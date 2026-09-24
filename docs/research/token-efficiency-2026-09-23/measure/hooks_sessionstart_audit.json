@@ -1,0 +1,193 @@
+{
+ "components": {
+  "config-mirror-assert.sh": {
+   "n": 950,
+   "chars": 5010377,
+   "median": 5713,
+   "p90": 8610,
+   "identical_to_prev_in_project": 0.186
+  },
+  "dod-persist.sh": {
+   "n": 683,
+   "chars": 1551370,
+   "median": 1944,
+   "p90": 2312,
+   "identical_to_prev_in_project": 0.051
+  },
+  "mailbox-drain.sh": {
+   "n": 472,
+   "chars": 1126763,
+   "median": 2793,
+   "p90": 3846,
+   "identical_to_prev_in_project": 0.129
+  },
+  "activation-watch.sh": {
+   "n": 848,
+   "chars": 267263,
+   "median": 258,
+   "p90": 258,
+   "identical_to_prev_in_project": 0.514
+  },
+  "setup-plan-symlinks.sh": {
+   "n": 927,
+   "chars": 170295,
+   "median": 184,
+   "p90": 190,
+   "identical_to_prev_in_project": 0.598
+  },
+  "session-start.sh": {
+   "n": 961,
+   "chars": 153335,
+   "median": 159,
+   "p90": 163,
+   "identical_to_prev_in_project": 0.316
+  },
+  "session-index-start.sh": {
+   "n": 929,
+   "chars": 97457,
+   "median": 129,
+   "p90": 135,
+   "identical_to_prev_in_project": 0.416
+  },
+  "setup-task-symlinks.sh": {
+   "n": 894,
+   "chars": 89556,
+   "median": 93,
+   "p90": 119,
+   "identical_to_prev_in_project": 0.525
+  },
+  "desk-brief-inject.sh": {
+   "n": 5,
+   "chars": 39130,
+   "median": 7826,
+   "p90": 7826,
+   "identical_to_prev_in_project": 0.8
+  },
+  "unattributed": {
+   "n": 5,
+   "chars": 4411,
+   "median": 1097,
+   "p90": 1097,
+   "identical_to_prev_in_project": 0.4
+  }
+ },
+ "dod": {
+  "n": 683,
+  "persisted": 608,
+  "orig_sizes": [
+   [
+    "16.6KB",
+    248
+   ],
+   [
+    "85.5KB",
+    51
+   ],
+   [
+    "51.2KB",
+    35
+   ],
+   [
+    "51.9KB",
+    17
+   ],
+   [
+    "71.1KB",
+    17
+   ],
+   [
+    "36.8KB",
+    16
+   ],
+   [
+    "90.1KB",
+    16
+   ],
+   [
+    "100.2KB",
+    16
+   ]
+  ],
+  "distinct_contracts": 43,
+  "top_contracts": [
+   [
+    "land prerequisite 1 of docs/research/dod-crosstalk-2026-08-18.md \u2014 stamp per-cap",
+    248
+   ],
+   [
+    "kitty begin-window-drag \u2014 PHASE 1 RESEARCH COMPLETE and landed (dad60f772, docs/",
+    55
+   ],
+   [
+    "investigate the pane-330 desk death (sid 88e2c2b1) \u2014 establish how it ended and ",
+    50
+   ],
+   [
+    "RESO_SECURITY_100P \u2014 execute docs/plans/RESO_SECURITY_100P.md to completion. Wav",
+    33
+   ],
+   [
+    "bottle menu review \u2014 drive Perrier-Jou\u00ebt + Mo\u00ebt bottles to ONE operator-signed-o",
+    32
+   ],
+   [
+    "SUCCESSOR'S FIRST TASK (small, and the only thing not yet done): one durable les",
+    24
+   ],
+   [
+    "implement Wave A of docs/plans/FLOOR_PLAN_PIPELINE_V2.md \u00a717 \u2014 W17 instrument re",
+    21
+   ],
+   [
+    "JEV 100TH-PERCENTILE UTILIZATION \u2014 COMPLETE 2026-09-22. Jev runs on real work tr",
+    19
+   ]
+  ],
+  "relevance_checked": 535,
+  "relevant": 9,
+  "not_relevant": 526
+ },
+ "mail": {
+  "injections": 340,
+  "msgs_median_p90": [
+   2,
+   3
+  ],
+  "messages": 604,
+  "forwarded": 440,
+  "age_hours_since_delivery_median_p90": [
+   0.0,
+   0.0
+  ],
+  "age_hours_since_origin_median_p90": [
+   163.2,
+   352.5
+  ],
+  "origin_older_than_24h": 352,
+  "origin_older_than_7d": 293
+ },
+ "mirror": {
+  "n": 950,
+  "forked_median_p90": [
+   216,
+   425
+  ],
+  "bak_share_median": 0.9,
+  "chars_median_p90": [
+   5713,
+   8610
+  ],
+  "persisted": 363
+ },
+ "activation": {
+  "n": 834,
+  "unrun_median": [
+   2,
+   2
+  ],
+  "rotting_median": [
+   2,
+   2
+  ]
+ }
+}

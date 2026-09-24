@@ -1,0 +1,18 @@
+sessions compared: 812
+input        extract=        408,030 cost-state=     80,531,455 extract/cost-state=0.0051
+cache_read   extract= 35,734,384,212 cost-state= 36,805,909,361 extract/cost-state=0.9709
+cc           extract=    875,612,870 cost-state=    867,032,831 extract/cost-state=1.0099
+out_first    extract=     67,868,209 cost-state=    130,273,500 extract/cost-state=0.5210
+out_final    extract=    115,562,843 cost-state=    130,273,500 extract/cost-state=0.8871
+out_est      extract=    129,896,596 cost-state=    130,273,500 extract/cost-state=0.9971
+closest variant per session: {'est': 803, 'final': 5}
+per model (M tokens):  cost-state in/out/cr/cc  |  extract in/out_final/out_est/cr/cc
+  claude-opus-5                    7.51    99.73   31792.5    659.2 |   0.28   100.66   108.27   32090.2    704.3
+  claude-opus-5-5                  1.22     7.22    2163.3     63.1 |   0.02     5.47     9.71    2394.2     83.8
+  claude-fable-5-1                 0.87     9.53    1107.8     62.2 |   0.10     8.25    10.55    1126.9     77.1
+  claude-opus-5[1m]                1.46     8.96    1510.1     47.0 |   0.00     0.00     0.00       0.0      0.0
+  claude-sonnet-5                  0.23     1.16     114.5      6.2 |   0.00     0.70     0.87      99.7      6.1
+  claude-opus-5-5[1m]              0.00     0.78      94.0      6.6 |   0.00     0.00     0.00       0.0      0.0
+  claude-opus-4-8                  0.00     0.47      23.1      3.5 |   0.00     0.48     0.50      23.4      4.3
+  claude-haiku-4-5-20251001       69.24     2.42       0.6     19.2 |   0.00     0.00     0.00       0.0      0.0
+  <synthetic>                      0.00     0.00       0.0      0.0 |   0.00     0.00     0.00       0.0      0.0

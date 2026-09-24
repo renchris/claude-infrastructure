@@ -1,0 +1,234 @@
+{
+ "classes": {
+  "date": {
+   "contexts": 3602,
+   "distinct": 20,
+   "chg_consec": 0.015,
+   "distinct_per_day_mean": 2.3
+  },
+  "session_context": {
+   "contexts": 3600,
+   "distinct": 611,
+   "chg_consec": 0.241,
+   "distinct_per_day_mean": 42.6
+  },
+  "global CLAUDE.md": {
+   "contexts": 3589,
+   "distinct": 18,
+   "chg_consec": 0.046,
+   "distinct_per_day_mean": 2.3
+  },
+  "global rules essay (~/.claude/rules/agent-operating-lessons.md)": {
+   "contexts": 3589,
+   "distinct": 6,
+   "chg_consec": 0.028,
+   "distinct_per_day_mean": 1.3
+  },
+  "skill listing": {
+   "contexts": 3518,
+   "distinct": 139,
+   "chg_consec": 0.21,
+   "distinct_per_day_mean": 12.2
+  },
+  "deferred tool names": {
+   "contexts": 3516,
+   "distinct": 130,
+   "chg_consec": 0.206,
+   "distinct_per_day_mean": 18.7
+  },
+  "mission board (~/.claude/rules/00-mission-board.md)": {
+   "contexts": 3375,
+   "distinct": 534,
+   "chg_consec": 0.227,
+   "distinct_per_day_mean": 36.8
+  },
+  "project CLAUDE.md [infra]": {
+   "contexts": 1911,
+   "distinct": 7,
+   "chg_consec": 0.208,
+   "distinct_per_day_mean": 1.6
+  },
+  "MEMORY.md [infra]": {
+   "contexts": 1757,
+   "distinct": 35,
+   "chg_consec": 0.036,
+   "distinct_per_day_mean": 3.2
+  },
+  "project rules agent-operating-lessons.md [infra]": {
+   "contexts": 1704,
+   "distinct": 101,
+   "chg_consec": 0.105,
+   "distinct_per_day_mean": 7.6
+  },
+  "environment": {
+   "contexts": 1049,
+   "distinct": 546,
+   "chg_consec": 0.579,
+   "distinct_per_day_mean": 37.1
+  },
+  "SessionStart hook context": {
+   "contexts": 964,
+   "distinct": 840,
+   "chg_consec": 0.886,
+   "distinct_per_day_mean": 56.3
+  },
+  "project CLAUDE.md [reso]": {
+   "contexts": 889,
+   "distinct": 2,
+   "chg_consec": 0.001,
+   "distinct_per_day_mean": 1.1
+  },
+  "project rules agent-operating-lessons.md [reso]": {
+   "contexts": 889,
+   "distinct": 17,
+   "chg_consec": 0.054,
+   "distinct_per_day_mean": 1.9
+  },
+  "project rules agent-teams.md [reso]": {
+   "contexts": 889,
+   "distinct": 1,
+   "chg_consec": 0.0,
+   "distinct_per_day_mean": 1.0
+  },
+  "MEMORY.md [reso]": {
+   "contexts": 889,
+   "distinct": 26,
+   "chg_consec": 0.055,
+   "distinct_per_day_mean": 2.6
+  },
+  "agent listing": {
+   "contexts": 769,
+   "distinct": 16,
+   "chg_consec": 0.097,
+   "distinct_per_day_mean": 3.5
+  },
+  "MEMORY.md [other]": {
+   "contexts": 752,
+   "distinct": 32,
+   "chg_consec": 0.119,
+   "distinct_per_day_mean": 3.4
+  },
+  "MCP server instructions": {
+   "contexts": 722,
+   "distinct": 18,
+   "chg_consec": 0.445,
+   "distinct_per_day_mean": 5.7
+  },
+  "project rules agent-operating-lessons.md [other]": {
+   "contexts": 607,
+   "distinct": 20,
+   "chg_consec": 0.086,
+   "distinct_per_day_mean": 2.4
+  },
+  "auto_mode": {
+   "contexts": 594,
+   "distinct": 4,
+   "chg_consec": 0.073,
+   "distinct_per_day_mean": 1.5
+  },
+  "project rules bottle-generation-ledger.md [reso]": {
+   "contexts": 331,
+   "distinct": 16,
+   "chg_consec": 0.082,
+   "distinct_per_day_mean": 2.9
+  },
+  "project CLAUDE.md [other]": {
+   "contexts": 129,
+   "distinct": 8,
+   "chg_consec": 0.055,
+   "distinct_per_day_mean": 1.4
+  }
+ },
+ "memory_block_positions": {
+  "global CLAUDE.md": {
+   "0": 3533,
+   "3": 53,
+   "5": 1,
+   "6": 1,
+   "8": 1
+  },
+  "mission board (~/.claude/rules/00-mission-board.md)": {
+   "1": 3372,
+   "6": 1,
+   "7": 1,
+   "9": 1
+  },
+  "global rules essay (~/.claude/rules/agent-operating-lessons.md)": {
+   "1": 161,
+   "2": 3372,
+   "4": 53,
+   "7": 1,
+   "8": 1,
+   "10": 1
+  },
+  "project CLAUDE.md [infra]": {
+   "2": 103,
+   "3": 1703,
+   "4": 104,
+   "9": 1
+  },
+  "project rules agent-operating-lessons.md [infra]": {
+   "4": 1599,
+   "5": 104,
+   "10": 1
+  },
+  "MEMORY.md [infra]": {
+   "5": 1652,
+   "6": 104,
+   "11": 1
+  },
+  "MEMORY.md [other]": {
+   "2": 1,
+   "3": 55,
+   "4": 686,
+   "5": 9,
+   "9": 1
+  },
+  "project CLAUDE.md [reso]": {
+   "2": 26,
+   "3": 862,
+   "11": 1
+  },
+  "project rules bottle-generation-ledger.md [reso]": {
+   "4": 330,
+   "12": 1
+  },
+  "project rules agent-operating-lessons.md [reso]": {
+   "3": 26,
+   "4": 532,
+   "5": 330,
+   "13": 1
+  },
+  "project rules agent-teams.md [reso]": {
+   "4": 26,
+   "5": 532,
+   "6": 330,
+   "14": 1
+  },
+  "MEMORY.md [reso]": {
+   "5": 26,
+   "6": 532,
+   "7": 330,
+   "15": 1
+  },
+  "project rules agent-operating-lessons.md [other]": {
+   "2": 12,
+   "3": 585,
+   "4": 9,
+   "8": 1
+  },
+  "project CLAUDE.md [other]": {
+   "0": 3,
+   "3": 126
+  }
+ },
+ "workflow_siblings": {
+  "workflow_runs": 128,
+  "runs_with_2plus_agents": 123,
+  "identical_memory_block": 116,
+  "identical_skill_listing": 108,
+  "identical_full_setup": 91,
+  "agents_in_multi_runs": 2396,
+  "agents_matching_run_majority_setup": 2199
+ }
+}

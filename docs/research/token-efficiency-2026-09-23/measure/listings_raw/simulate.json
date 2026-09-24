@@ -1,0 +1,262 @@
+{
+ "budget": 30000,
+ "score_source": "/Users/chrisren/.claude-secondary/.claude.json",
+ "validation": {
+  "mode": "priority",
+  "simulated_total": 29996,
+  "actual_total_with_header": 30103,
+  "described_actual": 44,
+  "described_sim": 48,
+  "agree": 44,
+  "only_actual": [],
+  "only_sim": [
+   "deploy-check",
+   "frontend-design-vue",
+   "research",
+   "vercel-design-guidelines"
+  ],
+  "full_total_if_all_described": 49335
+ },
+ "after": {
+  "mode": "fits",
+  "total": 29121,
+  "described": 75,
+  "newly_described": [
+   "account-relogin",
+   "browsermcp",
+   "cafe-wifi-optimization",
+   "codex-security",
+   "coding-standards",
+   "corpus-to-skill",
+   "demo-recording",
+   "desk",
+   "evolve-skill",
+   "fix-lint",
+   "frontier-campaign",
+   "frontier-hole",
+   "frontier-routing",
+   "grok-wiki-audit",
+   "motion",
+   "outlook-cleanup",
+   "permission-harvest",
+   "pr",
+   "react-best-practices",
+   "recover",
+   "relogin",
+   "repo-wiki",
+   "review",
+   "scaffold",
+   "video-understanding",
+   "visual-direction",
+   "wrap"
+  ],
+  "lost_description": [],
+  "full_total_if_all_described": 29121,
+  "still_nameonly": []
+ },
+ "proposals": [
+  {
+   "name": "cafe-wifi-optimization",
+   "kind": "skill",
+   "old_chars": 2107,
+   "old_listed_chars": 1536,
+   "new_chars": 218,
+   "saved_chars": 1318,
+   "proposed": "Client-side ladder for slow GUEST Wi-Fi you cannot administer (cafe, hotel, airport): route, SNR, capacity, bufferbloat direction, and the Wi-Fi vs iPhone-tether call. Not for any network whose router you can log into."
+  },
+  {
+   "name": "limit-recover",
+   "kind": "command",
+   "old_chars": 1838,
+   "old_listed_chars": 1536,
+   "new_chars": 247,
+   "saved_chars": 1289,
+   "proposed": "Recover delegated work after any interruption (usage or weekly limit, login cliff, network drop, stalled agent or workflow, crash or resume): audit every slot, subagent and teammate from disk, re-run what is incomplete, or move to another account."
+  },
+  {
+   "name": "frontier-routing",
+   "kind": "skill",
+   "old_chars": 1628,
+   "old_listed_chars": 1536,
+   "new_chars": 227,
+   "saved_chars": 1309,
+   "proposed": "Policy for when to use the frontier model (Fable) instead of the default tier: only for unknown-unknowns after research stalls, inside the hook-enforced spawn cap. Points to /frontier-hole, /frontier-run and /frontier-campaign."
+  },
+  {
+   "name": "permission-harvest",
+   "kind": "skill",
+   "old_chars": 1528,
+   "old_listed_chars": 1528,
+   "new_chars": 215,
+   "saved_chars": 1313,
+   "proposed": "Weekly review of manual permission prompts: runs cc-permission-harvest read-only, buckets the prompts, proposes composable prefix allow rules and hands the operator one cc-do apply step. Never writes settings files."
+  },
+  {
+   "name": "dia-agent",
+   "kind": "skill",
+   "old_chars": 1462,
+   "old_listed_chars": 1462,
+   "new_chars": 223,
+   "saved_chars": 1239,
+   "proposed": "Drive the operator's real logged-in Dia browser without consent prompts: AppleScript for tabs, windows and JS; CDP via dia://inspect for trusted input, screenshots, network and cookies; a clean-profile launcher as fallback."
+  },
+  {
+   "name": "manual-command-delivery",
+   "kind": "skill",
+   "old_chars": 1412,
+   "old_listed_chars": 1412,
+   "new_chars": 226,
+   "saved_chars": 1186,
+   "proposed": "Load before asking the user to do anything (login, sudo, a blocked or destructive step): write one re-runnable /tmp script that drives every drivable step, gates irreversible ones behind a typed yes, and hand over one command."
+  },
+  {
+   "name": "plan-conventions",
+   "kind": "skill",
+   "old_chars": 1407,
+   "old_listed_chars": 1407,
+   "new_chars": 233,
+   "saved_chars": 1174,
+   "proposed": "Rules for writing and updating plan or design docs: integrate, never overwrite; compact completed sections; expand upcoming ones with file:line detail; mandatory Phase 0 with a per-wave execution locus. Load when editing a *plan*.md."
+  },
+  {
+   "name": "demo-recording",
+   "kind": "skill",
+   "old_chars": 1398,
+   "old_listed_chars": 1398,
+   "new_chars": 227,
+   "saved_chars": 1171,
+   "proposed": "Record a live screen, terminal or agent demo and embed it in a README as animated WebP (GitHub strips <video>): capture, iTerm2 sizing, near-lossless encode recipe, contact-sheet review. Not for understanding an existing video."
+  },
+  {
+   "name": "research-subagents",
+   "kind": "skill",
+   "old_chars": 1256,
+   "old_listed_chars": 1256,
+   "new_chars": 244,
+   "saved_chars": 1012,
+   "proposed": "Discipline for read-only research fan-out: decomposition artifact, default N=10, a 7-field brief with a file delivery path, adversarial sampling, stop and synthesis rules. Load before spawning research subagents; not for code-writing teammates."
+  },
+  {
+   "name": "browsermcp",
+   "kind": "skill",
+   "old_chars": 1247,
+   "old_listed_chars": 1247,
+   "new_chars": 180,
+   "saved_chars": 1067,
+   "proposed": "History of the retired BrowserMCP server plus the browser-automation decision tree; the agent-browser CLI is the live path. Load when browser tools report \"No such tool available\"."
+  },
+  {
+   "name": "agent-teams",
+   "kind": "skill",
+   "old_chars": 1175,
+   "old_listed_chars": 1175,
+   "new_chars": 242,
+   "saved_chars": 933,
+   "proposed": "Orchestrating code-writing teammates (Agent with name:): runtime detection, 150-line brief rules, pre-spawn checklist, model and effort pinning, lifecycle, shutdown and crash recovery. Load before spawning teammates or planning 2+ code tasks."
+  },
+  {
+   "name": "recover",
+   "kind": "command",
+   "old_chars": 1148,
+   "old_listed_chars": 1148,
+   "new_chars": 242,
+   "saved_chars": 906,
+   "proposed": "Front door for recovering delegated work after any interruption (network drop, stalled agent, killed task, crash or resume, quota, login cliff), or for moving a healthy session to another account. Modes: limit, resume-in-place, stall, switch."
+  },
+  {
+   "name": "codex-security",
+   "kind": "skill",
+   "old_chars": 1125,
+   "old_listed_chars": 1125,
+   "new_chars": 206,
+   "saved_chars": 919,
+   "proposed": "Run OpenAI's Codex Security methodology natively (vendored plugin; no Codex or OpenAI account): repo and diff security scans, threat models, finding validation and triage, fixes, write-ups and SARIF output."
+  },
+  {
+   "name": "coding-standards",
+   "kind": "skill",
+   "old_chars": 1093,
+   "old_listed_chars": 1093,
+   "new_chars": 221,
+   "saved_chars": 872,
+   "proposed": "House style for TypeScript, React/Next.js and Python (FastAPI, Pydantic v2, mypy strict, ruff): strictness, exports, Server Components, naming. Load when writing a new component, module or endpoint, or for a style review."
+  },
+  {
+   "name": "self-explaining-artifact",
+   "kind": "skill",
+   "old_chars": 1060,
+   "old_listed_chars": 1060,
+   "new_chars": 229,
+   "saved_chars": 831,
+   "proposed": "Build a self-contained animated HTML explainer of an article, dataset or mechanism, and verify it with measured gates (word count, AA contrast, frame budget). Use when an explainer was rejected as walls of text or hard to follow."
+  },
+  {
+   "name": "repo-wiki",
+   "kind": "skill",
+   "old_chars": 1056,
+   "old_listed_chars": 1056,
+   "new_chars": 214,
+   "saved_chars": 842,
+   "proposed": "Generate a source-grounded README or multi-page wiki for a repository in two passes (a structure plan, then pages), with citation and diagram rules and 15 named styles. Use to write a README or document a codebase."
+  },
+  {
+   "name": "autonomous-authenticated-web-access",
+   "kind": "skill",
+   "old_chars": 985,
+   "old_listed_chars": 985,
+   "new_chars": 228,
+   "saved_chars": 757,
+   "proposed": "Choose and run read-only access to a logged-in web app: API token, then clean-profile CDP, then warm Dia CDP; plus trusted-input, shadow-DOM and consent-modal techniques for hardened SPAs. Pairs with dia-agent and agent-browser."
+  },
+  {
+   "name": "resume-sessions",
+   "kind": "skill",
+   "old_chars": 981,
+   "old_listed_chars": 981,
+   "new_chars": 228,
+   "saved_chars": 753,
+   "proposed": "Resume every Claude Code session across the 4 accounts after a crash or reboot: find open sessions, recreate worktrees, take the full session rather than the summary, clear terminal gibberish, re-engage them and keep them alive."
+  },
+  {
+   "name": "grok-wiki-audit",
+   "kind": "skill",
+   "old_chars": 911,
+   "old_listed_chars": 911,
+   "new_chars": 227,
+   "saved_chars": 684,
+   "proposed": "Our recipe for a multi-shard defect sweep of a repo with grok-wiki ask: preflight checks (a broken claude stub, the codex config override), shard design, and verifying each finding against the pre-fix artifact before fixing it."
+  },
+  {
+   "name": "model-upgrade",
+   "kind": "skill",
+   "old_chars": 874,
+   "old_listed_chars": 874,
+   "new_chars": 235,
+   "saved_chars": 639,
+   "proposed": "Runbook for moving to a new Claude model or off one: the binary gate first (does the pinned Claude Code register the id?), the model-id census, config and doc sweeps, the model ladder. Use when a model ships or frontier access changes."
+  }
+ ],
+ "agent_proposals": [
+  {
+   "name": "deep-research",
+   "old_chars": 1358,
+   "new_chars": 197,
+   "saved_chars": 1161,
+   "proposed": "Deep research subagent (Opus tier; the lead may pass model \"fable\" per model-config.yaml). Default for research fan-out slots and for adversarial or multi-hop briefs. Returns signal-dense findings."
+  },
+  {
+   "name": "deep-research-sonnet",
+   "old_chars": 878,
+   "new_chars": 171,
+   "saved_chars": 707,
+   "proposed": "Sonnet-tier research worker, benched: use only in a probe-certified low- or medium-effort Workflow (~/.claude/model-routing-freewin-probe.md). Otherwise use deep-research."
+  },
+  {
+   "name": "frontier-derivation",
+   "old_chars": 527,
+   "new_chars": 192,
+   "saved_chars": 335,
+   "proposed": "Read-only, baseline-blind panelist for /frontier-run: derives failure modes from the system model first, then reads code to confirm or refute them. One per hole; the lead passes model \"fable\"."
+  }
+ ]
+}

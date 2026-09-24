@@ -1,0 +1,341 @@
+{
+ "method": "Price the listing attachments (skill_listing, mcp_instructions_delta, deferred_tools_delta,\nagent_listing_delta) and the ToolSearch round trips, from extract.sqlite (xdup=0).\n\nMethod (ESTIMATED, list-price weights; the fleet is quota-billed):\n  A token that sits in a context's prefix is paid on every later response of that context:\n    - response reads the cached prefix (cache_read >= READ_FLOOR tokens) -> in_price * cr_mult\n    - otherwise the prefix was (re)written this response -> in_price * (1.25*share_5m + 2.0*share_1h),\n      or 1.0x when nothing was cached.\n  M(file, s) = sum of that per-token price over the file's responses with seq > s.\n  Item cost = tokens(item) * M(file, resp_before(item)); tokens = chars / CPT.\n  Priced twice: at each response's own model and re-priced at Opus 5.5 ($4 in, cr 0.05x).\n  CPT: 3.0 chars/token is Claude Code's own estimate for Opus 5.x/Fable (fn xf -> 3 bytes/token)\n  and matches headless /context (30.1k-char listing ~ 10k tokens); 2.6 chars/token is the ratio\n  MEASURED on memory files by /context. Both are reported.\n  \"Static token value\" = sum over contexts of M(file, first listing) = what one extra token in\n  every context's initial listing costs over the window.",
+ "read_floor": 20000,
+ "by_kind_ctx": [
+  {
+   "kind": "agent_listing_delta",
+   "ctx_type": "main",
+   "n": 877.0,
+   "chars": 6744271.0,
+   "usd_own@3.0": 112.98,
+   "usd_o55@3.0": 56.45,
+   "usd_own@2.6": 130.36,
+   "usd_o55@2.6": 65.13
+  },
+  {
+   "kind": "agent_listing_delta",
+   "ctx_type": "subagent",
+   "n": 17.0,
+   "chars": 140651.0,
+   "usd_own@3.0": 0.48,
+   "usd_o55@3.0": 0.19,
+   "usd_own@2.6": 0.56,
+   "usd_o55@2.6": 0.22
+  },
+  {
+   "kind": "deferred_tools_delta",
+   "ctx_type": "main",
+   "n": 1243.0,
+   "chars": 5786662.0,
+   "usd_own@3.0": 102.24,
+   "usd_o55@3.0": 50.12,
+   "usd_own@2.6": 117.97,
+   "usd_o55@2.6": 57.83
+  },
+  {
+   "kind": "deferred_tools_delta",
+   "ctx_type": "subagent",
+   "n": 352.0,
+   "chars": 932272.0,
+   "usd_own@3.0": 6.87,
+   "usd_o55@3.0": 4.06,
+   "usd_own@2.6": 7.93,
+   "usd_o55@2.6": 4.68
+  },
+  {
+   "kind": "deferred_tools_delta",
+   "ctx_type": "workflow_agent",
+   "n": 2790.0,
+   "chars": 17606613.0,
+   "usd_own@3.0": 68.74,
+   "usd_o55@3.0": 38.05,
+   "usd_own@2.6": 79.31,
+   "usd_o55@2.6": 43.9
+  },
+  {
+   "kind": "mcp_instructions_delta",
+   "ctx_type": "main",
+   "n": 1148.0,
+   "chars": 2582673.0,
+   "usd_own@3.0": 40.17,
+   "usd_o55@3.0": 19.94,
+   "usd_own@2.6": 46.35,
+   "usd_o55@2.6": 23.01
+  },
+  {
+   "kind": "mcp_instructions_delta",
+   "ctx_type": "subagent",
+   "n": 354.0,
+   "chars": 1040841.0,
+   "usd_own@3.0": 6.8,
+   "usd_o55@3.0": 3.21,
+   "usd_own@2.6": 7.85,
+   "usd_o55@2.6": 3.7
+  },
+  {
+   "kind": "mcp_instructions_delta",
+   "ctx_type": "workflow_agent",
+   "n": 2371.0,
+   "chars": 7029695.0,
+   "usd_own@3.0": 26.32,
+   "usd_o55@3.0": 12.74,
+   "usd_own@2.6": 30.37,
+   "usd_o55@2.6": 14.7
+  },
+  {
+   "kind": "skill_listing",
+   "ctx_type": "main",
+   "n": 1410.0,
+   "chars": 26725596.0,
+   "usd_own@3.0": 439.89,
+   "usd_o55@3.0": 216.36,
+   "usd_own@2.6": 507.56,
+   "usd_o55@2.6": 249.64
+  },
+  {
+   "kind": "skill_listing",
+   "ctx_type": "subagent",
+   "n": 357.0,
+   "chars": 10401161.0,
+   "usd_own@3.0": 92.27,
+   "usd_o55@3.0": 50.61,
+   "usd_own@2.6": 106.46,
+   "usd_o55@2.6": 58.4
+  },
+  {
+   "kind": "skill_listing",
+   "ctx_type": "workflow_agent",
+   "n": 2798.0,
+   "chars": 80313439.0,
+   "usd_own@3.0": 333.64,
+   "usd_o55@3.0": 184.51,
+   "usd_own@2.6": 384.97,
+   "usd_o55@2.6": 212.89
+  }
+ ],
+ "by_kind": {
+  "agent_listing_delta": {
+   "n": 894.0,
+   "chars": 6884922.0,
+   "usd_own@3.0": 113.46,
+   "usd_o55@3.0": 56.64,
+   "usd_own@2.6": 130.91,
+   "usd_o55@2.6": 65.35
+  },
+  "deferred_tools_delta": {
+   "n": 4385.0,
+   "chars": 24325547.0,
+   "usd_own@3.0": 177.85,
+   "usd_o55@3.0": 92.23,
+   "usd_own@2.6": 205.21,
+   "usd_o55@2.6": 106.41
+  },
+  "mcp_instructions_delta": {
+   "n": 3873.0,
+   "chars": 10653209.0,
+   "usd_own@3.0": 73.29,
+   "usd_o55@3.0": 35.89,
+   "usd_own@2.6": 84.57,
+   "usd_o55@2.6": 41.41
+  },
+  "skill_listing": {
+   "n": 4565.0,
+   "chars": 117440196.0,
+   "usd_own@3.0": 865.79,
+   "usd_o55@3.0": 451.48,
+   "usd_own@2.6": 998.99,
+   "usd_o55@2.6": 520.94
+  }
+ },
+ "static_token_value": {
+  "main": {
+   "contexts": 871,
+   "usd_per_1k_tokens_own": 42.7573,
+   "usd_per_1k_tokens_o55": 20.9752
+  },
+  "subagent": {
+   "contexts": 346,
+   "usd_per_1k_tokens_own": 9.2013,
+   "usd_per_1k_tokens_o55": 5.0592
+  },
+  "workflow_agent": {
+   "contexts": 2664,
+   "usd_per_1k_tokens_own": 33.1859,
+   "usd_per_1k_tokens_o55": 18.3434
+  },
+  "all": {
+   "contexts": 3881,
+   "usd_per_1k_tokens_own": 85.1445,
+   "usd_per_1k_tokens_o55": 44.3778
+  }
+ },
+ "toolsearch_only_responses": [
+  {
+   "ctx_type": "main",
+   "n": 523,
+   "usd_own": 120.58,
+   "usd_o55": 75.24,
+   "avg_cache_read": 253285
+  },
+  {
+   "ctx_type": "subagent",
+   "n": 59,
+   "usd_own": 10.82,
+   "usd_o55": 7.98,
+   "avg_cache_read": 108240
+  },
+  {
+   "ctx_type": "workflow_agent",
+   "n": 429,
+   "usd_own": 98.29,
+   "usd_o55": 66.95,
+   "avg_cache_read": 138686
+  }
+ ],
+ "toolsearch_any_responses": [
+  1511,
+  437.4365159000004,
+  294.979946
+ ],
+ "fleet_total": [
+  32517.424510999874,
+  18318.682968600137
+ ],
+ "skill_listing_by_ctx_agent_project": [
+  {
+   "ctx_type": "main",
+   "agent_type": "-",
+   "project": "other",
+   "n": 1387.0,
+   "chars": 26314776.0,
+   "usd_own@3.0": 432.68,
+   "usd_o55@3.0": 212.56
+  },
+  {
+   "ctx_type": "workflow_agent",
+   "agent_type": "workflow-subagent",
+   "project": "other",
+   "n": 2442.0,
+   "chars": 70052882.0,
+   "usd_own@3.0": 284.84,
+   "usd_o55@3.0": 157.59
+  },
+  {
+   "ctx_type": "subagent",
+   "agent_type": "deep-research",
+   "project": "other",
+   "n": 218.0,
+   "chars": 6322745.0,
+   "usd_own@3.0": 63.81,
+   "usd_o55@3.0": 33.03
+  },
+  {
+   "ctx_type": "workflow_agent",
+   "agent_type": "deep-research",
+   "project": "other",
+   "n": 155.0,
+   "chars": 4356251.0,
+   "usd_own@3.0": 35.92,
+   "usd_o55@3.0": 20.34
+  },
+  {
+   "ctx_type": "subagent",
+   "agent_type": "general-purpose",
+   "project": "other",
+   "n": 89.0,
+   "chars": 2596168.0,
+   "usd_own@3.0": 17.11,
+   "usd_o55@3.0": 10.67
+  },
+  {
+   "ctx_type": "workflow_agent",
+   "agent_type": "general-purpose",
+   "project": "other",
+   "n": 201.0,
+   "chars": 5904306.0,
+   "usd_own@3.0": 12.89,
+   "usd_o55@3.0": 6.58
+  },
+  {
+   "ctx_type": "subagent",
+   "agent_type": "general-purpose",
+   "project": "reso",
+   "n": 29.0,
+   "chars": 872436.0,
+   "usd_own@3.0": 8.39,
+   "usd_o55@3.0": 4.29
+  },
+  {
+   "ctx_type": "main",
+   "agent_type": "-",
+   "project": "reso",
+   "n": 23.0,
+   "chars": 410820.0,
+   "usd_own@3.0": 7.2,
+   "usd_o55@3.0": 3.8
+  },
+  {
+   "ctx_type": "subagent",
+   "agent_type": "deep-research",
+   "project": "reso",
+   "n": 10.0,
+   "chars": 300960.0,
+   "usd_own@3.0": 1.91,
+   "usd_o55@3.0": 1.74
+  },
+  {
+   "ctx_type": "subagent",
+   "agent_type": "Explore",
+   "project": "other",
+   "n": 6.0,
+   "chars": 158352.0,
+   "usd_own@3.0": 0.8,
+   "usd_o55@3.0": 0.58
+  },
+  {
+   "ctx_type": "subagent",
+   "agent_type": "code-reviewer",
+   "project": "other",
+   "n": 1.0,
+   "chars": 30088.0,
+   "usd_own@3.0": 0.09,
+   "usd_o55@3.0": 0.09
+  },
+  {
+   "ctx_type": "subagent",
+   "agent_type": "deep-research-base",
+   "project": "other",
+   "n": 1.0,
+   "chars": 30103.0,
+   "usd_own@3.0": 0.05,
+   "usd_o55@3.0": 0.05
+  },
+  {
+   "ctx_type": "subagent",
+   "agent_type": "deep-research-omit",
+   "project": "other",
+   "n": 1.0,
+   "chars": 30103.0,
+   "usd_own@3.0": 0.05,
+   "usd_o55@3.0": 0.05
+  },
+  {
+   "ctx_type": "subagent",
+   "agent_type": "deep-research-sonnet-base",
+   "project": "other",
+   "n": 1.0,
+   "chars": 30103.0,
+   "usd_own@3.0": 0.03,
+   "usd_o55@3.0": 0.05
+  },
+  {
+   "ctx_type": "subagent",
+   "agent_type": "deep-research-sonnet-omit",
+   "project": "other",
+   "n": 1.0,
+   "chars": 30103.0,
+   "usd_own@3.0": 0.03,
+   "usd_o55@3.0": 0.05
+  }
+ ]
+}

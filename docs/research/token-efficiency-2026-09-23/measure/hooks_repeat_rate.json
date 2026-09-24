@@ -1,0 +1,121 @@
+{
+ "mailbox-drain.sh [wake-path nag]": {
+  "n": 2827,
+  "repeats": 2309,
+  "repeat_share": 0.817,
+  "chars": 1441275,
+  "repeat_chars_share": 0.806
+ },
+ "mailbox-drain.sh [peer mail]": {
+  "n": 618,
+  "repeats": 21,
+  "repeat_share": 0.034,
+  "chars": 1312995,
+  "repeat_chars_share": 0.029
+ },
+ "memory-nudge.sh": {
+  "n": 434,
+  "repeats": 205,
+  "repeat_share": 0.472,
+  "chars": 1200971,
+  "repeat_chars_share": 0.47
+ },
+ "handoff-intent-nudge.sh": {
+  "n": 736,
+  "repeats": 269,
+  "repeat_share": 0.365,
+  "chars": 599840,
+  "repeat_chars_share": 0.365
+ },
+ "plan-agent-teams-default.sh": {
+  "n": 337,
+  "repeats": 226,
+  "repeat_share": 0.671,
+  "chars": 378144,
+  "repeat_chars_share": 0.668
+ },
+ "cache-expiry-warning.sh": {
+  "n": 1186,
+  "repeats": 928,
+  "repeat_share": 0.782,
+  "chars": 374604,
+  "repeat_chars_share": 0.783
+ },
+ "research-precognition-nudge.sh": {
+  "n": 419,
+  "repeats": 211,
+  "repeat_share": 0.504,
+  "chars": 289948,
+  "repeat_chars_share": 0.504
+ },
+ "mailbox-drain.sh [parked-watcher warning]": {
+  "n": 192,
+  "repeats": 65,
+  "repeat_share": 0.339,
+  "chars": 238825,
+  "repeat_chars_share": 0.306
+ },
+ "backup-before-write.sh": {
+  "n": 305,
+  "repeats": 173,
+  "repeat_share": 0.567,
+  "chars": 238324,
+  "repeat_chars_share": 0.628
+ },
+ "agent-teams-enforce.sh": {
+  "n": 483,
+  "repeats": 360,
+  "repeat_share": 0.745,
+  "chars": 216165,
+  "repeat_chars_share": 0.753
+ },
+ "web-entrypoint-ladder.sh": {
+  "n": 167,
+  "repeats": 0,
+  "repeat_share": 0.0,
+  "chars": 179191,
+  "repeat_chars_share": 0.0
+ },
+ "enforce-email-formatting.py": {
+  "n": 13,
+  "repeats": 2,
+  "repeat_share": 0.154,
+  "chars": 116779,
+  "repeat_chars_share": 0.151
+ },
+ "relay-verbatim.sh": {
+  "n": 244,
+  "repeats": 81,
+  "repeat_share": 0.332,
+  "chars": 95124,
+  "repeat_chars_share": 0.332
+ },
+ "cc-builtin: file modified after edit (post-file-edit.sh formatter)": {
+  "n": 169,
+  "repeats": 29,
+  "repeat_share": 0.172,
+  "chars": 50350,
+  "repeat_chars_share": 0.168
+ },
+ "memory-index-drain.sh": {
+  "n": 44,
+  "repeats": 14,
+  "repeat_share": 0.318,
+  "chars": 31899,
+  "repeat_chars_share": 0.303
+ },
+ "waiting-recycle.sh": {
+  "n": 14,
+  "repeats": 1,
+  "repeat_share": 0.071,
+  "chars": 11748,
+  "repeat_chars_share": 0.031
+ },
+ "validate-plan-structure.sh": {
+  "n": 17,
+  "repeats": 7,
+  "repeat_share": 0.412,
+  "chars": 10930,
+  "repeat_chars_share": 0.409
+ }
+}

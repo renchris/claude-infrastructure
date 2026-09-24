@@ -1,0 +1,1060 @@
+{
+ "files": 800,
+ "tool_chars": {
+  "Bash": 60415754,
+  "StructuredOutput": 19662,
+  "WebFetch": 7312668,
+  "Read": 11594783,
+  "ToolSearch": 942,
+  "WebSearch": 2279832,
+  "Write": 62189,
+  "Monitor": 18118,
+  "Edit": 155384,
+  "mcp__ms365__list-mail-messages": 309836,
+  "mcp__ms365__list-mail-folders": 7554,
+  "mcp__ms365__get-mail-message": 87124,
+  "TaskStop": 17386,
+  "Agent": 132933,
+  "SendUserFile": 3580,
+  "Skill": 1133,
+  "Glob": 249,
+  "SendMessage": 14503,
+  "Workflow": 24501,
+  "AskUserQuestion": 2095,
+  "ListAgents": 28534,
+  "SubagentHandback": 488,
+  "mcp__ms365__graph-batch": 251210,
+  "mcp__ms365__list-mail-attachments": 9675,
+  "mcp__ms365__download-bytes-to-file": 4023,
+  "mcp__ms365__create-reply-draft": 25815,
+  "mcp__ms365__update-mail-message": 48,
+  "mcp__ms365__create-mail-attachment-upload-session": 1662,
+  "mcp__ms365__send-draft-message": 88,
+  "mcp__ms365__list-mail-folder-messages": 52349,
+  "RemoteTrigger": 37,
+  "Grep": 845,
+  "mcp__ms365__get-current-user": 242,
+  "mcp__ms365__search-onedrive-files": 2900,
+  "mcp__ms365__verify-login": 244,
+  "mcp__ms365__list-accounts": 1154,
+  "mcp__ms365__get-my-profile": 11279,
+  "mcp__ms365__list-drives": 3266,
+  "mcp__motion-plus__search-motion-source": 2249,
+  "ReadNotifications": 48,
+  "mcp__ms365__get-drive-root-item": 118,
+  "mcp__ms365__list-folder-files": 886,
+  "mcp__ms365__list-excel-worksheets": 763,
+  "PushNotification": 50,
+  "mcp__ms365__create-reply-all-draft": 33713,
+  "mcp__motion__search-motion-docs": 102,
+  "ScheduleWakeup": 315
+ },
+ "top_lines": {
+  "Bash": [
+   [
+    "Permission for this action was denied by the Claude Code auto mode classifier. Reason: Blocked by cl",
+    48388
+   ],
+   [
+    "Shell cwd was reset to /Users/chrisren/Development/claude-infrastructure",
+    46720
+   ],
+   [
+    "    \"NSSplitView Subview Frames SwiftUI._ConditionalContent<SwiftUI.ModifiedContent<SwiftUI.Modified",
+    46480
+   ],
+   [
+    "  \"source_argv\": \"/Users/chrisren/.claude-N/node_modules/.bin/claude --permission-mode auto --model ",
+    37648
+   ],
+   [
+    "N /opt/homebrew/bin/timeout -k N N nice -n N /usr/sbin/taskpolicy -c background bats tests/account-c",
+    36344
+   ],
+   [
+    "CLAUDE.global.md:N:**Default model = Opus N.N @ effort high** \u2014 SSOT `model-config.yaml` `opus_lates",
+    32830
+   ],
+   [
+    "                                                                                                    ",
+    29575
+   ],
+   [
+    "{\"units\": [{\"coverage_id\": \"src%NFapp%NFactions%NFtenantConfigActions.ts%Nmodule%N%Nuse%Nserver%N%Ne",
+    27729
+   ],
+   [
+    "[{\"key\":\"gN-src.app.app\",\"files\":[\"src/app/(app)/error.tsx\",\"src/app/(app)/page.tsx\",\"src/app/(app)/",
+    27124
+   ],
+   [
+    "N:N: Introduction Speech processing is commonly investigated by the measurement of brain activity as",
+    26331
+   ],
+   [
+    "\u26a0 ship-land: the post-land verifier is RUNNING but trunk is NOT CERTIFYING \u2014 newest GREEN stamp is N",
+    24846
+   ],
+   [
+    "{\"units\":[{\"coverage_id\":\"src%NFapp%NFactions%NFreplicache%NFnotificationDispatch.ts%Napprover%Nreso",
+    24001
+   ],
+   [
+    " a correlated EXISTS \\uN a predicate no index can serve. drizzle/schema.ts:N-N records the repo's ow",
+    24001
+   ],
+   [
+    "\u2192 gate: bare-name binaries on unattended paths (launchd jobs + hooks + the bats corpus)",
+    23672
+   ],
+   [
+    "Shell cwd was reset to /Users/chrisren/Development/.worktrees/wt-pool-N",
+    23328
+   ],
+   [
+    "tion guard rejects a negative or non-integer actual_spend is not visible from the builder; the colum",
+    22227
+   ],
+   [
+    "!function(w,d){if(d.location.href.indexOf('showHidden=true') =T.bl(a))c&&c();else T.bD(function(){T.",
+    21314
+   ],
+   [
+    " Just a moment... *{box-sizing:border-box;margin:N;padding:N}html{line-height:N.N;-webkit-text-size-",
+    21007
+   ],
+   [
+    "N N-N:N:N",
+    20754
+   ],
+   [
+    "    \"NSWindow Frame SwiftUI._ConditionalContent<SwiftUI.ModifiedContent<SwiftUI.ModifiedContent<Swif",
+    19768
+   ],
+   [
+    "Shell cwd was reset to /Users/chrisren/Development/.worktrees/lr-detect-wN",
+    19650
+   ],
+   [
+    "/private/tmp/claude-N/-Users-chrisren-Development-claude-infrastructure/eNfeN-bdN-NfN-afN-NeNfNbN/sc",
+    19407
+   ],
+   [
+    "blocked  | fNbNeaaebd | claude-infrastructure        | Flip com.claude.desk-invariant from 'staged' ",
+    18285
+   ],
+   [
+    "Supporting context: the Stack Overflow N survey point is DROPPED from the email at revision N.N (kep",
+    18122
+   ],
+   [
+    "{\"units\":[{\"coverage_id\":\"settings-templates%NFsettings.example.json%NPreToolUse%NABash::hooks%NFsma",
+    17996
+   ],
+   [
+    "/Users/chrisren/Library/Application Support/fnm/node-versions/vN.N.N/installation/lib/node_modules/@",
+    17967
+   ],
+   [
+    "\u2717 **Myth: \"LLMs are trained on macOS.\"** No vendor publishes its training environments, and every di",
+    17735
+   ],
+   [
+    "blocked  | NfeddeNcc | claude-infrastructure        | CORRECTED BY ITS AUTHOR N-N-NTN:NxZ after recy",
+    17280
+   ],
+   [
+    "\u21bb ship-land[locked]: STALE GATE \u2014 origin/main or HEAD moved during the unlocked gate (base Nddc\u2192eNba",
+    16767
+   ],
+   [
+    "Shell cwd was reset to /Users/chrisren/Development/mac-bootstrap",
+    16445
+   ],
+   [
+    "Updating files:  N% (N/N)\rUpdating files:  N% (N/N)\rUpdating files:  N% (N/N)\rUpdating files:  N% (N",
+    16406
+   ],
+   [
+    "ecision that is the only thing holding this latent: `the latent gap ... is closed by this documented",
+    16001
+   ],
+   [
+    "'`, whose greedy `.*` anchors on the LAST occurrence of the string, so `git branch -D live-branch &&",
+    16001
+   ],
+   [
+    " repository being operated on (which is exactly the `git -C` case above) the list is empty or belong",
+    16000
+   ],
+   [
+    "N:[^gx-gN]: GN gap-fill, \"cloud and remote execution \u2014 latency, session survival and throughput\" \u2014 t",
+    15886
+   ],
+   [
+    "Session cwd remains /Users/chrisren/Development/claude-infrastructure; directory changes made by the",
+    15741
+   ],
+   [
+    "chrisren         N   N.N  N.N N   N sN  S+   N:NAM   N:N.N bash /Users/chrisren/.claude/bin/cc-close",
+    15730
+   ],
+   [
+    "chrisren         N   N.N  N.N N N sN  S+   N:NAM   N:N.N /Users/chrisren/.claude-N/node_modules/.bin",
+    15632
+   ],
+   [
+    "\u2192 gate: unattended-path own-scope \u2014 blocking on N file(s) in this land's diff; others advisory.",
+    15361
+   ],
+   [
+    "  N   N     N    N.N  /Users/chrisren/.claude-N/node_modules/.bin/claude --permission-mode auto --mo",
+    15345
+   ]
+  ],
+  "Read": [
+   [
+    "N\tSupporting context: the Stack Overflow N survey point is DROPPED from the email at revision N.N (k",
+    14966
+   ],
+   [
+    "N\tN. **Apple-side post-write stall (the \"few seconds\"):** ctime\u2212mtime over the last N days (n=N): pN",
+    10116
+   ],
+   [
+    "N\tN. **Hammerspoon was dead from N-N-N N:N:N to N-N-N N:N:N (N.N h).** launchd: \"termination reporte",
+    10044
+   ],
+   [
+    "N\t**SCQA.** Situation: the engineers deliver through an AI coding agent, Claude Code or an equivalen",
+    9443
+   ],
+   [
+    "N\tN Playwright tests, one `visual-regression` project, `--workers=N`: N registry entries \u00d7 (full-pag",
+    7384
+   ],
+   [
+    "N\t- Hammerspoon polls the directory every N ms with one stat() (N \u00b5s), lists it (N,N entries = N.N m",
+    7056
+   ],
+   [
+    "N\t| `microsoftN_archive` | Teams meetings and Copilot chats as one local markdown folder, refreshed ",
+    6668
+   ],
+   [
+    "N\t    media: 'screen and (prefers-color-scheme: dark) and (device-width: Npx) and (device-height: Np",
+    6332
+   ],
+   [
+    "N\t+**Default model = Opus N.N @ effort high** \u2014 SSOT `model-config.yaml` `opus_latest`; the `claude(",
+    6160
+   ],
+   [
+    "N\t`ship-land.sh` per CAS round: `ship-reconcile.sh` (unbounded) \u2192 `rm -rf .next/types` + **`tsc --no",
+    5864
+   ],
+   [
+    "N\tFresh detached worktree + `pnpm install` (N\u2013N s) + `db:setup` + `next typegen` \u2192 typecheck N\u2013N s (",
+    5852
+   ],
+   [
+    "N\t  return N",
+    5607
+   ],
+   [
+    "N\t  - brief: You are an adversarial verifier. Try to REFUTE this claim; default to refuted=true if y",
+    5497
+   ],
+   [
+    "N\t-**Default model = Opus N @ effort high** \u2014 SSOT `model-config.yaml` `opus_latest`; the `claude()`",
+    5476
+   ],
+   [
+    "N\t    media: 'screen and (device-width: Npx) and (device-height: Npx) and (-webkit-device-pixel-rati",
+    5132
+   ],
+   [
+    "N\t  [ \"$status\" -eq N ]",
+    4896
+   ],
+   [
+    "N\t|---|---|---|",
+    4851
+   ],
+   [
+    "N\t| `microsoftN` | Outlook mail, calendar, contacts and OneDrive through a local MCP server | **DELI",
+    4836
+   ],
+   [
+    "N\t\"needs\": \"Operator lands the run-plane loopback + untrusted-input fixes onto doc_classifier origin",
+    4704
+   ],
+   [
+    "N\t<div style=\"font-family:Aptos,Aptos_EmbeddedFont,Aptos_MSFontService,Calibri,Helvetica,sans-serif;",
+    4663
+   ],
+   [
+    "N\t| Blocked | No security control on Windows as issued | Anthropic's Claude Code documentation: \"run",
+    4550
+   ],
+   [
+    "N\t                                                                                                  ",
+    4415
+   ],
+   [
+    "N\t    notes: 'Evolve Nightclub, N Skinner Street, Nanaimo, BC VNR NEN (Vancouver Island). Warm lead ",
+    4381
+   ],
+   [
+    "N\tN. If a hardened virtual desktop is proposed instead, it ends a long run unless your IT writes an ",
+    4350
+   ],
+   [
+    "N\tOperator-only. Newest verifier-green ancestor within **N commits** (~N\u2013N.N days at N commits/day; ",
+    4108
+   ],
+   [
+    "N\t- A second clipboard writer exists: launchd WatchPaths agent com.chrisren.screenshot-clipboard \u2192 ~",
+    4023
+   ],
+   [
+    "N\t  state=OK stateUpd=N-N-N (Nd ago) cfgUpd=N-N-N (Nd ago)",
+    3892
+   ],
+   [
+    "N\t- owned by `hunter-wildcard-obvious`: settings-templates%NFsettings.example.json%NPreToolUse%NABas",
+    3780
+   ],
+   [
+    "N\t- screencapture writes the PNG to a hidden temp `.Screenshot \u2026 .png` in the SAME directory (same i",
+    3744
+   ],
+   [
+    "N\tThe engineers deliver through an AI coding agent, Claude Code or an equivalent such as Copilot CLI",
+    3740
+   ],
+   [
+    "N\t| `shared_folders` | a shared OneDrive or SharePoint folder as a plain path in any repo, with mark",
+    3700
+   ],
+   [
+    "N\tRanked gaps: (N) the SPEND BOUNDARY, which is the single highest-impact unknown \u2014 RN votes remove(",
+    3679
+   ],
+   [
+    "N\tStatus: DRAFT, not sent. Revision N.N (N-N-N). This email is the only content that will be sent: n",
+    3542
+   ],
+   [
+    "N\tWindows reaches the same place only by running Microsoft's built-in Linux layer, and that is where",
+    3531
+   ],
+   [
+    "N\tN. Most of what the agents run is a shell command, and on Windows every one of those costs more to",
+    3515
+   ],
+   [
+    "N\t    \"local\": \"Inside an OS-enforced sandbox with networking disabled, an allowlisted environment (",
+    3481
+   ],
+   [
+    "N\tAdversarial results from five spot-checks against origin/main (worktree N behind): RN's claim that",
+    3448
+   ],
+   [
+    "N\t|---|---|---|---|",
+    3377
+   ],
+   [
+    "N\tN. **Hammerspoon's own latency after the rename** (from log vs ctime, N real shots): detection N\u2013N",
+    3321
+   ],
+   [
+    "N\tRemote N-vCPU Linux runner: full verification N\u2013N min warm \u2014 NOT faster than the laptop's N.N-min ",
+    3320
+   ]
+  ],
+  "WebFetch": [
+   [
+    "> For details about how to [add the SDK](/en-us/graph/sdks/sdk-installation) to your project and [cr",
+    92988
+   ],
+   [
+    "          \"content\": \"{\\r\\n  \\\"type\\\": \\\"AdaptiveCard\\\",\\r\\n  \\\"version\\\": \\\"N.N\\\",\\r\\n  \\\"body\\\": [",
+    19720
+   ],
+   [
+    "// To initialize your graphClient, see https://learn.microsoft.com/en-us/graph/sdks/create-client?fr",
+    13530
+   ],
+   [
+    "Choose the permission or permissions marked as least privileged for this API. Use a higher privilege",
+    12740
+   ],
+   [
+    "updated_at: N-N-NTN:N:N.NZ",
+    11152
+   ],
+   [
+    "ms.date: N-N-NTN:N:N.NZ",
+    10222
+   ],
+   [
+    "// Code snippets are only available for the latest version. Current version is N.x\r",
+    9240
+   ],
+   [
+    "          \"linkUrl\": \"https://teams.microsoft.com/l/meeting/details?eventId=AAMkADcyZTMzNWZhLWENYjAt",
+    7920
+   ],
+   [
+    "| \u2705 Device  \u274c User | \u2705 Pro  \u2705 Enterprise  \u2705 Education  \u2705 IoT Enterprise / IoT Enterprise LTSC | \u2705 Wi",
+    7607
+   ],
+   [
+    "The response body was not retrieved. If this URL requires authentication, use an authenticated tool ",
+    7350
+   ],
+   [
+    "> Fetch the complete documentation index at: https://code.claude.com/docs/llms.txt",
+    6889
+   ],
+   [
+    "* **No background subagents from in-process teammates**: an in-process teammate's own subagents run ",
+    6880
+   ],
+   [
+    "# To initialize your graph_client, see https://learn.microsoft.com/en-us/graph/sdks/create-client?fr",
+    6875
+   ],
+   [
+    "feedback_help_link_type: ''",
+    6552
+   ],
+   [
+    "feedback_help_link_url: ''",
+    6318
+   ],
+   [
+    "  This page describes agent teams as of vN.N.N. With `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` set, spa",
+    6270
+   ],
+   [
+    "> Use this file to discover all available pages before exploring further.",
+    6216
+   ],
+   [
+    "- https://authoring-docs-microsoft.poolparty.biz/devrel/bcbcbadN-N-N-N-NcNbN",
+    6138
+   ],
+   [
+    "- https://authoring-docs-microsoft.poolparty.biz/devrel/NbNeNaa-NaNd-NdeN-aN-NeNedcN",
+    6138
+   ],
+   [
+    "N. Sign in to the [Microsoft Entra admin center](https://entra.microsoft.com) as at least a [Securit",
+    6090
+   ],
+   [
+    "page_type: conceptual",
+    5764
+   ],
+   [
+    "Once you have a Dev Drive created, Visual Studio will automatically recognize it when you're creatin",
+    5580
+   ],
+   [
+    "feedback_system: Standard",
+    5564
+   ],
+   [
+    "Output too large (N.NKB). Full output saved to: /Users/chrisren/.claude-next/projects/-Users-chrisre",
+    5486
+   ],
+   [
+    "    - **Trust multifactor authentication from Microsoft Entra tenants**: Select this checkbox to all",
+    5475
+   ],
+   [
+    "  <img src=\"https://mintcdn.com/claude-code/nsvRFSDNfpSUNnTN/images/subagents-vs-agent-teams-dark.pn",
+    5390
+   ],
+   [
+    "// Code snippets are only available for the latest major version. Current major version is $vN.*\r",
+    5390
+   ],
+   [
+    "  <img src=\"https://mintcdn.com/claude-code/nsvRFSDNfpSUNnTN/images/subagents-vs-agent-teams-light.p",
+    5350
+   ],
+   [
+    "As of vN.N.N, an idle teammate's row stays in the panel while any teammate or subagent is still work",
+    5290
+   ],
+   [
+    "When one agent sends another a message over `SendMessage`, Claude Code tells the receiving agent the",
+    5290
+   ],
+   [
+    "Claude Code generates both of these automatically at session startup and updates them as teammates j",
+    5250
+   ],
+   [
+    "| --- | --- |\r",
+    5160
+   ],
+   [
+    "item_type: Content",
+    5130
+   ],
+   [
+    "Claude Code reports a message as sent only when the write to the recipient's mailbox file succeeds, ",
+    5090
+   ],
+   [
+    "layout: Conceptual",
+    4978
+   ],
+   [
+    "original_content_git_url: https://github.com/microsoftgraph/microsoft-graph-docs/blob/live/api-refer",
+    4944
+   ],
+   [
+    "* **Organization IP allowlist**: cloud sessions call the Anthropic API from Anthropic-managed infras",
+    4872
+   ],
+   [
+    "Enabling agent teams also changes ordinary delegation. Claude may [name a subagent](/docs/en/sub-age",
+    4760
+   ],
+   [
+    "The team config contains a `members` array with each member's name and agent ID. The lead's entry al",
+    4630
+   ],
+   [
+    "Claude Code publishes signed apt, dnf, and apk repositories. Each repository offers two channels: `s",
+    4608
+   ]
+  ],
+  "WebSearch": [
+   [
+    "REMINDER: You MUST include the sources above in your response to the user using markdown hyperlinks.",
+    77265
+   ],
+   [
+    "Links: [{\"title\":\"The Performance Cost To Ubuntu WSLN On Windows N NHN - Phoronix\",\"url\":\"https://ww",
+    8579
+   ],
+   [
+    "Links: [{\"title\":\"Worldwide PC market update QN N: Omdia: overall decline N%, Apple up N%. IDC: over",
+    5597
+   ],
+   [
+    "Links: [{\"title\":\"Graph APIs to Fetch Meeting Insights - Teams | Microsoft Learn\",\"url\":\"https://lea",
+    5413
+   ],
+   [
+    "Links: [{\"title\":\"Does windowsN enterprise cloud PC support WSLN? - Microsoft Q&A\",\"url\":\"https://le",
+    5032
+   ],
+   [
+    "Links: [{\"title\":\"Perrier-Jouet Champagne Brut Blanc De Blancs NV Nml - Buy online at SaratogaWine.c",
+    4910
+   ],
+   [
+    "Links: [{\"title\":\"University Car Wash & Vehicle Inspections - Austin, TX - Nextdoor\",\"url\":\"https://",
+    4618
+   ],
+   [
+    "Links: [{\"title\":\"Adding Admins in UniFi \u2013 Ubiquiti Help Center\",\"url\":\"https://help.ui.com/hc/en-us",
+    4378
+   ],
+   [
+    "Links: [{\"title\":\"Export MS Copilot Conversation. - Microsoft Q&A\",\"url\":\"https://learn.microsoft.co",
+    3972
+   ],
+   [
+    "Links: [{\"title\":\"Copilot coding agent now supports AGENTS.md custom instructions - GitHub Changelog",
+    3968
+   ],
+   [
+    "Links: [{\"title\":\"Media Quality and Network Connectivity Performance - Skype for Business Online (re",
+    3946
+   ],
+   [
+    "Links: [{\"title\":\"Collecting Microsoft N Copilot Data with Microsoft Purview eDiscovery | Microsoft ",
+    3930
+   ],
+   [
+    "Links: [{\"title\":\"CoPilot functionality for externally hosted meetings - Microsoft Q&A\",\"url\":\"https",
+    3916
+   ],
+   [
+    "Links: [{\"title\":\"Gorillas Touchless Car Wash, Pflugerville | Roadtrippers\",\"url\":\"https://maps.road",
+    3748
+   ],
+   [
+    "Links: [{\"title\":\"Perrier-Jouet Grand Brut | Wine.com\",\"url\":\"https://www.wine.com/product/perrier-j",
+    3683
+   ],
+   [
+    "Links: [{\"title\":\"Share conversations and responses in Microsoft Copilot | Microsoft Support\",\"url\":",
+    3668
+   ],
+   [
+    "Links: [{\"title\":\"Microsoft cancels Claude Code licences after engineers use it too much\",\"url\":\"htt",
+    3654
+   ],
+   [
+    "Links: [{\"title\":\"Cloudflare AI Gateway Pricing Explained For N\",\"url\":\"https://www.truefoundry.com/",
+    3634
+   ],
+   [
+    "Links: [{\"title\":\"Microsoft Shifts Engineers from Claude Code to GitHub Copilot CLI\",\"url\":\"https://",
+    3575
+   ],
+   [
+    "Links: [{\"title\":\"Moet & Chandon Brut Impe\u0301rial transparent PNG - StickPNG\",\"url\":\"https://www.stick",
+    3466
+   ],
+   [
+    "Links: [{\"title\":\"Gartner Says Worldwide PC Shipments Increased N% in First Quarter of N | MarketScr",
+    3440
+   ],
+   [
+    "Links: [{\"title\":\"GitHub - ivanopcode/devnote-override-macos-metal-vram-cap: Dev Note \u2014 Override mac",
+    3440
+   ],
+   [
+    "Links: [{\"title\":\"Cross-tenant access overview - Microsoft Entra External ID | Microsoft Learn\",\"url",
+    3339
+   ],
+   [
+    "Links: [{\"title\":\"Amazon.com: Intehill NK Portable Monitor for Laptop, High-end N-inch Portable Comp",
+    3336
+   ],
+   [
+    "Links: [{\"title\":\"OpenAI Just Bought Gitpod: The AI IDE Wars Are Officially On - DEV Community\",\"url",
+    3333
+   ],
+   [
+    "Links: [{\"title\":\"Harness engineering: leveraging Codex in an agent-first world | OpenAI\",\"url\":\"htt",
+    3269
+   ],
+   [
+    "Links: [{\"title\":\"Moet & Chandon Ice Imperial French Champagne Glass Bottle Nml - Sparkling Wine - W",
+    3266
+   ],
+   [
+    "Links: [{\"title\":\"N NFL Christmas Games: Schedule, Teams, How to Watch | FOX Sports\",\"url\":\"https://",
+    3255
+   ],
+   [
+    "Links: [{\"title\":\"Microsoft N Price Increase N: What\u2019s Changing and When\",\"url\":\"https://redriver.co",
+    3212
+   ],
+   [
+    "Links: [{\"title\":\"ViewSonic VXN-NK-OLED portable monitor review: NK OLED goodness in a slim package ",
+    3107
+   ],
+   [
+    "Links: [{\"title\":\"BLANC DE BLANCS | Perrier-Jou\u00ebt France\",\"url\":\"https://www.perrier-jouet.com/en-us",
+    3098
+   ],
+   [
+    "Links: [{\"title\":\"THE COMMON INTEREST KARAOKE BAR & GRILL, Austin - Restaurant Reviews & Phone Numbe",
+    3084
+   ],
+   [
+    "Links: [{\"title\":\"SOTSU FlipAction Elite N\\\" NK Portable Monitor SFAENPMSPB B&H\",\"url\":\"https://www.",
+    3074
+   ],
+   [
+    "Links: [{\"title\":\"GPU Accelerated Compositing in Chrome\",\"url\":\"https://www.chromium.org/developers/",
+    3036
+   ],
+   [
+    "Links: [{\"title\":\"The Total Economic Impact\u2122 Of Apple Mac For Business\",\"url\":\"https://tei.forrester",
+    3006
+   ],
+   [
+    "Links: [{\"title\":\"External users are unable to continue Microsoft Teams meeting chat after the meeti",
+    2972
+   ],
+   [
+    "Links: [{\"title\":\"About cloud and local sandboxes for GitHub Copilot - GitHub Docs\",\"url\":\"https://d",
+    2971
+   ],
+   [
+    "Links: [{\"title\":\"Made for developers and agents, Windows N at Build N\",\"url\":\"https://techcommunity",
+    2965
+   ],
+   [
+    "Links: [{\"title\":\"Bing Search APIs Retiring on August N, N - Microsoft Lifecycle | Microsoft Learn\",",
+    2958
+   ],
+   [
+    "Links: [{\"title\":\"A Game-By-Game Look At The Seahawks\u2019 N Schedule\",\"url\":\"https://www.seahawks.com/n",
+    2957
+   ]
+  ],
+  "mcp__ms365__list-mail-messages": [
+   [
+    "      \"id\": \"AQMkADAwATYNMDABLTlmNTUALWENZGUtMDACLTAwCgBGAAADfHgLJFooeEuAVUNTlNxLTgcANymqAQJNikGyvEd",
+    52260
+   ],
+   [
+    "      \"parentFolderId\": \"AQMkADAwATYNMDABLTlmNTUALWENZGUtMDACLTAwCgAuAAADfHgLJFooeEuAVUNTlNxLTgEANym",
+    14656
+   ],
+   [
+    "      \"receivedDateTime\": \"N-N-NTN:N:NZ\",",
+    14350
+   ],
+   [
+    "          \"emailAddress\": {",
+    8764
+   ],
+   [
+    "        \"emailAddress\": {",
+    8346
+   ],
+   [
+    "      \"sentDateTime\": \"N-N-NTN:N:NZ\",",
+    7728
+   ],
+   [
+    "      \"toRecipients\": [",
+    6360
+   ],
+   [
+    "      \"from\": {",
+    5136
+   ],
+   [
+    "          \"address\": \"service.vistareal@irvinecompany.com\"",
+    2360
+   ],
+   [
+    "      \"bodyPreview\": \"You are receiving this email because your Amazon CloudWatch Alarm \\\"sevenrooms",
+    2264
+   ],
+   [
+    "            \"address\": \"ichrisN@hotmail.com\"",
+    2162
+   ],
+   [
+    "            \"name\": \"ichrisN@hotmail.com\",",
+    2024
+   ],
+   [
+    "      \"bodyPreview\": \"Congratulations! Your reservation has been booked! \ud83c\udf89 \u034f \u200c   \u2007 \ufeff \u034f \u200c   \u2007 \ufeff \u034f \u200c  ",
+    1953
+   ],
+   [
+    "            \"address\": \"service.vistareal@irvinecompany.com\"",
+    1952
+   ],
+   [
+    "            \"address\": \"ren.chris@outlook.com\"",
+    1880
+   ],
+   [
+    "      \"bodyPreview\": \"[renchris/sevenrooms-bridge] test workflow run\\r\\n\\r\\n\\r\\n\\r\\ntest: All jobs h",
+    1630
+   ],
+   [
+    "          \"name\": \"C .\",",
+    1600
+   ],
+   [
+    "          \"address\": \"ichrisN@hotmail.com\"",
+    1496
+   ],
+   [
+    "          \"address\": \"ren.chris@outlook.com\"",
+    1485
+   ],
+   [
+    "      \"bodyPreview\": \"Hi Jessica,\\r\\n\\r\\nThank you for going back through the turn invoices and the ",
+    1440
+   ],
+   [
+    "          \"name\": \"Vista Real RSO\",",
+    1440
+   ],
+   [
+    "      \"subject\": \"Re: Photos Set N - #N - Narek, Jiahao, Chris\",",
+    1428
+   ],
+   [
+    "      \"bodyPreview\": \"Hi Vista,\\r\\n\\r\\nI appreciate you giving the breakdown. I do have a concern th",
+    1420
+   ],
+   [
+    "      \"bodyPreview\": \"Hello Christopher,\\r\\n\\r\\nThank you for allowing me more time to review your f",
+    1420
+   ],
+   [
+    "      \"hasAttachments\": false,",
+    1364
+   ],
+   [
+    "      \"subject\": \"RE: Action needed - Review guidance and respond - TrackingID#N\",",
+    1274
+   ],
+   [
+    "            \"name\": \"ren.chris@outlook.com\",",
+    1215
+   ],
+   [
+    "      \"bodyPreview\": \"Good Afternoon,\\r\\n\\r\\n\\r\\n\\r\\nThank you for your residency with us at Vista R",
+    1192
+   ],
+   [
+    "          \"address\": \"no-reply@sns.amazonaws.com\"",
+    1150
+   ],
+   [
+    "      \"bodyPreview\": \"To the Vista Real office \u2014\\r\\n\\r\\nThis is a formal request under California Ci",
+    1136
+   ],
+   [
+    "      \"isDraft\": false,",
+    1128
+   ],
+   [
+    "      \"bodyPreview\": \"Please apply an IP address exception so our tenant can send external email. Ev",
+    1120
+   ],
+   [
+    "            \"address\": \"chris.swe@outlook.com\"",
+    987
+   ],
+   [
+    "      \"bodyPreview\": \"Hey!\\r\\n\\r\\nCan you please send a link and the information for the guest list ",
+    960
+   ],
+   [
+    "            \"name\": \"Vista Real RSO\",",
+    950
+   ],
+   [
+    "            \"name\": \"chris.swe@outlook.com\",",
+    945
+   ],
+   [
+    "      \"bodyPreview\": \"Netgate\\r\\n\\r\\nThank you for being a member!\\r\\n\\r\\nWelcome to the Patreon com",
+    942
+   ],
+   [
+    "      \"bodyPreview\": \"---------- Forwarded message ---------\\r\\nFrom: Emilia Cadenasso <emiliarcaden",
+    882
+   ],
+   [
+    "      \"subject\": \"Re: Action needed - Review guidance and respond - TrackingID#N\",",
+    882
+   ],
+   [
+    "          \"name\": \"Reso Reservation Email was Delivered\",",
+    870
+   ]
+  ],
+  "mcp__ms365__graph-batch": [
+   [
+    "            \"id\": \"AQMkADAwATYNMDABLTlmNTUALWENZGUtMDACLTAwCgBGAAADfHgLJFooeEuAVUNTlNxLTgcANymqAQJNi",
+    12470
+   ],
+   [
+    "        \"Content-Type\": \"application/json; odata.metadata=minimal; odata.streaming=true; IEEENCompat",
+    8127
+   ],
+   [
+    "        \"Content-Type\": \"application/json;odata.metadata=minimal;odata.streaming=true;IEEENCompatibl",
+    7501
+   ],
+   [
+    "      \"status\": N,",
+    4704
+   ],
+   [
+    "            \"receivedDateTime\": \"N-N-NTN:N:NZ\",",
+    4536
+   ],
+   [
+    "            \"id\": \"ANCNDEDNDNBENE!N\"",
+    4510
+   ],
+   [
+    "                \"provisioningStatus\": \"Success\",",
+    4312
+   ],
+   [
+    "      \"headers\": {",
+    4256
+   ],
+   [
+    "        \"Content-Type\": \"application/json\"",
+    3913
+   ],
+   [
+    "            \"date\": \"N-N-NTN:N:N\",",
+    3827
+   ],
+   [
+    "      \"body\": {",
+    3568
+   ],
+   [
+    "          },",
+    3250
+   ],
+   [
+    "          \"message\": \"Missing scope permissions on the request. API requires one of 'OnlineMeetingAi",
+    2723
+   ],
+   [
+    "                \"appliesTo\": \"User\"",
+    2664
+   ],
+   [
+    "        \"Cache-Control\": \"no-store, no-cache\",",
+    2632
+   ],
+   [
+    "              \"emailAddress\": {",
+    2560
+   ],
+   [
+    "          \"innerError\": {",
+    2444
+   ],
+   [
+    "            \"lastModifiedDateTime\": \"N-N-NTN:N:NZ\",",
+    2340
+   ],
+   [
+    "        \"error\": {",
+    2242
+   ],
+   [
+    "              },",
+    2227
+   ],
+   [
+    "      \"id\": \"N\",",
+    2115
+   ],
+   [
+    "              }",
+    1968
+   ],
+   [
+    "        \"OData-Version\": \"N.N\",",
+    1920
+   ],
+   [
+    "        \"Cache-Control\": \"no-cache\",",
+    1850
+   ],
+   [
+    "            \"from\": {",
+    1760
+   ],
+   [
+    "            }",
+    1722
+   ],
+   [
+    "          \"message\": \"Missing scope permissions on the request. API requires one of 'Chat.ReadBasic,",
+    1596
+   ],
+   [
+    "          \"message\": \"Missing scope permissions on the request. API requires one of 'OnlineMeetingTr",
+    1560
+   ],
+   [
+    "          \"message\": \"Missing scope permissions on the request. API requires one of 'OnlineMeetingRe",
+    1556
+   ],
+   [
+    "              {",
+    1536
+   ],
+   [
+    "          \"message\": \"Missing scope permissions on the request. API requires one of 'Team.ReadBasic.",
+    1521
+   ],
+   [
+    "          \"message\": \"The sharing link no longer exists, or you do not have permission to access it.",
+    1236
+   ],
+   [
+    "        \"Cache-Control\": \"no-store, no-cache, max-age=N, private\",",
+    1139
+   ],
+   [
+    "            \"id\": \"AQMkAGEyYThhZWFjLTcNMDgtNGYxMyNMjAxLTQzYjRlMTAwADJmNNMALgAAANgreNmbOZBhyNSYETpgyI",
+    1136
+   ],
+   [
+    "        \"x-ms-resource-unit\": \"N\",",
+    1120
+   ],
+   [
+    "        \"Cache-Control\": \"private\",",
+    1116
+   ],
+   [
+    "        \"Link\": \"<https://developer.microsoft-tst.com/en-us/graph/changes?$filterby=vN.N,New_Propert",
+    1035
+   ],
+   [
+    "          \"code\": \"Forbidden\",",
+    1023
+   ],
+   [
+    "                \"sortOrder\": \"ascending\",",
+    1008
+   ],
+   [
+    "                \"viewType\": \"thumbnails\"",
+    984
+   ]
+  ]
+ },
+ "grep_repeated_path_bytes": {
+  "grep": 185906,
+  "echo": 56276,
+  "sed": 22330,
+  "git grep": 22038,
+  "ls": 10279,
+  "git add": 8147,
+  "(for-loop)": 7127,
+  "G()": 5997,
+  "cat": 5238,
+  "git show": 4604,
+  "python3 -c": 4201,
+  "pnpm vitest": 3231,
+  "-E": 3008,
+  "head": 2822,
+  "git diff": 2561
+ },
+ "grep_line_bytes": {
+  "grep": 1022260,
+  "echo": 387439,
+  "sed": 109435,
+  "git grep": 152362,
+  "ls": 89513,
+  "git add": 26496,
+  "(for-loop)": 65429,
+  "G()": 28920,
+  "cat": 34055,
+  "git show": 16638,
+  "python3 -c": 28478,
+  "pnpm vitest": 13213,
+  "-E": 11966,
+  "head": 12870,
+  "git diff": 8444
+ }
+}

@@ -1,0 +1,303 @@
+{
+ "main": {
+  "files": 1030,
+  "instr_n": 986,
+  "instr_median": 2335,
+  "instr_per_server": {
+   "motion": {
+    "present": 841,
+    "median_chars": 257
+   },
+   "motion-plus": {
+    "present": 683,
+    "median_chars": 262
+   },
+   "ms365": {
+    "present": 661,
+    "median_chars": 1757
+   },
+   "mac-messages": {
+    "present": 35,
+    "median_chars": 795
+   },
+   "claude.ai Claude Docs": {
+    "present": 215,
+    "median_chars": 1895
+   }
+  },
+  "deferred_n": 1030,
+  "deferred_median_chars": 7113,
+  "deferred_median_names": 211,
+  "deferred_per_server": {
+   "(built-in)": {
+    "present": 875,
+    "median_names": 22
+   },
+   "motion-plus": {
+    "present": 563,
+    "median_names": 4
+   },
+   "motion": {
+    "present": 717,
+    "median_names": 1
+   },
+   "ms365": {
+    "present": 539,
+    "median_names": 188
+   },
+   "claude_ai_uidotsh": {
+    "present": 218,
+    "median_names": 1
+   },
+   "mac-messages": {
+    "present": 34,
+    "median_names": 11
+   },
+   "claude_ai_Claude_Docs": {
+    "present": 172,
+    "median_names": 8
+   },
+   "uidotsh": {
+    "present": 39,
+    "median_names": 1
+   },
+   "claude_ai_Gmail": {
+    "present": 73,
+    "median_names": 2
+   },
+   "claude_ai_Google_Calendar": {
+    "present": 73,
+    "median_names": 2
+   },
+   "claude_ai_Google_Drive": {
+    "present": 127,
+    "median_names": 2
+   }
+  },
+  "builtin_deferred_names": {
+   "WebSearch": 872,
+   "CronCreate": 773,
+   "CronDelete": 773,
+   "CronList": 773,
+   "DesignSync": 773,
+   "EnterWorktree": 773,
+   "ExitWorktree": 773,
+   "Monitor": 773,
+   "NotebookEdit": 773,
+   "PushNotification": 773,
+   "SendMessage": 773,
+   "TaskStop": 773,
+   "RemoteTrigger": 771,
+   "WebFetch": 756,
+   "ListMcpResourcesTool": 726,
+   "ReadMcpResourceDirTool": 726,
+   "ReadMcpResourceTool": 726,
+   "SendUserFile": 695,
+   "EnterPlanMode": 693,
+   "ExitPlanMode": 693,
+   "EndConversation": 692,
+   "TaskOutput": 681,
+   "ms365": 220,
+   "motion-plus": 198,
+   "FetchInboxMessage": 58,
+   "motion": 43,
+   "TaskCreate": 13,
+   "TaskGet": 13,
+   "TaskList": 13,
+   "TaskUpdate": 13,
+   "mac-messages": 2
+  }
+ },
+ "subagent": {
+  "files": 354,
+  "instr_n": 354,
+  "instr_median": 2416,
+  "instr_per_server": {
+   "motion": {
+    "present": 354,
+    "median_chars": 257
+   },
+   "motion-plus": {
+    "present": 354,
+    "median_chars": 262
+   },
+   "ms365": {
+    "present": 350,
+    "median_chars": 1757
+   },
+   "mac-messages": {
+    "present": 28,
+    "median_chars": 795
+   },
+   "claude.ai Claude Docs": {
+    "present": 94,
+    "median_chars": 1895
+   }
+  },
+  "deferred_n": 346,
+  "deferred_median_chars": 304,
+  "deferred_median_names": 2,
+  "deferred_per_server": {
+   "(built-in)": {
+    "present": 346,
+    "median_names": 2
+   },
+   "claude_ai_Gmail": {
+    "present": 21,
+    "median_names": 2
+   },
+   "claude_ai_Google_Calendar": {
+    "present": 21,
+    "median_names": 2
+   },
+   "claude_ai_Google_Drive": {
+    "present": 23,
+    "median_names": 2
+   },
+   "claude_ai_uidotsh": {
+    "present": 35,
+    "median_names": 1
+   },
+   "motion-plus": {
+    "present": 122,
+    "median_names": 4
+   },
+   "motion": {
+    "present": 122,
+    "median_names": 1
+   },
+   "ms365": {
+    "present": 122,
+    "median_names": 188
+   },
+   "mac-messages": {
+    "present": 6,
+    "median_names": 11
+   },
+   "claude_ai_Claude_Docs": {
+    "present": 19,
+    "median_names": 8
+   },
+   "uidotsh": {
+    "present": 3,
+    "median_names": 1
+   }
+  },
+  "builtin_deferred_names": {
+   "WebSearch": 346,
+   "WebFetch": 315,
+   "EnterWorktree": 122,
+   "ExitWorktree": 122,
+   "Monitor": 122,
+   "SendMessage": 122,
+   "TaskStop": 122,
+   "NotebookEdit": 116,
+   "CronCreate": 2,
+   "CronDelete": 2,
+   "CronList": 2,
+   "DesignSync": 2,
+   "ListMcpResourcesTool": 2,
+   "PushNotification": 2,
+   "ReadMcpResourceDirTool": 2,
+   "ReadMcpResourceTool": 2,
+   "RemoteTrigger": 2
+  }
+ },
+ "workflow_agent": {
+  "files": 2680,
+  "instr_n": 2385,
+  "instr_median": 2416,
+  "instr_per_server": {
+   "mac-messages": {
+    "present": 309,
+    "median_chars": 795
+   },
+   "motion": {
+    "present": 2371,
+    "median_chars": 257
+   },
+   "motion-plus": {
+    "present": 2371,
+    "median_chars": 262
+   },
+   "ms365": {
+    "present": 2245,
+    "median_chars": 1757
+   },
+   "claude.ai Claude Docs": {
+    "present": 710,
+    "median_chars": 1895
+   }
+  },
+  "deferred_n": 2680,
+  "deferred_median_chars": 7106,
+  "deferred_median_names": 212,
+  "deferred_per_server": {
+   "(built-in)": {
+    "present": 2664,
+    "median_names": 18
+   },
+   "claude_ai_uidotsh": {
+    "present": 1044,
+    "median_names": 1
+   },
+   "mac-messages": {
+    "present": 321,
+    "median_names": 11
+   },
+   "motion-plus": {
+    "present": 2520,
+    "median_names": 4
+   },
+   "motion": {
+    "present": 2520,
+    "median_names": 1
+   },
+   "ms365": {
+    "present": 2376,
+    "median_names": 188
+   },
+   "claude_ai_Claude_Docs": {
+    "present": 718,
+    "median_names": 8
+   },
+   "claude_ai_Google_Drive": {
+    "present": 714,
+    "median_names": 2
+   },
+   "uidotsh": {
+    "present": 454,
+    "median_names": 1
+   },
+   "claude_ai_Gmail": {
+    "present": 368,
+    "median_names": 2
+   },
+   "claude_ai_Google_Calendar": {
+    "present": 368,
+    "median_names": 2
+   }
+  },
+  "builtin_deferred_names": {
+   "WebSearch": 2664,
+   "CronCreate": 2520,
+   "CronDelete": 2520,
+   "CronList": 2520,
+   "DesignSync": 2520,
+   "EnterWorktree": 2520,
+   "ExitWorktree": 2520,
+   "ListMcpResourcesTool": 2520,
+   "Monitor": 2520,
+   "NotebookEdit": 2520,
+   "PushNotification": 2520,
+   "ReadMcpResourceDirTool": 2520,
+   "ReadMcpResourceTool": 2520,
+   "RemoteTrigger": 2520,
+   "SendMessage": 2520,
+   "TaskStop": 2520,
+   "SendUserFile": 2497,
+   "WebFetch": 1670,
+   "FetchInboxMessage": 317
+  }
+ }
+}

@@ -1,0 +1,673 @@
+{
+ "n_main_sessions": 1052,
+ "skills": {
+  "limit-recover": {
+   "skill_calls": 11,
+   "skill_calls_main": 11,
+   "skill_calls_agent": 0,
+   "slash": 110,
+   "main_sessions": 77,
+   "errors": 0,
+   "main_session_share": 0.0732
+  },
+  "ship": {
+   "skill_calls": 108,
+   "skill_calls_main": 108,
+   "skill_calls_agent": 0,
+   "slash": 0,
+   "main_sessions": 108,
+   "errors": 0,
+   "main_session_share": 0.1027
+  },
+  "(unnamed local-command output)": {
+   "skill_calls": 0,
+   "skill_calls_main": 0,
+   "skill_calls_agent": 0,
+   "slash": 73,
+   "main_sessions": 41,
+   "errors": 0,
+   "main_session_share": 0.039
+  },
+  "are-we-done": {
+   "skill_calls": 0,
+   "skill_calls_main": 0,
+   "skill_calls_agent": 0,
+   "slash": 70,
+   "main_sessions": 57,
+   "errors": 0,
+   "main_session_share": 0.0542
+  },
+  "accounts": {
+   "skill_calls": 0,
+   "skill_calls_main": 0,
+   "skill_calls_agent": 0,
+   "slash": 69,
+   "main_sessions": 51,
+   "errors": 0,
+   "main_session_share": 0.0485
+  },
+  "effort": {
+   "skill_calls": 0,
+   "skill_calls_main": 0,
+   "skill_calls_agent": 0,
+   "slash": 31,
+   "main_sessions": 27,
+   "errors": 0,
+   "main_session_share": 0.0257
+  },
+  "model": {
+   "skill_calls": 0,
+   "skill_calls_main": 0,
+   "skill_calls_agent": 0,
+   "slash": 23,
+   "main_sessions": 19,
+   "errors": 0,
+   "main_session_share": 0.0181
+  },
+  "handoff": {
+   "skill_calls": 21,
+   "skill_calls_main": 21,
+   "skill_calls_agent": 0,
+   "slash": 1,
+   "main_sessions": 21,
+   "errors": 0,
+   "main_session_share": 0.02
+  },
+  "goal": {
+   "skill_calls": 0,
+   "skill_calls_main": 0,
+   "skill_calls_agent": 0,
+   "slash": 19,
+   "main_sessions": 18,
+   "errors": 0,
+   "main_session_share": 0.0171
+  },
+  "context": {
+   "skill_calls": 0,
+   "skill_calls_main": 0,
+   "skill_calls_agent": 0,
+   "slash": 18,
+   "main_sessions": 18,
+   "errors": 0,
+   "main_session_share": 0.0171
+  },
+  "qa-commits": {
+   "skill_calls": 0,
+   "skill_calls_main": 0,
+   "skill_calls_agent": 0,
+   "slash": 14,
+   "main_sessions": 14,
+   "errors": 0,
+   "main_session_share": 0.0133
+  },
+  "outbound-drafting": {
+   "skill_calls": 13,
+   "skill_calls_main": 11,
+   "skill_calls_agent": 2,
+   "slash": 0,
+   "main_sessions": 13,
+   "errors": 0,
+   "main_session_share": 0.0124
+  },
+  "keep-laptop-alive": {
+   "skill_calls": 0,
+   "skill_calls_main": 0,
+   "skill_calls_agent": 0,
+   "slash": 13,
+   "main_sessions": 8,
+   "errors": 0,
+   "main_session_share": 0.0076
+  },
+  "research-subagents": {
+   "skill_calls": 12,
+   "skill_calls_main": 12,
+   "skill_calls_agent": 0,
+   "slash": 0,
+   "main_sessions": 12,
+   "errors": 0,
+   "main_session_share": 0.0114
+  },
+  "workflow-authoring": {
+   "skill_calls": 12,
+   "skill_calls_main": 12,
+   "skill_calls_agent": 0,
+   "slash": 0,
+   "main_sessions": 12,
+   "errors": 0,
+   "main_session_share": 0.0114
+  },
+  "plan-conventions": {
+   "skill_calls": 9,
+   "skill_calls_main": 9,
+   "skill_calls_agent": 0,
+   "slash": 0,
+   "main_sessions": 9,
+   "errors": 0,
+   "main_session_share": 0.0086
+  },
+  "pyramid-principle": {
+   "skill_calls": 7,
+   "skill_calls_main": 7,
+   "skill_calls_agent": 0,
+   "slash": 1,
+   "main_sessions": 8,
+   "errors": 0,
+   "main_session_share": 0.0076
+  },
+  "agent-teams": {
+   "skill_calls": 7,
+   "skill_calls_main": 7,
+   "skill_calls_agent": 0,
+   "slash": 0,
+   "main_sessions": 7,
+   "errors": 0,
+   "main_session_share": 0.0067
+  },
+  "clear": {
+   "skill_calls": 0,
+   "skill_calls_main": 0,
+   "skill_calls_agent": 0,
+   "slash": 7,
+   "main_sessions": 7,
+   "errors": 0,
+   "main_session_share": 0.0067
+  },
+  "pyramid-principle-full": {
+   "skill_calls": 6,
+   "skill_calls_main": 6,
+   "skill_calls_agent": 0,
+   "slash": 0,
+   "main_sessions": 6,
+   "errors": 0,
+   "main_session_share": 0.0057
+  },
+  "read-twitter": {
+   "skill_calls": 2,
+   "skill_calls_main": 2,
+   "skill_calls_agent": 0,
+   "slash": 3,
+   "main_sessions": 5,
+   "errors": 0,
+   "main_session_share": 0.0048
+  },
+  "agent-browser": {
+   "skill_calls": 4,
+   "skill_calls_main": 0,
+   "skill_calls_agent": 4,
+   "slash": 0,
+   "main_sessions": 3,
+   "errors": 0,
+   "main_session_share": 0.0029
+  },
+  "artifact-design": {
+   "skill_calls": 4,
+   "skill_calls_main": 4,
+   "skill_calls_agent": 0,
+   "slash": 0,
+   "main_sessions": 4,
+   "errors": 0,
+   "main_session_share": 0.0038
+  },
+  "claude-api": {
+   "skill_calls": 3,
+   "skill_calls_main": 2,
+   "skill_calls_agent": 1,
+   "slash": 0,
+   "main_sessions": 3,
+   "errors": 0,
+   "main_session_share": 0.0029
+  },
+  "resume-sessions": {
+   "skill_calls": 1,
+   "skill_calls_main": 1,
+   "skill_calls_agent": 0,
+   "slash": 2,
+   "main_sessions": 3,
+   "errors": 0,
+   "main_session_share": 0.0029
+  },
+  "exit": {
+   "skill_calls": 0,
+   "skill_calls_main": 0,
+   "skill_calls_agent": 0,
+   "slash": 3,
+   "main_sessions": 3,
+   "errors": 0,
+   "main_session_share": 0.0029
+  },
+  "account-relogin": {
+   "skill_calls": 2,
+   "skill_calls_main": 2,
+   "skill_calls_agent": 0,
+   "slash": 0,
+   "main_sessions": 2,
+   "errors": 0,
+   "main_session_share": 0.0019
+  },
+  "beautiful-mermaid-docs": {
+   "skill_calls": 2,
+   "skill_calls_main": 2,
+   "skill_calls_agent": 0,
+   "slash": 0,
+   "main_sessions": 2,
+   "errors": 0,
+   "main_session_share": 0.0019
+  },
+  "compact-memory": {
+   "skill_calls": 1,
+   "skill_calls_main": 1,
+   "skill_calls_agent": 0,
+   "slash": 1,
+   "main_sessions": 2,
+   "errors": 0,
+   "main_session_share": 0.0019
+  },
+  "frontend-design:frontend-design": {
+   "skill_calls": 2,
+   "skill_calls_main": 2,
+   "skill_calls_agent": 0,
+   "slash": 0,
+   "main_sessions": 2,
+   "errors": 0,
+   "main_session_share": 0.0019
+  },
+  "cc-version-audit": {
+   "skill_calls": 0,
+   "skill_calls_main": 0,
+   "skill_calls_agent": 0,
+   "slash": 2,
+   "main_sessions": 1,
+   "errors": 0,
+   "main_session_share": 0.001
+  },
+  "relogin": {
+   "skill_calls": 0,
+   "skill_calls_main": 0,
+   "skill_calls_agent": 0,
+   "slash": 2,
+   "main_sessions": 1,
+   "errors": 0,
+   "main_session_share": 0.001
+  },
+  "amplify-build": {
+   "skill_calls": 1,
+   "skill_calls_main": 1,
+   "skill_calls_agent": 0,
+   "slash": 0,
+   "main_sessions": 1,
+   "errors": 0,
+   "main_session_share": 0.001
+  },
+  "bottle-reference-sourcing": {
+   "skill_calls": 1,
+   "skill_calls_main": 0,
+   "skill_calls_agent": 1,
+   "slash": 0,
+   "main_sessions": 1,
+   "errors": 0,
+   "main_session_share": 0.001
+  },
+  "bottle-sourcing-per-bottle": {
+   "skill_calls": 1,
+   "skill_calls_main": 1,
+   "skill_calls_agent": 0,
+   "slash": 0,
+   "main_sessions": 1,
+   "errors": 0,
+   "main_session_share": 0.001
+  },
+  "dia-agent": {
+   "skill_calls": 1,
+   "skill_calls_main": 1,
+   "skill_calls_agent": 0,
+   "slash": 0,
+   "main_sessions": 1,
+   "errors": 0,
+   "main_session_share": 0.001
+  },
+  "frontier-campaign": {
+   "skill_calls": 1,
+   "skill_calls_main": 1,
+   "skill_calls_agent": 0,
+   "slash": 0,
+   "main_sessions": 1,
+   "errors": 0,
+   "main_session_share": 0.001
+  },
+  "ground-up": {
+   "skill_calls": 1,
+   "skill_calls_main": 1,
+   "skill_calls_agent": 0,
+   "slash": 0,
+   "main_sessions": 1,
+   "errors": 0,
+   "main_session_share": 0.001
+  },
+  "manual-command-delivery": {
+   "skill_calls": 1,
+   "skill_calls_main": 1,
+   "skill_calls_agent": 0,
+   "slash": 0,
+   "main_sessions": 1,
+   "errors": 0,
+   "main_session_share": 0.001
+  },
+  "model-upgrade": {
+   "skill_calls": 1,
+   "skill_calls_main": 1,
+   "skill_calls_agent": 0,
+   "slash": 0,
+   "main_sessions": 1,
+   "errors": 0,
+   "main_session_share": 0.001
+  },
+  "motion": {
+   "skill_calls": 1,
+   "skill_calls_main": 1,
+   "skill_calls_agent": 0,
+   "slash": 0,
+   "main_sessions": 1,
+   "errors": 0,
+   "main_session_share": 0.001
+  },
+  "video-understanding": {
+   "skill_calls": 1,
+   "skill_calls_main": 1,
+   "skill_calls_agent": 0,
+   "slash": 0,
+   "main_sessions": 1,
+   "errors": 0,
+   "main_session_share": 0.001
+  },
+  "cc-upgrade-gate": {
+   "skill_calls": 0,
+   "skill_calls_main": 0,
+   "skill_calls_agent": 0,
+   "slash": 1,
+   "main_sessions": 1,
+   "errors": 0,
+   "main_session_share": 0.001
+  },
+  "dep-audit": {
+   "skill_calls": 0,
+   "skill_calls_main": 0,
+   "skill_calls_agent": 0,
+   "slash": 1,
+   "main_sessions": 1,
+   "errors": 0,
+   "main_session_share": 0.001
+  },
+  "design-login": {
+   "skill_calls": 0,
+   "skill_calls_main": 0,
+   "skill_calls_agent": 0,
+   "slash": 1,
+   "main_sessions": 1,
+   "errors": 0,
+   "main_session_share": 0.001
+  },
+  "keybindings": {
+   "skill_calls": 0,
+   "skill_calls_main": 0,
+   "skill_calls_agent": 0,
+   "slash": 1,
+   "main_sessions": 1,
+   "errors": 0,
+   "main_session_share": 0.001
+  },
+  "skill-promote": {
+   "skill_calls": 0,
+   "skill_calls_main": 0,
+   "skill_calls_agent": 0,
+   "slash": 1,
+   "main_sessions": 1,
+   "errors": 0,
+   "main_session_share": 0.001
+  }
+ },
+ "skill_tool_total": 237,
+ "skill_tool_errors": 0,
+ "main_sessions_with_any_skill_call": 183,
+ "agent_tool_spawns_by_type": {
+  "deep-research": 374,
+  "general-purpose": 197,
+  "(none)": 33,
+  "Explore": 15,
+  "probe-unpinned": 8,
+  "research-decomposition-critic": 4,
+  "frontier-derivation-omit": 3,
+  "probe-pinned-medium": 3,
+  "research-decomposition-critic-omit": 3,
+  "frontier-derivation-base": 2,
+  "research-decomposition-critic-base": 2,
+  "Adjudicate STOP-bar codepoint G8": 1,
+  "Adjudicate double-key G1": 1,
+  "Adjudicate double-key G2": 1,
+  "Adjudicate double-key G3": 1,
+  "Adjudicate double-key G4": 1,
+  "Adjudicate double-key G5": 1,
+  "Adjudicate double-key G6": 1,
+  "Adjudicate double-key G7": 1,
+  "Blind re-key A25 famis": 1,
+  "Blind re-key A27 (foreground)": 1,
+  "Blind re-key A3 README": 1,
+  "Resume blind re-key A1": 1,
+  "Resume blind re-key A9": 1,
+  "Verify: backup prune glob": 1,
+  "Verify: bundled short options": 1,
+  "Verify: clause split separator": 1,
+  "Verify: is-true-flag layer1 shortcircuit": 1,
+  "Verify: jq fail-open": 1,
+  "Verify: mailbox body splice": 1,
+  "Verify: phase0 exit status": 1,
+  "Verify: python3 -c path interpolation": 1,
+  "Verify: reset-hard arm sentinel": 1,
+  "Verify: verdict JSON injection": 1,
+  "claude-code-guide": 1,
+  "code-reviewer": 1,
+  "deep-research-base": 1,
+  "deep-research-omit": 1,
+  "deep-research-sonnet-base": 1,
+  "deep-research-sonnet-omit": 1,
+  "fat": 1,
+  "lean": 1
+ },
+ "agent_files_by_type": {
+  "workflow_agent:workflow-subagent": 2313,
+  "subagent:deep-research": 221,
+  "workflow_agent:general-purpose": 213,
+  "workflow_agent:deep-research": 143,
+  "subagent:general-purpose": 115,
+  "subagent:Explore": 6,
+  "subagent:research-decomposition-critic": 4,
+  "subagent:probe-unpinned": 3,
+  "subagent:probe-pinned-medium": 2,
+  "subagent:code-reviewer": 1,
+  "subagent:deep-research-base": 1,
+  "subagent:deep-research-omit": 1,
+  "subagent:deep-research-sonnet-base": 1,
+  "subagent:deep-research-sonnet-omit": 1,
+  "subagent:fat": 1,
+  "subagent:frontier-derivation-base": 1,
+  "subagent:frontier-derivation-omit": 1,
+  "subagent:lean": 1,
+  "subagent:research-decomposition-critic-base": 1,
+  "subagent:research-decomposition-critic-omit": 1
+ },
+ "agent_listing_delta": [
+  {
+   "ctx_type": "main",
+   "n": 1035,
+   "chars": 6744271,
+   "avg": 6516.0
+  },
+  {
+   "ctx_type": "subagent",
+   "n": 17,
+   "chars": 140651,
+   "avg": 8274.0
+  }
+ ],
+ "mcp_servers": {
+  "ms365": {
+   "calls": 748,
+   "errors": 41,
+   "error_rate": 0.0548,
+   "sessions": 32,
+   "session_share": 0.0304,
+   "top_tools": {
+    "list-mail-messages": 233,
+    "graph-batch": 132,
+    "get-mail-message": 106,
+    "download-bytes-to-file": 51,
+    "list-mail-folder-messages": 28,
+    "list-accounts": 25,
+    "update-mail-message": 23,
+    "list-mail-attachments": 19
+   }
+  },
+  "claude_ai_uidotsh": {
+   "calls": 31,
+   "errors": 2,
+   "error_rate": 0.0645,
+   "sessions": 5,
+   "session_share": 0.0048,
+   "top_tools": {
+    "uidotsh_fetch": 29,
+    "authenticate": 2
+   }
+  },
+  "motion": {
+   "calls": 9,
+   "errors": 2,
+   "error_rate": 0.2222,
+   "sessions": 4,
+   "session_share": 0.0038,
+   "top_tools": {
+    "search-motion-docs": 9
+   }
+  },
+  "motion-plus": {
+   "calls": 7,
+   "errors": 0,
+   "error_rate": 0.0,
+   "sessions": 4,
+   "session_share": 0.0038,
+   "top_tools": {
+    "generate-css-easing": 4,
+    "search-motion-source": 3
+   }
+  },
+  "mac-messages": {
+   "calls": 2,
+   "errors": 0,
+   "error_rate": 0.0,
+   "sessions": 1,
+   "session_share": 0.001,
+   "top_tools": {
+    "tool_get_recent_messages": 2
+   }
+  }
+ },
+ "mcp_instructions_delta": [
+  {
+   "ctx_type": "main",
+   "n": 1274,
+   "chars": 2582673,
+   "avg": 2027.0,
+   "max": 5106
+  },
+  {
+   "ctx_type": "subagent",
+   "n": 354,
+   "chars": 1040841,
+   "avg": 2940.0,
+   "max": 5106
+  },
+  {
+   "ctx_type": "workflow_agent",
+   "n": 2385,
+   "chars": 7029695,
+   "avg": 2947.0,
+   "max": 5106
+  }
+ ],
+ "deferred_tools_delta": [
+  {
+   "ctx_type": "main",
+   "n": 1400,
+   "chars": 5786662,
+   "avg": 4133.0,
+   "max": 8230
+  },
+  {
+   "ctx_type": "subagent",
+   "n": 352,
+   "chars": 932272,
+   "avg": 2649.0,
+   "max": 7433
+  },
+  {
+   "ctx_type": "workflow_agent",
+   "n": 2805,
+   "chars": 17606613,
+   "avg": 6277.0,
+   "max": 8176
+  }
+ ],
+ "toolsearch_calls": {
+  "main": {
+   "calls": 658,
+   "sessions": 436
+  },
+  "subagent": {
+   "calls": 132,
+   "sessions": 32
+  },
+  "workflow_agent": {
+   "calls": 729,
+   "sessions": 37
+  }
+ },
+ "toolsearch_targets": {
+  "select:WebSearch": 748,
+  "select:WebFetch": 581,
+  "select:ms365": 410,
+  "select:Monitor": 265,
+  "select:SendMessage": 140,
+  "select:TaskStop": 115,
+  "keyword": 44,
+  "select:SendUserFile": 30,
+  "select:TaskOutput": 13,
+  "select:Glob": 11,
+  "select:Grep": 11,
+  "select:claude_ai_uidotsh": 8,
+  "select:motion-plus": 8,
+  "select:ReadMcpResourceTool": 4,
+  "select:motion": 4,
+  "select:TaskCreate": 3,
+  "select:TaskList": 3,
+  "select:TaskUpdate": 3,
+  "select:PushNotification": 2,
+  "select:ListMcpResourcesTool": 2,
+  "select:m": 2,
+  "select:claude_ai_Gmail": 2,
+  "select:CronCreate": 1,
+  "select:DesignSync": 1,
+  "select:RemoteTrigger": 1,
+  "select:TaskGet": 1,
+  "select:mcp__": 1,
+  "select:mcp": 1,
+  "select:Workflow": 1,
+  "select:WorkflowCreate": 1,
+  "select:Agent": 1,
+  "select:Task": 1,
+  "select:mcp__ms365": 1,
+  "select:mac-messages": 1,
+  "select:mcp__ms365_": 1
+ },
+ "toolsearch_errors": [
+  1519,
+  0
+ ]
+}

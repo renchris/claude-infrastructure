@@ -1,0 +1,3015 @@
+{
+ "generated_by": "scripts/listings_assemble.py",
+ "window": "2026-09-09T00:00Z .. 2026-09-23T23:02Z (extract build of record)",
+ "context_from_tmp": {
+  "default": {
+   "System prompt": "2.2k",
+   "MCP tools": "629",
+   "MCP tools (deferred)": "367.7k",
+   "System tools (deferred)": "14.1k",
+   "Custom agents": "1.4k",
+   "Memory files": "48.2k",
+   "Skills": "10k",
+   "Messages": "1.7k",
+   "Compact buffer": "3k",
+   "Free space": "932.9k"
+  },
+  "budget_1_char": {
+   "System prompt": "2.2k",
+   "System tools": "7.4k",
+   "MCP tools": "629",
+   "MCP tools (deferred)": "367.7k",
+   "System tools (deferred)": "14.1k",
+   "Custom agents": "1.4k",
+   "Memory files": "48.2k",
+   "Skills": "2.4k",
+   "Messages": "1.7k",
+   "Compact buffer": "3k",
+   "Free space": "933k"
+  },
+  "note": "headless /context from /tmp, claude 2.1.280, claude-opus-5-5[1m]; per-skill figures are Claude Code estimates (chars/3)"
+ },
+ "binary_listing_logic": {
+  "budget": "SLASH_COMMAND_TOOL_CHAR_BUDGET if set, else floor(contextWindow * bytesPerToken * skillListingBudgetFraction)",
+  "defaults": {
+   "skillListingBudgetFraction": 0.01,
+   "bytesPerToken": "3 for Opus 5.x/Fable/Sonnet 5; 4 for pre-5 models",
+   "contextWindow_default": 200000,
+   "skillListingMaxDescChars": 1536
+  },
+  "effective_budget_chars": {
+   "1M window, Opus 5.x/Fable": 30000,
+   "200k window, Opus 5.x": 6000,
+   "200k window, pre-5 model": 8000
+  },
+  "entry": "\"- name: \" + (description [+ \" - \" + when_to_use]) cut to 1536 chars with an ellipsis",
+  "over_budget": "bundled prompt skills keep full text; skillOverrides name-only stay name-only; all others start name-only and are given their full text greedily in usage-score order (usageCount * max(0.5^(days/7), 0.1), from <configdir>/.claude.json skillUsage) while the increment fits",
+  "settings": [
+   "skillListingBudgetFraction",
+   "skillListingMaxDescChars",
+   "skillOverrides {name: on|name-only|user-invocable-only|off}",
+   "disableBundledSkills"
+  ],
+  "no_listing_when": "the context tool set lacks the Skill tool (fn yCn returns [])",
+  "sources": "claude.exe 2.1.280 fns nUe, JBt, yCn, Fmt, LYe, qke, xf (byte offsets ~178.77M, ~180.34M, ~180.44M)"
+ },
+ "rendered_listing_sizes": {
+  "main": {
+   "n": 872,
+   "median_chars": 30080,
+   "p90_chars": 30097,
+   "max_chars": 30103,
+   "median_header": 82,
+   "median_described": 47,
+   "median_nameonly": 31
+  },
+  "subagent": {
+   "n": 346,
+   "median_chars": 30083,
+   "p90_chars": 30096,
+   "max_chars": 30103,
+   "median_header": 82,
+   "median_described": 46,
+   "median_nameonly": 33
+  },
+  "workflow_agent": {
+   "n": 2664,
+   "median_chars": 30088,
+   "p90_chars": 30102,
+   "max_chars": 30103,
+   "median_header": 82,
+   "median_described": 47,
+   "median_nameonly": 36
+  }
+ },
+ "rendered_listing_counts": {
+  "main": 872,
+  "subagent": 346,
+  "workflow_agent": 2664
+ },
+ "skills": [
+  {
+   "name": "cafe-wifi-optimization",
+   "kind": "skill",
+   "path": "/Users/chrisren/.claude/skills/cafe-wifi-optimization/SKILL.md",
+   "frontmatter_desc_chars": 2107,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 2107,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "< 20",
+   "rendered_listings_described": 0,
+   "rendered_listings_nameonly": 732,
+   "described_share": 0.0,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 8,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 1
+  },
+  {
+   "name": "limit-recover",
+   "kind": "command",
+   "path": "/Users/chrisren/Development/claude-infrastructure/commands/limit-recover.md",
+   "frontmatter_desc_chars": 1838,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 1838,
+   "strict_yaml_fails": true,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "~520",
+   "rendered_listings_described": 3855,
+   "rendered_listings_nameonly": 16,
+   "described_share": 0.996,
+   "skill_tool_calls_14d": 11,
+   "slash_invocations_14d": 110,
+   "main_sessions_using": 77,
+   "main_session_share": 0.0732,
+   "declared_trigger_phrases": 10,
+   "trigger_phrases_seen_in_prompts": 1,
+   "name_mentioned_sessions": 103
+  },
+  {
+   "name": "frontier-routing",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/frontier-routing/SKILL.md",
+   "frontmatter_desc_chars": 1628,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 1628,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "< 20",
+   "rendered_listings_described": 0,
+   "rendered_listings_nameonly": 3871,
+   "described_share": 0.0,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 1,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 3
+  },
+  {
+   "name": "permission-harvest",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/permission-harvest/SKILL.md",
+   "frontmatter_desc_chars": 1528,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 1528,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "< 20",
+   "rendered_listings_described": 0,
+   "rendered_listings_nameonly": 3261,
+   "described_share": 0.0,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 5,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 4
+  },
+  {
+   "name": "dia-agent",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/dia-agent/SKILL.md",
+   "frontmatter_desc_chars": 1462,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 1462,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "~490",
+   "rendered_listings_described": 3855,
+   "rendered_listings_nameonly": 16,
+   "described_share": 0.996,
+   "skill_tool_calls_14d": 1,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 1,
+   "main_session_share": 0.001,
+   "declared_trigger_phrases": 11,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 2
+  },
+  {
+   "name": "manual-command-delivery",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/manual-command-delivery/SKILL.md",
+   "frontmatter_desc_chars": 1412,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 1412,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "~480",
+   "rendered_listings_described": 3842,
+   "rendered_listings_nameonly": 29,
+   "described_share": 0.993,
+   "skill_tool_calls_14d": 1,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 1,
+   "main_session_share": 0.001,
+   "declared_trigger_phrases": 5,
+   "trigger_phrases_seen_in_prompts": 1,
+   "name_mentioned_sessions": 2
+  },
+  {
+   "name": "plan-conventions",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/plan-conventions/SKILL.md",
+   "frontmatter_desc_chars": 1407,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 1407,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "~480",
+   "rendered_listings_described": 3526,
+   "rendered_listings_nameonly": 345,
+   "described_share": 0.911,
+   "skill_tool_calls_14d": 9,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 9,
+   "main_session_share": 0.0086,
+   "declared_trigger_phrases": 4,
+   "trigger_phrases_seen_in_prompts": 2,
+   "name_mentioned_sessions": 4
+  },
+  {
+   "name": "demo-recording",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/demo-recording/SKILL.md",
+   "frontmatter_desc_chars": 1398,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 1398,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "< 20",
+   "rendered_listings_described": 1388,
+   "rendered_listings_nameonly": 2483,
+   "described_share": 0.359,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 0,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 0
+  },
+  {
+   "name": "research-subagents",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/research-subagents/SKILL.md",
+   "frontmatter_desc_chars": 1256,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 1256,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "~430",
+   "rendered_listings_described": 3855,
+   "rendered_listings_nameonly": 16,
+   "described_share": 0.996,
+   "skill_tool_calls_14d": 12,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 12,
+   "main_session_share": 0.0114,
+   "declared_trigger_phrases": 5,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 7
+  },
+  {
+   "name": "browsermcp",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/browsermcp/SKILL.md",
+   "frontmatter_desc_chars": 1247,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 1247,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "< 20",
+   "rendered_listings_described": 1199,
+   "rendered_listings_nameonly": 2672,
+   "described_share": 0.31,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 5,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 0
+  },
+  {
+   "name": "agent-teams",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/agent-teams/SKILL.md",
+   "frontmatter_desc_chars": 1175,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 1175,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "~400",
+   "rendered_listings_described": 3855,
+   "rendered_listings_nameonly": 16,
+   "described_share": 0.996,
+   "skill_tool_calls_14d": 7,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 7,
+   "main_session_share": 0.0067,
+   "declared_trigger_phrases": 2,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 6
+  },
+  {
+   "name": "recover",
+   "kind": "command",
+   "path": "/Users/chrisren/Development/claude-infrastructure/commands/recover.md",
+   "frontmatter_desc_chars": 1148,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 1148,
+   "strict_yaml_fails": true,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "< 20",
+   "rendered_listings_described": 0,
+   "rendered_listings_nameonly": 3203,
+   "described_share": 0.0,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 9,
+   "trigger_phrases_seen_in_prompts": 1,
+   "name_mentioned_sessions": 18
+  },
+  {
+   "name": "codex-security",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/codex-security/SKILL.md",
+   "frontmatter_desc_chars": 1125,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 1125,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "< 20",
+   "rendered_listings_described": 804,
+   "rendered_listings_nameonly": 3067,
+   "described_share": 0.208,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 7,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 3
+  },
+  {
+   "name": "coding-standards",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/coding-standards/SKILL.md",
+   "frontmatter_desc_chars": 1093,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 1093,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "< 20",
+   "rendered_listings_described": 742,
+   "rendered_listings_nameonly": 3129,
+   "described_share": 0.192,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 2,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 0
+  },
+  {
+   "name": "self-explaining-artifact",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/self-explaining-artifact/SKILL.md",
+   "frontmatter_desc_chars": 1060,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 1060,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "~360",
+   "rendered_listings_described": 3057,
+   "rendered_listings_nameonly": 814,
+   "described_share": 0.79,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 5,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 0
+  },
+  {
+   "name": "repo-wiki",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/repo-wiki/SKILL.md",
+   "frontmatter_desc_chars": 1056,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 1056,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "< 20",
+   "rendered_listings_described": 0,
+   "rendered_listings_nameonly": 1309,
+   "described_share": 0.0,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 4,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 1
+  },
+  {
+   "name": "autonomous-authenticated-web-access",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/autonomous-authenticated-web-access/SKILL.md",
+   "frontmatter_desc_chars": 985,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 985,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "~340",
+   "rendered_listings_described": 3855,
+   "rendered_listings_nameonly": 16,
+   "described_share": 0.996,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 2,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 1
+  },
+  {
+   "name": "resume-sessions",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/resume-sessions/SKILL.md",
+   "frontmatter_desc_chars": 981,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 981,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "~330",
+   "rendered_listings_described": 3855,
+   "rendered_listings_nameonly": 16,
+   "described_share": 0.996,
+   "skill_tool_calls_14d": 1,
+   "slash_invocations_14d": 2,
+   "main_sessions_using": 3,
+   "main_session_share": 0.0029,
+   "declared_trigger_phrases": 7,
+   "trigger_phrases_seen_in_prompts": 1,
+   "name_mentioned_sessions": 6
+  },
+  {
+   "name": "grok-wiki-audit",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/grok-wiki-audit/SKILL.md",
+   "frontmatter_desc_chars": 911,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 911,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "< 20",
+   "rendered_listings_described": 0,
+   "rendered_listings_nameonly": 1314,
+   "described_share": 0.0,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 0,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 1
+  },
+  {
+   "name": "model-upgrade",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/model-upgrade/SKILL.md",
+   "frontmatter_desc_chars": 874,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 874,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "~300",
+   "rendered_listings_described": 1127,
+   "rendered_listings_nameonly": 2744,
+   "described_share": 0.291,
+   "skill_tool_calls_14d": 1,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 1,
+   "main_session_share": 0.001,
+   "declared_trigger_phrases": 4,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 5
+  },
+  {
+   "name": "frontier-run",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/frontier-run/SKILL.md",
+   "frontmatter_desc_chars": 813,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 813,
+   "strict_yaml_fails": true,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "~280",
+   "rendered_listings_described": 2788,
+   "rendered_listings_nameonly": 1083,
+   "described_share": 0.72,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 1,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 2
+  },
+  {
+   "name": "read-twitter",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/read-twitter/SKILL.md",
+   "frontmatter_desc_chars": 784,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 784,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "~270",
+   "rendered_listings_described": 544,
+   "rendered_listings_nameonly": 3023,
+   "described_share": 0.153,
+   "skill_tool_calls_14d": 2,
+   "slash_invocations_14d": 3,
+   "main_sessions_using": 5,
+   "main_session_share": 0.0048,
+   "declared_trigger_phrases": 1,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 6
+  },
+  {
+   "name": "cc-upgrade-gate",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/cc-upgrade-gate/SKILL.md",
+   "frontmatter_desc_chars": 752,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 752,
+   "strict_yaml_fails": true,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "~260",
+   "rendered_listings_described": 758,
+   "rendered_listings_nameonly": 3113,
+   "described_share": 0.196,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 1,
+   "main_sessions_using": 1,
+   "main_session_share": 0.001,
+   "declared_trigger_phrases": 3,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 4
+  },
+  {
+   "name": "video-understanding",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/video-understanding/SKILL.md",
+   "frontmatter_desc_chars": 749,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 749,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "< 20",
+   "rendered_listings_described": 1356,
+   "rendered_listings_nameonly": 2515,
+   "described_share": 0.35,
+   "skill_tool_calls_14d": 1,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 1,
+   "main_session_share": 0.001,
+   "declared_trigger_phrases": 0,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 0
+  },
+  {
+   "name": "kpmg-deck",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/kpmg-deck/SKILL.md",
+   "frontmatter_desc_chars": 746,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 746,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "~250",
+   "rendered_listings_described": 1651,
+   "rendered_listings_nameonly": 2220,
+   "described_share": 0.427,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 1,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 0
+  },
+  {
+   "name": "frontier-campaign",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/frontier-campaign/SKILL.md",
+   "frontmatter_desc_chars": 729,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 729,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "< 20",
+   "rendered_listings_described": 1808,
+   "rendered_listings_nameonly": 2063,
+   "described_share": 0.467,
+   "skill_tool_calls_14d": 1,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 1,
+   "main_session_share": 0.001,
+   "declared_trigger_phrases": 1,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 3
+  },
+  {
+   "name": "pyramid-principle-full",
+   "kind": "skill",
+   "path": "/Users/chrisren/.claude/skills/pyramid-principle-full/SKILL.md",
+   "frontmatter_desc_chars": 685,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 685,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "~240",
+   "rendered_listings_described": 3855,
+   "rendered_listings_nameonly": 16,
+   "described_share": 0.996,
+   "skill_tool_calls_14d": 6,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 6,
+   "main_session_share": 0.0057,
+   "declared_trigger_phrases": 3,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 11
+  },
+  {
+   "name": "visual-direction",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/visual-direction/SKILL.md",
+   "frontmatter_desc_chars": 647,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 647,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "< 20",
+   "rendered_listings_described": 0,
+   "rendered_listings_nameonly": 738,
+   "described_share": 0.0,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 1,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 1
+  },
+  {
+   "name": "motion",
+   "kind": "skill",
+   "path": "/Users/chrisren/.claude/skills/motion/SKILL.md",
+   "frontmatter_desc_chars": 634,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 634,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "< 20",
+   "rendered_listings_described": 798,
+   "rendered_listings_nameonly": 3073,
+   "described_share": 0.206,
+   "skill_tool_calls_14d": 1,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 1,
+   "main_session_share": 0.001,
+   "declared_trigger_phrases": 0,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 10
+  },
+  {
+   "name": "beautiful-mermaid-docs",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/beautiful-mermaid-docs/SKILL.md",
+   "frontmatter_desc_chars": 619,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 619,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "~220",
+   "rendered_listings_described": 3855,
+   "rendered_listings_nameonly": 16,
+   "described_share": 0.996,
+   "skill_tool_calls_14d": 2,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 2,
+   "main_session_share": 0.0019,
+   "declared_trigger_phrases": 4,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 5
+  },
+  {
+   "name": "frontier-hole",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/frontier-hole/SKILL.md",
+   "frontmatter_desc_chars": 610,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 610,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "< 20",
+   "rendered_listings_described": 1519,
+   "rendered_listings_nameonly": 2352,
+   "described_share": 0.392,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 4,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 2
+  },
+  {
+   "name": "cc-version-audit",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/cc-version-audit/SKILL.md",
+   "frontmatter_desc_chars": 607,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 607,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "~210",
+   "rendered_listings_described": 2106,
+   "rendered_listings_nameonly": 1765,
+   "described_share": 0.544,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 2,
+   "main_sessions_using": 1,
+   "main_session_share": 0.001,
+   "declared_trigger_phrases": 3,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 3
+  },
+  {
+   "name": "grok-wiki-cli",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/grok-wiki-cli/SKILL.md",
+   "frontmatter_desc_chars": 595,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 595,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "~200",
+   "rendered_listings_described": 2062,
+   "rendered_listings_nameonly": 1809,
+   "described_share": 0.533,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 0,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 1
+  },
+  {
+   "name": "ground-up",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/ground-up/SKILL.md",
+   "frontmatter_desc_chars": 556,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 556,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "~190",
+   "rendered_listings_described": 3855,
+   "rendered_listings_nameonly": 16,
+   "described_share": 0.996,
+   "skill_tool_calls_14d": 1,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 1,
+   "main_session_share": 0.001,
+   "declared_trigger_phrases": 2,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 3
+  },
+  {
+   "name": "outbound-drafting",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/outbound-drafting/SKILL.md",
+   "frontmatter_desc_chars": 538,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 538,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "~190",
+   "rendered_listings_described": 3362,
+   "rendered_listings_nameonly": 509,
+   "described_share": 0.869,
+   "skill_tool_calls_14d": 13,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 13,
+   "main_session_share": 0.0124,
+   "declared_trigger_phrases": 4,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 2
+  },
+  {
+   "name": "corpus-to-skill",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/corpus-to-skill/SKILL.md",
+   "frontmatter_desc_chars": 519,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 519,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "< 20",
+   "rendered_listings_described": 37,
+   "rendered_listings_nameonly": 3834,
+   "described_share": 0.01,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 2,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 1
+  },
+  {
+   "name": "account-relogin",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/account-relogin/SKILL.md",
+   "frontmatter_desc_chars": 488,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 488,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "< 20",
+   "rendered_listings_described": 2699,
+   "rendered_listings_nameonly": 1172,
+   "described_share": 0.697,
+   "skill_tool_calls_14d": 2,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 2,
+   "main_session_share": 0.0019,
+   "declared_trigger_phrases": 4,
+   "trigger_phrases_seen_in_prompts": 1,
+   "name_mentioned_sessions": 26
+  },
+  {
+   "name": "outlook-cleanup",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/outlook-cleanup/SKILL.md",
+   "frontmatter_desc_chars": 210,
+   "when_to_use_chars": 270,
+   "listing_desc_chars": 483,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "< 20",
+   "rendered_listings_described": 0,
+   "rendered_listings_nameonly": 3871,
+   "described_share": 0.0,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 6,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 1
+  },
+  {
+   "name": "resume-sessions",
+   "kind": "command",
+   "path": "/Users/chrisren/Development/claude-infrastructure/commands/resume-sessions.md",
+   "frontmatter_desc_chars": 478,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 478,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "~330",
+   "rendered_listings_described": 3855,
+   "rendered_listings_nameonly": 16,
+   "described_share": 0.996,
+   "skill_tool_calls_14d": 1,
+   "slash_invocations_14d": 2,
+   "main_sessions_using": 3,
+   "main_session_share": 0.0029,
+   "declared_trigger_phrases": 2,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 6
+  },
+  {
+   "name": "relogin",
+   "kind": "command",
+   "path": "/Users/chrisren/Development/claude-infrastructure/commands/relogin.md",
+   "frontmatter_desc_chars": 464,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 464,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "< 20",
+   "rendered_listings_described": 85,
+   "rendered_listings_nameonly": 3786,
+   "described_share": 0.022,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 2,
+   "main_sessions_using": 1,
+   "main_session_share": 0.001,
+   "declared_trigger_phrases": 3,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 26
+  },
+  {
+   "name": "desk",
+   "kind": "command",
+   "path": "/Users/chrisren/Development/claude-infrastructure/commands/desk.md",
+   "frontmatter_desc_chars": 453,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 453,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "< 20",
+   "rendered_listings_described": 0,
+   "rendered_listings_nameonly": 3871,
+   "described_share": 0.0,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 4,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 348
+  },
+  {
+   "name": "handoff",
+   "kind": "command",
+   "path": "/Users/chrisren/Development/claude-infrastructure/commands/handoff.md",
+   "frontmatter_desc_chars": 450,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 450,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "~150",
+   "rendered_listings_described": 3867,
+   "rendered_listings_nameonly": 4,
+   "described_share": 0.999,
+   "skill_tool_calls_14d": 21,
+   "slash_invocations_14d": 1,
+   "main_sessions_using": 21,
+   "main_session_share": 0.02,
+   "declared_trigger_phrases": 2,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 142
+  },
+  {
+   "name": "accounts",
+   "kind": "command",
+   "path": "/Users/chrisren/Development/claude-infrastructure/commands/accounts.md",
+   "frontmatter_desc_chars": 441,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 441,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "~150",
+   "rendered_listings_described": 3860,
+   "rendered_listings_nameonly": 11,
+   "described_share": 0.997,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 69,
+   "main_sessions_using": 51,
+   "main_session_share": 0.0485,
+   "declared_trigger_phrases": 4,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 84
+  },
+  {
+   "name": "grok-wiki-custom",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/grok-wiki-custom/SKILL.md",
+   "frontmatter_desc_chars": 433,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 433,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "~150",
+   "rendered_listings_described": 584,
+   "rendered_listings_nameonly": 3287,
+   "described_share": 0.151,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 0,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 1
+  },
+  {
+   "name": "research",
+   "kind": "command",
+   "path": "/Users/chrisren/Development/claude-infrastructure/commands/research.md",
+   "frontmatter_desc_chars": 389,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 389,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "< 20",
+   "rendered_listings_described": 2466,
+   "rendered_listings_nameonly": 1405,
+   "described_share": 0.637,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 3,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 211
+  },
+  {
+   "name": "compact-memory",
+   "kind": "command",
+   "path": "/Users/chrisren/Development/claude-infrastructure/commands/compact-memory.md",
+   "frontmatter_desc_chars": 337,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 337,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "~120",
+   "rendered_listings_described": 3862,
+   "rendered_listings_nameonly": 9,
+   "described_share": 0.998,
+   "skill_tool_calls_14d": 1,
+   "slash_invocations_14d": 1,
+   "main_sessions_using": 2,
+   "main_session_share": 0.0019,
+   "declared_trigger_phrases": 0,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 2
+  },
+  {
+   "name": "evolve-skill",
+   "kind": "command",
+   "path": "/Users/chrisren/Development/claude-infrastructure/commands/evolve-skill.md",
+   "frontmatter_desc_chars": 334,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 334,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "< 20",
+   "rendered_listings_described": 0,
+   "rendered_listings_nameonly": 3871,
+   "described_share": 0.0,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 0,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 0
+  },
+  {
+   "name": "agent-browser",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/agent-browser/SKILL.md",
+   "frontmatter_desc_chars": 321,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 321,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "~110",
+   "rendered_listings_described": 3855,
+   "rendered_listings_nameonly": 16,
+   "described_share": 0.996,
+   "skill_tool_calls_14d": 4,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 3,
+   "main_session_share": 0.0029,
+   "declared_trigger_phrases": 0,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 3
+  },
+  {
+   "name": "plan-update",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/plan-update/SKILL.md",
+   "frontmatter_desc_chars": 285,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 285,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "~100",
+   "rendered_listings_described": 499,
+   "rendered_listings_nameonly": 3372,
+   "described_share": 0.129,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 0,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 0
+  },
+  {
+   "name": "harvest-skill",
+   "kind": "command",
+   "path": "/Users/chrisren/Development/claude-infrastructure/commands/harvest-skill.md",
+   "frontmatter_desc_chars": 278,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 278,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "~100",
+   "rendered_listings_described": 1875,
+   "rendered_listings_nameonly": 1996,
+   "described_share": 0.484,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 0,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 0
+  },
+  {
+   "name": "react-best-practices",
+   "kind": "skill",
+   "path": "/Users/chrisren/.claude/skills/react-best-practices/SKILL.md",
+   "frontmatter_desc_chars": 268,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 268,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "< 20",
+   "rendered_listings_described": 1307,
+   "rendered_listings_nameonly": 2564,
+   "described_share": 0.338,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 0,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 1
+  },
+  {
+   "name": "frontend-design-vue",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/claude-infrastructure/skills/frontend-design-vue/SKILL.md",
+   "frontmatter_desc_chars": 258,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 258,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "~90",
+   "rendered_listings_described": 438,
+   "rendered_listings_nameonly": 3433,
+   "described_share": 0.113,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 3,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 1
+  },
+  {
+   "name": "keep-laptop-alive",
+   "kind": "command",
+   "path": "/Users/chrisren/Development/claude-infrastructure/commands/keep-laptop-alive.md",
+   "frontmatter_desc_chars": 226,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 226,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "~80",
+   "rendered_listings_described": 2465,
+   "rendered_listings_nameonly": 1406,
+   "described_share": 0.637,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 13,
+   "main_sessions_using": 8,
+   "main_session_share": 0.0076,
+   "declared_trigger_phrases": 3,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 8
+  },
+  {
+   "name": "vercel-design-guidelines",
+   "kind": "skill",
+   "path": "/Users/chrisren/.claude/skills/vercel-design-guidelines/SKILL.md",
+   "frontmatter_desc_chars": 219,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 219,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "~80",
+   "rendered_listings_described": 586,
+   "rendered_listings_nameonly": 3285,
+   "described_share": 0.151,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 6,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 1
+  },
+  {
+   "name": "skill-promote",
+   "kind": "command",
+   "path": "/Users/chrisren/Development/claude-infrastructure/commands/skill-promote.md",
+   "frontmatter_desc_chars": 201,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 201,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "~70",
+   "rendered_listings_described": 2376,
+   "rendered_listings_nameonly": 1495,
+   "described_share": 0.614,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 1,
+   "main_sessions_using": 1,
+   "main_session_share": 0.001,
+   "declared_trigger_phrases": 0,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 1
+  },
+  {
+   "name": "copy-plan",
+   "kind": "command",
+   "path": "/Users/chrisren/Development/claude-infrastructure/commands/copy-plan.md",
+   "frontmatter_desc_chars": 173,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 173,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": null,
+   "rendered_listings_described": 0,
+   "rendered_listings_nameonly": 0,
+   "described_share": null,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 0,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 0
+  },
+  {
+   "name": "are-we-done",
+   "kind": "command",
+   "path": "/Users/chrisren/Development/claude-infrastructure/commands/are-we-done.md",
+   "frontmatter_desc_chars": 105,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 105,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "~40",
+   "rendered_listings_described": 3856,
+   "rendered_listings_nameonly": 15,
+   "described_share": 0.996,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 70,
+   "main_sessions_using": 57,
+   "main_session_share": 0.0542,
+   "declared_trigger_phrases": 0,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 57
+  },
+  {
+   "name": "read-twitter",
+   "kind": "command",
+   "path": "/Users/chrisren/Development/claude-infrastructure/commands/read-twitter.md",
+   "frontmatter_desc_chars": 77,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 77,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "~270",
+   "rendered_listings_described": 544,
+   "rendered_listings_nameonly": 3023,
+   "described_share": 0.153,
+   "skill_tool_calls_14d": 2,
+   "slash_invocations_14d": 3,
+   "main_sessions_using": 5,
+   "main_session_share": 0.0048,
+   "declared_trigger_phrases": 0,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 6
+  },
+  {
+   "name": "wrap",
+   "kind": "command",
+   "path": "/Users/chrisren/Development/claude-infrastructure/commands/wrap.md",
+   "frontmatter_desc_chars": 69,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 69,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": "< 20",
+   "rendered_listings_described": 1068,
+   "rendered_listings_nameonly": 2803,
+   "described_share": 0.276,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 0,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 61
+  },
+  {
+   "name": "commit",
+   "kind": "command",
+   "path": "/Users/chrisren/Development/claude-infrastructure/commands/commit.md",
+   "frontmatter_desc_chars": 53,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 53,
+   "strict_yaml_fails": false,
+   "has_frontmatter": true,
+   "context_tmp_tokens": null,
+   "rendered_listings_described": 0,
+   "rendered_listings_nameonly": 0,
+   "described_share": null,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 0,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 436
+  },
+  {
+   "name": "pyramid-principle",
+   "kind": "skill",
+   "path": "/Users/chrisren/Development/convert-pdf-to-md/pyramid-principle-prompt.md",
+   "frontmatter_desc_chars": 0,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 0,
+   "strict_yaml_fails": false,
+   "has_frontmatter": false,
+   "context_tmp_tokens": "< 20",
+   "rendered_listings_described": 3865,
+   "rendered_listings_nameonly": 6,
+   "described_share": 0.998,
+   "skill_tool_calls_14d": 7,
+   "slash_invocations_14d": 1,
+   "main_sessions_using": 8,
+   "main_session_share": 0.0076,
+   "declared_trigger_phrases": 0,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 3
+  },
+  {
+   "name": "deploy-check",
+   "kind": "command",
+   "path": "/Users/chrisren/Development/claude-infrastructure/commands/deploy-check.md",
+   "frontmatter_desc_chars": 0,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 0,
+   "strict_yaml_fails": false,
+   "has_frontmatter": false,
+   "context_tmp_tokens": "< 20",
+   "rendered_listings_described": 2180,
+   "rendered_listings_nameonly": 1691,
+   "described_share": 0.563,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 0,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 0
+  },
+  {
+   "name": "fix-lint",
+   "kind": "command",
+   "path": "/Users/chrisren/Development/claude-infrastructure/commands/fix-lint.md",
+   "frontmatter_desc_chars": 0,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 0,
+   "strict_yaml_fails": false,
+   "has_frontmatter": false,
+   "context_tmp_tokens": "< 20",
+   "rendered_listings_described": 1246,
+   "rendered_listings_nameonly": 2625,
+   "described_share": 0.322,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 0,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 0
+  },
+  {
+   "name": "pr",
+   "kind": "command",
+   "path": "/Users/chrisren/Development/claude-infrastructure/commands/pr.md",
+   "frontmatter_desc_chars": 0,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 0,
+   "strict_yaml_fails": false,
+   "has_frontmatter": false,
+   "context_tmp_tokens": "< 20",
+   "rendered_listings_described": 435,
+   "rendered_listings_nameonly": 3436,
+   "described_share": 0.112,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 0,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 10
+  },
+  {
+   "name": "review",
+   "kind": "command",
+   "path": "/Users/chrisren/Development/claude-infrastructure/commands/review.md",
+   "frontmatter_desc_chars": 0,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 0,
+   "strict_yaml_fails": false,
+   "has_frontmatter": false,
+   "context_tmp_tokens": "< 20",
+   "rendered_listings_described": 0,
+   "rendered_listings_nameonly": 3871,
+   "described_share": 0.0,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 0,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 52
+  },
+  {
+   "name": "scaffold",
+   "kind": "command",
+   "path": "/Users/chrisren/Development/claude-infrastructure/commands/scaffold.md",
+   "frontmatter_desc_chars": 0,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 0,
+   "strict_yaml_fails": false,
+   "has_frontmatter": false,
+   "context_tmp_tokens": "< 20",
+   "rendered_listings_described": 233,
+   "rendered_listings_nameonly": 3638,
+   "described_share": 0.06,
+   "skill_tool_calls_14d": 0,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 0,
+   "main_session_share": 0.0,
+   "declared_trigger_phrases": 0,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 0
+  },
+  {
+   "name": "ship",
+   "kind": "command",
+   "path": "/Users/chrisren/Development/claude-infrastructure/commands/ship.md",
+   "frontmatter_desc_chars": 0,
+   "when_to_use_chars": 0,
+   "listing_desc_chars": 0,
+   "strict_yaml_fails": false,
+   "has_frontmatter": false,
+   "context_tmp_tokens": "~30",
+   "rendered_listings_described": 3867,
+   "rendered_listings_nameonly": 4,
+   "described_share": 0.999,
+   "skill_tool_calls_14d": 108,
+   "slash_invocations_14d": 0,
+   "main_sessions_using": 108,
+   "main_session_share": 0.1027,
+   "declared_trigger_phrases": 0,
+   "trigger_phrases_seen_in_prompts": 0,
+   "name_mentioned_sessions": 370
+  }
+ ],
+ "agents": [
+  {
+   "name": "deep-research-sonnet",
+   "desc_chars": 878,
+   "context_tmp_tokens": "380",
+   "listing_entry_median_chars": 992,
+   "agent_tool_spawns_14d": 0,
+   "workflow_agent_files_14d": 0,
+   "subagent_files_14d": 0,
+   "omitClaudeMd": true,
+   "model": "sonnet",
+   "in_repo": true
+  },
+  {
+   "name": "deep-research",
+   "desc_chars": 1358,
+   "context_tmp_tokens": "533",
+   "listing_entry_median_chars": 1564,
+   "agent_tool_spawns_14d": 374,
+   "workflow_agent_files_14d": 143,
+   "subagent_files_14d": 221,
+   "omitClaudeMd": true,
+   "model": "opus",
+   "in_repo": true
+  },
+  {
+   "name": "frontier-derivation",
+   "desc_chars": 527,
+   "context_tmp_tokens": "209",
+   "listing_entry_median_chars": 603,
+   "agent_tool_spawns_14d": 0,
+   "workflow_agent_files_14d": 0,
+   "subagent_files_14d": 0,
+   "omitClaudeMd": true,
+   "model": "opus",
+   "in_repo": true
+  },
+  {
+   "name": "motion-reviewer",
+   "desc_chars": 212,
+   "context_tmp_tokens": "75",
+   "listing_entry_median_chars": 250,
+   "agent_tool_spawns_14d": 0,
+   "workflow_agent_files_14d": 0,
+   "subagent_files_14d": 0,
+   "omitClaudeMd": null,
+   "model": null,
+   "in_repo": false
+  },
+  {
+   "name": "research-decomposition-critic",
+   "desc_chars": 339,
+   "context_tmp_tokens": "155",
+   "listing_entry_median_chars": 398,
+   "agent_tool_spawns_14d": 4,
+   "workflow_agent_files_14d": 0,
+   "subagent_files_14d": 4,
+   "omitClaudeMd": true,
+   "model": "sonnet",
+   "in_repo": true
+  }
+ ],
+ "agent_listing": {
+  "n": 1029,
+  "median_total": 6577,
+  "per_agent": {
+   "deep-research": {
+    "present": 861,
+    "median_chars": 1564
+   },
+   "claude-code-guide": {
+    "present": 792,
+    "median_chars": 1091
+   },
+   "deep-research-sonnet": {
+    "present": 861,
+    "median_chars": 992
+   },
+   "code-reviewer": {
+    "present": 116,
+    "median_chars": 687
+   },
+   "frontier-derivation": {
+    "present": 861,
+    "median_chars": 603
+   },
+   "Explore": {
+    "present": 872,
+    "median_chars": 539
+   },
+   "type-design-analyzer": {
+    "present": 116,
+    "median_chars": 512
+   },
+   "code-simplifier": {
+    "present": 116,
+    "median_chars": 456
+   },
+   "comment-analyzer": {
+    "present": 116,
+    "median_chars": 448
+   },
+   "research-decomposition-critic": {
+    "present": 861,
+    "median_chars": 398
+   },
+   "silent-failure-hunter": {
+    "present": 116,
+    "median_chars": 382
+   },
+   "Plan": {
+    "present": 872,
+    "median_chars": 364
+   },
+   "general-purpose": {
+    "present": 872,
+    "median_chars": 309
+   },
+   "pr-test-analyzer": {
+    "present": 116,
+    "median_chars": 256
+   },
+   "motion-reviewer": {
+    "present": 861,
+    "median_chars": 250
+   },
+   "north-star-design-agent": {
+    "present": 116,
+    "median_chars": 224
+   },
+   "visual-design-iterator": {
+    "present": 116,
+    "median_chars": 203
+   },
+   "fresh-eyes-evaluator": {
+    "present": 116,
+    "median_chars": 192
+   },
+   "schema-migration": {
+    "present": 116,
+    "median_chars": 183
+   },
+   "deep-research-base": {
+    "present": 1,
+    "median_chars": 170
+   },
+   "deep-research-omit": {
+    "present": 1,
+    "median_chars": 170
+   },
+   "deep-research-sonnet-base": {
+    "present": 1,
+    "median_chars": 164
+   },
+   "deep-research-sonnet-omit": {
+    "present": 1,
+    "median_chars": 164
+   },
+   "frontier-derivation-base": {
+    "present": 1,
+    "median_chars": 143
+   },
+   "frontier-derivation-omit": {
+    "present": 1,
+    "median_chars": 143
+   },
+   "research-decomposition-critic-base": {
+    "present": 1,
+    "median_chars": 136
+   },
+   "research-decomposition-critic-omit": {
+    "present": 1,
+    "median_chars": 136
+   },
+   "claude": {
+    "present": 872,
+    "median_chars": 132
+   },
+   "statusline-setup": {
+    "present": 872,
+    "median_chars": 111
+   },
+   "probe-pinned-medium": {
+    "present": 4,
+    "median_chars": 89
+   },
+   "probe-unpinned": {
+    "present": 4,
+    "median_chars": 79
+   },
+   "lean": {
+    "present": 2,
+    "median_chars": 32
+   },
+   "fat": {
+    "present": 2,
+    "median_chars": 31
+   }
+  }
+ },
+ "usage_summary": {
+  "n_main_sessions": 1052,
+  "skill_tool_calls": 237,
+  "skill_tool_errors": 0,
+  "main_sessions_with_skill_call": 183,
+  "slash_commands": {
+   "skill_calls": 0,
+   "skill_calls_main": 0,
+   "skill_calls_agent": 0,
+   "slash": 73,
+   "main_sessions": 41,
+   "errors": 0,
+   "main_session_share": 0.039
+  }
+ },
+ "mcp": {
+  "servers": {
+   "ms365": {
+    "calls": 748,
+    "errors": 41,
+    "error_rate": 0.0548,
+    "sessions": 32,
+    "session_share": 0.0304,
+    "top_tools": {
+     "list-mail-messages": 233,
+     "graph-batch": 132,
+     "get-mail-message": 106,
+     "download-bytes-to-file": 51,
+     "list-mail-folder-messages": 28,
+     "list-accounts": 25,
+     "update-mail-message": 23,
+     "list-mail-attachments": 19
+    }
+   },
+   "claude_ai_uidotsh": {
+    "calls": 31,
+    "errors": 2,
+    "error_rate": 0.0645,
+    "sessions": 5,
+    "session_share": 0.0048,
+    "top_tools": {
+     "uidotsh_fetch": 29,
+     "authenticate": 2
+    }
+   },
+   "motion": {
+    "calls": 9,
+    "errors": 2,
+    "error_rate": 0.2222,
+    "sessions": 4,
+    "session_share": 0.0038,
+    "top_tools": {
+     "search-motion-docs": 9
+    }
+   },
+   "motion-plus": {
+    "calls": 7,
+    "errors": 0,
+    "error_rate": 0.0,
+    "sessions": 4,
+    "session_share": 0.0038,
+    "top_tools": {
+     "generate-css-easing": 4,
+     "search-motion-source": 3
+    }
+   },
+   "mac-messages": {
+    "calls": 2,
+    "errors": 0,
+    "error_rate": 0.0,
+    "sessions": 1,
+    "session_share": 0.001,
+    "top_tools": {
+     "tool_get_recent_messages": 2
+    }
+   }
+  },
+  "instructions_delta": [
+   {
+    "ctx_type": "main",
+    "n": 1274,
+    "chars": 2582673,
+    "avg": 2027.0,
+    "max": 5106
+   },
+   {
+    "ctx_type": "subagent",
+    "n": 354,
+    "chars": 1040841,
+    "avg": 2940.0,
+    "max": 5106
+   },
+   {
+    "ctx_type": "workflow_agent",
+    "n": 2385,
+    "chars": 7029695,
+    "avg": 2947.0,
+    "max": 5106
+   }
+  ],
+  "deferred_tools_delta": [
+   {
+    "ctx_type": "main",
+    "n": 1400,
+    "chars": 5786662,
+    "avg": 4133.0,
+    "max": 8230
+   },
+   {
+    "ctx_type": "subagent",
+    "n": 352,
+    "chars": 932272,
+    "avg": 2649.0,
+    "max": 7433
+   },
+   {
+    "ctx_type": "workflow_agent",
+    "n": 2805,
+    "chars": 17606613,
+    "avg": 6277.0,
+    "max": 8176
+   }
+  ],
+  "per_ctx_blocks": {
+   "main": {
+    "files": 1030,
+    "instr_n": 986,
+    "instr_median": 2335,
+    "instr_per_server": {
+     "motion": {
+      "present": 841,
+      "median_chars": 257
+     },
+     "motion-plus": {
+      "present": 683,
+      "median_chars": 262
+     },
+     "ms365": {
+      "present": 661,
+      "median_chars": 1757
+     },
+     "mac-messages": {
+      "present": 35,
+      "median_chars": 795
+     },
+     "claude.ai Claude Docs": {
+      "present": 215,
+      "median_chars": 1895
+     }
+    },
+    "deferred_n": 1030,
+    "deferred_median_chars": 7113,
+    "deferred_median_names": 211,
+    "deferred_per_server": {
+     "(built-in)": {
+      "present": 875,
+      "median_names": 22
+     },
+     "motion-plus": {
+      "present": 563,
+      "median_names": 4
+     },
+     "motion": {
+      "present": 717,
+      "median_names": 1
+     },
+     "ms365": {
+      "present": 539,
+      "median_names": 188
+     },
+     "claude_ai_uidotsh": {
+      "present": 218,
+      "median_names": 1
+     },
+     "mac-messages": {
+      "present": 34,
+      "median_names": 11
+     },
+     "claude_ai_Claude_Docs": {
+      "present": 172,
+      "median_names": 8
+     },
+     "uidotsh": {
+      "present": 39,
+      "median_names": 1
+     },
+     "claude_ai_Gmail": {
+      "present": 73,
+      "median_names": 2
+     },
+     "claude_ai_Google_Calendar": {
+      "present": 73,
+      "median_names": 2
+     },
+     "claude_ai_Google_Drive": {
+      "present": 127,
+      "median_names": 2
+     }
+    },
+    "builtin_deferred_names": {
+     "WebSearch": 872,
+     "CronCreate": 773,
+     "CronDelete": 773,
+     "CronList": 773,
+     "DesignSync": 773,
+     "EnterWorktree": 773,
+     "ExitWorktree": 773,
+     "Monitor": 773,
+     "NotebookEdit": 773,
+     "PushNotification": 773,
+     "SendMessage": 773,
+     "TaskStop": 773,
+     "RemoteTrigger": 771,
+     "WebFetch": 756,
+     "ListMcpResourcesTool": 726,
+     "ReadMcpResourceDirTool": 726,
+     "ReadMcpResourceTool": 726,
+     "SendUserFile": 695,
+     "EnterPlanMode": 693,
+     "ExitPlanMode": 693,
+     "EndConversation": 692,
+     "TaskOutput": 681,
+     "ms365": 220,
+     "motion-plus": 198,
+     "FetchInboxMessage": 58,
+     "motion": 43,
+     "TaskCreate": 13,
+     "TaskGet": 13,
+     "TaskList": 13,
+     "TaskUpdate": 13,
+     "mac-messages": 2
+    }
+   },
+   "subagent": {
+    "files": 354,
+    "instr_n": 354,
+    "instr_median": 2416,
+    "instr_per_server": {
+     "motion": {
+      "present": 354,
+      "median_chars": 257
+     },
+     "motion-plus": {
+      "present": 354,
+      "median_chars": 262
+     },
+     "ms365": {
+      "present": 350,
+      "median_chars": 1757
+     },
+     "mac-messages": {
+      "present": 28,
+      "median_chars": 795
+     },
+     "claude.ai Claude Docs": {
+      "present": 94,
+      "median_chars": 1895
+     }
+    },
+    "deferred_n": 346,
+    "deferred_median_chars": 304,
+    "deferred_median_names": 2,
+    "deferred_per_server": {
+     "(built-in)": {
+      "present": 346,
+      "median_names": 2
+     },
+     "claude_ai_Gmail": {
+      "present": 21,
+      "median_names": 2
+     },
+     "claude_ai_Google_Calendar": {
+      "present": 21,
+      "median_names": 2
+     },
+     "claude_ai_Google_Drive": {
+      "present": 23,
+      "median_names": 2
+     },
+     "claude_ai_uidotsh": {
+      "present": 35,
+      "median_names": 1
+     },
+     "motion-plus": {
+      "present": 122,
+      "median_names": 4
+     },
+     "motion": {
+      "present": 122,
+      "median_names": 1
+     },
+     "ms365": {
+      "present": 122,
+      "median_names": 188
+     },
+     "mac-messages": {
+      "present": 6,
+      "median_names": 11
+     },
+     "claude_ai_Claude_Docs": {
+      "present": 19,
+      "median_names": 8
+     },
+     "uidotsh": {
+      "present": 3,
+      "median_names": 1
+     }
+    },
+    "builtin_deferred_names": {
+     "WebSearch": 346,
+     "WebFetch": 315,
+     "EnterWorktree": 122,
+     "ExitWorktree": 122,
+     "Monitor": 122,
+     "SendMessage": 122,
+     "TaskStop": 122,
+     "NotebookEdit": 116,
+     "CronCreate": 2,
+     "CronDelete": 2,
+     "CronList": 2,
+     "DesignSync": 2,
+     "ListMcpResourcesTool": 2,
+     "PushNotification": 2,
+     "ReadMcpResourceDirTool": 2,
+     "ReadMcpResourceTool": 2,
+     "RemoteTrigger": 2
+    }
+   },
+   "workflow_agent": {
+    "files": 2680,
+    "instr_n": 2385,
+    "instr_median": 2416,
+    "instr_per_server": {
+     "mac-messages": {
+      "present": 309,
+      "median_chars": 795
+     },
+     "motion": {
+      "present": 2371,
+      "median_chars": 257
+     },
+     "motion-plus": {
+      "present": 2371,
+      "median_chars": 262
+     },
+     "ms365": {
+      "present": 2245,
+      "median_chars": 1757
+     },
+     "claude.ai Claude Docs": {
+      "present": 710,
+      "median_chars": 1895
+     }
+    },
+    "deferred_n": 2680,
+    "deferred_median_chars": 7106,
+    "deferred_median_names": 212,
+    "deferred_per_server": {
+     "(built-in)": {
+      "present": 2664,
+      "median_names": 18
+     },
+     "claude_ai_uidotsh": {
+      "present": 1044,
+      "median_names": 1
+     },
+     "mac-messages": {
+      "present": 321,
+      "median_names": 11
+     },
+     "motion-plus": {
+      "present": 2520,
+      "median_names": 4
+     },
+     "motion": {
+      "present": 2520,
+      "median_names": 1
+     },
+     "ms365": {
+      "present": 2376,
+      "median_names": 188
+     },
+     "claude_ai_Claude_Docs": {
+      "present": 718,
+      "median_names": 8
+     },
+     "claude_ai_Google_Drive": {
+      "present": 714,
+      "median_names": 2
+     },
+     "uidotsh": {
+      "present": 454,
+      "median_names": 1
+     },
+     "claude_ai_Gmail": {
+      "present": 368,
+      "median_names": 2
+     },
+     "claude_ai_Google_Calendar": {
+      "present": 368,
+      "median_names": 2
+     }
+    },
+    "builtin_deferred_names": {
+     "WebSearch": 2664,
+     "CronCreate": 2520,
+     "CronDelete": 2520,
+     "CronList": 2520,
+     "DesignSync": 2520,
+     "EnterWorktree": 2520,
+     "ExitWorktree": 2520,
+     "ListMcpResourcesTool": 2520,
+     "Monitor": 2520,
+     "NotebookEdit": 2520,
+     "PushNotification": 2520,
+     "ReadMcpResourceDirTool": 2520,
+     "ReadMcpResourceTool": 2520,
+     "RemoteTrigger": 2520,
+     "SendMessage": 2520,
+     "TaskStop": 2520,
+     "SendUserFile": 2497,
+     "WebFetch": 1670,
+     "FetchInboxMessage": 317
+    }
+   }
+  },
+  "loaded_tools_tokens": {
+   "total": 629,
+   "tools": [
+    "mcp__claude_ai_Claude_Docs__batch (156)",
+    "guide (191)",
+    "update (282)"
+   ],
+   "calls_14d": 0
+  }
+ },
+ "toolsearch": {
+  "calls": {
+   "main": {
+    "calls": 658,
+    "sessions": 436
+   },
+   "subagent": {
+    "calls": 132,
+    "sessions": 32
+   },
+   "workflow_agent": {
+    "calls": 729,
+    "sessions": 37
+   }
+  },
+  "errors": [
+   1519,
+   0
+  ],
+  "targets": {
+   "select:WebSearch": 748,
+   "select:WebFetch": 581,
+   "select:ms365": 410,
+   "select:Monitor": 265,
+   "select:SendMessage": 140,
+   "select:TaskStop": 115,
+   "keyword": 44,
+   "select:SendUserFile": 30,
+   "select:TaskOutput": 13,
+   "select:Glob": 11,
+   "select:Grep": 11,
+   "select:claude_ai_uidotsh": 8,
+   "select:motion-plus": 8,
+   "select:ReadMcpResourceTool": 4,
+   "select:motion": 4,
+   "select:TaskCreate": 3,
+   "select:TaskList": 3,
+   "select:TaskUpdate": 3,
+   "select:PushNotification": 2,
+   "select:ListMcpResourcesTool": 2,
+   "select:m": 2,
+   "select:claude_ai_Gmail": 2,
+   "select:CronCreate": 1,
+   "select:DesignSync": 1,
+   "select:RemoteTrigger": 1,
+   "select:TaskGet": 1,
+   "select:mcp__": 1,
+   "select:mcp": 1,
+   "select:Workflow": 1,
+   "select:WorkflowCreate": 1,
+   "select:Agent": 1,
+   "select:Task": 1,
+   "select:mcp__ms365": 1,
+   "select:mac-messages": 1,
+   "select:mcp__ms365_": 1
+  },
+  "only_toolsearch_responses": [
+   {
+    "ctx_type": "main",
+    "n": 523,
+    "usd_own": 120.58,
+    "usd_o55": 75.24,
+    "avg_cache_read": 253285
+   },
+   {
+    "ctx_type": "subagent",
+    "n": 59,
+    "usd_own": 10.82,
+    "usd_o55": 7.98,
+    "avg_cache_read": 108240
+   },
+   {
+    "ctx_type": "workflow_agent",
+    "n": 429,
+    "usd_own": 98.29,
+    "usd_o55": 66.95,
+    "avg_cache_read": 138686
+   }
+  ]
+ },
+ "cost": {
+  "by_kind": {
+   "agent_listing_delta": {
+    "n": 894.0,
+    "chars": 6884922.0,
+    "usd_own@3.0": 113.46,
+    "usd_o55@3.0": 56.64,
+    "usd_own@2.6": 130.91,
+    "usd_o55@2.6": 65.35
+   },
+   "deferred_tools_delta": {
+    "n": 4385.0,
+    "chars": 24325547.0,
+    "usd_own@3.0": 177.85,
+    "usd_o55@3.0": 92.23,
+    "usd_own@2.6": 205.21,
+    "usd_o55@2.6": 106.41
+   },
+   "mcp_instructions_delta": {
+    "n": 3873.0,
+    "chars": 10653209.0,
+    "usd_own@3.0": 73.29,
+    "usd_o55@3.0": 35.89,
+    "usd_own@2.6": 84.57,
+    "usd_o55@2.6": 41.41
+   },
+   "skill_listing": {
+    "n": 4565.0,
+    "chars": 117440196.0,
+    "usd_own@3.0": 865.79,
+    "usd_o55@3.0": 451.48,
+    "usd_own@2.6": 998.99,
+    "usd_o55@2.6": 520.94
+   }
+  },
+  "by_kind_ctx": [
+   {
+    "kind": "agent_listing_delta",
+    "ctx_type": "main",
+    "n": 877.0,
+    "chars": 6744271.0,
+    "usd_own@3.0": 112.98,
+    "usd_o55@3.0": 56.45,
+    "usd_own@2.6": 130.36,
+    "usd_o55@2.6": 65.13
+   },
+   {
+    "kind": "agent_listing_delta",
+    "ctx_type": "subagent",
+    "n": 17.0,
+    "chars": 140651.0,
+    "usd_own@3.0": 0.48,
+    "usd_o55@3.0": 0.19,
+    "usd_own@2.6": 0.56,
+    "usd_o55@2.6": 0.22
+   },
+   {
+    "kind": "deferred_tools_delta",
+    "ctx_type": "main",
+    "n": 1243.0,
+    "chars": 5786662.0,
+    "usd_own@3.0": 102.24,
+    "usd_o55@3.0": 50.12,
+    "usd_own@2.6": 117.97,
+    "usd_o55@2.6": 57.83
+   },
+   {
+    "kind": "deferred_tools_delta",
+    "ctx_type": "subagent",
+    "n": 352.0,
+    "chars": 932272.0,
+    "usd_own@3.0": 6.87,
+    "usd_o55@3.0": 4.06,
+    "usd_own@2.6": 7.93,
+    "usd_o55@2.6": 4.68
+   },
+   {
+    "kind": "deferred_tools_delta",
+    "ctx_type": "workflow_agent",
+    "n": 2790.0,
+    "chars": 17606613.0,
+    "usd_own@3.0": 68.74,
+    "usd_o55@3.0": 38.05,
+    "usd_own@2.6": 79.31,
+    "usd_o55@2.6": 43.9
+   },
+   {
+    "kind": "mcp_instructions_delta",
+    "ctx_type": "main",
+    "n": 1148.0,
+    "chars": 2582673.0,
+    "usd_own@3.0": 40.17,
+    "usd_o55@3.0": 19.94,
+    "usd_own@2.6": 46.35,
+    "usd_o55@2.6": 23.01
+   },
+   {
+    "kind": "mcp_instructions_delta",
+    "ctx_type": "subagent",
+    "n": 354.0,
+    "chars": 1040841.0,
+    "usd_own@3.0": 6.8,
+    "usd_o55@3.0": 3.21,
+    "usd_own@2.6": 7.85,
+    "usd_o55@2.6": 3.7
+   },
+   {
+    "kind": "mcp_instructions_delta",
+    "ctx_type": "workflow_agent",
+    "n": 2371.0,
+    "chars": 7029695.0,
+    "usd_own@3.0": 26.32,
+    "usd_o55@3.0": 12.74,
+    "usd_own@2.6": 30.37,
+    "usd_o55@2.6": 14.7
+   },
+   {
+    "kind": "skill_listing",
+    "ctx_type": "main",
+    "n": 1410.0,
+    "chars": 26725596.0,
+    "usd_own@3.0": 439.89,
+    "usd_o55@3.0": 216.36,
+    "usd_own@2.6": 507.56,
+    "usd_o55@2.6": 249.64
+   },
+   {
+    "kind": "skill_listing",
+    "ctx_type": "subagent",
+    "n": 357.0,
+    "chars": 10401161.0,
+    "usd_own@3.0": 92.27,
+    "usd_o55@3.0": 50.61,
+    "usd_own@2.6": 106.46,
+    "usd_o55@2.6": 58.4
+   },
+   {
+    "kind": "skill_listing",
+    "ctx_type": "workflow_agent",
+    "n": 2798.0,
+    "chars": 80313439.0,
+    "usd_own@3.0": 333.64,
+    "usd_o55@3.0": 184.51,
+    "usd_own@2.6": 384.97,
+    "usd_o55@2.6": 212.89
+   }
+  ],
+  "skill_listing_by_ctx_agent": [
+   {
+    "ctx_type": "main",
+    "agent_type": "-",
+    "project": "other",
+    "n": 1387.0,
+    "chars": 26314776.0,
+    "usd_own@3.0": 432.68,
+    "usd_o55@3.0": 212.56
+   },
+   {
+    "ctx_type": "workflow_agent",
+    "agent_type": "workflow-subagent",
+    "project": "other",
+    "n": 2442.0,
+    "chars": 70052882.0,
+    "usd_own@3.0": 284.84,
+    "usd_o55@3.0": 157.59
+   },
+   {
+    "ctx_type": "subagent",
+    "agent_type": "deep-research",
+    "project": "other",
+    "n": 218.0,
+    "chars": 6322745.0,
+    "usd_own@3.0": 63.81,
+    "usd_o55@3.0": 33.03
+   },
+   {
+    "ctx_type": "workflow_agent",
+    "agent_type": "deep-research",
+    "project": "other",
+    "n": 155.0,
+    "chars": 4356251.0,
+    "usd_own@3.0": 35.92,
+    "usd_o55@3.0": 20.34
+   },
+   {
+    "ctx_type": "subagent",
+    "agent_type": "general-purpose",
+    "project": "other",
+    "n": 89.0,
+    "chars": 2596168.0,
+    "usd_own@3.0": 17.11,
+    "usd_o55@3.0": 10.67
+   },
+   {
+    "ctx_type": "workflow_agent",
+    "agent_type": "general-purpose",
+    "project": "other",
+    "n": 201.0,
+    "chars": 5904306.0,
+    "usd_own@3.0": 12.89,
+    "usd_o55@3.0": 6.58
+   },
+   {
+    "ctx_type": "subagent",
+    "agent_type": "general-purpose",
+    "project": "reso",
+    "n": 29.0,
+    "chars": 872436.0,
+    "usd_own@3.0": 8.39,
+    "usd_o55@3.0": 4.29
+   },
+   {
+    "ctx_type": "main",
+    "agent_type": "-",
+    "project": "reso",
+    "n": 23.0,
+    "chars": 410820.0,
+    "usd_own@3.0": 7.2,
+    "usd_o55@3.0": 3.8
+   },
+   {
+    "ctx_type": "subagent",
+    "agent_type": "deep-research",
+    "project": "reso",
+    "n": 10.0,
+    "chars": 300960.0,
+    "usd_own@3.0": 1.91,
+    "usd_o55@3.0": 1.74
+   },
+   {
+    "ctx_type": "subagent",
+    "agent_type": "Explore",
+    "project": "other",
+    "n": 6.0,
+    "chars": 158352.0,
+    "usd_own@3.0": 0.8,
+    "usd_o55@3.0": 0.58
+   },
+   {
+    "ctx_type": "subagent",
+    "agent_type": "code-reviewer",
+    "project": "other",
+    "n": 1.0,
+    "chars": 30088.0,
+    "usd_own@3.0": 0.09,
+    "usd_o55@3.0": 0.09
+   },
+   {
+    "ctx_type": "subagent",
+    "agent_type": "deep-research-base",
+    "project": "other",
+    "n": 1.0,
+    "chars": 30103.0,
+    "usd_own@3.0": 0.05,
+    "usd_o55@3.0": 0.05
+   },
+   {
+    "ctx_type": "subagent",
+    "agent_type": "deep-research-omit",
+    "project": "other",
+    "n": 1.0,
+    "chars": 30103.0,
+    "usd_own@3.0": 0.05,
+    "usd_o55@3.0": 0.05
+   },
+   {
+    "ctx_type": "subagent",
+    "agent_type": "deep-research-sonnet-base",
+    "project": "other",
+    "n": 1.0,
+    "chars": 30103.0,
+    "usd_own@3.0": 0.03,
+    "usd_o55@3.0": 0.05
+   },
+   {
+    "ctx_type": "subagent",
+    "agent_type": "deep-research-sonnet-omit",
+    "project": "other",
+    "n": 1.0,
+    "chars": 30103.0,
+    "usd_own@3.0": 0.03,
+    "usd_o55@3.0": 0.05
+   }
+  ],
+  "static_token_value": {
+   "main": {
+    "contexts": 871,
+    "usd_per_1k_tokens_own": 42.7573,
+    "usd_per_1k_tokens_o55": 20.9752
+   },
+   "subagent": {
+    "contexts": 346,
+    "usd_per_1k_tokens_own": 9.2013,
+    "usd_per_1k_tokens_o55": 5.0592
+   },
+   "workflow_agent": {
+    "contexts": 2664,
+    "usd_per_1k_tokens_own": 33.1859,
+    "usd_per_1k_tokens_o55": 18.3434
+   },
+   "all": {
+    "contexts": 3881,
+    "usd_per_1k_tokens_own": 85.1445,
+    "usd_per_1k_tokens_o55": 44.3778
+   }
+  },
+  "fleet_total": [
+   32517.424510999874,
+   18318.682968600137
+  ],
+  "method": "Price the listing attachments (skill_listing, mcp_instructions_delta, deferred_tools_delta,\nagent_listing_delta) and the ToolSearch round trips, from extract.sqlite (xdup=0).\n\nMethod (ESTIMATED, list-price weights; the fleet is quota-billed):\n  A token that sits in a context's prefix is paid on every later response of that context:\n    - response reads the cached prefix (cache_read >= READ_FLOOR tokens) -> in_price * cr_mult\n    - otherwise the prefix was (re)written this response -> in_price * (1.25*share_5m + 2.0*share_1h),\n      or 1.0x when nothing was cached.\n  M(file, s) = sum of that per-token price over the file's responses with seq > s.\n  Item cost = tokens(item) * M(file, resp_before(item)); tokens = chars / CPT.\n  Priced twice: at each response's own model and re-priced at Opus 5.5 ($4 in, cr 0.05x).\n  CPT: 3.0 chars/token is Claude Code's own estimate for Opus 5.x/Fable (fn xf -> 3 bytes/token)\n  and matches headless /context (30.1k-char listing ~ 10k tokens); 2.6 chars/token is the ratio\n  MEASURED on memory files by /context. Both are reported.\n  \"Static token value\" = sum over contexts of M(file, first listing) = what one extra token in\n  every context's initial listing costs over the window."
+ },
+ "simulation": {
+  "validation": {
+   "mode": "priority",
+   "simulated_total": 29996,
+   "actual_total_with_header": 30103,
+   "described_actual": 44,
+   "described_sim": 48,
+   "agree": 44,
+   "only_actual": [],
+   "only_sim": [
+    "deploy-check",
+    "frontend-design-vue",
+    "research",
+    "vercel-design-guidelines"
+   ],
+   "full_total_if_all_described": 49335
+  },
+  "after_20_proposals": {
+   "mode": "fits",
+   "total": 29121,
+   "described": 75,
+   "newly_described": [
+    "account-relogin",
+    "browsermcp",
+    "cafe-wifi-optimization",
+    "codex-security",
+    "coding-standards",
+    "corpus-to-skill",
+    "demo-recording",
+    "desk",
+    "evolve-skill",
+    "fix-lint",
+    "frontier-campaign",
+    "frontier-hole",
+    "frontier-routing",
+    "grok-wiki-audit",
+    "motion",
+    "outlook-cleanup",
+    "permission-harvest",
+    "pr",
+    "react-best-practices",
+    "recover",
+    "relogin",
+    "repo-wiki",
+    "review",
+    "scaffold",
+    "video-understanding",
+    "visual-direction",
+    "wrap"
+   ],
+   "lost_description": [],
+   "full_total_if_all_described": 29121,
+   "still_nameonly": []
+  },
+  "scenarios": {
+   "S0_current": {
+    "mode": "priority",
+    "entry_chars": 29996,
+    "described": 48,
+    "nameonly": [
+     "account-relogin",
+     "browsermcp",
+     "cafe-wifi-optimization",
+     "codex-security",
+     "coding-standards",
+     "corpus-to-skill",
+     "demo-recording",
+     "desk",
+     "evolve-skill",
+     "fix-lint",
+     "frontier-campaign",
+     "frontier-hole",
+     "frontier-routing",
+     "grok-wiki-audit",
+     "motion",
+     "outlook-cleanup",
+     "permission-harvest",
+     "pr",
+     "react-best-practices",
+     "recover",
+     "relogin",
+     "repo-wiki",
+     "review",
+     "scaffold",
+     "video-understanding",
+     "visual-direction",
+     "wrap"
+    ],
+    "note": "real rendered listing: 30,103 chars incl. an ~82-char header; the simulation is len()-based, the binary uses Bun.stringWidth",
+    "chars_saved_vs_S0": 0,
+    "tokens_saved_per_context@3cpt": 0,
+    "usd14d_saved_if_all_contexts_own": 0.0,
+    "usd14d_saved_if_all_contexts_o55": 0.0
+   },
+   "S1_20_proposals": {
+    "mode": "fits",
+    "entry_chars": 29121,
+    "described": 75,
+    "nameonly": [],
+    "chars_saved_vs_S0": 875,
+    "tokens_saved_per_context@3cpt": 292,
+    "usd14d_saved_if_all_contexts_own": 24.8,
+    "usd14d_saved_if_all_contexts_o55": 12.9
+   },
+   "S2_all_own_le_250": {
+    "mode": "fits",
+    "entry_chars": 20606,
+    "described": 75,
+    "nameonly": [],
+    "chars_saved_vs_S0": 9390,
+    "tokens_saved_per_context@3cpt": 3130,
+    "usd14d_saved_if_all_contexts_own": 266.5,
+    "usd14d_saved_if_all_contexts_o55": 138.9
+   },
+   "S3_S2_plus_nameonly_unused_bundled": {
+    "mode": "fits",
+    "entry_chars": 16994,
+    "described": 67,
+    "nameonly": [
+     "claude-in-chrome",
+     "dataviz",
+     "fewer-permission-prompts",
+     "keybindings-help",
+     "loop",
+     "run",
+     "schedule",
+     "simplify"
+    ],
+    "chars_saved_vs_S0": 13002,
+    "tokens_saved_per_context@3cpt": 4334,
+    "usd14d_saved_if_all_contexts_own": 369.0,
+    "usd14d_saved_if_all_contexts_o55": 192.3
+   },
+   "S4_S1_budget_fraction_0.005": {
+    "mode": "priority",
+    "entry_chars": 14996,
+    "described": 36,
+    "nameonly": [
+     "account-relogin",
+     "browsermcp",
+     "cafe-wifi-optimization",
+     "codex-security",
+     "coding-standards",
+     "corpus-to-skill",
+     "demo-recording",
+     "desk",
+     "dia-agent",
+     "evolve-skill",
+     "frontend-design-vue",
+     "frontier-campaign",
+     "frontier-hole",
+     "frontier-routing",
+     "frontier-run",
+     "grok-wiki-audit",
+     "grok-wiki-cli",
+     "grok-wiki-custom",
+     "ground-up",
+     "harvest-skill",
+     "kpmg-deck",
+     "manual-command-delivery",
+     "motion",
+     "outlook-cleanup",
+     "permission-harvest",
+     "plan-update",
+     "pr",
+     "react-best-practices",
+     "recover",
+     "relogin",
+     "repo-wiki",
+     "research",
+     "review",
+     "scaffold",
+     "skill-promote",
+     "vercel-design-guidelines",
+     "video-understanding",
+     "visual-direction",
+     "wrap"
+    ],
+    "chars_saved_vs_S0": 15000,
+    "tokens_saved_per_context@3cpt": 5000,
+    "usd14d_saved_if_all_contexts_own": 425.7,
+    "usd14d_saved_if_all_contexts_o55": 221.9
+   },
+   "S5_S2_budget_fraction_0.005": {
+    "mode": "priority",
+    "entry_chars": 14976,
+    "described": 48,
+    "nameonly": [
+     "account-relogin",
+     "cafe-wifi-optimization",
+     "codex-security",
+     "coding-standards",
+     "corpus-to-skill",
+     "demo-recording",
+     "desk",
+     "evolve-skill",
+     "fix-lint",
+     "frontend-design-vue",
+     "frontier-campaign",
+     "frontier-hole",
+     "frontier-routing",
+     "grok-wiki-audit",
+     "motion",
+     "outlook-cleanup",
+     "permission-harvest",
+     "pr",
+     "react-best-practices",
+     "recover",
+     "relogin",
+     "repo-wiki",
+     "review",
+     "scaffold",
+     "video-understanding",
+     "visual-direction",
+     "wrap"
+    ],
+    "chars_saved_vs_S0": 15020,
+    "tokens_saved_per_context@3cpt": 5007,
+    "usd14d_saved_if_all_contexts_own": 426.3,
+    "usd14d_saved_if_all_contexts_o55": 222.2
+   }
+  }
+ },
+ "proposed_skill_descriptions": [
+  {
+   "name": "cafe-wifi-optimization",
+   "kind": "skill",
+   "old_chars": 2107,
+   "old_listed_chars": 1536,
+   "new_chars": 218,
+   "saved_chars": 1318,
+   "proposed": "Client-side ladder for slow GUEST Wi-Fi you cannot administer (cafe, hotel, airport): route, SNR, capacity, bufferbloat direction, and the Wi-Fi vs iPhone-tether call. Not for any network whose router you can log into."
+  },
+  {
+   "name": "limit-recover",
+   "kind": "command",
+   "old_chars": 1838,
+   "old_listed_chars": 1536,
+   "new_chars": 247,
+   "saved_chars": 1289,
+   "proposed": "Recover delegated work after any interruption (usage or weekly limit, login cliff, network drop, stalled agent or workflow, crash or resume): audit every slot, subagent and teammate from disk, re-run what is incomplete, or move to another account."
+  },
+  {
+   "name": "frontier-routing",
+   "kind": "skill",
+   "old_chars": 1628,
+   "old_listed_chars": 1536,
+   "new_chars": 227,
+   "saved_chars": 1309,
+   "proposed": "Policy for when to use the frontier model (Fable) instead of the default tier: only for unknown-unknowns after research stalls, inside the hook-enforced spawn cap. Points to /frontier-hole, /frontier-run and /frontier-campaign."
+  },
+  {
+   "name": "permission-harvest",
+   "kind": "skill",
+   "old_chars": 1528,
+   "old_listed_chars": 1528,
+   "new_chars": 215,
+   "saved_chars": 1313,
+   "proposed": "Weekly review of manual permission prompts: runs cc-permission-harvest read-only, buckets the prompts, proposes composable prefix allow rules and hands the operator one cc-do apply step. Never writes settings files."
+  },
+  {
+   "name": "dia-agent",
+   "kind": "skill",
+   "old_chars": 1462,
+   "old_listed_chars": 1462,
+   "new_chars": 223,
+   "saved_chars": 1239,
+   "proposed": "Drive the operator's real logged-in Dia browser without consent prompts: AppleScript for tabs, windows and JS; CDP via dia://inspect for trusted input, screenshots, network and cookies; a clean-profile launcher as fallback."
+  },
+  {
+   "name": "manual-command-delivery",
+   "kind": "skill",
+   "old_chars": 1412,
+   "old_listed_chars": 1412,
+   "new_chars": 226,
+   "saved_chars": 1186,
+   "proposed": "Load before asking the user to do anything (login, sudo, a blocked or destructive step): write one re-runnable /tmp script that drives every drivable step, gates irreversible ones behind a typed yes, and hand over one command."
+  },
+  {
+   "name": "plan-conventions",
+   "kind": "skill",
+   "old_chars": 1407,
+   "old_listed_chars": 1407,
+   "new_chars": 233,
+   "saved_chars": 1174,
+   "proposed": "Rules for writing and updating plan or design docs: integrate, never overwrite; compact completed sections; expand upcoming ones with file:line detail; mandatory Phase 0 with a per-wave execution locus. Load when editing a *plan*.md."
+  },
+  {
+   "name": "demo-recording",
+   "kind": "skill",
+   "old_chars": 1398,
+   "old_listed_chars": 1398,
+   "new_chars": 227,
+   "saved_chars": 1171,
+   "proposed": "Record a live screen, terminal or agent demo and embed it in a README as animated WebP (GitHub strips <video>): capture, iTerm2 sizing, near-lossless encode recipe, contact-sheet review. Not for understanding an existing video."
+  },
+  {
+   "name": "research-subagents",
+   "kind": "skill",
+   "old_chars": 1256,
+   "old_listed_chars": 1256,
+   "new_chars": 244,
+   "saved_chars": 1012,
+   "proposed": "Discipline for read-only research fan-out: decomposition artifact, default N=10, a 7-field brief with a file delivery path, adversarial sampling, stop and synthesis rules. Load before spawning research subagents; not for code-writing teammates."
+  },
+  {
+   "name": "browsermcp",
+   "kind": "skill",
+   "old_chars": 1247,
+   "old_listed_chars": 1247,
+   "new_chars": 180,
+   "saved_chars": 1067,
+   "proposed": "History of the retired BrowserMCP server plus the browser-automation decision tree; the agent-browser CLI is the live path. Load when browser tools report \"No such tool available\"."
+  },
+  {
+   "name": "agent-teams",
+   "kind": "skill",
+   "old_chars": 1175,
+   "old_listed_chars": 1175,
+   "new_chars": 242,
+   "saved_chars": 933,
+   "proposed": "Orchestrating code-writing teammates (Agent with name:): runtime detection, 150-line brief rules, pre-spawn checklist, model and effort pinning, lifecycle, shutdown and crash recovery. Load before spawning teammates or planning 2+ code tasks."
+  },
+  {
+   "name": "recover",
+   "kind": "command",
+   "old_chars": 1148,
+   "old_listed_chars": 1148,
+   "new_chars": 242,
+   "saved_chars": 906,
+   "proposed": "Front door for recovering delegated work after any interruption (network drop, stalled agent, killed task, crash or resume, quota, login cliff), or for moving a healthy session to another account. Modes: limit, resume-in-place, stall, switch."
+  },
+  {
+   "name": "codex-security",
+   "kind": "skill",
+   "old_chars": 1125,
+   "old_listed_chars": 1125,
+   "new_chars": 206,
+   "saved_chars": 919,
+   "proposed": "Run OpenAI's Codex Security methodology natively (vendored plugin; no Codex or OpenAI account): repo and diff security scans, threat models, finding validation and triage, fixes, write-ups and SARIF output."
+  },
+  {
+   "name": "coding-standards",
+   "kind": "skill",
+   "old_chars": 1093,
+   "old_listed_chars": 1093,
+   "new_chars": 221,
+   "saved_chars": 872,
+   "proposed": "House style for TypeScript, React/Next.js and Python (FastAPI, Pydantic v2, mypy strict, ruff): strictness, exports, Server Components, naming. Load when writing a new component, module or endpoint, or for a style review."
+  },
+  {
+   "name": "self-explaining-artifact",
+   "kind": "skill",
+   "old_chars": 1060,
+   "old_listed_chars": 1060,
+   "new_chars": 229,
+   "saved_chars": 831,
+   "proposed": "Build a self-contained animated HTML explainer of an article, dataset or mechanism, and verify it with measured gates (word count, AA contrast, frame budget). Use when an explainer was rejected as walls of text or hard to follow."
+  },
+  {
+   "name": "repo-wiki",
+   "kind": "skill",
+   "old_chars": 1056,
+   "old_listed_chars": 1056,
+   "new_chars": 214,
+   "saved_chars": 842,
+   "proposed": "Generate a source-grounded README or multi-page wiki for a repository in two passes (a structure plan, then pages), with citation and diagram rules and 15 named styles. Use to write a README or document a codebase."
+  },
+  {
+   "name": "autonomous-authenticated-web-access",
+   "kind": "skill",
+   "old_chars": 985,
+   "old_listed_chars": 985,
+   "new_chars": 228,
+   "saved_chars": 757,
+   "proposed": "Choose and run read-only access to a logged-in web app: API token, then clean-profile CDP, then warm Dia CDP; plus trusted-input, shadow-DOM and consent-modal techniques for hardened SPAs. Pairs with dia-agent and agent-browser."
+  },
+  {
+   "name": "resume-sessions",
+   "kind": "skill",
+   "old_chars": 981,
+   "old_listed_chars": 981,
+   "new_chars": 228,
+   "saved_chars": 753,
+   "proposed": "Resume every Claude Code session across the 4 accounts after a crash or reboot: find open sessions, recreate worktrees, take the full session rather than the summary, clear terminal gibberish, re-engage them and keep them alive."
+  },
+  {
+   "name": "grok-wiki-audit",
+   "kind": "skill",
+   "old_chars": 911,
+   "old_listed_chars": 911,
+   "new_chars": 227,
+   "saved_chars": 684,
+   "proposed": "Our recipe for a multi-shard defect sweep of a repo with grok-wiki ask: preflight checks (a broken claude stub, the codex config override), shard design, and verifying each finding against the pre-fix artifact before fixing it."
+  },
+  {
+   "name": "model-upgrade",
+   "kind": "skill",
+   "old_chars": 874,
+   "old_listed_chars": 874,
+   "new_chars": 235,
+   "saved_chars": 639,
+   "proposed": "Runbook for moving to a new Claude model or off one: the binary gate first (does the pinned Claude Code register the id?), the model-id census, config and doc sweeps, the model ladder. Use when a model ships or frontier access changes."
+  }
+ ],
+ "proposed_agent_descriptions": [
+  {
+   "name": "deep-research",
+   "old_chars": 1358,
+   "new_chars": 197,
+   "saved_chars": 1161,
+   "proposed": "Deep research subagent (Opus tier; the lead may pass model \"fable\" per model-config.yaml). Default for research fan-out slots and for adversarial or multi-hop briefs. Returns signal-dense findings."
+  },
+  {
+   "name": "deep-research-sonnet",
+   "old_chars": 878,
+   "new_chars": 171,
+   "saved_chars": 707,
+   "proposed": "Sonnet-tier research worker, benched: use only in a probe-certified low- or medium-effort Workflow (~/.claude/model-routing-freewin-probe.md). Otherwise use deep-research."
+  },
+  {
+   "name": "frontier-derivation",
+   "old_chars": 527,
+   "new_chars": 192,
+   "saved_chars": 335,
+   "proposed": "Read-only, baseline-blind panelist for /frontier-run: derives failure modes from the system model first, then reads code to confirm or refute them. One per hole; the lead passes model \"fable\"."
+  }
+ ],
+ "opportunities": [
+  {
+   "rank": 1,
+   "category": "flag",
+   "change": "Rewrite every own skill/command description to <=250 chars (20 drafted)",
+   "est_saving_14d": "<=  own /  Opus 5.5 (S2); S1 alone /",
+   "quality_risk": "low",
+   "all_skills_described": true
+  },
+  {
+   "rank": 2,
+   "category": "flag",
+   "change": "Drop Skill from tools: of deep-research and deep-research-sonnet (no listing sent)",
+   "est_saving_14d": " own /  Opus 5.5",
+   "quality_risk": "low",
+   "cost": "3 Skill calls in 14 d"
+  },
+  {
+   "rank": 3,
+   "category": "propose",
+   "change": "Lean custom agentType for Workflow slots (explicit tools, no Skill/MCP) instead of workflow-subagent tools:[*]",
+   "est_saving_14d": "/ skill listing + <= / MCP blocks",
+   "quality_risk": "medium"
+  },
+  {
+   "rank": 4,
+   "category": "flag",
+   "change": "skillOverrides name-only for 8 bundled skills with 0 uses",
+   "est_saving_14d": " own /  Opus 5.5 beyond S2",
+   "quality_risk": "low"
+  },
+  {
+   "rank": 5,
+   "category": "propose",
+   "change": "Scope ms365 out of user MCP config (3.0% of main sessions use it)",
+   "est_saving_14d": "~ own / ~ Opus 5.5",
+   "quality_risk": "medium"
+  },
+  {
+   "rank": 6,
+   "category": "propose",
+   "change": "Disable the unused claude.ai Claude Docs connector (629 loaded tool tokens + 1,895-char instructions)",
+   "est_saving_14d": "~ own /  Opus 5.5 going forward",
+   "quality_risk": "low"
+  },
+  {
+   "rank": 7,
+   "category": "flag",
+   "change": "Tighten 3 agent descriptions (-2,203 chars)",
+   "est_saving_14d": " own /  Opus 5.5",
+   "quality_risk": "low"
+  },
+  {
+   "rank": 8,
+   "category": "propose",
+   "change": "Upstream: do not defer WebSearch/WebFetch for agents that list them in tools:",
+   "est_saving_14d": " own /  Opus 5.5 (412 ToolSearch-only turns)",
+   "quality_risk": "low"
+  }
+ ]
+}

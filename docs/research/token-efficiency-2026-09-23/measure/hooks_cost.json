@@ -1,0 +1,1312 @@
+{
+ "chars_per_token": 2.5,
+ "injections": {
+  "session-continue.sh": {
+   "n": 3682,
+   "contexts": 215,
+   "chars": 2701042,
+   "median_chars": 661,
+   "p90_chars": 899,
+   "usd": 154.46,
+   "usd_at_opus55": 67.5,
+   "avg_resps_alive": 290.9,
+   "persisted_previews": 0,
+   "events": {
+    "Stop (meta copy)": 1968,
+    "hook_blocking_error:Stop": 1714
+   },
+   "usd_by_event": {
+    "Stop (meta copy)": 72.22,
+    "hook_blocking_error:Stop": 82.23
+   },
+   "usd55_by_event": {
+    "Stop (meta copy)": 31.72,
+    "hook_blocking_error:Stop": 35.78
+   },
+   "ctx_types": {
+    "main": 3682
+   }
+  },
+  "config-mirror-assert.sh": {
+   "n": 950,
+   "contexts": 881,
+   "chars": 5056045,
+   "median_chars": 5783,
+   "p90_chars": 8672,
+   "usd": 86.82,
+   "usd_at_opus55": 37.75,
+   "avg_resps_alive": 79.7,
+   "persisted_previews": 363,
+   "events": {
+    "hook_additional_context:SessionStart": 950
+   },
+   "usd_by_event": {
+    "hook_additional_context:SessionStart": 86.82
+   },
+   "usd55_by_event": {
+    "hook_additional_context:SessionStart": 37.75
+   },
+   "ctx_types": {
+    "main": 950
+   }
+  },
+  "/goal prompt hook (Claude Code built-in)": {
+   "n": 584,
+   "contexts": 18,
+   "chars": 872080,
+   "median_chars": 1462,
+   "p90_chars": 1686,
+   "usd": 72.16,
+   "usd_at_opus55": 30.82,
+   "avg_resps_alive": 381.8,
+   "persisted_previews": 0,
+   "events": {
+    "Stop (meta copy)": 584
+   },
+   "usd_by_event": {
+    "Stop (meta copy)": 72.16
+   },
+   "usd55_by_event": {
+    "Stop (meta copy)": 30.82
+   },
+   "ctx_types": {
+    "main": 584
+   }
+  },
+  "mailbox-drain.sh [peer mail]": {
+   "n": 967,
+   "contexts": 447,
+   "chars": 2466911,
+   "median_chars": 2640,
+   "p90_chars": 3872,
+   "usd": 54.19,
+   "usd_at_opus55": 27.46,
+   "avg_resps_alive": 97.8,
+   "persisted_previews": 9,
+   "events": {
+    "hook_additional_context:PostToolUse": 472,
+    "hook_additional_context:UserPromptSubmit": 149,
+    "hook_additional_context:SessionStart": 346
+   },
+   "usd_by_event": {
+    "hook_additional_context:PostToolUse": 30.38,
+    "hook_additional_context:UserPromptSubmit": 4.97,
+    "hook_additional_context:SessionStart": 18.84
+   },
+   "usd55_by_event": {
+    "hook_additional_context:PostToolUse": 15.95,
+    "hook_additional_context:UserPromptSubmit": 2.95,
+    "hook_additional_context:SessionStart": 8.56
+   },
+   "ctx_types": {
+    "main": 947,
+    "subagent": 9,
+    "workflow_agent": 11
+   }
+  },
+  "mailbox-drain.sh [wake-path nag]": {
+   "n": 2950,
+   "contexts": 435,
+   "chars": 1696435,
+   "median_chars": 334,
+   "p90_chars": 757,
+   "usd": 35.27,
+   "usd_at_opus55": 19.07,
+   "avg_resps_alive": 72.8,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:SessionStart": 123,
+    "hook_additional_context:UserPromptSubmit": 2827
+   },
+   "usd_by_event": {
+    "hook_additional_context:SessionStart": 0.11,
+    "hook_additional_context:UserPromptSubmit": 35.16
+   },
+   "usd55_by_event": {
+    "hook_additional_context:SessionStart": 0.06,
+    "hook_additional_context:UserPromptSubmit": 19.01
+   },
+   "ctx_types": {
+    "main": 2950
+   }
+  },
+  "dod-persist.sh": {
+   "n": 683,
+   "contexts": 659,
+   "chars": 1565278,
+   "median_chars": 1958,
+   "p90_chars": 2336,
+   "usd": 29.66,
+   "usd_at_opus55": 13.05,
+   "avg_resps_alive": 96.1,
+   "persisted_previews": 608,
+   "events": {
+    "hook_additional_context:SessionStart": 683
+   },
+   "usd_by_event": {
+    "hook_additional_context:SessionStart": 29.66
+   },
+   "usd55_by_event": {
+    "hook_additional_context:SessionStart": 13.05
+   },
+   "ctx_types": {
+    "main": 683
+   }
+  },
+  "memory-nudge.sh": {
+   "n": 434,
+   "contexts": 213,
+   "chars": 1235257,
+   "median_chars": 2704,
+   "p90_chars": 3081,
+   "usd": 26.67,
+   "usd_at_opus55": 13.86,
+   "avg_resps_alive": 84.0,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:UserPromptSubmit": 434
+   },
+   "usd_by_event": {
+    "hook_additional_context:UserPromptSubmit": 26.67
+   },
+   "usd55_by_event": {
+    "hook_additional_context:UserPromptSubmit": 13.86
+   },
+   "ctx_types": {
+    "main": 434
+   }
+  },
+  "handoff-intent-nudge.sh": {
+   "n": 736,
+   "contexts": 467,
+   "chars": 657984,
+   "median_chars": 894,
+   "p90_chars": 894,
+   "usd": 16.52,
+   "usd_at_opus55": 7.86,
+   "avg_resps_alive": 116.3,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:UserPromptSubmit": 736
+   },
+   "usd_by_event": {
+    "hook_additional_context:UserPromptSubmit": 16.52
+   },
+   "usd55_by_event": {
+    "hook_additional_context:UserPromptSubmit": 7.86
+   },
+   "ctx_types": {
+    "main": 736
+   }
+  },
+  "completion-assert.sh": {
+   "n": 577,
+   "contexts": 143,
+   "chars": 472740,
+   "median_chars": 745,
+   "p90_chars": 1197,
+   "usd": 10.04,
+   "usd_at_opus55": 5.41,
+   "avg_resps_alive": 72.6,
+   "persisted_previews": 0,
+   "events": {
+    "Stop (meta copy)": 289,
+    "hook_blocking_error:Stop": 288
+   },
+   "usd_by_event": {
+    "Stop (meta copy)": 4.72,
+    "hook_blocking_error:Stop": 5.32
+   },
+   "usd55_by_event": {
+    "Stop (meta copy)": 2.55,
+    "hook_blocking_error:Stop": 2.87
+   },
+   "ctx_types": {
+    "main": 577
+   }
+  },
+  "agent-teams-enforce.sh": {
+   "n": 483,
+   "contexts": 90,
+   "chars": 254322,
+   "median_chars": 403,
+   "p90_chars": 578,
+   "usd": 8.5,
+   "usd_at_opus55": 4.43,
+   "avg_resps_alive": 118.8,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:PreToolUse": 483
+   },
+   "usd_by_event": {
+    "hook_additional_context:PreToolUse": 8.5
+   },
+   "usd55_by_event": {
+    "hook_additional_context:PreToolUse": 4.43
+   },
+   "ctx_types": {
+    "main": 482,
+    "subagent": 1
+   }
+  },
+  "research-precognition-nudge.sh": {
+   "n": 419,
+   "contexts": 208,
+   "chars": 323049,
+   "median_chars": 771,
+   "p90_chars": 771,
+   "usd": 7.81,
+   "usd_at_opus55": 3.93,
+   "avg_resps_alive": 104.0,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:UserPromptSubmit": 419
+   },
+   "usd_by_event": {
+    "hook_additional_context:UserPromptSubmit": 7.81
+   },
+   "usd55_by_event": {
+    "hook_additional_context:UserPromptSubmit": 3.93
+   },
+   "ctx_types": {
+    "main": 419
+   }
+  },
+  "mailbox-drain.sh [parked-watcher warning]": {
+   "n": 195,
+   "contexts": 109,
+   "chars": 259354,
+   "median_chars": 1060,
+   "p90_chars": 2252,
+   "usd": 6.88,
+   "usd_at_opus55": 3.71,
+   "avg_resps_alive": 118.8,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:UserPromptSubmit": 192,
+    "hook_additional_context:SessionStart": 3
+   },
+   "usd_by_event": {
+    "hook_additional_context:UserPromptSubmit": 6.84,
+    "hook_additional_context:SessionStart": 0.04
+   },
+   "usd55_by_event": {
+    "hook_additional_context:UserPromptSubmit": 3.69,
+    "hook_additional_context:SessionStart": 0.02
+   },
+   "ctx_types": {
+    "main": 195
+   }
+  },
+  "anti-deference-nudge.sh": {
+   "n": 359,
+   "contexts": 121,
+   "chars": 248457,
+   "median_chars": 720,
+   "p90_chars": 845,
+   "usd": 6.58,
+   "usd_at_opus55": 3.44,
+   "avg_resps_alive": 94.6,
+   "persisted_previews": 0,
+   "events": {
+    "Stop (meta copy)": 180,
+    "hook_blocking_error:Stop": 179
+   },
+   "usd_by_event": {
+    "Stop (meta copy)": 3.07,
+    "hook_blocking_error:Stop": 3.52
+   },
+   "usd55_by_event": {
+    "Stop (meta copy)": 1.6,
+    "hook_blocking_error:Stop": 1.84
+   },
+   "ctx_types": {
+    "main": 359
+   }
+  },
+  "plan-agent-teams-default.sh": {
+   "n": 337,
+   "contexts": 109,
+   "chars": 404405,
+   "median_chars": 1196,
+   "p90_chars": 1197,
+   "usd": 6.48,
+   "usd_at_opus55": 3.69,
+   "avg_resps_alive": 47.0,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:PreToolUse": 337
+   },
+   "usd_by_event": {
+    "hook_additional_context:PreToolUse": 6.48
+   },
+   "usd55_by_event": {
+    "hook_additional_context:PreToolUse": 3.69
+   },
+   "ctx_types": {
+    "main": 258,
+    "subagent": 51,
+    "workflow_agent": 28
+   }
+  },
+  "cache-expiry-warning.sh": {
+   "n": 1186,
+   "contexts": 258,
+   "chars": 468298,
+   "median_chars": 395,
+   "p90_chars": 395,
+   "usd": 6.3,
+   "usd_at_opus55": 3.16,
+   "avg_resps_alive": 54.9,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:UserPromptSubmit": 1186
+   },
+   "usd_by_event": {
+    "hook_additional_context:UserPromptSubmit": 6.3
+   },
+   "usd55_by_event": {
+    "hook_additional_context:UserPromptSubmit": 3.16
+   },
+   "ctx_types": {
+    "main": 1186
+   }
+  },
+  "frontier-status.sh": {
+   "n": 892,
+   "contexts": 880,
+   "chars": 303428,
+   "median_chars": 340,
+   "p90_chars": 341,
+   "usd": 4.92,
+   "usd_at_opus55": 2.2,
+   "avg_resps_alive": 81.9,
+   "persisted_previews": 0,
+   "events": {
+    "hook_success:SessionStart": 892
+   },
+   "usd_by_event": {
+    "hook_success:SessionStart": 4.92
+   },
+   "usd55_by_event": {
+    "hook_success:SessionStart": 2.2
+   },
+   "ctx_types": {
+    "main": 892
+   }
+  },
+  "backup-before-write.sh": {
+   "n": 305,
+   "contexts": 110,
+   "chars": 262057,
+   "median_chars": 951,
+   "p90_chars": 965,
+   "usd": 4.23,
+   "usd_at_opus55": 2.42,
+   "avg_resps_alive": 46.4,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:PreToolUse": 305
+   },
+   "usd_by_event": {
+    "hook_additional_context:PreToolUse": 4.23
+   },
+   "usd55_by_event": {
+    "hook_additional_context:PreToolUse": 2.42
+   },
+   "ctx_types": {
+    "main": 237,
+    "subagent": 31,
+    "workflow_agent": 37
+   }
+  },
+  "activation-watch.sh": {
+   "n": 848,
+   "contexts": 822,
+   "chars": 270442,
+   "median_chars": 260,
+   "p90_chars": 264,
+   "usd": 4.19,
+   "usd_at_opus55": 1.91,
+   "avg_resps_alive": 81.5,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:SessionStart": 848
+   },
+   "usd_by_event": {
+    "hook_additional_context:SessionStart": 4.19
+   },
+   "usd55_by_event": {
+    "hook_additional_context:SessionStart": 1.91
+   },
+   "ctx_types": {
+    "main": 848
+   }
+  },
+  "enforce-email-formatting.py": {
+   "n": 34,
+   "contexts": 27,
+   "chars": 167283,
+   "median_chars": 2348,
+   "p90_chars": 8921,
+   "usd": 4.09,
+   "usd_at_opus55": 2.29,
+   "avg_resps_alive": 69.4,
+   "persisted_previews": 21,
+   "events": {
+    "hook_additional_context:PreToolUse": 34
+   },
+   "usd_by_event": {
+    "hook_additional_context:PreToolUse": 4.09
+   },
+   "usd55_by_event": {
+    "hook_additional_context:PreToolUse": 2.29
+   },
+   "ctx_types": {
+    "main": 28,
+    "workflow_agent": 5,
+    "subagent": 1
+   }
+  },
+  "setup-plan-symlinks.sh": {
+   "n": 927,
+   "contexts": 881,
+   "chars": 172125,
+   "median_chars": 186,
+   "p90_chars": 193,
+   "usd": 2.75,
+   "usd_at_opus55": 1.23,
+   "avg_resps_alive": 80.0,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:SessionStart": 927
+   },
+   "usd_by_event": {
+    "hook_additional_context:SessionStart": 2.75
+   },
+   "usd55_by_event": {
+    "hook_additional_context:SessionStart": 1.23
+   },
+   "ctx_types": {
+    "main": 927
+   }
+  },
+  "session-start.sh": {
+   "n": 961,
+   "contexts": 882,
+   "chars": 155198,
+   "median_chars": 160,
+   "p90_chars": 165,
+   "usd": 2.48,
+   "usd_at_opus55": 1.12,
+   "avg_resps_alive": 79.8,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:SessionStart": 961
+   },
+   "usd_by_event": {
+    "hook_additional_context:SessionStart": 2.48
+   },
+   "usd55_by_event": {
+    "hook_additional_context:SessionStart": 1.12
+   },
+   "ctx_types": {
+    "main": 961
+   }
+  },
+  "relay-verbatim.sh": {
+   "n": 244,
+   "contexts": 150,
+   "chars": 114400,
+   "median_chars": 467,
+   "p90_chars": 472,
+   "usd": 1.94,
+   "usd_at_opus55": 1.13,
+   "avg_resps_alive": 51.5,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:PostToolUse": 244
+   },
+   "usd_by_event": {
+    "hook_additional_context:PostToolUse": 1.94
+   },
+   "usd55_by_event": {
+    "hook_additional_context:PostToolUse": 1.13
+   },
+   "ctx_types": {
+    "main": 219,
+    "workflow_agent": 19,
+    "subagent": 6
+   }
+  },
+  "desk-brief-inject.sh": {
+   "n": 5,
+   "contexts": 5,
+   "chars": 39306,
+   "median_chars": 7860,
+   "p90_chars": 7864,
+   "usd": 1.75,
+   "usd_at_opus55": 0.7,
+   "avg_resps_alive": 222.8,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:SessionStart": 5
+   },
+   "usd_by_event": {
+    "hook_additional_context:SessionStart": 1.75
+   },
+   "usd55_by_event": {
+    "hook_additional_context:SessionStart": 0.7
+   },
+   "ctx_types": {
+    "main": 5
+   }
+  },
+  "web-entrypoint-ladder.sh": {
+   "n": 167,
+   "contexts": 167,
+   "chars": 192992,
+   "median_chars": 1156,
+   "p90_chars": 1156,
+   "usd": 1.7,
+   "usd_at_opus55": 0.96,
+   "avg_resps_alive": 27.5,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:PreToolUse": 167
+   },
+   "usd_by_event": {
+    "hook_additional_context:PreToolUse": 1.7
+   },
+   "usd55_by_event": {
+    "hook_additional_context:PreToolUse": 0.96
+   },
+   "ctx_types": {
+    "main": 33,
+    "subagent": 31,
+    "workflow_agent": 103
+   }
+  },
+  "session-index-start.sh": {
+   "n": 929,
+   "contexts": 876,
+   "chars": 98601,
+   "median_chars": 133,
+   "p90_chars": 137,
+   "usd": 1.5,
+   "usd_at_opus55": 0.68,
+   "avg_resps_alive": 79.9,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:SessionStart": 929
+   },
+   "usd_by_event": {
+    "hook_additional_context:SessionStart": 1.5
+   },
+   "usd55_by_event": {
+    "hook_additional_context:SessionStart": 0.68
+   },
+   "ctx_types": {
+    "main": 929
+   }
+  },
+  "boundary-handoff.sh": {
+   "n": 243,
+   "contexts": 52,
+   "chars": 141815,
+   "median_chars": 563,
+   "p90_chars": 776,
+   "usd": 1.47,
+   "usd_at_opus55": 0.84,
+   "avg_resps_alive": 27.9,
+   "persisted_previews": 0,
+   "events": {
+    "Stop (meta copy)": 115,
+    "hook_blocking_error:Stop": 128
+   },
+   "usd_by_event": {
+    "Stop (meta copy)": 0.6,
+    "hook_blocking_error:Stop": 0.87
+   },
+   "usd55_by_event": {
+    "Stop (meta copy)": 0.34,
+    "hook_blocking_error:Stop": 0.5
+   },
+   "ctx_types": {
+    "main": 243
+   }
+  },
+  "setup-task-symlinks.sh": {
+   "n": 894,
+   "contexts": 881,
+   "chars": 90504,
+   "median_chars": 94,
+   "p90_chars": 120,
+   "usd": 1.43,
+   "usd_at_opus55": 0.64,
+   "avg_resps_alive": 81.5,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:SessionStart": 894
+   },
+   "usd_by_event": {
+    "hook_additional_context:SessionStart": 1.43
+   },
+   "usd55_by_event": {
+    "hook_additional_context:SessionStart": 0.64
+   },
+   "ctx_types": {
+    "main": 894
+   }
+  },
+  "cc-builtin: file modified after edit (post-file-edit.sh formatter)": {
+   "n": 169,
+   "contexts": 64,
+   "chars": 63831,
+   "median_chars": 389,
+   "p90_chars": 425,
+   "usd": 0.91,
+   "usd_at_opus55": 0.54,
+   "avg_resps_alive": 53.7,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:PostToolUse": 169
+   },
+   "usd_by_event": {
+    "hook_additional_context:PostToolUse": 0.91
+   },
+   "usd55_by_event": {
+    "hook_additional_context:PostToolUse": 0.54
+   },
+   "ctx_types": {
+    "main": 61,
+    "subagent": 47,
+    "workflow_agent": 61
+   }
+  },
+  "dispatch-assert.sh": {
+   "n": 44,
+   "contexts": 17,
+   "chars": 53860,
+   "median_chars": 1250,
+   "p90_chars": 1344,
+   "usd": 0.89,
+   "usd_at_opus55": 0.47,
+   "avg_resps_alive": 55.3,
+   "persisted_previews": 0,
+   "events": {
+    "Stop (meta copy)": 22,
+    "hook_blocking_error:Stop": 22
+   },
+   "usd_by_event": {
+    "Stop (meta copy)": 0.43,
+    "hook_blocking_error:Stop": 0.46
+   },
+   "usd55_by_event": {
+    "Stop (meta copy)": 0.23,
+    "hook_blocking_error:Stop": 0.24
+   },
+   "ctx_types": {
+    "main": 44
+   }
+  },
+  "memory-index-drain.sh": {
+   "n": 44,
+   "contexts": 26,
+   "chars": 35375,
+   "median_chars": 769,
+   "p90_chars": 960,
+   "usd": 0.64,
+   "usd_at_opus55": 0.35,
+   "avg_resps_alive": 53.1,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:PostToolUse": 44
+   },
+   "usd_by_event": {
+    "hook_additional_context:PostToolUse": 0.64
+   },
+   "usd55_by_event": {
+    "hook_additional_context:PostToolUse": 0.35
+   },
+   "ctx_types": {
+    "main": 41,
+    "workflow_agent": 3
+   }
+  },
+  "unattributed": {
+   "n": 165,
+   "contexts": 144,
+   "chars": 45864,
+   "median_chars": 179,
+   "p90_chars": 652,
+   "usd": 0.59,
+   "usd_at_opus55": 0.32,
+   "avg_resps_alive": 21.2,
+   "persisted_previews": 0,
+   "events": {
+    "hook_stopped_continuation:TeammateIdle": 126,
+    "hook_additional_context:PostToolUse": 14,
+    "hook_additional_context:PreToolUse": 19,
+    "Stop (meta copy)": 1,
+    "hook_additional_context:SessionStart": 5
+   },
+   "usd_by_event": {
+    "hook_stopped_continuation:TeammateIdle": 0.01,
+    "hook_additional_context:PostToolUse": 0.18,
+    "hook_additional_context:PreToolUse": 0.28,
+    "Stop (meta copy)": 0.08,
+    "hook_additional_context:SessionStart": 0.04
+   },
+   "usd55_by_event": {
+    "hook_stopped_continuation:TeammateIdle": 0.01,
+    "hook_additional_context:PostToolUse": 0.09,
+    "hook_additional_context:PreToolUse": 0.17,
+    "Stop (meta copy)": 0.03,
+    "hook_additional_context:SessionStart": 0.02
+   },
+   "ctx_types": {
+    "main": 157,
+    "workflow_agent": 7,
+    "subagent": 1
+   }
+  },
+  "validate-plan-structure.sh": {
+   "n": 53,
+   "contexts": 40,
+   "chars": 29608,
+   "median_chars": 485,
+   "p90_chars": 726,
+   "usd": 0.59,
+   "usd_at_opus55": 0.34,
+   "avg_resps_alive": 49.2,
+   "persisted_previews": 0,
+   "events": {
+    "hook_blocking_error:PostToolUse": 36,
+    "hook_additional_context:PostToolUse": 17
+   },
+   "usd_by_event": {
+    "hook_blocking_error:PostToolUse": 0.21,
+    "hook_additional_context:PostToolUse": 0.38
+   },
+   "usd55_by_event": {
+    "hook_blocking_error:PostToolUse": 0.12,
+    "hook_additional_context:PostToolUse": 0.22
+   },
+   "ctx_types": {
+    "main": 27,
+    "subagent": 13,
+    "workflow_agent": 13
+   }
+  },
+  "waiting-recycle.sh": {
+   "n": 43,
+   "contexts": 21,
+   "chars": 25956,
+   "median_chars": 442,
+   "p90_chars": 1669,
+   "usd": 0.47,
+   "usd_at_opus55": 0.25,
+   "avg_resps_alive": 54.0,
+   "persisted_previews": 0,
+   "events": {
+    "Stop (meta copy)": 13,
+    "hook_blocking_error:PostToolUse": 16,
+    "hook_additional_context:PostToolUse": 14
+   },
+   "usd_by_event": {
+    "Stop (meta copy)": 0.14,
+    "hook_blocking_error:PostToolUse": 0.11,
+    "hook_additional_context:PostToolUse": 0.23
+   },
+   "usd55_by_event": {
+    "Stop (meta copy)": 0.08,
+    "hook_blocking_error:PostToolUse": 0.06,
+    "hook_additional_context:PostToolUse": 0.12
+   },
+   "ctx_types": {
+    "main": 40,
+    "subagent": 3
+   }
+  },
+  "project-hook: bash -c 'f=\"~/.reso/unblock-sweep.last\"; m=$(stat -f %m \"$f\"": {
+   "n": 9,
+   "contexts": 9,
+   "chars": 17455,
+   "median_chars": 1748,
+   "p90_chars": 3137,
+   "usd": 0.43,
+   "usd_at_opus55": 0.19,
+   "avg_resps_alive": 111.8,
+   "persisted_previews": 0,
+   "events": {
+    "hook_success:SessionStart": 9
+   },
+   "usd_by_event": {
+    "hook_success:SessionStart": 0.43
+   },
+   "usd55_by_event": {
+    "hook_success:SessionStart": 0.19
+   },
+   "ctx_types": {
+    "main": 9
+   }
+  },
+  "project-hook: if [ ! -x node_modules/.bin/next ] || [ ! -x node_modules/.b": {
+   "n": 6,
+   "contexts": 6,
+   "chars": 27890,
+   "median_chars": 4271,
+   "p90_chars": 5515,
+   "usd": 0.24,
+   "usd_at_opus55": 0.12,
+   "avg_resps_alive": 49.8,
+   "persisted_previews": 0,
+   "events": {
+    "hook_success:SessionStart": 6
+   },
+   "usd_by_event": {
+    "hook_success:SessionStart": 0.24
+   },
+   "usd55_by_event": {
+    "hook_success:SessionStart": 0.12
+   },
+   "ctx_types": {
+    "main": 6
+   }
+  },
+  "mcp-auth-guard.sh": {
+   "n": 10,
+   "contexts": 10,
+   "chars": 8530,
+   "median_chars": 851,
+   "p90_chars": 988,
+   "usd": 0.09,
+   "usd_at_opus55": 0.04,
+   "avg_resps_alive": 50.4,
+   "persisted_previews": 0,
+   "events": {
+    "hook_success:SessionStart": 10
+   },
+   "usd_by_event": {
+    "hook_success:SessionStart": 0.09
+   },
+   "usd55_by_event": {
+    "hook_success:SessionStart": 0.04
+   },
+   "ctx_types": {
+    "main": 10
+   }
+  },
+  "project-hook: if [ ! -f sqlite.db ]; then echo 'Provisioning local DB\u2026'; i": {
+   "n": 8,
+   "contexts": 8,
+   "chars": 751,
+   "median_chars": 94,
+   "p90_chars": 94,
+   "usd": 0.0,
+   "usd_at_opus55": 0.0,
+   "avg_resps_alive": 40.9,
+   "persisted_previews": 0,
+   "events": {
+    "hook_success:SessionStart": 8
+   },
+   "usd_by_event": {
+    "hook_success:SessionStart": 0.0
+   },
+   "usd55_by_event": {
+    "hook_success:SessionStart": 0.0
+   },
+   "ctx_types": {
+    "main": 8
+   }
+  },
+  "project-hook: bash .claude/emit-stdout.sh": {
+   "n": 1,
+   "contexts": 1,
+   "chars": 97,
+   "median_chars": 97,
+   "p90_chars": 97,
+   "usd": 0.0,
+   "usd_at_opus55": 0.0,
+   "avg_resps_alive": 1.0,
+   "persisted_previews": 0,
+   "events": {
+    "hook_success:SessionStart": 1
+   },
+   "usd_by_event": {
+    "hook_success:SessionStart": 0.0
+   },
+   "usd55_by_event": {
+    "hook_success:SessionStart": 0.0
+   },
+   "ctx_types": {
+    "main": 1
+   }
+  }
+ },
+ "forced": {
+  "session-continue.sh": {
+   "n": 1922.1,
+   "contexts": 213,
+   "responses": 11356,
+   "usd": 2403.01,
+   "usd_at_opus55": 1084.13,
+   "output_tokens": 4601143,
+   "classes": {
+    "substantive": 614.6,
+    "poll_rearm": 265.0,
+    "readonly_check": 59.5,
+    "nothing": 34.5,
+    "reformat_close": 818.5,
+    "short_probe": 130.0
+   },
+   "usd_by_class": {
+    "substantive": 1666.41,
+    "poll_rearm": 116.82,
+    "readonly_check": 129.61,
+    "nothing": 2.32,
+    "reformat_close": 432.05,
+    "short_probe": 55.8
+   }
+  },
+  "/goal prompt hook (Claude Code built-in)": {
+   "n": 557.9,
+   "contexts": 18,
+   "responses": 1492,
+   "usd": 411.21,
+   "usd_at_opus55": 176.45,
+   "output_tokens": 574679,
+   "classes": {
+    "reformat_close": 25.5,
+    "poll_rearm": 3.0,
+    "readonly_check": 2.5,
+    "substantive": 44.9,
+    "short_probe": 443.0,
+    "nothing": 39.0
+   },
+   "usd_by_class": {
+    "reformat_close": 12.53,
+    "poll_rearm": 1.85,
+    "readonly_check": 5.21,
+    "substantive": 144.35,
+    "short_probe": 236.04,
+    "nothing": 11.23
+   }
+  },
+  "completion-assert.sh": {
+   "n": 256.2,
+   "contexts": 136,
+   "responses": 1785,
+   "usd": 355.9,
+   "usd_at_opus55": 168.82,
+   "output_tokens": 1274368,
+   "classes": {
+    "substantive": 154.8,
+    "reformat_close": 77.5,
+    "poll_rearm": 9.5,
+    "readonly_check": 11.5,
+    "nothing": 3.0
+   },
+   "usd_by_class": {
+    "substantive": 308.67,
+    "reformat_close": 23.81,
+    "poll_rearm": 4.43,
+    "readonly_check": 18.65,
+    "nothing": 0.33
+   }
+  },
+  "anti-deference-nudge.sh": {
+   "n": 154.2,
+   "contexts": 121,
+   "responses": 1129,
+   "usd": 243.64,
+   "usd_at_opus55": 119.91,
+   "output_tokens": 879550,
+   "classes": {
+    "nothing": 0.5,
+    "readonly_check": 6.0,
+    "substantive": 71.2,
+    "reformat_close": 76.0,
+    "poll_rearm": 0.5
+   },
+   "usd_by_class": {
+    "nothing": 0.0,
+    "readonly_check": 9.45,
+    "substantive": 215.54,
+    "reformat_close": 18.44,
+    "poll_rearm": 0.2
+   }
+  },
+  "boundary-handoff.sh": {
+   "n": 104.5,
+   "contexts": 46,
+   "responses": 449,
+   "usd": 151.01,
+   "usd_at_opus55": 71.23,
+   "output_tokens": 364745,
+   "classes": {
+    "substantive": 65.5,
+    "reformat_close": 27.0,
+    "poll_rearm": 1.5,
+    "readonly_check": 2.5,
+    "nothing": 8.0
+   },
+   "usd_by_class": {
+    "substantive": 126.4,
+    "reformat_close": 16.79,
+    "poll_rearm": 0.85,
+    "readonly_check": 5.39,
+    "nothing": 1.59
+   }
+  },
+  "dispatch-assert.sh": {
+   "n": 21.0,
+   "contexts": 17,
+   "responses": 126,
+   "usd": 36.62,
+   "usd_at_opus55": 18.81,
+   "output_tokens": 92058,
+   "classes": {
+    "substantive": 12.0,
+    "reformat_close": 4.0,
+    "poll_rearm": 1.0,
+    "readonly_check": 1.0,
+    "nothing": 3.0
+   },
+   "usd_by_class": {
+    "substantive": 33.77,
+    "reformat_close": 1.14,
+    "poll_rearm": 0.46,
+    "readonly_check": 1.04,
+    "nothing": 0.2
+   }
+  },
+  "waiting-recycle.sh": {
+   "n": 12.0,
+   "contexts": 8,
+   "responses": 74,
+   "usd": 20.63,
+   "usd_at_opus55": 9.38,
+   "output_tokens": 63936,
+   "classes": {
+    "substantive": 9.0,
+    "readonly_check": 1.0,
+    "reformat_close": 1.5,
+    "poll_rearm": 0.5
+   },
+   "usd_by_class": {
+    "substantive": 18.17,
+    "readonly_check": 1.36,
+    "reformat_close": 0.92,
+    "poll_rearm": 0.18
+   }
+  },
+  "unattributed": {
+   "n": 1.0,
+   "contexts": 1,
+   "responses": 3,
+   "usd": 1.16,
+   "usd_at_opus55": 0.49,
+   "output_tokens": 1209,
+   "classes": {
+    "reformat_close": 1.0
+   },
+   "usd_by_class": {
+    "reformat_close": 1.16
+   }
+  }
+ },
+ "nonvisible": {
+  "hook_additional_context": {
+   "n": 308,
+   "files": 0,
+   "raw_chars": 1077366
+  },
+  "hook_blocking_error": {
+   "n": 257,
+   "files": 0,
+   "raw_chars": 238440
+  },
+  "hook_cancelled": {
+   "n": 9140,
+   "files": 0,
+   "raw_chars": 2070580
+  },
+  "hook_non_blocking_error": {
+   "n": 148,
+   "files": 0,
+   "raw_chars": 74947
+  },
+  "hook_success": {
+   "n": 80594,
+   "files": 0,
+   "raw_chars": 132062
+  },
+  "hook_system_message": {
+   "n": 3015,
+   "files": 0,
+   "raw_chars": 1622126
+  }
+ },
+ "cancelled_timeouts": {
+  "operator-readout.sh": 2731,
+  "session-continue.sh": 2509,
+  "completion-assert.sh": 1439,
+  "boundary-handoff.sh": 1395,
+  "validate-bash.sh": 349,
+  "?": 210,
+  "dod-persist.sh": 89,
+  "handoff-intent-nudge.sh": 57,
+  "agent-teams-enforce.sh": 56,
+  "anti-deference-nudge.sh": 54,
+  "mailbox-drain.sh": 39,
+  "memory-nudge.sh": 31,
+  "notify.sh": 30,
+  "session-index-start.sh": 27,
+  "smart-bash-allowlist.sh": 27,
+  "mcp-auth-guard.sh": 22,
+  "dispatch-assert.sh": 20,
+  "session-start.sh": 20,
+  "escalation-watch.sh": 19,
+  "activation-watch.sh": 16,
+  "curl-gate-scope.sh": 16,
+  "rm-safe-allowlist.sh": 15,
+  "teammate-auto-shutdown.sh": 14,
+  "ship-rail-push-allow.sh": 13,
+  "post-tool-batch.sh": 12,
+  "session-beat.sh": 11,
+  "teammate-checkpoint.sh": 11,
+  "desk-brief-inject.sh": 9,
+  "pre-session-validate.sh": 9,
+  "qos-rewrite.sh": 9,
+  "setup-task-symlinks.sh": 9,
+  "project-hook: bash -c 'f=\"~/.reso/unblock-sweep.last\"; m=$(stat -f %m \"$f\"": 8,
+  "git-worktree-guard.sh": 8,
+  "frontier-status.sh": 7,
+  "coldcompile-admit.sh": 6,
+  "setup-plan-symlinks.sh": 6,
+  "project-hook: MAIN_WT=$(git worktree list | head -1 | awk '{print $1}'); i": 5,
+  "handed-off-session-guard.sh": 5,
+  "live-session-registry.sh": 5,
+  "session-register.sh": 5,
+  "goal-inert-watch.sh": 4,
+  "plan-agent-teams-default.sh": 4,
+  "config-mirror-assert.sh": 3,
+  "project-hook: touch \"~/.reso/worktree-gc.wake\" 2>/dev/null || true": 2,
+  "keychain-guard.sh": 2,
+  "lead-crash-watchdog.sh": 2,
+  "backup-before-write.sh": 1,
+  "cache-expiry-tracker.sh": 1,
+  "cc-permission-beacon.sh": 1,
+  "check-edit-boundary.sh": 1
+ },
+ "unattributed_top": [
+  [
+   [
+    "hook_stopped_continuation:TeammateIdle",
+    "Idle teammate auto-shutdown (work preserved in ref"
+   ],
+   126
+  ],
+  [
+   [
+    "hook_additional_context:PreToolUse:mcp__ms365__send-draft-message",
+    "R1b \u2014 sending an EXISTING draft (permitted; compos"
+   ],
+   6
+  ],
+  [
+   [
+    "hook_additional_context:PreToolUse:mcp__ms365__update-mail-message",
+    "ALIAS CHECK (advisory \u2014 this hook cannot verify it"
+   ],
+   4
+  ],
+  [
+   [
+    "hook_additional_context:SessionStart",
+    "ACTIVATION ARMED BUT NOT IN EFFECT (axis 4, env-ar"
+   ],
+   4
+  ],
+  [
+   [
+    "hook_additional_context:PreToolUse:mcp__ms365__graph-batch",
+    "R1c \u2014 graph-batch carrying only GETs (reads are fi"
+   ],
+   4
+  ],
+  [
+   [
+    "hook_additional_context:PostToolUse:Edit",
+    "\u26a0\ufe0f PLAN STATUS [RESO_SECURITY_100P.md]: no valid '"
+   ],
+   2
+  ],
+  [
+   [
+    "hook_additional_context:PostToolUse:Bash",
+    "\ud83d\udea8 MEMORY INDEX IS OVER ITS LOADER CAP \u2014 25003/2500"
+   ],
+   2
+  ],
+  [
+   [
+    "hook_additional_context:PreToolUse:Agent",
+    "\ud83d\udea8 DELIVERY-CONTRACT NEGATION: this brief suppresse"
+   ],
+   2
+  ],
+  [
+   [
+    "hook_additional_context:PreToolUse:mcp__ms365__send-draft-message",
+    "R1b \u2014 sending an EXISTING draft from ren.chris@out"
+   ],
+   1
+  ],
+  [
+   [
+    "hook_additional_context:PostToolUse:Edit",
+    "The memory index at MEMORY.md is 20.6KB, approachi"
+   ],
+   1
+  ],
+  [
+   [
+    "hook_additional_context:PreToolUse:Agent",
+    "BRIEF OVER CAP: this teammate brief is 186 lines, "
+   ],
+   1
+  ],
+  [
+   [
+    "hook_additional_context:PreToolUse:mcp__ms365__create-draft-email",
+    "ALIAS CHECK (advisory \u2014 this hook cannot verify it"
+   ],
+   1
+  ],
+  [
+   [
+    "hook_additional_context:PostToolUse:Bash",
+    "\u26a0 WEDGED \u2014 quiet monitoring boundary (context 76% "
+   ],
+   1
+  ],
+  [
+   [
+    "hook_additional_context:PostToolUse:Edit",
+    "\u26a0\ufe0f PLAN STATUS [CONTINUOUS_DELIVERY_TO_LIVE_KITTY."
+   ],
+   1
+  ],
+  [
+   [
+    "hook_additional_context:PostToolUse:Bash",
+    "\ud83d\udea8 MEMORY INDEX IS OVER ITS LOADER CAP \u2014 25035/2500"
+   ],
+   1
+  ]
+ ],
+ "n_trigger_groups": 3045
+}

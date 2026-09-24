@@ -1,0 +1,433 @@
+{
+ "file": "/Users/chrisren/.claude-secondary/projects/-Users-chrisren-Development-claude-infrastructure/eda5fec4-25af-477c-9795-6c51630c1d6f.jsonl",
+ "ts": "2026-09-23T22:30:04.328Z",
+ "version": "2.1.280",
+ "total_chars": 30103,
+ "entries": [
+  {
+   "name": "account-relogin",
+   "chars": 17,
+   "described": false
+  },
+  {
+   "name": "agent-browser",
+   "chars": 338,
+   "described": true
+  },
+  {
+   "name": "agent-teams",
+   "chars": 1190,
+   "described": true
+  },
+  {
+   "name": "autonomous-authenticated-web-access",
+   "chars": 1024,
+   "described": true
+  },
+  {
+   "name": "beautiful-mermaid-docs",
+   "chars": 645,
+   "described": true
+  },
+  {
+   "name": "browsermcp",
+   "chars": 12,
+   "described": false
+  },
+  {
+   "name": "cafe-wifi-optimization",
+   "chars": 24,
+   "described": false
+  },
+  {
+   "name": "cc-upgrade-gate",
+   "chars": 771,
+   "described": true
+  },
+  {
+   "name": "cc-version-audit",
+   "chars": 627,
+   "described": true
+  },
+  {
+   "name": "codex-security",
+   "chars": 16,
+   "described": false
+  },
+  {
+   "name": "coding-standards",
+   "chars": 18,
+   "described": false
+  },
+  {
+   "name": "corpus-to-skill",
+   "chars": 17,
+   "described": false
+  },
+  {
+   "name": "demo-recording",
+   "chars": 16,
+   "described": false
+  },
+  {
+   "name": "dia-agent",
+   "chars": 1475,
+   "described": true
+  },
+  {
+   "name": "frontend-design-vue",
+   "chars": 21,
+   "described": false
+  },
+  {
+   "name": "frontier-campaign",
+   "chars": 19,
+   "described": false
+  },
+  {
+   "name": "frontier-hole",
+   "chars": 15,
+   "described": false
+  },
+  {
+   "name": "frontier-routing",
+   "chars": 18,
+   "described": false
+  },
+  {
+   "name": "frontier-run",
+   "chars": 829,
+   "described": true
+  },
+  {
+   "name": "grok-wiki-audit",
+   "chars": 17,
+   "described": false
+  },
+  {
+   "name": "grok-wiki-cli",
+   "chars": 612,
+   "described": true
+  },
+  {
+   "name": "grok-wiki-custom",
+   "chars": 453,
+   "described": true
+  },
+  {
+   "name": "ground-up",
+   "chars": 569,
+   "described": true
+  },
+  {
+   "name": "kpmg-deck",
+   "chars": 759,
+   "described": true
+  },
+  {
+   "name": "manual-command-delivery",
+   "chars": 1439,
+   "described": true
+  },
+  {
+   "name": "model-upgrade",
+   "chars": 891,
+   "described": true
+  },
+  {
+   "name": "motion",
+   "chars": 8,
+   "described": false
+  },
+  {
+   "name": "outbound-drafting",
+   "chars": 559,
+   "described": true
+  },
+  {
+   "name": "outlook-cleanup",
+   "chars": 17,
+   "described": false
+  },
+  {
+   "name": "permission-harvest",
+   "chars": 20,
+   "described": false
+  },
+  {
+   "name": "plan-conventions",
+   "chars": 1427,
+   "described": true
+  },
+  {
+   "name": "plan-update",
+   "chars": 300,
+   "described": true
+  },
+  {
+   "name": "pyramid-principle",
+   "chars": 58,
+   "described": true
+  },
+  {
+   "name": "pyramid-principle-full",
+   "chars": 711,
+   "described": true
+  },
+  {
+   "name": "react-best-practices",
+   "chars": 22,
+   "described": false
+  },
+  {
+   "name": "read-twitter",
+   "chars": 800,
+   "described": true
+  },
+  {
+   "name": "repo-wiki",
+   "chars": 11,
+   "described": false
+  },
+  {
+   "name": "research-subagents",
+   "chars": 1278,
+   "described": true
+  },
+  {
+   "name": "resume-sessions",
+   "chars": 1000,
+   "described": true
+  },
+  {
+   "name": "self-explaining-artifact",
+   "chars": 1088,
+   "described": true
+  },
+  {
+   "name": "vercel-design-guidelines",
+   "chars": 26,
+   "described": false
+  },
+  {
+   "name": "video-understanding",
+   "chars": 21,
+   "described": false
+  },
+  {
+   "name": "visual-direction",
+   "chars": 18,
+   "described": false
+  },
+  {
+   "name": "accounts",
+   "chars": 453,
+   "described": true
+  },
+  {
+   "name": "are-we-done",
+   "chars": 120,
+   "described": true
+  },
+  {
+   "name": "compact-memory",
+   "chars": 355,
+   "described": true
+  },
+  {
+   "name": "deploy-check",
+   "chars": 14,
+   "described": false
+  },
+  {
+   "name": "desk",
+   "chars": 6,
+   "described": false
+  },
+  {
+   "name": "evolve-skill",
+   "chars": 14,
+   "described": false
+  },
+  {
+   "name": "fix-lint",
+   "chars": 10,
+   "described": false
+  },
+  {
+   "name": "handoff",
+   "chars": 461,
+   "described": true
+  },
+  {
+   "name": "harvest-skill",
+   "chars": 295,
+   "described": true
+  },
+  {
+   "name": "keep-laptop-alive",
+   "chars": 247,
+   "described": true
+  },
+  {
+   "name": "limit-recover",
+   "chars": 1553,
+   "described": true
+  },
+  {
+   "name": "pr",
+   "chars": 4,
+   "described": false
+  },
+  {
+   "name": "recover",
+   "chars": 9,
+   "described": false
+  },
+  {
+   "name": "relogin",
+   "chars": 9,
+   "described": false
+  },
+  {
+   "name": "research",
+   "chars": 10,
+   "described": false
+  },
+  {
+   "name": "review",
+   "chars": 8,
+   "described": false
+  },
+  {
+   "name": "scaffold",
+   "chars": 10,
+   "described": false
+  },
+  {
+   "name": "ship",
+   "chars": 84,
+   "described": true
+  },
+  {
+   "name": "skill-promote",
+   "chars": 218,
+   "described": true
+  },
+  {
+   "name": "wrap",
+   "chars": 6,
+   "described": false
+  },
+  {
+   "name": "dataviz",
+   "chars": 1447,
+   "described": true
+  },
+  {
+   "name": "update-config",
+   "chars": 707,
+   "described": true
+  },
+  {
+   "name": "keybindings-help",
+   "chars": 248,
+   "described": true
+  },
+  {
+   "name": "code-review",
+   "chars": 853,
+   "described": true
+  },
+  {
+   "name": "simplify",
+   "chars": 188,
+   "described": true
+  },
+  {
+   "name": "fewer-permission-prompts",
+   "chars": 191,
+   "described": true
+  },
+  {
+   "name": "loop",
+   "chars": 344,
+   "described": true
+  },
+  {
+   "name": "schedule",
+   "chars": 381,
+   "described": true
+  },
+  {
+   "name": "claude-api",
+   "chars": 164,
+   "described": true
+  },
+  {
+   "name": "workflow-authoring",
+   "chars": 252,
+   "described": true
+  },
+  {
+   "name": "claude-in-chrome",
+   "chars": 547,
+   "described": true
+  },
+  {
+   "name": "run",
+   "chars": 368,
+   "described": true
+  },
+  {
+   "name": "init",
+   "chars": 6,
+   "described": false
+  },
+  {
+   "name": "security-review",
+   "chars": 17,
+   "described": false
+  },
+  {
+   "name": "anthropic-skills:docs",
+   "chars": 23,
+   "described": false
+  },
+  {
+   "name": "anthropic-skills:docx",
+   "chars": 23,
+   "described": false
+  },
+  {
+   "name": "anthropic-skills:import-memory",
+   "chars": 32,
+   "described": false
+  },
+  {
+   "name": "anthropic-skills:morning",
+   "chars": 26,
+   "described": false
+  },
+  {
+   "name": "anthropic-skills:pdf",
+   "chars": 22,
+   "described": false
+  },
+  {
+   "name": "anthropic-skills:pptx",
+   "chars": 23,
+   "described": false
+  },
+  {
+   "name": "anthropic-skills:skill-creator",
+   "chars": 32,
+   "described": false
+  },
+  {
+   "name": "anthropic-skills:xlsx",
+   "chars": 23,
+   "described": false
+  }
+ ]
+}

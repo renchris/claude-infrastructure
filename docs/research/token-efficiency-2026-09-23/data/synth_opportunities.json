@@ -1,0 +1,114 @@
+{
+ "fleet_own": 32517.424510999874,
+ "fleet_o55": 18318.682968600137,
+ "audit_cut_fraction": {
+  "global CLAUDE.md": 0.5197203434911468,
+  "project CLAUDE.md [infra]": 0.5154523618895116,
+  "project rules agent-operating-lessons.md [infra]": 0.8986068738356867,
+  "mission board (~/.claude/rules/00-mission-board.md)": 0.8236363636363636,
+  "global rules essay (~/.claude/rules/agent-operating-lessons.md)": 1.0
+ },
+ "memory_files": {
+  "own": 8885.149999999998,
+  "o55": 4958.679999999999,
+  "agents_own": 4184.42,
+  "agents_o55": 2395.9699999999993
+ },
+ "slim": {
+  "global CLAUDE.md": {
+   "cut": 0.5197203434911468,
+   "standalone_own": 2035.5886693517746,
+   "standalone_o55": 1142.8390493198572,
+   "main_only_own": 1029.0462801124706,
+   "main_only_o55": 564.8112804924388
+  },
+  "project CLAUDE.md [infra]": {
+   "cut": 0.5154523618895116,
+   "standalone_own": 304.2251385108087,
+   "standalone_o55": 159.00674459567654,
+   "main_only_own": 254.43244035228182,
+   "main_only_o55": 131.069226581265
+  },
+  "project rules agent-operating-lessons.md [infra]": {
+   "cut": 0.8986068738356867,
+   "standalone_own": 1639.0319796700776,
+   "standalone_o55": 899.0741494100813,
+   "main_only_own": 908.8779504036286,
+   "main_only_o55": 484.3311328599584
+  },
+  "mission board (~/.claude/rules/00-mission-board.md)": {
+   "cut": 0.8236363636363636,
+   "standalone_own": 253.44938181818182,
+   "standalone_o55": 145.02589090909092,
+   "main_only_own": 120.5227090909091,
+   "main_only_o55": 67.36521818181818
+  },
+  "global rules essay (~/.claude/rules/agent-operating-lessons.md)": {
+   "cut": 1.0,
+   "standalone_own": 338.96,
+   "standalone_o55": 183.62,
+   "main_only_own": 160.9,
+   "main_only_o55": 84.23
+  }
+ },
+ "lean_agent_type": {
+  "memory_own": 3347.536,
+  "memory_o55": 1916.7759999999996,
+  "skill_listing_own": 604.5200000000001,
+  "skill_listing_o55": 348.29999999999995,
+  "deferred_names_own": 151.28000000000003,
+  "deferred_names_o55": 88.71999999999998,
+  "mcp_instructions_growth_own": 66.0,
+  "mcp_instructions_growth_o55": 36.68372093023255,
+  "total_own": 4169.336,
+  "total_o55": 2390.479720930232
+ },
+ "memory_bundle": {
+  "own": 6643.11537995929,
+  "o55": 3722.286579045712,
+  "share_own": 0.2042940202017562,
+  "share_o55": 0.20319618967291725
+ },
+ "long_context_tax_main": {
+  "200000": {
+   "reads_above_own": 5336.417968650054,
+   "reads_above_o55": 2290.0312980000235,
+   "responses_above": 65123,
+   "recycles": 1722,
+   "recycle_start_cost_own": 2135.28,
+   "recycle_start_cost_o55": 1708.224,
+   "net_upper_own": 3201.1379686500536,
+   "net_upper_o55": 581.8072980000236
+  },
+  "300000": {
+   "reads_above_own": 2874.910755649985,
+   "reads_above_o55": 1242.9802827999936,
+   "responses_above": 40408,
+   "recycles": 536,
+   "recycle_start_cost_own": 664.64,
+   "recycle_start_cost_o55": 531.712,
+   "net_upper_own": 2210.270755649985,
+   "net_upper_o55": 711.2682827999936
+  },
+  "400000": {
+   "reads_above_own": 1424.8014693499938,
+   "reads_above_o55": 620.3752601999977,
+   "responses_above": 23221,
+   "recycles": 240,
+   "recycle_start_cost_own": 297.6,
+   "recycle_start_cost_o55": 238.08,
+   "net_upper_own": 1127.2014693499937,
+   "net_upper_o55": 382.29526019999764
+  },
+  "500000": {
+   "reads_above_own": 625.9613708999997,
+   "reads_above_o55": 273.7131576000011,
+   "responses_above": 12437,
+   "recycles": 121,
+   "recycle_start_cost_own": 150.04,
+   "recycle_start_cost_o55": 120.032,
+   "net_upper_own": 475.9213708999997,
+   "net_upper_o55": 153.68115760000114
+  }
+ }
+}

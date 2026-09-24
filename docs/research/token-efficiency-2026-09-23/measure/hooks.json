@@ -1,0 +1,3723 @@
+{
+ "window": "2026-09-09T00:00Z .. 2026-09-23T23:02Z (14 d), xdup=0",
+ "basis_note": "counts/chars MEASURED from data/extract.sqlite + data/hooks.sqlite; $ = list-price weights (subscription-billed fleet), tokens = chars/2.5 (ESTIMATED, fitted in scripts/probe_stop_block_double.py)",
+ "inventory": {
+  "n_hooks": 104,
+  "n_distinct_scripts": 82,
+  "count_by_event": {
+   "PostToolUse": 14,
+   "WorktreeCreate": 1,
+   "TeammateIdle": 1,
+   "FileChanged": 2,
+   "PostToolBatch": 1,
+   "PermissionRequest": 4,
+   "PreCompact": 3,
+   "PostToolUseFailure": 3,
+   "PreToolUse": 18,
+   "Notification": 5,
+   "TaskCompleted": 1,
+   "PermissionDenied": 1,
+   "CwdChanged": 1,
+   "UserPromptSubmit": 7,
+   "Stop": 13,
+   "StopFailure": 1,
+   "SessionEnd": 7,
+   "SessionStart": 18,
+   "InstructionsLoaded": 1,
+   "PostCompact": 1,
+   "ConfigChange": 1
+  },
+  "per_config_dir": {
+   ".claude": {
+    "n": 104,
+    "only_here": [],
+    "missing_here": []
+   },
+   ".claude-next": {
+    "n": 91,
+    "only_here": [],
+    "missing_here": [
+     [
+      "PostToolUse",
+      "mcp__ms365__get-mail-message.*",
+      "~/.claude/hooks/mail-images-auto.sh"
+     ],
+     [
+      "PostToolUseFailure",
+      "",
+      "~/.claude/hooks/cc-permission-beacon.sh clear"
+     ],
+     [
+      "PostToolUseFailure",
+      "",
+      "~/.claude/hooks/mailbox-drain.sh post-tool"
+     ],
+     [
+      "PostToolUseFailure",
+      "Bash",
+      "~/.claude/hooks/log-bash.sh"
+     ],
+     [
+      "PreToolUse",
+      "AskUserQuestion",
+      "~/.claude/hooks/cc-unattended-ask-guard.sh"
+     ],
+     [
+      "PreToolUse",
+      "Bash",
+      "~/.claude/hooks/coldcompile-admit.sh"
+     ],
+     [
+      "PreToolUse",
+      "Bash",
+      "~/.claude/hooks/pr-gate.sh"
+     ],
+     [
+      "PreToolUse",
+      "WebFetch|WebSearch",
+      "~/.claude/hooks/web-entrypoint-ladder.sh"
+     ],
+     [
+      "SessionEnd",
+      "",
+      "~/.claude/hooks/session-deregister.sh"
+     ],
+     [
+      "SessionStart",
+      "",
+      "~/.claude/hooks/desk-brief-inject.sh"
+     ],
+     [
+      "SessionStart",
+      "",
+      "~/.claude/hooks/escalation-watch.sh"
+     ],
+     [
+      "Stop",
+      "",
+      "~/.claude/hooks/handoff-claim-assert.sh"
+     ],
+     [
+      "UserPromptSubmit",
+      "",
+      "~/.claude/hooks/handed-off-session-guard.sh"
+     ]
+    ]
+   },
+   ".claude-secondary": {
+    "n": 95,
+    "only_here": [],
+    "missing_here": [
+     [
+      "PostToolUse",
+      "mcp__ms365__get-mail-message.*",
+      "~/.claude/hooks/mail-images-auto.sh"
+     ],
+     [
+      "PostToolUseFailure",
+      "",
+      "~/.claude/hooks/cc-permission-beacon.sh clear"
+     ],
+     [
+      "PostToolUseFailure",
+      "",
+      "~/.claude/hooks/mailbox-drain.sh post-tool"
+     ],
+     [
+      "PostToolUseFailure",
+      "Bash",
+      "~/.claude/hooks/log-bash.sh"
+     ],
+     [
+      "PreToolUse",
+      "Bash",
+      "~/.claude/hooks/pr-gate.sh"
+     ],
+     [
+      "PreToolUse",
+      "WebFetch|WebSearch",
+      "~/.claude/hooks/web-entrypoint-ladder.sh"
+     ],
+     [
+      "SessionStart",
+      "",
+      "~/.claude/hooks/escalation-watch.sh"
+     ],
+     [
+      "SessionStart",
+      "",
+      "~/.claude/hooks/net-context-stamp.sh"
+     ],
+     [
+      "Stop",
+      "",
+      "~/.claude/hooks/handoff-claim-assert.sh"
+     ]
+    ]
+   },
+   ".claude-tertiary": {
+    "n": 96,
+    "only_here": [],
+    "missing_here": [
+     [
+      "PostToolUse",
+      "mcp__ms365__get-mail-message.*",
+      "~/.claude/hooks/mail-images-auto.sh"
+     ],
+     [
+      "PostToolUseFailure",
+      "",
+      "~/.claude/hooks/cc-permission-beacon.sh clear"
+     ],
+     [
+      "PostToolUseFailure",
+      "",
+      "~/.claude/hooks/mailbox-drain.sh post-tool"
+     ],
+     [
+      "PostToolUseFailure",
+      "Bash",
+      "~/.claude/hooks/log-bash.sh"
+     ],
+     [
+      "PreToolUse",
+      "Bash",
+      "~/.claude/hooks/pr-gate.sh"
+     ],
+     [
+      "SessionStart",
+      "",
+      "~/.claude/hooks/escalation-watch.sh"
+     ],
+     [
+      "SessionStart",
+      "",
+      "~/.claude/hooks/net-context-stamp.sh"
+     ],
+     [
+      "Stop",
+      "",
+      "~/.claude/hooks/handoff-claim-assert.sh"
+     ]
+    ]
+   },
+   ".claude-quaternary": {
+    "n": 95,
+    "only_here": [],
+    "missing_here": [
+     [
+      "PostToolUse",
+      "mcp__ms365__get-mail-message.*",
+      "~/.claude/hooks/mail-images-auto.sh"
+     ],
+     [
+      "PostToolUseFailure",
+      "",
+      "~/.claude/hooks/cc-permission-beacon.sh clear"
+     ],
+     [
+      "PostToolUseFailure",
+      "",
+      "~/.claude/hooks/mailbox-drain.sh post-tool"
+     ],
+     [
+      "PostToolUseFailure",
+      "Bash",
+      "~/.claude/hooks/log-bash.sh"
+     ],
+     [
+      "PreToolUse",
+      "Bash",
+      "~/.claude/hooks/pr-gate.sh"
+     ],
+     [
+      "PreToolUse",
+      "WebFetch|WebSearch",
+      "~/.claude/hooks/web-entrypoint-ladder.sh"
+     ],
+     [
+      "SessionStart",
+      "",
+      "~/.claude/hooks/escalation-watch.sh"
+     ],
+     [
+      "SessionStart",
+      "",
+      "~/.claude/hooks/net-context-stamp.sh"
+     ],
+     [
+      "Stop",
+      "",
+      "~/.claude/hooks/handoff-claim-assert.sh"
+     ]
+    ]
+   },
+   "/Users/chrisren/Development/claude-infrastructure/.claude/settings.json": {
+    "n": 0,
+    "hooks": []
+   },
+   "/Users/chrisren/Development/claude-infrastructure/.claude/settings.local.json": {
+    "n": 0,
+    "hooks": []
+   }
+  },
+  "not_in_repo": [
+   "date '+[%Y-%m-%d %H:%M:%S] Auto-compact triggered' >> ~/.claude/logs/sessions.log",
+   "date '+[%Y-%m-%d %H:%M:%S] Manual compact triggered' >> ~/.claude/logs/sessions.log",
+   "~/.claude/hooks/web-entrypoint-ladder.sh",
+   "~/.claude/hooks/net-context-stamp.sh"
+  ],
+  "hooks": [
+   {
+    "event": "PostToolUse",
+    "matcher": "Write|Edit|MultiEdit",
+    "command": "~/.claude/hooks/post-file-edit.sh",
+    "script": "post-file-edit.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/post-file-edit.sh",
+    "in_repo": true,
+    "timeout_s": 30,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "PostToolUse",
+    "matcher": "Write|Edit|MultiEdit",
+    "command": "~/.claude/hooks/plan-index-update.sh",
+    "script": "plan-index-update.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/plan-index-update.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "PostToolUse",
+    "matcher": "Write|Edit|MultiEdit",
+    "command": "~/.claude/hooks/validate-plan-structure.sh",
+    "script": "validate-plan-structure.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/validate-plan-structure.sh",
+    "in_repo": true,
+    "timeout_s": 10,
+    "emits": "additionalContext,exit2",
+    "visible_injections_14d": 53,
+    "injection_usd_14d": 0.59,
+    "injection_usd_14d_at_opus55": 0.34,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "PostToolUse",
+    "matcher": "Write|Edit|MultiEdit",
+    "command": "~/.claude/hooks/plan-version-commit.sh",
+    "script": "plan-version-commit.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/plan-version-commit.sh",
+    "in_repo": true,
+    "timeout_s": 10,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "PostToolUse",
+    "matcher": "Bash",
+    "command": "~/.claude/hooks/log-bash.sh",
+    "script": "log-bash.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/log-bash.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "PostToolUse",
+    "matcher": "Bash",
+    "command": "~/.claude/hooks/waiting-recycle.sh",
+    "script": "waiting-recycle.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/waiting-recycle.sh",
+    "in_repo": true,
+    "timeout_s": null,
+    "emits": "additionalContext,decision:block,systemMessage,exit2",
+    "visible_injections_14d": 43,
+    "injection_usd_14d": 0.47,
+    "injection_usd_14d_at_opus55": 0.25,
+    "forced_turns_14d": 12.0,
+    "forced_usd_14d": 20.63,
+    "forced_usd_14d_at_opus55": 9.38,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "PostToolUse",
+    "matcher": "Bash",
+    "command": "~/.claude/hooks/relay-verbatim.sh",
+    "script": "relay-verbatim.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/relay-verbatim.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "additionalContext",
+    "visible_injections_14d": 244,
+    "injection_usd_14d": 1.94,
+    "injection_usd_14d_at_opus55": 1.13,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "PostToolUse",
+    "matcher": "TaskCreate|TaskUpdate",
+    "command": "~/.claude/hooks/task-mutation-index.sh",
+    "script": "task-mutation-index.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/task-mutation-index.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "PostToolUse",
+    "matcher": "*",
+    "command": "~/.claude/hooks/teammate-checkpoint.sh",
+    "script": "teammate-checkpoint.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/teammate-checkpoint.sh",
+    "in_repo": true,
+    "timeout_s": 10,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 11
+   },
+   {
+    "event": "PostToolUse",
+    "matcher": "ExitPlanMode",
+    "command": "~/.claude/hooks/plan-pin-session.sh",
+    "script": "plan-pin-session.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/plan-pin-session.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "PostToolUse",
+    "matcher": "*",
+    "command": "~/.claude/hooks/cc-permission-beacon.sh clear",
+    "script": "cc-permission-beacon.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/cc-permission-beacon.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 1
+   },
+   {
+    "event": "PostToolUse",
+    "matcher": "*",
+    "command": "~/.claude/hooks/mailbox-drain.sh post-tool",
+    "script": "mailbox-drain.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/mailbox-drain.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "additionalContext,systemMessage",
+    "visible_injections_14d": 4112,
+    "injection_usd_14d": 96.34,
+    "injection_usd_14d_at_opus55": 50.24,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 39
+   },
+   {
+    "event": "PostToolUse",
+    "matcher": "Bash|Write|Edit|MultiEdit",
+    "command": "~/.claude/hooks/memory-index-drain.sh",
+    "script": "memory-index-drain.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/memory-index-drain.sh",
+    "in_repo": true,
+    "timeout_s": 10,
+    "emits": "additionalContext",
+    "visible_injections_14d": 44,
+    "injection_usd_14d": 0.64,
+    "injection_usd_14d_at_opus55": 0.35,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "PostToolUse",
+    "matcher": "mcp__ms365__get-mail-message.*",
+    "command": "~/.claude/hooks/mail-images-auto.sh",
+    "script": "mail-images-auto.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/mail-images-auto.sh",
+    "in_repo": true,
+    "timeout_s": null,
+    "emits": "additionalContext",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "WorktreeCreate",
+    "matcher": "*",
+    "command": "~/.claude/hooks/worktree-setup.sh",
+    "script": "worktree-setup.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/worktree-setup.sh",
+    "in_repo": true,
+    "timeout_s": 180,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "TeammateIdle",
+    "matcher": "*",
+    "command": "~/.claude/hooks/teammate-auto-shutdown.sh",
+    "script": "teammate-auto-shutdown.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/teammate-auto-shutdown.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "exit2",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 14
+   },
+   {
+    "event": "FileChanged",
+    "matcher": "/Users/chrisren/.claude/file-watch-paths",
+    "command": "~/.claude/hooks/file-changed.sh",
+    "script": "file-changed.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/file-changed.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "FileChanged",
+    "matcher": "*",
+    "command": "~/.claude/hooks/file-changed.sh",
+    "script": "file-changed.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/file-changed.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "PostToolBatch",
+    "matcher": "*",
+    "command": "~/.claude/hooks/post-tool-batch.sh",
+    "script": "post-tool-batch.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/post-tool-batch.sh",
+    "in_repo": true,
+    "timeout_s": 10,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 12
+   },
+   {
+    "event": "PermissionRequest",
+    "matcher": "Bash",
+    "command": "/Users/chrisren/.claude/hooks/notify.sh permission",
+    "script": "notify.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/notify.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 30
+   },
+   {
+    "event": "PermissionRequest",
+    "matcher": "AskUserQuestion",
+    "command": "/Users/chrisren/.claude/hooks/notify.sh question",
+    "script": "notify.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/notify.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 30
+   },
+   {
+    "event": "PermissionRequest",
+    "matcher": "ExitPlanMode",
+    "command": "/Users/chrisren/.claude/hooks/notify.sh plan",
+    "script": "notify.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/notify.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 30
+   },
+   {
+    "event": "PermissionRequest",
+    "matcher": "*",
+    "command": "~/.claude/hooks/cc-permission-beacon.sh write",
+    "script": "cc-permission-beacon.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/cc-permission-beacon.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 1
+   },
+   {
+    "event": "PreCompact",
+    "matcher": "auto",
+    "command": "date '+[%Y-%m-%d %H:%M:%S] Auto-compact triggered' >> ~/.claude/logs/sessions.log",
+    "script": null,
+    "repo_path": null,
+    "in_repo": false,
+    "timeout_s": 5,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "PreCompact",
+    "matcher": "auto",
+    "command": "~/.claude/hooks/dod-persist.sh",
+    "script": "dod-persist.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/dod-persist.sh",
+    "in_repo": true,
+    "timeout_s": 10,
+    "emits": "additionalContext,exit2",
+    "visible_injections_14d": 683,
+    "injection_usd_14d": 29.66,
+    "injection_usd_14d_at_opus55": 13.05,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 89
+   },
+   {
+    "event": "PreCompact",
+    "matcher": "manual",
+    "command": "date '+[%Y-%m-%d %H:%M:%S] Manual compact triggered' >> ~/.claude/logs/sessions.log",
+    "script": null,
+    "repo_path": null,
+    "in_repo": false,
+    "timeout_s": 5,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "PostToolUseFailure",
+    "matcher": "Bash",
+    "command": "~/.claude/hooks/log-bash.sh",
+    "script": "log-bash.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/log-bash.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "PostToolUseFailure",
+    "matcher": "*",
+    "command": "~/.claude/hooks/mailbox-drain.sh post-tool",
+    "script": "mailbox-drain.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/mailbox-drain.sh",
+    "in_repo": true,
+    "timeout_s": null,
+    "emits": "additionalContext,systemMessage",
+    "visible_injections_14d": 4112,
+    "injection_usd_14d": 96.34,
+    "injection_usd_14d_at_opus55": 50.24,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 39
+   },
+   {
+    "event": "PostToolUseFailure",
+    "matcher": "*",
+    "command": "~/.claude/hooks/cc-permission-beacon.sh clear",
+    "script": "cc-permission-beacon.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/cc-permission-beacon.sh",
+    "in_repo": true,
+    "timeout_s": null,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 1
+   },
+   {
+    "event": "PreToolUse",
+    "matcher": "Bash",
+    "command": "~/.claude/hooks/smart-bash-allowlist.sh",
+    "script": "smart-bash-allowlist.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/smart-bash-allowlist.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 27
+   },
+   {
+    "event": "PreToolUse",
+    "matcher": "Bash",
+    "command": "~/.claude/hooks/curl-gate-scope.sh",
+    "script": "curl-gate-scope.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/curl-gate-scope.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 16
+   },
+   {
+    "event": "PreToolUse",
+    "matcher": "Bash",
+    "command": "~/.claude/hooks/validate-bash.sh",
+    "script": "validate-bash.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/validate-bash.sh",
+    "in_repo": true,
+    "timeout_s": 10,
+    "emits": "additionalContext,permissionDecision",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 349
+   },
+   {
+    "event": "PreToolUse",
+    "matcher": "Bash",
+    "command": "~/.claude/hooks/git-worktree-guard.sh",
+    "script": "git-worktree-guard.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/git-worktree-guard.sh",
+    "in_repo": true,
+    "timeout_s": 10,
+    "emits": "exit2",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 8
+   },
+   {
+    "event": "PreToolUse",
+    "matcher": "Bash",
+    "command": "~/.claude/hooks/keychain-guard.sh",
+    "script": "keychain-guard.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/keychain-guard.sh",
+    "in_repo": true,
+    "timeout_s": null,
+    "emits": "permissionDecision",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 2
+   },
+   {
+    "event": "PreToolUse",
+    "matcher": "Bash",
+    "command": "~/.claude/hooks/rm-safe-allowlist.sh",
+    "script": "rm-safe-allowlist.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/rm-safe-allowlist.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "permissionDecision",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 15
+   },
+   {
+    "event": "PreToolUse",
+    "matcher": "Bash",
+    "command": "~/.claude/hooks/ship-rail-push-allow.sh",
+    "script": "ship-rail-push-allow.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/ship-rail-push-allow.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "permissionDecision",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 13
+   },
+   {
+    "event": "PreToolUse",
+    "matcher": "Bash",
+    "command": "$HOME/.claude/hooks/qos-rewrite.sh",
+    "script": "qos-rewrite.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/qos-rewrite.sh",
+    "in_repo": true,
+    "timeout_s": 10,
+    "emits": "permissionDecision",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 9
+   },
+   {
+    "event": "PreToolUse",
+    "matcher": "Bash",
+    "command": "~/.claude/hooks/coldcompile-admit.sh",
+    "script": "coldcompile-admit.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/coldcompile-admit.sh",
+    "in_repo": true,
+    "timeout_s": 10,
+    "emits": "permissionDecision",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 6
+   },
+   {
+    "event": "PreToolUse",
+    "matcher": "Bash",
+    "command": "~/.claude/hooks/pr-gate.sh",
+    "script": "pr-gate.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/pr-gate.sh",
+    "in_repo": true,
+    "timeout_s": null,
+    "emits": "permissionDecision",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "PreToolUse",
+    "matcher": "Write|Edit|MultiEdit",
+    "command": "~/.claude/hooks/backup-before-write.sh",
+    "script": "backup-before-write.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/backup-before-write.sh",
+    "in_repo": true,
+    "timeout_s": 10,
+    "emits": "additionalContext,permissionDecision",
+    "visible_injections_14d": 305,
+    "injection_usd_14d": 4.23,
+    "injection_usd_14d_at_opus55": 2.42,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 1
+   },
+   {
+    "event": "PreToolUse",
+    "matcher": "Write|Edit|MultiEdit",
+    "command": "~/.claude/hooks/check-edit-boundary.sh",
+    "script": "check-edit-boundary.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/check-edit-boundary.sh",
+    "in_repo": true,
+    "timeout_s": 10,
+    "emits": "permissionDecision",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 1
+   },
+   {
+    "event": "PreToolUse",
+    "matcher": "Write|Edit|MultiEdit",
+    "command": "~/.claude/hooks/plan-agent-teams-default.sh",
+    "script": "plan-agent-teams-default.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/plan-agent-teams-default.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "additionalContext,permissionDecision",
+    "visible_injections_14d": 337,
+    "injection_usd_14d": 6.48,
+    "injection_usd_14d_at_opus55": 3.69,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 4
+   },
+   {
+    "event": "PreToolUse",
+    "matcher": "Agent",
+    "command": "~/.claude/hooks/agent-teams-enforce.sh",
+    "script": "agent-teams-enforce.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/agent-teams-enforce.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "additionalContext,permissionDecision",
+    "visible_injections_14d": 483,
+    "injection_usd_14d": 8.5,
+    "injection_usd_14d_at_opus55": 4.43,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 56
+   },
+   {
+    "event": "PreToolUse",
+    "matcher": "Agent",
+    "command": "~/.claude/hooks/frontier-spawn-gate.sh",
+    "script": "frontier-spawn-gate.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/frontier-spawn-gate.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "exit2",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "PreToolUse",
+    "matcher": "mcp__ms365__send-mail|mcp__ms365__reply-mail-message|mcp__ms365__reply-all-mail-message|mcp__ms365__create-reply-draft|mcp__ms365__create-draft-email|mcp__ms365__create-forward-draft|mcp__ms365__forward-mail-message|mcp__ms365__create-reply-all-draft|mcp__ms365__update-mail-message|mcp__ms365__send-draft-message|mcp__ms365__list-mail-messages|mcp__ms365__get-mail-message|mcp__ms365__graph-batch",
+    "command": "~/.claude/hooks/enforce-email-formatting.py",
+    "script": "enforce-email-formatting.py",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/enforce-email-formatting.py",
+    "in_repo": true,
+    "timeout_s": 10,
+    "emits": "additionalContext,decision:block,permissionDecision",
+    "visible_injections_14d": 34,
+    "injection_usd_14d": 4.09,
+    "injection_usd_14d_at_opus55": 2.29,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "PreToolUse",
+    "matcher": "AskUserQuestion",
+    "command": "~/.claude/hooks/cc-unattended-ask-guard.sh",
+    "script": "cc-unattended-ask-guard.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/cc-unattended-ask-guard.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "exit2",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "PreToolUse",
+    "matcher": "WebFetch|WebSearch",
+    "command": "~/.claude/hooks/web-entrypoint-ladder.sh",
+    "script": "web-entrypoint-ladder.sh",
+    "repo_path": "/Users/chrisren/.claude/hooks/web-entrypoint-ladder.sh",
+    "in_repo": false,
+    "timeout_s": null,
+    "emits": "additionalContext",
+    "visible_injections_14d": 167,
+    "injection_usd_14d": 1.7,
+    "injection_usd_14d_at_opus55": 0.96,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "Notification",
+    "matcher": "permission_prompt",
+    "command": "/Users/chrisren/.claude/hooks/notify.sh permission",
+    "script": "notify.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/notify.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 30
+   },
+   {
+    "event": "Notification",
+    "matcher": "permission_prompt",
+    "command": "~/.claude/hooks/push-critical.sh",
+    "script": "push-critical.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/push-critical.sh",
+    "in_repo": true,
+    "timeout_s": 6,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "Notification",
+    "matcher": "elicitation_dialog",
+    "command": "/Users/chrisren/.claude/hooks/notify.sh elicitation",
+    "script": "notify.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/notify.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 30
+   },
+   {
+    "event": "Notification",
+    "matcher": "elicitation_dialog",
+    "command": "/Users/chrisren/.claude/hooks/push-critical.sh",
+    "script": "push-critical.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/push-critical.sh",
+    "in_repo": true,
+    "timeout_s": 6,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "Notification",
+    "matcher": "idle_prompt",
+    "command": "/Users/chrisren/.claude/hooks/push-critical.sh",
+    "script": "push-critical.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/push-critical.sh",
+    "in_repo": true,
+    "timeout_s": 6,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "TaskCompleted",
+    "matcher": "*",
+    "command": "~/.claude/hooks/task-quality-gate.sh",
+    "script": "task-quality-gate.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/task-quality-gate.sh",
+    "in_repo": true,
+    "timeout_s": 120,
+    "emits": "exit2",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "PermissionDenied",
+    "matcher": "*",
+    "command": "~/.claude/hooks/permission-denied.sh",
+    "script": "permission-denied.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/permission-denied.sh",
+    "in_repo": true,
+    "timeout_s": 10,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "CwdChanged",
+    "matcher": "*",
+    "command": "~/.claude/hooks/cwd-changed.sh",
+    "script": "cwd-changed.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/cwd-changed.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "UserPromptSubmit",
+    "matcher": "*",
+    "command": "~/.claude/hooks/handed-off-session-guard.sh",
+    "script": "handed-off-session-guard.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/handed-off-session-guard.sh",
+    "in_repo": true,
+    "timeout_s": null,
+    "emits": "exit2",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 5
+   },
+   {
+    "event": "UserPromptSubmit",
+    "matcher": "*",
+    "command": "~/.claude/hooks/cache-expiry-warning.sh",
+    "script": "cache-expiry-warning.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/cache-expiry-warning.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "additionalContext",
+    "visible_injections_14d": 1186,
+    "injection_usd_14d": 6.3,
+    "injection_usd_14d_at_opus55": 3.16,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "UserPromptSubmit",
+    "matcher": "*",
+    "command": "~/.claude/hooks/memory-nudge.sh",
+    "script": "memory-nudge.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/memory-nudge.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "additionalContext",
+    "visible_injections_14d": 434,
+    "injection_usd_14d": 26.67,
+    "injection_usd_14d_at_opus55": 13.86,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 31
+   },
+   {
+    "event": "UserPromptSubmit",
+    "matcher": "*",
+    "command": "~/.claude/hooks/handoff-intent-nudge.sh",
+    "script": "handoff-intent-nudge.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/handoff-intent-nudge.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "additionalContext,exit2",
+    "visible_injections_14d": 736,
+    "injection_usd_14d": 16.52,
+    "injection_usd_14d_at_opus55": 7.86,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 57
+   },
+   {
+    "event": "UserPromptSubmit",
+    "matcher": "*",
+    "command": "~/.claude/hooks/research-precognition-nudge.sh",
+    "script": "research-precognition-nudge.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/research-precognition-nudge.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "additionalContext",
+    "visible_injections_14d": 419,
+    "injection_usd_14d": 7.81,
+    "injection_usd_14d_at_opus55": 3.93,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "UserPromptSubmit",
+    "matcher": "*",
+    "command": "~/.claude/hooks/session-beat.sh prompt",
+    "script": "session-beat.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/session-beat.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 11
+   },
+   {
+    "event": "UserPromptSubmit",
+    "matcher": "*",
+    "command": "~/.claude/hooks/mailbox-drain.sh prompt",
+    "script": "mailbox-drain.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/mailbox-drain.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "additionalContext,systemMessage",
+    "visible_injections_14d": 4112,
+    "injection_usd_14d": 96.34,
+    "injection_usd_14d_at_opus55": 50.24,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 39
+   },
+   {
+    "event": "Stop",
+    "matcher": "*",
+    "command": "/Users/chrisren/.claude/hooks/notify.sh complete",
+    "script": "notify.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/notify.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 30
+   },
+   {
+    "event": "Stop",
+    "matcher": "*",
+    "command": "~/.claude/hooks/cache-expiry-tracker.sh",
+    "script": "cache-expiry-tracker.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/cache-expiry-tracker.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 1
+   },
+   {
+    "event": "Stop",
+    "matcher": "*",
+    "command": "~/.claude/hooks/teammate-checkpoint.sh",
+    "script": "teammate-checkpoint.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/teammate-checkpoint.sh",
+    "in_repo": true,
+    "timeout_s": 10,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 11
+   },
+   {
+    "event": "Stop",
+    "matcher": "*",
+    "command": "~/.claude/hooks/session-continue.sh",
+    "script": "session-continue.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/session-continue.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "additionalContext,decision:block,systemMessage,exit2",
+    "visible_injections_14d": 3682,
+    "injection_usd_14d": 154.46,
+    "injection_usd_14d_at_opus55": 67.5,
+    "forced_turns_14d": 1922.1,
+    "forced_usd_14d": 2403.01,
+    "forced_usd_14d_at_opus55": 1084.13,
+    "timeouts_14d_incl_copies": 2509
+   },
+   {
+    "event": "Stop",
+    "matcher": "*",
+    "command": "~/.claude/hooks/anti-deference-nudge.sh",
+    "script": "anti-deference-nudge.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/anti-deference-nudge.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "decision:block",
+    "visible_injections_14d": 359,
+    "injection_usd_14d": 6.58,
+    "injection_usd_14d_at_opus55": 3.44,
+    "forced_turns_14d": 154.2,
+    "forced_usd_14d": 243.64,
+    "forced_usd_14d_at_opus55": 119.91,
+    "timeouts_14d_incl_copies": 54
+   },
+   {
+    "event": "Stop",
+    "matcher": "*",
+    "command": "~/.claude/hooks/completion-assert.sh",
+    "script": "completion-assert.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/completion-assert.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "decision:block,exit2",
+    "visible_injections_14d": 577,
+    "injection_usd_14d": 10.04,
+    "injection_usd_14d_at_opus55": 5.41,
+    "forced_turns_14d": 256.2,
+    "forced_usd_14d": 355.9,
+    "forced_usd_14d_at_opus55": 168.82,
+    "timeouts_14d_incl_copies": 1439
+   },
+   {
+    "event": "Stop",
+    "matcher": "*",
+    "command": "~/.claude/hooks/dispatch-assert.sh",
+    "script": "dispatch-assert.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/dispatch-assert.sh",
+    "in_repo": true,
+    "timeout_s": 10,
+    "emits": "decision:block",
+    "visible_injections_14d": 44,
+    "injection_usd_14d": 0.89,
+    "injection_usd_14d_at_opus55": 0.47,
+    "forced_turns_14d": 21.0,
+    "forced_usd_14d": 36.62,
+    "forced_usd_14d_at_opus55": 18.81,
+    "timeouts_14d_incl_copies": 20
+   },
+   {
+    "event": "Stop",
+    "matcher": "*",
+    "command": "~/.claude/hooks/boundary-handoff.sh",
+    "script": "boundary-handoff.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/boundary-handoff.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "additionalContext,decision:block,systemMessage,exit2",
+    "visible_injections_14d": 243,
+    "injection_usd_14d": 1.47,
+    "injection_usd_14d_at_opus55": 0.84,
+    "forced_turns_14d": 104.5,
+    "forced_usd_14d": 151.01,
+    "forced_usd_14d_at_opus55": 71.23,
+    "timeouts_14d_incl_copies": 1395
+   },
+   {
+    "event": "Stop",
+    "matcher": "*",
+    "command": "~/.claude/hooks/operator-readout.sh",
+    "script": "operator-readout.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/operator-readout.sh",
+    "in_repo": true,
+    "timeout_s": 10,
+    "emits": "decision:block,systemMessage,exit2",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 2731
+   },
+   {
+    "event": "Stop",
+    "matcher": "*",
+    "command": "~/.claude/hooks/session-beat.sh stop",
+    "script": "session-beat.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/session-beat.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 11
+   },
+   {
+    "event": "Stop",
+    "matcher": "*",
+    "command": "~/.claude/hooks/goal-inert-watch.sh",
+    "script": "goal-inert-watch.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/goal-inert-watch.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "additionalContext,decision:block,systemMessage",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 4
+   },
+   {
+    "event": "Stop",
+    "matcher": "*",
+    "command": "~/.claude/hooks/handoff-claim-assert.sh",
+    "script": "handoff-claim-assert.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/handoff-claim-assert.sh",
+    "in_repo": true,
+    "timeout_s": 10,
+    "emits": "decision:block,exit2",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "Stop",
+    "matcher": "*",
+    "command": "~/.claude/hooks/cc-permission-beacon.sh clear",
+    "script": "cc-permission-beacon.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/cc-permission-beacon.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 1
+   },
+   {
+    "event": "StopFailure",
+    "matcher": "*",
+    "command": "~/.claude/hooks/stop-failure-marker.sh",
+    "script": "stop-failure-marker.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/stop-failure-marker.sh",
+    "in_repo": true,
+    "timeout_s": 10,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "SessionEnd",
+    "matcher": "*",
+    "command": "~/.claude/hooks/session-end.sh",
+    "script": "session-end.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/session-end.sh",
+    "in_repo": true,
+    "timeout_s": 10,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "SessionEnd",
+    "matcher": "*",
+    "command": "~/.claude/hooks/session-deregister.sh",
+    "script": "session-deregister.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/session-deregister.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "SessionEnd",
+    "matcher": "*",
+    "command": "~/.claude/hooks/session-index-end.sh",
+    "script": "session-index-end.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/session-index-end.sh",
+    "in_repo": true,
+    "timeout_s": 10,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "SessionEnd",
+    "matcher": "*",
+    "command": "~/.claude/hooks/session-save-id.sh",
+    "script": "session-save-id.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/session-save-id.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "SessionEnd",
+    "matcher": "*",
+    "command": "~/.claude/hooks/harvest-skill-end.sh",
+    "script": "harvest-skill-end.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/harvest-skill-end.sh",
+    "in_repo": true,
+    "timeout_s": 10,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "SessionEnd",
+    "matcher": "*",
+    "command": "~/.claude/hooks/live-session-registry.sh",
+    "script": "live-session-registry.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/live-session-registry.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 5
+   },
+   {
+    "event": "SessionEnd",
+    "matcher": "*",
+    "command": "~/.claude/hooks/cc-permission-beacon.sh clear",
+    "script": "cc-permission-beacon.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/cc-permission-beacon.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 1
+   },
+   {
+    "event": "SessionStart",
+    "matcher": "*",
+    "command": "~/.claude/hooks/session-start.sh",
+    "script": "session-start.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/session-start.sh",
+    "in_repo": true,
+    "timeout_s": 10,
+    "emits": "additionalContext",
+    "visible_injections_14d": 961,
+    "injection_usd_14d": 2.48,
+    "injection_usd_14d_at_opus55": 1.12,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 20
+   },
+   {
+    "event": "SessionStart",
+    "matcher": "*",
+    "command": "~/.claude/hooks/setup-plan-symlinks.sh",
+    "script": "setup-plan-symlinks.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/setup-plan-symlinks.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "additionalContext",
+    "visible_injections_14d": 927,
+    "injection_usd_14d": 2.75,
+    "injection_usd_14d_at_opus55": 1.23,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 6
+   },
+   {
+    "event": "SessionStart",
+    "matcher": "*",
+    "command": "~/.claude/hooks/setup-task-symlinks.sh",
+    "script": "setup-task-symlinks.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/setup-task-symlinks.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "additionalContext",
+    "visible_injections_14d": 894,
+    "injection_usd_14d": 1.43,
+    "injection_usd_14d_at_opus55": 0.64,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 9
+   },
+   {
+    "event": "SessionStart",
+    "matcher": "*",
+    "command": "~/.claude/hooks/pre-session-validate.sh",
+    "script": "pre-session-validate.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/pre-session-validate.sh",
+    "in_repo": true,
+    "timeout_s": 10,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 9
+   },
+   {
+    "event": "SessionStart",
+    "matcher": "*",
+    "command": "~/.claude/hooks/lead-crash-watchdog.sh",
+    "script": "lead-crash-watchdog.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/lead-crash-watchdog.sh",
+    "in_repo": true,
+    "timeout_s": 10,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 2
+   },
+   {
+    "event": "SessionStart",
+    "matcher": "*",
+    "command": "~/.claude/hooks/session-register.sh",
+    "script": "session-register.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/session-register.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 5
+   },
+   {
+    "event": "SessionStart",
+    "matcher": "*",
+    "command": "~/.claude/hooks/activation-watch.sh",
+    "script": "activation-watch.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/activation-watch.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "additionalContext",
+    "visible_injections_14d": 848,
+    "injection_usd_14d": 4.19,
+    "injection_usd_14d_at_opus55": 1.91,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 16
+   },
+   {
+    "event": "SessionStart",
+    "matcher": "*",
+    "command": "~/.claude/hooks/dod-persist.sh",
+    "script": "dod-persist.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/dod-persist.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "additionalContext,exit2",
+    "visible_injections_14d": 683,
+    "injection_usd_14d": 29.66,
+    "injection_usd_14d_at_opus55": 13.05,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 89
+   },
+   {
+    "event": "SessionStart",
+    "matcher": "*",
+    "command": "~/.claude/hooks/desk-brief-inject.sh",
+    "script": "desk-brief-inject.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/desk-brief-inject.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "additionalContext",
+    "visible_injections_14d": 5,
+    "injection_usd_14d": 1.75,
+    "injection_usd_14d_at_opus55": 0.7,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 9
+   },
+   {
+    "event": "SessionStart",
+    "matcher": "*",
+    "command": "~/.claude/hooks/mailbox-wake-arm.sh",
+    "script": "mailbox-wake-arm.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/mailbox-wake-arm.sh",
+    "in_repo": true,
+    "timeout_s": 14400,
+    "emits": "exit2",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "SessionStart",
+    "matcher": "*",
+    "command": "~/.claude/hooks/escalation-watch.sh",
+    "script": "escalation-watch.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/escalation-watch.sh",
+    "in_repo": true,
+    "timeout_s": 10,
+    "emits": "additionalContext",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 19
+   },
+   {
+    "event": "SessionStart",
+    "matcher": "*",
+    "command": "~/.claude/hooks/accounts-board.sh",
+    "script": "accounts-board.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/accounts-board.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "additionalContext,systemMessage",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "SessionStart",
+    "matcher": "*",
+    "command": "~/.claude/hooks/session-index-start.sh",
+    "script": "session-index-start.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/session-index-start.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "additionalContext",
+    "visible_injections_14d": 929,
+    "injection_usd_14d": 1.5,
+    "injection_usd_14d_at_opus55": 0.68,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 27
+   },
+   {
+    "event": "SessionStart",
+    "matcher": "*",
+    "command": "~/.claude/hooks/config-mirror-assert.sh",
+    "script": "config-mirror-assert.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/config-mirror-assert.sh",
+    "in_repo": true,
+    "timeout_s": 8,
+    "emits": "additionalContext",
+    "visible_injections_14d": 950,
+    "injection_usd_14d": 86.82,
+    "injection_usd_14d_at_opus55": 37.75,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 3
+   },
+   {
+    "event": "SessionStart",
+    "matcher": "*",
+    "command": "~/.claude/hooks/frontier-status.sh",
+    "script": "frontier-status.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/frontier-status.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "",
+    "visible_injections_14d": 892,
+    "injection_usd_14d": 4.92,
+    "injection_usd_14d_at_opus55": 2.2,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 7
+   },
+   {
+    "event": "SessionStart",
+    "matcher": "*",
+    "command": "~/.claude/hooks/live-session-registry.sh",
+    "script": "live-session-registry.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/live-session-registry.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 5
+   },
+   {
+    "event": "SessionStart",
+    "matcher": "*",
+    "command": "~/.claude/hooks/mailbox-drain.sh session-start",
+    "script": "mailbox-drain.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/mailbox-drain.sh",
+    "in_repo": true,
+    "timeout_s": 5,
+    "emits": "additionalContext,systemMessage",
+    "visible_injections_14d": 4112,
+    "injection_usd_14d": 96.34,
+    "injection_usd_14d_at_opus55": 50.24,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 39
+   },
+   {
+    "event": "SessionStart",
+    "matcher": "*",
+    "command": "~/.claude/hooks/net-context-stamp.sh",
+    "script": "net-context-stamp.sh",
+    "repo_path": "/Users/chrisren/.claude/hooks/net-context-stamp.sh",
+    "in_repo": false,
+    "timeout_s": null,
+    "emits": "additionalContext",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "InstructionsLoaded",
+    "matcher": "session_start",
+    "command": "~/.claude/hooks/instructions-loaded.sh",
+    "script": "instructions-loaded.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/instructions-loaded.sh",
+    "in_repo": true,
+    "timeout_s": 10,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "PostCompact",
+    "matcher": "*",
+    "command": "~/.claude/hooks/post-compact.sh",
+    "script": "post-compact.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/post-compact.sh",
+    "in_repo": true,
+    "timeout_s": 10,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   },
+   {
+    "event": "ConfigChange",
+    "matcher": "*",
+    "command": "~/.claude/hooks/config-change.sh",
+    "script": "config-change.sh",
+    "repo_path": "/Users/chrisren/Development/claude-infrastructure/hooks/config-change.sh",
+    "in_repo": true,
+    "timeout_s": 10,
+    "emits": "",
+    "visible_injections_14d": 0,
+    "injection_usd_14d": 0,
+    "injection_usd_14d_at_opus55": 0,
+    "forced_turns_14d": 0,
+    "forced_usd_14d": 0,
+    "forced_usd_14d_at_opus55": 0,
+    "timeouts_14d_incl_copies": 0
+   }
+  ]
+ },
+ "injections": {
+  "session-continue.sh": {
+   "n": 3682,
+   "contexts": 215,
+   "chars": 2701042,
+   "median_chars": 661,
+   "p90_chars": 899,
+   "usd": 154.46,
+   "usd_at_opus55": 67.5,
+   "avg_resps_alive": 290.9,
+   "persisted_previews": 0,
+   "events": {
+    "Stop (meta copy)": 1968,
+    "hook_blocking_error:Stop": 1714
+   },
+   "usd_by_event": {
+    "Stop (meta copy)": 72.22,
+    "hook_blocking_error:Stop": 82.23
+   },
+   "usd55_by_event": {
+    "Stop (meta copy)": 31.72,
+    "hook_blocking_error:Stop": 35.78
+   },
+   "ctx_types": {
+    "main": 3682
+   }
+  },
+  "config-mirror-assert.sh": {
+   "n": 950,
+   "contexts": 881,
+   "chars": 5056045,
+   "median_chars": 5783,
+   "p90_chars": 8672,
+   "usd": 86.82,
+   "usd_at_opus55": 37.75,
+   "avg_resps_alive": 79.7,
+   "persisted_previews": 363,
+   "events": {
+    "hook_additional_context:SessionStart": 950
+   },
+   "usd_by_event": {
+    "hook_additional_context:SessionStart": 86.82
+   },
+   "usd55_by_event": {
+    "hook_additional_context:SessionStart": 37.75
+   },
+   "ctx_types": {
+    "main": 950
+   }
+  },
+  "/goal prompt hook (Claude Code built-in)": {
+   "n": 584,
+   "contexts": 18,
+   "chars": 872080,
+   "median_chars": 1462,
+   "p90_chars": 1686,
+   "usd": 72.16,
+   "usd_at_opus55": 30.82,
+   "avg_resps_alive": 381.8,
+   "persisted_previews": 0,
+   "events": {
+    "Stop (meta copy)": 584
+   },
+   "usd_by_event": {
+    "Stop (meta copy)": 72.16
+   },
+   "usd55_by_event": {
+    "Stop (meta copy)": 30.82
+   },
+   "ctx_types": {
+    "main": 584
+   }
+  },
+  "mailbox-drain.sh [peer mail]": {
+   "n": 967,
+   "contexts": 447,
+   "chars": 2466911,
+   "median_chars": 2640,
+   "p90_chars": 3872,
+   "usd": 54.19,
+   "usd_at_opus55": 27.46,
+   "avg_resps_alive": 97.8,
+   "persisted_previews": 9,
+   "events": {
+    "hook_additional_context:PostToolUse": 472,
+    "hook_additional_context:UserPromptSubmit": 149,
+    "hook_additional_context:SessionStart": 346
+   },
+   "usd_by_event": {
+    "hook_additional_context:PostToolUse": 30.38,
+    "hook_additional_context:UserPromptSubmit": 4.97,
+    "hook_additional_context:SessionStart": 18.84
+   },
+   "usd55_by_event": {
+    "hook_additional_context:PostToolUse": 15.95,
+    "hook_additional_context:UserPromptSubmit": 2.95,
+    "hook_additional_context:SessionStart": 8.56
+   },
+   "ctx_types": {
+    "main": 947,
+    "subagent": 9,
+    "workflow_agent": 11
+   }
+  },
+  "mailbox-drain.sh [wake-path nag]": {
+   "n": 2950,
+   "contexts": 435,
+   "chars": 1696435,
+   "median_chars": 334,
+   "p90_chars": 757,
+   "usd": 35.27,
+   "usd_at_opus55": 19.07,
+   "avg_resps_alive": 72.8,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:SessionStart": 123,
+    "hook_additional_context:UserPromptSubmit": 2827
+   },
+   "usd_by_event": {
+    "hook_additional_context:SessionStart": 0.11,
+    "hook_additional_context:UserPromptSubmit": 35.16
+   },
+   "usd55_by_event": {
+    "hook_additional_context:SessionStart": 0.06,
+    "hook_additional_context:UserPromptSubmit": 19.01
+   },
+   "ctx_types": {
+    "main": 2950
+   }
+  },
+  "dod-persist.sh": {
+   "n": 683,
+   "contexts": 659,
+   "chars": 1565278,
+   "median_chars": 1958,
+   "p90_chars": 2336,
+   "usd": 29.66,
+   "usd_at_opus55": 13.05,
+   "avg_resps_alive": 96.1,
+   "persisted_previews": 608,
+   "events": {
+    "hook_additional_context:SessionStart": 683
+   },
+   "usd_by_event": {
+    "hook_additional_context:SessionStart": 29.66
+   },
+   "usd55_by_event": {
+    "hook_additional_context:SessionStart": 13.05
+   },
+   "ctx_types": {
+    "main": 683
+   }
+  },
+  "memory-nudge.sh": {
+   "n": 434,
+   "contexts": 213,
+   "chars": 1235257,
+   "median_chars": 2704,
+   "p90_chars": 3081,
+   "usd": 26.67,
+   "usd_at_opus55": 13.86,
+   "avg_resps_alive": 84.0,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:UserPromptSubmit": 434
+   },
+   "usd_by_event": {
+    "hook_additional_context:UserPromptSubmit": 26.67
+   },
+   "usd55_by_event": {
+    "hook_additional_context:UserPromptSubmit": 13.86
+   },
+   "ctx_types": {
+    "main": 434
+   }
+  },
+  "handoff-intent-nudge.sh": {
+   "n": 736,
+   "contexts": 467,
+   "chars": 657984,
+   "median_chars": 894,
+   "p90_chars": 894,
+   "usd": 16.52,
+   "usd_at_opus55": 7.86,
+   "avg_resps_alive": 116.3,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:UserPromptSubmit": 736
+   },
+   "usd_by_event": {
+    "hook_additional_context:UserPromptSubmit": 16.52
+   },
+   "usd55_by_event": {
+    "hook_additional_context:UserPromptSubmit": 7.86
+   },
+   "ctx_types": {
+    "main": 736
+   }
+  },
+  "completion-assert.sh": {
+   "n": 577,
+   "contexts": 143,
+   "chars": 472740,
+   "median_chars": 745,
+   "p90_chars": 1197,
+   "usd": 10.04,
+   "usd_at_opus55": 5.41,
+   "avg_resps_alive": 72.6,
+   "persisted_previews": 0,
+   "events": {
+    "Stop (meta copy)": 289,
+    "hook_blocking_error:Stop": 288
+   },
+   "usd_by_event": {
+    "Stop (meta copy)": 4.72,
+    "hook_blocking_error:Stop": 5.32
+   },
+   "usd55_by_event": {
+    "Stop (meta copy)": 2.55,
+    "hook_blocking_error:Stop": 2.87
+   },
+   "ctx_types": {
+    "main": 577
+   }
+  },
+  "agent-teams-enforce.sh": {
+   "n": 483,
+   "contexts": 90,
+   "chars": 254322,
+   "median_chars": 403,
+   "p90_chars": 578,
+   "usd": 8.5,
+   "usd_at_opus55": 4.43,
+   "avg_resps_alive": 118.8,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:PreToolUse": 483
+   },
+   "usd_by_event": {
+    "hook_additional_context:PreToolUse": 8.5
+   },
+   "usd55_by_event": {
+    "hook_additional_context:PreToolUse": 4.43
+   },
+   "ctx_types": {
+    "main": 482,
+    "subagent": 1
+   }
+  },
+  "research-precognition-nudge.sh": {
+   "n": 419,
+   "contexts": 208,
+   "chars": 323049,
+   "median_chars": 771,
+   "p90_chars": 771,
+   "usd": 7.81,
+   "usd_at_opus55": 3.93,
+   "avg_resps_alive": 104.0,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:UserPromptSubmit": 419
+   },
+   "usd_by_event": {
+    "hook_additional_context:UserPromptSubmit": 7.81
+   },
+   "usd55_by_event": {
+    "hook_additional_context:UserPromptSubmit": 3.93
+   },
+   "ctx_types": {
+    "main": 419
+   }
+  },
+  "mailbox-drain.sh [parked-watcher warning]": {
+   "n": 195,
+   "contexts": 109,
+   "chars": 259354,
+   "median_chars": 1060,
+   "p90_chars": 2252,
+   "usd": 6.88,
+   "usd_at_opus55": 3.71,
+   "avg_resps_alive": 118.8,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:UserPromptSubmit": 192,
+    "hook_additional_context:SessionStart": 3
+   },
+   "usd_by_event": {
+    "hook_additional_context:UserPromptSubmit": 6.84,
+    "hook_additional_context:SessionStart": 0.04
+   },
+   "usd55_by_event": {
+    "hook_additional_context:UserPromptSubmit": 3.69,
+    "hook_additional_context:SessionStart": 0.02
+   },
+   "ctx_types": {
+    "main": 195
+   }
+  },
+  "anti-deference-nudge.sh": {
+   "n": 359,
+   "contexts": 121,
+   "chars": 248457,
+   "median_chars": 720,
+   "p90_chars": 845,
+   "usd": 6.58,
+   "usd_at_opus55": 3.44,
+   "avg_resps_alive": 94.6,
+   "persisted_previews": 0,
+   "events": {
+    "Stop (meta copy)": 180,
+    "hook_blocking_error:Stop": 179
+   },
+   "usd_by_event": {
+    "Stop (meta copy)": 3.07,
+    "hook_blocking_error:Stop": 3.52
+   },
+   "usd55_by_event": {
+    "Stop (meta copy)": 1.6,
+    "hook_blocking_error:Stop": 1.84
+   },
+   "ctx_types": {
+    "main": 359
+   }
+  },
+  "plan-agent-teams-default.sh": {
+   "n": 337,
+   "contexts": 109,
+   "chars": 404405,
+   "median_chars": 1196,
+   "p90_chars": 1197,
+   "usd": 6.48,
+   "usd_at_opus55": 3.69,
+   "avg_resps_alive": 47.0,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:PreToolUse": 337
+   },
+   "usd_by_event": {
+    "hook_additional_context:PreToolUse": 6.48
+   },
+   "usd55_by_event": {
+    "hook_additional_context:PreToolUse": 3.69
+   },
+   "ctx_types": {
+    "main": 258,
+    "subagent": 51,
+    "workflow_agent": 28
+   }
+  },
+  "cache-expiry-warning.sh": {
+   "n": 1186,
+   "contexts": 258,
+   "chars": 468298,
+   "median_chars": 395,
+   "p90_chars": 395,
+   "usd": 6.3,
+   "usd_at_opus55": 3.16,
+   "avg_resps_alive": 54.9,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:UserPromptSubmit": 1186
+   },
+   "usd_by_event": {
+    "hook_additional_context:UserPromptSubmit": 6.3
+   },
+   "usd55_by_event": {
+    "hook_additional_context:UserPromptSubmit": 3.16
+   },
+   "ctx_types": {
+    "main": 1186
+   }
+  },
+  "frontier-status.sh": {
+   "n": 892,
+   "contexts": 880,
+   "chars": 303428,
+   "median_chars": 340,
+   "p90_chars": 341,
+   "usd": 4.92,
+   "usd_at_opus55": 2.2,
+   "avg_resps_alive": 81.9,
+   "persisted_previews": 0,
+   "events": {
+    "hook_success:SessionStart": 892
+   },
+   "usd_by_event": {
+    "hook_success:SessionStart": 4.92
+   },
+   "usd55_by_event": {
+    "hook_success:SessionStart": 2.2
+   },
+   "ctx_types": {
+    "main": 892
+   }
+  },
+  "backup-before-write.sh": {
+   "n": 305,
+   "contexts": 110,
+   "chars": 262057,
+   "median_chars": 951,
+   "p90_chars": 965,
+   "usd": 4.23,
+   "usd_at_opus55": 2.42,
+   "avg_resps_alive": 46.4,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:PreToolUse": 305
+   },
+   "usd_by_event": {
+    "hook_additional_context:PreToolUse": 4.23
+   },
+   "usd55_by_event": {
+    "hook_additional_context:PreToolUse": 2.42
+   },
+   "ctx_types": {
+    "main": 237,
+    "subagent": 31,
+    "workflow_agent": 37
+   }
+  },
+  "activation-watch.sh": {
+   "n": 848,
+   "contexts": 822,
+   "chars": 270442,
+   "median_chars": 260,
+   "p90_chars": 264,
+   "usd": 4.19,
+   "usd_at_opus55": 1.91,
+   "avg_resps_alive": 81.5,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:SessionStart": 848
+   },
+   "usd_by_event": {
+    "hook_additional_context:SessionStart": 4.19
+   },
+   "usd55_by_event": {
+    "hook_additional_context:SessionStart": 1.91
+   },
+   "ctx_types": {
+    "main": 848
+   }
+  },
+  "enforce-email-formatting.py": {
+   "n": 34,
+   "contexts": 27,
+   "chars": 167283,
+   "median_chars": 2348,
+   "p90_chars": 8921,
+   "usd": 4.09,
+   "usd_at_opus55": 2.29,
+   "avg_resps_alive": 69.4,
+   "persisted_previews": 21,
+   "events": {
+    "hook_additional_context:PreToolUse": 34
+   },
+   "usd_by_event": {
+    "hook_additional_context:PreToolUse": 4.09
+   },
+   "usd55_by_event": {
+    "hook_additional_context:PreToolUse": 2.29
+   },
+   "ctx_types": {
+    "main": 28,
+    "workflow_agent": 5,
+    "subagent": 1
+   }
+  },
+  "setup-plan-symlinks.sh": {
+   "n": 927,
+   "contexts": 881,
+   "chars": 172125,
+   "median_chars": 186,
+   "p90_chars": 193,
+   "usd": 2.75,
+   "usd_at_opus55": 1.23,
+   "avg_resps_alive": 80.0,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:SessionStart": 927
+   },
+   "usd_by_event": {
+    "hook_additional_context:SessionStart": 2.75
+   },
+   "usd55_by_event": {
+    "hook_additional_context:SessionStart": 1.23
+   },
+   "ctx_types": {
+    "main": 927
+   }
+  },
+  "session-start.sh": {
+   "n": 961,
+   "contexts": 882,
+   "chars": 155198,
+   "median_chars": 160,
+   "p90_chars": 165,
+   "usd": 2.48,
+   "usd_at_opus55": 1.12,
+   "avg_resps_alive": 79.8,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:SessionStart": 961
+   },
+   "usd_by_event": {
+    "hook_additional_context:SessionStart": 2.48
+   },
+   "usd55_by_event": {
+    "hook_additional_context:SessionStart": 1.12
+   },
+   "ctx_types": {
+    "main": 961
+   }
+  },
+  "relay-verbatim.sh": {
+   "n": 244,
+   "contexts": 150,
+   "chars": 114400,
+   "median_chars": 467,
+   "p90_chars": 472,
+   "usd": 1.94,
+   "usd_at_opus55": 1.13,
+   "avg_resps_alive": 51.5,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:PostToolUse": 244
+   },
+   "usd_by_event": {
+    "hook_additional_context:PostToolUse": 1.94
+   },
+   "usd55_by_event": {
+    "hook_additional_context:PostToolUse": 1.13
+   },
+   "ctx_types": {
+    "main": 219,
+    "workflow_agent": 19,
+    "subagent": 6
+   }
+  },
+  "desk-brief-inject.sh": {
+   "n": 5,
+   "contexts": 5,
+   "chars": 39306,
+   "median_chars": 7860,
+   "p90_chars": 7864,
+   "usd": 1.75,
+   "usd_at_opus55": 0.7,
+   "avg_resps_alive": 222.8,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:SessionStart": 5
+   },
+   "usd_by_event": {
+    "hook_additional_context:SessionStart": 1.75
+   },
+   "usd55_by_event": {
+    "hook_additional_context:SessionStart": 0.7
+   },
+   "ctx_types": {
+    "main": 5
+   }
+  },
+  "web-entrypoint-ladder.sh": {
+   "n": 167,
+   "contexts": 167,
+   "chars": 192992,
+   "median_chars": 1156,
+   "p90_chars": 1156,
+   "usd": 1.7,
+   "usd_at_opus55": 0.96,
+   "avg_resps_alive": 27.5,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:PreToolUse": 167
+   },
+   "usd_by_event": {
+    "hook_additional_context:PreToolUse": 1.7
+   },
+   "usd55_by_event": {
+    "hook_additional_context:PreToolUse": 0.96
+   },
+   "ctx_types": {
+    "main": 33,
+    "subagent": 31,
+    "workflow_agent": 103
+   }
+  },
+  "session-index-start.sh": {
+   "n": 929,
+   "contexts": 876,
+   "chars": 98601,
+   "median_chars": 133,
+   "p90_chars": 137,
+   "usd": 1.5,
+   "usd_at_opus55": 0.68,
+   "avg_resps_alive": 79.9,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:SessionStart": 929
+   },
+   "usd_by_event": {
+    "hook_additional_context:SessionStart": 1.5
+   },
+   "usd55_by_event": {
+    "hook_additional_context:SessionStart": 0.68
+   },
+   "ctx_types": {
+    "main": 929
+   }
+  },
+  "boundary-handoff.sh": {
+   "n": 243,
+   "contexts": 52,
+   "chars": 141815,
+   "median_chars": 563,
+   "p90_chars": 776,
+   "usd": 1.47,
+   "usd_at_opus55": 0.84,
+   "avg_resps_alive": 27.9,
+   "persisted_previews": 0,
+   "events": {
+    "Stop (meta copy)": 115,
+    "hook_blocking_error:Stop": 128
+   },
+   "usd_by_event": {
+    "Stop (meta copy)": 0.6,
+    "hook_blocking_error:Stop": 0.87
+   },
+   "usd55_by_event": {
+    "Stop (meta copy)": 0.34,
+    "hook_blocking_error:Stop": 0.5
+   },
+   "ctx_types": {
+    "main": 243
+   }
+  },
+  "setup-task-symlinks.sh": {
+   "n": 894,
+   "contexts": 881,
+   "chars": 90504,
+   "median_chars": 94,
+   "p90_chars": 120,
+   "usd": 1.43,
+   "usd_at_opus55": 0.64,
+   "avg_resps_alive": 81.5,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:SessionStart": 894
+   },
+   "usd_by_event": {
+    "hook_additional_context:SessionStart": 1.43
+   },
+   "usd55_by_event": {
+    "hook_additional_context:SessionStart": 0.64
+   },
+   "ctx_types": {
+    "main": 894
+   }
+  },
+  "cc-builtin: file modified after edit (post-file-edit.sh formatter)": {
+   "n": 169,
+   "contexts": 64,
+   "chars": 63831,
+   "median_chars": 389,
+   "p90_chars": 425,
+   "usd": 0.91,
+   "usd_at_opus55": 0.54,
+   "avg_resps_alive": 53.7,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:PostToolUse": 169
+   },
+   "usd_by_event": {
+    "hook_additional_context:PostToolUse": 0.91
+   },
+   "usd55_by_event": {
+    "hook_additional_context:PostToolUse": 0.54
+   },
+   "ctx_types": {
+    "main": 61,
+    "subagent": 47,
+    "workflow_agent": 61
+   }
+  },
+  "dispatch-assert.sh": {
+   "n": 44,
+   "contexts": 17,
+   "chars": 53860,
+   "median_chars": 1250,
+   "p90_chars": 1344,
+   "usd": 0.89,
+   "usd_at_opus55": 0.47,
+   "avg_resps_alive": 55.3,
+   "persisted_previews": 0,
+   "events": {
+    "Stop (meta copy)": 22,
+    "hook_blocking_error:Stop": 22
+   },
+   "usd_by_event": {
+    "Stop (meta copy)": 0.43,
+    "hook_blocking_error:Stop": 0.46
+   },
+   "usd55_by_event": {
+    "Stop (meta copy)": 0.23,
+    "hook_blocking_error:Stop": 0.24
+   },
+   "ctx_types": {
+    "main": 44
+   }
+  },
+  "memory-index-drain.sh": {
+   "n": 44,
+   "contexts": 26,
+   "chars": 35375,
+   "median_chars": 769,
+   "p90_chars": 960,
+   "usd": 0.64,
+   "usd_at_opus55": 0.35,
+   "avg_resps_alive": 53.1,
+   "persisted_previews": 0,
+   "events": {
+    "hook_additional_context:PostToolUse": 44
+   },
+   "usd_by_event": {
+    "hook_additional_context:PostToolUse": 0.64
+   },
+   "usd55_by_event": {
+    "hook_additional_context:PostToolUse": 0.35
+   },
+   "ctx_types": {
+    "main": 41,
+    "workflow_agent": 3
+   }
+  },
+  "unattributed": {
+   "n": 165,
+   "contexts": 144,
+   "chars": 45864,
+   "median_chars": 179,
+   "p90_chars": 652,
+   "usd": 0.59,
+   "usd_at_opus55": 0.32,
+   "avg_resps_alive": 21.2,
+   "persisted_previews": 0,
+   "events": {
+    "hook_stopped_continuation:TeammateIdle": 126,
+    "hook_additional_context:PostToolUse": 14,
+    "hook_additional_context:PreToolUse": 19,
+    "Stop (meta copy)": 1,
+    "hook_additional_context:SessionStart": 5
+   },
+   "usd_by_event": {
+    "hook_stopped_continuation:TeammateIdle": 0.01,
+    "hook_additional_context:PostToolUse": 0.18,
+    "hook_additional_context:PreToolUse": 0.28,
+    "Stop (meta copy)": 0.08,
+    "hook_additional_context:SessionStart": 0.04
+   },
+   "usd55_by_event": {
+    "hook_stopped_continuation:TeammateIdle": 0.01,
+    "hook_additional_context:PostToolUse": 0.09,
+    "hook_additional_context:PreToolUse": 0.17,
+    "Stop (meta copy)": 0.03,
+    "hook_additional_context:SessionStart": 0.02
+   },
+   "ctx_types": {
+    "main": 157,
+    "workflow_agent": 7,
+    "subagent": 1
+   }
+  },
+  "validate-plan-structure.sh": {
+   "n": 53,
+   "contexts": 40,
+   "chars": 29608,
+   "median_chars": 485,
+   "p90_chars": 726,
+   "usd": 0.59,
+   "usd_at_opus55": 0.34,
+   "avg_resps_alive": 49.2,
+   "persisted_previews": 0,
+   "events": {
+    "hook_blocking_error:PostToolUse": 36,
+    "hook_additional_context:PostToolUse": 17
+   },
+   "usd_by_event": {
+    "hook_blocking_error:PostToolUse": 0.21,
+    "hook_additional_context:PostToolUse": 0.38
+   },
+   "usd55_by_event": {
+    "hook_blocking_error:PostToolUse": 0.12,
+    "hook_additional_context:PostToolUse": 0.22
+   },
+   "ctx_types": {
+    "main": 27,
+    "subagent": 13,
+    "workflow_agent": 13
+   }
+  },
+  "waiting-recycle.sh": {
+   "n": 43,
+   "contexts": 21,
+   "chars": 25956,
+   "median_chars": 442,
+   "p90_chars": 1669,
+   "usd": 0.47,
+   "usd_at_opus55": 0.25,
+   "avg_resps_alive": 54.0,
+   "persisted_previews": 0,
+   "events": {
+    "Stop (meta copy)": 13,
+    "hook_blocking_error:PostToolUse": 16,
+    "hook_additional_context:PostToolUse": 14
+   },
+   "usd_by_event": {
+    "Stop (meta copy)": 0.14,
+    "hook_blocking_error:PostToolUse": 0.11,
+    "hook_additional_context:PostToolUse": 0.23
+   },
+   "usd55_by_event": {
+    "Stop (meta copy)": 0.08,
+    "hook_blocking_error:PostToolUse": 0.06,
+    "hook_additional_context:PostToolUse": 0.12
+   },
+   "ctx_types": {
+    "main": 40,
+    "subagent": 3
+   }
+  },
+  "project-hook: bash -c 'f=\"~/.reso/unblock-sweep.last\"; m=$(stat -f %m \"$f\"": {
+   "n": 9,
+   "contexts": 9,
+   "chars": 17455,
+   "median_chars": 1748,
+   "p90_chars": 3137,
+   "usd": 0.43,
+   "usd_at_opus55": 0.19,
+   "avg_resps_alive": 111.8,
+   "persisted_previews": 0,
+   "events": {
+    "hook_success:SessionStart": 9
+   },
+   "usd_by_event": {
+    "hook_success:SessionStart": 0.43
+   },
+   "usd55_by_event": {
+    "hook_success:SessionStart": 0.19
+   },
+   "ctx_types": {
+    "main": 9
+   }
+  },
+  "project-hook: if [ ! -x node_modules/.bin/next ] || [ ! -x node_modules/.b": {
+   "n": 6,
+   "contexts": 6,
+   "chars": 27890,
+   "median_chars": 4271,
+   "p90_chars": 5515,
+   "usd": 0.24,
+   "usd_at_opus55": 0.12,
+   "avg_resps_alive": 49.8,
+   "persisted_previews": 0,
+   "events": {
+    "hook_success:SessionStart": 6
+   },
+   "usd_by_event": {
+    "hook_success:SessionStart": 0.24
+   },
+   "usd55_by_event": {
+    "hook_success:SessionStart": 0.12
+   },
+   "ctx_types": {
+    "main": 6
+   }
+  },
+  "mcp-auth-guard.sh": {
+   "n": 10,
+   "contexts": 10,
+   "chars": 8530,
+   "median_chars": 851,
+   "p90_chars": 988,
+   "usd": 0.09,
+   "usd_at_opus55": 0.04,
+   "avg_resps_alive": 50.4,
+   "persisted_previews": 0,
+   "events": {
+    "hook_success:SessionStart": 10
+   },
+   "usd_by_event": {
+    "hook_success:SessionStart": 0.09
+   },
+   "usd55_by_event": {
+    "hook_success:SessionStart": 0.04
+   },
+   "ctx_types": {
+    "main": 10
+   }
+  },
+  "project-hook: if [ ! -f sqlite.db ]; then echo 'Provisioning local DB\u2026'; i": {
+   "n": 8,
+   "contexts": 8,
+   "chars": 751,
+   "median_chars": 94,
+   "p90_chars": 94,
+   "usd": 0.0,
+   "usd_at_opus55": 0.0,
+   "avg_resps_alive": 40.9,
+   "persisted_previews": 0,
+   "events": {
+    "hook_success:SessionStart": 8
+   },
+   "usd_by_event": {
+    "hook_success:SessionStart": 0.0
+   },
+   "usd55_by_event": {
+    "hook_success:SessionStart": 0.0
+   },
+   "ctx_types": {
+    "main": 8
+   }
+  },
+  "project-hook: bash .claude/emit-stdout.sh": {
+   "n": 1,
+   "contexts": 1,
+   "chars": 97,
+   "median_chars": 97,
+   "p90_chars": 97,
+   "usd": 0.0,
+   "usd_at_opus55": 0.0,
+   "avg_resps_alive": 1.0,
+   "persisted_previews": 0,
+   "events": {
+    "hook_success:SessionStart": 1
+   },
+   "usd_by_event": {
+    "hook_success:SessionStart": 0.0
+   },
+   "usd55_by_event": {
+    "hook_success:SessionStart": 0.0
+   },
+   "ctx_types": {
+    "main": 1
+   }
+  }
+ },
+ "forced_turns": {
+  "session-continue.sh": {
+   "n": 1922.1,
+   "contexts": 213,
+   "responses": 11356,
+   "usd": 2403.01,
+   "usd_at_opus55": 1084.13,
+   "output_tokens": 4601143,
+   "classes": {
+    "substantive": 614.6,
+    "poll_rearm": 265.0,
+    "readonly_check": 59.5,
+    "nothing": 34.5,
+    "reformat_close": 818.5,
+    "short_probe": 130.0
+   },
+   "usd_by_class": {
+    "substantive": 1666.41,
+    "poll_rearm": 116.82,
+    "readonly_check": 129.61,
+    "nothing": 2.32,
+    "reformat_close": 432.05,
+    "short_probe": 55.8
+   }
+  },
+  "/goal prompt hook (Claude Code built-in)": {
+   "n": 557.9,
+   "contexts": 18,
+   "responses": 1492,
+   "usd": 411.21,
+   "usd_at_opus55": 176.45,
+   "output_tokens": 574679,
+   "classes": {
+    "reformat_close": 25.5,
+    "poll_rearm": 3.0,
+    "readonly_check": 2.5,
+    "substantive": 44.9,
+    "short_probe": 443.0,
+    "nothing": 39.0
+   },
+   "usd_by_class": {
+    "reformat_close": 12.53,
+    "poll_rearm": 1.85,
+    "readonly_check": 5.21,
+    "substantive": 144.35,
+    "short_probe": 236.04,
+    "nothing": 11.23
+   }
+  },
+  "completion-assert.sh": {
+   "n": 256.2,
+   "contexts": 136,
+   "responses": 1785,
+   "usd": 355.9,
+   "usd_at_opus55": 168.82,
+   "output_tokens": 1274368,
+   "classes": {
+    "substantive": 154.8,
+    "reformat_close": 77.5,
+    "poll_rearm": 9.5,
+    "readonly_check": 11.5,
+    "nothing": 3.0
+   },
+   "usd_by_class": {
+    "substantive": 308.67,
+    "reformat_close": 23.81,
+    "poll_rearm": 4.43,
+    "readonly_check": 18.65,
+    "nothing": 0.33
+   }
+  },
+  "anti-deference-nudge.sh": {
+   "n": 154.2,
+   "contexts": 121,
+   "responses": 1129,
+   "usd": 243.64,
+   "usd_at_opus55": 119.91,
+   "output_tokens": 879550,
+   "classes": {
+    "nothing": 0.5,
+    "readonly_check": 6.0,
+    "substantive": 71.2,
+    "reformat_close": 76.0,
+    "poll_rearm": 0.5
+   },
+   "usd_by_class": {
+    "nothing": 0.0,
+    "readonly_check": 9.45,
+    "substantive": 215.54,
+    "reformat_close": 18.44,
+    "poll_rearm": 0.2
+   }
+  },
+  "boundary-handoff.sh": {
+   "n": 104.5,
+   "contexts": 46,
+   "responses": 449,
+   "usd": 151.01,
+   "usd_at_opus55": 71.23,
+   "output_tokens": 364745,
+   "classes": {
+    "substantive": 65.5,
+    "reformat_close": 27.0,
+    "poll_rearm": 1.5,
+    "readonly_check": 2.5,
+    "nothing": 8.0
+   },
+   "usd_by_class": {
+    "substantive": 126.4,
+    "reformat_close": 16.79,
+    "poll_rearm": 0.85,
+    "readonly_check": 5.39,
+    "nothing": 1.59
+   }
+  },
+  "dispatch-assert.sh": {
+   "n": 21.0,
+   "contexts": 17,
+   "responses": 126,
+   "usd": 36.62,
+   "usd_at_opus55": 18.81,
+   "output_tokens": 92058,
+   "classes": {
+    "substantive": 12.0,
+    "reformat_close": 4.0,
+    "poll_rearm": 1.0,
+    "readonly_check": 1.0,
+    "nothing": 3.0
+   },
+   "usd_by_class": {
+    "substantive": 33.77,
+    "reformat_close": 1.14,
+    "poll_rearm": 0.46,
+    "readonly_check": 1.04,
+    "nothing": 0.2
+   }
+  },
+  "waiting-recycle.sh": {
+   "n": 12.0,
+   "contexts": 8,
+   "responses": 74,
+   "usd": 20.63,
+   "usd_at_opus55": 9.38,
+   "output_tokens": 63936,
+   "classes": {
+    "substantive": 9.0,
+    "readonly_check": 1.0,
+    "reformat_close": 1.5,
+    "poll_rearm": 0.5
+   },
+   "usd_by_class": {
+    "substantive": 18.17,
+    "readonly_check": 1.36,
+    "reformat_close": 0.92,
+    "poll_rearm": 0.18
+   }
+  },
+  "unattributed": {
+   "n": 1.0,
+   "contexts": 1,
+   "responses": 3,
+   "usd": 1.16,
+   "usd_at_opus55": 0.49,
+   "output_tokens": 1209,
+   "classes": {
+    "reformat_close": 1.0
+   },
+   "usd_by_class": {
+    "reformat_close": 1.16
+   }
+  }
+ },
+ "nonvisible": {
+  "hook_additional_context": {
+   "n": 308,
+   "files": 0,
+   "raw_chars": 1077366
+  },
+  "hook_blocking_error": {
+   "n": 257,
+   "files": 0,
+   "raw_chars": 238440
+  },
+  "hook_cancelled": {
+   "n": 9140,
+   "files": 0,
+   "raw_chars": 2070580
+  },
+  "hook_non_blocking_error": {
+   "n": 148,
+   "files": 0,
+   "raw_chars": 74947
+  },
+  "hook_success": {
+   "n": 80594,
+   "files": 0,
+   "raw_chars": 132062
+  },
+  "hook_system_message": {
+   "n": 3015,
+   "files": 0,
+   "raw_chars": 1622126
+  }
+ },
+ "timeouts_incl_copies": {
+  "operator-readout.sh": 2731,
+  "session-continue.sh": 2509,
+  "completion-assert.sh": 1439,
+  "boundary-handoff.sh": 1395,
+  "validate-bash.sh": 349,
+  "?": 210,
+  "dod-persist.sh": 89,
+  "handoff-intent-nudge.sh": 57,
+  "agent-teams-enforce.sh": 56,
+  "anti-deference-nudge.sh": 54,
+  "mailbox-drain.sh": 39,
+  "memory-nudge.sh": 31,
+  "notify.sh": 30,
+  "session-index-start.sh": 27,
+  "smart-bash-allowlist.sh": 27,
+  "mcp-auth-guard.sh": 22,
+  "dispatch-assert.sh": 20,
+  "session-start.sh": 20,
+  "escalation-watch.sh": 19,
+  "activation-watch.sh": 16,
+  "curl-gate-scope.sh": 16,
+  "rm-safe-allowlist.sh": 15,
+  "teammate-auto-shutdown.sh": 14,
+  "ship-rail-push-allow.sh": 13,
+  "post-tool-batch.sh": 12,
+  "session-beat.sh": 11,
+  "teammate-checkpoint.sh": 11,
+  "desk-brief-inject.sh": 9,
+  "pre-session-validate.sh": 9,
+  "qos-rewrite.sh": 9,
+  "setup-task-symlinks.sh": 9,
+  "project-hook: bash -c 'f=\"~/.reso/unblock-sweep.last\"; m=$(stat -f %m \"$f\"": 8,
+  "git-worktree-guard.sh": 8,
+  "frontier-status.sh": 7,
+  "coldcompile-admit.sh": 6,
+  "setup-plan-symlinks.sh": 6,
+  "project-hook: MAIN_WT=$(git worktree list | head -1 | awk '{print $1}'); i": 5,
+  "handed-off-session-guard.sh": 5,
+  "live-session-registry.sh": 5,
+  "session-register.sh": 5,
+  "goal-inert-watch.sh": 4,
+  "plan-agent-teams-default.sh": 4,
+  "config-mirror-assert.sh": 3,
+  "project-hook: touch \"~/.reso/worktree-gc.wake\" 2>/dev/null || true": 2,
+  "keychain-guard.sh": 2,
+  "lead-crash-watchdog.sh": 2,
+  "backup-before-write.sh": 1,
+  "cache-expiry-tracker.sh": 1,
+  "cc-permission-beacon.sh": 1,
+  "check-edit-boundary.sh": 1
+ },
+ "sessionstart_audit": {
+  "components": {
+   "config-mirror-assert.sh": {
+    "n": 950,
+    "chars": 5010377,
+    "median": 5713,
+    "p90": 8610,
+    "identical_to_prev_in_project": 0.186
+   },
+   "dod-persist.sh": {
+    "n": 683,
+    "chars": 1551370,
+    "median": 1944,
+    "p90": 2312,
+    "identical_to_prev_in_project": 0.051
+   },
+   "mailbox-drain.sh": {
+    "n": 472,
+    "chars": 1126763,
+    "median": 2793,
+    "p90": 3846,
+    "identical_to_prev_in_project": 0.129
+   },
+   "activation-watch.sh": {
+    "n": 848,
+    "chars": 267263,
+    "median": 258,
+    "p90": 258,
+    "identical_to_prev_in_project": 0.514
+   },
+   "setup-plan-symlinks.sh": {
+    "n": 927,
+    "chars": 170295,
+    "median": 184,
+    "p90": 190,
+    "identical_to_prev_in_project": 0.598
+   },
+   "session-start.sh": {
+    "n": 961,
+    "chars": 153335,
+    "median": 159,
+    "p90": 163,
+    "identical_to_prev_in_project": 0.316
+   },
+   "session-index-start.sh": {
+    "n": 929,
+    "chars": 97457,
+    "median": 129,
+    "p90": 135,
+    "identical_to_prev_in_project": 0.416
+   },
+   "setup-task-symlinks.sh": {
+    "n": 894,
+    "chars": 89556,
+    "median": 93,
+    "p90": 119,
+    "identical_to_prev_in_project": 0.525
+   },
+   "desk-brief-inject.sh": {
+    "n": 5,
+    "chars": 39130,
+    "median": 7826,
+    "p90": 7826,
+    "identical_to_prev_in_project": 0.8
+   },
+   "unattributed": {
+    "n": 5,
+    "chars": 4411,
+    "median": 1097,
+    "p90": 1097,
+    "identical_to_prev_in_project": 0.4
+   }
+  },
+  "dod": {
+   "n": 683,
+   "persisted": 608,
+   "orig_sizes": [
+    [
+     "16.6KB",
+     248
+    ],
+    [
+     "85.5KB",
+     51
+    ],
+    [
+     "51.2KB",
+     35
+    ],
+    [
+     "51.9KB",
+     17
+    ],
+    [
+     "71.1KB",
+     17
+    ],
+    [
+     "36.8KB",
+     16
+    ],
+    [
+     "90.1KB",
+     16
+    ],
+    [
+     "100.2KB",
+     16
+    ]
+   ],
+   "distinct_contracts": 43,
+   "top_contracts": [
+    [
+     "land prerequisite 1 of docs/research/dod-crosstalk-2026-08-18.md \u2014 stamp per-cap",
+     248
+    ],
+    [
+     "kitty begin-window-drag \u2014 PHASE 1 RESEARCH COMPLETE and landed (dad60f772, docs/",
+     55
+    ],
+    [
+     "investigate the pane-330 desk death (sid 88e2c2b1) \u2014 establish how it ended and ",
+     50
+    ],
+    [
+     "RESO_SECURITY_100P \u2014 execute docs/plans/RESO_SECURITY_100P.md to completion. Wav",
+     33
+    ],
+    [
+     "bottle menu review \u2014 drive Perrier-Jou\u00ebt + Mo\u00ebt bottles to ONE operator-signed-o",
+     32
+    ],
+    [
+     "SUCCESSOR'S FIRST TASK (small, and the only thing not yet done): one durable les",
+     24
+    ],
+    [
+     "implement Wave A of docs/plans/FLOOR_PLAN_PIPELINE_V2.md \u00a717 \u2014 W17 instrument re",
+     21
+    ],
+    [
+     "JEV 100TH-PERCENTILE UTILIZATION \u2014 COMPLETE 2026-09-22. Jev runs on real work tr",
+     19
+    ]
+   ],
+   "relevance_checked": 535,
+   "relevant": 9,
+   "not_relevant": 526
+  },
+  "mail": {
+   "injections": 340,
+   "msgs_median_p90": [
+    2,
+    3
+   ],
+   "messages": 604,
+   "forwarded": 440,
+   "age_hours_since_delivery_median_p90": [
+    0.0,
+    0.0
+   ],
+   "age_hours_since_origin_median_p90": [
+    163.2,
+    352.5
+   ],
+   "origin_older_than_24h": 352,
+   "origin_older_than_7d": 293
+  },
+  "mirror": {
+   "n": 950,
+   "forked_median_p90": [
+    216,
+    425
+   ],
+   "bak_share_median": 0.9,
+   "chars_median_p90": [
+    5713,
+    8610
+   ],
+   "persisted": 363
+  },
+  "activation": {
+   "n": 834,
+   "unrun_median": [
+    2,
+    2
+   ],
+   "rotting_median": [
+    2,
+    2
+   ]
+  }
+ },
+ "repeat_rate": {
+  "mailbox-drain.sh [wake-path nag]": {
+   "n": 2827,
+   "repeats": 2309,
+   "repeat_share": 0.817,
+   "chars": 1441275,
+   "repeat_chars_share": 0.806
+  },
+  "mailbox-drain.sh [peer mail]": {
+   "n": 618,
+   "repeats": 21,
+   "repeat_share": 0.034,
+   "chars": 1312995,
+   "repeat_chars_share": 0.029
+  },
+  "memory-nudge.sh": {
+   "n": 434,
+   "repeats": 205,
+   "repeat_share": 0.472,
+   "chars": 1200971,
+   "repeat_chars_share": 0.47
+  },
+  "handoff-intent-nudge.sh": {
+   "n": 736,
+   "repeats": 269,
+   "repeat_share": 0.365,
+   "chars": 599840,
+   "repeat_chars_share": 0.365
+  },
+  "plan-agent-teams-default.sh": {
+   "n": 337,
+   "repeats": 226,
+   "repeat_share": 0.671,
+   "chars": 378144,
+   "repeat_chars_share": 0.668
+  },
+  "cache-expiry-warning.sh": {
+   "n": 1186,
+   "repeats": 928,
+   "repeat_share": 0.782,
+   "chars": 374604,
+   "repeat_chars_share": 0.783
+  },
+  "research-precognition-nudge.sh": {
+   "n": 419,
+   "repeats": 211,
+   "repeat_share": 0.504,
+   "chars": 289948,
+   "repeat_chars_share": 0.504
+  },
+  "mailbox-drain.sh [parked-watcher warning]": {
+   "n": 192,
+   "repeats": 65,
+   "repeat_share": 0.339,
+   "chars": 238825,
+   "repeat_chars_share": 0.306
+  },
+  "backup-before-write.sh": {
+   "n": 305,
+   "repeats": 173,
+   "repeat_share": 0.567,
+   "chars": 238324,
+   "repeat_chars_share": 0.628
+  },
+  "agent-teams-enforce.sh": {
+   "n": 483,
+   "repeats": 360,
+   "repeat_share": 0.745,
+   "chars": 216165,
+   "repeat_chars_share": 0.753
+  },
+  "web-entrypoint-ladder.sh": {
+   "n": 167,
+   "repeats": 0,
+   "repeat_share": 0.0,
+   "chars": 179191,
+   "repeat_chars_share": 0.0
+  },
+  "enforce-email-formatting.py": {
+   "n": 13,
+   "repeats": 2,
+   "repeat_share": 0.154,
+   "chars": 116779,
+   "repeat_chars_share": 0.151
+  },
+  "relay-verbatim.sh": {
+   "n": 244,
+   "repeats": 81,
+   "repeat_share": 0.332,
+   "chars": 95124,
+   "repeat_chars_share": 0.332
+  },
+  "cc-builtin: file modified after edit (post-file-edit.sh formatter)": {
+   "n": 169,
+   "repeats": 29,
+   "repeat_share": 0.172,
+   "chars": 50350,
+   "repeat_chars_share": 0.168
+  },
+  "memory-index-drain.sh": {
+   "n": 44,
+   "repeats": 14,
+   "repeat_share": 0.318,
+   "chars": 31899,
+   "repeat_chars_share": 0.303
+  },
+  "waiting-recycle.sh": {
+   "n": 14,
+   "repeats": 1,
+   "repeat_share": 0.071,
+   "chars": 11748,
+   "repeat_chars_share": 0.031
+  },
+  "validate-plan-structure.sh": {
+   "n": 17,
+   "repeats": 7,
+   "repeat_share": 0.412,
+   "chars": 10930,
+   "repeat_chars_share": 0.409
+  }
+ },
+ "cuts": [
+  {
+   "layer": "Stop hook session-continue.sh (agent-armed \ud83d\udd27 step)",
+   "change": "Do not re-block when the armed step is a WAIT whose completion already wakes the session (background Bash/Monitor/workflow live, or cc-await-ping armed), and never re-block with a reason identical to the last one when the forced turn in between wrote nothing (hysteresis). Keeps every block that leads to real work.",
+   "base_usd_14d": 489.5,
+   "base_usd_14d_at_opus55": 220.84,
+   "removable_fraction": 0.6,
+   "est_saving_usd_14d": 293.7,
+   "est_saving_usd_14d_at_opus55": 132.5,
+   "method": "MEASURED waste-likely forced turns under \ud83d\udd27 (886 turns: re-format close / 1-2 response probes / re-arm / nothing, classifier hand-validated on a seeded sample) x 0.6 (ESTIMATED share that are waits or identical re-blocks)",
+   "quality_risk": "medium",
+   "category": "flag",
+   "validate": "A/B via env flag on the hook: forced turns/context, $ per completed task, and count of sessions that went idle with \ud83d\udd27 work left (must not rise)",
+   "rollback": "unset the flag",
+   "rank": 1
+  },
+  {
+   "layer": "/goal (Claude Code built-in prompt Stop hook) + goal-inert-watch.sh",
+   "change": "Detect a goal whose evaluator keeps answering 'waiting on the operator' (N>=3 consecutive goal blocks whose forced turn wrote nothing) and surface ONE operator notice + recommend /goal clear, instead of letting it block every Stop.",
+   "base_usd_14d": 258.98,
+   "base_usd_14d_at_opus55": 111.13,
+   "removable_fraction": 0.8,
+   "est_saving_usd_14d": 207.2,
+   "est_saving_usd_14d_at_opus55": 88.9,
+   "method": "MEASURED waste-likely goal-forced turns (506 in 18 contexts; e.g. 'No drag.' state probes) x 0.8",
+   "quality_risk": "low",
+   "category": "propose",
+   "validate": "count goal-forced turns per context before/after; operator-facing notice rate",
+   "rollback": "remove the watch branch",
+   "rank": 2
+  },
+  {
+   "layer": "Stop reasons (all Stop hooks; Claude Code sends each reason TWICE)",
+   "change": "Shorten every Stop block reason to <=200 chars (verdict + the one next step + a pointer to the full text in a file); report the double send (meta 'Stop hook feedback' + rendered hook_blocking_error) upstream.",
+   "base_usd_14d": 173.44,
+   "base_usd_14d_at_opus55": 77.66,
+   "removable_fraction": 0.65,
+   "est_saving_usd_14d": 112.7,
+   "est_saving_usd_14d_at_opus55": 50.5,
+   "method": "MEASURED persistence $ of both copies; median reason 560-1,250 chars -> 200 = ~0.65 removable (ESTIMATED)",
+   "quality_risk": "medium",
+   "category": "flag",
+   "validate": "forced-turn class mix and completion rate unchanged; reasons still name the next step",
+   "rollback": "revert text",
+   "rank": 3
+  },
+  {
+   "layer": "Stop hook session-continue.sh (\ud83d\udd14 WAKE FLOOR) + mailbox-wake-arm.sh",
+   "change": "Arm the inbox wake path mechanically (the asyncRewake SessionStart hook already exists) instead of blocking the model to arm cc-await-ping; stop blocking on a missing wake path.",
+   "base_usd_14d": 111.02,
+   "base_usd_14d_at_opus55": 50.09,
+   "removable_fraction": 0.9,
+   "est_saving_usd_14d": 99.9,
+   "est_saving_usd_14d_at_opus55": 45.1,
+   "method": "MEASURED: 342 of 381 WAKE-FLOOR forced turns are re-arm/probe/nothing; x 0.9",
+   "quality_risk": "low",
+   "category": "flag",
+   "validate": "sessions that miss peer mail (cc-notify reason=) must not rise; WAKE-FLOOR forced turns -> ~0",
+   "rollback": "revert the flag",
+   "rank": 4
+  },
+  {
+   "layer": "SessionStart config-mirror-assert.sh",
+   "change": "Replace the FORKED name list (median 216 names, 90% settings.json.bak-* backups; 363 of 950 over the 10k persist cap) with a count + a path to the full list; filter backups out of FORKED.",
+   "base_usd_14d": 86.82,
+   "base_usd_14d_at_opus55": 37.75,
+   "removable_fraction": 0.95,
+   "est_saving_usd_14d": 82.5,
+   "est_saving_usd_14d_at_opus55": 35.9,
+   "method": "MEASURED $; element median 5,713 chars -> ~250 (ESTIMATED 0.95)",
+   "quality_risk": "low",
+   "category": "direct",
+   "validate": "SessionStart chars per main context; the mirror check still runs and still pages on a real shadow",
+   "rollback": "git revert",
+   "rank": 5
+  },
+  {
+   "layer": "UserPromptSubmit mailbox-drain.sh (\ud83d\udd14 wake-path nag)",
+   "change": "Emit the 'No inbox wake path armed' nag only when its state changes within a context (82% of 2,827 are repeats).",
+   "base_usd_14d": 35.27,
+   "base_usd_14d_at_opus55": 19.07,
+   "removable_fraction": 0.81,
+   "est_saving_usd_14d": 28.4,
+   "est_saving_usd_14d_at_opus55": 15.4,
+   "method": "MEASURED $ x MEASURED within-context repeat share (scripts/hooks_repeat_rate.py)",
+   "quality_risk": "low",
+   "category": "flag",
+   "validate": "repeat share -> 0; watcher-arm rate unchanged",
+   "rollback": "revert",
+   "rank": 6
+  },
+  {
+   "layer": "Per-prompt / per-tool nudges (handoff-intent-nudge.sh, research-precognition-nudge.sh, cache-expiry-warning.sh, agent-teams-enforce.sh, plan-agent-teams-default.sh, backup-before-write.sh)",
+   "change": "Dedupe within a context: emit a nudge only when its digit-normalized text differs from one already in the context.",
+   "base_usd_14d": 49.84,
+   "base_usd_14d_at_opus55": 25.49,
+   "removable_fraction": 0.57,
+   "est_saving_usd_14d": 28.3,
+   "est_saving_usd_14d_at_opus55": 14.5,
+   "method": "MEASURED $ x MEASURED per-script within-context repeat share",
+   "quality_risk": "low",
+   "category": "flag",
+   "validate": "behaviours the nudges target (team spawns, research fan-out) unchanged",
+   "rollback": "revert",
+   "rank": 7
+  },
+  {
+   "layer": "SessionStart dod-persist.sh (frozen DoD re-injection)",
+   "change": "Inject a DoD only when its capture belongs to this session's lineage (own sid or recorded predecessor); otherwise inject nothing. Today the repo-keyed store shows 'THE CURRENT CONTRACT' = the newest capture from ANY session: 43 contracts over 683 injections, one shown to 248 sessions; first-prompt keyword match 9/535, hand check 7/8 unrelated; 608 of 683 are 2,000-char previews of 16-100 KB files.",
+   "base_usd_14d": 29.66,
+   "base_usd_14d_at_opus55": 13.05,
+   "removable_fraction": 0.95,
+   "est_saving_usd_14d": 28.2,
+   "est_saving_usd_14d_at_opus55": 12.4,
+   "method": "MEASURED $ x ESTIMATED 0.95 (share of injections not in the session's lineage)",
+   "quality_risk": "low (removes misdirection)",
+   "category": "flag",
+   "validate": "completion-assert/wrap-ledger verdicts unchanged (they read the file, not the injection); count of sessions whose close cites a foreign scope",
+   "rollback": "revert",
+   "rank": 8
+  },
+  {
+   "layer": "UserPromptSubmit memory-nudge.sh (MEMORY INDEX BUDGET, 2.7k chars/prompt)",
+   "change": "Emit once per context and on change; shrink to the number + the command.",
+   "base_usd_14d": 26.67,
+   "base_usd_14d_at_opus55": 13.86,
+   "removable_fraction": 0.8,
+   "est_saving_usd_14d": 21.3,
+   "est_saving_usd_14d_at_opus55": 11.1,
+   "method": "MEASURED $; repeat share 0.472 + shrink 2.7k->~300 chars (ESTIMATED 0.8)",
+   "quality_risk": "low",
+   "category": "flag",
+   "validate": "MEMORY.md stays under cap (the nudge's purpose)",
+   "rollback": "revert",
+   "rank": 9
+  },
+  {
+   "layer": "SessionStart mailbox-drain.sh (peer mail re-forwarded at session start)",
+   "change": "At SessionStart drop forwarded messages whose ORIGIN is >24 h old (median origin age 163 h; 293/604 >7 d) and show a count + the listing command instead.",
+   "base_usd_14d": 18.84,
+   "base_usd_14d_at_opus55": 8.56,
+   "removable_fraction": 0.58,
+   "est_saving_usd_14d": 11.0,
+   "est_saving_usd_14d_at_opus55": 5.0,
+   "method": "MEASURED $ x MEASURED share of messages >24 h old at origin",
+   "quality_risk": "low",
+   "category": "flag",
+   "validate": "no fresh (<24h) message dropped; cc-notify still lists all",
+   "rollback": "revert",
+   "rank": 10
+  },
+  {
+   "layer": "SessionStart one-liners (session-index-start, setup-task/plan-symlinks, session-start MCP line, activation-watch, frontier-status)",
+   "change": "Drop the zero-information session-index line ('Recent: [today] (no summary) x3') and merge the rest into one line.",
+   "base_usd_14d": 17.27,
+   "base_usd_14d_at_opus55": 7.78,
+   "removable_fraction": 0.4,
+   "est_saving_usd_14d": 6.9,
+   "est_saving_usd_14d_at_opus55": 3.1,
+   "method": "MEASURED $ x ESTIMATED 0.4",
+   "quality_risk": "low",
+   "category": "direct",
+   "validate": "SessionStart chars per context",
+   "rollback": "git revert",
+   "rank": 11
+  }
+ ]
+}

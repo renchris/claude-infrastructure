@@ -1,0 +1,121 @@
+{
+ "baseline_tokens": 14.0,
+ "bash_plain": {
+  "orig_chars": 35145,
+  "orig_tokens": 15486.0,
+  "chars_per_token": 2.269
+ },
+ "paths_root": {
+  "orig_chars": 33255,
+  "orig_tokens": 16786.0,
+  "chars_per_token": 1.981,
+  "clean_chars": 29081,
+  "clean_tokens": 14886.0,
+  "removed_chars": 4174,
+  "removed_tokens": 1900.0,
+  "tokens_per_removed_char": 0.4552,
+  "token_share_removed": 0.1132
+ },
+ "paths_home": {
+  "orig_chars": 33255,
+  "orig_tokens": 16786.0,
+  "chars_per_token": 1.981,
+  "clean_chars": 31519,
+  "clean_tokens": 16086.000000000002,
+  "removed_chars": 1736,
+  "removed_tokens": 699.9999999999982,
+  "tokens_per_removed_char": 0.4032,
+  "token_share_removed": 0.0417
+ },
+ "box_banner_lines": {
+  "orig_chars": 31097,
+  "orig_tokens": 12786.0,
+  "chars_per_token": 2.432,
+  "clean_chars": 30651,
+  "clean_tokens": 12686.0,
+  "removed_chars": 446,
+  "removed_tokens": 100.0,
+  "tokens_per_removed_char": 0.2242,
+  "token_share_removed": 0.0078
+ },
+ "box_chars_all": {
+  "orig_chars": 31097,
+  "orig_tokens": 12786.0,
+  "chars_per_token": 2.432,
+  "clean_chars": 30485,
+  "clean_tokens": 12586.0,
+  "removed_chars": 612,
+  "removed_tokens": 200.0,
+  "tokens_per_removed_char": 0.3268,
+  "token_share_removed": 0.0156
+ },
+ "json_minify": {
+  "orig_chars": 29131,
+  "orig_tokens": 16286.0,
+  "chars_per_token": 1.789,
+  "clean_chars": 28713,
+  "clean_tokens": 16186.0,
+  "removed_chars": 418,
+  "removed_tokens": 100.0,
+  "tokens_per_removed_char": 0.2392,
+  "token_share_removed": 0.0061
+ },
+ "readnum_all": {
+  "orig_chars": 29116,
+  "orig_tokens": 12986.0,
+  "chars_per_token": 2.242,
+  "clean_chars": 27532,
+  "clean_tokens": 12086.0,
+  "removed_chars": 1584,
+  "removed_tokens": 900.0,
+  "tokens_per_removed_char": 0.5682,
+  "token_share_removed": 0.0693
+ },
+ "readnum_sparse10": {
+  "orig_chars": 29116,
+  "orig_tokens": 12986.0,
+  "chars_per_token": 2.242,
+  "clean_chars": 27694,
+  "clean_tokens": 12186.0,
+  "removed_chars": 1422,
+  "removed_tokens": 800.0,
+  "tokens_per_removed_char": 0.5626,
+  "token_share_removed": 0.0616
+ },
+ "ansi": {
+  "orig_chars": 34810,
+  "orig_tokens": 16686.0,
+  "chars_per_token": 2.086,
+  "clean_chars": 32224,
+  "clean_tokens": 15086.0,
+  "removed_chars": 2586,
+  "removed_tokens": 1600.0,
+  "tokens_per_removed_char": 0.6187,
+  "token_share_removed": 0.0959
+ },
+ "progress_cr": {
+  "orig_chars": 27943,
+  "orig_tokens": 11786.0,
+  "chars_per_token": 2.371,
+  "clean_chars": 7385,
+  "clean_tokens": 3686.0,
+  "removed_chars": 20558,
+  "removed_tokens": 8100.0,
+  "tokens_per_removed_char": 0.394,
+  "token_share_removed": 0.6873
+ },
+ "pad_ws": {
+  "orig_chars": 32712,
+  "clean_chars": 31211,
+  "removed_chars": 1501,
+  "removed_tokens": 0.0,
+  "tokens_per_removed_char": 0.0
+ },
+ "cwd_reset": {
+  "orig_chars": 21899,
+  "clean_chars": 0,
+  "removed_chars": 21899,
+  "removed_tokens": 9286.0,
+  "tokens_per_removed_char": 0.424
+ }
+}

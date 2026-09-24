@@ -1,0 +1,3017 @@
+{
+ "context_captures": {
+  "tmp": {
+   "categories": {
+    "System prompt": "2.2k",
+    "MCP tools": "629",
+    "MCP tools (deferred)": "367.7k",
+    "System tools (deferred)": "14.1k",
+    "Custom agents": "1.4k",
+    "Memory files": "48.2k",
+    "Skills": "10k",
+    "Messages": "1.7k",
+    "Compact buffer": "3k",
+    "Free space": "932.9k"
+   },
+   "memory_files": [
+    {
+     "type": "User",
+     "path": "/Users/chrisren/.claude-secondary/CLAUDE.md",
+     "tokens": "40.4k"
+    },
+    {
+     "type": "User",
+     "path": "/Users/chrisren/.claude/rules/00-mission-board.md",
+     "tokens": "5.5k"
+    },
+    {
+     "type": "User",
+     "path": "/Users/chrisren/.claude/rules/agent-operating-lessons.md",
+     "tokens": "2.4k"
+    }
+   ],
+   "custom_agents": [
+    {
+     "agent": "deep-research",
+     "source": "User",
+     "tokens": "533"
+    },
+    {
+     "agent": "deep-research-sonnet",
+     "source": "User",
+     "tokens": "380"
+    },
+    {
+     "agent": "frontier-derivation",
+     "source": "User",
+     "tokens": "209"
+    },
+    {
+     "agent": "motion-reviewer",
+     "source": "User",
+     "tokens": "75"
+    },
+    {
+     "agent": "research-decomposition-critic",
+     "source": "User",
+     "tokens": "155"
+    }
+   ],
+   "skills": [
+    {
+     "skill": "account-relogin",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "agent-browser",
+     "source": "User",
+     "tokens": "~110"
+    },
+    {
+     "skill": "agent-teams",
+     "source": "User",
+     "tokens": "~400"
+    },
+    {
+     "skill": "autonomous-authenticated-web-access",
+     "source": "User",
+     "tokens": "~340"
+    },
+    {
+     "skill": "beautiful-mermaid-docs",
+     "source": "User",
+     "tokens": "~220"
+    },
+    {
+     "skill": "browsermcp",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "cafe-wifi-optimization",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "cc-upgrade-gate",
+     "source": "User",
+     "tokens": "~260"
+    },
+    {
+     "skill": "cc-version-audit",
+     "source": "User",
+     "tokens": "~210"
+    },
+    {
+     "skill": "codex-security",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "coding-standards",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "corpus-to-skill",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "demo-recording",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "dia-agent",
+     "source": "User",
+     "tokens": "~490"
+    },
+    {
+     "skill": "frontend-design-vue",
+     "source": "User",
+     "tokens": "~90"
+    },
+    {
+     "skill": "frontier-campaign",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "frontier-hole",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "frontier-routing",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "frontier-run",
+     "source": "User",
+     "tokens": "~280"
+    },
+    {
+     "skill": "grok-wiki-audit",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "grok-wiki-cli",
+     "source": "User",
+     "tokens": "~200"
+    },
+    {
+     "skill": "grok-wiki-custom",
+     "source": "User",
+     "tokens": "~150"
+    },
+    {
+     "skill": "ground-up",
+     "source": "User",
+     "tokens": "~190"
+    },
+    {
+     "skill": "kpmg-deck",
+     "source": "User",
+     "tokens": "~250"
+    },
+    {
+     "skill": "manual-command-delivery",
+     "source": "User",
+     "tokens": "~480"
+    },
+    {
+     "skill": "model-upgrade",
+     "source": "User",
+     "tokens": "~300"
+    },
+    {
+     "skill": "motion",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "outbound-drafting",
+     "source": "User",
+     "tokens": "~190"
+    },
+    {
+     "skill": "outlook-cleanup",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "permission-harvest",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "plan-conventions",
+     "source": "User",
+     "tokens": "~480"
+    },
+    {
+     "skill": "plan-update",
+     "source": "User",
+     "tokens": "~100"
+    },
+    {
+     "skill": "pyramid-principle",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "pyramid-principle-full",
+     "source": "User",
+     "tokens": "~240"
+    },
+    {
+     "skill": "react-best-practices",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "read-twitter",
+     "source": "User",
+     "tokens": "~270"
+    },
+    {
+     "skill": "repo-wiki",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "research-subagents",
+     "source": "User",
+     "tokens": "~430"
+    },
+    {
+     "skill": "resume-sessions",
+     "source": "User",
+     "tokens": "~330"
+    },
+    {
+     "skill": "self-explaining-artifact",
+     "source": "User",
+     "tokens": "~360"
+    },
+    {
+     "skill": "vercel-design-guidelines",
+     "source": "User",
+     "tokens": "~80"
+    },
+    {
+     "skill": "video-understanding",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "visual-direction",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "accounts",
+     "source": "User",
+     "tokens": "~150"
+    },
+    {
+     "skill": "are-we-done",
+     "source": "User",
+     "tokens": "~40"
+    },
+    {
+     "skill": "compact-memory",
+     "source": "User",
+     "tokens": "~120"
+    },
+    {
+     "skill": "deploy-check",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "desk",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "evolve-skill",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "fix-lint",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "handoff",
+     "source": "User",
+     "tokens": "~150"
+    },
+    {
+     "skill": "harvest-skill",
+     "source": "User",
+     "tokens": "~100"
+    },
+    {
+     "skill": "keep-laptop-alive",
+     "source": "User",
+     "tokens": "~80"
+    },
+    {
+     "skill": "limit-recover",
+     "source": "User",
+     "tokens": "~520"
+    },
+    {
+     "skill": "pr",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "recover",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "relogin",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "research",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "review",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "scaffold",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "ship",
+     "source": "User",
+     "tokens": "~30"
+    },
+    {
+     "skill": "skill-promote",
+     "source": "User",
+     "tokens": "~70"
+    },
+    {
+     "skill": "wrap",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "dataviz",
+     "source": "Built-in",
+     "tokens": "~480"
+    },
+    {
+     "skill": "update-config",
+     "source": "Built-in",
+     "tokens": "~240"
+    },
+    {
+     "skill": "keybindings-help",
+     "source": "Built-in",
+     "tokens": "~80"
+    },
+    {
+     "skill": "code-review",
+     "source": "Built-in",
+     "tokens": "~280"
+    },
+    {
+     "skill": "simplify",
+     "source": "Built-in",
+     "tokens": "~60"
+    },
+    {
+     "skill": "fewer-permission-prompts",
+     "source": "Built-in",
+     "tokens": "~60"
+    },
+    {
+     "skill": "loop",
+     "source": "Built-in",
+     "tokens": "~120"
+    },
+    {
+     "skill": "schedule",
+     "source": "Built-in",
+     "tokens": "~130"
+    },
+    {
+     "skill": "claude-api",
+     "source": "Built-in",
+     "tokens": "~360"
+    },
+    {
+     "skill": "workflow-authoring",
+     "source": "Built-in",
+     "tokens": "~80"
+    },
+    {
+     "skill": "run",
+     "source": "Built-in",
+     "tokens": "~120"
+    },
+    {
+     "skill": "init",
+     "source": "Built-in",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "security-review",
+     "source": "Built-in",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "anthropic-skills:docs",
+     "source": "claude.ai sync",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "anthropic-skills:docx",
+     "source": "claude.ai sync",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "anthropic-skills:import-memory",
+     "source": "claude.ai sync",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "anthropic-skills:morning",
+     "source": "claude.ai sync",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "anthropic-skills:pdf",
+     "source": "claude.ai sync",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "anthropic-skills:pptx",
+     "source": "claude.ai sync",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "anthropic-skills:skill-creator",
+     "source": "claude.ai sync",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "anthropic-skills:xlsx",
+     "source": "claude.ai sync",
+     "tokens": "< 20"
+    }
+   ],
+   "mcp_tools_loaded": 202,
+   "total": "64.1k / 1m (6%)"
+  },
+  "infra": {
+   "categories": {
+    "System prompt": "2.2k",
+    "MCP tools": "629",
+    "MCP tools (deferred)": "367.7k",
+    "System tools (deferred)": "14.1k",
+    "Custom agents": "1.4k",
+    "Memory files": "87.7k",
+    "Skills": "10k",
+    "Messages": "1.7k",
+    "Compact buffer": "3k",
+    "Free space": "893.3k"
+   },
+   "memory_files": [
+    {
+     "type": "User",
+     "path": "/Users/chrisren/.claude-secondary/CLAUDE.md",
+     "tokens": "40.4k"
+    },
+    {
+     "type": "User",
+     "path": "/Users/chrisren/.claude/rules/00-mission-board.md",
+     "tokens": "5.5k"
+    },
+    {
+     "type": "User",
+     "path": "/Users/chrisren/.claude/rules/agent-operating-lessons.md",
+     "tokens": "2.4k"
+    },
+    {
+     "type": "Project",
+     "path": "/Users/chrisren/Development/claude-infrastructure/.claude/CLAUDE.md",
+     "tokens": "2.4k"
+    },
+    {
+     "type": "Project",
+     "path": "/Users/chrisren/Development/claude-infrastructure/.claude/rules/agent-operating-lessons.md",
+     "tokens": "27.9k"
+    },
+    {
+     "type": "AutoMem",
+     "path": "/Users/chrisren/.claude-secondary/projects/-Users-chrisren-Development-claude-infrastructure/memory/MEMORY.md",
+     "tokens": "9.3k"
+    }
+   ],
+   "custom_agents": [
+    {
+     "agent": "deep-research",
+     "source": "User",
+     "tokens": "533"
+    },
+    {
+     "agent": "deep-research-sonnet",
+     "source": "User",
+     "tokens": "380"
+    },
+    {
+     "agent": "frontier-derivation",
+     "source": "User",
+     "tokens": "209"
+    },
+    {
+     "agent": "motion-reviewer",
+     "source": "User",
+     "tokens": "75"
+    },
+    {
+     "agent": "research-decomposition-critic",
+     "source": "User",
+     "tokens": "155"
+    }
+   ],
+   "skills": [
+    {
+     "skill": "account-relogin",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "agent-browser",
+     "source": "User",
+     "tokens": "~110"
+    },
+    {
+     "skill": "agent-teams",
+     "source": "User",
+     "tokens": "~400"
+    },
+    {
+     "skill": "autonomous-authenticated-web-access",
+     "source": "User",
+     "tokens": "~340"
+    },
+    {
+     "skill": "beautiful-mermaid-docs",
+     "source": "User",
+     "tokens": "~220"
+    },
+    {
+     "skill": "browsermcp",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "cafe-wifi-optimization",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "cc-upgrade-gate",
+     "source": "User",
+     "tokens": "~260"
+    },
+    {
+     "skill": "cc-version-audit",
+     "source": "User",
+     "tokens": "~210"
+    },
+    {
+     "skill": "codex-security",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "coding-standards",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "corpus-to-skill",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "demo-recording",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "dia-agent",
+     "source": "User",
+     "tokens": "~490"
+    },
+    {
+     "skill": "frontend-design-vue",
+     "source": "User",
+     "tokens": "~90"
+    },
+    {
+     "skill": "frontier-campaign",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "frontier-hole",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "frontier-routing",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "frontier-run",
+     "source": "User",
+     "tokens": "~280"
+    },
+    {
+     "skill": "grok-wiki-audit",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "grok-wiki-cli",
+     "source": "User",
+     "tokens": "~200"
+    },
+    {
+     "skill": "grok-wiki-custom",
+     "source": "User",
+     "tokens": "~150"
+    },
+    {
+     "skill": "ground-up",
+     "source": "User",
+     "tokens": "~190"
+    },
+    {
+     "skill": "kpmg-deck",
+     "source": "User",
+     "tokens": "~250"
+    },
+    {
+     "skill": "manual-command-delivery",
+     "source": "User",
+     "tokens": "~480"
+    },
+    {
+     "skill": "model-upgrade",
+     "source": "User",
+     "tokens": "~300"
+    },
+    {
+     "skill": "motion",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "outbound-drafting",
+     "source": "User",
+     "tokens": "~190"
+    },
+    {
+     "skill": "outlook-cleanup",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "permission-harvest",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "plan-conventions",
+     "source": "User",
+     "tokens": "~480"
+    },
+    {
+     "skill": "plan-update",
+     "source": "User",
+     "tokens": "~100"
+    },
+    {
+     "skill": "pyramid-principle",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "pyramid-principle-full",
+     "source": "User",
+     "tokens": "~240"
+    },
+    {
+     "skill": "react-best-practices",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "read-twitter",
+     "source": "User",
+     "tokens": "~270"
+    },
+    {
+     "skill": "repo-wiki",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "research-subagents",
+     "source": "User",
+     "tokens": "~430"
+    },
+    {
+     "skill": "resume-sessions",
+     "source": "User",
+     "tokens": "~330"
+    },
+    {
+     "skill": "self-explaining-artifact",
+     "source": "User",
+     "tokens": "~360"
+    },
+    {
+     "skill": "vercel-design-guidelines",
+     "source": "User",
+     "tokens": "~80"
+    },
+    {
+     "skill": "video-understanding",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "visual-direction",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "accounts",
+     "source": "User",
+     "tokens": "~150"
+    },
+    {
+     "skill": "are-we-done",
+     "source": "User",
+     "tokens": "~40"
+    },
+    {
+     "skill": "compact-memory",
+     "source": "User",
+     "tokens": "~120"
+    },
+    {
+     "skill": "deploy-check",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "desk",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "evolve-skill",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "fix-lint",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "handoff",
+     "source": "User",
+     "tokens": "~150"
+    },
+    {
+     "skill": "harvest-skill",
+     "source": "User",
+     "tokens": "~100"
+    },
+    {
+     "skill": "keep-laptop-alive",
+     "source": "User",
+     "tokens": "~80"
+    },
+    {
+     "skill": "limit-recover",
+     "source": "User",
+     "tokens": "~520"
+    },
+    {
+     "skill": "pr",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "recover",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "relogin",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "research",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "review",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "scaffold",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "ship",
+     "source": "User",
+     "tokens": "~30"
+    },
+    {
+     "skill": "skill-promote",
+     "source": "User",
+     "tokens": "~70"
+    },
+    {
+     "skill": "wrap",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "dataviz",
+     "source": "Built-in",
+     "tokens": "~480"
+    },
+    {
+     "skill": "update-config",
+     "source": "Built-in",
+     "tokens": "~240"
+    },
+    {
+     "skill": "keybindings-help",
+     "source": "Built-in",
+     "tokens": "~80"
+    },
+    {
+     "skill": "code-review",
+     "source": "Built-in",
+     "tokens": "~280"
+    },
+    {
+     "skill": "simplify",
+     "source": "Built-in",
+     "tokens": "~60"
+    },
+    {
+     "skill": "fewer-permission-prompts",
+     "source": "Built-in",
+     "tokens": "~60"
+    },
+    {
+     "skill": "loop",
+     "source": "Built-in",
+     "tokens": "~120"
+    },
+    {
+     "skill": "schedule",
+     "source": "Built-in",
+     "tokens": "~130"
+    },
+    {
+     "skill": "claude-api",
+     "source": "Built-in",
+     "tokens": "~360"
+    },
+    {
+     "skill": "workflow-authoring",
+     "source": "Built-in",
+     "tokens": "~80"
+    },
+    {
+     "skill": "run",
+     "source": "Built-in",
+     "tokens": "~120"
+    },
+    {
+     "skill": "init",
+     "source": "Built-in",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "security-review",
+     "source": "Built-in",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "anthropic-skills:docs",
+     "source": "claude.ai sync",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "anthropic-skills:docx",
+     "source": "claude.ai sync",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "anthropic-skills:import-memory",
+     "source": "claude.ai sync",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "anthropic-skills:morning",
+     "source": "claude.ai sync",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "anthropic-skills:pdf",
+     "source": "claude.ai sync",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "anthropic-skills:pptx",
+     "source": "claude.ai sync",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "anthropic-skills:skill-creator",
+     "source": "claude.ai sync",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "anthropic-skills:xlsx",
+     "source": "claude.ai sync",
+     "tokens": "< 20"
+    }
+   ],
+   "mcp_tools_loaded": 202,
+   "total": "103.7k / 1m (10%)"
+  },
+  "reso": {
+   "categories": {
+    "System prompt": "2.2k",
+    "MCP tools": "629",
+    "MCP tools (deferred)": "368k",
+    "System tools (deferred)": "13.9k",
+    "Custom agents": "4.4k",
+    "Memory files": "137.8k",
+    "Skills": "10k",
+    "Messages": "4.5k",
+    "Compact buffer": "3k",
+    "Free space": "837.4k"
+   },
+   "memory_files": [
+    {
+     "type": "User",
+     "path": "/Users/chrisren/.claude-secondary/CLAUDE.md",
+     "tokens": "40.4k"
+    },
+    {
+     "type": "User",
+     "path": "/Users/chrisren/.claude/rules/00-mission-board.md",
+     "tokens": "5.5k"
+    },
+    {
+     "type": "User",
+     "path": "/Users/chrisren/.claude/rules/agent-operating-lessons.md",
+     "tokens": "2.4k"
+    },
+    {
+     "type": "Project",
+     "path": "/Users/chrisren/Development/reso-management-app/CLAUDE.md",
+     "tokens": "14.6k"
+    },
+    {
+     "type": "Project",
+     "path": "/Users/chrisren/Development/reso-management-app/.claude/rules/bottle-generation-ledger.md",
+     "tokens": "43.3k"
+    },
+    {
+     "type": "Project",
+     "path": "/Users/chrisren/Development/reso-management-app/.claude/rules/agent-operating-lessons.md",
+     "tokens": "20.6k"
+    },
+    {
+     "type": "Project",
+     "path": "/Users/chrisren/Development/reso-management-app/.claude/rules/agent-teams.md",
+     "tokens": "3.2k"
+    },
+    {
+     "type": "AutoMem",
+     "path": "/Users/chrisren/.claude-secondary/projects/-Users-chrisren-Development-reso-management-app/memory/MEMORY.md",
+     "tokens": "7.8k"
+    }
+   ],
+   "custom_agents": [
+    {
+     "agent": "code-reviewer",
+     "source": "Project",
+     "tokens": "618"
+    },
+    {
+     "agent": "code-simplifier",
+     "source": "Project",
+     "tokens": "134"
+    },
+    {
+     "agent": "comment-analyzer",
+     "source": "Project",
+     "tokens": "608"
+    },
+    {
+     "agent": "deep-research",
+     "source": "User",
+     "tokens": "533"
+    },
+    {
+     "agent": "deep-research-sonnet",
+     "source": "User",
+     "tokens": "380"
+    },
+    {
+     "agent": "fresh-eyes-evaluator",
+     "source": "Project",
+     "tokens": "61"
+    },
+    {
+     "agent": "frontier-derivation",
+     "source": "User",
+     "tokens": "209"
+    },
+    {
+     "agent": "motion-reviewer",
+     "source": "Project",
+     "tokens": "75"
+    },
+    {
+     "agent": "north-star-design-agent",
+     "source": "Project",
+     "tokens": "66"
+    },
+    {
+     "agent": "pr-test-analyzer",
+     "source": "Project",
+     "tokens": "528"
+    },
+    {
+     "agent": "research-decomposition-critic",
+     "source": "User",
+     "tokens": "155"
+    },
+    {
+     "agent": "schema-migration",
+     "source": "Project",
+     "tokens": "58"
+    },
+    {
+     "agent": "silent-failure-hunter",
+     "source": "Project",
+     "tokens": "491"
+    },
+    {
+     "agent": "type-design-analyzer",
+     "source": "Project",
+     "tokens": "448"
+    },
+    {
+     "agent": "visual-design-iterator",
+     "source": "Project",
+     "tokens": "61"
+    }
+   ],
+   "skills": [
+    {
+     "skill": "account-relogin",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "agent-browser",
+     "source": "User",
+     "tokens": "~110"
+    },
+    {
+     "skill": "agent-teams",
+     "source": "User",
+     "tokens": "~400"
+    },
+    {
+     "skill": "autonomous-authenticated-web-access",
+     "source": "User",
+     "tokens": "~340"
+    },
+    {
+     "skill": "beautiful-mermaid-docs",
+     "source": "User",
+     "tokens": "~220"
+    },
+    {
+     "skill": "browsermcp",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "cafe-wifi-optimization",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "cc-upgrade-gate",
+     "source": "User",
+     "tokens": "~260"
+    },
+    {
+     "skill": "cc-version-audit",
+     "source": "User",
+     "tokens": "~210"
+    },
+    {
+     "skill": "codex-security",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "coding-standards",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "corpus-to-skill",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "demo-recording",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "dia-agent",
+     "source": "User",
+     "tokens": "~490"
+    },
+    {
+     "skill": "frontend-design-vue",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "frontier-campaign",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "frontier-hole",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "frontier-routing",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "frontier-run",
+     "source": "User",
+     "tokens": "~280"
+    },
+    {
+     "skill": "grok-wiki-audit",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "grok-wiki-cli",
+     "source": "User",
+     "tokens": "~200"
+    },
+    {
+     "skill": "grok-wiki-custom",
+     "source": "User",
+     "tokens": "~150"
+    },
+    {
+     "skill": "ground-up",
+     "source": "User",
+     "tokens": "~190"
+    },
+    {
+     "skill": "kpmg-deck",
+     "source": "User",
+     "tokens": "~250"
+    },
+    {
+     "skill": "manual-command-delivery",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "model-upgrade",
+     "source": "User",
+     "tokens": "~300"
+    },
+    {
+     "skill": "motion",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "outbound-drafting",
+     "source": "User",
+     "tokens": "~190"
+    },
+    {
+     "skill": "outlook-cleanup",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "permission-harvest",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "plan-conventions",
+     "source": "User",
+     "tokens": "~480"
+    },
+    {
+     "skill": "plan-update",
+     "source": "User",
+     "tokens": "~100"
+    },
+    {
+     "skill": "pyramid-principle",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "pyramid-principle-full",
+     "source": "User",
+     "tokens": "~240"
+    },
+    {
+     "skill": "react-best-practices",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "read-twitter",
+     "source": "User",
+     "tokens": "~270"
+    },
+    {
+     "skill": "repo-wiki",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "research-subagents",
+     "source": "User",
+     "tokens": "~430"
+    },
+    {
+     "skill": "resume-sessions",
+     "source": "User",
+     "tokens": "~330"
+    },
+    {
+     "skill": "self-explaining-artifact",
+     "source": "User",
+     "tokens": "~360"
+    },
+    {
+     "skill": "vercel-design-guidelines",
+     "source": "User",
+     "tokens": "~80"
+    },
+    {
+     "skill": "video-understanding",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "visual-direction",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "bottle-reference-sourcing",
+     "source": "Project",
+     "tokens": "~370"
+    },
+    {
+     "skill": "check-latency",
+     "source": "Project",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "dep-audit",
+     "source": "Project",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "deploy-status",
+     "source": "Project",
+     "tokens": "~80"
+    },
+    {
+     "skill": "design-page",
+     "source": "Project",
+     "tokens": "~160"
+    },
+    {
+     "skill": "Drizzle Migrations Deep Dive",
+     "source": "Project",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "improve",
+     "source": "Project",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "live-event",
+     "source": "Project",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "Monitoring & Operations",
+     "source": "Project",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "post-event",
+     "source": "Project",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "security-audit",
+     "source": "Project",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "Sync Debugging",
+     "source": "Project",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "ui",
+     "source": "Project",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "Venue Research",
+     "source": "Project",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "vercel-react-view-transitions",
+     "source": "Project",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "accounts",
+     "source": "User",
+     "tokens": "~150"
+    },
+    {
+     "skill": "amplify-build",
+     "source": "Project",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "are-we-done",
+     "source": "User",
+     "tokens": "~40"
+    },
+    {
+     "skill": "code-review",
+     "source": "Project",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "compact-memory",
+     "source": "User",
+     "tokens": "~120"
+    },
+    {
+     "skill": "deploy-check",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "desk",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "evolve-skill",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "exhaust-improvements",
+     "source": "Project",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "fix-lint",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "handoff",
+     "source": "User",
+     "tokens": "~150"
+    },
+    {
+     "skill": "harvest-skill",
+     "source": "User",
+     "tokens": "~100"
+    },
+    {
+     "skill": "investigate",
+     "source": "Project",
+     "tokens": "~30"
+    },
+    {
+     "skill": "keep-laptop-alive",
+     "source": "User",
+     "tokens": "~80"
+    },
+    {
+     "skill": "limit-recover",
+     "source": "User",
+     "tokens": "~520"
+    },
+    {
+     "skill": "pr",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "project-pass",
+     "source": "Project",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "qa",
+     "source": "Project",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "qa-commits",
+     "source": "Project",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "react-doctor",
+     "source": "Project",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "recover",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "relogin",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "research",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "review",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "review-pr",
+     "source": "Project",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "scaffold",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "ship",
+     "source": "User",
+     "tokens": "~30"
+    },
+    {
+     "skill": "skill-promote",
+     "source": "User",
+     "tokens": "~70"
+    },
+    {
+     "skill": "ui-local",
+     "source": "Project",
+     "tokens": "~30"
+    },
+    {
+     "skill": "ui-off",
+     "source": "Project",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "wrap",
+     "source": "User",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "autoreview-remaining-decisions",
+     "source": "Project",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "autoreview-sweep",
+     "source": "Project",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "bottle-sourcing-per-bottle",
+     "source": "Project",
+     "tokens": "~40"
+    },
+    {
+     "skill": "chrome-stage1",
+     "source": "Project",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "design-page-stage1",
+     "source": "Project",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "project-pass-readonly",
+     "source": "Project",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "test-coverage-gap-mapper",
+     "source": "Project",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "dataviz",
+     "source": "Built-in",
+     "tokens": "~480"
+    },
+    {
+     "skill": "update-config",
+     "source": "Built-in",
+     "tokens": "~240"
+    },
+    {
+     "skill": "keybindings-help",
+     "source": "Built-in",
+     "tokens": "~80"
+    },
+    {
+     "skill": "simplify",
+     "source": "Built-in",
+     "tokens": "~60"
+    },
+    {
+     "skill": "fewer-permission-prompts",
+     "source": "Built-in",
+     "tokens": "~60"
+    },
+    {
+     "skill": "loop",
+     "source": "Built-in",
+     "tokens": "~120"
+    },
+    {
+     "skill": "schedule",
+     "source": "Built-in",
+     "tokens": "~130"
+    },
+    {
+     "skill": "claude-api",
+     "source": "Built-in",
+     "tokens": "~360"
+    },
+    {
+     "skill": "workflow-authoring",
+     "source": "Built-in",
+     "tokens": "~80"
+    },
+    {
+     "skill": "run",
+     "source": "Built-in",
+     "tokens": "~120"
+    },
+    {
+     "skill": "init",
+     "source": "Built-in",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "security-review",
+     "source": "Built-in",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "anthropic-skills:docs",
+     "source": "claude.ai sync",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "anthropic-skills:docx",
+     "source": "claude.ai sync",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "anthropic-skills:import-memory",
+     "source": "claude.ai sync",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "anthropic-skills:morning",
+     "source": "claude.ai sync",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "anthropic-skills:pdf",
+     "source": "claude.ai sync",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "anthropic-skills:pptx",
+     "source": "claude.ai sync",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "anthropic-skills:skill-creator",
+     "source": "claude.ai sync",
+     "tokens": "< 20"
+    },
+    {
+     "skill": "anthropic-skills:xlsx",
+     "source": "claude.ai sync",
+     "tokens": "< 20"
+    }
+   ],
+   "mcp_tools_loaded": 203,
+   "total": "159.6k / 1m (16%)"
+  }
+ },
+ "calibration": [
+  {
+   "block": "infra/hook_SessionStart.md",
+   "chars": 8220,
+   "tokens": 3600,
+   "chars_per_token": 2.28
+  },
+  {
+   "block": "infra/agent_listing_delta.md",
+   "chars": 6437,
+   "tokens": 2500,
+   "chars_per_token": 2.57
+  },
+  {
+   "block": "infra/mcp_instructions_delta.md",
+   "chars": 4311,
+   "tokens": 1500,
+   "chars_per_token": 2.87
+  },
+  {
+   "block": "infra/deferred_tools_delta.md",
+   "chars": 7602,
+   "tokens": 3800,
+   "chars_per_token": 2.0
+  },
+  {
+   "block": "infra/hook_UserPromptSubmit.md",
+   "chars": 894,
+   "tokens": 400,
+   "chars_per_token": 2.23
+  },
+  {
+   "block": "infra/instructions.md",
+   "chars": 225006,
+   "tokens": 88100,
+   "chars_per_token": 2.55
+  },
+  {
+   "block": "infra/session_context.md",
+   "chars": 1300,
+   "tokens": 500,
+   "chars_per_token": 2.6
+  },
+  {
+   "block": "infra/small_bundle.md",
+   "chars": 1924,
+   "tokens": 800,
+   "chars_per_token": 2.4
+  },
+  {
+   "block": "reso/agent_listing_delta.md",
+   "chars": 16051,
+   "tokens": 5700,
+   "chars_per_token": 2.82
+  },
+  {
+   "block": "reso/hook_SessionStart.md",
+   "chars": 9422,
+   "tokens": 4200,
+   "chars_per_token": 2.24
+  },
+  {
+   "block": "reso/deferred_tools_delta.md",
+   "chars": 7120,
+   "tokens": 3600,
+   "chars_per_token": 1.98
+  },
+  {
+   "block": "reso/instructions.md",
+   "chars": 344089,
+   "tokens": 138300,
+   "chars_per_token": 2.49
+  },
+  {
+   "block": "infra/skill_listing.md",
+   "chars": 30103,
+   "tokens": 11200,
+   "chars_per_token": 2.69
+  }
+ ],
+ "cost": {
+  "fleet_usd_own": 32517.424510999874,
+  "fleet_usd_opus55": 18318.682968600137,
+  "contexts": {
+   "main": 985,
+   "subagent": 361,
+   "workflow_agent": 2401
+  },
+  "T0_median": {
+   "main|2.1.260": 28534,
+   "main|*": 16135,
+   "subagent|2.1.260": 9262.0,
+   "subagent|*": 9262.0,
+   "main|2.1.280": 14302,
+   "subagent|2.1.280": 9175.5,
+   "workflow_agent|2.1.260": 23278,
+   "workflow_agent|*": 23156,
+   "workflow_agent|2.1.280": 7788.0,
+   "main|2.1.114": 15696,
+   "main|2.1.183": 15750.0
+  },
+  "rows": [
+   {
+    "source": "global CLAUDE.md",
+    "contexts": 3533,
+    "tokens_median": 35918,
+    "tokens_total_per_ctx_sum": 130283574,
+    "by_ctx_type": {
+     "main": 842,
+     "subagent": 328,
+     "workflow_agent": 2363
+    },
+    "by_repo": {
+     "infra": 1783,
+     "other": 862,
+     "reso": 888
+    },
+    "usd_spec_own": 3566.74,
+    "usd_spec_opus55": 1873.18,
+    "usd_observed_own": 3916.7,
+    "usd_observed_opus55": 2198.95,
+    "share_fleet_observed_own": 0.1204,
+    "share_fleet_observed_opus55": 0.12,
+    "usd_spec_first_write_own": 954.14,
+    "usd_spec_first_write_opus55": 744.41,
+    "usd_observed_own_by_ctx_type": {
+     "main": 1980.0,
+     "subagent": 325.09,
+     "workflow_agent": 1611.61
+    },
+    "usd_observed_opus55_by_ctx_type": {
+     "main": 1086.76,
+     "subagent": 174.16,
+     "workflow_agent": 938.02
+    }
+   },
+   {
+    "source": "system prompt + tool schemas (T0)",
+    "contexts": 3747,
+    "tokens_median": 23278,
+    "tokens_total_per_ctx_sum": 79033805,
+    "by_ctx_type": {
+     "main": 985,
+     "subagent": 361,
+     "workflow_agent": 2401
+    },
+    "by_repo": {
+     "infra": 1793,
+     "other": 1066,
+     "reso": 888
+    },
+    "usd_spec_own": 0.0,
+    "usd_spec_opus55": 0.0,
+    "usd_observed_own": 2155.3,
+    "usd_observed_opus55": 1079.85,
+    "share_fleet_observed_own": 0.0663,
+    "share_fleet_observed_opus55": 0.0589,
+    "usd_spec_first_write_own": 0.0,
+    "usd_spec_first_write_opus55": 0.0,
+    "usd_observed_own_by_ctx_type": {
+     "main": 1251.05,
+     "subagent": 79.32,
+     "workflow_agent": 824.93
+    },
+    "usd_observed_opus55_by_ctx_type": {
+     "main": 611.04,
+     "subagent": 42.12,
+     "workflow_agent": 426.7
+    }
+   },
+   {
+    "source": "project rules agent-operating-lessons.md [infra]",
+    "contexts": 1703,
+    "tokens_median": 25656,
+    "tokens_total_per_ctx_sum": 58429023,
+    "by_ctx_type": {
+     "main": 511,
+     "subagent": 188,
+     "workflow_agent": 1004
+    },
+    "by_repo": {
+     "infra": 1703
+    },
+    "usd_spec_own": 1670.04,
+    "usd_spec_opus55": 866.12,
+    "usd_observed_own": 1823.97,
+    "usd_observed_opus55": 1000.52,
+    "share_fleet_observed_own": 0.0561,
+    "share_fleet_observed_opus55": 0.0546,
+    "usd_spec_first_write_own": 432.26,
+    "usd_spec_first_write_opus55": 337.04,
+    "usd_observed_own_by_ctx_type": {
+     "main": 1011.43,
+     "subagent": 132.43,
+     "workflow_agent": 680.11
+    },
+    "usd_observed_opus55_by_ctx_type": {
+     "main": 538.98,
+     "subagent": 71.84,
+     "workflow_agent": 389.7
+    }
+   },
+   {
+    "source": "skill listing",
+    "contexts": 3518,
+    "tokens_median": 11183,
+    "tokens_total_per_ctx_sum": 38751572,
+    "by_ctx_type": {
+     "main": 771,
+     "subagent": 346,
+     "workflow_agent": 2401
+    },
+    "by_repo": {
+     "infra": 1688,
+     "other": 976,
+     "reso": 854
+    },
+    "usd_spec_own": 1027.08,
+    "usd_spec_opus55": 543.11,
+    "usd_observed_own": 1115.14,
+    "usd_observed_opus55": 626.79,
+    "share_fleet_observed_own": 0.0343,
+    "share_fleet_observed_opus55": 0.0342,
+    "usd_spec_first_write_own": 279.62,
+    "usd_spec_first_write_opus55": 217.87,
+    "usd_observed_own_by_ctx_type": {
+     "main": 510.62,
+     "subagent": 102.74,
+     "workflow_agent": 501.78
+    },
+    "usd_observed_opus55_by_ctx_type": {
+     "main": 278.49,
+     "subagent": 56.45,
+     "workflow_agent": 291.85
+    }
+   },
+   {
+    "source": "project CLAUDE.md [infra]",
+    "contexts": 1703,
+    "tokens_median": 2402,
+    "tokens_total_per_ctx_sum": 10678061,
+    "by_ctx_type": {
+     "main": 511,
+     "subagent": 188,
+     "workflow_agent": 1004
+    },
+    "by_repo": {
+     "infra": 1703
+    },
+    "usd_spec_own": 538.76,
+    "usd_spec_opus55": 255.44,
+    "usd_observed_own": 590.21,
+    "usd_observed_opus55": 308.48,
+    "share_fleet_observed_own": 0.0182,
+    "share_fleet_observed_opus55": 0.0168,
+    "usd_spec_first_write_own": 93.38,
+    "usd_spec_first_write_opus55": 72.5,
+    "usd_observed_own_by_ctx_type": {
+     "main": 493.61,
+     "subagent": 17.37,
+     "workflow_agent": 79.22
+    },
+    "usd_observed_opus55_by_ctx_type": {
+     "main": 254.28,
+     "subagent": 10.21,
+     "workflow_agent": 43.98
+    }
+   },
+   {
+    "source": "MEMORY.md [infra]",
+    "contexts": 1756,
+    "tokens_median": 9448,
+    "tokens_total_per_ctx_sum": 16484212,
+    "by_ctx_type": {
+     "main": 514,
+     "subagent": 188,
+     "workflow_agent": 1054
+    },
+    "by_repo": {
+     "infra": 1756
+    },
+    "usd_spec_own": 522.3,
+    "usd_spec_opus55": 267.76,
+    "usd_observed_own": 573.21,
+    "usd_observed_opus55": 313.51,
+    "share_fleet_observed_own": 0.0176,
+    "share_fleet_observed_opus55": 0.0171,
+    "usd_spec_first_write_own": 123.1,
+    "usd_spec_first_write_opus55": 96.98,
+    "usd_observed_own_by_ctx_type": {
+     "main": 344.92,
+     "subagent": 40.82,
+     "workflow_agent": 187.47
+    },
+    "usd_observed_opus55_by_ctx_type": {
+     "main": 183.33,
+     "subagent": 22.55,
+     "workflow_agent": 107.63
+    }
+   },
+   {
+    "source": "project rules agent-operating-lessons.md [reso]",
+    "contexts": 888,
+    "tokens_median": 16313,
+    "tokens_total_per_ctx_sum": 14437540,
+    "by_ctx_type": {
+     "main": 114,
+     "subagent": 31,
+     "workflow_agent": 743
+    },
+    "by_repo": {
+     "reso": 888
+    },
+    "usd_spec_own": 322.74,
+    "usd_spec_opus55": 175.5,
+    "usd_observed_own": 349.98,
+    "usd_observed_opus55": 202.78,
+    "share_fleet_observed_own": 0.0108,
+    "share_fleet_observed_opus55": 0.0111,
+    "usd_spec_first_write_own": 102.27,
+    "usd_spec_first_write_opus55": 78.46,
+    "usd_observed_own_by_ctx_type": {
+     "main": 134.84,
+     "subagent": 16.21,
+     "workflow_agent": 198.93
+    },
+    "usd_observed_opus55_by_ctx_type": {
+     "main": 78.94,
+     "subagent": 8.93,
+     "workflow_agent": 114.9
+    }
+   },
+   {
+    "source": "global rules essay (~/.claude/rules/agent-operating-lessons.md)",
+    "contexts": 3533,
+    "tokens_median": 2379,
+    "tokens_total_per_ctx_sum": 11135375,
+    "by_ctx_type": {
+     "main": 842,
+     "subagent": 328,
+     "workflow_agent": 2363
+    },
+    "by_repo": {
+     "infra": 1783,
+     "other": 862,
+     "reso": 888
+    },
+    "usd_spec_own": 313.83,
+    "usd_spec_opus55": 161.34,
+    "usd_observed_own": 338.96,
+    "usd_observed_opus55": 183.62,
+    "share_fleet_observed_own": 0.0104,
+    "share_fleet_observed_opus55": 0.01,
+    "usd_spec_first_write_own": 79.51,
+    "usd_spec_first_write_opus55": 61.88,
+    "usd_observed_own_by_ctx_type": {
+     "main": 160.9,
+     "subagent": 20.77,
+     "workflow_agent": 157.29
+    },
+    "usd_observed_opus55_by_ctx_type": {
+     "main": 84.23,
+     "subagent": 11.07,
+     "workflow_agent": 88.32
+    }
+   },
+   {
+    "source": "project CLAUDE.md [reso]",
+    "contexts": 888,
+    "tokens_median": 14496,
+    "tokens_total_per_ctx_sum": 12895265,
+    "by_ctx_type": {
+     "main": 114,
+     "subagent": 31,
+     "workflow_agent": 743
+    },
+    "by_repo": {
+     "reso": 888
+    },
+    "usd_spec_own": 289.5,
+    "usd_spec_opus55": 155.47,
+    "usd_observed_own": 313.85,
+    "usd_observed_opus55": 180.21,
+    "share_fleet_observed_own": 0.0097,
+    "share_fleet_observed_opus55": 0.0098,
+    "usd_spec_first_write_own": 92.63,
+    "usd_spec_first_write_opus55": 69.49,
+    "usd_observed_own_by_ctx_type": {
+     "main": 113.14,
+     "subagent": 12.14,
+     "workflow_agent": 188.57
+    },
+    "usd_observed_opus55_by_ctx_type": {
+     "main": 65.57,
+     "subagent": 6.65,
+     "workflow_agent": 107.98
+    }
+   },
+   {
+    "source": "mission board (~/.claude/rules/00-mission-board.md)",
+    "contexts": 3372,
+    "tokens_median": 3481,
+    "tokens_total_per_ctx_sum": 10923281,
+    "by_ctx_type": {
+     "main": 744,
+     "subagent": 320,
+     "workflow_agent": 2308
+    },
+    "by_repo": {
+     "infra": 1680,
+     "other": 830,
+     "reso": 862
+    },
+    "usd_spec_own": 280.13,
+    "usd_spec_opus55": 150.68,
+    "usd_observed_own": 307.72,
+    "usd_observed_opus55": 176.08,
+    "share_fleet_observed_own": 0.0095,
+    "share_fleet_observed_opus55": 0.0096,
+    "usd_spec_first_write_own": 78.7,
+    "usd_spec_first_write_opus55": 61.72,
+    "usd_observed_own_by_ctx_type": {
+     "main": 146.33,
+     "subagent": 26.14,
+     "workflow_agent": 135.25
+    },
+    "usd_observed_opus55_by_ctx_type": {
+     "main": 81.79,
+     "subagent": 14.02,
+     "workflow_agent": 80.27
+    }
+   },
+   {
+    "source": "deferred tool names",
+    "contexts": 3372,
+    "tokens_median": 3543,
+    "tokens_total_per_ctx_sum": 9940530,
+    "by_ctx_type": {
+     "main": 640,
+     "subagent": 346,
+     "workflow_agent": 2386
+    },
+    "by_repo": {
+     "infra": 1681,
+     "other": 837,
+     "reso": 854
+    },
+    "usd_spec_own": 241.26,
+    "usd_spec_opus55": 130.52,
+    "usd_observed_own": 265.49,
+    "usd_observed_opus55": 152.98,
+    "share_fleet_observed_own": 0.0082,
+    "share_fleet_observed_opus55": 0.0084,
+    "usd_spec_first_write_own": 69.65,
+    "usd_spec_first_write_opus55": 54.65,
+    "usd_observed_own_by_ctx_type": {
+     "main": 114.21,
+     "subagent": 10.26,
+     "workflow_agent": 141.03
+    },
+    "usd_observed_opus55_by_ctx_type": {
+     "main": 64.26,
+     "subagent": 6.08,
+     "workflow_agent": 82.64
+    }
+   },
+   {
+    "source": "SessionStart hook context",
+    "contexts": 839,
+    "tokens_median": 3980,
+    "tokens_total_per_ctx_sum": 3475893,
+    "by_ctx_type": {
+     "main": 839
+    },
+    "by_repo": {
+     "infra": 538,
+     "other": 187,
+     "reso": 114
+    },
+    "usd_spec_own": 207.21,
+    "usd_spec_opus55": 99.49,
+    "usd_observed_own": 237.54,
+    "usd_observed_opus55": 127.95,
+    "share_fleet_observed_own": 0.0073,
+    "share_fleet_observed_opus55": 0.007,
+    "usd_spec_first_write_own": 35.51,
+    "usd_spec_first_write_opus55": 27.79,
+    "usd_observed_own_by_ctx_type": {
+     "main": 237.54
+    },
+    "usd_observed_opus55_by_ctx_type": {
+     "main": 127.95
+    }
+   },
+   {
+    "source": "project rules bottle-generation-ledger.md [reso]",
+    "contexts": 330,
+    "tokens_median": 19287,
+    "tokens_total_per_ctx_sum": 8140332,
+    "by_ctx_type": {
+     "main": 85,
+     "subagent": 24,
+     "workflow_agent": 221
+    },
+    "by_repo": {
+     "reso": 330
+    },
+    "usd_spec_own": 192.24,
+    "usd_spec_opus55": 115.82,
+    "usd_observed_own": 215.46,
+    "usd_observed_opus55": 138.22,
+    "share_fleet_observed_own": 0.0066,
+    "share_fleet_observed_opus55": 0.0075,
+    "usd_spec_first_write_own": 60.68,
+    "usd_spec_first_write_opus55": 48.8,
+    "usd_observed_own_by_ctx_type": {
+     "main": 141.35,
+     "subagent": 15.79,
+     "workflow_agent": 58.32
+    },
+    "usd_observed_opus55_by_ctx_type": {
+     "main": 89.33,
+     "subagent": 9.81,
+     "workflow_agent": 39.08
+    }
+   },
+   {
+    "source": "project rules agent-operating-lessons.md [other]",
+    "contexts": 606,
+    "tokens_median": 8902,
+    "tokens_total_per_ctx_sum": 6001797,
+    "by_ctx_type": {
+     "main": 99,
+     "subagent": 44,
+     "workflow_agent": 463
+    },
+    "by_repo": {
+     "other": 606
+    },
+    "usd_spec_own": 133.86,
+    "usd_spec_opus55": 69.97,
+    "usd_observed_own": 142.27,
+    "usd_observed_opus55": 78.27,
+    "share_fleet_observed_own": 0.0044,
+    "share_fleet_observed_opus55": 0.0043,
+    "usd_spec_first_write_own": 40.57,
+    "usd_spec_first_write_opus55": 32.52,
+    "usd_observed_own_by_ctx_type": {
+     "main": 48.17,
+     "subagent": 17.21,
+     "workflow_agent": 76.89
+    },
+    "usd_observed_opus55_by_ctx_type": {
+     "main": 27.03,
+     "subagent": 8.24,
+     "workflow_agent": 42.99
+    }
+   },
+   {
+    "source": "agent listing",
+    "contexts": 640,
+    "tokens_median": 2436,
+    "tokens_total_per_ctx_sum": 1801726,
+    "by_ctx_type": {
+     "main": 640
+    },
+    "by_repo": {
+     "infra": 447,
+     "other": 113,
+     "reso": 80
+    },
+    "usd_spec_own": 114.7,
+    "usd_spec_opus55": 55.83,
+    "usd_observed_own": 131.38,
+    "usd_observed_opus55": 72.13,
+    "share_fleet_observed_own": 0.004,
+    "share_fleet_observed_opus55": 0.0039,
+    "usd_spec_first_write_own": 18.07,
+    "usd_spec_first_write_opus55": 14.41,
+    "usd_observed_own_by_ctx_type": {
+     "main": 131.38
+    },
+    "usd_observed_opus55_by_ctx_type": {
+     "main": 72.13
+    }
+   },
+   {
+    "source": "MEMORY.md [reso]",
+    "contexts": 888,
+    "tokens_median": 4320,
+    "tokens_total_per_ctx_sum": 4281047,
+    "by_ctx_type": {
+     "main": 114,
+     "subagent": 31,
+     "workflow_agent": 743
+    },
+    "by_repo": {
+     "reso": 888
+    },
+    "usd_spec_own": 97.88,
+    "usd_spec_opus55": 53.44,
+    "usd_observed_own": 106.63,
+    "usd_observed_opus55": 62.23,
+    "share_fleet_observed_own": 0.0033,
+    "share_fleet_observed_opus55": 0.0034,
+    "usd_spec_first_write_own": 30.86,
+    "usd_spec_first_write_opus55": 23.44,
+    "usd_observed_own_by_ctx_type": {
+     "main": 43.23,
+     "subagent": 4.55,
+     "workflow_agent": 58.85
+    },
+    "usd_observed_opus55_by_ctx_type": {
+     "main": 25.59,
+     "subagent": 2.59,
+     "workflow_agent": 34.06
+    }
+   },
+   {
+    "source": "MEMORY.md [other]",
+    "contexts": 751,
+    "tokens_median": 6470,
+    "tokens_total_per_ctx_sum": 3389675,
+    "by_ctx_type": {
+     "main": 137,
+     "subagent": 84,
+     "workflow_agent": 530
+    },
+    "by_repo": {
+     "other": 751
+    },
+    "usd_spec_own": 77.97,
+    "usd_spec_opus55": 40.43,
+    "usd_observed_own": 83.69,
+    "usd_observed_opus55": 46.03,
+    "share_fleet_observed_own": 0.0026,
+    "share_fleet_observed_opus55": 0.0025,
+    "usd_spec_first_write_own": 22.98,
+    "usd_spec_first_write_opus55": 18.38,
+    "usd_observed_own_by_ctx_type": {
+     "main": 29.07,
+     "subagent": 8.65,
+     "workflow_agent": 45.97
+    },
+    "usd_observed_opus55_by_ctx_type": {
+     "main": 16.29,
+     "subagent": 4.15,
+     "workflow_agent": 25.59
+    }
+   },
+   {
+    "source": "project rules agent-teams.md [reso]",
+    "contexts": 888,
+    "tokens_median": 3130,
+    "tokens_total_per_ctx_sum": 2782751,
+    "by_ctx_type": {
+     "main": 114,
+     "subagent": 31,
+     "workflow_agent": 743
+    },
+    "by_repo": {
+     "reso": 888
+    },
+    "usd_spec_own": 62.46,
+    "usd_spec_opus55": 33.54,
+    "usd_observed_own": 67.71,
+    "usd_observed_opus55": 38.87,
+    "share_fleet_observed_own": 0.0021,
+    "share_fleet_observed_opus55": 0.0021,
+    "usd_spec_first_write_own": 19.99,
+    "usd_spec_first_write_opus55": 14.99,
+    "usd_observed_own_by_ctx_type": {
+     "main": 24.38,
+     "subagent": 2.62,
+     "workflow_agent": 40.72
+    },
+    "usd_observed_opus55_by_ctx_type": {
+     "main": 14.12,
+     "subagent": 1.43,
+     "workflow_agent": 23.31
+    }
+   },
+   {
+    "source": "session_context (gitStatus, userEmail)",
+    "contexts": 3600,
+    "tokens_median": 497,
+    "tokens_total_per_ctx_sum": 2099966,
+    "by_ctx_type": {
+     "main": 853,
+     "subagent": 361,
+     "workflow_agent": 2386
+    },
+    "by_repo": {
+     "infra": 1785,
+     "other": 927,
+     "reso": 888
+    },
+    "usd_spec_own": 57.1,
+    "usd_spec_opus55": 29.9,
+    "usd_observed_own": 62.93,
+    "usd_observed_opus55": 35.12,
+    "share_fleet_observed_own": 0.0019,
+    "share_fleet_observed_opus55": 0.0019,
+    "usd_spec_first_write_own": 15.34,
+    "usd_spec_first_write_opus55": 11.88,
+    "usd_observed_own_by_ctx_type": {
+     "main": 30.86,
+     "subagent": 4.85,
+     "workflow_agent": 27.21
+    },
+    "usd_observed_opus55_by_ctx_type": {
+     "main": 16.74,
+     "subagent": 2.7,
+     "workflow_agent": 15.68
+    }
+   },
+   {
+    "source": "small setup attachments (env, model, auto_mode, date, ...)",
+    "contexts": 3602,
+    "tokens_median": 172,
+    "tokens_total_per_ctx_sum": 1240102,
+    "by_ctx_type": {
+     "main": 855,
+     "subagent": 361,
+     "workflow_agent": 2386
+    },
+    "by_repo": {
+     "infra": 1786,
+     "other": 928,
+     "reso": 888
+    },
+    "usd_spec_own": 52.22,
+    "usd_spec_opus55": 26.47,
+    "usd_observed_own": 58.36,
+    "usd_observed_opus55": 32.39,
+    "share_fleet_observed_own": 0.0018,
+    "share_fleet_observed_opus55": 0.0018,
+    "usd_spec_first_write_own": 10.38,
+    "usd_spec_first_write_opus55": 8.25,
+    "usd_observed_own_by_ctx_type": {
+     "main": 49.04,
+     "subagent": 0.69,
+     "workflow_agent": 8.63
+    },
+    "usd_observed_opus55_by_ctx_type": {
+     "main": 26.4,
+     "subagent": 0.54,
+     "workflow_agent": 5.45
+    }
+   },
+   {
+    "source": "memory-block wrapper text",
+    "contexts": 3533,
+    "tokens_median": 424,
+    "tokens_total_per_ctx_sum": 1495986,
+    "by_ctx_type": {
+     "main": 841,
+     "subagent": 329,
+     "workflow_agent": 2363
+    },
+    "by_repo": {
+     "infra": 1782,
+     "other": 864,
+     "reso": 887
+    },
+    "usd_spec_own": 41.05,
+    "usd_spec_opus55": 21.44,
+    "usd_observed_own": 44.81,
+    "usd_observed_opus55": 24.98,
+    "share_fleet_observed_own": 0.0014,
+    "share_fleet_observed_opus55": 0.0014,
+    "usd_spec_first_write_own": 10.96,
+    "usd_spec_first_write_opus55": 8.52,
+    "usd_observed_own_by_ctx_type": {
+     "main": 22.68,
+     "subagent": 3.47,
+     "workflow_agent": 18.66
+    },
+    "usd_observed_opus55_by_ctx_type": {
+     "main": 12.36,
+     "subagent": 1.87,
+     "workflow_agent": 10.76
+    }
+   },
+   {
+    "source": "MCP server instructions",
+    "contexts": 601,
+    "tokens_median": 814,
+    "tokens_total_per_ctx_sum": 449977,
+    "by_ctx_type": {
+     "main": 601
+    },
+    "by_repo": {
+     "infra": 423,
+     "other": 99,
+     "reso": 79
+    },
+    "usd_spec_own": 25.54,
+    "usd_spec_opus55": 12.74,
+    "usd_observed_own": 30.17,
+    "usd_observed_opus55": 17.08,
+    "share_fleet_observed_own": 0.0009,
+    "share_fleet_observed_opus55": 0.0009,
+    "usd_spec_first_write_own": 4.42,
+    "usd_spec_first_write_opus55": 3.6,
+    "usd_observed_own_by_ctx_type": {
+     "main": 30.17
+    },
+    "usd_observed_opus55_by_ctx_type": {
+     "main": 17.08
+    }
+   },
+   {
+    "source": "UserPromptSubmit hook context (1st prompt)",
+    "contexts": 548,
+    "tokens_median": 389,
+    "tokens_total_per_ctx_sum": 266431,
+    "by_ctx_type": {
+     "main": 548
+    },
+    "by_repo": {
+     "infra": 415,
+     "other": 68,
+     "reso": 65
+    },
+    "usd_spec_own": 18.33,
+    "usd_spec_opus55": 8.87,
+    "usd_observed_own": 20.55,
+    "usd_observed_opus55": 10.98,
+    "share_fleet_observed_own": 0.0006,
+    "share_fleet_observed_opus55": 0.0006,
+    "usd_spec_first_write_own": 2.71,
+    "usd_spec_first_write_opus55": 2.13,
+    "usd_observed_own_by_ctx_type": {
+     "main": 20.55
+    },
+    "usd_observed_opus55_by_ctx_type": {
+     "main": 10.98
+    }
+   },
+   {
+    "source": "other pre-first-response attachments: edited_text_file",
+    "contexts": 61,
+    "tokens_median": 2927,
+    "tokens_total_per_ctx_sum": 178453,
+    "by_ctx_type": {
+     "main": 61
+    },
+    "by_repo": {
+     "infra": 38,
+     "other": 15,
+     "reso": 8
+    },
+    "usd_spec_own": 12.23,
+    "usd_spec_opus55": 5.68,
+    "usd_observed_own": 13.9,
+    "usd_observed_opus55": 7.19,
+    "share_fleet_observed_own": 0.0004,
+    "share_fleet_observed_opus55": 0.0004,
+    "usd_spec_first_write_own": 1.85,
+    "usd_spec_first_write_opus55": 1.43,
+    "usd_observed_own_by_ctx_type": {
+     "main": 13.9
+    },
+    "usd_observed_opus55_by_ctx_type": {
+     "main": 7.19
+    }
+   },
+   {
+    "source": "project CLAUDE.md [other]",
+    "contexts": 129,
+    "tokens_median": 1071,
+    "tokens_total_per_ctx_sum": 304857,
+    "by_ctx_type": {
+     "main": 42,
+     "subagent": 46,
+     "workflow_agent": 41
+    },
+    "by_repo": {
+     "other": 129
+    },
+    "usd_spec_own": 8.27,
+    "usd_spec_opus55": 4.44,
+    "usd_observed_own": 9.63,
+    "usd_observed_opus55": 5.65,
+    "share_fleet_observed_own": 0.0003,
+    "share_fleet_observed_opus55": 0.0003,
+    "usd_spec_first_write_own": 2.31,
+    "usd_spec_first_write_opus55": 2.03,
+    "usd_observed_own_by_ctx_type": {
+     "main": 6.33,
+     "subagent": 1.92,
+     "workflow_agent": 1.38
+    },
+    "usd_observed_opus55_by_ctx_type": {
+     "main": 3.83,
+     "subagent": 1.12,
+     "workflow_agent": 0.7
+    }
+   },
+   {
+    "source": "global rules other",
+    "contexts": 12,
+    "tokens_median": 22,
+    "tokens_total_per_ctx_sum": 35071,
+    "by_ctx_type": {
+     "main": 12
+    },
+    "by_repo": {
+     "other": 12
+    },
+    "usd_spec_own": 0.35,
+    "usd_spec_opus55": 0.28,
+    "usd_observed_own": 0.35,
+    "usd_observed_opus55": 0.28,
+    "share_fleet_observed_own": 0.0,
+    "share_fleet_observed_opus55": 0.0,
+    "usd_spec_first_write_own": 0.35,
+    "usd_spec_first_write_opus55": 0.28,
+    "usd_observed_own_by_ctx_type": {
+     "main": 0.35
+    },
+    "usd_observed_opus55_by_ctx_type": {
+     "main": 0.28
+    }
+   },
+   {
+    "source": "other pre-first-response attachments: ultra_effort_exit",
+    "contexts": 1,
+    "tokens_median": 46,
+    "tokens_total_per_ctx_sum": 46,
+    "by_ctx_type": {
+     "main": 1
+    },
+    "by_repo": {
+     "infra": 1
+    },
+    "usd_spec_own": 0.0,
+    "usd_spec_opus55": 0.0,
+    "usd_observed_own": 0.01,
+    "usd_observed_opus55": 0.0,
+    "share_fleet_observed_own": 0.0,
+    "share_fleet_observed_opus55": 0.0,
+    "usd_spec_first_write_own": 0.0,
+    "usd_spec_first_write_opus55": 0.0,
+    "usd_observed_own_by_ctx_type": {
+     "main": 0.01
+    },
+    "usd_observed_opus55_by_ctx_type": {
+     "main": 0.0
+    }
+   }
+  ],
+  "static_total": {
+   "usd_spec_own": 9873.789999999997,
+   "usd_spec_opus55": 5157.46,
+   "usd_observed_own": 10820.619999999997,
+   "usd_observed_opus55": 6041.289999999997
+  },
+  "rewrites": {
+   "main": {
+    "later_responses": 81169,
+    "static_mostly_rewritten": 914,
+    "rate": 0.0113
+   },
+   "subagent": {
+    "later_responses": 15085,
+    "static_mostly_rewritten": 74,
+    "rate": 0.0049
+   },
+   "workflow_agent": {
+    "later_responses": 60372,
+    "static_mostly_rewritten": 461,
+    "rate": 0.0076
+   }
+  },
+  "static_tokens_per_ctx": {
+   "main": {
+    "median_tokens": 101940,
+    "p90": 140819
+   },
+   "subagent": {
+    "median_tokens": 94192,
+    "p90": 117255
+   },
+   "workflow_agent": {
+    "median_tokens": 94988,
+    "p90": 124328
+   }
+  }
+ },
+ "volatility": {
+  "classes": {
+   "date": {
+    "contexts": 3602,
+    "distinct": 20,
+    "chg_consec": 0.015,
+    "distinct_per_day_mean": 2.3
+   },
+   "session_context": {
+    "contexts": 3600,
+    "distinct": 611,
+    "chg_consec": 0.241,
+    "distinct_per_day_mean": 42.6
+   },
+   "global CLAUDE.md": {
+    "contexts": 3589,
+    "distinct": 18,
+    "chg_consec": 0.046,
+    "distinct_per_day_mean": 2.3
+   },
+   "global rules essay (~/.claude/rules/agent-operating-lessons.md)": {
+    "contexts": 3589,
+    "distinct": 6,
+    "chg_consec": 0.028,
+    "distinct_per_day_mean": 1.3
+   },
+   "skill listing": {
+    "contexts": 3518,
+    "distinct": 139,
+    "chg_consec": 0.21,
+    "distinct_per_day_mean": 12.2
+   },
+   "deferred tool names": {
+    "contexts": 3516,
+    "distinct": 130,
+    "chg_consec": 0.206,
+    "distinct_per_day_mean": 18.7
+   },
+   "mission board (~/.claude/rules/00-mission-board.md)": {
+    "contexts": 3375,
+    "distinct": 534,
+    "chg_consec": 0.227,
+    "distinct_per_day_mean": 36.8
+   },
+   "project CLAUDE.md [infra]": {
+    "contexts": 1911,
+    "distinct": 7,
+    "chg_consec": 0.208,
+    "distinct_per_day_mean": 1.6
+   },
+   "MEMORY.md [infra]": {
+    "contexts": 1757,
+    "distinct": 35,
+    "chg_consec": 0.036,
+    "distinct_per_day_mean": 3.2
+   },
+   "project rules agent-operating-lessons.md [infra]": {
+    "contexts": 1704,
+    "distinct": 101,
+    "chg_consec": 0.105,
+    "distinct_per_day_mean": 7.6
+   },
+   "environment": {
+    "contexts": 1049,
+    "distinct": 546,
+    "chg_consec": 0.579,
+    "distinct_per_day_mean": 37.1
+   },
+   "SessionStart hook context": {
+    "contexts": 964,
+    "distinct": 840,
+    "chg_consec": 0.886,
+    "distinct_per_day_mean": 56.3
+   },
+   "project CLAUDE.md [reso]": {
+    "contexts": 889,
+    "distinct": 2,
+    "chg_consec": 0.001,
+    "distinct_per_day_mean": 1.1
+   },
+   "project rules agent-operating-lessons.md [reso]": {
+    "contexts": 889,
+    "distinct": 17,
+    "chg_consec": 0.054,
+    "distinct_per_day_mean": 1.9
+   },
+   "project rules agent-teams.md [reso]": {
+    "contexts": 889,
+    "distinct": 1,
+    "chg_consec": 0.0,
+    "distinct_per_day_mean": 1.0
+   },
+   "MEMORY.md [reso]": {
+    "contexts": 889,
+    "distinct": 26,
+    "chg_consec": 0.055,
+    "distinct_per_day_mean": 2.6
+   },
+   "agent listing": {
+    "contexts": 769,
+    "distinct": 16,
+    "chg_consec": 0.097,
+    "distinct_per_day_mean": 3.5
+   },
+   "MEMORY.md [other]": {
+    "contexts": 752,
+    "distinct": 32,
+    "chg_consec": 0.119,
+    "distinct_per_day_mean": 3.4
+   },
+   "MCP server instructions": {
+    "contexts": 722,
+    "distinct": 18,
+    "chg_consec": 0.445,
+    "distinct_per_day_mean": 5.7
+   },
+   "project rules agent-operating-lessons.md [other]": {
+    "contexts": 607,
+    "distinct": 20,
+    "chg_consec": 0.086,
+    "distinct_per_day_mean": 2.4
+   },
+   "auto_mode": {
+    "contexts": 594,
+    "distinct": 4,
+    "chg_consec": 0.073,
+    "distinct_per_day_mean": 1.5
+   },
+   "project rules bottle-generation-ledger.md [reso]": {
+    "contexts": 331,
+    "distinct": 16,
+    "chg_consec": 0.082,
+    "distinct_per_day_mean": 2.9
+   },
+   "project CLAUDE.md [other]": {
+    "contexts": 129,
+    "distinct": 8,
+    "chg_consec": 0.055,
+    "distinct_per_day_mean": 1.4
+   }
+  },
+  "memory_block_positions": {
+   "global CLAUDE.md": {
+    "0": 3533,
+    "3": 53,
+    "5": 1,
+    "6": 1,
+    "8": 1
+   },
+   "mission board (~/.claude/rules/00-mission-board.md)": {
+    "1": 3372,
+    "6": 1,
+    "7": 1,
+    "9": 1
+   },
+   "global rules essay (~/.claude/rules/agent-operating-lessons.md)": {
+    "1": 161,
+    "2": 3372,
+    "4": 53,
+    "7": 1,
+    "8": 1,
+    "10": 1
+   },
+   "project CLAUDE.md [infra]": {
+    "2": 103,
+    "3": 1703,
+    "4": 104,
+    "9": 1
+   },
+   "project rules agent-operating-lessons.md [infra]": {
+    "4": 1599,
+    "5": 104,
+    "10": 1
+   },
+   "MEMORY.md [infra]": {
+    "5": 1652,
+    "6": 104,
+    "11": 1
+   },
+   "MEMORY.md [other]": {
+    "2": 1,
+    "3": 55,
+    "4": 686,
+    "5": 9,
+    "9": 1
+   },
+   "project CLAUDE.md [reso]": {
+    "2": 26,
+    "3": 862,
+    "11": 1
+   },
+   "project rules bottle-generation-ledger.md [reso]": {
+    "4": 330,
+    "12": 1
+   },
+   "project rules agent-operating-lessons.md [reso]": {
+    "3": 26,
+    "4": 532,
+    "5": 330,
+    "13": 1
+   },
+   "project rules agent-teams.md [reso]": {
+    "4": 26,
+    "5": 532,
+    "6": 330,
+    "14": 1
+   },
+   "MEMORY.md [reso]": {
+    "5": 26,
+    "6": 532,
+    "7": 330,
+    "15": 1
+   },
+   "project rules agent-operating-lessons.md [other]": {
+    "2": 12,
+    "3": 585,
+    "4": 9,
+    "8": 1
+   },
+   "project CLAUDE.md [other]": {
+    "0": 3,
+    "3": 126
+   }
+  },
+  "workflow_siblings": {
+   "workflow_runs": 128,
+   "runs_with_2plus_agents": 123,
+   "identical_memory_block": 116,
+   "identical_skill_listing": 108,
+   "identical_full_setup": 91,
+   "agents_in_multi_runs": 2396,
+   "agents_matching_run_majority_setup": 2199
+  }
+ },
+ "headline": {
+  "static_attachments_usd_own": 10821,
+  "static_attachments_usd_opus55": 6041,
+  "share_own": 0.333,
+  "share_opus55": 0.33,
+  "system_plus_tools_usd_own": 2155,
+  "system_plus_tools_usd_opus55": 1080,
+  "memory_files_usd_own": 8885,
+  "memory_files_usd_opus55": 4959,
+  "memory_files_in_agents_usd_own": 4184,
+  "memory_files_in_agents_usd_opus55": 2396,
+  "skill_listing_in_agents_usd_own": 605,
+  "skill_listing_in_agents_usd_opus55": 348,
+  "skill_tool_use_rate": {
+   "main": 0.177,
+   "subagent": 0.008,
+   "workflow_agent": 0.002
+  },
+  "workflow_agents_launched_within_20s_of_run_start": [
+   692,
+   2669
+  ],
+  "static_share_of_ctx_type_spend": {
+   "main": 0.3,
+   "subagent": 0.36,
+   "workflow_agent": 0.4
+  }
+ },
+ "opportunities": [
+  {
+   "change": "omitClaudeMd custom agent type for workflow/research agents; rules they need restated in brief",
+   "usd_own": [
+    3350,
+    4184
+   ],
+   "usd_opus55": [
+    1920,
+    2396
+   ],
+   "risk": "medium",
+   "category": "flag"
+  },
+  {
+   "change": "drop skill listing from agent contexts",
+   "usd_own": 605,
+   "usd_opus55": 348,
+   "risk": "low",
+   "category": "flag"
+  },
+  {
+   "change": "mission board out of always-loaded memory -> main-only SessionStart context (or at least sort it after stable files)",
+   "usd_own": 161,
+   "usd_opus55": 94,
+   "risk": "low",
+   "category": "direct"
+  },
+  {
+   "change": "trim infra project rules file to its own stated ~43K-char budget (now 74K)",
+   "usd_own": 770,
+   "usd_opus55": 420,
+   "risk": "low-medium",
+   "category": "flag"
+  },
+  {
+   "change": "global CLAUDE.md slimming, per 10%",
+   "usd_own": 392,
+   "usd_opus55": 220,
+   "risk": "per-cut",
+   "category": "flag"
+  },
+  {
+   "change": "cache breakpoint after setup attachments so workflow siblings read the ~95k setup",
+   "usd_own": 890,
+   "usd_opus55": 750,
+   "risk": "low (feasibility unproven)",
+   "category": "propose"
+  },
+  {
+   "change": "shorten longest skill descriptions so listing covers all skills within budget",
+   "usd_own": 0,
+   "usd_opus55": 0,
+   "risk": "low",
+   "category": "flag"
+  },
+  {
+   "change": "keep ms365 deferred tool names out of agents",
+   "usd_own": 151,
+   "usd_opus55": 89,
+   "risk": "low",
+   "category": "flag"
+  }
+ ]
+}

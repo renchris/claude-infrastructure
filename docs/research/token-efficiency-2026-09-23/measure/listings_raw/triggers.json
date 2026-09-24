@@ -1,0 +1,773 @@
+{
+ "n_sessions": 1052,
+ "n_prompts": 2659,
+ "agent_listing": {
+  "n": 1029,
+  "median_total": 6577,
+  "per_agent": {
+   "deep-research": {
+    "present": 861,
+    "median_chars": 1564
+   },
+   "claude-code-guide": {
+    "present": 792,
+    "median_chars": 1091
+   },
+   "deep-research-sonnet": {
+    "present": 861,
+    "median_chars": 992
+   },
+   "code-reviewer": {
+    "present": 116,
+    "median_chars": 687
+   },
+   "frontier-derivation": {
+    "present": 861,
+    "median_chars": 603
+   },
+   "Explore": {
+    "present": 872,
+    "median_chars": 539
+   },
+   "type-design-analyzer": {
+    "present": 116,
+    "median_chars": 512
+   },
+   "code-simplifier": {
+    "present": 116,
+    "median_chars": 456
+   },
+   "comment-analyzer": {
+    "present": 116,
+    "median_chars": 448
+   },
+   "research-decomposition-critic": {
+    "present": 861,
+    "median_chars": 398
+   },
+   "silent-failure-hunter": {
+    "present": 116,
+    "median_chars": 382
+   },
+   "Plan": {
+    "present": 872,
+    "median_chars": 364
+   },
+   "general-purpose": {
+    "present": 872,
+    "median_chars": 309
+   },
+   "pr-test-analyzer": {
+    "present": 116,
+    "median_chars": 256
+   },
+   "motion-reviewer": {
+    "present": 861,
+    "median_chars": 250
+   },
+   "north-star-design-agent": {
+    "present": 116,
+    "median_chars": 224
+   },
+   "visual-design-iterator": {
+    "present": 116,
+    "median_chars": 203
+   },
+   "fresh-eyes-evaluator": {
+    "present": 116,
+    "median_chars": 192
+   },
+   "schema-migration": {
+    "present": 116,
+    "median_chars": 183
+   },
+   "deep-research-base": {
+    "present": 1,
+    "median_chars": 170
+   },
+   "deep-research-omit": {
+    "present": 1,
+    "median_chars": 170
+   },
+   "deep-research-sonnet-base": {
+    "present": 1,
+    "median_chars": 164
+   },
+   "deep-research-sonnet-omit": {
+    "present": 1,
+    "median_chars": 164
+   },
+   "frontier-derivation-base": {
+    "present": 1,
+    "median_chars": 143
+   },
+   "frontier-derivation-omit": {
+    "present": 1,
+    "median_chars": 143
+   },
+   "research-decomposition-critic-base": {
+    "present": 1,
+    "median_chars": 136
+   },
+   "research-decomposition-critic-omit": {
+    "present": 1,
+    "median_chars": 136
+   },
+   "claude": {
+    "present": 872,
+    "median_chars": 132
+   },
+   "statusline-setup": {
+    "present": 872,
+    "median_chars": 111
+   },
+   "probe-pinned-medium": {
+    "present": 4,
+    "median_chars": 89
+   },
+   "probe-unpinned": {
+    "present": 4,
+    "median_chars": 79
+   },
+   "lean": {
+    "present": 2,
+    "median_chars": 32
+   },
+   "fat": {
+    "present": 2,
+    "median_chars": 31
+   }
+  }
+ },
+ "triggers": {
+  "skill:account-relogin": {
+   "invoked_sessions": 2,
+   "name_mentioned_sessions": 26,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 4,
+   "triggers_seen": [
+    {
+     "trigger": "not logged in \u00b7 please run /login",
+     "sessions": 1,
+     "with_invocation": 0
+    }
+   ],
+   "triggers_unseen": 3
+  },
+  "skill:agent-browser": {
+   "invoked_sessions": 3,
+   "name_mentioned_sessions": 3,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 0,
+   "triggers_seen": [],
+   "triggers_unseen": 0
+  },
+  "skill:agent-teams": {
+   "invoked_sessions": 7,
+   "name_mentioned_sessions": 6,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 2,
+   "triggers_seen": [],
+   "triggers_unseen": 2
+  },
+  "skill:autonomous-authenticated-web-access": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 1,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 2,
+   "triggers_seen": [],
+   "triggers_unseen": 2
+  },
+  "skill:beautiful-mermaid-docs": {
+   "invoked_sessions": 2,
+   "name_mentioned_sessions": 5,
+   "name_mentioned_and_invoked": 2,
+   "declared_triggers": 4,
+   "triggers_seen": [],
+   "triggers_unseen": 4
+  },
+  "skill:browsermcp": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 0,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 5,
+   "triggers_seen": [],
+   "triggers_unseen": 5
+  },
+  "skill:cafe-wifi-optimization": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 1,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 8,
+   "triggers_seen": [],
+   "triggers_unseen": 8
+  },
+  "skill:cc-upgrade-gate": {
+   "invoked_sessions": 1,
+   "name_mentioned_sessions": 4,
+   "name_mentioned_and_invoked": 1,
+   "declared_triggers": 3,
+   "triggers_seen": [],
+   "triggers_unseen": 3
+  },
+  "skill:cc-version-audit": {
+   "invoked_sessions": 1,
+   "name_mentioned_sessions": 3,
+   "name_mentioned_and_invoked": 1,
+   "declared_triggers": 3,
+   "triggers_seen": [],
+   "triggers_unseen": 3
+  },
+  "skill:codex-security": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 3,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 7,
+   "triggers_seen": [],
+   "triggers_unseen": 7
+  },
+  "skill:coding-standards": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 0,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 2,
+   "triggers_seen": [],
+   "triggers_unseen": 2
+  },
+  "skill:corpus-to-skill": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 1,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 2,
+   "triggers_seen": [],
+   "triggers_unseen": 2
+  },
+  "skill:demo-recording": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 0,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 0,
+   "triggers_seen": [],
+   "triggers_unseen": 0
+  },
+  "skill:dia-agent": {
+   "invoked_sessions": 1,
+   "name_mentioned_sessions": 2,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 11,
+   "triggers_seen": [],
+   "triggers_unseen": 11
+  },
+  "skill:frontend-design-vue": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 1,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 3,
+   "triggers_seen": [],
+   "triggers_unseen": 3
+  },
+  "skill:frontier-campaign": {
+   "invoked_sessions": 1,
+   "name_mentioned_sessions": 3,
+   "name_mentioned_and_invoked": 1,
+   "declared_triggers": 1,
+   "triggers_seen": [],
+   "triggers_unseen": 1
+  },
+  "skill:frontier-hole": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 2,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 4,
+   "triggers_seen": [],
+   "triggers_unseen": 4
+  },
+  "skill:frontier-routing": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 3,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 1,
+   "triggers_seen": [],
+   "triggers_unseen": 1
+  },
+  "skill:frontier-run": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 2,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 1,
+   "triggers_seen": [],
+   "triggers_unseen": 1
+  },
+  "skill:grok-wiki-audit": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 1,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 0,
+   "triggers_seen": [],
+   "triggers_unseen": 0
+  },
+  "skill:grok-wiki-cli": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 1,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 0,
+   "triggers_seen": [],
+   "triggers_unseen": 0
+  },
+  "skill:grok-wiki-custom": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 1,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 0,
+   "triggers_seen": [],
+   "triggers_unseen": 0
+  },
+  "skill:ground-up": {
+   "invoked_sessions": 1,
+   "name_mentioned_sessions": 3,
+   "name_mentioned_and_invoked": 1,
+   "declared_triggers": 2,
+   "triggers_seen": [],
+   "triggers_unseen": 2
+  },
+  "skill:kpmg-deck": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 0,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 1,
+   "triggers_seen": [],
+   "triggers_unseen": 1
+  },
+  "skill:manual-command-delivery": {
+   "invoked_sessions": 1,
+   "name_mentioned_sessions": 2,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 5,
+   "triggers_seen": [
+    {
+     "trigger": "silver platter",
+     "sessions": 8,
+     "with_invocation": 0
+    }
+   ],
+   "triggers_unseen": 4
+  },
+  "skill:model-upgrade": {
+   "invoked_sessions": 1,
+   "name_mentioned_sessions": 5,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 4,
+   "triggers_seen": [],
+   "triggers_unseen": 4
+  },
+  "skill:motion": {
+   "invoked_sessions": 1,
+   "name_mentioned_sessions": 10,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 0,
+   "triggers_seen": [],
+   "triggers_unseen": 0
+  },
+  "skill:outbound-drafting": {
+   "invoked_sessions": 13,
+   "name_mentioned_sessions": 2,
+   "name_mentioned_and_invoked": 1,
+   "declared_triggers": 4,
+   "triggers_seen": [],
+   "triggers_unseen": 4
+  },
+  "skill:outlook-cleanup": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 1,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 6,
+   "triggers_seen": [],
+   "triggers_unseen": 6
+  },
+  "skill:permission-harvest": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 4,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 5,
+   "triggers_seen": [],
+   "triggers_unseen": 5
+  },
+  "skill:plan-conventions": {
+   "invoked_sessions": 9,
+   "name_mentioned_sessions": 4,
+   "name_mentioned_and_invoked": 2,
+   "declared_triggers": 4,
+   "triggers_seen": [
+    {
+     "trigger": "why:",
+     "sessions": 11,
+     "with_invocation": 0
+    },
+    {
+     "trigger": "update the plan",
+     "sessions": 4,
+     "with_invocation": 0
+    }
+   ],
+   "triggers_unseen": 2
+  },
+  "skill:plan-update": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 0,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 0,
+   "triggers_seen": [],
+   "triggers_unseen": 0
+  },
+  "skill:pyramid-principle-full": {
+   "invoked_sessions": 6,
+   "name_mentioned_sessions": 11,
+   "name_mentioned_and_invoked": 6,
+   "declared_triggers": 3,
+   "triggers_seen": [],
+   "triggers_unseen": 3
+  },
+  "skill:pyramid-principle": {
+   "invoked_sessions": 8,
+   "name_mentioned_sessions": 3,
+   "name_mentioned_and_invoked": 1,
+   "declared_triggers": 0,
+   "triggers_seen": [],
+   "triggers_unseen": 0
+  },
+  "skill:react-best-practices": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 1,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 0,
+   "triggers_seen": [],
+   "triggers_unseen": 0
+  },
+  "skill:read-twitter": {
+   "invoked_sessions": 5,
+   "name_mentioned_sessions": 6,
+   "name_mentioned_and_invoked": 4,
+   "declared_triggers": 1,
+   "triggers_seen": [],
+   "triggers_unseen": 1
+  },
+  "skill:repo-wiki": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 1,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 4,
+   "triggers_seen": [],
+   "triggers_unseen": 4
+  },
+  "skill:research-subagents": {
+   "invoked_sessions": 12,
+   "name_mentioned_sessions": 7,
+   "name_mentioned_and_invoked": 1,
+   "declared_triggers": 5,
+   "triggers_seen": [],
+   "triggers_unseen": 5
+  },
+  "skill:resume-sessions": {
+   "invoked_sessions": 3,
+   "name_mentioned_sessions": 6,
+   "name_mentioned_and_invoked": 3,
+   "declared_triggers": 7,
+   "triggers_seen": [
+    {
+     "trigger": "stuck",
+     "sessions": 11,
+     "with_invocation": 0
+    }
+   ],
+   "triggers_unseen": 6
+  },
+  "skill:self-explaining-artifact": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 0,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 5,
+   "triggers_seen": [],
+   "triggers_unseen": 5
+  },
+  "skill:vercel-design-guidelines": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 1,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 6,
+   "triggers_seen": [],
+   "triggers_unseen": 6
+  },
+  "skill:video-understanding": {
+   "invoked_sessions": 1,
+   "name_mentioned_sessions": 0,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 0,
+   "triggers_seen": [],
+   "triggers_unseen": 0
+  },
+  "skill:visual-direction": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 1,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 1,
+   "triggers_seen": [],
+   "triggers_unseen": 1
+  },
+  "command:accounts": {
+   "invoked_sessions": 51,
+   "name_mentioned_sessions": 84,
+   "name_mentioned_and_invoked": 51,
+   "declared_triggers": 4,
+   "triggers_seen": [],
+   "triggers_unseen": 4
+  },
+  "command:are-we-done": {
+   "invoked_sessions": 57,
+   "name_mentioned_sessions": 57,
+   "name_mentioned_and_invoked": 57,
+   "declared_triggers": 0,
+   "triggers_seen": [],
+   "triggers_unseen": 0
+  },
+  "command:commit": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 436,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 0,
+   "triggers_seen": [],
+   "triggers_unseen": 0
+  },
+  "command:compact-memory": {
+   "invoked_sessions": 2,
+   "name_mentioned_sessions": 2,
+   "name_mentioned_and_invoked": 2,
+   "declared_triggers": 0,
+   "triggers_seen": [],
+   "triggers_unseen": 0
+  },
+  "command:copy-plan": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 0,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 0,
+   "triggers_seen": [],
+   "triggers_unseen": 0
+  },
+  "command:deploy-check": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 0,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 0,
+   "triggers_seen": [],
+   "triggers_unseen": 0
+  },
+  "command:desk": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 348,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 4,
+   "triggers_seen": [],
+   "triggers_unseen": 4
+  },
+  "command:evolve-skill": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 0,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 0,
+   "triggers_seen": [],
+   "triggers_unseen": 0
+  },
+  "command:fix-lint": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 0,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 0,
+   "triggers_seen": [],
+   "triggers_unseen": 0
+  },
+  "command:handoff": {
+   "invoked_sessions": 21,
+   "name_mentioned_sessions": 142,
+   "name_mentioned_and_invoked": 4,
+   "declared_triggers": 2,
+   "triggers_seen": [],
+   "triggers_unseen": 2
+  },
+  "command:harvest-skill": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 0,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 0,
+   "triggers_seen": [],
+   "triggers_unseen": 0
+  },
+  "command:keep-laptop-alive": {
+   "invoked_sessions": 8,
+   "name_mentioned_sessions": 8,
+   "name_mentioned_and_invoked": 8,
+   "declared_triggers": 3,
+   "triggers_seen": [],
+   "triggers_unseen": 3
+  },
+  "command:limit-recover": {
+   "invoked_sessions": 77,
+   "name_mentioned_sessions": 103,
+   "name_mentioned_and_invoked": 74,
+   "declared_triggers": 10,
+   "triggers_seen": [
+    {
+     "trigger": "not logged in \u00b7 please run /login",
+     "sessions": 1,
+     "with_invocation": 0
+    }
+   ],
+   "triggers_unseen": 9
+  },
+  "command:pr": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 10,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 0,
+   "triggers_seen": [],
+   "triggers_unseen": 0
+  },
+  "command:read-twitter": {
+   "invoked_sessions": 5,
+   "name_mentioned_sessions": 6,
+   "name_mentioned_and_invoked": 4,
+   "declared_triggers": 0,
+   "triggers_seen": [],
+   "triggers_unseen": 0
+  },
+  "command:recover": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 18,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 9,
+   "triggers_seen": [
+    {
+     "trigger": "switch accounts",
+     "sessions": 1,
+     "with_invocation": 0
+    }
+   ],
+   "triggers_unseen": 8
+  },
+  "command:relogin": {
+   "invoked_sessions": 1,
+   "name_mentioned_sessions": 26,
+   "name_mentioned_and_invoked": 1,
+   "declared_triggers": 3,
+   "triggers_seen": [],
+   "triggers_unseen": 3
+  },
+  "command:research": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 211,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 3,
+   "triggers_seen": [],
+   "triggers_unseen": 3
+  },
+  "command:resume-sessions": {
+   "invoked_sessions": 3,
+   "name_mentioned_sessions": 6,
+   "name_mentioned_and_invoked": 3,
+   "declared_triggers": 2,
+   "triggers_seen": [],
+   "triggers_unseen": 2
+  },
+  "command:review": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 52,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 0,
+   "triggers_seen": [],
+   "triggers_unseen": 0
+  },
+  "command:scaffold": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 0,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 0,
+   "triggers_seen": [],
+   "triggers_unseen": 0
+  },
+  "command:ship": {
+   "invoked_sessions": 108,
+   "name_mentioned_sessions": 370,
+   "name_mentioned_and_invoked": 88,
+   "declared_triggers": 0,
+   "triggers_seen": [],
+   "triggers_unseen": 0
+  },
+  "command:skill-promote": {
+   "invoked_sessions": 1,
+   "name_mentioned_sessions": 1,
+   "name_mentioned_and_invoked": 1,
+   "declared_triggers": 0,
+   "triggers_seen": [],
+   "triggers_unseen": 0
+  },
+  "command:wrap": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 61,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 0,
+   "triggers_seen": [],
+   "triggers_unseen": 0
+  },
+  "agent:deep-research-sonnet": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 3,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 0,
+   "triggers_seen": [],
+   "triggers_unseen": 0
+  },
+  "agent:deep-research": {
+   "invoked_sessions": 54,
+   "name_mentioned_sessions": 7,
+   "name_mentioned_and_invoked": 1,
+   "declared_triggers": 2,
+   "triggers_seen": [
+    {
+     "trigger": "fable",
+     "sessions": 63,
+     "with_invocation": 8
+    }
+   ],
+   "triggers_unseen": 1
+  },
+  "agent:frontier-derivation": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 3,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 1,
+   "triggers_seen": [
+    {
+     "trigger": "fable",
+     "sessions": 63,
+     "with_invocation": 0
+    }
+   ],
+   "triggers_unseen": 0
+  },
+  "agent:motion-reviewer": {
+   "invoked_sessions": 0,
+   "name_mentioned_sessions": 0,
+   "name_mentioned_and_invoked": 0,
+   "declared_triggers": 0,
+   "triggers_seen": [],
+   "triggers_unseen": 0
+  },
+  "agent:research-decomposition-critic": {
+   "invoked_sessions": 3,
+   "name_mentioned_sessions": 2,
+   "name_mentioned_and_invoked": 1,
+   "declared_triggers": 0,
+   "triggers_seen": [],
+   "triggers_unseen": 0
+  }
+ }
+}

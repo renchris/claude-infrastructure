@@ -1,0 +1,45 @@
+{
+ "census": {
+  "deduped": 162408,
+  "files": 5026,
+  "models": {
+   "<synthetic>": 705,
+   "claude-fable-5-1": 5080,
+   "claude-haiku-4-5-20251001": 44,
+   "claude-opus-4-7": 70,
+   "claude-opus-4-8": 139,
+   "claude-opus-5": 139532,
+   "claude-opus-5-5": 16100,
+   "claude-sonnet-5": 738
+  },
+  "records": 386893,
+  "repeats": 220321,
+  "roots": [
+   {
+    "acct": "next",
+    "dir": "/Users/chrisren/.claude/projects"
+   },
+   {
+    "acct": "next2",
+    "dir": "/Users/chrisren/.claude-secondary/projects"
+   },
+   {
+    "acct": "next3",
+    "dir": "/Users/chrisren/.claude-tertiary/projects"
+   },
+   {
+    "acct": "next4",
+    "dir": "/Users/chrisren/.claude-quaternary/projects"
+   }
+  ],
+  "unkeyed": 0
+ },
+ "tokens": {
+  "cache_creation": 1089875536,
+  "cache_read": 40952612691,
+  "input": 1229385,
+  "output": 75430106
+ },
+ "verdict": "CENSUS",
+ "window": "2026-09-09"
+}

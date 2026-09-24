@@ -1,0 +1,15 @@
+== /Users/chrisren/.claude-secondary/projects/-Users-chrisren-Development-claude-infrastructure/59935750-76f4-4dd6-bc71-0aa9b27bbff0.jsonl
+jq:     resp=158 records=286 input=316 cc=646735 cr=39733821 out_final=103461 out_first=103461
+sqlite: resp=158 records=286 input=316 cc=646735 cr=39733821 out_final=103461 out_first=103461
+jq:     tool_result=163 errors=3 tool_use=163 attachments=311 attach_rendered_chars=324782 tool_result_chars=192260
+sqlite: tool_result=163 errors=3 tool_use=163 attachments=311 attach_rendered_chars=324782 tool_result_chars=192260
+== /Users/chrisren/.claude/projects/-Users-chrisren-Development-claude-infrastructure/309ec82a-4b8f-43c8-8f79-f8492d4f290f/subagents/agent-ac2311b5989ea4de6.jsonl
+jq:     resp=109 records=186 input=218 cc=428674 cr=35791359 out_final=136366 out_first=31242
+sqlite: resp=109 records=186 input=218 cc=428674 cr=35791359 out_final=136366 out_first=31242
+jq:     tool_result=115 errors=1 tool_use=115 attachments=140 attach_rendered_chars=309256 tool_result_chars=443417
+sqlite: tool_result=115 errors=1 tool_use=115 attachments=140 attach_rendered_chars=309256 tool_result_chars=443417
+== /Users/chrisren/.claude-secondary/projects/-Users-chrisren-Development--worktrees-wt-pool-7/eab98191-18a7-4306-ac3f-12aa3b6be0cf/subagents/workflows/wf_1764024a-a21/agent-a1ccfef17fcfdbac4.jsonl
+jq:     resp=39 records=106 input=78 cc=179276 cr=6137181 out_final=38857 out_first=143
+sqlite: resp=39 records=106 input=78 cc=179276 cr=6137181 out_final=38857 out_first=143
+jq:     tool_result=51 errors=1 tool_use=51 attachments=56 attach_rendered_chars=248381 tool_result_chars=68027
+sqlite: tool_result=51 errors=1 tool_use=51 attachments=56 attach_rendered_chars=248381 tool_result_chars=68027

@@ -1,0 +1,24 @@
+{
+  "axis": "binary-side-requests-cache-layout",
+  "build": "claude-code 2.1.280",
+  "prices_note": "list prices as quota weights; Opus 5.5 $4/$20, read $0.20, write 1.25x(5m)/2x(1h); Haiku 4.5 $1/$5",
+  "experiment_sessions_to_exclude": ["ba4f2f52-ca83-4613-b035-9a683cb22dd8","01175ecd-d32b-4c41-a253-98836fa8eb7d","39b591d4-60cf-48bf-a5da-a86352d1031c","c955125b-c7d8-47ca-8a26-98bf46abfe1d","fe39becc-46df-49d5-9a9f-a6e7b4a457ee","f8bf934e-b19d-40c2-bf79-b87f435edbfd","37f47d43-55a3-44d7-8e53-14db61e885bf"],
+  "experiments": {
+    "common_flags": "claude -p --output-format json --model claude-opus-5-5 --setting-sources project,local (CLAUDE_CONFIG_DIR=~/.claude-secondary inherited)",
+    "a": {"x1": {"read":10459,"create":7210,"ttl":"1h"}, "x2": {"read":10459,"create":7210,"ttl":"1h"},
+          "y1_append_file": {"read":10468,"create":47676,"ttl":"1h"}, "y2_append_file_other_dir": {"read":10468,"create":45767,"ttl":"1h"},
+          "y1b_append_file_same_dir": {"read":58144,"create":0},
+          "verdict": "appended system prompt is NOT reused across different cwds (only ~10.46k global tools+static-system block is); fully reused within the same cwd"},
+    "b": {"lean_omitClaudeMd_first_request": {"read":0,"create":1793,"ttl":"5m","prefix":1795},
+          "fat_first_request": {"read":1357,"create":40916,"ttl":"5m","prefix":42275},
+          "setup": "project CLAUDE.md = copy of global CLAUDE.md (104,973 chars), agents tools: Read"}
+  },
+  "workflow_first_request_cache_MEASURED": {"script":"scripts/wf_first_request_cache.py","workflow_agents":5293,"first_req_read_zero_pct":24.7,
+     "share_prefix_read":0.132,"mean_read_when_reading":18930,"median_prefix":105723,"create_5m_tokens":495393740,"cost_opus55_usd":2492,
+     "agent_tool_subagents":628,"agent_tool_share_read":0.090,"agent_tool_cost_opus55_usd":241},
+  "ttl_resolution": ["FORCE_PROMPT_CACHING_5M","env CLAUDE_CODE_PROMPT_CACHE_TTL (main) / CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL (other)","settings promptCacheTtl / subagentPromptCacheTtl","agent frontmatter experimental.cacheTtl","ENABLE_PROMPT_CACHING_1H -> 1h for all sources","non-subscriber or overage -> 5m","subscriber: 1h if querySource in tengu_prompt_cache_1h_config allowlist (default repl_main_thread*, sdk, auto_mode, memdir_relevance) else 5m"],
+  "side_requests_per_firing_usd_150k_ctx": {"prompt_suggestion":0.032,"away_summary":0.032,"session_title":0.001,"goal_eval_haiku_under_100k":0.01,"goal_eval_haiku_over_100k_sliding":0.125,"compaction":"0.07-0.19 + rewrite","side_question":0.03,"agent_summary_per_30s_100k_agent":0.02},
+  "omitClaudeMd_removes": ["User/Project/Local CLAUDE.md","~/.claude/rules/*.md",".claude/rules/*.md","AutoMem MEMORY.md"],
+  "omitClaudeMd_keeps": ["Managed policy memory (custom agents)","skill listing","agent listing","MCP instructions","deferred tool names","gitStatus (except Explore/Plan)","date","hook context"],
+  "workflow_agentType_supports_custom_agent": true
+}
