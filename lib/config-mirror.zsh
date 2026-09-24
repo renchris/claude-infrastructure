@@ -71,12 +71,13 @@ _cc_linktarget() {   # <path> → sets $_CC_LINK to the raw symlink target ('' i
   fi
 }
 
-# _cc_instructions_variant_target <src> <dst> — the per-account instructions A/B arm.
+# _cc_instructions_variant_target <src> <dst> <name> — the per-account instructions A/B arm.
 #   $src/instruction-variants holds lines "<account-dir-basename> <variant>" (e.g.
-#   ".claude-tertiary slim"); `cc-instructions-variant` is its only writer. For a listed account whose
-#   $src/CLAUDE.<variant>.md exists, sets $_CC_VARIANT_TARGET to that file and returns 0. Anything
-#   else — unlisted, malformed, or a variant file that is missing — returns 1, so the account falls
-#   back to the shared CLAUDE.md and a stale registry line can never leave it without instructions.
+#   ".claude-tertiary slim"); `cc-instructions-variant` is its only writer. For a listed account it
+#   resolves <name> CLAUDE.md to the file $src/CLAUDE.<variant>.md and <name> rules to the directory
+#   $src/rules.<variant>, sets $_CC_VARIANT_TARGET and returns 0. Anything else — unlisted, malformed,
+#   or a variant target that is missing — returns 1, so the entry falls back to the shared one and a
+#   stale registry line can never leave an account without instructions.
 typeset -g _CC_VARIANT_TARGET=''
 _cc_instructions_variant_target() {
   emulate -L zsh
@@ -86,8 +87,12 @@ _cc_instructions_variant_target() {
   while IFS= read -r line; do
     [[ "${line%% *}" == "$acct" ]] || continue
     v="${${line#* }// /}"
-    [[ "$v" =~ '^[a-z0-9-]+$' && -f "$1/CLAUDE.$v.md" ]] || return 1
-    _CC_VARIANT_TARGET="$1/CLAUDE.$v.md"
+    [[ "$v" =~ '^[a-z0-9-]+$' ]] || return 1
+    case "$3" in
+      CLAUDE.md) [[ -f "$1/CLAUDE.$v.md" ]] || return 1; _CC_VARIANT_TARGET="$1/CLAUDE.$v.md" ;;
+      rules)     [[ -d "$1/rules.$v" ]] || return 1; _CC_VARIANT_TARGET="$1/rules.$v" ;;
+      *)         return 1 ;;
+    esac
     return 0
   done < "$reg"
   return 1
@@ -154,9 +159,10 @@ _cc_sync_config_mirror() {
       [[ -L "$dst/$name" ]] && { rm -f "$dst/$name"; print -u2 "config-mirror: un-shared transient '$name' in ${dst:t}"; }
       continue
     fi
-    # An account registered for an instructions A/B arm reads CLAUDE.<variant>.md as its
-    # CLAUDE.md; without this the loop below re-points it at the shared file every session start.
-    [[ "$name" == CLAUDE.md ]] && _cc_instructions_variant_target "$src" "$dst" && e="$_CC_VARIANT_TARGET"
+    # An account registered for an instructions A/B arm reads CLAUDE.<variant>.md as its CLAUDE.md
+    # and rules.<variant>/ as its rules/; without this the loop below re-points both at the shared
+    # entries every session start.
+    [[ "$name" == CLAUDE.md || "$name" == rules ]] && _cc_instructions_variant_target "$src" "$dst" "$name" && e="$_CC_VARIANT_TARGET"
     if [[ -L "$dst/$name" ]]; then
       _cc_linktarget "$dst/$name"
       [[ "$_CC_LINK" == "$e" ]] && continue                               # already the right symlink
