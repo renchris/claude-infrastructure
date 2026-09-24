@@ -1,6 +1,6 @@
 ---
 name: manual-command-delivery
-description: "Load before asking the user to do anything (login, sudo, a blocked or destructive step, a silver platter): write one re-runnable /tmp script that drives every drivable step, gates irreversible ones behind a typed yes, and hand over one command."
+description: "Load before asking the user to do anything (login, sudo, a blocked or destructive step): one re-runnable /tmp script that drives every step, gates irreversible ones behind --confirm <target>, and runs as one command needing zero keystrokes."
 ---
 
 ## Manual-Command Delivery (All Projects)
@@ -25,9 +25,16 @@ question about *the human's consent*. A shell can `DROP TABLE` and `git push --f
 - **Reversible** ⇒ driven silently. This is most steps, and driving them is the whole point.
 - **Irreversible, production-mutating, money-spending, credential-writing, or refused by a
   classifier or permission prompt** ⇒ **GATED**. Print the RESOLVED command (account · target ·
-  row count), one line on what it cannot undo, and why it was blocked; then require a typed `yes`,
-  defaulting to no. Declining skips that step and reports it. Support `--dry-run`.
-- 🚨 **The consent must also be expressible IN THE COMMAND**: `--confirm <target>`, refused unless it
+  row count), one line on what it cannot undo, and why it was blocked. Support `--dry-run`.
+- 🚨 **The command you hand over takes ZERO keystrokes** (operator ruling 2026-09-24): it runs to
+  completion in a regular Terminal and under `!` alike, with no `Type yes`, `read`, "press Enter",
+  pager or editor. Consent rides IN the handed line (`--confirm <target>`, below), and the chat line
+  above `▶ Run this:` states what it changes and cannot undo. A typed-`yes` prompt may remain only
+  as the fallback for a bare run, defaulting to no; the handed command never takes that path. The
+  only residue is interaction the OS or a vendor demands (a `sudo` password or Touch ID, a browser
+  sign-in or MFA); name it above the marker. *(Why: a handed `bash /tmp/agentsync-publish.sh`
+  stopped on a typed-yes prompt, so "one command" still needed the human mid-run.)*
+- 🚨 **The consent is expressed IN THE COMMAND**: `--confirm <target>`, refused unless it
   names the exact target the run changes (any other target ⇒ exit before a single live read), and
   refused together with `--dry-run`. The operator runs handed commands through Claude Code's `!`,
   which has **no keyboard**: a prompt-only gate reads EOF, and a naive `read || answer=""` then
