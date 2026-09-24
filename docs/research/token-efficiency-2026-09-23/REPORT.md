@@ -32,6 +32,13 @@ session at launch; a change ships to all accounts or none. Migration 0037 conver
   the `workflow-lean` worker started 13× smaller (5.3k vs 70.5k tokens), cost 29.5% less per run and was correct
   6/6 vs 5/6. Too small to prove parity; the full offline gate in `TEST_PLAN.md` comes before ~~any account switch~~ any fleet-wide switch (per-account
   switching withdrawn 2026-09-23).
+- **Full offline gate (2026-09-24, blind-judged, `eval/GATE.md`): neither flag ships.** Slim instructions **FAIL**
+  (conviction 85%): 35% cheaper per task (p<0.001, 20/20 tasks), but asked "are we done / good to close?" it
+  claimed safe-to-close over open work in 8 of 10 runs against 1 of 10 on the full file (pooled p=0.0055, all three
+  accounts). `workflow-lean` **FAIL as built** (80%): 87% cheaper per slot and equally correct (verifier 28/28,
+  judge 40/40 in both arms), but 14% more turns (p=0.016) and padded answers (26/40 vs 36/40 on the scope item).
+  In post-gate probes, a one-line scope clause removed the padding, and restoring the full file's "safe to close is
+  an assertion, not a vibe" paragraph fixed one close task but not the other.
 
 ## 1. Harness map and baseline
 
@@ -76,9 +83,9 @@ Savings are list $ per 14.96 days and % of the $32,517 fleet; **status** is what
 
 | # | Change | Layer | Saving (own, %) | Risk | Category | Status |
 |---:|---|---|---:|---|---|---|
-| 1 | Lean worker type for workflow and research agents (`omitClaudeMd`, no Skill/Agent/MCP tools) | agents | $4,169 (12.8%) | med | FLAG | **built**: `agents/workflow-lean.md`, opt-in per slot |
+| 1 | Lean worker type for workflow and research agents (`omitClaudeMd`, no Skill/Agent/MCP tools) | agents | $4,169 (12.8%) | med | FLAG | **built**: `agents/workflow-lean.md`, opt-in per slot · **offline gate FAIL as built 2026-09-24** (padding, +14% turns); re-gate with a scope clause |
 | 2 | Cache breakpoint after the setup attachments | CC binary | $890-1,210 (2.7-3.7%) | low | PROPOSE (upstream) | proposed; flag-level workaround described |
-| 3 | Slim global CLAUDE.md (−54% tokens) | memory | $2,036 (6.3%) | med | FLAG | **built**: `CLAUDE.global.slim.md` + ~~per-account switch~~ (withdrawn 2026-09-23: offline gate, then all accounts or none) |
+| 3 | Slim global CLAUDE.md (−54% tokens) | memory | $2,036 (6.3%) | med | FLAG | **built**: `CLAUDE.global.slim.md` + ~~per-account switch~~ (withdrawn 2026-09-23: offline gate, then all accounts or none) · **offline gate FAIL 2026-09-24** (false safe-to-close, 8/10 vs 1/10); ships to no account |
 | 4 | Project rules split: resident core + situational half (−88% resident) | memory | $1,639 (5.0%) | med | FLAG | **built**: default-neutral split + staged migration 0036 |
 | 5 | Prompt suggestion off (forced on by our env) | settings | ≤$745 outside the total | low | PROPOSE (operator set it on purpose) | proposed |
 | 6 | Idle keepalive for main threads | binary | ≥$549 (1.7%) | low | PROPOSE | proposed |
@@ -190,6 +197,23 @@ script in `eval/raw/`.
   estimate. Next is the full offline gate (F1: 20 tasks × ≥5 runs per arm; F2: 10+ briefs), with fixtures that start
   clean, a private TMPDIR per run, and auto-mode push refusals recorded as their own outcome (they hit both arms).
 
+**Full offline gate (2026-09-24):** full detail in `eval/GATE.md`; the harness is in `eval/harness/` and can be
+re-run, with raw data in `eval/gate/`. The pass/fail rule was fixed in `harness/agg.py` before any result was read.
+- *Slim instructions (F1), 200 runs: 20 tasks, 5 runs per arm each, ABBA order, three accounts. FAIL.* The cost
+  held up ($0.493 vs $0.763, −35.4%, −37.0% on the meter proxy). Success (94/100 vs 98/100) and overall compliance
+  (95.4% vs 97.1%) were not significantly different. Asked "are we 100% complete and ready to close?" (T10), 4 of 5
+  slim runs checked only git and the ledger, never opened the plan, and answered "Good to close: yes" over an open
+  wave. All 5 full runs found it. T08 (dirty tree) showed the same over-claim. The failing slim runs were also the
+  cheapest, so part of the saving is work not done.
+- *`workflow-lean` (F2), 80 slots: 10 briefs, 4 per arm each, run as a Workflow. FAIL as built.* Cost per slot
+  $0.089 vs $0.675 (−86.8%), the same correctness on every check the test could verify, and no writes outside
+  OUTDIR. The guardrails it failed were turns per agent (5.5 vs 4.8) and padded answers.
+- *Post-gate probes, not part of either verdict.* Restoring the full file's "✅ is a safe-to-close assertion"
+  paragraph fixed T08 but not T10; the rest of the difference can be bisected with `harness/build-probe-arm.py`.
+  A one-line scope clause in the lean brief removed the padding at the same cost.
+- *What this decides.* Under the 2026-09-23 ruling this gate replaces the per-account online A/B. The slim
+  instructions ship to no account, and `workflow-lean` stays opt-in and unused by default.
+
 ## 5. Gaps
 
 - **Plan-meter weights are bounded, not measured per class.** Cache reads are ≤¼ of list weight and plausibly 0;
@@ -202,8 +226,8 @@ script in `eval/raw/`.
 - **No tokenizer on transcripts**: splits inside measured deltas use fitted chars-per-token ratios (2.2-2.7).
 - **Time-based microcompact** (server flag) may clear old tool results at request build; if active, re-read costs of
   old tool output are overstated.
-- **Not measured:** latency; the goal evaluator's real cache behaviour; turns per agent under `workflow-lean` at
-  scale; quality under any flag beyond the pilot (the online A/B is the operator's switch; since 2026-09-23 it is
+- **Not measured:** latency; the goal evaluator's real cache behaviour; quality under any flag beyond the pilot and
+  the 2026-09-24 offline gate (the online A/B is the operator's switch; since 2026-09-23 it is
   per session, never per account).
 - **Earlier price fits used first-record output** (`cc-quota-price` before this pass, and the output weight hardcoded
   in `scripts/meter-experiment/analyse.py`): re-fit when the quota-price fit has positive-delta buckets (it abstains
