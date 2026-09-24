@@ -171,7 +171,10 @@ script in `eval/raw/`.
   artifact the fixture builder left in every copy. Where the arms behaved differently the slim runs were not worse:
   both slim runs of the sudo task gated the install behind `--confirm <target>`, neither full run did.
 - *Worker type.* `workflow-lean` first request 5.3k vs 70.5k tokens, 69% fewer subagent tokens, 29.5% lower parent
-  cost, the same number of responses, correct 6/6 vs 5/6.
+  cost, the same number of responses, correct 6/6 vs 5/6. Post-land check: a Workflow `agent()` slot with
+  `agentType: 'workflow-lean'` and a `schema` returned a valid structured result in a fresh session, first request
+  5,149 tokens (a default workflow agent writes ~130k). A session started before the land cannot see the type: agent
+  definitions load at session start.
 - *Limits.* n = 2 per arm per item: the quality differences are within noise, and the cost difference is a pilot
   estimate. Next is the full offline gate (F1: 20 tasks × ≥5 runs per arm; F2: 10+ briefs), with fixtures that start
   clean, a private TMPDIR per run, and auto-mode push refusals recorded as their own outcome (they hit both arms).
