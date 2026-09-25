@@ -477,7 +477,7 @@ measured this unit) and `statusline.sh` is a COPY; W3 does not land until this p
 |---|---|---|
 | R1 capacity gate | `capacity-admit.sh:782-792` ceiling 8 + load term (U05); `lr-fire-resume.sh:322` second gate exit 9 = today's 4 PARTIALs (U03) | W1's beat takes ACTIVE 10→7 so the refusal becomes an admission — land R1 knowing the arithmetic moved |
 | R2 kick + request lane | flip `.kick-on`; plist QueueDirectories/ThrottleInterval (P7 Part B); `--enqueue` writes one request per row and the drain runs ~45 s serial `--one`s inside one lock (U06 gap 2) | W3's TICK-SKIP/heartbeat/account-map guard must be live FIRST (P7 Part C) |
-| R3 husk closure | `successor_pin` (`handoff-fire.sh:3435`) refuses an expect-rooted successor whose pty is a child of the pane's tty (lead-findings § Husk retirement); `cc-teardown` DEFERs a dirty/unpushed pane | `faults/<sid>.json` + `--reaper` NAME the husk; nothing here closes it |
+| R3 husk closure — **CLOSED `6f0353ff8` (W9b, 2026-09-20); bg-daemon shape pinned 2026-09-25, § 13 last entry** | `successor_pin` (`handoff-fire.sh:3435`) refused an expect-rooted successor whose pty is a child of the pane's tty (lead-findings § Husk retirement); `cc-teardown` DEFERs a dirty/unpushed pane | `faults/<sid>.json` + `--reaper` NAME the husk; nothing here closes it |
 | R4 in-place recycle transport | `lr-fire-resume` → expect → cc-close-attrib shape is non-recyclable; kitty transport library (U02, U03, U04, U08) | the census's PANE-REUSED / RESUMING states are the oracle a transport can read back |
 | R5 engagement oracle | `handoff-fire.sh:6811/6815` 90 s dead-waits, `:6879` unattributed verdict (U04); poller NOT-ENGAGED `:373` | `CC_LIMITED_CLAIM_GRACE_S` (120 s) is the seam that moves when the dead-wait is shortened |
 | R6 ranker / target | `claude-accounts --rank` vs lr-fleet's dry run disagree; reasons discarded at `lr-fleet.sh:301` (U13); `claude-accounts` not on PATH in an expect-launched session (lead-findings 3) | `cc-limited --json` carries `acct_now`/`acct_death`; the ranker consumes it |
@@ -1115,3 +1115,28 @@ is yours to rule; the token path there never reads it. Re-anchor every `file:lin
 `1b2676f4c` before firing W1–W3.
 
 - 2026-09-20 — **W5 CLOSED from a DISPATCHED session, not lead-inline** (Phase 0 locus changed at fire time: the lead was past its succession point, so § 3's `L` for this wave is superseded by `S`). The chip itself was already on trunk from the sibling (`33a9563fb` + `aaedbf3dd`), exactly as this § 13 says, so the wave delivered only what § 11 #13 makes the actual gate: the zero-subprocess fork gate, plus the five render cases the landed five do not reach — 30-column clip, BOTH sources absent, set-but-empty `KITTY_WINDOW_ID`, colonless `ITERM_SESSION_ID`, column-0 anchoring when no ordinal renders — taking the identity layer to 10 render rows + 1 gate (`tests/statusline-identity.bats` 34/34, plan line `1..34`). Four things a successor should not re-derive. **(a)** The cure predates the tests, so no row can go red against pristine HEAD; each is red-proofed by a stated MUTANT instead, all six executed and pasted in the suite's `# RED-PROOF` footer. **(b)** One of those mutants SURVIVED and is recorded rather than hidden: `${KITTY_WINDOW_ID:-}` → `${KITTY_WINDOW_ID-}` leaves the set-but-empty row green, because both spellings yield "" and the iTerm2 fallback is guarded on the resulting VALUE, not on set-ness — so the suite is blind to that one character and the row's original rationale was wrong until the mutant refuted it. **(c)** § 11 #13's literal spelling ("no `|`") is FALSE against the landed block, which carries `||` and a locale `case` alternation and forks nothing; the gate therefore matches the CLASS (delete-then-match) and ships a positive control so it can convict as well as acquit. **(d)** The § 4 DoD clause `neither ⇒ #? <sid8>` is NOT implemented and must not be — the sibling deliberately rejected the placeholder ("a placeholder identifies nothing and makes its own absence unfalsifiable"), row 25 now pins its ABSENCE, and it is the DoD that was wrong, not the code. P6 re-measured: +1.6 ms CPU/render (30 renders × 3 reps, 56.1 → 57.7 ms) — inside the ±3 ms band and inside the 4 ms within-arm spread, which is § 11 #13's own point that the band cannot resolve the effect.
+
+- 2026-09-25 · **R3 CLOSED, and the third "a recovered session has no pane address" report had a cause that is not ours
+  (branch `recover-pane-address`).** The report blamed the limit-recover relaunch. Measured on reso wt-pool-2, that
+  relaunch (pid 76287, run by `lr-fire-resume.sh` under expect) carried `KITTY_WINDOW_ID=405` + `ITERM_SESSION_ID=w0t0p0:405` and
+  held a correct row. Occurrences 1–2 (no `ITERM_SESSION_ID` under expect) were already fixed by W1's `KITTY_WINDOW_ID`
+  fallback (`5d45af7f6`), and R3 by W9b's ancestry pin (`6f0353ff8`). The session that lost its address, bb4e00d0, was
+  a **Claude Code 2.1.280 background fork**. The operator backgrounded the session ("Backgrounding after the current
+  tool finishes…" → `continued-in`), and the daemon started `claude --session-id <new> --fork-session --resume <parent>.jsonl`
+  with `CLAUDE_CODE_SESSION_KIND=bg`, stripping `KITTY_WINDOW_ID` / `ITERM_SESSION_ID` through an explicit denylist.
+  Window 405 went on displaying it, as a viewer. The fix has three parts:
+  - `hooks/session-register.sh` adopts the pane by LINEAGE. The parent sid comes from our own argv, and the change
+    applies only when exactly one row names that parent. The pane is re-registered under the new pid and sid, and
+    the address is exported through `CLAUDE_ENV_FILE`.
+  - `hooks/mailbox-drain.sh` falls back to the row that names its own session, because a bg session was deaf to
+    `--notify-back`.
+  - `handoff-fire.sh --recycle` now REFUSES a bg session. `/exit` there only DETACHES the viewer
+    (`docs/research/bg-session-semantics-2026-09-25.md` § Q3), so restoring the address must not turn a refusal into
+    a second live copy. `bin/cc-bats` clears the mark so a suite run from a bg session reads its subject, not its runner.
+
+  Tests: `tests/session-register-bg-fork.bats` 10, `tests/handoff-recycle-bg-session.bats` 8, and two
+  `successor_pin` cases in `tests/handoff-selfclose-transplanted-source.bats`. Every case that was new behaviour ran
+  RED on trunk before the fix. The R3 `successor_pin` case is red on `6f0353ff8^` and green since, which ratifies W9b
+  rather than proving anything new. **Residual, named:** the remote-recycle bg arm (`hf_bg_hosted "$HF_REMOTE_ROW_PID"`) is
+  unit-tested on the oracle only, and no end-to-end remote fixture drives it. Continuing a bg session in place has no sanctioned
+  verb. The refusal routes to a split-right handoff or `/stop`.
