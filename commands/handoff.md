@@ -356,6 +356,22 @@ transcript-activity proxy. Static hint orders are retired — two of them contra
 within 48h. If a fired session rate-limits, relaunch the SAME worktree on another `claude-nextN`
 (no rework). Account = launcher suffix only; the worktree is account-agnostic.
 
+🚨 **When the operator overrides a HALT, keep the router's objective — never pick by headroom.**
+An operator "fire now" over a no-routable refusal authorizes firing, not a new ranking. Choose
+among the accounts refused ONLY by `kmax-concurrency` (a load cap, not a quota fact — never a
+`weekly-exhausted` / `5h-cutoff` one), by the same urgency the router uses, weekly headroom ÷
+hours-to-reset²:
+
+```bash
+claude-accounts --json | jq -r '[.rows[] | select(.route_reasons.general == "kmax-concurrency")
+  | . + {u: ((1 - .weekly_pct/100) / ((.weekly_reset_h // 168) | . * .))}] | max_by(.u) | .acct'
+```
+
+then pass that as `--account`. *(2026-09-25: the router refused all four, and the fire was
+hand-routed to the account with the most headroom — `next3`, whose week resets LAST (91 h), over
+`next` (35 h), whose unused quota was about to die. The refusal itself was a counting defect —
+finished headless jobs were counted as live sessions — fixed in `bound_kwork`, `bin/claude-accounts`.)*
+
 **2a · Pre-fire account sweep — never hand off blind to a stranded account.** BEFORE it ranks,
 `handoff-fire.sh` runs `claude-accounts --fresh` (which auto-heals STALE accounts in-process and
 rewrites the shared cache the `--rank` above then reads) and inspects every account's auth. For each
