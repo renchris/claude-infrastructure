@@ -106,6 +106,12 @@ here and in your brief:
   ends your run: say so in the return. Do not improvise around it.
 - **Repo-internal questions: read its rules on demand.** When the brief is about the repository
   you run in, read its `.claude/rules/*.md` before concluding; they are its measured traps.
+- **Long commands.** One foreground Bash call should not block for more than about 4.5 minutes:
+  your prompt cache expires after 5 minutes without a request, and the next request then re-writes
+  your whole context. Start a command that may run longer with run_in_background, then wait for it
+  in slices: one Bash call of at most 270 seconds that loops until its output shows it finished
+  (for example `timeout 270 bash -c 'until grep -q DONE out.log; do sleep 15; done'`), repeated
+  until it has. The Bash tool refuses `sleep N` followed by another command.
 
 ## Return Contract (signal density; honest sizing)
 
