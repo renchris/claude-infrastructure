@@ -171,6 +171,66 @@ jqv() { jq -r "$1" < "$D/out.json"; }   # <filter> → its value, for `run`
   [[ "$output" == *"withheld"* ]] || { echo "did not reclassify to HARD: $output"; false; }
 }
 
+# ── producer diagnosis: WHICH of three states, never a blanket "appears to be down" ──────────────
+# 2026-09-24: the hook said "appears to be down" while the job was loaded and RUNNING — one tick
+# 3h40m old, starved at PRI 4. launchctl and ps are stubbed on PATH so every state is reachable and
+# none of these reads the live box.
+stub_launchd() {  # <running|unloaded|idle0|idle14>
+  mkdir -p "$D/bin"
+  cat > "$D/bin/launchctl" <<EOF
+#!/bin/bash
+case "$1" in
+  running) printf '{\n\t"LastExitStatus" = 14;\n\t"PID" = 4242;\n};\n' ;;
+  idle0)   printf '{\n\t"LastExitStatus" = 0;\n};\n' ;;
+  idle14)  printf '{\n\t"LastExitStatus" = 14;\n};\n' ;;
+  *)       echo 'Could not find service' >&2; exit 113 ;;
+esac
+EOF
+  printf '#!/bin/bash\necho " 03:40:12"\n' > "$D/bin/ps"
+  chmod +x "$D/bin/launchctl" "$D/bin/ps"
+  export PATH="$D/bin:$PATH"
+}
+
+@test "10b HARD band + a RUNNING producer: names the stuck tick, its age and the restart — not 'down'" {
+  stub_launchd running; mk_board; age_board 7200
+  run emit startup
+  [ "$status" -eq 0 ]
+  run jqv '.systemMessage'
+  [[ "$output" == *"RUNNING"* && "$output" == *"pid 4242"* && "$output" == *"03:40:12"* ]] \
+    || { echo "running tick not described: $output"; false; }
+  [[ "$output" == *"launchctl kickstart -k gui/$UID/com.claude.accounts-keepwarm"* ]] \
+    || { echo "no pasteable restart command: $output"; false; }
+  [[ "$output" != *"appears to be down"* ]] || { echo "the misdiagnosis is back: $output"; false; }
+  [[ "$output" != *"$BOARDTOK"* ]] || { echo "ancient numbers were PRINTED: $output"; false; }
+}
+
+@test "10c an UNLOADED producer is named as not loaded, with the bootstrap command" {
+  stub_launchd unloaded; mk_board; age_board 7200
+  emit startup; run jqv '.systemMessage'
+  [[ "$output" == *"NOT LOADED"* && "$output" == *"launchctl bootstrap gui/$UID"* ]] \
+    || { echo "unloaded producer not named: $output"; false; }
+}
+
+@test "10d an IDLE producer: a clean exit and a failing exit are told apart" {
+  stub_launchd idle14; mk_board; age_board 7200
+  emit startup; run jqv '.systemMessage'
+  [[ "$output" == *"last exit 14"* && "$output" == *"err.log"* ]] || { echo "failing exit: $output"; false; }
+  stub_launchd idle0
+  emit startup; run jqv '.systemMessage'
+  [[ "$output" == *"exited 0 without refreshing"* && "$output" == *"out.log"* ]] \
+    || { echo "clean exit misread as failing: $output"; false; }
+}
+
+@test "10e the STALE band and the MISSING board carry the same diagnosis" {
+  stub_launchd running; mk_board; age_board 600
+  emit startup; run jqv '.systemMessage'
+  [[ "$output" == *"STALE"* && "$output" == *"RUNNING"* && "$output" == *"$BOARDTOK"* ]] \
+    || { echo "stale band lost the diagnosis or the board: $output"; false; }
+  rm -f "$CC_ACCOUNTS_BOARD"
+  emit startup; run jqv '.systemMessage'
+  [[ "$output" == *"unavailable"* && "$output" == *"RUNNING"* ]] || { echo "missing: $output"; false; }
+}
+
 @test "11 a compact SessionStart is silent — the board marks a beginning, not a mid-task event" {
   mk_board
   run emit compact
@@ -529,4 +589,37 @@ for l in rows:
     assert re.fullmatch(r\"\\s*(-|—|[0-9]+pp)\", cell), \"strand cell misaligned in %r: %r\" % (l, cell)
 '"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+# ── the producer's plist: the priority band and the startup deadline ──────────────────────────
+# 2026-09-24: under ProcessType Background (PRI 4) at load ~250 on 10 cores, a tick sat 3h40m in
+# dyld at 0.04 s of CPU — before claude-accounts could arm its own SIGALRM — and launchd never
+# overlaps ticks, so the SessionStart board was withheld for hours.
+PLIST_KW="launchd/staged/com.claude.accounts-keepwarm.plist"
+
+@test "26 the keepwarm plist runs at Standard priority — Background starved the board for hours" {
+  command -v plutil >/dev/null 2>&1 || skip "plutil is Darwin-only"
+  run plutil -extract ProcessType raw "$REPO/$PLIST_KW"
+  [ "$output" = "Standard" ] || { echo "ProcessType is $output"; false; }
+  run plutil -extract LowPriorityIO raw "$REPO/$PLIST_KW"
+  [ "$status" -ne 0 ] || { echo "LowPriorityIO is back: $output"; false; }
+}
+
+@test "27 the plist's own command kills a tick stalled BEFORE the interpreter arms its alarm" {
+  command -v plutil >/dev/null 2>&1 || skip "plutil is Darwin-only"
+  cmd="$(plutil -extract ProgramArguments.2 raw "$REPO/$PLIST_KW")"
+  short="${cmd/ 240 / 1 }"                         # the real command, bound shrunk to 1s
+  [ "$short" != "$cmd" ] || { echo "the 240s bound moved — mutation did not apply: $cmd"; false; }
+  mkdir -p "$HOME/.claude/bin"
+  # A stand-in that never reaches Python: exactly the stall the in-process alarm cannot see.
+  printf '#!/bin/bash\nexec /bin/sleep 20\n' > "$HOME/.claude/bin/claude-accounts"
+  chmod +x "$HOME/.claude/bin/claude-accounts"
+  s=$SECONDS; run /bin/bash -c "$short"; el=$(( SECONDS - s ))
+  [ "$status" -eq 142 ] || { echo "not killed by SIGALRM: rc=$status $output"; false; }
+  [ "$el" -lt 10 ] || { echo "took ${el}s — the bound did not fire"; false; }
+  # Positive control: a tick that finishes inside the bound is untouched and its rc passes through.
+  printf '#!/bin/bash\necho "args:$*"\n' > "$HOME/.claude/bin/claude-accounts"
+  run /bin/bash -c "$cmd"
+  [ "$status" -eq 0 ] && [[ "$output" == "args:--keepwarm --max-age 90" ]] \
+    || { echo "a healthy tick was disturbed: rc=$status $output"; false; }
 }

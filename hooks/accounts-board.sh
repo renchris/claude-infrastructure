@@ -26,7 +26,7 @@
 # probe. A hook that shells out to it recreates exactly the class of defect W0 had just removed
 # (a 21-29s SessionStart, hooks dying on their own timeouts). So the read is a `cat` of a file
 # somebody else already rendered — the producer is the `com.claude.accounts-keepwarm` launchd job
-# (StartInterval 60), which sweeps the account cache anyway and now writes the board in the same
+# (launchd/staged/, StartInterval 180), which sweeps the account cache anyway and now writes the board in the same
 # pass. tests/accounts-board.bats asserts this hook forks NO claude-accounts, with a positive
 # control proving that fixture can actually see such a call.
 #
@@ -53,7 +53,33 @@ STALE_S="${CC_BOARD_STALE_S:-300}"
 HARD_S="${CC_BOARD_HARD_S:-3600}"
 # Named here rather than inlined in the message: it is the one thing an operator staring at
 # "unavailable" needs, and it is also what a future reader greps for to find the producer.
-PRODUCER="com.claude.accounts-keepwarm (launchd, StartInterval 60)"
+# No interval in it: "StartInterval 60" sat here for six weeks after the plist moved to 180.
+LABEL="com.claude.accounts-keepwarm"
+PRODUCER="$LABEL (launchd)"
+
+# WHY the producer is not refreshing, from ONE read of launchd's own record. This hook used to say
+# "appears to be down" for every stale board, and on 2026-09-24 that sent the reader to the wrong
+# fault: the job was loaded and RUNNING — one tick 3h40m old at 0.04s of CPU, starved at PRI 4 —
+# and `launchctl list | grep` shows a PID, which reads as healthy. The three states need three
+# different actions, so the message names which one it is. Runs only off the fresh path, and
+# `launchctl list <label>` + one `ps` fit easily inside the hook's 5s budget.
+producer_state() {
+  local info pid et rc
+  info="$(launchctl list "$LABEL" 2>/dev/null)" \
+    || { printf 'is NOT LOADED, so nothing refreshes this board.\n  Install: launchctl bootstrap gui/%s ~/Library/LaunchAgents/%s.plist (source: launchd/staged/)' "$UID" "$LABEL"; return; }
+  pid="$(printf '%s\n' "$info" | sed -n 's/^[[:space:]]*"PID" = \([0-9][0-9]*\);.*/\1/p')"
+  if [ -n "$pid" ]; then
+    et="$(ps -o etime= -p "$pid" 2>/dev/null | tr -d ' ')"
+    printf 'is RUNNING but its current tick (pid %s) is %s old, where a healthy one takes seconds:\n  starved or wedged. Restart it: launchctl kickstart -k gui/%s/%s' "$pid" "${et:-?}" "$UID" "$LABEL"
+    return
+  fi
+  rc="$(printf '%s\n' "$info" | sed -n 's/^[[:space:]]*"LastExitStatus" = \(-\{0,1\}[0-9][0-9]*\);.*/\1/p')"
+  if [ "$rc" = "0" ]; then
+    printf 'is loaded and idle, and its last tick exited 0 without refreshing the board.\n  Read the board= field: tail ~/.claude/logs/accounts-keepwarm.out.log'
+  else
+    printf 'is loaded and idle, last exit %s, so its ticks are failing.\n  Read: tail ~/.claude/logs/accounts-keepwarm.err.log' "${rc:-unknown}"
+  fi
+}
 
 emit() {  # <message> → the ONE sanctioned channel, top-level, never nested, never additionalContext
   jq -nc --arg m "$1" '{systemMessage:$m}' 2>/dev/null || true
@@ -71,7 +97,7 @@ src="$(printf '%s' "$input" | jq -r '.source // ""' 2>/dev/null || true)"
 [ "$src" = "compact" ] && exit 0
 
 [ -f "$BOARD" ] || emit "accounts board unavailable — nothing pre-rendered at $BOARD.
-  Producer: $PRODUCER. Check: launchctl list | grep accounts-keepwarm
+  Producer $PRODUCER $(producer_state)
   For the live table right now, run: claude-accounts"
 
 now="$(date +%s)"
@@ -107,13 +133,14 @@ if [ "$age" -ge "$HARD_S" ]; then
   # old, they can be describing a window that no longer exists.
   emit "accounts board is $(fmt_age "$age") old — numbers withheld as unsafe to read (the 5h
   window it reports rolls every 5h, so a board this old can describe a window that has ended).
-  Producer $PRODUCER appears to be down. Check: launchctl list | grep accounts-keepwarm
+  Producer $PRODUCER $(producer_state)
   For the live table, run: claude-accounts"
 fi
 
 if [ "$age" -ge "$STALE_S" ]; then
-  emit "⚠ STALE by $(fmt_age "$age") — $PRODUCER has not refreshed this board; the numbers below
-  are last-known, not current. Live table: claude-accounts
+  emit "⚠ STALE by $(fmt_age "$age") — the numbers below are last-known, not current.
+  Producer $PRODUCER $(producer_state)
+  Live table: claude-accounts
 
 $body"
 fi

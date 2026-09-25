@@ -710,7 +710,8 @@ def working_concurrency(cfg, window_min=None, budget_s=None):
     i.e. it would break the very re-pick path this budget exists to feed. RESIDUAL: the extreme
     tail (walks reaching <500 dirs in 5 s) is the QoS band, not the budget. If the unmeasured
     fraction stays above 30%, the next lever is the plist's ProcessType — a launchd edit, operator-
-    owned — never a router constant.
+    owned — never a router constant. PULLED 2026-09-24: the plist is ProcessType Standard, after a
+    PRI-4 tick starved 3h40m at 0.04 s of CPU and left the SessionStart board withheld for hours.
 
     THE BUDGET, 2.0 -> 5.0 (W1.7, and it is not a "just raise the timeout" — the number was
     sized against the wrong distribution). The measured walk is 0.04-0.07 s over 826 transcripts,
