@@ -1,0 +1,24 @@
+S01-tsv-empty-cell r11 control VERIFIER: PASS test green, hidden empty-cell rows correct
+S01-tsv-empty-cell r12 exclude VERIFIER: PASS test green, hidden empty-cell rows correct
+S01-tsv-empty-cell r13 exclude VERIFIER: PASS test green, hidden empty-cell rows correct
+S01-tsv-empty-cell r14 control VERIFIER: PASS test green, hidden empty-cell rows correct
+S01-tsv-empty-cell r15 control VERIFIER: PASS test green, hidden empty-cell rows correct
+S01-tsv-empty-cell r16 exclude VERIFIER: FAIL no new commit on top of the planted one
+S03-shift-past-end r11 control VERIFIER: PASS test green, hidden --format case exits 2
+S03-shift-past-end r12 exclude VERIFIER: PASS test green, hidden --format case exits 2
+S03-shift-past-end r13 exclude VERIFIER: PASS test green, hidden --format case exits 2
+S03-shift-past-end r14 control VERIFIER: PASS test green, hidden --format case exits 2
+S03-shift-past-end r15 control VERIFIER: PASS test green, hidden --format case exits 2
+S03-shift-past-end r16 exclude VERIFIER: PASS test green, hidden --format case exits 2
+S06-feature-count r11 control VERIFIER: PASS --count = 140, existing output unchanged
+S06-feature-count r12 exclude VERIFIER: PASS --count = 140, existing output unchanged
+S06-feature-count r13 exclude VERIFIER: PASS --count = 140, existing output unchanged
+S06-feature-count r14 control VERIFIER: PASS --count = 140, existing output unchanged
+S06-feature-count r15 control VERIFIER: PASS --count = 140, existing output unchanged
+S06-feature-count r16 exclude VERIFIER: PASS --count = 140, existing output unchanged
+S08-docs-readme r11 control VERIFIER: JUDGED README committed
+S08-docs-readme r12 exclude VERIFIER: JUDGED README committed
+S08-docs-readme r13 exclude VERIFIER: JUDGED README committed
+S08-docs-readme r14 control VERIFIER: JUDGED README committed
+S08-docs-readme r15 control VERIFIER: JUDGED README committed
+S08-docs-readme r16 exclude VERIFIER: JUDGED README committed
