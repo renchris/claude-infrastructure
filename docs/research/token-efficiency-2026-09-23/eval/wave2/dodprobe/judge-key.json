@@ -1,0 +1,146 @@
+{
+ "D1250": {
+  "task": "T07-close-unpushed",
+  "cell": "U-T07",
+  "arm": "default",
+  "rep": "r1"
+ },
+ "D9952": {
+  "task": "T07-close-unpushed",
+  "cell": "U-T07",
+  "arm": "lineage",
+  "rep": "r2"
+ },
+ "D3379": {
+  "task": "T07-close-unpushed",
+  "cell": "U-T07",
+  "arm": "lineage",
+  "rep": "r3"
+ },
+ "D1936": {
+  "task": "T07-close-unpushed",
+  "cell": "U-T07",
+  "arm": "default",
+  "rep": "r4"
+ },
+ "D7990": {
+  "task": "T07-close-unpushed",
+  "cell": "U-T07",
+  "arm": "default",
+  "rep": "r5"
+ },
+ "D5556": {
+  "task": "T07-close-unpushed",
+  "cell": "U-T07",
+  "arm": "lineage",
+  "rep": "r6"
+ },
+ "D7024": {
+  "task": "T10-status-plan",
+  "cell": "U-T10",
+  "arm": "default",
+  "rep": "r1"
+ },
+ "D8257": {
+  "task": "T10-status-plan",
+  "cell": "L-T10",
+  "arm": "default",
+  "rep": "r11"
+ },
+ "D9828": {
+  "task": "T10-status-plan",
+  "cell": "L-T10",
+  "arm": "lineage",
+  "rep": "r12"
+ },
+ "D6457": {
+  "task": "T10-status-plan",
+  "cell": "L-T10",
+  "arm": "lineage",
+  "rep": "r13"
+ },
+ "D6655": {
+  "task": "T10-status-plan",
+  "cell": "L-T10",
+  "arm": "default",
+  "rep": "r14"
+ },
+ "D8233": {
+  "task": "T10-status-plan",
+  "cell": "L-T10",
+  "arm": "default",
+  "rep": "r15"
+ },
+ "D9855": {
+  "task": "T10-status-plan",
+  "cell": "L-T10",
+  "arm": "lineage",
+  "rep": "r16"
+ },
+ "D5001": {
+  "task": "T10-status-plan",
+  "cell": "U-T10",
+  "arm": "lineage",
+  "rep": "r2"
+ },
+ "D1955": {
+  "task": "T10-status-plan",
+  "cell": "U-T10",
+  "arm": "lineage",
+  "rep": "r3"
+ },
+ "D5320": {
+  "task": "T10-status-plan",
+  "cell": "U-T10",
+  "arm": "default",
+  "rep": "r4"
+ },
+ "D4376": {
+  "task": "T10-status-plan",
+  "cell": "U-T10",
+  "arm": "default",
+  "rep": "r5"
+ },
+ "D5353": {
+  "task": "T10-status-plan",
+  "cell": "U-T10",
+  "arm": "lineage",
+  "rep": "r6"
+ },
+ "D1591": {
+  "task": "T18-plan-mark-done",
+  "cell": "L-T18",
+  "arm": "default",
+  "rep": "r11"
+ },
+ "D2417": {
+  "task": "T18-plan-mark-done",
+  "cell": "L-T18",
+  "arm": "lineage",
+  "rep": "r12"
+ },
+ "D7054": {
+  "task": "T18-plan-mark-done",
+  "cell": "L-T18",
+  "arm": "lineage",
+  "rep": "r13"
+ },
+ "D8705": {
+  "task": "T18-plan-mark-done",
+  "cell": "L-T18",
+  "arm": "default",
+  "rep": "r14"
+ },
+ "D6317": {
+  "task": "T18-plan-mark-done",
+  "cell": "L-T18",
+  "arm": "default",
+  "rep": "r15"
+ },
+ "D2237": {
+  "task": "T18-plan-mark-done",
+  "cell": "L-T18",
+  "arm": "lineage",
+  "rep": "r16"
+ }
+}

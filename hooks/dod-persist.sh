@@ -127,7 +127,14 @@ persist_dod() {  # $1=file  $2=scope  $3=cwd  $4=source-label  [$5=session-id, "
   printf '## %s (%s)%s\n%s\n\n' "$ts" "$4" "$prov" "$2" >> "$1" 2>/dev/null || true
 }
 
-# ── CC_DOD_LINEAGE_ONLY=1 — inject only this session's own lineage (default 0 = today's frame) ──
+# ── CC_DOD_LINEAGE_ONLY — inject only this session's own lineage (DEFAULT ON; =0 restores the old frame) ──
+# ON BY DEFAULT since 2026-09-24 (token-efficiency wave 2, item 3; conviction 91%). Offline probe
+# (docs/research/token-efficiency-2026-09-23/eval/wave2/dod-lineage-probe.md, 24 runs, blind-judged):
+# with a pooled worktree's UNRELATED contract in the store, the old frame dragged it into the answer
+# in 4 of 6 runs and lineage-only in 0 of 6, at equal success; with the worktree's OWN plan scope
+# written by a session outside the lineage, lineage-only hid it and scored 5 of 6 on the plan-status
+# task (T10's known baseline miss) against 6 of 6. In production 7 of 8 injected contracts were
+# unrelated (measure/hooks.md §4). The pointer line still names the store for a session that wants it.
 # The toplevel filter (dod_filter_for) separates WORKTREES, not sessions: every session started in one
 # checkout shares its toplevel, and a capture with no provenance is kept rather than guessed at.
 # Measured over 14 days, the injected "THE CURRENT CONTRACT" was one of 43 contracts, the top one shown
@@ -226,7 +233,7 @@ _dod_lineage_pred() {  # $1=cwd → recorded predecessor toplevels, one per line
 # The stream the write-side dedup compares against: this session's own captures under the flag (when
 # the session id is known), the worktree-filtered stream otherwise.
 _dod_dedup_stream() {  # $1=cwd  $2=file  $3=own sid
-  if [ "${CC_DOD_LINEAGE_ONLY:-0}" = 1 ] && [ -n "${3:-}" ]; then
+  if [ "${CC_DOD_LINEAGE_ONLY:-1}" = 1 ] && [ -n "${3:-}" ]; then
     dod_filter_for "$1" "$2" | _dod_lineage_blocks "${_dod_nl}${3}${_dod_nl}" "${_dod_nl}"
   else
     dod_filter_for "$1" "$2"
@@ -338,7 +345,7 @@ case "$event" in
     # foreign wave's, and keeps anything unattributable (see hooks/lib/dod-path.sh § FAIL-OPEN).
     content="$(dod_read_content "$cwd")"
     [ -n "$content" ] || exit 0
-    if [ "${CC_DOD_LINEAGE_ONLY:-0}" = 1 ]; then
+    if [ "${CC_DOD_LINEAGE_ONLY:-1}" = 1 ]; then
       _dod_inject_lineage_only "$cwd" "$sid" "$content"
       exit 0
     fi

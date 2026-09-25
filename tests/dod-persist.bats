@@ -12,6 +12,9 @@ setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HOOK="$REPO/hooks/dod-persist.sh"
   export WRAP_DOD_DIR="$BATS_TEST_TMPDIR/dod"; mkdir -p "$WRAP_DOD_DIR"
+  # Lineage-only is the DEFAULT since 2026-09-24. The cases below that pin the older worktree frame
+  # run it explicitly at =0; the lineage-only cases pass =1, and "unset is on" is asserted with env -u.
+  export CC_DOD_LINEAGE_ONLY=0
   CWD="$BATS_TEST_TMPDIR/wt"; mkdir -p "$CWD"
   git -C "$CWD" init -q; git -C "$CWD" config user.email t@t; git -C "$CWD" config user.name t
   echo x > "$CWD/f"; git -C "$CWD" add f; git -C "$CWD" commit -qm init
@@ -450,28 +453,28 @@ lo_lacks() { ! printf '%s' "$1" | grep -qF -- "$2"; }
   lo_ctx "$output" | grep -qF '    Scope (frozen): finish the compaction round trip'
 }
 
-@test "lineage-only FLAG OFF: output is byte-identical to the hook without the lineage-only branch" {
+@test "lineage-only =0: output is byte-identical to the hook without the lineage-only branch; UNSET is on" {
   lo_setup
   # Reference: the subject with its 4-line flag branch removed. Preconditions asserted, so a moved
   # anchor fails here instead of silently comparing the subject with itself.
   local ref="$BATS_TEST_TMPDIR/ref/hooks"; mkdir -p "$ref"
   ln -sfn "$REPO/hooks/lib" "$ref/lib"
-  [ "$(grep -c 'if \[ "${CC_DOD_LINEAGE_ONLY:-0}" = 1 \]; then' "$HOOK")" -eq 1 ]
-  awk '/if \[ "\$\{CC_DOD_LINEAGE_ONLY:-0\}" = 1 \]; then/ {skip=4} skip>0 {skip--; next} {print}' "$HOOK" > "$ref/dod-persist.sh"
+  [ "$(grep -c 'if \[ "${CC_DOD_LINEAGE_ONLY:-1}" = 1 \]; then' "$HOOK")" -eq 1 ]
+  awk '/if \[ "\$\{CC_DOD_LINEAGE_ONLY:-1\}" = 1 \]; then/ {skip=4} skip>0 {skip--; next} {print}' "$HOOK" > "$ref/dod-persist.sh"
   # the SessionStart branch is gone; the write-side dedup reads the flag too and stays
-  [ "$(grep -c 'CC_DOD_LINEAGE_ONLY:-0' "$ref/dod-persist.sh")" -eq $(( $(grep -c 'CC_DOD_LINEAGE_ONLY:-0' "$HOOK") - 1 )) ]
+  [ "$(grep -c 'CC_DOD_LINEAGE_ONLY:-1' "$ref/dod-persist.sh")" -eq $(( $(grep -c 'CC_DOD_LINEAGE_ONLY:-1' "$HOOK") - 1 )) ]
   [ "$(grep -c '_dod_inject_lineage_only "\$cwd"' "$ref/dod-persist.sh")" -eq 0 ]
   local j; j="$(lo_json MESID)"
   local want got on
-  want="$(printf '%s' "$j" | env -u CC_DOD_LINEAGE_ONLY bash "$ref/dod-persist.sh" 2>/dev/null)"
-  got="$(printf '%s' "$j" | env -u CC_DOD_LINEAGE_ONLY bash "$HOOK" 2>/dev/null)"
+  want="$(printf '%s' "$j" | CC_DOD_LINEAGE_ONLY=0 bash "$ref/dod-persist.sh" 2>/dev/null)"
+  got="$(printf '%s' "$j" | CC_DOD_LINEAGE_ONLY=0 bash "$HOOK" 2>/dev/null)"
   [ -n "$want" ]
   [ "$got" = "$want" ]
-  got="$(printf '%s' "$j" | CC_DOD_LINEAGE_ONLY=0 bash "$HOOK" 2>/dev/null)"
-  [ "$got" = "$want" ]
-  # power: the flag does change the output on this store
+  # power: the flag does change the output on this store, and unset now means ON (2026-09-24)
   on="$(printf '%s' "$j" | CC_DOD_LINEAGE_ONLY=1 bash "$HOOK" 2>/dev/null)"
   [ "$on" != "$want" ]
+  got="$(printf '%s' "$j" | env -u CC_DOD_LINEAGE_ONLY bash "$HOOK" 2>/dev/null)"
+  [ "$got" = "$on" ] || { echo "unset did not behave as on"; false; }
 }
 
 @test "lineage-only: the /handoff carry — a same-pane successor inherits the predecessor's set" {
@@ -500,8 +503,8 @@ lo_lacks() { ! printf '%s' "$1" | grep -qF -- "$2"; }
   local f; f="$(dod_path)"
   local tx; tx="$(mktx "ship X")"
   local pc; pc="$(jq -nc --arg c "$CWD" --arg t "$tx" '{hook_event_name:"PreCompact",cwd:$c,transcript_path:$t,trigger:"auto",session_id:"SIDB"}')"
-  # flag off: today's dedup, no capture for B
-  printf '%s' "$pc" | env -u CC_DOD_LINEAGE_ONLY bash "$HOOK" >/dev/null 2>&1
+  # flag off (=0): today's dedup, no capture for B
+  printf '%s' "$pc" | CC_DOD_LINEAGE_ONLY=0 bash "$HOOK" >/dev/null 2>&1
   [ "$(grep -c 'session=SIDB' "$f")" -eq 0 ]
   # flag on: B gets its own capture, once
   printf '%s' "$pc" | CC_DOD_LINEAGE_ONLY=1 bash "$HOOK" >/dev/null 2>&1
@@ -515,7 +518,7 @@ lo_lacks() { ! printf '%s' "$1" | grep -qF -- "$2"; }
   [[ "$output" == unchanged* ]] || false
   run bash -c 'cd "$1" && CLAUDE_CODE_SESSION_ID=SIDC CC_DOD_LINEAGE_ONLY=1 bash "$0" set "Scope (frozen): ship X"' "$HOOK" "$CWD"
   [[ "$output" == captured* ]] || false
-  run bash -c 'cd "$1" && CLAUDE_CODE_SESSION_ID=SIDD bash "$0" set "Scope (frozen): ship X"' "$HOOK" "$CWD"
+  run bash -c 'cd "$1" && CLAUDE_CODE_SESSION_ID=SIDD CC_DOD_LINEAGE_ONLY=0 bash "$0" set "Scope (frozen): ship X"' "$HOOK" "$CWD"
   [[ "$output" == unchanged* ]] || false   # flag off: today's worktree-wide dedup
 }
 
