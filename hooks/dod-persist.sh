@@ -157,31 +157,37 @@ persist_dod() {  # $1=file  $2=scope  $3=cwd  $4=source-label  [$5=session-id, "
 # sibling session in the same worktree had already captured would write nothing, and the injection
 # above would then have nothing of its own to show after compaction.
 _dod_nl="$(printf '\nx')"; _dod_nl="${_dod_nl%x}"
+# One awk pass, not a bash `while read`: stdin here is always a PIPE, where bash's read consumes one
+# byte per syscall, so the ~114 KB live store cost ~0.18s per call and SessionStart makes 2-3 calls
+# (measured 2026-09-25; dod-persist was the heaviest SessionStart hook and hit its 5s timeout 66
+# times in four days, which holds back every other SessionStart message). The id sets travel
+# through the environment because they contain newlines, which `awk -v` would mangle. Byte
+# semantics (LC_ALL=C) so the multibyte ' · ' separators match exactly as the bash patterns did,
+# and every membership test is a literal index(), never a regex. `index(S, "\n" x "\n")` is the
+# old `case "$S" in *"${nl}${x}${nl}"*`, including the empty-toplevel case the bash form matched.
 _dod_lineage_blocks() {  # $1=lineage session ids  $2=predecessor toplevels (both newline-framed); stdin → kept blocks
-  local keep=0 line rest s top
-  while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in
-      '# Durable frozen DoD'*)
-        # a second file's header, when dod_read_content concatenates two stores: not part of the
-        # block above it
-        keep=0 ;;
-      '## '*)
-        keep=0
-        case "$line" in *' · session='*)
-          rest="${line#*' · session='}"; s="${rest%%' · '*}"
-          if [ -n "$s" ]; then
-            case "$1" in *"${_dod_nl}${s}${_dod_nl}"*) keep=1 ;; esac
-          fi ;;
-        esac
-        if [ "$keep" = 0 ]; then
-          case "$line" in *' · toplevel='*)
-            rest="${line#*' · toplevel='}"; top="${rest%%' · '*}"
-            case "$2" in *"${_dod_nl}${top}${_dod_nl}"*) keep=1 ;; esac ;;
-          esac
-        fi ;;
-    esac
-    if [ "$keep" = 1 ]; then printf '%s\n' "$line"; fi
-  done
+  DOD_LB_SIDS="${1:-}" DOD_LB_PRED="${2:-}" LC_ALL=C awk '
+    function field(line, key,    i, rest, j) {   # the value after the FIRST key, up to the next " · "
+      i = index(line, key); if (!i) return ""
+      rest = substr(line, i + length(key)); j = index(rest, " · ")
+      return j ? substr(rest, 1, j - 1) : rest
+    }
+    BEGIN { sids = ENVIRON["DOD_LB_SIDS"]; pred = ENVIRON["DOD_LB_PRED"]; keep = 0 }
+    # a second file'"'"'s header, when dod_read_content concatenates two stores: not part of the
+    # block above it
+    index($0, "# Durable frozen DoD") == 1 { keep = 0 }
+    index($0, "## ") == 1 {
+      keep = 0
+      if (index($0, " · session=")) {
+        s = field($0, " · session=")
+        if (s != "" && index(sids, "\n" s "\n")) keep = 1
+      }
+      if (!keep && index($0, " · toplevel=")) {
+        if (index(pred, "\n" field($0, " · toplevel=") "\n")) keep = 1
+      }
+    }
+    keep { print }
+  '
   return 0
 }
 # Lines outside every '## ' block, other than the file headers: a legacy boxes-only checklist or a
