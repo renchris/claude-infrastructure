@@ -185,7 +185,14 @@ sweep_liveness() { # → the warn line, or empty when the sweep is fresh
   local row ts age now
   now="$(now_s)"
   # The sweep's OWN rows, never the shared ledger's newest — see header note (2).
-  row="$(grep '"tool":"autonomy-sweep"' "$IDL" 2>/dev/null | tail -1 || true)"
+  # Tail window first: the ledger is ~17 MB and a full grep of it was ~0.45s of every session start,
+  # while the newest sweep row sits a few hundred lines from the end (1 MB ≈ 3,900 rows ≈ hours of
+  # ledger against a 300s sweep). The window's first line is dropped because it is cut mid-row; a
+  # window with no sweep row (a small file, or a sweep dead for a long time) falls back to the full
+  # scan, so the answer is the same either way. `LC_ALL=C grep -F`: BSD grep under a UTF-8 locale
+  # is ~8x slower on this input, and a literal ASCII pattern cannot match differently byte-wise.
+  row="$(tail -c 1048576 "$IDL" 2>/dev/null | tail -n +2 | LC_ALL=C grep -F '"tool":"autonomy-sweep"' | tail -1 || true)"
+  [ -n "$row" ] || row="$(LC_ALL=C grep -F '"tool":"autonomy-sweep"' "$IDL" 2>/dev/null | tail -1 || true)"
   if [ -n "$row" ]; then
     ts="${row#*\"ts\":\"}"; ts="${ts%%\"*}"
     ts="$(iso_to_epoch "$ts")"
@@ -225,29 +232,41 @@ watch() {
     scan_note='⚠ escalation record scan DID NOT RUN (perl/Digest::SHA unavailable) — record counts below are ABSENT, not zero'
   fi
 
-  # Aggregate per class. One pass per class over the UNSEEN rows only (~tens of lines, not the whole
-  # corpus), which keeps this to pure bash with NO eval and no dynamic variable names — the sibling
-  # autonomy-sweep.sh declares "no eval" in its own header, and a parallel c_*/n_*/p_* triple read
-  # back through `eval` is exactly the shape that makes a static check blind.
+  # Aggregate per class in ONE awk pass → `class<TAB>count<TAB>newest-mtime<TAB>newest-path`, then
+  # walk the <=6 aggregate rows in bash. This used to be one bash `while read` pass per class on the
+  # premise that unseen rows are "~tens of lines"; measured 2026-09-25 there were 1,897, and the six
+  # passes were ~0.5s of the hook that gates every SessionStart render. Still no eval and no dynamic
+  # variable names — the sibling autonomy-sweep.sh declares "no eval" in its own header, and a
+  # parallel c_*/n_*/p_* triple read back through `eval` is exactly the shape that makes a static
+  # check blind. Same semantics as the loop it replaces: a row needs a non-empty path, a non-numeric
+  # mtime counts as 0, and the newest path is the FIRST row with the strictly greatest mtime > 0.
   local classes="handoff-alarm announce-alarm announce-degrade completion-push page mail-deadletter"
-  local total=0 rcls mt path cnt newest npath det line
-  while IFS=$'\t' read -r rcls mt path; do
-    [ -n "${path:-}" ] && total=$(( total + 1 ))
+  local agg total=0 acls acnt mt path cnt newest npath det line
+  agg="$(printf '%s\n' "$rows" | awk -F'\t' '
+    NF >= 3 {
+      p = $3; for (k = 4; k <= NF; k++) p = p "\t" $k
+      if (p == "") next
+      c = $1; m = $2; if (m !~ /^[0-9]+$/) m = 0
+      if (!(c in n)) { n[c] = 0; nw[c] = 0; np[c] = "" }
+      n[c]++
+      if (m + 0 > nw[c] + 0) { nw[c] = m; np[c] = p }
+    }
+    END { for (c in n) printf "%s\t%d\t%s\t%s\n", c, n[c], nw[c], np[c] }')"
+  while IFS=$'\t' read -r acls acnt mt path; do
+    [ -n "${acnt:-}" ] && total=$(( total + acnt ))
   done <<EOF
-$rows
+$agg
 EOF
 
   if [ "$total" -gt 0 ]; then
     body='ESCALATIONS (unseen dead-letter records):'
     for cls in $classes; do
       cnt=0; newest=0; npath=""
-      while IFS=$'\t' read -r rcls mt path; do
-        [ "$rcls" = "$cls" ] && [ -n "${path:-}" ] || continue
-        case "${mt:-0}" in ''|*[!0-9]*) mt=0 ;; esac
-        cnt=$(( cnt + 1 ))
-        [ "$mt" -gt "$newest" ] && { newest="$mt"; npath="$path"; }
+      while IFS=$'\t' read -r acls acnt mt path; do
+        [ "$acls" = "$cls" ] || continue
+        cnt="$acnt"; newest="$mt"; npath="${path:-}"
       done <<EOF
-$rows
+$agg
 EOF
       [ "$cnt" -gt 0 ] || continue
       line="$(printf '· %s: %s (newest %s' "$cls" "$cnt" "$(fmt_age $(( now - newest )))")"

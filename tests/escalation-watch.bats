@@ -286,11 +286,37 @@ ew_mutant() { # a copy of the LIVE subject with one line mutated → the strong 
   printf '{"ts":"%s","hook":"waiting-recycle","disposition":"abstained"}\n' \
     "$(date -u -r "$(( CC_ESCALATION_NOW - 5 ))" +%Y-%m-%dT%H:%M:%SZ)" > "$CC_IDL"
   local m
-  # shellcheck disable=SC2016  # a sed script: $IDL must reach sed literally, not this shell
-  m="$(ew_mutant 's/grep .\"tool\":\"autonomy-sweep\". "\$IDL"/cat "$IDL"/')"
+  # Both reads (the tail window and its full-scan fallback) carry the filter, so the mutant widens
+  # every occurrence; a sed that matched nothing would leave the subject alarming and fail below.
+  m="$(ew_mutant 's/LC_ALL=C grep -F .\"tool\":\"autonomy-sweep\"./cat/g')"
   run bash "$m"
   [ "$status" -eq 0 ] || false
   [ -z "$output" ]                   # the mutant goes SILENT where the subject alarms
+}
+
+# ── the 1 MB tail window over a large ledger (the live one is ~17 MB) ─────────────────────────────
+foreign_rows_mb() { # <MB> — append ~<MB> MB of other tools' rows, newer than any sweep row
+  awk -v n="$(( $1 * 9000 ))" -v ts="$(date -u -r "$CC_ESCALATION_NOW" +%Y-%m-%dT%H:%M:%SZ)" \
+    'BEGIN { for (i = 0; i < n; i++) printf "{\"ts\":\"%s\",\"hook\":\"waiting-recycle\",\"disposition\":\"abstained\",\"pad\":\"%060d\"}\n", ts, i }' \
+    >> "$CC_IDL"
+}
+
+@test "large ledger: a fresh sweep row inside the tail window keeps liveness silent" {
+  foreign_rows_mb 2
+  printf '{"ts":"%s","tool":"autonomy-sweep","disposition":"fired"}\n' \
+    "$(date -u -r "$(( CC_ESCALATION_NOW - 60 ))" +%Y-%m-%dT%H:%M:%SZ)" >> "$CC_IDL"
+  foreign_rows_mb 0; [ "$(wc -c < "$CC_IDL")" -gt 1048576 ] || false
+  run "$HOOK"
+  [ "$status" -eq 0 ] || false
+  [ -z "$output" ]
+}
+
+@test "large ledger: a stale sweep row BEFORE the tail window is still found (full-scan fallback)" {
+  sweep_ran_at 7200                  # 2h ago, then >1 MB of newer foreign rows buries it
+  foreign_rows_mb 2
+  ctx
+  [[ "$CTX" == *"autonomy-sweep last ran 2h 0m ago"* ]] || false
+  [[ "$CTX" != *"NEVER run"* ]] || false
 }
 
 # ── expired-unread ───────────────────────────────────────────────────────────────────────────────
