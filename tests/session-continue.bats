@@ -688,13 +688,13 @@ bash_tu() { jq -nc --arg c "$1" '[{type:"tool_use",id:"t1",name:"Bash",input:{co
 
 @test "RE-BLOCK: identical step after a forced turn that only READ ⇒ the stop is allowed, step stays armed" {
   r="$(first_block "wait for the lander")"
-  [[ "$r" == *"Next: wait for the lander"* ]]
+  [[ "$r" == *"Next: wait for the lander"* ]] || false
   tx="$(forced_tx "$r" "$(bash_tu 'git status && sleep 5; cat /tmp/x.log | tail -3')")"
   run actuate sidA "$tx"
   ! fired "$output" || { echo "re-blocked an idle repeat: $output"; false; }
   printf '%s' "$output" | jq -er .systemMessage | grep -q 'Step still armed'
   run sc status
-  [[ "$output" == ARMED* ]]
+  [[ "$output" == ARMED* ]] || false
   [ "$(cat "$CLAUDE_CONFIG_DIR"/continue-state/*.count 2>/dev/null || find "$CLAUDE_CONFIG_DIR" -name '*.count' -exec cat {} \;)" = 1 ]
 }
 
@@ -767,7 +767,8 @@ completion-assert: you claimed done" "$(bash_tu 'git status')")"
 
 @test "RE-BLOCK: a MECHANICALLY armed step is never skipped (its own budget bounds it)" {
   r="$(first_block "wait for the lander")"
-  for s in $(find "$CLAUDE_CONFIG_DIR" -type f ! -name '*.*' 2>/dev/null); do printf mech > "$s.src"; done
+  find "$CLAUDE_CONFIG_DIR" -type f ! -name '*.*' -exec sh -c 'printf mech > "$1.src"' _ {} \;
+  [ -n "$(find "$CLAUDE_CONFIG_DIR" -name '*.src')" ]   # the provenance stamp really landed
   tx="$(forced_tx "$r" "$(bash_tu 'git status')")"
   run actuate sidA "$tx"
   fired "$output"
