@@ -228,6 +228,60 @@ case "$GI_EVALS" in ''|*[!0-9]*) GI_EVALS=0 ;; esac
 # the goal is gone. Neither is blind — the guard was reached and the fire condition is not met.
 [ "$GI_STATE" = "live" ] || _gi_abstain "no-goal:${GI_STATE:-?}"
 
+# ── EMPTY-STREAK ARM (token-efficiency 2026-09-23, OPPORTUNITIES rank 13) ─────────────────────────
+# The OPPOSITE failure from the rest of this hook: the goal IS being evaluated, keeps being judged
+# unmet, and every evaluation forces a turn in which nothing gets done — 18 contexts made 510 such
+# empty turns in 14 d (measure/hooks.md §3). After CC_GOAL_EMPTY_STREAK (default 3) consecutive
+# goal-forced turns that wrote nothing, tell the OPERATOR once and recommend `/goal clear`.
+# A goal-forced turn is one opened by a "Stop hook feedback" record that the evaluator follows with a
+# non-sentinel goal_status met:false; "wrote nothing" is hooks/lib/turn-scan.sh's classifier, shared
+# with session-continue.sh. ONCE PER STREAK: a crumb is written when the notice fires and removed the
+# first time the streak is broken, so a Stop this hook missed (timeout) cannot swallow the notice and
+# a continuing streak cannot repeat it. systemMessage only — never a block, never additionalContext.
+# Kill switch: CC_GOAL_EMPTY_NOTICE=0.
+# (Spelled `!= arm` unquoted on purpose: MUTATION M2 in tests/goal-inert-watch.bats locates the
+# inert arm's gate by its quoted source text, and a second copy of that text here would disarm it.)
+if [ "${CC_GOAL_EMPTY_NOTICE:-1}" != 0 ] && [ "$GI_LAST" != arm ]; then
+  _gets="$_giscd/lib/turn-scan.sh"
+  [ -f "$_gets" ] || { _gett="${BASH_SOURCE[0]}"; [ -L "$_gett" ] && _gett="$(readlink "$_gett")"
+    _gets="$(cd "$(dirname "$_gett")" 2>/dev/null && pwd)/lib/turn-scan.sh"; }
+  [ -f "$_gets" ] || _gets="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/turn-scan.sh"
+  [ -f "$_gets" ] || _gets="$HOME/.claude/hooks/lib/turn-scan.sh"
+  _gek="${CC_GOAL_EMPTY_STREAK:-3}"; case "$_gek" in ''|*[!0-9]*|0) _gek=3 ;; esac
+  # shellcheck source=lib/turn-scan.sh
+  # shellcheck disable=SC1091
+  if [ -r "$_gets" ] && . "$_gets" 2>/dev/null && command -v turn_scan >/dev/null 2>&1 \
+     && _gescan="$(turn_scan "$TP" "$_gek")"; then
+    # Streak = the newest turns, counted back until one is not goal-forced or did work.
+    _gestreak="$(printf '%s\n' "$_gescan" | jq -sr '
+      reverse | reduce .[] as $t ({n:0, open:true};
+        if .open and $t.g and ($t.w | not) then .n += 1 else .open = false end) | .n' 2>/dev/null || echo 0)"
+    case "$_gestreak" in ''|*[!0-9]*) _gestreak=0 ;; esac
+    _gecrumb="$_gi_crumb_dir/${SID:-unknown}.empty-streak"
+    if [ "$_gestreak" -lt "$_gek" ]; then
+      rm -f "$_gecrumb" 2>/dev/null
+    elif [ ! -f "$_gecrumb" ]; then
+      mkdir -p "$_gi_crumb_dir" 2>/dev/null || true
+      date -u +%Y-%m-%dT%H:%M:%SZ > "$_gecrumb" 2>/dev/null || true
+      _geshort="$COND"; [ "${#_geshort}" -gt 120 ] && _geshort="${_geshort:0:117}..."
+      log_idl fired "goal-empty-streak" "$(jq -cn --argjson n "$_gestreak" --argjson e "$GI_EVALS" \
+        '{streak:$n,evals:$e}' 2>/dev/null)"
+      jq -nc --arg m "$(printf '%s\n' \
+"⚠️  /goal has forced ${_gestreak} turns in a row that did nothing — each evaluation judges it unmet and" \
+"   hands the session another turn, which re-reads the whole context and writes nothing." \
+"" \
+"   goal (${GI_EVALS} evaluation(s)): \"${_geshort}\"" \
+"" \
+"   If what remains is not this session's to do now (waiting on a peer, a step only you can take)," \
+"   clear it:  /goal clear" \
+"   A step the session should still drive can be kept with:" \
+"     ~/.claude/hooks/session-continue.sh set \"<the ONE next step>\"")" \
+        '{systemMessage:$m}' 2>/dev/null || true
+      exit 0
+    fi
+  fi
+fi
+
 # ── (3b) BLIND arm — nothing REPORTABLE is deferring, so prove the skip from elapsed turns ────────
 # Only reached when the payload names no deferrer, so the extra transcript pass costs nothing on the
 # hot path. TURNS counts REAL typed user messages after the arm sentinel: a tool_result carries an
