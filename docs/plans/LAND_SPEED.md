@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: complete
 ---
 
 # LAND_SPEED — first-time-successful, fast lands in claude-infrastructure
@@ -128,4 +128,43 @@ Shas are pre-land; the land rebases them. Resolve by subject on trunk.
 
 ## Before / after
 
-_Pending — filled in after landing, from `--compare`._
+Landed `86f9c997d` at 2026-09-25T03:08:37Z (content-verified, sweep clean); live layer converged
+the same minute (`CC_DEPLOY_MAX_LAG_COMMITS=0 bash scripts/deploy-live.sh`, rc 0, 0 un-stamped
+commits above the live tip). The land's own smoke was load-shed (load ~200 ≥ ceiling 80), so the
+behavioural proof is the suites run by hand this session: stranded-sweep 19/19, land-speed-census
+4/4, land-gate-cas 22/22, gate-selftest-memo 8/8, gate-precheck 13/13, land-gate-memo 11/11,
+gate-ownscope-leak 24/24, land-lint-scope-derived 13/13, ship-land-converge-edge 9/9,
+land-inflight 9/9, land-reland-row-identity 4/4, gate-home-isolation 23/23, unattended-path-lint
+21/21, ship-land 179/179 once the pre-existing red below was fixed. (`land-gate-cas` "many refs"
+went red once on a wall-clock `hold_s ≤ 2` bound at load ~200, then passed in BOTH arms, trunk
+scripts and branch scripts, back to back at the same load. It was the box, not the diff.)
+
+`python3 scripts/land-speed-census.py --compare 2026-09-25T03:08:37Z --days 7`:
+
+| landed lands | baseline (7d, n=338) | post (n=2 — **too small to judge**) |
+|---|---|---|
+| total_s p50 / p90 | 1037 / 2869 | 776 (this land), 1003 (a sibling) |
+| gate_s p50 / p90 | 348 / 1987 | 770, 205 |
+| **post_s** p50 / p90 | **593 / 883** | **1 (this land)**, 794 (the sibling) |
+
+**Read the post column per row, not as a percentile.** With n=2 the census's p50 picks the larger
+value. The 794s is `research/tokeff-wave2`, which landed 10s after this one and ran its OWN
+worktree's pre-fix `stranded-sweep.sh`: ship-land resolves every script through `$SCRIPT_DIR`, so a
+rail fix reaches only lands from worktrees cut after it (situational lesson "Rail fix is
+per-worktree"). This land ran the fixed sweep: 1s. On a quiet trunk the fix reaches the fleet over
+roughly a day as worktrees turn over; re-run `--compare` with the same cut once n ≥ 30 to publish
+a p50. Fix 3 did not fire on this land (it went green on round 1, so no re-round happened). Fix 2
+did fire ("unattended-path own-scope scan CARRIED"). This land's arms were 745s at load ~200, so
+one land at that load cannot show fix 2's ~72s.
+
+Pre-existing red found and fixed on the way (`a476baecc`, rebased on land): `tests/ship-land.bats`
+"shellcheck ABSENT" was red on trunk at the same load. Since `362811da6` the lint searches
+`/opt/homebrew/bin` when PATH misses, and the fixture sealed only PATH. It also pinned
+pre-rewording text.
+
+## Follow-ups (not done; each named with why)
+
+- **Move the unattended-path arm last in run_gate.** Arms fail fast, and ~21 reds/week sit behind
+  it, so they would surface ~100s sooner. Not done: it is a ~90-line block move in a file siblings
+  edit weekly, for about 35 min/week of red latency. It passes F1 but not the size bar for this land.
+- **Publish post-fix p50s** once the post window reaches n ≥ 30 (same `--compare` cut).
