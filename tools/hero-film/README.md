@@ -360,7 +360,7 @@ under a minute. Every flight starts and ends at rest.
 | t (s) | Place | Line of type | What happens |
 |---|---|---|---|
 | 0.0–5.0 | **The poster** | the governing thought (4.5 s to read) | held, still; three commits crawl toward the gate |
-| 5.0–8.4 | flight to the window, 3.4 s | the thought leaves in the first 0.4 s | once the camera is under way the card fades and the scrollback clears |
+| 5.0–8.4 | flight to the window, 3.4 s | the thought leaves in the first 0.4 s | once the camera is under way the card and the scrollback fade out together over 0.9 s |
 | 8.4–16.75 | **The window** | **A session fires a peer.** lands 7.8–8.5 | read until 11.3; then `/handoff`, the fire command, the split, the peer boots, reads this film's brief, works; `account ③ · feat/readme-hero-film` read for 2.5 s |
 | 16.75–28.65 | **The window**, same shot | **Only decisions reach you.** | read until 19.95; the card rises out of the originator's pane (1.5 s) and stands 7.0 s to be read |
 | 28.65–33.05 | flight to `~/.claude`, 4.4 s, up and over the gate | | the peer's commit leaves its window, the fleet's three cross the gate one at a time, then the peer's, onto `origin/main` |
@@ -368,7 +368,7 @@ under a minute. Every flight starts and ends at rest.
 | 40.0–44.6 | flight home, 4.6 s (background re-keyed) | the thought assembles in the last 0.7 s, under 250 px/s | `✅ SAFE TO CLOSE`, the ping lands, the peer folds its pane, all mid-flight |
 | 44.6–45.9 | the poster | the governing thought | held to the seam: 6.3 s still with the opening |
 
-### Storyboard: FILM (63.1 s, 60 fps), as built
+### Storyboard: FILM (63.5 s, 60 fps), as built
 
 The same scenes and timing through the window, then the gate between the window and the racks, which
 the loop leaves out. The camera never holds still: each shot creeps (4–9 px/s, pushed in along its own
@@ -381,12 +381,12 @@ and the poster pushes in through frame 0, so the last frame runs on into the fir
 | 5.0–8.4 | down onto the originator's window | |
 | 8.4–16.75 | the window: the split and the boot | **A session fires a peer.** |
 | 16.75–28.65 | the window: the card rises | **Only decisions reach you.** |
-| 28.65–32.85 | round to the gate, 4.2 s | |
-| 32.85–41.45 | the gate: three lands one at a time, `git push --force` refused at the wall, the peer's commit last | **One land at a time. A dangerous call never runs.** |
-| 41.45–45.65 | down `origin/main` to `~/.claude`, 4.2 s | |
-| 45.65–52.6 | the racks light, file by file | **Landed is not live until the running bytes match.** |
-| 52.6–57.6 | home, 5.0 s: close, ping, fold | the thought assembles in the last 0.7 s |
-| 57.6–63.1 | the poster, arriving on frame 0 | the governing thought (5.5 s still) |
+| 28.65–33.25 | up and round to the gate, 4.6 s, above the near panes | |
+| 33.25–41.85 | the gate: three lands one at a time, `git push --force` refused at the wall, the peer's commit last | **One land at a time. A dangerous call never runs.** |
+| 41.85–46.05 | down `origin/main` to `~/.claude`, 4.2 s | |
+| 46.05–53.0 | the racks light, file by file | **Landed is not live until the running bytes match.** |
+| 53.0–58.0 | home, 5.0 s: close, ping, fold | the thought assembles in the last 0.7 s |
+| 58.0–63.5 | the poster, arriving on frame 0 | the governing thought (5.5 s still) |
 
 ### Decisions, round 2
 
@@ -424,9 +424,9 @@ and the poster pushes in through frame 0, so the last frame runs on into the fir
   itself: flights whole (a full q30 frame is 9-15 KB, what img2webp's rectangles cost anyway), the
   first frame of each hold whole and crisp, and later hold frames as the rectangle whose source moved
   more than 3 levels since that pixel was last stored, at q75 while it moves and re-sent at q90 once
-  still for 6 frames (so every line stands crisp while it is read). Result: 0 stale frames of 1,415
-  (one 3×3 block in one flight frame per grade) at 15.6 MB dark and 14.9 MB light (then the seam
-  fix below). Getting back under 12 MB would take flights faster than the 900 px/s bound or fewer
+  still for 6 frames (so every line stands crisp while it is read); the poster holds stay at q90 so
+  the loop point joins like quality to like. Result, as shipped: no stale region (one or two single
+  3×3 blocks in flight frames per grade) at 16.4 MB dark and 15.7 MB light. Getting back under 12 MB would take flights faster than the 900 px/s bound or fewer
   scenes; neither is worth trading against the operator's verdict, which was about pace, not size.
   GitHub serves a repo-relative README image from raw.githubusercontent.com with no camo cap (sister
   repo, `research/github-medium.md`), and frame 0 is the file's first 225 KB.
@@ -434,6 +434,43 @@ and the poster pushes in through frame 0, so the last frame runs on into the fir
   1/60-story-second signature changed, so a blur sub-frame just before the scrollback cleared drew the
   old rows under the cleared state's signature, and the stale canvas stuck for four seconds. The
   clear is now in the signature, which is millisecond-grained.
+
+### Critique round 3 ([`critique-round-3.md`](critique-round-3.md), fresh context)
+
+The rubric added the operator's third verdict: motion smoothness at 60 fps, orientation through each
+flight, and whether every line can be read in time. Scores: smoothness 6, orientation 8, read in time 7,
+concreteness 8, continuity 7, frame 0 8, legibility 7, honesty 6, seam 9. It measured every flight as
+easing cleanly from rest to rest, and every caption, chip and the card with time to spare. Adopted:
+
+- *B1, the card and the scrollback cut mid-flight* (the first transition every viewer sees). They now
+  fade together over 0.9 s as the camera leaves the poster (`rowsAlpha`, a whole-pane fade in
+  `drawPane`), instead of a `/clear` in one frame.
+- *M3, the peer's brief scrolled off after 0.9 s.* Its greeked work rows now arrive after the card, as
+  the camera leaves, so the brief (the proof it is a real session) stands through the window scene.
+- *m2, chips cut in one frame.* They fade with their line over the first 0.6 s of the next flight.
+- *m4, the racks went backwards in view.* They turn amber by 60 % of the flight in, while distant.
+- *m7, the light grade's amber text* is `#7a3b00`, 7.9:1 on its row (was 5.9).
+- *m9, the FILM's flight to the gate skimmed the near panes.* It is pulled out and lifted
+  (`hop 0.5, rise 0.25`) and runs 4.6 s: nearest object 4.4 units (was 3.1), object sweep 815 px/s
+  (was 1,045).
+
+Declined:
+
+- *M1, "a still picture 42 % of the time".* The stillness is the operator's verdict applied: every
+  line is read before its scene moves. Ambient drift in a hold would change every pixel of every frame,
+  which in an animated WebP is a flight's cost for the whole hold.
+- *M2, the gate beat missing from the loop.* Recorded above (three scenes, 85 %); the FILM has it.
+- *M4, "72 % sure, says the session" looks unsourced.* It is R3's recorded conviction (`CLAUDE.global.md`,
+  the model-ladder decision "open at 72 % conviction"), filed with `cc-decide open --conviction`; §
+  Honesty rule cites it.
+- *m1, quality steps at flight edges.* Easing the quality across ten frames either side of each edge
+  would store thirty-odd full frames at near-hold quality, 3–4 MB; the speed-scaled softening already
+  ramps the look.
+- *m3, the split reflows in one frame.* kitty's split is instant; the divider drawing down carries the
+  beat.
+- *m5, frame 0's first line is smaller; m6, pane text is ~8 CSS px.* Round one's Pyramid tiers and its
+  decision that pane rows are texture; not this round's scope.
+- *m8, the status-line ids.* They are session ids, real ones.
 
 ## Verification
 
@@ -450,14 +487,14 @@ bash scripts/hero-film-render.sh verify   # decode the shipped WebPs; seam, ghos
 |---|---|---|
 | Pacing gate | `PACING PASS`, both cuts | |
 | Picture speed, max | loop 865 px/s (0.45 frame widths a second), film 815 (bound 900; round one 7,044) | |
-| Named-object sweep, turn, acceleration, max | loop 1,046 px/s, 6.9 °/s, 952 px/s²; film 1,045, 12.1, 551 (bounds 1,400, 25, 1,000) | |
+| Named-object sweep, turn, acceleration, max | loop 1,046 px/s, 6.9 °/s, 952 px/s²; film 994, 13.8, 589 (bounds 1,400, 25, 1,000) | |
 | Reading margin, min | +0.32 s (the peer's chip); every line +0.33 s or more, the thought at frame 0 +0.55 s | |
-| LOOP | 15,992,228 bytes; 1676 × 943, 45,900 ms, 1,417 stored frames, every moving frame at 60 fps (744 in flights) | 15,352,150 bytes; 1,423 stored frames |
+| LOOP | 16,356,946 bytes; 1676 × 943, 45,900 ms, 1,413 stored frames, every moving frame at 60 fps (744 in flights) | 15,680,736 bytes; 1,419 stored frames |
 | Loop count (`webpinfo`) | 0 (infinite) | 0 |
 | Ghosts, near-lossless (≥ 3/255 on flat source) | 0 of 2 | 0 of 2 |
-| Ghosts, lossy (solid patch ≥ 24/255) | 1 of 1,415 (one 3 × 3 block, one flight frame) | 1 of 1,421 (the same) |
-| Seam, decoded (> 15 %) | 226 px; an ordinary step 78–180 | 780 px; an ordinary step 80–238 (the crawling commits' step plus q90 against near-lossless edge noise; the source seam is 79 px against 86) |
-| FILM | `launch-film.mp4`: H.264 High, yuv420p, 1920 × 1080, 60 fps, 3,786 frames, 63.100 s, 18,672,542 bytes (CRF 21); last frame 616 px from frame 0 at 6 % fuzz, against 343–444 between neighbours | — |
+| Ghosts, lossy (solid patch ≥ 24/255) | 2 of 1,411 (one 3 × 3 block each, in flight frames) | 1 of 1,417 (the same) |
+| Seam, decoded (> 15 %) | 226 px; an ordinary step 69–160 | 780 px; an ordinary step 85–222 (the crawling commits' step plus q90 against near-lossless edge noise, invisible side by side; the source seam is 79 px against 86) |
+| FILM | `launch-film.mp4`: H.264 High, yuv420p, 1920 × 1080, 60 fps, 3,810 frames, 63.500 s, 19,490,134 bytes (CRF 21); last frame 616 px from frame 0 at 6 % fuzz, against 343–444 between neighbours | — |
 
 ### Round one build (superseded by round 2)
 

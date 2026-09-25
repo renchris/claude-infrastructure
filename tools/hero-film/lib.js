@@ -69,7 +69,7 @@ export const THEMES = {
     // Two steps darker than GitHub's canvas where the world has surfaces (sister repo, round 3).
     floor: '#ffffff', grid: '#e6eaef', reflect: 0.14, glowA: 0.16, shadow: '#1f2328', shadowA: 0.24,
     rack: '#eef1f4', rackEdge: '#6e7781', rackDim: '#8c959f', card: '#ffffff', cardEdge: '#6e7781',
-    liveRow: '#dafbe1', amberRow: '#fff1dc', amberText: '#9a4a00',
+    liveRow: '#dafbe1', amberRow: '#fff1dc', amberText: '#7a3b00', // 7.9:1 on its row (was 5.9; critique round 3, m7)
     gate: '#59636e', gateArm: '#1f2328',
     bgRekey: '#fffffd',
   },

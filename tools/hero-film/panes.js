@@ -148,11 +148,14 @@ export function drawPane(g, T, x0, y0, w, h, pane) {
     rows = rows.slice(1)
   }
   if (pane.anchor === 'bottom') y = Math.max(top, boxY - Math.round(lh * 0.3) - used)
+  // The scrollback fades as a whole (round two, critique round 3 B1: a /clear cut in one frame, mid-flight,
+  // read as a glitch).
+  const rowA = pane.rowsAlpha ?? 1
   for (const row of rows) {
     if (y > boxY - lh) break
     const reveal = row.reveal ?? 1
     if (reveal <= 0) continue
-    g.globalAlpha = row.dim ? 0.55 : 1
+    g.globalAlpha = rowA * (row.dim ? 0.55 : 1)
     const tx = x0 + pad + f * 1.3
     if (row.kind === 'greek') {
       const n = row.lines ?? 2
@@ -167,7 +170,7 @@ export function drawPane(g, T, x0, y0, w, h, pane) {
         y += lh
       }
       y += Math.round(lh * 0.45)
-      g.globalAlpha = 1
+      g.globalAlpha = rowA
       continue
     }
     if (row.kind === 'user') {
@@ -180,7 +183,7 @@ export function drawPane(g, T, x0, y0, w, h, pane) {
       g.fillStyle = T.paneInk
       paintLines(g, lines, tx, y, lh, reveal)
       y += lines.length * lh + Math.round(lh * 0.55)
-      g.globalAlpha = 1
+      g.globalAlpha = rowA
       continue
     }
     if (row.kind === 'tool') {
@@ -194,7 +197,7 @@ export function drawPane(g, T, x0, y0, w, h, pane) {
       g.fillStyle = T.paneInk
       paintLines(g, lines, tx + f * 1.2, y, lh, reveal)
       y += lines.length * lh + Math.round(lh * 0.45)
-      g.globalAlpha = 1
+      g.globalAlpha = rowA
       continue
     }
     // say / ping / close / hook
@@ -232,8 +235,9 @@ export function drawPane(g, T, x0, y0, w, h, pane) {
       })
     }
     y += lines.length * lh + Math.round(lh * 0.45)
-    g.globalAlpha = 1
+    g.globalAlpha = rowA
   }
+  g.globalAlpha = 1
   // Prompt box.
   g.strokeStyle = T.faint
   g.lineWidth = 2
