@@ -273,7 +273,10 @@ seed_batsc() {   # $1 = "real-nosc" | an exit code for a stub lint
   mkdir -p tests
   printf '#!/usr/bin/env bats\nsetup() { export HOME="$BATS_TEST_TMPDIR/home"; }\n@test "x" { true; }\n' > tests/zz.bats
   if [ "$1" = "real-nosc" ]; then
-    printf '#!/bin/bash\nexec env PATH=/usr/bin:/bin "%s" "$@"\n' "$REPO/scripts/bats-shellcheck-lint.sh" > batsc-stub.sh
+    # CC_SHELLCHECK_PREFIXES= (set, EMPTY) seals the lint's second lookup rung: since 362811da6 it
+    # also searches /opt/homebrew/bin and friends when PATH misses, so a PATH-only seal found the
+    # host's Homebrew shellcheck and this "absent" case read clean on every Mac that has one.
+    printf '#!/bin/bash\nexec env PATH=/usr/bin:/bin CC_SHELLCHECK_PREFIXES= "%s" "$@"\n' "$REPO/scripts/bats-shellcheck-lint.sh" > batsc-stub.sh
   elif [ "$1" = "scan-only-2" ]; then
     # --selftest passes, the SCAN returns 2. Without this the scan leg's non-verdict arm is dead
     # code that no case reaches, because the selftest leg always fires first on a real absent tool.
@@ -293,7 +296,9 @@ seed_batsc() {   # $1 = "real-nosc" | an exit code for a stub lint
   [ "$status" -eq 9 ]                                        # 9 = no verdict, NOT 0 = clean
   echo "$output" | grep -q 'bats-shellcheck-lint could not RUN' || false
   echo "$output" | grep -q 'NON-VERDICT' || false
-  echo "$output" | grep -q 'shellcheck is not installed' || false
+  # 362811da6 reworded the operator line: it now names the ABSENCE ("genuinely absent") beside the
+  # prefix seam, instead of asserting "not installed" about a host it had not searched.
+  echo "$output" | grep -q 'genuinely absent' || false
   ! echo "$output" | grep -q 'GATE RED' || false             # a could-not-run is never a claim
   git fetch -q origin main
   [ -z "$(git ls-tree origin/main -- batsc-stub.sh)" ]       # fail-closed: nothing landed
