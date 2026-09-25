@@ -540,7 +540,11 @@ EOF
   # learn which to RUN. Round 1 has no union and asks once. The own-range call is deliberately made
   # FIRST so `tail -1` below still reads the union call; head/tail are what this test asserts on, so
   # only the count moved.
-  [ "$(wc -l < "$BATS_TEST_TMPDIR/direct-only" | tr -d ' ')" = "3" ]                    # r1 + r2 own + r2 union
+  # FOUR since LAND_SPEED (2026-09-24): the re-round also asks whether any trunk change since a.bats
+  # went green in round 1 selects it (THE CARRY in run_smoke). This fixture's selector names a.bats
+  # for every question, so the carry declines and a.bats still runs twice — the count is the only
+  # thing that moved, and the carry call sits before the union call so `tail -1` is unchanged.
+  [ "$(wc -l < "$BATS_TEST_TMPDIR/direct-only" | tr -d ' ')" = "4" ]                    # r1 + r2 own + r2 carry + r2 union
   [ "$(head -1 "$BATS_TEST_TMPDIR/direct-only" | awk '{print gsub(/\.\./,"")}')" = "1" ]  # r1: 1 range
   [ "$(tail -1 "$BATS_TEST_TMPDIR/direct-only" | awk '{print gsub(/\.\./,"")}')" = "2" ]  # r2: + union
   fb="$(sed -E 's/^--direct //; s/\.\..*//' < "$BATS_TEST_TMPDIR/direct-only" | head -1)"  # r1's base
@@ -763,4 +767,63 @@ EOF
   [ "$(awk -v a="$ml" -v b="$nx" 'NR>a && NR<b' "$sl" | grep -c 'attest_land .*"round"')" -eq 0 ]
   # …and it DOES appear in the outer loop, so this is a placement assertion and not a vacuous one.
   [ "$(grep -c 'attest_land .*"round"' "$sl")" -eq 1 ]
+}
+
+# ── LAND_SPEED: THE CARRY — an own suite already green this land is not re-run for a trunk move ───
+# that cannot reach it. A re-round used to re-run every direct suite of the composed tree; a
+# replayed real round had 18 own suites, 768s of smoke, and a sibling delta that selected none of
+# them. The selector below answers by QUESTION, told apart on the wire: the own-range call ends in
+# `..HEAD`, the union call carries two ranges, and the carry query is one range ending at a trunk
+# sha (every trunk change since the suite went green). $1 = the carry query's answer.
+carry_fixture() {
+  smoke_fixture
+  printf '#!/usr/bin/env bats\n@test "b" { true; }\n' > tests/b.bats
+  git add tests/b.bats && git commit -q -m "seed suite b" && git push -q origin HEAD:main
+  git fetch -q origin main
+  carry_answer "$1"
+  echo 1 > "$MOVER_ARMED"                          # exactly one sibling land, during round 1
+}
+
+carry_answer() {  # rewrite ONLY the selector: $1 = what the carry query answers
+  cat > "$SEL" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$BATS_TEST_TMPDIR/sel-argv"
+case "\$1" in lint) exit 0 ;; esac
+if [ -n "\${3:-}" ]; then printf 'tests/a.bats\ntests/b.bats\n'; exit 0; fi
+case "\${2:-}" in *..HEAD) echo tests/a.bats; exit 0 ;; esac
+printf '%b' "$1"
+EOF
+  chmod +x "$SEL"
+}
+
+@test "LAND_SPEED carry: an own suite green in round 1 that the trunk delta cannot reach is NOT re-run" {
+  carry_fixture 'tests/b.bats\n'                   # the sibling delta reaches b.bats only
+  our_branch feat/carry carry.sh
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "STALE GATE"
+  [ "$(grep -cx 'tests/a.bats' "$BATS_TEST_TMPDIR/bats-argv")" -eq 1 ]   # round 1 only
+  [ "$(grep -cx 'tests/b.bats' "$BATS_TEST_TMPDIR/bats-argv")" -eq 1 ]   # the sibling's suite still runs
+  echo "$output" | grep -q 'tests/a.bats CARRIED green'
+  grep -q '"stage":"land".*"smoke":"green".*"smoke_carried":1' "$LAND_LOG"
+  git fetch -q origin main
+  [ -n "$(git ls-tree origin/main -- carry.sh)" ]
+}
+
+@test "LAND_SPEED carry: the trunk delta REACHES the own suite, answers FULL, or the switch is off → it re-runs" {
+  local ans
+  carry_fixture 'tests/b.bats\n'
+  for ans in 'tests/a.bats\ntests/b.bats\n' 'FULL\n' 'OFF'; do
+    carry_answer "$ans"
+    if [ "$ans" = OFF ]; then export SHIP_LAND_SMOKE_CARRY=off; fi
+    our_branch "feat/nocarry-$(printf '%s' "$ans" | tr -cd 'A-Za-z')" "nocarry-${#ans}.sh"
+    : > "$BATS_TEST_TMPDIR/bats-argv"
+    echo $(( $(cat "$MOVER_COUNT" 2>/dev/null || echo 0) + 1 )) > "$MOVER_ARMED"   # one fresh sibling land
+    run bash "$SHIPLAND" --trunk main
+    [ "$status" -eq 0 ] || { echo "ans=$ans: $output" >&2; return 1; }
+    [ "$(grep -cx 'tests/a.bats' "$BATS_TEST_TMPDIR/bats-argv")" -eq 2 ] || { echo "ans=$ans carried a suite it could not" >&2; return 1; }
+    ! echo "$output" | grep -q 'CARRIED green' || false
+    unset SHIP_LAND_SMOKE_CARRY
+    git checkout -q main && git pull -q --rebase origin main
+  done
 }

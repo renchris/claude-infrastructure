@@ -342,6 +342,8 @@ gate_red() {  # $1=arm  [$2=subject: the file/suite it named] — raise GATE_RED
 SMOKE_STATE="${SHIP_LAND_SMOKE_STATE:-none}"
 SMOKE_N="${SHIP_LAND_SMOKE_N:-0}"              # direct suites the smoke actually RAN
 SMOKE_S="${SHIP_LAND_SMOKE_S:-0}"              # wall seconds the smoke spent
+SMOKE_CARRIED="${SHIP_LAND_SMOKE_CARRIED:-0}"  # direct suites CARRIED green from an earlier round
+SMOKE_GREEN_CARRY=""                           # THIS land's greens: "<suite>\t<blob>\t<base>" lines
 NET_STATE="${SHIP_LAND_NET_STATE:-none}"       # live | inert | none — ATTESTED, never enforced
 SMOKE_DEADLINE=""                              # non-empty ⇒ gate_bats bounds every child by it
 
@@ -759,12 +761,13 @@ attest_land() {  # $1=verify $2=sweep $3=esc $4=exit [$5=stage: land|round] — 
   # new-enum-member-falls-into-fail-closed-default).
   local stage="${5:-land}"
   local total_s=$(( $(date +%s) - LAND_T0 ))
-  printf '{"ts":"%s","tool":"ship-land","repo":"%s","branch":"%s","sid":"%s","verify":"%s","sweep":"%s","esc_scan":"%s","exit":%s,"stage":"%s","head":"%s","base":"%s","tree":"%s","gate_scope":"%s","selected_n":%s,"smoke":"%s","smoke_n":%s,"smoke_s":%s,"net":"%s","red":"%s","total_s":%s,"gate_rounds":%s,"gate_s":%s,"gate_arms_s":%s,"gate_statics_s":%s}\n' \
+  printf '{"ts":"%s","tool":"ship-land","repo":"%s","branch":"%s","sid":"%s","verify":"%s","sweep":"%s","esc_scan":"%s","exit":%s,"stage":"%s","head":"%s","base":"%s","tree":"%s","gate_scope":"%s","selected_n":%s,"smoke":"%s","smoke_n":%s,"smoke_s":%s,"net":"%s","red":"%s","total_s":%s,"gate_rounds":%s,"gate_s":%s,"gate_arms_s":%s,"gate_statics_s":%s,"smoke_carried":%s}\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${REPO_ROOT}" "${BRANCH}" "${CLAUDE_CODE_SESSION_ID:-}" \
     "$1" "$2" "$3" "$4" "$stage" \
     "${ATTEST_HEAD:-?}" "${ATTEST_BASE:-?}" "${ATTEST_TREE:-?}" "${LANE}" "${SELECTED_N:--1}" \
     "${SMOKE_STATE:-none}" "${SMOKE_N:-0}" "${SMOKE_S:-0}" "${NET_STATE:-none}" "${red}" \
     "$total_s" "${MEAS_ROUNDS:-0}" "${MEAS_GATE_S:-0}" "${MEAS_ARMS_S:-0}" "${MEAS_STATICS_S:-0}" \
+    "${SMOKE_CARRIED:-0}" \
     >> "$log" 2>/dev/null || true
   ATTESTED=1
   # THE CROSS-PROCESS HALF OF THE LATCH. The locked phase is a separate process behind land-lock, so
@@ -1557,6 +1560,7 @@ post_state_write() {  # $1=landed_head — the locked child's entire handover
     printf 'SELECTED_N=%s\n'   "${SELECTED_N:--1}"
     printf 'SMOKE_STATE=%s\n'  "${SMOKE_STATE:-none}"
     printf 'SMOKE_N=%s\n'      "${SMOKE_N:-0}"
+    printf 'SMOKE_CARRIED=%s\n' "${SMOKE_CARRIED:-0}"
     printf 'SMOKE_S=%s\n'      "${SMOKE_S:-0}"
     printf 'NET_STATE=%s\n'    "${NET_STATE:-none}"
     printf 'GATE_RED=%s\n'     "${GATE_RED:-0}"
@@ -1585,6 +1589,7 @@ post_state_read() {  # $1=file — one explicit arm per key: no `eval`, so a cor
       SELECTED_N)   SELECTED_N="$v"   ;;
       SMOKE_STATE)  SMOKE_STATE="$v"  ;;
       SMOKE_N)      SMOKE_N="$v"      ;;
+      SMOKE_CARRIED) SMOKE_CARRIED="$v" ;;
       SMOKE_S)      SMOKE_S="$v"      ;;
       NET_STATE)    NET_STATE="$v"    ;;
       GATE_RED)     GATE_RED="$v"     ;;
@@ -2241,7 +2246,8 @@ gate_bats() {  # run bats with the operator's lander tuning scrubbed; args pass 
       -u LAND_LOCK_WAIT -u LAND_LOCK_TTL \
       -u SHIP_LAND_LANE -u SHIP_LAND_SMOKE_BUDGET_S -u SHIP_LAND_TIMEOUT_BIN \
       -u SHIP_LAND_SMOKE_PER_SUITE_S -u SHIP_LAND_SMOKE_BUDGET_CAP_S \
-      -u SHIP_LAND_CARVEOUT_CONFIRM -u SHIP_LAND_UNATTENDED_CARRY \
+      -u SHIP_LAND_CARVEOUT_CONFIRM -u SHIP_LAND_SMOKE_CARRY -u SHIP_LAND_SMOKE_CARRIED \
+      -u SHIP_LAND_UNATTENDED_CARRY \
       -u SHIP_LAND_T0 -u SHIP_LAND_MEAS_ROUNDS -u SHIP_LAND_MEAS_GATE_S \
       -u SHIP_LAND_MEAS_ARMS_S -u SHIP_LAND_MEAS_STATICS_S \
       CC_GATE_MAX_LOAD=0 CC_BATS_MAX_ROOTS=0 ${homeenv[@]+"${homeenv[@]}"} bats "$@" </dev/null
@@ -2366,7 +2372,7 @@ run_smoke() {  # $1=range → 0 = PROCEED · 1 = RED (a named failure in a direc
   #
   # `skipped` (load-shed) already had its own token and keeps it — it was never part of the
   # conflation, and re-spelling it would break every reader for no gain.
-  SMOKE_STATE="none-nosuites"; SMOKE_N=0; SMOKE_S=0; SMOKE_DEADLINE=""
+  SMOKE_STATE="none-nosuites"; SMOKE_N=0; SMOKE_S=0; SMOKE_CARRIED=0; SMOKE_DEADLINE=""
   ls tests/*.bats >/dev/null 2>&1 || return 0
 
   # STRUCTURAL: nothing heavy may EVER run under the land-lock. Not a policy an author can forget —
@@ -2422,6 +2428,38 @@ run_smoke() {  # $1=range → 0 = PROCEED · 1 = RED (a named failure in a direc
   own=""
   if [[ -n "$EXTRA_RANGE" ]]; then
     own="$("$GATE_SELECT" --direct "$range" 2>/dev/null)" || own_rc=$?
+  fi
+  # ---- THE CARRY: a suite THIS land already proved green is not re-run for a trunk move that ----
+  # cannot reach it (LAND_SPEED 2026-09-24). A stale-gate re-round used to re-run every direct suite
+  # of the composed tree, including the lander's own suites that went green one round earlier, and
+  # it re-ran them on a tree whose only novelty is the sibling delta. Measured: stale re-rounds are
+  # the LONG rounds (a round-3 stale row's smoke is p50 764s), 53.9 gate-hours in a week went to
+  # rounds that landed nothing, and a replayed round of 17 suites / 768s had 18 own suites of which
+  # the sibling delta selected NONE — the whole re-round re-proved facts nothing had touched.
+  #
+  # THE RULE, and it is the selector's own model, not a new one: suite S is carried iff (1) S passed
+  # (rc 0) in an earlier round of THIS land, at base B; (2) S's own blob is unchanged since; and (3)
+  # `gate-select --direct B..<this base>` — every trunk change since S went green — does NOT select
+  # S. The land gate already trusts that selector to decide which suites a change can reach at all
+  # (the smoke runs ONLY the direct suites of the diff; everything else is the post-land verifier's),
+  # so (3) asks it exactly the question it answers for every land's first round. The sibling delta's
+  # OWN direct suites still run in full: union scope is unchanged, only the re-proof of untouched
+  # greens is dropped. Any doubt runs the suite: the selector answering FULL or dying, a changed
+  # blob, a suite that was red / cut / never reached, or the kill switch SHIP_LAND_SMOKE_CARRY=off.
+  # Calls go BEFORE the union call below: tests/land-gate-cas.bats reads the LAST selector call.
+  local rbase_s carry_sel="" carry_bases="" cb csel csel_f crc=0
+  rbase_s="${range%%..*}"
+  if [[ -n "$EXTRA_RANGE" && -n "$SMOKE_GREEN_CARRY" && "${SHIP_LAND_SMOKE_CARRY:-on}" != "off" ]]; then
+    while IFS= read -r cb; do
+      [[ -z "$cb" ]] && continue
+      crc=0
+      csel="$("$GATE_SELECT" --direct "$cb..$rbase_s" 2>/dev/null)" || crc=$?
+      [[ "$crc" -ne 0 || "$csel" = "FULL" ]] && continue          # undecided ⇒ nothing carries from B
+      carry_bases="${carry_bases}${cb}"$'\n'
+      while IFS= read -r csel_f; do
+        [[ -n "$csel_f" ]] && carry_sel="${carry_sel}${cb}"$'\t'"${csel_f}"$'\n'
+      done <<< "$csel"
+    done <<< "$(printf '%s' "$SMOKE_GREEN_CARRY" | cut -f3 | sort -u)"
   fi
   direct="$("$GATE_SELECT" --direct "$range" ${EXTRA_RANGE:+"$EXTRA_RANGE"} 2>/dev/null)" || sel_rc=$?
   # ---- THE SILENCE RUNG: the selector RAN and DIED ----------------------------------------------
@@ -2537,9 +2575,16 @@ run_smoke() {  # $1=range → 0 = PROCEED · 1 = RED (a named failure in a direc
   # ONE clone for the whole smoke (not one per suite): the direct suites are as non-hermetic as any
   # other, so they still get the isolated $HOME. Fail-open by contract — see gate_home_setup.
   gate_home_setup
+  local fblob
   while IFS= read -r f; do
     [[ -z "$f" ]] && continue
     [[ -e "$f" ]] || continue                            # a suite deleted by this very land
+    fblob="$(git hash-object -- "$f" 2>/dev/null)" || fblob=""
+    if [[ -n "$carry_bases" && -n "$fblob" ]] && smoke_carry_hit "$f" "$fblob" "$carry_bases" "$carry_sel"; then
+      SMOKE_CARRIED=$(( SMOKE_CARRIED + 1 ))
+      echo "↷ gate: smoke — $f CARRIED green from an earlier round of this land (blob unchanged; no trunk change since selects it)." >&2
+      continue
+    fi
     if [[ -n "$SMOKE_DEADLINE" && "$(date +%s)" -ge "$SMOKE_DEADLINE" ]]; then
       cut=1
       echo "⏱ gate: smoke budget ${budget}s exhausted — remaining suite(s) not started, land PROCEEDS (attested smoke:\"partial\"; the verifier is the net). Override: SHIP_LAND_SMOKE_BUDGET_S." >&2
@@ -2550,7 +2595,7 @@ run_smoke() {  # $1=range → 0 = PROCEED · 1 = RED (a named failure in a direc
     # and on a re-round `direct` also holds the sibling delta's suites, which are not that.
     srv=0; run_scoped_suite "$f" "$own" || srv=$?
     case "$srv" in
-      0) ;;
+      0) [[ -n "$fblob" ]] && SMOKE_GREEN_CARRY="${SMOKE_GREEN_CARRY}${f}"$'\t'"${fblob}"$'\t'"${rbase_s}"$'\n' ;;
       2) cut=1 ;;                                        # cut twice / bound fired ⇒ NO verdict
       # Membership by `case` over a newline-fenced string, NOT `printf | grep -qxF`: this file runs
       # under `set -o pipefail`, where a producer piped into an early-exiting `grep -q` can be
@@ -2599,8 +2644,27 @@ run_smoke() {  # $1=range → 0 = PROCEED · 1 = RED (a named failure in a direc
     return 0
   fi
   SMOKE_STATE="green"
-  echo "✓ gate: smoke green — $n direct suite(s) in ${SMOKE_S}s." >&2
+  local carried_note=""
+  [[ "$SMOKE_CARRIED" -gt 0 ]] && carried_note=", $SMOKE_CARRIED carried green from an earlier round"
+  echo "✓ gate: smoke green — $n direct suite(s) in ${SMOKE_S}s${carried_note}." >&2
   return 0
+}
+
+smoke_carry_hit() {  # $1=suite $2=its blob now $3=usable bases (\n) $4="<base>\t<suite>" selections
+  # 0 ⇔ this land holds a green for $1 at the SAME blob, earned at a base B whose selection since
+  # (B..this base) was decided AND does not include $1. See THE CARRY in run_smoke. Fork-free, and
+  # by `case` over newline-fenced strings — never `grep -q` under pipefail.
+  local f="$1" blob="$2" bases="$3" sel="$4" line lf lb lbase
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    lf="${line%%$'\t'*}"; line="${line#*$'\t'}"
+    lb="${line%%$'\t'*}"; lbase="${line#*$'\t'}"
+    [[ "$lf" = "$f" && "$lb" = "$blob" ]] || continue
+    case $'\n'"$bases" in *$'\n'"$lbase"$'\n'*) ;; *) continue ;; esac
+    case $'\n'"$sel" in *$'\n'"$lbase"$'\t'"$f"$'\n'*) continue ;; esac
+    return 0
+  done <<< "$SMOKE_GREEN_CARRY"
+  return 1
 }
 
 record_gate_cut() {  # $1=rc $2=logfile [$3=file — default the whole corpus] — a CUT must be
@@ -5317,6 +5381,7 @@ main_outer() {
     export SHIP_LAND_GATE_EFFECTIVE_FULL="$GATE_EFFECTIVE_FULL" SHIP_LAND_SELECTED_N="$SELECTED_N" \
            SHIP_LAND_FIRST_BASE="$FIRST_BASE" \
            SHIP_LAND_SMOKE_STATE="$SMOKE_STATE" SHIP_LAND_SMOKE_N="$SMOKE_N" \
+           SHIP_LAND_SMOKE_CARRIED="$SMOKE_CARRIED" \
            SHIP_LAND_SMOKE_S="$SMOKE_S" SHIP_LAND_NET_STATE="$NET_STATE"
     meas_export
     "$LAND_LOCK" -- "$SELF" __locked "$TRUNK" "$DRY_RUN" "$GATE_BASE" "$GATE_HEAD"
