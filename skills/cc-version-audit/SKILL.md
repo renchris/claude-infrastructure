@@ -91,7 +91,7 @@ grep -n "^## 2\.1\." /tmp/cc-changelog.md | head -40   # locate the gap: our-ver
 Read every version between the running version and the target.
 
 ## Step 3 — Fan out the assessment (Dynamic Workflow, 3 axes + adversary)
-Fire a workflow (or subagents) with these reso-workflow axes — each reads the
+Fire a workflow (or `workflow-lean` subagents) with these reso-workflow axes — each reads the
 changelog slice AND reso's actual configs, rates each change BLOCKER/CAUTION/
 IMPROVEMENT/NEUTRAL:
 1. **Agent Teams / effort / worktree** — implicit-team spawn, TeammateIdle reap,

@@ -98,7 +98,7 @@ close the panes second.
 | Writes/modifies code (2+ tasks) | Agent Teams (TeamCreate + worktrees) |
 | Writes/modifies code (1 task) | Single agent in lead session OR one assignee |
 | Research/exploration (no code) | `Explore` subagent (read-only, fire-and-forget) |
-| 50+ parallel read-only tasks | Subagents |
+| 50+ parallel read-only tasks | Subagents — `subagent_type: "workflow-lean"` when the brief is self-contained |
 | **Re-checking work YOU just did** | **Never spawn for this.** See below. |
 
 ### Never spawn an agent to verify your own output (Opus 5, 2026-08-01)

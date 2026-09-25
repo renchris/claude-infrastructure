@@ -21,7 +21,7 @@ implementation are zero-factors; never start from the cheaper-to-build option.
 
 ## Phase 1 — measure the incumbent to death (don't-inherit ≠ don't-measure)
 
-Fan out read-only researchers (target ~3: failure archaeology of prior docs/attempts ·
+Fan out read-only `workflow-lean` researchers (target ~3: failure archaeology of prior docs/attempts ·
 live telemetry re-derived from disk · the adjacent-layer/deploy seams). Rules that earned
 their place: every handed-down count is a CLAIM — re-derive it from primary disk truth
 before gating any decision on it (three "facts" fell this way in the exemplar); harvest
