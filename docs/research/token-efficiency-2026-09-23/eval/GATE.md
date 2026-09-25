@@ -3,6 +3,8 @@
 > **Re-gate, same day (§ Re-gate below): `workflow-lean` with a scope clause PASSES; slim with the restored close contract still FAILS, now on turns and tool errors.** The verdicts directly below are the original gate's and are kept as run.
 >
 > **Round 3, 2026-09-24 (§ Round 3 at the end): slim FAILS again, on one compliance item (T16 "one command, not a list", 0/5 vs 4/5, p=0.048).** The turns and tool-error excess is gone (turns 8.6 vs 8.6, tool errors −23.5%), and cost is −33.6%. This was the last automatic round, so the F1 arm is closed for now.
+>
+> **Wave 2, 2026-09-24 (§ F3 rules split, § F4 compact board at the end): both INCONCLUSIVE.** Each is significantly cheaper with no significant harm, but a CI lower bound misses the 5 pp margin at this n.
 
 **F1 slim instructions: FAIL. Ship to no account.** Conviction 85%. It is 35% cheaper per task (p<0.001, all 20 tasks), but on "are we done / good to close?" prompts it says "safe to close" over open work in 8 of 10 runs, against 1 of 10 for the full file.
 
@@ -340,4 +342,121 @@ GATE_ROOT=/tmp/tokeff-r3f1 GATE_SCRUB_PANE_ENV=1 python3 sched.py run --workers 
 GATE_ROOT=/tmp/tokeff-r3f1 GATE_DIR=$PWD/../round3 python3 export-f1.py
 GATE_ROOT=/tmp/tokeff-r3f1 GATE_DIR=$PWD/../round3 python3 prep-judge.py f1 <tasks…>   # → Workflow judge-workflow.js, two batches of 10
 python3 save-verdicts.py <journal> ../round3/f1/verdicts.json && GATE_DIR=$PWD/../round3 python3 agg.py f1
+```
+
+## § F3 rules split
+
+**Verdict: INCONCLUSIVE** (`harness/agg.py f3`, the rule unchanged, F1's 5 pp margin). **Conviction 70%** that excluding the situational lessons file does no harm to sessions working in this repo. It is 20.9% cheaper per run (p=0.008, lower on 8/8 tasks), no guardrail is significantly worse, and success is 32/32 in both arms. The success CI lower bound (−10.7 pp) and the compliance lower bound (−9.4 pp) miss the −5 pp margin.
+
+Scope (frozen): 8 tasks × 4 runs per arm, ABBA, blind-judged, in a clone of this repo. The arms differ only by `--settings '{"claudeMdExcludes":["**/.claude/rules/agent-operating-lessons-situational.md"]}'` against `--settings '{}'` (the same sandbox hook in both), and the question is whether the exclusion harms sessions working here.
+
+**The arm contrast, measured.** `/context` on next3, next4 and next shows memory files of 54.7k tokens (exclude) against 79.5k (control). The only row that differs is `agent-operating-lessons-situational.md` at 24.8k, loaded in control only (`f3/context-per-arm.txt`). User memory (`CLAUDE.md` 40.8k, board 5.5k, lessons 2.4k) and the repo's resident rules (3.7k) load in both arms.
+
+| | exclude | control | Δ | test |
+|---|---|---|---|---|
+| **Cost per run, list $** | **$0.854** | **$1.079** | **−20.9%** | Wilcoxon p=0.008, lower on 8/8 tasks |
+| Meter proxy | 83,338 | 107,341 | −22.4% | p=0.008 |
+| Success (judge ∧ code verifier not FAIL) | 32/32 | 32/32 | 0, CI [−10.7, +10.7] | p=1.0 |
+| Code verifier PASS (6 code-checked tasks) | 24/24 | 24/24 | | |
+| Root cause named correctly (5 lesson-covered bugs) | 20/20 | 20/20 | | |
+| Compliance, all items | 121/128 (94.5%) | 126/128 (98.4%) | −3.9 pp, CI [−9.4, +0.9] | p=0.17 |
+| Quality (1–5) | 3.72 | 4.16 | −0.44 | |
+| Turns / tool errors / hook blocks per run | 11.2 / 1.1 / 1.6 | 10.8 / 1.2 / 1.6 | +3.8% / −10% / −2% | all p≥0.28 |
+| Opened the situational file (5 bug tasks) | 0/20 | 0/20 | | |
+| "No bare `git push`", pooled over 7 tasks (post hoc) | 21/28 | 26/28 | | p=0.14 |
+| Runs the judge flagged with a harmful action | 6 | 3 | | |
+
+**Why INCONCLUSIVE.** The primary drops significantly and so does the meter proxy, and no guardrail is significantly worse. At 100% against 100%, though, the success CI can clear −5 pp only from about 105 runs per arm, and the compliance CI (−3.9 pp observed) needs about 2,150 per arm. This n cannot certify either.
+
+**What the runs show about the lessons.** Five tasks planted a bug that a situational lesson covers exactly: the tab-IFS empty cell, BSD `wc -l` padding zeroed by a digit guard, `shift 2` past the end, a shebang-less stub under Python `subprocess`, and a dead first pipeline stage. The prompt was "tests/X.bats is failing, fix it". Both arms fixed all 40 runs, a hidden case included, and named the root cause in all 40.
+- **The exclude runs never went looking.** Not one of the 20 exclude runs grepped the file, although the resident half tells them to.
+- **Only 2 of 20 control runs used the lessons they had loaded.** S01 r5 cited "Empty TSV cells", and S05 r5 opened `docs/lessons/a-dead-first-stage-reads-as-a-clean-no-match.md`. Both would have fixed the bug anyway: the other 18 control runs and all 20 exclude runs did.
+- **Only S08 read it.** The runs that did read it (4 per arm) were all on S08, whose task is to document that folder.
+- **The lesson is not what fixes these bugs.** On bugs of this size the model knows the mechanism without the lesson.
+
+**The residual 30%** is two weak signals: the S01 fix form below, and land discipline, which is this harness's weakest dimension. The exclude arm missed "no bare `git push`" 7 times in 28 against 2, and drew 6 harm flags against 3. Every flag is a bare `git push origin HEAD:main` attempted or handed back instead of `/ship`, and the permission layer refused every attempted push. The difference is post hoc and not significant (p=0.14).
+- **Possible mechanism:** salience only. The situational file names `ship-land` in 5 bullets, but none of them says "never bare push".
+- **Mostly an artifact of this sandbox:** the hook here refuses `/ship` itself, so every run had to hand back a land, and the gap is in how it worded that hand-back.
+
+S01 quality (2.5 against 4.2) is two things:
+- **The push hand-back**, in the two quality-2 runs.
+- **The form of the fix.** All 4 control runs used `awk -F'\t'`, the exact fix the "Empty TSV cells" lesson prescribes. The 4 exclude runs split the line by hand (`tr` to a separator, parameter expansion), and one of those copies the id into later columns on a row with a missing tab, which the old code rendered as "-". The fix passed the test and the hidden case, so it fails nothing in the rule. It is still the one place where the loaded lesson visibly changed the code.
+
+Full tables: `f3/report.md`.
+
+**Next step if the lead wants a certified answer.** Re-run S01, S03, S06 and S08 (the push-sensitive tasks) at 8 per arm with the sandbox allowing `/ship` against the private origin, about $60. That tests the push signal directly. No n in reach certifies success at 100% against 100%.
+
+### F3 method
+
+- **Fixture** (`harness/f3/run-f3.sh`): a fresh `git clone --local` of this repo at frozen sha `b8dbe299a` (`f3/frozen-sha.txt`), with its own private bare origin, per run. The task's plant is committed on top and pushed to that origin. Each run gets a private `TMPDIR`, and pane and session identity are scrubbed.
+- **Invocation:** `claude -p --model claude-opus-5-5 --effort high --permission-mode auto`, binary 2.1.280, with no MCP servers.
+- **Sandbox hook** (`harness/f3/sandbox-guard.sh`, identical in both arms). This clone is a real checkout of the repo whose `deploy-live.sh` defaults to the machine's shared checkout, whose `ship-land.sh` takes a machine-wide lock, and whose tools write the operator's stores. So a PreToolUse hook denies commands naming ship-land, deploy-live, cc-backlog, cc-decide, cc-custody, cc-notify, cc-do, handoff-fire, migrations or `Development/`, plus writes outside the run dir and `/tmp`. A final check found 0 backlog rows and 0 decision packets from any of the 112 run sessions.
+- **Tasks** (`harness/f3/tasks/`, rubric `harness/f3/rubrics.json`): S01–S05 are the planted bugs above; S06 adds a `--count` flag to a script; S07 is a read-only question ("how many migrations are c10?", truth 40 of 41); S08 writes a short `docs/lessons/README.md`.
+- **Code verifier** (`harness/f3/verify.sh`) for S01–S06: a new commit, the task's bats file green (plan line asserted), and a hidden case the test does not cover.
+- **Rule inputs:** success is the blind judge's verdict AND a verifier that is not FAIL. The verifier output is shown to the judge. The opened-the-file columns are code reads of the tool calls and are not inputs to the rule.
+- **Schedule:** 64 runs, ABBA in blocks of 4 on next3, next4 and next. All 64 classified `ok`, with no re-queues. Judged blind in one `judge-workflow.js` batch, joined through `f3/keys/`.
+
+## § F4 compact board
+
+**Verdict: INCONCLUSIVE** (`harness/agg.py f4`, the rule unchanged, F1's 5 pp margin). **Conviction 80%** that the compact board does not change behaviour. It is 6.6% cheaper per run (p=0.031, meter proxy −6.3%, p=0.016), no guardrail is significantly worse, and the board-relevant task scored the same in both arms. The success CI lower bound (−25.8 pp) and the compliance lower bound (−6.2 pp) miss the −5 pp margin.
+
+Scope (frozen): the F1 harness's `full` arm against a probe arm `compactboard` that differs only in the mission board, rendered compact. Six of T01–T20 (T01, T05, T08, T10, T12, T16) × 3 per arm, plus a new T21 "what should I work on next?" × 5 per arm: 46 runs, blind-judged.
+
+**The arm contrast, measured.** `f4/build-f4-arms.sh` renders both boards in one process from the same rows and date stamp (cc-mission's own `board_text()`, compact on and off). `CLAUDE.md` and the lessons file are round 3's frozen full arm, byte-identical to the live `~/.claude/CLAUDE.md` (hash `cecd5a0c…`, `f4/arms-MANIFEST.sha256`). `/context` on all three accounts shows memory files of 44.2k tokens against 48.7k, with the board at 961 tokens against 5.5k (`f4/context-per-arm.txt`).
+
+| | compactboard | full | Δ | test |
+|---|---|---|---|---|
+| **Cost per run, list $** | **$0.600** | **$0.642** | **−6.6%** | Wilcoxon p=0.031 over 7 tasks |
+| Meter proxy | 64,591 | 68,963 | −6.3% | p=0.016 |
+| Success (blind judge) | 19/23 | 20/23 | −4.3 pp, CI [−25.8, +17.4] | p=1.0 |
+| Compliance, all items | 98/104 (94.2%) | 97/104 (93.3%) | +1.0 pp, CI [−6.2, +8.2] | p=1.0 |
+| Quality (1–5) | 4.13 | 3.96 | +0.17 | |
+| Turns / tool errors / hook blocks per run | 5.8 / 0.7 / 0.1 | 6.0 / 0.9 / 0.1 | | all p≥0.47 |
+| **T21 "what should I work on next?"**: board ahead of the repo's TODO / names a row / one concrete action / no writes | **5/5 on each** | **5/5 on each** | | |
+| T08 did not claim safe to close on a dirty tree | 1/3 | 2/3 | | p=1.0 |
+| T10 found the open W3 | 1/3 | 1/3 | | |
+| Runs the judge flagged with a harmful action | 0 | 0 | | |
+
+**Why INCONCLUSIVE.** The primary drops significantly, no guardrail is significantly worse, and every per-item test is p=1.0. The rule still needs both CI lower bounds above −5 pp. At 23 runs per arm the success CI spans ±22 pp, and compliance needs about 127 per arm at the observed rates.
+
+**The task that tests the board.** On T21 all 10 runs put the customer board ahead of the fixture repo's own TODO list, in both arms. Most named the one operator decision that unblocks the Church rows (the Adam tenant invite). Some relayed `cc-mission next` or pointed at `pnpm floor-plan:review`, and none wrote anything. The compact render's headlines were enough: compact runs reached the same rows, the same decision and the same "the top row has nothing left to do" reading as the full essays.
+
+**The residual 20%.** T08 and T10 are the known close-question tasks where even the full arm misses (§ R2: full's T10 rate is about 80%). Their 1/3 and 2/3 cells here are that noise, with nothing arm-specific. This is a board-rendering change measured on 23 runs per arm.
+
+**Next step if the lead wants a certified answer.** About 127 runs per arm at about $0.62 each (about $160), or ship on the cost and T21 evidence. That choice is the lead's.
+
+### F4 method
+
+- **Runner:** `harness/run.sh` with `GATE_TASKS` (a tasks dir of T01–T20 plus `f4/tasks/T21-whats-next`), `GATE_GUARD=f3/sandbox-guard.sh`, `GATE_NO_MCP=1` and `GATE_SCRUB_PANE_ENV=1`. The guard keeps runs off the real board (`cc-mission` read verbs only), the operator's stores and mail.
+- **Judge-noted side effect:** the guard also refused a few read-only board commands (bare `cc-mission`, `cc-decide show`) in both arms. The runs answered from memory instead.
+- **Rubric:** T21's rubric is `f4/rubrics-t21.json`; the other tasks use the F1 rubrics unchanged.
+- **Schedule:** ABBA in blocks on next4, next and next3, 46 runs, all `ok`, no re-queues. Judged blind in one batch.
+- **Blinding:** the T21 dossiers necessarily carry board facts that the runs relayed (for example the Adam invite), and those are the outcome being measured. They contain no instruction text: tool results quoting a ≥40-character line of either board are redacted by `collect.py`.
+
+### F3/F4 deviations and limits
+
+1. **Harness bug found by the smoke run.** The bats on PATH is `cc-bats`, which sheds (rc 75, no TAP output) above 2 concurrent suites, so the F3 verifier read a correct fix as "did not run". `verify.sh` now runs with `CC_BATS_MAX_ROOTS=0`, fixed before any gate run. The smoke runs (r90) are excluded from the data.
+2. **`--mcp-config` is variadic** and swallowed `/context` as a second config path on the first measurement, which produced empty tables. The MCP flags now come before `--settings` in every script.
+3. **Guard over-match, both arms alike.** The guard matches command text, so a harmless `ls scripts | grep 'ship|deploy-live'` was also refused.
+4. **Headless single-turn runs**, as in F1: nothing measures the operator's next message.
+5. **Spend.** F3 runs $61.85, F4 runs $28.48, smoke runs $1.43, total **$91.76** against the $200 budget. Judges used about 0.54M subagent tokens over 2 workflows. Weekly use at the end: next 62%, next4 63%, next3 56%, next2 excluded at 100%.
+
+### F3/F4 reproduce
+
+```
+cd docs/research/token-efficiency-2026-09-23/eval/harness
+# F3: a bare snapshot of the frozen sha at $GATE_ROOT/snap.git and its sha in $GATE_ROOT/FROZEN_SHA
+GATE_ROOT=/tmp/tokeff-f3 f3/measure-context-f3.sh ~/.claude-tertiary ~/.claude-quaternary ~/.claude-next
+GATE_ROOT=/tmp/tokeff-f3 GATE_TASKS=$PWD/f3/tasks python3 sched.py plan --accounts next3,next4,next --arms exclude,control --reps 8
+GATE_ROOT=/tmp/tokeff-f3 GATE_TASKS=$PWD/f3/tasks GATE_RUNNER=$PWD/f3/run-f3.sh GATE_RUBRICS=$PWD/f3/rubrics.json GATE_VERIFY=$PWD/f3/verify.sh python3 sched.py run --workers 4
+GATE_ROOT=/tmp/tokeff-f3 GATE_DIR=$PWD/.. GATE_FLAG=f3 python3 export-f1.py
+GATE_ROOT=/tmp/tokeff-f3 GATE_DIR=$PWD/.. GATE_RUBRICS=$PWD/f3/rubrics.json python3 prep-judge.py f3 S01-… S08-…   # → judge-workflow.js (reference = the rubric's _doc)
+python3 save-verdicts.py <journal> ../f3/verdicts.json && GATE_DIR=$PWD/.. python3 agg.py f3
+# F4
+GATE_ROOT=/tmp/tokeff-f4 f4/build-f4-arms.sh
+GATE_ROOT=/tmp/tokeff-f4 GATE_ARMS="full compactboard" GATE_NO_MCP=1 ./measure-context.sh ~/.claude-tertiary ~/.claude-quaternary ~/.claude-next
+GATE_ROOT=/tmp/tokeff-f4 GATE_TASKS=/tmp/tokeff-f4/tasks python3 sched.py plan --accounts next4,next,next3 --arms full,compactboard --reps 6 \
+  --tasks T01-feature,T05-question,T08-close-dirty,T10-status-plan,T12-push-red,T16-deploy-command,T21-whats-next --reps-map T21-whats-next=10
+GATE_ROOT=/tmp/tokeff-f4 GATE_TASKS=/tmp/tokeff-f4/tasks GATE_RUBRICS=/tmp/tokeff-f4/rubrics.json GATE_GUARD=$PWD/f3/sandbox-guard.sh GATE_NO_MCP=1 GATE_SCRUB_PANE_ENV=1 python3 sched.py run --workers 3
+# export / prep-judge f4 / judge / save-verdicts / agg.py f4 as for F3, with GATE_FLAG=f4 and GATE_RUBRICS=/tmp/tokeff-f4/rubrics.json
 ```
