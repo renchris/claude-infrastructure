@@ -784,6 +784,128 @@ _bounded() { local s="$1"; shift
   if [ -n "$_WRAP_BOUND_BIN" ]; then "$_WRAP_BOUND_BIN" "$s" "$@"; else "$@"; fi
 }
 
+# ── backlog-fold cache (2026-09-24, fix/stop-hook-latency) ────────────────────────────────────────
+# `cc-backlog list --json` re-folds the whole append-only store (9 MB today) on every call: ~2.2 s
+# each at a load of ~300, and this script makes two of them (`--blocked`, `--all`). That was 6.9 s
+# of a 13.2 s run, and this script runs inside operator-readout's 10 s and session-continue's 5 s
+# Stop-hook timeouts, which is why both sat at their caps on nearly every turn.
+#
+# The key is the one operator-readout's blg_list_cached already relies on: the store is ONE
+# append-only file, so its (mtime,size) is an exact invalidator (every add/claim/block/done appends
+# and grows it; only `compact` rewrites it, and that changes the size too). No TTL. Two additions
+# over that cache, because this one serves a CALLER-resolved binary:
+#   · the binary's own (mtime,size) is in the key, followed through its symlink, so a landed
+#     cc-backlog change invalidates every entry instead of serving the old fold's shape;
+#   · only a SUCCESSFUL, non-empty run is stored, and the list's own rc is returned unchanged, so
+#     every caller's fail-open arm (`|| { …_SRC="error"… }`) behaves exactly as before.
+# An unstattable store or binary (GNU stat, a missing file) ⇒ no key ⇒ the plain bounded call.
+#
+# THE MISS IS FILLED DETACHED, NOT INLINE. At a load of ~300 a cold fold takes longer than the
+# caller's 5 s bound, so an inline fill is killed by that bound every time and the cache NEVER fills
+# — measured: rc 124 on both lists, run after run, 10 s spent and YOURS_SRC=error. So a miss starts
+# ONE detached filler (scripts/lib/detach.sh: its own session, immune to the hook's process-group
+# kill) that folds under its own 300 s bound and moves the result into place, and the caller only
+# WAITS for that file, up to the same bound it always had. Past the bound the caller returns 124,
+# exactly as a timed-out bounded call did, and the filler finishes anyway, so the next caller hits.
+# Single-flight: a `mkdir` lock beside the entry, so concurrent Stops (two hooks per session, N
+# sessions after every backlog append) start one fold between them, not one each. A lock older
+# than 10 min belongs to a filler that died and is taken over. One miss also starts the fold for
+# the other list this script reads, so the two waits overlap instead of running back to back.
+# No detach lib or no python3 ⇒ the inline bounded call, the pre-cache behaviour.
+#
+# WRAP_BACKLOG_CACHE: auto (default) caches only the REAL binary — CC_BACKLOG_BIN unset. A suite that
+# stubs the binary gets the uncached call it always had, so no stub's output can be served from, or
+# written into, a shared cache. `on` forces it (the cache's own tests), `off`/`0`/`no` disables it.
+# WRAP_BACKLOG_CACHE_DIR overrides the directory (shared with operator-readout's by default, so one
+# directory holds both and its miss-path sweep bounds both).
+_wl_lstat_key() { # $1 = path → "<mtime>-<size>" of the file a symlink points at, or empty
+  local k
+  k="$(stat -L -f '%m-%z' "$1" 2>/dev/null || true)"
+  case "$k" in *[!0-9-]*|-*|*-|'') k="" ;; esac
+  printf '%s' "$k"
+}
+# The filler, run detached as `bash -c "$_WL_BLC_FILLER" _ <entry> <lock> <cmd…>`.
+# shellcheck disable=SC2016  # expanded by the detached bash, not here
+_WL_BLC_FILLER='out="$1"; lock="$2"; shift 2
+tmp="$(mktemp "$out.XXXXXX" 2>/dev/null)" || { rmdir "$lock" 2>/dev/null; exit 0; }
+if "$@" > "$tmp" 2>/dev/null && [ -s "$tmp" ]; then mv -f "$tmp" "$out" 2>/dev/null; fi
+rm -f "$tmp"; rmdir "$lock" 2>/dev/null; exit 0'
+_wl_detach_ready() { # rc 0 = `detach` is callable
+  command -v detach >/dev/null 2>&1 && return 0
+  [ -x /usr/bin/python3 ] || return 1
+  local l
+  for l in "$(dirname "$0")/lib/detach.sh" "$HOME/.claude/scripts/lib/detach.sh"; do
+    # shellcheck source=lib/detach.sh
+    # shellcheck disable=SC1091
+    [ -f "$l" ] && . "$l" 2>/dev/null && command -v detach >/dev/null 2>&1 && return 0
+  done
+  return 1
+}
+_wl_blc_entry() { # $1 = skey · $2 = bkey · $3 = bin · $4 = the list args as one string → entry name
+  local k="wl-$1-${CC_BACKLOG_FILE:-default}-$2-$3-$4"
+  printf '%s' "${k//[^A-Za-z0-9._-]/_}"
+}
+_wl_blc_fill() { # $1 = entry path · $2 = bin · $3.. = list args; rc 0 = a filler is running or done
+  local out="$1" bin="$2" lock; shift 2
+  lock="$out.fill"
+  [ -s "$out" ] && return 0
+  if ! mkdir "$lock" 2>/dev/null; then
+    [ -n "$(find "$lock" -maxdepth 0 -mmin +10 2>/dev/null)" ] || return 0   # a live filler holds it
+    rmdir "$lock" 2>/dev/null; mkdir "$lock" 2>/dev/null || return 0
+  fi
+  _wl_detach_ready || { rmdir "$lock" 2>/dev/null; return 1; }
+  if [ -n "$_WRAP_BOUND_BIN" ]; then
+    detach /dev/null /bin/bash -c "$_WL_BLC_FILLER" _ "$out" "$lock" "$_WRAP_BOUND_BIN" 300 "$bin" list "$@" >/dev/null 2>&1
+  else
+    detach /dev/null /bin/bash -c "$_WL_BLC_FILLER" _ "$out" "$lock" "$bin" list "$@" >/dev/null 2>&1
+  fi || { rmdir "$lock" 2>/dev/null; return 1; }
+  return 0
+}
+# ONE miss-wait per run, shared by both backlog reads (called by each reader, in THIS shell, before
+# its substitution; the first call arms it). One miss starts both folds side by side, so a second
+# full wait would only re-wait for the same fill — back to back that was two bounds, 10 s, inside a
+# 5 s hook. WRAP_BACKLOG_WAIT_S (default 3) caps the total; the per-call bound still caps each.
+_WL_BLC_END=""
+_wl_blc_arm() {
+  [ -n "$_WL_BLC_END" ] && return 0
+  local w="${WRAP_BACKLOG_WAIT_S:-3}"; case "$w" in ''|*[!0-9]*) w=3 ;; esac
+  _WL_BLC_END=$(( SECONDS + w ))
+}
+_backlog_list() { # $1 = timeout s · $2 = resolved cc-backlog · $3.. = `list` args; rc = list's rc
+  local t="$1" bin="$2"; shift 2
+  local skey bkey dir out lset end
+  case "${WRAP_BACKLOG_CACHE:-auto}" in
+    off|0|no) _bounded "$t" "$bin" list "$@"; return $? ;;
+    on|1|yes) ;;
+    *) [ -z "${CC_BACKLOG_BIN:-}" ] || { _bounded "$t" "$bin" list "$@"; return $?; } ;;
+  esac
+  skey="$(_wl_lstat_key "${CC_BACKLOG_FILE:-$HOME/.claude/autonomy/backlog.jsonl}")"
+  bkey="$(_wl_lstat_key "$bin")"
+  if [ -z "$skey" ] || [ -z "$bkey" ]; then _bounded "$t" "$bin" list "$@"; return $?; fi
+  dir="${WRAP_BACKLOG_CACHE_DIR:-${CC_ORB_BLG_CACHE_DIR:-${TMPDIR:-/tmp}/cc-orb-blg-cache.${UID:-0}}}"
+  out="$dir/$(_wl_blc_entry "$skey" "$bkey" "$bin" "$*")"
+  if [ -s "$out" ] && cat "$out" 2>/dev/null; then return 0; fi
+  mkdir -p "$dir" 2>/dev/null || { _bounded "$t" "$bin" list "$@"; return $?; }
+  _wl_blc_fill "$out" "$bin" "$@" || { _bounded "$t" "$bin" list "$@"; return $?; }
+  for lset in "--blocked --json" "--all --json"; do
+    [ "$lset" = "$*" ] && continue
+    # shellcheck disable=SC2086  # a constant word list, split on purpose
+    _wl_blc_fill "$dir/$(_wl_blc_entry "$skey" "$bkey" "$bin" "$lset")" "$bin" $lset || true
+  done
+  find "$dir" -type f -mmin +240 -delete 2>/dev/null || true   # bound the dir (miss path only)
+  find "$dir" -type d -name '*.fill' -mmin +30 -empty -delete 2>/dev/null || true
+  case "$t" in ''|*[!0-9]*) t=5 ;; esac
+  end=$(( SECONDS + t ))
+  case "${_WL_BLC_END:-}" in ''|*[!0-9]*) ;; *) [ "$_WL_BLC_END" -lt "$end" ] && end="$_WL_BLC_END" ;; esac
+  while [ ! -s "$out" ]; do
+    # The filler gave up (its fold failed or produced nothing) ⇒ fail now, not at the bound.
+    [ -d "$out.fill" ] || [ -s "$out" ] || return 1
+    [ "$SECONDS" -lt "$end" ] || return 124
+    sleep 0.2
+  done
+  cat "$out"
+}
+
 # YOURS = blocked backlog items whose .session == $SID. ANY failure (no binary, non-zero exit,
 # no jq, unparseable json, timeout) ⇒ YOURS=0 + YOURS_SRC=error. Fail-OPEN: a backlog we cannot
 # read never blocks a close and never invents an operator step.
@@ -793,7 +915,8 @@ count_operator_steps() {
   local bin json n
   bin="$(_resolve_backlog_bin)" || { YOURS=0; YOURS_SRC="error"; return 0; }
   command -v jq >/dev/null 2>&1 || { YOURS=0; YOURS_SRC="error"; return 0; }
-  json="$(_bounded "${WRAP_BACKLOG_TIMEOUT_S:-5}" "$bin" list --blocked --json 2>/dev/null)" \
+  _wl_blc_arm
+  json="$(_backlog_list "${WRAP_BACKLOG_TIMEOUT_S:-5}" "$bin" --blocked --json 2>/dev/null)" \
     || { YOURS=0; YOURS_SRC="error"; return 0; }
   # A needs-human row that carries no conviction/receipt (post-epoch) is NOT an operator step yet —
   # it is UNCONVICTED (counted by count_filed_undriven, the filer's own 🔧) and must not be credited
@@ -877,29 +1000,38 @@ UNCONVICTED_MINE=0; UNCONVICTED_ROWS=0; UNCONVICTED_PKTS=0; UNCONVICTED_SRC="ski
 FILED_MINE=0; FILED_SRC="skip"; CLOSED_MINE=0
 count_filed_undriven() {
   if [ -z "$SID" ]; then FILED_MINE=0; FILED_SRC="none"; return 0; fi
-  local bin json f c
+  local bin res f c u
   bin="$(_resolve_backlog_bin)" || { FILED_SRC="error"; return 0; }
   command -v jq >/dev/null 2>&1 || { FILED_SRC="error"; return 0; }
-  json="$(_bounded "${WRAP_BACKLOG_TIMEOUT_S:-5}" "$bin" list --all --json 2>/dev/null)" \
-    || { FILED_SRC="error"; return 0; }
-  f="$(printf '%s' "$json" | jq -r --arg sid "$SID" \
-        '[ .[] | select(.status == "open" and (.filedBy // "") == $sid
-                        and (.whyNotNow // "") == "" and (.condition // "") == "") ] | length' 2>/dev/null)" \
-    || { FILED_SRC="error"; return 0; }
-  c="$(printf '%s' "$json" | jq -r --arg sid "$SID" \
-        '[ .[] | select(.status == "done" and (.closedSession // "") == $sid) ] | length' 2>/dev/null)" \
-    || c=0
-  # UNCONVICTED_ROWS (§ UNCONVICTED above) — the same fetch, one more question: which needs-human
+  # ONE jq pass, streamed (2026-09-24, fix/stop-hook-latency). `list --all --json` is ~6.5 MB; it
+  # used to be captured into a shell variable and re-piped through three jq parses, ~2.3 s at a load
+  # of ~300. Each count keeps its own failure rule through its own `try`: f failing is FILED_SRC=error
+  # (it was the `|| error` arm), c and u failing are 0 (their `|| x=0` arms). pipefail carries a
+  # failed fetch out of the substitution exactly as the old `json="$(…)" || error` did.
+  #
+  # UNCONVICTED_ROWS (u; § UNCONVICTED above) — the same fetch, one more question: which needs-human
   # rows of mine carry no number or no receipt. Open OR blocked: a legacy-binary add leaves the row
   # open, the current binary blocks it at birth, and neither shape is the operator's without the
   # fields. Fail toward 0 like CLOSED_MINE — this term must never manufacture a 🔧 from a read error.
-  local u
-  u="$(printf '%s' "$json" | jq -r --arg sid "$SID" --arg epoch "$CONVICTION_EPOCH" \
-        '[ .[] | select((.status == "open" or .status == "blocked") and (.filedBy // "") == $sid
+  _wl_blc_arm
+  res="$(set -o pipefail
+        _backlog_list "${WRAP_BACKLOG_TIMEOUT_S:-5}" "$bin" --all --json 2>/dev/null \
+        | jq -r --arg sid "$SID" --arg epoch "$CONVICTION_EPOCH" '
+          (try ([ .[] | select(.status == "open" and (.filedBy // "") == $sid
+                        and (.whyNotNow // "") == "" and (.condition // "") == "") ] | length)
+           catch "E") as $f
+          | (try ([ .[] | select(.status == "done" and (.closedSession // "") == $sid) ] | length)
+             catch "E") as $c
+          | (try ([ .[] | select((.status == "open" or .status == "blocked") and (.filedBy // "") == $sid
                         and ((.whyNotNow // "") | startswith("needs-human"))
                         and ((.ts // "") >= $epoch)
-                        and ((.conviction == null) or ((.receipt // "") == ""))) ] | length' 2>/dev/null)" \
-    || u=0
+                        and ((.conviction == null) or ((.receipt // "") == ""))) ] | length)
+             catch "E") as $u
+          | "\($f) \($c) \($u)"' 2>/dev/null)" \
+    || { FILED_SRC="error"; return 0; }
+  read -r f c u <<WLFILED
+$res
+WLFILED
   case "$f" in ''|*[!0-9]*) FILED_SRC="error"; return 0 ;; esac
   case "$c" in ''|*[!0-9]*) c=0 ;; esac
   case "$u" in ''|*[!0-9]*) u=0 ;; esac
