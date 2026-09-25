@@ -58,6 +58,16 @@ enqueue()   { printf '{"type":"queue-operation","operation":"enqueue","timestamp
   [ "$output" = "submitted 2026-09-19T21:04:00.000Z" ] || { echo "$output"; false; }
 }
 
+@test "RED-PROOF probe: a token split by a <pasted_content> boundary is still submitted" {
+  # Replays pane 405's record shape (2026-09-24): the raw substring test said none, so the expect
+  # poll ran to its 180 s deadline while the session was frozen behind it.
+  user_rec 2026-09-19T21:04:00.000Z "\"\\n\\n<pasted_content id=\\\"d32f\\\">\\nResumed in place — ${TOK%:*}\\n</pasted_content id=\\\"d32f\\\">\\n\\n:${TOK##*:}\""
+  ! grep -q "$TOK" "$TX" || { echo "fixture carries the token contiguously — it tests nothing"; false; }
+  run "$PROBE" "$CFG" "$SID" "$T0" "$TOK"
+  [ "$status" -eq 0 ]
+  [ "$output" = "submitted 2026-09-19T21:04:00.000Z" ] || { echo "$output"; false; }
+}
+
 @test "probe: the token in a queue-operation enqueue → queued <ts> (typed, behind a running turn)" {
   enqueue 2026-09-19T21:03:00.000Z "\"/limit-recover ingest /x $TOK\""
   run "$PROBE" "$CFG" "$SID" "$T0" "$TOK"
@@ -281,6 +291,14 @@ STUB
 
   printf '%s\n' "{\"type\":\"assistant\",\"timestamp\":\"2026-09-19T21:04:00.000Z\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"quoting $TOK back\"}]}}" "$late" > "$TX"
   agree "the token echoed by an assistant turn" none
+
+  # A PASTE BOUNDARY SPLITTING THE TOKEN (2026-09-24, pane 405): Claude Code wrapped the first piece
+  # of the typed prompt in <pasted_content> and the tail landed after the closing tag.
+  printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"2026-09-19T21:04:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"\\n\\n<pasted_content id=\\\"d32f\\\">\\ningest ${TOK%:*}\\n</pasted_content id=\\\"d32f\\\">\\n\\n:${TOK##*:}\"}}" "$late" > "$TX"
+  agree "the token split across a paste boundary" submitted
+
+  printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"2026-09-19T21:04:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"<pasted_content id=\\\"a1\\\">\\ningest $TOK\\n</pasted_content id=\\\"a1\\\">\"}}" "$late" > "$TX"
+  agree "the whole prompt inside one paste block" submitted
 
   # The one fixture where the two implementations answer DIFFERENT WORDS and must still agree on the
   # thing that matters: an ENQUEUED prompt has been typed but not yet accepted as a user record, so

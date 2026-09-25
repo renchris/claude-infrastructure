@@ -4090,11 +4090,21 @@ resume_engaged() { # $1=target cfg  $2=sid  $3=baseline (UTC, %FT%T) $4=submit t
     for f in "$cfg"/projects/*/"$sid".jsonl; do
       [ -f "$f" ] || continue
       sub_f="$(/usr/bin/python3 - "$f" "$t0" "$tok" <<'TOK'
-import json, sys
+import json, re, sys
 f, t0, tok = sys.argv[1], sys.argv[2], sys.argv[3]
 best = ""
+# Same normaliser as lr-submit-probe.sh: a paste boundary can split the token (2026-09-24, pane 405).
+PASTE_TAG = re.compile(r"\n*</?pasted_content\b[^>]*>\n*")
+def flat(c):
+    if isinstance(c, str):
+        t = c
+    elif isinstance(c, list) and all(isinstance(b, dict) for b in c):
+        t = "".join(b.get("text", "") if isinstance(b.get("text"), str) else json.dumps(b) for b in c)
+    else:
+        t = json.dumps(c) if c else ""
+    return PASTE_TAG.sub("", t)
 for line in open(f, errors="replace"):
-    if tok not in line:
+    if tok not in line and "pasted_content" not in line:
         continue
     try:
         d = json.loads(line)
@@ -4106,8 +4116,7 @@ for line in open(f, errors="replace"):
     if ts <= t0:
         continue
     m = d.get("message") if isinstance(d.get("message"), dict) else {}
-    c = m.get("content")
-    txt = c if isinstance(c, str) else (json.dumps(c) if c else "")
+    txt = flat(m.get("content"))
     if tok in txt and ts > best:
         best = ts
 print(best)
