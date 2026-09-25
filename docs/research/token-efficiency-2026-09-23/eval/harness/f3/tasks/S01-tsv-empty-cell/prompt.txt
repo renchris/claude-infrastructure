@@ -1,0 +1,1 @@
+tests/pane-table.bats is failing, fix it

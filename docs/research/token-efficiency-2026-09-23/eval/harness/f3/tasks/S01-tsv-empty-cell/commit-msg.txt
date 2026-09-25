@@ -1,0 +1,1 @@
+feat(pane-table): registry export as an aligned table

@@ -1,0 +1,1 @@
+feat(stamp-version): build stamp from the checkout's HEAD

@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# pane-table.sh — render the session registry export as an aligned table.
+#
+#   scripts/pane-table.sh <export.tsv>
+#
+# The export has one session per line, three tab-separated columns: session id, pane, cwd.
+# A session that has not been given a pane yet has an EMPTY pane column; it renders as "-".
+set -uo pipefail
+
+[ $# -eq 1 ] || { echo "usage: pane-table.sh <export.tsv>" >&2; exit 2; }
+[ -r "$1" ] || { echo "pane-table: cannot read $1" >&2; exit 2; }
+
+printf '%-10s %-6s %s\n' SESSION PANE CWD
+while IFS=$'\t' read -r id pane cwd; do
+  [ -n "$id" ] || continue
+  printf '%-10s %-6s %s\n' "$id" "${pane:--}" "${cwd:--}"
+done < "$1"

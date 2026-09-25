@@ -1,0 +1,1 @@
+tests/stamp-version.bats is failing, fix it

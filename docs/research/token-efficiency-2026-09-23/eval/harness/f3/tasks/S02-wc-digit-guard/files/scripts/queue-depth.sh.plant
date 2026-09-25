@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# queue-depth.sh — how many entries are waiting in a spool file (one entry per line).
+#
+#   scripts/queue-depth.sh <spool-file>      prints "<n> queued"
+#   scripts/queue-depth.sh --over N <spool>  exits 1 when more than N are queued
+#
+# A missing spool counts as 0 queued: the producer creates it lazily.
+set -uo pipefail
+
+limit=""
+if [ "${1:-}" = "--over" ]; then
+  limit=${2:-}
+  shift 2 2>/dev/null || { echo "usage: queue-depth.sh [--over N] <spool-file>" >&2; exit 2; }
+fi
+[ $# -eq 1 ] || { echo "usage: queue-depth.sh [--over N] <spool-file>" >&2; exit 2; }
+
+n=0
+if [ -f "$1" ]; then
+  n=$(wc -l < "$1")
+fi
+# Harden: anything that is not a plain count (an error message, an empty read) counts as 0.
+case "$n" in ''|*[!0-9]*) n=0 ;; esac
+
+echo "$n queued"
+if [ -n "$limit" ] && [ "$n" -gt "$limit" ]; then
+  exit 1
+fi
+exit 0

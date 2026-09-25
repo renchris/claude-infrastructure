@@ -109,12 +109,20 @@ def decide(primary, primary_meter, harms, cis, margin, flag):
 
 
 # ------------------------------------------------------------------ F1
-def f1():
-    runs = [json.loads(l) for l in open(f"{GATE}/f1/runs.jsonl")]
-    verdicts = json.load(open(f"{GATE}/f1/verdicts.json"))
+def f1like(flag):
+    """F1, and F3/F4, which run the F1 harness shape (headless runs, blind dossiers, per-task keys).
+    F3 and F4 are instruction-content changes like F1, so they take F1's 5 pp margin. In F3, success
+    is the judge's verdict AND a code verifier that did not FAIL (the verifier is shown to the judge)."""
+    title, T, C = {
+        "f1": ("F1 slim instructions", "slim", "full"),
+        "f3": ("F3 rules split (situational lessons excluded)", "exclude", "control"),
+        "f4": ("F4 compact mission board", "compactboard", "full"),
+    }[flag]
+    runs = [json.loads(l) for l in open(f"{GATE}/{flag}/runs.jsonl")]
+    verdicts = json.load(open(f"{GATE}/{flag}/verdicts.json"))
     keyed = {}
     for g in verdicts:
-        keys = json.load(open(f"{GATE}/f1/keys/{g['id']}.json"))["dossiers"]
+        keys = json.load(open(f"{GATE}/{flag}/keys/{g['id']}.json"))["dossiers"]
         for v in g["verdicts"]:
             k = keys[v["dossier"]]
             keyed[(g["id"], k["rep"])] = v
@@ -125,7 +133,8 @@ def f1():
             continue
         r = dict(
             r,
-            success=v["success"],
+            success=v["success"] and r.get("verifier") != "fail",
+            judge_success=v["success"],
             quality=v["quality"],
             items=v["items"],
             harmful=v["harmful"],
@@ -133,7 +142,52 @@ def f1():
             push_blocked=r["push_refused"] > 0,
         )
         rows.append(r)
-    return rows, report("F1 slim instructions", rows, "slim", "full", "task", 0.05)
+    text, summary = report(title, rows, T, C, "task", 0.05)
+    if flag == "f3":  # mechanical outcomes, reported beside the rule (not inputs to it)
+        A = {a: [r for r in rows if r["arm"] == a] for a in (T, C)}
+        ex = ["\n### Mechanical outcomes (code, not judge; not inputs to the rule)\n"]
+        ex.append(f"| | {T} | {C} |\n|---|---|---|")
+        for key, label in (
+            ("situational_read", "Opened the situational lessons file"),
+            ("lesson_body_read", "Opened a docs/lessons body"),
+            ("rules_dir_read", "Touched .claude/rules at all"),
+        ):
+            ex.append(
+                f"| {label} | {sum(bool(r.get(key)) for r in A[T])}/{len(A[T])} | {sum(bool(r.get(key)) for r in A[C])}/{len(A[C])} |"
+            )
+        for lab, pred in (
+            (
+                "Verifier PASS (code-checked tasks)",
+                lambda r: r.get("verifier") == "pass",
+            ),
+            ("Judge success (all tasks)", lambda r: r["judge_success"]),
+        ):
+            den = lambda a: [
+                r
+                for r in A[a]
+                if lab.startswith("Judge") or r.get("verifier") in ("pass", "fail")
+            ]
+            ex.append(
+                f"| {lab} | {sum(pred(r) for r in den(T))}/{len(den(T))} | {sum(pred(r) for r in den(C))}/{len(den(C))} |"
+            )
+        ex.append(
+            f"\n| task | situational opened {T} / {C} | verifier PASS {T} / {C} |\n|---|---|---|"
+        )
+        for t in sorted({r["task"] for r in rows}):
+            g = lambda a, k: [r for r in A[a] if r["task"] == t]
+            sr = lambda a: (
+                f"{sum(bool(r.get('situational_read')) for r in g(a, 0))}/{len(g(a, 0))}"
+            )
+            vp = lambda a: (
+                f"{sum(r.get('verifier') == 'pass' for r in g(a, 0))}/{len(g(a, 0))}"
+            )
+            ex.append(f"| {t} | {sr(T)} / {sr(C)} | {vp(T)} / {vp(C)} |")
+        text += "\n" + "\n".join(ex)
+    return rows, (text, summary)
+
+
+def f1():
+    return f1like("f1")
 
 
 # ------------------------------------------------------------------ F2
@@ -404,7 +458,7 @@ def report(title, rows, T, C, unit, margin, f2_extra=False):
 
 if __name__ == "__main__":
     which = sys.argv[1]
-    rows, (text, summary) = f1() if which == "f1" else f2()
+    rows, (text, summary) = f2() if which == "f2" else f1like(which)
     os.makedirs(f"{GATE}/{which}", exist_ok=True)
     json.dump(summary, open(f"{GATE}/{which}/summary.json", "w"), indent=1, default=str)
     open(f"{GATE}/{which}/report.md", "w").write(

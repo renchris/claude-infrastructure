@@ -41,23 +41,29 @@ def log(msg):
     print(line, flush=True)
 
 
+TASKS = os.environ.get("GATE_TASKS", f"{H}/tasks")
+RUNNER = os.environ.get("GATE_RUNNER", f"{H}/run.sh")
+
+
 def tasks():
     return sorted(
-        d
-        for d in os.listdir(f"{H}/tasks")
-        if os.path.isfile(f"{H}/tasks/{d}/prompt.txt")
+        d for d in os.listdir(TASKS) if os.path.isfile(f"{TASKS}/{d}/prompt.txt")
     )
 
 
-def plan(accounts):
+def plan(accounts, arms=("full", "slim"), nreps=10, only=None, reps_map=None):
+    """Defaults reproduce the F1 plan exactly. F3/F4 pass --arms, --reps, --tasks, --reps-map:
+    order is ABBA repeated and cut at the rep count; blocks are runs of 4 reps on one account."""
     if os.path.exists(SCHED):
         print(f"schedule exists: {SCHED}")
         return
     cells, k = [], 0
-    for ti, t in enumerate(tasks()):
-        a, b = ("full", "slim") if int(t[1:3]) % 2 == 0 else ("slim", "full")
-        order = [a, b, b, a, a, b, b, a, a, b]
-        for bi, reps in enumerate(((1, 2, 3, 4), (5, 6, 7, 8), (9, 10))):
+    for ti, t in enumerate(t for t in tasks() if not only or t in only):
+        a, b = arms if int(t[1:3]) % 2 == 0 else arms[::-1]
+        n = (reps_map or {}).get(t, nreps)
+        order = [(a, b, b, a)[i % 4] for i in range(n)]
+        allr = list(range(1, n + 1))
+        for bi, reps in enumerate(allr[i : i + 4] for i in range(0, n, 4)):
             acct = accounts[k % len(accounts)]
             k += 1
             for r in reps:
@@ -181,7 +187,7 @@ def run(workers):
             )
             save(cells)
             p = subprocess.run(
-                [f"{H}/run.sh", c["arm"], c["task"], str(c["rep"]), ccd],
+                [RUNNER, c["arm"], c["task"], str(c["rep"]), ccd],
                 capture_output=True,
                 text=True,
             )
@@ -300,7 +306,17 @@ if __name__ == "__main__":
             if "--accounts" in args
             else ["next", "next4", "next3"]
         )
-        plan(accts)
+        opt = lambda k: args[args.index(k) + 1] if k in args else None
+        rm = opt("--reps-map")
+        plan(
+            accts,
+            tuple(opt("--arms").split(",")) if opt("--arms") else ("full", "slim"),
+            int(opt("--reps") or 10),
+            set(opt("--tasks").split(",")) if opt("--tasks") else None,
+            {kv.split("=")[0]: int(kv.split("=")[1]) for kv in rm.split(",")}
+            if rm
+            else None,
+        )
     elif cmd == "run":
         run(int(args[args.index("--workers") + 1]) if "--workers" in args else 3)
     elif cmd == "stop":

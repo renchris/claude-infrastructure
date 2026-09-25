@@ -1,0 +1,27 @@
+#!/usr/bin/env bats
+# tests/marker-scan.bats — scripts/marker-scan.sh passes clean files and refuses marked or unscannable ones.
+
+setup() {
+  REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+  MS="$REPO/scripts/marker-scan.sh"
+  D="$BATS_TEST_TMPDIR"
+  printf 'one\ntwo\n' > "$D/clean.txt"
+  printf 'one\n<<<<<<< HEAD\ntwo\n=======\nthree\n>>>>>>> topic\n' > "$D/marked.txt"
+}
+
+@test "clean files pass" {
+  run bash "$MS" "$D/clean.txt"
+  [ "$status" -eq 0 ]
+}
+
+@test "a file with conflict markers is refused and named" {
+  run bash "$MS" "$D/clean.txt" "$D/marked.txt"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"marked.txt"* ]]
+}
+
+@test "a file that cannot be scanned is refused, not passed" {
+  run bash "$MS" "$D/clean.txt" "$D/does-not-exist.txt"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"does-not-exist.txt"* ]]
+}

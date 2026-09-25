@@ -1,0 +1,27 @@
+#!/usr/bin/env bats
+# tests/pane-table.bats — scripts/pane-table.sh renders the registry export one row per session.
+
+setup() {
+  REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+  PT="$REPO/scripts/pane-table.sh"
+  EXPORT="$BATS_TEST_TMPDIR/export.tsv"
+}
+
+@test "a session with a pane renders all three columns" {
+  printf 's-a1\t%%12\t/work/alpha\n' > "$EXPORT"
+  run bash "$PT" "$EXPORT"
+  [ "$status" -eq 0 ]
+  [ "${lines[1]}" = "s-a1       %12    /work/alpha" ]
+}
+
+@test "a session with no pane yet shows '-' for the pane and keeps its cwd" {
+  printf 's-a1\t%%12\t/work/alpha\ns-b2\t\t/work/beta\n' > "$EXPORT"
+  run bash "$PT" "$EXPORT"
+  [ "$status" -eq 0 ]
+  [ "${lines[2]}" = "s-b2       -      /work/beta" ]
+}
+
+@test "missing file is a usage error" {
+  run bash "$PT" "$BATS_TEST_TMPDIR/nope.tsv"
+  [ "$status" -eq 2 ]
+}
