@@ -880,7 +880,7 @@ _wl_blc_arm() {
 }
 _backlog_list() { # $1 = timeout s · $2 = resolved cc-backlog · $3.. = `list` args; rc = list's rc
   local t="$1" bin="$2"; shift 2
-  local skey bkey dir out lset end
+  local skey bkey dir out lset end cbin
   case "${WRAP_BACKLOG_CACHE:-auto}" in
     off|0|no) _bounded "$t" "$bin" list "$@"; return $? ;;
     on|1|yes) ;;
@@ -890,14 +890,18 @@ _backlog_list() { # $1 = timeout s · $2 = resolved cc-backlog · $3.. = `list` 
   bkey="$(_wl_lstat_key "$bin")"
   if [ -z "$skey" ] || [ -z "$bkey" ]; then _bounded "$t" "$bin" list "$@"; return $?; fi
   dir="${WRAP_BACKLOG_CACHE_DIR:-${CC_ORB_BLG_CACHE_DIR:-${TMPDIR:-/tmp}/cc-orb-blg-cache.${UID:-0}}}"
-  out="$dir/$(_wl_blc_entry "$skey" "$bkey" "$bin" "$*")"
+  # Key on the binary's PHYSICAL directory, not on how the caller spelled it: the hooks reach this
+  # script as ~/.claude/hooks/../scripts/ and the CLI as ~/.claude/scripts/, so the same cc-backlog
+  # arrived under two spellings and every backlog append paid two cold folds (measured live).
+  if cbin="$(cd "${bin%/*}" 2>/dev/null && pwd -P)"; then cbin="$cbin/${bin##*/}"; else cbin="$bin"; fi
+  out="$dir/$(_wl_blc_entry "$skey" "$bkey" "$cbin" "$*")"
   if [ -s "$out" ] && cat "$out" 2>/dev/null; then return 0; fi
   mkdir -p "$dir" 2>/dev/null || { _bounded "$t" "$bin" list "$@"; return $?; }
   _wl_blc_fill "$out" "$bin" "$@" || { _bounded "$t" "$bin" list "$@"; return $?; }
   for lset in "--blocked --json" "--all --json"; do
     [ "$lset" = "$*" ] && continue
     # shellcheck disable=SC2086  # a constant word list, split on purpose
-    _wl_blc_fill "$dir/$(_wl_blc_entry "$skey" "$bkey" "$bin" "$lset")" "$bin" $lset || true
+    _wl_blc_fill "$dir/$(_wl_blc_entry "$skey" "$bkey" "$cbin" "$lset")" "$bin" $lset || true
   done
   find "$dir" -type f -mmin +240 -delete 2>/dev/null || true   # bound the dir (miss path only)
   find "$dir" -type d -name '*.fill' -mmin +30 -empty -delete 2>/dev/null || true

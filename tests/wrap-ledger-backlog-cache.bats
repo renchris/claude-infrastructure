@@ -193,3 +193,14 @@ await_entry() {
   [ "$(field "$output" YOURS)" = "1" ]
   [ "$(calls '--blocked')" = "2" ]
 }
+
+@test "two spellings of one binary share one entry (hooks reach it via hooks/../scripts/../bin)" {
+  run bash "$LEDGER" --machine
+  [ "$(calls '--blocked')" = "1" ]
+  mkdir -p "$BATS_TEST_TMPDIR/sub"
+  CC_BACKLOG_BIN="$BATS_TEST_TMPDIR/sub/../cc-backlog-stub" run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" YOURS)" = "1" ]
+  [ "$(calls '--blocked')" = "1" ]
+  [ "$(calls '--all')" = "1" ]
+}
