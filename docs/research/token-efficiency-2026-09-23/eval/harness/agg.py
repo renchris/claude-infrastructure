@@ -117,6 +117,7 @@ def f1like(flag):
         "f1": ("F1 slim instructions", "slim", "full"),
         "f3": ("F3 rules split (situational lessons excluded)", "exclude", "control"),
         "f4": ("F4 compact mission board", "compactboard", "full"),
+        "f1sys": ("F1 rank 2: memory in the system prompt", "sys", "full"),
     }[flag]
     runs = [json.loads(l) for l in open(f"{GATE}/{flag}/runs.jsonl")]
     verdicts = json.load(open(f"{GATE}/{flag}/verdicts.json"))

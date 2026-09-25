@@ -18,7 +18,7 @@ mode, rest = sys.argv[1], sys.argv[2:]
 groups = []
 # f3 and f4 are staged exactly like f1 (same dossier shape), into their own dir; a task's rep count
 # is whatever its schedule planned (F1: always 10).
-if mode in ("f1", "f3", "f4"):
+if mode in ("f1", "f3", "f4", "f1sys"):
     sched = json.load(open(f"{G}/schedule.json"))
     for t in rest:
         cells = [c for c in sched if c["task"] == t]
