@@ -181,3 +181,15 @@ await_entry() {
     [ "$(field "$output" UNCONVICTED_ROWS)" = "0" ]
   done
 }
+
+@test "a cache that cannot be written falls back to the plain bounded call, with the right answer" {
+  : > "$BATS_TEST_TMPDIR/not-a-dir"
+  export WRAP_BACKLOG_CACHE_DIR="$BATS_TEST_TMPDIR/not-a-dir"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" YOURS)" = "1" ]
+  [ "$(field "$output" FILED_MINE)" = "1" ]
+  run bash "$LEDGER" --machine
+  [ "$(field "$output" YOURS)" = "1" ]
+  [ "$(calls '--blocked')" = "2" ]
+}

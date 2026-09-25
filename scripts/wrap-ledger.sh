@@ -842,7 +842,13 @@ _wl_detach_ready() { # rc 0 = `detach` is callable
   return 1
 }
 _wl_blc_entry() { # $1 = skey · $2 = bkey · $3 = bin · $4 = the list args as one string → entry name
-  local k="wl-$1-${CC_BACKLOG_FILE:-default}-$2-$3-$4"
+  # The two PATHS go in as a cksum, not verbatim: spelled out they pushed the name past the 255-byte
+  # NAME_MAX under a deep TMPDIR (measured off-box), and a lock that cannot be created is a cache
+  # that cannot fill. The stats and the args stay readable; the path pair only has to separate
+  # stores and binaries, and a CRC collision would still have to match both files' (mtime,size).
+  local ph k
+  ph="$(printf '%s|%s' "${CC_BACKLOG_FILE:-default}" "$3" | cksum 2>/dev/null | tr ' ' '-')"
+  k="wl-$1-$2-${ph:-nopath}-$4"
   printf '%s' "${k//[^A-Za-z0-9._-]/_}"
 }
 _wl_blc_fill() { # $1 = entry path · $2 = bin · $3.. = list args; rc 0 = a filler is running or done
@@ -850,6 +856,7 @@ _wl_blc_fill() { # $1 = entry path · $2 = bin · $3.. = list args; rc 0 = a fil
   lock="$out.fill"
   [ -s "$out" ] && return 0
   if ! mkdir "$lock" 2>/dev/null; then
+    [ -d "$lock" ] || return 1          # no lock and none can be made (unwritable, too long): uncached
     [ -n "$(find "$lock" -maxdepth 0 -mmin +10 2>/dev/null)" ] || return 0   # a live filler holds it
     rmdir "$lock" 2>/dev/null; mkdir "$lock" 2>/dev/null || return 0
   fi
