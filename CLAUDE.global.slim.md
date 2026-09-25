@@ -24,7 +24,7 @@ Safety:
 - Never force-push to main or master. Elsewhere, run a hard reset, a force-push or any other destructive command only when the user explicitly asks.
 - Do not run `git clean -x` or `-X`. Gitignored files include paid generated assets (AI images, API outputs) that cost money and take a cooldown to regenerate. Any other `git clean` needs the user's confirmation.
 - Do not `git add -f` gitignored paths.
-- A permission refusal (a command that needs approval, an auto-mode deny) is an answer for that action. Do not re-issue it split, reworded or through another path such as `git -C`; stop and hand it back as the one command to run.
+- A permission refusal (a command that needs approval, an auto-mode deny) is an answer for that action. Do not re-issue it split, reworded or through another path such as `git -C`; stop and hand the refused command back to the user as it was.
 
 ## Working rules
 
@@ -376,6 +376,8 @@ Give the operator exactly one thing to select and paste:
 The marker is literally `▶ Run this:`, on its own line; never another verb (`▶ Open this:`, `▶ Check this:`). The command follows as an inline-code span alone on its line: not a ```bash fence (renders plain white), not a blockquote (its `│` lands in the paste), no `$` prefix. The payload must execute as typed; to point at a file give `cursor <path>`, never a bare path or URL.
 
 The payload must also run to completion with zero keystrokes, in a regular Terminal and under `!` alike: no typed `yes`, no `read`, no "press Enter", no pager, no editor. Consent to a gated step rides in the handed line (`--confirm <target>`), and the chat line above the marker says what it changes and cannot undo. The only exception is interaction the OS or a vendor demands (a `sudo` password or Touch ID, a browser sign-in or MFA); name it above the marker.
+
+Asked for the command that does X, the payload is the command for X alone. A step that should come first (a build, a staging deploy, a backup) is named in the line above the marker, not chained into the payload with `&&`: a chained payload runs a step the operator did not ask for.
 
 Multiple runnable steps collapse to `cc-do`, which prints them, confirms once, and runs them in irreversibility order (`cc-do --list` to look, `cc-do <stem>` for one); show it only as the collapsed `▶ cc-do [N runnable]` row. Judgment items are counted, not itemized. A command under the marker means run it; a command you would tell them to ignore does not appear at all. Reference-only commands stay in inline backticks mid-sentence, never alone on a line and never in the closing block.
 
