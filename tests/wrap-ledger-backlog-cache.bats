@@ -8,6 +8,9 @@
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   LEDGER="$REPO/scripts/wrap-ledger.sh"
+  # a private $HOME: every default this ledger falls back to (~/.claude stores, the backlog path,
+  # the detach lib's second tier) must resolve inside the fixture, never on the operator's box
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   export CC_CUSTODY_DIR="$BATS_TEST_TMPDIR/custody"
   ORIGIN="$BATS_TEST_TMPDIR/origin.git"
   WORK="$BATS_TEST_TMPDIR/work"
