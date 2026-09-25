@@ -31,25 +31,36 @@
 # `ps -o tty= -p $$` reads `??` here (verified). That oracle resolves its tty from the session
 # registry, and an assignee pane has no registry row at all (134/134, lead-crash-watchdog.sh:596).
 agent_assignee_argv() { # → 0 = this session IS a team assignee; echoes the matched agent-id
-  local tbl
-  if [ -n "${CC_WF_PSTABLE_FILE:-}" ] && [ -f "${CC_WF_PSTABLE_FILE}" ]; then
-    tbl="$(cat "$CC_WF_PSTABLE_FILE" 2>/dev/null)"
-  else
-    tbl="$(ps -axo pid=,ppid=,command= 2>/dev/null)"
-  fi
-  [ -n "$tbl" ] || return 1
   # CC_WF_START_PID exists so the suite can pin where the walk begins: a hook's own $$ is a pid the
   # test cannot know in advance, so without it the ancestry could only be tested by stubbing out the
   # walk itself — i.e. not tested at all. $$ (not BASHPID) is right in production: it survives the
   # command substitution this function is called inside, and names the hook process whose ancestry
   # actually contains the CC process.
-  printf '%s\n' "$tbl" | awk -v start="${CC_WF_START_PID:-$$}" -v maxhop="${CC_WF_MAX_HOPS:-8}" '
-    { p = $1; PP[p] = $2; c = ""; for (i = 3; i <= NF; i++) c = c " " $i; CMD[p] = c " " }
+  #
+  # STREAMED, AND THE COMMAND IS BUILT ONLY FOR THE WALK (2026-09-24, fix/stop-hook-latency). The
+  # table is ~1,700 processes / ~550 KB here (argv carries whole briefs), and this runs up to six
+  # times per Stop across session-continue and operator-readout. It used to be captured into a shell
+  # variable, re-piped, and turned into a command string for EVERY process — ~0.1-0.2 s a call at a
+  # load of ~300 — when the walk reads at most maxhop of them. Now each line is kept whole and split
+  # only when the walk visits it. split() with the default FS is the same whitespace split the old
+  # per-record field loop used, so the rebuilt string is byte-identical. An empty table still ends in
+  # rc 1 with no output: the walk finds no command at the start pid and no parent after it.
+  { if [ -n "${CC_WF_PSTABLE_FILE:-}" ] && [ -f "${CC_WF_PSTABLE_FILE}" ]; then
+      cat "$CC_WF_PSTABLE_FILE" 2>/dev/null
+    else
+      ps -axo pid=,ppid=,command= 2>/dev/null
+    fi; } | awk -v start="${CC_WF_START_PID:-$$}" -v maxhop="${CC_WF_MAX_HOPS:-8}" '
+    { PP[$1] = $2; L[$1] = $0 }
+    function cmdof(p,   n, f, i, c) {
+      n = split(L[p], f); c = ""
+      for (i = 3; i <= n; i++) c = c " " f[i]
+      return c " "
+    }
     END {
       cur = start
       for (h = 0; h < maxhop; h++) {
         if (cur == "" || cur == "0" || cur == "1") exit 1
-        c = CMD[cur]
+        c = cmdof(cur)
         if (c ~ / --agent-id / && c ~ / --agent-name / && c ~ / --team-name /) {
           n = split(c, w, " "); id = ""; nm = ""; tm = ""
           for (i = 1; i < n; i++) {
