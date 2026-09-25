@@ -1,0 +1,99 @@
+diff --git a/bin/cc-close-attrib b/bin/cc-close-attrib
+index c1fc900be..9764e0873 100755
+--- a/bin/cc-close-attrib
++++ b/bin/cc-close-attrib
+@@ -161,6 +161,94 @@ MEMDIR_ARGV=()
+ _memdir_inject 2>/dev/null || true
+ [[ ${#MEMDIR_ARGV[@]} -gt 0 ]] && set -- "${MEMDIR_ARGV[@]}"
+ 
++# ── USER MEMORY IN THE SYSTEM PROMPT (token-efficiency rank 2, wave 3, 2026-09-24). OFF unless the
++#    flag file exists; migration 0042 (c10, operator-run) creates it. Claude Code puts the memory files
++#    in the first user message, after its only system cache breakpoint, so every new context re-writes
++#    them; appended to the system prompt they sit before the breakpoint and sibling contexts share them
++#    (eval/wave2/r2-breakpoint.md: cold 3-slot workflow cache writes -53%). The F1 quality gate on this
++#    placement (eval/GATE.md § Wave 3 rank 2) found no quality leg worse. It needs THREE things at once
++#    — the user memory excluded (claudeMdExcludes), the same text appended for the main thread and for
++#    subagents, and CLAUDE_CODE_ENABLE_APPEND_SUBAGENT_PROMPT=1 — and only argv can carry the append
++#    (a settings `appendSystemPrompt` is ignored; probed on 2.1.280). That is why this lives HERE, per
++#    launch, and never as a settings.json exclude: an exclude in the shared file would strip the
++#    instructions from every session that did not come through this wrapper. Only the user-level files
++#    move (identical in every cwd); project memory stays where the loader puts it. Fails OPEN: on any
++#    doubt the argv is left untouched. Kill switch CC_SYSPROMPT_MEMORY=off.
++SYSMEM_ARGV=()
++_sysmem_inject() {
++  [[ "${CC_SYSPROMPT_MEMORY:-on}" != off ]] || return 0
++  [[ -f "${CC_SYSPROMPT_MEMORY_FLAG:-$HOME/.claude/autonomy/sysprompt-memory}" ]] || return 0
++  local ccd="${CLAUDE_CONFIG_DIR:-$HOME/.claude}" a i n=$# at=-1 form="" val=""
++  ccd="${ccd%/}"
++  local -a args=("$@")
++  # A session launch only: no subcommand (mcp, config, …), no resume (its first user message already
++  # holds the memory), and no caller-supplied append or exclude to collide with.
++  case "${args[0]:-}" in -*|'') ;; *) return 0 ;; esac
++  for (( i = 0; i < n; i++ )); do
++    a="${args[i]}"
++    [[ "$a" == "--" ]] && break
++    case "$a" in
++      --resume|--resume=*|-r|--continue|-c|--version|-v|--help|-h|--append-system-prompt*|--append-subagent-system-prompt*) return 0 ;;
++      # Launchers put their own flags first, so a subcommand need not be args[0]; an exact
++      # subcommand word anywhere skips (a prompt that is exactly one of these words only loses the move).
++      mcp|config|update|doctor|install|plugin|plugins|setup-token|migrate-installer|agents|auth) return 0 ;;
++      *claudeMdExcludes*) return 0 ;;
++      --settings)
++        [[ $at -lt 0 && $((i + 1)) -lt $n ]] || return 0
++        at=$i; form=space; val="${args[i+1]}"; i=$((i + 1))
++        case "$val" in *claudeMdExcludes*) return 0 ;; esac ;;
++      --settings=*)
++        [[ $at -lt 0 ]] || return 0
++        at=$i; form=eq; val="${a#--settings=}" ;;
++    esac
++  done
++  if [[ $at -ge 0 ]]; then
++    local t="${val#"${val%%[![:space:]]*}"}"
++    [[ "$t" == "{"* ]] || return 0               # a settings FILE: not merged here, fail open
++  fi
++  # The user-level memory files, in load order, deduplicated by real path.
++  local -a files=() seen=() excl=()
++  local f real s dup
++  for f in "$ccd/CLAUDE.md" "$ccd"/rules/*.md; do
++    [[ -f "$f" && -r "$f" ]] || continue
++    real="$(cd -P "$(dirname "$f")" 2>/dev/null && pwd -P)/$(basename "$f")" || continue
++    dup=0; for s in "${seen[@]+"${seen[@]}"}"; do [[ "$s" == "$real" ]] && dup=1; done
++    [[ $dup -eq 0 ]] || continue
++    seen+=("$real"); files+=("$f"); excl+=("$f")
++    [[ "$real" != "$f" ]] && excl+=("$real")
++  done
++  [[ ${#files[@]} -gt 0 ]] || return 0
++  local out_dir="$HOME/.claude/cache/sysprompt-memory" out tmp
++  mkdir -p "$out_dir" 2>/dev/null || return 0
++  out="$out_dir/$(basename "$ccd").md"
++  tmp="$(mktemp "$out_dir/.tmp.XXXXXX" 2>/dev/null)" || return 0
++  { for f in "${files[@]}"; do
++      printf "Contents of %s (user's private global instructions for all projects):\n\n" "$f"
++      cat "$f"; printf '\n\n'
++    done; } > "$tmp" 2>/dev/null && mv "$tmp" "$out" 2>/dev/null || { rm -f "$tmp"; return 0; }
++  local js list=""
++  for f in "${excl[@]}"; do
++    js="$(_memdir_json_str "$f")" || return 0
++    list="${list:+$list,}\"$js\""
++  done
++  local key="\"claudeMdExcludes\":[$list]" merged
++  SYSMEM_ARGV=("${args[@]}")
++  if [[ $at -lt 0 ]]; then
++    SYSMEM_ARGV=("--settings={$key}" "${args[@]}")
++  else
++    local body="${t#\{}"
++    if [[ "${body//[[:space:]]/}" == "}" ]]; then merged="{$key}"; else merged="{$key,$body"; fi
++    if [[ "$form" == eq ]]; then SYSMEM_ARGV[at]="--settings=$merged"; else SYSMEM_ARGV[at+1]="$merged"; fi
++  fi
++  SYSMEM_ARGV=(--append-system-prompt-file "$out" --append-subagent-system-prompt-file "$out" "${SYSMEM_ARGV[@]}")
++  return 0
++}
++_sysmem_inject "$@" 2>/dev/null || true
++if [[ ${#SYSMEM_ARGV[@]} -gt 0 ]]; then
++  set -- "${SYSMEM_ARGV[@]}"
++  export CLAUDE_CODE_ENABLE_APPEND_SUBAGENT_PROMPT=1
++fi
++
+ RECORDS_DIR="${CC_CLOSE_RECORDS_DIR:-$HOME/.claude/logs/close-records}"
+ # Same $HOME-derived path bin/claude-latest writes and lead-crash-watchdog.sh:821 globs.
+ STDERR_DIR="${CC_STDERR_LOG_DIR:-$HOME/.claude/logs/stderr}"

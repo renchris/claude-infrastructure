@@ -35,6 +35,21 @@ fi
 SETTINGS=$(python3 -c 'import json,sys; print(json.dumps({"claudeMdExcludes": sys.argv[1:]}))' \
   "$CCD/CLAUDE.md" "$HOME/.claude/CLAUDE.md" "$HOME/.claude/rules/00-mission-board.md" \
   "$HOME/.claude/rules/agent-operating-lessons.md")
+# Rank 2's setup-breakpoint workaround (wave 3): an arm dir holding a SYSPROMPT marker keeps the same
+# files in the fixture but excludes them as memory and appends their text, framed as the memory loader
+# frames it, to the SYSTEM prompt (main and subagents), so it sits before the system cache breakpoint.
+# Without the marker nothing below changes, which reproduces every earlier F1 round.
+SYS=()
+if [ -f "$G/arms/$ARM/SYSPROMPT" ]; then
+  MEMFILE="$RUN/out/memory.md"
+  for f in "$FX/.claude/CLAUDE.md" "$FX/.claude/rules/"*.md; do
+    printf 'Contents of %s (project instructions, checked into the codebase):\n\n%s\n\n' "$f" "$(cat "$f")"
+  done > "$MEMFILE"
+  SETTINGS=$(python3 -c 'import json,sys; s=json.loads(sys.argv[1]); s["claudeMdExcludes"]+=sys.argv[2:]; print(json.dumps(s))' \
+    "$SETTINGS" '**/.claude/CLAUDE.md' '**/.claude/rules/*.md')
+  SYS=(--append-system-prompt-file "$MEMFILE" --append-subagent-system-prompt-file "$MEMFILE")
+  export CLAUDE_CODE_ENABLE_APPEND_SUBAGENT_PROMPT=1
+fi
 # GATE_GUARD=<hook script>: add f3/sandbox-guard.sh as a PreToolUse hook (both arms alike), so a run
 # cannot mutate the real mission board or operator stores. GATE_NO_MCP=1: start no MCP servers, so a
 # run cannot create a real mail draft. Both default off, which reproduces the F1 rounds.
@@ -62,7 +77,7 @@ if [ "${GATE_SCRUB_PANE_ENV:-0}" = 1 ]; then
 fi
 START=$(date +%s)
 CLAUDE_CONFIG_DIR="$CCD" TMPDIR="$RUN/tmp/" ${SCRUB[@]+"${SCRUB[@]}"} timeout 1500 "$CLAUDE_BIN" -p --output-format json \
-  --model claude-opus-5-5 --effort high --permission-mode auto ${MCP[@]+"${MCP[@]}"} --settings "$SETTINGS" \
+  --model claude-opus-5-5 --effort high --permission-mode auto ${MCP[@]+"${MCP[@]}"} ${SYS[@]+"${SYS[@]}"} --settings "$SETTINGS" \
   "$(cat "$T/prompt.txt")" > "$RUN/out/result.json" 2> "$RUN/out/stderr.txt"
 RC=$?
 END=$(date +%s)
