@@ -52,12 +52,27 @@ for f in "$CFG"/projects/*/"$SID".jsonl; do
   [ -f "$f" ] && [ -r "$f" ] || continue
   found=1
   hit="$(tail -c "$LRP_TAIL" "$f" 2>/dev/null | /usr/bin/python3 -c '
-import json, sys
+import json, re, sys
 t0, tok = sys.argv[1], sys.argv[2]
 sub = q = ""
+# A PASTE BOUNDARY CAN SPLIT THE TOKEN (measured 2026-09-24, pane 405). A typed prompt arrives in
+# pieces; Claude Code wraps the first piece in <pasted_content id=…> and the tail lands after the
+# closing tag, so the record read  …T222647 [nl] </pasted_content id="d32f"> [nl][nl] Z:2b726d38. A raw
+# substring test said none, lr-fire-resume held its poll loop for 180 s and the recycle watcher
+# never saw the submit. The tags and the newlines around them are removed before matching.
+PASTE_TAG = re.compile(r"\n*</?pasted_content\b[^>]*>\n*")
+def flat(c):
+    if isinstance(c, str):
+        t = c
+    elif isinstance(c, list) and all(isinstance(b, dict) for b in c):
+        t = "".join(b.get("text", "") if isinstance(b.get("text"), str) else json.dumps(b) for b in c)
+    else:
+        t = json.dumps(c) if c else ""
+    return PASTE_TAG.sub("", t)
 for line in sys.stdin:
-    if tok not in line:            # cheap prefilter: the token is plain ASCII, so JSON escaping
-        continue                   # cannot alter it and a substring miss is a real miss
+    if tok not in line and "pasted_content" not in line:
+        continue                   # cheap prefilter: the token is plain ASCII, so JSON escaping
+                                   # cannot alter it; only a paste boundary can split it
     try:
         d = json.loads(line)
     except Exception:
@@ -70,13 +85,11 @@ for line in sys.stdin:
         if d.get("isSidechain"):   # a subagent-thread record is not THIS session submitting
             continue
         m = d.get("message") if isinstance(d.get("message"), dict) else {}
-        c = m.get("content")
-        txt = c if isinstance(c, str) else (json.dumps(c) if c else "")
+        txt = flat(m.get("content"))
         if tok in txt and ts > sub:
             sub = ts
     elif kind == "queue-operation" and d.get("operation") == "enqueue":
-        c = d.get("content")
-        txt = c if isinstance(c, str) else (json.dumps(c) if c else "")
+        txt = flat(d.get("content"))
         if tok in txt and ts > q:
             q = ts
 print(sub)
