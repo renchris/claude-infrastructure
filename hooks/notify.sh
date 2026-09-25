@@ -31,6 +31,33 @@ nty_osa() {
 
 EVENT_TYPE="${1:-complete}"
 
+# ── NO SOUND OR ALERT FROM A HEADLESS SESSION (2026-09-24) ───────────────────────────────────────
+# A `claude -p` run has no pane and no human, so a chime or banner from it carries nothing anyone
+# can act on — and a PermissionRequest in -p cannot be answered anyway. Measured 2026-09-24: a
+# benchmark harness running headless sessions played ~16 afplay/min (Funk on permission, Purr on
+# complete), some wedged for over an hour; coreaudiod sat at ~100% CPU, and Dia logged a spin the
+# same minute the rate jumped. The plays never reached the shared log because the harness gives
+# each run its own TMPDIR, which also gave each run its own debounce lock.
+# Discriminator: the CONTROLLING TTY of the session process. A hook itself never has one (the
+# harness detaches it — agent-identity.sh:30), so walk up: an interactive session's claude process
+# holds a tty (ttysNNN) within 1-2 hops (hook → [sh] → claude); a headless one reads `??` all the
+# way. Fails OPEN — any ps miss ⇒ notify as before. Override: CC_NOTIFY_HEADLESS=1.
+# Seams: NTY_PARENT_PID (start pid) · NTY_PS (ps binary).
+if [ "${CC_NOTIFY_HEADLESS:-0}" != 1 ]; then
+  _nty_p="${NTY_PARENT_PID:-$PPID}"; _nty_hops=0; _nty_headless=""
+  while [ "$_nty_hops" -lt 3 ] && [ "${_nty_p:-0}" -gt 1 ] 2>/dev/null; do
+    _nty_row="$("${NTY_PS:-ps}" -o tty=,ppid= -p "$_nty_p" 2>/dev/null || true)"
+    if [ -z "$_nty_row" ]; then _nty_headless=""; break; fi
+    read -r _nty_tty _nty_pp <<<"$_nty_row"
+    case "$_nty_tty" in
+      '?'|'??') _nty_headless=1 ;;
+      *) _nty_headless=""; break ;;
+    esac
+    _nty_p="$_nty_pp"; _nty_hops=$((_nty_hops + 1))
+  done
+  [ "$_nty_headless" = 1 ] && exit 0
+fi
+
 # ── DON'T CHIME FOR A SESSION THE OPERATOR ISN'T WATCHING (2026-08-02) ───────────────────────────
 # The debounce lock is per-SESSION by deliberate design, so N background team assignees going idle
 # play N × Purr.aiff with nothing for the operator to act on — the alarm-polarity failure exactly
