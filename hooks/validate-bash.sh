@@ -723,10 +723,97 @@ fi
 
 # ── Hard deny: catastrophic or rule-violating patterns ────────────────
 
+# The heredoc-body-free copy of the command. Computed here, once, because the system-damage arm
+# below is its first reader; the pkill section further down explains why a body is data.
+CMD_NOHD="$CMD"
+if [[ "$HAVE_IS_TRUE_FLAG" == "1" ]] && declare -F strip_heredoc_bodies >/dev/null 2>&1; then
+  # Absent library ⇒ $CMD unchanged ⇒ exactly the previous behaviour: an over-block on a heredoc
+  # message body, never an under-block. `declare -F` for the same reason rm_argv_scan needs it —
+  # hooks/ deploys as per-file symlinks, so a NEW hook can briefly sit beside an OLD lib.
+  CMD_NOHD=$(strip_heredoc_bodies "$CMD")
+fi
+
+# ── MENTION vs EXECUTION for the text-matching deny rules (2026-09-24) ──
+# The sudo-rm, DDL, drizzle-kit, `git commit -n`, `git add -f` and identity-write rules matched the
+# RAW command, so they refused words that only sit in a heredoc body or a quoted literal: a bats
+# fixture being written, a commit message, `printf '…CREATE TABLE…'`. Replaying 118 real denies
+# (2026-09-09..23) through the hook left 26 standing, ~16 of them exactly this shape.
+# vb_rule_text_init sets VB_RULE_TEXT to what those rules match. It stays the RAW command whenever
+# the stripped text could still execute — a shell given text (`sh -c`, `bash <<EOF`, `| bash`,
+# `bash <<<`, `sh < f`), eval / ssh / su / watch / source / `. f`, `xargs … sh`, or an exec
+# primitive anywhere in the raw text (system(), subprocess, popen, child_process, os.exec, qx,
+# `do shell script`) — and when the heredoc stripper is absent. When in doubt, raw.
+# Otherwise it is CMD_NOHD with every quoted literal that cannot run blanked to `_Q_`: a literal
+# holding whitespace or a shell metacharacter. A double-quoted one holding `$(` or a backtick IS
+# code and is kept; a bare word like "drizzle-kit" is kept, unquoted. A real quote-state scan, not
+# CMD_NOQ's sed pairing: that pairs across an apostrophe (`"it's" && sudo rm … 'x'` blanks the rm).
+# Call it DIRECTLY, never in `$( )` — the result lives in globals. vb_classify alone sets VB_RAW
+# without the awk pass, for the two rules that parse quotes themselves.
+VB_RAW=""
+VB_RULE_TEXT="$CMD"
+vb_blank_literals() {
+  printf '%s' "$1" | awk -v SQ="'" -v DQ='"' '
+    function lit(b, ex) { if (ex || b !~ /[ \t\n;&|<>()]/) return b; return "_Q_" }
+    {
+      s = $0; n = length(s); i = 1
+      while (i <= n) {
+        c = substr(s, i, 1)
+        if (st == 0) {
+          if (c == "\\") { o = o substr(s, i, 2); i += 2; continue }
+          if (c == "#" && (i == 1 || substr(s, i - 1, 1) ~ /[ \t;&|(]/)) break
+          if (c == SQ) { st = (i > 1 && substr(s, i - 1, 1) == "$") ? 3 : 1; b = ""; i++; continue }
+          if (c == DQ) { st = 2; b = ""; dep = 0; ex = 0; i++; continue }
+          o = o c; i++; continue
+        }
+        if (st != 2) {
+          if (st == 3 && c == "\\") { b = b substr(s, i, 2); i += 2; continue }
+          if (c == SQ) { o = o lit(b, 0); st = 0 } else b = b c
+          i++; continue
+        }
+        if (c == "\\") { b = b substr(s, i, 2); i += 2; continue }
+        if (c == "`") ex = 1
+        if (c == "$" && substr(s, i + 1, 1) == "(") { ex = 1; dep++; b = b "$("; i += 2; continue }
+        if (c == ")" && dep > 0) dep--
+        if (c == DQ && dep == 0) { o = o lit(b, ex); st = 0; i++; continue }
+        b = b c; i++
+      }
+      if (st != 0) { b = b "\n"; next }
+      print o; o = ""
+    }
+    END { if (st != 0) printf "%s%s\n", o, b }'
+}
+vb_classify() {  # sets VB_RAW: 1 = match the raw command, 0 = the stripped text is safe
+  [[ -n "$VB_RAW" ]] && return 0
+  VB_RAW=1
+  [[ "$HAVE_IS_TRUE_FLAG" == "1" ]] && declare -F strip_heredoc_bodies >/dev/null 2>&1 || return 0
+  local p='(^|[^[:alnum:]_.-])' sh='(ba|z|k|da|fi)?sh' r
+  local -a res=(
+    "${p}${sh}([[:space:]]+[^[:space:];&|]+)*[[:space:]]+-[[:alnum:]]*c([[:space:]]|$)"
+    "${p}${sh}([[:space:]]+-[^[:space:];&|]+)*[[:space:]]*(<|HEREDOC_INPUT_SENTINEL)"
+    "\|[[:space:]]*((sudo|env|nohup|time|command)([[:space:]]+[^[:space:];&|]+)*[[:space:]]+)?([^[:space:];&|]*/)?${sh}([[:space:]]|$)"
+    "${p}(eval|ssh|su|watch|source)([[:space:]]|$)"
+    "(^|[;&|({]|[[:space:]](then|do|else))[[:space:]]*\.[[:space:]]+[^[:space:]]"
+    "${p}xargs([[:space:]]+[^;&|]*)?[[:space:]]([^[:space:];&|]*/)?${sh}([[:space:]]|$)"
+  )
+  for r in "${res[@]}"; do [[ "$CMD_NOHD" =~ $r ]] && return 0; done
+  r='system[[:space:]]*\(|popen|subprocess|exec(Sync|FileSync)|spawnSync|child_process|os\.(exec|spawn)|shell script|qx[^[:alnum:][:space:]]'
+  [[ "$CMD" =~ $r ]] && return 0
+  VB_RAW=0
+}
+vb_rule_text_init() {
+  [[ -n "${VB_TEXT_DONE:-}" ]] && return 0
+  VB_TEXT_DONE=1
+  vb_classify
+  [[ "$VB_RAW" == "0" ]] && VB_RULE_TEXT=$(vb_blank_literals "$CMD_NOHD")
+  return 0
+}
+
 # System damage, part 1 — the two shapes that are NOT an rm argv question. A fork bomb is syntax,
 # not a command with flags; `sudo rm` is a two-token shape whose breadth (any rm at all under
-# sudo) is deliberate. Both keep their text matching, unchanged.
-if echo "$CMD" | grep -qE '(sudo[[:space:]]+rm|:\(\)\{[[:space:]]*:\|:&[[:space:]]*\};:)'; then
+# sudo) is deliberate. Both keep their text matching — of VB_RULE_TEXT, so a quoted or heredoc
+# MENTION of `sudo rm` is not the act.
+[[ "$CMD" == *sudo* || "$CMD" == *'(){'* ]] && vb_rule_text_init
+if echo "$VB_RULE_TEXT" | grep -qE '(sudo[[:space:]]+rm|:\(\)\{[[:space:]]*:\|:&[[:space:]]*\};:)'; then
   deny "Dangerous command pattern blocked: potential system damage (sudo rm, or fork bomb)."
 fi
 
@@ -843,14 +930,8 @@ fi
 # The harvest reads that same body-free copy rather than $CMD. It still needs the ORIGINAL QUOTES
 # (that is where a real pattern lives), but never the original BODIES: otherwise a correctly scoped
 # `pkill -f "bats.*${PWD##*/}"` would be denied by the very commit message describing why it is
-# scoped. Text is not execution — and neither is stdin.
-CMD_NOHD="$CMD"
-if [[ "$HAVE_IS_TRUE_FLAG" == "1" ]] && declare -F strip_heredoc_bodies >/dev/null 2>&1; then
-  # Absent library ⇒ $CMD unchanged ⇒ exactly the previous behaviour: an over-block on a heredoc
-  # message body, never an under-block. `declare -F` for the same reason rm_argv_scan needs it —
-  # hooks/ deploys as per-file symlinks, so a NEW hook can briefly sit beside an OLD lib.
-  CMD_NOHD=$(strip_heredoc_bodies "$CMD")
-fi
+# scoped. Text is not execution — and neither is stdin. (CMD_NOHD is computed once, above the
+# system-damage arm, which reads it first.)
 CMD_NOQ=$(printf '%s' "$CMD_NOHD" | sed -e "s/'[^']*'/''/g" -e 's/"[^"]*"/""/g')
 if printf '%s' "$CMD_NOQ" | sed 's/[&|()]/;/g' | tr ';' '\n' | sed 's/^[[:space:]]*//' \
      | grep -qE '^(sudo[[:space:]]+)?(pkill|killall)([[:space:]]|$)'; then
@@ -996,14 +1077,19 @@ fi
 # blocked when in DATABASE-COMMAND context. This avoids false positives on
 # commit messages that discuss DDL ("fix: block DROP TABLE in migration").
 # A command like `echo "DROP TABLE x" | turso db shell` still matches because
-# BOTH conditions are true.
-if echo "$CMD" | grep -qiE '\b(turso|sqlite3?|psql|mysql|mariadb|libsql|drizzle-kit[[:space:]]+(push|drop|migrate))\b' \
+# BOTH conditions are true. The TOOL is read off VB_RULE_TEXT (a tool named only inside a heredoc
+# body or a quoted literal is not being run); the DDL off the raw $CMD, because a real tool's SQL
+# arrives exactly there — as a quoted argument to the db shell, or in a heredoc fed to it.
+shopt -s nocasematch
+[[ "$CMD" =~ turso|sqlite|psql|mysql|mariadb|libsql|drizzle-kit ]] && vb_rule_text_init
+shopt -u nocasematch
+if echo "$VB_RULE_TEXT" | grep -qiE '\b(turso|sqlite3?|psql|mysql|mariadb|libsql|drizzle-kit[[:space:]]+(push|drop|migrate))\b' \
    && echo "$CMD" | grep -qiE '\b(DROP[[:space:]]+TABLE|DROP[[:space:]]+DATABASE|DROP[[:space:]]+INDEX|ALTER[[:space:]]+TABLE|CREATE[[:space:]]+TABLE|TRUNCATE[[:space:]]+TABLE)\b'; then
   deny "DDL blocked — all schema changes must go through Drizzle migrations (pnpm generate). See CLAUDE.md critical rule #1."
 fi
 
 # drizzle-kit push bypasses migration history
-if echo "$CMD" | grep -qE 'drizzle-kit[[:space:]]+push'; then
+if echo "$VB_RULE_TEXT" | grep -qE 'drizzle-kit[[:space:]]+push'; then
   deny "drizzle-kit push bypasses migration history and causes schema drift. Use pnpm generate instead."
 fi
 
@@ -1027,7 +1113,11 @@ if [[ "$CMD" == *git* && ( "$CMD" == *add* || "$CMD" == *stage* ) ]]; then
   # `declare -F` is not ceremony: hooks/ deploys as per-file symlinks, so a live layer can briefly
   # hold a NEW validate-bash.sh beside an OLD lib. Absent function → text path, never a crash.
   if [[ "$HAVE_IS_TRUE_FLAG" == "1" ]] && declare -F git_add_force_scan >/dev/null 2>&1; then
-    GIT_ADD_SCAN=$(git_add_force_scan "$CMD")
+    # The scan tokenizes quotes itself; what it cannot see is that a heredoc BODY is stdin, so it
+    # gets the body-free copy unless that body (or a literal) may execute — see vb_rule_text_init.
+    vb_classify
+    if [[ "$VB_RAW" == "1" ]]; then GIT_ADD_SCAN=$(git_add_force_scan "$CMD")
+    else GIT_ADD_SCAN=$(git_add_force_scan "$CMD_NOHD"); fi
     GIT_ADD_SCAN_RC=$?
   fi
 fi
@@ -1063,8 +1153,10 @@ fi
 
 # git commit -n short form of --no-verify (head-aware regex). `-n` is meaningful
 # only when preceded by `git commit` (or git commit --amend, etc.). Cannot use
-# is_true_flag since `-n` is common on many tools (cat -n, sed -n, head -n).
-if echo "$CMD" | grep -qE 'git([[:space:]]+-[a-zA-Z]+[[:space:]]+[^[:space:]]+)*[[:space:]]+commit\b[^|&;]*[[:space:]]-n\b'; then
+# is_true_flag since `-n` is common on many tools (cat -n, sed -n, head -n). Matched on
+# VB_RULE_TEXT, so a `git commit -n` quoted as test data or written into a heredoc is not the act.
+[[ "$CMD" == *commit* ]] && vb_rule_text_init
+if echo "$VB_RULE_TEXT" | grep -qE 'git([[:space:]]+-[a-zA-Z]+[[:space:]]+[^[:space:]]+)*[[:space:]]+commit\b[^|&;]*[[:space:]]-n\b'; then
   deny "git commit -n blocked — short form of --no-verify, bypasses pre-commit hooks. See CLAUDE.md critical rule #2."
 fi
 
@@ -1230,7 +1322,12 @@ if [[ "$CMD" == *user.email* || "$CMD" == *user.name* ]]; then
 # GOVERNS the fragment: splitting there would hide the `cd … &&` and convict a guarded write.
 # `tr` pads the replacement set with its last char, so one `\n` maps BOTH delimiters — spelling it
 # '\n\n' is the same operation with a duplicate shellcheck rightly flags (SC2020).
-GID_CLAUSES="$(printf '%s' "$CMD" | tr ';|' '\n')"
+# Heredoc bodies come off first (a fixture being WRITTEN is not a write to this repo) unless the
+# body may execute. Quotes stay: the target walk below reads them, and blanking `-C ""` would hide
+# the very incident this clause exists for.
+vb_classify
+if [[ "$VB_RAW" == "1" ]]; then GID_SRC="$CMD"; else GID_SRC="$CMD_NOHD"; fi
+GID_CLAUSES="$(printf '%s' "$GID_SRC" | tr ';|' '\n')"
 while IFS= read -r gid_clause; do
   printf '%s' "$gid_clause" | grep -qE 'git\b.*\bconfig\b.*\buser\.(email|name)\b' || continue
   # Reads, the repair, and explicitly-scoped writes are never blocked.
