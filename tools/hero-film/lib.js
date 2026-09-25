@@ -16,6 +16,21 @@ export const ease = {
   glide: (x) => (x < 0.5 ? 16 * x ** 5 : 1 - (-2 * x + 2) ** 5 / 2),
   soft: (x) => 0.5 - Math.cos(Math.PI * clamp01(x)) / 2,
   walk: (x) => x,
+  // Smootherstep: leaves and arrives with zero speed AND zero acceleration, so no start or stop jolts.
+  smoother: (x) => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * x * (x * (6 * x - 15) + 10)),
+}
+
+/**
+ * Quintic Hermite progress over u in 0..1: from 0 to 1 with speed m0 at the start and m1 at the end
+ * (in units of the average speed) and zero acceleration at both ends. m0 = m1 = 0 is smootherstep.
+ * The film's flights use it to leave and join a drifting camera without a jolt.
+ */
+export function hermite5(u, m0 = 0, m1 = 0) {
+  const x = clamp01(u)
+  const x3 = x * x * x
+  const x4 = x3 * x
+  const x5 = x4 * x
+  return m0 * (x - 6 * x3 + 8 * x4 - 3 * x5) + m1 * (-4 * x3 + 7 * x4 - 3 * x5) + (10 * x3 - 15 * x4 + 6 * x5)
 }
 
 /** Progress of t through [a, b], clamped to 0..1. */

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # hero-film-render.sh: render the README hero launch film (tools/hero-film/) into its deliverables.
 #
+#   bash scripts/hero-film-render.sh pacing   # the pacing gate: camera speed and reading time, per frame
 #   bash scripts/hero-film-render.sh review   # 2 fps stills of both cuts and grades -> contact sheets
 #   bash scripts/hero-film-render.sh loop     # assets/hero/hero-{dark,light}.webp + poster-{dark,light}.png
 #   bash scripts/hero-film-render.sh film     # assets/hero/launch-film.mp4 (dark, 1920x1080, 60 fps)
@@ -29,7 +30,7 @@ OUT=${OUT:-/tmp/cih-film}
 LOOP_W=${LOOP_W:-1676} # 2x the 838 CSS px README column
 LOOP_H=${LOOP_H:-943}
 FONT=${FONT:-/System/Library/Fonts/Menlo.ttc}
-LOOP_FPS=${LOOP_FPS:-30}
+LOOP_FPS=${LOOP_FPS:-60}
 FILM_FPS=${FILM_FPS:-60}
 WORKERS=${WORKERS:-3}
 CAP="node scripts/hero-film-capture.mjs"
@@ -72,25 +73,66 @@ review() {
   done
 }
 
+# The pacing gate (scripts/hero-film-pacing.py): the page reports every frame's camera flow, story
+# clock and type state without rendering, and the checker fails on any frame over a speed bound or any
+# line held for less than its reading time. loop and film run it first, so no render starts on a cut
+# that would fail it.
+pacing() {
+  mkdir -p "$OUT"
+  for cut in loop film; do
+    $CAP --cut "$cut" --probe "$OUT/pacing-$cut.json"
+  done
+  python3 scripts/hero-film-pacing.py "$OUT/pacing-loop.json" "$OUT/pacing-film.json"
+}
+
 loop() {
+  pacing
   mkdir -p assets/hero
   for theme in dark light; do
     local dir="$OUT/loop-$theme"
-    # Holds at 30 fps; flights (the page's meta.flights) at 20 fps, where motion blur covers the rate.
-    $CAP --cut loop --theme "$theme" --fps "$LOOP_FPS" --flight-fps 20 --width 1920 --height 1080 --workers "$WORKERS" --out "$dir"
+    # Every frame at 60 fps, flights included (operator, round two: 20 fps flights read as judder).
+    $CAP --cut loop --theme "$theme" --fps "$LOOP_FPS" --width 1920 --height 1080 --workers "$WORKERS" --out "$dir"
     mkdir -p "$dir/small"
     rm -f "$dir/small"/*.png
     cp "$dir/meta.json" "$dir/small/"
-    # shellcheck disable=SC2016 # the single-quoted script is expanded by the inner sh, per frame
-    find "$dir" -maxdepth 1 -name 'f*.png' -print0 |
-      xargs -0 -P "${JOBS:-8}" -I{} sh -c 'magick "$1" -filter Lanczos -resize "$2" "$3/small/$(basename "$1")"' _ {} "${LOOP_W}x${LOOP_H}!" "$dir"
-    python3 scripts/hero-film-encode-loop.py "$dir/small" "assets/hero/hero-$theme.webp" --hold "${LOOP_HOLD:-q90}" --flight "${LOOP_FLIGHT:-q40}"
+    # Downscale, and soften each frame in proportion to how fast the picture moves in it (the pacing
+    # report's image flow, frame for frame): sigma = SOFT_MAX px at the gate's speed bound, nothing at
+    # rest. Motion hides it and a flight lands into focus without a pop. Measured round two on the
+    # homeward flight (324 frames, lossy q30): 4.23 MB at SOFT_MAX 1.5, 4.03 at 2.0, 3.88 at 2.5.
+    python3 - "$dir" "$OUT/pacing-loop.json" "${LOOP_W}x${LOOP_H}!" "${SOFT_MAX:-2.5}" "${JOBS:-8}" <<'PY'
+import json, pathlib, subprocess, sys
+from concurrent.futures import ThreadPoolExecutor
+d, pacing, size, soft, jobs = pathlib.Path(sys.argv[1]), json.loads(pathlib.Path(sys.argv[2]).read_text()), sys.argv[3], float(sys.argv[4]), int(sys.argv[5])
+flow = [max(f["flow"]) * pacing["fps"] for f in pacing["frames"]]
+frames = sorted(d.glob("f*.png"))
+if len(frames) != len(flow):
+    sys.exit(f"{len(frames)} frames but the pacing report has {len(flow)}: re-run the capture and the gate together")
+def one(k):
+    sigma = round(soft * min(1.0, flow[k] / 900.0), 2)
+    args = ["magick", str(frames[k]), "-filter", "Lanczos", "-resize", size]
+    if sigma >= 0.05:
+        args += ["-blur", f"0x{sigma}"]
+    subprocess.run([*args, str(d / "small" / frames[k].name)], check=True)
+with ThreadPoolExecutor(jobs) as ex:
+    list(ex.map(one, range(len(frames))))
+PY
+  done
+  # The two grades encode in parallel: the encoder is single-threaded and is most of the time.
+  local pids=() theme
+  for theme in dark light; do
+    python3 scripts/hero-film-encode-loop.py "$OUT/loop-$theme/small" "assets/hero/hero-$theme.webp" --hold "${LOOP_HOLD:-q90}" --move "${LOOP_MOVE:-q75}" --flight "${LOOP_FLIGHT:-q30}" &
+    pids+=("$!")
+  done
+  local pid
+  for pid in "${pids[@]}"; do wait "$pid"; done
+  for theme in dark light; do
     # Frame 0 as a still, at the loop's size, for the <picture> fallback and for reduced motion.
-    magick "$dir/small/f000000.png" -strip "assets/hero/poster-$theme.png"
+    magick "$OUT/loop-$theme/small/f000000.png" -strip "assets/hero/poster-$theme.png"
   done
 }
 
 film() {
+  pacing
   mkdir -p assets/hero
   local dir="$OUT/film-dark"
   $CAP --cut film --theme dark --fps "$FILM_FPS" --width 1920 --height 1080 --workers "$WORKERS" --out "$dir"
@@ -119,10 +161,11 @@ verify() {
 }
 
 case "${1:-review}" in
+  pacing) pacing ;;
   review) review ;;
   loop) loop ;;
   film) film ;;
   seam) seam ;;
   verify) verify ;;
-  *) echo "usage: $0 review|loop|film|seam|verify" >&2; exit 2 ;;
+  *) echo "usage: $0 pacing|review|loop|film|seam|verify" >&2; exit 2 ;;
 esac

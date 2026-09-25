@@ -553,7 +553,9 @@ export function buildWorld(T, { width = 1920, height = 1080 } = {}) {
   // A pose: position, yaw, pitch, roll, focal length F in px and the principal point (cx, cy). An
   // off-centre principal point is a lens shift: it moves the horizon without tilting the camera, so
   // standing windows stay vertical.
+  let cur = { F: 1400, cx: width / 2, cy: height / 2 }
   function pose(p) {
+    cur = { F: p.F, cx: p.cx ?? width / 2, cy: p.cy ?? height / 2 }
     cam.position.set(p.x, p.y, p.z)
     cam.rotation.set(-(p.pitch ?? 0), -(p.yaw ?? 0), p.roll ?? 0)
     const n = cam.near
@@ -571,6 +573,11 @@ export function buildWorld(T, { width = 1920, height = 1080 } = {}) {
     const d = -v3.z
     v3.applyMatrix4(cam.projectionMatrix)
     return [(v3.x + 1) * 0.5 * width, (1 - v3.y) * 0.5 * height, d]
+  }
+  /** The world point the pixel (px, py) shows at view depth d, under the current pose (the pacing probe). */
+  function unproject(px, py, d) {
+    v3.set(((px - cur.cx) * d) / cur.F, (-(py - cur.cy) * d) / cur.F, -d).applyMatrix4(cam.matrixWorld)
+    return [v3.x, v3.y, v3.z]
   }
 
   // ------------------------------------------------------------------------------ the state
@@ -722,7 +729,7 @@ export function buildWorld(T, { width = 1920, height = 1080 } = {}) {
     renderer.render(quadScene, quadCam)
   }
 
-  return { renderer, scene, cam, pose, project, update, render, stretches, pillPoint }
+  return { renderer, scene, cam, pose, project, unproject, update, render, stretches, pillPoint }
 }
 
 export { rng }

@@ -8,6 +8,7 @@
     "diagrams:check": "node scripts/render-diagrams.mjs --check",
     "timeline": "python3 tools/timeline/gen.py",
     "timeline:check": "python3 tools/timeline/gen.py --check",
+    "hero:pacing": "bash scripts/hero-film-render.sh pacing",
     "hero:review": "bash scripts/hero-film-render.sh review",
     "hero:loop": "bash scripts/hero-film-render.sh loop",
     "hero:film": "bash scripts/hero-film-render.sh film",

@@ -12,9 +12,9 @@
 // on its first frame with nothing undone. A cut is an edit list: each edit holds a pose or flies
 // between two, shows a line of type, and maps film time t to story time s.
 
-import { THEMES, clamp01, e, ease, lerp, p } from './lib.js'
-import { drawWindow } from './panes.js'
-import { FLEET, HERO, HH, HW, LIFT, RACK_X, RACK_Z, buildWorld, heroFoot } from './world.js'
+import { THEMES, clamp01, e, ease, hermite5, lerp, p } from './lib.js'
+import { CARD_TEXT, drawWindow } from './panes.js'
+import { FH, FLEET, HERO, HH, HW, LIFT, RACK_X, RACK_Z, buildWorld, heroFoot } from './world.js'
 
 const q = new URLSearchParams(location.search)
 const THEME = q.get('theme') === 'light' ? 'light' : 'dark'
@@ -34,27 +34,29 @@ layer.style.inset = '0'
 // One land, in story seconds. Every row a viewer can read is a real string (README § Honesty rule).
 const S = {
   // Frame 0 is the END state of the last land, at s = start. The originator's scrollback clears at
-  // s = clear, inside the first flight's blur, so the story begins at a bare prompt and the peer's
+  // s = clear, as the camera leaves the poster, so the story begins at a bare prompt and the peer's
   // ping appears once, at the end (critique round two, blocker 1: result before cause).
   start: -0.3, clear: -0.15,
-  // A session fires a peer: /handoff, the fire command, the split, the peer boots and reads its brief.
+  // A session fires a peer: /handoff, the fire command, the split, the peer boots, reads its brief, works.
   type: [0.0, 0.35], submit: 0.4, say1: 0.5, fire: [0.6, 0.95], divider: [1.0, 1.35], boot: [1.35, 1.9],
-  brief: [1.85, 2.05], peerLine: [1.6, 2.2], say2: 2.15, peerSay: 2.4,
-  // The yard: fleet commits through the land-lock one at a time; a force push refused.
-  work: [3.1, 3.9, 4.7, 5.5],
-  passes: [3.6, 4.4, 5.2, 6.0, 6.55],
-  force: { go: 3.65, hit: 4.4, wall: [4.1, 4.36], red: 4.4, fade: [5.3, 5.8], wallFade: [5.5, 6.0] },
-  // The close: a false "done" sent back; the one decision rises to the human.
-  done: 6.8, hook: 7.2, strike: [7.2, 7.45], notYet: 7.7, peerGo: 7.9, card: [8.3, 9.1],
-  // The land: through the gate onto origin/main, verified by content; the live layer converges.
-  peerPass: 9.4, stale: [9.8, 9.95], verified: 10.1, deploy: 10.55, pulse: [10.6, 11.0], lit: [11.0, 12.0],
+  brief: [1.85, 2.05], peerLine: [1.6, 2.2], say2: 2.15, peerSay: 2.4, work: [2.7, 3.0, 3.3],
+  // The one decision rises out of the originator's pane to the human.
+  card: [3.35, 4.25],
+  // The peer's commit leaves its window for the land-lock; the fleet's commits cross it one at a
+  // time; a force push is refused (the FILM's gate scene); the peer's commit crosses last.
+  peerGo: 4.3,
+  passes: [5.5, 6.3, 7.1],
+  force: { go: 5.3, hit: 6.1, wall: [5.8, 6.06], red: 6.1, fade: [8.8, 9.3], wallFade: [9.0, 9.5] },
+  peerPass: 8.9,
+  // The land: onto origin/main, verified by content; the live layer converges.
+  stale: [9.3, 9.45], verified: 9.6, deploy: 10.05, pulse: [10.1, 10.5], lit: [10.5, 11.5],
   // The return: the peer's close, its ping, and its pane folding shut.
-  safe: 12.3, ping: [12.6, 12.95], fold: [13.1, 13.55], lineFade: [13.2, 13.7],
-  END: 14.0,
+  safe: 11.8, ping: [12.1, 12.45], fold: [12.6, 13.05], lineFade: [12.7, 13.2],
+  END: 13.5,
 }
 const PASSES = [...S.passes, S.peerPass] // every commit through the gate this land, in order
 const PASS_T = 0.4 // gate to the trunk's head
-const FLEET_PILLS = [7, 3, 9, 0, 10] // which fleet windows commit this land, in pass order
+const FLEET_PILLS = [7, 3, 9] // which fleet windows commit this land, in pass order
 
 // The originator's rows, one land's worth. Three lands are stacked so the pane's visible tail is the
 // same at s = 0 and s = END (it shows well under two lands of rows).
@@ -72,11 +74,7 @@ const PEER_ROWS = [
   { kind: 'say', text: "I'll start by reading the operator rulings and the sister repo's pipeline.", at: S.peerSay },
   { kind: 'greek', lines: 2, at: S.work[0] },
   { kind: 'greek', lines: 3, at: S.work[1] },
-  { kind: 'greek', lines: 1, at: S.work[2] },
-  { kind: 'greek', lines: 2, at: S.work[3] },
-  { kind: 'say', text: 'Done.', at: S.done, strike: S.strike },
-  { kind: 'hook', text: 'Completion-assert: your close reads as done/complete, but the LIVE ledger contradicts it', at: S.hook, reveal: [S.hook, S.hook + 0.2] },
-  { kind: 'say', text: 'Not landed yet. Running /ship.', at: S.notYet },
+  { kind: 'greek', lines: 2, at: S.work[2] },
   { kind: 'close', text: '✅ SAFE TO CLOSE — nothing of mine is open', at: S.safe },
 ]
 function rowsAt(list, s) {
@@ -108,8 +106,8 @@ function landState(s) {
   st.peerPill = pillOn('peer', 0, s, S.peerGo, S.peerPass)
   // The force push: straight for origin/main, around the gate; stopped by the deny wall.
   const F = S.force
-  st.force = s < F.go || s > F.fade[1] ? null : { on: 'force', u: 0.49 * ease.travel(p(s, F.go, F.hit)), a: 1 - e(s, F.fade[0], F.fade[1], ease.travel), red: s >= F.red ? 1 : 0 }
-  st.wall = e(s, F.wall[0], F.wall[1], ease.settle) * (s < F.wallFade[1] ? 1 : 0)
+  st.force = CUT !== 'film' || s < F.go || s > F.fade[1] ? null : { on: 'force', u: 0.49 * ease.travel(p(s, F.go, F.hit)), a: 1 - e(s, F.fade[0], F.fade[1], ease.travel), red: s >= F.red ? 1 : 0 }
+  st.wall = CUT !== 'film' ? 0 : e(s, F.wall[0], F.wall[1], ease.settle) * (s < F.wallFade[1] ? 1 : 0)
   st.wallA = 1 - e(s, F.wallFade[0], F.wallFade[1], ease.travel)
   // The conveyor: every pass moves origin/main's history one spacing on.
   st.conveyor = PASSES.reduce((n, g) => n + e(s, g, g + PASS_T, ease.travel), 0)
@@ -127,10 +125,12 @@ function pillOn(on, n, s, born, pass) {
   if (s < pass) return { on, n, u: 0.985 * ease.soft(p(s, born, pass - 0.1)), a: e(s, born, born + 0.25) }
   return { on: 'trunk', n, u: ease.travel(p(s, pass, pass + PASS_T)), a: 1, green: 1 }
 }
-// The originator's window is redrawn only when what it shows changes.
+// The originator's window is redrawn only when what it shows changes. The clear is a step, so it is
+// in the signature itself: at 1/60 story-second quantisation a blur sub-frame just before it drew the
+// old scrollback under the cleared state's signature, and that stale canvas stuck (review sheet, round
+// two).
 function heroSig(s) {
-  const q2 = (x) => Math.round(x * 60)
-  return [q2(Math.min(s, S.END)), THEME].join(':')
+  return [Math.round(Math.min(s, S.END) * 1000), s < S.clear ? 'pre' : 'post', THEME].join(':')
 }
 
 // The card, in the originator's window's own frame: it leaves the left pane and settles to its left,
@@ -179,33 +179,31 @@ function drawHero(c, st) {
 // ------------------------------------------------------------------------------------ cameras
 // A pose is a position, a point it looks at, a focal length F (px) and a principal point (cx, cy).
 const POSES = {
-  // The poster: eye height, left of the originator's window, which stands on the right third; the
-  // fleet's lines sweep past it into the gate.
+  // The poster: a high 3/4 over the fleet; the originator's window large in the right foreground.
   poster: { p: [12, 8, 31], at: [2.5, 0, 6], F: 1300, cx: 1300, cy: 480 },
-  // The split: front-on, close.
-  split: { p: hl(0.35, 1.7, 6.4), at: hl(0.2, 1.47, 0), F: 1650, cx: 1010, cy: 660 },
-  // The yard: high behind the fan's right flank, the gate and the trunk ahead.
-  yard: { p: [11.5, 8.2, 17.0], at: [-1.8, 0.4, -1.0], F: 1400, cx: 1000, cy: 610 },
-  // The close: on the peer's pane, with room on the left for the card.
-  close: { p: hl(-0.5, 1.8, 6.9), at: hl(0.15, 1.45, 0), F: 1500, cx: 1010, cy: 700 },
-  // The racks: after the gate, a 3/4 on ~/.claude with the trunk running in.
-  racks: { p: [8.5, 4.6, RACK_Z + 17], at: [-0.2, 2.0, RACK_Z], F: 1800, cx: 880, cy: 790 },
-  // FILM only: each key is a neighbour of a LOOP pose, so the camera keeps drifting through it.
-  posterIn: { p: [11.3, 7.55, 29.4], at: [2.5, 0, 6], F: 1300, cx: 1300, cy: 480 },
-  splitB: { p: hl(0.3, 1.66, 5.9), at: hl(0.2, 1.47, 0), F: 1650, cx: 1010, cy: 660 },
-  rise: { p: [15, 10.5, 32], at: [0.5, 0, 5], F: 1250, cx: 1000, cy: 560 },
-  // Waypoints that keep the camera in front of the originator's window, never through it.
-  swing: { p: [19, 5.5, 22], at: hl(0, 1.5, 0), F: 1400, cx: 1000, cy: 600 },
-  hop: { p: [9, 7.0, 27], at: [1.5, 0.4, 4], F: 1350, cx: 1000, cy: 620 },
-  yardB: { p: [10.4, 7.8, 16.0], at: [-1.8, 0.4, -1.0], F: 1400, cx: 1000, cy: 610 },
-  gate: { p: [7.8, 4.6, 10.5], at: [-1.2, 0.8, -0.5], F: 1450, cx: 1000, cy: 640 },
-  gateB: { p: [7.1, 4.3, 9.5], at: [-1.2, 0.8, -0.5], F: 1450, cx: 1000, cy: 640 },
-  closeB: { p: hl(-0.4, 1.78, 6.4), at: hl(0.15, 1.45, 0), F: 1500, cx: 1010, cy: 700 },
-  card: { p: hl(-1.9, 2.3, 6.2), at: hl(-1.5, 1.85, 1.9), F: 1500, cx: 1060, cy: 660 },
-  trunk: { p: [4.2, 2.6, 5.0], at: [-0.3, 0.4, -7], F: 1350, cx: 1000, cy: 640 },
-  racksB: { p: [7.9, 4.4, RACK_Z + 15.8], at: [-0.2, 2.0, RACK_Z], F: 1800, cx: 880, cy: 790 },
-  over: { p: [24, 13, 14], at: [0, 0, 8], F: 1150, cx: 1000, cy: 560 },
+  // The window: the originator's kitty window, both panes once it splits, with room on the left for
+  // the card that rises out of the left pane.
+  window: { p: hl(-0.5, 1.8, 6.9), at: hl(0.15, 1.45, 0), F: 1500, cx: 1010, cy: 700 },
+  // The racks: after the gate, a 3/4 on ~/.claude with the trunk running in. Round two framed it from
+  // 1.8x further back on a 1.8x longer lens, turned a fifth of the way toward the poster: the racks are
+  // the same size, and the two flights that reach them travel 13 % less (5,626 -> 4,864 px), which is
+  // 13 % fewer 60 fps frames in the WebP's most expensive span.
+  racks: { p: [14.0, 6.5, 10.3], at: [-0.2, 2.0, RACK_Z], F: 3240, cx: 880, cy: 790 },
+  // FILM only: the gate, high over the land-lock with every lane converging on it.
+  gate: { p: [11.5, 8.2, 17.0], at: [-1.8, 0.4, -1.0], F: 1400, cx: 1000, cy: 610 },
 }
+// FILM only: each held shot creeps (the camera never holds still), pushed in along its own line of
+// sight and turned a touch, well under CALM; the poster pushes in THROUGH frame 0, so the film's last
+// frame runs on into its first at the same pace.
+const creep = (c, push, turn = 0) => {
+  const o = orbitOf(c)
+  return fromOrbit({ ...o, lr: o.lr - push, yaw: o.yaw + turn })
+}
+POSES.posterIn = creep(POSES.poster, 0.03)
+POSES.posterOut = creep(POSES.poster, -0.034)
+POSES.windowB = creep(POSES.window, 0.07, 0.02)
+POSES.gateB = creep(POSES.gate, 0.05, -0.02)
+POSES.racksB = creep(POSES.racks, 0.05, 0.015)
 // A pose can be overridden from the URL while composing: ?pose=name:{"p":[...],...}
 if (q.get('pose')) {
   const [name, json] = q.get('pose').split(/:(.*)/s)
@@ -217,41 +215,100 @@ function toCam(c) {
   const pitch = Math.atan2(-d[1], Math.hypot(d[0], d[2]))
   return { x: c.p[0], y: c.p[1], z: c.p[2], yaw, pitch, F: c.F, cx: c.cx, cy: c.cy }
 }
-// A flight: from pose a to pose b along a curve through `via` (an offset from the straight line's
-// midpoint), eased so it leaves and arrives at rest.
-function fly(a, b, k, via = [0, 0, 0], viaAt = [0, 0, 0]) {
-  const j = 1 - k
-  const bez = (A, B, off) => A.map((v, i) => j * j * v + 2 * j * k * ((v + B[i]) / 2 + off[i]) + k * k * B[i])
-  return { p: bez(a.p, b.p, via), at: bez(a.at, b.at, viaAt), F: lerp(a.F, b.F, k), cx: lerp(a.cx, b.cx, k), cy: lerp(a.cy, b.cy, k) }
+// A move, as an orbit about the point the camera looks at: that point travels a curve (bent by
+// viaAt), the camera's bearing and elevation from it turn evenly, and its distance changes evenly in
+// LOG space, so a push from far to near reads at one pace instead of rushing at the end (round one's
+// straight-line flights put most of their image motion into their last few frames). `hop` pulls the
+// camera out mid-move (log units) and `rise` lifts it (radians), so a long move climbs, looks, and
+// settles instead of sweeping low across the world.
+function orbitOf(c) {
+  const d = [c.p[0] - c.at[0], c.p[1] - c.at[1], c.p[2] - c.at[2]]
+  const r = Math.hypot(...d)
+  return { at: c.at, yaw: Math.atan2(d[0], d[2]), pitch: Math.asin(d[1] / r), lr: Math.log(r), F: c.F, cx: c.cx, cy: c.cy }
 }
-// The FILM's camera never stops until its last frame: a monotone cubic (PCHIP) through key poses,
-// leaving the first key from rest and arriving on the last at rest (sister repo, round 3).
-const flat = (c) => [...c.p, ...c.at, c.F, c.cx, c.cy]
-const unflat = (v) => ({ p: v.slice(0, 3), at: v.slice(3, 6), F: v[6], cx: v[7], cy: v[8] })
-function pathCam(keys, t) {
-  const P = keys.map((k) => flat(POSES[k.pose]))
-  const n = keys.length
-  const found = keys.findIndex((k, j) => j < n - 1 && t < keys[j + 1].t)
-  const i = found < 0 ? n - 2 : found
-  const slope = (a, c) => (P[a + 1][c] - P[a][c]) / (keys[a + 1].t - keys[a].t)
-  const tangent = (j, c) => {
-    if (j === n - 1 || j === 0) return 0
-    const d0 = slope(j - 1, c)
-    const d1 = slope(j, c)
-    if (d0 * d1 <= 0) return 0
-    const h0 = keys[j].t - keys[j - 1].t
-    const h1 = keys[j + 1].t - keys[j].t
-    const w1 = 2 * h1 + h0
-    const w2 = h1 + 2 * h0
-    return (w1 + w2) / (w1 / d0 + w2 / d1)
+function fromOrbit(o) {
+  const r = Math.exp(o.lr)
+  const c = Math.cos(o.pitch)
+  return { p: [o.at[0] + r * c * Math.sin(o.yaw), o.at[1] + r * Math.sin(o.pitch), o.at[2] + r * c * Math.cos(o.yaw)], at: o.at, F: o.F, cx: o.cx, cy: o.cy }
+}
+function pathAt(a, b, k, m = {}) {
+  const A = orbitOf(a)
+  const B = orbitOf(b)
+  const j = 1 - k
+  const via = m.viaAt ?? [0, 0, 0]
+  const at = A.at.map((v, i) => j * j * v + 2 * j * k * ((v + B.at[i]) / 2 + via[i]) + k * k * B.at[i])
+  let dyaw = B.yaw - A.yaw
+  dyaw -= 2 * Math.PI * Math.round(dyaw / (2 * Math.PI))
+  const bump = 4 * k * j
+  return fromOrbit({
+    at, yaw: A.yaw + dyaw * k, pitch: lerp(A.pitch, B.pitch, k) + (m.rise ?? 0) * bump, lr: lerp(A.lr, B.lr, k) + (m.hop ?? 0) * bump,
+    F: lerp(A.F, B.F, k), cx: lerp(A.cx, B.cx, k), cy: lerp(A.cy, B.cy, k),
+  })
+}
+// A move is timed by how far the PICTURE moves, not by its parameter: the image travel of a 3 x 3 grid
+// of points at the subject's depth and of every named object on screen (the fastest one, per step),
+// tabulated along the path, so the picture's speed follows the move's speed curve exactly and the
+// camera slows wherever it passes close to something. That is what the pacing gate measures.
+const GRID = [0.1, 0.5, 0.9].flatMap((u) => [0.1, 0.5, 0.9].map((v) => [u * W, v * H]))
+let OBJ_REST = null // the named objects, the card where it rests (set once the world exists)
+// Each measure against its own bound (scripts/hero-film-pacing.py): the subject's depth at MAX_FLOW,
+// 900 px/s; a named object at MAX_SWEEP, 1400 px/s (an edge leaving frame as the camera pulls back is
+// peripheral; a post skimmed past the lens is not, and 1400 still forbids that).
+const SWEEP_W = 900 / 1400
+// An object counts in full once it is 150 px inside the frame and fades out toward the edge: it is
+// peripheral there, and a point stepping in at full weight would read as a jolt that is not on screen.
+const EDGE = 150
+const edgeW = (q2) => (q2 ? clamp01(Math.min(q2[0], W - q2[0], q2[1], H - q2[1]) / EDGE) : 0)
+function imageStep(c0, c1) {
+  world.pose(toCam(c0))
+  const depth = world.project(...c0.at)?.[2] ?? 10
+  const pts = GRID.map(([x, y]) => world.unproject(x, y, depth))
+  const was = [...GRID, ...OBJ_REST.map((o) => world.project(...o))]
+  const all = [...pts, ...OBJ_REST]
+  world.pose(toCam(c1))
+  let most = 0
+  all.forEach((w, i) => {
+    const a = was[i]
+    if (!a || a[0] < 0 || a[0] > W || a[1] < 0 || a[1] > H) return
+    const q2 = world.project(...w)
+    if (q2) most = Math.max(most, Math.hypot(q2[0] - a[0], q2[1] - a[1]) * (i < GRID.length ? 1 : SWEEP_W * edgeW(a)))
+  })
+  return most
+}
+// The steps are smoothed into an envelope (a moving max, then a moving mean, over 1/6 of the path)
+// before they are summed: the measure is a max over points, and when the point that dominates it leaves
+// the frame the raw step drops at once, so timing on it would let the camera lurch forward (measured
+// round two: 142 -> 385 px/s in three frames).
+function arcTable(at) {
+  const N = 480
+  const w = 40
+  const raw = []
+  let prev = at(0)
+  for (let i = 1; i <= N; i += 1) {
+    const c = at(i / N)
+    raw.push(imageStep(prev, c))
+    prev = c
   }
-  const h = keys[i + 1].t - keys[i].t
-  const u = clamp01((t - keys[i].t) / h)
-  const h00 = 2 * u ** 3 - 3 * u ** 2 + 1
-  const h10 = u ** 3 - 2 * u ** 2 + u
-  const h01 = -2 * u ** 3 + 3 * u ** 2
-  const h11 = u ** 3 - u ** 2
-  return unflat(P[i].map((v, c) => h00 * v + h10 * h * tangent(i, c) + h01 * P[i + 1][c] + h11 * h * tangent(i + 1, c)))
+  const win = (arr, i, f) => f(...arr.slice(Math.max(0, i - w), Math.min(arr.length, i + w + 1)))
+  const hi = raw.map((_, i) => win(raw, i, Math.max))
+  const env = hi.map((_, i) => win(hi, i, (...v) => v.reduce((x, y) => x + y, 0) / v.length))
+  const acc = [0]
+  env.forEach((d, i) => acc.push(acc[i] + d))
+  return { acc, L: acc[N], N }
+}
+/** The path parameter k at which fraction a of the move's image travel is done. */
+function kAtArc(tab, a) {
+  if (!(tab.L > 0)) return clamp01(a)
+  const want = clamp01(a) * tab.L
+  let lo = 0
+  let hi = tab.N
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1
+    if (tab.acc[mid] < want) lo = mid
+    else hi = mid
+  }
+  const seg = tab.acc[hi] - tab.acc[lo]
+  return (lo + (seg > 0 ? (want - tab.acc[lo]) / seg : 0)) / tab.N
 }
 
 // ------------------------------------------------------------------------------------ the type
@@ -309,14 +366,10 @@ g1.querySelectorAll('.mono').forEach((m) => Object.assign(m.style, { letterSpaci
 const THOUGHT = [g1, g2, g3]
 const LINES = {
   split: ['A session fires a peer.'],
-  yard: ['Every session in its own lane.<br>One land at a time.'],
-  close: ['“Done” is checked.<br>Only decisions reach you.'],
+  decide: ['Only decisions reach you.'],
   racks: ['Landed is not live<br>until the running bytes match.'],
   // FILM only.
-  lanes: ['Every session in its own lane.'],
   gate: ['One land at a time.<br>A dangerous call never runs.'],
-  checked: ['“Done” is checked, not believed.'],
-  decide: ['Only decisions reach you.'],
 }
 const lines = {}
 for (const [k, [text]] of Object.entries(LINES)) {
@@ -331,104 +384,145 @@ const chips = {
   verified: el('', { ...chipStyle, fontFamily: 'Geist', fontWeight: '600', color: 'var(--green)', borderColor: 'var(--green)' }, 'on origin/main · verified by content'),
   deploy: el('mono', { ...chipStyle, color: 'var(--ink)' }, 'deploy-live.sh'),
   acct: T.acct.map((c, a) => el('mono', { ...chipStyle, fontSize: '26px', padding: '5px 10px 8px', color: c, borderColor: c }, `account ${'①②③④'[a]}`)),
-  // The hook that refused the false "done": its real file name, in the colour of a refusal.
-  hook: el('', { ...chipStyle, fontFamily: 'Geist', fontWeight: '600', fontSize: '32px', color: 'var(--red)', borderColor: 'var(--red)' }, `“Done.” sent back by <span class="mono" style="font-weight:500">hooks/completion-assert.sh</span>`),
 }
 
 // ------------------------------------------------------------------------------------ the edits
-// An edit holds `cam` (a pose) or flies `fly: [from, to]`, and maps film time to story time:
-// s = s0 + (t - from) * rate. The LOOP's camera is locked between flights, because an animated WebP
-// has no motion compensation: a still frame is nearly free and a moving one costs about 1 MB a second.
+// Round two's pacing (operator, 2026-09-25: "everything moves and jars so fast I don't feel oriented
+// nor I can read anything in time"), gated by scripts/hero-film-pacing.py rather than by eye:
+//   - every flight is a multi-second move whose PICTURE speed follows smootherstep (image travel
+//     tabulated along an orbit path, so no frame outruns the bound and nothing starts or stops dead);
+//   - every line lands while the camera is calm, stands still for its reading time BEFORE the story
+//     moves under it, and stays until that story is done; type never moves while the camera is fast;
+//   - fewer beats: the loop has three scenes, not five (README § Round 2).
+// An edit holds `cam` (a pose; the FILM creeps toward `drift` over the hold) or is a flight `fly` from
+// the edit before it to the edit after it. Story time and type are keyed on film time, per cut.
 const LOOP = [
-  { from: 0, to: 2.6, cam: 'poster', s0: S.start, rate: 0, poster: true },
-  // The reset (scrollback cleared, the card delivered) happens inside this flight's blur.
-  { from: 2.6, to: 3.4, fly: ['poster', 'split'], via: [0, 0.3, 0], s0: S.start, rate: 0.375, blur: true },
-  { from: 3.4, to: 6.0, cam: 'split', line: 'split', s0: 0, rate: 1.0, chip: ['peer'] },
-  { from: 6.0, to: 6.9, fly: ['split', 'yard'], via: [3, 5, 6], viaAt: [0, 0, 0], s0: 2.6, rate: 0.44, blur: true },
-  { from: 6.9, to: 9.9, cam: 'yard', line: 'yard', s0: 3.0, rate: 1.1, chip: ['force', 'denied', 'accounts'] },
-  { from: 9.9, to: 10.8, fly: ['yard', 'close'], via: [2, 4, 4], s0: 6.3, rate: 0.33, blur: true },
-  { from: 10.8, to: 13.8, cam: 'close', line: 'close', s0: 6.6, rate: 0.93, chip: ['hook'] },
-  // Up first, so the camera clears the card it leaves hanging in front of the window.
-  { from: 13.8, to: 14.7, fly: ['close', 'racks'], via: [2, 10, 18], s0: 9.39, rate: 0.68, blur: true },
-  { from: 14.7, to: 16.9, cam: 'racks', line: 'racks', s0: 10.0, rate: 1.0, chip: ['verified', 'deploy'] },
+  { from: 0, to: 5.0, cam: 'poster', poster: true },
+  { from: 5.0, to: 8.4, fly: { hop: 0.3 }, blur: true },
+  { from: 8.4, to: 28.65, cam: 'window', chip: ['peer'] },
+  // After the peer's commit: up off the window, over its line and the gate, down origin/main.
+  { from: 28.65, to: 33.05, fly: { hop: 0.9, viaAt: [0, 4, 0] }, blur: true },
+  { from: 33.05, to: 40.0, cam: 'racks', chip: ['verified', 'deploy'] },
   // REKEY: this flight's background is two levels off (invisible), so every pixel of the poster that
   // follows differs from the frame before it and the encoder re-sends the poster whole (sister repo).
-  // The peer's close, its ping and the fold play out as the camera decelerates into the poster, so the
-  // held poster that follows is still (critique round two: the fold read as a pop on a still hold).
-  { from: 16.9, to: 18.0, fly: ['racks', 'poster'], via: [6, 9, 8], viaAt: [0, -1, 6], s0: 12.2, rate: 1.8 / 1.1, blur: true, rekey: true },
-  { from: 18.0, to: 19.4, cam: 'poster', s0: S.END, rate: 0, poster: true, arrive: true },
+  { from: 40.0, to: 44.6, fly: { hop: 0.6 }, blur: true, rekey: true },
+  { from: 44.6, to: 45.9, cam: 'poster', poster: true },
 ]
-// The FILM: one camera path that never stops until it arrives back on frame 0. Edits carry only the
-// story clock and the type; the camera comes from FILM_PATH.
+// Story keys [film t, story s]: flat while a line is read; moving only on calm frames under a standing
+// line, or inside a flight once the camera is under way (the card and the scrollback go as it leaves
+// the poster; the peer's commit crosses the gate as the camera follows it; the peer folds its pane as
+// the camera climbs home). Generated by tools/hero-film/schedule.py; README § Round 2 has the table.
+const LOOP_STORY = [
+  [0, S.start], [5.41, S.start], [5.81, S.clear], [11.3, S.clear], [11.45, 0],
+  [14.75, 3.3], [19.95, 3.3], [21.45, S.card[1]], [29.18, S.card[1]], [32.52, S.stale[1]],
+  [36.85, S.stale[1]], [38.9, S.lit[1]], [40.55, S.lit[1]], [44.05, S.END], [45.9, S.END],
+]
+const LOOP_TYPE = [
+  { key: 'thought', out: [5.0, 5.44] },
+  { key: 'split', in: [7.8, 8.5], out: [16.15, 16.75] },
+  { key: 'decide', in: [16.75, 17.45], out: [28.65, 29.25] },
+  { key: 'racks', in: [32.48, 33.15], out: [40.0, 40.6] },
+  { key: 'thought', in: [43.9, 44.7] },
+]
+// The FILM: the same scenes and the gate between the window and the racks; the camera never holds
+// still, it creeps through each shot (well under CALM) and flies between them.
 const FILM = [
-  { from: 0, to: 2.4, s0: S.start, rate: 0, poster: true, typeIn: null },
-  { from: 2.4, to: 6.4, s0: -0.6, rate: 0.8, line: 'split', chip: ['peer'] },
-  { from: 6.4, to: 9.6, s0: 2.6, rate: 0.28, line: 'lanes' },
-  { from: 9.6, to: 13.2, s0: 3.5, rate: 0.83, line: 'gate', chip: ['force', 'denied', 'accounts'] },
-  { from: 13.2, to: 16.4, s0: 6.4, rate: 0.44, line: 'checked', chip: ['hook'] },
-  { from: 16.4, to: 19.4, s0: 7.81, rate: 0.46, line: 'decide' },
-  // Its line waits until the camera is through the gate, so no sign crosses the caption band.
-  { from: 19.4, to: 25.2, s0: 9.2, rate: 0.52, line: 'racks', chip: ['verified', 'deploy'], typeIn: [22.0, 22.6] },
-  // The return: the camera climbs over the racks and swings round to the fleet's faces; the ping and
-  // the fold are timed into the final approach, where the originator's window faces the lens.
-  { from: 25.2, to: 27.8, s0: 12.22, rate: 0.108 },
-  { from: 27.8, to: 30.0, s0: 12.5, rate: 0.68, poster: true, typeIn: [28.3, 29.2], typeOut: null, arrive: true },
+  { from: 0, to: 5.0, cam: 'poster', drift: 'posterIn', poster: true },
+  { from: 5.0, to: 8.4, fly: { hop: 0.3 } },
+  { from: 8.4, to: 28.65, cam: 'window', drift: 'windowB', chip: ['peer'] },
+  { from: 28.65, to: 32.85, fly: { hop: 0.3 } },
+  { from: 32.85, to: 41.45, cam: 'gate', drift: 'gateB', chip: ['force', 'denied', 'accounts'] },
+  { from: 41.45, to: 45.65, fly: { hop: 0.3 } },
+  { from: 45.65, to: 52.6, cam: 'racks', drift: 'racksB', chip: ['verified', 'deploy'] },
+  { from: 52.6, to: 57.6, fly: { hop: 0.6 } },
+  { from: 57.6, to: 63.1, cam: 'posterOut', drift: 'poster', poster: true },
 ]
-const FILM_PATH = [
-  { t: 0, pose: 'poster' },
-  { t: 2.4, pose: 'posterIn' },
-  { t: 3.6, pose: 'split' },
-  { t: 6.2, pose: 'splitB' },
-  { t: 8.2, pose: 'rise' },
-  { t: 9.8, pose: 'yardB' },
-  { t: 11.4, pose: 'gate' },
-  { t: 13.0, pose: 'gateB' },
-  { t: 14.0, pose: 'swing' },
-  { t: 15.0, pose: 'close' },
-  { t: 16.3, pose: 'closeB' },
-  { t: 18.2, pose: 'card' },
-  { t: 19.4, pose: 'hop' },
-  { t: 20.6, pose: 'trunk' },
-  { t: 22.4, pose: 'racks' },
-  { t: 25.0, pose: 'racksB' },
-  { t: 27.2, pose: 'over' },
-  { t: 29.2, pose: 'poster' },
+const FILM_STORY = [
+  [0, S.start], [5.41, S.start], [5.81, S.clear], [11.3, S.clear], [11.45, 0],
+  [14.75, 3.3], [19.95, 3.3], [21.45, S.card[1]], [29.15, S.card[1]], [32.35, 4.9],
+  [36.95, 4.9], [41.35, S.stale[0]], [41.95, S.stale[0]], [45.15, S.stale[1]], [49.45, S.stale[1]],
+  [51.5, S.lit[1]], [53.2, S.lit[1]], [57.0, S.END], [63.1, S.END],
+]
+const FILM_TYPE = [
+  { key: 'thought', out: [5.0, 5.44] },
+  { key: 'split', in: [7.8, 8.5], out: [16.15, 16.75] },
+  { key: 'decide', in: [16.75, 17.45], out: [28.65, 29.25] },
+  { key: 'gate', in: [32.3, 32.95], out: [41.45, 41.95] },
+  { key: 'racks', in: [45.1, 45.75], out: [52.6, 53.2] },
+  { key: 'thought', in: [56.9, 57.7] },
 ]
 const EDITS = CUT === 'film' ? FILM : LOOP
+const STORY = CUT === 'film' ? FILM_STORY : LOOP_STORY
+const TYPE = CUT === 'film' ? FILM_TYPE : LOOP_TYPE
+// Chips that leave with their scene's first line rather than with the camera.
+const CHIP_OUT = { peer: TYPE.find((x) => x.key === 'split').out }
 const DURATION = EDITS[EDITS.length - 1].to
-const SHUTTER = Number(q.get('shutter') ?? 1 / 120)
-const SUBS = Number(q.get('subs') ?? 6) // 6 sub-frames: 4 strobed a post the camera passed close to
+// A 360-degree shutter at 60 fps: round two's moves are slow enough that 1/60 s of blur is ~14 px at
+// their peak, which reads as smooth motion rather than smear, and it cost 9 % fewer WebP bytes than
+// 1/120 s (measured on one second of the longest flight). 8 sub-frames so the longer shutter never
+// strobes.
+const SHUTTER = Number(q.get('shutter') ?? 1 / 60)
+const SUBS = Number(q.get('subs') ?? 8)
 
 // ------------------------------------------------------------------------------------ one frame
 let world = null
 function editAt(t) {
   return EDITS.find((x) => t >= x.from && t < x.to) ?? EDITS[EDITS.length - 1]
 }
-function storyAt(ed, t) {
-  const s = ed.s0 + (t - ed.from) * (ed.rate ?? 0)
-  return Math.max(S.start, Math.min(S.END, s))
+function storyAt(t) {
+  const i = STORY.findIndex(([t1], j) => j > 0 && t < t1)
+  if (i < 0) return STORY[STORY.length - 1][1]
+  const [t0, s0] = STORY[i - 1]
+  const [t1, s1] = STORY[i]
+  return lerp(s0, s1, p(t, t0, t1))
+}
+// Each moving edit's path and its image-travel table, built once the world exists. A flight runs from
+// where the shot before it ended to where the shot after it begins; in the FILM it leaves and joins
+// each shot's creep at that creep's own image speed (quintic Hermite), so the camera never jolts.
+function prepMoves() {
+  OBJ_REST = objectPoints({ card: cardAt(S.END) })
+  EDITS.forEach((ed, i) => {
+    if (ed.fly) {
+      const prev = EDITS[i - 1]
+      const next = EDITS[i + 1]
+      ed._a = POSES[prev.drift ?? prev.cam]
+      ed._b = POSES[next.cam]
+      ed._tab = arcTable((k) => pathAt(ed._a, ed._b, k, ed.fly))
+    } else if (ed.drift) {
+      ed._tab = arcTable((k) => pathAt(POSES[ed.cam], POSES[ed.drift], k))
+      ed._v = ed._tab.L / (ed.to - ed.from) // image px per second
+    }
+  })
+  EDITS.forEach((ed, i) => {
+    if (!ed.fly) return
+    const T0 = ed.to - ed.from
+    const per = ed._tab.L > 0 ? T0 / ed._tab.L : 0
+    ed._m0 = (EDITS[i - 1]._v ?? 0) * per
+    ed._m1 = (EDITS[i + 1]._v ?? 0) * per
+  })
 }
 function camAt(ed, t) {
-  if (CUT === 'film') return pathCam(FILM_PATH, t)
-  if (ed.cam) return POSES[ed.cam]
-  const k = ease.travel(p(t, ed.from, ed.to))
-  return fly(POSES[ed.fly[0]], POSES[ed.fly[1]], k, ed.via, ed.viaAt)
+  if (ed.fly) return pathAt(ed._a, ed._b, kAtArc(ed._tab, hermite5(p(t, ed.from, ed.to), ed._m0, ed._m1)), ed.fly)
+  if (ed.drift) return pathAt(POSES[ed.cam], POSES[ed.drift], kAtArc(ed._tab, p(t, ed.from, ed.to)))
+  return POSES[ed.cam]
 }
 const REST = landState(S.start)
 // Ambient commits: while the poster holds, three commits crawl toward the gate, so the poster reads as
 // a running system and not a still (critique round two, finding 9). tau is time from the seam, so
-// their positions agree on both sides of it; they fade out inside the flights either side.
-const AMBIENT = [{ n: 4, u0: 0.42 }, { n: 9, u0: 0.3 }, { n: 3, u0: 0.55 }]
+// their positions agree on both sides of it; they fade in and out inside the flights either side.
+const AMBIENT = [{ n: 4, u0: 0.45 }, { n: 9, u0: 0.35 }, { n: 3, u0: 0.55 }]
 function ambientAt(t) {
   const tau = t < DURATION / 2 ? t : t - DURATION
-  const reach = CUT === 'film' ? [-2.6, 3.4] : [-2.0, 3.0]
+  const first = EDITS[0].to
+  const last = EDITS[EDITS.length - 1].from - DURATION
+  const reach = [last - 0.5, first + 0.6]
   if (tau < reach[0] || tau > reach[1]) return null
   const a = e(tau, reach[0], reach[0] + 0.5, ease.travel) * (1 - e(tau, reach[1] - 0.5, reach[1], ease.travel))
-  return AMBIENT.map((m) => ({ on: 'line', n: m.n, u: m.u0 + 0.07 * tau, a }))
+  return AMBIENT.map((m) => ({ on: 'line', n: m.n, u: m.u0 + 0.05 * tau, a }))
 }
 function applyWorld(t) {
   const ed = editAt(t)
-  const s = storyAt(ed, t)
+  const s = storyAt(t)
   world.pose(toCam(camAt(ed, t)))
   const cur = { ...landState(s), ambient: ambientAt(t) }
   world.update((k) => (k === 0 ? cur : REST), { fog: [34, 150], rekey: !!ed.rekey, drawHero })
@@ -442,67 +536,57 @@ function show(d, o = 1) {
 function hideAll() {
   for (const d of layer.children) d.style.visibility = 'hidden'
 }
-/** Kinetic type: words arrive (k 0 -> 1) rising into place in turn, and leave drifting left. */
+/** Kinetic type: words arrive (k 0 -> 1) rising into place in turn, and the line leaves whole. */
 function kin(d, k, mode) {
   const ws = d._words
   const n = ws.length
   const stag = 0.16
   show(d, k > 0.001 ? 1 : 0)
   ws.forEach((w, i) => {
-    const local = clamp01(k * (1 + stag * (n - 1)) - stag * (mode === 'out' ? n - 1 - i : i))
+    const local = clamp01(k * (1 + stag * (n - 1)) - stag * i)
     if (mode === 'out') {
       // A line leaves whole: word by word, it left fragments that read as other sentences.
-      const u = ease.leave(1 - clamp01(k))
+      const u = ease.smoother(1 - clamp01(k))
       w.style.opacity = (1 - u).toFixed(3)
-      w.style.transform = `translate(${(-60 * u).toFixed(1)}px, 0)`
+      w.style.transform = `translate(${(-40 * u).toFixed(1)}px, 0)`
     } else {
-      const u = ease.settle(local)
-      w.style.opacity = local.toFixed(3)
-      w.style.transform = `translate(0, ${(34 * (1 - u)).toFixed(1)}px)`
+      // Words rise into place on smootherstep: no word lands with a jolt.
+      const u = ease.smoother(local)
+      w.style.opacity = ease.smoother(clamp01(local * 1.4)).toFixed(3)
+      w.style.transform = `translate(0, ${(26 * (1 - u)).toFixed(1)}px)`
     }
   })
-}
-let posterK = 0
-function showType(x, k, mode) {
-  if (!x || k <= 0.001) return
-  if (x.poster) {
-    THOUGHT.forEach((d) => kin(d, k, mode))
-    posterK = Math.max(posterK, k)
-  } else if (x.line) kin(lines[x.line], k, mode)
 }
 function typeAt(t, st) {
   hideAll()
   show(mark)
-  posterK = 0
   const ed = editAt(t)
   document.documentElement.style.setProperty('--bg', ed.rekey ? T.bgRekey : T.bg)
-  const i = EDITS.indexOf(ed)
-  const prev = EDITS[i - 1]
-  const next = EDITS[i + 1]
-  const u = p(t, ed.from, ed.to)
-  if (CUT === 'film') {
-    const tin = ed.typeIn === undefined ? [ed.from, ed.from + 0.7] : ed.typeIn
-    const tout = ed.typeOut === undefined ? [ed.to - 0.45, ed.to] : ed.typeOut
-    if (tout && t >= tout[0]) showType(ed, 1 - p(t, tout[0], tout[1]), 'out')
-    else showType(ed, tin ? p(t, tin[0], tin[1]) : 1, 'in')
-  } else if (ed.fly) {
-    // Across a flight the old line leaves over its first half and the new one arrives in its last
-    // 40 %, word by word, so type is always in motion with the camera.
-    showType(prev, 1 - p(u, 0, 0.5), 'out')
-    // Into the poster the thought assembles during the flight itself, so the held poster that
-    // follows is still apart from the window (those frames are stored near-lossless, and a moving
-    // headline in them cost 6.3 MB of an 11 MB loop, measured round one).
-    showType(next, p(u, next?.poster ? 0.45 : 0.62, 1), 'in')
-  } else showType(ed, 1, 'in')
+  let posterK = 0
+  for (const x of TYPE) {
+    const on = x.in ? x.in[0] : -Infinity
+    const off = x.out ? x.out[1] : Infinity
+    if (t < on || t >= off) continue
+    let k
+    let mode
+    if (x.out && t >= x.out[0]) [k, mode] = [1 - p(t, x.out[0], x.out[1]), 'out']
+    else [k, mode] = [x.in ? p(t, x.in[0], x.in[1]) : 1, 'in']
+    if (k <= 0.001) continue
+    if (x.key === 'thought') {
+      THOUGHT.forEach((d) => kin(d, k, mode))
+      posterK = Math.max(posterK, k)
+    } else kin(lines[x.key], k, mode)
+  }
   show(scrim, 1 - posterK)
   show(side, posterK)
   // Chips, in the edit that names them.
   const want = new Set(ed.chip ?? [])
   const s = st.s
   const S0 = world.stretches.find((x) => x.k === 0)
+  const out = (k) => (CHIP_OUT[k] ? 1 - p(t, CHIP_OUT[k][0], CHIP_OUT[k][1]) : 1)
   if (want.has('peer')) {
     const [fx, , fz] = hl(HW / 4, 0, 0.15)
-    chipAt(chips.peer, fx, LIFT, fz, clamp01(st.peerLine * 2.2) * st.peerLineA, -200, 18)
+    chipAt(chips.peer, fx, LIFT, fz, clamp01(st.peerLine * 2.2) * st.peerLineA * out('peer'), -200, 18)
   }
   if (want.has('force') && st.force) {
     const pt = world.pillPoint(S0, st.force)
@@ -511,11 +595,6 @@ function typeAt(t, st) {
     chips.force.style.borderColor = st.force.red ? T.red : T.faint
   }
   if (want.has('denied') && st.wall > 0.01) chipAt(chips.denied, S0.wallAt.x, 1.55, S0.wallAt.z, st.wallA * e(s, S.force.red, S.force.red + 0.15), -10, -80)
-  if (want.has('hook')) {
-    // Under the peer's pane, so the struck "Done." and the hook's own row stay in view above it.
-    const [x, y, z] = hl(HW / 4, LIFT, 0.15)
-    chipAt(chips.hook, x, y, z, e(s, S.hook, S.hook + 0.15) * (1 - e(s, S.peerGo + 0.6, S.peerGo + 0.9, ease.travel)), -330, 18)
-  }
   if (want.has('accounts')) {
     // Each account named once, in its own colour, on one of its lines.
     ;[6, 8, 3, 4].forEach((n, a) => {
@@ -547,10 +626,116 @@ function seek(t) {
   typeAt(t, st)
 }
 
+// ------------------------------------------------------------------------------------ the pacing probe
+// scripts/hero-film-pacing.py gates the pacing on these numbers rather than on an eye: how fast the
+// picture moves (image flow at the subject's depth, px per frame at 1920 wide, over a 3 x 3 grid), how
+// fast the camera turns and travels, what the story clock does, and how visible and how still every
+// piece of type is. Nothing is rendered: each frame is posed and laid out, then read back.
+const UNITS = [
+  ['thought', THOUGHT],
+  ...Object.entries(lines).map(([k, d]) => [`line:${k}`, [d]]),
+  ...Object.entries(chips).flatMap(([k, d]) => (Array.isArray(d) ? d.map((x, a) => [`chip:${k}${a}`, [x]]) : [[`chip:${k}`, [d]]])),
+]
+function textOf(ds) {
+  let code = ''
+  let all = ''
+  for (const d of ds) {
+    all += ` ${d.textContent}`
+    if (d.classList.contains('mono')) code += ` ${d.textContent}`
+    else d.querySelectorAll('.mono').forEach((m) => { code += ` ${m.textContent}` })
+  }
+  let prose = all
+  for (const c of code.trim().split(/\s+/)) prose = prose.replace(c, ' ')
+  return { prose: prose.trim().replace(/\s+/g, ' '), code: code.trim() }
+}
+function unitState(ds) {
+  let vis = 1
+  let move = 0
+  for (const d of ds) {
+    const o = d.style.visibility === 'visible' ? Number(d.style.opacity || 1) : 0
+    vis = Math.min(vis, o)
+    for (const w of d._words ?? []) {
+      vis = Math.min(vis, o * Number(w.style.opacity || 1))
+      const m = /translate\(([-\d.]+)px, ([-\d.]+)px\)/.exec(w.style.transform)
+      if (m) move = Math.max(move, Math.hypot(Number(m[1]), Number(m[2])))
+    }
+  }
+  return [Number(vis.toFixed(3)), Number(move.toFixed(1)), Number.parseFloat(ds[0].style.left) || 0, Number.parseFloat(ds[0].style.top) || 0]
+}
+// Named objects the camera must not sweep past (the grid above only sees the subject's depth): the
+// gate's posts, the originator's window, each rack, each fleet window, and the card while it shows.
+function objectPoints(st) {
+  const pts = []
+  for (const sx of [-1.5, 1.5]) for (const y of [0, 4.2]) pts.push([sx, y, 0])
+  for (const lx of [-HW / 2, HW / 2]) for (const ly of [LIFT, LIFT + HH]) pts.push(hl(lx, ly, 0))
+  for (const x of RACK_X) for (const dx of [-1.7, 1.7]) for (const y of [0, 5]) pts.push([x + dx, y, RACK_Z])
+  for (const f of FLEET) for (const y of [LIFT, LIFT + FH]) pts.push([f.x, y, f.z])
+  if (st.card && st.card.a > 0.01) {
+    const c = st.card
+    for (const sx of [-1, 1]) for (const sy of [-1, 1]) pts.push([c.x + sx * RX * 1.05 * c.scale, c.y + sy * 0.615 * c.scale, c.z + sx * RZ * 1.05 * c.scale])
+  }
+  return pts
+}
+function probe(t, dt) {
+  const c0 = camAt(editAt(t), t)
+  world.pose(toCam(c0))
+  const depth = world.project(...c0.at)?.[2] ?? 10
+  const pts = GRID.map(([x, y]) => world.unproject(x, y, depth))
+  const m = world.cam.matrixWorld.elements
+  const fwd = [-m[8], -m[9], -m[10]]
+  const t1 = (((t + dt) % DURATION) + DURATION) % DURATION
+  world.pose(toCam(camAt(editAt(t1), t1)))
+  const flow = pts.map((w, i) => {
+    const q = world.project(...w)
+    return q ? Math.hypot(q[0] - GRID[i][0], q[1] - GRID[i][1]) : 1e4
+  })
+  const { ed, s, st } = applyWorld(t)
+  typeAt(t, st)
+  // Object sweep: each named point on screen now, where the next frame's camera puts it.
+  const obj = objectPoints(st)
+  const near = Math.min(...obj.map((o) => Math.hypot(o[0] - c0.p[0], o[1] - c0.p[1], o[2] - c0.p[2])))
+  world.pose(toCam(c0))
+  const on = obj.map((o) => world.project(...o)).map((q2) => (q2 && q2[0] > 0 && q2[0] < W && q2[1] > 0 && q2[1] < H ? q2 : null))
+  world.pose(toCam(camAt(editAt(t1), t1)))
+  let sweep = 0
+  obj.forEach((o, i) => {
+    if (!on[i]) return
+    const q2 = world.project(...o)
+    sweep = Math.max(sweep, (q2 ? Math.hypot(q2[0] - on[i][0], q2[1] - on[i][1]) : 1e4) * edgeW(on[i]))
+  })
+  world.pose(toCam(c0))
+  let card = null
+  if (st.card) {
+    // Its centre on screen and its width there: the card is type only while it is big enough to read.
+    const c = st.card
+    const hw = 1.05 * c.scale
+    const l = world.project(c.x - RX * hw, c.y, c.z - RZ * hw)
+    const r = world.project(c.x + RX * hw, c.y, c.z + RZ * hw)
+    const mid = world.project(c.x, c.y, c.z)
+    card = { a: Number(c.a.toFixed(3)), at: mid ? mid.slice(0, 2).map((v) => Number(v.toFixed(1))) : null, w: l && r ? Number(Math.hypot(r[0] - l[0], r[1] - l[1]).toFixed(1)) : 0 }
+  }
+  return {
+    t: Number(t.toFixed(4)), s: Number(s.toFixed(5)), edit: EDITS.indexOf(ed), fly: !!ed.fly,
+    p: c0.p.map((v) => Number(v.toFixed(4))), fwd: fwd.map((v) => Number(v.toFixed(6))), F: Number(c0.F.toFixed(2)),
+    flow: flow.map((v) => Number(v.toFixed(2))), depth: Number(depth.toFixed(2)), sweep: Number(sweep.toFixed(2)), near: Number(near.toFixed(2)),
+    units: Object.fromEntries(UNITS.map(([k, ds]) => [k, unitState(ds)])), card,
+  }
+}
+// While composing: the image travel (px at 1920) of a move between two poses, for a flight spec.
+window.__moveL = (a, b, spec = {}) => arcTable((k) => pathAt(POSES[a], POSES[b], k, spec)).L
+window.__pacing = (fps = 60) => {
+  const frames = []
+  for (let f = 0; f < Math.round(DURATION * fps); f += 1) frames.push(probe(f / fps, 1 / fps))
+  const texts = Object.fromEntries(UNITS.map(([k, ds]) => [k, textOf(ds)]))
+  texts.card = { prose: CARD_TEXT, code: '' }
+  return { cut: CUT, theme: THEME, duration: DURATION, fps, edits: EDITS.map((x, i) => ({ from: x.from, to: x.to, fly: x.fly ? [EDITS[i - 1].drift ?? EDITS[i - 1].cam, EDITS[i + 1].cam] : null, cam: x.cam ?? null, line: null, poster: !!x.poster })), texts, frames }
+}
+
 window.__duration = DURATION
-// What the encoder needs to know: where the camera flies (film-encode-loop.py stores those frames
-// lossy, at 20 fps) and which holds are the poster (stored near-lossless: frame 0 is the most-seen
-// frame, and the seam is exact only if the poster decodes the same both times it is shown).
+// What the encoder needs to know: where the camera flies (hero-film-encode-loop.py stores those frames
+// lossy; every frame of both cuts is 60 fps since round two) and which holds are the poster (their
+// first frame is stored near-lossless: frame 0 is the most-seen frame, and the seam is exact only if
+// the poster decodes the same both times it is shown).
 window.__meta = {
   cut: CUT,
   duration: DURATION,
@@ -560,6 +745,7 @@ window.__meta = {
 const seekAny = (t) => seek(((t % DURATION) + DURATION) % DURATION)
 Promise.all(['400 26px "Geist"', '500 26px "Geist"', '600 26px "Geist"', '400 26px "Geist Mono"', '500 26px "Geist Mono"', '600 26px "Geist Mono"'].map((f) => document.fonts.load(f))).then(() => document.fonts.ready).then(() => {
   world = buildWorld(T, { width: W, height: H })
+  prepMoves()
   stage.append(world.renderer.domElement)
   stage.append(layer)
   window.__seek = seekAny

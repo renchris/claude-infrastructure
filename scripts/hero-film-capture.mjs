@@ -13,6 +13,11 @@
  *   node scripts/hero-film-capture.mjs --theme dark --cut film --fps 60 --out /tmp/cih-film/dark
  *   node scripts/hero-film-capture.mjs --theme light --cut loop --fps 1 --out /tmp/cih-film/review
  *   node scripts/hero-film-capture.mjs --theme dark --times 0,3,7.5 --out /tmp/cih-film/stills
+ *   node scripts/hero-film-capture.mjs --cut loop --probe /tmp/cih-film/pacing-loop.json
+ *
+ * --probe FILE --eval EXPR prints EXPR evaluated in the loaded page instead (a composing aid).
+ * --probe writes the page's pacing report (window.__pacing(fps): camera flow, story clock, type
+ * visibility, one row per frame, nothing rendered) for scripts/hero-film-pacing.py to gate.
  */
 
 import { spawn } from 'node:child_process'
@@ -41,7 +46,7 @@ function serve() {
 let BASE = null
 
 function parseArgs(argv) {
-  const o = { page: 'tools/hero-film/index.html', query: '', theme: 'dark', cut: 'film', fps: 60, flightFps: null, from: 0, to: null, width: 1920, height: 1080, scale: 1, out: null, times: null, workers: 1, format: 'png' }
+  const o = { page: 'tools/hero-film/index.html', query: '', theme: 'dark', cut: 'film', fps: 60, flightFps: null, from: 0, to: null, width: 1920, height: 1080, scale: 1, out: null, times: null, workers: 1, format: 'png', probe: null }
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i]
     const v = () => argv[(i += 1)]
@@ -60,9 +65,11 @@ function parseArgs(argv) {
     else if (a === '--times') o.times = v().split(',').map(Number)
     else if (a === '--workers') o.workers = Number(v())
     else if (a === '--format') o.format = v()
+    else if (a === '--probe') o.probe = v()
+    else if (a === '--eval') o.eval = v()
     else throw new Error(`unknown argument: ${a}`)
   }
-  if (!o.out) throw new Error('--out <dir> is required')
+  if (!o.out && !o.probe) throw new Error('--out <dir> or --probe <file> is required')
   return o
 }
 
@@ -181,6 +188,18 @@ async function evaluate(cdp, expression) {
 
 /** One Chrome, one page, posed at each time in `times`; frame names come from `names`. */
 async function worker(o, times, names, label) {
+  // A Chrome whose DevTools endpoint never comes up (a busy machine, a port another process took) is
+  // relaunched on a new port, up to three times: one slow launch should not end a five-minute capture.
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await workerOnce(o, times, names, `${label}-${attempt}`)
+    } catch (err) {
+      if (attempt >= 3 || !/did not come up/.test(err.message)) throw err
+      process.stderr.write(`  ${label}: ${err.message}; relaunching (attempt ${attempt + 1} of 3)\n`)
+    }
+  }
+}
+async function workerOnce(o, times, names, label) {
   const port = 9300 + Math.floor(Math.random() * 600)
   const userDataDir = join('/tmp', `cih-film-chrome-${process.pid}-${label}`)
   const chrome = launchChrome(port, userDataDir)
@@ -218,6 +237,43 @@ async function worker(o, times, names, label) {
   }
 }
 
+/** The page's pacing report: one Chrome, the page loaded at the capture size, window.__pacing(fps). */
+async function probeRun(o) {
+  const port = 9300 + Math.floor(Math.random() * 600)
+  const userDataDir = join('/tmp', `cih-film-chrome-${process.pid}-pacing`)
+  const chrome = launchChrome(port, userDataDir)
+  let cdp
+  try {
+    cdp = connect(await waitForDevTools(port))
+    await cdp.ready
+    await cdp.send('Page.enable')
+    cdp.on('Runtime.exceptionThrown', (e) => process.stderr.write(`  page: ${e.exceptionDetails?.exception?.description ?? e.exceptionDetails?.text}\n`))
+    await cdp.send('Runtime.enable')
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: o.width, height: o.height, deviceScaleFactor: o.scale, mobile: false })
+    const loaded = cdp.once('Page.loadEventFired')
+    await cdp.send('Page.navigate', { url: `${BASE}/${o.page}?theme=${o.theme}&cut=${o.cut}${o.query ? `&${o.query}` : ''}` })
+    await loaded
+    const ready = 'new Promise((r) => { const t0 = Date.now(); const f = () => (typeof window.__pacing === "function" && window.__ready ? r(true) : Date.now() - t0 > 60000 ? r(false) : setTimeout(f, 50)); f() })'
+    if (!(await evaluate(cdp, ready))) throw new Error('film page did not expose window.__pacing(fps)')
+    const t0 = Date.now()
+    if (o.eval) {
+      // --eval EXPR: any expression against the loaded page, printed as JSON (composing aid).
+      process.stdout.write(`${JSON.stringify(await evaluate(cdp, o.eval))}\n`)
+      return
+    }
+    const report = await evaluate(cdp, `window.__pacing(${o.fps})`)
+    writeFileSync(o.probe, `${JSON.stringify(report)}\n`)
+    process.stdout.write(`${o.cut}/${o.theme} pacing: ${report.frames.length} frames at ${o.fps} fps in ${((Date.now() - t0) / 1000).toFixed(1)}s -> ${o.probe}\n`)
+  } finally {
+    try { cdp?.close() } catch { /* gone */ }
+    const exited = new Promise((res) => chrome.once('exit', res))
+    chrome.kill('SIGTERM')
+    await Promise.race([exited, new Promise((r) => setTimeout(r, 4000))])
+    if (chrome.exitCode === null && chrome.signalCode === null) chrome.kill('SIGKILL')
+    try { rmSync(userDataDir, { recursive: true, force: true }) } catch { /* best effort */ }
+  }
+}
+
 async function durationOf(o) {
   const probe = { ...o, out: join('/tmp', `cih-film-probe-${process.pid}`) }
   mkdirSync(probe.out, { recursive: true })
@@ -251,7 +307,7 @@ async function main() {
   const server = await serve()
   BASE = `http://127.0.0.1:${server.address().port}`
   try {
-    await capture(o)
+    await (o.probe ? probeRun(o) : capture(o))
   } finally {
     server.closeAllConnections()
     server.close()
@@ -273,6 +329,7 @@ async function capture(o) {
     const total = Math.round((duration - o.from) * o.fps)
     times = Array.from({ length: total }, (_, f) => o.from + f / o.fps)
     // --flight-fps: while the camera flies (the page's meta.flights), sample at this rate instead.
+    // No render uses it since round two: a flight below 60 fps is the judder the operator rejected.
     if (o.flightFps && meta.flights?.length) {
       const inFlight = (t) => meta.flights.some(([a, b]) => t >= a - 1e-9 && t < b - 1e-9)
       times = times.filter((t) => !inFlight(t))
