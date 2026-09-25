@@ -1,0 +1,16 @@
+/* tools/hero-film/film.css. Adapted from agent-context-sync film/film.css. Geist is installed with
+   npm install --no-save by scripts/hero-film-render.sh, never committed. */
+@font-face { font-family: 'Geist'; font-weight: 400; src: url('../../node_modules/@fontsource/geist-sans/files/geist-sans-latin-400-normal.woff2') format('woff2'); }
+@font-face { font-family: 'Geist'; font-weight: 500; src: url('../../node_modules/@fontsource/geist-sans/files/geist-sans-latin-500-normal.woff2') format('woff2'); }
+@font-face { font-family: 'Geist'; font-weight: 600; src: url('../../node_modules/@fontsource/geist-sans/files/geist-sans-latin-600-normal.woff2') format('woff2'); }
+@font-face { font-family: 'Geist'; font-weight: 700; src: url('../../node_modules/@fontsource/geist-sans/files/geist-sans-latin-700-normal.woff2') format('woff2'); }
+@font-face { font-family: 'Geist Mono'; font-weight: 400; src: url('../../node_modules/@fontsource/geist-mono/files/geist-mono-latin-400-normal.woff2') format('woff2'); }
+@font-face { font-family: 'Geist Mono'; font-weight: 500; src: url('../../node_modules/@fontsource/geist-mono/files/geist-mono-latin-500-normal.woff2') format('woff2'); }
+@font-face { font-family: 'Geist Mono'; font-weight: 600; src: url('../../node_modules/@fontsource/geist-mono/files/geist-mono-latin-600-normal.woff2') format('woff2'); }
+html, body { margin: 0; padding: 0; overflow: hidden; }
+body { width: 1920px; height: 1080px; background: var(--bg); color: var(--ink); font-family: 'Geist', sans-serif; -webkit-font-smoothing: antialiased; }
+#stage { position: absolute; inset: 0; overflow: hidden; }
+canvas { position: absolute; inset: 0; }
+.t { position: absolute; left: 0; top: 0; white-space: pre; will-change: transform, opacity; }
+.t .w { display: inline-block; white-space: pre; }
+.mono { font-family: 'Geist Mono', monospace; }
