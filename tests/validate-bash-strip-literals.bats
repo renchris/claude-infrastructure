@@ -61,8 +61,8 @@ must_not_fire() {  # <reason-prefix> <command>… — the rule's own deny must b
 
 @test "FP git identity write: a fixture WRITTEN through a heredoc is not a write here" {
   must_not_fire 'git identity write' \
-    $'cat > tests/x.bats <<\'BATS\'\nsetup() {\n  cd "$WORK" || return 1\n  git config user.email tester@example.com\n}\nBATS' \
-    $'python3 - <<\'PY\'\ns = \'\'\'git -C "$d" config user.email t@t\'\'\'\nPY'
+    $'cat > tests/x.bats <<\'BATS\'\nsetup() {\n  cd "${WORK:?}" || return 1\n  git config user.email tester@example.com\n}\nBATS' \
+    $'python3 - <<\'PY\'\ns = \'\'\'git -C "$d/repo" config user.email t@t\'\'\'\nPY'
 }
 
 @test "FP DDL: a tool and its SQL named only inside literals or a heredoc body" {
@@ -108,8 +108,8 @@ must_not_fire() {  # <reason-prefix> <command>… — the rule's own deny must b
 @test "TP git identity write, bare and wrapped" {
   must_deny 'git config user.email a@b' "sh -c 'git config user.email a@b'" \
     'bash -c "git config user.email a@b"' 'eval "git config user.email a@b"' \
-    $'bash <<\'EOF\'\ngit config user.email a@b\nEOF' 'git -C "" config user.email t@t' \
-    'git -C "$d" config user.email t@t'
+    $'bash <<\'EOF\'\ngit config user.email a@b\nEOF'
+  # The empty and all-expansion -C targets are pinned by tests/git-identity-write-guard.bats:54-60.
 }
 
 @test "TP DDL, bare and wrapped" {
