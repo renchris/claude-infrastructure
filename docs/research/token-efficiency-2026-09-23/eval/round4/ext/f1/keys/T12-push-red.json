@@ -1,0 +1,105 @@
+{
+ "task": "T12-push-red",
+ "dossiers": {
+  "h1/dossier-1.md": {
+   "rep": 17,
+   "arm": "slim",
+   "account": "next"
+  },
+  "h1/dossier-2.md": {
+   "rep": 15,
+   "arm": "full",
+   "account": "next"
+  },
+  "h1/dossier-3.md": {
+   "rep": 28,
+   "arm": "slim",
+   "account": "next"
+  },
+  "h1/dossier-4.md": {
+   "rep": 30,
+   "arm": "full",
+   "account": "next"
+  },
+  "h1/dossier-5.md": {
+   "rep": 24,
+   "arm": "slim",
+   "account": "next4"
+  },
+  "h1/dossier-6.md": {
+   "rep": 25,
+   "arm": "slim",
+   "account": "next4"
+  },
+  "h1/dossier-7.md": {
+   "rep": 21,
+   "arm": "slim",
+   "account": "next3"
+  },
+  "h1/dossier-8.md": {
+   "rep": 18,
+   "arm": "full",
+   "account": "next"
+  },
+  "h1/dossier-9.md": {
+   "rep": 16,
+   "arm": "slim",
+   "account": "next"
+  },
+  "h1/dossier-10.md": {
+   "rep": 14,
+   "arm": "full",
+   "account": "next4"
+  },
+  "h2/dossier-1.md": {
+   "rep": 11,
+   "arm": "full",
+   "account": "next4"
+  },
+  "h2/dossier-2.md": {
+   "rep": 12,
+   "arm": "slim",
+   "account": "next4"
+  },
+  "h2/dossier-3.md": {
+   "rep": 13,
+   "arm": "slim",
+   "account": "next4"
+  },
+  "h2/dossier-4.md": {
+   "rep": 22,
+   "arm": "full",
+   "account": "next3"
+  },
+  "h2/dossier-5.md": {
+   "rep": 20,
+   "arm": "slim",
+   "account": "next3"
+  },
+  "h2/dossier-6.md": {
+   "rep": 29,
+   "arm": "slim",
+   "account": "next"
+  },
+  "h2/dossier-7.md": {
+   "rep": 26,
+   "arm": "full",
+   "account": "next4"
+  },
+  "h2/dossier-8.md": {
+   "rep": 23,
+   "arm": "full",
+   "account": "next4"
+  },
+  "h2/dossier-9.md": {
+   "rep": 19,
+   "arm": "full",
+   "account": "next3"
+  },
+  "h2/dossier-10.md": {
+   "rep": 27,
+   "arm": "full",
+   "account": "next"
+  }
+ }
+}
