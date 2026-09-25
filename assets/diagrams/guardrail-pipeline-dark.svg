@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 783.5131666666666 754.9680000000001" width="783.5131666666666" height="754.9680000000001" style="--bg:#0d1117;--fg:#e6edf3;--line:#3d444d;--accent:#4493f8;--muted:#9198a1">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 863.6881666666666 754.9680000000001" width="863.6881666666666" height="754.9680000000001" style="--bg:#0d1117;--fg:#e6edf3;--line:#3d444d;--accent:#4493f8;--muted:#9198a1">
 <style>
   text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; }
   svg {
@@ -25,72 +25,74 @@
     <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
-<polyline class="edge" data-from="P" data-to="UPS" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="521.1518333333332,76.9 521.1518333333332,124.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="UPS" data-to="M" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="521.1518333333332,178.70000000000002 521.1518333333332,226.70000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="M" data-to="Pre" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="521.1518333333332,263.6 521.1518333333332,275.6 270.85731666666663,275.6 270.85731666666663,287.6000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Pre" data-to="No" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="refused" points="247.76264999999995,403.0733333333334 247.76264999999995,462.16800000000006 169.16099999999994,462.16800000000006 169.16099999999994,542.4680000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Pre" data-to="Tool" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="allowed · Write backed up first" points="293.9519833333333,403.0733333333334 293.9519833333333,462.16800000000006 379.15999999999997,462.16800000000006 379.15999999999997,588.0325" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Tool" data-to="Post" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="379.15999999999997,624.9325000000001 379.15999999999997,661.1680000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Post" data-to="M" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="468.47833333333324,661.1680000000001 468.47833333333324,649.1680000000001 466.2361666666666,649.1680000000001 466.2361666666666,649.1680000000001 512.8072333333332,649.1680000000001 512.8072333333332,263.6" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="M" data-to="Stop" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="521.1518333333332,263.6 521.1518333333332,275.6 634.5591666666666,275.6 634.5591666666666,367.90000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Stop" data-to="M" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="the live git ledger disagrees" points="653.8253333333332,387.1661666666667 653.8253333333332,355.90000000000003 674.5591666666666,355.90000000000003 674.5591666666666,275.6 546.1856333333333,275.6 546.1856333333333,263.6" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Stop" data-to="End" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="genuinely done" points="634.5591666666666,483.49700000000007 634.5591666666666,588.0325" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="P" data-to="UPS" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="601.9208333333332,76.9 601.9208333333332,124.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="UPS" data-to="M" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="601.9208333333332,178.70000000000002 601.9208333333332,226.70000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="M" data-to="Pre" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="601.9208333333332,263.6 601.9208333333332,275.6000000000001 325.76481666666666,275.6000000000001 325.76481666666666,287.60000000000014" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Pre" data-to="No" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="refused" points="302.67015,403.07333333333344 302.67015,462.1680000000001 209.54549999999995,462.1680000000001 209.54549999999995,542.4680000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Pre" data-to="Tool" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="allowed · Write backed up first" points="348.85948333333334,403.07333333333344 348.85948333333334,462.1680000000001 459.929,462.1680000000001 459.929,576.2680000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Tool" data-to="Post" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="459.929,613.1680000000001 459.929,661.1680000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Post" data-to="M" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="549.2473333333332,661.1680000000001 549.2473333333332,649.1680000000001 547.0051666666666,649.1680000000001 547.0051666666666,649.1680000000001 593.5762333333332,649.1680000000001 593.5762333333332,263.6" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="M" data-to="Stop" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="601.9208333333332,263.6 601.9208333333332,275.6000000000001 715.3281666666666,275.6000000000001 715.3281666666666,382.20000000000005" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Stop" data-to="M" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="the live ledger disagrees
+or the hand-off was drivable" points="734.5943333333332,401.4661666666667 734.5943333333332,370.20000000000005 755.3281666666666,370.20000000000005 755.3281666666666,275.6 626.9546333333333,275.6 626.9546333333333,263.6" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Stop" data-to="End" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="genuinely done" points="715.3281666666666,497.797 715.3281666666666,614.0970000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
 <g class="edge-label" data-from="Pre" data-to="No" data-label="refused">
-  <rect x="141.66099999999994" y="469.16800000000006" width="54.478" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="168.89999999999995" y="484.31800000000004" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">refused</text>
+  <rect x="182.04549999999995" y="469.1680000000001" width="54.478" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="209.28449999999995" y="484.3180000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">refused</text>
 </g>
 <g class="edge-label" data-from="Pre" data-to="Tool" data-label="allowed · Write backed up first">
-  <rect x="300.15999999999997" y="469.16800000000006" width="157.834" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="379.077" y="484.31800000000004" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">allowed · Write backed up first</text>
+  <rect x="380.929" y="469.1680000000001" width="157.834" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="459.846" y="484.3180000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">allowed · Write backed up first</text>
 </g>
-<g class="edge-label" data-from="Stop" data-to="M" data-label="the live git ledger disagrees">
-  <rect x="601.5591666666666" y="294.6" width="145.95400000000004" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="674.5361666666665" y="309.75" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">the live git ledger disagrees</text>
+<g class="edge-label" data-from="Stop" data-to="M" data-label="the live ledger disagrees
+or the hand-off was drivable">
+  <rect x="682.3281666666664" y="294.6" width="145.36" height="44.6" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="755.0081666666665" y="316.90000000000003" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="755.0081666666665" dy="-3.3000000000000007">the live ledger disagrees</tspan><tspan x="755.0081666666665" dy="14.3">or the hand-off was drivable</tspan></text>
 </g>
 <g class="edge-label" data-from="Stop" data-to="End" data-label="genuinely done">
-  <rect x="589.5591666666666" y="526.4970000000001" width="89.52400000000003" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="634.3211666666666" y="541.647" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">genuinely done</text>
+  <rect x="670.3281666666666" y="540.797" width="89.52400000000003" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="715.0901666666666" y="555.947" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">genuinely done</text>
 </g>
 <g class="node" data-id="P" data-label="your prompt" data-shape="stadium">
-  <rect x="464.9793333333332" y="40" width="112.345" height="36.900000000000006" rx="18.450000000000003" ry="18.450000000000003" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="521.1518333333332" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">your prompt</text>
+  <rect x="545.7483333333332" y="40" width="112.345" height="36.900000000000006" rx="18.450000000000003" ry="18.450000000000003" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="601.9208333333332" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">your prompt</text>
 </g>
-<g class="node" data-id="UPS" data-label="UserPromptSubmit — 6 hooks
-mail · nudges" data-shape="rectangle">
-  <rect x="416.07333333333327" y="124.9" width="210.15699999999998" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="521.1518333333332" y="151.8" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="521.1518333333332" dy="-3.9000000000000012">UserPromptSubmit — 6 hooks</tspan><tspan x="521.1518333333332" dy="16.900000000000002">mail · nudges</tspan></text>
+<g class="node" data-id="UPS" data-label="UserPromptSubmit — 7 hooks
+mail · nudges · stale-copy guard" data-shape="rectangle">
+  <rect x="486.09783333333326" y="124.9" width="231.646" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="601.9208333333332" y="151.8" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="601.9208333333332" dy="-3.9000000000000012">UserPromptSubmit — 7 hooks</tspan><tspan x="601.9208333333332" dy="16.900000000000002">mail · nudges · stale-copy guard</tspan></text>
 </g>
 <g class="node" data-id="M" data-label="Claude" data-shape="stadium">
-  <rect x="479.4288333333333" y="226.70000000000002" width="83.446" height="36.900000000000006" rx="18.450000000000003" ry="18.450000000000003" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="521.1518333333332" y="245.15000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">Claude</text>
+  <rect x="560.1978333333333" y="226.70000000000002" width="83.446" height="36.900000000000006" rx="18.450000000000003" ry="18.450000000000003" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="601.9208333333332" y="245.15000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">Claude</text>
 </g>
 <g class="node" data-id="Pre" data-label="PreToolUse
-14 hooks" data-shape="diamond">
-  <polygon points="270.85731666666663,287.6000000000001 340.1413166666666,356.88400000000007 270.85731666666663,426.16800000000006 201.57331666666664,356.88400000000007" fill="#2b2410" stroke="#d4af37" stroke-width="0.75" />
-  <text x="270.85731666666663" y="356.88400000000007" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="270.85731666666663" dy="-3.9000000000000012">PreToolUse</tspan><tspan x="270.85731666666663" dy="16.900000000000002">14 hooks</tspan></text>
+18 hooks" data-shape="diamond">
+  <polygon points="325.76481666666666,287.60000000000014 395.04881666666665,356.8840000000001 325.76481666666666,426.1680000000001 256.48081666666667,356.8840000000001" fill="#2b2410" stroke="#d4af37" stroke-width="0.75" />
+  <text x="325.76481666666666" y="356.8840000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="325.76481666666666" dy="-3.9000000000000012">PreToolUse</tspan><tspan x="325.76481666666666" dy="16.900000000000002">18 hooks</tspan></text>
 </g>
 <g class="node" data-id="No" data-label="the call never runs
-41 deny rules · dangerous bash
-wrong worktree · unsanctioned push" data-shape="rectangle">
-  <rect x="40" y="542.4680000000001" width="258.32199999999995" height="70.7" rx="0" ry="0" fill="#2b1618" stroke="#f85149" stroke-width="0.75" />
-  <text x="169.16099999999997" y="577.8180000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="169.16099999999997" dy="-12.350000000000001">the call never runs</tspan><tspan x="169.16099999999997" dy="16.900000000000002">41 deny rules · dangerous bash</tspan><tspan x="169.16099999999997" dy="16.900000000000002">wrong worktree · unsanctioned push</tspan></text>
+41 deny rules · destructive bash
+commit in the shared checkout · unsanctioned push" data-shape="rectangle">
+  <rect x="40" y="542.4680000000001" width="339.09099999999995" height="70.7" rx="0" ry="0" fill="#2b1618" stroke="#f85149" stroke-width="0.75" />
+  <text x="209.54549999999998" y="577.8180000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="209.54549999999998" dy="-12.350000000000001">the call never runs</tspan><tspan x="209.54549999999998" dy="16.900000000000002">41 deny rules · destructive bash</tspan><tspan x="209.54549999999998" dy="16.900000000000002">commit in the shared checkout · unsanctioned push</tspan></text>
 </g>
 <g class="node" data-id="Tool" data-label="the tool call" data-shape="rectangle">
-  <rect x="326.32199999999995" y="588.0325" width="105.67599999999999" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="379.15999999999997" y="606.4825000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">the tool call</text>
+  <rect x="407.09099999999995" y="576.2680000000001" width="105.67599999999999" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="459.929" y="594.7180000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">the tool call</text>
 </g>
-<g class="node" data-id="Post" data-label="PostToolUse — 12 hooks
+<g class="node" data-id="Post" data-label="PostToolUse — 15 hooks
 plan version · bash log · context watch" data-shape="rectangle">
-  <rect x="289.84166666666664" y="661.1680000000001" width="267.9549999999999" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="423.8191666666666" y="688.0680000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="423.8191666666666" dy="-3.9000000000000012">PostToolUse — 12 hooks</tspan><tspan x="423.8191666666666" dy="16.900000000000002">plan version · bash log · context watch</tspan></text>
+  <rect x="370.61066666666665" y="661.1680000000001" width="267.9549999999999" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="504.5881666666666" y="688.0680000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="504.5881666666666" dy="-3.9000000000000012">PostToolUse — 15 hooks</tspan><tspan x="504.5881666666666" dy="16.900000000000002">plan version · bash log · context watch</tspan></text>
 </g>
 <g class="node" data-id="Stop" data-label="Stop
-12 hooks" data-shape="diamond">
-  <polygon points="634.5591666666666,367.90000000000003 692.3576666666665,425.6985 634.5591666666666,483.497 576.7606666666666,425.6985" fill="#2b2410" stroke="#d4af37" stroke-width="0.75" />
-  <text x="634.5591666666666" y="425.6985" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="634.5591666666666" dy="-3.9000000000000012">Stop</tspan><tspan x="634.5591666666666" dy="16.900000000000002">12 hooks</tspan></text>
+13 hooks" data-shape="diamond">
+  <polygon points="715.3281666666666,382.20000000000005 773.1266666666666,439.99850000000004 715.3281666666666,497.797 657.5296666666666,439.99850000000004" fill="#2b2410" stroke="#d4af37" stroke-width="0.75" />
+  <text x="715.3281666666666" y="439.99850000000004" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="715.3281666666666" dy="-3.9000000000000012">Stop</tspan><tspan x="715.3281666666666" dy="16.900000000000002">13 hooks</tspan></text>
 </g>
 <g class="node" data-id="End" data-label="turn ends" data-shape="stadium">
-  <rect x="585.7966666666666" y="588.0325" width="97.525" height="36.900000000000006" rx="18.450000000000003" ry="18.450000000000003" fill="#12261a" stroke="#3fb950" stroke-width="0.75" />
-  <text x="634.5591666666667" y="606.4825000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3" dy="4.55">turn ends</text>
+  <rect x="666.5656666666666" y="614.0970000000001" width="97.525" height="36.900000000000006" rx="18.450000000000003" ry="18.450000000000003" fill="#12261a" stroke="#3fb950" stroke-width="0.75" />
+  <text x="715.3281666666667" y="632.5470000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3" dy="4.55">turn ends</text>
 </g>
 </svg>

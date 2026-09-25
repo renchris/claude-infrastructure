@@ -2,12 +2,12 @@ flowchart LR
     A["session A<br/>own worktree · acct 1"] --> G
     B["session B<br/>own worktree · acct 2"] --> G
     C["session C<br/>own worktree · acct 3"] --> G
-    G["fast gate — UNLOCKED, seconds<br/>statics + ratchets + bounded smoke<br/>(sheds by SKIPPING under load; no corpus, ever)"]
-    G --> Lock{"land-lock<br/>held p50 3s (p90 5s):<br/>the CAS push window only"}
+    G["gate — UNLOCKED, minutes<br/>statics + ratchets + bounded smoke<br/>(sheds by SKIPPING under load; no corpus, ever)"]
+    G --> Lock{"land-lock<br/>held p50 3 s (p90 8 s):<br/>the CAS push window only"}
     Lock --> Push["push → verify by CONTENT,<br/>not commit count"]
     Push --> Trunk[("origin/main")]
     Trunk --> V["verifier — ONE, background band<br/>full corpus, fresh cell,<br/>host suites partitioned out"]
-    V -->|"green stamp"| D["deploy autopilot<br/>fail-closed on green"]
+    V -->|"verdict stamp"| D["deploy-live<br/>kicked by every land · never a RED tree"]
     D --> Live[("live ~/.claude")]
     classDef w fill:@blue-bg,stroke:@blue-fg,color:@text
     classDef k fill:@gold-bg,stroke:@gold-fg,color:@text

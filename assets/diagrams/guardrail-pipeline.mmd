@@ -1,13 +1,13 @@
 flowchart TB
-    P(["your prompt"]) --> UPS["UserPromptSubmit — 6 hooks<br/>mail · nudges"]
+    P(["your prompt"]) --> UPS["UserPromptSubmit — 7 hooks<br/>mail · nudges · stale-copy guard"]
     UPS --> M(["Claude"])
-    M --> Pre{"PreToolUse<br/>14 hooks"}
-    Pre -->|"refused"| No["the call never runs<br/>41 deny rules · dangerous bash<br/>wrong worktree · unsanctioned push"]
+    M --> Pre{"PreToolUse<br/>18 hooks"}
+    Pre -->|"refused"| No["the call never runs<br/>41 deny rules · destructive bash<br/>commit in the shared checkout · unsanctioned push"]
     Pre -->|"allowed · Write backed up first"| Tool["the tool call"]
-    Tool --> Post["PostToolUse — 12 hooks<br/>plan version · bash log · context watch"]
+    Tool --> Post["PostToolUse — 15 hooks<br/>plan version · bash log · context watch"]
     Post --> M
-    M --> Stop{"Stop<br/>12 hooks"}
-    Stop -->|"the live git ledger disagrees"| M
+    M --> Stop{"Stop<br/>13 hooks"}
+    Stop -->|"the live ledger disagrees<br/>or the hand-off was drivable"| M
     Stop -->|"genuinely done"| End(["turn ends"])
     classDef gate fill:@gold-bg,stroke:@gold-fg,color:@text
     classDef no fill:@red-bg,stroke:@red-fg,color:@text
