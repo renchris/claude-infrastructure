@@ -69,6 +69,12 @@ session at launch; a change ships to all accounts or none. Migration 0037 conver
   - *Measured and held:* the rank 2 workaround (−53% cache writes on a cold workflow run), pending an F1 gate.
   - *Dropped with reasons:* ranks 6 and 26. *Filed upstream:* rank 22 (anthropics/claude-code#96909).
   - The 7-day realized `workflow-lean` saving reports itself here after 2026-10-01 (§ 6).
+- **Wave 3 (2026-09-24): the operator's approvals of the same day.**
+  - *visual-direction skill (not a ranked row):* its "Good" calibration example, and the mirrored `ui/ideas.md` it
+    reads, was the cream-and-terracotta template, the most common generated design. It now commits to a
+    subject-derived direction outside all five templates, and the skill carries the five-template forbid-list inline
+    (the `frontend-design` plugin that held it is off on every account). Landed as `fix(visual-direction): the
+    calibration example leaves the five generated-design templates`.
 
 ## 1. Harness map and baseline
 

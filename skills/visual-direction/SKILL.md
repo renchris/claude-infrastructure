@@ -18,35 +18,52 @@ prevents memorable.
 
 ## 1. DECIDE — commit to an aesthetic before any markup
 
-Load the `frontend-design` skill (it auto-triggers on build-UI requests; load it explicitly if it
-did not). Name the subject, audience and job first — distinctive choices come from the subject's
-vernacular, not from a palette generator. Produce a token plan:
+The `frontend-design` plugin is off on every account, so nothing loads it: what this step needs
+from it is written out here. Name the subject, audience and job first — distinctive choices come
+from the subject's vernacular, not from a palette generator. Produce a token plan:
 
 - **Color** — 4-6 named hex values, with roles.
 - **Type** — one or two families, roles stated. Two only if clearly distinct.
 - **Layout** — a concept in one sentence plus an ASCII wireframe; state alignment.
 - **Principles** — what makes this page unlike any other page.
 
-Then **review that plan against the brief and revise anything that is a default.** `frontend-design`
-ships the named cliché list (cream `#F4F1EA` + terracotta `#D97757`, the SaaS-card kit, ALL-CAPS
-eyebrows, `→` appended to buttons). If your plan reads like what you would produce for any similar
-brief, it is not yet a design.
+Then **review that plan against the brief and revise anything that is a default.** Generated design
+falls into the same five templates whatever the subject. The operator hates all five; none may be
+the answer to an axis the brief leaves free:
+
+1. **Cream and terracotta** — a warm cream ground (near `#F4F1EA`), a high-contrast serif display,
+   and a terracotta or clay accent (near `#D97757`, Anthropic's own accent, so it reads as a tell).
+2. **Near-black plus one acid accent** — a black or near-black ground with one bright acid-green or
+   vermilion accent.
+3. **Broadsheet** — hairline rules, zero border-radius, dense newspaper columns.
+4. **The SaaS card kit** — content chopped into identical rounded cards, one radius on everything,
+   the same soft grey shadow (`rgba(0,0,0,.1)`) under each, gradient washes as decoration.
+5. **Template chrome** — a tracked-out ALL-CAPS eyebrow above every heading, meta strings joined
+   with middle dots (`A · B · C`), `WORD — fragment` labels, tinted near-black (`#0B0B0B`, `#111`)
+   standing in for black, a monospace face for small data labels, `→` appended to link and button
+   text.
+
+Where the brief itself asks for one of these, follow the brief. Otherwise, if your plan reads like
+what you would produce for any similar brief, it is not yet a design.
 
 ## 2. DIVERSIFY — 3-4 genuinely different directions, not variants of one
 
 Use the **seven axes** from the mirrored legacy skill — `vendor/uidotsh/ui/ideas.md` (this exists
 ONLY in our mirror; the vendor dropped it from the current `ideas` skill): layout · typography ·
-color · spacing · surfaces · shape · personality. Its own calibration bar:
+color · spacing · surfaces · shape · personality. The calibration bar (our mirror's copy of
+`ideas.md` carries the same example; the vendor's own "Good" was template 1 above):
 
 > Bad: "Minimal and clean — a simple layout with plenty of whitespace"
 >
-> Good: "Editorial and asymmetric — oversized serif headline (DM Serif Display, ~72px) with dramatic
-> scale contrast against small body text. Warm stone neutrals with a single saturated terracotta
-> accent on the CTA only. No cards, no borders, no shadows — hierarchy through type scale and weight
-> alone."
+> Good: "Sea chart, for a sailing school — a chart-paper blue-white ground (#EEF4F7) and three
+> depth-sounding blues (#BFD7E6, #6FA3C7, #1D4E73) as the only surface colours, with buoy red
+> (#C8102E) kept for the booking button. One humanist sans (Fira Sans) in sentence case throughout,
+> headings large and light. The course schedule is plotted along a horizontal tide-time axis
+> instead of stacked in cards; photos run full-bleed with a soft 16px radius. No shadows: depth
+> comes from the blue steps."
 
-The second is a decision; the first is a mood. If your directions differ only in accent colour, you
-generated one direction four times.
+The second is a decision taken from the subject's own world; the first is a mood. If your
+directions differ only in accent colour, you generated one direction four times.
 
 Concrete inputs, both in the mirror: `design/guidelines/font-recommendations.md` (17 typefaces with
 sourcing URLs, pairing notes, weight restrictions, OpenType feature settings) and
