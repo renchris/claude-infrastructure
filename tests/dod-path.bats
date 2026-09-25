@@ -12,7 +12,10 @@ setup() {
   WL="$REPO_ROOT/scripts/wrap-ledger.sh"
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   export WRAP_DOD_DIR="$BATS_TEST_TMPDIR/dod"; mkdir -p "$WRAP_DOD_DIR"
-  unset WRAP_DOD_FILE CLAUDE_SESSION_ID WRAP_SESSION_ID
+  # CLAUDE_CODE_SESSION_ID and the pane ids too: `set` stamps the capture with the first, and the
+  # SessionStart lineage frame reads all three. Left ambient, a run inside a Claude session passes a
+  # case that a launchd runner (none of them set) fails — row c6ba32a5f661.
+  unset WRAP_DOD_FILE CLAUDE_SESSION_ID WRAP_SESSION_ID CLAUDE_CODE_SESSION_ID CC_PANE_ID ITERM_SESSION_ID
   # One origin, two worktree-like clones — the succession hop under test.
   O="$BATS_TEST_TMPDIR/origin.git"; git init -q --bare "$O"
   A="$BATS_TEST_TMPDIR/wt-a"; B="$BATS_TEST_TMPDIR/wt-b"
@@ -132,18 +135,34 @@ _edge() {  # $1=firing cwd  $2=fired cwd
 @test "CROSSTALK: a concurrent wave A's frozen scope is not injected into wave B as binding" {
   local L="$BATS_TEST_TMPDIR/wt-lead"; git clone -q "$O" "$L" 2>/dev/null
   _edge "$L" "$A"; _edge "$L" "$B"
-  ( cd "$A" && "$DP" set "Scope (frozen): wave A contract" ) >/dev/null
-  ( cd "$B" && "$DP" set "Scope (frozen): wave B contract" ) >/dev/null
-  run bash -c "printf '%s' '{\"hook_event_name\":\"SessionStart\",\"cwd\":\"$B\"}' | '$DP'"
-  [ "$status" -eq 0 ]
-  local n
-  n="$(printf '%s' "$output" | grep -cF 'wave A contract' || true)"
-  if [ "$n" -ne 0 ]; then
-    echo "wave B was handed a concurrent sibling's scope as binding ($n hit(s))" >&2; false
-  fi
-  # …and the injection is not merely EMPTY — B's own contract must still be there. A filter that
-  # dropped everything would pass the assertion above while destroying the feature.
-  printf '%s' "$output" | grep -qF 'wave B contract'
+  # Each wave is its own session, as in production. The stamps matter only to the DEFAULT frame
+  # (CC_DOD_LINEAGE_ONLY on since dd3f4033f), which injects a block only when its header names this
+  # session's lineage or a recorded predecessor — a sessionless capture in B's own toplevel is
+  # neither, so B would be shown nothing of its own.
+  ( cd "$A" && CLAUDE_CODE_SESSION_ID=SID-A "$DP" set "Scope (frozen): wave A contract" ) >/dev/null
+  ( cd "$B" && CLAUDE_CODE_SESSION_ID=SID-B "$DP" set "Scope (frozen): wave B contract" ) >/dev/null
+  # Both frames. =0 is the worktree frame, with no session on the read, so dropping A there is the
+  # TOPLEVEL filter's doing alone; the default frame is what production runs.
+  local frame json n
+  for frame in 0 default; do
+    json="$(jq -nc --arg c "$B" '{hook_event_name:"SessionStart",cwd:$c}')"
+    if [ "$frame" = default ]; then
+      json="$(jq -nc --arg c "$B" '{hook_event_name:"SessionStart",cwd:$c,session_id:"SID-B"}')"
+      run bash -c 'printf "%s" "$1" | env -u CC_DOD_LINEAGE_ONLY "$0"' "$DP" "$json"
+    else
+      run bash -c 'printf "%s" "$1" | CC_DOD_LINEAGE_ONLY=0 "$0"' "$DP" "$json"
+    fi
+    [ "$status" -eq 0 ]
+    n="$(printf '%s' "$output" | grep -cF 'wave A contract' || true)"
+    if [ "$n" -ne 0 ]; then
+      echo "[$frame] wave B was handed a concurrent sibling's scope as binding ($n hit(s))" >&2; false
+    fi
+    # …and the injection is not merely EMPTY — B's own contract must still be there. A filter that
+    # dropped everything would pass the assertion above while destroying the feature.
+    if ! printf '%s' "$output" | grep -qF 'wave B contract'; then
+      echo "[$frame] wave B's own contract is missing from its injection: $output" >&2; false
+    fi
+  done
 }
 
 @test "LINEAGE: a predecessor's scope is inherited TRANSITIVELY (A → B → C)" {
