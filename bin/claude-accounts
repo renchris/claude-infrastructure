@@ -556,6 +556,21 @@ def frontier_window(cfg):
 ENV_TOK = re.compile(r"^[A-Z_][A-Z0-9_]*=")
 
 
+class _Census(dict):
+    """A per-account count dict that can carry a second per-account count beside it.
+
+    It exists so `concurrency()` and `working_concurrency()` keep returning exactly the dict every
+    caller and every test stub already uses, while collect() can read one more number off the
+    same pass: `headless` (live `claude -p` processes) and `top` (top-level transcripts, the
+    subset of the walk's total that is one-per-session). A stub returning a plain dict carries
+    neither, and collect() then applies no bound — the pre-bound behaviour exactly."""
+
+    def __init__(self, counts, **extra):
+        super().__init__(counts)
+        for k, v in extra.items():
+            setattr(self, k, v)
+
+
 def concurrency(cfg):
     """Live interactive-session count per account, or None when it CANNOT BE MEASURED.
 
@@ -596,6 +611,7 @@ def concurrency(cfg):
     projected at 150, against a 10 s timeout — ~10x headroom, 07 §6.5), which is why this is a
     contract fix and not a redesign of the instrument."""
     counts = {a["name"]: 0 for a in cfg["accounts"]}
+    headless = {a["name"]: 0 for a in cfg["accounts"]}
     # rstrip("/") on the KEYS as well as on the observed dir. The observed side has always been
     # rstripped (below), the key side was not, so a config_dir written with a trailing slash in
     # accounts.json could never match anything and that account scored 0 live sessions forever —
@@ -642,7 +658,7 @@ def concurrency(cfg):
         # Headless one-shot flags sit in the first few argv slots (`claude -p "…"`); scanning
         # the whole line would false-match a '-p' or '--print' inside a PROMPT argument.
         head = [t for t in toks[1:7] if t.startswith("-")]
-        if "-p" in head or "--print" in head or "--version" in head:
+        if "--version" in head:
             continue
         # ps -E appends env AFTER argv, so the LAST CLAUDE_CONFIG_DIR= match is the real env
         # var — a first-match search could hit prompt text that merely mentions it.
@@ -650,8 +666,14 @@ def concurrency(cfg):
         d = os.path.expanduser(cfgs[-1]) if cfgs else os.path.join(HOME, ".claude")
         name = by_dir.get(d.rstrip("/"))
         if name:
-            counts[name] += 1
-    return counts
+            # A headless one-shot is still kept out of the INTERACTIVE count (the pane census and
+            # heal()'s rotation gate read that), but it is tallied: it is a live process writing a
+            # transcript, and bound_kwork() needs it to cap the working census.
+            if "-p" in head or "--print" in head:
+                headless[name] += 1
+            else:
+                counts[name] += 1
+    return _Census(counts, headless=headless)
 
 
 KWORK_BUDGET_S = 15.0      # was 5.0, was 2.0 — see the budget note in working_concurrency's
@@ -736,6 +758,7 @@ def working_concurrency(cfg, window_min=None, budget_s=None):
     now = time.time()
     scanned = 0
     counts = {a["name"]: 0 for a in cfg["accounts"]}
+    top = {a["name"]: 0 for a in cfg["accounts"]}
     by_dir = {a["config_dir"].rstrip("/"): a["name"] for a in cfg["accounts"]}
     mirror_next = next((a["name"] for a in cfg["accounts"]
                         if a["config_dir"].rstrip("/").endswith(".claude-next")), None)
@@ -782,6 +805,8 @@ def working_concurrency(cfg, window_min=None, budget_s=None):
                             try:
                                 if now - os.lstat(os.path.join(wroot, fname)).st_mtime <= window_s:
                                     counts[name] += 1
+                                    if wroot == slug.path:
+                                        top[name] += 1
                             except OSError:
                                 continue
                 except OSError:
@@ -793,7 +818,7 @@ def working_concurrency(cfg, window_min=None, budget_s=None):
         log_event(f"working_concurrency: walk aborted by {type(e).__name__}: {e} — k_work "
                   "UNMEASURED for this sweep, router charges the pane census")
         return None
-    return counts
+    return _Census(counts, top=top)
 
 
 # ---- usage endpoint (urllib in-process: no tokens in argv/ps) ---------------------------------
@@ -1783,6 +1808,7 @@ def collect(cfg, no_heal=False, prev=None):
         # not measure, so k_eff's census fallback — not a fabricated 0 — is what cached rows
         # replay for the TTL.
         row["k_work"] = wcounts.get(acct["name"]) if wcounts is not None else None
+        bound_kwork(row, acct["name"], counts, wcounts)
         # HERE, not at the probe's k_live argument, and that placement is the safety property:
         # heal()'s rotation gate reads the argument and must keep seeing None (inherit_k's
         # docstring). This stamps a SEPARATE field on the row afterwards, so only the router's
@@ -2099,6 +2125,39 @@ def recovery_floors(R):
                        R.get("RECOVERY_S_CEIL", RECOVERY_S_CEIL_DEFAULT)),
             _cliff_env("CC_ROUTE_RECOVERY_F_FLOOR",
                        R.get("RECOVERY_F_FLOOR", RECOVERY_F_FLOOR_DEFAULT)))
+
+
+def bound_kwork(row, name, counts, wcounts):
+    """Cap the working census's TOP-LEVEL term at the live processes on this account.
+
+    THE DEFECT (measured 2026-09-25). `working_concurrency` counts every transcript written in the
+    last KWORK_WINDOW_MIN (10) minutes, which measures THROUGHPUT, not concurrency: a session that
+    finished nine minutes ago still counts. Harmless for long interactive sessions, ruinous for a
+    harness running short headless `claude -p` jobs back to back — the token-efficiency eval did,
+    and every account read 18-21 top-level "working" transcripts against 2-4 live processes. All
+    three healthy accounts were refused `kmax-concurrency` (KMAX 8), the router abstained, and a
+    /handoff fire was hand-routed to the account whose weekly quota expires LAST — the opposite of
+    the router's own deadline-dominant objective.
+
+    The fix is a physical ceiling, not a new constant: a top-level transcript is one session, and a
+    session with no live process cannot be burning, so the top-level term is min(written in the
+    window, live processes incl. headless). SUBAGENT transcripts stay uncapped on purpose — they
+    run inside their parent's process, so a process count cannot bound them, and counting them is
+    the deliberate 2026-09-04 change. The raw walk count stays on the row as `k_work_raw`. Applied
+    only when BOTH instruments carry their split (a stub or an older caller returns a plain dict,
+    so no bound). Kill: CC_ROUTE_KWORK_LIVE_BOUND=off."""
+    if not _term_on("CC_ROUTE_KWORK_LIVE_BOUND") or row.get("k_work") is None or counts is None:
+        return
+    top = getattr(wcounts, "top", None)
+    headless = getattr(counts, "headless", None)
+    if top is None or headless is None or name not in top or name not in counts:
+        return
+    total = row["k_work"]
+    live = counts[name] + headless.get(name, 0)
+    bounded = min(top[name], live) + (total - top[name])
+    if bounded < total:
+        row["k_work_raw"] = total
+        row["k_work"] = bounded
 
 
 def k_eff(r):
