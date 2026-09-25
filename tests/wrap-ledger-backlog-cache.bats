@@ -68,9 +68,22 @@ STUB
 
 field() { printf '%s' "$1" | grep -E "^$2=" | head -1 | cut -d= -f2-; }
 calls() { grep -c -e "$1" "$STUB_CALLS" | tr -d ' '; }
+# rc 0 = a FINISHED entry for list args $1 exists. An entry's name ends in its args (`…_--json`); a
+# filler's temp file ends `…_--json.XXXXXX` and its lock `…_--json.fill`, so neither can match.
+has_entry() {
+  local e
+  for e in "$WRAP_BACKLOG_CACHE_DIR"/wl-*; do
+    [ -f "$e" ] || continue
+    case "$e" in *"$1"*_--json) return 0 ;; esac
+  done
+  return 1
+}
 # wait (bounded) until the detached filler has put an entry for $1 in place
-await_entry() { local i; for i in $(seq 1 150); do
-  ls "$WRAP_BACKLOG_CACHE_DIR" 2>/dev/null | grep -v '\.fill$' | grep -q -e "$1" && return 0; sleep 0.2; done; return 1; }
+await_entry() {
+  local i=0
+  while [ "$i" -lt 150 ]; do has_entry "$1" && return 0; sleep 0.2; i=$((i + 1)); done
+  return 1
+}
 
 @test "a hit serves both folds without re-running cc-backlog, and the ledger is the same" {
   run bash "$LEDGER" --machine
@@ -120,7 +133,10 @@ await_entry() { local i; for i in $(seq 1 150); do
   [ "$status" -eq 0 ]
   [ "$(field "$output" YOURS_SRC)" = "error" ]
   [ "$(field "$output" FILED_SRC)" = "error" ]
-  [ -z "$(ls "$WRAP_BACKLOG_CACHE_DIR" 2>/dev/null | grep -v '\.fill$')" ]
+  run has_entry '--blocked'
+  [ "$status" -ne 0 ]
+  run has_entry '--all'
+  [ "$status" -ne 0 ]
 }
 
 @test "a fold slower than the wait fails open in time, then the detached fill serves the next run" {
