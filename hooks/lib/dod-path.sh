@@ -109,35 +109,42 @@ dod_lineage_record() {
 
 # dod_lineage_ancestors <cwd> → my toplevel, then every transitive PREDECESSOR, one per line.
 # Cycle-safe (a `seen` set, so an A→B→A pair terminates) and depth-bounded.
+#
+# ONE awk pass, not a bash `while read` (2026-09-24, fix/stop-hook-latency). The walk re-reads the
+# whole append-only lineage file once per BFS level, and a bash read loop pays several builtins per
+# line: at 1,985 lines under a load of ~300 that was 4.6 s of a 13.2 s wrap-ledger run — and
+# wrap-ledger runs inside two Stop hooks' timeouts. awk holds the file in memory and walks the same
+# levels in the same order. Output is identical line for line: me first, then each level's newly
+# seen predecessors in file order. A line with fewer than three tab fields was only ever a self-edge
+# under the old parse (from == to), and a self-edge can never print, because its `to` is on the
+# frontier only if its `from` is already seen; awk simply skips those lines.
 dod_lineage_ancestors() {
-  local me f line rest from to seen frontier next guard=0
+  local me f
   me="$(dod_toplevel "${1:-.}")"
   [ -n "$me" ] || return 0
   printf '%s\n' "$me"
   f="$(_dod_lineage_file)"
   [ -f "$f" ] || return 0
-  seen="${_DOD_NL}${me}${_DOD_NL}"
-  frontier="${_DOD_NL}${me}${_DOD_NL}"
-  while [ "$guard" -lt 64 ]; do
-    guard=$((guard + 1))
-    next=""
-    while IFS= read -r line || [ -n "$line" ]; do
-      [ -n "$line" ] || continue
-      case "$line" in '#'*) continue ;; esac
-      rest="${line#*"$_DOD_TAB"}"            # from <tab> to <tab> label
-      from="${rest%%"$_DOD_TAB"*}"
-      rest="${rest#*"$_DOD_TAB"}"            # to <tab> label
-      to="${rest%%"$_DOD_TAB"*}"
-      [ -n "$from" ] && [ -n "$to" ] || continue
-      case "$frontier" in *"${_DOD_NL}${to}${_DOD_NL}"*) ;; *) continue ;; esac
-      case "$seen" in *"${_DOD_NL}${from}${_DOD_NL}"*) continue ;; esac
-      seen="${seen}${from}${_DOD_NL}"
-      next="${next}${from}${_DOD_NL}"
-      printf '%s\n' "$from"
-    done < "$f"
-    [ -n "$next" ] || break
-    frontier="${_DOD_NL}${next}"
-  done
+  awk -F '\t' -v me="$me" '
+    { n++; L[n] = $0; F[n] = $2; T[n] = $3 }
+    END {
+      seen[me] = 1; front[me] = 1
+      for (g = 0; g < 64; g++) {
+        split("", nx); any = 0
+        for (i = 1; i <= n; i++) {
+          if (L[i] == "" || substr(L[i], 1, 1) == "#") continue
+          fr = F[i]; to = T[i]
+          if (fr == "" || to == "") continue
+          if (!(to in front)) continue
+          if (fr in seen) continue
+          seen[fr] = 1; nx[fr] = 1; any = 1
+          print fr
+        }
+        if (!any) break
+        split("", front)
+        for (k in nx) front[k] = 1
+      }
+    }' "$f" 2>/dev/null
   return 0
 }
 
