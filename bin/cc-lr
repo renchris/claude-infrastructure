@@ -120,6 +120,9 @@ cc-lr — find · recover · status · repair, for a limit-blocked session.
   cc-lr recover <ref> [--target A] [--source-pane P]
                              refuse a teammate / an ambiguous ref / a non-limited session,
                              else take the mutex and fire lr-fleet --one … --detach
+  cc-lr recover --limited [--account next|next2|next3|next4] [--target A]
+                             every LIMITED session (optionally one account's), each through
+                             the single-ref path above, so each keeps its own refusals
   cc-lr switch [--target A|auto] [--dry-run]
                              move THIS pane's session to another account, in place: same
                              window, same uuid, new account. SELF only — no ref, no
@@ -302,9 +305,66 @@ cl_resolve() { # <ref> → the one TSV row on stdout; rc 0 ok · 1 no match · 2
   printf '%s\n' "$out"
 }
 
+# ── recover --limited: one command for "recover account N" ─────────────────────────────────────
+# 2026-09-24: the operator typed "/limit-recover account 2s" beside a screenshot, and the only verb
+# took ONE ref, so the panes were matched by hand from the picture. This enumerates with the same
+# resolver `cc-lr find --limited` uses and runs the single-ref path per session in a subshell, so
+# every refusal (TEAMMATE, AMBIGUOUS, not LIMITED, the mutex) applies unchanged to each one.
+cl_acct_dirs() { # <label> → the config-dir basenames that account owns, space-separated; rc 1 unknown
+  case "$1" in
+    next|1|account1|claude|claude-next) echo ".claude .claude-next" ;;
+    next2|2|account2|secondary|claude-secondary) echo ".claude-secondary" ;;
+    next3|3|account3|tertiary|claude-tertiary) echo ".claude-tertiary" ;;
+    next4|4|account4|quaternary|claude-quaternary) echo ".claude-quaternary" ;;
+    *) return 1 ;;
+  esac
+}
+cmd_recover_limited() { # [--account A] [--target T]
+  local acct_f="" target="auto" dirs="" out rc sid pane acct cfg cwd live klass base n=0 fired=0 refused=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --account) [ $# -ge 2 ] || { usage; exit 3; }; acct_f="$2"; shift 2 ;;
+      --target)  [ $# -ge 2 ] || { usage; exit 3; }; target="$2"; shift 2 ;;
+      *) echo "cc-lr recover --limited: unknown argument $1" >&2; usage; exit 3 ;;
+    esac
+  done
+  if [ -n "$acct_f" ]; then
+    dirs="$(cl_acct_dirs "$acct_f")" || { echo "cc-lr: unknown account '$acct_f' (next|next2|next3|next4, or 1-4)" >&2; exit 3; }
+  fi
+  [ -f "$FIND_BIN" ] || cl_die "cannot reach cc-find at $FIND_BIN" 2
+  out="$(bash "$FIND_BIN" --limited 2>/dev/null)"; rc=$?
+  [ "$rc" -le 1 ] || cl_die "cc-find --limited exited $rc" 2
+  while IFS=$'\t' read -r sid pane acct cfg cwd live klass; do
+    [ -n "$sid" ] || continue
+    if [ -n "$dirs" ]; then
+      base="${cfg%/}"; base="${base##*/}"
+      case " $dirs " in *" $base "*) ;; *) continue ;; esac
+    fi
+    n=$((n + 1))
+    if ( cmd_recover "$sid" --target "$target" ${pane:+--source-pane "$pane"} ); then
+      fired=$((fired + 1))
+    else
+      refused=$((refused + 1))
+    fi
+  done <<EOF_ROWS
+$out
+EOF_ROWS
+  if [ "$n" -eq 0 ]; then
+    echo "cc-lr: no LIMITED session${acct_f:+ on $acct_f} — nothing to recover."
+    return 1
+  fi
+  echo "cc-lr: ${fired} fired, ${refused} refused of ${n} limited session(s)${acct_f:+ on $acct_f}. Verdicts arrive as mail; END THE TURN."
+  [ "$fired" -gt 0 ]
+}
+
 # ── recover ────────────────────────────────────────────────────────────────────────────────────
 cmd_recover() {
   local ref="" target="auto" pane_arg="" row rc sid pane acct cfg cwd live klass mutex out fpid run
+  case " $* " in *" --limited "*)
+    local _a=() _x
+    for _x in "$@"; do [ "$_x" = --limited ] || _a+=("$_x"); done
+    cmd_recover_limited "${_a[@]}"; return $? ;;
+  esac
   while [ $# -gt 0 ]; do
     case "$1" in
       --target) [ $# -ge 2 ] || { usage; exit 3; }; target="$2"; shift 2 ;;

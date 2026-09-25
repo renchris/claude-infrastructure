@@ -69,6 +69,17 @@ until a human logged in. So on a cliff:
 
 ## The fast path — `cc-lr recover <ref>`, then END THE TURN
 
+**`/limit-recover account N` (or no ref at all) is also ONE command:**
+
+```bash
+cc-lr recover --limited --account nextN     # 1-4 and next..next4 both work; omit --account for every account
+```
+
+It lists every session whose last word is a usage-limit error, filtered by account, and runs the
+single-ref path below for each one, so each keeps its own refusals. Print its lines verbatim and
+**END THE TURN**. Never match panes from a screenshot. That was the only route before this form
+existed (2026-09-24).
+
 **`/limit-recover <ref>` is ONE command and one turn.** `<ref>` is whatever you have in hand — a
 pane id (`117`, `⌗117`, `#117`) or a sid8 (`cb227486`):
 
