@@ -666,6 +666,10 @@ lr_rc=0
 # everything below is the SESSION's own lifetime, whose end is not a relaunch failure and must never
 # be recorded as one (W2).
 trap - EXIT
+# The expect program turns echo OFF before interact; every exit path it can take must not hand the
+# fall-through shell a terminal that no longer echoes, so the original state is restored here too.
+lr_tty_saved=""
+[ -t 0 ] && lr_tty_saved="$(stty -g 2>/dev/null)"
 lr_state relaunch-typed expect "spawning $model/$effort on $(basename "$cfg")"
 # shellcheck disable=SC2016  # single quotes are REQUIRED: the body below is an expect(1) program,
 #   and its $env(...)/$bin references must reach expect uninterpreted. Bash expansion here would
@@ -682,6 +686,17 @@ expect -c '
   set injected 0
   set asis $env(LR_ASIS)
   set menu_answered 0
+  # NO ECHO BEFORE interact (2026-09-24, pane 405). Until interact the pane tty stays cooked with
+  # ECHO on, so the terminal replies to the TUI boot queries (XTVERSION, kitty keyboard flags, DA1)
+  # were painted across the composer row as ^[P>|kitty(0.48.2)^[\^[[?5u^[[?62;52;c, and that paint
+  # broke the composer border parse, so lr_screen read UNKNOWN and the submit wait ran to its
+  # deadline. The call site below restores THIS original state before the drain and interact.
+  set lr_tty_orig ""
+  if {[catch {exec /bin/stty -g <@ stdin 2>/dev/null} lr_tty_orig]} {
+    set lr_tty_orig ""
+  } else {
+    catch {exec /bin/stty -echo <@ stdin 2>/dev/null}
+  }
   # THE QUIET BUDGET. `timeout` in expect means "no new output for N seconds", and a booting TUI
   # paints continuously — so silence is the positive fact that the frame has settled. 8 s replaces
   # the old 300 s `timeout {}`, which was not a wait but a silent give-up: a READY phrase the binary
@@ -696,6 +711,21 @@ expect -c '
     if {![info exists env(LR_NOTE_SH)]} { return }
     catch { exec env LR_ST_STATE=$state LR_ST_STAGE=$stage LR_ST_DETAIL=$detail \
                  /bin/bash -c $env(LR_NOTE_SH) }
+  }
+  # WAIT BY READING, NEVER BY SLEEPING, once the prompt is typed (2026-09-24, pane 405). A bare
+  # sleep reads nothing from the spawn, the pty buffer fills and claude BLOCKS on its own output:
+  # the resumed transcript went silent for 246 s, exactly the length of the submit poll. This relays
+  # what the session paints (log_user is on) for about $secs seconds, then returns. Only the waits
+  # AFTER the prompt is typed use it: before that, the READY and menu matchers read the buffer.
+  proc lr_pump {secs} {
+    set end [expr {[clock seconds] + $secs}]
+    while {[clock seconds] < $end} {
+      set timeout 1
+      if {[catch {expect { -re {.+} {} timeout {} eof { return } }}]} {
+        sleep 1
+        return
+      }
+    }
   }
   proc lr_screen {} {
     global env
@@ -743,7 +773,7 @@ expect -c '
         send_user "\nlr-fire-resume: CR WITHHELD — a menu is parked over the composer. Enter would take its highlighted default, so nothing was sent. Read the pane.\n"
         return
       }
-      sleep 1
+      lr_pump 1
     }
     # NOT MEASURED, so fall through rather than withhold: our own text is already typed, so a CR
     # here can only submit it or be swallowed exactly as before — it cannot answer a menu we would
@@ -1052,7 +1082,7 @@ expect -c '
           break
         }
       }
-      sleep 1
+      lr_pump 1
     }
     if {$verb eq "submitted"} {
       lr_note submitted submit "user record carrying the run token at $ts"
@@ -1119,10 +1149,13 @@ expect -c '
     return [encoding convertfrom utf-8 [lr_reply_filter $buf]]
   }
   # <<< lr-reply-drain
+  # echo back ON before the drain snapshots the tty, so the state it restores is the ORIGINAL one
+  if {$lr_tty_orig ne ""} { catch {exec /bin/stty $lr_tty_orig <@ stdin 2>/dev/null} }
   set lr_keep [lr_drain_user]
   if {$lr_keep ne ""} { send -- $lr_keep }
   interact
 ' || lr_rc=$?
+[ -z "$lr_tty_saved" ] || stty "$lr_tty_saved" 2>/dev/null || true
 # ── FALL THROUGH TO A SHELL, so the pane outlives the session (see the block above the expect) ────
 # ONE caller must NOT get a shell, and it is identified by an AFFIRMATIVE fact rather than by the
 # absence of one:

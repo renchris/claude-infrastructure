@@ -591,6 +591,60 @@ INNER
   [[ "$(states)" == *"submitted"* ]] || { echo "states: $(states)"; false; }
 }
 
+@test "RED-PROOF submit poll: the wait READS the session, so a chatty session is never blocked on its pty" {
+  # 2026-09-24, pane 405: the poll loop slept without reading the spawn, the pty filled and claude
+  # blocked on its own output — the transcript went silent for 246 s, the whole poll. Here the stub
+  # writes 128 KiB (far past any pty buffer) the moment it gets the prompt; a probe stub records, on every poll, whether that
+  # write has completed. A sleeping loop can never see it complete; a reading loop sees it at once.
+  exp_setup
+  export LR_TEST_FLUSHED="$BATS_TEST_TMPDIR/flushed" LR_TEST_PROBELOG="$BATS_TEST_TMPDIR/probelog"
+  cat > "$STUB" <<'SH'
+#!/bin/bash
+[[ "$1" == "--version" ]] && { echo "stub 9.9.9"; exit 0; }
+echo "BOOTED"
+: > "$LR_TEST_GOT"
+IFS= read -r line; printf 'GOT:[%s]\n' "$line" >> "$LR_TEST_GOT"
+head -c 131072 /dev/zero | tr '\0' 'x'
+: > "$LR_TEST_FLUSHED"
+while IFS= read -r line; do printf 'GOT:[%s]\n' "$line" >> "$LR_TEST_GOT"; done
+exit 0
+SH
+  chmod +x "$STUB"
+  cat > "$BATS_TEST_TMPDIR/probe-stub" <<'SH'
+#!/bin/bash
+if [ -f "$LR_TEST_FLUSHED" ]; then echo yes >> "$LR_TEST_PROBELOG"; else echo no >> "$LR_TEST_PROBELOG"; fi
+echo none
+SH
+  chmod +x "$BATS_TEST_TMPDIR/probe-stub"
+  export LR_PROBE="$BATS_TEST_TMPDIR/probe-stub" LR_SUBMIT_PAINT_S=0 LR_SUBMIT_POLL_S=10 RCY_ENGAGE_TIMEOUT=10
+  screen 1 empty
+  screen 2 empty
+  lr_expect_run 90
+  [ -s "$LR_TEST_PROBELOG" ] || { echo "the probe was never called — the poll loop did not run"; echo "$output" | tail -c 400; false; }
+  grep -q yes "$LR_TEST_PROBELOG" \
+    || { echo "every poll saw the session still BLOCKED on its own output: $(tr '\n' ' ' < "$LR_TEST_PROBELOG")"; false; }
+}
+
+@test "RED-PROOF no echo before interact: the pane tty stops echoing while the prompt is typed and polled" {
+  # 2026-09-24, pane 405: the pane tty stayed cooked with ECHO until interact (measured: echo icanon
+  # for the whole pre-interact phase), so the replies to the TUI boot queries were painted across
+  # the composer as ^[P>|kitty(0.48.2)^[\^[[?5u^[[?62;52;c. The mode is read off the pty slave
+  # the program runs on, 1 s in — long before interact, which the 4 s + 6 s poll keeps far away.
+  exp_setup
+  export LR_SUBMIT_PAINT_S=0 EXP LR_SUBMIT_POLL_S=4 RCY_ENGAGE_TIMEOUT=6
+  screen 1 empty
+  run timeout 90 expect -c '
+    spawn -noecho expect -f $env(EXP)
+    set timeout 1; expect { -re {.+} { exp_continue } timeout {} }
+    set m [exec /bin/stty -a < $spawn_out(slave,name)]
+    puts "\nMODE:[regexp -inline {[-]*echo } $m]"
+    set timeout 20; expect { -re {.+} { exp_continue } timeout {} eof {} }
+    catch close; catch wait; exit 0'
+  local mode; mode="$(printf '%s' "$output" | grep -a -o 'MODE:[^}]*' | head -1)"
+  [ -n "$mode" ] || { echo "no MODE sample"; echo "$output" | tail -c 400; false; }
+  [[ "$mode" == *"-echo"* ]] || { echo "pre-interact the pane tty still ECHOES: $mode"; false; }
+}
+
 @test "RED-PROOF submit poll: nothing in the transcript → ONE re-Enter, gated on OUR draft, then FAILED:submit" {
   exp_setup
   screen 1 empty          # quiet arm: safe to type

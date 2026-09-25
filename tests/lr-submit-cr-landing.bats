@@ -63,6 +63,7 @@ proc send {args} { global SENT; lappend SENT [lindex $args end] }
 proc send_user {args} {}
 proc lr_note {a b c} {}
 proc sleep {n} {}
+proc lr_pump {n} {}
 proc lr_screen {} { global SCREENS LOOKS; set v [lindex $SCREENS $LOOKS]; incr LOOKS
                     if {$v eq ""} { set v [lindex $SCREENS end] }; return $v }
 array set env {}
