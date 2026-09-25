@@ -386,6 +386,29 @@ Full tables: `f3/report.md`.
 
 **Next step if the lead wants a certified answer.** Re-run S01, S03, S06 and S08 (the push-sensitive tasks) at 8 per arm with the sandbox allowing `/ship` against the private origin, about $60. That tests the push signal directly. No n in reach certifies success at 100% against 100%.
 
+### F3 targeted re-run (lead, wave 2, 2026-09-24): the push signal does not replicate
+
+The residual 30% above was a post-hoc bare-push gap on S01, S03, S06 and S08. The lead re-ran exactly those four
+tasks, 3 per arm each (reps r11-r16, ABBAAB, next3/next4/next, the same `run-f3.sh` and sandbox), $22.50, and scored
+bare push mechanically, the same way for the gate's runs and the new ones (`harness/f3/f3-push-agg.py`: a Bash call
+running `git … push`, or "git push" in the final answer). Data: `wave2/f3-targeted/`.
+
+| runs | bare push, exclude | bare push, control | Fisher p |
+|---|---:|---:|---:|
+| gate (r1-r8, these four tasks) | 9/16 | 4/16 | 0.149 |
+| targeted (r11-r16) | **2/12** | **6/12** | 0.193 |
+| pooled | 11/28 | 10/28 | 1.000 |
+
+The direction flipped, so the gate's gap was noise. Code verifier on the targeted runs: exclude 8 PASS, 1 FAIL, 3
+JUDGED; control 9 PASS, 3 JUDGED. The one FAIL (S01 r16) is a harness artifact: the machine's bats admission gate
+deferred its test run, the agent backgrounded the retry and said it would commit after it, and the headless session
+ended there. Cost per run $0.817 vs $1.058 (−22.8%), matching the gate. 0 backlog rows from the 24 run sessions.
+
+**Verdict unchanged: INCONCLUSIVE under the rule. Conviction that the exclusion is harmless rises from 70% to 80%.** The one
+concrete harm signal is gone. What remains is the rule's margin, which at 100% vs 100% success no reachable n certifies,
+and S01's fix form: all 4 control runs in the gate used the lesson's `awk -F'\t'`, the exclude runs split by hand.
+Migration 0036 stays staged for all accounts; running it is the operator's decision.
+
 ### F3 method
 
 - **Fixture** (`harness/f3/run-f3.sh`): a fresh `git clone --local` of this repo at frozen sha `b8dbe299a` (`f3/frozen-sha.txt`), with its own private bare origin, per run. The task's plant is committed on top and pushed to that origin. Each run gets a private `TMPDIR`, and pane and session identity are scrubbed.
