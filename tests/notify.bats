@@ -29,6 +29,10 @@ setup() {
   export NTY_OSA_TIMEOUT_BIN=""            # documented seam: set-but-EMPTY disables the wrapper
   export CLAUDE_CONFIG_DIR="$HOME/.claude-test"
   unset CLAUDE_PROJECT_DIR
+  # The land gate and a Bash tool call both run with NO controlling tty, so the headless gate would
+  # silence every rendering test below. Those tests are about WHAT an alert says; the gate has its
+  # own section (H1-H5) that unsets this.
+  export CC_NOTIFY_HEADLESS=1
 }
 
 # a well-formed harness payload: session $1, cwd $2, Bash command $3
@@ -323,4 +327,51 @@ fire() { printf '%s' "$1" | "$H" "$2"; }
   # just as happily. The sticky bit lives in the high digits (%Mp), and it is the whole reason the
   # attack is pre-create rather than replace, so the assertion has to name it.
   [ "$(stat -f %Mp%Lp /private/tmp)" = "1777" ]
+}
+
+# ── HEADLESS GATE — no sound or alert from a session with no controlling tty (2026-09-24) ────────
+# A headless benchmark harness played ~16 afplay/min into coreaudiod (Funk on permission). The gate
+# walks the hook's ancestors' ttys; a stub ps answers from a pid → "tty ppid" map so every branch
+# is reachable without a real terminal.
+ps_map() {
+  unset CC_NOTIFY_HEADLESS
+  printf '%s\n' "$@" > "$CC_NOTIFY_DIR/ps.map"
+  printf '#!/bin/bash\nwhile [ $# -gt 0 ]; do [ "$1" = -p ] && { awk -v p="$2" '"'"'$1==p{print $2, $3}'"'"' "%s/ps.map"; exit 0; }; shift; done\n' \
+    "$CC_NOTIFY_DIR" > "$STUB/ps"
+  chmod +x "$STUB/ps"
+  export NTY_PS="$STUB/ps" NTY_PARENT_PID=500
+}
+played() { cat "$CC_NOTIFY_DIR/claude-notify.log" 2>/dev/null | grep -c 'Playing' || true; }
+
+@test "H1 headless: no tty anywhere up the chain ⇒ no sound, no alert" {
+  ps_map "500 ?? 400" "400 ?? 300" "300 ?? 1"
+  fire "$(payload 1a5cf368-aaaa-bbbb-cccc-dddd /Users/x/proj 'rm -rf build')" permission
+  [ -z "$(osa)" ]
+  [ "$(played)" = "0" ]
+}
+
+@test "H2 interactive: the session process one hop up holds a tty ⇒ alert fires" {
+  ps_map "500 ?? 400" "400 ttys004 300"
+  fire "$(payload 1a5cf368-aaaa-bbbb-cccc-dddd /Users/x/proj 'rm -rf build')" permission
+  [[ "$(osa)" == *'display notification "rm -rf build"'* ]] || false
+  [ "$(played)" = "1" ]
+}
+
+@test "H3 fail open: an unreadable ancestor (ps prints nothing) ⇒ alert still fires" {
+  ps_map "999 ?? 1"
+  fire "$(payload 1a5cf368-aaaa-bbbb-cccc-dddd /Users/x/proj 'ls')" permission
+  [ "$(played)" = "1" ]
+}
+
+@test "H4 override: CC_NOTIFY_HEADLESS=1 notifies from a headless chain" {
+  ps_map "500 ?? 1"
+  export CC_NOTIFY_HEADLESS=1
+  fire "$(payload 1a5cf368-aaaa-bbbb-cccc-dddd /Users/x/proj 'ls')" permission
+  [ "$(played)" = "1" ]
+}
+
+@test "H5 the walk is bounded: a tty FOUR hops up does not count" {
+  ps_map "500 ?? 400" "400 ?? 300" "300 ?? 200" "200 ttys004 1"
+  fire "$(payload 1a5cf368-aaaa-bbbb-cccc-dddd /Users/x/proj 'ls')" complete
+  [ "$(played)" = "0" ]
 }
