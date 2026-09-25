@@ -832,7 +832,8 @@ _gi_crumb_setup() {  # $1 = session id
 # docs/research/token-efficiency-2026-09-23/measure/hooks.md §4 "Peer mail", §5 row 10: adopted mail
 # arrives days after it was sent, in full (a 2.5 KB WAKE-PATH-DOWN notice 14 days late). With the
 # flag set to N hours, a forwarded line whose ORIGIN stamp is older than N hours renders as one line
-# with a grep that prints the full text from this session's inbox. Default unset = every line verbatim.
+# with a grep that prints the full text from this session's inbox. Default (unset) = 24 h since
+# 2026-09-24; 0, empty or non-numeric = every line verbatim.
 sf_seed() { # own box: an old long forward, a fresh long forward, an old long NON-forwarded line, an old short forward
   local now pad; now="$(date '+%Y-%m-%dT%H:%M:%S%z')"
   pad="$(printf 'x%.0s' $(seq 1 400))"
@@ -875,7 +876,7 @@ sf_ctx() { printf '%s' "$1" | jq -r '.hookSpecificOutput.additionalContext'; }
   [[ "$c" != *'[stale forward: '* ]] || false
 }
 
-@test "stale forward FLAG OFF: output is byte-identical to the drain without the stale-forward block" {
+@test "stale forward OFF (=0/empty/abc): byte-identical to the drain without the block; UNSET is on" {
   # Reference: the subject with the STALE FORWARDS block cut out and the render reading $body again.
   # Preconditions asserted, so a moved anchor fails here instead of comparing the subject with itself.
   local ref="$BATS_TEST_TMPDIR/ref/hooks"; mkdir -p "$ref"
@@ -885,19 +886,27 @@ sf_ctx() { printf '%s' "$1" | jq -r '.hookSpecificOutput.additionalContext'; }
   awk '/^_shown="\$body"$/ {skip=1} skip && /^esac$/ {skip=0; next} skip {next} {print}' "$DRAIN" \
     | sed 's/printf '"'"'%s\\n'"'"' "\$_shown"/printf '"'"'%s\\n'"'"' "$body"/' > "$ref/mailbox-drain.sh"
   [ "$(grep -c '_shown' "$ref/mailbox-drain.sh")" -eq 0 ] || false
-  [ "$(grep -c 'CC_DRAIN_STALE_FORWARD_H:-' "$ref/mailbox-drain.sh")" -eq 0 ] || false
+  [ "$(grep -c 'CC_DRAIN_STALE_FORWARD_H-24' "$ref/mailbox-drain.sh")" -eq 0 ] || false
   local b2="$BATS_TEST_TMPDIR/mbox2"; mkdir -p "$b2"
   sf_seed; cp "$MBOX" "$b2/$UUID.md"
   local want got
   want="$(echo '{}' | env -u CLAUDE_CONFIG_DIR -u CC_DRAIN_STALE_FORWARD_H CC_MAILBOX_DIR="$b2" bash "$ref/mailbox-drain.sh" session-start)"
-  got="$(echo '{}' | env -u CLAUDE_CONFIG_DIR -u CC_DRAIN_STALE_FORWARD_H bash "$DRAIN" session-start)"
+  got="$(echo '{}' | env -u CLAUDE_CONFIG_DIR CC_DRAIN_STALE_FORWARD_H=0 bash "$DRAIN" session-start)"
   [ -n "$want" ] || false
   # the only difference between the two runs is the mailbox dir, which appears in no rendered line
   [ "$got" = "$want" ] || false
-  # an unparseable flag value is the same as unset
+  # an empty or unparseable flag value is the same as 0 (off)
+  for v in '' abc; do
+    cp "$b2/$UUID.md" "$MBOX"; rm -f "$SEEN" "$CC_MAILBOX_DIR/$UUID.acked"
+    got="$(echo '{}' | env -u CLAUDE_CONFIG_DIR CC_DRAIN_STALE_FORWARD_H="$v" bash "$DRAIN" session-start)"
+    [ "$got" = "$want" ] || { echo "value '$v' was not off"; false; }
+  done
+  # the default: UNSET is on (24 h) since 2026-09-24
   cp "$b2/$UUID.md" "$MBOX"; rm -f "$SEEN" "$CC_MAILBOX_DIR/$UUID.acked"
-  got="$(echo '{}' | env -u CLAUDE_CONFIG_DIR CC_DRAIN_STALE_FORWARD_H=abc bash "$DRAIN" session-start)"
-  [ "$got" = "$want" ] || false
+  got="$(echo '{}' | env -u CLAUDE_CONFIG_DIR -u CC_DRAIN_STALE_FORWARD_H bash "$DRAIN" session-start)"
+  [ "$got" != "$want" ] || { echo "unset rendered verbatim: the default is not on"; false; }
+  [[ "$got" == *'[stale forward: '* ]] || false
+  cp "$b2/$UUID.md" "$MBOX"
   # power: the flag does change the output on this fixture
   rm -f "$SEEN" "$CC_MAILBOX_DIR/$UUID.acked"
   got="$(echo '{}' | env -u CLAUDE_CONFIG_DIR CC_DRAIN_STALE_FORWARD_H=24 bash "$DRAIN" session-start)"

@@ -600,7 +600,13 @@ fi
 # PRESENTATION ONLY: every body line is reproduced verbatim (except stale forwards when the flag
 # below is set), and the tokens the suites pin ("as CONTEXT", "no watcher armed") are preserved.
 #
-# ── STALE FORWARDS (CC_DRAIN_STALE_FORWARD_H, default unset = every line verbatim) ────────────────
+# ── STALE FORWARDS (CC_DRAIN_STALE_FORWARD_H, default 24 h; 0, empty or non-numeric = verbatim) ───
+# ON BY DEFAULT since 2026-09-24 (token-efficiency wave 2, item 3). Replayed over all 918 real
+# inboxes that day (docs/research/token-efficiency-2026-09-23/eval/harness/drain-stale-replay.py):
+# 78.7% of forwarded lines (3,754 of 4,770, 2.0 MB) were delivered more than 24 h after they were
+# sent, median 174 h, and they are time-bound machine pages (permission-pending, reaper and
+# supervisor self-checks, session deaths, watcher notices) whose facts had expired by delivery.
+# Each keeps a grep to its full text. `CC_DRAIN_STALE_FORWARD_H=0` restores every line verbatim.
 # Adoption re-stamps a predecessor's unread mail as "<now> [forwarded:<old>] <origin line>", so a
 # notice can reach a session days after it was sent, and in full: median origin age at SessionStart
 # was 163 h, 293 of 604 messages were over 7 days old, and one 2.5 KB WAKE-PATH-DOWN notice arrived
@@ -617,8 +623,9 @@ fi
 # Presentation only: `body` is untouched, so the cursor, the custody discharger above and the sender
 # digest below all still read every line in full. Any parse failure keeps the line.
 _shown="$body"
-case "${CC_DRAIN_STALE_FORWARD_H:-}" in
-  ''|*[!0-9]*) ;;
+_sf_h="${CC_DRAIN_STALE_FORWARD_H-24}"
+case "$_sf_h" in
+  ''|0|*[!0-9]*) ;;
   *)
     if printf '%s\n' "$body" | grep -q '\[forwarded:' && command -v python3 >/dev/null 2>&1; then
       _sfpy='
@@ -675,7 +682,7 @@ if len(stale) > max_n:
     out = [l for i, l in enumerate(out) if i not in drop]
 sys.stdout.write("\n".join(out) + "\n")
 '
-      _sf="$(printf '%s\n' "$body" | CC_SF_H="$CC_DRAIN_STALE_FORWARD_H" CC_SF_MAX="${CC_DRAIN_STALE_FORWARD_MAX:-}" \
+      _sf="$(printf '%s\n' "$body" | CC_SF_H="$_sf_h" CC_SF_MAX="${CC_DRAIN_STALE_FORWARD_MAX:-}" \
                CC_SF_BOX="$(mailbox_file "$own_uuid")" python3 -c "$_sfpy" 2>/dev/null)" && [ -n "$_sf" ] && _shown="$_sf"
     fi ;;
 esac

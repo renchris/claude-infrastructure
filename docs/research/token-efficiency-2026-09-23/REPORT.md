@@ -112,7 +112,7 @@ Savings are list $ per 14.96 days and % of the $32,517 fleet; **status** is what
 | 11 | Mission board compact render (−82%) | memory | $253 (0.8%) | low | FLAG | **built**: flag file / env, and always on in the slim arm |
 | 12 | Large non-read Bash output to a file | tool results | ≤$453 (1.4%) | med | PROPOSE | proposed (no user-space hook) |
 | 13 | `/goal` empty-turn notice | hooks | $207 (0.6%) | low | PROPOSE | proposed |
-| 14 | Hook text trims (FORKED list, empty one-liners; stale forwards, DoD lineage) | hooks | $206 (0.6%) | low | DIRECT + FLAG | **done / built** |
+| 14 | Hook text trims (FORKED list, empty one-liners; stale forwards, DoD lineage) | hooks | $206 (0.6%) | low | DIRECT + FLAG | **done / built** · **stale forwards ON fleet-wide 2026-09-24** (code default 24 h, agent-side, no settings change; conviction 88%): replay over all 918 inboxes (`eval/harness/drain-stale-replay.py`) found 78.7% of forwarded lines delivered >24 h late (median 174 h), almost all expired machine pages; each keeps a grep to its full text; `CC_DRAIN_STALE_FORWARD_H=0` restores verbatim |
 | 15 | Agents background long commands | agent prompt | $298 (0.9%) | low-med | FLAG | in `workflow-lean.md`; not added to the default agents |
 | 16 | `bashOutputMaxChars: 16000` | settings | ~$172 net | med | FLAG | proposed (settings change) |
 | 17 | session-continue re-block suppression | Stop hook | $294 (0.9%) | med | FLAG | proposed |
