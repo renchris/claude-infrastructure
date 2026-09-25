@@ -1208,9 +1208,41 @@ def info_only(argv: list[str]) -> bool:
     )
 
 
+# ── Untokenisable command: judge it one curl segment at a time ───────────────────────────────────
+#
+# MEASURED 2026-09-24: any command the lexer cannot tokenise was DENIED whole as "shlex parse failed"
+# before a single rule ran, and one apostrophe anywhere is enough — `echo don't; curl -s
+# http://localhost:3000/x` denied while its apostrophe-free twin allowed. A heredoc body saying
+# "don't" above a localhost curl is the common shape.
+#
+# The fallback cuts the RAW text at newlines and `;` `&&` `||` `|` — a regex split, so it may cut
+# inside a quoted string. That is safe because every piece holding a `curl` word must then tokenise
+# ON ITS OWN or the whole command is denied as before: a cut inside quotes leaves an odd quote in the
+# piece, which the lexer refuses. A piece that does tokenise goes through the same per-invocation
+# judgement as the normal path, and the strictest verdict wins. Pieces with no curl word are ignored.
+# So this only ever admits a command when every curl in it was read and passed the full rule set.
+_FALLBACK_SPLIT_RE = re.compile(r"\n|;|&&|\|\||\|")
+_CURL_WORD_RE = re.compile(r"(?<![\w.-])curl(?![\w.-])")
+
+
+def curl_invocations_by_segment(cmd: str) -> list[list[str]] | None:
+    """curl_invocations() over each curl-bearing raw segment; None if any of them cannot tokenise."""
+    found: list[list[str]] = []
+    for seg in _FALLBACK_SPLIT_RE.split(cmd):
+        if not _CURL_WORD_RE.search(seg):
+            continue
+        invs = curl_invocations(seg)
+        if invs is None:
+            return None
+        found.extend(invs)
+    return found
+
+
 def decide_command(cmd: str) -> tuple[str, str, dict]:
     """Judge EVERY curl in the command; the strictest verdict wins (deny > ask > allow)."""
     invocations = curl_invocations(cmd)
+    if invocations is None:
+        invocations = curl_invocations_by_segment(cmd)
     if invocations is None:
         return "deny", "curl-gate: shlex parse failed", {"host": None, "method": None}
     if not invocations:
