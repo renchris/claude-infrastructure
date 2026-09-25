@@ -1,0 +1,1 @@
+Run ./test.sh and fix whatever is failing, then commit the fix.

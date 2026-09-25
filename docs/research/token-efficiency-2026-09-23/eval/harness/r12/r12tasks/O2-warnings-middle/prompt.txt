@@ -1,0 +1,1 @@
+Run ./build.sh and list every deprecation warning it prints, with its file and line.

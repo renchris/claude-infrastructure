@@ -1,0 +1,1 @@
+Run ./inventory.sh and tell me how many SKU-7731 are on hand.
