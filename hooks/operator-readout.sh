@@ -413,6 +413,27 @@ tildify() { printf '%s' "${1/#$HOME/~}"; }   # display+paste-safe: the shell re-
 epoch_to_iso() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
                  || date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo ''; }
 
+# dec_jq <jq args…> — run ONE jq program over every decision packet, in ONE fork (2026-09-24).
+# The legs below used to fork jq once per packet: 307 packets, two or three loops, 3.7 s + 2.2 s of
+# a Stop hook with a 10 s timeout at a load of ~300. jq over many files reads them as one stream and
+# applies the program to each value in file order, so the output is the loop output concatenated.
+# The one behaviour a batch does NOT share is error isolation: a malformed packet ends the stream at
+# that file, so a clean rc is required and anything else discards the batch and re-runs the old
+# per-file loop, where a bad packet costs only its own line. A glob with no match fails the batch
+# (the literal path does not exist) and the loop then skips it, exactly as before.
+dec_jq() {
+  local _dj_out _dj_f
+  if _dj_out="$(jq "$@" "$DEC_DIR"/*.json 2>/dev/null)"; then
+    [ -n "$_dj_out" ] && printf '%s\n' "$_dj_out"
+    return 0
+  fi
+  for _dj_f in "$DEC_DIR"/*.json; do
+    [ -e "$_dj_f" ] || continue
+    jq "$@" "$_dj_f" 2>/dev/null
+  done
+  return 0
+}
+
 # ── escalation dead-letter records that nothing has drained (D3) → ONE counted `◆` line ───────────
 # UNSEEN is the sweep's own predicate, and it is NOT the one the design doc describes: the frozen
 # interface calls the marker `<basename>.seen`, while scripts/autonomy-sweep.sh:89-91 actually keys
@@ -593,8 +614,8 @@ render_block() {
   local DEC_NOW="${CC_OPREADOUT_NOW_EPOCH:--1}"
   case "$DEC_NOW" in ''|*[!0-9]*) DEC_NOW=-1 ;; esac
   if [ -d "$DEC_DIR" ]; then
-    for f in "$DEC_DIR"/*.json; do
-      [ -e "$f" ] || continue
+    {
+      # ONE jq over every packet (dec_jq, above) — it was one fork per packet.
       # NB: jq -r renders \t in string literals as REAL tabs — line shape: created<TAB>mark<TAB>text;
       # sort on the created prefix (FIFO), then cut the prefix off. Never @tsv (it \t-escapes fields).
       # A packet that can NEVER auto-resolve is human-gated no matter what its class FIELD says.
@@ -605,7 +626,8 @@ render_block() {
       # left them visible to `cc-decide list --open` yet absent from the numbered steps, which is
       # the surface the operator actually reads. Class A is deliberately NOT folded: it also lacks
       # a default/deadline, but it is a post-hoc audit trail with nothing for the operator to do.
-      jq -r --arg ph "$CC_PLACEHOLDER_RE" --arg con "$C_ON" --arg coff "$C_OFF" \
+      # shellcheck disable=SC2016  # a jq program: $ is jq syntax, not a shell expansion
+      dec_jq -r --arg ph "$CC_PLACEHOLDER_RE" --arg con "$C_ON" --arg coff "$C_OFF" \
         --argjson nowarg "$DEC_NOW" "$CC_PH_JQ"'
         select((.status // "" | if . == "" then "open" else . end) == "open"
                and ((.class // "") == "C"
@@ -650,8 +672,8 @@ render_block() {
            elif $run != ""   then "decision\t▶\t\($run)   [decision \($cls) \($id8): \($sent | .[0:60])]\t\($id8)"
            elif $staged != "" then "decision\t▶\tbash \($staged)   [decision \($cls) \($id8): \($sent | .[0:60])]\t\($id8)"
            else "decision\t◆\t[decision \($cls) \($id8)\($agelbl)] \($sent)\t\($id8)" end) as $line
-        | "\(.created // "?")\t\($line)"' "$f" 2>/dev/null
-    done | sort | cut -f2- >> "$steps_file"
+        | "\(.created // "?")\t\($line)"'
+    } | sort | cut -f2- >> "$steps_file"
   fi
 
   # 4 · blocked backlog → TWO classes off ONE read: `yours` (filed by THIS session) and `backlog`
@@ -956,21 +978,17 @@ render_block() {
   horizon="$(epoch_to_iso $(( NOW + 86400 )))"
   if [ -d "$DEC_DIR" ] && [ -n "$horizon" ]; then
     b_earliest="$(
-      for f in "$DEC_DIR"/*.json; do
-        [ -e "$f" ] || continue
-        jq -r --arg h "$horizon" '
+      # shellcheck disable=SC2016
+      dec_jq -r --arg h "$horizon" '
           select((.status // "")=="open" and (.class // "")=="B"
                  and (.veto_deadline // "") != "" and .veto_deadline <= $h)
-          | .veto_deadline' "$f" 2>/dev/null
-      done | sort | head -1)"
+          | .veto_deadline' | sort | head -1)"
     if [ -n "$b_earliest" ]; then
       b_n="$(
-        for f in "$DEC_DIR"/*.json; do
-          [ -e "$f" ] || continue
-          jq -r --arg h "$horizon" '
+        # shellcheck disable=SC2016
+        dec_jq -r --arg h "$horizon" '
             select((.status // "")=="open" and (.class // "")=="B"
-                   and (.veto_deadline // "") != "" and .veto_deadline <= $h) | .id' "$f" 2>/dev/null
-        done | grep -c .)"
+                   and (.veto_deadline // "") != "" and .veto_deadline <= $h) | .id' | grep -c .)"
       b_line="${b_n} class-B default(s) auto-fire ≤24h (earliest ${b_earliest}) — veto: cc-decide veto <id>"
     fi
   fi
