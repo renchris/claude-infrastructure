@@ -345,3 +345,18 @@ PY
   [ "$status" -eq 0 ]
   [ "$(printf '%s' "$output" | _j '[a["arm"] for a in d["arms"] if a["sha"]=="'"$(_sha16 'slim instructions')"'"][0]')" = "slim" ]
 }
+
+@test "--by-agent-type groups worker contexts by the agentType in each transcript's .meta.json" {
+  run "$L" --since 2026-09-01 --by-agent-type --json
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # the workflow agent carries agent-w1.meta.json (workflow-lean); the subagent has no meta file
+  [ "$(printf '%s' "$output" | _j '",".join("%s/%s/%d" % (a["ctx_type"], a["agent_type"], a["contexts"]) for a in sorted(d["agent_types"], key=lambda a: a["ctx_type"]))')" = "subagent/(no meta)/1,workflow_agent/workflow-lean/1" ]
+  # the dollars are the same worker dollars the fleet view reports: subagent 1.00016 + workflow 0.50062
+  [ "$(printf '%s' "$output" | _j 'round(sum(a["usd_total"] for a in d["agent_types"]),5)')" = "1.50078" ]
+  [ "$(printf '%s' "$output" | _j '[round(a["usd_total"],5) for a in d["agent_types"] if a["agent_type"]=="workflow-lean"][0]')" = "0.50062" ]
+  # main threads are never a worker context
+  [ "$(printf '%s' "$output" | _j 'sum(a["ctx_type"]=="main" for a in d["agent_types"])')" -eq 0 ]
+  run "$L" --since 2026-09-01 --by-agent-type
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"workflow-lean"* ]] || false
+}

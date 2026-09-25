@@ -27,6 +27,8 @@ Usage:
                   (scans the whole window so the tree matches the fleet view; --quick scans only
                   the tree and reports recorded output, unimputed)
   cc-token-ledger --by-arm                                  cost per task per instructions arm
+  cc-token-ledger --by-agent-type                           cost per worker context by agentType
+                  (read from each subagent/workflow-agent transcript's sibling .meta.json)
   cc-token-ledger --side-requests                   cost-state minus transcript, per session
                   (sessions still writing at --until are skipped: cost-state runs to process end)
   cc-token-ledger --check                   exit 1 if ENABLE_PROMPT_CACHING_1H is set anywhere
@@ -757,6 +759,70 @@ def view_by_arm(results, pricer):
     return {"variant_log": "present" if log is not None else "absent", "arms": rows}
 
 
+def agent_type_of(path):
+    """A worker transcript's agentType from its sibling <agent>.meta.json (written by Claude Code
+    for subagents and workflow agents), or a label saying why there is none."""
+    if not path.endswith(".jsonl"):
+        return "(no meta)"
+    try:
+        with open(path[: -len(".jsonl")] + ".meta.json", encoding="utf-8") as fh:
+            return json.load(fh).get("agentType") or "(no agentType)"
+    except (OSError, ValueError, AttributeError):
+        return "(no meta)"
+
+
+def view_by_agent_type(results, pricer, exclude_slug=None):
+    """Cost per WORKER context (subagent, workflow agent) grouped by (context type, agentType): the
+    instrument behind the lean-worker realized-savings readout (scripts/tokeff-lean-readout.sh).
+    exclude_slug: a regex over the project slug; matching contexts are counted in `excluded` only."""
+    quiet = _Silent(pricer)  # the fleet pass owns the unpriced-model count
+    rx = re.compile(exclude_slug) if exclude_slug else None
+    per_file = defaultdict(Acc)
+    excluded = set()
+    for f, r, o in iter_kept(results):
+        if f["cls"][0] == "main":
+            continue
+        if rx and rx.search(f["cls"][2]):
+            excluded.add(f["path"])
+            continue
+        per_file[f["path"]].add(f, r, o, quiet)
+    key = {f["path"]: (f["cls"][0], agent_type_of(f["path"])) for f in results if f["path"] in per_file}
+    groups = defaultdict(list)
+    for p, acc in per_file.items():
+        groups[key[p]].append(acc)
+    rows = []
+    for (ctx, at), accs in sorted(groups.items(), key=lambda kv: -sum(a.total() for a in kv[1])):
+        tot = Acc()
+        for a in accs:
+            tot.responses += a.responses
+            for k in CLASSES:
+                tot.tok[k] += a.tok[k]
+                tot.usd[k] += a.usd[k]
+                tot.usd_re[k] += a.usd_re[k]
+        rows.append({
+            "ctx_type": ctx, "agent_type": at, "contexts": len(accs), "responses": tot.responses,
+            "usd_total": tot.total(), "usd_total_reprice": tot.total_re(),
+            "usd_per_context": dist(a.total() for a in accs),
+            "usd_reprice_per_context": dist(a.total_re() for a in accs),
+            "cache_write_tokens": tot.tok["cache_write_5m"] + tot.tok["cache_write_1h"],
+            "cache_hit_rate": tot.hit_rate(),
+        })
+    return {"agent_types": rows, "exclude_slug": exclude_slug, "excluded_contexts": len(excluded)}
+
+
+def render_agent_types(v, reprice):
+    out = ["Cost per worker context by agentType (subagents and workflow agents; main threads excluded)",
+           "%-15s %-26s %8s %9s %12s %10s %10s %12s %7s" % (
+               "context", "agentType", "contexts", "responses", "$ total", "$ mean", "$ median",
+               "$ @" + reprice.replace("claude-", ""), "hit")]
+    for a in v["agent_types"]:
+        out.append("%-15s %-26s %8s %9s %12s %10s %10s %12s %7s" % (
+            a["ctx_type"], a["agent_type"][:26], num(a["contexts"]), num(a["responses"]), money(a["usd_total"]),
+            money(a["usd_per_context"]["mean"]), money(a["usd_per_context"]["median"]),
+            money(a["usd_total_reprice"]), pcts(a["cache_hit_rate"])))
+    return "\n".join(out)
+
+
 SIDE_KEYS = ("input", "cache_write", "cache_read", "output")
 
 
@@ -1008,6 +1074,9 @@ def main(argv):
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--task", metavar="SESSION_ID")
     g.add_argument("--by-arm", action="store_true")
+    g.add_argument("--by-agent-type", action="store_true")
+    ap.add_argument("--exclude-slug", metavar="REGEX", default=None,
+                    help="with --by-agent-type: leave out worker contexts whose project slug matches")
     g.add_argument("--side-requests", action="store_true")
     g.add_argument("--check", action="store_true")
     ap.add_argument("--quick", action="store_true",
@@ -1082,6 +1151,10 @@ def main(argv):
         v = view_by_arm(results, pricer)
         v["meta"] = meta
         print(json.dumps(v, indent=1) if a.json else render_arms(v, a.reprice))
+    elif a.by_agent_type:
+        v = view_by_agent_type(results, pricer, a.exclude_slug)
+        v["meta"] = meta
+        print(json.dumps(v, indent=1) if a.json else render_agent_types(v, a.reprice))
     elif a.side_requests:
         v = view_side(results, pricer, since, bounded=a.until is not None)
         v["meta"] = meta
