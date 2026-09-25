@@ -660,3 +660,123 @@ ma_row() { grep -F "\"reason\":\"$1\"" "$CONTINUE_IDL" 2>/dev/null | tail -1; }
   run sc status
   [[ "$output" == *"the operator's parked step"* ]] || { echo "THE OPERATOR'S PARK WAS DISARMED: $output"; false; }
 }
+
+# ── IDENTICAL RE-BLOCK AFTER AN IDLE FORCED TURN (token-efficiency rank 17) ───────────────────────
+# first_block <step> → arms the step as sidA and lets the hook emit its REAL first block; prints the
+# block reason, so the fixture transcript below carries exactly what the harness would have recorded.
+first_block() {
+  arm "$1" sidA
+  actuate sidA | jq -r .reason
+}
+# forced_tx <reason> <tool_use json array> [boundary-override-json] → transcript path whose last turn
+# was opened by that block's "Stop hook feedback" record and made the given tool calls.
+forced_tx() {
+  local p="$BATS_TEST_TMPDIR/ftx-$BATS_TEST_NUMBER.jsonl" fb
+  fb="$(printf 'Stop hook feedback:\n%s' "$1")"
+  {
+    jq -nc '{type:"user",message:{role:"user",content:"please do the thing"}}'
+    jq -nc '{type:"assistant",message:{role:"assistant",content:[{type:"text",text:"on it"}]}}'
+    if [ -n "${3:-}" ]; then printf '%s\n' "$3"
+    else jq -nc --arg r "$fb" '{type:"user",isMeta:true,message:{role:"user",content:$r}}'; fi
+    jq -nc --argjson t "$2" '{type:"assistant",message:{role:"assistant",content:$t}}'
+    jq -nc '{type:"user",message:{role:"user",content:[{type:"tool_result",tool_use_id:"t1",content:"ok"}]}}'
+    jq -nc '{type:"assistant",message:{role:"assistant",content:[{type:"text",text:"still waiting"}]}}'
+  } > "$p"
+  printf '%s' "$p"
+}
+bash_tu() { jq -nc --arg c "$1" '[{type:"tool_use",id:"t1",name:"Bash",input:{command:$c}}]'; }
+
+@test "RE-BLOCK: identical step after a forced turn that only READ ⇒ the stop is allowed, step stays armed" {
+  r="$(first_block "wait for the lander")"
+  [[ "$r" == *"Next: wait for the lander"* ]]
+  tx="$(forced_tx "$r" "$(bash_tu 'git status && sleep 5; cat /tmp/x.log | tail -3')")"
+  run actuate sidA "$tx"
+  ! fired "$output" || { echo "re-blocked an idle repeat: $output"; false; }
+  printf '%s' "$output" | jq -er .systemMessage | grep -q 'Step still armed'
+  run sc status
+  [[ "$output" == ARMED* ]]
+  [ "$(cat "$CLAUDE_CONFIG_DIR"/continue-state/*.count 2>/dev/null || find "$CLAUDE_CONFIG_DIR" -name '*.count' -exec cat {} \;)" = 1 ]
+}
+
+@test "RE-BLOCK: a forced turn with NO tool call at all is also idle ⇒ allowed" {
+  r="$(first_block "wait for the lander")"
+  tx="$(forced_tx "$r" '[{"type":"text","text":"holding"}]')"
+  run actuate sidA "$tx"
+  ! fired "$output" || false
+}
+
+@test "RE-BLOCK: an Edit in the forced turn is work ⇒ still blocks" {
+  r="$(first_block "wait for the lander")"
+  tx="$(forced_tx "$r" '[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"/x/a.sh","old_string":"a","new_string":"b"}}]')"
+  run actuate sidA "$tx"
+  fired "$output"
+}
+
+@test "RE-BLOCK: a subagent spawn in the forced turn is work ⇒ still blocks" {
+  r="$(first_block "wait for the lander")"
+  tx="$(forced_tx "$r" '[{"type":"tool_use","id":"t1","name":"Agent","input":{"prompt":"x"}}]')"
+  run actuate sidA "$tx"
+  fired "$output"
+}
+
+@test "RE-BLOCK: write-shaped Bash is work ⇒ still blocks (commit, redirect, sed -i, interpreter, find -delete)" {
+  r="$(first_block "wait for the lander")"
+  for c in 'git commit -qm x' 'git -C /tmp/r push origin HEAD' 'echo hi > out.txt' 'printf x >> log' \
+           "sed -i '' s/a/b/ f" 'bash scripts/ship-land.sh' 'python3 fix.py' "bash -c 'rm x'" \
+           'find . -name x -delete' 'cd /tmp && touch y' 'ls | xargs rm' 'x=$(git stash)' \
+           'cc-notify abc "done"' 'for f in *; do rm "$f"; done'; do
+    arm "wait for the lander" sidA     # same step; zeroes .count so 14 blocks never reach the cap
+    tx="$(forced_tx "$r" "$(bash_tu "$c")")"
+    run actuate sidA "$tx"
+    fired "$output" || { echo "NOT counted as work: $c"; false; }
+  done
+}
+
+@test "RE-BLOCK: a CHANGED step is a new reason ⇒ blocks" {
+  r="$(first_block "wait for the lander")"
+  arm "now land the fix" sidA
+  tx="$(forced_tx "$r" "$(bash_tu 'git status')")"
+  run actuate sidA "$tx"
+  fired "$output"
+  printf '%s' "$output" | jq -r .reason | grep -q 'Next: now land the fix'
+}
+
+@test "RE-BLOCK: a first block is never skipped — the turn was opened by a HUMAN prompt, not our block" {
+  arm "wait for the lander" sidA
+  tx="$(forced_tx "unused" "$(bash_tu 'git status')" "$(jq -nc '{type:"user",message:{role:"user",content:"how is it going?"}}')")"
+  run actuate sidA "$tx"
+  fired "$output"
+}
+
+@test "RE-BLOCK: another hook's feedback in the same record is not an identical reason ⇒ blocks" {
+  r="$(first_block "wait for the lander")"
+  tx="$(forced_tx "$r
+completion-assert: you claimed done" "$(bash_tu 'git status')")"
+  run actuate sidA "$tx"
+  fired "$output"
+}
+
+@test "RE-BLOCK: pending mail ⇒ blocks (the block folds it)" {
+  r="$(first_block "wait for the lander")"
+  printf '2026-09-24T00:00:00Z [peer] ping\n' >> "$CC_MAILBOX_DIR/CCCCCCCC-1111-2222-3333-444444444444.md"
+  tx="$(forced_tx "$r" "$(bash_tu 'git status')")"
+  run actuate sidA "$tx"
+  fired "$output"
+  printf '%s' "$output" | jq -r .reason | grep -q 'INBOX'
+}
+
+@test "RE-BLOCK: a MECHANICALLY armed step is never skipped (its own budget bounds it)" {
+  r="$(first_block "wait for the lander")"
+  for s in $(find "$CLAUDE_CONFIG_DIR" -type f ! -name '*.*' 2>/dev/null); do printf mech > "$s.src"; done
+  tx="$(forced_tx "$r" "$(bash_tu 'git status')")"
+  run actuate sidA "$tx"
+  fired "$output"
+}
+
+@test "RE-BLOCK: CC_REBLOCK_SUPPRESS=0 restores the unconditional re-block" {
+  r="$(first_block "wait for the lander")"
+  tx="$(forced_tx "$r" "$(bash_tu 'git status')")"
+  export CC_REBLOCK_SUPPRESS=0
+  run actuate sidA "$tx"
+  fired "$output"
+}

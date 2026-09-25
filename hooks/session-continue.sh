@@ -139,7 +139,7 @@ case "${1:-}" in
   set)
     f=$(sentinel_for "$PWD")
     printf '%s' "${2:-Continue the in-scope work.}" > "$f"
-    rm -f "${f}.count" 2>/dev/null   # fresh chain → reset the loop counter (D-7 re-arm lever)
+    rm -f "${f}.count" "${f}.src" 2>/dev/null   # fresh chain → reset the loop counter (D-7 re-arm lever); agent-armed now
     # (b) sid-bind: stamp the arming session so a same-cwd successor can't inherit this sentinel.
     # Empty sid ⇒ write no bind (actuation then skips the sid check — conservative, never a wrong clear).
     csid="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
@@ -1101,6 +1101,8 @@ mechanical_arm() {   # rc 0 = armed (fall through to the armed path) · rc 1 = d
 
   printf '%s' "Commit the ${n_files} file(s) you edited this turn that are still uncommitted: ${shown}. Run the repo's gate, commit with explicit paths, then land per the repo's ship policy. Deliberately parked, or not yours? Run \`~/.claude/hooks/session-continue.sh clear\` and say so in your close." > "$f" 2>/dev/null || return 1
   [ -n "$cur_sid" ] && printf '%s' "$cur_sid" > "${f}.sid" 2>/dev/null
+  # Provenance for the identical-re-block skip (rank 17), which applies to agent-armed steps only.
+  printf 'mech' > "${f}.src" 2>/dev/null || true
   # Same cwd-stamp the CLI `set` writes. A MECHANICALLY armed sentinel is the one most likely to be
   # cleared from the wrong directory — the model never chose where it was armed — so it needs the
   # sidecar that lets `clear` name the cwd at least as much as an agent-set one does.
@@ -1235,7 +1237,7 @@ Then re-read the ledger with \`/wrap\`. If the converger refuses, file it (\`cc-
 # Floor order: mechanical 🔧 (uncommitted own writes) → ship floor (📦/🚀 own work) → wake floor
 # (reachability). At most ONE floor emits per Stop — the hook prints a single JSON object.
 if [ ! -f "$f" ]; then
-  rm -f "${f}.count" "${f}.sid" "${f}.cwd" 2>/dev/null
+  rm -f "${f}.count" "${f}.sid" "${f}.cwd" "${f}.src" 2>/dev/null
   if ! mechanical_arm; then
     if ! _sf_json="$(ship_floor)"; then
       mark_blocked ship-floor
@@ -1280,6 +1282,87 @@ if [ -n "$stored_sid" ] && [ -n "$cur_sid" ] && [ "$stored_sid" != "$cur_sid" ];
   printf 'session-continue: sentinel sid=%s ≠ session sid=%s (inherited across succession) — cleared, allowing stop.\n' "$stored_sid" "$cur_sid" >&2
   log_idl cleared "sid-mismatch" "$(jq -cn --arg a "$stored_sid" --arg b "$cur_sid" \
     '{stored_sid:$a,session_sid:$b}' 2>/dev/null)"
+  exit 0
+fi
+
+# continue_reason <step> <n> <max> — the 🔧 block reason. ONE builder, because the re-block
+# suppression below compares a previous block's text against this one: two copies would drift.
+continue_reason() {
+  printf '%s' "🔧 Loose ends remain — do NOT stop yet. Next: ${1}
+
+Re-arm each 🔧 turn: run \`~/.claude/hooks/session-continue.sh set \"<next step>\"\` to refresh the step AND reset the continuation counter (a fresh set zeroes .count — this is how a long grind stays under the ${3}-cap). When done (✅/📦), blocked on the user (⛔), or out of context (📤), run \`~/.claude/hooks/session-continue.sh clear\` so the session can close. (continuation ${2}/${3})"
+}
+
+# ── (b2) IDENTICAL RE-BLOCK AFTER AN IDLE FORCED TURN — skip it (token-efficiency rank 17) ────────
+# Measured over 14 d: 1,503 forced turns from this armed path, 886 waste-likely — the model answers
+# "still waiting" and stops, and the next Stop hands it the byte-identical step again
+# (docs/research/token-efficiency-2026-09-23/measure/hooks.md §3). This skips ONLY that repeat, and
+# only when every one of these holds, so autonomous driving is unchanged everywhere else:
+#   · the turn now ending was opened by THIS hook's own 🔧 block (the transcript's last turn boundary
+#     is its "Stop hook feedback" record) — so a first block is never skipped, and neither is the
+#     first block after a human prompt or a task notification;
+#   · that block's reason equals the one we would emit now, ignoring only the continuation counter —
+#     a changed step, a mail fold, or another hook's reason in the same feedback all fail this;
+#   · no mail is pending (a block would fold it);
+#   · the sentinel was armed by the agent, not by the mechanical 🔧 arm (its dirt has its own bound);
+#   · the turn made no tool call that can write: file-edit tools, subagents, messages, or any Bash
+#     clause outside a read-only verb list (a redirect, `sed -i`, `find -delete`, a mutating git verb,
+#     an interpreter or script all count as work). Unsure ⇒ work ⇒ block, as before.
+# The step stays armed, so the next turn that does anything is driven again. Kill switch:
+# CC_REBLOCK_SUPPRESS=0. The turn facts come from hooks/lib/turn-scan.sh (shared with goal-inert-watch).
+_sc_turn_lib() { # source hooks/lib/turn-scan.sh (same resolution order as session-writes.sh) → rc 0 loaded
+  command -v turn_scan >/dev/null 2>&1 && return 0
+  local l="${TURN_SCAN_LIB:-$_scd/lib/turn-scan.sh}" t
+  [ -f "$l" ] || { t="$0"; [ -L "$t" ] && t="$(readlink "$t")"
+    l="$(cd "$(dirname "$t")" 2>/dev/null && pwd)/lib/turn-scan.sh"; }
+  [ -f "$l" ] || l="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/turn-scan.sh"
+  [ -f "$l" ] || l="$HOME/.claude/hooks/lib/turn-scan.sh"
+  [ -f "$l" ] || return 1
+  # shellcheck source=lib/turn-scan.sh
+  # shellcheck disable=SC1091
+  . "$l" 2>/dev/null && command -v turn_scan >/dev/null 2>&1
+}
+reblock_is_idle_repeat() { # rc 0 = skip this block (identical reason, idle forced turn); rc 1 = block
+  [ "${CC_REBLOCK_SUPPRESS:-1}" != 0 ] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  [ "$(cat "${f}.src" 2>/dev/null)" = mech ] && return 1
+  local tp scan prev want pend step
+  tp="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)"
+  case "$tp" in "~"*) tp="$HOME${tp#\~}" ;; esac
+  [ -n "$tp" ] && [ -f "$tp" ] || return 1
+  case "$_ouid" in
+    ''|.|..|.*|*[!A-Za-z0-9._-]*) pend=0 ;;
+    *) command -v mailbox_pending_count >/dev/null 2>&1 || return 1
+       pend="$(mailbox_pending_count "$_ouid" 2>/dev/null || echo x)" ;;
+  esac
+  [ "$pend" = 0 ] || return 1
+  _sc_turn_lib || return 1
+  scan="$(turn_scan "$tp" 1)" || return 1
+  # The turn now ending: opened by our block (checked below) and idle.
+  [ "$(printf '%s' "$scan" | jq -r '.w' 2>/dev/null)" = false ] || return 1
+  prev="$(printf '%s' "$scan" | jq -r '.b' 2>/dev/null)" || return 1
+  step="$(cat "$f" 2>/dev/null)" || return 1
+  want="Stop hook feedback:
+$(continue_reason "$step" N "${CLAUDE_CONTINUE_MAX:-8}")"
+  # Only the counter may differ: "(continuation 3/8)" vs "(continuation N/8)".
+  prev="$(printf '%s' "$prev" | sed -E 's/\(continuation [0-9N]+\/[0-9]+\)$/(continuation)/')"
+  want="$(printf '%s' "$want" | sed -E 's/\(continuation [0-9N]+\/[0-9]+\)$/(continuation)/')"
+  [ "$prev" = "$want" ]
+}
+if reblock_is_idle_repeat; then
+  printf 'session-continue: 🔧 re-block skipped — the forced turn since the identical previous block changed nothing; step stays armed.\n' >&2
+  log_idl abstained "reblock-idle-repeat" "$(jq -cn --arg s "$(cat "$f" 2>/dev/null)" '{step:$s}' 2>/dev/null)"
+  # This stop is now a genuine idle, so the reachability floor applies exactly as on the unarmed path.
+  if ! _wf_json="$(wake_floor)"; then
+    mark_blocked wake-floor
+    printf '%s' "$_wf_json"
+    exit 0
+  fi
+  if [ -n "${_wf_json:-}" ]; then
+    printf '%s' "$_wf_json"
+  else
+    jq -nc --arg m "🔧 Step still armed, not re-sent: the last forced turn changed nothing. It drives again on the next turn that does work; \`session-continue.sh clear\` if it is finished." '{systemMessage:$m}' 2>/dev/null || true
+  fi
   exit 0
 fi
 
@@ -1331,9 +1414,7 @@ case "$_ouid" in
 esac
 
 step=$(cat "$f")
-reason="🔧 Loose ends remain — do NOT stop yet. Next: ${step}
-
-Re-arm each 🔧 turn: run \`~/.claude/hooks/session-continue.sh set \"<next step>\"\` to refresh the step AND reset the continuation counter (a fresh set zeroes .count — this is how a long grind stays under the ${MAX}-cap). When done (✅/📦), blocked on the user (⛔), or out of context (📤), run \`~/.claude/hooks/session-continue.sh clear\` so the session can close. (continuation ${n}/${MAX})"
+reason="$(continue_reason "$step" "$n" "$MAX")"
 
 # v2 fold: PREPEND pending peer mail (higher priority than self-continuation — a peer is trying to reach
 # you). The re-arm reminder stays in $reason below it, so folding never starves the continuation counter (F14).
