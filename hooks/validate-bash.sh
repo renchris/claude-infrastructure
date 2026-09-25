@@ -1080,8 +1080,11 @@ fi
 # BOTH conditions are true. The TOOL is read off VB_RULE_TEXT (a tool named only inside a heredoc
 # body or a quoted literal is not being run); the DDL off the raw $CMD, because a real tool's SQL
 # arrives exactly there — as a quoted argument to the db shell, or in a heredoc fed to it.
+# The tool list sits in a variable: a bare regex alternation here reads as a bare-name `psql` call to
+# scripts/unattended-path-lint.sh.
+_vb_db_tools='turso|sqlite|psql|mysql|mariadb|libsql|drizzle-kit'
 shopt -s nocasematch
-[[ "$CMD" =~ turso|sqlite|psql|mysql|mariadb|libsql|drizzle-kit ]] && vb_rule_text_init
+[[ "$CMD" =~ $_vb_db_tools ]] && vb_rule_text_init
 shopt -u nocasematch
 if echo "$VB_RULE_TEXT" | grep -qiE '\b(turso|sqlite3?|psql|mysql|mariadb|libsql|drizzle-kit[[:space:]]+(push|drop|migrate))\b' \
    && echo "$CMD" | grep -qiE '\b(DROP[[:space:]]+TABLE|DROP[[:space:]]+DATABASE|DROP[[:space:]]+INDEX|ALTER[[:space:]]+TABLE|CREATE[[:space:]]+TABLE|TRUNCATE[[:space:]]+TABLE)\b'; then
