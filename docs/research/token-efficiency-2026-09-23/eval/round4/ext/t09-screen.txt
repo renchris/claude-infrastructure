@@ -1,0 +1,12 @@
+round4
+   4  full · not landed · no yes · judge ok
+   1  full · not landed · says yes · judge ok
+   1  slim · not landed · no yes · judge fail
+   2  slim · not landed · no yes · judge ok
+   2  slim · not landed · says yes · judge fail
+round4/ext
+   3  full · landed · says yes · judge ok
+   5  full · not landed · no yes · judge ok
+   2  full · not landed · says yes · judge ok
+   8  slim · not landed · no yes · judge ok
+   2  slim · not landed · says yes · judge ok
