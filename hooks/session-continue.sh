@@ -599,7 +599,20 @@ wf_teardown_marked() { # → 0 = a fresh teardown marker names this session
 # session in the fleet on a fixed period. Long timeout ⇒ a timeout-wake is a rare, self-healing
 # re-arm rather than a treadmill.
 # Seams (tests): CC_WAKE_FLOOR (0 disables) · CC_WAKE_FLOOR_MAX · CC_WAKE_FLOOR_TTL_S ·
-#                CC_WAKE_FLOOR_TIMEOUT_S · CC_MAILBOX_DIR.
+#                CC_WAKE_FLOOR_TIMEOUT_S · CC_MAILBOX_DIR · CC_WAKE_FLOOR_SETTINGS.
+
+# wake_arm_on_stop_registered → rc 0 when the settings file registers hooks/mailbox-wake-arm.sh on
+# Stop WITH asyncRewake:true and CC_WAKE_ARM has not disabled it. Registered without asyncRewake it
+# would run synchronously and is not the mechanical arm, so it does not count. Unreadable ⇒ rc 1,
+# which keeps the floor's block: the fail direction is "one forced turn", never "deaf".
+wake_arm_on_stop_registered() {
+  [ "${CC_WAKE_ARM:-1}" != 0 ] || return 1
+  local s="${CC_WAKE_FLOOR_SETTINGS:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json}"
+  [ -f "$s" ] || return 1
+  jq -e '[.hooks.Stop[]?.hooks[]? | select((.command // "") | test("(^|/)mailbox-wake-arm\\.sh$"))
+          | select(.asyncRewake == true)] | length > 0' "$s" >/dev/null 2>&1
+}
+
 wake_floor() { # → echoes JSON on stdout when it wants to BLOCK; otherwise silent. Never fails.
   [ "${CC_WAKE_FLOOR:-1}" = 1 ] || return 0
   command -v jq >/dev/null 2>&1 || return 0
@@ -612,6 +625,23 @@ wake_floor() { # → echoes JSON on stdout when it wants to BLOCK; otherwise sil
 
   # Already reachable → clear the budget so a LATER unarmed episode starts fresh (self-healing).
   if mailbox_wake_armed "$_ouid"; then rm -f "$sf" 2>/dev/null; return 0; fi
+
+  # ── MECHANICAL ARM PRESENT ⇒ this Stop arms the watcher itself, so do not spend a model turn ─────
+  # (token-efficiency 2026-09-23, OPPORTUNITIES rank 20). When settings register
+  # hooks/mailbox-wake-arm.sh on STOP with asyncRewake (migration 0012), the harness launches that
+  # hook at THIS same Stop, in the background, and it arms the inbox watcher with no model action —
+  # and wakes the session on pending mail at once, which also covers the custody and pending cases
+  # below. Blocking here then buys nothing but a forced turn: measured 381 WAKE FLOOR turns in 14 d,
+  # 342 of them waste-likely (measure/hooks.md §3). The heartbeat check above cannot see that arm,
+  # because both hooks start together and the watcher has not written `.watching` yet.
+  # Goal-safe: an asyncRewake hook is not a background Bash task, so it does not suspend /goal
+  # evaluation (the reason the model-instructed arm must be --idle-scoped under a live goal).
+  # CC_WAKE_ARM=0 makes that hook a no-op, so it also re-enables this floor.
+  if wake_arm_on_stop_registered; then
+    printf 'session-continue: wake floor ABSTAINS (mailbox-wake-arm.sh is registered on Stop with asyncRewake — it arms the watcher at this Stop).\n' >&2
+    log_idl abstained "wake-floor-mechanical-arm"
+    return 0
+  fi
 
   now="$(date +%s 2>/dev/null || echo 0)"
   cnt=0; ts=0; prev_sid=""
