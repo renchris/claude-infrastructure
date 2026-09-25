@@ -141,8 +141,72 @@ NL='
 # candidate, back under the original with this.
 TRUNK_PATHS="${NL}$(git ls-tree -r --name-only "${REMOTE_TRUNK}" 2>/dev/null)${NL}"
 
+# --mine PREFILTER — which branches can POSSIBLY yield a report (LAND_SPEED, 2026-09-24).
+# Under --mine a commit is reported only if mine_match says so: it is an ancestor of one of
+# MINE_ANCHORS, or it carries this session's legacy trailer. Every other commit on every
+# other branch is judged and then silently skipped — so the per-branch walk below, which is
+# one `git cherry` fork per local branch, spent its whole cost proving silence. Measured on
+# the land path 2026-09-24: 2,984 local branches, ~0.3-0.5s per cherry at load ~250, and the
+# sweep was post_s p50 584s / p90 858s of a landed land's p50 1036s — MORE than the gate
+# (scripts/land-speed-census.py). The comment above TRUNK_PATHS priced it at 708 refs.
+#
+# So under --mine the candidate set is computed FIRST, in two git processes over the whole
+# repo: OWN = (commits reachable from an anchor) minus (commits reachable from trunk), plus
+# every local-branch commit off trunk whose Session-Id / Land-Session trailer equals MINE.
+# Only branches CONTAINING an OWN commit are walked, and they are walked by the SAME judge
+# as before — the prefilter narrows which branches are read, never how a commit is judged.
+# Equivalence: judge_commit reports under --mine only when the sha is off trunk AND
+# mine_match holds, which is exactly OWN; and git cherry's candidates on a branch are that
+# branch's commits off trunk, so a branch holding no OWN commit could only ever go silent.
+#
+# FAILURE DIRECTION: any prefilter instrument failing (a bad ref makes `--branches` exit
+# non-zero, as does an unreadable anchor) falls back to the FULL walk, which is what names
+# an unreadable branch as a NON-VERDICT. The prefilter can make the sweep faster; it can
+# never make it quieter. Kill switch: STRANDED_SWEEP_MINE_PREFILTER=off.
+PREFILTERED=0
+LOOP_BRANCHES=""
+ALL_BRANCHES="$(git for-each-ref --format='%(refname:short)' refs/heads/)"
+if [[ -n "${MINE}" && "${STRANDED_SWEEP_MINE_PREFILTER:-on}" != "off" ]]; then
+  pf_ok=1
+  own=""
+  if [[ -n "${MINE_ANCHORS}" ]]; then
+    own="$(printf '%s^%s\n' "${MINE_ANCHORS}" "${REMOTE_TRUNK}" | git rev-list --stdin 2>/dev/null)" || pf_ok=0
+  fi
+  trailer_own=""
+  if [[ "${pf_ok}" -eq 1 ]]; then
+    # Exact-value match, like mine_match's `grep -xF`: a field is compared whole, never grepped.
+    trailer_log="$(git log --format='%H%x09%(trailers:key=Session-Id,valueonly,separator=%x09)%x09%(trailers:key=Land-Session,valueonly,separator=%x09)' \
+      --exclude="${TRUNK}" --branches --not "${REMOTE_TRUNK}" 2>/dev/null)" || pf_ok=0
+    trailer_own="$(printf '%s\n' "${trailer_log}" | MINE_SID="${MINE}" awk -F'\t' '
+      { for (i = 2; i <= NF; i++) if ($i == ENVIRON["MINE_SID"]) { print $1; next } }')"
+  fi
+  if [[ "${pf_ok}" -eq 1 ]]; then
+    own="$(printf '%s\n%s\n' "${own}" "${trailer_own}" | sed '/^$/d' | sort -u)"
+    if [[ -z "${own}" ]]; then
+      PREFILTERED=1   # no own commit is off trunk anywhere: no branch can yield a report
+    else
+      # ONE for-each-ref; repeated --contains is a union. Built as an array, never word-split.
+      contains_args=()
+      while IFS= read -r c; do contains_args+=(--contains "${c}"); done <<EOF
+${own}
+EOF
+      if LOOP_BRANCHES="$(git for-each-ref --format='%(refname:short)' "${contains_args[@]}" refs/heads/ 2>/dev/null)"; then
+        PREFILTERED=1
+      else
+        LOOP_BRANCHES=""
+      fi
+    fi
+  fi
+fi
+[[ "${PREFILTERED}" -eq 1 ]] || LOOP_BRANCHES="${ALL_BRANCHES}"
+
 found=0
 branch_count=0
+while IFS= read -r b; do
+  [[ -n "${b}" && "${b}" != "${TRUNK}" ]] && branch_count=$(( branch_count + 1 ))
+done <<EOF
+${ALL_BRANCHES}
+EOF
 unreadable=0
 unreadable_names=""
 hit_branches=0
@@ -192,9 +256,8 @@ EOF
   echo ""
   return 0
 }
-for branch in $(git for-each-ref --format='%(refname:short)' refs/heads/); do
+for branch in ${LOOP_BRANCHES}; do
   [[ "${branch}" = "${TRUNK}" ]] && continue
-  branch_count=$(( branch_count + 1 ))
 
   # `git cherry` is the cheap PRE-FILTER — it enumerates the branch's commits that are not
   # on the trunk. It is NOT the verdict, and its rc is now CHECKED. Two failures paid for:

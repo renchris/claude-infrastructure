@@ -341,3 +341,80 @@ seed_anchor_strands() {
   run bash -c "set -uo pipefail; cd '$WORK'; . '$f'; MINE='absent-from-this-commit'; MINE_ANCHORS=''; mine_match '$sha'; echo rc=\$?"
   [ "$output" = "rc=1" ] || { echo "a peer session's sha did not answer 1: $output" >&2; return 1; }
 }
+
+# --- COST: the --mine PREFILTER (LAND_SPEED 2026-09-24) ----------------------------------
+# ship-land runs `--mine` after every push, and the per-branch walk forked one `git cherry`
+# per local branch: 2,984 branches, post_s p50 584s of a 1036s landed land. Under --mine
+# only branches holding an OWN commit can report anything, so only those may be walked.
+# The cost is asserted as a COUNT of `git cherry` forks, never as a duration: a wall-clock
+# bound would be a property of the box's load, and this box runs at load/core > 20.
+
+git_shim() {  # PATH shim that records every git subcommand, then execs the real git
+  local real; real="$(command -v git)"
+  mkdir -p "$BATS_TEST_TMPDIR/shim"
+  GIT_CALLS="$BATS_TEST_TMPDIR/git-calls.log"
+  : > "$GIT_CALLS"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$1" >> "%s"\nexec "%s" "$@"\n' "$GIT_CALLS" "$real" \
+    > "$BATS_TEST_TMPDIR/shim/git"
+  chmod +x "$BATS_TEST_TMPDIR/shim/git"
+}
+
+seed_peer_branches() {  # $1=count — peer WIP branches, each with an unlanded new file
+  local i
+  for i in $(seq 1 "$1"); do
+    git checkout -q -b "peer$i" main
+    echo "p$i" > "peer$i.txt" && git add "peer$i.txt" && git commit -q -m "peer $i"
+  done
+  git checkout -q main
+}
+
+@test "COST: --mine with no own commit off trunk walks ZERO branches (no git cherry fork)" {
+  seed_peer_branches 12
+  git_shim
+  PATH="$BATS_TEST_TMPDIR/shim:$PATH" run bash "$SWEEP" --mine SID-NONE main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "0 own-session (SID-NONE) drops across 12 branch(es)"   # count kept
+  cherries="$(grep -cx cherry "$GIT_CALLS" || true)"
+  [ "$cherries" -eq 0 ] || { echo "walked $cherries branch(es) that could not yield a --mine report" >&2; return 1; }
+  # POSITIVE CONTROL on the shim itself: default mode still walks every branch, so a 0 above
+  # cannot be the shim failing to record.
+  : > "$GIT_CALLS"
+  PATH="$BATS_TEST_TMPDIR/shim:$PATH" run bash "$SWEEP" main
+  [ "$(grep -cx cherry "$GIT_CALLS")" -eq 12 ]
+}
+
+@test "COST: --mine with one own drop among peers walks ONLY the branch that holds it" {
+  seed_peer_branches 8
+  git checkout -q -b featA main
+  echo aaa > fileA.txt && git add fileA.txt && git commit -q -m "add fileA"
+  git update-ref refs/land/failed/20260924T000000Z-SID-A-featA HEAD
+  git checkout -q main
+  git_shim
+  PATH="$BATS_TEST_TMPDIR/shim:$PATH" run bash "$SWEEP" --mine SID-A main
+  [ "$status" -eq 1 ]                           # the own drop still FIRES
+  echo "$output" | grep -q "fileA.txt"
+  ! echo "$output" | grep -q "peer1.txt" || false
+  [ "$(grep -cx cherry "$GIT_CALLS")" -eq 1 ]
+}
+
+@test "EQUIVALENCE: prefilter on and off give byte-identical --mine verdicts" {
+  # Anchor-owned, trailer-owned, an own commit on TWO branches, and peers — every arm of
+  # mine_match, judged both ways. The kill switch restores the full walk.
+  seed_anchor_strands
+  git checkout -q -b featT main
+  echo ttt > fileT.txt && git add fileT.txt
+  git commit -q -m "$(printf 'add fileT\n\nSession-Id: SID-A\n')"
+  git checkout -q -b featA2 featA
+  git checkout -q main
+  seed_peer_branches 3
+  local sid on off
+  for sid in SID-A SID-B SID-Z; do
+    on="$(bash "$SWEEP" --mine "$sid" main 2>&1; echo "rc=$?")"
+    off="$(STRANDED_SWEEP_MINE_PREFILTER=off bash "$SWEEP" --mine "$sid" main 2>&1; echo "rc=$?")"
+    [ "$on" = "$off" ] || { printf 'sid=%s diverged\n--- on ---\n%s\n--- off ---\n%s\n' "$sid" "$on" "$off" >&2; return 1; }
+  done
+  # …and the comparison was not vacuous: SID-A reports all three own commits, featA twice.
+  on="$(bash "$SWEEP" --mine SID-A main 2>&1)" || true   # rc 1 is the FIRE, not a failure
+  echo "$on" | grep -q "fileT.txt"
+  [ "$(echo "$on" | grep -c "✗ STRANDED")" -eq 3 ]
+}
