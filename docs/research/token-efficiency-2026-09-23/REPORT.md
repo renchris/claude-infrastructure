@@ -76,6 +76,7 @@ session at launch; a change ships to all accounts or none. Migration 0037 conver
     (the `frontend-design` plugin that held it is off on every account). Landed as `fix(visual-direction): the
     calibration example leaves the five generated-design templates`.
   - *Dropped by operator ruling:* rank 21 (ms365 stays in the default set; it conflicts with the email-images rule).
+  - *Staged as all-accounts c10 migrations:* 0040, the Claude Docs connector off (rank 25).
 
 ## 1. Harness map and baseline
 
@@ -144,7 +145,7 @@ Savings are list $ per 14.96 days and % of the $32,517 fleet; **status** is what
 | 22 | Stop reason sent twice (upstream) | binary | $92 | low | PROPOSE | proposed · **filed upstream 2026-09-24**: anthropics/claude-code#96909 (re-verified on 2.1.280: both the meta message and the `hook_blocking_error` attachment carry the reason) |
 | 23 | Narrow allow rules for recurring denied shapes | permissions | $66-104 | low | PROPOSE | proposed (operator-owned) |
 | 24 | Recurring tool-error fixes in our code | hooks, skills | $72-87 | low | DIRECT | **partly done** (blocked delivery filename); `validate-bash.sh` narrowing proposed · **landed 2026-09-24** by the wave-2 hooks session: validate-bash deny rules match the command with heredoc bodies and quoted literals stripped, keeping a raw match for `sh -c`/`bash -c`/`eval` (`e200e35ed`, `6128f9279`, `2106cb885`); curl-gate judges an untokenisable command per curl segment instead of denying it whole (`edaaa897d`); a capacity refusal says how many refusals remain before it admits (`153d46b22`) |
-| 25 | Claude Docs connector off (0 calls) | connectors | $69 | low | FLAG | proposed (account setting) |
+| 25 | Claude Docs connector off (0 calls) | connectors | $69 | low | FLAG | proposed (account setting) · **staged for all accounts 2026-09-24** (operator approved; `eval/wave3/r25-connector.md`): a per-connector switch exists. `deniedMcpServers: [{"serverName": "claude.ai Claude Docs"}]` drops the server before it connects, with its 8 tools and its instructions, and leaves the other claude.ai connectors connected (exact-name match; measured headless on next3 and next4). A server-level `permissions.deny` removes only the tools, and `/mcp disable` is per project. The `anthropic-skills:docs` skill needs this connector, so the migration also sets it `off` in `skillOverrides`. Every start then prints a stderr "blocked by enterprise policy" warning. c10 `bash ~/Development/claude-infrastructure/migrations/0040-claude-docs-connector-off.sh --confirm settings.json` |
 | 26 | Stop reasons ≤ 200 chars | Stop hooks | $113 | med | FLAG | proposed · **dropped 2026-09-24**: the long reasons are the close-contract repairs, and every offline gate showed close answers are where quality breaks (F1: 8/10 false closes when the close text was cut); #96909 would remove the duplicated half with no text change |
 | T1-T4 | Telemetry: census output fix, per-task ledger, side-request accounting, TTL guard | instruments | $0 (prerequisite) | – | DIRECT | **done** |
 | P1-P3 | Cheaper worker model / lower effort for mechanical slots; Fable confinement | models | sensitivities only | med-high | PROPOSE | proposed |
