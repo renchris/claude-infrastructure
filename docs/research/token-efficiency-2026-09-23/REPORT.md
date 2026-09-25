@@ -75,6 +75,7 @@ session at launch; a change ships to all accounts or none. Migration 0037 conver
     subject-derived direction outside all five templates, and the skill carries the five-template forbid-list inline
     (the `frontend-design` plugin that held it is off on every account). Landed as `fix(visual-direction): the
     calibration example leaves the five generated-design templates`.
+  - *Dropped by operator ruling:* rank 21 (ms365 stays in the default set; it conflicts with the email-images rule).
 
 ## 1. Harness map and baseline
 
@@ -139,7 +140,7 @@ Savings are list $ per 14.96 days and % of the $32,517 fleet; **status** is what
 | 18 | `total_tokens_reminder` | vendor internal | ≤$263 (0.8%) | med | — | identified (`tengu_lapis_anchor`, a padded 15M countdown, likely an anti-early-stop signal): **keep** |
 | 19 | Two lines for recurring tool errors (`sleep N; cmd` refusal, Edit-after-Bash-read) | instructions | $104-138 | low | FLAG | **in the slim variant** |
 | 20 | WAKE FLOOR armed mechanically | Stop hook | $100 (0.3%) | low | FLAG | proposed · **landed 2026-09-24** (`0e29e7333`): the wake floor stands down when the Stop asyncRewake arm (mailbox-wake-arm) is registered, instead of blocking the model to arm a watcher |
-| 21 | ms365 scoped out of the user MCP config | MCP | ~$200 (0.6%) | med | FLAG | proposed (operator ruling: email-images rule) |
+| 21 | ms365 scoped out of the user MCP config | MCP | ~$200 (0.6%) | med | FLAG | proposed (operator ruling: email-images rule) · **dropped 2026-09-24 by operator ruling**: ms365 stays in the default MCP set, because the standing email-images rule has every mail read extract and look at the message's images, which needs the mail tools in any session |
 | 22 | Stop reason sent twice (upstream) | binary | $92 | low | PROPOSE | proposed · **filed upstream 2026-09-24**: anthropics/claude-code#96909 (re-verified on 2.1.280: both the meta message and the `hook_blocking_error` attachment carry the reason) |
 | 23 | Narrow allow rules for recurring denied shapes | permissions | $66-104 | low | PROPOSE | proposed (operator-owned) |
 | 24 | Recurring tool-error fixes in our code | hooks, skills | $72-87 | low | DIRECT | **partly done** (blocked delivery filename); `validate-bash.sh` narrowing proposed · **landed 2026-09-24** by the wave-2 hooks session: validate-bash deny rules match the command with heredoc bodies and quoted literals stripped, keeping a raw match for `sh -c`/`bash -c`/`eval` (`e200e35ed`, `6128f9279`, `2106cb885`); curl-gate judges an untokenisable command per curl segment instead of denying it whole (`edaaa897d`); a capacity refusal says how many refusals remain before it admits (`153d46b22`) |
