@@ -3864,6 +3864,40 @@ pid_is_cc() { # $1=pid → 0 live CC process / 1 not
   printf '%s' "$a0" | grep -E 'node|claude' >/dev/null
 }
 
+# ---- A BACKGROUNDED SESSION CANNOT BE RECYCLED (2026-09-25) ---------------------------------------
+# Claude Code 2.1.280 can background a session into its daemon (`/background`, or ← on an empty
+# composer): the conversation continues in a fork under `claude --bg-pty-host`, and the pane's TUI
+# becomes a VIEWER of it. In that state `/exit` does not end the session. The binary's own /exit
+# description reads "Detach from this background session (it keeps running)", and Ctrl+C says the
+# same. The viewer drops to the agents view, not to a shell. So the recycle contract ("/exit returns
+# this pane to a prompt, then we type the relaunch") fails both ways: no prompt ever appears, and if
+# one did, the relaunch would be a SECOND live copy beside the daemon's. Read out of the 2.1.280
+# binary (docs/research/bg-session-semantics-2026-09-25.md § Q3, 85 %) and measured on reso wt-pool-2, where window
+# 405 displayed bb4e00d0 while its worker 92384 ran under pty-host 92118 → daemon 91697 → the
+# pane's own client 76287.
+#
+# Until 2026-09-25 this could not be reached: the daemon strips KITTY_WINDOW_ID/ITERM_SESSION_ID, so
+# --recycle refused on the missing address. hooks/session-register.sh now restores that address by
+# lineage, so this refusal is what keeps restoring the address from turning a safe refusal into a
+# double copy. The oracle is argv[1] of the pid or its PARENT (`--bg-pty-host`), never a pattern
+# over the full argv: a fired session's argv carries its whole brief (memory
+# pgrep-f-matches-agent-briefs). Two hops, not a long walk: the worker's pty-host is its direct
+# parent (92384 → 92118), and a deeper walk from a test fixture's pid would climb into the RUNNER's
+# ancestry and convict every remote-recycle case run from inside a bg session.
+hf_bg_hosted() { # $1=pid → 0 iff pid runs under Claude Code's session daemon
+  local p="${1:-}" n=0 a1
+  case "$p" in ''|*[!0-9]*) return 1 ;; esac
+  while [ -n "$p" ] && [ "$p" != 0 ] && [ "$p" != 1 ] && [ "$n" -lt 2 ]; do
+    a1="$(ps -o args= -p "$p" 2>/dev/null | awk 'NR==1{print $2}' || true)"
+    [ "$a1" = "--bg-pty-host" ] && return 0
+    p="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d '[:space:]' || true)"; n=$((n + 1))
+  done
+  return 1
+}
+hf_bg_recycle_refusal() { # $1=pane $2=subject phrase
+  echo "!! --recycle REFUSED: $2 is BACKGROUNDED — Claude Code's session daemon hosts it, not pane $1. /exit there only DETACHES the viewer: the session keeps running, the pane falls back to the agents view instead of a shell, and a relaunch would be a second live copy. Continue with a handoff (Skill handoff → handoff-fire.sh --split-right), or end it with /stop first. Nothing was typed." >&2
+}
+
 # ---- PANE PROCESS STATE — THREE-VALUED, and the shell verdict is POSITIVE (2026-08-06) ----------
 # THE INCIDENT THIS EXISTS TO PREVENT: `--recycle` typed a shell command into a LIVE Claude Code
 # composer (2026-08-06, memory reference-recycle-probe-types-into-live-composer). The probe it
@@ -10067,6 +10101,14 @@ if [ "$RECYCLE" = 1 ]; then
   else
     SID="${SESSION_ID:-$(self_pane_id)}"
     [ -n "$SID" ] || { echo "!! --recycle needs \$ITERM_SESSION_ID, \$KITTY_WINDOW_ID (in a genuine kitty pane) or --session-id" >&2; exit 1; }
+    # The env mark, not hf_bg_hosted "$$": the mark is the daemon's own statement about this session
+    # and a test can scrub it (bin/cc-bats does), where our own ancestry is the runner's and cannot be.
+    if [ "${CLAUDE_CODE_SESSION_KIND:-}" = bg ]; then
+      hf_bg_recycle_refusal "$SID" "this session"; exit 2
+    fi
+  fi
+  if [ "$RCY_REMOTE" = 1 ] && hf_bg_hosted "${HF_REMOTE_ROW_PID:-}"; then
+    hf_bg_recycle_refusal "$SID" "the session in pane $SID (pid $HF_REMOTE_ROW_PID)"; exit 2
   fi
   # SAME SELF-IDENTITY GATE AS self-close, and needed MORE here (item 71909cbeee08). Recycle does not
   # merely close the pane it names: it types /exit AND a launcher command into it. A stale id

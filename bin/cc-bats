@@ -381,6 +381,15 @@ if [ -z "$REAL_BATS" ] || [ ! -x "$REAL_BATS" ]; then
   exit 127
 fi
 
+# ── a test run is never a BACKGROUNDED session (2026-09-25) ────────────────────────────────────
+# Claude Code 2.1.280 marks a session it backgrounded into its daemon with CLAUDE_CODE_SESSION_KIND=bg,
+# and every process it starts inherits the mark. scripts/handoff-fire.sh --recycle refuses a bg session
+# on that mark (/exit only detaches one), so a suite launched from inside a backgrounded session —
+# including the land gate a bg session's /ship runs — would read the RUNNER's state, not the subject's,
+# and every recycle case would refuse. Cleared here, before any exec path, like the other ambient
+# identity a suite must not inherit; tests/handoff-recycle-bg-session.bats sets it explicitly.
+unset CLAUDE_CODE_SESSION_KIND
+
 # ── kill switch ───────────────────────────────────────────────────────────────────────────────
 if [ "${CC_BATS_QOS:-on}" = "off" ]; then
   exec "$REAL_BATS" "$@"

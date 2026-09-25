@@ -772,3 +772,62 @@ PS
   run _w9b_harness /dev/ttys042 6001
   [ "$status" -eq 1 ] || { echo "$output"; false; }
 }
+
+# ══ R3 through successor_pin, for the THIRD nested shape: a daemon-hosted (backgrounded) session ══
+# (LIMIT_DETECT_100P § 8 R3; 2026-09-25, reso wt-pool-2.) Claude Code 2.1.280 backgrounds a session
+# into its daemon: the fork runs on the bg-pty-host's pty, its next two ancestors have NO tty at all
+# (`??`), and the pane's own tty is reached only above the pane's client and its expect wrapper.
+# Measured: 92384 ttys019 → 92118 ?? → 91697 ?? → 76287 ttys008 → 76180 ttys008 → 76165 ttys005.
+# This drives successor_pin end to end — registry row → sid + pid → ancestry — which the two W9b
+# units above do not, and it is GREEN on the W9b tree: it ratifies that R3's fix already reaches the
+# bg shape rather than proving a new one.
+_r3_bg_harness() { # $1 = pinned pid → rc of successor_pin against pane 405 on ttys005
+  local stub="$BATS_TEST_TMPDIR/bin"; mkdir -p "$stub" "$BATS_TEST_TMPDIR/reg"
+  cat > "$BATS_TEST_TMPDIR/pstable" <<'TABLE'
+92384 92118 ttys019 /Users/x/.claude-280/node_modules/@anthropic-ai/claude-code/bin/claude.exe
+92118 91697 ?? /Users/x/.claude-280/node_modules/@anthropic-ai/claude-code/bin/claude.exe
+91697 76287 ?? /Users/x/.claude-280/node_modules/@anthropic-ai/claude-code/bin/claude.exe
+76287 76180 ttys008 /Users/x/.claude-280/node_modules/.bin/claude
+76180 76165 ttys008 bash
+76165 72389 ttys005 expect
+72389 1 ttys005 /bin/bash
+7001 1 ttys099 /Users/x/.claude-280/node_modules/.bin/claude
+TABLE
+  cat > "$stub/ps" <<'PS'
+#!/usr/bin/env bash
+field=""; pid=""
+while [ $# -gt 0 ]; do
+  case "$1" in -o) field="$2"; shift 2 ;; -p) pid="$2"; shift 2 ;; *) shift ;; esac
+done
+row="$(awk -v p="$pid" '$1 == p { print; exit }' "$PSTABLE")"
+[ -n "$row" ] || exit 1
+set -- $row
+case "$field" in
+  tty=)  printf '%s\n' "$3" ;;
+  ppid=) printf '%s\n' "$2" ;;
+  comm=|args=) printf '%s\n' "$4" ;;
+  *) echo "ps stub: unhandled -o '$field'" >&2; exit 64 ;;
+esac
+PS
+  chmod +x "$stub/ps"
+  export PSTABLE="$BATS_TEST_TMPDIR/pstable" CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg"
+  printf '{"paneUUID":"405","pid":%s,"session_id":"bb4e00d0-47a8-4f4a-b42d-1aef86ae49e6"}' "$1" \
+    > "$CC_REGISTRY_DIR/405.json"
+  PATH="$stub:$PATH"
+  sed -n '/^successor_pin() {/,/^}/p;/^pin_still_live() {/,/^}/p;/^pid_is_cc() {/,/^}/p' "$HF" \
+    > "$BATS_TEST_TMPDIR/subject.sh"
+  # shellcheck disable=SC1091
+  . "$BATS_TEST_TMPDIR/subject.sh"
+  successor_pin 405 /dev/ttys005
+}
+
+@test "successor_pin: a backgrounded (daemon-hosted) successor is PINNED LIVE through tty-less hops" {
+  run _r3_bg_harness 92384
+  [ "$status" -eq 0 ] || { echo "rc=$status $output"; false; }
+  [ "$output" = "bb4e00d0-47a8-4f4a-b42d-1aef86ae49e6 92384" ]
+}
+
+@test "successor_pin: a registry-bound pid with no ancestor on the pane tty is still PINNED DEAD" {
+  run _r3_bg_harness 7001
+  [ "$status" -eq 1 ] || { echo "rc=$status $output"; false; }
+}

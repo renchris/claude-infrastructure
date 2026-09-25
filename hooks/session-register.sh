@@ -93,6 +93,45 @@ pid_is_strict_ancestor() {
   return 1
 }
 
+# bg_fork_parent_sid → the session a daemon-hosted fork continues, read off OUR OWN argv, else "".
+# Both flags are required: `--resume` alone is an ordinary resume of the SAME sid (whose row, if any,
+# the env path already handles), and only `--fork-session` makes the argv a statement of lineage. The
+# value is a transcript path or a bare sid; either way the sid is its basename minus `.jsonl`.
+# `read -a`, never `for t in $args`: the argv carries a --settings JSON blob, and an unquoted
+# expansion would glob its `*`s against the hook's cwd.
+bg_fork_parent_sid() {
+  local args t prev="" fork=0 val="" toks
+  args="$(ps -o args= -p "$CPID" 2>/dev/null)" || return 0
+  read -r -a toks <<<"$args" || true
+  for t in "${toks[@]}"; do
+    case "$prev" in --resume) val="$t" ;; esac
+    case "$t" in --fork-session) fork=1 ;; --resume=*) val="${t#--resume=}" ;; esac
+    prev="$t"
+  done
+  [ "$fork" = 1 ] && [ -n "$val" ] || return 0
+  val="${val##*/}"; val="${val%.jsonl}"
+  case "$val" in ''|*[!A-Za-z0-9-]*) return 0 ;; esac
+  printf '%s' "$val"
+}
+
+# bg_fork_pane <parent-sid> → the pane whose row names <parent-sid>, iff EXACTLY ONE row does, else "".
+# Zero rows means the parent was never addressable either, and there is nothing to continue. Two rows
+# means the store disagrees with itself, and guessing between two live panes is how /exit gets typed
+# into a stranger's composer, so it abstains. A cheap fixed-string prefilter over the store, then jq on
+# the survivors only — the hook runs under a wall-clock cap on every session start.
+bg_fork_pane() {
+  local psid="${1:-}" dir="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}" f hit="" n=0 p
+  [ -n "$psid" ] && [ -d "$dir" ] || return 0
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    p="$(jq -r --arg s "$psid" 'select(.session_id == $s) | .paneUUID // empty' "$f" 2>/dev/null)"
+    [ -n "$p" ] || continue
+    hit="$p"; n=$((n + 1))
+  done < <(grep -lF -- "$psid" "$dir"/*.json 2>/dev/null)
+  [ "$n" = 1 ] && printf '%s' "$hit"
+  return 0
+}
+
 register() {
 command -v jq >/dev/null 2>&1 || return 0
 
@@ -132,6 +171,21 @@ command -v jq >/dev/null 2>&1 || return 0
 # unchanged, so an inherited KITTY_WINDOW_ID in a nested `claude -p` is refused exactly as an
 # inherited CC_PANE_ID is.
 pane="${CC_PANE_ID:-${ITERM_SESSION_ID:-${KITTY_WINDOW_ID:-}}}"; pane="${pane##*:}"
+# THE FOURTH ADDRESS IS NOT IN THE ENVIRONMENT AT ALL: A BACKGROUNDED SESSION (2026-09-25).
+# Claude Code 2.1.280 can background a running session into its daemon: the pane's TUI keeps
+# DISPLAYING the conversation, but the process carrying it is a fork the daemon starts as
+# `claude --session-id <new> --fork-session --resume <parent>.jsonl` with CLAUDE_CODE_SESSION_KIND=bg
+# and with KITTY_WINDOW_ID / ITERM_SESSION_ID stripped. Measured on reso wt-pool-2: window 405 showed
+# bb4e00d0 while its row still named the parent e44c8e8c, so --recycle refused and --notify-back was
+# deaf — the third "recovered session has no address" report, and the first whose cause was not ours.
+# The address is recoverable by LINEAGE: the parent is on our own argv, and the one row naming the
+# parent is the pane we continue. See bg_fork_pane below for what it refuses.
+via=env bg_parent=""
+if [ -z "$pane" ] && [ "${CLAUDE_CODE_SESSION_KIND:-}" = bg ]; then
+  bg_parent="$(bg_fork_parent_sid)"
+  [ -n "$bg_parent" ] && pane="$(bg_fork_pane "$bg_parent")"
+  [ -n "$pane" ] && via=bg-fork
+fi
 case "$pane" in
   ''|.|..) return 0 ;;
   .*) return 0 ;;
@@ -208,7 +262,13 @@ mkdir -p "$reg_dir" 2>/dev/null || return 0
 # skipping it here would reopen the 2026-08-08 dead-pid-corpse hazard on precisely the sessions that
 # have no pane to be re-addressed through.
 row="$reg_dir/$pane.json"
-if [ -f "$row" ]; then
+# A bg fork is EXEMPT, and only because its address was never inherited: the gate's premise is "this
+# id reached me through the environment of the process that owns the pane", and a bg fork has no such
+# id — the daemon stripped it. The live ancestor holding the row is the pane's client, which the fork
+# CONTINUES (its `continued-in` record names us); refusing here is exactly the no-row outcome above.
+if [ "$via" = bg-fork ]; then
+  reclaim_idl adopted "bg fork of ${bg_parent} adopts pane $pane (daemon-hosted continuation; address by lineage)"
+elif [ -f "$row" ]; then
   inc=$(jq -r '.pid // empty' "$row" 2>/dev/null)
   case "$inc" in ''|*[!0-9]*) inc="" ;; esac
   if [ -n "$inc" ] && [ "$inc" != "$cpid" ] && kill -0 "$inc" 2>/dev/null \
@@ -297,6 +357,24 @@ if jq -n --arg paneUUID "$pane" --arg name "$name" --arg cwd "$cwd" \
   mv -f "$tmp" "$reg_dir/$pane.json" 2>/dev/null || rm -f "$tmp" 2>/dev/null
 else
   rm -f "$tmp" 2>/dev/null
+fi
+# The row makes the fork ADDRESSABLE; the environment is what lets it address ITSELF. Every recipe
+# that names "my pane" reads it from env — `handoff-fire.sh --recycle`, `--notify-back
+# "${ITERM_SESSION_ID##*:}"`, `cc-await-ping` — and a hook cannot change its session's environment,
+# but CLAUDE_ENV_FILE is sourced before every later Bash tool call. Only the spellings the parent pane
+# would have carried: ITERM_SESSION_ID in the synthesised kitty form (~/.zshrc, scripts/kitty-setup.sh),
+# KITTY_WINDOW_ID only for a numeric id under a kitty that is still in our env, CC_PANE_ID for `hdl-`.
+if [ "$via" = bg-fork ] && [ -n "${CLAUDE_ENV_FILE:-}" ]; then
+  {
+    case "$pane" in
+      hdl-*) printf 'export CC_PANE_ID=%s\n' "$pane" ;;
+      *)     printf 'export ITERM_SESSION_ID=w0t0p0:%s\n' "$pane"
+             case "$pane" in
+               *[!0-9]*) ;;
+               *) [ -n "${KITTY_PID:-}" ] && printf 'export KITTY_WINDOW_ID=%s\n' "$pane" ;;
+             esac ;;
+    esac
+  } >> "$CLAUDE_ENV_FILE" 2>/dev/null || true
 fi
 return 0
 }

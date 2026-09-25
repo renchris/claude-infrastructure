@@ -88,6 +88,23 @@ own_sid="$(printf '%s' "$_stdin_json" | jq -r '.session_id // empty' 2>/dev/null
 case "$own_sid" in *[!0-9A-Fa-f-]*) own_sid="" ;; esac
 own_tp="$(printf '%s' "$_stdin_json" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
 
+# NO ADDRESS IN ENV ⇒ ASK THE REGISTRY WHICH PANE NAMES MY SESSION (2026-09-25). A session Claude Code
+# backgrounded into its daemon runs with KITTY_WINDOW_ID / ITERM_SESSION_ID stripped while its pane
+# goes on displaying it; hooks/session-register.sh adopts that pane by lineage and writes the row, but
+# a hook cannot hand its session an environment, so this hook would exit below and every
+# `--notify-back` to that pane would be written and never read. The row is keyed by pane and names
+# exactly one session; exactly-one is required, as the registrar requires it.
+if [ -z "$own_pane" ] && [ -n "$own_sid" ]; then
+  _rg_dir="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}" _rg_n=0 _rg_hit=""
+  while IFS= read -r _rg_f; do
+    [ -n "$_rg_f" ] || continue
+    _rg_p="$(jq -r --arg s "$own_sid" 'select(.session_id == $s) | .paneUUID // empty' "$_rg_f" 2>/dev/null || true)"
+    [ -n "$_rg_p" ] || continue
+    _rg_hit="$_rg_p"; _rg_n=$((_rg_n + 1))
+  done < <(grep -lF -- "$own_sid" "$_rg_dir"/*.json 2>/dev/null || true)
+  [ "$_rg_n" = 1 ] && own_pane="$_rg_hit"
+fi
+
 # AN ADDRESS IS STILL REQUIRED — it is how this hook knows WHICH container it is in, and the alias
 # trail is keyed on it. A missing/path-unsafe address is the one unrecoverable case (exit 0, as
 # before). What is NOT required is that the address be hex-shaped: this gate refused
