@@ -612,3 +612,95 @@ LOOP_TASK='[{"id":"b9","type":"shell","status":"running","command":"while pgrep 
   run bash -c "printf '{\"session_id\":\"sid-crumb3\",\"hook_event_name\":\"Stop\",\"background_tasks\":[]}' | CC_GOAL_INERT_DIR='$CC_GOAL_INERT_DIR' '$H'"
   [ -f "$CC_GOAL_INERT_DIR/sid-crumb3.json" ] || false
 }
+
+# ══ EMPTY-STREAK (token-efficiency rank 13) ═══════════════════════════════════════════════════════
+# The goal IS evaluating, keeps judging unmet, and each forced turn does nothing. After 3 in a row the
+# operator gets ONE notice recommending `/goal clear`.
+
+# goal_turn <kind> [goal:yes|no] — append one turn to $D/t.jsonl. kind: idle | read | edit | commit.
+# goal=yes: the turn is opened by the evaluator's feedback and its unmet goal_status (the real
+# shape: "Stop hook feedback:\n[<condition>]…" then the attachment). goal=no: a human prompt.
+goal_turn() {
+  local tu
+  if [ "${2:-yes}" = yes ]; then
+    jq -nc '{type:"user",isMeta:true,message:{role:"user",content:"Stop hook feedback:\n[land every leg of the migration] not yet: the land has not happened"}}' >> "$D/t.jsonl"
+    jq -nc '{type:"attachment",attachment:{type:"goal_status",met:false,condition:"land every leg of the migration",reason:"not yet"}}' >> "$D/t.jsonl"
+  else
+    jq -nc '{type:"user",message:{role:"user",content:"anything new?"}}' >> "$D/t.jsonl"
+  fi
+  case "$1" in
+    idle)   tu='[{"type":"text","text":"Still waiting on the lander."}]' ;;
+    read)   tu='[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"git status && git log --oneline -3"}}]' ;;
+    edit)   tu='[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"/x/a.sh","old_string":"a","new_string":"b"}}]' ;;
+    commit) tu='[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"git commit -qm fix"}}]' ;;
+  esac
+  jq -nc --argjson c "$tu" '{type:"assistant",message:{role:"assistant",content:$c}}' >> "$D/t.jsonl"
+  [ "$1" = idle ] || jq -nc '{type:"user",message:{role:"user",content:[{type:"tool_result",tool_use_id:"t1",content:"ok"}]}}' >> "$D/t.jsonl"
+}
+# an armed goal that has already been evaluated once, then the given turns
+mk_goal_turns() { mk_armed >/dev/null; for k in "$@"; do goal_turn "$k"; done; printf '%s' "$D/t.jsonl"; }
+empty_run() { # <transcript> <sid> → hook output
+  printf '%s' "$(payload "$1" '[]' "$2")" | CC_GOAL_INERT_DIR="$D/crumbs" "$H"
+}
+
+@test "EMPTY-STREAK FIRES: 3 goal-forced turns in a row that wrote nothing ⇒ one /goal clear notice" {
+  t="$(mk_goal_turns idle read idle)"
+  run empty_run "$t" es-1
+  [ "$status" -eq 0 ]
+  m="$(printf '%s' "$output" | jq -r '.systemMessage')"
+  printf '%s' "$m" | grep -q 'forced 3 turns in a row that did nothing'
+  printf '%s' "$m" | grep -q '/goal clear'
+  [ "$(printf '%s' "$output" | jq -r 'keys | join(",")')" = systemMessage ]   # never a block
+}
+
+@test "EMPTY-STREAK SILENT: 2 empty goal-forced turns is below the threshold" {
+  t="$(mk_goal_turns idle read)"
+  run empty_run "$t" es-2
+  [ -z "$output" ]
+}
+
+@test "EMPTY-STREAK SILENT: the newest goal-forced turn did work (Edit, or a commit)" {
+  t="$(mk_goal_turns idle idle idle edit)"
+  run empty_run "$t" es-3a
+  [ -z "$output" ]
+  t="$(mk_goal_turns idle idle idle commit)"
+  run empty_run "$t" es-3b
+  [ -z "$output" ]
+}
+
+@test "EMPTY-STREAK SILENT: a working turn inside the window breaks the streak" {
+  t="$(mk_goal_turns idle edit idle idle)"
+  run empty_run "$t" es-4
+  [ -z "$output" ]
+}
+
+@test "EMPTY-STREAK SILENT: empty turns opened by the HUMAN are not goal-forced" {
+  mk_armed >/dev/null
+  goal_turn idle no; goal_turn idle no; goal_turn idle no
+  run empty_run "$D/t.jsonl" es-5
+  # Three human turns with no evaluation DO trip the never-evaluated arm (correctly); what must
+  # not appear is the empty-streak notice, because none of these turns was forced by the goal.
+  ! printf '%s' "$output" | grep -q 'did nothing' || false
+}
+
+@test "EMPTY-STREAK ONCE PER STREAK: silent while it continues, fires again after a break" {
+  t="$(mk_goal_turns idle idle idle)"
+  run empty_run "$t" es-6
+  [ -n "$output" ]
+  goal_turn idle
+  run empty_run "$t" es-6
+  [ -z "$output" ]                          # same streak, 4 long: no repeat
+  goal_turn edit
+  run empty_run "$t" es-6
+  [ -z "$output" ]                          # streak broken: crumb cleared
+  goal_turn idle; goal_turn idle; goal_turn idle
+  run empty_run "$t" es-6
+  [ -n "$output" ]                          # a new streak: one new notice
+}
+
+@test "EMPTY-STREAK: CC_GOAL_EMPTY_NOTICE=0 silences it" {
+  t="$(mk_goal_turns idle idle idle)"
+  export CC_GOAL_EMPTY_NOTICE=0
+  run empty_run "$t" es-7
+  [ -z "$output" ]
+}
