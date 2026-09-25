@@ -33,7 +33,7 @@ def build(cut):
     E.append(dict(frm=0, to=5.0, cam='poster', drift='posterIn' if cut == 'film' else None, poster=True))
     typ.append(("thought", None, None, 5.0, R(5.0 + 0.13 * T1)))
     s0, s1, _, _ = flight_edges(5.0, T1)
-    story += [(s0, 'S.start'), (R(s0 + 0.4), 'S.clear')]
+    story += [(s0, 'S.start'), (R(s0 + 0.9), 'S.clear')]  # the card and scrollback fade, not cut
     E.append(dict(frm=5.0, to=R(5.0 + T1), fly="{ hop: 0.3 }"))
     a = R(5.0 + T1)
     b = window_scene(a, story, typ)
@@ -42,14 +42,16 @@ def build(cut):
     if cut == 'loop':
         T2 = 4.4
         m0, m1, _, _ = flight_edges(b, T2)
-        story += [(m0, 'S.card[1]'), (m1, 'S.stale[1]')]
+        # The racks turn amber by 60 % of the flight, while still distant, not as the camera settles.
+        story += [(m0, 'S.card[1]'), (R(b + 0.6 * T2), 'S.stale[1]')]
         E.append(dict(frm=b, to=R(b + T2), fly="{ hop: 0.9, viaAt: [0, 4, 0] }", note="After the peer's commit: up off the window, over its line and the gate, down origin/main."))
         c = R(b + T2)
     else:
-        T2 = 4.2
+        T2 = 4.6
         m0, m1, _, _ = flight_edges(b, T2)
         story += [(m0, 'S.card[1]'), (m1, '4.9')]
-        E.append(dict(frm=b, to=R(b + T2), fly="{ hop: 0.3 }"))
+        # Pulled out and lifted, so the near fleet panes pass below the lens (critique round 3, m9).
+        E.append(dict(frm=b, to=R(b + T2), fly="{ hop: 0.5, rise: 0.25 }"))
         g = R(b + T2)
         story += [(R(g + 4.1), '4.9'), (R(g + 8.5), 'S.stale[0]')]
         typ.append(("gate", R(g - 0.13 * T2), R(g + 0.1), R(g + 8.6), R(g + 9.1)))
