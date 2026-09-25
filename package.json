@@ -7,7 +7,12 @@
     "diagrams": "node scripts/render-diagrams.mjs",
     "diagrams:check": "node scripts/render-diagrams.mjs --check",
     "timeline": "python3 tools/timeline/gen.py",
-    "timeline:check": "python3 tools/timeline/gen.py --check"
+    "timeline:check": "python3 tools/timeline/gen.py --check",
+    "hero:review": "bash scripts/hero-film-render.sh review",
+    "hero:loop": "bash scripts/hero-film-render.sh loop",
+    "hero:film": "bash scripts/hero-film-render.sh film",
+    "hero:seam": "bash scripts/hero-film-render.sh seam",
+    "hero:verify": "bash scripts/hero-film-render.sh verify"
   },
   "devDependencies": {
     "beautiful-mermaid": "1.1.3"
