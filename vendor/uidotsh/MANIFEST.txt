@@ -2,6 +2,9 @@
 # captured: 2026-09-21T04:11:38Z from https://ui.sh/mcp (MCP) + https://assets.ui.sh (HTTP)
 # SCOPE: the VENDOR-CAPTURED files only. README.md, VISUAL-KIT.md and MANIFEST.txt are
 # authored locally, are deliberately NOT listed, and are NOT covered by a -c check.
+# LOCAL EDIT 2026-09-24: ui/ideas.md's "Good" calibration example (warm stone neutrals + terracotta
+# accent, the most common generated-design template) was replaced; the vendor capture was
+# b5053f87caf258997c76c8154fd72f1a472e04124e407ea4f9e6b0f7149da495 10209. Its row lists the edited file.
 # sha256  size  path
 d98ebb2be4c7052a69123bb48d561c1aca2b2a960720aac882ccc34cacf9a9ba  3858  add-dark-mode.md
 bf4f673c85e866792ab944fbece15ca4465b44bbc465c35b6997919c9456eb76  171050  assets/avatars/1.webp
@@ -193,5 +196,5 @@ f8f41cf9f6319d6116dab83c393ffb5622b8ab5bfb3fd36ae967d647d99aef60  2233  ui/desig
 b635289793a4b03a5db6110afb389e6753d6ececee32b0537b8f8ae3d1c586e7  794  ui/design-guidelines/testimonials.md
 4808cc9d0ba1011ca2fa48d51b0e45a03d4337f6218fc73666fb9e56d07323ef  1333  ui/design-guidelines/typography.md
 5b1b24ab5c52162b0384f029249b38cbb0de61710d925398674edcfadb9ebfb1  836  ui/finalize.md
-b5053f87caf258997c76c8154fd72f1a472e04124e407ea4f9e6b0f7149da495  10209  ui/ideas.md
+b2c1ac87c58fc8a873bec9073ce7f991baf77ce17440bbb24e71eeabdd99a612  10727  ui/ideas.md
 b4f9106ead87faabf5ccb1206e23cfbfb423ab04c6a32e57ef9cd0cda5b8e154  967  ui/make-responsive.md

@@ -59,7 +59,7 @@ Suggested phase updates:
    **New designs (no existing aesthetic):** Write a style definition for each option covering:
    - Layout — grid vs asymmetric, content arrangement, visual emphasis
    - Typography — font character (geometric sans, humanist, serif, mono), scale contrast, weight strategy, tracking
-   - Color — warm vs cool, muted vs saturated, specific palette direction (e.g. "warm stone neutrals with terracotta accent")
+   - Color — warm vs cool, muted vs saturated, specific palette direction taken from the subject (e.g. "chart-paper blue-white with three depth-sounding blues and one buoy-red accent"); never cream and terracotta, near-black with one acid accent, broadsheet hairlines, the SaaS card kit, or ALL-CAPS eyebrow chrome unless the brief asks for it (the full list is in skills/visual-direction/SKILL.md step 1)
    - Spacing — airy vs compact, rhythm, whitespace strategy
    - Surfaces — flat vs layered, cards vs open, border/shadow approach
    - Shape — border radius (sharp vs soft vs pill), button style
@@ -67,7 +67,9 @@ Suggested phase updates:
 
    Bad: "Minimal and clean — a simple layout with plenty of whitespace"
 
-   Good: "Editorial and asymmetric — oversized serif headline (DM Serif Display, ~72px) with dramatic scale contrast against small body text. Warm stone neutrals with a single saturated terracotta accent on the CTA only. Generous whitespace, 120px+ between sections. No cards, no borders, no shadows — hierarchy through type scale and weight alone. Pill-shaped buttons with subtle letter-spacing. High-end magazine spread, not a tech product."
+   Good: "Sea chart, for a sailing school — a chart-paper blue-white ground (#EEF4F7) and three depth-sounding blues (#BFD7E6, #6FA3C7, #1D4E73) as the only surface colours, with buoy red (#C8102E) kept for the booking button. One humanist sans (Fira Sans) in sentence case throughout, headings large and light. The course schedule is plotted along a horizontal tide-time axis instead of stacked in cards; photos run full-bleed with a soft 16px radius. No shadows: depth comes from the blue steps."
+
+   (Local edit, 2026-09-24: the vendor's original "Good" example was warm stone neutrals with a terracotta accent, the most common generated-design template; replaced in this mirror.)
 
    **Adding to an existing design:** Match the existing aesthetic — vary layout, content structure, and component choices, not the style.
 
