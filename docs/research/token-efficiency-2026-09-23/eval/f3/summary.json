@@ -1,0 +1,71 @@
+{
+ "title": "F3 rules split (situational lessons excluded)",
+ "verdict": "INCONCLUSIVE",
+ "n": {
+  "exclude": 32,
+  "control": 32
+ },
+ "margin_pp": 5.0,
+ "primary": {
+  "t": 0.853865725,
+  "c": 1.07908134375,
+  "pct": -20.871051107911434,
+  "p": 0.0078125,
+  "units": 8
+ },
+ "meter": {
+  "t": 83337.75,
+  "c": 107341.3125,
+  "pct": -22.361905161165232,
+  "p": 0.0078125,
+  "units": 8
+ },
+ "significant_harms": [],
+ "ci_misses": [
+  {
+   "name": "Success",
+   "lo": -0.10717919825507072,
+   "p1": 1.0,
+   "p0": 1.0
+  },
+  {
+   "name": "Compliance",
+   "lo": -0.09413779817297001,
+   "p1": 0.9453125,
+   "p0": 0.984375
+  }
+ ],
+ "n_needed_per_arm": {
+  "Success": 4,
+  "Compliance": 2154
+ },
+ "success": [
+  {
+   "exclude": 32,
+   "control": 32
+  },
+  {
+   "exclude": 32,
+   "control": 32
+  }
+ ],
+ "compliance": {
+  "exclude": [
+   121,
+   128
+  ],
+  "control": [
+   126,
+   128
+  ]
+ },
+ "ci_success": [
+  -0.10717919825507072,
+  0.10717919825507072
+ ],
+ "ci_compliance": [
+  -0.09413779817297001,
+  0.009370203735951363
+ ],
+ "items_tested": 32
+}

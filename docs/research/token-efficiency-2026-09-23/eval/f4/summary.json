@@ -1,0 +1,71 @@
+{
+ "title": "F4 compact mission board",
+ "verdict": "INCONCLUSIVE",
+ "n": {
+  "compactboard": 23,
+  "full": 23
+ },
+ "margin_pp": 5.0,
+ "primary": {
+  "t": 0.5999979714285715,
+  "c": 0.6422013485714285,
+  "pct": -6.571673702762864,
+  "p": 0.03125,
+  "units": 7
+ },
+ "meter": {
+  "t": 64591.15238095238,
+  "c": 68962.81904761905,
+  "pct": -6.339164678938112,
+  "p": 0.015625,
+  "units": 7
+ },
+ "significant_harms": [],
+ "ci_misses": [
+  {
+   "name": "Success",
+   "lo": -0.2584822220254173,
+   "p1": 0.8260869565217391,
+   "p0": 0.8695652173913043
+  },
+  {
+   "name": "Compliance",
+   "lo": -0.061686839962327045,
+   "p1": 0.9423076923076923,
+   "p0": 0.9326923076923077
+  }
+ ],
+ "n_needed_per_arm": {
+  "Success": 23220,
+  "Compliance": 127
+ },
+ "success": [
+  {
+   "compactboard": 19,
+   "full": 20
+  },
+  {
+   "compactboard": 23,
+   "full": 23
+  }
+ ],
+ "compliance": {
+  "compactboard": [
+   98,
+   104
+  ],
+  "full": [
+   97,
+   104
+  ]
+ },
+ "ci_success": [
+  -0.2584822220254173,
+  0.17392056741375503
+ ],
+ "ci_compliance": [
+  -0.061686839962327045,
+  0.081758733552935
+ ],
+ "items_tested": 32
+}

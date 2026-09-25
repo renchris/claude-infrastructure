@@ -1,0 +1,24 @@
+== .claude-tertiary full: | Memory files | 48.7k | 4.9% |
+| Project | <fx>/.claude/CLAUDE.md | 40.8k |
+| Project | <fx>/.claude/rules/00-mission-board.md | 5.5k |
+| Project | <fx>/.claude/rules/agent-operating-lessons.md | 2.4k |
+== .claude-tertiary compactboard: | Memory files | 44.2k | 4.4% |
+| Project | <fx>/.claude/CLAUDE.md | 40.8k |
+| Project | <fx>/.claude/rules/00-mission-board.md | 961 |
+| Project | <fx>/.claude/rules/agent-operating-lessons.md | 2.4k |
+== .claude-quaternary full: | Memory files | 48.7k | 4.9% |
+| Project | <fx>/.claude/CLAUDE.md | 40.8k |
+| Project | <fx>/.claude/rules/00-mission-board.md | 5.5k |
+| Project | <fx>/.claude/rules/agent-operating-lessons.md | 2.4k |
+== .claude-quaternary compactboard: | Memory files | 44.2k | 4.4% |
+| Project | <fx>/.claude/CLAUDE.md | 40.8k |
+| Project | <fx>/.claude/rules/00-mission-board.md | 961 |
+| Project | <fx>/.claude/rules/agent-operating-lessons.md | 2.4k |
+== .claude-next full: | Memory files | 48.7k | 4.9% |
+| Project | <fx>/.claude/CLAUDE.md | 40.8k |
+| Project | <fx>/.claude/rules/00-mission-board.md | 5.5k |
+| Project | <fx>/.claude/rules/agent-operating-lessons.md | 2.4k |
+== .claude-next compactboard: | Memory files | 44.2k | 4.4% |
+| Project | <fx>/.claude/CLAUDE.md | 40.8k |
+| Project | <fx>/.claude/rules/00-mission-board.md | 961 |
+| Project | <fx>/.claude/rules/agent-operating-lessons.md | 2.4k |
