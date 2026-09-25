@@ -19,7 +19,8 @@ the app's version, and they are the reason this is not a worse copy:
 
 **What does not carry, stated honestly, because the first version of this line undersold it.** Three
 of the gaps really are state: the `~/.rlm-wiki` store, per-page concurrency (here, fan the page pass
-out to subagents instead), and the multi-repo namespace (`repoId:path`) — do that one by hand if you
+out to `workflow-lean` subagents instead, each brief naming its page file, the style lens and this
+SKILL.md's path for the citation and diagram rules), and the multi-repo namespace (`repoId:path`) — do that one by hand if you
 span repos. But the largest gap was never state at all: it is the **style table below**, 15 named
 lenses and ~12.6K chars of prompt in the app's `wikiStyleGuidance` alone, of which this skill
 originally carried exactly one — and not even the CLI's default. It is carried now.

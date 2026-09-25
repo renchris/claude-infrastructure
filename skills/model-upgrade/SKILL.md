@@ -22,7 +22,7 @@ pandoc -f html -t plain --wrap=none page.html -o page.txt    # each vendor page
 ```
 
 The per-effort evidence the effort policy needs lives in CHARTS with no data labels, so read the
-native figures with vision. Then fan out page-range readers that extract page-cited facts, with a
+native figures with vision. Then fan out `workflow-lean` page-range readers (the brief names the range, its text and figure files, and the output file) that extract page-cited facts, with a
 second reader per range re-checking each fact at its page. Opus 5.5 run: 462 extracted, 8
 corrected, 0 unsupported, 158 added — `docs/research/opus55-utilization-2026-09-22/`.
 **Do not OCR a born-digital card.** Measured on the Opus 5.5 card (`…/mistral-ocr-eval.md`):

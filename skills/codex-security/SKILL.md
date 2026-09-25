@@ -89,7 +89,7 @@ they are the only adaptations required.
 | `open_codex_security_workspace`, `await_codex_security_scan_start`, `get_codex_security_scan_context`, `start_codex_security_deep_scan`, `complete_codex_security_scan`, and every other `*_codex_security_*` MCP tool | **Unavailable by construction.** Take the documented prompt-only path. The skills already branch on this — "In Codex CLI or when those tools are unavailable, use the prompt-only path." |
 | "In the Codex desktop app…" / setup workspace / **Continue in Codex** / "press Start scan" | Skip entirely. You are never the app host. |
 | `complete_codex_security_scan` for sealing | Run the finalizer directly (see below) |
-| Codex subagent fan-out, workers, per-candidate agents | Claude `Agent` subagents — `Explore` for read-only file sweeps, `general-purpose` for candidate work. One subagent per shard/candidate, same phase boundaries |
+| Codex subagent fan-out, workers, per-candidate agents | Claude `Agent` subagents — `workflow-lean` for file sweeps and for candidate validation, attack-path and write-up work (it has Write for the scan artifacts, which `Explore` lacks; name the artifact dirs in the brief), `general-purpose` only for the fix-finding remediation stage, which edits code. One subagent per shard/candidate, same phase boundaries |
 | `<python_command>` | `python3` |
 | `<plugin_dir>` | the `$plugin_dir` you resolved above — never a hardcoded `vendor/…` path |
 | `fail_codex_security_scan` | No terminal-fail tool exists. Record progress and leave the bundle resumable — never discard a scan because work remains |

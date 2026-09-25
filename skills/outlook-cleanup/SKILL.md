@@ -117,7 +117,7 @@ Workflow:
 5. After all waves done, concatenate `out-*.jsonl` into `classifications.jsonl`
 6. Verify: `wc -l classifications.jsonl` equals `wc -l messages.jsonl`
 
-Use the Agent tool with `subagent_type: general-purpose`, `model: sonnet`, `run_in_background: true`. Spawn all 10 in one message (parallel). Wait for all task notifications. Aggregate.
+Use the Agent tool with `subagent_type: workflow-lean`, `model: sonnet`, `run_in_background: true` (the brief is self-contained and reads only its shard, so the lean worker skips the memory prefix; the preamble figures in this skill were measured on `general-purpose`, re-measure before relying on them). Spawn all 10 in one message (parallel). Wait for all task notifications. Aggregate.
 
 ## Phase: NEEDS_RESCUE_AUDIT
 

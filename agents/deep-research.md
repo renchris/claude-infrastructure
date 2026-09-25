@@ -158,7 +158,7 @@ a follow-up wave from root context.
 #68619 runaway and the missing per-session ceiling — *not* an upstream fix to
 wait for; nothing upstream is holding this): re-enable with these rules:
 - Recursion cap: depth 2 only (lead → you → 2-4 sub-subagents).
-- Sub-subagents use `general-purpose` type.
+- Sub-subagents use `workflow-lean` type (self-contained brief; inert while depth is held at 1).
 - Each sub-subagent gets a focused brief at 200-400K depth (not the full
   150-250K of a leaf, because they're narrower scope).
 - Sub-subagents must NOT spawn further. Enforce in their briefs:

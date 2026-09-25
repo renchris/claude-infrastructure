@@ -416,7 +416,7 @@ On the **model** axis it is pinned to `roles.research_worker` ONLY in-process/te
   token is the un-spawned agent — this is the biggest zero-quality-cost saving.)
 - **Workflow bulk synthesis worker = `roles.workflow_synthesis_worker` — Opus 5.5 @xhigh since
   2026-09-22.** In a Workflow, spawn breadth-first synthesis/inferential workers as
-  `agent(brief, {model: 'claude-opus-5-5', effort: 'xhigh'})`, keeping the saturation bound below.
+  `agent(brief, {agentType: 'workflow-lean', model: 'claude-opus-5-5', effort: 'xhigh'})`, keeping the saturation bound below.
   The equal-tools settle run (`docs/research/opus55-synth-reprobe-2026-09-22/`) had it beat
   Sonnet 5 @max 5-1 on judged pairs with 98.5% v 89.2% key recall and a third of the wrong
   claims, at roughly 1.5× the quota — quality-first pays that. The Sonnet record below is the
@@ -617,9 +617,11 @@ their convergence"* — treat as synthesis (use lower cap). The previous "500–
   multi-axis depth research. ⚠️ See § Recursion Regression — the `Agent`
   tool declaration is currently NOT honored by stock Claude Code; the
   subagent runs as flat (non-recursive) deep research.
-- `general-purpose`: built-in, Sonnet, all-tools. Use for adversarial briefs
-  (≤500 token verdict) and as `deep-research` substitute when custom-agent
-  registration is unavailable (new session before first restart).
+- `workflow-lean`: custom, no CLAUDE.md/rules/memory, no Skill/Agent/MCP. Use for
+  adversarial briefs (≤500 token verdict) and any other self-contained read-only brief.
+- `general-purpose`: built-in, all-tools. Use as the `deep-research` / `workflow-lean`
+  substitute when custom-agent registration is unavailable (new session before first
+  restart).
 
 **Frontier tier**: the model is whatever `versions.frontier_latest` names —
 read the SSOT live, never a hardcoded model or date. SSOT:
@@ -627,7 +629,7 @@ read the SSOT live, never a hardcoded model or date. SSOT:
 `frontier_access.active: true` (and today ≤ `end`), route the
 adversarial/judge/depth-coordination slots to it via the call-time Agent
 `model: "fable"` override — and the same for Dynamic Workflow
-judge/synthesis slots via `agent(prompt, {model: "fable"})`. Otherwise those
+judge/synthesis slots via `agent(prompt, {agentType: 'workflow-lean', model: "fable"})`. Otherwise those
 slots use `frontier_access.fallback`.
 
 🚨 **This paragraph carried THREE dead conjuncts until 2026-09-04** — the same
@@ -896,7 +898,7 @@ and return a 500-token manifest with section anchors. Lead reads sections
 on demand during synthesis. Decouples N from lead-context. Mirrors
 Anthropic's production system per their multi-agent blog.
 
-At N > 50, additionally introduce **mid-tier synthesizer subagents** (3-5
+At N > 50, additionally introduce **mid-tier synthesizer subagents** (`workflow-lean`; 3-5
 mid-synths, each handling 5-10 leaves). Cost: ~10-15% information loss per
 hierarchical layer; one extra LLM hop per leaf (~3× supervisor pattern cost).
 Justified only for genuinely large research questions (>50 distinguishable

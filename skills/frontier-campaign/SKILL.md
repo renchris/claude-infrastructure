@@ -25,8 +25,8 @@ A candidate (C-NNN in the ledger) passes only with ALL of:
   with no named items are the signature of a fake generator. These named
   dissolutions become the done-rubric's acceptance criteria.
 
-Then the **red-team gate — BEFORE any frontier spend**: one `general-purpose`
-Sonnet agent, ≤500-token verdict, default-to-refute: *"Argue this candidate is
+Then the **red-team gate — BEFORE any frontier spend**: one `workflow-lean`
+Sonnet agent (`model: sonnet`), ≤500-token verdict, default-to-refute: *"Argue this candidate is
 fake-generator / already-solved / not-long-horizon."* Survives → `REDTEAMED`.
 
 ## 2 — Spec (the full up-front specification; Fable architect, bounded)
