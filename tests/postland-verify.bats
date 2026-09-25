@@ -977,10 +977,14 @@ PS
 @test "C29: a VERDICT spends the candidates — a green in between cannot corroborate a later red" {
   # The trap this closes: candidate rows live for CONVICT_TTL (24h), so without an explicit clear a
   # file convicted once, then EXONERATED by a green corpus, then failing once more hours later would
-  # be red off a SINGLE window — C29 rebuilt out of its own state. Fails runs 1-3 (window 1), passes
-  # run 4 (window 2 ⇒ green ⇒ candidates spent), fails from run 5 on.
+  # be red off a SINGLE window — C29 rebuilt out of its own state. On the first tree it fails runs 1-3
+  # (window 1) and passes from run 4 (window 2 ⇒ green ⇒ candidates spent); on the retargeted tree it
+  # fails always. The failure MUST be keyed on the TREE, not on the counter alone: the final red is
+  # re-run by C30 at the first tree (its last green), and a failure that reproduced there too would be
+  # dropped as NOT DIFFERENTIAL — correctly, since a counter-keyed failure is a flake, not a regression.
+  # That is how this test went red once C30 shipped (d4b07a9ea); CC_POSTLAND_FLOOR_EXONERATE=off greened it.
   c="$BATS_TEST_TMPDIR/spend-counter"
-  add_stateful_test spender "$(printf '#!/bin/bash\nC="%s"\nn=$(cat "$C" 2>/dev/null || echo 0)\nn=$((n+1))\necho "$n" > "$C"\n[ "$n" -eq 4 ] && exit 0\nexit 1\n' "$c")"
+  add_stateful_test spender "$(printf '#!/bin/bash\nC="%s"\nn=$(cat "$C" 2>/dev/null || echo 0)\nn=$((n+1))\necho "$n" > "$C"\ngrep -q "^# retarget" "$(dirname "$0")/spender.bats" && exit 1\n[ "$n" -ge 4 ] && exit 0\nexit 1\n' "$c")"
   push_commit "convicted, then exonerated, then failing again"
   t1="$(origin_tree)"
   run bash "$SUT" --run-if-needed                  # window 1 => candidate recorded
@@ -1073,6 +1077,11 @@ PS
   # three sweeps, and a cool-off refusal on an unrelated constant would red it for a reason that has
   # nothing to do with corroboration.
   export CC_POSTLAND_CUT_MAX=99
+  # C30 pinned OFF for the same reason. B passes run 1 on t1 and fails later on the SAME tree, so C31
+  # records t1 as B's pass floor, re-runs B there at t2's verdict, reproduces the failure and drops B
+  # as NOT DIFFERENTIAL — correctly, since a same-tree pass-then-fail IS a flake. That is the floor's
+  # own axis, not this test's: the question here is whether B's ledger row survived to be corroborated.
+  export CC_POSTLAND_FLOOR_EXONERATE=off
   run bash "$SUT" --run-if-needed                  # window 1
   second_window                                    # window 2 => RED on A, B pending
   run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$t1.json"
