@@ -934,3 +934,55 @@ auto_run() { # rest = argv for `cc-lr switch`
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [ ! -e "$BATS_TEST_TMPDIR/ranker.argv" ] || { cat "$BATS_TEST_TMPDIR/ranker.argv"; false; }
 }
+
+# ── recover --limited [--account] — one command for "recover account N" (2026-09-24) ─────────────
+# The operator asked for "/limit-recover account 2" beside a screenshot and the only verb took ONE
+# ref, so the panes were matched by hand. This stub answers --limited with every row and a sid with
+# its own row, the two calls the bulk path makes.
+limited_stub() { # <TSV rows…>
+  local r f="$BATS_TEST_TMPDIR/rows.tsv"
+  : > "$f"; for r in "$@"; do printf '%s\n' "$r" >> "$f"; done
+  cat > "$CC_LR_FIND_BIN" <<SH
+#!/usr/bin/env bash
+if [ "\$1" = --limited ]; then [ -s "$f" ] || exit 1; cat "$f"; exit 0; fi
+grep "^\$1" "$f" && exit 0
+exit 1
+SH
+  chmod +x "$CC_LR_FIND_BIN"
+}
+
+@test "recover --limited --account next2 fires exactly that account's limited sessions" {
+  fleet_stub 0
+  limited_stub \
+    "aaaa0001-0000-4000-8000-000000000001	11	claude-secondary	$HOME/.claude-secondary	/x	live	LIMITED" \
+    "aaaa0002-0000-4000-8000-000000000002	12	claude-secondary	$HOME/.claude-secondary	/y	live	LIMITED" \
+    "aaaa0003-0000-4000-8000-000000000003	13	claude-tertiary	$HOME/.claude-tertiary	/z	live	LIMITED"
+  run bash "$LR" recover --limited --account next2
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -q aaaa0001 "$BATS_TEST_TMPDIR/fleet.argv" || { echo "next2 session 1 was not fired:"; cat "$BATS_TEST_TMPDIR/fleet.argv"; false; }
+  grep -q aaaa0002 "$BATS_TEST_TMPDIR/fleet.argv" || { echo "next2 session 2 was not fired:"; cat "$BATS_TEST_TMPDIR/fleet.argv"; false; }
+  ! grep -q aaaa0003 "$BATS_TEST_TMPDIR/fleet.argv" || { echo "fired a next3 session under --account next2"; false; }
+  grep -q -- '--source-pane 11' "$BATS_TEST_TMPDIR/fleet.argv" || { cat "$BATS_TEST_TMPDIR/fleet.argv"; false; }
+  [[ "$output" == *"2 fired, 0 refused of 2 limited session(s) on next2"* ]] || { echo "$output"; false; }
+}
+
+@test "recover --limited: a TEAMMATE in the set is refused and the rest still fire; '2' means next2" {
+  fleet_stub 0
+  limited_stub \
+    "bbbb0001-0000-4000-8000-000000000001	21	claude-secondary	$HOME/.claude-secondary	/x	live	TEAMMATE" \
+    "bbbb0002-0000-4000-8000-000000000002	22	claude-secondary	$HOME/.claude-secondary	/y	live	LIMITED"
+  run bash "$LR" recover --limited --account 2
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  ! grep -q bbbb0001 "$BATS_TEST_TMPDIR/fleet.argv" || { echo "a TEAMMATE was fired"; false; }
+  grep -q bbbb0002 "$BATS_TEST_TMPDIR/fleet.argv" || { echo "the limited session was not fired"; false; }
+  [[ "$output" == *"1 fired, 1 refused of 2"* ]] || { echo "$output"; false; }
+}
+
+@test "recover --limited with nothing limited is rc 1 and fires nothing" {
+  fleet_stub 0
+  limited_stub
+  run bash "$LR" recover --limited --account next4
+  [ "$status" -eq 1 ] || { echo "rc $status: $output"; false; }
+  [ ! -s "$BATS_TEST_TMPDIR/fleet.argv" ] || { echo "fired something"; false; }
+  [[ "$output" == *"no LIMITED session on next4"* ]] || { echo "$output"; false; }
+}
