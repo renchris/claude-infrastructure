@@ -88,6 +88,22 @@
   four healthy-looking accounts sat beside a pick that ignored three of them.
   The remedy applied was this paragraph's own: lengthen StartInterval, 60 -> 180.
 
+  🚨 ProcessType Standard SINCE 2026-09-24 (was Background + LowPriorityIO), and the "3.9-36.8s"
+  band above is a record of the PRI-4 regime, not a property of the sweep. At load average 245-298
+  on 10 cores, a PRI-4 process gets effectively NO CPU: one tick sat 3h40m in dyld's initializers
+  (before a line of Python ran) with 0.04s of CPU, and the one before it took 50 min
+  (took_ms=3031741). launchd never overlaps ticks, so the SessionStart board was 5-6h old and
+  withheld. The 52-min "interpreter wedge" b8dbe299a fixed with an in-process alarm was this same
+  starvation — 0.43s of CPU in 52 min is a process that was never scheduled, not one that hung.
+  At PRI 31 python3 starts in ~0.1s under the same load. The job is seconds of CPU every 180s, so
+  Background bought politeness nobody could measure and cost the only output the job has.
+
+  AND A DEADLINE THAT COVERS STARTUP. claude-accounts arms its own SIGALRM (CC_KEEPWARM_DEADLINE_S,
+  225s), but only once the interpreter has started and imported — so a stall in exec, dyld or
+  imports was unbounded, which is exactly where the 3h40m tick sat. `perl -e 'alarm N; exec ...'`
+  arms the kernel timer BEFORE the exec; a pending alarm survives execve (measured: exit 142 at the
+  bound), and Python's own alarm(225) then replaces it. 240 = the readers' lock wait.
+
   Kill: launchctl bootout gui/$(id -u)/com.claude.accounts-keepwarm
 -->
 <plist version="1.0">
@@ -99,7 +115,7 @@
   <array>
     <string>/bin/bash</string>
     <string>-c</string>
-    <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"; exec "$HOME/.claude/bin/claude-accounts" --keepwarm --max-age 90</string>
+    <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"; exec /usr/bin/perl -e 'alarm shift; exec @ARGV or die "exec: $!"' 240 "$HOME/.claude/bin/claude-accounts" --keepwarm --max-age 90</string>
   </array>
 
   <key>StartInterval</key>
@@ -109,10 +125,7 @@
   <false/>
 
   <key>ProcessType</key>
-  <string>Background</string>
-
-  <key>LowPriorityIO</key>
-  <true/>
+  <string>Standard</string>
 
   <key>StandardOutPath</key>
   <string>/Users/chrisren/.claude/logs/accounts-keepwarm.out.log</string>
