@@ -379,6 +379,51 @@ seed_unatt() {   # $1 = "sigterm" | an exit code for the stub's --selftest
   [ -z "$(git ls-tree origin/main -- unatt-stub.sh)" ]
 }
 
+# ── LAND_SPEED: the own-scope scan is CARRIED by the selftest's strict real-tree receipt ─────────
+# The real lint's --selftest runs a STRICT scan of its root, and the arm then ran an OWN-SCOPE scan
+# of the same root — 72s at load ~150 for a verdict the first scan already implies. The stub below
+# records every non-selftest invocation, so the COUNT of scans is the assertion (never wall time).
+# $1 = the receipt root the stub prints ("self" = its own root, "none" = no receipt, else a path).
+seed_unatt_receipt() {
+  mkdir -p hooks scripts
+  printf '#!/bin/bash\necho hi\n' > hooks/zz-unatt-hook.sh
+  printf '#!/bin/bash\nroot="$(cd "$(dirname "$0")/.." && pwd -P)"\nmode="%s"\ncase "$1" in\n  --print-scope) printf "hooks/*\\n"; exit 0 ;;\n  --selftest)\n    case "$mode" in self) echo "unattended-path-lint --selftest: real-tree strict-clean root=$root" ;; none) ;; *) echo "unattended-path-lint --selftest: real-tree strict-clean root=$mode" ;; esac\n    exit 0 ;;\nesac\necho scan >> "%s"\nexit 0\n' \
+    "$1" "$BATS_TEST_TMPDIR/unatt-scans" > scripts/unatt-stub.sh
+  chmod +x scripts/unatt-stub.sh
+  : > "$BATS_TEST_TMPDIR/unatt-scans"
+  git add hooks/zz-unatt-hook.sh scripts/unatt-stub.sh && git commit -q -m "feat: unattended receipt fixture"
+}
+
+@test "LAND_SPEED: a strict-clean receipt for THIS root carries the own-scope scan — 0 scans, gate green" {
+  git checkout -q -b feat/unatt-carry main
+  seed_unatt_receipt self
+  run env SHIP_LAND_UNATTENDED_LINT="$WORK/scripts/unatt-stub.sh" bash "$SHIPLAND" --precheck --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'unattended-path own-scope scan CARRIED' || false
+  [ "$(grep -c . "$BATS_TEST_TMPDIR/unatt-scans")" -eq 0 ]
+}
+
+@test "LAND_SPEED: no receipt, a FOREIGN root's receipt, or the kill switch — the scan runs, once" {
+  git checkout -q -b feat/unatt-nocarry main
+  seed_unatt_receipt none
+  run env SHIP_LAND_UNATTENDED_LINT="$WORK/scripts/unatt-stub.sh" bash "$SHIPLAND" --precheck --trunk main
+  [ "$status" -eq 0 ]
+  [ "$(grep -c . "$BATS_TEST_TMPDIR/unatt-scans")" -eq 1 ]
+  ! echo "$output" | grep -q 'scan CARRIED' || false
+
+  git checkout -q -b feat/unatt-foreign main
+  seed_unatt_receipt "$BATS_TEST_TMPDIR/some-other-checkout"
+  run env SHIP_LAND_UNATTENDED_LINT="$WORK/scripts/unatt-stub.sh" bash "$SHIPLAND" --precheck --trunk main
+  [ "$status" -eq 0 ]
+  [ "$(grep -c . "$BATS_TEST_TMPDIR/unatt-scans")" -eq 1 ]
+
+  git checkout -q -b feat/unatt-off main
+  seed_unatt_receipt self
+  run env SHIP_LAND_UNATTENDED_CARRY=off SHIP_LAND_UNATTENDED_LINT="$WORK/scripts/unatt-stub.sh" bash "$SHIPLAND" --precheck --trunk main
+  [ "$status" -eq 0 ]
+  [ "$(grep -c . "$BATS_TEST_TMPDIR/unatt-scans")" -eq 1 ]
+}
+
 # ── THE CHOKEPOINT: own-scope must cover every population the lint judges ────────────────────────
 # Own-scope makes a violation OUTSIDE the lander's diff advisory, so the pathspec that builds the
 # own-set IS the gate's scope. It listed only `tests/*.bats` until rule 4 (embedded selftests)

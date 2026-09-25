@@ -2441,7 +2441,17 @@ Y=/bin/ls
     echo "  findings for Mac-only binaries and drops the allowlist rows for Linux-stock ones, in both"
     echo "  directions at once — a NON-VERDICT. The detector cases above ran and are unaffected."
   elif [ -n "$ROOT" ] && [ -d "$ROOT/hooks" ]; then
-    ( unset CC_UNATTENDED_OWN; "$SELF" "$ROOT" >/dev/null 2>&1 ); expect 0 "$?" 'the real tree is not clean under the shipped allowlist'
+    ( unset CC_UNATTENDED_OWN; "$SELF" "$ROOT" >/dev/null 2>&1 ); real_tree_rc=$?
+    expect 0 "$real_tree_rc" 'the real tree is not clean under the shipped allowlist'
+    # THE RECEIPT ship-land reads (LAND_SPEED 2026-09-24). This arm is a STRICT scan of $ROOT — no
+    # own-set, so every finding and every stuck row blocks — and ship-land's very next step is the
+    # OWN-SCOPE scan of the same root with the same env, whose blocking set is a subset of this one
+    # (lint_tree: zero_cover / stale_cover / non-verdicts ignore the own-set; findings and stuck rows
+    # block under own-scope only where strict blocks too). So strict-clean ⇒ own-scope-clean, and
+    # the gate was paying ~70s per round (load ~150) to re-derive a verdict already in hand. Printed
+    # ONLY when this arm ran and passed; a skipped or failed arm prints nothing, so the gate runs its
+    # own scan exactly as before.
+    [ "$real_tree_rc" -eq 0 ] && real_tree_receipt="unattended-path-lint --selftest: real-tree strict-clean root=$ROOT"
   fi
 
   # 20. THE LANGUAGE GUARD, both directions. The two files below are byte-identical except for their
@@ -2510,6 +2520,7 @@ PLIST
   if [ "$fails" -eq 0 ]; then
     echo "unattended-path-lint --selftest: $checks/$checks — RED on a bare binary inside \"\$( )\" (the shape a greedy tokenizer missed), on a bare binary at command position, on a stuck ratchet entry, on a plist whose INLINE export PATH cannot reach the binary, on a /sbin-only binary in the bats corpus under a runner whose PATH stops at /bin, on that binary reached through bats' own \`run\` wrapper, on a bare binary inside a case BODY (invisible to this lint for its whole life, until the label state landed) and on one after a REAL pipe (so the label fix was not bought by blinding the scanner to piped invocations); GREEN on a case LABEL in EITHER arity — the shape that minted two allowlist rows and contorted a real test into \`[ = ] || [ = ]\`, and whose one-arm form was wrongly believed already handled — on an absolute path, a name inside a single-quoted regex, a name in a comment, a heredoc body, a stock binary, a grandfathered site, an allowlist row whose FILE this run never scanned (a non-verdict about this run's reach, never a stale row — the shape that refused the first cloud land to touch bin/cc-dispatch), a plist whose inline PATH does reach, the same corpus file under a runner whose PATH carries /sbin, and prose following an arithmetic expansion nested in a command substitution (the desync that minted two allowlist rows out of nothing); RED on a launchd target invoked by BARE NAME and on one named by its DEPLOYED path (two plists that resolved NOTHING and were skipped in silence, which the AGGREGATE plist control could not see because the other 23 resolved), on an AMBIGUOUS basename that must be reported rather than guessed, on an UNDECLARED plist resolving no in-tree target, and on a STALE out-of-tree declaration whose plist now resolves; GREEN on a DECLARED out-of-tree target, the control that makes \"report every unresolvable target\" the wrong rule; LOUD on a missing root, a root with no governed layers, and a corpus with no runner plist; own-scope blocks INSIDE / advises OUTSIDE across all three arity states; GREEN on a python-shebang file whose prose sits where a shell scanner reads command position, against a RED control of the SAME BYTES under a bash shebang and a RED control on a shebang-less file (so the language guard is keyed on the shebang and did not widen into scanning nothing)${real_tree_clause}. EVERY fixture above names a binary installed NOWHERE (zzunobtainium) or one installed only inside the sandbox (zzreachable), so each verdict is a property of the fixture and not of the invoker's tool inventory — the defect that made this arm answer to \`apt-get install shellcheck\`."
     [ "$skips" -gt 0 ] && echo "unattended-path-lint --selftest: $skips arm(s) SKIPPED as a NON-VERDICT on this platform (named above) — the detector's own cases all ran, and the tree-level question is asked directly by ship-land's own-scope run."
+    [ -n "${real_tree_receipt:-}" ] && echo "$real_tree_receipt"
     exit 0
   fi
   echo "unattended-path-lint --selftest: FAILED ($fails of $checks) — the detector does not discriminate."

@@ -56,6 +56,16 @@ darwin_only_tree_arm() {
 @test "--selftest passes (the gate keys on this exit code)" {
   run "$LINT" --selftest
   [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # LAND_SPEED: the strict real-tree RECEIPT ship-land reads to carry its own-scope scan. Printed
+  # exactly when the real-tree arm ran — on Darwin — and never off it, where that arm is a skip.
+  local root receipt
+  root="$(cd "$(dirname "$LINT")/.." && pwd -P)"
+  receipt="unattended-path-lint --selftest: real-tree strict-clean root=$root"
+  if [ "$(uname -s)" = "Darwin" ]; then
+    [[ $'\n'"$output"$'\n' == *$'\n'"$receipt"$'\n'* ]] || { echo "no receipt for $root" >&2; return 1; }
+  else
+    [[ "$output" != *'real-tree strict-clean'* ]]
+  fi
 }
 
 @test "--selftest's verdict does not move when the BOX gains a binary (backlog f85fce7c26f5)" {
