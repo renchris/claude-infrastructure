@@ -1238,6 +1238,17 @@ Then re-read the ledger with \`/wrap\`. If the converger refuses, file it (\`cc-
 # (reachability). At most ONE floor emits per Stop — the hook prints a single JSON object.
 if [ ! -f "$f" ]; then
   rm -f "${f}.count" "${f}.sid" "${f}.cwd" "${f}.src" 2>/dev/null
+  # ONE ancestry walk for all three floors (2026-09-24, fix/stop-hook-latency). Each floor asks
+  # agent_assignee_argv inside its own `$(…)`, so a memo set inside one could never reach the next,
+  # and each call walked the whole process table again (~0.17 s apiece at a load of ~230). The
+  # question is about THIS hook process's ancestry, which cannot change during the run, so it is
+  # asked once here, in this shell, and the function is replaced by its answer: same stdout, same
+  # rc. CC_SC_ASSIGNEE_MEMO=0 restores a live walk per call.
+  if [ "${CC_SC_ASSIGNEE_MEMO:-1}" != "0" ]; then
+    # shellcheck disable=SC2218  # defined by the sourced agent-identity lib (or its stub) above
+    _sc_aid_memo="$(agent_assignee_argv)"; _sc_aid_rc=$?
+    agent_assignee_argv() { [ -n "$_sc_aid_memo" ] && printf '%s\n' "$_sc_aid_memo"; return "$_sc_aid_rc"; }
+  fi
   if ! mechanical_arm; then
     if ! _sf_json="$(ship_floor)"; then
       mark_blocked ship-floor
