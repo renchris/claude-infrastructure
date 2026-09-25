@@ -1,0 +1,39 @@
+== .claude-tertiary exclude: | Memory files | 54.7k | 5.5% |
+| User | /Users/chrisren/.claude-tertiary/CLAUDE.md | 40.8k |
+| User | /Users/chrisren/.claude/rules/00-mission-board.md | 5.5k |
+| User | /Users/chrisren/.claude/rules/agent-operating-lessons.md | 2.4k |
+| Project | <fx>/.claude/CLAUDE.md | 2.4k |
+| Project | <fx>/.claude/rules/agent-operating-lessons.md | 3.7k |
+== .claude-tertiary control: | Memory files | 79.5k | 7.9% |
+| User | /Users/chrisren/.claude-tertiary/CLAUDE.md | 40.8k |
+| User | /Users/chrisren/.claude/rules/00-mission-board.md | 5.5k |
+| User | /Users/chrisren/.claude/rules/agent-operating-lessons.md | 2.4k |
+| Project | <fx>/.claude/CLAUDE.md | 2.4k |
+| Project | <fx>/.claude/rules/agent-operating-lessons.md | 3.7k |
+| Project | <fx>/.claude/rules/agent-operating-lessons-situational.md | 24.8k |
+== .claude-quaternary exclude: | Memory files | 54.7k | 5.5% |
+| User | /Users/chrisren/.claude-quaternary/CLAUDE.md | 40.8k |
+| User | /Users/chrisren/.claude/rules/00-mission-board.md | 5.5k |
+| User | /Users/chrisren/.claude/rules/agent-operating-lessons.md | 2.4k |
+| Project | <fx>/.claude/CLAUDE.md | 2.4k |
+| Project | <fx>/.claude/rules/agent-operating-lessons.md | 3.7k |
+== .claude-quaternary control: | Memory files | 79.5k | 7.9% |
+| User | /Users/chrisren/.claude-quaternary/CLAUDE.md | 40.8k |
+| User | /Users/chrisren/.claude/rules/00-mission-board.md | 5.5k |
+| User | /Users/chrisren/.claude/rules/agent-operating-lessons.md | 2.4k |
+| Project | <fx>/.claude/CLAUDE.md | 2.4k |
+| Project | <fx>/.claude/rules/agent-operating-lessons.md | 3.7k |
+| Project | <fx>/.claude/rules/agent-operating-lessons-situational.md | 24.8k |
+== .claude-next exclude: | Memory files | 54.7k | 5.5% |
+| User | /Users/chrisren/.claude-next/CLAUDE.md | 40.8k |
+| User | /Users/chrisren/.claude/rules/00-mission-board.md | 5.5k |
+| User | /Users/chrisren/.claude/rules/agent-operating-lessons.md | 2.4k |
+| Project | <fx>/.claude/CLAUDE.md | 2.4k |
+| Project | <fx>/.claude/rules/agent-operating-lessons.md | 3.7k |
+== .claude-next control: | Memory files | 79.5k | 7.9% |
+| User | /Users/chrisren/.claude-next/CLAUDE.md | 40.8k |
+| User | /Users/chrisren/.claude/rules/00-mission-board.md | 5.5k |
+| User | /Users/chrisren/.claude/rules/agent-operating-lessons.md | 2.4k |
+| Project | <fx>/.claude/CLAUDE.md | 2.4k |
+| Project | <fx>/.claude/rules/agent-operating-lessons.md | 3.7k |
+| Project | <fx>/.claude/rules/agent-operating-lessons-situational.md | 24.8k |
