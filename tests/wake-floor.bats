@@ -676,3 +676,51 @@ CC_HEADLESS_PREFIX_SHA="${CC_HEADLESS_PREFIX_SHA:-3b11e115}"
   [ "$status" -eq 0 ]
   blocked "$output" || false                   # RED: the defect this change closes — it kills the session
 }
+
+# ── MECHANICAL ARM (token-efficiency rank 20): with mailbox-wake-arm.sh registered on Stop with
+#    asyncRewake, that hook arms the watcher at this same Stop, so the floor must not force a turn. ──
+# settings_stop <asyncRewake json value|absent> [event] — write $CLAUDE_CONFIG_DIR/settings.json
+settings_stop() {
+  local ev="${2:-Stop}" entry='{"type":"command","command":"~/.claude/hooks/mailbox-wake-arm.sh","timeout":14400}'
+  [ "$1" = absent ] || entry="$(printf '%s' "$entry" | jq -c --argjson a "$1" '. + {asyncRewake:$a}')"
+  jq -n --arg ev "$ev" --argjson e "$entry" \
+    '{hooks:{($ev):[{hooks:[{type:"command",command:"~/.claude/hooks/session-continue.sh"},$e]}]}}' \
+    > "$CLAUDE_CONFIG_DIR/settings.json"
+}
+
+@test "MECHANICAL ARM: registered on Stop with asyncRewake ⇒ an unarmed idle is NOT blocked (no forced turn)" {
+  settings_stop true
+  run actuate sidA
+  [ "$status" -eq 0 ]
+  ! blocked "$output" || false
+  grep -q '"reason":"wake-floor-mechanical-arm"' "$HOME/.claude/autonomy/idl.jsonl"
+}
+
+@test "MECHANICAL ARM: pending mail is also left to the Stop arm (it wakes on pending mail at once)" {
+  settings_stop true; mail 1
+  run actuate sidA
+  ! blocked "$output" || false
+}
+
+@test "MECHANICAL ARM: registered WITHOUT asyncRewake is not the mechanical arm ⇒ still blocks" {
+  settings_stop false
+  run actuate sidA
+  blocked "$output"
+  settings_stop absent
+  rm -f "$CC_MAILBOX_DIR/$U.wakefloor"
+  run actuate sidA
+  blocked "$output"
+}
+
+@test "MECHANICAL ARM: registered only on SessionStart (0007 alone) ⇒ still blocks" {
+  settings_stop true SessionStart
+  run actuate sidA
+  blocked "$output"
+}
+
+@test "MECHANICAL ARM: CC_WAKE_ARM=0 disables that hook, so the floor blocks again" {
+  settings_stop true
+  export CC_WAKE_ARM=0
+  run actuate sidA
+  blocked "$output"
+}
