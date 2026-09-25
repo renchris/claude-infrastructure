@@ -1,0 +1,15 @@
+flowchart LR
+    Board["what to work on next<br/>customer mission board ▸ backlog ▸ dispatcher"] --> Close{"a session<br/>tries to close"}
+    Close -->|"every rung verified from live git"| Safe(["✅ SAFE TO CLOSE<br/>nothing of mine is open"])
+    Close -->|"the ledger disagrees,<br/>or the work was drivable"| Back["sent back to work<br/>— the turn does not end"]
+    Close -->|"a real decision remains"| Ask{"conviction ≤ 90%,<br/>a research receipt,<br/>two measured options?"}
+    Ask -->|"no"| Back
+    Ask -->|"yes"| You(["ONE decision card for you<br/>or ONE command under ▶ Run this:"])
+    classDef k fill:@gold-bg,stroke:@gold-fg,color:@text
+    classDef b fill:@blue-bg,stroke:@blue-fg,color:@text
+    classDef r fill:@red-bg,stroke:@red-fg,color:@text
+    classDef g fill:@green-bg,stroke:@green-fg,color:@text
+    class Close,Ask k
+    class Board b
+    class Back r
+    class Safe,You g
