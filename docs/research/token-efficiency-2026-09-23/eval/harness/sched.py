@@ -51,9 +51,11 @@ def tasks():
     )
 
 
-def plan(accounts, arms=("full", "slim"), nreps=10, only=None, reps_map=None):
+def plan(accounts, arms=("full", "slim"), nreps=10, only=None, reps_map=None, offset=0):
     """Defaults reproduce the F1 plan exactly. F3/F4 pass --arms, --reps, --tasks, --reps-map:
-    order is ABBA repeated and cut at the rep count; blocks are runs of 4 reps on one account."""
+    order is ABBA repeated and cut at the rep count; blocks are runs of 4 reps on one account.
+    --rep-offset N (round 4 extension) only relabels rep r as r+N, so an extension's runs can be
+    pooled with an earlier round's without colliding; order and blocking are unchanged."""
     if os.path.exists(SCHED):
         print(f"schedule exists: {SCHED}")
         return
@@ -70,7 +72,7 @@ def plan(accounts, arms=("full", "slim"), nreps=10, only=None, reps_map=None):
                 cells.append(
                     dict(
                         task=t,
-                        rep=r,
+                        rep=r + offset,
                         arm=order[r - 1],
                         block=f"{t}/b{bi + 1}",
                         account=acct,
@@ -316,6 +318,7 @@ if __name__ == "__main__":
             {kv.split("=")[0]: int(kv.split("=")[1]) for kv in rm.split(",")}
             if rm
             else None,
+            int(opt("--rep-offset") or 0),
         )
     elif cmd == "run":
         run(int(args[args.index("--workers") + 1]) if "--workers" in args else 3)
