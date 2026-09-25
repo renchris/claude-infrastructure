@@ -589,7 +589,7 @@ for f in "$REPO"/scripts/backlog-consolidation/*.py; do
   check_one "scripts/backlog-consolidation/$(basename "$f")" "$CFG/scripts/backlog-consolidation/$(basename "$f")"
 done
 
-# FORWARD-WALK EXCLUSIONS. install.sh globs these three classes too, and for each of them a
+# FORWARD-WALK EXCLUSIONS. install.sh globs these four classes too, and for each of them a
 # per-file "$CFG/<rel>" parity question is the WRONG question — they deploy to a different ROOT or
 # by a different MODEL, so walking them here would mint a finding per member against a live layer
 # that is in fact correct. They are listed rather than merely omitted because an omission carries
@@ -600,6 +600,7 @@ done
 #   NOT-PER-FILE /githooks/*       copies into <repo>/.git/hooks and ~/.git-template/hooks (install.sh's githooks leg)
 #   NOT-PER-FILE /launchd/*.plist  copies into ~/Library/LaunchAgents (install.sh's LaunchAgents leg)
 #   NOT-PER-FILE /vendor/*/        ONE directory symlink per plugin, deliberately not per file (install.sh's vendor leg)
+#   NOT-PER-FILE /CLAUDE.global.*.md  COPIES to ~/.claude/CLAUDE.<variant>.md, a different name (install.sh's instructions-variant leg, ade130dc7)
 
 # Single-file links install.sh makes by name rather than by glob.
 check_one "accounts.json"       "$CFG/accounts.json"
