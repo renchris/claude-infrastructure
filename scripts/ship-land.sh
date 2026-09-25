@@ -2241,7 +2241,7 @@ gate_bats() {  # run bats with the operator's lander tuning scrubbed; args pass 
       -u LAND_LOCK_WAIT -u LAND_LOCK_TTL \
       -u SHIP_LAND_LANE -u SHIP_LAND_SMOKE_BUDGET_S -u SHIP_LAND_TIMEOUT_BIN \
       -u SHIP_LAND_SMOKE_PER_SUITE_S -u SHIP_LAND_SMOKE_BUDGET_CAP_S \
-      -u SHIP_LAND_CARVEOUT_CONFIRM \
+      -u SHIP_LAND_CARVEOUT_CONFIRM -u SHIP_LAND_UNATTENDED_CARRY \
       -u SHIP_LAND_T0 -u SHIP_LAND_MEAS_ROUNDS -u SHIP_LAND_MEAS_GATE_S \
       -u SHIP_LAND_MEAS_ARMS_S -u SHIP_LAND_MEAS_STATICS_S \
       CC_GATE_MAX_LOAD=0 CC_BATS_MAX_ROOTS=0 ${homeenv[@]+"${homeenv[@]}"} bats "$@" </dev/null
@@ -3968,8 +3968,8 @@ run_gate() {  # $1=range → 0 green / 1 red
     # caller without /sbin, 23/23 passing for one with it. A blob-only key would carry a green
     # earned under one environment into another. It is the most expensive selftest of the eleven and
     # it is excluded anyway: an unsound memo on a detector-validity proof is worse than the seconds.
-    local _st_rc=0
-    "$UNATTENDED_LINT" --selftest >/dev/null 2>&1 || _st_rc=$?
+    local _st_rc=0 _st_out=""
+    _st_out="$("$UNATTENDED_LINT" --selftest 2>/dev/null)" || _st_rc=$?
     # A SIGNAL DEATH IS A THIRD STATE, NEVER RED (measured 2026-09-11, during the land of backlog
     # 5a5a3073626c). This is the ONE selftest deliberately excluded from selftest_ok's memo — see
     # its header above — so it is the only arm that re-runs its full ~2.5min scan on EVERY round,
@@ -4000,7 +4000,25 @@ run_gate() {  # $1=range → 0 green / 1 red
       gate_red unattended-path-selftest
       return 1
     fi
-    own_run UNATTENDED CC_UNATTENDED_OWN "$upown" "$UNATTENDED_LINT" >&2; _arm_rc=$?
+    # THE OWN-SCOPE SCAN IS CARRIED when the selftest just proved the SAME root strict-clean
+    # (LAND_SPEED 2026-09-24). Measured at load ~150: this arm was 132s of a 228s arms phase — the
+    # selftest 101s (its real-tree arm is a full STRICT scan) plus this scan 72s, i.e. the tree was
+    # scanned twice per round, and the second scan cannot block where the first passed: same lint,
+    # same root, same env, and own-scope's blocking set is a subset of strict's (see the receipt's
+    # comment in unattended-path-lint.sh). The receipt is matched EXACTLY, root included, and the
+    # root is derived the way the lint derives its own; any miss — a non-Darwin box that skipped
+    # the arm, a lint that predates the receipt, an override pointing elsewhere — runs the scan as
+    # before. Kill switch: SHIP_LAND_UNATTENDED_CARRY=off.
+    local _rt_root _rt_receipt
+    _rt_root="$(cd "$(dirname "$UNATTENDED_LINT")/.." 2>/dev/null && pwd -P)" || _rt_root=""
+    _rt_receipt="unattended-path-lint --selftest: real-tree strict-clean root=${_rt_root}"
+    if [[ "${SHIP_LAND_UNATTENDED_CARRY:-on}" != "off" && -n "$_rt_root" ]] \
+      && case $'\n'"$_st_out"$'\n' in *$'\n'"$_rt_receipt"$'\n'*) true ;; *) false ;; esac; then
+      echo "→ gate: unattended-path own-scope scan CARRIED — the selftest's strict real-tree arm just scanned ${_rt_root} clean, and strict-clean implies own-scope-clean." >&2
+      _arm_rc=0
+    else
+      own_run UNATTENDED CC_UNATTENDED_OWN "$upown" "$UNATTENDED_LINT" >&2; _arm_rc=$?
+    fi
     if (( _arm_rc == 2 )); then arm_nonverdict "unattended-path-lint"; return 1; fi
     if (( _arm_rc != 0 )); then
       echo "✗ gate: unattended-path RED — a file THIS LAND CHANGES invokes a binary by bare name that" >&2
