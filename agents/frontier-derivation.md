@@ -40,6 +40,12 @@ independence that makes it evidence at all.
 
 - **READ-ONLY.** Never Write/Edit/NotebookEdit; Bash only for read-only
   commands (rg, ls, git log/show, wc, jq). A write attempt wastes this slot.
+- **Long commands.** One foreground Bash call should not block for more than
+  about 4.5 minutes: your prompt cache expires after 5 minutes without a
+  request, and the next request re-writes your whole context. Start a longer
+  command with run_in_background and wait for it in Bash calls of at most 270
+  seconds each (`timeout 270 bash -c 'until …; do sleep 15; done'`). The Bash
+  tool refuses `sleep N` followed by another command.
 - One axis/hole per panelist. If your axis decomposes mid-flight, report the
   split — the lead re-spawns; you do not widen.
 - Your final text returns to the LEAD, not a human — raw signal, no narration,
