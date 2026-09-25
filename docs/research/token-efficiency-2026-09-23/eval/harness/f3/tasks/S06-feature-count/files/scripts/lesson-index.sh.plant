@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# lesson-index.sh — list the lesson bodies under docs/lessons/ as "<slug><TAB><title>".
+#
+#   scripts/lesson-index.sh              every lesson
+#   scripts/lesson-index.sh --grep WORD  only lessons whose title contains WORD (case-insensitive)
+set -uo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+pat=""
+if [ "${1:-}" = "--grep" ]; then
+  [ $# -ge 2 ] || { echo "usage: lesson-index.sh [--grep WORD]" >&2; exit 2; }
+  pat=$2
+fi
+
+for f in "$ROOT"/docs/lessons/*.md; do
+  title=$(grep -m1 '^# ' "$f" | sed 's/^# //')
+  if [ -n "$pat" ] && ! grep -qi -- "$pat" <<< "$title"; then
+    continue
+  fi
+  printf '%s\t%s\n' "$(basename "$f" .md)" "$title"
+done

@@ -13,22 +13,24 @@ import json, os, random, shutil, sys
 H = os.path.dirname(os.path.abspath(__file__))
 G = os.environ.get("GATE_ROOT", "/tmp/tokeff-gate")
 GATE = os.environ.get("GATE_DIR", os.path.join(os.path.dirname(H), "gate"))
-rub = json.load(open(f"{H}/rubrics.json"))
+rub = json.load(open(os.environ.get("GATE_RUBRICS", f"{H}/rubrics.json")))
 mode, rest = sys.argv[1], sys.argv[2:]
 groups = []
-if mode == "f1":
+# f3 and f4 are staged exactly like f1 (same dossier shape), into their own dir; a task's rep count
+# is whatever its schedule planned (F1: always 10).
+if mode in ("f1", "f3", "f4"):
     sched = json.load(open(f"{G}/schedule.json"))
     for t in rest:
         cells = [c for c in sched if c["task"] == t]
-        if len(cells) != 10 or any(c["state"] != "done" for c in cells):
-            print(f"skip {t}: not all 10 reps done", file=sys.stderr)
+        if not cells or any(c["state"] != "done" for c in cells):
+            print(f"skip {t}: not all reps done", file=sys.stderr)
             continue
         order = sorted(cells, key=lambda c: c["rep"])
-        random.Random(f"f1-{t}").shuffle(order)
-        d = f"{GATE}/f1/dossiers/{t}"
+        random.Random(f"{mode}-{t}").shuffle(order)
+        d = f"{GATE}/{mode}/dossiers/{t}"
         shutil.rmtree(d, ignore_errors=True)
         os.makedirs(d)
-        os.makedirs(f"{GATE}/f1/keys", exist_ok=True)
+        os.makedirs(f"{GATE}/{mode}/keys", exist_ok=True)
         keys = {}
         for k, c in enumerate(order, 1):
             shutil.copy(
@@ -41,7 +43,7 @@ if mode == "f1":
             }
         json.dump(
             {"task": t, "dossiers": keys},
-            open(f"{GATE}/f1/keys/{t}.json", "w"),
+            open(f"{GATE}/{mode}/keys/{t}.json", "w"),
             indent=1,
         )
         groups.append(
@@ -49,7 +51,7 @@ if mode == "f1":
                 "id": t,
                 "kind": "f1",
                 "dir": d,
-                "n": 10,
+                "n": len(order),
                 "success": rub[t]["success"],
                 "items": rub[t]["items"],
                 "reference": "",

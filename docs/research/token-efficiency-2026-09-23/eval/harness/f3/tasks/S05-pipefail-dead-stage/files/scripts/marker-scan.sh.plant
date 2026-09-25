@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# marker-scan.sh — refuse a set of files that still carries merge-conflict markers.
+#
+#   scripts/marker-scan.sh <file>...
+#
+# Exit 0: every file was scanned and none has a marker.
+# Exit 1: at least one file has a marker, or could not be scanned (it is named on stderr).
+set -uo pipefail
+
+[ $# -gt 0 ] || { echo "usage: marker-scan.sh <file>..." >&2; exit 2; }
+
+rc=0
+for f in "$@"; do
+  if grep -nE '^(<{7}|>{7}) ' "$f" 2>/dev/null | grep -q .; then
+    echo "marker-scan: conflict markers in $f" >&2
+    rc=1
+  fi
+done
+exit "$rc"

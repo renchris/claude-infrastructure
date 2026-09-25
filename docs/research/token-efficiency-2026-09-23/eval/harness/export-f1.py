@@ -11,10 +11,11 @@ import json, os
 H = os.path.dirname(os.path.abspath(__file__))
 G = os.environ.get("GATE_ROOT", "/tmp/tokeff-gate")
 GATE = os.environ.get("GATE_DIR", os.path.join(os.path.dirname(H), "gate"))
-os.makedirs(f"{GATE}/f1", exist_ok=True)
+FLAG = os.environ.get("GATE_FLAG", "f1")  # f3/f4 export the same way into their own dir
+os.makedirs(f"{GATE}/{FLAG}", exist_ok=True)
 sched = json.load(open(f"{G}/schedule.json"))
 n = 0
-with open(f"{GATE}/f1/runs.jsonl", "w") as out:
+with open(f"{GATE}/{FLAG}/runs.jsonl", "w") as out:
     for c in sorted(sched, key=lambda c: (c["task"], c["rep"])):
         p = f"{G}/runs/{c['task']}/r{c['rep']}/out/metrics.json"
         m = json.load(open(p)) if os.path.exists(p) else {"fail_class": "missing"}
@@ -25,4 +26,4 @@ with open(f"{GATE}/f1/runs.jsonl", "w") as out:
         )
         out.write(json.dumps(row) + "\n")
         n += 1
-print(f"wrote {n} rows to {GATE}/f1/runs.jsonl")
+print(f"wrote {n} rows to {GATE}/{FLAG}/runs.jsonl")

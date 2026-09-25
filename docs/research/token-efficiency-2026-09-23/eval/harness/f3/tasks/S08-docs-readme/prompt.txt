@@ -1,0 +1,1 @@
+docs/lessons needs a README — what's in there and how a new lesson gets added. keep it short

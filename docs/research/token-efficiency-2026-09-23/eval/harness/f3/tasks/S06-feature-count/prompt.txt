@@ -1,0 +1,1 @@
+add a --count flag to scripts/lesson-index.sh that just prints how many lessons there are

@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# export-rows.sh — write the ledger's rows out in one of two formats.
+#
+#   scripts/export-rows.sh [--format tsv|csv] [--out FILE] [--limit N]
+#
+# Reads rows (tab-separated) on stdin. Without --out, writes to stdout.
+set -u
+
+fmt=tsv out="" limit=0
+usage() { echo "usage: export-rows.sh [--format tsv|csv] [--out FILE] [--limit N]" >&2; }
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --format) fmt=${2:-}; shift 2 ;;
+    --out) out=${2:-}; shift 2 ;;
+    --limit) limit=${2:-}; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "export-rows: unknown argument: $1" >&2; usage; exit 2 ;;
+  esac
+done
+
+case "$fmt" in
+  tsv|csv) ;;
+  *) echo "export-rows: --format needs tsv or csv" >&2; exit 2 ;;
+esac
+case "$limit" in
+  ''|*[!0-9]*) echo "export-rows: --limit needs a number" >&2; exit 2 ;;
+esac
+
+emit() {
+  local n=0 line
+  while IFS= read -r line; do
+    if [ "$limit" -gt 0 ] && [ "$n" -ge "$limit" ]; then break; fi
+    if [ "$fmt" = csv ]; then printf '%s\n' "${line//$'\t'/,}"; else printf '%s\n' "$line"; fi
+    n=$((n + 1))
+  done
+}
+
+if [ -n "$out" ]; then emit > "$out"; else emit; fi

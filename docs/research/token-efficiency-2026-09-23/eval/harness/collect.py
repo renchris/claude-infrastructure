@@ -19,8 +19,14 @@ RUN, TASK = sys.argv[1].rstrip("/"), sys.argv[2]
 H = os.path.dirname(os.path.abspath(__file__))
 OUT, FX = f"{RUN}/out", f"{RUN}/fx"
 ORIGIN = f"{RUN}/origin.git"
-rub = json.load(open(f"{H}/rubrics.json"))[TASK]
-prompt = open(f"{H}/tasks/{TASK}/prompt.txt").read().strip()
+# F3 runs keep their own tasks, rubric and verifier (harness/f3/); unset, these are the F1 defaults.
+rub = json.load(open(os.environ.get("GATE_RUBRICS", f"{H}/rubrics.json")))[TASK]
+prompt = (
+    open(os.path.join(os.environ.get("GATE_TASKS", f"{H}/tasks"), TASK, "prompt.txt"))
+    .read()
+    .strip()
+)
+VERIFY = os.environ.get("GATE_VERIFY", "")
 ccd = open(f"{OUT}/config_dir").read().strip()
 arm = open(f"{OUT}/arm").read().strip()
 rc = int(open(f"{OUT}/rc").read().strip() or 1)
@@ -198,6 +204,37 @@ m = dict(
     if os.path.isdir(f"{OUT}/tmp-leaked")
     else [],
 )
+# F3 mechanical outcomes: did the run open the situational lessons file (or any lesson body), and
+# what did the code verifier say. Read from the tool calls and the fixture, never from the judge.
+joined = [s for _, _, _, s in calls]
+m["situational_read"] = any("agent-operating-lessons-situational" in s for s in joined)
+m["lesson_body_read"] = any("docs/lessons/" in s for s in joined)
+m["rules_dir_read"] = any(".claude/rules" in s for s in joined)
+verify_out = ""
+if VERIFY and os.path.exists(f"{OUT}/plant.sha"):
+    plant = open(f"{OUT}/plant.sha").read().strip()
+    try:
+        vp = subprocess.run(
+            ["bash", VERIFY, TASK, FX, plant],
+            cwd=FX,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=600,
+        )
+        verify_out = vp.stdout
+        m["verifier"] = {0: "pass", 1: "fail", 3: "judged"}.get(vp.returncode, "error")
+    except Exception as e:
+        verify_out, m["verifier"] = f"[harness error: {e}]", "error"
+    m["verifier_detail"] = (verify_out.strip().splitlines() or [""])[-1][:300]
+    m["new_commits"] = int(
+        subprocess.run(
+            ["git", "-C", FX, "rev-list", "--count", f"{plant}..HEAD"],
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        or 0
+    )
 json.dump(m, open(f"{OUT}/metrics.json", "w"), indent=1)
 
 
@@ -220,6 +257,13 @@ def sh(cmd):
         return f"[harness error: {e}]"
 
 
+# Diff base: the initial commit (F1 fixtures), or the planted commit for F3, whose clone carries the
+# repo's whole history (a root-commit diff would be the entire repository).
+BASE = (
+    open(f"{OUT}/plant.sha").read().strip()
+    if os.path.exists(f"{OUT}/plant.sha")
+    else "$(git rev-list --max-parents=0 HEAD 2>/dev/null | tail -1)"
+)
 D = [
     f"# Dossier\n",
     "## Prompt\n",
@@ -236,19 +280,21 @@ for c in [
     "git log --oneline --all --graph -8",
     "git branch -a -v",
     "git ls-remote origin 2>/dev/null || echo '(no origin)'",
-    "git diff $(git rev-list --max-parents=0 HEAD 2>/dev/null | tail -1) --stat -- . ':!.claude' 2>/dev/null",
+    f"git diff {BASE} --stat -- . ':!.claude' 2>/dev/null",
     "git ls-files --others --exclude-standard | grep -v '^.claude' || echo '(no untracked files)'",
 ]:
     D.append(f"### `{c}`\n```\n{sh(c)}\n```\n")
 if os.path.exists(f"{FX}/.git"):
     D.append(
-        "### Diff of tracked files vs the initial commit\n```diff\n"
+        "### Diff of tracked files vs the base commit\n```diff\n"
         + sh(
-            "git diff $(git rev-list --max-parents=0 HEAD | tail -1) -- . ':!.claude' | head -200"
+            f"git diff {BASE} -- . ':!.claude' | head -200"
         )
         + "\n```\n"
     )
 D.append("## Outcome checks (run by the harness after the session)\n")
+if verify_out:
+    D.append(f"### Harness verifier (code)\n```\n{neutral(verify_out.rstrip())}\n```\n")
 for c in rub["checks"]:
     D.append(f"### `{neutral(c)[:160]}`\n```\n{sh(c)}\n```\n")
 open(f"{OUT}/dossier.md", "w").write("\n".join(D))

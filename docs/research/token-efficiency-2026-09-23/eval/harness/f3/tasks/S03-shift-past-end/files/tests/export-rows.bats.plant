@@ -1,0 +1,30 @@
+#!/usr/bin/env bats
+# tests/export-rows.bats — scripts/export-rows.sh formats and argument handling.
+# Every invocation is bounded: an argument-parsing bug must fail the test, not hang the suite.
+
+setup() {
+  REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+  ER="$REPO/scripts/export-rows.sh"
+}
+
+@test "tsv passes rows through" {
+  run timeout 10 bash -c "printf 'a\tb\nc\td\n' | bash '$ER'"
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = $'a\tb' ]
+}
+
+@test "csv converts tabs and --limit stops early" {
+  run timeout 10 bash -c "printf 'a\tb\nc\td\n' | bash '$ER' --format csv --limit 1"
+  [ "$status" -eq 0 ]
+  [ "$output" = "a,b" ]
+}
+
+@test "--out with no value is a usage error, not a hang" {
+  run timeout 10 bash "$ER" --out < /dev/null
+  [ "$status" -eq 2 ]
+}
+
+@test "--limit with no value is a usage error, not a hang" {
+  run timeout 10 bash "$ER" --format csv --limit < /dev/null
+  [ "$status" -eq 2 ]
+}

@@ -12,7 +12,8 @@ G=${GATE_ROOT:-/tmp/tokeff-gate}
 CLAUDE_BIN=${CLAUDE_BIN:-$HOME/.claude-280/node_modules/.bin/claude}
 # full|slim are the gate's arms; any other name must be a probe arm already built under $G/arms.
 case "$ARM" in full|slim) ;; *[!a-z0-9-]*|'') echo "bad arm: $ARM" >&2; exit 2;; *) [ -d "$G/arms/$ARM" ] || { echo "bad arm: $ARM" >&2; exit 2; };; esac
-T="$H/tasks/$TASK"
+# GATE_TASKS: a tasks dir other than harness/tasks (F4 uses one holding T01-T20 plus its T21).
+T="${GATE_TASKS:-$H/tasks}/$TASK"
 [ -f "$T/prompt.txt" ] && [ -x "$T/fixture.sh" ] || { echo "no task: $TASK" >&2; exit 2; }
 [ -d "$CCD" ] || { echo "no config dir: $CCD" >&2; exit 2; }
 [ -f "$G/arms/$ARM/CLAUDE.md" ] || { echo "arm files missing: $G/arms/$ARM (run build-arms.sh)" >&2; exit 2; }
@@ -34,6 +35,16 @@ fi
 SETTINGS=$(python3 -c 'import json,sys; print(json.dumps({"claudeMdExcludes": sys.argv[1:]}))' \
   "$CCD/CLAUDE.md" "$HOME/.claude/CLAUDE.md" "$HOME/.claude/rules/00-mission-board.md" \
   "$HOME/.claude/rules/agent-operating-lessons.md")
+# GATE_GUARD=<hook script>: add f3/sandbox-guard.sh as a PreToolUse hook (both arms alike), so a run
+# cannot mutate the real mission board or operator stores. GATE_NO_MCP=1: start no MCP servers, so a
+# run cannot create a real mail draft. Both default off, which reproduces the F1 rounds.
+if [ -n "${GATE_GUARD:-}" ]; then
+  SETTINGS=$(python3 -c 'import json,sys; s=json.loads(sys.argv[1]); s["hooks"]={"PreToolUse":[{"matcher":"Bash|Edit|Write|MultiEdit|NotebookEdit","hooks":[{"type":"command","command":"bash "+sys.argv[2]+" "+sys.argv[3]}]}]}; print(json.dumps(s))' \
+    "$SETTINGS" "$GATE_GUARD" "$RUN")
+fi
+MCP=()
+# (--mcp-config is variadic: these go BEFORE --settings, or it swallows the prompt as a config path.)
+[ "${GATE_NO_MCP:-0}" = 1 ] && MCP=(--strict-mcp-config --mcp-config '{"mcpServers":{}}')
 printf '%s\n' "$ARM" > "$RUN/out/arm"
 printf '%s\n' "$CCD" > "$RUN/out/config_dir"
 touch "$RUN/out/start.stamp"
@@ -51,7 +62,7 @@ if [ "${GATE_SCRUB_PANE_ENV:-0}" = 1 ]; then
 fi
 START=$(date +%s)
 CLAUDE_CONFIG_DIR="$CCD" TMPDIR="$RUN/tmp/" ${SCRUB[@]+"${SCRUB[@]}"} timeout 1500 "$CLAUDE_BIN" -p --output-format json \
-  --model claude-opus-5-5 --effort high --permission-mode auto --settings "$SETTINGS" \
+  --model claude-opus-5-5 --effort high --permission-mode auto ${MCP[@]+"${MCP[@]}"} --settings "$SETTINGS" \
   "$(cat "$T/prompt.txt")" > "$RUN/out/result.json" 2> "$RUN/out/stderr.txt"
 RC=$?
 END=$(date +%s)

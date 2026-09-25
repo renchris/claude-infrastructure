@@ -1,0 +1,36 @@
+#!/usr/bin/env bats
+# tests/stamp-version.bats — scripts/stamp-version.py against a stubbed git, so the stamp is known.
+
+setup() {
+  REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+  SV="$REPO/scripts/stamp-version.py"
+  STUB="$BATS_TEST_TMPDIR/bin"
+  mkdir -p "$STUB"
+  # A fake git: fixed sha, and a clean or dirty status depending on STUB_DIRTY.
+  cat > "$STUB/git" <<'EOF'
+case "$1" in
+  rev-parse) echo abc1234 ;;
+  status) [ -n "${STUB_DIRTY:-}" ] && echo " M file.txt" ;;
+esac
+exit 0
+EOF
+  chmod +x "$STUB/git"
+}
+
+@test "prints the short sha git reports" {
+  run env PATH="$STUB:$PATH" python3 "$SV"
+  [ "$status" -eq 0 ]
+  [ "$output" = "version abc1234" ]
+}
+
+@test "--dirty marks a tree with changes" {
+  run env PATH="$STUB:$PATH" STUB_DIRTY=1 python3 "$SV" --dirty
+  [ "$status" -eq 0 ]
+  [ "$output" = "version abc1234+dirty" ]
+}
+
+@test "--dirty leaves a clean tree unmarked" {
+  run env PATH="$STUB:$PATH" python3 "$SV" --dirty
+  [ "$status" -eq 0 ]
+  [ "$output" = "version abc1234" ]
+}

@@ -1,0 +1,28 @@
+#!/usr/bin/env bats
+# tests/queue-depth.bats — scripts/queue-depth.sh counts spool entries and enforces --over.
+
+setup() {
+  REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+  QD="$REPO/scripts/queue-depth.sh"
+  SPOOL="$BATS_TEST_TMPDIR/spool"
+}
+
+@test "a missing spool is 0 queued" {
+  run bash "$QD" "$BATS_TEST_TMPDIR/absent"
+  [ "$status" -eq 0 ]
+  [ "$output" = "0 queued" ]
+}
+
+@test "counts one entry per line" {
+  printf 'job-1\njob-2\njob-3\n' > "$SPOOL"
+  run bash "$QD" "$SPOOL"
+  [ "$status" -eq 0 ]
+  [ "$output" = "3 queued" ]
+}
+
+@test "--over trips when the spool is deeper than the limit" {
+  printf 'a\nb\nc\nd\ne\n' > "$SPOOL"
+  run bash "$QD" --over 4 "$SPOOL"
+  [ "$status" -eq 1 ]
+  [ "$output" = "5 queued" ]
+}
