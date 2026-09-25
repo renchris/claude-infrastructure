@@ -328,6 +328,8 @@ export function drawWindow(g, T, W, H, win) {
 // CLAUDE.global.md § The readout): a decision, a plain question, and how sure the session is. The
 // question is R3 there, open at 72 %: whether a session may escalate to the frontier model on its
 // own. No buttons: the answer is a reply, not a click (critique round two, blocker 2).
+// The card's words, as the pacing probe counts them for reading time.
+export const CARD_TEXT = '⛔ Blocked — need your call: May a session switch to the bigger model on its own? 72 % sure, says the session.'
 export function drawCard(g, T, W, H) {
   g.clearRect(0, 0, W, H)
   const r = Math.round(H * 0.05)
@@ -351,8 +353,9 @@ export function drawCard(g, T, W, H) {
   const w72 = g.measureText('72 %').width
   g.font = `500 ${H * 0.078}px ${SANS}`
   g.fillStyle = T.muted
-  g.fillText('sure, says the session.', pad + w72 + H * 0.05, H * 0.72)
-  g.fillText('The call is yours.', pad + w72 + H * 0.05, H * 0.84)
+  // "The call is yours." went in round two: "need your call" already says it, and every word here
+  // costs the viewer reading time (README § Round 2).
+  g.fillText('sure, says the session.', pad + w72 + H * 0.05, H * 0.795)
 }
 
 // ------------------------------------------------------------------------------------ the racks
