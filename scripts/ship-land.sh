@@ -3691,6 +3691,50 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
   fi
 
+  # ── PUBLIC-REPO HYGIENE: personal identifiers and local-only content ─────────────────────────
+  # This repo is public (docs/plans/PUBLIC_REPO_HYGIENE.md). The tree was cleaned once; this is
+  # what keeps it clean. Every land runs it, OWN-SCOPE: only lines and paths the range ADDS can
+  # block, so a sibling's pre-existing text is never this land's to answer for. Arms: the
+  # operator's private redaction map (the same file the public projection applies), any e-mail
+  # address config/public-hygiene.conf does not allow, phone-shaped numbers, local-only paths.
+  # Off this machine (no private store, e.g. a fixture $HOME) the identifier arm is DISARMED and
+  # the lint says so on stderr; the generic arms still run.
+  #
+  # gate_bounded: THE AUTHOR'S OWN DIFF — a refusal names an added line or path, and clears the
+  # moment that line is replaced with its placeholder or the path is dropped from the land. A
+  # detector fault is escapable by SHIP_LAND_PUBLIC_HYGIENE_LINT=/nonexistent, and --selftest runs
+  # first so a broken detector refuses loudly rather than passing silently.
+  PH_LINT="${SHIP_LAND_PUBLIC_HYGIENE_LINT:-scripts/public-hygiene-lint.py}"
+  if [[ -x "$PH_LINT" ]]; then
+    echo "→ gate: public-repo hygiene (identifiers, e-mail, phone, local-only paths added by this land)" >&2
+    if ! selftest_ok "$PH_LINT"; then
+      echo "✗ gate: public-hygiene-lint --selftest FAILED — the detector no longer discriminates," >&2
+      echo "  so its clean verdict would mean nothing. Fix the lint before landing." >&2
+      echo "  Escape if it is the detector that is broken: SHIP_LAND_PUBLIC_HYGIENE_LINT=/nonexistent" >&2
+      gate_red public-hygiene-selftest
+      # gate_bounded: THE DETECTOR, NOT THE WORLD — clears when the lint's selftest is green again, and
+      # SHIP_LAND_PUBLIC_HYGIENE_LINT=/nonexistent disarms the arm outright
+      return 1
+    fi
+    local _phrc=0
+    python3 "$PH_LINT" --own-range "$range" --allow-no-map >&2 || _phrc=$?
+    if (( _phrc == 2 )); then
+      arm_nonverdict "public-hygiene-lint"
+      # gate_bounded: NON-VERDICT — clears when the lint can read git and its rule files again
+      return 1
+    fi
+    if (( _phrc != 0 )); then
+      echo "✗ gate: public-repo hygiene RED — this land adds a personal identifier, an unlisted e-mail" >&2
+      echo "  address, a phone number or a local-only path to a PUBLIC repo. Replace each named hit with" >&2
+      echo "  its placeholder (example.com addresses, 555-01xx numbers), or keep the content in the" >&2
+      echo "  private store (~/Development/claude-private; skills/LOCAL_ONLY.md says how)." >&2
+      gate_red public-hygiene
+      # gate_bounded: THE AUTHOR'S OWN DIFF — the named added line or path; replacing it with its
+      # placeholder (or dropping the path) clears the refusal on the next attempt
+      return 1
+    fi
+  fi
+
   # ── pipefail/SIGPIPE ratchet (backlog 791345455b58) ───────────────────────────────────────────
   # Fifth deterministic blocker class, same own-scope contract as the ratchets above. `producer |
   # grep -q PAT` under `set -o pipefail` reads FALSE **on a match**: grep exits at the match, the
