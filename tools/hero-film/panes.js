@@ -292,33 +292,35 @@ function paintLines(g, lines, x, y, lh, reveal, head) {
 // win = { title, panes: [pane, pane?], split: 0..1 (the divider's x as a fraction of the width, drawn
 //         down to `draw`), draw: 0..1, focus: 0|1 }
 export function drawWindow(g, T, W, H, win) {
+  // k scales the window's fixed pixel details (border, divider) with its canvas (world.js TEX).
+  const k = win.k ?? 1
   g.clearRect(0, 0, W, H)
   const r = Math.round(H * 0.022)
   const tb = Math.round(H * 0.046)
   rr(g, 0, 0, W, H, r)
   g.fillStyle = T.bezel
   g.fill()
-  rr(g, 3, 3, W - 6, H - 6, r - 2)
+  rr(g, 3 * k, 3 * k, W - 6 * k, H - 6 * k, r - 2 * k)
   g.fillStyle = T.title
   g.fill()
   g.font = `500 ${Math.round(tb * 0.52)}px ${SANS}`
   g.fillStyle = T.titleInk
   g.textAlign = 'center'
   g.textBaseline = 'middle'
-  g.fillText(win.title ?? '✳ Claude Code', W / 2, tb / 2 + 2)
+  g.fillText(win.title ?? '✳ Claude Code', W / 2, tb / 2 + 2 * k)
   g.textAlign = 'left'
-  const bx = 3
+  const bx = 3 * k
   const by = tb
-  const bw = W - 6
-  const bh = H - tb - 3
+  const bw = W - 6 * k
+  const bh = H - tb - 3 * k
   const panes = win.panes
   const sx = win.split == null ? 1 : win.split
   const leftW = Math.round(bw * sx)
   drawPane(g, T, bx, by, leftW, bh, panes[0])
-  if (panes[1] && leftW < bw - 4) drawPane(g, T, bx + leftW + 3, by, bw - leftW - 3, bh, panes[1])
+  if (panes[1] && leftW < bw - 4 * k) drawPane(g, T, bx + leftW + 3 * k, by, bw - leftW - 3 * k, bh, panes[1])
   if (win.split != null && (win.draw ?? 1) > 0) {
     g.fillStyle = T.divider
-    g.fillRect(bx + leftW - 1, by, 4, bh * clamp01(win.draw ?? 1))
+    g.fillRect(bx + leftW - k, by, 4 * k, bh * clamp01(win.draw ?? 1))
   }
   // Round the bottom corners off the panes.
   g.globalCompositeOperation = 'destination-in'
