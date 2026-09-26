@@ -29,37 +29,17 @@ setup() {
   ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   HARNESS="$ROOT/scripts/validate-bash-differential.sh"
   CONTROLS="$ROOT/scripts/validate-bash-differential-controls.sh"
-  SITES="$ROOT/tests/fixtures/validate-bash-sites.tsv"
-  CORPUS="$ROOT/tests/fixtures/validate-bash-corpus.txt"
 }
 
-@test "fixtures and harness are present" {
-  [ -r "$HARNESS" ]
-  [ -r "$CONTROLS" ]
-  [ -r "$SITES" ]
-  [ -r "$CORPUS" ]
-}
-
-@test "every pattern site's measured verdict still matches its pinned verdict" {
+@test "every pattern site's measured verdict matches its pin, with full coverage and no drift" {
+  # One run owns all three: the harness exits 1 on a verdict mismatch, on a COVERAGE FAILURE
+  # (a grep site missing from the inventory) and on a DRIFT FAILURE (a pinned pattern absent from
+  # its line), and exits 2 on a missing fixture — the output printed below names which.
   run bash "$HARNESS"
   [ "$status" -eq 0 ] || {
     printf '%s\n' "$output"
     false
   }
-}
-
-@test "coverage: every code-level grep site in the hook is in the inventory" {
-  run bash "$HARNESS"
-  [ "$status" -eq 0 ]
-  # the harness prints this section only on a coverage failure
-  [[ "$output" != *"COVERAGE FAILURE"* ]] || false
-  [[ "$output" != *"UNTESTED grep sites"* ]]
-}
-
-@test "drift: every pinned pattern still appears literally on its hook line" {
-  run bash "$HARNESS"
-  [ "$status" -eq 0 ]
-  [[ "$output" != *"DRIFT FAILURE"* ]]
 }
 
 @test "the corpus actually exercises the divergence axes (non-vacuous)" {

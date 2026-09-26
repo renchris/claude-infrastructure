@@ -290,21 +290,13 @@ edit_raw()  { jq -nc --arg f "$1" --arg o "$2" --arg n "$3" \
   [ "$status" -eq 1 ]
 }
 
-@test "the limit is honoured, and its default is spelled in exactly ONE place" {
+@test "the limit is honoured" {
+  # The SSOT half (the default spelled in exactly ONE place) is owned by
+  # tests/memory-nudge-budget.bats "the three measurers share ONE limit literal", which runs the
+  # same three greps plus a scan of hooks/ bin/ scripts/ for any fourth spelling.
   idx="$(mkindex 5000)"
   MEMORY_INDEX_LIMIT=5050 run mib_verdict Edit "$idx" "$(edit_grow "$idx" 100)"
   [ "$status" -eq 0 ]
-  # SSOT. Before 2026-08-15 the default was re-spelled in the gate, the nudge and the rotor, and
-  # a fix to one of the three could silently leave the other two measuring a different index.
-  # NO `-r`: the operand is ONE FILE, so recursion means nothing — but it is not inert. Under `-r`
-  # the grep on PATH (ugrep 7.5.0 here) prefixes each count with its filename, so `$n` came back as
-  # `…/memory-index-measure.sh:1` and the comparison died `integer expression expected`, status 2.
-  # This case could never pass — it reds on pristine origin/main exactly as it does here. The two
-  # sibling assertions below already use the plain `-c` form that works.
-  n="$(grep -c 'MEMORY_INDEX_LIMIT:-' "$REPO/hooks/lib/memory-index-measure.sh")"
-  [ "$n" -eq 1 ]
-  [ "$(grep -c 'MEMORY_INDEX_LIMIT:-' "$LIB")" -eq 0 ]
-  [ "$(grep -c 'MEMORY_INDEX_LIMIT:-' "$REPO/hooks/memory-nudge.sh")" -eq 0 ]
 }
 
 # ── end-to-end through the host hook, invoked the way the harness invokes it ──
