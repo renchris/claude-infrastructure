@@ -175,9 +175,23 @@ setup() {
 }
 
 @test "M4 KILL SWITCH: CC_MBX_PULL_ADOPT=0 is honored by the drain hook" {
-  # the switch is read by the CALLER (hooks/mailbox-drain.sh); assert it is wired there, since a
-  # kill switch that exists only in a comment is not a kill switch.
-  grep -q 'CC_MBX_PULL_ADOPT' "$REPO/hooks/mailbox-drain.sh" || false
+  # The switch is read by the CALLER (hooks/mailbox-drain.sh), so drive the real hook. A grep for the
+  # name cannot see this: it also sits in a comment there, and a kill switch that exists only in a
+  # comment is not a kill switch. Both arms share one fixture — a crashed predecessor on my pane.
+  mailbox_alias_write "$PANE_A" "$SESS_1"
+  printf '2026-07-29T10:00:00-0700 [peer] mail for a crashed predecessor\n' >> "$CC_MAILBOX_DIR/$SESS_1.md"
+  mailbox_alias_write "$PANE_A" "$SESS_2"
+  drain() { printf '{"session_id":"%s"}' "$SESS_2" \
+    | env CC_MBX_PULL_ADOPT="$1" CC_PANE_ID="$PANE_A" "$REPO/hooks/mailbox-drain.sh" session-start; }
+  run drain 0
+  [ "$status" -eq 0 ]
+  ! grep -qs 'crashed predecessor' "$CC_MAILBOX_DIR/$SESS_2.md" || false   # not adopted
+  grep -q 'crashed predecessor' "$CC_MAILBOX_DIR/$SESS_1.md"                 # still where it was
+  # CONTROL: the same fixture at the default switch value DOES adopt, so the arm above is not silent
+  # for a harness reason.
+  run drain 1
+  [ "$status" -eq 0 ]
+  grep -q 'crashed predecessor' "$CC_MAILBOX_DIR/$SESS_2.md"
 }
 
 # ── liveness proxy ───────────────────────────────────────────────────────────────────────────────

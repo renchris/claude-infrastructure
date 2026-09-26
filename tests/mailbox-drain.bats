@@ -328,6 +328,9 @@ an embedded newline that must not leak into the operator line"
 }
 
 @test "arm-on-open: EMPTY inbox + ARMED watcher ⇒ silent (nothing to say)" {
+  # Also the E2 DISCRIMINATOR: this is the same armed watcher with NO live /goal. The goal-inert notice
+  # is a CONJUNCTION; one that fired on every armed watcher would tell every goal-less session to kill
+  # the wake path it was correctly told to arm.
   printf 'pid=%s\n' "$$" > "$CC_MAILBOX_DIR/$UUID.watching"
   run bash -c 'echo "{}" | "$0" prompt' "$DRAIN"
   [ "$status" -eq 0 ]
@@ -583,15 +586,6 @@ goal_t() { # → a transcript path whose LAST goal_status attachment is a live a
   printf '%s' "$ctx" | grep -q 'holding your LIVE /goal inert' || false
   # it must NOT read as the arm nudge — the session is armed; that is the whole problem
   ! printf '%s' "$ctx" | grep -q 'No inbox wake path armed' || false
-}
-
-@test "E2 DISCRIMINATOR: the SAME armed watcher with NO live /goal stays silent" {
-  # The condition is the CONJUNCTION. A report that fired on every armed watcher would tell every
-  # goal-less session to kill the wake path it was correctly told to arm.
-  printf 'pid=%s\n' "$$" > "$CC_MAILBOX_DIR/$UUID.watching"
-  run bash -c 'echo "{}" | "$0" prompt' "$DRAIN"
-  [ "$status" -eq 0 ]
-  [ -z "$output" ] || false
 }
 
 @test "E2 EXEMPTION: an idle-scoped watcher is SANCTIONED under a live goal ⇒ no kill notice" {

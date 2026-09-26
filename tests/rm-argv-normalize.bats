@@ -239,18 +239,8 @@ not_denied_count() {
   [ "$missed" -eq 11 ]
 }
 
-# ════ the orphaned matrix, brought under the gate ═══════════════════════════════════════════════
-
-@test "the hooks/tests decision matrix passes (86 cases, none of which the gate could see before)" {
-  # hooks/tests/validate-bash.test.sh is the SSOT decision matrix for this hook — false positives,
-  # true positives, ask cases, silent no-ops, edge cases. The land gate runs `tests/*.bats` and
-  # nothing else, so those 60 assertions have never blocked a land: detection, not a gate
-  # (memory: enforcement-must-live-at-the-chokepoint). One line fixes that, and it is the natural
-  # regression net for exactly this change.
-  run bash "$REPO/hooks/tests/validate-bash.test.sh"
-  [ "$status" -eq 0 ]
-  echo "$output" | grep -q 'PASSED' || false
-}
+# The hooks/tests decision matrix (hooks/tests/validate-bash.test.sh) runs under the land gate via
+# git-add-force-argv.bats "the hooks/tests decision matrix passes"; one ~25 s runner is enough.
 
 # ════ WHERE THE COMMAND ENDS — the same spelling question, one layer out ═════════════════════════
 #
