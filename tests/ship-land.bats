@@ -1010,9 +1010,6 @@ case "\$(cat "$KILL_MODE" 2>/dev/null)" in
   unattrib)  echo "1..3"; echo "ok 1 alpha"; exit 1 ;;
   startup)   exit 1 ;;
   red)       echo "1..1"; echo "not ok 1 boom"; exit 1 ;;
-  sig-once)  if [ ! -f "$BATS_TEST_TMPDIR/killed-once" ]; then
-               : > "$BATS_TEST_TMPDIR/killed-once"; echo "1..3"; echo "ok 1 alpha"; exit 137
-             fi ;;
   cut-then-red) if [ ! -f "$BATS_TEST_TMPDIR/cut-once" ]; then
                : > "$BATS_TEST_TMPDIR/cut-once"; echo "1..3"; echo "ok 1 alpha"; exit 137
              else echo "1..3"; echo "ok 1 alpha"; echo "not ok 2 boom"; exit 1; fi ;;
@@ -2250,26 +2247,11 @@ shed_probe_v() {  # $@ = env assignments → "<ABOVE|BELOW> ceiling=<c> load=<l>
 # The two lanes' rules are NOT in tension: v1 blocks on a non-verdict because it was asked to
 # PROVE the tree; the fast lane proceeds because it never claimed to.
 # RED-PROOF: every assertion below fails against the pre-c605a2e tree, where EVERY non-zero bats
-# exit produced "GATE RED" + exit 6. The `red` and `startup` cases are the positive controls — if
-# the kill path ever starts swallowing genuine failures, those two go red.
-# Counts are per-suite arithmetic: scope_fixture seeds TWO suites, so a corpus-wide cut is 2 × (run
-# + one bounded re-run) = 4 invocations, not 2.
-
-@test "v1 gate-killed: a SIGNAL-killed corpus exits 9 (not 6), pushes nothing, retries once each" {
-  scope_fixture
-  echo sig > "$KILL_MODE"
-  gc="$(git rev-parse --git-common-dir)"; rm -f "$gc/gate-green"
-  landable feat/killed gk.sh
-
-  run env SHIP_LAND_LANE=v1 bash "$SHIPLAND" --trunk main
-  [ "$status" -eq 9 ]                                          # 9 = no verdict, NOT 6 = red
-  echo "$output" | grep -q "GATE-KILLED" || false
-  ! echo "$output" | grep -q "GATE RED" || false               # never both, never the wrong one
-  [ "$(grep -c . "$BATS_ARGV")" -eq 4 ]                        # 2 suites × (run + ONE re-run)
-  [ ! -f "$gc/gate-green" ]                                    # a kill proves nothing ⇒ no marker
-  git fetch -q origin main
-  [ -z "$(git ls-tree origin/main -- gk.sh)" ]                 # fail-closed: nothing landed
-}
+# exit produced "GATE RED" + exit 6. The `startup` case here and the `red` positive control in the
+# LANE=v1 CORPUS section below are the positive controls — if the kill path ever starts swallowing
+# genuine failures, those go red. The all-suites-killed exit 9 (with its 2 × (run + one bounded
+# re-run) = 4 invocation count) and the cut-then-green land are owned by that section's per-suite
+# cases, which assert everything these once did plus the flakes.jsonl rows.
 
 @test "v1 gate-killed: land.log attests exit 9, so a kill is not in the red denominator" {
   scope_fixture
@@ -2297,18 +2279,6 @@ shed_probe_v() {  # $@ = env assignments → "<ABOVE|BELOW> ceiling=<c> load=<l>
   echo "$output" | grep -q "GATE-KILLED" || false
 }
 
-@test "v1 gate-killed POSITIVE CONTROL: a suite that NAMES a failing test still exits 6" {
-  # If this ever goes green-by-accident the whole split is worthless — a real red MUST stay a red.
-  scope_fixture
-  echo red > "$KILL_MODE"
-  landable feat/really-red gr.sh
-
-  run env SHIP_LAND_LANE=v1 bash "$SHIPLAND" --trunk main
-  [ "$status" -eq 6 ]
-  echo "$output" | grep -q "GATE RED" || false
-  ! echo "$output" | grep -q "GATE-KILLED" || false
-}
-
 @test "v1 gate-killed: a suite that emits NO TAP at all is ALSO a non-verdict (exit 9, fail-closed)" {
   # An earlier draft split "never got going" from "died mid-run" and called the former a RED.
   # Retired deliberately: the ONE discriminator is `not ok` in the TAP, and a second rule keyed on
@@ -2323,19 +2293,6 @@ shed_probe_v() {  # $@ = env assignments → "<ABOVE|BELOW> ceiling=<c> load=<l>
   echo "$output" | grep -q "GATE-KILLED" || false
   git fetch -q origin main
   [ -z "$(git ls-tree origin/main -- gn.sh)" ]                 # the property that actually matters
-}
-
-@test "v1 gate-killed: a cut-then-green re-run LANDS (the whole point of the single re-run)" {
-  scope_fixture
-  echo sig-once > "$KILL_MODE"                                 # the FIRST invocation only
-  landable feat/kill-then-green kg.sh
-
-  run env SHIP_LAND_LANE=v1 bash "$SHIPLAND" --trunk main
-  [ "$status" -eq 0 ]
-  echo "$output" | grep -q "CUT, not RED" || false             # it named the non-verdict…
-  [ "$(grep -c . "$BATS_ARGV")" -eq 3 ]                        # …re-ran only the cut suite…
-  git fetch -q origin main
-  [ -n "$(git ls-tree origin/main -- kg.sh)" ]                 # …and landed
 }
 
 @test "v1 gate-killed: a cut re-run that turns up REAL failures is a red (6), not a kill (9)" {

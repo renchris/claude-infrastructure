@@ -249,11 +249,14 @@ TELL="The cc-inbox-guard cost profile deserves its own scoped pass — 52.8s of 
 
 # ── fail-open safety ──
 @test "missing transcript ⇒ exit 0 silent abstain" {
-  printf '{"session_id":"s","transcript_path":"/nonexistent/t.jsonl","cwd":"/tmp"}' | "$HOOK"
+  run bash -c "printf '%s' '{\"session_id\":\"s\",\"transcript_path\":\"/nonexistent/t.jsonl\",\"cwd\":\"/tmp\"}' | '$HOOK'"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q '"reason":"transcript-missing"' "$DISPATCH_ASSERT_IDL"
 }
 
 @test "empty stdin ⇒ exit 0 silent" {
-  printf '' | "$HOOK"
+  run "$HOOK" </dev/null
+  [ "$status" -eq 0 ]; [ -z "$output" ]
 }
 
 @test "B-3: exactly one IDL line per invocation" {

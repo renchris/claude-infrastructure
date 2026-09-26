@@ -11,6 +11,11 @@
 # is the command verbatim — `@tsv` is deliberately not used, because it escapes a tab as `\t` and
 # would silently rewrite any command containing one. (4) and (5) are the assertions that would catch
 # that, and (8) is the one that can fail: a mutant using @tsv must corrupt a tab-bearing command.
+#
+# Cases (1)-(3) and (7) were removed as duplicates: the plain round-trip, the session id and the
+# absent-sid placeholder are owned by tests/validate-bash-audit-log.bats (4), (2), (3); the
+# run_in_background read is owned behaviourally by tests/validate-bash-goal-guard.bats (the
+# background DENY and the foreground PASS under a live goal).
 
 setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
@@ -34,22 +39,6 @@ logline() {
   # exist on that path. Without this the command substitution in (8) inherits the failure and the
   # control dies before it can assert anything.
   cat "$HOME/.claude/logs/bash-commands.log" 2>/dev/null || true
-}
-
-@test "(1) a plain command still round-trips into the audit line" {
-  run logline "echo r15-plain"
-  [[ "$output" == *"echo r15-plain" ]]
-}
-
-@test "(2) the session id from the single parse reaches the logger" {
-  run logline "echo r15-sid" "sid-abcdef"
-  [[ "$output" == *"[sid-abcdef]"* ]]
-}
-
-@test "(3) an ABSENT session_id renders as the '-' placeholder" {
-  rm -rf "$HOME/.claude/logs"
-  run bash -c 'jq -nc "{tool_name:\"Bash\",tool_input:{command:\"echo r15-nosid\"}}" | bash "$0" >/dev/null 2>&1; cat "$HOME/.claude/logs/bash-commands.log"' "$HOOK"
-  [[ "$output" == *"[-]"* ]]
 }
 
 @test "(4) a command containing a TAB survives the parse byte-for-byte" {
@@ -77,17 +66,6 @@ logline() {
   run bash -c 'jq -nc "{tool_name:\"Bash\",tool_input:{command:\"echo r15-empty-sid\"},session_id:\"\"}" | bash "$0" >/dev/null 2>&1; cat "$HOME/.claude/logs/bash-commands.log"' "$HOOK"
   [[ "$output" == *"[-]"* ]] || false
   [[ "$output" == *"echo r15-empty-sid"* ]]
-}
-
-@test "(7) run_in_background still reaches the /goal guard from the single parse" {
-  # A backgrounded poll loop under a live goal is the shape that guard denies; it can only see it
-  # if run_in_background survived the collapse.
-  export CLAUDE_GOAL_ACTIVE=1
-  run bash -c 'jq -nc "{tool_name:\"Bash\",tool_input:{command:\"until false; do sleep 30; done\",run_in_background:true},session_id:\"sid-g\"}" | bash "$0"' "$HOOK"
-  [ "$status" -eq 0 ]
-  # the guard is env/state dependent, so assert only that the field was READ as true: a false
-  # reading takes the branch that emits nothing at all.
-  [ -n "$output" ] || skip "goal guard not armed in this environment — field-read asserted by (8)"
 }
 
 @test "(8) CONTROL — an @tsv mutant CORRUPTS a tab-bearing command, so (4) is not vacuous" {

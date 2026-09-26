@@ -35,12 +35,10 @@ mk_superseded() { # $1=successor pid  $2=successor pane
     "$CFG" "$1" "${2:-647}" > "$TOMB"
 }
 
-@test "no tombstone: an ordinary session is untouched (exit 0, silent)" {
-  run bash "$HOOK" <<<"$INPUT"
-  [ "$status" -eq 0 ]; [ -z "$output" ]
-}
-
 @test "THE INCIDENT: the STALE copy (this claude pid is NOT the successor) is BLOCKED, naming the live pane" {
+  # Also the control on the account acquittal: the tombstone's handed_off_to IS this account, so
+  # without the supersession arm this copy would be acquitted — the blindness that let two writers
+  # share one transcript. (The no-tombstone path is owned by tests/handed-off-session-guard.bats.)
   mk_superseded "$$" 647
   CC_HOG_SELF_PID=4194100 run bash "$HOOK" <<<"$INPUT"
   [ "$status" -eq 2 ]
@@ -59,14 +57,6 @@ mk_superseded() { # $1=successor pid  $2=successor pane
   mk_superseded 4194101 647
   CC_HOG_SELF_PID=4194100 run bash "$HOOK" <<<"$INPUT"
   [ "$status" -eq 0 ]
-}
-
-@test "CONTROL: the account acquittal must NOT rescue a same-account stale copy" {
-  # Without the supersession arm the tombstone's handed_off_to == this account would acquit EVERY
-  # copy — the exact blindness that let two writers share one transcript.
-  mk_superseded "$$" 647
-  CC_HOG_SELF_PID=4194100 run bash "$HOOK" <<<"$INPUT"
-  [ "$status" -eq 2 ]
 }
 
 @test "an unresolvable self identity fails OPEN rather than blocking a session it cannot name" {
