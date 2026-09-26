@@ -35,21 +35,31 @@ _stub_sessions() {
   chmod +x "$HOME/.claude/bin/cc-sessions"
 }
 
+# The two it2-guard refusals below isolate THEIR guard: no inherited pane id (the positive control
+# would refuse first) and a HEALTHY registry (registry-unreadable would refuse first). Without both,
+# deleting the array guard still exits 3 — refused by a sibling — and the case guards nothing. The
+# `"oracle":"unknown"` token is the it2 guard's own; the siblings name themselves differently.
 @test "REFUSES with verdict=unknown when the oracle emits nothing (the fabricated-zero bug)" {
+  unset CC_PANE_ID ITERM_SESSION_ID
   _stub_it2 ''
+  _stub_sessions '[]'
   run /bin/bash "$RPT" --json
   [ "$status" -eq 3 ]
   printf '%s' "$output" | grep -q '"verdict":"unknown"' || false
+  printf '%s' "$output" | grep -q '"oracle":"unknown"' || false
   # and it must NOT have claimed any strand number. `grep -c … || true` keeps this a LIVE final
   # `[ ]` comparison — a bare `grep -qv` here would exit 0 on any non-matching line and assert nothing.
   [ "$(printf '%s' "$output" | grep -c 'dead_never_surfaced' || true)" = "0" ]
 }
 
 @test "REFUSES when the oracle emits non-array garbage" {
+  unset CC_PANE_ID ITERM_SESSION_ID
   _stub_it2 'not json at all'
+  _stub_sessions '[]'
   run /bin/bash "$RPT" --json
   [ "$status" -eq 3 ]
   printf '%s' "$output" | grep -q '"verdict":"unknown"' || false
+  printf '%s' "$output" | grep -q '"oracle":"unknown"' || false
 }
 
 @test "REFUSES when the positive control FAILS — list readable but our own pane is absent" {
