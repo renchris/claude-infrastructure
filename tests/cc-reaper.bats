@@ -1858,8 +1858,8 @@ EOF
 }
 
 # ── THE NIGHTLY REGRESSION NET WAS THE FOURTH (2026-09-10, cc-backlog b1f7763af89f). launchd runs
-# `scripts/nightly-regression.sh --run` at 04:00 and its first step alone (the full bats corpus) runs
-# 30+ min, so a launchd-parented bash with no whitelist token was collected past the 600 s floor —
+# `scripts/nightly-regression.sh --run` at 04:00 and its first step alone (the full bats corpus, retired
+# from the nightly 2026-09-26) ran 30+ min, so a launchd-parented bash with no whitelist token was collected past the 600 s floor —
 # 8 TERMs in cc-reaper.log between 2026-08-30 and 2026-09-09, and regression.log got one verdict in
 # that window. Pair form, as above: the nightly survives and the unrelated orphan beside it dies.
 @test "garbage: the nightly regression run is never collected, and an unrelated orphan beside it still is" {
