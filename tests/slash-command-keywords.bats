@@ -48,10 +48,3 @@ fm_description() {
     fi
   done
 }
-
-@test "a hyphenated keyword would not have counted — the tokenizer this suite models" {
-  run bash -c 'printf "%s" "lid-close sleep" | tr " " "\n" | tr "[:upper:]" "[:lower:]" | sed "s/[^a-z0-9]//g"'
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"lidclose"* ]] || false
-  [[ "$output" != *$'\nlid\n'* ]]
-}

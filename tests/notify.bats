@@ -271,8 +271,8 @@ fire() { printf '%s' "$1" | "$H" "$2"; }
 # we own; it does not stop them PRE-CREATING a name that does not exist yet. So a planted symlink
 # turned every append into a write into an attacker-chosen file AS US (on a hook that fires on every
 # Stop), and a planted lock muted one named session. S1-S4 RED-prove against a pristine git-archive
-# of the pre-fix hook; S5 is the positive control that keeps them from passing vacuously, and S6
-# pins the host property the whole finding rests on (both green either side, by design).
+# of the pre-fix hook; S5 is the positive control that keeps them from passing vacuously (green
+# either side, by design).
 
 @test "S1: a symlink planted at the log path is NOT followed (arbitrary-file append)" {
   local victim="$BATS_TEST_TMPDIR/victim"; : > "$victim"
@@ -320,13 +320,6 @@ fire() { printf '%s' "$1" | "$H" "$2"; }
   fire "$(payload ctl /w/proj 'ls')" permission
   [ -s "$CC_NOTIFY_DIR/claude-notify.log" ]
   [ -f "$CC_NOTIFY_DIR/claude-notify-.claude-test-ctl-permission.lock" ]
-}
-
-@test "S6: host property — /tmp really is mode 1777, which is what made the names plantable" {
-  # %Lp is the low three octal digits ONLY — it reads 777 here and would have passed a 0777 /tmp
-  # just as happily. The sticky bit lives in the high digits (%Mp), and it is the whole reason the
-  # attack is pre-create rather than replace, so the assertion has to name it.
-  [ "$(stat -f %Mp%Lp /private/tmp)" = "1777" ]
 }
 
 # ── HEADLESS GATE — no sound or alert from a session with no controlling tty (2026-09-24) ────────

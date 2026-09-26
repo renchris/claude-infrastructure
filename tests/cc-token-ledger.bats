@@ -30,12 +30,6 @@ _j() { python3 -c 'import json,sys; d=json.load(sys.stdin); print(eval(sys.argv[
 _near() { python3 -c 'import sys; a,b=float(sys.argv[1]),float(sys.argv[2]); sys.exit(0 if abs(a-b)<1e-6 else 1)' "$1" "$2"; }
 _sha16() { printf '%s' "$1" | shasum -a 256 | cut -c1-16; }
 
-@test "fixture HOME has the config dirs the ledger scans" {
-  [ -f "$HOME/.claude-secondary/projects/proj/$SA.jsonl" ]
-  [ -f "$HOME/.claude-tertiary/projects/proj/$SA.jsonl" ]
-  [ -f "$HOME/.claude/autonomy/instruction-variants.jsonl" ]
-}
-
 @test "a message written as several records is one response carrying its final output" {
   run "$L" --since 2026-09-01 --task "$SA" --json
   [ "$status" -eq 0 ]

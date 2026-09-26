@@ -6,7 +6,7 @@
 # its abstain path runs on every tool call of every session. It used to spend 9 external execs
 # discovering it had nothing to do (`cat`, 5x `jq` over ONE payload, `git rev-parse`, the GC
 # damper's `find`, `cat` of the counter); it now spends 2. Nothing in teammate-checkpoint-gc.bats
-# could see that change — every one of its 13 cases fires Stop, which is the path that DOES work —
+# could see that change — every one of its cases fires Stop, which is the path that DOES work —
 # so without this file the whole R-2 saving is unpinned and the next edit silently re-adds forks.
 #
 # Harness laws, inherited from teammate-checkpoint-gc.bats and extended:
