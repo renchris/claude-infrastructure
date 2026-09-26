@@ -15,8 +15,18 @@
 # The two MUTATION CHECKS at the bottom neuter one behaviour each in a COPY and assert a positive
 # test above flips.
 
+#
+# RED-proof (R1): against the pre-fix resolver, which kept only the FIRST ps match, R1 exits 4 with
+# "no claude binary found" — its stubbed ps lists a bare relative `claude` ahead of an absolute one.
+
 setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/.claude/logs"
+  # A launcher in the sandbox HOME, so resolution never depends on what the live fleet's ps rows
+  # look like. Without it the dry-run tests went red whenever ps listed a bare `claude` argv[0]
+  # first — intermittently, and only inside postland-verify, where that is the common case.
+  mkdir -p "$HOME/.claude-0/node_modules/.bin"
+  printf '#!/bin/sh\nexit 0\n' > "$HOME/.claude-0/node_modules/.bin/claude"
+  chmod +x "$HOME/.claude-0/node_modules/.bin/claude"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   S="$REPO/scripts/idle-slope-sweep.sh"
   D="$BATS_TEST_TMPDIR"
@@ -134,6 +144,18 @@ EOF
   [[ "$output" == *"binary   :"* ]]
 }
 
+@test "R1: a bare relative claude argv[0] listed FIRST does not hide a live absolute binary" {
+  # No HOME launcher: only the ps scan can resolve, so an early give-up has nowhere to fall back to.
+  rm -rf "$HOME/.claude-0"
+  mkdir -p "$D/bin" "$D/fleet"
+  printf '#!/bin/sh\nexit 0\n' > "$D/fleet/claude"; chmod +x "$D/fleet/claude"
+  printf '#!/bin/sh\nprintf "%%s\\n" "claude --resume x" "%s --model opus"\n' "$D/fleet/claude" > "$D/bin/ps"
+  chmod +x "$D/bin/ps"
+  PATH="$D/bin:$PATH" CC_SLOPE_MAX_START_LOAD=99999 run "$S" --dry-run --points "0 3 6"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"binary   : $D/fleet/claude"* ]]
+}
+
 @test "14: an absent launcher is refused with the launcher exit code, not a crash" {
   CC_SLOPE_CLAUDE_BIN="$D/no-such-claude" run "$S" --points "0 3 6"
   [ "$status" -eq 4 ]
@@ -163,6 +185,7 @@ EOF
 
 @test "M2: MUTATION — dropping the settle floor accepts a 10 s settle" {
   m="$D/mutant2.sh"
+  # shellcheck disable=SC2016  # the $ vars are LITERAL source text for sed to match, not expansions
   sed 's|if \[ "$SETTLE_S" -lt 90 \] && \[ "$DRY" = 0 \]; then|if [ "$SETTLE_S" -lt 0 ] \&\& [ "$DRY" = 0 ]; then|' "$S" > "$m"
   chmod +x "$m"
   grep -q 'SETTLE_S" -lt 0 ' "$m"

@@ -156,13 +156,17 @@ resolve_claude_bin() {
     [ -x "$CC_SLOPE_CLAUDE_BIN" ] || return 1
     printf '%s' "$CC_SLOPE_CLAUDE_BIN"; return 0
   fi
-  local live
-  live="$(ps -axo command= 2>/dev/null | awk '{
+  # EVERY candidate is tried, not just the first. The first version printed the first match and
+  # exited, but a session launched through the `claude()` shell function carries a bare `claude`
+  # argv[0] — relative, so never -x from here — and when ps listed one of those first the scan
+  # returned nothing usable and fell through, whatever absolute binaries sat further down the list.
+  local live c
+  while IFS= read -r live; do
+    [ -x "$live" ] && { printf '%s' "$live"; return 0; }
+  done < <(ps -axo command= 2>/dev/null | awk '{
       n = split($1, a, "/"); b = a[n]
-      if (b == "claude" || b == "claude.exe") { print $1; exit }
-    }')"
-  if [ -n "$live" ] && [ -x "$live" ]; then printf '%s' "$live"; return 0; fi
-  local c
+      if (b == "claude" || b == "claude.exe") print $1
+    }')
   for c in "$HOME"/.claude-*/node_modules/.bin/claude; do
     [ -x "$c" ] && { printf '%s' "$c"; return 0; }
   done
