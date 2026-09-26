@@ -186,7 +186,7 @@ assert_site() {
 }
 
 @test "consumers: hooks/session-continue.sh wake floor + mail fold accept a headless address" {
-  assert_site hooks/session-continue.sh _ouid 4
+  assert_site hooks/session-continue.sh _ouid 5
 }
 
 @test "consumers: hooks/session-continue.sh adopts a headless resolved mailbox key" {
