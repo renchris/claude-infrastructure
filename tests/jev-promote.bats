@@ -11,6 +11,10 @@
 setup() {
   REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/.claude/autonomy"
+  # Pin the clock; do NOT authorise spend (same pin as jev-predict-land.bats). hooks/lib/jev.sh
+  # defaults the free window to close 2026-09-25, and from the 26th `arm` refused with exit 4 and
+  # tests 17 and 24 went red on the calendar alone. The refusal cases pass 2020-01-01 per call.
+  export CC_JEV_FREE_UNTIL=2099-01-01
 }
 # `|| true` on the kill itself, not a trailing `return 0`: under load the mock can be reaped
 # before teardown runs, and silencing stderr does not silence the EXIT STATUS — the failed kill
@@ -700,6 +704,7 @@ unatt_on() { jq -n '{enabled:true,authorized:"x",decision:"ea7a241bdf78"}' > "$1
 }
 
 @test "unattended: a CHANGED corpus does run, and produces rows" {
+  need_deps
   mkcorpus
   UH="$(unatt_home)"; unatt_on "$UH"
   # a completed pass recording a DIFFERENT corpus
@@ -751,6 +756,7 @@ unatt_on() { jq -n '{enabled:true,authorized:"x",decision:"ea7a241bdf78"}' > "$1
 # caught. The signal that cannot drift is the one the run observes: a pass that BOUGHT NOTHING has
 # nothing left to buy.
 @test "promote: a pass that buys nothing STAMPS itself complete, once" {
+  need_deps
   mkcorpus
   export MOCK_CHOICE_ROTATE=1
   start_mock ok
@@ -803,6 +809,7 @@ unatt_on() { jq -n '{enabled:true,authorized:"x",decision:"ea7a241bdf78"}' > "$1
 # progress, so `done_n == 0` never fired, so the stamp never landed, so the scheduler ran again.
 # An id that can NEVER buy would tick forever at 1800s. "It is converging" is not a bound.
 @test "resume: exhausting the attempt budget stamps COMPLETE WITH GAPS" {
+  need_deps
   mkcorpus
   R="$BATS_TEST_TMPDIR/gappy.jsonl"
   SHA="x"
