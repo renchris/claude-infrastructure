@@ -222,24 +222,6 @@ st_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)
   [ "$(st_of "$id2")" = open ]
 }
 
-@test "--force is rejected on any event other than reopen/unblock/block/claim (never silently ignored)" {
-  guard_env
-  id=$(bash "$CB" add --project /r --title T --source S)
-  run bash "$CB" done "$id" --evidence ref:1 --force
-  [ "$status" -eq 2 ]
-  echo "$output" | grep -q -- '--force'
-  # `done` is now the ONLY exemplar this rejection has. Exactly five verbs reach cmd_transition
-  # (claim, done, reopen, block, unblock) and four of them are in the allowlist since block joined it
-  # with its terminal guard (2026-08-25) — so the second exemplar this test used to carry, `block`,
-  # is a legitimate accept today and is pinned as one in the lease test below. Stating the arithmetic
-  # rather than quietly dropping a case: if a sixth transition verb is ever added, it belongs here.
-  #
-  # The other half is that the MESSAGE must keep naming the real allowlist. A verb can be added to
-  # the condition and left out of the sentence, which reads to the caller as though the flag simply
-  # does not exist for it — the rejection would then be right and its explanation wrong.
-  echo "$output" | grep -q 'reopen, unblock, block and claim'
-}
-
 # ── THE RE-OPEN EFFECT: unblock is the other spelling of reopen (backlog d6d8b259235d + 62daeb7d4463)
 # Status is a last-transition-wins fold, so `unblock` and `reopen` both resolve to "open" — which IS
 # cc-dispatch's fire predicate. Only `reopen` was guarded. The tests below are the reopen guards
@@ -2218,7 +2200,11 @@ lease_pristine() {
   # parses as the loop keyword and shellcheck aborts on the construct (SC1010).
   run bash "$CB" "done" lease00000a8 --evidence sha --force
   [ "$status" -eq 2 ]
-  printf '%s' "$output" | grep -q 'force applies only to reopen, unblock, block and claim'
+  # The MESSAGE must keep naming the real allowlist (and the flag itself). A verb can be added to the
+  # condition and left out of the sentence, which reads to the caller as though the flag simply does
+  # not exist for it. Exactly five verbs reach cmd_transition (claim, done, reopen, block, unblock),
+  # so `done` is the only rejection exemplar; if a sixth transition verb is ever added, pin it here.
+  printf '%s' "$output" | grep -q -- '--force applies only to reopen, unblock, block and claim'
 
   # BOTH DIRECTIONS, deliberately. The rejection half alone cannot tell a correctly-grown allowlist
   # from one that grew by accident: `unblock` joined it when unblock learned the re-open-effect

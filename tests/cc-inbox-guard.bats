@@ -100,6 +100,8 @@ n_alarms() { find "$CC_COMMS_ALARM_DIR" -name 'undelivered-*.json' 2>/dev/null |
   msg_aged 60 peer            # 60s < 600s deadline for a peer ping
   export CC_INBOX_GUARD_LIVE_UUIDS="$U"
   run "$G" sweep
+  [ "$status" -eq 0 ]         # a sweep that died early would also push nothing
+  printf '%s' "$output" | grep -q 'within deadline'
   not_pushed
 }
 
@@ -135,6 +137,8 @@ n_alarms() { find "$CC_COMMS_ALARM_DIR" -name 'undelivered-*.json' 2>/dev/null |
   "$G" sweep >/dev/null
   : > "$PUSHLOG"     # clear the phone log; the state marker persists
   run "$G" sweep
+  [ "$status" -eq 0 ]  # a second sweep that died before escalate() would also push nothing
+  printf '%s' "$output" | grep -q 'damped=1'
   not_pushed         # same (acked:lines) → damped
 }
 

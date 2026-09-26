@@ -22,11 +22,16 @@ mkwt() {
   echo seed > "$1/a.txt"; git -C "$1" add a.txt; git -C "$1" commit -qm seed
 }
 
-@test "selftest passes and runs all 16 checks (a zero-check suite must not 'pass')" {
+@test "selftest passes, is non-vacuous (floor), and its tally matches what it rendered" {
+  floor=16                        # raise when checks are added; LOWERING it is a deliberate act
   run "$T" selftest
   [ "$status" -eq 0 ]
-  n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 16 ]
+  # `|| true` normalizes grep's rc-1-on-zero-matches; the count is data, the assertions are the verdict.
+  ok_lines="$(printf '%s' "$output" | grep -c '^  ok ' || true)"
+  claimed="$(printf '%s' "$output" | sed -n 's/^cc-respawn selftest: \([0-9][0-9]*\) passed,.*/\1/p')"
+  [ "$ok_lines" -ge "$floor" ]    # FLOOR, not an exact count: an added check is growth, not a red
+  [ -n "$claimed" ]
+  [ "$claimed" = "$ok_lines" ]    # TALLY: the summary counts what it actually rendered
 }
 
 @test "RS-a: prepare with no --go ruling → REFUSED (exit 2), refusal recorded" {

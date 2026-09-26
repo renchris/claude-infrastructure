@@ -262,11 +262,16 @@ swept() { tail -1 "$T/idl.jsonl" | jq -r "$1"; }   # <jq-filter> over the sweep'
   [ "$(swept .new_pages)" -eq 0 ]
 }
 
-@test "--selftest passes and runs all 15 checks (a zero-check selftest must not 'pass')" {
+@test "selftest passes, is non-vacuous (floor), and its tally matches what it rendered" {
+  floor=15                        # raise when checks are added; LOWERING it is a deliberate act
   run "$BIN" --selftest
   [ "$status" -eq 0 ]
-  n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 15 ]
+  # `|| true` normalizes grep's rc-1-on-zero-matches; the count is data, the assertions are the verdict.
+  ok_lines="$(printf '%s' "$output" | grep -c '^  ok ' || true)"
+  claimed="$(printf '%s' "$output" | sed -n 's/^cc-escalations --selftest: \([0-9][0-9]*\) passed,.*/\1/p')"
+  [ "$ok_lines" -ge "$floor" ]    # FLOOR, not an exact count: an added check is growth, not a red
+  [ -n "$claimed" ]
+  [ "$claimed" = "$ok_lines" ]    # TALLY: the summary counts what it actually rendered
   ! printf '%s' "$output" | grep -q '^  FAIL' || false
 }
 

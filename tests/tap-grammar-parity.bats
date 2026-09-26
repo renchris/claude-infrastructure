@@ -39,13 +39,6 @@ setup() {
   LOOSE='^not ok'
 }
 
-@test "every cut-vs-red reader carries the STRICT grammar" {
-  for f in $SUTS; do
-    [ -f "$REPO/$f" ]
-    grep -qF -- "$STRICT" "$REPO/$f"
-  done
-}
-
 @test "no reader still spells the grammar LOOSELY as a pattern" {
   # The needle is the quoted pattern literal — `'^not ok'`, closing quote immediately after `ok` —
   # not the bare substring. Prose that discusses the old spelling, and ship-land's `sig=` signature
@@ -60,7 +53,8 @@ setup() {
 @test "EVERY quoted not-ok pattern BEGINS with the one grammar" {
   # "All four are strict" is not the invariant; ONE grammar is. Two readers could both require a
   # <N> and still disagree — `[0-9]+` vs `[0-9]*`, a dropped anchor, a tab class — and that
-  # disagreement is invisible to the two tests above.
+  # disagreement is invisible to the loose-spelling ban above. The `[ "$n" -ge 1 ]` floor below is also
+  # what proves every reader carries the strict grammar at all (a missing file yields zero literals).
   #
   # The rule is PREFIX, not equality, and the difference is load-bearing: ship-land.sh legitimately
   # carries a second, LONGER pattern — leg A's `'^not ok [0-9]+ bats-gather-tests[[:space:]]*$'`,
