@@ -86,6 +86,9 @@ start_mock() {
 runhook() { printf '{"session_id":"%s","transcript_path":"%s","cwd":"%s"}' "sid-$RANDOM" "$1" "$2" | bash "$HOOK"; }
 
 @test "1. no key: the hook is exactly today's hook - silent on a tell-free message" {
+  # Revive the arm and stand up a mock that WOULD fire, so key absence is the only thing keeping
+  # it silent. Without this the retirement gate short-circuits first and the test proves nothing.
+  start_mock ok drivable
   local w f; w="$(mkrepo n1)"; f="$(mkfix "$TELLFREE")"
   run env -u AI_GATEWAY_API_KEY bash -c "printf '{\"session_id\":\"s\",\"transcript_path\":\"$f\",\"cwd\":\"$w\"}' | bash '$HOOK'"
   [ "$status" -eq 0 ]

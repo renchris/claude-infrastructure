@@ -147,15 +147,17 @@ setup() {
   # The load-bearing ordering assertion. _cc_sync_account returns 1 early when the config mirror
   # fails; if the token load sat after that return, a failing sync would leave the PREVIOUS
   # launcher's token exported — a silent cross-account bearer on exactly the unhappy path.
-  # Forced failure: no ~/.claude/.claude.json for the mirror to work from.
-  mkdir -p "$HOME/.claude-tertiary"
+  # Forced failure: the config dir is a regular FILE, so the mirror's `mkdir -p "$dst"` fails and
+  # _cc_sync_account really takes its early `return 1`. (A missing ~/.claude/.claude.json does NOT
+  # fail the mirror — it exits 0 — so a fixture built on that never reached the early return.)
+  : > "$HOME/.claude-tertiary"
   run zsh -fc "source '$MIRROR'
                export CLAUDE_CODE_OAUTH_TOKEN=STALE-FROM-PREVIOUS-LAUNCH
                _cc_sync_account '$HOME/.claude-tertiary' >/dev/null 2>&1
-               printf 'tok=%s\n' \"\${CLAUDE_CODE_OAUTH_TOKEN-<UNSET>}\""
+               printf 'rc=%s tok=%s\n' \"\$?\" \"\${CLAUDE_CODE_OAUTH_TOKEN-<UNSET>}\""
   [ "$status" -eq 0 ]
-  echo "$output" | grep -qx 'tok=<UNSET>' || {
-    echo "STALE TOKEN SURVIVED a sync failure — got: $output" >&2; return 1; }
+  echo "$output" | grep -qx 'rc=1 tok=<UNSET>' || {
+    echo "STALE TOKEN SURVIVED a sync failure (or the sync did not fail) — got: $output" >&2; return 1; }
 }
 
 @test "_cc_sync_account's own exit status is NOT changed by the token loader" {

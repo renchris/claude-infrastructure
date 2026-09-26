@@ -314,6 +314,8 @@ field() { # <key> → the value from the verdict line
 }
 
 # ── the plist and the fleet declaration ──────────────────────────────────────────────────────────
+# The fleet.manifest row for this label is owned by tests/fleet-manifest-lint.bats ("the REAL repo
+# is clean"), which reds on any committed launchd plist without a manifest row.
 
 @test "the plist is valid, calendar-scheduled off reso's slot, and does not run at load" {
   P="$REPO_ROOT/launchd/com.claude.worktree-gc-infra.plist"
@@ -322,10 +324,6 @@ field() { # <key> → the value from the verdict line
   [ "$(plutil -extract StartCalendarInterval.Minute raw -o - "$P")" = "15" ]
   [ "$(plutil -extract RunAtLoad raw -o - "$P")" = "false" ]
   [ "$(plutil -extract Label raw -o - "$P")" = "com.claude.worktree-gc-infra" ]
-}
-
-@test "the label is DECLARED in launchd/fleet.manifest (a plist without a row reds cc-fleet)" {
-  grep -q '^com.claude.worktree-gc-infra *|' "$REPO_ROOT/launchd/fleet.manifest"
 }
 
 # ── EFFECT, NOT EXIT CODE (master 66ef300dd0b4 — fleet footprint) ────────────────
