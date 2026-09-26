@@ -6,9 +6,12 @@ function of time (`index.html` + `film.js`, one three.js world in `world.js`, ev
 
 | Artefact | What it is | File |
 |---|---|---|
-| **LOOP** | the README's first element: an animated WebP, 1676 × 943 (2× the 838 CSS px column), 60 fps on every moving frame, a dark and a light grade behind `<picture>`, seamless | `assets/hero/hero-{dark,light}.webp` |
+| **LOOP** | the README's first element: an animated WebP, 1676 × 943 (2× the 838 CSS px column, supersampled from a 4K render), 60 fps on every moving frame, a dark and a light grade behind `<picture>`, seamless | `assets/hero/hero-{dark,light}.webp` |
 | **POSTER** | frame 0 of the loop, as a still | `assets/hero/poster-{dark,light}.png` |
-| **FILM** | the launch film: 1920 × 1080, 60 fps, H.264, dark grade, one unbroken camera | `assets/hero/launch-film.mp4` |
+| **FILM** | the launch film: 3840 × 2160, 60 fps, H.264, dark grade, one unbroken camera | `assets/hero/launch-film.mp4` |
+
+The look (lighting, materials, the floor's reflections, bloom, depth of field) is `look.js`
+(§ Round 3).
 
 ```sh
 npm run hero:pacing   # the pacing gate: camera speed and reading time, per frame, both cuts
@@ -471,6 +474,91 @@ Declined:
 - *m5, frame 0's first line is smaller; m6, pane text is ~8 CSS px.* Round one's Pyramid tiers and its
   decision that pane rows are texture; not this round's scope.
 - *m8, the status-line ids.* They are session ids, real ones.
+
+## Round 3 — fidelity, pace, resolution (the operator's fourth verdict, 2026-09-25)
+
+> "We need higher resolution. And we still need it smooth during transitions, and needs to hold when
+> displaying information for a bit. Now its just universally slow. Anyway we can overall increase the
+> detail/fidelity of the entire scene so it looks like a production enviroment and not just a base
+> virtual enviroment?"
+
+Three asks, three layers, one commit each. Two alternative strategies ran in parallel sessions
+(the operator's own request), so the round can be compared rather than only iterated: a HyperFrames
+build (branch `hero-hyperframes`, after @kaolti's two-prompt Cosmos film) and a max-effort
+motion-graphics "showreel" led by the Pyramid Principle (branch `hero-showreel`, after @stephanlivera).
+Neither touches this pipeline.
+
+### The look (`look.js`)
+
+Round two drew every surface unlit (`MeshBasicMaterial`) on the page colour, with mirrored twins
+under the floor for reflections. That is what read as "a base virtual environment". Now:
+
+| Layer | Round 2 | Round 3 |
+|---|---|---|
+| Light | none (unlit) | a key with soft shadows from high front-left, a sky/ground fill, a cool edge light from behind, and each fleet screen as an area light in its account's hue |
+| Windows | a textured plane | a clear-coated bezel, the screen set in it, dielectric glass whose reflections of the room slide across it in a flight |
+| Gate | four boxes | brushed-metal posts on plinths, a backlit sign, lamps and an arm stripe that light green while a land passes (green = landed) |
+| `~/.claude` | three planes | three rack cabinets, each with a status strip: amber while its files are stale, green when live |
+| Commits | flat capsules | glowing capsules that light the floor round them |
+| Floor | the page colour and a line grid | polished concrete with inlaid seams (the grid, still a flight's speed cue), roughness variation, and glossy blurred reflections from a mirrored camera (so a reflection is lit correctly) |
+| Finish | none | bloom on emitters (dark grade only), a shallow depth of field that softens the far field and barely the near, a highlight roll-off above a knee that leaves the page colour exact, a vignette into it, dither; grain in the FILM only |
+| Textures | 1× | 2× (`TEX`), so pane text is sharp in a 4K frame |
+
+Decisions:
+
+- **The key light comes from the front-left, not from behind the fleet.** A backlight is the
+  cinematic default, but its glint on a glossy floor sat in the middle of every shot as a bloomed
+  white blob; from the front-left the glint falls behind the lens.
+- **No bloom in the light grade.** On a white page every pixel sits at the bloom threshold, so bloom
+  veiled all the type in white (measured on the first light render: the card's "72 %" read grey).
+- **The glass is a dielectric, not a metal.** As a metal it reflected the room over the whole
+  screen and haloed the text; as glass it reflects ~4 % head-on and more at grazing angles.
+- **Depth of field is lopsided on purpose.** The far field softens (up to 5 px at 1920); the near
+  field at an eighth of that, because the card and the originator's window stand in front of the
+  focus and must stay readable.
+- **Nothing glints on the floor that is not in the picture.** The review sheet found three glints on
+  the glossy floor: the racks' and the gate's area lights left bright ghost rectangles, the edge
+  light (behind the fleet) hazed the floor behind the gate, and the originator's area light left a
+  grey patch under its window. Those area lights are gone (the floor reflects the real screens
+  anyway), and the edge light comes from the front-right.
+- **The glass is drawn in the main pass only.** The environment map is not mirrored with the world,
+  so in the floor's reflection the glass reflected the room's ceiling lights and hung a grey box under
+  every window.
+- **Grain is the FILM's only.** In an animated WebP a still frame is nearly free; grain changes every
+  pixel of every frame and would make each hold cost what a flight costs.
+
+### The pace
+
+Round one peaked at 7,044 px/s ("jars so fast"); round two capped the picture at 900 px/s and held
+every line its whole reading time before the scene moved ("universally slow"). Round three sits
+between them, on the same smootherstep ease:
+
+| Rule | Round 2 | Round 3 | Why |
+|---|---|---|---|
+| picture speed | ≤ 900 px/s | ≤ 2,000 px/s; flights sized for ~1,800 at peak, never under 1.6 s | about one frame width a second: fast enough to feel like a cut, eased enough to stay oriented |
+| named-object sweep, turn, acceleration | 1,400 px/s, 25 °/s, 1,000 px/s² | 3,000, 40, 4,500 | scaled with the speed; still no jolt at either end of a move |
+| type moves only while the picture is under | 250 px/s | 400 px/s | the last 13 % of a faster flight is slower than that |
+| a line stands before the scene moves under it | its whole reading time | 1.2 s (`QUIET`), then the scene plays while it is read | read-then-watch was most of round two's dead air; every line, chip and the card still stands its full reading time |
+| line arrival and exit | inside the flight's 13 % edges | arrives by 0.5 s into the hold, leaves from 0.3 s before the flight | at 1.6 s flights the 13 % edges were 0.2 s: type would snap |
+
+Durations, from each flight's measured image travel (`window.__moveL`): poster → window 1.6 s (1,237
+px), window → `~/.claude` 2.58 s (2,480), home 2.49 s (2,387); the FILM's swing to the gate 2.0 s
+(it turns ~64°; at 1.6 s it turned 40 °/s), gate → racks 1.93 s, home 2.56 s. The LOOP is 36.0 s
+(was 45.9), the FILM 48.0 s (was 63.5).
+
+### The resolution
+
+- **Both cuts are photographed at 3840 × 2160** (device scale 2), with the DOM type rendered at 2×
+  as well.
+- **The FILM ships at 4K**, 60 fps, H.264 High (level 5.2), CRF 22, `-tune film` for its grain.
+- **The LOOP stays 1676 × 943, supersampled from 4K.** It is 2× the README's 838 CSS px column, so
+  more pixels cannot be seen there, and a 60 fps frame must decode inside 16.7 ms: measured on the
+  round-two loop, p50 5.0 ms and p90 6.8 ms per frame at 1676 (PIL, loaded machine), so 3× (2.25× the
+  pixels) would put p90 near 15 ms. The resolution gain in the loop comes from what feeds it: 2.3
+  source pixels per output pixel, 2× textures, speed-softening cut from σ 2.5 to 1.0, and flight
+  frames at q45 instead of q30.
+- **The FILM's holds render once.** Its eight motion-blur sub-frames now run only in flights; a hold
+  creeps under 0.2 px per 1/60 s, so they were eight identical renders.
 
 ## Verification
 
