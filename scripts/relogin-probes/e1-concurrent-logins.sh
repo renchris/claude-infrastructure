@@ -31,11 +31,12 @@ for a in "$@"; do case "$a" in
   -*) echo "e1: unknown flag: $a" >&2; exit 2 ;;
   *)  ACCT="$a" ;;
 esac; done
-IDENT="$(python3 - "$ACCOUNTS_JSON" "$ACCT" "$(cd "$(dirname "$0")/../../hooks/lib" 2>/dev/null && pwd || echo "$HOME/.claude/hooks/lib")" <<'PY'
+IDENT_LIB="$(cd "$(dirname "$0")/../../hooks/lib" 2>/dev/null && pwd)" || IDENT_LIB="$HOME/.claude/hooks/lib"
+IDENT="$(python3 - "$ACCOUNTS_JSON" "$ACCT" "$IDENT_LIB" <<'PY'
 import json, os, sys
 d = json.load(open(os.path.expanduser(sys.argv[1])))
-# Personal fields live in the gitignored identity overlay (this repo is public): fill the row's
-# missing email from it — same resolver as claude-accounts (hooks/lib/identity.py).
+# Personal fields live in the gitignored identity overlay (this repo is public): fill the
+# missing email of the account row from it — same resolver as claude-accounts (hooks/lib/identity.py).
 sys.path.insert(0, sys.argv[3])
 try:
     import identity
