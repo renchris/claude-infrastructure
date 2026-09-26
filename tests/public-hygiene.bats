@@ -232,3 +232,17 @@ STUB
   [[ "$output" == *"rename already done"* ]]
   [[ "$output" == *"ff=yes"* ]]
 }
+
+@test "PARITY: the ripgrep fast path and the Python path return the SAME findings (>200 blobs)" {
+  command -v rg >/dev/null || skip "rg absent — only the Python path exists here"
+  r="$(mkrepo parity)"
+  for i in $(seq 1 230); do printf 'file %s clean person@example.com +1 555-010-0123\n' "$i" > "$r/f$i.txt"; done
+  printf 'ask TopSecretName, mail someone@realmail.test, call (303) 867-53''09\n' > "$r/hits.txt"
+  git -C "$r" add -A; git -C "$r" "${G[@]}" commit -q -m many
+  run python3 "$LINT" --repo "$r" --tree HEAD --conf "$CONF" --max-findings 1000
+  fast="$(printf '%s\n' "$output" | grep -E '^(IDENTIFIER|EMAIL|PHONE)' | sed 's/  */ /g' | sort)"
+  PUBLIC_HYGIENE_NO_RG=1 run python3 "$LINT" --repo "$r" --tree HEAD --conf "$CONF" --max-findings 1000
+  slow="$(printf '%s\n' "$output" | grep -E '^(IDENTIFIER|EMAIL|PHONE)' | sed 's/  */ /g' | sort)"
+  [ "$(printf '%s\n' "$fast" | grep -c .)" -eq 3 ] || { echo "fast: $fast"; false; }
+  [ "$fast" = "$slow" ] || { diff <(echo "$fast") <(echo "$slow"); false; }
+}
