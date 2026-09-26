@@ -64,6 +64,17 @@ setup() {
   # nothing. This seam runs it in the foreground so every assertion below has a defined observation
   # point. The detached shape that actually ships is covered by its own case at the end of this file.
   export SESSION_REGISTER_RECLAIM_WAIT=1
+  # The durable `claude` ancestor every `fire` runs under — see fire() for why the suite must supply
+  # it. A SYMLINK, because macOS names a symlinked exec's comm after the link; a copied /bin/bash is
+  # SIGKILLed by code signing.
+  mkdir -p "$BATS_TEST_TMPDIR/fakebin"
+  ln -sf /bin/bash "$BATS_TEST_TMPDIR/fakebin/claude"
+  FAKE_CLAUDE="$BATS_TEST_TMPDIR/fakebin/claude"
+}
+
+teardown() {
+  [ -s "$BATS_TEST_TMPDIR/fake-claude.pids" ] && xargs kill < "$BATS_TEST_TMPDIR/fake-claude.pids" 2>/dev/null
+  return 0
 }
 
 # NEGATIVE assertions must NOT be written `! cmd`: bash exempts a `!`-inverted command from set -e, so
@@ -80,9 +91,45 @@ refute_in_file() { [ ! -s "$2" ] || [ "$(grep -c "$1" "$2")" -eq 0 ]; }
 # (memory: bats-background-job-fabricates-not-ok — it wedged every /ship on 2026-07-25). The hook
 # closes fd 3 on its own detached child too; this closes it one level earlier, at the boundary bats
 # actually owns.
+#
+# UNDER A DURABLE `claude` PARENT, which the suite supplies (backlog 363035ab5b52). The hook's identity
+# is its nearest `claude` ancestor, else $PPID. Run bare, that ancestor is whatever launched bats: the
+# operator's own session when a person runs the suite, and NOTHING under the launchd post-land runner,
+# where the fallback names the `run` subshell — dead by the next line — or, for a bare `fire`, the
+# test process itself, the very pid a planted dispatcher claim names. Post-land went red at
+# a4dea392ca82 on exactly those two cases (the `kill -0` assertion and the hand-over IDL) while every
+# interactive run was green. So the parent is FAKE_CLAUDE, run as a tiny SESSION SERVER: it fires the
+# hook once per request file until teardown kills it. Between the two sits a /bin/sh that dies with
+# each firing, as SessionStart's shim does: without it the hook's $PPID IS the durable pid, and a hook
+# that skipped the ancestor walk would pass the `kill -0` case it exists to catch. Two verbs, because the hook
+# distinguishes them: `fire` starts a NEW session (a new durable pid), `resume` fires again inside the
+# CURRENT one — what resume/compact do to a live process. Output travels through files and the server
+# holds no inherited fd, so `run`'s capture reaches EOF and bats' fd 3 is never held.
+FIRE_SERVER='d=$1 k=0
+while :; do
+  while [ ! -e "$d/req.$k" ]; do /bin/sleep 0.1; done
+  /bin/sh -c "/bin/bash \"\$1\"; exit \"\$?\"" sh "$2" < "$d/req.$k" > "$d/out.$k" 2> "$d/err.$k"
+  echo "$?" > "$d/rc.$k.tmp"; /bin/mv "$d/rc.$k.tmp" "$d/rc.$k"
+  k=$((k + 1))
+done'
+
 fire() {
-  printf '{"cwd":"%s","session_id":"deadbeef-0000-0000-0000-000000000000"}' "$1" \
-    | command /bin/bash "$HOOK" 3>&-
+  local d; d="$(mktemp -d "$BATS_TEST_TMPDIR/session.XXXXXX")"
+  "$FAKE_CLAUDE" -c "$FIRE_SERVER" claude "$d" "$HOOK" </dev/null >/dev/null 2>&1 3>&- &
+  echo "$!" >> "$BATS_TEST_TMPDIR/fake-claude.pids"
+  printf '%s' "$d" > "$BATS_TEST_TMPDIR/session.current"    # a file, not a var: `run` is a subshell
+  resume "$1"
+}
+
+resume() {
+  local d k=0 i=0; d="$(cat "$BATS_TEST_TMPDIR/session.current")"
+  while [ -e "$d/req.$k" ]; do k=$((k + 1)); done
+  printf '{"cwd":"%s","session_id":"deadbeef-0000-0000-0000-000000000000"}' "$1" > "$d/req.$k.tmp"
+  /bin/mv "$d/req.$k.tmp" "$d/req.$k"
+  while [ ! -s "$d/rc.$k" ] && [ "$i" -lt 3000 ]; do /bin/sleep 0.1; i=$((i + 1)); done
+  [ -s "$d/rc.$k" ] || return 124
+  cat "$d/out.$k"; cat "$d/err.$k" >&2
+  return "$(cat "$d/rc.$k")"
 }
 
 # a dispatched item, claimed the way cc-dispatch claims it: the dispatcher's own, now-dead, pid.
@@ -263,7 +310,7 @@ by_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)
   fire "$BATS_TEST_TMPDIR/wt-$id"
   n=$(grep -c 'reclaim' "$CC_BACKLOG_FILE")
   [ "$n" -eq 1 ]
-  fire "$BATS_TEST_TMPDIR/wt-$id"
+  resume "$BATS_TEST_TMPDIR/wt-$id"                               # same process, SessionStart again
   [ "$(grep -c 'reclaim' "$CC_BACKLOG_FILE")" -eq 1 ]
   run cat "$SESSION_REGISTER_IDL"
   printf '%s' "$output" | jq -e 'select(.disposition=="noop" and .reason=="already ours")'
