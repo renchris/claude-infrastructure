@@ -14,7 +14,7 @@
 # to run (it creates a real tab/window), so the create step cannot execute in CI. The durable,
 # checkable guarantees are (a) neither function ever types (no `write text` in its body), (b) each
 # creates a surface and returns its id, (c) the $ESC AppleScript-string escaping that ONLY the
-# write-text path needed is gone, and (d) the dispatcher routes both surfaces through it2_land. The
+# write-text path needed is gone, and (d) spawn() never hands as_tab the launch command. The
 # it2_type_verified transport itself is unit-tested in handoff-fire-inject.bats; the dispatcher
 # wiring (id → it2_land, fail-loud) is exercised with stubs in handoff-splitright.bats.
 
@@ -67,15 +67,6 @@ setup() {
   # The whole file: no ESC= definition and no "$ESC" interpolation into an osascript string literal.
   ! grep -qE '^ESC=' "$HF" || false
   ! grep -qF '"$ESC"' "$HF"
-}
-
-@test "the dispatcher lands BOTH --tab and --window through it2_land (the verified transport)" {
-  # --window: capture spawn_frontmost's id, then it2_land it.
-  grep -qF 'winid="$(spawn_frontmost' <<<"$SPAWN_FN"
-  grep -qF 'it2_land "$winid"' <<<"$SPAWN_FN"
-  # --tab: capture as_tab's id, then it2_land it.
-  grep -qF 'as_tab "$FIRING_SID"' <<<"$SPAWN_FN"
-  grep -qF 'it2_land "$newid"' <<<"$SPAWN_FN"
 }
 
 @test "as_tab is invoked create-only — no launch command (\$CMD) passed to it" {

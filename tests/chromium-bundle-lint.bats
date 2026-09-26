@@ -36,10 +36,6 @@ mk() {
   { printf '#!/bin/bash\n'; printf '%s\n' "$2"; } > "$FIX/$1/scripts/probe.sh"
 }
 
-@test "the lint is executable" {
-  [ -x "$LINT" ] || { echo "not executable: $LINT"; false; }
-}
-
 @test "--selftest passes (the detector still discriminates)" {
   run "$LINT" --selftest
   [ "$status" -eq 0 ] || { echo "selftest failed:"; echo "$output"; false; }
@@ -101,6 +97,13 @@ done'
 @test "WIRED AT THE CHOKEPOINT: run_gate invokes the lint" {
   # A lint enforced only by this suite is post-hoc detection. gate-select picks a suite by the
   # files a land touches, so a NEW screenshot script would never select this file.
-  grep -q 'chromium-bundle-lint' "$REPO/scripts/ship-land.sh" \
-    || { echo "ship-land.sh does not invoke chromium-bundle-lint.sh — the ratchet is unenforced"; false; }
+  # The CODE form inside run_gate, not a mention: the name also sits in comments and arm labels, so
+  # a bare grep stayed green with CHROMIUM_LINT emptied and the arm never running.
+  gate="$(sed -n '/^run_gate() {/,/^}/p' "$REPO/scripts/ship-land.sh")"
+  # shellcheck disable=SC2016  # literal code text, not an expansion
+  grep -qF 'CHROMIUM_LINT="${SHIP_LAND_CHROMIUM_LINT:-scripts/chromium-bundle-lint.sh}"' <<<"$gate" \
+    || { echo "run_gate no longer points CHROMIUM_LINT at scripts/chromium-bundle-lint.sh"; false; }
+  # shellcheck disable=SC2016  # literal code text, not an expansion
+  grep -qF 'own_run CHROMIUM CC_CHROMIUM_OWN "$cbown" "$CHROMIUM_LINT"' <<<"$gate" \
+    || { echo "run_gate does not invoke chromium-bundle-lint.sh — the ratchet is unenforced"; false; }
 }

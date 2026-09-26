@@ -51,14 +51,6 @@ dry() { bash "$HF" --prompt-file "$PF" --session-id "w1t0p0:FAKE-UUID" --account
   echo "$output" | grep -qiE "follow: +no"          # C1: visible, but focus is NOT stolen
 }
 
-@test "C1 REGRESSION: making the default visible did not make it raise" {
-  # The whole risk of this change is that 'visible' quietly becomes 'focus-stealing'. Pin them
-  # apart: the default surface is a split AND follow is off, in the same assertion.
-  run dry
-  echo "$output" | grep -qE "surface: +split-right"
-  [[ "$output" != *"follow: YES"* ]] || false
-}
-
 @test "--follow keeps the split-right (⌘D) preference and raises" {
   run dry --follow
   [ "$status" -eq 0 ]

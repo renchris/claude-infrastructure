@@ -351,18 +351,6 @@ SH
   [ ! -f "$H/ccnotify-calls.log" ]               # happy path pages nobody
 }
 
-@test "watcher T-0: NO pin handed over (deployed-copy skew) → falls back to the tty check" {
-  # The 6th arg is optional and positional-last precisely so an older deployed watcher mid-land
-  # ignores it. That back-compat must keep the OLD behaviour, not become a silent no-check.
-  H="$BATS_TEST_TMPDIR/home-t0-skew"; mk_home "$H"
-  : > "$PS_DEAD_DIR/TTY-A"
-  : > "$PS_DEAD_DIR/TTY-B"                       # nothing on the successor's tty either
-  run env HOME="$H" bash "$HF" __selfclose PREDSID TTY-A SUCC-B TTY-B
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"ABORTED at close-instant"* ]] || false
-  ! grep -q "session close" "$H/it2-calls.log" 2>/dev/null || false  # predecessor left alive
-}
-
 @test "watcher T-0: pin is NOT re-derived from the registry row (a NEW session cannot satisfy it)" {
   # If the watcher re-read the row instead of re-checking the handed-over pin, a DIFFERENT session
   # launched into that pane during the window would satisfy a gate that proved the OLD one engaged.

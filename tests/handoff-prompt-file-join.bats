@@ -35,17 +35,11 @@
 # `prompt_file`): ALL NINE not-ok. Every case reddens for the same underlying reason, that no
 # emitter wrote the key at all.
 #
-# CASE 9 IS THE ONE TO READ HONESTLY, and the correction is recorded rather than laundered. It is
-# labelled a CONTROL and the first draft of this header claimed it was "green in both directions by
-# design". The red-proof refuted that: it fails pre-change on `KeyError: 'prompt_file'`, because it
-# reads the key before it can judge the escaping. That does NOT make it a proof of the feature —
-# the property it actually guards (a `"` or `\` in a path cannot corrupt the jq-less line) is
-# UNPROVABLE against the pristine tree, for the plainest possible reason: there is no field there
-# to corrupt, so the subject of the assertion does not yet exist. It is the inverse of the trap
-# BACKLOG_DRAIN_24_7 §2.1 (recycle #18) paid for — *"ask of every green pre-fix case whether its
-# subject even exists yet"* — and the answer here is no, which is why its red says nothing about
-# the escaping either way. It stays because that escaping is hand-rolled and the blast radius of
-# getting it wrong is the whole file, not one key; it is a regression guard, not evidence.
+# Case 9 (a `"` or `\` in the path cannot corrupt the jq-less line) was a regression guard on the
+# hand-rolled escaping, never a proof of the feature, and was removed on 2026-09-25: the same
+# escaper and fallback branch are guarded by tests/handoff-brief-provenance.bats ("a brief path
+# holding a quote and a backslash still writes ONE parseable row"), which also asserts one row and a
+# byte-identical round-trip.
 #
 # The functions are extracted VERBATIM from scripts/handoff-fire.sh and sourced, so every assertion
 # is against the LITERAL emission rather than a hand-written approximation that could pass while the
@@ -57,7 +51,7 @@ setup() {
   HOME="$BATS_TEST_TMPDIR/home"; export HOME
   mkdir -p "$HOME/.claude/logs"
   LOG="$HOME/.claude/logs/handoffs.jsonl"
-  # An EMPTY PATH dir, for the two fallback cases. Reaching the jq-less branch the way production
+  # An EMPTY PATH dir, for the fallback case. Reaching the jq-less branch the way production
   # does means making jq unresolvable, and every other external the emitter touches on that path
   # (mkdir, cat, ps, date) is already `|| true`-guarded or has a builtin answer — which is the
   # property those cases incidentally confirm.
@@ -204,20 +198,4 @@ setup() {
   [[ "$output" == *'"prompt_file":"/tmp/fire-nojq.txt"'* ]] || false
   run python3 -c "import json,sys; json.loads(open(sys.argv[1]).read().strip())" "$LOG"
   [ "$status" -eq 0 ]
-}
-
-# ── 6 · CONTROL — the escaping, not the field ─────────────────────────────────────────────────
-
-@test "CONTROL: a path holding a quote and a backslash cannot break the fallback's JSON" {
-  command -v python3 >/dev/null 2>&1 || skip "fallback shape check needs python3"
-  # Green in BOTH directions by construction — pre-change there was no field to corrupt — so this
-  # is a guard on the hand-rolled escaping, never a proof of the feature. It earns its place
-  # because this is the one field on that path whose value is not controlled by us: an unescaped
-  # `"` there does not lose one key, it makes the reader that hits it drop or die on the WHOLE file.
-  PATH="$BATS_TEST_TMPDIR/emptybin" \
-  PROMPT_FILE_ORIG='/tmp/fire-"odd"\name.txt' \
-  FIRING_SID="cc-sid-e" SPAWNED_PANE="pane-E" CHOSEN="next" emit_handoff_telemetry 1
-  run python3 -c "import json,sys; print(json.loads(open(sys.argv[1]).read().strip())['prompt_file'])" "$LOG"
-  [ "$status" -eq 0 ]
-  [ "$output" = '/tmp/fire-"odd"\name.txt' ]
 }

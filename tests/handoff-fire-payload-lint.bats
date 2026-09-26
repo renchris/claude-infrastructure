@@ -37,6 +37,9 @@ setup() {
 
 # ---- enforce (real fire path; aborts before any side effect) ---------------------------------
 
+# Also THE LAUNDERING REGRESSION: the back-channel trailer is on by default, so this fire's payload
+# is trailer-materialized too. F3 judges what the AUTHOR wrote (PROMPT_FILE_ORIG); if our own
+# trailer laundered the malformed block past it, this would exit 0 and fire.
 @test "RED-with-intent (cc-notify, no uuid/role) → real fire ABORTS exit 4 before spawn" {
   printf 'Continue the build.\nOn completion, cc-notify the desk when finished.\n' > "$P"
   run timeout 25 bash "$HF" --prompt-file "$P" --cwd "$WT" --launcher claude --session-id "$SID"
@@ -83,16 +86,6 @@ setup() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"payload-lint (advisory): one-way fire"* ]] || false
   [[ "$output" != *"WOULD BLOCK"* ]]
-}
-
-# THE LAUNDERING REGRESSION, pinned. F3 judges what the AUTHOR wrote; our own trailer must never
-# make a malformed authored back-channel pass. Without PROMPT_FILE_ORIG this exits 0 and fires.
-@test "our default trailer does NOT launder a malformed AUTHORED back-channel past F3" {
-  printf 'Continue the build.\nOn completion, cc-notify the desk when finished.\n' > "$P"
-  run timeout 25 bash "$HF" --prompt-file "$P" --cwd "$WT" --launcher claude --session-id "$SID"
-  [ "$status" -eq 4 ]
-  [[ "$output" == *"ABORTED (F3 / T-P2-5)"* ]] || false
-  [[ "$output" != *"→ fired"* ]]
 }
 
 # ---- dry preview reports the block without failing (dry never fires) --------------------------
