@@ -1957,7 +1957,7 @@ PY
 # hold it: a suite that runs the sweep with a generous bound reaches every arm and goes green over
 # exactly the production configuration that starves them.
 #
-# This ratchet is deliberately blind to WHAT the detectors do (§6's canary already covers that) and
+# This ratchet is deliberately blind to WHAT the detectors do (the §6 cases above cover that) and
 # asserts only that they cannot be sequenced behind a checkpoint again.
 
 @test "§7 the drain-chain and flow detectors run before the FIRST yield checkpoint" {
