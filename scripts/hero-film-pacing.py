@@ -22,8 +22,10 @@ READING, every piece of type (a line, the governing thought, a chip, the decisio
 time is READ_BASE + READ_WORD per word + READ_CODE per code token (a token of a monospace string); the
 card counts as type only while it is at least CARD_W px wide on screen (smaller, it is an object). It
 must stand fully visible and still, with the camera calm (image flow under CALM), for at least that
-long. A line (and the thought) must also have that reading time before its scene's story clock starts
-to move: the viewer reads first, then watches. And no story action may play on a calm frame without a
+long. A line must also stand QUIET s before its scene's story clock starts to move (round two demanded
+its whole reading time there, which is most of what made round two "universally slow"; the viewer
+reads on while the scene plays under the line, and the line still stands its full reading time).
+The thought on the loop's frame 0 keeps the full rule: a first visit reads it before anything moves. And no story action may play on a calm frame without a
 line standing still to name it. In the loop, frame 0 must already hold the thought for its reading
 time (a first visit starts there), and a piece of type that stands across the seam is timed across it.
 
@@ -35,12 +37,15 @@ import math
 import sys
 from pathlib import Path
 
-MAX_FLOW = 900.0  # px/s at 1920 wide: under half a frame width a second; 6.5 CSS px a frame at 838 px
-MAX_SWEEP = 1400.0  # px/s: the fastest named object on screen (window, gate post, rack, card corner)
-MAX_TURN = 25.0  # deg/s of view direction
-MAX_ACCEL = 1000.0  # px/s^2 of image speed: at least ~0.9 s from rest to MAX_FLOW, and back
+# Round 3 (operator, 2026-09-25: round two was "just universally slow"; round one "jars so fast"). The
+# bounds sit between the two measured rounds: round one peaked at 7,044 px/s, round two at 865.
+MAX_FLOW = 2000.0  # px/s at 1920 wide: about one frame width a second, 33 px a frame at 60 fps
+MAX_SWEEP = 3000.0  # px/s: the fastest named object on screen (window, gate post, rack, card corner)
+MAX_TURN = 40.0  # deg/s of view direction
+MAX_ACCEL = 4500.0  # px/s^2 of image speed: still eased, ~0.8 s from rest to full speed, and back
 CALM = 60.0  # px/s: slower than this the picture is holding (the film's creep is slower still)
-TYPE_FLOW = 250.0  # px/s: type arrives and leaves only while the picture is slower than this
+TYPE_FLOW = 400.0  # px/s: type arrives and leaves only while the picture is slower than this
+QUIET = 1.2  # s: a line stands this long before the story moves under it (round two: its whole reading time)
 CARD_W = 400.0  # px at 1920: the card's body text is ~11 CSS px at the README's 838 px from here up
 CHIP_V = 90.0  # px/s: a chip may ride its object this fast and still be read
 STILL_MOVE = 0.5  # px: a word displaced further than this is still arriving or leaving
@@ -223,8 +228,9 @@ def check(path, baseline):
                         quiet = k * dt
                         break
             ok_still = st_len + 1e-9 >= need
-            ok_quiet = (not is_line) or quiet + 1e-9 >= need
-            margin = (quiet if is_line else st_len) - need
+            q_need = min(need, QUIET)
+            ok_quiet = (not is_line) or quiet + 1e-9 >= q_need
+            margin = min(st_len - need, quiet - q_need) if is_line else st_len - need
             if margin < min_margin[0]:
                 min_margin = (margin, f"{u} at {fr[occ[0]]['t']:.2f}")
             verdict = "ok" if ok_still and ok_quiet else "FAIL"
