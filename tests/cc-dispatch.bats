@@ -1,8 +1,9 @@
 #!/usr/bin/env bats
 # T-P7-4/5 cc-dispatch — the L4 dispatcher spine. The tool's `selftest` RED-proves every branch
-# against stubbed actuators; these bats add (a) the selftest exit-code + check-count contract and
-# (b) CLI-level end-to-end runs against the REAL cc-backlog (temp CC_BACKLOG_FILE) so the backlog
-# TRANSITION (open→claimed→reopen) is proven through the real fold — not just "claim was invoked".
+# against stubbed actuators (its exit-code + check-count contract is owned by tests/cc-dispatch-v2.bats
+# A12); these bats add CLI-level end-to-end runs against the REAL cc-backlog (temp CC_BACKLOG_FILE) so
+# the backlog TRANSITION (open→claimed→reopen) is proven through the real fold — not just "claim was
+# invoked".
 # cc-wave-plan (unbuilt; T-P7-6) + the spawn bin + the pages dir are stubbed via the env seams.
 
 setup() {
@@ -152,56 +153,6 @@ idl_action() { tail -1 "$C/idl.jsonl" | jq -r '.action'; }
   [ "$status" -eq 0 ]
   ! echo "$output" | grep -q "retracted $id" || false
   [ "$(status_of "$id")" = claimed ]
-}
-
-@test "selftest passes and runs its full check set (a zero-check suite must not 'pass')" {
-  run "$DISP" selftest
-  [ "$status" -eq 0 ]
-  n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  # FLOOR + TALLY, not `-eq N`. The exact-count form this replaces could only ever red on the
-  # SUITE'S OWN GROWTH — it fired on 156 → 161 when the self-release rollback added its cases, and
-  # over its whole history it caught zero regressions while costing an edit at every real
-  # improvement (memory: exact-count-assertion-tripwires-its-own-subject). The two halves cover what
-  # the count was reaching for and the count could not: the FLOOR kills a suite that silently stopped
-  # running its checks, and the TALLY — the selftest's own summary line, with failures pinned at
-  # zero — kills a suite that ran them and let some fail. Neither degrades as the suite grows.
-  [ "$n_ok" -ge 156 ]
-  [[ "$output" == *"$n_ok passed, 0 failed"* ]] || false
-                        # 49 pre-v2 + the decision/admission split (S1,S2,S6,S7 + kill switches).
-                        # 156 → 161: the SELF-RELEASE rollback (backlog 98e0e325b3ed) — (d) 2 for the
-                        # flagged shape, (d2) 3 for the refused-flag fallback that must still release
-                        # the claim without letting the journal claim a self-release it never made.
-                        # 142 → 156: the ACTUATOR-ARBITER branch (5a) — (m2) 7 + (m2b) 4 + (m3) 3.
-                        # The done latch is now enforced by `cc-backlog claim` itself, because step
-                        # 1b's filter is pull-time and the landing can arrive during the wave-plan +
-                        # admission tail (backlog dadc3c2410aa, measured on 5690b9d11bee). rc 4 has
-                        # TWO causes since the lease landed, so (m2) and (m2b) are each other's
-                        # control at the SAME rc: done-latch ⇒ skip, lease ⇒ failed. Without the
-                        # pair, a bare `[ "$crc" -eq 4 ]` would stay green while reclassifying every
-                        # lease refusal. (m3) holds the line on ordinary claim failures.
-                        # 121 → 142: the STALE-PREMISE guard (1d) — 18 cases (v1-v6) covering the
-                        # retraction, its positive control, the source-scope control that keeps a
-                        # human-filed item citing a finished plan dispatchable, both fail-OPEN paths
-                        # and the kill switch — plus 2 assertions that de-vacuum case (m). (m)'s
-                        # claim/spawn assertions passed with the wasDone predicate stripped, so the
-                        # PER-ITEM property was unproven; wave.json is the observable that fails.
-                        # 113 → 121: the singleton gates ADMISSION, not DECISION (de5e3e24be8f) —
-                        # case (t) asserts the lock-loser's full decision set plus four zero-effect
-                        # reads, each mirrored by a (t2) positive control.
-                        # 111 → 113: the spawn-failure record now names its rc AND carries the
-                        # fire's own stderr, so (d) asserts the cause is present, not just the verdict.
-                        # 108 → 106 when the ceiling moved off the accounts oracle onto the ledger's
-                        # `claimed` fold (§3 S2): the oracle-hang bound and the zero-timeout config
-                        # case had nothing left to bound. Fewer checks here is a DELETION of dead
-                        # surface, not lost coverage — A14 in cc-dispatch-v2.bats now guards the
-                        # signal itself, which is the property those two were circling.
-                        # 106 → 111 with multi-project coverage (f7abcbdee98c): the brief's rails
-                        # line is now read from the project, so (c) asserts BOTH branches instead of
-                        # one unconditional '/ship', plus the (c6) positive control that a
-                        # conf-declared FOREIGN project is dispatched and gets the ship rail when its
-                        # repo carries one. This count is deliberately exact — it is what stops a
-                        # selftest that silently stops running checks from reading as a pass.
-  ! printf '%s' "$output" | grep -q '^  FAIL'
 }
 
 @test "unknown arg → exit 3 (fail-loud, no silent no-op)" {

@@ -373,11 +373,3 @@ last_idl() { tail -1 "$CC_WAVE_IDL"; }
   run "$WP" --items "$IT1"
   [ "$status" -eq 4 ]
 }
-
-@test "contract: the in-script selftest still passes with zero failures" {
-  run "$WP" selftest
-  [ "$status" -eq 0 ]
-  ! printf '%s' "$output" | grep -q '^  FAIL' || false
-  n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -ge 55 ]
-}

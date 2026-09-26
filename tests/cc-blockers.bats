@@ -281,7 +281,9 @@ kinds() { ccb --json | jq -r '.[].kind' | sort | tr '\n' ' '; }
   [ "$(kinds)" = "verifier-inert " ]
 }
 
-@test "alarms verifier-inert and trunk-red are MUTUALLY EXCLUSIVE — fresh side" {
+@test "alarms verifier-inert and trunk-red are MUTUALLY EXCLUSIVE — fresh side: trunk-red is the ONLY row (no verifier-inert, no never-green)" {
+  # kinds() is the SORTED FULL kind list, so this one equality also proves never-green DEFERS to
+  # the sharper trunk-red row — never two rows for one fault.
   for n in 1 2 3 4 5; do mkstamp "r$n" red "${n}M"; done   # same shape, stamps now FRESH
   : > "$CC_LAND_LOG"
   [ "$(kinds)" = "trunk-red " ]
@@ -516,12 +518,6 @@ hold_run_lock() { # the verifier's OWN in-progress mark: run.lock.d/pid naming a
   printf 'deadbeef\n' > "$CC_POSTLAND_DIR/last-green"
   run ccb --json
   [ "$(echo "$output" | jq '[.[] | select(.kind=="never-green")] | length')" = 0 ]
-}
-
-@test "alarm never-green DEFERS to a sharper row — never two rows for one fault" {
-  for n in 1 2 3 4 5; do mkstamp "r$n" red "${n}M"; done          # all-red ⇒ trunk-red owns it
-  : > "$CC_LAND_LOG"
-  [ "$(kinds)" = "trunk-red " ]
 }
 
 @test "alarm never-green DEFERS to verifier-inert/STALE (a dead verifier is the sharper fault)" {

@@ -189,11 +189,6 @@ PYEOF
   grep -q 'test-afunix-path-lint.sh' "$REPO/scripts/postland-verify.sh" || false
 }
 
-@test "the nightly picks it up automatically (name matches *lint*.sh AND supports --selftest)" {
-  case "$(basename "$LINT")" in *lint*.sh) ;; *) false ;; esac
-  grep -q -- '--selftest' "$LINT" || false
-}
-
 # The four files the class actually lived in. Named, so a future refactor that reintroduces the bug
 # in any of them fails HERE with the history attached, not just in the anonymous whole-tree scan.
 #

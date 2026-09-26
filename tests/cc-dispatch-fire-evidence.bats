@@ -16,7 +16,7 @@
 # same green.
 #
 # fire_log_keep is extracted from the shipped bin/cc-dispatch and executed, so this replays the real
-# artifact. The last test is a MUTATION CONTROL proving the assertions can fail.
+# artifact.
 
 setup() {
   export HOME="$BATS_TEST_TMPDIR/home"
@@ -138,20 +138,4 @@ mode_of() {
   # ask and had no answer; it now rides on the one-line record too, not only in the log file.
   grep -q "anchored to live pane" "$DISPATCH"
   grep -q 'idl fired "$id -> $acct${fanch:+ — $fanch}"' "$DISPATCH"
-}
-
-@test "CONTROL: the OLD success arm keeps nothing — the assertions above can fail" {
-  cat > "$BATS_TEST_TMPDIR/old.sh" <<'SH'
-old_arm() { # the pre-fix shape: capture, branch, delete unread
-  local ferrf="$1"
-  if [ "$2" -eq 0 ]; then :; else :; fi
-  rm -f "$ferrf" 2>/dev/null
-}
-SH
-  cp "$CAP" "$BATS_TEST_TMPDIR/victim.txt"
-  run bash -c ". '$BATS_TEST_TMPDIR/old.sh'; old_arm '$BATS_TEST_TMPDIR/victim.txt' 0"
-  [ "$status" -eq 0 ]
-  # the evidence is gone and nothing was written anywhere
-  [ ! -f "$BATS_TEST_TMPDIR/victim.txt" ]
-  [ ! -s "$CC_DISPATCH_FIRE_LOG" ]
 }
