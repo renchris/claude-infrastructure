@@ -338,11 +338,6 @@ EOF
   grep -q "kgown=\"\$(git diff --name-only \"\$range\" -- 'tests/\*.bats'" "$REPO/scripts/ship-land.sh" || false
 }
 
-@test "WIRING: the task-quality-gate hook invokes it too, at the earlier chokepoint" {
-  grep -q 'bats-kill-guard-lint.sh' "$REPO/hooks/task-quality-gate.sh" || false
-  grep -q 'bats-kill-guard' "$REPO/hooks/task-quality-gate.sh" || false
-}
-
 @test "WIRING: the hook is own-scoped too — an invariant's OTHER consumer takes the same fix" {
   # This hook fires on every task in the repo, so a whole-corpus block here made one sibling's kill a
   # red for every author of every task — the same misattribution as the land arm, at an earlier

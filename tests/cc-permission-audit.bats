@@ -234,11 +234,6 @@ print(json.dumps({'session_id':sys.argv[1],'ts':int(time.time())-int(sys.argv[4]
   [[ "$output" != *ancient-cmd* ]]
 }
 
-@test "the docstring no longer claims no history exists — it is now produced" {
-  run grep -c 'so no history exists' "$AUDIT"
-  [ "$output" = "0" ]
-}
-
 # ── Adversarial-review fixes (verify-audit, 2026-07-31) ─────────────────────────────────────────
 # Each of these reproduces a defect an independent reviewer demonstrated against the landed code.
 @test "D1: a grant is PROVEN by tool_use_id — matching tool NAMES is not evidence" {

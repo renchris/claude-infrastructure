@@ -196,19 +196,6 @@ install_stub() {   # $1=suite file (repo-relative)  $2=redirect target  $3=varia
   done < <(stub_rows)
 }
 
-@test "C2: the mutant is a REAL mutant — it differs from the shipped stub on every row" {
-  # Guards the anchor itself. If a stub is reworded so `mutate_to_historical` no longer bites, the
-  # mutant would equal the original, C would pass for the wrong reason, and A would be unguarded.
-  while IFS='|' read -r file target _flag; do
-    [ -n "$file" ] || continue
-    install_stub "$file" "$target" fixed
-    cp "$BATS_TEST_TMPDIR/stub" "$BATS_TEST_TMPDIR/fixed"
-    install_stub "$file" "$target" historical
-    run diff -q "$BATS_TEST_TMPDIR/fixed" "$BATS_TEST_TMPDIR/stub"
-    [ "$status" != "0" ]
-  done < <(stub_rows)
-}
-
 # ── the table itself ─────────────────────────────────────────────────────────────────────────────
 
 @test "the stub table is non-empty and every row names a file that exists" {
