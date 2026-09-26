@@ -162,18 +162,20 @@ function cardAt(s) {
 function drawHero(c, st) {
   const s = st.s
   const g = c.getContext('2d')
+  const k = c.width / 2048 // world.js TEX: the canvas is drawn at k times round two's size
   const left = {
-    font: 30, acct: HERO.acct, sess: 'claude-infrastructure (4f2ef1b9)', status: 'high', anchor: 'bottom', greekSeed: 3,
+    font: 30 * k, acct: HERO.acct, sess: 'claude-infrastructure (4f2ef1b9)', status: 'high', anchor: 'bottom', greekSeed: 3,
     rows: originRows(s), typing: st.typing, pingAcct: HERO.peerAcct,
     // The last land's scrollback fades out with the card as the camera leaves the poster.
     rowsAlpha: s < S.clear ? 1 - ease.smoother(p(s, S.start, S.clear)) : 1,
   }
   const right = {
-    font: 30, acct: HERO.peerAcct, sess: 'claude-infrastructure (dec7f8dc)', status: 'high', anchor: 'bottom', greekSeed: 11,
+    font: 30 * k, acct: HERO.peerAcct, sess: 'claude-infrastructure (dec7f8dc)', status: 'high', anchor: 'bottom', greekSeed: 11,
     boot: st.boot, rows: s >= S.fold[1] ? [] : rowsAt(PEER_ROWS, s),
     header: { version: 'v2.1.280', model: 'Opus 5.5 · Claude Max', cwd: '~/…/.worktrees/feat/readme-hero-film' },
   }
   drawWindow(g, T, c.width, c.height, {
+    k,
     title: st.split < 0.999 ? '✳ Claude Code — 2 panes' : '✳ Claude Code',
     panes: st.split < 0.999 ? [left, right] : [left],
     split: st.split < 0.999 ? st.split : null,
@@ -218,7 +220,7 @@ function toCam(c) {
   const d = [c.at[0] - c.p[0], c.at[1] - c.p[1], c.at[2] - c.p[2]]
   const yaw = Math.atan2(d[0], -d[2])
   const pitch = Math.atan2(-d[1], Math.hypot(d[0], d[2]))
-  return { x: c.p[0], y: c.p[1], z: c.p[2], yaw, pitch, F: c.F, cx: c.cx, cy: c.cy }
+  return { x: c.p[0], y: c.p[1], z: c.p[2], yaw, pitch, F: c.F, cx: c.cx, cy: c.cy, focus: Math.hypot(...d) }
 }
 // A move, as an orbit about the point the camera looks at: that point travels a curve (bent by
 // viaAt), the camera's bearing and elevation from it turn evenly, and its distance changes evenly in
@@ -625,10 +627,10 @@ function seek(t) {
   const ed = editAt(t)
   if ((ed.blur || CUT === 'film') && SUBS > 1) {
     const subs = Array.from({ length: SUBS }, (_, k) => () => applyWorld(Math.max(ed.from, Math.min(ed.to - 1e-4, t + ((k + 0.5) / SUBS - 0.5) * SHUTTER))))
-    world.render(subs)
+    world.render(subs, { seed: Math.round(t * 60) })
   } else {
     applyWorld(t)
-    world.render(null)
+    world.render(null, { seed: Math.round(t * 60) })
   }
   const { st } = applyWorld(t)
   typeAt(t, st)
@@ -752,7 +754,9 @@ window.__meta = {
 }
 const seekAny = (t) => seek(((t % DURATION) + DURATION) % DURATION)
 Promise.all(['400 26px "Geist"', '500 26px "Geist"', '600 26px "Geist"', '400 26px "Geist Mono"', '500 26px "Geist Mono"', '600 26px "Geist Mono"'].map((f) => document.fonts.load(f))).then(() => document.fonts.ready).then(() => {
-  world = buildWorld(T, { width: W, height: H })
+  // Grain moves every pixel of every frame, so it is the FILM's only: in the loop's animated WebP a still
+  // frame is nearly free, and grain would make every hold cost what a flight costs.
+  world = buildWorld(T, { width: W, height: H, grain: CUT === 'film' ? Number(q.get('grain') ?? 2.2) : 0 })
   prepMoves()
   stage.append(world.renderer.domElement)
   stage.append(layer)

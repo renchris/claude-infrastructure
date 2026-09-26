@@ -12,9 +12,15 @@
 //
 // Nothing here keeps time. film.js computes every state from the clock and calls update().
 
-import * as THREE from '../../node_modules/three/build/three.module.js'
+import * as THREE from 'three'
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js'
 import { RACKS, canvas, drawCard, drawFloorText, drawRack, drawSign, drawWindow } from './panes.js'
 import { clamp01, rng } from './lib.js'
+import { LAYER_FLOOR, LOOKS, environment, floorMaterial, initAreaLights, pipeline } from './look.js'
+
+// Round 3: every canvas is drawn at TEX times round two's size, so a pane's text stays sharp in a 4K
+// frame (the window shot puts the originator's window ~2,700 px wide).
+export const TEX = 2
 
 // --------------------------------------------------------------------------------- the layout
 export const DZ = 56 // one stretch, one land
@@ -116,18 +122,19 @@ function ribbon(curve, width, n = 96) {
   return g
 }
 // A ribbon's material draws only u <= `draw` (a line growing from its window), in one colour.
-function lineMat(color, opacity = 1, additive = false) {
+// Round 3: `boost` lifts a line above the bloom threshold, so it emits light rather than being paint.
+function lineMat(color, opacity = 1, additive = false, boost = 1) {
   return new THREE.ShaderMaterial({
-    uniforms: { color: { value: new THREE.Color(color) }, opacity: { value: opacity }, draw: { value: 1 }, from: { value: 0 }, soft: { value: 0 }, fogColor: { value: new THREE.Color() }, fogNear: { value: 1 }, fogFar: { value: 2 } },
+    uniforms: { color: { value: new THREE.Color(color) }, opacity: { value: opacity }, draw: { value: 1 }, from: { value: 0 }, soft: { value: 0 }, boost: { value: boost }, fogColor: { value: new THREE.Color() }, fogNear: { value: 1 }, fogFar: { value: 2 } },
     vertexShader: 'varying vec2 vUv; varying float vDepth; void main() { vUv = uv; vec4 mv = modelViewMatrix * vec4(position, 1.0); vDepth = -mv.z; gl_Position = projectionMatrix * mv; }',
-    fragmentShader: `uniform vec3 color; uniform float opacity; uniform float draw; uniform float from; uniform float soft; uniform vec3 fogColor; uniform float fogNear; uniform float fogFar;
+    fragmentShader: `uniform vec3 color; uniform float opacity; uniform float draw; uniform float from; uniform float soft; uniform float boost; uniform vec3 fogColor; uniform float fogNear; uniform float fogFar;
       varying vec2 vUv; varying float vDepth;
       void main() {
         if (vUv.x > draw || vUv.x < from) discard;
         float a = opacity;
         if (soft > 0.0) { float d = abs(vUv.y - 0.5) * 2.0; a *= pow(1.0 - d, 2.0); }
         float f = smoothstep(fogNear, fogFar, vDepth);
-        gl_FragColor = vec4(mix(color, fogColor, f), a * (1.0 - f * 0.0));
+        gl_FragColor = vec4(mix(color * boost, fogColor, f), a);
         #include <colorspace_fragment>
       }`,
     transparent: true,
@@ -137,19 +144,34 @@ function lineMat(color, opacity = 1, additive = false) {
 }
 
 // --------------------------------------------------------------------------------- building
-export function buildWorld(T, { width = 1920, height = 1080 } = {}) {
-  const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true, powerPreference: 'high-performance' })
-  renderer.setPixelRatio(1)
+export function buildWorld(T, { width = 1920, height = 1080, grain = 0 } = {}) {
+  const dark = T.bg === '#0d1117'
+  const L = LOOKS[dark ? 'dark' : 'light']
+  // The page is laid out at 1920 x 1080 CSS px and photographed at the device pixel ratio (2 in round
+  // 3: 3840 x 2160, the FILM's size and the loop's supersampled source).
+  const dpr = window.devicePixelRatio || 1
+  const renderer = new THREE.WebGLRenderer({ antialias: false, preserveDrawingBuffer: true, powerPreference: 'high-performance' })
+  renderer.setPixelRatio(dpr)
   renderer.setSize(width, height)
   renderer.outputColorSpace = THREE.SRGBColorSpace
+  renderer.toneMapping = THREE.NoToneMapping // look.js rolls highlights off itself, leaving the page colour exact
+  renderer.shadowMap.enabled = true
+  renderer.shadowMap.type = THREE.PCFShadowMap
   const maxAniso = renderer.capabilities.getMaxAnisotropy()
   const scene = new THREE.Scene()
   const bg = new THREE.Color(T.bg)
   scene.background = bg
   scene.fog = new THREE.Fog(bg, 40, 150)
+  scene.environment = environment(renderer)
+  initAreaLights()
   const cam = new THREE.PerspectiveCamera(40, width / height, 0.05, 800)
   cam.rotation.order = 'YXZ'
-  const dark = T.bg === '#0d1117'
+  cam.layers.enable(LAYER_FLOOR)
+  // Things lying on the floor: drawn in the main pass, never in the reflection (look.js).
+  const onFloor = (...objs) => {
+    for (const o of objs) o.traverse((m) => m.layers.set(LAYER_FLOOR))
+    return objs[0]
+  }
 
   const tex = (c) => {
     const t = new THREE.CanvasTexture(c)
@@ -160,47 +182,40 @@ export function buildWorld(T, { width = 1920, height = 1080 } = {}) {
     return t
   }
   const lineMats = [] // every ShaderMaterial that needs the fog uniforms each frame
-  const mkLine = (color, opacity, additive) => {
-    const m = lineMat(color, opacity, additive)
+  const mkLine = (color, opacity, additive, boost = 1) => {
+    const m = lineMat(color, opacity, additive, boost)
     lineMats.push(m)
     return m
   }
 
-  // Reflections: every standing thing has a mirrored twin under the floor, fading with depth below
-  // it. The floor itself is the background colour, so a twin at low opacity reads as a gloss.
-  const reflectFade = (mat, strength) => {
-    mat.transparent = true
-    mat.depthWrite = false
-    mat.opacity = strength
-    mat.onBeforeCompile = (sh) => {
-      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying float vWY;').replace('#include <project_vertex>', '#include <project_vertex>\nvWY = (modelMatrix * vec4(transformed, 1.0)).y;')
-      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vWY;').replace('#include <dithering_fragment>', '#include <dithering_fragment>\ngl_FragColor.a *= clamp(1.0 + vWY / 1.6, 0.0, 1.0);')
-    }
-    return mat
+  // ---------------------------------------------------------------------- materials
+  // A kitty window is a physical object: a dark anodised bezel with a clearcoat, the lit screen set in
+  // it, and a sheet of glass whose reflections of the room slide across it as the camera moves.
+  const bezelMat = new THREE.MeshPhysicalMaterial({ color: L.body, metalness: 0.6, roughness: 0.32, clearcoat: 0.7, clearcoatRoughness: 0.18, envMapIntensity: L.env })
+  const glassMat = new THREE.MeshStandardMaterial({ color: 0x000000, metalness: 0, roughness: 0.06, envMapIntensity: L.glass, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false })
+  const metalMat = new THREE.MeshPhysicalMaterial({ color: L.metalHi, metalness: 0.9, roughness: 0.28, clearcoat: 0.3, envMapIntensity: L.env * 1.2 })
+  const darkMetal = new THREE.MeshPhysicalMaterial({ color: L.metal, metalness: 0.75, roughness: 0.4, envMapIntensity: L.env })
+  const lampMat = (color, k = L.lineBoost) => new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(k), toneMapped: false })
+  /** A panel standing on its bottom edge (or centred), facing +z: bezel body, screen, glass. */
+  function panel(w, h, map, { depth = 0.08, rim = 0.05, radius = 0.06, centre = false, own = false } = {}) {
+    const g = new THREE.Group()
+    const y0 = centre ? 0 : h / 2
+    const bm = own ? bezelMat.clone() : bezelMat
+    const body = new THREE.Mesh(new RoundedBoxGeometry(w + 2 * rim, h + 2 * rim, depth, 4, radius).translate(0, y0, -depth / 2 + 0.004), bm)
+    body.castShadow = true
+    const screen = new THREE.Mesh(new THREE.PlaneGeometry(w, h).translate(0, y0, 0.007), new THREE.MeshBasicMaterial({ map, transparent: true, color: new THREE.Color().setScalar(L.screen) }))
+    const glass = new THREE.Mesh(new THREE.PlaneGeometry(w, h).translate(0, y0, 0.011), own ? glassMat.clone() : glassMat)
+    glass.renderOrder = 9
+    g.add(body, screen, glass)
+    return { g, body, screen, glass }
   }
-  const mirrored = []
-  const addStanding = (obj, strength = T.reflect) => {
+  const addStanding = (obj) => {
     scene.add(obj)
-    const twin = obj.clone(true)
-    twin.traverse((m) => {
-      if (m.isMesh) {
-        m.material = Array.isArray(m.material) ? m.material.map((x) => reflectFade(x.clone(), strength)) : reflectFade(m.material.clone(), strength)
-        m.renderOrder = -1
-      }
-    })
-    twin.scale.y = -1
-    scene.add(twin)
-    mirrored.push({ obj, twin })
-    return twin
-  }
-  const syncTwin = (obj, twin) => {
-    twin.position.set(obj.position.x, -obj.position.y, obj.position.z)
-    twin.rotation.set(-obj.rotation.x, obj.rotation.y, -obj.rotation.z, obj.rotation.order)
-    twin.scale.set(obj.scale.x, -obj.scale.y, obj.scale.z)
-    twin.visible = obj.visible
+    return obj
   }
 
-  // A soft contact shadow and a screen's spill of light onto the floor.
+  // A soft contact shadow under each standing thing (the key light's shadow falls well away from a
+  // window that floats LIFT off the floor; this keeps it grounded).
   const blob = (() => {
     const c = canvas(256, 256)
     const g = c.getContext('2d')
@@ -215,26 +230,66 @@ export function buildWorld(T, { width = 1920, height = 1080 } = {}) {
   const floorBlob = (w, d, color, opacity) => {
     const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color, alphaMap: blob, transparent: true, opacity, depthWrite: false }))
     m.renderOrder = 1
+    m.layers.set(LAYER_FLOOR)
     return m
   }
 
-  // ---------------------------------------------------------------------- the floor grid
-  // A faint grid establishes the ground plane and the speed of a flight.
-  {
-    const c = canvas(512, 512)
-    const g = c.getContext('2d')
-    g.clearRect(0, 0, 512, 512)
-    g.strokeStyle = '#ffffff'
-    g.lineWidth = 3
-    g.strokeRect(0, 0, 512, 512)
-    const t = new THREE.CanvasTexture(c)
-    t.wrapS = t.wrapT = THREE.RepeatWrapping
-    t.repeat.set(160, 240)
-    t.anisotropy = maxAniso
-    const grid = new THREE.Mesh(new THREE.PlaneGeometry(4 * 160, 4 * 240).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: T.grid, alphaMap: t, transparent: true, depthWrite: false }))
-    grid.position.set(0, -0.002, -200)
-    grid.renderOrder = -2
-    scene.add(grid)
+  // ---------------------------------------------------------------------- light
+  // A cool key from high behind the fleet (rim-lights every window and throws its shadow toward the
+  // lens), a sky/ground fill, a faint front rim, and each lit screen as an area light on the floor.
+  scene.add(new THREE.HemisphereLight(L.hemi[0], L.hemi[1], L.hemi[2]))
+  const key = new THREE.DirectionalLight(L.key[0], L.key[1])
+  key.position.set(-22, 30, 20)
+  key.target.position.set(2, 0, -2)
+  key.castShadow = true
+  Object.assign(key.shadow.camera, { left: -44, right: 44, top: 44, bottom: -44, near: 1, far: 120 })
+  key.shadow.mapSize.set(4096, 4096)
+  key.shadow.bias = -0.0004
+  key.shadow.normalBias = 0.03
+  key.shadow.radius = 4
+  scene.add(key, key.target)
+  const rimL = new THREE.DirectionalLight(L.rim[0], L.rim[1])
+  rimL.position.set(18, 9, -30) // a cool edge from behind
+  scene.add(rimL)
+  const screenLight = (w, h, x, y, z, yaw, color = '#c9d6ff', k = 1) => {
+    if (!L.screenLight) return null
+    const l = new THREE.RectAreaLight(color, L.screenLight * k, w, h)
+    l.position.set(x + Math.sin(yaw) * 0.05, y, z + Math.cos(yaw) * 0.05)
+    l.lookAt(x + Math.sin(yaw) * 2, y, z + Math.cos(yaw) * 2)
+    scene.add(l)
+    return l
+  }
+
+  // ---------------------------------------------------------------------- the floor
+  // Polished concrete with inlaid seams every 4 units (the old grid: it still reads a flight's speed),
+  // reflecting everything standing on it, blurred (look.js).
+  const floorMat = floorMaterial(L)
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(640, 960).rotateX(-Math.PI / 2), floorMat)
+  floor.position.set(0, 0, -200)
+  floor.receiveShadow = true
+  floor.layers.set(LAYER_FLOOR)
+  floor.renderOrder = -3
+  scene.add(floor)
+  // Dust in the air, lit: fixed in the world, so it parallaxes in a flight and is still in a hold.
+  if (L.motes) {
+    const R = rng(97)
+    const pos = new Float32Array(L.motes * 3)
+    for (let i = 0; i < L.motes; i += 1) pos.set([(R() - 0.5) * 70, 0.3 + R() ** 1.6 * 10, 32 - R() * 80], i * 3)
+    const dot = (() => {
+      const c = canvas(64, 64)
+      const g = c.getContext('2d')
+      const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32)
+      gr.addColorStop(0, 'rgba(255,255,255,1)')
+      gr.addColorStop(1, 'rgba(255,255,255,0)')
+      g.fillStyle = gr
+      g.fillRect(0, 0, 64, 64)
+      return new THREE.CanvasTexture(c)
+    })()
+    const geo = new THREE.BufferGeometry()
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3))
+    const motes = new THREE.Points(geo, new THREE.PointsMaterial({ size: 0.05, map: dot, color: '#9fb4d6', transparent: true, opacity: 0.35, depthWrite: false, blending: THREE.AdditiveBlending }))
+    motes.layers.set(LAYER_FLOOR)
+    scene.add(motes)
   }
 
   // ---------------------------------------------------------------------- the trunk
@@ -242,25 +297,27 @@ export function buildWorld(T, { width = 1920, height = 1080 } = {}) {
   const trunkZ0 = 1.2 // origin/main starts at the gate: before it there is no trunk, only branches
   const trunkZ1 = -DZ * 5
   const trunkCurve = new THREE.LineCurve3(new THREE.Vector3(0, 0, trunkZ0), new THREE.Vector3(0, 0, trunkZ1))
-  const trunk = new THREE.Mesh(ribbon(trunkCurve, 0.24, 4), mkLine(T.green, 1))
+  const trunk = new THREE.Mesh(ribbon(trunkCurve, 0.24, 4), mkLine(T.green, 1, false, L.lineBoost))
   trunk.position.y = 0.012
   trunk.renderOrder = 3
   scene.add(trunk)
-  const trunkGlow = new THREE.Mesh(ribbon(trunkCurve, 2.0, 4), mkLine(T.green, T.glowA * 1.4, dark))
+  const trunkGlow = new THREE.Mesh(ribbon(trunkCurve, 2.0, 4), mkLine(T.green, T.glowA * 0.9, dark))
   trunkGlow.material.uniforms.soft.value = 1
   trunkGlow.position.y = 0.008
   trunkGlow.renderOrder = 2
   scene.add(trunkGlow)
+  onFloor(trunk, trunkGlow)
   const dotGeo = new THREE.CircleGeometry(0.13, 32).rotateX(-Math.PI / 2)
   const ringGeo = new THREE.RingGeometry(0.2, 0.3, 40).rotateX(-Math.PI / 2)
 
   // ---------------------------------------------------------------------- per stretch
   const fleetCanvases = FLEET.map((o) => {
-    const c = canvas(1024, 640)
-    drawWindow(c.getContext('2d'), T, 1024, 640, {
+    const c = canvas(1024 * TEX, 640 * TEX)
+    drawWindow(c.getContext('2d'), T, 1024 * TEX, 640 * TEX, {
       title: `✳ ${o.branch}`,
+      k: TEX,
       panes: [{
-        font: 21, acct: o.acct, sess: `claude-infrastructure (${(o.seed * 2654435761 >>> 0).toString(16).slice(0, 8)})`, greekSeed: o.seed,
+        font: 21 * TEX, acct: o.acct, sess: `claude-infrastructure (${(o.seed * 2654435761 >>> 0).toString(16).slice(0, 8)})`, greekSeed: o.seed,
         header: { version: 'v2.1.280', model: 'Opus 5.5 · Claude Max', cwd: `~/…/.worktrees/${o.branch}` },
         rows: [{ kind: 'user', text: o.cmd }, { kind: 'greek', lines: 2 }, { kind: 'greek', lines: 3 }, { kind: 'greek', lines: 1 }],
       }],
@@ -268,55 +325,45 @@ export function buildWorld(T, { width = 1920, height = 1080 } = {}) {
     return tex(c)
   })
   const branchLabel = (text, color) => {
-    const c = canvas(1024, 96)
-    drawFloorText(c.getContext('2d'), 1024, 96, text, color)
+    const c = canvas(1024 * TEX, 96 * TEX)
+    drawFloorText(c.getContext('2d'), 1024 * TEX, 96 * TEX, text, color)
     const t = tex(c)
     return t
   }
   const gateSign = (() => {
-    const c = canvas(768, 256)
-    drawSign(c.getContext('2d'), T, 768, 256)
+    const c = canvas(768 * TEX, 256 * TEX)
+    drawSign(c.getContext('2d'), T, 768 * TEX, 256 * TEX)
     return tex(c)
   })()
   const floorWord = (text, color, h = 128) => {
-    const c = canvas(1024, h)
-    drawFloorText(c.getContext('2d'), 1024, h, text, color, { align: 'center', weight: 600 })
+    const c = canvas(1024 * TEX, h * TEX)
+    drawFloorText(c.getContext('2d'), 1024 * TEX, h * TEX, text, color, { align: 'center', weight: 600 })
     return tex(c)
   }
   const mainWord = floorWord('origin/main', T.green)
   const claudeWord = floorWord('~/.claude', T.ink)
 
-  const winGeo = (w, h) => new THREE.PlaneGeometry(w, h).translate(0, h / 2, 0)
-  const backMat = new THREE.MeshBasicMaterial({ color: T.title })
   const stretches = []
   for (const k of STRETCHES) {
     const gz = gateZ(k)
     const S = { k, gz, fleet: [], lines: [], pills: [] }
     // Fleet windows and their lines.
     FLEET.forEach((o, n) => {
-      const g = new THREE.Group()
-      const face = new THREE.Mesh(winGeo(FW, FH), new THREE.MeshBasicMaterial({ map: fleetCanvases[n] }))
-      const back = new THREE.Mesh(winGeo(FW, FH), backMat)
-      back.rotation.y = Math.PI
-      g.add(face, back)
+      const { g, screen: face } = panel(FW, FH, fleetCanvases[n])
       g.position.set(o.x, LIFT, gz + o.z)
       g.rotation.y = rot(o.deg * FACE)
       addStanding(g)
-      const sh = floorBlob(FW * 1.25, 1.2, T.shadow, T.shadowA)
+      const sh = floorBlob(FW * 1.25, 1.2, T.shadow, T.shadowA * 0.7)
       sh.position.set(o.x, 0.003, gz + o.z - 0.1)
       sh.rotation.y = rot(o.deg * FACE)
       scene.add(sh)
-      if (dark) {
-        const spill = floorBlob(FW * 1.5, 3.2, T.acct[o.acct], 0.07)
-        spill.position.set(o.x + Math.sin(rot(o.deg * FACE)) * 1.5, 0.004, gz + o.z + Math.cos(rot(o.deg * FACE)) * 1.5)
-        spill.rotation.y = rot(o.deg * FACE)
-        scene.add(spill)
-      }
+      // The screen lights the floor in front of it, in its account's hue.
+      screenLight(FW, FH, o.x, LIFT + FH / 2, gz + o.z, rot(o.deg * FACE), T.acct[o.acct], 0.8)
       const curve = branchCurve(o.x, o.z + gz, gz)
-      const line = new THREE.Mesh(ribbon(curve, 0.15), mkLine(T.acct[o.acct], 1))
+      const line = new THREE.Mesh(ribbon(curve, 0.15), mkLine(T.acct[o.acct], 1, false, L.lineBoost))
       line.position.y = 0.01
       line.renderOrder = 3
-      const glow = new THREE.Mesh(ribbon(curve, 1.5), mkLine(T.acct[o.acct], T.glowA * 1.3, dark))
+      const glow = new THREE.Mesh(ribbon(curve, 1.5), mkLine(T.acct[o.acct], T.glowA * 0.8, dark))
       glow.material.uniforms.soft.value = 1
       glow.position.y = 0.006
       glow.renderOrder = 2
@@ -331,42 +378,34 @@ export function buildWorld(T, { width = 1920, height = 1080 } = {}) {
       lab.translateZ(-1.95)
       lab.renderOrder = 4
       scene.add(lab)
+      onFloor(line, glow, lab)
       S.fleet.push({ o, g, face })
       S.lines.push({ curve, line, glow, acct: o.acct, n })
     })
 
     // The originator's window: two panes once it splits. One canvas per stretch, redrawn on change.
-    const hc = canvas(2048, 1114)
+    const hc = canvas(2048 * TEX, 1114 * TEX)
     const ht = tex(hc)
-    const hero = new THREE.Group()
-    const hface = new THREE.Mesh(winGeo(HW, HH), new THREE.MeshBasicMaterial({ map: ht }))
-    const hback = new THREE.Mesh(winGeo(HW, HH), backMat)
-    hback.rotation.y = Math.PI
-    hero.add(hface, hback)
+    const { g: hero } = panel(HW, HH, ht, { depth: 0.1, rim: 0.06 })
     hero.position.set(HERO.x, LIFT, gz + HERO.z)
     hero.rotation.y = rot(HERO.deg)
     addStanding(hero)
     {
-      const sh = floorBlob(HW * 1.2, 1.3, T.shadow, T.shadowA)
+      const sh = floorBlob(HW * 1.2, 1.3, T.shadow, T.shadowA * 0.7)
       sh.position.set(HERO.x, 0.003, gz + HERO.z - 0.1)
       sh.rotation.y = rot(HERO.deg)
       scene.add(sh)
-      if (dark) {
-        const spill = floorBlob(HW * 1.4, 3.6, '#c9d1d9', 0.06)
-        spill.position.set(HERO.x + Math.sin(rot(HERO.deg)) * 1.7, 0.004, gz + HERO.z + Math.cos(rot(HERO.deg)) * 1.7)
-        spill.rotation.y = rot(HERO.deg)
-        scene.add(spill)
-      }
+      screenLight(HW, HH, HERO.x, LIFT + HH / 2, gz + HERO.z, rot(HERO.deg), '#dfe6f2', 1.0)
     }
     // Its two lines: the originator's (left half) and the peer's (right half, drawn as it boots).
     const heroLines = [0, 1].map((half) => {
       const [fx, fz] = heroFoot(half)
       const curve = branchCurve(fx, fz + gz, gz)
       const acct = half === 0 ? HERO.acct : HERO.peerAcct
-      const line = new THREE.Mesh(ribbon(curve, 0.17), mkLine(T.acct[acct], 1))
+      const line = new THREE.Mesh(ribbon(curve, 0.17), mkLine(T.acct[acct], 1, false, L.lineBoost))
       line.position.y = 0.011
       line.renderOrder = 3
-      const glow = new THREE.Mesh(ribbon(curve, 1.6), mkLine(T.acct[acct], T.glowA * 1.3, dark))
+      const glow = new THREE.Mesh(ribbon(curve, 1.6), mkLine(T.acct[acct], T.glowA * 0.8, dark))
       glow.material.uniforms.soft.value = 1
       glow.position.y = 0.007
       glow.renderOrder = 2
@@ -380,36 +419,59 @@ export function buildWorld(T, { width = 1920, height = 1080 } = {}) {
       lab.translateZ(-1.95)
       lab.renderOrder = 4
       scene.add(lab)
+      onFloor(line, glow, lab)
       return { curve, line, glow, lab }
     })
     Object.assign(S, { hc, ht, hero, heroLines, heroSig: '' })
 
-    // The gate: two posts, a lintel with its sign, and an arm that lifts for one land at a time.
+    // The gate: two brushed-metal posts on plinths, a lintel carrying a backlit sign, and an arm that
+    // lifts for one land at a time. The arm's stripe and the two lamps on the lintel light green while
+    // a land passes (green = landed), and are dark otherwise.
     const gate = new THREE.Group()
-    const postMat = new THREE.MeshBasicMaterial({ color: T.gate })
+    const postGeo = new RoundedBoxGeometry(0.26, 4.2, 0.26, 3, 0.05).translate(0, 2.1, 0)
+    const plinthGeo = new RoundedBoxGeometry(0.62, 0.14, 0.62, 3, 0.04).translate(0, 0.07, 0)
+    const parts = []
+    for (const x of [-1.5, 1.5]) {
+      const post = new THREE.Mesh(postGeo, metalMat)
+      post.position.x = x
+      const plinth = new THREE.Mesh(plinthGeo, darkMetal)
+      plinth.position.x = x
+      parts.push(post, plinth)
+    }
     // Tall enough that the lifted arm clears the lintel and its sign (critique round two, finding 6).
-    const postGeo = new THREE.BoxGeometry(0.22, 4.2, 0.22).translate(0, 2.1, 0)
-    const pl = new THREE.Mesh(postGeo, postMat)
-    pl.position.x = -1.5
-    const pr = new THREE.Mesh(postGeo, postMat)
-    pr.position.x = 1.5
-    const lintel = new THREE.Mesh(new THREE.BoxGeometry(3.22, 0.2, 0.22), postMat)
+    const lintel = new THREE.Mesh(new RoundedBoxGeometry(3.36, 0.26, 0.32, 3, 0.05), metalMat)
     lintel.position.y = 4.2
+    const signBody = new THREE.Mesh(new RoundedBoxGeometry(3.14, 1.1, 0.12, 3, 0.04), darkMetal)
+    signBody.position.set(0, 4.85, -0.04)
     const sign = new THREE.Mesh(new THREE.PlaneGeometry(3.0, 1.0), new THREE.MeshBasicMaterial({ map: gateSign, transparent: true }))
-    sign.position.set(0, 4.85, 0.02)
-    const signBack = new THREE.Mesh(new THREE.PlaneGeometry(3.0, 1.0), new THREE.MeshBasicMaterial({ color: T.rackEdge }))
-    signBack.rotation.y = Math.PI
-    signBack.position.set(0, 4.85, -0.02)
+    sign.position.set(0, 4.85, 0.03)
+    const gateLamp = lampMat(T.green, 0.25)
+    const lamps = [-1.2, 1.2].map((x) => {
+      const m = new THREE.Mesh(new THREE.SphereGeometry(0.075, 20, 12), gateLamp)
+      m.position.set(x, 4.2, 0.17)
+      return m
+    })
     const armPivot = new THREE.Group()
-    armPivot.position.set(-1.39, 1.05, 0.14)
-    const arm = new THREE.Mesh(new THREE.BoxGeometry(2.9, 0.13, 0.1).translate(1.45, 0, 0), new THREE.MeshBasicMaterial({ color: T.gateArm }))
-    armPivot.add(arm)
-    gate.add(pl, pr, lintel, sign, signBack, armPivot)
+    armPivot.position.set(-1.39, 1.05, 0.2)
+    const arm = new THREE.Mesh(new RoundedBoxGeometry(2.9, 0.14, 0.11, 2, 0.035).translate(1.45, 0, 0), new THREE.MeshPhysicalMaterial({ color: T.gateArm, roughness: 0.35, clearcoat: 0.6, envMapIntensity: L.env }))
+    arm.castShadow = true
+    const stripeMat = lampMat(T.green, 0.25)
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.035, 0.115).translate(1.55, 0, 0), stripeMat)
+    armPivot.add(arm, stripe)
+    for (const m of [...parts, lintel, signBody]) m.castShadow = true
+    gate.add(...parts, lintel, signBody, sign, ...lamps, armPivot)
     gate.position.set(0, 0, gz)
-    const gateTwin = addStanding(gate)
+    addStanding(gate)
+    const gatePt = L.pillLight ? new THREE.PointLight(T.green, 0, 7, 2) : null
+    if (gatePt) {
+      gatePt.position.set(0, 1.4, gz + 0.3)
+      scene.add(gatePt)
+    }
     S.gate = gate
     S.armPivot = armPivot
-    S.armTwin = gateTwin.children[5]
+    S.gateLamp = gateLamp
+    S.stripeMat = stripeMat
+    S.gatePt = gatePt
 
     // origin/main and ~/.claude, painted on the floor after the gate.
     const mw = new THREE.Mesh(new THREE.PlaneGeometry(4.4, 0.55).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ map: mainWord, transparent: true, depthWrite: false }))
@@ -417,29 +479,33 @@ export function buildWorld(T, { width = 1920, height = 1080 } = {}) {
     mw.position.set(-0.75, 0.013, gz - 6.5)
     mw.renderOrder = 4
     scene.add(mw)
+    onFloor(mw)
 
     // The racks: ~/.claude, three of them, fed from the trunk by three short links.
     S.racks = RACKS.map((rack, r) => {
-      const c = canvas(512, 752)
-      drawRack(c.getContext('2d'), T, 512, 752, rack, { stale: 0, wave: 1 })
+      const c = canvas(512 * TEX, 752 * TEX)
+      drawRack(c.getContext('2d'), T, 512 * TEX, 752 * TEX, rack, { stale: 0, wave: 1 })
       const t = tex(c)
-      const g = new THREE.Group()
-      const face = new THREE.Mesh(winGeo(RACK_W, RACK_H), new THREE.MeshBasicMaterial({ map: t }))
-      const back = new THREE.Mesh(winGeo(RACK_W, RACK_H), new THREE.MeshBasicMaterial({ color: T.rackEdge }))
-      back.rotation.y = Math.PI
-      g.add(face, back)
+      // A cabinet: a deep metal body with the rack's face set in it, and a status strip along its top
+      // that shows the rack's state (amber while its files are stale, green when live).
+      const { g } = panel(RACK_W, RACK_H, t, { depth: 0.7, rim: 0.09, radius: 0.05 })
+      const ledMat = lampMat(T.green, dark ? 1.6 : 1)
+      const led = new THREE.Mesh(new THREE.BoxGeometry(RACK_W * 0.9, 0.05, 0.02), ledMat)
+      led.position.set(0, RACK_H + 0.045, 0.012)
+      g.add(led)
       g.position.set(RACK_X[r], LIFT, gz + RACK_Z)
       addStanding(g)
-      const sh = floorBlob(RACK_W * 1.2, 1.2, T.shadow, T.shadowA)
+      const sh = floorBlob(RACK_W * 1.2, 1.2, T.shadow, T.shadowA * 0.7)
       sh.position.set(RACK_X[r], 0.003, gz + RACK_Z - 0.1)
       scene.add(sh)
       // A link from the trunk to the rack's foot.
       const lc = new THREE.CubicBezierCurve3(new THREE.Vector3(0, 0, gz + RACK_Z + 4.2), new THREE.Vector3(0, 0, gz + RACK_Z + 2.0), new THREE.Vector3(RACK_X[r], 0, gz + RACK_Z + 2.4), new THREE.Vector3(RACK_X[r], 0, gz + RACK_Z + 0.25))
-      const link = new THREE.Mesh(ribbon(lc, 0.08, 40), mkLine(T.green, 1))
+      const link = new THREE.Mesh(ribbon(lc, 0.08, 40), mkLine(T.green, 1, false, L.lineBoost))
       link.position.y = 0.012
       link.renderOrder = 3
       scene.add(link)
-      return { rack, c, t, g, link, last: -1 }
+      onFloor(link, sh)
+      return { rack, c, t, g, link, ledMat, last: -1 }
     })
     const cw = new THREE.Mesh(new THREE.PlaneGeometry(7.4, 0.93), new THREE.MeshBasicMaterial({ map: claudeWord, transparent: true, depthWrite: false }))
     cw.position.set(0, LIFT + RACK_H + 0.7, gz + RACK_Z)
@@ -452,6 +518,7 @@ export function buildWorld(T, { width = 1920, height = 1080 } = {}) {
     hist.frustumCulled = false
     hist.renderOrder = 5
     scene.add(hist)
+    onFloor(hist)
     const head = new THREE.Group()
     const hd = new THREE.Mesh(dotGeo, new THREE.MeshBasicMaterial({ color: T.ink, transparent: true }))
     const hr = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: T.green, transparent: true }))
@@ -459,6 +526,7 @@ export function buildWorld(T, { width = 1920, height = 1080 } = {}) {
     head.position.set(0, 0.022, gz + HEAD_Z)
     head.renderOrder = 6
     scene.add(head)
+    onFloor(head)
     S.hist = hist
     S.head = head
     // The converger's pulse: from HEAD down the trunk to the racks' links.
@@ -466,9 +534,10 @@ export function buildWorld(T, { width = 1920, height = 1080 } = {}) {
     if (dark) pulse.material.blending = THREE.AdditiveBlending
     pulse.renderOrder = 6
     scene.add(pulse)
-    const pulseDot = new THREE.Mesh(dotGeo, new THREE.MeshBasicMaterial({ color: T.green }))
+    const pulseDot = new THREE.Mesh(dotGeo, lampMat(T.green))
     pulseDot.renderOrder = 7
     scene.add(pulseDot)
+    onFloor(pulse, pulseDot)
     S.pulse = pulse
     S.pulseDot = pulseDot
 
@@ -481,7 +550,9 @@ export function buildWorld(T, { width = 1920, height = 1080 } = {}) {
       const gl = floorBlob(1.4, 1.4, T.amber, dark ? 0.35 : 0.25)
       if (dark) gl.material.blending = THREE.AdditiveBlending
       scene.add(gl)
-      return { m, gl }
+      const pt = L.pillLight ? new THREE.PointLight(T.amber, 0, 3.2, 2) : null
+      if (pt) scene.add(pt)
+      return { m, gl, pt }
     }
     S.pills = [0, 1, 2, 3, 4].map(() => pillMk())
     S.peerPill = pillMk()
@@ -499,6 +570,7 @@ export function buildWorld(T, { width = 1920, height = 1080 } = {}) {
     dash.position.y = 0.014
     dash.renderOrder = 4
     scene.add(dash)
+    onFloor(dash)
     S.forceDash = dash
     const wallAt = S.forcePath.getPointAt(0.52)
     const wall = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 1.9).translate(0, 0.95, 0), new THREE.MeshBasicMaterial({ color: T.red, transparent: true, opacity: 0.6, side: THREE.DoubleSide, depthWrite: false }))
@@ -515,12 +587,14 @@ export function buildWorld(T, { width = 1920, height = 1080 } = {}) {
     S.wallAt = wallAt
 
     // The card: the one thing that reaches the human.
-    const cc = canvas(1024, 600)
-    drawCard(cc.getContext('2d'), T, 1024, 600)
-    const card = new THREE.Mesh(new THREE.PlaneGeometry(2.1, 1.23), new THREE.MeshBasicMaterial({ map: tex(cc), transparent: true }))
-    card.renderOrder = 8
-    scene.add(card)
-    S.card = card
+    const cc = canvas(1024 * TEX, 600 * TEX)
+    drawCard(cc.getContext('2d'), T, 1024 * TEX, 600 * TEX)
+    const cp = panel(2.1, 1.23, tex(cc), { depth: 0.035, rim: 0.035, radius: 0.045, centre: true, own: true })
+    cp.body.material.transparent = true
+    cp.screen.renderOrder = 8
+    scene.add(cp.g)
+    S.card = cp.g
+    S.cardParts = cp
     const tether = new THREE.Mesh(new THREE.PlaneGeometry(0.03, 1).translate(0, 0.5, 0), new THREE.MeshBasicMaterial({ color: T.muted, transparent: true, opacity: 0.6, depthWrite: false }))
     scene.add(tether)
     S.tether = tether
@@ -528,26 +602,8 @@ export function buildWorld(T, { width = 1920, height = 1080 } = {}) {
     stretches.push(S)
   }
 
-  // Accumulation, for motion blur: each sub-frame renders into `one`, then adds into `acc`.
-  const rtOpts = { type: THREE.HalfFloatType, samples: 4, colorSpace: THREE.LinearSRGBColorSpace }
-  const one = new THREE.WebGLRenderTarget(width, height, rtOpts)
-  const acc = new THREE.WebGLRenderTarget(width, height, { type: THREE.HalfFloatType })
-  const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2))
-  const quadScene = new THREE.Scene()
-  quadScene.add(quad)
-  const quadCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1)
-  const addMat = new THREE.ShaderMaterial({
-    uniforms: { src: { value: null }, w: { value: 1 } },
-    vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
-    fragmentShader: 'uniform sampler2D src; uniform float w; varying vec2 vUv; void main() { gl_FragColor = vec4(texture2D(src, vUv).rgb * w, 1.0); }',
-    blending: THREE.AdditiveBlending, depthTest: false, depthWrite: false, transparent: true,
-  })
-  const outMat = new THREE.ShaderMaterial({
-    uniforms: { src: { value: null } },
-    vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
-    fragmentShader: 'uniform sampler2D src; varying vec2 vUv; void main() { gl_FragColor = vec4(texture2D(src, vUv).rgb, 1.0);\n#include <colorspace_fragment>\n}',
-    depthTest: false, depthWrite: false,
-  })
+  // The frame: reflection, world, bloom, depth of field, averaged over motion-blur samples (look.js).
+  const frame = pipeline(renderer, scene, cam, { width, height, dpr, L, bg: T.bg, floorMat, grain })
 
   // ------------------------------------------------------------------------------ the camera
   // A pose: position, yaw, pitch, roll, focal length F in px and the principal point (cx, cy). An
@@ -556,6 +612,8 @@ export function buildWorld(T, { width = 1920, height = 1080 } = {}) {
   let cur = { F: 1400, cx: width / 2, cy: height / 2 }
   function pose(p) {
     cur = { F: p.F, cx: p.cx ?? width / 2, cy: p.cy ?? height / 2 }
+    // Depth of field focuses where the camera looks (film.js passes the distance).
+    cam.userData.focus = p.focus ?? cam.userData.focus ?? 10
     cam.position.set(p.x, p.y, p.z)
     cam.rotation.set(-(p.pitch ?? 0), -(p.yaw ?? 0), p.roll ?? 0)
     const n = cam.near
@@ -615,7 +673,11 @@ export function buildWorld(T, { width = 1920, height = 1080 } = {}) {
       S.heroLines[1].lab.material.opacity = s.peerLineA * clamp01(s.peerLine * 3)
       // The arm: 0 down, 1 up.
       S.armPivot.rotation.z = (Math.PI / 2) * 0.92 * s.arm
-      S.armTwin.rotation.z = S.armPivot.rotation.z
+      // The lamps and the arm's stripe light green while a land passes.
+      const glow = 0.25 + (L.lineBoost - 0.25) * s.arm
+      S.gateLamp.color.set(T.green).multiplyScalar(glow)
+      S.stripeMat.color.set(T.green).multiplyScalar(glow)
+      if (S.gatePt) S.gatePt.intensity = 5 * s.arm
       // Pills in flight.
       S.pills.forEach((pl, n) => placePill(S, pl, s.pills[n]))
       placePill(S, S.peerPill, s.peerPill)
@@ -634,8 +696,12 @@ export function buildWorld(T, { width = 1920, height = 1080 } = {}) {
         S.card.position.set(s.card.x, s.card.y, s.card.z)
         S.card.rotation.set(0, s.card.yaw, 0)
         S.card.scale.setScalar(s.card.scale)
-        S.card.material.opacity = s.card.a
-        S.card.material.transparent = s.card.a < 0.999
+        const { body, screen, glass } = S.cardParts
+        body.material.opacity = s.card.a
+        body.material.depthWrite = s.card.a > 0.999
+        body.castShadow = s.card.a > 0.5
+        screen.material.opacity = s.card.a
+        glass.material.opacity = s.card.a
         S.tether.position.set(s.card.x0, 0, s.card.z0)
         S.tether.scale.set(1, Math.max(0.001, s.card.y - s.card.scale), 1)
         S.tether.material.opacity = 0.6 * s.card.tether
@@ -658,20 +724,22 @@ export function buildWorld(T, { width = 1920, height = 1080 } = {}) {
         const wave = clamp01(s.wave * 1.25 - r * 0.12)
         const q = `${Math.round(s.stale * 30)}:${Math.round(wave * 90)}`
         if (q !== R.last) {
-          drawRack(R.c.getContext('2d'), T, 512, 752, R.rack, { stale: s.stale, wave })
+          drawRack(R.c.getContext('2d'), T, 512 * TEX, 752 * TEX, R.rack, { stale: s.stale, wave })
           R.t.needsUpdate = true
           R.last = q
         }
+        // The cabinet's status strip: amber while its files are stale, green once the wave has lit it.
+        R.ledMat.color.set(s.stale && wave < 0.999 ? T.amber : T.green).multiplyScalar(dark ? 1.6 : 1)
       })
       // Ambient commits on the poster: the system is running while the headline holds.
       S.ambient.forEach((pl, n) => placePill(S, pl, s.ambient?.[n] ?? null))
     }
-    for (const { obj, twin } of mirrored) syncTwin(obj, twin)
   }
   // A pill state: null (hidden) or { curve: 'line'|'peer'|'force'|'trunk', n, u, a, green, red }.
   function placePill(S, pl, ps) {
     pl.m.visible = !!ps && ps.a > 0.001
     pl.gl.visible = pl.m.visible
+    if (pl.pt) pl.pt.intensity = 0
     if (!pl.m.visible) return
     let curve
     if (ps.on === 'line') curve = S.lines[ps.n].curve
@@ -684,8 +752,13 @@ export function buildWorld(T, { width = 1920, height = 1080 } = {}) {
     pl.m.position.set(pt.x, 0.02, pt.z)
     pl.m.rotation.y = Math.atan2(tg.x, tg.z)
     const col = ps.red > 0.5 ? T.red : ps.green > 0.5 ? T.green : T.amber
-    pl.m.material.color.set(col)
+    pl.m.material.color.set(col).multiplyScalar(L.pillGlow)
     pl.m.material.opacity = ps.a
+    if (pl.pt) {
+      pl.pt.color.set(col)
+      pl.pt.intensity = L.pillLight * ps.a
+      pl.pt.position.set(pt.x, 0.45, pt.z)
+    }
     pl.gl.material.color.set(col)
     pl.gl.material.opacity = (dark ? 0.35 : 0.25) * ps.a
     pl.gl.position.set(pt.x, 0.005, pt.z)
@@ -702,31 +775,8 @@ export function buildWorld(T, { width = 1920, height = 1080 } = {}) {
   }
 
   /** Render the current state, or the average of several (motion blur). */
-  function render(samples) {
-    if (!samples) {
-      renderer.setRenderTarget(null)
-      renderer.render(scene, cam)
-      return
-    }
-    renderer.setRenderTarget(acc)
-    renderer.setClearColor(0x000000, 1)
-    renderer.clear()
-    samples.forEach((apply) => {
-      apply()
-      renderer.setRenderTarget(one)
-      renderer.render(scene, cam)
-      quad.material = addMat
-      addMat.uniforms.src.value = one.texture
-      addMat.uniforms.w.value = 1 / samples.length
-      renderer.setRenderTarget(acc)
-      renderer.autoClear = false
-      renderer.render(quadScene, quadCam)
-      renderer.autoClear = true
-    })
-    quad.material = outMat
-    outMat.uniforms.src.value = acc.texture
-    renderer.setRenderTarget(null)
-    renderer.render(quadScene, quadCam)
+  function render(samples, opts) {
+    frame.render(samples, opts)
   }
 
   return { renderer, scene, cam, pose, project, unproject, update, render, stretches, pillPoint }
