@@ -684,25 +684,6 @@ print(total_user, file=sys.stderr)
 " 2>/dev/null || echo ""
 }
 
-# Extract both context_text and message_count from a transcript
-session_index_extract_transcript_meta() {
-    local transcript_path="$1"
-    [ -f "$transcript_path" ] || return
-    python3 -c "
-import json, os
-path = '$transcript_path'
-user_count = 0
-with open(path) as f:
-    for line in f:
-        try:
-            d = json.loads(line)
-            if d.get('type') == 'user':
-                user_count += 1
-        except: pass
-print(user_count)
-" 2>/dev/null || echo "0"
-}
-
 # ─── Extract Enriched Data from Transcript ─────────────────
 # Extracts assistant text, file paths, and commands from transcript JSONL.
 # Output: tab-separated assistant_text\tfiles_changed\tcommands_run
@@ -830,8 +811,8 @@ session_index_changed_files() {
 # The sweep used to call session_index_extract_context + _extract_enriched +
 # _extract_transcript_meta, i.e. **three full-file JSON parses of the same file** — on a
 # 60 s tick that re-read every active session's growing transcript three times a minute
-# (audit 06 §5.3). Semantics are preserved field-for-field; the three single-purpose
-# functions above are kept for their other callers.
+# (audit 06 §5.3). Semantics are preserved field-for-field; _extract_context and _extract_enriched
+# are kept for session-index-end.sh, while _extract_transcript_meta had no other caller and is gone.
 session_index_extract_all() {
     local transcript_path="$1"
     local max_messages="${2:-5}"
