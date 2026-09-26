@@ -32,6 +32,9 @@ setup() {
   [ -f "$GATE" ]
   unset CLAUDE_EMAIL_FORMAT_GATE_DISABLED
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # The mailbox addresses come from the identity overlay (hooks/lib/identity.py); this suite
+  # pins the synthetic one, whose ms365 block mirrors the real shape with public placeholders.
+  export CC_IDENTITY_FILE="$REPO/tests/fixtures/identity.fixture.json"
   export TMPDIR="$BATS_TEST_TMPDIR/tmp"; mkdir -p "$TMPDIR"
   # R4 freshness: these fixtures are single calls with no session history, so without this
   # stamp every ALLOW control would go red and every DENY would go green for the wrong reason.

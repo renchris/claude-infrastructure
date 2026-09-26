@@ -42,6 +42,9 @@ setup() {
   GATE="$REPO/hooks/enforce-email-formatting.py"
   unset CLAUDE_EMAIL_FORMAT_GATE_DISABLED
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # The mailbox addresses come from the identity overlay (hooks/lib/identity.py); this suite
+  # pins the synthetic one, whose ms365 block mirrors the real shape with public placeholders.
+  export CC_IDENTITY_FILE="$REPO/tests/fixtures/identity.fixture.json"
   export TMPDIR="$BATS_TEST_TMPDIR/tmp"; mkdir -p "$TMPDIR"
   # R4 (pre-write freshness, 2026-08-25) denies a draft write unless the session has listed
   # RECEIVED mail recently. These fixtures are single calls with no session history, so without
@@ -370,7 +373,7 @@ stopfeedback() { printf '{"type":"user","message":{"content":"Stop hook feedback
 @test "an alias differing only in case is allowed, not treated as a foreign address" {
   # Graph is case-insensitive on addresses; a case-sensitive set membership test would deny a
   # perfectly valid call. This is a false-positive guard, not a nicety.
-  run decision "$GATE" mcp__ms365__create-reply-draft "$(tin_from 'Operator@Example.com')"
+  run decision "$GATE" mcp__ms365__create-reply-draft "$(tin_from 'Operator@Example.COM')"
   [ "$output" = "allow" ]
 }
 
@@ -473,13 +476,21 @@ NO_MAILBOX_DRAFT='{"account":null,"body":{"subject":"Hi","body":{"contentType":"
   # Blob 724840277 is hooks/enforce-email-formatting.py at origin/main immediately before this change,
   # pinned as a blob for the same reason as the R1 red-proof below.
   local pre="$BATS_TEST_TMPDIR/pre-mailbox-hook.py"
+  # The public projection of this repo rewrites that blob (it names real addresses), so its sha
+  # does not exist there: nothing to replay, which is a skip, never a pass.
+  git -C "$REPO" cat-file -e 724840277 2>/dev/null || skip "pinned pre-change blob 724840277 absent (public projection)"
   git -C "$REPO" cat-file -p 724840277 > "$pre"
   run grep -c '^MAILBOXES' "$pre"
   [ "$output" = "0" ]
+  # The replayed hook's own alias set, read from the ARTIFACT rather than restated here: the
+  # control must feed it an address it knew, and this repo no longer carries the real one.
+  local known_alias
+  known_alias="$(sed -n 's/^KNOWN_ALIASES = {"\([^"]*\)".*/\1/p' "$pre")"
+  [ -n "$known_alias" ]
 
   run decision "$pre" mcp__ms365__create-draft-email "$NO_MAILBOX_DRAFT"
   [ "$output" = "allow" ]
-  run decision "$pre" mcp__ms365__create-reply-draft "$(tin_from_in '"chris@example.org"' operator.alt@example.net)"
+  run decision "$pre" mcp__ms365__create-reply-draft "$(tin_from_in '"chris@example.org"' "$known_alias")"
   [ "$output" = "allow" ]
   run decision "$pre" mcp__ms365__create-reply-draft "$(tin_from_in '"chris@example.org"' hello@example.org)"
   [ "$output" = "deny" ]

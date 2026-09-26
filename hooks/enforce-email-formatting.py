@@ -34,8 +34,8 @@ Fires on the ms365 mail send/draft tools. Three independent guard families:
       pass. R1b uses hooks/lib/cc-interactive.sh's predicate instead.
 
   R2  MAILBOX IDENTITY + ALIAS CONTINUITY (2026-08-25; two mailboxes 2026-09-14). The
-      server holds the personal mailbox (operator.alt@example.net, operator@example.com) and
-      chris@example.org, and routes each call by its `account` argument — silently falling
+      server holds the personal mailbox (two aliases) and the work mailbox — both named in
+      the identity overlay, see MAILBOXES — and routes each call by its `account` argument — silently falling
       back to the personal one without it. Enforced here: a call that writes content, sets
       a sender or transmits must name its mailbox, and `from`/`sender` must be an address
       THAT mailbox owns (MAILBOXES). NOT enforceable here: whether the chosen alias matches
@@ -346,23 +346,43 @@ def _writes_content(tool_name: str, tool_input) -> bool:
 #
 # account (as `ms-365-mcp-server --list-accounts` prints it) ->
 #   (Graph's default From when `from` is omitted, every address the mailbox may send as).
-# The default matters: VERIFIED 2026-08-25, a reply on a thread addressed to operator came
-# back from operator.alt — Graph applies the MAILBOX default, not the thread's alias.
-# chris@example.org's set is its Exchange proxy addresses plus info@ (SendAs), read 2026-09-14
-# with `Get-Mailbox chris` / `Get-RecipientPermission`.
-MAILBOXES = {
-    "operator@example.com": (
-        "operator.alt@example.net",
-        frozenset({"operator.alt@example.net", "operator@example.com"}),
-    ),
-    "chris@example.org": (
-        "chris@example.org",
-        frozenset(
-            f"{user}@example.org"
-            for user in "chris admin hello alerts test postmaster info".split()
-        ),
-    ),
-}
+# The default matters: VERIFIED 2026-08-25, a reply on a thread addressed to the personal
+# mailbox's second alias came back from its default alias — Graph applies the MAILBOX default,
+# not the thread's alias. The work mailbox's set is its Exchange proxy addresses plus info@
+# (SendAs), read 2026-09-14 with `Get-Mailbox` / `Get-RecipientPermission`.
+#
+# The ADDRESSES are personal values and this repo is public, so they live in the gitignored
+# identity overlay (hooks/lib/identity.py; `ms365.mailboxes` + `ms365.roles`). A missing
+# overlay yields NO mailboxes, so every draft write / from change / send-draft is DENIED —
+# fail-closed, never a silently opened gate.
+def _identity_ms365():
+    """The overlay's `ms365` block. Same resolution rule as hooks/lib/identity.py — read
+    directly rather than imported, because suites run MUTANT copies of this hook from a temp
+    dir where no sibling lib/ exists."""
+    path = os.environ.get("CC_IDENTITY_FILE") or os.path.join(
+        os.path.expanduser("~"), ".claude", "identity.local.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    ms = data.get("ms365") if isinstance(data, dict) else None
+    return ms if isinstance(ms, dict) else {}
+
+
+def _load_mailboxes():
+    ms = _identity_ms365()
+    boxes = {}
+    for acct, v in (ms.get("mailboxes") or {}).items():
+        if isinstance(v, dict) and v.get("aliases"):
+            boxes[acct.lower()] = (
+                str(v.get("default") or "").lower(),
+                frozenset(str(a).lower() for a in v["aliases"]),
+            )
+    return boxes, (ms.get("roles") or {})
+
+
+MAILBOXES, _MAILBOX_ROLES = _load_mailboxes()
 
 
 def require_mailbox(tool_name: str, tool_input) -> str:
@@ -380,7 +400,7 @@ def require_mailbox(tool_name: str, tool_input) -> str:
     deny(
         f"BLOCKED (R2, mailbox): {tool_name.split('__')[-1]} writes, re-addresses or sends mail, "
         f"so it must name its mailbox, and {named}. Without one the server uses its selected "
-        f"default — the personal mailbox — which puts a reso.gl message in the wrong mailbox "
+        f"default — the personal mailbox — which puts a work message in the wrong mailbox "
         f"under the wrong identity. Retry with account set to the mailbox whose thread this "
         f"is: {' or '.join(MAILBOXES)}."
     )
@@ -548,35 +568,34 @@ RECIPE = """ms365 email recipe (auto-injected — settled, do not re-derive):
    sending is denied outright (rule 0). Verifying a draft costs one read now.
 
 5. NAME THE MAILBOX, THEN MATCH THE THREAD'S ALIAS. Two mailboxes, chosen by `account`:
-     account "operator@example.com" — personal; aliases operator.alt@example.net and
-       operator@example.com; Graph's default From is operator.alt.
-     account "chris@example.org" — sends as chris@ admin@ hello@ alerts@ test@ postmaster@ and
-       info@ reso.gl; default From chris@example.org.
+     account "«P»" — personal; aliases «P_DEF» and
+       «P_OTHER»; Graph's default From is «P_DEF_SHORT».
+     account "«W»" — sends as «W_USERS»; default From «W_DEF».
    Hook-enforced: every draft write, `from` change and send-draft-message must pass
    `account` — without it the server silently uses the personal mailbox.
-   The personal mailbox has TWO aliases: operator.alt@example.net
-   and operator@example.com. THE INVARIANT: an outgoing message uses the alias the
+   The personal mailbox has TWO aliases: «P_DEF»
+   and «P_OTHER». THE INVARIANT: an outgoing message uses the alias the
    counterparty already has for THAT thread. Derive it — read the original's
    toRecipients/ccRecipients and see which of the two they wrote to. Never default.
    ⚠️ Graph will NOT do this for you. A reply inherits the MAILBOX DEFAULT
-   (operator.alt@example.net), not the thread's alias — verified 2026-08-25 on a thread
-   addressed to operator, whose reply draft came back from operator.alt. So: thread on
-   operator.alt -> the default is already correct, leave from unset. Thread on operator ->
+   («P_DEF»), not the thread's alias — verified 2026-08-25 on a thread
+   addressed to «P_OTHER_SHORT», whose reply draft came back from «P_DEF_SHORT». So: thread on
+   «P_DEF_SHORT» -> the default is already correct, leave from unset. Thread on «P_OTHER_SHORT» ->
    you MUST set the alias explicitly.
-   ⚠️ This used to add "Comment mode CANNOT set from, so a operator thread needs
+   ⚠️ This used to add "Comment mode CANNOT set from, so a «P_OTHER_SHORT» thread needs
    Message.body". That inference is DEAD (measured 2026-08-25): the create call cannot set
    `from`, but update-mail-message CAN — a PATCH carrying {"from": …, "ccRecipients": […]}
-   on a Comment-created draft was read back with both applied. So a operator thread is no
+   on a Comment-created draft was read back with both applied. So a «P_OTHER_SHORT» thread is no
    longer a reason to abandon the auto-quote: use the rule-3 splice and set the alias on the
    PATCH. Nothing about the alias forces you to hand-build a chain any more.
    Confirm on the finished draft with rule 4 and read its From: header.
    Hook-enforced: a from/sender the named mailbox does not own is DENIED. The hook CANNOT
    check thread-match — a PreToolUse hook sees only the request, never Graph's response —
    so that half is yours. Your backstop is that the operator sees From in Outlook.
-   WHY THIS RULE EXISTS: it used to read "set from = operator@example.com" flatly. Every
-   VendorCo email on order #ORDER-REDACTED was addressed to operator.alt; the dispatch-hold request
-   went out from operator, an address they had never seen on that order. They dispatched
-   and charged the next morning. The old rule did not merely fail to help — it
+   WHY THIS RULE EXISTS: it used to read "set from = «P_OTHER»" flatly. Every
+   vendor email on one order was addressed to «P_DEF_SHORT»; the dispatch-hold request
+   went out from «P_OTHER_SHORT», an address they had never seen on that order. They
+   dispatched and charged the next morning. The old rule did not merely fail to help — it
    overrode a default that was already correct.
    Display name is not settable per-message on this account.
 
@@ -593,6 +612,47 @@ RECIPE = """ms365 email recipe (auto-injected — settled, do not re-derive):
    true` — six such reads in the last 20 minutes are exactly what missed the message. Only a
    LIST of received mail counts. Anything new: read it and re-check every factual claim in
    the draft before handing it over."""
+
+
+def _recipe_tokens():
+    """RECIPE rule 5 names the real mailboxes. They come from the overlay; with no overlay the
+    tokens render as placeholders (and MAILBOXES is empty, so every mail write is refused)."""
+    def short(a):
+        return a.split("@", 1)[0]
+    p = _MAILBOX_ROLES.get("personal", "")
+    w = _MAILBOX_ROLES.get("work", "")
+    p_def, p_aliases = MAILBOXES.get(p.lower(), ("", frozenset()))
+    p_other = next((a for a in sorted(p_aliases) if a != p_def), "")
+    w_def, w_aliases = MAILBOXES.get(w.lower(), ("", frozenset()))
+    order = []
+    for a in ((_load_raw_aliases(w)) or sorted(w_aliases)):
+        if a not in order:
+            order.append(a)
+    dom = w.split("@", 1)[1] if "@" in w else ""
+    users = [short(a) for a in order]
+    w_users = (" ".join(u + "@" for u in users[:-1]) + " and\n       " + users[-1] + "@ " + dom
+               if len(users) > 1 else (order[0] if order else "<work mailbox addresses>"))
+    return {
+        "P": p or "<personal mailbox>", "P_DEF": p_def or "<default alias>",
+        "P_OTHER": p_other or "<second alias>",
+        "P_DEF_SHORT": short(p_def) if p_def else "<default alias>",
+        "P_OTHER_SHORT": short(p_other) if p_other else "<second alias>",
+        "W": w or "<work mailbox>", "W_USERS": w_users, "W_DEF": w_def or "<work default>",
+    }
+
+
+def _load_raw_aliases(account):
+    """The work mailbox's aliases in the overlay's own ORDER (a frozenset loses it)."""
+    for k, v in (_identity_ms365().get("mailboxes") or {}).items():
+        if k.lower() == account.lower() and isinstance(v, dict):
+            return [str(a).lower() for a in v.get("aliases") or []]
+    return []
+
+
+_R = _recipe_tokens()
+for _k, _v in _R.items():
+    RECIPE = RECIPE.replace("«" + _k + "»", _v)
+
 
 
 _SESSION_ID = None
@@ -1084,8 +1144,8 @@ def main():
             f"That must be the alias the counterparty already has for THIS thread, taken "
             f"from the original's toRecipients/ccRecipients — not a default. A reply from "
             f"an address they have never seen on the thread can be filed against no order: "
-            f"VendorCo #ORDER-REDACTED was addressed to operator.alt throughout, the hold request went "
-            f"from operator, and they dispatched and charged anyway. If the thread "
+            f"a vendor's order thread was addressed to {_R['P_DEF_SHORT']} throughout, the hold "
+            f"request went from {_R['P_OTHER_SHORT']}, and they dispatched and charged anyway. If the thread "
             f"is on {default_alias} you can simply omit `from` — that is already "
             f"Graph's default. Confirm on the finished draft with get-mail-message-mime "
             f"(it works on drafts) and read its From: header."

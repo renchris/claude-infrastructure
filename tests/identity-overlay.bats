@@ -78,6 +78,6 @@ print(cfg)'
 @test "the tracked template and fixture carry example domains only" {
   run grep -hoE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' "$REPO/identity.example.json" "$FIX"
   [ "$status" -eq 0 ]
-  run bash -c "grep -hoE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' '$REPO/identity.example.json' '$FIX' | grep -vE '@example\.(com|org)$'"
+  run bash -c "grep -hoE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' '$REPO/identity.example.json' '$FIX' | grep -vE '@example\.(com|org|net)$'"
   [ "$status" -eq 1 ]
 }

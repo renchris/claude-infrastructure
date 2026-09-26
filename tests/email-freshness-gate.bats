@@ -35,6 +35,9 @@ setup() {
   unset CLAUDE_EMAIL_FORMAT_GATE_DISABLED
   unset CC_MS365_FRESHNESS_MIN
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # The mailbox addresses come from the identity overlay (hooks/lib/identity.py); this suite
+  # pins the synthetic one, whose ms365 block mirrors the real shape with public placeholders.
+  export CC_IDENTITY_FILE="$REPO/tests/fixtures/identity.fixture.json"
   export TMPDIR="$BATS_TEST_TMPDIR/tmp"; mkdir -p "$TMPDIR"
   SID="bats-fresh"
 }

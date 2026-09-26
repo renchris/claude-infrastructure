@@ -32,6 +32,9 @@ setup() {
   # Fixture the ambient state before anything runs: an unfixtured suite executes against the
   # operator's live ~/, which contaminates every other result in the run.
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # The mailbox addresses come from the identity overlay (hooks/lib/identity.py); this suite
+  # pins the synthetic one, whose ms365 block mirrors the real shape with public placeholders.
+  export CC_IDENTITY_FILE="$REPO/tests/fixtures/identity.fixture.json"
   export TMPDIR="$BATS_TEST_TMPDIR/tmp"; mkdir -p "$TMPDIR"
   WORK="$BATS_TEST_TMPDIR"
   # A self-defending fragment: explicit colour on the wrapper, explicit margin on the block.

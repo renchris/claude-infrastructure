@@ -54,6 +54,9 @@ setup() {
   # suite green while proving nothing. Clear it explicitly rather than trusting the caller's shell.
   unset CLAUDE_EMAIL_FORMAT_GATE_DISABLED
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # The mailbox addresses come from the identity overlay (hooks/lib/identity.py); this suite
+  # pins the synthetic one, whose ms365 block mirrors the real shape with public placeholders.
+  export CC_IDENTITY_FILE="$REPO/tests/fixtures/identity.fixture.json"
   export TMPDIR="$BATS_TEST_TMPDIR/tmp"; mkdir -p "$TMPDIR"  # the recipe-once marker lands here
   # R4 (pre-write freshness, 2026-08-25) denies a draft write unless the session has listed
   # RECEIVED mail recently. These fixtures are single calls with no session history, so without

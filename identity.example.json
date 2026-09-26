@@ -1,13 +1,29 @@
 {
   "_what": "TEMPLATE for the personal identity overlay. The real file is $HOME/.claude/identity.local.json (gitignored; on the operator's machine a symlink into a private repo). Read by hooks/lib/identity.{py,sh}. Copy this, fill in your own values; never commit the filled copy.",
   "accounts": {
-    "next": {"email": "you+claude@example.com", "mailbox": "you@example.com", "dia_profile": "Profile1"}
+    "next": {
+      "email": "you+claude@example.com",
+      "mailbox": "you@example.com",
+      "dia_profile": "Profile1"
+    }
   },
   "keychain_account": "YOUR_MACOS_USERNAME",
-  "git_identity": {"email": "you@example.com", "github_owner": "your-github-login"},
+  "git_identity": {
+    "email": "you@example.com",
+    "github_owner": "your-github-login"
+  },
   "ms365": {
     "mailboxes": {
-      "you@example.com": {"default": "you@example.com", "aliases": ["you@example.com", "alias@example.com"]}
+      "you@example.com": {
+        "default": "you@example.com",
+        "aliases": [
+          "you@example.com",
+          "alias@example.com"
+        ]
+      }
+    },
+    "roles": {
+      "personal": "you@example.com"
     }
   }
 }
