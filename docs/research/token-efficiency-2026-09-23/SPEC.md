@@ -1,5 +1,10 @@
 # Task spec (operator-supplied, 2026-09-23) — verbatim
 
+Source: Eric Zakariasson (Cursor), <https://x.com/ericzakariasson/status/2102853511637774551>, posted
+2026-09-23 as "a prompt to improve your agent harness based on what we've learned at cursor". The
+7% figure below is Cursor's own, written up at <https://cursor.com/blog/improved-token-efficiency>.
+The prompt was pasted without its link and this line was added on 2026-09-26.
+
 # Improve this agent harness's token efficiency
 
 You're working on an LLM agent harness: the system prompt, tool definitions, request assembly, context caching, compaction, and retrieval, and how work is split across agents. Make the agent's runs cheaper without making it worse at its job.
