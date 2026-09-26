@@ -4,15 +4,16 @@
     python3 tools/hero-film/schedule.py           # print LOOP / FILM and their _STORY and _TYPE arrays
     python3 tools/hero-film/schedule.py --apply   # write them into tools/hero-film/film.js in place
 
-Round two (README § Round 2) re-timed every beat against scripts/hero-film-pacing.py, and each flight's
-length moves everything after it, so the numbers are derived here rather than typed: a flight's
-duration comes from its image travel (1.875 x travel / ~860 px/s), a line's hold from its reading time.
+Round three (README § Round 3) re-timed every beat again, against the operator's fourth verdict: round
+two was "just universally slow". Each flight's length moves everything after it, so the numbers are
+derived here rather than typed: a flight's duration comes from its image travel (1.875 x travel / 1,800
+px/s, never under 1.6 s; round two used ~860 px/s), a line's hold from its reading time.
 Change a duration here, --apply, then `npm run hero:pacing`; the gate, not this file, is the judge.
 
 The rules it encodes: story moves inside a flight only after the first 12 % and before the last 12 %
 (the camera is under way; calm frames need a standing line); type leaves in a flight's first 13 % and
-arrives in its last 13 % (the picture is under 250 px/s there); each line is read (reading time + 0.3 s)
-before the story moves under it.
+arrives in its last 13 % (the picture is slow there); a line stands QUIET s (1.2) before the story moves
+under it, and stays until every piece of type in its scene has had its reading time.
 """
 import pathlib
 import sys
@@ -22,59 +23,83 @@ S = dict(start='S.start', clear='S.clear')
 def flight_edges(t0, T):  # story may move only once under way; type moves only while slow
     return R(t0 + 0.12 * T), R(t0 + T - 0.12 * T), R(t0 + 0.13 * T), R(t0 + T - 0.13 * T)
 
-def window_scene(a, story, typ):
-    story += [(R(a + 2.9), 'S.clear'), (R(a + 3.05), '0'), (R(a + 6.35), '3.3'), (R(a + 11.55), '3.3'), (R(a + 13.05), 'S.card[1]')]
-    typ += [("split", R(a - 0.6), R(a + 0.1), R(a + 7.75), R(a + 8.35)), ("decide", R(a + 8.35), R(a + 9.05))]
-    return R(a + 20.25)
+QUIET = 1.2  # s a line stands before the story moves under it (round two: its whole reading time)
+ARRIVE = 0.5  # s into a hold that a line finishes arriving (it starts in the flight's last 13 %)
+LEAVE = 0.3  # s before a flight that a line starts leaving (it is gone by the flight's first 13 %)
+
+
+def fly_time(travel):  # a flight's duration from its image travel (window.__moveL), at ~1,800 px/s peak
+    return max(1.6, R(1.875 * travel / 1800))
+
+
+def line(key, a, T_in, b, T_out):  # a line over the hold [a, b], arriving from the flight before
+    return (key, R(a - 0.13 * T_in) if T_in else None, R(a + ARRIVE) if T_in else None,
+            R(b - LEAVE) if T_out else None, R(b + 0.13 * T_out) if T_out else None)
+
 
 def build(cut):
     E, story, typ = [], [(0, 'S.start')], []
-    T1 = 3.4
-    E.append(dict(frm=0, to=5.0, cam='poster', drift='posterIn' if cut == 'film' else None, poster=True))
-    typ.append(("thought", None, None, 5.0, R(5.0 + 0.13 * T1)))
-    s0, s1, _, _ = flight_edges(5.0, T1)
-    story += [(s0, 'S.start'), (R(s0 + 0.9), 'S.clear')]  # the card and scrollback fade, not cut
-    E.append(dict(frm=5.0, to=R(5.0 + T1), fly="{ hop: 0.3 }"))
-    a = R(5.0 + T1)
-    b = window_scene(a, story, typ)
+    T1 = fly_time(1237)
+    P = 5.1  # the poster: frame 0 holds the thought for its reading time (4.5 s) before it leaves
+    E.append(dict(frm=0, to=P, cam='poster', drift='posterIn' if cut == 'film' else None, poster=True))
+    typ.append(line("thought", 0, None, P, T1))
+    s0, s1, _, _ = flight_edges(P, T1)
+    story += [(s0, 'S.start'), (R(s0 + 0.6 * (T1 - 0.24 * T1)), 'S.clear')]  # the card and scrollback fade, not cut
+    E.append(dict(frm=P, to=R(P + T1), fly="{ hop: 0.3 }"))
+    a = R(P + T1)
+    L0 = a + ARRIVE
+    # The split: read the line for QUIET s, then the story plays 1:1 (the split, the boot, the brief);
+    # the peer's chip (~2.7 s to read) is fully in ~3.25 s after the line lands.
+    story += [(R(L0 + QUIET), 'S.clear'), (R(L0 + QUIET + 0.15), '0'), (R(L0 + QUIET + 3.45), '3.3')]
+    split_off = R(L0 + 6.4)
+    typ.append(line("split", a, T1, split_off, 0) [:3] + (split_off, R(split_off + 0.6)))
+    d0 = R(split_off + 0.6)  # the decision's line arrives as the split's leaves
+    typ.append(("decide", d0, R(d0 + 0.7)))
+    # The card: QUIET s after its line lands it rises (1.5 s), then stands for its 7.0 s of reading.
+    story += [(R(d0 + 0.7 + QUIET), '3.3'), (R(d0 + 0.7 + QUIET + 1.5), 'S.card[1]')]
+    b = R(d0 + 0.7 + QUIET + 1.5 + 7.5)
     E.append(dict(frm=a, to=b, cam='window', drift='windowB' if cut == 'film' else None, chip="['peer']"))
-    typ[-1] = typ[-1] + (b, R(b + 0.6))
     if cut == 'loop':
-        T2 = 4.4
+        T2 = fly_time(2480)
         m0, m1, _, _ = flight_edges(b, T2)
         # The racks turn amber by 60 % of the flight, while still distant, not as the camera settles.
         story += [(m0, 'S.card[1]'), (R(b + 0.6 * T2), 'S.stale[1]')]
+        typ[-1] = typ[-1] + (R(b - LEAVE), R(b + 0.13 * T2))
         E.append(dict(frm=b, to=R(b + T2), fly="{ hop: 0.9, viaAt: [0, 4, 0] }", note="After the peer's commit: up off the window, over its line and the gate, down origin/main."))
         c = R(b + T2)
+        Tin = T2
     else:
-        T2 = 4.6
+        T2 = max(2.0, fly_time(1464))  # it swings ~64 degrees round the fleet: at 1.6 s it turned 40 deg/s
         m0, m1, _, _ = flight_edges(b, T2)
         story += [(m0, 'S.card[1]'), (m1, '4.9')]
+        typ[-1] = typ[-1] + (R(b - LEAVE), R(b + 0.13 * T2))
         # Pulled out and lifted, so the near fleet panes pass below the lens (critique round 3, m9).
         E.append(dict(frm=b, to=R(b + T2), fly="{ hop: 0.5, rise: 0.25 }"))
         g = R(b + T2)
-        story += [(R(g + 4.1), '4.9'), (R(g + 8.5), 'S.stale[0]')]
-        typ.append(("gate", R(g - 0.13 * T2), R(g + 0.1), R(g + 8.6), R(g + 9.1)))
-        h = R(g + 8.6)
+        # The gate: read QUIET s, then three lands, the refused force push, the peer's commit (4.4 s).
+        story += [(R(g + ARRIVE + QUIET), '4.9'), (R(g + ARRIVE + QUIET + 4.4), 'S.stale[0]')]
+        h = R(g + ARRIVE + QUIET + 4.4 + 0.5)
+        T3 = fly_time(1851)
+        typ.append(line("gate", g, T2, h, T3))
         E.append(dict(frm=g, to=h, cam='gate', drift='gateB', chip="['force', 'denied', 'accounts']"))
-        T3 = 4.2
         m0, m1, _, _ = flight_edges(h, T3)
         story += [(m0, 'S.stale[0]'), (m1, 'S.stale[1]')]
         E.append(dict(frm=h, to=R(h + T3), fly="{ hop: 0.3 }"))
         c = R(h + T3)
-    Tin = T2 if cut == 'loop' else T3
-    typ.append(("racks", R(c - 0.13 * Tin), R(c + 0.1)))
-    story += [(R(c + 3.8), 'S.stale[1]'), (R(c + 5.85), 'S.lit[1]')]
-    d = R(c + 6.95)
+        Tin = T3
+    # ~/.claude: read QUIET s, then verified, deploy-live.sh, the files turn green (2.05 story s in 2.2);
+    # the verified chip (2.5 s to read) is in ~0.4 s after the story starts.
+    story += [(R(c + ARRIVE + QUIET), 'S.stale[1]'), (R(c + ARRIVE + QUIET + 2.2), 'S.lit[1]')]
+    d = R(c + ARRIVE + QUIET + 0.4 + 2.5 + 0.4)
+    T4 = fly_time(2387 if cut == 'loop' else 2462)
+    typ.append(line("racks", c, Tin, d, T4))
     E.append(dict(frm=c, to=d, cam='racks', drift='racksB' if cut == 'film' else None, chip="['verified', 'deploy']"))
-    typ[-1] = typ[-1] + (d, R(d + 0.6))
-    T4 = 4.6 if cut == 'loop' else 5.0
     m0, m1, _, _ = flight_edges(d, T4)
     story += [(m0, 'S.lit[1]'), (m1, 'S.END')]
     E.append(dict(frm=d, to=R(d + T4), fly="{ hop: 0.6 }", rekey=cut == 'loop', note=None))
     e = R(d + T4)
-    end = R(e + 1.3) if cut == 'loop' else R(e + 5.5)
-    typ.append(("thought", R(e - 0.7), R(e + 0.1), None, None))
+    end = R(e + ARRIVE + 0.3) if cut == 'loop' else R(e + 5.2)
+    typ.append(("thought", R(e - 0.13 * T4), R(e + ARRIVE), None, None))
     E.append(dict(frm=e, to=end, cam='posterOut' if cut == 'film' else 'poster', drift='poster' if cut == 'film' else None, poster=True))
     story.append((end, 'S.END'))
     return E, story, typ
