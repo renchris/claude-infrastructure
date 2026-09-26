@@ -7178,7 +7178,16 @@ if [ "${1:-}" = "__recycle" ]; then
   rcy_bgwork_every="${CC_RECYCLE_BGWORK_EVERY_S:-15}"
   case "$rcy_bgwork_every" in ''|*[!0-9]*) rcy_bgwork_every=15 ;; esac
   [ "$rcy_bgwork_every" -ge 3 ] || rcy_bgwork_every=3
-  while [ "$waited" -lt "$rcy_wait_max" ] && ! at_shell; do
+  # THE LOOP'S OWN VERDICT IS KEPT, NEVER RE-ASKED (2026-09-26, pane 780). This loop used to exit on
+  # `! at_shell` and the refusal below re-probed with a second `! at_shell`. Right after claude exits,
+  # zsh runs its precmd, and a prompt helper sitting in the foreground process group makes
+  # pane_cc_state read `unknown` for a fraction of a second. So a pane this loop had just CONFIRMED
+  # was convicted by the re-probe, and a third probe for the message read `shell` again: the ledger
+  # said "never reached a confirmed shell in 6s (verdict: shell)" and the relaunch was never typed.
+  # One affirmative read is the evidence typing needs; a later flicker does not withdraw it.
+  rcy_shell_ok=0
+  while [ "$waited" -lt "$rcy_wait_max" ]; do
+    if at_shell; then rcy_shell_ok=1; break; fi
     sleep 3; waited=$((waited+3))
     # PANE-VANISHED CHECK (2026-08-26 — pane-32 strand). The loop above can only ask the pane's TTY,
     # and a pane that was DESTROYED by the /exit has no tty left to ask: pane_cc_state reads no
@@ -7275,7 +7284,9 @@ if [ "${1:-}" = "__recycle" ]; then
     echo "!! pane $RSID VANISHED ${waited}s after the /exit (enumerated by session list at arm time, absent now) — the pane had no shell under its session, so its own /exit closed it. Nothing was typed; the successor never started. Fire it into a NEW pane: scripts/handoff-fire.sh --prompt-file ${RCY_PROMPT_FILE:-<brief>} --split-right" >&2
     exit 1
   fi
-  if ! at_shell; then
+  # The bound expired with no confirmation: one last read, as the old loop condition gave it.
+  if [ "$rcy_shell_ok" != 1 ] && [ "$rcy_vanished" != 1 ] && at_shell; then rcy_shell_ok=1; fi
+  if [ "$rcy_shell_ok" != 1 ]; then
     # LEDGER COMPLETENESS (recycle-100p): both real recycle failures in the 3.5-day instrumented
     # window emitted ZERO outcome rows — a failed recycle was ledger-invisible, provable only by
     # intent-gap analysis over self-deleting TMPDIR logs. Every terminal watcher failure now
@@ -7292,7 +7303,7 @@ if [ "${1:-}" = "__recycle" ]; then
     if [ "${rcy_bgwork_seen:-0}" = 1 ]; then
       rcy_bgwork_note=" THE /exit DID NOT LAND: it raised the harness's background-work dialog (a live run_in_background task), and this pane is still holding a live session at that menu — NOT an empty pane, and nothing is stranded yet. $([ "${rcy_bgwork_sent:-0}" -gt 0 ] && printf '%s' "It was answered ${rcy_bgwork_sent}x and did not clear" || printf '%s' "It was NOT answered (CC_RECYCLE_BGWORK_ANSWER=off, or the menu carried no readable index)"). Recover with one keystroke IN THAT PANE — choose '${CC_MODAL_BGWORK_KEEP:-Move to background and exit}', then re-run the recycle, which arms a fresh watcher."
     fi
-    emit_recycle_event recycle-dead "" "$RSID" "never reached a confirmed shell in ${waited}s (verdict: $rcy_dead_verdict)${rcy_bgwork_seen:+; background-work dialog SEEN, answered ${rcy_bgwork_sent}x}" || true
+    emit_recycle_event recycle-dead "" "$RSID" "never reached a confirmed shell in ${waited}s (verdict: $rcy_dead_verdict)$([ "${rcy_bgwork_seen:-0}" = 1 ] && printf '; background-work dialog SEEN, answered %sx' "${rcy_bgwork_sent:-0}")" || true
     # ESCALATE, don't just log (2026-08-25, RECYCLE_SIGTERM_INCIDENT deliverable 3). This is the
     # TERMINAL failure of a recycle: the /exit already landed, so the predecessor is GONE and the
     # successor was never typed — the pane holds no claude at all and the session's remaining work
