@@ -76,3 +76,4 @@ skills/kpmg-deck/*	local-only	skills/LOCAL_ONLY.md	quotes a licensed corporate b
 skills/grok-wiki-cli/*	local-only	skills/LOCAL_ONLY.md	verbatim upstream skill text with no licence grant; lives in the private store
 skills/grok-wiki-custom/*	local-only	skills/LOCAL_ONLY.md	verbatim upstream skill text with no licence grant; lives in the private store
 skills/repo-wiki/*	local-only	skills/LOCAL_ONLY.md	prompt text derived from an unlicensed upstream; lives in the private store
+skills/outlook-cleanup/*	local-only	skills/LOCAL_ONLY.md	the operator's own inbox rules: keep-lists name his banks, brokerages, landlord and purchase vendors; lives in the private store

@@ -36,6 +36,7 @@ resolves at `~/.claude/...` exactly as before. The links point outside this chec
 | `skills/repo-wiki/` | Prompt text derived from an unlicensed upstream. It can come back only as a clean-room rewrite. |
 | `skills/kpmg-deck/` | Quotes a corporate brand book page by page and ships its brand tokens. It is its own git repo inside the private store (`skills/kpmg-deck/.git`). `scripts/mirror-kpmg-deck.sh`, which copied it into this checkout, is retired. |
 | `assets/**/recycle-bmo.*`, `assets/**/clawd-bmo-*` | Renders of a third-party cartoon character. The generators (`tools/banner/recycle.py`, `tools/blender/clawd_bmo.py`) stay and write into `assets/`, where `.gitignore` keeps the output out. |
+| `skills/outlook-cleanup/` | The operator's own inbox-cleanup rules: its keep-lists name his banks, brokerages, landlord and purchase vendors, in YAML, code and prompt text alike, so there is no public half to keep. |
 | `identity.local.json` | The operator's personal identity values: account e-mails, mailbox aliases, the git author address. Template: `identity.example.json`. |
 
 Each local-only skill's private `SKILL.md` carries a `> **Local-only …**` block under its first
