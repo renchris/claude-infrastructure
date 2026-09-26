@@ -109,6 +109,9 @@ assert "toolu_OPEN1" in c, c
 assert "unit A" in c, c
 assert "toolu_DONE1" not in c, c
 assert "Agent 2 (settled 1, open 1)" in c, c
+# …under the population headers a READ ledger renders (W2-B f2 owns the UNREAD wording)
+assert "Delegation population (by tool):" in c, c
+assert "Open delegations" in c, c
 # (iii) the disk-truth audit, before anything else
 assert "lr-audit.py" in c, c
 assert "before re-firing anything" in c or "before answering the prompt" in c, c
@@ -261,32 +264,6 @@ assert "NON-SUCCESSFULLY" not in c, c
 @test "W2-B e4: an EMPTY stdin payload exits 0 (the hook is fully consuming, so no writer SIGPIPEs)" {
   run bash -c ': | bash "$1"' _ "$HOOK"
   [ "$status" -eq 0 ]
-}
-
-@test "W2-B f: when the ledger cannot be computed the notice says UNREAD — it never renders as 'nothing was delegated'" {
-  # A zero and an unread are different facts. Rendering them as one sentence is how
-  # a fail-safe default comes to mimic the healthy state.
-  prompt_and_spawn; add_api_error "err-uuid-1"
-  mkdir -p "$BATS_TEST_TMPDIR/fakelr"
-  cp "$REPO/scripts/limit-recover/lr-lib.sh" "$BATS_TEST_TMPDIR/fakelr/"
-  cat > "$BATS_TEST_TMPDIR/fakelr/lr-audit.py" <<'PY'
-import sys
-sys.exit(3)   # the ledger refuses
-PY
-  mkdir -p "$BATS_TEST_TMPDIR/cfg2/scripts"
-  ln -s "$BATS_TEST_TMPDIR/fakelr" "$BATS_TEST_TMPDIR/cfg2/scripts/limit-recover"
-  CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/cfg2" run bash -c '
-    cd "$3" && printf "{\"session_id\":\"%s\",\"transcript_path\":\"%s\"}" "$1" "$2" | bash ./hooks/recover-inject.sh
-  ' _ "$SID" "$TP" "$REPO"
-  # The repo copy resolves first by design (the sibling beside the executed file), so
-  # this arm asserts the RENDERING contract rather than the ladder: with a real
-  # ledger the population line is present and specific.
-  echo "$output" | python3 -c '
-import json,sys
-c=json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"]
-assert "Delegation population (by tool):" in c, c
-assert "Open delegations" in c, c
-'
 }
 
 @test "W2-B f2: the UNREAD wording exists and is reachable — a population that cannot be read is named as such" {

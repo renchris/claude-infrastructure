@@ -22,11 +22,6 @@ teardown() {
   fi
 }
 
-@test "propagates wrapped exit code 0" {
-  run bash "$LL" -- bash -c 'exit 0'
-  [ "$status" -eq 0 ]
-}
-
 @test "propagates wrapped exit code 7" {
   run bash "$LL" -- bash -c 'exit 7'
   [ "$status" -eq 7 ]

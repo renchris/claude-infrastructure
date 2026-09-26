@@ -98,6 +98,7 @@ chmod +x "$p"; echo "$p"; }
   : > "$CC_SWEEP_SEEN_DIR/$key"
   run bash "$DIGEST"
   echo "$output" | grep -qiE "pages?.*2|2.*pages?"
+  echo "$output" | grep -q "1 surfaced by the sweep, 1 pending"
 }
 
 # ── D9 inert-check monitor (RED-proven) ────────────────────────────────────────
@@ -115,7 +116,9 @@ chmod +x "$p"; echo "$p"; }
 
 @test "D9: a hook that sometimes fires does NOT alarm" {
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  for i in $(seq 1 10); do printf '{"hook":"healthy-guard","disposition":"abstained","ts":"%s"}\n' "$now" >> "$CC_IDL"; done
+  # BLIND abstentions, as in the ALARM case above: a reason-less abstention is DORMANT and can never
+  # alarm, so without the reason this passed whatever the "fired NONE" rule did.
+  for i in $(seq 1 10); do printf '{"hook":"healthy-guard","disposition":"abstained","reason":"no-telemetry","ts":"%s"}\n' "$now" >> "$CC_IDL"; done
   printf '{"hook":"healthy-guard","disposition":"fired","ts":"%s"}\n' "$now" >> "$CC_IDL"
   printf '{"hook":"healthy-guard","disposition":"fired","ts":"%s"}\n' "$now" >> "$CC_IDL"
   run bash "$DIGEST"
@@ -124,7 +127,8 @@ chmod +x "$p"; echo "$p"; }
 
 @test "D9: a hook with fewer than 10 evals does NOT alarm (below the window)" {
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  for i in $(seq 1 5); do printf '{"hook":"quiet-guard","disposition":"abstained","ts":"%s"}\n' "$now" >> "$CC_IDL"; done
+  # BLIND abstentions, so only the N>=10 window keeps it quiet (a reason-less one is DORMANT anyway).
+  for i in $(seq 1 5); do printf '{"hook":"quiet-guard","disposition":"abstained","reason":"no-telemetry","ts":"%s"}\n' "$now" >> "$CC_IDL"; done
   run bash "$DIGEST"
   ! echo "$output" | grep -q "quiet-guard" || false
 }
@@ -133,7 +137,9 @@ chmod +x "$p"; echo "$p"; }
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   printf '{"hook":"g","disposition":"fired","ts":"%s"}\n' "$now" >> "$CC_IDL"
   run bash "$DIGEST"
-  echo "$output" | grep -qiE "no inert|none|no alarm|healthy"
+  # Anchored on the D9 line itself: the unanchored "none|healthy" also matched the other sections'
+  # empty-state placeholders (`_none open_` …), so it passed with the D9 line deleted.
+  echo "$output" | grep -q '^_no inert checks'
 }
 
 # The bug this fixes (e7d326caa6a7): a record-flood night (page/sweep churn) crowds a naive global

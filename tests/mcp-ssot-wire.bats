@@ -64,6 +64,8 @@ PY
 # --- the render contract ---------------------------------------------------------------------
 
 @test "renders every SSOT server into every account config dir" {
+  # install.sh executes the wirer directly (not via `bash`), so the executable bit is contract too.
+  [ -x "$WIRE" ]
   run bash "$WIRE"
   [ "$status" -eq 0 ]
   for f in "$HOME/.claude-secondary/.claude.json" "$HOME/.claude-tertiary/.claude.json"; do
@@ -71,6 +73,9 @@ PY
       run python3 -c "import json;print('yes' if '$name' in (json.load(open('$f')).get('mcpServers') or {}) else 'NO')"
       [ "$output" = "yes" ]
     done
+    # …rendered as the SSOT's transport, not merely present as a key.
+    run python3 -c "import json;print(json.load(open('$f'))['mcpServers']['ms365'].get('type'))"
+    [ "$output" = "stdio" ]
   done
 }
 
@@ -107,7 +112,7 @@ PY
   before="$(python3 -c "import sys;sys.stdout.write(open('$HOME/.claude-tertiary/.claude.json').read())")"
   run bash "$WIRE" --check
   [ "$status" -eq 0 ]
-  [[ "$output" == *"correct"* ]] || false
+  [[ "$output" == *"already correct"* ]] || false
   after="$(python3 -c "import sys;sys.stdout.write(open('$HOME/.claude-tertiary/.claude.json').read())")"
   [ "$before" = "$after" ]
 }

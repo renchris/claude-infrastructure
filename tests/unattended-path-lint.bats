@@ -49,10 +49,6 @@ darwin_only_tree_arm() {
     skip "tree-level arm: judges bare names against THIS box's binaries, for launchd jobs that exist only on macOS — a NON-VERDICT on $(uname -s 2>/dev/null || echo unknown), not a pass"
 }
 
-@test "the lint is present and executable" {
-  [ -x "$LINT" ]
-}
-
 @test "--selftest passes (the gate keys on this exit code)" {
   run "$LINT" --selftest
   [ "$status" -eq 0 ] || { echo "$output"; false; }

@@ -259,8 +259,11 @@ stopfeedback() { printf '{"type":"user","message":{"content":"Stop hook feedback
   # R1b loosened exactly ONE tool. If a clean transcript now opens send-mail, the compose-and-transmit
   # path has been reopened and the whole guard is gone.
   T="$BATS_TEST_TMPDIR/t9.jsonl"; human "send it" > "$T"
-  run tp_decision mcp__ms365__send-mail "$QUOTED_BODY" "$T"
-  [ "$output" = "deny" ]
+  local t
+  for t in send-mail reply-mail-message reply-all-mail-message forward-mail-message; do
+    run tp_decision "mcp__ms365__$t" "$QUOTED_BODY" "$T"
+    [ "$output" = "deny" ] || { echo "$t opened under a clean transcript: $output"; false; }
+  done
 }
 
 # ── R1 CONTROLS: the draft path must keep working ──────────────────────────────────────────────────

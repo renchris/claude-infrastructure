@@ -221,6 +221,12 @@ os.utime(p, (back, back))'
   call mcp__ms365__list-mail-messages "$INBOUND"
   run call mcp__ms365__create-reply-draft "$(draft_tin)"
   [ "$output" = "allow" ]
+  # The arm that makes "falls back to the DEFAULT" falsifiable. A crash fails open and a fallback to
+  # 0 disables R4, so both would allow the read-backed call above; only a real default still denies
+  # a session that never read.
+  SID="bats-fresh-noread"
+  run call mcp__ms365__create-reply-draft "$(draft_tin)"
+  [ "$output" = "deny" ]
 }
 
 @test "a marker location that cannot be written fails OPEN — a hook bug never strands the operator" {
@@ -228,14 +234,11 @@ os.utime(p, (back, back))'
   # silently falls back to /tmp when TMPDIR is unwritable, so that version of this test passed
   # through a perfectly writable directory and never reached the fail-open branch at all.
   # Occupying the probe path with a DIRECTORY makes touch() raise IsADirectoryError for real.
+  # Its positive control (the same call, probe not blocked, is denied) is the red-proof case
+  # "a draft write with no prior mailbox read at all is refused" above.
   mkdir -p "$TMPDIR/cc-ms365-inbound-$SID.probe"
   run call mcp__ms365__create-reply-draft "$(draft_tin)"
   [ "$output" = "allow" ]
-}
-
-@test "POSITIVE CONTROL for the above: without the blocked probe the same call is denied" {
-  run call mcp__ms365__create-reply-draft "$(draft_tin)"
-  [ "$output" = "deny" ]
 }
 
 @test "R4 does not reorder R1: a send is still refused, read or no read" {

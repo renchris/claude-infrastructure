@@ -14,9 +14,9 @@
 #
 # WHAT MAKES THIS SUITE NON-VACUOUS.
 #   RED-PROOF  a structured HTML Comment over the old cap: DENIED pre-fix, ALLOWED post-fix.
-#   EQUIVALENCE a PLAIN-TEXT Comment over the cap must STAY denied. Green in both arms by design —
-#              it is the guard that the fix did not simply delete the rule, and the mutant below is
-#              what proves it has any power at all.
+#   EQUIVALENCE a PLAIN-TEXT Comment over the cap (even one with newlines) must STAY denied. Green
+#              in both arms by design — it is the guard that the fix did not simply delete the
+#              rule, and the mutant below is what proves it has any power at all.
 #   HOLE-CLOSE  opening Comment to HTML inherits the density rule, which is a whole-body average and
 #              blind to one enormous <p>. MAX_BLOCK_CHARS closes that, and it is tested on BOTH
 #              Comment and Message.body because the hole predates this change on the latter.
@@ -113,14 +113,8 @@ PY
 }
 
 # ── EQUIVALENCE: the plain-text rule must survive the fix ──────────────────────────────────────────
-
-@test "a long PLAIN-TEXT Comment is still refused" {
-  # Graph really does strip newlines out of prose. This is the original 2026-06-12 defect and the
-  # fix must not have deleted it. Green in both arms — see the mutant below for its power.
-  local long; long="$(python3 -c 'print("word " * 80)')"
-  run decision "$GATE" mcp__ms365__create-reply-draft "$(tin_comment "$long")"
-  [ "$output" = "deny" ]
-}
+# The single-line "word " * 80 case is owned by tests/email-reply-quote-guard.bats ("an over-length
+# Comment is still refused"); the newline variant below is the stronger one and the mutant's fixture.
 
 @test "a long plain-text Comment with newlines in it is STILL refused" {
   # The tempting weaker rule is "allow it if the author put breaks in". Newlines are exactly what
@@ -201,21 +195,7 @@ print("BAD", bad) if bad else print("OK")
   [ "$output" = "allow" ]
 }
 
-# ── CONTROLS: everything the fix must NOT have touched ────────────────────────────────────────────
-
-@test "a short plain Comment is still allowed" {
-  run decision "$GATE" mcp__ms365__create-reply-draft "$(tin_comment "Thanks - Tuesday works for me.")"
-  [ "$output" = "allow" ]
-}
-
-@test "a reply carrying Message.body with no quoted chain is still refused" {
-  run decision "$GATE" mcp__ms365__create-reply-draft "$(tin_message "<p>Thanks - Tuesday works.</p>")"
-  [ "$output" = "deny" ]
-}
-
-@test "the four compose-and-send tools are still denied outright" {
-  for t in send-mail reply-mail-message reply-all-mail-message forward-mail-message; do
-    run decision "$GATE" "mcp__ms365__$t" "$(tin_comment "hello")"
-    [ "$output" = "deny" ]
-  done
-}
+# ── CONTROLS: everything the fix must NOT have touched — owned by the rule's own suites ──────────
+# The short plain Comment (allow) and the short Message.body reply without a quoted chain (deny)
+# are owned by tests/email-reply-quote-guard.bats; the four compose-and-send tools (R1) by
+# tests/email-drafts-only-and-alias.bats, one case per tool.
