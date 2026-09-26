@@ -404,6 +404,9 @@ run_prepush() {
 @test "seal: CC_GIT_IDENTITY_EMAIL cannot widen the allowlist without the sentinel" {
   local r; r="$(mkrepo sealemail https://github.com/renchris/x.git)"   # the REAL owner
   git -C "${r:?repo path required}" config user.email attacker@evil.test
+  # Unsealed, the hook reads the sanctioned address from $HOME's overlay. Give it one, so the
+  # refusal below is the SEAL holding and not merely "no overlay, refuse everything".
+  mkdir -p "$HOME/.claude"; cp "$SRC/tests/fixtures/identity.fixture.json" "$HOME/.claude/identity.local.json"
   run env -u CC_GIT_IDENTITY_TEST CC_GIT_IDENTITY_EMAIL=attacker@evil.test "$HOOK" --check "$r"
   [ "$status" -eq 1 ]                       # the env value must NOT be accepted as sanctioned
   [[ "$output" == *"attacker@evil.test"* ]] || false
@@ -462,20 +465,40 @@ user.name Good"
   [ "$status" -eq 0 ]
 }
 
-@test "postland: the SHIPPED DEFAULT is the address that attributes, with no env pin" {
+@test "postland: the SHIPPED DEFAULT is the overlay's address, with no env pin" {
   # The three tests around this one run under a pinned contract, so they would all pass even if
   # the shipped fallback were wrong. This is the arm that reads what actually ships: unset the
-  # pin and confirm the built-in default admits operator@example.com and refuses the poison.
-  # (That address → account `renchris` was verified against the GitHub API on 2026-08-08; it is a
-  # perishable fact, re-derivable with `git-identity-assert.sh verify-attribution`.)
+  # pin and confirm the default — the identity overlay's git_identity.email — admits that address
+  # and refuses the poison. (This repo is public, so the real address lives only in the overlay;
+  # the address → account mapping is re-derivable with `git-identity-assert.sh verify-attribution`.)
   unset CC_GIT_IDENTITY_EMAIL
+  export CC_IDENTITY_FILE="$SRC/tests/fixtures/identity.fixture.json"
   load_snap_ok
-  run identity_snap_ok "user.email operator@example.com
-user.name Chris Ren"
+  run identity_snap_ok "user.email owner@example.com
+user.name Owner"
   [ "$status" -eq 0 ]
   run identity_snap_ok "user.email t@e.com
 user.name t"
   [ "$status" -ne 0 ]
+}
+
+@test "postland: a MISSING overlay blesses nothing — fail closed, never an empty-string match" {
+  unset CC_GIT_IDENTITY_EMAIL
+  export CC_IDENTITY_FILE="$BATS_TEST_TMPDIR/no-such-overlay.json"
+  load_snap_ok
+  run identity_snap_ok "user.email owner@example.com
+user.name Owner"
+  [ "$status" -ne 0 ]
+}
+
+@test "pre-commit: a MISSING overlay refuses an in-scope commit and names the overlay" {
+  unset CC_GIT_IDENTITY_EMAIL
+  export CC_IDENTITY_FILE="$BATS_TEST_TMPDIR/no-such-overlay.json"
+  local r; r="$(mkrepo nooverlay https://github.com/owner/x.git)"
+  git -C "$r" config user.email owner@example.com; git -C "$r" config user.name Owner
+  run bash "$HOOK" --check "$r"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"identity overlay missing"* ]]
 }
 
 @test "postland: a POISONED baseline is NOT restorable — the fix" {
@@ -639,10 +662,10 @@ postland_tick() {  # <repo> <state dir> — one real --run-if-needed against a f
 }
 
 @test "postland: the OTHER unattributed family is not restorable either" {
-  # operator+claude@example.com looks legitimate and is just as unattributable on GitHub
+  # The owner's +claude plus-address looks legitimate and is just as unattributable on GitHub
   # (verified 2026-08-08). A denylist keyed on `t` would have restored this one.
   load_snap_ok
-  run identity_snap_ok "user.email operator+claude@example.com
+  run identity_snap_ok "user.email good+claude@example.test
 user.name Chris Ren"
   [ "$status" -ne 0 ]
 }

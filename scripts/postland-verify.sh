@@ -1365,8 +1365,13 @@ identity_snapshot() { git -C "$REPO" config --local --get-regexp '^user\.' 2>/de
 identity_snap_ok() {
   local snap="$1" want em
   # Sealed like the hooks: an env var that can widen this predicate is a bypass, not a seam.
-  if [ "${CC_GIT_IDENTITY_TEST:-}" = 1 ]; then want="${CC_GIT_IDENTITY_EMAIL:-operator@example.com}"
-  else want="operator@example.com"; fi
+  # The sanctioned address is personal, so it comes from the identity overlay (git_identity.email);
+  # an unreadable overlay leaves want empty, and an empty want never blesses a snapshot.
+  local idf="$HOME/.claude/identity.local.json" ow
+  [ "${CC_GIT_IDENTITY_TEST:-}" = 1 ] && idf="${CC_IDENTITY_FILE:-$idf}"
+  ow="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["git_identity"]["email"])' "$idf" 2>/dev/null || true)"
+  if [ "${CC_GIT_IDENTITY_TEST:-}" = 1 ]; then want="${CC_GIT_IDENTITY_EMAIL:-$ow}"
+  else want="$ow"; fi
   [ -z "$snap" ] && return 0
   # LAST, not first. `user.email` is multi-valued when .git/config carries two [user] sections,
   # and git's effective author is the LAST one — measured. An `awk … exit` read the FIRST, i.e.

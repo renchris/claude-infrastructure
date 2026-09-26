@@ -56,11 +56,19 @@ export LC_ALL=C
 #
 # They now require CC_GIT_IDENTITY_TEST=1 as well, which the suite sets and nothing in production
 # does. An env var that can silently WIDEN a security predicate is not a seam, it is a hole.
+# WANT_EMAIL is a personal value and this repo is public, so it is read from the gitignored identity
+# overlay (key git_identity.email; hooks/lib/identity.{py,sh}). This file can run as a COPY in
+# <git-dir>/hooks, so it reads the ABSOLUTE $HOME path, never a repo-relative one. A missing overlay
+# leaves WANT_EMAIL empty, and an empty WANT_EMAIL REFUSES every in-scope commit (fail closed).
+# CC_IDENTITY_FILE is honoured only under the same CC_GIT_IDENTITY_TEST seal as the overrides below.
+_cc_idf="$HOME/.claude/identity.local.json"
+[ "${CC_GIT_IDENTITY_TEST:-}" = 1 ] && _cc_idf="${CC_IDENTITY_FILE:-$_cc_idf}"
+_cc_overlay_email="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["git_identity"]["email"])' "$_cc_idf" 2>/dev/null || true)"
 if [ "${CC_GIT_IDENTITY_TEST:-}" = 1 ]; then
-  WANT_EMAIL="${CC_GIT_IDENTITY_EMAIL:-operator@example.com}"
+  WANT_EMAIL="${CC_GIT_IDENTITY_EMAIL:-$_cc_overlay_email}"
   WANT_OWNER="${CC_GIT_IDENTITY_OWNER:-renchris}"
 else
-  WANT_EMAIL="operator@example.com"
+  WANT_EMAIL="$_cc_overlay_email"
   WANT_OWNER="renchris"
 fi
 
