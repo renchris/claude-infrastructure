@@ -357,12 +357,6 @@ mk_marker() { # <file> <pane> <mode> [young]  — aged 1 h by default (> the 900
   [ "$(notify_count)" -eq 1 ]
 }
 
-# ── launchd/supervisor-callable: runs standalone, exit 0, no args ──────────────
-@test "runs standalone with no args and exits 0" {
-  run "${SWEEP_TO[@]}" bash "$SWEEP"
-  [ "$status" -eq 0 ]
-}
-
 # ══ age-reap of the six write-only event dirs (audit 03 §1b/§1c fix 5) ═════════════════════════
 # L2: each case asserts the failure-DISTINCT pair — OLD reaped AND YOUNG kept. Asserting only the
 # reap would stay green if the horizon collapsed to 0 and ate live records; asserting only the keep
@@ -1872,12 +1866,12 @@ STUB
   [ -n "$(jq -r 'select(.disposition=="config-parity")|.settings_drift_rc // .detail.settings_drift_rc // "x"' "$CC_IDL" | tail -1)" ]
 }
 
-@test "0a-i CONTROL: the pre-fix ORDER (block below the checkpoints) journals NO config-parity" {
-  local mutant="$BATS_TEST_TMPDIR/sweep-preorder.sh"
+# build_preorder_mutant <dst> — the sweep with the parity block MOVED back below the checkpoints.
+build_preorder_mutant() {
   # rung 1 of the lib ladder, exactly as the real script resolves it — a copy in BATS_TEST_TMPDIR
   # otherwise falls through to $HOME/.claude and dies before the property is ever exercised.
   ln -sfn "$REPO/scripts/lib" "$BATS_TEST_TMPDIR/lib"
-  SRC="$SWEEP" DST="$mutant" python3 - <<'PY'
+  SRC="$SWEEP" DST="$1" python3 - <<'PY'
 import os
 src, dst = os.environ['SRC'], os.environ['DST']
 L = open(src).read().split('\n')
@@ -1889,6 +1883,11 @@ k = next(n for n,l in enumerate(L) if l.strip() == 'sweep_yield 2e-custody-death
 L[k:k] = blk + ['']
 open(dst,'w').write('\n'.join(L))
 PY
+}
+
+@test "0a-i CONTROL: the pre-fix ORDER (block below the checkpoints) journals NO config-parity" {
+  local mutant="$BATS_TEST_TMPDIR/sweep-preorder.sh"
+  build_preorder_mutant "$mutant"
   # the mutation is present AND the fixed shape is gone — never merely "the files differ"
   grep -q '^_drift="\$_SWEEP_DIR/settings-drift-assert.sh"$' "$mutant"
   [ "$(grep -n '^_drift=' "$mutant" | cut -d: -f1)" -gt "$(grep -n '^sweep_yield 0b-author-death-join$' "$mutant" | cut -d: -f1)" ]
@@ -1906,6 +1905,15 @@ PY
   # cut: both orders reach the block, so the pair above is a property of ORDER and not of the block.
   echo '{"kind":"alarm","detail":"never-stuck gate red"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
   run "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  ! grep -q '"disposition":"self-bound"' "$CC_IDL" || false
+  grep -q '"disposition":"config-parity"' "$CC_IDL"
+  # …and the pre-fix ORDER, on a fresh journal: the mutant's block must still be live code.
+  local mutant="$BATS_TEST_TMPDIR/sweep-preorder.sh"
+  build_preorder_mutant "$mutant"
+  : > "$CC_IDL"
+  echo '{"kind":"alarm","detail":"never-stuck gate red"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
+  run "${SWEEP_TO[@]}" bash "$mutant"
   [ "$status" -eq 0 ]
   ! grep -q '"disposition":"self-bound"' "$CC_IDL" || false
   grep -q '"disposition":"config-parity"' "$CC_IDL"

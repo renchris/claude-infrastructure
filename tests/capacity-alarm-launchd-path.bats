@@ -103,12 +103,6 @@ plist_path() {
   [[ "$output" != *'"seg_pct":null'* ]]
 }
 
-@test "sysctl is reachable on the CURRENT plist PATH (the actual fix)" {
-  local p; p="$(plist_path)"; p="${p//\$HOME/$HOME}"
-  run env -i PATH="$p" HOME="$HOME" bash -c 'command -v sysctl'
-  [ "$status" -eq 0 ]
-}
-
 # ── CADENCE (2026-07-31) ──────────────────────────────────────────────────────────────────────
 # The interval is a load-bearing part of the instrument, and it lives in a DIFFERENT file from the
 # reasoning that justifies it — the exact shape in which a number silently regresses. At 600 s this

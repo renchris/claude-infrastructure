@@ -88,11 +88,7 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
-# ── The "executable/wired, not prose-only" proof: the hook is registered + runnable ─────────
-@test "hook file is executable (install.sh will symlink a runnable file)" {
-  [ -x "$HOOK" ]
-}
-
+# ── The "wired, not prose-only" proof: the hook is registered (every case above execs it) ──
 @test "settings template registers the hook under an AskUserQuestion PreToolUse matcher" {
   run jq -e '.hooks.PreToolUse[] | select(.matcher | test("AskUserQuestion")) | .hooks[].command | select(test("cc-unattended-ask-guard.sh"))' "$TMPL"
   [ "$status" -eq 0 ]

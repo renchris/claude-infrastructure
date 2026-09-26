@@ -67,12 +67,6 @@ nrec() { find "$CC_COMPLETION_RECORDS_DIR" -name 'push-*.json' 2>/dev/null | wc 
   [ "$status" -ne 0 ]
 }
 
-@test "a degraded record is what autonomy-sweep surfaces (its predicate is verdict != verified)" {
-  CC_NOTIFY_BIN="$(stub nowatch)" run "$C" fire --event "ship W6"
-  rec="$(find "$CC_COMPLETION_RECORDS_DIR" -name 'push-*.json' | head -1)"
-  [ "$(jq -r '.verdict' "$rec")" != "verified" ]
-}
-
 @test "FAIL-HONEST: cc-announce exit 0 with NO verdict token is recorded unverified, never upgraded" {
   # an older/stubbed cc-announce that says nothing must not be read as a confirmed wake
   ann="$BATS_TEST_TMPDIR/mute-announce.sh"

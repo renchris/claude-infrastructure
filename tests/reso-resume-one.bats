@@ -369,10 +369,15 @@ mk_reaped_worktree() { # <repo-name> <branch> <wtpath>
     /*/bin/reso-resume-one) ;;
     *) echo "deployed symlink points somewhere unexpected: $target" >&2; return 1 ;;
   esac
-  # The claim is CONTENT identity with the gated file, not merely that a link exists. A symlink
-  # makes that structurally true, which is exactly why it was chosen over the copy that rotted —
-  # so assert the property, and let the mechanism be what makes it cheap to hold.
-  cmp -s "$live" "$target"
+  # The claim is that the link lands IN THIS REPO'S PRIMARY CHECKOUT — the tree the trunk
+  # fast-forward moves — not merely that a link exists. (A `cmp` of the link with its own target
+  # opened one inode twice and passed for a link into any other clone.) Not $RRO itself: from a
+  # linked worktree that file legitimately differs, so resolve the primary via the common git dir.
+  local primary
+  primary="$(cd "$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir)/.." && pwd -P)"
+  [ -f "$target" ] || { echo "deployed symlink is dangling: $target" >&2; return 1; }
+  [ "$(cd "$(dirname "$target")/.." && pwd -P)" = "$primary" ] \
+    || { echo "deployed symlink points into another tree: $target (primary checkout: $primary)" >&2; return 1; }
 }
 
 # ── THE CAPACITY GATE IN THE ENGINE'S OWN BODY (backlog eda267ff4b14) ────────────────────────────

@@ -54,6 +54,9 @@ run_tqg() {  # $1=worktree  $2=team_name
   printf '#!/bin/bash\nif [ ; then\n' > "$w/broken.sh"
   run run_tqg "$w" "team-x"
   [ "$status" -eq 2 ]
+  # this input is ALSO a shellcheck parse error, so the rc alone is owned by the shellcheck arm —
+  # the bash -n arm must be the one that reports it
+  printf '%s' "$output" | grep -qF '[bash -n'
 }
 
 @test "infra: only a non-shell file changed → exit 0 (nothing to check)" {

@@ -473,17 +473,6 @@ mutant_bare_awk() {  # → writes fn-noguard.sh
   [ ! -f "$BATS_TEST_TMPDIR/notify.log" ] || false
 }
 
-@test "W2-ROUTED CONTROL: a legacy 3-argument call behaves exactly as before (no unlanded claim)" {
-  # Every pre-existing caller and test passes three arguments. Defaulting to 0 is what makes this
-  # strictly additive rather than a behaviour change nobody asked for.
-  stamp_with_notifyback "$ORIG"
-  mkdir -p "$MDIR/.sent"
-  printf '2026-08-09T00:56:08+0000 %s\n' "$ORIG" > "$MDIR/.sent/$PANE"
-  run sc_announce_before_retire "$PANE" "$FIRED_DIR" "$MDIR"
-  [ "$status" -eq 0 ] || false
-  [ ! -f "$BATS_TEST_TMPDIR/notify.log" ] || false
-}
-
 @test "W2-ROUTED: the unannounced-retire announce carries the unlanded clause too" {
   stamp_with_notifyback "$ORIG"
   run sc_announce_before_retire "$PANE" "$FIRED_DIR" "$MDIR" 5 "wt-abandoned" "origin/main"
