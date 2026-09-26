@@ -206,14 +206,18 @@ mk_big() {
   [ "$status" -eq 0 ]; [ -z "$output" ]
 }
 
-@test "the osascript page fork is BOUNDED (wrc_osa) — with a positive control" {
+@test "the osascript page fork is BOUNDED (wrc_osa) — and the bound really cuts a slow command" {
   grep -q 'wrc_osa osascript -e' "$HOOK"                # the page call site is wrapped…
   grep -q 'WRC_OSA_TIMEOUT_S="\${WRC_OSA_TIMEOUT_S:-5}"' "$HOOK"   # …by a 5s default bound…
   grep -qE '"\$WRC_OSA_TB" -k 3 "\$WRC_OSA_TIMEOUT_S" "\$@"' "$HOOK"  # …applied with a hard -k kill…
   grep -q '/opt/homebrew/bin/timeout' "$HOOK"           # …resolving timeout(1) off-PATH too (hooks run without Homebrew)
-  # POSITIVE CONTROL: the same assertions MUST fail on a copy with the wrapper stripped.
-  local strip="$BATS_TEST_TMPDIR/unbounded.sh"
-  sed 's/wrc_osa osascript -e/osascript -e/' "$HOOK" > "$strip"
-  run grep -c 'wrc_osa osascript -e' "$strip"
-  [ "$output" -eq 0 ]
+  # BEHAVIOUR: the greps prove the words, not the bound. Lift the resolver + wrapper out of the hook
+  # and run a slow command through it at a 1s bound: it must be CUT (124), as tests/osa-bounds.bats
+  # proves for hooks/lib/osa.sh.
+  local w="$BATS_TEST_TMPDIR/wrc-osa.sh"
+  sed -n '/^WRC_OSA_TIMEOUT_S=/,/^}/p' "$HOOK" > "$w"
+  grep -q '^wrc_osa() {' "$w" || false                  # the extraction really reached the wrapper
+  run env WRC_OSA_TIMEOUT_S=1 bash -c ". '$w'; [ -n \"\$WRC_OSA_TB\" ] || exit 99; wrc_osa sleep 20"
+  [ "$status" -ne 99 ] || skip "no timeout(1)/gtimeout on this box — wrc_osa runs unbounded by design"
+  [ "$status" -eq 124 ]
 }

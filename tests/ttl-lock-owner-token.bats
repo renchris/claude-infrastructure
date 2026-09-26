@@ -106,7 +106,7 @@ deadpid() { sleep 1 & local p=$!; kill "$p" 2>/dev/null || true; wait "$p" 2>/de
 
 # ── cc-idl ───────────────────────────────────────────────────────────────────────────────────────
 
-@test "6: cc-idl — append stamps a token and releases its own lock cleanly" {
+@test "6: cc-idl — append releases its own lock cleanly (the token it stamps is asserted in 9)" {
   run "$IDL" append '{"k":"v"}'
   [ "$status" -eq 0 ] || { echo "append failed: $output"; false; }
   [ ! -d "$CC_IDL_LOCK" ] || { echo "lock dir survived a clean append — release is incomplete"; false; }
@@ -132,7 +132,7 @@ deadpid() { sleep 1 & local p=$!; kill "$p" 2>/dev/null || true; wait "$p" 2>/de
   [ ! -d "$CC_IDL_LOCK" ] || { echo "lock not released after the reclaimed append"; false; }
 }
 
-@test "9: cc-idl — the REAL release_lock does not delete a foreign token (steal mid-hold)" {
+@test "9: cc-idl — the held lock carries cc-idl's OWN token, and the REAL release_lock does not delete a foreign one" {
   # Drives cc-idl's own release_lock, not a copy of it. An earlier version of this test reimplemented
   # the release logic inline and therefore asserted nothing about the subject — a tautology that
   # passed against the unfixed binary. To make it real the critical section has to stay open long
@@ -151,12 +151,18 @@ SH
   PATH="$bin:$PATH" "$IDL" append '{"k":"v2"}' >/dev/null 2>&1 &
   local runner=$!
 
-  # Wait on the lock DIR, not on the owner file: the unfixed binary writes no token at all, and
-  # keying on the token would make this test fail pre-fix merely for the token's absence (which
-  # tests 1/6 already cover) instead of for the release behaviour it is meant to isolate.
+  # Wait on the lock DIR first, so a missing lock and a missing token fail with different messages.
   local i=0
   while [ ! -d "$CC_IDL_LOCK" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
   [ -d "$CC_IDL_LOCK" ] || { echo "cc-idl never took the lock"; kill "$runner" 2>/dev/null; false; }
+
+  # THE TOKEN. While cc-idl holds the lock, `owner` must name cc-idl itself. Nothing else in this
+  # file reads cc-idl's own token (7 and 8 plant theirs), and without it a later dead holder can be
+  # reclaimed only after LOCK_TTL — the pid-liveness reclaim 8 relies on silently stops working.
+  i=0
+  while [ ! -s "$CC_IDL_LOCK/owner" ] && [ "$i" -lt 30 ]; do sleep 0.1; i=$((i + 1)); done
+  local own=""; [ -s "$CC_IDL_LOCK/owner" ] && read -r own < "$CC_IDL_LOCK/owner"
+  [ "$own" = "$runner" ] || { echo "cc-idl's lock token is '$own', not its own pid $runner"; kill "$runner" 2>/dev/null; false; }
 
   sleep 9 & local peer=$!
   printf '%s\n' "$peer" > "$CC_IDL_LOCK/owner"     # peer stole it and now owns this dir

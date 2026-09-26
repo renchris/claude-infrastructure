@@ -72,14 +72,6 @@ setup() {
   [ "$status" -eq 0 ] || { echo "the disarm line is not a no-op under bash: status=$status"; false; }
 }
 
-@test "RED-PROOF: a drifted pair is actually caught" {
-  # Proves the equality test above discriminates rather than passing vacuously — the same predicate,
-  # applied to a deliberately drifted pair, must fail.
-  local a='unsetopt correct correct_all 2>/dev/null || true'
-  local b='unsetopt correct 2>/dev/null || true'
-  [ "$a" != "$b" ] || false
-}
-
 @test "every rewired site routes its typed command through osa_type_verified" {
   # The three sites the item names. Asserted per-file so a regression names the file it broke.
   local f

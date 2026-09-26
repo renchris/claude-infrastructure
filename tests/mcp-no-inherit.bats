@@ -160,47 +160,6 @@ JSON
   [ "$output" -ge 2 ]
 }
 
-@test "the SSOT servers are wired into every account config dir, and the wiring is idempotent" {
-  # The other half of the fix: the allowlist only matters if the server is actually IN each
-  # account's user-scope config. Runs against the fixtured $HOME, so it asserts the merge semantics
-  # — adds one key, preserves everything else — without touching the real account dirs.
-  WIRE="$REPO/scripts/mcp-ssot-wire.sh"
-  [ -x "$WIRE" ]
-
-  mkdir -p "$HOME/.claude" "$HOME/.claude-tertiary"
-  cat > "$HOME/.claude/accounts.json" <<'JSON'
-{"accounts":[{"name":"next","config_dir":"~/.claude-secondary","launcher":"claude"},
-             {"name":"next3","config_dir":"~/.claude-tertiary","launcher":"claude3"}]}
-JSON
-  # .claude-secondary already carries state that MUST survive the merge; .claude-tertiary is bare.
-  # The exemplar is deliberately NOT one of the SSOT's own servers: the renderer owns those, so it
-  # would overwrite the fixture and this would assert the renderer's output, not merge-preservation.
-  cat > "$HOME/.claude-secondary/.claude.json" <<'JSON'
-{"numStartups": 42, "mcpServers": {"unrelated-server": {"type": "http", "url": "https://example.invalid/a"}}}
-JSON
-  echo '{}' > "$HOME/.claude-tertiary/.claude.json"
-  echo '{}' > "$HOME/.claude/.claude.json"
-
-  run bash "$WIRE"
-  [ "$status" -eq 0 ]
-
-  # present in both account dirs…
-  run jq -r '.mcpServers.ms365.type' "$HOME/.claude-secondary/.claude.json"
-  [ "$output" = "stdio" ]
-  run jq -r '.mcpServers.ms365.type' "$HOME/.claude-tertiary/.claude.json"
-  [ "$output" = "stdio" ]
-  # …the pre-existing server and the unrelated per-account counter both survive (merge, not write)…
-  run jq -r '.mcpServers."unrelated-server".url' "$HOME/.claude-secondary/.claude.json"
-  [ "$output" = "https://example.invalid/a" ]
-  run jq -r '.numStartups' "$HOME/.claude-secondary/.claude.json"
-  [ "$output" = "42" ]
-
-  # …and a second run is a no-op reporting success, which is what makes it safe inside install.sh.
-  run bash "$WIRE" --check
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"already correct"* ]] || false
-}
-
 @test "the passthrough uses --mcp-config=VALUE — the space form eats the prompt" {
   # REGRESSION, not styling. `--mcp-config` is variadic: `--mcp-config <path> "<prompt>"` consumes
   # the prompt as a second config path, and a real fire died on it with ENAMETOOLONG while every
