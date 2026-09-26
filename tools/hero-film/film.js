@@ -625,7 +625,9 @@ function chipAt(d, x, y, z, o, dx = 0, dy = 0) {
 
 function seek(t) {
   const ed = editAt(t)
-  if ((ed.blur || CUT === 'film') && SUBS > 1) {
+  // Motion blur only where the camera travels: a FILM hold creeps at 4-10 px/s, under 0.2 px in 1/60 s,
+  // so its eight sub-frames were eight identical renders (round 3: holds render once, ~3x faster).
+  if ((ed.blur || (CUT === 'film' && ed.fly)) && SUBS > 1) {
     const subs = Array.from({ length: SUBS }, (_, k) => () => applyWorld(Math.max(ed.from, Math.min(ed.to - 1e-4, t + ((k + 0.5) / SUBS - 0.5) * SHUTTER))))
     world.render(subs, { seed: Math.round(t * 60) })
   } else {
