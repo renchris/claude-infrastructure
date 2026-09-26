@@ -894,10 +894,16 @@ function tree_root(p,   q, d) {
 }'
 
 read_coalition_procs() { # → "<procs> <app>" for the largest terminal coalition, or nothing
-  "${CC_CAP_PS:-ps}" -Ao pid=,ppid=,comm= 2>/dev/null | awk "$TREE_WALK_AWK"'
-    { p = $1; pp = $2; c = $3; for (i = 4; i <= NF; i++) c = c " " $i
+  # ZOMBIES ARE NOT POPULATION. A terminal that never reaps holds <defunct> children that cost no
+  # memory, and the libproc true count (read_coalition_true) cannot see them at all — measured
+  # 2026-09-26, one kitty held 776 of them, which read coal_procs 888 against a true 159 and put
+  # rung 6 into a live ALARM over nothing. They keep a parent[] entry; they are just not counted.
+  "${CC_CAP_PS:-ps}" -Ao pid=,ppid=,stat=,comm= 2>/dev/null | awk "$TREE_WALK_AWK"'
+    { p = $1; pp = $2; c = $4; for (i = 5; i <= NF; i++) c = c " " $i
       sub(/.*\//, "", c)
-      parent[p] = pp; pids[++np] = p
+      parent[p] = pp
+      if ($3 ~ /Z/) next
+      pids[++np] = p
       if (c == "iTerm2" || c == "kitty" || c == "ghostty" || c == "Ghostty") root[p] = c }
     END {
       for (i = 1; i <= np; i++) { r = tree_root(pids[i]); if (r != "") cnt[r]++ }
