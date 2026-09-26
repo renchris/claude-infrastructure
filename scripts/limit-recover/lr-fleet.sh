@@ -837,6 +837,30 @@ lf_admit_section() { # $1=sid $2=cfg $3=acct $4=pane $5=cwd $6=tier → 0 admitt
   LF_ADMIT_TARGET="$target"
   return 0
 }
+# lf_await_relaunch <sid> <pane> <iso floor> → prints the pane of a live registry row and rc 0 ·
+# prints "dead:<detail>" and rc 1 when the recycle watcher wrote recycle-dead for that pane since the
+# floor · prints nothing and rc 2 when neither appeared within LR_FLEET_PROOF_WAIT_S (default 240 s,
+# which covers the watcher's shell wait and boot wait on every measured recovery; the worst case is
+# longer, and past the bound the answer is UNPROVEN, never a guess). The ledger is the watcher's own
+# (handoff-fire emit_recycle_event), read by class and pane, never by prose.
+lf_await_relaunch() {
+  local sid="$1" pane="$2" floor="$3" max poll waited=0 row led dead
+  max="${LR_FLEET_PROOF_WAIT_S:-240}"; case "$max" in ''|*[!0-9]*) max=240 ;; esac
+  poll="${LR_FLEET_PROOF_POLL_S:-5}"; case "$poll" in ''|*[!0-9]*|0) poll=5 ;; esac
+  led="${LR_HANDOFF_LEDGER:-$HOME/.claude/logs/handoffs.jsonl}"
+  while :; do
+    row="$(lr_registry_live_rows "$sid" 2>/dev/null | head -1 | cut -f1 || true)"
+    [ -n "$row" ] && { printf '%s' "$row"; return 0; }
+    if [ -n "$pane" ] && [ "$pane" != "-" ] && [ -f "$led" ] && command -v jq >/dev/null 2>&1; then
+      dead="$(tail -n 500 "$led" 2>/dev/null | jq -rR --arg p "$pane" --arg f "$floor" '
+                fromjson? | select(.class == "recycle-dead" and (.target_pane|tostring) == $p and (.ts // "") >= $f)
+                | .detail // "recycle-dead"' 2>/dev/null | tail -1 || true)"
+      [ -n "$dead" ] && { printf 'dead:%s' "$dead"; return 1; }
+    fi
+    [ "$waited" -lt "$max" ] || return 2
+    sleep "$poll"; waited=$((waited + poll))
+  done
+}
 lf_one() { # $1=sid $2=cfg $3=acct $4=pane $5=cwd $6=tier → rc of the recovery; prints the result row
   local sid="$1" cfg="$2" acct="$3" pane="$4" cwd="$5" tier="$6" target rc=0 out rdir="$FLEET_DIR/$RUN" model="" effort="" arc=0
   mkdir -p "$rdir"
@@ -889,18 +913,62 @@ lf_one() { # $1=sid $2=cfg $3=acct $4=pane $5=cwd $6=tier → rc of the recovery
   # cheap check whose failure means exactly what it says. Only the recycle path is proved this way:
   # the replace and spawn paths take the pane id from the successor's own announcement, and the
   # registry read would overwrite a correct new pane with the SOURCE's stale row.
+  #
+  # AND AN UNPROVEN CLAIM IS NOT A RECOVERY (2026-09-26, ac0f0123). The branch below used to leave
+  # the verdict at RECOVERED and only change the note, so the mail read `verdict=RECOVERED … the
+  # in-place claim is UNPROVEN` while lr-handoff's own line said SWITCHED-UNPROVEN, and the pane sat
+  # at a bare shell. Under --detach (LR_INPLACE_AWAIT=0) lr-handoff returns the moment the /exit has
+  # landed, BEFORE the relaunch can register, so a registry read at that instant proves nothing either
+  # way: the detached driver has nobody waiting on it, so it waits for the proof instead
+  # (lf_await_relaunch). A row ⇒ RECOVERED; the watcher's own recycle-dead row ⇒ FAILED; neither
+  # within the bound ⇒ UNPROVEN, which is its own token and never RECOVERED.
   if [ "$mech" = recycle-in-place ]; then
-    local _after
+    local _after _dead=""
     _after="$(lr_registry_live_rows "$sid" 2>/dev/null | head -1 | cut -f1 || true)"
+    if [ -z "$_after" ] && [ "$rc" = 0 ] && [ "${LR_INPLACE_AWAIT:-1}" = 0 ]; then
+      _after="$(lf_await_relaunch "$sid" "$pane" "$t0")" || _dead="$_after"
+      [ -z "$_dead" ] || _after=""
+    fi
     if [ -n "$_after" ]; then
       pane_after="$_after"
+    elif [ -n "$_dead" ]; then
+      pane_after="?"; verdict="FAILED"; rc=1
+      note="the recycle watcher recorded recycle-dead for pane ${pane:-?}: ${_dead#dead:}; see $rdir/$sid.stderr"
     else
       pane_after="?"
+      [ "$verdict" = RECOVERED ] && verdict="UNPROVEN"
       [ "$note" = "-" ] && note="no live registry row names this session after the run — the in-place claim is UNPROVEN; see $rdir/$sid.stderr"
     fi
   fi
   lf_row "$sid" "$pane" "$pane_after" "$acct" "$target" "$mech/$verdict" "$note"
   return "$rc"
+}
+# ── A TRANSPLANTED SESSION IS DONE ONLY WHILE SOMETHING RUNS IT (2026-09-26, ac0f0123) ─────────
+# `--one` used to answer every already-transplanted sid with "nothing to do" and exit 0. On
+# 2026-09-26 the transcript sat in ~/.claude-secondary with NO live process — the recycle had typed
+# /exit, its relaunch never ran, and the pane's tty was gone — so a `cc-lr repair` mode=relaunch
+# request did nothing, printed a success, and mailed no verdict at all. The move being complete is
+# half the job; the other half is a process holding the session, and lr_holder_count is the one
+# predicate this file already uses for that (registry rows + --resume leaves, overlap counted once).
+lf_transplanted_live() { # $1=sid $2=target cfg → 0 a live process holds it (nothing owed) · 1 stranded
+  [ "$(lr_holder_count "$1" 2>/dev/null || echo 0)" -gt 0 ] || return 1
+  echo "lr-fleet: --one $1 — already TRANSPLANTED→$(lf_acct_of_cfg "$2") and a live process holds it; nothing to do" >&2
+  return 0
+}
+# STRANDED IS A FAILED ROW, NEVER A RELAUNCH FROM HERE. The source pane is gone, so an in-place
+# recycle has nowhere to type, and a new window opened by an unattended driver is a second live copy
+# the moment lr_holder_count has missed a holder (a pid whose argv it does not parse). So the row is
+# FAILED, it goes through the same report and mail as every other verdict, and its note carries the
+# one command that relaunches the session where it now lives, run from a window the operator chose.
+lf_stranded() { # $1=sid $2=target cfg $3=acct $4=pane $5=cwd $6=tier → 1, and the row is written
+  local sid="$1" to="$2" acct="$3" pane="$4" cwd="$5" tier="$6" tacct cmd
+  tacct="$(lf_acct_of_cfg "$to")"
+  cmd="$LR/lr-fire-resume.sh $tacct ${cwd:-.} $sid"
+  case "$tier" in */*) cmd="$cmd --model ${tier%%/*} --effort ${tier#*/}" ;; esac
+  echo "lr-fleet: --one $sid — TRANSPLANTED→$tacct but NO live process holds it: stranded, not recovered. Relaunch it in a new window: $cmd" >&2
+  lf_row "$sid" "${pane:--}" "-" "$acct" "$tacct" "transplanted-stranded/FAILED" \
+    "transplanted to $tacct but no live process holds the session; relaunch in a new window: $cmd"
+  return 1
 }
 # THE RECORD IS BOUNDED AT THE WRITER, because the pool made this file CONCURRENT (W6b). O_APPEND
 # is atomic only up to the writer's stdio buffer: a record longer than it goes out as several
@@ -1173,7 +1241,8 @@ EOF
       [ -n "$cwd" ] || cwd="$(grep -o '"cwd":"[^"]*"' "$cfg"/projects/*/"$SID".jsonl 2>/dev/null | tail -1 | cut -d'"' -f4)"
       tier="$(lr_tier_from_transcript "$cfg" "$SID" 2>/dev/null | tr ' ' '/' || true)"
       if _to="$(lr_transplanted_to "$SID" "$cfg")"; then
-        echo "lr-fleet: --one $SID — already TRANSPLANTED→$(lf_acct_of_cfg "$_to"); nothing to do" >&2; exit 0
+        lf_transplanted_live "$SID" "$_to" && exit 0
+        LF_STRANDED_TO="$_to"
       fi
     else
       # No store holds the transcript under that name. The census reads the same stores, so this is
@@ -1199,9 +1268,17 @@ EOF
       [ -n "$row" ] || { echo "lr-fleet: --one $SID — no transcript in any store" >&2; exit 2; }
       IFS=$'\t' read -r _ cfg acct pane pid cwd tier disp kind kinds err_age <<<"$row"
       [ -n "$SOURCE_PANE" ] && pane="$SOURCE_PANE"
-      case "$disp" in TRANSPLANTED*) echo "lr-fleet: --one $SID — already $disp; nothing to do" >&2; exit 0 ;; esac
+      case "$disp" in TRANSPLANTED*)
+        _to="$(lr_transplanted_to "$SID" "$cfg" 2>/dev/null || true)"
+        lf_transplanted_live "$SID" "${_to:-$cfg}" && exit 0
+        LF_STRANDED_TO="${_to:-$cfg}" ;;
+      esac
     fi
-    lf_one "$SID" "$cfg" "$acct" "$pane" "$cwd" "$tier"; rc=$?
+    if [ -n "${LF_STRANDED_TO:-}" ]; then
+      lf_stranded "$SID" "$LF_STRANDED_TO" "$acct" "$pane" "$cwd" "$tier"; rc=$?
+    else
+      lf_one "$SID" "$cfg" "$acct" "$pane" "$cwd" "$tier"; rc=$?
+    fi
     echo "$FLEET_DIR/$RUN" > "$FLEET_DIR/last"
     lf_report "$FLEET_DIR/$RUN" >&2 || true
     # ── THE VERDICT REACHES SOMEONE ───────────────────────────────────────────────────────────────
@@ -1224,6 +1301,7 @@ EOF
       case "$_lf_mv" in
         *RECOVERED)  _lf_v=RECOVERED ;;
         *PARTIAL)    _lf_v=PARTIAL ;;
+        *UNPROVEN)   _lf_v=UNPROVEN ;;
         parked*)     _lf_v=PARKED ;;
         dry-run*)    _lf_v=DRYRUN ;;
         # `skipped/by-design` is matched by this same arm and deliberately does NOT get a token of

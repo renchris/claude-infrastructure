@@ -829,6 +829,93 @@ SH
   [ "$status" -eq 1 ] || { echo "$output"; false; }
 }
 
+# ── 2026-09-26 (ac0f0123, pane 780): the verdict mail and the transplanted short-circuit ──────────
+# The detached driver runs lr-handoff with LR_INPLACE_AWAIT=0 and mails a verdict= token. It is
+# driven here in its detached-child shape directly (LR_FLEET_DETACHED=1), so the mail is written in
+# the foreground and the case needs no polling.
+detached_one() { # runs --one as the detached child does; the mail lands in $BATS_TEST_TMPDIR/notify.log
+  export CC_NOTIFY_BIN="$BATS_TEST_TMPDIR/cc-notify" CC_ADMIT_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/notify.log"\n' "$BATS_TEST_TMPDIR" > "$CC_NOTIFY_BIN"
+  chmod +x "$CC_NOTIFY_BIN"
+  run env LR_FLEET_DETACHED=1 LR_FLEET_REQUESTER=999 LR_INPLACE_AWAIT=0 \
+    LR_FLEET_PROOF_WAIT_S="${PROOF_WAIT:-2}" LR_FLEET_PROOF_POLL_S=1 \
+    bash "$FLEET" --one "$SID" --target next3 --source-pane 616
+}
+unregistering_handoff() { # the relaunch that never re-registers (the /exit landed, nothing came back)
+  cat > "$LR_HANDOFF_BIN" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >> "${LRH_LOG:?}"
+rm -f "${CC_REGISTRY_DIR:?}"/616.json
+[ -n "${LRH_DEAD_ROW:-}" ] && { mkdir -p "$HOME/.claude/logs"; printf '%s\n' "$LRH_DEAD_ROW" >> "$HOME/.claude/logs/handoffs.jsonl"; }
+[ -n "${LRH_REREGISTER:-}" ] && ( sleep 1; printf '%s\n' "$LRH_REREGISTER" > "${CC_REGISTRY_DIR:?}/616.json" ) &
+echo "lr-handoff ${SID:-x}: verdict=SWITCHED-UNPROVEN from=.claude to=next3 proven=no trigger=limit" >&2
+echo "/bundle/path"
+SH
+  chmod +x "$LR_HANDOFF_BIN"
+}
+
+@test "[RED] an in-place run whose relaunch is never proven does NOT mail verdict=RECOVERED" {
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"; unregistering_handoff
+  detached_one
+  run cat "$BATS_TEST_TMPDIR/notify.log"
+  [[ "$output" == *"verdict="* ]] || { echo "no mail: $output"; false; }
+  [[ "$output" != *"verdict=RECOVERED"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=UNPROVEN"* ]] || { echo "$output"; false; }
+}
+
+@test "the watcher's own recycle-dead row for that pane turns the verdict into FAILED" {
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"; unregistering_handoff
+  export LRH_DEAD_ROW='{"ts":"2999-01-01T00:00:00Z","class":"recycle-dead","target_pane":"616","detail":"never reached a confirmed shell in 6s (verdict: unknown)"}'
+  PROOF_WAIT=30 detached_one
+  run cat "$BATS_TEST_TMPDIR/notify.log"
+  [[ "$output" == *"verdict=FAILED"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"recycle-dead"* ]] || { echo "$output"; false; }
+}
+
+@test "CONTROL: a relaunch that registers within the bound is RECOVERED, with the pane it registered from" {
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"; unregistering_handoff
+  export LRH_REREGISTER="{\"paneUUID\":\"616\",\"session_id\":\"$SID\",\"pid\":$$,\"account\":\"claude-tertiary\",\"cwd\":\"$CWD\"}"
+  PROOF_WAIT=20 detached_one
+  run cat "$BATS_TEST_TMPDIR/notify.log"
+  [[ "$output" == *"verdict=RECOVERED"* ]] || { echo "$output"; false; }
+  run cat "$LR_STATE_DIR/fleet/"one-*/results.tsv
+  [[ "$output" == *$'\t616\t616\t'* ]] || { echo "$output"; false; }
+}
+
+# A transplanted session with no live holder was answered "already TRANSPLANTED → nothing to do",
+# exit 0, and no mail — while its transcript sat on the target account with nothing running it.
+transplanted_fixture() {
+  blocked_tx "$SEC" "$SID"                    # the source keeps a (re-created) stub, as on 2026-09-26
+  printf '{"sid":"%s","from":"%s","to":"%s"}\n' "$SID" "$SEC" "$TER" > "$LR_STATE_DIR/locks/$SID.lock"
+  blocked_tx "$TER" "$SID"
+}
+
+@test "[RED] --one on a transplanted session that NOTHING runs is FAILED and names the relaunch, never 'nothing to do'" {
+  transplanted_fixture
+  run bash "$FLEET" --one "$SID" --target next2 --source-pane 780
+  [ "$status" -ne 0 ] || { echo "$output"; false; }
+  [[ "$output" != *"nothing to do"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"transplanted-stranded/FAILED"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"lr-fire-resume.sh next3 $CWD $SID"* ]] || { echo "$output"; false; }
+  [ ! -s "$LRH_LOG" ] || { echo "the actuator was driven over a stranded transplant"; cat "$LRH_LOG"; false; }
+}
+
+@test "[RED] …and under --detach that FAILED verdict reaches the requester as mail" {
+  transplanted_fixture
+  detached_one
+  run cat "$BATS_TEST_TMPDIR/notify.log"
+  [[ "$output" == *"verdict=FAILED"* ]] || { echo "no FAILED mail: $output"; false; }
+}
+
+@test "CONTROL: a transplanted session a live process DOES hold is still 'nothing to do', exit 0" {
+  transplanted_fixture
+  row 700 "$SID"                              # the successor pane, alive (pid = this bats process)
+  run bash "$FLEET" --one "$SID" --target next2
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"nothing to do"* ]] || { echo "$output"; false; }
+  [ ! -s "$LRH_LOG" ] || { cat "$LRH_LOG"; false; }
+}
+
 # ── W9a: --mark's tombstone check is over EVERY store, and --duplicates dedupes by sid ───────────
 # A backgrounded holder is reaped here rather than inline: an assertion that fails leaves the
 # inline `kill` unreached, and a stray `sleep` in the process table is exactly the kind of live

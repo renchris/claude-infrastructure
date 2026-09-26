@@ -89,7 +89,7 @@ cc-lr recover <ref>            # add --target next3 to pin the account; --source
 
 Print its three lines verbatim and **END THE TURN**. Do not poll, do not confirm, do not re-census
 to check the pane id you were handed. The verdict comes back as MAIL — a `cc-notify` line carrying
-`verdict=RECOVERED|PARTIAL|PARKED|FAILED`, its note and the evidence dir — which `mailbox-drain`
+`verdict=RECOVERED|UNPROVEN|PARTIAL|PARKED|FAILED` (UNPROVEN: the /exit landed but no live process re-registered the session within the bound), its note and the evidence dir — which `mailbox-drain`
 delivers at your next turn boundary like any other message.
 
 Measured 2026-09-19 (`docs/research/lr100p-2026-09-19/research/U11-today-run-audit.md` §2):
