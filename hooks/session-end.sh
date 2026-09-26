@@ -48,7 +48,7 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] Session ended sid=${_se_sid_log:--} reason=
 # resolved HERE, where ancestry is still true, and handed down as CC_TERM (teammate-auto-shutdown.sh
 # pin_term_verdict carries the measurement). Kill switch: CC_TEAMMATE_ORPHAN_CLOSE=off.
 if [ "${CC_TEAMMATE_ORPHAN_CLOSE:-on}" != off ] && command -v jq >/dev/null 2>&1; then
-  _se_pane="${ITERM_SESSION_ID:-}"; _se_pane="${_se_pane##*:}"; [ -n "$_se_pane" ] || _se_pane="${KITTY_WINDOW_ID:-}"
+  _se_pane="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; _se_pane="${_se_pane##*:}"; [ -n "$_se_pane" ] || _se_pane="${KITTY_WINDOW_ID:-}"
   _se_cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
   _se_member=""
   if [ -n "$_se_pane" ] && [ -d "$_se_cfg/teams" ]; then
