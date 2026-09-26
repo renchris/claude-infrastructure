@@ -222,3 +222,20 @@ _edge() {  # $1=firing cwd  $2=fired cwd
   run bash -c "cd '$B' && '$DP' get"
   printf '%s' "$output" | grep -q 'pinned'
 }
+
+@test "IDENTITY: cc.canonicalUrl keeps the repo key across an origin move (public-repo cutover)" {
+  # docs/plans/PUBLIC_REPO_HYGIENE.md: the working origin moves to a private repo and the public URL
+  # becomes a projection. Every stored DoD is keyed on sha(old origin URL); the cutover records the
+  # old URL as cc.canonicalUrl so the key — and every frozen scope under it — survives the move.
+  before="$(bash -c ". '$REPO_ROOT/hooks/lib/dod-path.sh' && _dod_repo_key '$A'")"
+  [ -n "$before" ]
+  old="$(git -C "$A" config --get remote.origin.url)"
+  git -C "$A" config cc.canonicalUrl "$old"
+  git -C "$A" remote set-url origin "$BATS_TEST_TMPDIR/moved-private.git"
+  after="$(bash -c ". '$REPO_ROOT/hooks/lib/dod-path.sh' && _dod_repo_key '$A'")"
+  [ "$after" = "$before" ]
+  # control: without the identity key the move DOES change the key (else this test proves nothing)
+  git -C "$A" config --unset cc.canonicalUrl
+  moved="$(bash -c ". '$REPO_ROOT/hooks/lib/dod-path.sh' && _dod_repo_key '$A'")"
+  [ "$moved" != "$before" ]
+}

@@ -490,6 +490,24 @@ def creds(account: str) -> "tuple[str, str]":
     return org_uuid(row), access_token(row)
 
 
+
+def _origin_slug() -> str | None:
+    """owner/name of THIS checkout's origin (github.com, https or ssh), or None."""
+    import subprocess as _sp
+
+    try:
+        url = _sp.run(
+            ["git", "-C", os.path.dirname(os.path.realpath(__file__)), "remote", "get-url", "origin"],
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+    except (OSError, _sp.SubprocessError):
+        return None
+    for sep in ("github.com/", "github.com:"):
+        if sep in url:
+            slug = url.split(sep, 1)[1].removesuffix(".git").strip("/")
+            return slug if slug.count("/") == 1 else None
+    return None
+
 def main() -> int:
     ap = argparse.ArgumentParser(add_help=True)
     ap.add_argument("--account", required=True)
@@ -497,7 +515,10 @@ def main() -> int:
         "--branch", default="", help="the branch the VM is authorized to push"
     )
     ap.add_argument(
-        "--repo", default="renchris/claude-infrastructure", help="owner/name"
+        "--repo",
+        default=_origin_slug() or "renchris/claude-infrastructure",
+        help="owner/name (default: this checkout's origin — the PRIVATE working repo once the public "
+        "URL is a projection; a cloud VM pushes branches, so it must never default to the public one)",
     )
     ap.add_argument("--revision", default="main")
     ap.add_argument("--title", default="cc-offload session")

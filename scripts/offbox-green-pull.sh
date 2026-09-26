@@ -136,6 +136,17 @@ cmd_pull() {
   local tmo; tmo="$(resolve_timeout)" || bail_open "no timeout(1) on PATH"
   command -v "$GH_BIN" >/dev/null 2>&1 || bail_open "no '$GH_BIN' on PATH"
   local NWO; NWO="$(nwo)" || bail_open "origin is not a github.com remote"
+  # PUBLIC PROJECTION (docs/plans/PUBLIC_REPO_HYGIENE.md): once origin is the PRIVATE working repo,
+  # hermetic runs on the PUBLIC repo, whose commits are a filter-repo projection of ours. With
+  # cc.publicRepo set, each private commit is translated through the commit-map public-publish.sh
+  # persists, and queried THERE; the stamp is still written under the PRIVATE tree, so deploy-live
+  # needs no change. A commit not yet published has no public sha and is simply not asked about.
+  local PUBLIC_NWO COMMIT_MAP
+  PUBLIC_NWO="$(g config --get cc.publicRepo 2>/dev/null || true)"
+  COMMIT_MAP="${CC_PUBLIC_COMMIT_MAP:-${CC_PRIVATE_DIR:-$HOME/Development/claude-private}/public-projection/commit-map}"
+  if [ -n "$PUBLIC_NWO" ] && [ ! -r "$COMMIT_MAP" ]; then
+    bail_open "cc.publicRepo=$PUBLIC_NWO but no commit-map at $COMMIT_MAP (run scripts/public-publish.sh)"
+  fi
 
   g fetch -q origin "${REF#origin/}" 2>/dev/null || true
 
@@ -151,7 +162,14 @@ cmd_pull() {
     # inherit one there. Here it is safe for the same reason it is there: the claim is about a tree.
     [ -f "$OFFBOX_DIR/$tree.json" ] && continue
 
-    verdict="$(check_conclusion "$sha" "$NWO" "$tmo")" || continue
+    if [ -n "$PUBLIC_NWO" ]; then
+      local psha
+      psha="$(awk -v s="$sha" '$1==s{print $2; exit}' "$COMMIT_MAP" 2>/dev/null)"
+      [ -n "$psha" ] || continue
+      verdict="$(check_conclusion "$psha" "$PUBLIC_NWO" "$tmo")" || continue
+    else
+      verdict="$(check_conclusion "$sha" "$NWO" "$tmo")" || continue
+    fi
     case "$verdict" in
       success)
         if [ "$DRY" -eq 1 ]; then
@@ -260,6 +278,23 @@ cmd_selftest() {
   printf '#!/bin/bash\nexit 9\n' > "$tmp/bin/gh"; chmod +x "$tmp/bin/gh"   # any query now fails
   pull --quiet >/dev/null 2>&1
   chk "P7 a stamped tree is not re-queried" "$first" "$(n_stamps)"
+
+  # P8 PUBLIC PROJECTION: with cc.publicRepo set, the query goes to the PUBLIC repo at the MAPPED
+  # sha, and the stamp still lands under the PRIVATE tree; an unmapped commit is not asked about.
+  rm -f "$tmp"/store/*.json
+  local priv; priv="$(git -C "$tmp/repo" rev-parse HEAD)"
+  printf 'old new\n%s %s\n' "$priv" 1111111111111111111111111111111111111111 > "$tmp/commit-map"
+  git -C "$tmp/repo" config cc.publicRepo acme/public-widgets
+  printf '#!/bin/bash\ncase "$*" in *"repos/acme/public-widgets/commits/1111111111111111111111111111111111111111/"*) echo completed:success ;; *) exit 7 ;; esac\n' \
+    > "$tmp/bin/gh"; chmod +x "$tmp/bin/gh"
+  CC_PUBLIC_COMMIT_MAP="$tmp/commit-map" pull --quiet >/dev/null 2>&1
+  chk "P8 a mapped commit is stamped from the PUBLIC repo's verdict" 1 "$(n_stamps)"
+  chk "P8b under the PRIVATE tree" 1 "$(find "$tmp/store" -name "$(git -C "$tmp/repo" rev-parse 'HEAD^{tree}').json" | grep -c .)"
+  rm -f "$tmp"/store/*.json
+  printf 'old new\n' > "$tmp/commit-map"
+  CC_PUBLIC_COMMIT_MAP="$tmp/commit-map" pull --quiet >/dev/null 2>&1
+  chk "P8c an unpublished (unmapped) commit writes nothing" 0 "$(n_stamps)"
+  git -C "$tmp/repo" config --unset cc.publicRepo
 
   [ "$st_fail" -eq 0 ] || { printf '\noffbox-green-pull --selftest: FAILED\n' >&2; return 1; }
   printf '\noffbox-green-pull --selftest: all controls green\n'

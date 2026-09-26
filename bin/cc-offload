@@ -457,7 +457,10 @@ DISPATCH_CONF="${CC_OFFLOAD_DISPATCH_CONF:-$ROOT/scripts/dispatch-projects.conf}
 # directory's basename — firing from a worktree (`wt-foo`) must not read as a different project.
 attached_project() {
   local url
-  url="$(git -C "$REPO" remote get-url origin 2>/dev/null)" || return 1
+  # cc.canonicalUrl survives an origin move (a repo renamed to a private working origin keeps its
+  # public name as its identity — docs/plans/PUBLIC_REPO_HYGIENE.md), so the label does too.
+  url="$(git -C "$REPO" config --get cc.canonicalUrl 2>/dev/null)" \
+    || url="$(git -C "$REPO" remote get-url origin 2>/dev/null)" || return 1
   [ -n "$url" ] || return 1
   url="${url%.git}"; url="${url%/}"
   printf '%s\n' "${url##*/}"

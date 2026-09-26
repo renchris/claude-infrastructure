@@ -1,0 +1,21 @@
+# gitleaks config for this repo and its public projection (scripts/public-publish.sh runs it over
+# every commit). Extends the default ruleset; the allowlist names the measured FALSE positives only.
+title = "claude-infrastructure"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "measured false positives (2026-09-26 full-history scan)"
+regexes = [
+  # Claude Code's own public OAuth client id — shipped in the vendor binary, not a secret
+  '''9d1c250a-e61b-44d9-88ed-5944d1962f5e''',
+  # a git blob sha printed as `key=` in a codex probe triage log
+  '''key=[0-9a-f]{40}''',
+]
+paths = [
+  # curl-gate suites feed deliberately fake bearer tokens/cookies to the gate under test
+  '''tests/curl-gate-(decide|redirect)\.bats''',
+  # a codex probe triage log prints git blob shas as `key=<sha>`
+  '''docs/research/codex-probe-screen-2026-08-10/TRIAGE-2026-08-15\.md''',
+]

@@ -488,3 +488,4 @@ homebrew.mxcl.postgresql@14        | run    | 0    | -    | 12 | 42-postgresql14
 #              not live. 18-fleet-activate.sh reconciles every `expect = run` label straight from this
 #              manifest, so it is correct for this row by construction.
 com.claude.browse-mirror           | run    | 600  | auto | 11 | 18-fleet-activate.sh
+com.claude.public-publish         | staged | 10800 | auto | 12 | 46-public-repo-cutover.sh

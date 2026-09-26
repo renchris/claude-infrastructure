@@ -36,7 +36,7 @@ needs is this file plus `~/Development/claude-private/` (the private store, belo
 | Phone numbers, street/home/lodging data, order/case/account numbers | REMOVE | contact / financial data |
 | Private third parties (names with contact data, their addresses, quoted messages) | REMOVE | not ours to publish |
 | Personal-life documents (housing, disputes, vendor claims, message-history extracts) | REMOVE (whole file → private store) | the file IS the personal data |
-| Dia profile names | REMOVE (overlay) | per-account personal labels |
+| Dia profile names | KEEP (values moved to the overlay anyway) | generic labels, not identifying |
 | Owner name "Chris Ren", GitHub login, macOS short name in `/Users/<name>` paths, hostname, `com.<name>.` launchd labels | KEEP | the public repo's OWNER identity: already public on the GitHub profile and on every commit; rewriting ~7,500 path hits would break fixtures and launchd plists for zero privacy gain |
 | Customer business names and public tenant hostnames | KEEP | public businesses; guest data / private contacts under them are REMOVE |
 
@@ -58,8 +58,8 @@ see `skills/LOCAL_ONLY.md`). Holds:
 | A3 | Email gate: MAILBOXES + RECIPE rule 5 rendered from overlay `ms365.{mailboxes,roles}`; read as JSON, not imported (suites run mutant copies from tmp). Rendered RECIPE differs only in the generalised vendor anecdote | DONE `728db7499` |
 | A4 | Git identity gate reads `git_identity.email`; missing overlay refuses in-scope commits | DONE `668c450d4` |
 | A5 | Relocation to `~/Development/claude-private`: vendor/uidotsh, grok-wiki-cli, grok-wiki-custom, repo-wiki, kpmg-deck (its own nested repo, moved whole), BMO renders; install.sh private-overlay leg; MIT/Apache notices; visual-direction example rewritten | DONE `6ced7d2aa` |
-| A6 | Docs/tests/prose scrub: personal docs moved whole to the private store; the rest rewritten with the SAME redaction map Phase B uses, so the projected tip tree equals the working tip tree | todo |
-| A7 | Land-gate lint `scripts/public-hygiene-lint.sh` wired into `scripts/ship-land.sh`, with `--selftest` mutation control | todo |
+| A6 | 112 personal-life docs moved whole to the private store (same relative path) + `skills/outlook-cleanup` made local-only (`771383db4`); model-facing texts name mailboxes by role (`354d43e1e`); the remaining 96 files take the projection's own tip tree, so **working tip tree == projected tip tree** by construction | DONE (see git log) |
+| A7 | `scripts/public-hygiene-lint.py` (private-map identifier arm + unlisted e-mail + phone + local-only paths; `--own-range`/`--tree`/`--history`; rg fast path) wired into `scripts/ship-land.sh` every land, own-scope; `--selftest` + 2 mutation tests in `tests/public-hygiene.bats` | DONE (see git log) |
 
 Ordering constraint (from the consumer map): re-point every live link to the private store first,
 then untrack. `deploy-live`'s `orphan_prune` deletes dead links whose target is inside the
@@ -88,6 +88,30 @@ deterministic `git filter-repo` projection of `main` at the original URL.** Meas
   disabled on the private repo before the visibility flip (macOS minutes).
 - Exposure that cannot be recalled: fork `zeroxvee/claude-infrastructure` (305 commits; 2 tip
   files carry identifiers); GitHub cached views of old shas until Support purges them.
+
+### Phase B — built
+
+- `scripts/public-publish.sh`: main-only clone → `git filter-repo --preserve-commit-hashes`
+  (paths, replace-text, replace-message, mailmap) → verifier (lint `--history` + gitleaks over the
+  projection) → fast-forward check → optional `--push --confirm <owner/repo>`; persists the
+  commit-map to the private store. Measured on this branch: 5,792 commits, ~2.5 min end to end,
+  `projection-verifier: 0 identifier hit(s), 0 gitleaks finding(s)`.
+- **The redaction map is LITERALS ONLY.** filter-repo runs every regex rule as a full pass over
+  ~1.3 GB of history blobs: a 12-regex map ran >11 min, 142 literals ~106 s. Each spelling was
+  enumerated from ALL of main's history (`rg -o -i` over exported blobs), longest first; a NEW
+  spelling is caught by the lint's generic e-mail/phone arms and then added. filter-repo applies
+  all literals before any regex and does NOT skip `#` lines — the publisher strips them.
+- Couplings, each inert until the cutover sets its key: `cc.canonicalUrl` (DoD store key,
+  `cc-offload` project label), `cc.publicRepo` + commit-map (`offbox-green-pull.sh`, selftest P8),
+  `cloud-create-api.py` default `--repo` = this checkout's origin (a cloud VM pushes, so it must
+  follow the PRIVATE repo).
+- Recurring publisher: `scripts/public-publish-tick.sh` via launchd `com.claude.public-publish`
+  (every 3 h), declared `staged`; inert until `publish-enabled` exists in the private store.
+- The one irreversible step is the operator's: `docs/activation/pending-activation/46-public-repo-cutover.sh`
+  (dry run by default; `--confirm renchris/claude-infrastructure` executes; bundle backup first;
+  self-verifying post-check re-clones the public repo and scans its whole history). Tested offline
+  end to end in `tests/public-hygiene.bats` (gh state machine incl. the rename redirect).
+- After the cutover: flip `launchd/fleet.manifest`'s `com.claude.public-publish` row to `run`.
 
 ## Known constraints
 

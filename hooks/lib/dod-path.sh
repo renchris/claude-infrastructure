@@ -33,9 +33,13 @@
 
 _dod_dir() { printf '%s' "${WRAP_DOD_DIR:-$HOME/.claude/autonomy/dod}"; }
 
-_dod_repo_key() { # $1=cwd → sha16 of remote.origin.url, or nothing (local-only repo)
+_dod_repo_key() { # $1=cwd → sha16 of the repo's identity URL, or nothing (local-only repo)
+  # cc.canonicalUrl, when set, is the repo's IDENTITY across an origin move: claude-infrastructure's
+  # working origin moved to a private repo while its public URL became a projection
+  # (docs/plans/PUBLIC_REPO_HYGIENE.md), and every stored DoD is keyed on the old URL's hash.
   local u
-  u="$(git -C "${1:-.}" config --get remote.origin.url 2>/dev/null || true)"
+  u="$(git -C "${1:-.}" config --get cc.canonicalUrl 2>/dev/null || true)"
+  [ -n "$u" ] || u="$(git -C "${1:-.}" config --get remote.origin.url 2>/dev/null || true)"
   [ -n "$u" ] || return 0
   printf '%s' "$u" | shasum 2>/dev/null | cut -c1-16 | tr -d '[:space:]'
 }
