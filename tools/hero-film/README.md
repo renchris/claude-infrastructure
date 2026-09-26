@@ -562,6 +562,31 @@ px), window → `~/.claude` 2.58 s (2,480), home 2.49 s (2,387); the FILM's swin
 
 ## Verification
 
+### Round 3 build, 2026-09-26
+
+```sh
+npm run hero:pacing                       # the pacing gate, both cuts
+bash scripts/hero-film-render.sh loop     # runs the gate, captures at 2x, softens by speed, encodes both grades
+bash scripts/hero-film-render.sh film     # runs the gate, captures at 2x + H.264 4K
+bash scripts/hero-film-render.sh verify   # decode the shipped WebPs; seam, ghosts, sheets
+```
+
+| Check | Dark | Light |
+|---|---|---|
+| Pacing gate | `PACING PASS`, both cuts | |
+| Picture speed, max | loop 1,589 px/s (0.83 frame widths a second), film 1,689 (bound 2,000; round two 865, round one 7,044) | |
+| Turn, acceleration, max | loop 14.7 °/s, 2,755 px/s²; film 31.8, 3,172 (bounds 40, 4,500) | |
+| Reading margin, min | +0.02 s (the racks' line, against its 1.2 s quiet); every line, chip and the card stands its full reading time | |
+| LOOP | 18,619,998 bytes; 1676 × 943, 35,970 ms, 1,150 stored frames (401 in flights) | 14,425,336 bytes; 1,147 stored frames |
+| Loop count (`webpinfo`) | 0 (infinite) | 0 |
+| Ghosts, near-lossless / lossy | 0 of 1 / 0 of 1,149 | 0 of 1 / 0 of 1,146 |
+| Seam, decoded (> 15 %) | 216 px (round two 226) | 594 px (round two 780) |
+| FILM | `launch-film.mp4`: H.264 High L5.2, yuv420p, 3840 × 2160, 60 fps, 2,903 frames, 48.383 s, 32,167,669 bytes (CRF 22, `-tune film`); last frame 7,549 px from frame 0 at 6 % fuzz (0.09 %), against 5,390 for an ordinary creep step | — |
+
+The first film capture's parent script was reaped mid-run (it had been started with a shell `&` inside
+a tool call); the 1,515 frames it had not written were captured by time (`--times`) into the same
+sequence, so the encode is one uninterrupted 60 fps run.
+
 ### Round 2 build, 2026-09-25
 
 ```sh
