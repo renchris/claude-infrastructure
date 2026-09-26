@@ -227,15 +227,27 @@ reason() { jq -r '.reason'      "$DESK_BRIEF_IDL" 2>/dev/null | tail -1; }
 }
 
 @test "desk-invariant: resolves its brief through a symlink too (the fixed default)" {
-  mkdir -p "$BATS_TEST_TMPDIR/fakescripts"
-  ln -s "$REPO/scripts/desk-invariant.sh" "$BATS_TEST_TMPDIR/fakescripts/desk-invariant.sh"
-  # --selftest is hermetic; if SCRIPT_DIR were unresolved the script still runs, so assert the
-  # resolution directly: the default BRIEF must land on a file that EXISTS.
-  run bash -c '
-    s="'"$BATS_TEST_TMPDIR"'/fakescripts/desk-invariant.sh"
-    while [ -L "$s" ]; do d="$(cd -P "$(dirname "$s")" && pwd)"; s="$(readlink "$s")"
-      case "$s" in /*) ;; *) s="$d/$s" ;; esac; done
-    d="$(cd -P "$(dirname "$s")" && pwd)"
-    test -f "$d/../docs/templates/desk-boot-brief.md"'
+  # Drive the REAL script through a symlink with DESK_INVARIANT_BRIEF unset, into the no-desk
+  # respawn, and read which --prompt-file the fire received. Unresolved, SCRIPT_DIR would be the
+  # symlink's dir, the default brief a path that does not exist, and fire_replacement would refuse
+  # ("boot brief missing") — the live ~/.claude/scripts entry point is exactly such a symlink.
+  local c="$BATS_TEST_TMPDIR/di" s want
+  mkdir -p "$c/fakescripts" "$c/roles" "$c/registry" "$c/projects" "$c/wait" "$c/state" "$c/stubs" \
+    "$c/fired" "$c/home"
+  ln -s "$REPO/scripts/desk-invariant.sh" "$c/fakescripts/desk-invariant.sh"
+  for s in it2 notify push ccnotify; do printf '#!/bin/bash\nexit 0\n' > "$c/stubs/$s"; chmod +x "$c/stubs/$s"; done
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/fire.log"\n' "$c" > "$c/stubs/fire"; chmod +x "$c/stubs/fire"
+  printf 'UGONE\n' > "$c/roles/desk"                  # a role holder with no registry row ⇒ no-desk
+  run env -u DESK_INVARIANT_BRIEF -u CC_DESK_OPTIN HOME="$c/home" CC_MAILBOX_DIR="$c/mailbox" \
+    DESK_INVARIANT_ROLE=desk DESK_INVARIANT_ROLES_DIR="$c/roles" DESK_INVARIANT_REGISTRY_DIR="$c/registry" \
+    DESK_INVARIANT_PROJECT_ROOTS="$c/projects" DESK_INVARIANT_WAIT_DIR="$c/wait" \
+    DESK_INVARIANT_STATE_DIR="$c/state" DESK_INVARIANT_IDL="$c/idl.jsonl" DESK_INVARIANT_IT2="$c/stubs/it2" \
+    DESK_INVARIANT_NOTIFY="$c/stubs/notify" DESK_INVARIANT_PUSH="$c/stubs/push" \
+    DESK_INVARIANT_NOTIFY_BIN="$c/stubs/ccnotify" DESK_INVARIANT_FIRE_BIN="$c/stubs/fire" \
+    DESK_INVARIANT_CANNED_CWD="$c" DESK_INVARIANT_FIRED_DIR="$c/fired" \
+    "$c/fakescripts/desk-invariant.sh" --once
   [ "$status" -eq 0 ]
+  [ -f "$c/fire.log" ]                                # the fire happened at all (brief guard passed)
+  want="$(cd -P "$REPO/scripts" && pwd)/../docs/templates/desk-boot-brief.md"
+  grep -qF -- "--prompt-file $want " "$c/fire.log"
 }

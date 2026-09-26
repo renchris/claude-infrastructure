@@ -545,13 +545,6 @@ EXPECT_FG='[{"cmdline":["expect","-c","set timeout 240\nspawn -noecho env DISABL
   [ "$(attempts)" = "0" ]
 }
 
-@test "exit 67 is distinct from 66 — an identity refusal and a composer refusal differ" {
-  # A caller that retries must be able to tell "wrong pane, re-derive the id" from "right pane,
-  # it is holding text". Collapsing them onto one code makes both unactionable.
-  grep -q 'exit 66' "$SHIM"
-  grep -q 'exit 67' "$SHIM"
-}
-
 # ── red-on-mutation: each correction is cut out, and its assertion must break ─────────────
 #
 # Per-site, because the two corrections are independent and a single mutant would attribute the

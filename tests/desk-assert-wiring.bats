@@ -6,8 +6,9 @@
 # makes the guard actually RUN in prod, so a future edit cannot silently regress it back to a dead
 # capability or the discipline-only prose it replaces:
 #
-#   (1) INSTALL leg   — desk-assert lands on PATH via wiring-all.sh's symlink loop, so the resident
-#                       rule's `desk-assert <sid>` resolves in prod (not command-not-found).
+#   (1) INSTALL leg   — desk-assert lands on PATH via install.sh's PATH-tools pass (the bin/desk-*
+#                       glob), so the resident rule's `desk-assert <sid>` resolves in prod (not
+#                       command-not-found).
 #   (2) GUARD leg     — bin/desk-assert exists, is executable, and is invocable (--help exits 0).
 #   (3) RESIDENT-RULE — the canned boot brief the LIVE desk-invariant fires from (docs/templates/
 #       leg             desk-boot-brief.md, per scripts/desk-invariant.sh:48) NAMES + INVOKES
@@ -17,19 +18,34 @@
 #                       prose triad ("keep two-way comms grounded") into a run-the-executable rule.
 #
 # RED-provable: revert the boot-brief invocation to bare prose and every RESIDENT-RULE test goes red;
-# drop desk-assert from wiring-all's loop and the INSTALL test goes red.
+# drop bin/desk-* from install.sh's PATH-tools glob and the INSTALL test goes red.
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   DA="$REPO/bin/desk-assert"
   BRIEF="$REPO/docs/templates/desk-boot-brief.md"
-  WIRING="$REPO/docs/activation/wiring-all.sh"
 }
 
 # ── (1) INSTALL leg ───────────────────────────────────────────────────────────────────────────
-@test "install: desk-assert is in wiring-all.sh's symlink install loop (resolves on PATH in prod)" {
-  # the loop does `ln -sf "$REPO/bin/$t" "$BIN/$t"` over a token list that must include desk-assert
-  grep -qE '(^|[[:space:]])desk-assert([[:space:]]|\\|$)' "$WIRING"
+@test "install: install.sh's PATH-tools pass selects desk-assert (resolves on PATH in prod)" {
+  # Prod ~/.claude/bin is populated by install.sh's PATH-tools loop, not by the run-by-hand
+  # docs/activation/wiring-all.sh. EXTRACT that loop's own header and run it over the real bin/ with a
+  # recording body in place of link_file, so a restated glob cannot drift from the one that ships.
+  # shellcheck disable=SC2016  # the needle IS the literal header text, $REPO_DIR unexpanded
+  [ "$(grep -cF 'for tool in "$REPO_DIR"/bin/' "$REPO/install.sh")" -eq 1 ]
+  local hdr sel="$BATS_TEST_TMPDIR/selected.txt"; : > "$sel"
+  # shellcheck disable=SC2016  # same literal needle
+  hdr="$(grep -F 'for tool in "$REPO_DIR"/bin/' "$REPO/install.sh")"
+  # shellcheck disable=SC2034  # read by the eval'd loop header below, which shellcheck cannot see
+  REPO_DIR="$REPO"
+  eval "$hdr
+    [ -f \"\$tool\" ] || continue
+    basename \"\$tool\" >> \"$sel\"
+  done"
+  [ "$(grep -cxF 'desk-assert' "$sel")" -eq 1 ]
+  # NEG control: the pass is still selective, so "everything is linked" cannot satisfy the line above.
+  [ -f "$REPO/bin/claude-accounts" ]
+  [ "$(grep -cxF 'claude-accounts' "$sel")" -eq 0 ]
 }
 
 # ── (2) GUARD leg ─────────────────────────────────────────────────────────────────────────────

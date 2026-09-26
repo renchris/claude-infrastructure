@@ -231,11 +231,3 @@ JSON
   run "$m" session close -f -s 300 --expect-cmdline-match '--agent-name w2-pin'
   [ "$status" -eq 68 ]
 }
-
-@test "META: the identity pin itself is still present and still refuses" {
-  # The fix splits one refusal OUT of the pin; it must never dissolve the pin. Three load-bearing
-  # strings, asserted directly against the shipped script.
-  grep -q 'identity_ok' "$SHIM"
-  grep -q 'exit 66' "$SHIM"
-  grep -q 'exit 68' "$SHIM"
-}

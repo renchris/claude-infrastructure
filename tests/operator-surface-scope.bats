@@ -221,18 +221,43 @@ readout_run() { printf '{"session_id":"s1","cwd":"%s"}' "$RWD" | "$REPO/hooks/op
   [[ "$output" == *"HANDOFF-INTENT PARITY"* ]]
 }
 
+# notify.sh, hermetic: side-effecting binaries stubbed (nothing plays on the host), a private artifact
+# dir, and the headless gate off — a bats run has no tty, which would silence every arm for a reason
+# unrelated to the assignee guard (the pattern tests/notify.bats setup() uses).
+notify_env() {
+  export CC_NOTIFY_DIR="$BATS_TEST_TMPDIR/nty"; mkdir -p "$CC_NOTIFY_DIR"
+  local stub="$BATS_TEST_TMPDIR/stubbin"; mkdir -p "$stub"
+  # shellcheck disable=SC2016  # $2 belongs to the generated stub, not to this shell
+  printf '#!/bin/bash\nprintf "%%s\\n" "$2" >> "%s/osa.argv"\n' "$CC_NOTIFY_DIR" > "$stub/osascript"
+  printf '#!/bin/bash\nexit 0\n' > "$stub/afplay"
+  chmod +x "$stub/osascript" "$stub/afplay"
+  export PATH="$stub:$PATH" NTY_OSA_TIMEOUT_BIN="" CC_NOTIFY_HEADLESS=1
+}
+notify_run() { # <event> <sid>
+  run bash -c 'printf "{\"session_id\":\"%s\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"ls\"}}" "$2" | "$0" "$1"' \
+    "$REPO/hooks/notify.sh" "$1" "$2"
+}
+nty_played() { grep -q "Playing .* for $1 \[$2" "$CC_NOTIFY_DIR/claude-notify.log" 2>/dev/null; }
+
 @test "S1 notify: no chime for an assignee's turn-complete" {
-  assignee_ancestry tm t1; team_cfg t1 tm
-  export CC_NOTIFY_SILENT=1
-  run bash -c '"$0" complete </dev/null' "$REPO/hooks/notify.sh"
+  notify_env; assignee_ancestry tm t1; team_cfg t1 tm
+  notify_run complete sa
   [ "$status" -eq 0 ]
+  ! nty_played complete sa || false
+  # CONTROL: the identical call from a LEAD does chime, so the silence above is the guard's.
+  lead_ancestry
+  notify_run complete sl
+  [ "$status" -eq 0 ]
+  nty_played complete sl
 }
 
 @test "S1 notify: a PERMISSION page is NOT suppressed — the operator must still answer it" {
-  assignee_ancestry tm t1; team_cfg t1 tm
-  # Scope check only: `complete` takes the guarded branch, `permission` must not even consult it.
-  run grep -c 'EVENT_TYPE" = "complete"' "$REPO/hooks/notify.sh"
-  [ "$output" = "1" ]
+  # `complete` takes the guarded branch; `permission` must not even consult it.
+  notify_env; assignee_ancestry tm t1; team_cfg t1 tm
+  notify_run permission sa
+  [ "$status" -eq 0 ]
+  nty_played permission sa
+  grep -q 'display notification "ls"' "$CC_NOTIFY_DIR/osa.argv"
 }
 
 # ── S3: the CONTRACT hooks stay armed — a teammate is still held to its own work ─────────────────
