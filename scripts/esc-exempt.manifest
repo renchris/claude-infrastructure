@@ -84,6 +84,13 @@ scripts/gate-classify.sh
 # BATS_TEST_TMPDIR, so a destructive statement in a test reaches a temp fixture and cannot reach
 # the operator's live ~/.claude state at all.
 tests/*
+# skills/kpmg-deck/examples/content.py — the only match is a QUOTED string on a demo slide (a mock
+# terminal line rendered as text into a .pptx); python-pptx writes it into a slide and nothing
+# executes it, so no store is reachable. The file is also leaving this repo for good: it quotes a
+# licensed brand book, becomes local-only (docs/plans/PUBLIC_REPO_HYGIENE.md), and the land gate's
+# public-hygiene lint refuses re-tracking it — so its only diff here is the deletion that removes
+# the string. Scoped to the ONE file, not skills/*.
+skills/kpmg-deck/examples/content.py
 
 # ── NON-ENTRIES (named deliberately, so the omission is a decision and not an oversight) ─────────
 # vendor/*  — NOT exempt. Vendored third-party code (vendor/codex-security) executes real SQL
