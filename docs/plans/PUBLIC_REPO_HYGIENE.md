@@ -53,11 +53,11 @@ see `skills/LOCAL_ONLY.md`). Holds:
 
 | # | Item | State |
 |---|---|---|
-| A1 | Identity overlay: `hooks/lib/identity.{py,sh}`, `identity.example.json`, `tests/fixtures/identity.fixture.json`, `tests/identity-overlay.bats` | in progress |
-| A2 | Readers: `bin/claude-accounts` load_cfg merge; `bin/cc-relogin`, `bin/cc-url-open`, `scripts/cloud-create-api.py`, `scripts/handoff-fire.sh` keychain, `scripts/relogin-probes/e1-concurrent-logins.sh`; strip the 4 personal fields from `accounts.json` | todo |
-| A3 | `hooks/enforce-email-formatting.py`: MAILBOXES + RECIPE rendered from the overlay; its 6 suites on the fixture; pinned-blob red-proof arms derive inputs from the blob | todo |
-| A4 | Git identity gate: `githooks/pre-commit`, `githooks/pre-push`, `scripts/git-identity-assert.sh`, `scripts/postland-verify.sh` read `git_identity` from the overlay (fail CLOSED when absent; `CC_IDENTITY_FILE` honoured only under `CC_GIT_IDENTITY_TEST=1`, added to the validate-bash seal) | todo |
-| A5 | Local-only relocation: `vendor/uidotsh`, `skills/{grok-wiki-cli,grok-wiki-custom,repo-wiki,kpmg-deck}`, BMO character renders; live links re-pointed into the private store BEFORE untracking; install.sh private leg; `skills/LOCAL_ONLY.md` rows; NOTICE for `test-audit` (MIT) and `agent-browser` (Apache-2.0); rewrite the quoted ui.sh example in `skills/visual-direction` | todo |
+| A1 | Identity overlay: `hooks/lib/identity.{py,sh}`, `identity.example.json`, `tests/fixtures/identity.fixture.json`, `tests/identity-overlay.bats` | DONE `d588b356d` |
+| A2 | Readers: `claude-accounts` load_cfg merge, `cc-offload`, `cc-url-open`, e1 probe; `accounts.json` loses email/mailbox/dia_profile. `keychain_account` STAYS (it is the macOS short name — owner identity, KEEP). Proof: `--relogin-info` byte-equal for all 4 accounts | DONE `178e0f595` |
+| A3 | Email gate: MAILBOXES + RECIPE rule 5 rendered from overlay `ms365.{mailboxes,roles}`; read as JSON, not imported (suites run mutant copies from tmp). Rendered RECIPE differs only in the generalised vendor anecdote | DONE `728db7499` |
+| A4 | Git identity gate reads `git_identity.email`; missing overlay refuses in-scope commits | DONE `668c450d4` |
+| A5 | Relocation to `~/Development/claude-private`: vendor/uidotsh, grok-wiki-cli, grok-wiki-custom, repo-wiki, kpmg-deck (its own nested repo, moved whole), BMO renders; install.sh private-overlay leg; MIT/Apache notices; visual-direction example rewritten | DONE `6ced7d2aa` |
 | A6 | Docs/tests/prose scrub: personal docs moved whole to the private store; the rest rewritten with the SAME redaction map Phase B uses, so the projected tip tree equals the working tip tree | todo |
 | A7 | Land-gate lint `scripts/public-hygiene-lint.sh` wired into `scripts/ship-land.sh`, with `--selftest` mutation control | todo |
 
@@ -67,7 +67,27 @@ checkout, and never judges links that point elsewhere.
 
 ## Phase B — clean the public history without rewriting the working one
 
-Design and measurements: to be filled from the determinism experiment (see § Phase B research).
+**Decision (conviction 92%): rename the current repo to a PRIVATE working origin, publish a
+deterministic `git filter-repo` projection of `main` at the original URL.** Measured
+(`/tmp/prh-census/S5-phaseB.md`, experiment scripts `/tmp/prh-phaseb/`):
+- Determinism: 6 cut points (incl. a pruned-empty tip, the one merge, its side branch) — every
+  shorter projection is a strict prefix of the longer one, 0 of 5,799 commit-map rows disagree;
+  a re-run is bit-identical. **`--preserve-commit-hashes` is mandatory**: without it the output
+  depends on emission order (4,130 commits differ under `--date-order`) and on the ref set.
+- Full projection ~25 s; build from a dedicated main-only clone, never `--source <bare> --push`.
+- Rejected: rewrite-in-place + force-push (all 5,799 main shas change; 2,221 cited in docs and
+  3,821 in the autonomy stores); private-only (hermetic CI ≈ 30,700 macOS min/month ≈ $1,900 on a
+  private repo, and contradicts the ruling); GitHub-native (nothing redacts history).
+- Rule-set freeze: any later change to the redaction map re-projects old commits = a
+  non-fast-forward republish. The publish script must refuse non-FF unless explicitly re-baselined.
+- Cutover couplings (all must be handled before the public repo takes the name):
+  `scripts/cloud-create-api.py:500` default `--repo` slug; `hooks/lib/dod-path.sh` keys the DoD
+  store on `sha(remote.origin.url)`; `bin/cc-offload` `attached_project` uses the origin basename;
+  `scripts/offbox-green-pull.sh` queries check-runs on origin by private sha (must query the
+  public repo and map via the persisted commit-map); `.github/workflows/hermetic.yml` must be
+  disabled on the private repo before the visibility flip (macOS minutes).
+- Exposure that cannot be recalled: fork `zeroxvee/claude-infrastructure` (305 commits; 2 tip
+  files carry identifiers); GitHub cached views of old shas until Support purges them.
 
 ## Known constraints
 
