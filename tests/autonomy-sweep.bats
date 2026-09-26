@@ -279,6 +279,20 @@ mk_marker() { # <file> <pane> <mode> [young]  — aged 1 h by default (> the 900
   grep -q '"disposition":"abstained"' "$CC_IDL"
 }
 
+# ── the fleet's evidence is the file the sweep actually touches ─────────────────────────────────
+@test "each run touches the heartbeat that launchd/fleet.manifest names as this job's evidence" {
+  local ev hb
+  ev="$(awk -F'|' '$1 ~ /^com\.chrisren\.autonomy-sweep[[:space:]]*$/ {gsub(/[[:space:]]/,"",$4); print $4}' \
+        "$REPO/launchd/fleet.manifest")"
+  # shellcheck disable=SC2088  # the manifest stores the literal ~/ text; this compares text, not a path
+  [ "$ev" = "~/.claude/autonomy/autonomy-sweep.heartbeat" ]
+  hb="$HOME/.claude/autonomy/autonomy-sweep.heartbeat"
+  [ ! -e "$hb" ]
+  run "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ -f "$hb" ]
+}
+
 # ── new alarm → exactly one notify, once (dedup on the second run) ──────────────
 @test "a new alarm → one notify to the desk role; a second run (nothing new) abstains" {
   echo '{"kind":"alarm","detail":"never-stuck gate red"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"

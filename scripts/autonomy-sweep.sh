@@ -379,6 +379,12 @@ SWEEP_T0="${CC_SWEEP_T0:-$(date +%s 2>/dev/null || printf 0)}"
 SWEEP_SELF_BOUND_S="${CC_SWEEP_SELF_BOUND_S:-400}"
 case "$SWEEP_SELF_BOUND_S" in ''|*[!0-9]*) SWEEP_SELF_BOUND_S=400 ;; esac
 case "$SWEEP_T0" in ''|*[!0-9]*) SWEEP_T0=0 ;; esac
+# ── RUN HEARTBEAT — the fleet's proof that this job executes (launchd/fleet.manifest) ─────────────
+# The manifest row used `auto` evidence, i.e. the plist's StandardOutPath. This sweep writes nothing
+# to stdout, so that file sat at 0 bytes from 2026-09-17 and cc-fleet read a job with 826 clean runs
+# (last exit 0) as STALLED 201h. Touched at the START of every run, so a pass that later yields to
+# its self-bound still proves it ran. A failed touch is left to show: the fleet then says STALLED.
+: > "$HOME/.claude/autonomy/autonomy-sweep.heartbeat" 2>/dev/null
 # ── PER-PHASE ELAPSED (backlog 6de092171021) ──────────────────────────────────────────────────────
 # WHY THIS EXISTS: this sweep could not be diagnosed, only guessed at. Measured 2026-09-09, the
 # lower half had not run for ~36 h — 52 ticks in 24 h, 26 self-bounded and 26 SIGTERM'd by
