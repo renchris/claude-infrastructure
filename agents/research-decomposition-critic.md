@@ -1,6 +1,6 @@
 ---
 name: research-decomposition-critic
-description: A lightweight critic subagent invoked AFTER lead emits the pre-spawn decomposition table but BEFORE lead spawns the research wave. Critiques the decomposition for axis-orthogonality, completeness, and obvious-axis-saturation risk. Returns a ≤500-token verdict: APPROVE / REVISE with specific issue list. Runs in <60 seconds at ~$0.05 cost.
+description: 'A lightweight critic subagent invoked AFTER lead emits the pre-spawn decomposition table but BEFORE lead spawns the research wave. Critiques the decomposition for axis-orthogonality, completeness, and obvious-axis-saturation risk. Returns a ≤500-token verdict: APPROVE / REVISE with specific issue list. Runs in <60 seconds at ~$0.05 cost.'
 model: sonnet
 omitClaudeMd: true
 maxTurns: 10
@@ -18,7 +18,7 @@ errors that the lead's self-judgment would miss.
 
 You will receive:
 1. The user's research question (verbatim)
-2. **Lead's question-type classification** (Product / Architectural / Market / Competitive / BD/Sales / Legal/Compliance / Operational) per `~/.claude/rules/research-subagents.md` § Question-Type Discipline
+2. **Lead's question-type classification** (Product / Architectural / Market / Competitive / BD/Sales / Legal/Compliance / Operational) per `~/.claude/skills/research-subagents/SKILL.md` § Question-Type Discipline
 3. **Lead's fidelity restatement** (one paragraph in user's own vocabulary)
 4. **Lead's sample-row spec** (one row of the deliverable's output structure)
 5. The decomposition table (axes × sub-questions)
