@@ -336,12 +336,39 @@ def _num_flag(args, name):
     return v
 
 
+def _identity_module():
+    """hooks/lib/identity.py from this checkout (bin/ is symlinked, so resolve through the link),
+    else from the live layer. None when neither exists — personal fields then stay absent and
+    probe rows degrade to blank labels, never to a crash."""
+    import importlib.util
+    me = globals().get("__file__")  # absent when a suite execs this source via `python3 -c`
+    cands = [os.path.join(os.path.dirname(os.path.realpath(me)), "..", "hooks", "lib", "identity.py")] if me else []
+    cands.append(os.path.expanduser("~/.claude/hooks/lib/identity.py"))
+    for cand in cands:
+        if os.path.isfile(cand):
+            spec = importlib.util.spec_from_file_location("cc_identity", cand)
+            mod = importlib.util.module_from_spec(spec)
+            try:
+                spec.loader.exec_module(mod)
+            except Exception:  # a broken helper must not take the dashboard down
+                return None
+            return mod
+    return None
+
+
 def load_cfg(need_claude_bin=True):
     try:
         with open(CFG_PATH) as f:
             cfg = json.load(f)
     except (OSError, json.JSONDecodeError) as e:
         sys.exit(f"claude-accounts: cannot read SSOT {CFG_PATH}: {e}")
+    # Personal fields (email, mailbox, dia_profile, keychain_account) live in the gitignored
+    # identity overlay, not in this public repo's accounts.json — merged here, filling only what
+    # the SSOT row lacks. A synthetic CLAUDE_ACCOUNTS_JSON fixture is never mixed with the real
+    # overlay unless the suite also sets CC_IDENTITY_FILE (hooks/lib/identity.py).
+    _ident = _identity_module()
+    if _ident is not None and not _ident.overlay_suppressed("CLAUDE_ACCOUNTS_JSON"):
+        _ident.merge_accounts(cfg)
     for a in cfg["accounts"]:
         a["config_dir"] = os.path.expanduser(a["config_dir"])
     for k in ("claude_bin", "model_config_ssot", "dia_local_state"):
@@ -1545,7 +1572,7 @@ def probe_account(cfg, acct, kc, k_live, ledger, prev, no_heal):
     dashboard for ALL FOUR accounts (and every consumer of --json/--route/--rank) instead
     of degrading the single bad row."""
     name = acct["name"]
-    row = {"acct": name, "email": acct["email"], "dia_profile": acct["dia_profile"],
+    row = {"acct": name, "email": acct.get("email"), "dia_profile": acct.get("dia_profile"),
            "launcher": acct["launcher"], "k": k_live, "auth": None}
     creds, kstate = read_creds(acct["config_dir"], kc)
     if kstate != "present":
@@ -5252,7 +5279,7 @@ def render_table(rows, cfg, win, cached, prev=None):
             print(f"  {name} {c(glyph, grgb)} {k}  "
                   + c(msg, RED if a in ("logged-out", "token-invalid") else AMBER)
                   + lastknown
-                  + c(f"  ({r['email']})", GRAY, dim=True))
+                  + c(f"  ({r.get('email') or '-'})", GRAY, dim=True))
         else:
             srh = r.get("session_reset_h")
             # the 5h reset sits WITH the 5h usage: a high 5h% + soon reset = capacity relief
@@ -5282,7 +5309,7 @@ def render_table(rows, cfg, win, cached, prev=None):
             fix = (f"{r['launcher']} → /login  (or: account-relogin skill)"
                    if a in LOGIN_FIXABLE else f"claude-accounts --relogin-info {r['acct']}")
             alerts.append(c("○ ", RED) + c(f"{r['acct']} {a}", RED, bold=True)
-                          + c(f" → {r['email']} · Dia “{r['dia_profile']}”", GRAY)
+                          + c(f" → {r.get('email') or '-'} · Dia “{r.get('dia_profile') or '-'}”", GRAY)
                           + c(f" · fix: {fix}", GRAY, dim=True))
         elif a == "healed":
             alerts.append(c("↻ ", PERI) + c(f"{r['acct']} token was stale — healed headlessly", PERI)
@@ -5319,7 +5346,7 @@ def render_table(rows, cfg, win, cached, prev=None):
                               RED if gone else AMBER, bold=True)
                           + c(" — a refresh does NOT renew it", GRAY)
                           + c(f" · {r['launcher']} → /login", GRAY, dim=True)
-                          + c(f" · {r['email']} · Dia “{r['dia_profile']}”", GRAY, dim=True))
+                          + c(f" · {r.get('email') or '-'} · Dia “{r.get('dia_profile') or '-'}”", GRAY, dim=True))
         if r.get("stale_quota"):
             # The numbers on this row are historical AND the row is router-excluded (every
             # inheritance path leaves row["error"] set, which _excluded() bails on). Say both

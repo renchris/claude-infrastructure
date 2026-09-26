@@ -931,10 +931,15 @@ cmd_open() {
   # identity-scoped link without its identity is a trap, not a link.
   if [ -n "$acct" ]; then
     local email profile
+    # email/dia_profile: the SSOT row first, else the gitignored identity overlay (this repo is
+    # public, so personal values are not in accounts.json — hooks/lib/identity.sh).
     email="$(jq -r --arg a "$acct" '.accounts[]? | select(.name==$a) | .email // empty' \
              "$HOME/.claude/accounts.json" 2>/dev/null | head -1)"
     profile="$(jq -r --arg a "$acct" '.accounts[]? | select(.name==$a) | .dia_profile // empty' \
              "$HOME/.claude/accounts.json" 2>/dev/null | head -1)"
+    local _idf="${CC_IDENTITY_FILE:-$HOME/.claude/identity.local.json}"
+    [ -n "$email" ] || email="$(jq -r --arg a "$acct" '.accounts[$a].email // empty' "$_idf" 2>/dev/null)"
+    [ -n "$profile" ] || profile="$(jq -r --arg a "$acct" '.accounts[$a].dia_profile // empty' "$_idf" 2>/dev/null)"
     printf '%saccount %s%s%s%s%s\n' "$C_META" "$C_OFF" "$C_BLD" "$acct" "$C_OFF" \
       "${email:+ — $email}${profile:+ (browser profile $profile)}"
     printf '%s⚠ this link resolves ONLY while signed in as that account; any other account is told\n' "$C_WARN"

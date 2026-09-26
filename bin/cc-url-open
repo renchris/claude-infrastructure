@@ -224,10 +224,21 @@ def profile_name_for_account(account):
     except Exception as e:  # noqa: BLE001
         log(f"accounts.json unreadable: {e}")
         return None
+    # dia_profile is a personal value kept in the gitignored identity overlay, not in the public
+    # accounts.json; merge it in by account name unless a fixture pointed us at its own file.
+    ident = {}
+    if not (os.environ.get("CC_URL_OPEN_ACCOUNTS") and not os.environ.get("CC_IDENTITY_FILE")):
+        try:
+            with open(os.environ.get("CC_IDENTITY_FILE")
+                      or f"{HOME}/.claude/identity.local.json") as fh:
+                ident = (json.load(fh) or {}).get("accounts") or {}
+        except Exception:  # noqa: BLE001 — a missing overlay degrades to "no profile", logged below
+            ident = {}
     for a in accounts:
         cfg = os.path.basename(os.path.expanduser(a.get("config_dir", ""))).lstrip(".")
         if cfg == str(account).lstrip("."):
-            return a.get("dia_profile") or None
+            return (a.get("dia_profile")
+                    or (ident.get(a.get("name")) or {}).get("dia_profile") or None)
     log(f"no dia_profile for account {account}")
     return None
 

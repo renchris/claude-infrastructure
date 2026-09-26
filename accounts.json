@@ -1,6 +1,6 @@
 {
   "_what": "SSOT for the 4 Claude Max accounts: identity map (launcher -> config dir -> email -> mailbox -> Dia profile) + router/endpoint config. Consumed by bin/claude-accounts, /accounts, scripts/handoff-fire.sh, skills/account-relogin. Deployed as a symlink at ~/.claude/accounts.json (install.sh); the knowledge-layer mirror shares it into every account config dir.",
-  "_secrets": "NO tokens live here, ever. OAuth tokens stay in the macOS Keychain (item 'Claude Code-credentials-<sha256(config-dir)[:8]>', account = keychain_account). Emails are fine: this repo is private.",
+  "_secrets": "NO tokens live here, ever. OAuth tokens stay in the macOS Keychain (item 'Claude Code-credentials-<sha256(config-dir)[:8]>', account = keychain_account). NO personal values either: this repo is PUBLIC. Each account's email, mailbox and dia_profile live in the gitignored identity overlay ($HOME/.claude/identity.local.json; template identity.example.json), merged in by hooks/lib/identity.py merge_accounts().",
   "_order": "accounts[] order = operator spend priority (next > next4 > next3 > next2, resume-sessions REFERENCE.md operator policy 2026-07-04).",
   "_fable": "There is no per-account Fable LAUNCHER any more (launcher consolidation, 2026-08-01): `claude-fable*` was only ever the row's launcher with a model env var, so the frontier tier is a MODEL, not a second entrypoint. Two routes, both live: pick `Fable` in the in-session /model picker (operator-confirmed 2026-08-01 on 2.1.220 — it is row 3, so this is the normal way in), or start pinned with `<launcher> --model claude-fable-5` when a session must BE Fable from turn one (fired peers, headless runs). The `fable_launcher` key is GONE because its value named a deleted command; `fable_name` STAYS (a bare CLI shorthand, not a launcher name) and gen-account-map.sh builds the fable pattern from it alone.",
   "_port_index": "port_index is a SEPARATE, frozen numbering used only for cc-authbrowser's per-account CDP port (PORT_BASE + port_index) — deliberately independent of accounts[] array order (contract SS1) so reordering accounts[] for spend priority never reshuffles a live CDP port. Optional per account; an entry with no port_index gets the next unused integer, so appending accounts never renumbers existing ones. fable_name/aliases are also optional (bare CLI shorthand for the fable variant, and extra config-dir basenames that resolve to this account).",
@@ -74,9 +74,6 @@
       "launcher": "claude",
       "fable_name": "fable",
       "port_index": 0,
-      "email": "operator.alt+claude@example.net",
-      "mailbox": "operator.alt@example.net",
-      "dia_profile": "Personaly",
       "aliases": [
         "claude"
       ]
@@ -86,30 +83,21 @@
       "config_dir": "~/.claude-quaternary",
       "launcher": "claude4",
       "fable_name": "fable4",
-      "port_index": 3,
-      "email": "operator4@example.com",
-      "mailbox": "operator4@example.com",
-      "dia_profile": "Claude4"
+      "port_index": 3
     },
     {
       "name": "next3",
       "config_dir": "~/.claude-tertiary",
       "launcher": "claude3",
       "fable_name": "fable3",
-      "port_index": 2,
-      "email": "operator+claude@example.com",
-      "mailbox": "operator@example.com",
-      "dia_profile": "Claude3"
+      "port_index": 2
     },
     {
       "name": "next2",
       "config_dir": "~/.claude-secondary",
       "launcher": "claude2",
       "fable_name": "fable2",
-      "port_index": 1,
-      "email": "operator2+claude@example.com",
-      "mailbox": "operator2@example.com",
-      "dia_profile": "Claude2"
+      "port_index": 1
     }
   ]
 }

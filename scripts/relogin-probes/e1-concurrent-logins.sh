@@ -31,13 +31,22 @@ for a in "$@"; do case "$a" in
   -*) echo "e1: unknown flag: $a" >&2; exit 2 ;;
   *)  ACCT="$a" ;;
 esac; done
-IDENT="$(python3 - "$ACCOUNTS_JSON" "$ACCT" <<'PY'
+IDENT="$(python3 - "$ACCOUNTS_JSON" "$ACCT" "$(cd "$(dirname "$0")/../../hooks/lib" 2>/dev/null && pwd || echo "$HOME/.claude/hooks/lib")" <<'PY'
 import json, os, sys
 d = json.load(open(os.path.expanduser(sys.argv[1])))
+# Personal fields live in the gitignored identity overlay (this repo is public): fill the row's
+# missing email from it — same resolver as claude-accounts (hooks/lib/identity.py).
+sys.path.insert(0, sys.argv[3])
+try:
+    import identity
+    if not identity.overlay_suppressed("CC_PROBE_ACCOUNTS_JSON"):
+        identity.merge_accounts(d)
+except ImportError:
+    pass
 a = next((x for x in d["accounts"] if x["name"] == sys.argv[2]), None)
 if a is None:
     sys.exit("no such account: " + sys.argv[2])
-fields = [os.path.expanduser(a["config_dir"]), a["email"],
+fields = [os.path.expanduser(a["config_dir"]), a.get("email", ""),
           d["keychain_account"], os.path.expanduser(d["claude_bin"])]
 # REFUSE on an empty identity field rather than emit it. The reader is `IFS=$'\t' read`, and tab is
 # IFS-*whitespace*: an empty cell does not yield an empty variable, it shifts every later field one
