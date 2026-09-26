@@ -79,7 +79,7 @@ default binding (user → lead → worker fidelity chain) is non-negotiable.
 **If brief is clean** (no drift triggers, or explicit user opt-in echoed):
 proceed to Depth Budget below.
 
-Reference: `~/.claude/rules/research-subagents.md` § Question-Type Discipline.
+Reference: `~/.claude/skills/research-subagents/SKILL.md` § Question-Type Discipline.
 
 ## Depth Budget (mandatory framing — calibrated)
 
@@ -192,7 +192,7 @@ counters within-fan-out blind spots.
 > **This self-pass is a FLOOR, not sufficient verification.** Fresh-context verifier
 > subagents outperform self-critique (Fable 5 guide, 2026-06-11) — the load-bearing
 > check is the lead's SEPARATE adversarial-sampling slot
-> (`~/.claude/rules/research-subagents.md` § Adversarial Sampling), not this in-context
+> (`~/.claude/skills/research-subagents/SKILL.md` § Adversarial Sampling), not this in-context
 > pass. Run it, but never let it stand in for the fresh-context adversarial subagent.
 
 ## Operating contract — you run WITHOUT CLAUDE.md
@@ -276,7 +276,7 @@ density, not absolute length.
 ## Cross-references
 
 This subagent implements the depth + recursion principles in
-`~/.claude/rules/research-subagents.md`. See that file for the full
+`~/.claude/skills/research-subagents/SKILL.md`. See that file for the full
 discipline at the lead level (pre-spawn artifact, banned phrases at lead,
 adversarial sampling across fan-out, cost asymmetry framing, stop
 condition).
