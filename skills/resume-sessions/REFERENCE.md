@@ -19,8 +19,9 @@ across 4 accounts. Every gotcha below cost a real debugging cycle — trust them
 
 ## 1. Account & credential map (verified)
 
-- 4 accounts: `next`=`.claude-next` (operator.alt+claude), `next2`=`.claude-secondary` (operator2+claude),
-  `next3`=`.claude-tertiary` (operator+claude), `next4`=`.claude-quaternary` (operator4).
+- 4 accounts: `next`=`.claude-next`, `next2`=`.claude-secondary`, `next3`=`.claude-tertiary`,
+  `next4`=`.claude-quaternary`. Each one's login e-mail: `claude-accounts --relogin-info <acct>`
+  (the addresses live in the identity overlay, not in this public repo).
   `.claude` mirrors `.claude-next` (same account). Launchers: `claude-next`, `claude-next2/3/4`,
   `claude-fable`, `claude-fable2/3/4` (all in `~/.zshrc`; interactive-shell functions only).
 - **OAuth token per account**: macOS Keychain item `Claude Code-credentials-<sha256(config-dir-path)[:8]>`,

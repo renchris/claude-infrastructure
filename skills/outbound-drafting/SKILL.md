@@ -225,18 +225,18 @@ which is the highest-signal tell of all because no mail client renders it.
 consent for **that** email — it is not standing consent for the next one, the same evening, to a
 different party.
 
-**Email also carries a second irreversible trap: the SENDER ALIAS.** The mailbox has two —
-`operator.alt@example.net` and `operator@example.com` — and a reply must go out on **the alias the
-counterparty already has for that thread** (read the original's `toRecipients`/`ccRecipients`).
-Graph does *not* do this for you: it applies the mailbox default (`operator.alt`), so a thread on
-`operator` needs `Message.from` set explicitly. VendorCo's order #ORDER-REDACTED was on `operator.alt`
-throughout; a hold request sent from `operator` reached an address they had never seen on that
-order, and they dispatched and charged anyway.
+**Email also carries a second irreversible trap: the SENDER ALIAS.** The personal mailbox has two
+aliases — the ms365 recipe the email hook injects at the first mail call names them, with Graph's
+default — and a reply must go out on **the alias the counterparty already has for that thread**
+(read the original's `toRecipients`/`ccRecipients`). Graph does *not* do this for you: it applies
+the mailbox default, so a thread on the other alias needs `Message.from` set explicitly. A vendor's
+order thread was on the default alias throughout; a hold request sent from the other one reached
+an address they had never seen on that order, and they dispatched and charged anyway.
 
-**Name the mailbox before the alias.** The ms365 server also holds `chris@example.org` (the business
-mailbox, sending as `chris@`, `hello@`, `info@` and the other reso.gl aliases). Every draft write,
-`from` change and send must pass `account` — `operator@example.com` or `chris@example.org` — because
-without it the server silently uses the personal mailbox. The email hook denies the call otherwise.
+**Name the mailbox before the alias.** The ms365 server also holds the business mailbox (sending
+as its own set of aliases; the recipe lists them). Every draft write, `from` change and send must
+pass `account` — the personal or the business mailbox, as the recipe names them — because without
+it the server silently uses the personal mailbox. The email hook denies the call otherwise.
 
 **A question is not an instruction.** *"So they won't auto-inspect unless we tell them?"* is a
 request for information. Answering it by emailing the landlord is not responsiveness — it commits
