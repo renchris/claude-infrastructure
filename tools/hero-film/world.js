@@ -206,6 +206,9 @@ export function buildWorld(T, { width = 1920, height = 1080, grain = 0 } = {}) {
     const screen = new THREE.Mesh(new THREE.PlaneGeometry(w, h).translate(0, y0, 0.007), new THREE.MeshBasicMaterial({ map, transparent: true, color: new THREE.Color().setScalar(L.screen) }))
     const glass = new THREE.Mesh(new THREE.PlaneGeometry(w, h).translate(0, y0, 0.011), own ? glassMat.clone() : glassMat)
     glass.renderOrder = 9
+    // Main pass only: the environment is not mirrored with the world, so in the floor's reflection the
+    // glass picked up the room's ceiling lights and hung a grey box under every window.
+    glass.layers.set(LAYER_FLOOR)
     g.add(body, screen, glass)
     return { g, body, screen, glass }
   }
@@ -249,7 +252,7 @@ export function buildWorld(T, { width = 1920, height = 1080, grain = 0 } = {}) {
   key.shadow.radius = 4
   scene.add(key, key.target)
   const rimL = new THREE.DirectionalLight(L.rim[0], L.rim[1])
-  rimL.position.set(18, 9, -30) // a cool edge from behind
+  rimL.position.set(26, 14, 30) // from the front-right: from behind, its glint on the floor sat behind the gate as a haze
   scene.add(rimL)
   const screenLight = (w, h, x, y, z, yaw, color = '#c9d6ff', k = 1) => {
     if (!L.screenLight) return null
@@ -395,7 +398,8 @@ export function buildWorld(T, { width = 1920, height = 1080, grain = 0 } = {}) {
       sh.position.set(HERO.x, 0.003, gz + HERO.z - 0.1)
       sh.rotation.y = rot(HERO.deg)
       scene.add(sh)
-      screenLight(HW, HH, HERO.x, LIFT + HH / 2, gz + HERO.z, rot(HERO.deg), '#dfe6f2', 1.0)
+      // No area light for this window: on the glossy floor its glint read as a grey box under the window,
+      // and the floor already reflects the screen itself (look.js).
     }
     // Its two lines: the originator's (left half) and the peer's (right half, drawn as it boots).
     const heroLines = [0, 1].map((half) => {
