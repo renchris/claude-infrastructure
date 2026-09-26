@@ -39,14 +39,14 @@ commit_file() { # <repo> <path> <content> [message]
 
 @test "MUTATION: disabling the e-mail arm makes the selftest FAIL (the control can see its subject)" {
   sed 's/for m in EMAIL_RE.finditer(data):/for m in []:/' "$LINT" > "$T/mut.py"
-  ! cmp -s "$LINT" "$T/mut.py"
+  ! cmp -s "$LINT" "$T/mut.py" || false
   run python3 "$T/mut.py" --selftest
   [ "$status" -ne 0 ]
 }
 
 @test "MUTATION: disabling the path arm makes the selftest FAIL" {
   sed 's/elif fnmatch.fnmatchcase(path, g) or path == g:/elif False:/' "$LINT" > "$T/mut.py"
-  ! cmp -s "$LINT" "$T/mut.py"
+  ! cmp -s "$LINT" "$T/mut.py" || false
   run python3 "$T/mut.py" --selftest
   [ "$status" -ne 0 ]
 }
@@ -61,8 +61,8 @@ commit_file() { # <repo> <path> <content> [message]
   commit_file "$r" new2.md "call secret.person at (303) 867-53""09"
   run python3 "$LINT" --repo "$r" --own-range "$base..HEAD" --conf "$CONF"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"IDENTIFIER new2.md: secret.person"* ]]
-  [[ "$output" == *"PHONE new2.md: (303) 867-53""09"* ]]
+  [[ "$output" == *"IDENTIFIER new2.md: secret.person"* ]] || false
+  [[ "$output" == *"PHONE new2.md: (303) 867-53""09"* ]] || false
   [[ "$output" != *"old.md"* ]]
 }
 
@@ -72,7 +72,7 @@ commit_file() { # <repo> <path> <content> [message]
   commit_file "$r" local-only/x.md "fine"
   run python3 "$LINT" --repo "$r" --tree HEAD --conf "$CONF"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"someone@realmail.test"* ]]
+  [[ "$output" == *"someone@realmail.test"* ]] || false
   [[ "$output" == *"PATH  local-only/x.md"* ]]
 }
 
@@ -82,7 +82,7 @@ commit_file() { # <repo> <path> <content> [message]
   git -C "$r" rm -q gone.md; git -C "$r" "${G[@]}" commit -q -m "remove it"
   run python3 "$LINT" --repo "$r" --history HEAD --conf "$CONF" --max-findings 100
   [ "$status" -eq 1 ]
-  [[ "$output" == *"gone.md: TopSecretName"* ]]
+  [[ "$output" == *"gone.md: TopSecretName"* ]] || false
   [[ "$output" == *"author: Secret.Person@corp.example"* ]]
 }
 
@@ -104,11 +104,11 @@ commit_file() { # <repo> <path> <content> [message]
   commit_file "$r" notes.md "ask TopSecretName or Secret.Person@corp.example" "note for TopSecretName"
   run bash "$PUB" --src "$r" --out "$T/out"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"projection-verifier: 0 identifier hit(s), 0 gitleaks finding(s)"* ]]
+  [[ "$output" == *"projection-verifier: 0 identifier hit(s), 0 gitleaks finding(s)"* ]] || false
   tip="$(printf '%s\n' "$output" | sed -n 's/^verdict=projected tip=\([0-9a-f]*\).*/\1/p')"
   p="$T/out/proj.git"
   [ "$(git -C "$p" show "$tip:notes.md")" = "ask a name or person@example.com" ]
-  ! git -C "$p" log --all --name-only --format= | grep -qE 'private-matter|local-only'
+  ! git -C "$p" log --all --name-only --format= | grep -qE 'private-matter|local-only' || false
   [ -z "$(git -C "$p" log --format='%ae%n%ce%n%B' | grep -iE 'secret|topsecret')" ]
   [ -s "$CC_PRIVATE_DIR/public-projection/commit-map" ]
 }
@@ -142,14 +142,14 @@ commit_file() { # <repo> <path> <content> [message]
   [ "$status" -eq 3 ]
   run bash "$PUB" --src "$r" --out "$T/o1" --public-url "$T/owner/pubrepo.git" --push --confirm owner/pubrepo
   [ "$status" -eq 0 ]
-  [[ "$output" == *"pushed="* ]]
+  [[ "$output" == *"pushed="* ]] || false
   # change the rule set so it rewrites the ROOT commit's message: every old commit re-projects
   # differently, so the new tip is NOT a descendant of the published one
   printf '%s\n' 'base==>root' >> "$CC_PRIVATE_DIR/public-projection/replace-text.txt"
   commit_file "$r" b.md "one more"
   run bash "$PUB" --src "$r" --out "$T/o2" --public-url "$T/owner/pubrepo.git" --push --confirm owner/pubrepo
   [ "$status" -eq 3 ]
-  [[ "$output" == *"ff=no"* ]]
+  [[ "$output" == *"ff=no"* ]] || false
   [[ "$output" == *"FORCE-PUSH"* ]]
 }
 
@@ -201,8 +201,8 @@ STUB
   cutover_fixture
   run bash "$CUT"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [[ "$output" == *"DRY RUN"* ]]
-  [[ "$output" == *"projection-verifier: 0 identifier hit(s)"* ]]
+  [[ "$output" == *"DRY RUN"* ]] || false
+  [[ "$output" == *"projection-verifier: 0 identifier hit(s)"* ]] || false
   ls "$T"/backup/all-refs-*.bundle >/dev/null
   [ "$(cat "$GH/state/repos")" = "renchris/claude-infrastructure public" ]
   [ "$(git -C "$W" config --get remote.origin.url)" = "https://github.com/renchris/claude-infrastructure.git" ]
@@ -213,10 +213,10 @@ STUB
   cutover_fixture
   run bash "$CUT" --confirm renchris/wrong
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [[ "$output" == *"DRY RUN"* ]]          # a wrong target never executes
+  [[ "$output" == *"DRY RUN"* ]] || false # a wrong target never executes
   run bash "$CUT" --confirm renchris/claude-infrastructure
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [[ "$output" == *"verdict=CUTOVER-OK"* ]]
+  [[ "$output" == *"verdict=CUTOVER-OK"* ]] || false
   grep -qx 'renchris/claude-infrastructure-private private' "$GH/state/repos"
   grep -qx 'renchris/claude-infrastructure public' "$GH/state/repos"
   [ "$(git -C "$W" config --get remote.origin.url)" = "https://github.com/renchris/claude-infrastructure-private.git" ]
@@ -229,7 +229,7 @@ STUB
   [ -f "$CC_PRIVATE_DIR/public-projection/publish-enabled" ]
   run bash "$CUT" --confirm renchris/claude-infrastructure
   [ "$status" -eq 0 ]
-  [[ "$output" == *"rename already done"* ]]
+  [[ "$output" == *"rename already done"* ]] || false
   [[ "$output" == *"ff=yes"* ]]
 }
 
