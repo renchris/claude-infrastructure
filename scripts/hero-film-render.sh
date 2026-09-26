@@ -4,7 +4,7 @@
 #   bash scripts/hero-film-render.sh pacing   # the pacing gate: camera speed and reading time, per frame
 #   bash scripts/hero-film-render.sh review   # 2 fps stills of both cuts and grades -> contact sheets
 #   bash scripts/hero-film-render.sh loop     # assets/hero/hero-{dark,light}.webp + poster-{dark,light}.png
-#   bash scripts/hero-film-render.sh film     # assets/hero/launch-film.mp4 (dark, 1920x1080, 60 fps)
+#   bash scripts/hero-film-render.sh film     # assets/hero/launch-film.mp4 (dark, 3840x2160, 60 fps)
 #   bash scripts/hero-film-render.sh seam     # loop seam: frame 0 against the last frame, both grades
 #   bash scripts/hero-film-render.sh verify   # decode the shipped WebPs and check them (hero-film-verify.py)
 #
@@ -32,6 +32,12 @@ LOOP_H=${LOOP_H:-943}
 FONT=${FONT:-/System/Library/Fonts/Menlo.ttc}
 LOOP_FPS=${LOOP_FPS:-60}
 FILM_FPS=${FILM_FPS:-60}
+# Round 3: the page is photographed at 2x (3840 x 2160). That is the FILM's size, and the loop's
+# supersampled source: 2.3 source pixels per output pixel across, so edges and pane text resolve
+# instead of stair-stepping. The loop stays 1676 px wide: that is 2x the README's 838 CSS px column,
+# and 3x would push a 60 fps flight frame's decode past its 16.7 ms (measured: p90 6.8 ms at 1676).
+LOOP_SCALE=${LOOP_SCALE:-2}
+FILM_SCALE=${FILM_SCALE:-2}
 WORKERS=${WORKERS:-3}
 CAP="node scripts/hero-film-capture.mjs"
 
@@ -91,7 +97,7 @@ loop() {
   for theme in dark light; do
     local dir="$OUT/loop-$theme"
     # Every frame at 60 fps, flights included (operator, round two: 20 fps flights read as judder).
-    $CAP --cut loop --theme "$theme" --fps "$LOOP_FPS" --width 1920 --height 1080 --workers "$WORKERS" --out "$dir"
+    $CAP --cut loop --theme "$theme" --fps "$LOOP_FPS" --width 1920 --height 1080 --scale "$LOOP_SCALE" --workers "$WORKERS" --out "$dir"
     mkdir -p "$dir/small"
     rm -f "$dir/small"/*.png
     cp "$dir/meta.json" "$dir/small/"
@@ -99,7 +105,9 @@ loop() {
     # report's image flow, frame for frame): sigma = SOFT_MAX px at the gate's speed bound, nothing at
     # rest. Motion hides it and a flight lands into focus without a pop. Measured round two on the
     # homeward flight (324 frames, lossy q30): 4.23 MB at SOFT_MAX 1.5, 4.03 at 2.0, 3.88 at 2.5.
-    python3 - "$dir" "$OUT/pacing-loop.json" "${LOOP_W}x${LOOP_H}!" "${SOFT_MAX:-2.5}" "${JOBS:-8}" <<'PY'
+    # Round 3 (the operator asked for higher resolution): SOFT_MAX 1.0 against the new 2,000 px/s bound,
+    # so a flight softens a little at its peak and nowhere else.
+    python3 - "$dir" "$OUT/pacing-loop.json" "${LOOP_W}x${LOOP_H}!" "${SOFT_MAX:-1.0}" "${JOBS:-8}" <<'PY'
 import json, pathlib, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor
 d, pacing, size, soft, jobs = pathlib.Path(sys.argv[1]), json.loads(pathlib.Path(sys.argv[2]).read_text()), sys.argv[3], float(sys.argv[4]), int(sys.argv[5])
@@ -108,7 +116,7 @@ frames = sorted(d.glob("f*.png"))
 if len(frames) != len(flow):
     sys.exit(f"{len(frames)} frames but the pacing report has {len(flow)}: re-run the capture and the gate together")
 def one(k):
-    sigma = round(soft * min(1.0, flow[k] / 900.0), 2)
+    sigma = round(soft * min(1.0, flow[k] / 2000.0), 2)
     args = ["magick", str(frames[k]), "-filter", "Lanczos", "-resize", size]
     if sigma >= 0.05:
         args += ["-blur", f"0x{sigma}"]
@@ -120,7 +128,7 @@ PY
   # The two grades encode in parallel: the encoder is single-threaded and is most of the time.
   local pids=() theme
   for theme in dark light; do
-    python3 scripts/hero-film-encode-loop.py "$OUT/loop-$theme/small" "assets/hero/hero-$theme.webp" --hold "${LOOP_HOLD:-q90}" --move "${LOOP_MOVE:-q75}" --flight "${LOOP_FLIGHT:-q30}" &
+    python3 scripts/hero-film-encode-loop.py "$OUT/loop-$theme/small" "assets/hero/hero-$theme.webp" --hold "${LOOP_HOLD:-q90}" --move "${LOOP_MOVE:-q75}" --flight "${LOOP_FLIGHT:-q45}" &
     pids+=("$!")
   done
   local pid
@@ -135,9 +143,11 @@ film() {
   pacing
   mkdir -p assets/hero
   local dir="$OUT/film-dark"
-  $CAP --cut film --theme dark --fps "$FILM_FPS" --width 1920 --height 1080 --workers "$WORKERS" --out "$dir"
+  $CAP --cut film --theme dark --fps "$FILM_FPS" --width 1920 --height 1080 --scale "$FILM_SCALE" --workers "$WORKERS" --out "$dir"
+  # H.264 High at 4K60 (level 5.2) plays everywhere a browser does; -tune film keeps the grain.
+  # Measured round 3 at CRF 20: a flight ~2.2 MB/s, a hold 0.6-0.85 MB/s.
   ffmpeg -y -hide_banner -loglevel error -framerate "$FILM_FPS" -i "$dir/f%06d.png" \
-    -vf "format=yuv420p" -c:v libx264 -preset slow -crf "${FILM_CRF:-21}" -tune animation \
+    -vf "format=yuv420p" -c:v libx264 -preset slow -crf "${FILM_CRF:-22}" -tune film \
     -x264-params "keyint=$((FILM_FPS * 2)):bframes=4:ref=5:aq-mode=3" \
     -color_range tv -colorspace bt709 -color_primaries bt709 -color_trc bt709 \
     -movflags +faststart assets/hero/launch-film.mp4
