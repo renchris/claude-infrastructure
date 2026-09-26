@@ -5,26 +5,33 @@
 # Exit 2 rejects the task; exit 0 allows. Deletions are excluded from the shell-file set (the
 # ship-land deletion-bug class: a removed .sh must not be handed to shellcheck).
 #
-# The git-worktree-list search is bypassed via the TASK_QUALITY_GATE_WORKTREE_OVERRIDE seam so the
-# gate can be exercised against a hermetic temp repo. Infra detection keys on the repo basename
-# (claude-infrastructure), so the fixture repo is created under that name — real detection runs.
+# The worktree is found the way production finds it: the hook runs from the fixture's MAIN repo and
+# matches the teammate name against `git worktree list`, so each fixture is a linked worktree whose
+# path carries that name (MATE, chosen so it cannot collide with a tmpdir or a live /tmp/worktree-*).
+# Infra detection keys on the MAIN repo's basename (claude-infrastructure), so the fixture repo is
+# created under that name — real detection runs.
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HOOK="$REPO/hooks/task-quality-gate.sh"
 }
 
-mkinfra() {  # a fresh git repo whose basename is claude-infrastructure → infra detection fires
-  local w="$BATS_TEST_TMPDIR/claude-infrastructure"
-  rm -rf "$w"; git init -q "$w"
-  ( cd "$w" || exit 1; git config user.email t@e.com; git config user.name t; git checkout -q -b main
-    echo base > README.md; git add README.md; git commit -qm base ) >/dev/null 2>&1
+MATE="tqgfixturemate"
+
+mkinfra() {  # a linked worktree (path carries $MATE) of a repo named claude-infrastructure
+  local r="$BATS_TEST_TMPDIR/claude-infrastructure" w="$BATS_TEST_TMPDIR/wt-$MATE"
+  rm -rf "$r" "$w"; git init -q "$r"
+  ( cd "$r" || exit 1; git config user.email t@e.com; git config user.name t; git checkout -q -b main
+    echo base > README.md; git add README.md; git commit -qm base
+    git worktree add -q -b work "$w" ) >/dev/null 2>&1
   printf '%s' "$w"
 }
 
-run_tqg() {  # $1=worktree  $2=team_name
-  jq -n --arg tm "$2" '{task_subject:"do work",teammate_name:"tm",team_name:$tm}' \
-    | TASK_QUALITY_GATE_WORKTREE_OVERRIDE="$1" bash "$HOOK"
+run_tqg() {  # $1=worktree  $2=team_name — the hook runs from $1's MAIN repo and must FIND $1 itself
+  local main
+  main="$(cd "$(git -C "$1" rev-parse --path-format=absolute --git-common-dir)/.." && pwd)"
+  jq -n --arg tm "$2" --arg mate "$MATE" '{task_subject:"do work",teammate_name:$mate,team_name:$tm}' \
+    | ( cd "$main" && bash "$HOOK" )
 }
 
 @test "non-team task → exit 0 (gate skips standalone tasks)" {
@@ -98,7 +105,7 @@ run_tqg() {  # $1=worktree  $2=team_name
 }
 
 @test "non-infra repo without node_modules → falls through, exit 0 (tsc path skips, unchanged)" {
-  local w="$BATS_TEST_TMPDIR/some-app"; rm -rf "$w"; git init -q "$w"
+  local w="$BATS_TEST_TMPDIR/some-app-$MATE"; rm -rf "$w"; git init -q "$w"
   ( cd "$w" || exit 1; git config user.email t@e.com; git config user.name t; git checkout -q -b main
     echo x > a.txt; git add a.txt; git commit -qm base; echo y > b.txt ) >/dev/null 2>&1
   run run_tqg "$w" "team-x"
