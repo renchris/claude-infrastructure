@@ -50,7 +50,7 @@ Lead's drift-detection upstream gate (research-decomposition-critic) is the
 primary defense; worker-side detection is defense-in-depth for waves where
 lead skipped the critic gate or the critic failed to catch type-drift.
 
-Reference: `~/.claude/skills/research-subagents/SKILL.md` § Question-Type Discipline.
+Reference: `~/.claude/rules/research-subagents.md` § Question-Type Discipline.
 
 ## Depth Budget (mandatory framing — calibrated)
 
@@ -136,7 +136,7 @@ budget honestly.
 ## Cross-references
 
 This subagent implements the Sonnet-tier worker role of the type-mix
-prescription in `~/.claude/skills/research-subagents/SKILL.md` § Per-Subagent
+prescription in `~/.claude/rules/research-subagents.md` § Per-Subagent
 Depth → Type-mix pin. The full depth + adversarial + return discipline is
 inherited from `~/.claude/agents/deep-research.md`; this file overrides
 only the model-tier frontmatter and the depth-budget modal (150K vs 180K).
