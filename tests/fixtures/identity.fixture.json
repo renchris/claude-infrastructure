@@ -1,0 +1,17 @@
+{
+  "_what": "Synthetic identity overlay for bats suites (export CC_IDENTITY_FILE=$REPO/tests/fixtures/identity.fixture.json). Example domains only.",
+  "accounts": {
+    "next":  {"email": "op1+claude@example.com", "mailbox": "op1@example.com", "dia_profile": "ProfileA"},
+    "next2": {"email": "op2+claude@example.com", "mailbox": "op2@example.com", "dia_profile": "ProfileB"},
+    "next3": {"email": "op3+claude@example.com", "mailbox": "op3@example.com", "dia_profile": "ProfileC"},
+    "next4": {"email": "op4@example.com",        "mailbox": "op4@example.com", "dia_profile": "ProfileD"}
+  },
+  "keychain_account": "fixtureuser",
+  "git_identity": {"email": "owner@example.com", "github_owner": "owner"},
+  "ms365": {
+    "mailboxes": {
+      "personal@example.com": {"default": "alias@example.com", "aliases": ["alias@example.com", "personal@example.com"]},
+      "work@example.org": {"default": "work@example.org", "aliases": ["work@example.org", "admin@example.org", "info@example.org"]}
+    }
+  }
+}
