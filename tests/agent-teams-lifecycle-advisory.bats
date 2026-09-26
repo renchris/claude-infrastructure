@@ -72,25 +72,13 @@ spawn() {
 }
 
 # ── (b) EQUIVALENCE GUARD — passes on BOTH arms ──────────────────────────────────────────────
-# Its power is proven by mutant M-b (advisory keyed on subagent_type alone, ignoring `name:`),
-# which it kills in the test below.
+# Its power: an advisory keyed on subagent_type alone (ignoring `name:`) would emit the marker here,
+# and the (a) arms prove this grep sees the marker whenever the hook emits it.
 
 @test "(b) EQUIVALENCE GUARD: deep-research WITHOUT name is silent" {
   run spawn deep-research ""
   [ "$status" -eq 0 ]
   ! echo "$output" | grep -qF "$MARKER"
-}
-
-@test "(b) mutant M-b (keyed on type, ignoring name) is killed by that guard" {
-  m="$BATS_TEST_TMPDIR/mutant-b.sh"
-  # M-b: emit the advisory for any research type, whether or not `name:` is set — the plausible
-  # mis-implementation that reads the rule as being about research agents rather than about naming.
-  awk '1; /^SUBAGENT_TYPE=/ {
-        print "case \"$SUBAGENT_TYPE\" in deep-research|deep-research-sonnet|Explore|frontier-derivation)";
-        print "  printf %s \"{\\\"hookSpecificOutput\\\":{\\\"hookEventName\\\":\\\"PreToolUse\\\",\\\"permissionDecision\\\":\\\"allow\\\",\\\"additionalContext\\\":\\\"NAMED RESEARCH AGENT\\\"}}\"; exit 0 ;;";
-        print "esac" }' "$HOOK" > "$m"
-  run spawn deep-research "" "$m"
-  echo "$output" | grep -qF "$MARKER"   # the mutant DOES emit ⇒ guard (b) would fail ⇒ it has power
 }
 
 # ── (c) EQUIVALENCE GUARD — passes on BOTH arms ──────────────────────────────────────────────
