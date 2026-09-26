@@ -52,6 +52,18 @@ PHONE_RE = re.compile(
     rb"|\(\d{3}\) ?\d{3}-\d{4}\b"
     rb"|\b\d{3}[.-]\d{3}[.-]\d{4}\b(?=[^\d.-]|$))"
 )
+def phone_allowed(m: bytes) -> bool:
+    """Fictional numbers never count: area code 555, or exchange 555 with line 01xx (the range
+    reserved for fiction). ONE rule for both scan paths — they disagreed once, and the lint then
+    convicted its own clean control on the ripgrep path only."""
+    d = re.sub(rb"\D", b"", m)
+    if len(d) == 11 and d.startswith(b"1"):
+        d = d[1:]
+    if len(d) == 7:
+        return d.startswith(b"55501")
+    return len(d) == 10 and (d[:3] == b"555" or (d[3:6] == b"555" and d[6:8] == b"01"))
+
+
 EMAIL_RE = re.compile(
     rb"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}"
 )
@@ -182,8 +194,7 @@ class Rules:
         out += [
             ("phone", m.group(0))
             for m in PHONE_RE.finditer(data)
-            if b"555-01" not in m.group(0)
-            and not re.search(rb"555[ .-]?01\d\d", m.group(0))
+            if not phone_allowed(m.group(0))
         ]
         return out
 
@@ -301,7 +312,7 @@ def _scan_blobs_rg(repo: str, shas: list[str], seen: dict[str, str], rules: Rule
         findings += [f"EMAIL {seen[s]}: {m.decode(errors='replace')}"
                      for s, m in rg(["-e", EMAIL_RE.pattern.decode()]) if not rules.email_allow.match(m)]
         findings += [f"PHONE {seen[s]}: {m.decode(errors='replace')}"
-                     for s, m in rg(["-e", RG_PHONE]) if not re.search(rb"555[ .-]?01\d\d", m)]
+                     for s, m in rg(["-e", RG_PHONE]) if not phone_allowed(m)]
         if rules.map_regexes:
             rx = re.compile("|".join(rules.map_regexes).encode())
             for sha in written:
