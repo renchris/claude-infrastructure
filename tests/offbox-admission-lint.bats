@@ -145,8 +145,16 @@ EOF
 @test "an EXISTING suite that is red off-box does not block a land that merely modifies it" {
   # The ratchet binds on ENTRY to the partition. An existing red suite is already measured hourly by
   # the producer; re-litigating it at every author's land would be the fleet-wide stop, not a gate.
-  run bash "$LINT" --added ""
-  [ "$status" -eq 0 ]
+  # So the range must really MODIFY tests/ambient.bats (red off-box, in the partition): that is what
+  # reaches the `--diff-filter=A` boundary. An explicit `--added` never derives a set from a range.
+  git init -q "$FIX"
+  git -C "$FIX" add -A
+  git -C "$FIX" -c user.email=tester@example.com -c user.name=tester commit -q -m base
+  base="$(git -C "$FIX" rev-parse HEAD)"
+  printf '# an edit to an existing suite\n' >> "$FIX/tests/ambient.bats"
+  git -C "$FIX" -c user.email=tester@example.com -c user.name=tester commit -q -am modify
+  run bash "$LINT" --range "$base..$(git -C "$FIX" rev-parse HEAD)"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" != *"REFUSE"* ]] || { echo "$output"; false; }
 }
 

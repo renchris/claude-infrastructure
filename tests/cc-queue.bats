@@ -64,9 +64,9 @@ hasnt() { case "$2" in *"$1"*) printf 'expected NOT to find: %s\n' "$1" >&2; ret
 beacon() { # $1=sid $2=since $3=tool $4=json tool_input
   printf '{"ts":%s,"tool_name":"%s","tool_input":%s,"cwd":"/x/proj"}' "$2" "$3" "$4" > "$CC_PERMPEND_DIR/$1.json"
 }
-telem() { # $1=sid $2=pid [$3=model]
-  printf '{"ts":999000,"session_id":"%s","cwd":"/x/proj","config_dir":"%s/cfg","model":"%s","pid":%s,"used_pct":11}' \
-    "$1" "$TD" "${3:-claude-opus-5}" "$2" > "$CC_TELEMETRY_DIR/$1.json"
+telem() { # $1=sid $2=pid [$3=model] [$4=telemetry ts, default 999000 = 1000s old]
+  printf '{"ts":%s,"session_id":"%s","cwd":"/x/proj","config_dir":"%s/cfg","model":"%s","pid":%s,"used_pct":11}' \
+    "${4:-999000}" "$1" "$TD" "${3:-claude-opus-5}" "$2" > "$CC_TELEMETRY_DIR/$1.json"
 }
 touch_transcript() { # $1=sid $2=epoch mtime
   local f="$TD/cfg/projects/-x-proj/$1.jsonl"; : > "$f"
@@ -146,7 +146,9 @@ touch_transcript() { # $1=sid $2=epoch mtime
 @test "C6: a FRESH telemetry ts does NOT make a cold session look working" {
   # The telemetry writer is the statusline; it goes stale on healthy sessions and fresh on ones doing
   # nothing. Binding activity to it was measured wrong (3.5-day-stale telemetry, 5-min-warm transcript).
-  telem sid-fresh 4242                                 # tel ts=999000 (1000s old), no transcript
+  # ts=999990 is 10s old — genuinely FRESH, inside WORKING_S=300 — over a transcript 100000s cold,
+  # so a cc-queue that read activity off the telemetry ts would call this `working`.
+  telem sid-fresh 4242 claude-opus-5 999990; touch_transcript sid-fresh 900000
   run "$Q" --json
   [ "$(echo "$output" | jq -r '.[]|select(.sid=="sid-fresh").state')" = idle ]
 }
@@ -310,7 +312,12 @@ touch_transcript() { # $1=sid $2=epoch mtime
   telem sid-1 4242; telem sid-2 4242
   beacon sid-1 999700 Bash '{"command":"x"}'
   run "$Q" --no-color --group-by account
+  [ "$status" -eq 0 ]
   has "GROUPED BY account" "$output"
+  # The header alone is a bare printf; the GROUPING is the jq under it. Both agents share one config
+  # dir, so exactly ONE group row, counting both, with sid-1's block in its blocked cell.
+  [ "$(printf '%s\n' "$output" | grep -c '  ⛔[0-9][0-9]*  ●')" -eq 1 ]
+  printf '%s\n' "$output" | grep -qE '^⛔ +2  ⛔1  ●0  ○1  ·0 +cfg$'
 }
 
 @test "C1: an unknown option fails loudly rather than rendering a partial list" {

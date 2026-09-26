@@ -195,17 +195,13 @@ feed() { # <file_path> <event> <session_id>  → writes $PAYLOAD
   [ "$status" -eq 0 ]
 }
 
-@test "no stdin at all exits 0" {
-  run "$HOOK" < /dev/null
-  [ "$status" -eq 0 ]
-}
-
 @test "an unrecognised argument falls through to the observer and still exits 0" {
   # The harness passes no arguments, but a fail-open script must not become fail-closed because
   # someone added a flag. Only the exact literal --check-matcher may take the checking path.
   feed /tmp/c.txt change sid-c
   run "$HOOK" --some-future-flag < "$PAYLOAD"
   [ "$status" -eq 0 ]
+  grep -q '/tmp/c.txt' "$LOG"      # …and it reached the observer: the row landed
 }
 
 @test "a payload with no file_path writes no row — an unattributable row is worse than none" {

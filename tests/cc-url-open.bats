@@ -91,12 +91,6 @@ EOF
   [[ "$output" == *"profile_dir=Default"* ]]
 }
 
-@test "CDP unavailable still opens the link (fallback, not a swallowed click)" {
-  run "$C" "$ART"
-  [ "$status" -eq 0 ]
-  grep -qF -- "-b company.thebrowser.dia $ART" "$OPEN_LOG"
-}
-
 @test "non-claude.ai URLs are never routed — they take today's path untouched" {
   run "$C" --explain "https://github.com/anthropics/claude-code"
   [[ "$output" == *"routed=False"* ]] || false

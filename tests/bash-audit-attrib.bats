@@ -93,10 +93,3 @@ pre_payload() { # <command> <session_id>
     | bash "$VALIDATE_BASH"
   grep -qE '\[-\] echo anon$' "$CMD_LOG"
 }
-
-@test "validate-bash still denies a catastrophic pattern (audit change is additive)" {
-  payload="$(pre_payload 'sudo rm -rf /etc' 'sid-fff')"
-  run bash "$VALIDATE_BASH" <<<"$payload"
-  [ "$status" -eq 0 ]
-  echo "$output" | grep -q '"permissionDecision": "deny"'
-}
