@@ -495,7 +495,7 @@ user.name Owner"
   unset CC_GIT_IDENTITY_EMAIL
   export CC_IDENTITY_FILE="$BATS_TEST_TMPDIR/no-such-overlay.json"
   local r; r="$(mkrepo nooverlay https://github.com/owner/x.git)"
-  git -C "$r" config user.email owner@example.com; git -C "$r" config user.name Owner
+  git -C "${r:?repo path required}" config user.email owner@example.com; git -C "${r:?repo path required}" config user.name Owner
   run bash "$HOOK" --check "$r"
   [ "$status" -eq 1 ]
   [[ "$output" == *"identity overlay missing"* ]]
