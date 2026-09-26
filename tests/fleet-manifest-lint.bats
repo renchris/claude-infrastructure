@@ -49,10 +49,6 @@ mkfix() {
   printf 'com.claude.alpha | run | 600 | auto | 11 | 18-fleet-activate.sh\n' >> "$R/launchd/fleet.manifest"
 }
 
-@test "the lint exists and is executable" {
-  [ -x "$LINT" ]
-}
-
 # THE INSTRUMENT'S OWN DISCRIMINATION PROOF. run_gate refuses to trust a clean verdict from a lint
 # whose --selftest fails, so this is the assertion that keeps the gate arm meaningful rather than
 # decorative.

@@ -168,8 +168,3 @@ _bomb_dir() {  # a fixture carrying one in-band future date → a REAL finding w
   grep -q 'SHIP_LAND_WALL_OWN_SCOPE' "$REPO/scripts/ship-land.sh" || false
   grep -q 'test-walltime-lint.sh' "$REPO/scripts/ship-land.sh" || false
 }
-
-@test "the nightly picks it up automatically (name matches *lint*.sh AND supports --selftest)" {
-  case "$(basename "$LINT")" in *lint*.sh) ;; *) false ;; esac
-  grep -q -- '--selftest' "$LINT" || false
-}

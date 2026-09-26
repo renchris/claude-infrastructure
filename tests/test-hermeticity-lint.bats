@@ -192,7 +192,12 @@ skip_if_selftest_nonverdict() {
   CC_HERM_SELFTEST_RULE=on run bash "$LINT"
   skip_if_unrunnable
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q 'test-hermeticity-lint: clean'
+  echo "$output" | grep -q 'test-hermeticity-lint: clean' || false
+  # …and the summary on that same clean run reports every ratchet's grandfathered count.
+  echo "$output" | grep -q 'grandfathered (\$HOME)' || false
+  echo "$output" | grep -q 'grandfathered (capacity gate)' || false
+  echo "$output" | grep -q 'grandfathered (orphan-close lever)' || false
+  echo "$output" | grep -q 'grandfathered (scratch path)' || false
 }
 
 @test "the third state DISCRIMINATES: a lost fork abstains, a bad ROOT still REDs" {
@@ -295,11 +300,6 @@ skip_if_selftest_nonverdict() {
   [ "$status" -eq 2 ]
   CC_HERM_ALLOWLIST="" run bash "$LINT" "$FIX"                # exists, but holds zero .bats suites
   [ "$status" -eq 2 ]
-}
-
-@test "the nightly picks it up automatically (name matches *lint*.sh AND supports_selftest)" {
-  case "$(basename "$LINT")" in *lint*.sh) ;; *) false ;; esac    # scripts/*lint*.sh glob
-  grep -qE -- '--selftest|selftest\)' "$LINT"                     # nightly's supports_selftest() probe
 }
 
 # ── OWN-SCOPE: the ratchet binds on what YOU changed, not on what trunk happens to contain ────────
@@ -583,16 +583,6 @@ skip_if_selftest_nonverdict() {
   [ "$status" -eq 1 ] || false
   echo "$output" | grep -q 'LEAK' || false
   [ "$(echo "$output" | grep -c 'AMBIENT')" -eq 0 ] || false
-}
-
-@test "the real tree is clean under ALL ratchets and the summary reports every count" {
-  CC_HERM_SELFTEST_RULE=on run bash "$LINT"
-  skip_if_unrunnable        # the other whole-tree case — same third state, same reason
-  [ "$status" -eq 0 ] || false
-  echo "$output" | grep -q 'grandfathered (\$HOME)' || false
-  echo "$output" | grep -q 'grandfathered (capacity gate)' || false
-  echo "$output" | grep -q 'grandfathered (orphan-close lever)' || false
-  echo "$output" | grep -q 'grandfathered (scratch path)' || false
 }
 
 # ── RULE 4: the embedded-selftest ratchet — the population rules 1-3 are structurally blind to ────

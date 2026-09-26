@@ -25,9 +25,10 @@ bats_require_minimum_version 1.5.0   # `run -127` below needs the flag form
 # comment for why a stub rather than the live interactive binary).
 #
 # NOT A DOC TEST. These cases execute the two E3 forms as shell, against a fixture with a genuinely
-# missing instruction path. The OLD form is kept deliberately as the control: a case that only ever
-# runs the fixed form cannot show that the fixture reaches the defect at all, and would pass
-# against the broken snippet too (memory: control-must-replay-the-real-artifact).
+# missing instruction path. The CORRECTED form is extracted from commands/compact-memory.md itself,
+# so a doc that regresses fails here. The OLD form is kept deliberately as the control: a case that
+# only ever runs the fixed form cannot show that the fixture reaches the defect at all, and would
+# pass against the broken snippet too (memory: control-must-replay-the-real-artifact).
 
 setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
@@ -38,6 +39,11 @@ setup() {
   [ ! -e "$P/.claude/CLAUDE.md" ]
   [ ! -e "$P/.claude/rules" ]
   STEM="topic-alpha"
+  # The E3 loop as the doc ships it: the fenced `while read -r f` block, up to the closing fence.
+  REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+  E3="$BATS_TEST_TMPDIR/e3-loop.sh"
+  awk '/while read -r f; do/{p=1} p&&/^ *```/{exit} p' "$REPO/commands/compact-memory.md" > "$E3"
+  grep -q 'ORPHAN' "$E3" || { echo "cannot extract the E3 loop from commands/compact-memory.md" >&2; return 1; }
 }
 
 # The DOCUMENTED-BEFORE form — the artifact under indictment, replayed verbatim.
@@ -46,14 +52,15 @@ e3_old() { # $1=grep-binary $2=stem → prints ORPHAN when it thinks the stem is
     || echo "ORPHAN $2.md"
 }
 
-# The CORRECTED form now in commands/compact-memory.md — skip operands that do not exist.
+# The CORRECTED form, EXECUTED FROM commands/compact-memory.md — never a transcription. A hand copy
+# lived here until 2026-09-25 and had already drifted (the doc gained a fourth path,
+# CLAUDE.global.md, and nothing went red); a doc reverted to the one-shot form would have stayed
+# green too. The stem arrives on stdin as the doc's pipeline feeds it, and the loop's bare `grep`
+# resolves, via PATH, to the binary under test.
 e3_new() { # $1=grep-binary $2=stem
-  local hit=0 c
-  for c in "$P/CLAUDE.md" "$P/.claude/CLAUDE.md" "$P/.claude/rules"; do
-    [ -e "$c" ] || continue
-    "$1" -rqF "$2" "$c" 2>/dev/null && { hit=1; break; }
-  done
-  [ "$hit" = 1 ] || echo "ORPHAN $2.md"
+  local d="$BATS_TEST_TMPDIR/e3-grep"
+  rm -rf "$d"; mkdir -p "$d"; ln -s "$1" "$d/grep"
+  printf '%s.md\n' "$2" | P="$P" PATH="$d:$PATH" bash "$E3"
 }
 
 # A grep that reports an unreadable operand as rc 2 EVEN WHEN ANOTHER OPERAND MATCHED — the
