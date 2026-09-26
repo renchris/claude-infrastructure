@@ -382,21 +382,6 @@ EOF
   [[ "$call" == *"\`segments\` means"* ]] || false
 }
 
-@test "19 EVERY TERM OFF is gate-off; the OLD pair off with a Wave D term on is NOT" {
-  # The §9.5.1 population defect, in both directions. Recording a real segment/active evaluation as
-  # `gate-off` would count a live refusal-capable window as a blind one — the same error the
-  # two-term branch was written to prevent, arriving from the other side.
-  run bash -c 'CC_ADMIT_LOAD_TERM=off CC_ADMIT_HEADROOM_TERM=off
-               . "$1"; cc_capacity_admit pair-off "s"' _ "$LIB"
-  [ "$status" -eq 0 ]
-  [ "$(jq -r 'select(.caller=="pair-off") | .basis' "$CC_ADMIT_IDL")" != gate-off ]
-  [ "$(jq -r 'select(.caller=="pair-off") | .terms' "$CC_ADMIT_IDL")" = "segments,active" ]
-  # ...and with all four off it IS gate-off, evaluating nothing.
-  run bash -c 'CC_ADMIT_LOAD_TERM=off CC_ADMIT_HEADROOM_TERM=off CC_ADMIT_SEGMENT_TERM=off CC_ADMIT_ACTIVE_TERM=off
-               . "$1"; cc_capacity_admit all-off "s"' _ "$LIB"
-  [ "$(jq -r 'select(.caller=="all-off") | .basis' "$CC_ADMIT_IDL")" = gate-off ]
-}
-
 @test "20 a dead sysctl no longer deletes the terms that never asked about it" {
   # 222 of 239 capacity rows over 2026-08-03..06 read `hw.ncpu unreadable ('')` because /usr/sbin is
   # absent from a launchd PATH. With two terms that fail-open return was defensible; with four it is

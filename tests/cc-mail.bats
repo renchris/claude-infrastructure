@@ -138,6 +138,7 @@ EOF
   # reader the operator trusts: a bare 'nothing' would read as silence on a busy channel.
   run bash "$CM" --since 2h --grep zzz-matches-nothing-zzz
   [[ "$output" == *"no signal mail"* ]] || false
+  [[ "$output" == *"noise suppressed"* ]] || false
 }
 
 @test "hermeticity: a run does not create or write the operator's live mailbox" {

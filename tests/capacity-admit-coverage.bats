@@ -93,12 +93,14 @@ calls_gate() { grep -qE '^[^#]*[^_a-zA-Z]cc_capacity_admit[[:space:]]' "$1"; }
 @test "21b the gate is placed AFTER --dry-run (an inspection must not be refused)" {
   # A dry run prints a command and spawns nothing. Gating it would refuse an inspection — and worse,
   # would spend budget on a spawn that never happened.
-  dry="$(grep -n 'DRYRUN' "$REPO/scripts/boot-resume-launch.sh" | grep -c 'exit 0' || true)"
-  [ "$dry" -ge 0 ]
   dryline="$(awk '/if \[ "\$DRYRUN" = "1" \]/{print NR; exit}' "$REPO/scripts/boot-resume-launch.sh")"
   gateline="$(awk '/cc_capacity_admit boot-resume-launch/{print NR; exit}' "$REPO/scripts/boot-resume-launch.sh")"
   [ -n "$dryline" ] && [ -n "$gateline" ] || false
   [ "$gateline" -gt "$dryline" ]
+  # …and the dry-run branch really LEAVES before the gate: an `exit 0` at the branch's own level,
+  # before the `fi` that closes it. Placement alone is satisfied by a branch that falls through.
+  dryexit="$(awk -v s="$dryline" 'NR>s && /^fi$/{exit} NR>s && /^  exit 0$/{print NR; exit}' "$REPO/scripts/boot-resume-launch.sh")"
+  [ -n "$dryexit" ] || { echo "the --dry-run branch has no exit 0 — it falls through to the gate"; false; }
 }
 
 @test "22 boot-resume.sh keeps SHED distinct from FAILED (rc 9 is not a launch failure)" {

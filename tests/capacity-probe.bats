@@ -39,6 +39,7 @@ EOF
 @test "a healthy box: probe ADMITS, records basis=measured like admit, and charges nothing" {
   run cc_capacity_probe lr100p-test "resume x"
   [ "$status" -eq 0 ]
+  grep -q '"basis":"measured"' "$CC_ADMIT_IDL"
   [ ! -s "$CC_ADMIT_STATE_DIR/lr100p-test.refusals" ]
 }
 

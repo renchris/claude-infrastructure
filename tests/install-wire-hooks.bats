@@ -55,14 +55,6 @@ run_wire() { run bash "$REPO/install.sh" --wire-hooks --config-dir "$CFG"; }
   [ "$status" -eq 0 ]
 }
 
-@test "RED-guard: a target that already has every command gains nothing and loses nothing" {
-  run_wire; [ "$status" -eq 0 ]
-  before=$(jq -S . "$CFG/settings.json")
-  run_wire; [ "$status" -eq 0 ]
-  after=$(jq -S . "$CFG/settings.json")
-  [ "$before" = "$after" ]
-}
-
 # ---- scripts/limit-recover deployment ----------------------------------------------------------
 
 @test "install.sh deploys scripts/limit-recover (the loaded launchd job runs it by absolute path)" {

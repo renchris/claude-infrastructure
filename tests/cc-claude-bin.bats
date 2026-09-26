@@ -139,9 +139,14 @@ setup() {
   # other than what the pin says. SKIP (not fail) where there is no real zshrc, e.g. under CI.
   [ -r "$HOME_REAL_ZSHRC" ] || HOME_REAL_ZSHRC="/Users/$(id -un)/.zshrc"
   [ -r "$HOME_REAL_ZSHRC" ] || skip "no real ~/.zshrc on this machine"
+  # Decide the skip from the zshrc TEXT (the resolver's own pin pattern), never from the resolver's
+  # answer: a pin naming a missing binary falls through to a later rung with rc 0, and reading that
+  # answer back would turn exactly the drift this case exists for into a skip.
+  grep -qE '^[[:space:]]*(local[[:space:]]+)?_bin="\$HOME/\.claude-[0-9]+/[A-Za-z0-9_./-]*claude"' "$HOME_REAL_ZSHRC" \
+    || skip "live zshrc carries no claude() _bin pin"
   run env -u CC_CLAUDE_BIN HOME="/Users/$(id -un)" CC_ZSHRC="$HOME_REAL_ZSHRC" "$C" --explain
   [ "$status" -eq 0 ]
-  [[ "$output" == *"_bin pin"* ]] || skip "live zshrc carries no claude() _bin pin"
+  [[ "$output" == *"_bin pin"* ]] || { echo "the live pin did not win — it names a binary that is not on disk: $output"; false; }
 }
 
 @test "RATCHET: no runtime file pins its own versioned claude binary — consumers go through this resolver" {

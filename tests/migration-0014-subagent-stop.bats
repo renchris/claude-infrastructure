@@ -7,8 +7,9 @@
 #
 # The interesting risk here is NOT "does it write" — it is the two ways a registration migration
 # reads green while doing nothing: skipping every dir because the array it tests for is absent
-# everywhere (which is why the discriminator is the Stop array, not SubagentStop), and registering a
-# path that does not execute. Both get their own arm.
+# everywhere (which is why the discriminator is the Stop array, not SubagentStop — the create arm
+# reds on that mutant, since a skipped dir registers nothing), and registering a path that does not
+# execute (its own refusal arm).
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -54,11 +55,13 @@ registered() { # <settings.json>
 }
 
 @test "the declared migration-verify command actually passes after the run" {
-  # A migration whose own verify does not clear is reported unverifiable forever.
+  # A migration whose own verify does not clear is reported unverifiable forever. Run the DECLARED
+  # command (what registration-state.sh executes), never a retyped copy of it.
+  verify="$(sed -n 's/^# *migration-verify: *//p' "$SUT" | head -1)"
+  [ -n "$verify" ]
   fleet_config "$HOME/.claude"
   bash "$SUT"
-  run jq -e '[.hooks.SubagentStop[]?.hooks[]?.command] | any(. == "~/.claude/hooks/subagent-stop.sh")' \
-    "$CC_CLAUDE_DIR/settings.json"
+  run bash -c "$verify"
   [ "$status" -eq 0 ]
 }
 
@@ -71,16 +74,6 @@ registered() { # <settings.json>
   for d in .claude .claude-next .claude-secondary .claude-tertiary .claude-quaternary; do
     registered "$HOME/$d/settings.json"
   done
-}
-
-@test "ANTI-VACUOUS ARM: it does not skip every dir for lack of a SubagentStop array" {
-  # If the fleet-config discriminator were "has a SubagentStop array" it would be false in all five
-  # dirs, every one would be skipped, and the migration would still exit 0 — green by doing nothing.
-  fleet_config "$HOME/.claude"
-  run bash "$SUT"
-  [ "$status" -eq 0 ]
-  ! printf '%s' "$output" | grep -q 'skipped (not a fleet config)' || false
-  registered "$HOME/.claude/settings.json"
 }
 
 @test "the stored command is the LITERAL tilde, not this machine's expanded \$HOME" {

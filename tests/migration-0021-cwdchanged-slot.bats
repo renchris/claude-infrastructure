@@ -158,14 +158,6 @@ cwd_cmds() { jq -r '[.hooks.CwdChanged[]?.hooks[]?.command]|join(",")' "$1"; }
   [ "$(cwd_cmds "$HOME/.claude/settings.json")" = "$NEW_CMD" ]
 }
 
-@test "APPEND would also satisfy 'present' — so assert the OLD command is GONE" {
-  # The whole call is REPLACE-not-APPEND; an any(== new) check passes under either.
-  fleet_config "$HOME/.claude"
-  bash "$SUT"
-  run jq -e '[.hooks.CwdChanged[]?.hooks[]?.command] | length' "$HOME/.claude/settings.json"
-  [ "$output" = "1" ]
-}
-
 @test "FileChanged's own arm/dispatch pair is NOT touched" {
   fleet_config "$HOME/.claude"
   bash "$SUT"

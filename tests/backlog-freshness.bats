@@ -37,7 +37,7 @@
 #
 #   mutant                                      kills          proves
 #   reopen prints on every verdict              16             the ambient-alarm defect is fenced
-#   arm reverts to unblock-only (literal)       15, 17         reopen really is in the arm
+#   arm reverts to unblock-only (literal)       17             reopen really is in the arm
 #   the re-read `||` becomes `return 9`         17, 19         a sensor cannot wedge a recovery path
 #
 # ⚠️ That third row is why case 19 tests THREE spellings of failure. Its first version fixtured only
@@ -286,22 +286,6 @@ add_row() {
 
 # ── THE RE-ADMISSION RE-READ (item 5) ────────────────────────────────────────────────────────────
 
-@test "15 REOPEN re-asks the premise — the re-admission path that ran no re-read at all" {
-  # Measured 2026-08-12: 374 reopen events against 60 unblock events on the live rows. The guarded
-  # verb was the rare one; the amnesia path was 6x its volume and ran no re-read at all.
-  #
-  # ASSERTED ON THE RE-READ FIRING, NOT ON A STAMP. An earlier version of this test asserted that
-  # reopen made never-validated fall — i.e. that the transition WROTE a currency stamp. That was the
-  # false-freshness bug in miniature and it is now forbidden: `cc-premise check` exits 0 both when a
-  # probe ran and when the row has none, so a stamp written here would mark unprobed rows validated.
-  # One producer writes the stamp (the sweep, which can see which arm fired); this verb re-ASKS and
-  # surfaces. Case 17 is what proves the ask actually happened.
-  local a; a="$(add_row "row one" "true")"
-  run "$CB" reopen "$a" --force
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"RE-READ ITS EVIDENCE"* ]]
-}
-
 @test "15b a re-admission writes NO currency stamp — a transition is not a measurement" {
   local a; a="$(add_row "row one" "exit 1")"
   run "$CB" freshness --never
@@ -321,6 +305,9 @@ add_row() {
 }
 
 @test "17 reopen SPEAKS when the premise is refuted — that is news, not noise" {
+  # Asserted on the RE-READ FIRING, never on a currency stamp: `cc-premise check` exits 0 both when a
+  # probe ran and when the row has none, so a stamp written by reopen would mark unprobed rows
+  # validated (the false-freshness bug). Only the sweep writes the stamp; this verb re-asks.
   local a; a="$(add_row "row one" "true")"
   run "$CB" reopen "$a" --force
   [ "$status" -eq 0 ]
