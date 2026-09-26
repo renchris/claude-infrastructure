@@ -957,6 +957,26 @@ sys.stdout.write("null" if v is None else str(v))' "$2"
   [ "$output" = "0" ] || false
 }
 
+@test "CF6: zombie children of the terminal are NOT counted into rung 6's coalition population" {
+  # 2026-09-26: a kitty that never reaps held 776 <defunct> children, the tree-walk counted every one,
+  # and rung 6 raised a live ALARM (888 against a true 159) over processes holding no memory. It also
+  # broke CF5 (t < p). RED-proof: against the pre-fix walk (`-Ao pid=,ppid=,comm=`, no stat) this
+  # fixture reads 6, not 3.
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  cat > "$BATS_TEST_TMPDIR/bin/ps" <<'EOF'
+#!/bin/sh
+case "$*" in
+  *comm=*) printf '%s\n' '500 1 S /Applications/kitty.app/Contents/MacOS/kitty' \
+              '501 500 S -zsh' '502 500 S+ bash' \
+              '503 500 Z <defunct>' '504 500 Z <defunct>' '505 500 Z <defunct>' ;;
+esac
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/bin/ps"
+  run env CC_CAP_COAL_FP=0 CC_CAP_PS="$BATS_TEST_TMPDIR/bin/ps" bash "$ALARM" --json --no-append
+  [ "$(cf_field "$output" coal_app)" = "kitty" ] || false
+  [ "$(cf_field "$output" coal_procs)" = "3" ]
+}
+
 # ══ THE AUTOMATION COALITION THE TERMINAL FILTER CANNOT SEE (cc-backlog 6c55ce7364d4) ══════
 # Sibling of the CF block above, and it exists because the CF instrument has a POPULATION limit that
 # reads as an instrument limit. read_coalition_true() only ever considers a coalition holding an
