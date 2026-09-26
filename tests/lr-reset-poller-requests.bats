@@ -174,6 +174,37 @@ EOF
   grep -q "SUPERSEDED-BY-LIVE-RUN $SID" "$STATE/poller.log" || { plog; false; }
 }
 
+# THE 2026-09-26 WEDGE (pane 780, ac0f0123). cc-lr re-stamps the claim's holder with the detached
+# driver's pid, and nothing releases it when that driver exits. The poller read only the claim's AGE,
+# so for 30 minutes after the driver died every repair request was dropped as SUPERSEDED-BY-LIVE-RUN
+# (21:02:51Z and 21:05:29Z) while the holder named pid 85261, already dead. cc-lr and lr-fleet both
+# steal a dead holder at once; the poller must read the same fact.
+@test "[RED] claim: a FRESH claim whose holder pid is DEAD is retaken, not honoured" {
+  mkdir -p "$STATE/runs/by-sid/$SID.active"
+  sleep 0 & dead=$!; wait "$dead" || true
+  printf '{"sid":"%s","pane":"780","pid":%d,"ts":"2026-09-26T21:01:19Z","by":"lr-fleet --one --detach"}\n' \
+    "$SID" "$dead" > "$STATE/runs/by-sid/$SID.active/holder"
+  rq "$SID" <<EOF
+{"sid":"$SID","requested_by":"driver-abc"}
+EOF
+  tick
+  grep -q -- "--one $SID" "$FLEET_LOG" || { cat "$FLEET_LOG" 2>/dev/null; plog; false; }
+  ! grep -q "SUPERSEDED-BY-LIVE-RUN $SID" "$STATE/poller.log" || { plog; false; }
+  grep -q "RUN-CLAIM-DEAD-HOLDER $SID" "$STATE/poller.log" || { plog; false; }
+}
+
+@test "claim CONTROL: a FRESH claim whose holder pid is ALIVE is honoured" {
+  mkdir -p "$STATE/runs/by-sid/$SID.active"
+  printf '{"sid":"%s","pane":"780","pid":%d,"by":"lr-fleet --one --detach"}\n' "$SID" "$$" \
+    > "$STATE/runs/by-sid/$SID.active/holder"
+  rq "$SID" <<EOF
+{"sid":"$SID","requested_by":"driver-abc"}
+EOF
+  tick
+  [ ! -s "$FLEET_LOG" ] || { cat "$FLEET_LOG"; false; }
+  grep -q "SUPERSEDED-BY-LIVE-RUN $SID" "$STATE/poller.log" || { plog; false; }
+}
+
 # ══ 3. THE HOOK-ORIGIN POLICY GATE — the red proof ═════════════════════════════════════════════
 
 @test "autorecover: a stop-failure-marker request is NOT drained without the flag, and is LEFT in place" {

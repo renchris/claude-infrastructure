@@ -718,8 +718,22 @@ UPG_BIN="${LR_UPGRADE_BIN:-$LR/lr-upgrade.sh}"
 RUN_CLAIM_TTL_MIN="${LR_RUN_CLAIM_TTL_MIN:-30}"
 [[ "$RUN_CLAIM_TTL_MIN" =~ ^[1-9][0-9]*$ ]] || RUN_CLAIM_TTL_MIN=30
 run_claim_take() { # $1=sid → 0 this tick owns the run, 1 a live run already holds it
-  local d="$RUN_CLAIMS/${1:?run_claim_take needs a sid}.active"
+  local d="$RUN_CLAIMS/${1:?run_claim_take needs a sid}.active" hp
   mkdir "$d" 2>/dev/null && return 0
+  # A HOLDER THAT NAMES A DEAD PID IS STOLEN AT ONCE (2026-09-26, ac0f0123). cc-lr re-stamps the
+  # claim with its detached driver's pid and nothing releases it when that driver exits, so reading
+  # the AGE alone dropped every repair request for 30 minutes behind a corpse (pid 85261). cc-lr's
+  # cl_mutex_take and lr-fleet's lf_run_claim_take already steal a dead holder; this is the same rule.
+  # A claim with no holder file is the poller's own shape and still waits out the TTL below.
+  hp="$(sed -n 's/.*"pid":\([0-9][0-9]*\).*/\1/p' "$d/holder" 2>/dev/null | sed -n '1p')"
+  if [[ -n "$hp" ]] && ! kill -0 "$hp" 2>/dev/null; then
+    rm -rf "$d" 2>/dev/null || true
+    if mkdir "$d" 2>/dev/null; then
+      log "RUN-CLAIM-DEAD-HOLDER $1 — the claim's holder pid $hp is dead; retaken"
+      return 0
+    fi
+    return 1
+  fi
   # `-maxdepth 0`: the claim is a DIRECTORY, and without it find descends and tests the (empty)
   # contents instead of the claim's own mtime. mkdir stamps it once and nothing writes inside, so
   # that mtime is the moment the run was claimed.
