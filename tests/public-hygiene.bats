@@ -109,7 +109,7 @@ commit_file() { # <repo> <path> <content> [message]
   p="$T/out/proj.git"
   [ "$(git -C "$p" show "$tip:notes.md")" = "ask a name or person@example.com" ]
   ! git -C "$p" log --all --name-only --format= | grep -qE 'private-matter|local-only' || false
-  [ -z "$(git -C "$p" log --format='%ae%n%ce%n%B' | grep -iE 'secret|topsecret')" ]
+  ! git -C "$p" log --format='%ae%n%ce%n%B' | grep -qiE 'secret|topsecret' || false
   [ -s "$CC_PRIVATE_DIR/public-projection/commit-map" ]
 }
 
