@@ -27,7 +27,6 @@ setup() {
   SID="9f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f"   # a live session's session_id
   DEADSID="11112222-3333-4444-5555-666677778888"
   export CC_PANE_ID=131                         # pin the control's own-pane leg; never inherit the real one
-  export CC_STRAND_FIXTURE_RE='^(ZZZZZZZZ)-'    # do not let the default fixture filter eat our uuids
 }
 
 _stub_it2() { # <json>

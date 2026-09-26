@@ -71,20 +71,16 @@ log "Quality gate for task: $TASK_SUBJECT (teammate: $TEAMMATE_NAME, team: $TEAM
 # docs/plans/MASTER_ENFORCING_STORE.md § Status log (2026-08-15).
 
 # Find the teammate's working directory by checking recent worktrees
-# Look for worktrees that match the teammate name.
-# Test seam: TASK_QUALITY_GATE_WORKTREE_OVERRIDE injects the path directly (the git-worktree-list
-# search below is CWD-relative and can't be exercised hermetically). Path-only — it changes WHICH
-# directory is gated, never authorization.
-WORKTREE_PATH="${TASK_QUALITY_GATE_WORKTREE_OVERRIDE:-}"
-if [ -z "$WORKTREE_PATH" ]; then
-  while IFS= read -r line; do
-    WT_PATH=$(echo "$line" | awk '{print $1}')
-    if echo "$WT_PATH" | grep -qi "$TEAMMATE_NAME" 2>/dev/null; then
-      WORKTREE_PATH="$WT_PATH"
-      break
-    fi
-  done < <(git worktree list 2>/dev/null)
-fi
+# Look for worktrees that match the teammate name (CWD-relative: tests/task-quality-gate.bats runs
+# the hook from a fixture repo's main checkout, so this search is exercised as shipped).
+WORKTREE_PATH=""
+while IFS= read -r line; do
+  WT_PATH=$(echo "$line" | awk '{print $1}')
+  if echo "$WT_PATH" | grep -qi "$TEAMMATE_NAME" 2>/dev/null; then
+    WORKTREE_PATH="$WT_PATH"
+    break
+  fi
+done < <(git worktree list 2>/dev/null)
 
 # Also check /tmp/worktree-* paths
 if [ -z "$WORKTREE_PATH" ]; then

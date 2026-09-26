@@ -24,7 +24,7 @@
 # out, or fails its own control produces verdict=unknown and NO strand numbers at all.
 # A non-verdict is not a zero (memory: named-failure-vs-no-verdict, absence-alarm-needs-evidence).
 #
-# Env: CC_MAILBOX_DIR · CC_STRAND_IT2_TIMEOUT_S (25) · CC_STRAND_FIXTURE_RE (test-UUID exclusion)
+# Env: CC_MAILBOX_DIR · CC_STRAND_IT2_TIMEOUT_S (25)
 # Exit: 0 = report produced · 3 = no liveness oracle (verdict=unknown; no numbers claimed)
 set -uo pipefail
 
@@ -33,7 +33,7 @@ IT2_TIMEOUT="${CC_STRAND_IT2_TIMEOUT_S:-25}"
 # The live alarm store is ~40% fixture noise (501 of 1,258 entries carry one test UUID, leaked by
 # suites into the live dir — cc-backlog 817faf3a4968). Mailboxes are cleaner, but the same suites
 # use the same keys, so exclude them from every denominator rather than quietly inflating the loss.
-FIXTURE_RE="${CC_STRAND_FIXTURE_RE:-^(AAAAAAAA|BBBBBBBB|DEADBEEF|CAFEBABE|0BADF00D|11111111|22222222|33333333|44444444)-}"
+FIXTURE_RE="^(AAAAAAAA|BBBBBBBB|DEADBEEF|CAFEBABE|0BADF00D|11111111|22222222|33333333|44444444)-"
 JSON=0
 [ "${1:-}" = "--json" ] && JSON=1
 
