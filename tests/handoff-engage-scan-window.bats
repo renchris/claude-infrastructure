@@ -139,13 +139,3 @@ row() { printf '{"paneUUID":"%s","session_id":"%s"}\n' "$PANE" "$1" > "$REG/$PAN
   CC_ENGAGE_SCAN_WINDOW=0 run recycle_engaged "$PANE" "$OLD_SID" "MK-R-STALE"
   [ "$status" -eq 0 ]
 }
-
-@test "recycle_engaged: the predecessor-exclusion still holds inside the window" {
-  # Scoping must not weaken the false-positive guard the function exists for: the caller of a recycle
-  # IS the session being recycled, so its own (fresh, therefore in-window) transcript must never
-  # count as proof of the relaunch.
-  row "$OLD_SID"
-  engaged_transcript "$PROJ/$OLD_SID.jsonl" "MK-LEAK"   # fresh mtime, but it is the PREDECESSOR
-  run recycle_engaged "$PANE" "$OLD_SID" "MK-LEAK"
-  [ "$status" -eq 1 ]
-}

@@ -29,7 +29,9 @@
 #      gitstatusd shape that tests/handoff-fire-inject.bats:351 records as the real wedged-pane one.
 #   C. THE ACTUATOR, not just the predicate. recycle_fire is extracted and RUN: on `unknown` it must
 #      exit non-zero having typed NOTHING, and on `cc` it must reach the watcher-arm path — a
-#      correct predicate wired to a branch that types anyway is the same incident.
+#      correct predicate wired to a branch that types anyway is the same incident. The `shell`
+#      actuator case (a CONFIRMED bare prompt still types) lives in
+#      tests/handoff-recycle-pane-survives.bats, whose recycle_fire harness is the superset.
 #
 # NOTHING HERE EXECUTES A REAL FIRE. Functions are sed-extracted (the established idiom,
 # tests/handoff-fire-pane-proof.bats:30) and `ps` is a fixture-driven stub, so no live pane is read
@@ -284,14 +286,4 @@ setup_recycle() {
   run recycle_fire
   run cat "$TYPED"
   [ "$output" = "" ]
-}
-
-@test "recycle_fire: a CONFIRMED bare prompt still types — the fix is not a blanket refusal" {
-  fixture_idle_shell
-  setup_recycle
-  STUB_TTY=ttys017
-  run recycle_fire
-  [ "$status" -eq 0 ]
-  run cat "$TYPED"
-  [ "$output" = "claude --resume abc" ]
 }

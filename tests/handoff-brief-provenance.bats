@@ -23,6 +23,10 @@
 #   4. THE jq-LESS FALLBACK CARRIES IT. An absence test inherits every hole in its input as a
 #      POSITIVE finding: a real fire written down the degraded path would be reported as a lost
 #      succession — the field manufacturing the very alarm it exists to make trustworthy.
+#
+# Property 2 and the jq-path half of property 3 (plus the recycle-intent row) are pinned by
+# tests/handoff-prompt-file-join.bats, which extracts the same emitters; the duplicates here were
+# removed on 2026-09-25. Section numbers below keep their original numbering.
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -46,9 +50,6 @@ setup() {
     sed -n '/^_under_test() {/,/^}/p'            "$HF"
     sed -n '/^_resolved_prompt_file() {/,/^}/p'  "$HF"
     sed -n '/^emit_fire_event() {/,/^}/p'        "$HF"
-    sed -n '/^_fire_gate_of() {/,/^}/p'          "$HF"
-    sed -n '/^emit_fire_refusal() {/,/^}/p'      "$HF"
-    sed -n '/^emit_recycle_event() {/,/^}/p'     "$HF"
     sed -n '/^  emit_handoff_telemetry() {/,/^  }$/p' "$HF"
   } > "$BATS_TEST_TMPDIR/units.sh"
   bash -n "$BATS_TEST_TMPDIR/units.sh" || { echo "extraction from $HF is not valid bash" >&2; return 1; }
@@ -68,6 +69,7 @@ _last() { tail -1 "$LOG"; }
 # between the two paths that both exist at emit time, which is the property the join depends on.
 @test "an admit row records the brief the LEAD named, not the back-channel copy it was rewritten to" {
   PROMPT_FILE_ORIG="$BRIEF"
+  # shellcheck disable=SC2034  # read by the emitters sourced from units.sh
   PROMPT_FILE="$BATS_TEST_TMPDIR/fire-successor.nb-copy.txt"   # what :7417 substitutes
   emit_fire_event admitted capacity "ok" admit capacity
   run jq -r '.prompt_file' <<<"$(_last)"
@@ -75,84 +77,16 @@ _last() { tail -1 "$LOG"; }
   [ "$output" = "$BRIEF" ]
 }
 
-# ── 2. a refusal carries it too ────────────────────────────────────────────────────────────────
-@test "a refused fire records its brief, so never-attempted and attempted-then-refused stay apart" {
-  PROMPT_FILE_ORIG="$BRIEF"
-  emit_fire_refusal capacity "box is full"
-  run jq -r '[.class, .verdict, .prompt_file] | @tsv' <<<"$(_last)"
-  [ "$status" -eq 0 ]
-  [ "$output" = "$(printf 'refused\trefuse\t%s' "$BRIEF")" ]
-}
-
 # ── 3. a relative argv path is absolutised ─────────────────────────────────────────────────────
 # A sweep scanning a brief directory compares absolute paths; a bare `fire-x.txt` matches nothing.
 @test "a relative --prompt-file is recorded absolute, so a sweep can compare it at all" {
   cd "$BATS_TEST_TMPDIR"
+  # shellcheck disable=SC2034  # read by the emitters sourced from units.sh
   PROMPT_FILE_ORIG="fire-successor.txt"
   emit_fire_event admitted capacity "ok" admit capacity
   run jq -r '.prompt_file' <<<"$(_last)"
   [ "$status" -eq 0 ]
   [ "$output" = "$BATS_TEST_TMPDIR/fire-successor.txt" ]
-}
-
-# ── 4. unmeasured reads null, never "" ─────────────────────────────────────────────────────────
-# R9. An empty string is a path that matches nothing while LOOKING measured — the worst value for
-# a field whose consumer is an absence test.
-# The assertion is `has("prompt_file")` AND the value, deliberately. The first version asserted
-# only `.prompt_file | type == "null"` and PASSED against pristine origin/main, where the key does
-# not exist at all — jq answers "null" for an ABSENT key exactly as it does for a null-valued one,
-# so the oracle could not fail and certified nothing. `has()` is the half that separates
-# "measured, and the answer is nothing" from "never written down", which is the entire distinction
-# this field exists to make.
-@test "a row with no brief in scope emits a PRESENT key valued null, not an empty string" {
-  # shellcheck disable=SC2034  # read by _resolved_prompt_file, sourced from units.sh
-  PROMPT_FILE_ORIG="" PROMPT_FILE=""
-  emit_fire_event admitted capacity "ok" admit capacity
-  run jq -r 'has("prompt_file") as $p | [$p, (.prompt_file | type)] | @tsv' <<<"$(_last)"
-  [ "$status" -eq 0 ]
-  [ "$output" = "$(printf 'true\tnull')" ]
-}
-
-# ── 5. the recycle-intent row — the one that witnesses the lost class ──────────────────────────
-# The lost-succession class is a lead that announced a recycle and died before firing. recycle-intent
-# is the only row emitted early enough to witness the attempt, and it runs in the PARENT where
-# PROMPT_FILE is set.
-@test "the recycle-intent row names the successor brief" {
-  PROMPT_FILE_ORIG="$BRIEF"
-  emit_recycle_event recycle-intent "" "pane-9" "recycle ATTEMPTED"
-  run jq -r '[.class, .prompt_file] | @tsv' <<<"$(_last)"
-  [ "$status" -eq 0 ]
-  [ "$output" = "$(printf 'recycle-intent\t%s' "$BRIEF")" ]
-}
-
-# ── 6. the jq-less fallback carries it ─────────────────────────────────────────────────────────
-# An absence test inherits every hole in its input as a POSITIVE finding. A real fire written down
-# the degraded path and missing this field is reported as a lost succession — the field
-# manufacturing the exact alarm it exists to make trustworthy. `jq` is removed from PATH rather
-# than mocked, so the fallback is reached the same way production would reach it.
-@test "the jq-less telemetry fallback still names the brief, so a degraded write is not a false alarm" {
-  # All five are read by the emitters sourced from units.sh, which shellcheck cannot follow into;
-  # they are also re-set inside the subshell below, which is the arm that actually runs the
-  # fallback. A shellcheck directive must be a SINGLE line — wrapping the reason onto a second
-  # comment line makes it unparseable (SC1073) and silently costs the whole file its analysis.
-  # shellcheck disable=SC2034
-  PROMPT_FILE_ORIG="$BRIEF"
-  # shellcheck disable=SC2034
-  SPAWNED_PANE="pane-9" WANT_SELF_RETIRE=0 SESSION_ID="sid-under-test"
-  # shellcheck disable=SC2016
-  # $1/$2 are the INNER shell's positionals (passed after `_` below), not this shell's.
-  run env PATH="/usr/bin:/bin" HOME="$HOME" bash -c '
-    . "$1"
-    PROMPT_FILE_ORIG="$2"; SPAWNED_PANE=pane-9; WANT_SELF_RETIRE=0
-    FIRING_SID=sid-under-test; CHOSEN=next; FIRE_GOAL=""
-    jq() { return 127; }        # force the fallback without removing the real binary from the box
-    emit_handoff_telemetry 1
-  ' _ "$BATS_TEST_TMPDIR/units.sh" "$BRIEF"
-  [ "$status" -eq 0 ]
-  line="$(_last)"
-  # Asserted as TEXT, deliberately: the fallback's contract is the literal printf shape, and parsing
-  # it with jq would pass on a line jq had to repair.
-  [[ "$line" == *"\"prompt_file\":\"$BRIEF\""* ]]
 }
 
 # ── 7. the fallback spells absence as null, not as an empty JSON string ────────────────────────

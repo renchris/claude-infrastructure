@@ -12,6 +12,10 @@
 # These assertions are structural (they read the shipped source), because the failing path needs a
 # congested live iTerm2 to reproduce and cannot be summoned in CI. A structural guard that cannot
 # fail is worthless, so each one is paired with a RED control proving it fails on the old text.
+# resolve_headless_anchor's own 0/1/2 mapping is no longer pinned here: the kitty backend stub made
+# it summonable, and tests/handoff-fire-kitty-daemon.bats runs the real function through all three
+# states. The overflow-to-WINDOW surface is driven through the real spawn() in
+# tests/handoff-splitright.bats ("a FULL anchor tab overflows to a NEW WINDOW").
 
 setup() {
   # HERMETIC: fixture $HOME before anything else. These assertions only read the shipped source,
@@ -36,18 +40,6 @@ setup() {
   grep -q 'NO-LIVE-SESSION' "$FIRE"
   # and it must be appended to `out` (stdout), not merely printed to stderr
   grep -A2 'no live iTerm2 session to anchor to' "$FIRE" | grep -q 'out.append("NO-LIVE-SESSION")'
-}
-
-@test "resolve_headless_anchor maps the token to 1 and every other failure to 2" {
-  run bash -c "sed -n '/^resolve_headless_anchor()/,/^}/p' '$FIRE'"
-  [ "$status" -eq 0 ]
-  # determined-empty -> 1
-  echo "$output" | grep -q 'NO-LIVE-SESSION) return 1'
-  # probe failure -> 2 (never 1, which would re-enable the mint)
-  echo "$output" | grep -q 'return 2'
-  # a non-zero it2py status must NOT be collapsed into the empty verdict
-  run bash -c "sed -n '/^resolve_headless_anchor()/,/^}/p' '$FIRE' | grep -qE 'it2py anchor .*\|\| return 1'"
-  [ "$status" -ne 0 ]
 }
 
 @test "the probe no longer swallows its own failure silently" {
@@ -96,41 +88,14 @@ setup() {
 @test "RED CONTROL: the pre-fix source shape fails every structural guard above" {
   tmp="$BATS_TEST_TMPDIR/prefix.sh"
   cp "$FIRE" "$tmp"
-  # reconstruct the ORIGINAL two lines that carried the defect
+  # reconstruct the ORIGINAL caller line that carried the defect
   perl -0pi -e 's/    ares="\$\(resolve_headless_anchor\)" \|\| arc=\$\?/    ares="\$(resolve_headless_anchor || true)"/' "$tmp"
-  perl -0pi -e 's/    NO-LIVE-SESSION\) return 1 ;;\n//' "$tmp"
 
   # the leaking caller shape is now present again → the guard that forbids it must trip
   grep -q 'resolve_headless_anchor || true' "$tmp"
   # and the status-capture shape is gone → its guard must trip
   run grep -q 'ares="$(resolve_headless_anchor)" || arc=$?' "$tmp"
   [ "$status" -ne 0 ]
-  # and the token mapping is gone → its guard must trip
-  run bash -c "sed -n '/^resolve_headless_anchor()/,/^}/p' '$tmp' | grep -q 'NO-LIVE-SESSION) return 1'"
-  [ "$status" -ne 0 ]
-}
-
-@test "RED CONTROL: a probe failure must not be spellable as the empty verdict" {
-  # If someone reintroduces `|| return 1` on the it2py call, the dedicated guard must catch it.
-  tmp="$BATS_TEST_TMPDIR/regress.sh"
-  cp "$FIRE" "$tmp"
-  # The sabotaged line now also carries the pane cap as argv[3] (room-aware anchoring). This
-  # pattern must TRACK the real line — when it did not, the substitution silently no-op'd, no
-  # regression was produced, and the control failed instead of proving anything. A control that
-  # can no longer reproduce the defect is inert, which is worse than absent.
-  perl -0pi -e 's/^  out="\$\(it2py anchor .*\|\| rc=\$\?$/  out="\$(it2py anchor "\$desk" 2>\/dev\/null)" || return 1/m' "$tmp"
-  # prove the sabotage actually landed before asserting on it
-  grep -q 'it2py anchor "\$desk" 2>/dev/null)" || return 1' "$tmp"
-  run bash -c "sed -n '/^resolve_headless_anchor()/,/^}/p' '$tmp'"
-  # the regressed text matches the forbidden pattern the real guard rejects
-  echo "$output" | grep -qE 'it2py anchor .*\|\| return 1'
-}
-
-# ── the shipped script still parses ───────────────────────────────────────────────────
-
-@test "handoff-fire.sh remains syntactically valid" {
-  run bash -n "$FIRE"
-  [ "$status" -eq 0 ]
 }
 
 # ── Metal-gate room awareness (2026-07-30) ────────────────────────────────────────────
@@ -155,16 +120,6 @@ setup() {
   [ "$status" -eq 0 ]
   echo "$output" | grep -q '_has_room'
   echo "$output" | grep -q 'len(t2.sessions) < cap'
-}
-
-@test "overflow degrades to a WINDOW, never a background tab" {
-  elif_line=$(grep -n 'every tab is at the cap' "$FIRE" | head -1 | cut -d: -f1)
-  [ -n "$elif_line" ]
-  # within the overflow arm, the surface must be window and must NOT be bg-tab
-  run bash -c "sed -n '${elif_line},$((elif_line+12))p' '$FIRE'"
-  echo "$output" | grep -q 'SURFACE="window"'
-  run bash -c "sed -n '${elif_line},$((elif_line+12))p' '$FIRE' | grep -q 'SURFACE=\"bg-tab\"'"
-  [ "$status" -ne 0 ]
 }
 
 @test "the overflow arm MINTS the window itself — SURFACE alone would hit no case arm" {

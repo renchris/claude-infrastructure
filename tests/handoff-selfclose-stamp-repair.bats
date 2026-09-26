@@ -167,8 +167,8 @@ and <!-- handoff-fire engagement marker: $MARKER (ignore) -->"
 $HEADING
 
 <!-- handoff-fire engagement marker: $MARKER (ignore) -->"
-  CC_SELFCLOSE_BRIEF_CONTRACT=0 fired_contract_in_my_brief "$PANE" \
-    && { echo "the R8 kill switch did not disable the path"; false; } || true
+  ! CC_SELFCLOSE_BRIEF_CONTRACT=0 fired_contract_in_my_brief "$PANE" \
+    || { echo "the R8 kill switch did not disable the path"; false; }
 }
 
 @test "proof REFUSED: no transcript for this pane (nothing was asked ⇒ nothing is proven)" {

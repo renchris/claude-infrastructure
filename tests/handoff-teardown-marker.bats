@@ -123,12 +123,14 @@ json_ok() { # $1 = file → assert it parses as one JSON object (skip if no pyth
 
 @test "telemetry: firing_rss_kb is keyed by SESSION_ID, not the pane FIRING_SID" {
   # The pidfile lives at the SESSION-ID key; FIRING_SID is a DIFFERENT (pane) value that must NOT
-  # match. Pre-fix the lookup used $FIRING_SID → miss → firing_rss_kb:0; post-fix it finds the pid.
+  # match. Pre-fix the lookup used $FIRING_SID → miss; post-fix it finds the pid. Asserted as a
+  # POSITIVE: since R9 a miss writes null (not 0), so the old `!= "firing_rss_kb":0}` could not fail.
   mkdir -p "$HOME/.claude/watchdog"
   printf '%s\n' "$$" > "$HOME/.claude/watchdog/cc-sid-rss.pid"
   FIRING_SID="pane-NOMATCH" SESSION_ID="cc-sid-rss" SPAWNED_PANE="pane-EEE" CHOSEN="next" \
     emit_handoff_telemetry 1
   run cat "$HJ"
   [[ "$output" == *'"engaged":1'* ]] || false
-  [[ "$output" != *'"firing_rss_kb":0}'* ]]          # rss found ⇒ lookup used SESSION_ID
+  run jq -r '.firing_rss_kb | type' "$HJ"
+  [ "$output" = number ]                             # rss found ⇒ lookup used SESSION_ID
 }

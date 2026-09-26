@@ -58,8 +58,9 @@ EOF
   # PATH ordering. `export PATH` above stays for vm_stat, which is stubbed on PATH by vmstub().
   export CC_FIRE_SYSCTL="$BIN/sysctl"
   # M10: the gate grew a SECOND term (memory headroom). Pin it to a comfortably-admitting synthetic
-  # value here so cases 1–9 keep asserting the LOAD term alone and never flip with the free-memory
-  # mood of the machine — the same ambient-dependence M11 removes from the rest of the corpus. The
+  # value here so cases 1–9 keep asserting the LOAD term alone (5, the --recycle exemption, is
+  # folded into 22) and never flip with the free-memory mood of the machine — the same
+  # ambient-dependence M11 removes from the rest of the corpus. The
   # headroom cases below override this per-test; the parse cases unset it and stub vm_stat instead.
   export CC_FIRE_HEADROOM_OVERRIDE=64
   # ── WAVE E (task #170) — THE LOAD TERM NOW SHIPS OFF; THIS SUITE PINS IT ON ────────────────────
@@ -142,12 +143,6 @@ EOF
       bash "$HF" --prompt-file "$PAYLOAD" --dry-run
   [ "$status" -ne 9 ]
   echo "$output" | grep -q 'capacity gate: ADMIT' || false
-}
-
-@test "5 --recycle is EXEMPT — a replacement fire is net-zero panes and must never be gated" {
-  # Gating a recycle would strand the very handoff that SHEDS load (fail-closed-as-amplifier).
-  fire 10 27.16 --recycle
-  [ "$status" -ne 9 ]
 }
 
 @test "6 FAIL-OPEN — unreadable hw.ncpu admits rather than stranding the fleet" {

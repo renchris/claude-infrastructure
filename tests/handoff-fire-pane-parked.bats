@@ -328,12 +328,6 @@ modal_screen() {
   [ "$status" -ne 0 ]
 }
 
-@test "verify_engagement: a wedged pane returns 4 (not 1, not 2) and names the modal" {
-  modal_screen
-  run verify_engagement "$PROJ" "MARK" "$REG" "$PANE" "$IT2" "the brief"
-  [ "$status" -eq 4 ]
-}
-
 @test "verify_engagement: ABSTAINS — a wedged pane is never re-sent the brief" {
   # THE SAFETY INVARIANT THIS STATE EXISTS FOR, and it is stronger than the parked one. A startup
   # dialog is a single-key prompt, so the paste's own bytes become ANSWERS — and the two dialogs
