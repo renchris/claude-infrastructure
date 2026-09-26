@@ -2,8 +2,9 @@
 # install.sh --- Skills --- deploys NESTED skill files, and never destroys an unversioned real file.
 #
 # Pre-fix, the skills loop was `for f in "$skilldir"*` + `[[ -f "$f" ]]` — top level only. A nested
-# tracked file was therefore never linked, and the 23 skills/kpmg-deck/**/* files on trunk lived as
-# REAL FILES outside the converger. Tests 1-2 are RED against that loop (the paths simply do not
+# tracked file was therefore never linked, and the 23 skills/kpmg-deck/**/* files then on trunk lived
+# as REAL FILES outside the converger. (kpmg-deck has since left this public repo — it quotes a
+# licensed brand book — so the fixture skill is now frontend-design-vue, which has nested references.) Tests 1-2 are RED against that loop (the paths simply do not
 # exist in a fresh config dir); tests 4-5 pin the backup guard that recursion makes necessary,
 # with 5 as its inertness control.
 
@@ -19,22 +20,22 @@ setup() {
   mkdir -p "$CFG"
   # A tracked skill that actually carries nested content. If this fixture ever goes flat the
   # tests below would pass vacuously, so assert its shape rather than trusting the name.
-  NESTED_REL="references/brand-kit.md"
-  NESTED_SRC="$REPO/skills/kpmg-deck/$NESTED_REL"
+  NESTED_REL="references/typography.md"
+  NESTED_SRC="$REPO/skills/frontend-design-vue/$NESTED_REL"
 }
 
 run_install() { run bash "$REPO/install.sh" --config-dir "$CFG"; }
 
 @test "fixture is real: the repo skill under test carries nested tracked content" {
   [ -f "$NESTED_SRC" ]
-  run bash -c "find '$REPO/skills/kpmg-deck' -mindepth 2 -type f | wc -l"
+  run bash -c "find '$REPO/skills/frontend-design-vue' -mindepth 2 -type f | wc -l"
   [ "$output" -gt 0 ]
 }
 
 @test "a NESTED skill file is deployed, and as a symlink back to the repo" {
   run_install
   [ "$status" -eq 0 ]
-  dest="$CFG/skills/kpmg-deck/$NESTED_REL"
+  dest="$CFG/skills/frontend-design-vue/$NESTED_REL"
   [ -L "$dest" ]
   [ "$(readlink "$dest")" = "$NESTED_SRC" ]
 }
@@ -42,8 +43,8 @@ run_install() { run bash "$REPO/install.sh" --config-dir "$CFG"; }
 @test "nested parent directories are created as REAL dirs, not symlinks" {
   run_install
   [ "$status" -eq 0 ]
-  [ -d "$CFG/skills/kpmg-deck/references" ]
-  [ ! -L "$CFG/skills/kpmg-deck/references" ]
+  [ -d "$CFG/skills/frontend-design-vue/references" ]
+  [ ! -L "$CFG/skills/frontend-design-vue/references" ]
 }
 
 @test "every nested tracked file of the fixture skill is linked — no partial conversion" {
@@ -51,15 +52,15 @@ run_install() { run bash "$REPO/install.sh" --config-dir "$CFG"; }
   [ "$status" -eq 0 ]
   missing=0
   while IFS= read -r f; do
-    rel="${f#"$REPO"/skills/kpmg-deck/}"
-    [ -L "$CFG/skills/kpmg-deck/$rel" ] || { echo "not linked: $rel"; missing=$((missing + 1)); }
-  done < <(find "$REPO/skills/kpmg-deck" -type f)
+    rel="${f#"$REPO"/skills/frontend-design-vue/}"
+    [ -L "$CFG/skills/frontend-design-vue/$rel" ] || { echo "not linked: $rel"; missing=$((missing + 1)); }
+  done < <(find "$REPO/skills/frontend-design-vue" -type f)
   [ "$missing" -eq 0 ]
 }
 
 @test "an unversioned real file that DIFFERS is backed up before being replaced by the link" {
-  mkdir -p "$CFG/skills/kpmg-deck/references"
-  dest="$CFG/skills/kpmg-deck/$NESTED_REL"
+  mkdir -p "$CFG/skills/frontend-design-vue/references"
+  dest="$CFG/skills/frontend-design-vue/$NESTED_REL"
   printf 'hand-written content that exists nowhere in git\n' > "$dest"
   run_install
   [ "$status" -eq 0 ]
@@ -70,8 +71,8 @@ run_install() { run bash "$REPO/install.sh" --config-dir "$CFG"; }
 }
 
 @test "CONTROL: an identical real file is NOT backed up — the guard is inert where content agrees" {
-  mkdir -p "$CFG/skills/kpmg-deck/references"
-  dest="$CFG/skills/kpmg-deck/$NESTED_REL"
+  mkdir -p "$CFG/skills/frontend-design-vue/references"
+  dest="$CFG/skills/frontend-design-vue/$NESTED_REL"
   cp "$NESTED_SRC" "$dest"
   run_install
   [ "$status" -eq 0 ]

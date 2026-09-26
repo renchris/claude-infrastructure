@@ -50,17 +50,17 @@ what you would produce for any similar brief, it is not yet a design.
 
 Use the **seven axes** from the mirrored legacy skill — `vendor/uidotsh/ui/ideas.md` (this exists
 ONLY in our mirror; the vendor dropped it from the current `ideas` skill): layout · typography ·
-color · spacing · surfaces · shape · personality. The calibration bar (our mirror's copy of
-`ideas.md` carries the same example; the vendor's own "Good" was template 1 above):
+color · spacing · surfaces · shape · personality. The calibration bar, in our own words (the mirror's `ideas.md` carries the
+vendor's version; the vendor's own "Good" was template 1 above):
 
-> Bad: "Minimal and clean — a simple layout with plenty of whitespace"
+> Bad: "Modern and friendly — rounded cards, a soft gradient and a clean sans-serif"
 >
-> Good: "Sea chart, for a sailing school — a chart-paper blue-white ground (#EEF4F7) and three
-> depth-sounding blues (#BFD7E6, #6FA3C7, #1D4E73) as the only surface colours, with buoy red
-> (#C8102E) kept for the booking button. One humanist sans (Fira Sans) in sentence case throughout,
-> headings large and light. The course schedule is plotted along a horizontal tide-time axis
-> instead of stacked in cards; photos run full-bleed with a soft 16px radius. No shadows: depth
-> comes from the blue steps."
+> Good: "Field notebook, for a botanical survey team — an unbleached-paper ground (#F4F0E6) with
+> pencil graphite (#3B3B38) for text and one pressed-leaf green (#4F6B3A) for anything the user
+> can act on. Headings in a condensed slab set like specimen labels; body in a plain book serif.
+> Each observation is a ruled index-card row with its coordinates in a monospaced margin, not a
+> floating card; photos sit inside thin hairline frames like taped-in prints. No gradients, no
+> shadows: hierarchy comes from rules and label weight."
 
 The second is a decision taken from the subject's own world; the first is a mood. If your
 directions differ only in accent colour, you generated one direction four times.
@@ -106,6 +106,7 @@ accessory off.
 - **The assets the guidelines hardcode are local.** `placeholder-content.md` says "always use
   `https://assets.ui.sh/screenshots/1.webp`"; all 77 of those files are in `vendor/uidotsh/assets/`.
   Self-host and rewrite the base URL — the CDN dies with the vendor.
-- **Mirror root:** `~/.claude/vendor/uidotsh/` (live) = `vendor/uidotsh/` in claude-infrastructure.
+- **Mirror root:** `~/.claude/vendor/uidotsh/` (live), linked from the operator's private store
+  (`~/Development/claude-private/vendor/uidotsh/`; licensed content, so never in the public repo).
   `VISUAL-KIT.md` there is the map. The corpus is frozen at 2026-09-19; the vendor's own installer
   needs an account token and would supersede it.

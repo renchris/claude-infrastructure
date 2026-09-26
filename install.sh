@@ -910,6 +910,61 @@ if [[ -d "$REPO_DIR/vendor" ]]; then
   done
 fi
 
+# --- Private overlay: content this PUBLIC repo must not carry, linked from a private store ---
+# Personal identity values (identity.json → identity.local.json, read by hooks/lib/identity.*),
+# licensed or unlicensed third-party content (paid vendor corpora, unlicensed upstream skills, a
+# brand book) live in $CC_PRIVATE_DIR — a remote-less git repo on the operator's machine — and are
+# linked here with the SAME models as the tracked legs above: vendor/* as one dir symlink per
+# plugin, skills/* per file. Record of what lives there and why: skills/LOCAL_ONLY.md.
+#
+# RUN AFTER the tracked legs, and a name the repo still tracks is SKIPPED loudly rather than
+# overridden: the tracked copy is the one deploy-parity audits. Links point OUTSIDE the checkout,
+# so deploy-live's orphan prune never judges them (it only prunes dead links into $REPO).
+# Global installs only; a fixture --config-dir never reaches the operator's private store.
+CC_PRIVATE_DIR="${CC_PRIVATE_DIR:-$HOME/Development/claude-private}"
+if $IS_GLOBAL && [[ -d "$CC_PRIVATE_DIR" ]]; then
+  echo ""
+  echo "Private overlay → $CONFIG_DIR/ (from $CC_PRIVATE_DIR)"
+  if [[ -f "$CC_PRIVATE_DIR/identity.json" ]]; then
+    link_file "$CC_PRIVATE_DIR/identity.json" "$CONFIG_DIR/identity.local.json"
+  else
+    echo "  ⚠ no $CC_PRIVATE_DIR/identity.json — identity-aware gates fail CLOSED (template: identity.example.json)" >&2
+    warnings=$((warnings + 1))
+  fi
+  ensure_real_dir "$CONFIG_DIR/vendor"
+  for pvdir in "$CC_PRIVATE_DIR"/vendor/*/; do
+    [[ -d "$pvdir" ]] || continue
+    pvsrc="${pvdir%/}"; pvdest="$CONFIG_DIR/vendor/$(basename "$pvsrc")"
+    # TRACKED is a git question, not a filesystem one: an untracked dir can linger in the checkout
+    # holding ignored residue (__pycache__, build output) and must not shadow the private copy.
+    if [[ -n "$(git -C "$REPO_DIR" ls-files -- "vendor/$(basename "$pvsrc")" 2>/dev/null | head -1)" ]]; then
+      echo "  ⚠ vendor/$(basename "$pvsrc") is tracked in the repo AND private — the tracked copy wins" >&2
+      warnings=$((warnings + 1)); continue
+    fi
+    if [[ -L "$pvdest" && "$(readlink "$pvdest")" == "$pvsrc" ]]; then
+      skipped=$((skipped + 1)); continue
+    fi
+    run ln -sfn "$pvsrc" "$pvdest"
+    echo "  ✓ $pvdest → $pvsrc"
+    installed=$((installed + 1))
+  done
+  for pskilldir in "$CC_PRIVATE_DIR"/skills/*/; do
+    [[ -d "$pskilldir" ]] || continue
+    pname="$(basename "$pskilldir")"
+    if [[ -n "$(git -C "$REPO_DIR" ls-files -- "skills/$pname" 2>/dev/null | head -1)" ]]; then
+      echo "  ⚠ skills/$pname is tracked in the repo AND private — the tracked copy wins" >&2
+      warnings=$((warnings + 1)); continue
+    fi
+    ensure_real_dir "$CONFIG_DIR/skills/$pname"
+    while IFS= read -r f; do
+      rel="${f#"$pskilldir"}"
+      [[ "$rel" == */* ]] && ensure_real_dir "$CONFIG_DIR/skills/$pname/${rel%/*}"
+      link_file "$f" "$CONFIG_DIR/skills/$pname/$rel"
+    done < <(find "$pskilldir" -type f -not -path '*/.git/*' -not -path '*/__pycache__/*' \
+               -not -path '*/.ruff_cache/*' | sort)
+  done
+fi
+
 # --- Global instructions (CLAUDE.global.md → ~/.claude/CLAUDE.md) — repo is the source of truth ---
 # The lean resident knowledge layer. It is COPIED as a real file (CC reads ~/.claude/CLAUDE.md
 # as user memory; a symlink into the repo would break across branch switches). PROJECT-only memory

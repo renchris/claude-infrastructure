@@ -20,6 +20,27 @@ Filed against backlog `3e2358f03e23`, which measured 18 live skills with no trac
 Every row above except `pyramid-principle` carries a `> **Local-only …**` block under its `SKILL.md`'s first heading, so the next editor who
 opens one is told before editing. That block is also what the row's stored falsifier greps for.
 
+## Content moved out because this repo is PUBLIC (2026-09-26)
+
+`docs/plans/PUBLIC_REPO_HYGIENE.md` made this repo safe to stay public. Anything we may not
+redistribute left the tree and now lives in the operator's **private store**,
+`$CC_PRIVATE_DIR` (default `~/Development/claude-private`, a git repo with no remote).
+`install.sh`'s private-overlay leg links it live, so every skill and vendor corpus below still
+resolves at `~/.claude/...` exactly as before. The links point outside this checkout, so
+`deploy-live`'s orphan prune never touches them.
+
+| Artifact | Why it cannot be tracked here |
+|---|---|
+| `vendor/uidotsh/` | Paid ui.sh content. Its own README says it is licensed for the account holder's local use only. `skills/visual-direction` routes into it through the live path `~/.claude/vendor/uidotsh/`. |
+| `skills/grok-wiki-cli/`, `skills/grok-wiki-custom/` | Verbatim upstream skill text with no licence grant. |
+| `skills/repo-wiki/` | Prompt text derived from an unlicensed upstream. It can come back only as a clean-room rewrite. |
+| `skills/kpmg-deck/` | Quotes a corporate brand book page by page and ships its brand tokens. It is its own git repo inside the private store (`skills/kpmg-deck/.git`). `scripts/mirror-kpmg-deck.sh`, which copied it into this checkout, is retired. |
+| `assets/**/recycle-bmo.*`, `assets/**/clawd-bmo-*` | Renders of a third-party cartoon character. The generators (`tools/banner/recycle.py`, `tools/blender/clawd_bmo.py`) stay and write into `assets/`, where `.gitignore` keeps the output out. |
+| `identity.local.json` | The operator's personal identity values: account e-mails, mailbox aliases, the git author address. Template: `identity.example.json`. |
+
+Each local-only skill's private `SKILL.md` carries a `> **Local-only …**` block under its first
+heading, so the stored falsifier below still reads only the two settled names.
+
 ## The same decision outside `skills/` — and why it is recorded here
 
 `deploy-link-parity.sh` began sweeping `skills/` and `agents/` on 2026-08-19, so the live-only

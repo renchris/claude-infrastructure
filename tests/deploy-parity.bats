@@ -2126,9 +2126,14 @@ _rawdeploy_extract() {  # $1=install.sh  $2=out TSV: line \t kind \t srcclass \t
   # VARIABLE source #2: the instructions A/B variant copy, `run cp "$_variant"` (ade130dc7). Like
   # $vsrc it is loop-driven — its for-header is scored by CLASS COVERAGE via the assert's
   # `CLAUDE.global.*.md)` arm — so it is pinned here by its spelling, not by a declaration.
-  [ "$DVAR" -eq 2 ]
+  # VARIABLE source #3: the PRIVATE-overlay vendor directory link, `run ln -sfn "$pvsrc"`. Its
+  # source is $CC_PRIVATE_DIR — outside the checkout BY DESIGN (licensed content this public repo
+  # may not carry; docs/plans/PUBLIC_REPO_HYGIENE.md) — so no $REPO_DIR-keyed arm can ever score it,
+  # and deploy-link-parity deliberately does not judge links that point outside the checkout.
+  [ "$DVAR" -eq 3 ]
   [ "$(awk -F'\t' '$2=="DEPLOY" && $3=="VARIABLE"{print $1}' "$RAW" \
-       | while IFS= read -r n; do sed -n "${n}p" "$MAP"; done | grep -c 'ln -sfn')" -eq 1 ]
+       | while IFS= read -r n; do sed -n "${n}p" "$MAP"; done | grep -c 'ln -sfn')" -eq 2 ]
+  [ "$(awk -F'\t' '$2=="DEPLOY" && $3=="VARIABLE" && $4=="$pvsrc"{n++} END{print n+0}' "$RAW")" -eq 1 ]
   [ "$(awk -F'\t' '$2=="DEPLOY" && $3=="VARIABLE" && $4=="$_variant"{n++} END{print n+0}' "$RAW")" -eq 1 ]
   # LIVE-PATH source: install.sh:703's ~/bin/restore-file convenience symlink. Its source is
   # $HOME/.claude/..., i.e. the LIVE layer rather than the checkout, so it is unnamable in the units

@@ -75,3 +75,18 @@ node_modules/
 
 # Timestamped pre-migration backups of accounts.json. Point-in-time safety copies, never inputs.
 /accounts.json.pre-*
+
+# ── Local-only: content this PUBLIC repo must not carry (skills/LOCAL_ONLY.md) ──────────────────
+# Kept in the operator's private store ($CC_PRIVATE_DIR, default ~/Development/claude-private) and
+# linked live by install.sh's private-overlay leg. The ignore rows stop them being re-added here;
+# scripts/public-hygiene-lint.sh refuses them at the land gate as well.
+/identity.local.json
+/vendor/uidotsh/
+/skills/grok-wiki-cli/
+/skills/grok-wiki-custom/
+/skills/repo-wiki/
+/skills/kpmg-deck/
+/assets/banner/recycle-bmo.svg
+/assets/demo/recycle-bmo.mp4
+/assets/demo/clawd-bmo-orbit.mp4
+/assets/blender/clawd-bmo-*.webp

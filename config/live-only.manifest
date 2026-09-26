@@ -72,4 +72,7 @@ skills/pyramid-principle-full/*	local-only	skills/LOCAL_ONLY.md	a substantial de
 skills/pyramid-principle/*	local-only	skills/LOCAL_ONLY.md	its SKILL.md is a symlink into ~/Development/convert-pdf-to-md, which is tracked in THAT repo and already has history and a remote
 skills/cafe-wifi-optimization/*	local-only	skills/LOCAL_ONLY.md	this repo is public and the skill records the operator's dated venue locations; its payload is versioned in the private ~/Development/personal repo
 agents/motion-reviewer.md	vendored	skills/LOCAL_ONLY.md	the Motion MCP plugin vendors an agent alongside its skill; same upstream-owned class as skills/motion
-skills/kpmg-deck/showcase.pptx	residue	skills/kpmg-deck/MIRROR.md	deliberate BUILD OUTPUT inside an otherwise fully tracked skill: .gitignore excludes it, MIRROR.md records it as a stale artifact to regenerate, examples/showcase.py produces it
+skills/kpmg-deck/*	local-only	skills/LOCAL_ONLY.md	quotes a licensed corporate brand book page by page and carries its brand tokens; lives in the private store, linked live by install.sh's private-overlay leg (its examples also write .pptx build output beside themselves)
+skills/grok-wiki-cli/*	local-only	skills/LOCAL_ONLY.md	verbatim upstream skill text with no licence grant; lives in the private store
+skills/grok-wiki-custom/*	local-only	skills/LOCAL_ONLY.md	verbatim upstream skill text with no licence grant; lives in the private store
+skills/repo-wiki/*	local-only	skills/LOCAL_ONLY.md	prompt text derived from an unlicensed upstream; lives in the private store

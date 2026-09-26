@@ -6,6 +6,8 @@ allowed-tools: Bash
 
 # agent-browser
 
+> Adapted from vercel-labs/agent-browser's own skill (Apache-2.0), with local modifications; licence text in `LICENSE-agent-browser` beside this file.
+
 Headless browser automation CLI. Uses bundled Chromium (not existing Chrome sessions).
 
 ## Quick Start

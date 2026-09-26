@@ -9,7 +9,7 @@ Adapted from OpenClaw's `test-audit` skill
 (<https://github.com/openclaw/openclaw/blob/main/.agents/skills/test-audit/SKILL.md>, MIT,
 © 2026 OpenClaw Foundation), which let OpenClaw delete ~400k LOC of tests with little change in
 coverage. The value bar and junk patterns are theirs. The bats mechanics, the gates and the
-repo-specific patterns are ours.
+repo-specific patterns are ours. The MIT notice for the adapted portions is in `LICENSE-OpenClaw` beside this file.
 
 Two modes, one value bar. The **authoring gate** applies to every new or changed test at write
 time. **Audit mode** sweeps existing tests for ones that re-assert source, duplicate stronger proof,
