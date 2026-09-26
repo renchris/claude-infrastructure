@@ -53,8 +53,9 @@ UID_N="$(id -u)"
 # defect and must never again be reported as seven failed assertions.
 command -v bats >/dev/null 2>&1 || {
   echo "✗ REFUSING to activate: \`bats\` does not resolve on the hardened PATH above." >&2
-  echo "  nightly-regression.sh SKIPS the bats check when bats is absent, and a skip is not a" >&2
-  echo "  RED — so the selftest's red-path arms would fail for a reason that is not a defect." >&2
+  echo "  The nightly no longer runs the full suite (the post-land verifier owns that), but its" >&2
+  echo "  step-4 gate and lint selftests still run bats inside them, and would fail for a reason" >&2
+  echo "  that is not a defect." >&2
   echo "  Install it (brew install bats-core) and re-run; do not 'fix' the selftest." >&2
   exit 1
 }

@@ -206,8 +206,9 @@ launchctl bootstrap gui/\$(id -u) ~/Library/LaunchAgents/com.claude.desk-invaria
 # kill-switch: launchctl bootout gui/\$(id -u)/com.claude.desk-invariant
 
 ════ ⑩ NIGHTLY REGRESSION SIGNAL (P0-18) ═══════════════════════════════════════════════════════════════
-# Runs bats + gate/lint selftests + plutil -lint nightly (04:00); PAGES on red (autonomy/pages/ + osascript);
-# always logs one line to ~/.claude/autonomy/regression.log. p12: nothing runs the tests between lands.
+# Runs gate/lint selftests + plutil -lint + the post-land net checks nightly (04:00); PAGES on red
+# (autonomy/pages/ + osascript); always logs one line to ~/.claude/autonomy/regression.log. The full
+# bats suite is the post-land verifier's job, not this one's (retired from the nightly 2026-09-26).
 cp "$REPO/launchd/com.claude.nightly-regression.plist" ~/Library/LaunchAgents/
 launchctl bootstrap gui/\$(id -u) ~/Library/LaunchAgents/com.claude.nightly-regression.plist
 # eyeball one run now:  "$REPO/scripts/nightly-regression.sh" --run ; tail -3 ~/.claude/autonomy/regression.log
