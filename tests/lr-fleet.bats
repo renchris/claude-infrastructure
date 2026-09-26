@@ -1202,9 +1202,38 @@ SH
 @test "retire-husks: without --yes it never closes, however complete the proof" {
   # The confirmation gate. Everything else can be satisfied and the default is still to print, not
   # to act — an actuator aimed at the operator's own visible windows does not get to be implicit.
-  blocked_tx "$SEC" "$SID"; husk_successor_turn; row HUSKP-9x7z "$SID"; husk_lock
-  run bash "$FLEET" --retire-husks
+  # So the proof here IS complete: every READ gate ahead of --yes passes, which the `would retire`
+  # line shows (it prints only past all four). Until 2026-09-25 this fixture stopped at gate 2 — the
+  # successor's turn sat in the SOURCE store and no terminal was stubbed — so it passed with the
+  # --yes gate deleted.
+  blocked_tx "$SEC" "$SID"; row HUSKP-9x7z "$SID"; husk_lock
+  # (2) the successor has spoken in the TARGET store, after the move
+  printf '{"type":"assistant","timestamp":"2026-09-09T00:52:00.000Z","message":{"role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"the successor speaking"}]}}\n' \
+    >> "$TER/projects/$SLUG/$SID.jsonl"
+  # (3) a live successor: an argv leaf, via a stub `ps` (as D7 does), so no real process is named
+  mkdir -p "$BATS_TEST_TMPDIR/psbin"
+  cat > "$BATS_TEST_TMPDIR/psbin/ps" <<PS
+#!/bin/bash
+case "\$*" in
+  *command=*) printf '%s\n' " 77721     1 claude --permission-mode auto --resume $SID" ;;
+  *) exec /bin/ps "\$@" ;;
+esac
+PS
+  # (4) a terminal that lists the husk window and records any close — never a real kitty
+  printf '#!/bin/bash\necho unix:/nonexistent/kitty-fixture\n' > "$BATS_TEST_TMPDIR/kitty-socket"
+  cat > "$BATS_TEST_TMPDIR/kitty" <<'SH'
+#!/bin/bash
+case "$*" in
+  *close-window*) printf '%s\n' "$*" >> "$(dirname "$0")/kitty-close.log" ;;
+  *" ls") printf '[{"tabs":[{"windows":[{"id":"HUSKP-9x7z"}]}]}]\n' ;;
+esac
+SH
+  chmod +x "$BATS_TEST_TMPDIR/psbin/ps" "$BATS_TEST_TMPDIR/kitty-socket" "$BATS_TEST_TMPDIR/kitty"
+  PATH="$BATS_TEST_TMPDIR/psbin:$PATH" CC_KITTY_SOCKET_BIN="$BATS_TEST_TMPDIR/kitty-socket" \
+    CC_TERM_KITTY="$BATS_TEST_TMPDIR/kitty" run bash "$FLEET" --retire-husks
+  [[ "$output" == *"would retire — re-run with --yes"* ]] || { echo "the fixture never reached the --yes gate: $output"; false; }
   [[ "$output" != *"RETIRED"* ]] || { echo "it closed without --yes: $output"; false; }
+  [ ! -s "$BATS_TEST_TMPDIR/kitty-close.log" ] || { echo "a close reached the terminal: $(cat "$BATS_TEST_TMPDIR/kitty-close.log")"; false; }
 }
 
 @test "retire-husks: --pane narrows to one husk and ignores the others" {

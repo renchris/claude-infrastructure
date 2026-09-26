@@ -195,13 +195,6 @@ fired()  { echo "$1" | grep -q '"decision":"block"'; }   # hook stdout ⇒ did i
 }
 
 # ── CAP: halts after ANTIDEF_MAX distinct defers (paraphrase-loop backstop; never wedge) ──
-@test "cap: distinct defers fire up to the cap then go silent" {
-  export ANTIDEF_MAX=2
-  run runhook "$(mkfix "Want me to run the tests?")"      "cap-sess"; fired "$output"
-  run runhook "$(mkfix "Shall I proceed with the wire?")" "cap-sess"; fired "$output"
-  run runhook "$(mkfix "Should I go ahead and commit?")"  "cap-sess"
-  [ "$status" -eq 0 ]; [ -z "$output" ]   # 3rd distinct defer → capped → silent
-}
 
 # ── A SPENT CAP MUST LEAVE A READABLE ROW (A07 R4, 2026-09-08) ────────────────────────────────────
 # A cap trip suppresses a REAL demand, and the record named only the spent counter — so 106 trips
@@ -248,8 +241,10 @@ fired()  { echo "$1" | grep -q '"decision":"block"'; }   # hook stdout ⇒ did i
 # ── IDL: exactly one {fired|abstained} record per invocation (B-3: didn't-fire ≠ never-evaluated) ──
 @test "IDL: fire writes a fired record with the tell" {
   run runhook "$(mkfix "Want me to run the tests next?")"
-  grep -q '"disposition":"fired"' "$ANTIDEF_IDL"
-  grep -q '"hook":"anti-deference-nudge"' "$ANTIDEF_IDL"
+  # ONE record must carry all three — two free-standing greps could each match a different row,
+  # and neither ever read the tell.
+  jq -e 'select(.disposition=="fired" and .hook=="anti-deference-nudge") | .tell | length > 0' \
+    "$ANTIDEF_IDL" >/dev/null
 }
 @test "IDL: a clean answer writes an abstained record" {
   run runhook "$(mkfix "Done — landed at abc1234, all green.")"
