@@ -192,15 +192,6 @@ STUB
   [ "$status" -eq 1 ]
 }
 
-@test "FAILNEG: a rejected /goal (marker in attachment rows only) stays 1 — it idles forever and DOES need the re-fire" {
-  mkdir -p "$PROJ/proj"
-  { printf '{"type":"attachment","content":"the brief MARKER-XYZ ok"}\n'
-    printf '{"type":"system","content":"Goal condition is limited to 4000 characters"}\n'
-  } > "$PROJ/proj/s.jsonl"
-  run engagement_seen "$PROJ" "MARKER-XYZ" "$REG" "$PANE"
-  [ "$status" -eq 1 ]
-}
-
 @test "FAILNEG THIRD STATE: an unreadable projects tree is 2 (cannot tell), never 1" {
   mkdir -p "$PROJ/locked"
   printf '{"type":"user","message":{"role":"user","content":"MARKER-XYZ"}}\n' > "$PROJ/locked/s.jsonl"

@@ -24,6 +24,8 @@ setup() {
 fire() { printf '%s' "$1" | "$HOOK"; }
 
 # ── the fail-open contract ──────────────────────────────────────────────────────────────────────
+# The '{}', malformed-JSON and empty-stdin shapes are owned by tests/subagent-stop-report-pointer.bats
+# ("stdout is EMPTY and exit is 0 on every input shape"), which also asserts empty stdout.
 
 @test "snake_case payload: exit 0" {
   run fire '{"session_id":"s1","agent_name":"tm-gates","transcript_path":"/tmp/x.jsonl"}'
@@ -37,21 +39,6 @@ fire() { printf '%s' "$1" | "$HOOK"; }
 
 @test "nested-object payload: exit 0" {
   run fire '{"session":{"id":"s3"},"agent":{"name":"explore"},"finalMessage":"done"}'
-  [ "$status" -eq 0 ]
-}
-
-@test "empty object (no fields at all): exit 0" {
-  run fire '{}'
-  [ "$status" -eq 0 ]
-}
-
-@test "malformed JSON: exit 0" {
-  run fire 'not json{{{'
-  [ "$status" -eq 0 ]
-}
-
-@test "empty stdin: exit 0" {
-  run fire ''
   [ "$status" -eq 0 ]
 }
 

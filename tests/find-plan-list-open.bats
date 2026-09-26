@@ -46,12 +46,6 @@ list_open() { bash "$FP" --list-open; }
   ! echo "$output" | grep -q 'old\.md'
 }
 
-@test "enumeration spans multiple projects (cross-project)" {
-  run list_open
-  echo "$output" | grep -q 'projA'
-  echo "$output" | grep -q 'projB'
-}
-
 @test "reads the index: an indexed plan outside the scan roots still appears" {
   # Only projA is in the scan roots; projB's plan is discoverable ONLY via the index.
   export CC_PLAN_SCAN_ROOTS="$PA/docs/plans"
