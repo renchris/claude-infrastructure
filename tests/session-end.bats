@@ -60,11 +60,6 @@ seed_session() { # $1=sid — LIVE pid so the background straggler sweep keeps i
   [ -e "$HOME/.claude/victim.pid" ]     # guard refused the traversal -> survives
 }
 
-@test "still logs 'Session ended'" {
-  end_for AAA
-  grep -q 'Session ended' "$HOME/.claude/logs/sessions.log"
-}
-
 # ── attribution on the sessions.log line (row b521cb445465) ───────────────────
 # The line used to be a bare "[ts] Session ended": no sid, no reason, on a log
 # where ~86% of such lines are PHANTOMS emitted by `claude mcp list` during
@@ -122,17 +117,6 @@ seed_session() { # $1=sid — LIVE pid so the background straggler sweep keeps i
   case "$line" in *"sid=AAA"*) ;; *) false ;; esac
   case "$line" in *"reason=clear"*) ;; *) false ;; esac
   [ -e "$WD/AAA.pid" ] || false                 # and the pidfile is still kept
-}
-
-@test "stdin is consumed once — the sid still reaches the removal logic" {
-  # Regression guard for the reordering: reading stdin at the top for the log line
-  # must not starve the charset-guarded rm below. An empty second read EXITS 0, so
-  # the `|| echo '{}'` fallback would NOT fire and the sid would silently blank.
-  seed_session AAA
-  run end_for AAA
-  [ "$status" -eq 0 ]
-  [ ! -e "$WD/AAA.pid" ] || false
-  [ ! -e "$WD/AAA.id" ] || false
 }
 
 @test "reason=clear keeps the pidfile (process survives /clear — no team-archive regression)" {

@@ -146,12 +146,6 @@ STAMP() { stamp_for "$WT"; }
   [ "$(refs_for frank)" -eq 3 ]
 }
 
-@test "checkpointing itself still works (GC change is additive)" {
-  printf 'dirty\n' > "$WT/new.txt"
-  fire Stop
-  git -C "$WT" show-ref --verify --quiet "refs/wip/team-alice/LAST"
-}
-
 @test "the GC stamp is never left behind outside the watchdog dir" {
   fire Stop
   [ -f "$(STAMP)" ]

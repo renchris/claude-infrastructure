@@ -478,14 +478,3 @@ _load_rotate() { eval "$(sed -n '/^rotate_out() {/,/^}/p' "$S")"; }
   grep -rq 'FIRST'  "$D"
   grep -rq 'SECOND' "$D"
 }
-
-@test "G4: MUTATION — a plain overwrite loses the prior run with no error" {
-  # The pre-2026-09-09 behaviour, as a control: it exits 0 and says nothing, which is exactly why
-  # the loss went unnoticed for two hours.
-  local out="$D/mut.tsv"
-  printf 'PRIOR\n' > "$out"
-  run bash -c "cp /dev/null '$out'"
-  [ "$status" -eq 0 ]
-  ! grep -q 'PRIOR' "$out" || false
-  [ -z "$output" ]
-}

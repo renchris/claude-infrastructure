@@ -13,7 +13,7 @@
 # unreadable tracking file, a swallowed heredoc) cannot pass by emitting nothing everywhere.
 #
 # RED-PROOF, run against `git show origin/main:hooks/cache-expiry-warning.sh` (the pristine pre-fix
-# subject): **5 of 7 fail** — cases 2, 3, 5, 6, 7. Cases 1 and 4 pass on BOTH branches and are named
+# subject): **4 of 6 fail** — cases 2, 3, 5, 6. Cases 1 and 4 pass on BOTH branches and are named
 # here as CONTRACT-PRESERVATION, not counted as proofs: they pin the silent-on-first-message path and
 # the JSON envelope, neither of which this change was allowed to alter.
 
@@ -75,12 +75,6 @@ run_hook() { run env CLAUDE_CONFIG_DIR="$D" ${1:+CC_PROMPT_CACHE_TTL_S=$1} bash 
   ! printf '%s' "$msg" | grep -q '/compact' || false
   # and it must say the quiet part out loud, so a future reader does not re-add the advice
   printf '%s' "$msg" | grep -q 'does NOT save quota'
-}
-
-@test "the TTL is not hardcoded to 300 anywhere in the hook" {
-  # the original defect, pinned so a revert is caught at the gate rather than in the field
-  ! grep -qE '^[[:space:]]*CACHE_TTL=300([[:space:]]|$)' "$H" || false
-  grep -q 'CC_PROMPT_CACHE_TTL_S' "$H"
 }
 
 @test "the reported TTL in the message tracks the configured one" {

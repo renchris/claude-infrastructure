@@ -13,7 +13,8 @@
 # Harness laws: L1 the fixtures are real transcript JSONL and a real SQLite index built by the
 # shipped init functions; L2 every assertion is failure-DISTINCT (a live owner's lock is NOT
 # stolen — the mirror of "an abandoned lock IS"); L3 `[ ]` / `grep -q` only; L4 each lock rule has
-# both polarities so neither "never steal" nor "always steal" can pass.
+# both polarities so neither "never steal" nor "always steal" can pass (the DEAD and RECYCLED
+# holder reclaims are owned by session-index-lock-stale.bats cases 3 and 4).
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -64,32 +65,13 @@ JSONL
   mkdir -p "$LOCKD"
   # The lock records ownership as TWO files, `pid` + `lstart` (see _session_index_lock_own) —
   # not a single `owner` line. These fixtures wrote `owner`, which the reclaim path never reads,
-  # so every case below fell through to the dir-age branch and the suite tested nothing real.
+  # so every such case fell through to the dir-age branch and the suite tested nothing real.
   printf '%s\n' "$$" > "$LOCKD/pid"
   ps -o lstart= -p $$ > "$LOCKD/lstart"          # byte-identical to what the holder writes
   touch -t "$(date -v-200d +%Y%m%d%H%M)" "$LOCKD"
   run bash -c "HOME='$HOME' bash -c 'source \"$HELPERS\"; session_index_trylock && echo ACQUIRED'"
   [ "$status" -ne 0 ]
   ! echo "$output" | grep -q ACQUIRED
-}
-
-@test "a lock whose owner pid is DEAD is taken over immediately" {
-  mkdir -p "$LOCKD"
-  printf '%s\n' 99999999 > "$LOCKD/pid"          # `kill -0` fails ⇒ holder gone ⇒ reclaim
-  printf 'Wed Jan  1 00:00:00 2020\n' > "$LOCKD/lstart"
-  run bash -c "HOME='$HOME' bash -c 'source \"$HELPERS\"; session_index_trylock && echo ACQUIRED'"
-  [ "$status" -eq 0 ]
-  echo "$output" | grep -q ACQUIRED
-}
-
-@test "a lock whose pid was RECYCLED into a different process is taken over" {
-  # Same pid, different start time — `kill -0` alone would call this alive forever.
-  mkdir -p "$LOCKD"
-  printf '%s\n' "$$" > "$LOCKD/pid"              # pid is LIVE, but the recorded start time differs
-  printf 'Wed Jan  1 00:00:00 2020\n' > "$LOCKD/lstart"
-  run bash -c "HOME='$HOME' bash -c 'source \"$HELPERS\"; session_index_trylock && echo ACQUIRED'"
-  [ "$status" -eq 0 ]
-  echo "$output" | grep -q ACQUIRED
 }
 
 @test "acquiring stamps an owner, and unlock removes the whole lock dir" {
