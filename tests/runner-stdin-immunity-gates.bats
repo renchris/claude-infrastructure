@@ -1,13 +1,13 @@
 #!/usr/bin/env bats
-# runner-stdin-immunity-gates — the SEVEN NON-LANDING bats runners hand bats a stdin that is
+# runner-stdin-immunity-gates — the SIX NON-LANDING bats runners hand bats a stdin that is
 # /dev/null, always. The counterpart of tests/runner-stdin-immunity.bats, which pins the same
 # property for the two LANDING runners (ship-land.sh, postland-verify.sh).
 #
 # WHY A SECOND FILE RATHER THAN A WIDER CENSUS IN THE FIRST. ce13bd08's evidence — 290 suites
-# screened, none depends on inherited stdin — licenses the LANDING corpus only. These are seven
-# subsystems with seven callers, and each needed its own screen: does that caller read stdin itself,
-# and does anything pipe into it? All seven came back clean (nightly-regression and deploy-live read
-# no stdin — their four while-read loops are every one of them fed from a file or heredoc; the four
+# screened, none depends on inherited stdin — licenses the LANDING corpus only. These are six
+# subsystems with six callers, and each needed its own screen: does that caller read stdin itself,
+# and does anything pipe into it? All came back clean (deploy-live reads
+# no stdin — its while-read loops are every one of them fed from a file or heredoc; the four
 # safety gates read none at all; task-quality-gate reads it exactly once, at the top, and see G10).
 #
 # THE MEASURED CORRECTION THIS FILE CARRIES (2026-08-06). ce13bd08 and 5e460544 shipped with the
@@ -17,19 +17,18 @@
 # and `com.claude.deploy-live --auto` were never the exposed path.
 # The exposed path is the one nobody wrote down: an AGENT OR DESK invocation. A Claude Code session's
 # fd 0 is a unix SOCKET, and a child that reads it never sees EOF — measured directly, rc 124. That
-# is how every one of these seven scripts is actually run day to day, so the exposure is larger than
+# is how every one of these six scripts is actually run day to day, so the exposure is larger than
 # the original framing, not smaller; it just lives somewhere else. The polarity is unchanged and is
 # still the whole problem: a hand-run from a terminal gets a stdin that EOFs and is GREEN, so the
 # hang is invisible to the only person who could see it, and a hung gate looks exactly like a slow
 # one.
 #
 # WHAT IS PINNED:
-#   G1   CENSUS — every bats EXECUTION site in all seven files carries the redirect, each file
+#   G1   CENSUS — every bats EXECUTION site in all six files carries the redirect, each file
 #        FLOORED so a rename cannot empty a grep into a vacuous pass. This is the arm that goes red
 #        when someone adds a new call site without one.
-#   G2/3 nightly-regression — the redirect rides a FUNCTION INVOCATION (`run_check … </dev/null`) and
-#        has to reach the `"$@"` inside. That propagation is the subtlest of the four shapes and the
-#        easiest to "tidy" away, so it is proven, not asserted.
+#   G2/3 retired 2026-09-26 with the call site they pinned: nightly-regression's full-suite step
+#        (`run_check "bats:…" … </dev/null`) no longer exists, so it runs no bats of its own.
 #   G4/5 session-lifecycle-safety-gate — the helper-function shape (`bats_green`), one redirect
 #        covering two call sites.
 #   G6/7 route-safety-gate — the inline `bats … && ok … || bad …` shape, standing for the three
@@ -56,7 +55,6 @@
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"   # hermeticity ratchet: never the live ~/
-  NGR="$REPO/scripts/nightly-regression.sh"
   SLG="$REPO/scripts/session-lifecycle-safety-gate.sh"
   RTG="$REPO/scripts/route-safety-gate.sh"
   DPL="$REPO/scripts/deploy-live.sh"
@@ -126,18 +124,18 @@ strip_redirect() {   # stdin = artifact text → stdout = mutant
 
 # ── G1 — the census ──────────────────────────────────────────────────────────────────────────────
 
-@test "G1: EVERY bats execution site in all EIGHT runners redirects stdin — census is FLOORED" {
-  # The behavioural arms prove the property at four sites; this proves COVERAGE at all of them, and
+@test "G1: EVERY bats execution site in all SEVEN runners redirects stdin — census is FLOORED" {
+  # The behavioural arms prove the property at three sites; this proves COVERAGE at all of them, and
   # it is the arm that fails when a NEW call site is added without a redirect. Comment lines are
   # excluded throughout: each of these files now carries a rationale that names both `bats` and
   # `</dev/null`, and a census that counted its own explanation would be self-congratulatory.
   #
-  # THE EIGHTH RUNNER, added 2026-08-10 (backlog b4f93c9fa73c). scripts/offbox-run.sh is the off-box
+  # THE OFF-BOX RUNNER, added 2026-08-10 (backlog b4f93c9fa73c). scripts/offbox-run.sh is the off-box
   # corpus runner, and it is in this census because it shipped WITHOUT the redirect and CI proved the
   # hazard is real rather than screened-clean: three matrix shards stopped after 3, 25 and 17 of their
   # 37-38 suites, each immediately after a stdin-reading suite that ate the rest of the shard's suite
   # list out of the runner's own `while read` pipe. The step exited 0 and its log simply ended.
-  # It is the first CONFIRMED instance of this class here — the seven above were screened and came
+  # It is the first CONFIRMED instance of this class here — the six above were screened and came
   # back clean — and it moves the exposure once more. Not the daemon's stdin (launchd hands
   # /dev/null), and not only an agent session's socket fd 0: ANY runner that feeds itself a work list
   # on a pipe is exposed to its own children, with no launchd and no session involved at all.
@@ -149,7 +147,6 @@ strip_redirect() {   # stdin = artifact text → stdout = mutant
   local spec f anchor floor hits missing bad=""
   # file|fixed-string anchor for the EXECUTION site|expected minimum count
   for spec in \
-    "scripts/nightly-regression.sh|run_check \"bats:|1" \
     "hooks/task-quality-gate.sh|bats \"\${runbats[@]}\"|2" \
     "scripts/session-lifecycle-safety-gate.sh|bats \"\$suite\" </dev/null|1" \
     "scripts/route-safety-gate.sh|bats tests/cc-route.bats|1" \
@@ -169,43 +166,6 @@ strip_redirect() {   # stdin = artifact text → stdout = mutant
     [ -z "$missing" ] || bad="$bad"$'\n'"$f: unredirected bats call site(s):"$'\n'"$missing"
   done
   [ -z "$bad" ] || { echo "$bad"; false; }
-}
-
-# ── G2/G3 — nightly-regression: does the redirect reach through a FUNCTION INVOCATION? ────────────
-
-# Extract the REAL run_check plus the REAL invocation line. run_check's own dependencies are stubbed
-# to their inert forms — `outfile` is a tmpfile-namer and NCHECK/REDS are tallies; none of them
-# touches stdin, so reducing them keeps the probe hermetic without weakening what it measures.
-build_ngr_probe() {   # $1=variant(fixed|mutant) → $BATS_TEST_TMPDIR/ngr.sh
-  local body line
-  body="$(sed -n '/^run_check() {/,/^}/p' "$NGR")"
-  [ -n "$body" ]                                              # an empty extraction is a vacuous pass
-  printf '%s\n' "$body" | grep -qF '"$@" >"$out" 2>&1' || false   # …and a non-empty one can be wrong
-  line="$(real_line "$NGR" 'run_check "bats:')"
-  if [ "$1" = mutant ]; then line="$(printf '%s\n' "$line" | strip_redirect)" || return 1; fi
-  { printf 'REDS=(); NCHECK=0\n'
-    printf 'outfile() { printf "%%s" "/dev/null"; }\n'
-    printf 'BATS_DIR="tests"\n'
-    printf '%s\n' "$body"
-    printf '%s\n' "$line"
-  } > "$BATS_TEST_TMPDIR/ngr.sh"
-}
-
-@test "G2: nightly-regression's run_check invocation carries the redirect INTO the child" {
-  # The shape here is unique among the seven: the redirect sits on a FUNCTION CALL, and has to apply
-  # to the whole body so that the `"$@"` inside gets it. That is correct bash and it is also exactly
-  # the kind of thing a tidy-up moves onto the wrong line, so it is measured rather than trusted.
-  install_draining_bats
-  build_ngr_probe fixed
-  [ "$(rc_with_never_eof_stdin 20 env PATH="$STUBDIR:$PATH" bash "$BATS_TEST_TMPDIR/ngr.sh")" = "0" ]
-}
-
-@test "G3: ANTI-VACUITY — nightly-regression's invocation WITHOUT the redirect hangs" {
-  # Proves three things G2 cannot prove alone: the fixture really presents a stdin that never EOFs,
-  # the stub really reads it, and the redirect is what makes G2 green.
-  install_draining_bats
-  build_ngr_probe mutant
-  [ "$(rc_with_never_eof_stdin 5 env PATH="$STUBDIR:$PATH" bash "$BATS_TEST_TMPDIR/ngr.sh")" = "124" ]
 }
 
 # ── G4/G5 — session-lifecycle-safety-gate: the helper-function shape ──────────────────────────────
@@ -297,7 +257,7 @@ build_dpl_probe() {   # $1=variant → $BATS_TEST_TMPDIR/dpl.sh
 }
 
 @test "G8: deploy-live's host-check bats call returns PROMPTLY on a stdin that never EOFs" {
-  # The quietest of the seven: host_checks never blocks and never changes the exit code, so a suite
+  # The quietest of the six: host_checks never blocks and never changes the exit code, so a suite
   # wedged here is not even a red — it is a deploy that simply never returns.
   install_draining_bats
   build_dpl_probe fixed

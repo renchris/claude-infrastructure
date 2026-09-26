@@ -455,13 +455,12 @@ STUB
 
 # ── nightly-regression postland_inertness (env-seam wired, stubbed check-set) ──────────────────
 nightly() { # runs the nightly with every other check stubbed green
-  mkdir -p "$BATS_TEST_TMPDIR/gt" "$BATS_TEST_TMPDIR/empty"
-  printf '#!/usr/bin/env bats\n@test "ok" { true; }\n' > "$BATS_TEST_TMPDIR/gt/ok.bats"
+  mkdir -p "$BATS_TEST_TMPDIR/empty"
   printf '<?xml version="1.0"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict/></plist>\n' \
     > "$BATS_TEST_TMPDIR/good.plist"
   env CC_NIGHTLY_NOTIFY=/usr/bin/true CC_NIGHTLY_NEVERSTUCK=/usr/bin/true CC_NIGHTLY_ABSTAIN=/usr/bin/true \
       CC_NIGHTLY_GATE_GLOB="$BATS_TEST_TMPDIR/empty/*.sh" CC_NIGHTLY_LINT_GLOB="$BATS_TEST_TMPDIR/empty/*.sh" \
-      CC_NIGHTLY_BATS_DIR="$BATS_TEST_TMPDIR/gt" CC_NIGHTLY_PLIST_GLOB="$BATS_TEST_TMPDIR/good.plist" \
+      CC_NIGHTLY_PLIST_GLOB="$BATS_TEST_TMPDIR/good.plist" \
       CC_NIGHTLY_PAGEDIR="$PAGES" CC_NIGHTLY_LOG="$BATS_TEST_TMPDIR/reg.log" \
       CC_NIGHTLY_REPO="$SHARED" CC_NIGHTLY_POSTLAND_DIR="$1" CC_NIGHTLY_POSTLAND_AGE=0 \
       CC_NIGHTLY_POSTLAND_VERIFY="${PV_STUB:-/usr/bin/true}" \

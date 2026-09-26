@@ -2,13 +2,15 @@
 # shellcheck disable=SC2015  # file-wide: the selftest's `[ test ] && okp || badp` reporter idiom
 # nightly-regression.sh — P0-18: the standing regression signal.
 #
-# Why (p12): NOTHING runs the tests between lands. never-stuck regressed 21·0 → 19·2 and sat unwatched;
-# a broken detector can rot for days because its bats only run when a human remembers. This is the
-# launchd-side nightly that runs the deterministic regression suite and PAGES on any red via P0-15's
-# pages/ consumer + an OS-level notification — so a deliberately-broken detector pages by morning.
+# Why (p12): never-stuck regressed 21·0 → 19·2 and sat unwatched — a broken detector can rot for days
+# when nothing runs it on a schedule. This is the launchd-side nightly that runs the checks no land
+# runs (plist lint, the live invariants, every gate/lint selftest, the post-land net's own liveness)
+# and PAGES on any red via P0-15's pages/ consumer + an OS-level notification. The full bats suite is
+# NOT one of them: under LAND_PIPELINE_V2 scripts/postland-verify.sh is the one party that asserts
+# it green (fresh worktree, retries, every cycle), and steps 5/5b below watch that verifier.
 #
 # WHAT IT RUNS (deterministic, side-effect-free — a 3am job must not mutate the live fleet):
-#   1. bats tests/                       — the full suite (a broken detector's bats reds here)
+#   1. (retired 2026-09-26) the full `bats tests/` run — see the note where it stood in regress()
 #   2. plutil -lint launchd/*.plist      — every plist parses (catches the raw-& class, T-P16-6)
 #   3. never-stuck-gate.sh (live)        — THE systematic invariant (the p12 21·0→19·2 signal)
 #   3b. idl-abstain-alarm.sh (live)      — the IDL abstention monitor: PAGES a check stuck at 100%
@@ -66,7 +68,6 @@ REPO="${CC_NIGHTLY_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 PAGEDIR="${CC_NIGHTLY_PAGEDIR:-$HOME/.claude/autonomy/pages}"
 LOG="${CC_NIGHTLY_LOG:-$HOME/.claude/autonomy/regression.log}"
 NOTIFY_CMD="${CC_NIGHTLY_NOTIFY:-}"                                   # empty → builtin osascript
-BATS_DIR="${CC_NIGHTLY_BATS_DIR:-$REPO/tests}"
 PLIST_GLOB="${CC_NIGHTLY_PLIST_GLOB:-$REPO/launchd/*.plist}"
 GATE_GLOB="${CC_NIGHTLY_GATE_GLOB:-$REPO/scripts/*gate*.sh}"
 LINT_GLOB="${CC_NIGHTLY_LINT_GLOB:-$REPO/scripts/*lint*.sh}"
@@ -518,29 +519,11 @@ regress() {
   mkdir -p "$PAGEDIR" "$(dirname "$LOG")" 2>/dev/null || true
   echo "nightly-regression @ $(now_iso) — repo=$REPO"
 
-  # 1. bats suite
-  #
-  # `</dev/null` — bats does not read stdin itself but INHERITS it into every test, and a suite that
-  # stubs a stdin-consuming binary with an unconditional `cat` then waits forever for an EOF that is
-  # not coming (5e460544; ce13bd08 fixed the landing runners). MEASURED 2026-08-06, and it corrects
-  # the premise those commits shipped with: launchd hands its child /dev/null on fd 0 already (probe:
-  # a RunAtLoad job read `lsof -d 0` → /dev/null), so the 04:00 run is NOT the exposed path. The
-  # exposed path is the one this script is run on by hand and by the desk — a Claude Code session's
-  # fd 0 is a unix SOCKET, and a child reading it never sees EOF (measured: rc 124). That is the
-  # inverted polarity that makes this worth a redirect: a hung nightly is indistinguishable from a
-  # slow one and nothing alarms.
-  #
-  # ON `run_check` AND NOT INSIDE IT: the redirect rides this ONE invocation (a redirect on a
-  # function call applies to its whole body, so the `"$@"` inside gets it). run_check also runs
-  # plutil, never-stuck-gate and the step-4 gates; the screen that licenses /dev/null covers the
-  # bats tree only, so it stays per call site — same reasoning that kept it out of postland-verify's
-  # `bounded` helper. Step 4's gates need nothing here: each carries the redirect at its own bats
-  # site, so the whole chain is immune at the leaf.
-  if command -v bats >/dev/null 2>&1; then
-    run_check "bats:$(basename "$BATS_DIR")" bats "$BATS_DIR" </dev/null
-  else
-    SKIPS+=("bats:not-installed"); printf '  skip bats (not installed)\n'
-  fi
+  # 1. RETIRED 2026-09-26: the full `bats tests/` run. The full-suite claim belongs to
+  # scripts/postland-verify.sh, and steps 5/5b below watch that it keeps stamping, and stamping GREEN.
+  # Here the run was unbounded, in the shared checkout, and had been RED on every completed night
+  # since 2026-07-19, so it carried no information; one night sat in it for 45h, holding a cc-bats
+  # root, while steps 2-6 (the checks nothing else runs) waited.
 
   # 2. plist lint
   if command -v plutil >/dev/null 2>&1; then
@@ -716,98 +699,63 @@ selftest() {
   local d; d="$(mktemp -d "${TMPDIR:-/tmp}/nightly-reg-selftest.XXXXXX")" || { echo mktemp failed; exit 1; }
   # shellcheck disable=SC2064
   trap "rm -rf '$d' '${RUNDIR:-/nonexistent}'" EXIT   # keep the capture dir cleaned too
-  mkdir -p "$d/pages" "$d/goodtests" "$d/badtests" "$d/torntests" "$d/plists" "$d/emptygl"
-  printf '#!/usr/bin/env bats\n@test "pass" { true; }\n' > "$d/goodtests/ok.bats"
-  printf '#!/usr/bin/env bats\n@test "fail" { false; }\n' > "$d/badtests/no.bats"
-  # A failing suite whose stream ALSO carries torn/spliced bytes. File-level output is written by
-  # bats OUTSIDE any test, so it reaches the capture UNPREFIXED (measured: twice — the gather pass
-  # and the exec pass), which is exactly the injection shape hooks/session-register.sh:347 names.
-  cat > "$d/torntests/no.bats" <<'TORN'
-#!/usr/bin/env bats
+  mkdir -p "$d/pages" "$d/redgates" "$d/torngates" "$d/plists" "$d/emptygl"
+  # The generic red source is a step-4 gate: a failing gate that relays its suite's TAP, the shape the
+  # page's detail extraction exists for.
+  printf '#!/bin/bash\nprintf "1..2\\nok 1 pass\\nnot ok 2 fail\\n"\nexit 1\n' > "$d/redgates/red-gate.sh"
+  # A failing gate whose stream ALSO carries torn/spliced bytes — output a runner writes OUTSIDE any
+  # test reaches the capture UNPREFIXED, which is exactly the injection shape
+  # hooks/session-register.sh:347 names.
+  cat > "$d/torngates/torn-gate.sh" <<'TORN'
+#!/bin/bash
 printf 'not ok\nnot ok3 squashed\nnot okay then\nnot okcorpus: 3 suites\n' >&2
-@test "fail" { false; }
+printf '1..1\nnot ok 1 fail\n'
+exit 1
 TORN
+  chmod +x "$d/redgates/red-gate.sh" "$d/torngates/torn-gate.sh"
   cp "$REPO/launchd/com.claude.team-orphan-reaper.plist" "$d/plists/good.plist" 2>/dev/null \
     || printf '<?xml version="1.0"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict/></plist>\n' > "$d/plists/good.plist"
   printf '<plist><dict><string>2>&1 raw ampersand</string></dict></plist>\n' > "$d/plists/bad.plist"
 
   # run the invariant with a stubbed check-set (NO eval — env-scoped overrides).
-  # <pagedir> <log> <batsdir> <plistglob> [postland-verify-stub] [console-capture] [POSTLAND_VERIFY]
+  # <pagedir> <log> <gateglob> <plistglob> [postland-verify-stub] [console-capture] [POSTLAND_VERIFY]
   # The last three are POSITIONAL rather than ambient on purpose: a `VAR=x run_inv …` prefix on a
   # *function* call persists in the caller afterwards (bash, non-POSIX), and wrapping each call in a
   # subshell to contain that is what makes shellcheck read every one of them as an SC2030/SC2031
   # lost-modification pair. Positionals have neither problem and state the fixture at the call site.
-  # THE ADMISSION BOUND IS PINNED OFF FOR THE FIXTURES, AND THAT IS NOT A BYPASS. cc-bats DEFERS
-  # (rc 75) when live bats roots >= CC_BATS_MAX_ROOTS *and* 1-min load/core >= CC_BATS_MAX_LOAD_PER_CORE,
-  # and the runner correctly scores that deferral as a NON-VERDICT — which is exactly right at 04:00
-  # and exactly wrong here. Every red-path assertion below asks "does a FAILING suite page?", so a
-  # deferred fixture answers a different question and is scored as a FAIL: the detector is reported
-  # broken because the box was busy. Measured 2026-08-24 on a freshly-rebooted box at load/core 1.92
-  # against the 2.0 default — 60 passed / 7 failed, every failure on the red-bats and red-torn arms;
-  # re-run at load 18.16 with both bounds raised, 67 passed / 0 failed, no other variable changed.
-  # That flake is not cosmetic: 22-nightly-regression-activate.sh gates activation on this selftest,
-  # so a busy box made the operator's activation refuse for a defect that did not exist.
-  # These fixtures are hermetic one-test stubs — they are not the contention the bound exists to
-  # shed — so the honest value here is "do not count me", NOT a relaxation of the real bound, which
-  # every non-selftest caller still gets. Both terms are pinned because the refusal is a conjunction:
-  # leaving either live would let the flake back in the moment the other one flipped.
   run_inv() {
     env CC_NIGHTLY_NOTIFY=/usr/bin/true CC_NIGHTLY_NEVERSTUCK=/usr/bin/true CC_NIGHTLY_ABSTAIN=/usr/bin/true \
-        CC_BATS_MAX_ROOTS=999999 CC_BATS_MAX_LOAD_PER_CORE=999999 \
         CC_NIGHTLY_POSTLAND_DIR="$d/nopostland" \
         CC_NIGHTLY_POSTLAND_VERIFY="${5:-/usr/bin/true}" POSTLAND_VERIFY="${7:-on}" \
-        CC_NIGHTLY_GATE_GLOB="$d/emptygl/*.sh" CC_NIGHTLY_LINT_GLOB="$d/emptygl/*.sh" \
-        CC_NIGHTLY_PAGEDIR="$1" CC_NIGHTLY_LOG="$2" CC_NIGHTLY_BATS_DIR="$3" CC_NIGHTLY_PLIST_GLOB="$4" \
+        CC_NIGHTLY_GATE_GLOB="$3" CC_NIGHTLY_LINT_GLOB="$d/emptygl/*.sh" \
+        CC_NIGHTLY_PAGEDIR="$1" CC_NIGHTLY_LOG="$2" CC_NIGHTLY_PLIST_GLOB="$4" \
         "$SELF" >"${6:-/dev/null}" 2>&1
   }
 
   echo "nightly-regression --selftest:"
 
-  # "COULD NOT TEST" IS NOT "TEST FAILED", AND THIS FILE OF ALL FILES MUST NOT CONFLATE THEM.
-  # Every red-path arm below asks "does a deliberately-broken suite make the detector page?".
-  # Answering that requires bats to actually RUN the broken fixture. When bats does not resolve,
-  # :468 SKIPS the bats check entirely — correct behaviour there, a skip is not a RED — so the
-  # fixture never runs, no page is written, and SEVEN assertions report the detector broken when
-  # the truth is that nothing was ever exercised. Measured 2026-08-24: from a shell with neither
-  # ~/.claude/bin nor /opt/homebrew/bin on PATH this printed `60 passed, 7 failed`, byte-identical
-  # to the deferral signature and to a genuine red — and it refused an activation for a detector
-  # that returned 67/0 five times out of five the moment bats was on PATH.
-  #
-  # So this abstains LOUDLY and non-zero rather than scoring the arms. Non-zero because the
-  # caller is a gate (22-nightly-regression-activate.sh) that must not arm on an untested
-  # detector; loud because a silent skip here is the same defect one level up. This is the same
-  # grammar as the rc-75 DEFERRAL the runner already honours: nothing ran, so nothing is claimed.
-  if ! command -v bats >/dev/null 2>&1; then
-    echo "  ABSTAIN: \`bats\` does not resolve on PATH, so the red-path fixtures cannot run." >&2
-    echo "           This is NOT a detector failure and must not be read as one — the arms were" >&2
-    echo "           never exercised. Put bats on PATH (brew install bats-core, or use the" >&2
-    echo "           plist's own PATH) and re-run." >&2
-    echo "nightly-regression --selftest: ABSTAINED — bats unavailable, 0 assertions scored."
-    return 2
-  fi
-
-  # green path: good bats + good plist + no gates → no page, exit 0
-  run_inv "$d/pages" "$d/green.log" "$d/goodtests" "$d/plists/good.plist"; local grc=$?
+  # green path: no gates + good plist → no page, exit 0
+  run_inv "$d/pages" "$d/green.log" "$d/emptygl/*.sh" "$d/plists/good.plist"; local grc=$?
   [ "$grc" -eq 0 ] && okp "green: exit 0" || badp "green: exit $grc (want 0)"
   [ ! -f "$d/pages/nightly-regression.page" ] && okp "green: NO page written" || badp "green: page written on green"
   grep -q 'GREEN' "$d/green.log" && okp "green: regression.log records GREEN" || badp "green: log missing GREEN"
 
-  # red path (bats): failing suite → page written + exit nonzero + log RED
-  run_inv "$d/pages" "$d/redb.log" "$d/badtests" "$d/plists/good.plist"; local brc=$?
-  [ "$brc" -ne 0 ] && okp "red-bats: nonzero exit" || badp "red-bats: exit 0 on a failing suite"
-  [ -f "$d/pages/nightly-regression.page" ] && okp "red-bats: page file written to pages/" || badp "red-bats: no page written"
-  grep -q 'RED' "$d/redb.log" && okp "red-bats: regression.log records RED" || badp "red-bats: log missing RED"
+  # red path (gate): a failing step-4 gate → page written + exit nonzero + log RED
+  run_inv "$d/pages" "$d/redg.log" "$d/redgates/*.sh" "$d/plists/good.plist"; local brc=$?
+  [ "$brc" -ne 0 ] && okp "red-gate: nonzero exit" || badp "red-gate: exit 0 on a failing gate"
+  [ -f "$d/pages/nightly-regression.page" ] && okp "red-gate: page file written to pages/" || badp "red-gate: no page written"
+  grep -q 'RED' "$d/redg.log" && okp "red-gate: regression.log records RED" || badp "red-gate: log missing RED"
   head -1 "$d/pages/nightly-regression.page" | grep -qE '^[0-9]+$' && okp "page: first line is an epoch (convention-compatible)" || badp "page: first line not an epoch"
-  grep -qE '^not ok [0-9]+' "$d/pages/nightly-regression.page" && okp "red-bats: page quotes the FAILING detail, not just the name" || badp "red-bats: page carries no failing detail"
+  grep -qE '^not ok [0-9]+' "$d/pages/nightly-regression.page" && okp "red-gate: page quotes the FAILING detail, not just the name" || badp "red-gate: page carries no failing detail"
   rm -f "$d/pages/nightly-regression.page"
 
-  # red path (bats) with a TORN stream: the detail must be the RESULT lines, never the splice.
+  # red path (gate) with a TORN stream: the detail must be the RESULT lines, never the splice.
   # The page is the only thing a human reads at 04:00 to decide what broke; filling its 15-line
   # budget with bytes that merely OPEN like a verdict spends the whole budget on noise, and — worse
   # — the `|| tail -15` fallback that exists for exactly this case never fires, because the loose
   # grep "succeeded". Same grammar as the two lanes above (scripts/ship-land.sh, scripts/deploy-live.sh).
-  run_inv "$d/pages" "$d/redt.log" "$d/torntests" "$d/plists/good.plist"; local trc=$?
-  [ "$trc" -ne 0 ] && okp "red-torn: nonzero exit" || badp "red-torn: exit 0 on a failing suite"
+  run_inv "$d/pages" "$d/redt.log" "$d/torngates/*.sh" "$d/plists/good.plist"; local trc=$?
+  [ "$trc" -ne 0 ] && okp "red-torn: nonzero exit" || badp "red-torn: exit 0 on a failing gate"
   grep -qE '^not ok [0-9]+' "$d/pages/nightly-regression.page" \
     && okp "red-torn: page still quotes the REAL result line" || badp "red-torn: page lost the real detail"
   grep -qE '^not (okay|okcorpus|ok3)' "$d/pages/nightly-regression.page" \
@@ -816,12 +764,12 @@ TORN
   rm -f "$d/pages/nightly-regression.page"
 
   # red path (plutil): deliberately-bad fixture plist → page + RED
-  run_inv "$d/pages" "$d/redp.log" "$d/goodtests" "$d/plists/bad.plist"; local prc=$?
+  run_inv "$d/pages" "$d/redp.log" "$d/emptygl/*.sh" "$d/plists/bad.plist"; local prc=$?
   [ "$prc" -ne 0 ] && okp "red-plutil: nonzero exit on a bad plist" || badp "red-plutil: exit 0 on a bad plist"
   [ -f "$d/pages/nightly-regression.page" ] && okp "red-plutil: page written" || badp "red-plutil: no page"
 
   # green night clears a prior standing page
-  run_inv "$d/pages" "$d/clear.log" "$d/goodtests" "$d/plists/good.plist"
+  run_inv "$d/pages" "$d/clear.log" "$d/emptygl/*.sh" "$d/plists/good.plist"
   [ ! -f "$d/pages/nightly-regression.page" ] && okp "green night clears the standing page" || badp "green night left a stale page"
 
   # S4: supports_selftest must fire on a real DISPATCH and NEVER on prose / a call to another script
@@ -994,7 +942,7 @@ PVOK
   # together is the point — separately, a wiring that created $d/nopostland/stamps would still pass
   # the first and the manufactured RED would only appear on the SECOND night, which is precisely the
   # shape that makes this class of defect survive review.
-  run_inv "$d/pages" "$d/pv-green.log" "$d/goodtests" "$d/plists/good.plist" \
+  run_inv "$d/pages" "$d/pv-green.log" "$d/emptygl/*.sh" "$d/plists/good.plist" \
           "$pvd/pv-ok.sh" "$d/pv-green.out"; local pvrc=$?
   [ "$pvrc" -eq 0 ] && okp "P: postland-verify --selftest runs and is scored (green night)" \
                     || badp "P: the postland-verify instrument check did not run green — see $d/pv-green.out"
@@ -1008,7 +956,7 @@ PVOK
 
   # ANTI-VACUITY. Everything above passes just as well against a check that is launched and then
   # ignored; only a stub that FAILS can prove its verdict reaches the night's.
-  run_inv "$d/pages" "$d/pv-red.log" "$d/goodtests" "$d/plists/good.plist" \
+  run_inv "$d/pages" "$d/pv-red.log" "$d/emptygl/*.sh" "$d/plists/good.plist" \
           "$pvd/pv-red.sh" "$d/pv-red.out"; local pvrrc=$?
   [ "$pvrrc" -ne 0 ] && grep -q 'RED  postland-verify.sh --selftest' "$d/pv-red.out" \
     && okp "P: a FAILING instrument reds the night (the verdict is not decorative)" \
@@ -1020,7 +968,7 @@ PVOK
 
   # KILL SWITCH ≠ VERDICT. POSTLAND_VERIFY=off exits 0 above the dispatch, so a bare run would score
   # `ok` having proven nothing. It must SKIP — logged, never silent, and never counted as a pass.
-  run_inv "$d/pages" "$d/pv-off.log" "$d/goodtests" "$d/plists/good.plist" \
+  run_inv "$d/pages" "$d/pv-off.log" "$d/emptygl/*.sh" "$d/plists/good.plist" \
           "$pvd/pv-red.sh" "$d/pv-off.out" off; local pvorc=$?
   [ "$pvorc" -eq 0 ] && grep -q 'skip postland-verify.sh --selftest' "$d/pv-off.out" \
     && ! grep -q 'ok   postland-verify.sh --selftest' "$d/pv-off.out" \
@@ -1125,7 +1073,7 @@ PVOK
 
   echo "nightly-regression --selftest: $PASS passed, $FAIL failed"
   [ "$FAIL" -eq 0 ] || exit 1
-  echo "nightly-regression --selftest: GREEN — red-path pages (bats + plutil), green-path clears, page is epoch-headed."
+  echo "nightly-regression --selftest: GREEN — red-path pages (gate + plutil), green-path clears, page is epoch-headed."
 }
 
 case "${1:-}" in
