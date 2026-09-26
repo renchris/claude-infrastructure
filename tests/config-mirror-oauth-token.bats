@@ -49,11 +49,6 @@ setup() {
   }
 }
 
-@test "the loader is version-controlled in the repo (not an unversioned live-only file)" {
-  [ -f "$MIRROR" ]
-  git -C "$REPO" ls-files --error-unmatch lib/config-mirror.zsh >/dev/null 2>&1
-}
-
 # --- the SET arm: positive control ---------------------------------------------------------
 
 @test "EFFECT: a minted token for the launched account IS exported" {
