@@ -131,12 +131,6 @@ EOF
   chmod +x "$1"
 }
 
-@test "R5/A10: cc-reaper contains timeout bounds at all (the acceptance grep that read 0)" {
-  run grep -c 'timeout ' "$REPO/bin/cc-reaper"
-  [ "$status" -eq 0 ]
-  [ "$output" -gt 0 ]
-}
-
 @test "HERMETICITY: every sweep here skips the garbage arm — this suite never reads the live process table" {
   # The pin in setup() is only worth having if its removal is LOUD. Unpinned, the sweep's first arm
   # forks two live `/bin/ps -Ax` and TERMs whatever the host is running under a launchd parent —

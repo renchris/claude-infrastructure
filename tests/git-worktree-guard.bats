@@ -3,8 +3,9 @@
 # saw `git -C <repo> worktree remove` / `git -C <repo> branch -d`, so the audit-§7 cleanup form
 # ran entirely unguarded; and the worktree-list check ran in the hook's cwd, not the -C target.
 # Red-proof: test 2 FAILS against the pre-fix guard (verified by stash-revert during authoring:
-# `git -C … branch -d <held>` exited 0 instead of 2). Test 4 is a reaches-the-leg smoke only —
-# its idle path exits 0 pre- and post-fix, so it discriminates nothing on its own.
+# `git -C … branch -d <held>` exited 0 instead of 2). Test 4 proves the -C form reaches the
+# worktree-remove leg by being BLOCKED on a live target; its idle half alone would pass even an
+# unmatched command (pass-through is also exit 0).
 
 setup() {
   # HERMETICITY (run_gate's blocking test-hermeticity ratchet): fixture $HOME FIRST so every test
@@ -59,14 +60,19 @@ run_guard() {  # $1 = the bash command string
 }
 
 @test "-C form reaches the worktree-remove leg (idle path still passes)" {
-  cd "$TDIR"
+  cd "$TDIR"   # NOT the repo — the -C target must be interrogated, not the cwd
   run run_guard "git -C $REPO worktree remove $TDIR/nonexistent-wt"
   [ "$status" -eq 0 ]
+  # the discriminating half: exit 0 is also what an UNMATCHED command gets, so only a block on a
+  # live target proves the -C form reached the leg at all
+  spawn_live_probe "$TDIR/wt-held"
+  run run_guard "git -C $REPO worktree remove $TDIR/wt-held"
+  [ "$status" -eq 2 ]
 }
 
 # ── the liveness leg's own verdict — the guard's WHOLE PURPOSE, previously untested ──────────────
-# Tests 3/4 only assert the remove leg PASSES on idle, so the suite went green whether the guard
-# blocked a live worktree or fell wide open (this file's own header: test 4 "discriminates nothing").
+# Tests 3/4 once asserted only that the remove leg PASSES on idle, so the suite went green whether the
+# guard blocked a live worktree or fell wide open (test 4 has since gained a live -C half).
 # That is the fail-open-pinned-by-its-own-suite shape (memory: present-but-inverted-guard). These two
 # pin both directions, and together they discriminate the batched lsof: a batch that lost the exact
 # cwd match would block test B, and one that lost the population would miss test A.

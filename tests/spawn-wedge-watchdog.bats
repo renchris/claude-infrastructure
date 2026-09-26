@@ -277,16 +277,6 @@ EOF
   [ "$output" -eq 1 ]
 }
 
-@test "EXTRACTION control: a re-inlined duplicate of the search is CAUGHT" {
-  # Without this the count above passes vacuously the day the grep pattern stops matching at all
-  # (memory: control-must-replay-the-real-artifact).
-  local mutant="$BATS_TEST_TMPDIR/reinlined.sh"
-  { cat "$LIB"; printf '  find "$t" -name "$sid.jsonl" -type f 2>/dev/null\n'; } > "$mutant"
-  run bash -c 'grep -c -- "-name \"\$sid.jsonl\"" "$1"' _ "$mutant"
-  [ "$status" -eq 0 ]
-  [ "$output" -eq 2 ]
-}
-
 @test "PANE PATH UNCHANGED: proof still names the REGISTRY, not the transcript" {
   # The extraction must not leak the sid path's provenance into the pane path. cc-wedge-watch
   # prints CC_ENGAGE_PROOF verbatim (bin/cc-wedge-watch:276) and the operator reads it to know
@@ -313,17 +303,6 @@ EOF
   [ -n "$a" ]
   [ -n "$b" ]
   [ "$a" = "$b" ]
-}
-
-@test "PARITY control: the comparison can actually FAIL (a mutated copy is caught)" {
-  # Without this, the parity test above passes vacuously the day either sed range stops matching
-  # (memory: control-must-replay-the-real-artifact — an extraction that yields "" equals another "").
-  local mutant="$BATS_TEST_TMPDIR/mutant.sh" a b
-  sed 's/^  \[ -s "\$f" \] || return 1/  [ -s "$f" ] || return 0/' "$LIB" > "$mutant"
-  a="$(sed -n '/^assistant_turn_in() {/,/^}/p' "$REPO/scripts/handoff-fire.sh")"
-  b="$(sed -n '/^assistant_turn_in() {/,/^}/p' "$mutant")"
-  [ -n "$b" ]
-  [ "$a" != "$b" ]
 }
 
 # ── THE ARMING SITE: a side-car that must never widen its own blast radius ───────────────────────

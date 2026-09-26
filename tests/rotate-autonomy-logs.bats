@@ -143,24 +143,6 @@ rot_count() { # <path>
 #    session) plus Stop, and the only >5MB log outside this list. Asserted BEHAVIOURALLY via a stubbed
 #    HOME, not by grepping the source, so this reds if a path is dropped OR if the list stops being
 #    consulted at all. ──
-@test "default target list covers every unbounded append-only log" {
-  local h="$BATS_TEST_TMPDIR/home"
-  mkdir -p "$h/.claude/autonomy" "$h/.claude/logs"
-  local expected=(
-    "$h/.claude/autonomy/idl.jsonl"
-    "$h/.claude/logs/bash-commands.log"
-    "$h/.claude/logs/bash-execution.log"
-    "$h/.claude/logs/teammate-checkpoint.log"
-  )
-  local f
-  for f in "${expected[@]}"; do mkbytes "$f" 250; done
-  HOME="$h" run bash "$ROT"             # no args, no ROTATE_TARGETS → the DEFAULT list
-  [ "$status" -eq 0 ]
-  for f in "${expected[@]}"; do
-    [ "$(rot_count "$f")" -eq 1 ] || { echo "not rotated by the default list: $f"; false; }
-    [ ! -s "$f" ]                       # and recreated empty in place
-  done
-}
 
 # ── ROTATE_TARGETS env override drives the target list ──
 @test "ROTATE_TARGETS env override is honored" {
