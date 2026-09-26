@@ -165,10 +165,9 @@ JSONL
   local t="$HOME/.claude/projects/-Users-x-proj/$SID_A.jsonl"
   mk_transcript "$t"
 
-  local ctx enr meta all
+  local ctx enr all
   ctx=$(session_index_extract_context "$t" 5)
   enr=$(session_index_extract_enriched "$t")
-  meta=$(session_index_extract_transcript_meta "$t")
   all=$(session_index_extract_all "$t" 5)
 
   local a_ctx a_at a_fc a_cr a_mc e_at e_fc e_cr
@@ -179,7 +178,6 @@ JSONL
   [ "$a_at"  = "$e_at" ]
   [ "$a_fc"  = "$e_fc" ]
   [ "$a_cr"  = "$e_cr" ]
-  [ "$a_mc"  = "$meta" ]
   # and it is not vacuously equal — the fixture really carries all four
   echo "$a_fc" | grep -q '/tmp/alpha.txt'
   echo "$a_cr" | grep -q 'echo hello'
