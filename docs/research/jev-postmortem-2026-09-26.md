@@ -7,9 +7,11 @@ extracted outcomes. Why?"* Six parallel investigators, one per axis; their repor
 
 ## The answer
 
-**No business outcome was ever available to Jev.** All five customer deliverables on the mission
-board were blocked on an operator act (an email, a floor-plan ruling, a login), not on
-classification. A 09-18 critic said so (*"none needs a single token … every hour here is an hour
+**None of the mission-board deliverables was Jev-shaped.** *(Corrected 2026-09-27: this line first
+read "no business outcome was ever available to Jev". The investigation behind it had searched only
+claude-infrastructure in depth and reso once; the cross-repo sweep in § Addendum is what supports
+the broader claim.)* All five customer deliverables on the mission board were blocked on an operator
+act (an email, a floor-plan ruling, a login), not on classification. A 09-18 critic said so (*"none needs a single token … every hour here is an hour
 not spent on the reply to VenueContact"*), and that finding never reached the doc
 (`a5-counterfactual.md` #7-8). What remained was internal value. There, **every session
 optimised for a correct measurement and a safe consent, and none owned getting an output
@@ -155,6 +157,48 @@ Roughly **1M Claude tokens per Jev call** (`a4-effort.md`).
 
 - `docs/lessons/value-deadline-work-ends-at-a-consumed-output.md`
 - `docs/lessons/an-agent-written-refusal-is-inherited-as-operator-policy.md`
+
+## Addendum — 2026-09-27: the cross-repo sweep the week never ran
+
+The operator asked whether all our repos really held zero use cases. Coverage during the week:
+
+| Repo | How far it was searched |
+|---|---|
+| claude-infrastructure | exhaustively |
+| reso-management-app | half an agent, once |
+| everything else | never |
+
+Seven read-only investigators then searched every active repo against one bar: a typed judgment,
+a consumer that acts on it, and something it replaces. Receipts are in
+`jev-postmortem-2026-09-26/use-case-sweep/`.
+
+| Repo | LLM calls in code today | Best Jev use found | Conviction |
+|---|---|---|---|
+| reso-management-app (product) | **none** | flag-note special-category guard, <50 writes/month; one-off guest-name dedup | 25% / 15% |
+| reso-management-app (QA/ops), reso-qa-runner | none (flake, alarm and runbook judgments are already deterministic) | screen for junk newly-added tests; nightly QA commit triage | 40% / 35% |
+| reso-web-app | **none** | guest-note triage, about 6/month | 15% |
+| sevenrooms-bridge | **none** | one-off offline relabel of door-note comps; about 0.2 sign-ups/day | 30% |
+| personal / claude-private (Outlook) | Sonnet classifier, 31,837 verdicts in one May run | Jev as the per-message KEEP/DELETE/ABSTAIN judge (see below) | 60% fit, low urgency |
+| claude-infrastructure (replace existing spend) | Opus/Fable eval judges; a dormant Haiku permission decider | eval judges: token-efficiency F1 (~5.85M tokens) and model-flip review judges ($84 list, 147 calls) | 55% / 45% |
+| natural-text-to-voice, voiceink, agent-context-sync, others | none that fit | none | — |
+
+- **Outlook, the only natural fit.** Its rescue rules flipped **1,663 of Sonnet's 4,535 DELETEs
+  (36.7%)** back to KEEP, and email is Jev's own benchmark domain. It is blocked by two things. The
+  mail would go out under standard retention (the hobby plan has no zero-retention), which is the
+  operator's call. And the pipeline has not run since May: its 2,885-message quarantine was never
+  purged.
+
+**Verdict.** Our customer products make **zero LLM calls**, so Jev has nothing to replace there, and
+the new judgments it could add are low-volume (tens a month) or one-off. The real uses are internal,
+and none clears 60%:
+
+- the eval judges, whose gold sets are already on disk;
+- Outlook triage.
+
+Their savings are small, because the fleet's Claude spend is plan quota with zero dollar exposure
+(`model-config.yaml:762`), and unused quota does not roll over. The week's real failure was
+therefore not missing a big use case. It was spending a week before establishing, in about one
+hour, that there was none.
 
 ## Re-derive, never re-quote
 
