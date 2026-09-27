@@ -3446,6 +3446,38 @@ def render_strand_score(sc, hours):
     return lines
 
 
+def soonest_reset_line(rows, cfg):
+    """The board's ONE drain line: the usable account whose weekly window resets first — the
+    quota that expires soonest — with what is left, the burn needed to use it all, the 48h-pace
+    verdict when the nowcast speaks, and WHY routing skips it when it does.
+
+    It replaced a per-account strand column (2026-09-27) that was loudest on freshly reset
+    accounts and blank on this one. The routing reason is here because the operator's question
+    at startup was "why did this session not open on the account about to reset?", and the
+    answer (`kmax-concurrency`) was on no surface they read. None when no account qualifies."""
+    cands = [r for r in rows
+             if r.get("weekly_pct") is not None
+             and isinstance(r.get("weekly_reset_h"), (int, float)) and r["weekly_reset_h"] > 0
+             and r.get("auth") not in ("login-required", "logged-out", "keychain-error")
+             and not r.get("auth_broken")]
+    if not cands:
+        return None
+    r = min(cands, key=lambda x: x["weekly_reset_h"])
+    left = max(0.0, 100.0 - r["weekly_pct"])
+    parts = [f"next reset: {r['acct']} in {fmt_h(r['weekly_reset_h'])}, {left:.0f}pp left"]
+    if left > 0:
+        parts.append(f"needs {left / r['weekly_reset_h']:.1f}pp/h to use it")
+    s = wk_strand_pp(r)
+    if s is not None:
+        parts.append("on pace to use it all" if s < 0.5 else f"~{s:.0f}pp dies at 48h pace")
+    _, why = score_general(r, cfg)
+    if why == "kmax-concurrency":
+        parts.append(f"not routed: {k_eff(r)} working ≥ cap {k_cap(r, cfg['router'])}")
+    elif why:
+        parts.append(f"not routed: {why}")
+    return " · ".join(parts)
+
+
 PACE_HEAD = "weekly drain — pp that DIE at reset (nowcast at the last 48h of pace):"
 PACE_HEAD_K = ("weekly drain — pp that DIE at reset "
                "(K={k:.3f} {src} · nowcast at the last 48h of pace):")
@@ -4706,7 +4738,13 @@ _NW_MARK, _NW_NAME, _NW_PCT, _NW_WKR = 3, 13, 5, 6
 # narrows `name`, which `_clip` already guards. Every cell is padded as PLAIN text and coloured
 # afterwards (`_cell`), because `f"{s:<8}"` counts escape bytes as columns and would silently
 # shred the alignment the colour was added to sharpen.
-_NW_BAR, _NW_STR = 8, 6
+#
+# 2026-09-27: `strand` gave its slot to `live`. Early in a week the strand nowcast restated the
+# unused headroom (84pp of 100) in red, and on the one account where it mattered — the next to
+# reset — it abstained (`—`) whenever that account's readings had gone stale. The operator could
+# not act on it, but did ask for the per-account session count /accounts already shows. The
+# drain question survives as ONE line under the table, about the soonest-resetting account.
+_NW_BAR, _NW_STR, _NW_LIVE = 8, 6, 4
 
 
 # ── BOARD COLOUR ──────────────────────────────────────────────────────────────────────────────
@@ -4795,7 +4833,7 @@ def _bpct(r, key):
     return bc((f"{v:.0f}%" + star).rjust(_NW_PCT + 1), usage_rgb(v))
 
 
-def _nrow(mark, name, p5, bar, pwk, pfb, strand, resets, login):
+def _nrow(mark, name, live, p5, bar, pwk, pfb, resets, login):
     """The ONE place the narrow table's column order and spacing live.
 
     Header and data rows both go through it, which is the drift the width constants were
@@ -4804,7 +4842,7 @@ def _nrow(mark, name, p5, bar, pwk, pfb, strand, resets, login):
     # `login` arrives UNPADDED on purpose: padding inside a coloured run leaves the spaces
     # before the reset sequence, where .rstrip() cannot see them, and they ride into every
     # copy-paste as invisible trailing ink.
-    return " ".join([mark + name, p5, bar, pwk, pfb, strand, resets, login]).rstrip()
+    return " ".join([mark + name, live, p5, bar, pwk, pfb, resets, login]).rstrip()
 
 
 def _disp_w(s):
@@ -4939,11 +4977,11 @@ def readout_lines(rows, cfg, win, cached, narrow=False):
                     + (f" {age}s" if age is not None else ""), BOARD_LABEL),
                _nrow(_cell("", _NW_MARK, "<", BOARD_LABEL),
                      _cell("account", _NW_NAME, "<", BOARD_LABEL),
+                     _cell("live", _NW_LIVE, ">", BOARD_LABEL),
                      _cell("5h", _NW_PCT + 1, ">", BOARD_LABEL),
                      _cell("", _NW_BAR, "<", BOARD_LABEL),
                      _cell("weekly", _NW_PCT + 1, ">", BOARD_LABEL),
                      _cell("fable", _NW_PCT + 1, ">", BOARD_LABEL),
-                     _cell("strand", _NW_STR, ">", BOARD_LABEL),
                      _cell("resets", _NW_WKR, ">", BOARD_LABEL),
                      bc("login", BOARD_LABEL))]
     else:
@@ -4996,8 +5034,9 @@ def readout_lines(rows, cfg, win, cached, narrow=False):
         # Only the LAYOUT branches here. Every value — the marks, the `*` suffixes, the em dash
         # rules, the warn threshold — was decided above, once, for both.
         if narrow:
-            # Narrow drops `live` (a k count is not what a startup glance is for), and renders
-            # both time columns as COUNTDOWNS rather than `absolute (in relative)` pairs: the
+            # Narrow carries `live` (the same k_shown the wide table prints) since 2026-09-27 —
+            # "how many sessions are already on it" turned out to be exactly what a startup
+            # glance is for. It renders both time columns as COUNTDOWNS rather than `absolute (in relative)` pairs: the
             # wide cell is ~20 cells and a board has ~14 to give it. The countdown is the half a
             # reader acts on; the absolute stamp stays one `claude-accounts` away.
             login_n = "⊘ REQ" if a == "login-required" else (
@@ -5011,17 +5050,16 @@ def readout_lines(rows, cfg, win, cached, narrow=False):
             # number on the board), but it must not read as a candidate.
             usable = a not in ("login-required", "logged-out", "keychain-error") \
                 and not r.get("auth_broken")
-            sp = wk_strand_pp(r)
-            st = "—" if not sp or sp <= 0 else f"{sp:.0f}pp"
+            ks = k_shown(r)
             out.append(_nrow(
                 _cell(marks.strip(), _NW_MARK, "<", BOARD_ACCENT, bold=True),
                 _cell(nm, _NW_NAME, "<", BOARD_TEXT if usable else BOARD_MUTE,
                       bold=bool(marks.strip())),
+                _cell(ks, _NW_LIVE, ">", BOARD_TEXT if usable and ks != "?" else BOARD_MUTE),
                 _bpct(r, "session_pct"),
                 board_bar(r.get("weekly_pct")),
                 _bpct(r, "weekly_pct"),
                 _bpct(r, "fable_pct"),
-                _cell(st, _NW_STR, ">", BOARD_MUTE if st == "—" else strand_rgb(sp)),
                 _cell(wk_n, _NW_WKR, ">", BOARD_TEXT if usable else BOARD_MUTE),
                 bc(login_n, RED if login_n.startswith(("⊘", "⚠")) else BOARD_LABEL)))
         else:
@@ -5185,6 +5223,9 @@ def readout_lines(rows, cfg, win, cached, narrow=False):
     if narrow:
         out.append(bc(f"  general → {pick_g or 'none'} · fable → {pick_f or 'none'}",
                       BOARD_LABEL))
+        sr = soonest_reset_line(rows, cfg)
+        if sr:
+            out.extend(bc(ln, BOARD_LABEL) for ln in _wrap_narrow(sr, first="· "))
     else:
         out.append(f"➤ general → **{pick_g or 'none'}** · ➤ fable → **{pick_f or 'none'}**")
     pl = pace_line(rows)
@@ -5202,8 +5243,6 @@ def readout_lines(rows, cfg, win, cached, narrow=False):
         # `narrow` already follows everywhere else — never a second strand calculation.
         _alarm = [x for x in pl.split("\n") if "⚠" in x] if narrow else []
         if narrow:
-            out.append(bc("· strand = points that DIE unspent at the reset (last-48h pace)",
-                          BOARD_LABEL))
             for _pln in _alarm:
                 out.extend(_wrap_narrow(_demark(_pln)))
         else:

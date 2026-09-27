@@ -579,14 +579,16 @@ PY
 import sys, re
 sgr = re.compile(chr(27) + r\"\\[[0-9;]*m\")
 lines = [sgr.sub(\"\", l) for l in sys.stdin.read().splitlines()]
-hdr = next((l for l in lines if \"account\" in l and \"strand\" in l), None)
-assert hdr, \"no header row carrying account+strand\"
-end = hdr.index(\"strand\") + len(\"strand\")
-rows = [l for l in lines if l is not hdr and (\"\u2591\" in l or \"\u2588\" in l)]
+hdr = next((l for l in lines if \"account\" in l and \"live\" in l and \"resets\" in l), None)
+assert hdr, \"no header row carrying account+live+resets\"
+# The resets column sits RIGHT of every coloured cell (bar + three percents), so it is the column a
+# colour-padding defect would shift. The strand column held this role until it left the board 2026-09-27.
+end = hdr.index(\"resets\") + len(\"resets\")
+rows = [l for l in lines if l is not hdr and (\"░\" in l or \"█\" in l)]
 assert rows, \"no data rows found\"
 for l in rows:
     cell = l[end-6:end]
-    assert re.fullmatch(r\"\\s*(-|—|[0-9]+pp)\", cell), \"strand cell misaligned in %r: %r\" % (l, cell)
+    assert re.fullmatch(r\"\\s*(—|[0-9]+[dhm]( [0-9]+[hm])?)\", cell), \"resets cell misaligned in %r: %r\" % (l, cell)
 '"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
