@@ -66,6 +66,7 @@ UPG_QUEUE="$LRU_STATE/upgrade-queue"
 UPG_RUNS="$LRU_STATE/upgrade"
 UPG_RESULTS="$LRU_STATE/results"
 UPG_CLAIMED="$LRU_STATE/claimed"
+UPG_DEFER="$LRU_STATE/upgrade-deferred"
 UPG_LOCK="$LRU_STATE/upgrade-drain.lock"
 UPG_MUTEX_DIR="$LRU_STATE/runs/by-sid"
 
@@ -649,6 +650,20 @@ EOF
   printf '%s\n' "$out"
 }
 
+# ── --until-idle: WHICH HOLDS ARE WORTH WAITING OUT (F5, 2026-09-27) ─────────────────────────────
+# A busy subject was dropped as NOTMOVED, so an operator who wanted "move it when it goes idle" had
+# to hand-write a detached polling loop (/tmp/lr-wait-move.sh, that day). A request carrying
+# .until_ts is instead PARKED in $UPG_DEFER when its re-judge says busy, and every drain start puts
+# the parked ones back in the queue — so the poller's own tick is the re-judge cadence and nothing
+# new has to stay alive. Only a hold that ENDS BY ITSELF is waitable; a structural one (a teammate,
+# a lead with a live member, a duplicate, a stale row, already on target, self, no transcript) would
+# be waited out for the whole budget and then refused anyway, so it is answered at once.
+# THE ONE LIST: cc-lr asks it through `--switch-waitable` rather than keeping a copy.
+lru_switch_waitable() { # $1=disposition → 0 a hold that ends by itself
+  case "$1" in mid-turn|subagents-in-flight|background-job|composer-occupied|composer-unknown) return 0 ;; esac
+  return 1
+}
+
 lru_switch_prompt() { # $1=target $2=req id → the ONE canonical line (ASCII, no kill phrase)
   printf '%s req=%s] Run in Bash now: cc-lr switch --target %s\n' "$LRU_SWITCH_MARK" "$2" "$1"
 }
@@ -679,8 +694,8 @@ lru_last_text() { # $1=transcript → the last assistant text, one line, ≤200 
 }
 
 # ── drive ONE switch ─────────────────────────────────────────────────────────────────────────────
-lru_switch_drive() { # $1=sid $2=pane $3=target $4=requested_by $5=req id → rc 0 SWITCHED · 1 FAILED · 3 NOTMOVED
-  local sid="$1" pane="$2" target="$3" by="${4:-?}" req="${5:-}" mutex row from cfg pid run pf src=0 word
+lru_switch_drive() { # $1=sid $2=pane $3=target $4=requested_by $5=req id [$6=until_ts] → rc 0 SWITCHED · 1 FAILED · 3 NOTMOVED · 4 DEFERRED (busy, inside its --until-idle budget: nothing typed, no verdict yet)
+  local sid="$1" pane="$2" target="$3" by="${4:-?}" req="${5:-}" until_ts="${6:-0}" mutex row from cfg pid run pf src=0 word
   local tcfg deadline t0 racct rsid tx calm=0
   if ! tcfg="$(lru_acct_cfg "$target")"; then
     lru_switch_result "$sid" "$pane" NOTMOVED - "$target" "target '$target' is not an account this map knows (nothing typed)" "$req" "$by"; return 3
@@ -701,7 +716,16 @@ lru_switch_drive() { # $1=sid $2=pane $3=target $4=requested_by $5=req id → rc
 $row
 EOF
   if [ "$word" != move ]; then
-    rm -rf "$mutex"; lru_switch_result "$sid" "$pane" NOTMOVED "$from" "$target" "$word (re-judged at drain time; nothing typed - re-run when it is idle)" "$req" "$by"; return 3
+    rm -rf "$mutex"
+    case "$until_ts" in ''|*[!0-9]*) until_ts=0 ;; esac
+    if [ "$until_ts" -gt 0 ] && lru_switch_waitable "$word"; then
+      if [ "$(date +%s)" -lt "$until_ts" ]; then
+        lru_say "switch ${sid:0:8} (pane $pane): $word - parked until idle (budget ends $(date -r "$until_ts" '+%H:%M:%S' 2>/dev/null || echo "$until_ts"))"
+        return 4
+      fi
+      lru_switch_result "$sid" "$pane" NOTMOVED "$from" "$target" "$word - still busy when its --until-idle budget ended (nothing typed)" "$req" "$by"; return 3
+    fi
+    lru_switch_result "$sid" "$pane" NOTMOVED "$from" "$target" "$word (re-judged at drain time; nothing typed - re-run when it is idle)" "$req" "$by"; return 3
   fi
   run="$LRU_STATE/switch/${sid:0:8}-$(date -u +%Y%m%dT%H%M%SZ)"
   mkdir -p "$run" 2>/dev/null || true
@@ -1024,6 +1048,12 @@ lru_drain() {
   echo "$$" > "$UPG_LOCK/pid"
   # shellcheck disable=SC2064
   trap "rm -rf '$UPG_LOCK'" EXIT
+  # --until-idle: each drain re-judges every parked switch ONCE (see lru_switch_waitable). Promoted
+  # under the drain lock, before the loop, so one drain can never spin on a subject that stays busy.
+  local d dn=0
+  for d in "$UPG_DEFER"/*.json; do [ -f "$d" ] && mv -f "$d" "$UPG_QUEUE/" 2>/dev/null && dn=$((dn + 1)); done
+  [ "$dn" -eq 0 ] || lru_say "re-judging $dn switch request(s) parked until idle"
+  local urc uts
   while :; do
     # shellcheck disable=SC2012  # names are ours (cc-lr-upgrade-<uuid>.json); ls -tr is the mtime order
     q="$(ls -1tr "$UPG_QUEUE"/*.json 2>/dev/null | head -1)"
@@ -1032,6 +1062,7 @@ lru_drain() {
     by="$(jq -r '.requested_by // "?"' "$q" 2>/dev/null)"; req="$(jq -r '.req_id // empty' "$q" 2>/dev/null)"
     scrub="$(jq -r '.scrub_composer // empty' "$q" 2>/dev/null)"
     kind="$(jq -r '.kind // "upgrade"' "$q" 2>/dev/null)"; tgt="$(jq -r '.target // empty' "$q" 2>/dev/null)"
+    uts="$(jq -r '.until_ts // 0' "$q" 2>/dev/null)"
     mv -f "$q" "$UPG_CLAIMED/" 2>/dev/null || rm -f "$q"
     if [ -z "$sid" ] || [ -z "$pane" ]; then lru_say "malformed request $q (no sid/pane) - dropped to claimed/"; continue; fi
     [ "$n" -gt 0 ] && sleep "$LRU_GAP_S"
@@ -1040,7 +1071,14 @@ lru_drain() {
     case "$kind" in
       switch)
         if [ -z "$tgt" ]; then lru_switch_result "$sid" "$pane" NOTMOVED - - "malformed switch request: no .target (nothing typed)" "$req" "$by"
-        else lru_switch_drive "$sid" "$pane" "$tgt" "$by" "$req" || true; fi ;;
+        else
+          urc=0; lru_switch_drive "$sid" "$pane" "$tgt" "$by" "$req" "$uts" || urc=$?
+          if [ "$urc" -eq 4 ]; then
+            mkdir -p "$UPG_DEFER" 2>/dev/null || true
+            mv -f "$UPG_CLAIMED/${q##*/}" "$UPG_DEFER/" 2>/dev/null \
+              || lru_switch_result "$sid" "$pane" NOTMOVED - "$tgt" "busy, and its request could not be parked in $UPG_DEFER (nothing typed)" "$req" "$by"
+          fi
+        fi ;;
       *) lru_drive "$sid" "$pane" "$by" "$req" "$scrub" || true ;;
     esac
     n=$((n + 1))
@@ -1130,6 +1168,8 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
                 --req-id) [ $# -ge 2 ] || exit 3; _rq="$2"; shift 2 ;;
                 *) lru_say "unknown arg $1"; exit 3 ;; esac; done
               lru_switch_drive "$_s" "$_p" "$_t" "$_by" "$_rq"; exit $? ;;
+    --switch-waitable) # <disposition> → rc 0 when --until-idle waits it out (the one list; cc-lr asks it)
+              [ $# -ge 2 ] || exit 3; lru_switch_waitable "$2"; exit $? ;;
     --drain)  lru_drain; exit $? ;;
     --auto-enqueue) lru_auto_enqueue; exit $? ;;
     --team-restore) [ $# -ge 3 ] || { lru_say "usage: --team-restore <cfg> <team>"; exit 3; }

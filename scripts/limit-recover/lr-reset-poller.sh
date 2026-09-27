@@ -709,6 +709,7 @@ nudge_in_place() { # $1=sid $2=cfg $3=registry rows ("pane<TAB>pid<TAB>acct<TAB>
 FLEET="${LR_FLEET_BIN:-$LR/lr-fleet.sh}"
 HUSK_REQS="$STATE/husk-requests"
 UPG_QUEUE="$STATE/upgrade-queue"
+UPG_DEFER="$STATE/upgrade-deferred"   # switch requests parked by `cc-lr switch --until-idle` (lr-upgrade.sh)
 UPG_BIN="${LR_UPGRADE_BIN:-$LR/lr-upgrade.sh}"
 # The run claim has no reaper here — the run REAPER is the sibling plan's and is out of scope — so it
 # is TTL-bounded, exactly as the fire claim above is and for the same reason: a driver that died
@@ -937,7 +938,9 @@ lrp_bounded_long() {
 }
 lrp_upgrade_kick() {
   local hp det="" d pid
-  compgen -G "$UPG_QUEUE/*.json" >/dev/null 2>&1 || return 0
+  # A PARKED switch is work too: the drain start is what re-judges it, so a tick that saw only
+  # parked requests and did not kick would leave them waiting out their whole --until-idle budget.
+  compgen -G "$UPG_QUEUE/*.json" >/dev/null 2>&1 || compgen -G "$UPG_DEFER/*.json" >/dev/null 2>&1 || return 0
   hp="$(cat "$STATE/upgrade-drain.lock/pid" 2>/dev/null || true)"
   if [[ "$hp" =~ ^[0-9]+$ ]] && kill -0 "$hp" 2>/dev/null; then
     log "UPGRADE-DRAIN already running (pid $hp)"; return 0

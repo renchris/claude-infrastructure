@@ -354,3 +354,87 @@ ranker() { # <rc> <stderr reason line or ''> <stdout lines…> — a claude-acco
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [ -f "$LRU_STATE/requests/cc-lr-switch-83838383-0000-4000-8000-000000000001.json" ] || { echo "$output"; false; }
 }
+
+# ── F. --until-idle: MOVE IT WHEN IT GOES IDLE (F5, 2026-09-27) ──────────────────────────────────
+# Busy panes were dropped as NOTMOVED, so the agent wrote its own detached polling loop
+# (/tmp/lr-wait-move.sh). With --until-idle the request carries a deadline, the drainer PARKS a busy
+# subject in upgrade-deferred/ (no verdict, nothing typed) and re-judges it at every drain start.
+# RED-proof: on 0ecf7a496 `--until-idle` was an unknown option (rc 3) and the drain answered a busy
+# subject NOTMOVED on first sight, whatever the request carried.
+
+@test "F1 [RED] --until-idle queues a busy subject with a deadline; a structural hold is still NOTMOVED at once" {
+  cc_lr_env
+  sess 701 91919191-0000-4000-8000-000000000001 busy
+  sess 702 91919191-0000-4000-8000-000000000002 rest claude-tertiary "$BIN --agent-id w@session-x --agent-name w --model claude-opus-5-5"
+  run bash "$REPO/bin/cc-lr" switch --from next3 --all-idle --target next2 --no-wait --until-idle 600
+  [[ "$output" == *"701   91919191  queued next3 → next2 — mid-turn now; parked until idle"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"702   91919191  NOTMOVED (teammate)"* ]] || { echo "$output"; false; }
+  r="$LRU_STATE/requests/cc-lr-switch-91919191-0000-4000-8000-000000000001.json"
+  [ -f "$r" ] || { echo "$output"; false; }
+  [ "$(jq -r .until_idle_s "$r")" = 600 ] || { cat "$r"; false; }
+  now=$(date +%s); uts=$(jq -r .until_ts "$r")
+  [ "$uts" -gt $((now + 590)) ] || { echo "until_ts=$uts now=$now"; false; }
+  [ "$uts" -le $((now + 600)) ] || { echo "until_ts=$uts now=$now"; false; }
+  [ ! -f "$LRU_STATE/requests/cc-lr-switch-91919191-0000-4000-8000-000000000002.json" ] || false
+  # default OFF: without the flag the same busy subject is not queued
+  rm -f "$LRU_STATE"/requests/*.json
+  run bash "$REPO/bin/cc-lr" switch --pane 701 --target next2 --no-wait
+  [[ "$output" == *"NOTMOVED (mid-turn)"* ]] || { echo "$output"; false; }
+  [ -z "$(ls -A "$LRU_STATE/requests" 2>/dev/null)" ] || false
+}
+
+@test "F2 [RED] the drain PARKS a busy subject inside its budget (no verdict, nothing typed), then moves it once idle" {
+  tui_stub; export SUBMIT_ACT=flip
+  sess 711 92929292-0000-4000-8000-000000000001 busy
+  mkdir -p "$LRU_STATE/upgrade-queue"
+  printf '{"kind":"switch","sid":"92929292-0000-4000-8000-000000000001","source_pane":"711","target":"next2","req_id":"u1","requested_by":"999","until_ts":%d}\n' \
+    "$(( $(date +%s) + 600 ))" > "$LRU_STATE/upgrade-queue/u.json"
+  run bash "$LRU" --drain
+  [ -f "$LRU_STATE/upgrade-deferred/u.json" ] || { echo "$output"; ls -R "$LRU_STATE"; false; }
+  [ ! -e "$LRU_STATE/results/switch-92929292-0000-4000-8000-000000000001.json" ] || { echo "a verdict was written while parked"; false; }
+  [ ! -s "$BATS_TEST_TMPDIR/notify.log" ] || { echo "mailed while parked: $(cat "$BATS_TEST_TMPDIR/notify.log")"; false; }
+  [ ! -s "$BATS_TEST_TMPDIR/submit.log" ] || { echo "typed into a busy session"; false; }
+  # still busy on the next drain: re-judged once, parked again — one drain never spins on it
+  run bash "$LRU" --drain
+  [ -f "$LRU_STATE/upgrade-deferred/u.json" ] || { echo "$output"; false; }
+  [ ! -s "$BATS_TEST_TMPDIR/submit.log" ] || false
+  # the subject goes idle: the next drain promotes, re-judges MOVE, types the one line, sees the flip
+  sess 711 92929292-0000-4000-8000-000000000001 rest
+  run bash "$LRU" --drain
+  r="$LRU_STATE/results/switch-92929292-0000-4000-8000-000000000001.json"
+  [ "$(jq -r .verdict "$r")" = SWITCHED ] || { echo "$output"; cat "$r"; false; }
+  [ "$(jq -r .req_id "$r")" = u1 ] || false
+  [ -z "$(ls -A "$LRU_STATE/upgrade-deferred" 2>/dev/null)" ] || false
+}
+
+@test "F3 [RED] a parked subject still busy when the budget ends is NOTMOVED, mailed, and says so" {
+  tui_stub
+  sess 721 93939393-0000-4000-8000-000000000001 busy
+  mkdir -p "$LRU_STATE/upgrade-deferred"
+  printf '{"kind":"switch","sid":"93939393-0000-4000-8000-000000000001","source_pane":"721","target":"next2","req_id":"u2","requested_by":"999","until_ts":%d}\n' \
+    "$(( $(date +%s) - 1 ))" > "$LRU_STATE/upgrade-deferred/v.json"
+  run bash "$LRU" --drain
+  r="$LRU_STATE/results/switch-93939393-0000-4000-8000-000000000001.json"
+  [ "$(jq -r .verdict "$r")" = NOTMOVED ] || { echo "$output"; cat "$r"; false; }
+  [[ "$(jq -r .reason "$r")" == "mid-turn - still busy when its --until-idle budget ended"* ]] || { cat "$r"; false; }
+  grep -q '^999 CC-LR-SWITCH pane 721 .*verdict=NOTMOVED' "$BATS_TEST_TMPDIR/notify.log" || { cat "$BATS_TEST_TMPDIR/notify.log"; false; }
+  [ -z "$(ls -A "$LRU_STATE/upgrade-deferred")" ] || false
+}
+
+@test "F4 [RED] the poller kicks the drainer when only PARKED requests exist" {
+  POLLER="$REPO/scripts/limit-recover/lr-reset-poller.sh"
+  export LR_POLLER_NO_CENSUS=1
+  export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/preg"; mkdir -p "$CC_REGISTRY_DIR"
+  export LR_POLLER_LAUNCH_DIR="$BATS_TEST_TMPDIR/launchers"; mkdir -p "$LR_POLLER_LAUNCH_DIR"
+  export CC_KITTY_SOCKET_BIN="$BATS_TEST_TMPDIR/no-kitty-socket"
+  printf '#!/bin/bash\nexit 1\n' > "$STUBS/osascript"; chmod +x "$STUBS/osascript"
+  mkdir -p "$HOME/bin"; printf '#!/bin/bash\necho %s\n' "'{\"rows\":[]}'" > "$HOME/bin/claude-accounts"; chmod +x "$HOME/bin/claude-accounts"
+  export PATH="$STUBS:$PATH"
+  export LR_UPGRADE_BIN="$STUBS/lr-upgrade"
+  printf '#!/bin/bash\necho "$*" >> %s\n' "$BATS_TEST_TMPDIR/drain.log" > "$LR_UPGRADE_BIN"; chmod +x "$LR_UPGRADE_BIN"
+  PSTATE="$HOME/.reso/limit-recover"; mkdir -p "$PSTATE/requests" "$PSTATE/upgrade-deferred"
+  printf '{"kind":"switch","sid":"94949494-0000-4000-8000-000000000001","source_pane":"731","target":"next2","until_ts":9999999999}\n' \
+    > "$PSTATE/upgrade-deferred/w.json"
+  LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
+  grep -q 'UPGRADE-DRAIN started' "$PSTATE/poller.log" || { cat "$PSTATE/poller.log"; false; }
+}
