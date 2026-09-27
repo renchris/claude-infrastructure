@@ -59,6 +59,10 @@ ffmpeg -i video.mp4 -vf "select='gt(scene,0.2)',metadata=print:file=scenes.txt" 
 
 # 5 · coarse sweep — 1 frame / 10s, 4 columns, timestamps burned in
 #     (ffmpeg here has NO drawtext/libfreetype; label via ImageMagick with -font)
+#     FAST-CUT footage (step 4 finds a cut every ~1s — montages, trailers): a
+#     fixed interval skips whole shots, so take ONE frame at the midpoint of each
+#     scene interval instead. Measured: a 35s montage had 31 shots; 2s sampling
+#     would have missed about half of them.
 
 # 6 · targeted full-res reads at the instants the transcript nominated
 ffmpeg -ss $T -i video.mp4 -frames:v 1 -q:v 2 hires.png
