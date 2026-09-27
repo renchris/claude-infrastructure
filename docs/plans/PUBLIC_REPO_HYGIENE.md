@@ -15,7 +15,7 @@ can have this as a public repository." Supersedes decision packet `760e13cf37ca`
 private"). Evidence that started this: `docs/research/plugin-packaging-2026-09-26/README.md`
 § Live exposure.
 
-## Phase 0 — orchestration
+## Phase 0 — orchestration — DONE
 
 **Execution locus per wave: L (lead-inline) for every wave.** Why not S (the default): capacity
 was MEASURED at intake (`claude-accounts --fresh`, 2026-09-26 ~14:10 CDT): `next` 99% weekly,
@@ -28,7 +28,7 @@ because they quote the identifiers verbatim).
 **Lead context budget:** recycle at ~60% via `handoff-fire.sh --recycle`; everything a successor
 needs is this file plus `~/Development/claude-private/` (the private store, below).
 
-## What counts as a personal identifier (classification, decided here)
+## What counts as a personal identifier (classification, decided here) — DONE
 
 | Class | Verdict | Why |
 |---|---|---|
@@ -40,7 +40,7 @@ needs is this file plus `~/Development/claude-private/` (the private store, belo
 | Owner name "Chris Ren", GitHub login, macOS short name in `/Users/<name>` paths, hostname, `com.<name>.` launchd labels | KEEP | the public repo's OWNER identity: already public on the GitHub profile and on every commit; rewriting ~7,500 path hits would break fixtures and launchd plists for zero privacy gain |
 | Customer business names and public tenant hostnames | KEEP | public businesses; guest data / private contacts under them are REMOVE |
 
-## The private store
+## The private store — DONE
 
 `~/Development/claude-private/` — a git repo with NO remote (precedent: `~/Development/personal`,
 see `skills/LOCAL_ONLY.md`). Holds:
@@ -49,23 +49,23 @@ see `skills/LOCAL_ONLY.md`). Holds:
 - `public-projection/` — the redaction map (`replace-text.txt`), the path-removal list and the
   mailmap. Private because each one names what it hides.
 
-## Phase A — clean the tree, keep every function
+## Phase A — clean the tree, keep every function — DONE
 
 | # | Item | State |
 |---|---|---|
-| A1 | Identity overlay: `hooks/lib/identity.{py,sh}`, `identity.example.json`, `tests/fixtures/identity.fixture.json`, `tests/identity-overlay.bats` | DONE `d588b356d` |
-| A2 | Readers: `claude-accounts` load_cfg merge, `cc-offload`, `cc-url-open`, e1 probe; `accounts.json` loses email/mailbox/dia_profile. `keychain_account` STAYS (it is the macOS short name — owner identity, KEEP). Proof: `--relogin-info` byte-equal for all 4 accounts | DONE `178e0f595` |
-| A3 | Email gate: MAILBOXES + RECIPE rule 5 rendered from overlay `ms365.{mailboxes,roles}`; read as JSON, not imported (suites run mutant copies from tmp). Rendered RECIPE differs only in the generalised vendor anecdote | DONE `728db7499` |
-| A4 | Git identity gate reads `git_identity.email`; missing overlay refuses in-scope commits | DONE `668c450d4` |
-| A5 | Relocation to `~/Development/claude-private`: vendor/uidotsh, grok-wiki-cli, grok-wiki-custom, repo-wiki, kpmg-deck (its own nested repo, moved whole), BMO renders; install.sh private-overlay leg; MIT/Apache notices; visual-direction example rewritten | DONE `6ced7d2aa` |
-| A6 | 112 personal-life docs moved whole to the private store (same relative path) + `skills/outlook-cleanup` made local-only (`771383db4`); model-facing texts name mailboxes by role (`354d43e1e`); the remaining 96 files take the projection's own tip tree, so **working tip tree == projected tip tree** by construction | DONE (see git log) |
-| A7 | `scripts/public-hygiene-lint.py` (private-map identifier arm + unlisted e-mail + phone + local-only paths; `--own-range`/`--tree`/`--history`; rg fast path) wired into `scripts/ship-land.sh` every land, own-scope; `--selftest` + 2 mutation tests in `tests/public-hygiene.bats` | DONE (see git log) |
+| A1 | Identity overlay: `hooks/lib/identity.{py,sh}`, `identity.example.json`, `tests/fixtures/identity.fixture.json`, `tests/identity-overlay.bats` | DONE `0313deaf3` |
+| A2 | Readers: `claude-accounts` load_cfg merge, `cc-offload`, `cc-url-open`, e1 probe; `accounts.json` loses email/mailbox/dia_profile. `keychain_account` STAYS (it is the macOS short name — owner identity, KEEP). Proof: `--relogin-info` byte-equal for all 4 accounts | DONE `4497467f0` (+ fixup `6b53bbbe1`) |
+| A3 | Email gate: MAILBOXES + RECIPE rule 5 rendered from overlay `ms365.{mailboxes,roles}`; read as JSON, not imported (suites run mutant copies from tmp). Rendered RECIPE differs only in the generalised vendor anecdote | DONE `20c96db10` |
+| A4 | Git identity gate reads `git_identity.email`; missing overlay refuses in-scope commits | DONE `82e5af1fe` (+ fixup `ca14ab8f4`) |
+| A5 | Relocation to `~/Development/claude-private`: vendor/uidotsh, grok-wiki-cli, grok-wiki-custom, repo-wiki, kpmg-deck (its own nested repo, moved whole), BMO renders; install.sh private-overlay leg; MIT/Apache notices; visual-direction example rewritten | DONE `a706fbb8a` |
+| A6 | 112 personal-life docs moved whole to the private store (same relative path) + `skills/outlook-cleanup` made local-only (`9bd5873c4`); model-facing texts name mailboxes by role (`3833c6b8f`); the remaining 96 files take the projection's own tip tree, so **working tip tree == projected tip tree** by construction (`352869a75`) | DONE |
+| A7 | `scripts/public-hygiene-lint.py` (private-map identifier arm + unlisted e-mail + phone + local-only paths; `--own-range`/`--tree`/`--history`; rg fast path) wired into `scripts/ship-land.sh` every land, own-scope; `--selftest` + 2 mutation tests in `tests/public-hygiene.bats` | DONE `5082f37bb` (+ fixup `8c13ec49b`; rg/Python parity `a5ffedd94`) |
 
 Ordering constraint (from the consumer map): re-point every live link to the private store first,
 then untrack. `deploy-live`'s `orphan_prune` deletes dead links whose target is inside the
 checkout, and never judges links that point elsewhere.
 
-## Phase B — clean the public history without rewriting the working one
+## Phase B — clean the public history without rewriting the working one — AWAITING THE OPERATOR'S CUTOVER
 
 **Decision (conviction 92%): rename the current repo to a PRIVATE working origin, publish a
 deterministic `git filter-repo` projection of `main` at the original URL.** Measured
@@ -89,7 +89,7 @@ deterministic `git filter-repo` projection of `main` at the original URL.** Meas
 - Exposure that cannot be recalled: fork `zeroxvee/claude-infrastructure` (305 commits; 2 tip
   files carry identifiers); GitHub cached views of old shas until Support purges them.
 
-### Phase B — built
+### Phase B — built — DONE `76f6cc2bc`
 
 - `scripts/public-publish.sh`: main-only clone → `git filter-repo --preserve-commit-hashes`
   (paths, replace-text, replace-message, mailmap) → verifier (lint `--history` + gitleaks over the
@@ -111,7 +111,17 @@ deterministic `git filter-repo` projection of `main` at the original URL.** Meas
   (dry run by default; `--confirm renchris/claude-infrastructure` executes; bundle backup first;
   self-verifying post-check re-clones the public repo and scans its whole history). Tested offline
   end to end in `tests/public-hygiene.bats` (gh state machine incl. the rename redirect).
-- After the cutover: flip `launchd/fleet.manifest`'s `com.claude.public-publish` row to `run`.
+- After the cutover: flip `launchd/fleet.manifest`'s `com.claude.public-publish` row to `run`,
+  then set this file's frontmatter to `status: complete`.
+
+### Remaining — the operator's cutover only (re-verified 2026-09-26)
+
+Every agent-side section above is DONE on trunk. The one open item is the irreversible cutover,
+filed as operator step `5caf6b5dcb2c`; plan item `151406a2c9cb` is parked behind it. Until it runs,
+github.com/renchris/claude-infrastructure is still PUBLIC with its full unredacted history.
+Readiness, measured 2026-09-27T01:23Z on trunk `edb3112ac`: `public-hygiene-lint.py --tree HEAD`
+0 findings; cutover dry run rc=0 — bundle backup verified (1.1G), projection of 5,806 commits,
+`projection-verifier: 0 identifier hit(s), 0 gitleaks finding(s)`, ruleset `71771919c31e`.
 
 ## Known constraints
 
