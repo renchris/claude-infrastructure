@@ -1348,6 +1348,66 @@ if [[ -n "$sel_input" ]]; then
   fi
 fi
 
+# ── 2a. REROUTE a parked session BEFORE its reset, the moment another account routes (2026-09-27) ─
+# poller.log 2026-09-26T20:55:27Z "PARKED ac0f0123 (next, weekly) resets 2026-09-27T04:00:00Z":
+# minutes later next2 fell below its concurrency cap and was routable, but § 2 skipped the record
+# until its OWN account's reset and nothing before that looked at any other account, so the session
+# sat parked until an operator asked. So each tick, a not-yet-reset record asks the router the
+# question lr-fleet asks — `--rank <lane> --recovery`, which is diagnostic and charges nothing
+# (only --assign charges, and lr-fleet does that itself) — and if any account OTHER than the parked
+# one routes, dispatches the same detached `lr-fleet --one … --target auto` the request lane uses,
+# under the same run claim. The record stays: § 2's transplant arm retires it only on proof.
+# One rank call per lane per tick; one dispatch per sid per LR_REROUTE_EVERY_MIN.
+# Kill: LR_POLLER_REROUTE=off.
+REROUTE_EVERY_MIN="${LR_REROUTE_EVERY_MIN:-15}"
+[[ "$REROUTE_EVERY_MIN" =~ ^[1-9][0-9]*$ ]] || REROUTE_EVERY_MIN=15
+REROUTE_DIR="$STATE/reroute"
+_rr_general="" _rr_general_asked=0 _rr_fable="" _rr_fable_asked=0 _rr_n=0
+reroute_rank() { # $1=lane → the router's stdout, asked at most once per tick per lane
+  local ab="${CC_ACCOUNTS_BIN:-$HOME/bin/claude-accounts}" out
+  if [[ "$1" == fable ]]; then
+    (( _rr_fable_asked )) || { _rr_fable="$("$ab" --rank fable --recovery --max-wait 3 2>/dev/null || true)"; _rr_fable_asked=1; }
+    out="$_rr_fable"
+  else
+    (( _rr_general_asked )) || { _rr_general="$("$ab" --rank general --recovery --max-wait 3 2>/dev/null || true)"; _rr_general_asked=1; }
+    out="$_rr_general"
+  fi
+  printf '%s\n' "$out"
+}
+reroute_parked() { # $1=sid $2=acct $3=cfg → dispatches or does nothing; never fatal
+  local sid="$1" acct="$2" cfg="$3" lane=general tier cand mark rc=0
+  [[ "${LR_POLLER_REROUTE:-on}" != off ]] || return 0
+  (( AUTOFIRE == 1 && DRY == 0 )) || return 0
+  (( _rr_n < MAX_PER_RUN )) || return 0
+  fire_latched "$sid" && return 0
+  { pgrep -f "resume $sid" >/dev/null 2>&1 || sid_claimed "$sid"; } && return 0
+  # Moved already: § 2's transplant arm owns it from here, and re-driving a transplanted session
+  # with no live holder mails a stranded FAILED row on every attempt.
+  if command -v lr_transplant_target >/dev/null 2>&1 && lr_transplant_target "$sid" "$cfg" >/dev/null 2>&1; then
+    return 0
+  fi
+  mark="$REROUTE_DIR/$sid"
+  if [[ -f "$mark" ]] && [[ -n "$(find "$mark" -mmin -"$REROUTE_EVERY_MIN" 2>/dev/null)" ]]; then
+    return 0
+  fi
+  if command -v lr_tier_from_transcript >/dev/null 2>&1; then
+    tier="$(lr_tier_from_transcript "$cfg" "$sid" 2>/dev/null || true)"
+    [[ "$tier" == claude-fable-* ]] && lane=fable
+  fi
+  cand="$(reroute_rank "$lane" | awk -v src="$acct" 'NF >= 2 && $1 != "none" && $1 != src && $2 ~ /^[0-9.eE+-]+$/ { print $1; exit }')"
+  [[ -n "$cand" ]] || return 0
+  run_claim_take "$sid" || return 0
+  mkdir -p "$REROUTE_DIR" 2>/dev/null; : > "$mark"
+  _rr_n=$((_rr_n + 1))
+  log "REROUTE $sid — parked on $acct, but $cand routes now ($lane lane); dispatching the recovery DETACHED (target auto)"
+  "$FLEET" --one "$sid" --target auto --from-daemon --detach > "$RESULTS/$sid.log" 2>&1 || rc=$?
+  if (( rc != 0 )); then
+    run_claim_release "$sid"
+    log "REROUTE $sid — dispatch failed rc=$rc (nothing started); retried after ${REROUTE_EVERY_MIN}m, see $RESULTS/$sid.log"
+  fi
+  return 0
+}
+
 # ── 2. RESUME (or notify) parked sessions whose reset has passed ───────────────────────
 for pf in "$PARKED"/*.json; do
   [[ -e "$pf" ]] || continue
@@ -1374,7 +1434,10 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
   sid="${_fields[0]}"; acct="${_fields[1]}"; cfg="${_fields[2]}"
   cwd="${_fields[3]}"; reset_at_utc="${_fields[4]}"
   reset_epoch=$(python3 -c "import sys,calendar,time; from datetime import datetime; print(int(calendar.timegm(datetime.fromisoformat(sys.argv[1].replace('Z','+00:00')).utctimetuple())))" "$reset_at_utc" 2>/dev/null || echo 0)
-  (( now < reset_epoch )) && continue                        # reset not reached yet
+  if (( now < reset_epoch )); then                           # reset not reached yet —
+    reroute_parked "$sid" "$acct" "$cfg"                     # …but another account may route now
+    continue
+  fi
   { pgrep -f "resume $sid" >/dev/null 2>&1 || sid_claimed "$sid"; } && { mv "$pf" "$RESUMED/$(basename "$pf")" 2>/dev/null; rm -f "$PARKED/$sid.notified"; continue; }
   # ── TRANSPLANTED elsewhere (LIMIT_RECOVER_100P): /limit-recover moved this session to another
   # account and its successor is on disk, so THIS store's copy is retired. Re-firing it here would be
