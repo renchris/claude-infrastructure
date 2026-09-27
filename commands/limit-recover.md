@@ -136,6 +136,7 @@ and every classifier, which is the whole reason the request lane exists.
 | `cc-pane send` to put text in a composer | its text path is iTerm2 AppleScript and iTerm2 is not running on this box: it returned **rc 0 and delivered nothing**, costing 13.1 min on pane 111 (U11 §3). |
 | `it2 session send` / `it2 session run` to deliver a MESSAGE | `send` types keystrokes — `it2 session send CR` typed the letters `C` and `R` into a live composer; `run` is the LAUNCH verb, whose armed-pane branch writes a `$CMD_DIR/<id>.cmd` file instead of reaching the screen (`handoff-fire.sh:1419-1431`). Messages go by `cc-notify`, which lands at a safe boundary. |
 | `kitty @ send-key` for control keys | Claude Code pushes the kitty keyboard protocol, so `ctrl+u` rendered as the literal text `^[[117;5u` in the composer (U08 §3). |
+| `kitty @ send-text … $'\r'` to submit a prompt | the text lands in the composer and the `\r` does NOT submit it (measured 2026-09-27 on window 814). Text and CR that reach the TUI together are read as one paste, and a CR inside a paste is a literal newline (`tests/lr-submit-cr-landing.bats`, incident 2026-09-22). To type AND submit, use `cc_tui_submit <pane> <payload-file>` (`scripts/lib/cc-tui.sh`): it pastes, reads the composer back, sends the CR as its own RPC only on an exact match, and proves the submit from the transcript. |
 
 If a pane genuinely must be told something, the one sanctioned write is a single `printf` to its own
 tty path — which is what `handoff-fire.sh`'s terminal recycle arm now does.
