@@ -43,7 +43,7 @@ setup() {
   # exported CC_ROUTE_RECOVERY=off would turn every assertion below vacuous.
   unset CC_ROUTE_RECOVERY CC_ROUTE_RECOVERY_W_FLOOR CC_ROUTE_RECOVERY_S_CEIL \
         CC_ROUTE_RECOVERY_F_FLOOR CC_ROUTE_PROJ CC_ROUTE_PROJ_LOOKAHEAD_H \
-        CC_ROUTE_CLIFF_TERM CC_ROUTE_KWORK
+        CC_ROUTE_CLIFF_TERM CC_ROUTE_KWORK CC_ROUTE_DISPATCH_W_FLOOR
 
   export HOME="$BATS_TEST_TMPDIR/home"
   mkdir -p "$HOME/.claude/logs"
@@ -348,6 +348,81 @@ for fn in (ca._excluded, ca.score_general, ca.score_fable, ca._rank_pass, ca.ran
     assert p["recovery"].default is False, (fn.__name__, p["recovery"].default)
 # the desk lane is NOT a recovery lane and does not pretend to be one
 assert "recovery" not in inspect.signature(ca.score_interactive).parameters
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || false
+}
+
+# ── the DISPATCH floor: a thin account is DEMOTED, never excluded (2026-09-27) ──────────────────
+# `handoff-fire.sh --account auto` takes `--rank general | head -1`. On 2026-09-26 it put a
+# code-writing fire on next4 at weekly 96-99 %, which hit its weekly limit before closing. The
+# only general-lane weekly bar is WEEKLY_FLOOR (0.5pp), and the T**2 urgency term paid next4's
+# ~12 h reset a ~180x bonus over next2's ~158 h one, so next4 outscored an almost-empty next2 4-6x.
+# The rule: an account under DISPATCH_W_FLOOR of weekly headroom ranks BELOW every account above
+# it, but stays in the list, so it is still picked when it is the only routable one. Scores are
+# untouched (the strand objective still orders each group), so THE INCIDENT case above holds.
+
+@test "[RED] DISPATCH FLOOR: the 2026-09-26 21:19Z snapshot ranks next2 above a next4 at weekly 99" {
+  run python3 -c "$LOAD"'
+n4 = row(acct="next4", weekly_pct=99, weekly_reset_h=11.7, fable_pct=40, fable_reset_h=11.7, session_pct=5, k=1, k_work=1)
+n2 = row(acct="next2", weekly_pct=3, weekly_reset_h=157.7, fable_pct=2, fable_reset_h=157.7, session_pct=2, k=0, k_work=0)
+# the incident still reproduces at the SCORE level, so this can only go green through the order
+assert ca.score_general(n4, CFG2)[0] > ca.score_general(n2, CFG2)[0]
+out, _ = ca.ranked([n4, n2], CFG2, WIN_OPEN, "general")
+order = [r["acct"] for _s, r in out]
+assert order == ["next2", "next4"], order
+assert out[1][1].get("thin_demoted") is True, out[1][1]
+# The fable lane at the 19:23Z snapshot (weekly 96, reset 13.6 h), where its own floor still admits.
+n4f = row(acct="next4", weekly_pct=96, weekly_reset_h=13.6, fable_pct=30, fable_reset_h=13.6, session_pct=5, k=1, k_work=1)
+n2f = row(acct="next2", weekly_pct=0, weekly_reset_h=159.6, fable_pct=0, fable_reset_h=159.6, session_pct=2, k=0, k_work=0)
+assert ca.score_fable(n4f, CFG2, WIN_OPEN)[0] > ca.score_fable(n2f, CFG2, WIN_OPEN)[0]
+out, _ = ca.ranked([n4f, n2f], CFG2, WIN_OPEN, "fable")
+assert [r["acct"] for _s, r in out] == ["next2", "next4"], out
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || false
+}
+
+@test "DISPATCH FLOOR: a thin account that is the ONLY routable one is still rank[0]" {
+  run python3 -c "$LOAD"'
+n4 = row(acct="next4", weekly_pct=99, weekly_reset_h=11.7, fable_pct=40, fable_reset_h=11.7, session_pct=5, k=1, k_work=1)
+cap = row(acct="next", weekly_pct=100, weekly_reset_h=5.0)
+out, reasons = ca.ranked([n4, cap], CFG2, WIN_OPEN, "general")
+assert [r["acct"] for _s, r in out] == ["next4"], out
+assert "next" in reasons
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || false
+}
+
+@test "DISPATCH FLOOR: the floor is DERIVED from the SSOT, range-validated, and the kill switch restores the score order" {
+  run python3 -c "$LOAD"'
+import os
+assert "DISPATCH_W_FLOOR" in R and 0.0 < R["DISPATCH_W_FLOOR"] < 1.0, R.get("DISPATCH_W_FLOOR")
+assert "DISPATCH_W_FLOOR" in ca.ROUTER_OPTIONAL_RANGES
+assert ca.dispatch_w_floor(R) == R["DISPATCH_W_FLOOR"]
+assert "_dispatch" in R and "DISPATCH_W_FLOOR" in R["_dispatch"]
+n4 = row(acct="next4", weekly_pct=99, weekly_reset_h=11.7, session_pct=5, k=1, k_work=1)
+n2 = row(acct="next2", weekly_pct=3, weekly_reset_h=157.7, session_pct=2, k=0, k_work=0)
+os.environ["CC_ROUTE_DISPATCH_W_FLOOR"] = "off"
+out, _ = ca.ranked([n4, n2], CFG2, WIN_OPEN, "general")
+assert [r["acct"] for _s, r in out] == ["next4", "next2"], out
+assert not any(r.get("thin_demoted") for _s, r in out)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || false
+}
+
+@test "DISPATCH FLOOR: accounts above the floor keep their score order; the interactive lane is untouched" {
+  run python3 -c "$LOAD"'
+a = row(acct="a", weekly_pct=60, weekly_reset_h=10.0, session_pct=5, k=0, k_work=0)
+b = row(acct="b", weekly_pct=10, weekly_reset_h=150.0, session_pct=5, k=0, k_work=0)
+out, _ = ca.ranked([b, a], CFG2, WIN_OPEN, "general")
+assert [r["acct"] for _s, r in out] == ["a", "b"], out     # urgency still wins above the floor
+assert not any(r.get("thin_demoted") for _s, r in out)
+t = row(acct="t", weekly_pct=99, weekly_reset_h=11.7, session_pct=5, k=0, k_work=0)
+out_i, _ = ca.ranked([t, b], CFG2, WIN_OPEN, "interactive")
+assert not any(r.get("thin_demoted") for _s, r in out_i)
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || false

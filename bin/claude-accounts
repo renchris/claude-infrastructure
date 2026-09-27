@@ -408,6 +408,7 @@ ROUTER_OPTIONAL_RANGES = {
     "RECOVERY_W_FLOOR": (0.0, 1.0),     # weekly headroom a recovery target must still hold
     "RECOVERY_S_CEIL": (0.0, 1.0),      # projected 5h utilisation a recovery target must be UNDER
     "RECOVERY_F_FLOOR": (0.0, 1.0),     # f_eff a fable recovery target must still hold
+    "DISPATCH_W_FLOOR": (0.0, 1.0),     # weekly headroom under which a dispatch pick is DEMOTED
 }
 
 
@@ -3901,7 +3902,50 @@ def _rank_pass(rows, cfg, win, kind, cliff, recovery=False):
     return out, reasons
 
 
+# ── the DISPATCH floor (2026-09-27): demote, never exclude ──────────────────────────────────────
+# `handoff-fire.sh --account auto` takes `--rank general | head -1`, and on 2026-09-26 that put a
+# code-writing fire on next4 at weekly 96-99 %; it hit the weekly limit before closing. The only
+# general-lane weekly bar is WEEKLY_FLOOR (0.5pp), and the T**2 urgency term paid next4's ~12 h
+# reset a ~180x bonus over next2's ~158 h one, so next4 outscored an almost-empty next2 4-6x.
+# Urgency is right about STRANDING and blind to SURVIVAL: a new fire burns for hours, and the
+# account it lands on must still exist at the end. So an account under this much weekly headroom
+# ranks BELOW every account above it. It stays in the list, so it is still the pick when it is the
+# only routable one; the score is untouched, so each group keeps the strand order. Not applied to
+# --recovery (its own floor already EXCLUDES) or to the interactive lane (it has its own tiers).
+DISPATCH_W_FLOOR_DEFAULT = 0.10   # = RECOVERY_W_FLOOR: ~9 h at the worst measured burn rate
+
+
+def dispatch_w_floor(R):
+    """Env override > SSOT > default; CC_ROUTE_DISPATCH_W_FLOOR=off restores the pure score order."""
+    return _desk_floor("CC_ROUTE_DISPATCH_W_FLOOR", R, "DISPATCH_W_FLOOR",
+                       DISPATCH_W_FLOOR_DEFAULT, 0.0)
+
+
+def _demote_thin(out, R):
+    """Stable-partition ranked (score, row) pairs: rows at/above the dispatch floor first."""
+    floor = dispatch_w_floor(R)
+    if floor <= 0.0 or not out:
+        return out
+    keep, thin = [], []
+    for s, r in out:
+        w = weekly_headroom(r)
+        if w is not None and w < floor:
+            r["thin_demoted"] = True
+            thin.append((s, r))
+        else:
+            keep.append((s, r))
+    return keep + thin
+
+
 def ranked(rows, cfg, win, kind, recovery=False):
+    """`_ranked` below, with the DISPATCH floor applied to the general and fable lanes."""
+    out, reasons = _ranked(rows, cfg, win, kind, recovery=recovery)
+    if kind in ("general", "fable") and not recovery:
+        out = _demote_thin(out, cfg["router"])
+    return out, reasons
+
+
+def _ranked(rows, cfg, win, kind, recovery=False):
     """Rank routable accounts, with the login-cliff term YIELDING rather than starving the fleet.
 
     🚨 The RECOVERY floors are NEVER yielded the way the cliff is, and the asymmetry is the whole
