@@ -101,7 +101,10 @@ Env: `CC_RT_IMG_SIZE` (default `medium`), `CC_RT_TIMEOUT` (20),
   those interleavings; the tool reports what the upstream thread endpoint
   returns and does not re-filter by author.
 - **A thread that continues inside a quote-tweet** is shown as a quote, not
-  followed. Re-run on the quoted URL to continue.
+  followed. Re-run on the quoted URL to continue. The quoted post's videos and
+  images ARE listed under the quote (`> 🎬 video in the quoted post → …`); a
+  "what's cooking" post often carries its only video there, so check those lines
+  before telling the user you saw every video in the thread.
 - Article output is unbounded — a long article is genuinely long (~16 KB on the
   test fixture). Use `--max` or read the first post only if that matters.
 - This is **read-only by construction**. There is no auth, no cookie, and no

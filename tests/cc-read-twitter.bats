@@ -149,6 +149,18 @@ print('\n'.join(rt.render_article(art)))"
   [[ "$output" == *"https://pbs/cover.jpg"* ]]
 }
 
+@test "a video inside a quoted post survives normalise + render instead of being dropped" {
+  run py "
+q={'author':{'screen_name':'b'},'text':'cooking','url':'qu',
+   'media':{'all':[{'type':'video','url':'https://v.example/q.mp4','duration':34.6},
+                   {'type':'photo','url':'https://pbs.twimg.com/media/X.jpg'}]}}
+p=rt.norm_fx({'id':'1','author':{'screen_name':'a'},'text':'aged like milk','quote':q})
+print(rt.render([p],{'source':'fxtwitter'},{}))"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"video in the quoted post · 34.6s → https://v.example/q.mp4"* ]] || false
+  [[ "$output" == *"image in the quoted post https://pbs.twimg.com/media/X.jpg"* ]]
+}
+
 @test "--help exits clean" {
   run "$TOOL" --help
   [ "$status" -eq 0 ]

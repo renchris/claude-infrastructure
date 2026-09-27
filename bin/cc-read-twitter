@@ -140,6 +140,9 @@ def norm_fx(p: dict) -> dict:
                 "author": ((q.get("author") or {}).get("screen_name")),
                 "text": q.get("text") or "",
                 "url": q.get("url"),
+                # The quoted post's own media. Dropping it hid a 35 s video that
+                # was the whole point of the post quoting it.
+                "media": norm_fx(q)["media"],
             }
             if q
             else None
@@ -437,6 +440,12 @@ def render(posts: list[dict], meta: dict, img_paths: dict) -> str:
         if p.get("quote"):
             q = p["quote"]
             L.append(f"> quoting @{q['author']}: {q['text']}")
+            for m in q.get("media") or []:
+                if m.get("type") == "video":
+                    dur = f" · {m['duration']}s" if m.get("duration") else ""
+                    L.append(f"> 🎬 video in the quoted post{dur} → {pick_video(m)}")
+                else:
+                    L.append(f"> 🖼 image in the quoted post {size_url(m.get('url'))}")
         if p.get("poll"):
             L.append(f"📊 poll: {json.dumps(p['poll'], separators=(',', ':'))}")
         if p.get("community_note"):
