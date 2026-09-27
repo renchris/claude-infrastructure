@@ -155,6 +155,23 @@ if [ "$FF" = no ] && [ "$REBASELINE" != 1 ]; then
   echo "  Re-publishing over it is a FORCE-PUSH of public history; only an explicit --rebaseline does that." >&2
   exit 3
 fi
+# Attribution. proj.git is a fresh clone, so init.templatedir fills it with the operator's identity
+# gate (githooks/pre-push), and that gate accepts only the PRIVATE address — the identifier the
+# mailmap exists to remove — so it refuses every projected commit (the 2026-09-27 cutover: 5814 of
+# 5814). What it protects, a commit GitHub credits to the account, holds just as well for the
+# account's own noreply address. So the publisher asserts exactly that over the whole projection,
+# and only then uses the gate's sanctioned per-repo exemption on this throwaway clone.
+OWNER="${CONFIRM%%/*}"
+UNATTR="$(git -C "$OUT/proj.git" log --format='%ae%n%ce' "$TIP" | sort -u \
+  | grep -viE "^[0-9]+\+${OWNER}@users\.noreply\.github\.com\$" || true)"
+if [ -n "$UNATTR" ]; then
+  echo "public-publish: refused — the projection carries identities GitHub would not credit to @$OWNER:" >&2
+  printf '%s\n' "$UNATTR" | head -10 | sed 's/^/  /' >&2
+  echo "  Map each to @$OWNER's noreply address in the private mailmap, then re-run." >&2
+  exit 1
+fi
+git -C "$OUT/proj.git" config cc.identity.exempt \
+  "public projection: every author and committer verified as @$OWNER's noreply address"
 FORCE=(); [ "$FF" = no ] && FORCE=(--force)
 git -C "$OUT/proj.git" push "${FORCE[@]}" "$PUBLIC_URL" "$TIP:refs/heads/$REF" || { echo "public-publish: push FAILED" >&2; exit 1; }
 AFTER="$(git ls-remote "$PUBLIC_URL" "refs/heads/$REF" | cut -f1)"

@@ -15,9 +15,9 @@ setup() {
     'Secret.Person@corp.example==>person@example.com' 'secret.person==>person' \
     'TopSecretName==>a name' > "$CC_PRIVATE_DIR/public-projection/replace-text.txt"
   printf '%s\n' 'docs/private-matter.md' > "$CC_PRIVATE_DIR/public-projection/paths-remove.txt"
-  printf '%s\n' 'Owner <owner@example.com> <Secret.Person@corp.example>' > "$CC_PRIVATE_DIR/public-projection/mailmap"
+  printf '%s\n' 'Owner <1+owner@users.noreply.github.com> <Secret.Person@corp.example>' > "$CC_PRIVATE_DIR/public-projection/mailmap"
   CONF="$T/conf"
-  printf '%s\n' 'path local-only/*' 'email .*@example\.(com|org|net|invalid)' > "$CONF"
+  printf '%s\n' 'path local-only/*' 'email .*@example\.(com|org|net|invalid)' 'email .*@users\.noreply\.github\.com' > "$CONF"
   G=(-c user.name=Owner -c user.email=Secret.Person@corp.example -c commit.gpgsign=false)
 }
 
@@ -153,15 +153,39 @@ commit_file() { # <repo> <path> <content> [message]
   [[ "$output" == *"FORCE-PUSH"* ]]
 }
 
+@test "publish REFUSES to push an identity GitHub would not credit to the confirmed owner" {
+  command -v git-filter-repo >/dev/null || skip "git-filter-repo absent"
+  command -v gitleaks >/dev/null || skip "gitleaks absent"
+  r="$(mkrepo attr)"; mkdir -p "$r/config"; cp "$CONF" "$r/config/public-hygiene.conf"
+  git -C "$r" add -A; git -C "$r" "${G[@]}" commit -q -m conf
+  printf '%s\n' 'Owner <owner@example.com> <Secret.Person@corp.example>' > "$CC_PRIVATE_DIR/public-projection/mailmap"
+  git init -q --bare "$T/owner/pubrepo.git"
+  run bash "$PUB" --src "$r" --out "$T/o1" --public-url "$T/owner/pubrepo.git" --push --confirm owner/pubrepo
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"would not credit to @owner"* ]] || false
+  [[ "$output" == *"owner@example.com"* ]] || false
+  [ -z "$(git -C "$T/owner/pubrepo.git" for-each-ref)" ]
+}
+
 # ── the cutover (docs/activation/pending-activation/46-public-repo-cutover.sh), end to end, offline:
 # github.com is a directory of bare repos (url.insteadOf), gh is a state machine that models the
 # rename REDIRECT, visibility and create, and launchctl is a stub. Nothing leaves the box.
 cutover_fixture() {
   CUT="$REPO/docs/activation/pending-activation/46-public-repo-cutover.sh"
-  GH="$T/gh"; mkdir -p "$GH/state" "$T/bin" "$HOME/Library/LaunchAgents"
+  # the bare repos sit under a path ENDING github.com/renchris: git hands pre-push the insteadOf-
+  # REWRITTEN url, and the identity gate scopes on that string, so a bare "$T/gh" put it out of scope
+  GH="$T/github.com/renchris"; mkdir -p "$GH/state" "$T/bin" "$HOME/Library/LaunchAgents"
   export GIT_CONFIG_GLOBAL="$T/gitconfig"
   git config --global url."$GH/".insteadOf "https://github.com/renchris/"
   git config --global init.defaultBranch main
+  # production parity: init.templatedir puts the REAL identity gate (githooks/pre-push) into every
+  # new repo, the publisher's projection clone included, and the gate accepts only the private
+  # address. Without this the suite ran with no gate at all and the 2026-09-27 cutover refused
+  # 5814 of 5814 projected commits on the first real push.
+  mkdir -p "$T/tmpl/hooks" "$HOME/.claude"; cp "$REPO/githooks/pre-push" "$T/tmpl/hooks/pre-push"
+  git config --global init.templatedir "$T/tmpl"
+  printf '{"git_identity":{"email":"Secret.Person@corp.example"}}\n' > "$HOME/.claude/identity.local.json"
+  printf '%s\n' 'Owner <1+renchris@users.noreply.github.com> <Secret.Person@corp.example>' > "$CC_PRIVATE_DIR/public-projection/mailmap"
   git init -q --bare "$GH/claude-infrastructure.git"
   printf 'renchris/claude-infrastructure public\n' > "$GH/state/repos"
   cat > "$T/bin/gh" <<'STUB'
