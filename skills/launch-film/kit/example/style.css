@@ -1,0 +1,82 @@
+/* Natural TTS launch film v3 — "studio". A warm light stage; colour lives in one object, the cobalt-ink voice orb
+   (plus the product's own UI blue inside the real popup and the real icon tile). Near-black SF Pro type, the article's
+   own Iowan Old Style italic for the one supporting line, small muted sentence-case captions. */
+:root {
+  --stage: #EFEDE8; --paper: #FBFAF7; --ink: #141414; --ink-2: #5A5650; --ink-3: #8A857D; --panel: #F5F3F1;
+  --display: system-ui, sans-serif; --serif: "Iowan Old Style", "Palatino", serif;
+  --mac-blue: #0A63E0;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 1920px; height: 1080px; overflow: hidden; background: var(--stage); }
+body { -webkit-font-smoothing: antialiased; text-rendering: geometricPrecision; }
+#stage { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; overflow: hidden; background: var(--stage); color: var(--ink); }
+.layer { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; }
+.abs { position: absolute; }
+
+/* ---------- atmosphere: none but a dither-strength grain and the opening's paper */
+#grain { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; z-index: 70; opacity: 0.018; image-rendering: pixelated; }
+#blackout { background: var(--paper); z-index: 65; }
+#orb-gl { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; z-index: 40; pointer-events: none; }
+
+/* ---------- the Chrome window (illustrative frame) around the real page */
+#world { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; }
+#win { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.win { position: relative; width: 1600px; height: 900px; border-radius: 14px; overflow: hidden; background: #fff;
+  box-shadow: 0 0 0 1px rgba(40, 32, 20, 0.07), 0 2px 4px rgba(40, 32, 20, 0.04), 0 18px 40px -12px rgba(40, 32, 20, 0.16), 0 60px 120px -40px rgba(40, 32, 20, 0.26); }
+.win-tabs { position: absolute; left: 0; top: 0; right: 0; height: 40px; background: #DDE3EA; }
+.win-tabs .lights { position: absolute; left: 16px; top: 14px; display: flex; gap: 8px; }
+.win-tabs .lights i { display: block; width: 12px; height: 12px; border-radius: 50%; }
+.win-tabs .tab { position: absolute; left: 86px; top: 7px; width: 260px; height: 33px; border-radius: 10px 10px 0 0; background: #fff;
+  display: flex; align-items: center; gap: 9px; padding: 0 12px; font: 400 12.5px/1 var(--display); color: #1F1F1F; }
+.win-tabs .tab span { flex: 1; white-space: nowrap; overflow: hidden; }
+.win-tabs .tab b { font-weight: 400; color: #5F6368; font-size: 14px; }
+.win-tabs .plus { position: absolute; left: 356px; top: 9px; font: 300 20px/1 var(--display); color: #5F6368; }
+.win-bar { position: absolute; left: 0; top: 40px; right: 0; height: 44px; background: #fff; border-bottom: 1px solid #E3E6EA;
+  display: flex; align-items: center; gap: 14px; padding: 0 14px; }
+.win-bar .nav { display: flex; gap: 16px; color: #5F6368; }
+.win-bar .nav svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.win-bar .omni { flex: 1; height: 32px; border-radius: 16px; background: #EEF1F5; display: flex; align-items: center; gap: 10px; padding: 0 14px;
+  font: 400 14px/1 var(--display); color: #1F1F1F; }
+.win-bar .omni svg { width: 14px; height: 14px; stroke: #5F6368; fill: none; stroke-width: 1.8; }
+.win-bar .exts { display: flex; align-items: center; gap: 14px; }
+.win-bar .ext { width: 26px; height: 26px; border-radius: 13px; display: grid; place-items: center; }
+.win-bar .ext.on { background: #E8EAF6; }
+.win-bar .puzzle { width: 16px; height: 16px; fill: #5F6368; }
+.win-bar .avatar { width: 24px; height: 24px; border-radius: 12px; background: #CFCAC1; }
+.win-view { position: absolute; left: 0; top: 84px; width: 1600px; height: 816px; overflow: hidden; background: #FBFAF7; }
+.page { position: absolute; left: 0; top: 0; width: 1600px; isolation: isolate; }
+#spot { position: absolute; left: 0; top: 0; width: 1600px; height: 900px; z-index: 20; pointer-events: none; overflow: visible; }
+
+/* ---------- macOS menus rebuilt in CSS (matched to assets/store/src/contextmenu-crop.png and assets/media/voices.webp) */
+.mac-menu {
+  position: absolute; padding: 5px 0; border-radius: 7px; background: rgba(236, 236, 237, 0.88); backdrop-filter: blur(26px) saturate(1.6);
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.26), 0 10px 32px rgba(0, 0, 0, 0.28), 0 2px 6px rgba(0, 0, 0, 0.12);
+  font: 400 13px/22px var(--display); color: #1d1d1f; letter-spacing: -0.08px; white-space: nowrap; z-index: 30;
+}
+.mac-menu .it { position: relative; height: 22px; margin: 0 5px; padding: 0 12px 0 9px; border-radius: 4px; }
+.mac-menu .it.on { background: var(--mac-blue); color: #fff; }
+.mac-menu .sep { height: 11px; position: relative; }
+.mac-menu .sep::after { content: ""; position: absolute; left: 14px; right: 14px; top: 5px; height: 1px; background: rgba(0, 0, 0, 0.11); }
+.mac-menu .chev { position: absolute; right: 11px; top: 0; font-size: 15px; color: #444; }
+.mac-list { font: 400 13px/19.5px var(--display); }
+.mac-list .it { height: 19.5px; padding-left: 28px; }
+.mac-list .hdr { height: 19.5px; padding-left: 21px; font: 600 11px/19.5px var(--display); color: #8a8a8e; }
+.mac-list .chk { position: absolute; left: 10px; top: 0; font-size: 12px; }
+
+/* ---------- the popup, hanging from the toolbar icon */
+.popup-frame { position: absolute; width: 360px; border-radius: 12px; overflow: hidden; background: #FAFAFA; z-index: 25;
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.2), 0 18px 50px -12px rgba(0, 0, 0, 0.35), 0 4px 12px rgba(0, 0, 0, 0.12); }
+
+/* ---------- pointer */
+#pointer { position: absolute; left: 0; top: 0; width: 0; height: 0; pointer-events: none; z-index: 50; }
+#pointer svg { position: absolute; left: 0; top: 0; overflow: visible; filter: drop-shadow(0 1px 1.2px rgba(0, 0, 0, 0.35)); }
+
+/* ---------- type */
+.caption { font: 400 21px/1.2 var(--display); letter-spacing: -0.005em; color: var(--ink-3); white-space: nowrap; }
+.display { font-family: var(--display); font-weight: 460; letter-spacing: -0.035em; line-height: 0.92; color: var(--ink); white-space: nowrap; }
+.italic { font-family: var(--serif); font-style: italic; font-weight: 400; letter-spacing: -0.012em; color: var(--ink-2); white-space: nowrap; }
+.mask { overflow: hidden; padding: 0.06em 0.08em 0.16em; margin: -0.06em -0.08em -0.16em; }
+.mask > span { display: inline-block; }
+.hair { position: absolute; height: 1px; background: rgba(20, 20, 20, 0.14); }
+.urlpill { display: inline-block; padding: 15px 28px; border-radius: 999px; background: var(--panel);
+  box-shadow: inset 0 0 0 1px rgba(40, 32, 20, 0.07); font: 400 27px/1.2 var(--display); color: var(--ink); letter-spacing: -0.01em; }

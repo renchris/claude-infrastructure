@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Natural TTS — launch film v3 (studio)</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="stage">
+  <!-- the Chrome window, the real page and the real popup, under one 3D camera -->
+  <div id="world"><div id="win"></div></div>
+
+  <!-- pillars: editorial chapters -->
+  <div id="pillars" class="layer"></div>
+  <div id="ring" class="layer"></div>
+  <svg id="hop" class="layer" width="1920" height="1080" style="overflow:visible"></svg>
+  <div id="fast" class="layer"></div>
+
+  <!-- the voice orb and its caption -->
+  <canvas id="orb-gl"></canvas>
+  <div id="orb-label" class="caption abs" style="z-index:41"></div>
+
+  <!-- outro -->
+  <div id="outro" class="layer"></div>
+
+  <div id="pointer"><svg id="ptr-arrow" width="26" height="34" viewBox="0 0 26 34"></svg><svg id="ptr-ibeam" width="14" height="30" viewBox="0 0 14 30"></svg></div>
+  <div id="blackout" class="layer"></div>
+  <canvas id="grain" width="960" height="540"></canvas>
+</div>
+<script type="module" src="scene.js"></script>
+</body>
+</html>

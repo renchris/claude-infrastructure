@@ -1,0 +1,106 @@
+{
+  "note": "v2 (launch-keynote style). Single source of timing, seconds from the first frame, read by composition/scene.js and sound/soundtrack2.py. 120 BPM: a beat is 0.5 s (15 frames), a bar 2 s. Voice windows are sacred: the music+effects stem is digital silence inside every silence_windows entry.",
+  "fps": 30,
+  "width": 1920,
+  "height": 1080,
+  "duration": 22.5,
+  "key": "D minor",
+  "bpm": 120,
+  "voices": [
+    {
+      "id": "v1",
+      "file": "audio/v1-heart.wav",
+      "voice": "af_heart",
+      "label": "Kokoro · Heart (US)",
+      "speed": 1.0,
+      "text": "Reading aloud never really left us.",
+      "start": 3.15,
+      "length": 2.675,
+      "speech_on": 3.45,
+      "speech_off": 5.39
+    },
+    {
+      "id": "v2",
+      "file": "audio/v2-emma-1.2.wav",
+      "voice": "bf_emma",
+      "label": "Kokoro · Emma (UK)",
+      "speed": 1.2,
+      "text": "A story spoken is a story shared, and the listener fills in the rest.",
+      "start": 14.55,
+      "length": 4.075,
+      "speech_on": 14.75,
+      "speech_off": 18.02
+    }
+  ],
+  "silence_windows": [
+    [3.15, 5.44],
+    [14.55, 18.07]
+  ],
+  "music_sections": [
+    {
+      "id": "A_tease",
+      "downbeat": 0.0,
+      "last_hit": 2.0,
+      "silent_by": 3.15,
+      "character": "dark, tense, expensive: sub pulse and a filtered heartbeat kick under a rising noise and pad swell, 16th ticks creeping in; one hard stab-plus-impact on the click at 2.0, then a short tail that is gone by 3.15 (the room goes silent before the voice)"
+    },
+    {
+      "id": "B_drop",
+      "riser_from": 5.5,
+      "downbeat": 6.0,
+      "accents": [6.0, 8.0, 10.0],
+      "build_from": 12.0,
+      "last_hit": 14.0,
+      "silent_by": 14.55,
+      "character": "the drop at 6.0 is the big moment: impact plus the full groove (punchy kick, clap on 2 and 4, crisp hats, sidechained supersaw chords, gliding sub). The three title words land on 6.0, 8.0 and 10.0, each with a stab accent. From 12.0 a filtered-down build (hats, rising noise, snare roll optional) into one hit on the Speak click at 14.0, then a fast release to silence by 14.55"
+    },
+    {
+      "id": "C_finale",
+      "riser_from": 18.1,
+      "downbeat": 18.5,
+      "final_hit": 20.5,
+      "fade_to_zero_by": 22.5,
+      "character": "second drop at 18.5 as the logo arrives (impact plus full groove, brightest statement of the chords); the final hit at 20.5 on the next bar, then everything but a pad and a reverb tail drops away and fades to digital silence by 22.5. This section's bar grid starts at 18.5"
+    }
+  ],
+  "sfx": [
+    { "t": 0.05, "until": 0.9, "type": "whoosh", "note": "the browser window rises out of the dark and the camera pushes in" },
+    { "t": 0.95, "until": 1.4, "type": "selection_sweep", "note": "the sentence is drag-selected" },
+    { "t": 1.5, "type": "menu_open", "note": "right-click menu pops" },
+    { "t": 2.0, "type": "click", "note": "'Speak selected text' clicked (inside the A_tease last hit)" },
+    { "t": 5.5, "until": 6.0, "type": "riser", "note": "reverse swell into the drop" },
+    { "t": 7.75, "until": 8.0, "type": "swish", "note": "title change" },
+    { "t": 9.75, "until": 10.0, "type": "swish", "note": "title change" },
+    { "t": 11.75, "until": 12.0, "type": "swish", "note": "into the popup" },
+    { "t": 12.35, "type": "click", "note": "Voice select clicked, list opens" },
+    { "t": 12.92, "type": "click", "note": "Emma chosen" },
+    { "t": 13.05, "until": 13.4, "type": "slider_glide", "note": "speed 1.0x to 1.2x" },
+    { "t": 14.0, "type": "click", "note": "Speak selected text (inside the B_drop last hit)" },
+    { "t": 18.1, "until": 18.5, "type": "riser", "note": "reverse swell into the second drop" },
+    { "t": 18.75, "type": "chime", "note": "the icon's sound arcs light up" }
+  ],
+  "events": {
+    "open_start": 0.05,
+    "open_end": 0.9,
+    "sel_start": 0.95,
+    "sel_end": 1.4,
+    "rclick": 1.5,
+    "hover_speak": 1.82,
+    "click_speak_menu": 2.0,
+    "zoom_out": 5.5,
+    "p_natural": 6.0,
+    "p_private": 8.0,
+    "p_fast": 10.0,
+    "popup_in": 12.0,
+    "select_click": 12.35,
+    "emma_hover": 12.8,
+    "emma_click": 12.92,
+    "slider_start": 13.05,
+    "slider_end": 13.4,
+    "click_speak_popup": 14.0,
+    "outro": 18.5,
+    "outro_name": 18.75,
+    "outro_sub": 19.0,
+    "outro_cta": 19.5
+  }
+}
