@@ -118,6 +118,8 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
      deliberately skipped while `k > 0` because the running CC owns the token lifecycle and a
      concurrent refresh could rotate the token out from under it. Report it as benign; do not
      recommend a relogin for it. Only the step-4 states need action.
+     A `stale` row whose keychain holds no refresh token can never heal, so it is now reported
+     as `login-required`; `stale` (even at `k=0`) stays benign only when a refresh token exists.
      **But read `heal_note` before calling any `stale` row benign.** That benign reading holds
      for a heal that was *skipped* (`heal_note` starts with `skipped:`). A heal that RAN and
      FAILED is a different fact on an identical-looking row — the table now says `heal FAILED`

@@ -943,7 +943,8 @@ print("OK")'
 ca.LASTGOOD_PATH = os.environ["CA_LEDGER"]
 ca.concurrency = lambda c: {"next3": 2}
 # expired token + live sessions ⇒ heal is skipped by design (CC owns the lifecycle)
-ca.read_creds = lambda d, k: ({"accessToken": "t", "expiresAt": 1000}, "present")
+ca.read_creds = lambda d, k: ({"accessToken": "t", "refreshToken": "r", "expiresAt": 1000},
+                              "present")
 ca.fetch_usage = lambda *a, **k: (401, {})
 rows = ca.collect(cfg, no_heal=True)
 assert rows[0]["auth"] == "stale", rows[0]
@@ -1072,6 +1073,34 @@ assert r["auth_actionable"] is True and r["login_fixable"] is True, r
 # ledger: without the reset it short-circuits on the recorded 400 and never reaches the
 # timeout branch at all. Two independent scenarios, not a sequence.
 for _a in ("next", "next2", "next3", "next4"): ca._clear_rejected(_a)
+ca.heal = lambda *a, **k: (False, "heal timed out")
+r = ca.collect(cfg)[0]
+assert r["auth"] == "stale", r
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || false
+}
+
+# 2026-09-27, next3: the keychain held NO refresh token, so heal() could only ever answer
+# "skipped: no refresh token in keychain" and the row sat at benign `stale` while cc-relogin
+# failed 6x. Stale + no refresh token is a dead login, on the heal AND the --no-heal path.
+# RED-proof: against e7d152d83's bin/claude-accounts collect() CALLED heal on the no-refresh-token
+# row (the raising stub surfaced as auth "probe-error"), i.e. the dead login was still being "healed".
+@test "collect: a stale token with NO refresh token stored is login-required, never benign stale" {
+  run python3 -c "$LOAD"'
+ca.LASTGOOD_PATH = os.environ["CA_LEDGER"]
+ca.concurrency = lambda c: {"next3": 0}                     # zero sessions ⇒ heal would run
+ca.read_creds = lambda d, k: ({"accessToken": "t", "expiresAt": 1000}, "present")
+def _no_heal(*a, **k): raise AssertionError("heal must not run without a refresh token")
+ca.heal = _no_heal
+ca.fetch_usage = lambda *a, **k: (401, {})
+for nh in (False, True):                                    # True = the cc-relogin read
+    r = ca.collect(cfg, no_heal=nh)[0]
+    assert r["auth"] == "login-required", (nh, r)
+    assert "/login" in r["error"] and "refresh token" in r["error"], (nh, r)
+    assert r["auth_actionable"] is True and r["login_fixable"] is True, (nh, r)
+# control: WITH a refresh token, a heal that merely timed out stays stale
+ca.read_creds = lambda d, k: ({"accessToken": "t", "refreshToken": "r", "expiresAt": 1000},
+                              "present")
 ca.heal = lambda *a, **k: (False, "heal timed out")
 r = ca.collect(cfg)[0]
 assert r["auth"] == "stale", r

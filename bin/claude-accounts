@@ -1627,6 +1627,14 @@ def probe_account(cfg, acct, kc, k_live, ledger, prev, no_heal):
         # that needs a login and an account that has been blanked.
         row["auth"] = "login-required"
         row["error"] = "login EXPIRED — run /login (refresh token past expiry)"
+    elif stale and not creds.get("refreshToken"):
+        # 2026-09-27, next3: the keychain held no refresh token, so heal() could only answer
+        # "skipped: no refresh token" and the row sat at benign `stale` while cc-relogin failed
+        # 6x — nothing could ever heal it. Stale + no RT is a dead login; say so on BOTH the heal
+        # and the --no-heal path (cc-relogin reads with --no-heal). A NON-stale token without an
+        # RT still works, so it is left alone. The usage fetch still runs, as for login_expired.
+        row["auth"] = "login-required"
+        row["error"] = "no refresh token stored — run /login"
     elif stale and not no_heal:
         rt_before = creds.get("refreshToken")
         # Only the opaque subprocess is serialised — see _HEAL_GATE. Everything around it stays
