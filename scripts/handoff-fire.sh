@@ -2946,6 +2946,22 @@ composer_residue_is_ours() { # $1=sid $2=current-content
   [ -n "$rec" ] && [ "$rec" = "$2" ]
 }
 
+# Is this composer content obviously NOT a draft (a stray keystroke, a leaked terminal reply, this
+# rail's own unsubmitted prompt)? The classifier and its evidence live in lib/composer-intent.sh,
+# shared with cc-tui.sh. An unreachable lib answers "a draft" — the refusal every caller had before.
+# The loader runs in the caller's shell, never inside `$(…)` — functions sourced in a subshell die
+# with it, and composer_discard_note is needed after the classification returns.
+hf_composer_intent_load() { # → 0 when the classifier is defined
+  command -v composer_unintended_class >/dev/null 2>&1 && return 0
+  # shellcheck disable=SC1091  # sibling lib, resolved from HF_DIR at runtime
+  [ -f "${HF_DIR:-}/lib/composer-intent.sh" ] && . "$HF_DIR/lib/composer-intent.sh" 2>/dev/null
+  command -v composer_unintended_class >/dev/null 2>&1
+}
+hf_composer_unintended() { # $1=space-stripped content → class on stdout; rc 0 unintended · 1 a draft
+  command -v composer_unintended_class >/dev/null 2>&1 || return 1
+  composer_unintended_class "$1"
+}
+
 # ---- PASTE READ-BACK oracle: what the composer SHOWS after a bracketed paste -------------------
 # MEASURED, not inferred (live CC pane, tmux 120x40, 2026-08-24 — five pastes, screens in
 # docs/research/recycle-100p-2026-08-22.md § "The multi-line read-back is a PLACEHOLDER"). A
@@ -8244,12 +8260,25 @@ if [ "${1:-}" = "--probe-recycle-preconditions" ]; then
   #    recycle's own composer gate catches this — 180 s AFTER the transplant. Reading it here turns a
   #    tombstoned husk into a message.
   PRP_IT2="${IT2_BIN:-$HOME/.claude/bin/it2}"
+  #    …UNLESS IT IS NOT A DRAFT (2026-09-27). A stray keystroke, a leaked terminal reply or this
+  #    rail's own unsubmitted prompt held every limited pane on the box through three recovery runs.
+  #    Those get a residue RECEIPT for their exact content, and the recycle's own-residue arm clears
+  #    them by its read-back-verified scrub — the same arm, the same byte-equality, so text that
+  #    changes between here and the /exit is a draft again and still defers the recycle.
   if PRP_COMPOSER="$(composer_content "$PRP_IT2" "$PRP_PANE")"; then
     if [ -n "$PRP_COMPOSER" ]; then
-      echo "composer: held:$(printf '%s' "$PRP_COMPOSER" | cut -c1-80)"
-      prp_verdict "HELD:draft" 3
+      hf_composer_intent_load || true
+      if PRP_CLS="$(hf_composer_unintended "$PRP_COMPOSER")"; then
+        composer_residue_record "$PRP_PANE" "$PRP_COMPOSER"
+        command -v composer_discard_note >/dev/null 2>&1 && composer_discard_note "$PRP_PANE" "$PRP_CLS" "$PRP_COMPOSER"
+        echo "composer: unintended:$PRP_CLS:$(printf '%s' "$PRP_COMPOSER" | cut -c1-80) — receipt filed; the recycle clears it"
+      else
+        echo "composer: held:$(printf '%s' "$PRP_COMPOSER" | cut -c1-80)"
+        prp_verdict "HELD:draft" 3
+      fi
+    else
+      echo "composer: empty"
     fi
-    echo "composer: empty"
   else
     echo "composer: unreadable"
     prp_verdict "HELD:composer-unreadable" 3
@@ -12844,7 +12873,14 @@ recycle_fire() {
   RCY_IT2="${REAL_IT2:-$HOME/.claude/bin/it2}"
   if [ "${CC_RECYCLE_COMPOSER_GATE:-on}" != off ]; then
     rcy_cg_c=""; rcy_cg_rc=0
-    rcy_cg_c="$(recycle_composer_gate "$RCY_IT2" "$SID" "${CC_RECYCLE_DRAFT_WAIT:-180}" "${CC_RECYCLE_DRAFT_IVL:-15}")" || rcy_cg_rc=$?
+    # A composer that ALREADY reads back as receipted residue is not a human mid-thought, so the
+    # 180 s wait for one to finish typing buys nothing; go straight to the attribution arm below.
+    rcy_cg_now="$(composer_content "$RCY_IT2" "$SID" 2>/dev/null)" || rcy_cg_now=""
+    if [ -n "$rcy_cg_now" ] && composer_residue_is_ours "$SID" "$rcy_cg_now"; then
+      rcy_cg_c="$rcy_cg_now"; rcy_cg_rc=1
+    else
+      rcy_cg_c="$(recycle_composer_gate "$RCY_IT2" "$SID" "${CC_RECYCLE_DRAFT_WAIT:-180}" "${CC_RECYCLE_DRAFT_IVL:-15}")" || rcy_cg_rc=$?
+    fi
     # OUR-OWN-RESIDUE ARM (item 1ea55b6ad9f3). A held composer has two very different causes and
     # the old gate could not tell them apart, so it refused both — forever, which is a deadlock
     # rather than a guard. An operator's draft still defers us (that polarity is the whole point

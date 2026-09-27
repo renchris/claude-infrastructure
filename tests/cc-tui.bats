@@ -95,6 +95,7 @@ setup() {
         case "$last" in
           $'\x15') printf 'CTRL-U\n' >> "$RPC_LOG"; return "${SEND_RC:-0}" ;;
           $'\x7f') printf 'DEL\n'    >> "$RPC_LOG"; return "${SEND_RC:-0}" ;;
+          $'\x0c') printf 'CTRL-L\n' >> "$RPC_LOG"; return "${SEND_RC:-0}" ;;
           $'\r')   printf 'CR\n'     >> "$RPC_LOG"
                    [ -n "${CR_APPEND:-}" ] && [ -f "$CR_APPEND" ] && cat "$CR_APPEND" >> "$TRANS"
                    [ -n "${CR_REPLACE:-}" ] && [ -f "$CR_REPLACE" ] && cp "$CR_REPLACE" "$TRANS"
@@ -177,6 +178,85 @@ sent()          { grep -c "^$1\$" "$RPC_LOG" 2>/dev/null || true; }
   [ "$status" -eq 3 ]
   [ "$(sent PASTE)" -eq 0 ]
   [ "$(sent CR)" -eq 0 ]
+}
+
+# NOT A DRAFT ⇒ CLEARED, ONCE (2026-09-27). Reads: #1 the pre-gate, #2 cc_tui_clear's own first
+# read, #3 after its Ctrl-U; #4 is the pre-gate again. Everything later is the paste screen.
+stray_then_clean() { # $1=the stray content
+  export CC_COMPOSER_DISCARD_LOG="$BATS_TEST_TMPDIR/discarded.log"
+  screen_draft "$SDIR/1" "$1"; screen_draft "$SDIR/2" "$1"; screen_empty "$SDIR/3"; screen_empty "$SDIR/4"
+  screen_paste "$SDIR/default" "$PAY"
+  : > "$TRANS"
+  CR_APPEND="$BATS_TEST_TMPDIR/append.jsonl"
+  printf '{"type":"user","message":{"content":"%s"}}\n' "$MARK" > "$CR_APPEND"
+}
+
+@test "a STRAY keystroke is cleared (read-back verified), kept on disk, and the submit proceeds" {
+  stray_then_clean "I"
+  run cc_tui_submit 42 "$PAY"
+  [ "$status" -eq 0 ] || { echo "$output"; cat "$RPC_LOG"; false; }
+  [ "$(sent CTRL-U)" -ge 1 ]
+  [ "$(sent PASTE)" -eq 1 ]
+  [[ "$output" == *"stray-keystroke"* ]] || false
+  grep -q $'class=stray-keystroke\tI$' "$CC_COMPOSER_DISCARD_LOG"
+}
+
+@test "this rail's OWN unsubmitted prompt is cleared, not held — the pane-814 shape" {
+  stray_then_clean "You were resumed on account next2 after a weekly limit on next (was pane 780). Continue the work"
+  run cc_tui_submit 42 "$PAY"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"rail-prompt"* ]]
+}
+
+@test "a draft is still HELD and nothing is cleared — the unintended arm never touches real text" {
+  screen_draft "$SDIR/default" "ship the brag film"
+  run cc_tui_submit 42 "$PAY"
+  [ "$status" -eq 3 ]
+  [ "$(sent CTRL-U)" -eq 0 ]
+  [ "$(sent PASTE)" -eq 0 ]
+}
+
+@test "a stray that will NOT clear is tried ONCE, then HOLDS like any occupied composer" {
+  export CC_COMPOSER_DISCARD_LOG="$BATS_TEST_TMPDIR/discarded.log"
+  screen_draft "$SDIR/default" "I"                 # Ctrl-U is inert: every read still shows it
+  run cc_tui_submit 42 "$PAY"
+  [ "$status" -eq 3 ]
+  [ "$(sent PASTE)" -eq 0 ]
+  [ "$(sent CR)" -eq 0 ]
+}
+
+# A PAINTED-OVER FRAME (pane 751): top border, the ❯ row, then lr-fire-resume's own verdict text
+# where the lower border was. One Ctrl-L, then the repainted frame is read like any other.
+screen_torn()  { printf 'scrollback line\n%s\n \xe2\x9d\xaf [Pasted text #1]Z:16ba1a46\nlr-fire-resume: NOT SUBMITTED\n' "$B" > "$1"; }
+screen_menu()  { printf 'Do you want to proceed?\n \xe2\x9d\xaf 1. Yes\n   2. No\n' > "$1"; }
+
+@test "a PAINTED-OVER composer gets ONE Ctrl-L, and the repainted frame is read and submitted" {
+  export CC_TUI_REDRAW_SETTLE=0.01 CC_TUI_PREWAIT=1 CC_TUI_PREIVL=1
+  screen_torn "$SDIR/1"; screen_torn "$SDIR/2"; screen_empty "$SDIR/3"; screen_paste "$SDIR/default" "$PAY"
+  : > "$TRANS"
+  CR_APPEND="$BATS_TEST_TMPDIR/append.jsonl"
+  printf '{"type":"user","message":{"content":"%s"}}\n' "$MARK" > "$CR_APPEND"
+  run cc_tui_submit 42 "$PAY"
+  [ "$status" -eq 0 ] || { echo "$output"; cat "$RPC_LOG"; false; }
+  [ "$(sent CTRL-L)" -eq 1 ]
+}
+
+@test "a MENU is not a painted-over composer — no Ctrl-L, it ABSTAINS and types nothing" {
+  export CC_TUI_REDRAW_SETTLE=0.01
+  screen_menu "$SDIR/default"
+  run cc_tui_submit 42 "$PAY"
+  [ "$status" -eq 2 ]
+  [ "$(sent CTRL-L)" -eq 0 ]
+  [ "$(sent PASTE)" -eq 0 ]
+}
+
+@test "a frame that stays painted over gets Ctrl-L ONCE, then abstains" {
+  export CC_TUI_REDRAW_SETTLE=0.01 CC_TUI_PREWAIT=1 CC_TUI_PREIVL=1
+  screen_torn "$SDIR/default"
+  run cc_tui_submit 42 "$PAY"
+  [ "$status" -eq 2 ]
+  [ "$(sent CTRL-L)" -eq 1 ]
+  [ "$(sent PASTE)" -eq 0 ]
 }
 
 @test "rc 3 and rc 2 are DIFFERENT verdicts — an occupied box is not an unreadable one" {

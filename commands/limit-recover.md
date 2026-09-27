@@ -147,6 +147,23 @@ machine surface over the same stores, and `lr-fleet.sh --locate` is its screen f
 (`--locate --json` execs into it). `LF_SLOW_SCAN=1` forces the old 35 s transcript walk back, which
 is what `--deep` means. Then hand the sid or the pane to `cc-lr recover`.
 
+### Text in the prompt box that nobody meant — cleared, never handed back (2026-09-27)
+
+A composer holding text used to stop every recovery (`HELD:draft`), and the "fix" was to ask the
+operator to press Ctrl-U. Recovery now tells a draft from junk by `scripts/lib/composer-intent.sh`
+and clears only the junk: a **stray keystroke** (≤2 characters, not a `/command`), a **leaked
+terminal reply** (`_Ga=…`, `[?62;c`, `P>|…`), or **this rail's own unsubmitted prompt** (a known
+prefix, or a trailing lr submit token). Everything else is still a draft and still holds. Each
+discard is appended to `~/.claude/logs/composer-discarded.log`. Kill switch
+`CC_COMPOSER_UNINTENDED=off`.
+
+- **Being moved:** the precheck files a residue receipt, and the recycle's verified scrub clears it.
+- **Already moved, but still on the old limit error** (the relaunch prompt never submitted): `cc-lr
+  recover` no longer says "nothing to do". If the account has headroom it types one `[limit-recover]`
+  continue prompt in the holder's own pane and proves a fresh assistant turn (`nudge-in-place/…`). A
+  frame that lr-fire-resume painted over gets one Ctrl-L to repaint it first.
+- **Never ask the operator to clear a stray.** A real draft is theirs, and so is the refusal.
+
 ## Iron rules (bind every mode; quote back any you are about to break and STOP)
 
 1. **Disk truth outranks conversation memory.** The unit inventory comes from `lr-audit.py`

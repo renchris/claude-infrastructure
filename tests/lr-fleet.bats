@@ -907,13 +907,73 @@ transplanted_fixture() {
   [[ "$output" == *"verdict=FAILED"* ]] || { echo "no FAILED mail: $output"; false; }
 }
 
-@test "CONTROL: a transplanted session a live process DOES hold is still 'nothing to do', exit 0" {
+@test "CONTROL: a transplanted session a live process holds AND that has moved past its limit is 'nothing to do', exit 0" {
   transplanted_fixture
+  printf '{"type":"assistant","timestamp":"2026-09-08T23:40:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"resumed and working"}]}}\n' \
+    >> "$TER/projects/$SLUG/$SID.jsonl"
   row 700 "$SID"                              # the successor pane, alive (pid = this bats process)
   run bash "$FLEET" --one "$SID" --target next2
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *"nothing to do"* ]] || { echo "$output"; false; }
   [ ! -s "$LRH_LOG" ] || { cat "$LRH_LOG"; false; }
+}
+
+# ── HELD BUT STILL ON ITS LIMIT ERROR (2026-09-27, panes 751 + 814) ─────────────────────────────
+# Moved, relaunched in place on an account with headroom, and then idle for hours on the copy of the
+# old error because the relaunch prompt never submitted. "nothing to do" was the wrong answer; the
+# nudge types ONE continue prompt through cc-tui and proves a fresh assistant turn.
+nudge_tui() { # $1=cc_tui_submit rc · $2=1 to append an engaged assistant turn
+  export LF_CC_TUI="$BATS_TEST_TMPDIR/cc-tui-stub.sh" LF_NUDGE_ENGAGE_S=10
+  cat > "$LF_CC_TUI" <<STUB
+cc_tui_submit() {
+  printf 'SUBMIT pane=%s prompt=%s\n' "\$1" "\$(cat "\$2")" >> "$BATS_TEST_TMPDIR/tui.log"
+  if [ "$2" = 1 ]; then
+    printf '{"type":"assistant","timestamp":"%s","message":{"role":"assistant","content":[{"type":"text","text":"continuing"}]}}\n' "\$(date -u +%FT%T.000Z)" >> "$TER/projects/$SLUG/$SID.jsonl"
+  fi
+  return $1
+}
+STUB
+}
+
+@test "a live holder still on its limit error is NUDGED in its own pane, and an engaged turn is RECOVERED" {
+  transplanted_fixture; row 700 "$SID"; nudge_tui 0 1
+  run bash "$FLEET" --one "$SID" --target next2
+  [[ "$output" != *"nothing to do"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"nudge-in-place/RECOVERED"* ]] || { echo "$output"; false; }
+  grep -q 'SUBMIT pane=700 prompt=\[limit-recover\]' "$BATS_TEST_TMPDIR/tui.log"
+  [ ! -s "$LRH_LOG" ] || { echo "a nudge must never move the session again"; cat "$LRH_LOG"; false; }
+}
+
+@test "…a composer holding a real draft makes the nudge FAILED, named, and nothing is moved" {
+  transplanted_fixture; row 700 "$SID"; nudge_tui 3 0
+  run bash "$FLEET" --one "$SID" --target next2
+  [ "$status" -ne 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"nudge-in-place/FAILED"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"holds a draft"* ]] || { echo "$output"; false; }
+}
+
+@test "…a submit with no assistant turn inside the bound is UNPROVEN, never RECOVERED" {
+  transplanted_fixture; row 700 "$SID"; nudge_tui 0 0
+  LF_NUDGE_ENGAGE_S=5 run bash "$FLEET" --one "$SID" --target next2
+  [[ "$output" == *"nudge-in-place/UNPROVEN"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"RECOVERED"* ]] || { echo "$output"; false; }
+}
+
+@test "…a holder whose account is still capped is PARKED and nothing is typed" {
+  transplanted_fixture; row 700 "$SID"; nudge_tui 0 1
+  export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/accounts-capped"
+  printf '#!/bin/sh\necho %s\n' "'{\"rows\":[{\"acct\":\"next3\",\"session_pct\":0,\"weekly_pct\":100}]}'" > "$CC_ACCOUNTS_BIN"; chmod +x "$CC_ACCOUNTS_BIN"
+  run bash "$FLEET" --one "$SID" --target next2
+  [[ "$output" == *"parked/capped"* ]] || { echo "$output"; false; }
+  [ ! -s "$BATS_TEST_TMPDIR/tui.log" ] || { cat "$BATS_TEST_TMPDIR/tui.log"; false; }
+}
+
+@test "…and under --detach the nudge's verdict reaches the requester as mail" {
+  transplanted_fixture; row 700 "$SID"; nudge_tui 0 1
+  detached_one
+  run cat "$BATS_TEST_TMPDIR/notify.log"
+  [[ "$output" == *"verdict=RECOVERED"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"nudge-in-place"* ]] || { echo "$output"; false; }
 }
 
 # ── W9a: --mark's tombstone check is over EVERY store, and --duplicates dedupes by sid ───────────

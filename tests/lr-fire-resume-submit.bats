@@ -1247,3 +1247,31 @@ arm_over() { # $1 = launcher path — runs the REAL arming block and prints what
   [[ "$(states)" != *"FAILED:submit"* ]] \
     || { echo "a refusal was recorded as a measured submission failure: $(states)"; false; }
 }
+
+# ── THE RUN NONCE MAKES A COLLAPSED PASTE "OURS" (2026-09-27, pane 751) ───────────────────────────
+# A long paste renders as a `[Pasted text #1]` chip, so the 40-char head is never on screen and a
+# pristine paste read DRAFT — no re-Enter, and the session sat TASK-LESS. The nonce is the last field
+# of THIS run's submit token; a composer showing it is ours, one showing another run's is not.
+nonce_screen() { # $1=composer row → prints the LR_SCREEN_SH verdict
+  local s="$BATS_TEST_TMPDIR/nonce-it2" b='────────────────────────────────'
+  printf '%s\n' "  chrome" "$b" " ❯ $1" "$b" " ? for shortcuts" > "$BATS_TEST_TMPDIR/nonce-screen.txt"
+  printf '#!/bin/sh\ncat "%s"\n' "$BATS_TEST_TMPDIR/nonce-screen.txt" > "$s"; chmod +x "$s"
+  LR_IT2="$s" LR_PANE=751 bash -c "$(sed -n "/<<'LRSCREENSH'/,/^LRSCREENSH\$/p" "$FIRE" | sed '1d;$d')"
+}
+
+@test "a paste CHIP carrying this run's nonce reads DRAFT-MINE; the head alone could not see it" {
+  export LR_SCREEN_WANT="Resumedinplaceonnext—samepane,samesessi" LR_SCREEN_NONCE=16ba1a46
+  [ "$(nonce_screen '[Pasted text #1]Z:16ba1a46')" = DRAFT-MINE ]
+  LR_SCREEN_NONCE=""
+  [ "$(nonce_screen '[Pasted text #1]Z:16ba1a46')" = DRAFT ]
+}
+
+@test "another run's nonce is NOT ours — the chip stays a DRAFT and earns no Enter" {
+  export LR_SCREEN_WANT="Resumedinplaceonnext—samepane,samesessi" LR_SCREEN_NONCE=0badf00d
+  [ "$(nonce_screen '[Pasted text #1]Z:16ba1a46')" = DRAFT ]
+}
+
+@test "lr-fire-resume derives the nonce from the armed token and exports it to the screen program" {
+  grep -q 'LR_SCREEN_NONCE="${LR_SUBMIT_TOKEN##\*:}"' "$FIRE"
+  grep -q 'export LR_PROBE LR_LIB_PATH LR_IT2 LR_PANE LR_SCREEN_WANT LR_SCREEN_NONCE' "$FIRE"
+}

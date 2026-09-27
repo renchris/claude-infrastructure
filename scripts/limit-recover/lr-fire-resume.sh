@@ -617,6 +617,14 @@ LR_PANE="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; LR_PANE="${LR_PANE##*:}"
 # The needle the composer must contain for a re-Enter to be allowed: the head of the prompt, printable
 # ASCII only and whitespace-stripped, because that is the exact shape the screen reader produces.
 LR_SCREEN_WANT="$(printf '%s' "$PROMPT" | LC_ALL=C tr -cd '[:print:]' | LC_ALL=C tr -d '[:space:]' | cut -c1-40)"
+# …AND THE RUN'S NONCE, for the composer that shows no head at all (2026-09-27, pane 751). Claude Code
+# collapses a long paste into a `[Pasted text #1]` chip, so the 40-char head above is never on screen
+# and a pristine paste read DRAFT: no re-Enter, and the session sat TASK-LESS for hours. The submit
+# token's final field is 8 random hex minted for THIS run, so seeing it in the composer is proof the
+# text is ours, whatever form the head took.
+LR_SCREEN_NONCE=""
+[ "$LR_SUBMIT_TOKEN_IN_PROMPT" = 1 ] && LR_SCREEN_NONCE="${LR_SUBMIT_TOKEN##*:}"
+case "$LR_SCREEN_NONCE" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;; *) LR_SCREEN_NONCE="" ;; esac
 IFS='' read -r -d '' LR_SCREEN_SH <<'LRSCREENSH' || true
 # EMPTY | DRAFT | DRAFT-MINE | MENU | UNKNOWN — the composer, read out of band from the pane itself.
 # The box is found by its BORDER RUNS (a repeat of U+2500), never by a literal TUI phrase: a phrase
@@ -642,6 +650,9 @@ body="$(printf '%s' "$body" | LC_ALL=C tr -d '[:space:]')"
 if [ -n "${LR_SCREEN_WANT:-}" ]; then
   case "$body" in *"$LR_SCREEN_WANT"*) printf DRAFT-MINE; exit 0 ;; esac
 fi
+if [ -n "${LR_SCREEN_NONCE:-}" ]; then
+  case "$body" in *"$LR_SCREEN_NONCE"*) printf DRAFT-MINE; exit 0 ;; esac
+fi
 printf DRAFT
 LRSCREENSH
 IFS='' read -r -d '' LR_NOTE_SH <<'LRNOTESH' || true
@@ -658,7 +669,7 @@ command -v lr_state_append >/dev/null 2>&1 || {
   echo "!! lr-fire-resume: lr-lib.sh unreachable — state '${LR_ST_STATE:-}' NOT recorded" >&2; exit 0; }
 lr_state_append "$LR_RUN_DIR" "${LR_ST_STATE:-}" "${LR_ST_STAGE:-}" "${LR_ST_DETAIL:-}" || true
 LRNOTESH
-export LR_PROBE LR_LIB_PATH LR_IT2 LR_PANE LR_SCREEN_WANT LR_SCREEN_SH LR_NOTE_SH
+export LR_PROBE LR_LIB_PATH LR_IT2 LR_PANE LR_SCREEN_WANT LR_SCREEN_NONCE LR_SCREEN_SH LR_NOTE_SH
 
 lr_rc=0
 # THE RELAUNCH-RC TRAP IS DISARMED HERE, and this line is the whole of its scope rule: everything

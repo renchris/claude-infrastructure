@@ -950,10 +950,104 @@ lf_one() { # $1=sid $2=cfg $3=acct $4=pane $5=cwd $6=tier → rc of the recovery
 # request did nothing, printed a success, and mailed no verdict at all. The move being complete is
 # half the job; the other half is a process holding the session, and lr_holder_count is the one
 # predicate this file already uses for that (registry rows + --resume leaves, overlap counted once).
-lf_transplanted_live() { # $1=sid $2=target cfg → 0 a live process holds it (nothing owed) · 1 stranded
+lf_transplanted_live() { # $1=sid $2=target cfg → 0 a live process holds it (nothing owed) · 1 stranded · 2 held but still on its limit error (lf_nudge)
   [ "$(lr_holder_count "$1" 2>/dev/null || echo 0)" -gt 0 ] || return 1
+  if [ "${LF_NUDGE_HELD:-on}" != off ] && lf_last_is_limit "$2" "$1"; then return 2; fi
   echo "lr-fleet: --one $1 — already TRANSPLANTED→$(lf_acct_of_cfg "$2") and a live process holds it; nothing to do" >&2
   return 0
+}
+# ── HELD IS NOT DONE WHILE THE HOLDER IS STILL ON ITS LIMIT ERROR (2026-09-27, panes 751 + 814) ──
+# The live-holder answer above was "nothing to do", and it was wrong for both sessions it met that
+# day: each had been moved, relaunched in place on an account WITH headroom, and then sat for hours
+# on the transplanted copy of its old limit error, because the relaunch's prompt never submitted —
+# 814's lay typed in the composer for 8 h, 751's was a paste chip the submit check could not read.
+# Nothing else on the box reaches that state: the reset poller retires a transplanted record, and
+# every recovery run said "nothing to do" and mailed nothing. The newest main-thread record being the
+# limit error is the discriminator — any later user or assistant record means the session moved on.
+lf_last_is_limit() { # $1=cfg $2=sid → 0 when the newest main-thread record in that store's copy is a limit error
+  local f
+  for f in "$1"/projects/*/"$2".jsonl; do
+    [ -f "$f" ] || continue
+    tail -c 400000 "$f" 2>/dev/null | /usr/bin/python3 -c '
+import json, sys
+last = None
+for ln in sys.stdin:
+    if "\"type\"" not in ln: continue
+    try: d = json.loads(ln)
+    except Exception: continue
+    if d.get("type") in ("user", "assistant") and not d.get("isSidechain") and not d.get("isMeta"):
+        last = d
+ok = bool(last and last.get("type") == "assistant" and last.get("isApiErrorMessage")
+          and "limit" in json.dumps(last.get("message", {})).lower())
+sys.exit(0 if ok else 1)' && return 0
+  done
+  return 1
+}
+lf_acct_has_headroom() { # $1=acct → 0 headroom or unreadable · 1 at a 5-hour or weekly cap
+  local bin
+  if [ -n "${CC_ACCOUNTS_BIN:-}" ]; then bin="$CC_ACCOUNTS_BIN"   # an override is exclusive, never a first guess
+  else for bin in "$LR/../../bin/claude-accounts" "$HOME/bin/claude-accounts"; do [ -x "$bin" ] && break; done; fi
+  [ -x "$bin" ] || return 0
+  "$bin" --json 2>/dev/null | /usr/bin/python3 -c '
+import json, sys
+try: rows = json.loads(sys.stdin.read()).get("rows", [])
+except Exception: sys.exit(0)
+for r in rows:
+    if r.get("acct") == sys.argv[1]:
+        sys.exit(1 if ((r.get("session_pct") or 0) >= 100 or (r.get("weekly_pct") or 0) >= 100) else 0)
+sys.exit(0)' "$1"
+}
+# The nudge types ONE continue prompt through cc-tui (read-back verified, transcript-proved; a
+# composer that is not a draft is cleared first, a draft still holds) and proves engagement by a
+# fresh non-error assistant turn — the same proof the poller's nudge_in_place uses.
+lf_nudge() { # $1=sid $2=holder cfg $3=source acct $4=pane → 0 engaged · 1 not; the row is written
+  local sid="$1" cfg="$2" acct="$3" pane="$4" hacct row tui f pf t0 rc=0 waited=0 max
+  hacct="$(lf_acct_of_cfg "$cfg")"
+  row="$(lr_registry_live_rows "$sid" 2>/dev/null | head -1 || true)"
+  [ -n "$row" ] && pane="${row%%$'\t'*}"
+  if [ -z "$pane" ] || [ "$pane" = - ]; then
+    lf_row "$sid" "-" "-" "$acct" "$hacct" "nudge-in-place/FAILED" \
+      "a live process holds the session on $hacct but no registry row names its pane, so there is nowhere to type"
+    return 1
+  fi
+  if ! lf_acct_has_headroom "$hacct"; then
+    lf_row "$sid" "$pane" "$pane" "$acct" "$hacct" "parked/capped" "$hacct is still at its limit; nothing typed"
+    return 1
+  fi
+  tui=""
+  for f in "${LF_CC_TUI:-}" "$LR/../lib/cc-tui.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/cc-tui.sh" "$HOME/.claude/scripts/lib/cc-tui.sh"; do
+    [ -n "$f" ] && [ -f "$f" ] && { tui="$f"; break; }
+  done
+  if [ -z "$tui" ]; then
+    lf_row "$sid" "$pane" "$pane" "$acct" "$hacct" "nudge-in-place/FAILED" "scripts/lib/cc-tui.sh is unreachable; nothing typed"
+    return 1
+  fi
+  pf="$FLEET_DIR/$RUN/$sid.nudge.txt"
+  printf '[limit-recover] The usage limit is past and %s has headroom. Continue the work you were doing before the limit.\n' "$hacct" > "$pf"
+  echo "lr-fleet: --one $sid — live on $hacct in pane $pane but still on its limit error; nudging it in place" >&2
+  t0="$(date -u +%FT%T)"
+  # shellcheck disable=SC1090  # runtime-resolved sibling, sourced in a subshell as the poller does
+  ( . "$tui" && cc_tui_submit "$pane" "$pf" ) >> "$FLEET_DIR/$RUN/$sid.stderr" 2>&1 || rc=$?
+  case "$rc" in
+    0|5) ;;
+    3) lf_row "$sid" "$pane" "$pane" "$acct" "$hacct" "nudge-in-place/FAILED" \
+         "the composer holds a draft (not a stray keystroke, a leaked reply or this rail's own text), so nothing was typed; see $FLEET_DIR/$RUN/$sid.stderr"
+       return 1 ;;
+    *) lf_row "$sid" "$pane" "$pane" "$acct" "$hacct" "nudge-in-place/FAILED" "cc_tui_submit rc $rc; see $FLEET_DIR/$RUN/$sid.stderr"
+       return 1 ;;
+  esac
+  max="${LF_NUDGE_ENGAGE_S:-120}"
+  while [ "$waited" -lt "$max" ]; do
+    if lr_engaged_after "$cfg" "$sid" "$t0"; then
+      lf_row "$sid" "$pane" "$pane" "$acct" "$hacct" "nudge-in-place/RECOVERED" \
+        "submitted a continue prompt in pane $pane on $hacct; a fresh assistant turn followed within ${waited}s"
+      return 0
+    fi
+    sleep 5; waited=$((waited + 5))
+  done
+  lf_row "$sid" "$pane" "$pane" "$acct" "$hacct" "nudge-in-place/UNPROVEN" \
+    "typed a continue prompt in pane $pane on $hacct (cc_tui_submit rc $rc) but no assistant turn followed within ${max}s"
+  return 1
 }
 # STRANDED IS A FAILED ROW, NEVER A RELAUNCH FROM HERE. The source pane is gone, so an in-place
 # recycle has nowhere to type, and a new window opened by an unattended driver is a second live copy
@@ -1241,8 +1335,8 @@ EOF
       [ -n "$cwd" ] || cwd="$(grep -o '"cwd":"[^"]*"' "$cfg"/projects/*/"$SID".jsonl 2>/dev/null | tail -1 | cut -d'"' -f4)"
       tier="$(lr_tier_from_transcript "$cfg" "$SID" 2>/dev/null | tr ' ' '/' || true)"
       if _to="$(lr_transplanted_to "$SID" "$cfg")"; then
-        lf_transplanted_live "$SID" "$_to" && exit 0
-        LF_STRANDED_TO="$_to"
+        _tl=0; lf_transplanted_live "$SID" "$_to" || _tl=$?
+        case "$_tl" in 0) exit 0 ;; 2) LF_NUDGE_TO="$_to" ;; *) LF_STRANDED_TO="$_to" ;; esac
       fi
     else
       # No store holds the transcript under that name. The census reads the same stores, so this is
@@ -1270,11 +1364,13 @@ EOF
       [ -n "$SOURCE_PANE" ] && pane="$SOURCE_PANE"
       case "$disp" in TRANSPLANTED*)
         _to="$(lr_transplanted_to "$SID" "$cfg" 2>/dev/null || true)"
-        lf_transplanted_live "$SID" "${_to:-$cfg}" && exit 0
-        LF_STRANDED_TO="${_to:-$cfg}" ;;
+        _tl=0; lf_transplanted_live "$SID" "${_to:-$cfg}" || _tl=$?
+        case "$_tl" in 0) exit 0 ;; 2) LF_NUDGE_TO="${_to:-$cfg}" ;; *) LF_STRANDED_TO="${_to:-$cfg}" ;; esac ;;
       esac
     fi
-    if [ -n "${LF_STRANDED_TO:-}" ]; then
+    if [ -n "${LF_NUDGE_TO:-}" ]; then
+      lf_nudge "$SID" "$LF_NUDGE_TO" "$acct" "$pane"; rc=$?
+    elif [ -n "${LF_STRANDED_TO:-}" ]; then
       lf_stranded "$SID" "$LF_STRANDED_TO" "$acct" "$pane" "$cwd" "$tier"; rc=$?
     else
       lf_one "$SID" "$cfg" "$acct" "$pane" "$cwd" "$tier"; rc=$?

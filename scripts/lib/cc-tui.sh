@@ -401,6 +401,43 @@ cc_tui_cr() { # $1=id → 0 sent / 1 the RPC failed
   return 0
 }
 
+# Is the occupied composer obviously NOT a draft? lib/composer-intent.sh holds the classes and their
+# evidence; resolved beside THIS file on first use. An unreachable lib answers "a draft" — the HELD
+# every caller had before.
+# The loader runs in the CALLER's shell, never inside `$(…)`: functions a subshell sources die with it
+# (memory: assignment-inside-command-substitution-never-escapes), and composer_discard_note is needed
+# after the classification returns.
+_cc_tui_intent_load() { # → 0 when the classifier is defined
+  local lib="${CC_COMPOSER_INTENT_LIB:-${CC_TUI_DIR:-.}/composer-intent.sh}"
+  command -v composer_unintended_class >/dev/null 2>&1 && return 0
+  # shellcheck disable=SC1090  # resolved beside this file at runtime
+  [ -f "$lib" ] && . "$lib" 2>/dev/null
+  command -v composer_unintended_class >/dev/null 2>&1
+}
+# A PAINTED-OVER FRAME IS NOT A MODAL (2026-09-27, pane 751). lr-fire-resume's expect program prints
+# its verdict straight onto the pane, so after a failed submit the composer's LOWER border is gone
+# and the box parse reads UNKNOWN — the same answer a blocking modal gets, and the repair abstains
+# for as long as nothing repaints. The two are told apart by what IS on screen: here the row under
+# the last border is a `❯` input row, which no modal renders (a selector's `❯` carries an ordinal).
+# Only that shape earns ONE Ctrl-L, which makes Claude Code repaint the frame and keeps the input.
+_cc_tui_torn_composer() { # $1=id → 0 when a ❯ input row sits under the last border and no border closes it
+  local scr
+  scr="$(cc_tui_screen "$1")" || return 1
+  printf '%s\n' "$scr" | LC_ALL=C awk -v b='────────────' '
+    index($0, b) > 0 { nb++; last = NR; next }
+    { line[NR] = $0 }
+    END {
+      if (nb < 1) exit 1
+      r = line[last + 1]
+      if (r ~ /❯/ && r !~ /❯[[:space:]]*[0-9]+\./) exit 0
+      exit 1
+    }'
+}
+_cc_tui_unintended() { # $1=space-stripped content → class on stdout; rc 0 unintended · 1 a draft
+  command -v composer_unintended_class >/dev/null 2>&1 || return 1
+  composer_unintended_class "$1"
+}
+
 # ── THE ENTRY POINT ──────────────────────────────────────────────────────────────────────────────
 # CC_TUI_LAST is an out-parameter carrying the last OBSERVATION (never a verdict — nothing branches
 # on it), for a caller that wants to log what was seen. Deliberately not `local`.
@@ -409,9 +446,10 @@ cc_tui_submit() { # $1=pane id $2=payload file → 0..5, per the table at the he
   local prewait="${CC_TUI_PREWAIT:-30}" preivl="${CC_TUI_PREIVL:-5}"
   local tries="${CC_TUI_READBACK_TRIES:-8}" settle="${CC_TUI_SETTLE:-0.5}"
   local rtries="${CC_TUI_RECORD_TRIES:-30}" rivl="${CC_TUI_RECORD_IVL:-2}"
-  local erc=0 t=0 n=0 c crc got marker tpath off sz scrub_rc
+  local erc=0 t=0 n=0 c crc got marker tpath off sz scrub_rc cls="" cleared=0 redrawn=0
 
   CC_TUI_LAST=""
+  _cc_tui_intent_load || true
   if ! cc_tui_valid_id "$id"; then
     CC_TUI_LAST="<bad-id>"
     echo "cc-tui: refusing — '$id' is not a kitty window id (a malformed --match costs 7.6s and hits the wrong pane or none)" >&2
@@ -435,6 +473,24 @@ cc_tui_submit() { # $1=pane id $2=payload file → 0..5, per the table at the he
   while :; do
     c="$(cc_tui_composer "$id")" && crc=0 || crc=1
     [ "$crc" = 0 ] && [ -z "$c" ] && break
+    # NOT A DRAFT ⇒ CLEAR IT, ONCE (2026-09-27). A stray keystroke, a leaked terminal reply or this
+    # rail's own unsubmitted prompt is not the operator mid-thought, and waiting on it only strands
+    # the repair. Cleared by the read-back-verified loop, what was discarded is kept on disk, and the
+    # gate then re-reads: anything still there (or anything that grew) is a draft and HOLDs as before.
+    if [ "$crc" = 0 ] && [ "$cleared" = 0 ] && cls="$(_cc_tui_unintended "$c")"; then
+      cleared=1; scrub_rc=0
+      cc_tui_clear "$id" >/dev/null 2>&1 || scrub_rc=$?
+      command -v composer_discard_note >/dev/null 2>&1 && composer_discard_note "$id" "$cls" "$c"
+      echo "cc-tui: composer held $cls '$(printf '%.80s' "$c")' — not a draft; cleared (scrub rc $scrub_rc), re-reading" >&2
+      continue
+    fi
+    if [ "$crc" != 0 ] && [ "$redrawn" = 0 ] && _cc_tui_torn_composer "$id"; then
+      redrawn=1
+      cc_tui_rpc send-text --match "id:$id" -- $'\x0c' >/dev/null 2>&1 || true
+      echo "cc-tui: the composer's lower border is painted over — sent ONE Ctrl-L so the TUI repaints, re-reading" >&2
+      /bin/sleep "${CC_TUI_REDRAW_SETTLE:-1}"
+      continue
+    fi
     if [ "$t" -ge "$prewait" ]; then
       if [ "$crc" = 0 ]; then
         CC_TUI_LAST="$(printf '%.120s' "$c")"
