@@ -73,6 +73,12 @@ setup() {
   # what every case in this file is asserting about anyway.
   export CC_WF_TEAM_ROOTS="$BATS_TEST_TMPDIR/teams"
   mkdir -p "$CC_WF_TEAM_ROOTS"
+  # 👤 LINEAGE: the seventh store. YOURS also counts rows filed by sessions this session FIRED, read
+  # from the fired-peer stamps — unpinned, every 👤 case would read the OPERATOR's real
+  # ~/.claude/cc-fired (1,800+ stamps) under whatever pane the suite runs in. Empty dir = no peers.
+  export CC_FIRED_DIR="$BATS_TEST_TMPDIR/fired"
+  mkdir -p "$CC_FIRED_DIR"
+  unset CC_PANE_ID ITERM_SESSION_ID WRAP_TRANSCRIPT
 }
 
 # goal_status transcript fixtures — the record dictionary is hooks/lib/goal-state.sh's header.
@@ -423,6 +429,123 @@ ok_state() {
   printf '%s' "$output" | grep -q "👤"
   printf '%s' "$output" | grep -qi "OPERATOR"
   ! printf '%s' "$output" | grep -qi "Next:.*continue" || false
+}
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# 👤 LINEAGE — operator steps filed by sessions THIS session FIRED are this session's too.
+# A fired peer files under its OWN session id, so a count keyed only on $SID let the firer close ✅
+# over a step its delegate filed (incident 2026-09-27: 5714603f → 938aab39, the Vercel top-up).
+# scripts/lib/fired-peers.sh owns the match: firedBySid == $SID, or for a LEGACY stamp (no
+# firedBySid) firedBy == our pane AND firedAt >= our session's start — panes are reused.
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+
+# a fired-peer stamp: $1 pane · $2 firedBy pane · $3 firedAt · $4 firedBySid ("" ⇒ legacy) · $5 peer sid
+mk_stamp() {
+  if [ -n "$4" ]; then
+    printf '{"paneUUID":"%s","firedBy":"%s","firedAt":"%s","firedBySid":"%s","transcript":"/p/proj/%s.jsonl","selfRetire":true}\n' \
+      "$1" "$2" "$3" "$4" "$5" > "$CC_FIRED_DIR/$1.json"
+  else
+    printf '{"paneUUID":"%s","firedBy":"%s","firedAt":"%s","transcript":"/p/proj/%s.jsonl","selfRetire":true}\n' \
+      "$1" "$2" "$3" "$5" > "$CC_FIRED_DIR/$1.json"
+  fi
+}
+# this session's transcript, first record at 2026-09-27T12:00:00Z — the legacy arm's time guard
+mk_own_transcript() {
+  local tp="$BATS_TEST_TMPDIR/own.jsonl"
+  printf '{"type":"user","timestamp":"2026-09-27T12:00:00.000Z","message":{"content":"go"}}\n' > "$tp"
+  export WRAP_TRANSCRIPT="$tp" WRAP_CACHE=off
+}
+
+@test "lineage: a step filed by a peer this session fired (firedBySid) ⇒ 👤, YOURS=1, YOURS_PEER=1" {
+  ok_state
+  export WRAP_SESSION_ID="$SID"
+  mk_stamp 900 810 2026-09-27T13:00:00Z "$SID" PEER-1
+  CC_BACKLOG_BIN="$(mk_backlog_stub "$(blocked_json PEER-1)")"; export CC_BACKLOG_BIN
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" RUNG)" = "👤" ]
+  [ "$(field "$output" YOURS)" = "1" ]
+  [ "$(field "$output" YOURS_PEER)" = "1" ]
+  [ "$(field "$output" YOURS_PEER_SRC)" = "ok" ]
+  run bash "$LEDGER"
+  [ "$status" -eq 0 ]
+  [ "$output" = "👤 My side is done & landed — 1 step(s) need you, 1 filed by sessions you fired; see the OPERATOR block." ]
+  run bash "$LEDGER" --full
+  printf '%s' "$output" | grep -q "^Yours (operator): 1 operator-only step(s) filed this session or by sessions it fired (1)"
+}
+
+@test "lineage: a stamp naming ANOTHER session is not ours, even when it came from our pane" {
+  ok_state
+  export WRAP_SESSION_ID="$SID" ITERM_SESSION_ID="w0t0p0:810"
+  mk_own_transcript
+  mk_stamp 900 810 2026-09-27T13:00:00Z "sess-someone-else" PEER-1
+  CC_BACKLOG_BIN="$(mk_backlog_stub "$(blocked_json PEER-1)")"; export CC_BACKLOG_BIN
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+  [ "$(field "$output" YOURS)" = "0" ]
+}
+
+@test "lineage: LEGACY stamp from our pane, fired AFTER this session started ⇒ counted" {
+  ok_state
+  export WRAP_SESSION_ID="$SID" ITERM_SESSION_ID="w0t0p0:810"
+  mk_own_transcript
+  mk_stamp 900 810 2026-09-27T13:00:00Z "" PEER-1
+  CC_BACKLOG_BIN="$(mk_backlog_stub "$(blocked_json PEER-1)")"; export CC_BACKLOG_BIN
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" RUNG)" = "👤" ]
+  [ "$(field "$output" YOURS)" = "1" ]
+  [ "$(field "$output" YOURS_PEER)" = "1" ]
+}
+
+@test "lineage: LEGACY stamp from our pane, fired BEFORE this session started ⇒ NOT counted (pane reuse)" {
+  ok_state
+  export WRAP_SESSION_ID="$SID" ITERM_SESSION_ID="w0t0p0:810"
+  mk_own_transcript
+  mk_stamp 900 810 2026-09-26T13:00:00Z "" PEER-1
+  CC_BACKLOG_BIN="$(mk_backlog_stub "$(blocked_json PEER-1)")"; export CC_BACKLOG_BIN
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+  [ "$(field "$output" YOURS)" = "0" ]
+  [ "$(field "$output" YOURS_PEER)" = "0" ]
+}
+
+@test "lineage: LEGACY stamp but this session's start is unknown ⇒ NOT counted (no time guard, no match)" {
+  ok_state
+  export WRAP_SESSION_ID="$SID" ITERM_SESSION_ID="w0t0p0:810"
+  mk_stamp 900 810 2026-09-27T13:00:00Z "" PEER-1
+  CC_BACKLOG_BIN="$(mk_backlog_stub "$(blocked_json PEER-1)")"; export CC_BACKLOG_BIN
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+  [ "$(field "$output" YOURS)" = "0" ]
+}
+
+@test "lineage: no stamps ⇒ the 👤 readout is byte-identical to before (own row only)" {
+  ok_state
+  export WRAP_SESSION_ID="$SID"
+  CC_BACKLOG_BIN="$(mk_backlog_stub "$(blocked_json "$SID")")"; export CC_BACKLOG_BIN
+  run bash "$LEDGER"
+  [ "$status" -eq 0 ]
+  [ "$output" = "👤 My side is done & landed — 1 step(s) need you; see the OPERATOR block." ]
+  run bash "$LEDGER" --machine
+  [ "$(field "$output" YOURS)" = "1" ]
+  [ "$(field "$output" YOURS_PEER)" = "0" ]
+  run bash "$LEDGER" --full
+  printf '%s' "$output" | grep -q "^Yours (operator): 1 operator-only step(s) filed this session, UNRUN"
+}
+
+@test "lineage: a corrupt stamp beside a good one is skipped, the good one still counts (fail-open per file)" {
+  ok_state
+  export WRAP_SESSION_ID="$SID"
+  printf '{not json' > "$CC_FIRED_DIR/000.json"
+  mk_stamp 900 810 2026-09-27T13:00:00Z "$SID" PEER-1
+  CC_BACKLOG_BIN="$(mk_backlog_stub "$(blocked_json PEER-1)")"; export CC_BACKLOG_BIN
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" YOURS)" = "1" ]
 }
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────

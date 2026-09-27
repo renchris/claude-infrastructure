@@ -184,7 +184,7 @@
 #                    WRAP_BACKLOG_TIMEOUT_S · WRAP_DECIDE_TIMEOUT_S · WRAP_TRANSCRIPT ·
 #                    WRAP_GOAL_TIMEOUT_S · WRAP_PROJECT_ROOTS ·
 #                    WRAP_RESIDENT · WRAP_RESIDENT_TIMEOUT_S · CC_WF_TEAM_ROOTS ·
-#                    CC_WF_PSTABLE_FILE · CC_SESSIONS_BIN ·
+#                    CC_WF_PSTABLE_FILE · CC_SESSIONS_BIN · CC_FIRED_DIR ·
 #                    WRAP_CACHE · WRAP_CACHE_DIR · WRAP_CACHE_WAIT_MS · WRAP_CACHE_WAIT_TRIES ·
 #                    WRAP_CACHE_LOCK_STALE_S
 set -uo pipefail
@@ -393,7 +393,7 @@ if [ "$MODE" = "machine" ] && [ -n "$WL_TRANSCRIPT" ]; then
     # resumed-session-loses-terminal-identity: no PATH, no $ITERM_SESSION_ID, pane renumbered), so
     # without this the memo would serve the predecessor's attributed count under the successor's
     # identity — silently, and in the direction that hides custody the successor does own.
-    _wl_k="$_wl_k|${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"
+    _wl_k="$_wl_k|${CC_PANE_ID:-${ITERM_SESSION_ID:-}}|${CC_FIRED_DIR:-}"
     _wl_k="$_wl_k|${WRAP_LIVE_REPO:-}|${WRAP_LIVE_BUDGET_COMMITS:-}|${WRAP_LIVE_BUDGET_MIN:-}"
     _wl_k="$_wl_k|${CC_MIGRATIONS_STATE:-}|${WRAP_LAND_INFLIGHT_LIB:-}"
     if _wl_d="$(_wl_digest "$_wl_k")"; then
@@ -917,29 +917,78 @@ _backlog_list() { # $1 = timeout s · $2 = resolved cc-backlog · $3.. = `list` 
   cat "$out"
 }
 
-# YOURS = blocked backlog items whose .session == $SID. ANY failure (no binary, non-zero exit,
-# no jq, unparseable json, timeout) ⇒ YOURS=0 + YOURS_SRC=error. Fail-OPEN: a backlog we cannot
-# read never blocks a close and never invents an operator step.
+# YOURS = blocked backlog items whose .session == $SID — OR whose .session is a session THIS session
+# fired (YOURS_PEER of them, see _wl_fired_peer_sids). ANY failure (no binary, non-zero exit, no jq,
+# unparseable json, timeout) ⇒ YOURS=0 + YOURS_SRC=error. Fail-OPEN: a backlog we cannot read never
+# blocks a close and never invents an operator step.
+#
+# WHY A PEER'S ROWS ARE MINE (2026-09-27). A fired session files its operator steps under ITS OWN
+# session id, so a count keyed only on $SID let the firing session close ✅ over a step its own
+# delegate had filed — the delegate had retired, and nobody else's ledger counts it either. Measured
+# over 30 days: 83 of 688 operator steps (12%) came from fired sessions. Incident: 5714603f fired
+# 938aab39, which filed the operator's Vercel top-up; 5714603f closed its own duplicate row and its
+# ledger went 👤 → ✅ with the step still open. docs/lessons/peer-filed-operator-steps-belong-to-the-firer.md
 YOURS=0; YOURS_SRC="skip"        # skip = not computed (a worse rung already governs)
+YOURS_PEER=0; YOURS_PEER_SRC="skip"
+# WL_PEER_SIDS = the peers' session ids, one per line, from the fired-peer stamps
+# (scripts/lib/fired-peers.sh owns the matching rule and its pane-reuse time guard). Set as GLOBALS
+# and called in this shell, never in a substitution, which would discard them. YOURS_PEER_SRC: ok ·
+# none (lib, store or both identities unavailable) · cap (too many candidate stamps — abstained).
+# Every failure ⇒ no peers.
+WL_PEER_SIDS=""
+_wl_fired_peer_sids() {
+  local lib tp start="" pane rc=0 out
+  WL_PEER_SIDS=""
+  lib="$(dirname "$0")/lib/fired-peers.sh"
+  [ -f "$lib" ] || lib="$HOME/.claude/scripts/lib/fired-peers.sh"
+  # shellcheck source=lib/fired-peers.sh
+  # shellcheck disable=SC1091
+  [ -f "$lib" ] && . "$lib" 2>/dev/null && command -v fired_peer_sids >/dev/null 2>&1 \
+    || { YOURS_PEER_SRC="none"; return 0; }
+  # This session's start bounds the read and is the legacy arm's time guard. The transcript is the
+  # one the Stop hooks pass; the pull path resolves it, exactly as the goal term does.
+  tp="${TRANSCRIPT_FLAG:-${WRAP_TRANSCRIPT:-}}"
+  [ -n "$tp" ] || tp="${GOAL_TP:-}"
+  if [ -z "$tp" ] && [ "$MODE" != "machine" ]; then tp="$(_wl_find_transcript "$SID" || true)"; fi
+  [ -n "$tp" ] && start="$(fired_session_start_epoch "$tp" 2>/dev/null || true)"
+  pane="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; pane="${pane##*:}"
+  out="$(fired_peer_sids "${CC_FIRED_DIR:-$HOME/.claude/cc-fired}" "$SID" "$pane" "$start" 2>/dev/null)" || rc=$?
+  case "$rc" in
+    0) YOURS_PEER_SRC="ok"; WL_PEER_SIDS="$out" ;;
+    3) YOURS_PEER_SRC="cap" ;;
+    *) YOURS_PEER_SRC="none" ;;
+  esac
+  return 0
+}
 count_operator_steps() {
   if [ -z "$SID" ]; then YOURS=0; YOURS_SRC="none"; return 0; fi
-  local bin json n
+  local bin json n peers pair
   bin="$(_resolve_backlog_bin)" || { YOURS=0; YOURS_SRC="error"; return 0; }
   command -v jq >/dev/null 2>&1 || { YOURS=0; YOURS_SRC="error"; return 0; }
   _wl_blc_arm
   json="$(_backlog_list "${WRAP_BACKLOG_TIMEOUT_S:-5}" "$bin" --blocked --json 2>/dev/null)" \
     || { YOURS=0; YOURS_SRC="error"; return 0; }
+  _wl_fired_peer_sids
+  peers="$(printf '%s' "$WL_PEER_SIDS" | grep -v '^$' | jq -R . 2>/dev/null | jq -s -c . 2>/dev/null)"
+  [ -n "$peers" ] || peers="[]"
   # A needs-human row that carries no conviction/receipt (post-epoch) is NOT an operator step yet —
   # it is UNCONVICTED (counted by count_filed_undriven, the filer's own 🔧) and must not be credited
   # here as "my side is done". Everything else in the blocked set is yours as before.
-  n="$(printf '%s' "$json" | jq -r --arg sid "$SID" --arg epoch "$CONVICTION_EPOCH" \
-        '[ .[] | select((.session // "") == $sid)
+  pair="$(printf '%s' "$json" | jq -r --arg sid "$SID" --arg epoch "$CONVICTION_EPOCH" \
+        --argjson peers "$peers" \
+        '[ .[] | (.session // "") as $s
+               | select($s == $sid or ($s != "" and ($peers | index($s)) != null))
                | select( ((.whyNotNow // "") | startswith("needs-human") | not)
                          or ((.conviction != null) and ((.receipt // "") != ""))
-                         or ((.ts // "") < $epoch) ) ] | length' 2>/dev/null)" \
+                         or ((.ts // "") < $epoch) )
+               | $s ]
+         | "\(length) \(map(select(. != $sid)) | length)"' 2>/dev/null)" \
     || { YOURS=0; YOURS_SRC="error"; return 0; }
+  n="${pair%% *}"
   case "$n" in ''|*[!0-9]*) YOURS=0; YOURS_SRC="error"; return 0 ;; esac
   YOURS="$n"; YOURS_SRC="$SID_SRC"
+  YOURS_PEER="${pair##* }"
+  case "$YOURS_PEER" in ''|*[!0-9]*) YOURS_PEER=0 ;; esac
 }
 
 # ── ⛔ — open class-C decisions THIS SESSION filed (see the header) ──
@@ -2227,7 +2276,13 @@ else
     fi
   elif [ "$YOURS" -gt 0 ]; then
     # 👤 outranks the absent-DoD note: an unrun operator step is a fact, an unverifiable scope is not.
-    RUNG="👤"; READOUT="👤 My side is done & landed — ${YOURS} step(s) need you; see the OPERATOR block."
+    # The peer clause appears only when a fired session filed some of them, so a close with none
+    # reads exactly as it always has.
+    if [ "$YOURS_PEER" -gt 0 ]; then
+      RUNG="👤"; READOUT="👤 My side is done & landed — ${YOURS} step(s) need you, ${YOURS_PEER} filed by sessions you fired; see the OPERATOR block."
+    else
+      RUNG="👤"; READOUT="👤 My side is done & landed — ${YOURS} step(s) need you; see the OPERATOR block."
+    fi
   elif [ "$DOD" = "absent" ]; then
     # ✅-eligible git state, but no durable DoD to confirm the scope was met → say so, never silent ✅.
     RUNG="✅"; READOUT="✅ Clean & landed — but NO durable DoD to confirm scope (completeness unverified; frozen a DoD via ~/.claude/autonomy/dod)."
@@ -2358,6 +2413,9 @@ emit_machine() {
   printf 'RESIDENT_DIRTY_FILES=%s\n' "$RESIDENT_DIRTY_FILES"
   printf 'YOURS=%s\n' "$YOURS"
   printf 'YOURS_SRC=%s\n' "$YOURS_SRC"
+  # The part of YOURS that sessions this session FIRED filed (scripts/lib/fired-peers.sh).
+  printf 'YOURS_PEER=%s\n' "$YOURS_PEER"
+  printf 'YOURS_PEER_SRC=%s\n' "$YOURS_PEER_SRC"
   printf 'FILED_MINE=%s\n' "$FILED_MINE"
   printf 'FILED_SRC=%s\n' "$FILED_SRC"
   # § UNCONVICTED — the sum and its two halves, so a consumer can name which store to cure.
@@ -2475,7 +2533,11 @@ emit_full() {
     none)  yours_disp="unknown — session id unresolvable (not counted)" ;;
     error) yours_disp="unknown — backlog unreadable (not counted)" ;;
     skip)  yours_disp="not counted (a worse rung governs)" ;;
-    *)     yours_disp="$( [ "$YOURS" -gt 0 ] && printf '%s operator-only step(s) filed this session, UNRUN — see the OPERATOR block' "$YOURS" || printf 'none filed this session' )" ;;
+    *)     yours_disp="$( if [ "$YOURS" -gt 0 ] && [ "$YOURS_PEER" -gt 0 ]; then
+                            printf '%s operator-only step(s) filed this session or by sessions it fired (%s), UNRUN — see the OPERATOR block' "$YOURS" "$YOURS_PEER"
+                          elif [ "$YOURS" -gt 0 ]; then
+                            printf '%s operator-only step(s) filed this session, UNRUN — see the OPERATOR block' "$YOURS"
+                          else printf 'none filed this session'; fi )" ;;
   esac
   printf 'Yours (operator): %s\n' "$yours_disp"
   local filed_disp; case "$FILED_SRC" in

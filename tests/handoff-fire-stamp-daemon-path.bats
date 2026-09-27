@@ -166,3 +166,42 @@ reason_of() { printf '%s' "${1##*— }"; }
   [ -s "$CC_FIRED_DIR/28.json" ]
   [ -z "$MFP_SKIP_REASON" ]
 }
+
+# ── firedBySid: the FIRING SESSION, not just its pane (2026-09-27) ──────────────────────────────
+# firedBy/originator name a PANE, and panes are reused, so no reader could tell which session fired
+# a peer — the firer's close ledger never counted the operator steps its peer filed
+# (docs/lessons/peer-filed-operator-steps-belong-to-the-firer.md). The writer now records the
+# session id; readers match on it (scripts/lib/fired-peers.sh).
+
+@test "firedBySid: stamp-peer --by-sid records the firing session id on the stamp" {
+  daemon_stamp --pane 28 --cwd "$PEERWT" --by 2 --by-sid SESS-FIRER
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.firedBySid' "$CC_FIRED_DIR/28.json")" = "SESS-FIRER" ]
+  [ "$(jq -r '.firedBy'    "$CC_FIRED_DIR/28.json")" = "2" ]          # the pane field is unchanged
+}
+
+@test "firedBySid: absent --by-sid ⇒ null, never a guessed id" {
+  daemon_stamp --pane 28 --cwd "$PEERWT" --by 2
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.firedBySid' "$CC_FIRED_DIR/28.json")" = "null" ]
+}
+
+@test "firedBySid: the fire path passes FIRING_SESSION_SID to both mark_fired_peer call sites" {
+  # Every fire-path call must carry the 6th argument; stamp-peer and self-close's repair pass their own.
+  run grep -cE 'mark_fired_peer "\$FIRED_DIR" .*"\$\{FIRING_SESSION_SID:-\}"' "$HF"
+  [ "$output" = "2" ]
+}
+
+@test "firedBySid: FIRING_SESSION_SID is this session's id only when the anchor is our own pane" {
+  local block; block="$(sed -n '/^FIRING_SESSION_SID=""$/,/^fi$/p' "$HF")"
+  [ -n "$block" ]
+  # No --session-id: our own pane ⇒ our session id.
+  run bash -c "_itsid=w0t0p0:837; SESSION_ID=; CLAUDE_CODE_SESSION_ID=S-ME; $block"$'\n''printf %s "$FIRING_SESSION_SID"'
+  [ "$output" = "S-ME" ]
+  # --session-id naming OUR pane ⇒ still ours.
+  run bash -c "_itsid=w0t0p0:837; SESSION_ID=837; CLAUDE_CODE_SESSION_ID=S-ME; $block"$'\n''printf %s "$FIRING_SESSION_SID"'
+  [ "$output" = "S-ME" ]
+  # --session-id naming ANOTHER pane ⇒ a fire on its behalf ⇒ unknown, never our id.
+  run bash -c "_itsid=w0t0p0:837; SESSION_ID=999; CLAUDE_CODE_SESSION_ID=S-ME; $block"$'\n''printf %s "$FIRING_SESSION_SID"'
+  [ -z "$output" ]
+}

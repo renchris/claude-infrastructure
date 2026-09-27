@@ -549,16 +549,50 @@ SH
   [[ "$output" == *"2 unread message(s)"* ]]
 }
 
-@test "inventory: WARNs on a peer this session fired that has no live session (b)" {
+# (b) keys on WHICH SESSION fired a peer, via scripts/lib/fired-peers.sh — never on the pane alone:
+# $1 is the closing PANE, and panes are reused, so the old `.firedBy == $1` compare counted every
+# peer any earlier session in this pane had fired. The lib is found through HF_DIR, as in production.
+inv_setup() {
   eval "$(sed -n '/^selfclose_inventory_warn() {/,/^}/p' "$HF")"
+  HF_DIR="$REPO/scripts"
   mailbox_pending_count() { echo 0; }                  # no unread → (a) silent
-  as_tty() { echo ""; }                                # fired pane unresolvable → orphan
   FIRED_DIR="$BATS_TEST_TMPDIR/fired"; mkdir -p "$FIRED_DIR"
-  printf '{"paneUUID":"DEADPEER","firedBy":"MYSID"}\n'   > "$FIRED_DIR/DEADPEER.json"
-  printf '{"paneUUID":"OTHERPEER","firedBy":"SOMEONE"}\n' > "$FIRED_DIR/OTHERPEER.json"   # not ours
-  run selfclose_inventory_warn "MYSID" ""
+  # This session's transcript starts at 2026-09-27T12:00:00Z (epoch 1790510400).
+  INV_TP="$BATS_TEST_TMPDIR/MY-SESSION.jsonl"
+  printf '{"type":"user","timestamp":"2026-09-27T12:00:00.123Z"}\n' > "$INV_TP"
+  transcript_for_sid() { [ "$1" = MY-SESSION ] && printf '%s' "$INV_TP"; return 0; }
+}
+
+@test "inventory: WARNs on a peer this session fired (matched by firedBySid) that has no live session (b)" {
+  inv_setup
+  as_tty() { echo ""; }                                # fired pane unresolvable → orphan
+  printf '{"paneUUID":"DEADPEER","firedBy":"MYSID","firedBySid":"MY-SESSION"}\n' > "$FIRED_DIR/DEADPEER.json"
+  # Same PANE, another SESSION: an earlier occupant of this pane fired it — not ours.
+  printf '{"paneUUID":"OTHERPEER","firedBy":"MYSID","firedBySid":"EARLIER-SESSION"}\n' > "$FIRED_DIR/OTHERPEER.json"
+  run selfclose_inventory_warn "MYSID" "" "MY-SESSION"
   [ "$status" -eq 0 ]
   [[ "$output" == *"1 peer(s) fired by this session"* ]]
+}
+
+@test "inventory: a LEGACY stamp (no firedBySid) counts only when fired from this pane AFTER this session started" {
+  inv_setup
+  as_tty() { echo ""; }
+  printf '{"paneUUID":"AFTER","firedBy":"MYSID","firedAt":"2026-09-27T13:00:00Z"}\n'  > "$FIRED_DIR/AFTER.json"
+  printf '{"paneUUID":"BEFORE","firedBy":"MYSID","firedAt":"2026-09-26T13:00:00Z"}\n' > "$FIRED_DIR/BEFORE.json"
+  run selfclose_inventory_warn "MYSID" "" "MY-SESSION"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"1 peer(s) fired by this session"* ]]
+}
+
+@test "inventory: no fired-peers lib ⇒ (b) counts nothing (ambiguity is silence, never a guess)" {
+  inv_setup
+  # shellcheck disable=SC2034  # read by the eval'd selfclose_inventory_warn to locate the lib
+  HF_DIR="$BATS_TEST_TMPDIR/no-lib"; HOME="$BATS_TEST_TMPDIR/no-home"
+  as_tty() { echo ""; }
+  printf '{"paneUUID":"DEADPEER","firedBy":"MYSID","firedBySid":"MY-SESSION"}\n' > "$FIRED_DIR/DEADPEER.json"
+  run selfclose_inventory_warn "MYSID" "" "MY-SESSION"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"fired by this session"* ]]
 }
 
 # RED-PROOF for the orphan probe itself. The test above resolves the pane to "" and so takes the
@@ -568,14 +602,12 @@ SH
 # reads that live peer as DEAD and warns the operator its work is stranded; pane_cc_state crosses
 # the nested pty via the descendant closure and stays silent.
 @test "inventory: a LIVE peer behind expect's nested pty is NOT counted as an orphan" {
-  eval "$(sed -n '/^selfclose_inventory_warn() {/,/^}/p' "$HF")"
+  inv_setup
   eval "$(sed -n '/^pid_is_cc() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^pane_cc_state() {/,/^}/p' "$HF")"
-  mailbox_pending_count() { echo 0; }                  # no unread → (a) silent
   as_tty() { echo "TTY-LIVEPEER"; }                    # resolves, and that pane HAS a live CC
-  FIRED_DIR="$BATS_TEST_TMPDIR/fired"; mkdir -p "$FIRED_DIR"
-  printf '{"paneUUID":"LIVEPEER","firedBy":"MYSID"}\n' > "$FIRED_DIR/LIVEPEER.json"
-  run selfclose_inventory_warn "MYSID" ""
+  printf '{"paneUUID":"LIVEPEER","firedBy":"MYSID","firedBySid":"MY-SESSION"}\n' > "$FIRED_DIR/LIVEPEER.json"
+  run selfclose_inventory_warn "MYSID" "" "MY-SESSION"
   [ "$status" -eq 0 ]
   [[ "$output" != *"fired by this session"* ]]
 }

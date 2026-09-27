@@ -4679,8 +4679,8 @@ sc_announce_before_retire() { # $1=pane $2=fired-dir $3=mailbox-dir [$4=unlanded
   return 0
 }
 
-mark_fired_peer() { # $1=fired-dir $2=fired-pane $3=cwd $4=firing-pane [$5=prompt-file] → best-effort, always 0
-  local dir="$1" pane="$2" cwd="$3" by="$4" pf="${5:-}" tmp
+mark_fired_peer() { # $1=fired-dir $2=fired-pane $3=cwd $4=firing-pane [$5=prompt-file] [$6=firing-session-id] → best-effort, always 0
+  local dir="$1" pane="$2" cwd="$3" by="$4" pf="${5:-}" bysid="${6:-}" tmp
   # MFP_SKIP_REASON — why this function declined, for a caller that needs to know.
   #
   # WHY AN OUT-PARAM RATHER THAN A RETURN CODE. The "always 0" contract stays exactly as it is: a
@@ -4725,6 +4725,10 @@ mark_fired_peer() { # $1=fired-dir $2=fired-pane $3=cwd $4=firing-pane [$5=promp
   #   marker       V2 §5.2 — the engagement proof row 2 owns, so successor_engaged no longer
   #                depends on row 4's registry row carrying a .session_id (a field the PROVISIONAL
   #                row this very script writes does not have — M-9).
+  #   firedBySid   the firing SESSION's id (2026-09-27). firedBy/originator name a PANE, and panes
+  #                are reused, so no reader could say which session fired a peer: the firer's close
+  #                ledger never counted the operator steps its peer filed. null when unknown — a
+  #                reader then falls back to pane + firedAt >= session start (scripts/lib/fired-peers.sh).
   # CC_LIFECYCLE_RECORD=0 reverts to the pre-v2 five-field stamp (R8 kill switch).
   if [ "${CC_LIFECYCLE_RECORD:-1}" = 0 ]; then
     if jq -n --arg paneUUID "$pane" --arg cwd "$cwd" --arg firedBy "$by" \
@@ -4744,11 +4748,12 @@ mark_fired_peer() { # $1=fired-dir $2=fired-pane $3=cwd $4=firing-pane [$5=promp
         --arg startedAt "${LR_STARTED_AT:-}" --arg engagedAt "${LR_ENGAGED_AT:-}" \
         --arg proof "${LR_PROOF:-}" --arg transcript "${LR_TRANSCRIPT:-}" \
         --arg marker "${FIRE_MARKER:-}" --arg originator "$by" \
-        --arg notifyBack "${NB_ARMED_TARGET:-}" \
+        --arg notifyBack "${NB_ARMED_TARGET:-}" --arg firedBySid "$bysid" \
         --arg latency "$(_iso_delta_s "${LR_STARTED_AT:-}" "${LR_ENGAGED_AT:-}")" \
         '{paneUUID:$paneUUID, cwd:$cwd, firedBy:$firedBy, firedAt:$firedAt, selfRetire:true}
          + {schema:2, originClass:"fired-peer"}
          + {originator:      (if $originator  == "" then null else $originator  end)}
+         + {firedBySid:      (if $firedBySid  == "" then null else $firedBySid  end)}
          + {notifyBack:      (if $notifyBack  == "" then null else $notifyBack  end)}
          + {firedStartedAt:  (if $startedAt   == "" then null else $startedAt   end)}
          + {engagedAt:       (if $engagedAt   == "" then null else $engagedAt   end)}
@@ -5554,10 +5559,15 @@ originator_liveness() { # $1=originator sid $2=registry dir → 0 dead / 1 alive
 # AND the close log. Ambiguity ⇒ count nothing and skip (per the light-touch contract):
 #   (a) UNREAD MAIL — undrained lines in THIS session's own inbox (~/.claude/mailbox/<sid>.md), read
 #       through the shared .seen cursor (mailbox_pending_count). Lib unavailable ⇒ skip.
-#   (b) ORPHANED FIRES — cc-fired stamps this session wrote (.firedBy == our sid) whose fired pane has
-#       no live session left (the peer we spawned is gone) — a fire with no live continuation.
-selfclose_inventory_warn() { # $1=our-session-id $2=logfile(optional)
-  local sid="$1" log="${2:-}" pending fired_orphans=0 f fb fp ftty lib have_mpc=0
+#   (b) ORPHANED FIRES — cc-fired stamps this session wrote whose fired pane has no live session left
+#       (the peer we spawned is gone) — a fire with no live continuation. "This session wrote" is
+#       scripts/lib/fired-peers.sh's rule, not a bare `.firedBy == $1`: $1 is our PANE, and panes are
+#       reused, so that compare counted every peer any earlier session in this pane had ever fired.
+#       Now: .firedBySid == our session id, or — for a stamp written before that field existed —
+#       .firedBy == our pane AND .firedAt >= our session's start. No lib ⇒ count nothing (ambiguity).
+selfclose_inventory_warn() { # $1=our-pane-id $2=logfile(optional) [$3=our-session-id]
+  local sid="$1" log="${2:-}" our_sid="${3-${CLAUDE_CODE_SESSION_ID:-}}" pending fired_orphans=0 fp ftty lib have_mpc=0
+  local fp_lib start="" rows
   [ -n "$sid" ] || return 0
   _inv_warn() { echo "$1" >&2; [ -n "$log" ] && { printf '%s\n' "$1" >> "$log" 2>/dev/null || true; }; }
   # (a) unread mail — reuse the mailbox-pending lib's cursor primitive (lazily sourced like
@@ -5580,11 +5590,18 @@ selfclose_inventory_warn() { # $1=our-session-id $2=logfile(optional)
   fi
   # (b) orphaned fires — stamps WE wrote whose fired pane is no longer alive (as_tty is set-e-safe /
   #     AppleEvent-foreground here; an unresolvable/dead pane counts as an orphan).
-  if command -v jq >/dev/null 2>&1 && [ -n "${FIRED_DIR:-}" ] && [ -d "$FIRED_DIR" ]; then
-    for f in "$FIRED_DIR"/*.json; do
-      [ -e "$f" ] || continue
-      fb="$(jq -r '.firedBy // empty' "$f" 2>/dev/null)"; [ "$fb" = "$sid" ] || continue
-      fp="$(jq -r '.paneUUID // empty' "$f" 2>/dev/null)"; [ -n "$fp" ] || continue
+  if ! command -v fired_peer_stamps >/dev/null 2>&1; then
+    for fp_lib in "${HF_DIR:-}/lib/fired-peers.sh" "$HOME/.claude/scripts/lib/fired-peers.sh"; do
+      # shellcheck disable=SC1090,SC1091
+      [ -f "$fp_lib" ] && { . "$fp_lib" 2>/dev/null || true; break; }
+    done
+  fi
+  if command -v jq >/dev/null 2>&1 && command -v fired_peer_stamps >/dev/null 2>&1 \
+     && [ -n "${FIRED_DIR:-}" ] && [ -d "$FIRED_DIR" ]; then
+    start="$(fired_session_start_epoch "$(transcript_for_sid "$our_sid")" 2>/dev/null || true)"
+    rows="$(fired_peer_stamps "$FIRED_DIR" "$our_sid" "$sid" "$start" 2>/dev/null || true)"
+    while IFS='	' read -r fp _; do
+      [ -n "$fp" ] || continue
       ftty="$(as_tty "$fp" 2>/dev/null || true)"
       # ORPHAN = "not affirmatively alive", so the test is `!= cc` and NOT `= shell`: an unreadable
       # pane must still warn. That keeps the fail-safe polarity the tty-only read had, while
@@ -5593,7 +5610,9 @@ selfclose_inventory_warn() { # $1=our-session-id $2=logfile(optional)
       if [ -z "$ftty" ] || [ "$(pane_cc_state "$ftty")" != cc ]; then
         fired_orphans=$((fired_orphans + 1))
       fi
-    done
+    done <<SCINV
+$rows
+SCINV
     [ "$fired_orphans" -gt 0 ] && \
       _inv_warn "⚠ WARN pre-close inventory: $fired_orphans peer(s) fired by this session ($sid) have no live session — their work may be stranded (see ~/.claude/cc-fired/; reopen any incomplete items)"
   fi
@@ -8053,11 +8072,14 @@ fi
 # for a human must not stamp it; one dispatching a peer says so explicitly.
 if [ "${1:-}" = "stamp-peer" ]; then
   shift
-  SP_PANE="" SP_CWD="" SP_BY="" SP_PROMPT=""
+  SP_PANE="" SP_CWD="" SP_BY="" SP_PROMPT="" SP_BY_SID=""
   while [ $# -gt 0 ]; do case "$1" in
     --pane)        SP_PANE="${2:?--pane needs a pane id}"; shift 2 ;;
     --cwd)         SP_CWD="${2:?--cwd needs a directory}"; shift 2 ;;
     --by)          SP_BY="${2:?--by needs the firing pane id}"; shift 2 ;;
+    # The firing SESSION's id (firedBySid). Optional and never guessed: a launcher that cannot
+    # name it leaves it null and readers fall back to pane + time.
+    --by-sid)      SP_BY_SID="${2:?--by-sid needs the firing session id}"; shift 2 ;;
     --prompt-file) SP_PROMPT="${2:?--prompt-file needs a path}"; shift 2 ;;
     *) echo "!! unknown stamp-peer arg: $1" >&2; exit 1 ;;
   esac; done
@@ -8068,7 +8090,7 @@ if [ "${1:-}" = "stamp-peer" ]; then
   # unvalidatable stamp this change set exists to remove.
   [ -n "$SP_CWD" ] || { echo "!! stamp-peer needs --cwd (it is the tenancy oracle the origin gate binds on)" >&2; exit 1; }
   [ -d "$SP_CWD" ] || { echo "!! stamp-peer: --cwd is not a directory: $SP_CWD" >&2; exit 1; }
-  mark_fired_peer "$FIRED_DIR" "$SP_PANE" "$SP_CWD" "$SP_BY" "$SP_PROMPT"
+  mark_fired_peer "$FIRED_DIR" "$SP_PANE" "$SP_CWD" "$SP_BY" "$SP_PROMPT" "$SP_BY_SID"
   # mark_fired_peer is best-effort by contract (it returns 0 even when the write fails) because a
   # fire must never die on its own bookkeeping. A caller that ASKED for a stamp is in the opposite
   # position: it needs to know, so verify the artifact and fail loudly if absent.
@@ -9064,7 +9086,10 @@ MSG
   # Pre-close inventory (light, best-effort, WARN-only): a closing session should not silently abandon
   # unread mail or peers it fired that have no live continuation. Runs in the REAL close path only
   # (before arming the watcher); zero counts are silent. NEVER blocks — the close proceeds regardless.
-  selfclose_inventory_warn "$SC_SID" "$SC_LOG" || true
+  # The session whose fires are inventoried: on a remote close (--source-pane) the SOURCE pane's
+  # session, never the driver's — the same choice the transplant tombstone lookup makes.
+  if [ "${SC_REMOTE_SOURCE:-0}" = 1 ]; then SC_INV_SID="${SC_SOURCE_SESSION:-}"; else SC_INV_SID="${CLAUDE_CODE_SESSION_ID:-}"; fi
+  selfclose_inventory_warn "$SC_SID" "$SC_LOG" "$SC_INV_SID" || true
   # M3 — the inventory above WARNS; this ACTS, and it is the last gate before any irreversible step.
   # Row 3's F4 was precisely "close path warned about undrained mail and closed anyway", so a warn
   # that is not followed by an actuator is the defect, not the fix. Ordered per the contract:
@@ -11339,7 +11364,7 @@ fire_cleanup() {
     FIRE_REG_TIMEOUT=0 ensure_registration "$REG_DIR" "$_pane" \
       "$(basename "${LAUNCH_DIR:-fire}")-${_pane%%-*}" "${LAUNCH_DIR:-}" "${CMD:-}" || true
     if [ "${WANT_SELF_RETIRE:-0}" = 1 ]; then
-      mark_fired_peer "$FIRED_DIR" "$_pane" "${LAUNCH_DIR:-}" "${FIRING_SID:-}" "${PROMPT_FILE:-}" || true
+      mark_fired_peer "$FIRED_DIR" "$_pane" "${LAUNCH_DIR:-}" "${FIRING_SID:-}" "${PROMPT_FILE:-}" "${FIRING_SESSION_SID:-}" || true
       echo "→ fire-cleanup: task-less pane $_pane made VISIBLE (registry row + fired-peer marker) — cc-reaper can GC it, and it can self-close if it turns out to be running" >&2
     else
       echo "⚠ fire-cleanup: task-less pane $_pane registered but NOT auto-reapable (--no-self-retire leaves no fired-peer marker, by design) — close it by hand: it2 session close -f -s $_pane" >&2
@@ -11683,6 +11708,15 @@ fi
 # instead of drifting to another window.
 _itsid="${ITERM_SESSION_ID:-}"
 FIRING_SID="${SESSION_ID:-${_itsid##*:}}"
+# FIRING_SESSION_SID — the SESSION running this fire, recorded on the peer's stamp as firedBySid so
+# the firer's close ledger can count the operator steps its peer files (scripts/lib/fired-peers.sh).
+# FIRING_SID is a PANE. Only trusted when the anchor is this process's own pane (or none was named):
+# a --session-id naming ANOTHER pane is a fire on that pane's behalf, and stamping our session id
+# on it would hand its peer's steps to the wrong ledger. Unknown ⇒ empty ⇒ null on the stamp.
+FIRING_SESSION_SID=""
+if [ -z "${SESSION_ID:-}" ] || [ "$SESSION_ID" = "${_itsid##*:}" ]; then
+  FIRING_SESSION_SID="${CLAUDE_CODE_SESSION_ID:-}"
+fi
 
 # ANCHOR_INTENT — did the CALLER name a pane at all? The two anchorless cases are NOT the same
 # failure and must not share one policy (regression 2026-07-25 → 2026-07-30):
@@ -13711,7 +13745,7 @@ else
       # An `if` block, NOT `[ … ] && …`: a false test would return 1 and `set -e` would abort the
       # fire right before the "→ fired" summary (the same trap noted at the stranded-account line).
       if [ "$WANT_SELF_RETIRE" = 1 ]; then
-        mark_fired_peer "$FIRED_DIR" "$SPAWNED_PANE" "$LAUNCH_DIR" "$FIRING_SID" "$PROMPT_FILE"
+        mark_fired_peer "$FIRED_DIR" "$SPAWNED_PANE" "$LAUNCH_DIR" "$FIRING_SID" "$PROMPT_FILE" "${FIRING_SESSION_SID:-}"
       fi
       # P0-15: publish the fired pane under its role so role-addressed pings reach it.
       if [ -n "$AS_ROLE" ] && [ -n "$SPAWNED_PANE" ]; then write_role "$CC_ROLES_DIR" "$AS_ROLE" "$SPAWNED_PANE"; fi
