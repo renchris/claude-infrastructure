@@ -625,6 +625,11 @@ LR_SCREEN_WANT="$(printf '%s' "$PROMPT" | LC_ALL=C tr -cd '[:print:]' | LC_ALL=C
 LR_SCREEN_NONCE=""
 [ "$LR_SUBMIT_TOKEN_IN_PROMPT" = 1 ] && LR_SCREEN_NONCE="${LR_SUBMIT_TOKEN##*:}"
 case "$LR_SCREEN_NONCE" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;; *) LR_SCREEN_NONCE="" ;; esac
+# …AND A CHIP WITH ONLY A FRAGMENT OF OUR TAIL AFTER IT (pane 815, the same morning). The typed
+# prompt is collapsed into the chip and only the last few keystrokes land as text after it — `2bd7`,
+# half the nonce — so the whole-nonce needle above misses too. The tail of OUR prompt is random
+# (it ends in the nonce), so a fragment of it after a chip is ours; a fragment must be ≥2 characters.
+LR_SCREEN_TAIL="$(printf '%s' "$PROMPT" | LC_ALL=C tr -cd '[:print:]' | LC_ALL=C tr -d '[:space:]' | tail -c 48)"
 IFS='' read -r -d '' LR_SCREEN_SH <<'LRSCREENSH' || true
 # EMPTY | DRAFT | DRAFT-MINE | MENU | UNKNOWN — the composer, read out of band from the pane itself.
 # The box is found by its BORDER RUNS (a repeat of U+2500), never by a literal TUI phrase: a phrase
@@ -653,6 +658,13 @@ fi
 if [ -n "${LR_SCREEN_NONCE:-}" ]; then
   case "$body" in *"$LR_SCREEN_NONCE"*) printf DRAFT-MINE; exit 0 ;; esac
 fi
+case "$body" in
+  "[Pastedtext#"*"]"?*)
+    rest="${body#*]}"
+    if [ -n "${LR_SCREEN_TAIL:-}" ] && [ "${#rest}" -ge 2 ]; then
+      case "$LR_SCREEN_TAIL" in *"$rest"*) printf DRAFT-MINE; exit 0 ;; esac
+    fi ;;
+esac
 printf DRAFT
 LRSCREENSH
 IFS='' read -r -d '' LR_NOTE_SH <<'LRNOTESH' || true
@@ -669,7 +681,7 @@ command -v lr_state_append >/dev/null 2>&1 || {
   echo "!! lr-fire-resume: lr-lib.sh unreachable — state '${LR_ST_STATE:-}' NOT recorded" >&2; exit 0; }
 lr_state_append "$LR_RUN_DIR" "${LR_ST_STATE:-}" "${LR_ST_STAGE:-}" "${LR_ST_DETAIL:-}" || true
 LRNOTESH
-export LR_PROBE LR_LIB_PATH LR_IT2 LR_PANE LR_SCREEN_WANT LR_SCREEN_NONCE LR_SCREEN_SH LR_NOTE_SH
+export LR_PROBE LR_LIB_PATH LR_IT2 LR_PANE LR_SCREEN_WANT LR_SCREEN_NONCE LR_SCREEN_TAIL LR_SCREEN_SH LR_NOTE_SH
 
 lr_rc=0
 # THE RELAUNCH-RC TRAP IS DISARMED HERE, and this line is the whole of its scope rule: everything

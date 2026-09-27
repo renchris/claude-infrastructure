@@ -208,6 +208,37 @@ stray_then_clean() { # $1=the stray content
   [[ "$output" == *"rail-prompt"* ]]
 }
 
+@test "a clipboard image the paste attached after OUR text is backspaced away, then the CR goes" {
+  screen_empty "$SDIR/1"
+  { printf 'scrollback line\n%s\n' "$B"; cat "$PAY"; printf '[Image #5]\n%s\n' "$B"; } > "$SDIR/2"
+  screen_paste "$SDIR/default" "$PAY"
+  : > "$TRANS"
+  CR_APPEND="$BATS_TEST_TMPDIR/append.jsonl"
+  printf '{"type":"user","message":{"content":"%s"}}\n' "$MARK" > "$CR_APPEND"
+  run cc_tui_submit 42 "$PAY"
+  [ "$status" -eq 0 ] || { echo "$output"; cat "$RPC_LOG"; false; }
+  [ "$(sent DEL)" -eq 1 ]
+  [ "$(sent CR)" -eq 1 ]
+}
+
+@test "an image chip that is not simply TRAILING our text is a mismatch — no backspace, no CR" {
+  screen_empty "$SDIR/1"
+  { printf 'scrollback line\n%s\n[Image #5] ' "$B"; cat "$PAY"; printf '%s\n' "$B"; } > "$SDIR/default"
+  run cc_tui_submit 42 "$PAY"
+  [ "$status" -eq 4 ]
+  [[ "$output" != *"attached clipboard image"* ]] || { echo "$output"; false; }
+  [ "$(sent CR)" -eq 0 ]
+}
+
+@test "cc_tui_transcript prefers the registry row's own account over a stale stub elsewhere" {
+  unset CC_TUI_TRANSCRIPT
+  mkdir -p "$HOME/.claude/projects/p" "$HOME/.claude-secondary/projects/p"
+  : > "$HOME/.claude/projects/p/sid-814.jsonl"; : > "$HOME/.claude-secondary/projects/p/sid-814.jsonl"
+  printf '{"session_id":"sid-814","account":"claude-secondary"}' > "$CC_REGISTRY_DIR/814.json"
+  run cc_tui_transcript 814
+  [ "$output" = "$HOME/.claude-secondary/projects/p/sid-814.jsonl" ] || { echo "$output"; false; }
+}
+
 @test "a draft is still HELD and nothing is cleared — the unintended arm never touches real text" {
   screen_draft "$SDIR/default" "ship the brag film"
   run cc_tui_submit 42 "$PAY"

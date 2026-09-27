@@ -1271,7 +1271,16 @@ nonce_screen() { # $1=composer row → prints the LR_SCREEN_SH verdict
   [ "$(nonce_screen '[Pasted text #1]Z:16ba1a46')" = DRAFT ]
 }
 
+@test "a chip followed by only a FRAGMENT of our tail is ours — the pane-815 shape; a human's words are not" {
+  export LR_SCREEN_WANT="Resumedinplaceonnext—samepane,samesessi" LR_SCREEN_NONCE=f00d2bd7
+  export LR_SCREEN_TAIL="0sessionx(submittoken:run:798afadf:20260927T072240Z:f00d2bd7)"
+  [ "$(nonce_screen '[Pasted text #1]2bd7')" = DRAFT-MINE ]
+  [ "$(nonce_screen '[Pasted text #1]2bd7)')" = DRAFT-MINE ]
+  [ "$(nonce_screen '[Pasted text #1]please also fix')" = DRAFT ]
+  [ "$(nonce_screen '[Pasted text #1]7')" = DRAFT ]
+}
+
 @test "lr-fire-resume derives the nonce from the armed token and exports it to the screen program" {
   grep -q 'LR_SCREEN_NONCE="${LR_SUBMIT_TOKEN##\*:}"' "$FIRE"
-  grep -q 'export LR_PROBE LR_LIB_PATH LR_IT2 LR_PANE LR_SCREEN_WANT LR_SCREEN_NONCE' "$FIRE"
+  grep -q 'export LR_PROBE LR_LIB_PATH LR_IT2 LR_PANE LR_SCREEN_WANT LR_SCREEN_NONCE LR_SCREEN_TAIL' "$FIRE"
 }

@@ -33,6 +33,10 @@ cls() { composer_unintended_class "$1" || printf 'DRAFT'; }
 @test "a submit token counts only at the END, alone or behind a paste chip" {
   [ "$(cls 'anything(submittoken:run:18e3fd78:20260927T054318Z:16ba1a46)')" = rail-token ]
   [ "$(cls '[Pastedtext#2+3lines]Z:16ba1a46)')" = rail-token ]
+  [ "$(cls '[Pastedtext#1]2bd7')" = rail-token ]             # pane 815: half the nonce after the chip
+  [ "$(cls '[Pastedtext#1]ab')" = rail-token ]
+  [ "$(cls '[Pastedtext#1]a')" = DRAFT ]                     # one character is not evidence
+  [ "$(cls '[Pastedtext#1]fixthis')" = DRAFT ]               # words after a chip are a human's
   [ "$(cls 'see(submittoken:run:18e3fd78:20260927T054318Z:16ba1a46)andfixit')" = DRAFT ]
   [ "$(cls '[Pastedtext#1]')" = DRAFT ]                    # an operator paste looks exactly like this
   [ "$(cls '[Pastedtext#1]andmynotes')" = DRAFT ]

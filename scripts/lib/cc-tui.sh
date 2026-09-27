@@ -316,7 +316,7 @@ cc_tui_marker() { # $1=payload file → the needle on stdout; rc 1 when none is 
 # THE SESSION, without reading a pixel: ~/.claude/cc-registry/<pane>.json (handoff-fire.sh:372
 # REG_DIR) names the session_id, and the transcript is <cfg>/projects/<slug>/<sid>.jsonl.
 cc_tui_transcript() { # $1=pane id → the transcript path on stdout; rc 1 when it cannot be resolved
-  local id="${1:-}" reg sid cfg f
+  local id="${1:-}" reg sid cfg f acct
   [ -n "${CC_TUI_TRANSCRIPT:-}" ] && { printf '%s' "$CC_TUI_TRANSCRIPT"; return 0; }
   reg="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}/${id}.json"
   [ -f "$reg" ] || return 1
@@ -324,6 +324,19 @@ cc_tui_transcript() { # $1=pane id → the transcript path on stdout; rc 1 when 
 try: print(json.load(open(sys.argv[1])).get("session_id") or "")
 except Exception: pass' "$reg" 2>/dev/null)"
   [ -n "$sid" ] || return 1
+  # THE ROW'S OWN ACCOUNT FIRST (2026-09-27, pane 814). A transplant leaves a stub copy of the
+  # transcript in the source store, and the first-store-wins walk below found that 4.8 KB stub in
+  # ~/.claude while the session was writing to ~/.claude-secondary — so a prompt that landed and was
+  # answered read as rc 5 "cannot tell". The row names the store the live process writes to.
+  acct="$(/usr/bin/python3 -c 'import json,sys
+try: print(json.load(open(sys.argv[1])).get("account") or "")
+except Exception: pass' "$reg" 2>/dev/null)"
+  case "$acct" in
+    ''|*/*|.*) ;;
+    *) for f in "$HOME/.$acct"/projects/*/"$sid".jsonl; do
+         [ -f "$f" ] && { printf '%s' "$f"; return 0; }
+       done ;;
+  esac
   for cfg in $(cc_tui_config_dirs); do
     for f in "$cfg"/projects/*/"$sid".jsonl; do
       [ -f "$f" ] && { printf '%s' "$f"; return 0; }
@@ -404,6 +417,24 @@ cc_tui_cr() { # $1=id → 0 sent / 1 the RPC failed
 # Is the occupied composer obviously NOT a draft? lib/composer-intent.sh holds the classes and their
 # evidence; resolved beside THIS file on first use. An unreachable lib answers "a draft" — the HELD
 # every caller had before.
+# How many `[Image #N]` chips trail an otherwise EXACT read-back of the payload? 0 when anything else
+# differs — this only ever explains a clipboard attachment, never a mangled text.
+_cc_tui_trailing_image_chips() { # $1=payload file $2=space-stripped read-back → count on stdout
+  local want rest n=0
+  want="$(LC_ALL=C tr -cd '[:print:]' < "${1:-}" 2>/dev/null | LC_ALL=C tr -d '[:space:]')"
+  case "${2-}" in "$want"?*) rest="${2#"$want"}" ;; *) printf 0; return 0 ;; esac
+  while [ -n "$rest" ]; do
+    case "$rest" in
+      "[Image#"[0-9]*) ;;
+      *) printf 0; return 0 ;;
+    esac
+    rest="${rest#\[Image#}"
+    rest="${rest#"${rest%%[!0-9]*}"}"
+    case "$rest" in "]"*) rest="${rest#]}"; n=$((n + 1)) ;; *) printf 0; return 0 ;; esac
+  done
+  printf '%s' "$n"
+}
+
 # The loader runs in the CALLER's shell, never inside `$(…)`: functions a subshell sources die with it
 # (memory: assignment-inside-command-substitution-never-escapes), and composer_discard_note is needed
 # after the classification returns.
@@ -446,7 +477,7 @@ cc_tui_submit() { # $1=pane id $2=payload file → 0..5, per the table at the he
   local prewait="${CC_TUI_PREWAIT:-30}" preivl="${CC_TUI_PREIVL:-5}"
   local tries="${CC_TUI_READBACK_TRIES:-8}" settle="${CC_TUI_SETTLE:-0.5}"
   local rtries="${CC_TUI_RECORD_TRIES:-30}" rivl="${CC_TUI_RECORD_IVL:-2}"
-  local erc=0 t=0 n=0 c crc got marker tpath off sz scrub_rc cls="" cleared=0 redrawn=0
+  local erc=0 t=0 n=0 c crc got marker tpath off sz scrub_rc cls="" cleared=0 redrawn=0 chips_cut=0 k
 
   CC_TUI_LAST=""
   _cc_tui_intent_load || true
@@ -519,6 +550,21 @@ cc_tui_submit() { # $1=pane id $2=payload file → 0..5, per the table at the he
     /bin/sleep "$settle"
     got="$(cc_tui_composer "$id")" && crc=0 || crc=1
     [ "$crc" = 0 ] && cc_tui_readback_ok "$f" "$got" && break
+    # A PASTE ALSO ATTACHES THE CLIPBOARD IMAGE (2026-09-27, panes 751 + 814). Claude Code answers a
+    # bracketed paste by attaching whatever image the system clipboard holds, so the composer read
+    # `<our text>[Image#5]` — the operator's own screenshot, about to be sent into another session.
+    # The composer was proven EMPTY before this paste, so a chip trailing our exact text is ours by
+    # construction; one backspace per chip removes it, and the loop re-reads, so the CR still goes
+    # only on an exact match. Once per submit: a chip that survives is a mismatch as before.
+    if [ "$crc" = 0 ] && [ "${chips_cut:-0}" = 0 ]; then
+      k="$(_cc_tui_trailing_image_chips "$f" "$got")"
+      if [ "${k:-0}" -gt 0 ]; then
+        chips_cut=1
+        while [ "$k" -gt 0 ]; do cc_tui_rpc send-text --match "id:$id" -- $'\x7f' >/dev/null 2>&1 || true; k=$((k - 1)); done
+        echo "cc-tui: the paste attached clipboard image(s) after our text — removed them, re-reading" >&2
+        continue
+      fi
+    fi
     n=$((n + 1))
     if [ "$n" -ge "$tries" ]; then
       if   [ "$crc" != 0 ]; then CC_TUI_LAST="<unreadable>"

@@ -55,7 +55,8 @@ EOF
   # The token must END the content: a draft that merely quotes a token (a pasted log line) keeps
   # typing after it, and the chip form admits nothing but token text between the chip and the end.
   if printf '%s' "$c" | LC_ALL=C grep -qE '\(submittoken:run:[0-9a-f]{8}:[0-9]{8}T[0-9]{6}Z:[0-9a-f]{8}\)?$' \
-     || printf '%s' "$c" | LC_ALL=C grep -qE '^\[Pastedtext#[0-9]+(\+[0-9]+lines)?\][A-Za-z0-9:()]*Z:[0-9a-f]{8}\)?$'; then
+     || printf '%s' "$c" | LC_ALL=C grep -qE '^\[Pastedtext#[0-9]+(\+[0-9]+lines)?\][A-Za-z0-9:()]*Z:[0-9a-f]{8}\)?$' \
+     || printf '%s' "$c" | LC_ALL=C grep -qE '^\[Pastedtext#[0-9]+(\+[0-9]+lines)?\][0-9a-f]{2,8}\)?$'; then
     printf 'rail-token'; return 0
   fi
   if printf '%s' "$c" | LC_ALL=C grep -qE '^(_G[A-Za-z]=|P>\||\][0-9]+;rgb:|\[\?[0-9][0-9;]*[A-Za-z$]|\[>[0-9;]*c)'; then
