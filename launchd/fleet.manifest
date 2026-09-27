@@ -165,7 +165,12 @@ com.claude.desk-invariant         | staged | 300  | auto | 5  | 18-fleet-activat
 # jev-batch.log. So `auto` would point the staleness sensor at a file that never changes and S5
 # would claim STALLED on a perfectly healthy job ticking every 30 minutes. The durable product that
 # actually proves execution is the log.
-com.claude.jev-batch              | run    | 1800 | ~/.claude/autonomy/jev-batch.log | 5  | 44-jev-batch-activate.sh
+# com.claude.jev-batch RETIRED 2026-09-27 (plist + 44-jev-batch-activate.sh removed; operator ruling,
+# decision packet 341e84d77a4c): every tick since 09-22 logged "corpus unchanged — no call made",
+# because only applying the promotion swap list changes the corpus and nothing applies it, and the
+# free window it existed to spend closed 09-25. `cc-jev batch` stays as a manual verb. Kept declared
+# so a resurrected copy reads as intentional-off. Post-mortem: docs/research/jev-postmortem-2026-09-26.md.
+com.claude.jev-batch              | retired | 0   | -    | 5  | 18-fleet-activate.sh
 com.claude.boot-resume            | staged | 300  | auto | 2  | 18-fleet-activate.sh
 com.claude.lead-supervisor        | run    | 0    | ~/.claude/autonomy/supervisor.log | 2 | 18-fleet-activate.sh
 com.claude.nightly-regression     | staged | 0    | auto | 1  | 18-fleet-activate.sh

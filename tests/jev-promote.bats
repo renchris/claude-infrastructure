@@ -297,22 +297,6 @@ runp() {
   grep -qF "free AI Gateway window closed" <<<"$output"
 }
 
-@test "plist: ships UNLOADED semantics and names a path that install.sh actually deploys" {
-  P="$REPO/launchd/com.claude.jev-batch.plist"
-  run plutil -lint "$P"
-  [ "$status" -eq 0 ]
-  # Both paths are in fact deployed (install.sh:759 has a dedicated scripts/jev/ block), so this
-  # is not a reachability assertion — it pins the SINGLE ENTRY POINT, so adding a subcommand never
-  # requires editing this plist again.
-  # Scope to what launchd EXECUTES. A whole-file grep also reads the comment that EXPLAINS the
-  # undeployed path, so it convicts the documentation for describing the trap it avoids — the
-  # assertion has to span exactly its subject.
-  EXEC="$(plutil -extract ProgramArguments json -o - "$P")"
-  grep -qF 'cc-jev' <<<"$EXEC"
-  ! grep -qF '.claude/scripts/jev/' <<<"$EXEC" || { echo "plist EXECUTES an undeployed path"; false; }
-  grep -qF 'launchctl bootout' "$P"          # the kill switch is written down beside the job
-}
-
 # 🚨 AN ARMING IS A SCARCE HUMAN ACT AND MUST NOT BE SPENT ON A LOCAL PRECONDITION.
 # consume-before-call is about CALLS: once bytes have left, the authorisation must already be
 # gone so a crash cannot leave a live one behind. It is NOT a reason to burn the token on a check
