@@ -22,6 +22,62 @@ INPUT=$(cat)
 TOOL=$(echo "$INPUT" | jq -r '.tool_name // empty')
 FILE=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
 
+# === AUTO-MEMORY PATH CANON (2026-09-27) ===
+# A memory write spelled through a SYMLINKED config dir (~/.claude-next/projects/…/memory/x.md,
+# where projects/ or memory/ links into ~/.claude/projects/) raises a permission prompt that no
+# allow rule, --add-dir or hook `allow` clears: CC's auto-memory carve-out matches the path AS
+# SPELLED, and bin/cc-close-attrib pins autoMemoryDirectory to the REAL path. Rewriting file_path
+# to the real path via `updatedInput` does clear it — headless A/B on 2.1.280, same spelling, one
+# variable: no hook ⇒ permission_denials 1; this rewrite ⇒ 0 and the file written, for Write and
+# for Read-then-Edit alike. It is the SAME file, so nothing is widened: the harness evaluates the
+# path its own symlink check would have resolved anyway. No permissionDecision is set, so every
+# other permission rule still runs, on the rewritten path.
+# Lesson: docs/lessons/symlinked-auto-memory-dir-prompts-on-every-write.md. Kill switch
+# CC_MEMPATH_CANON=off. Fails open: on any doubt the input is left untouched.
+CANON_TI=""
+EMITTED=0
+_bbw_phys() { # <path> → the path with every symlinked ancestor resolved (the leaf may not exist)
+  local probe="${1%/*}" rest="/${1##*/}" real
+  while [ -n "$probe" ] && [ ! -d "$probe" ]; do
+    rest="/${probe##*/}$rest"; probe="${probe%/*}"
+  done
+  [ -n "$probe" ] || return 1
+  real="$(cd -P "$probe" 2>/dev/null && pwd -P)" && [ -n "$real" ] || return 1
+  printf '%s' "${real%/}$rest"
+}
+if [ "${CC_MEMPATH_CANON:-on}" != off ]; then
+  case "$TOOL:$FILE" in
+    Write:/*/.claude*/projects/*/memory/*|Edit:/*/.claude*/projects/*/memory/*|MultiEdit:/*/.claude*/projects/*/memory/*)
+      if _bbw_real="$(_bbw_phys "$FILE")" && [ "$_bbw_real" != "$FILE" ]; then
+        case "$_bbw_real" in
+          /*/.claude*/projects/*/memory/*)
+            CANON_TI="$(printf '%s' "$INPUT" | jq -c --arg p "$_bbw_real" '.tool_input + {file_path: $p}' 2>/dev/null)" || CANON_TI=""
+            [ -n "$CANON_TI" ] && FILE="$_bbw_real"
+            ;;
+        esac
+      fi
+      ;;
+  esac
+fi
+# Every advisory below goes out through _bbw_out, which carries the rewrite along; a path that
+# emits nothing still delivers it via the EXIT trap. Fed by a heredoc, never a pipeline, so
+# EMITTED is set in THIS shell.
+_bbw_out() {
+  local body; body="$(cat)"
+  EMITTED=1
+  if [ -n "$CANON_TI" ]; then
+    printf '%s' "$body" | jq -c --argjson ti "$CANON_TI" '.hookSpecificOutput.updatedInput = $ti' 2>/dev/null \
+      && return 0
+  fi
+  printf '%s\n' "$body"
+}
+# shellcheck disable=SC2329  # invoked by the EXIT trap below
+_bbw_rewrite_only() {
+  [ -n "$CANON_TI" ] && [ "$EMITTED" -eq 0 ] || return 0
+  jq -nc --argjson ti "$CANON_TI" '{hookSpecificOutput: {hookEventName: "PreToolUse", updatedInput: $ti}}'
+}
+trap _bbw_rewrite_only EXIT
+
 # Fast exit: no file path or file doesn't exist
 [ -z "$FILE" ] && exit 0
 [ ! -f "$FILE" ] && exit 0
@@ -67,6 +123,7 @@ if [ -r "$MIB_LIB" ]; then
   . "$MIB_LIB"
   MIB_TI=$(echo "$INPUT" | jq -c '.tool_input // {}')
   if MIB_REASON="$(mib_verdict "$TOOL" "$FILE" "$MIB_TI")"; then
+    EMITTED=1  # a deny needs no rewrite: the write never happens
     jq -nc --arg r "$MIB_REASON" '{
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
@@ -98,7 +155,7 @@ fi
 # === EDIT TOOL: plan context only, no backup needed ===
 if [ "$TOOL" = "Edit" ]; then
   if [ "$IS_PLAN" = true ]; then
-    cat <<EOF
+    _bbw_out <<EOF
 {
   "hookSpecificOutput": {
     "hookEventName": "PreToolUse",
@@ -184,7 +241,7 @@ if cp -L "$FILE" "$BACKUP_FILE" 2>/dev/null; then
   fi
 
   # === WARN AI ===
-  cat <<EOF
+  _bbw_out <<EOF
 {
   "hookSpecificOutput": {
     "hookEventName": "PreToolUse",
@@ -194,7 +251,7 @@ if cp -L "$FILE" "$BACKUP_FILE" 2>/dev/null; then
 EOF
 else
   # Backup failed (disk full, permissions) — warn but allow Write to proceed
-  cat <<EOF
+  _bbw_out <<EOF
 {
   "hookSpecificOutput": {
     "hookEventName": "PreToolUse",

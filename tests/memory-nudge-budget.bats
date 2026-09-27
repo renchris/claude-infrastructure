@@ -551,7 +551,10 @@ rotate_env() {  # small, hand-countable budgets for the actuation tests
   git init -q "$proj"
   proj_phys="$(cd "$proj" && pwd -P)"
   slug="$(printf '%s' "$proj_phys" | tr '/.' '--')"
-  want="$CLAUDE_CONFIG_DIR/projects/$slug/memory/MEMORY.md"
+  # The hook names the PHYSICAL path (memory-path-canon.bats): the config dir does not exist in
+  # this fixture, so its deepest existing ancestor — $BATS_TEST_TMPDIR, /var vs /private/var on
+  # macOS — is what resolves.
+  want="$(cd -P "$BATS_TEST_TMPDIR" && pwd -P)/${CLAUDE_CONFIG_DIR#"$BATS_TEST_TMPDIR"/}/projects/$slug/memory/MEMORY.md"
   out=""
   for _ in $(seq 1 12); do
     out="$(printf '{"session_id":"s-new","cwd":"%s"}' "$proj" | bash "$HOOK" || true)"

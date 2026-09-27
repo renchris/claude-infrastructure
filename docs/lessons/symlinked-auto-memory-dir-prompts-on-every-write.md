@@ -58,3 +58,42 @@ end on a teammate pane.
 If a path-scoped permission prompt survives allow rules, `--add-dir` and hook allows, look for
 a symlink between the spelled path and the real one. Point the path setting at the real path.
 Do not try to widen the permission.
+
+## 2026-09-27: the fix held, and our own hook routed around it
+
+A `.claude-next` reso session (2.1.280, auto mode) still prompted on
+`Write ~/.claude-next/projects/-Users-chrisren-Development-reso-management-app/memory/project-promoter-data-rbac-ruling.md`.
+The operator clicked Yes 16 s later. The launcher fix was working: the session's own system
+prompt named the real `~/.claude/projects/…/memory/` path. The symlinked spelling came from
+**`hooks/memory-nudge.sh`**, which built the index path from `$CLAUDE_CONFIG_DIR/projects/…` and
+printed it in its periodic nudge ("the index is … — create it there"). The model obeyed the
+more specific instruction. Pinning `autoMemoryDirectory` only moves which spelling the carve-out
+accepts. Every other writer of that path still had to agree with it, and one did not.
+
+Headless A/B on the same binary, same `--settings autoMemoryDirectory=<real>`, same
+`CLAUDE_CONFIG_DIR=~/.claude-next`, with only the spelling or the hook varying:
+
+| arm | permission_denials | file written |
+|---|---|---|
+| real spelling | 0 | yes |
+| symlinked spelling, no hook | 1 | no |
+| symlinked spelling + PreToolUse `updatedInput` rewriting `file_path` to the real path | 0 | yes |
+| same, `permissionDecision: allow` added | 0 | yes |
+| Read + Edit through the symlinked spelling, with the rewrite | 0 | yes (edit applied) |
+
+A hook **`allow`** cannot clear the safetyCheck, but a hook **`updatedInput`** can. The rewrite
+changes the path the check evaluates, where an allow only tries to override the verdict. No
+decision is needed, so every other permission rule still runs on the rewritten path.
+
+Two fixes, so that no spelling prompts:
+
+- `hooks/memory-nudge.sh` names the physical path, resolved as `cc-close-attrib` resolves it.
+- `hooks/backup-before-write.sh`, which already runs on `Write|Edit|MultiEdit` so no settings.json
+  change was needed, rewrites any `*/.claude*/projects/*/memory/*` path whose physical form
+  differs to that physical form. Kill switch: `CC_MEMPATH_CANON=off`. Tests are in
+  `tests/memory-path-canon.bats`.
+
+**The general rule, sharpened:** a canonical-path fix is only as strong as the least canonical
+path you print. After pinning a path setting, grep every model-facing emitter of that path
+(hooks, skills, commands). Then make the chokepoint canonicalize, so an unforeseen spelling
+is repaired rather than refused.

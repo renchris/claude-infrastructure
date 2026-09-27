@@ -115,6 +115,23 @@ if [ -z "$MEM" ]; then
       [ -f "$p" ] && { MEM="$p"; break 2; }
     done
   done
+  # NAME THE PHYSICAL PATH (2026-09-27). On the symlinked accounts $CFG/projects/<slug>/memory is
+  # reached through a symlink into ~/.claude/projects/, and bin/cc-close-attrib pins the harness's
+  # autoMemoryDirectory to the REAL path. CC's write carve-out matches the path AS SPELLED, so a
+  # write to the symlinked spelling this hook used to print raised a permission prompt auto mode
+  # cannot approve — measured 2026-09-27: the model followed this nudge to
+  # ~/.claude-next/projects/…/memory/ and the operator had to click Yes. Resolve the deepest
+  # EXISTING ancestor (memory/ may not exist yet) and re-append the rest, exactly as
+  # cc-close-attrib does, so the two agree. MEMORY_INDEX_PATH above is an override, left as given.
+  if [ -n "$WANT" ]; then
+    _mn_probe="${WANT%/*}" _mn_rest="/${WANT##*/}"
+    while [ -n "$_mn_probe" ] && [ ! -d "$_mn_probe" ]; do
+      _mn_rest="/${_mn_probe##*/}$_mn_rest"; _mn_probe="${_mn_probe%/*}"
+    done
+    if [ -n "$_mn_probe" ] && _mn_real="$(cd -P "$_mn_probe" 2>/dev/null && pwd -P)" && [ -n "$_mn_real" ]; then
+      WANT="${_mn_real%/}$_mn_rest"
+    fi
+  fi
 fi
 
 # ── Measure (fail-safe: a side-car must never fail wider than itself) ─────────
