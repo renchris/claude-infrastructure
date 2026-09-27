@@ -239,3 +239,45 @@ _settle() {  # the fire is DETACHED; wait for the marker rather than racing it
     bash -c 'source "$1"; post_release_finish main' _ "$mutant" >/dev/null 2>&1
   _settle || { echo "mutant did not fire — case 3 is NOT credited to the guard"; false; }
 }
+
+# ── 9 · the post-land VERIFIER kick must not hold the caller's stdout pipe ────────────────────
+# Incident 2026-09-27: the verifier was Popen'd with no stdio redirection, so the detached child
+# inherited ship-land's stdout. `ship-land.sh 2>&1 | tail -15` then blocked until the full bats
+# run ended (40+ min), and cc-lr read that pane as `background-job`. The stub outlives the
+# function by 20 s, so a held pipe shows as a >=20 s pipeline; a released one returns at once.
+# RED-proof: against the unfixed Popen (no stdio args) this failed at the timing assert with
+# "pipeline held open 20s by the detached verifier"; green after the fix.
+@test "postland kick: the detached verifier does not hold the caller's stdout pipe" {
+  local sd="$BATS_TEST_TMPDIR/sd" pidf="$BATS_TEST_TMPDIR/verifier.pid"
+  local probe="$BATS_TEST_TMPDIR/probe-pl.sh" log="$POSTLAND_DIR/postland-kick.log"
+  mkdir -p "$sd"
+  cat > "$sd/postland-verify.sh" <<STUB
+#!/usr/bin/env bash
+echo \$\$ > "$pidf"
+echo "verifier-early \$*"
+exec sleep 20
+STUB
+  chmod +x "$sd/postland-verify.sh"
+  _extract_to "$BATS_TEST_TMPDIR/pl-pristine.sh"
+  sed "s|^SCRIPT_DIR=\"/nonexistent\"\$|SCRIPT_DIR=\"$sd\"|" "$BATS_TEST_TMPDIR/pl-pristine.sh" > "$probe"
+  grep -qF "SCRIPT_DIR=\"$sd\"" "$probe" || { echo "SCRIPT_DIR REWRITE DID NOT APPLY"; false; }
+  printf 'x\n' > "$BATS_TEST_TMPDIR/post-state"
+
+  local t0 t1; t0="$(date +%s)"
+  SHIP_LAND_CONVERGE=off POSTLAND_VERIFY=on SHIP_LAND_POST_STATE="$BATS_TEST_TMPDIR/post-state" \
+    run bash -c 'source "$1"; post_release_finish main | cat' _ "$probe"
+  t1="$(date +%s)"
+
+  # the verifier must have been spawned at all, or the timing below proves nothing
+  local i=0
+  while [ "$i" -lt 50 ] && ! grep -qs 'verifier-early' "$log"; do sleep 0.1; i=$((i+1)); done
+  local logged=no; grep -qs 'verifier-early --run-if-needed' "$log" && logged=yes
+  if [ -s "$pidf" ]; then kill "$(cat "$pidf")" 2>/dev/null || true; fi
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"LANDED"* ]] || false
+  [ -s "$pidf" ] || { echo "verifier stub never ran"; false; }
+  [ $((t1 - t0)) -lt 5 ] || { echo "pipeline held open $((t1 - t0))s by the detached verifier"; false; }
+  [ "$logged" = yes ] || { echo "verifier output did not reach $log"; cat "$log" 2>&1; false; }
+  [[ "$output" != *"verifier-early"* ]] || false
+}

@@ -1685,12 +1685,20 @@ post_release_finish() {  # $1=trunk — runs in the OUTER process, the land-lock
   # start_new_session is MANDATORY — nohup/disown children share our process group and are reaped
   # by the harness's group SIGKILL.
   # Guarded: absent verifier (or POSTLAND_VERIFY=off) is a no-op, never a land failure.
+  # STDIO GOES TO A LOG, NEVER TO OUR STDOUT. A new session detaches the process group, not the
+  # file descriptors: on 2026-09-27 the verifier inherited ship-land's stdout, so `ship-land.sh
+  # 2>&1 | tail -15` held the pipe for 40+ min and cc-lr read the pane as `background-job`,
+  # blocking every account move. Same shape as the converge kick below.
   if [[ "${POSTLAND_VERIFY:-on}" != "off" && -x "$SCRIPT_DIR/postland-verify.sh" ]]; then
     local pdir; pdir="${POSTLAND_DIR:-$HOME/.claude/autonomy/postland}"
     mkdir -p "$pdir" 2>/dev/null || true
     printf '%s\n' "$LANDED_HEAD" > "$pdir/queue" 2>/dev/null || true
-    python3 -c 'import subprocess,sys; subprocess.Popen([sys.argv[1],"--run-if-needed"],start_new_session=True)' \
-      "$SCRIPT_DIR/postland-verify.sh" 2>/dev/null || true
+    python3 -c 'import subprocess,sys
+with open(sys.argv[2], "a") as log:
+    subprocess.Popen([sys.argv[1], "--run-if-needed"],
+                     stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                     start_new_session=True)' \
+      "$SCRIPT_DIR/postland-verify.sh" "$pdir/postland-kick.log" 2>/dev/null || true
   fi
 
   # --- edge-triggered live-layer converge (G2, backlog 193d63e30c82) ---------------------------
