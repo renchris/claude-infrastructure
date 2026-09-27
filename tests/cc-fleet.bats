@@ -644,8 +644,14 @@ STUB
   # went red for the next lander. postland-verify bisected it to 82f08302a correctly and its
   # auto-revert FAILED rc=90, exactly as for permission-harvest and browse-mirror above — forward is
   # again the only remedy. The count moves WITH the repair.
-  if [ "$n" != 36 ]; then
-    echo "manifest declares $n labels, expected 36 — if a plist was legitimately added or retired,"
+  # 37 since 2026-09-26: com.claude.public-publish (76f6cc2bc, backlog 7d11973e4135) — the jev-batch
+  # shape an EIGHTH time: plist and manifest row in one commit, coverage loop satisfied, this count
+  # left behind. Declared `staged` (interval 10800), inert until the operator runs
+  # 46-public-repo-cutover.sh. A/B: 36 labels at the parent, 37 at 76f6cc2bc and on trunk.
+  # postland-verify bisected it correctly and its auto-revert FAILED rc=90 (a 14-file feature under
+  # the commits on top), so forward is the only remedy. The count moves WITH the repair.
+  if [ "$n" != 37 ]; then
+    echo "manifest declares $n labels, expected 37 — if a plist was legitimately added or retired,"
     echo "move this count and say why (see the block above); if not, a row is missing. Declared:"
     grep -vE '^[[:space:]]*(#|$)' "$M" | cut -d'|' -f1 | sed 's/[[:space:]]//g; s/^/  /'
     return 1
