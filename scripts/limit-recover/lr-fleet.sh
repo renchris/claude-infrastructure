@@ -1059,6 +1059,9 @@ lf_stranded() { # $1=sid $2=target cfg $3=acct $4=pane $5=cwd $6=tier → 1, and
   tacct="$(lf_acct_of_cfg "$to")"
   cmd="$LR/lr-fire-resume.sh $tacct ${cwd:-.} $sid"
   case "$tier" in */*) cmd="$cmd --model ${tier%%/*} --effort ${tier#*/}" ;; esac
+  # --prompt, or the relaunched session comes back IDLE and stays idle: a hand relaunch of this
+  # exact line without it sat ~10 h on 2026-09-27. One line, single-quoted so a paste keeps it one word.
+  cmd="$cmd --prompt 'resumed on $tacct after a limit; continue'"
   echo "lr-fleet: --one $sid — TRANSPLANTED→$tacct but NO live process holds it: stranded, not recovered. Relaunch it in a new window: $cmd" >&2
   lf_row "$sid" "${pane:--}" "-" "$acct" "$tacct" "transplanted-stranded/FAILED" \
     "transplanted to $tacct but no live process holds the session; relaunch in a new window: $cmd"

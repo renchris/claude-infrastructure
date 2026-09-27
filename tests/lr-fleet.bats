@@ -900,6 +900,21 @@ transplanted_fixture() {
   [ ! -s "$LRH_LOG" ] || { echo "the actuator was driven over a stranded transplant"; cat "$LRH_LOG"; false; }
 }
 
+@test "[RED] the stranded relaunch line passes --prompt, so the relaunched session takes a turn" {
+  # Measured 2026-09-27: a hand relaunch without --prompt came back idle and sat ~10 h.
+  transplanted_fixture
+  run bash "$FLEET" --one "$SID" --target next2 --source-pane 780
+  line="$(printf '%s\n' "$output" | grep -m1 'Relaunch it in a new window: ' | sed 's/.*Relaunch it in a new window: //')"
+  [ -n "$line" ] || { echo "$output"; false; }
+  # The line is pasted into a shell: the prompt must survive as ONE argument after --prompt.
+  eval "set -- $line"
+  local got="" prev=""
+  for a in "$@"; do [ "$prev" = --prompt ] && got="$a"; prev="$a"; done
+  [ "$got" = "resumed on next3 after a limit; continue" ] || { echo "prompt arg: '$got' from: $line"; false; }
+  run cat "$LR_STATE_DIR/fleet/"one-*/results.tsv
+  [[ "$output" == *"--prompt 'resumed on next3 after a limit; continue'"* ]] || { echo "$output"; false; }
+}
+
 @test "[RED] …and under --detach that FAILED verdict reaches the requester as mail" {
   transplanted_fixture
   detached_one
