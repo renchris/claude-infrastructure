@@ -438,3 +438,155 @@ ranker() { # <rc> <stderr reason line or ''> <stdout lines…> — a claude-acco
   LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
   grep -q 'UPGRADE-DRAIN started' "$PSTATE/poller.log" || { cat "$PSTATE/poller.log"; false; }
 }
+
+# ── G. CLAUDE CODE BACKGROUND (--bg) SESSIONS (F4, 2026-09-27) ──────────────────────────────────
+# Pane 405's registry row named e44c8e8c (its transcript frozen on a tool_use) while the pane showed
+# background session adb89f78 (job bb4e00d0, hosted by the daemon its claude spawned). The census
+# called 405 mid-turn forever and never listed adb89f78. The move that worked by hand — stop the job,
+# transplant, Ctrl-C twice out of the agent view, relaunch — is now the drainer's, keystrokes and all.
+# RED-proof: on 0ecf7a496 G1-G2 read 405 as mid-turn and listed no bg row; G3 queued nothing; G4-G6 got
+# NOTMOVED (bg-session is not `move`), so nothing was stopped, transplanted or typed.
+PARENT=e44c8e8c-0000-4000-8000-000000000001
+BGSID=adb89f78-0000-4000-8000-000000000001
+# bgfix <status> [host: yes|no] — pane 405 (next3, frozen parent) hosting a bg session on next4
+bgfix() {
+  local st="$1" host="${2:-yes}" hp=76287
+  [ "$host" = yes ] || hp=11111
+  SESS_PID=76287 sess 405 "$PARENT" busy claude-tertiary "$BIN --model claude-opus-5-5 --effort high --permission-mode auto"
+  {
+    printf '%d 1 %s %s\n' 91697 "$LST" "/x/claude.exe daemon run --origin transient --spawned-by {\"label\":\"claude\",\"cwd\":\"/w\",\"pid\":$hp}"
+    printf '%d 91697 %s %s\n' 43666 "$LST" 'claude bg-pty-host --bg-pty-host /tmp/x.pty.sock 200 50 -- claude.exe --bg-spare /tmp/x.claim.sock'
+    printf '%d 43666 %s %s\n' 43728 "$LST" 'claude bg-spare --bg-spare /tmp/x.claim.sock'
+  } >> "$LRU_PS_SNAPSHOT"
+  mkdir -p "$HOME/.claude-quaternary/sessions" "$HOME/.claude-quaternary/projects/-x"
+  printf '{"pid":43728,"sessionId":"%s","cwd":"%s","kind":"bg","jobId":"bb4e00d0","status":"%s"}\n' "$BGSID" "$BATS_TEST_TMPDIR" "$st" \
+    > "$HOME/.claude-quaternary/sessions/43728.json"
+  printf '%s\n' '{"type":"assistant","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"idle"}]}}' \
+    > "$HOME/.claude-quaternary/projects/-x/$BGSID.jsonl"
+}
+row_of() { printf '%s\n' "$output" | awk -F'\t' -v s="$1" '$2 == s'; }
+
+@test "G1 [RED] the switch census lists a live bg session per account, and judges its host pane by it — never mid-turn" {
+  bgfix idle
+  # a STALE sessions file (its pid is not running) is not a session
+  printf '{"pid":49999,"sessionId":"deadbeef-0000-4000-8000-000000000001","kind":"bg","jobId":"j0","status":"idle"}\n' > "$HOME/.claude-quaternary/sessions/49999.json"
+  run bash "$LRU" --switch-census --target next2
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(row_of "$PARENT" | cut -f7)" = bg-host ] || { echo "$output"; false; }
+  [ "$(row_of "$BGSID" | cut -f1,3,6,7)" = "405"$'\t'"next4"$'\t'"43728"$'\t'"bg-session" ] || { echo "$output"; false; }
+  [[ "$output" != *deadbeef* ]] || { echo "a stale sessions file was listed: $output"; false; }
+  # --from selects bg rows by THEIR account
+  run bash "$LRU" --switch-census --from next4 --target next2
+  [ "$(printf '%s\n' "$output" | grep -c .)" -eq 1 ] || { echo "$output"; false; }
+  [ "$(row_of "$BGSID" | cut -f7)" = bg-session ] || { echo "$output"; false; }
+  # the upgrade census judges the host pane the same way (a newer binary exists, so it is a candidate)
+  printf '#!/bin/bash\necho /opt/cc/.claude-290/node_modules/.bin/claude\n' > "$STUBS/cc-claude-bin"; chmod +x "$STUBS/cc-claude-bin"
+  printf 'versions:\n  opus_latest: claude-opus-5-5\n' > "$BATS_TEST_TMPDIR/model-config.yaml"
+  LRU_MODEL_CONFIG="$BATS_TEST_TMPDIR/model-config.yaml" LRU_CLAUDE_BIN_CMD="$STUBS/cc-claude-bin" run bash "$LRU" --census 405
+  [[ "$output" == *$'\t'bg-host* ]] || { echo "$output"; false; }
+}
+
+@test "G2 [RED] bg dispositions: busy, no hosting pane, and the SAME conversation live twice (split) are each named" {
+  bgfix working
+  run bash "$LRU" --switch-census --from next4
+  [ "$(row_of "$BGSID" | cut -f7)" = bg-busy ] || { echo "$output"; false; }
+  : > "$LRU_PS_SNAPSHOT"; rm -f "$LRU_REG_DIR"/*.json
+  bgfix idle no
+  run bash "$LRU" --switch-census --from next4
+  [ "$(row_of "$BGSID" | cut -f1,7)" = "-"$'\t'"bg-no-pane" ] || { echo "$output"; false; }
+  # the conversation ALSO live as an interactive session (the state the manual move left behind)
+  sess 406 "$BGSID" rest claude-tertiary
+  run bash "$LRU" --switch-census --from next4
+  [ "$(row_of "$BGSID" | awk -F'\t' '$3 == "next4"' | cut -f7)" = bg-split ] || { echo "$output"; false; }
+}
+
+@test "G3 [RED] the driver: --all-idle lists a bg session and names the --sid move; --sid queues it" {
+  cc_lr_env
+  bgfix idle
+  run bash "$REPO/bin/cc-lr" switch --from next4 --all-idle --target next3 --no-wait
+  [[ "$output" == *"NOTMOVED (bg-session — a background job is moved only when named: cc-lr switch --sid $BGSID --target next3)"* ]] || { echo "$output"; false; }
+  [ -z "$(ls -A "$LRU_STATE/requests" 2>/dev/null)" ] || false
+  run bash "$REPO/bin/cc-lr" switch --sid adb89f78 --target next3 --no-wait
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  r="$LRU_STATE/requests/cc-lr-switch-$BGSID.json"
+  [ "$(jq -r '.kind + " " + .source_pane + " " + .from + " " + .target' "$r")" = "switch 405 next4 next3" ] || { cat "$r"; false; }
+}
+
+# The bg drive's world: `claude stop`, lr-transplant, the kitty RPC and it2 are recorders that play the
+# subject, all logging into ONE file so the ORDER is observable.
+bg_actors() {
+  export LRU_CLAUDE_BIN_CMD="$STUBS/cc-claude-bin" LRU_TRANSPLANT="$STUBS/lr-transplant" LRU_IT2_BIN="$STUBS/it2"
+  export LRU_TUI_LIB="$BATS_TEST_TMPDIR/tui.sh" LRU_BG_POLL_S=0 LRU_BG_STOP_S=2 LRU_BG_QUIT_S=2 LRU_BG_CTRLC_GAP_S=0 LRU_RETYPE_MAX=1
+  A="$BATS_TEST_TMPDIR/actions.log"
+  export A BGSID LST BIN
+  printf '#!/bin/bash\necho %s\n' "$STUBS/claude" > "$STUBS/cc-claude-bin"
+  cat > "$STUBS/claude" <<'STUB'
+#!/bin/bash
+echo "stop $2 cfg=$CLAUDE_CONFIG_DIR" >> "$A"
+d="$(dirname "$A")"; n=$(cat "$d/stops" 2>/dev/null || echo 0); echo $((n + 1)) > "$d/stops"
+[ -e "$d/stop-fails" ] && exit 0
+[ -e "$d/reclaim" ] && [ "$n" -ge 1 ] && exit 0
+grep -v '^43728 ' "$LRU_PS_SNAPSHOT" > "$LRU_PS_SNAPSHOT.t"; mv "$LRU_PS_SNAPSHOT.t" "$LRU_PS_SNAPSHOT"
+STUB
+  cat > "$STUBS/lr-transplant" <<'STUB'
+#!/bin/bash
+echo "transplant $*" >> "$A"
+case "$*" in *"--phase confirm"*) mkdir -p "$HOME/.claude-tertiary/projects/-x"
+  cp "$HOME/.claude-quaternary/projects/-x/$BGSID.jsonl" "$HOME/.claude-tertiary/projects/-x/" ;; esac
+STUB
+  cat > "$LRU_TUI_LIB" <<'STUB'
+cc_tui_rpc() {
+  [ "${*: -1}" = $'\x03' ] && echo "ctrl-c $3" >> "$A"
+  if [ "$(grep -c '^ctrl-c' "$A")" -ge 2 ]; then grep -v '^76287 ' "$LRU_PS_SNAPSHOT" > "$LRU_PS_SNAPSHOT.t"; mv "$LRU_PS_SNAPSHOT.t" "$LRU_PS_SNAPSHOT"; fi
+  return 0
+}
+STUB
+  cat > "$STUBS/it2" <<'STUB'
+#!/bin/bash
+echo "it2 $1 $2 $3 $4 | $5" >> "$A"
+reg="$LRU_REG_DIR/$4.json"
+jq --arg s "$BGSID" '.session_id = $s | .account = "claude-tertiary" | .pid = 88001' "$reg" > "$reg.t" && mv "$reg.t" "$reg"
+printf '%d 1 %s %s\n' 88001 "$LST" "$BIN --resume $BGSID" >> "$LRU_PS_SNAPSHOT"
+[ -e "$(dirname "$A")/reclaim" ] && printf '%d 43666 %s %s\n' 43728 "$LST" 'claude bg-spare --bg-spare /tmp/x.claim.sock' >> "$LRU_PS_SNAPSHOT"
+exit 0
+STUB
+  chmod +x "$STUBS/cc-claude-bin" "$STUBS/claude" "$STUBS/lr-transplant" "$STUBS/it2"
+}
+bg_result() { cat "$LRU_STATE/results/switch-$BGSID.json"; }
+
+@test "G4 [RED] the drainer moves a bg session: stop under the SOURCE config, transplant admit+confirm, 2x Ctrl-C, launcher — SWITCHED on the flip" {
+  bgfix idle; bg_actors
+  run bash "$LRU" --switch-drive "$BGSID" 405 next3 --requested-by 999 --req-id g4
+  [ "$status" -eq 0 ] || { echo "$output"; cat "$A"; bg_result; false; }
+  [ "$(jq -r .verdict "$LRU_STATE/results/switch-$BGSID.json")" = SWITCHED ] || { bg_result; false; }
+  [ "$(cut -d' ' -f1 "$A" | tr '\n' ' ')" = "stop transplant transplant ctrl-c ctrl-c it2 " ] || { cat "$A"; false; }
+  grep -qx "stop bb4e00d0 cfg=$HOME/.claude-quaternary" "$A" || { cat "$A"; false; }
+  grep -q -- "--sid $BGSID --from $HOME/.claude-quaternary --to $HOME/.claude-tertiary --phase admit --cause voluntary" "$A" || { cat "$A"; false; }
+  grep -q -- '--phase confirm' "$A" || { cat "$A"; false; }
+  grep -q '^ctrl-c id:405' "$A" || { cat "$A"; false; }
+  # the launcher relaunches THE BG SID on the TARGET config, with the host pane's own model/effort/mode
+  L="$(grep '^it2 ' "$A" | sed 's/.*&& nocorrect bash //')"
+  grep -q "$HOME/.claude-tertiary" "$L" || { cat "$L"; false; }
+  grep -q "$BGSID" "$L" || { cat "$L"; false; }
+  grep -q -- '--model claude-opus-5-5 --effort high --permission-mode auto' "$L" || { cat "$L"; false; }
+  grep -q '^999 CC-LR-SWITCH pane 405 .*verdict=SWITCHED' "$BATS_TEST_TMPDIR/notify.log" || { cat "$BATS_TEST_TMPDIR/notify.log"; false; }
+}
+
+@test "G5 [RED] a job the SOURCE daemon re-claims after the move is caught: re-stopped once, else FAILED as SPLIT-BRAIN — never SWITCHED" {
+  bgfix idle; bg_actors
+  touch "$BATS_TEST_TMPDIR/reclaim"
+  run bash "$LRU" --switch-drive "$BGSID" 405 next3 --req-id g5
+  [ "$status" -eq 1 ] || { echo "$output"; cat "$A"; false; }
+  [ "$(jq -r .verdict "$LRU_STATE/results/switch-$BGSID.json")" = FAILED ] || { bg_result; false; }
+  [[ "$(jq -r .reason "$LRU_STATE/results/switch-$BGSID.json")" == SPLIT-BRAIN*"claude stop bb4e00d0"* ]] || { bg_result; false; }
+  [ "$(grep -c '^stop ' "$A")" -eq 2 ] || { echo "no re-stop was tried"; cat "$A"; false; }
+}
+
+@test "G6 [RED] a job that will not stop: FAILED, and nothing is transplanted or typed" {
+  bgfix idle; bg_actors
+  touch "$BATS_TEST_TMPDIR/stop-fails"
+  run bash "$LRU" --switch-drive "$BGSID" 405 next3 --req-id g6
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [ "$(jq -r .verdict "$LRU_STATE/results/switch-$BGSID.json")" = FAILED ] || { bg_result; false; }
+  [ "$(cut -d' ' -f1 "$A" | sort -u | tr '\n' ' ')" = "stop " ] || { echo "acted past a failed stop:"; cat "$A"; false; }
+}

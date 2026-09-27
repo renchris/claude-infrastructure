@@ -56,6 +56,7 @@ LRU_TUI_LIB="${LRU_TUI_LIB:-$LRU_DIR/../lib/cc-tui.sh}"
 LRU_CA_LIB="${LRU_CA_LIB:-$LRU_DIR/../lib/capacity-admit.sh}"
 LRU_LR_LIB="${LRU_LR_LIB:-$LRU_DIR/lr-lib.sh}"
 LRU_IT2_BIN="${LRU_IT2_BIN:-$HOME/.claude/bin/it2}"
+LRU_TRANSPLANT="${LRU_TRANSPLANT:-$LRU_DIR/lr-transplant.sh}"
 LRU_NOTIFY_BIN="${LRU_NOTIFY_BIN:-$HOME/.claude/bin/cc-notify}"
 LRU_SELF_SID="${LRU_SELF_SID-${CLAUDE_CODE_SESSION_ID:-}}"
 LRU_RETYPE_MAX="${LRU_RETYPE_MAX:-5}"; case "$LRU_RETYPE_MAX" in ''|*[!0-9]*) LRU_RETYPE_MAX=5 ;; esac
@@ -474,8 +475,10 @@ lru_dup_sids() { # $1=live pass → " sid  sid " for every sid held by more than
 
 lru_census() { # [$1=ref: pane id or sid prefix; empty = all] → TSV rows on stdout; rc 1 none matched
   local ref="${1:-}" snap target_bin f pane pid sid acct cwd args bin model tgt eff perm cfg tx disp rows="" n=0
-  local dupsids="" pass k
+  local dupsids="" pass k hostpids=""
   snap="$(lru_snapshot)"
+  # F4: a pane showing a live bg session is judged by it, not by its frozen parent (see lru_bg_sessions).
+  hostpids=" $(lru_bg_sessions "$snap" | awk -F'\t' '$8 != "" { printf "%s ", $8 }')"
   target_bin="$("$LRU_CLAUDE_BIN_CMD" 2>/dev/null || true)"
   [ -n "$target_bin" ] || { lru_say "cannot resolve the current binary ($LRU_CLAUDE_BIN_CMD) — refusing to judge 'current'"; return 2; }
   # pass 1: live rows (pid in the snapshot, lstart agreeing when the row records one)
@@ -526,7 +529,8 @@ EOF
       if [ -z "$disp" ]; then
         tx="$(lru_transcript "$cfg" "$sid" || true)"
         if [ -z "$tx" ]; then disp=no-transcript
-        elif ! lru_at_rest "$tx"; then disp=mid-turn
+        elif ! lru_at_rest "$tx"; then
+          case "$hostpids" in *" $pid "*) disp=bg-host ;; *) disp=mid-turn ;; esac
         fi
       fi
       # A background Agent-tool subagent leaves its session AT REST, so the rest check cannot see it;
@@ -576,6 +580,43 @@ EOF
 # cleanupSessionTeams, which kills the members (see the team procedure above). Neither is "busy" —
 # both are structural, so neither is re-tried.
 LRU_SWITCH_MARK='[operator-ruling cc-lr-switch'
+
+# ══ CLAUDE CODE BACKGROUND (`--bg`) SESSIONS (F4, 2026-09-27) ══════════════════════════════════════
+# A conversation can leave its pane for a background session: Claude Code's daemon
+# (`claude daemon run --origin transient --spawned-by {…"pid":<the pane's claude>}`) hosts it under a
+# `claude bg-pty-host` child, and the session writes `<cfg>/sessions/<pid>.json` with kind "bg" and
+# its jobId. The registry never hears of it. Measured on pane 405: its row still named e44c8e8c, whose
+# transcript ended on an unanswered tool_use, while the pane displayed adb89f78 (job bb4e00d0) — so
+# every census called 405 `mid-turn` forever and --all-idle never listed adb89f78 at all.
+# The session file is the vendor's own record; `claude agents --json` prints the same pid/status from
+# it. LIVENESS IS THE SNAPSHOT'S, as for every other row here — a sessions file outlives its process.
+lru_snap_ppid() { # $1=snapshot $2=pid → its parent pid
+  printf '%s\n' "$1" | LRU_P="$2" awk "$LRU_PROC_LINE"' && $1 == ENVIRON["LRU_P"] { print $2; exit }'
+}
+lru_bg_host_pid() { # $1=snapshot $2=bg session pid → the pid of the claude that spawned its daemon, or nothing
+  local p="$2" a i=0
+  while [ -n "$p" ] && [ "$p" != 1 ] && [ "$i" -lt 4 ]; do
+    p="$(lru_snap_ppid "$1" "$p")"; i=$((i + 1))
+    a="$(lru_snap_args "$1" "$p")"
+    case "$a" in *" daemon run "*--spawned-by*)
+      printf '%s' "$a" | sed -n 's/.*--spawned-by .*"pid":\([0-9][0-9]*\).*/\1/p'; return 0 ;; esac
+  done
+  return 0
+}
+lru_bg_sessions() { # $1=snapshot → TSV: sid pid cfg account cwd status jobId host_pid — LIVE bg sessions only
+  local f sid pid cfg job st cwd
+  for f in "${LRU_CFG_ROOT%/}"/.claude*/sessions/*.json; do
+    [ -f "$f" ] || continue
+    [ "$(jq -r '.kind // empty' "$f" 2>/dev/null)" = bg ] || continue
+    sid="$(jq -r '.sessionId // empty' "$f" 2>/dev/null)"; pid="$(jq -r '.pid // empty' "$f" 2>/dev/null)"
+    [ -n "$sid" ] && [ -n "$pid" ] || continue
+    [ -n "$(lru_snap_args "$1" "$pid")" ] || continue
+    cfg="${f%/sessions/*}"; job="$(jq -r '.jobId // empty' "$f" 2>/dev/null)"
+    st="$(jq -r '.status // empty' "$f" 2>/dev/null)"; cwd="$(jq -r '.cwd // empty' "$f" 2>/dev/null)"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$sid" "$pid" "$cfg" "$(lru_acct_name "${cfg##*/.}")" \
+      "${cwd:--}" "${st:--}" "${job:--}" "$(lru_bg_host_pid "$1" "$pid")"
+  done
+}
 lru_load_acct_map() {
   command -v cc_acct_name_for_dir_basename >/dev/null 2>&1 && return 0
   local m
@@ -602,10 +643,12 @@ lru_acct_cfg() { # $1=account name → its config dir; rc 1 when the map does no
 # subagent probe loads handoff-fire, the composer read is an RPC), but duplicates are still read
 # off the whole fleet's live pass, so a filtered row is never judged against a partial population.
 lru_switch_census() {
-  local from="${1:-}" target="${2:-}" sel="${3:-}" snap pass dups k f sid pane pid acct cwd cfg args tx disp out=""
+  local from="${1:-}" target="${2:-}" sel="${3:-}" snap pass dups k f sid pane pid acct cwd cfg args tx disp out="" bgs hostpids=""
   snap="$(lru_snapshot)"
   pass="$(lru_live_pass "$snap")"
   dups="$(lru_dup_sids "$pass")"
+  bgs="$(lru_bg_sessions "$snap")"
+  [ -z "$bgs" ] || hostpids=" $(printf '%s\n' "$bgs" | awk -F'\t' '$8 != "" { printf "%s ", $8 }')"
   while IFS=$'\t' read -r k f sid; do
     [ -n "$k" ] || continue
     pane="$(jq -r '.paneUUID // empty' "$f" 2>/dev/null)"; pid="$(jq -r '.pid // empty' "$f" 2>/dev/null)"
@@ -629,7 +672,10 @@ lru_switch_census() {
       if [ -z "$disp" ]; then
         tx="$(lru_transcript "$cfg" "$sid" || true)"
         if [ -z "$tx" ]; then disp=no-transcript
-        elif ! lru_at_rest "$tx"; then disp=mid-turn
+        elif ! lru_at_rest "$tx"; then
+          # A frozen parent whose pane spawned a LIVE bg session is showing that session, not
+          # working: judge it by the bg session (listed as its own row below), never as mid-turn.
+          case "$hostpids" in *" $pid "*) disp=bg-host ;; *) disp=mid-turn ;; esac
         fi
       fi
       if [ -z "$disp" ] && [ "$(lru_live_subagents "$sid" "$pid")" -gt 0 ]; then disp=subagents-in-flight; fi
@@ -644,6 +690,35 @@ lru_switch_census() {
     out="$out$pane"$'\t'"$sid"$'\t'"${acct:--}"$'\t'"$cfg"$'\t'"${cwd:--}"$'\t'"$pid"$'\t'"$disp"$'\n'
   done <<EOF
 $pass
+EOF
+  # THE BG ROWS. Pane = the registry pane whose claude spawned the daemon (the pane showing it), or
+  # "-". Dispositions: bg-session (idle; movable when named by --sid/--pane) · bg-busy (working) ·
+  # bg-no-pane (nothing to relaunch it in) · bg-split (the SAME conversation is also live as an
+  # interactive session — two writers already; never move either copy) · on-target.
+  local bsid bpid bcfg bacct bcwd bst bhost hp
+  while IFS=$'\t' read -r bsid bpid bcfg bacct bcwd bst _ bhost; do
+    [ -n "$bsid" ] || continue
+    [ -z "$from" ] || [ "$bacct" = "$from" ] || continue
+    hp="-"
+    if [ -n "$bhost" ]; then
+      hp="$(printf '%s\n' "$pass" | while IFS=$'\t' read -r k f _; do
+              [ "$k" = LIVE ] && [ "$(jq -r '.pid // empty' "$f" 2>/dev/null)" = "$bhost" ] && { jq -r '.paneUUID // empty' "$f"; break; }
+            done)"
+      [ -n "$hp" ] || hp="-"
+    fi
+    case "$sel" in
+      pane:*) [ "$hp" = "${sel#pane:}" ] || continue ;;
+      sid:*)  case "$bsid" in "${sel#sid:}"*) ;; *) continue ;; esac ;;
+    esac
+    if printf '%s\n' "$pass" | awk -F'\t' -v s="$bsid" '$1 == "LIVE" && $3 == s { f = 1 } END { exit !f }'; then disp=bg-split
+    elif [ -n "$target" ] && [ "$bacct" = "$target" ]; then disp=on-target
+    elif [ "$hp" = - ]; then disp=bg-no-pane
+    elif [ "$bst" != idle ]; then disp=bg-busy
+    else disp=bg-session
+    fi
+    out="$out$hp"$'\t'"$bsid"$'\t'"${bacct:--}"$'\t'"$bcfg"$'\t'"$bcwd"$'\t'"$bpid"$'\t'"$disp"$'\n'
+  done <<EOF
+$bgs
 EOF
   out="$(printf '%s' "$out" | awk -F'\t' 'NF' | LC_ALL=C sort -t$'\t' -k1,1n)"
   [ -n "$out" ] || return 1
@@ -660,7 +735,7 @@ EOF
 # be waited out for the whole budget and then refused anyway, so it is answered at once.
 # THE ONE LIST: cc-lr asks it through `--switch-waitable` rather than keeping a copy.
 lru_switch_waitable() { # $1=disposition → 0 a hold that ends by itself
-  case "$1" in mid-turn|subagents-in-flight|background-job|composer-occupied|composer-unknown) return 0 ;; esac
+  case "$1" in mid-turn|subagents-in-flight|background-job|composer-occupied|composer-unknown|bg-busy) return 0 ;; esac
   return 1
 }
 
@@ -715,6 +790,10 @@ lru_switch_drive() { # $1=sid $2=pane $3=target $4=requested_by $5=req id [$6=un
   IFS=$'\t' read -r _ _ from cfg _ pid word <<EOF
 $row
 EOF
+  if [ "$word" = bg-session ]; then
+    lru_switch_bg_drive "$sid" "$pane" "$target" "$tcfg" "$from" "$cfg" "$pid" "$by" "$req"; local brc=$?
+    rm -rf "$mutex"; return "$brc"
+  fi
   if [ "$word" != move ]; then
     rm -rf "$mutex"
     case "$until_ts" in ''|*[!0-9]*) until_ts=0 ;; esac
@@ -774,6 +853,113 @@ EOF
   return 1
 }
 lru_mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
+
+# ── drive ONE background-session move (F4, 2026-09-27) ─────────────────────────────────────────────
+# The manual move that worked on pane 405, made a verb, with every keystroke typed by THIS process
+# (the launchd drainer) and none by an agent — auto mode denies an agent sending keys into another
+# live pane, and that denial is correct. The subject cannot move itself: a bg session has no pane
+# composer to type the SELF verb into. So, in order, each step verified before the next:
+#   1. `claude stop <jobId>` under the SOURCE config — the conversation is kept; the process ends.
+#   2. lr-transplant --phase admit, then --phase confirm (--cause voluntary).
+#   3. In the hosting pane, two Ctrl-C quit Claude's agent view; the pane's claude exits and its
+#      shell returns. Then the launcher is typed there (the same `it2 session run` the upgrade's
+#      retype uses), running lr-fire-resume on the TARGET config with the bg session's id.
+#   4. The verdict is the registry flip (pane → bg sid on the target, transcript under the target)
+#      AND the job staying stopped. Measured the day this was written: after the manual stop the
+#      daemon log reads `bg settled bb4e00d0 (killed)` and, 4 minutes later, `bg claimed-spare
+#      bb4e00d0 (fleet)` — the job came BACK, so the conversation ran on two accounts at once. A
+#      move that does not re-check the source leaves that split-brain behind and calls it SWITCHED.
+# Snapshot-aware liveness, so the suite's `ps` file and the live `ps` answer the same question.
+lru_pid_live() { [ -n "$(lru_snap_args "$(lru_snapshot)" "$1")" ]; }
+lru_bg_row() { # $1=sid → that sid's live bg row (lru_bg_sessions columns), or nothing
+  lru_bg_sessions "$(lru_snapshot)" | LRU_S="$1" awk -F'\t' '$1 == ENVIRON["LRU_S"]' | head -1
+}
+lru_wait_gone() { # $1=pid $2=seconds → 0 gone · 1 still live at the bound
+  local w=0
+  while lru_pid_live "$1"; do
+    [ "$w" -lt "$2" ] || return 1
+    sleep "${LRU_BG_POLL_S:-1}"; w=$((w + 1))
+  done
+  return 0
+}
+lru_bg_stop() { # $1=src cfg $2=jobId $3=bg pid $4=run dir → 0 stopped and gone · 1 not
+  local bin; bin="$("$LRU_CLAUDE_BIN_CMD" 2>/dev/null || true)"
+  [ -n "$bin" ] || return 1
+  CLAUDE_CONFIG_DIR="$1" "$bin" stop "$2" >> "$4/stop.log" 2>&1 || true
+  lru_wait_gone "$3" "${LRU_BG_STOP_S:-30}"
+}
+lru_switch_bg_drive() { # $1=sid $2=pane $3=target $4=tcfg $5=from $6=src cfg $7=bg pid $8=by $9=req → rc 0 SWITCHED · 1 FAILED · 3 NOTMOVED
+  local sid="$1" pane="$2" target="$3" tcfg="$4" from="$5" scfg="$6" bpid="$7" by="$8" req="$9"
+  local row job cwd host hargs model eff perm run L t0 i=0 racct="" rsid="" deadline again sock
+  row="$(lru_bg_row "$sid")"
+  IFS=$'\t' read -r _ _ _ _ cwd _ job host <<EOF
+$row
+EOF
+  if [ -z "$row" ] || [ -z "$job" ] || [ "$job" = - ] || [ -z "$host" ]; then
+    lru_switch_result "$sid" "$pane" NOTMOVED "$from" "$target" "bg session unreadable at drive time (job '${job:-}', host pid '${host:-}'): nothing stopped, nothing typed" "$req" "$by"; return 3
+  fi
+  if [ ! -f "$LRU_TUI_LIB" ] || [ ! -f "$LRU_TRANSPLANT" ]; then
+    lru_switch_result "$sid" "$pane" NOTMOVED "$from" "$target" "cc-tui.sh or lr-transplant.sh unreachable: nothing stopped, nothing typed" "$req" "$by"; return 3
+  fi
+  # The relaunch keeps the pane's own model/effort/mode (its claude is the one that ran the
+  # conversation before it went to the background), else the SSOT model at high/auto.
+  hargs="$(lru_snap_args "$(lru_snapshot)" "$host")"
+  model="$(lru_flag "$hargs" --model "$LRU_RE_MODEL")"; eff="$(lru_flag "$hargs" --effort "$LRU_RE_EFFORT")"
+  perm="$(lru_flag "$hargs" --permission-mode "$LRU_RE_PERM")"
+  [ -n "$model" ] || model="$(lru_ssot versions opus_latest || true)"
+  [ -n "$eff" ] || eff=high; [ -n "$perm" ] || perm=auto
+  run="$LRU_STATE/switch/${sid:0:8}-bg-$(date -u +%Y%m%dT%H%M%SZ)"
+  mkdir -p "$run" 2>/dev/null || true
+  L="$(lru_mint_launcher "$run" "$tcfg" "$cwd" "$sid" "$model" "$eff" "$perm" "")" || {
+    lru_switch_result "$sid" "$pane" NOTMOVED "$from" "$target" "could not mint an ASCII-only launcher in $run: nothing stopped, nothing typed" "$req" "$by"; return 3; }
+  # 1. STOP. Everything before this line refused without touching anything.
+  if ! lru_bg_stop "$scfg" "$job" "$bpid" "$run"; then
+    lru_switch_result "$sid" "$pane" FAILED "$from" "$target" "claude stop $job did not end bg pid $bpid within ${LRU_BG_STOP_S:-30}s (log $run/stop.log); nothing transplanted, nothing typed" "$req" "$by"; return 1
+  fi
+  # 2. TRANSPLANT, in its two phases.
+  if ! bash "$LRU_TRANSPLANT" --sid "$sid" --from "$scfg" --to "$tcfg" --phase admit --cause voluntary >> "$run/transplant.log" 2>&1 \
+     || ! bash "$LRU_TRANSPLANT" --sid "$sid" --from "$scfg" --to "$tcfg" --phase confirm --cause voluntary >> "$run/transplant.log" 2>&1; then
+    lru_switch_result "$sid" "$pane" FAILED "$from" "$target" "stopped, but lr-transplant refused (log $run/transplant.log); the conversation is intact under $scfg - reopen it with: CLAUDE_CONFIG_DIR=$scfg claude attach $job" "$req" "$by"; return 1
+  fi
+  # 3. QUIT THE AGENT VIEW, then type the launcher at the shell it leaves behind.
+  t0="$(date +%s)"
+  # shellcheck disable=SC1090  # sourced in a subshell: a sibling library must not replace our names
+  ( . "$LRU_TUI_LIB" && cc_tui_rpc send-text --match "id:$pane" -- $'\x03' >/dev/null 2>&1 \
+      && sleep "${LRU_BG_CTRLC_GAP_S:-1}" && cc_tui_rpc send-text --match "id:$pane" -- $'\x03' >/dev/null 2>&1 ) >> "$run/keys.log" 2>&1 || true
+  if ! lru_wait_gone "$host" "${LRU_BG_QUIT_S:-30}"; then
+    lru_switch_result "$sid" "$pane" FAILED "$from" "$target" "stopped and transplanted to $target, but the agent view in pane $pane did not quit (pid $host still live) - run in that pane once it is at a shell: cd $cwd && bash $L" "$req" "$by"; return 1
+  fi
+  # Never type into a starting claude: retype only while no live process is resuming this sid.
+  while :; do
+    if ! lru_snapshot | grep -F -- "$sid" | grep -qE 'lr-fire-resume|--resume'; then
+      [ "$i" -lt "${LRU_RETYPE_MAX:-5}" ] || break
+      i=$((i + 1))
+      sock="$(command -v lr_kitty_socket >/dev/null 2>&1 && lr_kitty_socket 2>/dev/null || true)"
+      CC_TERM_KITTY_TO="${sock:-${CC_TERM_KITTY_TO:-}}" "$LRU_IT2_BIN" session run -s "$pane" "cd $(printf %q "$cwd") && nocorrect bash $(printf %q "$L")" >/dev/null 2>&1 || true
+    fi
+    # 4. THE VERDICT: the registry flip…
+    racct="$(lru_acct_name "$(jq -r '.account // empty' "$LRU_REG_DIR/$pane.json" 2>/dev/null)")"
+    rsid="$(jq -r '.session_id // empty' "$LRU_REG_DIR/$pane.json" 2>/dev/null)"
+    [ "$rsid" = "$sid" ] && [ "$racct" = "$target" ] && lru_transcript "$tcfg" "$sid" >/dev/null && break
+    deadline=$(( t0 + ${LRU_SWITCH_VERIFY_S:-600} ))
+    [ "$(date +%s)" -lt "$deadline" ] || break
+    sleep "${LRU_SWITCH_POLL_S:-5}"
+  done
+  if [ "$rsid" != "$sid" ] || [ "$racct" != "$target" ]; then
+    lru_switch_result "$sid" "$pane" FAILED "$from" "$target" "stopped and transplanted, launcher typed $i time(s), but pane $pane's registry row does not name ${sid:0:8} on $target - run in that pane: cd $cwd && bash $L" "$req" "$by"; return 1
+  fi
+  # …AND THE SOURCE STAYING DEAD. One re-stop if the daemon re-claimed the job, then the truth.
+  again="$(lru_bg_row "$sid" | awk -F'\t' -v c="$scfg" '$3 == c { print $2 }')"
+  if [ -n "$again" ]; then
+    lru_bg_stop "$scfg" "$job" "$again" "$run" || true
+    again="$(lru_bg_row "$sid" | awk -F'\t' -v c="$scfg" '$3 == c { print $2 }')"
+    if [ -n "$again" ]; then
+      lru_switch_result "$sid" "$pane" FAILED "$from" "$target" "SPLIT-BRAIN: live on $target in pane $pane, but the $from daemon re-claimed job $job (pid $again) and a re-stop did not end it - stop it: CLAUDE_CONFIG_DIR=$scfg claude stop $job" "$req" "$by"; return 1
+    fi
+  fi
+  lru_switch_result "$sid" "$pane" SWITCHED "$from" "$target" "bg session: job $job stopped under $scfg and stayed stopped; pane $pane relaunched it on $target (registry flip, transcript under $tcfg)" "$req" "$by"
+  return 0
+}
 
 # ── THE LAUNCHER — pure ASCII, or refused ────────────────────────────────────────────────────────
 # Defect 4: a prompt carrying `—` went through printf %q as $'…\342\200\224…' and a later `sed` in

@@ -787,6 +787,30 @@ the target with the transcript present under the target config: **SWITCHED** (pr
 must be an explicit account — `auto` is refused, because each subject would resolve it from its own
 view and the driver could not confirm the move.
 
+**Three additions (2026-09-27, from the "move next2 + next4 to next3" session, which took ~6 prompts):**
+
+- **The target is asked once, before anything is queued.** The driver runs the router's own check
+  (`claude-accounts --rank general`, one `--fresh` re-read, fail-open when the router cannot answer).
+  An unranked target is refused with `verdict=NOTMOVED … target-unroutable: <the router's reason>`,
+  rc 2, nothing queued; an auth reason also names `cc-relogin <acct> --dia` with the mailbox and Dia
+  profile. `--dry-run` shows the table with each would-be move relabelled `target-unroutable`.
+- **`--until-idle S` (default off)** queues a subject that is only busy for now — `mid-turn`,
+  `subagents-in-flight`, `background-job`, `composer-occupied/unknown`, `bg-busy` — with a deadline.
+  The drainer parks it in `upgrade-deferred/` (no verdict, nothing typed) and re-judges it at every
+  drain start until it is idle (then moves it) or S seconds pass (then `NOTMOVED`, mailed).
+  Structural holds (teammate, lead with a live member, duplicate, stale row, on target) are answered
+  at once.
+- **Claude Code background (`--bg`) sessions** are listed per account from `<cfg>/sessions/*.json`
+  (kind `bg`, pid live), on the pane whose claude spawned their daemon: `bg-session` (idle) ·
+  `bg-busy` · `bg-no-pane` · `bg-split` (the same conversation is ALSO live interactively — stop the
+  idle copy first). That host pane is judged `bg-host`, never `mid-turn` off its frozen parent.
+  A bg session moves only when NAMED — `cc-lr switch --sid <bg sid> --target <acct>` (or `--pane`),
+  never by `--all-idle`. The drainer, not any agent, does it: `claude stop <jobId>` under the source
+  config, `lr-transplant --phase admit` then `confirm`, two Ctrl-C to quit the pane's agent view,
+  then the launcher at the shell it leaves. SWITCHED needs the registry flip AND the source job
+  staying stopped: the daemon was measured re-claiming a stopped job 4 minutes later, so a
+  re-claimed job gets one re-stop and otherwise reports `FAILED … SPLIT-BRAIN` with the stop command.
+
 🚨 **THE AUTHORITY MARKER — read this if a prompt beginning `[operator-ruling cc-lr-switch` lands in
 your composer.** It is the OPERATOR's ruling, relayed by the launchd reset poller (the only actor
 outside every classifier), not a peer's opinion. Run the command it names. The SELF verb still

@@ -766,7 +766,7 @@ cmd_switch_driver() { # <target> <dry> <pane> <sid> <from> <all> <wait_s> [exclu
   fi
 
   if [ "$dry" -eq 1 ]; then
-    [ -z "$unroute" ] || census="$(printf '%s\n' "$census" | awk -F'\t' -v OFS='\t' 'NF { if ($7 == "move") $7 = "target-unroutable"; print }')"
+    [ -z "$unroute" ] || census="$(printf '%s\n' "$census" | awk -F'\t' -v OFS='\t' 'NF { if ($7 == "move" || $7 == "bg-session") $7 = "target-unroutable"; print }')"
     printf '%-5s %-8s  %-18s %s\n' PANE SID 'ACCOUNT → TARGET' DISPOSITION
     printf '%s\n' "$census" | while IFS=$'\t' read -r p s ac _ _ _ d; do
       [ -n "$p" ] || continue
@@ -774,7 +774,9 @@ cmd_switch_driver() { # <target> <dry> <pane> <sid> <from> <all> <wait_s> [exclu
     done
     [ -z "$unroute" ] || printf 'target-unroutable: the router does not rank %s (%s)%s\n' "$target" "$unroute" "${hint:+ — $hint}"
     printf '%s to move · DRY RUN: nothing was written or typed\n' \
-      "$(printf '%s\n' "$census" | awk -F'\t' '$7 == "move"' | grep -c .)"
+      "$(printf '%s\n' "$census" | awk -F'\t' -v a="$all" '$7 == "move" || ($7 == "bg-session" && a != 1)' | grep -c .)"
+    printf '%s\n' "$census" | awk -F'\t' '$7 == "bg-split" { printf "bg-split %s: this conversation is live TWICE (a background job and an interactive session) - stop the idle copy before any move\n", substr($2, 1, 8) }'
+    printf '%s\n' "$census" | awk -F'\t' '$7 == "bg-host" { printf "bg-host %s: pane %s shows a background session (the bg row on the same pane), not its own frozen transcript\n", substr($2, 1, 8), $1 }'
     return 0
   fi
 
@@ -789,7 +791,16 @@ cmd_switch_driver() { # <target> <dry> <pane> <sid> <from> <all> <wait_s> [exclu
   while IFS=$'\t' read -r p s ac _ _ _ d; do
     [ -n "$p" ] || continue
     note="request"
-    if [ "$d" != move ]; then
+    if [ "$d" = bg-session ] && [ "$all" -ne 1 ]; then
+      # F4: a Claude Code background session, NAMED by --sid/--pane. It cannot run the SELF verb (it
+      # has no composer), so the drainer moves it: stop the job, transplant, quit the hosting pane's
+      # agent view, relaunch there. Never by --all-idle — a fleet sweep does not stop jobs.
+      note="bg session: the drainer stops the job, transplants it and relaunches it in pane $p; request"
+    elif [ "$d" != move ]; then
+      if [ "$d" = bg-session ]; then
+        cl_switch_line "$p" "$s" skipped "$ac" "$target" "bg-session — a background job is moved only when named: cc-lr switch --sid $s --target $target"
+        nbad=$((nbad + 1)); continue
+      fi
       if [ "$until_s" -gt 0 ] && bash "$UPGRADE_BIN" --switch-waitable "$d" 2>/dev/null; then
         note="$d now; parked until idle (<= ${until_s}s), request"
       else
