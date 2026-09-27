@@ -80,6 +80,12 @@ single-ref path below for each one, so each keeps its own refusals. Print its li
 **END THE TURN**. Never match panes from a screenshot. That was the only route before this form
 existed (2026-09-24).
 
+When `--account` names an account at a 5-hour or weekly cap, the same command also queues that
+account's IDLE sessions for a move (the `cc-lr switch --from <acct> --all-idle` census, minus the
+sessions it just recovered) and prints both sets. An idle session on a capped account dies on its
+next turn: on 2026-09-26 pane 754 sat idle on account 1 at 100% weekly while this command found
+only pane 780. The move goes to `--target`, or to the best other account when that is `auto`.
+
 **`/limit-recover <ref>` is ONE command and one turn.** `<ref>` is whatever you have in hand — a
 pane id (`117`, `⌗117`, `#117`) or a sid8 (`cb227486`):
 

@@ -122,7 +122,10 @@ cc-lr — find · recover · status · repair, for a limit-blocked session.
                              else take the mutex and fire lr-fleet --one … --detach
   cc-lr recover --limited [--account next|next2|next3|next4] [--target A]
                              every LIMITED session (optionally one account's), each through
-                             the single-ref path above, so each keeps its own refusals
+                             the single-ref path above, so each keeps its own refusals. With
+                             --account, when that account is at a 5-hour or weekly cap, also
+                             queues its IDLE sessions (the `switch --from A --all-idle` census)
+                             for --target, or the best other account when auto
   cc-lr switch [--target A|auto] [--dry-run]
                              move THIS pane's session to another account, in place: same
                              window, same uuid, new account. SELF only — no ref, no
@@ -319,8 +322,35 @@ cl_acct_dirs() { # <label> → the config-dir basenames that account owns, space
     *) return 1 ;;
   esac
 }
+cl_acct_name() { # <label> → the account-map NAME for cl_acct_dirs' labels; rc 1 unknown
+  case "$1" in
+    next|1|account1|claude|claude-next) echo next ;;
+    next2|2|account2|secondary|claude-secondary) echo next2 ;;
+    next3|3|account3|tertiary|claude-tertiary) echo next3 ;;
+    next4|4|account4|quaternary|claude-quaternary) echo next4 ;;
+    *) return 1 ;;
+  esac
+}
+# Is the account at a 5-hour or weekly cap? The same read and the same >= 100 rule as
+# lr-fleet.sh's lf_acct_has_headroom, so the two never disagree about one account.
+cl_acct_cap() { # <name> → stdout "weekly 100%" / "5-hour 100%"; rc 0 capped · 1 headroom · 2 unreadable
+  local ab="${CC_ACCOUNTS_BIN:-$HOME/bin/claude-accounts}"
+  [ -x "$ab" ] || return 2
+  "$ab" --json 2>/dev/null | /usr/bin/python3 -c '
+import json, sys
+try: rows = json.loads(sys.stdin.read()).get("rows", [])
+except Exception: sys.exit(2)
+for r in rows:
+    if r.get("acct") == sys.argv[1]:
+        w, s = r.get("weekly_pct") or 0, r.get("session_pct") or 0
+        if w >= 100: print("weekly %d%%" % w); sys.exit(0)
+        if s >= 100: print("5-hour %d%%" % s); sys.exit(0)
+        sys.exit(1)
+sys.exit(2)' "$1"
+}
 cmd_recover_limited() { # [--account A] [--target T]
   local acct_f="" target="auto" dirs="" out rc sid pane acct cfg cwd live klass base n=0 fired=0 refused=0
+  local seen="" name cap cap_rc sw_target qrc=1
   while [ $# -gt 0 ]; do
     case "$1" in
       --account) [ $# -ge 2 ] || { usage; exit 3; }; acct_f="$2"; shift 2 ;;
@@ -340,7 +370,7 @@ cmd_recover_limited() { # [--account A] [--target T]
       base="${cfg%/}"; base="${base##*/}"
       case " $dirs " in *" $base "*) ;; *) continue ;; esac
     fi
-    n=$((n + 1))
+    n=$((n + 1)); seen="$seen $sid"
     if ( cmd_recover "$sid" --target "$target" ${pane:+--source-pane "$pane"} ); then
       fired=$((fired + 1))
     else
@@ -351,10 +381,35 @@ $out
 EOF_ROWS
   if [ "$n" -eq 0 ]; then
     echo "cc-lr: no LIMITED session${acct_f:+ on $acct_f} — nothing to recover."
-    return 1
+  else
+    echo "cc-lr: ${fired} fired, ${refused} refused of ${n} limited session(s)${acct_f:+ on $acct_f}. Verdicts arrive as mail; END THE TURN."
   fi
-  echo "cc-lr: ${fired} fired, ${refused} refused of ${n} limited session(s)${acct_f:+ on $acct_f}. Verdicts arrive as mail; END THE TURN."
-  [ "$fired" -gt 0 ]
+
+  # ── THE IDLE HALF (2026-09-27). "Recover account N" means every session on it, and at a cap an
+  # IDLE session is only one turn from the same limit error: pane 754 sat idle on account 1 at 100%
+  # weekly while this command found only pane 780, and the operator had to name it. So at a cap the
+  # same command also queues the account's idle sessions through the switch driver's census
+  # (`cc-lr switch --from <acct> --all-idle`), minus the sessions recovered above. With headroom it
+  # does nothing more: an idle session there is healthy, and moving it would be a surprise.
+  if [ -n "$acct_f" ] && name="$(cl_acct_name "$acct_f")"; then
+    cap="$(cl_acct_cap "$name")"; cap_rc=$?
+    case "$cap_rc" in
+      0)
+        if [ "$target" = auto ]; then
+          sw_target="$(cl_switch_auto_target "$name")" || {
+            echo "cc-lr: $name is at $cap — its idle sessions were NOT queued: $sw_target. Name one with --target <acct>."
+            sw_target=""; }
+        else
+          sw_target="$target"
+        fi
+        if [ -n "$sw_target" ]; then
+          echo "cc-lr: $name is at $cap — queueing its IDLE sessions for $sw_target (cc-lr switch --from $name --all-idle):"
+          ( cmd_switch_driver "$sw_target" 0 "" "" "$name" 1 0 "$seen" ); qrc=$?
+        fi ;;
+      2) echo "cc-lr: could not read $name's usage — its idle sessions were NOT checked; if it is capped: cc-lr switch --from $name --all-idle --target <acct>" ;;
+    esac
+  fi
+  [ "$fired" -gt 0 ] || [ "$qrc" -eq 0 ]
 }
 
 # ── recover ────────────────────────────────────────────────────────────────────────────────────
@@ -534,11 +589,11 @@ cl_verdict() { # <TOKEN> <to> <note>
 CL_DESK_SAFE_TIER="${CL_SWITCH_SAFE_TIER:-2}"
 # stdout carries the ACCOUNT on rc 0 and the REASON otherwise: it runs inside `$( … )`, so a global
 # set in here would die with the subshell (memory: assignment-inside-command-substitution).
-cl_switch_auto_target() { # → stdout: account (rc 0) · why (rc 1 none safe, rc 2 could not ask)
-  local ab src out rc=0 best
+cl_switch_auto_target() { # [source acct, default this session's] → stdout: account (rc 0) · why (rc 1 none safe, rc 2 could not ask)
+  local ab src="${1:-}" out rc=0 best
   ab="${CC_ACCOUNTS_BIN:-$HOME/bin/claude-accounts}"
   [ -x "$ab" ] || { printf 'the ranker is not executable at %s' "$ab"; return 2; }
-  src="$(cl_from_acct)"
+  [ -n "$src" ] || src="$(cl_from_acct)"
   out="$(CC_ROUTE_DESK_HYST=off "$ab" --rank interactive 2>/dev/null)" || rc=$?
   # The ranker's own taxonomy: 2 = it answered and every account is excluded by POLICY, 3 = it has
   # no DATA. The first is a real "nothing is safe"; the second is our blindness, not a verdict.
@@ -584,8 +639,8 @@ cl_switch_line() { # <pane> <sid> <VERDICT> <from> <to> <reason>
     *)        printf '✗ %-5s %s  %s %s → %s — %s\n' "$1" "${2:0:8}" "$3" "$4" "$5" "$6" ;;
   esac
 }
-cmd_switch_driver() { # <target> <dry> <pane> <sid> <from> <all> <wait_s>
-  local target="$1" dry="$2" pane="$3" sid="$4" from="$5" all="$6" wait_s="$7" census rc sel=""
+cmd_switch_driver() { # <target> <dry> <pane> <sid> <from> <all> <wait_s> [excluded sids, space-separated]
+  local target="$1" dry="$2" pane="$3" sid="$4" from="$5" all="$6" wait_s="$7" excl="${8:-}" census rc sel=""
   case "$wait_s" in ''|*[!0-9]*) echo "cc-lr switch: --wait takes whole seconds" >&2; exit 3 ;; esac
   # EXACTLY ONE SUBJECT. A fleet-wide move by default is the accident this verb must not make easy,
   # so --all-idle needs --from, and --from alone is not a subject.
@@ -635,6 +690,11 @@ cmd_switch_driver() { # <target> <dry> <pane> <sid> <from> <all> <wait_s>
        return 1 ;;
     *) cl_die "the switch census failed (rc $rc); nothing was written" 2 ;;
   esac
+  # Sessions the caller is already recovering (recover --limited's own set) are not switch subjects.
+  if [ -n "$excl" ]; then
+    census="$(printf '%s\n' "$census" | awk -F'\t' -v x=" $excl " 'index(x, " " $2 " ") == 0')"
+    [ -n "$census" ] || { echo "cc-lr switch: no idle session on ${from:-the account} beyond the ones already being recovered"; return 1; }
+  fi
   if [ -n "$sid" ] && [ "$(printf '%s\n' "$census" | grep -c .)" -gt 1 ]; then
     echo "cc-lr switch: REFUSED — sid '$sid' matched more than one live session; pass the pane id. Nothing was written. Candidates:" >&2
     printf '%s\n' "$census" | cut -f1,2 >&2

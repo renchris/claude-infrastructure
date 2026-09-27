@@ -986,3 +986,89 @@ SH
   [ ! -s "$BATS_TEST_TMPDIR/fleet.argv" ] || { echo "fired something"; false; }
   [[ "$output" == *"no LIMITED session on next4"* ]] || { echo "$output"; false; }
 }
+
+# ── recover --limited --account on a CAPPED account also queues its IDLE sessions (2026-09-27) ──
+# The account-1 recovery: `cc-lr recover --limited --account 1` found only pane 780 (its last word
+# was the limit error). Pane 754 sat idle on the same account at 100% weekly and would die on its
+# next turn; the operator had to name it. When the account is at a 5-hour or weekly cap, the same
+# command now also queues the account's idle sessions through the switch driver's census
+# (`cc-lr switch --from <acct> --all-idle`), minus the sessions it is already recovering.
+capped_ranker() { # <acct> <weekly> <session> <rank lines…> — --json answers usage, --rank answers the rank
+  local a="$1" w="$2" s="$3"; shift 3
+  local r f="$BATS_TEST_TMPDIR/rank.txt"; : > "$f"
+  for r in "$@"; do printf '%s\n' "$r" >> "$f"; done
+  cat > "$CC_ACCOUNTS_BIN" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$BATS_TEST_TMPDIR/ranker.argv"
+case " \$* " in
+  *" --json "*) printf '{"rows":[{"acct":"%s","weekly_pct":%s,"session_pct":%s},{"acct":"next2","weekly_pct":7,"session_pct":2}]}\n' "$a" "$w" "$s"; exit 0 ;;
+  *" --rank "*) cat "$f"; exit 0 ;;
+esac
+exit 97
+SH
+  chmod +x "$CC_ACCOUNTS_BIN"
+}
+census_stub() { # <TSV rows: pane sid acct - - - disposition>
+  export CC_LR_UPGRADE_BIN="$BATS_TEST_TMPDIR/lr-upgrade.sh"
+  local r f="$BATS_TEST_TMPDIR/census.tsv"; : > "$f"
+  for r in "$@"; do printf '%s\n' "$r" >> "$f"; done
+  cat > "$CC_LR_UPGRADE_BIN" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$BATS_TEST_TMPDIR/census.argv"
+[ -s "$f" ] || exit 1
+cat "$f"
+SH
+  chmod +x "$CC_LR_UPGRADE_BIN"
+}
+
+@test "[RED] recover --limited --account 1 at weekly 100% also queues the account's IDLE sessions, not the limited one twice" {
+  fleet_stub 0
+  limited_stub "cccc0780-0000-4000-8000-000000000780	780	claude-next	$HOME/.claude-next	/x	live	LIMITED"
+  capped_ranker next 100 3 "next2 3" "next3 2"
+  census_stub \
+    "780	cccc0780-0000-4000-8000-000000000780	next	-	-	-	move" \
+    "754	cccc0754-0000-4000-8000-000000000754	next	-	-	-	move" \
+    "760	cccc0760-0000-4000-8000-000000000760	next	-	-	-	busy"
+  run bash "$LR" recover --limited --account 1
+  [ "$status" -eq 0 ] || { echo "rc $status: $output"; false; }
+  grep -q cccc0780 "$BATS_TEST_TMPDIR/fleet.argv" || { echo "the limited pane was not recovered"; false; }
+  grep -q -- '--from next' "$BATS_TEST_TMPDIR/census.argv" || { echo "the idle census was not asked about next"; cat "$BATS_TEST_TMPDIR/census.argv" 2>/dev/null; echo "$output"; false; }
+  [ -f "$LR_STATE_DIR/requests/cc-lr-switch-cccc0754-0000-4000-8000-000000000754.json" ] || { echo "idle pane 754 was not queued"; ls "$LR_STATE_DIR/requests" 2>/dev/null; echo "$output"; false; }
+  [ ! -f "$LR_STATE_DIR/requests/cc-lr-switch-cccc0780-0000-4000-8000-000000000780.json" ] || { echo "the limited pane was ALSO queued for a switch"; false; }
+  [ ! -f "$LR_STATE_DIR/requests/cc-lr-switch-cccc0760-0000-4000-8000-000000000760.json" ] || { echo "a busy pane was queued"; false; }
+  jq -e '.target == "next2" and .from == "next"' "$LR_STATE_DIR/requests/cc-lr-switch-cccc0754-0000-4000-8000-000000000754.json" >/dev/null
+  [[ "$output" == *"1 fired, 0 refused of 1 limited session(s) on 1"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"754"*"queued next → next2"* ]] || { echo "$output"; false; }
+}
+
+@test "[RED] recover --limited --account on a capped account with NOTHING limited still queues the idle sessions" {
+  fleet_stub 0
+  limited_stub
+  capped_ranker next 4 100 "next2 3"
+  census_stub "754	cccc0754-0000-4000-8000-000000000754	next	-	-	-	move"
+  run bash "$LR" recover --limited --account next
+  [ "$status" -eq 0 ] || { echo "rc $status: $output"; false; }
+  [ ! -s "$BATS_TEST_TMPDIR/fleet.argv" ] || { echo "fired a recovery with nothing limited"; false; }
+  [ -f "$LR_STATE_DIR/requests/cc-lr-switch-cccc0754-0000-4000-8000-000000000754.json" ] || { echo "$output"; false; }
+}
+
+@test "recover --limited --account on an account with headroom does not touch its idle sessions" {
+  fleet_stub 0
+  limited_stub "cccc0780-0000-4000-8000-000000000780	780	claude-next	$HOME/.claude-next	/x	live	LIMITED"
+  capped_ranker next 60 10 "next2 3"
+  census_stub "754	cccc0754-0000-4000-8000-000000000754	next	-	-	-	move"
+  run bash "$LR" recover --limited --account 1
+  [ "$status" -eq 0 ] || { echo "rc $status: $output"; false; }
+  [ ! -s "$BATS_TEST_TMPDIR/census.argv" ] || { echo "the idle census ran for an account with headroom"; false; }
+  [ ! -d "$LR_STATE_DIR/requests" ] || [ -z "$(ls "$LR_STATE_DIR/requests")" ] || { echo "queued a switch"; false; }
+}
+
+@test "recover --limited --account --target X passes X to the idle queue instead of ranking" {
+  fleet_stub 0
+  limited_stub
+  capped_ranker next 100 0 "next2 3"
+  census_stub "754	cccc0754-0000-4000-8000-000000000754	next	-	-	-	move"
+  run bash "$LR" recover --limited --account next --target next3
+  [ "$status" -eq 0 ] || { echo "rc $status: $output"; false; }
+  jq -e '.target == "next3"' "$LR_STATE_DIR/requests/cc-lr-switch-cccc0754-0000-4000-8000-000000000754.json" >/dev/null
+}
