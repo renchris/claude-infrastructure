@@ -710,7 +710,7 @@ EOF
       pane:*) [ "$hp" = "${sel#pane:}" ] || continue ;;
       sid:*)  case "$bsid" in "${sel#sid:}"*) ;; *) continue ;; esac ;;
     esac
-    if printf '%s\n' "$pass" | awk -F'\t' -v s="$bsid" '$1 == "LIVE" && $3 == s { f = 1 } END { exit !f }'; then disp=bg-split
+    if [ -n "$(printf '%s\n' "$pass" | awk -F'\t' -v s="$bsid" '$1 == "LIVE" && $3 == s')" ]; then disp=bg-split
     elif [ -n "$target" ] && [ "$bacct" = "$target" ]; then disp=on-target
     elif [ "$hp" = - ]; then disp=bg-no-pane
     elif [ "$bst" != idle ]; then disp=bg-busy
@@ -931,7 +931,7 @@ EOF
   fi
   # Never type into a starting claude: retype only while no live process is resuming this sid.
   while :; do
-    if ! lru_snapshot | grep -F -- "$sid" | grep -qE 'lr-fire-resume|--resume'; then
+    if [ -z "$(lru_snapshot | awk -v s="$sid" 'index($0, s) && /lr-fire-resume|--resume/')" ]; then
       [ "$i" -lt "${LRU_RETYPE_MAX:-5}" ] || break
       i=$((i + 1))
       sock="$(command -v lr_kitty_socket >/dev/null 2>&1 && lr_kitty_socket 2>/dev/null || true)"
