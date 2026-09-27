@@ -293,3 +293,64 @@ cc_lr_env() {
   [ "$status" -eq 1 ] || { echo "$output"; false; }
   [ "$(jq -r .verdict "$LRU_STATE/results/switch-70707070-0000-4000-8000-000000000001.json")" = FAILED ] || false
 }
+
+# ── E. THE TARGET IS ASKED ONCE, BEFORE ANYTHING IS QUEUED (F2, 2026-09-27) ──────────────────────
+# `--from next2 --all-idle --target next3` queued 4 requests while next3's keychain held no refresh
+# token; each subject took a full turn to refuse "target not routable". The router already knew.
+# RED-proof: on 0ecf7a496 E1 wrote 2 requests and exited 0; E2's dry run printed `move`.
+ranker() { # <rc> <stderr reason line or ''> <stdout lines…> — a claude-accounts that answers --rank / --relogin-info
+  local rc="$1" why="$2"; shift 2
+  export CC_ACCOUNTS_BIN="$STUBS/claude-accounts"
+  {
+    echo '#!/bin/bash'
+    echo 'echo "$*" >> "'"$BATS_TEST_TMPDIR"'/ranker.argv"'
+    echo 'if [ "$1" = --relogin-info ]; then echo "{\"name\":\"$2\",\"email\":\"ops+$2@example.com\",\"dia_profile\":\"Claude3\"}"; exit 0; fi'
+    [ -n "$why" ] && printf 'echo %q >&2\n' "$why"
+    for l in "$@"; do printf 'echo %q\n' "$l"; done
+    echo "exit $rc"
+  } > "$CC_ACCOUNTS_BIN"; chmod +x "$CC_ACCOUNTS_BIN"
+}
+
+@test "E1 [RED] an unroutable target is refused ONCE with the router's reason and the relogin cure — nothing queued, nothing kicked" {
+  cc_lr_env
+  sess 601 81818181-0000-4000-8000-000000000001
+  sess 602 81818181-0000-4000-8000-000000000002
+  ranker 0 'claude-accounts: general excluded — next2=no refresh token stored — run /login; next4=5h-cutoff' 'next4 0.3' 'next 0.2'
+  run bash "$REPO/bin/cc-lr" switch --from next3 --all-idle --target next2 --no-wait
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=NOTMOVED"*"target-unroutable: no refresh token stored — run /login"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"cc-relogin next2 --dia"*"ops+next2@example.com"*"Claude3"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"5h-cutoff"* ]] || { echo "another account's reason leaked: $output"; false; }
+  [ -z "$(ls -A "$LRU_STATE/requests" 2>/dev/null)" ] || { ls "$LRU_STATE/requests"; false; }
+  [ ! -s "$BATS_TEST_TMPDIR/launchctl.log" ] || { echo "the poller was kicked"; false; }
+  # asked with a --fresh re-read before refusing (cache staleness is curable, not arguable)
+  grep -qx -- '--rank general --fresh' "$BATS_TEST_TMPDIR/ranker.argv" || { cat "$BATS_TEST_TMPDIR/ranker.argv"; false; }
+}
+
+@test "E2 [RED] the dry run relabels every would-be move as target-unroutable; a non-auth reason names no relogin" {
+  cc_lr_env
+  sess 611 82828282-0000-4000-8000-000000000001
+  sess 612 82828282-0000-4000-8000-000000000002 busy
+  ranker 0 'claude-accounts: general excluded — next2=kmax-concurrency' 'next4 0.3'
+  run bash "$REPO/bin/cc-lr" switch --from next3 --all-idle --target next2 --dry-run
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"611   82828282  next3 → next2"*"target-unroutable"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"612   82828282  next3 → next2"*"mid-turn"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"0 to move · DRY RUN"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"kmax-concurrency"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"cc-relogin"* ]] || { echo "a concurrency exclusion was sent to relogin: $output"; false; }
+}
+
+@test "E3 a ranked target queues as before; a ranker that cannot answer FAILS OPEN (the subject's own gate stays the backstop)" {
+  cc_lr_env
+  sess 621 83838383-0000-4000-8000-000000000001
+  ranker 0 '' 'next2 0.4'
+  run bash "$REPO/bin/cc-lr" switch --pane 621 --target next2 --no-wait
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -f "$LRU_STATE/requests/cc-lr-switch-83838383-0000-4000-8000-000000000001.json" ] || { echo "$output"; false; }
+  rm -f "$LRU_STATE"/requests/*.json
+  ranker 3 'claude-accounts: no data' ''
+  run bash "$REPO/bin/cc-lr" switch --pane 621 --target next2 --no-wait
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -f "$LRU_STATE/requests/cc-lr-switch-83838383-0000-4000-8000-000000000001.json" ] || { echo "$output"; false; }
+}
