@@ -156,15 +156,37 @@ cc_tui_screen() { # $1=window id → the pane's screen on stdout; rc 0 read / 1 
 # tui-literal-phrase-match-is-width-dependent). A torn or boxless screen is rc 1 = UNKNOWN, and
 # every caller fails toward NOT typing.
 cc_tui_composer() { # $1=window id → stdout: printable content, space-stripped; rc 0 parsed / 1 UNKNOWN
-  local id="${1:-}" scr raw rc b12='────────────'
-  scr="$(cc_tui_screen "$id")" || return 1
-  raw="$(printf '%s\n' "$scr" | LC_ALL=C awk -v b="$b12" '
-    { line[NR] = $0; if (index($0, b) > 0) { b2 = b1; b1 = NR } }
+  local id="${1:-}" scr plain span raw rc b12='────────────'
+  # DIM IS NOT CONTENT — CC's prompt suggestion renders faint (SGR 2) inside the box; real input
+  # never does. Read the rendering and drop faint runs; the parse is the one in composer_content.
+  cc_tui_valid_id "$id" || return 1
+  scr="$(cc_tui_rpc get-text --match "id:$id" --extent screen --ansi 2>/dev/null)" || scr=""
+  [ -n "$scr" ] || scr="$(cc_tui_screen "$id")" || return 1
+  plain="$(printf '%s\n' "$scr" | LC_ALL=C perl -pe 's/\e\[[0-?]*[ -\/]*[@-~]|\e\][^\a\e]*(?:\a|\e\\)?|\e.//g')"
+  span="$(printf '%s\n' "$plain" | LC_ALL=C awk -v b="$b12" '
+    { if (index($0, b) > 0) { b2 = b1; b1 = NR } }
     END {
       if (b1 == 0 || b2 == 0 || b1 - b2 < 2) exit 9
-      for (i = b2 + 1; i < b1; i++) print line[i]
+      print (b2 + 1) "," (b1 - 1)
     }')" && rc=0 || rc=$?
   [ "$rc" = 0 ] || return 1
+  raw="$(printf '%s\n' "$scr" | LC_ALL=C sed -n "${span}p" | LC_ALL=C perl -ne '
+    my ($d, $o) = (0, "");
+    while (/\G(?:\e\[([0-9;:]*)m|\e\[[0-?]*[ -\/]*[@-~]|\e\][^\a\e]*(?:\a|\e\\)?|\e.|([^\e]))/gcs) {
+      if (defined $1) {
+        my @p = split /;/, $1, -1; @p = ("") unless @p;
+        for (my $i = 0; $i < @p; $i++) {
+          my ($c) = split /:/, $p[$i], 2; $c = "" unless defined $c;
+          if ($c eq "" || $c eq "0" || $c eq "22") { $d = 0 }
+          elsif ($c eq "2") { $d = 1 }
+          elsif ($c =~ /^[345]8$/ && $p[$i] !~ /:/) {
+            my $m = defined $p[$i + 1] ? $p[$i + 1] : "";
+            $i += $m eq "5" ? 2 : $m eq "2" ? 4 : 0;
+          }
+        }
+      } elsif (defined $2) { $o .= $2 unless $d }
+    }
+    print $o;')"
   raw="$(printf '%s' "$raw" | LC_ALL=C tr -cd '[:print:]')"
   # The never-typed-in placeholder, matched as a WHOLE row only: a real draft that merely STARTS
   # with `Try "` must still read as a draft — a loose match types over operator text.

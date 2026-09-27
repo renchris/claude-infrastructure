@@ -110,6 +110,39 @@ setup() {
   [ "$status" -eq 0 ]; [ -z "$output" ]
 }
 
+@test "a FAINT prompt suggestion reads EMPTY — the pane-751 shape, measured 2026-09-27" {
+  # The real row, byte for byte from `kitty @ get-text --ansi`: reset, glyph, NBSP, then the
+  # suggestion under SGR 22;2. A plain read called this a draft and held three limit recoveries.
+  mk_screen $'\e[m❯\xc2\xa0\e[22;2mship the brag film'
+  run composer_content it2 sid
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+@test "unfaint text after the glyph is still a DRAFT — the pane-815 shape" {
+  mk_screen $'\e[m❯\xc2\xa0I'
+  run composer_content it2 sid
+  [ "$status" -eq 0 ]; [ "$output" = "I" ]
+}
+
+@test "the 2 inside truecolor 38;2;r;g;b is NOT faint — a coloured draft stays a draft" {
+  mk_screen $'\e[m❯ \e[38;2;200;2;2mDEPLOY-NOW' $'\e[38:2:136:136:136mSECOND-ROW'
+  run composer_content it2 sid
+  [ "$status" -eq 0 ]; [ "$output" = "DEPLOY-NOWSECOND-ROW" ]
+}
+
+@test "a draft followed by a faint hint keeps the draft and drops the hint" {
+  mk_screen $'\e[m❯ keep this\e[2m  (hint)\e[22m tail'
+  run composer_content it2 sid
+  [ "$status" -eq 0 ]; [ "$output" = "keepthistail" ]
+}
+
+@test "a coloured border row still locates the box" {
+  local cb=$'\e[m\e[38:2:136:136:136m'"$B"
+  { echo "noise"; echo "$cb"; printf '%s\n' $'\e[m❯\xc2\xa0\e[2msuggested'; echo "$cb"; echo "  (4) status"; } > "$SCREEN_FILE"
+  run composer_content it2 sid
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
 @test "a real draft that merely STARTS with the placeholder shape reads as a DRAFT" {
   mk_screen "$GLYPH Try \"x\" then run the deploy"
   run composer_content it2 sid

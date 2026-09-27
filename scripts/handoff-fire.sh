@@ -2742,17 +2742,48 @@ EOF
 # A torn/unreadable screen or a missing box returns rc 1 = UNKNOWN, and every caller fails toward
 # NOT typing (the 2026-08-06 rule: typing needs the affirmative).
 composer_content() { # $1=it2-bin $2=session-id → stdout: printable composer content, space-stripped; rc 0 parsed / 1 UNKNOWN
-  local it2="${1:-}" id="${2:-}" scr raw rc b12='────────────'
+  local it2="${1:-}" id="${2:-}" scr plain span raw rc b12='────────────'
   [ -n "$it2" ] && [ -n "$id" ] || return 1
-  scr="$(hf_bounded "$it2" session read -s "$id" -n "${FIRE_COMPOSER_READLINES:-24}" 2>/dev/null || true)"
+  # DIM IS NOT CONTENT (2026-09-27). CC renders its prompt SUGGESTION inside the box as faint
+  # (SGR 2) text; real input is never faint. A plain read cannot tell them apart, so a suggested
+  # `ship the brag film` read as an operator draft and HELD every limit recovery of pane 751, three
+  # runs in a row, over a composer that was empty. So ask for the rendering (`--ansi`, bin/it2-kitty)
+  # and drop faint runs — the rule bin/it2-kitty's close guard has applied since W-close. A backend
+  # that cannot honour `--ansi` falls back to the plain read, i.e. today's behaviour: a suggestion
+  # reads as a draft, which REFUSES — a stuck pane, never a lost draft.
+  scr="$(hf_bounded "$it2" session read -s "$id" -n "${FIRE_COMPOSER_READLINES:-24}" --ansi 2>/dev/null || true)"
+  [ -n "$scr" ] || scr="$(hf_bounded "$it2" session read -s "$id" -n "${FIRE_COMPOSER_READLINES:-24}" 2>/dev/null || true)"
   [ -n "$scr" ] || return 1
-  raw="$(printf '%s\n' "$scr" | LC_ALL=C awk -v b="$b12" '
-    { line[NR] = $0; if (index($0, b) > 0) { b2 = b1; b1 = NR } }
+  # The BOX is located on an escape-free copy (line count preserved), so a colour change inside a
+  # border row can never hide it; its ROWS are then taken from the rendered copy.
+  plain="$(printf '%s\n' "$scr" | LC_ALL=C perl -pe 's/\e\[[0-?]*[ -\/]*[@-~]|\e\][^\a\e]*(?:\a|\e\\)?|\e.//g')"
+  span="$(printf '%s\n' "$plain" | LC_ALL=C awk -v b="$b12" '
+    { if (index($0, b) > 0) { b2 = b1; b1 = NR } }
     END {
       if (b1 == 0 || b2 == 0 || b1 - b2 < 2) exit 9      # no box between two borders ⇒ UNKNOWN
-      for (i = b2 + 1; i < b1; i++) print line[i]
+      print (b2 + 1) "," (b1 - 1)
     }')" && rc=0 || rc=$?
   [ "$rc" = 0 ] || return 1
+  # Drop every escape sequence and every FAINT run. SGR params are parsed, not substring-matched:
+  # the `2` inside truecolor `38;2;r;g;b` is a colour-space selector, not faint, and reading it as
+  # faint would make a coloured draft vanish — the direction that types over operator text.
+  raw="$(printf '%s\n' "$scr" | LC_ALL=C sed -n "${span}p" | LC_ALL=C perl -ne '
+    my ($d, $o) = (0, "");
+    while (/\G(?:\e\[([0-9;:]*)m|\e\[[0-?]*[ -\/]*[@-~]|\e\][^\a\e]*(?:\a|\e\\)?|\e.|([^\e]))/gcs) {
+      if (defined $1) {
+        my @p = split /;/, $1, -1; @p = ("") unless @p;
+        for (my $i = 0; $i < @p; $i++) {
+          my ($c) = split /:/, $p[$i], 2; $c = "" unless defined $c;
+          if ($c eq "" || $c eq "0" || $c eq "22") { $d = 0 }
+          elsif ($c eq "2") { $d = 1 }
+          elsif ($c =~ /^[345]8$/ && $p[$i] !~ /:/) {
+            my $m = defined $p[$i + 1] ? $p[$i + 1] : "";
+            $i += $m eq "5" ? 2 : $m eq "2" ? 4 : 0;
+          }
+        }
+      } elsif (defined $2) { $o .= $2 unless $d }
+    }
+    print $o;')"
   raw="$(printf '%s' "$raw" | LC_ALL=C tr -cd '[:print:]')"
   # Anchored placeholder: exact-whole-row only — a real draft that merely STARTS with `Try "` must
   # still read as a draft (the failure direction of a loose match is typing over operator text).

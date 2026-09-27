@@ -717,7 +717,7 @@ sys.exit(1 if bad else 0)' "$SHIM"
 }
 
 @test "CONTROL: without dim-awareness, CC's placeholder blocks the close" {
-  local m; m="$(mutate 'elif tok == "2": dim = True' 'elif tok == "2": dim = False')"
+  local m; m="$(mutate 'elif code == "2": dim = True' 'elif code == "2": dim = False')"
   screen "$(printf '\033[m\033[38:2:153:153:153m❯%s\033[22;2;39mPress up to edit queued messages' "$NBSP")"
   run "$m" session close -f -s 300
   [ "$status" -eq 67 ]           # the mutant refuses a safe pane — so the real assertion tests it

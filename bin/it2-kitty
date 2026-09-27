@@ -244,7 +244,7 @@ fi
 shift
 verb="${1:-}"; shift 2>/dev/null || true
 
-SESSION=""; VERTICAL=0; JSON=0
+SESSION=""; VERTICAL=0; JSON=0; ANSI=0
 # The close-target identity pins. Empty = not supplied = today's unchecked close (see the header).
 EXPECT_CMDLINE=""; EXPECT_GENERATION=""
 # `session tui-submit` payload. Parsed in the SHARED loop for the same reason --json is: an
@@ -278,6 +278,9 @@ while [ $# -gt 0 ]; do
     # needed a force=True interception. Claude Code always passes it on close, so it must parse
     # without error; binding it to a variable would only invite a reader to "wire it up" later.
     -f|--force)   shift ;;
+    # `session read --ansi` — the rendering, for readers that must tell faint placeholder text from
+    # real input (handoff-fire.sh composer_content). Shared loop, same reason as --json.
+    --ansi)       ANSI=1; shift ;;
     --) shift; ARGS+=("$@"); break ;;
     *)  ARGS+=("$1"); shift ;;
   esac
@@ -912,9 +915,18 @@ def walk(s):
         p = m.group(1)
         if not p: dim = False
         else:
-            for tok in p.replace(":", ";").split(";"):
-                if tok in ("", "0", "22"): dim = False
-                elif tok == "2": dim = True
+            # Parsed, not substring-split: the `2` in truecolor `38;2;r;g;b` / `38:2:r:g:b` selects
+            # a colour space and is NOT faint. Reading it as faint made coloured text vanish, the
+            # direction that closes a pane over an operator draft.
+            toks, k = p.split(";"), 0
+            while k < len(toks):
+                code = toks[k].split(":")[0]
+                if code in ("", "0", "22"): dim = False
+                elif code == "2": dim = True
+                elif code in ("38", "48", "58") and ":" not in toks[k]:
+                    nxt = toks[k + 1] if k + 1 < len(toks) else ""
+                    k += 2 if nxt == "5" else 4 if nxt == "2" else 0
+                k += 1
         i = m.end()
     for ch in s[i:]: yield ch, dim
 def has_content(rows):
@@ -1382,7 +1394,8 @@ else:
     fi
     case "$verb" in
       focus) kt focus-window --match "id:$SESSION" || exit 1 ;;
-      read)  kt get-text     --match "id:$SESSION" || exit 1 ;;
+      read)  if [ "$ANSI" = 1 ]; then kt get-text --match "id:$SESSION" --ansi || exit 1
+             else kt get-text --match "id:$SESSION" || exit 1; fi ;;
     esac
     ;;
 
