@@ -110,6 +110,11 @@ open(os.path.join(P, "sess.jsonl"), "w").close()                 # the parent se
 open(os.path.join(sub, "agent-aaa.jsonl"), "w").close()          # two burners under it
 open(os.path.join(sub, "agent-bbb.jsonl"), "w").close()
 open(os.path.join(sub, "notes.txt"), "w").close()                # and a non-transcript, never counted
+# A Workflow run writes its bookkeeping beside its agents; only the agent is a burner. FAILS
+# PRE-FIX at 4: a live workflow charged one phantom session toward the KMAX exclusion.
+wf = os.path.join(sub, "workflows", "wf_1")
+os.makedirs(wf)
+open(os.path.join(wf, "journal.jsonl"), "w").close()
 
 c = {"accounts": [{"name": "a", "config_dir": os.path.join(os.environ["BATS_TEST_TMPDIR"], "kwork")}]}
 got = ca.working_concurrency(c, window_min=10, budget_s=5.0)

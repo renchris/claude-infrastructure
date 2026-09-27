@@ -830,6 +830,13 @@ def working_concurrency(cfg, window_min=None, budget_s=None):
                                 return _kwork_unmeasured(budget_s, scanned)
                             if not fname.endswith(".jsonl"):
                                 continue
+                            # Below the session level only `agent-*.jsonl` is an agent. A
+                            # Workflow also writes `subagents/workflows/<run>/journal.jsonl`
+                            # (329 on disk, 2026-09-27) — run bookkeeping, not a burner — and
+                            # counting it charged one phantom session per live workflow toward
+                            # the KMAX exclusion.
+                            if wroot != slug.path and not fname.startswith("agent-"):
+                                continue
                             try:
                                 if now - os.lstat(os.path.join(wroot, fname)).st_mtime <= window_s:
                                     counts[name] += 1
