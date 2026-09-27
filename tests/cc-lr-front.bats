@@ -1066,7 +1066,9 @@ SH
 @test "recover --limited --account --target X passes X to the idle queue instead of ranking" {
   fleet_stub 0
   limited_stub
-  capped_ranker next 100 0 "next2 3"
+  # next3 is RANKED (the driver refuses an unranked explicit target before queuing — F2, 2026-09-27)
+  # but BELOW next2, so a regression that re-ranks instead of passing X through still picks next2.
+  capped_ranker next 100 0 "next2 3" "next3 1"
   census_stub "754	cccc0754-0000-4000-8000-000000000754	next	-	-	-	move"
   run bash "$LR" recover --limited --account next --target next3
   [ "$status" -eq 0 ] || { echo "rc $status: $output"; false; }
