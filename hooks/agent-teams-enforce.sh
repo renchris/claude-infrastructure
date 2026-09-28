@@ -593,7 +593,9 @@ case "$_PTR_SID" in *[!A-Za-z0-9._-]*) _PTR_SID="" ;; esac
 ptr_first() { # <kind> → 0 the first time this session reaches this pointer kind (marks it), else 1
   local d f
   [ -n "$_PTR_SID" ] || return 0
-  d="${CC_ATE_PTR_STATE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/state/agent-teams-ptr}"
+  # Under $HOME, as the spawn budget is: session ids are unique across accounts, and every suite
+  # fixtures $HOME, so a test can never write a marker into a live config dir.
+  d="${CC_ATE_PTR_STATE_DIR:-$HOME/.claude/state/agent-teams-ptr}"
   f="$d/$_PTR_SID.$1"
   [ -f "$f" ] && return 1
   mkdir -p "$d" 2>/dev/null || true

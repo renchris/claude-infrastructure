@@ -29,6 +29,7 @@ setup() {
   # $HOME/.claude/autonomy/spawn-budget. $HOME is already fixtured above, but the seam is pinned
   # explicitly so a case that sets its own HOME cannot silently charge the operator's real budget.
   export CC_SPAWN_STATE_DIR="$BATS_TEST_TMPDIR/spawn-budget"
+  export CC_ATE_PTR_STATE_DIR="$BATS_TEST_TMPDIR/ptr-state"   # once-per-session pointer markers
 }
 
 brief() { yes "brief content line" | head -n "$1"; }   # emit an N-line brief
