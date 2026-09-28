@@ -31,6 +31,33 @@ source "$HELPERS"
 # Fast exit if no DB
 [ -f "$SESSION_INDEX_DB" ] || exit 0
 
+# ─── sessions_fts identity (read helpers for the tick-end check below) ───
+# sessions_fts was once DROPped and re-created (not DELETEd) by a racing migration probe, emptying
+# search with no log line anywhere (docs/research/truememory-2026-09-27.md §5.13). SQLite has no DDL
+# triggers, and none on virtual tables, so no trigger can see that. What DOES move is the table's
+# IDENTITY: the sqlite_master rowid of sessions_fts and the rootpage of its shadow sessions_fts_data.
+# A DROP+CREATE changes both; ordinary inserts and deletes change neither. VACUUM can also renumber
+# them, which is why every VACUUM this script runs re-records the identity straight afterwards.
+FTS_IDENTITY_FILE="${SESSION_INDEX_FTS_IDENTITY_FILE:-$HOME/.claude/state/session-index-fts-identity}"
+
+# Prints "<rowid>:<rootpage>". One sqlite3 process for both reads. A missing table makes the
+# concatenation NULL, i.e. empty output, and the caller treats that like a failed read.
+_fts_identity_read() {
+    session_index_sql "SELECT (SELECT rowid FROM sqlite_master WHERE name='sessions_fts') || ':' || (SELECT rootpage FROM sqlite_master WHERE name='sessions_fts_data');" 2>/dev/null
+}
+
+# Overwrites the stored identity without comparing: used right after a VACUUM this script ran,
+# so a renumbering it caused itself is never reported as a DROP+CREATE on the next tick.
+_fts_identity_rebaseline() {
+    local id
+    id="$(_fts_identity_read)" || return 0
+    if [[ "$id" =~ ^[0-9]+:[0-9]+$ ]]; then
+        mkdir -p "$(dirname "$FTS_IDENTITY_FILE")" 2>/dev/null || true
+        printf '%s\n' "$id" > "$FTS_IDENTITY_FILE" 2>/dev/null || true
+    fi
+    return 0
+}
+
 # ─── Retention verb ───────────────────────────────────────
 # `--retention` reports (reads only); `--retention-apply` deletes + VACUUMs. The index
 # outlives its subject ~4× — 5,453 session rows against ~1,600 transcripts, because CC's
@@ -44,6 +71,7 @@ case "${1:-}" in
     session_index_trylock || { echo "session-index-retention: index is locked, skipping"; exit 0; }
     if [ "$1" = "--retention-apply" ]; then
         read -r _b _a _d <<< "$(session_index_retention --apply)"
+        [ "${_d:-0}" -gt 0 ] && _fts_identity_rebaseline     # retention VACUUMs only when it deleted
     else
         read -r _b _a _d <<< "$(session_index_retention)"
     fi
@@ -208,7 +236,10 @@ if [ "$SESSION_INDEX_RETENTION_DAYS" -gt 0 ] 2>/dev/null; then
         mkdir -p "$(dirname "$RETENTION_STAMP")" 2>/dev/null || true
         date -u +"%Y-%m-%dT%H:%M:%SZ" > "$RETENTION_STAMP" 2>/dev/null || true
         read -r _rb _ra _rd <<< "$(session_index_retention --apply)"
-        [ "${_rd:-0}" -gt 0 ] && session_index_log "Weekly retention: $_rb -> $_ra sessions ($_rd removed)"
+        if [ "${_rd:-0}" -gt 0 ]; then
+            session_index_log "Weekly retention: $_rb -> $_ra sessions ($_rd removed)"
+            _fts_identity_rebaseline
+        fi
     fi
 fi
 
@@ -259,6 +290,86 @@ if [ "$CC_HISTORY_UNION_MINUTES" -gt 0 ] 2>/dev/null; then
             fi
             session_index_log "History gap-fill: $_gf_verdict"
         fi
+    fi
+fi
+
+# ─── sessions_fts identity (every tick) + parity verdict (hourly) ───
+# Runs last, after this tick's own writes, retention and VACUUM, so it compares settled states.
+# FAIL-OPEN: every read is guarded (`|| rc=$?`, `|| true`), so nothing here can exit the sweep
+# non-zero, and the sweep's real work above has already happened. Cost: one sqlite3 process per
+# tick; the damped pass adds one more plus one bounded `find` per project root, once an hour.
+_fts_ident="unknown"
+_fts_rc=0
+_fts_now_id="$(_fts_identity_read)" || _fts_rc=$?
+if [ "$_fts_rc" -ne 0 ] || ! [[ "$_fts_now_id" =~ ^[0-9]+:[0-9]+$ ]]; then
+    # Never treated as "unchanged": a read that fails, or finds the table gone, is exactly what a
+    # DROP in flight looks like. The stored identity is kept, so the next good read still compares.
+    session_index_log "FTS-IDENTITY UNKNOWN rc=$_fts_rc read='$_fts_now_id'"
+else
+    _fts_old_id="$(cat "$FTS_IDENTITY_FILE" 2>/dev/null || true)"
+    if [ -n "$_fts_old_id" ] && [ "$_fts_old_id" != "$_fts_now_id" ]; then
+        session_index_log "FTS-IDENTITY CHANGED old=$_fts_old_id new=$_fts_now_id (DROP+CREATE unless a VACUUM ran)"
+        _fts_ident="changed"
+        # Sticky until the next hourly verdict, so a change seen on a minute tick is not lost
+        # from the one line an hourly reader looks at.
+        : > "$FTS_IDENTITY_FILE.changed" 2>/dev/null || true
+    else
+        _fts_ident="ok"
+    fi
+    mkdir -p "$(dirname "$FTS_IDENTITY_FILE")" 2>/dev/null || true
+    printf '%s\n' "$_fts_now_id" > "$FTS_IDENTITY_FILE" 2>/dev/null || true
+fi
+
+SESSION_INDEX_FTS_PARITY_MINUTES="${SESSION_INDEX_FTS_PARITY_MINUTES:-60}"
+SESSION_INDEX_FTS_PARITY_TOLERANCE="${SESSION_INDEX_FTS_PARITY_TOLERANCE:-5}"
+FTS_PARITY_STAMP="${SESSION_INDEX_FTS_PARITY_STAMP:-$HOME/.claude/state/session-index-fts-parity.last}"
+if [ "$SESSION_INDEX_FTS_PARITY_MINUTES" -gt 0 ] 2>/dev/null; then
+    _pa_due=0
+    if [ ! -f "$FTS_PARITY_STAMP" ]; then
+        _pa_due=1
+    elif [ -n "$(find "$FTS_PARITY_STAMP" -maxdepth 0 -mmin +"$((SESSION_INDEX_FTS_PARITY_MINUTES - 1))" 2>/dev/null || true)" ]; then
+        _pa_due=1
+    fi
+    if [ "$_pa_due" -eq 1 ]; then
+        mkdir -p "$(dirname "$FTS_PARITY_STAMP")" 2>/dev/null || true
+        date -u +"%Y-%m-%dT%H:%M:%SZ" > "$FTS_PARITY_STAMP" 2>/dev/null || true
+        # sessions_fts is a plain (content-storing) FTS5 table, one row per session written in the
+        # same upsert, so COUNT(*) on each side is the invariant; the tolerance absorbs a writer
+        # caught between its two statements.
+        _pa_rc=0
+        _pa_row="$(session_index_sql "SELECT (SELECT COUNT(*) FROM sessions) || ' ' || (SELECT COUNT(*) FROM sessions_fts) || ' ' || IFNULL((SELECT CAST(strftime('%s','now') - strftime('%s', MAX(last_swept_at)) AS INTEGER) FROM file_tracking), 'none');" 2>/dev/null)" || _pa_rc=$?
+        _pa_sessions="unknown"; _pa_fts="unknown"; _pa_age="unknown"
+        if [ "$_pa_rc" -eq 0 ] && [[ "$_pa_row" =~ ^[0-9]+\ [0-9]+\ [0-9a-z-]+$ ]]; then
+            read -r _pa_sessions _pa_fts _pa_age <<< "$_pa_row"
+            _pa_diff=$((_pa_sessions - _pa_fts))
+            [ "$_pa_diff" -lt 0 ] && _pa_diff=$((0 - _pa_diff))
+            # ALARM-ONLY, deliberately no rebuild: until the deleter is gone (P0b), a rebuild here
+            # would be a damper that hides it.
+            if [ "$_pa_diff" -gt "$SESSION_INDEX_FTS_PARITY_TOLERANCE" ]; then
+                session_index_log "FTS-PARITY DRIFT fts=$_pa_fts sessions=$_pa_sessions"
+            fi
+        else
+            session_index_log "FTS-PARITY UNKNOWN rc=$_pa_rc"
+        fi
+        # Transcripts on disk per account root (same root list retention uses): the index can only
+        # be as complete as the roots it sweeps, and this sweep reads just the first one.
+        _pa_roots=""
+        _pa_root_list="${SESSION_INDEX_PROJECT_ROOTS:-$CLAUDE_PROJECTS_DIR $HOME/.claude-secondary/projects $HOME/.claude-tertiary/projects $HOME/.claude-quaternary/projects}"
+        # shellcheck disable=SC2086  # an intentional space-separated list, as in the helpers
+        for _pa_r in $_pa_root_list; do
+            _pa_label="$(basename "$(dirname "$_pa_r")")"
+            if [ -d "$_pa_r" ]; then
+                _pa_n="$(find "$_pa_r" -maxdepth 3 -type f -name '*.jsonl' 2>/dev/null | wc -l | tr -d ' ' || true)"
+            else
+                _pa_n="absent"
+            fi
+            _pa_roots="${_pa_roots:+$_pa_roots,}$_pa_label:${_pa_n:-unknown}"
+        done
+        if [ -f "$FTS_IDENTITY_FILE.changed" ]; then
+            _fts_ident="changed"
+            rm -f "$FTS_IDENTITY_FILE.changed" 2>/dev/null || true
+        fi
+        session_index_log "SWEEP-VERDICT roots=$_pa_roots fts_rows=$_pa_fts sessions=$_pa_sessions newest_swept_age_s=$_pa_age identity=$_fts_ident"
     fi
 fi
 
