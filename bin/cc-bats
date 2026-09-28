@@ -641,6 +641,10 @@ if [ -z "$ADMIT_SKIP" ]; then
       for _a in "$@"; do _cmd="$_cmd $(printf '%q' "$_a")"; done
       echo "cc-bats: REFUSED — $N_ROOTS concurrent bats execution root(s) (ceiling CC_BATS_MAX_ROOTS=$MAX_ROOTS) AND 1-min load/core at or above CC_BATS_MAX_LOAD_PER_CORE=$MAX_LPC." >&2
       echo "cc-bats: nothing ran, nothing was verified — this is a DEFERRAL, not a test result. Re-run when a slot frees:" >&2
+      # The lesson body, through the PHYSICAL self-path (builtins only, as above): a filtered TAP read of
+      # this refusal is zero `not ok` lines and exit 0 — it reads as a pass. Named only if it exists.
+      _lsn="${self_phys%/*/*}/docs/lessons/a-gate-refusal-is-not-a-gate-result.md"
+      [ -f "$_lsn" ] && echo "cc-bats: lesson: $_lsn" >&2
       if [ "${#_cmd}" -le 2000 ]; then
         echo "cc-bats:   $_cmd" >&2
       else

@@ -125,6 +125,20 @@ entries() { find "$ROOTS" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l | tr -d ' 
   [[ "$output" == *"CC_BATS_MAX_ROOTS=0"* ]] || false
 }
 
+@test "(iv-c) the refusal points at the lesson body, by an absolute path that exists" {
+  hold 2
+  shim CC_BATS_MAX_ROOTS=2 CC_BATS_MAX_LOAD_PER_CORE=0
+  [ "$status" -eq 75 ] || false
+  # A filtered TAP read of this refusal is zero `not ok` lines and exit 0 — it reads as a pass. The
+  # pointer names the lesson that says so, resolved through the shim's PHYSICAL self-path.
+  local line f
+  line="$(printf '%s\n' "$output" | grep '^cc-bats: lesson: ')"
+  [ -n "$line" ] || false
+  f="${line#cc-bats: lesson: }"
+  [ "$f" = "$REPO/docs/lessons/a-gate-refusal-is-not-a-gate-result.md" ] || false
+  [ -f "$f" ] || false
+}
+
 @test "(iv-b) the refusal names the live holders it lost to" {
   hold 2
   shim CC_BATS_MAX_ROOTS=2 CC_BATS_MAX_LOAD_PER_CORE=0

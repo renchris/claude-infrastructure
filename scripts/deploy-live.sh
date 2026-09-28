@@ -436,6 +436,18 @@ if [ "$AUTO" -eq 1 ] && { [ "$BOOTSTRAP" -eq 1 ] || [ "$FORCE" -eq 1 ]; }; then
 fi
 
 say()  { printf 'deploy-live: %s\n' "$1"; }
+# THIS script's own repo, through the DEREFERENCED self-path (a live run is ~/.claude/scripts/…, a
+# per-file symlink into the checkout). BSD-safe: readlink -f where it exists, else a bounded hop loop.
+dl_self_repo() {
+  local p="${BASH_SOURCE[0]:-$0}" t n=0 r
+  r="$(readlink -f "$p" 2>/dev/null)" && [ -n "$r" ] && p="$r"
+  while [ -L "$p" ] && [ "$n" -lt 20 ]; do
+    t="$(readlink "$p")"
+    case "$t" in /*) p="$t" ;; *) p="$(dirname "$p")/$t" ;; esac
+    n=$(( n + 1 ))
+  done
+  (cd "$(dirname "$p")/.." 2>/dev/null && pwd -P)
+}
 # Under --auto the steady state is silence: only state CHANGES reach the log.
 asay() { [ "$AUTO" -eq 1 ] || printf 'deploy-live: %s\n' "$1"; }
 die()  { printf 'deploy-live: REFUSED — %s\n' "$1" >&2; exit 1; }
@@ -1724,6 +1736,10 @@ if [ "${CC_DEPLOY_BARE_REPAIR:-on}" != off ] \
       say "REPAIRED core.bare=true on $DEPLOY_REPO (a worktree add/remove flips it; every working-tree git op was failing) — advance continues"
     else
       say "core.bare=true on $DEPLOY_REPO and the unset did NOT restore a working tree (git exited $bare_rc${bare_err:+ — GIT SAID: $bare_err}) — leaving it to the ff arm, which counts and escalates it"
+      # The lesson this state already taught once: a bare checkout is the live EFFECT behind a lag whose
+      # filed CAUSE was refuted, and an --offline dry-run under-reads that lag. Named only if present.
+      _lsn="$(dl_self_repo)/docs/lessons/cause-refuted-effect-discharged.md"
+      [ -f "$_lsn" ] && say "lesson: $_lsn"
     fi
   fi
 fi
