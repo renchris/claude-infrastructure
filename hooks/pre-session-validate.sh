@@ -48,7 +48,7 @@ cat >/dev/null 2>&1 || true
 # non-default account bricked (T-P10-3). Frontier sessions never need the saved default
 # (claude-fable pins --model explicitly), so stripping it is always safe. Self-heal +
 # warn. Observed live 2026-06-11 (a /model fable save broke stable-track probes). On new
-# frontier tiers, extend the case pattern via the /model-upgrade skill.
+# frontier tiers, extend the case pattern via the cc-upgrade skill (model.md).
 SETTINGS_FILE="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
 if [[ -f "$SETTINGS_FILE" ]] && command -v python3 >/dev/null 2>&1; then
   saved_model=$(python3 -c "import json;print(json.load(open('$SETTINGS_FILE')).get('model',''))" 2>/dev/null || echo '')

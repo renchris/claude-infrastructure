@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+"""cc-model-registered <model-id> [--bin PATH] — does a Claude Code binary register a model id?
+
+WHY THIS EXISTS. We pin Claude Code, so a model released after the pinned build cannot be in it,
+and no SSOT edit makes the id dispatchable. This has been rediscovered by hand on every model
+release (the cc-upgrade skill's registration phase). The question is answered by the BINARY, not
+the docs, and the obvious instrument is blind:
+
+  * the binary is a Bun single-file executable, and a plain `grep` over it reads 0 for EVERY
+    model, including ones the fleet demonstrably runs, so a bare zero looks like a finding;
+  * `strings | grep` works but takes minutes over ~220 MB;
+  * ids nest: `claude-sonnet-5` is a prefix of `claude-sonnet-5-5`, so a substring count
+    reports the old id as present in a build that only knows the new one.
+
+So this reads the file through mmap, counts the id only where the next byte is not [-0-9] (or at
+EOF), and ALWAYS counts a positive control id beside it. A control of 0 means the instrument is
+broken (wrong file, a wrapper stub), never that the model is absent.
+
+Binary: --bin PATH, else whatever bin/cc-claude-bin resolves (the launcher's own pin).
+
+Exit: 0 present · 1 absent · 2 cannot measure (control absent, or no readable binary) · 64 usage.
+stdout: one line  verdict=<present|absent|instrument-broken> id=<id> count=<n>
+                  control=<control-id> control_count=<n> bin=<resolved path>
+"""
+
+from __future__ import annotations
+
+import mmap
+import os
+import re
+import shutil
+import subprocess
+import sys
+
+CONTROL = "claude-opus-5"
+USAGE = "usage: cc-model-registered <model-id> [--bin PATH]"
+
+
+def count_id(buf: mmap.mmap | bytes, ident: str) -> int:
+    """Occurrences of ident not followed by [-0-9]: claude-sonnet-5 never counts claude-sonnet-5-5."""
+    pat = re.compile(re.escape(ident.encode()) + rb"(?![-0-9])")
+    return sum(1 for _ in pat.finditer(buf))
+
+
+def resolve_bin() -> str:
+    """The launcher's binary through bin/cc-claude-bin (sibling first, then PATH). Empty on failure."""
+    here = os.path.dirname(os.path.realpath(__file__))
+    resolver = os.path.join(here, "cc-claude-bin")
+    if not os.access(resolver, os.X_OK):
+        resolver = shutil.which("cc-claude-bin") or ""
+    if not resolver:
+        return ""
+    out = subprocess.run([resolver], capture_output=True, text=True, check=False)
+    return out.stdout.strip() if out.returncode == 0 else ""
+
+
+def main(argv: list[str]) -> int:
+    ident, bin_path = "", ""
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--bin" and i + 1 < len(argv):
+            bin_path = argv[i + 1]
+            i += 2
+            continue
+        if a in ("-h", "--help"):
+            print(__doc__)
+            return 0
+        if a.startswith("-") or ident:
+            print(USAGE, file=sys.stderr)
+            return 64
+        ident = a
+        i += 1
+    if not re.fullmatch(r"claude-[a-z0-9-]+", ident or ""):
+        print(
+            USAGE + "  (the id looks like claude-<family>-<n>[-<n>])", file=sys.stderr
+        )
+        return 64
+
+    bin_path = bin_path or resolve_bin()
+    if not bin_path:
+        print(
+            "verdict=instrument-broken reason=no-binary (cc-claude-bin resolved nothing; pass --bin)"
+        )
+        return 2
+    real = os.path.realpath(bin_path)
+    try:
+        with open(real, "rb") as fh:
+            size = os.fstat(fh.fileno()).st_size
+            if size == 0:
+                n = ctl = 0
+            else:
+                with mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ) as buf:
+                    n, ctl = count_id(buf, ident), count_id(buf, CONTROL)
+    except OSError as exc:
+        print(
+            f"verdict=instrument-broken reason=unreadable bin={real} ({exc.strerror})"
+        )
+        return 2
+
+    fields = f"id={ident} count={n} control={CONTROL} control_count={ctl} bin={real}"
+    if ctl == 0:
+        print(f"verdict=instrument-broken {fields}", flush=True)
+        hint = (
+            " — a file this small is a wrapper stub, not the Bun binary"
+            if size < 10_000_000
+            else ""
+        )
+        print(
+            f"cc-model-registered: control {CONTROL} not found, so a 0 for {ident} "
+            f"proves nothing{hint}",
+            file=sys.stderr,
+        )
+        return 2
+    print(f"verdict={'present' if n else 'absent'} {fields}")
+    return 0 if n else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

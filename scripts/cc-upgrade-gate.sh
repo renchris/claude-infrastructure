@@ -11,12 +11,12 @@
 # (a PRESUMED demotion that was actually fine) is the exact failure mode this eliminates: every check
 # verifies the ARTIFACT (modelUsage / argv / exit), never a claim.
 #
-# The 14 checks live one-per-file in lib/cc-upgrade-gate/check*.sh and are AUTO-DISCOVERED (each defines
+# The checks live one-per-file in lib/cc-upgrade-gate/check*.sh and are AUTO-DISCOVERED (each defines
 # a `check_NN` function). Adding a probe is a new FILE, never an edit here — that is what makes the
 # multi-teammate build collision-free.
 #
 # Usage:
-#   scripts/cc-upgrade-gate.sh ~/.claude-219/node_modules/.bin/claude claude-opus-5 next
+#   scripts/cc-upgrade-gate.sh ~/.claude-<NNN>/node_modules/.bin/claude <model-id> next
 #   scripts/cc-upgrade-gate.sh <bin> <model> next next2 next3 next4      # full multi-account sweep
 # Env:
 #   GATE_RETRIES=<n>   bounded retry for flaky probes (default 3)
@@ -134,7 +134,7 @@ w(f"  VERDICT: {verdict}  ({model} on {binary} {version})")
 if verdict == "RED":
     w("  ⇒ PARK the upgrade. Failing ways-of-working named above. Do NOT activate.")
 else:
-    w("  ⇒ ALL GREEN. Ways of working hold — safe to activate (see cc-upgrade-gate skill).")
+    w("  ⇒ ALL GREEN. Ways of working hold — safe to activate (see the cc-upgrade skill, gate.md).")
 sys.exit(1 if verdict == "RED" else 0)
 PY
 rc=$?

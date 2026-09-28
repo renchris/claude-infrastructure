@@ -9,7 +9,8 @@
 # guard that aborts first, an override). So this probe RUNS the real launcher body against a STUB
 # binary planted under a fake $HOME and reads what the launcher ACTUALLY handed the child:
 # the argv + the exported env. PASS iff `claude` passes, exactly:
-#   --model claude-opus-5   ·   --effort high   ·   --permission-mode auto   ·   SPAWN_DEPTH=1
+#   --model <versions.opus_latest>  ·  --effort <effort_defaults.default>  ·  --permission-mode auto
+#   ·  SPAWN_DEPTH=1   (both expectations are read from the SSOT below, never restated here)
 #
 # RETARGETED 2026-08-01 (was `claude-opus5`, and expected `--permission-mode default`). The
 # 2026-07-31 consolidation collapsed claude-next + claude-opus5 into ONE `claude()` body; both old
@@ -186,7 +187,7 @@ check_05() {
   fi
 
   emit_result 05 launcher-resolution PASS \
-    "claude passes --model claude-opus-5 + --effort high + --permission-mode auto + SPAWN_DEPTH=1 (effect-read of child argv/env)" \
+    "claude passes --model $_g5_want_model + --effort $_g5_want_effort + --permission-mode auto + SPAWN_DEPTH=1 (effect-read of child argv/env)" \
     "$shim_note"
   rm -rf "$fakehome"
   return 0

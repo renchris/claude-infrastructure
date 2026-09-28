@@ -52,7 +52,6 @@ from types import ModuleType
 from typing import Any, TextIO
 
 MODEL = "claude-haiku-4-5-20251001"
-DEFAULT_CLAUDE = "/Users/chrisren/.claude-280/node_modules/.bin/claude"
 ASSISTANT_CAP = 1500
 EXCERPT_CAP = 300
 CHUNK_CHARS = 40000
@@ -91,6 +90,16 @@ Reply with ONLY a JSON object, no prose and no code fence:
 {{transcript}}
 {fence_end}
 """
+
+
+def default_claude() -> str:
+    """The launcher's own binary via bin/cc-claude-bin, never a copied pin (the RATCHET case in
+    tests/cc-claude-bin.bats). Empty when nothing resolves; the caller refuses to run."""
+    resolver = Path(__file__).resolve().parent / "cc-claude-bin"
+    if not os.access(resolver, os.X_OK):
+        return ""
+    out = subprocess.run([str(resolver)], capture_output=True, text=True, check=False)
+    return out.stdout.strip() if out.returncode == 0 else ""
 
 
 def _load_norm() -> ModuleType:
@@ -518,7 +527,13 @@ def main() -> int:
     except PermissionError as exc:
         print(f"cc-memory-extract: {exc}", file=sys.stderr)
         return 2
-    binary = os.environ.get("CC_MEMORY_EXTRACT_CLAUDE") or DEFAULT_CLAUDE
+    binary = os.environ.get("CC_MEMORY_EXTRACT_CLAUDE") or default_claude()
+    if not binary:
+        print(
+            "cc-memory-extract: bin/cc-claude-bin resolved no claude binary",
+            file=sys.stderr,
+        )
+        return 2
 
     t0 = time.time()
     calls = 0

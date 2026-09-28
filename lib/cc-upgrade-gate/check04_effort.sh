@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # check04_effort.sh — #4 Effort ladder.
 # ─────────────────────────────────────────────────────────────────────────────
-# The binary must ACCEPT Opus 5's effort ladder — high (its own default), xhigh,
-# and max. A rejected effort flag surfaces as is_error=true / no JSON at all, so
-# "accepted" is asserted on the artifact: JSON came back with is_error=false. The
-# default rung (high) is held to the stronger bar — the model must actually
-# register in modelUsage (no silent demotion). Prompts are trivial to bound cost.
+# The binary must ACCEPT the whole effort ladder for the candidate model — low, medium,
+# high, xhigh and max — whatever the model family. The SSOT assigns rungs per use case,
+# and a worker-tier model may be routed at low/medium, so a ladder that only probed the
+# top three would certify a model on rungs we never use and miss the ones we do. A
+# rejected effort flag surfaces as is_error=true / no JSON at all, so "accepted" is
+# asserted on the artifact: JSON came back with is_error=false. high is held to the
+# stronger bar — the model must actually register in modelUsage (no silent demotion).
+# Prompts are trivial to bound cost.
 # shellcheck shell=bash
 
 # _effort_ok <cfg> <effort> : 0 iff the binary ACCEPTED the flag (returned JSON,
@@ -27,7 +30,7 @@ check_04() {
     return 0
   fi
 
-  # high = Opus 5's own default rung: strongest bar, the model must register.
+  # high: the strongest bar, the model must register (no silent demotion).
   out_high="$(gate_headless "$cfg" "$GATE_MODEL" "Reply with exactly: ok" --effort high)"
   if ! printf '%s' "$out_high" | json_has_model "$GATE_MODEL"; then
     emit_result 04 effort-ladder FAIL \
@@ -36,8 +39,8 @@ check_04() {
     return 0
   fi
 
-  # xhigh + max: the binary must ACCEPT each flag (JSON returned, is_error=false).
-  for lvl in xhigh max; do
+  # every other rung: the binary must ACCEPT each flag (JSON returned, is_error=false).
+  for lvl in low medium xhigh max; do
     _effort_ok "$cfg" "$lvl" || failed="$failed $lvl"
   done
   failed="${failed# }"
@@ -48,7 +51,7 @@ check_04() {
       "high=accepted(model registered) rejected=[$failed]"
   else
     emit_result 04 effort-ladder PASS \
-      "effort ladder accepted on $GATE_MODEL: high(default,+model) xhigh max" \
+      "effort ladder accepted on $GATE_MODEL: low medium high(+model) xhigh max" \
       "modelUsage=$(printf '%s' "$out_high" | json_get modelUsage)"
   fi
   return 0

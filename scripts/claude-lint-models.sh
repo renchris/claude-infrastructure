@@ -44,7 +44,7 @@ if [[ "$fa_active" == "true" && -n "$fa_end" ]]; then
   if [[ "$(date +%Y-%m-%d)" > "$fa_end" ]]; then
     EXPIRED_WINDOW=1
     echo "⚠️  frontier_access: $fa_model window ended $fa_end but active: true."
-    echo "    Run the downgrade: see ~/.claude/skills/model-upgrade/SKILL.md § Downgrade."
+    echo "    Run the downgrade: see ~/.claude/skills/cc-upgrade/model.md § Case C — Downgrade / window-end."
   fi
 fi
 
@@ -114,7 +114,7 @@ elif [[ "$1" == "--all" || "$1" == "--selftest" ]]; then  # --selftest = nightly
   if [[ $fail_count -gt 0 || $EXPIRED_WINDOW -eq 1 ]]; then
     echo ""
     [[ $fail_count -gt 0 ]] && echo "❌ $fail_count file(s) with stale refs. Fix: claude-bump-models --apply"
-    [[ $EXPIRED_WINDOW -eq 1 ]] && echo "❌ frontier_access window expired — run the downgrade (model-upgrade skill)."
+    [[ $EXPIRED_WINDOW -eq 1 ]] && echo "❌ frontier_access window expired — run the downgrade (cc-upgrade skill, model.md § Case C)."
     exit 1
   fi
   echo "✅ All UPDATE-classified files clean."

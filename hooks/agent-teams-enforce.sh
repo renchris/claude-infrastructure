@@ -530,7 +530,7 @@ fi
 # until then they risk silent auto-mode demotion, so they're denied here. Blocks
 # the 2026-04-17 failure mode (stale plan hardcoding Sonnet for "mechanical"
 # teammates).
-# Rule: memory/feedback-agent-team-models.md + model-upgrade skill.
+# Rule: memory/feedback-agent-team-models.md + cc-upgrade skill (model.md).
 if [ -n "$TEAMMATE_ID" ] && [ -n "$MODEL" ]; then
   ALLOWED=$(yq -r '.auto_mode_allowlist.non_firstParty_max[]' "$HOME/.claude/model-config.yaml" 2>/dev/null)
   [ -n "$ALLOWED" ] || ALLOWED="claude-opus-4-8"   # fallback if yq/config unavailable

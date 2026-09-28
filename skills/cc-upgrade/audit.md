@@ -1,136 +1,110 @@
----
-name: cc-version-audit
-description: Decide HOLD or ADVANCE for the Claude Code binary (claude-next or the pinned stable) against the latest CHANGELOG, scoped to our workflows; writes MANIFEST.jsonl entries. Use on "should we upgrade Claude Code". Not for model changes (/model-upgrade).
-allowed-tools: Read, Edit, Write, Bash, WebSearch, WebFetch, Workflow, Agent, AskUserQuestion
----
+# audit.md — should the Claude Code binary advance? (phases P2, P3, P8)
 
-# cc-version-audit — Claude Code binary-version upgrade-safety runbook
+Paper evidence for a CC **binary** move: what Anthropic *said* changed, judged against how we work.
+It never stands in for the gate (gate.md): the audit tells you what changed, the gate tells you
+what broke. Run both, audit first.
 
-Assess advancing the CC **binary** (not the model). Two tracks: an **eval** track (a
-`~/.claude-<NNN>` dir, selected by a zshrc `_bin` line) and a **pinned stable** track
-(`claude`/`cc` → `~/.claude-versions/`). SSOT ledger: `~/.claude-versions/MANIFEST.jsonl`.
 Related memories: `hardened-version-management`, `feedback-detect-cc-runtime-not-claude-version`,
 `version-identity-is-the-running-process-not-the-launcher`,
 `resident-policy-must-not-restate-perishable-facts`.
 
-🚨 **This file names NO version as current, deliberately.** Every number it used to state
-went stale: from 2026-07-10 it read "eval 2.1.183 / stable 2.1.114", and measured 2026-08-11
-the eval track was on **2.1.220** — 37 releases and five MANIFEST entries later, none of which
-this file knew about. A runbook that restates a perishable fact has no path to learn it
-changed (same defect the CLAUDE.md ship-policy table was rewritten to delete). Read every
-number live via Step 0/1. **A hardcoded current-version anywhere below is a bug in this file.**
+🚨 **This file names NO version as current, deliberately.** It once pinned two versions by number
+(historical: "eval 2.1.183 / stable 2.1.114") while the fleet had moved 37 releases on. A runbook
+that restates a perishable fact has no path to learn it changed. Read every number live; dated
+facts live only in holds.md.
 
-## Step 0 — Detect the REAL running runtime (never `claude --version`)
-`claude`/`cc` are shell functions resolving the stable-pinned launcher, so `claude --version`
-reports the STABLE pin's number even inside an eval-track session — plausible, wrong, and
-silent. In order of authority:
+## The two lanes
+
+| Lane | Launchers | Binary | Governed by |
+|---|---|---|---|
+| **fleet** | `claude`, `cc` and the account/effort variants | the `_bin=` pin inside `~/.zshrc` `claude()`; read it with `cc-claude-bin --explain` | the activation script's `_bin` edit (gate.md § GREEN), nothing else |
+| **legacy** | `claude-prev`, `cc-prev` (+ `claude-prev2/3/4`) | `claude-latest` → `~/.claude-versions/current`, a symlink to a version dir (`readlink ~/.claude-versions/current`) | MANIFEST default-deny (§ MANIFEST below) |
+
+Every consumer that needs "the claude binary" goes through `bin/cc-claude-bin`; keying.md § Pins
+has the ratchet that keeps it that way.
+
+## Step 0 — detect the REAL running runtime (never `claude --version`)
+
+`claude` is a shell function, so `claude --version` reports whatever the CURRENT `~/.zshrc` pin
+resolves to, not what this session is running. A pane started before a repoint keeps its old
+`claude()` body and its old binary. In order of authority:
+
 - **`ps -o command= -p $PPID`** — the running process's own argv, carrying the real
-  `~/.claude-<NNN>/node_modules/.bin/claude` path. The only reading that cannot lie, because
-  it interrogates the process rather than a name that resolves elsewhere.
+  `~/.claude-<NNN>/node_modules/.bin/claude` path. The only reading that cannot lie, because it
+  interrogates the process rather than a name that resolves elsewhere.
 - `echo $CLAUDE_CODE_EXECPATH` → `.../.claude-<NNN>/...`
 - `echo $AI_AGENT` → `claude-code_2-1-XXX_agent`
-- `echo $CLAUDE_CODE_EXECPATH` → `.../.claude-183/...` ⟹ eval/2.1.183
-- Tool availability: `TeamCreate`/`TeamDelete` present ⟹ 2.1.114; absent ⟹ implicit-team model (≥2.1.178).
 
-## Step 1 — Establish the target (do NOT trust the `stable` dist-tag)
-```bash
-npm view @anthropic-ai/claude-code version            # latest published
-npm view @anthropic-ai/claude-code dist-tags --json   # stable / latest / next
-cat ~/.claude-versions/current; tail -3 ~/.claude-versions/MANIFEST.jsonl
-```
-The npm `stable` dist-tag is **not** a reliability signal — 2026-07 it pointed at
-2.1.197, which sat inside a self-destructing-daemon regression window. Judge from
-the CHANGELOG + churn, never the tag. (2026-08: it pointed at 2.1.221 while `latest`
-was 2.1.228 — the trap recurs, so this is a standing property, not an anecdote.)
+Fleet-wide: `ps -axo pid=,command= | awk '$2 ~ /\.claude-[0-9]+\//'` lists every live session's
+binary (the census model.md Case A step 0b needs before any flip).
 
-## Step 1b — Discharge the STANDING HOLD *before* reading anything else 🚨
-
-**A previous audit HELD, and its reasons are the first thing this audit must answer.**
-Without this step the hold's reasoning lives only as prose in a MANIFEST note, and each
-audit re-derives it from scratch or — worse — advances past it without noticing. Read the
-last non-advancing entry and extract its held-open issue list:
+## Step 1 — establish the target (do NOT trust the `stable` dist-tag)
 
 ```bash
-# the most recent skip entry carrying a REVISIT TRIGGER (not merely tail -3, which drifts)
-grep -o '"version":"[^"]*"' ~/.claude-versions/MANIFEST.jsonl | tail -5
-python3 - <<'PY'
-import json
-rows=[json.loads(l) for l in open('/Users/chrisren/.claude-versions/MANIFEST.jsonl') if l.strip()]
-held=[r for r in rows if 'REVISIT' in (r.get('notes') or '')]
-print(held[-1]['version'] if held else 'no standing hold'); print(held[-1]['notes'] if held else '')
-PY
+npm view @anthropic-ai/claude-code dist-tags time --json   # stable / latest / next + publish times
+cc-claude-bin --explain                                 # fleet lane pin
+readlink ~/.claude-versions/current                         # legacy lane
 ```
 
-**Then check EVERY held-open issue for resolution** — one line each in your output, and an
-explicit `still open` is a verdict, not a gap:
+**The npm `stable` dist-tag is not a reliability signal and not a route to a new model** — one
+copy of this trap, here. It has pointed into a self-destructing-daemon regression window, trailed
+`latest` by several releases, and lacked a newly released model id that only `latest` carried
+(each measured, historical). Check the tag you are actually about to install; judge from the
+CHANGELOG + churn, never the tag.
 
-| Issue | Held because | Discharged when |
-|---|---|---|
-| **#84974** | `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1` does not disable nesting (2.1.225); effective depth off-by-one | closed/fixed, **or** a release restores a spawn ceiling |
-| **#85264** | fork subagents spawn unauthorized nested agents (2.1.226) | closed/fixed |
-| **#85015** | two bg subagent workers → 46 GiB, jetsam froze a 16 GB Mac (2.1.222/224) | closed/fixed |
-| **#84224 · #85154** | auto-updater installs into the PATH-resolved npm prefix / yields a stub with no `bin/claude` and no rollback | closed/fixed — this is the UPGRADE MECHANISM, so it gates its own remedy |
-| **#85886 #85497 #85412 #85690 #85764** | cross-session inbox: socket never bound, same-second bind race, self-delivery, ListAgents omissions | the *race* fixed, not merely first-session-after-upgrade |
-
-🚨 **The ceiling that was REMOVED is the load-bearing one.** 2.1.224 deleted the
-200-subagent-per-session cap. That reads as a feature in the changelog ("long-running
-sessions no longer refuse new agents") and is therefore filed under improvements, not risks
-— so grep the whole gap for *restored / limit / cap / ceiling / depth* and treat a silent
-band as **still uncapped**. This box fans out N=12 by default and has taken four
-memory-storm kernel panics; an unbounded spawn is the failure mode that reaches the kernel.
+## Step 1b — discharge the standing HOLD → holds.md § 1
 
 **Slice floor:** read the CHANGELOG from the version we ACTUALLY RUN (Step 0), never from
-`latest` minus a few. A fix for a held-open issue can land in any release in the gap, and
-skipping the early ones is how a discharged blocker gets missed.
+`latest` minus a few. A fix for a held-open issue can land in any release in the gap, and skipping
+the early ones is how a discharged blocker gets missed.
 
-## Step 2 — Fetch + slice the CHANGELOG gap
+## Step 2 — fetch + slice the CHANGELOG gap
+
 ```bash
 curl -sL https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md -o /tmp/cc-changelog.md
-grep -n "^## 2\.1\." /tmp/cc-changelog.md | head -40   # locate the gap: our-version → latest
+grep -n "^## 2\.1\." /tmp/cc-changelog.md | head -40   # locate the gap: our-version → target
 ```
+
 Read every version between the running version and the target.
 
-## Step 3 — Fan out the assessment (Dynamic Workflow, 3 axes + adversary)
-Fire a workflow (or `workflow-lean` subagents) with these reso-workflow axes — each reads the
-changelog slice AND reso's actual configs, rates each change BLOCKER/CAUTION/
-IMPROVEMENT/NEUTRAL:
-1. **Agent Teams / effort / worktree** — implicit-team spawn, TeammateIdle reap,
-   it2/tmux pane backend, per-member effort, worktree isolation, depth-cap/fork.
-2. **Background subagents / Dynamic Workflows / model+cost defaults** — background-
-   by-default subagents, workflow `agent()`/schema behavior, daemon reliability +
-   regression WINDOWS, Explore model/cost, default-model flip vs reso's pins.
-3. **Hooks / permission modes / auto-mode / launchers** — matcher semantics,
-   SessionStart streaming/idle-reap, Stop/Notification, auto-mode destructive-cmd
-   blocks + transcript-tamper rules, default-permission-mode flip, AskUserQuestion.
-Then an **adversarial** agent (web-enabled): sweep
-`github.com/anthropics/claude-code/issues` for OPEN regressions vs the target band
-that the changelog omits; default to flagging risk; return a sharp ≤450-token verdict.
-In a Workflow, run all four slots (they only read) with `agentType: 'workflow-lean'` and a
-self-contained brief that names the changelog slice and the config paths; see the
-research-subagents skill § Workflow slot table for the model/effort pins and the exclusions.
+## Step 3 — fan out the assessment (Dynamic Workflow, 3 axes + adversary)
 
-## Step 4 — Churn-signal heuristic (the load-bearing judgment)
-A version that FIXES a daemon/hook regression means that subsystem was recently
-broken. **Set the safe floor at the LAST fix in a regression cluster, not the first
-version that looks clean.** (2026-07: 2.1.196 shipped daemon self-kill fixed only
-across 199–203 → safe floor 2.1.203, not the 2.1.197 `stable` tag.) A version with
-<1 week field exposure is a moving target regardless of changelog.
+Four read-only slots, `agentType: 'workflow-lean'`, each with a self-contained brief naming the
+changelog slice and the config paths it reads (research-subagents skill § Workflow slot table for
+the model/effort pins). Each rates every change BLOCKER / CAUTION / IMPROVEMENT / NEUTRAL:
 
-🚨 **Measure that week as AGE SINCE PUBLISH, never as tenure on the `latest` tag** — the two
-read alike and only one is reachable. Measured 2026-08-20 over the package's whole npm history:
-exactly **two** versions have EVER held `latest` for ≥7 days, and one of them is our own pin
-2.1.220 (9.96 d, and only because it sat through a release pause). Excluding it, the longest
-tenure in the last 40 releases is **2.99 d**, against 20 releases in 30 days — roughly one every
-1.5 days. So a hold criterion phrased "≥1 week as npm `latest`" is not a strict bar, it is an
-**unsatisfiable** one: it cannot clear on the normal shipping rhythm, only on a shipping pause,
-so the audit it gates would return HOLD forever without that ever being an evidence-based verdict
-(this is what backlog `b69b1d957cec` had, and how the defect was found). Age since publish keeps
-accruing after a version stops being `latest`, which is what soak actually means, and it is the
-predicate this line has always intended. Instrument:
+1. **Agent Teams / effort / worktree** — implicit-team spawn, TeammateIdle reap, it2/tmux pane
+   backend, per-member effort, worktree isolation, depth-cap/fork.
+2. **Background subagents / Dynamic Workflows / model+cost defaults** — background-by-default
+   subagents, workflow `agent()`/schema behaviour, daemon reliability + regression WINDOWS, Explore
+   model/cost, default-model and alias flips vs reso's pins.
+3. **Hooks / permission modes / auto-mode / launchers** — matcher semantics, SessionStart
+   streaming/idle-reap, Stop/Notification, auto-mode destructive-cmd blocks + transcript-tamper
+   rules, default-permission-mode flip, AskUserQuestion.
+4. **Adversary** (web-enabled): sweep `github.com/anthropics/claude-code/issues` for OPEN
+   regressions in the target band that the changelog omits; default to flagging risk; a sharp
+   ≤450-token verdict.
+
+Every axis also walks holds.md § 2 (the standing reso landmines).
+
+## Step 4 — churn signal (the load-bearing judgment)
+
+A version that FIXES a daemon/hook regression means that subsystem was recently broken. **Set the
+safe floor at the LAST fix in a regression cluster, not the first version that looks clean**
+(historical: a daemon self-kill shipped in 2.1.196 and was fixed across 199–203, so the floor was
+the last fix, 2.1.203, not the `stable` tag's 2.1.197 — historical). A version with <1 week of
+field exposure is a moving target regardless of changelog.
+
+🚨 **Measure that week as AGE SINCE PUBLISH, never as tenure on the `latest` tag.** Measured over
+the package's whole npm history (historical, 2026-08-20): almost no version has ever held `latest`
+for ≥7 days, because releases ship about every 1.5 days. A criterion phrased "≥1 week as npm
+`latest`" is therefore **unsatisfiable** — it clears only on a shipping pause, so an audit gated
+on it returns HOLD forever without that being an evidence-based verdict (backlog `b69b1d957cec`).
+Age since publish keeps accruing after a version stops being `latest`, which is what soak means.
 
 ```bash
 npm view @anthropic-ai/claude-code time --json | jq -r --arg v "$TARGET" '.[$v]'   # publish date
-# tenure-as-latest, if you ever need it as a CONTRAST — never as the gate:
+# tenure-as-latest, only ever as a CONTRAST — never as the gate:
 npm view @anthropic-ai/claude-code time --json | jq -r '
   to_entries | map(select(.key|test("^[0-9]+\\.[0-9]+\\.[0-9]+$")))
   | map(.value |= sub("\\.[0-9]+Z$";"Z")) | sort_by(.value) | . as $v
@@ -139,82 +113,84 @@ npm view @anthropic-ai/claude-code time --json | jq -r '
   | sort_by(-.days) | .[0:5][] | "\(.ver)\t\(.days) d"'
 ```
 
-(`fromdate` throws on npm's millisecond timestamps — strip the fractional seconds first, as
-above, or the whole measurement dies on one malformed-looking row.)
+(`fromdate` throws on npm's millisecond timestamps — strip the fractional seconds first, as above.)
 
-## Step 5 — Verdict + MANIFEST governance (the auto-install trap)
-Two INDEPENDENT guards hold the pin — both must stay intact (verified 2026-07-09):
-- **CC's built-in self-updater is off**: `DISABLE_AUTOUPDATER=1` is exported by the
-  launcher (`~/bin/claude-latest`, ~line 333). *(The 2026-07 audit's live analysis
-  miscalled this `DISABLE_AUTOREPATCH` — no such var; the real one is
-  `DISABLE_AUTOUPDATER`. Grep the launcher, don't trust the recalled name.)*
-- **The launcher's own bump is default-deny**: `claude-latest` reads
-  `MANIFEST.jsonl` and **auto-installs a newer version ONLY if its `status` is
-  `stable` or `candidate`**; `skip` or no-entry ⟹ REFUSED (stays on installed).
-So a `candidate` entry TRIGGERS the advance — that is the trap.
-- **To HOLD**: every assessed version → `status:"skip"` (even the conditional
-  target). Put the conditional-advance playbook in that version's `notes`.
-- **To ADVANCE**: `status:"candidate"` ONLY when actually ready to install, gated
-  behind the pre-flight (Step 6). `stable` only after soak.
-Entry shape (append after the last line via Edit, never overwrite):
-`{"version":"X","status":"skip|candidate|stable","date_added":"<ISO>","notes":"<why + citations + [[memory-link]]>"}`
+The operator mandate (gate.md) may override a failed age bar: the bar is a PROXY for field
+evidence, and a GREEN gate is the evidence itself. Record the override in the MANIFEST note and
+the activation script's header.
 
-## Step 6 — Pre-flight gate before ANY promotion (reso-specific)
-Before flipping a version to `candidate`:
-- Live **TeammateIdle + SessionStart + `shutdown_request`** smoke test on a throwaway team.
-- Confirm **`--permission-mode auto` still resolves non-blocking** (2.1.200 flipped
-  the DEFAULT to Manual; auto is not the default anymore).
-- Set **AskUserQuestion idle-timeout** in launcher profiles (2.1.200 stopped auto-continue).
-- Audit teammate `Agent()` spawns for **explicit `model:`** (2.1.197 default = Sonnet 5;
-  bare spawns silent-demote).
-- Update the **Explore = Haiku ~70× cheaper** assumption in `research-subagents.md`
-  if ≥2.1.198 (Explore now inherits lead model, capped opus).
+**Sizing the jump honestly.** Registration (cc-model-registered) is ONE axis. Hooks, Stop-hook
+semantics, auto mode, the effort ladder, spawn depth, permissions, settings-schema keys and MCP are
+all unmeasured by it; the gate measures them. The dangerous shape is a settings key or hook field
+that is silently *dropped* rather than loudly rejected. Precedent (historical): 2.1.219 changed
+the nested-subagent spawn-depth default to 3, re-opening GH #68619 (a 4M-token/5-min runaway) on
+this spawn-heavy box — carry `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1` across every bump.
 
-## Standing reso landmines (recurring — check every audit)
-| Signal | Status |
-|---|---|
-| Default permission-mode flip (2.1.200 → Manual) | CAUTION — reso pins `auto`, verify it survives |
-| Default model flip (2.1.197 → Sonnet 5) | NEUTRAL for pinned lead; CAUTION for bare teammate spawns |
-| Explore model (2.1.198 → opus not Haiku) | COST regression — re-price fan-outs |
-| Background-daemon regression window | BLOCKER until the LAST fix in the cluster |
-| Effort-override (2.1.186 leader-inherit) | NON-ISSUE — project settings.local.json wins |
-| Hook matchers (2.1.191 comma / 2.1.195 hyphen) | NON-ISSUE — reso uses `|` + exact MCP names |
-| **Write tool may overwrite an unread file (2.1.228)** | **CAUTION** — newer models no longer need a read first. Directly loosens the INTEGRATE-never-overwrite discipline; the `backup-before-write` PreToolUse hook is now the ONLY thing standing between a model and a silent plan-file rewrite. Verify that hook fires before advancing. |
-| **Subagent-per-session cap REMOVED (2.1.224)** | **CAUTION** — the 200-spawn ceiling is gone; only concurrency + depth remain. `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` becomes the sole runaway bound. Re-verify it still reaches the child. |
-| **Native cross-session `SendMessage`/`ListAgents` (2.1.224-228)** | **ASSESS, do not silently adopt** — this box already has a home-grown substrate (`cc-notify`, mailbox, `cc-await-ping`). Three consecutive releases of fixes to the native one = a churning subsystem. Overlap is an opportunity AND a double-delivery hazard. |
-| **Session cleanup / plugin-cache deletion (2.1.228 fixes)** | **READ CAREFULLY every audit** — 228 fixed cleanup deleting a project's *memory folder* contents, and plugin-cache GC deleting a cache whose only version is a **symlinked dev checkout**. This box's entire `~/.claude` is per-file symlinks into a git checkout, so any GC that follows symlinks is catastrophic here. Treat symlink-following cleanup as a standing blocker class. |
-| **`-p` + `--mcp-config` not connected before first turn (fixed 2.1.221)** | On ≤2.1.220 the model emits tool calls as literal text in print mode. Matters wherever a launcher composes `--mcp-config` into headless fires. |
+**What the gate does NOT cover, so the audit must:** the AskUserQuestion idle-timeout in launcher
+profiles (a default change stops auto-continue), and re-pricing fan-outs when the Explore model
+default moves (research-subagents skill). Everything else the old pre-flight list asked by hand —
+a teammate lifecycle smoke, `--permission-mode auto` non-blocking, explicit `model:` on teammate
+spawns — is gate checks #3, #7, #10 and #11 now; do not redo them by hand.
+
+## P3 — install the candidate without burning the bridge
+
+```bash
+npm install --prefix ~/.claude-<NNN> @anthropic-ai/claude-code@<ver>
+```
+
+A new prefix exists and the **old prefix is untouched** — it is the rollback. Nothing to undo.
+Then `cc-model-registered <id> --bin ~/.claude-<NNN>/node_modules/.bin/claude` for any model
+id this run needs.
+
+## Verdict + MANIFEST governance (the auto-install trap)
+
+Two guards, and both must stay intact:
+
+- **CC's built-in self-updater is off**: `DISABLE_AUTOUPDATER=1` is exported by every launcher
+  (grep `~/.zshrc` and `~/bin/claude-latest` for it; do not trust a recalled name — an earlier
+  audit miscalled it `DISABLE_AUTOREPATCH`, which does not exist).
+- **The legacy lane's bump is default-deny**: `claude-latest` reads `MANIFEST.jsonl` and
+  auto-installs a newer version ONLY if its `status` is `stable` or `candidate`; `skip` or no entry
+  ⟹ refused. So on the legacy lane a `candidate` entry TRIGGERS the advance — that is the trap.
+
+The MANIFEST `status` governs ONLY that legacy lane. **The fleet lane does not read it**; the fleet
+pin moves only through the activation script's `_bin` edit. So a row can say `skip` while the
+fleet advances past it — say which in the note.
+
+- **To HOLD** (and for every version the legacy lane must not take): `status:"skip"`. Put the
+  conditional-advance playbook in the `notes`.
+- **To ADVANCE the legacy lane**: `status:"candidate"` only when actually ready to install there,
+  after a GREEN gate. `stable` only after soak.
+- Entry shape (append after the last line via Edit, never overwrite):
+  `{"version":"X","status":"skip|candidate|stable","date_added":"<ISO>","notes":"<why + citations + REVISIT when: … + [[memory-link]]>"}`.
+  A band audit writes one row per version; the last row carries the `REVISIT` trigger holds.md reads.
+
+## Rollback
+
+Put the launcher's `_bin` back to the prior `~/.claude-<NNN>` and revert the keying diff
+**together** (model.md, keying.md). What does NOT come back with it: any
+`claude-bump-models --apply` sweep already run (re-run it `--from-to <new> <old>`), and anything a
+session wrote while running the new binary.
+
+🚨 **A CC-version rollback silently drops capabilities that live in the binary, not in our
+config.** Canonical instance (historical): rolling 2.1.170 → 2.1.114 dropped the long-horizon
+harness — the autonomous-loop preamble, the "check your last paragraph before ending the turn"
+early-stop instruction, and the `SendUserMessage` verbatim tool all lived in the newer binary. The
+CLASS is permanent and matters more with one fleet lane, because a rollback moves the whole fleet.
+A model-only change (model.md Case C) keeps the binary pin and is unaffected. After any rollback,
+re-verify that autonomous `/loop`, `/frontier-run` and `/schedule` still self-terminate and report
+correctly, and re-run the gate on the rolled-back build rather than assuming it behaves as
+remembered.
+
+## P8 — record
+
+1. MANIFEST rows (above), one per assessed version.
+2. The run ledger row (router § Ledger) with the verdict and evidence paths.
+3. A `claude-code-<range>-*.md` memory + MEMORY.md index line only for what generalises (the
+   anti-capture list applies: no transient failures, no this-machine facts).
 
 ## Output
-A briefing: (1) one-line VERDICT (hold vs target version, per track), (2) blockers +
-mitigations, (3) cautions to re-verify, (4) net improvements, (5) recommended action
-+ MANIFEST entries. Then: write the MANIFEST entries, write/append a
-`claude-code-<range>-*.md` memory + MEMORY.md index line. Never advance a track
-without the Step 6 gate.
 
-## Appendix — extract a built-in command's hidden prompt from the binary
-When the CHANGELOG describes a new built-in command (e.g. `/checkup`, alias of
-`doctor`) but not what it *actually does* to your config, read its orchestration
-prompt straight out of the binary — the ground truth the changelog paraphrases.
-The main npm package is now a small **wrapper stub** (~150 KB unpacked); the real
-CLI ships as a per-platform Bun single-executable (`claude.exe`, ~215 MB) delivered
-as an `optionalDependencies` package (`@anthropic-ai/claude-code-<platform>`, one
-per arch, version-matched to the main pkg). Pull it read-only into `/tmp` (this
-NEVER touches the pinned install):
-```bash
-cd /tmp && npm pack @anthropic-ai/claude-code-darwin-arm64   # platform pkg for THIS arch
-tar xzf anthropic-ai-claude-code-darwin-arm64-*.tgz
-bin=$(find package -name claude.exe -o -name 'claude' -type f | head -1)  # SEA binary
-strings -n 8 "$bin" > /tmp/cc-bin-strings.txt
-grep -nE 'doctor|checkup|Check [0-9]|DISABLE_DOCTOR_COMMAND' /tmp/cc-bin-strings.txt
-```
-The full numbered-check prompt (`/checkup` runs Check 0–8) extracts verbatim; the
-technique generalizes to **any** built-in command's hidden system prompt. Caveats:
-a naive `grep` catches noise (the binary also embeds the Workflow tool's own
-prompt — anchor on the command's unique markers); pick the platform pkg matching
-your arch (`-darwin-arm64` / `-darwin-x64` / `-linux-x64` / `-linux-arm64` / `-win32-x64`). Governance note: the
-`doctor`/`checkup` command is **killable via `DISABLE_DOCTOR_COMMAND`** — set it if
-its auto-fixes (disabling rarely-fired-but-deliberate skills, moving always-loaded
-CLAUDE.md rules, turning off load-bearing slow hooks) would fight a deliberate
-config. Its Check 6 (version currency) already no-ops under `DISABLE_AUTOUPDATER=1`
-(Step 5), so it will not nag to `claude update` against the pin.
+A briefing: (1) one-line VERDICT (hold vs target, per lane), (2) blockers + mitigations, (3)
+cautions to re-verify, (4) net improvements, (5) the recommended action + the MANIFEST rows. Never
+move the fleet lane on an audit alone: the gate decides.

@@ -1,304 +1,185 @@
----
-name: model-upgrade
-description: "Runbook for moving to a new Claude model or off one: the binary gate first (does the pinned Claude Code register the id?), the model-id census, config and doc sweeps, the model ladder. Use when a model ships or frontier access changes."
-allowed-tools: Read, Edit, Write, Bash, AskUserQuestion, Skill
----
+# model.md — moving to a new Claude model or off one (phases P1, P7)
 
-# model-upgrade — model-reference upgrade/downgrade runbook
+Model facts (ids, pricing, capabilities, deprecations) come from the `claude-api` skill and the
+release pack (utilize.md), never from memory.
 
-**Step -1 (always):** invoke the `claude-api` skill first for authoritative model IDs,
-pricing, and capability facts. Never answer model facts from memory.
+## P1 — registration: does the binary know the id? Run it BEFORE classifying, every time
 
-**Step -1b — fetch the release materials YOURSELF; there is no human step.** (Added 2026-09-22,
-operator ruling: the agent does this via tools, not the operator via a web UI.) The set is the
-announcement, the System Card PDF it links, "Prompting Claude <Model>", and the pages that guide
-links: effort, what's new, migration guide, models overview.
+🚨 **We pin Claude Code, so a model release is ALWAYS also a binary event.** A model that shipped
+after our pinned build cannot be in that build; no SSOT edit makes it dispatchable. Ask the binary:
 
 ```bash
-curl -sSL -A "Mozilla/5.0" -o card.pdf "<system-card-url>"   # born-digital: PDF page N == printed N
-pdftotext -layout card.pdf card.txt                          # exact text layer
-pdfimages -png -p card.pdf figs/fig                          # every chart at NATIVE resolution
-pandoc -f html -t plain --wrap=none page.html -o page.txt    # each vendor page
+cc-model-registered <new-id>                                          # the live fleet pin
+cc-model-registered <new-id> --bin ~/.claude-<NNN>/node_modules/.bin/claude   # each candidate
 ```
 
-The per-effort evidence the effort policy needs lives in CHARTS with no data labels, so read the
-native figures with vision. Then fan out `workflow-lean` page-range readers (the brief names the range, its text and figure files, and the output file) that extract page-cited facts, with a
-second reader per range re-checking each fact at its page. Opus 5.5 run: 462 extracted, 8
-corrected, 0 unsupported, 158 added — `docs/research/opus55-utilization-2026-09-22/`.
-**Do not OCR a born-digital card.** Measured on the Opus 5.5 card (`…/mistral-ocr-eval.md`):
-- Mistral's text matched `pdftotext`, except 15 numbers came back LaTeX-wrapped (`\(33\%\)`
-  defeats a grep for `33%`).
-- Its chart crops were 613×359 px against the PDF's native 2000×1300.
-- It moved a table's group header onto the wrong model column.
+It resolves the live pin through `bin/cc-claude-bin`, byte-scans with mmap, counts the id only
+where it is not a prefix of a longer id (`claude-sonnet-5` inside `claude-sonnet-5-5` does not
+count), and always counts the control `claude-opus-5` beside it. **Never report a bare zero**: a
+plain `grep` on this Bun binary reads 0 for every model, including ones the fleet runs, so the
+obvious probe is blind in the direction that looks like a finding.
 
-OCR is for SCANNED pages only. Detect them per page: `pdffonts` shows no fonts, or `pdftotext`
-yields under ~50 characters over a page-spanning image. Read those pages with Claude vision. The
-Mistral OCR API (`mistral-ocr-latest`, key in the keychain as `MISTRAL_API_KEY`) is the
-purpose-built alternative, but its workspace allowed **0 OCR requests/min** on 2026-09-22 (the key
-itself authenticates). That is a plan setting to re-check, not a property of the product.
-
-**Step 0 — THE BINARY GATE. Run this BEFORE classifying, every time, no exceptions.**
-
-🚨 **We pin Claude Code. Therefore a model release is never only a model event — it is ALWAYS
-also a binary event.** A model that shipped after our pinned build cannot be in that build, so
-the id is not dispatchable no matter what the SSOT says. Ask the binary, not the docs:
-
-```bash
-BIN=$(readlink -f ~/.claude-220/node_modules/@anthropic-ai/claude-code/bin/claude.exe)  # ← the PINNED one
-for m in <new-id> claude-opus-5; do printf '%-20s %s\n' "$m" "$(strings -a "$BIN" | grep -c -- "$m")"; done
-```
-
-🚨 **`strings` first, and NEVER report a zero without a positive control beside it.** The binary
-is a Bun-compiled single-file executable: a plain `grep` on it returns **0 for every model**,
-including ones the fleet demonstrably runs. The obvious probe is blind, and it fails in the
-direction that looks like a finding. `claude-opus-5` is the control — if it reads 0 too, your
-instrument is broken, not the binary. (Watch prefixes: `claude-fable-5` is a prefix of
-`claude-fable-5-1`, so grep the LONGER id and read both counts.)
-
-| Probe result | What this upgrade is |
-|---|---|
-| new id **present** | Ordinary upgrade. Continue to Step 1 and run the case normally. |
-| new id **absent** | **STAGED upgrade.** Park the id in `versions.<family>_staged`, leave `<family>_latest` and `<family>_prior` alone, and do **NOT** run `claude-bump-models --apply`. Go to **§ The binary gate** below. |
+| Exit | Meaning | What this upgrade is |
+|---|---|---|
+| 0 | present on the live pin | Ordinary model lane. Continue to Step 1. |
+| 1 | absent on the live pin | **STAGED** — the both lane. Park the id in `versions.<family>_staged`, leave `<family>_latest` and `<family>_prior` alone, do **NOT** run `claude-bump-models --apply`, and run audit + gate (audit.md, gate.md) on a candidate where the id reads 0. |
+| 2 | control absent / no readable binary | **STOP.** The instrument is broken, not the binary. |
 
 Why the `--apply` prohibition is absolute: the sweep rewrites roles, the auto-mode allowlist and
 every doc literal to an id the harness cannot resolve. Nothing warns you; the next `/frontier-run`
 or teammate spawn simply fails. Leaving `<family>_prior` empty is what keeps the *current* model
-from being convicted as stale — `claude-lint-models` collects its stale set from `_prior$` keys
-and `claude-bump-models` iterates `${family}_{latest,prior}`, so a `*_staged` key is inert in both
-(verified 2026-09-03). **This has now been hit twice** — Opus 5 (2026-07-24, needed 2.1.219) and
-Fable 5.1 (2026-09-03, needs ≥2.1.253) — and both times it was rediscovered by hand because this
-step did not exist. That is the whole reason it is Step 0.
+from being convicted as stale — `claude-lint-models` collects its stale set from `_prior$` keys and
+`claude-bump-models` iterates `${family}_{latest,prior}`, so a `*_staged` key is inert in both. A
+family with no `_staged` key yet gets one when you stage it. Every recent release has been staged
+(historical: Opus 5, Fable 5.1, Opus 5.5 and Sonnet 5.5 each needed a newer binary), and each was
+rediscovered by hand until this step existed.
 
-**Step 1 — classify the event.** Three distinct cases; misclassifying is THE failure mode:
+## Step 1 — classify the event (misclassifying is THE failure mode)
 
 | Case | Signature | Example |
 |---|---|---|
-| **A. Lateral** | New model REPLACES same-family prior | Opus 4.7 → 4.8; Sonnet 4.6 → 4.7; Fable 5 → 5.1 |
-| **B. Tier-insertion** | New tier ABOVE the ladder; old top STAYS in service | Fable 5 above Opus 4.8 (2026-06-09) |
-| **C. Downgrade / window-end** | Access to top tier lapses; fall back | a FUTURE tier lapses (Fable 5 is now PERMANENT — Max/Team-Premium inclusion at 50% of limits from 2026-07-20, `frontier_access.permanent: true`, so it no longer applies) |
-| **D. Default-tier repoint** | The ladder is unchanged and every id stays in service — what moves is WHICH tier `roles.lead_default` (and the launcher) points at | "should Fable 5.1 replace Opus 5 as the starting model?" (asked 2026-09-16; answer was NO) |
-
-🚨 **CASE D IS NOT SERVED BY THIS RUNBOOK'S TOOLING, AND THE FAILURE IS SILENT.** Added
-2026-09-16 after the question was asked for the first time. A, B and C all move a `versions.*`
-key; D moves **`roles.*`** and touches `versions.*` not at all. Both sweep tools derive their
-working set exclusively from `versions`:
-
-* `~/bin/claude-bump-models:65-69` — `for family in frontier opus sonnet haiku` … builds pairs
-  from `versions.${family}_prior|${family}_latest`. A `roles.*` edit yields **no pair**.
-* `scripts/claude-lint-models.sh:33` — `.versions | … select(.key | test("_prior$"))`. A
-  `roles.*` edit contributes **nothing** to the stale set.
-
-⇒ **Running `/model-upgrade` on a Case D change certifies it while checking nothing**, and both
-tools report clean, which reads as a pass. Verified 2026-09-16 by reading both files.
-
-**So for Case D, the verification is not the sweep — it is these, and none of them is automatic:**
-
-1. **Decide in the currency that binds.** On a Max-plan fleet this is NOT $/token. Fable is a
-   **sub-cap of the same weekly bucket at 50%** (`accounts.json` `frontier.coupling`), so a
-   default on it strands half the weekly capacity at any quality. Read
-   `docs/research/fable51-vs-opus5-routing-2026-09-16/` before re-opening this; §&nbsp;Re-derive
-   gives the two commands.
-2. **Enumerate the default-model EMITTERS by hand** — they are not a `versions` sweep:
-   `roles.lead_default` · `~/.zshrc` `claude()` `--model`/`--effort` · the five per-config-dir
-   `settings.json` (incl. any `"model"` key — `.claude-quaternary` carries one and the other four
-   do not) · `agents/*.md` frontmatter · `commands/handoff.md` · `hooks/frontier-spawn-gate.sh`
-   (keyed by PREFIX — under a Fable default it throttles ORDINARY work) ·
-   `lib/cc-upgrade-gate/check05_launcher.sh` (hardcodes both `--model` and `--effort`, so any
-   repoint reds the gate that certifies binary bumps).
-3. **Never widen `model-classification.json`'s `update` list to fix this** without first
-   anchoring `claude-bump-models:133` — its `sed` is unanchored and `claude-fable-5` is a strict
-   PREFIX of `claude-fable-5-1`, so a sweep would corrupt ids to `claude-fable-5-1-1`.
-4. **There is no staging surface for a routing decision.** `*_staged` stages a RELEASE and is
-   invisible to both tools by construction; `accounts.json` accounts carry no model field. The
-   **role ladder is the only A/B surface** — move ONE role, measure, revert in one line.
-
-A blind literal sweep is correct ONLY for Case A. Case B is "add alongside" (per
-claude-api migration guide Step 1 Bucket 2) — rewriting `opus → fable` would
-de-tier Opus references that must stay Opus.
+| **A. Lateral** | New model REPLACES the same-family prior | Opus 4.7 → 4.8; Fable 5 → 5.1 |
+| **B. Tier-insertion** | New tier ABOVE the ladder; the old top STAYS in service | Fable 5 above Opus 4.8 |
+| **C. Downgrade / window-end** | Access to a top tier lapses; fall back | a future tier's window ends (a permanent tier, `frontier_access.permanent: true`, never does) |
+| **D. Role / default-tier repoint** | The ladder is unchanged and every id stays in service; what moves is WHICH model a `roles.*` key (incl. `roles.lead_default` and the launcher) points at | "should the frontier tier become the starting model?"; "move the research worker onto the new Sonnet" |
 
 ⚠️ **Case and binary state are INDEPENDENT axes.** A lateral bump whose id is absent is still a
-lateral bump; it is just gated. Classify normally, then execute the case's steps only after the
-binary gate clears. The two most recent releases were both Case A **and** both staged.
+lateral bump; it is just gated. Classify normally, then run the case's steps only after the binary
+clears. A blind literal sweep is correct ONLY for Case A. Case B is "add alongside" (claude-api
+migration guide, Step 1 Bucket 2): rewriting `opus → fable` would de-tier references that must
+stay Opus.
+
+🚨 **"Use the new model to the full" is mostly Case D.** The `versions` bump is Case A; the value is
+in moving `roles.*` keys (`research_worker`, `workflow_synthesis_worker`, `teammate_mechanical`,
+…) onto it at chosen effort rungs (utilize.md). So a model-lane run ends in the Case D emitter
+census below, not in a green lint.
+
+## Case D is not served by the sweep tooling, and the failure is silent
+
+A, B and C move a `versions.*` key; D moves **`roles.*`** and touches `versions.*` not at all. Both
+sweep tools derive their working set exclusively from `versions`:
+
+- `~/bin/claude-bump-models` — `for family in frontier opus sonnet haiku` builds pairs from
+  `versions.${family}_prior|${family}_latest`. A `roles.*` edit yields **no pair**.
+- `scripts/claude-lint-models.sh` — `.versions | … select(.key | test("_prior$"))`. A `roles.*`
+  edit contributes **nothing** to the stale set.
+
+⇒ **Both tools report clean on a Case D change while checking nothing.** For Case D the
+verification is these, and none is automatic:
+
+1. **Decide in the currency that binds.** On a Max-plan fleet this is weekly plan quota, not
+   $/token. The frontier tier is a **sub-cap of the same weekly bucket** (`accounts.json`
+   `frontier.coupling`), so a default on it strands capacity at any quality. Read
+   `docs/research/fable51-vs-opus5-routing-2026-09-16/` before re-opening this (its § Re-derive
+   gives the two commands) and re-derive, never re-quote.
+2. **Enumerate the default-model EMITTERS by hand** — they are not a `versions` sweep:
+   `roles.*` in the SSOT · `~/.zshrc` `claude()` `--model`/`--effort` · the per-config-dir
+   `settings.json` files (incl. any `"model"` key — they need not agree) · `agents/*.md`
+   frontmatter · `commands/handoff.md` · `hooks/frontier-spawn-gate.sh` (keyed by PREFIX — under a
+   frontier default it throttles ORDINARY work) · `lib/cc-upgrade-gate/check05_launcher.sh`
+   (expects `--model` = `versions.opus_latest`, so a lead repoint off Opus reds it; gate.md).
+3. **Widening `model-classification.json`'s `update` list is not the fix.** Both tools are now
+   word-boundary anchored (a prefix id no longer corrupts to `…-1-1`), but the sweep still only
+   rewrites `_prior → _latest` pairs; a roles move produces none.
+4. **There is no staging surface for a routing decision.** `*_staged` stages a RELEASE and is
+   invisible to both tools; `accounts.json` accounts carry no model field. The **role ladder is the
+   only A/B surface** — move ONE role, measure, revert in one line.
 
 ## SSOT map
 
 | File | Job |
 |---|---|
-| `~/.claude/model-config.yaml` | versions (latest/prior per family: frontier/opus/sonnet/haiku), `frontier_access` window, `pricing_per_mtok`, role ladder, effort defaults, deprecations |
-| `~/bin/claude-bump-models` | literal-ID sweep over classified files (`--apply`, `--check`, `--from-to OLD NEW`) |
-| `~/.claude/scripts/claude-lint-models.sh` | stale-ref lint (`--all`) + frontier-window expiry check (fails when window lapsed but `active: true`) |
-| `~/.claude/model-classification.json` | `update` = auto-sweepable; `preserve` = historical, never touch; `review` = mixed prose/citations — THIS skill walks them by hand |
-| `~/.zshrc` | launcher tracks (see Appendix) — runtime model selection, separate from doc refs |
+| `~/.claude/model-config.yaml` | `versions` (latest/prior/staged per family: frontier/opus/sonnet/haiku), `frontier_access`, `pricing_per_mtok`, `roles`, `effort_defaults`, `auto_mode_allowlist`, deprecations |
+| `~/bin/claude-bump-models` | literal-id sweep over classified files (`--apply`, `--check`, `--from-to OLD NEW`) |
+| `scripts/claude-lint-models.sh` | stale-ref lint (`--all`) + frontier-window expiry check (fails when the window lapsed but `active: true`) |
+| `~/.claude/model-classification.json` | `update` = auto-sweepable; `preserve` = historical, never touch; `review` = mixed prose/citations, walked by hand here |
+| `~/.zshrc` `claude()` | runtime selection: the `_bin` pin and the `--model`/`--effort` defaults, separate from doc refs |
 
-**Known blind spot:** the sweep/lint match full IDs (`claude-opus-4-7`) only. Prose
-forms ("Opus 4.7", "Opus-tier") live in `review` files and need judgment — that's
-why they're not in `update`.
+**Known blind spot:** the sweep and lint match full ids (`claude-opus-4-7`) only. Prose forms
+("Opus 4.7", "Opus-tier") live in `review` files and need judgment.
 
-## The binary gate — when Step 0 says the id is absent
+## P7 — the flip. Keying first (keying.md), then the case
 
-Seven gates, in order. Gates 1–5 are free and reversible: none of them touches the live launcher,
-so all of them can be run today on any release. Only gate 6 changes what the fleet executes.
+### Case A — Lateral bump
 
-| # | Gate | Vehicle | PASS looks like | On FAIL |
-|---|---|---|---|---|
-| 1 | *Should* we advance the binary at all? | **`/cc-version-audit`** — CHANGELOG vs our workflow, emits HOLD/ADVANCE + MANIFEST entries | ADVANCE, with the delta's breaking changes named | HOLD: record why in the staged block; the model waits |
-| 2 | Get the candidate on disk without burning the bridge | `npm i --prefix ~/.claude-<NNN> @anthropic-ai/claude-code@<ver>` | new prefix exists, **old prefix untouched** | nothing to undo |
-| 3 | *Do our ways of working still work on it?* | **`/cc-upgrade-gate`** — headless self-evidencing probes | GREEN across Agent Teams, workflows, hooks, launchers, auto-mode, effort, permissions, MCP, resume | RED **names the failing way-of-working** → PARK, do not adopt |
-| 4 | Are we entitled to the model? | `--model <new-id> --print "ok"` on the candidate + a live budget in `claude-accounts` | real completion returned | registered-but-unentitled → wait; entitlement can be server-date-gated |
-| 5 | Is it in plan usage, or does it spend credits? | read the CURRENT plan docs | an explicit statement | **NOT STATED is the common answer — record it as that, never as "yes"** |
-| 6 | Rewrite the hardcoded id sites, **in the same diff as the flip** | § Model-id keying below | both classes rewritten | a half-fix is worse than none — see below |
-| 7 | The flip itself | the case's own steps (A/B/C) + effort re-sweep | `claude-lint-models --all` green, one live spawn spot-checked | revert gate 6's diff and the launcher line together |
-
-**Gate 1 vs gate 3 is a real division of labour, not redundancy.** `cc-version-audit` tells you
-what Anthropic *said* changed; `cc-upgrade-gate` tells you what actually *broke*. Over a large
-version delta only the second is evidence. Run both, in that order, and never let a green audit
-stand in for the gate — "the model id resolves" is not "the harness still works".
-
-**Sizing the jump honestly.** Registration is ONE axis. Hooks, Stop-hook semantics, auto mode, the
-effort ladder, spawn depth, permissions, settings-schema keys and MCP are all unmeasured by the
-Step 0 probe. Precedent: 2.1.219 changed the nested-subagent spawn-depth default to 3, which
-re-opens GH #68619 (4M tok/5min runaway) on this spawn-heavy box — carry
-`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1` across any bump. The dangerous shape is a settings key or
-hook field that is silently *dropped* rather than loudly rejected.
-
-⚠️ **The npm `stable` dist-tag is not a route to a new model.** Measured 2026-09-03: `stable`
-(2.1.236) did not carry `claude-fable-5-1`; only `latest` did. Check the tag you are actually
-about to install rather than assuming "stable is safer, and safe enough".
-
-**Rollback.** Gate 6+7 is one revert: put the launcher's binary path back to the prior
-`~/.claude-<NNN>` and revert the keying diff **together**. What does NOT come back with it: any
-`claude-bump-models --apply` sweep already run (re-run it `--from-to <new> <old>`), and anything a
-session wrote while running the new binary.
-
-## Model-id keying — the gate-6 rewrite, and why a half-fix is worse than none
-
-Grep the fleet for the OLD id before flipping. Sites split into two classes that fail in opposite
-directions, and **a check that finds only one class produces a flip that looks complete and is not**:
-
-- **DETECTORS** test `$MODEL` against the literal (`[ "$MODEL" = "claude-fable-5" ]`). After a flip
-  they evaluate FALSE — no error, no log — so the new model runs while nothing accounts it as that
-  tier. Under-counting, silent.
-- **EMITTERS** *write* the literal (`fable) MODEL="claude-fable-5" ;;`, `--model claude-fable-5`,
-  `model=claude-fable-5`). They are keyed on an alias or on a flag, so they never "go false" — they
-  just keep launching the OLD model while the SSOT claims the new one. The config reads adopted and
-  the fleet is not.
-
-```bash
-# detectors                                   # emitters
-grep -rnE '=[[:space:]]*"?<old-id>"?' bin scripts    grep -rnE '(model=|--model )<old-id>' bin scripts
-```
-
-Two more traps, both measured on the Fable 5 → 5.1 census (2026-09-03):
-
-1. **Selftest assertions pinned to the old id go VACUOUSLY GREEN** (`bin/cc-route`,
-   `bin/cc-wave-plan` both assert `.model=="claude-fable-5"`). A green suite is not evidence that
-   the keying survived; it may be asserting the very thing you failed to change.
-2. **Glob-matchers survive the flip while equality-matchers do not.** `~/.zshrc`'s cost warning
-   uses `== *claude-fable-5*`, which still matches `claude-fable-5-1`. Fix only the detectors and
-   you get the worst split available: the human is still warned about the tier's cost while every
-   mechanical arm that counts it reads "not that tier". Warned about the money, not counting it.
-
-**Prefer the glob's shape** — a prefix or `case` test covering both ids — over swapping one literal
-for another, so the *next* bump in that family does not re-create the whole problem.
-
-## Case A — Lateral bump
-
-0. **Binary gate cleared?** (Step 0). If NOT: write ONLY `<family>_staged: <new-id>` plus the
-   pricing row and any deprecation change, leave `_latest`/`_prior` alone, and stop here — the rest
-   of this case is gated. Everything below assumes the id is dispatchable.
-0b. **The binary gate clears for NEW shells only — census the fleet before the flip.** (Measured
-   2026-09-22, Opus 5.5.) A `~/.zshrc` repoint reaches shells started after it. A `--recycle` types
-   into the pane's EXISTING shell, which keeps its old `claude()` body, so recycling does not move a
-   pane to the new binary. Hours after the repoint, 14 sessions still ran 2.1.260, which refuses
-   the new id by name.
-   - **Census:** list each live session's binary with
-     `ps -axo pid=,command= | awk '$2 ~ /\.claude-[0-9]+\//'`.
-   - **Hazard class:** any consumer that hands the NEW full id to a process started by an old shell
-     (type ii in the census). The family alias (`opus`, `fable`) is resolved by whichever binary
-     runs, so it is safe across the split.
-   - **What 2026-09-22 did:** made `handoff-fire --recycle --model opus` type the alias
-     (feat/opus55-utilization), and did NOT run step 2's `--apply`. Its only effective targets were reso
-     team-brief pins that 2.1.260 leads read.
-   - Record in the SSOT section which consumers are safe and why.
-1. `model-config.yaml`: set `<family>_prior` = old latest, `<family>_latest` = new ID, and CLEAR
-   `<family>_staged`. Update `pricing_per_mtok` + `deprecations` from claude-api skill facts.
+0. **Registration cleared?** If NOT: write ONLY `<family>_staged: <new-id>` plus the pricing row
+   and any deprecation change, leave `_latest`/`_prior` alone, and stop — the rest is gated.
+0b. **The repoint clears for NEW shells only — census the fleet before the flip.** A `~/.zshrc`
+   repoint reaches shells started after it. A `--recycle` types into the pane's EXISTING shell,
+   which keeps its old `claude()` body, so recycling does not move a pane to the new binary
+   (historical, the Opus 5.5 move: hours after the repoint, 14 sessions still ran a binary that
+   refused the new id by name).
+   - **Census:** `ps -axo pid=,command= | awk '$2 ~ /\.claude-[0-9]+\//'`.
+   - **Hazard class:** any consumer that hands the NEW full id to a process started by an old shell.
+     The family alias (`opus`, `fable`) is resolved by whichever binary runs, so it is safe across
+     the split — prefer it at such sites, and hold step 2's `--apply` while the split lasts.
+   - Record in the SSOT which consumers are safe and why.
+1. `model-config.yaml`: `<family>_prior` = old latest, `<family>_latest` = new id, CLEAR
+   `<family>_staged`. Update `pricing_per_mtok` + `deprecations` from claude-api facts.
    ⚠️ `pricing_per_mtok` pairs are `[input, output]` BASE rates and consumers index them
    positionally — do not change the arity. Cache-read multipliers are a real third dimension
-   (standard 0.1× base input, but **0.025× on Fable 5.1 / Mythos 5.1**) and go in comments. A
-   base-rate-only comparison systematically misprices any model with a non-standard cache rate.
+   (standard 0.1× base input, but some models differ — read the claude-api skill) and go in
+   comments; a base-rate-only comparison misprices any model with a non-standard cache rate.
 2. `claude-bump-models` (dry-run) → review the pair list → `--apply`. **Setting `_prior` is what
    arms this**: the lint builds its stale set from `_prior$` keys, so writing `_prior` before the
    binary can run the new id is exactly how a healthy model gets convicted as stale.
-3. `claude-lint-models.sh --all` → must be green.
-4. Walk every `review`-classified file: fix prose refs ("Opus 4.7" → "Opus 4.8")
-   **except** historical citations (benchmarks "Opus 4.6 76% at 1M", incident records
-   "GH #52522 Opus 4.7 auto-compact", provenance lines "--model claude-opus-4-8").
-   Test: does the sentence claim "what we use NOW" (update) or "what happened THEN" (preserve)?
-5. Project-side files: edit in the session worktree + commit (never edit the primary
-   checkout directly — note `claude-bump-models --apply` DOES edit the primary checkout's
-   working tree, leaving uncommitted changes there; surface that to the user).
-6. Launcher tracks usually unchanged (auto-mode picks the model). Check
-   `auto_mode_allowlist` — new models lag ~2 weeks before entering Max-plan auto mode.
+3. `~/.claude/scripts/claude-lint-models.sh --all` → green.
+4. Walk every `review`-classified file: fix prose refs **except** historical citations
+   (benchmarks, incident records, provenance lines). Test: does the sentence claim "what we use
+   NOW" (update) or "what happened THEN" (preserve)?
+5. Project-side files: edit in a session worktree + commit. `claude-bump-models --apply` DOES edit
+   the primary checkout's working tree and leaves uncommitted changes there; surface that.
+6. Check `auto_mode_allowlist`: new models can lag before entering Max-plan auto mode.
 
-## Case B — Tier-insertion (new top tier)
+### Case B — Tier-insertion (new top tier)
 
-1. `model-config.yaml`: set `frontier_latest`; fill `frontier_access` (model, tracks,
-   source, start, end, `active: true`, fallback). Add pricing row. Update roles that
-   should ride the new tier (`lead_default`, `research_adversarial`, `workflow_judge`,
-   `eval_judge`) — teammate roles stay on the auto-mode-allowlisted model. Agent
-   Teams run BOTH launcher tracks (eval-track teams empirically fine since 2.1.156);
-   the teammate gate is `auto_mode_allowlist` in the SSOT, not the track — once the
-   new tier is verified to hold auto mode (one test spawn; `claude auto-mode config`
-   does NOT print allowModels), append it to `non_firstParty_max` and the
-   enforce-hook follows automatically.
-2. **Write all doc references conditionally** so the downgrade needs zero doc edits:
-   > "frontier: <Model> via call-time `model: "<alias>"` override while
-   > `frontier_access.active` AND on the <track> track; otherwise <fallback>"
-3. Canonical reference list (re-walk these for any insertion; verified present 2026-09-03):
+1. `model-config.yaml`: set `frontier_latest`; fill `frontier_access` (model, source, start, end
+   or `permanent`, `active: true`, fallback). Add the pricing row. Move the roles that should ride
+   the new tier (`lead_default`, `research_adversarial`, `workflow_judge`, `eval_judge`) — teammate
+   roles stay on an auto-mode-allowlisted model. The teammate gate is `auto_mode_allowlist` in the
+   SSOT: once the new tier is verified to hold auto mode (one test spawn; `claude auto-mode config`
+   does NOT print allowModels), append it to `non_firstParty_max` and the enforce hook follows.
+2. **Write every doc reference conditionally**, so the downgrade needs zero doc edits:
+   > "frontier: `versions.frontier_latest` via call-time `model: "<alias>"` override while
+   > `frontier_access.active`; otherwise `frontier_access.fallback`"
+3. Canonical reference list (re-walk for any insertion; `ls` each before trusting it):
    - `~/.claude/commands/research.md` — type-mix table + the frontier footnote
    - `~/.claude/agents/deep-research.md` + `deep-research-sonnet.md` — descriptions only
    - `~/.claude/model-config.yaml` — roles/comments
-   - project `.claude/commands/project-pass.md`, `docs/research/CONTEXT_EXHAUSTION_GUARDRAILS.md`
-     (reso — a SECOND repo with its own gate and land cycle; scope that deliberately)
-   - ~~`~/.claude/rules/research-subagents.md`~~ — **GONE.** That FILE no longer exists;
-     `model-classification.json` still lists it in `review`, which is a dead path a walk will
-     silently find nothing in. (The DIRECTORY is a different question and this entry used to
-     overstate it: `~/.claude/rules/` loads fine in an interactive session — it still holds
-     `agent-operating-lessons.md`, which the harness injects verbatim — and does NOT load under
-     `claude -p`, which is the only mode the original probe ever ran. The dead path is the one
-     that matters here and is unaffected.)
-   🚨 **Name the SSOT KEY, not the model.** Write "`versions.frontier_latest`, currently Fable 5"
-   rather than "Fable 5". Measured 2026-09-03: this footnote had accumulated THREE false claims
-   (a window that ended two windows earlier, an `AND on the claude-next eval track` conjunct no
-   session could satisfy after consolidation v2, and a fallback that had moved to Opus 5) — and a
-   conditional that names a deleted track reads as "the tier is unavailable". A doc that restates
-   a perishable fact has no path to learn the fact changed.
-4. **Agent frontmatter stays a family alias (`model: opus`)** — definitions are shared
-   by both launcher tracks; the new tier exists only where its CC version runs. The
-   upgrade is always a call-time `model` override (Agent tool: `"fable"`; Workflow
-   `agent()` opts.model) from a lead that has checked `frontier_access`.
-5. Launcher: sweep every binary pin (Appendix census) — there is no longer an "eval track only"
-   option to hide behind. ⚠️ The old text here read "bump the EVAL track only, NEVER the stable
-   track", which was safe advice in the two-track world and is unrunnable now: consolidation v2
-   deleted the eval track, so a bump is fleet-wide by construction. That is what makes gate 3
-   (`/cc-upgrade-gate`) load-bearing rather than optional.
-6. Verify (below) + write a memory entry. Record the **access terms**, not a window end date —
-   `frontier_access.permanent: true` is the current shape and a hardcoded end date was the thing
-   that rotted last time.
+   - `.claude/skills/research-subagents/SKILL.md` (the `review` entry in model-classification.json)
+   - reso `.claude/commands/project-pass.md`, `docs/research/CONTEXT_EXHAUSTION_GUARDRAILS.md` —
+     a SECOND repo with its own gate and land cycle; scope that deliberately
+   🚨 **Name the SSOT KEY, not the model.** Write "`versions.frontier_latest`" rather than a model
+   name. A footnote that restated the model once accumulated three false claims (a window that had
+   ended, a launcher conjunct no session could satisfy, a fallback that had moved), and a
+   conditional that names a deleted launcher reads as "the tier is unavailable" (historical).
+4. **Agent frontmatter stays a family alias (`model: opus`).** The new tier is a call-time `model`
+   override (Agent tool: `"fable"`; Workflow `agent()` opts.model) from a lead that has checked
+   `frontier_access`.
+5. The binary moves fleet-wide through the activation script (gate.md); every other consumer reads
+   `bin/cc-claude-bin`. There is no second lane to trial it on, which is what makes the gate
+   load-bearing.
+6. Verify (below) + a memory entry. Record the **access terms**, not a window end date — a
+   hardcoded end date is what rotted last time.
 
-## Case C — Downgrade / window-end
+### Case C — Downgrade / window-end
 
 Because Case B wrote conditional references, this is config-only:
 
-1. `model-config.yaml`: `frontier_access.active: false` (leave the block — historical
-   record + reusable for the next window).
-2. `~/.zshrc`: remove `--model <id>` from the eval-track function (2 refs, ~lines
-   306/310); keep the version pin unless also rolling back CC.
-3. Roles: conditional roles auto-degrade via `fallback` — no edit. If any doc hard-pinned
-   the frontier ID outside the conditional pattern: `claude-bump-models --from-to
-   claude-fable-5 claude-opus-4-8` (dry-run first).
-4. `claude-lint-models.sh --all` → expiry warning clears (active is false).
-5. Memory: note the window closed + actual end date.
+1. `model-config.yaml`: `frontier_access.active: false` (leave the block — historical record,
+   reusable for the next window).
+2. `~/.zshrc` `claude()`: if a `--model` default names the frontier id, point it at
+   `frontier_access.fallback`; keep the binary pin unless also rolling back CC.
+3. Roles: conditional roles auto-degrade via `fallback` — no edit. If a doc hard-pinned the
+   frontier id outside the conditional pattern:
+   `claude-bump-models --from-to <frontier-id> <fallback-id>` (dry-run first; read both ids from the SSOT).
+4. `~/.claude/scripts/claude-lint-models.sh --all` → the expiry warning clears.
+5. Memory: note the window closed + the actual end date.
+
+### Case D — Role / default-tier repoint
+
+Move ONE role at a time, at the rung utilize.md chose; run the § Case D emitter census above;
+spot-check one live spawn of that role (its `modelUsage`); revert in one line if it regresses.
 
 ## Verification (every case)
 
@@ -308,93 +189,24 @@ claude-bump-models            # dry-run: expect 0 pending
 ~/.claude/scripts/claude-lint-models.sh --all
 rg -n 'claude-(fable|opus|sonnet|haiku)-[0-9]|Opus [45]\.[0-9]|Fable [0-9]' \
   ~/.claude/commands ~/.claude/agents ~/.claude/model-config.yaml
-# the binary actually in service, and whether it knows the id you just wrote:
-BIN=$(readlink -f "$HOME/.claude-220/node_modules/@anthropic-ai/claude-code/bin/claude.exe")
-strings -a "$BIN" | grep -c -- "$(yq -r '.versions.frontier_latest' ~/.claude/model-config.yaml)"
-strings -a "$BIN" | grep -c -- claude-opus-5     # positive control; 0 here means the PROBE is broken
+# every id the SSOT now routes is registered in the binary actually in service:
+for k in frontier_latest opus_latest sonnet_latest haiku_latest; do
+  id=$(yq -r ".versions.$k // \"\"" ~/.claude/model-config.yaml); [ -n "$id" ] && cc-model-registered "$id"
+done
 ```
 
-⚠️ Two corrections to what this block used to say (2026-09-03). It ran `claude-next --version` —
-that launcher was deleted by consolidation v2 and the command silently does nothing. And it grepped
-`~/.claude/rules`, which **no longer holds the file that step was looking for** (the content moved
-to reso's `.claude/rules/`). A verification step that greps for an absent file returns clean and
-proves nothing — swap the paths, keep the intent. ⚠️ The scope claim here used to read "does not
-load on this machine and no longer exists", and both halves were too strong: the directory exists
-and holds `agent-operating-lessons.md`, and it LOADS interactively — the 2.1.114/2.1.220 probes
-that produced the original verdict were all run under `claude -p`, the one mode where it does not.
-**Update `.claude-220` above to whatever the launcher pin currently is** — see the Appendix census;
-that path is itself one of the pins that goes stale.
+A Case D change also needs its emitter census and a live spawn; the block above cannot see it.
 
-## Appendix — the binary pins (runtime, distinct from doc refs)
+## Invariants (long form)
 
-⚠️ **REWRITTEN 2026-09-03. This section used to describe TWO launcher tracks — a held-at-2.1.114
-"stable" `claude`/`cc` via `claude-latest`, and an "eval" `claude-next`/`cc-next` — with the rule
-"bump the EVAL track only, NEVER the stable track". That world is gone.** Launcher consolidation v2
-deleted `claude-next`, `cc-next`, `claude-fable*` and `claude-opus5`; the survivors are `claude`,
-`cc`, `claude-prev`, `cc-prev` and the account/effort variants (`claude2/3/4`, `claude-x`,
-`claude-h`, …). Every one of them resolves to a single pin. **There is no second lane still running
-the old binary**, which is precisely why the binary gate now has to be Step 0: a bump is fleet-wide
-and simultaneous, not a track you can try things on.
-
-**The pins are plural and cannot check each other** (census 2026-09-03; `.claude-220` was current):
-
-| Where | Shape | If left stale |
-|---|---|---|
-| `~/.zshrc:496` | `local _bin="$HOME/.claude-220/node_modules/.bin/claude"` — inside `claude()` | LOUD. The path is gone, the launcher errors. |
-| `bin/cc-offload:87` | `CLOUD_CLAUDE="${CC_CLOUD_CREATE_BIN:-$HOME/.claude-220/…}"` | **SILENT.** Old dir still on disk ⇒ cloud offload keeps running the OLD binary. |
-| `scripts/lib/cloud-create.sh:116` | `: "${CC_CLOUD_CREATE_BIN:=$HOME/.claude-220/…}"` | **SILENT**, same shape. |
-| `scripts/capacity-ramp.sh:51` | `BIN="${CC_RAMP_BIN:-$HOME/.claude-220/…}"` | **SILENT.** |
-| `hooks/model-permission-decider.py:93` | `"MITL_CLAUDE_BIN", "/Users/chrisren/.claude-220/…"` — absolute | **SILENT**, and it decides permissions. |
-| `scripts/mcp-modal-probe.py:28`, `scripts/mcp-modal-e2e-probe.py:12` | probe paths | probe measures the OLD binary and reports it as current. |
-| `bin/cc-notify:754` | error text: "Point `CC_CLAUDE_BIN` at a **2.1.220+** binary" | a version ASSERTION inside a string; goes quietly wrong. |
-| `bin/cc-reaper:2766-2768` | `/x/.claude-220/…` selftest stubs | fixtures, not live — but they rot as fixtures. |
-
-**The `${VAR:-default}` ones are the dangerous class**, and for the same reason the model-id
-EMITTERS are: they do not fail, they keep working against the previous version, which is still
-sitting on disk precisely because we keep it for rollback. The rollback artefact is what makes the
-stale pin invisible.
-
-📌 Filed as backlog `e8b753cac339` with this census. It supersedes the older task-board item
-("claude_bin is pinned in 2 places that must agree but cannot check each other"), which
-**undercounts** — measured, it is 6 live pins plus 2 probes and a version assertion inside a
-string. Bumping the binary means sweeping all of them, or — better, and the actual fix — giving
-them one resolver to read.
-
-**Bump procedure:** `npm install --prefix ~/.claude-<NNN> @anthropic-ai/claude-code@<ver>` →
-run the binary gate's gates 1–3 → sweep every pin above → `source ~/.zshrc` → keep the prior
-`~/.claude-<NNN>` for rollback. `~/.claude-versions/` + `bin/claude-latest` + MANIFEST default-deny
-still exist and still guard the legacy `claude-latest` path; the live launcher no longer goes
-through them, so a MANIFEST entry is no longer sufficient to move the fleet.
-
-## Invariants
-
-1. **Never write a model id the LIVE binary cannot dispatch** — that is Step 0, and it is the
-   invariant this skill most recently lacked. (Superseded wording: "never pin a model the stable
-   track doesn't know". The stable/eval split is gone; the constraint survives and got stricter,
-   because there is now only one track and no parallel lane to fail safe into.)
+1. **Never write a model id the live binary cannot dispatch** — P1, every time.
 1b. **A staged id is not a routed id.** While `<family>_staged` is set, every doc, role and
-   allowlist keeps naming the OLD model, and `claude-bump-models --apply` stays unrun. The staged
-   key exists so the SSOT can record a release without claiming it.
-2. Never rewrite historical citations, benchmarks, incident records, or provenance lines.
-   The test is tense: "the worker slot defaults to X" is a routing claim (update); "Sonnet 5
-   measured ≤ Opus 4.8 quality" is a measurement (preserve, and annotate as not-re-run).
-3. Frontier docs are conditional-by-construction; if you catch yourself writing a bare
-   "use Fable 5" without the window condition, rewrite it.
+   allowlist keeps naming the OLD model, and `claude-bump-models --apply` stays unrun.
+2. Never rewrite historical citations, benchmarks, incident records, or provenance lines. The test
+   is tense: "the worker slot defaults to X" is a routing claim (update); "X measured ≤ Y" is a
+   measurement (preserve, and annotate as not re-run).
+3. Frontier docs are conditional by construction; a bare "use <frontier model>" without the window
+   condition gets rewritten.
 4. Model facts come from the claude-api skill, not memory.
-5. `claude-bump-models --apply` mutates the PRIMARY checkout working tree — project-side
-   fixes go through a session worktree + commit instead.
-6. **A CC-version ROLLBACK silently drops capabilities that live in the binary, not in our
-   config.** Recorded instance (still the canonical example): rolling 2.1.170 → 2.1.114 dropped the
-   long-horizon harness — the autonomous-loop preamble, the "check your last paragraph before
-   ending the turn" early-stop instruction, and the `SendUserMessage` verbatim tool all lived in
-   the newer binary. The specific version pair is historical (the eval track it described is gone),
-   but the CLASS is permanent and now matters MORE: with one track, a rollback moves the whole
-   fleet. A model-only change (Case C) keeps the version pin and is unaffected. After any
-   CC-version rollback, re-verify that autonomous `/loop`, `/frontier-run` and `/schedule`
-   still self-terminate and report correctly — and prefer re-running `/cc-upgrade-gate` on the
-   rolled-back build over assuming the old one still behaves as remembered.
-7. **Registration ≠ entitlement ≠ plan inclusion.** Three separate gates that fail differently:
-   the id missing from the binary (Step 0, silent non-dispatch), the account not entitled
-   (server-side, can be date-gated — Fable 5 was), and the model not being in plan usage (a
-   billing fact no probe on this box can see). Never let one stand in for another, and record
-   "NOT STATED" as itself rather than resolving it to "yes".
+5. `claude-bump-models --apply` mutates the PRIMARY checkout's working tree — project-side fixes
+   go through a session worktree + commit instead.

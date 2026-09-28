@@ -669,7 +669,7 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
       bin/cc-*)                  want=1; cls='bin/cc-*' ;;
       bin/desk-*)                want=1; cls='bin/desk-*' ;;
       bin/ms365-*)               want=1; cls='bin/ms365-*' ;;
-      skills/*/*/*)              want=0 ;;   # install.sh links skills/<name>/<file>, one level only
+      skills/*/*/*)              want=0 ;;   # nested: install.sh links these too (recursive), but this assert scores top level only
       skills/*/*)                want=1; cls='skills/*/*' ;;
       # Root-config SSOTs, each its own install.sh line (:436, :445) rather than a loop. accounts.json
       # is deliberately ABSENT: install.sh:428 links it, but it is gitignored (it holds real email
