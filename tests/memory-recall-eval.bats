@@ -252,10 +252,10 @@ class StaticModel:
 PY
 }
 
-# run_fuse <extra args…> — the fused eval over the fixture corpus, results JSON to $OUT.
+# run_fuse — the fused eval over the fixture corpus, results JSON to $OUT.
 run_fuse() {
   run env PYTHONPATH="$BATS_TEST_TMPDIR/stub" python3 "$REPO/$FUSE_PY" "${CORPUS[@]}" \
-    --queries "$FX/queries.json" --out "$OUT" "$@"
+    --queries "$FX/queries.json" --out "$OUT"
 }
 
 # fuse_row <id> <style> <key> — one field of one row out of $OUT.
