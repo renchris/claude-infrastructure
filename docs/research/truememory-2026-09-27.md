@@ -1409,6 +1409,43 @@ Arm 1 registers none of these. All three arms also run the f3 sandbox guard.
 7. **Smoke runs** (T01 in arms 1-3) ran under a separate root and are excluded from the results. They matched
    the full run.
 
+### 5.18 Wave E #23 and #26 — DROP under §5.17's no-gain branch (recorded 2026-09-28, no build)
+**Rule applied.** §5.16 pre-registered: "No gain → … Wave E #23 and #26 stop". §5.17 measured no gain (0 wins,
+0 losses, 16 ties, p = 1.0), so both stop. Neither experiment's own verdict rule (plan § Wave E) was scored,
+and neither is reopened by a result recorded here.
+
+- **#23 per-prompt pointer recall: DROP.** Never built. Its rule (≥40 hand-labelled shadow fires, top-1 relevant
+  ≥60% with Wilson lower bound ≥45%, fires on ≤15% of prompts) was never run. It is a push consumer at the prompt,
+  the class §5.17 says not to add on faith. *Reopen only if* a delivery-research wave, on tasks the stock arm
+  fails (#36's fixtures, §5.23-5.24), shows that a pushed pointer changes what the agent does.
+- **#26 ruling-shaped operator text nudge: DROP.** It shadowed from Wave B (`e2d44ff12`) until this wave. Its
+  live log never reached its own n. From the first row (2026-09-28T07:10:14Z) to 16:45:19Z, the
+  `memory-nudge:ruling` IDL rows numbered 184: **0 fired**, 15 no-match, 169 not-typed. Most counted prompts in
+  that window were machine-authored (fire briefs, task notifications, teammate mail), and
+  `~/.claude/state/ruling-shadow.jsonl` was never written. Its rule needed ≥20 fires with precision ≥70% and fires
+  on ≥2 of the 4 never-written rulings, and it had 0 fires. The fire path is retired: the shadow is now off unless
+  `CC_RULING_SHADOW=on` is set. Each prompt still logs one `abstained kill-switch` row, a reached guard (DORMANT),
+  so the registry row stays true. *Reopen only if* the same delivery-research wave shows that capture at the
+  ruling moment changes behaviour. #24's Stage 0 (§5.20) measures the capture half from transcripts, not prompts.
+
+### 5.19 Wave E #4b — FTS5 + model2vec fusion on operator-worded queries
+*Pending: owned by the Wave E teammate `tme-4b`, which replaces this line with its pre-registration and results.*
+
+### 5.20 Wave E #24 — candidate extractor, Stage 0 (`--dry-run`)
+*Pending: owned by the Wave E teammate `tme-24`, which replaces this line with its pre-registration and results.*
+
+### 5.21 Wave E #25 — transcript capture scan, dry-run verdicts
+*Pending: owned by the Wave E teammate `tme-24`; decided by #24's Stage-0 verdict.*
+
+### 5.22 Wave E #27 — provenance-and-verification tier
+*Pending: owned by the Wave E teammate `tme-27`, which replaces this line with its pre-registration and results.*
+
+### 5.23 Wave E #36 — adherence at the moment of action: inventory, fixtures, PRE-REGISTRATION
+*Pending: owned by the Wave E teammate `tme-36a`, which writes the pre-registration here before any scored run.*
+
+### 5.24 Wave E #36 — results
+*Pending: owned by the Wave E teammate `tme-36b`, which replaces this line with the A/B results and verdict.*
+
 ---
 
 ## 6. Trust assessment of TrueMemory's claims
