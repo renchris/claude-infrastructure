@@ -39,6 +39,9 @@ setup() {
   export LRU_SELF_SID=""
   export LRU_LR_LIB="$BATS_TEST_TMPDIR/absent-lr-lib.sh"
   export LRU_NOTIFY_BIN="$BATS_TEST_TMPDIR/absent-cc-notify"
+  # The resume-debt ledger is tests/lr-upgrade-custody.bats's subject; here it is absent, so every
+  # case keeps the pre-ledger behaviour and never reaches a real cc-resume-debt.
+  export CC_RESUME_DEBT_BIN="$BATS_TEST_TMPDIR/absent-cc-resume-debt"
   STUBS="$BATS_TEST_TMPDIR/stubs"; mkdir -p "$STUBS"
   # NEVER the real terminal: it2 is a recorder and the retype budget is zero unless a case raises it.
   printf '#!/bin/bash\necho "$*" >> %s\n' "$BATS_TEST_TMPDIR/it2.log" > "$STUBS/it2"; chmod +x "$STUBS/it2"

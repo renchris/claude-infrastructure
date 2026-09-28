@@ -58,6 +58,14 @@ LRU_LR_LIB="${LRU_LR_LIB:-$LRU_DIR/lr-lib.sh}"
 LRU_IT2_BIN="${LRU_IT2_BIN:-$HOME/.claude/bin/it2}"
 LRU_TRANSPLANT="${LRU_TRANSPLANT:-$LRU_DIR/lr-transplant.sh}"
 LRU_NOTIFY_BIN="${LRU_NOTIFY_BIN:-$HOME/.claude/bin/cc-notify}"
+# The resume-debt ledger (docs/plans/CLOSE_RESUME_CUSTODY.md §2 D2): surface check before /exit,
+# pane-bound proof, settle a stranded relaunch. Every call is best-effort — an absent tool must never
+# halt an upgrade, so each caller falls back to the pre-ledger behaviour when it is missing.
+LRU_RD_BIN="${CC_RESUME_DEBT_BIN:-}"
+if [ -z "$LRU_RD_BIN" ]; then
+  LRU_RD_BIN="$LRU_DIR/../../bin/cc-resume-debt"
+  [ -x "$LRU_RD_BIN" ] || LRU_RD_BIN="$HOME/.claude/bin/cc-resume-debt"
+fi
 LRU_SELF_SID="${LRU_SELF_SID-${CLAUDE_CODE_SESSION_ID:-}}"
 LRU_RETYPE_MAX="${LRU_RETYPE_MAX:-5}"; case "$LRU_RETYPE_MAX" in ''|*[!0-9]*) LRU_RETYPE_MAX=5 ;; esac
 LRU_RETYPE_GAP_S="${LRU_RETYPE_GAP_S:-20}"; case "$LRU_RETYPE_GAP_S" in ''|*[!0-9]*) LRU_RETYPE_GAP_S=20 ;; esac
@@ -72,6 +80,26 @@ UPG_LOCK="$LRU_STATE/upgrade-drain.lock"
 UPG_MUTEX_DIR="$LRU_STATE/runs/by-sid"
 
 lru_say() { printf 'lr-upgrade: %s\n' "$*" >&2; }
+
+LRU_RD_LOG=/dev/null   # a drive points this at its run dir; stdout stays the result row
+lru_rd() { # cc-resume-debt <args> → its rc; 127 when the tool is absent (callers fall back)
+  [ -x "$LRU_RD_BIN" ] || return 127
+  "$LRU_RD_BIN" "$@" >> "$LRU_RD_LOG" 2>&1
+}
+# One mail per result. `poller-auto` is a requester NAME, not an address: mailed literally it exits
+# 3 (target unknown) and the verdict reached nobody (incident 2026-09-28). It, and any other value
+# cc-notify reports unknown, goes to the desk role instead.
+lru_mail() { # $1=requested_by $2=message
+  local rc=0
+  [ -x "$LRU_NOTIFY_BIN" ] || return 0
+  case "$1" in
+    ''|'?'|-) return 0 ;;
+    poller-auto) rc=3 ;;
+    *) "$LRU_NOTIFY_BIN" "$1" "$2" >/dev/null 2>&1 || rc=$? ;;
+  esac
+  [ "$rc" = 3 ] && { "$LRU_NOTIFY_BIN" --role desk "$2" >/dev/null 2>&1 || true; }
+  return 0
+}
 
 # ── the SSOT: which model is "current" ──────────────────────────────────────────────────────────
 # One awk per key, scoped to its block and stopping at the next top-level key — the same shape as
@@ -776,9 +804,7 @@ lru_switch_result() { # $1=sid $2=pane $3=VERDICT $4=from $5=to $6=reason $7=req
     > "$tmp" 2>/dev/null && mv -f "$tmp" "$UPG_RESULTS/switch-$1.json"
   msg="CC-LR-SWITCH pane $2 (${1:0:8}): verdict=$3 from=${4:--} to=${5:--} proven=$proven - $6"
   printf '%s\t%s\t%s\t%s\n' "$2" "${1:0:8}" "$3" "$6"
-  case "$8" in ''|'?'|-) ;; *)
-    [ -x "$LRU_NOTIFY_BIN" ] && "$LRU_NOTIFY_BIN" "$8" "$msg" >/dev/null 2>&1 || true ;;
-  esac
+  lru_mail "$8" "$msg"
 }
 
 lru_last_text() { # $1=transcript → the last assistant text, one line, ≤200 chars
@@ -931,8 +957,14 @@ EOF
   mkdir -p "$run" 2>/dev/null || true
   L="$(lru_mint_launcher "$run" "$tcfg" "$cwd" "$sid" "$model" "$eff" "$perm" "")" || {
     lru_switch_result "$sid" "$pane" NOTMOVED "$from" "$target" "could not mint an ASCII-only launcher in $run: nothing stopped, nothing typed" "$req" "$by"; return 3; }
-  # 1. STOP. Everything before this line refused without touching anything.
+  # 1. STOP. Everything before this line refused without touching anything. The stop is a CLOSE, so
+  # it opens a resume debt first (handoff-fire does this for the foreground path; this one exits
+  # via `claude stop` + ^C and never reaches it). Best-effort: an absent ledger changes nothing.
+  LRU_RD_LOG="$run/resume-debt.log"
+  lru_rd open --sid "$sid" --cfg "$scfg" --cwd "$cwd" --pane "$pane" --account "$from" --by "lr-upgrade switch-bg" \
+    --why "switch $from -> $target: claude stop $job, then relaunch in pane $pane" || true
   if ! lru_bg_stop "$scfg" "$job" "$bpid" "$run"; then
+    lru_rd abandon --sid "$sid" --why "claude stop $job did not end bg pid $bpid: the close never happened" || true
     lru_switch_result "$sid" "$pane" FAILED "$from" "$target" "claude stop $job did not end bg pid $bpid within ${LRU_BG_STOP_S:-30}s (log $run/stop.log); nothing transplanted, nothing typed" "$req" "$by"; return 1
   fi
   # 2. TRANSPLANT, in its two phases.
@@ -940,6 +972,10 @@ EOF
      || ! bash "$LRU_TRANSPLANT" --sid "$sid" --from "$scfg" --to "$tcfg" --phase confirm --cause voluntary >> "$run/transplant.log" 2>&1; then
     lru_switch_result "$sid" "$pane" FAILED "$from" "$target" "stopped, but lr-transplant refused (log $run/transplant.log); the conversation is intact under $scfg - reopen it with: CLAUDE_CONFIG_DIR=$scfg claude attach $job" "$req" "$by"; return 1
   fi
+  # The conversation now lives under the target: re-key the debt so any relaunch reads it there.
+  lru_rd abandon --sid "$sid" --why "transplanted $from -> $target; re-opened under $tcfg" || true
+  lru_rd open --sid "$sid" --cfg "$tcfg" --cwd "$cwd" --pane "$pane" --account "$target" --by "lr-upgrade switch-bg" \
+    --why "switch $from -> $target: relaunch in pane $pane" || true
   # 3. QUIT THE AGENT VIEW, then type the launcher at the shell it leaves behind.
   t0="$(date +%s)"
   # shellcheck disable=SC1090  # sourced in a subshell: a sibling library must not replace our names
@@ -964,8 +1000,18 @@ EOF
     [ "$(date +%s)" -lt "$deadline" ] || break
     sleep "${LRU_SWITCH_POLL_S:-5}"
   done
+  # No flip: the ledger settles it (a NEW window, same sid, else one backlog row + page).
+  local settled=""
   if [ "$rsid" != "$sid" ] || [ "$racct" != "$target" ]; then
-    lru_switch_result "$sid" "$pane" FAILED "$from" "$target" "stopped and transplanted, launcher typed $i time(s), but pane $pane's registry row does not name ${sid:0:8} on $target - run in that pane: cd $cwd && bash $L" "$req" "$by"; return 1
+    local src=0 why="stopped and transplanted, launcher typed $i time(s), but pane $pane's registry row does not name ${sid:0:8} on $target - run in that pane: cd $cwd && bash $L"
+    lru_settle "$sid" "$pane" "pane $pane never showed ${sid:0:8} on $target after $i retype(s)" || src=$?
+    case "$src" in
+      0) settled="$LRU_SETTLE_WHY" ;;
+      127) lru_switch_result "$sid" "$pane" FAILED "$from" "$target" "$why" "$req" "$by"; return 1 ;;
+      *) lru_switch_result "$sid" "$pane" FAILED "$from" "$target" "$LRU_SETTLE_WHY; log $LRU_RD_LOG" "$req" "$by"; return 1 ;;
+    esac
+  else
+    lru_rd discharge --sid "$sid" --why "registry flip: pane $pane names ${sid:0:8} on $target" || true
   fi
   # …AND THE SOURCE STAYING DEAD. One re-stop if the daemon re-claimed the job, then the truth.
   again="$(lru_bg_row "$sid" | awk -F'\t' -v c="$scfg" '$3 == c { print $2 }')"
@@ -975,6 +1021,10 @@ EOF
     if [ -n "$again" ]; then
       lru_switch_result "$sid" "$pane" FAILED "$from" "$target" "SPLIT-BRAIN: live on $target in pane $pane, but the $from daemon re-claimed job $job (pid $again) and a re-stop did not end it - stop it: CLAUDE_CONFIG_DIR=$scfg claude stop $job" "$req" "$by"; return 1
     fi
+  fi
+  if [ -n "$settled" ]; then
+    lru_switch_result "$sid" "$pane" SWITCHED "$from" "$target" "bg session: job $job stopped under $scfg and stayed stopped; $settled" "$req" "$by"
+    return 0
   fi
   lru_switch_result "$sid" "$pane" SWITCHED "$from" "$target" "bg session: job $job stopped under $scfg and stayed stopped; pane $pane relaunched it on $target (registry flip, transcript under $tcfg)" "$req" "$by"
   return 0
@@ -1055,9 +1105,7 @@ lru_result() { # $1=sid $2=pane $3=verdict(upgraded|skipped|failed) $4=reason $5
     '{sid:$sid, pane:$pane, verdict:$v, reason:$why, command:$cmd, req_id:$req, requested_by:$by, ts:$ts}' \
     > "$tmp" 2>/dev/null && mv -f "$tmp" "$UPG_RESULTS/upgrade-$1.json"
   printf '%s\t%s\t%s\t%s\n' "$2" "${1:0:8}" "$3" "$4"
-  case "$7" in ''|'?'|-) ;; *)
-    [ -x "$LRU_NOTIFY_BIN" ] && "$LRU_NOTIFY_BIN" "$7" "CC-LR-UPGRADE pane $2 (${1:0:8}): $3 - $4${5:+ | run: $5}" >/dev/null 2>&1 || true ;;
-  esac
+  lru_mail "$7" "CC-LR-UPGRADE pane $2 (${1:0:8}): $3 - $4${5:+ | run: $5}"
 }
 
 # The capacity decision, BEFORE anything is typed (defect 3). The probe charges nothing; the mint
@@ -1100,10 +1148,55 @@ lru_resumed_on() { # $1=sid $2=binary $3=model → 0 when a live --resume <sid> 
   done
   return 1
 }
+# …BUT A PROCESS IS NOT PROOF (incident 2026-09-28). lr_resume_procs is a machine-wide argv match: it
+# accepted the operator's out-of-pane rescue as pane 405's relaunch and wrote `upgraded` over a
+# stranded pane. Proof is cc-resume-debt's registry-bound LIVE read, held; lru_resumed_on stays as
+# the binary/model check. A short retry covers the registry row lagging a just-started process.
+lru_proven() { # $1=sid $2=binary $3=model → 0 when proven LIVE (tool absent: lru_resumed_on)
+  local n=0 rc=0
+  while :; do
+    rc=0; lru_rd prove --sid "$1" --hold "${LRU_PROVE_HOLD_S:-15}" || rc=$?
+    [ "$rc" = 127 ] && { lru_resumed_on "$1" "${2:-}" "${3:-}"; return; }
+    [ "$rc" = 0 ] && return 0
+    n=$((n + 1)); [ "$n" -lt "${LRU_PROVE_TRIES:-3}" ] || return 1
+    sleep "${LRU_PROVE_GAP_S:-5}"
+  done
+}
+# The relaunch surface: is the pane still enumerated by the terminal? rc 0 yes · 1 absent · 3 unknown
+# · 127 no tool. The window 405 was destroyed ~19 s after a clean /exit; everything typed after that
+# went nowhere.
+lru_surface() { lru_rd surface --pane "$1"; }
+# A stranded close, handed to the ledger: relaunch in a NEW window with the same sid, else ONE
+# backlog row + page. Sets LRU_SETTLE_WHY to the verdict clause; rc 0 proven · 1 escalated/undecided
+# · 127 no tool.
+LRU_SETTLE_WHY=""
+lru_settle() { # $1=sid $2=pane $3=how the pane was left
+  local rc=0
+  LRU_SETTLE_WHY=""
+  lru_rd settle --sid "$1" || rc=$?
+  case "$rc" in
+    0) LRU_SETTLE_WHY="relaunched in a NEW window by cc-resume-debt ($3)"; return 0 ;;
+    1) LRU_SETTLE_WHY="stranded ($3); escalated to cc-backlog needs by cc-resume-debt (find the row: cc-resume-debt list --escalated; run it: cc-do <id>)" ;;
+    127) return 127 ;;
+    *) LRU_SETTLE_WHY="stranded ($3); resume-debt undecided (settle rc $rc; cc-resume-debt sweep keeps it open)" ;;
+  esac
+  return 1
+}
 # lr-fire-resume's own last word about the confirmation prompt, from the run's state log.
 lru_submit_state() { # $1=run dir → last state line's state, empty when none
   [ -f "$1/events.jsonl" ] || return 0
   jq -r '.state // empty' "$1/events.jsonl" 2>/dev/null | tail -n 1
+}
+
+# The verdict of a stranded or unproven relaunch, from the ledger's settle. rc 0 upgraded · 1 failed.
+lru_settle_verdict() { # $1=sid $2=pane $3=how the pane was left $4=no-tool reason $5=command $6=req $7=by
+  local rc=0
+  lru_settle "$1" "$2" "$3" || rc=$?
+  case "$rc" in
+    0) lru_result "$1" "$2" upgraded "$LRU_SETTLE_WHY; proven LIVE by cc-resume-debt" "" "$6" "$7"; return 0 ;;
+    127) lru_result "$1" "$2" failed "$4" "$5" "$6" "$7"; return 1 ;;
+    *) lru_result "$1" "$2" failed "$LRU_SETTLE_WHY; log $LRU_RD_LOG" "$5" "$6" "$7"; return 1 ;;
+  esac
 }
 
 # ── drive ONE session ────────────────────────────────────────────────────────────────────────────
@@ -1165,6 +1258,17 @@ EOF
     1) lru_result "$sid" "$pane" skipped "composer-occupied (appeared after the census; nothing typed)" "" "$req" "$by"; return 3 ;;
     *) lru_result "$sid" "$pane" skipped "composer-unknown (unreadable at the last read; nothing typed)" "" "$req" "$by"; return 3 ;;
   esac
+  # THE RELAUNCH SURFACE, BEFORE ANY /exit (incident 2026-09-28): the relaunch is typed into this
+  # pane, so a pane the terminal does not enumerate now is a close with nowhere to resume into. Only
+  # a positive answer proceeds; an absent ledger tool keeps the pre-ledger behaviour, said aloud.
+  LRU_RD_LOG="$run/resume-debt.log"
+  local src=0; lru_surface "$pane" || src=$?
+  case "$src" in
+    0) ;;
+    1) lru_result "$sid" "$pane" skipped "relaunch-surface-unverified: pane $pane is not enumerated by the terminal now (nothing typed)" "" "$req" "$by"; return 3 ;;
+    127) lru_say "cc-resume-debt absent ($LRU_RD_BIN): relaunch surface of pane $pane NOT verified - proceeding as before" ;;
+    *) lru_result "$sid" "$pane" skipped "relaunch-surface-unverified: relaunch surface unknown for pane $pane (surface rc $src; nothing typed)" "" "$req" "$by"; return 3 ;;
+  esac
   # THE HOLD (lead only), as late as possible: every check that can still refuse without typing has
   # run. From here to the launcher's --team-restore the lead has no team dir, so its exit-time
   # cleanupSessionTeams finds no member to kill and nothing to delete.
@@ -1189,7 +1293,7 @@ EOF
       --source-pane "$pane" --source-session "$sid" --resume-launcher "$L" --resume-cfg "$cfg" \
       --resume-cwd "$cwd" ${tm_id:+--team-member-id "$tm_id"} --await ) > "$hflog" 2>&1 || hrc=$?
   binlabel="$(printf '%s\n' "$target_bin" | awk -F/ '{ for (i = 1; i <= NF; i++) if ($i ~ /^\.claude-/) { print $i; exit } ; print $NF }')"
-  if [ "$hrc" = 0 ] && lru_resumed_on "$sid" "$target_bin" "$tgt"; then
+  if [ "$hrc" = 0 ] && lru_resumed_on "$sid" "$target_bin" "$tgt" && lru_proven "$sid" "$target_bin" "$tgt"; then
     if [ "$role" = teammate ]; then
       lru_result "$sid" "$pane" upgraded "now $tgt on $binlabel (effort $eff) as teammate $tm_id; confirmed by its live --resume process (no prompt by design: the team is not woken)" "" "$req" "$by"; return 0
     fi
@@ -1204,20 +1308,39 @@ EOF
   # The old process is gone. Either the relaunch is up (slow engagement) or the pane is at a bare
   # shell. NEVER leave it there: retype the launcher, bounded. capacity-admit admits a given resume
   # after 3 refusals on one budget key (this run's dir), so ≤5 tries is enough and cannot loop.
+  # Retype ONLY into a surface that exists: a destroyed window's pane id types nowhere, and its tty
+  # may already belong to someone else's new window.
   i=0
+  local gone="" trc
   while ! lru_resumed_on "$sid" "$target_bin" "$tgt"; do
     [ "$i" -ge "$LRU_RETYPE_MAX" ] && break
+    src=0; lru_surface "$pane" || src=$?
+    if [ "$src" = 1 ]; then
+      gone=1; lru_say "pane $pane is no longer enumerated by the terminal: retyping stopped after $i retype(s)"; break
+    fi
     i=$((i + 1))
     sock="$(command -v lr_kitty_socket >/dev/null 2>&1 && lr_kitty_socket 2>/dev/null || true)"
-    CC_TERM_KITTY_TO="${sock:-${CC_TERM_KITTY_TO:-}}" "$LRU_IT2_BIN" session run -s "$pane" "cd $(printf %q "$cwd") && nocorrect bash $(printf %q "$L")" >/dev/null 2>&1 || true
+    trc=0; CC_TERM_KITTY_TO="${sock:-${CC_TERM_KITTY_TO:-}}" "$LRU_IT2_BIN" session run -s "$pane" "cd $(printf %q "$cwd") && nocorrect bash $(printf %q "$L")" >/dev/null 2>&1 || trc=$?
+    [ "$trc" = 0 ] || lru_say "retype $i into pane $pane: it2 rc $trc"
     local w=0
     while [ "$w" -lt 30 ]; do lru_resumed_on "$sid" "$target_bin" "$tgt" && break; sleep 2; w=$((w + 2)); done
     lru_resumed_on "$sid" "$target_bin" "$tgt" || sleep "$LRU_RETYPE_GAP_S"
   done
   if ! lru_resumed_on "$sid" "$target_bin" "$tgt"; then
-    # The launcher never ran: put the team back so the manual relaunch below finds it.
+    # The launcher never ran: put the team back so the settle (or the manual relaunch) finds it.
     [ "$held" = 1 ] && { lru_team_restore "$cfg" "$team" || lru_say "!! team $team hold could not be restored - it is at $(lru_team_hold_path "$cfg" "$team")"; }
-    lru_result "$sid" "$pane" failed "pane left at a bare shell after $i retype(s) (handoff-fire rc $hrc; log $hflog)" "$cmd" "$req" "$by"; return 1
+    local left="pane $pane stayed at a bare shell after $i retype(s)"
+    [ -n "$gone" ] && left="pane $pane was gone"
+    lru_settle_verdict "$sid" "$pane" "$left" \
+      "pane left at a bare shell after $i retype(s) (handoff-fire rc $hrc; log $hflog)" "$cmd" "$req" "$by"
+    return
+  fi
+  # A PROCESS IS NOT PROOF: `upgraded` below requires the registry-bound LIVE read. An unproven
+  # relaunch (an out-of-pane or unregistered --resume) is settled, never reported upgraded.
+  if ! lru_proven "$sid" "$target_bin" "$tgt"; then
+    lru_settle_verdict "$sid" "$pane" "a --resume ${sid:0:8} process runs on the target but is not proven LIVE in the registry" \
+      "relaunch unproven (handoff-fire rc $hrc; log $hflog)" "$cmd" "$req" "$by"
+    return
   fi
   # RELAUNCHED ON THE TARGET — the upgrade is done. Now the confirmation turn, bounded, and cut
   # short the moment lr-fire-resume itself records that its prompt never reached the transcript.
