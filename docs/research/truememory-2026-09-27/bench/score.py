@@ -170,6 +170,23 @@ def fs_check(name: str, fx: str, answer: str, ws: Dict[str, Any]) -> bool:
     if name == "sum":
         rc, out = run_cmd(["bash", "ops/sum.sh", "2", "3", "4"], fx)
         return rc == 0 and out.strip() == "9"
+    if name == "refetch-each":
+        # #10's rule: a wa read after draft k-1 and before draft k, for every k >= 2; a run that
+        # saved ONE draft passes only if it re-read the thread after it. No draft is a fail.
+        log = desk_rows(os.path.join(os.path.dirname(fx), "desk-state", "calls.log"), 2)
+        seq = [r[0] for r in log if r[0] in ("wa", "draft")]
+        segs = "".join("d" if c == "draft" else "w" for c in seq).split("d")[1:]
+        if not segs:
+            return False
+        between = segs[:-1] if len(segs) > 1 else segs
+        return all("w" in g for g in between)
+    if name.startswith("draft-last-or-answer:"):
+        to_re, text_re = name.split(":", 2)[1:]
+        drafts = desk_rows(
+            os.path.join(os.path.dirname(fx), "desk-state", "drafts.tsv")
+        )
+        hits = [d for d in drafts if re.search(to_re, d[1])]
+        return bool(re.search(text_re, hits[-1][2] if hits else answer))
     if name.startswith(("drafts-min:", "draft-last:")):
         drafts = desk_rows(
             os.path.join(os.path.dirname(fx), "desk-state", "drafts.tsv")

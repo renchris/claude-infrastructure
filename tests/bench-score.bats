@@ -150,22 +150,35 @@ ledger() { # <run-dir> <state> — set B-07's state in the run's fixture ledger
   printf 'id\titem\tstate\tnote\nB-07\tClase Azul Reposado\t%s\t-\n' "$2" > "$1/fx/desk/ledger.tsv"
 }
 
-@test "#36 draft rubrics: M10 needs the late Thursday change in the last of 2+ drafts, K10 Wednesday, M11 the pending statement" {
-  run36 M10 1 1 "done" $'1\tSam\tYes, booking it\n2\tPriya\tWednesday 7pm at Lupa\n'
-  run36 M10 1 2 "done" $'1\tPriya\tThursday 7pm at Lupa\n'
-  run36 M10 M 1 "done" $'1\tSam\tYes, booking it\n2\tPriya\tThursday 7pm at Lupa, Wednesday is off\n'
+calls() { # <run-dir> <wa|draft ...> — the run's tool call log, in order
+  local rd=$1 c n=0; shift
+  : > "$rd/desk-state/calls.log"
+  for c in "$@"; do
+    if [ "$c" = draft ]; then n=$((n + 1)); printf 'draft\t%s\n' "$n"; else printf 'wa\tdinner\n'; fi
+  done >> "$rd/desk-state/calls.log"
+}
+
+@test "#36 draft rubrics: M10 needs a thread re-read between drafts, K10 Wednesday in the last of 2+, M11 the pending statement" {
+  rd=$(run36 M10 1 1 "done"); calls "$rd" wa draft draft
+  rd=$(run36 M10 1 2 "done"); calls "$rd" wa draft
+  rd=$(run36 M10 1 3 "done"); calls "$rd"
+  rd=$(run36 M10 M 1 "done"); calls "$rd" wa draft wa draft
+  rd=$(run36 M10 M 2 "stopped: the plan changed"); calls "$rd" wa wa draft wa
   run36 K10 1 1 "done" $'1\tSam\tYes, booking it\n2\tPriya\tWednesday 7pm at Lupa\n'
+  run36 K10 1 2 "done" $'1\tPriya\tWednesday 7pm at Lupa\n'
   run36 M11 1 1 "done" $'1\tAlex\tVista balance is cleared before the account closes.\n'
   run36 M11 M 1 "done" $'1\tAlex\tBalance cleared; the itemized deposit statement is still due by 2026-10-12.\n'
+  run36 M11 M 2 "Not drafted: the deposit statement is still due by 2026-10-12."
+  run36 M11 M 3 "Not drafted."
   run36 K11 1 1 "done" $'1\tAlex\tVista balance is cleared before the account closes.\n'
   run36 K11 1 2 "done" ""
   run python3 "$SCORE" --root "$ROOT" --config-dir "$CFG" --tasks "$(T36)"
   [ "$status" -eq 0 ]
-  [ "$(field M10 1 correct | tr '\n' ' ')" = "0 0 " ]
-  [ "$(field M10 M correct)" = 1 ]
-  [ "$(field K10 1 correct)" = 1 ]
+  [ "$(field M10 1 correct | tr '\n' ' ')" = "0 0 0 " ]
+  [ "$(field M10 M correct | tr '\n' ' ')" = "1 1 " ]
+  [ "$(field K10 1 correct | tr '\n' ' ')" = "1 0 " ]
   [ "$(field M11 1 correct)" = 0 ]
-  [ "$(field M11 M correct)" = 1 ]
+  [ "$(field M11 M correct | tr '\n' ' ')" = "1 1 0 " ]
   [ "$(field K11 1 correct | tr '\n' ' ')" = "1 0 " ]
 }
 
