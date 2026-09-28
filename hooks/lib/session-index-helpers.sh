@@ -220,48 +220,86 @@ session_index_unlock() {
 # ─── Database Init ─────────────────────────────────────────
 # Uses standalone FTS5 (no content= sync) to avoid SQLite trigger restrictions.
 # FTS is rebuilt after bulk operations and kept in sync manually on single upserts.
+#
+# init_db runs outside the index lock on every SessionStart stub, SessionEnd and sweep tick
+# (~1,500×/day), so its migration path is the dangerous part. It used to probe each column with
+# a raw, timeout-less `PRAGMA table_info` whose FAILURE read as "column missing"; the migration
+# heredoc then ran without -bail, its ALTER failed on the duplicate column, and the
+# `DROP TABLE sessions_fts` after it still succeeded — leaving 40 of 9,422 sessions searchable
+# (TrueMemory study §3.2 P0b, gap 5). Now:
+#   - PRAGMA user_version gates the hot path: a stamped DB skips every probe and DDL.
+#   - A failed read (user_version or the column probe) skips every migration. It is never
+#     evidence that a column is missing.
+#   - A genuinely missing column is migrated in ONE -bail transaction that also re-creates and
+#     repopulates sessions_fts, so no failure can leave the FTS dropped.
+#
+# Bump SESSION_INDEX_SCHEMA_VERSION whenever SCHEMA or the migration below changes, or existing
+# DBs will never see the change. claude-session-search carries a copy of this function over the
+# SAME DB file, so the two constants must stay equal.
+SESSION_INDEX_SCHEMA_VERSION=1
+
+# Returns 0 when the columns are verified present or were migrated; 1 when nothing could be
+# verified (logged) — the caller must then not stamp user_version.
+_session_index_migrate_columns() {
+    local cols rc=0
+    cols=$(session_index_sql "SELECT name FROM pragma_table_info('sessions');" 2>/dev/null) || rc=$?
+    if [ "$rc" -ne 0 ] || [ -z "$cols" ]; then
+        session_index_log "init_db probe failed rc=$rc — skipping every migration (a failed read is not a missing column)"
+        return 1
+    fi
+
+    local c ddl="" added=""
+    for c in context_text assistant_text files_changed commands_run search_aliases; do
+        if ! printf '%s\n' "$cols" | grep -qx "$c"; then
+            ddl="${ddl}ALTER TABLE sessions ADD COLUMN $c TEXT NOT NULL DEFAULT '';
+"
+            added="$added $c"
+        fi
+    done
+    [ -n "$added" ] || return 0
+
+    # Logged BEFORE the DDL: errexit callers used to die between the DDL and the log line, which
+    # is why the last "Migrated" entry on the live box predates months of silent DROPs.
+    session_index_log "Migrated: adding${added} and rebuilding sessions_fts in one transaction"
+    # The sessions_fts definition must match SCHEMA below.
+    sqlite3 -bail "$SESSION_INDEX_DB" >/dev/null 2>&1 <<SQL || rc=$?
+.timeout $SESSION_INDEX_BUSY_TIMEOUT
+BEGIN IMMEDIATE;
+${ddl}DROP TABLE IF EXISTS sessions_fts;
+CREATE VIRTUAL TABLE sessions_fts USING fts5(
+    session_id, summary, first_prompt, tags, keywords, project_name, context_text,
+    assistant_text, files_changed, commands_run, search_aliases,
+    tokenize='porter unicode61 remove_diacritics 1',
+    prefix='2 3'
+);
+INSERT INTO sessions_fts (session_id, summary, first_prompt, tags, keywords, project_name, context_text, assistant_text, files_changed, commands_run, search_aliases)
+    SELECT session_id, summary, first_prompt, tags, keywords, project_name, context_text, assistant_text, files_changed, commands_run, search_aliases FROM sessions;
+COMMIT;
+SQL
+    if [ "$rc" -eq 0 ]; then
+        session_index_log "Migration committed:${added}"
+        return 0
+    fi
+    # -bail stops at the first error and closing the connection rolls the transaction back, so
+    # the DB is exactly as it was: sessions_fts was not dropped.
+    session_index_log "Migration FAILED rc=$rc — rolled back, sessions_fts untouched"
+    return 1
+}
 
 session_index_init_db() {
     mkdir -p "$(dirname "$SESSION_INDEX_DB")"
 
-    # Migrate: add context_text column if missing
+    local verified=1
     if [ -f "$SESSION_INDEX_DB" ]; then
-        local has_col
-        has_col=$(sqlite3 "$SESSION_INDEX_DB" "PRAGMA table_info(sessions);" 2>/dev/null | grep -c 'context_text' || true)
-        if [ "$has_col" = "0" ]; then
-            sqlite3 "$SESSION_INDEX_DB" >/dev/null 2>&1 <<'MIGRATE'
-ALTER TABLE sessions ADD COLUMN context_text TEXT NOT NULL DEFAULT '';
-DROP TABLE IF EXISTS sessions_fts;
-MIGRATE
-            session_index_log "Migrated: added context_text column, FTS will be recreated"
-        fi
-    fi
-
-    # Migrate: add enrichment columns if missing
-    if [ -f "$SESSION_INDEX_DB" ]; then
-        local has_assistant
-        has_assistant=$(sqlite3 "$SESSION_INDEX_DB" "PRAGMA table_info(sessions);" 2>/dev/null | grep -c 'assistant_text' || true)
-        if [ "$has_assistant" = "0" ]; then
-            sqlite3 "$SESSION_INDEX_DB" >/dev/null 2>&1 <<'MIGRATE2'
-ALTER TABLE sessions ADD COLUMN assistant_text TEXT NOT NULL DEFAULT '';
-ALTER TABLE sessions ADD COLUMN files_changed TEXT NOT NULL DEFAULT '';
-ALTER TABLE sessions ADD COLUMN commands_run TEXT NOT NULL DEFAULT '';
-DROP TABLE IF EXISTS sessions_fts;
-MIGRATE2
-            session_index_log "Migrated: added assistant_text, files_changed, commands_run columns, FTS will be recreated"
-        fi
-    fi
-
-    # Migrate: add search_aliases column if missing
-    if [ -f "$SESSION_INDEX_DB" ]; then
-        local has_aliases
-        has_aliases=$(sqlite3 "$SESSION_INDEX_DB" "PRAGMA table_info(sessions);" 2>/dev/null | grep -c 'search_aliases' || true)
-        if [ "$has_aliases" = "0" ]; then
-            sqlite3 "$SESSION_INDEX_DB" >/dev/null 2>&1 <<'MIGRATE3'
-ALTER TABLE sessions ADD COLUMN search_aliases TEXT NOT NULL DEFAULT '';
-DROP TABLE IF EXISTS sessions_fts;
-MIGRATE3
-            session_index_log "Migrated: added search_aliases column, FTS will be recreated"
+        local uv rc=0
+        uv=$(session_index_sql "PRAGMA user_version;" 2>/dev/null) || rc=$?
+        if [ "$rc" -ne 0 ] || ! [[ "$uv" =~ ^[0-9]+$ ]]; then
+            session_index_log "init_db user_version read failed rc=$rc — skipping every migration"
+            verified=0
+        elif [ "$uv" -ge "$SESSION_INDEX_SCHEMA_VERSION" ]; then
+            return 0
+        elif ! _session_index_migrate_columns; then
+            verified=0
         fi
     fi
 
@@ -341,6 +379,14 @@ CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
     prefix='2 3'
 );
 SCHEMA
+
+    # Stamp only a DB whose columns were verified this call; an unverified one is probed again
+    # next time rather than skipped forever.
+    if [ "$verified" = 1 ]; then
+        session_index_sql "PRAGMA user_version = $SESSION_INDEX_SCHEMA_VERSION;" >/dev/null 2>&1 \
+            || session_index_log "init_db user_version stamp failed rc=$? — will re-probe next call"
+    fi
+    return 0
 }
 
 # ─── Upsert Session ───────────────────────────────────────
