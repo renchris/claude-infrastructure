@@ -294,9 +294,67 @@ record.)*
 | 21, 22 | claim-queue spec; deny-only capture ledger | a background worker is approved |
 | 23-27 | experiments | #4 and #5 exist (23, 27); #14 (24, 25); #26 already in B |
 
-## Wave D — build-later items (S · `tma-wave-d`) — ready (Waves A-C DONE 2026-09-28)
+## Wave D — build-later items (S · `tma-wave-d`) — DONE 2026-09-28 (#21, #22 wait on Wave E #24)
 
 Each item's design is the research doc section named. "Done" = landed, gate-green, own suite passes.
+
+**Landed (origin/main, content-verified; live layer converged):**
+- #20 `6f4fd40b1` `memory-fleet-sweep.sh --schema` (report-only, writes nothing). Live: `SCHEMA-VERDICT
+  stores=34 files=1676 violations=15` (12 no-frontmatter, matching the research; 1 each missing name,
+  description, type).
+- #16 `a775df44e` `bin/cc-memory-neighbours` (mutual top-3 BM25 on name/description/first paragraph via #10's
+  tokenizer, unlinked and not same-origin, `archive/.family-names` scope, HOT-HUBS before/after; `--record`
+  writes only `.family-names`) · #17 `51dc25649` `cc-memory-dropped-token-audit --pair A B --into C` · both
+  wired into compact-memory step 7 and new step 7b `785491e11`. Infra store, full history (no
+  `.family-names` yet): 499 topics, 314 pairs, 63 families, hubs 104 → 169 if every pair were linked.
+- #19 `d69f06db4` kernel-released rotor lock (`flock`, else `/usr/bin/lockf`, else mkdir; `.rotate.lock`
+  never unlinked; `CCMR_LOCK_IMPL` seam); a SIGKILLed rotor leaves no lock; the drain renders `verdict=locked`
+  in its own words; a failed rename now prints `verdict=error reason=commit-rename-failed`.
+- #15 `0d81fb6f2` `bin/cc-memory-read-ledger` (all roots incl. subagents, author and >10-topic readers
+  excluded, metadata only, 365-day prune) · `ea07499f1` hourly damped sweep block
+  (`session-index-sweep:read-ledger` IDL rows) · `e1e7451ea` rotor protection (read by a non-author within
+  60 days ⇒ rank 2, never lowers a rank; `reads=absent|stale|ok` on the verdict) + registry row. First run
+  13.4 s over 5,341 transcripts (21 reads), warm 0.7 s.
+- #18a `aff1d904e` the sweep indexes `*/workflows/wf_*.json` (own row per file, source `workflow-sweep`,
+  never `script`/`logs`, 32K-char cap; retention counts wf files as evidence) · `7eb75b912` the sweep scans
+  every account root (one root-list function shared with retention and the parity block; symlinked roots
+  deduped). Before it, the live sweep saw only `~/.claude/projects`: ~70 of ~205 transcripts a day and 320 of
+  376 workflow files, including #106's gold, were never indexed. claude-search half: branch `tma-d-wfindex`
+  of claude-session-search (`5ec4365`), a PUBLIC repo; its push is operator step `eb1d9ecb9c41`
+  (`bash ~/.claude/autonomy/css-wfindex-land.sh --confirm claude-session-search`).
+- #18 `d16f659ec` `hooks/lib/episodic_cue.sh` · `a42563184` `scripts/episodic-cue-outcome.py` (nightly 7d) ·
+  `cbccd82d1` replay + X6 probe (`hook-probe/RESULTS-wave-d-2026-09-28.md`: PASS on 2.1.280) · `3d6272aae` the
+  nudge wiring (cue-only JSON on a non-due prompt; on a due one the cue leads unless a 🚨 overflow warning is
+  present; `memory-nudge:episodic` registry row). Fires on 14 of 3,205 typed prompts in 30 days (0.44%) and
+  on 4 of 4 targets. **PROVISIONAL:** #35 (research §5.17) found no gain for push consumers, so the cue stays
+  only if `episodic-cue-outcome.py` shows fires followed by a claude-search. Replay after #18a
+  (`episodic-replay/README.md`, `1269d65ba`): #106 resolves through claude-search (gold at rank 2) with
+  correctly spelled nouns; the cue's literal nouns carry the prompt's typos and miss; #78 and #88 are out of
+  reach of any session query; #110 stays a true negative.
+- Combined-tree fixes `c4a4379b5` (norm-share counts only sessions created after the lib went live, never
+  workflow rows) · `1694f08e1` (nightly selftest stubs 7c and 7d).
+- #21, #22 NOT built: their entry condition (a background memory worker approved on Wave E #24's verdict)
+  does not hold. #21's spec (research §3.20-3.22) goes into `MEMORY_KNOWLEDGE_V2.md` when #24 passes Stage 0.
+
+**Learnings (for Wave E):**
+- Idle in-process teammates did not wake on mail. Every Wave D teammate transcript stopped writing between
+  08:10 and 08:38, and the INTEGRATE message and a scope-growth message sat unprocessed for about an hour
+  (the program lead saw the stall first). Brief each teammate with its whole task up front, never a design
+  that needs a lead message after the teammate goes idle. Hand-off patches were integrated lead-inline from
+  `git apply --check`-clean files instead.
+- An untracked `.teammate-busy` makes ship-land refuse the tree as dirty. Add it to the common gitdir's
+  `info/exclude` before the first land from a teammate worktree.
+- The sweep's source-priority upsert keeps pre-lib text on `sessions-index` rows while bumping `indexed_at`,
+  so widening the sweep to new roots read as 13% norm-share contamination the lib never wrote; and the
+  nightly selftest ran 7c/7d unstubbed against live data (6 of 67 red). Both surfaced only on the combined
+  tree after #18a went live.
+- #106's gold never contains "pinterest" (the research note was wrong): it is the `bottle-reference-sourcing`
+  workflow ("Perrier" 18 times). Check the gold artifact's text before designing a query around it.
+- cc-bats refuses (no plan line) when two roots run and load/core ≥ 2.0; a suite runner must retry until a
+  `1..N` line appears. Load sat at 20-55 all wave; every land's smoke was partial or budget-cut, so every
+  suite was run by hand before and after.
+- A push to a public repo with no `/ship` is outward-facing: file it as an operator step with a gated script
+  rather than holding a permission prompt open (a held prompt froze the session).
 
 | # | Item | Design | Entry condition | Done when |
 |---|---|---|---|---|
@@ -371,3 +429,4 @@ These extend the research doc's X1-X5 (§2) with what the session after the stud
 - 2026-09-28 — Wave A DONE: #1, #2 (P0, P0b, P1 + claude-session-search port), #3, #8, #11, migration 0043 (staged) and the rejection record landed; learnings under § Wave A. Wave B next.
 - 2026-09-28 — Wave B DONE: #4, #5, #6+#7, #10, #26 (shadow) and #35 landed; live layer converged. #35 read no gain (the tasks had no headroom), so the pre-registered no-gain branch applies: Wave E #23 and #26 stop and the next delivery measurement needs tasks the stock arm fails. Learnings under § Wave B. Wave C next.
 - 2026-09-28 — Wave C DONE: #9, #12, #13 and #14 landed (`5070c4488` … `c2876fbe3`), 28 suites green on trunk tip, live layer converged; #12's store backfill filed as operator step `a459c9c681a5`. Learnings under § Wave C. Wave D next.
+- 2026-09-28 — Wave D DONE: #15, #16, #17, #18 (provisional on its outcome log), #18a, #19 and #20 landed (`6f4fd40b1` … `1269d65ba`), 20 suites green on the combined tree and on trunk tip, live layer converged. #18a's claude-session-search half is operator step `eb1d9ecb9c41` (public-repo push). #21 and #22 wait on Wave E #24. Learnings under § Wave D. Wave E next.
