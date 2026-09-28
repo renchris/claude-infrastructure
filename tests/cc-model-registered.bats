@@ -13,6 +13,7 @@ setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   P="$REPO/bin/cc-model-registered"
   F="$BATS_TEST_TMPDIR"
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
 }
 
 blob() {  # blob <file> <id>... : ids NUL-separated between filler, one "line" in total

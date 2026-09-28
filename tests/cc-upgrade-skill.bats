@@ -20,6 +20,7 @@
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
 }
 
 # --- checks, each over a root dir so case 6 can run them on a scratch copy -----------------------
