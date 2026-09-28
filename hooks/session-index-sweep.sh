@@ -293,6 +293,77 @@ if [ "$CC_HISTORY_UNION_MINUTES" -gt 0 ] 2>/dev/null; then
     fi
 fi
 
+# ─── Memory read ledger (self-damped hourly; truememory-2026-09-27.md §3.15, item #15) ───
+# Same stamp shape as the history-union block above. bin/cc-memory-read-ledger records which memory
+# topic files sessions READ (author and bulk readers excluded) into $HOME/.claude/state, and
+# bin/cc-memory-rotate reads its summary as protection only. It rides this sweep because the sweep
+# already walks the transcripts on a schedule; it never runs inside the per-file loop above.
+# FAIL-OPEN: the whole block is one function called under `|| true`, which suspends errexit inside
+# it, so nothing it does can exit the sweep non-zero. The CLI resolves through the DEREFERENCED
+# self-path (acceptance X1: ~/.claude/hooks is a per-file symlink farm, so `dirname "$0"` is the
+# wrong dir), and every run writes ONE IDL row under its own name (X2):
+#   fired ledger-written                  the CLI printed `LEDGER-VERDICT scanned=…`
+#   abstained <the CLI's own reason>      no-transcript-roots · state-unwritable · internal-error
+#                                         (all BLIND: nothing was observed) · run-in-progress
+#   abstained ledger-cli-missing          the CLI did not resolve (BLIND)
+#   abstained ledger-cli-failed           no verdict line came back, e.g. no python3 (BLIND)
+# CC_READ_LEDGER_MINUTES=0 disables it; CC_READ_LEDGER_BIN overrides the CLI path (tests).
+_rl_deref() { # <path> → the real file behind any symlink chain (BSD-safe)
+    local p="$1" t n=0
+    readlink -f "$p" 2>/dev/null && return 0
+    while [ -L "$p" ] && [ "$n" -lt 20 ]; do
+        t="$(readlink "$p")"
+        case "$t" in /*) p="$t" ;; *) p="$(dirname "$p")/$t" ;; esac
+        n=$((n + 1))
+    done
+    printf '%s\n' "$p"
+}
+_read_ledger_tick() {
+    local self hooks_dir bin out rc last disp reason extra
+    self="$(_rl_deref "${BASH_SOURCE[0]}")"
+    hooks_dir="$(dirname "$self")"
+    bin="${CC_READ_LEDGER_BIN:-$(dirname "$hooks_dir")/bin/cc-memory-read-ledger}"
+    if [ -x "$bin" ]; then
+        rc=0
+        out="$("$bin" 2>/dev/null)" || rc=$?
+        last="$(printf '%s\n' "$out" | tail -1)"
+        case "$last" in
+            "LEDGER-VERDICT scanned="*) disp=fired; reason=ledger-written ;;
+            "LEDGER-VERDICT abstained reason="*)
+                disp=abstained; reason="${last#*reason=}"; reason="${reason%% *}" ;;
+            *) disp=abstained; reason=ledger-cli-failed; last="${last:-verdict=no-output}" ;;
+        esac
+        session_index_log "Read ledger: $last rc=$rc"
+    else
+        disp=abstained; reason=ledger-cli-missing; last="cli not executable at $bin"
+        session_index_log "Read ledger: abstained $reason ($bin)"
+    fi
+    if [ -r "$hooks_dir/lib/idl-log.sh" ]; then
+        # shellcheck source=hooks/lib/idl-log.sh
+        # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+        . "$hooks_dir/lib/idl-log.sh"
+        # No session owns a sweep tick, so the sid slot reads the unset SID and records "?".
+        idl_init "${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}" session-index-sweep:read-ledger
+        extra="$(jq -nc --arg v "$last" '{verdict:$v}' 2>/dev/null)"
+        log_idl "$disp" "$reason" "$extra"
+    fi
+}
+CC_READ_LEDGER_MINUTES="${CC_READ_LEDGER_MINUTES:-60}"
+READ_LEDGER_STAMP="${CC_READ_LEDGER_STAMP:-$HOME/.claude/state/memory-read-ledger.last}"
+if [ "$CC_READ_LEDGER_MINUTES" -gt 0 ] 2>/dev/null; then
+    _rl_due=0
+    if [ ! -f "$READ_LEDGER_STAMP" ]; then
+        _rl_due=1
+    elif [ -n "$(find "$READ_LEDGER_STAMP" -maxdepth 0 -mmin +"$((CC_READ_LEDGER_MINUTES - 1))" 2>/dev/null || true)" ]; then
+        _rl_due=1
+    fi
+    if [ "$_rl_due" -eq 1 ]; then
+        mkdir -p "$(dirname "$READ_LEDGER_STAMP")" 2>/dev/null || true
+        date -u +"%Y-%m-%dT%H:%M:%SZ" > "$READ_LEDGER_STAMP" 2>/dev/null || true
+        _read_ledger_tick || true
+    fi
+fi
+
 # ─── sessions_fts identity (every tick) + parity verdict (hourly) ───
 # Runs last, after this tick's own writes, retention and VACUUM, so it compares settled states.
 # FAIL-OPEN: every read is guarded (`|| rc=$?`, `|| true`), so nothing here can exit the sweep
