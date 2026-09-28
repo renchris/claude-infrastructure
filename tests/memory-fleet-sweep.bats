@@ -135,3 +135,157 @@ mkidx() {
   [ "$status" -eq 0 ]
   has "$output" 'proj-link'
 }
+
+# ── --reach ─────────────────────────────────────────────────────────────────────────────────────
+# A real project dir on disk, its store under the temp HOME keyed by the project's slug, a topic
+# the index links (a.md), and a topic cited ONLY by the situational rules file (b.md) — the
+# delivered-surface shape §3.8 measured. The settings fixture decides whether that file loads.
+mkreach() {
+  PROJ="$BATS_TEST_TMPDIR/work/proj-reach"
+  mkdir -p "$PROJ/.claude/rules"
+  PROJ="$(cd "$PROJ" && pwd -P)"
+  SLUG="$(printf '%s' "$PROJ" | sed 's/[^A-Za-z0-9]/-/g')"
+  STORE="$HOME/.claude/projects/$SLUG/memory"; mkdir -p "$STORE"
+  printf -- '- [A](a.md) — hook\n' >"$STORE/MEMORY.md"
+  printf 'a\n' >"$STORE/a.md"; printf 'b\n' >"$STORE/b.md"
+  printf '# Project\nNothing here names the situational file.\n' >"$PROJ/CLAUDE.md"
+  printf -- '- [B](b.md) — only here\n' >"$PROJ/.claude/rules/agent-operating-lessons-situational.md"
+  export RULES_LOADED_SETTINGS="$BATS_TEST_TMPDIR/settings.json"
+  printf '{"claudeMdExcludes":["**/.claude/rules/agent-operating-lessons-situational.md"],"model":"claude-opus-5-5"}\n' \
+    >"$RULES_LOADED_SETTINGS"
+}
+
+# mkcache <path> <features-json> → a .claude.json holding that cachedGrowthBookFeatures object
+mkcache() { mkdir -p "$(dirname "$1")"; printf '{"cachedGrowthBookFeatures":%s}\n' "$2" >"$1"; }
+OFF='{"tengu_passport_quail":false,"tengu_slate_thimble":false,"tengu_onyx_plover":{"enabled":false},"tengu_sepia_cormorant":[],"tengu_umber_petrel":false}'
+
+@test "--reach absent: the table and the exit code are exactly what they were" {
+  mkreach
+  mkidx .claude proj-over 40 700 >/dev/null
+  run "$SCRIPT"
+  [ "$status" -eq 1 ]
+  plain="$output"
+  hasnt "$plain" 'REACH'
+  hasnt "$plain" 'NATIVE'
+  hasnt "$plain" 'HISTORY'
+  run "$SCRIPT" --reach
+  [ "$status" -eq 1 ]                      # --reach reports; it never changes the exit contract
+  [ "$(printf '%s\n' "$output" | grep -v -E '^(REACH|NATIVE|HISTORY)')" = "$plain" ]
+}
+
+@test "--reach: a topic cited only by an excluded, unnamed rules file is a dark destination" {
+  mkreach
+  run "$SCRIPT" --reach
+  [ "$status" -eq 0 ]
+  row="$(printf '%s\n' "$output" | grep "^REACH store=$SLUG ")"
+  has "$row" 'topics=2 hop1=1 excl_bullets=1 excl_only_topics=1 dark_dest=1'
+  has "$output" 'REACH-VERDICT dark_dest=1 unknown=0'
+}
+
+@test "--reach: the same store with the exclusion lifted is not dark" {
+  mkreach
+  printf '{"claudeMdExcludes":[],"model":"claude-opus-5-5"}\n' >"$RULES_LOADED_SETTINGS"
+  run "$SCRIPT" --reach
+  row="$(printf '%s\n' "$output" | grep "^REACH store=$SLUG ")"
+  has "$row" 'hop1=2 excl_bullets=0 excl_only_topics=0 dark_dest=0'
+  has "$output" 'REACH-VERDICT dark_dest=0 unknown=0'
+}
+
+@test "--reach: an excluded file that a delivered file NAMES is not a dark destination" {
+  mkreach
+  printf 'Situational lessons: agent-operating-lessons-situational.md\n' >>"$PROJ/CLAUDE.md"
+  run "$SCRIPT" --reach
+  has "$output" 'excl_only_topics=1 dark_dest=0'
+  has "$output" 'REACH-VERDICT dark_dest=0'
+}
+
+@test "--reach: unreadable settings make dark_dest unknown, never 0" {
+  mkreach
+  export RULES_LOADED_SETTINGS="$BATS_TEST_TMPDIR/absent.json"
+  run "$SCRIPT" --reach
+  has "$output" 'dark_dest=?'
+  has "$output" 'REACH-VERDICT dark_dest=0 unknown=1'
+}
+
+@test "--reach: all-off caches read nondefault=0; one flipped flag reads non-zero" {
+  mkreach
+  mkcache "$HOME/.claude.json" "$OFF"
+  mkcache "$HOME/.claude-next/.claude.json" "$OFF"
+  run "$SCRIPT" --reach
+  has "$output" "NATIVE root=$HOME/.claude.json quail=false slate=false onyx_enabled=false onyx_available=false moth=false stone=false linen=false haze=false killswitch=0"
+  has "$output" 'NATIVE-VERDICT nondefault=0 unknown=0'
+  mkcache "$HOME/.claude-next/.claude.json" '{"tengu_passport_quail":true}'
+  run "$SCRIPT" --reach
+  has "$output" "NATIVE root=$HOME/.claude-next/.claude.json quail=true"
+  has "$output" 'NATIVE-VERDICT nondefault=1 unknown=0'
+}
+
+@test "--reach: the kill switch fires only when umber_petrel is on AND a listed substring is in the model" {
+  mkreach
+  mkcache "$HOME/.claude.json" '{"tengu_umber_petrel":true,"tengu_sepia_cormorant":["opus-5"]}'
+  run "$SCRIPT" --reach
+  has "$output" 'killswitch=1'
+  has "$output" 'NATIVE-VERDICT nondefault=1'
+  mkcache "$HOME/.claude.json" '{"tengu_umber_petrel":false,"tengu_sepia_cormorant":["opus-5"]}'
+  run "$SCRIPT" --reach
+  has "$output" 'killswitch=0'
+  mkcache "$HOME/.claude.json" '{"tengu_umber_petrel":true,"tengu_sepia_cormorant":["haiku"]}'
+  run "$SCRIPT" --reach
+  has "$output" 'killswitch=0'
+  has "$output" 'NATIVE-VERDICT nondefault=0 unknown=0'
+}
+
+@test "--reach: an unreadable cache is status=unreadable and counts as unknown" {
+  mkreach
+  mkdir -p "$HOME/.claude-tertiary"; printf '{not json' >"$HOME/.claude-tertiary/.claude.json"
+  run "$SCRIPT" --reach
+  has "$output" "NATIVE root=$HOME/.claude-tertiary/.claude.json status=unreadable"
+  has "$output" 'NATIVE-VERDICT nondefault=0 unknown=1'
+}
+
+@test "--reach: a store holding .consolidate-lock reads consolidate_lock=1" {
+  mkreach
+  : >"$STORE/.consolidate-lock"
+  run "$SCRIPT" --reach
+  has "$output" "NATIVE-STORE store=$SLUG consolidate_lock=1 team_dir=0 logs_dir=0"
+  has "$output" 'NATIVE-VERDICT nondefault=1'
+}
+
+@test "--reach: a memory_saved transcript newer than the stamp counts once, then not again" {
+  mkreach
+  mkdir -p "$HOME/.claude/state" "$HOME/.claude/projects/$SLUG"
+  touch -t 202601010000 "$HOME/.claude/state/memory-fleet-sweep.native-stamp"
+  printf '{"type":"system","subtype":"memory_saved"}\n' >"$HOME/.claude/projects/$SLUG/s.jsonl"
+  run "$SCRIPT" --reach
+  has "$output" 'NATIVE-TRANSCRIPTS memory_saved_records=1 scanned=1 since=2026-01-01'
+  has "$output" 'NATIVE-VERDICT nondefault=1'
+  run "$SCRIPT" --reach
+  has "$output" 'NATIVE-TRANSCRIPTS memory_saved_records=0 scanned=0'
+}
+
+@test "--reach: HISTORY reads the out-of-store gitdir, and says none when there is none" {
+  mkreach
+  run "$SCRIPT" --reach
+  has "$output" "HISTORY store=$SLUG status=none"
+  export CC_MEMORY_HISTORY_ROOT="$BATS_TEST_TMPDIR/hist"
+  gd="$CC_MEMORY_HISTORY_ROOT/$(cd "$STORE" && pwd -P | tr '/' '-').git"
+  git init -q --bare "$gd"
+  tree="$(git --git-dir="$gd" mktree </dev/null)"
+  c="$(GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t \
+       GIT_COMMITTER_DATE='2026-01-01T00:00:00Z' git --git-dir="$gd" commit-tree "$tree" -m snap)"
+  git --git-dir="$gd" update-ref refs/heads/main "$c"
+  run "$SCRIPT" --reach
+  row="$(printf '%s\n' "$output" | grep "^HISTORY store=$SLUG ")"
+  has "$row" 'age_s='
+  has "$row" 'newest_mtime_age_s='
+  has "$row" 'behind=1'                    # the store's files are newer than a January snapshot
+}
+
+@test "--reach invoked THROUGH a symlink still resolves both libs" {
+  mkreach
+  mkdir -p "$BATS_TEST_TMPDIR/farm"
+  ln -sf "$SCRIPT" "$BATS_TEST_TMPDIR/farm/memory-fleet-sweep.sh"
+  run bash "$BATS_TEST_TMPDIR/farm/memory-fleet-sweep.sh" --reach
+  [ "$status" -eq 0 ]
+  has "$output" 'REACH-VERDICT dark_dest=1'
+}
