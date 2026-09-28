@@ -464,7 +464,7 @@ rotate_env() {  # small, hand-countable budgets for the actuation tests
   run fire s-act1 "$idx"
   [ "$status" -eq 0 ]
   [ -z "$output" ]                               # damped prompt: no advisory...
-  [ "$(wc -c <"$idx" | tr -d ' ')" -le 1000 ]    # ...but the index was healed on disk
+  [ "$(eff "$idx")" -le 1000 ]                   # ...but the index was healed (loader units)
   ls "$(dirname "$idx")"/archive/MEMORY_ARCHIVE_*-COLD.md >/dev/null
 }
 

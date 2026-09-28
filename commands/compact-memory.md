@@ -16,8 +16,11 @@ bundle (Claude Code 2.1.233, cc-backlog `7a56de4c54ab`; derivation in
 
 1. **strips the YAML frontmatter** (`/^---\s*\n([\s\S]*?)---\s*\n?/`) — a `--- … ---` header
    costs nothing;
-2. **strips block HTML comments** — including the `<!-- cold tier: … -->` pointer
-   `bin/cc-memory-rotate` writes into the index itself;
+2. **strips block HTML comments** — which is why the cold-tier pointer is no longer one: the old
+   `<!-- cold tier: … -->` line was invisible to every session and its count went stale.
+   `bin/cc-memory-rotate` now owns a VISIBLE line after the H1 (`- Not loaded: <N> demoted
+   rules, listed in archive/…-COLD.md; …`), refreshed at each rotation and **charged against the
+   cap** (about 200 units);
 3. **trims**, then compares **`String.length` — UTF-16 CODE UNITS, not bytes** — against
    **25,000**, and the line count against **200**.
 
@@ -835,9 +838,13 @@ carried the entire verdict.
 ## PROTECTED
 - Any entry/line tagged `(PINNED)` is skipped entirely (explicit opt-out; mirrors hermes pin-to-protect).
 - Never delete historical decisions, "Why:" rationale, learnings, or known issues (global File Update Rule).
-- Archiving *intentionally* leaves a topic file unindexed. Keep that honest by putting a pointer —
-  `<!-- archived entries: archive/MEMORY_ARCHIVE_<year>-H<half>.md -->` — in the index header, so
-  archived topics stay discoverable from the auto-loaded surface. Cheaper than a bullet per entry.
+- Archiving *intentionally* leaves a topic file unindexed. Keep that honest with a VISIBLE pointer
+  in the index header, so archived topics stay discoverable from the auto-loaded surface. Cheaper
+  than a bullet per entry. An HTML comment does not qualify: the loader strips it, so it points no
+  session anywhere. For the cold tier the rotor owns the line — `- Not loaded: <N> demoted rules,
+  listed in archive/MEMORY_ARCHIVE_<year>-H<half>-COLD.md; …`, right after the H1, N recounted and
+  the line replaced in place at every rotation, charged against the cap (about 200 units). It never
+  starts with `- [`, so nothing counts it as an entry; do not hand-edit it.
 
 ## Output
 A report: SAFE-AUTO actions (taken or previewed), then the PROPOSE-ONLY queue as an

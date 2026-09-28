@@ -47,7 +47,7 @@
 # cc-backlog 7a56de4c54ab), the loader strips YAML frontmatter and block HTML comments, trims, and
 # then compares `String.length` — UTF-16 CODE UNITS — against 25000, plus a 200-LINE cap this gate
 # did not know about at all. So `—` costs 1 against the cap and 3 on disk, a `---` header and the
-# rotor's own `<!-- cold tier … -->` pointer cost NOTHING, and a raw-byte read of the file
+# any block comment (the rotor's old `<!-- cold tier … -->` pointer among them) cost NOTHING, and a raw-byte read of the file
 # over-measures in three independent directions at once.
 #
 # The whole derivation, the safe-direction argument for each approximation, and the version

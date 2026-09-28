@@ -109,7 +109,7 @@ mkbulk() {
   if grep -qF -- '(a01.md)' "$d/MEMORY.md"; then return 1; fi
   grep -qxF -- "$last" "$d/MEMORY.md"            # tail guard kept the newest line
   head -1 "$d/MEMORY.md" | grep -qF '# Memory — fixture'
-  grep -qF 'cold tier' "$d/MEMORY.md"            # discoverability pointer added
+  grep -qF -- '- Not loaded: ' "$d/MEMORY.md"    # discoverability pointer added
   grep -qF 'verdict=rotated' "$d/archive/.rotate.log"
   [ -f "$d/a01.md" ]                             # topic files are never touched
 }
@@ -196,17 +196,83 @@ mkbulk() {
   has "$output" 'verdict=rotated'
 }
 
-@test "the cold-tier POINTER the rotor writes is free — the loader strips block comments" {
-  # The rotor adds `<!-- cold tier: … -->` to the index and used to budget for its own
-  # bookkeeping line. The loader removes it before measuring, so it must cost 0 chars.
+# ── THE COLD-TIER POINTER (TrueMemory research §3.9, 2026-09-28) ─────────────────────────────
+# It used to be a `<!-- cold tier: … -->` comment: the loader strips block comments, so no session
+# saw it, and the rotor never refreshed its count. It is now a VISIBLE line after the H1 that the
+# loader counts, so these pin what makes it true: present once, charged, N = the cold count,
+# refreshed in place, and never censused as an entry.
+
+# ptrs <index> → how many pointer lines it holds; ptr_n <index> → the N the line states;
+# cold_bullets <memdir> → `^- ` lines across every COLD file, the count N must equal.
+ptrs() { grep -c -- '^- Not loaded: ' "$1" || true; }
+ptr_n() { sed -n 's/^- Not loaded: \([0-9]*\) demoted rules.*/\1/p' "$1"; }
+cold_bullets() { cat "$1"/archive/MEMORY_ARCHIVE_*-COLD.md | grep -c '^- ' || true; }
+
+@test "the cold-tier POINTER is visible after the H1, once, ≤200 units, and N is the cold count" {
   d="$(mkmem ptr)"; mkbulk "$d"
   before="$(eff "$d/MEMORY.md")"
   run "$SCRIPT" "$d/MEMORY.md"
   has "$output" 'verdict=rotated'
-  grep -qF 'archive/MEMORY_ARCHIVE' "$d/MEMORY.md"
+  [ "$(ptrs "$d/MEMORY.md")" -eq 1 ]
+  sed -n 2p "$d/MEMORY.md" | grep -q -- '^- Not loaded: '     # right after the H1
+  line="$(sed -n 2p "$d/MEMORY.md")"
+  has "$line" 'archive/MEMORY_ARCHIVE_'
+  has "$line" 'cc-memory-search'
+  printf '%s' "$line" >"$BATS_TEST_TMPDIR/ptr.line"
+  [ "$(eff "$BATS_TEST_TMPDIR/ptr.line")" -le 200 ]
+  [ "$(ptr_n "$d/MEMORY.md")" -eq "$(cold_bullets "$d")" ]
+  # The loader SEES it now (the comment form measured 0 here), and it is charged: the rotation
+  # still lands at/under target in loader units with the line counted.
+  [ "$(mim_effective_file "$d/MEMORY.md" | grep -c -- '^- Not loaded: ')" -eq 1 ]
   after="$(eff "$d/MEMORY.md")"
   [ "$after" -lt "$before" ]
   [ "$after" -le 1000 ]
+  # The entry census is unchanged by the line: every one of the 10 entries is in exactly one of
+  # the index or COLD, and nothing else in the index reads as an entry.
+  [ $(( $(grep -c '^- \[' "$d/MEMORY.md") + $(cold_bullets "$d") )) -eq 10 ]
+}
+
+@test "the pointer is REFRESHED in place by the next rotation — new N, never a second line" {
+  d="$(mkmem ptr2)"; mkbulk "$d"
+  run "$SCRIPT" "$d/MEMORY.md"
+  has "$output" 'verdict=rotated'
+  n1="$(ptr_n "$d/MEMORY.md")"
+  local i
+  for i in 11 12 13 14 15 16 17 18; do
+    addentry "$d" "b$i.md" project old "$(pad 140)"
+  done
+  run "$SCRIPT" "$d/MEMORY.md"
+  has "$output" 'verdict=rotated'
+  [ "$(ptrs "$d/MEMORY.md")" -eq 1 ]
+  sed -n 2p "$d/MEMORY.md" | grep -q -- '^- Not loaded: '
+  n2="$(ptr_n "$d/MEMORY.md")"
+  [ "$n2" -gt "$n1" ]
+  [ "$n2" -eq "$(cold_bullets "$d")" ]
+}
+
+@test "a legacy <!-- cold tier: … --> comment is REPLACED by the visible line, not kept beside it" {
+  d="$(mkmem ptr3)"
+  printf '%s\n' '<!-- cold tier: archive/MEMORY_ARCHIVE_*-COLD.md — 171 entries, hand-written -->' >>"$d/MEMORY.md"
+  mkbulk "$d"
+  run "$SCRIPT" "$d/MEMORY.md"
+  has "$output" 'verdict=rotated'
+  hasnt "$(cat "$d/MEMORY.md")" '<!-- cold tier:'
+  [ "$(ptrs "$d/MEMORY.md")" -eq 1 ]
+  sed -n 2p "$d/MEMORY.md" | grep -q -- '^- Not loaded: '
+  [ "$(ptr_n "$d/MEMORY.md")" -eq "$(cold_bullets "$d")" ]
+  [ "$(eff "$d/MEMORY.md")" -le 1000 ]    # charged in full: the comment it replaced cost nothing
+}
+
+@test "several COLD files: the pointer names the glob and N counts all of them" {
+  d="$(mkmem ptr4)"; mkbulk "$d"
+  mkdir -p "$d/archive"
+  printf -- '- [z1](z1.md) — older half\n- [z2](z2.md) — older half\n' \
+    >"$d/archive/MEMORY_ARCHIVE_2020-H1-COLD.md"
+  run "$SCRIPT" "$d/MEMORY.md"
+  has "$output" 'verdict=rotated'
+  has "$(sed -n 2p "$d/MEMORY.md")" 'listed in archive/MEMORY_ARCHIVE_*-COLD.md;'
+  [ "$(ptr_n "$d/MEMORY.md")" -eq "$(cold_bullets "$d")" ]
+  [ "$(cold_bullets "$d")" -gt 2 ]
 }
 
 @test "exhausted: nothing eligible leaves the file byte-identical with the kept census" {
@@ -524,7 +590,9 @@ ordfx() {
   has "$output" 'verdict=rotated'
   hasnt "$output" 'stage2=0'
   grep -qF -- '(feedback-real.md)' "$d/MEMORY.md"
-  [ "$(wc -c <"$d/MEMORY.md" | tr -d ' ')" -le 1000 ]
+  # The loader's measure, not `wc -c`: the target is in loader units, and the visible cold-tier
+  # pointer the rotor now charges leaves too little slack for the em-dash byte overhead.
+  [ "$(eff "$d/MEMORY.md")" -le 1000 ]
 }
 
 @test "band pressure: the type stamp holds — stage 2 arms only at the LIMIT" {

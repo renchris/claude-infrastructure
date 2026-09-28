@@ -19,7 +19,9 @@
 #   2. STRIP BLOCK HTML COMMENTS.  When the body contains `<!--` it is run through the markdown
 #      lexer and every block-level `<!-- … -->` token is dropped (residue on the line is kept).
 #      Note what this means for us: the `<!-- cold tier: … -->` pointer line cc-memory-rotate
-#      writes into the index is FREE — the rotor was budgeting for its own bookkeeping.
+#      used to write was FREE, and for the same reason INVISIBLE to every session. Since
+#      2026-09-28 (TrueMemory research §3.9) the rotor writes a visible `- Not loaded: …` line
+#      instead, which the loader counts and the rotor charges.
 #   3. TRIM, then CHECK.  `mCr()` compares the TRIMMED result against two caps and truncates:
 #         · 25000  — and it is `String.length`, i.e. UTF-16 CODE UNITS, not bytes. Every slice
 #                    in that function is character-indexed (`a.slice(0, 25000)`).

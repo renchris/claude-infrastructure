@@ -224,6 +224,11 @@ INDEX="$DIR/MEMORY.md"
 # below becomes an effective-size comparison with the accounting untouched. The gap shrinks a
 # little as lines leave, so holding it fixed across one rotation over-estimates the projection:
 # the rotor archives a touch more than strictly needed, never less.
+# ⚠️ CORRECTED 2026-09-28: that last sentence had the direction backwards. A fixed, too-large
+# overhead RAISES the byte target, so subtracting moved lines by their bytes under-archived (1012
+# units against a 1000 target, measured). The selection loops now subtract each moved line's
+# UTF-16 units (line_units), which is what leaves the loader's count; the header's comment
+# pointer, the reason this stayed hidden, is now a visible line the loader counts.
 _ccmr_lib="$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")")/../hooks/lib/memory-index-measure.sh"
 # shellcheck source=/dev/null   # SC1091 suppression: this gate calls shellcheck without -x
 if [ -r "$_ccmr_lib" ]; then . "$_ccmr_lib"; fi
@@ -1195,6 +1200,68 @@ $f
   echo 1
 }
 
+# ── THE COLD-TIER POINTER (visible-cold-tier-pointer, TrueMemory research §3.9, 2026-09-28) ────
+# The pointer used to be a column-0 `<!-- cold tier: … -->` comment. The loader strips block
+# comments, so no session ever saw it (`mim_effective_file | grep -c cold` = 0); the HAVE_PTR
+# grep matched the hand-written copy, so it was never refreshed and its count went stale (171
+# against 285 bullets); and an invisible pointer does not meet the PROTECTED discoverability rule
+# in commands/compact-memory.md. It is now a VISIBLE line the rotor owns: found by PTR_PREFIX,
+# rewritten after the H1 at every rotation, never duplicated, and charged in the projection
+# because the loader counts it. It must never start with `- [`, or it would be censused as an
+# entry. Its value is a correct count and a correct path, not recall: prose pull lines measured
+# 0/54 and 2/64 uptake. Keep it ASCII, so bytes = UTF-16 units and the byte projection is exact.
+PTR_PREFIX='- Not loaded: '
+
+# ptr_line <n> <ref> → the pointer line. ≤200 units up to a 4-digit n with a single-file ref
+# (199 at the measured n=285); the glob spelling is 4 shorter.
+ptr_line() {
+  printf -- '%s%s demoted rules, listed in %s; their topic files stay in this dir. Run cc-memory-search <terms> (it reads them) before concluding a rule is absent.' \
+    "$PTR_PREFIX" "$1" "$2"
+}
+
+# cold_ref <count-this-rotation's-file: 0|1> → how the pointer names the cold tier: the single
+# file when there is one, the glob when there are several, empty when there is none.
+cold_ref() {
+  local n=0 one="" f
+  for f in "$DIR"/archive/MEMORY_ARCHIVE_*-COLD.md; do
+    if [ ! -f "$f" ] || [ "$f" = "$COLD" ]; then continue; fi
+    n=$(( n + 1 )); one="archive/${f##*/}"
+  done
+  if [ "$1" -eq 1 ] || [ -f "$COLD" ]; then n=$(( n + 1 )); one="archive/${COLD##*/}"; fi
+  if [ "$n" -eq 0 ]; then return 0; fi
+  if [ "$n" -eq 1 ]; then printf '%s' "$one"; else printf 'archive/MEMORY_ARCHIVE_*-COLD.md'; fi
+}
+
+# line_units <s> → _LU, the line's UTF-16 length under LC_ALL=C: its bytes, less UTF-8
+# continuation bytes, plus one per 4-byte lead (a surrogate pair). A global, not a $( ), because
+# the selection loops call it per moved line.
+#
+# WHY THE SELECTION LOOPS SUBTRACT THIS AND NOT THE LINE'S BYTES (2026-09-28). The thresholds are
+# shifted by OVERHEAD, measured ONCE on the pre-rotation index, and that overhead includes every
+# entry's multibyte delta (2 per `—`). A moved line takes its delta with it, so subtracting its
+# BYTES lowers the projection by more than the loader's count falls, and the index lands OVER
+# target in loader units: measured 1012 against 1000 on a 20-entry fixture. The comment pointer
+# hid this, because its own ~140 stripped bytes kept the post-rotation overhead large; the visible
+# pointer exposed it. Subtracting units makes PROJ - OVERHEAD the loader's size, and PROJ stays an
+# upper bound on raw bytes (units ≤ bytes), so the byte shrink check below stays sound.
+line_units() {
+  local c f
+  c="${1//[$'\x80'-$'\xbf']/}"
+  f="${1//[^$'\xf0'-$'\xf4']/}"
+  _LU=$(( ${#c} + ${#f} ))
+}
+
+# cold_count → the `^- ` lines across every COLD file, i.e. the demoted rules the pointer counts.
+cold_count() {
+  local f n=0 c
+  for f in "$DIR"/archive/MEMORY_ARCHIVE_*-COLD.md; do
+    if [ ! -f "$f" ]; then continue; fi
+    c=$(awk '/^- /{c++} END{print c+0}' "$f")
+    n=$(( n + c ))
+  done
+  printf '%s' "$n"
+}
+
 ATTEMPT=0
 while :; do
   ATTEMPT=$(( ATTEMPT + 1 ))
@@ -1269,19 +1336,27 @@ while :; do
   build_hub_table "$(printf '%s' "$ENTRY_FILES" | tr "$TAB" '\n')"
   build_entry_tables "$(printf '%s' "$ENTRY_FILES" | tr "$TAB" '\n')"
 
-  # Does the header already point at the cold tier? (PROTECTED section of compact-memory.md:
-  # archived topics must stay discoverable from the auto-loaded surface.)
-  HAVE_PTR=0
-  if grep -q 'archive/MEMORY_ARCHIVE' "$INDEX"; then HAVE_PTR=1; fi
-  # UNIT: loader CHARS, not bytes. `${LIMIT} B` stood here until 2026-08-24 and was the dead
-  # pre-2026-08-15 byte premise re-seeded into the one file the next observer measures — this
-  # pointer is written INTO the index, so a stale unit label teaches every reader of it to size
-  # the next cut in `wc -c` and mint another false "over budget" item (backlog c7bef93baca6).
-  # KEEP THIS LINE SHORT. The loader strips block comments so it is free against the 25000-char
-  # cap (test 9), but it is NOT free against the LINE cap or the disk the index costs everywhere
-  # else — a first pass at this fix spelled the unit out in full and RED-ed tests 17 and 20 on
-  # raw size. The explanation goes in this comment; the stamp gets the one corrected word.
-  PTR_LINE="<!-- cold tier: archive/MEMORY_ARCHIVE_*-COLD.md — auto-rotated by cc-memory-rotate near the ${LIMIT}-char read limit; restore = paste the line back -->"
+  # Which lines are pointers already? (PROTECTED section of compact-memory.md: archived topics
+  # must stay discoverable from the auto-loaded surface.) A visible pointer, and a legacy
+  # single-line `<!-- cold tier: … -->` comment (old rotor output or hand-written), are both
+  # replaced by the one fresh line. PTR_OLD_B counts only the VISIBLE ones' bytes: a legacy
+  # comment is stripped by the loader, so its bytes sit in OVERHEAD and removing it frees no
+  # loader unit — charging the new line in full is what keeps the projection honest.
+  YEAR=$(date +%Y); MON=$(date +%m)
+  HALF=1; if [ "${MON#0}" -gt 6 ]; then HALF=2; fi
+  COLD="$DIR/archive/MEMORY_ARCHIVE_${YEAR}-H${HALF}-COLD.md"
+  PTR_OLD_LNOS=""; PTR_OLD_B=0; PTR_OLD_L=0
+  i=0
+  while [ "$i" -lt "$NL" ]; do
+    case "${LINES[$i]}" in
+      "$PTR_PREFIX"*)
+        PTR_OLD_LNOS="$PTR_OLD_LNOS $i"; PTR_OLD_L=$(( PTR_OLD_L + 1 ))
+        PTR_OLD_B=$(( PTR_OLD_B + ${#LINES[$i]} + 1 )) ;;
+      "<!-- cold tier:"*"-->"*)
+        PTR_OLD_LNOS="$PTR_OLD_LNOS $i"; PTR_OLD_L=$(( PTR_OLD_L + 1 )) ;;
+    esac
+    i=$(( i + 1 ))
+  done
 
   # Classify → eligible list "mtime<TAB>lineno<TAB>file", oldest mtime first. Stage-1 type
   # keeps also record their ordinal, so breach pressure can re-judge exactly that set.
@@ -1322,7 +1397,25 @@ while :; do
   # verdict=rotated, which reads as healed and is not.
   PROJ=$SIZE
   PROJ_L=$NL
-  if [ "$HAVE_PTR" -eq 0 ]; then PROJ=$(( PROJ + ${#PTR_LINE} + 1 )); PROJ_L=$(( PROJ_L + 1 )); fi
+  # The pointer's final count and spelling are known only after the cold append, so charge an
+  # upper bound: every entry going cold (count + NENT), and the longer of the two spellings the
+  # line can end with (this rotation's file counted or not). Charged as the delta against the
+  # pointer lines it replaces; with no cold tier yet the line may never be written, so only
+  # growth is charged there — an over-charge only ever leaves the index smaller than projected.
+  PTR_N_UP=$(( $(cold_count) + NENT ))
+  PTR_PROJ=0
+  for _w in 1 0; do
+    _ref=$(cold_ref "$_w")
+    if [ -z "$_ref" ]; then continue; fi
+    _pl=$(ptr_line "$PTR_N_UP" "$_ref")
+    if [ "${#_pl}" -gt "$PTR_PROJ" ]; then PTR_PROJ=${#_pl}; fi
+  done
+  PTR_DB=$(( PTR_PROJ + 1 - PTR_OLD_B )); PTR_DL=$(( 1 - PTR_OLD_L ))
+  if [ -z "$(cold_ref 0)" ]; then
+    if [ "$PTR_DB" -lt 0 ]; then PTR_DB=0; fi
+    if [ "$PTR_DL" -lt 0 ]; then PTR_DL=0; fi
+  fi
+  PROJ=$(( PROJ + PTR_DB )); PROJ_L=$(( PROJ_L + PTR_DL ))
   MOVE_LNOS=""; MOVED=0; REMAIN=$NENT
   # Why the selection loop stopped: `floor` = it hit MIN_KEEP, `pool` = it ran out of eligible
   # entries. That distinction is the whole diagnostic value of the exhausted census — see BOUND.
@@ -1341,11 +1434,16 @@ while :; do
     SORTED=""
   fi
   MOVED_LIVE=0
+  # `PROJ < SIZE` joins the stop test because the pointer is now a visible ~190-byte line: on a
+  # LINE-pressured index of short entries, reaching the line target alone can leave the rewrite
+  # bigger than the original, which the byte shrink guarantee below refuses (would-not-shrink).
+  # Moving one more entry is the honest cure; loosening the guarantee is not.
   while IFS="$TAB" read -r _rk _mt _sz li f; do
     if [ -z "${li:-}" ]; then continue; fi
-    if [ "$PROJ" -le "$TARGET" ] && [ "$PROJ_L" -le "$TARGET_LINES" ]; then break; fi
+    if [ "$PROJ" -le "$TARGET" ] && [ "$PROJ_L" -le "$TARGET_LINES" ] && [ "$PROJ" -lt "$SIZE" ]; then break; fi
     if [ "$REMAIN" -le "$MIN_KEEP" ]; then STOP_REASON=floor; break; fi
-    PROJ=$(( PROJ - ${#LINES[$li]} - 1 ))
+    line_units "${LINES[$li]}"
+    PROJ=$(( PROJ - _LU - 1 ))
     PROJ_L=$(( PROJ_L - 1 ))
     MOVE_LNOS="$MOVE_LNOS $li"
     MOVED=$(( MOVED + 1 )); REMAIN=$(( REMAIN - 1 ))
@@ -1385,9 +1483,10 @@ EOF
       SORTED2=$(printf '%s' "$ELIG2" | sort -t "$TAB" -k1,1n -k2,2n -k3,3nr -k5,5)
       while IFS="$TAB" read -r _rk _mt _sz li f; do
         if [ -z "${li:-}" ]; then continue; fi
-        if [ "$PROJ" -le "$TARGET" ] && [ "$PROJ_L" -le "$TARGET_LINES" ]; then break; fi
+        if [ "$PROJ" -le "$TARGET" ] && [ "$PROJ_L" -le "$TARGET_LINES" ] && [ "$PROJ" -lt "$SIZE" ]; then break; fi
         if [ "$REMAIN" -le "$MIN_KEEP" ]; then STOP_REASON=floor; break; fi
-        PROJ=$(( PROJ - ${#LINES[$li]} - 1 ))
+        line_units "${LINES[$li]}"
+        PROJ=$(( PROJ - _LU - 1 ))
         PROJ_L=$(( PROJ_L - 1 ))
         MOVE_LNOS="$MOVE_LNOS $li"
         MOVED=$(( MOVED + 1 )); STAGE2=$(( STAGE2 + 1 )); REMAIN=$(( REMAIN - 1 ))
@@ -1514,16 +1613,8 @@ EOF
     fi
   fi
 
-  # A pointer to a cold tier this rotation never wrote is a dangling pointer, written into the
-  # always-loaded index. Suppress it when everything was routed. The PROJECTION above already
-  # charged for it, so suppressing it only ever leaves the index SMALLER than projected — the
-  # safe direction, and the shrink guarantee below still holds.
-  if [ "$COLD_N" -eq 0 ]; then HAVE_PTR=1; fi
-
   # ── COLD first, verified, idempotent — then the index ──────────────────────────────────────
-  YEAR=$(date +%Y); MON=$(date +%m)
-  HALF=1; if [ "${MON#0}" -gt 6 ]; then HALF=2; fi
-  COLD="$DIR/archive/MEMORY_ARCHIVE_${YEAR}-H${HALF}-COLD.md"
+  # (COLD, the file this rotation appends to, is named above the pointer census.)
   mkdir -p "$DIR/archive"
   if [ "$COLD_N" -gt 0 ]; then [ -f "$COLD" ] || : >"$COLD"; fi
   # Stage the block first, append once: the idempotency greps must read a COLD that this
@@ -1544,6 +1635,14 @@ ${LINES[$li]}"
       fi
     done
   fi
+
+  # The pointer, counted AFTER the append so N is the cold tier as it now stands. No cold file
+  # at all (everything routed, and none from earlier rotations) means no line: a pointer to a
+  # file that does not exist is a dangling pointer in the always-loaded index. Old pointer lines
+  # are dropped only when a fresh one replaces them.
+  PTR_TEXT=""; PTR_DROP=""
+  _ref=$(cold_ref 0)
+  if [ -n "$_ref" ]; then PTR_TEXT=$(ptr_line "$(cold_count)" "$_ref"); PTR_DROP="$PTR_OLD_LNOS"; fi
 
   # ── CITATION ON DEMOTION (Phase 5 item 5) ──────────────────────────────────────────────────
   #
@@ -1601,18 +1700,17 @@ ${LINES[$li]}"
 
   TMP=$(mktemp "$DIR/.MEMORY.md.rotate.XXXXXX")
   {
+    # The pointer goes right after the H1, or at the very top when line 0 is not one.
+    PTR_AT=-1
+    case "${LINES[0]}" in "# "*) PTR_AT=0 ;; esac
+    if [ -n "$PTR_TEXT" ] && [ "$PTR_AT" -lt 0 ]; then printf '%s\n' "$PTR_TEXT"; fi
     i=0
-    if [ "$HAVE_PTR" -eq 0 ]; then
-      case "${LINES[0]}" in "- ["*) printf '%s\n' "$PTR_LINE" ;; esac
-    fi
     while [ "$i" -lt "$NL" ]; do
-      case " $MOVE_LNOS " in
+      case " $MOVE_LNOS $PTR_DROP " in
         *" $i "*) : ;;
         *) printf '%s\n' "${LINES[$i]}" ;;
       esac
-      if [ "$i" -eq 0 ] && [ "$HAVE_PTR" -eq 0 ]; then
-        case "${LINES[0]}" in "- ["*) : ;; *) printf '%s\n' "$PTR_LINE" ;; esac
-      fi
+      if [ "$i" -eq "$PTR_AT" ] && [ -n "$PTR_TEXT" ]; then printf '%s\n' "$PTR_TEXT"; fi
       i=$(( i + 1 ))
     done
   } >"$TMP"
