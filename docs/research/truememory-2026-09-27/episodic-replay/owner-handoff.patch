@@ -1,0 +1,209 @@
+diff --git a/hooks/memory-nudge.sh b/hooks/memory-nudge.sh
+index 89fcd28ec..b0f17ad74 100755
+--- a/hooks/memory-nudge.sh
++++ b/hooks/memory-nudge.sh
+@@ -173,6 +173,30 @@ _mn_ruling_shadow() {
+ }
+ _mn_ruling_shadow || true
+ 
++# ── EPISODIC CUE (truememory-2026-09-27.md §3.18, #18; PROVISIONAL). One narrow-cue line pointing at
++# claude-search when a typed prompt refers to earlier work; it injects nothing from other sessions.
++# Computed on EVERY counted prompt, like the shadow above, and it rides whichever JSON this hook
++# prints: cue-only on a non-due prompt (_mn_not_due), prepended to the nudge on a due one. Exactly
++# one JSON object either way. The lib logs its own `memory-nudge:episodic` IDL row per prompt and
++# every fire to ~/.claude/state/episodic-cue.jsonl, which scripts/episodic-cue-outcome.py reads
++# nightly — adoption rides on that log. Resolved through the dereferenced self-path (X1), and a
++# missing lib costs the cue and nothing else. Kill switch CC_EPISODIC_CUE=off.
++_MN_CUE=""
++_mn_ep="$(dirname "$(_mn_deref "${BASH_SOURCE[0]}")")/lib/episodic_cue.sh"
++if [ -r "$_mn_ep" ]; then
++  # A sentinel keeps the prompt's trailing newlines, which a bare $( ) would strip.
++  _mn_prompt="$(printf '%s' "$INPUT" | jq -j '.prompt | if type == "string" then . else "" end' 2>/dev/null; printf x)"
++  _mn_prompt="${_mn_prompt%x}"
++  # shellcheck source=lib/episodic_cue.sh
++  # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
++  . "$_mn_ep" && _MN_CUE="$(episodic_cue_line "$_mn_prompt" 2>/dev/null)" || _MN_CUE=""
++fi
++_mn_not_due() {
++  [ -z "$_MN_CUE" ] || jq -cn --arg ctx "$_MN_CUE" \
++    '{hookSpecificOutput:{hookEventName:"UserPromptSubmit",additionalContext:$ctx}}'
++  exit 0
++}
++
+ MEM="${MEMORY_INDEX_PATH:-}"
+ WANT="$MEM"
+ if [ -z "$MEM" ]; then
+@@ -579,9 +603,9 @@ fi
+ OVERFLOW=0
+ case "$BUDGET_CTX" in '🚨'*) OVERFLOW=1 ;; esac
+ if [ "$OVERFLOW" -eq 1 ]; then
+-  [ "$COUNT" -eq 1 ] || [ $((COUNT % INTERVAL)) -eq 0 ] || exit 0
++  [ "$COUNT" -eq 1 ] || [ $((COUNT % INTERVAL)) -eq 0 ] || _mn_not_due
+ else
+-  [ $((COUNT % INTERVAL)) -eq 0 ] || exit 0
++  [ $((COUNT % INTERVAL)) -eq 0 ] || _mn_not_due
+ fi
+ # One IDL row per DECISION turn (hook `memory-nudge`); non-fire turns exited above, so this adds no
+ # per-prompt cost. scripts/idl-expected-fires.tsv measures these rows against the fires the
+@@ -658,6 +682,6 @@ NUDGE="MEMORY CHECK (periodic): if this session surfaced a DURABLE, generalizabl
+ 
+ # Build with jq: the message interpolates measured values, and shell quoting is
+ # not JSON quoting — a hand-rolled heredoc would be a quoting bug waiting to land.
+-jq -cn --arg ctx "${BUDGET_CTX:+$BUDGET_CTX }$NUDGE" \
++jq -cn --arg ctx "${_MN_CUE:+$_MN_CUE }${BUDGET_CTX:+$BUDGET_CTX }$NUDGE" \
+   '{hookSpecificOutput:{hookEventName:"UserPromptSubmit",additionalContext:$ctx}}'
+ exit 0
+diff --git a/scripts/idl-abstain-alarm.sh b/scripts/idl-abstain-alarm.sh
+index a3d94ec47..983d8cbef 100755
+--- a/scripts/idl-abstain-alarm.sh
++++ b/scripts/idl-abstain-alarm.sh
+@@ -142,6 +142,8 @@ _reap_keep_dormant=(claimer-live owned-wait)
+ # logged once per session, beside a once-per-session `no-match` that proves the guard was reached.
+ # no-prompt and classify-error joined with memory-nudge:ruling (truememory #26, X3): a payload with
+ # no string `.prompt`, and a classifier that threw, are both prompts the shadow could not score.
++# memory-nudge:episodic (truememory §3.18, #18) adds no reason: its one could-not-observe outcome is
++# classify-error, already listed; not-typed, no-match and kill-switch are reached guards.
+ # neighbour-lib-missing joined with backup-before-write:neighbours (truememory §3.10, X3): the new-topic
+ # branch could not resolve hooks/lib/memory_neighbours.py (or python3) through its dereferenced
+ # self-path, so it never scored the write. empty-pool and kill-switch stay out: the guard was reached.
+@@ -290,7 +292,8 @@ denom_lesson_symptom_replay_failure() { _denom_lesson_replay "$1" error; }
+ 
+ # Prompts memory-nudge SAW: the RAW per-session counters (not divided by the interval), summed over
+ # the same state dirs with the same mtime cutoff. The denominator for `memory-nudge:ruling`, the
+-# ruling shadow, which logs one row for every prompt that increments a counter (truememory #26).
++# ruling shadow, which logs one row for every prompt that increments a counter (truememory #26), and
++# for `memory-nudge:episodic`, the episodic cue, which does the same (truememory §3.18, #18).
+ # The shadow never writes these files, so they are a source it cannot fake (X5). The interval kill
+ # switch (MEMORY_NUDGE_INTERVAL=0) exits before both the counter and the shadow, so none are due.
+ denom_nudge_prompts() {
+diff --git a/scripts/idl-expected-fires.tsv b/scripts/idl-expected-fires.tsv
+index 94ab4dfc4..f550562ad 100644
+--- a/scripts/idl-expected-fires.tsv
++++ b/scripts/idl-expected-fires.tsv
+@@ -27,6 +27,7 @@ memory-nudge	denom_nudge_expected	1d	10	-
+ bash-output-offload:lesson	denom_lesson_symptom_replay	1d	3	0.5
+ log-bash:lesson	denom_lesson_symptom_replay_failure	1d	3	0.5
+ memory-nudge:ruling	denom_nudge_prompts	1d	10	0.5
++memory-nudge:episodic	denom_nudge_prompts	1d	10	0.5
+ backup-before-write:neighbours	denom_new_memory_files	7d	10	0.5
+ cc-memory-search	denom_memory_search_invocations	7d	10	0.9
+ session-index:norm	denom_sessionend_indexed	1d	5	-
+diff --git a/scripts/nightly-regression.sh b/scripts/nightly-regression.sh
+index cc5f1d150..ebf1d6741 100755
+--- a/scripts/nightly-regression.sh
++++ b/scripts/nightly-regression.sh
+@@ -34,6 +34,8 @@
+ #   7c. norm-share.py — share of session-index context_text rows indexed in the last 24 h that still
+ #      carry non-operator markers (truememory §3.14 gap item 3). RED above 10%; too few rows abstains.
+ #      The window starts no earlier than the lib's first live `session-index:norm` IDL row.
++#   7d. episodic-cue-outcome.py — for each episodic cue fire older than 24 h, whether a claude-search
++#      followed it in that session (truememory §3.18, #18, PROVISIONAL). A report: RED only on a crash.
+ #
+ # ON RED: write a page file to autonomy/pages/ (drainable by the P0-15 SO-5 desk-role consumer) +
+ # osascript notification. ALWAYS append a one-line result to autonomy/regression.log.
+@@ -689,6 +691,17 @@ regress() {
+   else
+     SKIPS+=("norm-share:no-python3")
+   fi
++  # 7d. the episodic cue's adoption log (truememory-2026-09-27.md §3.18, #18; PROVISIONAL): for each
++  # fire older than 24 h, was it followed by a claude-search in that session's transcript? The
++  # EPISODIC-VERDICT line lands in the captured output; exit 0 on every verdict (a report, not a
++  # gate: RED only if it crashes). Read-only. CC_NIGHTLY_EPISODIC_OUTCOME stubs it (executed directly), like 7b.
++  if [ -n "${CC_NIGHTLY_EPISODIC_OUTCOME:-}" ]; then
++    run_check "episodic-cue-outcome" "$CC_NIGHTLY_EPISODIC_OUTCOME"
++  elif command -v python3 >/dev/null 2>&1; then
++    run_check "episodic-cue-outcome" python3 "$SELF_SCRIPTS/episodic-cue-outcome.py"
++  else
++    SKIPS+=("episodic-cue-outcome:no-python3")
++  fi
+ 
+   # ── verdict ──
+   local n_red="${#REDS[@]}" summary
+diff --git a/tests/memory-nudge-episodic.bats b/tests/memory-nudge-episodic.bats
+new file mode 100644
+index 000000000..1e1d3d239
+--- /dev/null
++++ b/tests/memory-nudge-episodic.bats
+@@ -0,0 +1,82 @@
++#!/usr/bin/env bats
++# memory-nudge-episodic.bats — the RENDERED JSON of hooks/memory-nudge.sh with the episodic cue
++# (truememory §3.18, #18): cue-only on a non-due prompt, cue + nudge on a due one, nothing on a
++# non-matching non-due prompt, always exactly one JSON object, the cue still reached through a
++# symlinked hooks dir (X1), and CC_EPISODIC_CUE=off. Hermetic: HOME, config, state, IDL and the
++# index all live in the test tmpdir, as in nudge-supersession-run.sh.
++
++setup() {
++  REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
++  export HOME="$BATS_TEST_TMPDIR/home"
++  export CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/cfg"
++  export MEMORY_NUDGE_STATE_DIR="$BATS_TEST_TMPDIR/state"
++  export CC_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
++  export MEMORY_INDEX_PATH="$BATS_TEST_TMPDIR/mem/MEMORY.md"
++  mkdir -p "$HOME" "$CLAUDE_CONFIG_DIR" "$MEMORY_NUDGE_STATE_DIR" "$BATS_TEST_TMPDIR/mem"
++  printf -- '- [A](a.md) — one\n' > "$MEMORY_INDEX_PATH"
++  unset CC_EPISODIC_CUE
++  HOOK="$REPO/hooks/memory-nudge.sh"
++  CUE_PROMPT='retrieve that Dynamic Workflow research from a week ago about pinterest'
++}
++
++nudge() { # <interval> <prompt> [hook]
++  jq -cn --arg p "$2" '{session_id:"sid-ep",cwd:"/nonexistent-cwd-xyz",prompt:$p}' \
++    | MEMORY_NUDGE_INTERVAL="$1" bash "${3:-$HOOK}"
++}
++
++@test "non-due prompt with a cue prints one JSON object carrying ONLY the cue" {
++  run nudge 1000 "$CUE_PROMPT"
++  [ "$status" -eq 0 ]
++  [ "$(printf '%s' "$output" | jq -s length)" -eq 1 ]
++  run jq -r '.hookSpecificOutput.hookEventName + "|" + .hookSpecificOutput.additionalContext' <<< "$output"
++  [[ "$output" == "UserPromptSubmit|EPISODIC CUE: "*"claude-search 'dynamic workflow research pinterest'"* ]] || false
++  [[ "$output" != *"MEMORY CHECK"* ]] || false
++}
++
++@test "due prompt with a cue prints one JSON object: cue first, then the nudge" {
++  run nudge 1 "$CUE_PROMPT"
++  [ "$status" -eq 0 ]
++  [ "$(printf '%s' "$output" | jq -s length)" -eq 1 ]
++  run jq -r '.hookSpecificOutput.additionalContext' <<< "$output"
++  [[ "$output" == "EPISODIC CUE: "*"MEMORY CHECK (periodic)"* ]] || false
++}
++
++@test "non-matching non-due prompt prints nothing; non-matching due prompt prints the plain nudge" {
++  run nudge 1000 'fix the failing test'
++  [ "$status" -eq 0 ]
++  [ -z "$output" ]
++  run nudge 1 'fix the failing test'
++  [ "$(printf '%s' "$output" | jq -s length)" -eq 1 ]
++  run jq -r '.hookSpecificOutput.additionalContext' <<< "$output"
++  [[ "$output" != *"EPISODIC CUE"* ]] || false
++  [[ "$output" == *"MEMORY CHECK (periodic)"* ]] || false
++}
++
++@test "every counted prompt logs one memory-nudge:episodic IDL row" {
++  nudge 1000 "$CUE_PROMPT" >/dev/null
++  nudge 1000 'fix the failing test' >/dev/null
++  run jq -r 'select(.hook == "memory-nudge:episodic") | .disposition + " " + .reason' "$CC_IDL"
++  [ "${lines[0]}" = "fired time-ago" ]
++  [ "${lines[1]}" = "abstained no-match" ]
++  [ "${#lines[@]}" -eq 2 ]
++}
++
++@test "X1: a hooks dir of per-file symlinks still renders the cue" {
++  mkdir -p "$BATS_TEST_TMPDIR/live/hooks/lib"
++  ln -s "$HOOK" "$BATS_TEST_TMPDIR/live/hooks/memory-nudge.sh"
++  [ ! -e "$BATS_TEST_TMPDIR/live/hooks/lib/episodic_cue.sh" ]
++  run nudge 1000 "$CUE_PROMPT" "$BATS_TEST_TMPDIR/live/hooks/memory-nudge.sh"
++  [ "$status" -eq 0 ]
++  run jq -r '.hookSpecificOutput.additionalContext' <<< "$output"
++  [[ "$output" == "EPISODIC CUE: "* ]] || false
++}
++
++@test "CC_EPISODIC_CUE=off: no cue on either path, nudge unchanged" {
++  export CC_EPISODIC_CUE=off
++  run nudge 1000 "$CUE_PROMPT"
++  [ -z "$output" ]
++  run nudge 1 "$CUE_PROMPT"
++  run jq -r '.hookSpecificOutput.additionalContext' <<< "$output"
++  [[ "$output" == *"MEMORY CHECK (periodic)"* ]] || false
++  [[ "$output" != *"EPISODIC CUE"* ]] || false
++}
