@@ -665,7 +665,11 @@ regress() {
   run_check "lesson-recall-delivery" "$lesson_replay" --delivery --days 1
   # 7b. what became of each new-topic neighbour advisory (backup-before-write:neighbours). Its verdict
   # (OUTCOME-VERDICT ok|unresolved-high|unknown) lands in the captured output; exit 0 on every verdict.
-  if command -v python3 >/dev/null 2>&1; then
+  # CC_NIGHTLY_MEM_NEIGH_OUTCOME stubs it (executed directly), like every other step: unstubbed, a
+  # fixture nightly would classify the machine's REAL advisories and write its unresolved list.
+  if [ -n "${CC_NIGHTLY_MEM_NEIGH_OUTCOME:-}" ]; then
+    run_check "mem-neighbours-outcome" "$CC_NIGHTLY_MEM_NEIGH_OUTCOME"
+  elif command -v python3 >/dev/null 2>&1; then
     run_check "mem-neighbours-outcome" python3 "$SELF_SCRIPTS/mem-neighbours-outcome.py"
   else
     SKIPS+=("mem-neighbours-outcome:no-python3")
@@ -745,7 +749,7 @@ TORN
   # lost-modification pair. Positionals have neither problem and state the fixture at the call site.
   run_inv() {
     env CC_NIGHTLY_NOTIFY=/usr/bin/true CC_NIGHTLY_NEVERSTUCK=/usr/bin/true CC_NIGHTLY_ABSTAIN=/usr/bin/true \
-        CC_NIGHTLY_LESSON_REPLAY=/usr/bin/true \
+        CC_NIGHTLY_LESSON_REPLAY=/usr/bin/true CC_NIGHTLY_MEM_NEIGH_OUTCOME=/usr/bin/true \
         CC_NIGHTLY_POSTLAND_DIR="$d/nopostland" \
         CC_NIGHTLY_POSTLAND_VERIFY="${5:-/usr/bin/true}" POSTLAND_VERIFY="${7:-on}" \
         CC_NIGHTLY_GATE_GLOB="$3" CC_NIGHTLY_LINT_GLOB="$d/emptygl/*.sh" \

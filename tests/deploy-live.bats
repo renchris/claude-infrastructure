@@ -464,6 +464,7 @@ nightly() { # runs the nightly with every other check stubbed green
       CC_NIGHTLY_PAGEDIR="$PAGES" CC_NIGHTLY_LOG="$BATS_TEST_TMPDIR/reg.log" \
       CC_NIGHTLY_REPO="$SHARED" CC_NIGHTLY_POSTLAND_DIR="$1" CC_NIGHTLY_POSTLAND_AGE=0 \
       CC_NIGHTLY_POSTLAND_VERIFY="${PV_STUB:-/usr/bin/true}" \
+      CC_NIGHTLY_LESSON_REPLAY=/usr/bin/true CC_NIGHTLY_MEM_NEIGH_OUTCOME=/usr/bin/true \
       bash "$NIGHTLY"
 }
 
