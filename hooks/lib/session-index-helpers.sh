@@ -897,7 +897,8 @@ except MemoryError:
 }
 
 # ─── Batched change detection (the sweep's hot path) ───────
-# Emits ONE tab-separated row per NEW-or-CHANGED transcript: <path>\t<mtime>\t<size>.
+# Emits ONE tab-separated row per NEW-or-CHANGED transcript or workflow result file:
+# <path>\t<mtime>\t<size>.
 #
 # Replaces the per-file cost that made the sweep a 59 s-per-60 s-tick scanner once
 # unblocked (audit 06 §3/§5.3): 2× `stat` AND one `sqlite3` process **per transcript**
@@ -907,7 +908,10 @@ except MemoryError:
 #   2. one `sqlite3`              — the whole file_tracking table, once
 #   3. one `awk`                  — the join, in-memory
 # maxdepth 3 preserves the two layouts the sweep has always handled: flat
-# `<project>/<sid>.jsonl` and nested `<project>/<sid>/transcript.jsonl`.
+# `<project>/<sid>.jsonl` and nested `<project>/<sid>/transcript.jsonl`. The find reaches depth 4
+# for ONE more shape, a Dynamic Workflow's result file `<project>/<sid>/workflows/wf_*.json`; awk
+# enforces the depths per kind, so the depth-4 `<sid>/subagents/agent-*.jsonl` transcripts this
+# index never held stay out.
 #
 # The tracking table reaches awk through a temp FILE, never `-v`: BSD awk (the /usr/bin/awk launchd
 # runs) rejects a multi-line -v value with "newline in string", so from the second tracked row on
@@ -929,9 +933,11 @@ session_index_changed_files() {
     # %m mtime, %z size, %N path — path LAST so a path containing spaces still parses.
     # find/stat are fenced with `|| true` so the pipeline's status is awk's alone: a transcript
     # vanishing mid-scan is routine, a failed join is not.
-    { find "$projects_dir" -maxdepth 3 -type f -name '*.jsonl' -exec stat -f '%m%t%z%t%N' {} + 2>/dev/null || true; } \
-      | awk -F'\t' -v trackfile="$tracking" '
+    { find "$projects_dir" -maxdepth 4 -type f \( -name '*.jsonl' -o -name 'wf_*.json' \) \
+          -exec stat -f '%m%t%z%t%N' {} + 2>/dev/null || true; } \
+      | SI_ROOT="${projects_dir%/}" awk -F'\t' -v trackfile="$tracking" '
           BEGIN {
+              root = ENVIRON["SI_ROOT"]
               while ((getline row < trackfile) > 0) {
                   if (row == "") continue
                   split(row, c, "\t")
@@ -941,6 +947,11 @@ session_index_changed_files() {
           }
           {
               path = $3
+              rel = substr(path, length(root) + 1)
+              sub(/^\/+/, "", rel)
+              depth = gsub(/\//, "/", rel)
+              if (rel ~ /\.jsonl$/) { if (depth > 2) next }
+              else if (rel !~ /^[^\/]+\/[^\/]+\/workflows\/wf_[^\/]*\.json$/) next
               if ((path in seen) && seen[path] == ($1 SUBSEP $2)) next
               print path "\t" $1 "\t" $2
           }' || rc=$?
@@ -1067,6 +1078,80 @@ sys.stdout.write(ctx + '\t' + at + '\t' + fc + '\t' + cr + '\t' + str(user_count
     _si_norm_report "$st" extract_all
 }
 
+# ─── Workflow result extraction ────────────────────────────
+# A Dynamic Workflow writes its result to `<project>/<sid>/workflows/wf_*.json`, and nothing else
+# records it: a finding that lived only there was invisible to claude-search (TrueMemory study
+# §3.18, miss #106). ONE python3 per changed file, printing TWO lines and nothing else:
+#   line 1  first_prompt   `workflow <name>: <summary head>`, ≤500 chars
+#   line 2  context_text   workflowName + summary + phase titles/details + every string in `result`
+# Never `script` (the JS source) or `logs`. Newlines are the separator, not tabs, so an empty
+# field cannot shift its neighbour (the TSV collapse). Prints nothing for a file it cannot read as
+# a workflow object, which the caller treats as "track it, index nothing".
+session_index_extract_workflow() {
+    local wf_path="$1"
+    local max_chars="${2:-${SESSION_INDEX_WF_MAX_CHARS:-32000}}"
+    [ -f "$wf_path" ] || return 0
+
+    local file_size
+    file_size=$(stat -f%z "$wf_path" 2>/dev/null || stat -c%s "$wf_path" 2>/dev/null || echo 0)
+    if [ "$file_size" -gt 52428800 ]; then
+        session_index_log "Skipping large workflow file ($file_size bytes): $wf_path"
+        return 0
+    fi
+
+    WF_PATH="$wf_path" WF_MAX_CHARS="$max_chars" python3 - <<'WF_PY' 2>/dev/null || true
+import json
+import os
+import sys
+from typing import Any
+
+
+def flat(s: str) -> str:
+    return " ".join(s.split())
+
+
+def walk(node: Any, out: list[str], budget: list[int]) -> None:
+    if budget[0] <= 0:
+        return
+    if isinstance(node, str):
+        s = flat(node)
+        if s:
+            out.append(s)
+            budget[0] -= len(s) + 1
+    elif isinstance(node, dict):
+        for v in node.values():
+            walk(v, out, budget)
+    elif isinstance(node, list):
+        for v in node:
+            walk(v, out, budget)
+
+
+max_chars = int(os.environ["WF_MAX_CHARS"])
+try:
+    with open(os.environ["WF_PATH"], encoding="utf-8", errors="replace") as fh:
+        d = json.load(fh)
+except (OSError, ValueError, MemoryError):
+    sys.exit(0)
+if not isinstance(d, dict):
+    sys.exit(0)
+
+name = flat(str(d.get("workflowName") or ""))
+summary = flat(str(d.get("summary") or ""))
+parts: list[str] = [p for p in (name, summary) if p]
+for ph in d.get("phases") or []:
+    if isinstance(ph, dict):
+        for k in ("title", "detail"):
+            v = ph.get(k)
+            if isinstance(v, str) and v.strip():
+                parts.append(flat(v))
+budget = [max_chars]
+walk(d.get("result"), parts, budget)
+
+head = f"workflow {name or '?'}: {summary}"[:500]
+sys.stdout.write(head + "\n" + " ".join(parts)[:max_chars] + "\n")
+WF_PY
+}
+
 # ─── Retention: drop rows whose transcript no longer exists ────────────────────
 # The index outlives its subject ~4× (audit 03 §1c): 5,453 session rows for ~1,600
 # transcripts, because CC's cleanupPeriodDays deletes transcripts at 30 d and NOTHING
@@ -1114,7 +1199,11 @@ $(find "$r" -maxdepth 3 -type f -name '*.jsonl' 2>/dev/null \
               b=$(basename "$f" .jsonl)
               [ "$b" = "transcript" ] && b=$(basename "$(dirname "$f")")
               printf '%s\n' "$b"
-          done)"
+          done)
+$(find "$r" -mindepth 4 -maxdepth 4 -type f -path '*/workflows/wf_*.json' 2>/dev/null \
+        | while IFS= read -r f; do basename "$f" .json; done)"
+        # ^ a workflow result row's id IS its file stem (`wf_…`, see the sweep), so its evidence
+        #   is that file; without this arm every such row reads "no transcript" and is deleted.
     done
     ondisk=$(printf '%s\n' "$ondisk" | grep . | sort -u)
     n_ondisk=$(printf '%s\n' "$ondisk" | grep -c . || true)

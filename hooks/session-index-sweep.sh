@@ -126,6 +126,25 @@ SKIPPED_BY_CAP=0
 # left behind, because a truncation nobody can see reads as "fully indexed".
 SESSION_INDEX_SWEEP_MAX_FILES="${SESSION_INDEX_SWEEP_MAX_FILES:-200}"
 
+# sweep_track <sid> <path> <project_dir> <mtime> <size> — stamp the row's sweep_mtime and record the
+# file as swept, so an unchanged file is not re-read next tick. Both writes in ONE sqlite3 process.
+sweep_track() {
+    local sid_escaped transcript_escaped proj_dir_escaped
+    sid_escaped=$(echo "$1" | sed "s/'/''/g")
+    transcript_escaped=$(echo "$2" | sed "s/'/''/g")
+    proj_dir_escaped=$(echo "$3" | sed "s/'/''/g")
+    session_index_sql <<SQL
+UPDATE sessions SET sweep_mtime = $4, sweep_size = $5 WHERE session_id = '$sid_escaped';
+INSERT INTO file_tracking (file_path, session_id, project_dir, last_mtime, last_size, last_swept_at, sweep_count, is_active)
+VALUES ('$transcript_escaped', '$sid_escaped', '$proj_dir_escaped', $4, $5, '$NOW', 1, 1)
+ON CONFLICT(file_path) DO UPDATE SET
+    last_mtime = $4,
+    last_size = $5,
+    last_swept_at = '$NOW',
+    sweep_count = file_tracking.sweep_count + 1;
+SQL
+}
+
 # ─── ONE batched change-detection pass ────────────────────
 # Was: for every transcript, 2× `stat` + 1× `sqlite3` SELECT, then 3 full-file python3
 # parses of the same file — ~4,900 processes for 1,631 transcripts, and every active
@@ -142,6 +161,38 @@ while IFS=$'\t' read -r transcript file_mtime file_size; do
     fi
 
     base=$(basename "$transcript")
+    # File mtime as ISO8601 for created_at/modified_at
+    file_mtime_iso=$(date -r "$file_mtime" -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "$NOW")
+
+    # ─── A Dynamic Workflow result: {project_dir}/{parent_sid}/workflows/wf_*.json ───
+    # Its OWN row, keyed on the file stem (`wf_…`), so the parent session's row is never touched.
+    # A file that is not a readable workflow object is still tracked, so an unchanged bad file is
+    # not re-parsed every tick; it is re-read only once its mtime or size moves.
+    if [[ "$base" == wf_*.json ]]; then
+        sid="${base%.json}"
+        project_dir="$(dirname "$(dirname "$(dirname "$transcript")")")/"
+        dir_name=$(basename "$project_dir")
+        proj_path=$(echo "$dir_name" | sed 's/^-/\//' | sed 's/-/\//g')
+        proj_name=$(session_index_project_name "$proj_path")
+
+        extracted=$(session_index_extract_workflow "$transcript" 2>/dev/null || true)
+        wf_head=""; wf_text=""
+        { IFS= read -r wf_head || true; IFS= read -r wf_text || true; } <<< "$extracted"
+
+        if [ -n "$wf_text" ]; then
+            keywords=$(session_index_extract_keywords "$wf_head $wf_text" 2>/dev/null || echo "")
+            session_index_upsert_with_fts \
+                "$sid" "$proj_path" "$proj_name" "" "$wf_head" "" \
+                "$file_mtime_iso" "$file_mtime_iso" 0 "" "$keywords" \
+                "workflow-sweep" "$wf_text" "" "" "" ""
+        else
+            session_index_log "Workflow file not indexed (unreadable or empty): $transcript"
+        fi
+        sweep_track "$sid" "$transcript" "$project_dir" "$file_mtime" "$file_size"
+        WORK_DONE=$((WORK_DONE + 1))
+        continue
+    fi
+
     if [ "$base" = "transcript.jsonl" ]; then
         # Nested layout: {project_dir}/{session_id}/transcript.jsonl
         sid=$(basename "$(dirname "$transcript")")
@@ -173,9 +224,6 @@ while IFS=$'\t' read -r transcript file_mtime file_size; do
 
     keywords=$(session_index_extract_keywords "$first_prompt $context_text" 2>/dev/null || echo "")
 
-    # File mtime as ISO8601 for created_at/modified_at
-    file_mtime_iso=$(date -r "$file_mtime" -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "$NOW")
-
     # Upsert session — 'sweep' source is lower priority than 'sessions-index'
     session_index_upsert_with_fts \
         "$sid" \
@@ -196,21 +244,7 @@ while IFS=$'\t' read -r transcript file_mtime file_size; do
         "$commands_run" \
         ""
 
-    sid_escaped=$(echo "$sid" | sed "s/'/''/g")
-    transcript_escaped=$(echo "$transcript" | sed "s/'/''/g")
-    proj_dir_escaped=$(echo "$project_dir" | sed "s/'/''/g")
-
-    # Both writes in ONE sqlite3 process (was two).
-    session_index_sql <<SQL
-UPDATE sessions SET sweep_mtime = $file_mtime, sweep_size = $file_size WHERE session_id = '$sid_escaped';
-INSERT INTO file_tracking (file_path, session_id, project_dir, last_mtime, last_size, last_swept_at, sweep_count, is_active)
-VALUES ('$transcript_escaped', '$sid_escaped', '$proj_dir_escaped', $file_mtime, $file_size, '$NOW', 1, 1)
-ON CONFLICT(file_path) DO UPDATE SET
-    last_mtime = $file_mtime,
-    last_size = $file_size,
-    last_swept_at = '$NOW',
-    sweep_count = file_tracking.sweep_count + 1;
-SQL
+    sweep_track "$sid" "$transcript" "$project_dir" "$file_mtime" "$file_size"
 
     WORK_DONE=$((WORK_DONE + 1))
 done < <(session_index_changed_files "$CLAUDE_PROJECTS_DIR")

@@ -319,3 +319,123 @@ track() { # <path> — record the file as swept at its CURRENT mtime+size, as th
   [ "$status" -eq 0 ]
   [ ! -f "$HOME/.claude/state/session-index-retention.last" ]
 }
+
+# ══ (3) Dynamic Workflow result files ═════════════════════════════════════════════════════════════
+# A workflow's result lives only in `<project>/<sid>/workflows/wf_*.json`; the TrueMemory study's
+# miss #106 had its answer there and nowhere the index read (docs/research/truememory-2026-09-27.md
+# §3.18). Each file becomes its OWN row keyed on its stem; the parent session's row is never touched.
+WF_ID=wf_abc12345-678
+
+mk_workflow() { # <path> — result words (zanzibarquux) appear ONLY in `result`; script/logs carry
+                # their own (scriptonlyword / logonlyword), which must never be indexed
+  mkdir -p "$(dirname "$1")"
+  cat > "$1" <<'JSON'
+{"runId":"wf_abc12345-678","timestamp":"2026-09-20T10:00:00Z","taskId":"t1",
+ "workflowName":"docs-audit","summary":"Audit the docs tree for stale plans","status":"completed",
+ "phases":[{"title":"Ground truth","detail":"map the code"}],
+ "result":[{"finding":"the zanzibarquux ledger is orphaned","files":["docs/a.md"]},"second note"],
+ "logs":["logonlyword appeared in a log"],
+ "script":"export const meta = { name: 'scriptonlyword' }",
+ "scriptPath":"/tmp/x.js","durationMs":10,"totalTokens":5}
+JSON
+}
+
+wf_path() { printf '%s' "$HOME/.claude/projects/-Users-x-proj/$SID_A/workflows/$WF_ID.json"; }
+db() { sqlite3 "$HOME/.claude/session-index.db" "$1"; }
+
+@test "a workflow result file is indexed as its OWN row, findable by a word only in its result" {
+  mk_transcript "$HOME/.claude/projects/-Users-x-proj/$SID_A.jsonl"
+  mk_workflow "$(wf_path)"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  run db "SELECT session_id FROM sessions_fts WHERE sessions_fts MATCH 'zanzibarquux';"
+  [ "$output" = "$WF_ID" ]
+  run db "SELECT source || '|' || project_path || '|' || first_prompt FROM sessions WHERE session_id='$WF_ID';"
+  [ "$output" = "workflow-sweep|/Users/x/proj|workflow docs-audit: Audit the docs tree for stale plans" ]
+  run db "SELECT COUNT(*) FROM sessions_fts WHERE sessions_fts MATCH 'ground';"   # a phase title
+  [ "$output" = "1" ]
+}
+
+@test "a workflow's script body and logs are never indexed" {
+  mk_transcript "$HOME/.claude/projects/-Users-x-proj/$SID_A.jsonl"
+  mk_workflow "$(wf_path)"
+  bash "$SWEEP"
+  run db "SELECT COUNT(*) FROM sessions WHERE session_id='$WF_ID';"
+  [ "$output" = "1" ]                          # the row exists, so the zeros below mean something
+  run db "SELECT COUNT(*) FROM sessions_fts WHERE sessions_fts MATCH 'scriptonlyword';"
+  [ "$output" = "0" ]
+  run db "SELECT COUNT(*) FROM sessions_fts WHERE sessions_fts MATCH 'logonlyword';"
+  [ "$output" = "0" ]
+}
+
+@test "indexing a workflow file leaves the parent session's row and FTS row byte-identical" {
+  mk_transcript "$HOME/.claude/projects/-Users-x-proj/$SID_A.jsonl"
+  bash "$SWEEP"
+  local q="SELECT session_id,project_path,project_name,summary,first_prompt,context_text,assistant_text,files_changed,commands_run,message_count,keywords,source FROM sessions WHERE session_id='$SID_A';"
+  local qf="SELECT session_id,first_prompt,context_text FROM sessions_fts WHERE session_id='$SID_A';"
+  local before beforef
+  before=$(db "$q"); beforef=$(db "$qf")
+  [ -n "$before" ]
+  mk_workflow "$(wf_path)"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  run db "SELECT COUNT(*) FROM sessions WHERE session_id='$WF_ID';"
+  [ "$output" = "1" ]
+  [ "$(db "$q")" = "$before" ]
+  [ "$(db "$qf")" = "$beforef" ]
+}
+
+@test "an unchanged workflow file is not re-extracted on the next sweep, a changed one is" {
+  mk_transcript "$HOME/.claude/projects/-Users-x-proj/$SID_A.jsonl"
+  mk_workflow "$(wf_path)"
+  bash "$SWEEP"
+  local p; p=$(wf_path)
+  run db "SELECT session_id || '|' || sweep_count FROM file_tracking WHERE file_path='$p';"
+  [ "$output" = "$WF_ID|1" ]
+  bash "$SWEEP"
+  run db "SELECT sweep_count FROM file_tracking WHERE file_path='$p';"
+  [ "$output" = "1" ]                          # untouched file ⇒ no second extraction
+  printf ' ' >> "$p"                           # size moves ⇒ detected again
+  bash "$SWEEP"
+  run db "SELECT sweep_count FROM file_tracking WHERE file_path='$p';"
+  [ "$output" = "2" ]
+}
+
+@test "a malformed workflow file is tracked and skipped; the sweep and the transcript survive it" {
+  mk_transcript "$HOME/.claude/projects/-Users-x-proj/$SID_A.jsonl"
+  mkdir -p "$(dirname "$(wf_path)")"
+  printf '{"runId": "wf_abc12345-678", "result": [trunc' > "$(wf_path)"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  run db "SELECT COUNT(*) FROM sessions WHERE session_id='$WF_ID';"
+  [ "$output" = "0" ]
+  run db "SELECT COUNT(*) FROM sessions WHERE session_id='$SID_A';"
+  [ "$output" = "1" ]
+  local p; p=$(wf_path)
+  run db "SELECT COUNT(*) FROM file_tracking WHERE file_path='$p';"
+  [ "$output" = "1" ]                          # tracked, so it is not re-parsed every tick
+}
+
+@test "retention keeps a workflow row while its file exists and drops it once the file is gone" {
+  mk_transcript "$HOME/.claude/projects/-Users-x-proj/$SID_A.jsonl"
+  mk_workflow "$(wf_path)"
+  bash "$SWEEP"                                  # the first tick also runs the weekly pass
+  run db "SELECT COUNT(*) FROM sessions WHERE session_id='$WF_ID';"
+  [ "$output" = "1" ]
+  rm -f "$(wf_path)"
+  run bash "$SWEEP" --retention-apply
+  [ "$status" -eq 0 ]
+  run db "SELECT COUNT(*) FROM sessions WHERE session_id='$WF_ID';"
+  [ "$output" = "0" ]
+  run db "SELECT COUNT(*) FROM sessions WHERE session_id='$SID_A';"
+  [ "$output" = "1" ]
+}
+
+@test "change detection reaches wf files at depth 4 but not depth-4 subagent transcripts" {
+  mk_workflow "$(wf_path)"
+  mk_transcript "$HOME/.claude/projects/-Users-x-proj/$SID_A/subagents/agent-deadbeef.jsonl"
+  run bash -c "HOME='$HOME' bash -c 'source \"$HELPERS\"; session_index_changed_files'"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "/workflows/$WF_ID.json"
+  [[ "$output" != *agent-deadbeef* ]] || false
+}
