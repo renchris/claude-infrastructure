@@ -27,6 +27,61 @@ setup() {
   # steady state, so any production constant is a future permanent-red. The seam is the fix.
   # The positive control below proves this pin is REACHED rather than decorative.
   export CC_OSA_TIMEOUT_S=180
+  # A FIXTURE HOME: the successful-launch cases below reach cc_log_pane_spawn, whose log lives
+  # under $HOME — a stubbed launch must never write a row into the operator's live spawn log.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # THE CAPACITY GATE'S STATE IS A FIXTURE. The capacity cases below reach the REAL gate, whose
+  # refusal BUDGET and IDL default to ~/.claude/autonomy — on 2026-09-28 the segments case wrote
+  # "refusal 1 of 3" into the PRODUCTION budget, spending the box's real admission bound on a test.
+  export CC_ADMIT_STATE_DIR="$BATS_TEST_TMPDIR/admit"
+  export CC_ADMIT_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
+  # RESUME DEBT (CLOSE_RESUME_CUSTODY §2 D4) — a recorder, never the real ledger.
+  export CC_RESUME_DEBT_BIN="$BATS_TEST_TMPDIR/cc-resume-debt"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/debt.log"\n' "$BATS_TEST_TMPDIR" > "$CC_RESUME_DEBT_BIN"
+  chmod +x "$CC_RESUME_DEBT_BIN"
+  unset CC_RESUME_DEBT_SETTLING
+}
+
+# A successful kitty launch, fully stubbed: kitty accepts `@ launch`, the engine exists, the gate admits.
+kitty_ok_env() {
+  unset IT2_WRAPPER_NO_KITTY CC_TERM_KITTY_TO KITTY_LISTEN_ON
+  export KITTY_WINDOW_ID=1
+  printf '#!/bin/bash\nexit 0\n' > "$BATS_TEST_TMPDIR/kitty"; chmod +x "$BATS_TEST_TMPDIR/kitty"
+  export CC_TERM_KITTY="$BATS_TEST_TMPDIR/kitty"
+  printf '#!/bin/bash\nexit 0\n' > "$BATS_TEST_TMPDIR/rro-k"; chmod +x "$BATS_TEST_TMPDIR/rro-k"
+  export CC_RESUME_ONE_BIN="$BATS_TEST_TMPDIR/rro-k"
+  export CC_ADMIT_GATE=off
+}
+
+@test "RESUME DEBT: a successful kitty launch opens ONE debt carrying the sid, cwd, account and cfg" {
+  kitty_ok_env
+  run bash "$LAUNCH" next3 /tmp sid-debt-1
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(wc -l < "$BATS_TEST_TMPDIR/debt.log" | tr -d ' ')" -eq 1 ]
+  grep -q '^open --sid sid-debt-1 --cfg .*/\.claude-tertiary --cwd /tmp --account next3 --by boot-resume-launch$' \
+    "$BATS_TEST_TMPDIR/debt.log" || { cat "$BATS_TEST_TMPDIR/debt.log"; false; }
+}
+
+@test "RESUME DEBT: a dry run opens NO debt" {
+  kitty_ok_env
+  run bash "$LAUNCH" --dry-run next3 /tmp sid-debt-2
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q '^KITTY: '                  # positive control: it took the kitty arm
+  [ ! -e "$BATS_TEST_TMPDIR/debt.log" ]
+}
+
+@test "RESUME DEBT: CC_RESUME_DEBT_SETTLING=1 (cc-resume-debt's own retry) opens NO debt" {
+  kitty_ok_env
+  CC_RESUME_DEBT_SETTLING=1 run bash "$LAUNCH" next3 /tmp sid-debt-3
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ ! -e "$BATS_TEST_TMPDIR/debt.log" ]
+}
+
+@test "RESUME DEBT: a failing debt binary never changes the launch's exit code" {
+  kitty_ok_env
+  printf '#!/bin/bash\nexit 7\n' > "$CC_RESUME_DEBT_BIN"
+  run bash "$LAUNCH" next3 /tmp sid-debt-4
+  [ "$status" -eq 0 ]
 }
 
 @test "--help exits 0" {

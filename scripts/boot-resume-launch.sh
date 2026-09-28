@@ -294,6 +294,36 @@ fi
 # spawn no gate saw. Exported so it survives the terminal-launch indirection to the engine.
 export CC_ADMIT_DONE=1
 
+# ── RESUME DEBT (docs/plans/CLOSE_RESUME_CUSTODY.md §2 D2/D4) ─────────────────────────────────────
+# A launched window is not a resumed session: the relaunch that stranded a customer session on
+# 2026-09-28 "succeeded" too. So every SUCCESSFUL launch opens a debt that only a proof (the
+# poller's sweep) discharges, and an unproven one escalates to a backlog row + page. Skipped when
+# CC_RESUME_DEBT_SETTLING=1 — cc-resume-debt calls this launcher for its own retry and already
+# holds the debt. Best-effort by contract: a missing or failing binary never changes our exit code.
+# Seam CC_RESUME_DEBT_BIN; else the repo bin beside this script (symlink-resolved first), else ~/.claude.
+brl_cfg_for() { # account alias → config dir, mirroring bin/reso-resume-one's alias table
+  case "$1" in
+    next|claude-next|fable|claude-fable)       printf '%s' "$HOME/.claude-next" ;;
+    next2|claude-next2|fable2|claude-fable2)   printf '%s' "$HOME/.claude-secondary" ;;
+    next3|claude-next3|fable3|claude-fable3)   printf '%s' "$HOME/.claude-tertiary" ;;
+    next4|claude-next4|fable4|claude-fable4)   printf '%s' "$HOME/.claude-quaternary" ;;
+  esac
+}
+brl_open_debt() {
+  [ "${CC_RESUME_DEBT_SETTLING:-0}" = 1 ] && return 0
+  local rd="${CC_RESUME_DEBT_BIN:-}" c cfg
+  if [ -z "$rd" ]; then
+    for c in "$(dirname "$_CC_KS")/../bin/cc-resume-debt" "$(dirname "$0")/../bin/cc-resume-debt" \
+             "${HOME:-}/.claude/bin/cc-resume-debt"; do
+      [ -x "$c" ] && { rd="$c"; break; }
+    done
+  fi
+  [ -n "$rd" ] && [ -x "$rd" ] || return 0
+  cfg="$(brl_cfg_for "$acct")"
+  "$rd" open --sid "$sid" ${cfg:+--cfg "$cfg"} --cwd "$cwd" --account "$acct" \
+    --by boot-resume-launch >/dev/null 2>&1 || true
+}
+
 if [ "$IN_KITTY" = 1 ]; then
   command -v "$KITTY" >/dev/null 2>&1 || { echo "boot-resume-launch: kitty unavailable" >&2; exit 3; }
   # No `open -a kitty` counterpart on purpose: we are RUNNING inside kitty (that is the predicate),
@@ -301,6 +331,7 @@ if [ "$IN_KITTY" = 1 ]; then
   # be missing. If it is, the launch fails and rc 4 reports the cut exactly as osascript's does.
   brl_kitty "${KARGS[@]}" >/dev/null 2>&1 || { echo "boot-resume-launch: kitty launch failed for $sid" >&2; exit 4; }
   command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn os-window kitty "" "${cwd:-$PWD}" "boot-resume-launch resume sid:${sid:-}"
+  brl_open_debt
   exit 0
 fi
 
@@ -326,4 +357,5 @@ pane="$(printf '%s' "$OSA_CREATE" | brl_bounded "$OSASCRIPT" - 2>/dev/null | tr 
 osa_type_verified "$pane" "$CMD" \
   || { echo "boot-resume-launch: could not verifiably type the resume command for $sid into pane $pane — refusing to submit an unverified line" >&2; exit 4; }
 command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn window iterm2 "" "${cwd:-$PWD}" "boot-resume-launch resume sid:${sid:-}"
+brl_open_debt
 exit 0
