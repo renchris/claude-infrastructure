@@ -517,6 +517,24 @@ clause on it would be a push consumer on faith. The need is measured: 71 of 91 r
 negative tool claim carry no conditions. *Reopen only if* `scripts/mem-neighbours-outcome.py` shows ≥1
 delivered-and-used advisory; then add the receipt sentence to that message and measure adoption.
 
+**R22 — FTS5 + model2vec fusion in `cc-memory-search`** (research #4b, §5.19). On 21 operator-worded queries
+(time-valid gold, blind labels): 7 wins, 3 losses, 11 ties, p = 0.172, and R@1 fell from 0.333 to 0.238. The
+study's agent-phrased 6-0 did not replicate here (1-2). Fusion lifts deep gold into ranks 5-10 but pushes FTS5's
+top hits down, and it costs 135-140 MB RSS against 42 MB. *Reopen only if* a fused ranking gains at p < 0.05 on
+≥40 operator-worded queries.
+
+**R23 — Automated candidate extraction and the transcript capture scan, hence a background memory worker**
+(research #24, #25, §5.20-5.21). Stage 0: 34/60 labelled candidates pass every anti-capture class (56.7%, Wilson
+44.1-68.4%, rule ≥90%), and 2 of 4 never-written rulings were recovered (rule ≥3). Most of the 20
+"already indexed" failures came from pasted fire briefs, which transcripts mark as typed. #25 was never built,
+and #21/#22's entry condition (a worker approved on #24's verdict) is not supported. *Reopen only if* an
+extractor that excludes machine-authored turns reaches ≥90% on ≥50 labelled candidates and recovers 3 of 4.
+
+**R24 — A moment-of-action rule push** (research #36, §5.23-5.24). There was no headroom: with the rule in
+context, stock obeyed in 36 of 36 single-task runs across 12 fixture variants, so there was no miss to prevent.
+No registered check catches the four real misses either. *Reopen only if* a long-session fixture (a resumed long
+transcript) makes stock fail.
+
 **Sub-parts dropped from adopted items**, so nobody resurrects them: a PreToolUse advisory arm for
 symptom recall; a standalone per-Bash hook fork; `symptoms:` frontmatter before 15 rows; routing
 demoted lines to COLD; a dynamic run-every-hook contract test (a static lint suffices); a persistent
