@@ -31,11 +31,15 @@ winner as a diff. Treat as a throwaway spike on ONE skill first (recommend `pyra
    baseline body + the failing/low-scoring cases (GEPA reads WHY it failed, not just that it did).
 3. **Score** baseline + each variant on every case:
    ```
-   claude-latest -p --bare --output-format json \
+   claude-latest -p --bare --output-format json --model claude-opus-5-5 --effort high \
      --append-system-prompt "<variant body>" \
      --json-schema '{"type":"object","properties":{"score":{"type":"number"},"feedback":{"type":"string"}},"required":["score","feedback"]}' \
      --max-budget-usd 2 "<case input>"
    ```
+   - Pin `--model` and `--effort` for the whole run (the id is `versions.opus_latest` in
+     `~/.claude/model-config.yaml` when the run starts): with neither, the scorer ran on the binary's
+     default model, and a 5.5-family launch with no `--effort` runs at MEDIUM whatever `effortLevel`
+     says, so scores stopped being comparable across a bump.
    - `--gate typecheck`: additionally shell out to `pnpm tsc --noEmit` in a scratch worktree and
      DISQUALIFY any variant that regresses it (a deterministic gate beats a reward-hackable judge).
    - `--gate qa`: parse the `/qa-commits` digest for new Critical/High; disqualify regressions.

@@ -156,8 +156,11 @@ REWORDED="$(mktemp "${TMPDIR:-/tmp}/cc-recover-${BLOCKED}.XXXXXX")"
 
 # ── the two SANCTIONED commands ──
 # 1. re-fire on a DIFFERENT model. --no-self-retire: the carried brief already holds the original's
-#    self-retire + notify-back directives; re-adding would duplicate them.
-REFIRE=( "$HANDOFF_BIN" --prompt-file "$REWORDED" --model "$TARGET" --cwd "$CWD" --no-self-retire )
+#    self-retire + notify-back directives; re-adding would duplicate them. --effort high is explicit
+#    (the SSOT's effort_defaults.default): with none, the rung was whatever launcher function the
+#    pane had (claude() high, claude-prev max), and a bare 5.5-family launch runs at MEDIUM because
+#    the user effortLevel does not apply to it (probe-effort-binding.md, measured 2026-09-28).
+REFIRE=( "$HANDOFF_BIN" --prompt-file "$REWORDED" --model "$TARGET" --effort high --cwd "$CWD" --no-self-retire )
 # 2. sanctioned self-close of the DOA blocked pane (succession statement mandatory). Default --terminal
 #    (honest: the blocked session produced nothing); execute upgrades to --successor when a live new pane appears.
 CLOSE_TERMINAL=( "$HANDOFF_BIN" self-close --session-id "$BLOCKED" --terminal )

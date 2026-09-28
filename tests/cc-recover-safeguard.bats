@@ -63,7 +63,7 @@ reworded_path() { printf '%s\n' "$1" | sed -n 's/^reworded brief: //p' | head -1
   run "$C" "$BPANE" --dry-run
   [ "$status" -eq 0 ]
   echo "$output" | grep -qE '^target model:   opus'
-  echo "$output" | grep -qE -- '--prompt-file .+ --model opus --cwd .+ --no-self-retire'
+  echo "$output" | grep -qE -- '--prompt-file .+ --model opus --effort high --cwd .+ --no-self-retire'
 }
 
 @test "dry-run: self-close carries the pane + a succession statement (--terminal)" {
