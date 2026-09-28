@@ -341,6 +341,21 @@ def call_model(binary: str, prompt: str, cwd: Path) -> tuple[int, str, str]:
     return p.returncode, p.stdout, p.stderr
 
 
+def source_turn(c: dict[str, Any], turns: list[OpTurn]) -> OpTurn | None:
+    """The operator turn a candidate cites: its `turn` as 2, "2" or "T2", else the turn whose
+    text contains the candidate's excerpt (the model does not always return the number)."""
+    by_n = {t.n: t for t in turns}
+    m = re.fullmatch(r"\s*T?(\d+)\s*", str(c.get("turn", "")))
+    if m and int(m.group(1)) in by_n:
+        return by_n[int(m.group(1))]
+    excerpt = " ".join(str(c.get("excerpt") or "").split())[:120]
+    if len(excerpt) >= 12:
+        for t in turns:
+            if excerpt in " ".join(t.text.split()):
+                return t
+    return None
+
+
 def store_for(project: str) -> str:
     return f"~/.claude/projects/{project}/memory"
 
@@ -349,7 +364,6 @@ def extract(
     s: Session, template: str, prompt_sha: str, binary: str, out: Path
 ) -> tuple[list[dict[str, Any]], int]:
     turns = operator_turns(s.path)
-    by_n = {t.n: t for t in turns}
     rows: list[dict[str, Any]] = []
     calls = 0
     base = {
@@ -368,6 +382,9 @@ def extract(
             fh.write(prompt)
         calls += 1
         rc, stdout, stderr = call_model(binary, prompt, out)
+        reply = out / "inputs" / f"{s.sid}-{i}.reply.txt"
+        with open(refuse_memory_path(reply), "w", encoding="utf-8") as fh:
+            fh.write(stdout)
         if rc != 0:
             rows.append(
                 {
@@ -393,15 +410,15 @@ def extract(
             )
             continue
         for c in cands:
-            n = c.get("turn")
-            src = by_n.get(n) if isinstance(n, int) else None
+            src = source_turn(c, turns)
+            n = src.n if src else None
             excerpt = str(c.get("excerpt") or (src.text if src else ""))[:EXCERPT_CAP]
             rows.append(
                 {
                     **base,
                     "kind": "candidate",
                     "chunk": i,
-                    "turn": n if isinstance(n, int) else None,
+                    "turn": n,
                     "ts": src.ts if src else "",
                     "name": c["name"],
                     "description": c["description"],

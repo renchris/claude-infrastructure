@@ -161,3 +161,18 @@ print(r["kind"],r["session"],r["error"])
   run python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["errors"])' "$OUT/run.json"
   [ "$output" = "1" ]
 }
+
+@test "a turn given as \"T2\", or only an excerpt, still maps to the source turn's ts; the raw reply is kept" {
+  good_session
+  export STUB_REPLY='{"candidates":[{"turn":"T2","name":"a","description":"d","body":"b"},{"name":"c","description":"d","body":"b","excerpt":"always sign off before implementing"}]}'
+  run "$EX" --dry-run --session good-1111 --out "$OUT"
+  [ "$status" -eq 0 ]
+  run python3 -c '
+import json,sys
+for l in open(sys.argv[1]):
+    r=json.loads(l); print(r["name"],r["turn"],r["ts"])
+' "$OUT/candidates.jsonl"
+  [ "$output" = "a 2 2026-09-20T00:00:03Z
+c 2 2026-09-20T00:00:03Z" ]
+  grep -q '"T2"' "$OUT/inputs/good-1111-0.reply.txt"
+}
