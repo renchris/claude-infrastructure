@@ -29,3 +29,4 @@ harvest-skill-end	denom_sessionend_indexed	1d	20	-
 memory-nudge	denom_nudge_expected	1d	10	-
 bash-output-offload:lesson	denom_lesson_symptom_replay	1d	3	0.5
 log-bash:lesson	denom_lesson_symptom_replay_failure	1d	3	0.5
+memory-nudge:ruling	denom_nudge_prompts	1d	10	0.5

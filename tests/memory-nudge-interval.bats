@@ -36,7 +36,10 @@ prompts() {
     LAST="$out"
   done
 }
-idl_n() { if [ -f "$CC_IDL" ]; then wc -l <"$CC_IDL" | tr -d ' '; else echo 0; fi; }
+# Only the nudge's own rows: the ruling shadow logs one `memory-nudge:ruling` row per prompt into
+# the same store (tests/memory-nudge-ruling-shadow.bats), and this suite is about the fire row.
+idl_n() { if [ -f "$CC_IDL" ]; then jq -s '[.[] | select(.hook == "memory-nudge")] | length' "$CC_IDL"; else echo 0; fi; }
+nrow() { jq -r --arg f "$1" 'select(.hook == "memory-nudge") | .[$f]' <"$CC_IDL"; }
 
 @test "0 is the kill switch: silent, no counter written, no IDL row" {
   export MEMORY_NUDGE_INTERVAL=0
@@ -80,9 +83,9 @@ idl_n() { if [ -f "$CC_IDL" ]; then wc -l <"$CC_IDL" | tr -d ' '; else echo 0; f
   [ "$(idl_n)" = "0" ]
   prompts s-row 1
   [ "$(idl_n)" = "1" ]
-  [ "$(jq -r '.hook' <"$CC_IDL")" = "memory-nudge" ]
-  [ "$(jq -r '.disposition' <"$CC_IDL")" = "fired" ]
-  [ "$(jq -r '.reason' <"$CC_IDL")" = "periodic" ]
-  [ "$(jq -r '.sid' <"$CC_IDL")" = "s-row" ]
-  [ "$(jq -r '.count' <"$CC_IDL")" = "12" ]
+  [ "$(nrow hook)" = "memory-nudge" ]
+  [ "$(nrow disposition)" = "fired" ]
+  [ "$(nrow reason)" = "periodic" ]
+  [ "$(nrow sid)" = "s-row" ]
+  [ "$(nrow count)" = "12" ]
 }

@@ -140,6 +140,8 @@ _reap_keep_dormant=(claimer-live owned-wait)
 # log-bash:lesson (truememory §3.6 #6, X3): the symptom table loaded 0 rows, or lesson_recall.py /
 # inject-sanitize.jq / jq could not be resolved, so no output could be matched at all. Each is
 # logged once per session, beside a once-per-session `no-match` that proves the guard was reached.
+# no-prompt and classify-error joined with memory-nudge:ruling (truememory #26, X3): a payload with
+# no string `.prompt`, and a classifier that threw, are both prompts the shadow could not score.
 _default_blind=(no-jq no-session-id no-stdin no-telemetry stale-telemetry \
                 no-transcript-path transcript-missing not-a-repo no-cwd no-assistant-text \
                 goal-unreadable \
@@ -147,6 +149,7 @@ _default_blind=(no-jq no-session-id no-stdin no-telemetry stale-telemetry \
                 snapshot-missing no-git gitdir-create-failed add-failed write-tree-failed commit-tree-failed \
                 no-temp-index unresolvable history-inside-store has-remote \
                 no-symptom-table lib-missing \
+                no-prompt classify-error \
                 "${_reap_keep_blind[@]}")
 if [ -n "${CC_ABSTAIN_BLIND_REASONS:-}" ]; then
   # shellcheck disable=SC2206  # intentional word-split of the override list
@@ -276,6 +279,31 @@ _denom_lesson_replay() { # <cutoff> <ok|error>
 }
 denom_lesson_symptom_replay() { _denom_lesson_replay "$1" ok; }
 denom_lesson_symptom_replay_failure() { _denom_lesson_replay "$1" error; }
+
+# Prompts memory-nudge SAW: the RAW per-session counters (not divided by the interval), summed over
+# the same state dirs with the same mtime cutoff. The denominator for `memory-nudge:ruling`, the
+# ruling shadow, which logs one row for every prompt that increments a counter (truememory #26).
+# The shadow never writes these files, so they are a source it cannot fake (X5). The interval kill
+# switch (MEMORY_NUDGE_INTERVAL=0) exits before both the counter and the shadow, so none are due.
+denom_nudge_prompts() {
+  local cutoff="$1" dirs d f c m sum=0 seen=0 iv
+  dirs="${CC_EXPECTED_NUDGE_STATE_DIRS:-$HOME/.claude/state $HOME/.claude-next/state $HOME/.claude-secondary/state $HOME/.claude-tertiary/state $HOME/.claude-quaternary/state}"
+  iv="${MEMORY_NUDGE_INTERVAL:-12}"; case "$iv" in ''|*[!0-9]*) iv=12 ;; esac; iv=$(( 10#$iv ))
+  for d in $dirs; do
+    [ -d "$d" ] || continue
+    seen=$(( seen + 1 ))
+    [ "$iv" -gt 0 ] || continue
+    for f in "$d"/nudge-*.count; do
+      [ -f "$f" ] || continue
+      m="$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0)"
+      [ "$m" -ge "$cutoff" ] 2>/dev/null || continue
+      c="$(cat "$f" 2>/dev/null || echo 0)"; case "$c" in ''|*[!0-9]*) c=0 ;; esac
+      sum=$(( sum + c ))
+    done
+  done
+  [ "$seen" -gt 0 ] || { printf 'no nudge state dir present among: %s' "$dirs"; return 1; }
+  printf '%s' "$sum"
+}
 
 # Evaluation rows a branch wrote since the cutoff (same four-disposition denominator as the table).
 _ia_branch_rows() { # <branch> <cutoff>

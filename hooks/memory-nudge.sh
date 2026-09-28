@@ -54,7 +54,46 @@ INTERVAL=$(( 10#$INTERVAL ))
 [ "$INTERVAL" -gt 0 ] || exit 0
 
 INPUT=$(cat)
-SID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || echo "")
+# ── RULING SHADOW classifier (truememory-2026-09-27.md §3.23-3.27 "speech-act-nudge-trigger", #26) ──
+# Folded into the ONE jq call that already reads session_id, so scoring every prompt costs no extra
+# fork. It emits sid, verdict, pattern, excerpt and prompt length joined by U+001F (a non-whitespace
+# IFS, so an empty field stays empty). SHADOW ONLY: the verdict is logged below and never reaches
+# stdout. Restatement patterns are tried first, so "don't forget, i told you" is a restatement.
+# Eligibility: a prompt starting with `<` (task-notification, teammate-message, system tags), one
+# carrying HANDOFF-ENGAGE/HANDOFF-PING, one over 4,000 chars (a brief) or a blank one is not typed.
+# No quoted-span stripping (TrueMemory's _QUOTED_SPAN_RE eats contractions, MEASURED). `^` in jq's
+# Oniguruma is start-of-string, so sentence starts are spelled \A, after [.!?] or after a newline.
+# A classifier error cannot cost the session id: `try` turns it into the verdict classify-error.
+# shellcheck disable=SC2016  # jq program, not shell: nothing in it is meant to expand
+_MN_RULING_JQ='
+def rules: [
+  {c:"restatement", n:"remember",            r:"\\bremember\\b[:,]?(?!\\s+(when|what|how|why|where|who|if|that)\\b)"},
+  {c:"restatement", n:"from-now-on",         r:"\\bfrom now on\\b"},
+  {c:"restatement", n:"i-told-you",          r:"\\bi told you\\b"},
+  {c:"restatement", n:"keep-forgetting",     r:"\\bkeep forgetting\\b"},
+  {c:"ruling",      n:"we-adverb",           r:"\\bwe (always|just|never|don[\u0027\u2019]t|do not|should always|should never)\\b"},
+  {c:"ruling",      n:"sentence-imperative", r:"(\\A\\s*|[.!?]\\s+|\\n\\s*)(always|never|don[\u0027\u2019]t|do not|stop|make sure|going forward)\\b"},
+  {c:"ruling",      n:"the-rule-is",         r:"\\bthe rule is\\b"},
+  {c:"ruling",      n:"every-time-you",      r:"\\bevery time you\\b"}
+];
+def verdict($p):
+  if ($p | type) != "string" then ["no-prompt", "-", "-"]
+  elif ($p | length) > 4000 or ($p | test("\\A\\s*<")) or ($p | test("HANDOFF-(ENGAGE|PING)"))
+       or ($p | test("\\S") | not) then ["not-typed", "-", "-"]
+  else
+    ([rules[] | . as $x | [$p | match($x.r; "i")][0] | select(. != null)
+      | {c: $x.c, n: $x.n, o: .offset}][0]) as $m
+    | if $m == null then ["no-match", "-", "-"]
+      else ([$m.o - 120, 0] | max) as $s
+        | [$m.c, $m.n, ($p[$s:$s + 300] | gsub("[[:cntrl:]]+"; " "))]
+      end
+  end;
+(.session_id // "" | tostring | gsub("[[:cntrl:]]"; "/")) as $sid
+| (try verdict(.prompt) catch ["classify-error", "-", "-"]) as $v
+| [$sid] + $v + [(.prompt | if type == "string" then length else 0 end | tostring)]
+| join("\u001f")'
+_MN_RULING_LINE=$(printf '%s' "$INPUT" | jq -r "$_MN_RULING_JQ" 2>/dev/null || echo "")
+IFS=$'\x1f' read -r SID _MN_RV _MN_RPAT _MN_REXC _MN_RLEN <<< "$_MN_RULING_LINE" || true
 [ -z "$SID" ] && exit 0
 # Defensive: session_id is a harness UUID; refuse anything with path/shell chars
 case "$SID" in *[!a-zA-Z0-9_-]*) exit 0 ;; esac
@@ -96,6 +135,43 @@ _mn_deref() {
 
 CWD=$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null || echo "")
 [ -n "$CWD" ] && [ -d "$CWD" ] || CWD="$PWD"
+
+_mn_idl="$(dirname "$(_mn_deref "${BASH_SOURCE[0]}")")/lib/idl-log.sh"
+
+# ── RULING SHADOW log. Runs on EVERY prompt that got this far — before the interval and damping
+# exits below — so each counted prompt gets exactly one `memory-nudge:ruling` IDL row (its own name,
+# acceptance X2): fired <class> on a match, else abstained no-match / not-typed / kill-switch.
+# The existing MEMORY_NUDGE_INTERVAL=0 kill switch still exits before this (and before the counter),
+# so the expected-fires denominator (raw nudge-*.count prompts) and these rows stop together.
+# A fire also appends one row a labeller can judge to $HOME/.claude/state/ruling-shadow.jsonl
+# (X4: one physical dir, not $CFG/state). Wave E promotes or kills this on that log
+# (docs/plans/TRUEMEMORY_ADOPTION.md:222). Nothing here writes to stdout, and every failure is
+# swallowed: a shadow must not be able to change or break the hook. Kill switch CC_RULING_SHADOW=off.
+_mn_ruling_shadow() {
+  local why="$_MN_RV" have_idl=0 sha row dir
+  if [ -r "$_mn_idl" ]; then
+    # shellcheck source=lib/idl-log.sh
+    # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+    . "$_mn_idl" && idl_init "${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}" memory-nudge:ruling SID && have_idl=1
+  fi
+  [ "${CC_RULING_SHADOW:-on}" != off ] || why=kill-switch
+  case "$why" in
+    restatement|ruling) ;;
+    *) [ "$have_idl" -eq 0 ] || log_idl abstained "${why:-classify-error}"; return 0 ;;
+  esac
+  sha=$( { printf '%s' "$INPUT" | jq -j '.prompt' | shasum -a 1 | cut -d' ' -f1; } 2>/dev/null ) || sha=""
+  dir="$HOME/.claude/state"
+  mkdir -p "$dir" 2>/dev/null || true
+  row=$(jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg sid "$SID" --arg cwd "$CWD" \
+          --arg class "$why" --arg pattern "$_MN_RPAT" --arg excerpt "$_MN_REXC" \
+          --arg len "$_MN_RLEN" --arg sha "$sha" \
+          '{ts:$ts,sid:$sid,cwd:$cwd,class:$class,pattern:$pattern,excerpt:$excerpt,
+            prompt_len:($len|tonumber? // 0),prompt_sha1:$sha}' 2>/dev/null) \
+    && printf '%s\n' "$row" >> "$dir/ruling-shadow.jsonl" 2>/dev/null
+  [ "$have_idl" -eq 0 ] || log_idl fired "$why" \
+    "$(jq -cn --arg p "$_MN_RPAT" '{pattern:$p}' 2>/dev/null)"
+}
+_mn_ruling_shadow || true
 
 MEM="${MEMORY_INDEX_PATH:-}"
 WANT="$MEM"
@@ -510,7 +586,7 @@ fi
 # One IDL row per DECISION turn (hook `memory-nudge`); non-fire turns exited above, so this adds no
 # per-prompt cost. scripts/idl-expected-fires.tsv measures these rows against the fires the
 # nudge-*.count files imply, so a nudge that stops firing pages SILENT instead of going quiet.
-_mn_idl="$(dirname "$(_mn_deref "${BASH_SOURCE[0]}")")/lib/idl-log.sh"
+# $_mn_idl was resolved above for the ruling shadow; re-sourcing resets the lib's state.
 if [ -r "$_mn_idl" ]; then
   # shellcheck source=lib/idl-log.sh
   # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
