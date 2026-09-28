@@ -126,6 +126,36 @@ row_class() {
   [ "$(metric loaded-only op reach)" = "0" ]
 }
 
+@test "a path-scoped rules file (paths: frontmatter) is not resident, so loaded-only skips it" {
+  mkdir -p "$BATS_TEST_TMPDIR/r"
+  { printf -- '---\npaths:\n  - "src/**"\n---\n'; cat "$FX/rules/always-loaded.md"; } \
+    >"$BATS_TEST_TMPDIR/r/always-loaded.md"
+  run python3 "$EVAL" --store "$STORE" --lessons "$FX/lessons" --rules "$BATS_TEST_TMPDIR/r/always-loaded.md" \
+    --queries "$FX/queries.json" --out "$OUT" --arms loaded-only
+  [ "$status" -eq 0 ]
+  [ "$(metric loaded-only authored reach)" = "0" ]
+}
+
+@test "a git-tracked lesson is born at its first add, even in a checkout flagged core.bare" {
+  r="$BATS_TEST_TMPDIR/repo"
+  mkdir -p "$r/docs/lessons" "$r/mem"
+  cp "$FX/lessons/lockfile-drift-breaks-ci.md" "$r/docs/lessons/"
+  git -C "$r" init -q
+  git -C "$r" add docs/lessons
+  GIT_AUTHOR_DATE="2001-06-01T00:00:00Z" GIT_COMMITTER_DATE="2001-06-01T00:00:00Z" \
+    git -C "$r" -c user.name=fixture -c user.email=fixture@example.invalid commit -q -m lesson
+  # the state a shared checkout is left in by a worktree op: `rev-parse --show-toplevel` refuses
+  # and `git -C <subdir> log --relative -- .` returns repo-wide, root-relative names
+  git -C "$r" config core.bare true
+  printf '%s\n' '[{"id": "fx-lesson", "miss_ts": "2005-01-01T00:00:00Z",' \
+    '"operator_verbatim": "ci fails because the lockfile no longer matches the package manifest",' \
+    '"gold": ["demo:docs/lessons/lockfile-drift-breaks-ci.md"]}]' >"$BATS_TEST_TMPDIR/q.json"
+  run python3 "$EVAL" --store "$r/mem" --lessons "$r/docs/lessons" --queries "$BATS_TEST_TMPDIR/q.json" \
+    --out "$OUT" --arms load-everything
+  [ "$status" -eq 0 ]
+  [ "$(row_class load-everything fx-lesson op)" = "hit" ]
+}
+
 @test "a frozen snapshot scores identically to the live corpus" {
   run python3 "$EVAL" "${CORPUS[@]}" --snapshot "$BATS_TEST_TMPDIR/snap"
   [ "$status" -eq 0 ]

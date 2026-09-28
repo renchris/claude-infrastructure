@@ -126,26 +126,39 @@ def store_name(d: Path) -> str:
 
 def git_birth(directory: Path) -> dict[str, float]:
     """First-add time per file under a git-tracked dir (a worktree's mtimes are its checkout's)."""
-    try:
-        out = subprocess.run(
-            [
-                "git",
-                "-C",
-                str(directory),
-                "log",
-                "--diff-filter=A",
-                "--name-only",
-                "--format=@%at",
-                "--relative",
-                "HEAD",
-                "--",
-                ".",
-            ],
+
+    # Names come back relative to the repo TOP, whatever -C says, so find the top by its .git
+    # entry (rev-parse --show-toplevel refuses in a checkout whose core.bare got set).
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", "-C", str(directory), *args],
             capture_output=True,
             text=True,
             timeout=60,
             check=False,
         ).stdout
+
+    top = next(
+        (
+            d
+            for d in (directory.resolve(), *directory.resolve().parents)
+            if (d / ".git").exists()
+        ),
+        None,
+    )
+    if top is None:
+        return {}
+    try:
+        rel = os.path.relpath(directory.resolve(), top)
+        out = git(
+            "log",
+            "--diff-filter=A",
+            "--name-only",
+            "--format=@%at",
+            "HEAD",
+            "--",
+            f":(top){rel}",
+        )
     except (OSError, subprocess.TimeoutExpired):
         return {}
     born: dict[str, float] = {}
@@ -154,9 +167,8 @@ def git_birth(directory: Path) -> dict[str, float]:
         if line.startswith("@"):
             t = float(line[1:])
         elif line.strip():
-            born[str((directory / line.strip()).resolve())] = (
-                t  # log is newest-first: oldest wins
-            )
+            # log is newest-first, so the last write (the oldest add) wins
+            born[str((top / line.strip()).resolve())] = t
     return born
 
 
@@ -187,9 +199,12 @@ def load_live(stores: list[str], lessons: str | None, rules: list[str]) -> Corpu
         gb = git_birth(c.lessons)
         for p in sorted(c.lessons.glob("*.md")):
             add_doc(c, f"lessons:{p.name}", p, gb.get(str(p.resolve()), fs_birth(p)))
+    births: dict[Path, dict[str, float]] = {}
     for r in rules:
         p = Path(r).expanduser()
-        gb = git_birth(p.parent)
+        if p.parent not in births:
+            births[p.parent] = git_birth(p.parent)
+        gb = births[p.parent]
         c.rules.append(p)
         add_doc(c, f"rules:{p.name}", p, gb.get(str(p.resolve()), fs_birth(p)))
     return c
@@ -410,8 +425,11 @@ def loaded_list(c: Corpus) -> list[str]:
             if not rel.startswith(".."):
                 out.append(f"store:{name}/{rel}")
     for p in c.rules:
+        text = p.read_text(encoding="utf-8", errors="replace")
+        if re.match(r"^---\n(?:.*\n)*?paths:", text):
+            continue  # path-scoped: loaded only when a matching file is touched, not resident
         out.append(f"rules:{p.name}")
-        for tgt in LINK.findall(p.read_text(encoding="utf-8", errors="replace")):
+        for tgt in LINK.findall(text):
             if "docs/lessons/" in tgt:
                 out.append(f"lessons:{os.path.basename(tgt.split('#', 1)[0])}")
     return list(dict.fromkeys(out))
