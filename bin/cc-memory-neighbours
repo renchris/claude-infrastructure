@@ -1,0 +1,253 @@
+#!/usr/bin/env python3
+"""cc-memory-neighbours — consolidation FAMILIES for /compact-memory step 7b. PROPOSE-ONLY.
+
+  cc-memory-neighbours <memdir> [--json] [--all] [--record]
+
+Scores every topic file's name, description and FIRST paragraph (never the full body: fat aggregator
+files saturate a full-body score) with BM25 over the store, using the same tokenizer and profile as
+the write-time neighbour hook (hooks/lib/memory_neighbours.py `tokens` / `profile`, §3.10), so the
+two instruments cannot disagree about what a topic is "about".
+
+A candidate PAIR is a mutual top-3 that is NOT already linked by `[[name]]` in either direction and
+does NOT share an `originSessionId` — /compact-memory step 7 presumes both of those distinct, so
+proposing them would only be noise the human learns to skip. Pairs are grouped into FAMILIES
+(connected components). For each family the human decides MERGE | LINK | NONE; this tool decides
+nothing, and writes nothing, by default.
+
+Why the decision comes BEFORE any link is written: step 7 treats a `[[linked]]` pair as distinct, so
+a link written early hides a true duplicate from every later pass, forever.
+
+SCOPE. A pair is proposed when at least one member is not yet listed in `<memdir>/archive/.family-names`
+(an absent file ⇒ every topic is in scope) — so a new topic twinning an old one still surfaces, and
+a pair the human already reviewed does not come back. `--all` ignores the file. `--record`, run by
+the human-driven compaction step only AFTER review, appends the in-scope topic names to that file
+and touches nothing else. There is no summary file and no family file, ever (TrueMemory's L4
+lesson: a generated summary is a lossy second copy that outlives its sources).
+
+HOT-HUBS: an entry with ≥4 inbound `[[links]]` from other topics is pinned hot by the rotor. `after_if_linked`
+assumes every proposed pair is LINKed both ways, so it is the worst case a LINK-everything review
+could reach.
+
+Exit codes: 0 answered (zero families is an answer), 2 usage / unreadable store / tokenizer library
+missing.
+"""
+
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import json
+import math
+import re
+import sys
+from pathlib import Path
+from types import ModuleType
+from typing import Callable
+
+TOP_K = 3
+HUB_MIN = 4
+K1 = 1.2
+B = 0.75
+_LINK = re.compile(r"\[\[([^\]\n]+)\]\]")
+_ORIGIN = re.compile(r"^\s*originSessionId:\s*(\S+)", re.M)
+
+
+def _load_lib() -> ModuleType:
+    """X1: resolve THIS script's symlinks first, so a run through ~/.claude/bin/ imports the lib
+    that sits beside the real file in the checkout, never whatever ~/.claude/hooks/lib holds."""
+    lib = Path(__file__).resolve().parent.parent / "hooks" / "lib" / "memory_neighbours.py"
+    spec = importlib.util.spec_from_file_location("memory_neighbours", lib)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {lib}")
+    sys.dont_write_bytecode = True
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class Topic:
+    def __init__(self, path: Path, text: str, head_bytes: int, profile: Callable[[Path, str], set[str]]) -> None:
+        self.path = path
+        self.stem = path.stem
+        front = ""
+        if text.startswith("---"):
+            end = text.find("\n---", 3)
+            front = text[3:end] if end != -1 else text[3:]
+        self.name = self.stem
+        self.description = ""
+        for line in front.splitlines():
+            key, _, val = line.partition(":")
+            if key.strip() == "name" and val.strip():
+                self.name = val.strip()
+            elif key.strip() == "description":
+                self.description = val.strip()
+        m = _ORIGIN.search(front)
+        self.origin = m.group(1) if m else ""
+        self.links = {s.split("|", 1)[0].strip() for s in _LINK.findall(text)}
+        self.profile = profile(path, text.encode("utf-8")[:head_bytes].decode("utf-8", "ignore"))
+
+
+def load_topics(memdir: Path, lib: ModuleType) -> list[Topic]:
+    profile: Callable[[Path, str], set[str]] = lib.profile
+    head_bytes: int = lib.HEAD_BYTES
+    out: list[Topic] = []
+    for p in sorted(memdir.glob("*.md")):
+        if p.name.upper().startswith("MEMORY") or not p.is_file():
+            continue
+        out.append(Topic(p, p.read_text(encoding="utf-8", errors="replace"), head_bytes, profile))
+    return out
+
+
+def bm25_top(topics: list[Topic]) -> dict[str, list[tuple[str, float]]]:
+    """Each topic's profile as the query against every other profile; the top K with score > 0."""
+    n = len(topics)
+    if n < 2:
+        return {t.stem: [] for t in topics}
+    avgdl = sum(len(t.profile) for t in topics) / n or 1.0
+    df: dict[str, int] = {}
+    for t in topics:
+        for w in t.profile:
+            df[w] = df.get(w, 0) + 1
+    idf = {w: math.log((n - c + 0.5) / (c + 0.5) + 1.0) for w, c in df.items()}
+    top: dict[str, list[tuple[str, float]]] = {}
+    for q in topics:
+        scored: list[tuple[str, float]] = []
+        for d in topics:
+            if d is q:
+                continue
+            norm = K1 * (1 - B + B * len(d.profile) / avgdl)
+            s = sum(idf[w] * (K1 + 1) / (1 + norm) for w in q.profile & d.profile)
+            if s > 0:
+                scored.append((d.stem, s))
+        scored.sort(key=lambda x: (-x[1], x[0]))
+        top[q.stem] = scored[:TOP_K]
+    return top
+
+
+def resolver(topics: list[Topic]) -> dict[str, str]:
+    """A `[[x]]` target → the stem it names (frontmatter name or file stem)."""
+    r: dict[str, str] = {}
+    for t in topics:
+        r[t.stem] = t.stem
+        r.setdefault(t.name, t.stem)
+    return r
+
+
+def inbound(topics: list[Topic], res: dict[str, str]) -> dict[str, set[str]]:
+    into: dict[str, set[str]] = {t.stem: set() for t in topics}
+    for t in topics:
+        for link in t.links:
+            target = res.get(link)
+            if target is not None and target != t.stem:
+                into[target].add(t.stem)
+    return into
+
+
+def families(pairs: list[tuple[str, str]]) -> list[list[str]]:
+    parent: dict[str, str] = {}
+
+    def find(x: str) -> str:
+        while parent.setdefault(x, x) != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for a, b in pairs:
+        parent[find(a)] = find(b)
+    groups: dict[str, list[str]] = {}
+    for x in parent:
+        groups.setdefault(find(x), []).append(x)
+    return sorted((sorted(g) for g in groups.values()), key=lambda g: g[0])
+
+
+def main(argv: list[str]) -> int:
+    ap = argparse.ArgumentParser(
+        prog="cc-memory-neighbours",
+        description="Propose consolidation families for /compact-memory step 7b. Writes nothing by default.",
+    )
+    ap.add_argument("memdir", help="a memory store directory (topic *.md files + MEMORY.md)")
+    ap.add_argument("--json", action="store_true", help="one JSON object instead of the report")
+    ap.add_argument("--all", action="store_true", help="ignore archive/.family-names; every topic is in scope")
+    ap.add_argument("--record", action="store_true",
+                    help="after human review: append the in-scope topic names to archive/.family-names")
+    a = ap.parse_args(argv)
+
+    memdir = Path(a.memdir)
+    if not memdir.is_dir():
+        print(f"cc-memory-neighbours: not a directory: {memdir}", file=sys.stderr)
+        return 2
+    try:
+        lib = _load_lib()
+    except (ImportError, OSError) as e:
+        print(f"cc-memory-neighbours: tokenizer library unavailable: {e}", file=sys.stderr)
+        return 2
+
+    topics = load_topics(memdir, lib)
+    by_stem = {t.stem: t for t in topics}
+    names_file = memdir / "archive" / ".family-names"
+    recorded: set[str] = set()
+    if names_file.is_file():
+        recorded = {ln.strip() for ln in names_file.read_text(encoding="utf-8").splitlines() if ln.strip()}
+    seen = set() if a.all else recorded
+    scope = {t.stem for t in topics if t.stem not in seen and t.name not in seen}
+
+    res = resolver(topics)
+    top = bm25_top(topics)
+    rank = {q: dict(v) for q, v in top.items()}
+    pairs: list[tuple[str, str]] = []
+    for x in sorted(rank):
+        for y in rank[x]:
+            if x >= y or x not in rank.get(y, {}):
+                continue
+            tx, ty = by_stem[x], by_stem[y]
+            if tx.links & {ty.stem, ty.name} or ty.links & {tx.stem, tx.name}:
+                continue
+            if tx.origin and tx.origin == ty.origin:
+                continue
+            if x not in scope and y not in scope:
+                continue
+            pairs.append((x, y))
+
+    into = inbound(topics, res)
+    before = sum(1 for s in into.values() if len(s) >= HUB_MIN)
+    after_into = {k: set(v) for k, v in into.items()}
+    for x, y in pairs:
+        after_into[x].add(y)
+        after_into[y].add(x)
+    after = sum(1 for s in after_into.values() if len(s) >= HUB_MIN)
+    fams = families(pairs)
+
+    if a.json:
+        print(json.dumps({
+            "topics": len(scope),
+            "pairs": [{"a": x, "b": y, "score_ab": round(rank[x][y], 3), "score_ba": round(rank[y][x], 3)}
+                      for x, y in pairs],
+            "families": [{"members": [{"name": m, "description": by_stem[m].description} for m in f],
+                          "decision": None} for f in fams],
+            "hot_hubs": {"before": before, "after_if_linked": after},
+        }, indent=2))
+    else:
+        for i, fam in enumerate(fams, 1):
+            print(f"FAMILY {i}  ({len(fam)} members)")
+            for m in fam:
+                print(f"  - {m} — {by_stem[m].description or '(no description)'}")
+            for x, y in pairs:
+                if x in fam:
+                    print(f"  pair: {x} <-> {y}  (bm25 {rank[x][y]:.2f} / {rank[y][x]:.2f})")
+            print("  decision: MERGE | LINK | NONE  (human decides)")
+            print()
+        print(f"HOT-HUBS before={before} after_if_linked={after}")
+        print(f"FAMILIES-VERDICT topics={len(scope)} pairs={len(pairs)} families={len(fams)}")
+
+    if a.record:
+        new = sorted(scope - recorded)
+        names_file.parent.mkdir(parents=True, exist_ok=True)
+        with names_file.open("a", encoding="utf-8") as fh:
+            for s in new:
+                fh.write(s + "\n")
+        print(f"RECORDED {len(new)} topic name(s) to {names_file}", file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
