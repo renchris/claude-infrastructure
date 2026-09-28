@@ -606,7 +606,6 @@ fi
 EMBEDDED_ALLOWLIST="$(cat <<'ALLOW'
 activation-watch.bats
 anti-deference-nudge.bats
-boot-resume-launch.bats
 boot-resume.bats
 boundary-handoff.bats
 cc-announce.bats
