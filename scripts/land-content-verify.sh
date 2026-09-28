@@ -307,7 +307,18 @@ while IFS= read -r -d '' P; do
     continue
   fi
   if [ -z "$TB" ]; then
-    BAD=$((BAD + 1)); printf '  %s — ABSENT from %s\n' "$P" "$BASE" >> "$TMP/report"
+    # REMOVED LATER is supersession too: trunk carried this exact blob at P, and a later trunk
+    # commit deleted or renamed it. Same exact discriminator as the differing-blob arm below, never
+    # "is the blob somewhere else" (a tiny common blob would forgive anything). Live instance:
+    # refs/land/failed/…-autonomy-core, whose core/commands/{wrap,handoff}.md landed and were then
+    # renamed byte-identical to autonomy-*.md by a1623fd0d — read as ABSENT, the row never retracted.
+    if trunk_ever_carried "$P" "$RB"; then
+      SUP=$((SUP + 1))
+      printf '  %s — ABSENT from %s now, but %s carried this exact blob before and later removed or renamed it: SUPERSEDED, not lost\n' \
+        "$P" "$BASE" "$BASE" >> "$TMP/superseded"
+    else
+      BAD=$((BAD + 1)); printf '  %s — ABSENT from %s\n' "$P" "$BASE" >> "$TMP/report"
+    fi
     continue
   fi
   [ "$RB" = "$TB" ] && continue          # blob-identical: landed, whatever the sha of the commit

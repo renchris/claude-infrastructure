@@ -484,3 +484,37 @@ fx_landed_other_sha() {
   [ "$status" -eq 1 ]
   echo "$output" | grep -q "f.txt" || { echo "the strand was not named: $output"; false; }
 }
+
+# ── REMOVED LATER: trunk carried the exact blob at P, then deleted or renamed it ─────────────────
+# Live instance: refs/land/failed/…-autonomy-core. Its core/commands/{wrap,handoff}.md landed and
+# were then renamed byte-identical by a1623fd0d, so the ABSENT arm convicted them and the row's
+# falsifier could never retract it.
+
+@test "REMOVED LATER — trunk carried this exact blob at P, then renamed it ⇒ 0, and it SAYS so" {
+  git -C "$W" checkout -q -b ren-side
+  printf 'cmd body\n' > "$W/wrap.md"; git -C "$W" add -A; git -C "$W" commit -qm 'side adds wrap.md'
+  local ref; ref="$(git -C "$W" rev-parse HEAD)"
+  git -C "$W" checkout -q main
+  printf 'cmd body\n' > "$W/wrap.md"; git -C "$W" add -A; git -C "$W" commit -qm 'trunk copy'
+  git -C "$W" mv wrap.md autonomy-wrap.md; git -C "$W" commit -qm 'trunk renames it'
+  git -C "$W" push -q origin main; git -C "$W" fetch -q origin main
+  run git -C "$W" merge-base --is-ancestor "$ref" origin/main
+  [ "$status" -ne 0 ]
+  run bash "$SUT" "$ref" --repo "$W" --no-fetch
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qF 'wrap.md — ABSENT from origin/main now, but' || { echo "did not name removal: $output"; false; }
+  echo "$output" | grep -q "would REVERT" || { echo "did not warn that re-landing reverts: $output"; false; }
+}
+
+@test "CONTROL — the SAME blob elsewhere on trunk forgives nothing if trunk never carried it at P ⇒ 1" {
+  # The arm keys on P's own history, never on "is this blob anywhere": a common blob at another
+  # path must not launder a path that never landed.
+  printf 'cmd body\n' > "$W/other.md"; git -C "$W" add -A; git -C "$W" commit -qm base; git -C "$W" push -q origin main
+  git -C "$W" checkout -q -b ren-ctl
+  printf 'cmd body\n' > "$W/wrap.md"; git -C "$W" add -A; git -C "$W" commit -qm 'side adds wrap.md'
+  local ref; ref="$(git -C "$W" rev-parse HEAD)"
+  git -C "$W" checkout -q main; git -C "$W" fetch -q origin main
+  run bash "$SUT" "$ref" --repo "$W" --no-fetch
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -qF 'wrap.md — ABSENT from origin/main' || { echo "strand not named: $output"; false; }
+}
