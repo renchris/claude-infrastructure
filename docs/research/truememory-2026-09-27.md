@@ -1438,7 +1438,36 @@ and neither is reopened by a result recorded here.
 *Pending: owned by the Wave E teammate `tme-24`; decided by #24's Stage-0 verdict.*
 
 ### 5.22 Wave E #27 — provenance-and-verification tier
-*Pending: owned by the Wave E teammate `tme-27`, which replaces this line with its pre-registration and results.*
+**Verdict: DROP.** A non-prose channel exists. It has never carried a delivered-and-used event, and §5.17
+makes that the price of any push consumer.
+
+**Pre-registration** (written 2026-09-28T16:56:52Z, before any #27 measurement;
+`~/.claude/autonomy/memory-eval/wave-e/27/preregistration.md`). The plan rule is "adopt only with a delivery
+mechanism other than prose (X7)". The operational rule: **ADOPT iff** (a) a non-prose channel pushes text at the
+moment a memory entry is written (a hook on the write, X6-probed), **AND** (b) that channel's own live log
+shows ≥1 delivered-and-used event (§5.17's keep rule for #6 and #10), **AND** (c) the claim class a receipt
+guards is present (≥1 entry written in the last 30 days that states a measured or negative tool claim without
+its conditions). Else DROP, naming which leg failed.
+
+| leg | measured (2026-09-28, all stores read-only, 2,316 real store dirs) | holds? |
+|---|---|---|
+| (a) channel | #10's `backup-before-write` new-topic branch pushes `additionalContext` on a `Write` to a new `*/memory/*.md` or `docs/lessons/*.md`, and passed its X6 live probe in Wave B | yes |
+| (b) delivered-and-used | `mem-neighbours.jsonl` holds 1 row, and it is the X6 probe's own sandbox (`/var/folders/…/proj/memory/`). The live IDL holds 0 `backup-before-write:neighbours` rows. #35's write runs gave #10 nothing to catch (§5.17). Two topic files were born after the branch went live (16:16Z and 16:20Z). Neither was created by a `Write` tool call that transcript search could find, so the branch, which sees `Write` only, had nothing to see | **no** |
+| (c) claim class present | 294 topic files born in the last 30 days. 91 carry a negative tool-claim line (crude regex: a negation beside a tool name). 71 of those 91 carry no condition token (binary version, headless/interactive, config dir). `^Receipt:` lines in any store: 0 | yes |
+
+The need is real, since leg (c) holds: 71 recent entries state a tool claim with no conditions, the exact
+over-generalisation §3.23-3.27 names. The only non-prose delivery path, though, is #10's message, and it has
+no evidence of use. Adding a receipt clause to it would be a push consumer added on faith, which §5.17's
+no-gain branch rules out. A prose `Receipt:` line is ruled out by X7 (measured uptake 0/54, 2/64).
+
+*Reopen only if* `scripts/mem-neighbours-outcome.py` shows ≥1 delivered-and-used new-topic advisory. Then add
+one receipt sentence to that same message ("if this entry states a tool claim, record the command, its output
+and the conditions: binary/version, headless|interactive, config dir"), and measure adoption as the share of
+`^Receipt:` or conditions-bearing claim lines in topics born after the change, against this section's 71/91.
+
+**Deviations.** 1. The claim scan is a regex screen, not hand-labelled. It decides nothing, because leg (b)
+fails on its own. 2. #10's live window is short: converged 2026-09-28 early, read at 17:00Z. Leg (b) reads
+"no evidence yet", which the reopen condition covers.
 
 ### 5.23 Wave E #36 — adherence at the moment of action: inventory, fixtures, PRE-REGISTRATION
 *Pending: owned by the Wave E teammate `tme-36a`, which writes the pre-registration here before any scored run.*
