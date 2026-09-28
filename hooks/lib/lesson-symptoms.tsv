@@ -1,0 +1,31 @@
+# lesson-symptoms.tsv — the symptom-to-lesson table read by hooks/lib/lesson_recall.py
+# (truememory-2026-09-27.md §3.6 step 3, item #6). A Bash result or a PostToolUseFailure `.error`
+# containing a literal below gets a one-line POINTER to the lesson, never the lesson text.
+#
+# FORMAT: literal<TAB>pointer<TAB>note. `#` lines are comments. At most 15 rows; past that, move to
+# the `symptoms:` frontmatter + compile cache the design defers (§3.6 last bullet).
+#   literal  12+ chars, matched case-sensitively as a substring. It must come from a FOREIGN
+#            emitter (git, bash, shellcheck, bats, jq, sqlite, nohup) and be verbatim in the lesson
+#            body or its incident. SEED RULE: a literal printed by one of OUR scripts would make the
+#            table fire on itself, so tests/lesson-recall.bats refuses any literal `git grep -F`
+#            finds on a non-comment line of bin/ scripts/ hooks/.
+#   pointer  docs/lessons/<slug>.md (repo-relative, resolved against the dereferenced repo root at
+#            runtime) or ~/.claude/projects/<key>/memory/<slug>.md (`~` expands to $HOME). The
+#            basename minus `.md` is the slug that dedup, holdout and lesson-hits.jsonl key on.
+#   note     for humans; never rendered.
+#
+# PRECISION over recall: a noisy pointer trains the model to ignore all of them. Dropped 2026-09-28:
+# `cannot lock ref` (the memory is about the remote `… is at X but expected Y` lost race, and a
+# substring cannot separate that from a local ref collision). Reads of the lesson corpus itself are
+# skipped by the scan (lesson_recall.READ_OF_CORPUS), or every lesson read would point at itself.
+#
+# This file is never linked live (install.sh links only *.sh and *.py), so the hooks resolve it
+# through their dereferenced self-path (acceptance X1).
+cannot rebase: You have unstaged changes	docs/lessons/never-write-a-tracked-file-while-ship-is-in-flight.md	git; the 2026-09-09 recurrence under a live lander
+fatal: this operation must be run in a work tree	~/.claude/projects/-Users-chrisren-Development-claude-infrastructure/memory/worktree-ops-can-bare-the-shared-checkout.md	git; core.bare flipped on the shared checkout (gap-2 recurrence 09-06)
+syntax error near unexpected token `;;'	docs/lessons/the-deployment-interpreter-is-not-the-one-on-your-path.md	bash 3.2 (launchd's /bin/bash) cannot parse a case arm with continue inside $( ); the generic message is most syntax errors, so only this token
+was not specified as input	docs/lessons/a-gates-invocation-is-part-of-its-contract.md	shellcheck SC1091; the land gate runs shellcheck bare
+not ok 1 bats-gather-tests	~/.claude/projects/-Users-chrisren-Development-claude-infrastructure/memory/cut-can-manufacture-its-own-verdict.md	bats; the collector synthesizes this line on any truncated gather
+is a tree, not a commit	~/.claude/projects/-Users-chrisren-Development-claude-infrastructure/memory/predicate-refusal-is-not-a-negative.md	git; a refusing predicate read as a clean "no"
+nohup: setsid: No such file or directory	~/.claude/projects/-Users-chrisren-Development-claude-infrastructure/memory/nohup-does-not-detach-from-a-tool-call.md	nohup; macOS has no setsid, use scripts/lib/detach.sh
+CC-LESSON-RECALL-CANARY-7Q2X	docs/lessons/empty-vs-no-surface.md	nightly canary
