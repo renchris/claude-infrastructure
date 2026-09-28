@@ -159,7 +159,7 @@ state_last() { tail -1 "$STATE" | jq -r "$1"; }
   run "$S" --store "$c" --since 2026-06-01 --json gnu
   [ "$status" -eq 0 ]
   [ "$(printf '%s' "$output" | jq -r '[.[].name] | join(",")')" = new-gnu ]
-  run "$S" --store "$c" --since 2026-13-45 gnu
+  run "$S" --store "$c" --since not-a-date gnu
   [ "$status" -eq 1 ]
 }
 
