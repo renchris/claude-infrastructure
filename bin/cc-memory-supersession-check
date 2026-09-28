@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+"""cc-memory-supersession-check — report-only audit of `superseded_by:` markers in one memory store.
+
+Usage: cc-memory-supersession-check <memdir>
+
+TrueMemory #12 (docs/research/truememory-2026-09-27.md §3.12). The rule (CLAUDE.global.md § Memory
+Hygiene) says a topic file that a new file wholly replaces carries `superseded_by: <heir> (date)` in
+its frontmatter, within its first 12 lines, because that is all bin/cc-memory-rotate's rank 0 reads.
+A marker nobody checks rots in four ways, and this prints one line per instance of each:
+
+  dangling-heir OLD.md -> HEIR (no HEIR or HEIR.md in the store)
+  cycle A.md -> B.md -> A.md
+  key-beyond-line-12 FILE.md:N (cc-memory-rotate reads lines 1-12 only)
+  index-links-superseded MEMORY.md:N -> OLD.md (superseded_by HEIR)
+
+then `SUPERSESSION-VERDICT findings=<n> files=<m>`. It never writes: /compact-memory step 4b reports
+the findings and a human picks the fix.
+
+A key is the rotor's own pattern — a line starting (after whitespace) with `superseded_by:` and a
+value — so prose that mentions the key inside backticks never matches; lines in ``` fences are
+skipped. The heir is the first token after the colon.
+
+Exit 0 whenever the directory was read (report-only, findings or not); exit 2 with a
+`SUPERSESSION-VERDICT non-verdict` line when it could not be, so a caller never reads "0 findings"
+off a store that was not looked at.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import sys
+
+KEY = re.compile(r"^\s*superseded_by:\s*(\S+)")
+LINK = re.compile(r"\]\(([^)\s]+\.md)\)")
+ROTOR_LINES = 12
+
+
+def non_verdict(reason: str, target: str) -> int:
+    print(f"SUPERSESSION-VERDICT non-verdict reason={reason} dir={target}")
+    return 2
+
+
+def find_key(path: str) -> tuple[str, int] | None:
+    """First `superseded_by:` key outside a code fence → (heir, 1-based line), else None."""
+    fenced = False
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for n, line in enumerate(fh, 1):
+            if line.lstrip().startswith("```"):
+                fenced = not fenced
+                continue
+            if fenced:
+                continue
+            m = KEY.match(line)
+            if m:
+                return m.group(1), n
+    return None
+
+
+def resolve(heir: str, names: set[str]) -> str | None:
+    for cand in (heir, f"{heir}.md"):
+        if cand in names:
+            return cand
+    return None
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 2:
+        print("usage: cc-memory-supersession-check <memdir>", file=sys.stderr)
+        return non_verdict("usage", argv[1] if len(argv) > 1 else "-")
+    memdir = argv[1]
+    try:
+        entries = sorted(os.listdir(memdir))
+    except OSError:
+        return non_verdict("unreadable", memdir)
+
+    topics = [e for e in entries if e.endswith(".md") and e != "MEMORY.md"
+              and os.path.isfile(os.path.join(memdir, e))]
+    names = set(entries)
+    findings: list[str] = []
+    edges: dict[str, str] = {}      # superseded file -> resolved heir file
+    marked: dict[str, str] = {}     # superseded file -> heir token as written
+
+    for topic in topics:
+        try:
+            key = find_key(os.path.join(memdir, topic))
+        except OSError:
+            findings.append(f"unreadable-file {topic}")
+            continue
+        if key is None:
+            continue
+        heir, line = key
+        marked[topic] = heir
+        if line > ROTOR_LINES:
+            findings.append(f"key-beyond-line-12 {topic}:{line} "
+                            f"(cc-memory-rotate reads lines 1-{ROTOR_LINES} only)")
+        target = resolve(heir, names)
+        if target is None:
+            findings.append(f"dangling-heir {topic} -> {heir} (no {heir} or {heir}.md in the store)")
+        else:
+            edges[topic] = target
+
+    seen_cycles: set[tuple[str, ...]] = set()
+    for start in sorted(edges):
+        path: list[str] = []
+        node: str | None = start
+        while node is not None and node not in path:
+            path.append(node)
+            node = edges.get(node)
+        if node is None:
+            continue
+        cyc = path[path.index(node):]
+        pivot = cyc.index(min(cyc))
+        canon = tuple(cyc[pivot:] + cyc[:pivot])
+        if canon not in seen_cycles:
+            seen_cycles.add(canon)
+            findings.append("cycle " + " -> ".join(canon + (canon[0],)))
+
+    index = os.path.join(memdir, "MEMORY.md")
+    if os.path.isfile(index):
+        try:
+            with open(index, encoding="utf-8", errors="replace") as fh:
+                for n, line in enumerate(fh, 1):
+                    for link in LINK.findall(line):
+                        if link in marked:
+                            findings.append(f"index-links-superseded MEMORY.md:{n} -> {link} "
+                                            f"(superseded_by {marked[link]})")
+        except OSError:
+            findings.append("unreadable-file MEMORY.md")
+
+    for f in findings:
+        print(f)
+    print(f"SUPERSESSION-VERDICT findings={len(findings)} files={len(topics)}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

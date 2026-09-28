@@ -258,6 +258,11 @@ minus the autonomous fork.
    properly-cold file, a never-indexed file and a `~~struck~~` retracted one — reports exactly the
    last two. Both control arms matter: the sweep must still FIND a struck-bullet orphan, which is
    precisely what the unanchored version could not do.
+4b. **Supersession check (report-only):** run `cc-memory-supersession-check <memdir>` and report
+   every finding it prints — dangling heir, cycle, `superseded_by:` placed beyond line 12 (the
+   rotor cannot see it), a `MEMORY.md` line linking a superseded file — with its closing
+   `SUPERSESSION-VERDICT findings=<n> files=<m>` line. Never auto-fix; the human picks each
+   repair. Exit 2 (`non-verdict`) means the store was not read: say so, never report it as clean.
 5. Report: N archived, N re-indexed, lines/bytes reclaimed, new `MEMORY.md` line count.
    > Reality check: in a dense, active memory most "resolved" entries carry a tail, so SAFE-AUTO
    > alone rarely clears the warning. That is by design — say so; the real lever is PROPOSE-ONLY.
@@ -346,6 +351,10 @@ positives would have buried them.
    HARD CONSTRAINT: entries sharing an `originSessionId` or cross-referenced via `[[...]]` are
    PRESUMED DISTINCT (e.g. `scope-freeze-at-intake` vs `mvp-ban-is-per-feature` encode different
    concepts) — flag, never merge.
+   When the human picks **supersede**, write `superseded_by: <heir> (YYYY-MM-DD)` into the OLD
+   file's frontmatter, within its first 12 lines (where the rotor's rank 0 reads it), and repoint
+   that file's `MEMORY.md` line to the heir — never leave the index pointing at the spent file.
+   Then re-run `cc-memory-supersession-check <memdir>`; it must report no finding for the pair.
 
 ## BUDGET THE PREFIXES FIRST (do this before writing a single line)
 
