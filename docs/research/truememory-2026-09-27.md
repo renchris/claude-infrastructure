@@ -1513,7 +1513,46 @@ p < 0.05 on ≥40 operator-worded queries.
    per-query latency is lower.
 
 ### 5.20 Wave E #24 — candidate extractor, Stage 0 (`--dry-run`)
-*Pending: owned by the Wave E teammate `tme-24`, which replaces this line with its pre-registration and results.*
+**Pre-registration (committed 2026-09-28, before any scored run).**
+
+*Rule (plan § Wave E, verbatim):* "#24: on a hand-labelled sample of ≥50 Stage-0 candidates, ≥90% pass every
+anti-capture class, AND it recovers ≥3 of the 4 never-written operator rulings (gap-2 #47, #58, #66/67, #70
+family) from their transcripts; else drop." Stage 0 writes nothing to any memory store.
+
+*Tool.* `bin/cc-memory-extract --dry-run` (`4180921d6`): eligible = cli entrypoint, ≥2 operator prompts, cwd not
+under `/tmp` or `/private/tmp`, transcript written in the last 30 days (385 of 4,384 transcripts on 2026-09-28).
+Input is operator turns plus ≤1,500 chars of preceding assistant text, no tool results, fenced as untrusted.
+Model `claude-haiku-4-5-20251001` via `claude -p --setting-sources ''` with no tools, at most 5 candidates per
+call, 40,000-char chunks.
+
+*Sample.*
+- **Targets (4 rulings, 5 sessions), all eligible:** #47 `5e498dc5` (turn 2026-09-12T03:14:12Z); #58 `61853387`
+  (2026-09-14T03:35:46Z); #66/67 family `09eb03c8` (personal cwd, 09-14/15) and `9d0a2a8d` (infra cwd, turns
+  09-15T12:40Z-18:40Z); #70 family `19f6b94b` (2026-09-16T13:39:07Z and 16:33:29Z). The 09-16 kitty session in
+  `/private/tmp/wt-kitty-overlay` (`0a92dbc5`, where "Then the draggable one" was said) is ineligible by the filter
+  and is not a target.
+- **Random:** eligible non-target sessions in the order of `random.Random(24).shuffle` over the sorted eligible
+  ids; the first 40, then further batches of 20 from the same order until the run has ≥50 non-target candidates.
+
+*Labelling.* If there are more than 60 non-target candidates, a seeded random 60 (`random.Random(24).sample`) is
+labelled; otherwise all of them. Each labelled candidate gets one boolean per anti-capture class, judged on the
+candidate as a would-be memory entry: transient error; environment-specific one-off; lucky path; unverified
+negative tool-claim; already indexed (the same rule was in any store before the source turn, checked with
+`bin/cc-memory-search --all` and grep over the stores, with file birth times). Plus `promotable` (durable,
+generalizable and correct). A candidate passes iff it fails no class. Target-session candidates are judged for
+recovery only and are outside the pass-rate sample (they were chosen, not sampled). The labeller is this agent,
+reading the candidate and its source turn; it is not blind to the tool.
+
+*Recovered* = at least one candidate from that ruling's session(s) whose body states the ruling:
+- #47: the operator's reference-image practice: going through "at least 4MB" Google Images results by hand.
+- #58: do not start implementing until the operator signs off (research, then plan, then sign-off).
+- #66/67: the kitty pane title must stay click-to-drag, as a standing requirement that other title-bar changes
+  (styling, overlay) must not trade away.
+- #70: no mannered prose: say what you mean directly and literally, not through metaphor or flourish.
+
+*Primary test and branches.* PASS iff the labelled pass rate is ≥90% (point estimate, n ≥ 50) AND recovered ≥3/4;
+otherwise DROP. Reported beside it: Wilson 95% CI, per-class failure counts, promotable share (the older 50%
+gate, secondary only), model calls and wall time. PASS ⇒ build #25 (§5.21); DROP ⇒ #25 is dropped unbuilt.
 
 ### 5.21 Wave E #25 — transcript capture scan, dry-run verdicts
 *Pending: owned by the Wave E teammate `tme-24`; decided by #24's Stage-0 verdict.*
