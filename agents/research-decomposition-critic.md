@@ -2,6 +2,7 @@
 name: research-decomposition-critic
 description: A lightweight critic subagent invoked AFTER lead emits the pre-spawn decomposition table but BEFORE lead spawns the research wave. Critiques the decomposition for axis-orthogonality, completeness, and obvious-axis-saturation risk. Returns a ≤500-token APPROVE or REVISE verdict listing specific issues. Runs in <60 seconds at ~$0.05 cost.
 model: sonnet
+effort: medium
 omitClaudeMd: true
 maxTurns: 10
 tools: Read, Grep, Glob

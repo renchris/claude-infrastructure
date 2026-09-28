@@ -26,7 +26,7 @@ A candidate (C-NNN in the ledger) passes only with ALL of:
   dissolutions become the done-rubric's acceptance criteria.
 
 Then the **red-team gate — BEFORE any frontier spend**: one `workflow-lean`
-Sonnet agent (`model: sonnet`), ≤500-token verdict, default-to-refute: *"Argue this candidate is
+Sonnet agent (`model:'sonnet', effort:'medium'` — an unpinned slot inherits the lead's rung), ≤500-token verdict, default-to-refute: *"Argue this candidate is
 fake-generator / already-solved / not-long-horizon."* Survives → `REDTEAMED`.
 
 ## 2 — Spec (the full up-front specification; Fable architect, bounded)
