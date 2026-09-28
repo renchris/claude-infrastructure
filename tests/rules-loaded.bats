@@ -10,11 +10,13 @@ setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   LIB="$REPO/hooks/lib/rules-loaded.sh"
   T="$BATS_TEST_TMPDIR"
+  export HOME="$T/home"; mkdir -p "$HOME"   # hermetic: the default settings path is never the live one
   S="$T/settings.json"
   export RULES_LOADED_SETTINGS="$S"
   SIT="/x/proj/.claude/rules/agent-operating-lessons-situational.md"
   RES="/x/proj/.claude/rules/agent-operating-lessons.md"
   # shellcheck source=../hooks/lib/rules-loaded.sh
+  # shellcheck disable=SC1091  # runtime-resolved source; the land gate runs shellcheck without -x
   . "$LIB"
 }
 

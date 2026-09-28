@@ -22,6 +22,8 @@
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   F="$BATS_TEST_TMPDIR/fx"; mkdir -p "$F"
+  # Hermetic: nothing here reads $HOME, and the fixture keeps it that way if a helper ever does.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
 }
 
 # The scanned population: every hook, every hook lib, and every TEXT file in bin/ (Python
@@ -92,7 +94,8 @@ check_c() {
 @test "a: every additionalContext key in hooks/ and bin/ sits under hookSpecificOutput" {
   n=0; while IFS= read -r _; do n=$((n + 1)); done < <(scan_files)
   [ "$n" -gt 100 ]                          # the population is real, not an empty glob
-  run check_a $(scan_files)
+  files=(); while IFS= read -r f; do files+=("$f"); done < <(scan_files)
+  run check_a "${files[@]}"
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
@@ -116,11 +119,13 @@ check_c() {
 # ── (b) ──────────────────────────────────────────────────────────────────────────────────────────
 
 @test "b: no hook or bin line pairs the situational rules file with 'loads by default'" {
-  run check_b $(scan_files)
+  files=(); while IFS= read -r f; do files+=("$f"); done < <(scan_files)
+  run check_b "${files[@]}"
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
 
+# shellcheck disable=SC2016  # the fixtures ARE literal `${RULES}` / `$RULES_HINT` source text
 @test "b: RED on the planted pre-fix shapes — a path literal, a \${RULES} string, a \$RULES_HINT string" {
   printf '%s\n' '# `.claude/rules/agent-operating-lessons-situational.md`, which also loads by default.)' >"$F/b1.sh"
   printf '%s\n' 'CTX="ALREADY CITED in ${RULES}, which loads by default, so DELETE it"' >"$F/b2.sh"
