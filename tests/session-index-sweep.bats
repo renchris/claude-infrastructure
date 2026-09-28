@@ -153,7 +153,7 @@ track() { # <path> — record the file as swept at its CURRENT mtime+size, as th
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "$SID_B"          # grown
   echo "$output" | grep -q "$SID_C"          # never tracked
-  [[ "$output" != *"$SID_A"* ]]              # tracked and unchanged: proves the join ran
+  [[ "$output" != *"$SID_A"* ]] || false     # tracked and unchanged: proves the join ran
   ! grep -q "change detection FAILED" "$HOME/.claude/logs/session-index.log" 2>/dev/null || false
 }
 
@@ -166,7 +166,7 @@ track() { # <path> — record the file as swept at its CURRENT mtime+size, as th
   run bash -c "PATH=/usr/bin:/bin:\$PATH HOME='$HOME' bash -c 'source \"$HELPERS\"; session_index_changed_files'"
   [ "$status" -eq 0 ]
   echo "$output" | grep -qF "$d/$SID_C.jsonl"
-  [[ "$output" != *"$SID_A"* ]]
+  [[ "$output" != *"$SID_A"* ]] || false
   [[ "$output" != *"$SID_B"* ]]
 }
 
