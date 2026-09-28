@@ -445,3 +445,33 @@ indexed_lines() { # <log> <n> — n SessionEnd lines a minute before NOW, in the
   printf '%s' "$output" | grep -q 'OK  *harvest-skill-end .*D=19 '
   printf '%s' "$output" | grep -q 'OK  *memory-nudge .*D=0 '
 }
+
+@test "registry: cc-memory-search's denominator counts real searches in bash-execution.log, not mentions" {
+  local bl="$BATS_TEST_TMPDIR/bash.log" t old i
+  t="$(date -u -r "$(( NOW - 60 ))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$(( NOW - 60 ))" +%Y-%m-%dT%H:%M:%SZ)"
+  old="$(date -u -r "$(( NOW - 8 * 86400 ))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$(( NOW - 8 * 86400 ))" +%Y-%m-%dT%H:%M:%SZ)"
+  {
+    printf '[%s] [s] cc-memory-search outside the 7d window | Exit: 0\n' "$old"
+    for i in 1 2 3 4 5 6 7 8; do printf '[%s] [s] cc-memory-search term%d | Exit: 0\n' "$t" "$i"; done
+    printf '[%s] [s] cd /x && CLAUDE_SESSION_ID=a ~/.claude/bin/cc-memory-search --json q | Exit: 127\n' "$t"
+    printf '[%s] [s] echo first\ncc-memory-search on a continuation line | Exit: 0\n' "$t"
+    printf '[%s] [s] cc-memory-search --canary | Exit: 0\n' "$t"
+    printf '[%s] [s] cc-memory-search --stats --days 3 | Exit: 0\n' "$t"
+    printf '[%s] [s] grep -n cc-memory-search CLAUDE.global.md | Exit: 0\n' "$t"
+    printf '[%s] [s] bats tests/cc-memory-search.bats | Exit: 0\n' "$t"
+  } > "$bl"
+  emit 1 other-hook fired x
+  run env CC_EXPECTED_BASH_LOG="$bl" CC_IDL="$IDL" CC_ABSTAIN_NOW="$NOW" CC_ABSTAIN_LOG="$LOG" CC_ABSTAIN_NMIN=10 \
+      CC_ABSTAIN_CENSUS=0 CC_EXPECTED_SESSION_INDEX_LOG="$BATS_TEST_TMPDIR/none" "$S" --run
+  [ "$status" -ne 0 ]
+  printf '%s' "$output" | grep -q 'SILENT  *cc-memory-search  *rows=0 *D=10 '
+  emit 9 cc-memory-search fired hits          # 9/10 = the 0.9 floor, but still under NMIN
+  emit 1 cc-memory-search abstained zero-hit
+  run env CC_EXPECTED_BASH_LOG="$bl" CC_IDL="$IDL" CC_ABSTAIN_NOW="$NOW" CC_ABSTAIN_LOG="$LOG" CC_ABSTAIN_NMIN=10 \
+      CC_ABSTAIN_CENSUS=0 CC_EXPECTED_SESSION_INDEX_LOG="$BATS_TEST_TMPDIR/none" "$S" --run
+  printf '%s' "$output" | grep -q 'OK  *cc-memory-search  *rows=10 *D=10 '
+  # An absent log is a non-verdict, never a page.
+  run env CC_EXPECTED_BASH_LOG="$BATS_TEST_TMPDIR/absent.log" CC_IDL="$IDL" CC_ABSTAIN_NOW="$NOW" CC_ABSTAIN_LOG="$LOG" \
+      CC_ABSTAIN_CENSUS=0 CC_EXPECTED_SESSION_INDEX_LOG="$BATS_TEST_TMPDIR/none" "$S" --run
+  printf '%s' "$output" | grep -q 'cc-memory-search .*denominator: UNKNOWN (no readable bash-execution log'
+}

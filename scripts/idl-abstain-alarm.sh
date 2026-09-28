@@ -338,6 +338,34 @@ denom_new_memory_files() {
   printf '%s' "$n"
 }
 
+# cc-memory-search searches recorded by log-bash.sh since the cutoff: Bash-tool commands that run
+# the tool in COMMAND position (after a separator, env assignments or a path), minus --canary and
+# --stats, which write no IDL row. The log stamps UTC as `[YYYY-MM-DDTHH:MM:SSZ] [sid] cmd | Exit: N`
+# and a multi-line command continues on unstamped lines, so records are rebuilt before matching.
+# An `Exit: 127` record still counts: unreachable-from-PATH must page, not vanish from D.
+denom_memory_search_invocations() {
+  local cutoff="$1" log cut
+  log="${CC_EXPECTED_BASH_LOG:-$HOME/.claude/logs/bash-execution.log}"
+  [ -r "$log" ] || { printf 'no readable bash-execution log at %s' "$log"; return 1; }
+  cut="$(date -u -r "$cutoff" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -d "@$cutoff" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)"
+  [ -n "$cut" ] || { printf 'cannot render the cutoff epoch %s as a UTC time' "$cutoff"; return 1; }
+  awk -v c="$cut" '
+    function judge(   rest, seg) { # one count per record that runs at least one real search
+      if (rec == "" || ts < c) return
+      rest = rec
+      while (match(rest, /(^|[;&|(`])[ \t]*([A-Za-z_][A-Za-z0-9_]*=[^ \t]*[ \t]+)*([^ \t;&|()`]*\/)?cc-memory-search([ \t;&|)]|$)/)) {
+        seg = substr(rest, RSTART); sub(/^[;&|(`]/, "", seg); sub(/[;&|].*/, "", seg)
+        if (seg !~ /--(canary|stats)/) { n++; return }
+        rest = substr(rest, RSTART + RLENGTH)
+      }
+    }
+    /^\[[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z\] \[[^]]*\] / {
+      judge(); ts = substr($0, 2, 20); rec = $0; sub(/^\[[^]]*\] \[[^]]*\] /, "", rec); next
+    }
+    { rec = rec ";" $0 }
+    END { judge(); print n + 0 }' "$log"
+}
+
 # Evaluation rows a branch wrote since the cutoff (same four-disposition denominator as the table).
 _ia_branch_rows() { # <branch> <cutoff>
   jq -Rrn --arg h "$1" --argjson c "$2" --argjson evals '["fired","passed","abstained","failed"]' '
@@ -902,7 +930,8 @@ selftest() {
   printf '{"ts":"%s","hook":"h-x","disposition":"fired","reason":"x"}\n' "$FIXTS" > "$XIDL"
   run_reg() { # <session-index-log> <nudge-state-dirs> <idl>
     env CC_IDL="$3" CC_ABSTAIN_NOW="$NOW" CC_ABSTAIN_LOG="$d/log-x" CC_ABSTAIN_NMIN=10 CC_ABSTAIN_CENSUS=0 \
-        MEMORY_NUDGE_INTERVAL=12 CC_EXPECTED_SESSION_INDEX_LOG="$1" CC_EXPECTED_NUDGE_STATE_DIRS="$2" "$SELF" --run 2>&1
+        MEMORY_NUDGE_INTERVAL=12 CC_EXPECTED_SESSION_INDEX_LOG="$1" CC_EXPECTED_NUDGE_STATE_DIRS="$2" \
+        CC_EXPECTED_BASH_LOG="${XBASH:-$d/x-no-bash.log}" "$SELF" --run 2>&1
   }
   out="$(run_reg "$XLOG" "$XEMPTY" "$XIDL")"; rc=$?
   [ "$rc" -ne 0 ]                                  && okp "X1 harvest 0 rows vs 25 indexed → nonzero exit" || badp "X1 silent harvest did not page"
@@ -924,6 +953,19 @@ selftest() {
   out="$(env CC_IDL="$XIDL" CC_ABSTAIN_NOW="$NOW" CC_ABSTAIN_LOG="$d/log-x" CC_ABSTAIN_CENSUS=0 \
              CC_EXPECTED_FIRES="$d/x-no-registry.tsv" "$SELF" --run 2>&1)"; rc=$?
   printf '%s' "$out" | grep -q 'expected-fires registry: UNKNOWN' && okp "X6 missing registry → UNKNOWN, not silence" || badp "X6 missing registry printed nothing"
+  # X7: cc-memory-search against bash-execution.log — 12 recorded searches (plus a --canary that
+  # must not count) with no IDL rows is SILENT; the same 12 with 12 rows is OK.
+  local XBASH="$d/x-bash.log" xt
+  xt="$(date -u -r "$(( NOW - 60 ))" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -d "@$(( NOW - 60 ))" '+%Y-%m-%dT%H:%M:%SZ')"
+  for ((i = 0; i < 12; i++)); do printf '[%s] [s] cc-memory-search term%d | Exit: 0\n' "$xt" "$i" >> "$XBASH"; done
+  printf '[%s] [s] cc-memory-search --canary | Exit: 0\n' "$xt" >> "$XBASH"
+  out="$(run_reg "$XLOG" "$XEMPTY" "$XIDL")"
+  printf '%s' "$out" | grep -q 'SILENT  *cc-memory-search .*D=12 ' && okp "X7 memory-search 0 rows vs 12 searches → SILENT" || badp "X7 memory-search not SILENT at D=12"
+  for ((i = 0; i < 12; i++)); do
+    printf '{"ts":"%s","hook":"cc-memory-search","sid":"x%d","disposition":"fired","reason":"hits"}\n' "$FIXTS" "$i" >> "$XIDL"
+  done
+  out="$(run_reg "$XLOG" "$XEMPTY" "$XIDL")"
+  printf '%s' "$out" | grep -q 'OK  *cc-memory-search' && okp "X7 memory-search 12 rows vs 12 searches → OK" || badp "X7 memory-search not OK"
 
   echo "idl-abstain-alarm --selftest: $PASS passed, $FAIL failed"
   [ "$FAIL" -eq 0 ] || exit 1

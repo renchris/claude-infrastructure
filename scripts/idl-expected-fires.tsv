@@ -21,8 +21,6 @@
 # Add a row ONLY for a branch that exists and logs today — a row for an unbuilt branch pages
 # SILENT on its first night. Rows for Wave B/C, to add with the branch that makes them true:
 #   #14 session-index:norm                   "Indexed session" lines in session-index.log; D>=5
-#   #4  cc-memory-search                     its commands in bash-execution.log(+.gz), new topic files,
-#                                            memory greps; D>=50
 branch	denominator-fn	window	D_min	ratio_floor
 harvest-skill-end	denom_sessionend_indexed	1d	20	-
 memory-nudge	denom_nudge_expected	1d	10	-
@@ -30,3 +28,4 @@ bash-output-offload:lesson	denom_lesson_symptom_replay	1d	3	0.5
 log-bash:lesson	denom_lesson_symptom_replay_failure	1d	3	0.5
 memory-nudge:ruling	denom_nudge_prompts	1d	10	0.5
 backup-before-write:neighbours	denom_new_memory_files	7d	10	0.5
+cc-memory-search	denom_memory_search_invocations	7d	10	0.9
