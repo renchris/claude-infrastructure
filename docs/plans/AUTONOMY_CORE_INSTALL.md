@@ -1,3 +1,7 @@
+---
+status: open
+---
+
 # Autonomy core — a modular, cross-platform install for outside users
 
 Scope (frozen): an outside user on macOS, Linux or WSL2 gets this repo's self-managing, long-running
