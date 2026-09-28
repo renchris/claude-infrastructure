@@ -191,3 +191,18 @@ Verbatim, in order:
    product's own domain, then design one object from its story.
 
 Rule drawn from them: **a second film inherits the procedure and the gates, never the first film's look.**
+
+## 2026-09-28: the claude-infrastructure day-sheet film (51 s, VERIFY PASS)
+
+Verbatim: "It a) looks very broken, and reads more like a basic 'prezi' high school slides presentation than a
+'world class design studio, seed funding startup backed' company product launch video b) it inherits the same theme
+as what we did for naturalTTS. I want to next provide you some inspo inputs for you to design against."
+
+What the frames showed: headline and body type crossed by the sheet's rule lines; labels overrun by their own leaders;
+a terminal card rendered mid-transform as a smeared, skewed plane; hairline curves filling most frames with no
+subject; captions and axis type far too small to read at 1080p; and the warm-paper ground, grotesk headline and mono
+labels of the Natural TTS film. Every encoding gate passed.
+
+Rules drawn from it: **a film can pass every encoding gate and still look broken, so VERIFY measures the picture**
+(`studio-method.md` §4). **Obeying a ban list is not design** (`studio-method.md` §3). The operator now supplies
+reference ("inspo") inputs, and the look is decided from those, from zero.

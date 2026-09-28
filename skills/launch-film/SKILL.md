@@ -13,7 +13,9 @@ ever in `/tmp`.
 
 Evidence files beside this skill (read them before changing a rule here):
 `operator-feedback.md` (every operator word on the film, verbatim, dated) and `pipeline.md` (each script: CLI,
-invariants, coupling, measured numbers).
+invariants, coupling, measured numbers). **`studio-method.md`** holds the craft rules and design gates that separate
+a designed film from a slide deck, measured across the Opus 5.5 motion-design wave. Read it before any design work:
+the 2026-09-28 film had every mechanic in this file and was still rejected as "prezi slides".
 
 ## 1. The bar, in the operator's words
 
@@ -42,7 +44,16 @@ Read together:
 Honest limit: the operator never ruled on single elements of v3 (the paper stage, the ink orb, the music). The
 design system in §2 is the agent's, accepted as a whole. Treat it as the proven default, not as law.
 
+6. **"Broken" and "prezi slides" are separate from "slop"** (2026-09-28, claude-infrastructure): type crossed by
+   lines, a card smeared mid-transform, frames with no subject, and unreadable small type read as broken. Layouts
+   that change between beats with nothing carried across read as slides. Every encoding gate passed on that film,
+   so the design gates in `studio-method.md` §4 are now part of VERIFY.
+
 ## 2. The look that passed (Natural TTS v3)
+
+This look is one film's accepted answer, not a house style. A warm paper ground with a clay accent and an italic
+serif is now also part of what viewers read as the default "AI-made" Opus look (`studio-method.md` §3). A second
+product decides its look from zero.
 
 **The AI-slop tells — remove every one before the operator sees a frame:** purple/indigo/violet/pink auras or
 gradients as the dominant field; iridescent or gradient-filled text; glow blooms; vignettes; light streaks;
@@ -95,7 +106,10 @@ used as a look (≤ 0.02, and only to dither).
    transition/animation, in every shadow root that hosts real product CSS (`kit/example/scene.js`, grep
    `transition: none !important`), including vendor pseudo-elements the `*` rule misses (a slider thumb leaked).
 6. **Stills review before any full render:** `./sheet.sh out.png t1 t2 …` over every scene AND mid-transition
-   frames. Check against §1 and the §2 tell list, frame by frame.
+   frames. Check against §1 and the §2 tell list, frame by frame. Review at three zoom levels
+   (`studio-method.md` §5): a sheet covering 100 % of the duration, a strip of every frame of each transition, and a
+   crop of every string that carries the story. Before this step, write the reads sheet: one timed line per read,
+   with no two overlapping.
 7. **Purity check:** render the same t set in forward and reverse order, diff the PNGs; byte-identical (or ≤ 4/255
    compositor AA) or find the leaking state.
 8. **Render in the background:** `caffeinate -d` running (display-off stalls capture), then
@@ -112,6 +126,8 @@ used as a look (≤ 0.02, and only to dither).
 12. **Verify:** `python3 verify.py timeline.json` must print `VERIFY PASS`. For a film with no product audio, cut the
     clip and Parakeet checks and **assert** what it only prints today: frame count = round(duration·fps), size,
     yuv420p/bt709, PSNR(frame 0, poster) and PSNR(frame 1, render 1) > ~40 dB, LUFS in band, true peak ≤ −1 dBTP.
+    Encoding gates alone passed a film the operator called broken, so VERIFY also runs the design gates in
+    `studio-method.md` §4: text vs line, minimum type size, text in transit, subject coverage and static share.
 13. **Deliver so the operator can watch it:** `open brag.mp4` and SendUserFile the mp4 + jpg + share copy. The
     operator judges by watching the MP4, not by reading the plan.
 14. **README, once accepted:** first hero asset, directly under the title and badges. GitHub strips `<video>`: upload
@@ -181,4 +197,8 @@ Measured on an M1 Max: v3 rendered 675 frames at `--dpr 2 --sub 4` in 19 min (�
 - Do not full-render before a stills sheet and the purity check; do not render without `caffeinate -d`.
 - Do not treat your own "APPROVED" as the operator's: every v1-v3 still review was the agent's; only watching the
   MP4 produced a verdict.
+- Do not hand the model your own previous film as a reference: references leak content, and a look copied that way
+  was rejected as inherited.
+- Do not ease a state change over half a second, or draw type while its container moves. The first reads as a
+  slideshow transition; the second smears.
 - Do not cite `file:line` into the kit or the source repos in new notes; cite a grep (line numbers rot).
