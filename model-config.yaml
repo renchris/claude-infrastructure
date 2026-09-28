@@ -124,9 +124,21 @@ versions:
                                             # pane is launched with the LEAD's --effort, which outranks
                                             # set-teammate-effort.sh's settings file — per-teammate effort is
                                             # a per-WAVE session fired at that rung.
-  sonnet_latest: claude-sonnet-5            # LATERAL 2026-06-30 (was claude-sonnet-4-6); 1M ctx, 128K out
-  sonnet_prior: claude-sonnet-4-6
-  haiku_latest: claude-haiku-4-5
+  sonnet_latest: claude-sonnet-5-5          # LATERAL 2026-09-28 (was claude-sonnet-5) — § SONNET 5.5. 1M ctx, 128K
+                                            # out, $2/$10 (cache read $0.20), retires not sooner than 2027-09-28.
+                                            # A VERSIONS bump only: no role routes to Sonnet (measured, § SONNET 5.5).
+                                            # Safe on a split fleet: nothing reads this key in code, the
+                                            # sweep rewrites 0 files and the lint stays clean (census.md §C,
+                                            # simulated), and 2.1.280 SERVES the full id headless (HTTP 200,
+                                            # modelUsage present; it only lacks client-side recognition).
+  sonnet_prior: claude-sonnet-5             # SET at the flip (was claude-sonnet-4-6). Arms the lint's stale
+                                            # sweep for claude-sonnet-5 literals in UPDATE-classified files.
+                                            # claude-sonnet-5 stays live upstream and is what the client-side
+                                            # auto-mode classifier runs (classifier_model below).
+  sonnet_staged: ""                         # NEW 2026-09-28, empty — the parking slot for the next Sonnet
+                                            # release (invisible to bump/lint by construction, like opus_staged).
+  haiku_latest: claude-haiku-4-5            # retires NOT SOONER than 2026-10-15 (a floor, not a date); Haiku 5.5
+                                            # is announced for "the coming weeks" — stage it on release.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # § OPUS 5.5 (lateral bump 2026-09-22) — ADOPTED. opus_latest, the Opus roles and
@@ -215,6 +227,75 @@ versions:
 #     quality for 1.29× speed; see the SLACK RULE note under effort_defaults), and the Workflow
 #     concurrency gate — min(16, max(2, ncpu−2)) = 8 on this 10-core box, per RUN — goes to 12 via
 #     c10 migration 0035 (staged; operator-run, since it writes settings env).
+# ─────────────────────────────────────────────────────────────────────────────
+# § SONNET 5.5 (lateral bump 2026-09-28) — VERSIONS ADOPTED, NO ROLE MOVED. sonnet_latest is
+# claude-sonnet-5-5; every role stays where it was, because our own blind-judged probes found no
+# slot where Sonnet 5.5 beats the incumbent at equal quality, and the vendor's own per-effort coding
+# charts put Opus 5.5 ahead at matched cost. Evidence, method and a conviction per row:
+# docs/research/sonnet55-utilization-2026-09-28/README.md. Effort keys: effort_defaults.sonnet55_*.
+# Sources: the three the operator supplied (anthropic.com/claude-sonnet-5-5, "Prompting Claude Sonnet
+# 5.5", the Sonnet 5.5 System Card, 148 pp.) plus what's new, migration guide, effort, preserved
+# thinking and models overview. 599 facts were extracted page-cited and each re-checked at its page
+# (570 confirmed, 29 corrected, 0 unsupported; verifiers added 169).
+#
+# ✅ STATUS 2026-09-28
+#   · Binary: 2.1.284 registers claude-sonnet-5-5 (byte scan, claude-opus-5 control); 2.1.280 does
+#     not register it but SERVES it headless (HTTP 200, `[claude-code:unrecognized_model]` is only a
+#     client log line). This is the first model since Opus 5 that the pinned binary could still
+#     dispatch, so the binary gate's "absent ⇒ undispatchable" held as a claim about recognition
+#     (1M context, alias resolution, Explore routing), not about the API.
+#   · cc-upgrade-gate on ~/.claude-284: GREEN 14/0/1 × claude-sonnet-5-5 AND × claude-opus-5-5
+#     (the lead model moves binary too, so one run would not have certified the flip). MANIFEST 2.1.284.
+#   · Launcher repoint to 2.1.284 = docs/activation/pending-activation/47-sonnet55-cc284-activate.sh,
+#     operator-run (auto mode refuses an agent-side ~/.zshrc edit as self-modification).
+#   · The alias `sonnet` resolves PER BINARY: claude-sonnet-5 on 2.1.280, claude-sonnet-5-5 on 2.1.284
+#     (measured through an API-logging proxy). Agent-tool `model` is an enum [sonnet, opus, haiku,
+#     fable] on both builds, so an in-session spawn can never name the full id.
+#
+# MEASURED IN OUR HARNESS (not vendor claims) — docs/research/sonnet55-*-2026-09-28/
+#   · Review class (codex-probe corpus, 36 anchored defects, blind 3-judge claude-opus-5 @xhigh panel):
+#     Sonnet 5.5 low 9 · medium 9 · high 8 · xhigh 11 · max 10 (3 cells lost to the output cap);
+#     re-judged in the same panel Opus 5.5 medium 8 · high 9 · xhigh 10, Fable 5.1 @high 11, Opus 5
+#     @max 14. No pair distinguishable (every p ≥ 0.38). As a SECOND reviewer beside Opus 5.5 @xhigh it
+#     adds +2 items — no more than a second Opus 5.5 sample (+3) and less than Fable 5.1 (+4) or Opus 5
+#     @max (+5): its errors are not decorrelated from Opus 5.5's.
+#   · Synthesis-worker class (6 frozen repo briefs, equal tools Read + read-only Bash, blind 4-way, two
+#     Opus 5.5 judges + one Opus 5 judge): Opus 5.5 @xhigh beat Sonnet 5.5 @xhigh 5-0-1, @high 5-0-1,
+#     @medium 6-0-0 on per-brief majorities (49 of 54 judge calls won, 0 lost). Recall is close (97.7%
+#     vs 94.6% at xhigh); citations are not (bad-citation rate 1.2–2.1% vs 4.5–14.6%). The Opus 5 judge
+#     saw the same gaps, so this is not own-family preference.
+#   · Effort, read from API request bodies: with NO --effort both 5.5 models send "medium" (on 2.1.280
+#     and 2.1.284), and top-level user `effortLevel` is IGNORED for 5.5 ids (the binary applies it only
+#     to a legacy list). modelSettings.<model>.effortLevel does bind → c10 migration 0044 pins Opus 5.5
+#     to high. Agent-tool subagents inherit the lead's effort (the tool has no effort field);
+#     frontmatter `effort:` is honoured via subagent_type but IGNORED on the `--agent` path; Workflow
+#     agent({effort}) is honoured. The `ultracode` keyword pins nothing on either build.
+#   · Schema'd Workflow agents on Sonnet 5.5 at low/medium: 0 of 40 null, schema-failed, wrong or
+#     max_tokens-stopped (CC demotes forced tool_choice to auto; the vendor's warning does not bite).
+#   · Refusals: 1 cyber refusal in 15 security-worded Sonnet 5.5 runs; 0 in 75 ordinary outputs; all 3
+#     Opus 5.5 controls on the same wording refused. A mid-stream refusal is retried and can end
+#     `end_turn` with a declined answer — result-level fields hide it; cc-classify now keys on the
+#     transcript's structural refusal record. switchModelsOnFlag is false on next/next2/next4 (a refusal
+#     blocks rather than silently falling back to Sonnet 5 for the whole session).
+#   · Auto mode as a teammate model: HOLDS (discriminating pair, 2.1.284). NOT added to
+#     auto_mode_allowlist.non_firstParty_max: no role wants a Sonnet teammate, and an entry would also
+#     admit `sonnet` → claude-sonnet-5 on 2.1.280, which nothing measured.
+#   · Quota draw per token (the currency that binds): see effort_defaults.sonnet55_cheap.
+#
+# BEHAVIOR THAT CHANGES HOW WE SUPERVISE IT (System Card; vendor docs)
+#   · Initiative is EFFORT-DEPENDENT: at low/medium it checks in before multipart coding work is done;
+#     at xhigh/max it starts its own review rounds, sometimes with subagents (on FrontierCode its max
+#     score fell BELOW xhigh because it ran the code-review skill and edited out of scope). Our briefs'
+#     frozen scope + "stop on issue, message lead" clause is the vendor's recommended steer.
+#   · Treats text arriving right after tool results as a possible injection (prompting guide § Mid-turn
+#     user messages). Our per-step hook text was cut on 2026-09-28 (mailbox-drain skips subagents,
+#     plan-defaults and teams pointers emit once); CC's own token countdown still follows most tool
+#     calls and is left on (vendor ships it; no misread observed).
+#   · Preserved thinking is BOUND TO THE ACCOUNT that created it: a Sonnet 5.5 session moved to another
+#     account (cc-lr switch, lr-handoff resume) loses its prior reasoning; a fresh fire from a brief
+#     (handoff-fire --recycle --account) is the clean path. Opus 5.5 and Fable 5.1 are not bound.
+#   · Prompt injection: most robust Sonnet yet (Gray Swan k=15 3.4% vs Opus 5.5 1.0%); destructive
+#     injections trip the cyber classifier and reroute to Sonnet 5 (25% of coding requests in one eval).
 # ─────────────────────────────────────────────────────────────────────────────
 # § FABLE 5.1 (lateral bump 2026-09-03) — ADOPTED. Binary gate cleared, keying flip landed.
 # Anthropic shipped Claude Fable 5.1 (`claude-fable-5-1`) and Claude Mythos 5.1
@@ -434,7 +515,7 @@ versions:
 #      ⚠️ This is a 2.1.220 → 2.1.259 jump. Registration is the ONLY axis measured above.
 #      Everything else our harness depends on — hooks, Stop-hook semantics, auto mode, the
 #      effort ladder, Agent Teams, permissions, MCP — is unmeasured across those 39 versions.
-#      Run the `cc-upgrade-gate` skill against the candidate BEFORE adopting it; that gate
+#      Run the `cc-upgrade-gate` skill (since 2026-09-28: `/cc-upgrade`, gate phase) against the candidate BEFORE adopting it; that gate
 #      exists for exactly this and is cheaper than discovering a broken way-of-working live.
 #   2. ✅ ENTITLEMENT — CONFIRMED 2026-09-03. `--model claude-fable-5-1 --print` returned a real
 #      completion on 2.1.260. Also covered mechanically by cc-upgrade-gate check_02, which walks
@@ -775,6 +856,12 @@ pricing_per_mtok:
                                              # 1, 2026 will not occur." The old row was a dated prediction
                                              # that this file kept asserting two days after it was refuted,
                                              # and research-subagents cost math was reading it. Cache $0.20.
+  claude-sonnet-5-5: [2, 10]                 # ADDED 2026-09-28 (announcement + models overview): same list price
+                                             # as Sonnet 5; cache read $0.20 (0.1× base), cache write $2.50 (5-min).
+                                             # Half of Opus 5.5's $4/$20, but Opus 5.5 caches reads at $0.20 too,
+                                             # and the vendor's per-task charts show Opus 5.5 ahead on coding at
+                                             # matched $ — so the rate alone buys nothing (§ SONNET 5.5). The
+                                             # currency that binds is plan quota: effort_defaults.sonnet55_cheap.
   claude-sonnet-4-6: [3, 15]                # still served — kept for prior-pinned cost math
   claude-haiku-4-5: [1, 5]
 
@@ -805,7 +892,15 @@ auto_mode_allowlist:
 # Sonnet 5 (2026-06-30): the CC `sonnet` alias still resolves to Sonnet 4.6 on the Anthropic
 # API at launch (platform docs), so the hardcoded classifier stays 4.6 — re-verify with
 # `claude auto-mode config` / on the next CC bump before moving to claude-sonnet-5.
-classifier_model: claude-sonnet-4-6
+classifier_model: claude-sonnet-5          # CORRECTED 2026-09-28 (was claude-sonnet-4-6, which the client
+                                            # never selects — it appears in the selector only as an EXCLUSION).
+                                            # MEASURED through an API-logging proxy on 2.1.284: the client-side
+                                            # auto-mode classifier request is claude-sonnet-5, thinking disabled,
+                                            # max_tokens 64, for Opus 5.5 and Sonnet 5.5 main loops alike (catalog
+                                            # key `sonnet5`, unless tengu_auto_mode_config.model is set — null on
+                                            # all four accounts). Most 2.1.284 auto sessions use the SERVER path
+                                            # instead, whose model is opaque. NON-LOAD-BEARING: nothing reads this
+                                            # key (git grep); it is a descriptive mirror.
 
 # Role → model mapping — the DYNAMIC LADDER. Most-intelligent by default, stepped
 # down per task class. Frontier roles are CONDITIONAL on frontier_access (active +
@@ -918,6 +1013,13 @@ roles:
                                             # better, ~95% that choosing it is right (it can only cost quota).
                                             # Run 1 (d5383f12c) was INCONCLUSIVE on a tool confound: 2.1.280
                                             # Workflow subagents have no Grep/Glob.
+                                            # RE-PROBED 2026-09-28 vs SONNET 5.5 — KEEP. Same 6 briefs and key,
+                                            # snapshot rebuilt by `git archive 47c3317eb`, every arm headless on
+                                            # 2.1.284 with the same tool rule, blind 4-way (2 Opus 5.5 + 1 Opus 5
+                                            # judge): Opus 5.5 @xhigh beat Sonnet 5.5 @xhigh 5-0-1, @high 5-0-1,
+                                            # @medium 6-0-0; bad cites 1.2–2.1% v 4.5–14.6%. Conviction 90%
+                                            # (sign test floor at 6 briefs, p = 0.0625). docs/research/sonnet55-
+                                            # synth-probe-2026-09-28/ (table.md).
                                             # Sonnet 5 record (2026-07-01 → 2026-09-22), kept: Ties Opus-4.8@max QUALITY across easy AND hard synthesis briefs (0 reliable
                                             # Opus wins; blind 4-judge default-to-refute panels — probes wf_fe2b1218-297
                                             # / wf_53759023 / wf_18a92ab8) at ~2-3× LIGHTER quota-draw ($3/$15 vs $5/$25
@@ -1309,6 +1411,49 @@ effort_defaults:
   # completeness 47 vs 56 of 60 — the agents cut enumeration, not accuracy. Short task, one sample,
   # and a skewed t0, so a long-task re-probe could still move it; until one does, do not add the line.
   # docs/research/opus55-feature-adoption-2026-09-22/README.md § Lever 2.
+  #
+  # ── Sonnet 5.5 rungs (2026-09-28, ADVISORY like opus55_*; no code reads them) ────────────────────
+  # NO ROLE ROUTES TO SONNET 5.5 (§ SONNET 5.5): these say what effort to give it WHEN something runs
+  # it — the alias `sonnet` on 2.1.284, a Workflow agent({model:'claude-sonnet-5-5'}), a probe. Its
+  # levels are RECALIBRATED against Sonnet 5 (vendor: "run a fresh sweep … rather than carrying over"),
+  # and Claude Code's default for it is MEDIUM (API default high). Measured: with no --effort it sends
+  # medium, and top-level user effortLevel does not reach it. Always pass effort explicitly.
+  sonnet55_default: high                    # any Sonnet 5.5 session or spawn with no better key: the vendor's
+                                            # API default and "start at high unless agentic or latency-bound".
+                                            # Our review sweep has high as its WEAKEST point estimate (8/36 vs
+                                            # 9 at low/medium) — noise at n=36, but no argument for more.
+  sonnet55_agentic_scoped: medium           # well-specified agentic coding / multistep tools (vendor: "start at
+                                            # medium … move to high for harder or longer"). At low/medium it
+                                            # CHECKS IN before multipart work is done — give it the carry-through
+                                            # line from the prompting guide or a higher rung, never both silent.
+                                            # Vendor coding charts, $list per task: FrontierCode medium 36.5 @$0.24,
+                                            # high 49.4 @$0.42, xhigh 52.1 @$1.59, max 46.2 @$20.78 (max < xhigh);
+                                            # Opus 5.5 medium 54.6 @$0.80 beats every Sonnet rung, which is why
+                                            # coding stays on Opus (opus55_coding_scoped).
+  sonnet55_review: low                      # a review first-pass, ONLY where quota binds: 9/36 at low vs Opus 5.5
+                                            # @xhigh 10/36 in one panel (p = 1.00), at the fewest tokens of any arm
+                                            # measured (median 4.8K output vs 36.5K). Not a substitute for the
+                                            # review default (opus55_capability_sensitive) and not a complement:
+                                            # beside Opus 5.5 @xhigh it adds +2 items, Fable 5.1 adds +4.
+  sonnet55_cheap: low                       # a COST tier for review-class / gate-verified bulk work, used ONLY when
+                                            # quota binds (claude-accounts strand nowcast ~0 on every routable
+                                            # account). QUOTA, MEASURED 2026-09-28 (next4, 2.1.284, @high, --tools
+                                            # "", in-situ A/B/A with holds; notes/probe-quota-draw.md): Sonnet 5.5
+                                            # draws 0.62× Opus 5.5 per OUTPUT token on the 5h meter, integer bound
+                                            # [0.49, 0.76], Monte Carlo 95% [0.54, 0.70]; both Sonnet phases 4.96
+                                            # 5h-pp per M output, Opus 8.05 (09-22 sweep 8.67, same bound). That is
+                                            # ABOVE the 0.5× list ratio: per list $, Sonnet costs ~1.2× Opus's plan
+                                            # points [0.99, 1.53]. So a vendor $/task chart OVERSTATES Sonnet's
+                                            # saving in our currency; where Opus already wins at matched $ (coding),
+                                            # it wins by more here. Where Sonnet ties on FEWER tokens (review at
+                                            # low: median 4.8K output vs Opus 5.5 @xhigh 36.5K) the draw is ≈8% of
+                                            # the incumbent's — the one place this key buys anything.
+                                            # Side measurement: 5h:weekly exchange 5.4× (4.5–7.0), not the 4.0 our
+                                            # draw math assumes.
+  # Sonnet 5.5 max is NOT a key: 3 of 9 review cells lost to the 128K output cap (233K tokens on one
+  # that finished), and on FrontierCode max scores 6 points BELOW xhigh because it launches review
+  # subagents and edits out of scope (announcement footnote 2). Low collapses on wide search (WANDR
+  # low 10.0 vs Sonnet 5 low 22.8) — never low for research.
 
 # Upcoming retirement dates (from Anthropic model-deprecations page; re-verified 2026-09-03).
 # Bump this list + re-run claude-lint-models when Anthropic announces changes.
@@ -1344,5 +1489,12 @@ deprecations:
 #   lateral (4.8→4.9): update versions map → claude-bump-models --apply → lint
 #   tier-insertion (Fable 5): frontier_access block + canonical reference list edits
 #   downgrade (window end): flip active: false → drop zshrc --model → lint
+# ⚠️ CORRECTED 2026-09-28: the three upgrade skills are now ONE, `/cc-upgrade`
+#   (~/.claude/skills/cc-upgrade/SKILL.md; model-upgrade, cc-version-audit and cc-upgrade-gate are
+#   one-cycle stubs that forward to it). It routes by trigger — a new model, a Claude Code release or
+#   harness feature, or both — and its model lane has FOUR cases, A-D: the three above plus D, a
+#   default-tier repoint (roles.* moves, invisible to both sweep tools). Case C now also points
+#   claude()'s --model at frontier_access.fallback rather than just dropping it. The auto-mode
+#   "~2-week lag" below held for 4.7; 5.5-generation models passed the gate's auto-mode check on day 0.
 # Expect ~2-week lag before a new model enters Max-plan auto-mode allowlist
 # (pattern observed with 4.7 in 2.1.111). Fable 5 never enters the stable track.
