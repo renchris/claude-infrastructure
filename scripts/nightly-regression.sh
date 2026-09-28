@@ -778,6 +778,7 @@ TORN
   run_inv() {
     env CC_NIGHTLY_NOTIFY=/usr/bin/true CC_NIGHTLY_NEVERSTUCK=/usr/bin/true CC_NIGHTLY_ABSTAIN=/usr/bin/true \
         CC_NIGHTLY_LESSON_REPLAY=/usr/bin/true CC_NIGHTLY_MEM_NEIGH_OUTCOME=/usr/bin/true \
+        CC_NIGHTLY_NORM_SHARE=/usr/bin/true CC_NIGHTLY_EPISODIC_OUTCOME=/usr/bin/true \
         CC_NIGHTLY_POSTLAND_DIR="$d/nopostland" \
         CC_NIGHTLY_POSTLAND_VERIFY="${5:-/usr/bin/true}" POSTLAND_VERIFY="${7:-on}" \
         CC_NIGHTLY_GATE_GLOB="$3" CC_NIGHTLY_LINT_GLOB="$d/emptygl/*.sh" \
