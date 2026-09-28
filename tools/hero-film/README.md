@@ -560,6 +560,29 @@ px), window → `~/.claude` 2.58 s (2,480), home 2.49 s (2,387); the FILM's swin
 - **The FILM's holds render once.** Its eight motion-blur sub-frames now run only in flights; a hold
   creeps under 0.2 px per 1/60 s, so they were eight identical renders.
 
+## The paper grade (a look-frame, 2026-09-27)
+
+The operator ruled that this repo gets one launch film, graded to the bar they accepted for the
+Natural TTS film (the launch-film skill, § 2). The story, camera and strings stay as they are; only
+the grade changes. It is a third grade, `?theme=paper` (`--theme paper` to the capture script), so
+the dark and light grades render as before and choosing between the looks is a single switch:
+
+- **A warm stone stage** (`#efede8`, lib.js `THEMES.paper`). The floor's albedo is `#bbb9b4`
+  because the lights put a gain of about 1.8 on it: a stone albedo rendered pure white.
+- **Colour in one place:** the green `origin/main` trunk. The lanes are ink hairlines (0.45 of
+  their width), commits in flight are ink capsules that turn green when they land, and the account
+  chips are muted to the level of labels.
+- **None of the tells:** no bloom, glow ribbons, floor halos, vignette, motes, or area lights from
+  screens (look.js `LOOKS.paper`). A contact shadow grounds each window.
+- **Real UI keeps its own theme.** The windows, the ⛔ card, the racks and the sign draw with the
+  dark theme (`surface`), because Claude Code's UI is never recoloured.
+- **Type:** the same strings and face (Geist), near-black `#141414`, weight 500, tracking −0.035 em.
+
+Each new hook falls back to the value used before (`T.look ?? …`, `L.halo ?? …`, `T.lane ?? T.acct`),
+so the other grades are unchanged. Frame 0, captured at 2× from HEAD's code and then from this code:
+dark at 120 dB PSNR (the dark grade's run-to-run noise is 111 dB) and light at 66.8 dB, with no
+pixel differing by more than 1 %.
+
 ## Verification
 
 ### Round 3 build, 2026-09-26

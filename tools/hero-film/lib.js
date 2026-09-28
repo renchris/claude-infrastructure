@@ -40,24 +40,25 @@ export const e = (t, a, b, fn = ease.settle) => fn(p(t, a, b))
 
 // Colour means one thing each: amber = work in flight, green = verified or landed, red = refused.
 // The four account hues are for lane lines and ①–④ badges only. Grades match GitHub's page colours.
+const DARK = {
+  bg: '#0d1117', ink: '#e6edf3', muted: '#8b949e', faint: '#30363d', dim: '#484f58',
+  amber: '#f0a33a', green: '#3fb950', greenInk: '#56d364', red: '#ff7b72', redFill: '#3d1519',
+  // Four cool hues at matched lightness, well away from refused-red (critique round two, finding 5).
+  acct: ['#39c5cf', '#58a6ff', '#8b8dff', '#c297ff'],
+  clawd: '#d77757',
+  // A kitty window: bezel, title bar, pane body, and Claude Code's own row tints.
+  bezel: '#30363d', title: '#1c2128', titleInk: '#8b949e', pane: '#161b22', paneInk: '#e6edf3', paneMuted: '#8b949e',
+  promptRow: '#262c36', greek: '#30363d', greekHi: '#484f58', divider: '#8b949e',
+  // The floor and its light.
+  floor: '#0d1117', grid: '#161b22', reflect: 0.2, glowA: 0.22, shadow: '#010409', shadowA: 0.55,
+  // Racks and cards.
+  rack: '#161b22', rackEdge: '#30363d', rackDim: '#484f58', card: '#1c2128', cardEdge: '#6e7681',
+  liveRow: '#12261a', amberRow: '#2d2111', amberText: '#f0a33a',
+  gate: '#8b949e', gateArm: '#e6edf3',
+  bgRekey: '#0d1119',
+}
 export const THEMES = {
-  dark: {
-    bg: '#0d1117', ink: '#e6edf3', muted: '#8b949e', faint: '#30363d', dim: '#484f58',
-    amber: '#f0a33a', green: '#3fb950', greenInk: '#56d364', red: '#ff7b72', redFill: '#3d1519',
-    // Four cool hues at matched lightness, well away from refused-red (critique round two, finding 5).
-    acct: ['#39c5cf', '#58a6ff', '#8b8dff', '#c297ff'],
-    clawd: '#d77757',
-    // A kitty window: bezel, title bar, pane body, and Claude Code's own row tints.
-    bezel: '#30363d', title: '#1c2128', titleInk: '#8b949e', pane: '#161b22', paneInk: '#e6edf3', paneMuted: '#8b949e',
-    promptRow: '#262c36', greek: '#30363d', greekHi: '#484f58', divider: '#8b949e',
-    // The floor and its light.
-    floor: '#0d1117', grid: '#161b22', reflect: 0.2, glowA: 0.22, shadow: '#010409', shadowA: 0.55,
-    // Racks and cards.
-    rack: '#161b22', rackEdge: '#30363d', rackDim: '#484f58', card: '#1c2128', cardEdge: '#6e7681',
-    liveRow: '#12261a', amberRow: '#2d2111', amberText: '#f0a33a',
-    gate: '#8b949e', gateArm: '#e6edf3',
-    bgRekey: '#0d1119',
-  },
+  dark: DARK,
   light: {
     bg: '#ffffff', ink: '#1f2328', muted: '#59636e', faint: '#d0d7de', dim: '#afb8c1',
     amber: '#c86a00', green: '#1a7f37', greenInk: '#1a7f37', red: '#cf222e', redFill: '#ffebe9',
@@ -72,6 +73,26 @@ export const THEMES = {
     liveRow: '#dafbe1', amberRow: '#fff1dc', amberText: '#7a3b00', // 7.9:1 on its row (was 5.9; critique round 3, m7)
     gate: '#59636e', gateArm: '#1f2328',
     bgRekey: '#fffffd',
+  },
+  // Paper: the Natural TTS launch-film bar (launch-film skill § 2), a look-frame the operator judges
+  // beside the dark grade (2026-09-27). A warm stone stage; the lanes are ink hairlines; colour lives
+  // in one place, the green origin/main trunk (landed, the product's own signal). Every canvas that
+  // shows real Claude Code UI (the windows, the ⛔ card, the racks, the sign) keeps the dark theme
+  // (`surface`), because real UI is never recoloured. `look` picks LOOKS.paper, `lane` colours the
+  // floor lines, `type` restyles the DOM type; the other grades carry none of them.
+  paper: {
+    bg: '#efede8', ink: '#141414', muted: '#8a857d', faint: '#d6d1c8', dim: '#125c28', // dim: origin/main's commit beads
+    // amber: a commit in flight is an ink capsule here; it turns green only when it lands.
+    amber: '#3b3833', green: '#1a7f37', greenInk: '#1a7f37', red: '#cf222e', redFill: '#ffebe9',
+    acct: ['#8a857d', '#8a857d', '#8a857d', '#8a857d'], // chips only: muted to the level of labels
+    lane: ['#4a463f', '#4a463f', '#4a463f', '#4a463f'],
+    clawd: '#d77757',
+    floor: '#efede8', grid: '#e4e0d8', reflect: 0.06, glowA: 0, shadow: '#2e2820', shadowA: 0.3,
+    gate: '#59636e', gateArm: '#1d1c1a',
+    bgRekey: '#efede9',
+    look: 'paper',
+    surface: DARK,
+    type: { fontWeight: '500', letterSpacing: '-0.035em' },
   },
 }
 

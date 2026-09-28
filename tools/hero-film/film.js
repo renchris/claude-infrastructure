@@ -4,6 +4,7 @@
 //   ?cut=loop   the README hero, an animated WebP (camera locked between flights)
 //   ?cut=film   the launch film, an MP4 (one camera that never stops)
 //   ?theme=dark|light, tuned to GitHub's page colours so the frame edge vanishes.
+//   ?theme=paper, the Natural TTS launch-film bar on a warm stone stage (lib.js THEMES.paper), a look-frame.
 //
 // Structure (adapted from agent-context-sync film/film.js, round 3). STORY is one land on its own
 // clock s. It is CYCLIC: the peer splits and later folds, pills pass the gate and become history on
@@ -17,7 +18,7 @@ import { CARD_TEXT, drawWindow } from './panes.js'
 import { FH, FLEET, HERO, HH, HW, LIFT, RACK_X, RACK_Z, buildWorld, heroFoot } from './world.js'
 
 const q = new URLSearchParams(location.search)
-const THEME = q.get('theme') === 'light' ? 'light' : 'dark'
+const THEME = ['light', 'paper'].includes(q.get('theme')) ? q.get('theme') : 'dark'
 const CUT = q.get('cut') === 'film' ? 'film' : 'loop'
 const T = THEMES[THEME]
 for (const [k, v] of Object.entries(T)) if (typeof v === 'string') document.documentElement.style.setProperty(`--${k}`, v)
@@ -174,7 +175,7 @@ function drawHero(c, st) {
     boot: st.boot, rows: s >= S.fold[1] ? [] : rowsAt(PEER_ROWS, s),
     header: { version: 'v2.1.280', model: 'Opus 5.5 · Claude Max', cwd: '~/…/.worktrees/feat/readme-hero-film' },
   }
-  drawWindow(g, T, c.width, c.height, {
+  drawWindow(g, T.surface ?? T, c.width, c.height, {
     k,
     title: st.split < 0.999 ? '✳ Claude Code — 2 panes' : '✳ Claude Code',
     panes: st.split < 0.999 ? [left, right] : [left],
@@ -382,6 +383,8 @@ const lines = {}
 for (const [k, [text]] of Object.entries(LINES)) {
   lines[k] = words(el('', { left: '108px', top: '158px', fontSize: '80px', fontWeight: '600', letterSpacing: '-0.04em', color: 'var(--ink)', lineHeight: '1.04' }, text))
 }
+// A grade may set its own weight and tracking for the type (THEMES.paper.type); the strings never change.
+if (T.type) for (const d of [g1, g2, g3, ...Object.values(lines)]) Object.assign(d.style, T.type)
 // Chips: labels on world objects, in the colour their object means.
 const chipStyle = { fontSize: '30px', lineHeight: '1', padding: '7px 13px 10px', borderRadius: '10px', border: '3px solid var(--faint)', background: 'var(--bg)', color: 'var(--ink)' }
 const chips = {

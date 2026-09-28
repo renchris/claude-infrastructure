@@ -50,6 +50,25 @@ export const LOOKS = {
     metal: '#6e7781', metalHi: '#afb8c1', body: '#6e7781', // bezels two steps darker than the page, as round one's panes
     vignette: 0.0, dof: 2.2, motes: 0,
   },
+  // Paper (lib.js THEMES.paper): a warm stone stage lit like a studio sweep, a matte floor that barely
+  // reflects, and none of the launch-film skill's § 2 tells: no bloom, no glow, no vignette, no motes,
+  // no emitters. A pane is grounded by its contact shadow, not by light spilling from its screen.
+  paper: {
+    knee: 0.985,
+    bloom: { strength: 0, radius: 0, threshold: 1 },
+    lineBoost: 1.0,
+    pillGlow: 1.0,
+    screen: 1.0,
+    reflect: 0.06, reflectBlur: 2.4,
+    floor: '#bbb9b4', floorRough: 0.85, floorSpec: 0.2, seam: '#b0aca5', seamA: 0.35, floorEnv: 0.0,
+    env: 0.6, glass: 0.2,
+    hemi: ['#fffdf8', '#d9d3c8', 0.62], key: ['#fff6e8', 0.5], rim: ['#f4f1ea', 0.12],
+    screenLight: 0, pillLight: 0,
+    metal: '#4a4640', metalHi: '#b9b4ac', body: '#1d1c1a',
+    vignette: 0.0, dof: 2.2, motes: 0,
+    laneW: 0.45, trunkW: 1.4, // lanes as hairlines; the trunk carries the frame's one colour
+    halo: 0, // the floor glow under a commit and under the converger's pulse (the other grades: 0.35 / 0.55)
+  },
 }
 
 /** The environment map every metal and glass surface reflects: a lit room, prefiltered. */

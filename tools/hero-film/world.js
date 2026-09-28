@@ -146,7 +146,10 @@ function lineMat(color, opacity = 1, additive = false, boost = 1) {
 // --------------------------------------------------------------------------------- building
 export function buildWorld(T, { width = 1920, height = 1080, grain = 0 } = {}) {
   const dark = T.bg === '#0d1117'
-  const L = LOOKS[dark ? 'dark' : 'light']
+  const L = LOOKS[T.look ?? (dark ? 'dark' : 'light')]
+  // Canvases that show real Claude Code UI draw in their own theme (THEMES.paper.surface), else the grade's.
+  const P = T.surface ?? T
+  const LANE = T.lane ?? T.acct
   // The page is laid out at 1920 x 1080 CSS px and photographed at the device pixel ratio (2 in round
   // 3: 3840 x 2160, the FILM's size and the loop's supersampled source).
   const dpr = window.devicePixelRatio || 1
@@ -300,7 +303,7 @@ export function buildWorld(T, { width = 1920, height = 1080, grain = 0 } = {}) {
   const trunkZ0 = 1.2 // origin/main starts at the gate: before it there is no trunk, only branches
   const trunkZ1 = -DZ * 5
   const trunkCurve = new THREE.LineCurve3(new THREE.Vector3(0, 0, trunkZ0), new THREE.Vector3(0, 0, trunkZ1))
-  const trunk = new THREE.Mesh(ribbon(trunkCurve, 0.24, 4), mkLine(T.green, 1, false, L.lineBoost))
+  const trunk = new THREE.Mesh(ribbon(trunkCurve, 0.24 * (L.trunkW ?? 1), 4), mkLine(T.green, 1, false, L.lineBoost))
   trunk.position.y = 0.012
   trunk.renderOrder = 3
   scene.add(trunk)
@@ -316,7 +319,7 @@ export function buildWorld(T, { width = 1920, height = 1080, grain = 0 } = {}) {
   // ---------------------------------------------------------------------- per stretch
   const fleetCanvases = FLEET.map((o) => {
     const c = canvas(1024 * TEX, 640 * TEX)
-    drawWindow(c.getContext('2d'), T, 1024 * TEX, 640 * TEX, {
+    drawWindow(c.getContext('2d'), P, 1024 * TEX, 640 * TEX, {
       title: `✳ ${o.branch}`,
       k: TEX,
       panes: [{
@@ -335,7 +338,7 @@ export function buildWorld(T, { width = 1920, height = 1080, grain = 0 } = {}) {
   }
   const gateSign = (() => {
     const c = canvas(768 * TEX, 256 * TEX)
-    drawSign(c.getContext('2d'), T, 768 * TEX, 256 * TEX)
+    drawSign(c.getContext('2d'), P, 768 * TEX, 256 * TEX)
     return tex(c)
   })()
   const floorWord = (text, color, h = 128) => {
@@ -363,16 +366,16 @@ export function buildWorld(T, { width = 1920, height = 1080, grain = 0 } = {}) {
       // The screen lights the floor in front of it, in its account's hue.
       screenLight(FW, FH, o.x, LIFT + FH / 2, gz + o.z, rot(o.deg * FACE), T.acct[o.acct], 0.8)
       const curve = branchCurve(o.x, o.z + gz, gz)
-      const line = new THREE.Mesh(ribbon(curve, 0.15), mkLine(T.acct[o.acct], 1, false, L.lineBoost))
+      const line = new THREE.Mesh(ribbon(curve, 0.15 * (L.laneW ?? 1)), mkLine(LANE[o.acct], 1, false, L.lineBoost))
       line.position.y = 0.01
       line.renderOrder = 3
-      const glow = new THREE.Mesh(ribbon(curve, 1.5), mkLine(T.acct[o.acct], T.glowA * 0.8, dark))
+      const glow = new THREE.Mesh(ribbon(curve, 1.5), mkLine(LANE[o.acct], T.glowA * 0.8, dark))
       glow.material.uniforms.soft.value = 1
       glow.position.y = 0.006
       glow.renderOrder = 2
       scene.add(line, glow)
       // The branch's name, painted along the line just ahead of the window.
-      const lab = new THREE.Mesh(new THREE.PlaneGeometry(3.4, 0.32).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ map: branchLabel(o.branch, T.acct[o.acct]), transparent: true, depthWrite: false, opacity: 0.7 }))
+      const lab = new THREE.Mesh(new THREE.PlaneGeometry(3.4, 0.32).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ map: branchLabel(o.branch, LANE[o.acct]), transparent: true, depthWrite: false, opacity: 0.7 }))
       const p0 = curve.getPointAt(0.1)
       const tg = curve.getTangentAt(0.1)
       lab.position.set(p0.x, 0.012, p0.z)
@@ -406,15 +409,15 @@ export function buildWorld(T, { width = 1920, height = 1080, grain = 0 } = {}) {
       const [fx, fz] = heroFoot(half)
       const curve = branchCurve(fx, fz + gz, gz)
       const acct = half === 0 ? HERO.acct : HERO.peerAcct
-      const line = new THREE.Mesh(ribbon(curve, 0.17), mkLine(T.acct[acct], 1, false, L.lineBoost))
+      const line = new THREE.Mesh(ribbon(curve, 0.17 * (L.laneW ?? 1)), mkLine(LANE[acct], 1, false, L.lineBoost))
       line.position.y = 0.011
       line.renderOrder = 3
-      const glow = new THREE.Mesh(ribbon(curve, 1.6), mkLine(T.acct[acct], T.glowA * 0.8, dark))
+      const glow = new THREE.Mesh(ribbon(curve, 1.6), mkLine(LANE[acct], T.glowA * 0.8, dark))
       glow.material.uniforms.soft.value = 1
       glow.position.y = 0.007
       glow.renderOrder = 2
       scene.add(line, glow)
-      const lab = new THREE.Mesh(new THREE.PlaneGeometry(3.4, 0.32).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ map: branchLabel(half === 0 ? HERO.branch : HERO.peerBranch, T.acct[acct]), transparent: true, depthWrite: false, opacity: 0.8 }))
+      const lab = new THREE.Mesh(new THREE.PlaneGeometry(3.4, 0.32).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ map: branchLabel(half === 0 ? HERO.branch : HERO.peerBranch, LANE[acct]), transparent: true, depthWrite: false, opacity: 0.8 }))
       const p0 = curve.getPointAt(0.1)
       const tg = curve.getTangentAt(0.1)
       lab.position.set(p0.x, 0.013, p0.z)
@@ -488,7 +491,7 @@ export function buildWorld(T, { width = 1920, height = 1080, grain = 0 } = {}) {
     // The racks: ~/.claude, three of them, fed from the trunk by three short links.
     S.racks = RACKS.map((rack, r) => {
       const c = canvas(512 * TEX, 752 * TEX)
-      drawRack(c.getContext('2d'), T, 512 * TEX, 752 * TEX, rack, { stale: 0, wave: 1 })
+      drawRack(c.getContext('2d'), P, 512 * TEX, 752 * TEX, rack, { stale: 0, wave: 1 })
       const t = tex(c)
       // A cabinet: a deep metal body with the rack's face set in it, and a status strip along its top
       // that shows the rack's state (amber while its files are stale, green when live).
@@ -534,7 +537,7 @@ export function buildWorld(T, { width = 1920, height = 1080, grain = 0 } = {}) {
     S.hist = hist
     S.head = head
     // The converger's pulse: from HEAD down the trunk to the racks' links.
-    const pulse = floorBlob(2.2, 2.2, T.green, dark ? 0.55 : 0.35)
+    const pulse = floorBlob(2.2, 2.2, T.green, L.halo ?? (dark ? 0.55 : 0.35))
     if (dark) pulse.material.blending = THREE.AdditiveBlending
     pulse.renderOrder = 6
     scene.add(pulse)
@@ -551,7 +554,7 @@ export function buildWorld(T, { width = 1920, height = 1080, grain = 0 } = {}) {
       const m = new THREE.Mesh(pillGeo, new THREE.MeshBasicMaterial({ color: T.amber, transparent: true }))
       m.renderOrder = 6
       scene.add(m)
-      const gl = floorBlob(1.4, 1.4, T.amber, dark ? 0.35 : 0.25)
+      const gl = floorBlob(1.4, 1.4, T.amber, L.halo ?? (dark ? 0.35 : 0.25))
       if (dark) gl.material.blending = THREE.AdditiveBlending
       scene.add(gl)
       const pt = L.pillLight ? new THREE.PointLight(T.amber, 0, 3.2, 2) : null
@@ -592,7 +595,7 @@ export function buildWorld(T, { width = 1920, height = 1080, grain = 0 } = {}) {
 
     // The card: the one thing that reaches the human.
     const cc = canvas(1024 * TEX, 600 * TEX)
-    drawCard(cc.getContext('2d'), T, 1024 * TEX, 600 * TEX)
+    drawCard(cc.getContext('2d'), P, 1024 * TEX, 600 * TEX)
     const cp = panel(2.1, 1.23, tex(cc), { depth: 0.035, rim: 0.035, radius: 0.045, centre: true, own: true })
     cp.body.material.transparent = true
     cp.screen.renderOrder = 8
@@ -673,7 +676,7 @@ export function buildWorld(T, { width = 1920, height = 1080, grain = 0 } = {}) {
       S.heroLines[1].glow.material.uniforms.draw.value = s.peerLine
       S.heroLines[1].line.material.uniforms.opacity.value = s.peerLineA
       S.heroLines[1].glow.material.uniforms.opacity.value = s.peerLineA * T.glowA * 1.3
-      S.heroLines[1].line.material.uniforms.color.value.set(s.peerLanded > 0.5 ? T.green : T.acct[HERO.peerAcct])
+      S.heroLines[1].line.material.uniforms.color.value.set(s.peerLanded > 0.5 ? T.green : LANE[HERO.peerAcct])
       S.heroLines[1].lab.material.opacity = s.peerLineA * clamp01(s.peerLine * 3)
       // The arm: 0 down, 1 up.
       S.armPivot.rotation.z = (Math.PI / 2) * 0.92 * s.arm
@@ -728,7 +731,7 @@ export function buildWorld(T, { width = 1920, height = 1080, grain = 0 } = {}) {
         const wave = clamp01(s.wave * 1.25 - r * 0.12)
         const q = `${Math.round(s.stale * 30)}:${Math.round(wave * 90)}`
         if (q !== R.last) {
-          drawRack(R.c.getContext('2d'), T, 512 * TEX, 752 * TEX, R.rack, { stale: s.stale, wave })
+          drawRack(R.c.getContext('2d'), P, 512 * TEX, 752 * TEX, R.rack, { stale: s.stale, wave })
           R.t.needsUpdate = true
           R.last = q
         }
@@ -764,7 +767,7 @@ export function buildWorld(T, { width = 1920, height = 1080, grain = 0 } = {}) {
       pl.pt.position.set(pt.x, 0.45, pt.z)
     }
     pl.gl.material.color.set(col)
-    pl.gl.material.opacity = (dark ? 0.35 : 0.25) * ps.a
+    pl.gl.material.opacity = (L.halo ?? (dark ? 0.35 : 0.25)) * ps.a
     pl.gl.position.set(pt.x, 0.005, pt.z)
   }
   // The pill's world position (for the type's chips).
