@@ -12,6 +12,16 @@ topic file. A token absent there existed ONLY on the index surface and has now b
 
   cc-memory-dropped-token-audit --old <pre-compaction index> --new <post-compaction index>
                                 [--memory-dir DIR] [--pointer-scan FILE ...] [--json]
+  cc-memory-dropped-token-audit --pair <topic A> <topic B> --into <merged topic C>
+                                [--strict-words] [--json]
+
+PAIR MODE is the merge-losslessness rule (/compact-memory step 7, truememory §3.17). Every hard
+token of A∪B — their description and body, never their other frontmatter keys, whose timestamps
+and session ids no merge should carry — must be present in C, or C must carry a line
+`Superseded (YYYY-MM-DD): was <token>` naming it. A token found ONLY on such a line is reported as
+superseded and clears; one whose Superseded line has no real date does not. Why a rule and not a
+veto on differing values: hard-token multisets differ in 29 of 29 measured candidate pairs, true
+duplicates included, so "values differ" alone would forbid every merge. When they differ, supersede.
 
 IT LIVES IN bin/, NOT scripts/, AND THAT IS LOAD-BEARING: install.sh:662 globs `scripts/*.sh`, so a
 `.py` at scripts/ top level is never symlinked into ~/.claude and a /compact-memory run in any other
@@ -53,6 +63,7 @@ import json
 import os
 import re
 import sys
+from typing import NoReturn
 
 STOP = set("""about above after again against because been before being below between both during
 each from have here into itself more most other over same some such than that their them then
@@ -73,21 +84,22 @@ BULLET = re.compile(r"^- \*{0,2}\[")
 ENTRY = re.compile(r"^- \*{0,2}\[(.*)\]\(([^()]*\.md)\)(.*)$")
 
 
-def stem(w):
+def stem(w: str) -> str:
     for s in ("ing", "ed", "es", "s"):
         if w.endswith(s) and len(w) - len(s) >= 4:
             return w[: -len(s)]
     return w
 
 
-def read(path):
+def read(path: str) -> str:
     with open(path, encoding="utf-8", errors="replace") as fh:
         return fh.read()
 
 
-def entries(path):
+def entries(path: str) -> tuple[dict[str, str], int]:
     """-> (dict target -> hook text, number of link-shaped bullets seen)."""
-    d, bullets = {}, 0
+    d: dict[str, str] = {}
+    bullets = 0
     for line in read(path).splitlines():
         if BULLET.match(line):
             bullets += 1
@@ -97,9 +109,9 @@ def entries(path):
     return d, bullets
 
 
-def toks(hook):
+def toks(hook: str) -> set[tuple[str, str]]:
     """The hard tokens a hook carries, each tagged with the class that decides if it blocks."""
-    out = set()
+    out: set[tuple[str, str]] = set()
     for m in re.finditer(r"`([^`]+)`", hook):
         for w in re.findall(r"[A-Za-z0-9_\-\./:$@{}]{3,}", m.group(1)):
             out.add(("code", w))
@@ -116,7 +128,7 @@ def toks(hook):
     return out
 
 
-def present(t, body, bn, bs):
+def present(t: str, body: str, bn: str, bs: set[str]) -> bool:
     """Case-insensitive, punctuation-insensitive, stemmed. This is what separates a genuine
     absence from an emphasis-only variant (`DELETES` vs "deleted") — without it the 2026-07-29
     pass drowned 2 real findings under 36 false ones."""
@@ -132,7 +144,7 @@ def present(t, body, bn, bs):
     return False
 
 
-def nonverdict(msg):
+def nonverdict(msg: str) -> NoReturn:
     print("verdict=non-verdict", flush=True)
     print(f"!! COULD NOT RUN: {msg}", file=sys.stderr)
     print("   Nothing above is a claim about your pass — this audit never reached a verdict.",
@@ -140,10 +152,83 @@ def nonverdict(msg):
     sys.exit(2)
 
 
-def main():
+SUPERSEDED = re.compile(r"^\s*[-*]?\s*Superseded \(([^)]*)\): was (.+)$", re.M)
+ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def strip_front(text: str) -> str:
+    """Body plus the `description:` value; every other frontmatter key is metadata, not content."""
+    if not text.startswith("---"):
+        return text
+    end = text.find("\n---", 3)
+    if end == -1:
+        return text
+    desc = [ln.partition(":")[2].strip() for ln in text[3:end].splitlines()
+            if ln.partition(":")[0].strip() == "description"]
+    return "\n".join(desc) + "\n" + text[end + 4:]
+
+
+def pair_main(a: argparse.Namespace) -> NoReturn:
+    src_a, src_b = a.pair
+    for p in (src_a, src_b, a.into):
+        if not os.path.isfile(p):
+            nonverdict(f"no such file: {p}")
+    merged = read(a.into)
+    kept = SUPERSEDED.sub("", merged)
+    kn = re.sub(r"[^a-z0-9]+", "", kept.lower())
+    ks = set(stem(w) for w in re.findall(r"[a-z0-9]+", kept.lower()))
+    was = "\n".join(m.group(2) for m in SUPERSEDED.finditer(merged)
+                    if ISO_DATE.fullmatch(m.group(1).strip()))
+    wn = re.sub(r"[^a-z0-9]+", "", was.lower())
+    ws = set(stem(w) for w in re.findall(r"[a-z0-9]+", was.lower()))
+
+    origin: dict[tuple[str, str], list[str]] = {}
+    for p in (src_a, src_b):
+        for tok in sorted(toks(strip_front(read(p)))):
+            origin.setdefault(tok, []).append(os.path.basename(p))
+
+    blocking: list[dict[str, str]] = []
+    advisory: list[dict[str, str]] = []
+    superseded: list[dict[str, str]] = []
+    for (cls, t), srcs in sorted(origin.items()):
+        if present(t, kept, kn, ks):
+            continue
+        row = {"entry": "+".join(srcs), "kind": "dropped-token", "class": cls, "token": t}
+        if present(t, was, wn, ws):
+            superseded.append({**row, "kind": "superseded"})
+        elif cls != "word" or a.strict_words:
+            blocking.append(row)
+        else:
+            advisory.append(row)
+
+    verdict = "lossy" if blocking else "clean"
+    into = os.path.basename(a.into)
+    if a.json:
+        print(json.dumps({"verdict": verdict, "pair": [os.path.basename(src_a), os.path.basename(src_b)],
+                          "into": into, "blocking": blocking, "advisory": advisory,
+                          "superseded": superseded}, indent=2))
+    else:
+        print(f"pair {os.path.basename(src_a)} + {os.path.basename(src_b)}  into {into}")
+        for label, rows in (("BLOCKING", blocking), ("ADVISORY (content words)", advisory),
+                            ("SUPERSEDED (cleared by a dated line)", superseded)):
+            if not rows:
+                continue
+            print(f"\n### {label} — {len(rows)}")
+            for r in rows:
+                print(f"    {r['entry']}  [{r['class']}] {r['token']}  ({r['kind']})")
+        print(f"\n==== {len(blocking)} blocking · {len(advisory)} advisory · {len(superseded)} superseded ====")
+        print("clean ⇒ every hard token of both sources is in the merge, or superseded by a dated line.")
+        print(f"verdict={verdict}")
+    sys.exit(1 if blocking else 0)
+
+
+def main() -> None:
     ap = argparse.ArgumentParser(add_help=True)
-    ap.add_argument("--old", required=True, help="pre-compaction index snapshot (archive/…)")
-    ap.add_argument("--new", required=True, help="the finished index")
+    ap.add_argument("--old", help="pre-compaction index snapshot (archive/…); required outside --pair")
+    ap.add_argument("--new", help="the finished index; required outside --pair")
+    ap.add_argument("--pair", nargs=2, metavar=("A", "B"),
+                    help="merge-losslessness mode: the two source topic files (needs --into)")
+    ap.add_argument("--into", metavar="C", help="the merged topic file (with --pair)")
     ap.add_argument("--memory-dir", help="where topic files live (default: dirname of --new)")
     ap.add_argument("--pointer-scan", action="append", default=[],
                     help="extra surface that may carry a rotor demotion pointer; repeatable")
@@ -151,6 +236,17 @@ def main():
                     help="raise ordinary content words from advisory to blocking")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args()
+
+    if a.pair is not None:
+        if a.into is None:
+            ap.error("--pair needs --into <merged topic C>")
+        if a.old or a.new or a.pointer_scan or a.memory_dir:
+            ap.error("--pair takes no --old/--new/--memory-dir/--pointer-scan")
+        pair_main(a)
+    if a.into is not None:
+        ap.error("--into needs --pair A B")
+    if a.old is None or a.new is None:
+        ap.error("the following arguments are required: --old, --new (or --pair A B --into C)")
 
     for p in (a.old, a.new):
         if not os.path.isfile(p):
@@ -191,7 +287,8 @@ def main():
         surfaces.append(read(p))
     pointed = "\n".join(surfaces)
 
-    blocking, advisory = [], []
+    blocking: list[dict[str, str]] = []
+    advisory: list[dict[str, str]] = []
 
     for fn in sorted(set(old) - set(new)):
         if fn in pointed:

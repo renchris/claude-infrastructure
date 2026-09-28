@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# shellcheck disable=SC2016  # every backtick here is a literal markdown code span in a fixture
 # THE NON-LOSSINESS PROOF FOR /compact-memory — bin/cc-memory-dropped-token-audit.
 #
 # IT LIVES IN bin/ BECAUSE THAT IS THE ONLY SURFACE THAT DEPLOYS. install.sh:662 globs
@@ -202,5 +203,89 @@ lacks_out() { ! printf '%s\n' "$output" | grep -qF -- "$1"; }
   run "$AUDIT" --old "$R/archive/MEMORY_INDEX_PRE-COMPACT_2026-08-07.md" --new "$R/MEMORY.md"
   [ "$status" -eq 0 ]
   has_out 'verdict=clean'
+}
+
+# --- PAIR MODE: the merge-losslessness rule (/compact-memory step 7, truememory §3.17). ---
+# 14+15 are the pair: the SAME two sources, one merge dropping a hard token and one carrying it.
+# 16+17 are the supersession pair: a dated line clears the token, an undated one does not — without
+# 17, 16 is equally consistent with a pair mode that ignores the token entirely.
+
+# pair_sources — A carries a flag and a number, B a SHA; both carry frontmatter a merge must NOT
+# be asked to carry (a session id and a timestamp are metadata, never content).
+pair_sources() {
+  printf '%s\n' '---' 'name: a' 'description: drain rule' 'metadata:' \
+    '  originSessionId: 2c6c3a09-0609-4f64-b86f-df04a99a7340' '  modified: 2026-09-08T00:22:48.728Z' \
+    '---' '' 'The drain runs `--drain-oversized` with a 30 s bound.' > "$MEM/a.md"
+  printf '%s\n' '---' 'name: b' 'description: drain rule twin' '---' '' \
+    'Landed as 828816d.' > "$MEM/b.md"
+}
+
+@test "14 PAIR a lossy merge — a hard token of A missing from C — BLOCKS and names it" {
+  pair_sources
+  printf '%s\n' '---' 'name: c' 'description: drain rule' '---' '' \
+    'The drain runs `--drain-oversized`. Landed as 828816d.' > "$MEM/c.md"
+  run "$AUDIT" --pair "$MEM/a.md" "$MEM/b.md" --into "$MEM/c.md"
+  [ "$status" -eq 1 ]
+  has_out 'pair a.md + b.md  into c.md'
+  has_out 'a.md  [num] 30  (dropped-token)'
+  has_out '==== 1 blocking'
+  has_out 'verdict=lossy'
+  lacks_out '2c6c3a09'
+  lacks_out '[sha] 828816d'
+}
+
+@test "15 PAIR POSITIVE CONTROL: the lossless merge of the same sources is clean" {
+  pair_sources
+  printf '%s\n' '---' 'name: c' 'description: drain rule' '---' '' \
+    'The drain runs `--drain-oversized` with a 30 s bound. Landed as 828816d.' > "$MEM/c.md"
+  run "$AUDIT" --pair "$MEM/a.md" "$MEM/b.md" --into "$MEM/c.md"
+  [ "$status" -eq 0 ]
+  has_out '==== 0 blocking'
+  has_out 'verdict=clean'
+}
+
+@test "16 PAIR a dated Superseded line clears the value it names" {
+  pair_sources
+  printf '%s\n' '---' 'name: c' 'description: drain rule' '---' '' \
+    'The drain runs `--drain-oversized` with a 45 s bound. Landed as 828816d.' \
+    'Superseded (2026-09-28): was 30' > "$MEM/c.md"
+  run "$AUDIT" --pair "$MEM/a.md" "$MEM/b.md" --into "$MEM/c.md"
+  [ "$status" -eq 0 ]
+  has_out 'SUPERSEDED (cleared by a dated line) — 1'
+  has_out 'a.md  [num] 30  (superseded)'
+  has_out 'verdict=clean'
+}
+
+@test "17 PAIR a Superseded line with no real date does NOT clear it" {
+  pair_sources
+  printf '%s\n' '---' 'name: c' 'description: drain rule' '---' '' \
+    'The drain runs `--drain-oversized` with a 45 s bound. Landed as 828816d.' \
+    'Superseded (someday): was 30' > "$MEM/c.md"
+  run "$AUDIT" --pair "$MEM/a.md" "$MEM/b.md" --into "$MEM/c.md"
+  [ "$status" -eq 1 ]
+  has_out 'a.md  [num] 30  (dropped-token)'
+  has_out 'verdict=lossy'
+}
+
+@test "18 PAIR bad args exit 2: --pair without --into, --pair with --old, --into alone, a missing file" {
+  pair_sources
+  run "$AUDIT" --pair "$MEM/a.md" "$MEM/b.md"
+  [ "$status" -eq 2 ]
+  has_out '--pair needs --into'
+  run "$AUDIT" --pair "$MEM/a.md" "$MEM/b.md" --into "$MEM/a.md" --old "$MEM/a.md"
+  [ "$status" -eq 2 ]
+  has_out '--pair takes no --old'
+  run "$AUDIT" --into "$MEM/a.md"
+  [ "$status" -eq 2 ]
+  has_out '--into needs --pair'
+  run "$AUDIT" --pair "$MEM/a.md" "$MEM/nope.md" --into "$MEM/a.md"
+  [ "$status" -eq 2 ]
+  has_out 'verdict=non-verdict'
+}
+
+@test "19 outside pair mode --old and --new stay required" {
+  run "$AUDIT" --new "$NEW"
+  [ "$status" -eq 2 ]
+  has_out 'required: --old, --new'
 }
 
