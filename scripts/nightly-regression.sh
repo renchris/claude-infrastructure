@@ -31,6 +31,8 @@
 #   7. mem-neighbours-outcome.py — classes each new-topic neighbour advisory older than 24 h
 #      (kept_distinct / merged / superseded / unresolved) and writes the unresolved pairs for
 #      compact-memory (truememory §3.10 criterion 4). A report, not a gate: RED only if it crashes.
+#   7c. norm-share.py — share of session-index context_text rows indexed in the last 24 h that still
+#      carry non-operator markers (truememory §3.14 gap item 3). RED above 10%; too few rows abstains.
 #
 # ON RED: write a page file to autonomy/pages/ (drainable by the P0-15 SO-5 desk-role consumer) +
 # osascript notification. ALWAYS append a one-line result to autonomy/regression.log.
@@ -673,6 +675,17 @@ regress() {
     run_check "mem-neighbours-outcome" python3 "$SELF_SCRIPTS/mem-neighbours-outcome.py"
   else
     SKIPS+=("mem-neighbours-outcome:no-python3")
+  fi
+  # 7c. the transcript normaliser's OUTPUT (truememory-2026-09-27.md §3.14 gap item 3): the share of
+  # context_text rows indexed in the last 24 h that still carry machinery markers. Exit 1 (RED, so a
+  # page) only on `verdict=regressed`; an unreadable DB or too few rows abstains green, printed in the
+  # capture. Read-only. CC_NIGHTLY_NORM_SHARE stubs it (executed directly), like 7b.
+  if [ -n "${CC_NIGHTLY_NORM_SHARE:-}" ]; then
+    run_check "norm-share" "$CC_NIGHTLY_NORM_SHARE"
+  elif command -v python3 >/dev/null 2>&1; then
+    run_check "norm-share" python3 "$SELF_SCRIPTS/norm-share.py"
+  else
+    SKIPS+=("norm-share:no-python3")
   fi
 
   # ── verdict ──
