@@ -1,0 +1,771 @@
+#!/usr/bin/env python3
+"""cc-memory-search — relevance search over memory topics, the cold tier, lessons and rules hooks.
+
+TrueMemory adoption item #4 (docs/research/truememory-2026-09-27.md §3.4). A derived substrate: an
+in-memory SQLite FTS5 table (`porter unicode61`, the session-index tokenizer convention) is built on
+every call — v1 keeps NO cache — and queried with an injection-safe quoted-OR of the input terms.
+Output is pointer lines only, each carrying its raw bm25 score tagged with its score space, so a
+consumer can threshold it (min-max normalisation, TM's defect, makes that impossible).
+
+    cc-memory-search [--all] [--top N] [--json] [--since YYYY-MM-DD] [--store DIR]...
+                     [--lessons DIR] [--rules FILE]... [--canary] [--stats [--days N]] <terms...>
+
+Default scope: the current project's store (resolved as hooks/lib/memory-index-locate.sh does), the
+`- [` link lines of its archive/*COLD*.md (never PRE-COMPACT snapshots), the repo's docs/lessons, one
+row per hook bullet of both .claude/rules/agent-operating-lessons*.md files, and every
+`type: feedback` topic in EVERY store (gap-2 replay: the rules that answered 3 of 14 queries lived in
+another project's store). `--all` adds every store's topics. --store/--lessons/--rules REPLACE the
+default scope.
+
+Liveness (gap 4): one IDL row per search in a `finally` (hook "cc-memory-search"), one state row in
+$HOME/.claude/state/memory-search.jsonl; --canary checks each active store's newest topic comes back;
+--stats reports the zero-hit share. scripts/idl-expected-fires.tsv compares IDL rows against the
+invocations bash-execution.log records, so a crash before logging pages.
+"""
+
+from __future__ import annotations
+
+import argparse
+import glob
+import json
+import os
+import re
+import sqlite3
+import subprocess
+import sys
+import time
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta, timezone
+from typing import Any
+
+# Column weights for bm25(name+H1, description, body). #5 (docs/research/memory-eval/recall_eval.py)
+# chooses this constant: 10/5/1 and 5/3/1 are both unproven, and CC_MEMORY_SEARCH_WEIGHTS="a,b,c"
+# overrides it so that harness can compare them without an edit.
+BM25_WEIGHTS: tuple[float, float, float] = (10.0, 5.0, 1.0)
+MAX_TERMS = 12
+BODY_CAP = 20000
+DESC_CAP = 120
+CANARY_DAYS = 30
+HOOK = "cc-memory-search"
+
+STOPWORDS = frozenset(
+    "a an the and or of to in on for with is are was were be been it its this that these those from by"
+    " at as not no do does did how what why when where which who whom we our us i me my you your he she"
+    " they them their there here so if then than but into out up down over about can could should would"
+    " will shall may might must has have had having am any all some just also only very more most such"
+    " own same other each both few too via vs".split()
+)
+TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
+LINK_RE = re.compile(r"^- \[([^\]]*)\]\(([^)]*)\)\s*(?:[—–-]+\s*)?(.*)$")
+TICK_RE = re.compile(r"^- `([^`]+)`\s*(?:[—–-]+\s*)?(.*)$")
+
+
+@dataclass
+class Doc:
+    path: str
+    name: str
+    description: str
+    body: str
+    store: str
+    day: date | None = None
+    extra_name: str = ""
+
+
+@dataclass
+class Scope:
+    label: str
+    stores: list[str] = field(default_factory=list)
+    lessons: list[str] = field(default_factory=list)
+    rules: list[str] = field(default_factory=list)
+    feedback_sweep: bool = False
+    all_stores: bool = False
+
+
+# ── frontmatter ─────────────────────────────────────────────────────────────────────────────────
+
+
+def parse_frontmatter(text: str) -> dict[str, str]:
+    """A YAML subset: top-level `k: v`, plus one nested level (`metadata:` → `metadata.k`)."""
+    out: dict[str, str] = {}
+    lines = text.split("\n")
+    if not lines or lines[0].strip() != "---":
+        return out
+    parent = ""
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        m = re.match(r"^(\s*)([A-Za-z_][\w-]*):\s*(.*)$", line)
+        if not m:
+            continue
+        indent, key, val = m.group(1), m.group(2), m.group(3).strip()
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+            val = val[1:-1]
+        if not indent:
+            parent = key if not val else ""
+            out[key] = val
+        elif parent:
+            out[f"{parent}.{key}"] = val
+    return out
+
+
+def body_of(text: str) -> str:
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        if end != -1:
+            return text[end + 4 :]
+    return text
+
+
+def h1_of(text: str) -> str:
+    m = re.search(r"^#\s+(.+)$", text, re.M)
+    return m.group(1).strip() if m else ""
+
+
+def parse_day(value: str) -> date | None:
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})", value or "")
+    if not m:
+        return None
+    try:
+        return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except ValueError:
+        return None
+
+
+def mtime_day(path: str) -> date | None:
+    try:
+        return datetime.fromtimestamp(os.stat(path).st_mtime, tz=timezone.utc).date()
+    except OSError:
+        return None
+
+
+def read_text(path: str) -> str | None:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
+# ── scope resolution ────────────────────────────────────────────────────────────────────────────
+
+
+def _git(cwd: str, *args: str) -> str:
+    try:
+        r = subprocess.run(
+            ["git", *args], cwd=cwd, capture_output=True, text=True, timeout=10
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def config_dir() -> str:
+    return os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(
+        os.path.expanduser("~"), ".claude"
+    )
+
+
+def current_store(cwd: str) -> str | None:
+    """The store whose MEMORY.md this session auto-loads — hooks/lib/memory-index-locate.sh's rule:
+    MEMORY_INDEX_PATH wins; else the MAIN worktree root (via the git common dir), then the cwd, each
+    tried in its logical and physical spelling, slugged with `/` and `.` folded to `-`."""
+    override = os.environ.get("MEMORY_INDEX_PATH")
+    if override:
+        return os.path.realpath(os.path.dirname(override))
+    cfg = config_dir()
+    root = ""
+    gcd = _git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    if gcd:
+        root = os.path.dirname(gcd)
+    for cand in (root, cwd):
+        if not cand:
+            continue
+        for base in (cand, os.path.realpath(cand)):
+            store = os.path.join(
+                cfg, "projects", base.replace("/", "-").replace(".", "-"), "memory"
+            )
+            if os.path.isfile(os.path.join(store, "MEMORY.md")):
+                return os.path.realpath(store)
+    return None
+
+
+def all_store_dirs() -> list[str]:
+    roots = {
+        os.path.join(os.path.expanduser("~"), ".claude", "projects"),
+        os.path.join(config_dir(), "projects"),
+    }
+    seen: dict[str, str] = {}
+    for root in sorted(roots):
+        for d in sorted(glob.glob(os.path.join(root, "*", "memory"))):
+            if os.path.isdir(d):
+                seen.setdefault(os.path.realpath(d), d)
+    return sorted(seen)
+
+
+def store_label(store: str) -> str:
+    store = store.rstrip("/")
+    base = os.path.basename(store)
+    return os.path.basename(os.path.dirname(store)) if base == "memory" else base
+
+
+def repo_root(cwd: str) -> str:
+    return _git(cwd, "rev-parse", "--show-toplevel") or cwd
+
+
+# ── corpus ──────────────────────────────────────────────────────────────────────────────────────
+
+
+def topic_docs(store: str, only_feedback: bool = False) -> list[Doc]:
+    docs: list[Doc] = []
+    label = store_label(store)
+    for p in sorted(glob.glob(os.path.join(store, "*.md"))):
+        if os.path.basename(p) == "MEMORY.md":
+            continue
+        if only_feedback:
+            try:
+                with open(p, encoding="utf-8", errors="replace") as fh:
+                    head = fh.read(4096)
+            except OSError:
+                continue
+            if not re.search(r"^\s*type:\s*[\"']?feedback\b", head, re.M):
+                continue
+        text = read_text(p)
+        if text is None:
+            continue
+        fm = parse_frontmatter(text)
+        if only_feedback and (fm.get("metadata.type") or fm.get("type")) != "feedback":
+            continue
+        h1 = h1_of(text)
+        name = fm.get("name") or h1 or os.path.splitext(os.path.basename(p))[0]
+        day = parse_day(
+            fm.get("metadata.modified") or fm.get("modified", "")
+        ) or mtime_day(p)
+        docs.append(
+            Doc(
+                p,
+                name,
+                fm.get("description", ""),
+                body_of(text)[:BODY_CAP],
+                label,
+                day,
+                h1,
+            )
+        )
+    return docs
+
+
+def link_row(
+    line: str, base: str, container: str, lineno: int, label: str
+) -> Doc | None:
+    m = LINK_RE.match(line)
+    if m:
+        title, target, rest = m.group(1), m.group(2).strip(), m.group(3).strip()
+        path = f"{container}:{lineno}"
+        if target and target != ".":
+            resolved = os.path.normpath(os.path.join(base, target))
+            if os.path.exists(resolved):
+                path = resolved
+        day = (
+            mtime_day(path) if path != f"{container}:{lineno}" else mtime_day(container)
+        )
+        return Doc(path, title, rest, line, label, day)
+    m = TICK_RE.match(line)
+    if m:
+        return Doc(
+            f"{container}:{lineno}",
+            m.group(1),
+            m.group(2).strip(),
+            line,
+            label,
+            mtime_day(container),
+        )
+    return None
+
+
+def cold_docs(store: str) -> list[Doc]:
+    docs: list[Doc] = []
+    label = store_label(store) + "/cold"
+    for p in sorted(glob.glob(os.path.join(store, "archive", "*COLD*.md"))):
+        if "PRE-COMPACT" in os.path.basename(p):
+            continue
+        text = read_text(p)
+        if text is None:
+            continue
+        for i, line in enumerate(text.split("\n"), 1):
+            if not line.startswith("- ["):
+                continue
+            m = LINK_RE.match(line)
+            if not m:
+                continue
+            # Cold link lines point at topic files that still sit in the store root.
+            target = m.group(2).strip()
+            base = (
+                store
+                if os.path.exists(os.path.join(store, target))
+                else os.path.dirname(p)
+            )
+            d = link_row(line, base, p, i, label)
+            if d:
+                docs.append(d)
+    return docs
+
+
+def lesson_docs(lessons: str) -> list[Doc]:
+    docs: list[Doc] = []
+    for p in sorted(glob.glob(os.path.join(lessons, "*.md"))):
+        text = read_text(p)
+        if text is None:
+            continue
+        fm = parse_frontmatter(text)
+        body = body_of(text)
+        h1 = h1_of(body)
+        name = fm.get("name") or h1 or os.path.splitext(os.path.basename(p))[0]
+        desc = fm.get("description", "")
+        if not desc:
+            paras = [
+                x.strip()
+                for x in re.split(r"\n\s*\n", body)
+                if x.strip() and not x.lstrip().startswith("#")
+            ]
+            desc = re.sub(r"\s+", " ", paras[0]) if paras else ""
+        day = parse_day(
+            fm.get("metadata.modified") or fm.get("modified", "")
+        ) or mtime_day(p)
+        docs.append(Doc(p, name, desc, body[:BODY_CAP], "lessons", day))
+    return docs
+
+
+def rules_docs(rules: str) -> list[Doc]:
+    text = read_text(rules)
+    if text is None:
+        return []
+    docs: list[Doc] = []
+    base = os.path.dirname(rules)
+    for i, line in enumerate(text.split("\n"), 1):
+        if not line.startswith("- "):
+            continue
+        d = link_row(line, base, rules, i, "rules")
+        if d is None:
+            d = Doc(
+                f"{rules}:{i}", line[2:60], line[2:], line, "rules", mtime_day(rules)
+            )
+        docs.append(d)
+    return docs
+
+
+def resolve_scope(args: argparse.Namespace, cwd: str) -> Scope:
+    if args.store or args.lessons or args.rules:
+        for s in args.store:
+            if not os.path.isdir(s):
+                raise FileNotFoundError(f"--store {s}: not a directory")
+        return Scope(
+            "custom",
+            list(args.store),
+            [args.lessons] if args.lessons else [],
+            list(args.rules),
+        )
+    root = repo_root(cwd)
+    rules = [
+        os.path.join(root, ".claude", "rules", "agent-operating-lessons.md"),
+        os.path.join(
+            root, ".claude", "rules", "agent-operating-lessons-situational.md"
+        ),
+    ]
+    lessons = [os.path.join(root, "docs", "lessons")]
+    if args.all:
+        return Scope("all", all_store_dirs(), lessons, rules, all_stores=True)
+    store = current_store(cwd)
+    return Scope(
+        "project", [store] if store else [], lessons, rules, feedback_sweep=True
+    )
+
+
+def build_corpus(scope: Scope) -> list[Doc]:
+    docs: list[Doc] = []
+    for s in scope.stores:
+        docs += topic_docs(s)
+        docs += cold_docs(s)
+    for ldir in scope.lessons:
+        docs += lesson_docs(ldir)
+    for r in scope.rules:
+        docs += rules_docs(r)
+    if scope.feedback_sweep:
+        mine = {os.path.realpath(s) for s in scope.stores}
+        for s in all_store_dirs():
+            if s not in mine:
+                docs += topic_docs(s, only_feedback=True)
+    # One row per real file; and per (name, description), since many worktree slugs hold copies of
+    # the same topic and five copies of one rule would fill the top 5. A link line (a cold-tier or
+    # rules hook) whose target is already a row is MERGED into it rather than dropped: every cold
+    # link measured points at a topic still in the store, so dropping would delete the tier, while
+    # its hook wording is exactly the extra vocabulary the tier exists to add.
+    out: list[Doc] = []
+    by_path: dict[str, Doc] = {}
+    seen_key: set[tuple[str, str]] = set()
+    for d in docs:
+        rp = os.path.realpath(d.path) if os.path.exists(d.path) else d.path
+        if rp in by_path:
+            host = by_path[rp]
+            host.extra_name = f"{host.extra_name} {d.name}".strip()
+            host.body = f"{host.body}\n{d.description}"
+            continue
+        key = (d.name, d.description)
+        if key in seen_key:
+            continue
+        by_path[rp] = d
+        seen_key.add(key)
+        out.append(d)
+    return out
+
+
+# ── query ───────────────────────────────────────────────────────────────────────────────────────
+
+
+def weights() -> tuple[float, float, float]:
+    raw = os.environ.get("CC_MEMORY_SEARCH_WEIGHTS", "")
+    if raw:
+        try:
+            parts = tuple(float(x) for x in raw.split(","))
+        except ValueError:
+            parts = ()
+        if len(parts) == 3:
+            return (parts[0], parts[1], parts[2])
+        print(
+            f"cc-memory-search: ignoring CC_MEMORY_SEARCH_WEIGHTS={raw!r} (want a,b,c)",
+            file=sys.stderr,
+        )
+    return BM25_WEIGHTS
+
+
+def query_terms(words: list[str]) -> list[str]:
+    """Lowercased alphanumeric tokens minus stopwords, de-duplicated in order. Only [^\\W_] survives,
+    so a term can never carry `"`, `*`, `(`, `:` or `-` into the FTS5 expression."""
+    out: list[str] = []
+    for t in TOKEN_RE.findall(" ".join(words).lower()):
+        if len(t) < 2 or t in STOPWORDS or t in out:
+            continue
+        out.append(t)
+    return out
+
+
+def fts_or(terms: list[str]) -> str:
+    return " OR ".join('"' + t.replace('"', '""') + '"' for t in terms)
+
+
+def build_db(docs: list[Doc]) -> sqlite3.Connection:
+    db = sqlite3.connect(":memory:")
+    db.execute(
+        "CREATE VIRTUAL TABLE d USING fts5(name, descr, body, tokenize='porter unicode61 remove_diacritics 1')"
+    )
+    db.executemany(
+        "INSERT INTO d(rowid, name, descr, body) VALUES (?,?,?,?)",
+        [
+            (i, f"{x.name} {x.extra_name}".strip(), x.description, x.body)
+            for i, x in enumerate(docs)
+        ],
+    )
+    return db
+
+
+def cap_terms(db: sqlite3.Connection, terms: list[str]) -> list[str]:
+    """No blind cap (gap 2: truncating a verbatim prompt at 12 dropped a gold file from rank 4 to 15).
+    Over MAX_TERMS, keep the rarest by document frequency; a term matching nothing is dropped first."""
+    if len(terms) <= MAX_TERMS:
+        return terms
+    df = {
+        t: db.execute(
+            "SELECT count(*) FROM d WHERE d MATCH ?", (fts_or([t]),)
+        ).fetchone()[0]
+        for t in terms
+    }
+    ranked = sorted(
+        (t for t in terms if df[t] > 0), key=lambda t: (df[t], terms.index(t))
+    )
+    keep = set(ranked[:MAX_TERMS])
+    return [t for t in terms if t in keep]
+
+
+def search(docs: list[Doc], terms: list[str], top: int) -> list[tuple[Doc, float]]:
+    if not docs or not terms:
+        return []
+    db = build_db(docs)
+    terms = cap_terms(db, terms)
+    if not terms:
+        return []
+    a, b, c = weights()
+    rows = db.execute(
+        "SELECT rowid, bm25(d, ?, ?, ?) AS s FROM d WHERE d MATCH ? ORDER BY s LIMIT ?",
+        (a, b, c, fts_or(terms), top),
+    ).fetchall()
+    return [(docs[r[0]], float(r[1])) for r in rows]
+
+
+# ── logging ─────────────────────────────────────────────────────────────────────────────────────
+
+
+def _utc() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _append(path: str, row: dict[str, Any]) -> None:
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row) + "\n")
+    except Exception:  # noqa: BLE001 — logging never changes the exit code or the output
+        pass
+
+
+def state_log() -> str:
+    return os.path.join(
+        os.path.expanduser("~"), ".claude", "state", "memory-search.jsonl"
+    )
+
+
+def idl_log() -> str:
+    return os.environ.get("CC_IDL") or os.path.join(
+        os.path.expanduser("~"), ".claude", "autonomy", "idl.jsonl"
+    )
+
+
+# ── modes ───────────────────────────────────────────────────────────────────────────────────────
+
+
+def emit(hits: list[tuple[Doc, float]], as_json: bool) -> None:
+    if as_json:
+        rows = [
+            {
+                "path": d.path,
+                "name": d.name,
+                "description": d.description,
+                "store": d.store,
+                "score": round(s, 4),
+                "score_space": "bm25",
+            }
+            for d, s in hits
+        ]
+        print(json.dumps(rows, indent=1))
+        return
+    for d, s in hits:
+        desc = re.sub(r"\s+", " ", d.description).strip()
+        if len(desc) > DESC_CAP:
+            desc = desc[: DESC_CAP - 1] + "…"
+        print(f"{s:.2f} [bm25 {d.store}] {d.path} — {d.name}: {desc}")
+
+
+def run_canary(args: argparse.Namespace) -> int:
+    stores = list(args.store) or all_store_dirs()
+    cutoff = time.time() - CANARY_DAYS * 86400
+    n = miss = 0
+    for s in stores:
+        topics = [
+            p
+            for p in glob.glob(os.path.join(s, "*.md"))
+            if os.path.basename(p) != "MEMORY.md"
+        ]
+        dated = [(os.stat(p).st_mtime, p) for p in topics if os.path.isfile(p)]
+        if not dated or max(dated)[0] < cutoff:
+            continue
+        newest = max(dated)[1]
+        fm = parse_frontmatter(read_text(newest) or "")
+        name = fm.get("name") or os.path.splitext(os.path.basename(newest))[0]
+        t0 = time.monotonic()
+        hits = search(topic_docs(s) + cold_docs(s), query_terms([name]), args.top)
+        rank = next(
+            (
+                i
+                for i, (d, _) in enumerate(hits, 1)
+                if os.path.realpath(d.path) == os.path.realpath(newest)
+            ),
+            0,
+        )
+        n += 1
+        miss += rank == 0
+        print(f"CANARY store={store_label(s)} rank={rank or 'miss'}")
+        _append(
+            state_log(),
+            {
+                "ts": _utc(),
+                "terms_n": len(query_terms([name])),
+                "hits": len(hits),
+                "top_path": hits[0][0].path if hits else "",
+                "scope": "canary",
+                "reason": "canary",
+                "dur_ms": int((time.monotonic() - t0) * 1000),
+            },
+        )
+    print(f"CANARY-VERDICT {'fail' if miss else 'ok'} stores={n} miss={miss}")
+    return 1 if miss else 0
+
+
+def run_stats(days: int) -> int:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    total = zero = 0
+    text = read_text(state_log()) or ""
+    for line in text.splitlines():
+        try:
+            row = json.loads(line)
+            if not isinstance(row, dict):
+                continue
+            ts = datetime.strptime(
+                str(row.get("ts", "")), "%Y-%m-%dT%H:%M:%SZ"
+            ).replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError, AttributeError):
+            continue
+        if row.get("reason") == "canary" or ts < cutoff:
+            continue
+        total += 1
+        zero += row.get("hits") == 0 and row.get("reason") == "zero-hit"
+    share = zero / total if total else 0.0
+    verdict = "unknown" if total < 5 else ("high" if share > 0.5 else "ok")
+    print(f"invocations={total} zero-hit={zero} share={share:.2f} days={days}")
+    print(f"ZERO-HIT-VERDICT {verdict}")
+    return 0
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        prog="cc-memory-search", description=__doc__.split("\n")[0] if __doc__ else None
+    )
+    p.add_argument(
+        "--all",
+        action="store_true",
+        help="search every store, each hit labelled with its store",
+    )
+    p.add_argument("--top", type=int, default=5)
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--since", help="only documents modified on/after YYYY-MM-DD")
+    p.add_argument(
+        "--store",
+        action="append",
+        default=[],
+        help="a memory store dir (replaces the default scope)",
+    )
+    p.add_argument("--lessons", help="a lessons dir (replaces the default scope)")
+    p.add_argument(
+        "--rules",
+        action="append",
+        default=[],
+        help="a rules file (replaces the default scope)",
+    )
+    p.add_argument(
+        "--canary",
+        action="store_true",
+        help="known-answer check: each active store's newest topic",
+    )
+    p.add_argument(
+        "--stats",
+        action="store_true",
+        help="invocations and zero-hit share from the state log",
+    )
+    p.add_argument("--days", type=int, default=7)
+    p.add_argument("terms", nargs="*")
+    # A verbatim prompt carries words like `-f` or `-kitty`; an unknown dash-word is a TERM, never a
+    # usage error (query_terms strips the dash, so it cannot become FTS5 NOT syntax either).
+    args, extra = p.parse_known_args(argv)
+    args.terms = list(args.terms) + extra
+    return args
+
+
+def main(argv: list[str]) -> int:
+    try:
+        args = parse_args(argv)
+    except SystemExit as exc:
+        if exc.code not in (
+            0,
+            None,
+        ):  # a usage error is still an invocation bash-execution.log counts
+            _append(
+                idl_log(),
+                {
+                    "ts": _utc(),
+                    "hook": HOOK,
+                    "sid": os.environ.get("CLAUDE_SESSION_ID") or "?",
+                    "disposition": "failed",
+                    "reason": "exception:usage",
+                    "hits": 0,
+                    "scope": "?",
+                    "dur_ms": 0,
+                },
+            )
+        raise
+    if args.stats:
+        return run_stats(args.days)
+    if args.canary:
+        return run_canary(args)
+    t0 = time.monotonic()
+    disposition, reason, scope_label, hits_n, top_path, terms_n = (
+        "failed",
+        "exception:unknown",
+        "?",
+        0,
+        "",
+        0,
+    )
+    try:
+        terms = query_terms(args.terms)
+        terms_n = len(terms)
+        since = parse_day(args.since) if args.since else None
+        if args.since and since is None:
+            raise ValueError(f"--since {args.since!r}: want YYYY-MM-DD")
+        scope = resolve_scope(args, os.getcwd())
+        scope_label = scope.label
+        if not terms:
+            print(
+                "cc-memory-search: no search terms after stopword removal",
+                file=sys.stderr,
+            )
+            disposition, reason = "abstained", "no-terms"
+            return 2
+        docs = build_corpus(scope)
+        if since is not None:
+            docs = [d for d in docs if d.day is not None and d.day >= since]
+        hits = search(docs, terms, args.top)
+        hits_n = len(hits)
+        top_path = hits[0][0].path if hits else ""
+        if hits:
+            disposition, reason = "fired", "hits"
+        else:
+            disposition, reason = "abstained", "zero-hit"
+            if not args.json:
+                print(
+                    f"no match ({len(docs)} documents, scope={scope_label})",
+                    file=sys.stderr,
+                )
+        emit(hits, args.json)
+        return 0
+    except Exception as exc:  # noqa: BLE001 — recorded as failed, then reported
+        disposition, reason = "failed", f"exception:{type(exc).__name__}"
+        print(f"cc-memory-search: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        dur = int((time.monotonic() - t0) * 1000)
+        _append(
+            idl_log(),
+            {
+                "ts": _utc(),
+                "hook": HOOK,
+                "sid": os.environ.get("CLAUDE_SESSION_ID") or "?",
+                "disposition": disposition,
+                "reason": reason,
+                "hits": hits_n,
+                "scope": scope_label,
+                "dur_ms": dur,
+            },
+        )
+        _append(
+            state_log(),
+            {
+                "ts": _utc(),
+                "terms_n": terms_n,
+                "hits": hits_n,
+                "top_path": top_path,
+                "scope": scope_label,
+                "reason": reason,
+                "dur_ms": dur,
+            },
+        )
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
