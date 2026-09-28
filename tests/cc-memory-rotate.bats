@@ -945,6 +945,81 @@ mkageonly() {
   if grep -qF -- '(a01.md)' "$d/MEMORY.md"; then return 1; fi       # oldest-first, exactly as before
 }
 
+# ── READ PROTECTION (TrueMemory #15) ─────────────────────────────────────────────────────────
+# The summary bin/cc-memory-read-ledger writes, keyed by the dir holding memory/ (mkmem <name> ⇒
+# store <name>). Two equal-rank, equal-age entries are the two OLDEST, so age alone takes both
+# first: the read one surviving while its unread peer goes is the whole protection, and each
+# degraded state (stale, too old a read, absent) is pinned by the read one going too.
+# mksummary <store> <topic> <days-ago> → exports CCMR_READ_SUMMARY
+mksummary() {
+  CCMR_READ_SUMMARY="$BATS_TEST_TMPDIR/read-summary.tsv"; export CCMR_READ_SUMMARY
+  printf '#store\ttopic\tlast_read\treads\n%s\t%s\t%s\t1\n' \
+    "$1" "$2" "$(date -u -v-"$3"d +%Y-%m-%dT%H:%M:%SZ)" >"$CCMR_READ_SUMMARY"
+}
+mkreadpair() { # <name> → memdir with read-live.md + unread.md, both the oldest eligible
+  local d
+  d="$(mkmem "$1")"
+  addentry "$d" read-live.md project old "a rule a peer session read last week $(pad 100)"
+  addentry "$d" unread.md project old "a rule nobody read $(pad 100)"
+  touch -t 202512011200 "$d/read-live.md" "$d/unread.md"
+  mkbulk "$d"
+  printf '%s' "$d"
+}
+
+@test "reads: a read entry is kept — a non-author read within 60 days ranks it last, its unread peer rotates" {
+  d="$(mkreadpair read1)"; mksummary read1 read-live.md 5
+  run "$SCRIPT" "$d/MEMORY.md"
+  [ "$status" -eq 0 ]
+  has "$output" 'verdict=rotated'
+  has "$output" 'reads=ok'
+  grep -qF -- '(read-live.md)' "$d/MEMORY.md"
+  if grep -qF -- '(unread.md)' "$d/MEMORY.md"; then return 1; fi
+}
+
+@test "reads: a read older than 60 days protects nothing" {
+  d="$(mkreadpair read2)"; mksummary read2 read-live.md 90
+  run "$SCRIPT" "$d/MEMORY.md"
+  has "$output" 'reads=ok'
+  if grep -qF -- '(read-live.md)' "$d/MEMORY.md"; then return 1; fi
+}
+
+@test "reads: a read in ANOTHER store protects nothing here" {
+  d="$(mkreadpair read3)"; mksummary some-other-store read-live.md 5
+  run "$SCRIPT" "$d/MEMORY.md"
+  has "$output" 'reads=ok'
+  if grep -qF -- '(read-live.md)' "$d/MEMORY.md"; then return 1; fi
+}
+
+@test "reads: a summary older than ~3 h applies no protection and says reads=stale" {
+  d="$(mkreadpair read4)"; mksummary read4 read-live.md 5
+  touch -t "$(date -v-5H +%Y%m%d%H%M)" "$CCMR_READ_SUMMARY"
+  run "$SCRIPT" "$d/MEMORY.md"
+  has "$output" 'verdict=rotated'
+  has "$output" 'reads=stale'
+  if grep -qF -- '(read-live.md)' "$d/MEMORY.md"; then return 1; fi
+}
+
+@test "reads: no summary at all degrades to today's order and says reads=absent" {
+  d="$(mkreadpair read5)"
+  CCMR_READ_SUMMARY="$BATS_TEST_TMPDIR/absent.tsv" run "$SCRIPT" "$d/MEMORY.md"
+  has "$output" 'verdict=rotated'
+  has "$output" 'reads=absent'
+  if grep -qF -- '(read-live.md)' "$d/MEMORY.md"; then return 1; fi
+}
+
+@test "reads: a read never rescues a superseded_by: entry (protection never overrides a declared death)" {
+  d="$(mkmem read6)"
+  mkbulk "$d"
+  addentry "$d" dead.md project old "a verdict its own heir replaced $(pad 100)"
+  addentry "$d" tailpad.md project old "keeps dead.md out of the tail guard $(pad 100)"
+  printf -- '---\nname: dead\nsuperseded_by: heir-rule\ndescription: d\nmetadata:\n  type: project\n---\nbody\n' >"$d/dead.md"
+  touch -t 202602011200 "$d/dead.md"
+  mksummary read6 dead.md 5
+  run "$SCRIPT" "$d/MEMORY.md"
+  has "$output" 'reads=ok'
+  if grep -qF -- '(dead.md)' "$d/MEMORY.md"; then return 1; fi
+}
+
 # ── CITATION ON DEMOTION (Phase 5 item 5) ────────────────────────────────────────────────────
 #
 # A routed line keeps its reader because both surfaces auto-load. A COLD one does not, so the

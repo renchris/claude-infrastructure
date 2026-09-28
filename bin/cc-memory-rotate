@@ -102,11 +102,15 @@
 # corpus by construction — which is correct: it is the sanctioned way to MARK an entry dead, not a
 # classifier guessing which ones are.
 #
-# ⚠️ NOT IMPLEMENTED, AND NAMED RATHER THAN FAKED: the plan's fourth criterion, "zero net reads AND
-# not HOT". No read ledger exists — nothing in this repo records which memory files a session read,
-# and the only trace is per-session transcript Read records across four account stores, which a
-# per-prompt actuator cannot compute. A rank derived from a store that does not exist would be
-# arithmetic standing in for a measurement.
+# READS ARE PROTECTION ONLY (TrueMemory #15, 2026-09-28). The plan's fourth criterion, "zero net
+# reads AND not HOT", needed a store of which memory files sessions read, and a per-prompt actuator
+# cannot compute that from four accounts' transcripts. bin/cc-memory-read-ledger now does, hourly
+# from the session-index sweep (author and bulk readers excluded), and leaves a per-topic summary
+# TSV. durability_rank reads it in ONE direction: a topic a non-author read within 60 days ranks 2.
+# A read never lowers a rank and never selects anything for eviction — "unread" is not evidence of
+# dead, only the absence of one kind of evidence of live. An explicit `superseded_by:` still wins.
+# A missing summary, or one older than ~3 h (the ledger stopped running), applies no protection at
+# all, and the verdict says which: `reads=absent|stale|ok`.
 #
 # ── SAFETY SHAPE ─────────────────────────────────────────────────────────────────────────────
 # COLD is written idempotently (a line already present is not duplicated) and VERIFIED
@@ -1251,7 +1255,36 @@ build_cited_set() {
   return 0
 }
 
-# durability_rank <topicfile> → 0 (declared dead) | 1 (no consumer) | 2 (live operating rule)
+# load_read_protection → sets READ_LIST (this store's topics a non-author read within
+# READ_WINDOW_DAYS) and READS_STATE (absent | stale | ok). The store key is the name of the dir
+# holding memory/, which is how bin/cc-memory-read-ledger keys it. awk, not an `IFS=<tab> read`:
+# the summary is read by field number, so the TSV collapse class cannot shift a column.
+READ_SUMMARY="${CCMR_READ_SUMMARY:-$HOME/.claude/state/memory-read-summary.tsv}"
+READ_MAX_AGE_S="${CCMR_READ_MAX_AGE_S:-10800}"
+READ_WINDOW_DAYS=60
+READ_LIST=""
+READS_STATE=absent
+load_read_protection() {
+  local m now cutoff store
+  READ_LIST=""; READS_STATE=absent
+  [ -r "$READ_SUMMARY" ] || return 0
+  now=$(date +%s)
+  m=$(stat -f %m "$READ_SUMMARY" 2>/dev/null || stat -c %Y "$READ_SUMMARY" 2>/dev/null || echo 0)
+  case "$m" in ''|*[!0-9]*) m=0 ;; esac
+  case "$READ_MAX_AGE_S" in ''|*[!0-9]*) READ_MAX_AGE_S=10800 ;; esac
+  if [ $(( now - m )) -gt "$READ_MAX_AGE_S" ]; then READS_STATE=stale; return 0; fi
+  cutoff=$(( now - READ_WINDOW_DAYS * 86400 ))
+  cutoff=$(date -u -r "$cutoff" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+           || date -u -d "@$cutoff" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)
+  if [ -z "$cutoff" ]; then READS_STATE=stale; return 0; fi
+  store=$(basename "$(dirname "$DIR")")
+  READ_LIST=$(awk -F'\t' -v s="$store" -v c="$cutoff" '!/^#/ && $1 == s && $3 >= c { print $2 }' \
+              "$READ_SUMMARY" 2>/dev/null | LC_ALL=C sort -u || true)
+  READS_STATE=ok
+}
+
+# durability_rank <topicfile> → 0 (declared dead) | 1 (no consumer) | 2 (live operating rule,
+# or read by a non-author within READ_WINDOW_DAYS — protection only, see the header)
 durability_rank() {
   local f="$1" sb
   if [ -z "$f" ]; then echo 1; return 0; fi
@@ -1264,6 +1297,13 @@ durability_rank() {
   fi
   case "
 $CITED_LIST
+" in
+    *"
+$f
+"*) echo 2; return 0 ;;
+  esac
+  case "
+$READ_LIST
 " in
     *"
 $f
@@ -1401,6 +1441,7 @@ while :; do
   # because stage 2 re-judges entries this loop classified as kept and must rank them by the same
   # measurement rather than a second, later one.
   build_cited_set "$(printf '%s' "$ENTRY_FILES" | tr "$TAB" '\n')"
+  load_read_protection
   # Same cadence and the same reason: the hub count is read by protect_reason for the stage-1
   # sweep AND again for the stage-2 re-judgment, so it is measured once per ATTEMPT — a retry
   # (a sibling appended between our read and our write) re-reads the corpus rather than reusing
@@ -1607,8 +1648,8 @@ EOF
   fi
 
   if [ "$DRYRUN" -eq 1 ]; then
-    printf 'verdict=dry-run moved=%s stage2=%s before=%s after_projected=%s lines_before=%s lines_projected=%s\n' \
-      "$MOVED" "$STAGE2" "$SIZE" "$PROJ" "$NLINES" "$PROJ_L"
+    printf 'verdict=dry-run moved=%s stage2=%s before=%s after_projected=%s lines_before=%s lines_projected=%s reads=%s\n' \
+      "$MOVED" "$STAGE2" "$SIZE" "$PROJ" "$NLINES" "$PROJ_L" "$READS_STATE"
     exit 0
   fi
 
@@ -1807,9 +1848,9 @@ ${LINES[$li]}"
   # `live=` is the alarm this rotation can raise, so its quiet value must be 0: it counts entries
   # that shipped code cites BY NAME and that had to be demoted anyway because nothing cheaper
   # reached TARGET. A `live=0` says the ordering did its job; any other value names a real cost.
-  printf 'verdict=rotated moved=%s stage2=%s before=%s after=%s lines_before=%s lines_after=%s cold=%s routed=%s dest=%s durability=%s live=%s cited=%s%s%s\n' \
+  printf 'verdict=rotated moved=%s stage2=%s before=%s after=%s lines_before=%s lines_after=%s cold=%s routed=%s dest=%s durability=%s live=%s cited=%s reads=%s%s%s\n' \
     "$MOVED" "$STAGE2" "$SIZE" "$NEWSZ" "$NLINES" "$NEWLINES" "$COLD_DISP" "$ROUTED" "$R_DESTS" \
-    "$CITE_SCAN" "${MOVED_LIVE:-0}" "${CITED_N:-0}" \
+    "$CITE_SCAN" "${MOVED_LIVE:-0}" "${CITED_N:-0}" "$READS_STATE" \
     "${ROUTE_NOTE:+ route=$ROUTE_NOTE}" "${CITE_NOTE:+ cite=$CITE_NOTE}"
   printf '%s verdict=rotated moved=%s stage2=%s routed=%s before=%s after=%s attempt=%s\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$MOVED" "$STAGE2" "$ROUTED" "$SIZE" "$NEWSZ" "$ATTEMPT" >>"$DIR/archive/.rotate.log" 2>/dev/null || true

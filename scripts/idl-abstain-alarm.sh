@@ -148,6 +148,10 @@ _reap_keep_dormant=(claimer-live owned-wait)
 # norm-import-failed joined with session-index:norm (truememory §3.14, X3): the session index could not
 # import hooks/lib/transcript_norm.py and fell back to the pre-fix filter that let 64% machinery into
 # context_text. The index still works, so nothing else notices; `lib` is the reached guard.
+# no-transcript-roots, state-unwritable, internal-error, ledger-cli-missing and ledger-cli-failed
+# joined with session-index-sweep:read-ledger (truememory §3.15 #15, X3): the hourly read ledger found
+# no transcript root, could not write its state, threw, did not resolve, or returned no verdict line —
+# in each case no transcript was observed. run-in-progress stays out: another run did the work.
 _default_blind=(no-jq no-session-id no-stdin no-telemetry stale-telemetry \
                 no-transcript-path transcript-missing not-a-repo no-cwd no-assistant-text \
                 goal-unreadable \
@@ -158,6 +162,7 @@ _default_blind=(no-jq no-session-id no-stdin no-telemetry stale-telemetry \
                 no-prompt classify-error \
                 neighbour-lib-missing \
                 norm-import-failed \
+                no-transcript-roots state-unwritable internal-error ledger-cli-missing ledger-cli-failed \
                 "${_reap_keep_blind[@]}")
 if [ -n "${CC_ABSTAIN_BLIND_REASONS:-}" ]; then
   # shellcheck disable=SC2206  # intentional word-split of the override list
@@ -242,6 +247,19 @@ denom_sessionend_indexed() {
   cut="$(date -r "$cutoff" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -d "@$cutoff" '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
   [ -n "$cut" ] || { printf 'cannot render the cutoff epoch %s as a local time' "$cutoff"; return 1; }
   awk -v c="$cut" 'index($0, "] Indexed session ") && substr($0, 2, 19) >= c { n++ } END { print n + 0 }' "$log"
+}
+
+# Hourly SWEEP-VERDICT lines in the same log since the cutoff: the fts-parity block's own damped
+# verdict (hooks/session-index-sweep.sh), written by the sweep at the same 60-minute cadence as the
+# read-ledger block, so each line is one tick on which a read-ledger run was due. The read-ledger
+# block never writes it (X5); its own lines say `Read ledger:`. Same local-time stamp as above.
+denom_sweep_verdicts() {
+  local cutoff="$1" log cut
+  log="${CC_EXPECTED_SESSION_INDEX_LOG:-${SESSION_INDEX_LOG:-$HOME/.claude/logs/session-index.log}}"
+  [ -r "$log" ] || { printf 'no readable session-index log at %s' "$log"; return 1; }
+  cut="$(date -r "$cutoff" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -d "@$cutoff" '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+  [ -n "$cut" ] || { printf 'cannot render the cutoff epoch %s as a local time' "$cutoff"; return 1; }
+  awk -v c="$cut" 'index($0, "] SWEEP-VERDICT ") && substr($0, 2, 19) >= c { n++ } END { print n + 0 }' "$log"
 }
 
 # Fires memory-nudge SHOULD have made: per session counter, floor(count / interval), summed over

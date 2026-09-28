@@ -477,3 +477,24 @@ indexed_lines() { # <log> <n> — n SessionEnd lines a minute before NOW, in the
       CC_ABSTAIN_CENSUS=0 CC_EXPECTED_SESSION_INDEX_LOG="$BATS_TEST_TMPDIR/none" "$S" --run
   printf '%s' "$output" | grep -q 'cc-memory-search .*denominator: UNKNOWN (no readable bash-execution log'
 }
+
+@test "registry: the read ledger's denominator counts SWEEP-VERDICT lines, never its own 'Read ledger:' lines (X5)" {
+  local si="$BATS_TEST_TMPDIR/si.log" lt i
+  lt="$(date -r "$(( NOW - 60 ))" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -d "@$(( NOW - 60 ))" '+%Y-%m-%d %H:%M:%S')"
+  for ((i = 0; i < 20; i++)); do
+    printf '[%s] SWEEP-VERDICT roots=a:1 fts_rows=1 sessions=1 newest_swept_age_s=1 identity=ok\n' "$lt"
+    printf '[%s] Read ledger: LEDGER-VERDICT scanned=1 reads=0 topics=0 pruned=0 rc=0\n' "$lt"
+  done >> "$si"
+  emit 1 other-hook fired x
+  run reg_alarm "" "$si" "$BATS_TEST_TMPDIR/none"
+  [ "$status" -ne 0 ]
+  printf '%s' "$output" | grep -q 'SILENT  *session-index-sweep:read-ledger  *rows=0 *D=20 '
+  emit 20 session-index-sweep:read-ledger fired ledger-written
+  run reg_alarm "" "$si" "$BATS_TEST_TMPDIR/none"
+  printf '%s' "$output" | grep -q 'OK  *session-index-sweep:read-ledger  *rows=20 *D=20 '
+  # Its could-not-observe reasons are BLIND (X3); run-in-progress is not.
+  local blind; blind=" $(sed -n '/^_default_blind=(/,/)$/p' "$S" | tr '\n' ' ') "
+  printf '%s' "$blind" | grep -q ' ledger-cli-failed '
+  printf '%s' "$blind" | grep -q ' no-transcript-roots '
+  if printf '%s' "$blind" | grep -q ' run-in-progress '; then return 1; fi
+}
