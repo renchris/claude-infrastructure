@@ -166,6 +166,28 @@ census() { run bash "$LRU" --census --all; }
   [ "$(disp_of 461)" = current ] || { echo "$output"; false; }
 }
 
+@test "A7b Sonnet stays Sonnet: targets versions.sonnet_latest, never opus_latest" {
+  # RED before 2026-09-28: every non-Fable model fell through to opus_latest, so an in-place upgrade
+  # moved a Sonnet 5.5 session onto Opus 5.5 and dropped all its (account- and model-bound) thinking.
+  sed -i '' 's/^versions:$/versions:\
+  sonnet_latest: claude-sonnet-5-5/' "$LRU_MODEL_CONFIG"
+  sess 462 12121212-0000-4000-8000-000000000003 "$OLD --permission-mode auto --model claude-sonnet-5 --effort high"
+  sess 463 12121212-0000-4000-8000-000000000004 "$NEW --permission-mode auto --model claude-sonnet-5-5 --effort medium"
+  census
+  [ "$(disp_of 462)" = upgrade ] || { echo "$output"; false; }
+  printf '%s\n' "$output" | awk -F'\t' '$1==462 { exit !($5=="claude-sonnet-5-5") }' || { echo "$output"; false; }
+  [ "$(disp_of 463)" = current ] || { echo "$output"; false; }
+}
+
+@test "A7c an SSOT naming an OLDER Sonnet never moves a newer Sonnet session back a version" {
+  sed -i '' 's/^versions:$/versions:\
+  sonnet_latest: claude-sonnet-5/' "$LRU_MODEL_CONFIG"
+  sess 464 12121212-0000-4000-8000-000000000005 "$OLD --permission-mode auto --model claude-sonnet-5-5 --effort high"
+  census
+  [ "$(disp_of 464)" = upgrade ] || { echo "$output"; false; }
+  printf '%s\n' "$output" | awk -F'\t' '$1==464 { exit !($5=="claude-sonnet-5-5") }' || { echo "$output"; false; }
+}
+
 @test "A8 argv: last WELL-FORMED flag wins; prompt text that mentions a flag is not a flag" {
   sess 470 13131313-0000-4000-8000-000000000001 "$OLD --model claude-opus-5 --effort high --effort max do --effort (set-teammate-effort.sh) and --model is text"
   census

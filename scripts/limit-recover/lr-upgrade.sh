@@ -117,9 +117,28 @@ lru_pinned_target() { # $1=sid → the pinned model on stdout; rc 1 when no live
 lru_target_model() { # $1=current model [$2=sid] → the model this session should be on
   lru_pinned_target "${2:-}" && return 0
   case "$1" in
-    *fable*) lru_ssot frontier_access model ;;      # Fable keeps Fable: a binary-only move
-    *)       lru_ssot versions opus_latest ;;       # Opus (and an argv with no --model) → opus_latest
+    *fable*)  lru_ssot frontier_access model ;;     # Fable keeps Fable: a binary-only move
+    *sonnet*) lru_sonnet_target "$1" ;;             # Sonnet keeps Sonnet (see below)
+    *)        lru_ssot versions opus_latest ;;      # Opus (and an argv with no --model) → opus_latest
   esac
+}
+# SONNET KEEPS SONNET (2026-09-28). This arm used to fall through to opus_latest, so an in-place
+# "upgrade" of a Sonnet 5.5 session silently moved it onto Opus 5.5 — and no other model reads
+# Sonnet 5.5's thinking blocks, so the session lost all of its reasoning
+# (docs/research/sonnet55-utilization-2026-09-28/notes/harness-hazards-a.md §2). The target is
+# versions.sonnet_latest, but never an OLDER Sonnet than the session already runs: a trunk whose
+# SSOT still names claude-sonnet-5 must not move a claude-sonnet-5-5 session back a version.
+lru_sonnet_target() { # $1=current Sonnet model → sonnet_latest, or $1 when that would be a downgrade
+  local v cur="${1%%\[*}"
+  v="$(lru_ssot versions sonnet_latest)" || v=""
+  [ -n "$v" ] || { printf '%s' "$1"; return 0; }
+  case "$cur" in
+    claude-sonnet-*)
+      if [ "$cur" != "$v" ] && [ "$(printf '%s\n%s\n' "$v" "$cur" | sort -V | tail -1)" = "$cur" ]; then
+        printf '%s' "$1"; return 0
+      fi ;;
+  esac
+  printf '%s' "$v"
 }
 
 # ── argv parsing: the LAST occurrence wins, as the CLI's own parser does ────────────────────────

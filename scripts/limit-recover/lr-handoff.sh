@@ -630,6 +630,15 @@ if [[ $MODEL_EXPLICIT -eq 0 && -n "$RT_MODEL" ]]; then
   MODEL="$RT_MODEL"
 fi
 if [[ $EFFORT_EXPLICIT -eq 0 && -z "$EFFORT" && -n "$RT_EFFORT" ]]; then EFFORT="$RT_EFFORT"; fi
+# SONNET 5.5 THINKING IS ACCOUNT-BOUND (2026-09-28). Its thinking blocks are readable only by the
+# account that wrote them; from another account the API drops them silently and the model answers
+# without its earlier reasoning. Our four accounts are four organizations, so a transplant keeps the
+# transcript and loses the reasoning in it (harness-hazards-a.md §2, preserved-thinking docs).
+# Opus 5.5 and Fable 5.1 are not bound. Said once, so the operator can choose the brief-based rail.
+if [[ "$RT_MODEL" == claude-sonnet-5-5* ]] \
+   && [[ "$(cd "$TCFG" 2>/dev/null && pwd -P)" != "$(cd "$CFG" 2>/dev/null && pwd -P)" ]]; then
+  echo "lr-handoff: Sonnet 5.5 reasoning does not cross accounts; the resumed session re-derives it (prefer handoff-fire --recycle --account)" >&2
+fi
 case "$MODEL" in claude-fable-*) [[ "$TARGET" == "auto" ]] && echo "lr-handoff: a Fable session routes on the fable lane" >&2 ;; esac
 
 TS=$(date -u +%Y%m%dT%H%M%SZ)

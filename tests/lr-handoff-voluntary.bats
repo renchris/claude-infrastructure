@@ -343,3 +343,28 @@ vol_tx() { # $1 = healthy | limit — the pane's transcript under the SOURCE con
   LRH_VOLUNTARY_FAILFAST=off fire --voluntary
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
+
+# ── SONNET 5.5 THINKING IS ACCOUNT-BOUND (2026-09-28) ─────────────────────────────────────────────
+# Its thinking blocks are readable only by the account that wrote them; a transplant to another
+# account keeps the transcript and silently loses the reasoning. The move is still made — the notice
+# lets the operator prefer the brief-based rail. Opus 5.5 is not bound, so it gets no notice.
+tier_tx() { # $1 = model id of the last real turn
+  mkdir -p "$HOME/.claude/projects/-fx"
+  printf '{"type":"assistant","timestamp":"2026-09-23T09:59:00.000Z","effort":"high","message":{"role":"assistant","model":"%s","stop_reason":"end_turn","content":[{"type":"text","text":"working"}]}}\n' "$1" \
+    > "$HOME/.claude/projects/-fx/$SID.jsonl"
+}
+S55_NOTICE="Sonnet 5.5 reasoning does not cross accounts; the resumed session re-derives it (prefer handoff-fire --recycle --account)"
+
+@test "SONNET 5.5: a transcript on claude-sonnet-5-5 moved to another account prints the reasoning notice" {
+  tier_tx claude-sonnet-5-5
+  fire
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"$S55_NOTICE"* ]] || { echo "$output"; false; }
+}
+
+@test "SONNET 5.5: an Opus 5.5 transcript moved to another account gets no notice" {
+  tier_tx claude-opus-5-5
+  fire
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *"does not cross accounts"* ]] || { echo "$output"; false; }
+}
