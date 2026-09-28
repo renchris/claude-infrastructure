@@ -1,0 +1,2522 @@
+{
+ "m2v_vec_only_full": {
+  "n": 50,
+  "recall@1": 0.68,
+  "recall@5": 0.88,
+  "recall@10": 0.94,
+  "mrr": 0.771720482132247,
+  "hits@1": 34,
+  "hits@5": 44,
+  "by_style": {
+   "lexical": {
+    "n": 20,
+    "r1": 16,
+    "r5": 19
+   },
+   "mixed": {
+    "n": 20,
+    "r1": 14,
+    "r5": 18
+   },
+   "paraphrase": {
+    "n": 10,
+    "r1": 4,
+    "r5": 7
+   }
+  },
+  "rows": [
+   {
+    "id": "q01",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/nohup-does-not-detach-from-a-tool-call.md",
+     "memory/dead-session-verdict-belongs-in-the-pane.md",
+     "lessons/a-0-byte-output-file-is-not-a-dead-process-it-is-a-process-that.md",
+     "memory/nohup-from-a-tool-call-is-not-detached.md",
+     "memory/wedged-shutdown-erases-its-own-evidence.md"
+    ]
+   },
+   {
+    "id": "q02",
+    "style": "lexical",
+    "gold_rank": 2,
+    "top5": [
+     "memory/interactive-grep-is-ugrep-not-usr-bin-grep.md",
+     "memory/grep-w-cannot-separate-nested-model-ids.md",
+     "memory/cc-notify-session-pane-mapping.md",
+     "memory/lookup-miss-is-not-absence.md",
+     "memory/process-count-is-not-a-count-of-the-work.md"
+    ]
+   },
+   {
+    "id": "q03",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/grep-q-under-pipefail-inverts-the-verdict.md",
+     "lessons/a-dead-first-stage-reads-as-a-clean-no-match.md",
+     "memory/interactive-grep-is-ugrep-not-usr-bin-grep.md",
+     "memory/pipefail-inverts-early-exit-probe.md",
+     "memory/recursive-grep-cannot-walk-the-symlink-layer.md"
+    ]
+   },
+   {
+    "id": "q04",
+    "style": "mixed",
+    "gold_rank": 5,
+    "top5": [
+     "memory/harness-reports-its-own-incompleteness.md",
+     "memory/assertion-span-must-equal-its-subject.md",
+     "memory/exact-count-assertion-tripwires-its-own-subject.md",
+     "memory/bats-background-job-fabricates-not-ok.md",
+     "memory/negated-assertion-dead-unless-final.md"
+    ]
+   },
+   {
+    "id": "q05",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "lessons/tab-is-ifs-whitespace-so-empty-tsv-cells-vanish.md",
+     "memory/ifs-whitespace-collapses-empty-fields.md",
+     "lessons/clean-nulls-can-be-one-conjunction.md",
+     "memory/quantised-step-must-be-bisected-not-divided.md",
+     "lessons/a-clause-splitter-is-a-claim-about-every-separator-the-shell-has.md"
+    ]
+   },
+   {
+    "id": "q06",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/git-stash-is-repo-global-across-worktrees.md",
+     "memory/side-worktree-commit-immediately.md",
+     "memory/gate-scope-from-git-diff-is-blind-to-untracked.md",
+     "memory/worktree-ops-can-bare-the-shared-checkout.md",
+     "memory/destructive-cleanup-runs-after-its-setup-failed.md"
+    ]
+   },
+   {
+    "id": "q07",
+    "style": "paraphrase",
+    "gold_rank": 8,
+    "top5": [
+     "lessons/a-re-dispatch-loop-is-evidence-about-the-dispatcher-not-about-th.md",
+     "memory/feedback-silver-platter-exact-commands.md",
+     "lessons/a-record-correction-wave-breaks-the-record.md",
+     "memory/recycle-announced-but-never-fired.md",
+     "lessons/a-row-you-file-carries-the-same-burden-as-a-row-you-drive-and-on.md"
+    ]
+   },
+   {
+    "id": "q08",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/darwin-qos-band-mechanics.md",
+     "memory/discriminating-retry-must-move-away-from-the-noise.md",
+     "memory/succession-detector-fires-during-the-succession.md",
+     "memory/session-index-message-count-is-not-a-billing-proxy.md",
+     "memory/prompt-suggestion-dropped-by-slow-stop-hooks.md"
+    ]
+   },
+   {
+    "id": "q09",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/mass-tls-hostname-mismatch-indicts-the-local-route.md",
+     "memory/reaper-blindness-it2-gate-rootcause.md",
+     "memory/resumed-session-loses-terminal-identity.md",
+     "memory/transplanted-session-loses-dispatch-identity.md",
+     "memory/suppressed-stderr-turns-a-failed-command-into-a-zero.md"
+    ]
+   },
+   {
+    "id": "q10",
+    "style": "mixed",
+    "gold_rank": 7,
+    "top5": [
+     "memory/cold-worktree-fire-autosubmit-race.md",
+     "lessons/a-mid-turn-brief-is-invisible-to-the-fired-peer-detector.md",
+     "memory/desk-spawned-session-lifecycle-discipline.md",
+     "memory/goal-idle-has-two-failure-poles.md",
+     "memory/desk-wave-monitor-lead-idle-is-owned-wait.md"
+    ]
+   },
+   {
+    "id": "q11",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/shellcheck-prose-comment-aborts-analysis.md",
+     "memory/lint-blindness-composes-and-hides-the-next-defect.md",
+     "memory/callers-dependency-probe-mutes-the-callees-non-verdict.md",
+     "lessons/a-gates-invocation-is-part-of-its-contract.md",
+     "memory/verification-harness-vacuous-pass-traps.md"
+    ]
+   },
+   {
+    "id": "q12",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/bisect-names-a-commit-it-never-ran.md",
+     "memory/self-repair-shares-a-lock-with-the-fault.md",
+     "memory/blocked-commit-hook-tears-down-the-sequencer.md",
+     "memory/wrong-cause-corroborated-by-true-metric.md",
+     "memory/control-must-replay-the-real-artifact.md"
+    ]
+   },
+   {
+    "id": "q13",
+    "style": "lexical",
+    "gold_rank": 4,
+    "top5": [
+     "memory/probe-child-session-marker-kills-persistence.md",
+     "memory/pgrep-excludes-the-callers-ancestors.md",
+     "memory/nohup-from-a-tool-call-is-not-detached.md",
+     "memory/pgrep-f-matches-agent-briefs.md",
+     "memory/desk-read-transcript-before-asserting-why.md"
+    ]
+   },
+   {
+    "id": "q14",
+    "style": "mixed",
+    "gold_rank": 2,
+    "top5": [
+     "memory/subscription-token-value-inverts-the-cost-axis.md",
+     "memory/transcript-lines-repeat-one-billed-response.md",
+     "memory/line-count-is-blind-to-prose-in-table-cells.md",
+     "memory/session-index-message-count-is-not-a-billing-proxy.md",
+     "lessons/a-quota-fault-is-classified-by-its-error-never-by-what-it-spent.md"
+    ]
+   },
+   {
+    "id": "q15",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/recursive-grep-cannot-walk-the-symlink-layer.md",
+     "memory/interactive-grep-is-ugrep-not-usr-bin-grep.md",
+     "lessons/a-dead-first-stage-reads-as-a-clean-no-match.md",
+     "memory/grep-w-cannot-separate-nested-model-ids.md",
+     "memory/transcript-corpus-spans-four-account-stores.md"
+    ]
+   },
+   {
+    "id": "q16",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/suppressed-stderr-turns-a-failed-command-into-a-zero.md",
+     "memory/opt-out-stated-reason-is-not-the-real-blocker.md",
+     "lessons/an-appended-redirect-binds-only-to-the-fallback.md",
+     "memory/killed-pipeline-empty-output-is-not-a-verdict.md",
+     "memory/daemon-fleet-v2.md"
+    ]
+   },
+   {
+    "id": "q17",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/killed-pipeline-empty-output-is-not-a-verdict.md",
+     "memory/gate-log-tail-hides-the-first-failure.md",
+     "lessons/a-0-byte-output-file-is-not-a-dead-process-it-is-a-process-that.md",
+     "memory/wedged-shutdown-erases-its-own-evidence.md",
+     "lessons/never-wrap-ship-in-your-own-timeout.md"
+    ]
+   },
+   {
+    "id": "q18",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/blocked-commit-hook-tears-down-the-sequencer.md",
+     "memory/bounded-gate-unbounded-by-compliance.md",
+     "lessons/a-deny-is-the-turn-boundary-a-message-lacks.md",
+     "memory/prompt-suggestion-dropped-by-slow-stop-hooks.md",
+     "lessons/git-clean-is-not-nothing-in-hand.md"
+    ]
+   },
+   {
+    "id": "q19",
+    "style": "lexical",
+    "gold_rank": 2,
+    "top5": [
+     "memory/self-repair-shares-a-lock-with-the-fault.md",
+     "memory/worktree-ops-can-bare-the-shared-checkout.md",
+     "memory/recycle-cwd-must-survive-its-own-exit.md",
+     "memory/idempotent-repair-gated-behind-conditional-advance.md",
+     "memory/host-suite-config-leak-corrupts-shared-checkout.md"
+    ]
+   },
+   {
+    "id": "q20",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/bats-runtime-cap-placement-and-borrowed-hermeticity.md",
+     "memory/de-ambienting-needs-every-coupling.md",
+     "memory/cut-can-manufacture-its-own-verdict.md",
+     "memory/harness-reports-its-own-incompleteness.md",
+     "memory/bats-background-job-fabricates-not-ok.md"
+    ]
+   },
+   {
+    "id": "q21",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/assignment-inside-command-substitution-never-escapes.md",
+     "memory/probe-subprocess-inherits-the-callers-environment.md",
+     "memory/negative-array-slice-empties-the-diagnostic.md",
+     "memory/multibyte-char-absorbed-into-variable-name.md",
+     "lessons/empty-vs-no-surface.md"
+    ]
+   },
+   {
+    "id": "q22",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/multibyte-char-absorbed-into-variable-name.md",
+     "lessons/empty-selector-is-a-universal-selector.md",
+     "memory/unsettable-field-is-a-different-endpoint.md",
+     "lessons/binary-only-is-a-property-of-the-layer-you-looked-at.md",
+     "lessons/nth-fallback-source-un-seals-old-fixtures.md"
+    ]
+   },
+   {
+    "id": "q23",
+    "style": "paraphrase",
+    "gold_rank": 1,
+    "top5": [
+     "memory/compressor-segment-exhaustion-panic.md",
+     "memory/resumed-session-loses-terminal-identity.md",
+     "lessons/a-crash-dump-s-memory-fields-are-derived-check-their-arithmetic.md",
+     "lessons/a-generator-fix-needs-its-population-enumerated-and-the-incident.md",
+     "lessons/a-crash-anchor-must-be-the-event-that-killed-the-subject-not-the.md"
+    ]
+   },
+   {
+    "id": "q24",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/reference-screenshot-clipboard-watcher.md",
+     "memory/feedback-tui-visibility-numbers-first.md",
+     "memory/foreign-tty-write-is-sized-in-syscalls.md",
+     "memory/opt-out-stated-reason-is-not-the-real-blocker.md",
+     "memory/install-verified-in-one-config-dir-is-not-installed.md"
+    ]
+   },
+   {
+    "id": "q25",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/agent-definition-cached-at-session-start.md",
+     "memory/subagent-stop-has-two-shapes.md",
+     "memory/subagent-records-live-in-separate-files.md",
+     "lessons/launcher-runs-the-live-layer.md",
+     "lessons/a-generator-fix-needs-its-population-enumerated-and-the-incident.md"
+    ]
+   },
+   {
+    "id": "q26",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/allow-rule-prefix-misses-bash-wrapper.md",
+     "lessons/detached-bash-is-reaped-after-ten-minutes.md",
+     "memory/bash32-case-in-substitution-zsh-repro-trap.md",
+     "lessons/the-deployment-interpreter-is-not-the-one-on-your-path.md",
+     "memory/handed-command-must-not-wrap.md"
+    ]
+   },
+   {
+    "id": "q27",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/absent-range-endpoint-selects-everything.md",
+     "lessons/a-0-byte-output-file-is-not-a-dead-process-it-is-a-process-that.md",
+     "lessons/a-spec-that-forbids-invention-names-artifacts-a-crawl-will-miss.md",
+     "memory/store-silence-is-evidence-only-if-it-has-a-writer.md",
+     "memory/resolution-signal-must-match-the-occurrence.md"
+    ]
+   },
+   {
+    "id": "q28",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/json-quoting-is-not-shell-quoting.md",
+     "lessons/the-deployment-interpreter-is-not-the-one-on-your-path.md",
+     "memory/handed-command-must-not-wrap.md",
+     "memory/bare-provenance-token-names-absence-not-actor.md",
+     "memory/negated-assertion-dead-unless-final.md"
+    ]
+   },
+   {
+    "id": "q29",
+    "style": "paraphrase",
+    "gold_rank": 1,
+    "top5": [
+     "memory/process-start-time-renders-in-ambient-timezone.md",
+     "memory/watcher-pin-fits-the-process-model.md",
+     "memory/orphanhood-is-not-a-discriminating-signal.md",
+     "memory/self-heal-remedy-must-be-proven-to-heal.md",
+     "lessons/a-stale-pid-does-not-decay-into-harmlessness-it-decays-into-a-gu.md"
+    ]
+   },
+   {
+    "id": "q30",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "lessons/symlinked-auto-memory-dir-prompts-on-every-write.md",
+     "lessons/symlinked-0-splits-sibling-sources.md",
+     "memory/subject-reads-its-own-path-and-its-own-output.md",
+     "memory/isolation-keyed-on-a-path-is-blind-to-other-paths.md",
+     "lessons/a-subagent-cannot-answer-a-permission-prompt-so-a-prompt-trigger.md"
+    ]
+   },
+   {
+    "id": "q31",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "lessons/detached-bash-is-reaped-after-ten-minutes.md",
+     "memory/bash32-case-in-substitution-zsh-repro-trap.md",
+     "memory/fixture-lifetime-is-an-orphan-leak-bound.md",
+     "lessons/the-deployment-interpreter-is-not-the-one-on-your-path.md",
+     "memory/killed-pipeline-empty-output-is-not-a-verdict.md"
+    ]
+   },
+   {
+    "id": "q32",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "lessons/shift-n-past-the-end-is-a-no-op-that-wedges-an-argv-loop.md",
+     "memory/prompt-suggestion-dropped-by-slow-stop-hooks.md",
+     "memory/optimistic-round-cannot-outrun-its-contention.md",
+     "lessons/binary-only-is-a-property-of-the-layer-you-looked-at.md",
+     "lessons/arming-and-mootness-cannot-share-one-falsifier.md"
+    ]
+   },
+   {
+    "id": "q33",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "lessons/soft-reset-onto-a-moved-ref-reverts-the-difference.md",
+     "memory/control-must-replay-the-real-artifact.md",
+     "memory/destructive-cleanup-runs-after-its-setup-failed.md",
+     "memory/blocked-commit-hook-tears-down-the-sequencer.md",
+     "memory/worktree-ops-can-bare-the-shared-checkout.md"
+    ]
+   },
+   {
+    "id": "q34",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "lessons/bash-32-counts-parens-inside-a-heredoc-it-never-runs.md",
+     "memory/bash32-case-in-substitution-zsh-repro-trap.md",
+     "lessons/the-deployment-interpreter-is-not-the-one-on-your-path.md",
+     "lessons/detached-bash-is-reaped-after-ten-minutes.md",
+     "memory/prefix-rules-cannot-express-shell-programs.md"
+    ]
+   },
+   {
+    "id": "q35",
+    "style": "mixed",
+    "gold_rank": 2,
+    "top5": [
+     "memory/authorization-is-not-transitive-over-peer-mail.md",
+     "lessons/a-subagent-cannot-answer-a-permission-prompt-so-a-prompt-trigger.md",
+     "memory/two-entry-actuator-one-managed-path.md",
+     "memory/fired-peer-silence-has-a-third-cause.md",
+     "memory/feedback-silver-platter-exact-commands.md"
+    ]
+   },
+   {
+    "id": "q36",
+    "style": "paraphrase",
+    "gold_rank": 4,
+    "top5": [
+     "memory/source-patching-test-makes-the-line-an-api.md",
+     "memory/conclusion-must-reach-the-enforcing-store.md",
+     "memory/harness-default-collapses-the-states-under-test.md",
+     "memory/spec-named-mechanism-may-be-prose-only.md",
+     "memory/red-proof-fixture-must-not-call-the-subject.md"
+    ]
+   },
+   {
+    "id": "q37",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/interactive-grep-is-ugrep-not-usr-bin-grep.md",
+     "lessons/a-dead-first-stage-reads-as-a-clean-no-match.md",
+     "memory/recursive-grep-cannot-walk-the-symlink-layer.md",
+     "memory/grep-q-under-pipefail-inverts-the-verdict.md",
+     "memory/deployed-copy-as-parsed-contract.md"
+    ]
+   },
+   {
+    "id": "q38",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/adhoc-resign-breaks-hardened-runtime.md",
+     "memory/filming-a-window-is-not-filming-a-rect.md",
+     "memory/project-tokenomics-plan-swap-verdict.md",
+     "memory/mass-tls-hostname-mismatch-indicts-the-local-route.md",
+     "memory/gui-memory-dialog-blames-the-coalition-host.md"
+    ]
+   },
+   {
+    "id": "q39",
+    "style": "mixed",
+    "gold_rank": 17,
+    "top5": [
+     "memory/guard-can-be-correct-and-checker-invisible.md",
+     "memory/scan-coverage-complete-is-files-not-classes.md",
+     "memory/filed-blocker-is-never-revalidated.md",
+     "memory/css-duplicate-keyframe-is-a-glide.md",
+     "memory/exoneration-bound-must-fit-what-it-bounds.md"
+    ]
+   },
+   {
+    "id": "q40",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/harness-kills-background-work-under-memory-pressure.md",
+     "memory/verify-throughput-below-trunk-velocity.md",
+     "memory/bound-must-fit-the-band-not-the-bench.md",
+     "memory/liveness-free-channel-never-gated-behind-liveness.md",
+     "memory/destructive-cleanup-runs-after-its-setup-failed.md"
+    ]
+   },
+   {
+    "id": "q41",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/timeout-rc-collides-with-the-childs-own-rc.md",
+     "memory/contract-prose-can-understate-the-mechanism.md",
+     "memory/bounding-external-calls.md",
+     "memory/recovery-notice-must-not-travel-the-broken-channel.md",
+     "lessons/a-transient-fault-is-explained-by-whatever-was-standing.md"
+    ]
+   },
+   {
+    "id": "q42",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "lessons/keep-both-on-appended-blocks-leaves-the-first-unterminated.md",
+     "memory/parallel-stream-convergence-protocol.md",
+     "memory/destructive-cleanup-runs-after-its-setup-failed.md",
+     "memory/append-conflict-shared-suffix.md",
+     "lessons/clean-nulls-can-be-one-conjunction.md"
+    ]
+   },
+   {
+    "id": "q43",
+    "style": "lexical",
+    "gold_rank": 8,
+    "top5": [
+     "memory/feedback-no-artificial-timelines-drive-to-completion.md",
+     "memory/bare-json-key-is-unforgeable-by-content.md",
+     "memory/unnamed-subagent-return-lands-in-full.md",
+     "lessons/a-lead-with-live-teammates-cannot-exit-unattended.md",
+     "memory/subagent-stop-has-two-shapes.md"
+    ]
+   },
+   {
+    "id": "q44",
+    "style": "paraphrase",
+    "gold_rank": 1,
+    "top5": [
+     "lessons/a-0-byte-output-file-is-not-a-dead-process-it-is-a-process-that.md",
+     "memory/killed-pipeline-empty-output-is-not-a-verdict.md",
+     "lessons/a-generator-fix-needs-its-population-enumerated-and-the-incident.md",
+     "memory/destructive-cleanup-runs-after-its-setup-failed.md",
+     "memory/harness-reports-its-own-incompleteness.md"
+    ]
+   },
+   {
+    "id": "q45",
+    "style": "paraphrase",
+    "gold_rank": 99,
+    "top5": [
+     "memory/self-heal-remedy-must-be-proven-to-heal.md",
+     "lessons/freshness-is-relative-to-the-subject-not-the-clock.md",
+     "lessons/an-alarm-describes-the-tier-it-measures-not-the-whole-ladder.md",
+     "memory/desk-verify-fresh-before-mutating-backlog.md",
+     "lessons/a-0-byte-output-file-is-not-a-dead-process-it-is-a-process-that.md"
+    ]
+   },
+   {
+    "id": "q46",
+    "style": "paraphrase",
+    "gold_rank": 11,
+    "top5": [
+     "memory/absence-alarm-needs-existence-evidence.md",
+     "memory/threshold-gated-monitor-is-blind-below-its-threshold.md",
+     "lessons/a-mid-turn-brief-is-invisible-to-the-fired-peer-detector.md",
+     "memory/alarm-must-key-on-the-store-not-the-sensor.md",
+     "memory/self-heal-remedy-must-be-proven-to-heal.md"
+    ]
+   },
+   {
+    "id": "q47",
+    "style": "paraphrase",
+    "gold_rank": 3,
+    "top5": [
+     "memory/destructive-cleanup-runs-after-its-setup-failed.md",
+     "memory/succession-detector-fires-during-the-succession.md",
+     "memory/lossless-fallback-hides-its-dead-primary.md",
+     "memory/self-heal-remedy-must-be-proven-to-heal.md",
+     "memory/absent-from-trunk-has-two-opposite-causes.md"
+    ]
+   },
+   {
+    "id": "q48",
+    "style": "paraphrase",
+    "gold_rank": 2,
+    "top5": [
+     "memory/adhoc-resign-breaks-hardened-runtime.md",
+     "memory/fixture-literal-date-expires-against-a-ttl.md",
+     "memory/verify-throughput-below-trunk-velocity.md",
+     "memory/destructive-cleanup-runs-after-its-setup-failed.md",
+     "lessons/dod-can-demand-what-the-cure-removed.md"
+    ]
+   },
+   {
+    "id": "q49",
+    "style": "paraphrase",
+    "gold_rank": 1,
+    "top5": [
+     "memory/a-plan-is-not-a-queue.md",
+     "memory/store-cure-is-only-as-wide-as-its-generator-input.md",
+     "lessons/value-deadline-work-ends-at-a-consumed-output.md",
+     "lessons/a-goal-condition-containing-an-operator-only-act-never-clears.md",
+     "memory/cold-worktree-fire-autosubmit-race.md"
+    ]
+   },
+   {
+    "id": "q50",
+    "style": "mixed",
+    "gold_rank": 2,
+    "top5": [
+     "lessons/a-path-length-correction-must-cover-every-spelling.md",
+     "lessons/a-locale-pin-protects-only-the-process-that-sets-it.md",
+     "memory/assertion-span-must-equal-its-subject.md",
+     "memory/postland-red-triage-order.md",
+     "memory/corrected-instrument-can-lie-again.md"
+    ]
+   }
+  ]
+ },
+ "rrf_fts5fielded+m2v_full": {
+  "n": 50,
+  "recall@1": 0.86,
+  "recall@5": 0.96,
+  "recall@10": 0.96,
+  "mrr": 0.9031595881595882,
+  "hits@1": 43,
+  "hits@5": 48,
+  "by_style": {
+   "lexical": {
+    "n": 20,
+    "r1": 19,
+    "r5": 20
+   },
+   "mixed": {
+    "n": 20,
+    "r1": 18,
+    "r5": 20
+   },
+   "paraphrase": {
+    "n": 10,
+    "r1": 6,
+    "r5": 8
+   }
+  },
+  "rows": [
+   {
+    "id": "q01",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/nohup-does-not-detach-from-a-tool-call.md",
+     "memory/nohup-from-a-tool-call-is-not-detached.md",
+     "memory/killed-pipeline-empty-output-is-not-a-verdict.md",
+     "memory/dead-session-verdict-belongs-in-the-pane.md",
+     "lessons/a-0-byte-output-file-is-not-a-dead-process-it-is-a-process-that.md"
+    ]
+   },
+   {
+    "id": "q02",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/grep-w-cannot-separate-nested-model-ids.md",
+     "memory/lookup-miss-is-not-absence.md",
+     "memory/resumed-session-loses-terminal-identity.md",
+     "memory/blind-check-generators-stdin-and-sid-keys.md",
+     "memory/panic-recreates-pane-orphans-fired-stamp.md"
+    ]
+   },
+   {
+    "id": "q03",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/pipefail-inverts-early-exit-probe.md",
+     "memory/grep-q-under-pipefail-inverts-the-verdict.md",
+     "lessons/a-0-byte-output-file-is-not-a-dead-process-it-is-a-process-that.md",
+     "memory/recursive-grep-cannot-walk-the-symlink-layer.md",
+     "memory/probe-that-acts-on-absence-must-confirm-presence.md"
+    ]
+   },
+   {
+    "id": "q04",
+    "style": "mixed",
+    "gold_rank": 3,
+    "top5": [
+     "memory/assertion-span-must-equal-its-subject.md",
+     "memory/bats-background-job-fabricates-not-ok.md",
+     "memory/negated-assertion-dead-unless-final.md",
+     "memory/re-derive-handed-down-measurements.md",
+     "memory/abstain-rule-can-retire-the-common-case.md"
+    ]
+   },
+   {
+    "id": "q05",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/ifs-whitespace-collapses-empty-fields.md",
+     "lessons/tab-is-ifs-whitespace-so-empty-tsv-cells-vanish.md",
+     "lessons/clean-nulls-can-be-one-conjunction.md",
+     "memory/line-count-is-blind-to-prose-in-table-cells.md",
+     "memory/blind-field-is-not-a-blind-api.md"
+    ]
+   },
+   {
+    "id": "q06",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/git-stash-is-repo-global-across-worktrees.md",
+     "memory/destructive-cleanup-runs-after-its-setup-failed.md",
+     "memory/tui-capture-is-a-sample-not-a-state.md",
+     "memory/worktree-ops-can-bare-the-shared-checkout.md",
+     "memory/clean-worktree-cannot-distinguish-never-worked-from-landed.md"
+    ]
+   },
+   {
+    "id": "q07",
+    "style": "paraphrase",
+    "gold_rank": 1,
+    "top5": [
+     "memory/plutil-extract-clobbers-input.md",
+     "lessons/aggregate-control-cannot-see-a-per-member-zero.md",
+     "memory/work-item-citation-refutes-its-own-remedy.md",
+     "memory/aggregate-control-cannot-see-a-per-member-zero.md",
+     "lessons/a-record-correction-wave-breaks-the-record.md"
+    ]
+   },
+   {
+    "id": "q08",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/darwin-qos-band-mechanics.md",
+     "memory/discriminating-retry-must-move-away-from-the-noise.md",
+     "memory/positive-control-the-denominator.md",
+     "lessons/a-transient-fault-is-explained-by-whatever-was-standing.md",
+     "memory/sweep-hosted-actuator-cannot-exceed-its-tick.md"
+    ]
+   },
+   {
+    "id": "q09",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/mass-tls-hostname-mismatch-indicts-the-local-route.md",
+     "memory/fixture-shape-parity-with-real-producer.md",
+     "memory/cross-session-mail-v3.md",
+     "memory/greedy-anchor-matches-the-longer-token.md",
+     "memory/suppressed-stderr-turns-a-failed-command-into-a-zero.md"
+    ]
+   },
+   {
+    "id": "q10",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/handoff-fire-goal-prefix-trap.md",
+     "memory/goal-idle-has-two-failure-poles.md",
+     "memory/dispatcher-verdict-is-not-the-fired-sessions-state.md",
+     "memory/desk-wave-monitor-lead-idle-is-owned-wait.md",
+     "memory/guard-universalization-deletes-a-capability-silently.md"
+    ]
+   },
+   {
+    "id": "q11",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/shellcheck-prose-comment-aborts-analysis.md",
+     "memory/lint-blindness-composes-and-hides-the-next-defect.md",
+     "memory/callers-dependency-probe-mutes-the-callees-non-verdict.md",
+     "lessons/a-gates-invocation-is-part-of-its-contract.md",
+     "memory/lint-directive-binds-to-the-next-construct.md"
+    ]
+   },
+   {
+    "id": "q12",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/bisect-names-a-commit-it-never-ran.md",
+     "lessons/a-bisect-s-predicate-must-be-the-convicted-test-not-its-suite.md",
+     "memory/case-born-in-dead-verifier-window-frames-innocents.md",
+     "memory/destructive-cleanup-runs-after-its-setup-failed.md",
+     "memory/subshell-erases-the-cleanup-record.md"
+    ]
+   },
+   {
+    "id": "q13",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/pgrep-f-matches-agent-briefs.md",
+     "memory/nohup-from-a-tool-call-is-not-detached.md",
+     "memory/pgrep-excludes-the-callers-ancestors.md",
+     "memory/desk-worker-lifecycle-triage.md",
+     "lessons/a-subagent-cannot-answer-a-permission-prompt-so-a-prompt-trigger.md"
+    ]
+   },
+   {
+    "id": "q14",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/transcript-lines-repeat-one-billed-response.md",
+     "memory/session-index-message-count-is-not-a-billing-proxy.md",
+     "memory/metric-denominator-discarded.md",
+     "memory/subscription-token-value-inverts-the-cost-axis.md",
+     "lessons/summed-per-process-cpu-is-not-system-utilization.md"
+    ]
+   },
+   {
+    "id": "q15",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/recursive-grep-cannot-walk-the-symlink-layer.md",
+     "memory/transcript-corpus-spans-four-account-stores.md",
+     "memory/symlinked-store-invisible-to-find.md",
+     "memory/reader-census-picks-mode-vs-relocation.md",
+     "memory/re-derive-handed-down-measurements.md"
+    ]
+   },
+   {
+    "id": "q16",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/suppressed-stderr-turns-a-failed-command-into-a-zero.md",
+     "memory/killed-pipeline-empty-output-is-not-a-verdict.md",
+     "lessons/an-appended-redirect-binds-only-to-the-fallback.md",
+     "memory/capture-based-probe-cannot-exercise-a-tty-gated-verb.md",
+     "memory/opt-out-stated-reason-is-not-the-real-blocker.md"
+    ]
+   },
+   {
+    "id": "q17",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/killed-pipeline-empty-output-is-not-a-verdict.md",
+     "memory/gate-log-tail-hides-the-first-failure.md",
+     "lessons/a-0-byte-output-file-is-not-a-dead-process-it-is-a-process-that.md",
+     "lessons/a-driver-shell-s-own-cpu-is-not-its-pipeline-s-progress.md",
+     "lessons/never-wrap-ship-in-your-own-timeout.md"
+    ]
+   },
+   {
+    "id": "q18",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/blocked-commit-hook-tears-down-the-sequencer.md",
+     "memory/shared-checkout-commit-is-a-fleet-converge-block.md",
+     "memory/rebasing-a-long-stranded-branch.md",
+     "memory/redundant-session-gc-by-content.md",
+     "memory/git-cherry-plus-is-not-absence-from-trunk.md"
+    ]
+   },
+   {
+    "id": "q19",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/worktree-ops-can-bare-the-shared-checkout.md",
+     "memory/self-repair-shares-a-lock-with-the-fault.md",
+     "memory/host-suite-config-leak-corrupts-shared-checkout.md",
+     "lessons/shared-checkout-commit-blocks-the-fleet-and-skipped-the-gate.md",
+     "memory/shared-checkout-commit-is-a-fleet-converge-block.md"
+    ]
+   },
+   {
+    "id": "q20",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/bats-runtime-cap-placement-and-borrowed-hermeticity.md",
+     "memory/de-ambienting-needs-every-coupling.md",
+     "memory/callers-dependency-probe-mutes-the-callees-non-verdict.md",
+     "memory/destructive-cleanup-runs-after-its-setup-failed.md",
+     "lessons/keep-both-on-appended-blocks-leaves-the-first-unterminated.md"
+    ]
+   },
+   {
+    "id": "q21",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/assignment-inside-command-substitution-never-escapes.md",
+     "memory/multibyte-char-absorbed-into-variable-name.md",
+     "lessons/a-synthetic-input-event-has-no-sandbox-the-screen-is-global.md",
+     "lessons/binary-only-is-a-property-of-the-layer-you-looked-at.md",
+     "memory/harness-default-collapses-the-states-under-test.md"
+    ]
+   },
+   {
+    "id": "q22",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/multibyte-char-absorbed-into-variable-name.md",
+     "memory/assignment-inside-command-substitution-never-escapes.md",
+     "lessons/shift-n-past-the-end-is-a-no-op-that-wedges-an-argv-loop.md",
+     "memory/ifs-whitespace-collapses-empty-fields.md",
+     "lessons/nth-fallback-source-un-seals-old-fixtures.md"
+    ]
+   },
+   {
+    "id": "q23",
+    "style": "paraphrase",
+    "gold_rank": 1,
+    "top5": [
+     "memory/compressor-segment-exhaustion-panic.md",
+     "lessons/a-crash-dump-s-memory-fields-are-derived-check-their-arithmetic.md",
+     "memory/agent-benchmark-panicked-the-box.md",
+     "memory/actuator-roster-keyed-on-the-last-culprits-shape.md",
+     "memory/detector-with-no-owner-is-not-an-actuator.md"
+    ]
+   },
+   {
+    "id": "q24",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/reference-screenshot-clipboard-watcher.md",
+     "memory/feedback-tui-visibility-numbers-first.md",
+     "memory/opt-out-stated-reason-is-not-the-real-blocker.md",
+     "memory/feedback-silver-platter-exact-commands.md",
+     "memory/procsub-pid-is-unreachable-own-the-pipe.md"
+    ]
+   },
+   {
+    "id": "q25",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/agent-definition-cached-at-session-start.md",
+     "memory/subagent-records-live-in-separate-files.md",
+     "lessons/in-process-agent-stops-at-100-turns-the-same-agent-in-a-workflow.md",
+     "memory/feedback-parallelize-by-default.md",
+     "memory/subagent-stop-has-two-shapes.md"
+    ]
+   },
+   {
+    "id": "q26",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/allow-rule-prefix-misses-bash-wrapper.md",
+     "memory/prefix-rules-cannot-express-shell-programs.md",
+     "lessons/an-allow-rule-cannot-silence-a-hook-s-ask.md",
+     "memory/count-the-population-the-remedy-acts-on.md",
+     "lessons/engaged-is-not-running.md"
+    ]
+   },
+   {
+    "id": "q27",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/absent-range-endpoint-selects-everything.md",
+     "lessons/keep-both-on-appended-blocks-leaves-the-first-unterminated.md",
+     "memory/append-conflict-shared-suffix.md",
+     "lessons/append-atomicity-ends-at-the-stdio-buffer.md",
+     "lessons/a-fixture-s-pid-range-is-a-claim-about-a-shared-wrapping-namespa.md"
+    ]
+   },
+   {
+    "id": "q28",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/json-quoting-is-not-shell-quoting.md",
+     "memory/ifs-whitespace-collapses-empty-fields.md",
+     "lessons/bash-32-counts-parens-inside-a-heredoc-it-never-runs.md",
+     "memory/probe-subprocess-inherits-the-callers-environment.md",
+     "memory/bats-dead-assertions-errexit-exemptions.md"
+    ]
+   },
+   {
+    "id": "q29",
+    "style": "paraphrase",
+    "gold_rank": 1,
+    "top5": [
+     "memory/process-start-time-renders-in-ambient-timezone.md",
+     "lessons/turn-adjacency-is-not-wall-clock-adjacency.md",
+     "memory/kill-on-reaped-child-fails-fast-path-hides-it.md",
+     "lessons/two-modes-n-hours-apart-is-a-timezone.md",
+     "memory/lease-must-name-the-doer.md"
+    ]
+   },
+   {
+    "id": "q30",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "lessons/symlinked-auto-memory-dir-prompts-on-every-write.md",
+     "lessons/a-subagent-cannot-answer-a-permission-prompt-so-a-prompt-trigger.md",
+     "memory/isolation-keyed-on-a-path-is-blind-to-other-paths.md",
+     "memory/permission-autonomy-allowlist-method.md",
+     "memory/dangling-lock-symlink-reads-as-held.md"
+    ]
+   },
+   {
+    "id": "q31",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "lessons/detached-bash-is-reaped-after-ten-minutes.md",
+     "memory/nohup-does-not-detach-from-a-tool-call.md",
+     "memory/killed-pipeline-empty-output-is-not-a-verdict.md",
+     "memory/nohup-from-a-tool-call-is-not-detached.md",
+     "memory/fixture-lifetime-is-an-orphan-leak-bound.md"
+    ]
+   },
+   {
+    "id": "q32",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "lessons/shift-n-past-the-end-is-a-no-op-that-wedges-an-argv-loop.md",
+     "lessons/binary-only-is-a-property-of-the-layer-you-looked-at.md",
+     "memory/closure-claim-rests-on-a-mismeasured-quantum.md",
+     "memory/subject-reads-its-own-path-and-its-own-output.md",
+     "memory/ifs-whitespace-collapses-empty-fields.md"
+    ]
+   },
+   {
+    "id": "q33",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "lessons/soft-reset-onto-a-moved-ref-reverts-the-difference.md",
+     "memory/destructive-cleanup-runs-after-its-setup-failed.md",
+     "lessons/a-read-only-surface-must-not-be-able-to-hold-state.md",
+     "memory/restore-to-snapshot-pins-the-fault.md",
+     "memory/cited-sha-may-not-survive-the-land.md"
+    ]
+   },
+   {
+    "id": "q34",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "lessons/bash-32-counts-parens-inside-a-heredoc-it-never-runs.md",
+     "memory/bash32-case-in-substitution-zsh-repro-trap.md",
+     "lessons/the-deployment-interpreter-is-not-the-one-on-your-path.md",
+     "memory/bats-dead-assertions-errexit-exemptions.md",
+     "memory/kill-on-reaped-child-fails-fast-path-hides-it.md"
+    ]
+   },
+   {
+    "id": "q35",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "lessons/a-subagent-cannot-answer-a-permission-prompt-so-a-prompt-trigger.md",
+     "memory/authorization-is-not-transitive-over-peer-mail.md",
+     "memory/fired-peer-silence-has-a-third-cause.md",
+     "memory/shutdown-request-is-not-an-actuator.md",
+     "memory/bare-json-key-is-unforgeable-by-content.md"
+    ]
+   },
+   {
+    "id": "q36",
+    "style": "paraphrase",
+    "gold_rank": 1,
+    "top5": [
+     "memory/spec-named-mechanism-may-be-prose-only.md",
+     "memory/conclusion-must-reach-the-enforcing-store.md",
+     "lessons/a-cost-premise-is-per-arm-and-is-usually-false.md",
+     "memory/cost-gate-must-be-strictly-weaker.md",
+     "memory/a-plan-is-not-a-queue.md"
+    ]
+   },
+   {
+    "id": "q37",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/interactive-grep-is-ugrep-not-usr-bin-grep.md",
+     "memory/deployed-copy-as-parsed-contract.md",
+     "memory/filter-repo-literals-not-regexes.md",
+     "memory/goal-stop-hook-vs-task-registry.md",
+     "memory/bash32-case-in-substitution-zsh-repro-trap.md"
+    ]
+   },
+   {
+    "id": "q38",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/adhoc-resign-breaks-hardened-runtime.md",
+     "memory/headless-chromium-still-registers-an-app.md",
+     "memory/gui-memory-dialog-blames-the-coalition-host.md",
+     "memory/filming-a-window-is-not-filming-a-rect.md",
+     "memory/project-tokenomics-plan-swap-verdict.md"
+    ]
+   },
+   {
+    "id": "q39",
+    "style": "mixed",
+    "gold_rank": 2,
+    "top5": [
+     "memory/css-duplicate-keyframe-is-a-glide.md",
+     "memory/verification-harness-vacuous-pass-traps.md",
+     "memory/control-population-must-be-stable.md",
+     "memory/bounding-external-calls.md",
+     "memory/actuator-roster-keyed-on-the-last-culprits-shape.md"
+    ]
+   },
+   {
+    "id": "q40",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/harness-kills-background-work-under-memory-pressure.md",
+     "memory/bound-must-fit-the-band-not-the-bench.md",
+     "memory/discriminating-retry-must-move-away-from-the-noise.md",
+     "memory/session-signals-do-not-measure-background-runtime.md",
+     "memory/strong-instrument-overruled-by-weak-proxies.md"
+    ]
+   },
+   {
+    "id": "q41",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/timeout-rc-collides-with-the-childs-own-rc.md",
+     "memory/output-must-round-trip-into-input.md",
+     "memory/assignment-inside-command-substitution-never-escapes.md",
+     "memory/strong-instrument-overruled-by-weak-proxies.md",
+     "memory/five-day-gate-blockage-rootcause.md"
+    ]
+   },
+   {
+    "id": "q42",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "lessons/keep-both-on-appended-blocks-leaves-the-first-unterminated.md",
+     "memory/append-conflict-shared-suffix.md",
+     "memory/parallel-stream-convergence-protocol.md",
+     "lessons/shared-checkout-commit-blocks-the-fleet-and-skipped-the-gate.md",
+     "memory/shared-checkout-commit-is-a-fleet-converge-block.md"
+    ]
+   },
+   {
+    "id": "q43",
+    "style": "lexical",
+    "gold_rank": 4,
+    "top5": [
+     "memory/unnamed-subagent-return-lands-in-full.md",
+     "memory/shutdown-request-is-not-an-actuator.md",
+     "memory/subagent-stop-has-two-shapes.md",
+     "lessons/in-process-agent-stops-at-100-turns-the-same-agent-in-a-workflow.md",
+     "memory/bare-json-key-is-unforgeable-by-content.md"
+    ]
+   },
+   {
+    "id": "q44",
+    "style": "paraphrase",
+    "gold_rank": 1,
+    "top5": [
+     "lessons/a-0-byte-output-file-is-not-a-dead-process-it-is-a-process-that.md",
+     "memory/killed-pipeline-empty-output-is-not-a-verdict.md",
+     "memory/negative-array-slice-empties-the-diagnostic.md",
+     "memory/exit-time-evidence-misses-the-death-that-kills-the-recorder.md",
+     "memory/narrated-verdict-is-indistinguishable-from-a-computed-one.md"
+    ]
+   },
+   {
+    "id": "q45",
+    "style": "paraphrase",
+    "gold_rank": 37,
+    "top5": [
+     "memory/threshold-gated-monitor-is-blind-below-its-threshold.md",
+     "memory/job-health-vs-work-outcome.md",
+     "memory/desk-worker-lifecycle-triage.md",
+     "lessons/a-cwd-census-cannot-see-a-worktrees-owner.md",
+     "memory/guard-sample-fields-bound-its-blind-spot.md"
+    ]
+   },
+   {
+    "id": "q46",
+    "style": "paraphrase",
+    "gold_rank": 2,
+    "top5": [
+     "memory/alarm-must-key-on-the-store-not-the-sensor.md",
+     "memory/alarm-polarity-and-attention-budget.md",
+     "memory/remedy-gate-must-cover-the-occasion.md",
+     "memory/detector-with-no-owner-is-not-an-actuator.md",
+     "memory/changelog-and-tracker-are-different-populations.md"
+    ]
+   },
+   {
+    "id": "q47",
+    "style": "paraphrase",
+    "gold_rank": 21,
+    "top5": [
+     "memory/fail-safe-default-mimics-the-healthy-state.md",
+     "memory/changelog-and-tracker-are-different-populations.md",
+     "memory/recovery-notice-must-not-travel-the-broken-channel.md",
+     "memory/destructive-cleanup-runs-after-its-setup-failed.md",
+     "memory/corrected-instrument-can-lie-again.md"
+    ]
+   },
+   {
+    "id": "q48",
+    "style": "paraphrase",
+    "gold_rank": 2,
+    "top5": [
+     "memory/scan-revision-predates-the-fix.md",
+     "memory/fixture-literal-date-expires-against-a-ttl.md",
+     "memory/restore-to-snapshot-pins-the-fault.md",
+     "memory/red-proof-environment-and-ref-fragility.md",
+     "memory/self-deploying-fix-inert-for-its-own-deploy.md"
+    ]
+   },
+   {
+    "id": "q49",
+    "style": "paraphrase",
+    "gold_rank": 1,
+    "top5": [
+     "memory/a-plan-is-not-a-queue.md",
+     "memory/recycle-announced-but-never-fired.md",
+     "lessons/in-process-agent-stops-at-100-turns-the-same-agent-in-a-workflow.md",
+     "lessons/an-agent-written-refusal-is-inherited-as-operator-policy.md",
+     "lessons/value-deadline-work-ends-at-a-consumed-output.md"
+    ]
+   },
+   {
+    "id": "q50",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "lessons/a-locale-pin-protects-only-the-process-that-sets-it.md",
+     "memory/c-locale-turns-character-ops-into-byte-ops.md",
+     "lessons/a-path-length-correction-must-cover-every-spelling.md",
+     "memory/fixture-shape-parity-with-real-producer.md",
+     "lessons/a-wrapper-renames-your-own-timeout-into-a-foreign-fault.md"
+    ]
+   }
+  ],
+  "latency_ms_mean": 24.846277474425733,
+  "encode_corpus_s": 13.286645540967584
+ },
+ "m2v_vec_only_head": {
+  "n": 50,
+  "recall@1": 0.82,
+  "recall@5": 0.9,
+  "recall@10": 0.9,
+  "mrr": 0.8538690476190477,
+  "hits@1": 41,
+  "hits@5": 45,
+  "by_style": {
+   "lexical": {
+    "n": 20,
+    "r1": 18,
+    "r5": 20
+   },
+   "mixed": {
+    "n": 20,
+    "r1": 17,
+    "r5": 19
+   },
+   "paraphrase": {
+    "n": 10,
+    "r1": 6,
+    "r5": 6
+   }
+  },
+  "rows": [
+   {
+    "id": "q01",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/nohup-does-not-detach-from-a-tool-call.md",
+     "memory/nohup-from-a-tool-call-is-not-detached.md",
+     "lessons/a-0-byte-output-file-is-not-a-dead-process-it-is-a-process-that.md",
+     "memory/killed-pipeline-empty-output-is-not-a-verdict.md",
+     "memory/git-dash-c-empty-is-a-noop.md"
+    ]
+   },
+   {
+    "id": "q02",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/grep-w-cannot-separate-nested-model-ids.md",
+     "memory/interactive-grep-is-ugrep-not-usr-bin-grep.md",
+     "memory/ui-label-is-not-the-code-identifier.md",
+     "memory/least-privilege-swap-census-misses-implicit-callers.md",
+     "memory/filename-glob-conscripts-into-a-sibling-gate.md"
+    ]
+   },
+   {
+    "id": "q03",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/grep-q-under-pipefail-inverts-the-verdict.md",
+     "memory/pipefail-inverts-early-exit-probe.md",
+     "memory/interactive-grep-is-ugrep-not-usr-bin-grep.md",
+     "memory/recursive-grep-cannot-walk-the-symlink-layer.md",
+     "memory/process-count-is-not-a-count-of-the-work.md"
+    ]
+   },
+   {
+    "id": "q04",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/negated-assertion-dead-unless-final.md",
+     "memory/checker-population-rests-on-an-untested-belief.md",
+     "memory/assertion-span-must-equal-its-subject.md",
+     "memory/cost-gate-must-be-strictly-weaker.md",
+     "memory/exact-count-assertion-tripwires-its-own-subject.md"
+    ]
+   },
+   {
+    "id": "q05",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/ifs-whitespace-collapses-empty-fields.md",
+     "lessons/tab-is-ifs-whitespace-so-empty-tsv-cells-vanish.md",
+     "memory/absent-range-endpoint-selects-everything.md",
+     "memory/feedback-handoff-splitright-default.md",
+     "memory/feedback-dedicated-split-pane-sessions-for-parallel-work.md"
+    ]
+   },
+   {
+    "id": "q06",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/git-stash-is-repo-global-across-worktrees.md",
+     "memory/gate-scope-from-git-diff-is-blind-to-untracked.md",
+     "memory/git-dash-c-empty-is-a-noop.md",
+     "memory/git-cherry-plus-is-not-absence-from-trunk.md",
+     "memory/worktree-ops-can-bare-the-shared-checkout.md"
+    ]
+   },
+   {
+    "id": "q07",
+    "style": "paraphrase",
+    "gold_rank": 1,
+    "top5": [
+     "memory/plutil-extract-clobbers-input.md",
+     "memory/recheck-reads-the-line-not-its-operands.md",
+     "memory/kill-on-reaped-child-fails-fast-path-hides-it.md",
+     "memory/subject-reads-its-own-path-and-its-own-output.md",
+     "memory/bare-json-key-is-unforgeable-by-content.md"
+    ]
+   },
+   {
+    "id": "q08",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/darwin-qos-band-mechanics.md",
+     "memory/control-calibrated-to-implementation-decays.md",
+     "memory/prompt-suggestion-dropped-by-slow-stop-hooks.md",
+     "lessons/a-prior-partial-evaluation-reads-as-a-completed-one.md",
+     "memory/css-duplicate-keyframe-is-a-glide.md"
+    ]
+   },
+   {
+    "id": "q09",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/mass-tls-hostname-mismatch-indicts-the-local-route.md",
+     "memory/resumed-session-loses-terminal-identity.md",
+     "memory/harness-default-collapses-the-states-under-test.md",
+     "memory/reaper-blindness-it2-gate-rootcause.md",
+     "memory/adhoc-resign-breaks-hardened-runtime.md"
+    ]
+   },
+   {
+    "id": "q10",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/handoff-fire-goal-prefix-trap.md",
+     "memory/goal-idle-has-two-failure-poles.md",
+     "memory/desk-spawned-session-lifecycle-discipline.md",
+     "memory/dispatcher-verdict-is-not-the-fired-sessions-state.md",
+     "memory/fired-peer-silence-has-a-third-cause.md"
+    ]
+   },
+   {
+    "id": "q11",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/shellcheck-prose-comment-aborts-analysis.md",
+     "memory/desk-whack-a-mole-means-file-systemic-fix.md",
+     "memory/lint-blindness-composes-and-hides-the-next-defect.md",
+     "memory/bats-dead-assertions-errexit-exemptions.md",
+     "memory/prescribed-remedy-worse-than-the-bug.md"
+    ]
+   },
+   {
+    "id": "q12",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/bisect-names-a-commit-it-never-ran.md",
+     "memory/blocked-commit-hook-tears-down-the-sequencer.md",
+     "memory/git-dash-c-empty-is-a-noop.md",
+     "memory/unfixtured-sensor-executes-the-deployed-subject.md",
+     "memory/git-cherry-plus-is-not-absence-from-trunk.md"
+    ]
+   },
+   {
+    "id": "q13",
+    "style": "lexical",
+    "gold_rank": 2,
+    "top5": [
+     "memory/process-count-is-not-a-count-of-the-work.md",
+     "memory/pgrep-f-matches-agent-briefs.md",
+     "memory/nohup-from-a-tool-call-is-not-detached.md",
+     "memory/pgrep-excludes-the-callers-ancestors.md",
+     "memory/probe-child-session-marker-kills-persistence.md"
+    ]
+   },
+   {
+    "id": "q14",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/transcript-lines-repeat-one-billed-response.md",
+     "memory/token-usage-from-transcripts.md",
+     "memory/session-index-message-count-is-not-a-billing-proxy.md",
+     "lessons/summed-per-process-cpu-is-not-system-utilization.md",
+     "memory/line-count-is-blind-to-prose-in-table-cells.md"
+    ]
+   },
+   {
+    "id": "q15",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/recursive-grep-cannot-walk-the-symlink-layer.md",
+     "memory/interactive-grep-is-ugrep-not-usr-bin-grep.md",
+     "memory/grep-w-cannot-separate-nested-model-ids.md",
+     "memory/context-econ-recycle-policy.md",
+     "memory/grep-q-under-pipefail-inverts-the-verdict.md"
+    ]
+   },
+   {
+    "id": "q16",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/suppressed-stderr-turns-a-failed-command-into-a-zero.md",
+     "memory/null-result-must-not-use-the-error-channel.md",
+     "memory/landedness-oracle-is-blind-to-intent.md",
+     "memory/process-name-is-the-image-not-the-work.md",
+     "memory/docclf-destination-and-run-report-spec.md"
+    ]
+   },
+   {
+    "id": "q17",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/killed-pipeline-empty-output-is-not-a-verdict.md",
+     "lessons/never-wrap-ship-in-your-own-timeout.md",
+     "lessons/a-driver-shell-s-own-cpu-is-not-its-pipeline-s-progress.md",
+     "memory/worktree-ops-can-bare-the-shared-checkout.md",
+     "lessons/a-0-byte-output-file-is-not-a-dead-process-it-is-a-process-that.md"
+    ]
+   },
+   {
+    "id": "q18",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/blocked-commit-hook-tears-down-the-sequencer.md",
+     "memory/shared-checkout-commit-is-a-fleet-converge-block.md",
+     "lessons/an-allow-rule-cannot-silence-a-hook-s-ask.md",
+     "memory/prompt-suggestion-dropped-by-slow-stop-hooks.md",
+     "memory/landedness-over-commits-is-blind-to-staged-content.md"
+    ]
+   },
+   {
+    "id": "q19",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/worktree-ops-can-bare-the-shared-checkout.md",
+     "memory/host-suite-config-leak-corrupts-shared-checkout.md",
+     "memory/parallel-stream-convergence-protocol.md",
+     "memory/shared-checkout-commit-is-a-fleet-converge-block.md",
+     "memory/self-deploying-fix-inert-for-its-own-deploy.md"
+    ]
+   },
+   {
+    "id": "q20",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/bats-runtime-cap-placement-and-borrowed-hermeticity.md",
+     "memory/verification-harness-vacuous-pass-traps.md",
+     "memory/bats-background-job-fabricates-not-ok.md",
+     "memory/cut-can-manufacture-its-own-verdict.md",
+     "memory/bound-must-fit-the-band-not-the-bench.md"
+    ]
+   },
+   {
+    "id": "q21",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/assignment-inside-command-substitution-never-escapes.md",
+     "memory/sensor-default-off-makes-blindness-the-shipping-path.md",
+     "memory/multibyte-char-absorbed-into-variable-name.md",
+     "memory/verification-harness-vacuous-pass-traps.md",
+     "memory/vendor-gate-may-be-an-env-var.md"
+    ]
+   },
+   {
+    "id": "q22",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/multibyte-char-absorbed-into-variable-name.md",
+     "memory/sensor-default-off-makes-blindness-the-shipping-path.md",
+     "memory/verification-harness-vacuous-pass-traps.md",
+     "memory/allow-rule-prefix-misses-bash-wrapper.md",
+     "memory/null-result-must-not-use-the-error-channel.md"
+    ]
+   },
+   {
+    "id": "q23",
+    "style": "paraphrase",
+    "gold_rank": 1,
+    "top5": [
+     "memory/compressor-segment-exhaustion-panic.md",
+     "memory/config-flip-is-not-a-shell-flip.md",
+     "memory/project-tokenomics-plan-swap-verdict.md",
+     "memory/terminal-identity-is-ancestry-not-environment.md",
+     "memory/capability-initialized-is-not-capability-used.md"
+    ]
+   },
+   {
+    "id": "q24",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/reference-screenshot-clipboard-watcher.md",
+     "memory/procsub-pid-is-unreachable-own-the-pipe.md",
+     "memory/filming-a-window-is-not-filming-a-rect.md",
+     "memory/readme-inline-media-encoding.md",
+     "memory/handoff-brief-prose-vs-identity.md"
+    ]
+   },
+   {
+    "id": "q25",
+    "style": "mixed",
+    "gold_rank": 3,
+    "top5": [
+     "memory/subagent-records-live-in-separate-files.md",
+     "memory/feedback-parallelize-by-default.md",
+     "memory/agent-definition-cached-at-session-start.md",
+     "memory/subagent-stop-has-two-shapes.md",
+     "memory/unnamed-subagent-return-lands-in-full.md"
+    ]
+   },
+   {
+    "id": "q26",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/allow-rule-prefix-misses-bash-wrapper.md",
+     "memory/bash32-case-in-substitution-zsh-repro-trap.md",
+     "memory/prefix-rules-cannot-express-shell-programs.md",
+     "memory/verification-harness-vacuous-pass-traps.md",
+     "memory/denylist-enumerates-spellings-not-the-class.md"
+    ]
+   },
+   {
+    "id": "q27",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/absent-range-endpoint-selects-everything.md",
+     "memory/scan-coverage-complete-is-files-not-classes.md",
+     "memory/work-item-remedy-can-become-forbidden.md",
+     "memory/negated-assertion-dead-unless-final.md",
+     "memory/resolution-signal-must-match-the-occurrence.md"
+    ]
+   },
+   {
+    "id": "q28",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/json-quoting-is-not-shell-quoting.md",
+     "memory/deployed-copy-as-parsed-contract.md",
+     "lessons/a-crash-dump-s-memory-fields-are-derived-check-their-arithmetic.md",
+     "memory/negated-assertion-dead-unless-final.md",
+     "memory/verification-harness-vacuous-pass-traps.md"
+    ]
+   },
+   {
+    "id": "q29",
+    "style": "paraphrase",
+    "gold_rank": 1,
+    "top5": [
+     "memory/process-start-time-renders-in-ambient-timezone.md",
+     "memory/bound-must-fit-the-band-not-the-bench.md",
+     "memory/kill-on-reaped-child-fails-fast-path-hides-it.md",
+     "memory/lookup-miss-is-not-absence.md",
+     "memory/watcher-pin-fits-the-process-model.md"
+    ]
+   },
+   {
+    "id": "q30",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "lessons/symlinked-auto-memory-dir-prompts-on-every-write.md",
+     "memory/git-dash-c-empty-is-a-noop.md",
+     "memory/dangling-lock-symlink-reads-as-held.md",
+     "memory/install-verified-in-one-config-dir-is-not-installed.md",
+     "memory/permission-autonomy-allowlist-method.md"
+    ]
+   },
+   {
+    "id": "q31",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "lessons/detached-bash-is-reaped-after-ten-minutes.md",
+     "memory/bash32-case-in-substitution-zsh-repro-trap.md",
+     "memory/allow-rule-prefix-misses-bash-wrapper.md",
+     "memory/killed-pipeline-empty-output-is-not-a-verdict.md",
+     "memory/destructive-cleanup-runs-after-its-setup-failed.md"
+    ]
+   },
+   {
+    "id": "q32",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "lessons/shift-n-past-the-end-is-a-no-op-that-wedges-an-argv-loop.md",
+     "memory/config-flip-is-not-a-shell-flip.md",
+     "memory/process-start-time-renders-in-ambient-timezone.md",
+     "memory/feedback-dedicated-split-pane-sessions-for-parallel-work.md",
+     "memory/falsifier-polarity-inverted-under-no-run.md"
+    ]
+   },
+   {
+    "id": "q33",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "lessons/soft-reset-onto-a-moved-ref-reverts-the-difference.md",
+     "memory/destructive-cleanup-runs-after-its-setup-failed.md",
+     "memory/git-dash-c-empty-is-a-noop.md",
+     "memory/control-must-replay-the-real-artifact.md",
+     "memory/parallel-stream-convergence-protocol.md"
+    ]
+   },
+   {
+    "id": "q34",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "lessons/bash-32-counts-parens-inside-a-heredoc-it-never-runs.md",
+     "memory/bash32-case-in-substitution-zsh-repro-trap.md",
+     "memory/allow-rule-prefix-misses-bash-wrapper.md",
+     "memory/prefix-rules-cannot-express-shell-programs.md",
+     "memory/verification-harness-vacuous-pass-traps.md"
+    ]
+   },
+   {
+    "id": "q35",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "lessons/a-subagent-cannot-answer-a-permission-prompt-so-a-prompt-trigger.md",
+     "memory/feedback-parallelize-by-default.md",
+     "memory/permission-autonomy-allowlist-method.md",
+     "lessons/a-validate-on-attach-door-cannot-admit-the-already-satisfied.md",
+     "memory/subagent-stop-has-two-shapes.md"
+    ]
+   },
+   {
+    "id": "q36",
+    "style": "paraphrase",
+    "gold_rank": null,
+    "top5": [
+     "memory/source-patching-test-makes-the-line-an-api.md",
+     "memory/harness-default-collapses-the-states-under-test.md",
+     "memory/contract-prose-can-understate-the-mechanism.md",
+     "memory/unfixtured-sensor-executes-the-deployed-subject.md",
+     "memory/cost-gate-must-be-strictly-weaker.md"
+    ]
+   },
+   {
+    "id": "q37",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/interactive-grep-is-ugrep-not-usr-bin-grep.md",
+     "memory/recursive-grep-cannot-walk-the-symlink-layer.md",
+     "memory/grep-q-under-pipefail-inverts-the-verdict.md",
+     "memory/filter-repo-literals-not-regexes.md",
+     "memory/pipefail-inverts-early-exit-probe.md"
+    ]
+   },
+   {
+    "id": "q38",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/adhoc-resign-breaks-hardened-runtime.md",
+     "lessons/an-appended-redirect-binds-only-to-the-fallback.md",
+     "memory/append-conflict-shared-suffix.md",
+     "memory/bounding-external-calls.md",
+     "memory/version-identity-is-the-running-process-not-the-launcher.md"
+    ]
+   },
+   {
+    "id": "q39",
+    "style": "mixed",
+    "gold_rank": 3,
+    "top5": [
+     "memory/recheck-reads-the-line-not-its-operands.md",
+     "memory/guard-can-be-correct-and-checker-invisible.md",
+     "memory/verification-harness-vacuous-pass-traps.md",
+     "memory/blind-check-generators-stdin-and-sid-keys.md",
+     "memory/poll-loop-bound-excludes-its-own-check.md"
+    ]
+   },
+   {
+    "id": "q40",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/harness-kills-background-work-under-memory-pressure.md",
+     "memory/bound-must-fit-the-band-not-the-bench.md",
+     "memory/verify-throughput-below-trunk-velocity.md",
+     "memory/destructive-cleanup-runs-after-its-setup-failed.md",
+     "memory/fixer-dry-run-is-weaker-than-the-detector.md"
+    ]
+   },
+   {
+    "id": "q41",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/timeout-rc-collides-with-the-childs-own-rc.md",
+     "memory/action-return-read-off-a-destroyed-handle.md",
+     "memory/session-crash-per-session-bloat.md",
+     "memory/transplanted-session-loses-dispatch-identity.md",
+     "memory/output-must-round-trip-into-input.md"
+    ]
+   },
+   {
+    "id": "q42",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "lessons/keep-both-on-appended-blocks-leaves-the-first-unterminated.md",
+     "memory/append-conflict-shared-suffix.md",
+     "memory/parallel-stream-convergence-protocol.md",
+     "memory/shared-checkout-commit-is-a-fleet-converge-block.md",
+     "memory/parked-blocker-obsoleted-by-later-fix.md"
+    ]
+   },
+   {
+    "id": "q43",
+    "style": "lexical",
+    "gold_rank": 3,
+    "top5": [
+     "memory/subagent-stop-has-two-shapes.md",
+     "memory/feedback-no-artificial-timelines-drive-to-completion.md",
+     "lessons/in-process-agent-stops-at-100-turns-the-same-agent-in-a-workflow.md",
+     "memory/unnamed-subagent-return-lands-in-full.md",
+     "memory/teammate-close-contract.md"
+    ]
+   },
+   {
+    "id": "q44",
+    "style": "paraphrase",
+    "gold_rank": 1,
+    "top5": [
+     "lessons/a-0-byte-output-file-is-not-a-dead-process-it-is-a-process-that.md",
+     "memory/destructive-cleanup-runs-after-its-setup-failed.md",
+     "memory/killed-pipeline-empty-output-is-not-a-verdict.md",
+     "memory/new-nonverdict-state-strands-its-consumers.md",
+     "memory/fixer-dry-run-is-weaker-than-the-detector.md"
+    ]
+   },
+   {
+    "id": "q45",
+    "style": "paraphrase",
+    "gold_rank": null,
+    "top5": [
+     "memory/fixer-dry-run-is-weaker-than-the-detector.md",
+     "memory/unfixed-file-is-not-a-sound-file.md",
+     "lessons/a-0-byte-output-file-is-not-a-dead-process-it-is-a-process-that.md",
+     "memory/job-health-vs-work-outcome.md",
+     "memory/guard-can-be-correct-and-checker-invisible.md"
+    ]
+   },
+   {
+    "id": "q46",
+    "style": "paraphrase",
+    "gold_rank": 1,
+    "top5": [
+     "memory/alarm-polarity-and-attention-budget.md",
+     "memory/reload-guard-excludes-the-always-busy.md",
+     "memory/fail-loud-into-a-log-nobody-reads-is-silent.md",
+     "memory/fired-peer-silence-has-a-third-cause.md",
+     "lessons/a-mid-turn-brief-is-invisible-to-the-fired-peer-detector.md"
+    ]
+   },
+   {
+    "id": "q47",
+    "style": "paraphrase",
+    "gold_rank": 16,
+    "top5": [
+     "memory/restore-to-snapshot-pins-the-fault.md",
+     "memory/destructive-cleanup-runs-after-its-setup-failed.md",
+     "memory/guard-key-cannot-cover-paths-that-run-only-without-it.md",
+     "memory/unfixed-file-is-not-a-sound-file.md",
+     "memory/degraded-path-restores-display-not-the-decision.md"
+    ]
+   },
+   {
+    "id": "q48",
+    "style": "paraphrase",
+    "gold_rank": 21,
+    "top5": [
+     "memory/adhoc-resign-breaks-hardened-runtime.md",
+     "memory/bound-must-fit-the-band-not-the-bench.md",
+     "memory/named-failure-vs-no-verdict.md",
+     "memory/reaper-blindness-it2-gate-rootcause.md",
+     "memory/null-result-must-not-use-the-error-channel.md"
+    ]
+   },
+   {
+    "id": "q49",
+    "style": "paraphrase",
+    "gold_rank": 1,
+    "top5": [
+     "memory/a-plan-is-not-a-queue.md",
+     "memory/dispatcher-verdict-is-not-the-fired-sessions-state.md",
+     "memory/handoff-fire-goal-prefix-trap.md",
+     "memory/side-worktree-commit-immediately.md",
+     "memory/resume-restores-session-not-channel.md"
+    ]
+   },
+   {
+    "id": "q50",
+    "style": "mixed",
+    "gold_rank": 12,
+    "top5": [
+     "memory/verification-harness-vacuous-pass-traps.md",
+     "memory/exoneration-bound-must-fit-what-it-bounds.md",
+     "memory/scan-revision-predates-the-fix.md",
+     "memory/source-patching-test-makes-the-line-an-api.md",
+     "memory/negative-array-slice-empties-the-diagnostic.md"
+    ]
+   }
+  ]
+ },
+ "rrf_fts5fielded+m2v_head": {
+  "n": 50,
+  "recall@1": 0.9,
+  "recall@5": 0.94,
+  "recall@10": 0.94,
+  "mrr": 0.9163186109027257,
+  "hits@1": 45,
+  "hits@5": 47,
+  "by_style": {
+   "lexical": {
+    "n": 20,
+    "r1": 19,
+    "r5": 20
+   },
+   "mixed": {
+    "n": 20,
+    "r1": 20,
+    "r5": 20
+   },
+   "paraphrase": {
+    "n": 10,
+    "r1": 6,
+    "r5": 7
+   }
+  },
+  "rows": [
+   {
+    "id": "q01",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/nohup-from-a-tool-call-is-not-detached.md",
+     "memory/nohup-does-not-detach-from-a-tool-call.md",
+     "memory/killed-pipeline-empty-output-is-not-a-verdict.md",
+     "memory/harness-kills-background-work-under-memory-pressure.md",
+     "lessons/a-0-byte-output-file-is-not-a-dead-process-it-is-a-process-that.md"
+    ]
+   },
+   {
+    "id": "q02",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/grep-w-cannot-separate-nested-model-ids.md",
+     "memory/lookup-miss-is-not-absence.md",
+     "memory/blind-check-generators-stdin-and-sid-keys.md",
+     "memory/resumed-session-loses-terminal-identity.md",
+     "memory/watcher-pin-fits-the-process-model.md"
+    ]
+   },
+   {
+    "id": "q03",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/pipefail-inverts-early-exit-probe.md",
+     "memory/grep-q-under-pipefail-inverts-the-verdict.md",
+     "memory/verification-harness-vacuous-pass-traps.md",
+     "lessons/a-0-byte-output-file-is-not-a-dead-process-it-is-a-process-that.md",
+     "memory/spec-named-mechanism-may-be-prose-only.md"
+    ]
+   },
+   {
+    "id": "q04",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/negated-assertion-dead-unless-final.md",
+     "memory/assertion-span-must-equal-its-subject.md",
+     "memory/bats-background-job-fabricates-not-ok.md",
+     "memory/lint-blindness-composes-and-hides-the-next-defect.md",
+     "memory/bats-dead-assertions-errexit-exemptions.md"
+    ]
+   },
+   {
+    "id": "q05",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/ifs-whitespace-collapses-empty-fields.md",
+     "lessons/tab-is-ifs-whitespace-so-empty-tsv-cells-vanish.md",
+     "memory/feedback-handoff-splitright-default.md",
+     "memory/line-count-is-blind-to-prose-in-table-cells.md",
+     "memory/feedback-dedicated-split-pane-sessions-for-parallel-work.md"
+    ]
+   },
+   {
+    "id": "q06",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/git-stash-is-repo-global-across-worktrees.md",
+     "memory/git-cherry-plus-is-not-absence-from-trunk.md",
+     "memory/worktree-ops-can-bare-the-shared-checkout.md",
+     "memory/clean-worktree-cannot-distinguish-never-worked-from-landed.md",
+     "memory/destructive-cleanup-runs-after-its-setup-failed.md"
+    ]
+   },
+   {
+    "id": "q07",
+    "style": "paraphrase",
+    "gold_rank": 1,
+    "top5": [
+     "memory/plutil-extract-clobbers-input.md",
+     "memory/cited-sha-may-not-survive-the-land.md",
+     "memory/work-item-citation-refutes-its-own-remedy.md",
+     "memory/subject-reads-its-own-path-and-its-own-output.md",
+     "lessons/symlinked-auto-memory-dir-prompts-on-every-write.md"
+    ]
+   },
+   {
+    "id": "q08",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/darwin-qos-band-mechanics.md",
+     "memory/feedback-dedicated-split-pane-sessions-for-parallel-work.md",
+     "memory/positive-control-the-denominator.md",
+     "memory/parked-blocker-obsoleted-by-later-fix.md",
+     "memory/shutdown-request-is-not-an-actuator.md"
+    ]
+   },
+   {
+    "id": "q09",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/mass-tls-hostname-mismatch-indicts-the-local-route.md",
+     "memory/peer-worktree-read-midwrite-parses-as-a-code-defect.md",
+     "memory/cross-session-mail-v3.md",
+     "memory/fixture-shape-parity-with-real-producer.md",
+     "memory/fork-cost-proxies-and-mid-session-siblings.md"
+    ]
+   },
+   {
+    "id": "q10",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/handoff-fire-goal-prefix-trap.md",
+     "memory/goal-idle-has-two-failure-poles.md",
+     "memory/dispatcher-verdict-is-not-the-fired-sessions-state.md",
+     "memory/shutdown-request-is-not-an-actuator.md",
+     "memory/desk-spawned-session-lifecycle-discipline.md"
+    ]
+   },
+   {
+    "id": "q11",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/shellcheck-prose-comment-aborts-analysis.md",
+     "memory/bats-dead-assertions-errexit-exemptions.md",
+     "memory/lint-blindness-composes-and-hides-the-next-defect.md",
+     "memory/lint-directive-binds-to-the-next-construct.md",
+     "memory/bash32-case-in-substitution-zsh-repro-trap.md"
+    ]
+   },
+   {
+    "id": "q12",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/bisect-names-a-commit-it-never-ran.md",
+     "memory/adjudicator-env-must-match-the-measurement.md",
+     "memory/git-dash-c-empty-is-a-noop.md",
+     "memory/unfixtured-sensor-executes-the-deployed-subject.md",
+     "lessons/a-bisect-s-predicate-must-be-the-convicted-test-not-its-suite.md"
+    ]
+   },
+   {
+    "id": "q13",
+    "style": "lexical",
+    "gold_rank": 2,
+    "top5": [
+     "memory/process-count-is-not-a-count-of-the-work.md",
+     "memory/pgrep-f-matches-agent-briefs.md",
+     "memory/nohup-from-a-tool-call-is-not-detached.md",
+     "memory/pgrep-excludes-the-callers-ancestors.md",
+     "lessons/a-subagent-cannot-answer-a-permission-prompt-so-a-prompt-trigger.md"
+    ]
+   },
+   {
+    "id": "q14",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/token-usage-from-transcripts.md",
+     "memory/transcript-lines-repeat-one-billed-response.md",
+     "memory/session-index-message-count-is-not-a-billing-proxy.md",
+     "lessons/summed-per-process-cpu-is-not-system-utilization.md",
+     "memory/subscription-token-value-inverts-the-cost-axis.md"
+    ]
+   },
+   {
+    "id": "q15",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/recursive-grep-cannot-walk-the-symlink-layer.md",
+     "memory/inventory-before-building.md",
+     "memory/retry-count-discriminates-flake-from-starvation.md",
+     "memory/symlinked-store-invisible-to-find.md",
+     "memory/self-identity-guard-must-fully-resolve.md"
+    ]
+   },
+   {
+    "id": "q16",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/suppressed-stderr-turns-a-failed-command-into-a-zero.md",
+     "memory/verification-harness-vacuous-pass-traps.md",
+     "memory/procsub-pid-is-unreachable-own-the-pipe.md",
+     "memory/negated-assertion-dead-unless-final.md",
+     "memory/landedness-oracle-is-blind-to-intent.md"
+    ]
+   },
+   {
+    "id": "q17",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/killed-pipeline-empty-output-is-not-a-verdict.md",
+     "memory/gate-log-tail-hides-the-first-failure.md",
+     "lessons/a-driver-shell-s-own-cpu-is-not-its-pipeline-s-progress.md",
+     "lessons/a-0-byte-output-file-is-not-a-dead-process-it-is-a-process-that.md",
+     "lessons/never-wrap-ship-in-your-own-timeout.md"
+    ]
+   },
+   {
+    "id": "q18",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/blocked-commit-hook-tears-down-the-sequencer.md",
+     "memory/shared-checkout-commit-is-a-fleet-converge-block.md",
+     "memory/rebasing-a-long-stranded-branch.md",
+     "lessons/keep-both-on-appended-blocks-leaves-the-first-unterminated.md",
+     "lessons/shared-checkout-commit-blocks-the-fleet-and-skipped-the-gate.md"
+    ]
+   },
+   {
+    "id": "q19",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/worktree-ops-can-bare-the-shared-checkout.md",
+     "memory/host-suite-config-leak-corrupts-shared-checkout.md",
+     "memory/parallel-stream-convergence-protocol.md",
+     "memory/shared-checkout-commit-is-a-fleet-converge-block.md",
+     "memory/rail-fix-propagates-per-worktree.md"
+    ]
+   },
+   {
+    "id": "q20",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/bats-runtime-cap-placement-and-borrowed-hermeticity.md",
+     "memory/de-ambienting-needs-every-coupling.md",
+     "memory/sensor-default-off-makes-blindness-the-shipping-path.md",
+     "memory/callers-dependency-probe-mutes-the-callees-non-verdict.md",
+     "memory/destructive-cleanup-runs-after-its-setup-failed.md"
+    ]
+   },
+   {
+    "id": "q21",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/assignment-inside-command-substitution-never-escapes.md",
+     "memory/multibyte-char-absorbed-into-variable-name.md",
+     "memory/git-dash-c-empty-is-a-noop.md",
+     "lessons/a-synthetic-input-event-has-no-sandbox-the-screen-is-global.md",
+     "memory/second-transport-makes-an-e2e-ambient.md"
+    ]
+   },
+   {
+    "id": "q22",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/multibyte-char-absorbed-into-variable-name.md",
+     "memory/assignment-inside-command-substitution-never-escapes.md",
+     "lessons/shift-n-past-the-end-is-a-no-op-that-wedges-an-argv-loop.md",
+     "memory/verification-harness-vacuous-pass-traps.md",
+     "lessons/scraped-url-must-exclude-control-characters.md"
+    ]
+   },
+   {
+    "id": "q23",
+    "style": "paraphrase",
+    "gold_rank": 1,
+    "top5": [
+     "memory/compressor-segment-exhaustion-panic.md",
+     "memory/agent-benchmark-panicked-the-box.md",
+     "memory/capability-initialized-is-not-capability-used.md",
+     "lessons/a-crash-dump-s-memory-fields-are-derived-check-their-arithmetic.md",
+     "memory/project-tokenomics-plan-swap-verdict.md"
+    ]
+   },
+   {
+    "id": "q24",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/reference-screenshot-clipboard-watcher.md",
+     "memory/procsub-pid-is-unreachable-own-the-pipe.md",
+     "memory/feedback-silver-platter-exact-commands.md",
+     "memory/feedback-tui-visibility-numbers-first.md",
+     "memory/readme-inline-media-encoding.md"
+    ]
+   },
+   {
+    "id": "q25",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/agent-definition-cached-at-session-start.md",
+     "memory/subagent-records-live-in-separate-files.md",
+     "memory/feedback-parallelize-by-default.md",
+     "memory/subagent-stop-has-two-shapes.md",
+     "memory/unnamed-subagent-return-lands-in-full.md"
+    ]
+   },
+   {
+    "id": "q26",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/allow-rule-prefix-misses-bash-wrapper.md",
+     "memory/prefix-rules-cannot-express-shell-programs.md",
+     "memory/permission-autonomy-allowlist-method.md",
+     "lessons/an-allow-rule-cannot-silence-a-hook-s-ask.md",
+     "memory/denylist-enumerates-spellings-not-the-class.md"
+    ]
+   },
+   {
+    "id": "q27",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/absent-range-endpoint-selects-everything.md",
+     "memory/deployed-copy-as-parsed-contract.md",
+     "memory/claimed-outcome-vs-checked-outcome.md",
+     "memory/marker-adjacency-is-part-of-its-meaning.md",
+     "memory/lookup-miss-is-not-absence.md"
+    ]
+   },
+   {
+    "id": "q28",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/json-quoting-is-not-shell-quoting.md",
+     "lessons/bash-32-counts-parens-inside-a-heredoc-it-never-runs.md",
+     "lessons/a-crash-dump-s-memory-fields-are-derived-check-their-arithmetic.md",
+     "memory/claude-code-2.1.219-opus5-eval.md",
+     "memory/bats-dead-assertions-errexit-exemptions.md"
+    ]
+   },
+   {
+    "id": "q29",
+    "style": "paraphrase",
+    "gold_rank": 1,
+    "top5": [
+     "memory/process-start-time-renders-in-ambient-timezone.md",
+     "memory/kill-on-reaped-child-fails-fast-path-hides-it.md",
+     "memory/liveness-proxy-cannot-be-output-age.md",
+     "memory/lookup-miss-is-not-absence.md",
+     "memory/session-signals-do-not-measure-background-runtime.md"
+    ]
+   },
+   {
+    "id": "q30",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "lessons/symlinked-auto-memory-dir-prompts-on-every-write.md",
+     "memory/permission-autonomy-allowlist-method.md",
+     "memory/install-verified-in-one-config-dir-is-not-installed.md",
+     "memory/dangling-lock-symlink-reads-as-held.md",
+     "memory/conclusion-must-reach-the-enforcing-store.md"
+    ]
+   },
+   {
+    "id": "q31",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "lessons/detached-bash-is-reaped-after-ten-minutes.md",
+     "memory/nohup-does-not-detach-from-a-tool-call.md",
+     "memory/nohup-from-a-tool-call-is-not-detached.md",
+     "memory/killed-pipeline-empty-output-is-not-a-verdict.md",
+     "lessons/a-0-byte-output-file-is-not-a-dead-process-it-is-a-process-that.md"
+    ]
+   },
+   {
+    "id": "q32",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "lessons/shift-n-past-the-end-is-a-no-op-that-wedges-an-argv-loop.md",
+     "memory/goal-idle-has-two-failure-poles.md",
+     "memory/unfixed-file-is-not-a-sound-file.md",
+     "memory/ifs-whitespace-collapses-empty-fields.md",
+     "memory/verification-harness-vacuous-pass-traps.md"
+    ]
+   },
+   {
+    "id": "q33",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "lessons/soft-reset-onto-a-moved-ref-reverts-the-difference.md",
+     "memory/destructive-cleanup-runs-after-its-setup-failed.md",
+     "memory/restore-to-snapshot-pins-the-fault.md",
+     "memory/landedness-over-commits-is-blind-to-staged-content.md",
+     "memory/git-cherry-plus-is-not-absence-from-trunk.md"
+    ]
+   },
+   {
+    "id": "q34",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "lessons/bash-32-counts-parens-inside-a-heredoc-it-never-runs.md",
+     "memory/bash32-case-in-substitution-zsh-repro-trap.md",
+     "memory/hermetic-in-stubs-not-in-interpreter.md",
+     "memory/nohup-does-not-detach-from-a-tool-call.md",
+     "memory/mass-tls-hostname-mismatch-indicts-the-local-route.md"
+    ]
+   },
+   {
+    "id": "q35",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "lessons/a-subagent-cannot-answer-a-permission-prompt-so-a-prompt-trigger.md",
+     "memory/fired-peer-silence-has-a-third-cause.md",
+     "memory/permission-autonomy-allowlist-method.md",
+     "memory/authorization-is-not-transitive-over-peer-mail.md",
+     "memory/prefix-rules-cannot-express-shell-programs.md"
+    ]
+   },
+   {
+    "id": "q36",
+    "style": "paraphrase",
+    "gold_rank": 31,
+    "top5": [
+     "memory/contract-prose-can-understate-the-mechanism.md",
+     "memory/work-item-remedy-can-become-forbidden.md",
+     "memory/cost-gate-must-be-strictly-weaker.md",
+     "memory/conclusion-must-reach-the-enforcing-store.md",
+     "memory/instrument-must-have-an-as-built-mode.md"
+    ]
+   },
+   {
+    "id": "q37",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/interactive-grep-is-ugrep-not-usr-bin-grep.md",
+     "memory/filter-repo-literals-not-regexes.md",
+     "memory/deployed-copy-as-parsed-contract.md",
+     "memory/pipefail-inverts-early-exit-probe.md",
+     "memory/process-count-is-not-a-count-of-the-work.md"
+    ]
+   },
+   {
+    "id": "q38",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/adhoc-resign-breaks-hardened-runtime.md",
+     "memory/gui-memory-dialog-blames-the-coalition-host.md",
+     "memory/headless-chromium-still-registers-an-app.md",
+     "lessons/bundle-verify-passes-on-a-bundle-that-cannot-be-cloned.md",
+     "memory/project-tokenomics-plan-swap-verdict.md"
+    ]
+   },
+   {
+    "id": "q39",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/verification-harness-vacuous-pass-traps.md",
+     "memory/bounding-external-calls.md",
+     "memory/poll-loop-bound-excludes-its-own-check.md",
+     "lessons/shift-n-past-the-end-is-a-no-op-that-wedges-an-argv-loop.md",
+     "memory/verify-throughput-below-trunk-velocity.md"
+    ]
+   },
+   {
+    "id": "q40",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/harness-kills-background-work-under-memory-pressure.md",
+     "memory/bound-must-fit-the-band-not-the-bench.md",
+     "memory/killed-pipeline-empty-output-is-not-a-verdict.md",
+     "memory/session-signals-do-not-measure-background-runtime.md",
+     "memory/strong-instrument-overruled-by-weak-proxies.md"
+    ]
+   },
+   {
+    "id": "q41",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "memory/timeout-rc-collides-with-the-childs-own-rc.md",
+     "memory/output-must-round-trip-into-input.md",
+     "memory/assignment-inside-command-substitution-never-escapes.md",
+     "memory/named-failure-vs-no-verdict.md",
+     "memory/gate-default-decides-failure-direction.md"
+    ]
+   },
+   {
+    "id": "q42",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "lessons/keep-both-on-appended-blocks-leaves-the-first-unterminated.md",
+     "memory/append-conflict-shared-suffix.md",
+     "memory/parallel-stream-convergence-protocol.md",
+     "memory/shared-checkout-commit-is-a-fleet-converge-block.md",
+     "lessons/shared-checkout-commit-blocks-the-fleet-and-skipped-the-gate.md"
+    ]
+   },
+   {
+    "id": "q43",
+    "style": "lexical",
+    "gold_rank": 1,
+    "top5": [
+     "lessons/in-process-agent-stops-at-100-turns-the-same-agent-in-a-workflow.md",
+     "memory/subagent-stop-has-two-shapes.md",
+     "memory/unnamed-subagent-return-lands-in-full.md",
+     "memory/teammate-close-contract.md",
+     "memory/feedback-dedicated-split-pane-sessions-for-parallel-work.md"
+    ]
+   },
+   {
+    "id": "q44",
+    "style": "paraphrase",
+    "gold_rank": 1,
+    "top5": [
+     "lessons/a-0-byte-output-file-is-not-a-dead-process-it-is-a-process-that.md",
+     "lessons/a-crash-dump-s-memory-fields-are-derived-check-their-arithmetic.md",
+     "memory/killed-pipeline-empty-output-is-not-a-verdict.md",
+     "memory/session-crash-per-session-bloat.md",
+     "memory/exit-time-evidence-misses-the-death-that-kills-the-recorder.md"
+    ]
+   },
+   {
+    "id": "q45",
+    "style": "paraphrase",
+    "gold_rank": 96,
+    "top5": [
+     "memory/job-health-vs-work-outcome.md",
+     "lessons/a-cwd-census-cannot-see-a-worktrees-owner.md",
+     "memory/desk-worker-lifecycle-triage.md",
+     "memory/shutdown-request-is-not-an-actuator.md",
+     "memory/strong-instrument-overruled-by-weak-proxies.md"
+    ]
+   },
+   {
+    "id": "q46",
+    "style": "paraphrase",
+    "gold_rank": 1,
+    "top5": [
+     "memory/alarm-polarity-and-attention-budget.md",
+     "memory/alarm-must-key-on-the-store-not-the-sensor.md",
+     "memory/remedy-gate-must-cover-the-occasion.md",
+     "lessons/poll-period-charged-as-a-cost-floor.md",
+     "memory/detector-with-no-owner-is-not-an-actuator.md"
+    ]
+   },
+   {
+    "id": "q47",
+    "style": "paraphrase",
+    "gold_rank": 43,
+    "top5": [
+     "memory/isolation-keyed-on-a-path-is-blind-to-other-paths.md",
+     "memory/search-branch-graveyard-before-building.md",
+     "memory/recovery-notice-must-not-travel-the-broken-channel.md",
+     "memory/changelog-and-tracker-are-different-populations.md",
+     "memory/new-nonverdict-state-strands-its-consumers.md"
+    ]
+   },
+   {
+    "id": "q48",
+    "style": "paraphrase",
+    "gold_rank": 4,
+    "top5": [
+     "memory/scan-revision-predates-the-fix.md",
+     "memory/filed-blocker-is-never-revalidated.md",
+     "memory/docclf-destination-and-run-report-spec.md",
+     "memory/fixture-literal-date-expires-against-a-ttl.md",
+     "memory/restore-to-snapshot-pins-the-fault.md"
+    ]
+   },
+   {
+    "id": "q49",
+    "style": "paraphrase",
+    "gold_rank": 1,
+    "top5": [
+     "memory/a-plan-is-not-a-queue.md",
+     "memory/search-branch-graveyard-before-building.md",
+     "memory/blocked-commit-hook-tears-down-the-sequencer.md",
+     "memory/discovery-critic-premise-goes-stale.md",
+     "memory/store-cure-is-only-as-wide-as-its-generator-input.md"
+    ]
+   },
+   {
+    "id": "q50",
+    "style": "mixed",
+    "gold_rank": 1,
+    "top5": [
+     "memory/c-locale-turns-character-ops-into-byte-ops.md",
+     "memory/negative-array-slice-empties-the-diagnostic.md",
+     "memory/guard-proxy-fails-in-both-directions.md",
+     "memory/verification-harness-vacuous-pass-traps.md",
+     "memory/memory-index-compaction-economics.md"
+    ]
+   }
+  ],
+  "latency_ms_mean": 12.578682457096875,
+  "encode_corpus_s": 2.438314290950075
+ },
+ "_meta": {
+  "model_load_s": 8.749470666050911,
+  "maxrss_bytes": 187416576
+ }
+}
