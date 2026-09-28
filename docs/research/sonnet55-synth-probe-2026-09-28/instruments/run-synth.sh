@@ -36,4 +36,5 @@ Rules:
     || jq -nc --arg b "$id" --arg m "$m" --arg e "$e" --argjson rc "$rc" '{brief:$b,model:$m,effort:$e,rc:$rc,is_error:true,note:"unparseable"}'
 }
 export -f cell
+# shellcheck disable=SC2016  # $1 is meant to expand in the child bash, not here
 printf '%s\n' "$@" | xargs -P "$SYN_PAR" -I{} bash -c 'cell "$1"' _ {} >>"$out/index.jsonl"
