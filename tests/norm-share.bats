@@ -12,6 +12,17 @@ setup() {
   unset SESSION_INDEX_DB
   NS="$REPO/scripts/norm-share.py"
   DB="$BATS_TEST_TMPDIR/index.db"
+  # The lib went live long ago unless a case says otherwise (the window's lower bound, see the script).
+  unset CC_IDL
+  mkdir -p "$HOME/.claude/autonomy"
+  IDL="$HOME/.claude/autonomy/idl.jsonl"
+  libseen "2019-01-01T00:00:00Z" > "$IDL"
+}
+
+# libseen <ts> [norm] — one session-index:norm IDL row, as hooks/lib/session-index-helpers.sh writes it.
+libseen() {
+  printf '{"ts":"%s","hook":"session-index:norm","sid":"s","disposition":"fired","reason":"lib","norm":"%s","caller":"x"}\n' \
+    "$1" "${2:-lib}"
 }
 
 # fixture <clean> <dirty> [<old-dirty>] — rows indexed a minute ago, plus dirty rows from 2020.
@@ -96,6 +107,44 @@ EOF
   before="$(shasum "$DB")"
   run python3 "$NS" --db "$DB"
   [ "$(shasum "$DB")" = "$before" ]
+}
+
+@test "no lib row in the IDL yet: abstains lib-not-live, exit 0, even over dirty rows" {
+  fixture 7 3
+  : > "$IDL"
+  run python3 "$NS" --db "$DB"
+  [ "$status" -eq 0 ]
+  [ "$output" = "verdict=abstain reason=lib-not-live" ]
+  # a fallback-only row and a malformed line do not count as the lib having run
+  { libseen "2019-01-01T00:00:00Z" "fallback:ImportError"; printf '{not json\n'; } > "$IDL"
+  run python3 "$NS" --db "$DB"
+  [ "$status" -eq 0 ]
+  [ "$output" = "verdict=abstain reason=lib-not-live" ]
+}
+
+@test "rows indexed before the lib first ran live are excluded, inside the 24 h window" {
+  fixture 7 3
+  # rows were indexed a minute ago; the lib first ran now, so none of them are the fix's output
+  libseen "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$IDL"
+  run python3 "$NS" --db "$DB"
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "NORM-SHARE contaminated=0 total=0 pct=0" ]
+  [ "${lines[1]}" = "verdict=abstain reason=too-few-rows" ]
+  # control: the same rows with an older lib row are counted and page
+  { libseen "$(date -u +%Y-%m-%dT%H:%M:%SZ)"; libseen "2019-01-01T00:00:00Z"; } > "$IDL"
+  run python3 "$NS" --db "$DB"
+  [ "$status" -eq 1 ]
+  [ "${lines[0]}" = "NORM-SHARE contaminated=3 total=10 pct=30" ]
+}
+
+@test "--idl and CC_IDL name the IDL" {
+  fixture 7 3
+  : > "$IDL"
+  libseen "2019-01-01T00:00:00Z" > "$BATS_TEST_TMPDIR/other.jsonl"
+  run python3 "$NS" --db "$DB" --idl "$BATS_TEST_TMPDIR/other.jsonl"
+  [ "$status" -eq 1 ]
+  CC_IDL="$BATS_TEST_TMPDIR/other.jsonl" run python3 "$NS" --db "$DB"
+  [ "$status" -eq 1 ]
 }
 
 @test "a garbage --hours is refused with rc 2" {

@@ -33,6 +33,7 @@
 #      compact-memory (truememory §3.10 criterion 4). A report, not a gate: RED only if it crashes.
 #   7c. norm-share.py — share of session-index context_text rows indexed in the last 24 h that still
 #      carry non-operator markers (truememory §3.14 gap item 3). RED above 10%; too few rows abstains.
+#      The window starts no earlier than the lib's first live `session-index:norm` IDL row.
 #
 # ON RED: write a page file to autonomy/pages/ (drainable by the P0-15 SO-5 desk-role consumer) +
 # osascript notification. ALWAYS append a one-line result to autonomy/regression.log.
@@ -678,8 +679,9 @@ regress() {
   fi
   # 7c. the transcript normaliser's OUTPUT (truememory-2026-09-27.md §3.14 gap item 3): the share of
   # context_text rows indexed in the last 24 h that still carry machinery markers. Exit 1 (RED, so a
-  # page) only on `verdict=regressed`; an unreadable DB or too few rows abstains green, printed in the
-  # capture. Read-only. CC_NIGHTLY_NORM_SHARE stubs it (executed directly), like 7b.
+  # page) only on `verdict=regressed`; an unreadable DB, too few rows, or no live lib row in the IDL
+  # yet abstains green, printed in the capture. Rows indexed before the lib first ran live are never
+  # counted, so a deploy does not page on the old filter's output. Read-only. CC_NIGHTLY_NORM_SHARE stubs it (executed directly), like 7b.
   if [ -n "${CC_NIGHTLY_NORM_SHARE:-}" ]; then
     run_check "norm-share" "$CC_NIGHTLY_NORM_SHARE"
   elif command -v python3 >/dev/null 2>&1; then
