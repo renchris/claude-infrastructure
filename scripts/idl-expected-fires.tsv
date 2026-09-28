@@ -1,0 +1,31 @@
+# idl-expected-fires.tsv — the expected-fires registry read by scripts/idl-abstain-alarm.sh.
+#
+# WHY: the alarm's per-hook table can only judge a hook that writes rows. A hook that stops
+# writing altogether leaves the table instead of turning red, so "dead" and "nothing happened"
+# look the same. Each row here names a denominator the branch does NOT write itself, and the
+# alarm compares the branch's IDL rows against it (docs/research/truememory-2026-09-27.md §3.3):
+#   SILENT    rows < the alarm's NMIN while D >= D_min           → RED
+#   DEGRADED  rows / D < ratio_floor (`-` = no ratio check)      → RED
+#   UNKNOWN   the denominator could not be computed              → printed, never read as healthy
+#
+# FORMAT: one TAB-separated row per branch; `#` lines are comments; no empty cells (use `-`).
+# The alarm reads it with a non-whitespace separator, so an empty cell stays empty and reads
+# UNKNOWN rather than shifting every later column.
+#   branch          the `.hook` value the branch logs under (its own IDL name, X2)
+#   denominator-fn  the NAME of a `denom_*` function defined in idl-abstain-alarm.sh. The alarm
+#                   calls it by name and never evaluates text from this file.
+#   window          lookback for both rows and denominator: <n>d or <n>h
+#   D_min           the denominator floor below which silence is not evidence
+#   ratio_floor     0-1 fraction, or `-`
+#
+# Add a row ONLY for a branch that exists and logs today — a row for an unbuilt branch pages
+# SILENT on its first night. Rows for Wave B/C, to add with the branch that makes them true:
+#   #10 backup-before-write:neighbours       new memory/*.md + docs/lessons/*.md by birthtime; D>=10, floor 0.5
+#   #6  bash-output-offload:lesson + log-bash:lesson   nightly replay of the symptom table over 24 h of
+#                                            tool-result text in all 4 roots; expected>=3, floor 0.5
+#   #14 session-index:norm                   "Indexed session" lines in session-index.log; D>=5
+#   #4  cc-memory-search                     its commands in bash-execution.log(+.gz), new topic files,
+#                                            memory greps; D>=50
+branch	denominator-fn	window	D_min	ratio_floor
+harvest-skill-end	denom_sessionend_indexed	1d	20	-
+memory-nudge	denom_nudge_expected	1d	10	-

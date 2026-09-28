@@ -11,6 +11,9 @@ setup() {
   LOG="$BATS_TEST_TMPDIR/abstain.log"
   NOW=1752900000
   TS="$(date -u -r "$NOW" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo 2026-07-19T04:00:00Z)"
+  # Fixture $HOME: the expected-fires registry's denominators default to the session-index log
+  # and nudge state under $HOME, so an unfixtured suite would measure the live machine.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
 }
 
 emit() { # <n> <hook> <disposition> <reason>
@@ -38,7 +41,8 @@ alarm() { env CC_IDL="$IDL" CC_ABSTAIN_NOW="$NOW" CC_ABSTAIN_LOG="$LOG" CC_ABSTA
   # ratchet (memory: downward-ratchet-catches-the-over-scoped-marker). Raise it when checks are
   # added; lowering it must stay a deliberate edit.
   local n_ok; n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -ge 44 ]
+  # RAISED 44 → 58 (2026-09-27) with the expected-fires registry's X1-X6 cases.
+  [ "$n_ok" -ge 58 ]
   ! printf '%s' "$output" | grep -q '^  FAIL' || false
   printf '%s' "$output" | grep -q "selftest: ${n_ok} passed, 0 failed"
 }
@@ -355,4 +359,89 @@ badline() { printf '%s\n' "$1" >> "$IDL"; }
   run alarm --report
   [ "$status" -eq 0 ]
   [ "$(printf '%s' "$output" | grep -c 'malformed=')" -eq 0 ]
+}
+
+# ── the expected-fires registry: SILENT / DEGRADED / UNKNOWN (truememory §3.3) ────────────────
+
+# reg_alarm <registry|""> <session-index-log> <nudge-dirs> [script] — the sweep with every
+# registry denominator pointed at a fixture.
+reg_alarm() {
+  local reg=()
+  [ -z "$1" ] || reg=(CC_EXPECTED_FIRES="$1")
+  env CC_IDL="$IDL" CC_ABSTAIN_NOW="$NOW" CC_ABSTAIN_LOG="$LOG" CC_ABSTAIN_NMIN=10 CC_ABSTAIN_CENSUS=0 \
+      MEMORY_NUDGE_INTERVAL=12 CC_EXPECTED_SESSION_INDEX_LOG="$2" CC_EXPECTED_NUDGE_STATE_DIRS="$3" \
+      ${reg[@]+"${reg[@]}"} "${4:-$S}" --run
+}
+indexed_lines() { # <log> <n> — n SessionEnd lines a minute before NOW, in the log's local-time stamp
+  local i lt
+  lt="$(date -r "$(( NOW - 60 ))" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -d "@$(( NOW - 60 ))" '+%Y-%m-%d %H:%M:%S')"
+  for ((i = 0; i < $2; i++)); do printf '[%s] Indexed session x%d (p, 0 msgs)\n' "$lt" "$i" >> "$1"; done
+}
+
+@test "registry: resolved through a SYMLINKED copy of the script, it still finds the .tsv (X1)" {
+  # install.sh links only *.sh/*.py, so live the .tsv exists only beside the REAL script. An
+  # underefed lookup would print "no registry" and measure nothing.
+  mkdir -p "$BATS_TEST_TMPDIR/live/scripts" "$BATS_TEST_TMPDIR/nudge"
+  ln -s "$S" "$BATS_TEST_TMPDIR/live/scripts/idl-abstain-alarm.sh"
+  indexed_lines "$BATS_TEST_TMPDIR/si.log" 25
+  emit 1 other-hook fired x
+  run reg_alarm "" "$BATS_TEST_TMPDIR/si.log" "$BATS_TEST_TMPDIR/nudge" "$BATS_TEST_TMPDIR/live/scripts/idl-abstain-alarm.sh"
+  [ "$status" -ne 0 ]
+  printf '%s' "$output" | grep -qF "expected-fires registry: $REPO/scripts/idl-expected-fires.tsv"
+  printf '%s' "$output" | grep -q 'SILENT  *harvest-skill-end'
+  ! printf '%s' "$output" | grep -q 'no registry' || false
+}
+
+@test "registry: a silent branch pages even when the IDL does not exist at all" {
+  mkdir -p "$BATS_TEST_TMPDIR/nudge"
+  indexed_lines "$BATS_TEST_TMPDIR/si.log" 25
+  [ ! -f "$IDL" ]
+  run reg_alarm "" "$BATS_TEST_TMPDIR/si.log" "$BATS_TEST_TMPDIR/nudge"
+  [ "$status" -ne 0 ]
+  printf '%s' "$output" | grep -q 'SILENT  *harvest-skill-end'
+  # --report prints the same verdict and never fails.
+  run env CC_IDL="$IDL" CC_ABSTAIN_NOW="$NOW" CC_ABSTAIN_LOG="$LOG" CC_ABSTAIN_CENSUS=0 \
+      CC_EXPECTED_SESSION_INDEX_LOG="$BATS_TEST_TMPDIR/si.log" CC_EXPECTED_NUDGE_STATE_DIRS="$BATS_TEST_TMPDIR/nudge" "$S" --report
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'RED — silent'
+}
+
+@test "registry: DEGRADED when rows/D falls under ratio_floor, OK at or above it" {
+  local reg="$BATS_TEST_TMPDIR/reg.tsv"
+  printf 'branch\tdenominator-fn\twindow\tD_min\tratio_floor\nharvest-skill-end\tdenom_sessionend_indexed\t1d\t5\t0.5\n' > "$reg"
+  indexed_lines "$BATS_TEST_TMPDIR/si.log" 40
+  emit 12 harvest-skill-end abstained below-gate          # 12 >= NMIN, but 12/40 < 0.5
+  run reg_alarm "$reg" "$BATS_TEST_TMPDIR/si.log" "$BATS_TEST_TMPDIR/none"
+  [ "$status" -ne 0 ]
+  printf '%s' "$output" | grep -q 'DEGRADED  *harvest-skill-end'
+  emit 10 harvest-skill-end fired staged                  # 22/40 >= 0.5
+  run reg_alarm "$reg" "$BATS_TEST_TMPDIR/si.log" "$BATS_TEST_TMPDIR/none"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'OK  *harvest-skill-end'
+}
+
+@test "registry: a denominator-fn that is not a denom_* function is UNKNOWN and is never executed" {
+  local reg="$BATS_TEST_TMPDIR/reg.tsv" canary="$BATS_TEST_TMPDIR/canary"
+  printf 'branch\tdenominator-fn\twindow\tD_min\tratio_floor\n' > "$reg"
+  printf 'b1\ttouch %s\t1d\t1\t-\nb2\tdenom_no_such\t1d\t1\t-\nb3\tdenom_sessionend_indexed\tweekly\t1\t-\n' "$canary" >> "$reg"
+  emit 1 other-hook fired x
+  run reg_alarm "$reg" "$BATS_TEST_TMPDIR/si.log" "$BATS_TEST_TMPDIR/none"
+  [ "$status" -eq 0 ]
+  [ ! -e "$canary" ]
+  printf '%s' "$output" | grep -q 'b1 .*denominator: UNKNOWN (denominator-fn'
+  printf '%s' "$output" | grep -q 'b2 .*denominator: UNKNOWN (no denominator function denom_no_such)'
+  printf '%s' "$output" | grep -q "b3 .*denominator: UNKNOWN (bad window 'weekly')"
+  grep -q 'denominators-unknown=3' "$LOG"
+}
+
+@test "registry: below D_min silence is not evidence, and the nudge kill switch expects nothing" {
+  mkdir -p "$BATS_TEST_TMPDIR/nudge"
+  printf '240' > "$BATS_TEST_TMPDIR/nudge/nudge-a.count"
+  indexed_lines "$BATS_TEST_TMPDIR/si.log" 19                # harvest D_min is 20
+  emit 1 other-hook fired x
+  run env CC_IDL="$IDL" CC_ABSTAIN_NOW="$NOW" CC_ABSTAIN_LOG="$LOG" CC_ABSTAIN_CENSUS=0 MEMORY_NUDGE_INTERVAL=0 \
+      CC_EXPECTED_SESSION_INDEX_LOG="$BATS_TEST_TMPDIR/si.log" CC_EXPECTED_NUDGE_STATE_DIRS="$BATS_TEST_TMPDIR/nudge" "$S" --run
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'OK  *harvest-skill-end .*D=19 '
+  printf '%s' "$output" | grep -q 'OK  *memory-nudge .*D=0 '
 }

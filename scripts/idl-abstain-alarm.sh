@@ -182,6 +182,146 @@ census_denominator() {
   esac
 }
 
+# ── THE EXPECTED-FIRES REGISTRY: the SILENT class (truememory-2026-09-27.md §3.3) ─────────────────
+# The table below can only judge a hook that writes rows: a hook that stops writing altogether
+# LEAVES the table instead of turning red. harvest-skill-end logged 20 candidates ever while
+# SessionEnd indexed ~11,670 sessions, and nothing here could see it. So each registered branch is
+# measured against a denominator it does not write itself (scripts/idl-expected-fires.tsv):
+#   SILENT    rows < NMIN while D >= D_min · DEGRADED rows/D < ratio_floor — both RED, like INERT.
+# A denominator that cannot be computed prints `denominator: UNKNOWN (<why>)` and is never read as
+# healthy (the same rule as census_denominator above).
+#
+# THE REGISTRY IS FOUND THROUGH THE DEREFERENCED SELF-PATH. install.sh links only *.sh and *.py, so
+# ~/.claude/scripts/idl-expected-fires.tsv never exists live; a `dirname "$SELF"` lookup would find
+# no registry through the live symlink and the whole class would go dark (acceptance X1).
+_ia_deref() { # <path> → the real file behind any symlink chain (readlink -f, BSD-safe fallback)
+  local p="$1" t n=0
+  readlink -f "$p" 2>/dev/null && return 0
+  while [ -L "$p" ] && [ "$n" -lt 20 ]; do
+    t="$(readlink "$p")"
+    case "$t" in /*) p="$t" ;; *) p="$(dirname "$p")/$t" ;; esac
+    n=$(( n + 1 ))
+  done
+  printf '%s\n' "$p"
+}
+REGISTRY="${CC_EXPECTED_FIRES:-$(dirname "$(_ia_deref "$SELF")")/idl-expected-fires.tsv}"
+
+# Denominator functions: `denom_<name> <cutoff-epoch>` prints ONE integer and returns 0, or prints
+# why it could not count and returns 1. Only names matching denom_* that are defined in THIS file
+# can be called; the registry supplies a name, never code.
+
+# SessionEnd "Indexed session" lines in session-index.log since the cutoff. The log stamps local
+# time as `[YYYY-MM-DD HH:MM:SS]`, which compares correctly as a string.
+denom_sessionend_indexed() {
+  local cutoff="$1" log cut
+  log="${CC_EXPECTED_SESSION_INDEX_LOG:-${SESSION_INDEX_LOG:-$HOME/.claude/logs/session-index.log}}"
+  [ -r "$log" ] || { printf 'no readable session-index log at %s' "$log"; return 1; }
+  cut="$(date -r "$cutoff" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -d "@$cutoff" '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+  [ -n "$cut" ] || { printf 'cannot render the cutoff epoch %s as a local time' "$cutoff"; return 1; }
+  awk -v c="$cut" 'index($0, "] Indexed session ") && substr($0, 2, 19) >= c { n++ } END { print n + 0 }' "$log"
+}
+
+# Fires memory-nudge SHOULD have made: per session counter, floor(count / interval), summed over
+# every config root's state dir (the counter lives under $CFG/state, which is 4 physical dirs —
+# the main root alone holds ~7% of a day's transcripts, acceptance X4). A counter whose mtime is
+# older than the cutoff saw no prompt in the window and is skipped.
+denom_nudge_expected() {
+  local cutoff="$1" dirs d f c m sum=0 seen=0 iv
+  dirs="${CC_EXPECTED_NUDGE_STATE_DIRS:-$HOME/.claude/state $HOME/.claude-next/state $HOME/.claude-secondary/state $HOME/.claude-tertiary/state $HOME/.claude-quaternary/state}"
+  # Same interval rule as the hook: 0 is the kill switch (nothing expected), garbage means 12.
+  iv="${MEMORY_NUDGE_INTERVAL:-12}"; case "$iv" in ''|*[!0-9]*) iv=12 ;; esac; iv=$(( 10#$iv ))
+  for d in $dirs; do
+    [ -d "$d" ] || continue
+    seen=$(( seen + 1 ))
+    [ "$iv" -gt 0 ] || continue
+    for f in "$d"/nudge-*.count; do
+      [ -f "$f" ] || continue
+      m="$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0)"
+      [ "$m" -ge "$cutoff" ] 2>/dev/null || continue
+      c="$(cat "$f" 2>/dev/null || echo 0)"; case "$c" in ''|*[!0-9]*) c=0 ;; esac
+      sum=$(( sum + c / iv ))
+    done
+  done
+  [ "$seen" -gt 0 ] || { printf 'no nudge state dir present among: %s' "$dirs"; return 1; }
+  printf '%s' "$sum"
+}
+
+# Evaluation rows a branch wrote since the cutoff (same four-disposition denominator as the table).
+_ia_branch_rows() { # <branch> <cutoff>
+  jq -Rrn --arg h "$1" --argjson c "$2" --argjson evals '["fired","passed","abstained","failed"]' '
+    [ inputs | (fromjson? // null) | select(type == "object")
+      | select(.hook? == $h)
+      | select(.disposition as $d | ($evals | index($d)) != null)
+      | select(((.ts // "") | fromdateiso8601? // 0) >= $c) ] | length' "$IDL" 2>/dev/null || true
+}
+
+# registry_pass → prints the registry section; sets REG_RED (names of SILENT/DEGRADED branches)
+# and REG_UNKNOWN (count). CC_EXPECTED_FIRES=off skips it (the legacy selftest cases).
+REG_RED=(); REG_UNKNOWN=0
+registry_pass() {
+  REG_RED=(); REG_UNKNOWN=0
+  [ "$REGISTRY" = off ] && return 0
+  if [ ! -r "$REGISTRY" ]; then
+    printf '  expected-fires registry: UNKNOWN (no registry at %s) — silent hooks are not being measured\n' "$REGISTRY"
+    REG_UNKNOWN=1; return 0
+  fi
+  printf '  expected-fires registry: %s\n' "$REGISTRY"
+  local now branch fn win dmin floor secs cutoff rows dval rc verdict
+  now="$(now_epoch)"
+  # Tabs become \037 before the read: tab is IFS-WHITESPACE, so `IFS=$'\t' read` would collapse an
+  # empty cell and shift every later column (docs/research/TSV_FIELD_COLLAPSE_2026-07-25.md). A
+  # non-whitespace IFS keeps an empty cell empty, and the checks below then call it UNKNOWN.
+  while IFS=$'\037' read -r branch fn win dmin floor; do
+    case "$branch" in ''|'#'*|branch) continue ;; esac
+    verdict="" secs=0
+    case "${win%?}" in
+      ''|*[!0-9]*) verdict=UNKNOWN; dval="bad window '$win'" ;;
+      *) case "$win" in
+           *d) secs=$(( 10#${win%?} * 86400 )) ;;
+           *h) secs=$(( 10#${win%?} * 3600 )) ;;
+           *)  verdict=UNKNOWN; dval="bad window '$win'" ;;
+         esac ;;
+    esac
+    case "$dmin" in ''|*[!0-9]*) verdict=UNKNOWN; dval="bad D_min '$dmin'" ;; esac
+    case "$floor" in -|0|0.[0-9]*|1|1.0) ;; *) verdict=UNKNOWN; dval="bad ratio_floor '$floor'" ;; esac
+    case "$fn" in
+      denom_*) declare -F "$fn" >/dev/null 2>&1 || { verdict=UNKNOWN; dval="no denominator function $fn"; } ;;
+      *) verdict=UNKNOWN; dval="denominator-fn '$fn' is not a denom_* name" ;;
+    esac
+    rows=0
+    if [ -z "$verdict" ]; then
+      cutoff=$(( now - secs ))
+      rows="$(_ia_branch_rows "$branch" "$cutoff")"; case "$rows" in ''|*[!0-9]*) rows=0 ;; esac
+      dval="$("$fn" "$cutoff" 2>/dev/null)"; rc=$?
+      if [ "$rc" -ne 0 ] || ! [ "$dval" -ge 0 ] 2>/dev/null; then
+        verdict=UNKNOWN; [ -n "$dval" ] || dval="$fn failed"
+      elif [ "$dval" -ge "$dmin" ] && [ "$rows" -lt "$NMIN" ]; then
+        verdict=SILENT
+      elif [ "$floor" != "-" ] && [ "$dval" -gt 0 ] \
+           && awk -v r="$rows" -v d="$dval" -v f="$floor" 'BEGIN { exit !(r / d < f) }'; then
+        verdict=DEGRADED
+      else
+        verdict=OK
+      fi
+    fi
+    if [ "$verdict" = UNKNOWN ]; then
+      REG_UNKNOWN=$(( REG_UNKNOWN + 1 ))
+      printf '  %-11s %-22s rows=%-4s denominator: UNKNOWN (%s)\n' UNKNOWN "$branch" "$rows" "$dval"
+      continue
+    fi
+    [ "$verdict" = OK ] || REG_RED+=("$branch")
+    printf '  %-11s %-22s rows=%-4s D=%-5s window=%s D_min=%s floor=%s nmin=%s\n' \
+      "$verdict" "$branch" "$rows" "$dval" "$win" "$dmin" "$floor" "$NMIN"
+  done < <(tr '\t' '\037' < "$REGISTRY")
+  return 0
+}
+
+silent_red() { # <space-joined branch names>
+  printf 'idl-abstain-alarm: RED — silent or degraded branch(es): %s\n' "$1"
+  printf '  each wrote fewer IDL rows than its expected-fires denominator allows (%s) — a hook\n' "$REGISTRY"
+  printf '  that stops logging is indistinguishable from one that is never called. detail: %s\n' "$LOG"
+}
+
 # ── the sweep: aggregate the IDL per hook, classify, report, and set the exit code ──
 # $1 = mode: "run" (exit reflects inert) | "report" (always 0)
 sweep() {
@@ -196,6 +336,14 @@ sweep() {
   }
 
   if [ ! -f "$IDL" ] || [ ! -s "$IDL" ]; then
+    # No IDL is still a verdict for the registry: every registered branch has 0 rows, and against
+    # a live denominator that is exactly SILENT.
+    registry_pass
+    if [ "${#REG_RED[@]}" -gt 0 ]; then
+      silent_red "${REG_RED[*]}"
+      printf '%s idl-abstain-alarm: RED no-idl SILENT:[%s]\n' "$(now_iso)" "${REG_RED[*]}" >> "$LOG" 2>/dev/null || true
+      [ "$mode" = report ] && return 0 || return 1
+    fi
     printf 'idl-abstain-alarm: GREEN — no IDL at %s (nothing to sweep)\n' "$IDL"
     printf '%s idl-abstain-alarm: GREEN no-idl\n' "$(now_iso)" >> "$LOG" 2>/dev/null || true
     return 0
@@ -335,17 +483,25 @@ sweep() {
       "$verdict" "$hook" "$total" "$abst" "$prod" "$failed" "$blind" "$pct"
   done <<< "$agg"
 
-  local n_inert="${#inert[@]}" summary
+  # The registry section sits under the table: it judges the branches the table cannot see.
+  registry_pass
+
+  local n_inert="${#inert[@]}" n_silent="${#REG_RED[@]}" summary
   summary="hooks=$nhooks inert=$n_inert dormant100=${#dormant100[@]} healthy=$healthy window=${LOOKBACK_DAYS}d nmin=$NMIN blind_pct=$BLIND_PCT"
   [ "$malformed" -gt 0 ]      && summary="$summary malformed=$malformed"
   [ "$n_inert" -gt 0 ]        && summary="$summary INERT:[${inert[*]}]"
   [ "${#dormant100[@]}" -gt 0 ] && summary="$summary DORMANT-100:[${dormant100[*]}]"
+  [ "$n_silent" -gt 0 ]       && summary="$summary SILENT:[${REG_RED[*]}]"
+  [ "$REG_UNKNOWN" -gt 0 ]    && summary="$summary denominators-unknown=$REG_UNKNOWN"
   printf '%s idl-abstain-alarm: %s\n' "$(now_iso)" "$summary" >> "$LOG" 2>/dev/null || true
 
   if [ "$n_inert" -gt 0 ]; then
     printf 'idl-abstain-alarm: RED — %d inert check(s): %s\n' "$n_inert" "${inert[*]}"
     printf '  each abstained 100%% over >=%d evals with ONLY blind (cannot-observe) reasons — a check\n' "$NMIN"
     printf '  that cannot see its guard is no check (blind-check law §3i). detail: %s\n' "$LOG"
+  fi
+  [ "$n_silent" -gt 0 ] && silent_red "${REG_RED[*]}"
+  if [ "$n_inert" -gt 0 ] || [ "$n_silent" -gt 0 ]; then
     [ "$mode" = report ] && return 0 || return 1
   fi
   printf 'idl-abstain-alarm: GREEN — %s\n' "$summary"
@@ -451,8 +607,10 @@ selftest() {
     done
   }
   run_alarm() { # <idl> [mode-arg] → runs the real script with a fixed clock
+    # CC_EXPECTED_FIRES=off: these cases prove the per-hook table alone; the registry's own
+    # cases (X below) point every denominator at a fixture instead of the live machine.
     env CC_IDL="$1" CC_ABSTAIN_NOW="$NOW" CC_ABSTAIN_LOG="$d/log" CC_ABSTAIN_NMIN=10 \
-        CC_ABSTAIN_LOOKBACK_DAYS=14 CC_ABSTAIN_BLIND_PCT=100 "$SELF" "${2:---run}"
+        CC_ABSTAIN_LOOKBACK_DAYS=14 CC_ABSTAIN_BLIND_PCT=100 CC_EXPECTED_FIRES=off "$SELF" "${2:---run}"
   }
 
   echo "idl-abstain-alarm --selftest:"
@@ -632,14 +790,48 @@ selftest() {
   # UNKNOWN branch is proved by pointing the census at a path that does not exist — a MISSING
   # denominator line and a denominator of 100% read the same to a human, and only one is true.
   printf '{"ts":"%s","hook":"h-w","disposition":"fired","reason":"x"}\n' "$FIXTS" > "$d/idl-w"
-  out="$(env CC_IDL="$d/idl-w" CC_ABSTAIN_NOW="$NOW" CC_ABSTAIN_LOG="$d/log-w" \
+  out="$(env CC_IDL="$d/idl-w" CC_ABSTAIN_NOW="$NOW" CC_ABSTAIN_LOG="$d/log-w" CC_EXPECTED_FIRES=off \
              CC_ABSTAIN_CENSUS_CMD="$d/no-such-census.py" "$SELF" --report 2>&1)"; rc=$?
   [ "$rc" -eq 0 ]                                  && okp "W census absent → sweep still exits 0 (fail-open)" || badp "W a missing census took the sweep down"
   printf '%s' "$out" | grep -q 'denominator: UNKNOWN' && okp "W census absent → explicit UNKNOWN, not silence" || badp "W missing census printed nothing at all"
   printf '%s' "$out" | grep -q 'h-w'               && okp "W the per-hook table still renders under it" || badp "W the hook table vanished"
-  out="$(env CC_IDL="$d/idl-w" CC_ABSTAIN_NOW="$NOW" CC_ABSTAIN_LOG="$d/log-w" \
+  out="$(env CC_IDL="$d/idl-w" CC_ABSTAIN_NOW="$NOW" CC_ABSTAIN_LOG="$d/log-w" CC_EXPECTED_FIRES=off \
              CC_ABSTAIN_CENSUS=0 "$SELF" --report 2>&1)"
   printf '%s' "$out" | grep -q 'denominator' && badp "W CC_ABSTAIN_CENSUS=0 did not suppress the line" || okp "W CC_ABSTAIN_CENSUS=0 suppresses the line"
+
+  # ── X: the expected-fires registry — one SILENT and one UNKNOWN case per registry row ─────────
+  # Run against the REAL registry (found through the dereferenced self-path) with every denominator
+  # pointed at a fixture, so a row added to the .tsv without a working denom_* function reds here.
+  local XLOG="$d/x-session-index.log" XEMPTY="$d/x-nudge-empty" XNUDGE="$d/x-nudge" XIDL="$d/x-idl" i lt
+  mkdir -p "$XEMPTY" "$XNUDGE"
+  lt="$(date -r "$(( NOW - 60 ))" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -d "@$(( NOW - 60 ))" '+%Y-%m-%d %H:%M:%S')"
+  for ((i = 0; i < 25; i++)); do printf '[%s] Indexed session x%d (p, 0 msgs)\n' "$lt" "$i" >> "$XLOG"; done
+  for ((i = 0; i < 5; i++)); do printf '24' > "$XNUDGE/nudge-x$i.count"; done   # 5 x 24/12 = 10 expected
+  printf '{"ts":"%s","hook":"h-x","disposition":"fired","reason":"x"}\n' "$FIXTS" > "$XIDL"
+  run_reg() { # <session-index-log> <nudge-state-dirs> <idl>
+    env CC_IDL="$3" CC_ABSTAIN_NOW="$NOW" CC_ABSTAIN_LOG="$d/log-x" CC_ABSTAIN_NMIN=10 CC_ABSTAIN_CENSUS=0 \
+        MEMORY_NUDGE_INTERVAL=12 CC_EXPECTED_SESSION_INDEX_LOG="$1" CC_EXPECTED_NUDGE_STATE_DIRS="$2" "$SELF" --run 2>&1
+  }
+  out="$(run_reg "$XLOG" "$XEMPTY" "$XIDL")"; rc=$?
+  [ "$rc" -ne 0 ]                                  && okp "X1 harvest 0 rows vs 25 indexed → nonzero exit" || badp "X1 silent harvest did not page"
+  printf '%s' "$out" | grep -q 'SILENT  *harvest-skill-end' && okp "X1 harvest reported SILENT" || badp "X1 harvest not SILENT"
+  out="$(run_reg "$d/x-no-such.log" "$XEMPTY" "$XIDL")"; rc=$?
+  printf '%s' "$out" | grep -q 'harvest-skill-end .*denominator: UNKNOWN' && okp "X2 harvest log absent → denominator UNKNOWN" || badp "X2 harvest UNKNOWN not printed"
+  [ "$rc" -eq 0 ]                                  && okp "X2 an UNKNOWN denominator does not page" || badp "X2 UNKNOWN paged"
+  out="$(run_reg "$d/x-no-such.log" "$XNUDGE" "$XIDL")"; rc=$?
+  [ "$rc" -ne 0 ]                                  && okp "X3 nudge 0 rows vs 10 expected → nonzero exit" || badp "X3 silent nudge did not page"
+  printf '%s' "$out" | grep -q 'SILENT  *memory-nudge' && okp "X3 memory-nudge reported SILENT" || badp "X3 nudge not SILENT"
+  out="$(run_reg "$XLOG" "$d/x-none-a $d/x-none-b" "$XIDL")"
+  printf '%s' "$out" | grep -q 'memory-nudge .*denominator: UNKNOWN' && okp "X4 no nudge state dir → denominator UNKNOWN" || badp "X4 nudge UNKNOWN not printed"
+  for ((i = 0; i < 12; i++)); do
+    printf '{"ts":"%s","hook":"harvest-skill-end","sid":"x%d","disposition":"abstained","reason":"below-gate"}\n' "$FIXTS" "$i" >> "$XIDL"
+  done
+  out="$(run_reg "$XLOG" "$XEMPTY" "$XIDL")"; rc=$?
+  [ "$rc" -eq 0 ]                                  && okp "X5 harvest with 12 rows vs 25 indexed → exit 0" || badp "X5 a logging harvest still paged"
+  printf '%s' "$out" | grep -q 'OK  *harvest-skill-end' && okp "X5 harvest reported OK" || badp "X5 harvest not OK"
+  out="$(env CC_IDL="$XIDL" CC_ABSTAIN_NOW="$NOW" CC_ABSTAIN_LOG="$d/log-x" CC_ABSTAIN_CENSUS=0 \
+             CC_EXPECTED_FIRES="$d/x-no-registry.tsv" "$SELF" --run 2>&1)"; rc=$?
+  printf '%s' "$out" | grep -q 'expected-fires registry: UNKNOWN' && okp "X6 missing registry → UNKNOWN, not silence" || badp "X6 missing registry printed nothing"
 
   echo "idl-abstain-alarm --selftest: $PASS passed, $FAIL failed"
   [ "$FAIL" -eq 0 ] || exit 1
