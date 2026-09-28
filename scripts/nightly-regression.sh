@@ -651,6 +651,16 @@ regress() {
   # 6. the e2e skip must be TRANSITIVE (S3) — a gate may not smuggle an unreviewed e2e past step 4.
   run_check "e2e-transitive-skip" transitive_e2e_assert
 
+  # 7. the lesson-recall arm (truememory-2026-09-27.md §3.6 #6, acceptance 4-5). It fails open, so a
+  #    dead arm and a quiet one look alike: the canary pipes the table's canary literal through the
+  #    DEPLOYED ~/.claude/hooks/bash-output-offload.sh (HOME and the IDL in a temp dir) and must get one
+  #    pointer back; the delivery check joins the last day's emitted pointers to transcript
+  #    hook_additional_context attachments by tool_use_id and reds below 0.9 (delivery changes between
+  #    binaries). Executed directly (shebang), so CC_NIGHTLY_LESSON_REPLAY can stub both.
+  local lesson_replay="${CC_NIGHTLY_LESSON_REPLAY:-$REPO/scripts/lesson-recall-replay.py}"
+  run_check "lesson-recall-canary" "$lesson_replay" --canary
+  run_check "lesson-recall-delivery" "$lesson_replay" --delivery --days 1
+
   # ── verdict ──
   local n_red="${#REDS[@]}" summary
   if [ "$n_red" -gt 0 ]; then
@@ -725,6 +735,7 @@ TORN
   # lost-modification pair. Positionals have neither problem and state the fixture at the call site.
   run_inv() {
     env CC_NIGHTLY_NOTIFY=/usr/bin/true CC_NIGHTLY_NEVERSTUCK=/usr/bin/true CC_NIGHTLY_ABSTAIN=/usr/bin/true \
+        CC_NIGHTLY_LESSON_REPLAY=/usr/bin/true \
         CC_NIGHTLY_POSTLAND_DIR="$d/nopostland" \
         CC_NIGHTLY_POSTLAND_VERIFY="${5:-/usr/bin/true}" POSTLAND_VERIFY="${7:-on}" \
         CC_NIGHTLY_GATE_GLOB="$3" CC_NIGHTLY_LINT_GLOB="$d/emptygl/*.sh" \

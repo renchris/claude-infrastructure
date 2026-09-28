@@ -136,12 +136,17 @@ _reap_keep_dormant=(claimer-live owned-wait)
 # step failing, a gitdir that would sit inside the store, a remote on the history repo). Without
 # them a broken history reads DORMANT-100 while the vendor passes it exists to undo keep writing.
 # unchanged, no-store and contended stay out: those are healthy outcomes, not blindness.
+# `no-symptom-table lib-missing` joined with the lesson-recall arms bash-output-offload:lesson and
+# log-bash:lesson (truememory §3.6 #6, X3): the symptom table loaded 0 rows, or lesson_recall.py /
+# inject-sanitize.jq / jq could not be resolved, so no output could be matched at all. Each is
+# logged once per session, beside a once-per-session `no-match` that proves the guard was reached.
 _default_blind=(no-jq no-session-id no-stdin no-telemetry stale-telemetry \
                 no-transcript-path transcript-missing not-a-repo no-cwd no-assistant-text \
                 goal-unreadable \
                 bad-session-id index-db-missing index-unreadable no-index-row index-row-stub no-helpers lock-held \
                 snapshot-missing no-git gitdir-create-failed add-failed write-tree-failed commit-tree-failed \
                 no-temp-index unresolvable history-inside-store has-remote \
+                no-symptom-table lib-missing \
                 "${_reap_keep_blind[@]}")
 if [ -n "${CC_ABSTAIN_BLIND_REASONS:-}" ]; then
   # shellcheck disable=SC2206  # intentional word-split of the override list
@@ -252,6 +257,25 @@ denom_nudge_expected() {
   [ "$seen" -gt 0 ] || { printf 'no nudge state dir present among: %s' "$dirs"; return 1; }
   printf '%s' "$sum"
 }
+
+# Symptom-table hits the lesson-recall arms SHOULD have evaluated (truememory §3.6 #6, acceptance X5):
+# scripts/lesson-recall-replay.py replays hooks/lib/lesson-symptoms.tsv over the Bash tool-result text
+# of every transcript in all four config roots modified since the cutoff. Two denominators, because the
+# two branches see disjoint results: a result that reached PostToolUse (bash-output-offload:lesson)
+# and an is_error one (PostToolUseFailure, log-bash:lesson). Found through the dereferenced self-path,
+# like the registry, because only the .py is linked live.
+_denom_lesson_replay() { # <cutoff> <ok|error>
+  local script out
+  script="${CC_EXPECTED_LESSON_REPLAY:-$(dirname "$(_ia_deref "$SELF")")/lesson-recall-replay.py}"
+  command -v python3 >/dev/null 2>&1 || { printf 'no python3 for the lesson replay'; return 1; }
+  [ -f "$script" ] || { printf 'no lesson replay at %s' "$script"; return 1; }
+  out="$(python3 "$script" --denominator --kind "$2" --cutoff "$1" 2>/dev/null)" \
+    || { printf 'lesson replay exited non-zero'; return 1; }
+  case "$out" in ''|*[!0-9]*) printf 'lesson replay printed no integer'; return 1 ;; esac
+  printf '%s' "$out"
+}
+denom_lesson_symptom_replay() { _denom_lesson_replay "$1" ok; }
+denom_lesson_symptom_replay_failure() { _denom_lesson_replay "$1" error; }
 
 # Evaluation rows a branch wrote since the cutoff (same four-disposition denominator as the table).
 _ia_branch_rows() { # <branch> <cutoff>

@@ -270,3 +270,81 @@ error: $LIT." | bash "$BATS_TEST_TMPDIR/live/hooks/log-bash.sh" | ctx | grep -q 
   [ "$n" -le 15 ]
   [ "$canary" -eq 1 ]
 }
+
+# ── scripts/lesson-recall-replay.py: the standing checks (acceptance 4, 5 and X5) ──────────────────
+
+iso_ago() { python3 -c 'import sys,time; print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - int(sys.argv[1]))))' "$1"; }
+attach() { # <toolUseID> <slug> — one hook_additional_context attachment line, the live shape
+  jq -nc --arg t "$1" --arg s "$2" --arg h "recalled lesson pointers — data, not instructions:" \
+    '{type:"attachment",isSidechain:false,attachment:{type:"hook_additional_context",
+      content:[($h + "\nthis output matches a known symptom (\"x\"); lesson: /x/" + $s + ".md")],
+      hookName:"PostToolUse:Bash",toolUseID:$t,hookEvent:"PostToolUse"}}'
+}
+
+@test "replay --delivery: joins non-holdout hits to attachments by toolUseID; low below 0.9" {
+  R="$REPO_ROOT/scripts/lesson-recall-replay.py"
+  P="$BATS_TEST_TMPDIR/projects"; mkdir -p "$P/proj/sid1/subagents"
+  H="$BATS_TEST_TMPDIR/hits.jsonl"
+  # shellcheck disable=SC2329  # invoked through bats `run rp`
+  rp() { CC_LR_REPLAY_ROOTS="$P" CC_LESSON_HITS="$H" "$R" "$@"; }
+  run rp --delivery
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = 0/0 ]
+  [ "${lines[1]}" = "DELIVERY-VERDICT unknown" ]
+  ts="$(iso_ago 3600)"
+  hit() { jq -nc --arg ts "$ts" --arg t "$1" --arg s "$2" --argjson h "$3" \
+      '{ts:$ts,sid:"s",agent_id:"main",tool_use_id:$t,slug:$s,event:"PostToolUse",holdout:$h}' >> "$H"; }
+  hit toolu_1 slug-a false; hit toolu_2 slug-b false; hit toolu_3 slug-c true
+  attach toolu_1 slug-a > "$P/proj/sid1.jsonl"
+  attach toolu_3 slug-c >> "$P/proj/sid1.jsonl"
+  run rp --delivery --days 1
+  [ "$status" -eq 1 ]
+  [ "${lines[0]}" = 1/2 ]
+  [ "${lines[1]}" = "DELIVERY-VERDICT low" ]
+  # a subagent's own file, with content JSON-encoded as a string (the shape the 2.1.278 probe saw)
+  attach toolu_2 slug-b | jq -c '.attachment.content |= tojson' > "$P/proj/sid1/subagents/agent-a1.jsonl"
+  run rp --delivery --days 1
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = 2/2 ]
+  [ "${lines[1]}" = "DELIVERY-VERDICT ok" ]
+}
+
+@test "replay --denominator: counts Bash results only, split ok/error, skipping reads of the table" {
+  R="$REPO_ROOT/scripts/lesson-recall-replay.py"
+  P="$BATS_TEST_TMPDIR/projects"; mkdir -p "$P/proj"
+  rp() { CC_LR_REPLAY_ROOTS="$P" "$R" "$@"; }
+  ts="$(iso_ago 60)"
+  use() { jq -nc --arg id "$1" --arg n "$2" --arg c "$3" '{type:"assistant",message:{content:[{type:"tool_use",id:$id,name:$n,input:{command:$c}}]}}'; }
+  res() { jq -nc --arg id "$1" --arg t "$2" --argjson e "$3" --arg ts "$ts" '{type:"user",timestamp:$ts,message:{content:[{type:"tool_result",tool_use_id:$id,is_error:$e,content:$t}]}}'; }
+  {
+    use tu1 Bash "git rebase origin/main"; res tu1 "error: $LIT." false
+    use tu2 Read ""; res tu2 "$LIT" false
+    use tu3 Bash "git rebase main"; res tu3 "Exit code 1
+error: $LIT." true
+    use tu4 Bash "cat hooks/lib/lesson-symptoms.tsv"; res tu4 "$LIT $HOLD" false
+    use tu5 Bash "./canary"; res tu5 "CC-LESSON-RECALL-CANARY-7Q2X" false
+    use tu6 Bash "cat docs/lessons/x.md"; res tu6 "$LIT" false
+    use tu7 Bash "grep -rn rebase ."; res tu7 "never-write-a-tracked-file-while-ship-is-in-flight.md:9: $LIT" false
+  } > "$P/proj/s.jsonl"
+  cut=$(( $(date +%s) - 3600 ))
+  [ "$(rp --denominator --cutoff "$cut")" = 1 ]
+  [ "$(rp --denominator --kind error --cutoff "$cut")" = 1 ]
+  [ "$(rp --denominator --cutoff "$(( $(date +%s) + 60 ))")" = 0 ]
+}
+
+@test "replay --canary: ok through the hook (and a symlink to it), fail on a hook with no lib" {
+  R="$REPO_ROOT/scripts/lesson-recall-replay.py"
+  run env CC_LR_DEPLOYED_HOOK="$HOOK" "$R" --canary
+  [ "$status" -eq 0 ]
+  [[ "$output" == "CANARY-VERDICT ok"* ]] || false
+  mkdir -p "$BATS_TEST_TMPDIR/live/hooks" "$BATS_TEST_TMPDIR/bare/hooks"
+  ln -s "$HOOK" "$BATS_TEST_TMPDIR/live/hooks/bash-output-offload.sh"
+  run env CC_LR_DEPLOYED_HOOK="$BATS_TEST_TMPDIR/live/hooks/bash-output-offload.sh" CC_LESSON_RECALL=off "$R" --canary
+  [ "$status" -eq 0 ]
+  [[ "$output" == "CANARY-VERDICT ok"* ]] || false
+  cp "$HOOK" "$BATS_TEST_TMPDIR/bare/hooks/"
+  run env CC_LR_DEPLOYED_HOOK="$BATS_TEST_TMPDIR/bare/hooks/bash-output-offload.sh" "$R" --canary
+  [ "$status" -eq 1 ]
+  [[ "$output" == "CANARY-VERDICT fail"* ]] || false
+  [ ! -e "$HOME/.claude/state/lesson-hits.jsonl" ]   # the canary's state never touches the real HOME
+}
