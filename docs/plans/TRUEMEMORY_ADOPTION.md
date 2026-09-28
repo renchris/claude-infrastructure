@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: complete
 ---
 
 # TrueMemory adoption — build the verified adoptions into our agent memory
@@ -451,3 +451,4 @@ These extend the research doc's X1-X5 (§2) with what the session after the stud
 - 2026-09-28 — Wave C DONE: #9, #12, #13 and #14 landed (`5070c4488` … `c2876fbe3`), 28 suites green on trunk tip, live layer converged; #12's store backfill filed as operator step `a459c9c681a5`. Learnings under § Wave C. Wave D next.
 - 2026-09-28 — Wave D DONE: #15, #16, #17, #18 (provisional on its outcome log), #18a, #19 and #20 landed (`6f4fd40b1` … `1269d65ba`), 20 suites green on the combined tree and on trunk tip, live layer converged. #18a's claude-session-search half is operator step `eb1d9ecb9c41` (public-repo push). #21 and #22 wait on Wave E #24. Learnings under § Wave D. Wave E next.
 - 2026-09-28 — Wave E DONE: all seven experiments dropped against their pre-registered rules. #4b p = 0.172 on 21 operator-worded queries; #24 Stage 0 56.7% and 2/4 rulings, so #25 went unbuilt and #21/#22 stay unbuilt with no worker proposed; #27 has no used channel; #36 had no headroom (stock 36/36); #23 and #26 stop under §5.17 and #26's shadow is retired. Nothing adopted; rejection rows R19-R24. The next delivery measurement needs a long-session harness. Learnings under § Wave E.
+- 2026-09-28 — Program DONE. The program lead collected Waves D and E by content: every cited sha is an ancestor of origin/main, and the lead re-ran four suites on trunk tip (`cc-memory-rotate` 1..62, `episodic-cue` 1..12, `memory-nudge-ruling-shadow` 1..17, `cc-memory-extract` 1..8, 0 failures each). The frozen DoD is met. #21 and #22 are closed unbuilt by their own entry rule (#24 dropped), not left waiting. Still open, and not an agent's to do: operator step `eb1d9ecb9c41`, the push of #18a's half to the public claude-session-search repo (`bash ~/.claude/autonomy/css-wfindex-land.sh --confirm claude-session-search`). Follow-on outside this DoD: a long-session delivery harness (Wave E learnings).
