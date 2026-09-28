@@ -45,7 +45,7 @@ one_verdict_line() { # exactly one line, and it is a verdict line
   run bash "$SNAP" "$BATS_TEST_TMPDIR/.dot/memory" dotted
   has "$output" "$(cd "$BATS_TEST_TMPDIR" && pwd -P | tr '/' '-')-.dot-memory.git"
   [ "$(git --git-dir="$G" rev-parse --is-bare-repository)" = true ]
-  git --git-dir="$G" show main:a.md | grep -qx 'body a'
+  git --git-dir="$G" show "$(git --git-dir="$G" rev-parse refs/heads/main)":a.md | grep -qx 'body a'
   git --git-dir="$G" log -1 --format=%s main | grep -q '^first '
 }
 
@@ -58,9 +58,9 @@ one_verdict_line() { # exactly one line, and it is a verdict line
   run bash "$SNAP" "$ST" three
   has "$output" 'verdict=snapshotted'
   [ "$(ncommits "$G")" -eq 2 ]
-  git --git-dir="$G" show main:b.md | grep -qx 'body b'
+  git --git-dir="$G" show "$(git --git-dir="$G" rev-parse refs/heads/main)":b.md | grep -qx 'body b'
   if git --git-dir="$G" cat-file -e main:a.md 2>/dev/null; then return 1; fi
-  git --git-dir="$G" show main~1:a.md | grep -qx 'body a'    # the pre-image is restorable
+  git --git-dir="$G" show "$(git --git-dir="$G" rev-parse refs/heads/main~1)":a.md | grep -qx 'body a'    # the pre-image is restorable
 }
 
 @test "scratch is not history: lock dir, cited scratch, *.tmp, .MEMORY.md.* temps are excluded" {
@@ -178,7 +178,7 @@ rotor_env() {
   G="$(find "$CC_MEMORY_HISTORY_ROOT" -maxdepth 1 -name '*.git')"
   [ "$(ncommits "$G")" -eq 1 ]
   git --git-dir="$G" log -1 --format=%s main | grep -q '^cc-memory-rotate:rotate '
-  [ "$(git --git-dir="$G" show main:MEMORY.md | shasum)" = "$pre" ]
+  [ "$(git --git-dir="$G" show "$(git --git-dir="$G" rev-parse refs/heads/main)":MEMORY.md | shasum)" = "$pre" ]
 }
 
 @test "rotor: a snapshot that fails or prints garbage changes neither verdict nor exit code" {
