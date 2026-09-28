@@ -84,7 +84,7 @@
 #      CC_SP_RESERVE_OPERATOR_SLOTS(3) · CC_SP_RESERVE_WINDOW_SLOTS(1) · CC_SP_RESERVE_GB(0) ·
 #      CC_SP_RESERVE_OPERATOR_GB(4) · CC_SP_RESERVE_WINDOW_GB(2) ·
 #      CC_SP_WINDOW_START(10) · CC_SP_WINDOW_END(5) · CC_SP_NOW · CC_SP_HOUR · CC_SP_TREES_OVERRIDE ·
-#      CC_SP_ACTIVE_OVERRIDE · CC_SP_BEAT_LIB
+#      CC_SP_ACTIVE_OVERRIDE · CC_SP_ACTIVE_WINDOW_S(86400) · CC_SP_BEAT_LIB
 # Pure definitions only — safe to source under `set -u`. bash 3.2-safe, BSD+GNU portable, no eval.
 
 # ══ THE CEILING — the ~15 folklore replaced by the MEASURED floor ══════════════════════════════════
@@ -241,6 +241,31 @@ cc_sp_load_beat() { # → 0 when cb_* is available, 1 otherwise. Idempotent.
   return 1
 }
 
+# ══ THE RECENT-BEAT SLURP (2026-09-28) ═════════════════════════════════════════════════════════════
+# Both censuses below used to `jq -s` the WHOLE beat dir, and the "~13 ms on 1,527 files" they quoted
+# went stale as the dir grew. Measured 2026-09-28: 6,307 files (25 MB), 191 of them touched in 24 h;
+# the whole-dir slurp cost 0.17 s warm and 1.0 s cold, and the Agent-tool PreToolUse hook paid it
+# twice per spawn (cc_sp_operator_state, then cc_sp_active). The hook ran 1.9-3.6 s against its 5 s
+# timeout, and 20-27% of Agent calls were cancelled and dispatched ungated
+# (docs/research/sonnet55-utilization-2026-09-28/notes/probe-teammate-classifier.md Q1).
+#
+# A beat file is rewritten whole on every beat, so its mtime is at least its own `.t` and
+# `.operatorT`: a file untouched for longer than a window cannot hold a value inside that window. So
+# the slurp reads only files modified within the caller's window (one `find -mmin` stat pass, ~30 ms
+# on the same dir) and returns rc 3 when none qualify, which every caller already reads the way it
+# read "newest beat too old". Fixtures written by a test are fresh by mtime, so a pinned cb_now does
+# not change which files are read.
+_cc_sp_slurp_recent() { # <jq-filter> <dir> <window_s> → jq -rs output over recent *.json | rc 3 none
+  local filter="$1" dir="$2" win="$3" mins p
+  local files=()
+  cc_sp_is_int "$win" || return 1
+  mins=$(( win / 60 + 2 ))   # round up, plus a minute of slack for find's whole-minute comparison
+  while IFS= read -r -d '' p; do files+=("$p"); done \
+    < <(find "$dir" -maxdepth 1 -name '*.json' -mmin "-$mins" -print0 2>/dev/null)
+  [ "${#files[@]}" -gt 0 ] || return 3
+  jq -rs "$filter" "${files[@]}" 2>/dev/null
+}
+
 # ══ THE ACTIVE POPULATION — the second census, and the one the box actually binds on ═══════════════
 # (Wave D re-term: backlog 1c45598a91be; DoD docs/research/scaling-bottlenecks-2026-08-09.md §5-P2.)
 #
@@ -291,10 +316,12 @@ cc_sp_load_beat() { # → 0 when cb_* is available, 1 otherwise. Idempotent.
 # writer's own), so a RECYCLED pid cannot inherit a dead session's activity. A beat carrying no
 # lstart cannot be proven either way and is NOT counted — same direction rule.
 #
-# COST: one jq slurp (ONE process over the whole dir, not one per file — the hard requirement stated
-# at cc_sp_operator_state) plus at most two `ps` (the TZ-pinned sample and the rollout-grace ambient
-# one described at the query below), and both are skipped entirely when no beat is mid-turn. Measured
-# on a 1,527-file fixture: the slurp is ~13 ms.
+# COST: one jq slurp (ONE process over the recent files, not one per file — the hard requirement
+# stated at cc_sp_operator_state) plus at most two `ps` (the TZ-pinned sample and the rollout-grace
+# ambient one described at the query below), and both are skipped entirely when no beat is mid-turn.
+# The slurp reads only beats touched inside CC_SP_ACTIVE_WINDOW_S (default 86400; see
+# _cc_sp_slurp_recent), so a turn that has run longer than a day without a Stop is not counted. That
+# is the lower-bound direction this census already takes: the term under-refuses, never over-refuses.
 cc_sp_active() { # → live MID-TURN session count | empty + rc 1 when unmeasurable
   if [ -n "${CC_SP_ACTIVE_OVERRIDE:-}" ]; then
     cc_sp_is_int "$CC_SP_ACTIVE_OVERRIDE" || return 1
@@ -302,7 +329,7 @@ cc_sp_active() { # → live MID-TURN session count | empty + rc 1 when unmeasura
   fi
   command -v jq >/dev/null 2>&1 || return 1
   cc_sp_load_beat || return 1
-  local now live_max dir out line maxt pairs pids pid n
+  local now live_max dir out line maxt pairs pids pid n awin
   now="$(cb_now 2>/dev/null)" || now=""
   cc_sp_is_int "$now" || return 1
   live_max="${CC_BEAT_LIVE_MAX_S:-900}"
@@ -313,13 +340,17 @@ cc_sp_active() { # → live MID-TURN session count | empty + rc 1 when unmeasura
   # ONE jq pass, emitting the existence-gate clock on the first line and one `P<pid> <lstart>` line
   # per mid-turn beat. A torn or invalid file makes jq exit non-zero over the WHOLE slurp, which
   # lands on rc 1 — never a parsed half-answer, exactly as cc_sp_operator_state treats it.
-  out="$(jq -rs '
+  awin="${CC_SP_ACTIVE_WINDOW_S:-86400}"
+  cc_sp_is_int "$awin" || awin=86400
+  [ "$awin" -ge "$live_max" ] || awin="$live_max"
+  # shellcheck disable=SC2016  # a jq program: $maxt is jq's, never the shell's
+  out="$(_cc_sp_slurp_recent '
       (map(select((.t|type) == "number") | .t) | max) as $maxt
       | ["T\($maxt)"]
         + ( map(select(.kind == "prompt" and (.pid|type) == "number"
                        and ((.lstart // "") | tostring | length) > 0))
             | map("P\(.pid) \(.lstart)") )
-      | .[]' "$dir"/*.json 2>/dev/null)" || return 1
+      | .[]' "$dir" "$awin")" || return 1
 
   maxt=""; pairs=""; pids=""
   while IFS= read -r line; do
@@ -420,7 +451,7 @@ EOF
 # population must share the state model (memory sibling-auditors-must-share-the-state-model); a
 # faster copy that drifts on which files count is a worse instrument than the slow one.
 cc_sp_operator_state() { # [sid] → self | present | absent | unknown
-  local sid="${1:-}" max age now dir pair maxt maxop live_max
+  local sid="${1:-}" max age now dir pair maxt maxop live_max win
   max="${CC_SP_OPERATOR_MAX_S:-900}"
   cc_sp_is_int "$max" || max=900
   if ! cc_sp_load_beat; then printf 'unknown'; return 0; fi
@@ -442,10 +473,14 @@ cc_sp_operator_state() { # [sid] → self | present | absent | unknown
   # `jq -s` over the glob: one process, one read, two maxima. A torn/invalid file makes jq exit
   # non-zero over the WHOLE slurp, which lands on the `unknown` arm below — the same direction
   # cb_last_beat takes for a torn single file (absent, never a parsed half-answer).
-  pair="$(jq -rs 'reduce .[] as $b ([0,0];
+  # Only beats touched inside the wider of the two windows can move either verdict (see
+  # _cc_sp_slurp_recent), so the decision is the same one the whole-dir slurp made.
+  win="$max"; [ "$live_max" -gt "$win" ] && win="$live_max"
+  # shellcheck disable=SC2016  # a jq program: $b is jq's, never the shell's
+  pair="$(_cc_sp_slurp_recent 'reduce .[] as $b ([0,0];
                     [ (if ($b.t|type)=="number" and $b.t > .[0] then $b.t else .[0] end),
                       (if ($b.operatorT|type)=="number" and $b.operatorT > .[1] then $b.operatorT else .[1] end) ])
-                  | "\(.[0]) \(.[1])"' "$dir"/*.json 2>/dev/null)" || pair=""
+                  | "\(.[0]) \(.[1])"' "$dir" "$win")" || pair=""
   maxt="${pair%% *}"; maxop="${pair##* }"
   cc_sp_is_int "$maxt" || { printf 'unknown'; return 0; }
   cc_sp_is_int "$maxop" || { printf 'unknown'; return 0; }

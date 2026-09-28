@@ -168,6 +168,22 @@ admit() { # $1=caller $2=what → prints the reason, exits with the gate's rc
   [ "$(sp cc_sp_operator_state)" = unknown ]
 }
 
+@test "08b the slurp reads only beats touched inside the window — a stale torn file is never opened" {
+  # The whole-dir slurp cost 0.17-1.0 s at 6,307 files and ran inside the Agent-tool hook. A beat
+  # file untouched for longer than the window cannot hold a value inside it, so it is skipped. The
+  # torn file makes the skip observable: read, it would turn the answer into UNKNOWN (case 08).
+  beat s1 999940 999940
+  printf '{"sid":"s2","t":' > "$CC_BEAT_DIR/s2.json"
+  touch -t "$(date -v-2d +%Y%m%d%H%M 2>/dev/null || date -d '2 days ago' +%Y%m%d%H%M)" "$CC_BEAT_DIR/s2.json"
+  [ "$(sp cc_sp_operator_state)" = present ]
+}
+
+@test "08c no beat touched inside the window ⇒ UNKNOWN (the existence gate, reached with zero files)" {
+  beat s1 999940 999940
+  touch -t "$(date -v-2d +%Y%m%d%H%M 2>/dev/null || date -d '2 days ago' +%Y%m%d%H%M)" "$CC_BEAT_DIR/s1.json"
+  [ "$(sp cc_sp_operator_state)" = unknown ]
+}
+
 @test "09 a clock that stepped backwards clamps to PRESENT, never to a forged long absence" {
   beat s1 1000500 1000500
   [ "$(sp cc_sp_operator_state)" = present ]

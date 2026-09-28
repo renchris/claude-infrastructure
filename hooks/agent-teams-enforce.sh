@@ -44,6 +44,58 @@ PROMPT=$(echo "$INPUT" | jq -r '.tool_input.prompt // empty')
 SUBAGENT_TYPE=$(echo "$INPUT" | jq -r '.tool_input.subagent_type // empty')
 MODEL=$(echo "$INPUT" | jq -r '.tool_input.model // empty')
 
+# ── MODEL ALLOWLIST FIRST (2026-09-28) ───────────────────────────────────────────────────────
+# A pure policy check on the payload, so it runs before the census gates below. It used to run
+# after them, and they cost 1.9-3.6 s against this hook's 5 s timeout: 20-27% of Agent calls were
+# cancelled and dispatched anyway, a Sonnet teammate included (probe-teammate-classifier.md Q1 in
+# docs/research/sonnet55-utilization-2026-09-28/notes/). A deny here now returns before any census,
+# and an off-allowlist spawn no longer charges the spawn budget on its way to being refused.
+# Teammate spawns (team_name set) MUST use a Max-plan auto-mode-allowlisted model.
+# Allowlist is read from the SSOT (~/.claude/model-config.yaml
+# .auto_mode_allowlist.non_firstParty_max — claude-opus-4-8 as of 2026-06-09) so
+# this hook can never drift from a model bump again (pre-2026-06-09 it hardcoded
+# opus-4-7 and would have rejected the swept 4-8 manifests). Off-allowlist models
+# silent-demote to acceptEdits and break team parallelism. Teams run BOTH launcher
+# tracks (stable 2.1.114 + claude-next eval); frontier models (claude-fable-5)
+# become teammate-eligible the moment they're verified into the SSOT allowlist —
+# until then they risk silent auto-mode demotion, so they're denied here. Blocks
+# the 2026-04-17 failure mode (stale plan hardcoding Sonnet for "mechanical"
+# teammates).
+# Rule: memory/feedback-agent-team-models.md + cc-upgrade skill (model.md).
+if [ -n "$TEAMMATE_ID" ] && [ -n "$MODEL" ]; then
+  ALLOWED=$(yq -r '.auto_mode_allowlist.non_firstParty_max[]' "$HOME/.claude/model-config.yaml" 2>/dev/null)
+  [ -n "$ALLOWED" ] || ALLOWED="claude-opus-4-8"   # fallback if yq/config unavailable
+  ALLOWED_FLAT=$(echo "$ALLOWED" | tr '\n' ' ')
+  MODEL_BASE="${MODEL%%\[*}"                        # strip [1m]-style suffixes
+  ALLOW_OK=0
+  case "$MODEL_BASE" in
+    *-*)  # full model ID — must match an allowlisted ID exactly
+      for m in $ALLOWED; do
+        [ "$MODEL_BASE" = "$m" ] && ALLOW_OK=1
+      done
+      ;;
+    *)    # bare family alias (opus, fable, …) — allowed iff the allowlist
+          # contains a model of that family (alias resolves to it)
+      for m in $ALLOWED; do
+        case "$m" in claude-"$MODEL_BASE"-*) ALLOW_OK=1 ;; esac
+      done
+      ;;
+  esac
+  if [ "$ALLOW_OK" -ne 1 ]; then
+    cat <<EOF
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "Teammate spawn rejected: model='$MODEL' is not on the Max-plan auto-mode allowlist (${ALLOWED_FLAT}). Use model='opus' (alias) or an allowlisted ID for all teammates. Off-allowlist models silent-demote to acceptEdits and break team parallelism. Frontier models (the claude-fable-5* family) become teammate-eligible only after verification into the SSOT allowlist (~/.claude/model-config.yaml auto_mode_allowlist.non_firstParty_max) — verify with one test spawn on the eval track, then append it there; this hook follows the SSOT automatically. Rule: memory/feedback-agent-team-models.md."
+  }
+}
+EOF
+    exit 0
+  fi
+fi
+
+
 # ── DUPLICATE-WORKER ADMISSION ────────────────────────────────────────────────────────────────
 # The SECOND consumer of the duplicate-worker lease (backlog 5deb4418a648). The first
 # (hooks/check-edit-boundary.sh, PreToolUse|Write|Edit|MultiEdit) stops a duplicate from CORRUPTING
@@ -519,56 +571,35 @@ if [ -n "$_lin_named" ] && [ "${CC_LINEAGE_GATE:-on}" != off ]; then
   fi
 fi
 
-# Teammate spawns (team_name set) MUST use a Max-plan auto-mode-allowlisted model.
-# Allowlist is read from the SSOT (~/.claude/model-config.yaml
-# .auto_mode_allowlist.non_firstParty_max — claude-opus-4-8 as of 2026-06-09) so
-# this hook can never drift from a model bump again (pre-2026-06-09 it hardcoded
-# opus-4-7 and would have rejected the swept 4-8 manifests). Off-allowlist models
-# silent-demote to acceptEdits and break team parallelism. Teams run BOTH launcher
-# tracks (stable 2.1.114 + claude-next eval); frontier models (claude-fable-5)
-# become teammate-eligible the moment they're verified into the SSOT allowlist —
-# until then they risk silent auto-mode demotion, so they're denied here. Blocks
-# the 2026-04-17 failure mode (stale plan hardcoding Sonnet for "mechanical"
-# teammates).
-# Rule: memory/feedback-agent-team-models.md + cc-upgrade skill (model.md).
-if [ -n "$TEAMMATE_ID" ] && [ -n "$MODEL" ]; then
-  ALLOWED=$(yq -r '.auto_mode_allowlist.non_firstParty_max[]' "$HOME/.claude/model-config.yaml" 2>/dev/null)
-  [ -n "$ALLOWED" ] || ALLOWED="claude-opus-4-8"   # fallback if yq/config unavailable
-  ALLOWED_FLAT=$(echo "$ALLOWED" | tr '\n' ' ')
-  MODEL_BASE="${MODEL%%\[*}"                        # strip [1m]-style suffixes
-  ALLOW_OK=0
-  case "$MODEL_BASE" in
-    *-*)  # full model ID — must match an allowlisted ID exactly
-      for m in $ALLOWED; do
-        [ "$MODEL_BASE" = "$m" ] && ALLOW_OK=1
-      done
-      ;;
-    *)    # bare family alias (opus, fable, …) — allowed iff the allowlist
-          # contains a model of that family (alias resolves to it)
-      for m in $ALLOWED; do
-        case "$m" in claude-"$MODEL_BASE"-*) ALLOW_OK=1 ;; esac
-      done
-      ;;
-  esac
-  if [ "$ALLOW_OK" -ne 1 ]; then
-    cat <<EOF
-{
-  "hookSpecificOutput": {
-    "hookEventName": "PreToolUse",
-    "permissionDecision": "deny",
-    "permissionDecisionReason": "Teammate spawn rejected: model='$MODEL' is not on the Max-plan auto-mode allowlist (${ALLOWED_FLAT}). Use model='opus' (alias) or an allowlisted ID for all teammates. Off-allowlist models silent-demote to acceptEdits and break team parallelism. Frontier models (the claude-fable-5* family) become teammate-eligible only after verification into the SSOT allowlist (~/.claude/model-config.yaml auto_mode_allowlist.non_firstParty_max) — verify with one test spawn on the eval track, then append it there; this hook follows the SSOT automatically. Rule: memory/feedback-agent-team-models.md."
-  }
-}
-EOF
-    exit 0
-  fi
-fi
-
 # Emit an allow + advisory skill-pointer (same pattern as the impl-nudge below). The resident
 # CLAUDE.md invariants carry the CORE discipline; these pointers ensure the full-detail skill
 # loads at the actual spawn point. Additive/advisory only — never denies.
 emit_allow_ctx() {
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","additionalContext":"%s"}}\n' "$1"
+}
+emit_allow_bare() {
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}\n'
+}
+
+# ONE POINTER PER KIND PER SESSION (2026-09-28). The skill pointers below used to ride every spawn,
+# so an N-wide fan-out put N copies after one step: 163 injections in 3 days on main threads
+# (harness-hazards-a.md §1b item 4). A fixed instruction repeated after tool results is the shape
+# Sonnet 5.5's prompting guide names as a mid-turn injection tell, and the second copy teaches
+# nothing the first did not. So each kind is emitted once per session; later spawns get the same
+# allow with no text. Per-spawn advisories (brief over cap, lifecycle, delivery contract) are facts
+# about THIS spawn and still fire every time. No session id ⇒ no key ⇒ emit, as before.
+_PTR_SID="$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)"
+case "$_PTR_SID" in *[!A-Za-z0-9._-]*) _PTR_SID="" ;; esac
+ptr_first() { # <kind> → 0 the first time this session reaches this pointer kind (marks it), else 1
+  local d f
+  [ -n "$_PTR_SID" ] || return 0
+  d="${CC_ATE_PTR_STATE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/state/agent-teams-ptr}"
+  f="$d/$_PTR_SID.$1"
+  [ -f "$f" ] && return 1
+  mkdir -p "$d" 2>/dev/null || true
+  find "$d" -type f -mtime +7 -delete 2>/dev/null || true
+  : > "$f" 2>/dev/null || true
+  return 0
 }
 
 # If team_name is set (with valid or absent model), this is an Agent Team — allow + point to skill.
@@ -642,7 +673,8 @@ if [ -n "$TEAMMATE_ID" ]; then
   fi
 
   if [ "$BRIEF_LINES" -gt "$BRIEF_WARN" ]; then
-    jq -n --arg n "$BRIEF_LINES" --arg warn "$BRIEF_WARN" --arg ptr "$SKILL_PTR" --arg adv "$LIFECYCLE_ADV" '{
+    _ptr=""; ptr_first agent-teams && _ptr="$SKILL_PTR"
+    jq -n --arg n "$BRIEF_LINES" --arg warn "$BRIEF_WARN" --arg ptr "$_ptr" --arg adv "$LIFECYCLE_ADV" '{
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
         permissionDecision: "allow",
@@ -654,7 +686,13 @@ if [ -n "$TEAMMATE_ID" ]; then
 
   # $LIFECYCLE_ADV is empty on every spawn this term does not apply to, so this concatenation is a
   # no-op there and the unchanged pointer is emitted byte-for-byte as before.
-  emit_allow_ctx "$SKILL_PTR$LIFECYCLE_ADV"
+  if ptr_first agent-teams; then
+    emit_allow_ctx "$SKILL_PTR$LIFECYCLE_ADV"
+  elif [ -n "$LIFECYCLE_ADV" ]; then
+    emit_allow_ctx "${LIFECYCLE_ADV# }"
+  else
+    emit_allow_bare
+  fi
   exit 0
 fi
 
@@ -696,7 +734,11 @@ esac
 # Discriminator is the EXPLICIT marker, not the topic.
 RESEARCH_MARKERS='READ[- ]ONLY RESEARCH|RESEARCH[- ]ONLY|NO (FILES|CODE)( WILL BE)? (WRITTEN|MODIFIED|CREATED)|WRITES? NOTHING (TO|ON) DISK|Tool budget:[[:space:]]*(Read|Glob|Grep|WebFetch|WebSearch|,|[[:space:]])+|Tool use limited to:[[:space:]]*(Read|Glob|Grep|WebFetch|WebSearch|,|[[:space:]])'
 if echo "$PROMPT" | grep -qEi "$RESEARCH_MARKERS"; then
-  emit_allow_ctx "RESEARCH-SUBAGENTS SKILL: fanning out research subagents. If composing a WAVE, invoke the research-subagents skill for the decomposition discipline (decompose before counting, default N=10, question-type + named-entity gates, 7-field briefs INCLUDING the mandatory field 7 Delivery — name the absolute artifact path each subagent WRITES, because a subagent's prose is invisible and only a file is delivered, adversarial-sampling floor, OASIS stop). The resident CLAUDE.md invariant carries the core."
+  if ptr_first research-subagents; then
+    emit_allow_ctx "RESEARCH-SUBAGENTS SKILL: fanning out research subagents. If composing a WAVE, invoke the research-subagents skill for the decomposition discipline (decompose before counting, default N=10, question-type + named-entity gates, 7-field briefs INCLUDING the mandatory field 7 Delivery — name the absolute artifact path each subagent WRITES, because a subagent's prose is invisible and only a file is delivered, adversarial-sampling floor, OASIS stop). The resident CLAUDE.md invariant carries the core."
+  else
+    emit_allow_bare
+  fi
   exit 0
 fi
 
@@ -710,7 +752,11 @@ RESEARCH_COUNT=$(echo "$PROMPT" | grep -oEi "$RESEARCH_KEYWORDS" 2>/dev/null | w
 
 # If clearly research-oriented (more research keywords than implementation), allow silently
 if [ "$RESEARCH_COUNT" -gt "$IMPL_COUNT" ] && [ "$IMPL_COUNT" -le 1 ]; then
-  emit_allow_ctx "RESEARCH-SUBAGENTS SKILL: research-oriented subagent spawn. If composing a research WAVE, invoke the research-subagents skill for the decomposition discipline (decompose before counting, default N=10, adversarial-sampling floor, OASIS stop, synthesis-bottleneck rules). The resident CLAUDE.md invariant carries the core."
+  if ptr_first research-subagents; then
+    emit_allow_ctx "RESEARCH-SUBAGENTS SKILL: research-oriented subagent spawn. If composing a research WAVE, invoke the research-subagents skill for the decomposition discipline (decompose before counting, default N=10, adversarial-sampling floor, OASIS stop, synthesis-bottleneck rules). The resident CLAUDE.md invariant carries the core."
+  else
+    emit_allow_bare
+  fi
   exit 0
 fi
 
@@ -730,6 +776,7 @@ fi
 
 # ALLOW+NUDGE: Foreground agent without team_name that looks like implementation
 if [ "$IMPL_COUNT" -ge 2 ]; then
+  ptr_first agent-teams-default || { emit_allow_bare; exit 0; }
   cat <<'EOF'
 {
   "hookSpecificOutput": {

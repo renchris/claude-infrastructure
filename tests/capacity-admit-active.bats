@@ -285,6 +285,19 @@ EOF
   [ "$(sp cc_sp_active)" = 1 ]
 }
 
+@test "11c a mid-turn beat untouched for longer than CC_SP_ACTIVE_WINDOW_S is not read" {
+  # The census reads only beats touched inside the window (default 86400 s), so a turn older than
+  # that without a Stop is not counted: the lower-bound direction, an under-refusal. A fresh stop
+  # beat keeps the existence gate live, so the 0 is a measurement, not a blind rc 1.
+  local ls old; ls="$(ps -o lstart= -p $$ | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  old="$(date -v-2d +%Y%m%d%H%M 2>/dev/null || date -d '2 days ago' +%Y%m%d%H%M)"
+  beat live 999990 prompt "$$" "$ls"
+  beat quiet 999985 stop "$$" "$ls"
+  touch -t "$old" "$CC_BEAT_DIR/live.json"
+  [ "$(sp cc_sp_active)" = 0 ]
+  [ "$(CC_SP_ACTIVE_WINDOW_S=400000 sp cc_sp_active)" = 1 ]
+}
+
 @test "12 the ACTIVE term REFUSES at the ceiling and ADMITS one below it" {
   CC_SP_ACTIVE_OVERRIDE=8 CC_ADMIT_ACTIVE_CEILING=8 run admit act-a "spawn"
   [ "$status" -eq 9 ]

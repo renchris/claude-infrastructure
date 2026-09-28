@@ -282,3 +282,54 @@ run_spawn() {
   run run_hook_named "impl-1" "$(brief 10)"
   [ "$(decision "$output")" = allow ]
 }
+
+# ── ALLOWLIST FIRST: a model deny never waits on the capacity census (2026-09-28) ─────────────────
+# The census gates took 1.9-3.6 s against the hook's 5 s timeout, and a timed-out PreToolUse is
+# cancelled and the spawn dispatched anyway — a Sonnet teammate included
+# (docs/research/sonnet55-utilization-2026-09-28/notes/probe-teammate-classifier.md Q1). The capacity
+# term is forced to REFUSE here, so the reason names which gate decided: RED on the pre-change hook,
+# which answered MACHINE CAPACITY before it ever read the model.
+@test "ALLOWLIST FIRST: an off-allowlist teammate is denied on the model before any capacity term runs" {
+  export CC_ADMIT_GATE=on CC_ADMIT_HEADROOM_OVERRIDE=0.5 CC_ADMIT_BUDGET=3
+  export CC_ADMIT_SEGMENT_TERM=off CC_ADMIT_ACTIVE_TERM=off CC_ADMIT_RESERVE_TERM=off
+  export CC_ADMIT_STATE_DIR="$BATS_TEST_TMPDIR/admit-state" CC_ADMIT_NOTIFY_BIN=/usr/bin/true
+  run run_hook_named "tm" "$(brief 10)" "sonnet"
+  [ "$(decision "$output")" = deny ]
+  r="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.permissionDecisionReason')"
+  [[ "$r" == "Teammate spawn rejected: model='sonnet'"* ]] || false
+  [ ! -s "$CC_ADMIT_IDL" ] || { echo "a census gate ran first: $(cat "$CC_ADMIT_IDL")"; false; }
+}
+
+# ── ONE POINTER PER KIND PER SESSION (2026-09-28) ─────────────────────────────────────────────────
+run_hook_sid() { # $1=session_id $2=name $3=prompt
+  jq -n --arg s "$1" --arg nm "$2" --arg p "$3" \
+    '{session_id:$s,tool_input:({prompt:$p} + (if $nm == "" then {} else {name:$nm} end))}' | bash "$HOOK"
+}
+ctx_of() { printf '%s' "$1" | jq -r '.hookSpecificOutput.additionalContext // ""'; }
+
+@test "POINTER ONCE: the AGENT-TEAMS pointer rides the first teammate spawn of a session, not the second" {
+  run run_hook_sid "sess-a" "impl-1" "$(brief 10)"
+  [ "$(decision "$output")" = allow ]
+  [[ "$(ctx_of "$output")" == "AGENT-TEAMS SKILL:"* ]] || false
+  run run_hook_sid "sess-a" "impl-2" "$(brief 10)"
+  [ "$(decision "$output")" = allow ]
+  [ -z "$(ctx_of "$output")" ] || { echo "pointer repeated: $output"; false; }
+  run run_hook_sid "sess-b" "impl-1" "$(brief 10)"
+  [[ "$(ctx_of "$output")" == "AGENT-TEAMS SKILL:"* ]] || false
+}
+
+@test "POINTER ONCE: the RESEARCH-SUBAGENTS pointer is once per session too" {
+  run run_hook_sid "sess-r" "" "READ-ONLY RESEARCH: survey the thing"
+  [[ "$(ctx_of "$output")" == "RESEARCH-SUBAGENTS SKILL:"* ]] || false
+  run run_hook_sid "sess-r" "" "READ-ONLY RESEARCH: survey another thing"
+  [ "$(decision "$output")" = allow ]
+  [ -z "$(ctx_of "$output")" ] || { echo "pointer repeated: $output"; false; }
+}
+
+@test "POINTER ONCE: a per-spawn advisory still fires after the pointer is spent (brief over cap)" {
+  run run_hook_sid "sess-c" "impl-1" "$(brief 10)"
+  run run_hook_sid "sess-c" "impl-2" "$(brief 160)"
+  [ "$(decision "$output")" = allow ]
+  [[ "$(ctx_of "$output")" == "BRIEF OVER CAP:"* ]] || false
+  if [[ "$(ctx_of "$output")" == *"AGENT-TEAMS SKILL:"* ]]; then echo "pointer repeated"; false; fi
+}
