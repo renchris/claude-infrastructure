@@ -38,7 +38,7 @@ does not hold.
 | B · substrate + push consumers | **S** (`tma-wave-b`) | #4, #5, #6 (+#7 as its acceptance criterion), #10, #26 in shadow mode, then #35 delivery benchmark | #6 and #10 read #3's registry (X5); #5's retriever arm needs #4 |
 | C · the rest of build-now | **S** (`tma-wave-c`) | #9, #12, #13, #14 | #14's sweep block needs #2; #12 edits the same instruction lines #10 edits |
 | D · build-later | **S** (`tma-wave-d`) | #15-#22, each behind its entry condition | every entry condition is a Wave A-C deliverable |
-| E · experiments | **S** (`tma-wave-e`) | #4b, #23, #24, #25, #26 verdict, #27 | each needs #4/#5 (and #14 for #24-25) to measure against |
+| E · experiments | **S** (`tma-wave-e`) | #4b, #23, #24, #25, #26 verdict, #27, #36 | each needs #4/#5 (and #14 for #24-25) to measure against |
 
 Waves are **serial**: they share `hooks/memory-nudge.sh`, `bin/cc-memory-rotate`,
 `scripts/memory-fleet-sweep.sh`, `hooks/lib/session-index-helpers.sh` and the two CLAUDE variants.
@@ -122,6 +122,7 @@ If it is ever missing, re-derive it per `docs/research/truememory-2026-09-27/gap
   from 88 comparable runs at 0.02-0.04 pp each; `cc-quota-price` fit, rel-RMSE 0.37). Route it to
   the account that would otherwise strand the most quota. Operator ruling 2026-09-27: runs at this
   cost need no ask.
+- **If push shows no gain** (arm 3 not better than arm 2 on lesson-used, sign test p ≥ 0.1): do not ship more push consumers on faith. Stop Wave E's push-shaped experiments (#23, #26), keep #6 and #10 only if their own logs show delivered-and-used events, and open a research wave on WHY delivery does not change behaviour (salience, placement in the tool result, rule wording), using #36's fixtures. That research wave is the one this program pre-authorises.
 - **Done when:** the results table (arm × lesson-used × correct × tokens) and its verdict are
   appended to `docs/research/truememory-2026-09-27.md` §5 and landed.
 
@@ -168,11 +169,18 @@ ships. Adopted ones become Wave-D-style build items; dropped ones get a rejectio
 | # | Experiment | Design | Entry condition | Verdict rule |
 |---|---|---|---|---|
 | 4b | FTS5 + model2vec (potion) fusion in `cc-memory-search` | §3.4 stage 2 | #4 and #5 landed | adopt if #5 shows a gain on queries NOT written by an agent (the study's 0.78 → 0.90 R@1 gain, 6 wins to 0, p = 0.031, was on agent-written queries). model2vec needs numpy only, no torch, so R14's hook-path rule holds |
-| 23 | per-prompt pointer recall, shadow mode first | §3.23-3.27 | #4, #5, #7 landed | adopt if shadow logs show top-1 relevance high enough on real prompts; the study measured raw bm25 floors as length-confounded |
-| 24 | candidate extractor, `--dry-run` Stage 0 only | §3.23-3.27 | #14 landed | adopt only if Stage 0 output passes the anti-capture classes; re-target Stage-0 gold on operator rulings (4 of the 14 real misses) |
+| 23 | per-prompt pointer recall, shadow mode first | §3.23-3.27 | #4, #5, #7 landed | pre-registered: over ≥40 shadow fires on real operator prompts, hand-labelled, top-1 relevant ≥60% with a Wilson 95% lower bound ≥45%, AND fires on ≤15% of prompts; else drop. The study measured raw bm25 floors as length-confounded (top-1 relevant 6/40 in a mixed store), so the floor must be rank- or length-normalised |
+| 24 | candidate extractor, `--dry-run` Stage 0 only | §3.23-3.27 | #14 landed | pre-registered: on a hand-labelled sample of ≥50 Stage-0 candidates, ≥90% pass every anti-capture class, AND it recovers ≥3 of the 4 never-written operator rulings (gap-2 #47, #58, #66/67, #70 family) from their transcripts; else drop |
 | 25 | transcript capture scan, dry-run verdicts | §3.23-3.27 | #24 passes Stage 0 | as #24 |
-| 26 | ruling-shaped operator text nudge | §3.23-3.27 | already shadowing in Wave B | adopt if the shadow log catches rulings with few false fires (the study's regex: 5 hits, 0 standing rules; unanchored "remember": 11 hits, about 8 rules) |
+| 26 | ruling-shaped operator text nudge | §3.23-3.27 | already shadowing in Wave B | pre-registered: over ≥20 shadow fires, precision ≥70% (fire = a standing operator ruling, hand-labelled), AND it fires on ≥2 of the 4 never-written rulings when their prompts are replayed; else drop. Baseline: the study's regex 5 hits, 0 standing rules; unanchored "remember" 11 hits, about 8 rules |
 | 27 | provenance-and-verification tier (prose receipt) | §3.23-3.27 | #4, #5 landed | adopt only with a delivery mechanism other than prose (X7) |
+| 36 | adherence at the moment of action: rules already in context or resident but not followed | new (gap-2 §classification row "in context or resident, not obeyed") | #35's harness exists | Fixtures: the four real misses — #10 (re-read the thread before each draft), #11 (a claim that implied nothing was due later), #29 (a command handed to the user that the agent could run), #79 (a sign-off the agent was told it may never give) — plus the resident-lesson recurrences (71% of recurrences had the rule resident, `our-usage.md:129`). Step 1, bounded: inventory the repo's existing moment-of-action checks (Stop-hook close checks such as `completion-assert.sh`, `anti-deference-nudge.sh`; PreToolUse guards) and map which of the four each would have caught. Step 2: build the cheapest mechanism that pushes the one relevant rule at the action (a draft, a close, a hand-off command) and run it through #35's harness on these fixtures. Pre-registered: adopt if it prevents ≥3 of 4 fixture misses with ≤10% added false blocks on control tasks; else record why and drop |
+
+## Open questions (tracked, not yet answerable)
+
+| Question | Why it matters | How it gets answered |
+|---|---|---|
+| Do our PreToolUse hooks fire on tool calls made inside Claude Code's native background memory writers (extractMemories, autoDream)? | If not, those writers bypass every guard we have, and #11's history is the only protection | Only testable when either flag reads on. #8's native-pass sentinel detects a flip; the first session after a flip runs a marker-hook probe (X6 pattern) inside the fork before trusting anything |
 
 ## Cross-cutting rules learned 2026-09-27 (X6-X8, bind on Waves B-E)
 
@@ -212,3 +220,4 @@ These extend the research doc's X1-X5 (§2) with what the session after the stud
 - 2026-09-27 — Research landed (`docs/research/truememory-2026-09-27.md`). Plan created. Wave A next.
 - 2026-09-27 — Wave A fired (pane `tma-wave-a`, account next). Hook-delivery finding re-measured live (`9639822a7`). #35 delivery benchmark added to Wave B; A/B harness preserved under `docs/research/truememory-2026-09-27/ab-harness/`.
 - 2026-09-27 — Scope grown to maximal extraction: Waves D (build-later) and E (experiments with verdict rules), X6-X8 learned in the post-study session (live delivery probe, prose is not delivery, nothing only in /tmp), and the built-in-vs-ours stack inventory. Upstream TrueMemory fix kit: `docs/research/truememory-2026-09-27/UPSTREAM_FIX_KIT.md`.
+- 2026-09-27 — Completeness review closed four plan gaps: numeric pre-registered verdicts for #23/#24/#26, #35's no-gain branch (pre-authorises a delivery-research wave), new experiment #36 for rules in context but not followed (4 of 14 real misses), and the native-fork hook question as a tracked open question. Our own hooks were checked for TrueMemory's top-level additionalContext bug: 38 files reference it, none emit it outside hookSpecificOutput.
