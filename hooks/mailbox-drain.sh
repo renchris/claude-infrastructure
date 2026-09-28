@@ -88,6 +88,16 @@ own_sid="$(printf '%s' "$_stdin_json" | jq -r '.session_id // empty' 2>/dev/null
 case "$own_sid" in *[!0-9A-Fa-f-]*) own_sid="" ;; esac
 own_tp="$(printf '%s' "$_stdin_json" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
 
+# SUBAGENTS NEVER DRAIN (2026-09-28). A subagent's PostToolUse payload carries its PARENT's
+# session_id, so keyed on session_id it read the lead's inbox: 27 subagent transcripts in 7 days held
+# peer mail, and the drain advanced the shared .seen cursor, so the lead never saw those lines. The
+# payload's non-empty `.agent_id` is what marks a subagent; the lead drains at its own next boundary.
+# Evidence: docs/research/sonnet55-utilization-2026-09-28/notes/harness-hazards-a.md §1b item 1.
+if [ "$MODE" = "post-tool" ] \
+   && [ -n "$(printf '%s' "$_stdin_json" | jq -r '.agent_id // empty' 2>/dev/null || true)" ]; then
+  exit 0
+fi
+
 # NO ADDRESS IN ENV ⇒ ASK THE REGISTRY WHICH PANE NAMES MY SESSION (2026-09-25). A session Claude Code
 # backgrounded into its daemon runs with KITTY_WINDOW_ID / ITERM_SESSION_ID stripped while its pane
 # goes on displaying it; hooks/session-register.sh adopts that pane by lineage and writes the row, but
@@ -704,7 +714,7 @@ sys.stdout.write("\n".join(out) + "\n")
     fi ;;
 esac
 _block="$(printf '%s\n' "$_shown" | sed 's/^/  │ /')"
-ctx="$(printf '📬 peer mail ◀ %s new %s from other Claude sessions%s\n  ╭─\n%s\n  ╰─ delivered as CONTEXT via the non-keystroke inbox channel — never typed into your input line.\n     Already marked delivered. Triage/act as appropriate; reply to a peer with cc-notify <uuid> "…". This is a message TO you, not something you typed.%s%s%s' \
+ctx="$(printf '📬 peer mail ◀ %s new %s from other Claude sessions%s\n  ╭─\n%s\n  ╰─ delivered as CONTEXT via the non-keystroke inbox channel — never typed into your input line.\n     Already marked delivered. Triage/act as appropriate; reply to a peer with cc-notify <uuid> "…". Notice from peer Claude sessions on this machine.%s%s%s' \
   "$n" "$plural" "$warn" "$_block" "$rest" "$_cust_note" "$nudge")"
 # ── OPERATOR-VISIBLE LINE (2026-07-26) ──────────────────────────────────────────────────────────
 # additionalContext is MODEL-ONLY: it reaches the agent and is never rendered in the conversation,

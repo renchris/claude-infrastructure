@@ -54,6 +54,30 @@ lib()  { . "$REPO/hooks/lib/mailbox-pending.sh"; }
   [ -z "$output" ]
 }
 
+@test "subagent gate: a post-tool payload with agent_id drains NOTHING and leaves .seen untouched" {
+  seed "2026-09-28T10:00:00+0000 [lead-peer] mail for the lead"
+  run bash -c 'echo "{\"session_id\":\"AAAAAAAA-1111-2222-3333-444444444444\",\"agent_id\":\"a29dfce6c64a18f37\"}" | "$0" post-tool' "$DRAIN"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [ ! -f "$SEEN" ]
+}
+
+@test "subagent gate: the same payload without agent_id still drains (the lead's own boundary)" {
+  seed "2026-09-28T10:00:00+0000 [lead-peer] mail for the lead"
+  run bash -c 'echo "{\"session_id\":\"AAAAAAAA-1111-2222-3333-444444444444\",\"agent_id\":\"\"}" | "$0" post-tool' "$DRAIN"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext' | grep -qF 'mail for the lead'
+  [ "$(cat "$SEEN")" -eq 1 ]
+}
+
+@test "delivered block carries a neutral peer notice, not a provenance denial" {
+  seed "2026-09-28T10:00:00+0000 [peer] hello"
+  run bash -c 'echo "{}" | "$0" post-tool' "$DRAIN"
+  ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
+  printf '%s' "$ctx" | grep -qF 'Notice from peer Claude sessions on this machine.'
+  if printf '%s' "$ctx" | grep -qF 'not something you typed'; then echo "provenance line still present"; false; fi
+}
+
 @test "D5: post-tool advances .seen only — .acked stays put for the guard/Stop-fold (ack_now=0)" {
   seed "one" "two"
   echo '{}' | "$DRAIN" post-tool >/dev/null
