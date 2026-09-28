@@ -48,3 +48,27 @@ names the skill ("we used it"), so no noun query can reach it. #106's gold lives
 result JSON, which #18a is to index, and the prompt misspells the brand ("Pierre Jouet" for
 Perrier-Jouët), so only "pinterest" or "dynamic workflow" could match it. The lead re-runs
 `bash replay.sh` after #18a is live and adds the after state here.
+
+## Replay, after state (2026-09-28, after #18a `aff1d904e` + all-roots sweep `7eb75b912`)
+
+The live sweep reaches the three other account roots (3,275 transcripts) at 200 files a tick, so the
+#106 gold (two `wf_*.json` under `~/.claude-quaternary`) was hours from the live index. `replay-after.sh`
+therefore builds what the live index will hold for those files: a `.backup` of the live index, plus
+the landed sweep run over a scratch root holding only the two gold workflow files (retention, history
+union and read ledger off), then `replay.sh` on that copy. Both gold rows were indexed
+(`wf_850036ea-183`, `wf_05868c2b-dcd`).
+
+| Miss | Cue's own query, top 5 (plain / deep) | Correctly spelled nouns from the same ask |
+|---|---|---|
+| #78 | not found / not found | n/a (gold is a memory topic under a tether-named index line, not a session) |
+| #88 | not found / not found | n/a (the prompt never names the skill) |
+| #106 | not found / not found | **found**: `wf_850036ea-183` at rank 2 for `dynamic workflow perrier jouet` and `bottle reference sourcing`, rank 5 for `perrier jouet` |
+| #110 | nothing (correct) / nothing (correct) | n/a (true negative) |
+
+Correction to the before-state note above: the gold never contains "pinterest" (0 occurrences in
+either file); it is the `bottle-reference-sourcing` workflow and says "Perrier" 18 times. So #106 is
+reachable through claude-search only because #18a indexes workflow results, and only with nouns the
+agent spells correctly. The cue's verbatim nouns carry the prompt's two typos ("Dyanmic", "Pierre
+Jouet") and miss. Result: 1 of 3 episodic misses resolves through claude-search once indexed; 0 of 3
+through the cue's literal query. The cue is a pointer, not the query: it tells the agent to search, and
+the agent writes the query. Its adoption stays provisional on `episodic-cue-outcome.py`.
