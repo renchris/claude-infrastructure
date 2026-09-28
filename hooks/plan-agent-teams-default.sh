@@ -238,6 +238,22 @@ if [ -f "$FILE" ]; then
   fi
 fi
 
+# ONCE PER (session, plan file) (2026-09-28). This used to re-emit on every Edit/Write of a plan:
+# 190 injections in 3 days, a fixed instruction after tool results on every step — the shape Sonnet
+# 5.5's prompting guide names as a mid-turn injection tell. The first edit of a file in a session
+# carries it; later edits of that file do not. No session id ⇒ no key ⇒ emit (fail toward the rule).
+# Evidence: docs/research/sonnet55-utilization-2026-09-28/notes/harness-hazards-a.md §1b item 3.
+_pd_sid="$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)"
+if [ -n "$_pd_sid" ]; then
+  _pd_key="$(printf '%s|%s|%s' "$CFG" "$_pd_sid" "$FILE" | shasum 2>/dev/null | cut -c1-16)"
+  if [ -n "$_pd_key" ]; then
+    mkdir -p "$LOCUS_STATE_DIR" 2>/dev/null || true
+    find "$LOCUS_STATE_DIR" -name '*.plandef' -mtime +7 -delete 2>/dev/null || true
+    [ -f "$LOCUS_STATE_DIR/$_pd_key.plandef" ] && exit 0
+    : > "$LOCUS_STATE_DIR/$_pd_key.plandef" 2>/dev/null || true
+  fi
+fi
+
 cat <<'EOF'
 {
   "hookSpecificOutput": {

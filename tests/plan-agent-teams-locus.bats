@@ -207,6 +207,25 @@ hook_once() { printf '%s' "$(payload "$1" "$TX")" | bash "$HOOK" 2>/dev/null || 
   refute_fired "$output"
 }
 
+@test "PLAN DEFAULTS once per (session, file): a second edit of the same plan in the same session emits nothing" {
+  PLAN='/Users/x/repo/docs/plans/THING_PLAN.md'
+  run bash -c "$(declare -f payload); payload '$PLAN' '' 'sess-A' | bash '$HOOK'"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'PLAN DEFAULTS'
+  run bash -c "$(declare -f payload); payload '$PLAN' '' 'sess-A' | bash '$HOOK'"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ] || { echo "re-emitted: $output"; false; }
+}
+
+@test "PLAN DEFAULTS once per (session, file): a different file or a different session emits again" {
+  run bash -c "$(declare -f payload); payload '/Users/x/repo/docs/plans/A_PLAN.md' '' 'sess-A' | bash '$HOOK'"
+  printf '%s' "$output" | grep -q 'PLAN DEFAULTS'
+  run bash -c "$(declare -f payload); payload '/Users/x/repo/docs/plans/B_PLAN.md' '' 'sess-A' | bash '$HOOK'"
+  printf '%s' "$output" | grep -q 'PLAN DEFAULTS'
+  run bash -c "$(declare -f payload); payload '/Users/x/repo/docs/plans/A_PLAN.md' '' 'sess-B' | bash '$HOOK'"
+  printf '%s' "$output" | grep -q 'PLAN DEFAULTS'
+}
+
 @test "kill-switch on the last operator message abstains" {
   export CC_LOCUS_SLICE_MIN=1
   uturn "2026-08-11T10:00:00.000Z" > "$TX"
