@@ -1,0 +1,365 @@
+#!/usr/bin/env bash
+# cc-resume-debt — a CLOSE is a debt until the resumed session is PROVEN alive
+# (docs/plans/CLOSE_RESUME_CUSTODY.md §2 D1/D2; the contract is there, this file implements it).
+#
+# THE GAP (2026-09-28): an automatic upgrade mover /exit-ed an idle customer session, the relaunch
+# into its pane failed because the window was gone, and the only trace was a log row. Every mover
+# that closes a session therefore opens a debt here BEFORE the close, and the debt is discharged
+# only by proof. Unproven ⇒ one retry in a NEW window with the SAME session id; still unproven ⇒
+# ONE runnable operator backlog row plus ONE page. Never silent, never twice.
+#
+# STORAGE (D1). bin/cc-custody is reused unchanged against a SIBLING store
+#   CC_CUSTODY_DIR=${CC_RESUME_DEBT_DIR:-~/.claude/autonomy/resume-debt}
+# — never the dispatch store, whose consumers scope by cwd and would convict the next innocent
+# session in the subject's worktree. Rich per-debt state lives beside it in meta/<sid>.json
+# (rewritten via temp + mv, never partially):
+#   {sid, marker, pane, cfg, account, cwd, by, why, opened_epoch, state, attempts, attempt_epoch,
+#    relaunch_rc, backlog_id, page_verdict, events:[{epoch,state,note}]}
+#   state ∈ open | retrying | escalated | proven | abandoned
+#
+# STATE MACHINE (one transition per `step`, under a per-sid mkdir lock):
+#   proven | abandoned                         → nothing
+#   any other state, proof holds               → discharge (proven)
+#   open, age ≥ GRACE (or settle's --now)      → relaunch, retrying
+#   retrying, relaunch rc≠0 or WAIT elapsed    → escalate (backlog row + page), escalated
+#   escalated                                  → nothing new (latched); a later proof still discharges
+# PROOF is `cc-find <sid>` reporting LIVE (registry pid + lstart) on two reads HOLD s apart. A
+# point-in-time argv/ps match is NOT proof — that was the incident's false positive.
+#
+# EXIT CODES: 0 ok · 1 not proven / escalated (prove, settle, surface-absent) · 2 usage ·
+#   3 undecided / store or enumerator failure · 4 settle ended on an abandoned debt.
+#
+# Env seams: CC_RESUME_DEBT_{DIR,CUSTODY_BIN,RESOLVE_BIN,FIND_BIN,PANE_BIN,BACKLOG_BIN,NOTIFY_BIN,
+#   RELAUNCH,NOW,HOLD_S,GRACE_S,WAIT_S,POLL_S,LOCK_STALE_S}.
+#   CC_RESUME_DEBT_RELAUNCH is a command PREFIX and is word-split on purpose (default
+#   `bash <repo>/scripts/boot-resume-launch.sh`); <account> <cwd> <sid> are appended.
+#   CC_RESUME_DEBT_NOW pins the state-machine clock (tests); settle's own deadline stays wall-clock.
+set -uo pipefail
+
+_SELF="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
+_HERE="$(cd "$(dirname "$_SELF")" 2>/dev/null && pwd)"
+_REPO="$(cd "$_HERE/.." 2>/dev/null && pwd)"
+
+_die() { printf 'cc-resume-debt: %s\n' "$1" >&2; exit "${2:-2}"; }
+_note() { printf 'cc-resume-debt: %s\n' "$1" >&2; }
+
+command -v jq >/dev/null 2>&1 || _die "jq not found" 3
+
+# _sib <name> — the sibling beside this script, else the live copy, else the bare name (PATH).
+_sib() {
+  if [ -x "$_HERE/$1" ]; then printf '%s' "$_HERE/$1"
+  elif [ -x "$HOME/.claude/bin/$1" ]; then printf '%s' "$HOME/.claude/bin/$1"
+  else printf '%s' "$1"; fi
+}
+_launcher() {
+  if [ -f "$_REPO/scripts/boot-resume-launch.sh" ]; then printf 'bash %s' "$_REPO/scripts/boot-resume-launch.sh"
+  else printf 'bash %s' "$HOME/.claude/scripts/boot-resume-launch.sh"; fi
+}
+_num() { case "$1" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; esac; }
+
+DIR="${CC_RESUME_DEBT_DIR:-$HOME/.claude/autonomy/resume-debt}"
+CUSTODY="${CC_RESUME_DEBT_CUSTODY_BIN:-$(_sib cc-custody)}"
+RESOLVE="${CC_RESUME_DEBT_RESOLVE_BIN:-$(_sib cc-resume-resolve)}"
+FIND="${CC_RESUME_DEBT_FIND_BIN:-$(_sib cc-find)}"
+PANE="${CC_RESUME_DEBT_PANE_BIN:-$(_sib cc-pane)}"
+BACKLOG="${CC_RESUME_DEBT_BACKLOG_BIN:-$(_sib cc-backlog)}"
+NOTIFY="${CC_RESUME_DEBT_NOTIFY_BIN:-$(_sib cc-notify)}"
+RELAUNCH="${CC_RESUME_DEBT_RELAUNCH:-$(_launcher)}"
+HOLD_S="$(_num "${CC_RESUME_DEBT_HOLD_S:-}" 15)"
+GRACE_S="$(_num "${CC_RESUME_DEBT_GRACE_S:-}" 240)"
+WAIT_S="$(_num "${CC_RESUME_DEBT_WAIT_S:-}" 180)"
+POLL_S="$(_num "${CC_RESUME_DEBT_POLL_S:-}" 5)"
+LOCK_STALE_S="$(_num "${CC_RESUME_DEBT_LOCK_STALE_S:-}" 300)"
+META="$DIR/meta"; LOCKS="$DIR/lock"; LOGS="$DIR/log"
+
+_now() { printf '%s' "${CC_RESUME_DEBT_NOW:-$(date +%s)}"; }
+_utc() { date -u -r "$1" +%FT%TZ 2>/dev/null || date -u -d "@$1" +%FT%TZ 2>/dev/null || printf '%s' "$1"; }
+_bounded() { if command -v timeout >/dev/null 2>&1; then timeout 10 "$@"; else "$@"; fi; }
+
+# ── meta sidecar ────────────────────────────────────────────────────────────────────────────────
+_meta() { printf '%s/%s.json' "$META" "$1"; }
+_get() { jq -r --arg k "$2" '.[$k] // "" | tostring' "$(_meta "$1")" 2>/dev/null; }
+# _set <sid> <jq filter> [jq args…] — atomic rewrite; a failed filter leaves the old file intact.
+_set() {
+  local f tmp filt; f="$(_meta "$1")"; filt="$2"; shift 2
+  tmp="$f.tmp.$$"
+  if jq "$@" "$filt" "$f" > "$tmp" 2>/dev/null; then mv -f "$tmp" "$f"; else rm -f "$tmp"; return 1; fi
+}
+# _ev <sid> <state> <note> — set state and append the event that explains it.
+_ev() {
+  # shellcheck disable=SC2016  # $s $n $e are jq variables
+  _set "$1" '.state = $s | .events += [{epoch: ($e|tonumber), state: $s, note: $n}]' \
+    --arg s "$2" --arg n "$3" --arg e "$(_now)"
+}
+_active() { case "$1" in open|retrying|escalated) return 0 ;; esac; return 1; }
+
+# ── lock (per sid; a lock older than LOCK_STALE_S by mtime may be taken) ─────────────────────────
+_HELD=""
+_release() { [ -n "$_HELD" ] && rmdir "$_HELD" 2>/dev/null; _HELD=""; }
+trap _release EXIT
+_mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null; }
+_stale() { local m; m="$(_mtime "$1")"; [ -n "$m" ] && [ $(( $(date +%s) - m )) -ge "$LOCK_STALE_S" ]; }
+_lock() {
+  local l="$LOCKS/$1" moved
+  mkdir -p "$LOCKS" 2>/dev/null
+  if ! mkdir "$l" 2>/dev/null; then
+    _stale "$l" || return 1
+    # Take a stale lock by RENAME (atomic; exactly one taker wins), then re-check what we moved: a
+    # racer may have re-made it fresh between our check and our mv — hand that one back.
+    moved="$l.stale.$$"
+    mv "$l" "$moved" 2>/dev/null || return 1
+    if ! _stale "$moved"; then mv "$moved" "$l" 2>/dev/null || rmdir "$moved" 2>/dev/null; return 1; fi
+    rmdir "$moved" 2>/dev/null
+    mkdir "$l" 2>/dev/null || return 1
+  fi
+  _HELD="$l"
+}
+
+# ── proof ───────────────────────────────────────────────────────────────────────────────────────
+_live_once() {
+  "$FIND" "$1" 2>/dev/null | awk -F'\t' -v s="$1" '$1 == s && $6 == "LIVE" { f = 1 } END { exit !f }'
+}
+_prove() { # <sid> <hold>
+  _live_once "$1" || return 1
+  [ "$2" -gt 0 ] && sleep "$2"
+  _live_once "$1"
+}
+
+# ── verbs ───────────────────────────────────────────────────────────────────────────────────────
+_open() {
+  local cur marker now ccwd key val
+  [ -n "$SID" ] || _die "open needs --sid"
+  if [ -f "$(_meta "$SID")" ] && _active "$(_get "$SID" state)"; then
+    _get "$SID" marker; return 0
+  fi
+  if [ -z "$CFG" ] || [ -z "$CWD" ] || [ -z "$ACCOUNT" ]; then
+    while IFS='=' read -r key val; do
+      case "$key" in
+        account) [ -n "$ACCOUNT" ] || ACCOUNT="$val" ;;
+        config_dir) [ -n "$CFG" ] || CFG="$val" ;;
+        cwd) [ -n "$CWD" ] || CWD="$val" ;;
+      esac
+    done <<EOF
+$("$RESOLVE" "$SID" 2>/dev/null || true)
+EOF
+  fi
+  now="$(_now)"; marker="resume:$SID:$now"
+  mkdir -p "$META" 2>/dev/null || _die "cannot create $META" 3
+  cur="$(_meta "$SID")"
+  jq -n --arg sid "$SID" --arg marker "$marker" --arg pane "$PANE_ID" --arg cfg "$CFG" \
+    --arg account "$ACCOUNT" --arg cwd "$CWD" --arg by "$BY" --arg why "$WHY" --arg e "$now" \
+    '{sid:$sid, marker:$marker, pane:$pane, cfg:$cfg, account:$account, cwd:$cwd, by:$by, why:$why,
+      opened_epoch:($e|tonumber), state:"open", attempts:0, attempt_epoch:0, relaunch_rc:null,
+      backlog_id:"", page_verdict:"", events:[{epoch:($e|tonumber), state:"open", note:("opened by "+$by)}]}' \
+    > "$cur.tmp.$$" && mv -f "$cur.tmp.$$" "$cur" || _die "meta write failed" 3
+  # custody --cwd must resolve to an existing dir; a vanished worktree keys the row on $HOME.
+  ccwd="$CWD"; [ -n "$ccwd" ] && [ -d "$ccwd" ] || ccwd="$HOME"
+  if ! CC_CUSTODY_DIR="$DIR" "$CUSTODY" open --cwd "$ccwd" --target "${PANE_ID:--}" --marker "$marker" \
+       --slug "$SID" --originator-pane "daemon:$BY" --provenance "$BY: $WHY" >/dev/null 2>&1; then
+    # The meta alone still drives the state machine, so the debt is kept, loudly, not dropped.
+    _set "$SID" '.events += [{epoch: .opened_epoch, state: "open", note: "custody open FAILED"}]'
+    _note "custody open failed for $SID — debt kept in meta only"
+    printf '%s\n' "$marker"; return 3
+  fi
+  printf '%s\n' "$marker"
+}
+
+_discharge() { # <sid> <why>
+  local st id
+  [ -f "$(_meta "$1")" ] || { _note "no debt for $1 — nothing to discharge"; return 0; }
+  st="$(_get "$1" state)"
+  _active "$st" || { _note "debt for $1 is already $st — nothing to discharge"; return 0; }
+  CC_CUSTODY_DIR="$DIR" "$CUSTODY" return "$(_get "$1" marker)" --why "$2" >/dev/null 2>&1 \
+    || _note "custody return failed for $1"
+  _ev "$1" proven "$2"
+  id="$(_get "$1" backlog_id)"
+  if [ -n "$id" ]; then
+    env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_SESSION_ID -u CC_SESSION_ID \
+      "$BACKLOG" "done" "$id" --evidence "$2" >/dev/null 2>&1 || _note "backlog done $id failed"
+  fi
+  return 0
+}
+
+_abandon() { # <sid> <why>
+  local st
+  [ -f "$(_meta "$1")" ] || { _note "no debt for $1 — nothing to abandon"; return 0; }
+  st="$(_get "$1" state)"
+  _active "$st" || { _note "debt for $1 is already $st — nothing to abandon"; return 0; }
+  CC_CUSTODY_DIR="$DIR" "$CUSTODY" abandon "$(_get "$1" marker)" --why "$2" >/dev/null 2>&1 \
+    || _note "custody abandon failed for $1"
+  _ev "$1" abandoned "$2"
+}
+
+_relaunch() { # <sid> — the retry: a NEW window, the SAME sid.
+  local acct cwd rc
+  acct="$(_get "$1" account)"; cwd="$(_get "$1" cwd)"
+  mkdir -p "$LOGS" 2>/dev/null
+  if [ -z "$acct" ] || [ -z "$cwd" ]; then
+    rc=64   # unresolvable subject: counts as a failed attempt, so the next step escalates
+  else
+    # shellcheck disable=SC2086  # RELAUNCH is a command PREFIX, word-split on purpose (header)
+    CC_RESUME_DEBT_SETTLING=1 $RELAUNCH "$acct" "$cwd" "$1" </dev/null >>"$LOGS/$1.log" 2>&1
+    rc=$?
+  fi
+  # shellcheck disable=SC2016  # jq variables
+  _set "$1" '.attempts += 1 | .attempt_epoch = ($e|tonumber) | .relaunch_rc = ($rc|tonumber)' \
+    --arg e "$(_now)" --arg rc "$rc"
+  _ev "$1" retrying "relaunch rc=$rc$([ "$rc" = 9 ] && printf ' (capacity deferred)')"
+}
+
+_escalate() { # <sid> — once per debt: one backlog row, one page.
+  local acct cwd by opened run title out rc id prc msg
+  acct="$(_get "$1" account)"; cwd="$(_get "$1" cwd)"; by="$(_get "$1" by)"
+  opened="$(_get "$1" opened_epoch)"
+  run="$(printf 'bash %s %q %q %q' "$HOME/.claude/scripts/boot-resume-launch.sh" "$acct" "$cwd" "$1")"
+  title="Resume stranded session $1 ($(basename "${cwd:-?}"), account ${acct:-?}) — ${by:-a mover} closed it and the relaunch failed (debt opened $(_utc "$opened"))"
+  out="$(env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_SESSION_ID -u CC_SESSION_ID \
+           "$BACKLOG" needs "$title" --project claude-infrastructure --run "$run" </dev/null 2>/dev/null)"
+  rc=$?
+  id=""; [ "$rc" -eq 0 ] && id="$(printf '%s\n' "$out" | grep -xE '[0-9a-f]{12}' | tail -1)"
+  # Latch BEFORE the page: a crash after this point cannot mint a second row.
+  # shellcheck disable=SC2016  # jq variables
+  _set "$1" '.backlog_id = $id' --arg id "$id"
+  _ev "$1" escalated "backlog needs rc=$rc id=${id:-none}"
+  if [ -n "$id" ]; then msg="STRANDED SESSION $1 — relaunch failed; run: cc-do $id"
+  else msg="STRANDED SESSION $1 — relaunch failed; run: $run"; fi
+  _bounded "$NOTIFY" --page "$msg" </dev/null >/dev/null 2>&1; prc=$?
+  # shellcheck disable=SC2016  # jq variables
+  _set "$1" '.page_verdict = $v' --arg v "$([ "$prc" -eq 0 ] && printf reached || printf 'refused-rc%s' "$prc")"
+}
+
+_step() { # <sid> <now-flag 0|1> — ONE transition; a held lock makes it a no-op.
+  local st age
+  [ -f "$(_meta "$1")" ] || { _note "no debt for $1"; return 0; }
+  _lock "$1" || return 0
+  st="$(_get "$1" state)"
+  if _active "$st"; then
+    if _prove "$1" "$HOLD_S"; then
+      _discharge "$1" "proven LIVE by cc-find"
+    else
+      case "$st" in
+        open)
+          age=$(( $(_now) - $(_get "$1" opened_epoch) ))
+          { [ "$2" -eq 1 ] || [ "$age" -ge "$GRACE_S" ]; } && _relaunch "$1" ;;
+        retrying)
+          age=$(( $(_now) - $(_get "$1" attempt_epoch) ))
+          { [ "$(_get "$1" relaunch_rc)" != 0 ] || [ "$age" -ge "$WAIT_S" ]; } && _escalate "$1" ;;
+      esac
+    fi
+  fi
+  _release
+  return 0
+}
+
+_settle() { # <sid> <wait> — rc 0 proven · 1 escalated · 3 undecided · 4 abandoned
+  local deadline st
+  [ -f "$(_meta "$1")" ] || { _note "no debt for $1"; return 3; }
+  deadline=$(( SECONDS + $2 ))
+  while :; do
+    _step "$1" 1
+    st="$(_get "$1" state)"
+    case "$st" in proven) return 0 ;; escalated) return 1 ;; abandoned) return 4 ;; esac
+    [ "$SECONDS" -ge "$deadline" ] && return 3
+    sleep "$POLL_S"
+  done
+}
+
+_sids() { # every sid with a meta file
+  local f
+  for f in "$META"/*.json; do [ -f "$f" ] && basename "$f" .json; done
+  return 0
+}
+
+_sweep() {
+  local s
+  while IFS= read -r s; do
+    [ -n "$s" ] || continue
+    # escalated is swept too: it stays OPEN (D2) and only a proof here can discharge it.
+    _active "$(_get "$s" state)" || continue
+    _step "$s" 0
+    printf '%s %s\n' "$s" "$(_get "$s" state)"
+  done <<EOF
+$(_sids)
+EOF
+  return 0
+}
+
+_surface() { # <pane> — rc 0 enumerated · 1 absent · 3 enumerator failed/empty (unknown ≠ absent)
+  local out
+  out="$(_bounded "$PANE" list 2>/dev/null)" || return 3
+  [ -n "$out" ] || return 3
+  printf '%s\n' "$out" | grep -Fxq -- "$1" && return 0
+  return 1
+}
+
+_list() {
+  local files filt
+  files="$(_sids | while IFS= read -r s; do [ -n "$s" ] && _meta "$s" && printf '\n'; done)"
+  filt='.'
+  [ "$WANT_OPEN" -eq 1 ] && filt="$filt | map(select(.state == \"open\" or .state == \"retrying\" or .state == \"escalated\"))"
+  [ "$WANT_ESC" -eq 1 ] && filt="$filt | map(select(.state == \"escalated\"))"
+  if [ -z "$files" ]; then [ "$WANT_JSON" -eq 1 ] && printf '[]\n'; return 0; fi
+  if [ "$WANT_JSON" -eq 1 ]; then
+    # shellcheck disable=SC2086  # one path per word; sids are validated to carry no whitespace
+    jq -s "$filt" $files
+  else
+    # shellcheck disable=SC2086
+    jq -rs "$filt | .[] | [.sid, .state, (.attempts|tostring), (if .backlog_id == \"\" then \"-\" else .backlog_id end), .marker] | @tsv" $files
+  fi
+}
+
+usage() {
+  cat <<'U'
+usage: cc-resume-debt open   --sid S [--cfg CFG] [--cwd C] [--pane P] [--account A] [--by WHO] [--why TEXT]
+       cc-resume-debt prove  --sid S [--hold N]
+       cc-resume-debt discharge --sid S --why TEXT
+       cc-resume-debt abandon   --sid S --why TEXT
+       cc-resume-debt step   --sid S
+       cc-resume-debt settle --sid S [--wait N]
+       cc-resume-debt sweep
+       cc-resume-debt surface --pane P
+       cc-resume-debt list [--open] [--escalated] [--json]
+U
+}
+
+# ── args ────────────────────────────────────────────────────────────────────────────────────────
+cmd="${1:-}"; shift 2>/dev/null || true
+SID="" CFG="" CWD="" PANE_ID="" ACCOUNT="" BY="unknown" WHY="" HOLD="" WAIT=""
+WANT_OPEN=0 WANT_ESC=0 WANT_JSON=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --sid) shift; SID="${1:-}" ;;
+    --cfg) shift; CFG="${1:-}" ;;
+    --cwd) shift; CWD="${1:-}" ;;
+    --pane) shift; PANE_ID="${1:-}" ;;
+    --account) shift; ACCOUNT="${1:-}" ;;
+    --by) shift; BY="${1:-}" ;;
+    --why) shift; WHY="${1:-}" ;;
+    --hold) shift; HOLD="${1:-}" ;;
+    --wait) shift; WAIT="${1:-}" ;;
+    --open) WANT_OPEN=1 ;;
+    --escalated) WANT_ESC=1 ;;
+    --json) WANT_JSON=1 ;;
+    -h|--help) usage; exit 0 ;;
+    *) usage >&2; _die "unknown arg: $1" ;;
+  esac
+  shift 2>/dev/null || true
+done
+# The sid names a file under meta/ and lock/ — refuse anything that could leave them.
+case "$SID" in ''|[A-Za-z0-9]*) ;; *) _die "bad --sid: $SID" ;; esac
+case "$SID" in *[!A-Za-z0-9._-]*) _die "bad --sid: $SID" ;; esac
+_need_sid() { [ -n "$SID" ] || _die "$cmd needs --sid"; }
+
+case "$cmd" in
+  open) _open ;;
+  prove) _need_sid; _prove "$SID" "$(_num "$HOLD" "$HOLD_S")" ;;
+  discharge) _need_sid; [ -n "$WHY" ] || _die "discharge needs --why"; _discharge "$SID" "$WHY" ;;
+  abandon) _need_sid; [ -n "$WHY" ] || _die "abandon needs --why"; _abandon "$SID" "$WHY" ;;
+  step) _need_sid; _step "$SID" 0 ;;
+  settle) _need_sid; _settle "$SID" "$(_num "$WAIT" $(( WAIT_S + 30 )))" ;;
+  sweep) _sweep ;;
+  surface) [ -n "$PANE_ID" ] || _die "surface needs --pane"; _surface "$PANE_ID" ;;
+  list) _list ;;
+  -h|--help|help) usage ;;
+  *) usage >&2; _die "unknown verb: ${cmd:-<none>}" ;;
+esac
