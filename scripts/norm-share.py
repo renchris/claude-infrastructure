@@ -13,6 +13,14 @@ by the old filter, so counting them would page every night after a deploy on dat
 touched; an alarm that fires on known-stale rows says nothing. The IDL is written by the helpers,
 never by this meter. No such row yet ⇒ `verdict=abstain reason=lib-not-live`.
 
+A recent indexed_at is not enough on its own (TrueMemory Wave D, 2026-09-28). The upsert keeps a
+row's context_text whenever the new writer's source sorts below the row's (`session-sweep` <
+`sessions-index`), yet it still stamps indexed_at. So when the sweep first reached the other
+account roots it re-stamped 14 SessionEnd rows whose text predates the lib, and they read as 13%
+contamination the lib never wrote. The meter therefore counts only sessions CREATED at or after
+the lib's first live run (every writer of such a session used the lib), and never
+`workflow-sweep` rows: workflow result JSON is not a transcript, and its text may quote a marker.
+
 MARKERS is the normaliser's prefix list plus the XML envelopes it drops, kept as a separate copy on
 purpose: a meter that imported the list it measures would stop counting whatever the lib stops
 dropping. Matching is by substring, because context_text joins many turns.
@@ -122,8 +130,9 @@ def main(argv: list[str]) -> int:
         conn = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True, timeout=5)
         try:
             rows = conn.execute(
-                "SELECT context_text FROM sessions WHERE indexed_at >= ? AND context_text != ''",
-                (cutoff,),
+                "SELECT context_text FROM sessions WHERE indexed_at >= ? AND created_at >= ?"
+                " AND source != 'workflow-sweep' AND context_text != ''",
+                (cutoff, live_since),
             ).fetchall()
         finally:
             conn.close()

@@ -25,20 +25,28 @@ libseen() {
     "$1" "${2:-lib}"
 }
 
-# fixture <clean> <dirty> [<old-dirty>] — rows indexed a minute ago, plus dirty rows from 2020.
+# fixture <clean> <dirty> [<old-dirty>] [<stale-dirty>] [<wf-dirty>] — rows created and indexed a
+# minute ago, plus dirty rows created and indexed in 2020, dirty rows created in 2020 but RE-STAMPED a
+# minute ago (the sweep reaching a SessionEnd row whose text it may not replace), and dirty
+# workflow-sweep rows indexed a minute ago.
 fixture() {
-  python3 - "$DB" "$1" "$2" "${3:-0}" <<'EOF'
+  python3 - "$DB" "$1" "$2" "${3:-0}" "${4:-0}" "${5:-0}" <<'EOF'
 import sqlite3, sys
 from datetime import datetime, timedelta, timezone
-db, clean, dirty, old = sys.argv[1], *map(int, sys.argv[2:])
+db, clean, dirty, old, stale, wf = sys.argv[1], *map(int, sys.argv[2:])
 now = (datetime.now(timezone.utc) - timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+then = "2020-01-01T00:00:00Z"
 c = sqlite3.connect(db)
-c.execute("CREATE TABLE sessions (session_id TEXT PRIMARY KEY, context_text TEXT NOT NULL DEFAULT '', indexed_at TEXT NOT NULL)")
-rows = [("Refactor the widget parser.", now)] * clean
-rows += [("Fix it. Stop hook feedback: the gate is red.", now)] * dirty
-rows += [("<teammate-message teammate_id=\"x\">brief</teammate-message>", "2020-01-01T00:00:00Z")] * old
-rows += [("", now)]  # empty context_text is never counted
-c.executemany("INSERT INTO sessions VALUES (?, ?, ?)", [(str(i), t, s) for i, (t, s) in enumerate(rows)])
+c.execute("CREATE TABLE sessions (session_id TEXT PRIMARY KEY, source TEXT NOT NULL DEFAULT '',"
+          " context_text TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, indexed_at TEXT NOT NULL)")
+rows = [("session-sweep", "Refactor the widget parser.", now, now)] * clean
+rows += [("session-sweep", "Fix it. Stop hook feedback: the gate is red.", now, now)] * dirty
+rows += [("session-sweep", "<teammate-message teammate_id=\"x\">brief</teammate-message>", then, then)] * old
+rows += [("sessions-index", "Stop hook feedback: pre-lib text.", then, now)] * stale
+rows += [("workflow-sweep", "result quotes <task-notification> verbatim", now, now)] * wf
+rows += [("session-sweep", "", now, now)]  # empty context_text is never counted
+c.executemany("INSERT INTO sessions VALUES (?, ?, ?, ?, ?)",
+              [(str(i), *r) for i, r in enumerate(rows)])
 c.commit()
 EOF
 }
@@ -135,6 +143,21 @@ EOF
   run python3 "$NS" --db "$DB"
   [ "$status" -eq 1 ]
   [ "${lines[0]}" = "NORM-SHARE contaminated=3 total=10 pct=30" ]
+}
+
+@test "a pre-lib session re-stamped by the sweep is excluded; a workflow row is excluded" {
+  fixture 10 0 0 4 3
+  libseen "2026-01-01T00:00:00Z" > "$IDL"
+  run python3 "$NS" --db "$DB"
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "NORM-SHARE contaminated=0 total=10 pct=0" ]
+  [ "${lines[1]}" = "verdict=ok" ]
+  # control: with the lib live since 2019 the re-stamped 2020 sessions ARE post-lib, so they count;
+  # the workflow rows still do not
+  libseen "2019-01-01T00:00:00Z" > "$IDL"
+  run python3 "$NS" --db "$DB"
+  [ "$status" -eq 1 ]
+  [ "${lines[0]}" = "NORM-SHARE contaminated=4 total=14 pct=29" ]
 }
 
 @test "--idl and CC_IDL name the IDL" {
