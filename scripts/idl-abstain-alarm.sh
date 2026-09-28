@@ -928,10 +928,15 @@ selftest() {
   for ((i = 0; i < 25; i++)); do printf '[%s] Indexed session x%d (p, 0 msgs)\n' "$lt" "$i" >> "$XLOG"; done
   for ((i = 0; i < 5; i++)); do printf '24' > "$XNUDGE/nudge-x$i.count"; done   # 5 x 24/12 = 10 expected
   printf '{"ts":"%s","hook":"h-x","disposition":"fired","reason":"x"}\n' "$FIXTS" > "$XIDL"
+  # Every other registry row's denominator is pinned to a zero fixture, so these cases judge only
+  # harvest-skill-end and memory-nudge: an unpinned one reads the machine's live transcripts or new
+  # memory files and pages SILENT against this empty IDL (it did, once #6 and #10 both landed).
+  mkdir -p "$d/x-neigh-empty"; printf 'print(0)\n' > "$d/x-replay.py"
   run_reg() { # <session-index-log> <nudge-state-dirs> <idl>
     env CC_IDL="$3" CC_ABSTAIN_NOW="$NOW" CC_ABSTAIN_LOG="$d/log-x" CC_ABSTAIN_NMIN=10 CC_ABSTAIN_CENSUS=0 \
         MEMORY_NUDGE_INTERVAL=12 CC_EXPECTED_SESSION_INDEX_LOG="$1" CC_EXPECTED_NUDGE_STATE_DIRS="$2" \
-        CC_EXPECTED_BASH_LOG="${XBASH:-$d/x-no-bash.log}" "$SELF" --run 2>&1
+        CC_EXPECTED_BASH_LOG="${XBASH:-$d/x-no-bash.log}" CC_EXPECTED_LESSON_REPLAY="$d/x-replay.py" \
+        CC_EXPECTED_NEIGH_DIRS="$d/x-neigh-empty" "$SELF" --run 2>&1
   }
   out="$(run_reg "$XLOG" "$XEMPTY" "$XIDL")"; rc=$?
   [ "$rc" -ne 0 ]                                  && okp "X1 harvest 0 rows vs 25 indexed → nonzero exit" || badp "X1 silent harvest did not page"
