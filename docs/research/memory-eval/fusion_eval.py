@@ -83,18 +83,25 @@ def sign_test(wins: int, losses: int) -> float:
 
 
 def blame_times(path: str) -> dict[int, float]:
-    """Line number -> committer time of that line (its last change: a conservative birth)."""
+    """Line number -> committer time of that line (its last change: a conservative birth). The top is
+    found by its .git entry and passed explicitly: a checkout a worktree op flagged core.bare refuses
+    `git -C <dir> blame` outright, which would silently degrade every row to the file's birth."""
+    real = Path(path).resolve()
+    top = next((d for d in real.parents if (d / ".git").exists()), None)
+    if top is None:
+        return {}
     try:
         out = subprocess.run(
             [
                 "git",
-                "-C",
-                os.path.dirname(path) or ".",
+                f"--git-dir={top / '.git'}",
+                f"--work-tree={top}",
                 "blame",
                 "--line-porcelain",
                 "--",
-                path,
+                str(real.relative_to(top)),
             ],
+            cwd=str(top),  # a pathspec is read relative to the cwd's prefix
             capture_output=True,
             text=True,
             timeout=60,
