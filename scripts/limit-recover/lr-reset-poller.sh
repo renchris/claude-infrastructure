@@ -969,6 +969,24 @@ if [[ "${LR_POLLER_NO_CENSUS:-0}" != 1 && "${LR_UPGRADE_AUTO:-on}" != off && -f 
   fi
 fi
 lrp_upgrade_kick
+# +3 THE RESUME-DEBT BACKSTOP (docs/plans/CLOSE_RESUME_CUSTODY.md §2 D4): one `cc-resume-debt sweep`
+# per tick steps every open debt once, so a debt whose settling watcher died still reaches proof or
+# escalation. Kill switch LR_RESUME_DEBT_SWEEP=off; DRY logs only; an absent binary is a silent skip.
+# RD: CC_RESUME_DEBT_BIN seam, else the repo bin beside this script, else ~/.claude/bin.
+RD="${CC_RESUME_DEBT_BIN:-}"
+if [[ -z "$RD" ]]; then
+  for _rd in "$LR/../../bin/cc-resume-debt" "$HOME/.claude/bin/cc-resume-debt"; do
+    [[ -x "$_rd" ]] && { RD="$_rd"; break; }
+  done
+fi
+if [[ "${LR_RESUME_DEBT_SWEEP:-on}" != off && -n "$RD" && -x "$RD" ]]; then
+  if [[ $DRY -eq 1 ]]; then
+    log "DRY   resume-debt sweep would run: $RD sweep"
+  else
+    _rd_out="$(lrp_bounded_long "$RD" sweep 2>>"$LOG" || true)"
+    while IFS= read -r _rd_l; do [[ -n "$_rd_l" ]] && log "RESUME-DEBT: $_rd_l"; done <<< "$_rd_out"
+  fi
+fi
 
 # ── TRANSPLANT-LOCK EXPIRY — the only caller of the TTL (cc-backlog 4f8c73bbdb35) ───────────────
 # lr-transplant.sh's split-brain lock had no TTL and no release verb, so an abandoned move held
