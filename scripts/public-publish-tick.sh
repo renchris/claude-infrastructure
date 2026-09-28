@@ -13,7 +13,16 @@
 # the operator re-baselines by hand. Exit: 0 always for "nothing to do"; the publisher's own rc
 # otherwise, so a verifier failure surfaces in the fleet's evidence log.
 set -uo pipefail
-SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# launchd runs this through the ~/.claude/scripts/ symlink, where an unresolved dirname/.. is
+# ~/.claude — not a git repo — so cc.publicRepo read empty and every tick REFUSED. Resolve every
+# hop first (loop from scripts/ship-land.sh `_resolve_self`; no `readlink -f`, this box is BSD).
+_self="${BASH_SOURCE[0]}"
+while [ -L "$_self" ]; do
+  _d="$(cd "$(dirname "$_self")" && pwd)"
+  _self="$(readlink "$_self")"
+  case "$_self" in /*) ;; *) _self="$_d/$_self" ;; esac
+done
+SELF_DIR="$(cd "$(dirname "$_self")" && pwd)"
 REPO="$(cd "$SELF_DIR/.." && pwd)"
 PRIV="${CC_PRIVATE_DIR:-$HOME/Development/claude-private}"
 MARK="$PRIV/public-projection/publish-enabled"

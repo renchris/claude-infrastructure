@@ -270,3 +270,18 @@ STUB
   [ "$(printf '%s\n' "$fast" | grep -c .)" -eq 3 ] || { echo "fast: $fast"; false; }
   [ "$fast" = "$slow" ] || { diff <(echo "$fast") <(echo "$slow"); false; }
 }
+
+@test "TICK: run through a symlinked scripts/ dir (launchd's path) it reads cc.publicRepo from the REAL checkout" {
+  # A copy of the tick in a fixture checkout, with a stub publisher that only records its args —
+  # the real public-publish.sh (which pushes) is never reached.
+  r="$(mkrepo tickrepo)"; mkdir -p "$r/scripts" "$T/live/scripts"
+  cp "$REPO/scripts/public-publish-tick.sh" "$r/scripts/"
+  printf '#!/bin/bash\necho "STUB-PUBLISH $*"\n' > "$r/scripts/public-publish.sh"
+  git -C "$r" config cc.publicRepo owner/public-fixture
+  ln -s "$r/scripts/public-publish-tick.sh" "$T/live/scripts/public-publish-tick.sh"
+  touch "$CC_PRIVATE_DIR/public-projection/publish-enabled"
+  TMPDIR="$T" run bash "$T/live/scripts/public-publish-tick.sh"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *REFUSED* ]] || { echo "$output"; false; }
+  [[ "$output" == *"STUB-PUBLISH --src $r --ref main --public-url https://github.com/owner/public-fixture.git"* ]] || { echo "$output"; false; }
+}
