@@ -1,0 +1,90 @@
+#!/bin/bash
+# autonomy — the autonomy-core command line.
+#
+#   autonomy continue set "<next step>"   keep working on <next step> instead of stopping
+#   autonomy continue clear | status      stop auto-continuing here / show what is armed
+#   autonomy ledger                       one-line state of the current git repo, from live reads
+#   autonomy restore <path> [--list]      put back the newest pre-Write backup of <path>
+#   autonomy doctor                       check the install; exit 1 on any problem
+#   autonomy version
+AC_HOME="$(cd "$(dirname "$0")/.." && pwd)"
+export AC_HOME
+# shellcheck disable=SC1091  # installed beside this command
+. "$AC_HOME/hooks/lib.sh"
+
+ledger() {
+  if ! command -v git >/dev/null 2>&1 || ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "READOUT=— Not a git repository; nothing to report"; return 0
+  fi
+  local top branch tracked untracked ahead=0 target="" readout
+  top="$(git rev-parse --show-toplevel)"
+  branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
+  tracked="$(git status --porcelain --untracked-files=no | wc -l | tr -d ' ')"
+  untracked="$(git status --porcelain | grep -c '^??' | tr -d ' ')"
+  if git rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
+    target="$(git rev-parse --abbrev-ref '@{u}')"
+    ahead="$(git rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)"
+  elif [ -n "$(git remote 2>/dev/null)" ]; then
+    target="any remote (no upstream set)"
+    ahead="$(git rev-list --count HEAD --not --remotes 2>/dev/null || echo 0)"
+  fi
+  if [ $((tracked + untracked)) -gt 0 ]; then
+    readout="🔧 Loose ends — $((tracked + untracked)) uncommitted change(s) ($tracked tracked, $untracked untracked)"
+  elif [ "$ahead" -gt 0 ]; then
+    readout="📦 Committed, not pushed — $ahead commit(s) exist only on this machine"
+  elif [ -z "$target" ]; then
+    readout="✅ Clean — committed (no remote configured, so nothing to push)"
+  else
+    readout="✅ Complete — clean and pushed to $target"
+  fi
+  echo "READOUT=$readout"
+  echo "repo:      $top ($branch)"
+  echo "changes:   $tracked tracked, $untracked untracked"
+  echo "unpushed:  ${target:+$ahead commit(s) vs $target}${target:-n/a (no remote)}"
+  echo "continue:  $(bash "$AC_HOME/hooks/continue.sh" status)"
+}
+
+restore() {
+  local path="${1:-}" list="${2:-}" flat newest
+  [ -n "$path" ] || { echo "usage: autonomy restore <path> [--list]" >&2; return 2; }
+  case "$path" in /*) ;; *) path="$PWD/$path" ;; esac
+  flat="$(printf '%s' "$path" | sed 's#/#%#g')"
+  # Day directories sort by name (YYYYMMDD) and copies by time suffix, so the last line is the newest.
+  newest="$(find "$AC_HOME/backups" -mindepth 2 -maxdepth 2 -type f -name "$flat.*" 2>/dev/null | sort | tail -1)"
+  if [ "$list" = --list ]; then find "$AC_HOME/backups" -mindepth 2 -maxdepth 2 -type f -name "$flat.*" 2>/dev/null | sort; return 0; fi
+  [ -n "$newest" ] || { echo "no backup of $path under $AC_HOME/backups" >&2; return 1; }
+  # Keep the current version too, so a restore can itself be undone.
+  if [ -f "$path" ]; then
+    printf '{"tool_input":{"file_path":%s}}' "$(ac_json_str "$path")" | bash "$AC_HOME/hooks/backup-before-write.sh"
+  fi
+  cp -p "$newest" "$path" && echo "restored $path from $newest"
+}
+
+doctor() {
+  local bad=0 cfg settings f
+  cfg="$(cd "$AC_HOME/.." && pwd)"
+  settings="$cfg/settings.json"
+  for f in hooks/lib.sh hooks/continue.sh hooks/completion-gate.sh hooks/backup-before-write.sh bin/autonomy CLAUDE.core.md; do
+    if [ -f "$AC_HOME/$f" ]; then echo "  ok    $f"; else echo "  FAIL  missing $AC_HOME/$f"; bad=1; fi
+  done
+  if command -v jq >/dev/null 2>&1; then echo "  ok    JSON via jq"
+  elif command -v python3 >/dev/null 2>&1; then echo "  ok    JSON via python3"
+  else echo "  FAIL  neither jq nor python3 is installed (the hooks cannot read their input)"; bad=1; fi
+  for f in continue.sh completion-gate.sh backup-before-write.sh; do
+    if grep -q "autonomy-core/hooks/$f" "$settings" 2>/dev/null; then echo "  ok    $f registered in settings.json"
+    else echo "  FAIL  $f is not registered in $settings"; bad=1; fi
+  done
+  if grep -q 'BEGIN autonomy-core' "$cfg/CLAUDE.md" 2>/dev/null; then echo "  ok    rules block in CLAUDE.md"
+  else echo "  FAIL  no autonomy-core rules block in $cfg/CLAUDE.md"; bad=1; fi
+  command -v git >/dev/null 2>&1 && echo "  ok    git" || echo "  warn  git not installed: the completion gate and ledger stay silent"
+  return "$bad"
+}
+
+case "${1:-}" in
+  continue) shift; bash "$AC_HOME/hooks/continue.sh" "${1:-status}" "${2:-}" ;;
+  ledger)   ledger ;;
+  restore)  shift; restore "$@" ;;
+  doctor)   doctor ;;
+  version)  cat "$AC_HOME/VERSION" 2>/dev/null || echo unknown ;;
+  *)        sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; [ -z "${1:-}" ] || exit 2 ;;
+esac
