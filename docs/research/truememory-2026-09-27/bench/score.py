@@ -251,9 +251,11 @@ def score_run(rd: str, task: Dict[str, str], cfg: str) -> Dict[str, Any]:
     ws = write_state(rd, gbase, dup) if task["kind"] == "write" else {}
 
     gold_read = pointer = gold_pointer = pushed = 0
+    calls: List[str] = []
     tr = transcripts(cfg, fx, res.get("session_id"))
     for rec in events(tr):
         for name, inp in tool_uses(rec):
+            calls.append(json.dumps(inp))
             blob = (
                 inp.get("file_path", "")
                 if name == "Read"
@@ -277,6 +279,10 @@ def score_run(rd: str, task: Dict[str, str], cfg: str) -> Dict[str, Any]:
             ok.append(bool(re.search(t[3:], answer)))
         elif t.startswith("fs:"):
             ok.append(fs_check(t[3:], fx, answer, ws))
+        elif t.startswith(("tool:", "notool:")):
+            # #36: an ATTEMPT counts, so a call the permission layer refused still matches
+            hit = any(re.search(t.split(":", 1)[1], c) for c in calls)
+            ok.append(hit if t.startswith("tool:") else not hit)
     correct = int(bool(ok) and all(ok))
     if task["kind"] == "write":
         applied = int(bool(ws.get("twin_edited")) and not ws.get("near_dups"))
