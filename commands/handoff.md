@@ -618,10 +618,29 @@ chain (verify → announce → close → focus) E2E'd 9/9 on 2026-07-13 (`script
 >   `--dirty-owner successor` (requires a verified-alive `--successor`; the close loses nothing
 >   because the owner survives). `--allow-dirty` remains the blunt, potentially-lossy override.
 > - **Remote relief** (retiring ANOTHER session's pane): prefer `cc-notify` instructing THAT
->   session to run its own `self-close --successor …` (its SessionEnd hooks + disposition stay
->   honest). Direct `self-close --session-id <their-pane>` is the fallback for an unresponsive
->   session and carries the SAME succession-statement obligation. Never raw `it2 session close` /
->   hand-typed `/exit` for teardown — those leave no announce, no focus, no log.
+>   session to run its own `self-close --successor …|--terminal` (its SessionEnd hooks + disposition
+>   stay honest). `self-close --session-id <their-pane>` is NOT a fallback: the self-identity gate
+>   refuses any pane this process does not live in ("an ASSERTION BY THE CALLER") — measured
+>   2026-09-28, origin 845 → peer 882. Never raw `it2 session close` / hand-typed `/exit` for
+>   teardown — those leave no announce, no focus, no log.
+> - **Firer retires its peer — `self-close --fired-peer <pane> --terminal`** (pane 882, 2026-09-28).
+>   The session that FIRED a peer may retire it when the peer is finished and cannot or will not
+>   retire itself. Ownership is the peer's fired-peer STAMP — its `firedBy` must be the caller's own
+>   (proven, never `unknown`) pane — not process ancestry. Admitted only when the peer's registry row
+>   names a LIVE session in the stamp's cwd (tenancy valid, not spent), its transcript is AT REST (no
+>   turn in flight; re-read right before the close), and then every peer-side guard runs against the
+>   PEER's session and worktree: dirty tree refuses, live teammates/subagents refuse, the terminal
+>   ledger refuses, and an UNLANDED branch REFUSES (exit 8 — stricter than the self form's warning).
+>   No override flag is admissible with it; `CC_FIRER_RETIRE=0` disables it. No stamp ⇒ refused —
+>   the peer's own `self-close` is then the path (its repair re-derives the stamp from its brief).
+> - **A recycled peer keeps its contract.** An inheriting `--recycle` (same-dir or relocating)
+>   re-anchors the stamp's boot-tenancy clock (`recycledAt`), so `cc-reaper`'s stale-tenancy GC no
+>   longer deletes the stamp of a peer that recycled more than 30 min after its fire (882: fired
+>   05:53, recycled 07:20, stamp GC'd 08:10, then refused as an ORIGIN session). And if a stamp is
+>   lost anyway, self-close's repair proof now crosses recycles: a recycle brief carrying the
+>   self-retire trailer is joined to its predecessor by handoff-fire's own `recycle-engaged` row and
+>   admitted only if that predecessor's first message carries the original contract + fire marker
+>   (`repairedFrom: recycle-chain`; `CC_SELFCLOSE_RECYCLE_CHAIN=0` disables the hop).
 
 Hard-won constraints
 baked into the script: ALL keystrokes are typed foreground — detached osascript AppleEvents to iTerm2

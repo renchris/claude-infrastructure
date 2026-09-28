@@ -90,6 +90,10 @@ load_proof_fn() {
   eval "$(sed -n '/^cc_sid_for_pane() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^transcript_for_sid() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^fired_contract_in_my_brief() {/,/^}/p' "$HF")"
+  # The per-session proof and its recycle hop live in two helpers since pane 882 (2026-09-28);
+  # fired_contract_in_my_brief is now the entry point that delegates to them.
+  eval "$(sed -n '/^_fcb_prove_sid() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^hf_recycle_predecessor() {/,/^}/p' "$HF")"
   # EXPORTED, not merely set: it is read by the sed-extracted subject above, which shellcheck
   # cannot see into — the same reason every fixture global below is exported.
   export SELF_RETIRE_CONTRACT_HEADING="$HEADING"

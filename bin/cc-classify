@@ -648,10 +648,24 @@ fired_peer() { # <paneUUID> [startedAt-ms] [cwd] → 0 iff a TENANCY-VALID spawn
   case "$(fired_stamp_tenancy "$FIRED_DIR/$pane.json" "$here")" in
     stale|spent) return 1 ;;
   esac
-  fep="$(fired_at_epoch "$pane" || true)"
+  fep="$(fired_tenancy_epoch "$pane" || true)"
   case "$fep" in ''|*[!0-9]*) return 1 ;; esac         # unparseable firedAt ⇒ INVALID
   started_s=$(( started_ms / 1000 ))
   [ "$started_s" -le $(( fep + FIRED_BOOT_MAX_S )) ]
+}
+
+fired_tenancy_epoch() { # <paneUUID> → boot-tenancy ANCHOR: the later of firedAt / recycledAt (fallback: mtime)
+  # A recycle of a fired peer boots a new session in the same pane; handoff-fire records it as
+  # `recycledAt` (hf_reanchor_peer_stamp). The boot check keys on the later instant; the ADOPTION
+  # baseline (fired_at_epoch, used below with FIRE_PROMPT_SLACK_S) stays the original fire's.
+  # Twin: bin/cc-reaper fired_at_epoch_r — keep the two jq expressions identical (pane 882, 2026-09-28).
+  local pane="${1:-}" f iso ep
+  f="$FIRED_DIR/$pane.json"; [ -f "$f" ] || return 1
+  iso="$(jq -r '[.firedAt, .recycledAt] | map(select(type == "string" and . != "")) | max // ""' "$f" 2>/dev/null)"
+  ep="$(iso_to_epoch "$iso")"
+  [ -n "$ep" ] || ep="$(stat -f %m "$f" 2>/dev/null)"
+  [ -n "$ep" ] || return 1
+  printf '%s' "$ep"
 }
 
 find_fired_successor_stamp() { # <predecessor-sid> <all-json> → 0 iff a TENANCY-VALID cc-fired stamp

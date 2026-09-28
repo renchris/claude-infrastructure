@@ -1187,10 +1187,17 @@ iso_to_epoch_r(){ # <iso8601> → epoch seconds (empty on parse fail). Mirrors c
   fi
   printf '%s' "$ep"
 }
-fired_at_epoch_r(){ # <paneUUID> → fire epoch (marker firedAt; fallback: marker file mtime)
+fired_at_epoch_r(){ # <paneUUID> → boot-tenancy ANCHOR epoch (later of firedAt / recycledAt; fallback: marker file mtime)
   local f="$FIRED_DIR/${1:-}.json" iso ep
   [ -f "$f" ] || return 1
-  iso="$(jq -r '.firedAt // ""' "$f" 2>/dev/null)"
+  # THE LATER OF firedAt AND recycledAt (pane 882, 2026-09-28). A recycle of a fired peer boots a NEW
+  # session in the same pane; handoff-fire's hf_reanchor_peer_stamp records that as `recycledAt`, only
+  # on positive proof the recycling pane held this stamp. Reading firedAt alone made every recycle
+  # more than FIRED_BOOT_MAX_S after the fire look like an id-reuse tenant, and the GC below deleted a
+  # live peer's contract (882: fired 05:53, recycled 07:20, stamp rm'd 08:10). Same-format ISO-Z
+  # strings order lexicographically, so max() is the later instant. Twin: bin/cc-classify
+  # fired_tenancy_epoch — keep the two jq expressions identical.
+  iso="$(jq -r '[.firedAt, .recycledAt] | map(select(type == "string" and . != "")) | max // ""' "$f" 2>/dev/null)"
   ep="$(iso_to_epoch_r "$iso")"
   # Same two-dialect shape this file already uses at the LOCKDIR mtime read below: BSD `stat -f`, then
   # GNU `stat -c`. Without the second arm the mtime fallback is itself unavailable off macOS, so the

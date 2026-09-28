@@ -2114,6 +2114,56 @@ hf_remote_source_bind() { # $1=pane $2=session $3=mode label → 0 bound / 2 ref
   return 0
 }
 
+# ── FIRER RETIRES ITS PEER (`self-close --fired-peer P`, pane 882, 2026-09-28) ────────────────────
+# THE GAP. A fired peer that finished, landed and went idle can be unable to retire ITSELF — its
+# stamp lost (the 882 case: deleted by the reaper's stale-tenancy GC after a late recycle), or the
+# session simply never taking another turn. The one party that knows the pane is a peer and that it
+# is done is the session that FIRED it, and until now it had no sanctioned verb: self-close names
+# the invoker's own pane, verify_self_pane refuses another pane ("no ancestor of this process owns
+# that pane's tty"), and the only other remote form is scoped to transplanted husks. So the
+# operator was asked to close the pane by hand.
+#
+# OWNERSHIP IS THE STAMP, NOT THE PROCESS TREE. Ancestry can only ever prove "this pane is mine" —
+# for a pane the caller names it says not-mine for the peer and for a bystander alike. What makes it
+# legitimate for session A to retire pane P is a record A did not write about itself: the stamp
+# handoff-fire wrote AT FIRE TIME, `firedBy` = the firing pane. So the gate is:
+#   (1) the CALLER's own pane is proven by verify_self_pane (the ordinary self gate, on the caller);
+#   (2) P's stamp exists, is self-retiring, is not spent, and its `firedBy` IS that pane;
+#   (3) P's registry row names a live session (pid alive) in the stamp's own cwd — tenancy VALID;
+#   (4) that session's transcript is AT REST (hf_transcript_at_rest) — no turn in flight, re-read
+#       again immediately before /exit is typed;
+# and then EVERY ordinary self-close gate runs against P's session and worktree (dirty tree, live
+# teammates, live subagents, the terminal ledger), plus one that is stricter than the self form:
+# an UNLANDED branch REFUSES here rather than warning, because the party closing is not the party
+# that could still ping about it. No override flag is admissible with this class.
+# CC_FIRER_RETIRE=0 disables it outright (R8).
+hf_firer_owns_peer() { # $1=fired-dir $2=peer pane $3=caller pane → 0 owned / 2 refused (says why)
+  local dir="${1:-}" peer="${2:-}" me="${3:-}" st by sr
+  st="$dir/$peer.json"
+  if [ ! -s "$st" ]; then
+    { echo "!! self-close --fired-peer REFUSED: pane $peer has no fired-peer stamp ($st)."
+      echo "!!   The stamp is the ONLY evidence of who fired a pane; without it nothing here can tell"
+      echo "!!   your peer from a bystander. If the peer itself is alive and finished, its own"
+      echo "!!   self-close can re-derive the stamp from its brief (the repair path); ask it to run it."
+    } >&2
+    return 2
+  fi
+  by="$(jq -r '.firedBy // ""' "$st" 2>/dev/null || true)"
+  sr="$(jq -r '.selfRetire // false' "$st" 2>/dev/null || echo false)"
+  if [ -z "$by" ] || [ "$by" != "$me" ]; then
+    { echo "!! self-close --fired-peer REFUSED: pane $peer was NOT fired by this pane."
+      echo "!!   its stamp names firedBy=${by:-<none>}; this pane is $me."
+      echo "!!   Only the session that fired a peer may retire it. Nothing was typed."
+    } >&2
+    return 2
+  fi
+  if [ "$sr" != true ]; then
+    echo "!! self-close --fired-peer REFUSED: pane $peer was fired WITHOUT the self-retire contract (--no-self-retire); it is not a pane anyone may retire for it. Nothing was typed." >&2
+    return 2
+  fi
+  return 0
+}
+
 # WHICH TERMINAL OWNS PANE P — the REMOTE-pane question, and it is not the one
 # pin_term_verdict_for_watcher answers (LIMIT_RECOVER_100P §10, measured 0 of 9).
 #
@@ -4961,16 +5011,43 @@ fired_marker_is_mine() { # $1=marker $2=self-pane → 0 proven mine / 1 not prov
 #     said later in the conversation gets a vote.
 # CC_SELFCLOSE_BRIEF_CONTRACT=0 disables the path outright (R8 kill switch), like its sibling classes.
 fired_contract_in_my_brief() { # $1=self-pane → 0 proven / 1 not
-  local pane="${1:-}" mysid tj brief marker nb
-  FCB_MARKER="" FCB_NOTIFYBACK=""            # deliberately NOT local — read by the caller
+  local pane="${1:-}" mysid
+  FCB_MARKER="" FCB_NOTIFYBACK="" FCB_VIA_RECYCLE=""   # deliberately NOT local — read by the caller
   [ "${CC_SELFCLOSE_BRIEF_CONTRACT:-1}" != 0 ] || return 1
   [ -n "$pane" ] || return 1
   command -v jq >/dev/null 2>&1 || return 1
   mysid="$(cc_sid_for_pane "$pane")"
   [ -n "$mysid" ] || return 1
+  _fcb_prove_sid "$pane" "$mysid" 0
+}
+
+# _fcb_prove_sid — the proof for ONE session in the pane; recurses across recycles.
+#
+# THE RECYCLE HOP (pane 882, 2026-09-28). A recycle relaunches the pane with a NEW session whose first
+# user message is the RECYCLE brief. When the pane inherited the contract (hf_recycle_inherits_peer)
+# that brief carries the self-retire trailer — but its marker is the recycle's HANDOFF-RECYCLE-…,
+# never a HANDOFF-ENGAGE-…, so this proof could not re-derive a recycled peer and the repair path was
+# unreachable for exactly the peers whose stamps the reaper's stale-tenancy GC deleted. Measured:
+# pane 882's recycled brief has the heading + HANDOFF-RECYCLE-38645-…; its predecessor d64fb5fe has
+# the heading + HANDOFF-ENGAGE-76863-…; the only record joining the two is handoff-fire's own
+# `recycle-engaged` row (target_pane 882, prev_sid d64fb5fe, 10 s after the brief).
+#
+# WHY THE HOP DOES NOT WIDEN THE PROOF. A recycled brief is admitted ONLY through a predecessor that
+# itself passes this same proof, joined by a row handoff-fire wrote when it recycled THIS pane, inside
+# a window measured from THIS brief. So the chain always ends at a first user message carrying the
+# trailer AND a fire marker — the original contract — and every hop is handoff-fire's own record:
+#   · a recycle brief that merely QUOTES the heading (an operator session recycling itself) fails at
+#     the predecessor, whose brief has no fire marker;
+#   · a session that never recycled has no HANDOFF-RECYCLE marker, so the hop is never attempted;
+#   · an old row for this pane id (a previous tenant) sits outside the window.
+# The marker and back-channel returned are the ROOT's — the original fire's — which is what the stamp
+# the fire wrote would have carried. CC_SELFCLOSE_RECYCLE_CHAIN=0 disables the hop alone.
+_fcb_prove_sid() { # $1=pane $2=sid $3=depth → 0 proven (sets FCB_MARKER/FCB_NOTIFYBACK/FCB_VIA_RECYCLE) / 1
+  local pane="${1:-}" sid="${2:-}" depth="${3:-0}" tj brief bts marker nb prev
+  [ -n "$sid" ] || return 1
   # transcript_for_sid, never a hand-rolled path: the flat `$pdir/<sid>.jsonl` shape this used to
   # assume matches NOTHING on a real box (0 flat vs 3148 nested, measured) — see its header.
-  tj="$(transcript_for_sid "$mysid")"
+  tj="$(transcript_for_sid "$sid")"
   [ -n "$tj" ] || return 1
   # The same extraction bin/cc-recover-safeguard uses to recover a brief — one reader, one shape.
   # `isMeta` excludes the harness's own injected turns, which is what makes ".[0]" the BRIEF and not a
@@ -4984,13 +5061,47 @@ fired_contract_in_my_brief() { # $1=self-pane → 0 proven / 1 not
   # nothing exits 1, pipefail propagates it out of the pipeline, and the assignment would kill the
   # script SILENTLY — the same trap the back-channel registry lookup documents at its own sed.
   marker="$(printf '%s' "$brief" | grep -oE 'HANDOFF-ENGAGE-[A-Za-z0-9._-]+' | tail -1 || true)"
-  [ -n "$marker" ] || return 1
-  # The back-channel address, so the repaired stamp can carry it and sc_announce_before_retire can
-  # ENFORCE the ping rather than merely having asked for it in prose. Absent ⇒ empty ⇒ the announce
-  # arm stands down exactly as it does for a fire that armed no back-channel.
-  nb="$(printf '%s' "$brief" | sed -n 's/^## BACK-CHANNEL — ping the originator (\(.*\))$/\1/p' | tail -1 || true)"
-  FCB_MARKER="$marker" FCB_NOTIFYBACK="$nb"
+  if [ -n "$marker" ]; then
+    # The back-channel address, so the repaired stamp can carry it and sc_announce_before_retire can
+    # ENFORCE the ping rather than merely having asked for it in prose. Absent ⇒ empty ⇒ the announce
+    # arm stands down exactly as it does for a fire that armed no back-channel.
+    nb="$(printf '%s' "$brief" | sed -n 's/^## BACK-CHANNEL — ping the originator (\(.*\))$/\1/p' | tail -1 || true)"
+    FCB_MARKER="$marker" FCB_NOTIFYBACK="$nb"
+    return 0
+  fi
+  # ---- the recycle hop (header above) ----
+  [ "${CC_SELFCLOSE_RECYCLE_CHAIN:-1}" != 0 ] || return 1
+  [ "$depth" -lt "${HF_RECYCLE_CHAIN_MAX:-8}" ] || return 1
+  case "$brief" in *HANDOFF-RECYCLE-*) ;; *) return 1 ;; esac
+  bts="$(jq -r -s 'map(select(.type=="user" and (.isMeta != true))) | .[0].timestamp // empty' "$tj" 2>/dev/null || true)"
+  [ -n "$bts" ] || return 1
+  prev="$(hf_recycle_predecessor "$pane" "$sid" "$bts")"
+  [ -n "$prev" ] && [ "$prev" != "$sid" ] || return 1
+  _fcb_prove_sid "$pane" "$prev" $((depth + 1)) || return 1
+  FCB_VIA_RECYCLE="${FCB_VIA_RECYCLE:+$FCB_VIA_RECYCLE }$prev"   # root first: the deeper hop set it
   return 0
+}
+
+# hf_recycle_predecessor — the session a recycle of PANE replaced to boot SID, from handoff-fire's own
+# `recycle-engaged` row (emit_recycle_event, whose prev_sid "is what makes a recycle JOINABLE"). The
+# row is written once the successor's first real turn lands, so it FOLLOWS the successor's brief:
+# admitted only inside [brief − HF_RECYCLE_JOIN_SKEW_S, brief + HF_RECYCLE_JOIN_WINDOW_S]. The nearest
+# qualifying row wins. Echoes the predecessor sid, or nothing.
+hf_recycle_predecessor() { # $1=pane $2=successor-sid $3=successor brief timestamp (ISO) → prev sid | ""
+  local pane="${1:-}" sid="${2:-}" bts="${3:-}" log="${HF_HANDOFFS_LOG:-$HOME/.claude/logs/handoffs.jsonl}"
+  [ -n "$pane" ] && [ -n "$sid" ] && [ -n "$bts" ] && [ -s "$log" ] || return 0
+  grep -F '"recycle-engaged"' "$log" 2>/dev/null \
+    | jq -r -s --arg p "$pane" --arg s "$sid" --arg b "$bts" \
+        --argjson skew "${HF_RECYCLE_JOIN_SKEW_S:-60}" --argjson win "${HF_RECYCLE_JOIN_WINDOW_S:-900}" '
+        def ep: sub("\\.[0-9]+Z$"; "Z") | (try fromdateiso8601 catch null);
+        ($b | ep) as $be
+        | if $be == null then empty else
+            [ .[] | select(.class == "recycle-engaged" and .engaged == true and (.target_pane|tostring) == $p
+                           and (.prev_sid | type) == "string" and .prev_sid != "" and .prev_sid != $s)
+                  | . + {d: (((.ts // "") | ep) as $t | if $t == null then null else $t - $be end)}
+                  | select(.d != null and .d >= (0 - $skew) and .d <= $win) ]
+            | sort_by(if .d < 0 then -.d else .d end) | .[0].prev_sid // empty
+          end' 2>/dev/null || true
 }
 
 # adopt_orphan_stamp — re-key an orphaned record onto THIS pane, so everything downstream keeps
@@ -5111,6 +5222,40 @@ hf_migrate_peer_stamp() { # $1=fired-dir $2=pane $3=new-cwd → best-effort, alw
     # LEGIBILITY (R10), the standard adoption and repair hold themselves to: a pane that keeps its
     # own authorisation across a move says so, to stderr, never only in-pane.
     echo "→ recycle: fired-peer stamp MIGRATED with the pane — cwd is now $newcwd (was ${old:-unset}). The self-retire contract is INHERITED, not re-minted: originator, back-channel and marker are the original fire's." >&2
+  else
+    rm -f "$tmp" 2>/dev/null
+  fi
+  return 0
+}
+
+# ---- …and EVERY inheriting recycle re-anchors the stamp's TENANCY CLOCK (pane 882, 2026-09-28) ---
+# THE THIRD HALF, and the one that DELETED a live contract. The stamp has two tenancy oracles, and
+# the two items above only taught one of them about recycles. fired_stamp_tenancy reads the CWD; but
+# bin/cc-reaper (fired_stamp_state) and bin/cc-classify (fired_peer) also read TIME — "the pane's
+# current session booted within CC_FIRED_BOOT_MAX_S (1800 s) of firedAt, else a later tenant reused
+# the id" — and the reaper GARBAGE-COLLECTS a stamp that fails it. A recycle IS a new session in the
+# same pane, so every recycle more than 30 minutes after the fire manufactured that `stale` verdict.
+# Measured: pane 882 fired 05:53:01Z, recycled 07:20:02Z (87 min), stamp rm'd by the reaper at
+# 08:10:49Z ("stale-tenancy stamp GC pane=882"), and its finished session was then refused as an
+# ORIGIN session by its own self-close. Pane 884, same originator, recycled after 19 min — inside the
+# window — kept its stamp and retired itself. Same code path; the only variable was the clock.
+#
+# RE-ANCHOR, DO NOT RE-MINT — the same rule as the migration above. firedAt stays the fire's (it is
+# also the adoption-slack baseline in cc-classify, which must keep excluding the ORIGINAL brief);
+# `recycledAt` is the additive field both time oracles now take the later of. Written only on the
+# positive proof hf_recycle_inherits_peer already demands (a VALID stamp for this pane in this cwd),
+# so a recycle can never re-anchor a stamp it does not hold — an operator session's recycle writes
+# nothing, exactly as before. `recycles` counts, for the reader, how many times the anchor moved.
+hf_reanchor_peer_stamp() { # $1=fired-dir $2=pane → best-effort, always 0
+  local dir="${1:-}" pane="${2:-}" tmp
+  [ -n "$dir" ] && [ -n "$pane" ] || return 0
+  [ -s "$dir/$pane.json" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  tmp="$dir/.$pane.reanchor.$$"
+  if jq --arg at "$(_iso_now)" '. + {recycledAt:$at, recycles:((.recycles // 0) + 1)}' \
+       "$dir/$pane.json" > "$tmp" 2>/dev/null \
+     && [ -s "$tmp" ] && mv -f "$tmp" "$dir/$pane.json" 2>/dev/null; then
+    echo "→ recycle: fired-peer stamp RE-ANCHORED (recycledAt) — the successor session boots now, not at the original fire, and the reaper's boot-tenancy clock now knows it." >&2
   else
     rm -f "$tmp" 2>/dev/null
   fi
@@ -8312,8 +8457,9 @@ fi
 # self-close — arm the detached watcher that retires this session once the calling turn ends.
 if [ "${1:-}" = "self-close" ]; then
   shift
+  SC_ARGV=" $* "      # the raw request, for the --fired-peer class's no-override check
   SC_SID="" SC_ALLOW_DIRTY=0 SC_ALLOW_UNLANDED=0 SC_DRY=0 SC_SUCCESSOR="" SC_TERMINAL=0 SC_NO_NOTIFY=0 SC_DIRTY_OWNER="" SC_ASSUME_ENGAGED=0 SC_ALLOW_LIVE_TM=0 SC_ALLOW_LIVE_SA=0 SC_ALLOW_ORIGIN_CLOSE=0 SC_ORPHANED_ASSIGNEE=0 SC_SID_EXPLICIT=0 SC_TRANSPLANTED_SOURCE=0
-  SC_SOURCE_PANE="" SC_SOURCE_SESSION="" SC_REMOTE_SOURCE=0 SC_SUBJ_CWD=""
+  SC_SOURCE_PANE="" SC_SOURCE_SESSION="" SC_REMOTE_SOURCE=0 SC_SUBJ_CWD="" SC_FIRED_PEER="" SC_FIRER_RETIRE=0 SC_FIRER=""
   while [ $# -gt 0 ]; do case "$1" in
     --session-id)  SC_SID="${2:?--session-id needs a value}"; SC_SID_EXPLICIT=1; shift 2 ;;
     --successor)   SC_SUCCESSOR="${2:?--successor needs a pane uuid}"; shift 2 ;;
@@ -8330,6 +8476,7 @@ if [ "${1:-}" = "self-close" ]; then
     --transplanted-source) SC_TRANSPLANTED_SOURCE=1; shift ;;
     --source-pane)    SC_SOURCE_PANE="${2:?--source-pane needs a pane uuid}"; shift 2 ;;
     --source-session) SC_SOURCE_SESSION="${2:?--source-session needs a session uuid}"; shift 2 ;;
+    --fired-peer)  SC_FIRED_PEER="${2:?--fired-peer needs the pane id of a peer THIS pane fired}"; shift 2 ;;
     --dry-run)     SC_DRY=1; shift ;;
     *) echo "!! unknown self-close arg: $1" >&2; exit 1 ;;
   esac; done
@@ -8363,10 +8510,12 @@ if [ "${1:-}" = "self-close" ]; then
   # cc-in-kitty about THIS process's ancestry — the wrong subject for that question. Resolving the
   # pane's own terminal here makes the pin a no-op (it returns at its first line once CC_TERM is
   # set) without touching the self- forms, which still get the ancestry answer they want.
-  if [ -n "$SC_SOURCE_PANE" ]; then
-    SC_TERM_RC=0; hf_remote_pane_term "$SC_SOURCE_PANE" || SC_TERM_RC=$?
+  # --fired-peer names somebody else's pane too (the peer), so it takes the same resolution.
+  SC_REMOTE_TERM_PANE="${SC_SOURCE_PANE:-$SC_FIRED_PEER}"
+  if [ -n "$SC_REMOTE_TERM_PANE" ]; then
+    SC_TERM_RC=0; hf_remote_pane_term "$SC_REMOTE_TERM_PANE" || SC_TERM_RC=$?
     if [ "$SC_TERM_RC" != 0 ]; then
-      hf_remote_pane_term_say "$SC_TERM_RC" "$SC_SOURCE_PANE" self-close
+      hf_remote_pane_term_say "$SC_TERM_RC" "$SC_REMOTE_TERM_PANE" self-close
       exit 2
     fi
   fi
@@ -8422,6 +8571,81 @@ if [ "${1:-}" = "self-close" ]; then
     if [ -n "$SC_SUBJ_CWD" ]; then
       echo "→ cwd-scoped guards (dirty tree) will read the SOURCE pane's own worktree $SC_SUBJ_CWD, not this pane's" >&2
     fi
+  fi
+  # ---- FIRER-RETIRE CLASS (`--fired-peer P`) — see hf_firer_owns_peer's header ----------------------
+  if [ -n "$SC_FIRED_PEER" ]; then
+    if [ "${CC_FIRER_RETIRE:-1}" = 0 ]; then
+      echo "!! self-close --fired-peer REFUSED: disabled by CC_FIRER_RETIRE=0." >&2; exit 2
+    fi
+    # One class, no overrides. Every flag below either names a DIFFERENT class or waives a gate, and
+    # this class exists precisely because it waives none: the peer's own guards all still bind.
+    # Read off the ARGV, not the parsed variables: every --allow-* override is refused by its flag
+    # spelling, so this class never names the override variables it is refusing (the transplanted-
+    # source suite pins that no class reaches for --allow-origin-close by counting its uses).
+    SC_FP_BAD=0
+    case "$SC_ARGV" in
+      *" --session-id "*|*" --source-pane "*|*" --source-session "*|*" --transplanted-source "*|*" --orphaned-assignee "*|*" --allow-"*|*" --dirty-owner "*|*" --successor "*|*" --successor-assume-engaged "*) SC_FP_BAD=1 ;;
+    esac
+    if [ "$SC_FP_BAD" = 1 ]; then
+      { echo "!! self-close --fired-peer REFUSED: it takes --terminal (and optionally --dry-run / --no-notify) and nothing else."
+        echo "!!   It retires a FINISHED peer with every one of that peer's own guards intact; an override,"
+        echo "!!   a successor or a second class would turn it into a general 'close that pane', which it is not."
+      } >&2
+      exit 2
+    fi
+    if [ "$SC_TERMINAL" != 1 ]; then
+      echo "!! self-close --fired-peer REFUSED: pass --terminal — a retired peer's work is landed and nothing continues it." >&2
+      exit 2
+    fi
+    command -v jq >/dev/null 2>&1 || { echo "!! self-close --fired-peer REFUSED: jq is not on PATH; the stamp and registry cannot be read." >&2; exit 2; }
+    # (1) WHO IS ASKING — the ordinary self gate, applied to the CALLER's own pane.
+    SC_FIRER="$(self_pane_id)"
+    [ -n "$SC_FIRER" ] || { echo "!! self-close --fired-peer REFUSED: this process has no pane of its own to prove it fired anything." >&2; exit 2; }
+    # STRICTER than the self form on one verdict. verify_self_pane proceeds on `unknown` (no evidence
+    # either way) because refusing would strand a peer's OWN retirement. Here the pane id is the
+    # ownership claim over SOMEBODY ELSE's pane, and an inherited $KITTY_WINDOW_ID/$ITERM_SESSION_ID
+    # is exactly the kind of claim that outlives the pane it names — so unproven refuses.
+    if [ "$(pane_ownership "$SC_FIRER")" = unknown ]; then
+      echo "!! self-close --fired-peer REFUSED: cannot PROVE this process lives in pane $SC_FIRER (the terminal returned no owner). Retiring another pane needs this pane's identity proven, not assumed from the environment. Nothing was typed." >&2
+      exit 2
+    fi
+    verify_self_pane "$SC_FIRER" 0 "self-close --fired-peer" || exit 2
+    SC_FIRER="$HF_VERIFIED_PANE"
+    if [ "$SC_FIRER" = "$SC_FIRED_PEER" ]; then
+      echo "!! self-close --fired-peer REFUSED: that is THIS pane — retire yourself with 'self-close --terminal'." >&2; exit 2
+    fi
+    # (2) WHO FIRED IT — the stamp handoff-fire wrote at fire time.
+    hf_firer_owns_peer "$FIRED_DIR" "$SC_FIRED_PEER" "$SC_FIRER" || exit 2
+    # (3) WHAT IS IN THE PANE NOW — the registry row, bound to a LIVE process, in the stamp's cwd.
+    SC_FP_ROW="$REG_DIR/$SC_FIRED_PEER.json"
+    SC_FP_SESS="$(jq -r '.session_id // empty' "$SC_FP_ROW" 2>/dev/null || true)"
+    hf_remote_source_bind "$SC_FIRED_PEER" "$SC_FP_SESS" "self-close --fired-peer" || exit 2
+    case "$HF_REMOTE_ROW_PID" in ''|*[!0-9]*) HF_REMOTE_ROW_PID="" ;; esac
+    if [ -z "$HF_REMOTE_ROW_PID" ] || ! kill -0 "$HF_REMOTE_ROW_PID" 2>/dev/null; then
+      echo "!! self-close --fired-peer REFUSED: the registry row for pane $SC_FIRED_PEER names pid ${HF_REMOTE_ROW_PID:-<none>}, which is not alive — the row is stale, so what is in that pane now is not the session it describes. Nothing was typed." >&2
+      exit 2
+    fi
+    if [ -z "$HF_REMOTE_CWD" ] || [ "$(fired_stamp_tenancy "$FIRED_DIR/$SC_FIRED_PEER.json" "$HF_REMOTE_CWD")" != valid ]; then
+      { echo "!! self-close --fired-peer REFUSED: the stamp for pane $SC_FIRED_PEER does not describe the session in it now"
+        echo "!!   (tenancy $(fired_stamp_tenancy "$FIRED_DIR/$SC_FIRED_PEER.json" "${HF_REMOTE_CWD:-/nonexistent}") — stamp cwd $(jq -r '.cwd // "?"' "$FIRED_DIR/$SC_FIRED_PEER.json" 2>/dev/null), pane cwd ${HF_REMOTE_CWD:-unknown})."
+        echo "!!   A spent stamp means the peer already retired; a stale one means the id holds a different session."
+      } >&2
+      exit 2
+    fi
+    # (4) IDLE — no turn in flight. /exit interrupts a live turn, so "cannot tell" refuses too.
+    SC_FP_TX="$(transcript_for_sid "$SC_FP_SESS")"
+    SC_FP_REST=0; hf_transcript_at_rest "$SC_FP_TX" || SC_FP_REST=$?
+    case "$SC_FP_REST" in
+      0) : ;;
+      1) echo "!! self-close --fired-peer REFUSED: pane $SC_FIRED_PEER has a turn IN FLIGHT (session ${SC_FP_SESS:0:8}); retiring it now would kill live work. Retry when it is idle. Nothing was typed." >&2; exit 2 ;;
+      *) echo "!! self-close --fired-peer REFUSED: cannot tell whether pane $SC_FIRED_PEER is idle — its transcript (${SC_FP_TX:-not found}) is unreadable. Unknown is not idle. Nothing was typed." >&2; exit 2 ;;
+    esac
+    # Admitted: from here the close runs on the PEER as its subject — the same remote plumbing the
+    # transplanted-source form uses (identity gate replaced by the binding above, cwd-scoped guards
+    # reading the peer's worktree, inventory keyed on the peer's session).
+    SC_FIRER_RETIRE=1 SC_REMOTE_SOURCE=1
+    SC_SID="$SC_FIRED_PEER" SC_SOURCE_PANE="$SC_FIRED_PEER" SC_SOURCE_SESSION="$SC_FP_SESS" SC_SUBJ_CWD="$HF_REMOTE_CWD"
+    echo "→ firer-retire AUTHORIZED: pane $SC_FIRED_PEER was fired by THIS pane $SC_FIRER (its stamp's firedBy), holds live session ${SC_FP_SESS:0:8} in $SC_SUBJ_CWD, and is at rest. Every peer-side guard below still runs against that session and worktree." >&2
   fi
   SC_SID="${SC_SID:-$(self_pane_id)}"
   # THE TARGET IS RE-ASSERTED AFTER RESOLUTION, not merely assigned before it. Everything below acts
@@ -8631,7 +8855,7 @@ USAGE
   # are different facts and the pre-existing message could only state one of them: a live pane that
   # inherited a REUSED kitty id would have been told it is "an ORIGIN session", which is a
   # misdiagnosis pointing at the wrong remedy. `unknown` is byte-for-byte the old behaviour.
-  SC_STAMP_STATE="$(fired_stamp_tenancy "$SC_FIRED_STAMP" "$PWD")"
+  SC_STAMP_STATE="$(fired_stamp_tenancy "$SC_FIRED_STAMP" "${SC_SUBJ_CWD:-$PWD}")"
   # ---- ADOPTION (item 1467ea1dad4f): a stamp MISS is not evidence of "never fired" ---------------
   # The pane id is volatile — a resume, a crash-recreate or a kitty restart renumbers the pane and
   # orphans its stamp under the old id (measured 2026-08-07: pane 353 holding pane 351's stamp). The
@@ -8648,7 +8872,7 @@ USAGE
       # changes its own authorisation must say so, to stderr AND the close log, never only in-pane.
       echo "→ fired-peer stamp ADOPTED: the record for this worktree was written under pane $SC_ADOPTED_FROM; this pane is $SC_SID." >&2
       echo "   The pane id changed underneath a live peer (resume / crash-recreate / kitty renumber). Identity PROVEN by the fire marker in this session's own transcript — a cwd match alone was never enough, and still is not." >&2
-      SC_STAMP_STATE="$(fired_stamp_tenancy "$SC_FIRED_STAMP" "$PWD")"
+      SC_STAMP_STATE="$(fired_stamp_tenancy "$SC_FIRED_STAMP" "${SC_SUBJ_CWD:-$PWD}")"
     fi
   fi
   if [ "$SC_CLASS_EXEMPT" = 0 ] && [ "${SC_ALLOW_ORIGIN_CLOSE:-0}" != 1 ] && [ "$SC_STAMP_STATE" = stale ]; then
@@ -8745,7 +8969,11 @@ USAGE
     if [ -s "$SC_FIRED_DIR_R/$SC_SID.json" ]; then
       # Additive provenance, so a stamp written by REPAIR is never mistaken for one written by a fire.
       SC_RTMP="$SC_FIRED_DIR_R/.$SC_SID.repair.$$"
-      if jq --arg at "$(_iso_now)" '. + {repairedAt:$at, repairedFrom:"brief-contract"}' \
+      # A proof that crossed recycles says so on the record: repairedFrom names the chain, and
+      # recycledFromSids lists the predecessor sessions it walked (root first).
+      if [ -n "${FCB_VIA_RECYCLE:-}" ]; then SC_RFROM="recycle-chain"; else SC_RFROM="brief-contract"; fi
+      if jq --arg at "$(_iso_now)" --arg from "$SC_RFROM" --arg via "${FCB_VIA_RECYCLE:-}" \
+           '. + {repairedAt:$at, repairedFrom:$from} + (if $via == "" then {} else {recycledFromSids:($via | split(" "))} end)' \
            "$SC_FIRED_DIR_R/$SC_SID.json" > "$SC_RTMP" 2>/dev/null && [ -s "$SC_RTMP" ]; then
         mv -f "$SC_RTMP" "$SC_FIRED_DIR_R/$SC_SID.json" 2>/dev/null || rm -f "$SC_RTMP" 2>/dev/null
       else
@@ -8753,9 +8981,13 @@ USAGE
       fi
       # LEGIBILITY (R10), the standard every other self-authorising path here holds itself to: a pane
       # that changes its own authorisation says so, to stderr AND the close log, never only in-pane.
-      echo "→ fired-peer stamp REPAIRED: pane $SC_SID had NO stamp, but its own first user message carries the self-retire contract and the fire marker $FCB_MARKER — handoff-fire composed and fired this brief, and the fire aborted before writing its record." >&2
+      if [ -n "${FCB_VIA_RECYCLE:-}" ]; then
+        echo "→ fired-peer stamp REPAIRED across a recycle: pane $SC_SID had NO stamp; its brief is a RECYCLE brief carrying the self-retire contract, and handoff-fire's own recycle-engaged record joins it to predecessor session(s) $FCB_VIA_RECYCLE, whose first user message carries the contract and the fire marker $FCB_MARKER." >&2
+      else
+        echo "→ fired-peer stamp REPAIRED: pane $SC_SID had NO stamp, but its own first user message carries the self-retire contract and the fire marker $FCB_MARKER — handoff-fire composed and fired this brief, and the fire aborted before writing its record." >&2
+      fi
       echo "   Wrote $SC_FIRED_DIR_R/$SC_SID.json (cwd $PWD${FCB_NOTIFYBACK:+, back-channel $FCB_NOTIFYBACK}). This is a REPAIR, not an override: cc-reaper, cc-classify and the announce-before-retire check now all see this peer correctly." >&2
-      SC_STAMP_STATE="$(fired_stamp_tenancy "$SC_FIRED_STAMP" "$PWD")"
+      SC_STAMP_STATE="$(fired_stamp_tenancy "$SC_FIRED_STAMP" "${SC_SUBJ_CWD:-$PWD}")"
     else
       # The writer declined — say WHY, from the writer's own reason rather than a guess re-derived
       # here (item 890cd862b965). The refusal below then stands, with the cause named.
@@ -8966,6 +9198,13 @@ MSG
       if [ "$_sc_ahead" -gt 0 ]; then
         _sc_br="$(sc_git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
         SC_UNLANDED_N="$_sc_ahead" SC_UNLANDED_BR="$_sc_br" SC_UNLANDED_TRUNK="$_sc_trunk"
+        if [ "$SC_FIRER_RETIRE" = 1 ]; then
+          # STRICTER for the firer (hf_firer_owns_peer's header): the peer's own warn-and-ping is how an
+          # unlanded branch reaches its originator, and here the originator is the one closing it —
+          # nobody is left to be told. Land it (or have the peer land it) first.
+          echo "!! self-close --fired-peer REFUSED: pane $SC_SID has $_sc_ahead commit(s) on $_sc_br NOT landed on $_sc_trunk (in ${SC_SUBJ_CWD:-$(pwd)}). A retired peer must have nothing unlanded. Nothing was typed." >&2
+          exit 8
+        fi
         echo "⚠ self-close: $_sc_ahead commit(s) on $_sc_br are NOT landed on $_sc_trunk — committed ≠ landed. /ship first if the land is yours; otherwise your ping MUST name this branch so the originator collects it (wave abandonment is the measured top loss class)." >&2
       fi
     fi
@@ -8997,7 +9236,8 @@ MSG
   #
   # --no-notify opts out, matching the succession announce it sits beside. Best-effort throughout: a
   # close must never die on its own bookkeeping.
-  [ "$SC_NO_NOTIFY" = 1 ] || sc_announce_before_retire "$SC_SID" "$FIRED_DIR" "${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}" \
+  # The firer-retire class skips it: the originator this would ping is the session running the close.
+  [ "$SC_NO_NOTIFY" = 1 ] || [ "$SC_FIRER_RETIRE" = 1 ] || sc_announce_before_retire "$SC_SID" "$FIRED_DIR" "${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}" \
     "${SC_UNLANDED_N:-0}" "${SC_UNLANDED_BR:-}" "${SC_UNLANDED_TRUNK:-}"
   # W2 CUSTODY: discharge the originator's open custody row for this fire — the marker on our own
   # stamp is the join key (the same one adoption proves identity by). Best-effort; a close never
@@ -9052,11 +9292,22 @@ MSG
   # The custody row is the ORIGINATOR's copy — it is what `cc-custody list` shows a lead that fired
   # this peer, and `--why` is an existing field on the return verb (bin/cc-custody:212-227), so this
   # needs no change there. A marker-less stamp still reached stderr above.
+  # FIRER-RETIRE: re-read "at rest" at the last moment before the first irreversible step (custody
+  # discharge, the spent stamp, /exit). The admission read was up to a few seconds and a ledger
+  # computation ago; a turn that started since then is live work, and the close stands down.
+  if [ "$SC_FIRER_RETIRE" = 1 ] && [ "$SC_DRY" = 0 ]; then
+    SC_FP_REST=0; hf_transcript_at_rest "$SC_FP_TX" || SC_FP_REST=$?
+    if [ "$SC_FP_REST" != 0 ]; then
+      echo "!! self-close --fired-peer ABORTED: pane $SC_SID is no longer at rest (re-read before the close) — a turn started. Nothing was typed, nothing was discharged." >&2
+      exit 2
+    fi
+  fi
   [ -n "$_sc_cmk" ] && _hf_custody return "$_sc_cmk" --why "$SC_LEDGER_STAMP"
   SC_LOG="/tmp/handoff-selfclose-$SC_SID-$(date +%s).log"
   if [ "$SC_DRY" = 1 ]; then
     echo "── dry run (self-close) ─────────────────────────"
     echo "pane:      $SC_SID"
+    [ "$SC_FIRER_RETIRE" = 1 ] && echo "retired by: its firer, pane $SC_FIRER (stamp firedBy) — peer session ${SC_SOURCE_SESSION:0:8} at rest in $SC_SUBJ_CWD"
     if [ -n "$SC_SUCCESSOR" ]; then
       if [ -n "$SUC_PIN" ]; then
         echo "successor: $SC_SUCCESSOR (tty $SUC_TTY — session ${SUC_PIN%% *} pid ${SUC_PIN##* } VERIFIED alive, SESSION-PINNED)"
@@ -9148,7 +9399,7 @@ MSG
     SC_CP_RC=0
     hf_bounded_s "$COMPLETION_PUSH_TIMEOUT_S" \
       "$COMPLETION_PUSH_BIN" fire --role "${CC_COMPLETION_ROLE:-desk}" --from handoff-fire \
-      --event "session $SC_SID self-closed (--terminal: nothing continues)" --detail "cwd $(pwd)" \
+      --event "session $SC_SID $([ "$SC_FIRER_RETIRE" = 1 ] && echo "retired by its firer $SC_FIRER" || echo self-closed) (--terminal: nothing continues)" --detail "cwd ${SC_SUBJ_CWD:-$(pwd)}" \
       || SC_CP_RC=$?
     # BOTH expiry codes, because `-k 3` makes two of them and they are MEASURED, not assumed (GNU
     # coreutils 9.1, this box): 124 when the callee dies on the SIGTERM, 137 when it ignores TERM and
@@ -11651,6 +11902,11 @@ fi
 # short-circuits on that too, so this is belt-and-braces rather than the only guard).
 if [ "$RCY_INHERIT_PEER" = 1 ] && [ "$RECYCLE_RELOC" = 1 ] && [ "$DRY" = 0 ]; then
   hf_migrate_peer_stamp "$FIRED_DIR" "$SID" "${LAUNCH_DIR:-}" || true
+fi
+# Every inheriting recycle, same-dir or relocating: the successor session boots after this line, so
+# the stamp's boot-tenancy anchor moves here (hf_reanchor_peer_stamp's header — pane 882).
+if [ "$RCY_INHERIT_PEER" = 1 ] && [ "$DRY" = 0 ]; then
+  hf_reanchor_peer_stamp "$FIRED_DIR" "$SID" || true
 fi
 
 # ── SUCCESSION LINEAGE EDGE (row 4de3d0f9c0e1, prerequisite 2) ──────────────────────────────────

@@ -472,6 +472,41 @@ EOF
   echo "$output" | grep -qi 'unstamped/stale'
 }
 
+@test "recycled peer (pane 882): a stamp RE-ANCHORED by a recycle is NOT GC'd when the fire is > BOOT_MAX old" {
+  # THE INCIDENT, replayed at the reaper: pane 882 fired 05:53, recycled 07:20 (87 min > 1800 s),
+  # and this GC deleted its stamp at 08:10 — after which the finished peer was refused as an ORIGIN
+  # session by its own self-close. handoff-fire now writes `recycledAt` on an inheriting recycle
+  # (hf_reanchor_peer_stamp); the boot-tenancy anchor is the LATER of firedAt/recycledAt. The
+  # sibling test above is the control: the same 2h-old fire with NO recycledAt is still GC'd.
+  set_desk; set_live 1
+  local old_iso rcy_iso
+  old_iso="$(date -u -r "$(( $(date +%s) - 7200 ))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
+  rcy_iso="$(date -u -r "$(( $(date +%s) - 10 ))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
+  mkdir -p "$D/fired"; printf '{"paneUUID":"%s","cwd":"x","firedBy":"t","firedAt":"%s","recycledAt":"%s","recycles":1,"selfRetire":true}\n' "$WPANE" "$old_iso" "$rcy_iso" > "$D/fired/$WPANE.json"
+  mock_classify finished "$D/clean" 9000 yes "$WPANE" "$(( $(date +%s) * 1000 ))"   # the recycle's session booted NOW
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  # Pre-fix: stale ⇒ GC'd and refused ("unstamped/stale"). Post-fix: the stamp is VALID, so this
+  # finished+landed+clean peer takes the promotion path and is reaped AS a fired peer (which is also
+  # what clears its marker — a retired pane's stamp, not a GC'd live one).
+  ! grep -q "stale-tenancy stamp GC pane=$WPANE" "$D/reaper.log" || { echo "the recycled peer's stamp was GC'd — pane 882 again"; cat "$D/reaper.log"; false; }
+  td_called
+}
+
+@test "recycled peer CONTROL: recycledAt is itself bounded — a tenant booting > BOOT_MAX after the RECYCLE is still stale" {
+  # The anchor moved; the id-reuse guard did not go away. A session that booted 2h after the last
+  # recycle is a later tenant exactly as it was one 2h after a fire.
+  set_desk; set_live 1
+  local old_iso
+  old_iso="$(date -u -r "$(( $(date +%s) - 7200 ))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
+  mkdir -p "$D/fired"; printf '{"paneUUID":"%s","cwd":"x","firedBy":"t","firedAt":"%s","recycledAt":"%s","selfRetire":true}\n' "$WPANE" "$old_iso" "$old_iso" > "$D/fired/$WPANE.json"
+  mock_classify finished "$D/clean" 9000 yes "$WPANE" "$(( $(date +%s) * 1000 ))"
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  [ ! -f "$D/fired/$WPANE.json" ]
+  grep -q 'stale-tenancy stamp GC' "$D/reaper.log"
+}
+
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 # ITEM A — the dirty-check must ignore UNTRACKED files (backlog 99adcddc2cc8)
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
