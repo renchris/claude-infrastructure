@@ -131,10 +131,17 @@ _reap_keep_dormant=(claimer-live owned-wait)
 # index, a session with no index row, a row still holding the SessionStart stub because the
 # concurrent session-index-end has not written it, missing helpers, and the index lock held by
 # another process (the orphaned lock of 2026-04 skipped every index for 111 days).
+# The last line joined with session-start:memory-snapshot (truememory §3.11, X3 again): each names
+# a snapshot that could not be TAKEN (script or detach lib unresolvable, no git, a git plumbing
+# step failing, a gitdir that would sit inside the store, a remote on the history repo). Without
+# them a broken history reads DORMANT-100 while the vendor passes it exists to undo keep writing.
+# unchanged, no-store and contended stay out: those are healthy outcomes, not blindness.
 _default_blind=(no-jq no-session-id no-stdin no-telemetry stale-telemetry \
                 no-transcript-path transcript-missing not-a-repo no-cwd no-assistant-text \
                 goal-unreadable \
                 bad-session-id index-db-missing index-unreadable no-index-row index-row-stub no-helpers lock-held \
+                snapshot-missing no-git gitdir-create-failed add-failed write-tree-failed commit-tree-failed \
+                no-temp-index unresolvable history-inside-store has-remote \
                 "${_reap_keep_blind[@]}")
 if [ -n "${CC_ABSTAIN_BLIND_REASONS:-}" ]; then
   # shellcheck disable=SC2206  # intentional word-split of the override list
