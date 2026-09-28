@@ -26,7 +26,9 @@ setup() {
   export MEMORY_NUDGE_STATE_DIR="$BATS_TEST_TMPDIR/state"
   export CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/cfg"
   export CC_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
-  unset CC_RULING_SHADOW MEMORY_NUDGE_INTERVAL CLAUDE_PROJECT_DIR
+  unset MEMORY_NUDGE_INTERVAL CLAUDE_PROJECT_DIR
+  # The shadow is retired (default OFF, research §5.18); the classifier cases opt back in.
+  export CC_RULING_SHADOW=on
   SHADOW="$HOME/.claude/state/ruling-shadow.jsonl"
   IDX="$BATS_TEST_TMPDIR/mem/MEMORY.md"; mkdir -p "$(dirname "$IDX")"
   printf -- '- [A](a.md) — one\n- [B](b.md) — two\n' > "$IDX"
@@ -142,6 +144,23 @@ ruling_n() { jq -s '[.[] | select(.hook == "memory-nudge:ruling")] | length' "$C
   [ "$OUT" = "$on" ]
 }
 
+@test "retired (#26 DROP, research §5.18): with the switch UNSET a ruling abstains kill-switch and writes no shadow row" {
+  unset CC_RULING_SHADOW
+  export MEMORY_NUDGE_INTERVAL=1
+  MEMORY_NUDGE_STATE_DIR="$BATS_TEST_TMPDIR/st-u" run_hook "$HOOK" s-u "we just go through 'at least 4mb' images on google images"
+  local off="$OUT"
+  [ "$(ruling disposition)" = "abstained" ]
+  [ "$(ruling reason)" = "kill-switch" ]
+  [ "$(ruling_n)" = "1" ]
+  [ "$(shadow_n)" = "0" ]
+  [ ! -e "$HOME/.claude/state/ruling-shadow.jsonl" ]
+  # Retiring the shadow changes nothing the model sees: stdout equals the opted-in run's.
+  CC_RULING_SHADOW=on MEMORY_NUDGE_STATE_DIR="$BATS_TEST_TMPDIR/st-o" run_hook "$HOOK" s-u "we just go through 'at least 4mb' images on google images"
+  [ "$(ruling disposition)" = "fired" ]
+  [ -n "$off" ]
+  [ "$OUT" = "$off" ]
+}
+
 @test "the shadow row: excerpt <= 300 chars on one line, length and sha1 of the prompt, sid and cwd" {
   local p
   p="$(printf '%*s' 1500 '' | tr ' ' 'x')"$'\n\n'"the rule is: rebase, never merge"$'\n'"$(printf '%*s' 1500 '' | tr ' ' 'y')"
@@ -198,10 +217,11 @@ alarm_run() {
   alarm_run "$idl" "$nd"
   [ "$status" -eq 1 ]                                   # RED: 30 prompts counted, none scored
   printf '%s' "$output" | grep -q 'SILENT  *memory-nudge:ruling .*D=30 '
-  # 30 prompts scored by the real hook: every counted prompt wrote one row, so the branch reads OK.
+  # 30 prompts through the real hook with the switch at its RETIRED default: every counted prompt
+  # still wrote one (kill-switch) row, so the branch reads OK and the registry row needs no change.
   for ((i = 0; i < 30; i++)); do
-    payload s-den "prompt number $i" | CC_IDL="$idl" MEMORY_NUDGE_STATE_DIR="$BATS_TEST_TMPDIR/den" \
-      MEMORY_INDEX_PATH="$IDX" bash "$HOOK" > /dev/null
+    payload s-den "prompt number $i" | env -u CC_RULING_SHADOW CC_IDL="$idl" \
+      MEMORY_NUDGE_STATE_DIR="$BATS_TEST_TMPDIR/den" MEMORY_INDEX_PATH="$IDX" bash "$HOOK" > /dev/null
   done
   [ "$(cat "$BATS_TEST_TMPDIR/den/nudge-s-den.count")" = "30" ]
   alarm_run "$idl" "$nd"

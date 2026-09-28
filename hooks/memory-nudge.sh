@@ -146,7 +146,10 @@ _mn_idl="$(dirname "$(_mn_deref "${BASH_SOURCE[0]}")")/lib/idl-log.sh"
 # A fire also appends one row a labeller can judge to $HOME/.claude/state/ruling-shadow.jsonl
 # (X4: one physical dir, not $CFG/state). Wave E promotes or kills this on that log
 # (docs/plans/TRUEMEMORY_ADOPTION.md:222). Nothing here writes to stdout, and every failure is
-# swallowed: a shadow must not be able to change or break the hook. Kill switch CC_RULING_SHADOW=off.
+# swallowed: a shadow must not be able to change or break the hook.
+# RETIRED 2026-09-28 (Wave E, #26 DROP, research §5.18): OFF unless CC_RULING_SHADOW=on. An unset
+# switch logs `abstained kill-switch` (a reached guard) on every counted prompt and writes no shadow
+# row, so the registry row still sees one row per prompt; `on` re-arms it for a delivery-research wave.
 _mn_ruling_shadow() {
   local why="$_MN_RV" have_idl=0 sha row dir
   if [ -r "$_mn_idl" ]; then
@@ -154,7 +157,7 @@ _mn_ruling_shadow() {
     # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
     . "$_mn_idl" && idl_init "${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}" memory-nudge:ruling SID && have_idl=1
   fi
-  [ "${CC_RULING_SHADOW:-on}" != off ] || why=kill-switch
+  [ "${CC_RULING_SHADOW:-off}" = on ] || why=kill-switch
   case "$why" in
     restatement|ruling) ;;
     *) [ "$have_idl" -eq 0 ] || log_idl abstained "${why:-classify-error}"; return 0 ;;
