@@ -175,3 +175,19 @@ Not supported by any operator quote, and so not rules:
 - the music choices.
 
 These were all the agent's decisions. The operator only accepted the v3 whole with "Great." He never commented on individual elements.
+
+## 2026-09-27: the claude-infrastructure film (a second repo, same method)
+
+Verbatim, in order:
+
+1. "What you just showed us is a Opus 5.5 generated video that we had from a few days ago, nothing new, let alone using
+   the brag workflow". It rejected a re-grade of the old three.js film sent in place of a new film made by the method.
+2. "Is this as communication clear and concise as possible providing as much business value, features, and outcomes of
+   our claude-infrastructure as possible?" This produced a Pyramid Principle pass on the message: one outcome line per
+   clause, each quoted verbatim from the README.
+3. "we overfit to the exact output style and not the methodology of design and composition … We should have different
+   inspiration from our claude harness infrastructure that helps self manages 15+ concurrent sessions". It rejected
+   Natural TTS's paper, accent and serif carried onto another product. What carries over is the method: research the
+   product's own domain, then design one object from its story.
+
+Rule drawn from them: **a second film inherits the procedure and the gates, never the first film's look.**

@@ -1,4 +1,4 @@
-// Renders composition/index.html frame by frame with chrome-headless-shell over CDP.
+// Renders composition/index.html (or --page <path>) frame by frame with chrome-headless-shell over CDP.
 //   node render.mjs stills [--dpr 1] t1 t2 ...        -> stills/t-<t>.png (1920x1080)
 //   node render.mjs video  [--dpr 2] [--from s] [--to s] -> out/frames.mkv (1920x1080 FFV1, lossless RGB; YUV happens once, at the final encode)
 // The server's root is the repository, so the composition loads the real article, popup and icon from it.
@@ -21,6 +21,8 @@ const FROM = Number(opt('from', '0'));
 const TO = opt('to', null);
 const OUT = opt('out', join(HERE, 'out', 'frames.mkv'));
 const SUB = Number(opt('sub', '1'));   // subframes per frame: motion blur over a 180-degree shutter
+const PAGE = opt('page', 'composition/index.html');   // a prototype page (the signature object alone) renders through the same contract
+const STILLS = opt('stills-dir', 'stills');
 
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ttf': 'font/ttf', '.wav': 'audio/wav' };
 const server = createServer(async (req, res) => {
@@ -60,7 +62,7 @@ const evaluate = async (expression) => { const r = await send('Runtime.evaluate'
 
 await send('Runtime.enable'); await send('Page.enable');
 await send('Emulation.setDeviceMetricsOverride', { width: 1920, height: 1080, deviceScaleFactor: DPR, mobile: false });
-await send('Page.navigate', { url: `${HTTP}/${relative(REPO, HERE)}/composition/index.html` });
+await send('Page.navigate', { url: `${HTTP}/${relative(REPO, HERE)}/${PAGE}` });
 for (let i = 0; ; i++) { if (await evaluate('window.__ready === true').catch(() => false)) break; if (i > 300) throw new Error('composition never became ready'); await new Promise((r) => setTimeout(r, 100)); }
 const info = await evaluate('window.__info()');
 console.error('ready', JSON.stringify(info));
@@ -69,10 +71,10 @@ const ff = (a, input) => new Promise((res, rej) => { const p = spawn('ffmpeg', [
 
 try {
   if (mode === 'stills') {
-    await mkdir(join(HERE, 'stills'), { recursive: true });
+    await mkdir(join(HERE, STILLS), { recursive: true });
     for (const t of args.map(Number)) {
       const png = await shot(t);
-      const out = join(HERE, 'stills', `t-${t.toFixed(2)}.png`);
+      const out = join(HERE, STILLS, `t-${t.toFixed(2)}.png`);
       if (DPR === 1) await (await import('node:fs/promises')).writeFile(out, png);
       else await ff(['-f', 'png_pipe', '-i', '-', '-vf', 'scale=1920:1080:flags=lanczos', out], png);
       console.log(out);

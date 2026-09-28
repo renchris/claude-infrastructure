@@ -152,6 +152,22 @@ Measured on an M1 Max: v3 rendered 675 frames at `--dpr 2 --sub 4` in 19 min (â‰
   For an infra repo that is a real thing on screen (a terminal pane, a commit landing, a file turning live), never
   an abstract orb pasted in.
 - **Real strings only:** terminal output and file names from real runs, as that repo's hero-film honesty rule says.
+- **Carry the METHOD, never the look.** On 2026-09-27 the operator rejected a claude-infrastructure build that had
+  Natural TTS's paper stage, one accent and Iowan italic: *"we overfit to the exact output style and not the
+  methodology of design and composition â€¦ We should have different inspiration from our claude harness infrastructure
+  that helps self manages 15+ concurrent sessions"*. The method is: research the product's OWN domain, then design one
+  signature object from its story that beats those references. For an agent-fleet repo that research wave was ten
+  read-only slots, each writing `notes.md` + `contact.png`: Claude brand films, parallel-agent products, infra launches,
+  real-world fleet control (ATC, rail tokens, Apollo), Apple's software craft, studio motion, terminal staging,
+  autonomy and the human decision, plus a hostile critic of the look-frame and a red team of the object. They
+  converged on what no agent product shows: time, work crossing one lock one at a time, and a film that ends on the
+  one decision left. The object that came out of it was **the day sheet**: one real day of the repo drawn as a train
+  timetable from `land.log`, with each land a thread through the lock. Every mark on it was a real record.
+- **Prototype the object alone through the film's own renderer** (`render.mjs --page proto/index.html --stills-dir
+  proto/stills`), keep a reject log with the reason per rejection, and only then build the film on it. Its purity
+  check caught three leaks the eye did not: a composited label layer (`will-change: transform`) whose text phase kept
+  the history of earlier frames, a canvas context carrying drawing state between redraws, and a font the page never
+  awaited before its first draw.
 
 ## Do NOT
 
