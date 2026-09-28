@@ -139,7 +139,60 @@ Hard constraints for the wave: never write any memory store or `settings*.json`;
 hook; stage migrations only; X1-X5 bind on every new hook branch or lib; test the RENDERED hook
 JSON; land via project `/ship` from the wave's own worktree.
 
-## Wave B — substrate and push consumers (S · `tma-wave-b`) — BLOCKED on Wave A
+## Wave B — substrate and push consumers (S · `tma-wave-b`) — DONE 2026-09-28
+
+**Landed (origin/main, content-verified):**
+- X6 probe + #35 pre-registration `2866cb421` (research §5.15-5.16; `hook-probe/{tool,failure,subagent}-run.sh`),
+  re-verified on 2.1.280 `c36bf87cf`. All four tool-event channels deliver on 2.1.278 and 2.1.280.
+- #6+#7 output arm `bf2524ed8` (inject-sanitize.jq, lesson-symptoms.tsv) · `4a5b11919` (bash-output-offload
+  and log-bash PostToolUseFailure arms through hooks/lib/lesson_recall.py) · `1d46ca69d` (lesson-recall-replay.py:
+  denominator, delivery join including subagents/*.jsonl, canary; registry rows; nightly step 7).
+  #6 emitters `6bacb2210` (lesson pointers on the cc-bats DEFERRAL, ship-land UNGATED/killed and deploy-live
+  core.bare lines) · `ba8e5c24a` (ship-land refuses an outer timeout/gtimeout at preflight, rc 2;
+  SHIP_ALLOW_OUTER_TIMEOUT=1; postland-verify's auto-revert lane opts out).
+- #5 `5224eec5e` (docs/research/memory-eval/recall_eval.py, public fixture, README) · `123844981`.
+- #26 shadow `e2d44ff12` (memory-nudge:ruling IDL rows + ~/.claude/state/ruling-shadow.jsonl; no model text).
+- #10 `bd56935ab` (hooks/lib/memory_neighbours.py, backup-before-write branch, OVERWRITE GUARD past tense,
+  mem-neighbours-outcome.py nightly step 7b) · nudge reword `00ca6bdf3`.
+- #4 `910f86140` (bin/cc-memory-search) · `045c8f334` (registry row) · `974122f01` (CLAUDE.global.md,
+  CLAUDE.global.slim.md, compact-memory step 7) · `c9b085699` · combined-tree fixes `e771f4b88` (alarm
+  selftest) and `<NIGHTLYFIX>` (nightly stubs).
+- #35 `<BENCHSHAS>`: **no gain** (0 wins, 0 losses, 16 ties; stock solved 15/16, so the tasks had no headroom).
+  #6 delivered its pointer in 8/8 symptom runs and none opened it; #10 never fired. Research §5.17.
+  The pre-registered no-gain branch applies: no push consumers on faith, Wave E #23 and #26 stop, and a
+  delivery-research wave needs tasks the stock arm fails.
+- Live layer converged at `ba8e5c24a`; live canaries green (lesson-recall CANARY-VERDICT ok; cc-memory-search
+  CANARY-VERDICT ok stores=16 miss=0). X6 live probes passed for #6 (both arms), #10 and the nudge line.
+
+**Learnings (for Waves C-E):**
+- Idle teammates are reaped. The TeammateIdle auto-shutdown ends a teammate and removes its worktree once it
+  idles with a clean tree, even while it waits on the lead: #35's first teammate died waiting for a one-line
+  decision. Brief teammates to `touch <worktree>/.teammate-busy` before any wait and never design a lead
+  checkpoint into a brief. Branches survived every reap; recreate the worktree from the branch.
+- All the Wave B branches appended to the same three files (idl-abstain-alarm.sh, idl-expected-fires.tsv,
+  nightly-regression.sh). Every land after the first hit a rebase conflict. All were unions, but one union left
+  a function unclosed and two teammates both numbered their nightly step 7. Next wave: one teammate owns the
+  registry and nightly edits and the others hand it their rows.
+- Branches green alone, red together, twice: (1) #6's replay and #10's new-file count read live data, so the
+  alarm --selftest went 56/2 on trunk (`e771f4b88`); (2) neither new nightly step was stubbed in
+  deploy-live.bats' fixture nightly, so 6 of its cases went red on trunk (`<NIGHTLYFIX>`). Each item's own
+  suites were green. Run the selftests and deploy-live.bats on the combined tree before the last land.
+- `bats` here is the cc-bats admission shim. A refusal prints no `1..N` and zero `not ok`, so a failure filter
+  reads it as a pass (it did once this wave). Only a plan line is a result.
+- 2.1.278 refuses claude-opus-5-5 ("version 2.1.280 or newer is required"); #35 ran on 2.1.280 and X6 was
+  re-run there. The zsh `claude` function was broken in tool calls; probes call the binary by path.
+- #6 permanently holds out 3 of its 8 symptom slugs (sha1 % 5), including the live nohup recurrence. The
+  verdict needs ≥15 control events (§3.6 acceptance 6), not a 2-week read.
+- #6 first counted 49 hits/day on successful output: reads of lesson and memory files print the literals. The
+  hook and the replay now skip those commands; 11/day after.
+- The land gate's wall-clock lint reads an invalid test date (`2026-13-45`) as a future time bomb; use a
+  non-date string for "rejects garbage" cases.
+- During the trunk re-run something outside this session rebased the lead worktree's branch onto origin/main
+  (reflog `rebase (start)` 24 min before `finish`, spanning the ship-land.bats run in that worktree). Nothing was
+  lost; it reads like a suite reaching its caller's repo and is not yet attributed.
+- Deferred to Wave E #4b: the private retriever-arm run of recall_eval.py (it needs the per-project store map
+  the #5 teammate built ad hoc). #4b's entry condition (#4 and #5 landed) now holds.
+- Seen read-only, not this repo's: the reso shared checkout sat at core.bare=true during this wave.
 
 #4 (§3.4, targets both `CLAUDE.global.md:103` and `CLAUDE.global.slim.md:47` plus live copies) ·
 #5 (§3.5, seeded from the 19 time-valid field queries; the private gold goes in
@@ -173,7 +226,7 @@ If it is ever missing, re-derive it per `docs/research/truememory-2026-09-27/gap
 - **Done when:** the results table (arm × lesson-used × correct × tokens) and its verdict are
   appended to `docs/research/truememory-2026-09-27.md` §5 and landed.
 
-## Wave C — the rest of build-now (S · `tma-wave-c`) — BLOCKED on Wave B
+## Wave C — the rest of build-now (S · `tma-wave-c`) — ready (Wave B DONE 2026-09-28)
 
 #9 (§3.9) · #12 (§3.12, both CLAUDE variants) · #13 (§3.13, link lint only; no forget cascade) ·
 #14 (§3.14, loud fallback; consumer-level test).
@@ -269,3 +322,4 @@ These extend the research doc's X1-X5 (§2) with what the session after the stud
 - 2026-09-27 — Scope grown to maximal extraction: Waves D (build-later) and E (experiments with verdict rules), X6-X8 learned in the post-study session (live delivery probe, prose is not delivery, nothing only in /tmp), and the built-in-vs-ours stack inventory. Upstream TrueMemory fix kit: `docs/research/truememory-2026-09-27/UPSTREAM_FIX_KIT.md`.
 - 2026-09-27 — Completeness review closed four plan gaps: numeric pre-registered verdicts for #23/#24/#26, #35's no-gain branch (pre-authorises a delivery-research wave), new experiment #36 for rules in context but not followed (4 of 14 real misses), and the native-fork hook question as a tracked open question. Our own hooks were checked for TrueMemory's top-level additionalContext bug: 38 files reference it, none emit it outside hookSpecificOutput.
 - 2026-09-28 — Wave A DONE: #1, #2 (P0, P0b, P1 + claude-session-search port), #3, #8, #11, migration 0043 (staged) and the rejection record landed; learnings under § Wave A. Wave B next.
+- 2026-09-28 — Wave B DONE: #4, #5, #6+#7, #10, #26 (shadow) and #35 landed; live layer converged. #35 read no gain (the tasks had no headroom), so the pre-registered no-gain branch applies: Wave E #23 and #26 stop and the next delivery measurement needs tasks the stock arm fails. Learnings under § Wave B. Wave C next.
