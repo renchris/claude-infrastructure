@@ -148,6 +148,7 @@ used as a look (≤ 0.02, and only to dither).
 | `join.sh`, `sheet.sh` | resume a crashed render; review sheets | none (join does not assert the count) |
 | `finish.sh` | poster as frame 0, BT.709 encode | `FPS`; drop the audio input for a silent film; CRF by grain; x264 level for 4K/60 |
 | `verify.py` | delivery gate | see step 12 |
+| `picture_gate.py`, `review.py`, `render.mjs geom` | the design gates of `studio-method.md` § 4, measured from the page's own geometry and the decoded film; the three-zoom review with its manifest | mark `data-role`/`data-texture`/`data-glyph` on the page; pass `--lockup <s>` |
 | `mix.py`, `audio/envelopes.py`, `audio/spectrum.py` | product-audio mix; audio-reactive data | mix is voice-specific (24 kHz, 2:1); spectrum works on any WAV, e.g. the score |
 | `sound/soundtrack2.py`, `tone2.py`, `BRIEF.md` | synthesized score, EQ, brief | key/chords hard-coded (D minor); SFX types; reference glob points at `/tmp` |
 | `example/` | v3's `scene.js` (page contract, closed-form helpers, the transition kill rule), `orb.js` (deterministic WebGL: clear, scissor to bbox, uniforms only, `gl.finish()`), `style.css`, `index.html`, the v3 plan | pattern only; the choreography is product-specific |

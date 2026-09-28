@@ -113,11 +113,28 @@ geometry, measure there; otherwise measure the decoded MP4.
 | Minimum type | text meant to be read is under 22 px at 1080p, or a headline is under 84 px (the bake-off's values; the red team's cap-height estimate was ~24 px). Smaller text is texture and must not carry words | unreadable captions and axis labels |
 | Text in transit | a text layer is drawn while its container's transform is changing, or text sits on a skewed or 3D-transformed plane | smeared, skewed cards mid-transform |
 | Subject coverage | for more than 0.3 s the subject covers under ~15 % of the frame, or ink is under 2 % | subjectless frames, hairlines on empty paper |
-| Static share | more than ~40 % of mid-film frames are static (mean abs diff < 0.5/255), or any hold outside the lockup is over ~1.2 s with no moving element | slide grammar |
+| Dead hold | any stretch outside the lockup over ~1.2 s in which no pixel changes (mean abs diff < 0.001/255 at 160×90, measured on the lossless render). The reels' static share (MAD < 0.5/255, best reels 25–28 %) is printed for the record but does not gate a launch film: see the calibration below | slide grammar |
 | Coverage | the stills reviewed do not cover 100 % of the duration (`tiles × interval ≥ duration`) | reviewing only the first 15 s |
 | Transition strips | a state change has no strip of every frame from 0.3 s before to 0.5 s after | pops, smears and overlaps between sampled frames |
 
 The thresholds are starting values drawn from the measured films; calibrate them per film and record the values used.
+
+**Two implementations.** `kit/picture_gate.py` is generic (with `node kit/render.mjs geom`, which records what the page itself
+lays out every frame: each visible text run's box, on-screen glyph size, opacity, role and plane, plus a screenshot with
+every glyph made transparent so a stroke inside a text box shows as pixels; and `kit/review.py`, which writes the
+sheets, the strips and the manifest the coverage gates read). The collector needs only the render contract, so it runs
+on any DOM film page, and it adds the pixel gates (dead holds, subject coverage). `design-gate.md` and
+`kit/design_gate.py` are the variant for a page that reports its own layout (`__layout`), e.g. one drawn on canvas. Pages mark `data-role="headline"`, `data-texture` (text deliberately below reading size) and
+`data-glyph` (colour emoji, which ignore `color`). On 2026-09-28 it failed the rejected claude-infrastructure v2 on 7 of
+8 gates (text crossed by lines in 183 of 510 checked frames, captions at 15 px, 375 frames of moving text, dead holds of
+6.5 s, subjectless runs of 6.6 s) and passed the v3 film built against it.
+
+**Calibration of static share (2026-09-28).** v2 measured 82.6 % static, and the calm v3 that fixed it measured 92 %,
+so the reel metric cannot separate a slide deck from a calm film. The same day the operator rejected a film built to
+the reels' motion as "just fast moving and not actually good design or informational", and the Opus 5.5 launch film
+holds still for about half its frames. What made v2 read as slides was the dead hold, 4–6.5 s in which nothing at all
+changes (its holds measure exactly zero difference), so the dead hold is what gates. A calm film stays alive with
+motion that carries information: a caret blinking on the beat, the relay object pulsing while held, rows arriving.
 Passing the gates is necessary and not sufficient. The last check is still a human read: after one viewing at phone
 size, can someone say what the product does?
 
