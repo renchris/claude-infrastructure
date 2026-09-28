@@ -1272,6 +1272,60 @@ The launcher runs 2.1.280. Current state was checked read-only.
 | `rm` of a memory file | not auto-allowed (`rm-safe-allowlist.sh:8-12`); goes to the classifier or a prompt |
 | Account roots on the slim CLAUDE variant | 4 of 5; `~/.claude` root held 20 of 286 transcripts in the last day |
 
+### 5.15 X6 live probe of the tool-event channels (Wave B, 2026-09-28; `hook-probe/RESULTS-tool-events-2026-09-28.md`)
+Claude Code 2.1.278, `claude -p --setting-sources ''`, Haiku 4.5.
+
+| Channel | Result |
+|---|---|
+| PostToolUse(Bash), one object with `updatedToolOutput` + `additionalContext` (#6 combined case) | both delivered |
+| PreToolUse(Write), one object with `updatedInput` + `additionalContext` (#10 through `_bbw_out`) | delivered |
+| PostToolUseFailure(Bash), `hookEventName` echoed from the payload (#6 log-bash arm) | delivered; `.error` is `Exit code N\n` + stdout + stderr |
+| PostToolUse inside a subagent | delivered, as a `hook_additional_context` attachment in `<sid>/subagents/agent-<id>.jsonl` only |
+
+This retires §3.6 gap-4's "PostToolUseFailure `additionalContext` has 0 live uses, an untested channel". A
+delivery replay must read subagent transcripts too, or it undercounts delivery.
+
+### 5.16 #35 end-to-end delivery benchmark — PRE-REGISTRATION (written 2026-09-28, before any run)
+**Question.** Given a real task where a stored lesson decides the outcome, does the agent use that lesson and
+get the task right, and does Wave B's push (#6 tool-output pointers, #10 write-time neighbours) change that?
+
+**Arms.** All arms: `claude -p` on account `next`, Opus 5.5 effort high, `--setting-sources ''` (no operator
+settings or hooks), empty MCP, the f3 sandbox-guard PreToolUse hook, a fixture clone of this repo, and a frozen
+COPY of the infra memory store loaded through `autoMemoryDirectory` (regenerated from the live store into
+`~/.claude/autonomy/memory-eval/`, never committed).
+1. **Stock Claude Code**: no hooks of ours, no rules files, the operator's user `CLAUDE.md` excluded; only the
+   built-in memory instruction and the frozen store.
+2. **Our stack before Wave B**: our memory hooks, rules files and instruction text exported from `abaf1e990`.
+3. **Our stack with Wave B**: the same set exported from trunk after #4, #6 and #10 landed.
+4. **TrueMemory** (optional): installed only in a sandboxed HOME with its hook output wrapped in
+   `hookSpecificOutput`; dropped, and said so, if it will not install cleanly.
+
+**Tasks.** 12: 8 lesson tasks (each has one gold lesson whose absence changes the outcome; ≥4 make the agent
+run a command whose output carries a foreign-emitter symptom from `hooks/lib/lesson-symptoms.tsv`, ≥2 are
+write tasks that would create a near-duplicate memory topic) and 4 control tasks where no stored lesson
+applies. 2 reps each.
+
+**Measures per run.** lesson-used (the run opened the gold file, or its answer or action applies the gold
+rule by the task's mechanical rubric, or on a write task it edited the existing twin instead of leaving a new
+duplicate) · correct (task rubric, mechanical) · wall time · tokens (input + output + cache creation, from the
+run's usage record).
+
+**Primary test (decides the verdict).** On the 8 lesson tasks × 2 reps = 16 cells paired by (task, rep),
+arm 3 vs arm 2 on lesson-used, one-sided sign test, ties dropped. **Gain** if p < 0.1; **no gain** if p ≥ 0.1.
+With 16 untied pairs that needs ≥ 12 wins (P(X≥12)=0.038; ≥11 gives 0.105). Many ties are expected, so a
+null reads "no detectable gain at this n", never "push does nothing".
+
+**Secondary (reported, never overriding the primary).** correct, arm 3 vs arm 2 (same test); arm 2 vs arm 1
+on lesson-used (does our pre-Wave-B stack beat stock); on the 4 control tasks, arm 3's false-pointer rate and
+correctness, which must not trail arm 2 by more than 1 of 8.
+
+**Branches.** Gain → #6 and #10 stay, Wave E push experiments proceed. No gain → per plan § Wave B: no new
+push consumers on faith, Wave E #23 and #26 stop, #6/#10 stay only if their own logs show delivered-and-used
+events, and a delivery-research wave opens on #36's fixtures.
+
+**Budget.** ~96 runs ≈ 2-4 weekly-quota points on `next` (operator ruling 2026-09-27: no ask needed). Stop
+and report if measured spend passes 5 points.
+
 ---
 
 ## 6. Trust assessment of TrueMemory's claims
