@@ -168,7 +168,7 @@ scan() {  # scan <file> → 0 clean, 1 findings, 2 non-verdict
   local store="" store_ok=0 lk_n=0 lk_rel=0 lk_store=0 broken=0 lk_nv=0 need_store=0 dir lno tgt
   dir=$(dirname "$f")
   store=$(store_dir "$dir") && [ -d "$store" ] && [ -r "$store" ] && [ -x "$store" ] && store_ok=1
-  while IFS=$'\t' read -r lno tgt; do
+  while read -r lno tgt; do  # lno is awk's NR (never empty); tgt is last and cut at its first space below
     [ -n "$lno" ] || continue
     tgt=${tgt%% *}; tgt=${tgt#<}; tgt=${tgt%>}
     case "$tgt" in ''|.|'#'*|http://*|https://*|mailto:*) continue ;; esac
@@ -189,7 +189,7 @@ scan() {  # scan <file> → 0 clean, 1 findings, 2 non-verdict
       adv=$((adv+1))
       printf 'advisory: %s:%d: link-unresolved (pre-existing) — %s resolves neither beside this file nor in the store.\n' "$f" "$lno" "$tgt"
     fi
-  done < <(awk '{ s = $0; while (match(s, /\]\([^)]*\)/)) { print NR "\t" substr(s, RSTART+2, RLENGTH-3); s = substr(s, RSTART+RLENGTH) } }' "$f")
+  done < <(awk '{ s = $0; while (match(s, /\]\([^)]*\)/)) { print NR " " substr(s, RSTART+2, RLENGTH-3); s = substr(s, RSTART+RLENGTH) } }' "$f")
   printf 'rules-hook-budget-lint: links — checked=%d resolved-relative=%d resolved-in-store=%d broken=%d\n' \
     "$lk_n" "$lk_rel" "$lk_store" "$broken" >&2
   [ "$lk_nv" -gt 0 ] && printf 'rules-hook-budget-lint: %d link(s) resolve nowhere beside %s and the memory store (%s) is unreadable — non-verdict, not findings.\n' \
