@@ -235,6 +235,12 @@ origin/main` matches zero paths under any `memory/` directory (positive control:
 `append-only-store-safety-rules` records 1,461 lines destroyed once by exactly this class of
 automation. Measurement is safe; automated mutation of an unbacked store is not. **Every mechanism
 in this plan is read-only against the store.**
+*(Scope note, 2026-09-27, TrueMemory study gap 1.)* That last sentence is a rule about what **we**
+build, not a guarantee about the store: Claude Code's vendor background passes (`extractMemories`,
+`autoDream`) can Edit, Write and `rm -f` any `.md` in the store once a server flag turns them on.
+See §8 R18, the `NATIVE` sentinel in `scripts/memory-fleet-sweep.sh --reach`, and
+`scripts/memory-store-snapshot.sh` (local history outside the store, the undo for those writes).
+The snapshot widens what is reversible; it does **not** by itself relax R2.
 
 **R3 — Autonomously draft skills to close F7.** Rejected: both `commands/harvest-skill.md` and
 `hooks/harvest-skill-end.sh` state in their own headers that the autonomous fork is deliberately
@@ -263,6 +269,10 @@ row does not re-inherit the stronger claim.
 already gone, so an advisory there reaches nothing that can act on it. `UserPromptSubmit` and
 `SessionStart` are the two events whose `additionalContext` reaches a live model; only `SessionStart`
 has 100% reach (C19).
+*(Correction, 2026-09-27.)* "The two events whose `additionalContext` reaches a live model" is too
+narrow: **PostToolUse** `hookSpecificOutput.additionalContext` reaches it too, delivered right after
+the tool result (`hooks/memory-index-drain.sh` emits exactly that at its tail; measured 94/94 in
+`docs/research/truememory-2026-09-27.md` §5.14). The rejection of `SessionEnd` itself stands.
 
 ---
 
@@ -432,3 +442,73 @@ nudge's filing form now exists to stop. **No new item was filed for it here.**
 - **R-5 (new, whoever next touches the loader)** — C33: the cap moved between 2.1.219 and 2.1.220.
   Re-derive with the C30/C31 method (compare the last delivered index line against the file) before
   trusting `24985`; it is a floor, not a measurement.
+
+## 8. TrueMemory study (2026-09-27): rejected alternatives
+
+Source and full evidence: `docs/research/truememory-2026-09-27.md` §4 (the table these rows
+compress) and its per-axis notes in `docs/research/truememory-2026-09-27/`. Numbered together
+because the sibling candidates each claimed "R11". §4 above is attempt 1's closed list and §7.5 is
+attempt 2's; this is the third. Each row names its reopen condition so nobody re-derives it.
+
+**R11 — Numeric encoding gate (novelty + salience + prediction error), speech-act salience, surprise
+boost.** On our corpus it is a length filter: r(log length, score) = 0.876; 0/19 facts of ≤50 chars
+pass against 139/140 over 200 chars, and short durable rules pass 2/185. The prediction-error latches
+fail open forever, and the gate is disabled in every one of TrueMemory's own benchmarks. It would
+also put an embedder on our write path. *Reopen only if* a scorer beats length-matched controls on
+≥20 negatives per anti-capture class.
+
+**R12 — Automatic store paths** (regex extractor, PreCompact raw snapshot, per-exchange store,
+MEMORY.md migrator). Over 40 transcripts the regex path produced 1,089 "facts", 976 under 25 chars;
+16 of 19 eager hits were Stop-hook feedback; the per-exchange store shipped writing 0 rows. R2 still
+bars content-creating automated writes; the drain's non-lossy relocation is the only carve-out.
+
+**R13 — Regex contradiction detection, in-place UPDATE dedup, ever-growing trait profiles.**
+"Actually…" superseded nothing; dedup overwrote one person's row with another's fact and Production
+with Staging. This independently confirms the rotor's refusal to read prose markers (the header
+comment in `bin/cc-memory-rotate` beside its supersession logic).
+
+**R14 — An ML retrieval runtime and heuristic multipliers** (model daemon, Qwen3, cross-encoder,
+HDBSCAN, temporal ×1.3, entity boosts). A cold recall hook costs 678-709 MB and 8-17 s; clustering
+silently no-op'd on every install; the temporal filter was dead through a key mismatch. The
+cross-encoder's R@1 gain (0.84 → 0.94) costs ~1.3 s and 1.85 GB while the calling model already
+reads the top-k. **Rule:** nothing on a hook path imports torch or talks to a daemon.
+
+**R15 — Installing, running or copying TrueMemory.** Its installer rewrites settings.json hooks and
+adds a CLAUDE.md block calling MEMORY.md "a lossy, potentially stale cache"; its MCP instructions
+steer the model to recall credentials; telemetry is on by default; the licence is AGPL-3.0-only with
+a relicensing CLA while this repo is headed for public projection. **Convention:** ideas only — copy
+no code, regex, prompt, template text, weights or fixtures; a file built from one of its ideas
+carries the header "Idea: arXiv 2605.04897 / TrueMemory #N; independent implementation, no
+TrueMemory code". *Reopen only if* it is relicensed permissively, a fresh install passes a smoke
+test, and its hooks emit `hookSpecificOutput`.
+
+**R16 — Recall appended to dispatched and subagent briefs** (research #33). 94.5% of the "headless"
+population is `/private/tmp` probe traffic; handoff-fire panes already load MEMORY.md; 87% of
+subagents are Workflow agents that `PreToolUse(Agent)` never sees; top-1 relevance on 25 real briefs
+was ~12%. At most, widen `agents/workflow-lean.md` if ever evidenced.
+
+**R17 — Further demotion of resident lessons to recalled pointers** (research #34). Already done
+(`cb5f7109c` + migration 0036: 19 resident bullets, −20.9% cost per run, p = 0.008); the proposed
+parity gate needs ~105-2,150 runs per arm. The remainder is truthfulness (research #1) and symptom
+recall (#6).
+
+**R18 — Hand consolidation or capture to Claude Code's native `autoDream` / `extractMemories`.**
+Both fork with Edit/Write on any `.md` in our stores and `rm -f` of `.md`; `archive/` is not
+protected. autoDream's Phase 4 shortens lines, deletes "contradicted facts" and drops pointers — the
+lossy half our rotor and `/compact-memory` keep human-gated — and the extraction prompt forbids
+verification ("no grepping… no git commands"). Extraction has no opt-out short of
+`autoMemoryEnabled:false`, which also stops MEMORY.md loading. **Rule:** pin `autoDreamEnabled:false`
+(`migrations/0043-autodream-pin.sh`, c10, operator-run), watch both flags with the `NATIVE` sentinel
+(`scripts/memory-fleet-sweep.sh --reach`), and let `scripts/memory-store-snapshot.sh` be the undo.
+
+**Sub-parts dropped from adopted items**, so nobody resurrects them: a PreToolUse advisory arm for
+symptom recall; a standalone per-Bash hook fork; `symptoms:` frontmatter before 15 rows; routing
+demoted lines to COLD; a dynamic run-every-hook contract test (a static lint suffices); a persistent
+FTS cache or embeddings in v1; a gzip-novelty threshold; a Python sanitizer helper; an H1/H2 body
+lint; `supersedes:`/`valid_until:` as required fields; a Read redirect hook; `cc-memory-forget
+--apply`; rotor link rewriting; an env_int fallback; a post-hoc Bash backup; PID-attributed heartbeat
+status; SessionEnd or PreCompact enqueue hooks; a claim-queue library ahead of any consumer; per-change
+f3 arms; rewording `.claude/rules/…` line 33 as a search consumer (0/218 uptake); a 2-week efficacy
+verdict from #6's holdout (no power); a DELETE log or SQLite trigger to catch the `sessions_fts`
+deleter (a DROP fires neither — the root-page fingerprint in `hooks/session-index-sweep.sh` is the
+detector); `autoMemoryEnabled:false` or `DISABLE_GROWTHBOOK=1` to block native extraction.
