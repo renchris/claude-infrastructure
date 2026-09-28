@@ -15,6 +15,9 @@
 #      migration registers), run from an exported copy of that tree; the fixture's .claude/CLAUDE.md
 #      and rules plus the tree's CLAUDE.global.slim.md (what account next loads) through --add-dir;
 #      the tree's bin/ on PATH.
+# #36 tasks (ids M* and K*; §5.23): the row comes from tasks-36.tsv and its plant from setup-36.sh,
+# and EVERY arm, arm 1 included, also gets rules-36.md as the CLAUDE.md of an --add-dir'd directory,
+# so the rule each fixture tests is in context in every arm ("in context, not obeyed").
 # `--setting-sources ''` loads NO user or project instructions in any arm (probed 2026-09-28), so the
 # arm-2/3 text arrives only through --add-dir with CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1. The
 # `project` source was rejected: its ancestor walk from a fixture under ~/.claude pulls in
@@ -41,7 +44,9 @@ case "$ARM" in
   *) echo "bad arm: $ARM" >&2; exit 2 ;;
 esac
 SHA=$(git -C "$REPO" rev-parse --verify -q "$SHA^{commit}") || { echo "unknown sha" >&2; exit 2; }
-ROW=$(awk -F'\t' -v t="$TASK" 'NR>1 && $1==t' "$H/tasks.tsv")
+TSV="$H/tasks.tsv"; SETUP_SH="$H/setup.sh"; R36=0
+case "$TASK" in M*|K*) TSV="$H/tasks-36.tsv"; SETUP_SH="$H/setup-36.sh"; R36=1 ;; esac
+ROW=$(awk -F'\t' -v t="$TASK" 'NR>1 && $1==t' "$TSV")
 [ -n "$ROW" ] || { echo "no task: $TASK" >&2; exit 2; }
 SETUP=$(printf '%s' "$ROW" | cut -f4); PROMPT=$(printf '%s' "$ROW" | cut -f5)
 case "$RUNROOT" in /tmp/*|/private/tmp/*|'') echo "refusing RUNROOT $RUNROOT (X8)" >&2; exit 2 ;; esac
@@ -84,7 +89,7 @@ mkdir -p "$(dirname "$MEMREAL")" && cp -R "$SRC" "$MEMREAL" && ln -s "$MEMREAL" 
 FXSLUG=$(python3 -c 'import os,re,sys; print(re.sub(r"[^A-Za-z0-9]", "-", os.path.realpath(sys.argv[1])))' "$FX")
 mkdir -p "$RUN/home/.claude/projects/$FXSLUG" && ln -s "$MEMREAL" "$RUN/home/.claude/projects/$FXSLUG/memory"
 
-bash "$H/setup.sh" "$SETUP" "$FX" "$RUN" || { echo "setup failed: $SETUP" >&2; exit 3; }
+bash "$SETUP_SH" "$SETUP" "$FX" "$RUN" || { echo "setup failed: $SETUP" >&2; exit 3; }
 if [ "$ARM" = 1 ]; then
   git -C "$FX" rm -q -r --ignore-unmatch .claude/rules 'CLAUDE.global*.md' \
     && git -C "$FX" commit -q -m "strip rules" && git -C "$FX" push -q origin HEAD:main
@@ -95,6 +100,10 @@ ADD=(); ENVX=(); PATHX=""
 if [ "$ARM" != 1 ]; then
   mkdir -p "$RUN/instr" && cp "$TREE/CLAUDE.global.slim.md" "$RUN/instr/CLAUDE.md"
   ADD=(--add-dir "$FX" "$RUN/instr"); ENVX=(CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1); PATHX="$TREE/bin:"
+fi
+if [ "$R36" = 1 ]; then
+  mkdir -p "$RUN/rules36" && cp "$H/rules-36.md" "$RUN/rules36/CLAUDE.md"
+  ADD+=(--add-dir "$RUN/rules36"); ENVX=(CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1)
 fi
 SETTINGS=$(python3 "$H/settings.py" "$ARM" "$RUN" "$TREE" "$GUARD" "$RUN/out/hooks.txt") || exit 3
 printf '%s\n' "$SETTINGS" > "$RUN/out/settings.json"

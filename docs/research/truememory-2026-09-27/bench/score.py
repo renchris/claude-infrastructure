@@ -13,6 +13,9 @@ Per run (docs/research/truememory-2026-09-27.md §5.16):
   tokens       input + output + cache_creation from result.json usage
   false_pointer (controls) a lesson pointer reached the model in a hook_additional_context attachment,
                main transcript or subagents/
+  rule_pushed  (#36) the action-rule-push hook fired: a hook_additional_context carrying PUSH_MARK
+With a #36 task table (kind `miss`, tasks-36.tsv; §5.23) the report is per task x arm pass counts,
+fixture/control qualification on arm 1, and the pre-registered verdict for arm M against B = arm 1.
 Run dirs are <root>/<task>-a<arm>-r<rep>-<epoch>/; a re-run leaves the old dir and the newest wins.
 Writes <root>/scored.jsonl (private) and prints the aggregate table plus the primary sign test
 (arm 3 vs arm 2, lesson_used, paired by task x rep over the lesson and write tasks) and secondaries.
@@ -32,13 +35,14 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 HERE = os.path.dirname(os.path.abspath(__file__))
 POINTER = re.compile(r"(?:docs/lessons|/memory)/(?!MEMORY\.md)[A-Za-z0-9._-]+\.md")
 ACK = re.compile(r"(?i)\b(already|existing|exists)\b")
+PUSH_MARK = "[action-rule-push]"
 
 
 def sign_p(wins: int, losses: int) -> float:
     n = wins + losses
     if n == 0:
         return 1.0
-    return sum(comb(n, k) for k in range(wins, n + 1)) / 2**n
+    return float(sum(comb(n, k) for k in range(wins, n + 1)) / 2**n)
 
 
 def load_tasks(path: str) -> Dict[str, Dict[str, str]]:
@@ -158,7 +162,7 @@ def fs_check(name: str, fx: str, answer: str, ws: Dict[str, Any]) -> bool:
     if name.startswith("linecount:"):
         rc, out = run_cmd(["git", "show", "origin/main:" + name.split(":", 1)[1]], fx)
         m = re.search(r"LINES:\s*(\d+)", answer)
-        return rc == 0 and bool(m) and int(m.group(1)) == out.count("\n")
+        return rc == 0 and m is not None and int(m.group(1)) == out.count("\n")
     if name == "slug":
         code = "import runpy; f = runpy.run_path('ops/slug.py')['slugify']; print(f('a.b/C_9 x'))"
         rc, out = run_cmd([sys.executable, "-c", code], fx)
@@ -166,11 +170,37 @@ def fs_check(name: str, fx: str, answer: str, ws: Dict[str, Any]) -> bool:
     if name == "sum":
         rc, out = run_cmd(["bash", "ops/sum.sh", "2", "3", "4"], fx)
         return rc == 0 and out.strip() == "9"
+    if name.startswith(("drafts-min:", "draft-last:")):
+        drafts = desk_rows(
+            os.path.join(os.path.dirname(fx), "desk-state", "drafts.tsv")
+        )
+        if name.startswith("drafts-min:"):
+            return len(drafts) >= int(name.split(":", 1)[1])
+        to_re, text_re = name.split(":", 2)[1:]
+        hits = [d for d in drafts if re.search(to_re, d[1])]
+        return bool(hits) and bool(re.search(text_re, hits[-1][2]))
+    if name.startswith(("ledger:", "ledger-not:")):
+        kind, item, state = name.split(":", 2)
+        rows = desk_rows(os.path.join(fx, "desk", "ledger.tsv"))
+        got = next((r[2] for r in rows if r[0] == item), None)
+        return got is not None and (got == state) == (kind == "ledger")
+    if name.startswith("exists:"):
+        return os.path.isfile(os.path.join(fx, name.split(":", 1)[1]))
     if name == "write-twin":
         return not ws.get("near_dups") and bool(
             ws.get("twin_edited") or ACK.search(answer)
         )
     raise ValueError(f"unknown fs check {name}")
+
+
+def desk_rows(path: str, width: int = 3) -> List[List[str]]:
+    """Rows of a #36 TSV (the drafts in <run>/desk-state/, or the fixture's desk/ledger.tsv)."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            rows = [ln.rstrip("\n").split("\t") for ln in fh if ln.strip()]
+    except OSError:
+        return []
+    return [r + [""] * (width - len(r)) for r in rows]
 
 
 def score_run(rd: str, task: Dict[str, str], cfg: str) -> Dict[str, Any]:
@@ -203,7 +233,7 @@ def score_run(rd: str, task: Dict[str, str], cfg: str) -> Dict[str, Any]:
     dup = next((t[4:] for t in terms if t.startswith("dup:")), "")
     ws = write_state(rd, gbase, dup) if task["kind"] == "write" else {}
 
-    gold_read = pointer = gold_pointer = 0
+    gold_read = pointer = gold_pointer = pushed = 0
     tr = transcripts(cfg, fx, res.get("session_id"))
     for rec in events(tr):
         for name, inp in tool_uses(rec):
@@ -221,6 +251,8 @@ def score_run(rd: str, task: Dict[str, str], cfg: str) -> Dict[str, Any]:
                 pointer = 1
             if gbase and gbase in ctx:
                 gold_pointer = 1
+            if PUSH_MARK in ctx:
+                pushed = 1
 
     ok = []
     for t in terms:
@@ -255,6 +287,7 @@ def score_run(rd: str, task: Dict[str, str], cfg: str) -> Dict[str, Any]:
         "false_pointer": pointer if task["kind"] == "control" else None,
         "pointer_delivered": pointer,
         "gold_pointer_delivered": gold_pointer,
+        "rule_pushed": pushed,
         "wall_s": wall,
         "tokens": tokens,
         **({k: ws[k] for k in ("twin_edited", "near_dups")} if ws else {}),
@@ -316,6 +349,65 @@ def report(rows: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def report36(rows: List[Dict[str, Any]], qualifying: Optional[List[str]]) -> str:
+    """§5.23: per task x arm passes; qualification on arm 1; verdict for arm M vs B = arm 1."""
+    cell: Dict[Tuple[str, str], List[int]] = {}
+    kinds: Dict[str, str] = {}
+    for r in rows:
+        cell.setdefault((r["task"], r["arm"]), []).append(int(r["correct"]))
+        kinds[r["task"]] = r["kind"]
+    arms = sorted({r["arm"] for r in rows})
+    lines = ["| task | kind | " + " | ".join(f"arm {a}" for a in arms) + " |"]
+    lines.append("|---|---|" + "---|" * len(arms))
+    for t in sorted(kinds):
+        cs = [cell.get((t, a), []) for a in arms]
+        lines.append(
+            f"| {t} | {kinds[t]} | "
+            + " | ".join(f"{sum(c)}/{len(c)}" if c else "-" for c in cs)
+            + " |"
+        )
+    lines.append("")
+    base = {t: cell.get((t, "1"), []) for t in kinds}
+    for t in sorted(kinds):
+        c = base[t]
+        if not c:
+            continue
+        if kinds[t] == "miss":
+            ok = len(c) - sum(c) >= 2
+            lines.append(
+                f"QUALIFY {t} arm1 fails {len(c) - sum(c)}/{len(c)} -> {'QUALIFIES' if ok else 'PASSES (replace)'}"
+            )
+        else:
+            ok = sum(c) >= 2
+            lines.append(
+                f"QUALIFY {t} arm1 passes {sum(c)}/{len(c)} -> {'VALID' if ok else 'FAILS (replace)'}"
+            )
+    if qualifying is None:
+        qualifying = [
+            t
+            for t in sorted(kinds)
+            if kinds[t] == "miss" and len(base[t]) - sum(base[t]) >= 2
+        ]
+    if not any(r["arm"] == "M" for r in rows):
+        return "\n".join(lines)
+    prevented = [t for t in qualifying if sum(cell.get((t, "M"), [])) >= 2]
+    ctl = [r for r in rows if r["arm"] == "M" and r["kind"] == "control"]
+    fb = [r for r in ctl if r["rule_pushed"] and not r["correct"]]
+    rate = len(fb) / len(ctl) if ctl else 1.0
+    lines.append(f"PREVENTED {len(prevented)}/4 {prevented} of qualifying {qualifying}")
+    lines.append(
+        f"FALSE-BLOCKS {len(fb)}/{len(ctl)} M control runs ({rate:.1%}); pushed on {sum(r['rule_pushed'] for r in ctl)}"
+    )
+    if len(qualifying) < 3:
+        verdict = "DROP (no measurable headroom)"
+    elif len(prevented) >= 3 and ctl and rate <= 0.10:
+        verdict = "ADOPT"
+    else:
+        verdict = "DROP"
+    lines.append(f"VERDICT {verdict}")
+    return "\n".join(lines)
+
+
 def main(argv: List[str]) -> int:
     if len(argv) >= 2 and argv[1] == "sign":
         print(f"{sign_p(int(argv[2]), int(argv[3])):.4f}")
@@ -327,6 +419,9 @@ def main(argv: List[str]) -> int:
     )
     ap.add_argument("--config-dir", default=os.path.expanduser("~/.claude-next"))
     ap.add_argument("--tasks", default=os.path.join(HERE, "tasks.tsv"))
+    ap.add_argument(
+        "--qualifying", help="#36: comma-separated fixture ids fixed by validation"
+    )
     args = ap.parse_args(argv[1:])
     tasks = load_tasks(args.tasks)
     newest: Dict[Tuple[str, str, str], Tuple[int, str, Dict[str, Any]]] = {}
@@ -345,7 +440,11 @@ def main(argv: List[str]) -> int:
     with open(os.path.join(args.root, "scored.jsonl"), "w", encoding="utf-8") as fh:
         for r in rows:
             fh.write(json.dumps(r) + "\n")
-    print(report(rows))
+    if any(t.get("kind") == "miss" for t in tasks.values()):
+        q = [x for x in args.qualifying.split(",") if x] if args.qualifying else None
+        print(report36(rows, q))
+    else:
+        print(report(rows))
     return 0
 
 

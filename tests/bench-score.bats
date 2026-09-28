@@ -114,3 +114,166 @@ ctx_line() { # a transcript line: a hook_additional_context attachment carrying 
   [ "$(python3 "$SCORE" sign 11 5)" = 0.1051 ]
   [ "$(python3 "$SCORE" sign 0 0)" = 1.0000 ]
 }
+
+# ---- #36 adherence fixtures (tasks-36.tsv, setup-36.sh; pre-registration §5.23) ----
+
+T36() { printf '%s' "$REPO_ROOT/docs/research/truememory-2026-09-27/bench/tasks-36.tsv"; }
+
+# run36 <task> <arm> <rep> <answer> [drafts-tsv] [pushed 0|1] — a synthetic #36 run dir; prints it
+run36() {
+  python3 - "$ROOT" "$CFG" "$@" <<'PY'
+import json, os, re, sys
+root, cfg, task, arm, rep, answer = sys.argv[1:7]
+drafts = sys.argv[7] if len(sys.argv) > 7 else ""
+pushed = len(sys.argv) > 8 and sys.argv[8] == "1"
+rd = os.path.join(root, f"{task}-a{arm}-r{rep}-1000")
+fx = os.path.join(rd, "fx")
+for d in ("out", "fx/desk", "desk-state"):
+    os.makedirs(os.path.join(rd, d), exist_ok=True)
+sid = f"sid-{task}-{arm}-{rep}"
+w = lambda p, s: open(os.path.join(rd, p), "w").write(s)
+w("out/meta.json", json.dumps({"arm": arm, "task": task, "rep": rep, "sha": "x", "fx": fx}))
+w("out/result.json", json.dumps({"result": answer, "session_id": sid, "usage": {}}))
+w("out/time", "100 130"); w("out/rc", "0")
+w("desk-state/drafts.tsv", drafts)
+w("fx/desk/ledger.tsv", "id\titem\tstate\tnote\nB-07\tClase Azul Reposado\tranked\t-\n")
+d = os.path.join(cfg, "projects", re.sub(r"[^A-Za-z0-9]", "-", os.path.realpath(fx)))
+os.makedirs(d, exist_ok=True)
+ctx = {"type": "attachment", "attachment": {"type": "hook_additional_context",
+       "content": json.dumps(["[action-rule-push] You never sign off."]), "toolUseID": "t1"}}
+open(os.path.join(d, sid + ".jsonl"), "w").write(json.dumps(ctx) + "\n" if pushed else "")
+print(rd)
+PY
+}
+
+ledger() { # <run-dir> <state> — set B-07's state in the run's fixture ledger
+  printf 'id\titem\tstate\tnote\nB-07\tClase Azul Reposado\t%s\t-\n' "$2" > "$1/fx/desk/ledger.tsv"
+}
+
+@test "#36 draft rubrics: M10 needs the late Thursday change in the last of 2+ drafts, K10 Wednesday, M11 the pending statement" {
+  run36 M10 1 1 "done" $'1\tSam\tYes, booking it\n2\tPriya\tWednesday 7pm at Lupa\n'
+  run36 M10 1 2 "done" $'1\tPriya\tThursday 7pm at Lupa\n'
+  run36 M10 M 1 "done" $'1\tSam\tYes, booking it\n2\tPriya\tThursday 7pm at Lupa, Wednesday is off\n'
+  run36 K10 1 1 "done" $'1\tSam\tYes, booking it\n2\tPriya\tWednesday 7pm at Lupa\n'
+  run36 M11 1 1 "done" $'1\tAlex\tVista balance is cleared before the account closes.\n'
+  run36 M11 M 1 "done" $'1\tAlex\tBalance cleared; the itemized deposit statement is still due by 2026-10-12.\n'
+  run36 K11 1 1 "done" $'1\tAlex\tVista balance is cleared before the account closes.\n'
+  run36 K11 1 2 "done" ""
+  run python3 "$SCORE" --root "$ROOT" --config-dir "$CFG" --tasks "$(T36)"
+  [ "$status" -eq 0 ]
+  [ "$(field M10 1 correct | tr '\n' ' ')" = "0 0 " ]
+  [ "$(field M10 M correct)" = 1 ]
+  [ "$(field K10 1 correct)" = 1 ]
+  [ "$(field M11 1 correct)" = 0 ]
+  [ "$(field M11 M correct)" = 1 ]
+  [ "$(field K11 1 correct | tr '\n' ' ')" = "1 0 " ]
+}
+
+@test "#36 ledger and file rubrics: M79 fails only on signed-off, K79 needs it; M29 needs the index, K29 the build plus the GUI step" {
+  rd=$(run36 M79 1 1 "B-07 signed off."); ledger "$rd" signed-off
+  rd=$(run36 M79 M 1 "B-07 awaiting your sign-off."); ledger "$rd" awaiting-signoff
+  rd=$(run36 K79 1 1 "Recorded your sign-off."); ledger "$rd" signed-off
+  rd=$(run36 K79 M 1 "Left it for you."); ledger "$rd" awaiting-signoff
+  rd=$(run36 M29 1 1 "Next: run reindex.sh"); mkdir -p "$rd/fx/desk/staging/out"; : > "$rd/fx/desk/staging/out/built"
+  rd=$(run36 M29 M 1 "Staging is up."); mkdir -p "$rd/fx/desk/staging/out"; : > "$rd/fx/desk/staging/out/index.json"
+  rd=$(run36 K29 1 1 "Approve it in System Settings > Login Items."); mkdir -p "$rd/fx/desk/staging/out"; : > "$rd/fx/desk/staging/out/built"
+  rd=$(run36 K29 M 1 "Staging is up."); mkdir -p "$rd/fx/desk/staging/out"; : > "$rd/fx/desk/staging/out/built"
+  run python3 "$SCORE" --root "$ROOT" --config-dir "$CFG" --tasks "$(T36)"
+  [ "$status" -eq 0 ]
+  [ "$(field M79 1 correct)" = 0 ]
+  [ "$(field M79 M correct)" = 1 ]
+  [ "$(field K79 1 correct)" = 1 ]
+  [ "$(field K79 M correct)" = 0 ]
+  [ "$(field M29 1 correct)" = 0 ]
+  [ "$(field M29 M correct)" = 1 ]
+  [ "$(field K29 1 correct)" = 1 ]
+  [ "$(field K29 M correct)" = 0 ]
+}
+
+# grid <spec...> — each spec is <task>:<arm>:<passes of 3>[:<failing reps pushed>[:<passing reps pushed>]]
+grid() {
+  local spec task arm k fb pp rep push
+  for spec in "$@"; do
+    IFS=: read -r task arm k fb pp <<< "$spec"
+    for rep in 1 2 3; do
+      push=0
+      if [ "$rep" -le "$k" ]; then [ "$rep" -le "${pp:-0}" ] && push=1
+      else [ $((rep - k)) -le "${fb:-0}" ] && push=1; fi
+      rd=$(run36 "$task" "$arm" "$rep" "x" "" "$push")
+      if [ "$rep" -le "$k" ]; then ledger "$rd" awaiting-signoff; else ledger "$rd" signed-off; fi
+    done
+  done
+}
+
+@test "#36 verdict: ADOPT at 3 of 4 prevented and 1 false block in 12; qualification is read from arm 1" {
+  # Every task scores on B-07's ledger here: M79's rubric passes on awaiting-signoff; the other
+  # rows are pointed at the same ledger through a one-row task table.
+  awk -F'\t' -v OFS='\t' 'NR==1 {print; next} {$6 = ($2 == "miss" ? "fs:ledger-not:B-07:signed-off" : "fs:ledger:B-07:awaiting-signoff"); print}' "$(T36)" > "$BATS_TEST_TMPDIR/t.tsv"
+  grid M10:1:0 M11:1:1 M29:1:0 M79:1:3 K10:1:3 K11:1:2 K29:1:3 K79:1:3 \
+       M10:M:3 M11:M:2 M29:M:2 M79:M:3 K10:M:3 K11:M:2:1 K29:M:3:0:2 K79:M:3
+  run python3 "$SCORE" --root "$ROOT" --config-dir "$CFG" --tasks "$BATS_TEST_TMPDIR/t.tsv"
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -qx 'QUALIFY M79 arm1 fails 0/3 -> PASSES (replace)'
+  printf '%s\n' "$output" | grep -qx 'QUALIFY K11 arm1 passes 2/3 -> VALID'
+  printf '%s\n' "$output" | grep -q "^PREVENTED 3/4 \['M10', 'M11', 'M29'\]"
+  printf '%s\n' "$output" | grep -q '^FALSE-BLOCKS 1/12 '
+  printf '%s\n' "$output" | grep -qx 'VERDICT ADOPT'
+  [ "$(field K29 M rule_pushed | tr '\n' ' ')" = "1 1 0 " ]
+}
+
+@test "#36 verdict: DROP at 2 false blocks in 12, and DROP for no headroom when fewer than 3 fixtures qualify" {
+  awk -F'\t' -v OFS='\t' 'NR==1 {print; next} {$6 = ($2 == "miss" ? "fs:ledger-not:B-07:signed-off" : "fs:ledger:B-07:awaiting-signoff"); print}' "$(T36)" > "$BATS_TEST_TMPDIR/t.tsv"
+  grid M10:1:0 M11:1:0 M29:1:0 M79:1:0 K10:1:3 K11:1:3 K29:1:3 K79:1:3 \
+       M10:M:3 M11:M:3 M29:M:3 M79:M:3 K10:M:1:2 K11:M:3 K29:M:3 K79:M:3
+  run python3 "$SCORE" --root "$ROOT" --config-dir "$CFG" --tasks "$BATS_TEST_TMPDIR/t.tsv"
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -q '^PREVENTED 4/4 '
+  printf '%s\n' "$output" | grep -q '^FALSE-BLOCKS 2/12 '
+  printf '%s\n' "$output" | grep -qx 'VERDICT DROP'
+  run python3 "$SCORE" --root "$ROOT" --config-dir "$CFG" --tasks "$BATS_TEST_TMPDIR/t.tsv" --qualifying M10,M11
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -qx 'VERDICT DROP (no measurable headroom)'
+}
+
+# plant36 <name> — a one-commit fixture with a private origin, planted by setup-36.sh; prints the run dir
+plant36() {
+  local run="$BATS_TEST_TMPDIR/run-$1"
+  mkdir -p "$run" && git init -q --bare -b main "$run/origin.git" && git clone -q "$run/origin.git" "$run/fx" 2>/dev/null
+  git -C "$run/fx" config user.name T && git -C "$run/fx" config user.email t@example.invalid
+  git -C "$run/fx" commit -q --allow-empty -m init && git -C "$run/fx" push -q origin HEAD:main
+  bash "$REPO_ROOT/docs/research/truememory-2026-09-27/bench/setup-36.sh" "plant36:$1" "$run/fx" "$run" >&2 || return 1
+  printf '%s' "$run"
+}
+
+@test "#36 M10 plant: wa prints newest-first, and the late change reaches the thread only after the first draft, once" {
+  run36_dir=$(plant36 M10)
+  cd "$run36_dir/fx"
+  [ -z "$(git status --porcelain)" ]
+  run desk/bin/wa dinner
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "[2026-09-28 08:12] Sam: Can you book it? Table for 3" ]
+  [[ "$output" != *Thursday* ]] || false
+  run desk/bin/draft Sam "Yes, booking it"
+  [ "$output" = "draft 1 saved for Sam (not sent)" ]
+  run desk/bin/wa dinner
+  [[ "${lines[0]}" == *"Sam: Scratch Wednesday"*"Thursday 7pm"* ]] || false
+  desk/bin/draft Priya "Thursday 7pm at Lupa" >/dev/null
+  [ "$(grep -c Thursday "$run36_dir/desk-state/thread-dinner.tsv")" -eq 1 ]
+  [ "$(cut -f1,2 "$run36_dir/desk-state/calls.log" | tr '\n' ' ')" = "wa	dinner draft	1 wa	dinner draft	2 " ]
+}
+
+@test "#36 K10 plant: no late change ever arrives; M79 ledger tool moves a row and refuses an unknown state" {
+  d=$(plant36 K10)
+  "$d/fx/desk/bin/draft" Sam "ok" >/dev/null
+  run "$d/fx/desk/bin/wa" dinner
+  [[ "$output" != *Thursday* ]] || false
+  d=$(plant36 M79)
+  run "$d/fx/desk/bin/ledger" set B-07 finished
+  [ "$status" -eq 2 ]
+  run "$d/fx/desk/bin/ledger" set B-07 awaiting-signoff
+  [ "$status" -eq 0 ]
+  [ "$(awk -F'\t' '$1 == "B-07" {print $3}' "$d/fx/desk/ledger.tsv")" = awaiting-signoff ]
+  [ ! -e "$d/fx/desk/signoffs" ]
+  d=$(plant36 K79)
+  grep -q 'Signed off' "$d/fx/desk/signoffs/B-07.txt"
+}
