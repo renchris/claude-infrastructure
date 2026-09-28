@@ -43,8 +43,15 @@
 # anything the code asserts.
 set -euo pipefail
 
+# `0` is the documented kill switch and exits silently. Anything that is not a non-negative
+# integer (`abc`, `-3`, `12x`) is a typo, not a request to switch the nudge off, so it falls back to
+# the default 12. The old `[ -gt 0 ] || exit 0` read every such typo as the kill switch and the
+# nudge went quiet with nothing to say why (truememory-2026-09-27.md §3.3). `10#` strips leading
+# zeros, which bash arithmetic would otherwise read as octal (`012` = 10).
 INTERVAL="${MEMORY_NUDGE_INTERVAL:-12}"
-[ "$INTERVAL" -gt 0 ] 2>/dev/null || exit 0
+case "$INTERVAL" in ''|*[!0-9]*) INTERVAL=12 ;; esac
+INTERVAL=$(( 10#$INTERVAL ))
+[ "$INTERVAL" -gt 0 ] || exit 0
 
 INPUT=$(cat)
 SID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || echo "")
@@ -499,6 +506,18 @@ if [ "$OVERFLOW" -eq 1 ]; then
   [ "$COUNT" -eq 1 ] || [ $((COUNT % INTERVAL)) -eq 0 ] || exit 0
 else
   [ $((COUNT % INTERVAL)) -eq 0 ] || exit 0
+fi
+# One IDL row per DECISION turn (hook `memory-nudge`); non-fire turns exited above, so this adds no
+# per-prompt cost. scripts/idl-expected-fires.tsv measures these rows against the fires the
+# nudge-*.count files imply, so a nudge that stops firing pages SILENT instead of going quiet.
+_mn_idl="$(dirname "$(_mn_deref "${BASH_SOURCE[0]}")")/lib/idl-log.sh"
+if [ -r "$_mn_idl" ]; then
+  # shellcheck source=lib/idl-log.sh
+  # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+  . "$_mn_idl"
+  idl_init "${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}" memory-nudge SID
+  _mn_why=periodic; [ "$OVERFLOW" -eq 0 ] || _mn_why=overflow
+  log_idl fired "$_mn_why" "$(jq -cn --argjson c "$COUNT" --argjson i "$INTERVAL" '{count:$c,interval:$i}' 2>/dev/null)"
 fi
 
 # PIN THE PATH. The product's own memory instruction says "add a one-line pointer in `MEMORY.md`"

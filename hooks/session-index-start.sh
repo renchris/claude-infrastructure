@@ -7,6 +7,16 @@ set -euo pipefail
 INPUT=$(cat)
 CWD=$(echo "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)
 
+# One IDL row per invocation from an EXIT trap, so an errexit death still leaves one (truememory §3.3 gap 5).
+_sis_lib="$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")/lib/idl-log.sh"
+if [ -r "$_sis_lib" ]; then
+    # shellcheck source=lib/idl-log.sh disable=SC1091  # runtime-resolved; the gate runs shellcheck without -x
+    . "$_sis_lib"; idl_init "${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}" session-index-start _SIS_SID
+    _SIS_SID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)
+    # shellcheck disable=SC2154  # both are assigned inside the trap string itself
+    trap '_sis_rc=$?; _sis_d=failed; [ "$_sis_rc" -ne 0 ] || _sis_d=passed; log_idl "$_sis_d" "exit:$_sis_rc"' EXIT
+fi
+
 # Resolve helpers
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HELPERS="$SCRIPT_DIR/lib/session-index-helpers.sh"

@@ -28,17 +28,41 @@ setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   export SESSION_INDEX_DB="$BATS_TEST_TMPDIR/idx.db"
   STAGE="$HOME/.claude/skills-pending/_candidates.jsonl"
+  # The hook's IDL row goes here, never to the operator's live store; no stub re-read waits.
+  export CC_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
+  export HARVEST_STUB_RETRIES=0
 }
 
 has()   { printf '%s' "$1" | grep -qF -- "$2"; }
 
-# mkrow <sid> <message_count> <commands_run> <files_changed>
+# mkrow <sid> <message_count> <commands_run> <files_changed> [source]
+# source defaults to the SessionEnd writer's value; `session-start` is session-index-start's stub.
 mkrow() {
   sqlite3 "$SESSION_INDEX_DB" \
-    "CREATE TABLE IF NOT EXISTS sessions (session_id TEXT, message_count INT, commands_run TEXT, files_changed TEXT);"
+    "CREATE TABLE IF NOT EXISTS sessions (session_id TEXT, message_count INT, commands_run TEXT, files_changed TEXT, source TEXT);"
   sqlite3 "$SESSION_INDEX_DB" \
-    "INSERT INTO sessions (session_id, message_count, commands_run, files_changed) VALUES ('$1', $2, '$3', '$4');"
+    "INSERT INTO sessions (session_id, message_count, commands_run, files_changed, source) VALUES ('$1', $2, '$3', '$4', '${5:-sessions-index}');"
 }
+
+# mktranscript <path> <n-user+assistant-records> — plus non-message records and a truncated
+# last line, which the count must skip rather than fail on.
+mktranscript() {
+  local i
+  : > "$1"
+  printf '{"type":"ai-title","aiTitle":"t"}\n' >> "$1"
+  for ((i = 0; i < $2; i++)); do
+    if [ $((i % 2)) -eq 0 ]; then
+      printf '{"message":{"content":[{"type":"text","text":"\\"type\\":\\"user\\""}]},"type":"user"}\n' >> "$1"
+    else
+      printf '{"message":{"content":[]},"type":"assistant"}\n' >> "$1"
+    fi
+  done
+  printf '{"type":"attachment"}\n{"type":"user","mess' >> "$1"
+}
+
+# IDL rows the hook wrote, and one field of the last.
+idl_n()    { [ -f "$CC_IDL" ] && wc -l <"$CC_IDL" | tr -d ' ' || echo 0; }
+idl_last() { tail -1 "$CC_IDL" | jq -r ".$1"; }
 
 fire() { printf '{"session_id":"%s"}' "$1" | bash "$HOOK"; }
 
@@ -116,8 +140,8 @@ field() { jq -r ".$1 // empty" <"$STAGE"; }
 }
 
 @test "a session id with no row exits clean — the empty-JSON-array path" {
-  # sqlite3 -json returns the two-byte string '[]' for no rows, not the empty string,
-  # so a bare -z test would fall through into jq and stage a null record.
+  # Older sqlite3 builds print the two-byte string '[]' for no rows under -json; 3.43 prints
+  # nothing. Either must stage nothing rather than fall through into jq with a null record.
   mkrow s-present 40 "ls | wc -l" "/a.md"
   run fire s-absent
   [ "$status" -eq 0 ]
@@ -151,4 +175,137 @@ field() { jq -r ".$1 // empty" <"$STAGE"; }
   [ "$(wc -l <"$STAGE" | tr -d ' ')" = "2" ]
   run jq -e -s 'length == 2 and all(has("ts") and has("session_id") and has("commands_run") and has("files_changed") and has("status"))' "$STAGE"
   [ "$status" -eq 0 ]
+}
+
+# ── every exit path writes exactly one IDL row (truememory §3.3) ──────────────
+# Before this, the hook's only output was the candidate file, so "every session is thin" and
+# "the gate can never open" were the same silence. Each case: one row, the right disposition,
+# the right reason, and nothing on stdout (a SessionEnd hook that prints JSON would be a change).
+
+# expect_row <disposition> <reason> — exactly one row, and it says this.
+expect_row() {
+  [ "$(idl_n)" = "1" ]
+  [ "$(idl_last hook)" = "harvest-skill-end" ]
+  [ "$(idl_last disposition)" = "$1" ]
+  [ "$(idl_last reason)" = "$2" ]
+}
+
+@test "row: empty stdin → abstained no-stdin" {
+  run bash -c "printf '' | bash '$HOOK'"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  expect_row abstained no-stdin
+}
+
+@test "row: no session id, and non-JSON stdin → abstained no-session-id" {
+  run bash -c "printf '{}' | bash '$HOOK'"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  expect_row abstained no-session-id
+  rm -f "$CC_IDL"
+  run bash -c "printf 'not json' | bash '$HOOK'"
+  expect_row abstained no-session-id
+}
+
+@test "row: malformed session id → abstained bad-session-id, and the id is not recorded" {
+  run bash -c "printf '{\"session_id\":\"a/../b; x\"}' | bash '$HOOK'"
+  expect_row abstained bad-session-id
+  [ "$(idl_last sid)" = "?" ]
+}
+
+@test "row: absent DB → index-db-missing; unreadable DB → index-unreadable; no row → no-index-row" {
+  run fire s-nodb
+  expect_row abstained index-db-missing
+  rm -f "$CC_IDL"; printf 'not a database' > "$SESSION_INDEX_DB"
+  run fire s-bad
+  expect_row abstained index-unreadable
+  rm -f "$CC_IDL" "$SESSION_INDEX_DB"; mkrow s-present 40 "ls" "/a.md"
+  run fire s-absent
+  expect_row abstained no-index-row
+}
+
+@test "row: a stub row (session-index-end not yet written) → index-row-stub, not no-cmds" {
+  mktranscript "$BATS_TEST_TMPDIR/t.jsonl" 20
+  mkrow s-stub 0 "" "" session-start
+  run bash -c "printf '{\"session_id\":\"s-stub\",\"transcript_path\":\"%s\"}' '$BATS_TEST_TMPDIR/t.jsonl' | bash '$HOOK'"
+  [ "$status" -eq 0 ]
+  expect_row abstained index-row-stub
+  [ ! -f "$STAGE" ]
+}
+
+@test "row: msgs=0 on the row with no transcript → stale-telemetry (BLIND), never below-gate" {
+  mkrow s-stale 0 "ls | wc -l" "/a.md"
+  run fire s-stale
+  expect_row abstained stale-telemetry
+  [ "$(idl_last transcript)" = "no-transcript-path" ]
+  rm -f "$CC_IDL"
+  run bash -c "printf '{\"session_id\":\"s-stale\",\"transcript_path\":\"/nonexistent/t.jsonl\"}' | bash '$HOOK'"
+  expect_row abstained stale-telemetry
+  [ "$(idl_last transcript)" = "transcript-missing" ]
+}
+
+@test "row: thin session → below-gate; no commands → no-cmds; staged → fired staged" {
+  mkrow s-thin 11 "ls" "/a.md"
+  run fire s-thin
+  expect_row abstained below-gate
+  [ "$(idl_last msgs)" = "11" ]
+  rm -f "$CC_IDL"; mkrow s-nocmd 40 "" "/a.md"
+  run fire s-nocmd
+  expect_row abstained no-cmds
+  rm -f "$CC_IDL"; mkrow s-go 40 "ls" "/a.md"
+  run fire s-go
+  [ -z "$output" ]
+  expect_row fired staged
+  [ -f "$STAGE" ]
+}
+
+@test "the transcript count opens the gate the row's message_count=0 kept shut" {
+  # The live defect: the row reads 0 in 11,666 of 11,670 SessionEnd lines. 14 user+assistant
+  # records in the transcript (the nested `"type":"user"` text and the cut last line must not count).
+  mktranscript "$BATS_TEST_TMPDIR/t.jsonl" 14
+  mkrow s-tx 0 "git status" "/a.md"
+  run bash -c "printf '{\"session_id\":\"s-tx\",\"transcript_path\":\"%s\"}' '$BATS_TEST_TMPDIR/t.jsonl' | bash '$HOOK'"
+  [ "$status" -eq 0 ]
+  expect_row fired staged
+  [ "$(idl_last msgs)" = "14" ]
+  [ "$(idl_last msgs_src)" = "transcript" ]
+  [ "$(jq -r '.message_count' <"$STAGE")" = "14" ]
+}
+
+@test "the transcript count outranks the row: 4 real messages stay below the gate" {
+  mktranscript "$BATS_TEST_TMPDIR/t.jsonl" 4
+  mkrow s-few 40 "git status" "/a.md"
+  run bash -c "printf '{\"session_id\":\"s-few\",\"transcript_path\":\"%s\"}' '$BATS_TEST_TMPDIR/t.jsonl' | bash '$HOOK'"
+  expect_row abstained below-gate
+  [ "$(idl_last msgs)" = "4" ]
+  [ ! -f "$STAGE" ]
+}
+
+@test "run through a symlink in a temp dir, the hook still finds its lib and logs (X1)" {
+  mkdir -p "$BATS_TEST_TMPDIR/live/hooks"
+  ln -s "$HOOK" "$BATS_TEST_TMPDIR/live/hooks/harvest-skill-end.sh"
+  mkrow s-link 11 "ls" "/a.md"
+  run bash -c "printf '{\"session_id\":\"s-link\"}' | bash '$BATS_TEST_TMPDIR/live/hooks/harvest-skill-end.sh'"
+  [ "$status" -eq 0 ]
+  expect_row abstained below-gate
+}
+
+@test "every BLIND reason this hook emits pages INERT in the alarm; the DORMANT ones do not (X3)" {
+  local alarm="$REPO/scripts/idl-abstain-alarm.sh" r i now ts
+  now=1752900000
+  ts="$(date -u -r "$now" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$now" +%Y-%m-%dT%H:%M:%SZ)"
+  for r in no-stdin no-session-id bad-session-id index-db-missing index-unreadable no-index-row index-row-stub stale-telemetry; do
+    : > "$CC_IDL"
+    for ((i = 0; i < 10; i++)); do
+      printf '{"ts":"%s","hook":"harvest-skill-end","disposition":"abstained","reason":"%s"}\n' "$ts" "$r" >> "$CC_IDL"
+    done
+    run env CC_ABSTAIN_NOW="$now" CC_ABSTAIN_LOG="$BATS_TEST_TMPDIR/a.log" CC_ABSTAIN_CENSUS=0 CC_EXPECTED_FIRES=off "$alarm" --run
+    [ "$status" -ne 0 ] || { echo "blind reason $r did not page"; return 1; }
+  done
+  for r in below-gate no-cmds; do
+    : > "$CC_IDL"
+    for ((i = 0; i < 10; i++)); do
+      printf '{"ts":"%s","hook":"harvest-skill-end","disposition":"abstained","reason":"%s"}\n' "$ts" "$r" >> "$CC_IDL"
+    done
+    run env CC_ABSTAIN_NOW="$now" CC_ABSTAIN_LOG="$BATS_TEST_TMPDIR/a.log" CC_ABSTAIN_CENSUS=0 CC_EXPECTED_FIRES=off "$alarm" --run
+    [ "$status" -eq 0 ] || { echo "dormant reason $r paged"; return 1; }
+  done
 }

@@ -125,9 +125,16 @@ _reap_keep_dormant=(claimer-live owned-wait)
 # every genuinely unreadable transcript as a reached-guard, land on the green DORMANT-100, and a
 # real breakage of the one lib four surfaces share would page nothing at all. It is unambiguously
 # a could-not-observe: the transcript exists and the hook could not parse it.
+# The second-to-last line joined on 2026-09-27 with the harvest-skill-end and session-index-end
+# enrollments (truememory §3.3, acceptance X3 — a new could-not-observe reason must join in the
+# SAME commit, or it defaults to DORMANT and reads green): a malformed id, an absent or unreadable
+# index, a session with no index row, a row still holding the SessionStart stub because the
+# concurrent session-index-end has not written it, missing helpers, and the index lock held by
+# another process (the orphaned lock of 2026-04 skipped every index for 111 days).
 _default_blind=(no-jq no-session-id no-stdin no-telemetry stale-telemetry \
                 no-transcript-path transcript-missing not-a-repo no-cwd no-assistant-text \
                 goal-unreadable \
+                bad-session-id index-db-missing index-unreadable no-index-row index-row-stub no-helpers lock-held \
                 "${_reap_keep_blind[@]}")
 if [ -n "${CC_ABSTAIN_BLIND_REASONS:-}" ]; then
   # shellcheck disable=SC2206  # intentional word-split of the override list
