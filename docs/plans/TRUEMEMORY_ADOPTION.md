@@ -156,8 +156,8 @@ JSON; land via project `/ship` from the wave's own worktree.
   mem-neighbours-outcome.py nightly step 7b) · nudge reword `00ca6bdf3`.
 - #4 `910f86140` (bin/cc-memory-search) · `045c8f334` (registry row) · `974122f01` (CLAUDE.global.md,
   CLAUDE.global.slim.md, compact-memory step 7) · `c9b085699` · combined-tree fixes `e771f4b88` (alarm
-  selftest) and `<NIGHTLYFIX>` (nightly stubs).
-- #35 `<BENCHSHAS>`: **no gain** (0 wins, 0 losses, 16 ties; stock solved 15/16, so the tasks had no headroom).
+  selftest) and `131ecf70f` (nightly stubs).
+- #35 `9fe735df7` (harness) · `05e357990` (no deletes, pinned origin) · `ddf721d05` (§5.17 results): **no gain** (0 wins, 0 losses, 16 ties; stock solved 15/16, so the tasks had no headroom).
   #6 delivered its pointer in 8/8 symptom runs and none opened it; #10 never fired. Research §5.17.
   The pre-registered no-gain branch applies: no push consumers on faith, Wave E #23 and #26 stop, and a
   delivery-research wave needs tasks the stock arm fails.
@@ -175,7 +175,7 @@ JSON; land via project `/ship` from the wave's own worktree.
   registry and nightly edits and the others hand it their rows.
 - Branches green alone, red together, twice: (1) #6's replay and #10's new-file count read live data, so the
   alarm --selftest went 56/2 on trunk (`e771f4b88`); (2) neither new nightly step was stubbed in
-  deploy-live.bats' fixture nightly, so 6 of its cases went red on trunk (`<NIGHTLYFIX>`). Each item's own
+  deploy-live.bats' fixture nightly, so 6 of its cases went red on trunk (`131ecf70f`). Each item's own
   suites were green. Run the selftests and deploy-live.bats on the combined tree before the last land.
 - `bats` here is the cc-bats admission shim. A refusal prints no `1..N` and zero `not ok`, so a failure filter
   reads it as a pass (it did once this wave). Only a plan line is a result.
@@ -187,9 +187,11 @@ JSON; land via project `/ship` from the wave's own worktree.
   hook and the replay now skip those commands; 11/day after.
 - The land gate's wall-clock lint reads an invalid test date (`2026-13-45`) as a future time bomb; use a
   non-date string for "rejects garbage" cases.
-- During the trunk re-run something outside this session rebased the lead worktree's branch onto origin/main
-  (reflog `rebase (start)` 24 min before `finish`, spanning the ship-land.bats run in that worktree). Nothing was
-  lost; it reads like a suite reaching its caller's repo and is not yet attributed.
+- Never shut a teammate down while a land runs from its worktree. The reaper removed #35's worktree mid-land;
+  the orphaned ship-land then rebased and LANDED the lead's own branch (`156484592`, the plan with placeholders,
+  plus `131ecf70f`, `c36bf87cf`) and left #35's commits unlanded. The earlier "foreign" rebase of the lead
+  worktree was the same process. Harvest, shut down, confirm the process is gone, recreate the worktree from the
+  branch, and only then land.
 - Deferred to Wave E #4b: the private retriever-arm run of recall_eval.py (it needs the per-project store map
   the #5 teammate built ad hoc). #4b's entry condition (#4 and #5 landed) now holds.
 - Seen read-only, not this repo's: the reso shared checkout sat at core.bare=true during this wave.
