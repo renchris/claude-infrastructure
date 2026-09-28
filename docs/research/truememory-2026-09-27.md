@@ -1326,6 +1326,89 @@ events, and a delivery-research wave opens on #36's fixtures.
 **Budget.** ~96 runs ≈ 2-4 weekly-quota points on `next` (operator ruling 2026-09-27: no ask needed). Stop
 and report if measured spend passes 5 points.
 
+### 5.17 #35 results (run 2026-09-28)
+**Verdict: NO GAIN (p = 1.0), and this benchmark could not have shown one because it has no headroom.** Every
+lesson task was solved with or without the lesson, so all 16 primary pairs tied. Read this as "these tasks do
+not separate the arms", never as "the push does nothing".
+
+72 runs (12 tasks × 2 reps × arms 1-3), all exit 0, on Claude Code 2.1.280, `claude-opus-5-5` at effort high,
+account `next`. Arm 2 = `abaf1e990`; arm 3 = `ba8e5c24a` (trunk with #4, #5, #6+#7, #10 and #26 landed).
+Harness: `truememory-2026-09-27/bench/`; scorer `score.py`, tests `tests/bench-score.bats`. Run dirs and
+per-run scores stay private under `~/.claude/autonomy/memory-eval/bench-runs/`.
+
+| arm | runs | lesson-used (8 lesson+write tasks × 2) | correct (same) | control correct | control false pointer | median wall s | median tokens |
+|---|---|---|---|---|---|---|---|
+| 1 stock | 24 | 15/16 | 15/16 | 8/8 | 0/8 | 22 | 19,907 |
+| 2 pre-Wave-B | 24 | 16/16 | 16/16 | 6/8 † | 0/8 | 26 | 70,024 |
+| 3 Wave B | 24 | 16/16 | 16/16 | 6/8 † | 0/8 | 26 | 70,284 |
+
+† A rubric artefact, not a failure; see deviation 6.
+
+**Primary (arm 3 vs arm 2, lesson-used, paired by task × rep):** 0 wins, 0 losses, 16 ties, p = 1.0 → no gain.
+
+**Secondaries.**
+- Correct, arm 3 vs arm 2: 0 wins, 0 losses, 16 ties, p = 1.0.
+- Lesson-used, arm 2 vs arm 1: 1 win, 0 losses, 15 ties, p = 0.5. The one difference is T05 rep 1, where the
+  stock arm answered YES to wrapping the lander in an outer timeout.
+- Controls: arm 3's false-pointer rate is 0/8, the same as arm 2's, and its correctness equals arm 2's (6/8
+  each; 8/8 after deviation 6). Neither measure trails arm 2 by more than 1 of 8.
+- **Delivery vs use (#6).** Arm 3 delivered the gold lesson's pointer in a `hook_additional_context`
+  attachment in all 8 runs whose command printed a `lesson-symptoms.tsv` literal (T01-T04 × 2), and in no other
+  run. **None of those 8 runs opened the lesson it pointed to**, and arms 1 and 2 reached the same answers
+  without the pointer. No run in any arm Read a gold lesson on T01-T06. So #6 delivers, but this benchmark has
+  no evidence that the delivery gets used.
+- **Write-time neighbours (#10).** On W01-W02 no run in any arm created a duplicate. Every run found the
+  existing twin: on W01 it edited the twin, and on W02 it indexed the unindexed twin in `MEMORY.md`. On W02,
+  arm 3 alone also revised the twin's body (2/2, against 0/4 for arms 1-2). #10's neighbour log
+  (`mem-neighbours.jsonl`) is empty in every write run, because no run wrote a new topic file. So #10 had
+  nothing to catch.
+- **Cost.** Our instruction text costs about 50K tokens a run (median 19.9K for stock against 70K for arms
+  2-3). Arms 2 and 3 are within 0.4% of each other. Measured spend, smoke runs included: `next` weekly went
+  from 7% to 9%.
+
+**Hooks registered in arms 2 and 3.** The two lists are identical; the hook bodies differ between the two
+shas:
+- `backup-before-write`: PreToolUse, Write|Edit|MultiEdit
+- `log-bash`: PostToolUse and PostToolUseFailure, Bash
+- `memory-index-drain`: PostToolUse, Bash|Write|Edit|MultiEdit
+- `harvest-skill-end`: SessionEnd
+- `memory-nudge`: UserPromptSubmit
+- `bash-output-offload`: PostToolUse, ^Bash$
+
+Arm 1 registers none of these. All three arms also run the f3 sandbox guard.
+
+**Branch taken under §5.16: no gain.** Per plan § Wave B:
+- No new push consumers are added on faith.
+- Wave E #23 and #26 stop.
+- #6 and #10 stay only if their own logs show delivered-and-used events. In this benchmark #6 was delivered
+  but never opened (0/8), and #10 never fired.
+- A delivery-research wave opens on #36's fixtures. That wave needs tasks the stock arm fails. This task set
+  gave stock 15/16, so it cannot measure a delivery effect.
+
+**Deviations from §5.16.**
+1. **Task validity, the main deviation.** §5.16 requires each lesson task to have "one gold lesson whose
+   absence changes the outcome". Measured, none did: stock solved 15/16, and no run read a gold lesson on
+   T01-T06. The tasks were fixed and committed before any run, and were not changed after the smoke run.
+2. **Arm 4 (TrueMemory) was dropped.** TM's native ingest extracts facts through an external LLM
+   (`ingest/pipeline.py:9`, `LLMConfig`). Loading the frozen store the way TM installs would need a paid API
+   key, and the only TM config on disk holds a placeholder. I dropped it after about 3 minutes of the
+   20-minute allowance, and installed nothing.
+3. **HOME.** `claude` itself keeps the real HOME, because a redirected HOME reports "Not logged in"
+   (measured when the harness was built). Only our hooks run with `HOME` and `CLAUDE_CONFIG_DIR` pointed into
+   the run dir, so their state and logs land there.
+4. **Instruction loading.** `--setting-sources ''` loads no user or project `CLAUDE.md` in any arm, so the
+   operator's user `CLAUDE.md` is excluded from every arm, not only arm 1. Arms 2 and 3 get their
+   instruction text (the fixture's `.claude/CLAUDE.md` and rules, plus the tree's `CLAUDE.global.slim.md`)
+   through `--add-dir` with `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1`.
+5. **The arm-3 fixture is 27 commits newer than arm 2's.** It includes a ship preflight check that refuses an
+   outer timeout, which is T05's subject. Arm 2 was already at ceiling on T05, so this changed no pair.
+6. **C03 rubric artefact.** In all four arm-2/3 runs of C03, the repo's own "never commit in the shared
+   checkout" rule led the agent to build `ops/sum.sh` in a sibling worktree. The pre-registered check looks
+   only in the fixture, so it scored those runs 0. All four sibling copies print `9` for `sum.sh 2 3 4`,
+   which makes control correctness 8/8 in every arm. The table keeps the mechanical score.
+7. **Smoke runs** (T01 in arms 1-3) ran under a separate root and are excluded from the results. They matched
+   the full run.
+
 ---
 
 ## 6. Trust assessment of TrueMemory's claims
