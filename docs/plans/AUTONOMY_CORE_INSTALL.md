@@ -36,6 +36,43 @@ hooks — which is the gap.
   stubs it, degrades cleanly, or must be rewritten.
 - Output: § W1 findings below, with the chosen core list and the install shape.
 
+### W1 findings (2026-09-28)
+
+**Verdict: every candidate is rewritten, none is copied.** The fleet versions are large and entangled
+(`session-continue.sh` 1,468 lines sourcing 7 `hooks/lib/` files; `completion-assert.sh` 1,287 lines, 9
+libs; `wrap-ledger.sh` 2,649 lines, 6 libs), and 42-63 lines in each reference fleet-only stores
+(mailbox, `cc-custody`, `cc-backlog`, `cc-decide`, `accounts.json`, `~/.claude-*`). Stubbing that many
+seams would ship dead code to outsiders; a small rewrite that keeps each mechanism's contract is less
+code and testable in a throwaway HOME.
+
+| Candidate | Kept as | Cut (fleet-only) |
+|---|---|---|
+| `CLAUDE.global.md` excerpt | `core/CLAUDE.core.md`, rewritten portable: frozen DoD, drive to done, net-positive follow-ons, close readout, context stewardship, `/goal` template | every `cc-*` store, handoff-fire, accounts, Fable ladder, mission board |
+| `hooks/session-continue.sh` | `core/hooks/continue.sh`: agent-armed "next step" sentinel, bounded (default 8), `set/clear/status` via `autonomy continue` | mailbox delivery, ship floor, custody, resident teammates, IDL log |
+| `hooks/completion-assert.sh` | `core/hooks/completion-gate.sh`: a "done" claim is blocked once per git state while tracked changes are uncommitted or commits are unpushed | origin close contract, peer-owned, close-shape, custody |
+| `scripts/wrap-ledger.sh` + `/wrap` | `autonomy ledger` + `core/commands/wrap.md`: rungs 🔧 / 📦 / ✅ from live git, plus armed continuation | 🚀 live layer, ⛔/👤 from backlog/decision stores, residents |
+| `/handoff` | `core/commands/handoff.md`, single pane: writes a bridge doc, the user runs `/clear` and pastes one line | handoff-fire (kitty/it2/iTerm panes), accounts, notify-back |
+| `hooks/backup-before-write.sh` | `core/hooks/backup-before-write.sh`: copy before a Write replaces a file, 14-day prune, `autonomy restore` | memory-index budget, plan-conventions injection |
+| `/goal` guidance | text only (native Claude Code feature): template + the measured evidence below | — |
+
+**Portability rules the core obeys** (checked by the tests): bash 3.2 (macOS `/bin/bash`; no assoc
+arrays, `mapfile`, `${x,,}`); no `sed -i`, `stat`, `date -d/-j`, `readlink -f`; JSON via `jq` when present
+else `python3` (Ubuntu/WSL ship python3, not jq; macOS 15+ ships jq); git optional (the gate and ledger
+abstain outside a repo). No launchd, kitty, `osascript`, multi-account or mailbox anywhere.
+
+**Install shape.** A separate root `install-core.sh`, not `install.sh --profile core`: `install.sh` is a
+1,514-line fleet installer whose global guards (worktree/stale refusal, accounts seed, git hooks,
+LaunchAgents) run before any option could branch, so a profile flag would thread through all of it;
+leaving it untouched makes the full install's `--dry-run` diff empty by construction. The installer is
+**self-contained**: sources live in `core/`, and `core/build.sh` embeds them as quoted
+heredocs (a bats test fails when the embedded copy drifts), so one curl'd file and one sha256 pin
+everything, with no second fetch and no ref argument. Target `${CLAUDE_CONFIG_DIR:-$HOME/.claude}`:
+files under `autonomy-core/`, `/wrap` and `/handoff` into `commands/` (a foreign file of that name is left
+alone), the rules as a marker-delimited block in `CLAUDE.md`, and three hook entries merged into
+`settings.json` (backed up once to `settings.json.before-autonomy-core`, plus a timestamped copy on every
+change). Refuses when the full install is present; `--uninstall` reverses every step. It verifies itself
+by driving each installed hook with fixture JSON and reading `settings.json` back, and fails closed.
+
 ## W2 — implement
 
 - `install.sh --profile core` (or a separate `install-core.sh`) — macOS, Linux, WSL2; idempotent; backs
