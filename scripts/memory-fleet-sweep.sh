@@ -46,16 +46,27 @@
 # It reads every store and every .claude.json; the one thing it writes is its own transcript-scan
 # stamp under ~/.claude/state. Without --reach the table and the exit contract are unchanged.
 #
-# Usage: memory-fleet-sweep.sh [--rotate] [--quiet] [--reach]
+# ── --schema: WHICH TOPIC FILES BREAK THE FRONTMATTER THE MEMORY INSTRUCTION PRESCRIBES ────────
+# Report-only (docs/research/truememory-2026-09-27.md §3.20). For every topic .md file in every
+# store above (not MEMORY.md, not archive/ or any other subdirectory) it checks a leading `---`
+# block that terminates, a non-empty `name:` and `description:`, and a type (`metadata:` → `type:`,
+# or a top-level `type:`) in user|feedback|project|reference. One row per violation:
+#   SCHEMA store=<slug> file=<name> class=<no-frontmatter|unterminated|missing-name|
+#                                         missing-description|missing-type|bad-type=<value>>
+# then `SCHEMA-VERDICT stores= files= violations=` with per-class counts. There is deliberately no
+# name==stem rule (206 false positives measured), no write-time check and no fix: it writes nothing.
+#
+# Usage: memory-fleet-sweep.sh [--rotate] [--quiet] [--reach] [--schema]
 # Exit:  0 every index under both caps · 1 at least one index over · 2 error
 set -euo pipefail
 
-ROTATE=0; QUIET=0; REACH=0
+ROTATE=0; QUIET=0; REACH=0; SCHEMA=0
 for a in "$@"; do
   case "$a" in
     --rotate) ROTATE=1 ;;
     --quiet)  QUIET=1 ;;
     --reach)  REACH=1 ;;
+    --schema) SCHEMA=1 ;;
     -h|--help) sed -n '/^set -euo/q;p' "$0"; exit 0 ;;
     *) printf 'memory-fleet-sweep: unknown flag %s\n' "$a" >&2; exit 2 ;;
   esac
@@ -435,6 +446,96 @@ if [ "$REACH" -eq 1 ]; then
   native_report
   history_report
 fi
+
+# ══ --schema ══════════════════════════════════════════════════════════════════════════════════
+# One python pass over every store; it opens files read-only and prints, nothing else.
+schema_report() {
+  python3 - "$INDEXES" <<'PY'
+import os, re, sys
+
+TYPES = ("user", "feedback", "project", "reference")
+CLASSES = ("no-frontmatter", "unterminated", "missing-name", "missing-description",
+           "missing-type", "bad-type")
+
+def unquote(v):
+    v = v.strip()
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+        v = v[1:-1].strip()
+    return v
+
+def check(path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            lines = [x.rstrip("\r\n").rstrip() for x in fh.read().lstrip("\ufeff").split("\n")]
+    except OSError:
+        return ["no-frontmatter"]
+    if not lines or lines[0] != "---":
+        return ["no-frontmatter"]
+    try:
+        end = lines.index("---", 1)
+    except ValueError:
+        return ["unterminated"]
+    top, meta_type, in_meta = {}, None, False
+    for ln in lines[1:end]:
+        if not ln or ln.lstrip().startswith("#"):
+            continue
+        if ln[0] in " \t":
+            if in_meta:
+                m = re.match(r"\s+type:(.*)$", ln)
+                if m:
+                    meta_type = unquote(m.group(1))
+            continue
+        in_meta = False
+        m = re.match(r"([A-Za-z_][A-Za-z0-9_-]*):(.*)$", ln)
+        if not m:
+            continue
+        k, v = m.group(1), m.group(2)
+        top.setdefault(k, unquote(v))
+        if k == "metadata":
+            in_meta = True
+            f = re.search(r"\btype:\s*([^,}]*)", v)
+            if f:
+                meta_type = unquote(f.group(1))
+    out = []
+    if not top.get("name"):
+        out.append("missing-name")
+    if not top.get("description"):
+        out.append("missing-description")
+    t = meta_type if meta_type else top.get("type", "")
+    if not t:
+        out.append("missing-type")
+    elif t not in TYPES:
+        out.append("bad-type=" + re.sub(r"\s+", "_", t))
+    return out
+
+stores = files = viol = 0
+counts = dict((c, 0) for c in CLASSES)
+for idx in sys.argv[1].split("\n"):
+    if not idx:
+        continue
+    store = os.path.dirname(idx)
+    slug = os.path.basename(os.path.dirname(store))
+    stores += 1
+    try:
+        names = sorted(os.listdir(store))
+    except OSError:
+        names = []
+    for n in names:
+        p = os.path.join(store, n)
+        if not n.endswith(".md") or n == "MEMORY.md" or not os.path.isfile(p):
+            continue
+        files += 1
+        for c in check(p):
+            viol += 1
+            counts[c.split("=", 1)[0]] += 1
+            print("SCHEMA store=%s file=%s class=%s" % (slug, n, c))
+print("SCHEMA-VERDICT stores=%d files=%d violations=%d %s" % (
+    stores, files, viol, " ".join("%s=%d" % (c.replace("-", "_"), counts[c]) for c in CLASSES)))
+PY
+}
+
+# A failed pass must not read as a clean fleet: it says so on the verdict line.
+[ "$SCHEMA" -eq 0 ] || schema_report || printf 'SCHEMA-VERDICT status=error\n'
 
 [ "$OVER" -eq 0 ] || exit 1
 exit 0

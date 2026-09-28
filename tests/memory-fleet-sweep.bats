@@ -289,3 +289,65 @@ OFF='{"tengu_passport_quail":false,"tengu_slate_thimble":false,"tengu_onyx_plove
   [ "$status" -eq 0 ]
   has "$output" 'REACH-VERDICT dark_dest=1'
 }
+
+# ── --schema ────────────────────────────────────────────────────────────────────────────────────
+# One store holding one topic file per violation class, two clean files (the metadata: form and
+# the top-level type: form), and an archive/ file with no frontmatter that must NOT be read.
+mkschema() {
+  S="$HOME/.claude/projects/-proj-schema/memory"; mkdir -p "$S/archive"
+  printf -- '- [A](clean-meta.md) — hook\n' >"$S/MEMORY.md"
+  printf -- '---\nname: clean-meta\ndescription: fine\nmetadata:\n  type: feedback\n---\nbody\n' >"$S/clean-meta.md"
+  printf -- '---\nname: "clean-top"\ndescription: fine\ntype: user\n---\nbody\n' >"$S/clean-top.md"
+  printf 'no frontmatter at all\n' >"$S/a-nofm.md"
+  printf -- '---\nname: x\ndescription: y\ntype: user\nbody never closes\n' >"$S/b-unterm.md"
+  printf -- '---\nname:\ndescription: y\ntype: user\n---\n' >"$S/c-noname.md"
+  printf -- '---\nname: d\ntype: project\n---\n' >"$S/d-nodesc.md"
+  printf -- '---\nname: e\ndescription: y\nmetadata:\n  other: 1\n---\n' >"$S/e-notype.md"
+  printf -- '---\nname: f\ndescription: y\nmetadata:\n  type: banana split\n---\n' >"$S/f-badtype.md"
+  printf 'archived, no frontmatter\n' >"$S/archive/old.md"
+}
+
+# snap → every path under HOME and the hash of every file, sorted: the before/after write proof
+snap() { (cd "$HOME" && find . -print | LC_ALL=C sort && find . -type f -exec shasum {} + | LC_ALL=C sort); }
+
+@test "--schema: one row per violation class, in file order, and an exact verdict" {
+  mkschema
+  run "$SCRIPT" --schema --quiet
+  [ "$status" -eq 0 ]                      # --schema reports; it never changes the exit contract
+  expected='SCHEMA store=-proj-schema file=a-nofm.md class=no-frontmatter
+SCHEMA store=-proj-schema file=b-unterm.md class=unterminated
+SCHEMA store=-proj-schema file=c-noname.md class=missing-name
+SCHEMA store=-proj-schema file=d-nodesc.md class=missing-description
+SCHEMA store=-proj-schema file=e-notype.md class=missing-type
+SCHEMA store=-proj-schema file=f-badtype.md class=bad-type=banana_split
+SCHEMA-VERDICT stores=1 files=8 violations=6 no_frontmatter=1 unterminated=1 missing_name=1 missing_description=1 missing_type=1 bad_type=1'
+  [ "$output" = "$expected" ]
+}
+
+@test "--schema: a clean store reads violations=0 and archive/ is never read" {
+  mkschema
+  rm "$S"/[a-f]-*.md
+  run "$SCRIPT" --schema --quiet
+  [ "$output" = 'SCHEMA-VERDICT stores=1 files=2 violations=0 no_frontmatter=0 unterminated=0 missing_name=0 missing_description=0 missing_type=0 bad_type=0' ]
+}
+
+@test "--schema writes nothing: the fixture HOME is byte-identical after the run" {
+  mkschema
+  before="$(snap)"
+  run "$SCRIPT" --schema
+  [ "$status" -eq 0 ]
+  has "$output" 'SCHEMA-VERDICT stores=1 files=8 violations=6'
+  [ "$(snap)" = "$before" ]
+}
+
+@test "--schema absent: the table and the exit code are exactly what they were" {
+  mkschema
+  mkidx .claude proj-over 40 700 >/dev/null
+  run "$SCRIPT"
+  [ "$status" -eq 1 ]
+  plain="$output"
+  hasnt "$plain" 'SCHEMA'
+  run "$SCRIPT" --schema
+  [ "$status" -eq 1 ]
+  [ "$(printf '%s\n' "$output" | grep -v '^SCHEMA')" = "$plain" ]
+}
