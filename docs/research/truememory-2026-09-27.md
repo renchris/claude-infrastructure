@@ -1554,8 +1554,59 @@ reading the candidate and its source turn; it is not blind to the tool.
 otherwise DROP. Reported beside it: Wilson 95% CI, per-class failure counts, promotable share (the older 50%
 gate, secondary only), model calls and wall time. PASS ⇒ build #25 (§5.21); DROP ⇒ #25 is dropped unbuilt.
 
+**Results (run 2026-09-28T17:01Z, one run, nothing written to any store).** 45 sessions (5 targets + the first 40 of
+the seeded order), 48 model calls, 702 s wall, 81 candidates, 0 error rows. The 66 non-target candidates cleared
+the 50 floor, so no extension batch ran; a seeded 60 were labelled.
+
+| measure | result | rule |
+|---|---|---|
+| labelled pass rate (fails no anti-capture class) | **34/60 = 56.7%**, Wilson 95% CI 44.1-68.4% | ≥90% |
+| failures by class | already indexed 20 · environment-specific one-off 6 · transient 0 · lucky path 0 · negative tool-claim 0 | |
+| rulings recovered | **2/4**: #58 yes (`research-plan-implement-phases`: "Do not jump into implementation without operator sign-off"), #70 yes (`avoid-mannered-prose`); #47 no; #66/67 no | ≥3/4 |
+| promotable (secondary) | 51/60 = 85%; promotable and passing 31/60 = 52% | older gate 50% |
+| sensitivity: CLAUDE.global.md counted as indexed | 29/60 = 48.3% | |
+
+**Verdict: DROP.** Both halves fail. Recovery (2/4) fails on its own, so the verdict does not depend on how the
+indexed class is judged. The pass-rate half does: without that class it would be 54/60 = 90.0%. That class is the
+extractor's main failure. A cheap extractor with no store access proposes rules the stores already hold: Pyramid
+answer-first (4 of 60), verify the premise or the landed fix before rework (6), autonomy to 100% (3).
+
+What the misses show:
+- **#47.** The practice was stated in passing inside a request ("we just go through 'at least 4mb' images on
+  google images but perhaps you will have a better breadth…"). The session's candidates were two other rules.
+- **#66/67.** In both eligible 09-14/15 sessions, every candidate came from turn 1, a pasted fire brief (5 from
+  `09eb03c8`, 3 from `9d0a2a8d`). The short drag prompts (09-15T12:40Z-18:40Z) yielded none. The plainest ruling
+  ("Then the draggable one", 09-16) sits in a `/private/tmp` session the filter excludes.
+- **Pasted briefs dominate the input.** At least 32 of the 60 labelled candidates (36 counting the 4 whose source
+  turn could not be resolved) come from source turns over 1,500 chars. These are machine-authored fire briefs that
+  the transcript labels as typed (`promptSource`). They restate standing rules, and that is where most "already
+  indexed" failures come from.
+
+**Deviations.**
+1. **Source ts.** In run 1, 16 of 81 rows had no source ts because the model returned `turn` as a non-integer.
+   After the run the tool was fixed to map `"T2"` or an excerpt-only reply to its source turn and keep the raw
+   reply (`d060e6295`). Run-1 rows were backfilled by excerpt match: 12 resolved, 4 not (all from pasted-brief
+   sessions). Candidate content is unaffected.
+2. **Child flags.** The child also gets `--tools '' --no-session-persistence --strict-mcp-config
+   --disable-slash-commands` beyond the brief's `claude -p --setting-sources '' --model …`.
+3. **Indexed check method.** The pre-registration named `cc-memory-search --all`. It was tried once, and on
+   descriptive queries its bm25 ranked unrelated lessons first. The check used instead is a regex grep over a fixed
+   corpus of 1,909 files, with UTC birth times: every account's memory store including archives, the infra and reso
+   `docs/lessons` and `.claude/rules`, and `git log -S` for the dates of rule bullets. The always-loaded
+   mission-board rule counted once (#52). CLAUDE.global.md is outside the primary count and is the sensitivity row.
+4. **#66/67 sessions.** The brief named "the kitty sessions of 2026-09-14/15". This agent chose `09eb03c8` and
+   `9d0a2a8d` as the eligible sessions with typed drag prompts in that window.
+5. **Labeller.** This agent labelled; it was not blind to the tool, and the labels are one reader's judgement.
+
+Private artefacts: `~/.claude/autonomy/memory-eval/wave-e/24/` (`run1/`, `labels.jsonl`, `selection.json`,
+`targets.tsv`, `random-order.txt`, `eligible-2026-09-28.txt`, `corpus.txt`).
+
 ### 5.21 Wave E #25 — transcript capture scan, dry-run verdicts
-*Pending: owned by the Wave E teammate `tme-24`; decided by #24's Stage-0 verdict.*
+**#25 dropped on #24's Stage-0 verdict (§5.20); nothing was built.** The rule says #25 runs only if #24 passes
+Stage 0. #24 failed both halves: 34/60 = 56.7% of labelled candidates passed every anti-capture class (Wilson 95%
+CI 44.1-68.4%, rule ≥90%), and it recovered 2 of the 4 never-written rulings (#58 and #70; rule ≥3). A nightly scan
+would feed the same extractor the same pasted briefs. So neither #25 nor a background memory worker (#21/#22's entry
+condition) is proposed on this evidence.
 
 ### 5.22 Wave E #27 — provenance-and-verification tier
 **Verdict: DROP.** A non-prose channel exists. It has never carried a delivered-and-used event, and §5.17
