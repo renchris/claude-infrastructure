@@ -1,6 +1,7 @@
 #!/bin/bash
 # Sweep daemon — catches sessions missed by SessionEnd hook.
-# Scans ~/.claude/projects/ for new or changed .jsonl transcripts,
+# Scans every account's projects root (session_index_project_roots) for new or changed .jsonl
+# transcripts and workflow result files,
 # extracts context + enriched data, and upserts into the index.
 # Designed to run every 60s via launchd with low priority I/O.
 # Performance target: <500ms when no changes detected.
@@ -247,7 +248,7 @@ while IFS=$'\t' read -r transcript file_mtime file_size; do
     sweep_track "$sid" "$transcript" "$project_dir" "$file_mtime" "$file_size"
 
     WORK_DONE=$((WORK_DONE + 1))
-done < <(session_index_changed_files "$CLAUDE_PROJECTS_DIR")
+done < <(session_index_changed_files_all_roots)
 
 # ─── Weekly retention (self-damped; no new launchd job) ───
 # Wired here rather than into the weekly backfill plist because that plist invokes
@@ -456,12 +457,10 @@ if [ "$SESSION_INDEX_FTS_PARITY_MINUTES" -gt 0 ] 2>/dev/null; then
         else
             session_index_log "FTS-PARITY UNKNOWN rc=$_pa_rc"
         fi
-        # Transcripts on disk per account root (same root list retention uses): the index can only
-        # be as complete as the roots it sweeps, and this sweep reads just the first one.
+        # Transcripts on disk per account root — the one root list the sweep and retention also
+        # read (session_index_project_roots); an absent root is reported as `absent`.
         _pa_roots=""
-        _pa_root_list="${SESSION_INDEX_PROJECT_ROOTS:-$CLAUDE_PROJECTS_DIR $HOME/.claude-secondary/projects $HOME/.claude-tertiary/projects $HOME/.claude-quaternary/projects}"
-        # shellcheck disable=SC2086  # an intentional space-separated list, as in the helpers
-        for _pa_r in $_pa_root_list; do
+        while IFS= read -r _pa_r; do
             _pa_label="$(basename "$(dirname "$_pa_r")")"
             if [ -d "$_pa_r" ]; then
                 _pa_n="$(find "$_pa_r" -maxdepth 3 -type f -name '*.jsonl' 2>/dev/null | wc -l | tr -d ' ' || true)"
@@ -469,7 +468,7 @@ if [ "$SESSION_INDEX_FTS_PARITY_MINUTES" -gt 0 ] 2>/dev/null; then
                 _pa_n="absent"
             fi
             _pa_roots="${_pa_roots:+$_pa_roots,}$_pa_label:${_pa_n:-unknown}"
-        done
+        done < <(session_index_project_roots --with-absent)
         if [ -f "$FTS_IDENTITY_FILE.changed" ]; then
             _fts_ident="changed"
             rm -f "$FTS_IDENTITY_FILE.changed" 2>/dev/null || true

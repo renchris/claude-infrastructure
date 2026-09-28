@@ -439,3 +439,81 @@ db() { sqlite3 "$HOME/.claude/session-index.db" "$1"; }
   echo "$output" | grep -q "/workflows/$WF_ID.json"
   [[ "$output" != *agent-deadbeef* ]] || false
 }
+
+# ══ (5) every account root ════════════════════════════════════════════════════════════════════════
+# Each account keeps its own projects root; the sweep read only $CLAUDE_PROJECTS_DIR, so ~70 of ~205
+# transcripts from one day and 320 of 376 workflow files (the #106 gold among them) were never
+# indexed. The sweep, retention and the parity count now share session_index_project_roots.
+
+@test "one sweep indexes a transcript in root A and a workflow file in root B" {
+  local a="$BATS_TEST_TMPDIR/rootA" b="$BATS_TEST_TMPDIR/rootB"
+  mk_transcript "$a/-Users-x-proj/$SID_A.jsonl"
+  mk_workflow "$b/-Users-x-proj/$SID_B/workflows/$WF_ID.json"
+  # shellcheck disable=SC2030,SC2031  # test-local on purpose: each @test is its own subshell
+  export SESSION_INDEX_PROJECT_ROOTS="$a $b"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  run db "SELECT session_id FROM sessions ORDER BY session_id;"
+  [ "$output" = "$SID_A
+$WF_ID" ]
+  run db "SELECT session_id FROM sessions_fts WHERE sessions_fts MATCH 'zanzibarquux';"
+  [ "$output" = "$WF_ID" ]
+  run db "SELECT project_dir FROM file_tracking WHERE session_id='$WF_ID';"
+  [ "$output" = "$b/-Users-x-proj/" ]
+}
+
+@test "a symlinked root that resolves to a listed root is swept once" {
+  local a="$BATS_TEST_TMPDIR/rootA" alias="$BATS_TEST_TMPDIR/rootA-alias"
+  mk_transcript "$a/-Users-x-proj/$SID_A.jsonl"
+  ln -s "$a" "$alias"
+  # shellcheck disable=SC2030,SC2031  # test-local on purpose: each @test is its own subshell
+  export SESSION_INDEX_PROJECT_ROOTS="$a $alias"
+  run bash -c "source \"$HELPERS\"; session_index_project_roots"
+  [ "$output" = "$a" ]
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  run db "SELECT COUNT(*) FROM sessions WHERE session_id='$SID_A';"
+  [ "$output" = "1" ]
+  run db "SELECT file_path || '|' || sweep_count FROM file_tracking;"
+  [ "$output" = "$a/-Users-x-proj/$SID_A.jsonl|1" ]
+}
+
+@test "with no root list, the default reaches the other accounts' roots" {
+  mk_transcript "$HOME/.claude/projects/-Users-x-proj/$SID_A.jsonl"
+  mk_transcript "$HOME/.claude-tertiary/projects/-Users-x-proj/$SID_B.jsonl"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  run db "SELECT COUNT(*) FROM sessions WHERE session_id IN ('$SID_A','$SID_B');"
+  [ "$output" = "2" ]
+}
+
+@test "a caller-set CLAUDE_PROJECTS_DIR alone is the only root scanned" {
+  local p="$BATS_TEST_TMPDIR/fixture-projects"
+  mk_transcript "$p/-Users-x-proj/$SID_A.jsonl"
+  mk_transcript "$HOME/.claude-secondary/projects/-Users-x-proj/$SID_B.jsonl"   # a default root
+  export CLAUDE_PROJECTS_DIR="$p"
+  run bash -c "source \"$HELPERS\"; session_index_project_roots --with-absent"
+  [ "$output" = "$p" ]
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  run db "SELECT session_id FROM sessions;"
+  [ "$output" = "$SID_A" ]
+}
+
+@test "retention keeps a row whose transcript is in another root, drops it once gone" {
+  local a="$BATS_TEST_TMPDIR/rootA" b="$BATS_TEST_TMPDIR/rootB"
+  mk_transcript "$a/-Users-x-proj/$SID_A.jsonl"
+  mk_transcript "$b/-Users-x-proj/$SID_B.jsonl"
+  # shellcheck disable=SC2030,SC2031  # test-local on purpose: each @test is its own subshell
+  export SESSION_INDEX_PROJECT_ROOTS="$a $b"
+  bash "$SWEEP"
+  run bash "$SWEEP" --retention-apply
+  [ "$status" -eq 0 ]
+  run db "SELECT COUNT(*) FROM sessions;"
+  [ "$output" = "2" ]                          # B's row survives: its evidence is in root B
+  rm -f "$b/-Users-x-proj/$SID_B.jsonl"
+  run bash "$SWEEP" --retention-apply
+  [ "$status" -eq 0 ]
+  run db "SELECT session_id FROM sessions;"
+  [ "$output" = "$SID_A" ]
+}

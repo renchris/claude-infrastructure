@@ -16,6 +16,11 @@
 # touches the live DB — and so a test can point at a fixture without moving $HOME.
 SESSION_INDEX_DB="${SESSION_INDEX_DB:-$HOME/.claude/session-index.db}"
 SESSION_INDEX_LOG="${SESSION_INDEX_LOG:-$HOME/.claude/logs/session-index.log}"
+# Recorded BEFORE the default below: a caller-chosen projects dir (a fixture, a rehearsal) narrows
+# the account-root list to that one dir, so the $HOME/.claude-* defaults never reach a fixture —
+# see session_index_project_roots. The `:=` keeps a second source in the same shell from reading
+# its own default back as the caller's choice.
+if [ -n "${CLAUDE_PROJECTS_DIR:-}" ]; then : "${_SI_PROJECTS_DIR_CALLER:=1}"; else : "${_SI_PROJECTS_DIR_CALLER:=0}"; fi
 CLAUDE_PROJECTS_DIR="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
 # The prompt log is per-account — `history.jsonl` is named in every _CC_ISOLATE set in
 # lib/config-mirror.zsh — so account 1's copy is a QUARTER of what was actually asked on this box.
@@ -713,6 +718,55 @@ _si_deref() { # <path> → the real file behind any symlink chain (readlink -f, 
     printf '%s\n' "$p"
 }
 SESSION_INDEX_NORM_DIR="${SESSION_INDEX_NORM_DIR:-$(dirname "$(_si_deref "${BASH_SOURCE[0]}")")}"
+
+# session_index_project_roots [--with-absent] — every account's projects root, one per line, in list
+# order. The index, retention and the parity count all read this ONE list: each account keeps its
+# own transcripts, and measured 2026-09-28 the non-canonical roots held ~70 of ~205 transcripts from
+# the last day and 320 of 376 workflow result files, none of which the sweep read.
+# List: $SESSION_INDEX_PROJECT_ROOTS if set; else just $CLAUDE_PROJECTS_DIR when the caller chose a
+# non-canonical one; else the canonical root plus the three other accounts' roots.
+# A root that resolves (cd -P) to a root already printed is skipped, so ~/.claude-next/projects —
+# a symlink to ~/.claude/projects — is never swept twice. Absent roots are skipped unless
+# --with-absent, which the parity count uses to report them as `absent`.
+session_index_project_roots() {
+    local with_absent=0 list r real seen=""
+    [ "${1:-}" = "--with-absent" ] && with_absent=1
+    if [ -n "${SESSION_INDEX_PROJECT_ROOTS:-}" ]; then
+        list="$SESSION_INDEX_PROJECT_ROOTS"
+    elif [ "${_SI_PROJECTS_DIR_CALLER:-0}" = 1 ] && [ "$CLAUDE_PROJECTS_DIR" != "$HOME/.claude/projects" ]; then
+        list="$CLAUDE_PROJECTS_DIR"
+    else
+        list="$CLAUDE_PROJECTS_DIR $HOME/.claude-secondary/projects $HOME/.claude-tertiary/projects $HOME/.claude-quaternary/projects"
+    fi
+    # shellcheck disable=SC2086  # an intentional space-separated list
+    for r in $list; do
+        r="${r%/}"
+        if [ -d "$r" ]; then
+            real="$(cd -P "$r" 2>/dev/null && pwd)" || real="$r"
+        else
+            [ "$with_absent" = 1 ] || continue
+            real="$r"
+        fi
+        case "
+$seen
+" in *"
+$real
+"*) continue ;; esac
+        seen="$seen
+$real"
+        printf '%s\n' "$r"
+    done
+}
+
+# session_index_changed_files_all_roots — session_index_changed_files over every root, concatenated.
+# Each root's rows are absolute paths, so the sweep loop derives each row's project dir as before.
+session_index_changed_files_all_roots() {
+    local r
+    while IFS= read -r r; do
+        [ -n "$r" ] || continue
+        session_index_changed_files "$r"
+    done < <(session_index_project_roots)
+}
 # The extractors run inside $(…) subshells, where a flag set on the first call dies with it, so
 # "once per process" is a token minted at source time (every subshell inherits it) and recorded in
 # a marker under $HOME/.claude/state (X4). A concurrent sweep and SessionEnd can each re-log once
@@ -1188,10 +1242,10 @@ session_index_retention() { # [--apply]  → prints "<before> <after> <deleted>"
     # exist deeper than that (the 1,295 deeper files are `agent-<hash>.jsonl` subagent
     # transcripts, which this index never contained).
     local roots ondisk n_ondisk r
-    roots="${SESSION_INDEX_PROJECT_ROOTS:-$CLAUDE_PROJECTS_DIR $HOME/.claude-secondary/projects $HOME/.claude-tertiary/projects $HOME/.claude-quaternary/projects}"
+    roots="$(session_index_project_roots --with-absent | tr '\n' ' ')"
+    roots="${roots% }"
     ondisk=""
-    # shellcheck disable=SC2086  # roots is an intentional space-separated list
-    for r in $roots; do
+    while IFS= read -r r; do
         [ -d "$r" ] || continue
         ondisk="$ondisk
 $(find "$r" -maxdepth 3 -type f -name '*.jsonl' 2>/dev/null \
@@ -1204,7 +1258,7 @@ $(find "$r" -mindepth 4 -maxdepth 4 -type f -path '*/workflows/wf_*.json' 2>/dev
         | while IFS= read -r f; do basename "$f" .json; done)"
         # ^ a workflow result row's id IS its file stem (`wf_…`, see the sweep), so its evidence
         #   is that file; without this arm every such row reads "no transcript" and is deleted.
-    done
+    done < <(session_index_project_roots)
     ondisk=$(printf '%s\n' "$ondisk" | grep . | sort -u)
     n_ondisk=$(printf '%s\n' "$ondisk" | grep -c . || true)
     if [ "${n_ondisk:-0}" -lt 1 ]; then
