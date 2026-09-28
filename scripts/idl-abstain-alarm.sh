@@ -142,6 +142,8 @@ _reap_keep_dormant=(claimer-live owned-wait)
 # logged once per session, beside a once-per-session `no-match` that proves the guard was reached.
 # no-prompt and classify-error joined with memory-nudge:ruling (truememory #26, X3): a payload with
 # no string `.prompt`, and a classifier that threw, are both prompts the shadow could not score.
+# memory-nudge:episodic (truememory §3.18, #18) adds no reason: its one could-not-observe outcome is
+# classify-error, already listed; not-typed, no-match and kill-switch are reached guards.
 # neighbour-lib-missing joined with backup-before-write:neighbours (truememory §3.10, X3): the new-topic
 # branch could not resolve hooks/lib/memory_neighbours.py (or python3) through its dereferenced
 # self-path, so it never scored the write. empty-pool and kill-switch stay out: the guard was reached.
@@ -308,7 +310,8 @@ denom_lesson_symptom_replay_failure() { _denom_lesson_replay "$1" error; }
 
 # Prompts memory-nudge SAW: the RAW per-session counters (not divided by the interval), summed over
 # the same state dirs with the same mtime cutoff. The denominator for `memory-nudge:ruling`, the
-# ruling shadow, which logs one row for every prompt that increments a counter (truememory #26).
+# ruling shadow, which logs one row for every prompt that increments a counter (truememory #26), and
+# for `memory-nudge:episodic`, the episodic cue, which does the same (truememory §3.18, #18).
 # The shadow never writes these files, so they are a source it cannot fake (X5). The interval kill
 # switch (MEMORY_NUDGE_INTERVAL=0) exits before both the counter and the shadow, so none are due.
 denom_nudge_prompts() {

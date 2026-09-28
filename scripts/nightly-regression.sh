@@ -34,6 +34,8 @@
 #   7c. norm-share.py — share of session-index context_text rows indexed in the last 24 h that still
 #      carry non-operator markers (truememory §3.14 gap item 3). RED above 10%; too few rows abstains.
 #      The window starts no earlier than the lib's first live `session-index:norm` IDL row.
+#   7d. episodic-cue-outcome.py — for each episodic cue fire older than 24 h, whether a claude-search
+#      followed it in that session (truememory §3.18, #18, PROVISIONAL). A report: RED only on a crash.
 #
 # ON RED: write a page file to autonomy/pages/ (drainable by the P0-15 SO-5 desk-role consumer) +
 # osascript notification. ALWAYS append a one-line result to autonomy/regression.log.
@@ -688,6 +690,17 @@ regress() {
     run_check "norm-share" python3 "$SELF_SCRIPTS/norm-share.py"
   else
     SKIPS+=("norm-share:no-python3")
+  fi
+  # 7d. the episodic cue's adoption log (truememory-2026-09-27.md §3.18, #18; PROVISIONAL): for each
+  # fire older than 24 h, was it followed by a claude-search in that session's transcript? The
+  # EPISODIC-VERDICT line lands in the captured output; exit 0 on every verdict (a report, not a
+  # gate: RED only if it crashes). Read-only. CC_NIGHTLY_EPISODIC_OUTCOME stubs it (executed directly), like 7b.
+  if [ -n "${CC_NIGHTLY_EPISODIC_OUTCOME:-}" ]; then
+    run_check "episodic-cue-outcome" "$CC_NIGHTLY_EPISODIC_OUTCOME"
+  elif command -v python3 >/dev/null 2>&1; then
+    run_check "episodic-cue-outcome" python3 "$SELF_SCRIPTS/episodic-cue-outcome.py"
+  else
+    SKIPS+=("episodic-cue-outcome:no-python3")
   fi
 
   # ── verdict ──

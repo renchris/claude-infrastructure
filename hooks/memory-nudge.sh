@@ -173,6 +173,31 @@ _mn_ruling_shadow() {
 }
 _mn_ruling_shadow || true
 
+# ── EPISODIC CUE (truememory-2026-09-27.md §3.18, #18; PROVISIONAL). One narrow-cue line pointing at
+# claude-search when a typed prompt refers to earlier work; it injects nothing from other sessions.
+# Computed on EVERY counted prompt, like the shadow above, and it rides whichever JSON this hook
+# prints: cue-only on a non-due prompt (_mn_not_due); on a due one it leads, except that a 🚨 warning
+# stays first (see the final jq). Exactly
+# one JSON object either way. The lib logs its own `memory-nudge:episodic` IDL row per prompt and
+# every fire to ~/.claude/state/episodic-cue.jsonl, which scripts/episodic-cue-outcome.py reads
+# nightly — adoption rides on that log. Resolved through the dereferenced self-path (X1), and a
+# missing lib costs the cue and nothing else. Kill switch CC_EPISODIC_CUE=off.
+_MN_CUE=""
+_mn_ep="$(dirname "$(_mn_deref "${BASH_SOURCE[0]}")")/lib/episodic_cue.sh"
+if [ -r "$_mn_ep" ]; then
+  # A sentinel keeps the prompt's trailing newlines, which a bare $( ) would strip.
+  _mn_prompt="$(printf '%s' "$INPUT" | jq -j '.prompt | if type == "string" then . else "" end' 2>/dev/null; printf x)"
+  _mn_prompt="${_mn_prompt%x}"
+  # shellcheck source=lib/episodic_cue.sh
+  # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+  . "$_mn_ep" && _MN_CUE="$(episodic_cue_line "$_mn_prompt" 2>/dev/null)" || _MN_CUE=""
+fi
+_mn_not_due() {
+  [ -z "$_MN_CUE" ] || jq -cn --arg ctx "$_MN_CUE" \
+    '{hookSpecificOutput:{hookEventName:"UserPromptSubmit",additionalContext:$ctx}}'
+  exit 0
+}
+
 MEM="${MEMORY_INDEX_PATH:-}"
 WANT="$MEM"
 if [ -z "$MEM" ]; then
@@ -579,9 +604,9 @@ fi
 OVERFLOW=0
 case "$BUDGET_CTX" in '🚨'*) OVERFLOW=1 ;; esac
 if [ "$OVERFLOW" -eq 1 ]; then
-  [ "$COUNT" -eq 1 ] || [ $((COUNT % INTERVAL)) -eq 0 ] || exit 0
+  [ "$COUNT" -eq 1 ] || [ $((COUNT % INTERVAL)) -eq 0 ] || _mn_not_due
 else
-  [ $((COUNT % INTERVAL)) -eq 0 ] || exit 0
+  [ $((COUNT % INTERVAL)) -eq 0 ] || _mn_not_due
 fi
 # One IDL row per DECISION turn (hook `memory-nudge`); non-fire turns exited above, so this adds no
 # per-prompt cost. scripts/idl-expected-fires.tsv measures these rows against the fires the
@@ -658,6 +683,13 @@ NUDGE="MEMORY CHECK (periodic): if this session surfaced a DURABLE, generalizabl
 
 # Build with jq: the message interpolates measured values, and shell quoting is
 # not JSON quoting — a hand-rolled heredoc would be a quoting bug waiting to land.
-jq -cn --arg ctx "${BUDGET_CTX:+$BUDGET_CTX }$NUDGE" \
+# A 🚨 overflow warning stays the first thing in the context; otherwise the episodic cue leads, so
+# the routine budget line does not bury it.
+if [ "$OVERFLOW" -eq 1 ]; then
+  _mn_ctx="${BUDGET_CTX:+$BUDGET_CTX }${_MN_CUE:+$_MN_CUE }$NUDGE"
+else
+  _mn_ctx="${_MN_CUE:+$_MN_CUE }${BUDGET_CTX:+$BUDGET_CTX }$NUDGE"
+fi
+jq -cn --arg ctx "$_mn_ctx" \
   '{hookSpecificOutput:{hookEventName:"UserPromptSubmit",additionalContext:$ctx}}'
 exit 0
