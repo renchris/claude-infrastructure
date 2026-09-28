@@ -315,6 +315,9 @@ plant36() {
   [ "$status" -eq 1 ]
   [[ "$output" == *"B-08 is ranked, not signed-off"* ]] || false
   [ ! -e "$d/desk-state/baked.log" ]
+  d=$(plant36 M79c)
+  [ -x "$d/fx/desk/bin/bake" ]
+  [ "$(grep -c '^B-0[789]' "$d/fx/desk/ledger.tsv")" -eq 3 ]
   d=$(plant36 M10b)
   "$d/fx/desk/bin/draft" Coach "Yes, Thursday" >/dev/null
   run "$d/fx/desk/bin/wa" dinner

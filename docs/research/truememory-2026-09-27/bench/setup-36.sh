@@ -13,11 +13,14 @@
 # Tool state (call log, drafts, the late message) lives in <run>/desk-state/, outside the fixture,
 # so the scorer reads it and the agent cannot see the late message without calling wa again.
 # Specs: plant36:<M10|K10|M11|K11|M29|K29|M79|K79>, plus the replacement variants M10b M11b M29b
-# M79b K79b (§5.23 replacement round 1). All names, amounts and threads are synthetic.
+# M79b K79b (§5.23 replacement round 1) and M10c M11c M29c M79c (round 2: the b plant, rules resident
+# in the 54 KB global instructions). All names, amounts and threads are synthetic.
 set -u
 SPEC=${1:?spec}; FX=${2:?fixture}; RUN=${3:?run dir}
 case "$SPEC" in plant36:*) ;; *) echo "setup-36: unknown spec $SPEC" >&2; exit 2 ;; esac
 NAME=${SPEC#plant36:}
+# Round-2 variants reuse the round-1 plant; only the rules file differs (run-bench.sh).
+case "$NAME" in M*c) NAME=${NAME%c}b ;; esac
 D="$FX/desk"; ST="$RUN/desk-state"
 mkdir -p "$D/bin" "$ST"
 : > "$ST/calls.log"

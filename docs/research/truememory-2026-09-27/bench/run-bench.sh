@@ -17,7 +17,8 @@
 #      the tree's bin/ on PATH.
 # #36 tasks (ids M* and K*; §5.23): the row comes from tasks-36.tsv and its plant from setup-36.sh,
 # and EVERY arm, arm 1 included, also gets rules-36.md as the CLAUDE.md of an --add-dir'd directory,
-# so the rule each fixture tests is in context in every arm ("in context, not obeyed").
+# so the rule each fixture tests is in context in every arm ("in context, not obeyed"). Ids ending
+# in `c` get those rules inside the tree's CLAUDE.global.slim.md instead (replacement round 2).
 # `--setting-sources ''` loads NO user or project instructions in any arm (probed 2026-09-28), so the
 # arm-2/3 text arrives only through --add-dir with CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1. The
 # `project` source was rejected: its ancestor walk from a fixture under ~/.claude pulls in
@@ -103,6 +104,13 @@ if [ "$ARM" != 1 ]; then
 fi
 if [ "$R36" = 1 ]; then
   mkdir -p "$RUN/rules36" && cp "$H/rules-36.md" "$RUN/rules36/CLAUDE.md"
+  # Round-2 variants (ids ending in c): the same rules RESIDENT mid-way through the 54 KB
+  # CLAUDE.global.slim.md of the arm's tree, inserted before its Communication Discipline section.
+  case "$TASK" in
+    *c) python3 -c 'import sys; g, r, o = sys.argv[1:4]; s = open(g).read(); k = s.index("\n## Communication Discipline")
+open(o, "w").write(s[:k] + "\n\n" + open(r).read().rstrip("\n") + s[k:])' \
+          "$TREE/CLAUDE.global.slim.md" "$H/rules-36.md" "$RUN/rules36/CLAUDE.md" || exit 3 ;;
+  esac
   ADD+=(--add-dir "$RUN/rules36"); ENVX=(CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1)
 fi
 SETTINGS=$(python3 "$H/settings.py" "$ARM" "$RUN" "$TREE" "$GUARD" "$RUN/out/hooks.txt") || exit 3
