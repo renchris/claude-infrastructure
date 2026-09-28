@@ -61,6 +61,9 @@ setup() {
   # ~/.claude/mailbox/dead-letter exactly as the four above once pointed at their live stores.
   export CC_MAILBOX_DIR="$BATS_TEST_TMPDIR/mailbox"
   export CC_SWEEP_SEEN_DIR="$BATS_TEST_TMPDIR/sweep-seen"
+  # The stranded-sessions line reads cc-resume-debt's LIVE ledger by default — same hazard as the
+  # stores above. `none` = absent; tests/operator-readout-stranded.bats owns that line.
+  export CC_RESUME_DEBT_BIN=none
   mkdir -p "$CC_ACTIVATION_DIR" "$CC_DECISIONS_DIR" "$CC_HANDOFF_ALARM_DIR" \
            "$CC_ANNOUNCE_ALARM_DIR" "$CC_COMPLETION_RECORDS_DIR" "$CC_PAGES_DIR" \
            "$CC_MAILBOX_DIR/dead-letter" "$CC_SWEEP_SEEN_DIR"

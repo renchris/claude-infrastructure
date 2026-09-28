@@ -479,6 +479,48 @@ escalation_unseen_count() {
   printf '%s' "$n"
 }
 
+# ── STRANDED SESSIONS (docs/plans/CLOSE_RESUME_CUSTODY.md §2 D4) — the resume debts that escalated:
+# a mover closed the session and every relaunch failed. cc-resume-debt files ONE `cc-backlog needs`
+# row per stranding, but in the standing pile that row is item 291 of a collapsed `◆ 290 blocked
+# backlog` count and its `▶` never prints — so they are ITEMISED here, up to 3, each with its
+# command. Prints NOTHING when there are none or the tool is absent, slow or failing: this runs
+# inside a Stop hook, where an error line is worse than a missing one. Bounded at 3 s.
+# CC_RESUME_DEBT_BIN: a path ⇒ use verbatim · the literal `none` ⇒ ABSENT (the CC_DO_BIN idiom:
+# the search's first tier is this checkout's own bin/, which no tmpdir isolation can make miss).
+stranded_sessions() {
+  local rd="${CC_RESUME_DEBT_BIN:-}" c to="" raw rows n us=$'\037' bid sid dcwd acct tag
+  [ "$rd" = none ] && return 0
+  if [ -z "$rd" ]; then
+    for c in "$SCRIPT_DIR/../bin/cc-resume-debt" "$HOME/.claude/bin/cc-resume-debt"; do
+      [ -x "$c" ] && { rd="$c"; break; }
+    done
+  fi
+  { [ -n "$rd" ] && [ -x "$rd" ]; } || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  for c in "$(command -v timeout 2>/dev/null)" "$(command -v gtimeout 2>/dev/null)" \
+           /opt/homebrew/bin/timeout /usr/local/bin/timeout; do
+    [ -n "$c" ] && [ -x "$c" ] && { to="$c"; break; }
+  done
+  if [ -n "$to" ]; then raw="$("$to" -k 1 3 "$rd" list --escalated --json 2>/dev/null)" || return 0
+  else raw="$("$rd" list --escalated --json 2>/dev/null)" || return 0; fi
+  # An array or a JSON-lines stream, both accepted. \037 (unit separator), never a tab: tab is IFS
+  # WHITESPACE, so `read` would collapse an empty backlog_id and shift every later field left.
+  rows="$(printf '%s\n' "$raw" | jq -r --arg us "$us" \
+    'if type == "array" then .[] else . end | select(type == "object" and (.sid // "") != "")
+     | [(.backlog_id // ""), .sid, (.cwd // ""), (.account // "")] | map(tostring) | join($us)' \
+    2>/dev/null)" || return 0
+  [ -n "$rows" ] || return 0
+  n="$(printf '%s\n' "$rows" | grep -c .)"
+  printf ' ⚠ %s stranded session(s) — closed by a mover, relaunch failed:\n' "$n"
+  while IFS="$us" read -r bid sid dcwd acct; do
+    tag="[${sid:0:8} · ${dcwd##*/} · ${acct}]"
+    if [ -n "$bid" ]; then printf '   ▶ cc-do %s   %s\n' "$bid" "$tag"
+    else printf '   ◆ cc-resume-debt settle --sid %s   %s\n' "$sid" "$tag"; fi
+  done <<< "$(printf '%s\n' "$rows" | head -3)"
+  [ "$n" -gt 3 ] && printf '   … +%s more — cc-resume-debt list --escalated\n' "$((n - 3))"
+  return 0
+}
+
 # ── the ONE renderer: prints the block (or nothing) for cwd=$1. Sets RUNG + TOTAL + Q_N for the
 #    caller — so hook mode must invoke it via redirection in THIS shell, never `$(…)` (subshell
 #    loses them).
@@ -1327,6 +1369,10 @@ render_block() {
   [ -n "$last_cls" ] && close_class "$last_cls" "$pc"
   rm -f "$steps_file"
   fi   # ── end CBUDGET collapse / itemise branch ──
+
+  # ── stranded sessions (CLOSE_RESUME_CUSTODY D4) — outside both mode branches, like the line below.
+  # Header ` ⚠` and rows indented by THREE: none match `^ [0-9]+ (▶|◆|✎)` (NSTEPS) or `^ (▶|◆)`.
+  stranded_sessions
 
   # ── escalation records (D3) — ONE counted line, outside both mode branches so it reads the same in
   # collapse, itemised and legacy. Deliberately UNNUMBERED: `NSTEPS` counts `^ [0-9]+ (▶|◆|✎)`, and
