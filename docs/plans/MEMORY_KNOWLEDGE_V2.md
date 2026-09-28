@@ -501,6 +501,22 @@ verification ("no grepping… no git commands"). Extraction has no opt-out short
 (`migrations/0043-autodream-pin.sh`, c10, operator-run), watch both flags with the `NATIVE` sentinel
 (`scripts/memory-fleet-sweep.sh --reach`), and let `scripts/memory-store-snapshot.sh` be the undo.
 
+**R19 — Per-prompt pointer recall** (research #23). Dropped unbuilt under #35's pre-registered no-gain
+branch (research §5.17, §5.18): the delivery benchmark found no gain for push consumers, and #23 is one at
+the prompt. *Reopen only if* a delivery-research wave on tasks the stock arm fails (#36's fixtures,
+research §5.23-5.24) shows a pushed pointer changes what the agent does.
+
+**R20 — Ruling-shaped operator text nudge** (research #26). Dropped under the same branch after shadowing
+from Wave B: 184 live `memory-nudge:ruling` rows, 0 fires (169 not-typed, 15 no-match), against a rule
+that needed ≥20 fires at ≥70% precision. The shadow is off unless `CC_RULING_SHADOW=on` (`287ffc74b`).
+*Reopen only if* that research wave shows capture at the ruling moment changes behaviour.
+
+**R21 — Provenance-and-verification tier, `Receipt:` line** (research #27, §5.22). X7 bars prose delivery,
+and the one non-prose channel (#10's new-topic advisory) has 0 delivered-and-used events, so a receipt
+clause on it would be a push consumer on faith. The need is measured: 71 of 91 recent topics with a
+negative tool claim carry no conditions. *Reopen only if* `scripts/mem-neighbours-outcome.py` shows ≥1
+delivered-and-used advisory; then add the receipt sentence to that message and measure adoption.
+
 **Sub-parts dropped from adopted items**, so nobody resurrects them: a PreToolUse advisory arm for
 symptom recall; a standalone per-Bash hook fork; `symptoms:` frontmatter before 15 rows; routing
 demoted lines to COLD; a dynamic run-every-hook contract test (a static lint suffices); a persistent
