@@ -112,6 +112,10 @@ minus the autonomous fork.
    `description:`) and report it; a dangling link is reported, never auto-removed.
    Also read `~/.claude/state/mem-neighbours-unresolved.txt` (new file, nearest neighbour, score, fire time — written nightly by `scripts/mem-neighbours-outcome.py`): each row is a likely duplicate left behind, so fold anything new into the neighbour and add `superseded_by: <neighbour>` to the new file.
 
+   Broken-link report (report-only): run `cc-memory-refs <memdir>`. A near-miss is usually a
+   misspelling to fix by hand; a wikilink with no near-miss may be a deliberate placeholder. Never
+   auto-rewrite links.
+
    🚨 **A file is an orphan only after subtracting THREE exclusion sets — E1 the index, E2 the
    demotion record, E3 the always-loaded instruction files.** Each is a *different reason* a topic
    file is CORRECTLY unindexed, and each was found by a measurement in which the naive sweep was

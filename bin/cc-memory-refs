@@ -1,0 +1,117 @@
+#!/usr/bin/env python3
+"""cc-memory-refs — report `[[slug]]` wikilinks in a memory store that name no memory, with near-misses.
+
+TrueMemory adoption item #13 (docs/research/truememory-2026-09-27.md §3.13). READ-ONLY and
+REPORT-ONLY: it never writes, never rewrites a link, and a broken link is never an error. The global
+memory rule allows a `[[name]]` with no file yet — it marks something worth writing later — so a
+wikilink with no near-miss may be a deliberate placeholder. A near-miss (difflib, cutoff 0.8) is
+usually a misspelling, and fixing it stays a human edit.
+
+    cc-memory-refs <memdir>
+
+Scans every *.md under <memdir> (MEMORY.md and archive/ included), outside fenced blocks and inline
+code, where a wikilink is only being quoted. A slug resolves if it matches any file stem or any
+frontmatter `name:`. Prints one line per distinct unresolved slug, sorted, then the verdict:
+
+    REFS-VERDICT broken=<n> near_miss=<k> files=<m>
+
+n = distinct unresolved slugs, k = how many of them have at least one near-miss, m = files read.
+Exit 0 when it read the dir (whatever it found), 2 when it could not.
+"""
+
+from __future__ import annotations
+
+import difflib
+import os
+import re
+import sys
+from pathlib import Path
+
+WIKILINK = re.compile(r"\[\[([^\[\]|#]+)(?:[|#][^\[\]]*)?\]\]")
+FENCE = re.compile(r"^\s*(```|~~~)")
+INLINE_CODE = re.compile(r"`[^`]*`")
+NAME = re.compile(r"^name:\s*['\"]?(.+?)['\"]?\s*$")
+
+
+def frontmatter_name(lines: list[str]) -> str | None:
+    """The `name:` of a leading `---` frontmatter block, if any."""
+    if not lines or lines[0].strip() != "---":
+        return None
+    for line in lines[1:]:
+        if line.strip() == "---":
+            return None
+        m = NAME.match(line)
+        if m:
+            return m.group(1)
+    return None
+
+
+def wikilinks(lines: list[str]) -> list[str]:
+    """Every wikilink slug outside fenced blocks and inline code spans."""
+    out: list[str] = []
+    fenced = False
+    for line in lines:
+        if FENCE.match(line):
+            fenced = not fenced
+            continue
+        if fenced:
+            continue
+        slugs = (
+            m.group(1).strip() for m in WIKILINK.finditer(INLINE_CODE.sub("", line))
+        )
+        out.extend(s for s in slugs if s)
+    return out
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 2 or argv[1] in ("-h", "--help"):
+        print("usage: cc-memory-refs <memdir>", file=sys.stderr)
+        return 2
+    root = Path(argv[1])
+    try:
+        # rglob swallows a permission error and yields nothing, which would render an unreadable
+        # store as an empty, clean one; listing the root first makes that a could-not-read.
+        files = None
+        if root.is_dir():
+            os.listdir(root)
+            files = sorted(p for p in root.rglob("*.md") if p.is_file())
+    except OSError as e:
+        print(f"cc-memory-refs: could not read {root}: {e}", file=sys.stderr)
+        return 2
+    if files is None:
+        print(f"cc-memory-refs: not a readable directory: {root}", file=sys.stderr)
+        return 2
+
+    known: set[str] = set()
+    cites: dict[str, set[str]] = {}
+    read = 0
+    for p in files:
+        known.add(p.stem)
+        try:
+            lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError as e:
+            print(f"cc-memory-refs: unreadable, skipped: {p}: {e}", file=sys.stderr)
+            continue
+        read += 1
+        name = frontmatter_name(lines)
+        if name:
+            known.add(name)
+        rel = str(p.relative_to(root))
+        for slug in wikilinks(lines):
+            cites.setdefault(slug, set()).add(rel)
+
+    candidates = sorted(known)
+    broken = sorted(s for s in cites if s not in known)
+    near_count = 0
+    for slug in broken:
+        near = difflib.get_close_matches(slug, candidates, n=3, cutoff=0.8)
+        near_count += bool(near)
+        where = ", ".join(sorted(cites[slug]))
+        hint = f"near-miss: {', '.join(near)}" if near else "no near-miss"
+        print(f"[[{slug}]] — cited in {where} — {hint}")
+    print(f"REFS-VERDICT broken={len(broken)} near_miss={near_count} files={read}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
