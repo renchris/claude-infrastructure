@@ -20,10 +20,11 @@ install_core() { run "$BASH_UNDER_TEST" "$REPO/install-core.sh" "$@"; }
 
 # A throwaway git repo with one commit; $1 = directory.
 mkrepo() {
-  git init -q "$1"
-  git -C "$1" config user.email t@example.invalid
-  git -C "$1" config user.name t
-  echo a > "$1/f"; git -C "$1" add f; git -C "$1" commit -qm init
+  local d="${1:?repo path required}"
+  git init -q "$d"
+  git -C "${d:?}" config user.email t@example.invalid
+  git -C "${d:?}" config user.name t
+  echo a > "$d/f"; git -C "$d" add f; git -C "$d" commit -qm init
 }
 
 stop_json() {  # <cwd> <message> [session]
@@ -38,13 +39,15 @@ stop_json() {  # <cwd> <message> [session]
 @test "fresh install into an empty config dir verifies itself and prints READY" {
   install_core
   [ "$status" -eq 0 ]
-  [[ "$output" == *"READY."* ]]
-  [[ "$output" != *"FAIL"* ]]
-  [ -x "$AC/bin/autonomy" ] && [ -f "$CFG/commands/wrap.md" ] && [ -f "$CFG/commands/handoff.md" ]
+  [[ "$output" == *"READY."* ]] || false
+  [[ "$output" != *"FAIL"* ]] || false
+  [ -x "$AC/bin/autonomy" ]
+  [ -f "$CFG/commands/wrap.md" ]
+  [ -f "$CFG/commands/handoff.md" ]
   [ "$(jq '[.hooks[][].hooks[].command | select(contains("autonomy-core/hooks/"))] | length' "$CFG/settings.json")" -eq 3 ]
   grep -q 'BEGIN autonomy-core' "$CFG/CLAUDE.md"
   # the install directory is filled into the rules and commands
-  ! grep -rq '__AC_HOME__' "$CFG/CLAUDE.md" "$CFG/commands" "$AC"
+  ! grep -rq '__AC_HOME__' "$CFG/CLAUDE.md" "$CFG/commands" "$AC" || false
   grep -q "$AC/bin/autonomy continue set" "$CFG/CLAUDE.md"
 }
 
@@ -59,8 +62,8 @@ stop_json() {  # <cwd> <message> [session]
   [ "$(head -2 "$CFG/CLAUDE.md")" = "$(printf '# my rules\nkeep me')" ]
   cp "$CFG/settings.json" "$BATS_TEST_TMPDIR/s1"; cp "$CFG/CLAUDE.md" "$BATS_TEST_TMPDIR/m1"
   install_core; [ "$status" -eq 0 ]
-  [[ "$output" == *"settings.json already up to date"* ]]
-  [[ "$output" == *"CLAUDE.md block already up to date"* ]]
+  [[ "$output" == *"settings.json already up to date"* ]] || false
+  [[ "$output" == *"CLAUDE.md block already up to date"* ]] || false
   cmp -s "$CFG/settings.json" "$BATS_TEST_TMPDIR/s1"
   cmp -s "$CFG/CLAUDE.md" "$BATS_TEST_TMPDIR/m1"
   [ "$(jq '[.hooks[][].hooks[].command | select(contains("autonomy-core/hooks/"))] | length' "$CFG/settings.json")" -eq 3 ]
@@ -75,7 +78,9 @@ stop_json() {  # <cwd> <message> [session]
   install_core --uninstall; [ "$status" -eq 0 ]
   [ "$(jq -c . "$CFG/settings.json")" = '{"model":"m","hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo mine"}]}]}}' ]
   [ "$(cat "$CFG/CLAUDE.md")" = '# my rules' ]
-  [ ! -e "$CFG/commands/wrap.md" ] && [ ! -e "$AC/hooks" ] && [ ! -e "$AC/bin" ]
+  [ ! -e "$CFG/commands/wrap.md" ]
+  [ ! -e "$AC/hooks" ]
+  [ ! -e "$AC/bin" ]
   [ -n "$(find "$AC/backups" -type f)" ]
 }
 
@@ -90,22 +95,23 @@ stop_json() {  # <cwd> <message> [session]
   mkdir -p "$CFG/commands"; printf 'my wrap\n' > "$CFG/commands/wrap.md"
   install_core; [ "$status" -eq 0 ]
   [ "$(cat "$CFG/commands/wrap.md")" = 'my wrap' ]
-  [[ "$output" == *"is your own /wrap; left alone"* ]]
+  [[ "$output" == *"is your own /wrap; left alone"* ]] || false
   [ -f "$CFG/commands/handoff.md" ]
 }
 
 @test "refuses (and changes nothing) where the full install is present; --force overrides" {
   mkdir -p "$CFG/hooks"; : > "$CFG/hooks/session-continue.sh"
   install_core; [ "$status" -eq 1 ]
-  [[ "$output" == *"full claude-infrastructure install is already"* ]]
-  [ ! -e "$AC" ] && [ ! -e "$CFG/settings.json" ]
+  [[ "$output" == *"full claude-infrastructure install is already"* ]] || false
+  [ ! -e "$AC" ]
+  [ ! -e "$CFG/settings.json" ]
   install_core --force; [ "$status" -eq 0 ]
 }
 
 @test "an invalid settings.json is refused and left byte-identical" {
   printf '{ not json\n' > "$CFG/settings.json"
   install_core; [ "$status" -eq 1 ]
-  [[ "$output" == *"is not valid JSON"* ]]
+  [[ "$output" == *"is not valid JSON"* ]] || false
   [ "$(cat "$CFG/settings.json")" = '{ not json' ]
 }
 
@@ -118,12 +124,12 @@ stop_json() {  # <cwd> <message> [session]
   done
   PATH="$bin" run "$bin/bash" "$REPO/install-core.sh"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"JSON via python3"* ]]
-  [[ "$output" == *"READY."* ]]
+  [[ "$output" == *"JSON via python3"* ]] || false
+  [[ "$output" == *"READY."* ]] || false
   [ "$(jq '[.hooks[][].hooks[].command | select(contains("autonomy-core/hooks/"))] | length' "$CFG/settings.json")" -eq 3 ]
   # the hooks read their input without jq too
   PATH="$bin" run bash -c "cd '$BATS_TEST_TMPDIR' && CLAUDE_CODE_SESSION_ID=p '$AC/bin/autonomy' continue set 'py step' && printf '{\"session_id\":\"p\"}' | bash '$AC/hooks/continue.sh'"
-  [[ "$output" == *'"decision":"block"'*"py step"* ]]
+  [[ "$output" == *'"decision":"block"'*"py step"* ]] || false
 }
 
 @test "GNU userland first on PATH (a Linux proxy) installs and verifies" {
@@ -134,7 +140,7 @@ stop_json() {  # <cwd> <message> [session]
   [ -n "$gnu" ] || skip "no GNU userland installed here"
   PATH="$gnu$PATH" run bash "$REPO/install-core.sh"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"READY."* ]]
+  [[ "$output" == *"READY."* ]] || false
 }
 
 @test "auto-continue: cwd-keyed without a session id, capped, and clear stops it" {
@@ -142,13 +148,14 @@ stop_json() {  # <cwd> <message> [session]
   mkdir -p "$BATS_TEST_TMPDIR/w"; cd "$BATS_TEST_TMPDIR/w"
   "$BASH_UNDER_TEST" "$AC/bin/autonomy" continue set "next thing"
   run "$BASH_UNDER_TEST" "$AC/bin/autonomy" continue status
-  [[ "$output" == "armed (0/8): next thing" ]]
+  [[ "$output" == "armed (0/8): next thing" ]] || false
   export AUTONOMY_CONTINUE_MAX=2
   local in; in="$(printf '{"session_id":"zz","cwd":"%s"}' "$PWD")"
-  run bash -c "printf '%s' '$in' | '$BASH_UNDER_TEST' '$AC/hooks/continue.sh'"; [[ "$output" == *"Auto-continue (1/2): next thing"* ]]
-  run bash -c "printf '%s' '$in' | '$BASH_UNDER_TEST' '$AC/hooks/continue.sh'"; [[ "$output" == *"Auto-continue (2/2)"* ]]
+  run bash -c "printf '%s' '$in' | '$BASH_UNDER_TEST' '$AC/hooks/continue.sh'"; [[ "$output" == *"Auto-continue (1/2): next thing"* ]] || false
+  run bash -c "printf '%s' '$in' | '$BASH_UNDER_TEST' '$AC/hooks/continue.sh'"; [[ "$output" == *"Auto-continue (2/2)"* ]] || false
   run bash -c "printf '%s' '$in' | '$BASH_UNDER_TEST' '$AC/hooks/continue.sh'"
-  [[ "$output" == *systemMessage*"stopped after 2 turns"* ]] && [[ "$output" != *block* ]]
+  [[ "$output" == *systemMessage*"stopped after 2 turns"* ]] || false
+  [[ "$output" != *block* ]] || false
   run "$BASH_UNDER_TEST" "$AC/bin/autonomy" continue status; [ "$output" = "not armed" ]
   # another directory is never driven by this one's sentinel
   "$BASH_UNDER_TEST" "$AC/bin/autonomy" continue set "here only"
@@ -167,15 +174,15 @@ stop_json() {  # <cwd> <message> [session]
   echo b > "$r/f"
   run bash -c "printf '%s' '$(stop_json "$r" "Not done yet, tests next.")' | '$BASH_UNDER_TEST' '$gate'"; [ -z "$output" ]
   run bash -c "printf '%s' '$(stop_json "$r" "Refactor landed ✅")' | '$BASH_UNDER_TEST' '$gate'"
-  [[ "$output" == *'"decision":"block"'*"1 tracked file(s) with uncommitted changes"* ]]
+  [[ "$output" == *'"decision":"block"'*"1 tracked file(s) with uncommitted changes"* ]] || false
   run bash -c "printf '%s' '$(stop_json "$r" "Refactor landed ✅")' | '$BASH_UNDER_TEST' '$gate'"; [ -z "$output" ]  # same state
-  run bash -c "printf '%s' '$(stop_json "$r" "Refactor landed ✅" s2)' | '$BASH_UNDER_TEST' '$gate'"; [[ "$output" == *block* ]]  # other session
+  run bash -c "printf '%s' '$(stop_json "$r" "Refactor landed ✅" s2)' | '$BASH_UNDER_TEST' '$gate'"; [[ "$output" == *block* ]] || false  # other session
   # unpushed: a clone that is one commit ahead of its upstream
   git clone -q "$r" "$BATS_TEST_TMPDIR/c"; git -C "$r" checkout -q -- f
   git -C "$BATS_TEST_TMPDIR/c" config user.email t@example.invalid; git -C "$BATS_TEST_TMPDIR/c" config user.name t
   echo c > "$BATS_TEST_TMPDIR/c/g"; git -C "$BATS_TEST_TMPDIR/c" add g; git -C "$BATS_TEST_TMPDIR/c" commit -qm two
   run bash -c "printf '%s' '$(stop_json "$BATS_TEST_TMPDIR/c" "Work is complete.")' | '$BASH_UNDER_TEST' '$gate'"
-  [[ "$output" == *"1 commit(s) not pushed to origin/"* ]]
+  [[ "$output" == *"1 commit(s) not pushed to origin/"* ]] || false
   mkdir -p "$BATS_TEST_TMPDIR/plain"
   run bash -c "printf '%s' '$(stop_json "$BATS_TEST_TMPDIR/plain" "All done.")' | '$BASH_UNDER_TEST' '$gate'"; [ -z "$output" ]
   run bash -c "printf '{\"cwd\":\"%s\"}' '$r' | '$BASH_UNDER_TEST' '$gate'"; [ -z "$output" ]   # no message field
@@ -202,22 +209,22 @@ stop_json() {  # <cwd> <message> [session]
   install_core; [ "$status" -eq 0 ]
   local L="$AC/bin/autonomy"
   mkrepo "$BATS_TEST_TMPDIR/o"; git clone -q "$BATS_TEST_TMPDIR/o" "$BATS_TEST_TMPDIR/c"; cd "$BATS_TEST_TMPDIR/c"
-  git config user.email t@example.invalid; git config user.name t
-  run "$BASH_UNDER_TEST" "$L" ledger; [[ "${lines[0]}" == "READOUT=✅ Complete — clean and pushed to origin/"* ]]
-  echo x > new; run "$BASH_UNDER_TEST" "$L" ledger; [[ "${lines[0]}" == "READOUT=🔧 Loose ends — 1 uncommitted change(s) (0 tracked, 1 untracked)" ]]
-  git add new; git commit -qm n; run "$BASH_UNDER_TEST" "$L" ledger; [[ "${lines[0]}" == "READOUT=📦 Committed, not pushed — 1 commit(s)"* ]]
-  cd "$BATS_TEST_TMPDIR"; run "$BASH_UNDER_TEST" "$L" ledger; [[ "${lines[0]}" == "READOUT=— Not a git repository"* ]]
+  git -C "$BATS_TEST_TMPDIR/c" config user.email t@example.invalid; git -C "$BATS_TEST_TMPDIR/c" config user.name t
+  run "$BASH_UNDER_TEST" "$L" ledger; [[ "${lines[0]}" == "READOUT=✅ Complete — clean and pushed to origin/"* ]] || false
+  echo x > new; run "$BASH_UNDER_TEST" "$L" ledger; [[ "${lines[0]}" == "READOUT=🔧 Loose ends — 1 uncommitted change(s) (0 tracked, 1 untracked)" ]] || false
+  git add new; git commit -qm n; run "$BASH_UNDER_TEST" "$L" ledger; [[ "${lines[0]}" == "READOUT=📦 Committed, not pushed — 1 commit(s)"* ]] || false
+  cd "$BATS_TEST_TMPDIR"; run "$BASH_UNDER_TEST" "$L" ledger; [[ "${lines[0]}" == "READOUT=— Not a git repository"* ]] || false
 }
 
 @test "--verify re-runs the self-checks without changing anything" {
   install_core; [ "$status" -eq 0 ]
   cp "$CFG/settings.json" "$BATS_TEST_TMPDIR/s"
   install_core --verify; [ "$status" -eq 0 ]
-  [[ "$output" == *READY* ]]
+  [[ "$output" == *READY* ]] || false
   cmp -s "$CFG/settings.json" "$BATS_TEST_TMPDIR/s"
   rm "$AC/hooks/continue.sh"
   install_core --verify; [ "$status" -eq 1 ]
-  [[ "$output" == *"NOT READY"* ]]
+  [[ "$output" == *"NOT READY"* ]] || false
 }
 
 @test "the core ships nothing fleet-only or macOS-only" {
