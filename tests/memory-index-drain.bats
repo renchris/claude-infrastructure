@@ -556,6 +556,9 @@ fire() { jq -nc --arg cwd "$1" '{session_id:"s1",cwd:$cwd,tool_name:"Bash",tool_
 }
 
 @test "26 the hook tells an already-cited operator to DELETE, never to append again" {
+  # DELETE is only correct when the rules file LOADS, so this case pins a settings fixture that
+  # does not exclude it; the excluded and unknown arms are cases 30-32.
+  settings loads
   p="$(mkproj p26)"; proj="${p%|*}"; memd="${p#*|}"
   topic "$memd" "twice.md" project
   run fire "$proj"
@@ -622,4 +625,116 @@ _mid_units() {                        # the budget arithmetic, lifted with its r
   MID_CAP=12
   mid_charge "$(( $(date +%s) - 99 ))"        # a wildly inflated reading
   [ "$MID_LEFT" -eq 12 ]                      # site 2 still holds its half, never zero
+}
+
+# ── What the model is TOLD about the destination loading (2026-09-27) ────────────────────────────
+# claudeMdExcludes drops the default destination on this machine (migration 0036), and the drain
+# used to say it "loads by default" — and, on already-cited, to DELETE the MEMORY.md bullet that was
+# then the rule's only resident pointer (docs/research/truememory-2026-09-27.md §3.1). The wording
+# is now computed by hooks/lib/rules-loaded.sh; these pin all three answers and the rendered shape.
+
+# settings <loads|excluded|unknown> → points RULES_LOADED_SETTINGS at a fixture giving that answer
+settings() {
+  case "$1" in
+    loads)    printf '{"claudeMdExcludes":["**/no-such-rules-file.md"]}\n' >"$T/settings-loads.json"
+              export RULES_LOADED_SETTINGS="$T/settings-loads.json" ;;
+    excluded) printf '{"claudeMdExcludes":["**/.claude/rules/agent-operating-lessons-situational.md"]}\n' >"$T/settings-excl.json"
+              export RULES_LOADED_SETTINGS="$T/settings-excl.json" ;;
+    unknown)  export RULES_LOADED_SETTINGS="$T/no-settings-here.json" ;;
+  esac
+}
+
+# The consumer's contract on a rendered hook stdout: exactly one JSON object, which parses, whose
+# additionalContext sits under hookSpecificOutput and is at most 10,000 chars.
+contract() {
+  local out="$1" n c
+  n="$(printf '%s' "$out" | jq -s length)"
+  [ "$n" = 1 ]
+  c="$(printf '%s' "$out" | jq -er '.hookSpecificOutput.additionalContext')"
+  [ -n "$c" ]
+  [ "$(printf '%s' "$c" | jq -Rs length)" -le 10000 ]
+}
+
+# drained_out <name> / cited_out <name> → the hook's stdout for that verdict, in a fresh project
+drained_out() {
+  local p proj memd
+  p="$(mkproj "$1")"; proj="${p%|*}"; memd="${p#*|}"
+  topic "$memd" "big.md" project
+  fire "$proj" >/dev/null
+  ( cd "$memd" && printf -- '- [Big](big.md) — %s\n' "$(pad 700)" >>MEMORY.md )
+  fire "$proj"
+}
+cited_out() {
+  local p proj memd
+  p="$(mkproj "$1")"; proj="${p%|*}"; memd="${p#*|}"
+  topic "$memd" "twice.md" project
+  fire "$proj" >/dev/null
+  ( cd "$memd" && printf -- '- [Twice](twice.md) — %s\n' "$(pad 700)" >>MEMORY.md )
+  fire "$proj" >/dev/null
+  ( cd "$memd" && printf -- '- [Twice](twice.md) — %s\n' "$(pad 700)" >>MEMORY.md )
+  fire "$proj"
+}
+ctx_of() { printf '%s' "$1" | jq -r '.hookSpecificOutput.additionalContext'; }
+
+@test "30 EXCLUDED: already-cited says KEEP the bullet — no DELETE, no loads claim" {
+  settings excluded
+  out="$(cited_out p30)"
+  contract "$out"
+  c="$(ctx_of "$out")"
+  has "$c" "ALREADY CITED"
+  has "$c" "does NOT load"
+  has "$c" "KEEP the MEMORY.md bullet"
+  has "$c" "RULES_RESIDENT_ADD_OK=1"
+  hasnt "$c" "DELETE"
+  hasnt "$c" "loads by default"
+  hasnt "$c" "its rule is firing already"
+}
+
+@test "31 UNKNOWN: already-cited never claims the file loads and never says DELETE" {
+  settings unknown
+  out="$(cited_out p31)"
+  contract "$out"
+  c="$(ctx_of "$out")"
+  has "$c" "ALREADY CITED"
+  has "$c" "could not be read from claudeMdExcludes"
+  has "$c" "KEEP the MEMORY.md bullet"
+  hasnt "$c" "DELETE"
+  hasnt "$c" "loads by default"
+  hasnt "$c" "that file loads ("
+}
+
+@test "32 EXCLUDED: a drain says the rule stopped firing and asks for the pointer back" {
+  settings excluded
+  out="$(drained_out p32)"
+  contract "$out"
+  c="$(ctx_of "$out")"
+  has "$c" "MEMORY INDEX DRAINED"
+  has "$c" "does NOT load"
+  has "$c" "Put a SHORT pointer back in MEMORY.md"
+  hasnt "$c" "still fires unprompted"
+  hasnt "$c" "loads by default"
+}
+
+@test "33 LOADS: a drain says the rule still fires, and both LOADS messages meet the contract" {
+  settings loads
+  out="$(drained_out p33)"
+  contract "$out"
+  c="$(ctx_of "$out")"
+  has "$c" "still fires unprompted"
+  hasnt "$c" "loads by default"
+  out="$(cited_out p33b)"
+  contract "$out"
+  has "$(ctx_of "$out")" "DELETE the MEMORY.md bullet"
+}
+
+@test "34 X1: the hook run THROUGH A SYMLINK with no lib/ beside the link still computes the answer" {
+  settings excluded
+  mkdir -p "$T/linkhooks"
+  ln -s "$HOOK" "$T/linkhooks/memory-index-drain.sh"
+  HOOK="$T/linkhooks/memory-index-drain.sh"
+  out="$(cited_out p34)"
+  contract "$out"
+  c="$(ctx_of "$out")"
+  has "$c" "does NOT load"
+  hasnt "$c" "DELETE"
 }

@@ -235,10 +235,36 @@ mib_is_memory_index() {
 # mib_verdict <tool_name> <file_path> <tool_input_json>
 #   DENY  → prints the reason on stdout, returns 0
 #   ALLOW → prints nothing, returns 1   (every fail-open path lands here)
+# mib_rules_file_loads <path> → loads|excluded|unknown, via hooks/lib/rules-loaded.sh resolved
+# beside THIS file's DEREFERENCED path. Invoked live this lib is ~/.claude/hooks/lib/… — a per-file
+# symlink — and a NEW sibling has no mirror there until a deploy links it, so an underefed
+# BASH_SOURCE would miss it and answer from nothing. A missing lib answers `unknown`, never `loads`.
+mib_rules_file_loads() {
+  local src="${BASH_SOURCE[0]}" t n=0 lib
+  if ! command -v rules_file_loads >/dev/null 2>&1; then
+    if t=$(readlink -f "$src" 2>/dev/null) && [ -n "$t" ]; then
+      src="$t"
+    else                                     # BSD readlink without -f: walk the chain by hand
+      while [ -L "$src" ] && [ "$n" -lt 20 ]; do
+        t="$(readlink "$src")"
+        case "$t" in /*) src="$t" ;; *) src="$(dirname "$src")/$t" ;; esac
+        n=$(( n + 1 ))
+      done
+    fi
+    lib="$(dirname "$src")/rules-loaded.sh"
+    if [ -r "$lib" ]; then
+      # shellcheck source=rules-loaded.sh
+      # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+      . "$lib"
+    fi
+  fi
+  if command -v rules_file_loads >/dev/null 2>&1; then rules_file_loads "$1"; else printf 'unknown\n'; fi
+}
+
 mib_verdict() {
   local tool="$1" file="$2" input="$3"
   local limit line_limit curm newm cur curl new newl over dim
-  local entry_limit edelta ebreach ereplaced eline efile eover ewas dest
+  local entry_limit edelta ebreach ereplaced eline efile eover ewas dest dload dsurface
 
   # Both caps are the same knobs memory-nudge.sh and cc-memory-rotate read. Either one
   # non-numeric is a fail-open: a gate that cannot read its own limit must not guess one.
@@ -310,8 +336,8 @@ EOFDELTA
     # Same destination the actuator resolves (bin/cc-memory-rotate route_dest_for / RULES_FILE), in
     # the same precedence, so the remedy this gate prescribes and the file cc-memory-rotate would
     # drain to are never two different files. Since 2026-09-23 that is the SITUATIONAL half of the
-    # split rules file (docs/research/token-efficiency-2026-09-23/audit/C7.labels.md): it loads by
-    # default, and the resident half is curated rather than appended to.
+    # split rules file (docs/research/token-efficiency-2026-09-23/audit/C7.labels.md); the resident
+    # half is curated rather than appended to.
     dest="${MEMORY_RULES_FILE:-}"
     if [ -z "$dest" ]; then
       if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
@@ -338,14 +364,23 @@ EOFDELTA
     else
       efile="${file%/*}/<the entry's topic>.md"
     fi
+    # Whether ${dest} LOADS is computed, never restated: claudeMdExcludes drops the default
+    # destination on this machine (migration 0036), and the unconditional "that surface loads" this printed was false
+    # there (docs/research/truememory-2026-09-27.md §3.1). One jq read, on this refusal path only.
+    dload=$(mib_rules_file_loads "$dest")
+    case "$dload" in
+      loads)    dsurface="That surface loads (claudeMdExcludes does not list it) and has NO ${limit}-unit cap, so nothing goes dark by moving there." ;;
+      excluded) dsurface="That file has NO ${limit}-unit cap, but it is listed in claudeMdExcludes and does NOT load, so it fires nothing on its own: this short index line stays the rule's only resident pointer — keep it (or promote the hook to the resident rules file beside it under RULES_RESIDENT_ADD_OK=1)." ;;
+      *)        dsurface="That file has NO ${limit}-unit cap, but whether it loads could not be read from claudeMdExcludes, so do not count on it firing: keep this short index line as the rule's resident pointer." ;;
+    esac
     printf '%s' "MEMORY INDEX WRITE REFUSED — this edit would push one index line ${eover} unit(s) past the ${entry_limit}-unit per-entry cap (that line would be ${ebreach} units; ${ewas}).
 
   ${eline}
 
-The index is a BUFFER and its lines are POINTERS. A line this long is a RULE being kept on the one surface the loader caps — ${limit} units and ${line_limit} lines, past which it silently drops the NEWEST entries. The rule's own text belongs in its topic file, and its firing one-liner belongs in the project's situational rules file, which the loader does not cap at all.
+The index is a BUFFER and its lines are POINTERS. A line this long is a RULE being kept on the one surface the loader caps — ${limit} units and ${line_limit} lines, past which it silently drops the NEWEST entries. The rule's own text belongs in its topic file, and its one-liner can live in the project's situational rules file, which the loader does not cap at all.
 
 SHORTEN THE LINE WITHOUT LOSING A WORD — try these in order:
-  1. WRITE THE RULE TO THE RULES FILE, keep the hook here. Append it to ${dest} (create it if absent) and leave this index line as a short pointer. That surface loads by default and has NO ${limit}-unit cap, so nothing goes dark by moving there.
+  1. WRITE THE RULE TO THE RULES FILE, keep the hook here. Append it to ${dest} (create it if absent) and leave this index line as a short pointer. ${dsurface}
   2. SPLIT IT INTO TWO ENTRIES if the line is carrying two rules — each gets its own topic file and its own index line, and each line is then under the cap.
   3. MOVE THE DETAIL INTO THE TOPIC FILE ${efile} and leave the index line naming it. A topic file is read on demand and has no cap either.
 

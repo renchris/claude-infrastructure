@@ -33,9 +33,10 @@
 # ── AND WHY IT ACTUATES RATHER THAN WARNS ────────────────────────────────────────────────────────
 # Detection without an actuator is worth zero here, and that is measured, not asserted: the advisory
 # has been correct and ignored for a month. The actuator is `cc-memory-rotate --drain-oversized`,
-# which MOVES an over-cap index line to the project's always-loaded rules file, verbatim. It is
-# non-lossy in the strong sense — the destination still loads unprompted, so nothing is shortened,
-# nothing is archived, and no human is asked to judge anything. See that flag's header for why the
+# which MOVES an over-cap index line to the project's rules file, verbatim: nothing is shortened,
+# nothing is archived, and no human is asked to judge anything. Whether that destination still
+# loads is NOT a given — claudeMdExcludes can drop it — so the message below computes it
+# (lib/rules-loaded.sh) and, when it does not load, keeps a pointer. See that flag's header for why the
 # tail guard must yield on that path and what still binds absolutely.
 #
 # ── FAIL-SAFE SHAPE ──────────────────────────────────────────────────────────────────────────────
@@ -86,6 +87,16 @@ _mid_src() {
 }
 _mid_src lib/memory-index-locate.sh  || exit 0
 _mid_src lib/memory-index-measure.sh || exit 0
+# Whether the destination LOADS is read from claudeMdExcludes, never assumed: the default
+# destination is excluded on this machine (migration 0036). Only the DEREFERENCED dir is tried —
+# a missing ~/.claude/hooks/lib mirror would be a stale answer — and a missing lib means
+# `unknown`, which the wording below treats as "do not claim it loads".
+if [ -r "$_MID_DIR/lib/rules-loaded.sh" ]; then
+  # shellcheck source=lib/rules-loaded.sh
+  # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+  . "$_MID_DIR/lib/rules-loaded.sh"
+fi
+command -v rules_file_loads >/dev/null 2>&1 || rules_file_loads() { printf 'unknown\n'; }
 
 LOC=$(mil_locate "$CWD") || exit 0
 MEM="${LOC%%	*}"
@@ -246,8 +257,9 @@ if [ -z "$PROJ" ]; then
 fi
 [ -n "$PROJ" ] || PROJ="$CWD"
 # The SITUATIONAL half of the split rules file (2026-09-23), the same default cc-memory-rotate
-# resolves: it loads by default, and the resident half is curated rather than appended to
-# (docs/research/token-efficiency-2026-09-23/audit/C7.labels.md).
+# resolves: the resident half is curated rather than appended to
+# (docs/research/token-efficiency-2026-09-23/audit/C7.labels.md). Whether it LOADS depends on
+# claudeMdExcludes (migration 0036 excludes it), so the messages below compute that per call.
 RULES="${MEMORY_RULES_FILE:-}"
 if [ -z "$RULES" ] && [ -n "$PROJ" ]; then
   RULES="$PROJ/.claude/rules/agent-operating-lessons-situational.md"
@@ -269,22 +281,53 @@ case "$DRC" in
     CTX="MEMORY INDEX DRAIN WAS CUT at its share of the ${MID_DEADLINE_S}s rotor budget and did NOT reach a verdict — an over-cap entry may still be sitting in the auto-loaded index. Nothing was moved and nothing was lost. Run it by hand to see what it would do: cc-memory-rotate <index> --drain-oversized --rules-file ${RULES}"
     ;;
 esac
+# Every remedy below that REMOVES the MEMORY.md bullet is only safe when ${RULES} actually loads:
+# otherwise the bullet is the rule's only resident pointer and removing it makes the rule go dark
+# (migration 0036 excludes the default destination; docs/research/truememory-2026-09-27.md §3.1).
+# So the load state is computed here — one jq read, and only on these three verdicts — and
+# `unknown` is worded as "do not count on it", never as loads.
+RLOAD=""
+case "$DV" in
+  verdict=drained*|verdict=already-cited*|verdict=exhausted*) RLOAD=$(rules_file_loads "$RULES") ;;
+esac
+# The resident half beside the destination: the rules file claudeMdExcludes leaves loaded, and the
+# land gate admits a new bullet there only under RULES_RESIDENT_ADD_OK=1.
+RESIDENT="${RULES%/*}/agent-operating-lessons.md"
+case "$RLOAD" in
+  loads)    RSTATE="that file loads (claudeMdExcludes does not list it)" ;;
+  excluded) RSTATE="that file is listed in claudeMdExcludes and does NOT load" ;;
+  *)        RSTATE="whether that file loads could not be read from claudeMdExcludes, so do not count on it" ;;
+esac
 case "$DV" in
   verdict=drained*)
     FILES=$(printf '%s' "$DV" | sed -n 's/.* files=\([^ ]*\).*/\1/p')
-    CTX="MEMORY INDEX DRAINED (automatic, this turn): the index line(s) you just wrote were over the per-entry buffer cap, so ${FILES:-they} moved VERBATIM to ${RULES}. Nothing was shortened and nothing was archived — that file loads by default, so the rule still fires unprompted; only its surface changed. Restore = paste the line back into MEMORY.md. Write the next durable rule straight to ${RULES} and keep the MEMORY.md bullet short, and this stops happening. Verdict: ${DV}"
+    if [ "$RLOAD" = loads ]; then
+      CTX="MEMORY INDEX DRAINED (automatic, this turn): the index line(s) you just wrote were over the per-entry buffer cap, so ${FILES:-they} moved VERBATIM to ${RULES}. Nothing was shortened and nothing was archived — ${RSTATE}, so the rule still fires unprompted; only its surface changed. Restore = paste the line back into MEMORY.md. Write the next durable rule straight to ${RULES} and keep the MEMORY.md bullet short, and this stops happening. Verdict: ${DV}"
+    else
+      CTX="MEMORY INDEX DRAINED (automatic, this turn): the index line(s) you just wrote were over the per-entry buffer cap, so ${FILES:-they} moved VERBATIM to ${RULES}. Nothing was shortened and nothing was archived, but ${RSTATE}, so the rule no longer fires unprompted from there. Put a SHORT pointer back in MEMORY.md now — under the cap, the detail in its topic file — because that bullet is the rule's only resident pointer; or promote its hook to ${RESIDENT} under RULES_RESIDENT_ADD_OK=1. Restore = paste the line back into MEMORY.md. Verdict: ${DV}"
+    fi
     ;;
   verdict=already-cited*)
     # Distinct from `exhausted` because the REMEDY is the opposite one. `exhausted` tells the
     # operator to append the line verbatim to the rules file; here the rules file ALREADY cites
     # that topic, so appending is precisely the duplicate the rotor's `already-cited` veto exists
-    # to prevent. The body is reachable from an always-loaded surface, so the index line is pure
-    # cost and the only action is to delete it. The rotor will not delete it for you — the
-    # report-never-touch rule is what keeps a routing bug from eating an entry.
-    CTX="MEMORY INDEX — the over-cap entry you just wrote is ALREADY CITED in ${RULES}, which loads by default, so its rule is firing already and the MEMORY.md line is duplicate context. Nothing was moved and nothing is broken. Do NOT append it to ${RULES} again: DELETE the MEMORY.md bullet, or fold anything the incumbent citation is missing INTO that existing line rather than beside it. Verdict: ${DV}"
+    # to prevent. When that file loads, the index line is pure cost and the action is to delete
+    # it; when it does not, the index line is the only resident pointer and must be KEPT. The
+    # rotor will not delete it for you — the report-never-touch rule is what keeps a routing bug
+    # from eating an entry.
+    if [ "$RLOAD" = loads ]; then
+      CTX="MEMORY INDEX — the over-cap entry you just wrote is ALREADY CITED in ${RULES}, and ${RSTATE}, so its rule is firing already and the MEMORY.md line is duplicate context. Nothing was moved and nothing is broken. Do NOT append it to ${RULES} again: DELETE the MEMORY.md bullet, or fold anything the incumbent citation is missing INTO that existing line rather than beside it. Verdict: ${DV}"
+    else
+      CTX="MEMORY INDEX — the over-cap entry you just wrote is ALREADY CITED in ${RULES}, but ${RSTATE}, so that citation does not fire unprompted. Nothing was moved and nothing is broken. Do NOT append it to ${RULES} again, and KEEP the MEMORY.md bullet: it is the rule's only resident pointer. Shorten it under the cap instead (the detail belongs in its topic file), or promote the hook to ${RESIDENT} under RULES_RESIDENT_ADD_OK=1 and only then drop the bullet. Verdict: ${DV}"
+    fi
     ;;
   verdict=exhausted*)
-    CTX="MEMORY INDEX — an entry you just wrote is over the per-entry buffer cap and could NOT be routed automatically. Every over-cap line is vetoed: PINNED, the feedback-/reference-/user- name convention and an operator-voice \`type:\` stamp are absolute at the routing gate, and an unparseable or dangling line is reported, never touched. Move it by hand to ${RULES} (append VERBATIM, delete the MEMORY.md line in the same edit) or shorten the hook and leave the rule in its topic file. Verdict: ${DV}"
+    if [ "$RLOAD" = loads ]; then
+      RMOVE="Move it by hand to ${RULES} (append VERBATIM, delete the MEMORY.md line in the same edit)"
+    else
+      RMOVE="Moving it to ${RULES} would take it off every resident surface (${RSTATE}), so append it there VERBATIM only if you also keep a SHORT MEMORY.md pointer to it"
+    fi
+    CTX="MEMORY INDEX — an entry you just wrote is over the per-entry buffer cap and could NOT be routed automatically. Every over-cap line is vetoed: PINNED, the feedback-/reference-/user- name convention and an operator-voice \`type:\` stamp are absolute at the routing gate, and an unparseable or dangling line is reported, never touched. ${RMOVE}, or shorten the hook and leave the rule in its topic file. Verdict: ${DV}"
     ;;
 esac
 

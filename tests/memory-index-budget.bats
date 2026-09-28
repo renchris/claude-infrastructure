@@ -368,3 +368,88 @@ fire_hook() { # fire_hook <hook-path> <tool> <tool_input-json>
   [ "$(mib_norm_path /a/b/memory/MEMORY.md)" = "/a/b/memory/MEMORY.md" ]
   [ "$(mib_norm_path /a//b/./memory//MEMORY.md)" = "/a/b/memory/MEMORY.md" ]
 }
+
+# ── What the entry-cap deny TELLS the model about the rules file loading (2026-09-27) ───────────
+# Remedy 1 said the situational rules file "loads by default … so nothing goes dark by moving
+# there", while claudeMdExcludes drops that file on this machine (migration 0036;
+# docs/research/truememory-2026-09-27.md §3.1). The sentence is now computed by
+# hooks/lib/rules-loaded.sh, on the refusal path only. The deny's model-visible text is its
+# permissionDecisionReason, so the rendered-output contract is asserted on that field.
+
+# An index whose first ENTRY line sits just under the per-entry cap, and the Edit that lengthens it
+# (the same shape tests/memory-index-entry-cap.bats trips dim=entry with).
+ec_pad() { head -c "$1" /dev/zero | tr '\0' x; }
+ec_idx() {
+  local d="$BATS_TEST_TMPDIR/$1/memory"; mkdir -p "$d"
+  : >"$d/alpha.md"
+  { printf '# Memory — fixture\n'
+    printf -- '- [Alpha](alpha.md) — %s\n' "$(ec_pad 480)"
+    printf -- '- [Beta](beta.md) — short hook\n'
+  } >"$d/MEMORY.md"
+  printf '%s' "$d/MEMORY.md"
+}
+ec_edit() { edit_raw "$1" "$(ec_pad 480)" "$(ec_pad 480)MORE"; }
+ec_settings() {
+  case "$1" in
+    loads)    printf '{"claudeMdExcludes":["**/no-such-rules-file.md"]}\n' >"$BATS_TEST_TMPDIR/s.json" ;;
+    excluded) printf '{"claudeMdExcludes":["**/.claude/rules/agent-operating-lessons-situational.md"]}\n' >"$BATS_TEST_TMPDIR/s.json" ;;
+    unknown)  rm -f "$BATS_TEST_TMPDIR/s.json" ;;
+  esac
+  export RULES_LOADED_SETTINGS="$BATS_TEST_TMPDIR/s.json"
+}
+
+@test "entry deny, LOADS: remedy 1 says the surface loads, computed — never 'by default'" {
+  ec_settings loads
+  idx="$(ec_idx rl-loads)"
+  CLAUDE_PROJECT_DIR=/tmp/proj-rl run mib_verdict Edit "$idx" "$(ec_edit "$idx")"
+  [ "$status" -eq 0 ]
+  has "$output" '1. WRITE THE RULE TO THE RULES FILE'
+  has "$output" 'That surface loads (claudeMdExcludes does not list it)'
+  hasnt "$output" 'loads by default'
+}
+
+@test "entry deny, EXCLUDED: remedy 1 keeps the index line as the only resident pointer" {
+  ec_settings excluded
+  idx="$(ec_idx rl-excl)"
+  CLAUDE_PROJECT_DIR=/tmp/proj-rl run mib_verdict Edit "$idx" "$(ec_edit "$idx")"
+  [ "$status" -eq 0 ]
+  has "$output" '/tmp/proj-rl/.claude/rules/agent-operating-lessons-situational.md'
+  has "$output" 'does NOT load'
+  has "$output" "stays the rule's only resident pointer"
+  hasnt "$output" 'loads by default'
+  hasnt "$output" 'nothing goes dark'
+}
+
+@test "entry deny, UNKNOWN: no loads claim when the settings cannot be read" {
+  ec_settings unknown
+  idx="$(ec_idx rl-unk)"
+  run mib_verdict Edit "$idx" "$(ec_edit "$idx")"
+  [ "$status" -eq 0 ]
+  has "$output" 'could not be read from claudeMdExcludes'
+  hasnt "$output" 'That surface loads'
+  hasnt "$output" 'loads by default'
+}
+
+@test "entry deny through the host hook: one JSON object, parses, reason ≤10,000 chars" {
+  for st in loads excluded unknown; do
+    ec_settings "$st"
+    idx="$(ec_idx "host-$st")"
+    out="$(fire_hook "$HOOK" Edit "$(ec_edit "$idx")")"
+    [ "$(printf '%s' "$out" | jq -s length)" = 1 ]
+    r="$(printf '%s' "$out" | jq -er '.hookSpecificOutput.permissionDecisionReason')"
+    has "$r" 'WRITE THE RULE TO THE RULES FILE'
+    [ "$(printf '%s' "$r" | jq -Rs length)" -le 10000 ]
+    printf '%s' "$out" | jq -e 'has("additionalContext") | not' >/dev/null
+  done
+}
+
+@test "X1: the lib sourced THROUGH A SYMLINK, with no rules-loaded.sh beside the link, still computes it" {
+  ec_settings excluded
+  linkdir="$BATS_TEST_TMPDIR/livelib"; mkdir -p "$linkdir"
+  ln -s "$LIB" "$linkdir/memory-index-budget.sh"
+  [ ! -e "$linkdir/rules-loaded.sh" ]
+  run bash -c '. "$1"; mib_rules_file_loads "$2"' _ "$linkdir/memory-index-budget.sh" \
+    "/p/.claude/rules/agent-operating-lessons-situational.md"
+  [ "$status" -eq 0 ]
+  [ "$output" = excluded ]
+}

@@ -24,12 +24,14 @@
 # of the index until it is at/under TARGET, LEAST-DURABLE FIRST (see DURABILITY ORDER below).
 #
 # 🚨 WHERE THEY GO CHANGED 2026-09-04. A selected line is now ROUTED to the project's
-# always-loaded rules file when route_veto permits, and COLD-recorded only when it does not.
+# rules file when route_veto permits, and COLD-recorded only when it does not.
 # (Since 2026-09-23 the default destination is the situational half of the split rules file,
-# `.claude/rules/agent-operating-lessons-situational.md`, which also loads by default.)
+# `.claude/rules/agent-operating-lessons-situational.md`. Whether it LOADS is not a property of
+# the file: claudeMdExcludes decides, and migration 0036 excludes it on this machine. Callers
+# that tell the model what loads compute it with hooks/lib/rules-loaded.sh, never restate it.)
 # Cold is a DEMOTION — archive/MEMORY_ARCHIVE_*-COLD.md does not auto-load, so holding the
-# loader cap used to cost the reader the rule. The rules file has no cap of that size and loads
-# unprompted, so a routed line is on a different SURFACE, not a colder one; the reader keeps it.
+# loader cap used to cost the reader the rule. The rules file has no cap of that size and, where
+# it is not excluded, loads unprompted, so a routed line is on a different SURFACE, not a colder one.
 # route_veto is unchanged and is not weakened by this: PINNED, the feedback-/reference-/user-
 # name convention and an operator-voice `type:` stamp still send a line to the cold record, so
 # on an index whose entries are nearly all `reference-` this routes NOTHING — the correct
@@ -549,9 +551,10 @@ resolve_rules_dest() {
   local rbase rdir rdir_p rtgt
   RESOLVE_REASON=""
   if [ -z "$RULES_FILE" ]; then RULES_FILE="${MEMORY_RULES_FILE:-}"; fi
-  # The SITUATIONAL half of the split rules file (2026-09-23): it loads by default like the
-  # resident half, and the resident half is curated, so routed and demoted lines land here
-  # (docs/research/token-efficiency-2026-09-23/audit/C7.labels.md). The already-cited veto and the
+  # The SITUATIONAL half of the split rules file (2026-09-23): the resident half is curated, so
+  # routed and demoted lines land here (docs/research/token-efficiency-2026-09-23/audit/C7.labels.md).
+  # It does NOT necessarily load — claudeMdExcludes can drop it (migration 0036 does) — which is why
+  # the hooks that report a route compute that with hooks/lib/rules-loaded.sh. The already-cited veto and the
   # citation scan read `.claude/rules/*.md`, so they see both halves either way.
   if [ -z "$RULES_FILE" ] && [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
     RULES_FILE="$CLAUDE_PROJECT_DIR/.claude/rules/agent-operating-lessons-situational.md"
