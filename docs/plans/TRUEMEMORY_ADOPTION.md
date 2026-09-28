@@ -76,7 +76,54 @@ creates it, never done by an agent):
 
 ---
 
-## Wave A — correctness and safety (S · `tma-wave-a`) — NOT STARTED
+## Wave A — correctness and safety (S · `tma-wave-a`) — DONE 2026-09-28
+
+**Landed (origin/main, content-verified):**
+- #1 `6b1afce14` wording from `claudeMdExcludes` via `hooks/lib/rules-loaded.sh`; `6d052d43e` static
+  lint `tests/hook-output-contract.bats`; `03e41f1c6` hermetic HOME for both new suites.
+- #2 P0 `bef0303d4` (tracking table via temp file) · P0b `9ce845cb0` (probe via busy-timeout
+  `session_index_sql`, skip-on-failure, `-bail` + `BEGIN IMMEDIATE`, `user_version` fast path) ·
+  P1 `ce235bc70` (sessions_fts identity fingerprint, hourly alarm-only parity, `SWEEP-VERDICT`) ·
+  `58c2951b8` errexit-reachable asserts. P0b ported to claude-session-search `5811933` (no P0 there:
+  that copy has no `awk -v tracking`). P2 not built (optional). Follow-up fix "a stamped DB
+  re-creates a dropped sessions_fts" (see Learnings), in both repos.
+- #3 `d08ab07ab` every-exit IDL rows (harvest, session-index-end/-start, nudge interval 0 vs garbage) ·
+  `dde03ca37` `scripts/idl-expected-fires.tsv` + SILENT/DEGRADED/UNKNOWN · `2b1c101f3`, `663044b6c`.
+- #8 `cf32f48ff` `memory-fleet-sweep.sh --reach`: `REACH`, `NATIVE`, `NATIVE-STORE`,
+  `NATIVE-TRANSCRIPTS`, `HISTORY` rows and the two verdict tokens.
+- #11 `46a55dc07` `scripts/memory-store-snapshot.sh` (bare gitdir outside the store, CAS commit),
+  rotor pre-mutation call, detached SessionStart trigger, compact-memory step · `127d39e20` its BLIND
+  reasons (X3) · `1f4a425f4`.
+- Migration `59331fee0` `migrations/0043-autodream-pin.sh` (c10, staged; operator step
+  `ac6cfd21f07f`). Rejection record `b531da930` (MEMORY_KNOWLEDGE_V2 §8 R11-R18, R2 scope note, R7
+  correction).
+
+**Learnings (for Waves B and C):**
+- Live `--reach` reads `REACH-VERDICT dark_dest=3` (personal, sevenrooms-bridge and the
+  `~/Development` root store), not the 2 the research predicted, and #1 does not lower it: #1 fixes
+  wording, not reachability. Clearing it needs a pointer in a delivered file for each store, which
+  is a memory-store or foreign-repo write. The alarm row belongs to row 10 (plan R5).
+- The nightly alarm may page `harvest-skill-end` and `memory-nudge` SILENT for about one night after
+  deploy (live: 0 rows vs D=79 and D=34) until about 10 rows accrue. That is the gap it exists to
+  show. If harvest keeps reading `index-row-stub` BLIND, the SessionEnd race is real: derive
+  commands from the transcript too.
+- New land gates a wave must pre-run: bare `shellcheck -s bash` on every changed `.bats` (one scope
+  per file, so an array and a string sharing a name trip SC2178/SC2128);
+  `scripts/test-hermeticity-lint.sh` (it also forces removal of an allowlist line once a suite is
+  hermetic); `scripts/bats-assert-liveness.py` (a mid-test `[[ … ]]` needs `|| false` on bash 3.2);
+  `scripts/moving-ref-control-lint.sh` (it flags `git show main:` even on a fixture repo; read through
+  a resolved sha).
+- Under load above about 80, ship-land sheds its test smoke and lands "behaviorally UNGATED". Run
+  each item's suites yourself before and after the land.
+- Named teammates can finish and still leave nothing but uncommitted edits when their process dies;
+  #1's last fix was completed lead-inline from its worktree.
+- The `NATIVE` sentinel reads `nondefault=0`: all native memory passes are off in all six caches today.
+- Branches that are each green can still be red together. P0b's `user_version` fast path returned
+  before the idempotent `CREATE … IF NOT EXISTS` pass, so a dropped `sessions_fts` never came back.
+  Only P1's identity suite, run against trunk after both landed, showed it (2 of 10 red). Fix: one
+  read returns both the stamp and whether the table exists. Re-run every wave suite on trunk after
+  the last land, not only on each branch.
+
 
 | # | Item | Design | New/changed files (research doc §2) | Suite that must pass |
 |---|---|---|---|---|
@@ -221,3 +268,4 @@ These extend the research doc's X1-X5 (§2) with what the session after the stud
 - 2026-09-27 — Wave A fired (pane `tma-wave-a`, account next). Hook-delivery finding re-measured live (`9639822a7`). #35 delivery benchmark added to Wave B; A/B harness preserved under `docs/research/truememory-2026-09-27/ab-harness/`.
 - 2026-09-27 — Scope grown to maximal extraction: Waves D (build-later) and E (experiments with verdict rules), X6-X8 learned in the post-study session (live delivery probe, prose is not delivery, nothing only in /tmp), and the built-in-vs-ours stack inventory. Upstream TrueMemory fix kit: `docs/research/truememory-2026-09-27/UPSTREAM_FIX_KIT.md`.
 - 2026-09-27 — Completeness review closed four plan gaps: numeric pre-registered verdicts for #23/#24/#26, #35's no-gain branch (pre-authorises a delivery-research wave), new experiment #36 for rules in context but not followed (4 of 14 real misses), and the native-fork hook question as a tracked open question. Our own hooks were checked for TrueMemory's top-level additionalContext bug: 38 files reference it, none emit it outside hookSpecificOutput.
+- 2026-09-28 — Wave A DONE: #1, #2 (P0, P0b, P1 + claude-session-search port), #3, #8, #11, migration 0043 (staged) and the rejection record landed; learnings under § Wave A. Wave B next.
