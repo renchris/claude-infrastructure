@@ -228,10 +228,55 @@ If it is ever missing, re-derive it per `docs/research/truememory-2026-09-27/gap
 - **Done when:** the results table (arm × lesson-used × correct × tokens) and its verdict are
   appended to `docs/research/truememory-2026-09-27.md` §5 and landed.
 
-## Wave C — the rest of build-now (S · `tma-wave-c`) — ready (Wave B DONE 2026-09-28)
+## Wave C — the rest of build-now (S · `tma-wave-c`) — DONE 2026-09-28
 
 #9 (§3.9) · #12 (§3.12, both CLAUDE variants) · #13 (§3.13, link lint only; no forget cascade) ·
 #14 (§3.14, loud fallback; consumer-level test).
+
+**Landed (origin/main, content-verified; live layer converged by the post-land edge converge):**
+- #9 `5070c4488`: the rotor writes a visible `- Not loaded: <N> demoted rules, listed in archive/…-COLD.md; …
+  Run cc-memory-search <terms> …` line after the H1, replaced in place by its prefix, N recounted each
+  rotation, charged in the projection; `PTR_LINE`/`HAVE_PTR` retired; compact-memory THE UNIT and
+  § PROTECTED, resident rules :33. 199 units at N=285 (not 164: the cc-memory-search wording is longer).
+  No recall gain is booked (§3.9 gap pass). Before-baseline for the 14-day archive-touch measure:
+  0 main-session tool calls named a COLD archive in the 14 days to 2026-09-28.
+- #13 `1791e0cca` link-resolution arm in `scripts/rules-hook-budget-lint.sh` (beside the file, then the
+  owning store; only lines added in the land's range block; selftest 8 arms) and the situational-file
+  header sentence · `fc31ebf1e` read-only `bin/cc-memory-refs` + compact-memory paragraph · `5248accf1`
+  space-separated reader (the TSV field-collapse gate). Live: 185 links, 144 relative, 41 store-only,
+  0 broken; `REFS-VERDICT broken=34 near_miss=4 files=522` on this repo's store.
+- #12 `c92df1f22` supersession clause in both CLAUDE variants and the nudge · `23064fd9d` read-only
+  `bin/cc-memory-supersession-check` (dangling heir, cycle, key past line 12, index line to a superseded
+  file) as compact-memory step 4b, step 7 writes the key · `9e9c81dd3` X6 live probe on 2.1.280
+  (`hook-probe/RESULTS-wave-c-2026-09-28.md`: nudge arm `ruling pending`, control `NONE`). Both live
+  stores read `findings=0` (no file carries the key yet). Backfill is operator step `a459c9c681a5`.
+- #14 `99e85a822` `hooks/lib/transcript_norm.py` (one Python predicate; cc-suggest-filter imports it),
+  both context_text blocks import it through a dereferenced self-path, loud fallback (`norm=` log line +
+  `session-index:norm` IDL row, `norm-import-failed` BLIND, registry row) and the consumer-level suite ·
+  `6890375c2` nightly step 7c `scripts/norm-share.py` · `c2876fbe3` its window starts at the lib's first
+  live IDL row.
+
+**Learnings (for Waves D-E):**
+- The reaper took all four teammate worktrees minutes after each report, including #14's while it
+  waited on the lead's call about its size guard (it had removed `.teammate-busy` when it reported).
+  Branches survived; the worktrees were recreated from them and a fresh teammate took the last step.
+  Budget for one respawn per wave, or tell a teammate to keep `.teammate-busy` until the lead replies.
+- A metric that watches a fix must start at the fix's first live run. norm-share over a plain 24 h
+  window read 30% (341/1138), all indexed by the old filter, and would have paged every night after
+  the converge. It now starts at the first `norm=lib` IDL row and abstains `lib-not-live` before it.
+- Build combined trees under `~/Development/.worktrees`, not `mktemp -d`: under `/var` the alarm's
+  symlink case compares `/var/…` with the dereferenced `/private/var/…` and goes red.
+- The land gate's `tsv-pad-lint` refuses any new `IFS=$'\t'` reader without emitter padding; a
+  teammate's suites stay green through it. Pre-run `scripts/tsv-pad-lint.sh`.
+- #9's visible line exposed a rotor bias the stripped comment had hidden: moved lines were subtracted
+  in bytes against a UTF-16 target (1012 vs 1000 on a fixture). Fixed in the same commit.
+- #14's live transcripts carry `origin`/`promptSource` only on the newest binary, so the prefix
+  fallback tier does most of the filtering on older transcripts.
+- All four lands ran with the direct-suite smoke skipped (selector FULL). Every Wave C suite was run
+  by hand on the combined tree before the last land and on trunk tip after it: 28 suites, 0 failures,
+  except one trunk-tip red in `memory-index-drain.bats` case 28 (a wall-clock case: `date +%s - 7`
+  read across a second boundary under load 10). Wave C did not touch that hook or suite; the case
+  passed 3/3 alone and the suite re-ran 1..34 with 0 failures.
 
 ## After this program — build-later and experiments (not in the frozen DoD)
 
@@ -249,7 +294,7 @@ record.)*
 | 21, 22 | claim-queue spec; deny-only capture ledger | a background worker is approved |
 | 23-27 | experiments | #4 and #5 exist (23, 27); #14 (24, 25); #26 already in B |
 
-## Wave D — build-later items (S · `tma-wave-d`) — BLOCKED on Waves A-C
+## Wave D — build-later items (S · `tma-wave-d`) — ready (Waves A-C DONE 2026-09-28)
 
 Each item's design is the research doc section named. "Done" = landed, gate-green, own suite passes.
 
@@ -325,3 +370,4 @@ These extend the research doc's X1-X5 (§2) with what the session after the stud
 - 2026-09-27 — Completeness review closed four plan gaps: numeric pre-registered verdicts for #23/#24/#26, #35's no-gain branch (pre-authorises a delivery-research wave), new experiment #36 for rules in context but not followed (4 of 14 real misses), and the native-fork hook question as a tracked open question. Our own hooks were checked for TrueMemory's top-level additionalContext bug: 38 files reference it, none emit it outside hookSpecificOutput.
 - 2026-09-28 — Wave A DONE: #1, #2 (P0, P0b, P1 + claude-session-search port), #3, #8, #11, migration 0043 (staged) and the rejection record landed; learnings under § Wave A. Wave B next.
 - 2026-09-28 — Wave B DONE: #4, #5, #6+#7, #10, #26 (shadow) and #35 landed; live layer converged. #35 read no gain (the tasks had no headroom), so the pre-registered no-gain branch applies: Wave E #23 and #26 stop and the next delivery measurement needs tasks the stock arm fails. Learnings under § Wave B. Wave C next.
+- 2026-09-28 — Wave C DONE: #9, #12, #13 and #14 landed (`5070c4488` … `c2876fbe3`), 28 suites green on trunk tip, live layer converged; #12's store backfill filed as operator step `a459c9c681a5`. Learnings under § Wave C. Wave D next.
