@@ -142,6 +142,9 @@ _reap_keep_dormant=(claimer-live owned-wait)
 # logged once per session, beside a once-per-session `no-match` that proves the guard was reached.
 # no-prompt and classify-error joined with memory-nudge:ruling (truememory #26, X3): a payload with
 # no string `.prompt`, and a classifier that threw, are both prompts the shadow could not score.
+# neighbour-lib-missing joined with backup-before-write:neighbours (truememory §3.10, X3): the new-topic
+# branch could not resolve hooks/lib/memory_neighbours.py (or python3) through its dereferenced
+# self-path, so it never scored the write. empty-pool and kill-switch stay out: the guard was reached.
 _default_blind=(no-jq no-session-id no-stdin no-telemetry stale-telemetry \
                 no-transcript-path transcript-missing not-a-repo no-cwd no-assistant-text \
                 goal-unreadable \
@@ -150,6 +153,7 @@ _default_blind=(no-jq no-session-id no-stdin no-telemetry stale-telemetry \
                 no-temp-index unresolvable history-inside-store has-remote \
                 no-symptom-table lib-missing \
                 no-prompt classify-error \
+                neighbour-lib-missing \
                 "${_reap_keep_blind[@]}")
 if [ -n "${CC_ABSTAIN_BLIND_REASONS:-}" ]; then
   # shellcheck disable=SC2206  # intentional word-split of the override list
@@ -303,6 +307,35 @@ denom_nudge_prompts() {
   done
   [ "$seen" -gt 0 ] || { printf 'no nudge state dir present among: %s' "$dirs"; return 1; }
   printf '%s' "$sum"
+}
+
+# New memory topic files and lessons the neighbours branch (backup-before-write:neighbours) SHOULD
+# have seen: *.md born after the cutoff (birthtime, `stat -f %B`, never mtime — an edit is not a
+# creation) under every ~/.claude/projects/*/memory (MEMORY.md and archive/ excluded) plus each
+# repo's docs/lessons found cheaply: ~/Development/*/docs/lessons. Only $HOME is scanned, never this
+# script's own checkout: a worktree (under the dot-dir ~/Development/.worktrees, which the glob skips)
+# is born whole, so every lesson in it would read as new, and a fixture $HOME would still measure it.
+# The branch writes none of these files' timestamps, so it cannot inflate its own denominator (X5).
+# RESIDUAL: git rewrites a file it updates (new inode), so a lesson EDITED and fast-forwarded into
+# the checkout also reads as born; that can only raise D, i.e. err toward DEGRADED, never toward OK.
+# CC_EXPECTED_NEIGH_DIRS overrides the whole dir list (tests). No birthtime (non-BSD stat) ⇒ UNKNOWN.
+denom_new_memory_files() {
+  local cutoff="$1" dirs d f b n=0 seen=0 visited=" " now
+  now="$(now_epoch)"   # births after NOW are not in the window (a fixture NOW sits in the past)
+  dirs="${CC_EXPECTED_NEIGH_DIRS:-$(printf '%s\n' "$HOME"/.claude/projects/*/memory "$HOME"/Development/*/docs/lessons)}"
+  stat -f %B / >/dev/null 2>&1 || { printf 'stat -f %%B (birthtime) unavailable on this platform'; return 1; }
+  for d in $dirs; do
+    d="$(cd -P "$d" 2>/dev/null && pwd)" || continue   # two spellings of one dir count once
+    case "$visited" in *" $d "*) continue ;; esac
+    visited="$visited$d "; seen=$(( seen + 1 ))
+    for f in "$d"/*.md; do
+      [ -f "$f" ] && [ "${f##*/}" != MEMORY.md ] || continue
+      b="$(stat -f %B "$f" 2>/dev/null || echo 0)"
+      [ "$b" -ge "$cutoff" ] 2>/dev/null && [ "$b" -le "$now" ] && n=$(( n + 1 ))
+    done
+  done
+  [ "$seen" -gt 0 ] || { printf 'no memory or lessons dir present'; return 1; }
+  printf '%s' "$n"
 }
 
 # Evaluation rows a branch wrote since the cutoff (same four-disposition denominator as the table).

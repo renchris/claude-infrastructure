@@ -78,6 +78,67 @@ _bbw_rewrite_only() {
 }
 trap _bbw_rewrite_only EXIT
 
+_mib_deref() { # <path> → the real file behind any symlink chain (readlink -f, BSD-safe fallback)
+  local p="$1" t n=0
+  readlink -f "$p" 2>/dev/null && return 0
+  while [ -L "$p" ] && [ "$n" -lt 20 ]; do
+    t="$(readlink "$p")"
+    case "$t" in /*) p="$t" ;; *) p="$(dirname "$p")/$t" ;; esac
+    n=$(( n + 1 ))
+  done
+  printf '%s\n' "$p"
+}
+
+# === NEW-TOPIC NEIGHBOURS (2026-09-28, truememory-2026-09-27.md §3.10) ===
+# A Write that CREATES a memory topic or lesson is shown its two nearest existing files (IDF token
+# overlap, hooks/lib/memory_neighbours.py; no threshold), because "grep MEMORY.md first" sees under
+# a third of a store and real twins were written anyway. The context reaches the model WITH the tool
+# result, after the file exists, hence the past tense. rm_friction: `rm <abs memory path>` is NOT
+# auto-allowed by rm-safe-allowlist.sh (probe 2026-09-28: silent, so it prompts or goes to the
+# classifier), so the advice leaves the duplicate for compact-memory's orphan sweep instead of an rm.
+# Every exit logs to the IDL (own name, X2) AND ~/.claude/state/mem-neighbours.jsonl (X4). The lib
+# resolves ONLY through the dereferenced self-path (X1). Kill switch CC_MEM_NEIGHBOURS=off.
+_bbw_nlog() { # <disposition> <reason> — one row, to both stores
+  local row
+  row="$(jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg sid "$(printf '%s' "$INPUT" | jq -r '.session_id // "?"')" \
+    --arg d "$1" --arg r "$2" --arg id "$NB_ID" --arg p "$FILE" --argjson t "$NB_TOP" \
+    '{ts:$ts, hook:"backup-before-write:neighbours", sid:$sid, disposition:$d, reason:$r,
+      tool_use_id:$id, path:$p, top:$t, rm_friction:"not-auto-allowed"}' 2>/dev/null)" || return 0
+  mkdir -p "$HOME/.claude/state" "$(dirname "${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}")" 2>/dev/null
+  printf '%s\n' "$row" >> "$HOME/.claude/state/mem-neighbours.jsonl" 2>/dev/null
+  printf '%s\n' "$row" >> "${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}" 2>/dev/null; return 0
+}
+case "$TOOL:$FILE" in Write:*/archive/*|Write:*/MEMORY.md) ;; Write:*/memory/*.md|Write:*/docs/lessons/*.md)
+  if [ ! -e "$FILE" ]; then
+    NB_PY="$(dirname "$(_mib_deref "${BASH_SOURCE[0]}")")/lib/memory_neighbours.py"
+    NB_ID="$(printf '%s' "$INPUT" | jq -r '.tool_use_id // "?"')"; NB_TOP='[]'; NB_RC=0
+    if [ "${CC_MEM_NEIGHBOURS:-on}" = off ]; then _bbw_nlog abstained kill-switch
+    elif [ ! -r "$NB_PY" ]; then _bbw_nlog abstained "neighbour-lib-missing:$NB_PY"
+    elif ! command -v python3 >/dev/null 2>&1; then _bbw_nlog abstained neighbour-lib-missing:no-python3
+    else
+      NB_OUT="$(printf '%s' "$INPUT" | jq -r '.tool_input.content // ""' | python3 "$NB_PY" "$FILE" 2>/dev/null)" || NB_RC=$?
+      NB_TOP="$(printf '%s' "$NB_OUT" | jq -c '.top // []' 2>/dev/null)"; [ -n "$NB_TOP" ] || NB_TOP='[]'
+      if [ "$NB_RC" -eq 124 ]; then _bbw_nlog failed timeout
+      elif [ "$NB_RC" -ne 0 ]; then _bbw_nlog failed "rc=$NB_RC"
+      elif [ "$NB_TOP" = '[]' ]; then _bbw_nlog abstained empty-pool
+      else
+        _bbw_nlog fired top2
+        # ≤400 chars: the new file's name is repeated as in the design, or "this file" when that
+        # would overflow; a cut is the last resort. Neighbours in the same dir are shown bare.
+        NB_MSG="$(jq -rn --arg x "$FILE" --argjson t "$NB_TOP" '($x | sub(".*/"; "")) as $b
+          | ($x | sub("/[^/]*$"; "/")) as $d
+          | ($t | map((.path | ltrimstr($d)) + " (" + (.score | tostring) + ")")) as $n
+          | [$b, "this file"] | map(. as $r | "You just created \($b); its nearest existing "
+            + (if ($n | length) > 1 then "files are \($n[0]) and \($n[1])" else "file is \($n[0])" end)
+            + ". If \($r) restates one of them, move anything new into it and leave \($r) for compact-memory'"'"'s orphan sweep; if it corrects one, add superseded_by; if it is different, ignore this.")
+          | (map(select(length <= 400)) + [.[1]])[0]')"
+        [ "${#NB_MSG}" -le 400 ] || NB_MSG="${NB_MSG:0:397}..."
+        _bbw_out <<<"$(jq -nc --arg c "$NB_MSG" '{hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext: $c}}')"
+      fi
+    fi
+  fi ;;
+esac
+
 # Fast exit: no file path or file doesn't exist
 [ -z "$FILE" ] && exit 0
 [ ! -f "$FILE" ] && exit 0
@@ -104,16 +165,7 @@ LINES=$(wc -l < "$FILE" | tr -d ' ')
 # `dirname "$BASH_SOURCE"` would miss the lib and fail open SILENTLY: the gate would read as landed
 # while being inert, the exact shape of MEMORY.md self-deploying-fix-inert-for-its-own-deploy.
 # Dereferencing lands us in the checkout, where the lib exists the moment the trunk fast-forwards.
-_mib_deref() { # <path> → the real file behind any symlink chain (readlink -f, BSD-safe fallback)
-  local p="$1" t n=0
-  readlink -f "$p" 2>/dev/null && return 0
-  while [ -L "$p" ] && [ "$n" -lt 20 ]; do
-    t="$(readlink "$p")"
-    case "$t" in /*) p="$t" ;; *) p="$(dirname "$p")/$t" ;; esac
-    n=$(( n + 1 ))
-  done
-  printf '%s\n' "$p"
-}
+# (_mib_deref is defined above the new-topic neighbours branch, which needs it first.)
 MIB_LIB="$(dirname "$(_mib_deref "${BASH_SOURCE[0]}")")/lib/memory-index-budget.sh"
 [ -r "$MIB_LIB" ] || MIB_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/memory-index-budget.sh"
 [ -r "$MIB_LIB" ] || MIB_LIB="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/memory-index-budget.sh"
@@ -245,7 +297,7 @@ if cp -L "$FILE" "$BACKUP_FILE" 2>/dev/null; then
 {
   "hookSpecificOutput": {
     "hookEventName": "PreToolUse",
-    "additionalContext": "OVERWRITE GUARD: You are about to OVERWRITE '${BASENAME}' (${LINES} lines). Backup saved to ${BACKUP_FILE}. CRITICAL RULE: INTEGRATE new content — do NOT delete or restructure existing sections. Use Edit for targeted changes instead of Write.${PLAN_RULES} Restore if overwritten: ~/.claude/scripts/restore-file.sh ${FILE}"
+    "additionalContext": "OVERWRITE GUARD: You just OVERWROTE '${BASENAME}' (${LINES} lines before the write). Backup saved to ${BACKUP_FILE}. CRITICAL RULE: INTEGRATE new content — do NOT delete or restructure existing sections. Use Edit for targeted changes instead of Write.${PLAN_RULES} Restore if overwritten: ~/.claude/scripts/restore-file.sh ${FILE}"
   }
 }
 EOF

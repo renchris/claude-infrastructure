@@ -107,6 +107,7 @@ minus the autonomous fork.
    index line, and every index link must resolve to a file on disk. A topic file with no index
    line is INVISIBLE at session load — silently decayed memory. Re-index it (write a hook from its
    `description:`) and report it; a dangling link is reported, never auto-removed.
+   Also read `~/.claude/state/mem-neighbours-unresolved.txt` (new file, nearest neighbour, score, fire time — written nightly by `scripts/mem-neighbours-outcome.py`): each row is a likely duplicate left behind, so fold anything new into the neighbour and add `superseded_by: <neighbour>` to the new file.
 
    🚨 **A file is an orphan only after subtracting THREE exclusion sets — E1 the index, E2 the
    demotion record, E3 the always-loaded instruction files.** Each is a *different reason* a topic

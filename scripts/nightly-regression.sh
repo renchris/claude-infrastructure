@@ -28,6 +28,9 @@
 #      trunk has carried UNPROVEN content past the green budget. Seam: CC_NIGHTLY_POSTLAND_GREEN_MAX/_SCAN.
 #   6. e2e-transitive-skip — the step-4 skip must hold TRANSITIVELY: a declared gate may not run an
 #      e2e suite from inside itself unless that call carries an inline `# e2e:reviewed-hermetic`.
+#   7. mem-neighbours-outcome.py — classes each new-topic neighbour advisory older than 24 h
+#      (kept_distinct / merged / superseded / unresolved) and writes the unresolved pairs for
+#      compact-memory (truememory §3.10 criterion 4). A report, not a gate: RED only if it crashes.
 #
 # ON RED: write a page file to autonomy/pages/ (drainable by the P0-15 SO-5 desk-role consumer) +
 # osascript notification. ALWAYS append a one-line result to autonomy/regression.log.
@@ -660,6 +663,13 @@ regress() {
   local lesson_replay="${CC_NIGHTLY_LESSON_REPLAY:-$REPO/scripts/lesson-recall-replay.py}"
   run_check "lesson-recall-canary" "$lesson_replay" --canary
   run_check "lesson-recall-delivery" "$lesson_replay" --delivery --days 1
+  # 7b. what became of each new-topic neighbour advisory (backup-before-write:neighbours). Its verdict
+  # (OUTCOME-VERDICT ok|unresolved-high|unknown) lands in the captured output; exit 0 on every verdict.
+  if command -v python3 >/dev/null 2>&1; then
+    run_check "mem-neighbours-outcome" python3 "$SELF_SCRIPTS/mem-neighbours-outcome.py"
+  else
+    SKIPS+=("mem-neighbours-outcome:no-python3")
+  fi
 
   # ── verdict ──
   local n_red="${#REDS[@]}" summary
