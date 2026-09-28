@@ -1,0 +1,108 @@
+{
+  "outputs": [
+    {
+      "label": "W",
+      "key_hits": ["K1","K2","K3","K4","K5","K7","K8","K9","K10","K11","K12","K13","K14","M1","M2","M3","M4","M5","M6","M7"],
+      "key_contradicted": [],
+      "citations_checked": 20,
+      "citations_bad": 8,
+      "wrong_claims": [
+        "Provenance cited at handoff-fire.sh:13191-13192/:13218; it is computed at :13196-13197 (13191-13194 is a header comment, 13218 is recycle prose)",
+        "Says the 'keyed on the FIRING cwd, not the target worktree' comment is at handoff-fire.sh:13196; it is at :13199-13200 (:13196 is `local rc=... prov=\"proven\"`)",
+        "wrap-ledger ladder lines wrong: cites blocked :1965-1968, dirty :1969-1970, remainder :1971-1972, unlanded :1973-1975; the actual arms are :1972, :1979, :1981, :1983 (1965-1970 is comment/compute_goal_liveness)",
+        "wrap-ledger attribution jq cited :1069-1075 and pane key :1064-1065; actual jq is :1065-1071 and the pane key is :1061",
+        "session-continue attribution jq cited :757-763 and fallback :770-772; actual :748-754 and :762 (770-772 is the THIRD STATE comment)",
+        "Citation table puts the 'session-continue.sh:302' pane-key comment at wrap-ledger.sh:1062; it is at :1058",
+        "cloud-return item_is_done condition cited :533 (a comment); the test is :534. operator-readout custody part cited :930; it is :929",
+        "Says the undocumented-rc goal outcome is 'not stated at :3594-3595'; the `*)` arm at :3593-3595 covers both custody and goal and fails OPEN for both",
+        "Self-close discharge (K6) is stated only as 'marker non-empty'. The output omits that the discharge sits after the W3-B1 terminal refusal (exit 8 at :8700), so a refused close discharges nothing"
+      ],
+      "extra_correct": [
+        "commands/are-we-done.md:22-23 is an operator-facing custody readout (list --open --fresh, count --open --stale)",
+        "handoff-fire.sh:3558 cites :9064 for fire_cleanup's 'KEPT' text; :9064 is unrelated and the text is at :10942",
+        "cloud-retire-terminal.sh:180 says cc-custody 'refuses' a second discharge; it is actually an rc-0 no-op with a stderr line (bin/cc-custody:229-233)",
+        "scripts/growth-coverage.conf:211 exempts the custody store from reaping",
+        "rc 1 opens custody with provenance unproven-rc1 and prints 'custody debt OPENED anyway' (:13227)"
+      ],
+      "score_1_10": 6
+    },
+    {
+      "label": "X",
+      "key_hits": ["K1","K2","K3","K4","K5","K6","K7","K8","K9","K10","K11","K12","K13","K14","M1","M2","M3","M4","M5","M6","M7"],
+      "key_contradicted": [],
+      "citations_checked": 20,
+      "citations_bad": 3,
+      "wrong_claims": [
+        "Places the deathwatch header 'It NEVER discharges a debt, never closes a row, never kills a process' at custody-deathwatch.sh:47; it is at :44",
+        "Cites the cloud-return superseded-item branch at :531 (a comment line); the item_is_done test is at :534",
+        "cloud-retire-terminal marker cited from the declaration's custody field at :202; the marker is read at :201 (:202 builds the why string)"
+      ],
+      "extra_correct": [
+        "handoff-fire.sh:3520 cites custody :10715 and the goal arm :10723; both have moved to :13219 and :13232",
+        "wrap-ledger.sh:1011-1012 counts 'three' other CUSTODY_OPEN consumers; session-busy (injected via :2143) is an unlisted fourth",
+        "The single-token discharge takes `first` (bin/cc-custody:216), so one slug ping clears at most one open row even if two share a slug in one cwd",
+        "bulk `abandon --stale` has no automated caller; bin/cc-teardown:275 and lead-crash-watchdog.sh:218/:1050 mention custody only in comments",
+        "wrap-ledger's `Dispatched:` line renders SRC=skip as 'not counted (a worse rung governs)' (:2328)",
+        "The bin/cc-custody:33-35 consumer header omits the deathwatch and session-busy"
+      ],
+      "score_1_10": 8
+    },
+    {
+      "label": "Y",
+      "key_hits": ["K1","K2","K3","K4","K5","K6","K7","K8","K9","K10","K11","K12","K13","K14","M1","M2","M3","M4","M5","M7"],
+      "key_contradicted": [],
+      "citations_checked": 20,
+      "citations_bad": 1,
+      "wrong_claims": [
+        "Describes handoff-fire.sh:8936 as the `--transplanted-source` argument parser; :8936 is `RCY_TRANSPLANT_CAUSE=` (the --transplant-cause arm), and --transplanted-source is :8934",
+        "Rates wrap-ledger.sh:1016's `bin/cc-custody:35-38` POLARITY cite as 'roughly holds'. The block is :36-39, and :35 is the tail of CONSUMERS",
+        "M6 only partly done: it leaves mailbox-drain's :7087 and :7100 cross-file cites 'Unchecked'. The brief explicitly asks for that check, and both are stale"
+      ],
+      "extra_correct": [
+        "Pins the recycle/dry exclusion at its assignment: ENGAGE_VERIFY=1 only when RECYCLE=0 and DRY=0 (handoff-fire.sh:10662), and a headless default blanks NOTIFY_BACK (:10716)",
+        "Store-wide reads concatenate all files (bin/cc-custody:240,260) and the key carries no cwd, so marker-less rows with the same slug|target in different cwds merge",
+        "cc-dispatch cloud rows carry no originatorPane, so without notifyBack they count as unattributable in wrap-ledger and the wake floor",
+        "cc-cloud declare --custody only stores the marker (bin/cc-cloud:311,988) and never calls cc-custody",
+        "Self-close discharges on --successor and --recycle closes too, because the refusal is terminal-only (:8673-8677)",
+        "The deathwatch is driven from scripts/autonomy-sweep.sh:1914",
+        "handoff-fire.sh:3520 (:10715/:10723) and :3557 (:9064) cites are stale; real sites :13219/:13232 and :10942",
+        "Inference that the drain cannot discharge cloud rows: the slug is cloud-$sid but the ping is cloud/<id>"
+      ],
+      "score_1_10": 8
+    },
+    {
+      "label": "Z",
+      "key_hits": ["K1","K2","K3","K4","K5","K6","K7","K8","K9","K10","K11","K12","K13","K14","M1","M2","M3","M4","M5","M6"],
+      "key_contradicted": [],
+      "citations_checked": 25,
+      "citations_bad": 3,
+      "wrong_claims": [
+        "Places the deathwatch header 'It NEVER discharges a debt, never closes a row' at custody-deathwatch.sh:41; it is at :44",
+        "Quotes 'uncertain about anything -> NEVER discharge' at deathwatch :66; that line is :73 (:66 says 'cannot discharge custody')",
+        "Cites deathwatch :67-68 for 'once per marker'; the per-marker latch statement is at :74",
+        "Says the mailbox-drain :7100 recipe 'is at :197'. :197 is only usage prose; the line that actually arms `HANDOFF-PING %s` is handoff-fire.sh:10734",
+        "M7 only half flagged: it flags wrap-ledger:1058's `session-continue.sh:302` but not session-continue.sh:724's own stale ':197' capture cite"
+      ],
+      "extra_correct": [
+        "Malformed-token guard: a leading --flag is refused as the discharge token (bin/cc-custody:146-149)",
+        "One corrupt jsonl line makes `list --open` print [] (bin/cc-custody:240), so wrap-ledger reports 0 with SRC=pane (:1076), while `count` dies 'store unreadable' rc 3 (:263). Verified: jq exits non-zero on malformed input",
+        "The drain can never discharge a cloud row: cloud-return pings `HANDOFF-PING cloud/$id:` (:844, :1001), which matches neither marker $sid nor slug cloud-$sid (bin/cc-custody:216), and D3 has already returned by marker (:979) before the ping (:1001)",
+        "The headers bin/cc-custody:23 and custody-deathwatch.sh:29-30 say the local return happens 'from sc_announce_before_retire'; that function (handoff-fire.sh:4344) makes no custody call, and the return is at :8707",
+        "wrap-ledger.sh:1000-1001 and handoff-fire.sh:4145-4146 still describe self-close as the only discharge",
+        "The wake floor's 'no armed watcher' clause is verified in code: `if mailbox_wake_armed ...; then rm -f $sf; return 0; fi` (session-continue.sh:614)",
+        "settle_custody runs only after a non-dry `cc-cloud retire` succeeds (cloud-retire-terminal.sh:286-294)",
+        "wrap-ledger.sh:1016-1018: all three stale cites flagged (POLARITY :36-39, not-expiry :45-49, the HEDGES text at session-continue :729)",
+        "handoff-fire.sh:3558 cites :9064; the real text is at :10942",
+        "verify_engagement's documented codes are 0/1/2/4/5 (handoff-fire.sh:3416)"
+      ],
+      "score_1_10": 9
+    }
+  ],
+  "WX": "X",
+  "WY": "Y",
+  "WZ": "Z",
+  "XY": "tie",
+  "XZ": "Z",
+  "YZ": "Z",
+  "pair_reasons": "All four found every producer (handoff-fire, cc-offload, both cc-dispatch arms; grep confirms there are no others). All four found every discharge site, the rc table, the late count, and both omitted consumers (operator-readout, session-busy). The key floor is effectively saturated, so the verdicts turn on accuracy and audit depth. W<X, W<Y, W<Z: W omits the self-close ordering that makes a refused terminal close discharge nothing (handoff-fire.sh:8668-8707; X, Y and Z all state it). W also carries the most wrong line cites (8 of 20 checked: provenance :13191/:13218, the wrap-ledger ladder :1965-1975, the jq at :1069-1075, session-continue :757-763/:770-772, and others), and it misses the wrap-ledger:1018 -> session-continue:608-612 stale cite. X vs Y is a tie. X fully checks the mailbox-drain :7087/:7100 cites, which Y leaves 'Unchecked'. Y instead adds verified points X lacks: ENGAGE_VERIFY at :10662, the cross-cwd merge of marker-less keys, the stale :9064 cite, and cloud rows being unattributable. Y also has fewer bad cites (1 vs 3). The two roughly offset. X<Z and Y<Z: Z's extras beyond the key are the most numerous, and each was verified in the repo. It confirms the wake floor's 'no armed watcher' clause at session-continue.sh:614, which X explicitly left unconfirmed. It finds the stale header claim that the return happens 'from sc_announce_before_retire' (no custody call at :4344), and flags the wrap-ledger:1000-1001 and handoff-fire:4145-4146 descriptions of self-close as the only discharge. It adds the malformed-token guard (:146-149) and the corrupt-line-reads-zero failure (jq rc!=0 -> list prints [] -> SRC=pane 0). It proves the drain cannot discharge cloud rows (cloud/$id at :844/:1001 vs slug cloud-$sid). It adds the settle_custody preconditions (:286-294) and flags all three stale wrap-ledger:1016-1018 cites. Z's weaknesses (three deathwatch header lines off by 3-8, only half of M7, the :3520 stale cite missed) do not offset that. No output flagged deathwatch.sh:333's stale cites or the deathwatch's deployed-copy inertness (:269-275)."
+}

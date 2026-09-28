@@ -1,0 +1,41 @@
+I found nine defects in `scripts/pool-floor.sh`. Two are minor: the `--help` overrun and the unreadable-store report (items 8 and 9) are small, but both are real. Line numbers count from the `#!/bin/bash` line as line 1.
+
+**1. Unhealthy samples without an integer `sessions` never reach the health check, so they don't break a streak.**
+- **Where:** line 102, `cap = [r for r in rows(cap_log) if isinstance(r.get("sessions"), int)]`
+- **Why it is wrong:** The filter runs before the `verdict`/swap test on line 106. A row like `{"verdict":"ALARM","swap_used_mb":800}` with `sessions` missing or null is dropped from `cap`, so it never reaches the `else` branch that resets `streak`. Healthy samples on either side of it are then counted as consecutive, and the floor is computed over a run that included a failing sample.
+
+**2. A missing `swap_used_mb` field counts as zero swap.**
+- **Where:** line 106, `    ok = r.get("verdict") == "OK" and float(r.get("swap_used_mb") or 0) <= 0`
+- **Why it is wrong:** `None or 0` gives `0`, and `0 <= 0` is true. A row with no `swap_used_mb` (a schema change, or a sampler that failed to read swap) passes the swap check as if swap had been measured at zero. The comment says both terms are required, but on missing data the second term is silently skipped.
+
+**3. The reported floor is the minimum over the whole streak so far, not the best run of `run_len` samples.**
+- **Where:** line 112, `        if streak >= run_len and cur_min > floor_m:`. It relies on `cur_min` at line 111, `        cur_min = n if cur_min is None else min(cur_min, n)`.
+- **Why it is wrong:** `cur_min` only falls within a streak, so `floor_m` can only be raised at `streak == run_len`, which uses the first 10 samples of each streak. Take a healthy streak of 500 samples whose first 3 are idle at 2 sessions and whose remaining 497 are at 40. The script reports `floor_m = 2` and `best_run = 10`. The header says "the largest session count sustained across a run of consecutive samples", and this does not compute that.
+
+**4. "Consecutive" is counted by log rows, never by timestamps.**
+- **Where:** line 109, `        streak += 1`
+- **Why it is wrong:** The comment at lines 51–52 equates 10 samples with "10 minutes green". If the alarm was down or the box was off for hours, healthy rows on either side of the gap are adjacent in the file. They increment the same streak, so 10 samples spread across a long outage qualify as a sustained run.
+
+**5. The pool "floor" is the maximum single sample, with no sustained-run requirement, and samples at 100% never lower it.**
+- **Where:** line 143–144, `        if w < 100:` / `            per[r["acct"]] = max(per.get(r["acct"], 0), k)`
+- **Why it is wrong:** One sample with `k=20` and `weekly_pct=40` sets that account's floor to 20. This contradicts the file's own rule that a floor wants a run and not a spike (lines 51–52). It also contradicts "one counter-example sample lowers it" (line 19): a sample at `weekly_pct >= 100` is skipped and can never lower anything. The comment on line 134 says "while that account's weekly window stayed under 100%", but the code tests each sample individually and never a window. An account that hit 100% an hour after the `k=20` sample still contributes 20.
+
+**6. The pool total sums per-account maxima taken at different times and presents it as a concurrent figure.**
+- **Where:** line 146, `        pool = {"per_account": per, "total": sum(per.values())}`
+- **Why it is wrong:** Account A's maximum may come from one day and account B's from another day. The printed line 169–170 says "N concurrent sessions", but no moment ever showed that total. It is not a measured lower bound on what the pool sustained together.
+
+**7. The weekly-span gate checks only the endpoints of the series, and counts stale rows.**
+- **Where:** line 132, `if u_span_h >= need_h:`, with `u_span_h` from line 128, `    t0, t1 = ts_of(util[0]), ts_of(util[-1])`
+- **Why it is wrong:** Two rows eight days apart, or eight days of nothing but `stale` rows, or rows from a single account, give `u_span_h >= 168`. The pool number is then computed from the few non-stale samples that exist. The header says the series must span a full weekly window before any pool number is more than noise, but the code only checks first-row and last-row time, not coverage.
+
+**8. When the span gate passes but no usable sample exists, the message contradicts itself.**
+- **Where:** lines 172–178, `        short = max(0.0, need_h - u_span_h)` and `                "computable by elapsed time.")`
+- **Why it is wrong:** If `u_span_h >= need_h` but every row is stale or lacks `k` or `weekly_pct`, `per` is empty and `pool` stays `None`. The script prints "need 168h (0h short)" and then "Nothing to run; this becomes computable by elapsed time." Elapsed time will not fix that case, so the reported cause is false.
+
+**9. An unreadable or missing utilization store is reported as an empty one.**
+- **Where:** lines 89–90, `    except OSError:` / `        return`, together with line 67 `[ -r "$CAP_LOG" ] || { echo "pool-floor: cannot read $CAP_LOG" >&2; exit 1; }`, which only checks the capacity log
+- **Why it is wrong:** If `CC_UTIL_LOG` points at a wrong path, a permission-denied file or a directory, `rows()` yields nothing. The script exits 3 and prints "Store is EMPTY — no live sweep has happened since the recorder landed" and "computable by elapsed time." The header says exit 1 means the stores could not be read. The same swallowing applies to `CAP_LOG` when it passes `-r` but `open` fails, such as when it is a directory. That case exits 3 as insufficient data instead of 1.
+
+**10. `--help` prints code, not just the header.**
+- **Where:** line 63, `    -h|--help) sed -n '2,50p' "$0"; exit 0 ;;`
+- **Why it is wrong:** The header comment ends at line 46. Lines 47–50 are `set -uo pipefail`, a blank line, and the `CAP_LOG=` and `UTIL_LOG=` assignments, so they are printed as part of the help text.

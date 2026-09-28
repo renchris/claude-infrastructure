@@ -1,0 +1,11 @@
+single: {'f51@high': 11, 'o55@high': 9, 'o55@medium': 8, 'o55@xhigh': 10, 'o5@max': 14, 's55@high': 8, 's55@low': 9, 's55@max': 10, 's55@medium': 9, 's55@xhigh': 11}
+union of two arms (/36), majority-credited items:
+  o55@xhigh  ∪ s55@xhigh  = 12   (+2 over o55@xhigh)
+  o55@xhigh  ∪ s55@low    = 11   (+1 over o55@xhigh)
+  o55@xhigh  ∪ s55@medium = 12   (+2 over o55@xhigh)
+  o55@xhigh  ∪ o55@high   = 13   (+3 over o55@xhigh)
+  o55@xhigh  ∪ f51@high   = 14   (+4 over o55@xhigh)
+  o55@xhigh  ∪ o5@max     = 15   (+5 over o55@xhigh)
+  o55@high   ∪ s55@medium = 11   (+2 over o55@high)
+  o55@high   ∪ o55@medium = 11   (+2 over o55@high)
+  s55@xhigh  ∪ s55@low    = 12   (+1 over s55@xhigh)

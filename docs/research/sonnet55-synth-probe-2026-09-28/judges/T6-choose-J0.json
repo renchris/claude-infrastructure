@@ -1,0 +1,81 @@
+{
+  "outputs": [
+    {
+      "label": "W",
+      "key_hits": ["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10", "T1", "T2", "T4", "T5"],
+      "key_contradicted": ["T3"],
+      "citations_checked": 22,
+      "citations_bad": 0,
+      "wrong_claims": [
+        "Q4: says the dispatch-assert activation script 'is not in this snapshot' and 'I did not find a committed registration' — false; docs/activation/pending-activation/11-dispatch-assert-activate.sh exists in the snapshot (it wires the hook at :96-103, jq '(.hooks.Stop[0].hooks) |= (' at :97). W excluded docs/ from its find and then drew the absence conclusion, so it fails to cite where dispatch-assert's Stop registration lives (a required Q4 deliverable).",
+        "Minor: 'the file's only function is open_packet_B at :93' for anti-deference-nudge.sh — a nested one-line lf() is also defined at :414 (does not affect the top-level placement of :527)."
+      ],
+      "extra_correct": [
+        "Correct negative list: operator-readout.sh:290 is a jq select(.event==\"block\") comparator; validate-bash.sh:137, reset-hard-shadow-allow.sh:164, curl-gate.py:174, model-permission-decider.py:515 are log/decision records, not block emissions; no literal \"block\" in any hooks/*.py (verified by grep).",
+        "Correctly notes the Stop array ends before SubagentStop at settings.example.json:502 and that boundary-handoff is in the second Stop group (_comment 'obj-2 — boundary-handoff').",
+        "tests/deploy-link-parity.bats:91-92 does stage 11-dispatch-assert-activate.sh as a fixture (verified)."
+      ],
+      "score_1_10": 6
+    },
+    {
+      "label": "X",
+      "key_hits": ["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10", "T1", "T2", "T3", "T4", "T5"],
+      "key_contradicted": [],
+      "citations_checked": 24,
+      "citations_bad": 0,
+      "wrong_claims": [
+        "Minor: 'its only function, open_packet_B' for anti-deference-nudge.sh — a nested one-line lf() is also defined at :414 (placement of :527 still correct)."
+      ],
+      "extra_correct": [
+        "Function-close lines verified: anti-deference open_packet_B closes :137, boundary-handoff last function closes :641, completion-assert last function closes :630, dispatch-assert last function closes :205, wake_floor :603-895, ship_floor :1098-1199.",
+        "Lists session-continue.sh systemMessage emitters :660, :700, :793, :840, :851, :893, :1264 (all verified).",
+        "Activation script details verified: :8, :55, :82-92 wiring, :21-22 operator-run (agent never self-activates).",
+        "Notes the recurring 'completion-assert.sh:113-123 pattern' pointer at boundary-handoff.sh:135 and completion-assert.sh:110 (verified present), correctly scoped as non-adjacent and unverified."
+      ],
+      "score_1_10": 9
+    },
+    {
+      "label": "Y",
+      "key_hits": ["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10", "T1", "T2", "T3", "T4", "T5"],
+      "key_contradicted": [],
+      "citations_checked": 24,
+      "citations_bad": 2,
+      "wrong_claims": [
+        "Q5 minor mis-citation: quotes '(B) TERMINATING — a fresh teardown marker naming THIS session…' as what sits at session-continue.sh:502; that text is at :501 (:502 is 'handoff-fire (self-close), cc-teardown (delegated close) and teammate-auto-shutdown'). Substance (teardown-marker prose, no systemMessage) is correct.",
+        "Minor: cites migrations/0027-handoff-claim-registration.sh:36 for the already-registered skip; :36 is blank, the check is :37-38.",
+        "Minor: lists real systemMessage emissions as :660,:700,:793,:840,:851,:893, omitting :1264 (not wrong, incomplete)."
+      ],
+      "extra_correct": [
+        "Cites waiting-recycle.sh:17 header ('PostToolUse:Bash') exactly as the key, plus :443 and :828 'rides PostToolUse:Bash' (verified).",
+        "Explicitly excludes session-continue.sh systemMessage-only emitters :660/:700/:793/:840/:851/:1264 from the site list (verified correct).",
+        "handoff-claim-assert.sh's only function is abstain() at :39 (verified)."
+      ],
+      "score_1_10": 8
+    },
+    {
+      "label": "Z",
+      "key_hits": ["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10", "T1", "T2", "T3", "T4", "T5"],
+      "key_contradicted": [],
+      "citations_checked": 40,
+      "citations_bad": 0,
+      "wrong_claims": [
+        "Negligible wording: 'The two .py hooks only ever set decision to allow, deny or ask' — there are three hooks/*.py files; the third (enforce-email-formatting.py) is correctly listed separately as prose at :229."
+      ],
+      "extra_correct": [
+        "Second drifted citation inside the enclosing function of site 7: session-continue.sh:724 says $_opane is 'the RAW pane key captured at :197'; :197 is test-history comment text and the only assignment is _opane=\"$_ouid\" at :425 (verified by grep).",
+        "anti-deference-nudge.sh:472 cites 'the suppressed-record lesson at :353'; :353 is a bare 'fi' closing the team-assignee abstain block at :351-352 (verified), correctly labelled as outside the tight window.",
+        "mechanical_arm (:938-1079) cross-pointers into ship_floor/wake_floor are drifted, all verified: :944 'ship_floor :969' (is mechanical_arm's own agent_team_member_confirms), 'wake_floor :732-736' (CC_CUSTODY_BIN test-seam comment; real kill-switch check :850); :952 'ship_floor at :865-869' (wake_floor reason text), 'wake_floor at :587-608' (header + guards; assignee check :778-779); :974 cites itself (real sibling log at :1106). Correctly labelled 'further out'.",
+        "Traces how function-internal emissions reach stdout: ship_floor captured at :1208 and printed at :1210, wake_floor captured at :1213 and printed at :1215 (verified).",
+        "Proves PostToolUse via settings.example.json matcher 'Bash' at :203 and waiting-recycle.sh:151/:633 actuation-mode lines (verified); .py hooks emit only PreToolUse permissionDecision (curl-gate.py:215-221, model-permission-decider.py:458-465, verified)."
+      ],
+      "score_1_10": 9
+    }
+  ],
+  "WX": "X",
+  "WY": "Y",
+  "WZ": "Z",
+  "XY": "tie",
+  "XZ": "Z",
+  "YZ": "Z",
+  "pair_reasons": "All four list exactly the key's 10 sites with correct enclosing scopes, identify waiting-recycle.sh's 8 PostToolUse-tagged blocks, name session-continue.sh (4) as the maximum, and flag the stale ':502' at session-continue.sh:1327. W vs X/Y/Z: W wrongly asserts the dispatch-assert activation script 'is not in this snapshot' (it exists at docs/activation/pending-activation/11-dispatch-assert-activate.sh; W's find excluded docs/). So W fails the Q4 deliverable of citing where that hook's Stop registration lives, and X, Y and Z each cite it correctly. X vs Y: Y has two off-by-one citations (the :502 quote is really :501; migration :36 should be :37-38), but its substance is right, so there is no material difference: tie. Z vs X and Z vs Y: Z has no bad citations in about 40 checked. For Q5 ('flag any' drifted pointer) it also adds verified drifted in-code citations, most notably session-continue.sh:724 ':197' inside wake_floor, the function that encloses site 7 (the real assignment is at :425), and anti-deference-nudge.sh:472 ':353'. X explicitly reported finding no others, and Y did not look. Z labels its further-out mechanical_arm finds honestly. That is a verified, material completeness advantage on a brief deliverable, so Z wins both pairs."
+}

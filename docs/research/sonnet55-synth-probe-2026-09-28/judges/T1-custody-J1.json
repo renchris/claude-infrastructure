@@ -1,0 +1,110 @@
+{
+  "outputs": [
+    {
+      "label": "W",
+      "key_hits": ["K1","K2","K3","K4","K5","K6","K7","K8","K9","K10","K11","K12","K13","K14","M1","M2","M3","M4","M5","M7"],
+      "key_contradicted": [],
+      "citations_checked": 40,
+      "citations_bad": 2,
+      "wrong_claims": [
+        "Says handoff-fire.sh:8936 is the `--transplanted-source` argument parser; :8936 is RCY_TRANSPLANT_CAUSE (--transplant-cause); --transplanted-source is :8934",
+        "Cites bin/cc-custody:93 for kind being open|return|abandon; :93 is the _row signature, the enumeration is at :16",
+        "Rates wrap-ledger.sh:1016's `bin/cc-custody:35-38` POLARITY citation as 'roughly holds'; POLARITY is :36-39 (line 35 is the CONSUMERS tail)"
+      ],
+      "extra_correct": [
+        "ENGAGE_VERIFY=1 only when RECYCLE=0 and DRY=0, cited directly at handoff-fire.sh:10662 (not only the comment)",
+        "Discharge rows take originatorPane from the caller's --originator-pane, not the matched row (bin/cc-custody:222-227)",
+        "Cross-cwd merge: the join key carries no cwd, so store-wide reads can merge marker-less rows with equal slug|target across cwds (bin/cc-custody:240,260)",
+        "Self-close discharge at :8707 precedes the SC_DRY branch at :8709",
+        "Stale citation: handoff-fire.sh:3520 cites :10715/:10723; real sites :13220/:13232",
+        "Stale citation: handoff-fire.sh:3558 cites :9064 for fire_cleanup KEPT; real text at :10942",
+        "Stale citation: session-continue.sh:724 ':197' and wrap-ledger.sh:1058 'session-continue.sh:302'; real capture :420-425",
+        "Deathwatch driven from scripts/autonomy-sweep.sh:1914; CUSTODY_BIN appears only at :138/:277/:282",
+        "growth-coverage.conf:211 exempts the custody store from reaping",
+        "cc-cloud declare --custody only stores the marker (bin/cc-cloud:311,988)"
+      ],
+      "score_1_10": 8
+    },
+    {
+      "label": "X",
+      "key_hits": ["K1","K2","K3","K4","K5","K6","K7","K8","K9","K10","K11","K12","K13","K14","M1","M2","M3","M4","M5","M6"],
+      "key_contradicted": [],
+      "citations_checked": 40,
+      "citations_bad": 3,
+      "wrong_claims": [
+        "Attributes 'It NEVER discharges a debt, never closes a row' to custody-deathwatch.sh:41; it is at :44",
+        "Attributes the quote 'uncertain about anything -> NEVER discharge' to custody-deathwatch.sh:66; it is at :73 (:66 says 'cannot discharge custody')",
+        "Cites custody-deathwatch.sh:67-68 for the once-per-marker latch; the latch is described at :74",
+        "Says the HANDOFF-PING recipe 'is at :197'; :197 is usage-header prose documenting it, the arming printf is :10734"
+      ],
+      "extra_correct": [
+        "Verified that bin/cc-custody:23 and custody-deathwatch.sh:29-30 are wrong: sc_announce_before_retire (handoff-fire.sh:4344) makes no custody call; the only _hf_custody calls are :8707 and :13220",
+        "Malformed-token guard: a leading --flag is not adopted as the discharge token (bin/cc-custody:146-149)",
+        "Stale citation wrap-ledger.sh:1017 ':44-46' for the not-expiry rule; real :45-49",
+        "cloud-retire-terminal settle_custody runs only when not a dry run (:286-289) and after `cc-cloud retire` succeeds (:291-294)",
+        "The ping drain cannot discharge cloud rows: cloud pings carry `cloud/<id>` (cloud-return.sh:844,1001) which matches neither marker $sid nor slug cloud-$sid; D3 discharges by marker before the ping is sent",
+        "A corrupt store line makes `list --open` print [] (SRC=pane, 0) while `count` exits 3 (SRC=error) (bin/cc-custody:240,263)",
+        "An armed watcher turns the wake floor off (session-continue.sh:614)",
+        "return/abandon fold the open set one file at a time and append to the matched file (bin/cc-custody:216-227)",
+        "wrap-ledger.sh:1000-1001 and handoff-fire.sh:4145-4146 still describe self-close as the only discharge",
+        "Stale citation handoff-fire.sh:3558 ':9064' -> real :10942"
+      ],
+      "score_1_10": 8
+    },
+    {
+      "label": "Y",
+      "key_hits": ["K1","K2","K3","K4","K5","K6","K8","K9","K10","K11","K12","K13","K14","M1","M2","M3","M4","M5","M6","M7"],
+      "key_contradicted": [],
+      "citations_checked": 30,
+      "citations_bad": 11,
+      "wrong_claims": [
+        "Rung-ladder line numbers wrong: cites ⛔ :1965-1968, dirty :1969-1970, remainder :1971-1972, 📦 :1973-1975; real :1972, :1979, :1981, :1983",
+        "Attribution jq cited at wrap-ledger.sh:1069-1075 and pane key at :1064-1065; real :1065-1071 and :1061",
+        "Cites the stale session-continue.sh:302 comment at wrap-ledger.sh:1062; it is at :1058",
+        "session-continue jq cited at :757-763 and fallback at :770-772; real :748-754 and :762",
+        "handoff-fire 'keyed on the FIRING cwd' comment cited at :13196 (real :13199); provenance at :13191-13192/:13218 (real :13196-13197); ENGAGE_VERIFY note at :13211-13217/:13235 (real :13213-13218/:13239)",
+        "mailbox-drain cwd scope cited at :563-566; the code is at :567-568",
+        "operator-readout 'N dispatched session(s) NOT returned' cited at :930; it is :929",
+        "Says the undocumented-rc goal outcome is 'not stated at :3594-3595'; the `*)` arm returns 0 for either consequence, so the goal arms too",
+        "Self-close row omits that the discharge sits after the terminal-close refusal (a refused close discharges nothing)",
+        "Drain row omits that the discharge verdict is read off stderr because cc-custody returns rc 0 either way"
+      ],
+      "extra_correct": [
+        "commands/are-we-done.md:22-23 is an additional readout consumer (`cc-custody list --open --fresh`, `count --open --stale`)",
+        "Stale citations: mailbox-drain :7087 and :7100 do not hold; slug basename at handoff-fire.sh:10721",
+        "Stale citation session-continue.sh ':197' and wrap-ledger 'session-continue.sh:302'; _opane set at :425",
+        "Stale citation handoff-fire.sh:3558 ':9064' -> real :10942"
+      ],
+      "score_1_10": 5
+    },
+    {
+      "label": "Z",
+      "key_hits": ["K1","K2","K3","K4","K5","K6","K7","K8","K9","K10","K11","K12","K13","K14","M1","M2","M3","M4","M5","M6","M7"],
+      "key_contradicted": [],
+      "citations_checked": 50,
+      "citations_bad": 2,
+      "wrong_claims": [
+        "Attributes 'It NEVER discharges a debt, never closes a row, never kills a process' to custody-deathwatch.sh:47; it is at :44",
+        "Cites cloud-retire-terminal.sh:202 for the marker read; the marker is read at :201 (:202 builds the why)"
+      ],
+      "extra_correct": [
+        "Readout 'not counted (a worse rung governs)' for CUSTODY_SRC=skip at wrap-ledger.sh:2328",
+        "Custody ranks ahead of operator-step, live-layer, filed, resident-member and no-trunk arms (wrap-ledger.sh:1999-2001, :2012-2017)",
+        "Busy injection is computed after the ladder (wrap-ledger.sh:2127); the header's 'three' consumers of CUSTODY_OPEN (:1011-1012) undercounts",
+        "bin/cc-teardown:275 and hooks/lead-crash-watchdog.sh:218,:1050 mention custody only in comments",
+        "Stale citation handoff-fire.sh:3520 ':10715/:10723' -> :13219/:13232",
+        "Stale citations session-continue.sh:724 ':197' and wrap-ledger.sh:1058 ':302' -> real capture :420/:425",
+        "Stale citation wrap-ledger.sh:1018 'session-continue.sh:608-612' -> rule at :726-730",
+        "One slug call discharges at most one row (first) (bin/cc-custody:216)"
+      ],
+      "score_1_10": 8
+    }
+  ],
+  "WX": "tie",
+  "WY": "W",
+  "WZ": "tie",
+  "XY": "X",
+  "XZ": "tie",
+  "YZ": "Z",
+  "pair_reasons": "All four get the core lifecycle right: the store and filename, the fold, the three-term open guard keyed on $PWD, the asymmetric rc table, all four producers, the six discharge sites, the deathwatch as a non-discharger, and all five consumers. No output contradicts a key item. Y loses to W, X and Z on verified citation accuracy. About 11 of the ~30 Y citations checked are off by several lines: the whole rung ladder (:1965-1975 vs the real :1972-1983), the wrap-ledger jq and pane lines, the session-continue jq and fallback, and three handoff-fire consequence-arm comments. Y also leaves out that the self-close discharge comes after the terminal refusal and that the drain reads its verdict off stderr, and it wrongly says the undocumented-rc goal outcome is 'not stated'. W, X and Z trade verified strengths that roughly cancel. X alone verifies that the cc-custody header's 'returns from sc_announce_before_retire' claim is false (4344 makes no custody call) and alone covers the malformed-token guard (:146-149) and the stale :44-46 TTL citation. X is also the only one to check the cloud-retire-terminal dry-run and retire-success preconditions. But X misses the handoff-fire:3520 and session-continue:724 ':197' stale citations and misplaces two deathwatch quotes. W catches 3520 and :197 but leaves :7087/:7100 unchecked and misnames what sits at :8936. Z covers all four M6 and both M7 stale citations but misses :3558->:9064 and misplaces the deathwatch quote (:47). None of these is a clear material edge, so W, X and Z tie pairwise."
+}

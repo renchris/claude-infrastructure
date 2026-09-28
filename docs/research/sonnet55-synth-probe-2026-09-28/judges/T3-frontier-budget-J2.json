@@ -1,0 +1,178 @@
+{
+  "task": "T3-frontier-budget",
+  "judge": "J2",
+  "snapshot": "/tmp/s55/repo-47c3317eb (sha 47c3317eb)",
+  "key": "/Users/chrisren/Development/claude-infrastructure/docs/research/opus55-synth-reprobe-2026-09-22/corpus/keys/T3-frontier-budget.md",
+  "method": "Every claim treated as unverified until opened byte-for-byte in the snapshot. Citation spot-checks run with awk/sed line dumps; three behavioural claims re-derived by running the gate's own regexes through grep -oE / grep -qE on the snapshot.",
+  "outputs": [
+    {
+      "label": "W",
+      "file": "/Users/chrisren/Development/.worktrees/sonnet55-cc284/docs/research/sonnet55-synth-probe-2026-09-28/arms/T3-frontier-budget__claude-sonnet-5-5__medium.md",
+      "key_hits": ["K1","K2","K3","K4","K5","K6","K7","K8","K9","K10","K11","K12","K13","K14","K15","K16","K17","K18","K20","M1","M2","M3","M4","M5","M6","M7","M8","M9","M12"],
+      "key_contradicted": [],
+      "key_missed": ["K19","M10","M11"],
+      "citations_checked": 34,
+      "citations_bad": 2,
+      "citations_bad_detail": [
+        "model-config.yaml:684 cited for the 'burn a per-session spawn-count slot the gate can't refund' quote — :684 reads '# raise a false \"expired-but-active\"; read `permanent: true` first.'; the quoted text is at :690-691.",
+        "model-config.yaml:696 cited for 'SSOT fallback is claude-opus-5-5' — :696 reads '# claude-lint-models. Playbook: docs/research/FABLE5_WINDOW_PLAYBOOK_2026-07-01.md'; fallback: claude-opus-5-5 is at :699. The VALUE stated is correct; the line is not."
+      ],
+      "citations_verified_sample": [
+        "hooks/frontier-spawn-gate.sh:67 full regex quoted byte-for-byte (verified)",
+        "hooks/frontier-spawn-gate.sh:120/:121/:125/:126-128/:133/:144 all land exactly",
+        "settings-templates/settings.example.json:160 + Bash matcher groups at :102,:203,:607,:704 (measured grep -n '\"matcher\": \"Bash\"')",
+        "migrations/0029-frontier-gate-session-path.sh:2,:6,:65,:73-77,:78-83,:86,:88,:92-95,:97-102,:104-105,:112-114,:121-125,:128 all land",
+        "migrations/README.md:68-74 (c10 definition) and :109 (deploy-migrations.sh --status) land",
+        "tests/frontier-spawn-gate.bats:32-34,:107-112,:139,:147,:170,:178 land",
+        "scripts/handoff-fire.sh:9295-9315 = hf_inflight_key; :10144-10147 = FABLE_EFFECTIVE prefix — both correct",
+        "CC_LADDER grep result reproduced exactly: 3 hits, CLAUDE.global.md:334 + NONLIMIT_RESUME_LADDER.md:840,:866; 0 hits under bin/scripts/hooks/commands/skills/lib/tools/autonomy/agents/launchd"
+      ],
+      "wrong_claims": [
+        "Two wrong model-config.yaml line numbers (above) on load-bearing facts (the no-refund quote and the SSOT fallback the brief asks to compare against).",
+        "settings-templates/settings.example.json:152-162 described as 'has a PreToolUse \"matcher\": \"Agent\" group' — the matcher key is at :151; :152-162 is the hooks array. Cosmetic."
+      ],
+      "extra_correct": [
+        "Names the :75 character-class gap: --model \"fable\" and --model $VAR are not matched (I reproduced: grep -oE -- '--model[= ]+[A-Za-z0-9._-]+' on 'handoff-fire.sh --model \"fable\" --prompt-file x' returns 0 matches).",
+        "Enumerates the four Bash matcher groups in the template (:102,:203,:607,:704) and says the only frontier-gate hit is :160 — verified.",
+        "Notes the Agent grep fallback at :104 looks for a \"model\" key a Bash payload lacks, so the session arm is effectively off without jq (matches key M2).",
+        "Correctly reports the migration's post-verify set (exactly-once, asyncRewake false, timeout 5, Agent entry survived) against :121-125."
+      ],
+      "gaps": [
+        "Brief item 8 says 'check each citation you encounter'. W checks only the three in-repo ones (gate:27, model-config.yaml:545, agent-teams-enforce.sh:366) and opens none of the docs/research citations into the gate (p15-escalation.md:44, A5-harness.md:357, A6-mechanics.md:245/:500, L1-census.md:62/:63) — all of which I verified exist and are stale.",
+        "Misses K19 (scripts/handoff-fire.sh:9493 resolves --model fable from the same SSOT key the gate reads)."
+      ],
+      "score_1_10": 7
+    },
+    {
+      "label": "X",
+      "file": "/Users/chrisren/Development/.worktrees/sonnet55-cc284/docs/research/sonnet55-synth-probe-2026-09-28/arms/T3-frontier-budget__claude-opus-5-5__xhigh.md",
+      "key_hits": ["K1","K2","K3","K4","K5","K6","K7","K8","K9","K10","K11","K12","K13","K14","K15","K16","K17","K18","K19","K20","M1","M2","M3","M4","M5","M6","M7","M8","M9","M12"],
+      "key_contradicted": [],
+      "key_missed": ["M10","M11"],
+      "citations_checked": 40,
+      "citations_bad": 0,
+      "citations_verified_sample": [
+        "scripts/handoff-fire.sh:9493 `fable) MODEL=\"$(_ssot_scalar frontier_access model)\"` — exact (K19; only X has it)",
+        "scripts/handoff-fire.sh:9494-9495 recycle-types-into-existing-shell comment — exact",
+        "model-config.yaml:690-691 (no-refund quote), :699 (fallback), :701-702, :687, :682, :663, :670, :937, :944-945, :949, :938-939, :512-514, :527-528, :545-549 — all land",
+        "model-config.yaml frontier_access block range :662 → pricing_per_mtok: at :712 — measured, correct",
+        "All nine external citation targets opened and confirmed: desk-audit/p15-escalation.md:44 (cites gate:59-67), A5-harness.md:357 (gate:37-69), A6-mechanics.md:245 (gate:26-38), A6-mechanics.md:500 (gate:23), L1-census.md:62 (gate:138, '--model claude-opus-5'), L1-census.md:63 (gate:149), A7-architecture.md:105, L2a-policy-surfaces.md:93-94",
+        "install.sh:1201-1204 'adds missing EVENTS only — never clobbers a populated event' — exact",
+        "README.md:869 (launcher names, `claude` → ~/.claude-next) vs model-config.yaml:670 (`claude` → ~/.claude-260) — both land; the disagreement is real",
+        "agents/frontier-derivation.md:5 `model: opus`; grep of agents/*.md for a fable model returns nothing — reproduced",
+        "tests/hook-jq-abstain.bats:6 names frontier-spawn-gate.sh among hooks that DO carry a jq guard — exact",
+        "migrations/0029:6,:7,:11,:27-30,:33,:41,:44-45,:61,:65,:73-77,:78-83,:86,:88,:92-95,:97-102,:104-105,:112-114,:121-126,:128 all land; :33 does read '5 s matches the Agent-matcher entry' and settings.example.json:161 is `\"timeout\": 5`",
+        "tests/frontier-spawn-gate.bats:47,:107-111,:114-136,:126-130,:141-143,:149-151,:152-158,:161-167,:175,:186-204 all land; grep -c '^@test' = 24 (measured), confirming 0029:11"
+      ],
+      "wrong_claims": [],
+      "extra_correct": [
+        "K19: the `fable` alias is resolved from the same SSOT key the gate reads (handoff-fire.sh:9493) — no other output has this.",
+        "Several fires in ONE Bash call cost one slot: the :71-73 loop returns on the first frontier match and :144 increments once. Verified against the code.",
+        "cap: 0 is numeric, so it passes :121 and then refuses every request at :136 — correct.",
+        "install.sh cannot add the Bash entry: its merge adds missing EVENTS only (install.sh:1201-1204) and the template lacks the entry anyway — verified.",
+        "The migration's precondition reads only ${CC_CLAUDE_DIR:-$HOME/.claude} (:61) while the write loop hardcodes five $HOME dirs (:86) — verified gap.",
+        "The migration does not cover ~/.claude-260, and model-config.yaml:670 vs README.md:869 disagree about which dir `claude` uses — both lines verified; the disagreement is genuine.",
+        "Best answer to 'the one command': the migration's own declared oracle (0029:6, length == 1, CC_CLAUDE_DIR-aware), plus why CLAUDE.global.md:334's one-liner is weaker (single dir, `any`, no timeout/asyncRewake check) — all three properties verified against the two lines.",
+        "Entry points outside the :67 regex named concretely (claude-prev*, claude-plan, claude-x/-h, claude-desk*, cc/ccr, and bash -c 'claude --model fable'). I reproduced the regex: claude-plan/claude-prev/bash -c '...' all NO MATCH, claude3 MATCH."
+      ],
+      "gaps": [
+        "Does not cite skills/frontier-routing/SKILL.md:41 (M10) — it uses L2a-policy-surfaces.md:93-94 and the gate's own header:2 for the same class instead.",
+        "Lists NONLIMIT_RESUME_LADDER.md:866 only as a CC_LADDER hit; does not call out its inverted 'does not yet see the SESSION path / treat the budget as advisory' claim (M11)."
+      ],
+      "score_1_10": 9
+    },
+    {
+      "label": "Y",
+      "file": "/Users/chrisren/Development/.worktrees/sonnet55-cc284/docs/research/sonnet55-synth-probe-2026-09-28/arms/T3-frontier-budget__claude-sonnet-5-5__high.md",
+      "key_hits": ["K1","K2","K3","K4","K5","K6","K7","K8","K9","K10","K11","K12","K13","K14","K15","K16","K17","K18","K20","M2","M3","M4","M6","M7","M8","M9","M12"],
+      "key_contradicted": [],
+      "key_missed": ["K19","M5","M10","M11"],
+      "key_partial": ["M1"],
+      "citations_checked": 26,
+      "citations_bad": 0,
+      "citations_verified_sample": [
+        "model-config.yaml:690-691, :699, :699-702, :687, :682, :676, :663, :938-939, :939-949, :949, :545, :548 — all land",
+        "hooks/frontier-spawn-gate.sh:85,:88,:90-91,:94,:96,:97,:102,:104,:106,:110,:112-114,:117,:120-121,:125,:126-128,:130-135,:136-142,:144,:148-153 — all land",
+        "tests/frontier-spawn-gate.bats:47,:107-112,:139-145,:147-159,:161,:214-237 land; grep -c '^@test' = 24 (I measured 24, matching Y's stated measurement)",
+        "settings-templates/settings.example.json:151,:160,:102-129 land; grep -c frontier in the template = 2 (reproduced)",
+        "migrations/0029:2,:6,:7,:11,:23-25,:61,:65,:67-72,:73-77,:78-83,:86,:88-95,:97-102,:104-105,:112-114,:121-125,:126,:127-131 land",
+        "scripts/registration-state.sh:73-83 (verdict list), :149 (verify header), :174-202 (verdict logic) land; --only matching at :145 makes '--only 0029' select this migration",
+        "scripts/handoff-fire.sh:9295-9310 = in-flight claim / hf_inflight_key; :10140-10147 = FABLE_EFFECTIVE — correct",
+        "Y's :67 quoted-invocation derivation is CORRECT — I reproduced it: 'bash -c \"handoff-fire.sh --model fable\"' and '\"/x/handoff-fire.sh\" --model fable' both NO MATCH against the :67 regex."
+      ],
+      "wrong_claims": [
+        "Ambiguous rather than wrong: 'A future claude-fable-6 would pass unless frontier_access.model was updated' — in context ('Hazard from the prefix rule') this means it escapes the gate, which is right; read literally as 'would pass the predicate' it is backwards.",
+        "§8's four docs/research citations are asserted 'also off' while Y states it did not open the targets. They ARE off (I opened all four), so the claim is true, but it is stated on faith rather than checked — the brief asks for the check."
+      ],
+      "extra_correct": [
+        "scripts/registration-state.sh --only 0029 as the fleet-wide live-state command, with the per-dir CC_CLAUDE_DIR mechanism (:149, :161-172) and the verdict vocabulary (:73-83) — verified, and a genuinely better answer than the single-dir jq one-liner.",
+        "Measured grep -c '^@test' = 24, corroborating migrations/0029:11 — I reproduced the same number.",
+        "model-config.yaml:939-949's '8→6 for the scarce 2026-07-01→07-07 window' rationale is stale against permanent: true — correct.",
+        "Verified-correct derivation that quoted launcher spellings do not satisfy the :67 anchor (reproduced above)."
+      ],
+      "gaps": [
+        "Misses M5 entirely: the :75 character class excludes quote marks, so --model \"claude-fable-5-1\" is uncounted. Y analyses quoting only against the :67 entrypoint anchor. Brief item 6 asks to enumerate every command shape that escapes counting.",
+        "CC_LADDER search was run with --exclude-dir=docs, so it found only CLAUDE.global.md:334 and never reached docs/plans/NONLIMIT_RESUME_LADDER.md:840's false 'read by the fire path' assertion (M1's substance). Y states the exclusion honestly; the conclusion 'no executable reads it' is still correct.",
+        "Misses K19."
+      ],
+      "score_1_10": 7
+    },
+    {
+      "label": "Z",
+      "file": "/Users/chrisren/Development/.worktrees/sonnet55-cc284/docs/research/sonnet55-synth-probe-2026-09-28/arms/T3-frontier-budget__claude-sonnet-5-5__xhigh.md",
+      "key_hits": ["K1","K2","K3","K4","K5","K6","K7","K8","K9","K10","K11","K12","K13","K14","K15","K16","K17","K18","K20","M1","M2","M3","M4","M5","M6","M7","M8","M9","M12"],
+      "key_contradicted": [],
+      "key_missed": ["K19","M10","M11"],
+      "citations_checked": 33,
+      "citations_bad": 0,
+      "citations_bad_soft": [
+        "hooks/agent-teams-enforce.sh:367-369 cited for 'which charges attempts' — :366-368 is the comment that literally says 'Attempts are charged, not admissions'; the charging code is :423-424. Lands on the assertion, not the implementation.",
+        "scripts/handoff-fire.sh:9296 cited for 'CC_FIRE_INFLIGHT=off' — :9296 is the comment naming the switch; the read is at :9367. Same shape."
+      ],
+      "citations_verified_sample": [
+        "model-config.yaml:690-691, :699, :701-702, :687, :682, :676, :676-681, :935-937, :939, :939-948, :949, :521-523, :553, :545 — all land",
+        "hooks/frontier-spawn-gate.sh:36,:37,:39-40,:40,:51-54,:62,:67 (full regex, byte-for-byte),:71-73,:75,:85,:88,:90-91,:94,:97,:102,:106,:110,:112-114,:115,:117,:120-121,:125,:126-128,:130,:132-135,:136,:138,:140,:142,:144,:145,:148-153 — all land",
+        "tests/frontier-spawn-gate.bats:47,:107-111,:139-145,:152-155,:154-158,:161-167,:170-183,:175,:186,:194-202 land; grep nosid tests/frontier-spawn-gate.bats returns nothing (reproduced — Z's claim 'no test pins it' is correct)",
+        "settings-templates/settings.example.json:100,:151,:160-161 land; the Bash group object is :101-129 (Z says :102-130 — one line off at each edge, cosmetic)",
+        "install.sh:509 and sync.sh:73 are the only 'frontier' mentions and both are comments — reproduced exactly",
+        "migrations/0029:2,:4,:6,:7,:20-21,:23-25,:27-30,:61,:65,:73-77,:78-83,:86,:88,:92-95,:97-102,:104-105,:112-114,:121-125,:127-129 land",
+        "scripts/registration-state.sh:73-84,:131-132 land",
+        "All six external citation targets opened and confirmed: p15-escalation.md:44, A6-mechanics.md:245, A6-mechanics.md:500, A5-harness.md:357, L1-census.md:62, L1-census.md:63",
+        "CC_LADDER: Z's stated result (exactly three lines — CLAUDE.global.md:334, NONLIMIT_RESUME_LADDER.md:840 and :866; nothing under the executable dirs) reproduces byte-for-byte."
+      ],
+      "wrong_claims": [
+        "§5: 'A hand-edit of active, an empty or garbled end, or a **fallback change** could reach the branch.' False for fallback — the window predicate at :117 reads only active and end; fallback is interpolated into the refusal text, never tested. Small but material.",
+        "§3: 'A fired session is a new process with its own session_id ... it starts at 0' is stated unhedged; new-session-id-per-process is harness behaviour, not something the snapshot's code establishes (X makes the same point but labels it an assumption)."
+      ],
+      "extra_correct": [
+        "Measured the :75 gap directly: ran the gate's own grep -oE on 'handoff-fire.sh --model \"fable\" --prompt-file x' and got 0 matches. I reproduced this exactly.",
+        "Sharpest unique finding in any of the four: test 15 asserts only the substring '--model claude-opus-5' (bats:175) against a fixture fallback of claude-opus-5 (bats:47), so it would also match 'claude-opus-5-5' and therefore cannot catch the stale-fallback drift. Verified — both lines and the substring logic are exactly as stated.",
+        "Tightest CC_LADDER evidence of the four: quotes both the CLAUDE.global.md kill-switch sentence and the plan's false 'read by the fire path' claim, gives both grep commands and both results, and contrasts with a REAL handoff-fire kill switch (CC_FIRE_INFLIGHT).",
+        "Notes the precondition/write-loop CC_CLAUDE_DIR gap in 0029 (:61 vs :86) — verified.",
+        "Gives both live-state commands (CLAUDE.global.md:334 one-liner and registration-state.sh) and flags that the one-liner uses `any` where the migration's oracle uses `length == 1` (0029:6) — verified.",
+        "Explicit what-I-did-not-verify section that is accurate."
+      ],
+      "gaps": [
+        "Misses K19 (handoff-fire.sh:9493).",
+        "Does not cite skills/frontier-routing/SKILL.md:41 (M10) or analyse NONLIMIT_RESUME_LADDER.md:866's inverted claim (M11)."
+      ],
+      "score_1_10": 8
+    }
+  ],
+  "pairwise": {
+    "WX": "X",
+    "WY": "tie",
+    "WZ": "Z",
+    "XY": "X",
+    "XZ": "X",
+    "YZ": "Z"
+  },
+  "pair_reasons": {
+    "WX": "X. Verified material differences: (a) X is the only output that hits K19 — scripts/handoff-fire.sh:9493 `fable) MODEL=\"$(_ssot_scalar frontier_access model)\"`, the alias resolving from the same SSOT key the gate reads; W cites only the FABLE_EFFECTIVE detector. (b) W carries two bad citations on load-bearing facts (model-config.yaml:684 for the no-refund quote, actually :690-691; :696 for the SSOT fallback, actually :699); X has zero bad citations across ~40 I opened. (c) Brief item 8 asks to check each citation encountered: X opens and correctly classifies nine external citations into the gate (p15-escalation.md:44, A5-harness.md:357, A6-mechanics.md:245/:500, L1-census.md:62/:63, A7-architecture.md:105, L2a:93-94, model-config.yaml:512-514) — I confirmed every one; W opens none of them.",
+    "WY": "tie. Neither has a decisive verified advantage. W has M5 (the :75 character class excludes quotes, so --model \"fable\" is uncounted — I reproduced 0 matches) which Y misses entirely on an item-6 'enumerate every command shape' question, and W's CC_LADDER grep covers the whole tree where Y's excluded docs/ and so never reached the plan's false 'read by the fire path' line. Y has zero bad citations where W has two (both model-config.yaml line numbers, including the fallback line the brief asks to compare against), correctly lands :690-691 and :699, measured grep -c '^@test' = 24, and found scripts/registration-state.sh --only 0029 as a verified fleet-wide live-state command. The two defect sets are of comparable weight and neither dominates.",
+    "WZ": "Z. Verified differences: (a) Z has zero hard-bad citations (two soft ones land on the comment asserting a fact rather than the implementing line) against W's two wrong model-config.yaml lines. (b) Z opens six external citations into the gate that W never checks, which brief item 8 asks for — I confirmed all six land where Z says. (c) Z contributes a verified finding no other output has: tests/frontier-spawn-gate.bats:175 asserts only the substring '--model claude-opus-5' against the :47 fixture, so it also matches claude-opus-5-5 and cannot catch the stale-fallback drift. Z's one wrong claim (a `fallback` change could reach the closed-window branch — :117 reads only active and end) is smaller than W's two mis-cited load-bearing facts plus the missing item-8 sweep.",
+    "XY": "X. (a) K19: only X cites scripts/handoff-fire.sh:9493. (b) M5: X names the :75 quoted-model escape (--model \"fable\" / 'claude-fable-5-1' / \"$M\"); Y analyses quoting only against the :67 entrypoint anchor and misses the model-extractor gap — an item-6 enumeration miss I confirmed is real. (c) CC_LADDER: X's grep covers the whole repo and quotes the plan's false 'read by the fire path' line (NONLIMIT_RESUME_LADDER.md:840); Y's grep excluded docs/ and never reached it. (d) X opens the nine external citations Y lists but states it did not open.",
+    "XZ": "X, narrowly but on specifics. (a) X hits K19 (handoff-fire.sh:9493); Z does not. (b) Z carries one material wrong claim — 'a fallback change could reach the [closed-window] branch' — which is false: the predicate at :117 tests only active and end. X has no material wrong claim I could find. (c) X checks three more external citations than Z (A7-architecture.md:105, L2a-policy-surfaces.md:93-94 as a correct-citation control, model-config.yaml:512-514/:527-528) and adds verified extras Z lacks: install.sh's merge cannot add the Bash entry (install.sh:1201-1204), the ~/.claude-260 vs ~/.claude-next documentation disagreement (model-config.yaml:670 vs README.md:869), multiple fires in one Bash call costing one slot, and no agent definition declaring a fable model. Z's unique wins (the test-15 substring finding; the tightest CC_LADDER evidence) are real but narrower than X's spread.",
+    "YZ": "Z. (a) M5: Z measured the :75 escape directly (0 matches for --model \"fable\"); Y misses it — an item-6 enumeration gap I verified is real. (b) CC_LADDER: Z's search is complete and reproduces exactly (three lines, both docs, zero under the executable dirs) and it names the plan's false 'read by the fire path' claim; Y's excluded docs/ and reached only CLAUDE.global.md. (c) Item 8: Z opens each docs/research citation and states where it lands; Y lists four and says it did not open them. (d) Z's unique verified finding that test 15's substring assertion cannot catch the stale-fallback drift. Z's one wrong claim (fallback reaching the closed branch) does not offset three verified advantages."
+  }
+}

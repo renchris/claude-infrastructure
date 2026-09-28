@@ -1,0 +1,128 @@
+{
+  "task": "T4-stop-arms",
+  "judge": "J2",
+  "repo_snapshot": "/tmp/s55/repo-47c3317eb",
+  "key": "/Users/chrisren/Development/claude-infrastructure/docs/research/opus55-synth-reprobe-2026-09-22/corpus/keys/T4-stop-arms.md",
+  "method": "Read brief + key, re-verified every key item's cited line in the snapshot (all 20 check out byte-for-byte), then read all four outputs in full and opened cited path:line locations with awk/sed in the snapshot. Counts below are measured (awk NR ranges over the named files), not estimated.",
+  "outputs": [
+    {
+      "label": "W",
+      "file": "arms/T4-stop-arms__claude-sonnet-5-5__high.md",
+      "key_hits": ["k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8", "k9", "k10", "k11", "k12", "k13", "k14", "M1", "M2", "M3", "M4", "M5", "M6"],
+      "key_contradicted": [],
+      "citations_checked": 20,
+      "citations_bad": 1,
+      "citations_bad_detail": [
+        "session-writes.sh:407-408 cited (with :420-421) as the site claiming session-continue.sh sets -o pipefail; :407-408 is about rc-1 consumption, the pipefail claim is only at :420-422. The finding itself (session-continue.sh sets no shell options, confirmed at session-continue.sh:365) is correct."
+      ],
+      "wrong_claims": [
+        "'The ledger reaches 🔧 for a dirty tree, a gate that is stale on HEAD, a DoD remainder, or open custody (scripts/wrap-ledger.sh:25, :1002)' — both cites are COMMENT lines and the code ladder has no gate-stale arm: :1972 ⛔, :1979 DIRTY, :1981 REMAINDER, :1983 UNLANDED, custody at :1998-2010; grep finds no STALE term feeding RUNG. This is the exact comment-over-code trap the brief warns about.",
+        "Left the 'position 4 of the Stop chain' claim explicitly unverified (settings-templates/settings.example.json:464-468 and :474-478 do confirm it) — honest, but a declared gap on a checkable item."
+      ],
+      "extra_correct": [
+        "A bare-shell `clear` writes sid '?' (:260) and the reader compares msid against ${cur_sid:-?} (:1060), so an operator's clear does NOT spend the mech budget of a real session — verified; the key's k6 is right only for an agent-run clear.",
+        "Non-numeric CLAUDE_CONTINUE_MAX / CC_MECH_MAX are never sanitised (:1255, :1053 vs the sanitised :1162, :807), so a junk value makes the `-ge` test error → false → the cap/budget never binds.",
+        "session-writes.sh's claim that session-continue.sh sets -o pipefail is false (session-continue.sh:365 says it sets no shell options).",
+        "The :963-966 comment's claim that wake_floor's assignee policy differs from mech/ship is wrong: :778-785, :970 and :1105 are identical (0|2 exempt, 1 not) — independently confirmed by agent-identity.sh:126-132/:148.",
+        "hooks/hook-chain.sh 'every member always runs' is at :77-78 (verified exact).",
+        "The armed path re-checks nothing about the tree, so a mechanically-armed sentinel keeps blocking after the model commits; the :922-923 SELF-CLEARING comment is true only of re-arming.",
+        "Wake-floor budget reset by an armed watcher (:614) is described by the hook's own :478-483 (verified)."
+      ],
+      "score_1_10": 7
+    },
+    {
+      "label": "X",
+      "file": "arms/T4-stop-arms__claude-opus-5-5__xhigh.md",
+      "key_hits": ["k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8", "k9", "k10", "k11", "k12", "k13", "k14", "M1", "M2", "M3", "M4", "M5", "M6"],
+      "key_contradicted": [],
+      "citations_checked": 22,
+      "citations_bad": 0,
+      "citations_bad_detail": [],
+      "wrong_claims": [
+        "Typo only: '§1(b) CLAUDE_MAX is never checked for being numeric' — the variable is CLAUDE_CONTINUE_MAX; the claim itself is correct (:1255 unsanitised, counter sanitised at :1256-1257)."
+      ],
+      "extra_correct": [
+        "hooks/completion-assert.sh:866-869 reads ${sentinel}.blocked, appends double-block-yield:session-continue-<arm> and sets contra=0 — verified byte-for-byte; so this hook's block SUPPRESSES a second hook's block.",
+        "session-continue.sh:1082-1083 quotes the mechanical arm's header as saying '📦 must NOT fire …' — no such sentence exists in :897-929 (grep 'must NOT fire' hits only :1082). A fabricated self-quotation the other three missed.",
+        ":545 cites lead-crash-watchdog.sh classify_death (:255-278): classify_death is at :402; :255-278 is retired_by_desk/close_record_summary. :547 cites marker_owns_sid (:112-118): it is at :207-213. Both verified.",
+        "CC_WF_TEARDOWN_FRESH_S:-1800 (:555) vs lead-crash-watchdog.sh:257's hard-coded `-mmin -30` — verified, and correctly framed as NOT an env-default divergence.",
+        "Cross-checked candidate divergent defaults and found none: CC_WATCH_FRESH_S is 90 at mailbox-pending.sh:297, bin/cc-notify:1297, bin/cc-await-ping:385; CC_TEARDOWN_DIR and CC_MAILBOX_DIR are uniform (I re-ran the grep: uniform).",
+        "Because the sentinel is cwd-keyed and SID-BIND clears on mismatch (:1246-1247), a sibling session that Stops first DELETES another session's live chain.",
+        "`clear --if-mine` (:212-217, :235) is the only ownership guard on the CLI side and never runs during a Stop (key trap 'clear refuses a foreign sentinel only with --if-mine').",
+        "Complete env inventory incl. SESSION_WRITES_LIB/WRAP_LEDGER_BIN/SESSION_WRITES_TIMEOUT_S:-5 (:171)/CC_MBX_SESSION_KEY:-1 (mailbox-pending.sh:906)/AGENT_IDENTITY_LIB/CC_WF_PSTABLE_FILE/CC_WF_START_PID/CC_WF_TEAM_ROOTS — all verified.",
+        "Answers the mail question with the key's polarity ('No — mail never blocks by itself') and still names the wake floor as the only route."
+      ],
+      "score_1_10": 9
+    },
+    {
+      "label": "Y",
+      "file": "arms/T4-stop-arms__claude-sonnet-5-5__xhigh.md",
+      "key_hits": ["k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8", "k9", "k10", "k11", "k12", "k13", "k14", "M1", "M2", "M3", "M4", "M5", "M6"],
+      "key_contradicted": [],
+      "citations_checked": 22,
+      "citations_bad": 4,
+      "citations_bad_detail": [
+        "':424 cites the pane capture at :197' — no ':197' at :424; the comment is at :724 (and :644). Wrong location.",
+        "':432 cites mailbox_promote_acked (:213)' — that comment is at :433. Off by one.",
+        "':955-956 cites ship_floor at :865-869, wake_floor at :587-608' — that comment is at :952. Off by three.",
+        "'session-writes.sh:424 says the sibling at :269 still has the printf|grep shape' — the sentence begins at :423."
+      ],
+      "wrong_claims": [
+        "'Verified correct: session-continue.sh:145 (the .sid write)' — the .sid write is at :146 (:145 only assigns csid). This certifies as correct one of the very stale self-citations the brief asks to catch (:177 cites '(:145)').",
+        "':1096 says budget exhaustion is silent. The code prints to stderr and logs ship-floor-budget' — a soft mischaracterisation: the comment's 'silent' means no surface to the MODEL, which :1174-1178 (stderr + IDL only) satisfies."
+      ],
+      "extra_correct": [
+        "The ship floor reads only RUNG, TRUNK, AHEAD, SHAS (:1127, :1148, :1181-1182), so a 📦 the ledger marks 'Land IN FLIGHT' (wrap-ledger.sh:1985-1986 sets only READOUT) still qualifies — verified, and unique to this output.",
+        "The only exit-2 sites are :116, :130 (set|clear|status) and :216 — verified exact by grep.",
+        "`clear` removes f/.count/.sid/.cwd (:253) and rewrites .mech but never touches .ship — verified.",
+        "The wake floor's budget check (:836) runs BEFORE the TTL check (:845) — verified.",
+        "bin/cc-custody:256-257: bare `count --open` still counts stale rows — verified exact.",
+        "Ledger-ladder reasoning that the non-DIRTY 🔧 causes (:1981, :1998-2010, :2017-2029, :2042-2052) all sit under DIRTY=0 branches, so in practice the mechanical arm needs a dirty tree and no ⛔ — verified, and correctly flagged as inference.",
+        "The :963-966 exemption-asymmetry comment is wrong; :781-783 vs :970 vs :1105 are identical (independently confirmed).",
+        "session-writes.sh's pipefail claim about session-continue.sh is false (:365).",
+        "Chain position verified against settings-templates/settings.example.json:464-468 / :474-478, including timeout 5 on both.",
+        "A compliant `set` after a mechanical block converts the chain into an agent-armed one with no CC_MECH_MAX bound (:1304 + :142) — correct, flagged as inference."
+      ],
+      "score_1_10": 8
+    },
+    {
+      "label": "Z",
+      "file": "arms/T4-stop-arms__claude-sonnet-5-5__medium.md",
+      "key_hits": ["k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8", "k9", "k10", "k11", "k12", "k13", "k14", "M1", "M2", "M3", "M4", "M5", "M6"],
+      "key_contradicted": [],
+      "citations_checked": 18,
+      "citations_bad": 3,
+      "citations_bad_detail": [
+        "':429' listed (with :724) as citing '_opane captured at :197' — :429 is the mailbox-lib source line; the text is at :724/:644.",
+        "':1328 precedent at :502' — that comment is at :1327.",
+        "'CC_WATCH_FRESH_S = 90, which is mailbox-pending.sh:296' — the default literal is at :297."
+      ],
+      "wrong_claims": [
+        "Custody wording: 'it counts rows that have originatorPane, or notifyBack equal to the pane or ending in -<pane>, as cust_mine' — the jq at :748-753 requires originatorPane == $p, not merely present; the phrasing reads as presence and is at best ambiguous.",
+        "Does not state cust = cust_mine + cust_unk (:758), so the key-10 precision point (unattributable rows also re-open the floor) is only implicit."
+      ],
+      "extra_correct": [
+        "CLAUDE_CONTINUE_MAX=0 makes the first check 0 -ge 0 true, so the hook never blocks — verified.",
+        "The other two floors call wf_teardown_marked ungated by CC_WAKE_FLOOR_TEARDOWN (:983, :1110) while the wake floor's is gated (:776) — verified.",
+        "The ledger sets 🔧 for several causes (:1979-2037), so the rung alone does not prove this session's dirt — verified.",
+        "The :963-966 exemption-asymmetry comment is wrong (:780-784 vs :970/:1105) — verified.",
+        "ship_floor's rc-0 stdout is captured into _sf_json and dropped (:1208-1212) — verified."
+      ],
+      "score_1_10": 6
+    }
+  ],
+  "cross_cutting_notes": [
+    "All 20 key items check out against the snapshot byte-for-byte (I re-read every cited line). All four outputs hit all 20 in substance; the key was a floor all four cleared, so every pairwise verdict below rests on citation accuracy and verified extras, not on key coverage.",
+    "KEY TRAP DISPUTED, OUTPUTS RIGHT: the key's trap bullet 'the three arms do NOT share one exemption policy, and the code says so at :963-966' rests on a COMMENT. Code: mechanical :968-980, ship :1103-1109 and wake :778-785 all exempt on agent_team_member_confirms rc 0 or rc 2 and not on rc 1 — identical. hooks/lib/agent-identity.sh:126-132 states the policy is held in one place and :148 spells the same `case $? in 0|2)`. W, Y and Z flag the comment as wrong and are correct; X states the correct semantics without flagging the comment. No output is penalised for this.",
+    "MAIL-QUESTION POLARITY: X answers 'No, mail never blocks by itself' (the key's polarity); W, Y and Z answer 'yes, but only via the wake floor and only with every other condition met'. The mechanism each describes is the same and matches M4, so this is framing, not a contradiction."
+  ],
+  "pairwise": {
+    "WX": "X",
+    "WY": "Y",
+    "WZ": "W",
+    "XY": "X",
+    "XZ": "X",
+    "YZ": "Y"
+  },
+  "pair_reasons": "WX→X: X carries three verified findings W lacks and no bad citation in 22 checks — completion-assert.sh:866-869 consuming the .blocked marker (double-block-yield, contra=0), the FABRICATED self-quote at :1082-1083 ('📦 must NOT fire' appears nowhere in :897-929), and the lead-crash-watchdog corrections (:545→classify_death is :402 not :255-278; :547→marker_owns_sid is :207-213 not :112-118). X also names every tuning env var the brief's (b) demands (SESSION_WRITES_TIMEOUT_S:-5, CC_MBX_SESSION_KEY:-1, AGENT_IDENTITY_LIB, CC_WF_PSTABLE_FILE/START_PID/TEAM_ROOTS) and covers `clear --if-mine`. W repeats an unverified COMMENT as code (wrap-ledger.sh:25 'gate ran-but-stale-on-HEAD' is a 🔧 cause — the ladder at :1972-1990 has no such arm) and mis-cites :407-408 for the pipefail claim. Both share the strong bare-shell-clear finding. WY→Y: Y verified four things W did not and W has nothing comparable in return — the ship floor reads only RUNG/TRUNK/AHEAD/SHAS so a 'Land IN FLIGHT' 📦 still qualifies (wrap-ledger.sh:1985-1986 sets READOUT only), the exit-2 site enumeration (:116/:130/:216, exact), budget-before-TTL ordering (:836 before :845), and `clear` never touching .ship; Y also verified the Stop-chain positions W left declared-unverified. Y's four off-by-a-few line numbers sit in its staleness audit and each names a stale comment that really is stale (only the pointer slips), plus one wrong verdict (:145 'verified correct' when the .sid write is :146); W's defect is substantive — a comment-derived trigger predicate the code does not implement. WZ→W: W has the verified bare-shell-clear/.mech-sid interaction (:260 vs :1060), the falsification of session-writes.sh's pipefail claim (session-continue.sh:365), the non-numeric-cap analysis, and a complete env inventory for the wake floor; Z omits the sid nuance of `clear`, omits CC_WF_MAX_HOPS/CC_CUSTODY_BIN/SESSION_WRITES_TIMEOUT_S/WRAP_LEDGER_BIN/SESSION_WRITES_LIB, never states cust = cust_mine + cust_unk (:758), and has 3 bad line cites (:429, :1328, mailbox-pending:296) against W's 1. XY→X: zero bad citations in 22 checks against Y's four, and X's cross-file verifications (completion-assert consumer, two lead-crash-watchdog corrections, the fabricated :1082-1083 quote, the --if-mine guard) are each byte-checked and absent from Y; Y's unique ledger-fields finding is real but does not offset a staleness audit in which four of its own pointers are wrong and one stale citation (:145) is certified correct. XZ→X: X is strictly superior on every measured axis — 0 vs 3 bad cites, complete vs partial env inventory, and a set of verified cross-file findings Z does not attempt (Z explicitly declines to check citations outside session-continue.sh). YZ→Y: Y verifies the chain positions, the exit-2 sites, the cc-custody stale-row contract (bin/cc-custody:256-257), the ledger-field set and the budget/TTL ordering, and gives a correct exemption matrix; Z has no unique verified finding, 3 bad cites, an ambiguous-to-wrong custody-attribution sentence, and the thinnest env-var coverage. Length is not the basis: Z is only ~35 lines shorter than Y but materially less verified."
+}

@@ -1,0 +1,84 @@
+{
+  "outputs": [
+    {
+      "label": "W",
+      "key_hits": ["S1","S2","S3","S4","S5","S6","S7","S8","S9","S10","T1","T2","T3","T4","T5"],
+      "key_contradicted": [],
+      "citations_checked": 40,
+      "citations_bad": 0,
+      "wrong_claims": [
+        "Minor wording only: says session-continue.sh:1327 is 'one line above sites 9 and 10'; it is 5 lines above :1332 (sits in the comment block directly above). Not material."
+      ],
+      "extra_correct": [
+        "session-continue.sh:724 cites ':197' for the raw $_opane capture; :197 is a test-history comment and the only assignment is _opane=\"$_ouid\" at :425 (verified; inside wake_floor, the function holding site :893)",
+        "session-continue.sh:944 'ship_floor :969' points at mechanical_arm's own agent_team_member_confirms line; ship_floor kill-switch is at :1101 (verified)",
+        "session-continue.sh:944 'wake_floor :732-736' is the CC_CUSTODY_BIN test-seam comment; wake_floor kill_switch_active is at :850 (verified)",
+        "session-continue.sh:952 'ship_floor at :865-869' lands in wake_floor's reason string (:866); real check at :1103-1108 (verified)",
+        "session-continue.sh:952 'wake_floor at :587-608' is header comment plus opening guards; assignee check at :778-779 (verified)",
+        "session-continue.sh:974 'The sibling at :974' points at itself; the sibling logging {assignee,confirm_rc} is ship_floor :1106 (verified)",
+        "anti-deference-nudge.sh:472 cites 'lesson at :353'; :353 is a bare fi closing the team-assignee abstain (verified)",
+        "wake_floor/ship_floor output captured and printed at session-continue.sh:1213/:1215 and :1208/:1210 (verified)",
+        "curl-gate.py:174 is an audit-log record; the .py hooks' decision payloads are PreToolUse permissionDecision (curl-gate.py:215-221, model-permission-decider.py:458-465) (verified)",
+        "waiting-recycle.sh settings entry has matcher Bash at settings.example.json:203; header :151 and banner :633 name PostToolUse (verified)",
+        "activation script lines :39 HOOK_CMD, :97 .hooks.Stop[0].hooks, :103 wired message, :22 'agent never self-activates' (verified)"
+      ],
+      "score_1_10": 10
+    },
+    {
+      "label": "X",
+      "key_hits": ["S1","S2","S3","S4","S5","S6","S7","S8","S9","S10","T1","T2","T4","T5"],
+      "key_contradicted": ["T3"],
+      "citations_checked": 22,
+      "citations_bad": 0,
+      "wrong_claims": [
+        "States for dispatch-assert.sh 'I did not find a committed registration' and 'the activation script is not in this snapshot'. False: docs/activation/pending-activation/11-dispatch-assert-activate.sh exists in the snapshot and wires it into .hooks.Stop[0].hooks (:97). X's find excluded docs/. Material for brief item 4."
+      ],
+      "extra_correct": [
+        "README.md:322 lists dispatch-assert under 'Stop (12)' and README.md:319 lists waiting-recycle under 'PostToolUse (12)' (verified)",
+        "tests/deploy-link-parity.bats:91-92 stages 11-dispatch-assert-activate.sh (verified)",
+        "validate-bash.sh:137 and reset-hard-shadow-allow.sh:164 are JSONL log writers; operator-readout.sh:290 is a jq select comparison (verified)",
+        "session-continue.sh:1211 is a trailing comment on exit 0 (verified)"
+      ],
+      "score_1_10": 7
+    },
+    {
+      "label": "Y",
+      "key_hits": ["S1","S2","S3","S4","S5","S6","S7","S8","S9","S10","T1","T2","T3","T4","T5"],
+      "key_contradicted": [],
+      "citations_checked": 24,
+      "citations_bad": 0,
+      "wrong_claims": [
+        "Says it found no other :NNN pointers adjacent to the emissions; the stale :197 citation at session-continue.sh:724 sits inside wake_floor(), which holds site :893. 'Adjacent' is debatable, so this is not counted as a hard error. 'wiring at :82-92' is loose (the jq edit is at :96-103)."
+      ],
+      "extra_correct": [
+        "Function close lines used to prove top-level placement: open_packet_B closes :137, boundary-handoff last fn :641, completion-assert last fn :630, dispatch-assert last fn :205 (verified)",
+        "Full list of systemMessage emitters in session-continue.sh (660, 700, 793, 840, 851, 893, 1264) (verified)",
+        "The 'completion-assert.sh:113-123 pattern' pointer appears at boundary-handoff.sh:135 and completion-assert.sh:110 (verified; flagged as unverified and non-adjacent)"
+      ],
+      "score_1_10": 9
+    },
+    {
+      "label": "Z",
+      "key_hits": ["S1","S2","S3","S4","S5","S6","S7","S8","S9","S10","T1","T2","T3","T4","T5"],
+      "key_contradicted": [],
+      "citations_checked": 22,
+      "citations_bad": 1,
+      "wrong_claims": [
+        "Cites migrations/0027-handoff-claim-registration.sh:36 for the already-registered skip; :36 is blank and the check is at :37 (off by one, minor)"
+      ],
+      "extra_correct": [
+        "Uses waiting-recycle.sh:17 (the key's header line, 'PostToolUse:Bash') plus :443 and :828 'rides PostToolUse:Bash' (verified)",
+        "Explicitly excludes the systemMessage-only emitters session-continue.sh:660/700/793/840/851/1264 (verified)",
+        "handoff-claim-assert.sh has only abstain() at :39; dispatch-assert discharged_since() at :162; wake_floor header comment at :603 states it echoes JSON to block (verified)"
+      ],
+      "score_1_10": 9
+    }
+  ],
+  "WX": "W",
+  "WY": "W",
+  "WZ": "W",
+  "XY": "Y",
+  "XZ": "Z",
+  "YZ": "tie",
+  "pair_reasons": "All four list the same 10 correct sites (S1-S10), correctly disqualify waiting-recycle.sh's 8 PostToolUse emissions, pick session-continue.sh with 4, and flag the stale ':502' citation at session-continue.sh:1327. X is the only output that breaks a key item. It says the dispatch-assert activation script is not in the snapshot, but docs/activation/pending-activation/11-dispatch-assert-activate.sh exists and appends to .hooks.Stop[0].hooks at :97. So W, Y and Z each beat X. W beats Y and Z on brief item 5 ('flag any' stale citation): it adds seven more drifted in-code citations, all verified byte-for-byte, including session-continue.sh:724 ':197' inside wake_floor(), which holds site :893. Y explicitly reports none beyond :502, and Z does not look. Y vs Z: both hit every key item. Z's one off-by-one citation (migration :36 vs :37) and Y's loose ':82-92' range are both immaterial, so that pair is a tie."
+}

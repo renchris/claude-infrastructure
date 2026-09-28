@@ -1,0 +1,84 @@
+{
+  "outputs": [
+    {
+      "label": "W",
+      "key_hits": ["S1","S1r","S2","S2a","S2r","S3","S3r","S4","S5","S5r","N1","N3","M3"],
+      "key_contradicted": ["N4"],
+      "citations_checked": 35,
+      "citations_bad": 5,
+      "wrong_claims": [
+        "(c) says the launchd plist 'is the only scheduled or unattended path I found'. That is false. launchd com.chrisren.autonomy-sweep (every 300s) runs scripts/autonomy-sweep.sh:1488, which calls cc-premise sweep, which reaches bin/cc-premise:1392 /bin/sh -c on deploy-live's stored falsifier. The key's N4 is corrected on exactly this point.",
+        "Misses bin/cc-premise:1392 (the key's 6th site, M1) entirely, and never adjudicates the deploy-live.sh:960 falsifier string (N2).",
+        "Rejects bin/cc-do:454 as 'Not a site' only because it was 'not traced to deploy-live.sh'. W itself notes that deploy-live.sh:811-812 files the run= strings as cc-backlog --run, so the link was one step away.",
+        "Off-by-one citations: export DEPLOY_REPO is at deploy-now.sh:60, not :61. The SHIP_LAND_CONVERGE test is at ship-land.sh:1727, not :1726. The \"$dl_script\" argv is at :1741, not :1742. The 'converge kicked' echo is at :1742, not :1743-1744. The behind>0 guard is at operator-readout.sh:532, not the ':522 region'."
+      ],
+      "extra_correct": [
+        "scripts/install.sh does not exist. install.sh:849 is only a link_file of deploy-now.sh (verified).",
+        "The run_steps ▶-only filter at bin/cc-do:386 means the ⊘ row at :196 is never executed (verified)."
+      ],
+      "score_1_10": 5
+    },
+    {
+      "label": "X",
+      "key_hits": ["S1","S1r","S2","S2a","S2r","S3","S3r","S4","S5","S5r","N1","N2","N3","M2","M3"],
+      "key_contradicted": ["N4"],
+      "citations_checked": 40,
+      "citations_bad": 0,
+      "wrong_claims": [
+        "(c) 'Every scheduled run therefore comes from that plist' is false. The autonomy-sweep launchd job reaches scripts/autonomy-sweep.sh:1488, then cc-premise sweep, then bin/cc-premise:1392, which runs deploy-live.sh --falsify-host. This contradicts corrected N4.",
+        "Leaves bin/cc-premise:1392 as an 'unverified candidate (not counted)' based on a grep for 'sh -c|bash -c|eval' that reported no non-comment hits in cc-premise. That grep structurally misses the list form [\"/bin/sh\", \"-c\", cmd] at :1392, so the negative is misleading and the key's 6th site (M1) goes uncounted."
+      ],
+      "extra_correct": [
+        "The stale citation at scripts/permission-harvest-run.sh:329 (bin/cc-do:436) is correct to flag: the bash -c is at bin/cc-do:454 (verified).",
+        "bin/cc-blockers:186 DEPLOY_REPO is used only for git -C and other scripts, never for deploy-live (sampled lines 228, 272, 533, 545, 627, 691 and 1349; verified).",
+        "Correct full exit-status handling of run_backlog_row at bin/cc-do:455-459, and the non-tty exit 3 at :535-540 (verified).",
+        "Correct that the plist has StartInterval at :41 and RunAtLoad at :44 (verified)."
+      ],
+      "score_1_10": 6
+    },
+    {
+      "label": "Y",
+      "key_hits": ["S1","S1r","S2","S2a","S2r","S3","S3r","S4","S5","S5r","N1","N2","N3","N4","M1","M2","M3"],
+      "key_contradicted": [],
+      "citations_checked": 45,
+      "citations_bad": 0,
+      "wrong_claims": [
+        "Minor: cites bin/cc-backlog:3775 for 'rows created by cc-backlog needs have status:blocked'. That line is a synthetic __pending__ record in the needs brake, not the mint itself. The claim is right in substance, but the citation is weak."
+      ],
+      "extra_correct": [
+        "Correct on N4 as corrected. launchd/com.chrisren.autonomy-sweep.plist:24,26 (StartInterval 300) runs scripts/autonomy-sweep.sh:1488 (gated by 21600s at :1429-1435). That reaches cc-premise cmd_sweep :3122-3123, then assess :2310, then run_falsifier :1392 (all verified).",
+        "Correct that bin/cc-do:359 does not pin DEPLOY_REPO the way the :184 probe does, so deploy-live's own default at deploy-live.sh:122 applies. The probe and the real run can therefore disagree when CC_SHARED_CHECKOUT is overridden (verified).",
+        "Correct that $DEPLOY_REPO in the run= strings is expanded at write time (double quotes), while $HOME in the falsifier is deliberately left unexpanded (deploy-live.sh:956-960, verified).",
+        "Correct stale-citation findings: launchd/com.claude.deploy-live.plist:16 cites operator-readout.sh:238-246, but the fallback code is at :517-518. bin/cc-do:152 cites §152-258, but the matching code is at :503-548 (verified).",
+        "bin/cc-premise:1776/1790-1793 is correctly rejected as a filing-day screen that parses the probe into clauses and does not execute it (verified).",
+        "Correctly flags bin/cc-backlog:4308 (/bin/sh -c \"$probe\" in cmd_falsify) as an open candidate rather than asserting it."
+      ],
+      "score_1_10": 9
+    },
+    {
+      "label": "Z",
+      "key_hits": ["S1","S1r","S2","S2a","S2r","S3","S3r","S4","S5","S5r","N1","N2","N3","M1","M2","M3"],
+      "key_contradicted": ["N4"],
+      "citations_checked": 38,
+      "citations_bad": 6,
+      "wrong_claims": [
+        "(c) 'Inside the scoped trees there is no scheduled or timer-driven caller' is false. scripts/autonomy-sweep.sh:1488 (launchd every 300s, premise pass every 21600s) calls cc-premise sweep, which reaches bin/cc-premise:1392. Z counts :1392 itself as site 6 but never connects it to that schedule, so it contradicts corrected N4.",
+        "'If you count the two arms of cc-do:358/359 as separate lines, the total is 8' is not coherent. Line 358 runs only when cmd starts with 'CONFIRM=1 ', and the deploy row's cmd is 'bash …', so :358 never executes deploy-live. Z itself says :359 is the deploy case.",
+        "Bad citations. REPO is at deploy-now.sh:53, not :52. The behind>0 guard is at operator-readout.sh:532, not :533. emit is defined at bin/cc-do:150, not :148. cmd = ent.get('falsifier') is at bin/cc-premise:1387, not :1381-1383 (which is docstring). The DIVERGED comment is at ship-land.sh:1703, not :1704. The no-unattended-caller claim is at deploy-now.sh:69-71, not :66-68."
+      ],
+      "extra_correct": [
+        "Correct: launchd/fleet.manifest:132 schedules com.claude.deploy-live at 600s (verified).",
+        "Correct that ship-land.sh:1703's citation of deploy-live.sh:2543 as the DIVERGED die is stale: :2543 prints $UNTRACKED, and a DIVERGED page/die block sits at :2458-2472 (verified; the key also names :2601).",
+        "Correct that the falsifier call is made from bin/cc-premise:2310 (assess), and that timeout/exception fails open with None (verified)."
+      ],
+      "score_1_10": 7
+    }
+  ],
+  "WX": "X",
+  "WY": "Y",
+  "WZ": "Z",
+  "XY": "Y",
+  "XZ": "Z",
+  "YZ": "Y",
+  "pair_reasons": "All four get the five core sites right (deploy-now:89, ship-land:1739, operator-readout:534, cc-do:184, cc-do:359), with correct path chains, so the pairs turn on the key's M1, M2 and corrected N4. Y is the only output that counts bin/cc-premise:1392 (M1), counts bin/cc-do:454 (M2) and also traces the in-scope scheduled path (autonomy-sweep.sh:1488 → cc-premise → :1392) that the corrected N4 requires. Its sampled citations were all exact, so Y beats X, Z and W. Z counts both M1 and M2 but states there is no scheduled in-scope caller and has about 6 off-by-one or wrong-line citations. X counts M2 but leaves M1 as an unverified candidate, based on a grep that structurally could not match the list-form /bin/sh -c, and also claims every scheduled run comes from the plist. Z verifying and counting the key's 6th site is a specific, material difference that outweighs X's better citation precision, so Z beats X. W misses M1 and N2 entirely, declines to count cc-do:454, contradicts N4 and has 5 off-by-one citations, so it loses to X, Y and Z."
+}

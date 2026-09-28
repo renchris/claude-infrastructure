@@ -1,0 +1,103 @@
+{
+  "outputs": [
+    {
+      "label": "W",
+      "key_hits": ["k1","k2","k3","k4","k5","k6","k7","k8","k9","k10","k11","k12","k13","M1","M2","M3","M4","M5","M6"],
+      "key_contradicted": [],
+      "citations_checked": 60,
+      "citations_bad": 3,
+      "wrong_claims": [
+        "Cites CC_WATCH_FRESH_S default at hooks/lib/mailbox-pending.sh:296; it is at :297 (296 is the mt sanitiser)",
+        "Stale-comment table cites session-continue.sh:429 for the '_opane captured at :197' claim; :429 is `if . \"$_mbxlib\"`; the only such comment is :724",
+        "Cites the 'precedent at :502' comment as :1328; it is at :1327",
+        "Custody description 'counts rows that have originatorPane, or notifyBack equal to the pane' is garbled (the code requires originatorPane == pane, :750)",
+        "k14 only partial: names agent_assignee_argv/agent_team_member_confirms and the 0/1/2 trichotomy but never states the process-ancestry walk or the three-flag conjunction with cross-field consistency"
+      ],
+      "extra_correct": [
+        "Flags the :963-966 comment as wrong: the wake floor, mechanical arm and ship floor all exempt on rc 0|2 and not on rc 1 (:780-784 vs :970, :1105). Verified: the three policies are identical, which also refutes the key's trap on this point",
+        "CLAUDE_CONTINUE_MAX is unvalidated: 0 makes `0 -ge 0` true (never blocks), and a non-numeric value errors to false (the cap never trips) (:1255-1258)",
+        "wf_teardown_marked is called ungated by CC_WAKE_FLOOR_TEARDOWN in the mech and ship arms (:983, :1110)",
+        "Ship-floor budget exhaustion emits no systemMessage, only stderr plus an IDL row (:1174-1177)",
+        "CLAUDE.global.md:605/:1025 say CLAUDE_CONTINUE_MAX 'bounds only the MECHANICAL arm', but the cap code applies to any sentinel"
+      ],
+      "score_1_10": 7
+    },
+    {
+      "label": "X",
+      "key_hits": ["k1","k2","k3","k4","k5","k6","k7","k8","k9","k10","k11","k12","k13","k14","M1","M2","M3","M4","M5","M6"],
+      "key_contradicted": [],
+      "citations_checked": 60,
+      "citations_bad": 2,
+      "wrong_claims": [
+        "Says the ledger reaches the 🔧 rung for 'a gate that is stale on HEAD', citing scripts/wrap-ledger.sh:25. That is a header comment; the code ladder (:1971-2056) has no gate-stale term, and the list omits the resident/filed/unconvicted/close-floor/no-trunk 🔧 causes. The claim is grounded in a comment, against the brief",
+        "Cites hooks/lib/session-writes.sh:407-408 for the claim that session-continue sets pipefail; those lines say nothing about pipefail (only :420-421 does)",
+        "Cites the hook-chain.sh:78 comment as session-continue.sh:315-316; it is at :317",
+        "Internal inconsistency: §1(d) says `clear` 'always spends the mechanical budget', then §2 correctly says a bare-shell clear does not"
+      ],
+      "extra_correct": [
+        "An armed sentinel keeps blocking after the tree goes clean. The armed path never re-checks the tree, so the 'self-clearing' comment at :922-923 holds only for re-arming",
+        "A bare-shell `clear` writes sid '?' into .mech, and :1060 zeroes the count on sid mismatch, so it does not spend a real session's mech budget (:260-261 vs :1060)",
+        "CC_MECH_MAX has no digit sanitising at :1053, so a non-numeric value makes the budget never bind",
+        "Flags the :963-966 comment as wrong (identical rc 0|2 policies across all three arms). Verified",
+        "session-writes.sh:420-421 falsely claims session-continue.sh sets -o pipefail; the file sets no shell options (:364-365)",
+        "The mail fold does not run on the cap exit (:1267 precedes it) and does not run if the drain claim is refused",
+        "Full assignee oracle: ancestry walk bounded by CC_WF_MAX_HOPS (8), three-flag conjunction with a self-consistent name@team (agent-identity.sh:46-71)"
+      ],
+      "score_1_10": 8
+    },
+    {
+      "label": "Y",
+      "key_hits": ["k1","k2","k3","k4","k5","k6","k7","k8","k9","k10","k11","k12","k13","k14","M1","M2","M3","M4","M5","M6"],
+      "key_contradicted": [],
+      "citations_checked": 70,
+      "citations_bad": 4,
+      "wrong_claims": [
+        "Stale-pointer list cites ':424 cites the pane capture at :197'; line 424 has no such text, and the comment is at :724",
+        "Cites the 'ship_floor at :865-869, wake_floor at :587-608' comment as :955-956; it is at :952",
+        "Cites the mailbox_promote_acked (:213) comment as :432 (it is :433), and the session-writes 'sibling at :269' comment as :424 (it is :423)",
+        "Lists 'session-continue.sh:145 (the .sid write)' as a verified-correct citation, but the .sid write is at :146 (:145 only reads the sid)"
+      ],
+      "extra_correct": [
+        "The hook never reads stop_hook_active. The only exit 2 sites are :116, :130 and :216 (verified by grep)",
+        "⛔ is checked first in the ledger ladder (wrap-ledger.sh:1972), so a pending decision masks the mechanical arm even over own dirty files",
+        "An armed sentinel persists and committing does not end the chain. A compliant `set` converts a mechanical chain into an agent-armed one with no CC_MECH_MAX bound (:142, :1304)",
+        "A spent mech budget does not by itself allow the stop, because the ship and wake floors still run afterwards",
+        "`clear` never touches .ship (:253, :261)",
+        "`cc-custody count --open` includes stale rows (bin/cc-custody:256-257)",
+        "Flags the :963-966 comment as wrong (identical rc 0|2 policies). Verified",
+        "session-writes.sh 'sibling at :269 still has the printf|grep shape' is stale: session_dirty_mine now uses a herestring at :354",
+        "Accurate per-arm exemption matrix; settings template chain positions 4 and 6 (settings.example.json:464-478)"
+      ],
+      "score_1_10": 8
+    },
+    {
+      "label": "Z",
+      "key_hits": ["k1","k2","k3","k4","k5","k6","k7","k8","k9","k10","k11","k12","k13","k14","M1","M2","M3","M4","M5","M6"],
+      "key_contradicted": [],
+      "citations_checked": 70,
+      "citations_bad": 0,
+      "wrong_claims": [
+        "Names the variable 'CLAUDE_MAX' when it means MAX/CLAUDE_CONTINUE_MAX (a typo; the substance is right)",
+        "The 🚀 rung description ('✅-eligible, no custody, trunk set, LIVE_BREACH=1') omits the resident/filed/unconvicted/close-floor arms that outrank it (wrap-ledger.sh:2017-2041). The range cited is correct but the description is incomplete"
+      ],
+      "extra_correct": [
+        "Because the sentinel is keyed on cwd, a sibling session that Stops first on another session's sentinel hits SID-BIND, deletes that live chain and goes idle itself without evaluating floors (:1247)",
+        "The .blocked marker is read by completion-assert.sh:866-869, which records double-block-yield and sets contra=0, so this hook's block suppresses a second block (verified)",
+        "The teardown freshness window CC_WF_TEARDOWN_FRESH_S:-1800 (:555) can diverge from lead-crash-watchdog.sh:257's hard-coded -mmin -30, which breaks the 'same window' contract at :544-546",
+        "A bare-shell `clear` writes sid '?', which does not bind a real session's mech budget (:1060)",
+        "The armed chain keeps blocking after a commit, and it does not re-check assignee, teardown or dirt on later Stops",
+        "With an older mailbox lib the fold falls back to mailbox_take, which advances .seen before the block is printed (:1296-1297)",
+        "Stale-comment catches all verified: :545 classify_death(:255-278) actually points at retired_by_desk/close_record_summary (classify_death is at :402); :547 marker_owns_sid(:112-118) is really at :207-213; the quote '📦 must NOT fire' at :1082 appears nowhere in :897-929; session-writes.sh:421 claims session-continue sets pipefail",
+        "⛔ outranks 🔧 in the ledger, so own dirty files under ⛔ never arm the mechanical arm (wrap-ledger.sh:1971-1980)"
+      ],
+      "score_1_10": 9
+    }
+  ],
+  "WX": "X",
+  "WY": "Y",
+  "WZ": "Z",
+  "XY": "tie",
+  "XZ": "Z",
+  "YZ": "Z",
+  "pair_reasons": "All four outputs state essentially all 20 key items correctly, and none contradicts one. The key's own trap on exemption policy is wrong: the wake floor, mechanical arm and ship floor all exempt on agent_team_member_confirms rc 0|2 and not on rc 1 (:780-784, :970, :1105). W, X and Y correctly flag the :963-966 comment that claims a difference; Z states the code correctly but does not flag the comment. W<X: W states k14 only thinly (no ancestry walk or three-flag conjunction) and has 3 bad cites. X adds two verified material points W lacks: an armed sentinel keeps blocking after the tree goes clean, and a bare-shell `clear` (sid '?') does not spend a real session's mech budget. W<Y: Y adds the full k14 mechanism, ⛔ masking the mechanical arm, a compliant `set` converting a mechanical chain into one with no CC_MECH_MAX bound, and the persistence of an armed sentinel. W<Z: Z has everything W has plus many verified extras and 0 bad cites. X=Y: each has distinct verified extras of similar weight (X: the bare-shell clear nuance and the unsanitised CC_MECH_MAX; Y: ⛔ masking, set-conversion, stop_hook_active, the matrix) and comparable flaws (X: a comment-grounded 'gate stale' 🔧 claim and 2 bad cites; Y: 4 bad stale-pointer cites, including :424 for :724 and :955-956 for :952). X<Z: Z's cites were byte-accurate across about 70 checks, where X has a comment-grounded wrong wrap-ledger claim. Z adds verified material findings X lacks: a sibling Stop deleting a live chain via SID-BIND, the .blocked marker suppressing completion-assert's block, and the teardown-window divergence from lead-crash-watchdog. Y<Z: the brief explicitly required verifying and flagging stale citations, and Y's stale-pointer section itself carries wrong line numbers (:424, :955-956, :432 and one in session-writes). Z's larger stale table (including cross-file lead-crash-watchdog cites) is fully accurate, and Z has the sibling-deletion and bare-shell-clear findings that Y lacks."
+}

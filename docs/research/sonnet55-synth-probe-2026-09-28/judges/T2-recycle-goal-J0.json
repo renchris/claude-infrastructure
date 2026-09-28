@@ -1,0 +1,95 @@
+{
+  "outputs": [
+    {
+      "label": "W",
+      "key_hits": ["K1","K2","K3","K4","K5","K6","K7","K8","K9","K10","K11","K12","K13","K14","K15","K16","K17","K18","M1","M2","M3","M4","M5","M6","M7"],
+      "key_contradicted": [],
+      "citations_checked": 32,
+      "citations_bad": 0,
+      "wrong_claims": [],
+      "extra_correct": [
+        "docs/research/voluntary-inplace-switch-2026-09-22/A07-clean-code-standards.md:170 claims inheritance is 'disabled with =off/=0'; :5843 shows =off does not disable it",
+        "--goal uses ${2:?} (:8950) so --goal \"\" cannot be used to suppress inheritance",
+        "Exact list of FIRE_GOAL assignments (:508, :5847, :5852, :7158, :8950, :12538) verified by grep",
+        "Resume branch (:12535-12538) blanks FIRE_GOAL unconditionally, so it also discards an explicit --goal; no guard elsewhere refuses --goal with --resume-launcher",
+        "Nuance that the :5821-5822 'stop searching either way' comment only holds once an attachment record is found; absent/unreadable keeps searching",
+        "Extra in-file stale comment citations verified: :663 cites :6241 (a bare #), :860 cites :8827 (a cc-notify comment), :840 cites :5884 (an arm_goal comment), :4407 cites pipefail at :273 and :10697/:11341 cite :197 (real :343); LIVENESS_DETECTOR_FAILNEG.md:208 cites :3574 (engage_rc_consequence row, fn at :3547); CRITIC.md:62/63/305 stale",
+        "detach() is python Popen(sys.argv[2:], start_new_session=True) (:1692-1697), so the condition travels as one raw argv element",
+        "Resume-mode watcher $11 is ${RCY_SOURCE_SESSION:-$rcy_old_sid} and engagement uses resume_engaged (:7358), consistent with same-session continuation",
+        "goal_armed_for_pane (:5792) is an exact-condition match anywhere in the successor transcript, not last-record-wins",
+        "Refusal stderr is emitted before the watcher log exists and no cc-notify is sent on this path, unlike the composer gate (:12502-12503) and arm_goal (:5892/:5897/:5902)",
+        "check_goal_arm's own stderr lines (:5746/:5755/:5761) misname the inherited condition as --goal"
+      ],
+      "score_1_10": 9
+    },
+    {
+      "label": "X",
+      "key_hits": ["K1","K2","K3","K4","K5","K6","K7","K8","K9","K10","K11","K12","K13","K14","K15","K16","K18","M1","M2","M3","M4","M5"],
+      "key_contradicted": [],
+      "citations_checked": 30,
+      "citations_bad": 0,
+      "wrong_claims": [
+        "Minor: cites the goal-state.sh:22 record-dictionary COMMENT under the heading 'What settles it in code' for /goal clear being met:true, even though the brief asks for code grounding (the code only tests met/failed)"
+      ],
+      "extra_correct": [
+        "Only the exact string 0 disables; 00, '0 ', off, false, no and empty do not (empty is replaced by :-1)",
+        "Resume branch blanking also discards an explicit --goal or env FIRE_GOAL",
+        "Explicit --goal is fatal on validation failure via check_goal_arm || exit 1 (:9015); an inherited one is only dropped",
+        "Help text :188-189 states inheritance is off in resume mode",
+        "arm_goal returns 0 on empty cond (:5867) and goal_unreachable only emits when FIRE_GOAL is non-empty (:801-804)"
+      ],
+      "score_1_10": 7
+    },
+    {
+      "label": "Y",
+      "key_hits": ["K1","K2","K3","K4","K5","K6","K7","K8","K9","K10","K11","K12","K13","K14","K15","K16","K18","M1","M2","M3","M4","M5"],
+      "key_contradicted": [],
+      "citations_checked": 32,
+      "citations_bad": 5,
+      "wrong_claims": [
+        "Stale-citation section rotates three line descriptions: says :11070 is 'a comment about a fire proceeding without a ping' (it is `claimed=\"$(cd \"$REPO\" && \"$POOL\" claim ...`), :10715 is 'a comment about the self-close stamp' (it is the 'nobody to ping; the fire proceeds' comment) and :10723 is `claimed=...` (it is the self-close stamp comment)",
+        "Says the only goal-state references in handoff-fire.sh are comments at :4824 and :5803; :4824 contains no goal-state reference (grep hits only :5803)",
+        "Says :12531 is a comment mentioning inherit_recycle_goal; it mentions only CC_RECYCLE_GOAL_INHERIT",
+        "Does not establish that set -euo pipefail is on (:343) and hedges on both branches, although the conclusion is right either way",
+        "States it did not read the dead-recycle tail; it does call goal_unreachable recycle-dead (:7397)"
+      ],
+      "extra_correct": [
+        "Composer gate uses a different switch compared with != off (:12468), a contrast to the != 0 opt-out",
+        "Help text :188-189 and header :34 (Env equivalent: FIRE_GOAL) corroborate, correctly labelled as comments",
+        "arm_goal verdict set: abstained on no pane/it2 (:5872-5875), held rc3, mangled rc4, abstained other, all return 0",
+        "Success message goes to stdout and truncates the condition with printf '%.100s' (:5849)",
+        "Refusal ledger row's detail names --goal and carries no 'inherited' field, so it reads as a refused fire although the recycle proceeds"
+      ],
+      "score_1_10": 6
+    },
+    {
+      "label": "Z",
+      "key_hits": ["K1","K2","K3","K4","K5","K6","K7","K8","K9","K10","K11","K12","K13","K14","K15","K16","K17","K18","M1","M2","M3","M4","M5","M6","M7"],
+      "key_contradicted": [],
+      "citations_checked": 32,
+      "citations_bad": 3,
+      "wrong_claims": [
+        "Cites goal_unreachable as a no-op at :5802; that line is the oracle header comment, and goal_unreachable is at :801-802",
+        "Says the other mentions of inherit_recycle_goal are comments at :4824, :5837 and :12531; only :4824 contains the name",
+        "Minor range imprecision: 'submit-token derivation follows (:12555-12627)'; :12555-12567 is RCY_SRC_TX/RUN_DIR and the token block starts at :12568/:12597"
+      ],
+      "extra_correct": [
+        "A07-clean-code-standards.md:170 wrongly says =off disables inheritance",
+        "Further stale citations verified: A05-recycle-engagement.md:106 (:12406-12412 -> :5805; real branch :12535-12538), SYNTHESIS.md:37 and CRITIC.md:62/:305 (4676-4684), CRITIC.md:63 (:4642 is #), LIVENESS_DETECTOR_FAILNEG.md:208 (:3574), recon-wave.md:35/:169 (3778-3800)",
+        "Call site is inside recycle_fire() (:12354), called once at :12964, and the function closes at :12747",
+        "Nothing tests sentinel, so an ARM marker with met:false that was never evaluated counts as live",
+        "Trailing newlines are stripped by $(...) at :5845 before validation",
+        "The code settles the question that A03:96/:348 leaves open (resume mode does not inherit)",
+        "Refusal ledger row: verdict refuse, gate payload, and detail hard-coded to '--goal condition ...'; no goal-arm row because arm_goal exits at :5867"
+      ],
+      "score_1_10": 9
+    }
+  ],
+  "WX": "W",
+  "WY": "W",
+  "WZ": "tie",
+  "XY": "X",
+  "XZ": "Z",
+  "YZ": "Z",
+  "pair_reasons": "The brief requires checking in-repo line-number citations of this machinery, including those in docs and other files. W and Z both verified the stale citations in hooks/goal-inert-watch.sh:36 (K17), CLAUDE.global.md:223 (M6) and docs/plans/NONLIMIT_RESUME_LADDER.md:753 (M7), plus several more. X and Y checked only the in-file :4824 comment and explicitly opened no docs, so they miss K17/M6/M7. That is the verified material difference behind W>X, W>Y, Z>X and Z>Y. W vs Z: both hit all 25 key items with correct substance. Z has one bad citation (goal_unreachable at :5802 instead of :801) and a trivial mis-listing of name mentions. W has none, but these slips are not load-bearing, so the pair is a tie. X vs Y: their key coverage is otherwise equal. Y's stale-citation section misdescribes three lines (:11070, :10715, :10723, rotated), wrongly lists :4824 as a goal-state reference, and does not establish pipefail. X has no bad citations and grounds M5 in :343. So X wins."
+}

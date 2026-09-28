@@ -1,0 +1,156 @@
+{
+  "task": "T6-choose",
+  "judge": "J2",
+  "repo_snapshot": "/tmp/s55/repo-47c3317eb",
+  "key": "/Users/chrisren/Development/claude-infrastructure/docs/research/opus55-synth-reprobe-2026-09-22/corpus/keys/T6-choose.md",
+  "key_reverified": "I re-derived the key from the snapshot before judging: grep of hooks/*.sh hooks/*.py for decision+block returns 18 emissions (10 qualifying + 8 waiting-recycle PostToolUse); settings-templates/settings.example.json Stop array spans :445-:501; dispatch-assert and handoff-claim-assert appear in no *.json in the tree. Key stands as written.",
+  "outputs": [
+    {
+      "label": "W",
+      "file": "arms/T6-choose__claude-sonnet-5-5__medium.md",
+      "key_hits": ["S1","S2","S3","S4","S5","S6","S7","S8","S9","S10","T1","T2","T3","T4","T5"],
+      "key_contradicted": [],
+      "citations_checked": 24,
+      "citations_bad": 2,
+      "citation_detail": [
+        "OK hooks/anti-deference-nudge.sh:93 open_packet_B() — verified",
+        "OK hooks/boundary-handoff.sh:394 free_win_now, :613 bh_live_waves — verified",
+        "OK hooks/dispatch-assert.sh:162 discharged_since() — verified",
+        "OK hooks/handoff-claim-assert.sh:39 abstain() (only function) — verified",
+        "OK hooks/session-continue.sh:603 wake_floor, :1098 ship_floor — verified",
+        "OK hooks/waiting-recycle.sh:17 header PostToolUse:Bash; :123 delivery line; :443 and :828 both literally read 'rides PostToolUse:Bash' — all verified",
+        "OK settings-templates/settings.example.json :176 PostToolUse, :212 waiting-recycle command, :445-:501 Stop array, :466/:471/:476/:496 the four registered hooks — verified",
+        "OK docs/activation/pending-activation/11-dispatch-assert-activate.sh :8, :55, :21 — verified verbatim",
+        "OK migrations/0027-handoff-claim-registration.sh :3, :6, :32 — verified verbatim",
+        "BAD migrations/0027-handoff-claim-registration.sh:36 cited as 'skips if the command is already registered' — :36 is a blank line; the already-registered skip is the jq -e at :37 with the echo at :38",
+        "BAD hooks/session-continue.sh:502 quoted as '(B) TERMINATING — a fresh teardown marker naming THIS session…' — that sentence is on :501; :502 reads 'handoff-fire (self-close), cc-teardown (delegated close) and teammate-auto-shutdown'. Substance of the drift finding is still right."
+      ],
+      "wrong_claims": [
+        "Section 5: 'The real systemMessage emissions are at :660, :700, :793, :840, :851 and :893' — the systemMessage-only emitters are :660,:700,:793,:840,:851,:1264 (verified by grep systemMessage hooks/session-continue.sh). W drops :1264 and substitutes :893, which is itself a decision:block object.",
+        "Citation slips listed above (0027:36 blank line; :502 quote sits on :501)."
+      ],
+      "extra_correct": [
+        "hooks/waiting-recycle.sh:443 and :828 as two further verified 'rides PostToolUse:Bash' proofs beyond the key's :17 — both verified verbatim",
+        "Lists all six systemMessage-only emitters (:660,:700,:793,:840,:851,:1264) in the section-1 exclusion list — verified correct there",
+        "Names the four registered Stop hooks at their exact template lines :466/:471/:476/:496 — verified"
+      ],
+      "score_1_10": 7
+    },
+    {
+      "label": "X",
+      "file": "arms/T6-choose__claude-opus-5-5__xhigh.md",
+      "key_hits": ["S1","S2","S3","S4","S5","S6","S7","S8","S9","S10","T1","T2","T3","T4","T5"],
+      "key_contradicted": [],
+      "citations_checked": 26,
+      "citations_bad": 0,
+      "citation_detail": [
+        "OK hooks/anti-deference-nudge.sh:514-525 FIRE_KIND if/elif chain, :527 emission, :528 exit 0 — verified",
+        "OK hooks/boundary-handoff.sh:723 emission, :724 exit 0 — verified",
+        "OK hooks/completion-assert.sh:1274-1284 reason assembly, :1286, :1287 exit 0 — verified",
+        "OK hooks/dispatch-assert.sh:225 inside 'if [ -f \"$PENDING\" ]' (opens :208), :226 exit 0; :258, :259 exit 0 — verified",
+        "OK hooks/handoff-claim-assert.sh:111-119 latch+cap, :127, :128 exit 0 — verified",
+        "OK hooks/session-continue.sh wake_floor :603-895, jq starts :892; captured at :1213 ('if ! _wf_json=\"$(wake_floor)\"') and printed at :1215 ('printf %s $_wf_json') — verified",
+        "OK hooks/session-continue.sh ship_floor :1098-1199; captured at :1208, printed at :1210 — verified",
+        "OK hooks/session-continue.sh:1327 drift, :502 inside the :501-504 (B) TERMINATING comment — verified",
+        "OK hooks/session-continue.sh:724 cites ':197'; :197 is the 'GREEN under env -u CLAUDE_CODE_SESSION_ID' test-history comment; the only _opane assignment is :425 — all three verified",
+        "OK hooks/session-continue.sh:944 cites 'ship_floor :969' — :969 is mechanical_arm's own agent_team_member_confirms; ship_floor's kill-switch release is :1101 — verified",
+        "OK hooks/session-continue.sh:944 cites 'wake_floor :732-736' — that is the CC_CUSTODY_BIN test-seam comment; wake_floor's kill_switch_active is :850 — verified",
+        "OK hooks/session-continue.sh:952 cites 'ship_floor at :865-869' — :866 is 'Re-arm after every wake…' inside wake_floor's reason string; ship_floor's assignee stand-down is :1103-1108 — verified",
+        "OK hooks/session-continue.sh:952 cites 'wake_floor at :587-608' — :587-602 is header comment, :603-607 wake_floor's opening guards; wake_floor's assignee check is :778-779 — verified",
+        "OK hooks/session-continue.sh:974 self-pointing citation; ship_floor's {assignee,confirm_rc} log is :1106 — verified",
+        "OK hooks/anti-deference-nudge.sh:472 cites ':353'; :353 is a bare 'fi' closing the :350-353 team-assignee block — verified",
+        "OK hooks/waiting-recycle.sh:151 'Claude Code calls it with NO args + the PostToolUse JSON on stdin → actuation mode'; :633 '---- PostToolUse actuation mode'; last helper drain_scan ends :1264 (so none of the 8 sits in a helper) — all verified",
+        "OK hooks/operator-readout.sh:290 is jq select((.event // \"\") == \"block\") — a comparator, verified",
+        "OK settings-templates/settings.example.json :176/:203/:212 PostToolUse|Bash, :445 Stop opens, :466/:471/:476/:496, :502 SubagentStop — verified",
+        "OK 11-dispatch-assert-activate.sh :39 HOOK_CMD, :97 '(.hooks.Stop[0].hooks) |= (', :103 'wired (Stop obj-0, after completion-assert, timeout 10)', :22 'The agent never self-activates hooks.' — verified verbatim",
+        "OK migrations/0027 :32 CMD, :47-48 '.hooks.Stop = ( (.hooks.Stop // [{}])', :6 and :57-58 verify — verified verbatim",
+        "OK hooks/curl-gate.py:174 log record, :215-221 PreToolUse payload; hooks/model-permission-decider.py:458-465 emit() allow/ask PreToolUse — verified"
+      ],
+      "wrong_claims": [],
+      "extra_correct": [
+        "Second drifted in-code citation inside the emitting function: hooks/session-continue.sh:724 cites ':197' for the _opane capture; :197 is a test-history comment and the real assignment is :425 — fully verified",
+        "Five more drifted citations in mechanical_arm pointing into the two emitting functions (:944→:969, :944→:732-736, :952→:865-869, :952→:587-608, :974→itself), each with the correct real target (:1101, :850, :1103-1108, :778-779, :1106) — all verified byte-for-byte",
+        "hooks/anti-deference-nudge.sh:472 cites ':353', which is a bare 'fi' — verified",
+        "Proves the wake_floor/ship_floor emissions actually reach stdout via the capture-and-printf at :1208/:1210 and :1213/:1215, closing test (a) for the two in-function sites — verified",
+        "Establishes none of waiting-recycle's 8 emissions sits inside a helper (last helper ends :1264) — verified",
+        "Rules the two .py hooks out by showing they emit PreToolUse permissionDecision only (curl-gate.py:215-221, model-permission-decider.py:458-465) — verified"
+      ],
+      "score_1_10": 9
+    },
+    {
+      "label": "Y",
+      "file": "arms/T6-choose__claude-sonnet-5-5__high.md",
+      "key_hits": ["S1","S2","S3","S4","S5","S6","S7","S8","S9","S10","T1","T2","T3","T4","T5"],
+      "key_contradicted": [],
+      "citations_checked": 22,
+      "citations_bad": 0,
+      "citation_detail": [
+        "OK hooks/anti-deference-nudge.sh — only function open_packet_B closes at :137 ('}' on 137) — verified",
+        "OK hooks/boundary-handoff.sh last function closes at :641 — verified",
+        "OK hooks/completion-assert.sh last function closes at :630 — verified",
+        "OK hooks/dispatch-assert.sh last function closes at :205 — verified",
+        "OK hooks/session-continue.sh wake_floor :603-895 with jq starting :892; ship_floor :1098-1199 — verified",
+        "OK hooks/waiting-recycle.sh:1592 quoted verbatim including the spaces after commas — matches the file byte-for-byte",
+        "OK hooks/waiting-recycle.sh:123-125 'confirmed delivered on PostToolUse @ 2.1.183' and 'The tool has ALREADY run at PostToolUse' — verified verbatim",
+        "OK settings-templates/settings.example.json :176, :212, :466, :471, :476, :496 (second Stop group) — verified",
+        "OK 11-dispatch-assert-activate.sh :8, :55, :21-22 — verified verbatim; 'wiring at :82-92' points at the '# ---- 2: Stop wiring' section header and backup loop (the jq edit itself is :96-103): loose but not false",
+        "OK migrations/0027 :32 CMD, :44-52 append-into-first-Stop-group jq, :6 verify — verified verbatim",
+        "OK hooks/session-continue.sh:1327 drift; :500-504 quote 'handoff-fire (self-close), cc-teardown (delegated close) and teammate-auto-shutdown' sits on :502 — verified exactly",
+        "OK hooks/boundary-handoff.sh:135 and hooks/completion-assert.sh:110 both carry the literal '(the completion-assert.sh:113-123 pattern)' pointer — verified; Y correctly declines to rule on it",
+        "OK hooks/reset-hard-shadow-allow.sh and hooks/validate-bash.sh write decision fields valued allow/would-allow/variable, never block — verified (:137, :164, :98-99)"
+      ],
+      "wrong_claims": [],
+      "extra_correct": [
+        "Four verified function-closing line numbers (:137, :641, :630, :205) that pin 'top level' for four of the six files — all verified",
+        "Complete and correct systemMessage list :660,:700,:793,:840,:851,:1264 (plus :893 as the block+systemMessage precedent) — verified",
+        "Correctly rules out hooks/reset-hard-shadow-allow.sh and hooks/validate-bash.sh as decision-writers whose value is never 'block' — verified",
+        "Notes the completion-assert.sh:113-123 pointer duplicated at boundary-handoff.sh:135 and completion-assert.sh:110 and explicitly declines to rule on it — both citing lines verified to exist"
+      ],
+      "score_1_10": 8
+    },
+    {
+      "label": "Z",
+      "file": "arms/T6-choose__claude-sonnet-5-5__xhigh.md",
+      "key_hits": ["S1","S2","S3","S4","S5","S6","S7","S8","S9","S10","T1","T2","T4","T5"],
+      "key_contradicted": ["T3"],
+      "citations_checked": 24,
+      "citations_bad": 0,
+      "citation_detail": [
+        "OK hooks/anti-deference-nudge.sh:93 open_packet_B; hooks/boundary-handoff.sh:394/:613 — verified",
+        "OK hooks/dispatch-assert.sh:224 reason= above the :225 emission, two-space indent — verified",
+        "OK hooks/session-continue.sh:603 wake_floor, :894 'return 1', :895 '}'; :1098 ship_floor, :1198 'return 1', :1199 '}' — verified exactly",
+        "OK hooks/waiting-recycle.sh:1592 quoted verbatim with the post-comma spaces — matches byte-for-byte",
+        "OK hooks/waiting-recycle.sh:123-125 — verified verbatim",
+        "OK settings-templates/settings.example.json :176, :212, :445-:501 Stop, :502 SubagentStop, :492 '_comment: obj-2 — boundary-handoff' — all verified; the two-group membership list is exactly right",
+        "OK README.md:319 (waiting-recycle under the 'PostToolUse (12)' header at :318) and README.md:322 (dispatch-assert under 'Stop (12)' opened :321) — verified",
+        "OK tests/deploy-link-parity.bats:91-92 land_new/stage_activation for dispatch-assert — verified verbatim",
+        "OK migrations/0027 :3, :6, :32 and the first-Stop-group jq append — verified",
+        "OK hooks/operator-readout.sh:290 jq select on .event == \"block\" — verified",
+        "OK hooks/validate-bash.sh:137, hooks/reset-hard-shadow-allow.sh:164, hooks/curl-gate.py:174, hooks/model-permission-decider.py:515 all JSONL/log writers — verified",
+        "OK 'the .py hooks have no literal \"block\" at all' — grep '\"block\"' hooks/*.py returns nothing: verified true",
+        "OK hooks/session-continue.sh:1327 drift, :501-503 quote — verified",
+        "OK the unchecked-pointer locations it names really do carry :NNN citations: anti-deference-nudge.sh:472 ('lesson at :353'), completion-assert.sh:1188 ('memory-nudge.sh:26'), session-continue.sh:944/:952/:965, dispatch-assert.sh:41 ('completion-assert.sh:22-26') — all verified to exist"
+      ],
+      "wrong_claims": [
+        "CONTRADICTS T3 and fails brief deliverable 4 for dispatch-assert: 'I did not find a committed registration' / 'So the activation script is not in this snapshot.' The script IS in the snapshot at docs/activation/pending-activation/11-dispatch-assert-activate.sh (measured: `find . -name '*dispatch-assert*'` returns it alongside hooks/dispatch-assert.sh and tests/dispatch-assert.bats). Z's own find excluded docs/, and it then generalised from the excluded search to a false nonexistence claim. The brief explicitly asked, for every file not in the template's Stop array, to 'cite where in this repository its Stop registration actually lives' — Z answers this for handoff-claim-assert.sh but not for dispatch-assert.sh.",
+        "Downstream of the same error: 'It appears only in that test fixture' (of 11-dispatch-assert-activate.sh) is false — the real script exists and contains the jq Stop-wiring at :96-103."
+      ],
+      "extra_correct": [
+        "'The .py hooks have no literal \"block\" at all' — verified true",
+        "README.md:319 and README.md:322 as a third, independent event-registration cross-check — both verified, and :322 is itself the prose that contradicts Z's own dispatch-assert conclusion",
+        "tests/deploy-link-parity.bats:91-92 staged-activation fixture — verified",
+        "settings.example.json:492 '_comment: obj-2 — boundary-handoff' pinning the second Stop group — verified",
+        "Precise read of the two in-function sites' surroundings (:894/:895, :1198/:1199) — verified",
+        "Honest, verified labelling of which 'top level' calls were read vs inferred from column-0 indentation"
+      ],
+      "score_1_10": 6
+    }
+  ],
+  "WX": "X",
+  "WY": "Y",
+  "WZ": "W",
+  "XY": "X",
+  "XZ": "X",
+  "YZ": "Y",
+  "pair_reasons": "All four outputs produce the identical, correct 10-site list (S1-S10) and all four get T1 (waiting-recycle, 8 emissions, exact lines), T2 and T4 right, so the site enumeration — the stated core of the answer — does not separate them. Separation comes from deliverable 5 (drifted in-code citations), deliverable 4 (where the unregistered hooks' Stop wiring lives), and byte-level citation accuracy. WX=X: X has 0 bad citations against W's 2 (migrations/0027:36 is a blank line, not the already-registered skip which is :37-38; W's quoted '(B) TERMINATING…' sentence sits on :501, not the cited :502), and X adds seven independently verified drifted citations (session-continue.sh:724→:197 with the real assignment at :425; :944→:969 and →:732-736; :952→:865-869 and →:587-608; :974→itself; anti-deference-nudge.sh:472→:353) where W reports only the one the key names — a direct, verified, material gain on brief item 5. XY=X: same reason; Y is clean (0 bad citations) and gives the correct :502 quote and the complete systemMessage list, but on item 5 it reports only the key's single drift and explicitly declines to verify the others, so X's seven verified extras are the material difference. XZ=X: X is clean and rich where Z asserts, falsely, that 'the activation script is not in this snapshot' — docs/activation/pending-activation/11-dispatch-assert-activate.sh is in the tree (measured via find) — leaving brief item 4 unanswered for dispatch-assert.sh and contradicting T3. WY=Y, narrow: both hit all 15 key items and neither adds a verified finding the other lacks in kind, but W carries two verified bad citations and an incomplete systemMessage list (drops :1264) while Y carries none and quotes :500-504 exactly; the differences are small and none changes an answer, so this is a narrow rather than a decisive call. WZ=W and YZ=Y: Z's false nonexistence claim about the dispatch-assert activation script is a substantive failure of a required deliverable and a direct contradiction of T3, which outweighs Z's otherwise clean citation record and its genuine verified extras (no literal \"block\" in the .py hooks; README.md:319/:322; deploy-link-parity.bats:91-92). Z's own README.md:322 evidence lists dispatch-assert as a Stop hook, so the contradiction was reachable from material it had already opened. Length and polish were not weighed: W is the shortest and scores above Z, and X's length is credited only because every extra claim in it was opened and confirmed."
+}

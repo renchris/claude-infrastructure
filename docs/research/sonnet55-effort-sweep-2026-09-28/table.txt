@@ -1,0 +1,32 @@
+judge rows 210 · parse failures 0 · ground truth 36
+index rows 45 · quota-fault rows set aside 0 · cells kept 45 · paired briefs (every arm measured) ['cp-01', 'cp-02', 'cp-04', 'cp-05', 'cp-06', 'cp-08', 'cp-09']
+
+Recall, strict majority (>=2 of 3 judges). `—` = unmeasured (quota fault, never scored 0).
+
+| brief | GT | s55@low | s55@medium | s55@high | s55@xhigh | s55@max | o5@max | f51@high | o55@medium | o55@high | o55@xhigh |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| cp-01 | 6 | 5 | 5 | 3 | 4 | 5 | 5 | 4 | 4 | 5 | 5 |
+| cp-02 | 4 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 |
+| cp-04 | 6 | 2 | 3 | 3 | 3 | 3 | 3 | 3 | 2 | 2 | 2 |
+| cp-05 | 4 | 2 | 1 | 2 | 2 | 1 | 2 | 1 | 1 | 0 | 2 |
+| cp-06 | 6 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| cp-08 | 5 | 0 | 0 | 0 | 2 | 0 | 2 | 1 | 1 | 0 | 1 |
+| cp-09 | 5 | 0 | 0 | 0 | 0 | 0 | 2 | 2 | 0 | 2 | 0 |
+| **TOTAL (measured)** | 36 | **9**/36 | **9**/36 | **8**/36 | **11**/36 | **10**/36 | **14**/36 | **11**/36 | **8**/36 | **9**/36 | **10**/36 |
+| **PAIRED** | 36 | **9**/36 | **9**/36 | **8**/36 | **11**/36 | **10**/36 | **14**/36 | **11**/36 | **8**/36 | **9**/36 | **10**/36 |
+
+| threshold (paired briefs) | s55@low | s55@medium | s55@high | s55@xhigh | s55@max | o5@max | f51@high | o55@medium | o55@high | o55@xhigh |
+|---|---|---|---|---|---|---|---|---|---|---|
+| >=1 judge | 9 | 9 | 8 | 11 | 10 | 14 | 11 | 8 | 9 | 10 |
+| >=2 of 3 | 9 | 9 | 8 | 11 | 10 | 14 | 11 | 8 | 9 | 10 |
+| unanimous | 8 | 9 | 8 | 11 | 10 | 13 | 10 | 8 | 8 | 10 |
+
+| arm | cells measured | arm failures | median output tokens | max output tokens | cells continued past the cap | continuations | cost USD (all measured cells) |
+|---|---|---|---|---|---|---|---|
+| s55@low | 9 | 0 | 4812 | 6082 | 0 | 0 | 0.97 |
+| s55@medium | 9 | 0 | 6304 | 10037 | 0 | 0 | 1.20 |
+| s55@high | 9 | 0 | 15074 | 28881 | 0 | 0 | 2.04 |
+| s55@xhigh | 9 | 0 | 33256 | 60957 | 0 | 0 | 3.52 |
+| s55@max | 9 | 3 (cp-06, cp-08, cp-09) | 110715 | 233842 | 1 | 1 | 24.00 |
+
+Quota faults: 0 rows, 0.00 USD spent for no output.

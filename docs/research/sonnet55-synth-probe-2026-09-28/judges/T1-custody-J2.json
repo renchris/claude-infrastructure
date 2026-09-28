@@ -1,0 +1,165 @@
+{
+  "task": "T1-custody",
+  "judge": "J2",
+  "repo_snapshot": "/tmp/s55/repo-47c3317eb (sha 47c3317eb)",
+  "key": "/Users/chrisren/Development/claude-infrastructure/docs/research/opus55-synth-reprobe-2026-09-22/corpus/keys/T1-custody.md",
+  "method": "Default-to-refute. Every key item and every load-bearing citation in each output was opened byte-for-byte in the snapshot (bin/cc-custody, hooks/lib/origin-identity.sh, scripts/handoff-fire.sh, hooks/mailbox-drain.sh, scripts/cloud-return.sh, scripts/cloud-retire-terminal.sh, scripts/custody-deathwatch.sh, scripts/wrap-ledger.sh, hooks/completion-assert.sh, hooks/session-continue.sh, hooks/operator-readout.sh, hooks/lib/session-busy.sh, hooks/lib/why-tier.sh, bin/cc-offload, bin/cc-dispatch, bin/cc-cloud, scripts/autonomy-sweep.sh, scripts/growth-coverage.conf, commands/are-we-done.md).",
+  "outputs": [
+    {
+      "label": "W",
+      "file": "arms/T1-custody__claude-sonnet-5-5__high.md",
+      "key_hits": ["K1","K2","K3","K4","K5","K6","K7","K8","K9","K10","K11","K12","K13","K14","M1","M2","M3","M4","M5","M6","M7"],
+      "key_contradicted": [],
+      "key_partial": {
+        "M6": "Catches (a) mailbox-drain:523->handoff-fire:8936, (c) :545->:7087 with the real site :10721, and (d) wrap-ledger:1018->session-continue:608-612 with the real site :726-730. For (b) :534->:7100 it says only 'unrelated comment' and names no real site (:10734). Does not mention wrap-ledger:1017's ':44-46' TTL reference."
+      },
+      "citations_checked": 24,
+      "citations_bad": 2,
+      "bad_citation_detail": [
+        "custody-deathwatch.sh:47 quoted as 'It NEVER discharges a debt, never closes a row, never kills a process' — that string is at :44; :47 is the GONE oracle bullet. Quote real, line wrong.",
+        "cloud-return.sh:531 given as the superseded-item branch test — the test is item_is_done at :534; :531 is prose (W flags it as unread)."
+      ],
+      "marginal_citations": [
+        "cloud-retire-terminal.sh:202 for the marker read — the marker is read at :201; :202 builds $why.",
+        "custody-deathwatch.sh 'around :58' for the REPORT condition — it is :59 (W hedges)."
+      ],
+      "wrong_claims": [
+        "The deathwatch self-description is attributed to :47 rather than :44 (line misattribution of a real quote); no substantive claim found false."
+      ],
+      "extra_correct": [
+        "The /goal arm at handoff-fire.sh:13232 is NOT gated by NB_ARMED_TARGET/SPAWNED_PANE — verified: :13232 is a bare `if engage_rc_consequence \"$rc\" goal`. Unique among the four and materially answers 'whether the same rule governs the /goal arm'.",
+        "wrap-ledger.sh:1012 asserts 'the other three consumers of CUSTODY_OPEN' — session-busy is a fourth. Verified at :1011-1013.",
+        "wrap-ledger.sh:2328 '*) custody_disp=\"not counted (a worse rung governs)\"' quoted exactly for the skip state.",
+        "handoff-fire.sh:8705's cite of cc-custody:212-227 adjudicated precisely: --why parsed at :158, checked at :212, written at :227 — all three verified.",
+        "cc-custody bulk abandon --stale has no automated caller — confirmed by grep: only the header (:56), the code (:183), usage (:268) and tests/cc-custody.bats.",
+        "bin/cc-teardown:275, hooks/lead-crash-watchdog.sh:218 and :1050 mention custody in comments only — verified, all three lines are comments.",
+        "wrap-ledger.sh:2127 'Computed AFTER the ladder' verified for the busy injection at :2143.",
+        "cc-custody count --open counts stale rows (:256-257, :263) — verified.",
+        "Callers of engage_apply_consequences at :13273-13365, after `if [ \"$ENGAGE_VERIFY\" = 1 ]` at :13239 — verified."
+      ],
+      "score_1_10": 8
+    },
+    {
+      "label": "X",
+      "file": "arms/T1-custody__claude-opus-5-5__xhigh.md",
+      "key_hits": ["K1","K2","K3","K4","K5","K6","K7","K8","K9","K10","K11","K12","K13","K14","M1","M2","M3","M4","M5","M6","M7"],
+      "key_contradicted": [],
+      "key_partial": {
+        "M6": "Catches (a) with the exact content (RCY_TRANSPLANT_CAUSE), (c) with the real site :10721, (d) with the real site :729, plus wrap-ledger:1017's ':44-46'->:45-49 which no other output caught. For (b) it names handoff-fire.sh:197 as 'the recipe' — :197 is the --notify-back help text, not the arming site (:10734).",
+        "M7": "Catches only the wrap-ledger.sh:1058 -> session-continue.sh:302 half. Misses session-continue.sh:724's own ':197' self-citation, which W, Y and Z all catch.",
+        "M5": "States the ENGAGE_VERIFY gate but sources it to the comment at :13213-13218 ('according to the comment'); does not verify the assignment at :10662."
+      },
+      "citations_checked": 26,
+      "citations_bad": 3,
+      "bad_citation_detail": [
+        "custody-deathwatch.sh:41 quoted as 'It NEVER discharges a debt, never closes a row' — that string is at :44; :41 is the '/ shard' sentence.",
+        "custody-deathwatch.sh:67-68 given for 'once per marker' — :67-68 is 'cannot signal a process... Its worst failure is therefore OPERATOR NOISE'.",
+        "handoff-fire.sh:197 given as where the HANDOFF-PING recipe lives, repairing mailbox-drain:534's stale ':7100'. :197 is the usage/help block; the arming printf is :10734."
+      ],
+      "marginal_citations": [
+        "wrap-ledger.sh:1036-1038 for the '-' anchor note — the block is :1037-1039."
+      ],
+      "wrong_claims": [
+        "custody-deathwatch.sh:41 and :67-68 misattributions (above).",
+        "Naming handoff-fire.sh:197 as the HANDOFF-PING recipe site is a wrong repair of a stale citation the brief asks to repair; the load-bearing site is :10734."
+      ],
+      "extra_correct": [
+        "STRONGEST BEYOND-KEY FIND: bin/cc-custody:23 and custody-deathwatch.sh:29-30 both say the local return happens FROM sc_announce_before_retire; verified false — sc_announce_before_retire is at handoff-fire.sh:4344, and grep shows _hf_custody is called only at :8707 and :13220, with the announce at :8652 preceding the discharge at :8707. Exactly the header-vs-code check the brief demands.",
+        "wrap-ledger.sh:1017's ':44-46' for the TTL rule is really :45-49 — only output to catch this key trap item.",
+        "session-continue.sh:614 `if mailbox_wake_armed \"$_ouid\"; then rm -f \"$sf\"; return 0; fi` — verified; W explicitly declined to verify this and X supplies it.",
+        "settle_custody's caller gating verified: dry-run skip at cloud-retire-terminal.sh:286-289, discharge only after `cc-cloud retire` succeeds at :291-294 (settle_custody call at :294).",
+        "cloud-return.sh D3's marker traced to bin/cc-dispatch:923 (`--custody \"$sid\"`) — verified.",
+        "The drain can never discharge a cloud row: ping text is `HANDOFF-PING cloud/$id:` (cloud-return.sh:844, :1001) while cloud rows carry slug `cloud-$sid` / marker `$sid`, and cc-custody:216 matches only `.marker == $t or .slug == $t`. Verified, and flagged as inference.",
+        "Corrupt-line behaviour: `list` falls back to '[]' (:240) while `count` exits 3 'store unreadable' (:263), so CUSTODY_SRC reads 'pane'/0 vs 'error'. Verified from the code.",
+        "Manual `cc-custody open` as a fifth producer, with handoff-fire.sh:3528's 'The desk hand-opened 529's row' as the historical instance — verified verbatim.",
+        "bin/cc-custody:146-149 malformed-flag-as-token guard surfaced.",
+        "growth-coverage.conf:211 'an OPEN debt must never be reaped' — verified verbatim."
+      ],
+      "score_1_10": 8
+    },
+    {
+      "label": "Y",
+      "file": "arms/T1-custody__claude-sonnet-5-5__xhigh.md",
+      "key_hits": ["K1","K2","K3","K4","K5","K6","K7","K8","K9","K10","K11","K12","K13","K14","M1","M2","M3","M4","M5","M6","M7"],
+      "key_contradicted": [],
+      "key_partial": {
+        "M6": "Catches (a) (with a wrong content label), (c) with the real site :10721, (d) with the real site :713-730, and handoff-fire.sh:3520's (:10715)/(:10723). For (b) it marks ':7087/:7100' explicitly UNCHECKED rather than asserting a wrong replacement."
+      },
+      "citations_checked": 25,
+      "citations_bad": 2,
+      "bad_citation_detail": [
+        "'handoff-fire.sh:8936 is the --transplanted-source argument parser' — :8936 is `RCY_TRANSPLANT_CAUSE=\"${2:?...}\"`; --transplanted-source is :8934. The substance (it is argv parsing, not a custody restriction) holds.",
+        "cloud-return.sh ':973-981' cited for 'otherwise the row is left OPEN' — the `left $custody OPEN` string is at :982, outside the range."
+      ],
+      "marginal_citations": [
+        "handoff-fire.sh:3557 for the '(:9064)' cross-reference — the parenthetical is on :3558; :3557 is where the quoted sentence starts.",
+        "handoff-fire.sh:8669-8673 for the terminal ledger refusal — that is the explanatory comment; the `if` is :8676-8702."
+      ],
+      "wrong_claims": [
+        "The :8936 content mislabel (above). No substantive claim found false."
+      ],
+      "extra_correct": [
+        "BEST SOURCING ON M5: ENGAGE_VERIFY=1 only when RECYCLE=0 and DRY=0 is cited to the assignment at handoff-fire.sh:10662, not merely to the rationale comment. Verified: `[ \"$RECYCLE\" = 0 ] && [ \"$DRY\" = 0 ] && ENGAGE_VERIFY=1`.",
+        "The self-close discharge at :8707 sits BEFORE the SC_DRY branch at :8709, so a dry-run self-close still discharges. Verified; beyond the key.",
+        "cc-cloud declare --custody only stores the marker on the declaration (bin/cc-cloud:311 DLOAD_KEYS, :988 argv) and never calls cc-custody — verified negative, correctly excluding a candidate producer.",
+        "The deathwatch is driven from scripts/autonomy-sweep.sh:1914 — verified (`_custdw=\"$_SWEEP_DIR/custody-deathwatch.sh\"`, invoked at :1916-1918).",
+        "custody-deathwatch.sh:11-15 names the launchd `/` shard as why it drops --cwd — verified verbatim.",
+        "Cross-cwd key collision: the open-set key carries no cwd and store-wide reads concatenate all files (:240, :260), so marker-less rows sharing slug|target in different cwds merge. Verified from the code.",
+        "cc-dispatch rows fail the known test (no --originator-pane) unless notifyBack is present, so they land in the unattributable class — verified against bin/cc-dispatch:904/:932 and the jq at wrap-ledger:1066.",
+        "growth-coverage.conf:211 and the 'no automated caller for bulk abandon --stale' negative — both verified.",
+        "Carries an explicit 'Not verified' section (sc_announce body, FIRE_MARKER universality, cloud ping text), which is honest about the one inference it could not close."
+      ],
+      "score_1_10": 8
+    },
+    {
+      "label": "Z",
+      "file": "arms/T1-custody__claude-sonnet-5-5__medium.md",
+      "key_hits": ["K1","K2","K3","K4","K5","K8","K9","K10","K11","K12","K13","K14","M1","M2","M3","M4","M5","M7"],
+      "key_contradicted": [],
+      "key_partial": {
+        "K6": "Names the self-close site, the marker key, the store-wide scope — but the condition is given only as 'the marker is non-empty'. The W3-B1 terminal-close ledger refusal that sits between the marker read (:8657) and the discharge (:8707), which is half of K6, is absent.",
+        "K7": "Slug key, --cwd scope, kill switch and the cap of 8 are present; the 'verdict is read off STDERR because cc-custody returns rc 0 either way' mechanism (mailbox-drain.sh:576-579) is absent.",
+        "M6": "Catches (a) and (c). Misses (d) wrap-ledger:1018 -> session-continue:608-612 entirely, and also misses handoff-fire.sh:3520's (:10715)/(:10723). For (b) it names handoff-fire.sh:197 as 'the recipe' — help text, not the arming site :10734."
+      },
+      "citations_checked": 26,
+      "citations_bad": 11,
+      "bad_citation_detail": [
+        "wrap-ledger.sh ladder, four wrong in one bullet: '⛔ (:1965-1968)' is the goal-term comment + compute_goal_liveness; 'dirty (:1969-1970)' is the ⛔ rationale comment; 'DoD remainder (:1971-1972)' is count_blocking_decisions + `if [ \"$BLOCKED\" -gt 0 ]`; 'unlanded 📦 (:1973-1975)' is the ⛔ RUNG/READOUT. Real: :1972 / :1979 / :1981 / :1983.",
+        "wrap-ledger.sh:1069-1075 given as the attribution jq — the jq is :1065-1071; :1072-1075 is the numeric guard and the SRC=pane assignment.",
+        "wrap-ledger.sh:1064-1065 given as the pane expression — it is :1061.",
+        "session-continue.sh:757-763 given as 'the same attribution jq' — that is the numeric guard, the else, and the count fallback; the jq is :748-754.",
+        "session-continue.sh:770-772 given as the `count --open --cwd \"$cwd\"` fallback — that is :762; :770-772 is the THIRD STATE comment.",
+        "handoff-fire.sh:13196 quoted for 'keyed on the FIRING cwd, not the target worktree' — :13196 is `local rc=...`; the comment is :13198-13199.",
+        "handoff-fire.sh:13191-13192 and :13218 given for the provenance assignment — it is :13196-13197.",
+        "handoff-fire.sh:13235 given for the ENGAGE_VERIFY gate — :13235 is `goal_unreachable \"$branch\" || true`; the gate is :13239.",
+        "mailbox-drain.sh:563-566 given for the payload-cwd fallback — it is :567-568.",
+        "wrap-ledger.sh:1062 given as the line that cites session-continue.sh:302 — the citing comment is :1058.",
+        "bin/cc-dispatch:931 given as the declared-path open — the `open` call is :932 (:931 resolves the binary)."
+      ],
+      "marginal_citations": [
+        "cloud-return.sh:533 for item_is_done (real :534); operator-readout.sh:930 for the custody parts line (real :929); handoff-fire.sh:13200-13209 and :13211-13217 for blocks that really run :13203-13211 and :13213-13218."
+      ],
+      "wrong_claims": [
+        "Eleven path:line locations above do not hold, in a brief whose standing instruction is 'verify any line number... before repeating it' and 'cite path:line for every claim'. Two of them (the ladder block and the two jq ranges) are the load-bearing reads for the rung computation and the wake floor.",
+        "Naming handoff-fire.sh:197 as 'the recipe' repairs mailbox-drain:534's stale citation with the help text rather than the arming printf at :10734."
+      ],
+      "extra_correct": [
+        "commands/are-we-done.md:22-23 as an operator-facing consumer (`cc-custody list --open --fresh`, `count --open --stale`) — verified verbatim; the only output to find it.",
+        "return/abandon rows never carry notifyBack or provenance (bin/cc-custody:223-227) — verified.",
+        "bin/cc-custody:159-161 as the '--provenance is open-only, accepted-and-ignored elsewhere' site — verified.",
+        "handoff-fire.sh:13209 as where the comment states the trailer hands the peer `HANDOFF-PING <NB_SLUG>` — verified verbatim.",
+        "growth-coverage.conf:211 reap exemption — verified."
+      ],
+      "score_1_10": 6
+    }
+  ],
+  "pairwise": {
+    "WX": "tie",
+    "WY": "tie",
+    "WZ": "W",
+    "XY": "tie",
+    "XZ": "X",
+    "YZ": "Y"
+  },
+  "pair_reasons": "WX tie: X carries the single strongest beyond-key verified result (bin/cc-custody:23 and custody-deathwatch.sh:29-30 both claim the local return fires from sc_announce_before_retire; verified false — that function is handoff-fire.sh:4344 and the only _hf_custody calls are :8707 and :13220) plus session-continue.sh:614 and wrap-ledger.sh:1017's ':44-46'->:45-49, which W misses or declines. W answers back with handoff-fire.sh:3520's (:10715)/(:10723), session-continue.sh:724's ':197', wrap-ledger.sh:1012's 'three consumers', and the unique correct observation that the /goal arm at :13232 is not gated by NB_ARMED_TARGET at all. W has 2 bad citations to X's 3, and X's ':197 is the recipe' is a wrong repair of a citation the brief asks to repair. Genuine trade both ways, no dominance. WY tie: near-identical key coverage and both clean on the wrap-ledger/session-continue regions. Y uniquely sources M5 to the assignment at :10662 rather than the comment, and finds the :8707-before-:8709 dry-run ordering, autonomy-sweep:1914 and the cc-cloud negative; W finds the /goal-arm gate asymmetry, wrap-ledger:1012 and the exact :2328 skip string, and repairs (c) where Y abstains. 2 bad citations each. XY tie: X is deeper on mechanism and owns the sc_announce falsification and the :44-46 catch; Y has the cleaner citation record (2 vs 3 bad, and zero errors in the wrap-ledger/session-continue blocks), catches two stale citations X misses (handoff-fire:3520 and session-continue:724's ':197'), and honestly abstains where X asserts a wrong replacement site. Trade, not dominance. WZ / XZ / YZ all go against Z on one specific, verified, material difference: Z states eleven path:line locations that do not hold at this sha, including the entire four-rung wrap-ledger ladder (:1965-1975 instead of :1972/:1979/:1981/:1983), the wrap-ledger attribution jq (:1069-1075 instead of :1065-1071), the wake-floor jq (:757-763 instead of :748-754) and its fallback (:770-772 instead of :762) — the exact reads the brief asks to be quoted. Z additionally omits the W3-B1 terminal-close refusal that orders the self-close discharge (K6), the stderr-verdict mechanism at mailbox-drain.sh:576-579 (K7), and the wrap-ledger:1018 stale citation. Its one unique correct find (commands/are-we-done.md:22-23) does not offset that. Length and polish were not weighed; all four are comparably long and well-organised."
+}

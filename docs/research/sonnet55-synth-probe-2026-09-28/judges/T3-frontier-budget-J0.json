@@ -1,0 +1,95 @@
+{
+  "outputs": [
+    {
+      "label": "W",
+      "key_hits": ["K1","K2","K3","K4","K5","K6","K7","K8","K9","K10","K11","K12","K13","K14","K15","K16","K17","K18","K20","M1","M2","M3","M4","M5","M6","M7","M8","M9","M12"],
+      "key_contradicted": [],
+      "citations_checked": 40,
+      "citations_bad": 1,
+      "wrong_claims": [
+        "Places hf_inflight_key at scripts/handoff-fire.sh:9305; the function header is at :9304 (:9305 is its first body line). Off by one line, minor."
+      ],
+      "extra_correct": [
+        "Ran the :75 extractor regex on `--model \"fable\"` and got 0 matches, so a quoted model value is an uncounted fire. Reproduced: rc=0, no counter file.",
+        "A cap of literal 0 is numeric, passes :121, and refuses every request at :136",
+        "The closed-window session refusal (:149) expands to a full id (claude-opus-5-5), which contradicts the alias-only rationale the cap branch and CLAUDE.global.md:334 encode. Test 15 (:175) matches by substring and cannot catch it.",
+        "The migration checks its precondition only on the primary dir's hook (:61) but writes five dirs (:86)",
+        "The CLAUDE.global.md jq one-liner uses any() and checks only ~/.claude, where the migration oracle (:6) uses length==1. Also names scripts/registration-state.sh for a fleet-wide view, with its verdict list at :73-84.",
+        "Opened and correctly re-pointed further stale research-doc citations: p15-escalation.md:44, A6-mechanics.md:245/:500, A5-harness.md:357, and L1-census.md:62 (the line lands but its content is stale)",
+        "The CC_LADDER grep covers the whole repo: exactly 3 hits (CLAUDE.global.md:334, NONLIMIT_RESUME_LADDER.md:840, :866), none in any executable dir",
+        "The asyncRewake:true / timeout>10 registration counts as a gate-nothing state (0029:7, :27-30)"
+      ],
+      "score_1_10": 8
+    },
+    {
+      "label": "X",
+      "key_hits": ["K1","K2","K3","K4","K5","K6","K7","K8","K9","K10","K11","K12","K13","K14","K15","K16","K17","K18","K20","M1","M2","M3","M4","M6","M7","M8","M9","M12"],
+      "key_contradicted": [],
+      "citations_checked": 35,
+      "citations_bad": 0,
+      "wrong_claims": [
+        "The CC_LADDER search used --exclude-dir=docs and so missed that NONLIMIT_RESUME_LADDER.md:840 claims the switch is 'read by the fire path'. This is disclosed, and the core answer (no executable reads it) is correct.",
+        "Reads the `grep -c frontier` result on the template (2 hits) as 'consistent with the Agent-group entry'. The second hit is frontier-status.sh at :334, an unrelated hook. Loose wording rather than false."
+      ],
+      "extra_correct": [
+        "Quoted launcher invocations escape the :67 entrypoint regex: `bash -c \"handoff-fire.sh --model fable\"` and `\"/x/handoff-fire.sh\" --model fable` both return rc=0 and are uncounted. Reproduced on the snapshot.",
+        "reserve_dates matching is space-padded, so a comma-separated list would never halve the cap",
+        "Offers `scripts/registration-state.sh --only 0029` as the fleet-wide check. The cited :149, :161-172 and :73-83 are verified.",
+        "The migration's write loop hardcodes $HOME dirs while HOOK_FILE and the verify line honour CC_CLAUDE_DIR",
+        "Verified the 0029:11 claim of '24/24, 4 mutants': grep -c '^@test' returns 24, and the mutants are 20-23",
+        "Flags the stale TIGHTENED 8->6 rationale at model-config.yaml:939-949"
+      ],
+      "score_1_10": 7
+    },
+    {
+      "label": "Y",
+      "key_hits": ["K1","K2","K3","K4","K5","K6","K7","K8","K9","K10","K11","K12","K13","K14","K15","K16","K17","K18","K20","M1","M2","M3","M4","M5","M6","M7","M8","M9","M12"],
+      "key_contradicted": [],
+      "citations_checked": 35,
+      "citations_bad": 2,
+      "wrong_claims": [
+        "Cites the 'burn a per-session spawn-count slot the gate can't refund' comment at model-config.yaml:684 and calls it the active: history comment. It is at :690-691; :684 is inside the end: comment.",
+        "Cites the SSOT fallback claude-opus-5-5 at model-config.yaml:696. It is at :699; :696 is the playbook comment.",
+        "Says the hook reads only FRONTIER_GATE_CFG and TMPDIR as environment variables. It also reads HOME (:36 default path). Minor."
+      ],
+      "extra_correct": [
+        "States explicitly that the claude-fable-5* prefix exists so the prior id claude-fable-5 is still counted (:43-50)",
+        "A quoted or $VAR --model value is outside the :75 character class and goes uncounted. Reproduced for the quoted case.",
+        "The CC_LADDER grep covers docs and names the plan's 'read by the fire path' claim at :840 as unimplemented",
+        "The window-closed backstop the header describes (:3-5) is unreachable with active:true and end 2099-12-31",
+        "Points to scripts/deploy-migrations.sh --status (migrations/README.md:109)"
+      ],
+      "score_1_10": 7
+    },
+    {
+      "label": "Z",
+      "key_hits": ["K1","K2","K3","K4","K5","K6","K7","K8","K9","K10","K11","K12","K13","K14","K15","K16","K17","K18","K19","K20","M1","M2","M3","M4","M5","M6","M7","M8","M9","M12"],
+      "key_contradicted": [],
+      "citations_checked": 45,
+      "citations_bad": 0,
+      "wrong_claims": [],
+      "extra_correct": [
+        "K19: handoff-fire resolves the fable alias from the same SSOT key (scripts/handoff-fire.sh:9493)",
+        "Several fires in one Bash call cost one slot: `handoff-fire.sh --model fable; claude3 --model fable` wrote a count of 1 on the snapshot. The extractor returns on the first match (:73) and :144 increments once.",
+        "Launchers outside the regex (claude-prev, claude-x, claude-plan, claude-desk*) and `bash -c 'claude --model fable'` are uncounted. Reproduced claude-prev and bash -c: rc=0, no counter.",
+        "Fail-mode asymmetry: a missing SSOT allows everything, while a present SSOT whose active: does not parse as true refuses every frontier request. This matches the key's precision note that an unreadable SSOT fails closed.",
+        "install.sh:1201-1204 merges only missing EVENTS, so it cannot add the Bash entry either",
+        "The migration's five-dir list omits ~/.claude-260, which model-config.yaml:670 names as the `claude` config dir. README.md:869 disagrees and says ~/.claude-next.",
+        "Gives the migration's own verify oracle (0029:6) as the live-state command and explains why the CLAUDE.global.md check is weaker",
+        "Traces the frontier_access block range as :662 to :712, with the first active: at :687 and the first end: at :682",
+        "model-config.yaml:944-945 ('hard cap, all fable spawns') and :937 ('reads this block') overclaim relative to the code",
+        "tests/hook-jq-abstain.bats:6 lists the gate as jq-guarded but has no case for it",
+        "Correctly verified citations: L2a-policy-surfaces.md:93-94, 0029:33 = settings:161, 0029:41/:44-45 against the test numbers",
+        "An Agent spawn with no model (inheriting a Fable parent) is uncounted (:106). No agents/*.md declares a fable model; agents/frontier-derivation.md:5 is `model: opus`."
+      ],
+      "score_1_10": 9
+    }
+  ],
+  "WX": "W",
+  "WY": "W",
+  "WZ": "Z",
+  "XY": "tie",
+  "XZ": "Z",
+  "YZ": "Z",
+  "pair_reasons": "No output contradicts a key item. None of the four cites skills/frontier-routing/SKILL.md:41 (M10) or the stale NONLIMIT_RESUME_LADDER.md:866 claim (M11); all four flag the gate header :2 instead, so this does not separate them. Z beats every other output: it is the only one with K19 (handoff-fire.sh:9493 alias resolution), had 0 bad citations in about 45 checked, and adds several extra bypasses that I reproduced on the snapshot (multi-fire costs one slot, bash -c quoting, claude-prev). It also finds the fail-closed asymmetry for a present but unparseable SSOT and the ~/.claude-260 coverage gap. W beats X: W has M5, the quoted --model bypass (reproduced), which X lacks. W's CC_LADDER search covers the plan line that X's docs-excluded grep missed. W also verified the research-doc stale citations it lists (X says it did not open each target), and W alone flags the full-id vs alias contradiction in the closed-window refusal. W beats Y: Y has 2 bad model-config line citations (:684 and :696), and W has more verified stale-citation and wiring findings. X vs Y is a tie: Y has M5 and the full CC_LADDER plan-line answer, X has the quoted-launcher bypass (reproduced) and 0 bad citations against Y's 2, so the differences offset. All counts above are from my spot-checks (sed/awk/grep on /tmp/s55/repo-47c3317eb) and from gate runs with a temp TMPDIR and PATH."
+}

@@ -1,0 +1,96 @@
+{
+  "outputs": [
+    {
+      "label": "W",
+      "key_hits": ["K1","K2","K3","K4","K5","K6","K7","K8","K9","K10","K11","K12","K13","K14","K15","K16","K18","M1","M2","M3","M4","M5"],
+      "key_contradicted": [],
+      "citations_checked": 30,
+      "citations_bad": 0,
+      "wrong_claims": [
+        "Minor: presents hooks/lib/goal-state.sh:22 (a header comment) under 'What settles it in code' for /goal clear being met:true; it is a comment, not code.",
+        "Omission, not a false claim: did not check hooks/goal-inert-watch.sh:36, CLAUDE.global.md:223 or docs/plans/NONLIMIT_RESUME_LADDER.md:753 (K17/M6/M7), and says so explicitly."
+      ],
+      "extra_correct": [
+        "cc_sid_for_pane fallback detail verified: CC_SESSIONS_DIRS glob :4984, live pid + ITERM_SESSION_ID suffix :4988-4991, sessionId :4994",
+        "Refusal ledger row verified: emit_fire_refusal :758-760 -> emit_fire_event, $HOME/.claude/logs/handoffs.jsonl :683/:711, gate payload :742, skipped when CC_FIRE_REFUSAL_LOG=0 :684",
+        "Resume branch also discards an explicit --goal/env goal (:12535-12538); explicit --goal is fatal at check_goal_arm || exit 1 :9015 while an inherited one only drops",
+        "goal_unreachable recycle-dead :7397 writes the unreachable goal-arm row only when FIRE_GOAL is non-empty (:801-804)",
+        "Correctly notes the grep-no-match vs grep-error collapse under set -euo pipefail (:343) changes nothing for the yes/no caller"
+      ],
+      "score_1_10": 7
+    },
+    {
+      "label": "X",
+      "key_hits": ["K1","K2","K3","K4","K5","K6","K7","K8","K9","K10","K11","K12","K13","K14","K15","K16","K17","K18","M1","M2","M3","M4","M5","M6","M7"],
+      "key_contradicted": [],
+      "citations_checked": 50,
+      "citations_bad": 2,
+      "wrong_claims": [
+        "'goal_unreachable is a no-op (:5802)': the function is at :801-806 (no-op guard :802); scripts/handoff-fire.sh:5802 is the goal_live_for_sid header comment.",
+        "'Other mentions of the name are the definition and comments (:4824, :5837, :12531)': :5837 and :12531 mention CC_RECYCLE_GOAL_INHERIT, not inherit_recycle_goal; the only comment mention is :4824."
+      ],
+      "extra_correct": [
+        "Call site is inside recycle_fire() (:12354, closing brace :12747), called once at :12964",
+        "No sentinel test in the oracle, so an unevaluated ARM marker (met:false) counts as live",
+        "Trailing newlines are stripped by $(...) at :5845 before check_goal_arm runs",
+        "Doc discrepancy: docs/research/voluntary-inplace-switch-2026-09-22/A07-clean-code-standards.md:170 claims '=off' disables; code honours only 0",
+        "Stale-citation table verified line by line: A03:96/:348, A05:106, CRITIC.md:62/63/305, SYNTHESIS.md:37, recon-wave.md:35/169, LIVENESS_DETECTOR_FAILNEG.md:208 all non-resolving as described",
+        "Refusal row detail hard-codes '--goal condition is ...' and carries verdict:refuse (:703-705); no goal-arm row is written because arm_goal returns at :5867",
+        "goal_armed_for_pane verification (:5792, :5905-5915) and 45s default :5866"
+      ],
+      "score_1_10": 9
+    },
+    {
+      "label": "Y",
+      "key_hits": ["K1","K2","K3","K4","K5","K6","K7","K8","K9","K10","K11","K12","K13","K14","K15","K16","K17","K18","M1","M2","M3","M4","M5","M6","M7"],
+      "key_contradicted": [],
+      "citations_checked": 60,
+      "citations_bad": 0,
+      "wrong_claims": [],
+      "extra_correct": [
+        "Exhaustive FIRE_GOAL assignment list verified by grep: :508, :5847, :5852, :7158, :8950, :12538; check_goal_arm called only at :5848 and :9015",
+        "--goal uses ${2:?} (:8950) so an empty --goal cannot suppress inheritance; any non-empty exported FIRE_GOAL (even whitespace) blocks it",
+        "detach runs python3 subprocess.Popen(sys.argv[2:], start_new_session=True) (:1693-1697): the condition travels as one raw argv element",
+        "Resume-mode argv $11 is ${RCY_SOURCE_SESSION:-$rcy_old_sid} and engagement uses resume_engaged (:12628, :7358)",
+        "await_armed :12629 and await_pane_proof :12636 gate /exit, aborting the recycle otherwise",
+        "goal_armed_for_pane re-resolves pane->successor sid (:5778) and matches the exact condition anywhere in the file (:5792), not last-record-wins",
+        "Comment :5821-5822 'stop searching either way' is accurate only once a record is found; absent/unreadable continue",
+        "Additional stale in-file citations of the watcher transport verified: :663 (-> :6241), :860 (-> :8827), :840 (-> :5884); and :4407/:10697/:11341 citing pipefail at :273/:197 (real :343)",
+        "A07-clean-code-standards.md:170 '=off' discrepancy; LIVENESS_DETECTOR_FAILNEG.md:208 :3574 lands in engage_rc_consequence (:3547)",
+        "Refusal row carries neither the predecessor sid nor 'inherited'; nothing is cc-notify'd, unlike :12502-12503 and arm_goal :5892/:5897/:5902"
+      ],
+      "score_1_10": 9
+    },
+    {
+      "label": "Z",
+      "key_hits": ["K1","K2","K3","K4","K5","K6","K7","K8","K9","K10","K11","K12","K13","K14","K15","K16","K18","M1","M2","M3","M4","M5"],
+      "key_contradicted": [],
+      "citations_checked": 40,
+      "citations_bad": 5,
+      "wrong_claims": [
+        "'line 11070 is a comment about a fire proceeding without a ping': scripts/handoff-fire.sh:11070 is code, `claimed=\"$(cd \"$REPO\" && \"$POOL\" claim ...`.",
+        "'Line 10723 is `claimed=\"$(cd \"$REPO\" && \"$POOL\" claim ...)\"`': fabricated; :10723 is a comment about the stamp/self-close announce (the claim line is :11070).",
+        "'Line 10715 is a comment about the self-close stamp': :10715 is '# nobody to ping; the fire proceeds exactly as it did before this default existed.' The three descriptions are shuffled across lines.",
+        "'The only references to goal-state in scripts/handoff-fire.sh are comments at :4824 and :5803': grep finds only :5803; :4824 does not mention goal-state.",
+        "Lists :12531 as a mention of inherit_recycle_goal; that line mentions CC_RECYCLE_GOAL_INHERIT only.",
+        "Did not verify set -euo pipefail (:343), a one-grep fact that the M5 analysis depends on; it hedges both branches instead (conclusion still correct).",
+        "Omission: did not check hooks/goal-inert-watch.sh:36, CLAUDE.global.md:223 or NONLIMIT_RESUME_LADDER.md:753 (K17/M6/M7)."
+      ],
+      "extra_correct": [
+        "arm_goal's abstained verdict when no pane/it2 is bound (:5872-5875) and the full held/mangled/abstained verdict set (:5889-5903)",
+        "Contrast with the composer gate's `!= off` comparison (:12468)",
+        "Empty condition is accepted by check_goal_arm (:5736)",
+        "goal_unreachable recycle-unverified path at :7321-7335 exits before arming; the write happens only when FIRE_GOAL is non-empty (:801-805)",
+        "Refusal row's detail names --goal and carries no 'inherited' field (:698-710)"
+      ],
+      "score_1_10": 6
+    }
+  ],
+  "WX": "X",
+  "WY": "Y",
+  "WZ": "W",
+  "XY": "Y",
+  "XZ": "X",
+  "YZ": "Y",
+  "pair_reasons": "All four get the core mechanism right. Every one states K1-K16, K18, M1-M5 in substance, and I found no key item contradicted. The differences come from the brief's explicit stale-citation requirement and from citation accuracy. W vs X: X checks and correctly refutes hooks/goal-inert-watch.sh:36, CLAUDE.global.md:223 and NONLIMIT_RESUME_LADDER.md:753 (K17/M6/M7). W checks none of these and admits it. X wins. W vs Y: Y wins for the same reason, and Y also has zero bad citations. W vs Z: both miss K17/M6/M7. However, Z's stale-citation section, which the brief specifically asked for, gives false contents for :10715, :10723 and :11070, including a fabricated quote at :10723. Z also wrongly says :4824 references goal-state and never verified pipefail at :343, whereas W verified it. W has 0 bad citations in 30 checked. W wins. X vs Y: both hit all 25 key items. Y has 0 bad citations in about 60 checked; X has 2 (goal_unreachable cited at :5802 instead of :802, and :5837/:12531 claimed as mentions of inherit_recycle_goal). Y also finds and verifies further stale in-file citations of the watcher transport machinery (:663->:6241, :860->:8827, :840->:5884) and adds verified transport detail (detach Popen raw argv at :1693-1697; goal_armed_for_pane exact match at :5792). That is a verified, material coverage and accuracy margin, so Y wins. X vs Z: X covers K17/M6/M7 and has fewer, less serious bad citations. X wins. Y vs Z: Y wins on the same grounds."
+}

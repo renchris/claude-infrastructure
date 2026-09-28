@@ -1,0 +1,147 @@
+{
+  "task": "T5-deploy-live-exec",
+  "judge": "J2",
+  "date": "2026-09-28",
+  "repo_snapshot": "/tmp/s55/repo-47c3317eb (sha 47c3317eb)",
+  "key": "/Users/chrisren/Development/claude-infrastructure/docs/research/opus55-synth-reprobe-2026-09-22/corpus/keys/T5-deploy-live-exec.md",
+  "method": "Every cited path:line re-opened in the snapshot with sed/awk before being credited. Key items S1..M3 adjudicated on substance, not wording. Near-miss lists sampled across all four outputs (21 shared citations + each output's unique ones).",
+  "outputs": [
+    {
+      "label": "W",
+      "file": "arms/T5-deploy-live-exec__claude-sonnet-5-5__high.md",
+      "site_total_claimed": 7,
+      "key_hits": ["S1", "S1r", "S2", "S2a", "S2r", "S3", "S3r", "S4", "S5", "S5r", "N1", "N2", "N3", "M1", "M2", "M3"],
+      "key_contradicted": ["N4"],
+      "key_hit_notes": {
+        "M1": "Counts bin/cc-premise:1392 as site 6 with the full store->run trace (deploy-live.sh:960-961 -> :1046/:1261 -> cc-premise cmd -> /bin/sh -c). Verified.",
+        "M2": "Counts bin/cc-do:454 as site 7 and traces the stored string to deploy-live.sh:708-746 filed at :812. Verified.",
+        "M3": "Near-miss list covers essentially every item the key names; only bin/cc-do:196-198 is described inside site 3 rather than listed as a rejection.",
+        "N4": "Plist facts correct (launchd/com.claude.deploy-live.plist:38, fleet.manifest:132 = 600s), but asserts 'Inside the scoped trees there is no scheduled or timer-driven caller' — false, and internally inconsistent with its own site 6 (cc-premise:1392 is reached every tick from the autonomy-sweep timer)."
+      },
+      "citations_checked": 42,
+      "citations_bad": 5,
+      "bad_citations": [
+        "scripts/deploy-now.sh:52 for REPO= — actual line is :53",
+        "hooks/operator-readout.sh:533 for the `behind > 0` guard — actual `if [ \"$behind\" -gt 0 ]` is :532 (:533 is `local dout drc`)",
+        "bin/cc-do:148 for 'emit writes it' — :148 is a comment about the path field; emit() is defined at :150",
+        "bin/cc-premise:1381-1383 for 'cmd is the item's stored falsifier field' — those lines are docstring prose; the assignment is :1387",
+        "scripts/ship-land.sh:1704 for the stale 'deploy-live.sh:2543 dies DIVERGED' citation — the citation is on :1703"
+      ],
+      "wrong_claims": [
+        "'Inside the scoped trees there is no scheduled or timer-driven caller' — refuted by launchd/com.chrisren.autonomy-sweep.plist:26 (StartInterval 300) -> scripts/autonomy-sweep.sh:1488 -> bin/cc-premise:1392, which W itself counts as an in-scope site.",
+        "Site 7 arguments: 'Each is bash $DEPLOY_REPO/scripts/deploy-live.sh --dry-run --offline, except line 734' glosses over :708's CC_DEPLOY_SCAN=$((depth+50)) prefix."
+      ],
+      "extra_correct": [
+        "Verified stale-citation finding: ship-land's cited deploy-live.sh:2543 is a printf of $UNTRACKED; the divergence page block is at :2467 and the untracked-collision block at :2541 (both re-read and confirmed).",
+        "launchd/fleet.manifest:132 schedules com.claude.deploy-live at 600 s — verified.",
+        "deploy-live.sh:554 (awk $0) and :787 (message text) correctly excluded from the re-exec search — verified.",
+        "deploy-live.sh:1047/:1262 correctly identified as `--source deploy-live` labels, not invocations — verified.",
+        "cc-premise call site at :2310 verified."
+      ],
+      "score_1_10": 7
+    },
+    {
+      "label": "X",
+      "file": "arms/T5-deploy-live-exec__claude-sonnet-5-5__medium.md",
+      "site_total_claimed": 5,
+      "key_hits": ["S1", "S1r", "S2", "S2a", "S2r", "S3", "S3r", "S4", "S5", "S5r", "N1", "N3", "M3"],
+      "key_contradicted": ["N4", "M1", "M2"],
+      "key_hit_notes": {
+        "M3": "Near-miss list is complete against the key's list and additionally nails the cc-do:196 / :386 trap ('the ⊘ row carries the same path but is never run').",
+        "M1": "bin/cc-premise is never mentioned. The key's missing 6th site is absent, so the stated total of 5 is wrong.",
+        "M2": "Explicitly rejects bin/cc-do:454 as 'not a site ... which I did not trace to deploy-live.sh' — but X's own near-miss section records that deploy-live.sh:708-746 is filed as `cc-backlog needs ... --run \"$run\"` (:811-812), i.e. it assembled the trace and then declined to draw it.",
+        "N2": "scripts/deploy-live.sh:960 (the printf'd falsifier) is never adjudicated; (c) claims 'the only bash …/deploy-live.sh lines are the stored advisory strings at :708-746'."
+      },
+      "citations_checked": 35,
+      "citations_bad": 5,
+      "bad_citations": [
+        "scripts/deploy-now.sh:61 for `export DEPLOY_REPO=\"$REPO\"` — actual :60",
+        "scripts/ship-land.sh:1742 for the `\"$dl_script\"` argument to python3 -c — actual :1741",
+        "scripts/ship-land.sh:1726 for the SHIP_LAND_CONVERGE test — :1726 is the 'Kill switch' comment; the `if [[ ... != off ]]` is :1727",
+        "scripts/ship-land.sh:1743-1744 for the 'converge kicked' echo — actual :1742 (:1743 is the elif for a diverged checkout)",
+        "hooks/operator-readout.sh ':522 region' for `behind > 0` — actual :532"
+      ],
+      "wrong_claims": [
+        "'There are 5 distinct execution sites' — the key's floor is 6 (bin/cc-premise:1392 missing), and the sibling dispatcher bin/cc-do:454 is rejected rather than adjudicated as data-dependent.",
+        "'The only unattended scheduled entry point is the launchd plist' / 'It is the only scheduled or unattended path I found' — refuted by the autonomy-sweep -> cc-premise:1392 chain inside scripts/ and bin/.",
+        "'bin/cc-do:454 ... which I did not trace to deploy-live.sh' — the trace runs through deploy-live.sh:812, which X cites two sections later."
+      ],
+      "extra_correct": [
+        "install.sh:849 is `link_file ... deploy-now.sh` (a symlink, not an execution) and install.sh is at the repo root, out of scope — both verified.",
+        "install.sh:1416 does cite `scripts/deploy-live.sh:2233` — verified as an unchecked cross-file citation.",
+        "bin/cc-do:386 keys on ▶ so the ⊘ row emitted at :196 is never executed — verified.",
+        "bin/cc-venue:187 is descriptive prose — verified."
+      ],
+      "score_1_10": 5
+    },
+    {
+      "label": "Y",
+      "file": "arms/T5-deploy-live-exec__claude-opus-5-5__xhigh.md",
+      "site_total_claimed": 7,
+      "key_hits": ["S1", "S1r", "S2", "S2a", "S2r", "S3", "S3r", "S4", "S5", "S5r", "N1", "N2", "N3", "N4", "M1", "M2", "M3"],
+      "key_contradicted": [],
+      "key_hit_notes": {
+        "N4": "The only output that states the key's correction: names launchd/com.chrisren.autonomy-sweep.plist:24,26 (300 s) -> scripts/autonomy-sweep.sh:1488 -> bin/cc-premise:1392 -> deploy-live.sh --falsify-host as a scheduled path whose executing line is inside scope, while keeping 'the scheduled job that runs the actual deploy (--auto) is outside the three trees'. Every link re-verified.",
+        "M1": "Site 7, with run_falsifier (:1362), cmd from ent['falsifier'] (:1387), /bin/sh -c (:1392), FALSIFIER_TIMEOUT_S :241, FALSIFIER_ENABLED :246, cwd REPO :129, exit-0 semantics :1402-1411, and all three caller chains (assess :2252/:2310; cmd_check :2657 reached from bin/cc-backlog:3046; cmd_sweep :3051/:3122-3123 reached from autonomy-sweep.sh:1488). All verified.",
+        "M2": "Site 6, with .run at :415, the blocked-row source (cc-backlog list --blocked :413), the six deploy-live run= strings, the filing call at :812 and the gate/exit handling. Verified.",
+        "M3": "Near-miss list covers the key's list plus cc-do:186-187/:196-198, cc-blockers:642 with its three rendering consumers, and cc-premise:1776/:1790-1793."
+      },
+      "citations_checked": 46,
+      "citations_bad": 1,
+      "bad_citations": [
+        "bin/cc-backlog:3775 offered as evidence that `cc-backlog needs` rows have status 'blocked'. The line does contain status:\"blocked\" but it is the synthetic `__pending__` dedup row; the line that actually blocks the created row is bin/cc-backlog:3828 (`targs=(block \"$id\" --needs \"$step\")`). Conclusion is right, citation does not carry it."
+      ],
+      "wrong_claims": [],
+      "extra_correct": [
+        "The probe/real-run asymmetry no other output found: bin/cc-do:184 pins DEPLOY_REPO=$SHARED but bin/cc-do:359 runs `bash \"$1\"` bare, so deploy-live.sh:122's own default applies and an overridden CC_SHARED_CHECKOUT makes probe and run disagree. Both lines re-read; correct.",
+        "Two verified stale cross-file citations: launchd/com.claude.deploy-live.plist:16 cites hooks/operator-readout.sh:238-246 for the fallback, which now lives at :517-518; bin/cc-do:152 claims it mirrors hooks/operator-readout.sh §152-258, while the matching block is :503-548.",
+        "bin/cc-blockers:642's recover_cmd has only rendering consumers (:1299, :1582, :1596 all via cell(...)) — verified.",
+        "bin/cc-premise:1776/:1790-1793 filing-day screen rejects script calls and absolute paths rather than running them — verified.",
+        "Flags bin/cc-backlog:4308 (`/bin/sh -c \"$probe\"`) as an unresolved possible 8th site. I checked it: the line exists as described, but cmd_falsify is reachable only from the `falsify` verb (bin/cc-backlog:7015) and deploy-live.sh files via `add --falsifier`/`needs`, so it is not reached from deploy-live's own flow. The flag was honest, not a wrong claim.",
+        "scripts/deploy-live.sh:2471 correctly identified as a page FILENAME, not a self-invocation."
+      ],
+      "score_1_10": 9
+    },
+    {
+      "label": "Z",
+      "file": "arms/T5-deploy-live-exec__claude-sonnet-5-5__xhigh.md",
+      "site_total_claimed": 6,
+      "key_hits": ["S1", "S1r", "S2", "S2a", "S2r", "S3", "S3r", "S4", "S5", "S5r", "N1", "N2", "N3", "M2", "M3"],
+      "key_contradicted": ["N4", "M1"],
+      "key_hit_notes": {
+        "M2": "Site 6, with the full string trace deploy-live.sh:708-746 -> :812 -> cc-do:415 -> :454 and the gate/exit handling. Verified.",
+        "M1": "Listed as an 'unverified candidate (not counted)'. Z read deploy-live.sh:960/:1044-1047 and the :1041 comment naming cc-premise, but stopped short of bin/cc-premise:1392, so the key's 6th site is not counted.",
+        "N4": "Plist facts all correct (:38, :41 StartInterval, :44 RunAtLoad, header comment 'Every 600s'), but 'Every scheduled run therefore comes from that plist' is false for the same reason as W and X.",
+        "M3": "Longest near-miss list of the four; all sampled entries verified."
+      },
+      "citations_checked": 48,
+      "citations_bad": 2,
+      "bad_citations": [
+        "scripts/ship-land.sh:1740 for `start_new_session=True` — it is on :1741 (:1740 carries stdout/stderr)",
+        "scripts/test-hermeticity-lint.sh:3025 listed as a rejected deploy-live near-miss — the line is `export SHIP_LAND_CONVERGE=off` and never names deploy-live"
+      ],
+      "wrong_claims": [
+        "'A pattern grep of bin/cc-premise for `sh -c|bash -c|eval ` found no non-comment hits ... It does show subprocess.run at bin/cc-premise:645 and bin/cc-premise:676.' The grep report is materially incomplete: subprocess.run occurs at :645, :676, :1391, :1916, :2204, :2726, :2756, :2789, :2914 (measured: grep -n 'subprocess.run' bin/cc-premise). :1391 is the call three lines from the answer, so the stated evidence understates what the search returned and is what produced the missed site.",
+        "'Every scheduled run therefore comes from that plist' — refuted by the autonomy-sweep (300 s) -> cc-premise:1392 chain."
+      ],
+      "extra_correct": [
+        "Verified stale citation no one else found: scripts/permission-harvest-run.sh:329 says `bin/cc-do:436` runs `bash -c \"$cmd\"`; the actual line is :454. Re-read and confirmed.",
+        "scripts/deploy-link-parity.sh:159 — fix() only appends to FIXES, so :509 cannot execute. Verified.",
+        "bin/cc-blockers:186's DEPLOY_REPO is used for git -C / postland-verify / other scripts and never for deploy-live.sh. Verified at the sampled consumers.",
+        "hooks/session-continue.sh:1191's `\\$(git rev-parse ...)` is escaped so it is never expanded — verified.",
+        "scripts/deploy-live.sh:1483 is `/bin/bash \"$PARITY_ASSERT\"`, a different script — verified.",
+        "scripts/permission-gate-lint.sh:104's EMBEDDED_SET glob `scripts/deploy-*` correctly rejected as a lint pattern — verified."
+      ],
+      "score_1_10": 6
+    }
+  ],
+  "pairwise": {
+    "WX": "W",
+    "WY": "Y",
+    "WZ": "W",
+    "XY": "Y",
+    "XZ": "Z",
+    "YZ": "Y"
+  },
+  "pair_reasons": "WX=W: W counts both dispatchers the key cares about — bin/cc-premise:1392 (key M1, the missing 6th site) and bin/cc-do:454 (M2) — each with a verified store->run trace. X has neither: cc-premise is never mentioned and cc-do:454 is rejected as 'not traced' even though X's own near-miss section cites deploy-live.sh:811-812 filing those --run strings. X also never adjudicates deploy-live.sh:960 (N2). Bad-citation rates are comparable (5/42 vs 5/35), so the site coverage decides it. WY=Y: both count 7 sites, but Y states the key's N4 correction (autonomy-sweep plist 300 s -> autonomy-sweep.sh:1488 -> cc-premise:1392 is a scheduled path whose executing line is in scope) while W asserts the opposite and contradicts its own site 6; Y's citations are materially cleaner (1 soft bad in 46 vs 5 hard in 42, including W's cc-premise:1381-1383 and cc-do:148 which are the load-bearing ones); Y alone found the verified DEPLOY_REPO asymmetry between cc-do:184 and cc-do:359. WZ=W: both miss N4 and both are otherwise near-identical on S1-S5r/N1-N3/M2/M3, but W verifies and counts cc-premise:1392 (M1) while Z leaves it as an uncounted candidate on the strength of a grep report that understates its own output; the key's headline finding outweighs W's higher citation-error count (5 vs 2). XY=Y: Y has two more verified sites (M1, M2), the N4 correction, one soft bad citation against X's five, and X additionally drops N2. XZ=Z: Z counts cc-do:454 with the full deploy-live.sh:708-746 -> :812 -> :415 -> :454 trace that X declined to draw, adjudicates deploy-live.sh:960 (N2) which X ignores, flags cc-premise honestly instead of omitting it, and has 2 bad citations in 48 against X's 5 in 35. YZ=Y: Y verifies the cc-premise site Z leaves open and states the N4 correction Z contradicts; Z's cc-premise grep report is the specific, verified defect (subprocess.run at :1391 was in the search's own output range). No pair is a tie: each verdict rests on a named, re-verified difference in sites counted or in load-bearing citation accuracy, not on length — Z's near-miss list is the longest of the four and still loses to W and Y."
+}
