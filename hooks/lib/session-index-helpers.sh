@@ -825,29 +825,47 @@ except MemoryError:
 #   3. one `awk`                  — the join, in-memory
 # maxdepth 3 preserves the two layouts the sweep has always handled: flat
 # `<project>/<sid>.jsonl` and nested `<project>/<sid>/transcript.jsonl`.
+#
+# The tracking table reaches awk through a temp FILE, never `-v`: BSD awk (the /usr/bin/awk launchd
+# runs) rejects a multi-line -v value with "newline in string", so from the second tracked row on
+# every tick emitted nothing (191,067 log lines; TrueMemory study §3.2 P0). ENVIRON is no better —
+# the table outgrows ARG_MAX at a few thousand rows. The caller reads this through `< <(…)`, where
+# neither `set -e` nor an exit status reaches it, so a failure is logged here or nowhere.
 session_index_changed_files() {
     local projects_dir="${1:-$CLAUDE_PROJECTS_DIR}"
     [ -d "$projects_dir" ] || return 0
-    local tracking
-    tracking=$(session_index_sql \
+    local tracking rc=0
+    tracking=$(mktemp "${TMPDIR:-/tmp}/si-tracking.XXXXXX") || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        session_index_log "change detection FAILED rc=$rc (mktemp)"
+        return "$rc"
+    fi
+    session_index_sql \
         "SELECT file_path || char(9) || last_mtime || char(9) || last_size FROM file_tracking;" \
-        2>/dev/null || true)
+        > "$tracking" 2>/dev/null || true
     # %m mtime, %z size, %N path — path LAST so a path containing spaces still parses.
-    find "$projects_dir" -maxdepth 3 -type f -name '*.jsonl' -exec stat -f '%m%t%z%t%N' {} + 2>/dev/null \
-      | awk -F'\t' -v tracking="$tracking" '
+    # find/stat are fenced with `|| true` so the pipeline's status is awk's alone: a transcript
+    # vanishing mid-scan is routine, a failed join is not.
+    { find "$projects_dir" -maxdepth 3 -type f -name '*.jsonl' -exec stat -f '%m%t%z%t%N' {} + 2>/dev/null || true; } \
+      | awk -F'\t' -v trackfile="$tracking" '
           BEGIN {
-              n = split(tracking, rows, "\n")
-              for (i = 1; i <= n; i++) {
-                  if (rows[i] == "") continue
-                  split(rows[i], c, "\t")
+              while ((getline row < trackfile) > 0) {
+                  if (row == "") continue
+                  split(row, c, "\t")
                   seen[c[1]] = c[2] SUBSEP c[3]
               }
+              close(trackfile)
           }
           {
               path = $3
               if ((path in seen) && seen[path] == ($1 SUBSEP $2)) next
               print path "\t" $1 "\t" $2
-          }'
+          }' || rc=$?
+    rm -f "$tracking"
+    if [ "$rc" -ne 0 ]; then
+        session_index_log "change detection FAILED rc=$rc"
+        return "$rc"
+    fi
 }
 
 # ─── One-pass transcript extraction ────────────────────────

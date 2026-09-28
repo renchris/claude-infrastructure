@@ -130,6 +130,55 @@ JSONL
   [ "$output" = "1" ]
 }
 
+# Every case above tracks at most ONE row, which is why the suite stayed green while BSD awk
+# rejected `-v tracking=<multi-line table>` ("newline in string") on every real tick from the
+# second tracked transcript onward: 191,067 log lines, nothing swept since 2026-09-07. The failure
+# sat inside the sweep's `< <(…)`, so neither `set -e` nor any test could see it. These cases put
+# /usr/bin/awk first on PATH, because that is the awk launchd runs.
+SID_C=bbbbbbbb-cccc-dddd-eeee-ffffffffffff
+
+track() { # <path> — record the file as swept at its CURRENT mtime+size, as the sweep would
+  sqlite3 "$HOME/.claude/session-index.db" "INSERT INTO file_tracking
+    (file_path, session_id, project_dir, last_mtime, last_size, last_swept_at)
+    VALUES ('$1', 'x', 'p', $(stat -f %m "$1"), $(stat -f %z "$1"), '2026-01-01T00:00:00Z');"
+}
+
+@test "with 2+ tracked rows under BSD awk, new and grown files are detected and unchanged ones are not" {
+  local d="$HOME/.claude/projects/-Users-x-proj"
+  mk_transcript "$d/$SID_A.jsonl"; track "$d/$SID_A.jsonl"
+  mk_transcript "$d/$SID_B.jsonl"; track "$d/$SID_B.jsonl"
+  echo '{"type":"user","message":{"content":"appended after tracking"}}' >> "$d/$SID_B.jsonl"
+  mk_transcript "$d/$SID_C.jsonl"
+  run bash -c "PATH=/usr/bin:/bin:\$PATH HOME='$HOME' bash -c 'source \"$HELPERS\"; session_index_changed_files'"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "$SID_B"          # grown
+  echo "$output" | grep -q "$SID_C"          # never tracked
+  [[ "$output" != *"$SID_A"* ]]              # tracked and unchanged: proves the join ran
+  ! grep -q "change detection FAILED" "$HOME/.claude/logs/session-index.log" 2>/dev/null || false
+}
+
+@test "a tracked path containing a space joins correctly among 2+ tracked rows" {
+  local d="$HOME/.claude/projects/-Users-x-my proj"
+  mk_transcript "$d/$SID_A.jsonl"; track "$d/$SID_A.jsonl"
+  mk_transcript "$HOME/.claude/projects/-Users-x-proj/$SID_B.jsonl"
+  track "$HOME/.claude/projects/-Users-x-proj/$SID_B.jsonl"
+  mk_transcript "$d/$SID_C.jsonl"
+  run bash -c "PATH=/usr/bin:/bin:\$PATH HOME='$HOME' bash -c 'source \"$HELPERS\"; session_index_changed_files'"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qF "$d/$SID_C.jsonl"
+  [[ "$output" != *"$SID_A"* ]]
+  [[ "$output" != *"$SID_B"* ]]
+}
+
+@test "a failing change-detection join is LOGGED with its rc, not lost in the process substitution" {
+  mkdir -p "$BATS_TEST_TMPDIR/shim"
+  printf '#!/bin/sh\necho "awk: simulated failure" >&2\nexit 2\n' > "$BATS_TEST_TMPDIR/shim/awk"
+  chmod +x "$BATS_TEST_TMPDIR/shim/awk"
+  mk_transcript "$HOME/.claude/projects/-Users-x-proj/$SID_A.jsonl"
+  run bash -c "PATH='$BATS_TEST_TMPDIR/shim':\$PATH HOME='$HOME' bash -c 'source \"$HELPERS\"; session_index_changed_files'"
+  grep -q "change detection FAILED rc=2" "$HOME/.claude/logs/session-index.log"
+}
+
 @test "the per-tick cap defers the overflow instead of running unbounded, and says so" {
   mk_transcript "$HOME/.claude/projects/-Users-x-proj/$SID_A.jsonl"
   mk_transcript "$HOME/.claude/projects/-Users-x-proj/$SID_B.jsonl"
