@@ -54,6 +54,10 @@ setup() {
   git -C "$SIB" config user.name sib
 
   export LAND_LOG="$BATS_TEST_TMPDIR/land.log"
+  # The fixture lands below run under whatever bounds this SUITE (ship-land's smoke gate and
+  # postland-verify both wrap suites in timeout(1)), so opt out of the outer-timeout preflight —
+  # tests/ship-land-outer-timeout.bats owns that preflight and unsets this.
+  export SHIP_ALLOW_OUTER_TIMEOUT=1
   export LAND_LOCK_DIR="$BATS_TEST_TMPDIR/lock"
   export LAND_LOCK_WAIT=30
   export SHIP_LAND_DECISIONS_DIR="$BATS_TEST_TMPDIR/decisions"

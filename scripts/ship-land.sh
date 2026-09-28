@@ -233,6 +233,19 @@ _resolve_self() {  # <path> → absolute path, every symlink hop resolved (bash 
 }
 SELF="$(_resolve_self "${BASH_SOURCE[0]:-$0}")"
 SCRIPT_DIR="$(dirname "$SELF")"
+# The lesson a verdict line points at, as an ABSOLUTE path through the DEREFERENCED self-path (SELF
+# above), so a live-path run via ~/.claude/scripts/ names the checkout's docs/lessons body. Prints
+# nothing when the body is absent — a dead pointer is worse than none. Never fails.
+_land_lesson() {  # <slug> → "lesson: <abs path>" on stdout, or nothing
+  local f; f="$(dirname "$SCRIPT_DIR")/docs/lessons/$1.md"
+  [[ -f "$f" ]] && printf 'lesson: %s' "$f"
+  return 0
+}
+_land_lesson_line() {  # <slug> → "  lesson: <abs path>" on stderr, or nothing
+  local l; l="$(_land_lesson "$1")"
+  [[ -n "$l" ]] && echo "  $l" >&2
+  return 0
+}
 LAND_LOCK="${SCRIPT_DIR}/land-lock.sh"
 LAND_VERIFY="${SCRIPT_DIR}/land-verify.sh"
 BACKUP_REAP="${SCRIPT_DIR}/ship-backup-reap.sh"
@@ -1412,6 +1425,40 @@ land_failure_inbox() {  # $1=exit code $2=cause word
   return 0
 }
 
+# OUR ANCESTRY, as the ucomm of each ancestor from the parent upward (max 12 hops), space-separated.
+# ONE walk for both readers: the signal handler (who likely sent this signal?) and the start-of-run
+# preflight (is a caller's timeout(1) about to convict a healthy land?). Best-effort and never fails:
+# the handler calls it while annotating an exit it must not change, and an unreadable ps is an empty
+# list, which the preflight reads as "no timeout seen" (fail-open — it is a guard, not a gate).
+_land_ancestry_ucomms() {
+  local p out="" n=0
+  p="$(ps -o ppid= -p $$ 2>/dev/null | tr -d ' ')"
+  while [ -n "$p" ] && [ "$p" -gt 1 ] 2>/dev/null && [ "$n" -lt 12 ]; do
+    out="$out $(ps -o ucomm= -p "$p" 2>/dev/null | tr -d ' ')"
+    p="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')"; n=$(( n + 1 ))
+  done
+  printf '%s' "${out# }"
+  return 0
+}
+
+# THE OUTER-TIMEOUT PREFLIGHT (TrueMemory §3.6 step 2). `timeout N … ship-land.sh` kept recurring
+# after the killed verdict above had named it (8 hits on 2026-09-21 alone): a verdict printed AFTER
+# the kill teaches nothing to the run it ended. ship-land bounds itself, and under lock contention a
+# healthy land outlives any bound a caller would guess, so refuse BEFORE the lock instead. Exact
+# ucomm match on timeout/gtimeout. Override for a caller whose bound is deliberate:
+# SHIP_ALLOW_OUTER_TIMEOUT=1 (postland-verify's auto-revert lane; the suites a bounded gate runs).
+land_outer_timeout_preflight() {
+  [[ "${SHIP_ALLOW_OUTER_TIMEOUT:-0}" = "1" ]] && return 0
+  local anc lsn; anc="$(_land_ancestry_ucomms)"
+  case " $anc " in
+    *" timeout "*|*" gtimeout "*)
+      lsn="$(_land_lesson never-wrap-ship-in-your-own-timeout)"
+      echo "✗ ship-land: verdict=refused reason=outer-timeout ancestry=[${anc}] — an outer timeout cannot tell a slow land from a wedged one and kills healthy lands; run /ship unbounded.${lsn:+ $lsn.} Override: SHIP_ALLOW_OUTER_TIMEOUT=1" >&2
+      exit 2 ;;
+  esac
+  return 0
+}
+
 # shellcheck disable=SC2329  # invoked indirectly — the three `trap` lines at dispatch are its only callers.
 _land_sig_verdict() {  # <signame> <signum>
   trap - TERM HUP INT EXIT
@@ -1438,17 +1485,14 @@ _land_sig_verdict() {  # <signame> <signum>
   # cc-reaper orphan class selects on), and whether a `timeout` sits in our OWN ancestry (if it
   # does, the likeliest sender is ours). Best-effort throughout — this runs from a signal handler
   # and must never fail the exit it is annotating (memory: addon-failure-exceeds-its-blast-radius).
-  local _sv_el _sv_pp _sv_anc="" _sv_p _sv_n=0 _sv_src="sender UNKNOWN"
+  local _sv_el _sv_pp _sv_anc _sv_src="sender UNKNOWN" _sv_own=0
   _sv_el=$(( $(date +%s) - ${LAND_T0:-$(date +%s)} ))
   _sv_pp="$(ps -o ppid= -p $$ 2>/dev/null | tr -d ' ')"; [ -n "$_sv_pp" ] || _sv_pp="?"
-  _sv_p="$_sv_pp"
-  while [ -n "$_sv_p" ] && [ "$_sv_p" -gt 1 ] 2>/dev/null && [ "$_sv_n" -lt 12 ]; do
-    _sv_anc="$_sv_anc $(ps -o ucomm= -p "$_sv_p" 2>/dev/null | tr -d ' ')"
-    _sv_p="$(ps -o ppid= -p "$_sv_p" 2>/dev/null | tr -d ' ')"; _sv_n=$(( _sv_n + 1 ))
-  done
-  case "$_sv_anc" in *timeout*) _sv_src="a TIMEOUT is in our OWN ancestry — the likeliest sender is our own bound, not a peer" ;; esac
-  [ "$_sv_pp" = "1" ] && _sv_src="we are ORPHANED (ppid 1) — the shape every cc-reaper orphan class selects on"
-  echo "✗ ship-land: verdict=killed signal=SIG$1 role=${LIFECYCLE_ROLE} branch=${BRANCH:-?} elapsed=${_sv_el}s ppid=${_sv_pp} ancestry=[${_sv_anc# }] — ${_sv_src}. This land did not fail a gate and nothing was proven about the tree; the work is still on ${BRANCH:-the branch}." >&2
+  _sv_anc="$(_land_ancestry_ucomms)"
+  case "$_sv_anc" in *timeout*) _sv_own=1; _sv_src="a TIMEOUT is in our OWN ancestry — the likeliest sender is our own bound, not a peer" ;; esac
+  [ "$_sv_pp" = "1" ] && { _sv_own=0; _sv_src="we are ORPHANED (ppid 1) — the shape every cc-reaper orphan class selects on"; }
+  echo "✗ ship-land: verdict=killed signal=SIG$1 role=${LIFECYCLE_ROLE} branch=${BRANCH:-?} elapsed=${_sv_el}s ppid=${_sv_pp} ancestry=[${_sv_anc}] — ${_sv_src}. This land did not fail a gate and nothing was proven about the tree; the work is still on ${BRANCH:-the branch}." >&2
+  [ "$_sv_own" = "1" ] && _land_lesson_line never-wrap-ship-in-your-own-timeout
   exit "$rc"
 }
 
@@ -2546,6 +2590,7 @@ run_smoke() {  # $1=range → 0 = PROCEED · 1 = RED (a named failure in a direc
     # moment of landing nothing has executed this diff. A skip that sounds like a hand-off is how
     # 352 ungated lands went unnoticed — the numbers are printed for the same reason.
     echo "⏭ gate: smoke SKIPPED — this land is behaviorally UNGATED: statics passed, but NO suite of this diff ran (1-min load ${SHED_LOAD:-?} ≥ ceiling ${SHED_CEILING:-?}). Shedding is a SKIP, never a wait (waiting is what starved five gates below their own ceiling). The post-land verifier is the only remaining net and it trails trunk by hours, so a suite this diff breaks can sit RED on trunk until it catches up. Override: CC_GATE_MAX_LOAD=0." >&2
+    _land_lesson_line a-landed-verdict-is-not-a-tested-verdict
     return 0
   fi
 
@@ -5323,6 +5368,8 @@ main_outer() {
   # check would send them to the expensive one); the dirty-tree refusal guards a LAND of unreviewed
   # bytes, whereas a dirty tree is the precheck's whole subject under --working.
   if [[ "$PRECHECK" = "1" ]]; then main_precheck "$TRUNK" "$WORKING" "$DO_FETCH"; fi
+  # A LAND only (a precheck returned above; a --dry-run pushes nothing), and before the landing lock.
+  [[ "$DRY_RUN" = "1" ]] || land_outer_timeout_preflight
 
   REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
   BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"

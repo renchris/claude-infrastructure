@@ -2513,7 +2513,7 @@ sleep 300")"
 # invoked with — the contract is "landed FROM the revert worktree, on the revert's own branch" —
 # and then really pushes, so "trunk healed" is observed end-to-end rather than mocked away.
 ship_stub() {
-  printf '#!/bin/bash\n{ echo "cwd=$PWD"; echo "branch=$(git rev-parse --abbrev-ref HEAD)"; echo "subject=$(git log -1 --format=%%s)"; } >> "%s/ship.argv"\ngit push -q origin HEAD:main\n' \
+  printf '#!/bin/bash\n{ echo "cwd=$PWD"; echo "branch=$(git rev-parse --abbrev-ref HEAD)"; echo "subject=$(git log -1 --format=%%s)"; echo "allow_outer_timeout=${SHIP_ALLOW_OUTER_TIMEOUT:-}"; } >> "%s/ship.argv"\ngit push -q origin HEAD:main\n' \
     "$REC" > "$STUB/ship-land"
   chmod +x "$STUB/ship-land"
   export CC_POSTLAND_SHIP_BIN="$STUB/ship-land"
@@ -2576,6 +2576,9 @@ do_has() { sed -n 's/^do: *//p' "$CC_PAGES_DIR/postland-revert-$1.page" | head -
   cwd="$(ship_field cwd)"
   norm "$CC_POSTLAND_WT_ROOT"
   [ "${cwd#"$NORM"/wt-revert-}" != "$cwd" ]                   # ...from the revert worktree
+  # ...and OPTED OUT of ship-land's outer-timeout preflight: this lane's bound is deliberate, and
+  # without the opt-out a real ship-land under it refuses every revert with rc 2.
+  [ "$(ship_field allow_outer_timeout)" = "1" ]
   run bash -c "sed -n 's/^subject=//p' '$REC/ship.argv' | head -1 | grep -c '^Revert '"
   [ "$output" = "1" ]
   git -C "$R" fetch -q origin

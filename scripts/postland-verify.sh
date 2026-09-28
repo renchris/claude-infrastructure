@@ -3294,7 +3294,9 @@ EOF
       # The land lane, from the revert's own worktree+branch. BOUNDED: its gate is the one piece of
       # this pipeline whose wall time is not ours to predict, and an unbounded fork here would hold
       # the verifier mutex the way the cc-inbox-guard fork held the gates for five days.
-      ( cd "$wt" && bounded "$SHIP_TO" "$REPO_SHIP" ) >/dev/null 2>&1; rc=$?
+      # SHIP_ALLOW_OUTER_TIMEOUT=1: this bound is deliberate (it protects the verifier mutex), so it
+      # opts out of ship-land's outer-timeout preflight, which would otherwise refuse every revert.
+      ( cd "$wt" && SHIP_ALLOW_OUTER_TIMEOUT=1 bounded "$SHIP_TO" "$REPO_SHIP" ) >/dev/null 2>&1; rc=$?
     else
       ( cd "$wt" && bounded 60 git revert --abort >/dev/null 2>&1 ) || true
       rc=90                                              # revert did not apply cleanly

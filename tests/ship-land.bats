@@ -21,6 +21,10 @@ setup() {
   git push -q -u origin main
 
   export LAND_LOG="$BATS_TEST_TMPDIR/land.log"
+  # The fixture lands below run under whatever bounds this SUITE (ship-land's smoke gate and
+  # postland-verify both wrap suites in timeout(1)), so opt out of the outer-timeout preflight —
+  # tests/ship-land-outer-timeout.bats owns that preflight and unsets this.
+  export SHIP_ALLOW_OUTER_TIMEOUT=1
   export LAND_LOCK_DIR="$BATS_TEST_TMPDIR/lock"
   export LAND_LOCK_WAIT=10
   export SHIP_LAND_DECISIONS_DIR="$BATS_TEST_TMPDIR/decisions"
@@ -2223,6 +2227,10 @@ shed_probe_v() {  # $@ = env assignments → "<ABOVE|BELOW> ceiling=<c> load=<l>
   # lands went unnoticed behind that sentence.
   echo "$output" | grep -q "behaviorally UNGATED" || false
   echo "$output" | grep -q "0.0001" || false              # the raw inputs are printed, not implied
+  # ...and it points at the lesson body by an absolute path that exists (never a dead pointer).
+  local lsn; lsn="$(printf '%s\n' "$output" | sed -n 's/^  lesson: //p' | head -1)"
+  [ "$lsn" = "$REPO/docs/lessons/a-landed-verdict-is-not-a-tested-verdict.md" ] || false
+  [ -f "$lsn" ] || false
   # NOT `grep -qv`: -v inverts LINE SELECTION, so it succeeds whenever ANY other line exists — a
   # negation that can never fail. The old sentence must be genuinely absent, so branch on the
   # POSITIVE match (a bare `!` compound is errexit-exempt in bats, hence the explicit `if`).
