@@ -174,8 +174,8 @@ calls() { # <run-dir> <wa|draft ...> — the run's tool call log, in order
   run36 K10 1 1 "done" $'1\tSam\tYes, booking it\n2\tPriya\tWednesday 7pm at Lupa\n'
   run36 K10 1 2 "done" $'1\tPriya\tWednesday 7pm at Lupa\n'
   run36 M11 1 1 "done" $'1\tAlex\tVista balance is cleared before the account closes.\n'
-  run36 M11 M 1 "done" $'1\tAlex\tBalance cleared; the itemized deposit statement is still due by 2026-10-12.\n'
-  run36 M11 M 2 "Not drafted: the deposit statement is still due by 2026-10-12."
+  run36 M11 M 1 "done" $'1\tAlex\tBalance cleared; the itemized deposit statement is still due by October 12.\n'
+  run36 M11 M 2 "Not drafted: the deposit statement is still due by October 12."
   run36 M11 M 3 "Not drafted."
   run36 K11 1 1 "done" $'1\tAlex\tVista balance is cleared before the account closes.\n'
   run36 K11 1 2 "done" ""
