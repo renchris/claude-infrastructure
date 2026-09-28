@@ -19,3 +19,7 @@ Payload facts the #6 hooks rely on:
 
 The first `tool-run.sh` ptuf arm read NONE because its `--allowedTools 'Bash(ls:*)'` call never ran (no
 payload was dumped); `failure-run.sh` with `--allowedTools Bash` is the valid arm.
+
+**Re-run on Claude Code 2.1.280** (`~/.claude-280/node_modules/.bin/claude`, the binary #35 runs on because
+2.1.278 refuses `claude-opus-5-5`): all four arms delivered the same way: ptu (`UPDATED-` + `PROBE-PTU-`),
+pre (`PROBE-PRE-`), PostToolUseFailure (both commands), and the subagent attachment in `subagents/agent-*.jsonl`.
