@@ -14,10 +14,10 @@ setup() {
   TMP="$BATS_TEST_TMPDIR"
 }
 
-@test "selftest passes and exercises all four arms" {
+@test "selftest passes and exercises all eight arms" {
   run "$LINT" --selftest
   [ "$status" -eq 0 ] || false
-  [[ "$output" == *"PASS (4 arms)"* ]] || false
+  [[ "$output" == *"PASS (8 arms)"* ]] || false
 }
 
 @test "a well-formed hook is clean" {
@@ -237,6 +237,7 @@ _resident_fixture() {
   local d="$BATS_TEST_TMPDIR/radd"; mkdir -p "$d/.claude/rules"
   git -C "$d" init -q
   printf '# r\n\n- [A](../../docs/lessons/a.md) — rule a.\n' > "$d/.claude/rules/agent-operating-lessons.md"
+  # shellcheck disable=SC2016  # the backticks are markdown inline code, not a substitution
   printf '# s\n\n- [B](../../docs/lessons/b.md) — rule b.\n  - `c.md` — nested c.\n' \
     > "$d/.claude/rules/agent-operating-lessons-situational.md"
   git -C "$d" add -A; git -C "$d" -c user.email=t@t -c user.name=t commit -qm base
@@ -274,4 +275,113 @@ S_=.claude/rules/agent-operating-lessons-situational.md
   [ "$status" -eq 0 ] || false
   cd "$d"; run "$LINT" --file "$R_" --own-range HEAD~1..HEAD
   [ "$status" -eq 0 ] || false
+}
+
+# -- broken links (docs/research/truememory-2026-09-27.md §3.13) ---------------------------------
+# A `](target)` resolves beside the file, then in the owning memory store, and only a target that
+# resolves nowhere is a finding. The store is pinned with RULES_LINT_STORE_DIR except in the one
+# case that proves the slug derivation, which builds its store under the hermetic $HOME.
+_link_fixture() {  # _link_fixture <bullet-target> -> echoes the rules file path
+  mkdir -p "$TMP/lk/rules" "$TMP/lk/store"
+  : > "$TMP/lk/rules/near.md"; : > "$TMP/lk/store/stored.md"
+  printf '# r\n\n- [L](%s) — a hook that states its rule.\n' "$1" > "$TMP/lk/rules/f.md"
+  echo "$TMP/lk/rules/f.md"
+}
+
+@test "links: a target beside the file resolves" {
+  f="$(_link_fixture 'near.md#section')"
+  RULES_LINT_STORE_DIR="$TMP/lk/store" run "$LINT" --file "$f"
+  [ "$status" -eq 0 ] || false
+  [[ "$output" == *"links — checked=1 resolved-relative=1 resolved-in-store=0 broken=0"* ]] || false
+}
+
+@test "links: a bare target present only in the memory store resolves" {
+  f="$(_link_fixture 'stored.md')"
+  RULES_LINT_STORE_DIR="$TMP/lk/store" run "$LINT" --file "$f"
+  [ "$status" -eq 0 ] || false
+  [[ "$output" == *"links — checked=1 resolved-relative=0 resolved-in-store=1 broken=0"* ]] || false
+}
+
+@test "links: a target that resolves nowhere is REFUSED and its line is named" {
+  f="$(_link_fixture 'gone.md')"
+  RULES_LINT_STORE_DIR="$TMP/lk/store" run "$LINT" --file "$f"
+  [ "$status" -eq 1 ] || false
+  [[ "$output" == *"f.md:3: LINK UNRESOLVED — gone.md resolves neither beside this file nor in $TMP/lk/store."* ]] || false
+  [[ "$output" == *"broken-link=1"* ]] || false
+}
+
+@test "links: an unreadable store makes a store-only miss a non-verdict, never a finding" {
+  f="$(_link_fixture 'gone.md')"
+  RULES_LINT_STORE_DIR="$TMP/lk/absent" run "$LINT" --file "$f"
+  [ "$status" -eq 0 ] || false
+  [[ "$output" == *"1 link(s) resolve nowhere beside $f and the memory store ($TMP/lk/absent) is unreadable — non-verdict, not findings."* ]] || false
+  [[ "$output" != *"LINK UNRESOLVED"* ]] || false
+}
+
+@test "links: urls, mailto, pure anchors and the bodyless dot are not link-checked" {
+  mkdir -p "$TMP/lk/store"
+  printf '# r\n\nsee [u](https://example.com/x.md), [m](mailto:a@b), [a](#top).\n\n- [U](http://example.com/y.md) — rule.\n' > "$TMP/f.md"
+  RULES_LINT_STORE_DIR="$TMP/lk/store" run "$LINT" --file "$TMP/f.md"
+  [ "$status" -eq 0 ] || false
+  [[ "$output" == *"links — checked=0 "* ]] || false
+}
+
+@test "links: prose lines are scanned too, not only bullets" {
+  mkdir -p "$TMP/lk/store"
+  printf '# r\n\nheader prose links [x](missing.md).\n\n- [U](https://example.com) — rule.\n' > "$TMP/f.md"
+  RULES_LINT_STORE_DIR="$TMP/lk/store" run "$LINT" --file "$TMP/f.md"
+  [ "$status" -eq 1 ] || false
+  [[ "$output" == *"f.md:3: LINK UNRESOLVED — missing.md"* ]] || false
+}
+
+@test "links: the store is derived from the MAIN repo root, so a worktree resolves there" {
+  unset RULES_LINT_STORE_DIR
+  mkdir -p "$TMP/my.repo/.claude/rules"
+  printf '# r\n\n- [S](stored.md) — rule.\n' > "$TMP/my.repo/.claude/rules/f.md"
+  git -C "$TMP/my.repo" init -q
+  git -C "$TMP/my.repo" add -A
+  git -C "$TMP/my.repo" -c user.email=t@t -c user.name=t commit -qm base
+  git -C "$TMP/my.repo" worktree add -q "$TMP/wt" -b wt
+  root="$(cd "$TMP/my.repo" && pwd -P)"
+  store="$HOME/.claude/projects/$(printf '%s' "$root" | tr '/.' '--')/memory"
+  mkdir -p "$store"; : > "$store/stored.md"
+  run "$LINT" --file "$TMP/wt/.claude/rules/f.md"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"resolved-in-store=1 broken=0"* ]] || false
+}
+
+# A real two-commit repo: the base already carries a broken link (a memory-store deletion, say);
+# the head adds a second one. Only the ADDED line may block under --own-range.
+_link_own_fixture() {
+  local d="$TMP/lkown"; mkdir -p "$d/.claude/rules" "$TMP/lk/store"
+  git -C "$d" init -q
+  printf '# r\n\n- [Old](old-gone.md) — was on the base.\n' > "$d/.claude/rules/x.md"
+  git -C "$d" add -A; git -C "$d" -c user.email=t@t -c user.name=t commit -qm base
+  printf -- '- [New](new-gone.md) — added by this land.\n' >> "$d/.claude/rules/x.md"
+  git -C "$d" add -A; git -C "$d" -c user.email=t@t -c user.name=t commit -qm head
+  echo "$d"
+}
+
+@test "links: without --own-range every broken link blocks" {
+  d="$(_link_own_fixture)"
+  RULES_LINT_STORE_DIR="$TMP/lk/store" run "$LINT" --file "$d/.claude/rules/x.md"
+  [ "$status" -eq 1 ] || false
+  [[ "$output" == *"broken-link=2"* ]] || false
+}
+
+@test "links: --own-range blocks the ADDED broken link and notes the pre-existing one" {
+  d="$(_link_own_fixture)"
+  cd "$d"; RULES_LINT_STORE_DIR="$TMP/lk/store" run "$LINT" --file .claude/rules/x.md --own-range HEAD~1..HEAD
+  [ "$status" -eq 1 ] || false
+  [[ "$output" == *".claude/rules/x.md:4: LINK UNRESOLVED — new-gone.md"* ]] || false
+  [[ "$output" == *"advisory: .claude/rules/x.md:3: link-unresolved (pre-existing) — old-gone.md"* ]] || false
+  [[ "$output" == *"broken-link=1"* ]] || false
+}
+
+@test "links: --own-range with nothing added leaves a pre-existing break non-blocking" {
+  d="$(_link_own_fixture)"
+  cd "$d"; RULES_LINT_STORE_DIR="$TMP/lk/store" run "$LINT" --file .claude/rules/x.md --own-range HEAD..HEAD
+  [ "$status" -eq 0 ] || false
+  [[ "$output" == *"link-unresolved (pre-existing) — new-gone.md"* ]] || false
+  [[ "$output" != *"LINK UNRESOLVED"* ]] || false
 }

@@ -14,11 +14,14 @@
 # 1-3 lessons/day, so an unenforced convention re-inflates the file inside a quarter. Hence a gate,
 # at the land, where the act happens.
 #
-# TWO refusals, both mechanical:
+# THREE refusals, all mechanical:
 #   (1) a BODYLESS bullet — link target `.` — which is the exact shape the cleanup removed. It
 #       means a body was never written and the evidence is riding on the resident surface.
 #   (2) an OVER-BUDGET bullet. The budget is per-bullet and generous; a lesson that cannot state
 #       its rule inside it is carrying evidence that belongs in its body file.
+#   (3) a BROKEN LINK — a `](target)` that resolves neither beside the file nor in the owning
+#       memory store (~/.claude/projects/<slug>/memory; RULES_LINT_STORE_DIR overrides). A hook
+#       whose body cannot be opened is a rule with its evidence deleted.
 #
 # 🚨 IT REFUSES ON SHAPE, NEVER ON TOTAL SIZE. A whole-file byte ceiling would convict a land that
 # added one well-formed hook to a file someone else had already inflated — attribution by
@@ -82,6 +85,21 @@ added_lines() {
   return 0
 }
 
+# store_dir <dir> → prints ~/.claude/projects/<slug>/memory for the repo owning <dir>; rc 1 if none.
+# The slug comes from the MAIN repo root (dirname of the common git dir), so a linked worktree
+# resolves to the store its sessions actually write, with `/` and `.` mapped to `-` as the product
+# does. RULES_LINT_STORE_DIR overrides it (tests; an empty value means "no store").
+store_dir() {
+  if [ -n "${RULES_LINT_STORE_DIR+x}" ]; then
+    [ -n "$RULES_LINT_STORE_DIR" ] || return 1
+    printf '%s' "$RULES_LINT_STORE_DIR"; return 0
+  fi
+  local gd
+  gd=$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 1
+  [ -n "$gd" ] || return 1
+  printf '%s/.claude/projects/%s/memory' "$HOME" "$(dirname "$gd" | tr '/.' '--')"
+}
+
 scan() {  # scan <file> → 0 clean, 1 findings, 2 non-verdict
   local f="$1" n=0 bodyless=0 over=0 dup=0 line=0 adv=0
   [ -f "$f" ] || { echo "rules-hook-budget-lint: NON-VERDICT — no such file: $f" >&2; return 2; }
@@ -138,10 +156,48 @@ scan() {  # scan <file> → 0 clean, 1 findings, 2 non-verdict
     echo "rules-hook-budget-lint: NON-VERDICT — parsed 0 bullets in $f; the anchor no longer matches the file." >&2
     return 2
   fi
+  # BROKEN LINKS (§3.13 of docs/research/truememory-2026-09-27.md). Every `](target)` on every
+  # line, not only bullets: success must mean the whole file was scanned, never a list of known
+  # links. A target resolves (a) beside this file, then (b) in the owning memory store, because the
+  # rotor routes lessons VERBATIM (`cc-memory-rotate`) and a bare `x.md` there names a store file.
+  # Rewriting those links would break the rotor's restore contract and idempotency, so resolution
+  # learns the store instead. Own-scoped like the other per-line arms: a memory-store deletion
+  # must not red an unrelated land, so a pre-existing break is a note and only an ADDED one blocks.
+  # An unreadable store cannot say "absent", so a store-only miss is then a non-verdict, never a
+  # finding — the same fail-closed polarity as the diff read above.
+  local store="" store_ok=0 lk_n=0 lk_rel=0 lk_store=0 broken=0 lk_nv=0 need_store=0 dir lno tgt
+  dir=$(dirname "$f")
+  store=$(store_dir "$dir") && [ -d "$store" ] && [ -r "$store" ] && [ -x "$store" ] && store_ok=1
+  while IFS=$'\t' read -r lno tgt; do
+    [ -n "$lno" ] || continue
+    tgt=${tgt%% *}; tgt=${tgt#<}; tgt=${tgt%>}
+    case "$tgt" in ''|.|'#'*|http://*|https://*|mailto:*) continue ;; esac
+    tgt=${tgt%%#*}
+    lk_n=$((lk_n+1)); need_store=0
+    case "$tgt" in
+      /*) [ -e "$tgt" ] && { lk_rel=$((lk_rel+1)); continue; } ;;
+      \~/*) [ -e "$HOME/${tgt#\~/}" ] && { lk_rel=$((lk_rel+1)); continue; } ;;
+      *) [ -e "$dir/$tgt" ] && { lk_rel=$((lk_rel+1)); continue; }
+         need_store=1
+         [ "$store_ok" = 1 ] && [ -e "$store/$tgt" ] && { lk_store=$((lk_store+1)); continue; } ;;
+    esac
+    if [ "$need_store" = 1 ] && [ "$store_ok" != 1 ]; then lk_nv=$((lk_nv+1)); continue; fi
+    if _mine "$lno"; then
+      broken=$((broken+1))
+      printf '%s:%d: LINK UNRESOLVED — %s resolves neither beside this file nor in %s.\n' "$f" "$lno" "$tgt" "$store"
+    else
+      adv=$((adv+1))
+      printf 'advisory: %s:%d: link-unresolved (pre-existing) — %s resolves neither beside this file nor in the store.\n' "$f" "$lno" "$tgt"
+    fi
+  done < <(awk '{ s = $0; while (match(s, /\]\([^)]*\)/)) { print NR "\t" substr(s, RSTART+2, RLENGTH-3); s = substr(s, RSTART+RLENGTH) } }' "$f")
+  printf 'rules-hook-budget-lint: links — checked=%d resolved-relative=%d resolved-in-store=%d broken=%d\n' \
+    "$lk_n" "$lk_rel" "$lk_store" "$broken" >&2
+  [ "$lk_nv" -gt 0 ] && printf 'rules-hook-budget-lint: %d link(s) resolve nowhere beside %s and the memory store (%s) is unreadable — non-verdict, not findings.\n' \
+    "$lk_nv" "$f" "${store:-unknown}" >&2
   [ "$adv" -gt 0 ] && printf 'rules-hook-budget-lint: %d advisory finding(s) on lines this land did not add — not blocking.\n' "$adv" >&2
-  if [ $((bodyless+over+dup)) -gt 0 ]; then
-    printf 'rules-hook-budget-lint: %d finding(s) over %d bullet(s) — bodyless=%d over-budget=%d duplicate=%d\n' \
-      "$((bodyless+over+dup))" "$n" "$bodyless" "$over" "$dup" >&2
+  if [ $((bodyless+over+dup+broken)) -gt 0 ]; then
+    printf 'rules-hook-budget-lint: %d finding(s) over %d bullet(s) — bodyless=%d over-budget=%d duplicate=%d broken-link=%d\n' \
+      "$((bodyless+over+dup+broken))" "$n" "$bodyless" "$over" "$dup" "$broken" >&2
     return 1
   fi
   printf 'rules-hook-budget-lint: clean — %d bullet(s), all bodied and within %d chars\n' "$n" "$BUDGET" >&2
@@ -149,12 +205,16 @@ scan() {  # scan <file> → 0 clean, 1 findings, 2 non-verdict
 }
 
 # ── --selftest: the detector must DISCRIMINATE, or its clean verdict means nothing ───────────────
-# Three arms. A clean fixture must pass, and EACH refusal must fire on its own — a selftest that
+# Eight arms. A clean fixture must pass, and EACH refusal must fire on its own — a selftest that
 # only proves the red case cannot tell a working lint from one that refuses everything.
 selftest() {
   local d rc fail=0
   d=$(mktemp -d) || { echo "selftest: NON-VERDICT — mktemp failed" >&2; return 2; }
   trap 'rm -rf "$d"' RETURN
+  # The first four arms judge shape only: a store that does not exist keeps their placeholder
+  # link targets non-verdict, so the caller's environment cannot flip them.
+  local RULES_LINT_STORE_DIR="$d/no-store"
+  export RULES_LINT_STORE_DIR
 
   printf '# rules\n\n- [Ok](../../docs/lessons/a.md) — a hook that states its rule inside the budget.\n' > "$d/clean.md"
   scan "$d/clean.md" >/dev/null 2>&1; rc=$?
@@ -173,7 +233,25 @@ selftest() {
   scan "$d/nobullets.md" >/dev/null 2>&1; rc=$?
   [ "$rc" -eq 2 ] || { echo "selftest: no-bullet fixture returned $rc, want 2 (non-verdict)" >&2; fail=1; }
 
-  if [ "$fail" -eq 0 ]; then echo "rules-hook-budget-lint --selftest: PASS (4 arms)" >&2; return 0; fi
+  # Link arms: one resolves beside the file, one only in the store, one nowhere, and the same
+  # nowhere-link against an unreadable store, which must stay a non-verdict rather than a finding.
+  mkdir -p "$d/lk/rules" "$d/lk/store"; : > "$d/lk/rules/near.md"; : > "$d/lk/store/stored.md"
+  printf '# rules\n\n- [Near](near.md#frag) — resolves beside the file.\n' > "$d/lk/rules/rel.md"
+  RULES_LINT_STORE_DIR="$d/lk/store" scan "$d/lk/rules/rel.md" >/dev/null 2>&1; rc=$?
+  [ "$rc" -eq 0 ] || { echo "selftest: relative-link fixture returned $rc, want 0" >&2; fail=1; }
+
+  printf '# rules\n\n- [Stored](stored.md) — resolves only in the memory store.\n' > "$d/lk/rules/store.md"
+  RULES_LINT_STORE_DIR="$d/lk/store" scan "$d/lk/rules/store.md" >/dev/null 2>&1; rc=$?
+  [ "$rc" -eq 0 ] || { echo "selftest: store-link fixture returned $rc, want 0" >&2; fail=1; }
+
+  printf '# rules\n\n- [Gone](gone.md) — resolves nowhere.\n' > "$d/lk/rules/broken.md"
+  RULES_LINT_STORE_DIR="$d/lk/store" scan "$d/lk/rules/broken.md" >/dev/null 2>&1; rc=$?
+  [ "$rc" -eq 1 ] || { echo "selftest: broken-link fixture returned $rc, want 1" >&2; fail=1; }
+
+  RULES_LINT_STORE_DIR="$d/lk/absent-store" scan "$d/lk/rules/broken.md" >/dev/null 2>&1; rc=$?
+  [ "$rc" -eq 0 ] || { echo "selftest: unreadable-store fixture returned $rc, want 0 (no finding)" >&2; fail=1; }
+
+  if [ "$fail" -eq 0 ]; then echo "rules-hook-budget-lint --selftest: PASS (8 arms)" >&2; return 0; fi
   echo "rules-hook-budget-lint --selftest: FAIL" >&2; return 1
 }
 

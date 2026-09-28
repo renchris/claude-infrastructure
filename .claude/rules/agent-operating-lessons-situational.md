@@ -1,5 +1,5 @@
 # Situational project rules — lessons that fire on a specific kind of work, grep them for the symptom
-Split verbatim from `agent-operating-lessons.md` on 2026-09-23 (docs/research/token-efficiency-2026-09-23/audit/C7.labels.md); same one-hook-per-lesson convention and budget lint, and new lessons are appended here.
+Split verbatim from `agent-operating-lessons.md` on 2026-09-23 (docs/research/token-efficiency-2026-09-23/audit/C7.labels.md); same one-hook-per-lesson convention and budget lint, and new lessons are appended here. Bare `x.md` links in this file resolve in this project's memory store dir (`~/.claude/projects/<slug>/memory`), not beside this file.
 
 <!-- routed 2026-09-06T02:52:09Z by cc-memory-rotate: 5 index line(s) moved VERBATIM off ~/.claude/projects/-Users-chrisren-Development-claude-infrastructure/memory/MEMORY.md to hold its loader cap (index 26406 B, target 22289). Both surfaces load unprompted, so nothing was demoted and nothing was shortened; restore = paste the line back. -->
 - [Append atomicity ends at the buffer](../../docs/lessons/append-atomicity-ends-at-the-stdio-buffer.md) — a record longer than the writer's stdio buffer goes out as several write() calls, so O_APPEND is no longer atomic and a concurrent appender splices into it; bound record SIZE at the writer and count parse failures.
