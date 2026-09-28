@@ -663,7 +663,6 @@ handoff-fire-tab-window-typing.bats
 handoff-fire-validate.bats
 handoff-selfclose.bats
 handoff-splitright.bats
-idl-abstain-alarm.bats
 install-wire-hooks.bats
 kimi-frontend-ab.bats
 land-gate-cas.bats
