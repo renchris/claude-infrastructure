@@ -319,6 +319,57 @@ if [ "$MCP_MODE" = "--refresh-mcp-cache" ]; then
   exit 0
 fi
 
+# === MEMORY STORE PRE-IMAGE (2026-09-27, local-store-history) ===
+# Snapshot this session's memory store into its local history (scripts/memory-store-snapshot.sh)
+# BEFORE the session can touch it. Our own actuators snapshot inside their locks, but Claude Code's
+# background extraction passes can Edit, Write and `rm -f` any store file without calling them, and
+# have no settings opt-out — this is the only pre-image those writes get. An unchanged store is a
+# no-op commit-wise, so doing it every session costs one detached git pass.
+# DETACHED (scripts/lib/detach.sh: own session, stdin /dev/null, output to the log), so it adds no
+# latency and can neither fail this hook nor hold its stdout pipe open. Store resolution and the IDL
+# row (`session-start:memory-snapshot`) happen in the child. Both paths are DEREFERENCED from this
+# file: invoked live it is a per-file symlink under ~/.claude/hooks, where a newly added scripts/
+# file has no mirror until a deploy links it. SS_MEMORY_SNAPSHOT=off disables it.
+_ss_deref() {
+  local p="$1" t n=0
+  readlink -f "$p" 2>/dev/null && return 0
+  while [ -L "$p" ] && [ "$n" -lt 20 ]; do
+    t="$(readlink "$p")"
+    case "$t" in /*) p="$t" ;; *) p="$(dirname "$p")/$t" ;; esac
+    n=$(( n + 1 ))
+  done
+  printf '%s\n' "$p"
+}
+if [ "${SS_MEMORY_SNAPSHOT:-on}" != off ]; then
+  _ss_payload=""
+  # Bounded read: the harness closes stdin after the payload, but a caller that leaves it open must
+  # cost at most a second, never a hung session start.
+  if [ ! -t 0 ]; then IFS= read -r -d '' -t 1 _ss_payload || true; fi
+  _ss_self="$(_ss_deref "${BASH_SOURCE[0]}")"
+  _ss_repo="$(cd "$(dirname "$_ss_self")/.." 2>/dev/null && pwd)" || _ss_repo=""
+  _ss_snap="$_ss_repo/scripts/memory-store-snapshot.sh"
+  _ss_det="$_ss_repo/scripts/lib/detach.sh"
+  _ss_mlog="$HOME/.claude/state/memory-snapshot.log"
+  mkdir -p "$HOME/.claude/state" 2>/dev/null || true
+  if [ -r "$_ss_snap" ] && [ -r "$_ss_det" ]; then
+    # shellcheck source=../scripts/lib/detach.sh
+    # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+    . "$_ss_det"
+    CC_MSS_PAYLOAD="$_ss_payload" CC_MSS_CWD="$PWD" \
+      detach "$_ss_mlog" /bin/bash "$_ss_snap" --session-start >/dev/null 2>&1 || true
+  else
+    # Could not even start: say so under the branch's own name, so a missing script reads as
+    # BLIND in the log rather than as a quiet session with nothing to snapshot.
+    printf '%s session-start:memory-snapshot verdict=error store=- sha=- reason=snapshot-missing gitdir=-\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$_ss_mlog" 2>/dev/null || true
+    if command -v jq >/dev/null 2>&1 && mkdir -p "$HOME/.claude/autonomy" 2>/dev/null; then
+      jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        '{ts:$ts,hook:"session-start:memory-snapshot",sid:"?",disposition:"abstained",reason:"snapshot-missing"}' \
+        >>"${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}" 2>/dev/null || true
+    fi
+  fi
+fi
+
 # ── Serve: fresh cache → stale cache + refresh → inline probe ─────────────────────────────────
 _MCP_SERVED_FROM_CACHE=0
 if _mcp_cache_read; then

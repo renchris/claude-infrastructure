@@ -390,6 +390,36 @@ trap '_ccmr_cleanup; exit 143' TERM
 trap '_ccmr_cleanup; exit 130' INT
 trap '_ccmr_cleanup; exit 129' HUP
 
+# ── PRE-IMAGE: local store history (scripts/memory-store-snapshot.sh) ─────────────────────────
+# Called once, just before this run's FIRST write, and INSIDE the lock above, so the commit it
+# makes is exactly the store as it stood before this rotor touched it — the undo the drain and
+# rotation paths never had. It is advisory by construction: its output never reaches our stdout
+# (callers parse OUR verdict line), and a missing, failing or garbage-printing snapshot changes
+# neither the verdict nor the exit code. The path is DEREFERENCED first: invoked live this file is
+# a per-file symlink under ~/.claude/bin, where a sibling scripts/ file has no mirror until a
+# deploy links it (same load-bearing reason as hooks/backup-before-write.sh's _mib_deref).
+_CCMR_SNAPPED=0
+_ccmr_snapshot() { # $1=which mutation path is about to write
+  [ "$_CCMR_SNAPPED" -eq 0 ] || return 0
+  _CCMR_SNAPPED=1
+  local _p="${BASH_SOURCE[0]}" _t _n=0 _s _v=""
+  if _t="$(readlink -f "$_p" 2>/dev/null)" && [ -n "$_t" ]; then
+    _p="$_t"
+  else
+    while [ -L "$_p" ] && [ "$_n" -lt 20 ]; do
+      _t="$(readlink "$_p")"
+      case "$_t" in /*) _p="$_t" ;; *) _p="$(dirname "$_p")/$_t" ;; esac
+      _n=$(( _n + 1 ))
+    done
+  fi
+  _s="$(dirname "$_p")/../scripts/memory-store-snapshot.sh"
+  if [ -r "$_s" ]; then
+    _v="$(bash "$_s" "$DIR" "cc-memory-rotate:$1" 2>/dev/null | head -n1)" || _v=""
+  fi
+  vlog "snapshot: ${_v:-no verdict ($_s)}"
+  return 0
+}
+
 TAB=$(printf '\t')
 # A literal, NOT $(printf '\n'): command substitution strips trailing newlines, so that spelling
 # yields the empty string and every HUB_TABLE lookup below would match at offset 0.
@@ -765,6 +795,8 @@ EOF
       "$ENTRY_LIMIT" "$D_CAND" "$D_N" "$D_FILES" "$D_DESTS"
     exit 0
   fi
+
+  _ccmr_snapshot drain-oversized
 
   # ── Destination first, verified, idempotent — then the index ────────────────────────────────
   # Same ordering and the same reason as the cold write below: a crash between the two leaves at
@@ -1405,6 +1437,10 @@ EOF
       "$MOVED" "$STAGE2" "$SIZE" "$PROJ" "$NLINES" "$PROJ_L"
     exit 0
   fi
+
+  # Once per run, not per attempt: a contended retry re-enters here after this pass may already
+  # have written cold/rules, and the pre-image that matters is the store before the FIRST pass.
+  _ccmr_snapshot rotate
 
   # ── ROUTE what may be routed; COLD is now the REMAINDER, not the destination ───────────────
   #

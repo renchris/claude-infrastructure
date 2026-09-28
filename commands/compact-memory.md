@@ -61,6 +61,15 @@ minus the autonomous fork.
   **Print the resolved path and confirm before editing.**
 - Default is a DRY-RUN report. Apply the SAFE-AUTO half only when invoked with `--apply-safe`.
   PROPOSE-ONLY items are NEVER auto-applied — present diffs and get per-item approval.
+- **Snapshot before the first write** (either half):
+  `~/.claude/scripts/memory-store-snapshot.sh <memory-dir> compact-memory`. It commits the store's
+  current state to a local, never-pushed history kept OUTSIDE the store
+  (`~/.local/state/cc-memory-history/<slug>.git`), prints one `verdict=` line, and never fails —
+  `unchanged` is fine, anything else is worth one line in the report. To undo:
+  `memory-store-snapshot.sh --list <memory-dir>` names the gitdir and the snapshots, and
+  `git --git-dir=<gitdir> show <sha>:<file>` prints a file as it was. This widens what is
+  reversible; it does **not** relax `MEMORY_KNOWLEDGE_V2.md` R2 — confirm-before-editing and
+  PROPOSE-ONLY's per-item approval stand unchanged.
 
 ## SAFE-AUTO (mechanical, reversible — only with `--apply-safe`)
 1. Scan the index for entries that are CLOSED with **no pending tail** — marked RESOLVED / DONE /
