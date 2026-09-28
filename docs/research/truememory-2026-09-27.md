@@ -48,7 +48,8 @@ Four findings support this.
    - Fielded SQLite FTS5 over the whole store reaches R@5 0.88 in about 3 ms, standard library only.
    - TM's own hybrid scores 0.96, but so does a 60-line FTS5+model2vec script. TM's reranked path
      costs about 23 s and 1.46 GB per query.
-   - TM's per-prompt injection emits a top-level `additionalContext` that Claude Code 2.1.278 ignores.
+   - TM's session-start and per-prompt injection emits a top-level `additionalContext` that Claude Code drops
+     (MEASURED-run on 2.1.114 and 2.1.280, §6).
    - **So the levers are push, not pull:** symptom recall on tool output (#6), the write-time
      neighbour advisory (#10), prompt recall or native prefetch (#23), and capture of rulings (#24, #26).
      The FTS5 index (#4) is their shared substrate, not the remedy on its own.
@@ -1284,7 +1285,7 @@ The launcher runs 2.1.280. Current state was checked read-only.
 | Gate AUC 0.788 / 0.730 / 0.816 | **Unverifiable** | Sweeps gitignored, harness skips, maintainer's #280 says "possible hallucinations". The gate is disabled in the benchmarks. |
 | "Superseded, not deleted" (`ingest/dedup.py:11`) | **False** | The code overwrites in place (`storage.py:1178`). |
 | Contradiction resolution | **Unproven** | Empty in production until #455/#580. 1/7 phrasings detected. #716: 6/6 → 0/6 with a stronger judge. |
-| Per-prompt recall in Claude Code | **Probably not delivered** | Top-level `additionalContext` is ignored by CC 2.1.278 (static). No test checks what CC consumes. |
+| Per-prompt recall in Claude Code | **Not delivered (MEASURED-run)** | Top-level `additionalContext` is dropped; only `hookSpecificOutput.additionalContext` reaches the model. Live probe 2026-09-27, `claude -p` with a throwaway hook printing a marker token: top-level form read `NONE`, nested form returned the token, for both UserPromptSubmit and SessionStart, on 2.1.114 and 2.1.280. TM's hooks print the top-level form (`session_start.py:752`, `user_prompt_submit.py:831`). No TM test checks what CC consumes. |
 | ~80 MB per session | **True only while the daemon is up** | 0.7 GB and 8-17 s per recall hook once it idle-exits. |
 | Robustness engineering (flock, SAVEPOINT swap, deadline, quarantine) | **Real and tested** | 40 lock/SAVEPOINT tests pass; kernel-released flock confirmed by probe. The weakness: removing the flock fails only 1 of 72 tests. |
 | Issue tracker | **High value as a failure catalogue** | 383 of 393 issues are owner-filed agent audits, with little external usage signal. The failure classes themselves are real and transferable: silent no-ops, benchmark ≠ product, producer-only tests. |
