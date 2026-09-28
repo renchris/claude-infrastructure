@@ -13,6 +13,9 @@
 # The last trunk commit before the shadow existed. Pinned, never a moving ref: a control replayed
 # from origin/main compares the change to itself the moment it lands.
 PRE_SHA=abaf1e990
+# The one sentence the #10 rewording added after PRE_SHA; the pre-change control strips it so it
+# still compares the shadow alone.
+NUDGE10=' '"Before writing, run cc-memory-search <terms> to find what is already stored (fall back to grep MEMORY.md), and create a new topic file with Write, not Bash, so the write hook can list its nearest existing files."
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -57,7 +60,8 @@ ruling_n() { jq -s '[.[] | select(.hook == "memory-nudge:ruling")] | length' "$C
   git -C "$REPO" show "$PRE_SHA:hooks/memory-nudge.sh" > "$pre/memory-nudge.sh"
   ln -s "$REPO/hooks/lib" "$pre/lib"
   MEMORY_NUDGE_STATE_DIR="$BATS_TEST_TMPDIR/st-c" run_hook "$pre/memory-nudge.sh" s-a "$p"
-  [ "$OUT" = "$a" ]
+  printf '%s' "$a" | grep -qF -- "$NUDGE10"
+  [ "$OUT" = "${a/"$NUDGE10"/}" ]
 }
 
 @test "restatement: 'remember: always run the linter'" {
@@ -198,4 +202,14 @@ alarm_run() {
   [ "$(cat "$BATS_TEST_TMPDIR/den/nudge-s-den.count")" = "30" ]
   alarm_run "$idl" "$nd"
   printf '%s' "$output" | grep -q 'OK  *memory-nudge:ruling  *rows=30  *D=30 '
+}
+
+@test "#10: the nudge points new topic files at cc-memory-search and at Write, not Bash" {
+  export MEMORY_NUDGE_INTERVAL=1
+  run_hook "$HOOK" s-10 "plain question"
+  [ "$(printf '%s' "$OUT" | jq -s 'length')" = "1" ]
+  printf '%s' "$OUT" | jq -r '.hookSpecificOutput.additionalContext' > "$BATS_TEST_TMPDIR/ctx"
+  grep -qF 'run cc-memory-search <terms>' "$BATS_TEST_TMPDIR/ctx"
+  grep -qF 'fall back to grep MEMORY.md' "$BATS_TEST_TMPDIR/ctx"
+  grep -qF 'with Write, not Bash' "$BATS_TEST_TMPDIR/ctx"
 }
