@@ -613,6 +613,9 @@ inv_setup() {
 }
 
 @test "inventory: silent when nothing is pending" {
+  # selfclose_inventory_warn calls transcript_for_sid since 89eba66e0; without it extracted too, the
+  # subject prints "command not found" and this test reads that as un-silence.
+  eval "$(sed -n '/^transcript_for_sid() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^selfclose_inventory_warn() {/,/^}/p' "$HF")"
   mailbox_pending_count() { echo 0; }
   FIRED_DIR="$BATS_TEST_TMPDIR/fired-empty"; mkdir -p "$FIRED_DIR"
