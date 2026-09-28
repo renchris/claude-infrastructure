@@ -366,11 +366,11 @@ badline() { printf '%s\n' "$1" >> "$IDL"; }
 # reg_alarm <registry|""> <session-index-log> <nudge-dirs> [script] — the sweep with every
 # registry denominator pointed at a fixture.
 reg_alarm() {
-  local reg=()
-  [ -z "$1" ] || reg=(CC_EXPECTED_FIRES="$1")
+  local regenv=()
+  [ -z "$1" ] || regenv=(CC_EXPECTED_FIRES="$1")
   env CC_IDL="$IDL" CC_ABSTAIN_NOW="$NOW" CC_ABSTAIN_LOG="$LOG" CC_ABSTAIN_NMIN=10 CC_ABSTAIN_CENSUS=0 \
       MEMORY_NUDGE_INTERVAL=12 CC_EXPECTED_SESSION_INDEX_LOG="$2" CC_EXPECTED_NUDGE_STATE_DIRS="$3" \
-      ${reg[@]+"${reg[@]}"} "${4:-$S}" --run
+      ${regenv[@]+"${regenv[@]}"} "${4:-$S}" --run
 }
 indexed_lines() { # <log> <n> — n SessionEnd lines a minute before NOW, in the log's local-time stamp
   local i lt
