@@ -17,6 +17,11 @@ session re-derives them.
 only 2-3 of 14 real misses were retrieval misses. The open question is whether the agent USES the
 right lesson when it matters, which only a task-level A/B can answer.
 
+**Scope (grown, 2026-09-27, operator: "maximal extraction … 100.00/100.00"):** +Wave D (build-later
+#15-#22, each behind its entry condition) · +Wave E (experiments #4b, #23-#27, each ending in a
+measured adopt-or-drop verdict) · +cross-cutting rules X6-X8 · +the stack inventory that defines
+#35's arm 1. Rejections #28-#34 stay rejected; reopening one needs its §4 reopen condition met.
+
 **Source of truth for designs:** the research doc. This plan does not restate designs. It owns the
 order, ownership, locus and status. Per-item sections point at `§3.x` and add only what the doc
 does not hold.
@@ -32,6 +37,8 @@ does not hold.
 | A · correctness + safety | **S** (dispatched session `tma-wave-a`, leads its own teammates) | #1, #2, #3, #8, #11 + autoDream-pin migration + rejection record | all independent of each other; #3 gates #6/#10/#14 in B and C |
 | B · substrate + push consumers | **S** (`tma-wave-b`) | #4, #5, #6 (+#7 as its acceptance criterion), #10, #26 in shadow mode, then #35 delivery benchmark | #6 and #10 read #3's registry (X5); #5's retriever arm needs #4 |
 | C · the rest of build-now | **S** (`tma-wave-c`) | #9, #12, #13, #14 | #14's sweep block needs #2; #12 edits the same instruction lines #10 edits |
+| D · build-later | **S** (`tma-wave-d`) | #15-#22, each behind its entry condition | every entry condition is a Wave A-C deliverable |
+| E · experiments | **S** (`tma-wave-e`) | #4b, #23, #24, #25, #26 verdict, #27 | each needs #4/#5 (and #14 for #24-25) to measure against |
 
 Waves are **serial**: they share `hooks/memory-nudge.sh`, `bin/cc-memory-rotate`,
 `scripts/memory-fleet-sweep.sh`, `hooks/lib/session-index-helpers.sh` and the two CLAUDE variants.
@@ -125,6 +132,10 @@ If it is ever missing, re-derive it per `docs/research/truememory-2026-09-27/gap
 
 ## After this program — build-later and experiments (not in the frozen DoD)
 
+*(Superseded 2026-09-27 by Waves D and E below: the operator asked for maximal extraction, so
+these items are now in the DoD, each behind its entry condition. The table is kept as the original
+record.)*
+
 | # | Item | Starts when |
 |---|---|---|
 | 15 | read-ledger | #2 P0+P0b landed |
@@ -135,7 +146,69 @@ If it is ever missing, re-derive it per `docs/research/truememory-2026-09-27/gap
 | 21, 22 | claim-queue spec; deny-only capture ledger | a background worker is approved |
 | 23-27 | experiments | #4 and #5 exist (23, 27); #14 (24, 25); #26 already in B |
 
+## Wave D — build-later items (S · `tma-wave-d`) — BLOCKED on Waves A-C
+
+Each item's design is the research doc section named. "Done" = landed, gate-green, own suite passes.
+
+| # | Item | Design | Entry condition | Done when |
+|---|---|---|---|---|
+| 15 | read-ledger (protects entries in the rotor's rank; never selects for eviction) | §3.15 | #2 P0+P0b landed | ledger fills hourly; rotor test shows a read entry is kept |
+| 16 | consolidation families at compaction (propose-only, mutual top-3) | §3.16 | #4 and #10 landed | `/compact-memory` step 7b proposes families; nothing merges without a human |
+| 17 | merge-losslessness rule (every hard token survives or is recorded superseded) | §3.17 | with #16 | `cc-memory-dropped-token-audit --pair` flags a lossy merge in a fixture |
+| 18 | episodic-session-recall (narrow cue line pointing at claude-search) | §3.18 | #2 landed AND the sweep indexes `*/workflows/wf_*.json` | the gap-2 episodic misses resolve through claude-search in a replay |
+| 19 | rotor fd-lock (kernel-released lock, not 180 s age reclaim) | §3.19 | any time | a killed rotor leaves no lock; test proves it |
+| 20 | report-only frontmatter schema listing | §3.20-3.22 | any time | `memory-fleet-sweep --schema` lists violations, writes nothing |
+| 21, 22 | claim-queue spec; deny-only capture ledger | §3.20-3.22 | a background memory worker is approved (Wave E #24 verdict) | spec recorded in `MEMORY_KNOWLEDGE_V2.md`; ledger only if the worker is approved |
+
+## Wave E — experiments, each ending in a measured adopt-or-drop verdict (S · `tma-wave-e`)
+
+An experiment is done when its verdict and numbers are appended to the research doc §5, not when it
+ships. Adopted ones become Wave-D-style build items; dropped ones get a rejection row.
+
+| # | Experiment | Design | Entry condition | Verdict rule |
+|---|---|---|---|---|
+| 4b | FTS5 + model2vec (potion) fusion in `cc-memory-search` | §3.4 stage 2 | #4 and #5 landed | adopt if #5 shows a gain on queries NOT written by an agent (the study's 0.78 → 0.90 R@1 gain, 6 wins to 0, p = 0.031, was on agent-written queries). model2vec needs numpy only, no torch, so R14's hook-path rule holds |
+| 23 | per-prompt pointer recall, shadow mode first | §3.23-3.27 | #4, #5, #7 landed | adopt if shadow logs show top-1 relevance high enough on real prompts; the study measured raw bm25 floors as length-confounded |
+| 24 | candidate extractor, `--dry-run` Stage 0 only | §3.23-3.27 | #14 landed | adopt only if Stage 0 output passes the anti-capture classes; re-target Stage-0 gold on operator rulings (4 of the 14 real misses) |
+| 25 | transcript capture scan, dry-run verdicts | §3.23-3.27 | #24 passes Stage 0 | as #24 |
+| 26 | ruling-shaped operator text nudge | §3.23-3.27 | already shadowing in Wave B | adopt if the shadow log catches rulings with few false fires (the study's regex: 5 hits, 0 standing rules; unanchored "remember": 11 hits, about 8 rules) |
+| 27 | provenance-and-verification tier (prose receipt) | §3.23-3.27 | #4, #5 landed | adopt only with a delivery mechanism other than prose (X7) |
+
+## Cross-cutting rules learned 2026-09-27 (X6-X8, bind on Waves B-E)
+
+These extend the research doc's X1-X5 (§2) with what the session after the study measured.
+
+- **X6 · Prove delivery live, not by shape.** Any hook that injects text must, before it counts as
+  done, pass a live delivery probe: the pattern in
+  `docs/research/truememory-2026-09-27/hook-probe/run.sh` (a marker token, `claude -p`, the model
+  asked whether it sees it), run on the current Claude Code binary. Why: TrueMemory's injection
+  looked correct and was dropped by Claude Code; only a live probe showed it. The output must be
+  `{"hookSpecificOutput": {"hookEventName": "<event>", "additionalContext": …}}`.
+- **X7 · A prose instruction is not a delivery mechanism.** No item may count "a line in CLAUDE.md or
+  rules telling the model to search/check X" as its consumer. Measured: 0 of 54 and 2 of 64 uptake.
+  Delivery must be pushed by a hook at the moment of need (tool failure, file write, prompt).
+- **X8 · No artifact lives only in `/tmp`.** Eval corpora, gold sets, harnesses and results go to the
+  repo (if not private) or `~/.claude/autonomy/` (if private) the moment they exist. The study nearly
+  lost its harness and gold set to `/tmp`; `/private/tmp` is wiped at boot.
+
+## Stack inventory — what is Claude Code's and what is ours (the #35 arm-1 baseline)
+
+- **Claude Code built-in:** per-project memory folder; `MEMORY.md` index loaded every session,
+  capped at 25,000 UTF-16 chars / 200 lines after frontmatter and comment stripping (newest entries
+  dropped silently past the cap); the built-in memory-writing instruction (types user / feedback /
+  project / reference, `[[links]]`); `CLAUDE.md` and `.claude/rules/*.md` loading; two flag-gated
+  background writers (extractMemories, autoDream), off today; `autoMemoryDirectory` setting.
+- **Ours:** the anti-capture rules; `hooks/memory-nudge.sh`, `hooks/memory-index-drain.sh`;
+  `bin/cc-memory-rotate` (cold tier) and `/compact-memory`; `hooks/lib/memory-index-measure.sh`;
+  `docs/lessons/` + rules-file hooks + `scripts/rules-hook-budget-lint.sh`;
+  `scripts/worktree-memory-link.sh` and the per-account symlink mirror (one physical store);
+  `hooks/harvest-skill-end.sh`; the session index (`hooks/session-index-*.sh`, `claude-search`, the
+  `claude-session-search` repo); `scripts/memory-fleet-sweep.sh`, `bin/cc-memory-dropped-token-audit`.
+- **#35 arm 1** therefore runs with a config dir that has none of "ours": no hooks, no rules files,
+  the stock memory instruction, and a frozen copy of the store via `autoMemoryDirectory`.
+
 ## Status log
 
 - 2026-09-27 — Research landed (`docs/research/truememory-2026-09-27.md`). Plan created. Wave A next.
 - 2026-09-27 — Wave A fired (pane `tma-wave-a`, account next). Hook-delivery finding re-measured live (`9639822a7`). #35 delivery benchmark added to Wave B; A/B harness preserved under `docs/research/truememory-2026-09-27/ab-harness/`.
+- 2026-09-27 — Scope grown to maximal extraction: Waves D (build-later) and E (experiments with verdict rules), X6-X8 learned in the post-study session (live delivery probe, prose is not delivery, nothing only in /tmp), and the built-in-vs-ours stack inventory. Upstream TrueMemory fix kit: `docs/research/truememory-2026-09-27/UPSTREAM_FIX_KIT.md`.
