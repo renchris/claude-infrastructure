@@ -118,6 +118,12 @@ failed call `settle` directly, which skips the grace.
 | lr-reset-poller tick | — | — | `cc-resume-debt sweep` every tick (backstop if a watcher died) |
 | operator-readout | — | — | itemised `⚠ N stranded session(s)` line with each `▶ cc-do <id>` |
 
+**Why the debt is opened INSIDE handoff-fire, not in each caller:** the recon critic found two
+more unattended `--recycle` callers nobody awaits — `hooks/waiting-recycle.sh:1470` (PostToolUse,
+fires on a `live-*` sentinel) and `scripts/drain-recycle-fire.sh:377` (drain chains). Every such
+caller fails exactly like pane 405 (the desk role file still names dead pane 672, so every
+`hf_alarm` push is refused). Opening at the `/exit` point covers all present and future callers.
+
 Not a close→resume path (checked, no change): lr-handoff REPLACE-in-place (verifies the successor
 before self-close), lr-transplant, lr-fire-resume / reso-resume-one (engines, called inside a debt).
 
