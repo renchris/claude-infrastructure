@@ -95,6 +95,9 @@ used as a look (≤ 0.02, and only to dither).
    (`.git/info/exclude`: `/brag-output*/`), never commit renders.
 2. **References.** One read-only research subagent per reference (the operator's links, plus the named brands);
    each writes `research/<slot>/notes.md` + `contact.png` with measured values. Read the sheets, not the pages.
+   - **A reference FILM from the operator** ("design against this"): extract it with `reference-film-method.md`
+     beside this file (method vs surface, mapped onto the current film's defects); the frame-level study stays
+     private.
 3. **Look-frame to the operator early** — one still of the hero moment, before the full build. Critics passed films
    the operator rejected on sight twice (abstract; unreadable pace).
 4. **`timeline.json` is the single source of timing** (`kit/timeline.json`): fps, size, duration, bpm, product clips

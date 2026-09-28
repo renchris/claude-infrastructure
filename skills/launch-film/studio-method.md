@@ -41,7 +41,11 @@ render. Three additions from it are worth taking:
    empty edge. This rule prevents both of the 2026-09-28 defects: the smeared card and type crossed by lines.
 3. **An anchor element survives each change and becomes the next state.** A progress bar becomes a volume slider;
    the selected row becomes the toast; one accent dot is carried through four states. This, more than the
-   container, is what makes a sequence read as one continuous thing.
+   container, is what makes a sequence read as one continuous thing. Keep the relay object **small and bold**. An
+   in-house bake-off on 2026-09-28 rebuilt the rejected claude-infrastructure film on another public method, and
+   every beat gained a subject once one small object (a caret) was handed across each seam. The rejected film's
+   signature object, a timetable, was the frame itself. Every seam is a designed match: act N+1's first frame
+   equals act N's last.
 4. **The real product changes state in every beat.** Typed input, a click, a ✓, a count-up, a toggle, a commit
    landing. A panel that only appears is a slide. Break screenshots into components and animate the parts (the
    single prompt line that visibly turned one launch film from slides into motion design). Use the product's
@@ -106,8 +110,8 @@ geometry, measure there; otherwise measure the decoded MP4.
 | Gate | Fails when | Catches |
 |---|---|---|
 | Text vs line | a visible text box intersects a stroke, rule or another text box (0 px tolerance) | type crossed by lines; labels overrun by their leaders |
-| Minimum type | text meant to be read renders under ~24 px cap height at 1080p (below that it is texture, and must not be words) | unreadable captions and axis labels |
-| Text in transit | a text layer is drawn while its container's transform is changing | smeared, skewed cards mid-transform |
+| Minimum type | text meant to be read is under 22 px at 1080p, or a headline is under 84 px (the bake-off's values; the red team's cap-height estimate was ~24 px). Smaller text is texture and must not carry words | unreadable captions and axis labels |
+| Text in transit | a text layer is drawn while its container's transform is changing, or text sits on a skewed or 3D-transformed plane | smeared, skewed cards mid-transform |
 | Subject coverage | for more than 0.3 s the subject covers under ~15 % of the frame, or ink is under 2 % | subjectless frames, hairlines on empty paper |
 | Static share | more than ~40 % of mid-film frames are static (mean abs diff < 0.5/255), or any hold outside the lockup is over ~1.2 s with no moving element | slide grammar |
 | Coverage | the stills reviewed do not cover 100 % of the duration (`tiles × interval ≥ duration`) | reviewing only the first 15 s |
@@ -145,6 +149,9 @@ Consistency comes mostly from shared code (one frozen API for type, colour and m
 - Heavy sounds (the thump, the transition swell) go on downbeats with the scene changes; light UI sounds go on the
   off-beats.
 - Hold the kick for bar 1 and drop it on bar 2. Leave true silence before the drop.
-- Master to about −14 to −16 LUFS, with true peak ≤ −1 dBTP.
+- Master to about −14 to −16 LUFS, with true peak ≤ −1 dBTP after the AAC encode. Keep the bass mono below 120 Hz.
+  Make an A/V sync check (< 1 ms against the cue export) fail the build. The rejected film shipped at −19 LUFS.
+- Put whooshes on each move's computed peak-velocity frame, and impacts on the frame where a spring first reaches its
+  target, both read from the same cue export as the picture.
 - **The film must read with the sound off.** The strongest dev-tool launch films ship with the sound quiet or
   absent. Avoid the "clicky techy synth" bed that viewers now name as the default.
