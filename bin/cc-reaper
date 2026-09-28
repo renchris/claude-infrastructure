@@ -707,7 +707,10 @@ _gs_escalation_alive() { # <pid> — did this pid survive the TERM? rc 0 = still
 # per pid (a pid can race the snapshot); still unreadable ⇒ SKIPPED and logged, readable ⇒ the
 # whitelist is applied to what was read before anything is signalled. `_gs_verify_kill` refuses an
 # unobserved argv as a belt. Pinned in tests/cc-reaper.bats ("argv-miss").
-GARBAGE_WL="lead-supervisor|cc-dispatch|cc-discover|cc-reaper|qos-census|compressor-sentinel|postland-verify|session-search|devserver-gc|deploy-live|cc-relogin|lr-reset-poller|teammate-reap|capacity-alarm|power-policy|log-rotation|restic|worktree-gc|caffeinate|cc-await-ping|mailbox-wake-arm|ship-land|desk-land|cloud-return|cloud-reconcile|nightly-regression|kitty|tmux|iTerm|launchd"
+# public-publish (2026-09-28): launchd's com.claude.public-publish runs public-publish-tick.sh, which
+# re-projects the whole history and runs well past 600 s under load; it was TERMed as orphan-bash at
+# age 919 s on its first real run, so the public repo never advanced. Pinned as a fixture pair.
+GARBAGE_WL="lead-supervisor|cc-dispatch|cc-discover|cc-reaper|qos-census|compressor-sentinel|postland-verify|session-search|devserver-gc|deploy-live|cc-relogin|lr-reset-poller|teammate-reap|capacity-alarm|power-policy|log-rotation|restic|worktree-gc|caffeinate|cc-await-ping|mailbox-wake-arm|ship-land|desk-land|cloud-return|cloud-reconcile|nightly-regression|public-publish|kitty|tmux|iTerm|launchd"
 _gs_argv_reread() { # <pid> → that pid's argv on stdout, "" when unreadable. Under the fixture seam it
                     # reads CC_REAPER_GARBAGE_PS_B2 (else PS_B again), never the live process table.
   local pid="$1" f

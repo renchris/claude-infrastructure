@@ -1879,6 +1879,26 @@ EOF
   [ "$got" = "90402 " ]
 }
 
+# ── THE PUBLIC PUBLISHER WAS THE FIFTH (2026-09-28). launchd runs com.claude.public-publish as
+# public-publish-tick.sh, which re-projects the whole history; its first real run was TERMed as
+# orphan-bash at age 919 s and the public repo never advanced. Pair form: it survives, the orphan dies.
+@test "garbage: the public publisher tick is never collected, and an unrelated orphan beside it still is" {
+  mk_garbage_fixtures
+  cat > "$GA" <<'EOF'
+90501 1 15:19 bash
+90502 1 15:19 bash
+EOF
+  cat > "$GB" <<'EOF'
+90501 bash /Users/x/.claude/scripts/public-publish-tick.sh
+90502 /bin/bash /Users/x/some/unrelated/orphan.sh
+EOF
+  run "$R" garbage --reap
+  [ "$status" -eq 0 ]
+  got="$(awk '$1=="TERM"{print $2}' "$KLOG" | sort -n | tr '\n' ' ')"
+  # RED before the fix: 90501 appears in this list too.
+  [ "$got" = "90502 " ]
+}
+
 # ── THE PID THAT CHANGED HANDS (2026-08-16). The kill-time re-verification checked `ucomm` only, and
 # orphan-bash / stuck-wrapper / dead-lead-watchdog all carry the ERE `^bash$` — so for the three
 # classes that dominate the candidate set it asked "is this a bash?" of a pid it had already decided
