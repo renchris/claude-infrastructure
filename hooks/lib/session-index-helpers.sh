@@ -291,13 +291,22 @@ session_index_init_db() {
 
     local verified=1
     if [ -f "$SESSION_INDEX_DB" ]; then
-        local uv rc=0
-        uv=$(session_index_sql "PRAGMA user_version;" 2>/dev/null) || rc=$?
-        if [ "$rc" -ne 0 ] || ! [[ "$uv" =~ ^[0-9]+$ ]]; then
+        # ONE read answers both questions the hot path needs: is the DB stamped, and does
+        # sessions_fts still exist. The stamp alone is not enough: skipping the idempotent
+        # CREATE-IF-NOT-EXISTS pass on a stamped DB left a sessions_fts dropped by anything else
+        # missing forever (every later FTS upsert fails), caught by the identity suite on trunk.
+        local uv fts row rc=0
+        row=$(session_index_sql "SELECT (SELECT user_version FROM pragma_user_version) || '|' || (SELECT COUNT(*) FROM sqlite_master WHERE name = 'sessions_fts');" 2>/dev/null) || rc=$?
+        uv="${row%%|*}"; fts="${row#*|}"
+        if [ "$rc" -ne 0 ] || ! [[ "$uv" =~ ^[0-9]+$ ]] || ! [[ "$fts" =~ ^[0-9]+$ ]]; then
             session_index_log "init_db user_version read failed rc=$rc — skipping every migration"
             verified=0
-        elif [ "$uv" -ge "$SESSION_INDEX_SCHEMA_VERSION" ]; then
+        elif [ "$uv" -ge "$SESSION_INDEX_SCHEMA_VERSION" ] && [ "$fts" -ge 1 ]; then
             return 0
+        elif [ "$uv" -ge "$SESSION_INDEX_SCHEMA_VERSION" ]; then
+            # Stamped but sessions_fts is gone: fall through to the non-destructive schema pass,
+            # which re-creates it (empty; the sweep's FTS-PARITY alarm then reports the gap).
+            session_index_log "init_db: sessions_fts missing on a stamped DB — re-creating it via the schema pass"
         elif ! _session_index_migrate_columns; then
             verified=0
         fi

@@ -119,3 +119,14 @@ SQL
   ! grep -q "table_info" "$SHIM_CALLS" || false
   [ "$(wc -l < "$SHIM_CALLS" | tr -d ' ')" = "1" ]         # the one user_version read
 }
+
+@test "a stamped DB whose sessions_fts was dropped gets it re-created, still in one read" {
+  bash -c "source '$HELPERS'; session_index_init_db"      # fresh DB: schema pass + stamp
+  "$REAL_SQLITE" "$DB" "DROP TABLE sessions_fts;"
+  rm -f "$SHIM_CALLS"
+  init_db_via_shim
+  [ "$status" -eq 0 ]
+  [ "$("$REAL_SQLITE" "$DB" "SELECT COUNT(*) FROM sqlite_master WHERE name = 'sessions_fts';")" = "1" ]
+  grep -q "sessions_fts missing on a stamped DB" "$LOG"
+  ! grep -q "table_info" "$SHIM_CALLS" || false             # no column probe: the stamp still holds
+}
