@@ -366,10 +366,30 @@ Each item's design is the research doc section named. "Done" = landed, gate-gree
 | 20 | report-only frontmatter schema listing | §3.20-3.22 | any time | `memory-fleet-sweep --schema` lists violations, writes nothing |
 | 21, 22 | claim-queue spec; deny-only capture ledger | §3.20-3.22 | a background memory worker is approved (Wave E #24 verdict) | spec recorded in `MEMORY_KNOWLEDGE_V2.md`; ledger only if the worker is approved |
 
-## Wave E — experiments, each ending in a measured adopt-or-drop verdict (S · `tma-wave-e`)
+## Wave E — experiments, each ending in a measured adopt-or-drop verdict (S · `tma-wave-e`) — DONE 2026-09-28
 
 An experiment is done when its verdict and numbers are appended to the research doc §5, not when it
 ships. Adopted ones become Wave-D-style build items; dropped ones get a rejection row.
+
+**Verdicts: every experiment DROPPED against its pre-registered rule. Nothing was adopted, so there is no build item.** Rejection rows are R19-R24 in `MEMORY_KNOWLEDGE_V2.md` §8.
+- #4b DROP (research §5.19): fusion 7 wins, 3 losses, 11 ties on 21 operator-worded queries, p = 0.172 (rule p < 0.05); R@1 0.333 → 0.238 (rule: no drop). `0cccdda64` pre-reg · `e1d88056c` fusion arm · `890ce1f9c` · `daa8c1590` results · `cb2367eca`.
+- #24 DROP (§5.20): Stage 0 34/60 = 56.7% pass every anti-capture class (rule ≥90%); 2/4 never-written rulings recovered (rule ≥3). `a7558326b` `bin/cc-memory-extract` (dry-run only, no write mode) · `45c0e3ae3` pre-reg · `eaaca2c28` · `be15978db` results.
+- #25 DROP unbuilt on #24's Stage-0 verdict (§5.21, `be15978db`).
+- #27 DROP (§5.22, `ffa917d57`): the one non-prose channel, #10's new-topic advisory, has 0 delivered-and-used events. The need is real: 71 of 91 recent negative tool-claim topics carry no conditions.
+- #36 DROP, no measurable headroom (§5.23-5.24): stock obeyed the in-context rule in 36 of 36 single-task runs across 12 fixture variants, so there was nothing to prevent. No registered check catches the four real misses. `53f2ce7a7` fixtures · `4c1b1ef9c` · `3a36179c4` · `4fc18023e` · `c08531f32` pre-reg · `afb324812`.
+- #23 and #26 DROP under §5.17's no-gain branch (§5.18, `5c396f081`). #26's shadow logged 0 fires in 184 live rows, and its fire path is retired: `287ffc74b` makes it off unless `CC_RULING_SHADOW=on`, and a test covers it.
+- Rejection rows R19-R21 landed in `be043ec2c`. R22-R24, §5.24 and the landed-sha citation fixes land with this close.
+
+**#24's bearing on #21/#22:** it does not support proposing a background memory worker. Stage 0 passes 56.7% (Wilson 44.1-68.4%) against ≥90%, and recovers 2 of 4 rulings against ≥3. #21 and #22 therefore stay unbuilt, and no worker is proposed. The recovery miss fails the rule on its own, so the verdict does not depend on how "already indexed" is judged.
+
+**Learnings (for the next memory or delivery wave):**
+- The two delivery benchmarks agree. In a fresh single-task `claude -p` session stock Opus 5.5 obeys an in-context rule: #35 15/16, #36 36/36, even with the rule buried in 54 KB of instructions. The real misses came hours into long sessions. A delivery-research wave needs a long-session harness (a resumed long transcript) before any push mechanism can be measured.
+- Transcripts mark pasted fire briefs as typed, so a capture tool built on `transcript_norm.typed_prompt` is fed machine text. At least 32 of #24's 60 labelled candidates came from such turns. The #26 shadow's classifier excluded them by the HANDOFF-ENGAGE marker and a 4,000-char cap; `transcript_norm` does not.
+- Idle teammates DID wake on mail this wave. tme-36a and tme-24 each answered a lead message within a minute while idle, which contradicts Wave D's reading. What never wakes a teammate is a detached run (`bench-all.sh` via detach). A teammate waiting on one must arm its own background waiter, so the lead should ask.
+- A land rebase rewrites a teammate branch's shas, so any sha a teammate cites in the research doc goes off-trunk. Four such citations were fixed after landing. Cite shas only after the land, or fix them in the closing commit.
+- The land gate's wall-clock lint reads an ISO date in `.bats` fixture prose (`2026-10-12`) as a time bomb. Spell dates in prose ("October 12").
+- The permission layer declines a glob-loop `rm -rf` of scratch dirs, and a held prompt froze the lead's pane. Teammates leave their `mktemp` scratch dirs, and the lead moves them to `~/.Trash`.
+- cc-bats refused for up to 16 retries at load 40-48. A suite runner with a 45-try budget, `~/.claude/autonomy/memory-eval/wave-e/runsuite.sh`, got every plan line.
 
 | # | Experiment | Design | Entry condition | Verdict rule |
 |---|---|---|---|---|
@@ -430,3 +450,4 @@ These extend the research doc's X1-X5 (§2) with what the session after the stud
 - 2026-09-28 — Wave B DONE: #4, #5, #6+#7, #10, #26 (shadow) and #35 landed; live layer converged. #35 read no gain (the tasks had no headroom), so the pre-registered no-gain branch applies: Wave E #23 and #26 stop and the next delivery measurement needs tasks the stock arm fails. Learnings under § Wave B. Wave C next.
 - 2026-09-28 — Wave C DONE: #9, #12, #13 and #14 landed (`5070c4488` … `c2876fbe3`), 28 suites green on trunk tip, live layer converged; #12's store backfill filed as operator step `a459c9c681a5`. Learnings under § Wave C. Wave D next.
 - 2026-09-28 — Wave D DONE: #15, #16, #17, #18 (provisional on its outcome log), #18a, #19 and #20 landed (`6f4fd40b1` … `1269d65ba`), 20 suites green on the combined tree and on trunk tip, live layer converged. #18a's claude-session-search half is operator step `eb1d9ecb9c41` (public-repo push). #21 and #22 wait on Wave E #24. Learnings under § Wave D. Wave E next.
+- 2026-09-28 — Wave E DONE: all seven experiments dropped against their pre-registered rules. #4b p = 0.172 on 21 operator-worded queries; #24 Stage 0 56.7% and 2/4 rulings, so #25 went unbuilt and #21/#22 stay unbuilt with no worker proposed; #27 has no used channel; #36 had no headroom (stock 36/36); #23 and #26 stop under §5.17 and #26's shadow is retired. Nothing adopted; rejection rows R19-R24. The next delivery measurement needs a long-session harness. Learnings under § Wave E.
