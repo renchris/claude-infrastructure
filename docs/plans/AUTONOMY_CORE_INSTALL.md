@@ -50,8 +50,8 @@ code and testable in a throwaway HOME.
 | `CLAUDE.global.md` excerpt | `core/CLAUDE.core.md`, rewritten portable: frozen DoD, drive to done, net-positive follow-ons, close readout, context stewardship, `/goal` template | every `cc-*` store, handoff-fire, accounts, Fable ladder, mission board |
 | `hooks/session-continue.sh` | `core/hooks/continue.sh`: agent-armed "next step" sentinel, bounded (default 8), `set/clear/status` via `autonomy continue` | mailbox delivery, ship floor, custody, resident teammates, IDL log |
 | `hooks/completion-assert.sh` | `core/hooks/completion-gate.sh`: a "done" claim is blocked once per git state while tracked changes are uncommitted or commits are unpushed | origin close contract, peer-owned, close-shape, custody |
-| `scripts/wrap-ledger.sh` + `/wrap` | `autonomy ledger` + `core/commands/wrap.md`: rungs 🔧 / 📦 / ✅ from live git, plus armed continuation | 🚀 live layer, ⛔/👤 from backlog/decision stores, residents |
-| `/handoff` | `core/commands/handoff.md`, single pane: writes a bridge doc, the user runs `/clear` and pastes one line | handoff-fire (kitty/it2/iTerm panes), accounts, notify-back |
+| `scripts/wrap-ledger.sh` + `/wrap` | `autonomy ledger` + `core/commands/autonomy-wrap.md`: rungs 🔧 / 📦 / ✅ from live git, plus armed continuation | 🚀 live layer, ⛔/👤 from backlog/decision stores, residents |
+| `/handoff` | `core/commands/autonomy-handoff.md`, single pane: writes a bridge doc, the user runs `/clear` and pastes one line | handoff-fire (kitty/it2/iTerm panes), accounts, notify-back |
 | `hooks/backup-before-write.sh` | `core/hooks/backup-before-write.sh`: copy before a Write replaces a file, 14-day prune, `autonomy restore` | memory-index budget, plan-conventions injection |
 | `/goal` guidance | text only (native Claude Code feature): template + the measured evidence below | — |
 

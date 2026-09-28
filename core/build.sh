@@ -10,14 +10,22 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 INSTALLER="$ROOT/install-core.sh"
 EOF_MARK="__AUTONOMY_CORE_EOF__"
-# <path under core/> <mode> — the installer copies exactly these.
+# <installed path>:<mode>[:<source under core/, when it differs>] — the installer copies exactly these.
+# The command sources carry an autonomy- prefix so the land gate's name-based test selection does not
+# map them onto the full install's wrap-*/handoff-* suites, which do not test them.
 FILES="hooks/lib.sh:755 hooks/continue.sh:755 hooks/completion-gate.sh:755 hooks/backup-before-write.sh:755
-bin/autonomy:755 CLAUDE.core.md:644 commands/wrap.md:644 commands/handoff.md:644"
+bin/autonomy:755 CLAUDE.core.md:644 commands/wrap.md:644:commands/autonomy-wrap.md
+commands/handoff.md:644:commands/autonomy-handoff.md"
+
+src_of() {  # <entry> → the source path under core/
+  local rest="${1#*:}"
+  case "$rest" in *:*) echo "${rest#*:}" ;; *) echo "${1%%:*}" ;; esac
+}
 
 region() {
   local entry path mode sum=""
   for entry in $FILES; do
-    path="${entry%:*}"
+    path="$(src_of "$entry")"
     [ -f "$ROOT/core/$path" ] || { echo "core/build.sh: missing core/$path" >&2; exit 1; }
     if grep -q "$EOF_MARK" "$ROOT/core/$path"; then
       echo "core/build.sh: core/$path contains the heredoc marker $EOF_MARK" >&2; exit 1
@@ -30,9 +38,9 @@ region() {
   echo "core-$(printf '%s' "$sum" | cksum | awk '{print $1}')"
   echo "$EOF_MARK"
   for entry in $FILES; do
-    path="${entry%:*}"; mode="${entry##*:}"
+    path="${entry%%:*}"; mode="${entry#*:}"; mode="${mode%%:*}"
     echo "ac_emit '$path' $mode <<'$EOF_MARK'"
-    cat "$ROOT/core/$path"
+    cat "$ROOT/core/$(src_of "$entry")"
     echo "$EOF_MARK"
   done
   echo "# <<< END EMBEDDED CORE"
