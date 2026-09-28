@@ -1469,6 +1469,49 @@ and neither is reopened by a result recorded here.
   cue-matched prompts, against the plan's target of ≥40. Stopped there as the brief directs. A significant
   result needs at least 5 wins to 0 (or 7 to 1) among untied pairs.
 
+**Results (run 2026-09-28). Verdict: DROP. Fusion did not win on operator wording, and its R@1 fell.**
+Harness `docs/research/memory-eval/fusion_eval.py` (tests in `tests/memory-recall-eval.bats`), run with a
+private venv (model2vec 0.9.0, numpy, no torch). Raw per-query ranks stay private in
+`~/.claude/autonomy/memory-eval/wave-e/4b/results.json`. Corpus per project scope, as of each query:
+personal 476 docs, reso 1,119, infra 869, voiceink 385, fde 384.
+
+| style | n scored | arm | R@1 [95%] | R@5 [95%] | MRR [95%] | top 1 supersedes |
+|---|---|---|---|---|---|---|
+| operator (`op`) | 21 | A FTS5 | 0.333 [0.17, 0.55] | 0.429 [0.24, 0.63] | 0.368 [0.20, 0.58] | 0 |
+| operator (`op`) | 21 | B fused | 0.238 [0.11, 0.45] | 0.381 [0.21, 0.59] | 0.338 [0.18, 0.55] | 0 |
+| agent (`ag`) | 11 | A FTS5 | 0.636 [0.35, 0.85] | 0.818 [0.52, 0.95] | 0.705 [0.41, 0.89] | 0 |
+| agent (`ag`) | 11 | B fused | 0.545 [0.28, 0.79] | 0.818 [0.52, 0.95] | 0.667 [0.38, 0.87] | 0 |
+
+- **Primary (`op`, rank of first gold, 11 past the top 10):** B 7 wins, 3 losses, 11 ties, one-sided
+  p = 0.172. R@1(B) 0.238 < R@1(A) 0.333. Both conditions fail, so DROP.
+- **Replication on `agent_query` (field records):** 1 win, 2 losses, 8 ties, p = 0.875. §5.1's 6-0 did not
+  reproduce on this corpus and scope.
+- **By source (`op`):** field records 5 wins, 1 loss (11 scored); transcript queries 2 wins, 2 losses (10).
+  Fusion helps deep ranks (5 of the 7 wins lift a gold from past 10 into ranks 5-10), and it pushes FTS5's
+  near-top hits down (R-wrap 1 → 30, T01 4 → 20, T04 1 → 2): that is the R@1 loss.
+- **Superseding top 1 (the #47 class):** 0 in both arms, over all 30 records.
+- **Cost of B:** a fresh process with the model cached answers one query in 0.85-0.92 s, against 1.0 s for
+  FTS5 alone in the same probe (the difference is disk-cache noise). The model loads in 0.30-0.37 s (4.5 s on
+  first use, download included). A fused query takes a mean of 59 ms (max 123 ms) over 49 queries,
+  including each project's first pass that encodes its heads. Peak RSS is 135-140 MB for one query and
+  278 MB for the full run, against 42 MB for FTS5 alone. On disk: a 103 MB venv and a 117 MB model cache.
+
+**Branch taken: DROP.** Nothing more is built; `cc-memory-search` stays FTS5-only. *Reopen only on* a gain at
+p < 0.05 on ≥40 operator-worded queries.
+
+**Deviations from the pre-registration.**
+2. **21 units scored, not 26.** Five more records came out gold-missing under the pre-registered rules. #88 and
+   T06: the gold is a project topic in the reso store, outside the infra project scope (reachable only with
+   `--all`). R-wrap2 and R-tracked: the gold lessons were first added on 2026-09-17T23:30Z, after the queries,
+   when the text still lived inside the rules file. #58: the gold file was born 17 s after its prompt, which
+   created it. `field-queries.json` calls all five time-valid; file birth says otherwise.
+3. **A harness fix after the pre-registration commit, before any scored run** (`da8de49d3`): rules-hook blame
+   had silently fallen back to file birth in reso's checkout, which is flagged `core.bare`, and in a subdirectory.
+4. **The #47 supersede finding cannot reproduce on today's text.** #47's top FTS5 hit is still the per-bottle
+   pipeline playbook §5.11 named, but that file no longer carries a `Replaces:` line.
+5. **Warm latency is not isolated.** The 59 ms mean includes each project's first head-encoding pass, so pure
+   per-query latency is lower.
+
 ### 5.20 Wave E #24 — candidate extractor, Stage 0 (`--dry-run`)
 *Pending: owned by the Wave E teammate `tme-24`, which replaces this line with its pre-registration and results.*
 
