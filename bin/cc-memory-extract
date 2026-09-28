@@ -296,17 +296,54 @@ def render_chunks(turns: list[OpTurn]) -> list[str]:
     return chunks
 
 
+def last_json_value(text: str) -> Any:
+    """The LAST complete top-level JSON value in `text`. Raises ValueError when there is none.
+
+    Scans from each `{` or `[`, keeps the value that parses there, and resumes AFTER it, so a value
+    nested inside one already parsed is never counted on its own. The first-`{`-to-last-`}` span
+    this replaced joins a draft and the final answer into one span that fails to parse; Sonnet 5.5's
+    prompting guide (Reasoning tasks with JSON output) says the model can write a draft before its
+    final JSON, and to parse the last value (harness-hazards-b.md item 6, 2026-09-28).
+    """
+    dec = json.JSONDecoder()
+    found: list[Any] = []
+    i, n = 0, len(text)
+    while i < n:
+        if text[i] in "{[":
+            try:
+                val, end = dec.raw_decode(text, i)
+            except ValueError:
+                i += 1
+                continue
+            found.append(val)
+            i = end
+        else:
+            i += 1
+    if not found:
+        raise ValueError("no JSON object in reply")
+    return found[-1]
+
+
+def unwrap_envelope(stdout: str) -> str:
+    """The reply text from a `--output-format json` result envelope. A reply cut off at max_tokens
+    is a failure, never a parse candidate: its last JSON value is whatever the cut left. Output
+    that is not an envelope is returned as it is."""
+    try:
+        env = json.loads(stdout)
+    except ValueError:
+        return stdout
+    if not isinstance(env, dict) or env.get("type") != "result":
+        return stdout
+    if env.get("stop_reason") == "max_tokens":
+        raise ValueError("reply truncated: stop_reason max_tokens")
+    if env.get("is_error"):
+        raise ValueError(f"model error: {str(env.get('result', ''))[:120]}")
+    return str(env.get("result") or "")
+
+
 def parse_reply(raw: str) -> list[dict[str, Any]]:
     """The candidates list from a model reply. Raises ValueError on anything malformed."""
-    text = raw.strip()
-    fence = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.S)
-    if fence:
-        text = fence.group(1)
-    start = text.find("{")
-    end = text.rfind("}")
-    if start < 0 or end <= start:
-        raise ValueError("no JSON object in reply")
-    obj = json.loads(text[start : end + 1])
+    obj = last_json_value(unwrap_envelope(raw).strip())
     if not isinstance(obj, dict) or not isinstance(obj.get("candidates"), list):
         raise ValueError("reply lacks a candidates list")
     out: list[dict[str, Any]] = []
@@ -328,6 +365,8 @@ def call_model(binary: str, prompt: str, cwd: Path) -> tuple[int, str, str]:
         "",
         "--model",
         MODEL,
+        "--output-format",
+        "json",
         "--tools",
         "",
         "--no-session-persistence",

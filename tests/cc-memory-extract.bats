@@ -176,3 +176,53 @@ for l in open(sys.argv[1]):
 c 2 2026-09-20T00:00:03Z" ]
   grep -q '"T2"' "$OUT/inputs/good-1111-0.reply.txt"
 }
+
+# ── LAST JSON VALUE, and max_tokens is a failure (2026-09-28) ─────────────────────────────────────
+# Sonnet 5.5's prompting guide: the model can write a draft before its final JSON, so parse the LAST
+# value, never first-{ to last-}. RED on the old parser: two fenced blocks made one greedy span that
+# failed json.loads, so a good reply became an error row.
+names_of() { python3 -c '
+import json,sys
+for l in open(sys.argv[1]):
+    r=json.loads(l); print(r.get("kind","cand"), r.get("name") or r.get("error"))
+' "$OUT/candidates.jsonl"; }
+
+@test "draft-then-final (two fenced blocks): only the FINAL value's candidates are kept" {
+  good_session
+  export STUB_REPLY='Draft first:
+```json
+{"candidates":[{"turn":2,"name":"draft","description":"d","body":"b"}]}
+```
+On reflection, final:
+```json
+{"candidates":[{"turn":2,"name":"final","description":"d","body":"b"}]}
+```'
+  run "$EX" --dry-run --session good-1111 --out "$OUT"
+  [ "$status" -eq 0 ]
+  run names_of
+  [ "$output" = "candidate final" ] || { echo "$output"; false; }
+}
+
+@test "unfenced draft then final, and a value nested in the final is not counted on its own" {
+  good_session
+  export STUB_REPLY='{"candidates":[{"turn":2,"name":"draft","description":"d","body":"b"}]} no wait -> {"candidates":[{"turn":2,"name":"final","description":"d","body":"b","meta":{"k":[1,2]}}]}'
+  run "$EX" --dry-run --session good-1111 --out "$OUT"
+  [ "$status" -eq 0 ]
+  run names_of
+  [ "$output" = "candidate final" ] || { echo "$output"; false; }
+}
+
+@test "a result envelope is unwrapped; stop_reason max_tokens is an error row, not a parse" {
+  good_session
+  export STUB_REPLY='{"type":"result","subtype":"success","is_error":false,"stop_reason":"end_turn","result":"draft {\"candidates\":[]} final {\"candidates\":[{\"turn\":2,\"name\":\"final\",\"description\":\"d\",\"body\":\"b\"}]}"}'
+  run "$EX" --dry-run --session good-1111 --out "$OUT"
+  [ "$status" -eq 0 ]
+  run names_of
+  [ "$output" = "candidate final" ] || { echo "$output"; false; }
+  rm -rf "$OUT"
+  export STUB_REPLY='{"type":"result","subtype":"success","is_error":false,"stop_reason":"max_tokens","result":"{\"candidates\":[{\"turn\":2,\"name\":\"cut\",\"description\":\"d\",\"body\":\"b\"}]}"}'
+  run "$EX" --dry-run --session good-1111 --out "$OUT"
+  [ "$status" -eq 0 ]
+  run names_of
+  [ "$output" = "error malformed reply: reply truncated: stop_reason max_tokens" ] || { echo "$output"; false; }
+}
