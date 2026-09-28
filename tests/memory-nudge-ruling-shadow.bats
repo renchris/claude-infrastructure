@@ -16,6 +16,8 @@ PRE_SHA=abaf1e990
 # The one sentence the #10 rewording added after PRE_SHA; the pre-change control strips it so it
 # still compares the shadow alone.
 NUDGE10=' '"Before writing, run cc-memory-search <terms> to find what is already stored (fall back to grep MEMORY.md), and create a new topic file with Write, not Bash, so the write hook can list its nearest existing files."
+# The supersession clause #12 added (docs/research/truememory-2026-09-27.md §3.12), stripped the same way.
+NUDGE12=' '"A CORRECTION edits the file it corrects and adds a dated CORRECTED (YYYY-MM-DD): line; only when a new file wholly replaces an old one, write superseded_by: <heir> (YYYY-MM-DD) in the OLD file's frontmatter within its first 12 lines; an entry that replaces an operator-stated practice carries Replaces: <practice> — ruling pending until the operator rules."
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -61,7 +63,9 @@ ruling_n() { jq -s '[.[] | select(.hook == "memory-nudge:ruling")] | length' "$C
   ln -s "$REPO/hooks/lib" "$pre/lib"
   MEMORY_NUDGE_STATE_DIR="$BATS_TEST_TMPDIR/st-c" run_hook "$pre/memory-nudge.sh" s-a "$p"
   printf '%s' "$a" | grep -qF -- "$NUDGE10"
-  [ "$OUT" = "${a/"$NUDGE10"/}" ]
+  printf '%s' "$a" | grep -qF -- "$NUDGE12"
+  local stripped="${a/"$NUDGE10"/}"
+  [ "$OUT" = "${stripped/"$NUDGE12"/}" ]
 }
 
 @test "restatement: 'remember: always run the linter'" {

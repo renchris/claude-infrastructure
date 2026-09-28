@@ -45,6 +45,7 @@ Memory (a MEMORY.md index line or a topic file) and proposed skills hold only du
 - something that worked once with no reason to think it generalizes
 - a claim that "tool Y can't do Z" based on one failed call. Verify it first; a wrapper, a flag or a version usually explains the failure.
 Run `cc-memory-search <terms>` first (it also searches the cold tier and lessons; fall back to grep MEMORY.md), and update an existing entry rather than adding a near-duplicate. Create a new topic file with Write, not Bash, so the write hook can list its nearest existing files.
+A correction edits the file it corrects and adds a dated `CORRECTED (YYYY-MM-DD):` line. Only when a new file wholly replaces an old one, write `superseded_by: <heir> (YYYY-MM-DD)` in the old file's frontmatter, within its first 12 lines, where `cc-memory-rotate` reads it. A new entry that replaces a practice the operator stated needs the operator's ruling, and until it is given the entry carries `Replaces: <practice> — ruling pending`.
 
 ### Plans
 

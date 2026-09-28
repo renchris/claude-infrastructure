@@ -112,6 +112,17 @@ from hermes-agent `agent/background_review.py` `_DO_NOT_CAPTURE`; the most porta
 idea in that repo. `/compact-memory`, `/harvest-skill`, and the `memory-nudge.sh`
 hook all embed this same list.)
 
+**How a correction is written** (§3.12 structured supersession, 2026-09-28). A correction
+EDITS the file it corrects and adds a dated `CORRECTED (YYYY-MM-DD):` line — it does not start
+a new file beside the old one. Only when a new file wholly replaces an old one, write
+`superseded_by: <heir> (YYYY-MM-DD)` in the OLD file's frontmatter, within its first 12 lines:
+that is where `cc-memory-rotate` reads it (a marked file is demoted first) and where
+`cc-memory-supersession-check` audits it. A new entry that replaces an **operator-stated
+practice** needs the operator's ruling; until it is given, the entry carries
+`Replaces: <practice> — ruling pending`. (Why: an agent-written artifact once opened with
+"Replaces: 'at least 4MB on Google Images'" on no ruling, and twelve hours later the operator
+asked for that practice "like normal" — retrieval would have served the unratified rule first.)
+
 ### Plan Document Conventions
 
 Plan/design/roadmap docs accumulate decisions across sessions → INTEGRATE never overwrite; completed sections compact (learnings + commit hashes + blockers), upcoming sections expand (file:line detail); **MANDATORY Phase 0 (Agent Team Orchestration) as the FIRST section** for any plan with 2+ code-writing tasks — and Phase 0's **first field is the EXECUTION LOCUS PER WAVE**: **S** = dispatched handoff session (the DEFAULT for every implementation wave, no justification needed) · **T** = in-session teammates · **L** = lead-inline (T and L each need one line of why), plus the **lead's own context budget + succession point**; never delete historical decisions / "Why:" rationale / learnings / known issues. Full conventions → the **plan-conventions** skill (the `backup-before-write` hook also auto-injects an abridged form on plan-file edits).
