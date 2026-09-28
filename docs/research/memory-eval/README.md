@@ -37,3 +37,11 @@ matches the manifest refuses with exit 3. Write results to
 **Holdout**: `sha1(id) % 5 == 0` is sealed. The default is `--split dev`; holdout numbers print only
 with `--split holdout --unseal`. Not built: `capture_eval` (deferred), per-change f3 arms (dropped),
 the `an3.py` recurrence counter (not found under the research directory).
+
+**Fusion eval (Wave E #4b)**: `fusion_eval.py` ranks the SAME corpus two ways. `fts` is
+`bin/cc-memory-search`'s own `build_corpus` + `search` (imported, so no log row is written). `fused`
+is RRF (k=60) of that list and model2vec cosine over head text. Documents born after the query leave
+the corpus before either arm ranks. model2vec is imported only by the fused arm, so without it that
+arm is `NOT-RUN` and FTS5 still scores. Scope comes from `--store/--lessons/--rules` or
+`--project-map` (the shipped default scope per query). Pre-registration and results:
+`docs/research/truememory-2026-09-27.md` §5.19. Tests stub model2vec on `PYTHONPATH`.

@@ -230,3 +230,116 @@ EOF
   run python3 -c 'import json,sys; print(sorted({r["id"] for r in json.load(open(sys.argv[1]))["rows"]}))' "$OUT"
   [ "$output" = "['q-docker']" ]
 }
+
+# ── fusion_eval.py (Wave E #4b): FTS5 + model2vec RRF over the same corpus ─────────────────────────
+# A STUB model2vec on PYTHONPATH returns fixed vectors (letter counts), so no model is downloaded.
+
+FUSE_PY="docs/research/memory-eval/fusion_eval.py"
+
+stub_m2v() {
+  # the CLI's feedback sweep globs $CLAUDE_CONFIG_DIR/projects: pin it inside the fixture HOME
+  export CLAUDE_CONFIG_DIR="$HOME/.claude"
+  unset MEMORY_INDEX_PATH
+  mkdir -p "$BATS_TEST_TMPDIR/stub/model2vec"
+  cat >"$BATS_TEST_TMPDIR/stub/model2vec/__init__.py" <<'PY'
+class StaticModel:
+    @classmethod
+    def from_pretrained(cls, name):
+        return cls()
+
+    def encode(self, texts):
+        return [[float(t.lower().count(c)) + 0.01 for c in "abcdefghijklmnopqrstuvwxyz"] for t in texts]
+PY
+}
+
+# run_fuse <extra args…> — the fused eval over the fixture corpus, results JSON to $OUT.
+run_fuse() {
+  run env PYTHONPATH="$BATS_TEST_TMPDIR/stub" python3 "$REPO/$FUSE_PY" "${CORPUS[@]}" \
+    --queries "$FX/queries.json" --out "$OUT" "$@"
+}
+
+# fuse_row <id> <style> <key> — one field of one row out of $OUT.
+fuse_row() {
+  python3 -c 'import json,sys; print(next(r[sys.argv[4]] for r in json.load(open(sys.argv[1]))["rows"] if r["id"]==sys.argv[2] and r["style"]==sys.argv[3]))' \
+    "$OUT" "$1" "$2" "$3"
+}
+
+@test "fusion: RRF k=60 arithmetic on a hand case, ties kept in first-appearance order" {
+  cd "$REPO/docs/research/memory-eval"
+  # a = 1/61 + 1/62, c = 1/63 + 1/61, b = 1/62, d = 1/63
+  run python3 -c 'import fusion_eval as f; print(f.rrf([[1, 2, 3], [3, 1, 4]]), f.rrf([[7], [8]]))'
+  [ "$status" -eq 0 ]
+  [ "$output" = "[1, 3, 2, 4] [7, 8]" ]
+  run python3 -c 'import fusion_eval as f; print(f.sign_test(5, 0), f.sign_test(7, 1), f.sign_test(4, 0), f.sign_test(0, 0))'
+  [ "$output" = "0.03125 0.03515625 0.0625 1.0" ]
+}
+
+@test "fusion: the fused arm ranks the fixture deterministically, identical across runs" {
+  stub_m2v
+  run_fuse
+  [ "$status" -eq 0 ]
+  first="$(fuse_row fx-sqlite op top5_fused)"
+  [ "$first" = "['store:demo-app/sqlite-locked-writes.md', 'store:demo-app/csv-quote-escaping.md', 'store:demo-app/flaky-network-retry.md', 'lessons:retry-needs-jitter.md', 'store:demo-app/color-palette-choice.md']" ]
+  [ "$(fuse_row fx-sqlite op top5_fts)" = "['store:demo-app/sqlite-locked-writes.md']" ]
+  run_fuse
+  [ "$status" -eq 0 ]
+  [ "$(fuse_row fx-sqlite op top5_fused)" = "$first" ]
+  printf '%s\n' "$output" | grep -qx 'op  sign wins=0 losses=0 ties=7 p=1.0'
+  printf '%s\n' "$output" | grep -qx 'VERDICT op DROP'
+}
+
+@test "fusion: born-late gold is gold-missing in both arms; a superseding top hit is counted" {
+  stub_m2v
+  run_fuse
+  [ "$status" -eq 0 ]
+  [ "$(fuse_row fx-born-late op class)" = "gold-missing" ]
+  [ "$(fuse_row fx-born-late op rank_fused)" = "11" ]
+  [ "$(fuse_row fx-images op sup_fts)" = "True" ]
+  [ "$(fuse_row fx-images op sup_fused)" = "True" ]
+}
+
+@test "fusion: a gold file the CLI dropped as a same-name twin counts through its kept twin" {
+  stub_m2v
+  mkdir -p "$BATS_TEST_TMPDIR/a/memory" "$BATS_TEST_TMPDIR/b/memory"
+  cp "$STORE/sqlite-locked-writes.md" "$BATS_TEST_TMPDIR/a/memory/"
+  cp "$STORE/sqlite-locked-writes.md" "$BATS_TEST_TMPDIR/b/memory/"
+  printf '%s\n' '[{"id": "tw", "miss_ts": "2099-01-01T00:00:00Z",' \
+    '"operator_verbatim": "database is locked when two workers write",' \
+    '"gold": ["store:b/sqlite-locked-writes.md"]}]' >"$BATS_TEST_TMPDIR/q.json"
+  run env PYTHONPATH="$BATS_TEST_TMPDIR/stub" python3 "$REPO/$FUSE_PY" --store "$BATS_TEST_TMPDIR/a/memory" \
+    --store "$BATS_TEST_TMPDIR/b/memory" --queries "$BATS_TEST_TMPDIR/q.json" --out "$OUT"
+  [ "$status" -eq 0 ]
+  [ "$(fuse_row tw op top5_fts)" = "['store:a/sqlite-locked-writes.md']" ]
+  [ "$(fuse_row tw op rank_fts)" = "1" ]
+  [ "$(fuse_row tw op rank_fused)" = "1" ]
+}
+
+@test "fusion: --project-map resolves the shipped default scope per query through MEMORY_INDEX_PATH" {
+  stub_m2v
+  root="$BATS_TEST_TMPDIR/proj"
+  mkdir -p "$root/docs/lessons" "$root/.claude/rules" "$BATS_TEST_TMPDIR/demo-app"
+  cp -R "$STORE" "$BATS_TEST_TMPDIR/demo-app/memory"
+  cp "$FX/lessons/lockfile-drift-breaks-ci.md" "$root/docs/lessons/"
+  printf '{"demo-app": {"store": "%s", "root": "%s"}}\n' "$BATS_TEST_TMPDIR/demo-app/memory" "$root" >"$BATS_TEST_TMPDIR/map.json"
+  run env PYTHONPATH="$BATS_TEST_TMPDIR/stub" python3 "$REPO/$FUSE_PY" --project-map "$BATS_TEST_TMPDIR/map.json" \
+    --queries "$FX/queries.json" --out "$OUT"
+  [ "$status" -eq 0 ]
+  [ "$(fuse_row fx-sqlite op rank_fts)" = "1" ]
+  [ "$(fuse_row fx-lesson op rank_fts)" = "1" ]
+  # the lesson came from the map's repo root (docs/lessons), resolved by the CLI's own scope rule
+  fuse_row fx-lesson op top5_fts | grep -q "^\['lessons:lockfile-drift-breaks-ci.md'"
+  printf '%s\n' "$output" | grep -qx 'UNMAPPED 2 record(s) with no --project-map entry: q-docker q-jitter-1'
+}
+
+@test "fusion: with model2vec absent the fused arm is NOT-RUN, FTS5 still scores, no log is written" {
+  export CC_IDL="$BATS_TEST_TMPDIR/idl.jsonl" CLAUDE_CONFIG_DIR="$HOME/.claude"
+  run env PYTHONPATH="$BATS_TEST_TMPDIR/no-such-dir" python3 "$REPO/$FUSE_PY" "${CORPUS[@]}" \
+    --queries "$FX/queries.json" --out "$OUT"
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -q "^ARM fused NOT-RUN: model2vec unavailable (ModuleNotFoundError"
+  printf '%s\n' "$output" | grep -qx 'VERDICT op NOT-RUN'
+  run python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(sorted(d["styles"]["op"]["arms"]), d["styles"]["op"]["arms"]["fts"]["r1"])' "$OUT"
+  [ "$output" = "['fts'] 1.0" ]
+  [ ! -e "$CC_IDL" ]
+  [ ! -e "$HOME/.claude/state/memory-search.jsonl" ]
+}
