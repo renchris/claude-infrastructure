@@ -516,17 +516,155 @@ ordfx() {
   if grep -qF -- '(ops-call.md)' "$d2/MEMORY.md"; then return 1; fi
 }
 
-@test "a fresh lock refuses; a stale lock is reclaimed" {
+# ── THE LOCK ────────────────────────────────────────────────────────────────────────────────
+# One verdict line per run, whatever the tier. A second one would be a pass-through bug in the
+# lockf wrapper, which prints its own only when the inner run printed none.
+one_verdict() { [ "$(printf '%s\n' "$1" | grep -c '^verdict=')" -eq 1 ]; }
+LOCKF_BIN=/usr/bin/lockf
+
+# hold_lockf <lockfile> → starts a lockf(1) holder in the background and waits until it holds the
+# lock; its child's pid lands in $HOLD_PID and lockf's in $HOLD_LOCKF. Every fd bats reads is
+# closed on it, or bats would wait for the holder before reporting.
+hold_lockf() {
+  local pidf="$BATS_TEST_TMPDIR/holder.pid" i=0
+  rm -f "$pidf"
+  # shellcheck disable=SC2016  # the holder's own $$ and $1, expanded by the inner bash
+  "$LOCKF_BIN" -s -k -t 0 "$1" bash -c 'echo $$ >"$1"; exec sleep 30' _ "$pidf" \
+    </dev/null >/dev/null 2>&1 3>&- &
+  HOLD_LOCKF=$!
+  while [ ! -s "$pidf" ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$(( i + 1 )); done
+  [ -s "$pidf" ]
+  HOLD_PID="$(cat "$pidf")"
+}
+release_lockf() { kill "$HOLD_PID" "$HOLD_LOCKF" 2>/dev/null || true; }
+
+# killed_midrun <impl> <dir> → runs the rotor on <dir> under CCMR_LOCK_IMPL=<impl>, parks it INSIDE
+# its lock at the pre-commit seam (a builtin `read` on a FIFO, so no child process can inherit the
+# lock fd), SIGKILLs the rotor that holds the lock, and waits for the invocation to end.
+killed_midrun() {
+  local impl="$1" d="$2" pidf="$BATS_TEST_TMPDIR/rotor.pid" fifo="$BATS_TEST_TMPDIR/park.fifo" i=0 bg
+  rm -f "$pidf" "$fifo"; mkfifo "$fifo"
+  # shellcheck disable=SC2016  # the seam is eval'd INSIDE the rotor, so $$ is the rotor's pid
+  PIDF="$pidf" FIFO="$fifo" CCMR_LOCK_IMPL="$impl" \
+    MEMORY_ROTATE_TEST_PRE_COMMIT='echo $$ >"$PIDF"; read -r -t 30 _ccmr_park <>"$FIFO" || true' \
+    "$SCRIPT" "$d/MEMORY.md" </dev/null >"$BATS_TEST_TMPDIR/killed.out" 2>&1 3>&- &
+  bg=$!
+  while [ ! -s "$pidf" ] && [ "$i" -lt 150 ]; do sleep 0.1; i=$(( i + 1 )); done
+  [ -s "$pidf" ]
+  kill -9 "$(cat "$pidf")"
+  wait "$bg" || true
+}
+
+@test "mkdir tier: a fresh lock refuses; a stale lock is reclaimed" {
   d="$(mkmem lock)"; mkbulk "$d"
   mkdir "$d/.rotate.lock.d"
   cp "$d/MEMORY.md" "$BATS_TEST_TMPDIR/lock.before"
-  run "$SCRIPT" "$d/MEMORY.md"
+  CCMR_LOCK_IMPL="mkdir" run "$SCRIPT" "$d/MEMORY.md"
   [ "$status" -eq 3 ]
-  has "$output" 'verdict=locked'
+  has "$output" 'verdict=locked lock=mkdir'
+  one_verdict "$output"
   cmp -s "$d/MEMORY.md" "$BATS_TEST_TMPDIR/lock.before"
   touch -t "$OLD" "$d/.rotate.lock.d"            # now stale (>180 s)
-  run "$SCRIPT" "$d/MEMORY.md"
+  CCMR_LOCK_IMPL="mkdir" run "$SCRIPT" "$d/MEMORY.md"
   has "$output" 'verdict=rotated'
+  [ ! -e "$d/.rotate.lock.d" ]                   # released on exit
+}
+
+@test "lockf tier: a held lock returns verdict=locked rc 3 and the index is byte-identical" {
+  [ -x "$LOCKF_BIN" ] || skip "lockf(1) is not at $LOCKF_BIN on this host"
+  d="$(mkmem lockf)"; mkbulk "$d"
+  cp "$d/MEMORY.md" "$BATS_TEST_TMPDIR/lockf.before"
+  hold_lockf "$d/.rotate.lock"
+  CCMR_LOCK_IMPL="lockf" run "$SCRIPT" "$d/MEMORY.md"
+  release_lockf
+  [ "$status" -eq 3 ]
+  [ "$output" = "verdict=locked lock=lockf" ]
+  cmp -s "$d/MEMORY.md" "$BATS_TEST_TMPDIR/lockf.before"
+}
+
+@test "lockf tier: a hand-set lock marker does not skip a held lock" {
+  [ -x "$LOCKF_BIN" ] || skip "lockf(1) is not at $LOCKF_BIN on this host"
+  d="$(mkmem marker)"; mkbulk "$d"
+  cp "$d/MEMORY.md" "$BATS_TEST_TMPDIR/marker.before"
+  hold_lockf "$d/.rotate.lock"
+  _CCMR_LOCK_HELD="$d/.rotate.lock" CCMR_LOCK_IMPL="lockf" run "$SCRIPT" "$d/MEMORY.md"
+  release_lockf
+  [ "$status" -eq 3 ]
+  has "$output" 'verdict=locked lock=lockf'
+  cmp -s "$d/MEMORY.md" "$BATS_TEST_TMPDIR/marker.before"
+}
+
+@test "lockf tier: an unheld run rotates, prints one verdict, and keeps the lock file" {
+  [ -x "$LOCKF_BIN" ] || skip "lockf(1) is not at $LOCKF_BIN on this host"
+  d="$(mkmem lockfok)"; mkbulk "$d"
+  CCMR_LOCK_IMPL="lockf" run "$SCRIPT" "$d/MEMORY.md"
+  [ "$status" -eq 0 ]
+  has "$output" 'verdict=rotated'
+  one_verdict "$output"
+  [ -f "$d/.rotate.lock" ]                       # never unlinked
+  [ ! -e "$d/.rotate.lock.d" ]
+}
+
+@test "lockf tier: a SIGKILLed rotor leaves no lock, and the next run proceeds" {
+  [ -x "$LOCKF_BIN" ] || skip "lockf(1) is not at $LOCKF_BIN on this host"
+  d="$(mkmem killf)"; mkbulk "$d"
+  killed_midrun lockf "$d"
+  has "$(cat "$BATS_TEST_TMPDIR/killed.out")" 'verdict=error reason=no-verdict-under-lockf'
+  CCMR_LOCK_IMPL="lockf" run "$SCRIPT" "$d/MEMORY.md"
+  hasnt "$output" 'verdict=locked'
+  has "$output" 'verdict=rotated'
+  [ -f "$d/.rotate.lock" ]
+}
+
+@test "CONTROL: the same SIGKILL under the mkdir tier DOES strand the lock" {
+  d="$(mkmem killd)"; mkbulk "$d"
+  killed_midrun mkdir "$d"
+  [ -d "$d/.rotate.lock.d" ]
+  CCMR_LOCK_IMPL="mkdir" run "$SCRIPT" "$d/MEMORY.md"
+  [ "$status" -eq 3 ]
+  has "$output" 'verdict=locked lock=mkdir'
+}
+
+@test "flock tier: a held lock returns verdict=locked, and a SIGKILLed holder leaves none" {
+  command -v flock >/dev/null 2>&1 || skip "flock(1) is not on PATH on this host (macOS ships lockf)"
+  d="$(mkmem flk)"; mkbulk "$d"
+  cp "$d/MEMORY.md" "$BATS_TEST_TMPDIR/flk.before"
+  CCMR_LOCK_IMPL="flock" run flock -n "$d/.rotate.lock" "$SCRIPT" "$d/MEMORY.md"
+  [ "$status" -eq 3 ]
+  has "$output" 'verdict=locked lock=flock'
+  cmp -s "$d/MEMORY.md" "$BATS_TEST_TMPDIR/flk.before"
+  killed_midrun flock "$d"
+  CCMR_LOCK_IMPL="flock" run "$SCRIPT" "$d/MEMORY.md"
+  has "$output" 'verdict=rotated'
+}
+
+@test "the lock tier seam: an unknown tier and an absent binary are errors, not a silent fallback" {
+  d="$(mkmem seam)"; mkbulk "$d"
+  CCMR_LOCK_IMPL=bogus run "$SCRIPT" "$d/MEMORY.md"
+  [ "$status" -eq 2 ]
+  [ "$output" = "verdict=error reason=unknown-lock-impl lock=bogus" ]
+  CCMR_LOCK_IMPL=lockf CCMR_LOCKF="$BATS_TEST_TMPDIR/no-lockf" run "$SCRIPT" "$d/MEMORY.md"
+  [ "$status" -eq 2 ]
+  [ "$output" = "verdict=error reason=lock-impl-unavailable lock=lockf" ]
+}
+
+@test "the default tier falls back to mkdir when neither flock nor lockf is available" {
+  command -v flock >/dev/null 2>&1 && skip "flock(1) is on PATH here, so the default is the flock tier"
+  d="$(mkmem deflt)"; mkbulk "$d"
+  mkdir "$d/.rotate.lock.d"
+  CCMR_LOCKF="$BATS_TEST_TMPDIR/no-lockf" run "$SCRIPT" "$d/MEMORY.md"
+  [ "$status" -eq 3 ]
+  has "$output" 'verdict=locked lock=mkdir'
+}
+
+@test "a failed index rename is verdict=error and leaves the index byte-identical" {
+  d="$(mkmem mvfail)"; mkbulk "$d"
+  cp "$d/MEMORY.md" "$BATS_TEST_TMPDIR/mvfail.before"
+  MEMORY_ROTATE_TEST_PRE_COMMIT='mv() { return 1; }' run "$SCRIPT" "$d/MEMORY.md"
+  [ "$status" -eq 2 ]
+  [ "$output" = "verdict=error reason=commit-rename-failed" ]
+  cmp -s "$d/MEMORY.md" "$BATS_TEST_TMPDIR/mvfail.before"
+  [ -z "$(find "$d" -maxdepth 1 -name '.MEMORY.md.*')" ]   # its temp is removed, not stranded
 }
 
 @test "contended: a sibling writing between read and commit is never clobbered" {

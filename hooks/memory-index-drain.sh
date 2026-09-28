@@ -299,6 +299,12 @@ case "$RLOAD" in
   *)        RSTATE="whether that file loads could not be read from claudeMdExcludes, so do not count on it" ;;
 esac
 case "$DV" in
+  verdict=locked*)
+    # Not a failure and not a refusal: another rotor holds this store's lock, almost always a sibling
+    # session rotating or draining the same index at this moment. The lock is released by the kernel
+    # when its holder exits, so it cannot outlive that run.
+    CTX="MEMORY INDEX DRAIN DID NOT RUN: another cc-memory-rotate holds this store's lock (a sibling session is rotating or draining this index right now). Nothing was moved and nothing was lost, but an over-cap entry you just wrote may still be in the auto-loaded index; the next write to it re-checks. Verdict: ${DV}"
+    ;;
   verdict=drained*)
     FILES=$(printf '%s' "$DV" | sed -n 's/.* files=\([^ ]*\).*/\1/p')
     if [ "$RLOAD" = loads ]; then
@@ -365,6 +371,9 @@ if [ -n "$M" ]; then
           ;;
         *)
           WHY="ran and could NOT clear it (${RV:-no verdict})"
+          case "${RV:-}" in
+            verdict=locked*) WHY="did NOT run: another cc-memory-rotate holds this store's lock, most likely a sibling session rotating it right now, which may clear it without you (${RV})" ;;
+          esac
           [ -n "$RCUT" ] && WHY="$RCUT"
           CTX="${CTX:+$CTX }🚨 MEMORY INDEX IS OVER ITS LOADER CAP — ${U}/${LIM} chars, ${L}/${LLIM} lines. Past either cap the loader SILENTLY DROPS THE TAIL, the NEWEST entries, so anything you append now is written into the invisible tail. Auto-rotation ${WHY}. Route a durable rule to ${RULES} instead, or apply ONE-IN-ONE-OUT before appending anything else."
           ;;

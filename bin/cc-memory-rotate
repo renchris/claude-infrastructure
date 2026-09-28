@@ -113,8 +113,12 @@
 # line-by-line BEFORE the index is rewritten, so a crash between the two leaves at worst a
 # duplicate in the record, never a lost line. The index rewrite is temp+rename with a stat
 # re-check and bounded retry — a sibling session's append between our read and our write
-# restarts the cycle instead of being clobbered. The lock is mkdir-based (macOS has no
-# flock(1)); stale locks (>180 s) are reclaimed. Every exit prints ONE parseable `verdict=`
+# restarts the cycle instead of being clobbered. The lock is released by the KERNEL when its
+# holder dies, so a SIGKILLed rotor leaves nothing to reclaim and the next run proceeds: `flock -n`
+# on fd 9 where flock(1) exists, else a re-run of this script under `/usr/bin/lockf -s -k -t 0`
+# (macOS ships lockf, not flock), else the old mkdir lock with its 180 s stale reclaim. The lock
+# FILE `.rotate.lock` is never unlinked, and children that could outlive us run with fd 9 closed.
+# CCMR_LOCK_IMPL=flock|lockf|mkdir forces a tier (see THE LOCK). Every exit prints ONE parseable `verdict=`
 # token on stdout (MEMORY.md claimed-outcome-vs-checked-outcome) and rotations append to
 # archive/.rotate.log. A side-car must never fail wider than itself: any unexpected state is
 # verdict=error with the index untouched.
@@ -173,13 +177,17 @@
 #        (LIMIT-4000) · MEMORY_INDEX_LINE_LIMIT (200) · MEMORY_ROTATE_AT_LINES (LINE_LIMIT-12) ·
 #        MEMORY_ROTATE_TARGET_LINES (LINE_LIMIT-32) · MEMORY_ROTATE_MIN_KEEP (40) · MEMORY_ROTATE_TAIL_GUARD (15) ·
 #        MEMORY_ROTATE_MIN_AGE_DAYS (7) · MEMORY_ROTATE_TEST_PRE_COMMIT (test seam, eval'd
-#        before each commit attempt's stat re-check — lets a suite exercise the contended path)
+#        before each commit attempt's stat re-check — lets a suite exercise the contended path) ·
+#        CCMR_LOCK_IMPL (flock|lockf|mkdir; unset = the first available, in that order) ·
+#        CCMR_LOCKF (/usr/bin/lockf — the lockf tier's binary)
 # Exit:  0 noop/rotated/dry-run · 2 error · 3 locked/contended · 4 exhausted
 set -euo pipefail
 export LC_ALL=C   # byte semantics everywhere: ${#s}, wc -c, sort — self-consistent accounting,
                   # reconciled to the loader's char limit by the threshold shift (see THE UNIT)
 
 VERBOSE=0; DRYRUN=0; INDEX=""; DRAIN=0; RULES_FILE=""
+# Kept verbatim for the lockf tier, which re-runs this script under lockf(1) (see THE LOCK).
+_CCMR_ARGV=("$@")
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run) DRYRUN=1 ;;
@@ -346,16 +354,76 @@ fi
 NMD=$(find "$DIR" -maxdepth 1 -name '*.md' | wc -l | tr -d ' ')
 if [ "$NMD" -gt 5000 ]; then printf 'verdict=error reason=dir-too-large n=%s\n' "$NMD"; exit 2; fi
 
-LOCK="$DIR/.rotate.lock.d"
-if ! mkdir "$LOCK" 2>/dev/null; then
-  NOW=$(date +%s)
-  LM=$(fmtime "$LOCK"); [ -n "$LM" ] || LM=$NOW
-  if [ $(( NOW - LM )) -gt 180 ] && rmdir "$LOCK" 2>/dev/null && mkdir "$LOCK" 2>/dev/null; then
-    vlog "reclaimed stale lock"
-  else
-    printf 'verdict=locked\n'; exit 3
-  fi
+# ── THE LOCK: released by the kernel, so a killed holder leaves nothing behind ───────────────
+# The old mkdir lock survived SIGKILL and made every later run report `locked` until its 180 s
+# reclaim — and the realistic killer is a hook budget, which is exactly when the next prompt's
+# rotor needs to run. A lock held on an open file descriptor dies with the process that holds it.
+#   flock  `flock -n 9` on fd 9, opened here for the rest of this process's life.
+#   lockf  macOS has lockf(1), not flock(1), and lockf only WRAPS a command, so this tier re-runs
+#          this script under `lockf -s -k -t 0 <lockfile>` with _CCMR_LOCK_HELD naming the lock
+#          file. lockf holds the lock, closes it in the child it forks, and exits 75 (EX_TEMPFAIL)
+#          when the lock is taken. The wrapper passes the inner run's stdout through when it holds
+#          a verdict and otherwise prints its own, so every path still prints exactly one.
+#   mkdir  the old lock and its stale reclaim, for a host with neither binary.
+# The lock FILE is never unlinked (-k): a waiter holding the unlinked inode and a newcomer locking
+# a fresh one would both "hold" it. Children that could outlive this process run with `9>&-`.
+LOCKFILE="$DIR/.rotate.lock"
+LOCK="$DIR/.rotate.lock.d"   # the mkdir tier only
+_CCMR_LOCK_DIR_HELD=0
+_CCMR_LOCKF="${CCMR_LOCKF:-/usr/bin/lockf}"
+LOCK_IMPL="${CCMR_LOCK_IMPL:-}"
+if [ -z "$LOCK_IMPL" ]; then
+  if command -v flock >/dev/null 2>&1; then LOCK_IMPL="flock"
+  elif [ -x "$_CCMR_LOCKF" ]; then LOCK_IMPL="lockf"
+  else LOCK_IMPL="mkdir"; fi
 fi
+case "$LOCK_IMPL" in
+  flock)
+    if ! command -v flock >/dev/null 2>&1; then
+      printf 'verdict=error reason=lock-impl-unavailable lock=flock\n'; exit 2
+    fi
+    if ! { exec 9>>"$LOCKFILE"; } 2>/dev/null; then
+      printf 'verdict=error reason=lock-file-unwritable lock=flock\n'; exit 2
+    fi
+    if ! flock -n 9; then printf 'verdict=locked lock=flock\n'; exit 3; fi
+    ;;
+  lockf)
+    # The marker alone is not trusted: an inherited or hand-set variable must not skip the lock,
+    # so the inner run also checks that its parent really is lockf.
+    _ccmr_pcomm=$(ps -o comm= -p "$PPID" 2>/dev/null) || _ccmr_pcomm=""
+    if [ "${_CCMR_LOCK_HELD:-}" = "$LOCKFILE" ] && [ "${_ccmr_pcomm##*/}" = lockf ]; then
+      unset _CCMR_LOCK_HELD
+      vlog "lock: lockf (held by the wrapping lockf)"
+    else
+      if [ ! -x "$_CCMR_LOCKF" ]; then
+        printf 'verdict=error reason=lock-impl-unavailable lock=lockf\n'; exit 2
+      fi
+      _ccmr_self="${BASH_SOURCE[0]}"
+      case "$_ccmr_self" in /*) : ;; *) _ccmr_self="$PWD/$_ccmr_self" ;; esac
+      _ccmr_rc=0
+      _ccmr_out=$(_CCMR_LOCK_HELD="$LOCKFILE" "$_CCMR_LOCKF" -s -k -t 0 "$LOCKFILE" \
+        "$BASH" "$_ccmr_self" ${_CCMR_ARGV[@]+"${_CCMR_ARGV[@]}"}) || _ccmr_rc=$?
+      case "$_ccmr_out" in
+        *verdict=*) printf '%s\n' "$_ccmr_out"; exit "$_ccmr_rc" ;;
+      esac
+      if [ "$_ccmr_rc" -eq 75 ]; then printf 'verdict=locked lock=lockf\n'; exit 3; fi
+      printf 'verdict=error reason=no-verdict-under-lockf rc=%s\n' "$_ccmr_rc"; exit 2
+    fi
+    ;;
+  mkdir)
+    if ! mkdir "$LOCK" 2>/dev/null; then
+      NOW=$(date +%s)
+      LM=$(fmtime "$LOCK"); [ -n "$LM" ] || LM=$NOW
+      if [ $(( NOW - LM )) -gt 180 ] && rmdir "$LOCK" 2>/dev/null && mkdir "$LOCK" 2>/dev/null; then
+        vlog "reclaimed stale lock"
+      else
+        printf 'verdict=locked lock=mkdir\n'; exit 3
+      fi
+    fi
+    _CCMR_LOCK_DIR_HELD=1
+    ;;
+  *) printf 'verdict=error reason=unknown-lock-impl lock=%s\n' "$LOCK_IMPL"; exit 2 ;;
+esac
 # The citation scan's pattern file is removed on the normal path, but a hook that hits its budget
 # kills this process mid-scan and that `rm -f` never runs — 22 stranded `.rotate.cited.*` files
 # measured in the live memory dir on 2026-09-05, arriving about one every six minutes. Cleanup
@@ -381,7 +449,7 @@ _ccmr_tmp() {
 }
 _ccmr_cleanup() {
   local _t
-  rmdir "$LOCK" 2>/dev/null || true
+  if [ "$_CCMR_LOCK_DIR_HELD" -eq 1 ]; then rmdir "$LOCK" 2>/dev/null || true; fi
   [ -n "$CITE_TMP" ] && rm -f "$CITE_TMP" 2>/dev/null
   if [ -n "$CCMR_TMPS" ]; then
     while IFS= read -r _t; do
@@ -421,7 +489,8 @@ _ccmr_snapshot() { # $1=which mutation path is about to write
   fi
   _s="$(dirname "$_p")/../scripts/memory-store-snapshot.sh"
   if [ -r "$_s" ]; then
-    _v="$(bash "$_s" "$DIR" "cc-memory-rotate:$1" 2>/dev/null | head -n1)" || _v=""
+    # 9>&-: the snapshot's git may detach a gc that outlives us, and it must not hold the lock.
+    _v="$(bash "$_s" "$DIR" "cc-memory-rotate:$1" 9>&- 2>/dev/null | head -n1)" || _v=""
   fi
   vlog "snapshot: ${_v:-no verdict ($_s)}"
   return 0
@@ -838,7 +907,10 @@ EOF
     rm -f "$D_TMP"; printf 'verdict=error reason=would-not-shrink\n'; exit 2
   fi
   chmod 644 "$D_TMP"
-  mv -f "$D_TMP" "$INDEX"
+  # A failed rename leaves the index as it was; under `set -e` a bare mv would exit with no verdict.
+  if ! mv -f "$D_TMP" "$INDEX"; then
+    rm -f "$D_TMP"; printf 'verdict=error reason=commit-rename-failed mode=drain-oversized\n'; exit 2
+  fi
   D_NEWLINES=$(flines "$INDEX")
   printf 'verdict=drained mode=drain-oversized entry_limit=%s oversized=%s moved=%s files=%s before=%s after=%s lines_before=%s lines_after=%s dest=%s\n' \
     "$ENTRY_LIMIT" "$D_CAND" "$D_N" "$D_FILES" "$SIZE" "$D_NEWSZ" "$NLINES" "$D_NEWLINES" "$D_DESTS"
@@ -1725,7 +1797,9 @@ ${LINES[$li]}"
   NEWSZ=$(fsize "$TMP")
   if [ "$NEWSZ" -ge "$SIZE" ]; then rm -f "$TMP"; printf 'verdict=error reason=would-not-shrink\n'; exit 2; fi
   chmod 644 "$TMP"
-  mv -f "$TMP" "$INDEX"
+  if ! mv -f "$TMP" "$INDEX"; then
+    rm -f "$TMP"; printf 'verdict=error reason=commit-rename-failed\n'; exit 2
+  fi
   NEWLINES=$(flines "$INDEX")
   # `cold=` names a file, so it must name one that EXISTS: a fully-routed rotation writes no
   # cold record, and printing its would-be path there sends the reader to a missing file.

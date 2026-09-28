@@ -738,3 +738,47 @@ ctx_of() { printf '%s' "$1" | jq -r '.hookSpecificOutput.additionalContext'; }
   has "$c" "does NOT load"
   hasnt "$c" "DELETE"
 }
+
+# A LOCKED rotor is neither a failure nor a refusal: another rotor holds the store's lock. Both call
+# sites must say so in their own words. The real rotor runs, forced onto its portable mkdir tier with
+# a fresh lock dir held, so no background holder process is needed.
+@test "35 a LOCKED per-entry drain renders its own text, not a drain or a silence" {
+  p="$(mkproj p35)"; proj="${p%|*}"; memd="${p#*|}"
+  topic "$memd" "big.md" project
+  run fire "$proj"
+  ( cd "$memd" && printf -- '- [Big](big.md) — %s\n' "$(pad 700)" >>MEMORY.md )
+  mkdir "$memd/.rotate.lock.d"
+  # shellcheck disable=SC2016  # $1/$2/$cwd are the inner bash's and jq's, not this shell's
+  run env CCMR_LOCK_IMPL=mkdir bash -c 'jq -nc --arg cwd "$1" "{session_id:\"s1\",cwd:\$cwd,tool_name:\"Bash\",tool_input:{command:\"true\"},tool_response:{exitCode:0}}" | bash "$2"' _ "$proj" "$REPO/hooks/memory-index-drain.sh"
+  [ "$status" -eq 0 ]
+  contract "$output"
+  ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
+  has "$ctx" "MEMORY INDEX DRAIN DID NOT RUN: another cc-memory-rotate holds this store's lock"
+  has "$ctx" "Verdict: verdict=locked lock=mkdir"
+  hasnt "$ctx" "MEMORY INDEX DRAINED"
+  grep -qF '(big.md)' "$memd/MEMORY.md"          # nothing moved
+}
+
+@test "36 a LOCKED whole-index rotation says it did NOT run, never that it could not clear" {
+  p="$(mkproj p36)"; proj="${p%|*}"; memd="${p#*|}"
+  i=1
+  while [ "$i" -le 40 ]; do add_entry "$memd" "e$i.md" 60; i=$(( i + 1 )); done
+  run fire "$proj"
+  ( cd "$memd" && printf -- '- [Last](e1.md) — tiny\n' >>MEMORY.md )
+  mkdir "$memd/.rotate.lock.d"
+  cp "$memd/MEMORY.md" "$T/p36.before"
+  # shellcheck disable=SC2016  # $1/$2/$cwd are the inner bash's and jq's, not this shell's
+  run env CCMR_LOCK_IMPL=mkdir MID_DEADLINE_S=120 \
+      MEMORY_INDEX_LINE_LIMIT=20 MEMORY_ROTATE_AT_LINES=12 MEMORY_ROTATE_TARGET_LINES=8 \
+      MEMORY_ROTATE_TAIL_GUARD=3 MEMORY_ROTATE_MIN_AGE_DAYS=0 MEMORY_ROTATE_MIN_KEEP=0 \
+      bash -c 'jq -nc --arg cwd "$1" "{session_id:\"s1\",cwd:\$cwd,tool_name:\"Bash\",tool_input:{command:\"true\"},tool_response:{exitCode:0}}" | bash "$2"' _ "$proj" "$REPO/hooks/memory-index-drain.sh"
+  [ "$status" -eq 0 ]
+  contract "$output"
+  ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
+  has "$ctx" "MEMORY INDEX IS OVER ITS LOADER CAP"
+  has "$ctx" "Auto-rotation did NOT run: another cc-memory-rotate holds this store's lock"
+  has "$ctx" "(verdict=locked lock=mkdir)"
+  hasnt "$ctx" "could NOT clear it"
+  hasnt "$ctx" "AUTO-ROTATED"
+  cmp -s "$memd/MEMORY.md" "$T/p36.before"
+}

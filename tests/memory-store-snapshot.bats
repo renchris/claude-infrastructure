@@ -63,8 +63,8 @@ one_verdict_line() { # exactly one line, and it is a verdict line
   git --git-dir="$G" show "$(git --git-dir="$G" rev-parse refs/heads/main~1)":a.md | grep -qx 'body a'    # the pre-image is restorable
 }
 
-@test "scratch is not history: lock dir, cited scratch, *.tmp, .MEMORY.md.* temps are excluded" {
-  mkdir "$ST/.rotate.lock.d"; : >"$ST/.rotate.lock.d/x"
+@test "scratch is not history: lock dir, lock file, cited scratch, *.tmp, .MEMORY.md.* temps are excluded" {
+  mkdir "$ST/.rotate.lock.d"; : >"$ST/.rotate.lock.d/x"; : >"$ST/.rotate.lock"
   : >"$ST/.rotate.cited.AbC123"; : >"$ST/foo.tmp"; : >"$ST/.MEMORY.md.rotate.Q1w2E3"
   mkdir -p "$ST/archive"; : >"$ST/archive/.rotate.cited.zz"; printf 'cold\n' >"$ST/archive/COLD.md"
   run bash "$SNAP" "$ST" scratch; G="$(gitdir "$output")"

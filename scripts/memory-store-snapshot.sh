@@ -50,7 +50,7 @@ ZERO_OID=0000000000000000000000000000000000000000
 
 # Scratch the rotor and index writers leave in the store for seconds at a time. Snapshotting them
 # would record a lock dir or a half-written temp as memory content.
-EXCLUDES=(':(exclude,glob).rotate.lock.d/**' ':(exclude,glob)**/.rotate.cited.*'
+EXCLUDES=(':(exclude,glob).rotate.lock.d/**' ':(exclude).rotate.lock' ':(exclude,glob)**/.rotate.cited.*'
           ':(exclude,glob)**/*.tmp' ':(exclude,glob)**/.MEMORY.md.*')
 
 # History key: the PHYSICAL path with every `/` → `-` (dots kept), so
