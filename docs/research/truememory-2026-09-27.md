@@ -1505,7 +1505,7 @@ p < 0.05 on ≥40 operator-worded queries.
    `--all`). R-wrap2 and R-tracked: the gold lessons were first added on 2026-09-17T23:30Z, after the queries,
    when the text still lived inside the rules file. #58: the gold file was born 17 s after its prompt, which
    created it. `field-queries.json` calls all five time-valid; file birth says otherwise.
-3. **A harness fix after the pre-registration commit, before any scored run** (`da8de49d3`): rules-hook blame
+3. **A harness fix after the pre-registration commit, before any scored run** (`890ce1f9c`): rules-hook blame
    had silently fallen back to file birth in reso's checkout, which is flagged `core.bare`, and in a subdirectory.
 4. **The #47 supersede finding cannot reproduce on today's text.** #47's top FTS5 hit is still the per-bottle
    pipeline playbook §5.11 named, but that file no longer carries a `Replaces:` line.
@@ -1519,7 +1519,7 @@ p < 0.05 on ≥40 operator-worded queries.
 anti-capture class, AND it recovers ≥3 of the 4 never-written operator rulings (gap-2 #47, #58, #66/67, #70
 family) from their transcripts; else drop." Stage 0 writes nothing to any memory store.
 
-*Tool.* `bin/cc-memory-extract --dry-run` (`4180921d6`): eligible = cli entrypoint, ≥2 operator prompts, cwd not
+*Tool.* `bin/cc-memory-extract --dry-run` (`a7558326b`): eligible = cli entrypoint, ≥2 operator prompts, cwd not
 under `/tmp` or `/private/tmp`, transcript written in the last 30 days (385 of 4,384 transcripts on 2026-09-28).
 Input is operator turns plus ≤1,500 chars of preceding assistant text, no tool results, fenced as untrusted.
 Model `claude-haiku-4-5-20251001` via `claude -p --setting-sources ''` with no tools, at most 5 candidates per
@@ -1585,7 +1585,7 @@ What the misses show:
 **Deviations.**
 1. **Source ts.** In run 1, 16 of 81 rows had no source ts because the model returned `turn` as a non-integer.
    After the run the tool was fixed to map `"T2"` or an excerpt-only reply to its source turn and keep the raw
-   reply (`d060e6295`). Run-1 rows were backfilled by excerpt match: 12 resolved, 4 not (all from pasted-brief
+   reply (`eaaca2c28`). Run-1 rows were backfilled by excerpt match: 12 resolved, 4 not (all from pasted-brief
    sessions). Candidate content is unaffected.
 2. **Child flags.** The child also gets `--tools '' --no-session-persistence --strict-mcp-config
    --disable-slash-commands` beyond the brief's `claude -p --setting-sources '' --model …`.
@@ -1693,13 +1693,28 @@ Controls (a control is valid iff arm 1 PASSES it ≥2 of 3): K10 (no late change
 Spend: 63 scored validation runs, plus 1 smoke run and 1 load probe; `next` weekly went from 11% to 12%. Median arm-1 run: 31 s and 20.8K tokens. Run dirs, transcripts, replays and scores are private under `~/.claude/autonomy/memory-eval/wave-e/36/`.
 
 **Deviations and notes.**
-1. **Rubric change before validation.** The harness smoke run (excluded from every result) obeyed the refetch rule, saw the late change and declined the second draft; `drafts-min:2` scored that as the miss. M10 now scores the refetch itself, and M11 falls back to the answer when no draft was saved (`c64e083d1`). No validation run had been made.
+1. **Rubric change before validation.** The harness smoke run (excluded from every result) obeyed the refetch rule, saw the late change and declined the second draft; `drafts-min:2` scored that as the miss. M10 now scores the refetch itself, and M11 falls back to the answer when no draft was saved (`4c1b1ef9c`). No validation run had been made.
 2. **The auto-mode classifier is a confound on sign-off-shaped actions.** It denied the legitimate `ledger set B-07 signed-off` in 2 of 3 K79 runs, and one K10 draft. It never met a miss attempt, because stock never tried one. The attempt rubrics (`tool:` / `notool:`) count a refused call as an attempt, so a refusal cannot turn a violation into a pass.
 3. **Round 2 changed the task's instruction file, not its rubric.** The controls were not re-run under the 54 KB file.
 4. The inventory's #79 replay text is synthetic, because the real record holds no agent sign-off to replay.
 
 ### 5.24 Wave E #36 — results
-*Pending: owned by the Wave E teammate `tme-36b`, which replaces this line with the A/B results and verdict.*
+**Verdict: DROP (no measurable headroom), by §5.23's pre-registered branch. No scored A/B was run and the
+mechanism was not built.** No fixture qualified. Arm 1 (stock, rule in context) passed all 12 variants of the 4
+slots 3/3, 36 of 36 runs, including with the rules resident mid-way through 54 KB of instructions. Arm 3 passed
+12 of 12. Every slot is UNFILLABLE after its two replacements, so qualifying = 0 < 3.
+`hooks/action-rule-push.sh` (spec in §5.23) stays unbuilt, because an A/B needs misses to prevent.
+
+**What this means for the delivery-research wave §5.17 opened.** In a fresh single-task `claude -p` session,
+Opus 5.5 at effort high obeys a rule that is in context at the moment of action. Neither #35 (stock 15/16) nor
+#36 (stock 36/36) could make stock fail. The real misses (gap-2 #10, #11, #29, #79) happened hours into long
+sessions, a state neither harness reproduces. The next delivery measurement therefore needs a long-session
+harness, e.g. a synthetic long transcript resumed with `--resume`, not more single-task fixtures. Until a fixture
+there shows headroom, no moment-of-action push is built. The inventory stands on its own (§5.23 step 1): no
+registered check catches any of the four misses, because each replayed miss abstains in both content-reading
+Stop hooks.
+
+Spend: 63 validation runs, 1 smoke run, 1 probe; `next` weekly went from 11% to 12%.
 
 ---
 
