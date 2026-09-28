@@ -145,6 +145,9 @@ _reap_keep_dormant=(claimer-live owned-wait)
 # neighbour-lib-missing joined with backup-before-write:neighbours (truememory §3.10, X3): the new-topic
 # branch could not resolve hooks/lib/memory_neighbours.py (or python3) through its dereferenced
 # self-path, so it never scored the write. empty-pool and kill-switch stay out: the guard was reached.
+# norm-import-failed joined with session-index:norm (truememory §3.14, X3): the session index could not
+# import hooks/lib/transcript_norm.py and fell back to the pre-fix filter that let 64% machinery into
+# context_text. The index still works, so nothing else notices; `lib` is the reached guard.
 _default_blind=(no-jq no-session-id no-stdin no-telemetry stale-telemetry \
                 no-transcript-path transcript-missing not-a-repo no-cwd no-assistant-text \
                 goal-unreadable \
@@ -154,6 +157,7 @@ _default_blind=(no-jq no-session-id no-stdin no-telemetry stale-telemetry \
                 no-symptom-table lib-missing \
                 no-prompt classify-error \
                 neighbour-lib-missing \
+                norm-import-failed \
                 "${_reap_keep_blind[@]}")
 if [ -n "${CC_ABSTAIN_BLIND_REASONS:-}" ]; then
   # shellcheck disable=SC2206  # intentional word-split of the override list
@@ -941,6 +945,7 @@ selftest() {
   out="$(run_reg "$XLOG" "$XEMPTY" "$XIDL")"; rc=$?
   [ "$rc" -ne 0 ]                                  && okp "X1 harvest 0 rows vs 25 indexed → nonzero exit" || badp "X1 silent harvest did not page"
   printf '%s' "$out" | grep -q 'SILENT  *harvest-skill-end' && okp "X1 harvest reported SILENT" || badp "X1 harvest not SILENT"
+  printf '%s' "$out" | grep -q 'SILENT  *session-index:norm' && okp "X1 session-index:norm 0 rows vs 25 indexed → SILENT" || badp "X1 norm not SILENT"
   out="$(run_reg "$d/x-no-such.log" "$XEMPTY" "$XIDL")"; rc=$?
   printf '%s' "$out" | grep -q 'harvest-skill-end .*denominator: UNKNOWN' && okp "X2 harvest log absent → denominator UNKNOWN" || badp "X2 harvest UNKNOWN not printed"
   [ "$rc" -eq 0 ]                                  && okp "X2 an UNKNOWN denominator does not page" || badp "X2 UNKNOWN paged"
@@ -951,6 +956,7 @@ selftest() {
   printf '%s' "$out" | grep -q 'memory-nudge .*denominator: UNKNOWN' && okp "X4 no nudge state dir → denominator UNKNOWN" || badp "X4 nudge UNKNOWN not printed"
   for ((i = 0; i < 12; i++)); do
     printf '{"ts":"%s","hook":"harvest-skill-end","sid":"x%d","disposition":"abstained","reason":"below-gate"}\n' "$FIXTS" "$i" >> "$XIDL"
+    printf '{"ts":"%s","hook":"session-index:norm","sid":"x%d","disposition":"fired","reason":"lib"}\n' "$FIXTS" "$i" >> "$XIDL"
   done
   out="$(run_reg "$XLOG" "$XEMPTY" "$XIDL")"; rc=$?
   [ "$rc" -eq 0 ]                                  && okp "X5 harvest with 12 rows vs 25 indexed → exit 0" || badp "X5 a logging harvest still paged"
@@ -971,6 +977,11 @@ selftest() {
   done
   out="$(run_reg "$XLOG" "$XEMPTY" "$XIDL")"
   printf '%s' "$out" | grep -q 'OK  *cc-memory-search' && okp "X7 memory-search 12 rows vs 12 searches → OK" || badp "X7 memory-search not OK"
+  # X8: session-index:norm whose every row is the import fallback is INERT — norm-import-failed is BLIND.
+  local X8="$d/x8.jsonl"; emit "$X8" 12 session-index:norm abstained norm-import-failed
+  out="$(run_alarm "$X8")"; rc=$?
+  [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'INERT.*session-index:norm\|session-index:norm.*INERT' \
+    && okp "X8 norm all-fallback → INERT" || badp "X8 norm all-fallback did not page INERT"
 
   echo "idl-abstain-alarm --selftest: $PASS passed, $FAIL failed"
   [ "$FAIL" -eq 0 ] || exit 1

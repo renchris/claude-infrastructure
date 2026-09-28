@@ -691,14 +691,92 @@ session_index_unpad() {
     printf '%s' "$1"
 }
 
+# ─── Transcript normaliser (truememory §3.14) ─────────────
+# Both context_text extractors keep only what the operator TYPED, via hooks/lib/transcript_norm.py.
+# The old filter dropped only `<`-leading text, and 78 of 122 selected messages (64%) were Stop-hook
+# feedback, skill bodies or peer messages. The lib is found through the DEREFERENCED self-path (X1):
+# ~/.claude/hooks/lib holds per-file links, so its dirname is not the checkout's lib.
+#
+# On a failed import the extractors fall back to the old inline filter, because the index must not
+# die. That fallback silently reverts the fix, so it is LOUD: once per process, session-index.log
+# gets `norm=lib` or `norm=fallback:<ExcType>`, and the IDL gets a `session-index:norm` row (X2)
+# whose fallback reason `norm-import-failed` is BLIND in scripts/idl-abstain-alarm.sh (X3).
+# SESSION_INDEX_NORM_DIR is the seam a test points at a directory without the lib.
+_si_deref() { # <path> → the real file behind any symlink chain (readlink -f, BSD-safe fallback)
+    local p="$1" t n=0
+    readlink -f "$p" 2>/dev/null && return 0
+    while [ -L "$p" ] && [ "$n" -lt 20 ]; do
+        t="$(readlink "$p")"
+        case "$t" in /*) p="$t" ;; *) p="$(dirname "$p")/$t" ;; esac
+        n=$(( n + 1 ))
+    done
+    printf '%s\n' "$p"
+}
+SESSION_INDEX_NORM_DIR="${SESSION_INDEX_NORM_DIR:-$(dirname "$(_si_deref "${BASH_SOURCE[0]}")")}"
+# The extractors run inside $(…) subshells, where a flag set on the first call dies with it, so
+# "once per process" is a token minted at source time (every subshell inherits it) and recorded in
+# a marker under $HOME/.claude/state (X4). A concurrent sweep and SessionEnd can each re-log once
+# after the other; that costs a row, never a missed one.
+_SI_NORM_PROC="$$.$RANDOM$RANDOM"
+_SI_NORM_MARK="$HOME/.claude/state/session-index-norm.proc"
+
+# The import preamble both Python blocks splice in: binds op(record) -> text | None and writes
+# the import status to $SI_NORM_STATUS when set. _legacy is the pre-§3.14 filter, verbatim.
+_SI_NORM_PY='
+import os, sys
+def _legacy(d):
+    content = d.get("message", {}).get("content", "")
+    if isinstance(content, list):
+        return " ".join(c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text").strip()
+    return str(content).strip()
+try:
+    sys.dont_write_bytecode = True
+    sys.path.insert(0, os.environ["SI_NORM_DIR"])
+    from transcript_norm import operator_text as op
+    _norm = "lib"
+except Exception as e:
+    op, _norm = _legacy, "fallback:" + type(e).__name__
+if os.environ.get("SI_NORM_STATUS"):
+    try:
+        with open(os.environ["SI_NORM_STATUS"], "w") as _fh:
+            _fh.write(_norm)
+    except Exception:
+        pass
+'
+
+# _si_norm_status_file → a fresh file for the Python block to write its status into, or nothing when
+# this process has already reported.
+_si_norm_status_file() {
+    [ "$(cat "$_SI_NORM_MARK" 2>/dev/null)" = "$_SI_NORM_PROC" ] && return 0
+    mktemp "${TMPDIR:-/tmp}/si-norm.XXXXXX" 2>/dev/null || true
+}
+
+# _si_norm_report <status-file> <caller> — the once-per-process log line and IDL row. Never fails.
+_si_norm_report() {
+    local f="$1" st disp=fired reason=lib row idl="${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
+    [ -n "$f" ] || return 0
+    st="$(cat "$f" 2>/dev/null)"; rm -f "$f"
+    [ -n "$st" ] || return 0   # python3 never ran: the extractor itself failed, not the import
+    [ "$st" = lib ] || { disp=abstained; reason=norm-import-failed; }
+    session_index_log "norm=$st caller=$2"
+    row="$(jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg sid "${SESSION_ID:-${sid:-?}}" \
+        --arg d "$disp" --arg r "$reason" --arg n "$st" --arg c "$2" \
+        '{ts:$ts, hook:"session-index:norm", sid:$sid, disposition:$d, reason:$r, norm:$n, caller:$c}' 2>/dev/null)" || return 0
+    mkdir -p "$(dirname "$idl")" "$(dirname "$_SI_NORM_MARK")" 2>/dev/null
+    printf '%s\n' "$row" >> "$idl" 2>/dev/null
+    printf '%s' "$_SI_NORM_PROC" > "$_SI_NORM_MARK" 2>/dev/null; return 0
+}
+
 # ─── Extract Context Text from Transcript ─────────────────
 
 session_index_extract_context() {
     local transcript_path="$1"
     local max_messages="${2:-10}"
     [ -f "$transcript_path" ] || return
-    python3 -c "
+    local st; st="$(_si_norm_status_file)"
+    SI_NORM_DIR="$SESSION_INDEX_NORM_DIR" SI_NORM_STATUS="$st" python3 -c "
 import json, sys, re
+$_SI_NORM_PY
 msgs = []
 total_user = 0
 with open('$transcript_path') as f:
@@ -707,14 +785,9 @@ with open('$transcript_path') as f:
             d = json.loads(line)
             if d.get('type') != 'user': continue
             total_user += 1
-            content = d.get('message', {}).get('content', '')
-            if isinstance(content, list):
-                text = ' '.join(c.get('text','') for c in content if isinstance(c, dict) and c.get('type')=='text')
-            else:
-                text = str(content)
-            text = text.strip()
+            text = op(d)
             # Skip system/command/XML messages and single-word responses
-            if not text or text.startswith('<') or text.startswith('<!--'): continue
+            if not text or text.startswith('<'): continue
             if len(text) < 10: continue
             # Skip plan preambles (## Context, ## Phase, markdown headers at start)
             # but keep the substantive parts
@@ -737,6 +810,7 @@ with open('$transcript_path') as f:
 print(' '.join(msgs)[:2500])
 print(total_user, file=sys.stderr)
 " 2>/dev/null || echo ""
+    _si_norm_report "$st" extract_context
 }
 
 # ─── Extract Enriched Data from Transcript ─────────────────
@@ -902,12 +976,15 @@ session_index_extract_all() {
         return 0
     fi
 
+    local st; st="$(_si_norm_status_file)"
     TRANSCRIPT_PATH="$transcript_path" \
     MAX_MESSAGES="$max_messages" \
     MAX_ASSISTANT_CHARS="$max_assistant_chars" \
     MAX_FILES="$max_files" \
+    SI_NORM_DIR="$SESSION_INDEX_NORM_DIR" SI_NORM_STATUS="$st" \
     python3 -c "
 import json, os, re, sys
+$_SI_NORM_PY
 # Path/limits arrive through the ENVIRONMENT, not string interpolation: a transcript path
 # is attacker-adjacent data and the older extractors spliced it straight into the program
 # text, where a quote would break the parse (or worse).
@@ -934,13 +1011,7 @@ try:
                 # ── context_text: identical rules to session_index_extract_context ──
                 user_count += 1
                 if len(msgs) < max_messages:
-                    content = d.get('message', {}).get('content', '')
-                    if isinstance(content, list):
-                        text = ' '.join(c.get('text','') for c in content
-                                        if isinstance(c, dict) and c.get('type') == 'text')
-                    else:
-                        text = str(content)
-                    text = text.strip()
+                    text = op(d)
                     if text and not text.startswith('<') and len(text) >= 10:
                         substantive = []
                         for ln in text.split('\n'):
@@ -993,6 +1064,7 @@ fc  = flat(' '.join(sorted(files)[:max_files]))
 cr  = flat(' '.join(commands[:50]))
 sys.stdout.write(ctx + '\t' + at + '\t' + fc + '\t' + cr + '\t' + str(user_count))
 " 2>/dev/null || printf '\t\t\t\t0'
+    _si_norm_report "$st" extract_all
 }
 
 # ─── Retention: drop rows whose transcript no longer exists ────────────────────

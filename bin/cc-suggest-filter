@@ -229,22 +229,13 @@ def extract_ladder(binary: Path) -> str | None:
 # transcript — no field records who pressed enter (`entrypoint` is "cli" for both, measured over
 # 47,502 user records) — so they are counted, and the `--dedupe` sensitivity check exists to bound
 # what they do to the result rather than to hand-wave them away.
-_INJECTED_PREFIXES = (
-    "Caveat:",
-    "Stop hook feedback:",
-    "[Request interrupted",
-    "[Image:",
-    "[desk-sweep]",
-    "Another Claude session sent a message:",
-    "A session-scoped Stop hook is now active",
-    "API Error:",
-    "This session is being continued from a previous conversation",
-)
-_SYSTEM_REMINDER = re.compile(r"<system-reminder>.*?</system-reminder>", re.S)
-# `[\s>]`, not `>`: the peer-message envelope is `<teammate-message teammate_id="…">`, so a pattern
-# demanding an immediate `>` matched none of them and left 199-to-1125-word agent briefs in the
-# corpus as "typed prompts". Found by hand-auditing a random 30, not by reading the regex.
-_XML_ENVELOPE = re.compile(r"\A<[a-z][a-z0-9-]*[\s>]")
+#
+# The list, the envelope regex and typed_prompt() live in hooks/lib/transcript_norm.py, the one
+# Python copy the session index also uses (truememory §3.14). It is found through the DEREFERENCED
+# self-path: ~/.claude/bin/cc-suggest-filter is a symlink, and ~/.claude/hooks/lib is not the repo.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks" / "lib"))
+sys.dont_write_bytecode = True
+from transcript_norm import typed_prompt  # noqa: E402
 
 DEFAULT_ROOTS = [
     Path.home() / ".claude" / "projects",
@@ -267,28 +258,6 @@ def _roots() -> list[Path]:
             seen.add(r)
             out.append(r)
     return out
-
-
-def typed_prompt(record: dict) -> str | None:
-    """Return the user-typed text of a transcript record, or None if it was not typed by a human."""
-    if record.get("type") != "user" or record.get("isSidechain"):
-        return None
-    if record.get("userType") not in (None, "external"):
-        return None
-    content = record.get("message", {}).get("content")
-    if isinstance(content, list):
-        # A list content block is a tool_result or an expanded slash command — never typing.
-        return None
-    if not isinstance(content, str):
-        return None
-    text = _SYSTEM_REMINDER.sub("", content).strip()
-    if not text:
-        return None
-    if _XML_ENVELOPE.match(text):
-        return None
-    if any(text.startswith(p) for p in _INJECTED_PREFIXES):
-        return None
-    return text
 
 
 def harvest(roots: list[Path], limit: int | None, dedupe: bool = False) -> list[dict]:

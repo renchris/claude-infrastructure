@@ -439,11 +439,13 @@ indexed_lines() { # <log> <n> — n SessionEnd lines a minute before NOW, in the
   printf '240' > "$BATS_TEST_TMPDIR/nudge/nudge-a.count"
   indexed_lines "$BATS_TEST_TMPDIR/si.log" 19                # harvest D_min is 20
   emit 1 other-hook fired x
+  emit 10 session-index:norm fired lib                       # same denominator, D_min 5: it must log
   run env CC_IDL="$IDL" CC_ABSTAIN_NOW="$NOW" CC_ABSTAIN_LOG="$LOG" CC_ABSTAIN_CENSUS=0 MEMORY_NUDGE_INTERVAL=0 \
       CC_EXPECTED_SESSION_INDEX_LOG="$BATS_TEST_TMPDIR/si.log" CC_EXPECTED_NUDGE_STATE_DIRS="$BATS_TEST_TMPDIR/nudge" "$S" --run
   [ "$status" -eq 0 ]
   printf '%s' "$output" | grep -q 'OK  *harvest-skill-end .*D=19 '
   printf '%s' "$output" | grep -q 'OK  *memory-nudge .*D=0 '
+  printf '%s' "$output" | grep -q 'OK  *session-index:norm .*D=19 '
 }
 
 @test "registry: cc-memory-search's denominator counts real searches in bash-execution.log, not mentions" {
