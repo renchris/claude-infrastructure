@@ -1429,7 +1429,45 @@ and neither is reopened by a result recorded here.
   ruling moment changes behaviour. #24's Stage 0 (§5.20) measures the capture half from transcripts, not prompts.
 
 ### 5.19 Wave E #4b — FTS5 + model2vec fusion on operator-worded queries
-*Pending: owned by the Wave E teammate `tme-4b`, which replaces this line with its pre-registration and results.*
+**Pre-registration (committed 2026-09-28, before any scored run; the rule is the lead's, fixed).**
+
+- **Question.** Does RRF fusion of the shipped FTS5 ranking with model2vec cosine beat FTS5 alone on queries
+  the operator typed? §5.1's 0.78 → 0.90 R@1 (6 wins to 0, p = 0.031) was on agent-written queries.
+- **Unit.** One operator-worded query with ≥1 hand-labelled gold file born before the query time.
+- **Arms.** A = `bin/cc-memory-search`'s own `build_corpus` and `search` (imported, never `main`, so no log is
+  written), top 100. B = RRF (k = 60, `1/(60+i+1)` per list, i from 0) of A's list and the top 100 by
+  `minishlab/potion-base-8M` cosine over head text (H1, else name with `-` as space, then `. ` and the
+  description), the `empirical-harness/hybrid_lite.py` recipe. Same query text, scope and corpus in both.
+- **Scope and corpus.** The shipped default (project) scope, resolved for the query's project: its store as the
+  current store (`MEMORY_INDEX_PATH`), its repo root for lessons and rules (`claude-infrastructure` = this
+  branch's tree), and the feedback sweep over every store under `~/.claude/projects`. A document born after the
+  query time is removed before ranking, in both arms: topics by file birth time, lessons by first git add,
+  rules-hook rows by `git blame` line time, cold rows by their target's birth. Text is today's (as in §5.11).
+  A gold file that `build_corpus` dropped as a same-(name, description) twin counts through its kept twin.
+- **Primary.** Rank of the first gold hit, 11 if not in the top 10. Win = B strictly better. One-sided sign
+  test, ties dropped. **ADOPT iff p < 0.05 AND R@1(B) ≥ R@1(A); else DROP.** A query with no gold in its own
+  scope's corpus is gold-missing: out of the primary and R@k, kept for the supersede count.
+- **Secondary (never overriding).** R@1, R@5, MRR per arm with Wilson 95% CIs; the same test on the field
+  records' `agent_query` (replication); per arm, queries whose top 1 is non-gold and declares
+  `Replaces:`/`Supersedes:` (recall_eval's `SUPERSEDE`, the #47 class); B's cold latency (fresh process: load,
+  encode corpus, one query), warm per-query latency and peak RSS.
+- **Query set** (private: `~/.claude/autonomy/memory-eval/wave-e/4b/queries.json`,
+  sha256 `5d0040be9844d06ebac8bf1e325af5e3112e2204f2fef0d5b0099b8339ac0e26`; 30 records).
+  - Field: the 19 records of `field-queries.json`, query = `operator_verbatim`. 15 have gold of a searchable
+    kind (topic, lesson, rules hook); #47, #66, #67, #106 do not (a runbook, research docs, none).
+  - Transcript: typed prompts (`transcript_norm.typed_prompt`) in `~/.claude*/projects/*/*.jsonl`, last 60 days:
+    6,008 typed prompts. Pass 1 (the brief's cue phrases plus synonyms) matched 64; pass 2 (broader cues:
+    "didn't we", "our runbook", "you keep", "in the past", …) matched 29 more. Of the 93 read, 12 were field
+    records already in the set, and 11 qualified: they relied on something stored and a searchable gold file
+    was born before them. The rest asked about in-session state or had no stored answer.
+  - Gold was labelled blind from the stores (grep, Read, the agent's reply in the transcript) before either arm
+    ran on any query.
+- **Branches.** ADOPT → phase 4: an opt-in `--fuse` in `cc-memory-search` (lazy import, FTS5 fallback with one
+  stderr line, a `fuse` field in the state log row), never default, never on a hook path. DROP → nothing more
+  is built; reopen only on a gain at p < 0.05 on ≥40 operator-worded queries.
+- **Deviation known at registration.** 1. **n < 40.** 26 scorable units (15 field + 11 transcript) after 93
+  cue-matched prompts, against the plan's target of ≥40. Stopped there as the brief directs. A significant
+  result needs at least 5 wins to 0 (or 7 to 1) among untied pairs.
 
 ### 5.20 Wave E #24 — candidate extractor, Stage 0 (`--dry-run`)
 *Pending: owned by the Wave E teammate `tme-24`, which replaces this line with its pre-registration and results.*
