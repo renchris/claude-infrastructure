@@ -53,4 +53,28 @@ fi
 [ -n "$EXIT" ] || EXIT="fail"
 mkdir -p ~/.claude/logs
 echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] [$SID] $CMD | Exit: $EXIT" >> ~/.claude/logs/bash-execution.log
+# THE LESSON ARM (truememory-2026-09-27.md §3.6, #6) — PostToolUseFailure ONLY, after the audit line
+# (which it never touches). A failing command never reaches PostToolUse, so bash-output-offload.sh
+# cannot see it; its `.error` is scanned here by hooks/lib/lesson_recall.py, which answers with a
+# hookSpecificOutput echoing THIS payload's hook_event_name (CC drops a mismatched one) or nothing.
+# The lib is found through the DEREFERENCED self-path (X1); an unresolvable one is a BLIND row.
+if [ "$EVT" = "PostToolUseFailure" ] && command -v python3 >/dev/null 2>&1; then
+  _lb_self="${BASH_SOURCE[0]}" _lb_n=0
+  while [ -L "$_lb_self" ] && [ "$_lb_n" -lt 20 ]; do
+    _lb_t="$(readlink "$_lb_self")"
+    case "$_lb_t" in /*) _lb_self="$_lb_t" ;; *) _lb_self="$(dirname "$_lb_self")/$_lb_t" ;; esac
+    _lb_n=$(( _lb_n + 1 ))
+  done
+  _lb_lr="$(dirname "$_lb_self")/lib/lesson_recall.py"
+  if [ -r "$_lb_lr" ]; then
+    printf '%s' "$INPUT" | PYTHONDONTWRITEBYTECODE=1 python3 "$_lb_lr" failure 2>/dev/null || true
+  else
+    _lb_idl="${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
+    mkdir -p "$(dirname "$_lb_idl")" 2>/dev/null || true
+    jq -cn --arg ts "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" --arg sid "$SID" --arg lib "$_lb_lr" \
+      --arg tu "$(printf '%s' "$INPUT" | jq -r '.tool_use_id // ""' 2>/dev/null)" \
+      '{ts:$ts,hook:"log-bash:lesson",sid:$sid,disposition:"abstained",reason:"lib-missing",tool_use_id:$tu,lib:$lib}' \
+      >> "$_lb_idl" 2>/dev/null || true
+  fi
+fi
 exit 0
