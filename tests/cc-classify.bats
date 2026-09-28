@@ -603,6 +603,74 @@ sgtx_subtypeonly() { local sid="$1" ago="$2"; local ts jf="$D/proj/slug/$sid.jso
   [ "$(cause "$UP")" = safeguard-blocked ]
 }
 
+# ── 5.5-generation refusals (2026-09-28) — shapes copied from the real 2.1.284 transcripts
+#    (probe-refusal.md: 2abe76ca Opus 5.5 hard block, 11439fdf Sonnet 5.5 mid-stream decline). The
+#    wording moved to "flagged this SESSION" / "your last MESSAGE", so the three original signatures
+#    matched none of it and only the subtype caught the block, with blocked_model:null. ──
+sgtx55() { local sid="$1" ago="$2" model="${3:-Opus 5.5}"; local ts txt jf="$D/proj/slug/$sid.jsonl"
+  ts="$(TZ=UTC date -j -f %s "$((NOW-ago))" +%Y-%m-%dT%H:%M:%S 2>/dev/null).000Z"
+  txt="API Error: ${model}'s safeguards flagged this session (https://www.anthropic.com/legal/aup). You may be seeing this for the first time: ${model} is more capable and has stronger safeguards as a result, which can sometimes flag non-cybersecurity work. Claude Code can't respond to your last message with ${model}."
+  {
+    jq -nc --arg ts "$ts" '{type:"user",isMeta:false,timestamp:$ts,message:{role:"user",content:"do the thing"}}'
+    jq -nc --arg ts "$ts" '{type:"assistant",timestamp:$ts,message:{role:"assistant",stop_reason:"refusal",content:[{type:"thinking",thinking:""}]}}'
+    jq -nc --arg ts "$ts" --arg m "$model" '{type:"system",subtype:"informational",level:"notice",timestamp:$ts,content:($m + "'"'"'s safeguards stopped the response above · continuing once with that noted")}'
+    jq -nc --arg ts "$ts" '{type:"system",subtype:"model_refusal_no_fallback",timestamp:$ts,content:"",apiRefusalCategory:"cyber",originalModel:"claude-opus-5-5"}'
+    jq -nc --arg ts "$ts" --arg t "$txt" '{type:"assistant",isApiErrorMessage:true,timestamp:$ts,message:{role:"assistant",stop_reason:"refusal",content:[{type:"text",text:$t}]}}'
+  } > "$jf"
+}
+sg_one() { local sid="$1" ago="$2" rec="$3"; local ts jf="$D/proj/slug/$sid.jsonl"   # user prompt + ONE record
+  ts="$(TZ=UTC date -j -f %s "$((NOW-ago))" +%Y-%m-%dT%H:%M:%S 2>/dev/null).000Z"
+  jq -nc --arg ts "$ts" '{type:"user",isMeta:false,timestamp:$ts,message:{role:"user",content:"do the thing"}}' > "$jf"
+  printf '%s' "$rec" | jq -c --arg ts "$ts" '. + {timestamp:$ts}' >> "$jf"
+}
+
+@test "safeguard-blocked 5.5 — the new wording alone blocks (subtype disabled) and names the model" {
+  reg "$UP" "$LIVE" /repo sid55; sgtx55 sid55 200 "Opus 5.5"
+  run env CC_CLASSIFY_SAFEGUARD_SUBTYPE=__none__ "$C" "$UP" --json
+  [ "$(printf '%s' "$output" | jq -r '.cause')" = safeguard-blocked ]
+  [ "$(printf '%s' "$output" | jq -r '.blocked_model')" = "Opus 5.5" ]
+  printf '%s' "$output" | jq -e '.refusal | test("flagged this session")' >/dev/null
+}
+
+@test "safeguard-blocked 5.5 — each of the four new signatures blocks on its own" {
+  local p
+  for p in "Opus 5.5's safeguards flagged this session." \
+           "Claude Code can't respond to your last message with Sonnet 5.5." \
+           "Claude Code can't respond to this message with Sonnet 5.5." \
+           "Sorry, I can't help with this. Start a new session to continue."; do
+    reg "$UP" "$LIVE" /repo sidP; sgtx_textonly sidP 200 "API Error: $p"
+    [ "$(CC_CLASSIFY_SAFEGUARD_SUBTYPE=__none__ cause "$UP")" = safeguard-blocked ] || { echo "missed: $p"; false; }
+  done
+}
+
+@test "safeguard-blocked 5.5 — STRUCTURAL stop_reason refusal alone blocks (no signature, no subtype)" {
+  reg "$UP" "$LIVE" /repo sidSR
+  sg_one sidSR 200 '{"type":"assistant","message":{"role":"assistant","stop_reason":"refusal","content":[{"type":"thinking","thinking":""}]}}'
+  run env CC_CLASSIFY_SAFEGUARD_SIGNATURES=__none__ CC_CLASSIFY_SAFEGUARD_SUBTYPE=__none__ "$C" "$UP" --json
+  [ "$(printf '%s' "$output" | jq -r '.cause')" = safeguard-blocked ]
+}
+
+@test "safeguard-blocked 5.5 — the 'safeguards stopped the response above' informational alone blocks and names the model" {
+  reg "$UP" "$LIVE" /repo sidIN
+  sg_one sidIN 200 "{\"type\":\"system\",\"subtype\":\"informational\",\"level\":\"notice\",\"content\":\"Sonnet 5.5's safeguards stopped the response above · continuing once with that noted\"}"
+  run env CC_CLASSIFY_SAFEGUARD_SIGNATURES=__none__ CC_CLASSIFY_SAFEGUARD_SUBTYPE=__none__ "$C" "$UP" --json
+  [ "$(printf '%s' "$output" | jq -r '.cause')" = safeguard-blocked ]
+  [ "$(printf '%s' "$output" | jq -r '.blocked_model')" = "Sonnet 5.5" ]
+}
+
+@test "safeguard-blocked 5.5 — a camelCase apiRefusalCategory record (fallback) alone blocks when terminal" {
+  reg "$UP" "$LIVE" /repo sidFB
+  sg_one sidFB 200 '{"type":"system","subtype":"model_refusal_fallback","content":"","apiRefusalCategory":"cyber","originalModel":"claude-opus-5-5","fallbackModel":"claude-opus-4-8"}'
+  run env CC_CLASSIFY_SAFEGUARD_SIGNATURES=__none__ CC_CLASSIFY_SAFEGUARD_SUBTYPE=__none__ "$C" "$UP" --json
+  [ "$(printf '%s' "$output" | jq -r '.cause')" = safeguard-blocked ]
+}
+
+@test "no safeguard-blocked 5.5 — a real text turn after the structural refusal is recovery" {
+  reg "$UP" "$LIVE" /repo sidRC; sgtx55 sidRC 500 "Opus 5.5"
+  jq -nc '{type:"assistant",message:{role:"assistant",content:[{type:"text",text:"here is the answer"}]}}' >> "$D/proj/slug/sidRC.jsonl"
+  [ "$(cause "$UP")" != safeguard-blocked ]
+}
+
 # ── G1 (2026-07-25) — the interactive lib must FAIL CLOSED when it cannot be resolved ────────────
 # Live, cc-classify runs as ~/.claude/bin/cc-classify (a per-file symlink dir), so $0's dirname IS
 # $CLAUDE_CONFIG_DIR/bin and ALL THREE resolve candidates collapse onto ~/.claude/hooks/lib/. A newly

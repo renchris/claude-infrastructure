@@ -79,7 +79,13 @@ PERMPEND_BLIND_DISABLE="${CC_CLASSIFY_PERMPEND_BLIND_DISABLE:-0}"        # 1 ⇒
 #    + case-insensitive (matched against the isApiErrorMessage text); the model_refusal_no_fallback
 #    system subtype is an independent STRUCTURAL corroborator (the cleanest deterministic marker).
 # default built in a single-quoted var — bash 3.2 (macOS) mishandles a literal apostrophe inside "${x:-…}"
+# The 5.5-generation wording (2.1.280+, measured 2026-09-28) says "flagged this SESSION" and "can't
+# respond to your last MESSAGE with", which matched none of the first three phrases, so every Opus 5.5
+# and Sonnet 5.5 cyber block was caught by the subtype alone and reported blocked_model:null
+# (docs/research/sonnet55-utilization-2026-09-28/notes/probe-refusal.md § Recommendations 1-2).
 _SG_SIG_DEFAULT='safeguards flagged this message|can'\''t respond to this request with|may flag safe, normal content'
+_SG_SIG_DEFAULT="$_SG_SIG_DEFAULT"'|safeguards flagged this session|can'\''t respond to your last message with'
+_SG_SIG_DEFAULT="$_SG_SIG_DEFAULT"'|can'\''t respond to this message with|can'\''t help with this. start a new session'
 SAFEGUARD_SIGNATURES="${CC_CLASSIFY_SAFEGUARD_SIGNATURES:-$_SG_SIG_DEFAULT}"
 SAFEGUARD_REFUSAL_SUBTYPE="${CC_CLASSIFY_SAFEGUARD_SUBTYPE:-model_refusal_no_fallback}"
 SAFEGUARD_IDLE_S="${CC_CLASSIFY_SAFEGUARD_IDLE_S:-120}"   # refusal terminal AND idle >= this ⇒ blocked
@@ -340,8 +346,9 @@ parse_blocked_model() { # <refusal-text> → best-effort model name (e.g. "Fable
   local t="$1" m
   # "…can't respond to this request with <Model>." — the authoritative phrasing.
   m="$(printf '%s' "$t" | sed -nE 's/.*[Rr]espond to this request with ([A-Za-z][A-Za-z0-9]*( [0-9]+(\.[0-9]+)*)?).*/\1/p' | head -1)"
-  # fallback: "API Error: <Model>'s safeguards …"
-  [ -z "$m" ] && m="$(printf '%s' "$t" | sed -nE "s/^API Error: ([A-Za-z][A-Za-z0-9]*( [0-9]+(\.[0-9]+)*)?)'s safeguards.*/\1/p" | head -1)"
+  # fallback: "API Error: <Model>'s safeguards …", or the bare "<Model>'s safeguards …" of the
+  # 2.1.280+ system notices ("…stopped the response above", "…flagged this session").
+  [ -z "$m" ] && m="$(printf '%s' "$t" | sed -nE "s/^(API Error: )?([A-Za-z][A-Za-z0-9]*( [0-9]+(\.[0-9]+)*)?)'s safeguards.*/\2/p" | head -1)"
   printf '%s' "$m"
 }
 
@@ -360,9 +367,20 @@ safeguard_blocked() { # <jsonl> → prints "<refusal-iso>\t<refusal-text>", retu
       | ([ (($r.message.content) // []) | if type=="array" then .[]? else empty end
            | select(.type=="text") | (.text // "") ] | join(" ") | gsub("[\\t\\r\\n]"; " ")) as $txt
       | ($txt | ascii_downcase) as $lc
+      | ((($r.content // "") | if type=="string" then . else "" end) | gsub("[\\t\\r\\n]"; " ")) as $stxt
       | if ($r.type=="system" and (($r.subtype // "") == $sub)) then "REFUSAL\t\t"
-        elif ($r.type=="assistant" and (($r.isApiErrorMessage // false) == true)
-              and (any($sigs[]; . as $s | ($s|length) > 0 and ($lc | contains($s))))) then
+        # STRUCTURAL, 2.1.280+ (2026-09-28): a system record carrying the camelCase refusal fields
+        # (apiRefusalCategory / originalModel / fallbackModel — the transcript spelling; stream-json
+        # uses snake_case), or the informational notice "safeguards stopped the response above".
+        elif ($r.type=="system"
+              and (($r.apiRefusalCategory // null) != null
+                   or (($r.subtype // "") == "informational"
+                       and ($stxt | ascii_downcase | contains("safeguards stopped the response above"))))) then
+          "REFUSAL\t" + ($r.timestamp // "") + "\t" + $stxt
+        elif ($r.type=="assistant"
+              and (((($r.isApiErrorMessage // false) == true)
+                    and (any($sigs[]; . as $s | ($s|length) > 0 and ($lc | contains($s)))))
+                   or ((($r.message.stop_reason) // "") == "refusal"))) then
           "REFUSAL\t" + ($r.timestamp // "") + "\t" + $txt
         elif ($r.type=="user" and ($r.isMeta != true)
               and ((($r.message.content|type) == "string" and (($r.message.content|length) > 0))
@@ -377,7 +395,7 @@ safeguard_blocked() { # <jsonl> → prints "<refusal-iso>\t<refusal-text>", retu
     ' 2>/dev/null)"
   [ -n "$tagged" ] || return 1
   printf '%s\n' "$tagged" | awk -F'\t' '
-      { if ($1=="REFUSAL") { last="R"; if ($2!="" || $3!="") { rts=$2; rtxt=$3 } }
+      { if ($1=="REFUSAL") { last="R"; if ($3!="") { rts=$2; rtxt=$3 } else if (rtxt=="" && $2!="") { rts=$2 } }
         else if ($1=="TURN") { last="T" } }
       END { if (last=="R") { print rts "\t" rtxt; exit 0 } exit 1 }'
 }
