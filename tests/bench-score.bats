@@ -20,7 +20,7 @@ mkrun() {
 import json, os, re, sys
 root, cfg, task, arm, rep, answer, main = sys.argv[1:8]
 sub = sys.argv[8] if len(sys.argv) > 8 else ""
-rd = os.path.join(root, task, f"a{arm}-r{rep}")
+rd = os.path.join(root, f"{task}-a{arm}-r{rep}-{os.environ.get('EPOCH', '1000')}")
 fx = os.path.join(rd, "fx")
 os.makedirs(os.path.join(rd, "out")); os.makedirs(fx); os.makedirs(os.path.join(rd, "mem"))
 sid = f"sid-{task}-{arm}-{rep}"
@@ -98,6 +98,15 @@ ctx_line() { # a transcript line: a hook_additional_context attachment carrying 
   [ "$(field C04 1 false_pointer)" = 0 ]
   [ "$(field C04 3 correct)" = 1 ]
   [ "$(field C04 3 lesson_used)" = None ]
+}
+
+@test "a re-run leaves the older run dir in place and only the newest run of a task x arm x rep is scored" {
+  EPOCH=1000 mkrun T05 3 1 "YES, wrap it." "$(read_line /x/README.md)"
+  EPOCH=2000 mkrun T05 3 1 "YES, wrap it." "$(read_line /x/docs/lessons/never-wrap-ship-in-your-own-timeout.md)"
+  run python3 "$SCORE" --root "$ROOT" --config-dir "$CFG"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '"task": "T05"' "$ROOT/scored.jsonl")" -eq 1 ]
+  [ "$(field T05 3 lesson_used)" = 1 ]
 }
 
 @test "the one-sided sign test matches §5.16: 12 of 16 is p=0.038, 11 of 16 is p=0.105, ties never enter" {

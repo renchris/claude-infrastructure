@@ -18,8 +18,12 @@ case "$SPEC" in
   -) exit 0 ;;
   rmmem:*)
     f=${SPEC#rmmem:}
-    rm -f "${MEM:?}/$f"
-    grep -vF "($f)" "$MEM/MEMORY.md" > "$MEM/MEMORY.md.n" && mv "$MEM/MEMORY.md.n" "$MEM/MEMORY.md"
+    # The one delete in the harness: a single named file inside THIS run's own store copy.
+    case "$f" in */*|..*|'') echo "setup: bad rmmem name $f" >&2; exit 2 ;; esac
+    real=$(cd "$MEM" && pwd -P); runreal=$(cd "$RUN" && pwd -P)
+    case "$real/" in "$runreal"/*) ;; *) echo "setup: $MEM is not under $RUN" >&2; exit 2 ;; esac
+    rm -f "$real/$f"
+    grep -vF "($f)" "$real/MEMORY.md" > "$real/MEMORY.md.n" && mv "$real/MEMORY.md.n" "$real/MEMORY.md"
     exit 0 ;;
   plant:*) ;;
   *) echo "setup: unknown spec $SPEC" >&2; exit 2 ;;

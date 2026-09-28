@@ -13,6 +13,7 @@ Per run (docs/research/truememory-2026-09-27.md §5.16):
   tokens       input + output + cache_creation from result.json usage
   false_pointer (controls) a lesson pointer reached the model in a hook_additional_context attachment,
                main transcript or subagents/
+Run dirs are <root>/<task>-a<arm>-r<rep>-<epoch>/; a re-run leaves the old dir and the newest wins.
 Writes <root>/scored.jsonl (private) and prints the aggregate table plus the primary sign test
 (arm 3 vs arm 2, lesson_used, paired by task x rep over the lesson and write tasks) and secondaries.
 """
@@ -328,14 +329,19 @@ def main(argv: List[str]) -> int:
     ap.add_argument("--tasks", default=os.path.join(HERE, "tasks.tsv"))
     args = ap.parse_args(argv[1:])
     tasks = load_tasks(args.tasks)
-    rows = []
-    for meta in sorted(
-        glob.glob(os.path.join(args.root, "*", "a*-r*", "out", "meta.json"))
-    ):
+    newest: Dict[Tuple[str, str, str], Tuple[int, str, Dict[str, Any]]] = {}
+    for meta in glob.glob(os.path.join(args.root, "*-a*-r*-*", "out", "meta.json")):
         rd = os.path.dirname(os.path.dirname(meta))
-        task = os.path.basename(os.path.dirname(rd))
-        if task in tasks:
-            rows.append(score_run(rd, tasks[task], args.config_dir))
+        with open(meta, encoding="utf-8") as fh:
+            m = json.load(fh)
+        key = (str(m["task"]), str(m["arm"]), str(m["rep"]))
+        epoch = int(rd.rsplit("-", 1)[1]) if rd.rsplit("-", 1)[1].isdigit() else 0
+        if key[0] in tasks and (key not in newest or epoch > newest[key][0]):
+            newest[key] = (epoch, rd, m)
+    rows = [
+        score_run(rd, tasks[key[0]], args.config_dir)
+        for key, (_, rd, _m) in sorted(newest.items())
+    ]
     with open(os.path.join(args.root, "scored.jsonl"), "w", encoding="utf-8") as fh:
         for r in rows:
             fh.write(json.dumps(r) + "\n")

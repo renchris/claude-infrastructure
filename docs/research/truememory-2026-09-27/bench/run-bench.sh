@@ -2,7 +2,7 @@
 # run-bench.sh <arm 1|2|3> <task-id> <rep> — ONE headless run of the #35 delivery benchmark
 # (docs/research/truememory-2026-09-27.md §5.16 pre-registration; results in §5.17).
 #
-# Modelled on ../ab-harness/run-ab.sh. Per run, under $RUNROOT/<task>/a<arm>-r<rep>/:
+# Modelled on ../ab-harness/run-ab.sh. Per run, under $RUNROOT/<task>-a<arm>-r<rep>-<epoch>/:
 #   origin.git + fx/  a clone of a one-commit snapshot of the repo at the arm's sha (arms 1-2:
 #                     BENCH_A2_SHA, default abaf1e990; arm 3: BENCH_A3_SHA, required)
 #   home/.claude/projects/<infra key>/memory/   the frozen store COPY (autoMemoryDirectory); mem -> it
@@ -10,7 +10,7 @@
 #
 # Arm differences, and nothing else differs:
 #   1  stock: no hooks of ours, no rules or instruction text (fixture .claude/rules/ and
-#      CLAUDE.global*.md deleted), only the sandbox guard.
+#      CLAUDE.global*.md removed by `git rm` in the run's own clone), only the sandbox guard.
 #   2/3 the memory hooks the arm's tree registers (settings template + bash-output-offload, which a
 #      migration registers), run from an exported copy of that tree; the fixture's .claude/CLAUDE.md
 #      and rules plus the tree's CLAUDE.global.slim.md (what account next loads) through --add-dir;
@@ -31,7 +31,7 @@ REPO=${BENCH_REPO:-$(git -C "$H" rev-parse --show-toplevel)}
 RUNROOT=${BENCH_ROOT:-$HOME/.claude/autonomy/memory-eval/bench-runs}
 SRC=${BENCH_STORE:-$HOME/.claude/autonomy/memory-eval/storecopy-infra-2026-09-28}
 CCD=${BENCH_CONFIG_DIR:-$HOME/.claude-next}
-CLAUDE_BIN=${CLAUDE_BIN:-/opt/homebrew/bin/claude}
+CLAUDE_BIN=${CLAUDE_BIN:-$HOME/.claude-280/node_modules/.bin/claude}
 GUARD=${BENCH_GUARD:-$HOME/Development/claude-infrastructure/docs/research/token-efficiency-2026-09-23/eval/harness/f3/sandbox-guard.sh}
 KEY=-Users-chrisren-Development-claude-infrastructure
 
@@ -48,22 +48,32 @@ case "$RUNROOT" in /tmp/*|/private/tmp/*|'') echo "refusing RUNROOT $RUNROOT (X8
 [ -d "$SRC" ] && [ -f "$GUARD" ] && [ -d "$CCD" ] || { echo "missing store, guard or config dir" >&2; exit 2; }
 
 # One snapshot repo and one exported tree per sha, shared by every run (built under a mkdir lock).
+# Nothing is ever deleted: each is built under a unique scratch name beside its target and renamed
+# into place, and the snapshot commit uses the exported tree as its work tree (the index lives in the
+# bare repo), so there is no scratch checkout at all.
 SNAP="$RUNROOT/_snap/$SHA.git"; TREE="$RUNROOT/_trees/$SHA"
 mkdir -p "$RUNROOT/_snap" "$RUNROOT/_trees"
 until mkdir "$RUNROOT/_snap/.lock" 2>/dev/null; do sleep 1; done
-if [ ! -d "$SNAP" ] || [ ! -d "$TREE" ]; then
-  B="$RUNROOT/_snap/.build-$$"; rm -rf "$B" "$TREE"; mkdir -p "$B/w" "$TREE"
-  git -C "$REPO" archive "$SHA" | tar -x -C "$B/w" && git -C "$REPO" archive "$SHA" | tar -x -C "$TREE" \
-    && git -C "$B/w" init -q -b main && git -C "$B/w" add -A \
-    && git -C "$B/w" -c user.name=Bench -c user.email=bench@example.invalid commit -q -m "snapshot $SHA" \
-    && git clone -q --bare "$B/w" "$SNAP"
-  st=$?; rm -rf "$B"
-  [ "$st" -eq 0 ] || { rmdir "$RUNROOT/_snap/.lock"; echo "snapshot failed" >&2; exit 3; }
+st=0
+if [ ! -d "$TREE" ]; then
+  T="$TREE.build-$$-$(date +%s)"; mkdir -p "$T"
+  git -C "$REPO" archive "$SHA" | tar -x -C "$T" && mv "$T" "$TREE" || st=1
+fi
+if [ "$st" -eq 0 ] && [ ! -d "$SNAP" ]; then
+  S="$SNAP.build-$$-$(date +%s)"
+  git init -q --bare -b main "$S" \
+    && git --git-dir="$S" --work-tree="$TREE" add -A \
+    && git --git-dir="$S" --work-tree="$TREE" -c user.name=Bench -c user.email=bench@example.invalid \
+      commit -q -m "snapshot $SHA" \
+    && mv "$S" "$SNAP" || st=1
 fi
 rmdir "$RUNROOT/_snap/.lock"
+[ "$st" -eq 0 ] || { echo "snapshot failed" >&2; exit 3; }
 
-RUN="$RUNROOT/$TASK/a$ARM-r$REP"
-rm -rf "${RUN:?}"; mkdir -p "$RUN/out" "$RUN/tmp" "$RUN/home/.claude/state" "$RUN/home/.claude/logs" "$RUN/home/.claude/autonomy"
+# A unique run dir per launch, so a re-run never deletes an earlier one (score.py keeps the newest).
+RUN="$RUNROOT/$TASK-a$ARM-r$REP-$(date +%s)"
+mkdir "$RUN" || { echo "run dir exists: $RUN" >&2; exit 3; }
+mkdir -p "$RUN/out" "$RUN/tmp" "$RUN/home/.claude/state" "$RUN/home/.claude/logs" "$RUN/home/.claude/autonomy"
 FX="$RUN/fx"
 git clone -q --bare --local "$SNAP" "$RUN/origin.git" && git clone -q --local "$RUN/origin.git" "$FX" \
   || { echo "fixture clone failed" >&2; exit 3; }
@@ -76,8 +86,8 @@ mkdir -p "$RUN/home/.claude/projects/$FXSLUG" && ln -s "$MEMREAL" "$RUN/home/.cl
 
 bash "$H/setup.sh" "$SETUP" "$FX" "$RUN" || { echo "setup failed: $SETUP" >&2; exit 3; }
 if [ "$ARM" = 1 ]; then
-  rm -rf "$FX/.claude/rules" "$FX"/CLAUDE.global*.md
-  git -C "$FX" add -A && git -C "$FX" commit -q -m "strip rules" && git -C "$FX" push -q origin HEAD:main
+  git -C "$FX" rm -q -r --ignore-unmatch .claude/rules 'CLAUDE.global*.md' \
+    && git -C "$FX" commit -q -m "strip rules" && git -C "$FX" push -q origin HEAD:main
 fi
 ( cd "$MEMREAL" && find . -type f | sort | xargs shasum -a 256 ) > "$RUN/out/mem.before.sha256"
 
@@ -91,6 +101,10 @@ printf '%s\n' "$SETTINGS" > "$RUN/out/settings.json"
 python3 -c 'import json,sys; a=sys.argv; print(json.dumps({"arm": a[1], "task": a[2], "rep": a[3], "sha": a[4], "fx": a[5]}))' \
   "$ARM" "$TASK" "$REP" "$SHA" "$FX" > "$RUN/out/meta.json"
 printf '%s' "$PROMPT" > "$RUN/out/prompt.txt"
+
+# The fixture must push only to its own private origin, never to a real remote.
+ORIGIN=$(git -C "$FX" remote get-url origin 2>/dev/null)
+case "$ORIGIN" in "$RUN"/*) ;; *) echo "refusing: fixture origin '$ORIGIN' is not under $RUN" >&2; exit 3 ;; esac
 
 cd "$FX" || exit 2
 START=$(date +%s)
