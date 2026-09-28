@@ -355,6 +355,24 @@ positives would have buried them.
    file's frontmatter, within its first 12 lines (where the rotor's rank 0 reads it), and repoint
    that file's `MEMORY.md` line to the heir — never leave the index pointing at the spent file.
    Then re-run `cc-memory-supersession-check <memdir>`; it must report no finding for the pair.
+   **When the two entries' VALUES differ, SUPERSEDE — do not merge.** A merge must carry every hard
+   token of both files (code spans, SHAs, numbers, ALL-CAPS), or a `Superseded (YYYY-MM-DD): was X`
+   line for each one it drops. Hard-token sets differed in 29 of 29 measured candidate pairs, true
+   duplicates included, so a difference is a value to record, never a veto on the merge. Before
+   replacing either file, run `cc-memory-dropped-token-audit --pair <A> <B> --into <draft C>`; it
+   must print `verdict=clean`.
+7b. **Consolidation families** (propose-only). Run `cc-memory-neighbours <memdir>`: mutual top-3
+   BM25 neighbours over name, description and first paragraph, not yet `[[linked]]` and not sharing
+   an `originSessionId`, grouped into families and scoped to topics not yet in
+   `archive/.family-names`. For each family the human decides **MERGE / LINK / NONE BEFORE any
+   `[[link]]` is written** — step 7 presumes a linked pair distinct, so a link written first hides
+   a true duplicate from every later pass. MERGE goes through step 7's supersede-or-lossless rule.
+   Report the `HOT-HUBS before=N after_if_linked=M` line with the proposal (≥4 inbound links pin an
+   entry hot). Never write a summary or family file. Once the human has reviewed every family, run
+   `cc-memory-neighbours <memdir> --record`. Nothing merges without a human. This is not left to
+   Claude Code's native autoDream because its consolidation phase is autonomous and lossy — it
+   shortens index lines, deletes "contradicted" facts and removes pointers — and knows none of the
+   rotor's protections (PINNED, TAIL_GUARD, the type hold, the dangling-link refusal).
 
 ## BUDGET THE PREFIXES FIRST (do this before writing a single line)
 
