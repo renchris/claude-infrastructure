@@ -1,5 +1,5 @@
 ---
-status: open
+status: done
 ---
 
 # Autonomy core — a modular, cross-platform install for outside users
@@ -73,7 +73,29 @@ alone), the rules as a marker-delimited block in `CLAUDE.md`, and three hook ent
 change). Refuses when the full install is present; `--uninstall` reverses every step. It verifies itself
 by driving each installed hook with fixture JSON and reading `settings.json` back, and fails closed.
 
-## W2 — implement
+## W2 — implement (DONE 2026-09-28)
+
+Landed `a1623fd0d` (public projection `d4ba67f0`): `install-core.sh`, `core/` (hooks, `autonomy` CLI,
+rules, commands, `build.sh`), `tests/install-core.bats` (16 tests, clean HOME and config dir; covers a
+python3-only PATH for the stock Ubuntu/WSL2 case, GNU userland first on PATH as a Linux proxy, merge,
+idempotency, uninstall, refusal over the full install). README § Quick start pins the installer to the
+public commit and its sha256 `4e611c1f…4ac1`. Full-install `--dry-run` output (throwaway HOME,
+`--config-dir`) is byte-identical to origin/main's.
+
+Learnings:
+- The land gate selects suites by file-name STEM: `core/commands/wrap.md` pulled in the fleet's
+  `wrap-*`/`handoff-*` suites, two of them red on trunk for reasons outside this diff
+  (`handoff-selfclose.bats` "inventory: silent when nothing is pending", since `89eba66e0`, whose eval'd
+  function now calls an undefined `transcript_for_sid`; `wrap-ledger-memo.bats` "six CONCURRENT cold
+  callers", 96 vs a ≤32 bound at load ~24, because the 750 ms single-flight wait is shorter than one
+  compute on a loaded box, reproduced on `89eba66e0~1` too). Sources are now `autonomy-*.md`,
+  installed under their real names.
+- Under bash 3.2, a mid-test `[[ ]]`, `!` or `&&`-chain does not fail a bats test; the dead-assertion
+  arm caught all of them, and each now ends in `|| false`.
+- Not done: a real WSL2 run. The Linux path is covered by the python3-only and GNU-userland tests,
+  not by a Linux kernel; Docker was not running on this machine.
+
+Original brief:
 
 - `install.sh --profile core` (or a separate `install-core.sh`) — macOS, Linux, WSL2; idempotent; backs
   up and merges `settings.json`; never touches the full install's paths or behaviour.
@@ -93,3 +115,6 @@ evaluated, 154 met (88%); 18 met goals first caught a premature stop (1-5 times 
 ## Status log
 
 - 2026-09-28 — plan created; W1+W2 dispatched as one session.
+- 2026-09-28 — W1 findings written; W2 landed `a1623fd0d`, live-converged, and published to the public
+  repo (`d4ba67f0`); the raw pinned URL's sha256 matches `git show origin/main:install-core.sh`.
+  README quick start added in a follow-up commit.

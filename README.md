@@ -656,6 +656,52 @@ last batch `xargs` makes. The correct form is
 
 ---
 
+## Quick start: autonomy core
+
+The portable part of this system, for anyone running Claude Code on macOS, Linux or Windows (inside
+WSL2), with no daemons, no kitty and one account. It installs:
+
+- **Rules** (a marked block in your `CLAUDE.md`): freeze the scope, drive in-scope work to a finished,
+  committed state without asking, stop only for real decisions, and close each turn with a state line
+  read from git.
+- **Three hooks**: auto-continue on an armed next step (capped at 8 turns in a row); a completion gate
+  that blocks a "done" claim once while git still shows uncommitted or unpushed work; a backup of every
+  file a Write is about to replace.
+- **`/wrap` and `/handoff`**, and an `autonomy` command (`continue`, `ledger`, `restore`, `doctor`).
+
+The full system in [Install](#install) is separate and unchanged.
+
+**One command**, in the shell where you run Claude Code (on Windows, in WSL2 Ubuntu):
+
+```
+curl -fsSLo /tmp/install-core.sh https://raw.githubusercontent.com/renchris/claude-infrastructure/d4ba67f0654204193b68e5cb4482d5d159e3fea2/install-core.sh && bash /tmp/install-core.sh
+```
+
+**Or one prompt**, pasted into Claude Code:
+
+```
+Install the autonomy core from github.com/renchris/claude-infrastructure, pinned to commit d4ba67f0654204193b68e5cb4482d5d159e3fea2. Download https://raw.githubusercontent.com/renchris/claude-infrastructure/d4ba67f0654204193b68e5cb4482d5d159e3fea2/install-core.sh to /tmp/install-core.sh and check its SHA-256 (sha256sum, or shasum -a 256 on macOS) is 4e611c1fe8117c5d0c21baa9abfcf50a729d973ab4abd205acdf51f14a004ac1; stop and tell me if it is not. Read the script, then run `bash /tmp/install-core.sh` and show me its Verifying lines. Finally, tell me to restart Claude Code so the hooks load.
+```
+
+The installer is one self-contained file, so that commit and hash pin everything it installs. It is
+safe to re-run, backs up `settings.json` and `CLAUDE.md` before changing them, merges rather than
+overwrites, and prints `READY` only after driving each installed hook with test input. It needs `jq`
+or `python3` (Ubuntu and WSL2 have `python3`), and `git` for the gate and the ledger. It refuses to
+install over the full system. Undo: `bash /tmp/install-core.sh --uninstall`.
+
+**Keeping a session running: `/goal`.** `/goal <condition>` (built into Claude Code) keeps a session
+taking turns until a separate evaluator judges the condition met. The evaluator sees only what the
+session prints, so a condition needs three parts: `<one measurable end state> — proven by <a command
+the session runs and prints>; do not <constraint>`. In our own sessions, 506 goals were armed: 176 were
+evaluated and 154 of those (88%) were met, and 18 of the met goals first caught a premature stop. The
+other 330 were never evaluated, because a goal is checked only when the session stops and those
+sessions handed off or ended mid-turn. A condition that names an activity or perfection never clears:
+"continue until 100.00 complete and correct at 100th percentile absolute perfection" ran 45 evaluations
+over 27.6 hours before it was ruled impossible. The core's rules carry the template, and `/handoff`
+writes one for the next session.
+
+---
+
 ## Install
 
 **Requirements:** macOS, git, `jq`, Python 3 (`requirements.txt`), Claude Code, and one or more Claude
