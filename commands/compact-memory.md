@@ -334,6 +334,8 @@ positives would have buried them.
    the full-fidelity text (`archive/`), never from an already-shortened index.
 7. **Near-duplicates**: pairs of topic files whose rule overlaps. Show both descriptions side by
    side + a one-line rationale; the human picks merge / keep-both / supersede. NEVER auto-merge.
+   Generate the candidate pairs with `cc-memory-search --json --top 3 "<name> <description>"` per
+   topic: a pair is a candidate when each file is in the other's top 3. Still propose-only.
    HARD CONSTRAINT: entries sharing an `originSessionId` or cross-referenced via `[[...]]` are
    PRESUMED DISTINCT (e.g. `scope-freeze-at-intake` vs `mvp-ban-is-per-feature` encode different
    concepts) — flag, never merge.

@@ -240,3 +240,9 @@ state_last() { tail -1 "$STATE" | jq -r "$1"; }
   b="$(CC_MEMORY_SEARCH_WEIGHTS=nope ms_custom --json kitty drag title 2>/dev/null | jq -r '.[0].score')"
   [ "$b" = "$d" ]
 }
+
+@test "both instruction variants name cc-memory-search (four of five roots load the slim one)" {
+  grep -q 'run .cc-memory-search <terms>. first' "$REPO/CLAUDE.global.md"
+  grep -q 'Run .cc-memory-search <terms>. first' "$REPO/CLAUDE.global.slim.md"
+  grep -q 'cc-memory-search --json --top 3' "$REPO/commands/compact-memory.md"
+}

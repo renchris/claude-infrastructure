@@ -100,8 +100,10 @@ permanent rule:
   Verify before encoding; a wrapper/flag/version usually explains it. (Live example:
   `claude --version` "failed" only because `claude` is a shell function — the real
   binary `claude-latest` was fine.)
-- **Anything already indexed** — grep `MEMORY.md` first; update the existing entry
-  instead of adding a near-duplicate.
+- **Anything already indexed** — run `cc-memory-search <terms>` first (it also searches the
+  cold tier and lessons; fall back to grep `MEMORY.md`); update the existing entry instead of
+  adding a near-duplicate. Create a new topic file with Write, not Bash: the write hook then lists
+  its nearest existing files.
 
 Capture instead: reusable rules, durable decisions **+ their why**, confirmed
 constraints, and corrections to prior memory. **Why:** this prevents memory rot — an
