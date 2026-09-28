@@ -149,6 +149,12 @@ Consistency comes mostly from shared code (one frozen API for type, colour and m
 - Heavy sounds (the thump, the transition swell) go on downbeats with the scene changes; light UI sounds go on the
   off-beats.
 - Hold the kick for bar 1 and drop it on bar 2. Leave true silence before the drop.
+- Choose a tempo with a whole number of frames per beat (60·fps/BPM an integer: 120 BPM is 30 frames at 60 fps).
+  Otherwise no cut can sit exactly on a beat.
+- Beat-lock the montage and snap section edges to beats, but size sections by the story, not in whole bars.
+- Mark the story's turn by removing the kick and its payoff by bringing it back. Dip 5–8 LU for about 1.8 s
+  before a hit. A single recognisable transition cue can do the work of a title card.
+- Use a small pitched palette (bells or plucks, a sub-kick, a pad) and 2–3 noise-based effect families.
 - Master to about −14 to −16 LUFS, with true peak ≤ −1 dBTP after the AAC encode. Keep the bass mono below 120 Hz.
   Make an A/V sync check (< 1 ms against the cue export) fail the build. The rejected film shipped at −19 LUFS.
 - Put whooshes on each move's computed peak-velocity frame, and impacts on the frame where a spring first reaches its
