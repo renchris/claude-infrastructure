@@ -12,6 +12,11 @@ are listed at the end with their named dependency so the next session can pick t
 data they wait on exists. Rejections (#28-#34) are recorded in `MEMORY_KNOWLEDGE_V2.md` so no
 session re-derives them.
 
+**Scope (grown, 2026-09-27, operator-approved):** +#35 end-to-end delivery benchmark in Wave B
+(below). Why: retrieval is solved cheaply on our data (FTS5+embedding 90% vs TM 94%, noise), and
+only 2-3 of 14 real misses were retrieval misses. The open question is whether the agent USES the
+right lesson when it matters, which only a task-level A/B can answer.
+
 **Source of truth for designs:** the research doc. This plan does not restate designs. It owns the
 order, ownership, locus and status. Per-item sections point at `§3.x` and add only what the doc
 does not hold.
@@ -25,7 +30,7 @@ does not hold.
 | Wave | Locus | Items | Why this grouping |
 |---|---|---|---|
 | A · correctness + safety | **S** (dispatched session `tma-wave-a`, leads its own teammates) | #1, #2, #3, #8, #11 + autoDream-pin migration + rejection record | all independent of each other; #3 gates #6/#10/#14 in B and C |
-| B · substrate + push consumers | **S** (`tma-wave-b`) | #4, #5, #6 (+#7 as its acceptance criterion), #10, #26 in shadow mode | #6 and #10 read #3's registry (X5); #5's retriever arm needs #4 |
+| B · substrate + push consumers | **S** (`tma-wave-b`) | #4, #5, #6 (+#7 as its acceptance criterion), #10, #26 in shadow mode, then #35 delivery benchmark | #6 and #10 read #3's registry (X5); #5's retriever arm needs #4 |
 | C · the rest of build-now | **S** (`tma-wave-c`) | #9, #12, #13, #14 | #14's sweep block needs #2; #12 edits the same instruction lines #10 edits |
 
 Waves are **serial**: they share `hooks/memory-nudge.sh`, `bin/cc-memory-rotate`,
@@ -87,9 +92,31 @@ JSON; land via project `/ship` from the wave's own worktree.
 `~/.claude/autonomy/memory-eval/`, never the repo) · #6 with #7 (§3.6, §3.7; delivery probe first;
 holdout needs ≥15 control events) · #10 (§3.10; logs every exit path, nightly outcome check) ·
 #26 shadow mode (§3.23-3.27 group; log-only, no model-facing text).
-**Wave B's first action:** copy `/tmp/tm-research/gap2/field-queries.json` to
-`~/.claude/autonomy/memory-eval/` if it still exists. `/tmp` is wiped at boot. If it is gone,
-re-derive it per `docs/research/truememory-2026-09-27/gap-2.md`.
+**Wave B's first action:** the private gold query set is already preserved at
+`~/.claude/autonomy/memory-eval/field-queries.json` (copied off `/tmp` by the lead, 2026-09-27).
+If it is ever missing, re-derive it per `docs/research/truememory-2026-09-27/gap-2.md`.
+
+**#35 end-to-end delivery benchmark (last Wave B item; runs after #4, #6, #10 land).**
+- **Question it answers:** given a real task where a stored lesson decides the outcome, does the
+  agent use that lesson and get it right?
+- **Arms:** (1) Claude Code auto memory out of the box, no hooks of ours; (2) our stack before
+  Wave B; (3) our stack with #6's tool-failure push and #10; (4) optional: TrueMemory with its hook
+  output wrapped in `hookSpecificOutput` (install only in a sandboxed HOME, never the real config;
+  drop the arm if it will not install cleanly).
+- **Harness:** start from `docs/research/truememory-2026-09-27/ab-harness/` (`run-ab.sh`,
+  `score.py`, `tasks.tsv`, prototype `cc-memory-search`; built and dry-run in the study, never run
+  for real). Its defaults point at `/tmp` paths: re-point them, and regenerate the frozen store copy
+  from the live store rather than committing it (it is private). Extend `tasks.tsv` so every task has
+  a lesson whose absence changes the outcome, plus control tasks where no lesson applies.
+- **Scoring:** lesson used (read or acted on), task correct, time, tokens. Pre-register the pass rule
+  before running (the harness already carries one: ≥30% line-arm uptake at p<0.05 counts; <10% means
+  substrate only).
+- **Budget:** 12 tasks × 2 reps × 4 arms ≈ 96 runs ≈ 2-4 weekly-quota points on one account (priced
+  from 88 comparable runs at 0.02-0.04 pp each; `cc-quota-price` fit, rel-RMSE 0.37). Route it to
+  the account that would otherwise strand the most quota. Operator ruling 2026-09-27: runs at this
+  cost need no ask.
+- **Done when:** the results table (arm × lesson-used × correct × tokens) and its verdict are
+  appended to `docs/research/truememory-2026-09-27.md` §5 and landed.
 
 ## Wave C — the rest of build-now (S · `tma-wave-c`) — BLOCKED on Wave B
 
@@ -111,3 +138,4 @@ re-derive it per `docs/research/truememory-2026-09-27/gap-2.md`.
 ## Status log
 
 - 2026-09-27 — Research landed (`docs/research/truememory-2026-09-27.md`). Plan created. Wave A next.
+- 2026-09-27 — Wave A fired (pane `tma-wave-a`, account next). Hook-delivery finding re-measured live (`9639822a7`). #35 delivery benchmark added to Wave B; A/B harness preserved under `docs/research/truememory-2026-09-27/ab-harness/`.

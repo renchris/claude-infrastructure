@@ -1,0 +1,50 @@
+#!/usr/bin/env python3
+"""cc-memory-search <terms...> [--top N] [--store DIR]
+A/B PROTOTYPE ONLY (gap-3 harness). Stdlib SQLite FTS5 over one memory store plus docs/lessons,
+built in memory per call, pointer lines out. Every call appends one row to $CCMS_LOG (the A/B
+counts invocations from transcripts; this log is a cross-check). Not the #4 design: no COLD
+link-line parsing, fixed 10/5/1 weights.
+"""
+import os, re, sqlite3, sys, json, time, glob
+
+STOP = set('a an the and or of to in on for with is are was be it this that from by at as not no do does'
+           ' how what why when where which we our i you'.split())
+
+args = sys.argv[1:]
+top = 5
+store = os.environ.get('CCMS_STORE', '')
+if '--top' in args:
+    i = args.index('--top'); top = int(args[i + 1]); del args[i:i + 2]
+if '--store' in args:
+    i = args.index('--store'); store = args[i + 1]; del args[i:i + 2]
+if not store or not args:
+    print('usage: cc-memory-search <terms...> [--top N]  (store: $CCMS_STORE)', file=sys.stderr); sys.exit(2)
+toks = [t for t in re.findall(r'[A-Za-z0-9_]{2,}', ' '.join(args).lower()) if t not in STOP][:12]
+log = os.environ.get('CCMS_LOG')
+if log:
+    with open(log, 'a') as fh:
+        fh.write(json.dumps({'t': time.time(), 'q': ' '.join(args), 'cwd': os.getcwd()}) + '\n')
+if not toks:
+    print('no search terms after stopwords'); sys.exit(0)
+
+db = sqlite3.connect(':memory:')
+db.execute("CREATE VIRTUAL TABLE d USING fts5(path UNINDEXED, name, descr, body, tokenize='porter unicode61')")
+paths = glob.glob(os.path.join(store, '*.md')) + glob.glob(os.path.join(store, 'archive', '*.md'))
+lessons = os.path.join(os.getcwd(), 'docs', 'lessons')
+paths += glob.glob(os.path.join(lessons, '*.md'))
+for p in paths:
+    try:
+        s = open(p, errors='replace').read()
+    except OSError:
+        continue
+    name = re.search(r'^name:\s*(.+)$', s, re.M)
+    desc = re.search(r'^description:\s*(.+)$', s, re.M)
+    h1 = re.search(r'^#\s+(.+)$', s, re.M)
+    db.execute('INSERT INTO d VALUES (?,?,?,?)', (p, ' '.join(x.group(1) for x in (name, h1) if x) or os.path.basename(p),
+                                               desc.group(1) if desc else '', s[:20000]))
+q = ' OR '.join('"%s"' % t for t in toks)
+rows = db.execute('SELECT path, descr, bm25(d, 0, 10, 5, 1) AS s FROM d WHERE d MATCH ? ORDER BY s LIMIT ?', (q, top)).fetchall()
+if not rows:
+    print('no match in %s (+docs/lessons)' % store)
+for p, descr, s in rows:
+    print('%s  [bm25 %.2f]  %s' % (p, s, (descr or '')[:160]))
