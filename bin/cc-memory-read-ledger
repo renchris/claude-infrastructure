@@ -1,0 +1,466 @@
+#!/usr/bin/env python3
+"""cc-memory-read-ledger — which memory topic files do sessions actually READ?
+
+WHY (TrueMemory adoption #15, docs/research/truememory-2026-09-27.md §3.15). The rotor
+(bin/cc-memory-rotate) names its own missing criterion: nothing recorded which memory files a
+session read, so "is this entry still used?" had no measurement behind it. The only trace is the
+per-session Read records in transcripts across four account stores, which a per-prompt actuator
+cannot compute. This CLI computes it offline, from the hourly session-index sweep, and leaves two
+TSVs the rotor can read cheaply.
+
+WHAT COUNTS AS A READ. A `Read` tool_use whose `file_path` is a `*/memory/<topic>.md` topic file:
+the parent directory must be named `memory`, so `archive/…` is excluded by construction, and
+`MEMORY.md` (the auto-loaded index, read by every session whether it wants it or not) is excluded
+by name. Transcripts are scanned in every account root, subagent transcripts included
+(`<sid>/subagents/*.jsonl`, reader kind `subagent`).
+
+WHAT DOES NOT COUNT, and why each exclusion exists:
+  · the AUTHOR — a session (main transcript or any of its subagents) that Wrote/Edited the same
+    topic. Reading your own draft back says nothing about whether anyone else needs it.
+  · a BULK reader — one transcript that read more than CC_READ_LEDGER_BULK (10) distinct topics.
+    That is an audit, a compaction or a research sweep; counting it would mark every file it
+    touched as live and the protection would cover the whole store.
+
+ROWS ARE METADATA ONLY — ts, session id, store, topic, reader kind. Never content.
+  ledger   $STATE/memory-read-ledger.tsv   one row per (session, kind, store, topic); ts is the
+                                           LAST read in that session. Pruned at 365 days.
+  summary  $STATE/memory-read-summary.tsv  one row per (store, topic): last non-author read, count
+                                           of ledger rows. Rebuilt whole from the ledger each run.
+  scan     $STATE/memory-read-ledger.scan  the watermark: epoch of the last completed scan.
+`store` is the name of the directory holding `memory/` — the project slug for a store under
+`projects/`, identical across account roots, so a read through any account lands on one key.
+
+INCREMENTAL. A session is re-scanned when any of its transcripts changed since the watermark (less
+a slack); its rows are then REPLACED, not appended, so a re-scan is idempotent and an author edit
+that arrives after the read still removes the read. Sessions whose transcripts were not touched —
+including ones the harness has since deleted — keep their rows: the ledger outlives transcripts by
+design, which is the whole point of a 365-day horizon over a 30-day transcript store.
+
+PREFILTER. `rg -l` (or `/usr/bin/grep -lE` when no rg resolves; launchd's PATH lacks Homebrew)
+over the changed sessions' files, so only transcripts that mention a memory topic path are parsed.
+
+OUTPUT. One parseable LAST stdout line:
+  LEDGER-VERDICT scanned=N reads=M topics=K pruned=P
+    scanned  transcript files examined this run (the changed sessions' files)
+    reads    ledger rows this run produced for the re-scanned sessions
+    topics   distinct (store, topic) pairs in the summary
+    pruned   rows dropped for age (> 365 d) or an unparseable ts
+  LEDGER-VERDICT abstained reason=<r>
+    no-transcript-roots   no root directory exists — nothing could be observed (BLIND)
+    state-unwritable      the state dir or its files could not be written (BLIND)
+    run-in-progress       another run holds the lock; that run is doing the work
+    internal-error        an unexpected exception (BLIND); exit 1
+Exit 0 on a verdict or an abstain, 1 only on internal-error.
+
+ENV SEAMS (tests): CC_READ_LEDGER_STATE_DIR, CC_READ_LEDGER_ROOTS (space-separated; else
+SESSION_INDEX_PROJECT_ROOTS, else the same four-root list session-index retention uses),
+CC_READ_LEDGER_NOW (epoch), CC_READ_LEDGER_RG (path; `none` forces the grep fallback),
+CC_READ_LEDGER_BULK, CC_READ_LEDGER_RETAIN_DAYS. `--full` ignores the watermark.
+"""
+
+from __future__ import annotations
+
+import errno
+import fcntl
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import IO
+
+UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+# `<store>/memory/<topic>.md` with nothing between memory/ and the file name.
+TOPIC_RE = re.compile(r"(?:^|/)([^/]+)/memory/([^/]+\.md)$")
+# The prefilter pattern: a JSON string value ending in a memory topic path. Same text for rg and
+# grep -E. It over-matches (a Write, a quoted mention) and never under-matches a Read's file_path.
+PREFILTER = r'/memory/[^"/\\]+\.md"'
+READ_TOOLS = frozenset({"Read"})
+WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
+TS_FMT = "%Y-%m-%dT%H:%M:%SZ"
+SLACK_S = 120
+BATCH = 400
+
+Key = tuple[str, str]  # (store, topic)
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "")
+    return int(raw) if raw.isdigit() else default
+
+
+def _iso(epoch: float) -> str:
+    return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime(TS_FMT)
+
+
+def _parse_ts(raw: str) -> float | None:
+    """ISO-8601 UTC (`…Z`, fractional seconds allowed) → epoch, or None."""
+    try:
+        return (
+            datetime.strptime(raw[:19], "%Y-%m-%dT%H:%M:%S")
+            .replace(tzinfo=timezone.utc)
+            .timestamp()
+        )
+    except ValueError:
+        return None
+
+
+def _cell(value: str) -> str:
+    """TSV emitter padding: an empty cell is written as `-` (scripts/tsv-pad-lint.sh)."""
+    clean = value.replace("\t", " ").replace("\n", " ")
+    return clean if clean else "-"
+
+
+@dataclass(frozen=True)
+class Transcript:
+    path: Path
+    sid: str
+    kind: str  # main | subagent
+    mtime: float
+
+
+@dataclass
+class Row:
+    ts: str
+    sid: str
+    store: str
+    topic: str
+    kind: str
+
+    def key(self) -> tuple[str, str, str, str]:
+        return (self.sid, self.kind, self.store, self.topic)
+
+    def line(self) -> str:
+        return "\t".join(
+            _cell(v) for v in (self.ts, self.sid, self.store, self.topic, self.kind)
+        )
+
+
+@dataclass
+class Parsed:
+    reads: dict[Key, float] = field(default_factory=dict)  # key → last read epoch
+    writes: set[Key] = field(default_factory=set)
+
+
+def topic_key(file_path: str) -> Key | None:
+    m = TOPIC_RE.search(file_path)
+    if not m or m.group(2) == "MEMORY.md":
+        return None
+    return (m.group(1), m.group(2))
+
+
+def resolve_roots() -> list[Path]:
+    raw = os.environ.get("CC_READ_LEDGER_ROOTS") or os.environ.get(
+        "SESSION_INDEX_PROJECT_ROOTS"
+    )
+    if not raw:
+        home = os.environ.get("HOME", "")
+        main = os.environ.get("CLAUDE_PROJECTS_DIR") or f"{home}/.claude/projects"
+        raw = " ".join(
+            [main]
+            + [
+                f"{home}/.claude-{a}/projects"
+                for a in ("secondary", "tertiary", "quaternary")
+            ]
+        )
+    roots: list[Path] = []
+    seen: set[str] = set()
+    for r in raw.split():
+        p = Path(r)
+        if not p.is_dir():
+            continue
+        real = os.path.realpath(p)
+        if real in seen:  # two spellings of one dir are one root
+            continue
+        seen.add(real)
+        roots.append(p)
+    return roots
+
+
+def _mtime(p: Path) -> float | None:
+    try:
+        return p.stat().st_mtime
+    except OSError:
+        return None
+
+
+def enumerate_transcripts(roots: list[Path]) -> dict[str, list[Transcript]]:
+    """sid → its transcripts (flat or nested main file, plus subagents) across every root."""
+    out: dict[str, list[Transcript]] = {}
+
+    def add(path: Path, sid: str, kind: str) -> None:
+        m = _mtime(path)
+        if m is not None:
+            out.setdefault(sid, []).append(Transcript(path, sid, kind, m))
+
+    for root in roots:
+        try:
+            projects = [p for p in root.iterdir() if p.is_dir()]
+        except OSError:
+            continue
+        for proj in projects:
+            try:
+                entries = list(proj.iterdir())
+            except OSError:
+                continue
+            for e in entries:
+                if e.is_file() and e.suffix == ".jsonl" and UUID_RE.match(e.stem):
+                    add(e, e.stem, "main")
+                elif e.is_dir() and UUID_RE.match(e.name):
+                    nested = e / "transcript.jsonl"
+                    if nested.is_file() and not (proj / f"{e.name}.jsonl").exists():
+                        add(nested, e.name, "main")
+                    sub = e / "subagents"
+                    if sub.is_dir():
+                        for s in sorted(sub.glob("*.jsonl")):
+                            add(s, e.name, "subagent")
+    return out
+
+
+def resolve_rg() -> str | None:
+    forced = os.environ.get("CC_READ_LEDGER_RG")
+    if forced:
+        return None if forced == "none" else forced
+    for cand in ("/opt/homebrew/bin/rg", "/usr/local/bin/rg"):
+        if os.access(cand, os.X_OK):
+            return cand
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        cand = os.path.join(d, "rg")
+        if d and os.access(cand, os.X_OK):
+            return cand
+    return None
+
+
+def prefilter(files: list[Path]) -> set[Path]:
+    """The subset of `files` that mention a memory topic path. rc 1 = no match; any stdout counts."""
+    rg = resolve_rg()
+    hits: set[Path] = set()
+    for i in range(0, len(files), BATCH):
+        chunk = [str(f) for f in files[i : i + BATCH]]
+        if rg:
+            cmd = [
+                rg,
+                "--no-config",
+                "--no-messages",
+                "-l",
+                "-e",
+                PREFILTER,
+                "--",
+                *chunk,
+            ]
+        else:
+            cmd = ["/usr/bin/grep", "-l", "-E", "-e", PREFILTER, "--", *chunk]
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if proc.returncode > 1 and not proc.stdout and rg:
+            # A broken rg must not read as "no transcript mentions memory": fall back for the chunk.
+            proc = subprocess.run(
+                ["/usr/bin/grep", "-l", "-E", "-e", PREFILTER, "--", *chunk],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        hits.update(Path(line) for line in proc.stdout.splitlines() if line)
+    return hits
+
+
+def parse_transcript(path: Path, fallback_ts: float) -> Parsed:
+    parsed = Parsed()
+    try:
+        fh: IO[str] = path.open(encoding="utf-8", errors="replace")
+    except OSError:
+        return parsed
+    with fh:
+        for line in fh:
+            if '"tool_use"' not in line or "/memory/" not in line:
+                continue
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(rec, dict):
+                continue
+            msg = rec.get("message")
+            content = msg.get("content") if isinstance(msg, dict) else None
+            if not isinstance(content, list):
+                continue
+            raw_ts = rec.get("timestamp")
+            ts = _parse_ts(raw_ts) if isinstance(raw_ts, str) else None
+            when = ts if ts is not None else fallback_ts
+            for item in content:
+                if not isinstance(item, dict) or item.get("type") != "tool_use":
+                    continue
+                name = item.get("name")
+                inp = item.get("input")
+                fp = inp.get("file_path") if isinstance(inp, dict) else None
+                if not isinstance(fp, str):
+                    continue
+                key = topic_key(fp)
+                if key is None:
+                    continue
+                if name in READ_TOOLS:
+                    parsed.reads[key] = max(parsed.reads.get(key, when), when)
+                elif name in WRITE_TOOLS:
+                    parsed.writes.add(key)
+    return parsed
+
+
+def load_rows(path: Path) -> list[Row]:
+    rows: list[Row] = []
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return rows
+    for line in text.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        cells = line.split("\t")
+        if len(cells) != 5:
+            continue
+        rows.append(Row(*cells))
+    return rows
+
+
+def session_rows(
+    transcripts: list[Transcript], hits: set[Path], bulk: int
+) -> list[Row]:
+    """The rows one session contributes: author reads and bulk transcripts excluded."""
+    parsed = [
+        (t, parse_transcript(t.path, t.mtime)) for t in transcripts if t.path in hits
+    ]
+    authored: set[Key] = set()
+    for _, p in parsed:
+        authored |= p.writes
+    merged: dict[tuple[str, str, str, str], float] = {}
+    for t, p in parsed:
+        if len(p.reads) > bulk:
+            continue
+        for key, when in p.reads.items():
+            if key in authored:
+                continue
+            k = (t.sid, t.kind, key[0], key[1])
+            merged[k] = max(merged.get(k, when), when)
+    return [
+        Row(_iso(w), sid, store, topic, kind)
+        for (sid, kind, store, topic), w in merged.items()
+    ]
+
+
+def write_atomic(path: Path, text: str) -> None:
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def render_summary(rows: list[Row]) -> str:
+    last: dict[Key, str] = {}
+    count: dict[Key, int] = {}
+    for r in rows:
+        k = (r.store, r.topic)
+        count[k] = count.get(k, 0) + 1
+        if r.ts > last.get(k, ""):
+            last[k] = r.ts
+    lines = ["#store\ttopic\tlast_read\treads"]
+    for k in sorted(last):
+        lines.append(
+            "\t".join((_cell(k[0]), _cell(k[1]), _cell(last[k]), str(count[k])))
+        )
+    return "\n".join(lines) + "\n"
+
+
+def run(full: bool) -> str:
+    now = float(os.environ.get("CC_READ_LEDGER_NOW") or time.time())
+    retain_s = _env_int("CC_READ_LEDGER_RETAIN_DAYS", 365) * 86400
+    bulk = _env_int("CC_READ_LEDGER_BULK", 10)
+    home = os.environ.get("HOME", "")
+    state = Path(os.environ.get("CC_READ_LEDGER_STATE_DIR") or f"{home}/.claude/state")
+
+    roots = resolve_roots()
+    if not roots:
+        return "LEDGER-VERDICT abstained reason=no-transcript-roots"
+    try:
+        state.mkdir(parents=True, exist_ok=True)
+        lock_fh = (state / "memory-read-ledger.lock").open("w")
+    except OSError:
+        return "LEDGER-VERDICT abstained reason=state-unwritable"
+    with lock_fh:
+        try:
+            fcntl.flock(lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            if exc.errno in (errno.EAGAIN, errno.EACCES, errno.EWOULDBLOCK):
+                return "LEDGER-VERDICT abstained reason=run-in-progress"
+            raise
+        ledger = state / "memory-read-ledger.tsv"
+        summary = state / "memory-read-summary.tsv"
+        scan = state / "memory-read-ledger.scan"
+        watermark = 0.0
+        if not full:
+            try:
+                watermark = float(scan.read_text(encoding="utf-8").strip() or 0)
+            except (OSError, ValueError):
+                watermark = 0.0
+
+        sessions = enumerate_transcripts(roots)
+        changed = {
+            sid: ts
+            for sid, ts in sessions.items()
+            if any(t.mtime >= watermark - SLACK_S for t in ts) or watermark <= 0
+        }
+        files = [t.path for ts in changed.values() for t in ts]
+        hits = prefilter(files)
+
+        fresh: list[Row] = []
+        for ts in changed.values():
+            fresh.extend(session_rows(ts, hits, bulk))
+
+        kept: list[Row] = []
+        pruned = 0
+        for r in load_rows(ledger):
+            if r.sid in changed:
+                continue  # replaced by this run's re-scan
+            when = _parse_ts(r.ts)
+            if when is None or when < now - retain_s:
+                pruned += 1
+                continue
+            kept.append(r)
+        fresh_kept: list[Row] = []
+        for r in fresh:
+            when = _parse_ts(r.ts)
+            if when is None or when < now - retain_s:
+                pruned += 1
+                continue
+            fresh_kept.append(r)
+        rows = sorted(
+            kept + fresh_kept, key=lambda r: (r.ts, r.sid, r.kind, r.store, r.topic)
+        )
+
+        body = "#ts\tsid\tstore\ttopic\tkind\n" + "".join(r.line() + "\n" for r in rows)
+        try:
+            write_atomic(ledger, body)
+            write_atomic(summary, render_summary(rows))
+            write_atomic(scan, f"{int(now)}\n")
+        except OSError:
+            return "LEDGER-VERDICT abstained reason=state-unwritable"
+        topics = len({(r.store, r.topic) for r in rows})
+        return f"LEDGER-VERDICT scanned={len(files)} reads={len(fresh_kept)} topics={topics} pruned={pruned}"
+
+
+def main(argv: list[str]) -> int:
+    if any(a in ("-h", "--help") for a in argv):
+        print(__doc__)
+        return 0
+    try:
+        verdict = run(full="--full" in argv)
+    except Exception as exc:  # noqa: BLE001 — the verdict line must survive anything
+        print(f"cc-memory-read-ledger: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print("LEDGER-VERDICT abstained reason=internal-error")
+        return 1
+    print(verdict)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
