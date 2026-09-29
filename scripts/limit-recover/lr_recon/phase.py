@@ -56,15 +56,19 @@ def _engaged(ev: T.Evidence) -> Tuple[bool, str]:
         return False, "no-token-this-attempt"
     if ev.token_record_offset is None or ev.confirm_len is None:
         return False, "offset-unknown"
-    if ev.token_record_offset <= ev.confirm_len:
-        return False, "token<=confirm_len"
+    # The offset is where the token's record STARTS (tokens.find_token), so a record starting AT
+    # confirm_len is wholly past the confirmed copy: the first append after the transplant, which
+    # is exactly where a same-uuid resume types the prompt (W5 rig). Only a record starting inside
+    # the confirmed bytes is a replay of the source.
+    if ev.token_record_offset < ev.confirm_len:
+        return False, "token<confirm_len"
     if not ev.nonerror_assistant_after_token:
         return False, "no-nonerror-turn"
     if not _target_bound(ev):
         return False, "no-target-holder"
     if ev.source_alive:
         return False, "source-alive"
-    return True, "token>confirm_len"
+    return True, "token>=confirm_len"
 
 
 def derive_phase(ev: T.Evidence) -> T.PhaseResult:

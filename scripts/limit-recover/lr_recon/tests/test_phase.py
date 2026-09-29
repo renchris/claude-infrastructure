@@ -88,11 +88,16 @@ class DerivePhaseOrder(unittest.TestCase):
         )
         self.assertEqual((res.phase, res.substate), ("RELAUNCHED", "SUBMITTED"))
 
-    def test_offset_must_exceed_confirm_len(self) -> None:
-        for off in (1903646, 1000):
+    def test_offset_must_lie_past_the_confirmed_copy(self) -> None:
+        # A record STARTING inside the confirmed bytes is a replay of the source: not engaged.
+        for off in (1903645, 1000):
             self.assertEqual(
                 phase.derive_phase(_with(token_record_offset=off)).phase, "RELAUNCHED"
             )
+        # W5 rig: the first append after the transplant starts AT confirm_len — that IS past it.
+        self.assertEqual(
+            phase.derive_phase(_with(token_record_offset=1903646)).phase, "ENGAGED"
+        )
 
     def test_confirm_len_none_not_engaged(self) -> None:
         res = phase.derive_phase(_with(confirm_len=None))
