@@ -137,6 +137,16 @@ def _facts(ctx: Ctx, snap: T.Snapshot, now: float) -> Dict[str, T.Fact]:
     """Step (a): census death rows add facts; expiry and contradiction from the census's turns."""
     paths = ctx.paths
     for s in snap.sessions.values():
+        mv = ctx.records.get(s.sid)
+        if (
+            mv is not None
+            and mv.open
+            and mv.target_acct == s.acct
+            and mv.timeline.submitted is None
+        ):
+            # a move's copied transcript ends in the SOURCE's death: read as the target's, it
+            # blocked every freshly moved-to account until engagement (W5 rig, target-auth)
+            continue
         f = (
             F.fact_from_death(s.acct, s.sid, s.transcript.last or {}, now, "census")
             if s.acct

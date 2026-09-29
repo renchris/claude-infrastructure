@@ -260,6 +260,22 @@ class MainTests(unittest.TestCase):
             os.path.exists(os.path.join(self.paths.facts, "next3.auth.json"))
         )
 
+    def test_a_move_target_is_not_blamed_for_the_sources_death(self):
+        """W5 rig: a moved session's copied transcript ends in the source's limit record, and the
+        census wrote it as a phantom fact on the TARGET until the move engaged."""
+        import time
+
+        now = time.time()
+        snap = _snap(now, self.tmp)  # acct next3, last record a limit
+        ctx = M.Ctx(self.paths, None, self.home)
+        rec = self._rec("RELAUNCHED", target="next3")
+        ctx.records[rec.sid] = rec
+        self.assertNotIn("next3.7d", M._facts(ctx, snap, now))
+        rec.timeline.submitted = (
+            now  # the target served this move's prompt: its death now
+        )
+        self.assertIn("next3.7d", M._facts(ctx, snap, now))
+
     def test_C_waits_until_the_move_chain_is_quiet(self):
         """W5 rig: C typed a second prompt while lr-fire-resume's own was still landing."""
         import time
