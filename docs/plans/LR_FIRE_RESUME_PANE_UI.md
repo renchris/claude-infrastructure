@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: complete
 ---
 
 # LR_FIRE_RESUME_PANE_UI — the pane cc-lr relaunches leave broken
@@ -10,6 +10,21 @@ pre-fix code, landed via the project /ship, and converged live.
 Scope (grown): +the same byte-transparent relay in `bin/reso-resume-one` (the boot-resume launcher
 runs the same Tcl 8.5 expect relay, so every emoji in a boot-resumed pane was mangled the same way;
 its patterns are all ASCII, so the fix there is the two-channel block and the drain call site).
+
+## Result — DONE 2026-09-29
+
+Landed on main as `e98cccb1c` (this plan), `9cbe10795` (probe window) and `c692c4035` (tty status
+to the run log and inbox, byte-transparent relay in both launchers); converged live, with the live
+blobs identical to trunk. `tests/lr-fire-resume-pane-ui.bats` has 7 cases, and 5 of them fail on the
+pre-fix tree. The land shed its smoke at load 210, so the suite was re-run on the landed tree:
+`1..7`, 0 failures. Also green before the land: `lr-fire-resume-submit`, `lr-submit-cr-landing`,
+`lr-fire-resume-reply-drain`, `-close-attrib`, `-direct-invocation`, `-model-ssot`,
+`lr-resume-answer-width`, `reso-resume-one`, `cc-tui`, `handoff-recycle-expect-probe`,
+`lr-handoff-launcher-quoting`, `cc-lr`, `cc-lr-front`.
+
+**Learnings.** A tail bound sized in bytes breaks as soon as one record outgrows it: bound the
+window by the question it answers (reach back to `t0`), not by a size. A mojibake that spares BMP
+characters and mangles only astral ones points at a UCS-2 runtime (Tcl 8.5), not at a locale.
 
 Reported 2026-09-28 ~19:16-19:24 CDT with three screenshots of panes relaunched by `cc-lr upgrade`
 (runs `ddd154a9-20260929T001507Z`, `46bc0436-20260929T001856Z`, `e0487c53-20260929T002302Z`). The
