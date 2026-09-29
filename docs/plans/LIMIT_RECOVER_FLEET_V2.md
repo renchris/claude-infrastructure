@@ -1,3 +1,7 @@
+---
+status: in-progress
+---
+
 # Implementation plan: lr-reconciler (pane-in-place parallel limit recovery), revision 2
 
 **Scope (frozen):** Pane-in-place parallel /limit-recover for every limited pane, in three steps:
@@ -420,3 +424,6 @@ Dynamic Workflow wf_99ea9654-29f (22 agents, 0 errors: 8 subsystem maps, 4 desig
 ## Status log
 
 - 2026-09-29: plan and architecture committed (programme lead, branch lr-fleet-v2-lead). Waves fire as dispatched sessions in dependency order.
+- 2026-09-29 (lead, `d4d7e4aec` landed): W0, W1 and W2a fired concurrently. The dependency graph drew W1 and W2a after W0, but neither shares a file with W0 or reads a W0 measurement, so they did not wait. W2b and W2c wait for W0, because they consume its bg-work dialog and Enter-readiness measurements. Firing was bounded by accounts, not by the graph: W2a waited about 10 minutes for a free seat on `next4` (both routable accounts were at KMAX).
+- Scope (grown): +W4-wf, an early W4 slice fired when W0 lands. After a move, a Workflow run whose dangling slots precede completed ones must get a salvage-seeded continuation, never a plain `resumeFromRunId`, which re-spends the finished slots (session 7c395da7 re-ran about 24 audit agents on 2026-09-28). Target: `scripts/limit-recover/lr-audit.py`, whose ACTION table and run-level gap rows feed the relaunch bundle. No other wave owns the file, so it does not wait for W3.
+- Operator decision 5 (core.bare): the sibling's heal (`lr_heal_bare_checkout`, switch `LR_BARE_REPAIR`, landed `b509a51f4`) stays as landed and is reverted only on a "deny" ruling. The reconciler honours `LR_HEAL_CORE_BARE=off` by exporting `LR_BARE_REPAIR=off` into every actuation (W3 T-act).
