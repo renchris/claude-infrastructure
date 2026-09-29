@@ -241,3 +241,38 @@ EOF
   [ "$status" -eq 1 ]
   [[ "$output" == *"NO repo SSOT for this Label"* ]] || false
 }
+
+# ── FLEET_V2 scope: the lr-reconciler family ──────────────────────────────────────────────────────
+@test "com.reso.lr-reconciler IS in scope: a live copy drifted from its real SSOT is flagged" {
+  unset LAUNCHD_LINT_REPO_DIR          # the real scripts/limit-recover/ SSOT, found by label
+  sed 's#<key>Label</key>#<key>Drifted</key><true/><key>Label</key>#' \
+    "$REPO/scripts/limit-recover/com.reso.lr-reconciler.plist" > "$LAUNCHD_LINT_LA_DIR/com.reso.lr-reconciler.plist"
+  cp "$REPO/scripts/limit-recover/com.reso.lr-reconciler-watchdog.plist" "$LAUNCHD_LINT_LA_DIR/"
+
+  run "$LINT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"RED  com.reso.lr-reconciler  CONTENT DRIFT"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"ok   com.reso.lr-reconciler-watchdog  ← scripts/limit-recover/"* ]] || false
+  [[ "$output" == *"1 problem(s) across 2 in-scope"* ]] || false
+}
+
+# ── --fixture: the positive-and-negative control ──────────────────────────────────────────────────
+@test "--fixture passes over the real repo SSOTs and never reads the live dir" {
+  unset LAUNCHD_LINT_REPO_DIR
+  # A drifted live file that the bare run WOULD flag: --fixture must not see it.
+  write_plist "$LAUNCHD_LINT_LA_DIR/com.reso.lr-reconciler.plist" com.reso.lr-reconciler true
+  run "$LINT" --fixture
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "${#lines[@]}" -eq 1 ]
+  [[ "$output" == "launchd-parity-lint --fixture: PASS — "*" SSOT copies clean (0 problems); drifted com.reso.lr-reconciler flagged alone (1 problem)" ]] || false
+  run "$LINT"                          # …while the bare run over the same live dir is RED
+  [ "$status" -eq 1 ]
+}
+
+@test "--fixture FAILS when a required SSOT is missing (the control cannot pass vacuously)" {
+  write_plist "$LAUNCHD_LINT_REPO_DIR/com.reso.lr-reset-poller.plist" com.reso.lr-reset-poller
+  write_plist "$LAUNCHD_LINT_REPO_DIR/com.reso.lr-reconciler.plist"   com.reso.lr-reconciler
+  run "$LINT" --fixture
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"FAIL"*"missing=[com.reso.lr-reconciler-watchdog com.reso.lr-reconciler-rig]"* ]] || { echo "$output"; false; }
+}

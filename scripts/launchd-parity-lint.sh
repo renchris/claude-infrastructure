@@ -25,7 +25,9 @@
 #                                                      are not)
 #
 # SCOPE — deliberately NOT every live plist:
-#   com.chrisren.*.plist · com.claude.*.plist · com.reso.lr-reset-poller.plist
+#   com.chrisren.*.plist · com.claude.*.plist · com.reso.lr-reset-poller.plist ·
+#   com.reso.lr-reconciler*.plist (the FLEET_V2 reconciler, its watchdog and its rig; their SSOTs are
+#   tracked beside the poller's in scripts/limit-recover/, which is already on the search path)
 # The other 6 com.reso.*/gl.reso.* jobs are reso-owned, have no repo anywhere, and 2 of them do not
 # even pass `plutil -lint` (raw unescaped `&&`; launchd's parser is more lenient than plutil's).
 # Including them would make this check RED on every single run from day one — and a detector that
@@ -41,13 +43,19 @@
 # its input in place, which is the exact incident this lint exists to make impossible to repeat.
 # Nothing is loaded, unloaded, installed, or booted out; that is C10 (operator-only).
 #
-# No self-test flag on purpose: nightly-regression.sh runs bare `scripts/*lint*.sh`, and a bare run
-# against the live fleet IS the check. A fixture-only pass would observe a description of the fleet
-# instead of the fleet.
+# The bare run audits the LIVE fleet, and stays the nightly's check: nightly-regression.sh runs bare
+# `scripts/*lint*.sh`, and a fixture-only pass would observe a description of the fleet instead of
+# the fleet. `--fixture` is the CONTROL, and a separate thing: it never reads the live LaunchAgents
+# dir. It copies every in-scope repo SSOT (by Label) into a temp LaunchAgents dir, runs the same
+# check loop over it and expects 0 problems (the negative control), then drifts ONE copy and expects
+# exactly that one flagged (the positive control). One verdict line; exit 0 only when both hold.
+# Why it exists: the nightly's green on a machine with none of these jobs loaded is VACUOUS, and a
+# new scope entry (lr-reconciler) is otherwise unproven until the day its job drifts.
 #
 # Exit: 0 = every in-scope live plist parses, is findable by label, and matches its SSOT
 #       1 = at least one lint failure / missing SSOT / content drift
 #       2 = usage error
+#       --fixture: 0 = both controls held · 1 = either did not (the captured loop output follows)
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -72,10 +80,13 @@ LA_DIR="${LAUNCHD_LINT_LA_DIR:-$HOME/Library/LaunchAgents}"
 LAUNCHD_LINT_REPO_DIR_DEFAULT="$REPO_ROOT/launchd:$REPO_ROOT/launchd/staged:$REPO_ROOT/scripts/limit-recover:$HOME/Development/claude-code-archive/launchd"
 REPO_DIRS="${LAUNCHD_LINT_REPO_DIR:-$LAUNCHD_LINT_REPO_DIR_DEFAULT}"
 
+FIXTURE=0
 case "${1:-}" in
   '') ;;
+  --fixture) FIXTURE=1 ;;
   -h|--help)
-    printf 'usage: %s\n' "$(basename "$0")"
+    printf 'usage: %s [--fixture]\n' "$(basename "$0")"
+    printf '  --fixture  positive+negative control over temp copies of the repo SSOTs (never reads live)\n'
     printf '  env: LAUNCHD_LINT_LA_DIR    live LaunchAgents dir (default ~/Library/LaunchAgents)\n'
     printf '       LAUNCHD_LINT_REPO_DIR  colon-separated repo SSOT search path\n'
     exit 0 ;;
@@ -98,7 +109,8 @@ plist_label() {
 }
 
 IDX="$(mktemp "${TMPDIR:-/tmp}/launchd-parity-idx.XXXXXX")" || exit 2
-trap 'rm -f "$IDX"' EXIT
+FIX_DIR=""
+trap 'rm -f "$IDX"; [ -z "$FIX_DIR" ] || rm -rf "$FIX_DIR"' EXIT
 
 # ── build the label→path index over every repo SSOT dir ───────────────────────────────────────────
 IFS=':' read -r -a _repo_dirs <<< "$REPO_DIRS"
@@ -121,8 +133,11 @@ for d in "${_repo_dirs[@]}"; do
 done
 [ "$idx_dirs" -gt 0 ] || bad "no repo SSOT dir exists in search path: $REPO_DIRS"
 
-# ── check every in-scope live plist ───────────────────────────────────────────────────────────────
-for live in "$LA_DIR"/com.chrisren.*.plist "$LA_DIR"/com.claude.*.plist "$LA_DIR"/com.reso.lr-reset-poller.plist; do
+# ── check every in-scope live plist in dir $1 (the live LA_DIR, or --fixture's temp copy of it) ────
+check_la_dir() {
+local live base lbl ssots match cand first
+for live in "$1"/com.chrisren.*.plist "$1"/com.claude.*.plist "$1"/com.reso.lr-reset-poller.plist \
+            "$1"/com.reso.lr-reconciler*.plist; do
   [ -f "$live" ] || continue
   checked=$((checked+1))
   base="$(basename "$live")"
@@ -165,6 +180,54 @@ for live in "$LA_DIR"/com.chrisren.*.plist "$LA_DIR"/com.claude.*.plist "$LA_DIR
     diff <(plutil -p "$live" 2>/dev/null) <(plutil -p "$first" 2>/dev/null) 2>/dev/null | sed 's/^/       /'
   fi
 done
+}
+
+# ── --fixture: the control. Never touches $LA_DIR; every write is to a temp copy. ─────────────────
+if [ "$FIXTURE" = 1 ]; then
+  FIX_DIR="$(mktemp -d "${TMPDIR:-/tmp}/launchd-parity-fixture.XXXXXX")" || exit 2
+  mkdir -p "$FIX_DIR/LaunchAgents" || exit 2
+  base_viol="$viol"   # an index-build defect (unparseable repo SSOT) is reported, and fails both legs
+  # Copies are VERBATIM: the compare is `plutil -p` equality with no path rewriting, and an installed
+  # plist is a byte copy of its SSOT — so a verbatim copy is exactly what a matching live file is.
+  # Named <Label>.plist so the loop's filename scope sees what launchd would; first SSOT per label.
+  copies=0
+  while IFS=$'\t' read -r lbl src; do
+    case "$lbl" in com.chrisren.*|com.claude.*|com.reso.lr-reset-poller|com.reso.lr-reconciler*) ;; *) continue ;; esac
+    case "$src" in *.plist) ;; *) continue ;; esac
+    [ -e "$FIX_DIR/LaunchAgents/$lbl.plist" ] && continue
+    cp "$src" "$FIX_DIR/LaunchAgents/$lbl.plist" || exit 2
+    copies=$((copies+1))
+  done < "$IDX"
+  missing=""
+  for lbl in com.reso.lr-reconciler com.reso.lr-reconciler-watchdog com.reso.lr-reconciler-rig com.reso.lr-reset-poller; do
+    [ -f "$FIX_DIR/LaunchAgents/$lbl.plist" ] || missing="$missing $lbl"
+  done
+  check_la_dir "$FIX_DIR/LaunchAgents" > "$FIX_DIR/clean.out" 2>&1
+  clean_viol=$((viol - base_viol)); clean_checked="$checked"
+  # Drift ONE copy — the lr-reconciler, so the newest scope entry is the one proven. sed, never
+  # plutil -extract/-replace: no plutil writer appears in this file, even against a temp copy.
+  target="$FIX_DIR/LaunchAgents/com.reso.lr-reconciler.plist"
+  drifted=0
+  if [ -f "$target" ]; then
+    sed 's#<key>Label</key>#<key>LaunchdParityFixtureDrift</key><true/><key>Label</key>#' "$target" > "$target.new" \
+      && ! cmp -s "$target" "$target.new" && mv "$target.new" "$target" && drifted=1
+    rm -f "$target.new"
+  fi
+  viol=0; checked=0
+  check_la_dir "$FIX_DIR/LaunchAgents" > "$FIX_DIR/drift.out" 2>&1
+  flagged="$(grep -c '^  RED ' "$FIX_DIR/drift.out")"
+  if [ -z "$missing" ] && [ "$base_viol" -eq 0 ] && [ "$clean_viol" -eq 0 ] && [ "$clean_checked" -eq "$copies" ] \
+     && [ "$drifted" = 1 ] && [ "$viol" -eq 1 ] && [ "$flagged" = 1 ] \
+     && grep -q '^  RED  com\.reso\.lr-reconciler  CONTENT DRIFT' "$FIX_DIR/drift.out"; then
+    echo "launchd-parity-lint --fixture: PASS — $copies SSOT copies clean (0 problems); drifted com.reso.lr-reconciler flagged alone (1 problem)"
+    exit 0
+  fi
+  echo "launchd-parity-lint --fixture: FAIL — copies=$copies clean_checked=$clean_checked clean_problems=$((clean_viol + base_viol)) missing=[${missing# }] drifted=$drifted drift_problems=$viol"
+  sed 's/^/  clean| /' "$FIX_DIR/clean.out"; sed 's/^/  drift| /' "$FIX_DIR/drift.out"
+  exit 1
+fi
+
+check_la_dir "$LA_DIR"
 
 # A check that silently examined nothing is a blind check, not a green one — say so out loud.
 if [ "$checked" -eq 0 ]; then
