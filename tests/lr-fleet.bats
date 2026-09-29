@@ -872,6 +872,15 @@ SH
   [[ "$output" == *"recycle-dead"* ]] || { echo "$output"; false; }
 }
 
+@test "a recycle-target-limited row (the target answered with a limit) is FAILED too, not a wait (W5 rig)" {
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"; unregistering_handoff
+  export LRH_DEAD_ROW='{"ts":"2999-01-01T00:00:00Z","class":"recycle-target-limited","target_pane":"616","detail":"relaunched pane 616; the target answered limit after 1s"}'
+  PROOF_WAIT=30 detached_one
+  run cat "$BATS_TEST_TMPDIR/notify.log"
+  [[ "$output" == *"verdict=FAILED"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"the target answered limit"* ]] || { echo "$output"; false; }
+}
+
 @test "CONTROL: a relaunch that registers within the bound is RECOVERED, with the pane it registered from" {
   blocked_tx "$SEC" "$SID"; row 616 "$SID"; unregistering_handoff
   export LRH_REREGISTER="{\"paneUUID\":\"616\",\"session_id\":\"$SID\",\"pid\":$$,\"account\":\"claude-tertiary\",\"cwd\":\"$CWD\"}"

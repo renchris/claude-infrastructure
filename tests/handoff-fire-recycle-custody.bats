@@ -630,6 +630,10 @@ if [ -f "$HOME/shell-after-first" ]; then
      && [ "$(date +%s)" -lt $(( $(cat "$HOME/first-read") + $(cat "$HOME/shell-after-first") )) ]; then cc=1; fi
   [ -f "$HOME/first-read" ] || cc=1
 fi
+# With $HOME/cc-after-type the pane is a shell until the launcher line is typed, and a claude after.
+if [ -f "$HOME/cc-after-type" ]; then
+  cc=0; grep -q lr-launch-w.sh "$HOME/it2-calls.log" 2>/dev/null && cc=1
+fi
 case "$args" in *lstart=*) printf 'Tue Sep 29 10:00:00 2026\n'; exit 0 ;; esac
 case "$args" in
   *"-axww -o args="*) [ "$cc" = 1 ] && printf 'claude --resume x\n'; exit 0 ;;
@@ -817,6 +821,43 @@ wrows() { grep "\"class\":\"$1\"" "$HOME/.claude/logs/handoffs.jsonl" 2>/dev/nul
   cat "$fix/assistant-turn.jsonl" >> "$TX"
   ! hf_recycle_last_read || { echo "a lifted limit read as standing"; false; }
   [ "$HF_LR_REASON" = limit-cleared ] || { echo "$HF_LR_REASON $HF_LR_WHAT"; false; }
+}
+
+# ── 15 · THE TARGET ANSWERED WITH A LIMIT: A VERDICT, NOT A WAIT ───────────────────────────────
+
+# The watcher in the background holding a real pane lock, as recycle_fire hands it one; $1 = extra env.
+drive_watcher_locked() {
+  load_tail_funcs
+  rm -f "$HOME/it2-calls.log" "$HOME/.claude/logs/handoffs.jsonl"; touch "$HOME/cc-after-type"
+  mkdir -p "$(dirname "$WCFG/projects/-r/x")"
+  cp "$REPO/tests/fixtures/lr-recon/jsonl/death-quota-limits.jsonl" "$WCFG/projects/-r/$SID_UUID.jsonl"
+  export HF_RECYCLE_LOCK="$LR_LOCKS_DIR/pane-t.recycle"; mkdir -p "$HF_RECYCLE_LOCK"
+  local t0=$SECONDS wp
+  env "$@" bash "$HF" __recycle "$WPANE" "$WTTY" "$WCMD" /tmp "$SID_UUID" "" "" "" \
+    "$WCFG" "$SID_UUID" "2026-09-29T00:00:00" "$WSRC" > "$W/watcher.out" 2>&1 & wp=$!
+  echo "$wp" > "$BATS_TEST_TMPDIR/wl.pid"
+  hf_recycle_lock_write "$HF_RECYCLE_LOCK" watcher "$wp"
+  status=0; wait "$wp" || status=$?
+  output="$(cat "$W/watcher.out")"; elapsed=$((SECONDS - t0))
+}
+
+@test "15 a target that answers with a limit ends the watcher at once: target-limited row, lock released, no dead page" {
+  watcher_world
+  drive_watcher_locked RCY_ENGAGE_TIMEOUT=60 RCY_ENGAGE_INTERVAL=1 LR_RECORD_ID=recon:x:1
+  [ "$status" -eq 1 ] || { echo "status=$status $output"; false; }
+  [[ "$output" == *"RECYCLE FAILED — target-limited"* ]] || { echo "$output"; false; }
+  [ "$elapsed" -lt 20 ] || { echo "waited ${elapsed}s: $output"; false; }
+  wrows recycle-target-limited | grep -q 'the target answered limit' || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
+  [ -z "$(wrows recycle-dead)" ] || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
+  [ ! -d "$HF_RECYCLE_LOCK" ] || { echo "the pane lock was not released"; cat "$HF_RECYCLE_LOCK/holder"; false; }
+  ! grep -rqsE 'HANDOFF-RECYCLE-(DEAD|TARGET)' "$CC_HANDOFF_ALARM_DIR" \
+    || { echo "a reconciler-owned move paged:"; grep -rhsE 'HANDOFF-RECYCLE' "$CC_HANDOFF_ALARM_DIR"; false; }
+
+  # RED control, today's behaviour: with the arm off the same world waits out the window as "never engaged".
+  watcher_world
+  drive_watcher_locked RCY_ENGAGE_TIMEOUT=3 RCY_ENGAGE_INTERVAL=1 LR_RECORD_ID=recon:x:1 HF_RECYCLE_TARGET_ERROR_EXIT=off
+  [[ "$output" == *"never engaged"* ]] || { echo "$output"; false; }
+  wrows recycle-dead | grep -q . || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
 }
 
 # ── 12 · CANCELLING THE BACKGROUND-WORK DIALOG OWES AN UNCONFIRM ───────────────────────────────

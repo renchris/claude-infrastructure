@@ -4946,6 +4946,50 @@ PY
   return 1
 }
 
+# THE OTHER HALF OF THE ORACLE (W5 rig, target-limited). resume_engaged drops error turns BY DESIGN, so
+# a target that answered the relaunch with a limit or an auth failure read exactly like a target that
+# had not answered yet: the watcher sat out RCY_ENGAGE_TIMEOUT holding the pane recycle lock, every
+# hop off that account was DEFERRED into a false STRANDED, and the timeout paged "never engaged".
+# Classified through the SSOT (lr_predicate.classify_record), never a new text match.
+resume_target_error() { # $1=target cfg $2=sid $3=baseline → prints limit|authentication_failed, rc 0 when the LAST main-chain assistant record newer than the baseline in the TARGET's copy is that error / 1 otherwise (incl. the SSOT unreachable: wait out the window, as before)
+  local cfg="${1:-}" sid="${2:-}" t0="${3:-}" f py
+  { [ -n "$cfg" ] && [ -n "$sid" ]; } || return 1
+  py="$(hf_lr_script lr_predicate.py HF_LR_PREDICATE_PY)" || return 1
+  for f in "$cfg"/projects/*/"$sid".jsonl; do
+    [ -f "$f" ] || continue
+    /usr/bin/python3 - "$f" "$t0" "$(dirname "$py")" <<'PY' && return 0
+import json, sys
+f, t0, d = sys.argv[1], sys.argv[2], sys.argv[3]
+sys.path.insert(0, d)
+import lr_predicate as P
+last = None
+for line in open(f, errors="replace"):
+    if '"assistant"' not in line:
+        continue
+    try:
+        r = json.loads(line)
+    except Exception:
+        continue
+    if r.get("type") != "assistant" or r.get("isSidechain") or (r.get("timestamp") or "") <= t0:
+        continue
+    m = r.get("message") if isinstance(r.get("message"), dict) else {}
+    if m.get("content") == "No response requested.":
+        continue
+    last = r
+if last is None:
+    sys.exit(1)
+# lr_recon/tokens.py:_KIND_MAP for the two kinds the daemon hops on (TARGET-LIMITED / TARGET-AUTH);
+# a 529 or a network error is the daemon's retry, not a hop, and keeps the window.
+k = {"limit": "limit", "auth_cliff": "authentication_failed", "org_blocked": "authentication_failed"}.get(
+    P.classify_record(last).get("kind"))
+if not k:
+    sys.exit(1)
+print(k)
+PY
+  done
+  return 1
+}
+
 recycle_engaged() { # $1=pane $2=pre-recycle-sid $3=marker → 0 engaged / 1 not
   local pane="${1:-}" oldsid="${2:-}" marker="${3:-}" pdir newsid hit scan_win=""
   # Same mtime scoping as engagement_seen, and this path needed it MORE: it sweeps every entry of
@@ -8634,6 +8678,23 @@ if [ "${1:-}" = "__recycle" ]; then
         emit_recycle_event recycle-engaged 1 "$RSID" "recycled in place; a real assistant turn within ${rcy_t}s" || true
         _hf_resume_debt discharge --sid "$RCY_DEBT_SID" --why "recycle engaged in pane $RSID"
         exit 0
+      fi
+      # THE TARGET ANSWERED WITH A LIMIT OR AN AUTH FAILURE: a verdict, not a wait. Exiting releases the
+      # pane lock through the EXIT trap, so the daemon's hop FROM this account is not DEFERRED.
+      if [ -n "$RCY_RESUME_SID" ] && [ "${HF_RECYCLE_TARGET_ERROR_EXIT:-on}" != off ] \
+         && rcy_te="$(resume_target_error "$RCY_RESUME_CFG" "$RCY_RESUME_SID" "$RCY_T0")"; then
+        rcy_te_cls=recycle-target-limited rcy_te_tag=LIMITED
+        [ "$rcy_te" = authentication_failed ] && rcy_te_cls=recycle-target-auth rcy_te_tag=AUTH
+        # The "RECYCLE FAILED" prefix is kept on purpose: recycle_await_verdict already reads it as a verdict.
+        echo "!! RECYCLE FAILED — ${rcy_te_cls#recycle-}: the relaunch in $RSID reached the target ($RCY_RESUME_CFG) and its answer is '$rcy_te' after ${rcy_t}s — the TARGET cannot carry this session. Pane left as is; lock released so the next move can hop FROM this account." >&2
+        emit_recycle_event "$rcy_te_cls" 0 "$RSID" "relaunched pane $RSID; the target answered $rcy_te after ${rcy_t}s" || true
+        goal_unreachable "$rcy_te_cls" || true
+        # A reconciler-owned move is re-planned by the daemon's hop; page only an unowned one.
+        case "${LR_RECORD_ID:-}" in recon:*) ;; *)
+          hf_alarm "$rcy_te_cls" "$RSID" "" "" "HANDOFF-RECYCLE-TARGET-$rcy_te_tag: pane $RSID relaunched on $RCY_RESUME_CFG, which answered '$rcy_te'. Move it on to another account." ;;
+        esac
+        _hf_resume_debt discharge --sid "$RCY_DEBT_SID" --why "target answered $rcy_te in pane $RSID; the next move hops from it"
+        exit 1
       fi
       sleep "$RCY_ENGAGE_INTERVAL"; rcy_t=$((rcy_t + RCY_ENGAGE_INTERVAL))
     done

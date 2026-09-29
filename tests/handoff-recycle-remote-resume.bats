@@ -495,6 +495,50 @@ tx() { # $1 = ISO ts  $2 = json fields after "type"
   [ "$status" -eq 1 ]
 }
 
+# ── resume_target_error — the oracle's other half: the target ANSWERED, with a limit or an auth failure
+# (W5 rig, target-limited). Mutant: make it `return 1` and the first and fourth cases go red.
+
+te_oracle() {
+  eval "$(sed -n '/^hf_lr_script() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^resume_target_error() {/,/^}/p' "$HF")"
+  command -v resume_target_error >/dev/null
+  export HF_LR_PREDICATE_PY="$REPO/scripts/limit-recover/lr_predicate.py"
+}
+LIMIT_REC='"isApiErrorMessage":true,"error":"rate_limit","apiErrorStatus":429,"message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"You'"'"'ve hit your session limit"}]}'
+
+@test "target error: a limit turn NEWER than the baseline in the TARGET's copy prints limit, rc 0" {
+  te_oracle
+  tx "2026-09-09T01:05:00.000Z" "$LIMIT_REC"
+  run resume_target_error "$TARGET_CFG" "$SESS" "2026-09-09T01:04:00"
+  [ "$status" -eq 0 ] && [ "$output" = limit ] || { echo "status=$status $output"; false; }
+}
+
+@test "target error CONTROL: the source's pre-move limit, OLDER than the baseline, is not the target's answer" {
+  te_oracle
+  tx "2026-09-09T01:00:00.000Z" "$LIMIT_REC"
+  run resume_target_error "$TARGET_CFG" "$SESS" "2026-09-09T01:04:00"
+  [ "$status" -eq 1 ] || { echo "status=$status $output"; false; }
+}
+
+@test "target error: the LAST record decides — an ok turn after the error is not an error" {
+  te_oracle
+  tx "2026-09-09T01:05:00.000Z" "$LIMIT_REC"
+  tx "2026-09-09T01:06:00.000Z" '"message":{"role":"assistant","content":[{"type":"text","text":"Running the audit"}]}'
+  run resume_target_error "$TARGET_CFG" "$SESS" "2026-09-09T01:04:00"
+  [ "$status" -eq 1 ] || { echo "status=$status $output"; false; }
+}
+
+@test "target error: authentication_failed prints authentication_failed; a 529 keeps the window (rc 1)" {
+  te_oracle
+  local fix="$REPO/tests/fixtures/lr-recon/jsonl" f="$TARGET_CFG/projects/$SLUG/$SESS.jsonl"
+  sed 's/"timestamp":"[^"]*"/"timestamp":"2026-09-09T01:05:00.000Z"/' "$fix/authentication-failed.jsonl" > "$f"
+  run resume_target_error "$TARGET_CFG" "$SESS" "2026-09-09T01:04:00"
+  [ "$status" -eq 0 ] && [ "$output" = authentication_failed ] || { echo "status=$status $output"; false; }
+  sed 's/"timestamp":"[^"]*"/"timestamp":"2026-09-09T01:05:00.000Z"/' "$fix/api-error-529.jsonl" > "$f"
+  run resume_target_error "$TARGET_CFG" "$SESS" "2026-09-09T01:04:00"
+  [ "$status" -eq 1 ] || { echo "status=$status $output"; false; }
+}
+
 # ── W1(b): THE ONE SILENT TERMINAL ARM ────────────────────────────────────────────────────────────
 #
 # `!! relaunch typed but no claude process appeared within 90s` is the watcher's LAST arm and, until

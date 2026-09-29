@@ -819,8 +819,8 @@ lf_admit_section() { # $1=sid $2=cfg $3=acct $4=pane $5=cwd $6=tier → 0 admitt
   return 0
 }
 # lf_await_relaunch <sid> <pane> <iso floor> → prints the pane of a live registry row and rc 0 ·
-# prints "dead:<detail>" and rc 1 when the recycle watcher wrote recycle-dead for that pane since the
-# floor · prints nothing and rc 2 when neither appeared within LR_FLEET_PROOF_WAIT_S (default 240 s,
+# prints "dead:<detail>" and rc 1 when the recycle watcher wrote recycle-dead (or its target answered
+# with a limit or an auth failure: recycle-target-limited / -auth) for that pane since the floor · prints nothing and rc 2 when neither appeared within LR_FLEET_PROOF_WAIT_S (default 240 s,
 # which covers the watcher's shell wait and boot wait on every measured recovery; the worst case is
 # longer, and past the bound the answer is UNPROVEN, never a guess). The ledger is the watcher's own
 # (handoff-fire emit_recycle_event), read by class and pane, never by prose.
@@ -834,7 +834,8 @@ lf_await_relaunch() {
     [ -n "$row" ] && { printf '%s' "$row"; return 0; }
     if [ -n "$pane" ] && [ "$pane" != "-" ] && [ -f "$led" ] && command -v jq >/dev/null 2>&1; then
       dead="$(tail -n 500 "$led" 2>/dev/null | jq -rR --arg p "$pane" --arg f "$floor" '
-                fromjson? | select(.class == "recycle-dead" and (.target_pane|tostring) == $p and (.ts // "") >= $f)
+                fromjson? | select((.class == "recycle-dead" or .class == "recycle-target-limited" or .class == "recycle-target-auth")
+                                   and (.target_pane|tostring) == $p and (.ts // "") >= $f)
                 | .detail // "recycle-dead"' 2>/dev/null | tail -1 || true)"
       [ -n "$dead" ] && { printf 'dead:%s' "$dead"; return 1; }
     fi
