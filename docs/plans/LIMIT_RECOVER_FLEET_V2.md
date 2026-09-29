@@ -129,8 +129,9 @@ Every teammate brief follows the agent-teams pre-spawn checklist:
 - `LR_TEAM_UNIT=off` (default).
 - `LR_HEAL_CORE_BARE=off` (default, until the operator rules).
 - `CC_RECYCLE_BGWORK_ANSWER` is forced to `cancel` for reconciler actuations.
-- `LR_RECR_SCHEDULE` (default `10,25,40` until W0 measures).
+- `LR_RECR_SCHEDULE` (default `5,15,30,45`, measured by W0 item 1; the placeholder was `10,25,40`).
 - `LR_AUDIT_RESUME_PREDICT=off` (W4-wf; default on): lr-audit stops predicting Workflow resume re-spend and offers the old plain resume.
+- `LR_LAUNCH_GUARD=off` skips `lr-fire-resume`'s launch lock and H(sid) re-check (W2c; on by default).
 
 ### Operator steps (filed with `cc-backlog needs`, one command each)
 1. **W5:** load the rig job, then the real reconciler and watchdog jobs: `bash /tmp/lr-recon-launchd.sh --confirm lr-reconciler`. The script runs `plutil -lint`, installs the plists from their repo SSOT, runs `launchctl bootstrap gui/$UID`, and verifies with `launchctl print` plus a fresh heartbeat read.
