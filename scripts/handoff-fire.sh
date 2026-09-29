@@ -2875,7 +2875,7 @@ hf_recycle_hold() { # $1=reason $2=detail $3=what the operator reads → exit 1
 # this very Bash call is its turn and its job — so an at-rest or job read would refuse every
 # self-recycle while protecting nothing.
 hf_recycle_last_read() { # → 0 every read clean · 1 refused (HF_LR_REASON, HF_LR_WHAT)
-  local c rc tx kind limited=0 sa_dir sa_live lib
+  local c rc tx kind limited=0 sa_dir sa_live lib tx_read="" joined=""
   HF_LR_REASON="" HF_LR_WHAT=""
   if [ "${RCY_REMOTE:-0}" = 1 ] && [ "$(hf_pane_focused "$SID")" = yes ] && [ "${LR_MOVE_FOCUSED:-off}" != on ]; then
     HF_LR_REASON=focused; HF_LR_WHAT="pane $SID became focused"; return 1
@@ -2891,9 +2891,15 @@ hf_recycle_last_read() { # → 0 every read clean · 1 refused (HF_LR_REASON, HF
   else
     tx="${RCY_SRC_TX:-}"
     [ -z "$tx" ] && [ -n "${HF_TS_TOMBSTONE:-}" ] && tx="${HF_TS_TOMBSTONE%.HANDOFF.json}.jsonl"
-    # confirm RENAMES the source to .handed-off; a write after it re-creates a stub at the old path,
-    # and the stub is then the freshest fact there is.
+    # confirm RENAMES the source to .handed-off; a write after it re-creates a stub at the old path.
     [ -n "$tx" ] && [ ! -f "$tx" ] && [ -f "$tx.handed-off" ] && tx="$tx.handed-off"
+    # BOTH exist ⇒ the stub is the TAIL of the retired transcript, not a transcript: a post-rename
+    # append is typically a hook-blocked system record with no assistant turn, so the stub alone can
+    # never show a limit (W5 rig, stub-recreated). Read what fold-stub will produce — retired + stub.
+    if [ -n "$tx" ] && [ -f "$tx" ] && [ -f "$tx.handed-off" ]; then
+      joined="$(mktemp "${TMPDIR:-/tmp}/hf-lastread.XXXXXX")" \
+        && cat "$tx.handed-off" "$tx" > "$joined" && tx_read="$joined"
+    fi
   fi
   [ "${RCY_TRANSPLANT_CAUSE:-}" = limit ] && limited=1
   if [ "$limited" = 1 ]; then
@@ -2902,14 +2908,17 @@ hf_recycle_last_read() { # → 0 every read clean · 1 refused (HF_LR_REASON, HF
       . "$lib" 2>/dev/null || true
     fi
     if ! command -v lr_last_api_error >/dev/null 2>&1; then
+      [ -n "$joined" ] && rm -f "$joined"
       HF_LR_REASON="limit-cleared"; HF_LR_WHAT="lr-lib unreachable — the limit cannot be re-read"; return 1
     fi
-    kind="$(lr_last_api_error "$tx" 2>/dev/null | cut -f3)"
+    kind="$(lr_last_api_error "${tx_read:-$tx}" 2>/dev/null | cut -f3)"
+    [ -n "$joined" ] && rm -f "$joined"
     if [ "$kind" != limit ]; then
       HF_LR_REASON="limit-cleared"; HF_LR_WHAT="last record is ${kind:-not an api error} ($tx)"; return 1
     fi
   else
-    rc=0; hf_transcript_at_rest "$tx" || rc=$?
+    rc=0; hf_transcript_at_rest "${tx_read:-$tx}" || rc=$?
+    [ -n "$joined" ] && rm -f "$joined"
     if [ "$rc" != 0 ]; then
       HF_LR_REASON=busy; HF_LR_WHAT="transcript not at rest (rc $rc — 1 in flight, 2 unreadable): ${tx:-<none>}"; return 1
     fi

@@ -803,6 +803,22 @@ wrows() { grep "\"class\":\"$1\"" "$HOME/.claude/logs/handoffs.jsonl" 2>/dev/nul
   wrows recycle-held-launch-lock | grep -q 'rec-other' || { cat "$HOME/.claude/logs/handoffs.jsonl"; echo "$output"; false; }
 }
 
+@test "14 a stub re-created after confirm is read JOINED with .handed-off: the limit still stands (W5 rig)" {
+  tail_world
+  local fix="$REPO/tests/fixtures/lr-recon/jsonl"
+  unset -f lr_last_api_error
+  # shellcheck disable=SC1091  # the REAL reader, not tail_world's stub
+  . "$REPO/scripts/limit-recover/lr-lib.sh"
+  cp "$fix/death-quota-limits.jsonl" "$TX.handed-off"
+  cp "$fix/system-informational-retired-source.jsonl" "$TX"   # the re-created stub: no assistant record
+  printf '%s\n' "" > "$READS"
+  hf_recycle_last_read || { echo "refused: $HF_LR_REASON $HF_LR_WHAT"; false; }
+  # Control: a stub carrying a SUCCESSFUL assistant turn really did lift the limit.
+  cat "$fix/assistant-turn.jsonl" >> "$TX"
+  ! hf_recycle_last_read || { echo "a lifted limit read as standing"; false; }
+  [ "$HF_LR_REASON" = limit-cleared ] || { echo "$HF_LR_REASON $HF_LR_WHAT"; false; }
+}
+
 # ── 12 · CANCELLING THE BACKGROUND-WORK DIALOG OWES AN UNCONFIRM ───────────────────────────────
 
 @test "12 the bgwork dialog under CC_RECYCLE_BGWORK_ANSWER=cancel: one Esc, no relaunch, unconfirm=needed" {
