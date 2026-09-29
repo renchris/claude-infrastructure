@@ -329,12 +329,19 @@ PY
   for _ in $(seq 50); do [ -e "$CACHE.lock.held" ] && break; python3 -c 'import time; time.sleep(0.1)'; done
   [ -e "$CACHE.lock.held" ]
   # Timed around the child alone, in one interpreter: bats' `run` and a second python startup
-  # are not the command's wall clock, and on a loaded box they alone cost ~0.5 s.
+  # are not the command's wall clock. The 2.5 s is asserted NET of a same-sandbox run that waits
+  # for nothing (`--max-wait 0`, no cache => exit 3 at once): interpreter start plus compiling this
+  # 7,000-line script happens before any code of ours runs, and measured 0.7-1.2 s at load 40-130
+  # (2026-09-29). What this case proves is that the LOCK WAIT is bounded (unbounded, it is 240 s).
   run python3 -c '
 import os, subprocess, sys, time
-t = time.monotonic()
-r = subprocess.run([os.environ["CA_BIN"], "--json", "--max-wait", "2"], capture_output=True)
-print(r.returncode, round(time.monotonic() - t, 3))'
+def timed(*a):
+    t = time.monotonic()
+    r = subprocess.run([os.environ["CA_BIN"], "--json", *a], capture_output=True)
+    return r.returncode, time.monotonic() - t
+_, base = timed("--max-wait", "0")
+rc, el = timed("--max-wait", "2")
+print(rc, round(el - base, 3))'
   kill "$holder" 2>/dev/null || true
   wait "$holder" 2>/dev/null || true
   read -r rc elapsed <<<"$output"
