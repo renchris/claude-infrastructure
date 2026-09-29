@@ -28,7 +28,7 @@ must judge when each session is really done, and which of its questions really n
 start, place, message and retire one another. A session reaches you only with a decision it cannot
 make. One job is still yours, noticing a session stuck on a permission prompt, and
 [the last section](#measured-not-claimed--including-where-it-falls-short) measures how long that
-takes. The repo is 6,311 files and 5,732 commits since 2026-03-24, checked by 15,570 tests, running
+takes. The repo is 7,309 files and 6,038 commits since 2026-03-24, checked by 16,159 tests, running
 on one Mac across four Claude accounts. [Install](#install) takes five commands.
 
 | | What the system does | The job it takes off you |
@@ -48,7 +48,7 @@ deployment.
 <!-- Diagram source: assets/diagrams/deploy-model.mmd — edit it, run `npm run diagrams`, commit the regenerated SVGs. -->
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/deploy-model-dark.svg">
-  <img src="assets/diagrams/deploy-model-light.svg" alt="The claude-infrastructure repo — 6,311 files under one reviewable history — deploys three ways. install.sh symlinks hooks, commands and scripts into the primary ~/.claude, so editing the live hook is editing the repo. install.sh --config-dir installs the same system into the four billing-isolated account directories; as deployed those directories symlink the code surfaces back to the primary, and isolate only their own auth and settings. Global surfaces — ~/bin tools, 101 cc tools, 28 LaunchAgents and the statusline — are copied, and sync.sh pulls hand-edits back.">
+  <img src="assets/diagrams/deploy-model-light.svg" alt="The claude-infrastructure repo — 7,309 files under one reviewable history — deploys three ways. install.sh symlinks hooks, commands and scripts into the primary ~/.claude, so editing the live hook is editing the repo. install.sh --config-dir installs the same system into the four billing-isolated account directories; as deployed those directories symlink the code surfaces back to the primary, and isolate only their own auth and settings. Global surfaces — ~/bin tools, 101 cc tools, 28 LaunchAgents and the statusline — are copied, and sync.sh pulls hand-edits back.">
 </picture>
 
 <details>
@@ -57,7 +57,7 @@ deployment.
 <!-- mermaid-fence: assets/diagrams/deploy-model.mmd (auto-synced by `npm run diagrams`) -->
 ```mermaid
 flowchart TB
-    Repo["claude-infrastructure<br/>6,311 files · one reviewable history"]
+    Repo["claude-infrastructure<br/>7,309 files · one reviewable history"]
     Repo &lt;--&gt;|"install.sh · SYMLINK<br/>editing the live hook IS editing the repo"| Prim["~/.claude<br/>hooks · commands · scripts"]
     Repo -->|"--config-dir · code SYMLINKED<br/>auth + settings per-account"| Alt["~/.claude-secondary … 4<br/>4 billing-isolated accounts"]
     Repo -->|"COPY<br/>sync.sh pulls hand-edits back"| Glob["~/bin · LaunchAgents<br/>101 cc-* tools · 28 daemons · statusline"]
@@ -85,7 +85,7 @@ them wait for you to run, because an agent must not rewrite its own permissions.
 ### Every trunk tree is proven in the background, and a red one is bisected
 
 **The full test corpus runs on every tree that reaches trunk, just not inside the land.** There are
-15,570 bats tests in 756 files. A land runs only the suites its change touches. The whole corpus
+16,159 bats tests in 801 files. A land runs only the suites its change touches. The whole corpus
 belongs to one background verifier, [`postland-verify.sh`](scripts/postland-verify.sh), which runs
 each trunk tree in a fresh checkout. When a tree goes red it bisects down to the one failing test,
 and re-runs the suspect commit's own tree before reverting it, so a flaky test cannot get an innocent
@@ -130,9 +130,9 @@ with its pane.
 
 <div align="center">
 
-<img src="assets/demo/handoff-live.webp" width="838" alt="Screen recording of one real terminal window in three captioned beats. One: a real Claude session runs handoff-fire.sh with --split-right --notify-back, and the pane splits. Two: a second Claude session boots in the new pane, reads its brief, gets origin/main = bebd9580, and reports the back-channel ping as verdict=delivered reason=wake-path-armed before running self-close --terminal. Three: the ping arrives inside the originator's own chat as PING RECEIVED FROM PEER with the peer's message, and the peer has closed its own pane — the window is back to one.">
+<img src="assets/demo/handoff-live.webp" width="838" alt="Screen recording of one real terminal window in three captioned beats, played at about 1.8 times real speed. One: a real Claude session runs handoff-fire.sh with --split-right --notify-back, and the pane splits. Two: a second Claude session boots in the new pane, reads its brief, gets origin/main = 04c549d2, and reports the back-channel ping as verdict=delivered reason=wake-path-armed before running self-close --terminal. Three: the ping arrives inside the originator's own chat as PING RECEIVED FROM PEER with the peer's message, and the peer has closed its own pane — the window is back to one.">
 
-<sub><b>An unedited recording of two real Claude sessions in one window.</b> One session fires a peer and the pane <b>splits</b>. The peer answers <code>origin/main = bebd9580</code> and <b>pings back</b>, and the ping arrives <b>in the first session's chat</b>. The peer then <b>closes its own pane</b>. The only human keystroke is the first prompt. Recorded 2026-08 on iTerm2; kitty has been the only terminal in use since 2026-08-03, and the same commands drive it. <a href="assets/demo/handoff-live.mp4">Full-resolution video</a> (1920×1144, 60 fps).</sub>
+<sub><b>A recording of two real Claude sessions in one window, played at about 1.8× speed</b> (roughly 50 seconds of real time in 30). One session fires a peer and the pane <b>splits</b>. The peer answers <code>origin/main = 04c549d2</code> and <b>pings back</b>, and the ping arrives <b>in the first session's chat</b>. The peer then <b>closes its own pane</b>. The only human keystroke is the first prompt. Recorded 2026-07-28 on iTerm2; kitty has been the only terminal in use since 2026-08-03, and the same commands drive it. <a href="assets/demo/handoff-live.mp4">Full-resolution video</a> (1920×1144, 60 fps).</sub>
 
 </div>
 
@@ -773,7 +773,7 @@ is rebuilt: **[`docs/README-reference.md`](docs/README-reference.md)**.
 | [`hooks/`](hooks) | one script per lifecycle refusal or record | 90 scripts; 105 entries wired on 21 events |
 | [`scripts/`](scripts) | orchestration: fire, land, verify, deploy, recover | 322 files |
 | [`commands/`](commands) · [`skills/`](skills) · [`agents/`](agents) | slash commands · loadable skills · custom subagents | 25 · 37 · 5 |
-| [`tests/`](tests) | the bats test corpus | 756 files, 15,570 tests |
+| [`tests/`](tests) | the bats test corpus | 801 files, 16,159 tests |
 | [`migrations/`](migrations) | idempotent changes to machine state | 44 |
 | [`launchd/`](launchd) | daemon definitions: dispatcher, reapers, verifier, deploy, search | 28 plists (26 loaded) + 5 staged |
 | [`config/`](config) · [`settings-templates/`](settings-templates) | deny rules, hook roster, `kitty.conf`, CPU-priority patterns | 12 · 3 |
