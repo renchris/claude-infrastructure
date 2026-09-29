@@ -344,15 +344,34 @@ fi
 # One `ps` fork, on a hook with a wall-clock budget. The tenancy gate above already spends up to 16.
 lstart=$(TZ=UTC LC_ALL=C ps -o lstart= -p "$cpid" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')
 
+# THE KITTY THIS PANE LIVES IN (W2c). A kitty window id is a per-process counter that restarts at 1
+# with every kitty, so `paneUUID` alone can name a window in a DIFFERENT kitty after a restart. The
+# socket and its owning pid let a reconciler address the right instance and hand bin/it2-kitty a
+# CC_TERM_KITTY_PID proof. Recorded only when the socket is live NOW; the pid is read out of
+# kitty.conf's `listen_on unix:/tmp/kitty-{kitty_pid}` name, never from a `ps` fork — this hook runs
+# at every session start. Anything unproven is null (a leading-zero pid too: `--argjson` would reject
+# it and take the whole row down with it), and readers ignore keys they do not know.
+kitty_listen_on=""; kitty_pid="null"
+_kl="${KITTY_LISTEN_ON:-}"
+if [ -n "$_kl" ] && [ -S "${_kl#unix:}" ]; then
+  kitty_listen_on="$_kl"
+  case "$_kl" in
+    */kitty-*) _kp="${_kl##*/kitty-}"
+               case "$_kp" in ''|0*|*[!0-9]*) ;; *) kitty_pid="$_kp" ;; esac ;;
+  esac
+fi
+
 # Atomic write (tmp + mv) so a concurrent cc-sessions read never sees a partial file.
 tmp="$reg_dir/.$pane.$$.tmp"
 if jq -n --arg paneUUID "$pane" --arg name "$name" --arg cwd "$cwd" \
         --arg account "$acct" --arg sessionId "$sid" --arg surface "$surface" \
-        --arg lstart "$lstart" \
-        --argjson pid "$cpid" --argjson startedAt "$started" \
+        --arg lstart "$lstart" --arg kittyListenOn "$kitty_listen_on" \
+        --argjson pid "$cpid" --argjson startedAt "$started" --argjson kittyPid "$kitty_pid" \
       '{paneUUID:$paneUUID, name:$name, cwd:$cwd, account:$account, pid:$pid,
         startedAt:$startedAt, session_id:(if $sessionId=="" then null else $sessionId end),
-        surface:$surface, lstart:$lstart}' \
+        surface:$surface, lstart:$lstart,
+        kitty_listen_on:(if $kittyListenOn=="" then null else $kittyListenOn end),
+        kitty_pid:$kittyPid}' \
       > "$tmp" 2>/dev/null; then
   mv -f "$tmp" "$reg_dir/$pane.json" 2>/dev/null || rm -f "$tmp" 2>/dev/null
 else
