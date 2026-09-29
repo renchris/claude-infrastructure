@@ -27,6 +27,10 @@ setup() {
   chmod +x "$STUB/osascript" "$STUB/afplay"
   export PATH="$STUB:$PATH"
   export NTY_OSA_TIMEOUT_BIN=""            # documented seam: set-but-EMPTY disables the wrapper
+  # The sound gate reads the 1-min load; pin it LOW so no test depends on how busy the box is.
+  printf '#!/bin/bash\necho "{ ${NTY_TEST_LOAD:-1.00} 1.00 1.00 }"\n' > "$STUB/sysctl"
+  chmod +x "$STUB/sysctl"
+  export NTY_SYSCTL="$STUB/sysctl"
   export CLAUDE_CONFIG_DIR="$HOME/.claude-test"
   unset CLAUDE_PROJECT_DIR
   # The land gate and a Bash tool call both run with NO controlling tty, so the headless gate would
@@ -367,4 +371,81 @@ played() { cat "$CC_NOTIFY_DIR/claude-notify.log" 2>/dev/null | grep -c 'Playing
   ps_map "500 ?? 400" "400 ?? 300" "300 ?? 200" "200 ttys004 1"
   fire "$(payload 1a5cf368-aaaa-bbbb-cccc-dddd /Users/x/proj 'ls')" complete
   [ "$(played)" = "0" ]
+}
+
+# ── MACHINE-WIDE SOUND GATE — every afplay is a new coreaudiod client (2026-09-29) ───────────────
+# Under starvation coreaudiod leaks ~7 IO contexts per client start and only a restart frees them
+# (docs/research/coreaudiod-spin-2026-09-29.md). The gate is one clock per class for the whole
+# machine; the banner is never gated. `gated` counts the log's skip lines.
+gated() { grep -c 'Gated' "$CC_NOTIFY_DIR/claude-notify.log" 2>/dev/null || true; }
+age_stamp() { # <class> <seconds ago>
+  touch -t "$(date -r $(( $(date +%s) - $2 )) +%Y%m%d%H%M.%S)" "$CC_NOTIFY_DIR/sound-$1.stamp"
+}
+
+@test "G1: two sessions completing inside 15 s play ONE chime machine-wide, not two" {
+  fire "$(payload sess-g1a /w/proj x)" complete
+  fire "$(payload sess-g1b /w/proj x)" complete
+  [ "$(played)" = "1" ]
+  [ "$(gated)" = "1" ]
+}
+
+@test "G2: the gate never touches the banner — both permission banners still render" {
+  fire "$(payload sess-g2a /w/proj cmd-a)" permission
+  fire "$(payload sess-g2b /w/proj cmd-b)" permission
+  [ "$(osa | grep -c 'display notification')" -eq 2 ]
+  [ "$(played)" = "1" ]
+}
+
+@test "G3: a 30 s old complete stamp plays at low load and is GATED when load is hot" {
+  age_stamp complete 30
+  fire "$(payload sess-g3a /w/proj x)" complete
+  [ "$(played)" = "1" ]                              # red control: 30 s > the 15 s cool gap
+  age_stamp complete 30
+  NTY_TEST_LOAD=55.20 fire "$(payload sess-g3b /w/proj x)" complete
+  [ "$(played)" = "1" ]
+  run grep 'Gated' "$CC_NOTIFY_DIR/claude-notify.log"
+  [[ "$output" == *"gap=120s load=55"* ]]
+}
+
+@test "G4: a fresh coreaudiod-hot flag makes the gate hot; a 20-minute-old one does not" {
+  age_stamp complete 30
+  : > "$CC_NOTIFY_DIR/coreaudiod-hot"
+  fire "$(payload sess-g4a /w/proj x)" complete
+  [ "$(gated)" = "1" ]
+  touch -t "$(date -r $(( $(date +%s) - 1200 )) +%Y%m%d%H%M.%S)" "$CC_NOTIFY_DIR/coreaudiod-hot"
+  age_stamp complete 30
+  fire "$(payload sess-g4b /w/proj x)" complete
+  [ "$(played)" = "1" ]                              # a dead watcher cannot throttle forever
+}
+
+@test "G5: a stamp dated in the FUTURE does not gate" {
+  touch -t "$(date -r $(( $(date +%s) + 3600 )) +%Y%m%d%H%M.%S)" "$CC_NOTIFY_DIR/sound-complete.stamp"
+  fire "$(payload sess-g5 /w/proj x)" complete
+  [ "$(played)" = "1" ]
+}
+
+@test "G6: a symlink planted at the stamp is neither trusted nor touched" {
+  echo keep > "$BATS_TEST_TMPDIR/victim"
+  touch -t 202001010000 "$BATS_TEST_TMPDIR/victim"
+  ln -s "$BATS_TEST_TMPDIR/victim" "$CC_NOTIFY_DIR/sound-complete.stamp"
+  fire "$(payload sess-g6 /w/proj x)" complete
+  [ "$(played)" = "1" ]
+  [ "$(stat -f %Sm -t %Y "$BATS_TEST_TMPDIR/victim")" = 2020 ]
+}
+
+@test "G7: CC_NOTIFY_SOUND_GATE=0 turns the gate off" {
+  export CC_NOTIFY_SOUND_GATE=0
+  fire "$(payload sess-g7a /w/proj x)" complete
+  fire "$(payload sess-g7b /w/proj x)" complete
+  [ "$(played)" = "2" ]
+}
+
+@test "G8: sessions with DIFFERENT TMPDIRs share one clock (the per-TMPDIR hole of 2026-09-24)" {
+  unset CC_NOTIFY_DIR
+  printf '#!/bin/bash\necho "%s/darwin/"\n' "$BATS_TEST_TMPDIR" > "$STUB/getconf"; chmod +x "$STUB/getconf"
+  TMPDIR="$BATS_TEST_TMPDIR/t1/" "$H" complete < /dev/null
+  TMPDIR="$BATS_TEST_TMPDIR/t2/" "$H" complete < /dev/null
+  [ "$(cat "$BATS_TEST_TMPDIR"/t?/cc-notify/claude-notify.log | grep -c Playing)" = 1 ]
+  [ "$(cat "$BATS_TEST_TMPDIR"/t?/cc-notify/claude-notify.log | grep -c Gated)" = 1 ]
+  [ -f "$BATS_TEST_TMPDIR/darwin/cc-notify/sound-complete.stamp" ]
 }

@@ -108,6 +108,7 @@ SCREENREADER_SOUNDS="/System/Library/PrivateFrameworks/ScreenReader.framework/Ve
 #
 # Seam: CC_NOTIFY_DIR relocates the log + debounce locks (bats asserts on real artifacts without
 # writing live fleet state — the same role CC_PERMPEND_DIR plays for the beacon).
+_nty_dir_seamed=0; [ -n "${CC_NOTIFY_DIR:-}" ] && _nty_dir_seamed=1
 if [ -z "${CC_NOTIFY_DIR:-}" ]; then
   _nty_base="${TMPDIR:-}"
   if [ -z "$_nty_base" ]; then _nty_base="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || true)"; fi
@@ -305,12 +306,75 @@ if [[ -n "$DIR" || -n "$SID8" ]]; then
     if [[ -n "$DETAIL" ]]; then MESSAGE="$DETAIL"; fi
 fi
 
+# ── MACHINE-WIDE SOUND GATE: every afplay is a new coreaudiod client (2026-09-29) ────────────────
+# WHY: under CPU starvation coreaudiod stops tearing client IO contexts down, and every afplay then
+# LEAKS contexts that run until the daemon restarts — measured from `pmset -g log`, ~7 per play once
+# degraded, 4,641 held at the 2026-09-29 restart at ~200% CPU. Leaks per logged play: 0.004 at load
+# <20, 0.42 at 20-40, 1.29 at >=40 (docs/research/coreaudiod-spin-2026-09-29.md). The per-session
+# debounce above cannot bound that: at ~14 live sessions each finishing on its own clock, the box
+# played up to 16 chimes a minute.
+# So one clock for the whole machine, per class: `complete` at most every 15 s, every other sound
+# every 2 s; HOT (1-min load >= CC_NOTIFY_HOT_LOAD, or scripts/coreaudiod-watch.sh's flag says the
+# daemon is leaking) stretches those to 120 s / 10 s. Replayed on the real 13-day log: -59% of plays
+# at load >= 40, -32% overall. Only afplay is gated — the permission/question/plan banner below still
+# carries its own sound through NotificationCenter, a long-lived client rather than a new process.
+# The state dir is the per-uid Darwin temp dir from confstr, NOT $TMPDIR, because a harness run can
+# carry its own TMPDIR (the 2026-09-24 incident). An explicit CC_NOTIFY_DIR seam keeps it local.
+# Seams: CC_NOTIFY_GLOBAL_DIR · NTY_SYSCTL · CC_NOTIFY_HOT_LOAD · CC_NOTIFY_{COMPLETE,SOUND}_GAP_S ·
+# CC_NOTIFY_{COMPLETE,SOUND}_GAP_HOT_S · CC_NOTIFY_SOUND_GATE=0 (off).
+NTY_PLAY=1; NTY_GATE_WHY=""
+if [ "${CC_NOTIFY_SOUND_GATE:-1}" != 0 ]; then
+  if [ -n "${CC_NOTIFY_GLOBAL_DIR:-}" ]; then NTY_GDIR="$CC_NOTIFY_GLOBAL_DIR"
+  elif [ "$_nty_dir_seamed" = 1 ]; then NTY_GDIR="$CC_NOTIFY_DIR"
+  else
+    _nty_g="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || true)"
+    NTY_GDIR="${_nty_g:+${_nty_g%/}/cc-notify}"; NTY_GDIR="${NTY_GDIR:-$CC_NOTIFY_DIR}"
+  fi
+  if [ ! -d "$NTY_GDIR" ]; then (umask 077; mkdir -p "$NTY_GDIR") 2>/dev/null || true; fi
+  NTY_HOT=""
+  _nty_la="$("${NTY_SYSCTL:-sysctl}" -n vm.loadavg 2>/dev/null || /usr/sbin/sysctl -n vm.loadavg 2>/dev/null || true)"
+  read -r _ _nty_l1 _ <<<"$_nty_la" || true
+  _nty_l1="${_nty_l1%%.*}"
+  case "$_nty_l1" in ''|*[!0-9]*) ;; *)
+    if (( _nty_l1 >= ${CC_NOTIFY_HOT_LOAD:-40} )); then NTY_HOT="load=${_nty_l1}"; fi ;;
+  esac
+  NTY_NOW=$(date +%s)
+  _nty_flag="$NTY_GDIR/coreaudiod-hot"
+  if [ -z "$NTY_HOT" ] && [ -f "$_nty_flag" ] && [ ! -L "$_nty_flag" ]; then
+    _nty_fm=$(stat -f %m "$_nty_flag" 2>/dev/null || echo 0)
+    if (( _nty_fm <= NTY_NOW && NTY_NOW - _nty_fm < 900 )); then NTY_HOT="coreaudiod-leaking"; fi
+  fi
+  if [ "$EVENT_TYPE" = complete ]; then
+    _nty_cls=complete
+    if [ -n "$NTY_HOT" ]; then _nty_gap="${CC_NOTIFY_COMPLETE_GAP_HOT_S:-120}"; else _nty_gap="${CC_NOTIFY_COMPLETE_GAP_S:-15}"; fi
+  else
+    _nty_cls=alert
+    if [ -n "$NTY_HOT" ]; then _nty_gap="${CC_NOTIFY_SOUND_GAP_HOT_S:-10}"; else _nty_gap="${CC_NOTIFY_SOUND_GAP_S:-2}"; fi
+  fi
+  # Same sink rules as the per-session lock: a stamp we cannot trust gates nothing (fail toward
+  # PLAYING), and a stamp in the future is stale, never fresh.
+  _nty_stamp="$NTY_GDIR/sound-${_nty_cls}.stamp"
+  if [ -d "$NTY_GDIR" ] && [ -O "$NTY_GDIR" ] && [ ! -L "$NTY_GDIR" ] && [ ! -L "$_nty_stamp" ]; then
+    if [ -f "$_nty_stamp" ] && [ -O "$_nty_stamp" ]; then
+      _nty_last=$(stat -f %m "$_nty_stamp" 2>/dev/null || echo 0)
+      if (( _nty_last <= NTY_NOW && NTY_NOW - _nty_last < _nty_gap )); then
+        NTY_PLAY=0; NTY_GATE_WHY="gap=${_nty_gap}s${NTY_HOT:+ ${NTY_HOT}}"
+      fi
+    fi
+    if [ "$NTY_PLAY" = 1 ]; then touch "$_nty_stamp" 2>/dev/null || true; fi
+  fi
+fi
+
 # Log for debugging — carries the identity too, so the log is itself triageable after the fact.
 # `|| true`: this is a DIAGNOSTIC, and it was the only side-effecting line here without one — so
 # under `set -e` an unwritable log file (disk full, or a foreign-owned file at this fixed
 # world-writable path after the tmp cleaner reaps it) aborted the hook and the alert was never
 # rendered at all. A missing log line must never cost the notification it is describing.
-{ echo "$(date): Playing ${SOUND} for ${EVENT_TYPE} [${SID8:-nosid}${DIR:+ ${DIR}}]" >> "$NTY_LOG"; } 2>/dev/null || true
+if [ "$NTY_PLAY" = 1 ]; then
+  { echo "$(date): Playing ${SOUND} for ${EVENT_TYPE} [${SID8:-nosid}${DIR:+ ${DIR}}]" >> "$NTY_LOG"; } 2>/dev/null || true
+else
+  { echo "$(date): Gated ${SOUND} for ${EVENT_TYPE} [${SID8:-nosid}${DIR:+ ${DIR}}] (${NTY_GATE_WHY})" >> "$NTY_LOG"; } 2>/dev/null || true
+fi
 
 # Play sound async (background with disown so script can exit immediately)
 # afplay's stderr is the OTHER append at this path — a redirect the eye skips, and it CREATES the
@@ -333,12 +397,14 @@ fi
 # `>/dev/null` on the sound player costs nothing — afplay's stdout carries no information anyone
 # reads — and it is what actually ends the wedge. scripts/bg-fd-inherit-lint.sh keeps every other
 # hook from re-introducing the same shape.
-if [[ "$SOUND" == /* ]]; then
-    afplay "${SOUND}" >/dev/null 2>> "$NTY_LOG" &
-else
-    afplay "${SOUNDS_DIR}/${SOUND}" >/dev/null 2>> "$NTY_LOG" &
+if [ "$NTY_PLAY" = 1 ]; then
+    if [[ "$SOUND" == /* ]]; then
+        afplay "${SOUND}" >/dev/null 2>> "$NTY_LOG" &
+    else
+        afplay "${SOUNDS_DIR}/${SOUND}" >/dev/null 2>> "$NTY_LOG" &
+    fi
+    disown 2>/dev/null || true
 fi
-disown 2>/dev/null || true
 
 # Show desktop notification for high-priority events only
 if [[ "$EVENT_TYPE" == "permission" || "$EVENT_TYPE" == "question" || "$EVENT_TYPE" == "elicitation" || "$EVENT_TYPE" == "plan" ]]; then
