@@ -308,6 +308,13 @@ SH
   HF_TS_CFG="$BATS_TEST_TMPDIR/from" HF_TS_TO="$BATS_TEST_TMPDIR/to"
   RCY_SRC_TX="$TX" HF_TS_TOMBSTONE="" HF_REMOTE_ROW_PID="" RESUME_LAUNCHER="" RESUME_CFG=""
   seed_healthy_transcript
+  # A case that builds a second world must not inherit the first one's watcher: its live holder
+  # would (correctly) refuse the new acquire. Retire it and its lock, as a finished recycle would.
+  local _p
+  for _p in "$BATS_TEST_TMPDIR"/watcher.*.pid; do
+    if [ -f "$_p" ]; then kill "$(cat "$_p")" 2>/dev/null || true; rm -f "$_p"; fi
+  done
+  rm -rf "$LR_LOCKS_DIR"
   # The watcher: a real process, so the kill and the lock's (pid, lstart) identity are real too.
   sleep 300 >/dev/null 2>&1 3>&- & WATCHER_PID=$!
   echo "$WATCHER_PID" > "$BATS_TEST_TMPDIR/watcher.$WATCHER_PID.pid"
@@ -371,7 +378,7 @@ SID_UUID="a1b2c3d4-0000-4000-8000-000000000002"
   [ "$status" -eq 1 ] || { echo "status=$status $output"; cat "$CALLS"; false; }
   local want="transplant --phase unconfirm --sid $SESS --from $HF_TS_CFG --to $HF_TS_TO --record-id rec-1 --watcher-record $HF_WATCHER_RECORD"
   [ "$(calls_n "$want")" = 1 ] || { cat "$CALLS"; false; }
-  [ "$(calls_n "transplant --phase confirm --sid $SESS --from $HF_TS_CFG --to $HF_TS_TO")" = 1 ] || { cat "$CALLS"; false; }
+  [ "$(calls_n "transplant --phase confirm --sid $SESS --from $HF_TS_CFG --to $HF_TS_TO --record-id rec-1")" = 1 ] || { cat "$CALLS"; false; }
   ! grep -q '^send' "$CALLS" || { echo "a keystroke was sent:"; cat "$CALLS"; false; }
   rows_of recycle-held-draft | grep -q 'operatordraft; unconfirm rc 0' || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
   [ ! -d "$HF_RECYCLE_LOCK" ] || { echo "lock not released: $HF_RECYCLE_LOCK"; false; }

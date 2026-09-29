@@ -2732,7 +2732,7 @@ hf_recycle_unconfirm() { # → sets RCY_UNCONFIRM_RC (the CLI's rc · "n/a" no c
   RCY_CONFIRM_RAN=0
   if ! tp="$(hf_lr_script lr-transplant.sh HF_LR_TRANSPLANT)"; then RCY_UNCONFIRM_RC="unreachable"; return 0; fi
   out="$(bash "$tp" --phase unconfirm --sid "$RCY_TS_SID" --from "$HF_TS_CFG" --to "$HF_TS_TO" \
-           --record-id "${LR_RECORD_ID:-}" ${HF_WATCHER_RECORD:+--watcher-record "$HF_WATCHER_RECORD"} 2>/dev/null)" || rc=$?
+           ${LR_RECORD_ID:+--record-id "$LR_RECORD_ID"} ${HF_WATCHER_RECORD:+--watcher-record "$HF_WATCHER_RECORD"} 2>/dev/null)" || rc=$?
   RCY_UNCONFIRM_RC="$rc"
   [ "$rc" = 0 ] || echo "⚠ recycle: lr-transplant --phase unconfirm rc $rc for ${RCY_TS_SID:0:8}: $(printf '%.160s' "$out")" >&2
   return 0
@@ -13733,7 +13733,7 @@ recycle_fire_commit() {
       exit 1
     fi
     hf_wake_guard "the transplant confirm"
-    bash "$rcy_tp" --phase confirm --sid "$RCY_TS_SID" --from "$HF_TS_CFG" --to "$HF_TS_TO" || rcy_tp_rc=$?
+    bash "$rcy_tp" --phase confirm --sid "$RCY_TS_SID" --from "$HF_TS_CFG" --to "$HF_TS_TO" ${LR_RECORD_ID:+--record-id "$LR_RECORD_ID"} || rcy_tp_rc=$?
     if [ "$rcy_tp_rc" != 0 ]; then
       hf_recycle_disarm
       emit_recycle_event recycle-held-transplant "" "$SID" "lr-transplant --phase confirm rc $rcy_tp_rc for ${RCY_TS_SID:0:8}" || true
