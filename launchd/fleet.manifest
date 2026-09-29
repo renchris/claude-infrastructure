@@ -222,6 +222,13 @@ com.claude.compressor-sentinel    | run    | 10   | ~/.claude/logs/compressor-se
 # `auto` would age correctly — but that file lives in /tmp and is wiped on reboot, while the script
 # appends one line to the log below on EVERY run (clean and spin alike), which is the durable stream.
 com.claude.browser-spin-guard     | run    | 300  | ~/.claude/logs/browser-spin-guard.log | — | 41-browser-spin-guard-activate.sh
+# ── com.claude.coreaudiod-watch (2026-09-29, coreaudiod-spin-2026-09-29.md) ───────────────────────
+# Counts coreaudiod's leaked IO contexts from `pmset -g assertions` (no root) every 300 s, feeds the
+# hot flag hooks/notify.sh backs its chimes off on, and pages the desk on the ok -> leaking edge.
+# Evidence is its own JSONL, one line per run whatever the verdict. Its root twin, the restart
+# watchdog, is a SYSTEM daemon in launchd/system/ and deliberately has no row: this manifest and
+# cc-fleet describe the gui domain.
+com.claude.coreaudiod-watch       | run    | 300  | ~/.claude/logs/coreaudiod-watch.jsonl | — | 48-coreaudiod-watchdog-install.sh
 # ── com.claude.relogin (row 7, ACCOUNT_ROUTING_V2 M4) ──────────────────────────────────────────────
 # WHY IT WAS MISSING, and why that mattered: this label was invisible to the three-way coverage loop
 # because that loop globs launchd/*.plist and this plist lives in launchd/staged/ — deliberately, so

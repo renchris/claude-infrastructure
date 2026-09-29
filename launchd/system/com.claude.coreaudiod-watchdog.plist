@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.claude.coreaudiod-watchdog — SYSTEM LaunchDaemon (root). Restarts coreaudiod when its
+  IO-context leak passes the restart floor (docs/research/coreaudiod-spin-2026-09-29.md).
+
+  This file lives in launchd/system/, OUTSIDE launchd/*.plist on purpose: install.sh's glob and
+  scripts/fleet-manifest-lint.sh cover the gui domain only, and a root daemon must never be
+  activated by an agent's converge. The operator installs it with
+  docs/activation/pending-activation/48-coreaudiod-watchdog-install.sh.
+
+  It runs a ROOT-OWNED COPY of scripts/coreaudiod-watch.sh at /usr/local/libexec/, never the repo
+  path: a root job executing a file the user account can rewrite is a privilege escalation.
+
+  Decision rule (scripts/coreaudiod-watch.sh --restart): restart when >= 1000 contexts are held, or
+  >= 300 held with >= 100% CPU over the last interval; never while an audio-in context younger than
+  3 h exists (a call or dictation), and at most once per 30 min. `killall coreaudiod` is what the
+  operator ran by hand on 2026-09-29; launchd respawns the daemon within a second.
+
+  Uninstall: sudo launchctl bootout system/com.claude.coreaudiod-watchdog; then remove this plist
+  from /Library/LaunchDaemons and the copy from /usr/local/libexec.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude.coreaudiod-watchdog</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/usr/local/libexec/claude-coreaudiod-watch.sh</string>
+        <string>--restart</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <key>StandardOutPath</key>  <string>/var/log/claude-coreaudiod-watchdog.stdout.log</string>
+    <key>StandardErrorPath</key><string>/var/log/claude-coreaudiod-watchdog.stderr.log</string>
+</dict>
+</plist>

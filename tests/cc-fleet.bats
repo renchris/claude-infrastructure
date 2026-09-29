@@ -653,8 +653,10 @@ STUB
   # 40 since 2026-09-29: com.reso.lr-reconciler, -watchdog and -rig (LIMIT_RECOVER_FLEET_V2 W3),
   # all `staged` and not loaded — W5's operator step installs them. The count moved IN the same
   # land as the rows, which is the point of this block.
-  if [ "$n" != 40 ]; then
-    echo "manifest declares $n labels, expected 40 — if a plist was legitimately added or retired,"
+  # 41 since 2026-09-29: com.claude.coreaudiod-watch (coreaudiod-spin-2026-09-29.md), `run`, row and
+  # plist in the same land. Its root twin lives in launchd/system/ and is deliberately undeclared.
+  if [ "$n" != 41 ]; then
+    echo "manifest declares $n labels, expected 41 — if a plist was legitimately added or retired,"
     echo "move this count and say why (see the block above); if not, a row is missing. Declared:"
     grep -vE '^[[:space:]]*(#|$)' "$M" | cut -d'|' -f1 | sed 's/[[:space:]]//g; s/^/  /'
     return 1

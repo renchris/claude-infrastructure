@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.claude.coreaudiod-watch — detects the coreaudiod IO-context leak (2026-09-29).
+
+  Under CPU starvation coreaudiod stops releasing client IO contexts; it held 5,117 and then 4,641
+  of them at its last two restarts and reached ~200% CPU, day after day, with nothing on the box
+  saying so (docs/research/coreaudiod-spin-2026-09-29.md). Every 300 s this job counts the held
+  contexts from `pmset -g assertions` (no root), appends ~/.claude/logs/coreaudiod-watch.jsonl,
+  maintains the hot flag hooks/notify.sh reads to back its chimes off, and pages the desk once on
+  the ok -> leaking edge (re-asserted every 6 h).
+
+  It cannot clear the leak: only a coreaudiod restart does, and that needs root. The root half is
+  launchd/system/com.claude.coreaudiod-watchdog.plist, which the operator installs.
+
+  Standard band, no ProcessType, for the reason browser-spin-guard's header gives: its trigger
+  condition is a pegged box, which is exactly when a Background-band job gets starved.
+  PATH carries /usr/sbin and /bin explicitly (pmset, ps) — the wrapper overwrites launchd's PATH.
+
+  Kill switches: CA_WATCH=0 in the wrapper, or `launchctl bootout gui/$UID/com.claude.coreaudiod-watch`.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude.coreaudiod-watch</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"; exec "$HOME/.claude/scripts/coreaudiod-watch.sh" --notify</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <key>StandardOutPath</key>  <string>/tmp/claude-coreaudiod-watch.stdout.log</string>
+    <key>StandardErrorPath</key><string>/tmp/claude-coreaudiod-watch.stderr.log</string>
+</dict>
+</plist>
