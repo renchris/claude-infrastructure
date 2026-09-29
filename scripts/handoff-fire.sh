@@ -187,6 +187,10 @@
 #                       (not limited, a teammate, a pane not holding a claude, a binding that does
 #                       not hold). Its caller is lr-handoff's lrh_precheck, which runs it BEFORE the
 #                       transplant so a refusal costs a message instead of a tombstoned husk.
+#                       [--voluntary --account-evidence F] is the ONLY way past the limit gate for
+#                       a pane that is not limited: F is a rejected 5h/7d account fact
+#                       (<acct>.<scope>.json) resetting ≥30 min out. A background job still
+#                       running in the pane HOLDs (exit 3, HELD:bg-work:<ship-land|other>).
 #   --resume-launcher F --resume-cfg DIR [--resume-cwd D]   (with --recycle) RESUME MODE: the
 #                       relaunch typed into the surviving shell is `bash F` (the lr-launch-*.sh
 #                       lr-handoff minted: lr-fire-resume of the SAME uuid on the TARGET account,
@@ -880,11 +884,20 @@ emit_recycle_event() { # $1=class $2=engaged (1|0|"") $3=pane $4=detail → alwa
   # row already names the brief and `target_pane`/`prev_sid` join the outcome rows back to it. A
   # reader who finds prompt_file:null on a recycle-dead row is reading the re-exec, not an absence
   # of evidence — stated here so nobody re-derives it.
+  #
+  # THE ROW NONCE (W2b). `attempt` + `watcher_pid` + `watcher_lstart` name WHICH arm of WHICH try
+  # wrote the row: a pane recycled twice in one recovery otherwise yields two indistinguishable
+  # outcome rows, and a pid alone is reused by the kernel, so its start time rides beside it. The
+  # parent carries WATCHER_PID once it has detached the watcher; the watcher sets it to its own $$.
+  # lstart is read inline (not via a helper) so suites that extract this function stay self-contained.
+  local wp="${WATCHER_PID:-}" wl=""
+  case "$wp" in ''|*[!0-9]*) wp="" ;; *) wl="$(TZ=UTC LC_ALL=C ps -o lstart= -p "$wp" 2>/dev/null | sed 's/^ *//; s/ *$//' || true)" ;; esac
   line=$(jq -cn --arg ts "$(_iso_now)" --arg cl "${1:-recycle}" --arg tp "${3:-}" --arg d "${4:-}" \
                 --arg fs "${FIRING_SID:-}" --arg ac "${CHOSEN:-}" --arg ps "${RCY_OLD_SID:-}" \
                 --argjson en "$en" --argjson ut "$(_under_test 2>/dev/null || echo false)" \
                 --argjson gr "$([ -n "${FIRE_GOAL:-}" ] && echo true || echo false)" \
                 --arg pf "$(_resolved_prompt_file 2>/dev/null || true)" \
+                --arg at "${HF_RECYCLE_ATTEMPT:-}" --arg wp "$wp" --arg wl "$wl" \
     '{ts:$ts, class:$cl, gate:"recycle"}
      + (if $en == null then {} else {engaged:$en} end)
      + {target_pane:(if $tp == "" then null else $tp end),
@@ -893,7 +906,10 @@ emit_recycle_event() { # $1=class $2=engaged (1|0|"") $3=pane $4=detail → alwa
         firing_sid:(if $fs == "" then null else $fs end),
         account:   (if $ac == "" then null else $ac end),
         detail:    (if $d  == "" then null else $d  end)}
-     + {prompt_file:(if $pf == "" then null else $pf end)}' 2>/dev/null) || line=""
+     + {prompt_file:(if $pf == "" then null else $pf end)}
+     + {attempt:       (if $at == "" then null else ($at | tonumber? // $at) end),
+        watcher_pid:   (if $wp == "" then null else ($wp | tonumber) end),
+        watcher_lstart:(if $wl == "" then null else $wl end)}' 2>/dev/null) || line=""
   [ -n "$line" ] && { printf '%s\n' "$line" >> "$log" 2>/dev/null || true; }
   return 0
 }
@@ -2374,6 +2390,128 @@ hf_transcript_at_rest() { # $1=transcript → 0 at rest · 1 in flight · 2 unre
   # lr-upgrade.sh's lru_at_rest — keep the two in step.
   [ "$last" = "user - stale-notification" ] && return 0
   return 1
+}
+
+# THE VOLUNTARY PATH'S EVIDENCE (W2b). A pane that is NOT limited may still be owed a move: its
+# ACCOUNT is walled (a rejected 5h/7d fact) and the session simply has not tried a turn since. The
+# probe's limit gate asks the transcript, which cannot know that — so the account fact is the one
+# thing allowed to stand in for it, and only when it is strong: rejected, a real scope, not
+# contradicted, resetting at least 30 min out (a wall about to lift is not worth a transplant), and
+# about the account the registry says this pane is on. Every failure is NAMED, because
+# "--voluntary was refused" with no reason is how a driver spends hours re-trying the same call.
+hf_account_evidence_check() { # $1=fact file (<acct>.<scope>.json) $2=registry row account ("" unknown) → rc 0 "<acct>.<scope> <resets_at>" · rc 1 <why>
+  local f="${1:-}"
+  if [ -z "$f" ] || [ ! -f "$f" ]; then echo missing; return 1; fi
+  /usr/bin/python3 - "$f" "${2:-}" "${HF_EVIDENCE_MIN_S:-1800}" <<'PY'
+import json, os, re, sys, time
+from datetime import datetime, timezone
+path, row_acct, min_s = sys.argv[1], sys.argv[2], int(sys.argv[3])
+def say(s, rc):
+    print(s)
+    sys.exit(rc)
+try:
+    with open(path) as fh:
+        d = json.load(fh)
+except Exception:
+    say("unreadable", 1)
+if not isinstance(d, dict):
+    say("unreadable", 1)
+acct, _, rest = os.path.basename(path).partition(".")
+fscope = rest[:-len(".json")] if rest.endswith(".json") else rest
+if d.get("status") != "rejected":
+    say("not-rejected", 1)
+scope = d.get("scope") or fscope
+if scope not in ("5h", "7d"):
+    say("scope", 1)
+if d.get("contradicted") is True:
+    say("contradicted", 1)
+r = d.get("resets_at")
+at = None
+if isinstance(r, (int, float)) and not isinstance(r, bool):
+    at = float(r)
+elif isinstance(r, str) and re.fullmatch(r"[0-9]+(\.[0-9]+)?", r.strip()):
+    at = float(r)
+elif isinstance(r, str):
+    s = re.sub(r"\.[0-9]+", "", r.strip()).replace("Z", "+00:00")
+    try:
+        t = datetime.fromisoformat(s)
+        at = (t if t.tzinfo else t.replace(tzinfo=timezone.utc)).timestamp()
+    except ValueError:
+        at = None
+if at is None:
+    say("unreadable", 1)
+if at - time.time() < min_s:
+    say("expiring", 1)
+if row_acct and row_acct != acct:
+    say("account-mismatch", 1)
+say("%s.%s %s" % (acct, scope, r), 0)
+PY
+}
+
+# THE BACKGROUND-JOB QUESTION, asked of the pane's claude pid. Same three answers and the same
+# watcher rule as lr-upgrade.sh's lru_bg_kind (keep the two in step): a job is a DIRECT child of the
+# claude pid that is a Bash-tool shell (`zsh|bash … shell-snapshots …`) outliving its turn; a job
+# whose argv names cc-await-ping and whose children are only cc-await-ping or its `| tail` is the
+# idle inbox WATCHER, which a relaunch re-arms from its own WAKE-PATH-DOWN mail; anything else is
+# WORK a /exit would kill. `shipland=yes` singles out the one kind of work whose death is most
+# expensive — a land killed between rebase and push. One ps snapshot, so every answer describes the
+# same instant. HF_PS_SNAPSHOT (a file, `pid ppid lstart(5) args`) is the test seam;
+# HF_WATCHER_IS_JOB=1 is the kill switch that counts watchers as work.
+hf_bg_work_kind() { # $1=pid → "<none|watcher|work|unknown> shipland=<yes|no> pids=<a,b|->"
+  local pid="${1:-}" snap
+  if [ -n "${HF_PS_SNAPSHOT:-}" ]; then snap="$(cat "$HF_PS_SNAPSHOT" 2>/dev/null || true)"
+  else snap="$(TZ=UTC LC_ALL=C ps -axww -o pid=,ppid=,lstart=,args= 2>/dev/null || true)"; fi
+  if [ -z "$pid" ] || [ -z "$snap" ]; then echo "unknown shipland=no pids=-"; return 0; fi
+  printf '%s\n' "$snap" | HF_BG_P="$pid" HF_BG_STRICT="${HF_WATCHER_IS_JOB:-0}" awk '
+    $1 ~ /^[0-9]+$/ && $3 ~ /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)$/ && $7 ~ /^[0-9][0-9][0-9][0-9]$/ {
+      par[$1] = $2; a = $0; for (i = 1; i <= 7; i++) sub(/^ *[^ ]+/, "", a); sub(/^ +/, "", a); args[$1] = a; bin[$1] = $8 }
+    END {
+      kind = "none"; ship = "no"; pids = ""
+      for (j in par) {
+        if (par[j] != ENVIRON["HF_BG_P"]) continue
+        if (bin[j] !~ /(^|\/)(zsh|bash)$/ || index(args[j], "shell-snapshots") == 0) continue
+        pids = pids (pids == "" ? "" : ",") j
+        w = (ENVIRON["HF_BG_STRICT"] != "1" && index(args[j], "cc-await-ping") > 0)
+        if (w) for (c in par) if (par[c] == j && args[c] !~ /cc-await-ping/ && bin[c] !~ /(^|\/)tail$/) w = 0
+        if (w) { if (kind == "none") kind = "watcher"; continue }
+        kind = "work"
+        split("", sel); sel[j] = 1; changed = 1
+        while (changed) { changed = 0
+          for (c in par) if (!(c in sel) && (par[c] in sel)) { sel[c] = 1; changed = 1 } }
+        for (c in sel) if (c != j && index(args[c], "ship-land.sh") > 0) ship = "yes"
+      }
+      print kind " shipland=" ship " pids=" (pids == "" ? "-" : pids)
+    }'
+}
+
+# The probe's use of it. ONLY AT REST is a job census meaningful: mid-turn, the turn's own
+# foreground Bash call is a shell-snapshots child too, and would read as WORK. A limited pane is at
+# rest by construction (the API refused its turn); a voluntary one must prove it from the
+# transcript, and one that cannot is HELD rather than guessed at. No registry pid ⇒ unknown and
+# proceed: the recycle's Esc backstop still guards the /exit. Prints the one `bg_work:` line.
+hf_bg_work_gate() { # $1=registry pid $2=1 when limited $3=transcript → rc 0 proceed · 3 hold (verdict in HF_BG_HOLD)
+  local pid="${1:-}" limited="${2:-0}" tx="${3:-}" rest=0 kind
+  HF_BG_HOLD=""
+  case "$pid" in ''|*[!0-9]*) echo "bg_work: unknown (no registry pid)"; return 0 ;; esac
+  if [ "$limited" != 1 ]; then
+    hf_transcript_at_rest "$tx" || rest=$?
+    if [ "$rest" != 0 ]; then
+      if [ "$rest" = 1 ]; then echo "bg_work: unknown (turn in flight)"
+      else echo "bg_work: unknown (transcript unreadable — at rest cannot be shown)"; fi
+      HF_BG_HOLD="HELD:mid-turn"
+      return 3
+    fi
+  fi
+  kind="$(hf_bg_work_kind "$pid")"
+  case "$kind" in
+    unknown\ *) echo "bg_work: unknown (ps unreadable)"; return 0 ;;
+    work\ *)
+      echo "bg_work: $kind"
+      case "$kind" in *" shipland=yes "*) HF_BG_HOLD="HELD:bg-work:ship-land" ;; *) HF_BG_HOLD="HELD:bg-work:other" ;; esac
+      return 3 ;;
+  esac
+  echo "bg_work: $kind"
+  return 0
 }
 
 # THE SAME-ACCOUNT EVIDENCE (cc-lr upgrade, 2026-09-22). Called AFTER hf_remote_source_bind (the row
@@ -5504,10 +5642,13 @@ live_subagents_of() { # $1=transcript dir (…/projects/<slug>/<sid>) [$2=owner 
   [ -n "$_d" ] && [ -d "$_d/subagents" ] || return 0
   case "$_born" in ''|*[!0-9]*) _born="" ;; esac
   _stops="$(subagent_stops_of "$_d.jsonl")"
-  for _m in "$_d"/subagents/agent-*.meta.json; do
+  # TWO LOCATIONS (W2b). A Workflow's agents write one level deeper, under
+  # subagents/workflows/<run>/, and run in-process exactly like Agent-tool spawns — so a /exit kills
+  # them just the same. The transcript always sits BESIDE its meta, whichever directory that is.
+  for _m in "$_d"/subagents/agent-*.meta.json "$_d"/subagents/workflows/*/agent-*.meta.json; do
     [ -f "$_m" ] || continue                       # unmatched glob
     _id="${_m##*/agent-}"; _id="${_id%.meta.json}"
-    _j="$_d/subagents/agent-$_id.jsonl"
+    _j="${_m%.meta.json}.jsonl"
     [ -f "$_j" ] || continue                       # meta with no transcript: nothing to lose or read
     if [ -n "$_born" ]; then
       _mt="$(stat -f %m "$_j" 2>/dev/null || stat -c %Y "$_j" 2>/dev/null || true)"
@@ -7355,6 +7496,9 @@ fi
 # \r not \n: CC's Ink TUI only binds Enter to CR (verified 2026-07-03 — \n was a no-op on an Ink
 # prompt, \r activated it); zsh accepts either.
 if [ "${1:-}" = "__recycle" ]; then
+  # The row nonce's watcher half: every emit_recycle_event from this re-exec names the watcher that
+  # wrote it. $$ IS the pid recycle_fire's detach printed — Popen execs this script directly.
+  WATCHER_PID=$$
   RSID="${2:?__recycle needs a session id}"
   TTY_PATH="${3:?__recycle needs the pane tty}"
   CMDFILE="${4:?__recycle needs the command file}"
@@ -8369,12 +8513,19 @@ if [ "${1:-}" = "--probe-live-subagents" ]; then
 fi
 if [ "${1:-}" = "--probe-recycle-preconditions" ]; then
   shift
-  PRP_PANE="" PRP_SESSION=""
+  PRP_PANE="" PRP_SESSION="" PRP_VOLUNTARY=0 PRP_EVIDENCE="" PRP_EVIDENCE_SET=0
   while [ $# -gt 0 ]; do case "$1" in
     --source-pane)    PRP_PANE="${2:?--source-pane needs a pane id}"; shift 2 ;;
     --source-session) PRP_SESSION="${2:?--source-session needs a session uuid}"; shift 2 ;;
+    --voluntary)      PRP_VOLUNTARY=1; shift ;;
+    --account-evidence) PRP_EVIDENCE="${2:?--account-evidence needs a file}"; PRP_EVIDENCE_SET=1; shift 2 ;;
     *) echo "!! unknown --probe-recycle-preconditions arg: $1" >&2; exit 2 ;;
   esac; done
+  # Evidence only ever STANDS IN for a limit on the voluntary path. Handed without --voluntary it
+  # would be a flag that silently does nothing, so it is a usage error instead.
+  if [ "$PRP_EVIDENCE_SET" = 1 ] && [ "$PRP_VOLUNTARY" != 1 ]; then
+    echo "!! --account-evidence is only meaningful with --voluntary" >&2; exit 2
+  fi
   prp_verdict() { echo "verdict: $1"; exit "$2"; }
 
   # 1. THE BINDING. Same function self-close and --recycle take; its refusal text is the one
@@ -8438,20 +8589,52 @@ if [ "${1:-}" = "--probe-recycle-preconditions" ]; then
   PRP_ERR="$(lr_last_api_error "$PRP_TX" 2>/dev/null || true)"
   PRP_KIND="$(printf '%s' "$PRP_ERR" | cut -f3)"
   if [ "$PRP_KIND" != limit ]; then
-    echo "limit: NO — the last assistant record is ${PRP_KIND:-not an api error} ($PRP_TX)"
-    # NAME THE VERB THAT DOES MOVE A HEALTHY PEER (2026-09-23). This gate is unconditional, so a
-    # caller that reached it with a healthy pane (lr-handoff --voluntary --source-pane) can never
-    # pass it; a refusal that names no next command is how the incident's driver spent hours.
-    echo "limit: a healthy pane is moved by asking it to move itself — cc-lr switch --pane $PRP_PANE --target <acct>"
-    prp_verdict "REFUSED:not-limited" 5
+    # THE ONE ALTERNATIVE (W2b): --voluntary with a strong ACCOUNT fact. The transcript cannot know
+    # the account is walled until the session tries a turn; the fact can. Without both, today's
+    # refusal stands byte-for-byte, plus a named `evidence:` reason when --voluntary asked for more.
+    PRP_EV_OUT="" PRP_EV_RC=1
+    if [ "$PRP_VOLUNTARY" = 1 ]; then
+      PRP_ROW_ACCT="$(jq -r '.account // empty' "$REG_DIR/$PRP_PANE.json" 2>/dev/null || true)"
+      PRP_EV_OUT="$(hf_account_evidence_check "$PRP_EVIDENCE" "$PRP_ROW_ACCT")" && PRP_EV_RC=0 || PRP_EV_RC=$?
+    fi
+    if [ "$PRP_EV_RC" = 0 ]; then
+      echo "limit: bypassed — account evidence ${PRP_EV_OUT%% *} resets_at=${PRP_EV_OUT#* } (voluntary)"
+    else
+      echo "limit: NO — the last assistant record is ${PRP_KIND:-not an api error} ($PRP_TX)"
+      # NAME THE VERB THAT DOES MOVE A HEALTHY PEER (2026-09-23). A caller that reached this gate
+      # with a healthy pane and no account fact cannot pass it; a refusal that names no next
+      # command is how the incident's driver spent hours.
+      echo "limit: a healthy pane is moved by asking it to move itself — cc-lr switch --pane $PRP_PANE --target <acct>"
+      [ "$PRP_VOLUNTARY" = 1 ] && echo "evidence: ${PRP_EV_OUT:-missing}"
+      prp_verdict "REFUSED:not-limited" 5
+    fi
+  else
+    echo "limit: kind=limit at $(printf '%s' "$PRP_ERR" | cut -f4)"
   fi
-  echo "limit: kind=limit at $(printf '%s' "$PRP_ERR" | cut -f4)"
 
   # 3. A TEAMMATE IS NOT RECOVERABLE IN PLACE. Its pane belongs to its lead's team, its close is the
   #    lead's harvest, and a transplant would orphan it (D2-safety R6, D3-safety R5 — teammate rule
   #    0). The head of the transcript is where the harness records `agentName`; 8 KB is the bound
   #    that keeps this cheap on a 200 MB file.
-  if head -c 8000 "$PRP_TX" 2>/dev/null | grep '"agentName"' >/dev/null; then
+  #    PARSED, not grepped (W2b): lr-predicate's is-teammate-head is the one copy of this test, and
+  #    it answers NO to `"agentName":null` and to a record merely quoting the key. Resolved by the
+  #    same ladder as lr-lib above. An unreachable or erroring predicate FALLS BACK to the substring
+  #    — never admits — because "could not ask" must not read as "not a teammate".
+  PRP_TM=""
+  for _prp_pred in "$(dirname "$0")/limit-recover/lr-predicate.sh" \
+                   "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/limit-recover/lr-predicate.sh" \
+                   "$HOME/.claude/scripts/limit-recover/lr-predicate.sh"; do
+    [ -f "$_prp_pred" ] || continue
+    PRP_TM="$(LR_HEAD_BYTES=8000 bash "$_prp_pred" is-teammate-head "$PRP_TX" 2>/dev/null | jq -r '.teammate' 2>/dev/null)" || PRP_TM=""
+    break
+  done
+  case "$PRP_TM" in
+    true)  PRP_IS_TM=1 ;;
+    false) PRP_IS_TM=0 ;;
+    *)     PRP_IS_TM=0
+           head -c 8000 "$PRP_TX" 2>/dev/null | grep '"agentName"' >/dev/null && PRP_IS_TM=1 ;;
+  esac
+  if [ "$PRP_IS_TM" = 1 ]; then
     echo "teammate: YES — agentName in the first 8 KB of $PRP_TX"
     prp_verdict "REFUSED:teammate" 5
   fi
@@ -8486,6 +8669,37 @@ if [ "${1:-}" = "--probe-recycle-preconditions" ]; then
     prp_verdict "REFUSED:pane:$PRP_STATE" 5
   fi
   echo "pane_state: cc (tty $PRP_TTY)"
+
+  # 4b. IDENTITY (W2b) — informational, never a verdict. What a later reconciler needs to prove the
+  #     pane it acts on is the pane this probe saw: a kitty window id is a per-kitty-process counter
+  #     that restarts at 1, so the window id means something only beside the kitty pid AND its start
+  #     time, and the pane's root process names what the window is actually running.
+  echo "tty: ${PRP_TTY:--}"
+  echo "window_id: $PRP_PANE"
+  PRP_KPID="${CC_TERM_KITTY_TO:-}"; PRP_KPID="${PRP_KPID##*kitty-}"
+  case "$PRP_KPID" in ''|*[!0-9]*) PRP_KPID="" ;; esac
+  PRP_KLS=""
+  [ -n "$PRP_KPID" ] && PRP_KLS="$(TZ=UTC LC_ALL=C ps -o lstart= -p "$PRP_KPID" 2>/dev/null | sed 's/^ *//; s/ *$//' || true)"
+  echo "kitty_pid: ${PRP_KPID:--}"
+  echo "kitty_lstart: ${PRP_KLS:--}"
+  PRP_ROOT=""
+  if [ "${CC_TERM:-}" = kitty ]; then
+    PRP_ROOT="$(kt_window_field "$PRP_PANE" pid 2>/dev/null || true)"
+    case "$PRP_ROOT" in ''|*[!0-9]*) PRP_ROOT="" ;; esac
+  fi
+  if [ -n "$PRP_ROOT" ]; then
+    PRP_ROOT_COMM="$(ps -o comm= -p "$PRP_ROOT" 2>/dev/null | sed 's/^ *//; s/ *$//' || true)"
+    PRP_ROOT_COMM="${PRP_ROOT_COMM##*/}"
+    echo "pane_root: $PRP_ROOT ${PRP_ROOT_COMM:--}"
+  else
+    echo "pane_root: -"
+  fi
+
+  # 4c. BACKGROUND WORK (W2b). /exit kills every job the session still runs; a land killed between
+  #     rebase and push is the costliest of them. HELD, not REFUSED — the job ends and the probe passes.
+  PRP_LIMITED=0; [ "$PRP_KIND" = limit ] && PRP_LIMITED=1
+  PRP_BG_RC=0; hf_bg_work_gate "${HF_REMOTE_ROW_PID:-}" "$PRP_LIMITED" "$PRP_TX" || PRP_BG_RC=$?
+  [ "$PRP_BG_RC" = 0 ] || prp_verdict "$HF_BG_HOLD" 3
 
   # 5. AN OPERATOR DRAFT IS THEIRS. The /exit would MERGE with it into one text message. Today the
   #    recycle's own composer gate catches this — 180 s AFTER the transplant. Reading it here turns a
@@ -13415,6 +13629,24 @@ recycle_fire() {
     kill "$WATCHER_PID" 2>/dev/null || true
     echo "!! recycle ABORTED: watcher heartbeat never appeared ($log) — /exit NOT typed, session stays alive. Run manually: $CMD" >&2
     exit 1
+  fi
+  # THE WATCHER RECORD (W2b). A caller that must later prove WHICH watcher owns this recycle (a
+  # retry, a custody reconciler) names a file; pid + lstart is the identity, since a pid alone is
+  # reused. Written only once the heartbeat proves the watcher is real. Best-effort by design: a
+  # failed write is one ⚠ line and never costs the recycle it describes.
+  if [ -n "${HF_WATCHER_RECORD:-}" ]; then
+    rcy_wr_ls="$(TZ=UTC LC_ALL=C ps -o lstart= -p "$WATCHER_PID" 2>/dev/null | sed 's/^ *//; s/ *$//' || true)"
+    if jq -n --arg pid "$WATCHER_PID" --arg ls "$rcy_wr_ls" --arg at "${HF_RECYCLE_ATTEMPT:-}" \
+          --arg pane "$SID" --arg sid "${RCY_SOURCE_SESSION:-$rcy_old_sid}" --arg ts "$(_iso_now)" \
+          '{pid:($pid|tonumber? // $pid), lstart:(if $ls == "" then null else $ls end),
+            attempt:(if $at == "" then null else ($at|tonumber? // $at) end),
+            pane:$pane, sid:(if $sid == "" then null else $sid end), armed_at:$ts}' \
+          > "$HF_WATCHER_RECORD.tmp.$$" 2>/dev/null \
+       && mv -f "$HF_WATCHER_RECORD.tmp.$$" "$HF_WATCHER_RECORD" 2>/dev/null; then :
+    else
+      rm -f "$HF_WATCHER_RECORD.tmp.$$" 2>/dev/null || true
+      echo "⚠ recycle: could not write the watcher record $HF_WATCHER_RECORD — the recycle proceeds without it"
+    fi
   fi
   # SECOND half of the arm — the pane, not just the log. Until this passes, nothing is killed.
   # Refused vs stalled are different diagnoses (see the self-close arm) and get different lines.
