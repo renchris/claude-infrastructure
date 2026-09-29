@@ -66,6 +66,86 @@ commit_file() { # <repo> <path> <content> [message]
   [[ "$output" != *"old.md"* ]]
 }
 
+@test "own-range scans EVERY commit: an address added then scrubbed inside the land is a finding" {
+  # The 2026-09-29 stall: the NET diff of the land was clean, the projected history was not, and the
+  # verifier only found out at publish time. The added line lives in commit 1 alone.
+  r="$(mkrepo percommit)"
+  base="$(git -C "$r" rev-parse HEAD)"
+  commit_file "$r" drafts/pr.md "cc someone@realmail.test on the PR"
+  added="$(git -C "$r" rev-parse --short=10 HEAD)"
+  commit_file "$r" drafts/pr.md "cc person@example.com on the PR" "scrub"
+  run git -C "$r" diff "$base..HEAD"
+  [[ "$output" != *realmail* ]] || { echo "the net diff still carries it: vacuous case"; false; }
+  run python3 "$LINT" --repo "$r" --own-range "$base..HEAD" --conf "$CONF"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"EMAIL drafts/pr.md: someone@realmail.test  (commit $added)"* ]] || { echo "$output"; false; }
+}
+
+@test "own-range scans every commit MESSAGE of the land" {
+  r="$(mkrepo permsg)"
+  base="$(git -C "$r" rev-parse HEAD)"
+  commit_file "$r" a.md "clean" "thanks to someone@realmail.test"
+  run python3 "$LINT" --repo "$r" --own-range "$base..HEAD" --conf "$CONF"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"message: someone@realmail.test"* ]] || { echo "$output"; false; }
+}
+
+# The land gate's gitleaks arm, run as ship-land.sh defines it (extracted, not re-implemented), with
+# gate_red / arm_nonverdict stubbed to record which verdict it raised.
+gl_arm() { # <repo> <range> → runs ph_gitleaks_arm in <repo>
+  local fn; fn="$(sed -n '/^ph_gitleaks_arm() {/,/^}/p' "$REPO/scripts/ship-land.sh")"
+  [ -n "$fn" ] || { echo "ph_gitleaks_arm not defined in ship-land.sh"; return 99; }
+  ( cd "$1" && eval "$fn"
+    gate_red() { echo "STUB gate_red $1"; }
+    arm_nonverdict() { echo "STUB arm_nonverdict $1 rc=${3:-2}"; }
+    ph_gitleaks_arm "$2" ) 2>&1
+}
+fake_token() { printf 'gh''p_%s' "1a2B3c4D5e6F7g8H9i0J1k2L3m4N5o6P7q8R"; }
+
+@test "GITLEAKS ARM: a secret one commit adds and the next removes is RED" {
+  command -v gitleaks >/dev/null || skip "gitleaks absent"
+  r="$(mkrepo glred)"; base="$(git -C "$r" rev-parse HEAD)"
+  commit_file "$r" cfg.txt "github_token = \"$(fake_token)\""
+  commit_file "$r" cfg.txt "github_token = \"\"" "scrub"
+  run gl_arm "$r" "$base..HEAD"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"STUB gate_red public-hygiene-gitleaks"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"$(fake_token)"* ]] || { echo "the finding printed the secret unredacted"; false; }
+}
+
+@test "GITLEAKS ARM: a clean range passes (positive control off the same fixture shape)" {
+  command -v gitleaks >/dev/null || skip "gitleaks absent"
+  r="$(mkrepo glclean)"; base="$(git -C "$r" rev-parse HEAD)"
+  commit_file "$r" cfg.txt "github_token = \"\""
+  run gl_arm "$r" "$base..HEAD"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *STUB* ]] || { echo "$output"; false; }
+}
+
+@test "GITLEAKS ARM: gitleaks missing, or a range git cannot resolve, is a NON-VERDICT, never a pass" {
+  r="$(mkrepo glnv)"
+  SHIP_LAND_PUBLIC_HYGIENE_GITLEAKS="$T/no-such-gitleaks" run gl_arm "$r" "HEAD~0..HEAD"
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  [[ "$output" == *"STUB arm_nonverdict public-hygiene-gitleaks rc=127"* ]] || { echo "$output"; false; }
+  command -v gitleaks >/dev/null || skip "gitleaks absent"
+  run gl_arm "$r" "deadbeef..HEAD"
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  [[ "$output" == *"STUB arm_nonverdict public-hygiene-gitleaks"* ]] || { echo "$output"; false; }
+}
+
+@test "GITLEAKS ARM is WIRED: run_gate calls it inside the public-hygiene block, after the lint" {
+  gate="$(sed -n '/^run_gate() {/,/^}/p' "$REPO/scripts/ship-land.sh")"
+  block="$(printf '%s\n' "$gate" | sed -n '/PH_LINT=/,/pipefail\/SIGPIPE ratchet/p')"
+  [[ "$block" == *'ph_gitleaks_arm "$range" || return 1'* ]] || { echo "run_gate does not call ph_gitleaks_arm"; false; }
+}
+
+@test "MUTATION: disabling the per-commit patch scan makes the selftest FAIL" {
+  sed 's/for commit, cur, line in _added_lines(patch):/for commit, cur, line in []:/' "$LINT" > "$T/mut.py"
+  ! cmp -s "$LINT" "$T/mut.py" || false
+  run python3 "$T/mut.py" --selftest
+  [ "$status" -ne 0 ]
+}
+
 @test "--tree sees an unlisted address and a local-only path" {
   r="$(mkrepo tree)"
   commit_file "$r" a.md "write to someone@realmail.test"

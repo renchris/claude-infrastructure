@@ -52,6 +52,8 @@ PHONE_RE = re.compile(
     rb"|\(\d{3}\) ?\d{3}-\d{4}\b"
     rb"|\b\d{3}[.-]\d{3}[.-]\d{4}\b(?=[^\d.-]|$))"
 )
+
+
 def phone_allowed(m: bytes) -> bool:
     """Fictional numbers never count: area code 555, or exchange 555 with line 01xx (the range
     reserved for fiction). ONE rule for both scan paths — they disagreed once, and the lint then
@@ -212,29 +214,116 @@ def report(findings: list[str], limit: int) -> int:
     return 1 if findings else 0
 
 
-def mode_own_range(repo: str, rng: str, rules: Rules) -> list[str]:
-    findings = []
-    added = (
-        git(repo, "diff", "--name-only", "--diff-filter=AR", rng).decode().splitlines()
-    )
-    for p in added:
-        why = rules.path_hit(p)
-        if why:
-            findings.append(f"PATH  {p}  ({why})")
-    diff = git(repo, "diff", "-U0", "--no-color", "--no-ext-diff", rng)
-    cur = None
-    for line in diff.split(b"\n"):
-        if line.startswith(b"+++ "):
+COMMIT_MARK = b"\x01commit "
+
+
+def _added_lines(patch: bytes):
+    """(commit sha or None, path, added line) for every `+` line of a -U0 patch. A line opening with
+    COMMIT_MARK (the `git log --format` header below) switches the commit; a diff line never can,
+    because every patch line opens with a diff prefix."""
+    commit, cur = None, None
+    for line in patch.split(b"\n"):
+        if line.startswith(COMMIT_MARK):
+            commit, cur = line[len(COMMIT_MARK) :].decode()[:10], None
+        elif line.startswith(b"+++ "):
             cur = (
                 line[6:].decode(errors="replace")
                 if line.startswith(b"+++ b/")
                 else None
             )
-        elif line.startswith(b"+") and not line.startswith(b"+++") and cur:
-            for kind, hit in rules.text_hits(line[1:]):
-                findings.append(
-                    f"{kind.upper():5} {cur}: {hit.decode(errors='replace')}"
+        elif line.startswith(b"+") and cur:
+            yield commit, cur, line[1:]
+
+
+def _own_range_net(repo: str, rng: str, rules: Rules) -> list[tuple[tuple, str]]:
+    """The range's NET diff: what the land leaves in the tree. Blind to a line one commit adds and a
+    later commit of the same land removes — which the history projection still carries."""
+    out = []
+    for p in (
+        git(repo, "diff", "--name-only", "--diff-filter=AR", rng).decode().splitlines()
+    ):
+        why = rules.path_hit(p)
+        if why:
+            out.append((("PATH", p), f"PATH  {p}  ({why})"))
+    diff = git(repo, "diff", "-U0", "--no-color", "--no-ext-diff", rng)
+    for _c, cur, line in _added_lines(diff):
+        for kind, hit in rules.text_hits(line):
+            out.append(
+                (
+                    (kind, cur, hit),
+                    f"{kind.upper():5} {cur}: {hit.decode(errors='replace')}",
                 )
+            )
+    return out
+
+
+def _own_range_commits(repo: str, rng: str, rules: Rules) -> list[tuple[tuple, str]]:
+    """EVERY commit of the range: the lines and paths each non-merge commit adds, and every commit's
+    message. The public projection keeps each of them in history, and its verifier scans every
+    historical blob, so an add-then-scrub inside one land is a publish-time failure the net diff
+    cannot see (2026-09-29: 27 addresses froze the public repo ~20 h; PUBLIC_REPO_HYGIENE.md)."""
+    out = []
+    names = git(
+        repo,
+        "log",
+        "--no-merges",
+        "--format=",
+        "--name-only",
+        "--no-renames",
+        "--diff-filter=AR",
+        rng,
+    )
+    for p in dict.fromkeys(names.decode(errors="replace").splitlines()):
+        why = p and rules.path_hit(p)
+        if why:
+            out.append(
+                (("PATH", p), f"PATH  {p}  ({why}, added by a commit in this range)")
+            )
+    patch = git(
+        repo,
+        "log",
+        "-p",
+        "-U0",
+        "--no-merges",
+        "--no-color",
+        "--no-ext-diff",
+        "--format=%x01commit %H",
+        rng,
+    )
+    for commit, cur, line in _added_lines(patch):
+        for kind, hit in rules.text_hits(line):
+            out.append(
+                (
+                    (kind, cur, hit),
+                    f"{kind.upper():5} {cur}: {hit.decode(errors='replace')}  (commit {commit})",
+                )
+            )
+    log = git(repo, "log", "--format=%H%x00%B%x1e", rng)
+    for rec in log.split(b"\x1e"):
+        rec = rec.strip(b"\n")
+        if not rec:
+            continue
+        sha, _, body = rec.partition(b"\0")
+        for kind, hit in rules.text_hits(body):
+            out.append(
+                (
+                    (kind, "message", sha, hit),
+                    f"{kind.upper():5} commit {sha[:10].decode()} message: {hit.decode(errors='replace')}",
+                )
+            )
+    return out
+
+
+def mode_own_range(repo: str, rng: str, rules: Rules) -> list[str]:
+    """Net diff first (its wording is what an author fixes in the tree), then every per-commit hit
+    the net diff did not already name — each (kind, path, hit) reported once."""
+    findings, seen = [], set()
+    for key, text in _own_range_net(repo, rng, rules) + _own_range_commits(
+        repo, rng, rules
+    ):
+        if key not in seen:
+            seen.add(key)
+            findings.append(text)
     return findings
 
 
@@ -246,7 +335,11 @@ def _scan_blobs(repo: str, entries: list[tuple[str, str]], rules: Rules) -> list
     if not seen:
         return findings
     shas = list(seen)
-    if len(shas) > 200 and shutil.which("rg") and not os.environ.get("PUBLIC_HYGIENE_NO_RG"):
+    if (
+        len(shas) > 200
+        and shutil.which("rg")
+        and not os.environ.get("PUBLIC_HYGIENE_NO_RG")
+    ):
         return _scan_blobs_rg(repo, shas, seen, rules)
     out = git(
         repo, "cat-file", "--batch", input_bytes=("\n".join(shas) + "\n").encode()
@@ -267,11 +360,15 @@ def _scan_blobs(repo: str, entries: list[tuple[str, str]], rules: Rules) -> list
     return findings
 
 
-RG_PHONE = (r"tel:\+?1?[0-9]{10}\b|\+1[ .-]?\(?[0-9]{3}\)?[ .-]?[0-9]{3}[ .-]?[0-9]{4}\b"
-            r"|\([0-9]{3}\) ?[0-9]{3}-[0-9]{4}\b|\b[0-9]{3}[.-][0-9]{3}[.-][0-9]{4}\b")
+RG_PHONE = (
+    r"tel:\+?1?[0-9]{10}\b|\+1[ .-]?\(?[0-9]{3}\)?[ .-]?[0-9]{3}[ .-]?[0-9]{4}\b"
+    r"|\([0-9]{3}\) ?[0-9]{3}-[0-9]{4}\b|\b[0-9]{3}[.-][0-9]{3}[.-][0-9]{4}\b"
+)
 
 
-def _scan_blobs_rg(repo: str, shas: list[str], seen: dict[str, str], rules: Rules) -> list[str]:
+def _scan_blobs_rg(
+    repo: str, shas: list[str], seen: dict[str, str], rules: Rules
+) -> list[str]:
     """Same verdict as the Python scan, at ripgrep speed (~1.3 GB of history blobs in seconds
     instead of minutes): export the TEXT blobs (same 8 KiB NUL test as filter-repo), then one rg
     pass per arm. Map regex rules, if any, still run in Python — rg's dialect differs."""
@@ -279,7 +376,9 @@ def _scan_blobs_rg(repo: str, shas: list[str], seen: dict[str, str], rules: Rule
     with tempfile.TemporaryDirectory() as d:
         bdir = os.path.join(d, "b")
         os.makedirs(bdir)
-        out = git(repo, "cat-file", "--batch", input_bytes=("\n".join(shas) + "\n").encode())
+        out = git(
+            repo, "cat-file", "--batch", input_bytes=("\n".join(shas) + "\n").encode()
+        )
         i, written = 0, []
         for sha in shas:
             nl = out.index(b"\n", i)
@@ -293,10 +392,26 @@ def _scan_blobs_rg(repo: str, shas: list[str], seen: dict[str, str], rules: Rule
             written.append(sha)
 
         def rg(args: list[str]) -> list[tuple[str, bytes]]:
-            p = subprocess.run(["rg", "-o", "-a", "-N", "--no-heading", "--with-filename", "--null",
-                                "--no-ignore", "--hidden", *args, bdir], capture_output=True)
+            p = subprocess.run(
+                [
+                    "rg",
+                    "-o",
+                    "-a",
+                    "-N",
+                    "--no-heading",
+                    "--with-filename",
+                    "--null",
+                    "--no-ignore",
+                    "--hidden",
+                    *args,
+                    bdir,
+                ],
+                capture_output=True,
+            )
             if p.returncode not in (0, 1):
-                raise NonVerdict(f"rg failed: {p.stderr.decode(errors='replace')[:200]}")
+                raise NonVerdict(
+                    f"rg failed: {p.stderr.decode(errors='replace')[:200]}"
+                )
             res = []
             for line in p.stdout.split(b"\n"):
                 if b"\0" in line:
@@ -308,17 +423,29 @@ def _scan_blobs_rg(repo: str, shas: list[str], seen: dict[str, str], rules: Rule
             lit = os.path.join(d, "lits.txt")
             with open(lit, "wb") as fh:
                 fh.write(("\n".join(rules.map_literals) + "\n").encode())
-            findings += [f"IDENTIFIER {seen[s]}: {m.decode(errors='replace')}" for s, m in rg(["-F", "-f", lit])]
-        findings += [f"EMAIL {seen[s]}: {m.decode(errors='replace')}"
-                     for s, m in rg(["-e", EMAIL_RE.pattern.decode()]) if not rules.email_allow.match(m)]
-        findings += [f"PHONE {seen[s]}: {m.decode(errors='replace')}"
-                     for s, m in rg(["-e", RG_PHONE]) if not phone_allowed(m)]
+            findings += [
+                f"IDENTIFIER {seen[s]}: {m.decode(errors='replace')}"
+                for s, m in rg(["-F", "-f", lit])
+            ]
+        findings += [
+            f"EMAIL {seen[s]}: {m.decode(errors='replace')}"
+            for s, m in rg(["-e", EMAIL_RE.pattern.decode()])
+            if not rules.email_allow.match(m)
+        ]
+        findings += [
+            f"PHONE {seen[s]}: {m.decode(errors='replace')}"
+            for s, m in rg(["-e", RG_PHONE])
+            if not phone_allowed(m)
+        ]
         if rules.map_regexes:
             rx = re.compile("|".join(rules.map_regexes).encode())
             for sha in written:
                 with open(os.path.join(bdir, sha), "rb") as fh:
                     data = fh.read()
-                findings += [f"IDENTIFIER {seen[sha]}: {m.group(0).decode(errors='replace')}" for m in rx.finditer(data)]
+                findings += [
+                    f"IDENTIFIER {seen[sha]}: {m.group(0).decode(errors='replace')}"
+                    for m in rx.finditer(data)
+                ]
     return findings
 
 
@@ -466,6 +593,43 @@ def selftest() -> int:
             if want and not got_tree:
                 print(f"selftest FAIL: {name}: --tree did not see it", file=sys.stderr)
                 bad += 1
+
+        def commit_text(body: str, msg: str) -> None:
+            with open(os.path.join(repo, "s.txt"), "w") as fh:
+                fh.write(body)
+            run("add", "-A")
+            run(*env_git, "commit", "-q", "-m", msg)
+
+        # per-commit arm: an address one commit adds and the next scrubs is absent from the NET diff
+        # but stays in the published history (the 2026-09-29 stall). The net diff must MISS it, so
+        # the case exercises the per-commit axis and not the old one, and --own-range must see it.
+        base = git(repo, "rev-parse", "HEAD").decode().strip()
+        commit_text("write to someone@realmail.test\n", "add")
+        commit_text("write to someone@example.com\n", "scrub")
+        if _own_range_net(repo, f"{base}..HEAD", rules):
+            print(
+                "selftest FAIL: add-then-scrub: the net diff saw it (vacuous case)",
+                file=sys.stderr,
+            )
+            bad += 1
+        if not any(
+            "someone@realmail.test" in f
+            for f in mode_own_range(repo, f"{base}..HEAD", rules)
+        ):
+            print(
+                "selftest FAIL: add-then-scrub: own-range missed the intermediate commit",
+                file=sys.stderr,
+            )
+            bad += 1
+        # message arm: a clean change whose commit MESSAGE carries the address
+        base = git(repo, "rev-parse", "HEAD").decode().strip()
+        commit_text("clean again\n", "thanks someone@realmail.test")
+        if not any(
+            "message: someone@realmail.test" in f
+            for f in mode_own_range(repo, f"{base}..HEAD", rules)
+        ):
+            print("selftest FAIL: own-range missed a commit message", file=sys.stderr)
+            bad += 1
         # history arm: every case above is now only in HISTORY, and must still be seen there
         h = mode_history(repo, "HEAD", rules)
         for needle in (
@@ -479,7 +643,9 @@ def selftest() -> int:
                 bad += 1
         if bad:
             return 1
-        print("selftest: ok (8 own-range cases, tree + history arms)")
+        print(
+            "selftest: ok (8 own-range cases + add-then-scrub + message, tree + history arms)"
+        )
         return 0
 
 
@@ -496,8 +662,11 @@ def main() -> int:
     ap.add_argument("--conf")
     ap.add_argument("--private-dir", default=DEFAULT_PRIVATE)
     ap.add_argument("--max-findings", type=int, default=50)
-    ap.add_argument("--allow-no-map", action="store_true",
-                    help="with no private map, run the e-mail/phone/path arms and SAY the identifier arm is off")
+    ap.add_argument(
+        "--allow-no-map",
+        action="store_true",
+        help="with no private map, run the e-mail/phone/path arms and SAY the identifier arm is off",
+    )
     try:
         args = ap.parse_args()
     except SystemExit as e:
@@ -513,10 +682,15 @@ def main() -> int:
             args.repo
             or git(os.getcwd(), "rev-parse", "--show-toplevel").decode().strip()
         )
-        map_path = args.map or os.path.join(args.private_dir, "public-projection", "replace-text.txt")
+        map_path = args.map or os.path.join(
+            args.private_dir, "public-projection", "replace-text.txt"
+        )
         if args.allow_no_map and not os.path.exists(map_path):
-            print(f"public-hygiene-lint: advisory — identifier arm DISARMED (no private map at {map_path});"
-                  " e-mail, phone and local-only-path arms still run", file=sys.stderr)
+            print(
+                f"public-hygiene-lint: advisory — identifier arm DISARMED (no private map at {map_path});"
+                " e-mail, phone and local-only-path arms still run",
+                file=sys.stderr,
+            )
             empty = os.path.join(tempfile.mkdtemp(), "empty-map.txt")
             open(empty, "w").close()
             args.map = empty

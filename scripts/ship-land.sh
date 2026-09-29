@@ -3239,6 +3239,51 @@ arm_nonverdict() {  # $1=lint label · $2=optional extra hint line · $3=optiona
   GATE_KILLED=1
 }
 
+# ph_gitleaks_arm <range> — the public-repo hygiene gate's SECOND arm: gitleaks over every commit of
+# the land (`git log -p <range>`, so a secret one commit adds and a later one removes is still a
+# finding). The projection verifier (scripts/public-publish.sh) runs the same gitleaks over every
+# historical blob, and on 2026-09-29 four fake test secrets that passed this gate froze the public
+# repo ~20 h at publish time, when history was already fixed (docs/plans/PUBLIC_REPO_HYGIENE.md
+# § Publisher stall). → 0 clean · 1 RED (gate_red raised) · 2 NON-VERDICT (arm_nonverdict raised).
+# SHIP_LAND_PUBLIC_HYGIENE_GITLEAKS names the binary; `off` disarms the arm.
+ph_gitleaks_arm() {
+  local range="$1" gl="${SHIP_LAND_PUBLIC_HYGIENE_GITLEAKS:-gitleaks}" rc=0
+  local cfg=()
+  if [[ "$gl" == off ]]; then
+    echo "→ gate: public-repo hygiene gitleaks arm DISARMED (SHIP_LAND_PUBLIC_HYGIENE_GITLEAKS=off)" >&2
+    return 0
+  fi
+  if ! command -v "$gl" >/dev/null 2>&1; then
+    arm_nonverdict "public-hygiene-gitleaks" "gitleaks not found ($gl) — brew install gitleaks, or SHIP_LAND_PUBLIC_HYGIENE_GITLEAKS=off to disarm the arm." 127
+    return 2
+  fi
+  # gitleaks exits 0 on a range git cannot resolve (measured, 8.30.1), so a clean exit is believed
+  # only for a range that resolves.
+  if ! git rev-list --count "$range" >/dev/null 2>&1; then
+    arm_nonverdict "public-hygiene-gitleaks" "git cannot resolve the land range '$range'."
+    return 2
+  fi
+  [[ -r .gitleaks.toml ]] && cfg=(--config .gitleaks.toml)
+  echo "→ gate: public-repo hygiene gitleaks (every commit of $range)" >&2
+  "$gl" git . ${cfg[@]+"${cfg[@]}"} --log-opts="$range" --no-banner --no-color --redact --verbose \
+    --exit-code 3 >&2 || rc=$?
+  case "$rc" in
+    0) return 0 ;;
+    3)
+      echo "✗ gate: public-repo hygiene gitleaks RED — a commit of this land adds a secret-shaped value." >&2
+      echo "  Every commit is published, so removing it in a later commit does not clear it: rewrite the" >&2
+      echo "  commit that adds it, or, for a FAKE test value, add a value row to .gitleaks.toml's allowlist" >&2
+      echo "  (a value, never a path, so a real secret in the same file is still caught)." >&2
+      gate_red public-hygiene-gitleaks
+      # gate_bounded: THE AUTHOR'S OWN COMMITS — the named finding clears once the commit that adds it
+      # is rewritten or its fake value is allowlisted; SHIP_LAND_PUBLIC_HYGIENE_GITLEAKS=off disarms
+      return 1 ;;
+    *)
+      arm_nonverdict "public-hygiene-gitleaks" "gitleaks exited $rc (neither clean nor findings)." "$rc"
+      return 2 ;;
+  esac
+}
+
 # ── THE --selftest MEMO (Tier 0 of the ratchet-arm memo rollout) ──────────────────────────────────
 # Eleven arms below open with an unconditional `<lint> --selftest`, and every one of them re-runs on
 # EVERY round of EVERY land — including the rounds a sibling's land invalidates (exit 42) before
@@ -3786,6 +3831,10 @@ run_gate() {  # $1=range → 0 green / 1 red
       # placeholder (or dropping the path) clears the refusal on the next attempt
       return 1
     fi
+    # The verifier's second arm, run here too, so the land gate is no weaker than the publish.
+    # ph_gitleaks_arm raises its own gate_red / arm_nonverdict and names its escape.
+    # gate_bounded: THE AUTHOR'S OWN COMMITS — see ph_gitleaks_arm; SHIP_LAND_PUBLIC_HYGIENE_GITLEAKS=off disarms
+    ph_gitleaks_arm "$range" || return 1
   fi
 
   # ── pipefail/SIGPIPE ratchet (backlog 791345455b58) ───────────────────────────────────────────
