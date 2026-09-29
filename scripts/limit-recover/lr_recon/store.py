@@ -98,6 +98,9 @@ def ensure_dirs(paths: T.Paths) -> None:
     """Create the reconciler's own tree ONLY; shared lr_root dirs are made on demand (§C7)."""
     for d in paths.reconciler_dirs():
         os.makedirs(d, 0o700, exist_ok=True)
+    # handoff-fire writes HF_WATCHER_RECORD (work/<sid>.watcher.json) before __main__ makes work/
+    # on demand for an identity or prompt file, so a move with neither found no directory
+    os.makedirs(paths.p("work"), 0o700, exist_ok=True)
 
 
 # ── records (§4.1) ───────────────────────────────────────────────────────────────────────────────

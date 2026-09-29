@@ -69,6 +69,10 @@ class AtomicAndDirs(Base):
             self.assertTrue(os.path.isdir(d))
             self.assertEqual(os.stat(d).st_mode & 0o777, 0o700)
 
+    def test_ensure_dirs_creates_the_watcher_record_dir(self) -> None:
+        """handoff-fire writes HF_WATCHER_RECORD into work/ before anything made it on demand."""
+        self.assertTrue(os.path.isdir(self.paths.p("work")))
+
 
 class Records(Base):
     def test_round_trip_stamps_updated_at(self) -> None:

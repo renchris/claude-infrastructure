@@ -727,6 +727,14 @@ def _invariant(ctx: Ctx, snap: T.Snapshot, now: Optional[float] = None) -> int:
             continue
         if r.phase in ("ENGAGED", "MOVED"):
             continue
+        if (
+            r.phase in ("EXITING", "PRE-MOVE")
+            and r.substate is None
+            and (now or time.time()) - float(r.close.get("busy_at", 0)) < ACTIVE_FAST_S
+        ):
+            # this pass's derive saw the move's live watcher or launcher (busy_at): it is owned by
+            # a process we did not adopt, not orphaned (W5 rig 0f71c0d5: a spurious EXITING/None page)
+            continue
         r.close["defect"] = True
         bad += 1
         _event(

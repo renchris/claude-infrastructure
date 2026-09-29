@@ -465,6 +465,23 @@ class MainTests(unittest.TestCase):
         rec.timeline.confirmed = now - 30
         self.assertEqual(M._invariant(ctx, snap, now), 1)
 
+    def test_a_record_with_a_live_watcher_this_pass_is_not_a_defect(self):
+        """W5 rig 0f71c0d5: EXITING/None was paged while the move's own watcher was live."""
+        import time
+
+        now = time.time()
+        ctx = M.Ctx(self.paths, None, self.home)
+        M.store.ensure_dirs(self.paths)
+        snap = T.Snapshot(wall=now, uptime_raw=0.0, panes={}, sessions={})
+        for phase in ("EXITING", "PRE-MOVE"):
+            rec = T.Record(sid="abcdef01-0000-0000-0000-000000000001", record_id="r1")
+            rec.phase, rec.substate = phase, None
+            ctx.records = {rec.sid: rec}
+            rec.close["busy_at"] = now  # this pass's derive saw a live watcher/launcher
+            self.assertEqual(M._invariant(ctx, snap, now), 0, phase)
+            rec.close["busy_at"] = now - 30  # CONTROL: an earlier pass's is no alibi
+            self.assertEqual(M._invariant(ctx, snap, now), 1, phase)
+
     def _in_flight_pass(self, rec, now):
         ctx = M.Ctx(self.paths, None, self.home)
         M.store.ensure_dirs(self.paths)
