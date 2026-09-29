@@ -12,6 +12,11 @@ regexes = [
   '''9d1c250a-e61b-44d9-88ed-5944d1962f5e''',
   # a git blob sha printed as `key=` in a codex probe triage log
   '''key=[0-9a-f]{40}''',
+  # fake test fixtures (2026-09-29): a curl-auth-header sample in the hook-ask fixture builder and
+  # the reconciler submit token pinned by tests/lr-handoff-flags.bats — values, not paths, so a real
+  # secret added to either file later is still caught
+  '''sk-live-SECRET''',
+  '''lrr-0123456789ab''',
 ]
 paths = [
   # curl-gate suites feed deliberately fake bearer tokens/cookies to the gate under test
