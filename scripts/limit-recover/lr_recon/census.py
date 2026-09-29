@@ -302,6 +302,17 @@ def upsert(
     if rec is not None and rec.open:
         merge_origin(rec, origin, autorecover_on)
         rec.updated_at = now
+        # Nothing has moved yet, so the source is where the session is observed NOW. A record
+        # created by a daemon that read a `next` row through the ~/.claude alias kept source_cfg
+        # ~/.claude, and every move of it was refused before planning (W5b canary 1); the same
+        # account's routable dir replaces it. Past PRE-MOVE, settle owns the source/target swap.
+        if (
+            rec.phase == "PRE-MOVE"
+            and s.cfg
+            and s.cfg != rec.source_cfg
+            and (not s.acct or s.acct == rec.source_acct)
+        ):
+            rec.source_cfg = s.cfg
         return rec, False
     rec = new_record(b, s, pane, cid, origin, autorecover_on, now)
     records[s.sid] = rec

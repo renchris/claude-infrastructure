@@ -139,6 +139,35 @@ class CensusRecords(unittest.TestCase):
         self.assertEqual((rec.origin, rec.plan_only), ("cc-lr", False))
         self.assertEqual(rec.record_id, "recon:c1:abcdef01:1")
 
+    def test_pre_move_source_cfg_follows_the_observed_session(self):
+        # W5b canary 1: a record made while the census read a `next` row through the ~/.claude
+        # alias kept source_cfg ~/.claude, and every later move of it was refused before planning
+        s = T.SessionObs(
+            sid="abcdef01-x", acct="next", cfg="/h/.claude", pid=10, lstart=L
+        )
+        b = T.Bucket(
+            sid=s.sid, name="IDLE-ELIGIBLE", acct="next", scope="5h", resets_at=NOW
+        )
+        recs = {}
+        rec, _ = C.upsert(recs, b, s, None, "fanout", "c1", True, NOW)
+        self.assertEqual(rec.source_cfg, "/h/.claude")
+        s2 = T.SessionObs(
+            sid=s.sid, acct="next", cfg="/h/.claude-next", pid=10, lstart=L
+        )
+        C.upsert(recs, b, s2, None, "fanout", "c1", True, NOW)
+        self.assertEqual(rec.source_cfg, "/h/.claude-next")
+        # past PRE-MOVE the swap is settle's: an observation on the target never rewrites it
+        rec.phase = "RELAUNCHED"
+        s3 = T.SessionObs(
+            sid=s.sid, acct="next4", cfg="/h/.claude-quaternary", pid=11, lstart=L
+        )
+        C.upsert(recs, b, s3, None, "fanout", "c1", True, NOW)
+        self.assertEqual(rec.source_cfg, "/h/.claude-next")
+        # and never across accounts while PRE-MOVE either
+        rec.phase = "PRE-MOVE"
+        C.upsert(recs, b, s3, None, "fanout", "c1", True, NOW)
+        self.assertEqual(rec.source_cfg, "/h/.claude-next")
+
     def test_new_record_carries_its_death_key(self):
         """W5 rig 80294ba4: a closed record must know which death it recovered (handled_death)."""
         last = dict(limit=True, kind="limit", uuid="u", ts="t")
