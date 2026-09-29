@@ -114,6 +114,17 @@ def _pane_state(rec: T.Record, snap: T.Snapshot) -> str:
     return "gone"
 
 
+def _tty_present(rec: T.Record, snap: T.Snapshot) -> bool:
+    ident = rec.identity
+    if ident.root_pid and ident.root_lstart:
+        return snap.alive(ident.root_pid, ident.root_lstart)
+    if not ident.tty:
+        return False
+    if snap.ttys:
+        return os.path.basename(ident.tty) in snap.ttys
+    return os.path.exists(ident.tty if ident.tty.startswith("/") else "/dev/" + ident.tty)
+
+
 def _identity_match(rec: T.Record, pane: Optional[T.PaneObs]) -> bool:
     ident = rec.identity
     if pane is None or not ident.root_pid:
@@ -191,12 +202,12 @@ def build(
         or _role_live(rec, snap, "launcher", "fire_resume"),
         pane_state=state,
         pane_absent_observations=rec.pane_absent_obs + (state == "gone"),
-        tty_present=bool(rec.identity.tty)
-        and os.path.exists(
-            rec.identity.tty
-            if rec.identity.tty.startswith("/")
-            else "/dev/" + rec.identity.tty
-        ),
+        # The pane's tty is "present" while the pane's recorded ROOT process (pid + lstart) lives.
+        # A device-node test never goes false on macOS (the /dev/ttysNNN node outlives its window),
+        # and "held by any process" went true again within seconds when another session's expect
+        # pty took the freed number (both seen in the W5 rig). pid + lstart cannot be reused. With
+        # no recorded root, fall back to the tty being held by a live process, then to the node.
+        tty_present=_tty_present(rec, snap),
         identity_match=_identity_match(rec, pane),
         exit_typed_by_me=rec.timeline.exit_typed_by_me is not None,
         resume_debt_open=debt_open(rec.sid),

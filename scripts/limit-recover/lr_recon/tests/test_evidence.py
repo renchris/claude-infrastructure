@@ -98,6 +98,20 @@ class EvidenceTests(unittest.TestCase):
             "unknown",
         )
 
+    def test_tty_present_follows_the_pane_root_process(self):
+        """W5 rig: the node outlives the window, and a freed tty number is re-used within seconds
+        by another session's expect pty; only the pane root's (pid, lstart) answers the question."""
+        self.rec.identity.tty = "ttys022"
+        snap = _snap()
+        snap.ttys = ["ttys022"]  # re-used by someone else
+        self.assertFalse(self._build(snap).tty_present)  # root 20 is not in this snapshot
+        snap.procs[20] = T.ProcRow(20, 1, "Ss", L, "-zsh")
+        self.assertTrue(self._build(snap).tty_present)
+        self.rec.identity.root_pid = 0  # no recorded root: the held-by-any-process fallback
+        self.assertTrue(self._build(snap).tty_present)
+        snap.ttys = ["ttys001"]
+        self.assertFalse(self._build(snap).tty_present)
+
     def test_identity_fail_closed(self):
         pane = T.PaneObs(
             kitty_pid=5,

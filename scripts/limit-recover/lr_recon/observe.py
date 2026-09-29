@@ -331,6 +331,7 @@ def observe(
     )
     try:
         snap.procs, ttys = read_ps(run)
+        snap.ttys = sorted(set(ttys.values()))
     except Exception:  # noqa: BLE001
         snap.degraded.append("ps")
         return snap

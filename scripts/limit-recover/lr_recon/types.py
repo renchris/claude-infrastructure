@@ -541,6 +541,9 @@ class Snapshot:
     rig_refused: List[str] = field(
         default_factory=list
     )  # rig mode only: sids dropped because no registry row carries rig:true
+    ttys: List[str] = field(
+        default_factory=list
+    )  # controlling ttys held by any live process ("ttys022"), from the same ps read
 
     def alive(self, pid: int, lstart: str) -> bool:
         row = self.procs.get(pid)
