@@ -3,16 +3,25 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>            <string>com.claude.public-publish</string>
+  <!--
+      NO `ProcessType Background` and NO `LowPriorityIO` (2026-09-29). That key applies Darwin's
+      darwinbg TASK ROLE, the same defect migrations/0010 and 0016 fixed on postland-verify and the
+      autonomy sweep: every descendant is pinned at PRI 4, E-core confined. Measured on this job:
+      filter-repo's "new history written" took 86-137 s at foreground priority and 534-5,605 s under
+      launchd, and the 2026-09-29T09:34Z tick sat runnable with 0 context switches for 10+ h while the
+      box had idle CPU. That held the tick's lock, so the public repo stalled ~20 h. The job still
+      runs demoted, through `taskpolicy -c utility` (PRI 20, below interactive, P-core eligible), the
+      band every other actuator here runs in. Fail-open: no taskpolicy(8) ⇒ exec directly.
+      Applying this is a bootout + bootstrap of a live job: c10, migrations/0045.
+  -->
   <key>ProgramArguments</key>
   <array>
     <string>/bin/zsh</string>
     <string>-lc</string>
-    <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:$PATH"; ~/.claude/scripts/public-publish-tick.sh</string>
+    <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:$PATH"; if [ -x /usr/sbin/taskpolicy ]; then exec /usr/sbin/taskpolicy -c utility ~/.claude/scripts/public-publish-tick.sh; fi; exec ~/.claude/scripts/public-publish-tick.sh</string>
   </array>
   <key>StartInterval</key>    <integer>10800</integer>
   <key>RunAtLoad</key>        <false/>
-  <key>ProcessType</key>      <string>Background</string>
-  <key>LowPriorityIO</key>    <true/>
   <key>Nice</key>             <integer>10</integer>
   <key>StandardOutPath</key>  <string>/Users/chrisren/.claude/logs/public-publish.out.log</string>
   <key>StandardErrorPath</key><string>/Users/chrisren/.claude/logs/public-publish.err.log</string>
