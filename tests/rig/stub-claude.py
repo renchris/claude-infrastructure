@@ -316,7 +316,8 @@ class Tui:
                 "-c",
                 # `& wait`, never a bare last command: zsh execs a trailing simple command, and the
                 # process would lose the shell-snapshots argv the bg-work detectors key on
-                "source %s/snapshot-zsh-rig.sh 2>/dev/null; sleep %d & wait" % (snap, seconds),
+                "source %s/snapshot-zsh-rig.sh 2>/dev/null; sleep %d & wait"
+                % (snap, seconds),
             ],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
@@ -517,8 +518,17 @@ def write_dead(sid, cwd):
     os.makedirs(reg, exist_ok=True)
     atomic(
         os.path.join(reg, "dead-%s.json" % sid[:8]),
-        {"paneUUID": "", "name": "rig dead", "cwd": cwd, "account": "claude-next", "pid": p.pid,
-         "startedAt": int(time.time()) - 3600, "session_id": sid, "surface": "pane", "rig": True},
+        {
+            "paneUUID": "",
+            "name": "rig dead",
+            "cwd": cwd,
+            "account": "claude-next",
+            "pid": p.pid,
+            "startedAt": int(time.time()) - 3600,
+            "session_id": sid,
+            "surface": "pane",
+            "rig": True,
+        },
     )
     s.user("Work on the rig task.")
     s.assistant("Working on it.")
@@ -592,6 +602,12 @@ def resume(sid):
 def main(argv):
     signal.signal(signal.SIGHUP, lambda *_: os._exit(0))
     a = argv[1:]
+    if "--version" in a or "-v" in a:
+        # Real Claude Code prints and exits 0: no session, no transcript, no registry row. Without this
+        # cc-close-attrib's version probe started a fresh stub session that overwrote the relaunched
+        # pane's registry row and hid the sid from the rig daemon (W5 N=30, clean-idle stuck IN-FLIGHT).
+        print("%s (Claude Code)" % VERSION)
+        return 0
     if "--rig-write-dead" in a:
         return write_dead(
             a[a.index("--rig-write-dead") + 1], a[a.index("--rig-cwd") + 1]
