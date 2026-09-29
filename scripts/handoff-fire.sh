@@ -8057,6 +8057,18 @@ if [ "${1:-}" = "__selfclose" ]; then
   exit 0
 fi
 
+# W5b REAL-CANARY TEST HOOK (docs/plans/LIMIT_RECOVER_FLEET_V2.md § W5 "Real canaries"). Two faults
+# cannot be timed from outside on a real session: a draft typed after the transplant confirm and
+# before the last read, and the watcher dying after the /exit and before the relaunch — each window
+# is about a second. A canary daemon (LR_RECON_CANARY set) may name an executable in HF_CANARY_HOOK;
+# it runs at the named point as `<hook> <point> <pane> <sid> <this pid>` and cannot fail the caller.
+# Production never sets LR_RECON_CANARY, so both call sites are inert there.
+hf_canary_hook() { # <point> <pane> <sid>
+  [ -n "${LR_RECON_CANARY:-}" ] || return 0
+  [ -n "${HF_CANARY_HOOK:-}" ] && [ -x "$HF_CANARY_HOOK" ] || return 0
+  "$HF_CANARY_HOOK" "$1" "${2:-}" "${3:-}" "$$" >/dev/null 2>&1 </dev/null || true
+}
+
 # Internal: recycle watcher (spawned detached by --recycle). ONLY AppleEvent-free work, same
 # constraint as __selfclose: ps-based tty polling + it2 python-API writes (both proven detached).
 # Waits for the typed /exit to land (claude process gone from the tty), then types the relaunch
@@ -8436,6 +8448,7 @@ if [ "${1:-}" = "__recycle" ]; then
     rcy_debt_settle
     exit 1
   fi
+  hf_canary_hook before-relaunch "$RSID" "${RCY_RESUME_SID:-}"
   # THE LAUNCH LOCK, THEN H(sid) = 0, UNDER IT (W2b). Resume mode only: a fresh-brief relaunch
   # starts a NEW session, which nothing else can be holding. Taken right before the keystroke and
   # KEPT through it — lr-fire-resume re-takes it by record match — so no second actuator can relaunch
@@ -14250,6 +14263,7 @@ recycle_fire_commit() {
     fi
     # From here a stand-down owes an UNCONFIRM: the source is retired and must be handed back.
     RCY_CONFIRM_RAN=1
+    hf_canary_hook after-confirm "$SID" "$RCY_TS_SID"
   fi
   # The /exit's wake guard sits BEFORE the last read, not between it and the keystroke: a guard that
   # slept after the read would re-open exactly the window the read exists to close.
