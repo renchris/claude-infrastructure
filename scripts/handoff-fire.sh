@@ -8221,6 +8221,15 @@ if [ "${1:-}" = "__recycle" ]; then
         if [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" = cancel ] \
            || { [ -z "$bgk" ] && [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" != off ]; }; then
           hf_bounded "$IT2" session send -s "$RSID" $'\e' >/dev/null 2>&1 || true
+          # OUR /exit MAY OUTLIVE THE DIALOG (W5 rig N=30, bgwork-after-confirm): Esc cancels the
+          # dialog and can leave the /exit this watcher typed in the composer, which every later
+          # precheck reads as an operator draft, so the session is HELD:draft forever and never
+          # recovers after its job ends. Attribution is structural (we typed it seconds ago), and it
+          # is scrubbed only when the composer reads back exactly `/exit`; anything else is left.
+          /bin/sleep "${FIRE_TYPE_SETTLE:-0.5}"
+          if [ "$(composer_content "$IT2" "$RSID" 2>/dev/null)" = "/exit" ]; then
+            composer_scrub_verified "$IT2" "$RSID" >/dev/null 2>&1 || true
+          fi
           echo "!! recycle HELD at ${waited}s: the /exit raised the background-work dialog and this relaunch may not choose either exit ($(if [ -z "$bgk" ]; then printf 'the menu offers no keep-work option'; else printf 'CC_RECYCLE_BGWORK_ANSWER=cancel'; fi)) — sent Esc (Stay); the session in $RSID is untouched and NO relaunch was typed. Re-run once its background work has ended." >&2
           # unconfirm=needed: the transplant confirm ran before the /exit and the session stays in
           # this pane, so the source must be handed back — the reconciler UNCONFIRMs off this field.

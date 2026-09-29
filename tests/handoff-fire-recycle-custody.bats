@@ -900,6 +900,47 @@ drive_watcher_locked() {
   ! grep -q $'session send .*\e' "$HOME/it2-calls.log" || { cat -v "$HOME/it2-calls.log"; false; }
 }
 
+@test "12c after the Esc, our own /exit left in the composer is scrubbed; an operator's text is not" {
+  local mode fx="$REPO/tests/fixtures/lr-recon/screens"
+  for mode in ours theirs; do
+    watcher_world
+    rm -f "$HOME/it2-calls.log"
+    # composer screens: the empty fixture with its prompt line replaced
+    sed 's/^❯.*/❯ \/exit/' "$fx/composer-empty-2.1.284.txt" > "$HOME/scr-exit"
+    sed 's/^❯.*/❯ half a thought the operator typed/' "$fx/composer-empty-2.1.284.txt" > "$HOME/scr-draft"
+    cp "$fx/composer-empty-2.1.284.txt" "$HOME/scr-empty"
+    cp "$fx/bgwork-dialog-2.1.284-agent-view-off.txt" "$HOME/scr"
+    export SCREEN="$HOME/scr" AFTER_ESC="$HOME/scr-exit"
+    [ "$mode" = theirs ] && AFTER_ESC="$HOME/scr-draft"
+    # the pane: Esc closes the dialog onto AFTER_ESC; Ctrl-U empties the composer
+    cat > "$HOME/.claude/bin/it2" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$HOME/it2-calls.log"
+case "$1 $2" in
+  "session list")
+    [ "${3:-}" = --json ] && printf '[{"id": "%s", "tty": "/dev/ttys999"}]\n' "$WPANE" || printf '%s\n' "$WPANE"
+    exit 0 ;;
+  "session read") cat "$SCREEN" ;;
+  "session send") txt="${!#}"
+    [ "$txt" = $'\e' ] && cp "$AFTER_ESC" "$SCREEN"
+    [ "$txt" = $'\x15' ] && cp "$HOME/scr-empty" "$SCREEN" ;;
+esac
+exit 0
+SH
+    chmod +x "$HOME/.claude/bin/it2"
+    export CC_PANE_MODAL_LIB="$REPO/hooks/lib/pane-modal.sh" CC_RECYCLE_BGWORK_EVERY_S=3 FIRE_TYPE_SETTLE=0
+    echo $(( $(date +%s) + 600 )) > "$HOME/shell-at"
+    CC_RECYCLE_BGWORK_ANSWER=cancel drive_watcher
+    [ "$status" -eq 1 ] || { echo "mode=$mode $output"; false; }
+    if [ "$mode" = ours ]; then
+      grep -q $'session send .*\x15' "$HOME/it2-calls.log" || { echo "mode=$mode"; cat -v "$HOME/it2-calls.log"; false; }
+    else
+      ! grep -q $'session send .*\x15' "$HOME/it2-calls.log" || { echo "mode=$mode scrubbed a draft"; cat -v "$HOME/it2-calls.log"; false; }
+    fi
+    [ "$(typed_relaunch)" = 0 ] || { echo "mode=$mode"; cat "$HOME/it2-calls.log"; false; }
+  done
+}
+
 # ── P · THE 1 s SHELL POLL ─────────────────────────────────────────────────────────────────────
 
 @test "P a shell that appears ~1 s after the /exit is confirmed with waited < 3" {
