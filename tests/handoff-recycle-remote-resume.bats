@@ -62,17 +62,19 @@ SH
 exit 0
 SH
   # ps: `-o tty= -p <pid>` answers PS_TTY_OUT (the row pid's tty); `-o ppid=` answers nothing, so the
-  # ancestry walk in hf_remote_source_pin stops after one hop; everything else answers nothing.
+  # ancestry walk in hf_remote_source_pin stops after one hop; `-o lstart=` answers one fixed start
+  # time, so the watcher's launch lock (W2b) can stamp its holder; everything else answers nothing.
   cat > "$SHIM/ps" <<'SH'
 #!/usr/bin/env bash
 want=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    -o) case "${2:-}" in tty=) want=tty ;; comm=) want=comm ;; esac; shift 2 ;;
+    -o) case "${2:-}" in tty=) want=tty ;; comm=) want=comm ;; lstart=) want=lstart ;; esac; shift 2 ;;
     *) shift ;;
   esac
 done
 [ "$want" = tty ] && [ -n "${PS_TTY_OUT:-}" ] && printf '%s\n' "$PS_TTY_OUT"
+[ "$want" = lstart ] && printf 'Tue Sep 29 10:00:00 2026\n'
 exit 0
 SH
   chmod +x "$SHIM/osascript" "$SHIM/git" "$SHIM/ps"
@@ -140,8 +142,13 @@ recycle_self() { # the SELF form: --transplanted-source with NO --source-pane/--
   mk_transplant; src_row
   recycle
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  printf '%s\n' "$output" | grep -qF "command:  cd $CWD_DIR && nocorrect bash $LAUNCHER" || { echo "$output"; false; }
+  # W2b: the launcher inherits the session's launch lock + the run's (record, attempt) through `env`.
+  printf '%s\n' "$output" | grep -qF "command:  cd $CWD_DIR && nocorrect env LR_LAUNCH_LOCK=$HOME/.reso/limit-recover/locks/$SESS.launch LR_RECORD_ID=hf-" || { echo "$output"; false; }
+  printf '%s\n' "$output" | grep -qF " LR_ATTEMPT=1 bash $LAUNCHER" || { echo "$output"; false; }
   [[ "$output" != *"exec bash"* ]] || { echo "an exec'd launcher makes the pane launcher-rooted and un-recyclable: $output"; false; }
+  # Kill switch: today's command, byte for byte.
+  HF_LAUNCH_LOCK=off recycle
+  printf '%s\n' "$output" | grep -qxF "command:  cd $CWD_DIR && nocorrect bash $LAUNCHER" || { echo "$output"; false; }
 }
 
 @test "--resume-cwd overrides the row's cwd" {
@@ -149,7 +156,8 @@ recycle_self() { # the SELF form: --transplanted-source with NO --source-pane/--
   other="$BATS_TEST_TMPDIR/elsewhere"; mkdir -p "$other"
   recycle --resume-cwd "$other"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  printf '%s\n' "$output" | grep -qF "command:  cd $other && nocorrect bash $LAUNCHER" || { echo "$output"; false; }
+  printf '%s\n' "$output" | grep -qF "command:  cd $other && nocorrect env LR_LAUNCH_LOCK=" || { echo "$output"; false; }
+  printf '%s\n' "$output" | grep -qF " LR_ATTEMPT=1 bash $LAUNCHER" || { echo "$output"; false; }
 }
 
 @test "the dry run names the mode: same uuid on the target, transcript-verified engagement, no goal inheritance" {
@@ -526,6 +534,8 @@ STUB
 #!/usr/bin/env bash
 args="$*"
 case "$args" in *pgid=*) printf '%s\n' "4242"; exit 0 ;; esac
+# One fixed start time, so the watcher's launch lock (W2b) can stamp its holder.
+case "$args" in *lstart=*) printf 'Tue Sep 29 10:00:00 2026\n'; exit 0 ;; esac
 case "$args" in
   *"-o pid= -t"*)    printf '100\n' ;;
   *"-o tpgid= -t"*)  printf '100\n' ;;

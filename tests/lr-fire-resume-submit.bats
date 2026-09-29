@@ -807,6 +807,8 @@ watcher_setup() {
 #!/usr/bin/env bash
 args="$*"
 case "$args" in *pgid=*) printf '%s\n' "4242"; exit 0 ;; esac
+# One fixed start time, so the watcher's launch lock (W2b) can stamp its holder.
+case "$args" in *lstart=*) printf 'Tue Sep 29 10:00:00 2026\n'; exit 0 ;; esac
 c="${PS_COUNT_FILE:?}"
 if [ "${args#*-o pid= -t}" != "$args" ]; then
   n=$(( $(cat "$c" 2>/dev/null || echo 0) + 1 )); printf '%s' "$n" > "$c"

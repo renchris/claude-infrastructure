@@ -176,12 +176,16 @@ setup() {
     # word covering the whole command, so that form is shielded at least as strongly.
     # Requiring form (a) of form (b) is what made this guard RED on trunk for every land whose
     # diff reached handoff-fire.sh: the shape was correct and the predicate was not.
+    # The W2b launch-lock form puts `env` in command position (`${NC}env LR_LAUNCH_LOCK=… bash <q>`):
+    # `env` is the shielded word, and the launcher is again a quoted argument.
     grep -q '${NC}${PREFIX}${LAUNCHER}' <<<"$line" \
       || grep -qE '\$\{NC\}bash \$\(printf %q ' <<<"$line" \
+      || grep -qE '\$\{NC\}env LR_LAUNCH_LOCK=.* bash \$\(printf %q ' <<<"$line" \
       || { echo "unshielded typed shape: $line"; false; }
   done <<<"$shapes"
-  # All seven known shapes: resume, 2x --recycle, cold + existing --worktree, --cwd, bare.
-  [ "$n" -eq 7 ] || { echo "expected 7 typed launch shapes, found $n — a shape was added or lost"; false; }
+  # All eight known shapes: resume (with and without the W2b launch-lock env), 2x --recycle, cold +
+  # existing --worktree, --cwd, bare.
+  [ "$n" -eq 8 ] || { echo "expected 8 typed launch shapes, found $n — a shape was added or lost"; false; }
 }
 
 @test "NC is exactly the zsh reserved word, with its separating space" {

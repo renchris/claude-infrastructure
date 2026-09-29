@@ -191,6 +191,18 @@
 #                       a pane that is not limited: F is a rejected 5h/7d account fact
 #                       (<acct>.<scope>.json) resetting ≥30 min out. A background job still
 #                       running in the pane HOLDs (exit 3, HELD:bg-work:<ship-land|other>).
+#   --husk              (with --recycle --transplanted-source) the source was ALREADY retired by an
+#                       earlier confirm: skip --phase confirm, and instead require <source>.handed-off
+#                       to exist and the tombstone's handed_off_to to equal --resume-cfg (else held,
+#                       nothing typed). Anywhere else ⇒ exit 2.
+#   --relaunch-at-shell --source-pane P --source-session S --resume-launcher L --resume-cfg C
+#                       [--resume-cwd W] --expect-identity F [--record-id R]   (W2b) type S's resume
+#                       into pane P, which a recycle left AT ITS SHELL. Reads first, in order: F (JSON,
+#                       any of tty/window_id/kitty_pid/kitty_lstart) · S's launch lock (exit 3
+#                       HELD:launch-lock) · no live holder of S (exit 3 HELD:holder) · P at `shell`
+#                       (exit 5 REFUSED:pane:<state>) · every F field equals the live pane (exit 5
+#                       REFUSED:identity) — then execs the recycle watcher, which folds, types and
+#                       proves engagement. HF_LAUNCH_LOCK=off drops the launch lock everywhere.
 #   --resume-launcher F --resume-cfg DIR [--resume-cwd D]   (with --recycle) RESUME MODE: the
 #                       relaunch typed into the surviving shell is `bash F` (the lr-launch-*.sh
 #                       lr-handoff minted: lr-fire-resume of the SAME uuid on the TARGET account,
@@ -500,6 +512,9 @@ RCY_SUBAGENT_SID=""                              # L1-b: the PREDECESSOR's sid, 
 # into `bash <launcher>` (lr-fire-resume of the SAME uuid on the TARGET account) and the engagement
 # oracle into "a new assistant turn in the target's copy" — same window id, same uuid, new account.
 RCY_SOURCE_PANE="" RCY_SOURCE_SESSION="" RCY_TRANSPLANTED_SOURCE=0 RCY_REMOTE=0
+# --husk (W2b): the source was ALREADY retired by an earlier confirm (the reconciler's), so this
+# recycle asserts that instead of confirming again — see recycle_fire_commit.
+RCY_HUSK=0
 # --same-account: the OTHER evidence class for the remote form (cc-lr upgrade, 2026-09-22). The
 # session did NOT move; it is relaunched into its OWN uuid on its OWN account (a new binary/model).
 # There is no tombstone to prove anything with, so the evidence is the row, the pin, the account and
@@ -2578,6 +2593,8 @@ _hf_lock_field() { # $1=raw holder $2=pid|lstart → the value
   case "$2" in
     pid)    printf '%s' "$1" | sed -n 's/.*"pid":\([0-9][0-9]*\)[,}].*/\1/p' ;;
     lstart) printf '%s' "$1" | sed -n 's/.*"lstart":"\([^"]*\)".*/\1/p' ;;
+    record_id) printf '%s' "$1" | sed -n 's/.*"record_id":"\([^"]*\)".*/\1/p' ;;
+    attempt) printf '%s' "$1" | sed -n 's/.*"attempt":\([0-9][0-9]*\)[,}].*/\1/p' ;;
   esac
 }
 # ALIVE = the pid runs AND started when the holder says it did. A holder we cannot parse is not
@@ -2590,13 +2607,16 @@ _hf_lock_holder_alive() { # $1=raw holder → 0 alive
   cur="$(_hf_lstart "$hp")"
   [ -n "$cur" ] && [ "$cur" = "$(printf '%s' "$hl" | tr -s ' ')" ]
 }
-hf_recycle_lock_write() { # $1=dir $2=role $3=pid → 0 written (atomically, tmp + mv)
+# $4/$5 name the holder's (record_id, attempt) when the caller owns a different pair than the pane
+# lock's — the launch lock's is the run's, not the recycle attempt's. Absent ⇒ the pane lock's own.
+hf_recycle_lock_write() { # $1=dir $2=role $3=pid [$4=record_id $5=attempt] → 0 written (atomically, tmp + mv)
   local dir="$1" role="$2" pid="$3" ls rid att tmp
   case "$pid" in ''|*[!0-9]*) return 1 ;; esac
   ls="$(_hf_lstart "$pid")"
   [ -n "$ls" ] || return 1
-  rid="$(printf '%s' "${LR_RECORD_ID:-}" | tr -d '"\\[:cntrl:]')"
-  att="${HF_RECYCLE_ATTEMPT:-0}"; case "$att" in ''|*[!0-9]*) att=0 ;; esac
+  if [ $# -ge 5 ]; then rid="$4"; att="$5"; else rid="${LR_RECORD_ID:-}"; att="${HF_RECYCLE_ATTEMPT:-0}"; fi
+  rid="$(printf '%s' "$rid" | tr -d '"\\[:cntrl:]')"
+  case "$att" in ''|*[!0-9]*) att=0 ;; esac
   tmp="$dir.holder.tmp.$$"
   printf '{"record_id":"%s","attempt":%s,"role":"%s","pid":%s,"lstart":"%s","at":%s.0}\n' \
     "$rid" "$att" "$role" "$pid" "$ls" "$(date +%s)" > "$tmp" 2>/dev/null \
@@ -2604,14 +2624,14 @@ hf_recycle_lock_write() { # $1=dir $2=role $3=pid → 0 written (atomically, tmp
   rm -f "$tmp" 2>/dev/null
   return 1
 }
-hf_recycle_lock_take() { # $1=dir $2=role $3=pid → 0 taken · 1 held by a LIVE holder (HF_LOCK_HOLDER) · 2 cannot write
+hf_recycle_lock_take() { # $1=dir $2=role $3=pid [$4=record_id $5=attempt] → 0 taken · 1 held by a LIVE holder (HF_LOCK_HOLDER) · 2 cannot write
   local dir="$1" role="$2" pid="$3" raw tomb try=0
   HF_LOCK_HOLDER=""
   mkdir -p "$(dirname "$dir")" 2>/dev/null || return 2
   while [ "$try" -lt 3 ]; do
     try=$((try + 1))
     if mkdir "$dir" 2>/dev/null; then
-      hf_recycle_lock_write "$dir" "$role" "$pid" && return 0
+      hf_recycle_lock_write "$dir" "$role" "$pid" "${@:4}" && return 0
       rm -rf "$dir" 2>/dev/null
       return 2
     fi
@@ -2668,6 +2688,87 @@ hf_recycle_disarm() { # → always 0
   if [ -n "${WATCHER_PID:-}" ]; then kill "$WATCHER_PID" 2>/dev/null || true; fi
   hf_recycle_lock_release "${HF_RECYCLE_LOCK:-}" "$$" "${WATCHER_PID:-}" || true
   return 0
+}
+
+# THE PER-SESSION LAUNCH LOCK (W2b watcher half). The pane lock above keeps two recycles off ONE
+# pane; it cannot see a second actuator relaunching the SAME SESSION somewhere else (the reconciler,
+# a debt settle, another pane). `<sid>.launch` is that exclusion, on the same mkdir + holder-JSON
+# primitives, and it is SHARED with lr-fire-resume, which treats the lock as its own iff the holder's
+# (record_id, attempt) equal its LR_RECORD_ID + LR_ATTEMPT — so the pair this side writes is the
+# run's, computed ONCE (by whichever process gets here first) and exported to every re-exec.
+hf_launch_identity() { # → sets + exports HF_LAUNCH_REC HF_LAUNCH_ATT (idempotent)
+  if [ -z "${HF_LAUNCH_REC:-}" ]; then
+    if [ -n "${LR_RECORD_ID:-}" ]; then
+      HF_LAUNCH_REC="$LR_RECORD_ID"; HF_LAUNCH_ATT="${LR_ATTEMPT:-1}"
+    else
+      HF_LAUNCH_REC="hf-$$-$(date +%s)"; HF_LAUNCH_ATT=1
+    fi
+  fi
+  # Sanitised exactly as hf_recycle_lock_write stores it, or our own holder would read as foreign.
+  HF_LAUNCH_REC="$(printf '%s' "$HF_LAUNCH_REC" | tr -d '"\\[:cntrl:]')"
+  case "${HF_LAUNCH_ATT:-}" in ''|*[!0-9]*) HF_LAUNCH_ATT=1 ;; esac
+  export HF_LAUNCH_REC HF_LAUNCH_ATT
+}
+hf_launch_lock_dir() { # $1=sid → the lock dir path; rc 1 without a sid
+  [ -n "${1:-}" ] || return 1
+  printf '%s/%s.launch' "${LR_LOCKS_DIR:-$HOME/.reso/limit-recover/locks}" "$1"
+}
+# FOREIGN = alive (pid runs AND started when it says) AND a different (record_id, attempt). A live
+# holder carrying OUR pair is this run one hop earlier (the parent, the verb this watcher exec'd
+# from): re-stamped with our pid, not refused. Dead or unreadable is stolen by the take primitive.
+hf_launch_lock_take() { # $1=sid $2=role → 0 held by us (HF_LAUNCH_LOCK_DIR) · 1 foreign live holder (HF_LOCK_HOLDER) · 2 cannot write
+  local dir rc=0
+  HF_LAUNCH_LOCK_DIR=""
+  hf_launch_identity
+  dir="$(hf_launch_lock_dir "${1:-}")" || return 2
+  hf_recycle_lock_take "$dir" "${2:-launch}" "$$" "$HF_LAUNCH_REC" "$HF_LAUNCH_ATT" || rc=$?
+  if [ "$rc" = 1 ] && [ -n "$HF_LOCK_HOLDER" ] \
+     && [ "$(_hf_lock_field "$HF_LOCK_HOLDER" record_id)" = "$HF_LAUNCH_REC" ] \
+     && [ "$(_hf_lock_field "$HF_LOCK_HOLDER" attempt)" = "$HF_LAUNCH_ATT" ]; then
+    rc=0; hf_recycle_lock_write "$dir" "${2:-launch}" "$$" "$HF_LAUNCH_REC" "$HF_LAUNCH_ATT" || rc=2
+  fi
+  [ "$rc" = 0 ] && HF_LAUNCH_LOCK_DIR="$dir"
+  return "$rc"
+}
+hf_launch_lock_release() { # $1=sid → 0 released (only a lock whose holder names THIS pid)
+  local dir
+  dir="$(hf_launch_lock_dir "${1:-}")" || return 1
+  hf_recycle_lock_release "$dir" "$$"
+}
+# H(sid) — lr-lib's lr_holder_count, the one arithmetic every census shares (registry panes ∪
+# `--resume <sid>` leaves). Read in a SUBSHELL so sourcing the library cannot redefine anything this
+# file already runs. HF_LR_LIB is the test seam. rc 1 = no answer, which every caller treats as a
+# holder (fail closed): a count that cannot be read cannot certify that nothing holds the session.
+hf_holder_count() { # $1=sid → the count on stdout; rc 1 unreadable
+  local lib n
+  lib="$(hf_lr_script lr-lib.sh HF_LR_LIB)" || return 1
+  n="$( (
+    # shellcheck disable=SC1090  # runtime-resolved library ladder
+    . "$lib" >/dev/null 2>&1 || exit 1
+    command -v lr_holder_count >/dev/null 2>&1 || exit 1
+    lr_holder_count "$1"
+  ) 2>/dev/null)" || return 1
+  case "$n" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "$n"
+}
+# THE RESUME-MODE RELAUNCH COMMAND — one builder for --recycle and --relaunch-at-shell, so the verb
+# types exactly what a recycle would. `bash <launcher>` runs as a child of the pane's shell (the
+# launcher execs lr-fire-resume → expect → claude), so the zsh stays the pane's root and the pane
+# stays recyclable. With the launch lock on, `env LR_LAUNCH_LOCK=… LR_RECORD_ID=… LR_ATTEMPT=…`
+# hands lr-fire-resume the lock this side holds and the pair that makes it lr-fire-resume's own;
+# `nocorrect` shields the command word (`env`) exactly as it shields `bash`. HF_LAUNCH_LOCK=off, or
+# no sid to name a lock by, is the pre-W2b command byte for byte. Reads RCY_CWD + RESUME_LAUNCHER.
+hf_resume_cmd_set() { # $1=resumed sid → sets CMD
+  local NC="${NC-nocorrect }" rcy_ll=""
+  if [ "${HF_LAUNCH_LOCK:-on}" != off ] && [ -n "${1:-}" ]; then
+    hf_launch_identity
+    rcy_ll="$(hf_launch_lock_dir "$1")"
+  fi
+  if [ -n "$rcy_ll" ]; then
+    CMD="cd $(printf %q "$RCY_CWD") && ${NC}env LR_LAUNCH_LOCK=$(printf %q "$rcy_ll") LR_RECORD_ID=$(printf %q "$HF_LAUNCH_REC") LR_ATTEMPT=$(printf %q "$HF_LAUNCH_ATT") bash $(printf %q "$RESUME_LAUNCHER")"
+  else
+    CMD="cd $(printf %q "$RCY_CWD") && ${NC}bash $(printf %q "$RESUME_LAUNCHER")"
+  fi
 }
 
 # THE WAKE GUARD. A lid-open wake leaves the terminal, the network and the pane's TUI settling for
@@ -7829,7 +7930,9 @@ if [ "${1:-}" = "__recycle" ]; then
   # heartbeat proves it, and exports the dir as HF_RECYCLE_LOCK. Whatever arm this watcher leaves by,
   # the lock goes with it — but only while it still names THIS pid, so a lock since stolen by a
   # newer recycle is never deleted from under its thief. No lock inherited ⇒ a no-op.
-  trap 'hf_recycle_lock_release "${HF_RECYCLE_LOCK:-}" "$$" || true' EXIT
+  # The session's LAUNCH lock (taken just before the relaunch is typed) goes too — by then
+  # lr-fire-resume has re-taken it by record match, and one still naming this pid is a dead holder.
+  trap 'hf_recycle_lock_release "${HF_RECYCLE_LOCK:-}" "$$" || true; hf_launch_lock_release "${RCY_RESUME_SID:-}" >/dev/null 2>&1 || true' EXIT
   RSID="${2:?__recycle needs a session id}"
   TTY_PATH="${3:?__recycle needs the pane tty}"
   CMDFILE="${4:?__recycle needs the command file}"
@@ -7848,6 +7951,8 @@ if [ "${1:-}" = "__recycle" ]; then
   # and `!!` line: settle relaunches the same sid in a NEW window, or escalates. It may block for
   # minutes, which a detached watcher can afford.
   rcy_debt_settle() {
+    # Settling relaunches the same sid elsewhere, and its lr-fire-resume must not meet our lock.
+    hf_launch_lock_release "${RCY_RESUME_SID:-}" >/dev/null 2>&1 || true
     if [ -z "$RCY_DEBT_SID" ]; then
       echo "⚠ resume-debt settle skipped: no session id was handed to this watcher" >&2
       return 0
@@ -7909,9 +8014,24 @@ if [ "${1:-}" = "__recycle" ]; then
   # said "never reached a confirmed shell in 6s (verdict: shell)" and the relaunch was never typed.
   # One affirmative read is the evidence typing needs; a later flicker does not withdraw it.
   rcy_shell_ok=0
+  # THE POLL STEP (W2b): 1 s, down from 3. The shell is typically back within a second of claude
+  # exiting, and every second between "the shell is back" and "the relaunch is typed" is a second in
+  # which the pane sits at a bare prompt the operator may start typing into. The checkpoints below
+  # were written as `waited % 15` / `case 60|150|300`, which only a step that divides them hits; they
+  # are LATCHES now (`-ge` the next due point), so a step of 2 or 3 fires each one exactly once too.
+  rcy_poll="${HF_RECYCLE_SHELL_POLL_S:-1}"
+  case "$rcy_poll" in 1|2|3) ;; *) rcy_poll=1 ;; esac
+  rcy_vanish_next=15; rcy_bgwork_next="$rcy_bgwork_every"; rcy_nudge_left="60 150 300"
   while [ "$waited" -lt "$rcy_wait_max" ]; do
     if at_shell; then rcy_shell_ok=1; break; fi
-    sleep 3; waited=$((waited+3))
+    sleep "$rcy_poll"; waited=$((waited+rcy_poll))
+    # The nudge checkpoint due THIS round, consumed here — before the bgwork arm's `continue` — so a
+    # round that answers the dialog skips its nudge exactly as the %-cadence did.
+    rcy_nudge_at=""
+    if [ -n "$rcy_nudge_left" ] && [ "$waited" -ge "${rcy_nudge_left%% *}" ]; then
+      rcy_nudge_at="${rcy_nudge_left%% *}"
+      case "$rcy_nudge_left" in *" "*) rcy_nudge_left="${rcy_nudge_left#* }" ;; *) rcy_nudge_left="" ;; esac
+    fi
     # PANE-VANISHED CHECK (2026-08-26 — pane-32 strand). The loop above can only ask the pane's TTY,
     # and a pane that was DESTROYED by the /exit has no tty left to ask: pane_cc_state reads no
     # processes and returns `unknown`, which is an abstention. So the watcher's one terminal
@@ -7921,7 +8041,8 @@ if [ "${1:-}" = "__recycle" ]; then
     # `session list` settles it in ~36 ms, so ask it every 15 s. Only `absent` acts (pane_enumerated
     # requires a successful listing carrying other panes); `unknown` keeps waiting, so a flaky
     # terminal API costs time and never mints a false "your pane is gone".
-    if [ "${CC_RECYCLE_VANISH_CHECK:-on}" != off ] && [ $((waited % 15)) -eq 0 ]; then
+    if [ "${CC_RECYCLE_VANISH_CHECK:-on}" != off ] && [ "$waited" -ge "$rcy_vanish_next" ]; then
+      rcy_vanish_next=$(( (waited / 15 + 1) * 15 ))
       if [ "$(pane_enumerated "$IT2" "$RSID")" = absent ]; then rcy_vanished=1; break; fi
     fi
     # THE BACKGROUND-WORK DIALOG (item 004d154032e8). Checked on the SAME 15 s cadence as the
@@ -7937,7 +8058,8 @@ if [ "${1:-}" = "__recycle" ]; then
     # that sentence is worth having even when the kill switch is off or the send is refused.
     # Bounded by CC_RECYCLE_BGWORK_MAX (default 2, against a dialog that is answered once): a
     # mis-detect can cost at most two stray keystrokes, never a keystroke storm.
-    if [ $((waited % rcy_bgwork_every)) -eq 0 ] && [ "$rcy_bgwork_sent" -lt "$rcy_bgwork_max" ]; then
+    if [ "$waited" -ge "$rcy_bgwork_next" ] && [ "$rcy_bgwork_sent" -lt "$rcy_bgwork_max" ]; then
+      rcy_bgwork_next=$(( (waited / rcy_bgwork_every + 1) * rcy_bgwork_every ))
       if bgk="$(pane_bgwork_key "$IT2" "$RSID")" && [ -n "$bgk" ]; then
         rcy_bgwork_seen=1
         # CANCEL (cc-lr upgrade's team procedure, 2026-09-23): for an Agent-Team lead or member
@@ -7949,7 +8071,9 @@ if [ "${1:-}" = "__recycle" ]; then
         if [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" = cancel ]; then
           hf_bounded "$IT2" session send -s "$RSID" $'\e' >/dev/null 2>&1 || true
           echo "!! recycle HELD at ${waited}s: the /exit raised the background-work dialog and this relaunch may not choose either exit (CC_RECYCLE_BGWORK_ANSWER=cancel) — sent Esc (Stay); the session in $RSID is untouched and NO relaunch was typed. Re-run once its background work has ended." >&2
-          emit_recycle_event recycle-held-bgwork "" "$RSID" "background-work dialog at ${waited}s cancelled with Esc (team relaunch); nothing typed" || true
+          # unconfirm=needed: the transplant confirm ran before the /exit and the session stays in
+          # this pane, so the source must be handed back — the reconciler UNCONFIRMs off this field.
+          emit_recycle_event recycle-held-bgwork "" "$RSID" "background-work dialog at ${waited}s cancelled with Esc (team relaunch); nothing typed; unconfirm=needed" || true
           exit 1
         fi
         if [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" != off ]; then
@@ -7962,7 +8086,7 @@ if [ "${1:-}" = "__recycle" ]; then
         echo "→ bgwork@${waited}s: the background-work dialog is up and answerable ('$bgk') but CC_RECYCLE_BGWORK_ANSWER=off — holding"
       fi
     fi
-    case "$waited" in 60|150|300)
+    case "$rcy_nudge_at" in 60|150|300)
       # NUDGE GATE (recycle-100p 2026-08-22): this used to be a BLIND CR — and a blind CR is what
       # SUBMITS a merged "draft+/exit" buffer (the ≥8 swallowed operator messages in the 24-day
       # corpus were fired by exactly this class of submit). A CR is now sent ONLY onto a composer
@@ -7976,7 +8100,7 @@ if [ "${1:-}" = "__recycle" ]; then
         cr)
           hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true ;;
         retype)
-          if [ "$waited" = 60 ]; then
+          if [ "$rcy_nudge_at" = 60 ]; then
             # typed-send-lint:allow — the THREE LINES BELOW are this send's echo-verification, in
             # the order the lint's own doctrine demands: type, read the composer back, submit the
             # CR only if it reads back exactly the line that was typed. A mangled or dropped send
@@ -8070,14 +8194,41 @@ if [ "${1:-}" = "__recycle" ]; then
   # mechanism, seconds wide here). Now that the process is provably gone (the shell is back), fold
   # that stub INTO the .handed-off record and remove it, so no census ever reads it as a live session.
   # $13 = the source transcript path the caller resolved from the tombstone; empty ⇒ nothing to fold.
+  #
+  # THE FOLD IS lr-transplant's (W2b): `--phase fold-stub` appends the stub to BOTH copies — the
+  # .handed-off record AND the target's transcript the relaunch is about to resume — and REFUSES when
+  # the target has advanced past the transplant (a turn landed there: a live copy exists, and typing
+  # a second one is the split brain this rail exists to prevent). A refusal therefore HOLDS: nothing
+  # typed, nothing settled (settling would relaunch the same sid somewhere else). An lr-transplant
+  # without the phase (rc 3) or none at all falls back to the append-only fold, loudly.
+  # Kill switch HF_FOLD_STUB=off = the append-only fold, exactly as before.
   RCY_SRC_TX="${13:-}"
   if [ -n "$RCY_SRC_TX" ] && [ -f "$RCY_SRC_TX" ] && [ -f "$RCY_SRC_TX.handed-off" ]; then
-    if cat "$RCY_SRC_TX" >> "$RCY_SRC_TX.handed-off" 2>/dev/null; then
-      rm -f "$RCY_SRC_TX" 2>/dev/null || true
-      echo "→ folded a re-created source stub ($(basename "$RCY_SRC_TX")) into its .handed-off record — the retired store holds no live-looking copy"
-    else
-      echo "⚠ could not fold the re-created source stub $RCY_SRC_TX into its .handed-off record — left in place beside its tombstone (the guard still blocks it)"
+    rcy_fold_rc=3; rcy_fold_out=""
+    if [ "${HF_FOLD_STUB:-on}" != off ] && rcy_fold_tp="$(hf_lr_script lr-transplant.sh HF_LR_TRANSPLANT)"; then
+      rcy_fold_rc=0
+      rcy_fold_out="$(bash "$rcy_fold_tp" --phase fold-stub --sid "${RCY_RESUME_SID:-}" --from "${RCY_SRC_TX%/projects/*}" \
+                        --to "${RCY_RESUME_CFG:-}" ${LR_RECORD_ID:+--record-id "$LR_RECORD_ID"} 2>/dev/null)" || rcy_fold_rc=$?
     fi
+    case "$rcy_fold_rc" in
+      0)
+        echo "→ folded a re-created source stub ($(basename "$RCY_SRC_TX")) via lr-transplant --phase fold-stub — appended to both copies, the retired store holds no live-looking copy" ;;
+      2)
+        rcy_fold_why="$(printf '%s' "$rcy_fold_out" | jq -r '(.reason // "") + (if (.detail // "") != "" then " (" + .detail + ")" else "" end)' 2>/dev/null || true)"
+        [ -n "$rcy_fold_why" ] || rcy_fold_why="$(printf '%.160s' "$rcy_fold_out")"
+        emit_recycle_event recycle-held-fold "" "$RSID" "lr-transplant --phase fold-stub REFUSED (${rcy_fold_why:-no reason given}) for ${RCY_RESUME_SID:0:8}; nothing typed, nothing settled" || true
+        hf_alarm recycle-held-fold "$RSID" "${RCY_RESUME_SID:-}" "" "HANDOFF-RECYCLE-HELD (FOLD REFUSED): pane $RSID is at a shell after the /exit, but lr-transplant refused to fold the re-created source stub for session ${RCY_RESUME_SID:0:8} (${rcy_fold_why:-no reason given}). A target that advanced means a live copy exists — so NOTHING was typed and the session was NOT settled. Find the live copy before relaunching: $(cat "$CMDFILE")" || true
+        echo "!! recycle HELD: lr-transplant --phase fold-stub REFUSED (${rcy_fold_why:-no reason given}) — a live copy of ${RCY_RESUME_SID:0:8} may exist, so NO relaunch was typed and nothing was settled" >&2
+        exit 1 ;;
+      *)
+        echo "⚠ legacy fold: lr-transplant --phase fold-stub unavailable (rc $rcy_fold_rc) — appending the stub to .handed-off only; the target copy does not get it"
+        if cat "$RCY_SRC_TX" >> "$RCY_SRC_TX.handed-off" 2>/dev/null; then
+          rm -f "$RCY_SRC_TX" 2>/dev/null || true
+          echo "→ folded a re-created source stub ($(basename "$RCY_SRC_TX")) into its .handed-off record — the retired store holds no live-looking copy"
+        else
+          echo "⚠ could not fold the re-created source stub $RCY_SRC_TX into its .handed-off record — left in place beside its tombstone (the guard still blocks it)"
+        fi ;;
+    esac
   fi
   # THE 2026-07-29 STRAND, made self-diagnosing. A session-owned worktree is reaped BY the exit this
   # watcher just observed, so the relaunch's cd target can disappear between arming and typing. The
@@ -8124,6 +8275,30 @@ if [ "${1:-}" = "__recycle" ]; then
     echo "!! pane $RSID vanished between exit and relaunch — relaunch surface gone; nothing typed, settling the session's resume debt" >&2
     rcy_debt_settle
     exit 1
+  fi
+  # THE LAUNCH LOCK, THEN H(sid) = 0, UNDER IT (W2b). Resume mode only: a fresh-brief relaunch
+  # starts a NEW session, which nothing else can be holding. Taken right before the keystroke and
+  # KEPT through it — lr-fire-resume re-takes it by record match — so no second actuator can relaunch
+  # this session between our check and its boot. A foreign live holder, or any holder of the session
+  # at all, means a copy is (about to be) running elsewhere: nothing typed, and nothing settled,
+  # since settling would relaunch it yet again. Kill switch HF_LAUNCH_LOCK=off = no lock, no check.
+  if [ -n "${RCY_RESUME_SID:-}" ] && [ "${HF_LAUNCH_LOCK:-on}" != off ]; then
+    rcy_ll_rc=0; hf_launch_lock_take "$RCY_RESUME_SID" watcher || rcy_ll_rc=$?
+    if [ "$rcy_ll_rc" != 0 ]; then
+      rcy_ll_what="${HF_LOCK_HOLDER:-<unwritable: $(hf_launch_lock_dir "$RCY_RESUME_SID")>}"
+      emit_recycle_event recycle-held-launch-lock "" "$RSID" "launch lock for ${RCY_RESUME_SID:0:8} not ours (rc $rcy_ll_rc): $rcy_ll_what; nothing typed" || true
+      hf_alarm recycle-held-launch-lock "$RSID" "$RCY_RESUME_SID" "" "HANDOFF-RECYCLE-HELD (LAUNCH LOCK): pane $RSID is at a shell after the /exit, but session ${RCY_RESUME_SID:0:8}'s launch lock is held by another live actuator ($rcy_ll_what) — NOTHING was typed, so two copies cannot start. If that actuator dies without launching, relaunch in that pane: $(cat "$CMDFILE")" || true
+      echo "!! recycle HELD: the launch lock for ${RCY_RESUME_SID:0:8} is not ours (rc $rcy_ll_rc — 1 another live actuator holds it, 2 it could not be written: $rcy_ll_what) — NO relaunch typed" >&2
+      exit 1
+    fi
+    rcy_h="$(hf_holder_count "$RCY_RESUME_SID")" || rcy_h="unreadable"
+    if [ "$rcy_h" != 0 ]; then
+      hf_launch_lock_release "$RCY_RESUME_SID" || true
+      emit_recycle_event recycle-held-holder "" "$RSID" "session ${RCY_RESUME_SID:0:8} has live holder(s): $rcy_h; nothing typed" || true
+      hf_alarm recycle-held-holder "$RSID" "$RCY_RESUME_SID" "" "HANDOFF-RECYCLE-HELD (LIVE HOLDER): pane $RSID is at a shell after the /exit, but session ${RCY_RESUME_SID:0:8} is still held by $rcy_h live process(es) (registry row or --resume) — NOTHING was typed, a second copy would split it. Once no process holds it, relaunch in that pane: $(cat "$CMDFILE")" || true
+      echo "!! recycle HELD: session ${RCY_RESUME_SID:0:8} still has live holder(s) ($rcy_h) — NO relaunch typed" >&2
+      exit 1
+    fi
   fi
   ok=0
   for _ in 1 2; do
@@ -8841,6 +9016,111 @@ if [ "${1:-}" = "--probe-live-subagents" ]; then
   [ -n "$PLS_DIR" ] && PLS_N="$(live_subagents_of "$PLS_DIR" "$(hf_pid_start_epoch "$PLS_PID")" | grep -c . || true)"
   echo "live_subagents: ${PLS_N:-0}"
   exit 0
+fi
+# ── --relaunch-at-shell — type a resume into a pane ALREADY at its shell (W2b) ───────────────────
+# The reconciler's verb for the pane a recycle left behind: the /exit landed, the relaunch did not
+# (a watcher that died, a hold that has since cleared). Every read comes BEFORE any keystroke, in
+# this order, and each refusal releases whatever it took:
+#   args + the identity file (JSON: any of tty window_id kitty_pid kitty_lstart)  → exit 2
+#   the session's launch lock (a foreign LIVE holder)                             → HELD:launch-lock, 3
+#   H(sid) = 0 under that lock (a registry pane or a --resume process holds it)   → HELD:holder, 3
+#   the pane resolves and pane_cc_state reads `shell`                              → REFUSED:pane:<state>, 5
+#   every identity field the file names equals the live value (a kitty window id
+#   restarts at 1 per kitty process, so id alone can name a stranger's pane)       → REFUSED:identity, 5
+#   a tombstone for the sid, when there is one, hands it to --resume-cfg           → REFUSED:target, 5
+# Then it builds the resume-mode command exactly as --recycle does (hf_resume_cmd_set) and EXECs the
+# watcher, so the SAME code folds the stub, re-takes the lock (same pid, same record ⇒ ours), types
+# and proves engagement. The submit token is not threaded here: the watcher's wall-clock oracle is
+# the pre-W3 behaviour, weaker but never wrong in the refusing direction.
+if [ "${1:-}" = "--relaunch-at-shell" ]; then
+  shift
+  RAS_PANE="" RAS_SESSION="" RAS_LAUNCHER="" RAS_CFG="" RAS_CWD="" RAS_ID_FILE=""
+  while [ $# -gt 0 ]; do case "$1" in
+    --source-pane)     RAS_PANE="${2:?--source-pane needs a pane id}"; shift 2 ;;
+    --source-session)  RAS_SESSION="${2:?--source-session needs a session uuid}"; shift 2 ;;
+    --resume-launcher) RAS_LAUNCHER="${2:?--resume-launcher needs a path}"; shift 2 ;;
+    --resume-cfg)      RAS_CFG="${2:?--resume-cfg needs a config dir}"; shift 2 ;;
+    --resume-cwd)      RAS_CWD="${2:?--resume-cwd needs a directory}"; shift 2 ;;
+    --expect-identity) RAS_ID_FILE="${2:?--expect-identity needs a file}"; shift 2 ;;
+    --record-id)       LR_RECORD_ID="${2:?--record-id needs a value}"; export LR_RECORD_ID; shift 2 ;;
+    *) echo "!! unknown --relaunch-at-shell arg: $1" >&2; exit 2 ;;
+  esac; done
+  ras_verdict() { # $1=verdict $2=exit — releases the launch lock iff it names this pid
+    hf_launch_lock_release "$RAS_SESSION" >/dev/null 2>&1 || true
+    echo "verdict: $1"; exit "$2"
+  }
+  if [ -z "$RAS_PANE" ] || [ -z "$RAS_SESSION" ] || [ -z "$RAS_LAUNCHER" ] || [ -z "$RAS_CFG" ] || [ -z "$RAS_ID_FILE" ]; then
+    echo "!! --relaunch-at-shell needs --source-pane --source-session --resume-launcher --resume-cfg --expect-identity" >&2; exit 2
+  fi
+  { [ -f "$RAS_LAUNCHER" ] && [ -s "$RAS_LAUNCHER" ]; } || { echo "!! --resume-launcher: missing or empty: $RAS_LAUNCHER" >&2; exit 2; }
+  [ -d "$RAS_CFG" ] || { echo "!! --resume-cfg: not a directory: $RAS_CFG" >&2; exit 2; }
+  # An identity file that cannot be read, or names none of the four fields, proves nothing about
+  # which pane this is — fail closed before anything is taken.
+  ras_idf() { jq -r --arg k "$1" '.[$k] // empty | tostring' "$RAS_ID_FILE" 2>/dev/null | sed 's/^-$//'; }
+  if ! jq -e 'type == "object" and (has("tty") or has("window_id") or has("kitty_pid") or has("kitty_lstart"))' "$RAS_ID_FILE" >/dev/null 2>&1; then
+    echo "!! --expect-identity: $RAS_ID_FILE is unreadable, not a JSON object, or names none of tty/window_id/kitty_pid/kitty_lstart" >&2; exit 2
+  fi
+  RAS_ID_TTY="$(ras_idf tty)"; RAS_ID_WIN="$(ras_idf window_id)"
+  RAS_ID_KPID="$(ras_idf kitty_pid)"; RAS_ID_KLS="$(ras_idf kitty_lstart)"
+
+  # 1. THE LAUNCH LOCK — first, so nothing below races a second actuator relaunching this session.
+  RAS_LL_RC=0; hf_launch_lock_take "$RAS_SESSION" relaunch-at-shell || RAS_LL_RC=$?
+  if [ "$RAS_LL_RC" != 0 ]; then
+    echo "launch_lock: $([ "$RAS_LL_RC" = 1 ] && printf 'held by %s' "${HF_LOCK_HOLDER:-<unreadable>}" || printf 'unwritable (%s)' "$(hf_launch_lock_dir "$RAS_SESSION")")"
+    echo "verdict: HELD:launch-lock"; exit 3
+  fi
+  echo "launch_lock: ours ($HF_LAUNCH_LOCK_DIR, record $HF_LAUNCH_REC attempt $HF_LAUNCH_ATT)"
+  # 2. NOTHING HOLDS THE SESSION — read UNDER the lock, so the answer cannot go stale before the type.
+  RAS_H="$(hf_holder_count "$RAS_SESSION")" || RAS_H="unreadable"
+  echo "holders: $RAS_H"
+  [ "$RAS_H" = 0 ] || ras_verdict "HELD:holder" 3
+  # 3. THE PANE, AT ITS SHELL — the watcher types only on an affirmative `shell`, and so does this.
+  RAS_TERM_RC=0; hf_remote_pane_term "$RAS_PANE" || RAS_TERM_RC=$?
+  if [ "$RAS_TERM_RC" != 0 ]; then
+    hf_remote_pane_term_say "$RAS_TERM_RC" "$RAS_PANE" --relaunch-at-shell
+    if [ "$RAS_TERM_RC" = 3 ]; then ras_verdict "HELD:pane:resolver-unavailable" 3; fi
+    ras_verdict "REFUSED:pane:absent" 5
+  fi
+  pin_term_verdict_for_watcher
+  RAS_TTY="$(as_tty "$RAS_PANE")"
+  RAS_STATE="unknown"; [ -n "$RAS_TTY" ] && RAS_STATE="$(pane_cc_state "$RAS_TTY")"
+  echo "pane_state: $RAS_STATE (tty ${RAS_TTY:-<unresolved>})"
+  [ "$RAS_STATE" = shell ] || ras_verdict "REFUSED:pane:$RAS_STATE" 5
+  # 4. IDENTITY — every field the file names, read the way the probe's identity lines read it.
+  RAS_KPID="${CC_TERM_KITTY_TO:-}"; RAS_KPID="${RAS_KPID##*kitty-}"
+  case "$RAS_KPID" in ''|*[!0-9]*) RAS_KPID="" ;; esac
+  RAS_KLS=""; [ -n "$RAS_KPID" ] && RAS_KLS="$(_hf_lstart "$RAS_KPID")"
+  RAS_ID_BAD=""
+  [ -z "$RAS_ID_TTY" ]  || [ "${RAS_ID_TTY#/dev/}" = "${RAS_TTY#/dev/}" ] || RAS_ID_BAD="$RAS_ID_BAD tty(want $RAS_ID_TTY, live ${RAS_TTY:-none})"
+  [ -z "$RAS_ID_WIN" ]  || [ "$RAS_ID_WIN" = "$RAS_PANE" ]                || RAS_ID_BAD="$RAS_ID_BAD window_id(want $RAS_ID_WIN, live $RAS_PANE)"
+  [ -z "$RAS_ID_KPID" ] || [ "$RAS_ID_KPID" = "$RAS_KPID" ]               || RAS_ID_BAD="$RAS_ID_BAD kitty_pid(want $RAS_ID_KPID, live ${RAS_KPID:-none})"
+  [ -z "$RAS_ID_KLS" ]  || [ "$(printf '%s' "$RAS_ID_KLS" | tr -s ' ')" = "$RAS_KLS" ] || RAS_ID_BAD="$RAS_ID_BAD kitty_lstart(want $RAS_ID_KLS, live ${RAS_KLS:-none})"
+  if [ -n "$RAS_ID_BAD" ]; then
+    echo "identity: MISMATCH —$RAS_ID_BAD"
+    ras_verdict "REFUSED:identity" 5
+  fi
+  echo "identity: ok"
+  # 5. THE TARGET — a tombstone for this sid must hand it to --resume-cfg, or the relaunch is a second
+  #    live copy. No tombstone (a same-account session) is not a refusal; it only means no stub to fold.
+  RAS_SRC_TX=""
+  if hf_transplant_evidence "$RAS_SESSION" "$CC_PROJECTS_DIRS" --relaunch-at-shell "" 2>/dev/null; then
+    if [ "${HF_TS_TO%/}" != "${RAS_CFG%/}" ]; then
+      echo "target: tombstone hands ${RAS_SESSION:0:8} to $HF_TS_TO, not $RAS_CFG"
+      ras_verdict "REFUSED:target" 5
+    fi
+    RAS_SRC_TX="${HF_TS_TOMBSTONE%.HANDOFF.json}.jsonl"
+  fi
+  echo "target: ok ($RAS_CFG)"
+  # 6. THE COMMAND, THEN THE WATCHER — exec'd, so its pid is ours and so is the lock it re-takes.
+  RESUME_LAUNCHER="$RAS_LAUNCHER"
+  RCY_CWD="$RAS_CWD"; { [ -n "$RCY_CWD" ] && [ -d "$RCY_CWD" ]; } || RCY_CWD="$PWD"
+  hf_resume_cmd_set "$RAS_SESSION"
+  RAS_CMDFILE="$(mktemp "${TMPDIR:-/tmp}/hf-relaunch-at-shell.XXXXXX")" || ras_verdict "REFUSED:cmdfile" 5
+  printf '%s\n' "$CMD" > "$RAS_CMDFILE"
+  echo "command: $CMD"
+  echo "verdict: OK — handing to the watcher"
+  exec "$0" __recycle "$RAS_PANE" "$RAS_TTY" "$RAS_CMDFILE" "$RCY_CWD" "$RAS_SESSION" "" "" "" \
+    "$RAS_CFG" "$RAS_SESSION" "$(date -u +%FT%T)" "$RAS_SRC_TX" "$(dirname "$RAS_LAUNCHER")" ""
 fi
 if [ "${1:-}" = "--probe-recycle-preconditions" ]; then
   shift
@@ -10153,6 +10433,7 @@ while [ $# -gt 0 ]; do case "$1" in
   --source-pane)    RCY_SOURCE_PANE="${2:?--source-pane needs a pane id}"; shift 2 ;;
   --source-session) RCY_SOURCE_SESSION="${2:?--source-session needs a session uuid}"; shift 2 ;;
   --transplanted-source) RCY_TRANSPLANTED_SOURCE=1; shift ;;
+  --husk)        RCY_HUSK=1; shift ;;
   --same-account) RCY_SAME_ACCOUNT=1; shift ;;
   --team-member-id) HF_TEAM_MEMBER_ID="${2:?--team-member-id needs an agent id}"; shift 2 ;;
   --transplant-cause)
@@ -10209,6 +10490,10 @@ fi
 if [ -n "$RCY_SOURCE_PANE" ] || [ -n "$RCY_SOURCE_SESSION" ] || [ "$RCY_TRANSPLANTED_SOURCE" = 1 ] || [ "$RCY_SAME_ACCOUNT" = 1 ] \
    || [ -n "$RESUME_LAUNCHER" ] || [ -n "$RESUME_CFG" ] || [ -n "$RESUME_CWD" ] || [ "$RECYCLE_AWAIT" = 1 ]; then
   [ "$RECYCLE" = 1 ] || { echo "!! --source-pane/--source-session/--transplanted-source/--same-account/--resume-launcher/--resume-cfg/--resume-cwd/--await are --recycle flags" >&2; exit 2; }
+fi
+# --husk names a state only the transplant class can be in (a source already retired by a confirm).
+if [ "$RCY_HUSK" = 1 ] && { [ "$RECYCLE" != 1 ] || [ "$RCY_TRANSPLANTED_SOURCE" != 1 ]; }; then
+  echo "!! --husk is only valid with --recycle --transplanted-source: it asserts a transplant's source was already retired, which no other class has" >&2; exit 2
 fi
 # The two evidence classes of the remote form are EXCLUSIVE: a session either moved (tombstone) or it
 # did not (same account). Accepting both would let whichever check is weaker decide.
@@ -12295,7 +12580,8 @@ if [ -n "$RESUME_LAUNCHER" ]; then
   # `nocorrect` guards the command word against `setopt CORRECT` (scripts/lib/cc-type-verified.sh).
   RCY_CWD="${RESUME_CWD:-$HF_REMOTE_CWD}"
   { [ -n "$RCY_CWD" ] && [ -d "$RCY_CWD" ]; } || RCY_CWD="$PWD"
-  CMD="cd $(printf %q "$RCY_CWD") && ${NC}bash $(printf %q "$RESUME_LAUNCHER")"
+  # The launch-lock env prefix (W2b) rides in hf_resume_cmd_set; --relaunch-at-shell builds the same.
+  hf_resume_cmd_set "${RCY_SOURCE_SESSION:-${RCY_TS_SID:-}}"
 elif [ "$RECYCLE" = 1 ] && [ "$RECYCLE_RELOC" = 0 ]; then
   # Same pane, same dir: $PWD is the session's working dir (the harness re-pins the Bash tool
   # cwd to it). PREFIX carries CLAUDE_ISOLATION_SKIP=1 (IN_PLACE forced in the pre-pass) so a
@@ -13710,7 +13996,26 @@ recycle_fire_commit() {
   # cannot be proven current is not a snapshot.
   #
   # Kill switch, never an enable flag: CC_TRANSPLANT_CONFIRM=off restores the pre-2026-09-22 path.
-  if [ "$RCY_TRANSPLANTED_SOURCE" = 1 ] && [ "${CC_TRANSPLANT_CONFIRM:-on}" != off ]; then
+  #
+  # --husk (W2b): the reconciler ran the confirm ITSELF, earlier, and the source is already retired.
+  # A second confirm is not idempotent evidence here — it would be this call claiming a snapshot it
+  # never took — so it is SKIPPED, and what a confirm leaves behind is ASSERTED instead: the source
+  # transcript's `.handed-off` exists, and the tombstone hands the session to the very config dir
+  # this relaunch resumes. Either missing ⇒ held, nothing typed. No confirm ran in this call, so
+  # nothing is owed back: RCY_CONFIRM_RAN stays 0 and no path below can UNCONFIRM.
+  if [ "$RCY_TRANSPLANTED_SOURCE" = 1 ] && [ "${RCY_HUSK:-0}" = 1 ]; then
+    local rcy_husk_tx=""
+    [ -n "${HF_TS_TOMBSTONE:-}" ] && rcy_husk_tx="${HF_TS_TOMBSTONE%.HANDOFF.json}.jsonl"
+    if [ -z "$rcy_husk_tx" ] || [ ! -f "$rcy_husk_tx.handed-off" ]; then
+      hf_recycle_hold husk "husk asserted but the source is not retired: ${rcy_husk_tx:-<no tombstone>}.handed-off absent" \
+        "--husk says session ${RCY_TS_SID:0:8} was already confirmed, but ${rcy_husk_tx:-<no tombstone>}.handed-off does not exist — its source is not retired"
+    fi
+    if [ -z "${HF_TS_TO:-}" ] || [ "${HF_TS_TO%/}" != "${RESUME_CFG%/}" ]; then
+      hf_recycle_hold husk "husk tombstone hands off to '${HF_TS_TO:-}', not --resume-cfg '${RESUME_CFG:-}'" \
+        "--husk: the tombstone hands session ${RCY_TS_SID:0:8} to '${HF_TS_TO:-<none>}' but --resume-cfg is '${RESUME_CFG:-<none>}'"
+    fi
+    echo "→ husk: session ${RCY_TS_SID:0:8} is already retired ($rcy_husk_tx.handed-off, handed to $HF_TS_TO) — no confirm this call"
+  elif [ "$RCY_TRANSPLANTED_SOURCE" = 1 ] && [ "${CC_TRANSPLANT_CONFIRM:-on}" != off ]; then
     # The three operands are globals the pre-pass set on BOTH arms: RCY_TS_SID (the caller's
     # --source-session on the remote form, $CLAUDE_CODE_SESSION_ID on the self form) and the two
     # config dirs hf_transplant_evidence derived (HF_TS_CFG = the SOURCE dir = FROM; HF_TS_TO = its

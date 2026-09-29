@@ -509,3 +509,250 @@ SH
   ! grep -q '^send' "$CALLS" || { cat "$CALLS"; false; }
   rows_of recycle-held-focused | grep -q 'unconfirm rc 0' || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
 }
+
+# ══ THE WATCHER HALF (W2b T-recycle-b): cases 9-12, the 1 s poll and the launch-lock prefix ═══════
+# Mutants (one per case, run by hand before landing): 9 make the husk branch `if false` (confirm
+# runs) · 10 make hf_launch_lock_take return 0 at its top · 11 make HF_FOLD_STUB default `off` ·
+# 12 drop `; unconfirm=needed` from the bgwork row · P default HF_RECYCLE_SHELL_POLL_S to 3 ·
+# X make hf_resume_cmd_set always take the legacy branch.
+#
+# The __recycle watcher is driven directly, as tests/handoff-recycle-custody.bats does: `ps` is a
+# shim that reads a claude on the pane until $HOME/shell-at (an epoch) has passed, then a bare zsh;
+# it answers `-o lstart=` with one fixed time so lock holders can be stamped. The it2 stub logs every
+# call and renders $SCREEN for `session read` when one is set.
+watcher_world() {
+  W="$BATS_TEST_TMPDIR/w"; mkdir -p "$W/shim"
+  export HOME="$BATS_TEST_TMPDIR/whome"; mkdir -p "$HOME/.claude/bin" "$HOME/.claude/logs" "$HOME/.claude/autonomy"
+  export CC_HANDOFF_ALARM_DIR="$HOME/.claude/handoff-alarms"
+  export CC_ADMIT_IDL="$HOME/.claude/autonomy/idl.jsonl"; : > "$CC_ADMIT_IDL"
+  export CC_NOTIFY_BIN="$HOME/.claude/bin/cc-notify"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$CC_NOTIFY_BIN"
+  export DEBT_LOG="$W/debt.log" CC_RESUME_DEBT_BIN="$W/cc-resume-debt"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\n' "$DEBT_LOG" > "$CC_RESUME_DEBT_BIN"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$W/shim/osascript"
+  cat > "$W/shim/ps" <<'SH'
+#!/usr/bin/env bash
+args="$*"
+cc=0; [ "$(date +%s)" -lt "$(cat "$HOME/shell-at" 2>/dev/null || echo 0)" ] && cc=1
+case "$args" in *pgid=*) printf '4242\n'; exit 0 ;; esac
+case "$args" in *lstart=*) printf 'Tue Sep 29 10:00:00 2026\n'; exit 0 ;; esac
+case "$args" in
+  *"-axww -o args="*) [ "$cc" = 1 ] && printf 'claude --resume x\n'; exit 0 ;;
+  *"-o pid= -t"*)     printf '100\n' ;;
+  *"-o tpgid= -t"*)   printf '100\n' ;;
+  *"-o comm= -t"*)    if [ "$cc" = 1 ]; then printf 'claude\n'; else printf -- '-zsh\n'; fi ;;
+  *pid=,ppid=*)       printf '100 1\n' ;;
+  *"pid=,comm= -g"*)  printf '100 /bin/zsh\n' ;;
+  *"-p 100"*)         if [ "$cc" = 1 ]; then printf 'claude\n'; else printf '/bin/zsh\n'; fi ;;
+esac
+exit 0
+SH
+  export WPANE="W-PANE"
+  cat > "$HOME/.claude/bin/it2" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$HOME/it2-calls.log"
+case "$1 $2" in
+  "session list")
+    [ "${3:-}" = --json ] && printf '[{"id": "%s", "tty": "/dev/ttys999"}]\n' "$WPANE" || printf '%s\n' "$WPANE"
+    exit 0 ;;
+  "session read") if [ -n "${SCREEN:-}" ]; then cat "$SCREEN"; else cat "$HOME/it2-screen" 2>/dev/null; fi ;;
+  "session send") txt="${!#}"; [ "${#txt}" -gt 3 ] && printf '%s' "$txt" > "$HOME/it2-screen" ;;
+esac
+exit 0
+SH
+  printf '#!/usr/bin/env bash\nprintf "transplant %%s\\n" "$*" >> "%s"\n[ -n "${FOLD_OUT:-}" ] && printf "%%s\\n" "$FOLD_OUT"\nexit "${FOLD_RC:-0}"\n' "$W/calls.log" > "$W/lr-transplant.sh"
+  chmod +x "$W/shim/ps" "$W/shim/osascript" "$HOME/.claude/bin/it2" "$CC_NOTIFY_BIN" "$CC_RESUME_DEBT_BIN" "$W/lr-transplant.sh"
+  export PATH="$W/shim:$PATH" HF_LR_TRANSPLANT="$W/lr-transplant.sh" LR_LOCKS_DIR="$W/locks"
+  export CC_REGISTRY_DIR="$W/reg"; mkdir -p "$CC_REGISTRY_DIR"
+  export HF_RECYCLE_SHELL_WAIT_S=6 FIRE_TYPE_ATTEMPTS=1 FIRE_TYPE_SETTLE=0 FIRE_TYPE_PRESETTLE=0
+  export RCY_BOOT_WAIT_S=1 RCY_BOOT_STALE_S=2 RCY_BOOT_IVL_S=0.2 RCY_BOOT_SLOW_IVL_S=1 RCY_BOOT_PANE_EVERY=2
+  export LR_RECORD_ID="rec-9"
+  unset CC_TERM HANDOFF_TTY_FAIL_FILE SCREEN HF_LAUNCH_REC HF_LAUNCH_ATT HF_RECYCLE_LOCK
+  WCMD="$W/relaunch.cmd"; printf 'cd /tmp && nocorrect bash /tmp/lr-launch-w.sh\n' > "$WCMD"
+  WTTY="$W/ttys999"; : > "$WTTY"
+  WCFG="$W/to"; mkdir -p "$WCFG"
+  WSRC="$W/from/projects/-r/$SID_UUID.jsonl"; mkdir -p "$(dirname "$WSRC")"
+}
+# The resume-mode watcher: $10 cfg, $11 the resumed sid, $12 T0, $13 the source transcript.
+drive_watcher() {
+  run bash "$HF" __recycle "$WPANE" "${1:-$WTTY}" "$WCMD" /tmp "$SID_UUID" "" "" "" \
+    "$WCFG" "$SID_UUID" "2026-09-29T00:00:00" "$WSRC"
+}
+typed_relaunch() { grep -c 'lr-launch-w.sh' "$HOME/it2-calls.log" 2>/dev/null || true; }
+wrows() { grep "\"class\":\"$1\"" "$HOME/.claude/logs/handoffs.jsonl" 2>/dev/null; }
+
+# ── 9 · --husk ─────────────────────────────────────────────────────────────────────────────────
+
+@test "9 --husk never runs confirm (extracted recycle_fire_commit); a husk whose source has no .handed-off is held" {
+  tail_world
+  local tomb="$BATS_TEST_TMPDIR/from/projects/-r/$SID_UUID.HANDOFF.json"
+  mkdir -p "$(dirname "$tomb")"; : > "${tomb%.HANDOFF.json}.jsonl.handed-off"
+  RCY_HUSK=1 HF_TS_TOMBSTONE="$tomb" RESUME_CFG="$HF_TS_TO"
+  printf '%s\n' "" "/exit" > "$READS"
+  run recycle_fire_commit "$SESS"
+  [ "$status" -eq 0 ] || { echo "status=$status $output"; cat "$CALLS"; false; }
+  ! grep -q -- '--phase confirm' "$CALLS" || { echo "a husk ran confirm:"; cat "$CALLS"; false; }
+  ! grep -q '^transplant' "$CALLS" || { cat "$CALLS"; false; }
+  [[ "$output" == *"→ husk: session ${SESS:0:8} is already retired"* ]] || { echo "$output"; false; }
+  [ "$(calls_n "send /exit")" = 1 ] || { cat "$CALLS"; false; }
+
+  # Not retired: held, nothing sent, the watcher killed and the pane lock released.
+  tail_world
+  RCY_HUSK=1 HF_TS_TOMBSTONE="$BATS_TEST_TMPDIR/from/projects/-r/none.HANDOFF.json" RESUME_CFG="$HF_TS_TO"
+  printf '%s\n' "" "/exit" > "$READS"
+  run recycle_fire_commit "$SESS"
+  [ "$status" -eq 1 ] || { echo "status=$status $output"; false; }
+  ! grep -q '^send' "$CALLS" || { cat "$CALLS"; false; }
+  ! grep -q '^transplant' "$CALLS" || { cat "$CALLS"; false; }
+  rows_of recycle-held-husk | grep -q 'handed-off absent; unconfirm rc n/a' || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
+  [ ! -d "$HF_RECYCLE_LOCK" ] || { echo "lock not released: $HF_RECYCLE_LOCK"; false; }
+  ! kill -0 "$WATCHER_PID" 2>/dev/null || { echo "watcher still alive"; false; }
+
+  # Retired, but handed to a config dir other than --resume-cfg: held too.
+  tail_world
+  RCY_HUSK=1 HF_TS_TOMBSTONE="$tomb" RESUME_CFG="$BATS_TEST_TMPDIR/elsewhere"
+  printf '%s\n' "" "/exit" > "$READS"
+  run recycle_fire_commit "$SESS"
+  [ "$status" -eq 1 ] || { echo "status=$status $output"; false; }
+  rows_of recycle-held-husk | grep -q "not --resume-cfg" || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
+
+  # --husk outside --recycle --transplanted-source is a usage error, before anything else.
+  run bash "$HF" --husk --prompt-file /dev/null
+  [ "$status" -eq 2 ] || { echo "status=$status $output"; false; }
+  [[ "$output" == *"--husk is only valid with --recycle --transplanted-source"* ]] || { echo "$output"; false; }
+  run bash "$HF" --recycle --husk --prompt-file /dev/null
+  [ "$status" -eq 2 ] || { echo "status=$status $output"; false; }
+}
+
+# ── 10 · --relaunch-at-shell REFUSES BEFORE ANY KEYSTROKE ──────────────────────────────────────
+
+@test "10 --relaunch-at-shell is HELD:launch-lock under a live foreign holder and HELD:holder while S is held" {
+  load_tail_funcs
+  export LR_LOCKS_DIR="$BATS_TEST_TMPDIR/locks"
+  local launcher="$BATS_TEST_TMPDIR/lr-launch.sh" cfg="$BATS_TEST_TMPDIR/to" idf="$BATS_TEST_TMPDIR/id.json" dir holder
+  printf 'exec true\n' > "$launcher"; mkdir -p "$cfg"
+  printf '{"tty":"/dev/ttys999","window_id":"%s"}\n' "$PANE" > "$idf"
+  ras() { run bash "$HF" --relaunch-at-shell --source-pane "$PANE" --source-session "$SID_UUID" \
+            --resume-launcher "$launcher" --resume-cfg "$cfg" --expect-identity "$idf" --record-id rec-10; }
+
+  dir="$LR_LOCKS_DIR/$SID_UUID.launch"; mkdir -p "$dir"
+  sleep 300 >/dev/null 2>&1 3>&- & holder=$!
+  echo "$holder" > "$BATS_TEST_TMPDIR/holder.pid"
+  hf_recycle_lock_write "$dir" relaunch "$holder" rec-other 1
+  ras
+  [ "$status" -eq 3 ] || { echo "status=$status $output"; false; }
+  [[ "$output" == *"verdict: HELD:launch-lock"* ]] || { echo "$output"; false; }
+  [ "$(_hf_lock_field "$(_hf_lock_raw "$dir")" pid)" = "$holder" ] || { echo "the foreign lock was taken"; cat "$dir/holder"; false; }
+  [ ! -e "$HOME/.claude/bin/it2" ] || { echo "an it2 exists in the hermetic HOME"; false; }
+
+  # A dead holder is stolen; then a LIVE registry row for S holds the session — and the lock is given back.
+  kill "$holder"; wait "$holder" 2>/dev/null || true
+  sleep 300 >/dev/null 2>&1 3>&- & holder=$!
+  echo "$holder" > "$BATS_TEST_TMPDIR/holder2.pid"
+  printf '{"session_id":"%s","pane":"%s","pid":%s}\n' "$SID_UUID" "$PANE" "$holder" > "$CC_REGISTRY_DIR/$PANE.json"
+  ras
+  [ "$status" -eq 3 ] || { echo "status=$status $output"; false; }
+  [[ "$output" == *"launch_lock: ours"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"holders: 1"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"verdict: HELD:holder"* ]] || { echo "$output"; false; }
+  [ ! -d "$dir" ] || { echo "the launch lock was not released on HELD:holder"; cat "$dir/holder"; false; }
+
+  # An identity file that names none of the four fields is refused before the lock is touched.
+  printf '{"other":1}\n' > "$idf"
+  ras
+  [ "$status" -eq 2 ] || { echo "status=$status $output"; false; }
+}
+
+# ── 11 · THE FOLD IS lr-transplant's ───────────────────────────────────────────────────────────
+
+@test "11 a re-created stub is folded by --phase fold-stub (not appended by the watcher); a refusal types nothing" {
+  watcher_world
+  printf 'retired\n' > "$WSRC.handed-off"; printf 'stub\n' > "$WSRC"
+  drive_watcher
+  grep -qxF "transplant --phase fold-stub --sid $SID_UUID --from $W/from --to $WCFG --record-id rec-9" "$W/calls.log" \
+    || { cat "$W/calls.log"; echo "$output"; false; }
+  [ "$(cat "$WSRC.handed-off")" = retired ] || { echo "the watcher appended to .handed-off itself"; cat "$WSRC.handed-off"; false; }
+  [[ "$output" == *"via lr-transplant --phase fold-stub"* ]] || { echo "$output"; false; }
+  [ "$(typed_relaunch)" -ge 1 ] || { echo "rc 0 must go on to type"; cat "$HOME/it2-calls.log"; false; }
+
+  # rc 2: held — no relaunch typed, nothing settled, an alarm and a recycle-held-fold row naming why.
+  watcher_world; rm -f "$HOME/it2-calls.log" "$DEBT_LOG" "$HOME/.claude/logs/handoffs.jsonl"
+  printf 'retired\n' > "$WSRC.handed-off"; printf 'stub\n' > "$WSRC"
+  FOLD_RC=2 FOLD_OUT='{"ok":false,"reason":"target-held","detail":"target-advanced","sid":"x"}' drive_watcher
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [ "$(typed_relaunch)" = 0 ] || { cat "$HOME/it2-calls.log"; false; }
+  wrows recycle-held-fold | grep -q 'target-held (target-advanced)' || { cat "$HOME/.claude/logs/handoffs.jsonl"; echo "$output"; false; }
+  [ ! -s "$DEBT_LOG" ] || { echo "a refused fold settled the session:"; cat "$DEBT_LOG"; false; }
+  grep -lq recycle-held-fold "$CC_HANDOFF_ALARM_DIR"/* || { echo "no alarm"; false; }
+
+  # rc 3 (an lr-transplant without the phase): the legacy append, loudly.
+  watcher_world
+  printf 'retired\n' > "$WSRC.handed-off"; printf 'stub\n' > "$WSRC"
+  FOLD_RC=3 drive_watcher
+  [[ "$output" == *"⚠ legacy fold"* ]] || { echo "$output"; false; }
+  [ "$(cat "$WSRC.handed-off")" = "$(printf 'retired\nstub')" ] || { cat "$WSRC.handed-off"; false; }
+  [ ! -e "$WSRC" ] || { echo "the stub was left"; false; }
+
+  # The launch lock in the watcher: a live foreign holder of the session's lock types nothing.
+  watcher_world; rm -f "$HOME/it2-calls.log"
+  load_tail_funcs
+  local dir="$LR_LOCKS_DIR/$SID_UUID.launch" holder
+  mkdir -p "$dir"
+  sleep 300 >/dev/null 2>&1 3>&- & holder=$!
+  echo "$holder" > "$BATS_TEST_TMPDIR/wholder.pid"
+  hf_recycle_lock_write "$dir" relaunch "$holder" rec-other 1
+  drive_watcher
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [ "$(typed_relaunch)" = 0 ] || { cat "$HOME/it2-calls.log"; false; }
+  wrows recycle-held-launch-lock | grep -q 'rec-other' || { cat "$HOME/.claude/logs/handoffs.jsonl"; echo "$output"; false; }
+}
+
+# ── 12 · CANCELLING THE BACKGROUND-WORK DIALOG OWES AN UNCONFIRM ───────────────────────────────
+
+@test "12 the bgwork dialog under CC_RECYCLE_BGWORK_ANSWER=cancel: one Esc, no relaunch, unconfirm=needed" {
+  watcher_world
+  export SCREEN="$REPO/tests/fixtures/lr-recon/screens/bgwork-dialog-2.1.284.txt"
+  export CC_PANE_MODAL_LIB="$REPO/hooks/lib/pane-modal.sh" CC_RECYCLE_BGWORK_EVERY_S=3
+  # The /exit did not land: claude is still on the pane, sitting at the dialog.
+  echo $(( $(date +%s) + 600 )) > "$HOME/shell-at"
+  CC_RECYCLE_BGWORK_ANSWER=cancel drive_watcher
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [ "$(grep -c $'session send .*\e' "$HOME/it2-calls.log")" = 1 ] || { cat -v "$HOME/it2-calls.log"; false; }
+  [ "$(typed_relaunch)" = 0 ] || { cat "$HOME/it2-calls.log"; false; }
+  wrows recycle-held-bgwork | grep -q 'nothing typed; unconfirm=needed' || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
+}
+
+# ── P · THE 1 s SHELL POLL ─────────────────────────────────────────────────────────────────────
+
+@test "P a shell that appears ~1 s after the /exit is confirmed with waited < 3" {
+  watcher_world
+  echo $(( $(date +%s) + 1 )) > "$HOME/shell-at"
+  drive_watcher
+  [[ "$output" =~ CONFIRMED\ at\ a\ shell\ prompt\ after\ ([0-9]+)s ]] || { echo "$output"; false; }
+  [ "${BASH_REMATCH[1]}" -ge 1 ] || { echo "the shell was never claude first: $output"; false; }
+  [ "${BASH_REMATCH[1]}" -lt 3 ] || { echo "waited ${BASH_REMATCH[1]}s: $output"; false; }
+}
+
+# ── X · THE LAUNCH-LOCK PREFIX IN THE RESUME-MODE COMMAND ──────────────────────────────────────
+
+@test "X the resume-mode command carries LR_LAUNCH_LOCK/LR_RECORD_ID/LR_ATTEMPT; HF_LAUNCH_LOCK=off is today's" {
+  load_tail_funcs
+  local f
+  for f in hf_launch_identity hf_launch_lock_dir hf_resume_cmd_set; do
+    eval "$(sed -n "/^$f() {/,/^}/p" "$HF")"
+  done
+  export LR_LOCKS_DIR="$BATS_TEST_TMPDIR/lk" LR_RECORD_ID=rec-x LR_ATTEMPT=2
+  unset HF_LAUNCH_REC HF_LAUNCH_ATT NC
+  RCY_CWD="/w d" RESUME_LAUNCHER="/l/lr-launch.sh"
+  hf_resume_cmd_set "$SID_UUID"
+  [ "$CMD" = "cd /w\\ d && nocorrect env LR_LAUNCH_LOCK=$BATS_TEST_TMPDIR/lk/$SID_UUID.launch LR_RECORD_ID=rec-x LR_ATTEMPT=2 bash /l/lr-launch.sh" ] || { echo "$CMD"; false; }
+  HF_LAUNCH_LOCK=off hf_resume_cmd_set "$SID_UUID"
+  [ "$CMD" = "cd /w\\ d && nocorrect bash /l/lr-launch.sh" ] || { echo "$CMD"; false; }
+  # No record in the environment: one hf-<pid>-<epoch> pair, computed once and reused.
+  unset LR_RECORD_ID HF_LAUNCH_REC HF_LAUNCH_ATT
+  hf_resume_cmd_set "$SID_UUID"
+  [[ "$CMD" == *" LR_RECORD_ID=hf-$$-"*" LR_ATTEMPT=1 bash "* ]] || { echo "$CMD"; false; }
+  local first="$HF_LAUNCH_REC"
+  hf_resume_cmd_set "$SID_UUID"
+  [ "$HF_LAUNCH_REC" = "$first" ] || { echo "$first → $HF_LAUNCH_REC"; false; }
+}

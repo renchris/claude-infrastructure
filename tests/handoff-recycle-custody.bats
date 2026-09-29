@@ -52,6 +52,8 @@ args="$*"
 cc=0
 [ "${ENGAGE_AS_CLAUDE:-0}" = 1 ] && [ -s "$HOME/it2-screen" ] && cc=1
 case "$args" in *pgid=*) printf '4242\n'; exit 0 ;; esac
+# One fixed start time, so the watcher's launch lock (W2b) can stamp its holder.
+case "$args" in *lstart=*) printf 'Tue Sep 29 10:00:00 2026\n'; exit 0 ;; esac
 case "$args" in
   *"-axww -o args="*) [ "$cc" = 1 ] && printf 'claude --resume %s\n' "$SESS"; exit 0 ;;
   *"-o pid= -t"*)     printf '100\n' ;;
