@@ -117,6 +117,37 @@ class PlanTests(unittest.TestCase):
             (recs["c"].substate, recs["c"].wait.max_age_s), ("WAIT_DATA", 120)
         )
 
+    def test_auth_hop_no_eligible_waits_for_a_seat_not_a_reset(self):
+        """W5 rig target-auth: a hop FROM an auth-failed account with no eligible target stays a
+        mover (WAIT_SLOT), never WAIT_RESET on the source's 5h fact — nothing leaves WAIT_RESET
+        for an auth-failed session (it never buckets as a record type)."""
+        rec = _rec("a")
+        rec.scope = "5h"  # the hop keeps the original scope; _rec pins "7d"
+        rec.close["hop"] = "auth"
+        facts = {
+            "next3.5h": T.Fact(acct="next3", scope="5h", resets_at=NOW + 10800),
+            "next3.auth": T.Fact(acct="next3", scope="auth", resets_at=None),
+        }
+        P.apply(
+            {"a": rec},
+            {"a": T.Placement(acct=None, reason="no-eligible")},
+            facts,
+            str,
+            NOW,
+        )
+        self.assertEqual((rec.substate, rec.wait.eta), ("WAIT_SLOT", None))
+        snap = T.Snapshot(wall=NOW, uptime_raw=0)
+        self.assertEqual([m.sid for m in P.movers([rec], snap, NOW)], ["a"])
+
+    def test_wait_reset_is_a_mover_once_its_eta_passes(self):
+        """The "reset" wake: a WAIT_RESET record is re-offered to --place after its ETA, so a
+        record whose session stops bucketing LIMITED cannot wait forever."""
+        rec = _rec("a", substate="WAIT_RESET")
+        rec.wait = T.Wait(reason="WAIT_RESET", since=NOW, eta=NOW + 300)
+        snap = T.Snapshot(wall=NOW, uptime_raw=0)
+        self.assertEqual(P.movers([rec], snap, NOW + 299), [])
+        self.assertEqual([m.sid for m in P.movers([rec], snap, NOW + 300)], ["a"])
+
     def test_phantoms_skip_plan_only_and_waits(self):
         a = _rec("a", target_acct="next4", substate="PLANNED")
         b = _rec("b", target_acct="next4", substate="PLANNED", plan_only=True)

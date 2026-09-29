@@ -119,7 +119,15 @@ def movers(records: Sequence[T.Record], snap: T.Snapshot, now: float) -> List[T.
             and rec.substate == "PLANNED"
         ):
             continue
-        if rec.substate not in (
+        # A WAIT_RESET whose ETA has passed is the "reset" wake the record advertises: re-offer
+        # it, or a record whose session stops bucketing LIMITED waits forever.
+        reset_due = (
+            rec.substate == "WAIT_RESET"
+            and rec.wait is not None
+            and rec.wait.eta is not None
+            and rec.wait.eta <= now
+        )
+        if not reset_due and rec.substate not in (
             "DETECTED",
             "WAIT_SLOT",
             "WAIT_DATA",
@@ -235,6 +243,11 @@ def start_fresh_sweep(
 
 
 def _source_resets(rec: T.Record, facts: Dict[str, T.Fact]) -> Optional[float]:
+    # A TARGET-AUTH hop moves FROM an account that cannot serve at all: no quota reset frees it,
+    # so it waits for a SEAT (WAIT_SLOT, re-placed every pass), never WAIT_RESET on the source's
+    # 5h fact — only the census leaves that, and an auth-failed session never buckets LIMITED.
+    if rec.close.get("hop") == "auth":
+        return None
     f = facts.get("%s.%s" % (rec.source_acct, rec.scope))
     return f.resets_at if f else None
 
