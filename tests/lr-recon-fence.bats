@@ -125,7 +125,7 @@ defers() { run /bin/bash "$S" defers "$SID"; }
   recon_on; owned; heartbeat "$OLD_PW"
   LR_RECON_WAKETIME="$((NOW - 60))" run /bin/bash "$S" defers "$SID"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"reason=heartbeat-fresh"* ]]
+  [[ "$output" == *"reason=heartbeat-fresh"* ]] || false
   # control: the same tree without the wake is stale
   defers
   [ "$status" -eq 1 ]
@@ -185,7 +185,7 @@ defers() { run /bin/bash "$S" defers "$SID"; }
   kill "$SLEEP_PID"; wait "$SLEEP_PID" 2>/dev/null || true; SLEEP_PID=""
   run /bin/bash "$S" lock-take "$L" r2 1 actuator "$$"
   [ "$status" -eq 0 ]
-  [[ "$(cat "$L/holder")" == *"\"record_id\":\"r2\""*"\"pid\":$$,"* ]]
+  [[ "$(cat "$L/holder")" == *"\"record_id\":\"r2\""*"\"pid\":$$,"* ]] || false
   [ -z "$(ls -d "$L".stolen.* 2>/dev/null)" ]
 }
 
@@ -202,15 +202,15 @@ defers() { run /bin/bash "$S" defers "$SID"; }
 
 @test "lstart contract: collapsed form written, double-spaced date still matches (\"Sep  9\" = \"Sep 9\")" {
   start_sleeper
-  [[ "$SLEEP_LSTART" != *"  "* ]]
+  [[ "$SLEEP_LSTART" != *"  "* ]] || false
   doubled="$(printf '%s' "$SLEEP_LSTART" | sed 's/ /  /')"
-  [[ "$doubled" == *"  "* ]]
+  [[ "$doubled" == *"  "* ]] || false
   run /bin/bash "$S" proc-alive "$SLEEP_PID" "$doubled"
   [ "$status" -eq 0 ]
   run /bin/bash -c '. "$1"; _lr_recon_lstart_norm "Wed Sep  9 01:02:03 2026  "' _ "$S"
   [ "$output" = "Wed Sep 9 01:02:03 2026" ]
   L="$LR_STATE_DIR/locks/$SID.launch"
   /bin/bash "$S" lock-take "$L" r1 1 watcher "$SLEEP_PID"
-  [[ "$(cat "$L/holder")" == *"\"lstart\":\"$SLEEP_LSTART\""* ]]
+  [[ "$(cat "$L/holder")" == *"\"lstart\":\"$SLEEP_LSTART\""* ]] || false
   [[ "$(cat "$L/holder")" != *"  "* ]]
 }

@@ -10,7 +10,7 @@ setup() {
 @test "phase CLI: every fixture row derives its expected phase" {
   run python3 -m lr_recon.phase --fixtures "$FIX"
   [ "$status" -eq 0 ]
-  [[ "$output" =~ phase\ fixtures:\ ([0-9]+)\ rows,\ ([0-9]+)\ pass,\ 0\ fail ]]
+  [[ "$output" =~ phase\ fixtures:\ ([0-9]+)\ rows,\ ([0-9]+)\ pass,\ 0\ fail ]] || false
   [ "${BASH_REMATCH[1]}" -eq "${BASH_REMATCH[2]}" ]
   [ "${BASH_REMATCH[1]}" -gt 0 ]
   [ "$(grep -c '^FAIL ' <<<"$output")" -eq 0 ]
