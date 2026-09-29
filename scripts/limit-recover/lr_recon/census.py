@@ -12,10 +12,12 @@ Decision 2 is SETTLED: a pane with live background work holds until the job ends
 
 from __future__ import annotations
 
+import dataclasses
 import os
-from typing import Dict, List, Mapping, Optional, Tuple
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 from lr_recon import facts as F
+from lr_recon import observe_rows, transcript
 from lr_recon import types as T
 
 STAY_S = 900  # §5 stay rule: the source resets within 15 min ⇒ WAIT_RESET in place
@@ -295,13 +297,21 @@ def not_needed_record(
     origin: str,
     reason: str,
     now: float,
+    stores: Sequence[str] = (),
+    amap: Optional[Mapping[str, str]] = None,
 ) -> T.Record:
     """A terminal NOT_NEEDED member for a request the stale reconcile closed before any record
     existed (a dead session, a session live elsewhere): the cohort counts it, so the operator sees
     that the request was answered rather than silently dropped (W5 rig, stale-request fault)."""
+    if s is None or not s.acct or not s.transcript.path:
+        # A dead session has no live holder, so observe left cfg/acct/transcript empty: resolve
+        # them from the store that holds its transcript, so the member joins its REAL cohort.
+        _tp, _h, s = _in_store(sid, s, list(stores), amap)
     acct = s.acct if s else ""
     fact = _cover(s, facts, now) if s else None
-    scope, resets = (fact.scope, fact.resets_at) if fact else (_own_scope(s) if s else ("", None))
+    scope, resets = (
+        (fact.scope, fact.resets_at) if fact else (_own_scope(s) if s else ("", None))
+    )
     cid = cohort_id(acct, scope, resets)
     rec = T.Record(
         sid=sid,
@@ -315,11 +325,43 @@ def not_needed_record(
     )
     rec.timeline.detected = now
     rec.updated_at = now
-    rec.terminal = T.Terminal(outcome="NOT_NEEDED", proof="stale request: " + reason, at=now)
+    rec.terminal = T.Terminal(
+        outcome="NOT_NEEDED", proof="stale request: " + reason, at=now
+    )
     return rec
 
 
 # ── §3 step 3: stale reconcile ──────────────────────────────────────────────────────────────────
+
+
+def _in_store(
+    sid: str,
+    s: Optional[T.SessionObs],
+    order: Sequence[str],
+    amap: Optional[Mapping[str, str]],
+) -> Tuple[str, bool, Optional[T.SessionObs]]:
+    """``transcript.locate`` over ``order`` (deduped, empties dropped). When it finds a live
+    transcript ``s`` did not carry, also an obs with that store's cfg, account and transcript —
+    what observe could not attach to a session with no live holder."""
+    seen: List[str] = []
+    for c in order:
+        if c and c not in seen:
+            seen.append(c)
+    tp, handed = transcript.locate(seen, s.cwd if s else "", sid)
+    if not tp or handed:
+        return tp, handed, s
+    cfg = os.path.dirname(os.path.dirname(os.path.dirname(tp)))
+    base = s if s is not None else T.SessionObs(sid=sid)
+    return (
+        tp,
+        False,
+        dataclasses.replace(
+            base,
+            cfg=base.cfg or cfg,
+            acct=base.acct or observe_rows.acct_of_cfg(cfg, dict(amap or {})),
+            transcript=transcript.observe_transcript(tp),
+        ),
+    )
 
 
 # TODO(W4): swap for lr-reset-poller.sh rq_stale_reason once it is extracted into lr-lib.sh.
@@ -347,14 +389,41 @@ def stale_reconcile(
     snap: T.Snapshot,
     boottime: Optional[float],
     now: float,
+    stores: Sequence[str] = (),
 ) -> List[Tuple[str, str, str]]:
-    """Check every request and parked record against evidence before anything acts."""
+    """Check every request and parked record against evidence before anything acts. ``stores``
+    is every configured account dir: a sid with no transcript in its own store is looked up in
+    all of them (a ``.handed-off`` tombstone counts as moving, never as absent)."""
     out: List[Tuple[str, str, str]] = []
     for req in requests:
+        rec = records.get(req.sid)
+        if (
+            rec is not None
+            and rec.open
+            and (
+                rec.timeline.planned
+                or rec.phase != "PRE-MOVE"
+                or rec.substate == "IN-FLIGHT"
+            )
+        ):
+            # A move this daemon owns: its phase machine decides (§3 step 3, invariant 25 —
+            # a source tombstone is not target-side evidence). The request retires once the
+            # record is terminal.
+            continue
         s = snap.sessions.get(req.sid)
         src = str(req.raw.get("config_dir") or req.raw.get("cfg") or "")
-        tp = s.transcript.path if s else str(req.raw.get("transcript_path") or "")
+        tp = (s.transcript.path if s else "") or str(
+            req.raw.get("transcript_path") or ""
+        )
         handed = bool(tp) and os.path.exists(tp + ".handed-off")
+        judged = s
+        if not tp:
+            order = [s.cfg if s else "", src] + list(stores)
+            tp, handed, judged = _in_store(req.sid, s, order, None)
+        elif s is not None and not s.transcript.path and not handed:
+            judged = dataclasses.replace(
+                s, transcript=transcript.observe_transcript(tp)
+            )
         if (
             s is not None
             and src
@@ -364,7 +433,7 @@ def stale_reconcile(
         ):
             out.append((req.sid, "NOT_NEEDED", "live on %s already" % s.cfg))
             continue
-        why = stale_reason(req.sid, s, tp, handed)
+        why = stale_reason(req.sid, judged, tp, handed)
         if why:
             out.append((req.sid, "NOT_NEEDED", why))
         elif s is None or not s.holders:

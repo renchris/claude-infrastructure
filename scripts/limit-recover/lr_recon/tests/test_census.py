@@ -168,6 +168,69 @@ class CensusRecords(unittest.TestCase):
         self.assertEqual(got["c"], "dead-before-claim")
         self.assertEqual(rec.substate, "PARKED-REBOOT")
 
+    def _stores(self):
+        """cfg-a holds only the source tombstone, cfg-b the target copy (a confirmed move)."""
+        tmp = tempfile.mkdtemp()
+        a, b = os.path.join(tmp, "cfg-a"), os.path.join(tmp, "cfg-b")
+        for cfg, name in ((a, "m.jsonl.handed-off"), (b, "m.jsonl")):
+            os.makedirs(os.path.join(cfg, "projects", "-w"))
+            open(os.path.join(cfg, "projects", "-w", name), "w").close()
+        holder = T.HolderObs(pid=1, lstart="x", cfg=a, src="registry")
+        s = T.SessionObs(sid="m", cfg=a, acct="next", holders=[holder])
+        return a, b, T.Snapshot(wall=NOW, uptime_raw=0.0, sessions={"m": s})
+
+    def test_mid_transplant_open_record_is_not_judged(self):
+        a, b, snap = self._stores()
+        rec = T.Record(sid="m", record_id="r", substate="IN-FLIGHT")
+        rec.timeline.planned = NOW - 30
+        reqs = [T.Request(sid="m", origin="cc-lr", raw={})]
+        out = C.stale_reconcile({"m": rec}, reqs, snap, None, NOW, stores=[a, b])
+        self.assertEqual(out, [])
+
+    def test_tombstone_found_across_stores(self):
+        a, b, snap = self._stores()
+        reqs = [T.Request(sid="m", origin="cc-lr", raw={})]
+        out = C.stale_reconcile({}, reqs, snap, None, NOW, stores=[a, b])
+        self.assertEqual(
+            out,
+            [("m", "NOT_NEEDED", "transplanted — the source transcript is tombstoned")],
+        )
+
+    def _dead(self):
+        """A holderless session as observe returns it, its limit death in cfg-a."""
+        cfg = os.path.join(tempfile.mkdtemp(), "cfg-a")
+        os.makedirs(os.path.join(cfg, "projects", "-w"))
+        fix = os.path.join(
+            os.path.dirname(os.path.realpath(__file__)),
+            *[".."] * 4,
+            "tests",
+            "fixtures",
+            "lr-recon",
+            "jsonl",
+            "death-quota-limits.jsonl",
+        )
+        dst = os.path.join(cfg, "projects", "-w", "d.jsonl")
+        with open(fix) as fin, open(dst, "w") as fout:
+            fout.write(fin.read())
+        return cfg, T.SessionObs(sid="d")
+
+    def test_dead_session_found_in_another_store_is_dead_before_claim(self):
+        cfg, s = self._dead()
+        snap = T.Snapshot(wall=NOW, uptime_raw=0.0, sessions={"d": s})
+        reqs = [T.Request(sid="d", origin="cc-lr", raw={})]
+        out = C.stale_reconcile({}, reqs, snap, None, NOW, stores=[cfg])
+        self.assertEqual(out, [("d", "NOT_NEEDED", "dead-before-claim")])
+
+    def test_dead_session_not_needed_record_joins_its_real_cohort(self):
+        cfg, s = self._dead()
+        rec = C.not_needed_record(
+            "d", s, {}, "cc-lr", "dead-before-claim", NOW, [cfg], {"next": cfg}
+        )
+        self.assertEqual(
+            (rec.source_acct, rec.source_cfg, rec.scope), ("next", cfg, "5h")
+        )
+        self.assertTrue(rec.cohort_id.startswith("next-5h-"), rec.cohort_id)
+
     def test_stale_reason_not_limited(self):
         s = T.SessionObs(
             sid="x", transcript=T.TranscriptObs(path="", last={"limit": False})

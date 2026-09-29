@@ -15,7 +15,7 @@ import json
 import os
 import sys
 import time
-from typing import Any, Dict, Iterator, List, Optional, Sequence
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
 from lr_recon import types as T
 
@@ -64,6 +64,26 @@ def find_transcript(cfg_dirs: Sequence[str], cwd: str, sid: str) -> Optional[str
 
 def handed_off_path(path: str) -> str:
     return path + ".handed-off"
+
+
+def locate(cfg_dirs: Sequence[str], cwd: str, sid: str) -> Tuple[str, bool]:
+    """``(path, handed_off)`` across EVERY store, store by store, as the poller's
+    ``rq_stale_reason`` looks (lr-reset-poller.sh:796-801): a live ``<sid>.jsonl`` or the path a
+    ``.handed-off`` tombstone retired. ``("", False)`` only when no store holds either."""
+    for cfg in cfg_dirs:
+        p = find_transcript([cfg], cwd, sid)
+        if p:
+            return p, os.path.exists(handed_off_path(p))
+        hits = sorted(
+            glob.glob(
+                os.path.join(
+                    glob.escape(cfg), "projects", "*", handed_off_path(sid + ".jsonl")
+                )
+            )
+        )
+        if hits:
+            return hits[0][: -len(".handed-off")], True
+    return "", False
 
 
 def _read(path: str, head: bool, n: int) -> bytes:
