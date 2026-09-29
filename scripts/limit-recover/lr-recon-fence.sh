@@ -38,6 +38,8 @@
 #   lr-recon-fence.sh lock-take <dir> <record_id> <attempt> <role> [pid]  0 taken/1 held/2 cannot
 #   lr-recon-fence.sh lock-release <dir> [pid]                         0 released / 1 not ours
 #   lr-recon-fence.sh proc-alive <pid> <lstart>                        0 alive / 1 dead
+#   lr-recon-fence.sh live                                             0 recon.on + fresh heartbeat / 1
+# Sourced callers use lr_recon_may_act <sid> <role> [always] / lr_recon_act_done (W4, below).
 
 _lr_recon_state_dir() {
   printf '%s' "${LR_STATE_DIR:-${HOME}/.reso/limit-recover}"
@@ -299,6 +301,98 @@ lr_recon_lock_release() {
   rm -rf "$dir"
 }
 
+# ── W4 caller helpers: the ONE way a legacy actor asks the fence and takes the launch lock ─────────
+# Every call site (poller arms, lf_one, the lr-upgrade drives, cc-lr, cc-resume-debt,
+# boot-resume-launch) goes through lr_recon_may_act, so "lapsed ⇒ act only under the launch lock"
+# is one implementation and not seven.
+
+# rc 0 when recon.on exists AND the heartbeat's progress advanced within the fresh window
+# (sleep-adjusted, the same rule as lr_recon_defers step 4); rc 1 otherwise. No verdict line.
+lr_recon_live() {
+  local root pw now wake fresh
+  [ -e "$(_lr_recon_state_dir)/recon.on" ] || return 1
+  root="$(_lr_recon_root)"
+  pw="$(_lr_recon_progress_wall "$root/heartbeat")"
+  [ -n "$pw" ] || return 1
+  now="$(_lr_recon_now)"
+  wake="$(_lr_recon_waketime)"
+  fresh="${LR_RECON_FENCE_FRESH_S:-180}"
+  _lr_recon_is_num "$fresh" || fresh=180
+  awk -v n="$now" -v p="$pw" -v w="$wake" -v f="$fresh" \
+    'BEGIN { base = (p + 0 > w + 0) ? p + 0 : w + 0; exit !((n + 0) - base <= f + 0) }'
+}
+
+_lr_recon_launch_lock_dir() {
+  printf '%s/locks/%s.launch' "$(_lr_recon_state_dir)" "$1"
+}
+
+# One line per typer acquisition in recon/launch.log — the double-typer audit (§C7). Best effort.
+_lr_recon_launch_log() {
+  # $1 sid $2 role $3 verdict
+  local root
+  root="$(_lr_recon_root)"
+  [ -d "$root" ] || return 0
+  printf '%s\t%s\t%s\t%s\tpid=%s\n' "$(date +%s)" "$1" "$2" "$3" "$$" >>"$root/launch.log" 2>/dev/null
+  return 0
+}
+
+# lr_recon_may_act <sid> <role> [always]  → rc 0 ACT · rc 1 DEFER (the caller must not touch the sid)
+# ACT after a "lapsed" verdict — and after ANY act verdict when "always" is passed (the relaunch
+# typers: cc-resume-debt, boot-resume-launch) — happens only while this process holds
+# locks/<sid>.launch; its path is exported in LR_LAUNCH_LOCK (lr-fire-resume asserts it) and the
+# caller releases it with lr_recon_act_done. Otherwise LR_LAUNCH_LOCK is exported empty.
+# A launch lock held by a LIVE other process ⇒ DEFER. A lock that cannot be created: DEFER on
+# "lapsed" (the reconciler may still own the sid), ACT unlocked on "always" with the reconciler off
+# (the legacy world keeps working). Verdict: `lr-recon-fence: gate=act|defer sid=… role=… lock=…`.
+lr_recon_may_act() {
+  local sid="$1" role="${2:-legacy}" always="${3:-}" why dir rc
+  LR_LAUNCH_LOCK=""
+  export LR_LAUNCH_LOCK
+  why="$(lr_recon_defers "$sid" 2>&1 >/dev/null)"
+  rc=$?
+  [ -n "$why" ] && printf '%s\n' "$why" >&2
+  if [ "$rc" -eq 0 ]; then
+    printf 'lr-recon-fence: gate=defer sid=%s role=%s lock=none\n' "$(printf '%s' "$sid" | cut -c1-8)" "$role" >&2
+    return 1
+  fi
+  case "$why" in
+    *reason=lapsed*) ;;
+    *) [ "$always" = always ] || { printf 'lr-recon-fence: gate=act sid=%s role=%s lock=none\n' \
+         "$(printf '%s' "$sid" | cut -c1-8)" "$role" >&2; return 0; } ;;
+  esac
+  dir="$(_lr_recon_launch_lock_dir "$sid")"
+  lr_recon_lock_take "$dir" "legacy:$role" 0 "$role" "$$"
+  rc=$?
+  case "$rc" in
+    0)
+      LR_LAUNCH_LOCK="$dir"
+      export LR_LAUNCH_LOCK
+      _lr_recon_launch_log "$sid" "$role" taken
+      printf 'lr-recon-fence: gate=act sid=%s role=%s lock=taken\n' "$(printf '%s' "$sid" | cut -c1-8)" "$role" >&2
+      return 0 ;;
+    1)
+      _lr_recon_launch_log "$sid" "$role" held
+      printf 'lr-recon-fence: gate=defer sid=%s role=%s lock=held\n' "$(printf '%s' "$sid" | cut -c1-8)" "$role" >&2
+      return 1 ;;
+  esac
+  case "$why" in
+    *reason=lapsed*)
+      printf 'lr-recon-fence: gate=defer sid=%s role=%s lock=cannot\n' "$(printf '%s' "$sid" | cut -c1-8)" "$role" >&2
+      return 1 ;;
+  esac
+  printf 'lr-recon-fence: gate=act sid=%s role=%s lock=cannot\n' "$(printf '%s' "$sid" | cut -c1-8)" "$role" >&2
+  return 0
+}
+
+# Release the launch lock lr_recon_may_act took (a no-op when it took none). Safe to repeat.
+lr_recon_act_done() {
+  [ -n "${LR_LAUNCH_LOCK:-}" ] || return 0
+  lr_recon_lock_release "$LR_LAUNCH_LOCK" "$$" 2>/dev/null
+  LR_LAUNCH_LOCK=""
+  export LR_LAUNCH_LOCK
+  return 0
+}
+
 _lr_recon_fence_main() {
   local cmd="${1:-}"
   [ $# -gt 0 ] && shift
@@ -312,11 +406,13 @@ _lr_recon_fence_main() {
     lock-release)
       [ $# -ge 1 ] || { echo "usage: lr-recon-fence.sh lock-release <dir> [pid]" >&2; return 2; }
       lr_recon_lock_release "$@" ;;
+    live)
+      lr_recon_live ;;
     proc-alive)
       [ $# -eq 2 ] || { echo "usage: lr-recon-fence.sh proc-alive <pid> <lstart>" >&2; return 2; }
       lr_recon_proc_alive "$@" ;;
     *)
-      echo "usage: lr-recon-fence.sh defers|lock-take|lock-release|proc-alive …" >&2
+      echo "usage: lr-recon-fence.sh defers|lock-take|lock-release|proc-alive|live …" >&2
       return 2 ;;
   esac
 }
