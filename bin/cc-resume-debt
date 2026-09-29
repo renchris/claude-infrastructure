@@ -117,7 +117,8 @@ _lock() {
 
 # ── proof ───────────────────────────────────────────────────────────────────────────────────────
 _live_once() {
-  "$FIND" "$1" 2>/dev/null | awk -F'\t' -v s="$1" '$1 == s && $6 == "LIVE" { f = 1 } END { exit !f }'
+  local out; out="$("$FIND" "$1" 2>/dev/null)" || true   # capture first: no pipe for pipefail to misread
+  awk -F'\t' -v s="$1" '$1 == s && $6 == "LIVE" { f = 1 } END { exit !f }' <<<"$out"
 }
 _prove() { # <sid> <hold>
   _live_once "$1" || return 1
@@ -129,7 +130,8 @@ _prove() { # <sid> <hold>
 # close happened in (`cc-find <pane>`, a sid other than the closed one) — without this, a watcher
 # that died after a good relaunch would leave the sweep to resume the old sid beside its successor.
 _successor_once() { # <closed sid> <pane>
-  "$FIND" "$2" 2>/dev/null | awk -F'\t' -v s="$1" -v p="$2" '$2 == p && $1 != s && $6 == "LIVE" { f = 1 } END { exit !f }'
+  local out; out="$("$FIND" "$2" 2>/dev/null)" || true
+  awk -F'\t' -v s="$1" -v p="$2" '$2 == p && $1 != s && $6 == "LIVE" { f = 1 } END { exit !f }' <<<"$out"
 }
 _prove_debt() { # <sid> <hold> — the proof a debt's mode admits
   local pane
@@ -311,7 +313,9 @@ _surface() { # <pane> — rc 0 enumerated · 1 absent · 3 enumerator failed/emp
   local out
   out="$(_bounded "$PANE" list 2>/dev/null)" || return 3
   [ -n "$out" ] || return 3
-  printf '%s\n' "$out" | grep -Fxq -- "$1" && return 0
+  # Whole-line match without a pipe (pipefail-sigpipe ratchet); $'\n' because a $( ) would strip
+  # the trailing newline and the LAST pane in the list could never match.
+  case $'\n'"$out"$'\n' in *$'\n'"$1"$'\n'*) return 0 ;; esac
   return 1
 }
 
