@@ -300,6 +300,32 @@ def bundles_dir(home: str, sid: str) -> str:
     return os.path.join(home, ".reso", "limit-recover", sid)
 
 
+def bundle_launcher(home: str, rec: T.Record) -> str:
+    """This move's own launcher (A-husk and B pass it as --resume-launcher): the newest bundle whose
+    MANIFEST names this record and target, its lr-launch-<sid8>-*.sh. Nothing else ever set
+    rec.bundle, so both spawned with an empty launcher and died DETERMINISTIC (W5 rig)."""
+    import glob
+
+    base = glob.escape(bundles_dir(home, rec.sid))
+    for man in sorted(
+        glob.glob(os.path.join(base, "bundle-*", "MANIFEST.json")), reverse=True
+    ):
+        try:
+            with open(man, encoding="utf-8") as fh:
+                doc = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if not isinstance(doc, dict) or doc.get("record_id") != rec.record_id:
+            continue
+        if rec.target_acct and doc.get("target") != rec.target_acct:
+            continue
+        pat = "lr-launch-%s-*.sh" % rec.sid[:8]
+        hits = sorted(glob.glob(os.path.join(glob.escape(os.path.dirname(man)), pat)))
+        if hits:
+            return hits[-1]
+    return ""
+
+
 def readiness(home: str, rec: T.Record) -> str:
     """The newest bundle of THIS attempt that noted READY/READY-QUIET, else "none". A bundle is this
     attempt's when its events carry attempt == rec.attempt (lr-fire-resume stamps LR_ATTEMPT)."""

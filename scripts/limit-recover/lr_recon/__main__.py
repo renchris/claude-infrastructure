@@ -505,6 +505,20 @@ def _command(ctx: Ctx, rec: T.Record, which: str) -> List[str]:
             rec,
             os.path.join(ctx.paths.facts, "%s.%s.json" % (rec.source_acct, rec.scope)),
         )
+    if which in ("A-husk", "B"):
+        rec.bundle = rec.bundle or settle.bundle_launcher(ctx.home, rec)
+        if not rec.bundle:
+            # handoff-fire aborts on `--resume-launcher ""` before any gate: a certain DETERMINISTIC
+            # failure, so WAIT for the move's bundle instead of spending the retry budget on it
+            rec.next_eligible_at = time.time() + settle.WAIT_RETRY_S
+            _event(
+                ctx.paths,
+                "no-launcher",
+                rec.sid,
+                rec.record_id,
+                "%s waits: no bundle launcher" % which,
+            )
+            return []
     if which == "A-husk":
         return act.cmd_husk(rec)
     if which == "B":

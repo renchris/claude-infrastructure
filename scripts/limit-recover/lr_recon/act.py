@@ -115,6 +115,8 @@ def cmd_move(
 
 
 def cmd_husk(rec: T.Record) -> List[str]:
+    if not rec.bundle:  # `--resume-launcher ""` can only fail: no argv, no spawn
+        return []
     return [
         "/bin/bash",
         _p(SCRIPTS, "handoff-fire.sh"),
@@ -135,6 +137,8 @@ def cmd_husk(rec: T.Record) -> List[str]:
 
 
 def cmd_relaunch_at_shell(rec: T.Record, identity_file: str) -> List[str]:
+    if not rec.bundle:
+        return []
     return [
         "/bin/bash",
         _p(SCRIPTS, "handoff-fire.sh"),

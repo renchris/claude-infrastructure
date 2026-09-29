@@ -326,6 +326,30 @@ class MainTests(unittest.TestCase):
         rec.timeline.confirmed = now - 30
         self.assertEqual(M._invariant(ctx, snap, now), 1)
 
+    def _rec(self, phase, target="next4"):
+        rec = T.Record(sid="abcdef01-0000-0000-0000-000000000001", record_id="r1")
+        rec.phase, rec.target_acct, rec.pane = phase, target, (5, 7)
+        return rec
+
+    def test_command_a_husk_never_emits_an_empty_launcher(self):
+        """W5 rig: rec.bundle was never set, so A-husk and B always died DETERMINISTIC."""
+        ctx = M.Ctx(self.paths, None, self.home)
+        M.store.ensure_dirs(self.paths)
+        rec = self._rec("HUSK-RETIRED")
+        self.assertEqual(
+            M._command(ctx, rec, "A-husk"), []
+        )  # no bundle: a wait, no spawn
+        self.assertIsNotNone(rec.next_eligible_at)
+        self.assertIn("no-launcher", [e["ev"] for e in self._events()])
+        d = os.path.join(self.home, ".reso", "limit-recover", rec.sid, "bundle-1")
+        os.makedirs(d)
+        with open(os.path.join(d, "MANIFEST.json"), "w") as fh:
+            json.dump({"record_id": "r1", "target": "next4"}, fh)
+        launcher = os.path.join(d, "lr-launch-abcdef01-x.sh")
+        open(launcher, "w").close()
+        argv = M._command(ctx, rec, "A-husk")
+        self.assertEqual(argv[argv.index("--resume-launcher") + 1], launcher)
+
     def test_daemon_loop_starts_and_runs_a_pass(self):
         """W5 rig: the long-running path had never started (Caffeinate() without its pid)."""
 

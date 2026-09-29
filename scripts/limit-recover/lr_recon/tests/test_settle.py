@@ -281,6 +281,26 @@ class Confirm(unittest.TestCase):
         self.assertIsNotNone(r.timeline.confirmed)
         self.assertFalse(settle.note_confirm(r))
 
+    def test_bundle_launcher_picks_this_records_bundle(self):
+        """W5 rig: nothing set rec.bundle, so every A-husk and B ran `--resume-launcher ""`."""
+        r = rec()
+        home = self.cfg
+        for ts, rid in (
+            ("20260929T114800Z", r.record_id),
+            ("20260929T114900Z", "other"),
+        ):
+            d = os.path.join(settle.bundles_dir(home, r.sid), "bundle-" + ts)
+            os.makedirs(d)
+            with open(os.path.join(d, "MANIFEST.json"), "w") as fh:
+                json.dump({"record_id": rid, "target": "next2"}, fh)
+            open(os.path.join(d, "lr-launch-4ac4c35d-%s.sh" % ts[-4:]), "w").close()
+        got = settle.bundle_launcher(home, r)
+        self.assertTrue(
+            got.endswith("bundle-20260929T114800Z/lr-launch-4ac4c35d-800Z.sh")
+        )
+        r.target_acct = "next4"  # a different move of the same record: not this bundle
+        self.assertEqual(settle.bundle_launcher(home, r), "")
+
     def test_no_tombstone_leaves_it_unknown(self):
         r = rec()
         r.source_cfg, r.cwd = self.cfg, "/w/x"

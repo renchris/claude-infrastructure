@@ -178,6 +178,16 @@ class ActTests(unittest.TestCase):
         self.assertIsNone(A.choose(T.PhaseResult("RELAUNCHED", "SUBMITTED", "C"), rec))
         self.assertIsNone(A.choose(T.PhaseResult("EXITING", None, "wait"), rec))
 
+    def test_no_launcher_is_no_argv(self):
+        """handoff-fire aborts on `--resume-launcher ""`: never build that command (W5 rig)."""
+        self.assertEqual(A.cmd_husk(_rec()), [])
+        self.assertEqual(A.cmd_relaunch_at_shell(_rec(), "/i.json"), [])
+        for argv in (
+            A.cmd_husk(_rec(bundle="/b/l.sh")),
+            A.cmd_relaunch_at_shell(_rec(bundle="/b/l.sh"), "/i.json"),
+        ):
+            self.assertEqual(argv[argv.index("--resume-launcher") + 1], "/b/l.sh")
+
 
 if __name__ == "__main__":
     unittest.main()
