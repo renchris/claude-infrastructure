@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: complete
 ---
 
 # CLOSE_RESUME_CUSTODY — a close is a debt until the resumed session is proven alive
@@ -59,7 +59,8 @@ launcher pin (`~/.zshrc _bin` → `.claude-284`), which `bin/cc-claude-bin` read
 LIVE in pane 932 on 2.1.284 (`cc-find d754cab6` → `932 … LIVE`); inbox notice left. 838, 842, 845,
 849 are alive on 2.1.280, never moved: the operator parked their requests in
 `~/.reso/limit-recover/upgrade-queue.parked-20260928/` and touched `upgrade-auto.off`. Re-arming
-that queue is the operator's call and should wait for this work to land.
+is the operator's switch; with this work landed, removing `upgrade-auto.off` lets the next poller
+tick re-census and re-queue them (the parked files are stale and need not be moved back).
 
 ## 2. Design
 
@@ -141,6 +142,17 @@ before self-close), lr-transplant, lr-fire-resume / reso-resume-one (engines, ca
 - Learning: the TeammateIdle auto-shutdown hook checkpoints and REMOVES a finished teammate's
   worktree, so an absent worktree dir is not lost work — read `git branch -v feat/<name>` and
   `refs/wip/<name>/LAST` before concluding anything.
+
+## 2c. W2 — DONE: landed c5626280f (content-verified, 17 paths), converged live
+- Land shed smoke (1-min load 140 ≥ 80), so every suite of the diff was run by hand on the landed
+  tree, all green: cc-resume-debt 1..21 · lr-upgrade-custody 1..7 · lr-upgrade 1..45 ·
+  lr-reset-poller-resume-sweep 1..4 · operator-readout-stranded 1..4 · operator-readout 1..114 ·
+  boot-resume-launch 1..16 · boot-resume 1..19 · cc-custody 1..15 · handoff-recycle-custody 1..7 ·
+  handoff-recycle-dead-escalates 1..7 · handoff-alarm-records 1..15 · handoff-recycle-same-account
+  1..20 · handoff-fire-pane-proof 1..21 · handoff-recycle-shell-flicker 1..3.
+- Gate findings fixed on the way: early-exit pipes under pipefail in cc-resume-debt; `a && b`
+  assertions errexit cannot reach; a bare-name `timeout` in a Stop hook (unattended-path-lint).
+- Live proof: `~/.claude/bin/cc-resume-debt prove --sid d754cab6-…` → rc 0 via live cc-find.
 
 ## 3. Open items / known issues
 - Who destroyed kitty window 405 within ~19 s of a clean `/exit` is unknown (kitty is set to keep a
