@@ -287,6 +287,8 @@ def _derive(ctx: Ctx, snap: T.Snapshot, now: float) -> None:
                 _event(ctx.paths, "exit", rec.sid, rec.record_id, detail)
         if not rec.open:
             continue
+        if settle.note_watcher_hold(ctx.home, rec, now):
+            _event(ctx.paths, "hold", rec.sid, rec.record_id, rec.last_error.detail)
         if settle.reprobe(rec, now):
             _event(ctx.paths, "reprobe", rec.sid, rec.record_id, "hold re-probed")
         if settle.replaced_elsewhere(rec, snap, now):

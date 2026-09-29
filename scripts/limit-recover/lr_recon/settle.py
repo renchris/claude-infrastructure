@@ -49,6 +49,14 @@ BUCKET_SUBSTATE = {
 # Holds the census cannot observe: re-probed through the actuator's own precheck.
 REPROBED = ("HOLD-DRAFT", "HOLD-MENU", "HOLD-COMPOSER")
 _REASON = re.compile(r"(?:PRECHECK |verdict: )(?:HELD|REFUSED):([A-Za-z:-]+)")
+# handoff-fire's held-after-confirm reasons (recycle-held-<reason>) → the PRE-MOVE hold they mean
+RCY_HELD_SUB = {
+    "draft": "HOLD-DRAFT",
+    "bg-work": "HOLD-BGWORK",
+    "bgwork": "HOLD-BGWORK",
+    "subagents": "HOLD-SUBAGENTS",
+    "focused": "HOLD-FOCUS",
+}
 _STRANDED = re.compile(r"^lr-handoff \S+: verdict=STRANDED\b", re.M)
 _HOLD_SUB = (
     (re.compile(r"\bdraft\b", re.I), "HOLD-DRAFT"),
@@ -111,6 +119,8 @@ def settle_exit(
     """Apply one dead actuator's exit to its record. Returns the event detail ('' = nothing)."""
     if pr.role != "actuator":
         return ""
+    if rc == 0 and pr.argv_hash == "UNCONFIRM":
+        return _unconfirmed(rec, now)
     if rc == 0:
         # TRANSPLANTED too: a confirmed move is usually derived TRANSPLANTED (row 12) in the pass
         # before its A exits, and a PRE-MOVE-only test left the relaunch gap with no substate.
@@ -167,6 +177,24 @@ def settle_exit(
         disp,
         ("/" + rec.substate) if pre and rec.substate else "",
     )
+
+
+def _unconfirmed(rec: T.Record, now: float) -> str:
+    """UNCONFIRM rc 0 undid this attempt's confirm: the source is whole again, so the next move is a
+    NEW attempt (one move spawn per (sid, attempt)), held for the reason the move was held for."""
+    err = rec.last_error
+    rec.attempt += 1
+    rec.confirm_len, rec.submit_token = None, ""
+    tl = rec.timeline
+    tl.confirmed = tl.exit_typed_by_me = tl.exited = tl.relaunched = tl.submitted = None
+    rec.last_error = None  # row 9's HOLD branch is per attempt
+    if err is not None and err.cls == "HOLD":
+        head = err.detail.split(":", 1)[0]
+        sub = head if head in RCY_HELD_SUB.values() else _hold_substate(err.detail)
+        _hold(rec, sub, now)
+    else:
+        rec.substate, rec.wait = "DETECTED", None
+    return "UNCONFIRM rc=0 → PRE-MOVE/%s, attempt %d" % (rec.substate, rec.attempt)
 
 
 def _hold(rec: T.Record, sub: str, now: float) -> None:
@@ -229,6 +257,35 @@ def note_confirm(rec: T.Record) -> bool:
     rec.confirm_len = n
     rec.timeline.confirmed = rec.timeline.confirmed or st.st_mtime
     return True
+
+
+def note_watcher_hold(home: str, rec: T.Record, now: float) -> bool:
+    """§7 step 5: the detached watcher cancels a dialog AFTER the confirm and says so only in its
+    handoffs row (`recycle-held-<reason>`, `…; unconfirm=needed`); A has already exited, usually
+    rc 0, so no actuator exit carries it and row 9 picked A-husk over UNCONFIRM (W5 rig). Keyed on
+    this attempt's HF_RECYCLE_ATTEMPT label."""
+    if rec.last_error is not None and rec.last_error.cls == "HOLD":
+        return False
+    want = "%s:%d" % (rec.record_id, rec.attempt)
+    path = os.path.join(home, ".claude", "logs", "handoffs.jsonl")
+    for ln in reversed(tail(path, 256 * 1024).splitlines()):
+        try:
+            row = json.loads(ln)
+        except ValueError:
+            continue
+        if not isinstance(row, dict) or str(row.get("attempt", "")) != want:
+            continue
+        sub = RCY_HELD_SUB.get(str(row.get("class", ""))[len("recycle-held-") :])
+        if sub and "unconfirm=needed" in str(row.get("detail", "")):
+            rec.attempts_by_class["HOLD"] = rec.attempts_by_class.get("HOLD", 0) + 1
+            rec.last_error = T.LastError(
+                cls="HOLD",
+                fingerprint="watcher|" + sub,
+                detail="%s: watcher held after the confirm; unconfirm=needed" % sub,
+                at=now,
+            )
+            return True
+    return False
 
 
 def dead_actuators(

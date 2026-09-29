@@ -301,6 +301,41 @@ class Confirm(unittest.TestCase):
         r.target_acct = "next4"  # a different move of the same record: not this bundle
         self.assertEqual(settle.bundle_launcher(home, r), "")
 
+    def _handoffs(self, *rows):
+        d = os.path.join(self.cfg, ".claude", "logs")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "handoffs.jsonl"), "a") as fh:
+            for cls, att, detail in rows:
+                fh.write(
+                    json.dumps({"class": cls, "attempt": att, "detail": detail}) + "\n"
+                )
+
+    def test_watcher_bgwork_row_marks_hold_for_this_attempt_only(self):
+        """W5 rig: the watcher Esc'd a bg-work dialog after the confirm, said so only in its handoffs
+        row, and row 9 chose A-husk instead of UNCONFIRM."""
+        r = rec(phase="HUSK-RETIRED", sub="no-stub")
+        det = "background-work dialog at 15s cancelled with Esc; nothing typed; "
+        self._handoffs(
+            ("recycle-held-bgwork", "recon:c:4ac4c35d:1:3", det + "unconfirm=needed"),
+            ("recycle-held-bgwork", "recon:c:4ac4c35d:1:1", det + "unconfirm rc 0"),
+        )
+        # another attempt's row, and this attempt's row that needs no unconfirm
+        self.assertFalse(settle.note_watcher_hold(self.cfg, r, 5.0))
+        self._handoffs(
+            ("recycle-held-bgwork", "recon:c:4ac4c35d:1:1", det + "unconfirm=needed")
+        )
+        self.assertTrue(settle.note_watcher_hold(self.cfg, r, 5.0))
+        self.assertEqual((r.last_error.cls, r.attempts_by_class["HOLD"]), ("HOLD", 1))
+        self.assertFalse(settle.note_watcher_hold(self.cfg, r, 6.0))  # idempotent
+        d = settle.settle_exit(r, actuator("UNCONFIRM"), 0, "", 7.0)
+        self.assertIn("HOLD-BGWORK", d)
+        self.assertEqual((r.attempt, r.confirm_len, r.last_error), (2, None, None))
+        self.assertEqual((r.substate, r.wait.reason), ("HOLD-BGWORK", "HOLD-BGWORK"))
+        # attempt 2 is a new move: the old attempt's row is not its hold
+        self.assertFalse(settle.note_watcher_hold(self.cfg, r, 8.0))
+        r.phase = "PRE-MOVE"
+        self.assertTrue(settle.rebucket(r, "LIMITED", 9.0))  # the job ended: move again
+
     def test_no_tombstone_leaves_it_unknown(self):
         r = rec()
         r.source_cfg, r.cwd = self.cfg, "/w/x"
