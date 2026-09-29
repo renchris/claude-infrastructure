@@ -81,6 +81,17 @@ UPG_MUTEX_DIR="$LRU_STATE/runs/by-sid"
 
 lru_say() { printf 'lr-upgrade: %s\n' "$*" >&2; }
 
+# §C10 FENCE: the reconciler may own a session, and then it alone types into that pane. Both drives
+# ask lr_recon_may_act before touching a sid. An unreachable fence keeps the legacy behaviour (act),
+# said once per drive — the pre-reconciler world must keep working where the fence is not deployed.
+LRU_FENCE="${LRU_FENCE:-$LRU_DIR/lr-recon-fence.sh}"
+[ -f "$LRU_FENCE" ] || LRU_FENCE="$HOME/.claude/scripts/limit-recover/lr-recon-fence.sh"
+# shellcheck disable=SC1090  # the path is a seam
+if ! { [ -f "$LRU_FENCE" ] && . "$LRU_FENCE"; }; then
+  lr_recon_may_act() { lru_say "recon fence unreachable at $LRU_FENCE - acting as before (${1:0:8})"; return 0; }
+  lr_recon_act_done() { return 0; }
+fi
+
 LRU_RD_LOG=/dev/null   # a drive points this at its run dir; stdout stays the result row
 lru_rd() { # cc-resume-debt <args> → its rc; 127 when the tool is absent (callers fall back)
   [ -x "$LRU_RD_BIN" ] || return 127
@@ -814,7 +825,19 @@ lru_last_text() { # $1=transcript → the last assistant text, one line, ≤200 
 }
 
 # ── drive ONE switch ─────────────────────────────────────────────────────────────────────────────
+# The fence wraps the whole drive so the launch lock (taken on a lapsed or always verdict) is held
+# across the submit and the verify loop and released on every return path, including the body's
+# many early ones. LR_LAUNCH_LOCK stays exported: handoff-fire / lr-handoff children act under it.
 lru_switch_drive() { # $1=sid $2=pane $3=target $4=requested_by $5=req id [$6=until_ts] → rc 0 SWITCHED · 1 FAILED · 3 NOTMOVED · 4 DEFERRED (busy, inside its --until-idle budget: nothing typed, no verdict yet)
+  local frc=0
+  if ! lr_recon_may_act "$1" lr-upgrade-switch; then
+    lru_switch_result "$1" "$2" NOTMOVED - "$3" "reconciler owns it" "${5:-}" "${4:-?}"; return 3
+  fi
+  _lru_switch_drive_run "$@" || frc=$?
+  lr_recon_act_done
+  return "$frc"
+}
+_lru_switch_drive_run() {
   local sid="$1" pane="$2" target="$3" by="${4:-?}" req="${5:-}" until_ts="${6:-0}" mutex row from cfg pid run pf src=0 word
   local tcfg deadline t0 racct rsid tx calm=0
   if ! tcfg="$(lru_acct_cfg "$target")"; then
@@ -1200,7 +1223,17 @@ lru_settle_verdict() { # $1=sid $2=pane $3=how the pane was left $4=no-tool reas
 }
 
 # ── drive ONE session ────────────────────────────────────────────────────────────────────────────
+# Fenced like lru_switch_drive: the launch lock spans the relaunch, the retype loop and the settle.
 lru_drive() { # $1=sid $2=pane $3=requested_by $4=req id [$5=scrub-composer text] → prints the result row; rc 0 upgraded · 1 failed · 3 skipped
+  local frc=0
+  if ! lr_recon_may_act "$1" lr-upgrade; then
+    lru_result "$1" "$2" skipped "reconciler owns it" "" "${4:-}" "${3:-?}"; return 3
+  fi
+  _lru_drive_run "$@" || frc=$?
+  lr_recon_act_done
+  return "$frc"
+}
+_lru_drive_run() {
   local sid="$1" pane="$2" by="${3:-?}" req="${4:-}" row disp bin model tgt eff perm cfg cwd pid
   local LRU_SCRUB_EXACT="${5:-${LRU_SCRUB_EXACT:-}}"; export LRU_SCRUB_EXACT
   local mutex run L t0 hflog hrc=0 i cmd target_bin sock binlabel st
