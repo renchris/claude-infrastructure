@@ -220,27 +220,27 @@ defers() { run /bin/bash "$S" defers "$SID"; }
 
 @test "may_act: recon off acts with no lock; live is false" {
   run /bin/bash -c ". '$S'; lr_recon_may_act '$SID' t; echo rc=\$? lock=[\$LR_LAUNCH_LOCK]; lr_recon_live; echo live=\$?"
-  [[ "$output" == *"rc=0 lock=[]"* ]]
-  [[ "$output" == *"live=1"* ]]
+  [[ "$output" == *"rc=0 lock=[]"* ]] || false
+  [[ "$output" == *"live=1"* ]] || false
   [ ! -e "$LR_STATE_DIR/locks/$SID.launch" ]
 }
 
 @test "may_act: fresh heartbeat defers and takes no lock; live is true" {
   recon_on; owned; heartbeat "$((NOW - 10)).0"
   run /bin/bash -c ". '$S'; lr_recon_may_act '$SID' t; echo rc=\$?; lr_recon_live; echo live=\$?"
-  [[ "$output" == *"rc=1"* ]]
-  [[ "$output" == *"gate=defer"* ]]
-  [[ "$output" == *"live=0"* ]]
+  [[ "$output" == *"rc=1"* ]] || false
+  [[ "$output" == *"gate=defer"* ]] || false
+  [[ "$output" == *"live=0"* ]] || false
   [ ! -e "$LR_STATE_DIR/locks/$SID.launch" ]
 }
 
 @test "may_act: lapsed acts only under the launch lock, holder names the caller, done releases it" {
   recon_on; owned; heartbeat "$OLD_PW"
   run /bin/bash -c ". '$S'; lr_recon_may_act '$SID' t; echo rc=\$? me=\$\$; cat \"\$LR_LAUNCH_LOCK/holder\"; echo; lr_recon_act_done; lr_recon_act_done; ls '$LR_STATE_DIR/locks'"
-  [[ "$output" == *"rc=0"* ]]
-  [[ "$output" == *"lock=taken"* ]]
+  [[ "$output" == *"rc=0"* ]] || false
+  [[ "$output" == *"lock=taken"* ]] || false
   me="$(printf '%s\n' "$output" | sed -n 's/.*me=\([0-9]*\).*/\1/p')"
-  [[ "$output" == *"\"pid\":$me,"* ]]
+  [[ "$output" == *"\"pid\":$me,"* ]] || false
   [ ! -e "$LR_STATE_DIR/locks/$SID.launch" ]
   grep -q "	$SID	t	taken	" "$LR_RECON_ROOT/launch.log"
 }
@@ -249,7 +249,7 @@ defers() { run /bin/bash "$S" defers "$SID"; }
   recon_on; owned; heartbeat "$OLD_PW"; start_sleeper
   /bin/bash -c ". '$S'; lr_recon_lock_take '$LR_STATE_DIR/locks/$SID.launch' other 0 x '$SLEEP_PID'"
   run /bin/bash -c ". '$S'; lr_recon_may_act '$SID' t; echo rc=\$?"
-  [[ "$output" == *"rc=1"* ]]
+  [[ "$output" == *"rc=1"* ]] || false
   [[ "$output" == *"lock=held"* ]]
 }
 
@@ -262,11 +262,11 @@ defers() { run /bin/bash "$S" defers "$SID"; }
   recon_on; owned; heartbeat "$OLD_PW"
   run /bin/bash -c ". '$S'; lr_recon_may_act '$SID' parent || exit 9
     /bin/bash -c \". '$S'; lr_recon_may_act '$SID' child; echo child=\\\$?; lr_recon_act_done\"
-    [ -d \"\$LR_LAUNCH_LOCK\" ] && echo still-held; lr_recon_act_done; [ -d '$LR_STATE_DIR/locks/$SID.launch' ] || echo released"
-  [[ "$output" == *"lock=inherited"* ]]
-  [[ "$output" == *"child=0"* ]]
-  [[ "$output" == *"still-held"* ]]
-  [[ "$output" == *"released"* ]]
+    if [ -d \"\$LR_LAUNCH_LOCK\" ]; then echo still-held; fi; lr_recon_act_done; if [ ! -d '$LR_STATE_DIR/locks/$SID.launch' ]; then echo released; fi"
+  [[ "$output" == *"lock=inherited"* ]] || false
+  [[ "$output" == *"child=0"* ]] || false
+  [[ "$output" == *"still-held"* ]] || false
+  [[ "$output" == *"released"* ]] || false
 }
 
 @test "may_act: the fence's own defer outranks an inherited lock" {

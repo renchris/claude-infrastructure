@@ -252,7 +252,8 @@ rd_deferred() { # the debt is left exactly where it was, with one `deferred` eve
 @test "cc-resume-debt: a new window when the pane is busy, or handoff-fire lacks the flag" {
   rd_fixture; printf '# supports --relaunch-at-shell\n' >> "$STUBS/hf"
   PANE_STATE=busy rd_run
-  [ ! -e "$BATS_TEST_TMPDIR/hf.log" ] && acted || { cat "$BATS_TEST_TMPDIR/out"; false; }
+  [ ! -e "$BATS_TEST_TMPDIR/hf.log" ] || { cat "$BATS_TEST_TMPDIR/out"; false; }
+  acted || { cat "$BATS_TEST_TMPDIR/out"; false; }
   rd_fixture; : > "$OBS"
   PANE_STATE=shell rd_run    # the fixture rewrote hf WITHOUT the flag
   [ ! -e "$BATS_TEST_TMPDIR/hf.log" ] && acted || { cat "$BATS_TEST_TMPDIR/out"; false; }

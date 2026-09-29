@@ -121,7 +121,8 @@ results() { cat "$LR_STATE_DIR"/fleet/*/results.tsv 2>/dev/null; }
   ppid="$(sed -n 's/^ppid=//p' "$LRH_ENV")"; gppid="$(sed -n 's/^gppid=//p' "$LRH_ENV")"
   # The holder is lr-fleet itself: the stub's parent, or its grandparent when bash forks a
   # subshell for the command substitution rather than exec'ing the stub in it.
-  [ -n "$hpid" ] && { [ "$hpid" = "$ppid" ] || [ "$hpid" = "$gppid" ]; } || { cat "$LRH_ENV"; false; }
+  [ -n "$hpid" ] || { cat "$LRH_ENV"; false; }
+  [ "$hpid" = "$ppid" ] || [ "$hpid" = "$gppid" ] || { cat "$LRH_ENV"; false; }
   [[ "$output" == *"gate=act sid=${SID:0:8} role=lr-fleet lock=taken"* ]] || { echo "$output"; false; }
   [ ! -e "$LR_STATE_DIR/locks/$SID.launch" ] || { ls -la "$LR_STATE_DIR/locks"; false; }
 }

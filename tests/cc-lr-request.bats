@@ -173,7 +173,8 @@ JSON
     [[ "$line" == *"$want"* ]] || { echo "missing '$want' in: $line"; false; }
   done
   run bash "$LR" status --cohort c1
-  [ "$status" -eq 0 ] && [[ "$output" == *aaaaaaaa* ]] || { echo "$output"; false; }
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *aaaaaaaa* ]] || { echo "$output"; false; }
   run bash "$LR" status --cohort nope
   [ "$status" -eq 1 ]
 }
