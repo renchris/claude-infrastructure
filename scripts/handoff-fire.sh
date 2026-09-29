@@ -3015,6 +3015,46 @@ hf_same_account_evidence() { # $1=pane $2=sid $3=resume cfg $4=row pid $5=mode �
   return 0
 }
 
+hf_ts_chain_tip() { # $1=sid $2..=distinct tombstone paths → rc 0 + the tip's path · rc 2 + why (stdout)
+  local sid="$1" ts to rs rto edges="" tips="" ntip=0 n cur found visited line
+  shift
+  n=$#
+  for ts in "$@"; do
+    to="$(jq -r '.handed_off_to // empty' "$ts" 2>/dev/null || true)"
+    if [ -z "$to" ]; then echo "$ts names no destination"; return 2; fi
+    if [ ! -d "$to/projects" ]; then echo "destination store $to/projects is missing"; return 2; fi
+    rs="$(cd "${ts%/projects/*}" 2>/dev/null && pwd -P)" || rs="${ts%/projects/*}"
+    rto="$(cd "$to" 2>/dev/null && pwd -P)" || rto="$to"
+    edges="$edges$ts $rs $rto
+"
+    if ! ls "$to"/projects/*/"$sid".HANDOFF.json >/dev/null 2>&1; then
+      tips="$ts $rs"; ntip=$((ntip + 1))
+    fi
+  done
+  if [ "$ntip" = 0 ]; then echo "no chain tip: every destination holds a tombstone (a cycle)"; return 2; fi
+  if [ "$ntip" -gt 1 ]; then echo "$ntip chain tips (a fork)"; return 2; fi
+  # Walk BACK from the tip: each store must have exactly one predecessor until the chain's origin,
+  # and the walk must visit every tombstone — otherwise a cycle hangs beside the chain.
+  cur="${tips#* }" visited=1
+  while [ "$visited" -le "$n" ]; do
+    found=""
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      if [ "${line##* }" = "$cur" ]; then
+        [ -n "$found" ] && { echo "two tombstones hand off into $cur (a fork)"; return 2; }
+        found="$line"
+      fi
+    done <<EOF
+$edges
+EOF
+    [ -n "$found" ] || break
+    visited=$((visited + 1))
+    found="${found% *}"; cur="${found##* }"
+  done
+  if [ "$visited" != "$n" ]; then echo "the chain from the tip reaches $visited of $n tombstones (a cycle)"; return 2; fi
+  printf '%s\n' "${tips%% *}"
+}
+
 hf_transplant_evidence() { # $1=sid $2=roots (projects dirs, space-separated) $3=mode label $4=local cfg ("" ⇒ the tombstone's own dir is the source) → 0 / 2 · sets HF_TS_TOMBSTONE HF_TS_TO HF_TS_LOCK HF_TS_CFG
   local sid="${1:-}" roots="${2:-}" mode="${3:-self-close}" cfg="${4:-}" pd ts dupes=0
   HF_TS_TOMBSTONE="" HF_TS_TO="" HF_TS_LOCK="" HF_TS_CFG="$cfg"
@@ -3031,7 +3071,7 @@ hf_transplant_evidence() { # $1=sid $2=roots (projects dirs, space-separated) $3
   # transplanted-source close on the `next` account: measured 2026-09-10, one 334-byte
   # .HANDOFF.json enumerated under both roots aborted the retirement of a verified successor.
   # Compare RESOLVED paths, so only a genuinely distinct file counts as a duplicate.
-  local _hf_ts_seen="" _hf_ts_rp
+  local _hf_ts_seen="" _hf_ts_rp _hf_ts_orig=""
   for pd in $roots; do
     for ts in "$pd"/*/"$sid".HANDOFF.json; do
       [ -f "$ts" ] || continue
@@ -3040,14 +3080,25 @@ hf_transplant_evidence() { # $1=sid $2=roots (projects dirs, space-separated) $3
       [ -z "$_hf_ts_seen" ] && [ -n "$HF_TS_TOMBSTONE" ] && dupes=1
       [ -z "$_hf_ts_seen" ] || dupes=1
       _hf_ts_seen="$_hf_ts_seen $_hf_ts_rp"
+      _hf_ts_orig="$_hf_ts_orig $ts"
       HF_TS_TOMBSTONE="$ts"
     done
   done
-  if [ -z "$cfg" ] && [ -n "$HF_TS_TOMBSTONE" ]; then HF_TS_CFG="${HF_TS_TOMBSTONE%/projects/*}"; fi
   if [ "$dupes" = 1 ]; then
-    echo "!! $mode REFUSED: more than one transplant tombstone for session ${sid:0:8} under: $roots — disambiguate by hand." >&2
-    return 2
+    # A MULTI-HOP SESSION (FLEET_V2 W5, lead decision 90%): a TARGET-LIMITED or TARGET-AUTH hop
+    # moves an already-moved session again, so A→B→C leaves a tombstone in A and in B. The one this
+    # pane is a husk over is the CHAIN TIP — the tombstone whose destination store holds none. Any
+    # other shape (no tip, several tips, a cycle, a missing destination) is refused as before.
+    local _hf_tip_why=""
+    # shellcheck disable=SC2086 # word-split on purpose: the list is space-separated paths
+    if ! _hf_tip_why="$(hf_ts_chain_tip "$sid" $_hf_ts_orig)"; then
+      echo "!! $mode REFUSED: more than one transplant tombstone for session ${sid:0:8} under: $roots, and they are not one chain ($_hf_tip_why) — disambiguate by hand." >&2
+      return 2
+    fi
+    HF_TS_TOMBSTONE="$_hf_tip_why"
+    echo "→ multi-hop session ${sid:0:8}: the chain tip is $HF_TS_TOMBSTONE" >&2
   fi
+  if [ -z "$cfg" ] && [ -n "$HF_TS_TOMBSTONE" ]; then HF_TS_CFG="${HF_TS_TOMBSTONE%/projects/*}"; fi
   if [ -z "$HF_TS_TOMBSTONE" ]; then
     { echo "!! $mode REFUSED: --transplanted-source, but session ${sid:0:8} has NO transplant tombstone."
       for pd in $roots; do echo "!!   looked for: $pd/*/$sid.HANDOFF.json"; done
