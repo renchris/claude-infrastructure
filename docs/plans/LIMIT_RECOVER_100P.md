@@ -941,3 +941,45 @@ above; the ones that changed a DESIGN rather than an anchor are restated here so
   deleted; its landed mechanisms (in-place recycle, transplant, launcher, drill) are the parts the
   reconciler drives. The sibling session's D4 (drain width / kickstart) is superseded by FLEET_V2's
   W1, W3 and W4. FLEET_V2 W4 adds the measured result here as a new section when it lands.
+
+## 11. FLEET_V2 — the reconciler replaces the one-actuator-at-a-time drivers (2026-09-29)
+
+**What changed for this plan's open items.** The fleet shape this plan left open — `lr-fleet.sh
+--recover` moving one session at a time behind the capacity probe (§7 item 8) — is replaced by the
+`lr_recon` reconciler in `scripts/limit-recover/lr_recon/`. It keeps one durable record per limited
+session, re-derives each record's phase from evidence on every pass, and re-fires every
+non-completion, so panes on every limited (account, scope) recover concurrently. This plan's landed
+mechanisms (in-place recycle, transplant, the launcher, the drill) are what the reconciler drives;
+nothing here is deleted. Everything else — waves, contracts, kill switches, decisions — lives in
+`docs/plans/LIMIT_RECOVER_FLEET_V2.md` (plan) and `docs/plans/LIMIT_RECOVER_FLEET_V2_ARCHITECTURE.md`.
+
+**Measured results, quoted from that plan's Status log (2026-09-29):**
+- **W0** (evidence: `docs/research/lr-recon-w0-2026-09-29/SUMMARY.md`): in 30 throwaway panes on
+  2.1.284 the first Enter was accepted every time, sent ≤ 0.62 s after paint, while the user record
+  landed in the transcript 1.6-11 s later — so transcript-only swallow checks misfire. A no-prompt
+  resume writes 17 records within 7 s. The goal survived a usage-limit death 12 of 12 times. The
+  burst probe saw 0 of 40 first turns fail or retry at N = 2..6 simultaneous cold starts.
+- **W1:** `--place`, the ledger and admission landed; acceptance `claude-accounts-place.bats`
+  (1..17), `capacity-admit-restore.bats` (1..4), `lr-lib.bats` (1..53), with all existing
+  `claude-accounts*.bats` and capacity-admit suites still green.
+- **W3:** the `lr_recon` package, the fence, the watchdog and three staged (not loaded) plists;
+  223 unittests on python 3.9.6 and 3.11, and the `derive_phase` fixtures pass 65 of 65 rows. The
+  live observe census was not run (the auto-mode classifier denied it); the 0-actuation property is
+  proven offline.
+- **W4-wf:** `lr-audit.py` predicts how many completed Workflow slots a plain `resumeFromRunId`
+  would re-spend; for run 7c395da7 it predicts 625 of 633 (608 verify), behind exactly the 8
+  measured index-stable hits.
+
+**The fences every legacy actor now calls.** Before touching a sid, the poller arms, `lf_one`, the
+lr-upgrade drives, `cc-lr`, `cc-resume-debt` and `boot-resume-launch` call
+`lr_recon_may_act <sid> <role> [always]` from `scripts/limit-recover/lr-recon-fence.sh` (rc 0 act,
+rc 1 defer). When the reconciler owns the sid but is dead ("lapsed"), the caller acts only while it
+holds `locks/<sid>.launch`, and releases it with `lr_recon_act_done`. `lr_recon_live` answers
+"recon.on exists and the heartbeat advanced within 180 s". With `recon.on` absent, every actor
+behaves exactly as this plan left it.
+
+**What stays the operator's.** `~/.reso/limit-recover/recon.on` (the cutover to the reconciler) and
+`autorecover.on` (recovery with no human) are created only by the operator; no wave creates either.
+Decision 2 is settled: a session with a running background job is held until the job ends, and the
+reconciler pages at 60 minutes for a ship-land job and 20 minutes otherwise. The operator readout
+names each held pane and the time it will page.
