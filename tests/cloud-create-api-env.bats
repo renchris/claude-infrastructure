@@ -362,6 +362,21 @@ run_create() {
   [[ "$output" == *"must be set together"* ]]
 }
 
+@test "no --repo and no github origin is REFUSED — never a fallback to the PUBLIC slug" {
+  # The default is read from the checkout the script lives in, so run a COPY inside a fixture repo.
+  local d="$BATS_TEST_TMPDIR/co"
+  mkdir -p "$d/scripts"; git -C "$d" init -q; cp "$SUT" "$d/scripts/"
+  run python3 "$d/scripts/cloud-create-api.py" --account fixture --branch claude/fire-t --dry-run
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  [[ "$output" == *"no --repo given"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"renchris/claude-infrastructure"* ]] || { echo "$output"; false; }
+  # positive control: with a github origin the default is that origin, and the dry run proceeds
+  git -C "$d" remote add origin https://github.com/owner/private-work.git
+  run python3 "$d/scripts/cloud-create-api.py" --account fixture --branch claude/fire-t --dry-run
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"owner/private-work"* ]] || { echo "$output"; false; }
+}
+
 @test "a create needs a branch — the outcome branch is what authorizes the push" {
   start_srv "$ENV_CLOUD" "$POST_OK" "$GET_ACCEPTED"
   run python3 "$SUT" --account fixture --repo o/r

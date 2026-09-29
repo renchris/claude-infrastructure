@@ -516,9 +516,10 @@ def main() -> int:
     )
     ap.add_argument(
         "--repo",
-        default=_origin_slug() or "renchris/claude-infrastructure",
+        default=_origin_slug(),
         help="owner/name (default: this checkout's origin — the PRIVATE working repo once the public "
-        "URL is a projection; a cloud VM pushes branches, so it must never default to the public one)",
+        "URL is a projection; a cloud VM pushes branches, so it must never default to the public one, "
+        "and with no github origin a create is REFUSED rather than guessed)",
     )
     ap.add_argument("--revision", default="main")
     ap.add_argument("--title", default="cc-offload session")
@@ -609,6 +610,15 @@ def main() -> int:
         )
         return 0 if ok else 5
 
+    # No fallback slug. The one this had was the PUBLIC repo's, contradicting its own help text: a
+    # checkout whose origin could not be read would have sent a branch-pushing VM at the public
+    # projection (docs/plans/PUBLIC_REPO_HYGIENE.md § Publisher stall).
+    if args.repo is None:
+        die(
+            2,
+            "no --repo given and this checkout has no github.com origin to default to; "
+            "pass --repo owner/name (the PRIVATE working repo)",
+        )
     if "/" not in args.repo:
         die(2, f"--repo must be owner/name, got {args.repo!r}")
     if not args.branch:
