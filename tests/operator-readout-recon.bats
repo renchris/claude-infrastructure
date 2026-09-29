@@ -106,3 +106,12 @@ heartbeat() { printf '{"pid":4242,"progress_wall":%s.25,"uptime":12.5}\n' "$1" >
   [ "$status" -eq 0 ]
   ! echo "$output" | grep -q 'lr-recon' || false
 }
+
+@test "a stale heartbeat is shown even when nothing is open (empty readout.line)" {
+  : > "$RR/readout.line"
+  heartbeat $((CC_OPREADOUT_NOW - 400))
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qxF ' ⚠ lr-recon: reconciler heartbeat stale 6m40s — the reset poller is paging and kickstarting it' \
+    || { echo "$output"; false; }
+}

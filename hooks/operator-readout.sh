@@ -526,16 +526,14 @@ stranded_sessions() {
 # line. The daemon renders it every pass into <recon root>/readout.line (lr_recon/__main__.py
 # _report), so this path is two stats and two builtin reads: no python, no jq, no fork. Shown only
 # after the operator's cutover (recon.on) and while the file is non-empty (empty ⇒ nothing open).
-# A heartbeat older than 180 s REPLACES it: a frozen daemon's last line would read as current.
+# A heartbeat older than 180 s REPLACES it — and is shown even when the line is empty, because a dead
+# daemon with nothing open is still a dead daemon, and the next limit cohort would find it so.
 # An unreadable or unparsable heartbeat prints nothing — this runs in a Stop hook, where a wrong
 # line is worse than a missing one. Seams: LR_STATE_DIR · LR_RECON_ROOT (the fence's names).
 lr_recon_line() {
   local lr="${LR_STATE_DIR:-$HOME/.reso/limit-recover}" root line="" hb="" pw age
   root="${LR_RECON_ROOT:-$lr/recon}"
-  { [ -f "$lr/recon.on" ] && [ -s "$root/readout.line" ]; } || return 0
-  # The daemon writes no trailing newline, so `read` returns 1 on a good file: judge the value.
-  { IFS= read -r line < "$root/readout.line"; } 2>/dev/null
-  [ -n "$line" ] || return 0
+  [ -f "$lr/recon.on" ] || return 0
   { IFS= read -r hb < "$root/heartbeat"; } 2>/dev/null
   case "$hb" in *'"progress_wall":'*) ;; *) return 0 ;; esac
   pw="${hb#*\"progress_wall\":}"; pw="${pw# }"; pw="${pw%%[!0-9]*}"   # epoch; fraction dropped
@@ -546,9 +544,11 @@ lr_recon_line() {
     if [ "$age" -ge 3600 ]; then printf -v age '%dh%02dm' $((age / 3600)) $((age % 3600 / 60))
     else printf -v age '%dm%02ds' $((age / 60)) $((age % 60)); fi
     printf ' ⚠ lr-recon: reconciler heartbeat stale %s — the reset poller is paging and kickstarting it\n' "$age"
-  else
-    printf ' ⟳ %s\n' "$line"
+    return 0
   fi
+  # The daemon writes no trailing newline, so `read` returns 1 on a good file: judge the value.
+  { IFS= read -r line < "$root/readout.line"; } 2>/dev/null
+  [ -n "$line" ] && printf ' ⟳ %s\n' "$line"
   return 0
 }
 
