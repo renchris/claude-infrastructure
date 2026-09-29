@@ -114,6 +114,19 @@ class ActTests(unittest.TestCase):
             "LR_BARE_REPAIR", env
         )  # decision 5 SETTLED: the sibling heal stays on
 
+    def test_an_idle_move_proves_its_relaunch_by_process_not_by_a_turn(self):
+        # W5b real canary 3: a no-prompt relaunch owes no assistant turn; waiting for one declared
+        # a working in-place rescue dead after 180 s and paged recycle-dead
+        r = _rec()
+        r.kind = "idle"
+        self.assertEqual(
+            A.actuator_env(r, _paths(), "", base={})["HF_ENGAGE_BY_PROCESS"], "1"
+        )
+        r.kind = "limited"  # CONTROL: a limited move types its prompt and proves it by the turn
+        self.assertNotIn(
+            "HF_ENGAGE_BY_PROCESS", A.actuator_env(r, _paths(), "", base={})
+        )
+
     def test_env_never_claims_a_preseed_the_daemon_did_not_run(self):
         # W5b: LR_PRESEED_DONE makes lr-handoff and lr-fire-resume skip the target's folder-trust
         # seed; nothing in lr_recon runs lr-preseed-env.sh, so a real move to an account where

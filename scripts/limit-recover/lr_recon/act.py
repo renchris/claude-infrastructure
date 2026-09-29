@@ -74,6 +74,13 @@ def actuator_env(
             "LR_RECON_ROOT": paths.root,
         }
     )
+    if rec.kind == "idle":
+        # An idle move relaunches with NO prompt, so no assistant turn is owed. Its watcher must
+        # prove the relaunch by a live `--resume <sid>` process (handoff-fire's no-prompt branch,
+        # the team procedure); waiting for a turn declared a working in-place rescue dead after
+        # 180 s and paged recycle-dead (W5b real canary 3). Canaries 1-2 passed only because
+        # their resumed sessions happened to take a turn.
+        env["HF_ENGAGE_BY_PROCESS"] = "1"
     if pane_sock:
         env["CC_TERM_KITTY_TO"] = pane_sock
     if rec.admit_token:
