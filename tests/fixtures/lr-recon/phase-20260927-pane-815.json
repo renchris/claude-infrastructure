@@ -1,0 +1,119 @@
+{
+  "incident": "2026-09-27/pane-815 (798afadf)",
+  "summary": "Pane 815, limited on next4 (seven-day), was held five times by composer residue, then recycled in place onto next; legacy wrote RECOVERED while the tokened prompt sat unsubmitted, and a later nudge's RECOVERED rested on an untokened prompt.",
+  "sources": [
+    "$HOME/.reso/limit-recover/requests/798afadf-*.json (source_pane 815, account next4, rate_limit_type seven_day)",
+    "$HOME/.reso/limit-recover/fleet/one-20260926T231116Z-798afadf/ (results.tsv FAILED rc=6 at 23:11:24Z; stderr precheck pane_state cc, composer held, verdict HELD:draft)",
+    "$HOME/.reso/limit-recover/fleet/one-20260927T{000723Z,045323Z,050109Z,051739Z}-798afadf/results.tsv (the same rc=6 refusal, four more times)",
+    "$HOME/.reso/limit-recover/fleet/one-20260927T072229Z-798afadf/ (results.tsv recycle-in-place/RECOVERED at 07:23:00Z; stderr composer residue scrubbed, 'the /exit landed', lock held)",
+    "$HOME/.reso/limit-recover/798afadf-*/bundle-20260927T072234Z/events.jsonl (submit-token-armed, relaunch-typed 07:22:53Z, CR-UNCONFIRMED 07:23:03Z, FAILED:submit 07:23:32Z) and transplant.json (sha256, chain)",
+    "$HOME/.claude/logs/handoffs.jsonl (class recycle-dead, target_pane 815, prev_sid 798afadf, engaged false, 07:26:21Z)",
+    "$HOME/.reso/limit-recover/fleet/one-20260927T074401Z-798afadf/ (stderr: composer held this attempt's rail-token paste ending '2bd7', cleared; verdict nudge-in-place/RECOVERED 'a fresh assistant turn followed within 15s' at 07:44:28Z)",
+    "$HOME/.claude-next/projects/*/798afadf-*.jsonl (admit-time length 2312130 by sha256 prefix match; boot records from 07:22:55Z; no record carries the attempt token; untokened human-origin prompt at offset 2397317, 07:44:11Z; non-error assistant from offset 2799012, 07:44:18Z)",
+    "$HOME/.claude-quaternary/projects/*/798afadf-*.jsonl.handed-off and .HANDOFF.json (exist; no stub)"
+  ],
+  "rows": [
+    {
+      "id": "0927-815-a",
+      "at": "2026-09-26T23:11:24Z",
+      "synthetic": false,
+      "note": "first dispatch: precheck saw residue in the composer and refused HELD:draft; nothing transplanted",
+      "expected_phase": "PRE-MOVE",
+      "expected_substate": "HOLD-DRAFT",
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "source",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": true,
+        "handed_off": false,
+        "live_watcher": false,
+        "pane_state": "claude",
+        "lock_names_target": false,
+        "source_retired": false,
+        "source_at_composer": true
+      }
+    },
+    {
+      "id": "0927-815-b",
+      "at": "2026-09-27T07:23:32Z",
+      "synthetic": false,
+      "note": "sixth dispatch, the false RECOVERED: /exit landed, claude relaunched on next, the tokened prompt stayed a paste in the composer (found there at 07:44); legacy results.tsv said RECOVERED at 07:23:00Z and the watcher said recycle-dead at 07:26:21Z",
+      "expected_phase": "RELAUNCHED",
+      "expected_substate": "DRAFTED",
+      "must_not_be": [
+        "ENGAGED"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 6,
+        "holders": [
+          {
+            "cfg": "target",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": false,
+        "handed_off": true,
+        "stub_present": false,
+        "live_watcher": false,
+        "pane_state": "claude",
+        "lock_names_target": true,
+        "source_retired": true,
+        "confirm_len": 2312130,
+        "submitted": false,
+        "relaunch_substate": "DRAFTED",
+        "token_record_offset": null,
+        "token_is_this_attempt": false,
+        "nonerror_assistant_after_token": false,
+        "target_last_assistant": "none",
+        "legacy_verdict": "RECOVERED"
+      }
+    },
+    {
+      "id": "0927-815-c",
+      "at": "2026-09-27T07:44:28Z",
+      "synthetic": false,
+      "note": "seventh dispatch (nudge) cleared the tokened draft and submitted an untokened continue prompt at offset 2397317; real turns followed and legacy wrote RECOVERED, but no user record carries attempt 6's token, so the table yields RELAUNCHED (sub-state unasserted)",
+      "expected_phase": "RELAUNCHED",
+      "expected_substate": null,
+      "must_not_be": [
+        "ENGAGED"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 6,
+        "holders": [
+          {
+            "cfg": "target",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": false,
+        "handed_off": true,
+        "stub_present": false,
+        "live_watcher": false,
+        "pane_state": "claude",
+        "lock_names_target": true,
+        "source_retired": true,
+        "confirm_len": 2312130,
+        "submitted": false,
+        "token_record_offset": null,
+        "token_is_this_attempt": false,
+        "nonerror_assistant_after_token": false,
+        "target_last_assistant": "none",
+        "legacy_verdict": "RECOVERED"
+      }
+    }
+  ]
+}

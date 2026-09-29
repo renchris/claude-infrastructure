@@ -1,0 +1,149 @@
+{
+  "incident": "2026-09-24/3d42fa49 (pane 513)",
+  "summary": "Pane 513 limited on next2 was parked once by a wedged router, then recycled in place onto next; the tokened prompt landed at 22:27:31Z and the session worked, but the legacy watcher wrote FAILED:submit because the paste wrapper split the token string.",
+  "sources": [
+    "$HOME/.reso/limit-recover/requests/3d42fa49-*.json (source_pane 513, account next2, error rate_limit, ts)",
+    "$HOME/.reso/limit-recover/fleet/one-20260924T222100Z/results.tsv + detached.log (3d42fa49 pane 513: parked, 'no routable target: router: claude-accounts: no servable cache and the single-flight lock stayed held for 240s', 22:25:07Z)",
+    "$HOME/.reso/limit-recover/fleet/one-20260924T222653Z/3d42fa49-*.stderr + results.tsv (precheck pane_state cc, composer empty, registry pid alive; 'the /exit landed'; lock held; results recycle-in-place/RECOVERED UNPROVEN at 22:27:08Z)",
+    "$HOME/.reso/limit-recover/3d42fa49-*/bundle-20260924T222657Z/events.jsonl (states submit-token-armed run token, relaunch-typed 22:27:15Z, CR-UNCONFIRMED 22:27:31Z, FAILED:submit 22:28:12Z; attempt)",
+    "$HOME/.reso/limit-recover/3d42fa49-*/bundle-20260924T222657Z/transplant.json (sha256, chain, source_retired, lock, tombstone)",
+    "$HOME/.claude-next/projects/*/3d42fa49-*.jsonl (admit-time length 1434150 = prefix whose sha256 equals transplant.json sha256; user record origin.kind=human at offset 1496532, 22:27:31.846Z, holding the token split as '<prefix>\\n</pasted_content …>\\n\\n:<nonce>'; non-error assistant at offset 1733269, 22:27:36Z)",
+    "$HOME/.claude-secondary/projects/*/3d42fa49-*.jsonl.handed-off (exists; no stub beside it)"
+  ],
+  "rows": [
+    {
+      "id": "0924-513-a",
+      "at": "2026-09-24T22:25:07Z",
+      "synthetic": false,
+      "note": "first dispatch: no routable target because the claude-accounts cache was unservable (router lock wedged 240 s); nothing transplanted, the limited source still live at its composer",
+      "expected_phase": "PRE-MOVE",
+      "expected_substate": "WAIT_DATA",
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "source",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": true,
+        "handed_off": false,
+        "live_watcher": false,
+        "pane_state": "claude",
+        "lock_names_target": false,
+        "source_retired": false,
+        "source_at_composer": true
+      }
+    },
+    {
+      "id": "0924-513-b",
+      "at": "2026-09-24T22:27:32Z",
+      "synthetic": false,
+      "note": "second dispatch: in-place recycle onto next; this attempt's tokened prompt is a user record at offset 1496532 > confirm_len 1434150, and no assistant record follows it yet",
+      "expected_phase": "RELAUNCHED",
+      "expected_substate": "SUBMITTED",
+      "evidence": {
+        "kind": "limited",
+        "attempt": 2,
+        "holders": [
+          {
+            "cfg": "target",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": false,
+        "handed_off": true,
+        "stub_present": false,
+        "live_watcher": false,
+        "pane_state": "claude",
+        "lock_names_target": true,
+        "source_retired": true,
+        "confirm_len": 1434150,
+        "submitted": true,
+        "relaunch_substate": "SUBMITTED",
+        "token_record_offset": 1496532,
+        "token_is_this_attempt": true,
+        "target_last_assistant": "none",
+        "nonerror_assistant_after_token": false
+      }
+    },
+    {
+      "id": "0924-513-c",
+      "at": "2026-09-24T22:28:12Z",
+      "synthetic": false,
+      "note": "the moment legacy wrote FAILED:submit ('no record of the prompt in the transcript within 30s'): the token record is past confirm_len and a non-error assistant turn followed at 22:27:36Z; the token string is split by the pasted_content wrapper, which is why the legacy full-string match missed it",
+      "expected_phase": "ENGAGED",
+      "expected_substate": null,
+      "evidence": {
+        "kind": "limited",
+        "attempt": 2,
+        "holders": [
+          {
+            "cfg": "target",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": false,
+        "handed_off": true,
+        "stub_present": false,
+        "live_watcher": false,
+        "pane_state": "claude",
+        "lock_names_target": true,
+        "source_retired": true,
+        "confirm_len": 1434150,
+        "submitted": true,
+        "relaunch_substate": "SUBMITTED",
+        "token_record_offset": 1496532,
+        "token_is_this_attempt": true,
+        "target_last_assistant": "ok",
+        "nonerror_assistant_after_token": true,
+        "legacy_verdict": "FAILED:submit"
+      }
+    },
+    {
+      "id": "0924-513-d",
+      "at": "2026-09-24T22:28:12Z",
+      "synthetic": true,
+      "note": "derived from 0924-513-c with one field changed: token_record_offset moved below confirm_len (a token record copied from the source); must not close as ENGAGED",
+      "expected_phase": "RELAUNCHED",
+      "expected_substate": "SUBMITTED",
+      "must_not_be": [
+        "ENGAGED"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 2,
+        "holders": [
+          {
+            "cfg": "target",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": false,
+        "handed_off": true,
+        "stub_present": false,
+        "live_watcher": false,
+        "pane_state": "claude",
+        "lock_names_target": true,
+        "source_retired": true,
+        "confirm_len": 1434150,
+        "submitted": true,
+        "relaunch_substate": "SUBMITTED",
+        "token_record_offset": 1434000,
+        "token_is_this_attempt": true,
+        "target_last_assistant": "ok",
+        "nonerror_assistant_after_token": true,
+        "legacy_verdict": "FAILED:submit"
+      }
+    }
+  ]
+}

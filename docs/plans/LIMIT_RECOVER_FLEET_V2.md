@@ -450,3 +450,18 @@ Dynamic Workflow wf_99ea9654-29f (22 agents, 0 errors: 8 subsystem maps, 4 desig
   - Admission: in-flight tokens count in the reserve term as well as the active term; without that, one token in flight would stop the operator reserve from binding. A malformed `CC_ADMIT_RESTORE_R` is recorded as blind term `restore-r` and falls back to the ceiling.
   - Not built: the `RECOVERY_IDLE_SEATS` knob. It is in the architecture change list, but its semantics wait on W0's no-prompt `--resume` measurement, and no W1 acceptance case covers it.
   - Blockers: none.
+- 2026-09-29, **W0 done** (branch lr-fv2-w0; the landed sha is in the lead's ping). Evidence and per-item detail: `docs/research/lr-recon-w0-2026-09-29/SUMMARY.md`. Fixtures: `tests/fixtures/lr-recon/`. Measured defaults:
+  - `LR_RECR_SCHEDULE=5,15,30,45`, with every re-send gated on DRAFT-MINE. In 30 throwaway panes on 2.1.284 the first Enter was accepted each time, sent ≤ 0.62 s after paint. The user record lands in the transcript 1.6-11 s later, so transcript-only swallow checks misfire.
+  - `RECOVERY_IDLE_SEATS=active`. A no-prompt resume writes 17 records within 7 s.
+  - The goal survives a usage-limit death (12 of 12), so no re-arm is needed on the same-uuid path.
+  - Under `CLAUDE_CODE_DISABLE_AGENT_VIEW=1`, `pane_bgwork_key` returns no key and option 2 becomes "Stay".
+  - Launchd resolves the socket through the `/tmp` glob, and needs the absolute `kitten` path.
+
+  Learnings for later waves:
+  - **W2c:** `cc-kitty-socket --all` is silently ignored today.
+  - **W3:** submit tokens are split by the paste wrapper; a §4.2 gap exists (source dead, watcher live, no holder); a parked menu must be checked before row 7; the 405/906 strands derive PRE-MOVE.
+  - **W4/W5:** a Workflow resume re-spends every completed slot whose call index shifts. The briefed rule, "every slot after the first dangling one", was refuted for 7c395da7.
+  - **W5 rig:** the fleet runs 2.1.284, and 2.1.114 parks at an invalid-settings dialog on today's `settings.json`.
+  - **HOLD-BGWORK:** 6 of 20 live panes hold only a `cc-await-ping` shell.
+
+  No blockers.

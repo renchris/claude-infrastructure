@@ -1,0 +1,471 @@
+{
+  "incident": "synthetic/required-rows",
+  "summary": "Rows for required phases and twins that no real incident row in this directory reaches; each is a real row's evidence with the named fields changed.",
+  "sources": [
+    "tests/fixtures/lr-recon/phase-20260929-cohort-0417.json (rows 849-b, 842-b)",
+    "tests/fixtures/lr-recon/phase-20260929-pane-947.json (rows 947-b, 947-c)",
+    "tests/fixtures/lr-recon/phase-20260928-pane-906.json (row 906-a)",
+    "docs/plans/LIMIT_RECOVER_FLEET_V2_ARCHITECTURE.md §4.2 rows 1-13"
+  ],
+  "rows": [
+    {
+      "id": "syn-split-brain-bg",
+      "at": "2026-09-29T04:18:10Z",
+      "synthetic": true,
+      "note": "derived from real row 849-b (phase-20260929-cohort-0417.json); changed: holders=[{\"cfg\": \"target\", \"pane_bound\": true, \"bg\": false, \"role\": \"claude\"}, {\"cfg\": \"source\", \"pane_bound\": false, \"bg\": true, \"role\": \"bg-row\"}]. A background-session row for the sid under the source cfg beside the engaged pane-bound target holder: |H|=2 counting bg rows, and row 1 wins over row 5.",
+      "expected_phase": "SPLIT-BRAIN",
+      "expected_substate": null,
+      "must_not_be": [
+        "ENGAGED",
+        "RELAUNCHED"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "target",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          },
+          {
+            "cfg": "source",
+            "pane_bound": false,
+            "bg": true,
+            "role": "bg-row"
+          }
+        ],
+        "source_alive": false,
+        "handed_off": true,
+        "stub_present": false,
+        "live_watcher": true,
+        "pane_state": "claude",
+        "identity_match": true,
+        "lock_names_target": true,
+        "source_retired": true,
+        "resume_debt_open": true,
+        "submitted": true,
+        "target_last_assistant": "ok",
+        "token_record_offset": 1971660,
+        "token_is_this_attempt": true,
+        "confirm_len": 1903646,
+        "nonerror_assistant_after_token": true,
+        "relaunch_substate": "SUBMITTED"
+      }
+    },
+    {
+      "id": "syn-notification-only",
+      "at": "2026-09-29T04:18:10Z",
+      "synthetic": true,
+      "note": "derived from real row 849-b (phase-20260929-cohort-0417.json); changed: target_last_assistant=\"notification\", nonerror_assistant_after_token=false. Token record past confirm_len, but the only assistant turn after it answers a task-notification (the 405-c/405-d shape: a queued notification arriving right after relaunch), so row 5 fails.",
+      "expected_phase": "RELAUNCHED",
+      "expected_substate": "SUBMITTED",
+      "must_not_be": [
+        "ENGAGED"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "target",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": false,
+        "handed_off": true,
+        "stub_present": false,
+        "live_watcher": true,
+        "pane_state": "claude",
+        "identity_match": true,
+        "lock_names_target": true,
+        "source_retired": true,
+        "resume_debt_open": true,
+        "submitted": true,
+        "target_last_assistant": "notification",
+        "token_record_offset": 1971660,
+        "token_is_this_attempt": true,
+        "confirm_len": 1903646,
+        "nonerror_assistant_after_token": false,
+        "relaunch_substate": "SUBMITTED"
+      }
+    },
+    {
+      "id": "syn-target-limited",
+      "at": "2026-09-29T04:19:01Z",
+      "synthetic": true,
+      "note": "derived from real row 842-b (phase-20260929-cohort-0417.json); changed: target_last_assistant=\"limit\", nonerror_assistant_after_token=false. The first assistant record after the submit record on the target is a rate-limit record.",
+      "expected_phase": "TARGET-LIMITED",
+      "expected_substate": null,
+      "must_not_be": [
+        "ENGAGED",
+        "RELAUNCHED"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "target",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": false,
+        "handed_off": true,
+        "stub_present": false,
+        "live_watcher": true,
+        "pane_state": "claude",
+        "identity_match": true,
+        "lock_names_target": true,
+        "source_retired": true,
+        "submitted": true,
+        "target_last_assistant": "limit",
+        "token_record_offset": 6536920,
+        "token_is_this_attempt": true,
+        "confirm_len": 6503030,
+        "nonerror_assistant_after_token": false,
+        "relaunch_substate": "SUBMITTED"
+      }
+    },
+    {
+      "id": "syn-target-auth",
+      "at": "2026-09-29T04:19:01Z",
+      "synthetic": true,
+      "note": "derived from real row 842-b (phase-20260929-cohort-0417.json); changed: target_last_assistant=\"authentication_failed\", nonerror_assistant_after_token=false. The target account answers the submitted prompt with authentication_failed.",
+      "expected_phase": "TARGET-AUTH",
+      "expected_substate": null,
+      "must_not_be": [
+        "ENGAGED",
+        "TARGET-LIMITED",
+        "RELAUNCHED"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "target",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": false,
+        "handed_off": true,
+        "stub_present": false,
+        "live_watcher": true,
+        "pane_state": "claude",
+        "identity_match": true,
+        "lock_names_target": true,
+        "source_retired": true,
+        "submitted": true,
+        "target_last_assistant": "authentication_failed",
+        "token_record_offset": 6536920,
+        "token_is_this_attempt": true,
+        "confirm_len": 6503030,
+        "nonerror_assistant_after_token": false,
+        "relaunch_substate": "SUBMITTED"
+      }
+    },
+    {
+      "id": "syn-target-transient",
+      "at": "2026-09-29T04:19:01Z",
+      "synthetic": true,
+      "note": "derived from real row 842-b (phase-20260929-cohort-0417.json); changed: target_last_assistant=\"server_529\", nonerror_assistant_after_token=false. SUBMITTED, and the last target record is a 529 api error.",
+      "expected_phase": "TARGET-TRANSIENT",
+      "expected_substate": null,
+      "must_not_be": [
+        "ENGAGED",
+        "TARGET-LIMITED",
+        "RELAUNCHED"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "target",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": false,
+        "handed_off": true,
+        "stub_present": false,
+        "live_watcher": true,
+        "pane_state": "claude",
+        "identity_match": true,
+        "lock_names_target": true,
+        "source_retired": true,
+        "submitted": true,
+        "target_last_assistant": "server_529",
+        "token_record_offset": 6536920,
+        "token_is_this_attempt": true,
+        "confirm_len": 6503030,
+        "nonerror_assistant_after_token": false,
+        "relaunch_substate": "SUBMITTED"
+      }
+    },
+    {
+      "id": "syn-husk-stub",
+      "at": "2026-09-29T03:04:35Z",
+      "synthetic": true,
+      "note": "derived from real row 947-b (phase-20260929-pane-947.json); changed: live_watcher=false, stub_present=true. The watcher died before /exit landed: .handed-off exists, the source is alive at cc, and it has re-created <sid>.jsonl beside .handed-off (the stub every 09-29 source produced).",
+      "expected_phase": "HUSK-RETIRED",
+      "expected_substate": "stub",
+      "must_not_be": [
+        "EXITING",
+        "ENGAGED",
+        "TRANSPLANTED"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "source",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": true,
+        "source_at_composer": true,
+        "handed_off": true,
+        "live_watcher": false,
+        "pane_state": "claude",
+        "identity_match": true,
+        "lock_names_target": true,
+        "source_retired": true,
+        "resume_debt_open": true,
+        "stub_present": true
+      }
+    },
+    {
+      "id": "syn-husk-no-stub",
+      "at": "2026-09-29T03:04:35Z",
+      "synthetic": true,
+      "note": "derived from real row 947-b (phase-20260929-pane-947.json); changed: live_watcher=false, stub_present=false. Same husk before the source has written anything after the rename: no stub, so UNCONFIRM is possible.",
+      "expected_phase": "HUSK-RETIRED",
+      "expected_substate": "no-stub",
+      "must_not_be": [
+        "EXITING",
+        "ENGAGED",
+        "TRANSPLANTED"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "source",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": true,
+        "source_at_composer": true,
+        "handed_off": true,
+        "live_watcher": false,
+        "pane_state": "claude",
+        "identity_match": true,
+        "lock_names_target": true,
+        "source_retired": true,
+        "resume_debt_open": true,
+        "stub_present": false
+      }
+    },
+    {
+      "id": "syn-pane-gone-r",
+      "at": "2026-09-29T03:04:41Z",
+      "synthetic": true,
+      "note": "derived from real row 947-c (phase-20260929-pane-947.json); changed: live_watcher=false, pane_state=\"gone\", pane_absent_observations=2, tty_present=false, exit_typed_by_me=true, stub_present=false. The window was destroyed after our /exit (absent from every kitty socket on two scans, tty gone) and the watcher is dead; resume debt is open (as it was at 03:04:36Z), so R.",
+      "expected_phase": "PANE-GONE",
+      "expected_substate": "R",
+      "must_not_be": [
+        "EXITED",
+        "PRE-MOVE"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [],
+        "source_alive": false,
+        "handed_off": true,
+        "stub_present": false,
+        "live_watcher": false,
+        "pane_state": "gone",
+        "identity_match": true,
+        "lock_names_target": true,
+        "source_retired": true,
+        "resume_debt_open": true,
+        "pane_absent_observations": 2,
+        "tty_present": false,
+        "exit_typed_by_me": true
+      }
+    },
+    {
+      "id": "syn-pane-gone-not-needed",
+      "at": "2026-09-29T03:04:41Z",
+      "synthetic": true,
+      "note": "derived from real row 947-c (phase-20260929-pane-947.json); changed: live_watcher=false, pane_state=\"gone\", pane_absent_observations=2, tty_present=false, exit_typed_by_me=false, resume_debt_open=false, stub_present=false. Same destroyed pane, but /exit was not typed by the recovery and no resume debt names the sid: NOT_NEEDED(handed-to-resume-debt).",
+      "expected_phase": "PANE-GONE",
+      "expected_substate": "NOT_NEEDED",
+      "must_not_be": [
+        "EXITED",
+        "PRE-MOVE"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [],
+        "source_alive": false,
+        "handed_off": true,
+        "stub_present": false,
+        "live_watcher": false,
+        "pane_state": "gone",
+        "identity_match": true,
+        "lock_names_target": true,
+        "source_retired": true,
+        "resume_debt_open": false,
+        "pane_absent_observations": 2,
+        "tty_present": false,
+        "exit_typed_by_me": false
+      }
+    },
+    {
+      "id": "syn-moved-ready",
+      "at": "2026-09-28T13:19:40Z",
+      "synthetic": true,
+      "note": "derived from real row 906-a (phase-20260928-pane-906.json); changed: holder_stable_two_samples=true, readiness=\"READY\"; removed: relaunch_substate. The no-prompt relaunch that 906 never achieved: the same (pid, lstart) on two samples >=15 s apart plus a READY note, no bg row under the source.",
+      "expected_phase": "MOVED",
+      "expected_substate": null,
+      "must_not_be": [
+        "RELAUNCHED",
+        "ENGAGED"
+      ],
+      "evidence": {
+        "kind": "idle",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "target",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": false,
+        "handed_off": false,
+        "live_watcher": true,
+        "pane_state": "claude",
+        "identity_match": true,
+        "holder_stable_two_samples": true,
+        "readiness": "READY",
+        "submitted": false
+      }
+    },
+    {
+      "id": "syn-moved-composer-x2",
+      "at": "2026-09-28T13:19:40Z",
+      "synthetic": true,
+      "note": "derived from real row 906-a (phase-20260928-pane-906.json); changed: holder_stable_two_samples=true, readiness=\"composer-empty-x2\"; removed: relaunch_substate. Readiness by the composer reading EMPTY twice instead of a READY note.",
+      "expected_phase": "MOVED",
+      "expected_substate": null,
+      "must_not_be": [
+        "RELAUNCHED"
+      ],
+      "evidence": {
+        "kind": "idle",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "target",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": false,
+        "handed_off": false,
+        "live_watcher": true,
+        "pane_state": "claude",
+        "identity_match": true,
+        "holder_stable_two_samples": true,
+        "readiness": "composer-empty-x2",
+        "submitted": false
+      }
+    },
+    {
+      "id": "syn-stable-no-readiness",
+      "at": "2026-09-28T13:19:40Z",
+      "synthetic": true,
+      "note": "derived from real row 906-a (phase-20260928-pane-906.json); changed: holder_stable_two_samples=true. Stable holder but readiness still none: MOVED requires readiness, so row 7 applies.",
+      "expected_phase": "RELAUNCHED",
+      "expected_substate": "UNPROMPTED",
+      "must_not_be": [
+        "MOVED"
+      ],
+      "evidence": {
+        "kind": "idle",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "target",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": false,
+        "handed_off": false,
+        "live_watcher": true,
+        "pane_state": "claude",
+        "identity_match": true,
+        "holder_stable_two_samples": true,
+        "readiness": "none",
+        "submitted": false,
+        "relaunch_substate": "UNPROMPTED"
+      }
+    },
+    {
+      "id": "syn-parked-menu",
+      "at": "2026-09-28T13:19:40Z",
+      "synthetic": true,
+      "note": "derived from real row 906-a (phase-20260928-pane-906.json); changed: holder_stable_two_samples=true, readiness=\"parked-menu\"; removed: relaunch_substate. Stable holder but the readiness note is a parked menu (lr-fire-resume.sh:961): row 6 turns it into HOLD-MENU.",
+      "expected_phase": "PRE-MOVE",
+      "expected_substate": "HOLD-MENU",
+      "must_not_be": [
+        "MOVED",
+        "RELAUNCHED"
+      ],
+      "evidence": {
+        "kind": "idle",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "target",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": false,
+        "handed_off": false,
+        "live_watcher": true,
+        "pane_state": "claude",
+        "identity_match": true,
+        "holder_stable_two_samples": true,
+        "readiness": "parked-menu",
+        "submitted": false
+      }
+    }
+  ]
+}

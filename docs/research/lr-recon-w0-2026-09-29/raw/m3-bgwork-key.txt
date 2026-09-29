@@ -1,0 +1,4 @@
+$ bash raw/m3-bgwork-key.sh $REPO tests/fixtures/lr-recon/screens/<frame>   # sources hooks/lib/pane-modal.sh: pane_bgwork_dialog + pane_bgwork_choice, the two calls pane_bgwork_key (handoff-fire.sh:3350) makes after reading the screen
+screen=bgwork-dialog-2.1.284.txt dialog=yes choice_rc=0 key=2 KEEP_LABEL='Move to background and exit'
+screen=bgwork-dialog-2.1.284-agent-view-off.txt dialog=yes choice_rc=1 key=<none> KEEP_LABEL='Move to background and exit'
+screen=composer-empty-2.1.284.txt dialog=no choice_rc=1 key=<none> KEEP_LABEL='Move to background and exit'

@@ -1,0 +1,152 @@
+{
+  "incident": "2026-09-28/pane-405",
+  "summary": "A poller-auto same-account binary upgrade of d754cab6 in pane 405: handoff-fire's watcher could not write the relaunch line (pane stranded at a bare shell, 23:14:11Z); lr-upgrade's own retype relaunched it, the continue prompt never reached the transcript (FAILED:submit 23:24:55Z), and the legacy path still recorded verdict 'upgraded' with confirmation UNCONFIRMED.",
+  "sources": [
+    "$HOME/.reso/limit-recover/results/upgrade-d754cab6-*.json (fields read: pane, verdict, reason, requested_by, ts)",
+    "$HOME/.reso/limit-recover/upgrade/d754cab6-20260928T231206Z/events.jsonl (fields read: ts, state, detail, attempt)",
+    "$HOME/.reso/limit-recover/upgrade/d754cab6-20260928T231206Z/handoff-fire.log (lines read: same-account relaunch, 'no tombstone', watcher pid, recycle verdict)",
+    "$HOME/.reso/limit-recover/upgrade/d754cab6-20260928T231206Z/launch.sh (read: LR_SUBMIT_TOKEN non-empty, config dir, --prompt present)",
+    "$TMPDIR/handoff-recycle-405-1790637132-*.log (lines read: armed, shell-prompt confirm, relaunch write failure; epoch in name = 2026-09-28T23:12:12Z)",
+    "$HOME/.claude/logs/handoffs.jsonl (rows 2026-09-28T23:12:11Z recycle-intent and 23:14:11Z recycle-dead for target_pane 405: class, detail)",
+    "$HOME/.reso/limit-recover/poller.log (2026-09-28T23:10:29Z UPGRADE-AUTO queued 405(d754cab6))",
+    "$HOME/.reso/limit-recover/upgrade-drain.log (405 d754cab6 upgraded line)",
+    "$HOME/.claude-secondary/projects/<slug>/d754cab6-*.jsonl (records 23:10Z-23:40Z: type, timestamp, byte offset; grep for the run token: 0 hits; no .jsonl.handed-off beside it)",
+    "$HOME/.reso/limit-recover/design-v2/findings.json item 41 and full.json finding 'launchd typing already proven' (pane 405 narrative)"
+  ],
+  "rows": [
+    {
+      "id": "405-a",
+      "at": "2026-09-28T23:12:12Z",
+      "synthetic": false,
+      "note": "Watcher pid 66382 armed on pane 405 while the source claude (registry pid on its tty) is still alive and its transcript at rest. Same-account upgrade: no lock, no tombstone, no .handed-off, so rows 8-12 cannot see this watcher. The cross-account version of this moment is 947-b (EXITING). kind=limited because the relaunch carries a prompt with a submit token (launch.sh LR_SUBMIT_TOKEN set).",
+      "expected_phase": "PRE-MOVE",
+      "expected_substate": null,
+      "must_not_be": [
+        "EXITING",
+        "HUSK-RETIRED",
+        "TRANSPLANTED",
+        "ENGAGED"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "source",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": true,
+        "handed_off": false,
+        "live_watcher": true,
+        "pane_state": "claude",
+        "identity_match": true,
+        "lock_names_target": false,
+        "source_retired": false
+      }
+    },
+    {
+      "id": "405-b",
+      "at": "2026-09-28T23:14:11Z",
+      "synthetic": false,
+      "note": "The strand: handoff-fire's watcher wrote recycle-dead 'relaunch write failed twice - pane stranded at a bare shell' and exited. Source gone, nothing holds the sid, no .handed-off (same-account). With .handed-off this shape is EXITED (compare real row 0919-111-a).",
+      "expected_phase": "PRE-MOVE",
+      "expected_substate": null,
+      "must_not_be": [
+        "RELAUNCHED",
+        "ENGAGED",
+        "MOVED",
+        "EXITING"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [],
+        "source_alive": false,
+        "handed_off": false,
+        "live_watcher": false,
+        "pane_state": "shell",
+        "identity_match": true,
+        "lock_names_target": false,
+        "source_retired": false,
+        "legacy_verdict": "recycle-dead"
+      }
+    },
+    {
+      "id": "405-c",
+      "at": "2026-09-28T23:22:05Z",
+      "synthetic": false,
+      "note": "lr-upgrade's retype relaunched claude in pane 405 (relaunch-typed 23:21:19Z) and sent the CR unconfirmed at 23:21:33Z; SUBMIT-UNMEASURED at 23:22:05Z. The target copy has no record carrying the run token; the only user record after relaunch is a queued task-notification (23:21:21Z) and there is no assistant record.",
+      "expected_phase": "RELAUNCHED",
+      "expected_substate": "SUBMITTED",
+      "must_not_be": [
+        "ENGAGED",
+        "TARGET-TRANSIENT",
+        "MOVED"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "target",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": false,
+        "handed_off": false,
+        "live_launcher": true,
+        "pane_state": "claude",
+        "identity_match": true,
+        "submitted": true,
+        "target_last_assistant": "none",
+        "token_record_offset": null,
+        "token_is_this_attempt": false,
+        "nonerror_assistant_after_token": false,
+        "relaunch_substate": "SUBMITTED"
+      }
+    },
+    {
+      "id": "405-d",
+      "at": "2026-09-28T23:24:56Z",
+      "synthetic": false,
+      "note": "lr-fire-resume ended FAILED:submit ('no record of the prompt in the transcript within 180s', 23:24:55Z) and the legacy result was written as verdict 'upgraded' with confirmation UNCONFIRMED; the relaunched claude is idle in the pane. Still no token record and no assistant record, so this must not close as ENGAGED.",
+      "expected_phase": "RELAUNCHED",
+      "expected_substate": "SUBMITTED",
+      "must_not_be": [
+        "ENGAGED",
+        "MOVED",
+        "TARGET-TRANSIENT"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "target",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": false,
+        "handed_off": false,
+        "live_launcher": false,
+        "live_watcher": false,
+        "pane_state": "claude",
+        "identity_match": true,
+        "submitted": true,
+        "target_last_assistant": "none",
+        "token_record_offset": null,
+        "token_is_this_attempt": false,
+        "nonerror_assistant_after_token": false,
+        "relaunch_substate": "SUBMITTED",
+        "legacy_verdict": "upgraded (UNCONFIRMED: FAILED:submit)"
+      }
+    }
+  ]
+}

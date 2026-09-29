@@ -1,0 +1,337 @@
+$ python3 docs/research/lr-recon-w0-2026-09-29/raw/m5-goal-scan.py   # run 2026-09-29, cwd = repo root
+# corpus: 5604 transcript files, 4242 session uuids, mtime >= 2026-09-01, cfgs=.claude,.claude-next,.claude-next4,.claude-secondary,.claude-tertiary,.claude-quaternary
+# corpus-wide (record copies, transplant duplicates counted per file):
+#   isApiErrorMessage error values: {'rate_limit': 350, 'server_error': 132, 'authentication_failed': 82, 'invalid_request': 27, 'unknown': 9}
+#   'blocking_limit' as a structured field value (error/reason/stop_reason/subtype): 0
+#   'Goal paused' system notices: {'Goal paused · usage limit reached · send a message after it resets to continue': 3, 'Goal paused · goal checks kept finding it unmet this turn · send a message to continue': 3, 'Goal paused · the goal check timed out · send a message to continue': 1, 'Goal paused · the API rejected the last request · send a message to continue, or run /goal clear': 1}
+#   'Goal cleared after an unrecoverable error (<label>)' notices: {'context limit reached': 2, 'authentication failed': 2}
+# sessions with goal_status + an api-error record: 50
+
+## 09e64dcb  copies=.claude-quaternary:handed-off,.claude-tertiary
+  2026-09-19T04:40:05  ARM        len=400 sha=895af3cf40                 c-quaternary+c-tertiary
+  2026-09-19T04:40:05  GCMD       len=400 sha=895af3cf40                 c-quaternary+c-tertiary
+  2026-09-19T05:36:16  STOP                                              c-quaternary+c-tertiary
+  2026-09-19T05:49:28  MET        len=400 sha=895af3cf40                 c-quaternary+c-tertiary
+  2026-09-19T05:49:31  STOP                                              c-quaternary+c-tertiary
+  2026-09-19T17:01:34  DEATH      rateLimitType=five_hour v2.1.260       c-quaternary+c-tertiary
+  2026-09-19T17:11:29  DEATH      rateLimitType=five_hour v2.1.260       c-quaternary+c-tertiary
+  2026-09-19T17:26:26  RESUME                                            c-tertiary
+  2026-09-19T17:45:46  STOP                                              c-tertiary
+  2026-09-19T19:53:38  DEATH      rateLimitType=five_hour v2.1.260       c-tertiary
+  2026-09-19T22:32:34  PROMPT                                            c-tertiary
+  2026-09-19T22:34:25  STOP                                              c-tertiary
+
+## 18e3fd78  copies=.claude,.claude-next,.claude-quaternary:handed-off
+  2026-09-26T19:20:08  ARM        len=576 sha=560250f829                 c+c-next+c-quaternary
+  2026-09-26T19:27:20  STOP                                              c+c-next+c-quaternary
+  2026-09-26T21:11:24  MET        len=576 sha=560250f829                 c+c-next+c-quaternary
+  2026-09-26T21:11:24  STOP                                              c+c-next+c-quaternary
+  2026-09-26T23:03:13  DEATH      rateLimitType=seven_day v2.1.280       c+c-next+c-quaternary
+  2026-09-27T05:43:38  RESUME                                            c+c-next
+  2026-09-27T07:27:02  STOP                                              c+c-next
+
+## 28f07827  copies=.claude-quaternary:handed-off,.claude-secondary
+  2026-09-19T15:48:08  ARM        len=1429 sha=27828afbef                c-quaternary+c-secondary
+  2026-09-19T15:48:08  GCMD       len=1429 sha=27828afbef                c-quaternary+c-secondary
+  2026-09-19T16:02:51  STOP                                              c-quaternary+c-secondary
+  2026-09-19T17:07:35  DEATH      rateLimitType=five_hour v2.1.260       c-quaternary+c-secondary
+  2026-09-19T17:09:46  DEATH      rateLimitType=five_hour v2.1.260       c-quaternary+c-secondary
+  2026-09-19T17:09:50  DEATH      rateLimitType=five_hour v2.1.260       c-quaternary+c-secondary
+  2026-09-19T17:14:48  DEATH      rateLimitType=five_hour v2.1.260       c-quaternary+c-secondary
+  2026-09-19T17:51:44  RESUME                                            c-secondary
+
+## 2de07510  copies=.claude-quaternary,.claude-secondary,.claude-secondary:handed-off
+  2026-09-04T19:34:58  ARM        len=1400 sha=880745b572                c-quaternary+c-secondary
+  2026-09-04T19:34:58  GCMD       len=1400 sha=880745b572                c-quaternary+c-secondary
+  2026-09-04T20:24:09  APIERR     error=server_error                     c-quaternary+c-secondary
+  2026-09-05T01:42:54  STOP                                              c-quaternary+c-secondary
+  2026-09-05T03:29:32  CHECKIN                                           c-quaternary+c-secondary
+  2026-09-05T03:29:42  STOP                                              c-quaternary+c-secondary
+  2026-09-05T03:31:01  DEATH      rateLimitType=five_hour v2.1.260       c-quaternary+c-secondary
+  2026-09-05T03:31:19  DEATH      rateLimitType=five_hour v2.1.260       c-quaternary+c-secondary
+  2026-09-05T03:31:42  DEATH      rateLimitType=five_hour v2.1.260       c-quaternary+c-secondary
+
+## 3c73a9d9  copies=.claude-tertiary
+  2026-09-22T07:08:04  ARM        len=515 sha=adf42efda5                 c-tertiary
+  2026-09-22T07:08:04  GCMD       len=515 sha=adf42efda5                 c-tertiary
+  2026-09-22T08:03:45  DEATH      rateLimitType=seven_day v2.1.260       c-tertiary
+  2026-09-22T08:03:46  DEATH      rateLimitType=seven_day v2.1.260       c-tertiary
+  2026-09-22T08:03:49  DEATH      rateLimitType=seven_day v2.1.260       c-tertiary
+  2026-09-22T15:25:51  PROMPT                                            c-tertiary
+  2026-09-22T15:52:40  STOP                                              c-tertiary
+
+## 4101dbdf  copies=.claude-quaternary
+  2026-08-17T10:00:36  ARM        len=212 sha=1913aa7a8e                 c-quaternary
+  2026-08-17T10:00:36  GCMD       len=212 sha=1913aa7a8e                 c-quaternary
+  2026-08-17T11:30:04  STOP                                              c-quaternary
+  2026-08-17T12:15:55  APIERR     error=server_error                     c-quaternary
+  2026-08-17T13:14:55  STOP                                              c-quaternary
+  2026-08-17T16:37:12  APIERR     error=authentication_failed            c-quaternary
+  2026-08-17T16:54:05  APIERR     error=server_error                     c-quaternary
+  2026-08-17T17:47:25  STOP                                              c-quaternary
+  2026-08-17T20:12:33  APIERR     error=server_error                     c-quaternary
+  2026-08-17T21:06:23  STOP                                              c-quaternary
+  2026-08-17T21:30:52  APIERR     error=server_error                     c-quaternary
+  2026-08-18T00:33:05  DEATH      rateLimitType=None v2.1.220            c-quaternary
+  2026-09-14T15:37:59  RESUME                                            c-quaternary
+  2026-09-14T15:38:07  APIERR     error=invalid_request                  c-quaternary
+  2026-09-14T15:38:07  CLR        len=212 sha=1913aa7a8e                 c-quaternary
+  2026-09-14T15:38:07  GCLR       Goal cleared after an unrecoverable error (context limit reached) c-quaternary
+  2026-09-14T15:39:02  APIERR     error=invalid_request                  c-quaternary
+
+## 46bc0436  copies=.claude-quaternary,.claude-secondary:handed-off
+  2026-09-28T06:15:21  ARM        len=761 sha=04c5ea0144                 c-quaternary+c-secondary
+  2026-09-28T16:21:28  STOP                                              c-quaternary+c-secondary
+  2026-09-28T16:22:10  MET        len=761 sha=04c5ea0144                 c-quaternary+c-secondary
+  2026-09-28T16:22:11  STOP                                              c-quaternary+c-secondary
+  2026-09-29T00:19:29  RESUME                                            c-quaternary+c-secondary
+  2026-09-29T00:19:50  STOP                                              c-quaternary+c-secondary
+  2026-09-29T04:01:31  DEATH      rateLimitType=five_hour v2.1.284       c-quaternary+c-secondary
+  2026-09-29T04:17:54  RESUME                                            c-quaternary
+  2026-09-29T04:24:27  STOP                                              c-quaternary
+
+## 52e35019  copies=.claude-secondary
+  2026-09-08T21:22:22  STOP                                              c-secondary
+  2026-09-08T22:08:39  ARM        len=295 sha=b741eae849                 c-secondary
+  2026-09-08T22:08:39  GCMD       len=295 sha=b741eae849                 c-secondary
+  2026-09-08T22:27:38  STOP                                              c-secondary
+  2026-09-08T23:11:09  DEATH      rateLimitType=five_hour v2.1.260       c-secondary
+  2026-09-08T23:57:29  DEATH      rateLimitType=five_hour v2.1.260       c-secondary
+  2026-09-09T00:51:53  RESUME                                            c-secondary
+  2026-09-09T00:54:01  STOP                                              c-secondary
+  2026-09-09T05:15:43  DEATH      rateLimitType=five_hour v2.1.260       c-secondary
+  2026-09-09T17:19:10  APIERR     error=server_error                     c-secondary
+  2026-09-09T17:39:14  STOP                                              c-secondary
+  2026-09-09T20:43:02  APIERR     error=server_error                     c-secondary
+  2026-09-09T21:50:04  STOP                                              c-secondary
+
+## 5e0d69f7  copies=.claude-quaternary,.claude-tertiary:handed-off
+  2026-09-14T03:54:00  STOP                                              c-quaternary+c-tertiary
+  2026-09-14T04:26:39  ARM        len=293 sha=0653d70fad                 c-quaternary+c-tertiary
+  2026-09-14T04:26:39  GCMD       len=293 sha=0653d70fad                 c-quaternary+c-tertiary
+  2026-09-14T04:28:47  STOP                                              c-quaternary+c-tertiary
+  2026-09-14T04:49:31  EVAL       len=293 sha=0653d70fad                 c-quaternary+c-tertiary
+  2026-09-14T04:49:35  STOP                                              c-quaternary+c-tertiary
+  2026-09-14T04:54:35  EVAL       len=293 sha=0653d70fad                 c-quaternary+c-tertiary
+  2026-09-14T04:54:35  STOP                                              c-quaternary+c-tertiary
+  2026-09-14T04:57:14  MET        len=293 sha=0653d70fad                 c-quaternary+c-tertiary
+  2026-09-14T04:57:14  STOP                                              c-quaternary+c-tertiary
+  2026-09-14T15:27:55  DEATH      rateLimitType=seven_day v2.1.260       c-quaternary+c-tertiary
+  2026-09-14T15:45:10  RESUME                                            c-quaternary
+  2026-09-14T15:47:16  STOP                                              c-quaternary
+
+## 60ccb8f4  copies=.claude-next:handed-off,.claude-secondary,.claude:handed-off
+  2026-09-26T18:38:16  ARM        len=353 sha=2d3f477871                 c+c-next+c-secondary
+  2026-09-26T18:54:40  STOP                                              c+c-next+c-secondary
+  2026-09-26T19:44:36  MET        len=353 sha=2d3f477871                 c+c-next+c-secondary
+  2026-09-26T19:44:40  STOP                                              c+c-next+c-secondary
+  2026-09-26T20:23:55  DEATH      rateLimitType=seven_day v2.1.280       c+c-next+c-secondary
+  2026-09-26T20:39:39  DEATH      rateLimitType=seven_day v2.1.280       c+c-next+c-secondary
+  2026-09-26T20:39:41  DEATH      rateLimitType=seven_day v2.1.280       c+c-next+c-secondary
+  2026-09-26T20:40:29  RESUME                                            c-secondary
+  2026-09-26T20:45:32  STOP                                              c-secondary
+
+## 65186f1f  copies=.claude-secondary,.claude-tertiary:handed-off
+  2026-09-19T18:04:11  ARM        len=595 sha=fa50cb8ea5                 c-secondary+c-tertiary
+  2026-09-19T18:35:50  STOP                                              c-secondary+c-tertiary
+  2026-09-19T19:57:41  DEATH      rateLimitType=five_hour v2.1.260       c-secondary+c-tertiary
+  2026-09-19T19:58:34  DEATH      rateLimitType=five_hour v2.1.260       c-secondary+c-tertiary
+  2026-09-19T20:48:39  RESUME                                            c-secondary
+  2026-09-19T21:07:07  STOP                                              c-secondary
+  2026-09-20T01:22:38  EVAL       len=595 sha=fa50cb8ea5                 c-secondary
+  2026-09-20T01:22:42  STOP                                              c-secondary
+  2026-09-20T01:24:15  EVAL       len=595 sha=fa50cb8ea5                 c-secondary
+  2026-09-20T01:24:22  STOP                                              c-secondary
+  2026-09-20T01:24:43  EVAL       len=595 sha=fa50cb8ea5                 c-secondary
+  2026-09-20T01:24:51  STOP                                              c-secondary
+  2026-09-20T01:27:20  EVAL       len=595 sha=fa50cb8ea5                 c-secondary
+  2026-09-20T01:27:26  STOP                                              c-secondary
+  2026-09-20T01:45:41  EVAL       len=595 sha=fa50cb8ea5                 c-secondary
+  2026-09-20T01:45:48  STOP                                              c-secondary
+  2026-09-20T01:45:56  EVAL       len=595 sha=fa50cb8ea5                 c-secondary
+  2026-09-20T01:46:04  STOP                                              c-secondary
+  2026-09-20T01:46:12  EVAL       len=595 sha=fa50cb8ea5                 c-secondary
+  2026-09-20T01:46:18  STOP                                              c-secondary
+  2026-09-20T01:46:23  EVAL       len=595 sha=fa50cb8ea5                 c-secondary
+  2026-09-20T01:46:31  STOP                                              c-secondary
+  2026-09-20T01:46:39  EVAL       len=595 sha=fa50cb8ea5                 c-secondary
+  2026-09-20T01:46:47  STOP                                              c-secondary
+  2026-09-20T01:46:54  EVAL       len=595 sha=fa50cb8ea5                 c-secondary
+  2026-09-20T01:47:02  STOP                                              c-secondary
+  2026-09-20T01:47:06  EVAL       len=595 sha=fa50cb8ea5                 c-secondary
+  2026-09-20T01:47:15  STOP                                              c-secondary
+  2026-09-20T01:47:19  EVAL       len=595 sha=fa50cb8ea5                 c-secondary
+  2026-09-20T01:47:27  STOP                                              c-secondary
+  2026-09-20T01:47:31  EVAL       len=595 sha=fa50cb8ea5                 c-secondary
+  2026-09-20T01:47:39  STOP                                              c-secondary
+  2026-09-20T08:52:10  CLR        len=595 sha=fa50cb8ea5                 c-secondary
+  2026-09-20T08:56:56  STOP                                              c-secondary
+
+## 798afadf  copies=.claude,.claude-next,.claude-quaternary:handed-off
+  2026-09-26T21:19:50  ARM        len=331 sha=0449c5319d                 c+c-next+c-quaternary
+  2026-09-26T21:41:20  STOP                                              c+c-next+c-quaternary
+  2026-09-26T22:21:49  DEATH      rateLimitType=seven_day v2.1.280       c+c-next+c-quaternary
+  2026-09-26T22:21:49  PAUSE      Goal paused · usage limit reached · send a message after it resets to continue c+c-next+c-quaternary
+  2026-09-26T22:22:40  DEATH      rateLimitType=seven_day v2.1.280       c+c-next+c-quaternary
+  2026-09-26T22:22:42  DEATH      rateLimitType=seven_day v2.1.280       c+c-next+c-quaternary
+  2026-09-26T23:11:14  DEATH      rateLimitType=seven_day v2.1.280       c+c-next+c-quaternary
+  2026-09-27T01:11:14  DEATH      rateLimitType=seven_day v2.1.280       c+c-next+c-quaternary
+  2026-09-27T07:22:55  RESUME                                            c+c-next
+
+## 7c395da7  copies=.claude-quaternary,.claude-secondary:handed-off
+  2026-09-28T12:53:48  ARM        len=381 sha=2819b8085f                 c-quaternary+c-secondary
+  2026-09-28T12:56:36  STOP                                              c-quaternary+c-secondary
+  2026-09-28T14:48:15  EVAL       len=381 sha=2819b8085f                 c-quaternary+c-secondary
+  2026-09-28T14:48:15  STOP                                              c-quaternary+c-secondary
+  2026-09-28T15:10:14  EVAL       len=381 sha=2819b8085f                 c-quaternary+c-secondary
+  2026-09-28T15:10:19  STOP                                              c-quaternary+c-secondary
+  2026-09-28T18:40:45  MET        len=381 sha=2819b8085f                 c-quaternary+c-secondary
+  2026-09-28T18:40:46  STOP                                              c-quaternary+c-secondary
+  2026-09-29T01:02:07  RESUME                                            c-quaternary+c-secondary
+  2026-09-29T01:03:27  STOP                                              c-quaternary+c-secondary
+  2026-09-29T03:59:20  DEATH      rateLimitType=five_hour v2.1.284       c-quaternary+c-secondary
+  2026-09-29T04:07:27  DEATH      rateLimitType=five_hour v2.1.284       c-quaternary+c-secondary
+  2026-09-29T04:18:04  RESUME                                            c-quaternary
+  2026-09-29T04:21:00  STOP                                              c-quaternary
+
+## 82354751  copies=.claude-secondary
+  2026-09-11T22:21:41  ARM        len=157 sha=2a4cb72a12                 c-secondary
+  2026-09-11T22:21:41  GCMD       len=157 sha=2a4cb72a12                 c-secondary
+  2026-09-11T22:27:24  MET        len=157 sha=2a4cb72a12                 c-secondary
+  2026-09-11T22:27:24  STOP                                              c-secondary
+  2026-09-12T03:57:51  DEATH      rateLimitType=seven_day v2.1.260       c-secondary
+  2026-09-12T03:57:53  DEATH      rateLimitType=seven_day v2.1.260       c-secondary
+  2026-09-12T04:00:36  DEATH      rateLimitType=seven_day v2.1.260       c-secondary
+  2026-09-12T15:28:11  STOP                                              c-secondary
+  2026-09-13T20:25:15  RESUME                                            c-secondary
+  2026-09-13T20:54:25  STOP                                              c-secondary
+
+## 98f02458  copies=.claude-secondary,.claude-tertiary:handed-off
+  2026-09-19T18:39:45  ARM        len=699 sha=6c22912d55                 c-secondary+c-tertiary
+  2026-09-19T19:52:33  DEATH      rateLimitType=five_hour v2.1.260       c-secondary+c-tertiary
+  2026-09-19T19:57:42  DEATH      rateLimitType=five_hour v2.1.260       c-secondary+c-tertiary
+  2026-09-19T21:29:47  RESUME                                            c-secondary
+  2026-09-19T22:02:39  STOP                                              c-secondary
+
+## ac0f0123  copies=.claude,.claude-next,.claude-next:handed-off,.claude-secondary,.claude:handed-off
+  2026-09-26T05:51:26  ARM        len=457 sha=33acad4a28                 c+c-next+c-secondary
+  2026-09-26T06:17:27  MET        len=457 sha=33acad4a28                 c+c-next+c-secondary
+  2026-09-26T06:17:27  STOP                                              c+c-next+c-secondary
+  2026-09-26T20:43:35  DEATH      rateLimitType=seven_day v2.1.280       c+c-next+c-secondary
+  2026-09-26T21:13:28  RESUME                                            c-secondary
+  2026-09-27T07:26:05  STOP                                              c-secondary
+
+## b418b97a  copies=.claude-secondary,.claude-secondary:handed-off,.claude-tertiary
+  2026-09-08T21:20:36  ARM        len=2054 sha=46aa665f0f                c-secondary+c-tertiary
+  2026-09-08T21:20:36  GCMD       len=2054 sha=46aa665f0f                c-secondary+c-tertiary
+  2026-09-08T21:45:11  STOP                                              c-secondary+c-tertiary
+  2026-09-08T22:17:53  CHECKIN                                           c-secondary+c-tertiary
+  2026-09-08T22:18:01  STOP                                              c-secondary+c-tertiary
+  2026-09-08T23:09:37  DEATH      rateLimitType=five_hour v2.1.260       c-secondary+c-tertiary
+  2026-09-08T23:09:39  DEATH      rateLimitType=five_hour v2.1.260       c-secondary+c-tertiary
+  2026-09-08T23:17:54  DEATH      rateLimitType=five_hour v2.1.260       c-secondary+c-tertiary
+  2026-09-08T23:25:03  RESUME                                            c-tertiary
+  2026-09-08T23:28:55  STOP                                              c-tertiary
+  2026-09-09T01:44:29  EVAL       len=2054 sha=46aa665f0f                c-tertiary
+  2026-09-09T01:44:31  STOP                                              c-tertiary
+  2026-09-09T01:46:18  EVAL       len=2054 sha=46aa665f0f                c-tertiary
+  2026-09-09T01:46:18  STOP                                              c-tertiary
+  2026-09-09T01:48:25  MET        len=2054 sha=46aa665f0f                c-tertiary
+  2026-09-09T01:48:25  STOP                                              c-tertiary
+
+## c0f857b6  copies=.claude,.claude-next,.claude-next:handed-off,.claude-tertiary,.claude:handed-off
+  2026-09-19T16:36:19  ARM        len=504 sha=57778494e1                 c+c-next+c-tertiary
+  2026-09-19T17:06:33  MET        len=504 sha=57778494e1                 c+c-next+c-tertiary
+  2026-09-19T17:06:33  STOP                                              c+c-next+c-tertiary
+  2026-09-19T21:40:08  DEATH      rateLimitType=seven_day v2.1.260       c+c-next+c-tertiary
+  2026-09-19T22:25:50  RESUME                                            c-tertiary
+  2026-09-19T22:39:03  STOP                                              c-tertiary
+
+## cc1f8d0a  copies=.claude-secondary
+  2026-09-16T21:31:39  ARM        len=431 sha=ebb227cc49                 c-secondary
+  2026-09-16T21:31:39  GCMD       len=431 sha=ebb227cc49                 c-secondary
+  2026-09-16T22:06:22  STOP                                              c-secondary
+  2026-09-16T23:01:20  DEATH      rateLimitType=five_hour v2.1.260       c-secondary
+  2026-09-16T23:02:04  DEATH      rateLimitType=five_hour v2.1.260       c-secondary
+  2026-09-16T23:36:15  DEATH      rateLimitType=five_hour v2.1.260       c-secondary
+  2026-09-17T00:45:46  STOP                                              c-secondary
+
+## cfb177b2  copies=.claude-quaternary,.claude-secondary:handed-off
+  2026-09-29T01:32:54  ARM        len=420 sha=540e642b55                 c-quaternary+c-secondary
+  2026-09-29T01:45:26  STOP                                              c-quaternary+c-secondary
+  2026-09-29T02:58:31  MET        len=420 sha=540e642b55                 c-quaternary+c-secondary
+  2026-09-29T02:58:34  STOP                                              c-quaternary+c-secondary
+  2026-09-29T04:15:44  DEATH      rateLimitType=five_hour v2.1.284       c-quaternary+c-secondary
+  2026-09-29T04:18:02  RESUME                                            c-quaternary
+  2026-09-29T04:19:07  STOP                                              c-quaternary
+
+## d02d8feb  copies=.claude-quaternary:handed-off,.claude-secondary
+  2026-09-19T14:55:15  STOP                                              c-quaternary+c-secondary
+  2026-09-19T15:00:40  ARM        len=617 sha=d597f644e4                 c-quaternary+c-secondary
+  2026-09-19T15:00:40  GCMD       len=617 sha=d597f644e4                 c-quaternary+c-secondary
+  2026-09-19T16:20:30  MET        len=617 sha=d597f644e4                 c-quaternary+c-secondary
+  2026-09-19T16:20:30  STOP                                              c-quaternary+c-secondary
+  2026-09-19T16:59:19  DEATH      rateLimitType=five_hour v2.1.260       c-quaternary+c-secondary
+  2026-09-19T17:20:49  RESUME                                            c-secondary
+  2026-09-19T17:44:45  STOP                                              c-secondary
+
+## d83af9ce  copies=.claude-quaternary:handed-off,.claude-secondary
+  2026-09-12T21:55:41  ARM        len=510 sha=74d2e81322                 c-quaternary+c-secondary
+  2026-09-12T22:13:18  STOP                                              c-quaternary+c-secondary
+  2026-09-12T22:31:12  DEATH      rateLimitType=seven_day v2.1.260       c-quaternary+c-secondary
+  2026-09-12T22:43:09  DEATH      rateLimitType=seven_day v2.1.260       c-quaternary+c-secondary
+  2026-09-12T22:53:01  DEATH      rateLimitType=seven_day v2.1.260       c-quaternary+c-secondary
+  2026-09-12T23:02:09  RESUME                                            c-secondary
+  2026-09-12T23:11:03  STOP                                              c-secondary
+  2026-09-13T00:06:10  EVAL       len=510 sha=74d2e81322                 c-secondary
+  2026-09-13T00:06:12  STOP                                              c-secondary
+  2026-09-13T00:07:30  EVAL       len=510 sha=74d2e81322                 c-secondary
+  2026-09-13T00:07:32  STOP                                              c-secondary
+  2026-09-13T00:08:05  MET        len=510 sha=74d2e81322                 c-secondary
+  2026-09-13T00:08:06  STOP                                              c-secondary
+
+## e442434c  copies=.claude-quaternary:handed-off,.claude-tertiary
+  2026-09-19T16:08:18  ARM        len=580 sha=d89fc12394                 c-quaternary+c-tertiary
+  2026-09-19T16:08:18  GCMD       len=580 sha=d89fc12394                 c-quaternary+c-tertiary
+  2026-09-19T16:26:53  STOP                                              c-quaternary+c-tertiary
+  2026-09-19T16:57:45  CHECKIN                                           c-quaternary+c-tertiary
+  2026-09-19T16:57:55  STOP                                              c-quaternary+c-tertiary
+  2026-09-19T16:58:33  DEATH      rateLimitType=five_hour v2.1.260       c-quaternary+c-tertiary
+  2026-09-19T16:58:43  DEATH      rateLimitType=five_hour v2.1.260       c-quaternary+c-tertiary
+  2026-09-19T16:58:49  DEATH      rateLimitType=five_hour v2.1.260       c-quaternary+c-tertiary
+  2026-09-19T17:27:19  DEATH      rateLimitType=five_hour v2.1.260       c-quaternary+c-tertiary
+  2026-09-19T17:47:16  RESUME                                            c-tertiary
+  2026-09-19T17:48:57  EVAL       len=580 sha=d89fc12394                 c-tertiary
+  2026-09-19T17:49:00  STOP                                              c-tertiary
+  2026-09-19T17:50:13  MET        len=580 sha=d89fc12394                 c-tertiary
+  2026-09-19T17:50:13  STOP                                              c-tertiary
+
+# PER-DEATH TABLE (goal ARMED at a usage-limit death; retries of one outage collapsed)
+sid      pre_e/s goal_set         death            cc_ver    pause resumed restore?   stops first_goal_rec_after     same_goal_evidence_after rearm
+28f07827 0/8     2026-09-19T15:48 2026-09-19T17:07 v2.1.260  False True    restore    0     -                        -                        False 
+2de07510 1/3     2026-09-04T19:34 2026-09-05T03:31 v2.1.260  False False   -          0     -                        -                        False 
+3c73a9d9 0/0     2026-09-22T07:08 2026-09-22T08:03 v2.1.260  False False   -          8     -                        -                        False 
+4101dbdf 0/15    2026-08-17T10:00 2026-08-18T00:33 v2.1.220  False True    restore    0     CLR@2026-09-14T15:38     CLR@2026-09-14T15:38     False Goal cleared after an unrecoverable error (context limit reached)
+52e35019 0/3     2026-09-08T22:08 2026-09-08T23:11 v2.1.260  False True    restore    25    -                        -                        False 
+52e35019 0/18    2026-09-08T22:08 2026-09-09T05:15 v2.1.260  False False   -          10    -                        -                        False 
+65186f1f 0/1     2026-09-19T18:04 2026-09-19T19:57 v2.1.260  False True    restore    16    EVAL@2026-09-20T01:22    EVAL@2026-09-20T01:22    False 
+798afadf 0/7     2026-09-26T21:19 2026-09-26T22:21 v2.1.280  True  True    restore    0     PAUSE@2026-09-26T22:21   -                        False 
+98f02458 0/0     2026-09-19T18:39 2026-09-19T19:52 v2.1.260  False True    restore    1     -                        -                        False 
+b418b97a 1/5     2026-09-08T21:20 2026-09-08T23:09 v2.1.260  False True    restore    11    EVAL@2026-09-09T01:44    EVAL@2026-09-09T01:44    False 
+cc1f8d0a 0/3     2026-09-16T21:31 2026-09-16T23:01 v2.1.260  False False   -          1     -                        -                        False 
+d83af9ce 0/11    2026-09-12T21:55 2026-09-12T22:31 v2.1.260  False True    restore    19    EVAL@2026-09-13T00:06    EVAL@2026-09-13T00:06    False 
+e442434c 1/11    2026-09-19T16:08 2026-09-19T16:58 v2.1.260  False True    restore    3     EVAL@2026-09-19T17:48    EVAL@2026-09-19T17:48    False 
+
+# COUNTS (sessions; a session counts once if any of its armed deaths qualifies)
+sessions_goal_armed_at_usage_limit_death=12  (armed deaths=13)
+sessions_with_Goal_paused_notice_at_death=1
+sessions_cleared_AT_death (CLR/GCLR within 10 min of death, before any resume)=0
+sessions_resumed_after_death=9
+sessions_restore_rule_true_at_resume=9
+sessions_same_goal_evidence_after_death (EVAL/MET/CLR/CHECKIN of same hash)=5
+sessions_rearmed_after_death (new ARM or /goal command)=0
+sessions_no_goal_record_after_death=6
+sessions_no_goal_record_after_death_but_>=1_stop_after=4
+sessions_goal_never_evaluated_before_death (0 EVAL/CHECKIN, >=1 STOP between ARM and death)=7
+sessions_no_goal_record_after_death_AND_evaluated_before_death=1
+# pre_e/s = goal EVAL+CHECKIN records / STOP records between the ARM and the death

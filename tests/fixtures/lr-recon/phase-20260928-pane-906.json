@@ -1,0 +1,105 @@
+{
+  "incident": "2026-09-28/pane-906",
+  "summary": "A poller-auto same-account no-prompt upgrade relaunch of 6b075742 (a team member) in pane 906: a claude process came up on the tty but never held a live '--resume 6b075742' for 15 s within 180 s (recycle-dead 13:23:02Z), and after 5 retypes the pane was left at a bare shell (verdict failed, 13:28:45Z) - the idle MOVED shape that never engaged.",
+  "sources": [
+    "$HOME/.reso/limit-recover/results/upgrade-6b075742-*.json (fields read: pane, verdict, reason, requested_by, ts)",
+    "$HOME/.reso/limit-recover/upgrade/6b075742-20260928T131929Z/events.jsonl (fields read: ts, state, detail)",
+    "$HOME/.reso/limit-recover/upgrade/6b075742-20260928T131929Z/handoff-fire.log (lines read: same-account relaunch, 'no tombstone', watcher pid 83801, RECYCLE FAILED line)",
+    "$HOME/.reso/limit-recover/upgrade/6b075742-20260928T131929Z/launch.sh (read: LR_SUBMIT_TOKEN='' and --prompt '' i.e. no-prompt relaunch; config dir)",
+    "$TMPDIR/handoff-recycle-906-1790601570-*.log (lines read: shell-prompt confirm, 'relaunch process up in 906 (claude on tty)', RECYCLE FAILED; epoch in name = 2026-09-28T13:19:30Z)",
+    "$HOME/.claude/logs/handoffs.jsonl (rows 2026-09-28T13:19:30Z recycle-intent and 13:23:02Z recycle-dead for target_pane 906: class, detail)",
+    "$HOME/.reso/limit-recover/poller.log (2026-09-28T13:19:20Z UPGRADE-AUTO queued 906(6b075742))",
+    "$HOME/.reso/limit-recover/upgrade-drain.log (906 6b075742 failed line)",
+    "$HOME/.claude-quaternary/projects/<slug>/6b075742-*.jsonl (ls: mtime 2026-09-28T13:19Z, nothing written after the relaunch; no .jsonl.handed-off)",
+    "$HOME/.reso/limit-recover/design-v2/findings.json item 41 and full.json finding 'launchd typing already proven' (pane 906 narrative)"
+  ],
+  "rows": [
+    {
+      "id": "906-a",
+      "at": "2026-09-28T13:19:40Z",
+      "synthetic": false,
+      "note": "relaunch-typed 13:19:40Z; the watcher saw 'relaunch process up in 906 (claude on tty)'. The holder is pane-bound under the relaunch cfg but never stable for two samples and there is no readiness note, so row 6 fails and row 7 yields RELAUNCHED with no prompt. kind=idle because the launcher carries no prompt and no submit token.",
+      "expected_phase": "RELAUNCHED",
+      "expected_substate": "UNPROMPTED",
+      "must_not_be": [
+        "MOVED",
+        "ENGAGED"
+      ],
+      "evidence": {
+        "kind": "idle",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "target",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": false,
+        "handed_off": false,
+        "live_watcher": true,
+        "pane_state": "claude",
+        "identity_match": true,
+        "holder_stable_two_samples": false,
+        "readiness": "none",
+        "submitted": false,
+        "relaunch_substate": "UNPROMPTED"
+      }
+    },
+    {
+      "id": "906-b",
+      "at": "2026-09-28T13:23:02Z",
+      "synthetic": false,
+      "note": "recycle-dead 'no-prompt relaunch never held a live --resume process' (watcher: never held for 15 s within 180 s). No holder, the watcher has exited, no .handed-off (same-account).",
+      "expected_phase": "PRE-MOVE",
+      "expected_substate": null,
+      "must_not_be": [
+        "MOVED",
+        "RELAUNCHED",
+        "ENGAGED"
+      ],
+      "evidence": {
+        "kind": "idle",
+        "attempt": 1,
+        "holders": [],
+        "source_alive": false,
+        "handed_off": false,
+        "live_watcher": false,
+        "identity_match": true,
+        "holder_stable_two_samples": false,
+        "readiness": "none",
+        "lock_names_target": false,
+        "legacy_verdict": "recycle-dead"
+      }
+    },
+    {
+      "id": "906-c",
+      "at": "2026-09-28T13:28:45Z",
+      "synthetic": false,
+      "note": "lr-upgrade gave up: 'pane left at a bare shell after 5 retype(s)' (handoff-fire rc 1), verdict failed. Bare shell, empty holder set.",
+      "expected_phase": "PRE-MOVE",
+      "expected_substate": null,
+      "must_not_be": [
+        "MOVED",
+        "RELAUNCHED",
+        "EXITED"
+      ],
+      "evidence": {
+        "kind": "idle",
+        "attempt": 1,
+        "holders": [],
+        "source_alive": false,
+        "handed_off": false,
+        "live_watcher": false,
+        "live_launcher": false,
+        "pane_state": "shell",
+        "identity_match": true,
+        "holder_stable_two_samples": false,
+        "readiness": "none",
+        "lock_names_target": false,
+        "legacy_verdict": "failed"
+      }
+    }
+  ]
+}

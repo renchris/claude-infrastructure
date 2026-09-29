@@ -1,0 +1,187 @@
+# m8 — slot-order shape of the Dynamic Workflow resumed by session 7c395da7 after its account move
+# generated 2026-09-29T05:17:04Z; read-only; home paths scrubbed to $HOME; labels, briefs and outputs not printed
+
+$ ls -la $HOME/.claude*/projects/*/7c395da7-fbbe-4123-8bd5-2456787d12c3*
+-rw-------@ 1 <user>  staff  5020260 Sep 29 00:16 $HOME/.claude-quaternary/projects/-Users-<user>-Development-claude-infrastructure/7c395da7-fbbe-4123-8bd5-2456787d12c3.jsonl
+-rw-r--r--@ 1 <user>  staff      335 Sep 28 23:17 $HOME/.claude-secondary/projects/-Users-<user>-Development-claude-infrastructure/7c395da7-fbbe-4123-8bd5-2456787d12c3.HANDOFF.json
+-rw-------@ 1 <user>  staff  4153050 Sep 28 23:17 $HOME/.claude-secondary/projects/-Users-<user>-Development-claude-infrastructure/7c395da7-fbbe-4123-8bd5-2456787d12c3.jsonl.handed-off
+
+$HOME/.claude-quaternary/projects/-Users-<user>-Development-claude-infrastructure/7c395da7-fbbe-4123-8bd5-2456787d12c3:
+total 0
+drwxr-xr-x@   5 <user>  staff   160 Sep 28 20:38 .
+drwxr-xr-x@ 189 <user>  staff  6048 Sep 28 23:17 ..
+drwxr-xr-x@   3 <user>  staff    96 Sep 28 20:38 subagents
+drwxr-xr-x@  92 <user>  staff  2944 Sep 29 00:14 tool-results
+drwx------@   4 <user>  staff   128 Sep 28 22:59 workflows
+
+$HOME/.claude-secondary/projects/-Users-<user>-Development-claude-infrastructure/7c395da7-fbbe-4123-8bd5-2456787d12c3:
+total 0
+drwxr-xr-x@   5 <user>  staff   160 Sep 28 20:38 .
+drwxr-xr-x@ 299 <user>  staff  9568 Sep 28 23:17 ..
+drwxr-xr-x@   3 <user>  staff    96 Sep 28 20:38 subagents
+drwxr-xr-x@  68 <user>  staff  2176 Sep 28 22:38 tool-results
+drwx------@   4 <user>  staff   128 Sep 28 22:59 workflows
+
+$ cat $HOME/.claude-secondary/projects/*/7c395da7-fbbe-4123-8bd5-2456787d12c3.HANDOFF.json
+{"handed_off_to":"$HOME/.claude-quaternary","target_transcript":"$HOME/.claude-quaternary/projects/-Users-<user>-Development-claude-infrastructure/7c395da7-fbbe-4123-8bd5-2456787d12c3.jsonl","ts":"2026-09-29T04:17:39Z","lock":"$HOME/.reso/limit-recover/locks/7c395da7-fbbe-4123-8bd5-2456787d12c3.lock"}
+
+$ for t in $HOME/.claude-secondary/projects/*/7c395da7-fbbe-4123-8bd5-2456787d12c3.jsonl.handed-off $HOME/.claude-quaternary/projects/*/7c395da7-fbbe-4123-8bd5-2456787d12c3.jsonl; do echo "== $t"; grep -o 'wf_[0-9a-f]\{8\}-[0-9a-f]\{3\}' $t | sort | uniq -c; grep -o 'resumeFromRunId[^,}]\{0,24\}' $t | grep wf_ | sort | uniq -c; done
+== $HOME/.claude-secondary/projects/-Users-<user>-Development-claude-infrastructure/7c395da7-fbbe-4123-8bd5-2456787d12c3.jsonl.handed-off
+  15 wf_efe43f63-ce7
+   2 resumeFromRunId: 'wf_efe43f63-ce7'
+   1 resumeFromRunId: \"wf_efe43f63-ce7\"
+== $HOME/.claude-quaternary/projects/-Users-<user>-Development-claude-infrastructure/7c395da7-fbbe-4123-8bd5-2456787d12c3.jsonl
+   2 wf_b0f2a31c-e7d
+ 121 wf_efe43f63-ce7
+  29 wf_f5a6f59a-ab7
+   2 resumeFromRunId: 'wf_efe43f63-ce7'
+   2 resumeFromRunId: \"wf_efe43f63-ce7\"
+   1 resumeFromRunId: \"wf_f5a6f59a-ab7\"
+   2 resumeFromRunId":"wf_efe43f63-ce7"
+
+$ for c in .claude-secondary .claude-quaternary; do for w in $HOME/$c/projects/*/7c395da7-fbbe-4123-8bd5-2456787d12c3/subagents/workflows/wf_*; do echo "$w agent-jsonl=$(ls $w | grep -c '^agent-.*\.jsonl$') journal-lines=$(wc -l < $w/journal.jsonl) mtime=$(stat -f %Sm $w/journal.jsonl)"; done; done
+$HOME/.claude-secondary/projects/-Users-<user>-Development-claude-infrastructure/7c395da7-fbbe-4123-8bd5-2456787d12c3/subagents/workflows/wf_efe43f63-ce7 agent-jsonl=646 journal-lines=    1293 mtime=Sep 28 22:59:19 2026
+$HOME/.claude-quaternary/projects/-Users-<user>-Development-claude-infrastructure/7c395da7-fbbe-4123-8bd5-2456787d12c3/subagents/workflows/wf_efe43f63-ce7 agent-jsonl=659 journal-lines=    1307 mtime=Sep 28 23:19:43 2026
+$HOME/.claude-quaternary/projects/-Users-<user>-Development-claude-infrastructure/7c395da7-fbbe-4123-8bd5-2456787d12c3/subagents/workflows/wf_f5a6f59a-ab7 agent-jsonl=11 journal-lines=      18 mtime=Sep 29 00:13:47 2026
+
+$ S=$HOME/.claude-secondary/projects/*/7c395da7-fbbe-4123-8bd5-2456787d12c3/subagents/workflows/wf_efe43f63-ce7/journal.jsonl; Q=$(echo $HOME/.claude-quaternary/projects/*/7c395da7-fbbe-4123-8bd5-2456787d12c3/subagents/workflows/wf_efe43f63-ce7/journal.jsonl); head -c $(wc -c < $(echo $S)) $Q | cmp - $(echo $S) && echo 'source journal is a byte-identical prefix of the post-move journal'
+source journal is a byte-identical prefix of the post-move journal
+
+$ python3 $HOME/Development/.worktrees/lr-fv2-w0/scripts/limit-recover/lr-audit.py --config-dir $HOME/.claude-secondary --session 7c395da7-fbbe-4123-8bd5-2456787d12c3 --cwd $HOME/Development/claude-infrastructure --transcript $HOME/.claude-secondary/projects/-Users-<user>-Development-claude-infrastructure/7c395da7-fbbe-4123-8bd5-2456787d12c3.jsonl.handed-off; echo rc=$?
+lr-audit: no transcript found (config=$HOME/.claude-secondary sid=7c395da7-fbbe-4123-8bd5-2456787d12c3 cwd=$HOME/Development/claude-infrastructure)
+rc=2
+# note: the full (non --ledger-only) mode ignores --transcript and discovers <sid>.jsonl, so it cannot open the source account's .jsonl.handed-off
+
+$ python3 $HOME/Development/.worktrees/lr-fv2-w0/scripts/limit-recover/lr-audit.py --config-dir $HOME/.claude-quaternary --session 7c395da7-fbbe-4123-8bd5-2456787d12c3 --cwd $HOME/Development/claude-infrastructure --quiet --json /tmp/.lraudit-q.json > /tmp/.lraudit-q.md; echo rc=$?; grep -E '^\| (runId|wf_)|verdict floor|delegation population|^\| session' /tmp/.lraudit-q.md
+rc=0
+
+# derivation script (/tmp/.m8-derive.py, scratch, reproduced verbatim):
+-----8<-----
+# m8 derivation: call order from run-summary workflowProgress[].index (1-based call/queue order),
+# joined to journal.jsonl terminal records and lr-audit per-agent verdicts. Prints counts only.
+import json, os, sys, collections
+H = os.path.expanduser("~")
+SID = "7c395da7-fbbe-4123-8bd5-2456787d12c3"
+P = "projects/-Users-" + os.path.basename(H) + "-Development-claude-infrastructure/" + SID
+SRC = os.path.join(H, ".claude-secondary", P)   # pre-move (source account) copy, last written before the move
+DST = os.path.join(H, ".claude-quaternary", P)  # post-move copy, holds the resumed run
+RUN = "wf_efe43f63-ce7"
+fixture_out, lraudit_json = sys.argv[1], sys.argv[2]
+
+def prog(root):
+    d = json.load(open(f"{root}/workflows/{RUN}.json"))
+    ag = {e["index"]: e for e in d["workflowProgress"] if e["type"] == "workflow_agent"}
+    return d, ag
+dA, A = prog(SRC); dB, B = prog(DST)
+jA = [json.loads(l) for l in open(f"{SRC}/subagents/workflows/{RUN}/journal.jsonl")]
+jB = [json.loads(l) for l in open(f"{DST}/subagents/workflows/{RUN}/journal.jsonl")]
+term = {r["agentId"]: r["type"] for r in jA if r["type"] in ("result", "failed")}
+startsA = [r for r in jA if r["type"] == "started"]
+print("source summary: status=%s agentCount=%s slots=%d states=%s" % (dA["status"], dA["agentCount"], len(A), dict(collections.Counter(e["state"] for e in A.values()))))
+print("source journal: started=%d result=%d failed=%d started-without-terminal=%d" % (len(startsA), sum(1 for r in jA if r["type"]=="result"), sum(1 for r in jA if r["type"]=="failed"), sum(1 for r in startsA if r["agentId"] not in term)))
+print("journal start order == call order:", [r["agentId"] for r in startsA] == [A[i]["agentId"] for i in sorted(A)])
+lra = {}
+for w in json.load(open(lraudit_json))["workflows"]:
+    if w["runId"] == RUN:
+        lra = {s["agentId"]: s["verdict"] for s in w["slots"]}
+posB = {e["label"]: (i, e) for i, e in B.items()}
+slots = []
+for i in sorted(A):
+    e = A[i]
+    st = {"done": "COMPLETE", "error": "NULL"}[e["state"]]
+    assert (st == "COMPLETE") == (term.get(e["agentId"]) == "result")
+    rr = None
+    if e["label"] in posB:
+        bi, be = posB[e["label"]]
+        if be.get("cached"): rr = False
+        elif be.get("agentId"): rr = True
+    slots.append({"i": i - 1, "status": st, "completed_before_move": st == "COMPLETE", "re_run_after_resume": rr})
+fd = next(s["i"] for s in slots if s["status"] != "COMPLETE")
+after = sum(1 for s in slots if s["i"] > fd and s["completed_before_move"])
+before = sum(1 for s in slots if s["i"] < fd and s["completed_before_move"])
+print("first_dangling_index=%d completed_before=%d completed_after=%d" % (fd, before, after))
+print("lr-audit (post-move config) verdicts for source-run agents:", dict(collections.Counter((e["state"], lra.get(e["agentId"])) for e in A.values())))
+kinds = []
+for i in sorted(A):
+    k = A[i]["label"].split(":")[0]
+    if kinds and kinds[-1][0] == k: kinds[-1][2] = i - 1
+    else: kinds.append([k, i - 1, i - 1])
+print("call-order kind runs [kind, first_i, last_i]:", kinds)
+# resumed run (same runId, post-move)
+same = [i for i, e in B.items() if A.get(i, {}).get("label") == e["label"]]
+cached = [i for i, e in B.items() if e.get("cached")]
+spawned = [i for i, e in B.items() if not e.get("cached") and e.get("agentId")]
+queued = [i for i, e in B.items() if not e.get("cached") and not e.get("agentId")]
+labA = {e["label"]: i for i, e in A.items()}
+print("resumed summary: status=%s agentCount=%s durationMs=%s slots=%d" % (dB["status"], dB["agentCount"], dB["durationMs"], len(B)))
+print("resumed: slots at same call index as source=%d cached=%d cached==same-index:%s spawned(cache miss, agent started)=%d queued(cache miss, killed before spawn)=%d never-called=%d" % (len(same), len(cached), sorted(cached)==sorted(same), len(spawned), len(queued), len(A)-len(B)))
+print("resumed: source slots never called by the resume: source i %d..%d" % (min(i for i in A if A[i]["label"] not in posB) - 1, max(i for i in A if A[i]["label"] not in posB) - 1))
+print("resumed spawned slots (resumed_i -> source_i):", [(i - 1, labA[B[i]["label"]] - 1) for i in sorted(spawned)])
+newstarts = jB[len(jA):]
+print("resumed journal appended: started=%d result=%d failed=%d; appended started keys also in source journal=%d" % (sum(1 for r in newstarts if r["type"]=="started"), sum(1 for r in newstarts if r["type"]=="result"), sum(1 for r in newstarts if r["type"]=="failed"), sum(1 for r in newstarts if r["type"]=="started" and r["key"] in {s["key"] for s in startsA})))
+# brief (2nd user message) identical, framing (1st user message) differs, for every re-spawned agent
+def um(p):
+    out = []
+    for l in open(p):
+        r = json.loads(l)
+        if r.get("type") == "user":
+            c = r["message"]["content"]; out.append(c if isinstance(c, str) else json.dumps(c))
+            if len(out) == 2: break
+    return out
+laA = {r["label"]: r["agentId"] for r in startsA}
+cmp = collections.Counter()
+for r in newstarts:
+    if r["type"] == "started":
+        a = um(f"{SRC}/subagents/workflows/{RUN}/agent-{laA[r['label']]}.jsonl"); b = um(f"{DST}/subagents/workflows/{RUN}/agent-{r['agentId']}.jsonl")
+        cmp[("framing_equal", a[0] == b[0], "brief_equal", a[1] == b[1])] += 1
+print("re-spawned agents, user-message comparison vs original agent:", dict(cmp))
+rr = collections.Counter(str(s["re_run_after_resume"]) for s in slots)
+print("fixture re_run_after_resume counts:", dict(rr))
+fx = {
+  "session": "7c395da7",
+  "run_id": RUN,
+  "source": "lr-audit.py (scripts/limit-recover, run read-only on $HOME/.claude-quaternary; it cannot open the source account, whose transcript is .jsonl.handed-off) + call order from workflowProgress[].index in $HOME/.claude-secondary/projects/<cwd-slug>/7c395da7-*/workflows/wf_efe43f63-ce7.json (pre-move copy), terminal state from .../subagents/workflows/wf_efe43f63-ce7/journal.jsonl; re_run from the resumed run's summary $HOME/.claude-quaternary/projects/<cwd-slug>/7c395da7-*/workflows/wf_efe43f63-ce7.json (cached flag / agentId per slot) and its appended journal records. Derivation: docs/research/lr-recon-w0-2026-09-29/raw/m8-workflow-prefix.txt",
+  "rule": "a plain resumeFromRunId re-spends every completed slot that sits after the first dangling one",
+  "rule_holds_for_this_run": False,
+  "observed": "all 13 dangling slots (died on the usage limit) were LAST in call order, so 0 completed slots sat after the first dangling one; the resume still re-spent completed slots: only the 8 slots whose call index was unchanged hit the cache, and every later slot was called at a different index (its call order had followed upstream completion order in the original run) and missed, with identical brief text",
+  "first_dangling_index": fd,
+  "completed_after_first_dangling": after,
+  "completed_before_first_dangling": before,
+  "total_slots": len(slots),
+  "resumed_run": {"run_id": RUN, "same_run_id": True, "status": dB["status"], "slots_called": len(B), "cache_hits": len(cached), "cache_hits_are_exactly_unchanged_call_index": sorted(cached) == sorted(same), "agents_respawned": len(spawned), "queued_cache_miss_not_spawned": len(queued), "respawned_resumed_i_to_source_i": [[i - 1, labA[B[i]["label"]] - 1] for i in sorted(spawned)]},
+  "slots": slots,
+}
+os.makedirs(os.path.dirname(fixture_out), exist_ok=True)
+if os.path.exists(fixture_out): sys.exit("refusing to overwrite " + fixture_out)
+json.dump(fx, open(fixture_out, "w"), indent=None, separators=(",", ":"))
+open(fixture_out, "a").write("\n")
+print("wrote fixture:", fixture_out.replace(H, "$HOME"), "slots:", len(slots))
+----->8-----
+
+$ python3 /tmp/.m8-derive.py $HOME/Development/.worktrees/lr-fv2-w0/tests/fixtures/lr-recon/workflow-prefix-7c395da7.json /tmp/.lraudit-q.json
+source summary: status=completed agentCount=646 slots=646 states={'done': 633, 'error': 13}
+source journal: started=646 result=633 failed=13 started-without-terminal=0
+journal start order == call order: True
+first_dangling_index=633 completed_before=633 completed_after=0
+lr-audit (post-move config) verdicts for source-run agents: {('done', 'COMPLETE'): 633, ('error', 'PENDING'): 13}
+call-order kind runs [kind, first_i, last_i]: [['find', 0, 7], ['verify', 8, 615], ['axis', 616, 622], ['refute', 623, 629], ['design', 630, 632], ['judge', 633, 635], ['write', 636, 636], ['draft', 637, 642], ['critic', 643, 645]]
+resumed summary: status=killed agentCount=616 durationMs=27488 slots=616
+resumed: slots at same call index as source=8 cached=8 cached==same-index:True spawned(cache miss, agent started)=13 queued(cache miss, killed before spawn)=595 never-called=30
+resumed: source slots never called by the resume: source i 616..645
+resumed spawned slots (resumed_i -> source_i): [(8, 458), (9, 459), (10, 460), (11, 461), (12, 462), (13, 463), (14, 464), (15, 465), (16, 466), (17, 467), (18, 468), (19, 469), (20, 470)]
+resumed journal appended: started=13 result=1 failed=0; appended started keys also in source journal=0
+re-spawned agents, user-message comparison vs original agent: {('framing_equal', False, 'brief_equal', True): 13}
+fixture re_run_after_resume counts: {'False': 8, 'None': 625, 'True': 13}
+wrote fixture: $HOME/Development/.worktrees/lr-fv2-w0/tests/fixtures/lr-recon/workflow-prefix-7c395da7.json slots: 646
+
+# the --quiet run above suppresses the markdown; same audit without --quiet, filtered to the run table (per-slot lines carry brief text and are not reproduced):
+$ python3 $HOME/Development/.worktrees/lr-fv2-w0/scripts/limit-recover/lr-audit.py --config-dir $HOME/.claude-quaternary --session 7c395da7-fbbe-4123-8bd5-2456787d12c3 --cwd $HOME/Development/claude-infrastructure | grep -E '^\| (runId|wf_)|verdict floor|delegation population|^\| session'
+- generated: 2026-09-29T05:17:29.344491Z · verdict floor: **NO GAPS** · **WAITING: 32** (not gaps, not complete)
+- delegation population by tool: Bash 35 (settled 35, open 0) · Workflow 3 (settled 3, open 0)
+| session | 2026-09-29T03:59:20.821Z | 2026-09-29T06:30:00Z | claude-opus-5-5 | You've hit your session limit · resets 1:30am (America/Chicago) |
+| session | 2026-09-29T04:07:27.839Z | 2026-09-29T06:30:00Z | claude-opus-5-5 | You've hit your session limit · resets 1:30am (America/Chicago) |
+| runId | name | run verdict | slots (verdict:n) | delivered | scriptPath |
+| wf_efe43f63-ce7 | <project>-2-0-plan | **PENDING** | COMPLETE:634 PENDING:25 | yes | `$HOME/.claude-quaternary/projects/-Users-<user>-Development-claude-infrastructure/7c395da7-fbbe-4123-8bd5-2456787d12c3/workflows/scripts/<project>-2-0-plan-wf_efe43f63-ce7.js` |
+| wf_f5a6f59a-ab7 | None | **PENDING** | COMPLETE:8 PENDING:5 | yes | `?` |
+
+# notes: lr-audit gives per-agent verdicts in journal-start order but no call index; call order here is workflowProgress[].index, and 'journal start order == call order: True' above shows they agree for this run. lr-audit's post-move verdict for the 13 slots that died on the limit is PENDING; the journal holds a 'failed' record and the summary state 'error' for each, so the fixture records them NULL. wf_f5a6f59a-ab7 is a separate hand-written continuation run (new script), not a resume of wf_efe43f63-ce7.

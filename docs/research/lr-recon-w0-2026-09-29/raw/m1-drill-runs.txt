@@ -1,0 +1,55 @@
+$ python3 raw/m1-drill.py /tmp/lrw0/drill-sids /tmp/lrw0/drill-wins $HOME/.claude-284/node_modules/.bin/claude $HOME/.claude-next /tmp/lrw0/drill-run1.jsonl   # 2026-09-29T05:19:44Z, load1=62.16, ncpu=10, CC 2.1.284
+n=10 accepted=10 first_cr_accepted=10
+paint->accepted_CR_sent_at: p50=0.3 p90=0.49 max=1.0  all=[0.09, 0.11, 0.12, 0.14, 0.3, 0.38, 0.44, 0.48, 0.49, 1.0]
+--- per pane
+{"pane": 0, "sid8": "0100534c", "window": "973", "relaunch_to_composer_s": 6.7, "relaunch_to_paint_s": 7.63, "result": "ACCEPTED", "accepted_cr": 1, "cr_sent_at_s": [0.12], "accepted_cr_sent_at_s": 0.12, "paint_to_record_s": 10.65}
+{"pane": 1, "sid8": "c677d155", "window": "974", "relaunch_to_composer_s": 8.59, "relaunch_to_paint_s": 9.75, "result": "ACCEPTED", "accepted_cr": 1, "cr_sent_at_s": [0.44], "accepted_cr_sent_at_s": 0.44, "paint_to_record_s": 2.51}
+{"pane": 2, "sid8": "f04239c3", "window": "975", "relaunch_to_composer_s": 8.59, "relaunch_to_paint_s": 9.74, "result": "ACCEPTED", "accepted_cr": 1, "cr_sent_at_s": [0.48], "accepted_cr_sent_at_s": 0.48, "paint_to_record_s": 8.47}
+{"pane": 3, "sid8": "0598aa8a", "window": "976", "relaunch_to_composer_s": 6.75, "relaunch_to_paint_s": 7.9, "result": "ACCEPTED", "accepted_cr": 1, "cr_sent_at_s": [0.09], "accepted_cr_sent_at_s": 0.09, "paint_to_record_s": 10.38}
+{"pane": 4, "sid8": "047a8fc9", "window": "977", "relaunch_to_composer_s": 6.64, "relaunch_to_paint_s": 7.38, "result": "ACCEPTED", "accepted_cr": 1, "cr_sent_at_s": [0.11], "accepted_cr_sent_at_s": 0.11, "paint_to_record_s": 11.1}
+{"pane": 5, "sid8": "35c4299c", "window": "978", "relaunch_to_composer_s": 9.45, "relaunch_to_paint_s": 10.32, "result": "ACCEPTED", "accepted_cr": 1, "cr_sent_at_s": [0.38], "accepted_cr_sent_at_s": 0.38, "paint_to_record_s": 2.75}
+{"pane": 6, "sid8": "84c46413", "window": "979", "relaunch_to_composer_s": 5.34, "relaunch_to_paint_s": 7.34, "result": "ACCEPTED", "accepted_cr": 1, "cr_sent_at_s": [0.3], "accepted_cr_sent_at_s": 0.3, "paint_to_record_s": 5.12}
+{"pane": 7, "sid8": "e95a5ffd", "window": "980", "relaunch_to_composer_s": 8.22, "relaunch_to_paint_s": 8.89, "result": "ACCEPTED", "accepted_cr": 1, "cr_sent_at_s": [1.0], "accepted_cr_sent_at_s": 1.0, "paint_to_record_s": 3.47}
+{"pane": 8, "sid8": "72c0462b", "window": "981", "relaunch_to_composer_s": 7.7, "relaunch_to_paint_s": 8.85, "result": "ACCEPTED", "accepted_cr": 1, "cr_sent_at_s": [0.49], "accepted_cr_sent_at_s": 0.49, "paint_to_record_s": 3.67}
+{"pane": 9, "sid8": "ac8912c0", "window": "982", "relaunch_to_composer_s": 6.0, "relaunch_to_paint_s": 7.69, "result": "ACCEPTED", "accepted_cr": 1, "cr_sent_at_s": [0.14], "accepted_cr_sent_at_s": 0.14, "paint_to_record_s": 4.56}
+$ python3 raw/m1-drill.py /tmp/lrw0/drill2-sids /tmp/lrw0/drill-wins $HOME/.claude-284/node_modules/.bin/claude $HOME/.claude-next /tmp/lrw0/drill-run2.jsonl   # 2026-09-29T05:21:48Z, load1=52.12, ncpu=10, CC 2.1.284, transcripts padded to ~1.0 MB / ~80k tokens
+n=10 accepted=10 first_cr_accepted=10
+paint->accepted_CR_sent_at: p50=0.05 p90=0.14 max=0.19  all=[0.03, 0.03, 0.03, 0.04, 0.05, 0.08, 0.09, 0.12, 0.14, 0.19]
+--- per pane
+{"pane": 0, "sid8": "92e2bb96", "window": "973", "relaunch_to_composer_s": 14.18, "relaunch_to_paint_s": 14.66, "result": "ACCEPTED", "accepted_cr": 1, "cr_sent_at_s": [0.08], "accepted_cr_sent_at_s": 0.08, "paint_to_record_s": 2.44}
+{"pane": 1, "sid8": "4539a9c9", "window": "974", "relaunch_to_composer_s": 13.86, "relaunch_to_paint_s": 14.48, "result": "ACCEPTED", "accepted_cr": 1, "cr_sent_at_s": [0.19], "accepted_cr_sent_at_s": 0.19, "paint_to_record_s": 2.25}
+{"pane": 2, "sid8": "4583c82d", "window": "975", "relaunch_to_composer_s": 13.72, "relaunch_to_paint_s": 14.09, "result": "ACCEPTED", "accepted_cr": 1, "cr_sent_at_s": [0.03], "accepted_cr_sent_at_s": 0.03, "paint_to_record_s": 1.59}
+{"pane": 3, "sid8": "0f13c5d2", "window": "976", "relaunch_to_composer_s": 15.28, "relaunch_to_paint_s": 15.71, "result": "ACCEPTED", "accepted_cr": 1, "cr_sent_at_s": [0.12], "accepted_cr_sent_at_s": 0.12, "paint_to_record_s": 1.92}
+{"pane": 4, "sid8": "eaf97c33", "window": "977", "relaunch_to_composer_s": 14.04, "relaunch_to_paint_s": 14.48, "result": "ACCEPTED", "accepted_cr": 1, "cr_sent_at_s": [0.09], "accepted_cr_sent_at_s": 0.09, "paint_to_record_s": 2.47}
+{"pane": 5, "sid8": "b612a0cf", "window": "978", "relaunch_to_composer_s": 13.33, "relaunch_to_paint_s": 13.7, "result": "ACCEPTED", "accepted_cr": 1, "cr_sent_at_s": [0.04], "accepted_cr_sent_at_s": 0.04, "paint_to_record_s": 5.74}
+{"pane": 6, "sid8": "86dbe512", "window": "979", "relaunch_to_composer_s": 13.84, "relaunch_to_paint_s": 14.15, "result": "ACCEPTED", "accepted_cr": 1, "cr_sent_at_s": [0.05], "accepted_cr_sent_at_s": 0.05, "paint_to_record_s": 1.89}
+{"pane": 7, "sid8": "6c603204", "window": "980", "relaunch_to_composer_s": 13.61, "relaunch_to_paint_s": 14.08, "result": "ACCEPTED", "accepted_cr": 1, "cr_sent_at_s": [0.03], "accepted_cr_sent_at_s": 0.03, "paint_to_record_s": 2.68}
+{"pane": 8, "sid8": "0bad076d", "window": "981", "relaunch_to_composer_s": 13.17, "relaunch_to_paint_s": 13.62, "result": "ACCEPTED", "accepted_cr": 1, "cr_sent_at_s": [0.03], "accepted_cr_sent_at_s": 0.03, "paint_to_record_s": 7.5}
+{"pane": 9, "sid8": "815aaf62", "window": "982", "relaunch_to_composer_s": 13.45, "relaunch_to_paint_s": 13.95, "result": "ACCEPTED", "accepted_cr": 1, "cr_sent_at_s": [0.14], "accepted_cr_sent_at_s": 0.14, "paint_to_record_s": 2.78}
+$ DRILL_PROMPT='/keybindings-help {marker} ingest /tmp/lrw0/scratch/bundle-20260929T050000Z --record-id r-0001 --attempt 1 --account-evidence /tmp/lrw0/scratch/facts.json run:drill:20260929T050000Z:0a1b2c3d (this is a readiness drill: reply with only the word OK and do nothing else)' python3 raw/m1-drill.py /tmp/lrw0/drill2-sids /tmp/lrw0/drill3-wins $HOME/.claude-284/node_modules/.bin/claude $HOME/.claude-next /tmp/lrw0/drill-run3.jsonl   # 2026-09-29T05:32:12Z, load1=35.06, ncpu=10, CC 2.1.284, ~1 MB transcripts, slash-command-shaped draft of 267 chars
+n=10 accepted=0 first_cr_accepted=0
+--- per pane
+{"pane": 0, "sid8": "92e2bb96", "window": "984", "relaunch_to_composer_s": 14.66, "relaunch_to_paint_s": 15.0, "result": "NOT-ACCEPTED", "cr_sent_at_s": [0.03]}
+{"pane": 1, "sid8": "4539a9c9", "window": "985", "relaunch_to_composer_s": 11.7, "relaunch_to_paint_s": 12.5, "result": "NOT-ACCEPTED", "cr_sent_at_s": [0.11]}
+{"pane": 2, "sid8": "4583c82d", "window": "986", "relaunch_to_composer_s": 5.8, "relaunch_to_paint_s": 8.6, "result": "NOT-ACCEPTED", "cr_sent_at_s": [0.2]}
+{"pane": 3, "sid8": "0f13c5d2", "window": "987", "relaunch_to_composer_s": 14.26, "relaunch_to_paint_s": 14.59, "result": "NOT-ACCEPTED", "cr_sent_at_s": [0.03]}
+{"pane": 4, "sid8": "eaf97c33", "window": "988", "relaunch_to_composer_s": 14.26, "relaunch_to_paint_s": 14.59, "result": "NOT-ACCEPTED", "cr_sent_at_s": [0.03]}
+{"pane": 5, "sid8": "b612a0cf", "window": "989", "relaunch_to_composer_s": 13.06, "relaunch_to_paint_s": 13.71, "result": "NOT-ACCEPTED", "cr_sent_at_s": [0.03]}
+{"pane": 6, "sid8": "86dbe512", "window": "990", "relaunch_to_composer_s": 13.85, "relaunch_to_paint_s": 14.19, "result": "NOT-ACCEPTED", "cr_sent_at_s": [0.03]}
+{"pane": 7, "sid8": "6c603204", "window": "991", "relaunch_to_composer_s": 4.52, "relaunch_to_paint_s": 7.95, "result": "NOT-ACCEPTED", "cr_sent_at_s": [0.13]}
+{"pane": 8, "sid8": "0bad076d", "window": "992", "relaunch_to_composer_s": 13.46, "relaunch_to_paint_s": 13.81, "result": "NOT-ACCEPTED", "cr_sent_at_s": [0.03]}
+{"pane": 9, "sid8": "815aaf62", "window": "993", "relaunch_to_composer_s": 16.16, "relaunch_to_paint_s": 16.49, "result": "NOT-ACCEPTED", "cr_sent_at_s": [0.02]}
+$ DRILL_PROMPT='/lrw0-noop {marker} ingest /tmp/lrw0/scratch/bundle-20260929T050000Z --record-id r-0001 --attempt 1 --account-evidence /tmp/lrw0/scratch/facts.json run:drill:20260929T050000Z:0a1b2c3d this is a readiness drill, reply with only the word OK and do nothing else at all' python3 raw/m1-drill.py /tmp/lrw0/drill2-sids /tmp/lrw0/drill3-wins $HOME/.claude-284/node_modules/.bin/claude $HOME/.claude-next /tmp/lrw0/drill-run4.jsonl   # 2026-09-29T05:35:17Z, load1=43.72, ncpu=10, CC 2.1.284, ~1 MB transcripts, user-invocable slash-command draft of 265 chars (project command /lrw0-noop)
+n=10 accepted=10 first_cr_accepted=10
+paint->accepted_CR_sent_at: p50=0.18 p90=0.58 max=0.62  all=[0.05, 0.07, 0.09, 0.09, 0.18, 0.21, 0.38, 0.56, 0.58, 0.62]
+--- per pane
+{"pane": 0, "sid8": "92e2bb96", "window": "984", "relaunch_to_composer_s": 19.83, "relaunch_to_paint_s": 20.63, "result": "ACCEPTED", "accepted_cr": 1, "cr_sent_at_s": [0.09], "accepted_cr_sent_at_s": 0.09, "paint_to_record_s": 6.05}
+{"pane": 1, "sid8": "4539a9c9", "window": "985", "relaunch_to_composer_s": 22.8, "relaunch_to_paint_s": 23.5, "result": "ACCEPTED", "accepted_cr": 1, "cr_sent_at_s": [0.62], "accepted_cr_sent_at_s": 0.62, "paint_to_record_s": 4.83}
+{"pane": 2, "sid8": "4583c82d", "window": "986", "relaunch_to_composer_s": 20.69, "relaunch_to_paint_s": 22.17, "result": "ACCEPTED", "accepted_cr": 1, "cr_sent_at_s": [0.56], "accepted_cr_sent_at_s": 0.56, "paint_to_record_s": 4.75}
+{"pane": 3, "sid8": "0f13c5d2", "window": "987", "relaunch_to_composer_s": 19.33, "relaunch_to_paint_s": 20.3, "result": "ACCEPTED", "accepted_cr": 1, "cr_sent_at_s": [0.09], "accepted_cr_sent_at_s": 0.09, "paint_to_record_s": 6.29}
+{"pane": 4, "sid8": "eaf97c33", "window": "988", "relaunch_to_composer_s": 22.91, "relaunch_to_paint_s": 24.9, "result": "ACCEPTED", "accepted_cr": 1, "cr_sent_at_s": [0.05], "accepted_cr_sent_at_s": 0.05, "paint_to_record_s": 3.16}
+{"pane": 5, "sid8": "b612a0cf", "window": "989", "relaunch_to_composer_s": 19.41, "relaunch_to_paint_s": 20.5, "result": "ACCEPTED", "accepted_cr": 1, "cr_sent_at_s": [0.38], "accepted_cr_sent_at_s": 0.38, "paint_to_record_s": 6.23}
+{"pane": 6, "sid8": "86dbe512", "window": "990", "relaunch_to_composer_s": 20.01, "relaunch_to_paint_s": 20.7, "result": "ACCEPTED", "accepted_cr": 1, "cr_sent_at_s": [0.07], "accepted_cr_sent_at_s": 0.07, "paint_to_record_s": 5.9}
+{"pane": 7, "sid8": "6c603204", "window": "991", "relaunch_to_composer_s": 22.44, "relaunch_to_paint_s": 23.62, "result": "ACCEPTED", "accepted_cr": 1, "cr_sent_at_s": [0.58], "accepted_cr_sent_at_s": 0.58, "paint_to_record_s": 4.24}
+{"pane": 8, "sid8": "0bad076d", "window": "992", "relaunch_to_composer_s": 20.1, "relaunch_to_paint_s": 20.73, "result": "ACCEPTED", "accepted_cr": 1, "cr_sent_at_s": [0.18], "accepted_cr_sent_at_s": 0.18, "paint_to_record_s": 5.16}
+{"pane": 9, "sid8": "815aaf62", "window": "993", "relaunch_to_composer_s": 20.34, "relaunch_to_paint_s": 20.68, "result": "ACCEPTED", "accepted_cr": 1, "cr_sent_at_s": [0.21], "accepted_cr_sent_at_s": 0.21, "paint_to_record_s": 5.9}

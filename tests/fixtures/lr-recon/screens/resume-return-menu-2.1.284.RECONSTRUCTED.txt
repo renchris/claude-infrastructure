@@ -1,0 +1,10 @@
+──────────────────────────────────────────────────────────────────────────────────────────────
+  This session is 2 days old and 312k tokens.
+
+  Resuming the full session will consume a substantial portion of your usage limits. We recommend resuming from a summary.
+
+  ❯ 1. Resume from summary (recommended)
+    2. Resume full session as-is
+    3. Don't ask me again
+
+  Enter to confirm · Esc to cancel

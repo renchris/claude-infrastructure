@@ -1,0 +1,8 @@
+
+⚠ $HOME/.claude-next/CLAUDE.md is over the 40.0k-char limit (54.0k chars) · /memory to free up context
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ Use the Bash tool with run_in_background set to true to run exactly: sleep 1800 . Do not wait for it. Then reply with only the word STARTED.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  (1) #970 73cc276b scratch                                                                                                                            /rc
+  ⏸ manual mode on

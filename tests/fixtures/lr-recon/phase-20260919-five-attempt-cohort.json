@@ -1,0 +1,212 @@
+{
+  "incident": "2026-09-19/next4-five-attempt-cohort",
+  "summary": "Five sessions limited on next4 (panes 111, 112, 114, 117, 121; reset 19:40Z) were recycled in place one at a time in five attempts between 17:19Z and 17:54Z; four ended 'relaunch typed but no claude process appeared within 90s' (the load-40+ boot failure) and the one legacy RECOVERED (112) rested on a turn woken by a task-notification, with no prompt ever typed.",
+  "sources": [
+    "$HOME/.reso/limit-recover/poller.log (lines 2026-09-19T16:59:23Z-17:09:51Z: PARKED rows naming the five sids, account next4, resets 19:40Z)",
+    "$HOME/.reso/limit-recover/fleet/one-20260919T170450Z/results.tsv (d02d8feb: pane 112, mechanism 'parked', note 'capacity', ts)",
+    "$HOME/.reso/limit-recover/fleet/one-20260919T171910Z/d02d8feb-*.stderr and results.tsv (pane 112 recycled in place onto next2, 'engagement verified by a new assistant turn', verdict recycle-in-place/RECOVERED at 17:21:05Z)",
+    "$HOME/.reso/limit-recover/fleet/one-20260919T172126Z/09e64dcb-*.stderr and results.tsv (pane 111 onto next3; '!! relaunch typed but no claude process appeared within 90s — fallback comment typed into pane'; lock held; verdict PARTIAL at 17:23:54Z)",
+    "$HOME/.reso/limit-recover/fleet/one-20260919T174403Z/e442434c-*.stderr and results.tsv (pane 121 onto next3; same '!!' line; verdict PARTIAL at 17:46:35Z)",
+    "$HOME/.reso/limit-recover/fleet/one-20260919T174851Z/ and one-20260919T175207Z/ results.tsv + stderr (28f07827 pane 114, cb227486 pane 117: same '!!' line, PARTIAL)",
+    "$HOME/.reso/limit-recover/<sid>-*/bundle-20260919T*/transplant.json for d02d8feb, 09e64dcb, e442434c (fields: sha256, source_retired=1, target_transcript cfg)",
+    "$HOME/.claude-secondary/projects/*/d02d8feb-*.jsonl and $HOME/.claude-tertiary/projects/*/{09e64dcb,e442434c}-*.jsonl (byte offsets, type, timestamp, origin.kind, isMeta, model, isApiErrorMessage of records after the admit-time length; admit-time length = the prefix whose sha256 equals transplant.json sha256; no 'run:<sid>' token string anywhere in these files)",
+    "$HOME/.claude-quaternary/projects/*/{d02d8feb,09e64dcb,e442434c}-*.jsonl.handed-off (existence; no stub <sid>.jsonl beside it)",
+    "$HOME/.reso/limit-recover/design-v2/full.json (evidence text: the 90s relaunch line 'appears 7 times, 5 of them on 2026-09-19 at load 40+'; load is the design's figure, not re-measured here)"
+  ],
+  "rows": [
+    {
+      "id": "0919-112-a",
+      "at": "2026-09-19T17:15:48Z",
+      "synthetic": false,
+      "note": "pane 112 (d02d8feb), first dispatch: lr-fleet parked it with note 'capacity' before any transplant; the limited source is still live in its pane",
+      "expected_phase": "PRE-MOVE",
+      "expected_substate": "WAIT_CAPACITY",
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "source",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": true,
+        "handed_off": false,
+        "live_watcher": false,
+        "pane_state": "claude",
+        "lock_names_target": false,
+        "source_retired": false
+      }
+    },
+    {
+      "id": "0919-112-b",
+      "at": "2026-09-19T17:21:05Z",
+      "synthetic": false,
+      "note": "pane 112, second dispatch: in-place recycle onto next2, relaunched claude booted at 17:20:49Z and a task-notification user record landed at offset 3452943; no assistant turn yet and no prompt was ever typed, yet legacy wrote RECOVERED at this second",
+      "expected_phase": "RELAUNCHED",
+      "expected_substate": "UNPROMPTED",
+      "must_not_be": [
+        "ENGAGED"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 2,
+        "holders": [
+          {
+            "cfg": "target",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": false,
+        "handed_off": true,
+        "stub_present": false,
+        "live_watcher": false,
+        "pane_state": "claude",
+        "lock_names_target": true,
+        "source_retired": true,
+        "confirm_len": 3399175,
+        "submitted": false,
+        "relaunch_substate": "UNPROMPTED",
+        "token_record_offset": null,
+        "token_is_this_attempt": false,
+        "nonerror_assistant_after_token": false,
+        "target_last_assistant": "none",
+        "legacy_verdict": "RECOVERED"
+      }
+    },
+    {
+      "id": "0919-112-c",
+      "at": "2026-09-19T17:21:56Z",
+      "synthetic": false,
+      "note": "pane 112 after the relaunched session answered the task-notification with non-error assistant records (first at 17:21:54Z, offset 3709303 > confirm_len); no submit token exists, so a notification-woken turn must not close ENGAGED",
+      "expected_phase": "RELAUNCHED",
+      "expected_substate": "UNPROMPTED",
+      "must_not_be": [
+        "ENGAGED"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 2,
+        "holders": [
+          {
+            "cfg": "target",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": false,
+        "handed_off": true,
+        "stub_present": false,
+        "live_watcher": false,
+        "pane_state": "claude",
+        "lock_names_target": true,
+        "source_retired": true,
+        "confirm_len": 3399175,
+        "submitted": false,
+        "relaunch_substate": "UNPROMPTED",
+        "token_record_offset": null,
+        "token_is_this_attempt": false,
+        "nonerror_assistant_after_token": false,
+        "target_last_assistant": "none",
+        "legacy_verdict": "RECOVERED"
+      }
+    },
+    {
+      "id": "0919-111-a",
+      "at": "2026-09-19T17:23:54Z",
+      "synthetic": false,
+      "note": "pane 111 (09e64dcb): /exit landed and the launcher was typed, but no claude process appeared within 90s; the watcher gave its verdict and typed a fallback comment at the shell. live_launcher is unknown and omitted (the target copy's first boot record is at 17:26:26Z)",
+      "expected_phase": "EXITED",
+      "expected_substate": null,
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [],
+        "source_alive": false,
+        "handed_off": true,
+        "stub_present": false,
+        "live_watcher": false,
+        "pane_state": "shell",
+        "pane_absent_observations": 0,
+        "tty_present": true,
+        "identity_match": true,
+        "exit_typed_by_me": true,
+        "lock_names_target": true,
+        "source_retired": true,
+        "submitted": false,
+        "confirm_len": 5422351,
+        "legacy_verdict": "PARTIAL"
+      }
+    },
+    {
+      "id": "0919-121-a",
+      "at": "2026-09-19T17:46:35Z",
+      "synthetic": false,
+      "note": "pane 121 (e442434c): same load failure — relaunch typed, no claude within 90s, fallback comment at the shell, watcher finished. live_launcher unknown and omitted (first boot record in the target copy at 17:47:15Z, 40 s later)",
+      "expected_phase": "EXITED",
+      "expected_substate": null,
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [],
+        "source_alive": false,
+        "handed_off": true,
+        "stub_present": false,
+        "live_watcher": false,
+        "pane_state": "shell",
+        "pane_absent_observations": 0,
+        "tty_present": true,
+        "identity_match": true,
+        "exit_typed_by_me": true,
+        "lock_names_target": true,
+        "source_retired": true,
+        "submitted": false,
+        "confirm_len": 4051450,
+        "legacy_verdict": "PARTIAL"
+      }
+    },
+    {
+      "id": "0919-121-b",
+      "at": "2026-09-19T17:47:31Z",
+      "synthetic": false,
+      "note": "pane 121 once claude did boot on next3: a task-notification user record (offset 4186580) woke a non-error turn (offset 4564730, 17:47:29Z); no prompt typed and no token, so still not ENGAGED",
+      "expected_phase": "RELAUNCHED",
+      "expected_substate": "UNPROMPTED",
+      "must_not_be": [
+        "ENGAGED"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "target",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": false,
+        "handed_off": true,
+        "stub_present": false,
+        "live_watcher": false,
+        "pane_state": "claude",
+        "lock_names_target": true,
+        "source_retired": true,
+        "confirm_len": 4051450,
+        "submitted": false,
+        "relaunch_substate": "UNPROMPTED",
+        "token_record_offset": null,
+        "token_is_this_attempt": false,
+        "nonerror_assistant_after_token": false,
+        "target_last_assistant": "none",
+        "legacy_verdict": "PARTIAL"
+      }
+    }
+  ]
+}

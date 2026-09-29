@@ -1,0 +1,123 @@
+{
+  "incident": "2026-09-27/switch-pane-812 (3afa727e)",
+  "summary": "A voluntary cc-lr switch of pane 812 from next2 to next3 was recorded SWITCHED proven=yes from the registry row alone, while the watcher found no assistant turn for our prompt within 180 s (one of the four false SWITCHED rows).",
+  "sources": [
+    "$HOME/.reso/limit-recover/results/switch-3afa727e-*.json (kind switch, pane 812, verdict SWITCHED, from next2, to next3, proven yes, reason 'registry row … names next3 and the transcript is under the tertiary cfg', ts)",
+    "$HOME/.reso/limit-recover/upgrade-drain.log (rows for pane 812: SWITCHED with the registry-row reason; an earlier NOTMOVED)",
+    "$HOME/.reso/limit-recover/3afa727e-*/bundle-20260927T160211Z/events.jsonl (submit-token-armed, relaunch-typed 16:02:33Z, composer-painted 16:02:37Z, 'queued … still behind a running turn at the 180s bound') and transplant.json (sha256, cause voluntary, chain secondary->tertiary)",
+    "$HOME/.reso/limit-recover/3afa727e-*/bundle-20260927T153352Z/events.jsonl (state REFUSED, stage precheck, 'target next3 not ranked by the router')",
+    "$HOME/.reso/limit-recover/3afa727e-*/bundle-20260927T160211Z/MANIFEST.json (trigger voluntary, in_place true, reason cc-lr switch)",
+    "$HOME/.claude/logs/handoffs.jsonl (class recycle-dead, target_pane 812, prev_sid 3afa727e, engaged false, 'no assistant turn within 180s', 2026-09-27T16:06:01Z)",
+    "$HOME/.claude-tertiary/projects/*/3afa727e-*.jsonl (admit-time length 2637217 by sha256 prefix match; task-notification user records after it; queue-operation enqueue of our paste at offset 3028370 (16:02:37Z) and remove ~10 s later; the nonce appears only in queue-operation and a queued_command attachment at offset 3043157, never in a user record; first non-error assistant at offset 3029631 (16:02:41Z))",
+    "$HOME/.claude-secondary/projects/*/3afa727e-*.jsonl.handed-off (exists; no stub)"
+  ],
+  "rows": [
+    {
+      "id": "0927-812-a",
+      "at": "2026-09-27T15:33:56Z",
+      "synthetic": false,
+      "note": "first switch attempt: precheck refused because the router did not rank next3; nothing transplanted and the idle source untouched",
+      "expected_phase": "PRE-MOVE",
+      "expected_substate": null,
+      "evidence": {
+        "kind": "idle",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "source",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": true,
+        "handed_off": false,
+        "live_watcher": false,
+        "pane_state": "claude",
+        "lock_names_target": false,
+        "source_retired": false,
+        "source_at_composer": true
+      }
+    },
+    {
+      "id": "0927-812-b",
+      "at": "2026-09-27T16:02:35Z",
+      "synthetic": false,
+      "note": "the moment legacy wrote SWITCHED proven=yes (16:02:35Z), from the registry row alone: relaunch typed at 16:02:33Z, composer not yet painted (painted at 16:02:37Z), watcher still waiting; no readiness note",
+      "expected_phase": "RELAUNCHED",
+      "expected_substate": "UNPROMPTED",
+      "must_not_be": [
+        "MOVED",
+        "ENGAGED"
+      ],
+      "evidence": {
+        "kind": "idle",
+        "attempt": 2,
+        "holders": [
+          {
+            "cfg": "target",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": false,
+        "handed_off": true,
+        "stub_present": false,
+        "live_watcher": true,
+        "pane_state": "claude",
+        "lock_names_target": true,
+        "source_retired": true,
+        "confirm_len": 2637217,
+        "submitted": false,
+        "relaunch_substate": "UNPROMPTED",
+        "token_record_offset": null,
+        "token_is_this_attempt": false,
+        "nonerror_assistant_after_token": false,
+        "target_last_assistant": "none",
+        "readiness": "none",
+        "legacy_verdict": "SWITCHED proven=yes"
+      }
+    },
+    {
+      "id": "0927-812-c",
+      "at": "2026-09-27T16:06:01Z",
+      "synthetic": false,
+      "note": "watcher verdict recycle-dead: a task-notification woke a non-error turn (offset 3029631), our tokened prompt was folded into it as a queued_command attachment (offset 3043157) and never became a user record; no readiness evidence, so not MOVED",
+      "expected_phase": "RELAUNCHED",
+      "expected_substate": "SUBMITTED",
+      "must_not_be": [
+        "MOVED",
+        "ENGAGED"
+      ],
+      "evidence": {
+        "kind": "idle",
+        "attempt": 2,
+        "holders": [
+          {
+            "cfg": "target",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": false,
+        "handed_off": true,
+        "stub_present": false,
+        "live_watcher": false,
+        "pane_state": "claude",
+        "lock_names_target": true,
+        "source_retired": true,
+        "confirm_len": 2637217,
+        "submitted": true,
+        "relaunch_substate": "SUBMITTED",
+        "token_record_offset": null,
+        "token_is_this_attempt": false,
+        "nonerror_assistant_after_token": false,
+        "target_last_assistant": "none",
+        "readiness": "none",
+        "legacy_verdict": "SWITCHED proven=yes"
+      }
+    }
+  ]
+}

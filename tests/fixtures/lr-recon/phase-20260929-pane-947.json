@@ -1,0 +1,192 @@
+{
+  "incident": "2026-09-29/pane-947",
+  "summary": "LIMITED session 55120708 in pane 947 moved in place from next3 (.claude-tertiary) to next (.claude-next) at 03:04Z: confirm renamed the source while it was still alive (it re-created a stub the watcher later folded), the watcher typed the relaunch into the shell, the first CR was swallowed, the re-CR landed the prompt at 03:05:29Z and recycle-engaged was logged at 03:05:41Z.",
+  "sources": [
+    "$HOME/.reso/limit-recover/55120708-*/bundle-20260929T030428Z/MANIFEST.json (fields read: source_cfg, target, target_cfg, source_pane, trigger, in_place)",
+    "$HOME/.reso/limit-recover/55120708-*/bundle-20260929T030428Z/transplant.json (fields read: source_retired, source_retired_reason, lock, tombstone, ts_first, phase)",
+    "$HOME/.reso/limit-recover/55120708-*/bundle-20260929T030428Z/events.jsonl (fields read: ts, state, detail, attempt)",
+    "$HOME/.reso/limit-recover/55120708-*/bundle-20260929T030428Z/lr-fire-resume.log",
+    "$HOME/.reso/limit-recover/locks/55120708-*.lock (fields read: from, to, ts)",
+    "$HOME/.claude-tertiary/projects/<slug>/55120708-*.HANDOFF.json (fields read: handed_off_to, ts; stat birth and mtime)",
+    "$HOME/.claude-tertiary/projects/<slug>/55120708-*.jsonl.handed-off (stat mtime; byte-compared against the target copy)",
+    "$HOME/.claude-next/projects/<slug>/55120708-*.jsonl (byte offsets of the token record and of the user/assistant/system records after it; message.content block types; isApiErrorMessage)",
+    "$HOME/.reso/limit-recover/fleet/one-20260929T030419Z-55120708/detached.log (precheck registry/pane_state/limit lines, source pid on tty, resume-debt open) and results.tsv",
+    "$TMPDIR/handoff-recycle-947-1790651074-*.log (armed, shell-prompt confirm, stub fold, SUBMITTED, ENGAGEMENT CONFIRMED)",
+    "$HOME/.claude/logs/handoffs.jsonl (rows 2026-09-29T03:04:34Z recycle-intent, 03:05:30Z recycle-submitted, 03:05:41Z recycle-engaged for target_pane 947)"
+  ],
+  "rows": [
+    {
+      "id": "947-a",
+      "at": "2026-09-29T03:04:33Z",
+      "synthetic": false,
+      "note": "Admitted and transplanted: lock (03:04:32Z) and tombstone (born 03:04:33Z) name .claude-next, source_retired=0 (admit-phase), source alive at cc (registry pid on its tty), watcher not yet armed (recycle-intent 03:04:34Z 'no watcher detached yet').",
+      "expected_phase": "TRANSPLANTED",
+      "expected_substate": null,
+      "must_not_be": [
+        "EXITING",
+        "PRE-MOVE"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "source",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": true,
+        "source_at_composer": true,
+        "handed_off": false,
+        "live_watcher": false,
+        "pane_state": "claude",
+        "identity_match": true,
+        "lock_names_target": true,
+        "source_retired": false
+      }
+    },
+    {
+      "id": "947-b",
+      "at": "2026-09-29T03:04:35Z",
+      "synthetic": false,
+      "note": "Confirm: tombstone rewritten at 03:04:35Z and the source renamed to .handed-off while the source claude is still alive (it re-created <sid>.jsonl after the rename; the watcher later folded that stub) and the watcher (pid 64037, armed 03:04:34Z) is live. This is the fatal-misread case: .handed-off plus a live source must be read as EXITING, never HUSK-RETIRED or closed.",
+      "expected_phase": "EXITING",
+      "expected_substate": null,
+      "must_not_be": [
+        "HUSK-RETIRED",
+        "ENGAGED",
+        "EXITED",
+        "TRANSPLANTED"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "source",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": true,
+        "source_at_composer": true,
+        "handed_off": true,
+        "live_watcher": true,
+        "pane_state": "claude",
+        "identity_match": true,
+        "lock_names_target": true,
+        "source_retired": true,
+        "resume_debt_open": true
+      }
+    },
+    {
+      "id": "947-c",
+      "at": "2026-09-29T03:04:41Z",
+      "synthetic": false,
+      "note": "The watcher confirmed a shell prompt ~6 s after arming (source dead), folded the source's re-created stub into .handed-off (.handed-off mtime 03:04:41Z) and is about to type the relaunch (relaunch-typed 03:04:48Z). The table has no row for handed-off + dead source + live watcher + empty H: rows 8-9 need a live source, row 10 excludes a live watcher, row 12 needs an unretired source, so it falls to PRE-MOVE; only the §4.3 live-process rule keeps the reconciler off it.",
+      "expected_phase": "PRE-MOVE",
+      "expected_substate": null,
+      "must_not_be": [
+        "EXITED",
+        "EXITING",
+        "ENGAGED",
+        "RELAUNCHED"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [],
+        "source_alive": false,
+        "handed_off": true,
+        "stub_present": true,
+        "live_watcher": true,
+        "pane_state": "shell",
+        "identity_match": true,
+        "lock_names_target": true,
+        "source_retired": true,
+        "resume_debt_open": true
+      }
+    },
+    {
+      "id": "947-d",
+      "at": "2026-09-29T03:05:10Z",
+      "synthetic": false,
+      "note": "Relaunched on .claude-next (relaunch-typed 03:04:48Z, composer-painted 03:04:55Z); the first CR was swallowed ('prompt still in the composer after 30s' at 03:05:29Z). No token record yet. confirm_len is measured as the byte length of the common prefix of the target copy and the .handed-off file, cut back to the last complete line (python byte compare); the .handed-off is a few KB longer because the watcher folded the source's re-created stub into it.",
+      "expected_phase": "RELAUNCHED",
+      "expected_substate": "DRAFTED",
+      "must_not_be": [
+        "ENGAGED"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "target",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": false,
+        "handed_off": true,
+        "stub_present": false,
+        "live_watcher": true,
+        "live_launcher": true,
+        "pane_state": "claude",
+        "identity_match": true,
+        "lock_names_target": true,
+        "source_retired": true,
+        "resume_debt_open": true,
+        "submitted": false,
+        "token_record_offset": null,
+        "confirm_len": 899766,
+        "target_last_assistant": "none",
+        "relaunch_substate": "DRAFTED"
+      }
+    },
+    {
+      "id": "947-e",
+      "at": "2026-09-29T03:05:41Z",
+      "synthetic": false,
+      "note": "recycle-engaged. Token record at byte 966637 > confirm_len 899766; a queued task-notification user record follows at the same millisecond, then non-error assistant records from 03:05:34Z. confirm_len is measured as the byte length of the common prefix of the target copy and the .handed-off file, cut back to the last complete line (python byte compare); the .handed-off is a few KB longer because the watcher folded the source's re-created stub into it.",
+      "expected_phase": "ENGAGED",
+      "expected_substate": null,
+      "must_not_be": [
+        "RELAUNCHED"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "target",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": false,
+        "handed_off": true,
+        "stub_present": false,
+        "live_watcher": true,
+        "pane_state": "claude",
+        "identity_match": true,
+        "lock_names_target": true,
+        "source_retired": true,
+        "resume_debt_open": true,
+        "submitted": true,
+        "target_last_assistant": "ok",
+        "token_record_offset": 966637,
+        "token_is_this_attempt": true,
+        "confirm_len": 899766,
+        "nonerror_assistant_after_token": true,
+        "relaunch_substate": "SUBMITTED",
+        "legacy_verdict": "recycle-engaged"
+      }
+    }
+  ]
+}

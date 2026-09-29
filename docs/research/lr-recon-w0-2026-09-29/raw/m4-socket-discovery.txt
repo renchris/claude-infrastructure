@@ -1,0 +1,48 @@
+$ date -u
+2026-09-29T05:11:59Z
+
+$ ls -l /tmp/kitty-* (owner, type, embedded pid)
+lrwxr-xr-x@ <user> $HOME/k482
+srwxr-xr-x@ <user> /tmp/kitty-73832
+lrwxr-xr-x@ <user> $HOME/kdev
+-rw-r--r--@ <user> /tmp/kitty-pane-menu-native.compile.log
+
+$ for each /tmp/kitty-<pid>: ps comm/etime/user of the embedded pid
+/tmp/kitty-482 type=other pid=482 ps=[]
+/tmp/kitty-73832 type=socket pid=73832 ps=[<user> kitty 12-03:58:06]
+/tmp/kitty-dev type=other pid=dev ps=[]
+/tmp/kitty-pane-menu-native.compile.log type=other pid=native.compile.log ps=[]
+
+$ lsof -U owners of /tmp/kitty-* (process holding each socket)
+kitty 73832 <user> /tmp/kitty-73832
+
+$ env -i PATH=/usr/bin:/bin bin/cc-kitty-socket; echo rc=$?
+unix:/tmp/kitty-73832
+rc=0
+
+$ env -i PATH=/usr/bin:/bin HOME=$HOME bin/cc-kitty-socket; echo rc=$?
+unix:/tmp/kitty-73832
+rc=0
+
+$ env -i PATH=/usr/bin:/bin bin/cc-kitty-socket --all; echo rc=$?  (flag W2c adds; expect unknown today)
+unix:/tmp/kitty-73832
+rc=0
+
+$ env -i PATH=/usr/bin:/bin sh -c "command -v kitten kitty; ls /Applications/kitty.app/Contents/MacOS/"
+rc=1
+kitten
+kitty
+
+$ enumeration under env -i: for each live socket, kitten @ --to unix:S ls | windows count
+/tmp/kitty-73832 -> 17 windows in 5 os-windows rc_err=
+
+$ bin/cc-kitty-socket (interactive env, KITTY_LISTEN_ON set)
+KITTY_LISTEN_ON=unix:/tmp/kitty-73832
+unix:/tmp/kitty-73832
+rc=0
+
+$ ps -axo pid,ucomm | awk "\$2==\"kitty\""  (every kitty process)
+43488 73832 kitty            Z   
+73832     1 kitty            S   
+43488 is a zombie (<defunct>) child of 73832: not a terminal, owns no socket.
+/tmp/kitty-482 and /tmp/kitty-dev are symlinks to $HOME source checkouts (not sockets); the [ -S ] test in cc-kitty-socket skips them.

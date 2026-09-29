@@ -1,0 +1,39 @@
+ts 2026-09-29T05:17:29Z live_claude 20
+pid sid8 idle_s snap_children(detector) naive_shell_children hook_children detector naive
+1469 ? None 0[-] 1 1 miss HIT
+3888 16fc84d4 2 1[Python,tee] 1 1 HIT HIT
+10056 431e6953 432 2[bash,sleep] 2 0 HIT HIT
+29771 e0487c53 177 1[bash] 1 0 HIT HIT
+39323 4b7cb388 137 0[-] 0 0 miss miss
+47943 fbb98e0e 246 0[-] 1 1 miss HIT
+50840 ? None 1[bash] 2 1 HIT HIT
+64699 c0fa9f0b 5 0[-] 0 0 miss miss
+65891 8ea01453 230 1[bash] 2 1 HIT HIT
+75201 0715cd0c 2212 0[-] 0 0 miss miss
+77918 55120708 726 1[bash] 2 1 HIT HIT
+78841 46bc0436 3006 1[bash] 2 1 HIT HIT
+80576 ? None 0[-] 1 1 miss HIT
+81133 cd3bd860 1057 0[-] 0 0 miss miss
+82256 415a3aac 166 2[curl,pdftoppm] 3 1 HIT HIT
+84984 cfb177b2 3510 0[-] 1 1 miss HIT
+86853 7c395da7 69 2[Python,bash] 3 1 HIT HIT
+89535 ddd154a9 94 0[-] 0 0 miss miss
+94460 685abfb0 497 2[bash,sleep] 2 0 HIT HIT
+97583 83010792 221 1[bash] 1 0 HIT HIT
+summary: detector HIT 11/20; naive-rule false positives (shell child that is only a hook) 4/20
+
+# classification of the Bash-tool shell children (grandchild command class)
+78841 shell 4806 -> ['cc-await-ping']
+97583 shell 52498 -> ['cc-await-ping']
+77918 shell 99957 -> ['cc-await-ping']
+65891 shell 57064 -> ['cc-await-ping']
+29771 shell 95033 -> ['cc-await-ping']
+82256 shell 1155 -> ['curl']
+82256 shell 79030 -> ['curl']
+94460 shell 53077 -> ['ship-land']
+94460 shell 61262 -> ['sleep']
+86853 shell 89352 -> ['cc-await-ping']
+10056 shell 2064 -> ['cc-await-ping']
+10056 shell 90492 -> ['sleep']
+3888 shell 79418 -> ['other:Python', 'tee']
+50840 shell 93708 -> ['bats/test']

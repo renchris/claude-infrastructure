@@ -1,0 +1,25 @@
+$ /tmp/lrw0/m2-sample.sh  (throwaway session 73cc276b, CC 2.1.284, cfg .claude-next; relaunch = claude --resume <sid>, NO prompt; samples of the transcript file)
+05:18:15 t+pres mtime=1790659021 lines=109 bytes=397927 claude_alive=0
+05:18:20 t+5s mtime=1790659099 lines=113 bytes=400226 claude_alive=1
+05:18:30 t+15s mtime=1790659102 lines=126 bytes=430189 claude_alive=1
+05:18:45 t+30s mtime=1790659102 lines=126 bytes=430189 claude_alive=1
+05:19:15 t+60s mtime=1790659102 lines=126 bytes=430189 claude_alive=1
+05:20:15 t+120s mtime=1790659102 lines=126 bytes=430189 claude_alive=1
+05:21:15 t+180s mtime=1790659102 lines=126 bytes=430189 claude_alive=1
+05:23:15 t+300s mtime=1790659102 lines=126 bytes=430189 claude_alive=1
+05:25:45 t+450s mtime=1790659102 lines=126 bytes=430189 claude_alive=1
+05:28:15 t+600s mtime=1790659102 lines=126 bytes=430189 claude_alive=1
+05:29:15 t+660s mtime=1790659102 lines=126 bytes=430189 claude_alive=1
+DONE
+
+records written by the no-prompt resume (lines 110-126):
+  10 x attachment/hook_success
+  2 x queue-operation/
+  2 x attachment/hook_system_message
+  1 x user/
+  1 x bridge-session/
+  1 x attachment/hook_additional_context
+{'isMeta': None, 'promptSource': 'system', 'turnOrigin': None, 'origin': {'kind': 'task-notification'}} content_head: <task-notification>
+<task-id>bt3unbioe</task-id>
+<tool-use-id>toolu_01Qm1nSzg8q2ioXhB6MRz41h</tool-use-id>
+<status>stopp

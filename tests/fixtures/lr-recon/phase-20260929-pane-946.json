@@ -1,0 +1,169 @@
+{
+  "incident": "2026-09-29/pane-946",
+  "summary": "LIMITED session 415a3aac in pane 946 moved in place from next3 (.claude-tertiary) to next (.claude-next): two lr-fleet attempts at 03:04Z and 03:07Z died rc 128 on a bare-flipped checkout before any transplant, the third (03:22:14Z) transplanted, the first CR was swallowed, the 30 s re-CR landed the prompt at 03:23:11Z and the watcher logged recycle-engaged at 03:23:27Z.",
+  "sources": [
+    "$HOME/.reso/limit-recover/415a3aac-*/bundle-20260929T032219Z/MANIFEST.json (fields read: source_cfg, target, target_cfg, source_pane, trigger, in_place)",
+    "$HOME/.reso/limit-recover/415a3aac-*/bundle-20260929T032219Z/transplant.json (fields read: source_retired, source_retired_reason, lock, tombstone, ts_first, phase)",
+    "$HOME/.reso/limit-recover/415a3aac-*/bundle-20260929T032219Z/events.jsonl (fields read: ts, state, detail, attempt)",
+    "$HOME/.reso/limit-recover/415a3aac-*/bundle-20260929T032219Z/lr-fire-resume.log",
+    "$HOME/.reso/limit-recover/locks/415a3aac-*.lock (fields read: from, to, ts)",
+    "$HOME/.claude-tertiary/projects/<slug>/415a3aac-*.HANDOFF.json (fields read: handed_off_to, ts; stat birth and mtime)",
+    "$HOME/.claude-tertiary/projects/<slug>/415a3aac-*.jsonl.handed-off (stat mtime; byte-compared against the target copy)",
+    "$HOME/.claude-next/projects/<slug>/415a3aac-*.jsonl (byte offsets of the token record and of the user/assistant/system records after it; message.content block types; isApiErrorMessage)",
+    "$HOME/.reso/limit-recover/fleet/one-20260929T032214Z-415a3aac/detached.log (precheck registry/pane_state/limit lines, source pid on tty, resume-debt open) and results.tsv",
+    "$TMPDIR/handoff-recycle-946-1790652144-*.log (armed, shell-prompt confirm, stub fold, SUBMITTED, ENGAGEMENT CONFIRMED)",
+    "$HOME/.reso/limit-recover/fleet/one-20260929T030419Z-415a3aac/{verdict.txt,results.tsv,detached.log,*.stderr} ('fatal: this operation must be run in a work tree', rc=128)",
+    "$HOME/.reso/limit-recover/fleet/one-20260929T030724Z-415a3aac/{verdict.txt,results.tsv} (second rc=128 attempt, target next4)",
+    "$HOME/.claude/logs/handoffs.jsonl (rows 2026-09-29T03:22:24Z recycle-intent, 03:23:12Z recycle-submitted, 03:23:27Z recycle-engaged for target_pane 946)",
+    "git show b509a51f4 (commit message: the 03:04Z run died on core.bare=true)"
+  ],
+  "rows": [
+    {
+      "id": "946-a",
+      "at": "2026-09-29T03:04:29Z",
+      "synthetic": false,
+      "note": "First lr-fleet attempt: lr-handoff died rc 128 ('this operation must be run in a work tree') before any transplant; no bundle, lock or tombstone yet. Source alive at cc (the 03:22Z precheck still found it on its tty). v2 would classify this as HOLD:repo-bare (repo_state is not an evidence field here, so no substate is asserted).",
+      "expected_phase": "PRE-MOVE",
+      "expected_substate": null,
+      "must_not_be": [
+        "TRANSPLANTED",
+        "EXITING",
+        "HUSK-RETIRED"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "source",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": true,
+        "source_at_composer": true,
+        "handed_off": false,
+        "live_watcher": false,
+        "pane_state": "claude",
+        "identity_match": true,
+        "lock_names_target": false,
+        "source_retired": false,
+        "legacy_verdict": "FAILED rc=128"
+      }
+    },
+    {
+      "id": "946-b",
+      "at": "2026-09-29T03:22:25Z",
+      "synthetic": false,
+      "note": "Third attempt admitted and transplanted: lock (03:22:23Z) and tombstone (born 03:22:23Z) name .claude-next, transplant.json source_retired=0 (admit-phase); the watcher (pid 65849, armed 03:22:24Z) is live but confirm has not renamed the source yet (tombstone rewritten 03:22:26Z). A live watcher without .handed-off stays TRANSPLANTED, not EXITING.",
+      "expected_phase": "TRANSPLANTED",
+      "expected_substate": null,
+      "must_not_be": [
+        "EXITING",
+        "HUSK-RETIRED",
+        "ENGAGED"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "source",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": true,
+        "source_at_composer": true,
+        "handed_off": false,
+        "live_watcher": true,
+        "pane_state": "claude",
+        "identity_match": true,
+        "lock_names_target": true,
+        "source_retired": false
+      }
+    },
+    {
+      "id": "946-c",
+      "at": "2026-09-29T03:22:50Z",
+      "synthetic": false,
+      "note": "Relaunched on .claude-next (relaunch-typed 03:22:34Z, composer-painted 03:22:39Z); the first CR was swallowed and lr-fire-resume logged 'prompt still in the composer after 30s' at 03:23:11Z. No token record yet. confirm_len is measured as the byte length of the common prefix of the target copy and the .handed-off file, cut back to the last complete line (python byte compare); the .handed-off is a few KB longer because the watcher folded the source's re-created stub into it.",
+      "expected_phase": "RELAUNCHED",
+      "expected_substate": "DRAFTED",
+      "must_not_be": [
+        "ENGAGED",
+        "EXITED"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "target",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": false,
+        "handed_off": true,
+        "stub_present": false,
+        "live_watcher": true,
+        "live_launcher": true,
+        "pane_state": "claude",
+        "identity_match": true,
+        "lock_names_target": true,
+        "source_retired": true,
+        "resume_debt_open": true,
+        "submitted": false,
+        "token_record_offset": null,
+        "confirm_len": 1298417,
+        "target_last_assistant": "none",
+        "relaunch_substate": "DRAFTED"
+      }
+    },
+    {
+      "id": "946-d",
+      "at": "2026-09-29T03:23:27Z",
+      "synthetic": false,
+      "note": "recycle-engaged. The user record carrying this attempt's run token sits at byte 1356988 of the target copy, past confirm_len 1298417; a queued task-notification user record follows at the same millisecond, then non-error assistant records (thinking/text/tool_use from 03:23:19Z). confirm_len is measured as the byte length of the common prefix of the target copy and the .handed-off file, cut back to the last complete line (python byte compare); the .handed-off is a few KB longer because the watcher folded the source's re-created stub into it.",
+      "expected_phase": "ENGAGED",
+      "expected_substate": null,
+      "must_not_be": [
+        "RELAUNCHED",
+        "SPLIT-BRAIN"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "target",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": false,
+        "handed_off": true,
+        "stub_present": false,
+        "live_watcher": true,
+        "pane_state": "claude",
+        "identity_match": true,
+        "lock_names_target": true,
+        "source_retired": true,
+        "resume_debt_open": true,
+        "submitted": true,
+        "target_last_assistant": "ok",
+        "token_record_offset": 1356988,
+        "token_is_this_attempt": true,
+        "confirm_len": 1298417,
+        "nonerror_assistant_after_token": true,
+        "relaunch_substate": "SUBMITTED",
+        "legacy_verdict": "recycle-engaged"
+      }
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+     └ PostToolBatch: Unknown hook event "PostToolBatch" was ignored. Valid events: PreToolUse, PostToolUse, PostToolUseFailure, Notification,
+   UserPromptSubmit, SessionStart, SessionEnd, Stop, StopFailure, SubagentStart, SubagentStop, PreCompact, PostCompact, PermissionRequest,
+   PermissionDenied, Setup, TeammateIdle, TaskCreated, TaskCompleted, Elicitation, ElicitationResult, ConfigChange, WorktreeCreate, WorktreeRemove,
+   InstructionsLoaded, CwdChanged, FileChanged
+
+  Learn more: https://code.claude.com/docs/en/hooks
+
+
+  Files with errors are skipped entirely, not just the invalid settings.
+
+  ❯ 1. Exit and fix manually
+    2. Continue without these settings
+
+  Enter to confirm · Esc to cancel

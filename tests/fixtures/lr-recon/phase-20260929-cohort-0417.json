@@ -1,0 +1,347 @@
+{
+  "incident": "2026-09-29/cohort-0417",
+  "summary": "Four LIMITED sessions moved concurrently in place from next2 (.claude-secondary) to next4 (.claude-quaternary) by lr-fleet started 04:17:06-07Z: panes 849 (8ea01453), 932 (cfb177b2), 842 (46bc0436), 841 (7c395da7). All four were confirmed while their sources were alive (each re-created a stub the watcher folded), two first CRs were swallowed (932, 842) and re-CR'd at 04:18:41Z, and the last recycle-engaged landed at 04:19:01Z.",
+  "sources": [
+    "$HOME/.reso/limit-recover/8ea01453-*/bundle-20260929T041723Z/MANIFEST.json (fields read: source_cfg, target, target_cfg, source_pane, trigger, in_place)",
+    "$HOME/.reso/limit-recover/8ea01453-*/bundle-20260929T041723Z/transplant.json (fields read: source_retired, source_retired_reason, lock, tombstone, ts_first, phase)",
+    "$HOME/.reso/limit-recover/8ea01453-*/bundle-20260929T041723Z/events.jsonl (fields read: ts, state, detail, attempt)",
+    "$HOME/.reso/limit-recover/8ea01453-*/bundle-20260929T041723Z/lr-fire-resume.log",
+    "$HOME/.reso/limit-recover/locks/8ea01453-*.lock (fields read: from, to, ts)",
+    "$HOME/.claude-secondary/projects/<slug>/8ea01453-*.HANDOFF.json (fields read: handed_off_to, ts; stat birth and mtime)",
+    "$HOME/.claude-secondary/projects/<slug>/8ea01453-*.jsonl.handed-off (stat mtime; byte-compared against the target copy)",
+    "$HOME/.claude-quaternary/projects/<slug>/8ea01453-*.jsonl (byte offsets of the token record and of the user/assistant/system records after it; message.content block types; isApiErrorMessage)",
+    "$HOME/.reso/limit-recover/fleet/one-20260929T041707Z-8ea01453/detached.log (precheck registry/pane_state/limit lines, source pid on tty, resume-debt open) and results.tsv",
+    "$TMPDIR/handoff-recycle-849-1790655450-*.log (armed, shell-prompt confirm, stub fold, SUBMITTED, ENGAGEMENT CONFIRMED)",
+    "$HOME/.reso/limit-recover/cfb177b2-*/bundle-20260929T041725Z/MANIFEST.json (fields read: source_cfg, target, target_cfg, source_pane, trigger, in_place)",
+    "$HOME/.reso/limit-recover/cfb177b2-*/bundle-20260929T041725Z/transplant.json (fields read: source_retired, source_retired_reason, lock, tombstone, ts_first, phase)",
+    "$HOME/.reso/limit-recover/cfb177b2-*/bundle-20260929T041725Z/events.jsonl (fields read: ts, state, detail, attempt)",
+    "$HOME/.reso/limit-recover/cfb177b2-*/bundle-20260929T041725Z/lr-fire-resume.log",
+    "$HOME/.reso/limit-recover/locks/cfb177b2-*.lock (fields read: from, to, ts)",
+    "$HOME/.claude-secondary/projects/<slug>/cfb177b2-*.HANDOFF.json (fields read: handed_off_to, ts; stat birth and mtime)",
+    "$HOME/.claude-secondary/projects/<slug>/cfb177b2-*.jsonl.handed-off (stat mtime; byte-compared against the target copy)",
+    "$HOME/.claude-quaternary/projects/<slug>/cfb177b2-*.jsonl (byte offsets of the token record and of the user/assistant/system records after it; message.content block types; isApiErrorMessage)",
+    "$HOME/.reso/limit-recover/fleet/one-20260929T041707Z-cfb177b2/detached.log (precheck registry/pane_state/limit lines, source pid on tty, resume-debt open) and results.tsv",
+    "$TMPDIR/handoff-recycle-932-1790655451-*.log (armed, shell-prompt confirm, stub fold, SUBMITTED, ENGAGEMENT CONFIRMED)",
+    "$HOME/.reso/limit-recover/46bc0436-*/bundle-20260929T041727Z/MANIFEST.json (fields read: source_cfg, target, target_cfg, source_pane, trigger, in_place)",
+    "$HOME/.reso/limit-recover/46bc0436-*/bundle-20260929T041727Z/transplant.json (fields read: source_retired, source_retired_reason, lock, tombstone, ts_first, phase)",
+    "$HOME/.reso/limit-recover/46bc0436-*/bundle-20260929T041727Z/events.jsonl (fields read: ts, state, detail, attempt)",
+    "$HOME/.reso/limit-recover/46bc0436-*/bundle-20260929T041727Z/lr-fire-resume.log",
+    "$HOME/.reso/limit-recover/locks/46bc0436-*.lock (fields read: from, to, ts)",
+    "$HOME/.claude-secondary/projects/<slug>/46bc0436-*.HANDOFF.json (fields read: handed_off_to, ts; stat birth and mtime)",
+    "$HOME/.claude-secondary/projects/<slug>/46bc0436-*.jsonl.handed-off (stat mtime; byte-compared against the target copy)",
+    "$HOME/.claude-quaternary/projects/<slug>/46bc0436-*.jsonl (byte offsets of the token record and of the user/assistant/system records after it; message.content block types; isApiErrorMessage)",
+    "$HOME/.reso/limit-recover/fleet/one-20260929T041706Z-46bc0436/detached.log (precheck registry/pane_state/limit lines, source pid on tty, resume-debt open) and results.tsv",
+    "$TMPDIR/handoff-recycle-842-1790655454-*.log (armed, shell-prompt confirm, stub fold, SUBMITTED, ENGAGEMENT CONFIRMED)",
+    "$HOME/.reso/limit-recover/7c395da7-*/bundle-20260929T041722Z/MANIFEST.json (fields read: source_cfg, target, target_cfg, source_pane, trigger, in_place)",
+    "$HOME/.reso/limit-recover/7c395da7-*/bundle-20260929T041722Z/transplant.json (fields read: source_retired, source_retired_reason, lock, tombstone, ts_first, phase)",
+    "$HOME/.reso/limit-recover/7c395da7-*/bundle-20260929T041722Z/events.jsonl (fields read: ts, state, detail, attempt)",
+    "$HOME/.reso/limit-recover/7c395da7-*/bundle-20260929T041722Z/lr-fire-resume.log",
+    "$HOME/.reso/limit-recover/locks/7c395da7-*.lock (fields read: from, to, ts)",
+    "$HOME/.claude-secondary/projects/<slug>/7c395da7-*.HANDOFF.json (fields read: handed_off_to, ts; stat birth and mtime)",
+    "$HOME/.claude-secondary/projects/<slug>/7c395da7-*.jsonl.handed-off (stat mtime; byte-compared against the target copy)",
+    "$HOME/.claude-quaternary/projects/<slug>/7c395da7-*.jsonl (byte offsets of the token record and of the user/assistant/system records after it; message.content block types; isApiErrorMessage)",
+    "$HOME/.reso/limit-recover/fleet/one-20260929T041706Z-7c395da7/detached.log (precheck registry/pane_state/limit lines, source pid on tty, resume-debt open) and results.tsv",
+    "$TMPDIR/handoff-recycle-841-1790655456-*.log (armed, shell-prompt confirm, stub fold, SUBMITTED, ENGAGEMENT CONFIRMED)",
+    "$HOME/.claude/logs/handoffs.jsonl (rows 2026-09-29T04:17:30Z-04:19:01Z: recycle-intent, recycle-residue-scrubbed, recycle-submitted, recycle-engaged for target_panes 849, 932, 842, 841)",
+    "$HOME/.reso/limit-recover/design-v2/full.json findings citing 'tonight's 04:17 cohort' (placements onto next4 at 04:17:19-26Z, bundle-to-paint 28-45 s, first CR landed only for 8ea01453 and 7c395da7)"
+  ],
+  "rows": [
+    {
+      "id": "841-a",
+      "at": "2026-09-29T04:17:34Z",
+      "synthetic": false,
+      "note": "7c395da7: lock (04:17:29Z) and tombstone (born 04:17:33Z) name .claude-quaternary; confirm not yet run (tombstone rewritten 04:17:39Z); source alive at cc (registry pid on tty); watcher not yet armed (armed 04:17:36Z).",
+      "expected_phase": "TRANSPLANTED",
+      "expected_substate": null,
+      "must_not_be": [
+        "EXITING",
+        "PRE-MOVE"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "source",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": true,
+        "source_at_composer": true,
+        "handed_off": false,
+        "live_watcher": false,
+        "pane_state": "claude",
+        "identity_match": true,
+        "lock_names_target": true,
+        "source_retired": false
+      }
+    },
+    {
+      "id": "849-a",
+      "at": "2026-09-29T04:17:32Z",
+      "synthetic": false,
+      "note": "8ea01453: confirm (tombstone rewritten 04:17:32Z, resume debt opened 04:17:33Z) with the source still alive (it re-created a stub after the rename; the watcher folded it, .handed-off mtime 04:17:35Z) and watcher pid 55202 live (armed 04:17:30Z). EXITING, not HUSK-RETIRED.",
+      "expected_phase": "EXITING",
+      "expected_substate": null,
+      "must_not_be": [
+        "HUSK-RETIRED",
+        "TRANSPLANTED",
+        "EXITED"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "source",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": true,
+        "handed_off": true,
+        "live_watcher": true,
+        "pane_state": "claude",
+        "identity_match": true,
+        "lock_names_target": true,
+        "source_retired": true
+      }
+    },
+    {
+      "id": "849-b",
+      "at": "2026-09-29T04:18:10Z",
+      "synthetic": false,
+      "note": "8ea01453: recycle-engaged; the first CR landed. Token record at byte 1971660 > confirm_len 1903646, then non-error assistant records from 04:18:05Z (thinking, tool_use, text). confirm_len is measured as the byte length of the common prefix of the target copy and the .handed-off file, cut back to the last complete line (python byte compare); the .handed-off is a few KB longer because the watcher folded the source's re-created stub into it. The target copy's token record does not contain the token as one literal string: the paste wrapper split it ('...T0417' + '</pasted_content ...>' + '..Z:<hex>'), so a literal substring scan misses it; the offset given is the record's line start, found by the token's trailing hex plus type=user.",
+      "expected_phase": "ENGAGED",
+      "expected_substate": null,
+      "must_not_be": [
+        "RELAUNCHED"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "target",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": false,
+        "handed_off": true,
+        "stub_present": false,
+        "live_watcher": true,
+        "pane_state": "claude",
+        "identity_match": true,
+        "lock_names_target": true,
+        "source_retired": true,
+        "resume_debt_open": true,
+        "submitted": true,
+        "target_last_assistant": "ok",
+        "token_record_offset": 1971660,
+        "token_is_this_attempt": true,
+        "confirm_len": 1903646,
+        "nonerror_assistant_after_token": true,
+        "relaunch_substate": "SUBMITTED",
+        "legacy_verdict": "recycle-engaged"
+      }
+    },
+    {
+      "id": "932-a",
+      "at": "2026-09-29T04:18:20Z",
+      "synthetic": false,
+      "note": "cfb177b2: relaunched on .claude-quaternary (relaunch-typed 04:17:56Z, composer-painted 04:18:05Z); first CR swallowed, draft still in the composer until the 04:18:41Z re-CR. No token record yet.",
+      "expected_phase": "RELAUNCHED",
+      "expected_substate": "DRAFTED",
+      "must_not_be": [
+        "ENGAGED"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "target",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": false,
+        "handed_off": true,
+        "stub_present": false,
+        "live_watcher": true,
+        "live_launcher": true,
+        "pane_state": "claude",
+        "identity_match": true,
+        "lock_names_target": true,
+        "source_retired": true,
+        "submitted": false,
+        "token_record_offset": null,
+        "confirm_len": 6705267,
+        "target_last_assistant": "none",
+        "relaunch_substate": "DRAFTED"
+      }
+    },
+    {
+      "id": "932-b",
+      "at": "2026-09-29T04:18:55Z",
+      "synthetic": false,
+      "note": "cfb177b2: recycle-engaged. Token record at byte 6750939 > confirm_len 6705267, then non-error assistant records from 04:18:49Z. confirm_len is measured as the byte length of the common prefix of the target copy and the .handed-off file, cut back to the last complete line (python byte compare); the .handed-off is a few KB longer because the watcher folded the source's re-created stub into it. The target copy's token record does not contain the token as one literal string: the paste wrapper split it ('...T0417' + '</pasted_content ...>' + '..Z:<hex>'), so a literal substring scan misses it; the offset given is the record's line start, found by the token's trailing hex plus type=user.",
+      "expected_phase": "ENGAGED",
+      "expected_substate": null,
+      "must_not_be": [
+        "RELAUNCHED"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "target",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": false,
+        "handed_off": true,
+        "stub_present": false,
+        "live_watcher": true,
+        "pane_state": "claude",
+        "identity_match": true,
+        "lock_names_target": true,
+        "source_retired": true,
+        "submitted": true,
+        "target_last_assistant": "ok",
+        "token_record_offset": 6750939,
+        "token_is_this_attempt": true,
+        "confirm_len": 6705267,
+        "nonerror_assistant_after_token": true,
+        "relaunch_substate": "SUBMITTED",
+        "legacy_verdict": "recycle-engaged"
+      }
+    },
+    {
+      "id": "842-a",
+      "at": "2026-09-29T04:18:45Z",
+      "synthetic": false,
+      "note": "46bc0436: the re-CR landed the prompt (token record at 04:18:41.647Z, byte 6536920 > confirm_len 6503030) but no assistant record exists yet (first one 04:18:52Z). Submitted, not engaged.",
+      "expected_phase": "RELAUNCHED",
+      "expected_substate": "SUBMITTED",
+      "must_not_be": [
+        "ENGAGED",
+        "TARGET-TRANSIENT"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "target",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": false,
+        "handed_off": true,
+        "stub_present": false,
+        "live_watcher": true,
+        "pane_state": "claude",
+        "identity_match": true,
+        "lock_names_target": true,
+        "source_retired": true,
+        "submitted": true,
+        "target_last_assistant": "none",
+        "token_record_offset": 6536920,
+        "token_is_this_attempt": true,
+        "confirm_len": 6503030,
+        "nonerror_assistant_after_token": false,
+        "relaunch_substate": "SUBMITTED"
+      }
+    },
+    {
+      "id": "842-b",
+      "at": "2026-09-29T04:19:01Z",
+      "synthetic": false,
+      "note": "46bc0436: recycle-engaged (last of the cohort). Non-error assistant records after the token from 04:18:52Z. confirm_len is measured as the byte length of the common prefix of the target copy and the .handed-off file, cut back to the last complete line (python byte compare); the .handed-off is a few KB longer because the watcher folded the source's re-created stub into it. The target copy's token record does not contain the token as one literal string: the paste wrapper split it ('...T0417' + '</pasted_content ...>' + '..Z:<hex>'), so a literal substring scan misses it; the offset given is the record's line start, found by the token's trailing hex plus type=user.",
+      "expected_phase": "ENGAGED",
+      "expected_substate": null,
+      "must_not_be": [
+        "RELAUNCHED"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "target",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": false,
+        "handed_off": true,
+        "stub_present": false,
+        "live_watcher": true,
+        "pane_state": "claude",
+        "identity_match": true,
+        "lock_names_target": true,
+        "source_retired": true,
+        "submitted": true,
+        "target_last_assistant": "ok",
+        "token_record_offset": 6536920,
+        "token_is_this_attempt": true,
+        "confirm_len": 6503030,
+        "nonerror_assistant_after_token": true,
+        "relaunch_substate": "SUBMITTED",
+        "legacy_verdict": "recycle-engaged"
+      }
+    },
+    {
+      "id": "841-b",
+      "at": "2026-09-29T04:18:33Z",
+      "synthetic": false,
+      "note": "7c395da7: recycle-engaged; first CR landed. Token record (literal token intact) at byte 4204613 > confirm_len 4147264; a queued task-notification user record follows at the same millisecond, then non-error assistant records from 04:18:22Z. confirm_len is measured as the byte length of the common prefix of the target copy and the .handed-off file, cut back to the last complete line (python byte compare); the .handed-off is a few KB longer because the watcher folded the source's re-created stub into it.",
+      "expected_phase": "ENGAGED",
+      "expected_substate": null,
+      "must_not_be": [
+        "RELAUNCHED"
+      ],
+      "evidence": {
+        "kind": "limited",
+        "attempt": 1,
+        "holders": [
+          {
+            "cfg": "target",
+            "pane_bound": true,
+            "bg": false,
+            "role": "claude"
+          }
+        ],
+        "source_alive": false,
+        "handed_off": true,
+        "stub_present": false,
+        "live_watcher": true,
+        "pane_state": "claude",
+        "identity_match": true,
+        "lock_names_target": true,
+        "source_retired": true,
+        "submitted": true,
+        "target_last_assistant": "ok",
+        "token_record_offset": 4204613,
+        "token_is_this_attempt": true,
+        "confirm_len": 4147264,
+        "nonerror_assistant_after_token": true,
+        "relaunch_substate": "SUBMITTED",
+        "legacy_verdict": "recycle-engaged"
+      }
+    }
+  ]
+}
