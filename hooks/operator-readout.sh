@@ -522,6 +522,36 @@ stranded_sessions() {
   return 0
 }
 
+# ── LR-RECON (docs/plans/LIMIT_RECOVER_FLEET_V2_ARCHITECTURE.md §C11) — the reconciler's ONE counted
+# line. The daemon renders it every pass into <recon root>/readout.line (lr_recon/__main__.py
+# _report), so this path is two stats and two builtin reads: no python, no jq, no fork. Shown only
+# after the operator's cutover (recon.on) and while the file is non-empty (empty ⇒ nothing open).
+# A heartbeat older than 180 s REPLACES it: a frozen daemon's last line would read as current.
+# An unreadable or unparsable heartbeat prints nothing — this runs in a Stop hook, where a wrong
+# line is worse than a missing one. Seams: LR_STATE_DIR · LR_RECON_ROOT (the fence's names).
+lr_recon_line() {
+  local lr="${LR_STATE_DIR:-$HOME/.reso/limit-recover}" root line="" hb="" pw age
+  root="${LR_RECON_ROOT:-$lr/recon}"
+  { [ -f "$lr/recon.on" ] && [ -s "$root/readout.line" ]; } || return 0
+  # The daemon writes no trailing newline, so `read` returns 1 on a good file: judge the value.
+  { IFS= read -r line < "$root/readout.line"; } 2>/dev/null
+  [ -n "$line" ] || return 0
+  { IFS= read -r hb < "$root/heartbeat"; } 2>/dev/null
+  case "$hb" in *'"progress_wall":'*) ;; *) return 0 ;; esac
+  pw="${hb#*\"progress_wall\":}"; pw="${pw# }"; pw="${pw%%[!0-9]*}"   # epoch; fraction dropped
+  case "$pw" in ''|*[!0-9]*) return 0 ;; esac
+  case "$NOW" in ''|*[!0-9]*) return 0 ;; esac
+  age=$(( NOW - pw ))
+  if [ "$age" -gt 180 ]; then
+    if [ "$age" -ge 3600 ]; then printf -v age '%dh%02dm' $((age / 3600)) $((age % 3600 / 60))
+    else printf -v age '%dm%02ds' $((age / 60)) $((age % 60)); fi
+    printf ' ⚠ lr-recon: reconciler heartbeat stale %s — the reset poller is paging and kickstarting it\n' "$age"
+  else
+    printf ' ⟳ %s\n' "$line"
+  fi
+  return 0
+}
+
 # ── the ONE renderer: prints the block (or nothing) for cwd=$1. Sets RUNG + TOTAL + Q_N for the
 #    caller — so hook mode must invoke it via redirection in THIS shell, never `$(…)` (subshell
 #    loses them).
@@ -1374,6 +1404,9 @@ render_block() {
   # ── stranded sessions (CLOSE_RESUME_CUSTODY D4) — outside both mode branches, like the line below.
   # Header ` ⚠` and rows indented by THREE: none match `^ [0-9]+ (▶|◆|✎)` (NSTEPS) or `^ (▶|◆)`.
   stranded_sessions
+  # ── lr-recon (FLEET_V2 §C11) — ONE line led by ` ⟳` (or ` ⚠` when stale): neither matches
+  # `^ [0-9]+ (▶|◆|✎)` (NSTEPS) nor `^ (▶|◆)`, so it adds a line without adding a step.
+  lr_recon_line
 
   # ── escalation records (D3) — ONE counted line, outside both mode branches so it reads the same in
   # collapse, itemised and legacy. Deliberately UNNUMBERED: `NSTEPS` counts `^ [0-9]+ (▶|◆|✎)`, and

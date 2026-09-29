@@ -64,6 +64,10 @@ setup() {
   # The stranded-sessions line reads cc-resume-debt's LIVE ledger by default — same hazard as the
   # stores above. `none` = absent; tests/operator-readout-stranded.bats owns that line.
   export CC_RESUME_DEBT_BIN=none
+  # The lr-recon line reads ~/.reso/limit-recover by default (this suite keeps the real $HOME), so
+  # a live cutover would inject its line here. An empty tree = absent; operator-readout-recon.bats
+  # owns that line.
+  export LR_STATE_DIR="$BATS_TEST_TMPDIR/lr" LR_RECON_ROOT="$BATS_TEST_TMPDIR/lr/recon"
   mkdir -p "$CC_ACTIVATION_DIR" "$CC_DECISIONS_DIR" "$CC_HANDOFF_ALARM_DIR" \
            "$CC_ANNOUNCE_ALARM_DIR" "$CC_COMPLETION_RECORDS_DIR" "$CC_PAGES_DIR" \
            "$CC_MAILBOX_DIR/dead-letter" "$CC_SWEEP_SEEN_DIR"

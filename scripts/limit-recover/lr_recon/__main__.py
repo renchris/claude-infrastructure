@@ -22,7 +22,16 @@ import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from lr_recon import act, census, evidence, observe, plan, report, store, transcript
+from lr_recon import (
+    act,
+    census,
+    evidence,
+    observe,
+    plan,
+    report,
+    store,
+    transcript,
+)
 from lr_recon import facts as F
 from lr_recon import types as T
 from lr_recon.admit import Admission, BootSlots
@@ -354,6 +363,15 @@ def _report(ctx: Ctx, mode: str, now: float) -> None:
             report.write_cohort(ctx.paths, cohort, recs, now)
         except Exception as e:  # a surface failure never stops the loop
             _event(ctx.paths, "report-error", detail=repr(e)[:200])
+    try:
+        # operator-readout.sh reads this one file instead of loading every record: a Stop hook
+        # has a ~2-3 s budget and no python on its path. Empty file ⇒ nothing open ⇒ no line.
+        store.atomic_write_text(
+            ctx.paths.p("readout.line"),
+            report.readout_line(ctx.paths, now, list(ctx.records.values())),
+        )
+    except Exception as e:
+        _event(ctx.paths, "report-error", detail=repr(e)[:200])
 
 
 def _invariant(ctx: Ctx, snap: T.Snapshot) -> int:

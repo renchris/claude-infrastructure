@@ -209,14 +209,41 @@ def write_cohort(
     store.atomic_write_json(os.path.join(paths.cohorts, cohort.cid + ".json"), doc)
 
 
-def readout_line(paths: T.Paths, now: float) -> str:
-    """One counted line for hooks/operator-readout.sh; "" when nothing is open."""
-    live = [r for r in store.load_all(paths, lambda _p, _r: None).values() if r.open]
+# The readout is one line: name at most three bg-held panes, count the rest.
+BG_HELD_SHOWN = 3
+
+
+def _bg_held(rec: T.Record) -> str:
+    """`<who> pages <HH:MM> (60 min, ship-land)` for one HOLD-BGWORK record. Decision 2 (SETTLED):
+    hold background work until it ends, and page at 60 min for a ship-land job, 20 min otherwise —
+    so the line tells the operator WHEN the hold turns into their problem, not just that it exists."""
+    d = max_age_deadline(rec)
+    ship = rec.wait is not None and "ship-land" in rec.wait.detail
+    limit = (
+        T.HOLD_BGWORK_SHIPLAND_MAX_AGE_S if ship else T.MAX_AGE_S["HOLD-BGWORK"] or 0
+    )
+    return "%s pages %s (%d min%s)" % (
+        who(rec),
+        "?" if d is None else time.strftime("%H:%M", time.localtime(d)),
+        limit // 60,
+        ", ship-land" if ship else "",
+    )
+
+
+def readout_line(
+    paths: T.Paths, now: float, records: Optional[Sequence[T.Record]] = None
+) -> str:
+    """One counted line for hooks/operator-readout.sh; "" when nothing is open. ``records`` lets the
+    daemon pass its in-memory set: its pass writes records AFTER reporting, so a disk read here
+    would render the previous pass."""
+    if records is None:
+        records = list(store.load_all(paths, lambda _p, _r: None).values())
+    live = [r for r in records if r.open]
     if not live:
         return ""
     t = _tally(live)
     n = len({r.cohort_id or r.sid for r in live})
-    return (
+    line = (
         "lr-recon: %d cohort%s open · %d moving · %d waiting · %d held · %d escalated"
         % (
             n,
@@ -227,6 +254,15 @@ def readout_line(paths: T.Paths, now: float) -> str:
             t["escalated"],
         )
     )
+    bg = sorted(
+        (r for r in live if not r.escalated and _state(r) == "HOLD-BGWORK"),
+        key=lambda r: (max_age_deadline(r) or 0.0, r.sid),
+    )
+    for r in bg[:BG_HELD_SHOWN]:
+        line += " · bg-held: " + _bg_held(r)
+    if len(bg) > BG_HELD_SHOWN:
+        line += " · +%d more" % (len(bg) - BG_HELD_SHOWN)
+    return line
 
 
 def _cc_notify(*args: str) -> None:

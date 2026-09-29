@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import tempfile
+import time
 import unittest
 from typing import Any, List, Optional, Tuple
 
@@ -293,6 +294,30 @@ class ReportTest(unittest.TestCase):
             R.readout_line(self.paths, T0),
             "lr-recon: 2 cohorts open · 1 moving · 1 waiting · 1 held · 1 escalated",
         )
+
+    def test_readout_line_names_bg_held_panes_with_their_page_time(self) -> None:
+        # Decision 2 (SETTLED): a ship-land job pages at 60 min, any other background job at 20.
+        def hm(t: float) -> str:
+            return time.strftime("%H:%M", time.localtime(t))
+
+        ship = rec(1, wait=wait("HOLD-BGWORK", detail="ship-land in flight"))
+        other = rec(2, wait=wait("HOLD-BGWORK", since=T0 + 60, detail="bats"))
+        line = R.readout_line(self.paths, T0, [ship, other, done(rec(3))])
+        self.assertEqual(
+            line,
+            "lr-recon: 1 cohort open · 0 moving · 0 waiting · 2 held · 0 escalated"
+            " · bg-held: %s pages %s (20 min)"
+            " · bg-held: %s pages %s (60 min, ship-land)"
+            % (R.who(other), hm(T0 + 60 + 1200), R.who(ship), hm(T0 + 3600)),
+        )
+        self.assertIn("pane 12:2", line)  # the operator finds the pane by its label
+
+    def test_readout_line_caps_bg_held_at_three(self) -> None:
+        recs = [rec(n, wait=wait("HOLD-BGWORK", since=T0 + n)) for n in range(1, 6)]
+        line = R.readout_line(self.paths, T0, recs)
+        self.assertEqual(line.count("bg-held:"), 3)
+        self.assertTrue(line.endswith(" · +2 more"), line)
+        self.assertNotIn("pane 12:4", line)  # the latest deadlines are the ones counted
 
     def test_residue_needs(self) -> None:
         draft = rec(1, wait=wait("HOLD-DRAFT"))

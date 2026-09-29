@@ -139,6 +139,17 @@ class MainTests(unittest.TestCase):
         popen.assert_not_called()
         am.assert_not_called()
 
+    def test_pass_writes_the_readout_line(self):
+        ctx, _s, _am, _popen = self._pass("observe")
+        with open(self.paths.p("readout.line"), encoding="utf-8") as fh:
+            line = fh.read()
+        self.assertTrue(line.startswith("lr-recon: 1 cohort open · "), line)
+        # nothing open ⇒ the file is emptied, not left holding the last open line
+        for r in ctx.records.values():
+            r.terminal = T.Terminal(outcome="CLOSED", at=1.0)
+        M._report(ctx, "observe", 2.0)
+        self.assertEqual(os.path.getsize(self.paths.p("readout.line")), 0)
+
     def test_once_prints_census_and_zero_actuations(self):
         import time
 
