@@ -13,7 +13,11 @@
 #
 # Env: CC_RESUME_ONE_BIN (default ~/.reso/bin/reso-resume-one) · CC_OSASCRIPT_BIN (default osascript)
 #      · CC_TERM_KITTY (kitty binary) · CC_TERM_KITTY_TO (kitty control socket) · IT2_WRAPPER_NO_KITTY=1
-#      (kill switch: force the iTerm2 path even inside kitty).
+#      (kill switch: force the iTerm2 path even inside kitty) · LR_STATE_DIR / LR_RECON_ROOT (the
+#      fence's stores) · CC_BOOT_RESUME_MODE / CC_BOOT_RESUME_STATE_DIR (the posture for PARKED-REBOOT).
+# Exit: 0 launched · 1 verified typing unavailable · 2 usage · 3 driver or reso-resume-one missing
+#      · 4 launch failed · 5 not ours to launch (reconciler owns it, launch lock held, H(sid) not
+#      empty, or PARKED-REBOOT outside `resume` mode) · 9 capacity shed.
 # Never reuses the current pane (resume-sessions off-by-one rule); always a new window. Fail-loud.
 set -uo pipefail
 
@@ -187,10 +191,14 @@ if [ "$IN_KITTY" = 1 ]; then
   # THE INVARIANT, once: any pane an agent may later be asked to recycle must end its command with an
   # interactive shell — bin/cc-pane-runner:46 states it for the split path, bin/reso-resume-one's tail
   # for the resume path. Repointing CC_RESUME_ONE_BIN at a program that merely exits re-opens it.
+  # SHELL ROOT (LIMIT_RECOVER_FLEET_V2 W4). The root is now an interactive zsh that runs the resume
+  # and then execs another interactive zsh, so the pane stays at a shell even when the program does
+  # NOT end in one — the invariant no longer rests on the other file's tail alone, and an in-pane
+  # relaunch (handoff-fire --relaunch-at-shell) has a prompt to type into. The command string is
+  # the shq-quoted CMD: every word single-quoted, so no correction prompt can fire on it.
   KARGS=(launch --type=os-window)
   { [ -n "$cwd" ] && [ -d "$cwd" ]; } && KARGS+=(--cwd "$cwd")
-  KARGS+=(-- "$RESUME_ONE" "$acct" "$cwd" "$sid")
-  [ -n "$branch" ] && KARGS+=("$branch")
+  KARGS+=(-- zsh -ic "$CMD; exec zsh -i")
 else
   # CREATE ONLY — the command is typed separately, through osa_type_verified. Splitting create from
   # type is what makes the echo-verify possible at all: `write text` always appends the newline, so
@@ -230,6 +238,51 @@ if [ ! -x "$RESUME_ONE" ]; then
   echo "boot-resume-launch: reso-resume-one not executable at $RESUME_ONE" >&2
   exit 3
 fi
+
+# ── ONE TYPER PER SESSION (LIMIT_RECOVER_FLEET_V2_ARCHITECTURE.md §C10 "Relaunch", §C7 locks) ─────
+# A launch is a relaunch like any other, so it asks three things before a window opens, and any NO
+# exits 5 (distinct from 2 usage, 3 missing dep, 4 launch failed, 9 capacity shed):
+#   1. PARKED-REBOOT: the reconciler parked this sid because its plan predates the boot. It is
+#      resumed only under the boot-resume posture `resume` (boot-resume.sh resolve_mode, mirrored).
+#   2. the fence: lr_recon_may_act … always — the reconciler may own the sid; otherwise this
+#      process takes locks/<sid>.launch (or inherits a live parent's, e.g. cc-resume-debt's).
+#   3. H(sid) empty: a live holder of the session means a second resume would be a second writer.
+# The lock this process took is released on its exit; an inherited one is left to its taker.
+brl_rec_root="${LR_RECON_ROOT:-${LR_STATE_DIR:-$HOME/.reso/limit-recover}/recon}"
+for _brl_rec in "$brl_rec_root/sessions/$sid.json" "$brl_rec_root/records/$sid.json"; do
+  [ -f "$_brl_rec" ] || continue
+  if grep -Eq '"(phase|substate)": ?"PARKED-REBOOT"' "$_brl_rec" 2>/dev/null; then
+    _brl_mode="${CC_BOOT_RESUME_MODE:-}"
+    _brl_mf="${CC_BOOT_RESUME_STATE_DIR:-$HOME/.claude/autonomy/boot-resume}/mode"
+    [ -z "$_brl_mode" ] && [ -f "$_brl_mf" ] && _brl_mode="$(tr -d '[:space:]' < "$_brl_mf" 2>/dev/null)"
+    if [ "$_brl_mode" != resume ]; then
+      echo "boot-resume-launch: parked-reboot: $sid is PARKED-REBOOT and the boot-resume mode is page, not resume - not launching" >&2
+      exit 5
+    fi
+  fi
+  break
+done
+_brl_lr="$(dirname "$_CC_KS")/limit-recover"
+[ -f "$_brl_lr/lr-recon-fence.sh" ] || _brl_lr="${HOME:-}/.claude/scripts/limit-recover"
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+if [ -f "$_brl_lr/lr-recon-fence.sh" ] && . "$_brl_lr/lr-recon-fence.sh" 2>/dev/null; then
+  if ! lr_recon_may_act "$sid" boot-resume-launch always; then
+    echo "boot-resume-launch: reconciler owns it: $sid is fenced (or its launch lock is held) - not launching" >&2
+    exit 5
+  fi
+  trap 'lr_recon_act_done' EXIT
+else
+  echo "boot-resume-launch: recon fence unreachable at $_brl_lr - launching as before" >&2
+fi
+_brl_h=""
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+[ -f "$_brl_lr/lr-lib.sh" ] && . "$_brl_lr/lr-lib.sh" 2>/dev/null \
+  && command -v lr_holder_count >/dev/null 2>&1 && _brl_h="$(lr_holder_count "$sid" 2>/dev/null)"
+case "$_brl_h" in
+  0) ;;
+  ''|*[!0-9]*) echo "boot-resume-launch: H($sid) unknown (lr-lib.sh unreachable) - treated as held, not launching" >&2; exit 5 ;;
+  *) echo "boot-resume-launch: $sid already has $_brl_h live holder(s) - a second resume would be a second writer, not launching" >&2; exit 5 ;;
+esac
 
 # ── MACHINE-CAPACITY ADMISSION — the reso-resume-one seam (MACHINE_CAPACITY_V2 §12.1/§12.4). ───
 # §12.1's bypass table listed `reso-resume-one` as an ungated spawn path. Every in-repo invocation
