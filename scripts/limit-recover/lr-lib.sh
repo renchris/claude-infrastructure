@@ -356,24 +356,27 @@ EOF
 # error is NOT subtracted (its turn may genuinely still be running, 93-101 min measured), an
 # unreadable transcript is NOT subtracted, and the ceiling itself is untouched.
 lr_phantom_actives() { # → count of live sessions whose mid-turn beat is a usage-limit corpse
-  local dir b sid pid kind cfg tx n=0 rest ekind
+  local dir b sid pid kind cfg tx n=0 rest ekind row
   dir="${CC_BEAT_DIR:-$HOME/.claude/cc-beats}"
   [ -d "$dir" ] || { printf '0'; return 0; }
   for b in "$dir"/*.json; do
     [ -f "$b" ] || continue
-    kind="$(jq -r 'if type=="object" then (.kind // "") else "" end' "$b" 2>/dev/null)" || continue
+    # ONE jq pass per beat. An empty field becomes `_`, which no check below accepts, because a
+    # tab is IFS whitespace and `read` would otherwise collapse it and shift the next field left.
+    row="$(jq -r 'if type=="object" then [(.kind // ""), (.pid // ""), (.sid // "")]
+                  | map(tostring | if . == "" then "_" else . end) | @tsv else empty end' "$b" 2>/dev/null)" || continue
+    IFS=$'\t' read -r kind pid sid <<<"$row" || continue
     [ "$kind" = prompt ] || continue
-    pid="$(jq -r 'if type=="object" then (.pid // "") else "" end' "$b" 2>/dev/null)"
     case "$pid" in ''|*[!0-9]*) continue ;; esac
     kill -0 "$pid" 2>/dev/null || continue          # dead ⇒ the census already discards it
-    sid="$(jq -r 'if type=="object" then (.sid // "") else "" end' "$b" 2>/dev/null)"
     case "$sid" in ''|*[!A-Za-z0-9-]*) continue ;; esac
     while IFS= read -r cfg; do
       [ -n "$cfg" ] || continue
       for tx in "$cfg"/projects/*/"$sid".jsonl; do
         [ -f "$tx" ] || continue
         IFS=$'	' read -r _ _ ekind rest <<<"$(lr_last_api_error "$tx" 2>/dev/null)" || ekind=""
-        [ "$ekind" = limit ] && { n=$((n + 1)); break 3; }
+        # break 2 leaves this beat's config-dir scan; break 3 left the per-beat loop and capped n at 1.
+        [ "$ekind" = limit ] && { n=$((n + 1)); break 2; }
       done
     done <<EOF
 $(lr_config_dirs)

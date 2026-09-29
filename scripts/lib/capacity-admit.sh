@@ -91,6 +91,7 @@
 #
 # Env: CC_ADMIT_GATE(on) · CC_ADMIT_MAX_LOAD_PER_CORE(2.0) · CC_ADMIT_MIN_HEADROOM_GB(4) ·
 #      CC_ADMIT_MAX_SEGMENT_PCT(50) · CC_ADMIT_ACTIVE_CEILING(8) · CC_ADMIT_ACTIVE_RESERVE(1) ·
+#      CC_ADMIT_RESTORE_R (restore budget; replaces the active ceiling when set) ·
 #      CC_ADMIT_BUDGET(3) · CC_ADMIT_SYSCTL · CC_ADMIT_LOADAVG_OVERRIDE · CC_ADMIT_HEADROOM_OVERRIDE ·
 #      CC_ADMIT_SEGMENT_OVERRIDE · CC_SP_ACTIVE_OVERRIDE ·
 #      CC_ADMIT_STATE_DIR · CC_ADMIT_IDL · CC_ADMIT_NOTIFY_BIN ·
@@ -1032,6 +1033,47 @@ _cc_admit_token_redeem() { # → 0 redeemed (the caller must ADMIT) / 1 no usabl
   return 0
 }
 
+# The derived TTL, for a caller that tells the operator how long a token lives.
+cc_capacity_token_ttl_s() { # → always 0 · prints the TTL in seconds
+  _cc_admit_token_ttl
+  printf '%s' "$CC_ADMIT_TOKEN_TTL_VALUE"
+  return 0
+}
+
+# ── TOKENS IN FLIGHT (lr-reconciler restore budget) ────────────────────────────────────────────
+# An admitted spawn is invisible to cc_sp_active until its session boots and goes mid-turn, so N
+# probes in a row would each see the same box and admit N over the budget. A live, unredeemed token
+# is that admission, counted. A redeemed token has already been renamed to `*.claim.*` and discarded
+# before any term runs, so a spawn never counts its own. Read-only: the MINT sweeps, never this.
+cc_capacity_tokens_inflight() { # → always 0 · prints an integer
+  local d f now issued n=0
+  d="${CC_ADMIT_STATE_DIR:-$HOME/.claude/autonomy/capacity-admit}/tokens"
+  [ -d "$d" ] || { printf '0'; return 0; }
+  now="$(date +%s 2>/dev/null || printf '')"
+  cc_hw_is_int_operand "$now" || { printf '0'; return 0; }
+  now="$CC_HW_INT_VALUE"
+  _cc_admit_token_ttl
+  for f in "$d"/*; do
+    [ -f "$f" ] || continue
+    [ ! -L "$f" ] || continue
+    [ -O "$f" ] || continue
+    case "${f##*/}" in *.claim.*) continue ;; esac
+    issued=""
+    if _cc_admit_token_parse "$f" && cc_hw_is_int_operand "$_CC_ADMIT_TOK_ISSUED"; then
+      issued="$CC_HW_INT_VALUE"
+    elif cc_hw_is_int_operand "$(_cc_admit_mtime "$f")"; then
+      issued="$CC_HW_INT_VALUE"
+    fi
+    [ -n "$issued" ] || continue
+    # A future-dated record can never redeem, so it is not an admission in flight.
+    [ $(( now - issued )) -ge 0 ] || continue
+    [ $(( now - issued )) -le "$CC_ADMIT_TOKEN_TTL_VALUE" ] || continue
+    n=$(( n + 1 ))
+  done
+  printf '%s' "$n"
+  return 0
+}
+
 # ── THE NON-CHARGING PROBE (LIMIT_RECOVER_100P, 2026-09-09) ─────────────────────────────────────
 # A fleet recovery must never type /exit into a pane it cannot relaunch, so it asks the box BEFORE
 # the irreversible keystroke — and asking must not SPEND the refusal budget that protects the box,
@@ -1063,7 +1105,7 @@ _cc_admit_page() { # $1=text
 cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
   local caller="${1:-unknown}" what="${2:-spawn}"
   local ncpu load ceiling lpc verdict floor head_gb sysctl_bin budget detail
-  local seg_row seg_pct seg_segs seg_lim seg_ceiling act act_ceiling
+  local seg_row seg_pct seg_segs seg_lim seg_ceiling act act_ceiling act_label act_inflight act_tok
   local tok_occ tok_rep tok_pgmax
 
   # The enabled-term list for THIS evaluation, rebuilt every call. See _cc_admit_emit's header: once
@@ -1352,15 +1394,31 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
   act=""
   if [ "${CC_ADMIT_ACTIVE_TERM:-on}" != off ]; then
     act_ceiling="${CC_ADMIT_ACTIVE_CEILING:-8}"
+    act_label="active ceiling ${act_ceiling}"
+    # THE RESTORE BUDGET (lr-reconciler): R replaces the ceiling, and an admitted-but-unredeemed token
+    # is a session already on its way in, so it counts as active for every caller. A malformed R is
+    # our own bad input — noted and ignored, never a refusal.
+    if [ -n "${CC_ADMIT_RESTORE_R:-}" ]; then
+      if cc_hw_is_int_operand "$CC_ADMIT_RESTORE_R"; then
+        act_ceiling="$CC_HW_INT_VALUE"; act_label="restore budget R=${act_ceiling}"
+      else
+        _cc_admit_note_blind restore-r
+      fi
+    fi
     if _cc_admit_load_presence && command -v cc_sp_active >/dev/null 2>&1; then
       act="$(cc_sp_active 2>/dev/null || true)"
     fi
     if ! cc_hw_is_int "$act" || ! cc_hw_is_int "$act_ceiling"; then
       _cc_admit_note_blind active
       act=""
-    elif [ $(( act + 1 )) -gt "$act_ceiling" ]; then
-      detail="${act} sessions mid-turn + 1 > active ceiling ${act_ceiling}"
-      _cc_admit_spend "$caller" "$what" "$budget" "$detail" "active"; return $?
+    else
+      act_inflight="$(cc_capacity_tokens_inflight)"
+      act_tok=""
+      [ "$act_inflight" = 0 ] || act_tok=" + ${act_inflight} admission token(s) in flight"
+      if [ $(( act + act_inflight + 1 )) -gt "$act_ceiling" ]; then
+        detail="${act} sessions mid-turn${act_tok} + 1 > ${act_label}"
+        _cc_admit_spend "$caller" "$what" "$budget" "$detail" "active"; return $?
+      fi
     fi
   fi
 
@@ -1408,8 +1466,8 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
       if cc_hw_is_int "$act_reserve" && cc_hw_is_int "${act_ceiling:-}"; then
         act_limit=$(( act_ceiling - act_reserve ))
         [ "$act_limit" -lt 0 ] && act_limit=0
-        if [ $(( act + 1 )) -gt "$act_limit" ]; then
-          detail="${act} sessions mid-turn + 1 > active ceiling ${act_ceiling} − operator reserve ${act_reserve} = ${act_limit} (operator ${CC_ADMIT_PRESENCE})"
+        if [ $(( act + ${act_inflight:-0} + 1 )) -gt "$act_limit" ]; then
+          detail="${act} sessions mid-turn${act_tok} + 1 > ${act_label} − operator reserve ${act_reserve} = ${act_limit} (operator ${CC_ADMIT_PRESENCE})"
           _cc_admit_spend "$caller" "$what" "$budget" "$detail" "reserve-active"; return $?
         fi
       fi
@@ -1469,7 +1527,7 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
     detail="${detail} · headroom term off"
   fi
   [ -n "$seg_pct" ] && detail="${detail} · segments ${seg_pct}% of limit (ceiling ${seg_ceiling}%)"
-  [ -n "$act" ]     && detail="${detail} · ${act} sessions mid-turn (active ceiling ${act_ceiling})"
+  [ -n "$act" ]     && detail="${detail} · ${act} sessions mid-turn${act_tok} (${act_label})"
   [ -n "$CC_ADMIT_BLIND" ] && detail="${detail} · BLIND: ${CC_ADMIT_BLIND}"
   CC_ADMIT_REASON="capacity-admit: ADMIT — ${detail}"
   if [ "${CC_ADMIT_LOAD_TERM:-on}" = off ] && [ -n "$floor" ]; then

@@ -1061,7 +1061,7 @@ lrh_precheck() { # → 0 admitted (token minted) / 6 HELD|REFUSED|PARKED, nothin
     if command -v cc_capacity_token_mint >/dev/null 2>&1; then
       LRH_ADMIT_TOKEN="$(cc_capacity_token_mint "$SID" 2>/dev/null || true)"
       if [[ -n "$LRH_ADMIT_TOKEN" ]]; then
-        echo "lr-handoff: precheck admitted — admission token $LRH_ADMIT_TOKEN (one-shot, TTL ${CC_ADMIT_TOKEN_TTL_S:-300}s, sid ${SID:0:8})" >&2
+        echo "lr-handoff: precheck admitted — admission token $LRH_ADMIT_TOKEN (one-shot, TTL $(if command -v cc_capacity_token_ttl_s >/dev/null 2>&1; then cc_capacity_token_ttl_s; else printf '%s' "${CC_ADMIT_TOKEN_TTL_S:-300}"; fi)s, sid ${SID:0:8})" >&2
         lrh_state admitted gate "token $LRH_ADMIT_TOKEN"
       else
         # A mint that fails is NOT a refusal: the launcher then evaluates fresh, with the same term

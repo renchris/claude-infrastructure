@@ -664,3 +664,21 @@ bare_fixture() { # $1=dir → a normal checkout with a commit (reflog), then fli
   mkdir -p "$BATS_TEST_TMPDIR/plain"
   run lr_heal_bare_checkout "$BATS_TEST_TMPDIR/plain"; [ "$status" -eq 2 ]
 }
+
+# ── lr_phantom_actives counts EVERY corpse ────────────────────────────────────────────────────────
+# `break 3` left the per-beat loop on the first match, so the count could never exceed 1 however many
+# limit-blocked sessions inflated the census — the recovery stayed refused by the ones it missed.
+@test "phantom count > 1 with 3 corpses" {
+  export CC_BEAT_DIR="$BATS_TEST_TMPDIR/beats"; mkdir -p "$CC_BEAT_DIR"
+  export LR_CONFIG_DIRS="$CFG"
+  local i sid
+  for i in 1 2 3; do
+    sid="bbbb000$i-0000-4000-8000-00000000000$i"
+    printf '{"sid":"%s","kind":"prompt","pid":%s,"t":1}\n' "$sid" "$(hk_live)" > "$CC_BEAT_DIR/$sid.json"
+    turn "$CFG/projects/$SLUG/$sid.jsonl" 2026-09-08T22:00:00.000Z claude-opus-5 high
+    limit "$CFG/projects/$SLUG/$sid.jsonl" 2026-09-08T23:11:09.000Z
+  done
+  run lr_phantom_actives
+  [ "$status" -eq 0 ]
+  [ "$output" = 3 ]
+}
