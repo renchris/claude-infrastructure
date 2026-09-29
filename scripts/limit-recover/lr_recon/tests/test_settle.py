@@ -30,7 +30,24 @@ def actuator(name="A"):
     return T.ProcRole(role="actuator", pid=4242, lstart="x", argv_hash=name)
 
 
+STRANDED = """!! unknown arg: --record-id
+  --headless          (usage text: any word may appear here)
+lr-handoff 4ac4c35d: verdict=STRANDED from=next to=next4 proven=no trigger=limit — the recycle did not verify (handoff-fire rc=1): the transplant is DONE
+lr-handoff: RETRY the recovery (the transplant is idempotent on a same-target re-run):
+"""
+
+
 class Exits(unittest.TestCase):
+    def test_a_stranded_move_is_never_terminal(self):
+        """W5 rig N=5: a usage dump above lr-handoff's STRANDED verdict said "headless", classify
+        read IMPOSSIBLE and closed five records whose sessions had already been transplanted."""
+        r = rec()
+        d = settle.settle_exit(r, actuator(), 4, STRANDED, 1.0)
+        self.assertNotIn("IMPOSSIBLE", d)
+        self.assertIn("BACKOFF", d)
+        self.assertIsNone(r.terminal)
+        self.assertTrue(r.open)
+
     def test_unreadable_composer_backs_off_instead_of_respawning(self):
         r = rec()
         d = settle.settle_exit(
@@ -71,7 +88,9 @@ class Exits(unittest.TestCase):
         from lr_recon import act
 
         r = rec()
-        self.assertFalse(settle.mark_in_flight(r))  # no tombstone read yet: still PLANNED
+        self.assertFalse(
+            settle.mark_in_flight(r)
+        )  # no tombstone read yet: still PLANNED
         r.confirm_len = 10
         self.assertTrue(settle.mark_in_flight(r))
         self.assertIsNone(act.choose(T.PhaseResult(phase="PRE-MOVE"), r))
@@ -86,27 +105,40 @@ class Exits(unittest.TestCase):
         self.assertEqual(r.substate, "IN-FLIGHT")
 
     def test_the_gap_after_transplanted_is_in_flight_without_an_exit(self):
-        r = rec(phase="PRE-MOVE", sub=None)  # PLANNED → TRANSPLANTED → the gap, A not reaped yet
+        r = rec(
+            phase="PRE-MOVE", sub=None
+        )  # PLANNED → TRANSPLANTED → the gap, A not reaped yet
         r.confirm_len = 10
         self.assertTrue(settle.mark_in_flight(r))
         self.assertEqual(r.substate, "IN-FLIGHT")
-        r2 = rec(phase="PRE-MOVE", sub=None)  # never confirmed: a fresh record, not a move
+        r2 = rec(
+            phase="PRE-MOVE", sub=None
+        )  # never confirmed: a fresh record, not a move
         self.assertFalse(settle.mark_in_flight(r2))
 
     def test_a_failed_move_makes_its_retry_a_new_attempt(self):
         r = rec()
-        settle.settle_exit(r, actuator(), 6, PRECHECK_HELD % ("x", "draft", "draft"), 1.0)
+        settle.settle_exit(
+            r, actuator(), 6, PRECHECK_HELD % ("x", "draft", "draft"), 1.0
+        )
         self.assertEqual(r.attempt, 2)
         settle.settle_exit(r, actuator("C"), 1, "cc_tui_submit mangled", 2.0)
         self.assertEqual(r.attempt, 2)  # an engage is not a move
 
     def test_hop_moves_from_the_failed_target_as_a_new_attempt(self):
         r = rec(phase="TARGET-LIMITED", sub=None)
-        r.source_acct, r.source_cfg, r.target_cfg, r.confirm_len = "next", "/c/a", "/c/b", 99
+        r.source_acct, r.source_cfg, r.target_cfg, r.confirm_len = (
+            "next",
+            "/c/a",
+            "/c/b",
+            99,
+        )
         r.submit_token = "lrr-1"
         h = T.HolderObs(pid=77, lstart="L", cfg="/c/b", src="session-row", pane=(1, 2))
         settle.new_attempt(r, h, "limit", 5.0)
-        self.assertEqual((r.source_acct, r.source_cfg, r.source_pid), ("next2", "/c/b", 77))
+        self.assertEqual(
+            (r.source_acct, r.source_cfg, r.source_pid), ("next2", "/c/b", 77)
+        )
         self.assertEqual((r.target_acct, r.confirm_len, r.submit_token), ("", None, ""))
         self.assertEqual((r.phase, r.substate, r.attempt), ("PRE-MOVE", "DETECTED", 2))
         self.assertEqual((r.close["hop"], r.close["hops"]), ("limit", 1))
@@ -114,31 +146,43 @@ class Exits(unittest.TestCase):
     def test_a_wait_is_not_retried_before_its_eligibility_time(self):
         r = rec()
         r.kind = "idle"
-        settle.settle_exit(r, actuator(), 6, "lr-handoff: PRECHECK REFUSED:not-limited — x", 5.0)
-        self.assertEqual((r.substate, r.next_eligible_at), ("WAIT_DATA", 5.0 + settle.WAIT_RETRY_S))
+        settle.settle_exit(
+            r, actuator(), 6, "lr-handoff: PRECHECK REFUSED:not-limited — x", 5.0
+        )
+        self.assertEqual(
+            (r.substate, r.next_eligible_at), ("WAIT_DATA", 5.0 + settle.WAIT_RETRY_S)
+        )
 
     def test_a_capacity_shed_R_waits_its_retry_time(self):
         r = rec(phase="PANE-GONE", sub="R")
         txt = "boot-resume-launch: capacity-admit: REFUSING resume x on next3 — load 54.30 on 10 cores"
         self.assertIn("WAIT", settle.settle_exit(r, actuator("R"), 9, txt, 5.0))
-        self.assertEqual((r.next_eligible_at, r.escalated), (5.0 + settle.WAIT_RETRY_S, False))
+        self.assertEqual(
+            (r.next_eligible_at, r.escalated), (5.0 + settle.WAIT_RETRY_S, False)
+        )
 
     def test_a_failed_R_makes_its_retry_a_new_attempt_outside_pre_move(self):
         r = rec(phase="PANE-GONE", sub="R")
-        settle.settle_exit(r, actuator("R"), 4, "boot-resume-launch: kitty launch failed", 5.0)
+        settle.settle_exit(
+            r, actuator("R"), 4, "boot-resume-launch: kitty launch failed", 5.0
+        )
         self.assertEqual(r.attempt, 2)
 
     def test_not_limited_on_a_hop_waits_instead_of_closing(self):
         r = rec()
         r.close["hop"] = "auth"
-        settle.settle_exit(r, actuator(), 6, "lr-handoff: PRECHECK REFUSED:not-limited — x", 5.0)
+        settle.settle_exit(
+            r, actuator(), 6, "lr-handoff: PRECHECK REFUSED:not-limited — x", 5.0
+        )
         self.assertIsNone(r.terminal)
         self.assertEqual(r.substate, "WAIT_SLOT")
 
     def test_unknown_exit_code_is_no_verdict(self):
         r = rec(phase="RELAUNCHED", sub="UNPROMPTED")
         pr = T.ProcRole(role="actuator", pid=7, lstart="x", argv_hash="adopted")
-        for _ in range(3):  # twice used to ESCALATE: two "identical DETERMINISTIC" rc=-1 exits
+        for _ in range(
+            3
+        ):  # twice used to ESCALATE: two "identical DETERMINISTIC" rc=-1 exits
             self.assertIn("code unknown", settle.settle_exit(r, pr, None, "", 1.0))
         self.assertEqual((r.escalated, r.last_error), (False, None))
 
@@ -189,7 +233,9 @@ class Replaced(unittest.TestCase):
         sess = T.SessionObs(sid=r.sid, holders=[])
         snap = T.Snapshot(wall=2.0, uptime_raw=0.0, sessions={r.sid: sess})
         self.assertFalse(settle.replaced_elsewhere(r, snap, 2.0))  # not up yet
-        sess.holders = [T.HolderObs(pid=9, lstart="L", cfg="/c", src="session-row", pane=(1, 7))]
+        sess.holders = [
+            T.HolderObs(pid=9, lstart="L", cfg="/c", src="session-row", pane=(1, 7))
+        ]
         self.assertTrue(settle.replaced_elsewhere(r, snap, 3.0))
         self.assertEqual(r.terminal.outcome, "REPLACED-NEW-WINDOW")
         self.assertEqual((r.close["via"], r.close["same_window"]), ("R", False))

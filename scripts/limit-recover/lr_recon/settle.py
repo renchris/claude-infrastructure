@@ -49,6 +49,7 @@ BUCKET_SUBSTATE = {
 # Holds the census cannot observe: re-probed through the actuator's own precheck.
 REPROBED = ("HOLD-DRAFT", "HOLD-MENU", "HOLD-COMPOSER")
 _REASON = re.compile(r"(?:PRECHECK |verdict: )(?:HELD|REFUSED):([A-Za-z:-]+)")
+_STRANDED = re.compile(r"^lr-handoff \S+: verdict=STRANDED\b", re.M)
 _HOLD_SUB = (
     (re.compile(r"\bdraft\b", re.I), "HOLD-DRAFT"),
     (re.compile(r"bg-work|background work", re.I), "HOLD-BGWORK"),
@@ -83,6 +84,12 @@ def _hold_substate(text: str) -> str:
 def outcome(rec: T.Record, rc: Optional[int], text: str) -> Tuple[str, str, str]:
     """(disposition, substate, reason). A precheck's named refusal wins over the free-text classes,
     because it is the actuator's own verdict on why nothing was done."""
+    if _STRANDED.search(text):
+        # lr-handoff's own verdict: the transplant is DONE and the relaunch did not verify. The
+        # session now lives on the target, so no free-text class may close it (W5 rig: a usage dump
+        # above the verdict said "headless" and scored IMPOSSIBLE, abandoning a moved session). A
+        # retry is safe; the next pass derives the husk from disk and the phase table rescues it.
+        return "TRANSIENT", "", "stranded: transplant done, relaunch not verified"
     reasons = _REASON.findall(text)
     if reasons and rec.phase == "PRE-MOVE":
         reason = reasons[-1].rstrip(":")
@@ -107,10 +114,15 @@ def settle_exit(
     if rc == 0:
         # TRANSPLANTED too: a confirmed move is usually derived TRANSPLANTED (row 12) in the pass
         # before its A exits, and a PRE-MOVE-only test left the relaunch gap with no substate.
-        if pr.argv_hash in ("A", "A-husk") and rec.phase in ("PRE-MOVE", "TRANSPLANTED"):
+        if pr.argv_hash in ("A", "A-husk") and rec.phase in (
+            "PRE-MOVE",
+            "TRANSPLANTED",
+        ):
             rec.substate, rec.wait = "IN-FLIGHT", None
         if pr.argv_hash == "R":
-            rec.close["replaced_at"] = now  # closed by replaced_elsewhere once it is seen
+            rec.close["replaced_at"] = (
+                now  # closed by replaced_elsewhere once it is seen
+            )
         return "%s rc=0" % pr.argv_hash
     if rc is None:
         # Adopted by argv, or exited before this daemon could reap it: no code is no verdict. The
@@ -235,7 +247,8 @@ def mark_in_flight(rec: T.Record) -> bool:
     a SECOND A over a transplanted session (W5 rig, with and without a daemon restart)."""
     if (
         rec.phase == "PRE-MOVE"
-        and rec.substate in ("PLANNED", None)  # None: PLANNED → TRANSPLANTED (row 12) → the gap
+        and rec.substate
+        in ("PLANNED", None)  # None: PLANNED → TRANSPLANTED (row 12) → the gap
         and rec.confirm_len is not None
     ):
         rec.substate, rec.wait = "IN-FLIGHT", None
@@ -243,14 +256,18 @@ def mark_in_flight(rec: T.Record) -> bool:
     return False
 
 
-def new_attempt(rec: T.Record, holder: Optional[T.HolderObs], why: str, now: float) -> None:
+def new_attempt(
+    rec: T.Record, holder: Optional[T.HolderObs], why: str, now: float
+) -> None:
     """§4.2 rows 2-3: the session is live on the target and failed there — a NEW move FROM that
     target (architecture §5 Pinning). The old target becomes the source; the target is re-placed."""
     if holder is not None:
         rec.source_pid, rec.source_lstart = holder.pid, holder.lstart
     rec.source_acct, rec.source_cfg = rec.target_acct, rec.target_cfg
     rec.attempt += 1
-    rec.target_acct = rec.target_cfg = rec.assign_id = rec.submit_token = rec.bundle = ""
+    rec.target_acct = rec.target_cfg = rec.assign_id = rec.submit_token = rec.bundle = (
+        ""
+    )
     rec.confirm_len, rec.sentinel_until, rec.intent = None, None, None
     tl = rec.timeline
     tl.planned = tl.confirmed = tl.exit_typed_by_me = tl.exited = None
@@ -263,7 +280,12 @@ def new_attempt(rec: T.Record, holder: Optional[T.HolderObs], why: str, now: flo
 def target_holder(rec: T.Record, snap: T.Snapshot) -> Optional[T.HolderObs]:
     s = snap.sessions.get(rec.sid)
     for h in s.holders if s else []:
-        if not h.bg and rec.pane and h.pane is not None and tuple(h.pane) == tuple(rec.pane):
+        if (
+            not h.bg
+            and rec.pane
+            and h.pane is not None
+            and tuple(h.pane) == tuple(rec.pane)
+        ):
             return h
     return None
 
@@ -284,7 +306,11 @@ def readiness(home: str, rec: T.Record) -> str:
     import glob
 
     runs = sorted(
-        glob.glob(os.path.join(glob.escape(bundles_dir(home, rec.sid)), "bundle-*", "events.jsonl")),
+        glob.glob(
+            os.path.join(
+                glob.escape(bundles_dir(home, rec.sid)), "bundle-*", "events.jsonl"
+            )
+        ),
         reverse=True,
     )
     for f in runs[:4]:
@@ -314,7 +340,11 @@ def replaced_elsewhere(rec: T.Record, snap: T.Snapshot, now: float) -> bool:
         return False
     s = snap.sessions.get(rec.sid)
     for h in s.holders if s else []:
-        if not h.bg and h.pane is not None and (not rec.pane or tuple(h.pane) != tuple(rec.pane)):
+        if (
+            not h.bg
+            and h.pane is not None
+            and (not rec.pane or tuple(h.pane) != tuple(rec.pane))
+        ):
             rec.close.update(via="R", pane=list(h.pane), same_window=False, at=now)
             rec.terminal = T.Terminal(
                 outcome="REPLACED-NEW-WINDOW",
