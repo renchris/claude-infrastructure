@@ -1071,6 +1071,28 @@ def decide(parsed: dict) -> tuple[str, str]:
     if not urls:
         return "ask", "No URL parsed; review manually"
 
+    # A `\` in the authority has no single reading: urlparse (and curl 8.7.1, measured) take the host
+    # after the last `@`, while a WHATWG parser reads the `\` as `/` and ends the authority there. So
+    # `http://169.254.169.254\@api.github.com/x` was an allow to "allowlisted host api.github.com"
+    # although _AUTH_SWITCH_CHARS already names `\` as an authority switch. The whole list is judged
+    # as written first (the `\` spelled %5C: same hosts, same credential scan over every URL, so it
+    # raises or returns exactly where this function always did), then with one URL at a time swapped
+    # for each of its cut readings; the strictest wins. (A `\` in the host or port itself makes curl
+    # refuse the URL — "Bad hostname" — so only the cut readings can name a target there.)
+    if any("\\" in url_authority(u) for u in urls):
+        readings = [backslash_readings(u) for u in urls]
+        written = [r[-1] for r in readings]
+        worst = decide({**parsed, "urls": written})
+        for i, rs in enumerate(readings):
+            for r in rs[:-1]:
+                try:
+                    v = decide({**parsed, "urls": written[:i] + [r] + written[i + 1 :]})
+                except ValueError:
+                    v = ("ask", f"cannot tell which host curl contacts for {urls[i]}")
+                if _STRICTNESS[v[0]] > _STRICTNESS[worst[0]]:
+                    worst = v
+        return worst
+
     # Multi-URL: must all pass
     decisions: list[tuple[str, str]] = []
     for raw_url in urls:
@@ -1574,6 +1596,23 @@ def url_authority(url: str) -> str:
     return re.split(r"[/?#]", rest, maxsplit=1)[0]
 
 
+def backslash_readings(url: str) -> list[str]:
+    """Every host a `\\` in `url`'s authority can select: each `\\` read as the `/` that ends the
+    authority, then the reading as written with each such `\\` spelled `%5C`. The escape keeps the
+    written reading's host and userinfo (so a URL credential is still seen) while leaving no `\\`
+    in any authority, so decide() on a reading never re-enters its backslash branch."""
+    auth = url_authority(url)
+    start = url.find("://")
+    start = start + 3 if start >= 0 else (2 if url.startswith("//") else 0)
+    end = start + len(auth)
+    out = [
+        url[: start + k] + "/" + url[start + k + 1 :]
+        for k, c in enumerate(auth)
+        if c == "\\"
+    ]
+    return out + [url[:start] + auth.replace("\\", "%5C") + url[end:]]
+
+
 def own_argv(argv: list[str]) -> list[str]:
     """argv cut at the `)` that closes a group opened BEFORE this curl (`$(curl …) http://$H/x`).
 
@@ -1689,12 +1728,26 @@ def decide_command(cmd: str, agent: bool = False) -> tuple[str, str, dict]:
     `curl …` that is only text inside a `$'…'` argument). The ruling for round 6 was "loosens
     nothing", so when the rewrite changes the text both readings are judged and the stricter wins.
     The mid-word `#` rewrite (midword_hash_safe) is held to the same rule.
+
+    An alias whose value holds curl is judged as that value (alias_curl_values), strictest wins.
     """
     fixed = judge_command(cmd, agent)
-    if fixed_lexing(cmd) == cmd:
-        return fixed
-    plain = judge_command(cmd, agent, ansi_c=False)
-    return plain if _STRICTNESS[plain[0]] > _STRICTNESS[fixed[0]] else fixed
+    if fixed_lexing(cmd) != cmd:
+        plain = judge_command(cmd, agent, ansi_c=False)
+        if _STRICTNESS[plain[0]] > _STRICTNESS[fixed[0]]:
+            fixed = plain
+    aliases = alias_curl_values(cmd)
+    if aliases is None:
+        aliases_v = [("ask", "an alias beside this curl could not be tokenised")]
+    else:
+        aliases_v = [
+            (d, "inside an alias: " + r)
+            for d, r, _ in (decide_command(v, agent) for v in aliases)
+        ]
+    for d, r in aliases_v:
+        if _STRICTNESS[d] > _STRICTNESS[fixed[0]]:
+            fixed = (d, r, fixed[2])
+    return fixed
 
 
 def judge_command(
@@ -1799,6 +1852,61 @@ _STMT_PREFIX_RE = re.compile(
     r"|env|[A-Za-z_][A-Za-z0-9_]*=\S*)\s+)+"
 )
 
+# `(`, `)`, `{` and `}` end a statement too: without them `f(){ curl …; }`, `function f { curl …; }`
+# and `case a in a) curl …;; esac` were never judged (the pipeline itself reads all three; only this
+# filter missed them). Splitting on more characters can only admit more commands to judgement, and a
+# command with no curl in it is judged "no curl invocation", so the widening loosens nothing.
+_STMT_SPLIT_RE = re.compile(r"[;&|\n(){}]+|\$\(|`")
+
+
+def statement_has_curl(c: str) -> bool:
+    """main()'s entry filter: some statement's command word is curl."""
+    if "curl" not in c:
+        return False
+    return any(
+        _STMT_PREFIX_RE.sub("", s.strip()).startswith(("curl", "xargs curl"))
+        or re.match(r"\S*/curl(\s|$)", _STMT_PREFIX_RE.sub("", s.strip()))
+        for s in _STMT_SPLIT_RE.split(c)
+    )
+
+
+_ALIAS_LINE_RE = re.compile(
+    r"(?m)(?:^|[;&|(){}])[ \t]*alias[ \t]+(?:-\w+[ \t]+)*[^=\s;&|()<>]+=([^\n]*)"
+)
+
+
+def alias_curl_values(cmd: str) -> list[str] | None:
+    """The value of every `alias NAME=VALUE` whose value holds a curl statement; None if an alias
+    near a curl cannot be tokenised. The alias's later use runs the value, so the value is judged as
+    the command it is (`alias g="curl -s http://169.254.169.254/"; g` was an unjudged allow)."""
+    if not re.search(r"\balias\b", cmd) or "curl" not in cmd:
+        return []
+    try:
+        toks = shell_tokens(cmd)
+    except ValueError:
+        # Untokenisable (a heredoc'd script, an open quote): undecidable only if a line really opens
+        # an alias whose value holds curl — the words alone appear in prose and code all the time.
+        hit = any(
+            statement_has_curl(m.group(1).strip("'\""))
+            for m in _ALIAS_LINE_RE.finditer(cmd)
+        )
+        return None if hit else []
+    out: list[str] = []
+    i = 0
+    while i < len(toks):
+        if toks[i] != "alias":
+            i += 1
+            continue
+        i += 1
+        while i < len(toks) and toks[i].startswith("-"):
+            i += 1
+        while i < len(toks) and re.match(r"[^=\s;&|()<>]+=", toks[i]):
+            value = toks[i].split("=", 1)[1]
+            if statement_has_curl(value):
+                out.append(value)
+            i += 1
+    return out
+
 
 def main() -> None:
     if os.environ.get("CURL_GATE_DISABLED") == "1":
@@ -1838,20 +1946,13 @@ def main() -> None:
     # Only gate if curl appears as a command (not just a string literal)
     # Cheap heuristic: tokenize and see if "curl" is the first token of any
     # statement separated by ; & && || |
-    import re
-
     # A NEWLINE, `$(`, a backtick and `(` end a statement too, and a statement may open with a
     # shell keyword or prefix before its command. The incumbent split was `[;&|]+` alone and tested
     # `startswith("curl")`, so `echo x⏎curl http://169.254.169.254/` and
     # `for u in …; do curl "$u"; done` were never gated at all — no IMDS deny, no pipe-to-shell deny
     # (measured 2026-09-24 while adding loop-variable resolution: the IMDS loop exited 0 unjudged).
-    statements = re.split(r"[;&|\n]+|\$\(|`|\(", cmd_trim)
-    is_curl_invocation = any(
-        _STMT_PREFIX_RE.sub("", s.strip()).startswith(("curl", "xargs curl"))
-        or re.match(r"\S*/curl(\s|$)", _STMT_PREFIX_RE.sub("", s.strip()))
-        for s in statements
-    )
-    if not is_curl_invocation:
+    # See _STMT_SPLIT_RE for `(){}`; an alias whose value holds curl is a curl statement.
+    if not statement_has_curl(cmd_trim) and alias_curl_values(cmd_trim) == []:
         sys.exit(0)
 
     if cmd_trim.startswith("xargs curl"):
