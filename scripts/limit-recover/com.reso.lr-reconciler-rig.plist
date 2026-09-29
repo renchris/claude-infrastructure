@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- com.reso.lr-reconciler-rig — the same lr_recon daemon as com.reso.lr-reconciler, pointed at a
+     throwaway rig root under /tmp for the W5 end-to-end rig (docs/plans/LIMIT_RECOVER_FLEET_V2.md, W5).
+     LR_RECON_RIG=1 makes it refuse every pane whose registry row lacks `rig:true`, so it can only
+     ever act on rig-tagged panes, and its state never touches the real ~/.reso tree.
+
+     NOT LOADED BY THIS WAVE, and on-demand when it is: RunAtLoad false and KeepAlive false, so it
+     runs only when the rig kickstarts it. Repo SSOT only; installed by W5's lr-recon-launchd.sh.
+     Actuation still needs recon.on under the RIG root plus mode=act there.
+     Kill switch: `launchctl bootout gui/$UID/com.reso.lr-reconciler-rig`.
+
+     PATH and the pinned /usr/bin/python3 follow com.reso.lr-reconciler.plist; see its header. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.reso.lr-reconciler-rig</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-c</string>
+    <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"; cd "$HOME/.claude/scripts/limit-recover" || exit 1; exec /usr/bin/python3 -m lr_recon</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>LR_STATE_DIR</key><string>/tmp/lr-recon-rig</string>
+    <key>LR_RECON_ROOT</key><string>/tmp/lr-recon-rig/recon</string>
+    <key>LR_RECON_RIG</key><string>1</string>
+  </dict>
+  <key>RunAtLoad</key><false/>
+  <key>KeepAlive</key><false/>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>/tmp/lr-recon-rig/recon/reconciler.out</string>
+  <key>StandardErrorPath</key><string>/tmp/lr-recon-rig/recon/reconciler.err</string>
+</dict>
+</plist>

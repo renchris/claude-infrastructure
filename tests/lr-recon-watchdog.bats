@@ -1,0 +1,170 @@
+#!/usr/bin/env bats
+# lr-recon-watchdog.bats — the §C9 watchdog for the lr_recon daemon.
+#
+# Hermetic: HOME, LR_STATE_DIR and LR_RECON_ROOT live under $BATS_TEST_TMPDIR; kill and page are fakes
+# that record their argv; sleep is `true`. The "daemon" holder is a real `sleep 60` this test starts,
+# read with its REAL lstart, so condition 1 (the holder is alive) runs through the real /bin/ps.
+# Clock and wake time are pinned through LR_RECON_NOW / LR_RECON_WAKETIME.
+
+SUT="$BATS_TEST_DIRNAME/../scripts/limit-recover/lr-recon-watchdog.sh"
+PLIST_DIR="$BATS_TEST_DIRNAME/../scripts/limit-recover"
+T=1790000000
+DEAD_LSTART="Mon Jan  1 00:00:00 2001"
+
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"
+  export LR_STATE_DIR="$BATS_TEST_TMPDIR/state"
+  export LR_RECON_ROOT="$LR_STATE_DIR/recon"
+  mkdir -p "$HOME" "$LR_RECON_ROOT" "$BATS_TEST_TMPDIR/bin"
+  KLOG="$BATS_TEST_TMPDIR/kill.log"
+  PLOG="$BATS_TEST_TMPDIR/page.log"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\n' "$KLOG" > "$BATS_TEST_TMPDIR/bin/fake-kill"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\n' "$PLOG" > "$BATS_TEST_TMPDIR/bin/fake-page"
+  chmod +x "$BATS_TEST_TMPDIR/bin/fake-kill" "$BATS_TEST_TMPDIR/bin/fake-page"
+  export LR_RECON_KILL="$BATS_TEST_TMPDIR/bin/fake-kill"
+  export LR_RECON_PAGE="$BATS_TEST_TMPDIR/bin/fake-page"
+  export LR_RECON_SLEEP=true
+  export LR_RECON_WAKETIME=$((T - 100000))
+  sleep 60 >/dev/null 2>&1 3>&- &
+  HOLDER=$!
+  HOLDER_LSTART="$(TZ=UTC LC_ALL=C /bin/ps -o lstart= -p "$HOLDER" | tr -s ' ' | sed 's/^ //; s/ $//')"
+  [ -n "$HOLDER_LSTART" ]
+}
+
+teardown() {
+  [ -n "${HOLDER:-}" ] && kill "$HOLDER" 2>/dev/null || true
+}
+
+hb() {  # $1=pid $2=lstart $3=progress $4=wall $5=progress_wall
+  printf '{"pid":%s,"lstart":"%s","progress":%s,"wall":%s.5,"uptime_raw":12.0,"progress_wall":%s.1}\n' \
+    "$1" "$2" "$3" "$4" "$5" > "$LR_RECON_ROOT/heartbeat"
+}
+
+tick() {  # $1=now — one launchd tick
+  LR_RECON_NOW="$1" run /bin/bash "$SUT"
+  [ "$status" -eq 0 ]
+}
+
+@test "no heartbeat: exits 0 silently and writes nothing" {
+  LR_RECON_NOW=$T run /bin/bash "$SUT"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [ ! -e "$LR_RECON_ROOT/watchdog.state" ]
+  [ ! -e "$LR_RECON_ROOT/watchdog.log" ]
+}
+
+@test "(1) no kill inside 180 s of stalled progress (reads 30 s apart, last advance 100 s ago)" {
+  hb "$HOLDER" "$HOLDER_LSTART" 7 $((T - 100)) $((T - 100))
+  tick $((T - 100))
+  tick $((T - 70))
+  tick "$T"
+  [ ! -e "$KLOG" ]
+  grep -q '^progress=7$' "$LR_RECON_ROOT/watchdog.state"
+  grep -q "^progress_seen=$((T - 100))\$" "$LR_RECON_ROOT/watchdog.state"
+}
+
+@test "179 s since first seeing the value is still no kill, even with an older progress_wall" {
+  hb "$HOLDER" "$HOLDER_LSTART" 7 $((T - 179)) $((T - 400))
+  tick $((T - 179))
+  tick "$T"
+  [ ! -e "$KLOG" ]
+}
+
+@test "(2) no kill within 120 s of a wake (stalled 400 s, woke 60 s ago)" {
+  export LR_RECON_WAKETIME=$((T - 60))
+  hb "$HOLDER" "$HOLDER_LSTART" 7 $((T - 300)) $((T - 400))
+  tick $((T - 300))
+  tick "$T"
+  [ ! -e "$KLOG" ]
+  grep -q 'woke 60s ago — no kill' "$LR_RECON_ROOT/watchdog.log"
+}
+
+@test "(3) kill after two stale reads: TERM, then KILL when the same holder survives" {
+  hb "$HOLDER" "$HOLDER_LSTART" 7 $((T - 300)) $((T - 400))
+  tick $((T - 300))
+  [ ! -e "$KLOG" ]
+  tick "$T"
+  [ "$(sed -n 1p "$KLOG")" = "-TERM $HOLDER" ]
+  [ "$(sed -n 2p "$KLOG")" = "-KILL $HOLDER" ]
+  grep -q "KILL -TERM pid=$HOLDER" "$LR_RECON_ROOT/watchdog.log"
+}
+
+@test "progress that advances between reads is never killed" {
+  hb "$HOLDER" "$HOLDER_LSTART" 7 $((T - 300)) $((T - 400))
+  tick $((T - 300))
+  hb "$HOLDER" "$HOLDER_LSTART" 8 "$T" $((T - 400))
+  tick "$T"
+  [ ! -e "$KLOG" ]
+}
+
+@test "a holder whose lstart mismatches (pid reuse) is not killed" {
+  hb "$HOLDER" "$DEAD_LSTART" 7 $((T - 300)) $((T - 400))
+  tick $((T - 300))
+  hb "$HOLDER" "$DEAD_LSTART" 7 "$T" $((T - 400))
+  tick "$T"
+  [ ! -e "$KLOG" ]
+  [ ! -e "$PLOG" ]
+}
+
+@test "(4) crash loop: one page at the second restart, latched for 15 min" {
+  printf 'starting\nTraceback: boom-marker\n' > "$LR_RECON_ROOT/reconciler.err"
+  hb "$HOLDER" "$HOLDER_LSTART" 1 "$T" "$T"
+  tick "$T"
+  hb 999991 "$DEAD_LSTART" 1 $((T + 60)) $((T + 60))
+  tick $((T + 60))
+  [ ! -e "$PLOG" ]
+  hb 999992 "$DEAD_LSTART" 1 $((T + 120)) $((T + 120))
+  tick $((T + 120))
+  [ "$(wc -l < "$PLOG" | tr -d ' ')" -eq 1 ]
+  grep -q 'crash loop' "$PLOG"
+  grep -q 'boom-marker' "$PLOG"
+  hb 999993 "$DEAD_LSTART" 1 $((T + 300)) $((T + 300))
+  tick $((T + 300))
+  [ "$(wc -l < "$PLOG" | tr -d ' ')" -eq 1 ]
+  [ ! -e "$KLOG" ]
+}
+
+@test "two restarts more than 10 min apart are not a crash loop" {
+  hb 999991 "$DEAD_LSTART" 1 "$T" "$T"
+  tick "$T"
+  hb 999992 "$DEAD_LSTART" 1 $((T + 60)) $((T + 60))
+  tick $((T + 60))
+  hb 999993 "$DEAD_LSTART" 1 $((T + 700)) $((T + 700))
+  tick $((T + 700))
+  [ ! -e "$PLOG" ]
+}
+
+@test "heartbeat stale >60 s with no live holder pages once per 15 min" {
+  hb 999991 "$DEAD_LSTART" 1 $((T - 61)) $((T - 61))
+  tick "$T"
+  [ "$(wc -l < "$PLOG" | tr -d ' ')" -eq 1 ]
+  grep -q 'heartbeat stale 61s' "$PLOG"
+  tick $((T + 600))
+  [ "$(wc -l < "$PLOG" | tr -d ' ')" -eq 1 ]
+  tick $((T + 900))
+  [ "$(wc -l < "$PLOG" | tr -d ' ')" -eq 2 ]
+}
+
+@test "a stale heartbeat with a LIVE holder does not page" {
+  hb "$HOLDER" "$HOLDER_LSTART" 1 $((T - 120)) $((T - 120))
+  tick "$T"
+  [ ! -e "$PLOG" ]
+}
+
+@test "bash -n under /bin/bash (the launchd interpreter)" {
+  run /bin/bash -n "$SUT"
+  [ "$status" -eq 0 ]
+}
+
+@test "shellcheck bare is clean" {
+  command -v shellcheck >/dev/null || skip "shellcheck not installed"
+  run shellcheck "$SUT"
+  [ "$status" -eq 0 ]
+}
+
+@test "the three reconciler plists pass plutil -lint" {
+  command -v plutil >/dev/null || skip "plutil not available"
+  run plutil -lint "$PLIST_DIR/com.reso.lr-reconciler.plist" \
+    "$PLIST_DIR/com.reso.lr-reconciler-watchdog.plist" "$PLIST_DIR/com.reso.lr-reconciler-rig.plist"
+  [ "$status" -eq 0 ]
+}

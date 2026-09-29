@@ -494,3 +494,13 @@ homebrew.mxcl.postgresql@14        | run    | 0    | -    | 12 | 42-postgresql14
 #              manifest, so it is correct for this row by construction.
 com.claude.browse-mirror           | run    | 600  | auto | 11 | 18-fleet-activate.sh
 com.claude.public-publish         | run    | 10800 | auto | 12 | 46-public-repo-cutover.sh
+# ── com.reso.lr-reconciler* (2026-09-29, LIMIT_RECOVER_FLEET_V2_ARCHITECTURE §C2/§C9) ────────────────
+# The one com.reso family this repo DOES own: unlike the reso-owned jobs excluded above, their SSOT is
+# scripts/limit-recover/ here. `staged` = built, not loaded; W5's operator step (lr-recon-launchd.sh)
+# installs them. The daemon follows the compressor-sentinel row: KeepAlive internal loop, interval_s =
+# its heartbeat tick, evidence = the heartbeat it rewrites every 10 s. The watchdog's evidence is its
+# state file, rewritten on every tick (its stdout stays empty by design). The rig is on-demand
+# (RunAtLoad/KeepAlive false), so it has no cadence to be late against: `0` and `-`, no S5 verdict.
+com.reso.lr-reconciler            | staged | 10   | ~/.reso/limit-recover/recon/heartbeat | — | lr-recon-launchd.sh
+com.reso.lr-reconciler-watchdog   | staged | 30   | ~/.reso/limit-recover/recon/watchdog.state | — | lr-recon-launchd.sh
+com.reso.lr-reconciler-rig        | staged | 0    | - | — | lr-recon-launchd.sh

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- com.reso.lr-reconciler-watchdog — the standalone watchdog for com.reso.lr-reconciler (§C9).
+     Every 30 s it reads recon/heartbeat: it kills a live holder whose main loop has made no
+     progress for >=180 s (never within 120 s of a wake), and pages a crash loop or a dead daemon,
+     latched once per 15 min. bash 3.2, imports nothing from the lr_recon package.
+
+     NOT LOADED BY THIS WAVE: repo SSOT only, installed by W5's operator step (lr-recon-launchd.sh).
+     With no heartbeat file (daemon not installed) every run exits 0 silently.
+     Kill switch: `launchctl bootout gui/$UID/com.reso.lr-reconciler-watchdog`.
+
+     PATH matches the daemon's wrapper; the watchdog needs /usr/sbin for `sysctl kern.waketime`
+     (it calls it by absolute path too, so a PATH edit cannot silently blind the wake guard). -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.reso.lr-reconciler-watchdog</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-c</string>
+    <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"; exec /bin/bash "$HOME/.claude/scripts/limit-recover/lr-recon-watchdog.sh"</string>
+  </array>
+  <key>StartInterval</key><integer>30</integer>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>/Users/chrisren/.reso/limit-recover/recon/watchdog.out</string>
+  <key>StandardErrorPath</key><string>/Users/chrisren/.reso/limit-recover/recon/watchdog.err</string>
+</dict>
+</plist>

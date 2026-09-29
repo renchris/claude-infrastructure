@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- com.reso.lr-reconciler — the lr_recon reconciler daemon (LIMIT_RECOVER_FLEET_V2_ARCHITECTURE §C2):
+     pane-in-place limit recovery for every limit-parked session, from outside every session and
+     outside the auto-mode classifier.
+
+     NOT LOADED BY THIS WAVE. This file is the repo SSOT only; W5's operator step
+     (lr-recon-launchd.sh) installs and bootstraps it. Nothing here runs until then.
+
+     IT ACTS ONLY WHEN `recon.on` EXISTS AND `recon/mode` SAYS `act`. Without recon.on it
+     observes and plans at most; it never owns, claims, confirms, exits or relaunches a pane.
+     Kill switches, in order of reach: delete recon.on (no actuation) · write `observe` to
+     recon/mode · `launchctl bootout gui/$UID/com.reso.lr-reconciler`.
+
+     KeepAlive + RunAtLoad + ThrottleInterval 10: an internal-loop daemon, so launchd's only job is
+     to start it and restart it. com.reso.lr-reconciler-watchdog (§C9) kills a live-but-stalled
+     holder and relies on KeepAlive to bring it back.
+
+     PATH is the compressor-sentinel wrapper's, and /usr/sbin on it is load-bearing: the daemon
+     reads `sysctl kern.waketime` / `kern.boottime` for its sleep-aware clock, and a wrapper that
+     drops /usr/sbin loses that silently in every scheduled run while a hand-run looks fine.
+
+     /usr/bin/python3 is PINNED rather than taken from PATH: the package is written 3.9-compatible
+     for exactly that interpreter, and PATH puts Homebrew first, so an unpinned `python3` would run
+     whatever version brew last installed — a different interpreter under launchd than under test. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.reso.lr-reconciler</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-c</string>
+    <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"; cd "$HOME/.claude/scripts/limit-recover" || exit 1; exec /usr/bin/python3 -m lr_recon</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>/Users/chrisren/.reso/limit-recover/recon/reconciler.out</string>
+  <key>StandardErrorPath</key><string>/Users/chrisren/.reso/limit-recover/recon/reconciler.err</string>
+</dict>
+</plist>
