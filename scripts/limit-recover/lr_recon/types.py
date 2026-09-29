@@ -690,6 +690,10 @@ class Record:
     wait: Optional[Wait] = None
     repo_state: Dict[str, Any] = field(default_factory=dict)
     escalated: bool = False
+    # cross-pass evidence history (evidence.py): PANE-GONE needs two consecutive absent scans,
+    # MOVED needs the same target holder on two samples ≥15 s apart ({pid, lstart, at})
+    pane_absent_obs: int = 0
+    target_sample: Optional[Dict[str, Any]] = None
     # terminal
     goal_snapshot: str = ""
     terminal: Optional[Terminal] = None
