@@ -417,6 +417,21 @@ Write `recon.on` and `recon/mode=act`. The first real cc-lr-origin cohort (the o
 - Focused limited panes. Should a limited pane you are currently looking at be moved? Recommendation: yes. The new post-confirm read-back makes typing into it safe, and holding it would stall the pane you most likely need. Conviction: 75%. Options: move it / hold it while it has focus.
 - Seat cap during a storm. Should the per-account active cap (KMAX=8, against a measured infrastructure limit of 5-6 concurrent requests per account) be raised during a recovery storm so more sessions move at once? Recommendation: no. The design names every waiting session and its ETA instead. Conviction: 80%. Options: keep 8 (fewer parallel moves, no added 529 risk) / raise it (more parallel moves, and more 'server temporarily limiting' refusals on the target accounts).
 
+### Decision research, 2026-09-29 (origin lead; 8 read-only agents, one per decision)
+
+The full table is in the design bundle, `decision-research-2026-09-29.md`. What it changes here:
+
+| # | Status | Revised recommendation (conviction) |
+|---|---|---|
+| 1 | on since 05:22Z | Keep automatic recovery on (88%). The first unattended recovery (pane 918, 05:32→05:38Z) spent 5 of its 6 minutes waiting for the poller to finish its pass before it reached the request, so the reconciler must start a recovery the moment a request lands (W3). |
+| 2 | **SETTLED** | Hold until the job ends. Page at 60 minutes when the job is a ship-land (claude-infrastructure lands take p50 836 s and p95 3456 s, and 30% exceed 20 minutes), and at 20 minutes otherwise (92%). |
+| 3 | operator | Hybrid. A 5-hour cap always waits: the median reset is 1.9 h (max 4.5 h), and a second cascade was measured on 2026-09-19. A weekly cap with reset ≤ 6 h waits. A weekly cap with reset > 6 h moves at most 1-2 sessions per pass to the least-thin account, re-checking the floors on each pick (75%). |
+| 4 | operator | Hold in v1, and resume the lead in place at its reset, with no `/exit`, so the team stays whole (88%). |
+| 5 | **SETTLED** | Allow. The heal already landed in `b509a51f4`: 4 checks, a backup, verification by a separate call, and the `LR_BARE_REPAIR=off` switch (92%). |
+| 6 | operator | No. The composer reader strips spaces and truncates by width, and there have ever been only 3 real draft holds (80%). |
+| 7 | operator; the gate is built regardless | Move the pane, but behind a focus gate (W2b). The planned `/exit` read-back did not exist: `handoff-fire.sh:1538` sent the text and Enter together (65%). |
+| 8 | operator; the probe is drivable | Keep 8. **Correction:** "5-6 concurrent requests per account" was never measured on this machine; it came from GH#62426 and habit. KMAX counts sessions written in the last 10 minutes, not requests, and the first-turn pacer (3 per account) is the burst protection. W0 item 9 runs the burst probe (65%). |
+
 ## Provenance
 
 Dynamic Workflow wf_99ea9654-29f (22 agents, 0 errors: 8 subsystem maps, 4 designs, 3 judges, 5 skeptics, 2 synthesis passes). The architecture is `docs/plans/LIMIT_RECOVER_FLEET_V2_ARCHITECTURE.md`. The 55 skeptic findings (4 fatal, 30 major) and their dispositions stayed in the design bundle outside the repo.
