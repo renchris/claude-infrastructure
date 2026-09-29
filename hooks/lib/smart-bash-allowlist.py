@@ -42,6 +42,15 @@ import json
 import os
 import re
 import sys
+from urllib.parse import urlparse
+
+# The shared internal-address normalizer (also used by hooks/curl-gate.py). If it cannot be loaded
+# the curl arm DEFERS — this file may only ever fail toward a prompt.
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+try:
+    import curl_ssrf as _ssrf
+except ImportError:
+    _ssrf = None
 
 # ── segment decomposition ────────────────────────────────────────────────────────────
 # Indirection means we cannot see what will actually run, so we refuse to decide at all.
@@ -858,8 +867,10 @@ CURL_FLAGS_WITHARG = {
     "--retry-max-time",
     "-r",
     "--range",
-    "--resolve",
 }
+# --resolve is deliberately NOT cleared (2026-09-29): it sends the connection to an address of its
+# own choosing, so the URL host this arm vets is not the machine curl talks to. It defers to the
+# normal permission flow; it was 2 commands in the whole archive.
 _URL = re.compile(r"^['\"]?https?://", re.I)
 # curl flags whose argument is a FILE THAT GETS WRITTEN. Kept as a named set so the
 # containment check applies uniformly and a future flag is added in one place. Everything
@@ -1038,6 +1049,17 @@ def allowed_segment(seg, sole=False):
                 i += 2
                 continue
             if _URL.match(tok):
+                # A URL to cloud metadata or a private network (in any spelling: decimal, hex,
+                # IPv4-mapped, nip.io, …) defers — not denied, because a LAN read like the router
+                # admin page is legitimate outside reso; the classifier decides.
+                if _ssrf is None:
+                    return None
+                try:
+                    host = urlparse(_unquote(tok)).hostname
+                except ValueError:
+                    return None
+                if _ssrf.is_internal_host(host):
+                    return None
                 i += 1
                 continue
             # An unrecognised token — including any flag not on the positive list, which
@@ -1116,6 +1138,12 @@ def decide(cmd, _fence=None, _depth=0):
         return None, "could not decompose the command with confidence"
 
     judgeable = [s for s in (normalize(raw) for raw in segs) if s]
+    # normalize() peels leading `VAR=` assignments, so an env proxy or a relocated curlrc on a curl
+    # command would be invisible to the curl arm. Either one moves where curl connects: defer.
+    if any(verb(s) == "curl" for s in judgeable) and (
+        _ssrf is None or _ssrf.ENV_PROXY_RE.search(cmd) or _ssrf.ENV_CURLRC_RE.search(cmd)
+    ):
+        return None, "curl with a proxy or curlrc environment override"
     reasons, judged = [], 0
     for seg in judgeable:
         crossed = crosses_fence(seg, fence)

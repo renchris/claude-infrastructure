@@ -38,6 +38,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
+# The internal-address normalizer and routing census live in hooks/lib/curl_ssrf.py, shared with
+# smart-bash-allowlist.py so the two hooks cannot drift. realpath: ~/.claude/hooks/curl-gate.py is a
+# per-file symlink into the checkout, and the lib sits beside the REAL file.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+try:
+    import curl_ssrf as _ssrf
+except ImportError:  # fail CLOSED on curl only — see decide_command()
+    _ssrf = None
+
 PROJECT_ROOT = "/Users/chrisren/Development/reso-management-app"
 AUDIT_LOG = Path.home() / ".reso" / "curl-audit.jsonl"
 
@@ -132,31 +141,12 @@ SENSITIVE_PATHS = (
 )
 
 
-# Internal-IP regexes — checked by string-startswith on parsed host.
 def is_internal_host(host: str) -> bool:
-    if not host:
-        return False
-    host = host.lower()
-    if host in ("localhost", "127.0.0.1", "0.0.0.0"):
-        # Allow localhost only for known dev ports
-        return False  # handled separately for dev ports
-    if host == "169.254.169.254":
-        return True  # cloud-metadata service
-    if host.startswith("169.254."):
-        return True
-    if host.startswith("10."):
-        return True
-    if host.startswith("192.168."):
-        return True
-    # 172.16.0.0 - 172.31.255.255
-    if host.startswith("172."):
-        try:
-            second = int(host.split(".")[1])
-            if 16 <= second <= 31:
-                return True
-        except (IndexError, ValueError):
-            pass
-    return False
+    """Cloud metadata / RFC1918 / link-local / ULA, in ANY spelling — decimal, hex, octal, IPv4-mapped
+    IPv6, nip.io-style names, metadata.google.internal. See hooks/lib/curl_ssrf.py for why the
+    incumbent string-prefix test was not enough. Loopback is not internal here; is_localhost_dev and
+    the loopback arm govern it."""
+    return _ssrf.is_internal_host(host)
 
 
 def emit(
@@ -464,6 +454,13 @@ def parse_argv(tokens: list[str], cmd: str) -> dict:
     has_max_redirs = False
     has_proto_redir = False
     has_max_filesize = False
+    # Routing census — flags that send the connection somewhere other than the URL's host.
+    route_targets: list[tuple[str, str]] = []
+    proxies: list[str] = []
+    unix_socket = False
+    dns_override: list[str] = []
+    url_expansion = False
+    disables_curlrc = len(tokens) > 1 and tokens[1] in ("-q", "--disable")
 
     i = 1
     while i < len(tokens):
@@ -513,6 +510,22 @@ def parse_argv(tokens: list[str], cmd: str) -> dict:
             has_proto_redir = True
         elif t == "--max-filesize" or t.startswith("--max-filesize="):
             has_max_filesize = True
+
+        # Routing census — a THIRD non-exclusive pre-pass, arity-blind like the two above. Only the
+        # space-separated spelling exists: curl rejects `--resolve=…` and never abbreviates a long
+        # option (measured, curl 8.7.1: `--resol` is "unknown").
+        if t in _ssrf.ROUTE_FLAGS and i + 1 < len(tokens):
+            route_targets.append((t, tokens[i + 1]))
+        elif t in _ssrf.PROXY_FLAGS:
+            proxies.append(t)
+        elif t.startswith("-") and not t.startswith("--") and len(t) > 1 and "x" in short_cluster_flags(t[1:]):
+            proxies.append(t)  # -x in a cluster or with an attached value: -sx p:3128, -xhttp://p
+        elif t in _ssrf.SOCKET_FLAGS:
+            unix_socket = True
+        elif t in _ssrf.DNS_FLAGS:
+            dns_override.append(t)
+        elif t.startswith(_ssrf.EXPAND_FLAGS_PREFIX) or t == "--variable":
+            url_expansion = True
 
         if t in ("-X", "--request"):
             if i + 1 < len(tokens):
@@ -631,6 +644,12 @@ def parse_argv(tokens: list[str], cmd: str) -> dict:
         "has_max_redirs": has_max_redirs,
         "has_proto_redir": has_proto_redir,
         "has_max_filesize": has_max_filesize,
+        "route_targets": route_targets,
+        "proxies": proxies,
+        "unix_socket": unix_socket,
+        "dns_override": dns_override,
+        "url_expansion": url_expansion,
+        "disables_curlrc": disables_curlrc,
     }
 
 
@@ -663,7 +682,11 @@ def is_localhost_dev(host: str, port: int | None) -> bool:
         return False
     if port is None:
         return False
-    return port in (3000, 3001, 3002, 3003, 4040, 6006, 9229, 11434)
+    # 4040 is NOT here (2026-09-29): it is reso's local API, and the operator's committed policy
+    # (reso a62839121, .claude/rules/api-security.md) lists localhost:4040 as READ-ONLY. A GET to it
+    # is still allowed by the open-read arm; a write now asks. Kept narrow to 4040 on purpose —
+    # read-only for every dev port would cost ~72 Ollama (11434) POST prompts outside reso.
+    return port in (3000, 3001, 3002, 3003, 6006, 9229, 11434)
 
 
 # ── What a request SENDS, which is the thing a read can actually leak ────────────────────────────
@@ -820,6 +843,40 @@ def decide(parsed: dict) -> tuple[str, str]:
     if parsed["config_file"]:
         return "deny", "-K/--config indirect URL source not parseable"
 
+    # ROUTING (2026-09-29). Every rule below judges the URL's host, but these flags make curl
+    # connect somewhere else, so the host check would be judging the wrong machine.
+    if parsed.get("unix_socket"):
+        return "ask", "--unix-socket sends the request to a local socket file, not to the URL's host"
+    if parsed.get("proxies"):
+        return (
+            "ask",
+            f"{parsed['proxies'][0]} sends the request through a proxy, so the URL's host is not where it goes",
+        )
+    if parsed.get("dns_override"):
+        return (
+            "ask",
+            f"{parsed['dns_override'][0]} picks the DNS server, which can point any host name at an internal address",
+        )
+    if parsed.get("url_expansion"):
+        return "ask", "--variable/--expand-* builds the URL at run time, so the written URL is not the real one"
+    for flag, val in parsed.get("route_targets") or []:
+        for tgt in _ssrf.route_target_hosts(flag, val):
+            if tgt is None:
+                return "ask", f"{flag} {val}: cannot tell where this sends the connection"
+            if is_internal_host(tgt):
+                return (
+                    "deny",
+                    f"{flag} redirects the connection to internal address {tgt} "
+                    "(cloud metadata / private network) — blocked",
+                )
+            if (
+                parsed["method"] not in SAFE_METHODS
+                or parsed.get("has_data")
+                or parsed.get("has_file_upload")
+                or outbound_credentials(parsed)
+            ):
+                return "ask", f"{flag} sends a write or a credential to {tgt} instead of the URL's host"
+
     # Sensitive output / upload paths
     op = parsed.get("output_path") or ""
     df = parsed.get("data_file_arg") or ""
@@ -842,7 +899,10 @@ def decide(parsed: dict) -> tuple[str, str]:
         host = (u.hostname or "").lower()
 
         if is_internal_host(host):
-            return "deny", f"Internal/IMDS target: {host}"
+            return (
+                "deny",
+                f"Internal/IMDS target: {host} is cloud metadata or a private-network address — blocked",
+            )
 
         # `.port` is a PROPERTY that RAISES on a non-numeric authority — and ours frequently is one,
         # because the model writes `http://localhost:3000$CHUNK` and the shell expands the variable
@@ -1240,6 +1300,12 @@ def curl_invocations_by_segment(cmd: str) -> list[list[str]] | None:
 
 def decide_command(cmd: str) -> tuple[str, str, dict]:
     """Judge EVERY curl in the command; the strictest verdict wins (deny > ask > allow)."""
+    if _ssrf is None:
+        return (
+            "deny",
+            "curl-gate: hooks/lib/curl_ssrf.py is missing, so internal addresses cannot be checked (fail-closed)",
+            {"host": None, "method": None},
+        )
     invocations = curl_invocations(cmd)
     if invocations is None:
         invocations = curl_invocations_by_segment(cmd)
@@ -1250,6 +1316,15 @@ def decide_command(cmd: str) -> tuple[str, str, dict]:
 
     meta: dict = {"host": None, "method": None}
     verdicts: list[tuple[str, str]] = []
+    # Command-level routing: an environment variable or a curlrc steers curl without a flag in argv.
+    if _ssrf.ENV_PROXY_RE.search(cmd):
+        verdicts.append(
+            ("ask", "a *_proxy environment variable sends curl through a proxy the host check cannot see")
+        )
+    if _ssrf.ENV_CURLRC_RE.search(cmd):
+        verdicts.append(
+            ("ask", "CURL_HOME/XDG_CONFIG_HOME/HOME is set, which moves the curlrc curl reads its options from")
+        )
     for argv in [v for a in invocations for v in expand_argv(a, cmd)]:
         if info_only(argv):
             verdicts.append(
@@ -1261,6 +1336,10 @@ def decide_command(cmd: str) -> tuple[str, str, dict]:
             continue
         parsed = parse_argv(argv, cmd)
         decision, reason = decide(parsed)
+        if decision == "allow" and not parsed.get("disables_curlrc"):
+            rc = _ssrf.default_curlrc_present()
+            if rc:
+                decision, reason = "ask", f"{rc} exists and can add proxy/resolve options this gate cannot see"
         # The rewrite rides in `meta` rather than widening this signature — every caller already
         # threads meta through to emit(), and single_simple_curl() means there is only ever one
         # invocation to compute it for.

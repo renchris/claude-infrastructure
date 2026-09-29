@@ -315,3 +315,21 @@ PY
       || { echo "qos table row '$word' is missing from _QOS_TOKENS"; false; }
   done < "$table"
 }
+
+# ── routing flags (2026-09-29): a routed read is never rewritten-and-allowed past the host check ──
+
+@test "19 a -L read through a proxy ASKS and carries no rewrite; a -L read pinned public is rewritten" {
+  run reason 'curl -L -x http://p.example:3128 https://example.com/'
+  echo "$output" | grep -q 'through a proxy'
+  run rewritten 'curl -L -x http://p.example:3128 https://example.com/'
+  [ -z "$output" ]
+  run rewritten 'curl -L --resolve example.com:443:93.184.216.34 https://example.com/'
+  echo "$output" | grep -q -- '--proto-redir =https'
+}
+
+@test "20 a -L read rerouted to IMDS by --resolve is DENIED, not rewritten" {
+  run reason 'curl -L --resolve example.com:80:169.254.169.254 http://example.com/'
+  echo "$output" | grep -q 'internal address 169.254.169.254'
+  run rewritten 'curl -L --resolve example.com:80:169.254.169.254 http://example.com/'
+  [ -z "$output" ]
+}

@@ -56,6 +56,18 @@ print(json.loads(out)["hookSpecificOutput"].get("permissionDecision","allow"))
 ' "$GATE"
 }
 
+# reason_of <command> → the permissionDecisionReason ("" on an implicit allow).
+reason_of() {
+  CMD="$1" CWD="$ROOT" python3 -c '
+import json,os,subprocess,sys
+pay=json.dumps({"session_id":"t","cwd":os.environ["CWD"],"hook_event_name":"PreToolUse",
+                "tool_name":"Bash","tool_input":{"command":os.environ["CMD"]}})
+p=subprocess.run([sys.executable,sys.argv[1]],input=pay,capture_output=True,text=True)
+out=p.stdout.strip()
+print(json.loads(out)["hookSpecificOutput"].get("permissionDecisionReason","") if out else "")
+' "$GATE"
+}
+
 # ── THE PARSE BUG: a flag value must never be judged as a URL ─────────────────────────────────────
 
 @test "the verbatim command from the audit log: -A user-agent is not a host" {
@@ -310,4 +322,106 @@ print(json.loads(out)["hookSpecificOutput"].get("permissionDecision","allow"))
   GATE="$pre"
   [ "$(decision $'echo don\'t; curl -s http://localhost:3000/x')" = "deny" ]
   [ "$(decision $'cat <<\'EOF\'\ndon\'t\nEOF\ncurl -s http://localhost:3000/api')" = "deny" ]
+}
+
+# ── SSRF TIGHTENING (2026-09-29): every spelling of an internal address, and every way of routing ──
+# the connection somewhere the URL's host does not name. Evidence and the decision record:
+# docs/research/hook-ask-confirmations-2026-09-28.md §6 Round 2. Each case pairs the refused shape
+# with a PERMIT twin, so an "ask everything" or "deny everything" bug goes red too.
+
+@test "SSRF numeric IPv4 spellings of IMDS/LAN deny; a public numeric host still reads" {
+  [ "$(decision 'curl http://2852039166/latest/meta-data/')" = "deny" ]        # decimal
+  [ "$(decision 'curl http://0xA9FEA9FE/latest/')" = "deny" ]                  # hex
+  [ "$(decision 'curl http://0251.0376.0251.0376/latest/')" = "deny" ]         # octal
+  [ "$(decision 'curl http://0xa9.0xfe.0xa9.0xfe/')" = "deny" ]                # per-octet hex
+  [ "$(decision 'curl http://3232235777/')" = "deny" ]                         # decimal 192.168.1.1
+  [ "$(decision 'curl -s http://8.8.8.8/')" = "allow" ]
+  [ "$(decision 'curl -s http://134744072/')" = "allow" ]                      # decimal 8.8.8.8
+}
+
+@test "SSRF IPv6 mapped / ULA (AWS IMDSv6) / link-local deny; public IPv6 still reads" {
+  [ "$(decision 'curl -g "http://[::ffff:169.254.169.254]/"')" = "deny" ]
+  [ "$(decision 'curl -g "http://[fd00:ec2::254]/latest/"')" = "deny" ]
+  [ "$(decision 'curl -g "http://[fe80::1]/"')" = "deny" ]
+  [ "$(decision 'curl -g "http://[2606:4700:4700::1111]/"')" = "allow" ]
+}
+
+@test "SSRF IP-in-DNS names and named metadata hosts deny; a public-encoded name still reads" {
+  [ "$(decision 'curl http://169.254.169.254.nip.io/latest/')" = "deny" ]
+  [ "$(decision 'curl http://10-0-0-1.sslip.io/')" = "deny" ]
+  [ "$(decision 'curl http://a9fea9fe.nip.io/')" = "deny" ]
+  [ "$(decision 'curl -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/')" = "deny" ]
+  [ "$(decision 'curl -s http://1.2.3.4.nip.io/')" = "allow" ]
+  [ "$(decision 'curl -s https://metadata.example.com/')" = "allow" ]
+}
+
+@test "SSRF --resolve: internal target denies (plain, +, *), undecidable asks, rerouted write asks" {
+  [ "$(decision 'curl --resolve example.com:80:169.254.169.254 http://example.com/')" = "deny" ]
+  [ "$(decision 'curl --resolve +example.com:80:10.0.0.1 http://example.com/')" = "deny" ]
+  [ "$(decision "curl --resolve '*:80:2852039166' http://example.com/")" = "deny" ]
+  [ "$(decision 'curl --resolve "studio60.reso.gl:443:$IP" https://studio60.reso.gl/')" = "ask" ]
+  [ "$(decision 'curl -X POST -d x --resolve hooks.slack.com:443:93.184.216.34 https://hooks.slack.com/x')" = "ask" ]
+  # PERMIT: a read pinned to a public address, and a cache-entry removal, route nowhere internal
+  [ "$(decision 'curl -s --resolve example.com:443:93.184.216.34 https://example.com/')" = "allow" ]
+  [ "$(decision 'curl -s --resolve -example.com:443 https://example.com/')" = "allow" ]
+}
+
+@test "SSRF --connect-to: internal target denies; a public target still reads" {
+  [ "$(decision 'curl --connect-to ::169.254.169.254:80 http://example.com/')" = "deny" ]
+  [ "$(decision 'curl --connect-to "example.com:443:[fd00:ec2::254]:443" https://example.com/')" = "deny" ]
+  [ "$(decision 'curl -s --connect-to example.com:443:example.org:443 https://example.com/')" = "allow" ]
+}
+
+@test "SSRF proxy flags and unix sockets ask; --noproxy is not a route" {
+  [ "$(decision 'curl -x http://p.example:3128 https://example.com/')" = "ask" ]
+  [ "$(decision 'curl -sx p.example:3128 https://example.com/')" = "ask" ]
+  [ "$(decision 'curl --proxy http://p.example:3128 https://example.com/')" = "ask" ]
+  [ "$(decision 'curl --preproxy socks5://p.example:1080 https://example.com/')" = "ask" ]
+  [ "$(decision 'curl --socks5-hostname p.example:1080 https://example.com/')" = "ask" ]
+  [ "$(decision 'curl --unix-socket /var/run/docker.sock http://localhost/containers/json')" = "ask" ]
+  [ "$(decision 'curl --abstract-unix-socket x http://localhost/')" = "ask" ]
+  [ "$(decision "curl -s --noproxy '*' https://example.com/")" = "allow" ]
+}
+
+@test "SSRF a *_proxy env assignment asks; no_proxy and unrelated assignments do not" {
+  [ "$(decision 'http_proxy=http://192.168.1.50:3128 curl http://example.com/')" = "ask" ]
+  [ "$(decision 'export HTTPS_PROXY=http://p.example:1; curl -s https://example.com/')" = "ask" ]
+  [ "$(decision 'ALL_PROXY=socks5://p.example:1080 curl -s https://example.com/')" = "ask" ]
+  [ "$(decision 'no_proxy=example.com curl -s https://example.com/')" = "allow" ]
+  [ "$(decision 'FOO=1 curl -s https://example.com/')" = "allow" ]
+}
+
+@test "SSRF --doh-url / --dns-servers ask; a plain read does not" {
+  [ "$(decision 'curl --doh-url https://dns.example/dns-query https://example.com/')" = "ask" ]
+  [ "$(decision 'curl --dns-servers 192.0.2.1 https://example.com/')" = "ask" ]
+  [ "$(decision 'curl -s https://example.com/')" = "allow" ]
+}
+
+@test "SSRF curlrc: relocating it asks, an existing default curlrc asks, and -q opts out" {
+  [ "$(decision 'CURL_HOME=/tmp/x curl -s https://example.com/')" = "ask" ]
+  [ "$(decision 'XDG_CONFIG_HOME=/tmp/x curl -s https://example.com/')" = "ask" ]
+  [ "$(decision 'HOME=/tmp/x curl -s https://example.com/')" = "ask" ]
+  [ "$(decision 'curl -s https://example.com/')" = "allow" ]        # fixture $HOME has no .curlrc
+  printf 'proxy = "http://10.0.0.9:3128"\n' > "$HOME/.curlrc"
+  [ "$(decision 'curl -s https://example.com/')" = "ask" ]
+  [ "$(decision 'curl -q -s https://example.com/')" = "allow" ]     # -q first: curlrc is not read
+}
+
+@test "SSRF --variable / --expand-url builds the URL at run time, so it asks" {
+  [ "$(decision "curl --variable %HOST --expand-url 'http://{{HOST}}/'")" = "ask" ]
+}
+
+@test "SSRF localhost:4040 is read-only (reso policy a62839121); other dev ports keep writes" {
+  [ "$(decision 'curl -s http://localhost:4040/api/health')" = "allow" ]
+  [ "$(decision 'curl -X POST -d x http://localhost:4040/api/x')" = "ask" ]
+  [ "$(decision 'curl -X DELETE http://localhost:4040/api/x')" = "ask" ]
+  [ "$(decision 'curl -X POST -d x http://localhost:11434/api/generate')" = "allow" ]
+  [ "$(decision 'curl -X POST -d x http://localhost:3000/api/x')" = "allow" ]
+}
+
+@test "SSRF deny reasons say what was blocked and why in plain words" {
+  run reason_of 'curl http://2852039166/latest/'
+  echo "$output" | grep -q 'private-network address — blocked'
+  run reason_of 'curl --resolve example.com:80:169.254.169.254 http://example.com/'
+  echo "$output" | grep -q 'redirects the connection to internal address 169.254.169.254'
 }

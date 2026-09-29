@@ -34,6 +34,10 @@ setup() {
     GATE="${BATS_TEST_TMPDIR}/curl-gate.py"
     sed "s|^PROJECT_ROOT = .*|PROJECT_ROOT = \"${FAKE_ROOT}\"|" \
         "$REPO/hooks/curl-gate.py" > "$GATE"
+    # The gate imports its internal-address normalizer from lib/ beside its REAL path; a copied
+    # gate without it fails closed (deny everything), which would make the out-of-scope cases vacuous.
+    mkdir -p "${BATS_TEST_TMPDIR}/lib"
+    cp "$REPO/hooks/lib/curl_ssrf.py" "${BATS_TEST_TMPDIR}/lib/"
 }
 
 probe() { # $1=cwd  $2=command
