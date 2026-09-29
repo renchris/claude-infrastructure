@@ -2922,8 +2922,8 @@ hf_recycle_last_read() { # → 0 every read clean · 1 refused (HF_LR_REASON, HF
     fi
   else
     rc=0; hf_transcript_at_rest "${tx_read:-$tx}" || rc=$?
-    [ -n "$joined" ] && rm -f "$joined"
     if [ "$rc" != 0 ]; then
+      [ -n "$joined" ] && rm -f "$joined"
       HF_LR_REASON=busy; HF_LR_WHAT="transcript not at rest (rc $rc — 1 in flight, 2 unreadable): ${tx:-<none>}"; return 1
     fi
   fi
@@ -2932,11 +2932,16 @@ hf_recycle_last_read() { # → 0 every read clean · 1 refused (HF_LR_REASON, HF
     sa_live=""
     [ -n "$sa_dir" ] && sa_live="$(live_subagents_of "$sa_dir" "${RCY_SA_BORN:-}")"
     if [ -n "$sa_live" ]; then
+      [ -n "$joined" ] && rm -f "$joined"
       HF_LR_REASON=subagents; HF_LR_WHAT="$(printf '%s\n' "$sa_live" | grep -c .) subagent(s) in flight"; return 1
     fi
   fi
-  # Not inside `$(…)`: the verdict comes back in HF_BG_HOLD, which a subshell would drop.
-  rc=0; hf_bg_work_gate "${HF_REMOTE_ROW_PID:-}" "$limited" "$tx" || rc=$?
+  # Not inside `$(…)`: the verdict comes back in HF_BG_HOLD, which a subshell would drop. The gate
+  # re-proves at-rest for a voluntary move, so it reads the SAME transcript the proof above read —
+  # retired + stub when a stub exists. Handed the stub alone it could never prove at-rest and held
+  # HELD:mid-turn a session that was at rest (W5b canary 3: 181 husk spawns, every one held).
+  rc=0; hf_bg_work_gate "${HF_REMOTE_ROW_PID:-}" "$limited" "${tx_read:-$tx}" || rc=$?
+  [ -n "$joined" ] && rm -f "$joined"
   if [ "$rc" != 0 ]; then
     HF_LR_REASON=bg-work; HF_LR_WHAT="${HF_BG_HOLD:-held}"; return 1
   fi

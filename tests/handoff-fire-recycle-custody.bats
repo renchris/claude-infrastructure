@@ -823,6 +823,22 @@ wrows() { grep "\"class\":\"$1\"" "$HOME/.claude/logs/handoffs.jsonl" 2>/dev/nul
   [ "$HF_LR_REASON" = limit-cleared ] || { echo "$HF_LR_REASON $HF_LR_WHAT"; false; }
 }
 
+@test "14b a VOLUNTARY move's background-work gate reads the same JOINED transcript as its at-rest proof (W5b canary 3)" {
+  tail_world
+  local fix="$REPO/tests/fixtures/lr-recon/jsonl"
+  # shellcheck disable=SC2034  # globals read by the handoff-fire functions under test
+  RCY_TRANSPLANT_CAUSE=voluntary HF_REMOTE_ROW_PID="$$"
+  cp "$fix/assistant-turn.jsonl" "$TX.handed-off"                   # retired: at rest
+  cp "$fix/system-informational-retired-source.jsonl" "$TX"   # the re-created stub: no turn at all
+  printf '%s\n' "" > "$READS"
+  # the at-rest proof read retired + stub and passed; the gate was handed the stub ALONE, could not
+  # prove at-rest from it, and held HELD:mid-turn a session that was at rest — 181 husk spawns
+  hf_recycle_last_read || { echo "refused: $HF_LR_REASON $HF_LR_WHAT"; false; }
+  # Control: a stub whose tail is a user turn in flight really is mid-turn, and still holds.
+  cat "$fix/user-prompt.jsonl" >> "$TX"
+  ! hf_recycle_last_read || { echo "a turn in flight read as at rest"; false; }
+}
+
 # ── 15 · THE TARGET ANSWERED WITH A LIMIT: A VERDICT, NOT A WAIT ───────────────────────────────
 
 # The watcher in the background holding a real pane lock, as recycle_fire hands it one; $1 = extra env.
