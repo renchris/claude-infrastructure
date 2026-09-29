@@ -127,6 +127,21 @@ caller fails exactly like pane 405 (the desk role file still names dead pane 672
 Not a close→resume path (checked, no change): lr-handoff REPLACE-in-place (verifies the successor
 before self-close), lr-transplant, lr-fire-resume / reso-resume-one (engines, called inside a debt).
 
+## 2b. W1 — DONE (2026-09-28/29), integrated on feat/close-resume-custody
+- crc-core `bin/cc-resume-debt` + `tests/cc-resume-debt.bats`; crc-recycle handoff-fire open-before-
+  `/exit`, surface re-check between exit and relaunch, settle on every no-claude arm, discharge on
+  engagement; crc-mover lr-upgrade surface refusal, `lru_proven`, surface-gated retype, settle,
+  switch-bg debts, `poller-auto` mail → `--role desk`; crc-surface boot-resume-launch debts, poller
+  sweep (`LR_RESUME_DEBT_SWEEP=off` kill switch), readout `⚠ N stranded session(s)` line, admit-state
+  isolation in `tests/boot-resume-launch.bats`.
+- Lead additions: `settle` opens a debt when none is on file (an older mover closed the session);
+  `--mode fresh` debts are also proven by a LIVE successor holding the recorded pane — without it a
+  watcher that died after a GOOD fresh-brief relaunch would leave the sweep resuming the old sid
+  beside its successor. Red-proofed (reverting `_prove_debt` fails the fresh case).
+- Learning: the TeammateIdle auto-shutdown hook checkpoints and REMOVES a finished teammate's
+  worktree, so an absent worktree dir is not lost work — read `git branch -v feat/<name>` and
+  `refs/wip/<name>/LAST` before concluding anything.
+
 ## 3. Open items / known issues
 - Who destroyed kitty window 405 within ~19 s of a clean `/exit` is unknown (kitty is set to keep a
   window on program exit). The design no longer depends on the answer.
