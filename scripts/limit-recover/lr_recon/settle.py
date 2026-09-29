@@ -151,6 +151,11 @@ def settle_exit(
         # Adopted by argv, or exited before this daemon could reap it: no code is no verdict. The
         # derived phase is the truth; scoring it as a failure escalated a move that had engaged.
         return "%s exited, code unknown — the phase decides" % pr.argv_hash
+    if rec.phase in ("MOVED", "ENGAGED"):
+        # The phase table already proved the move from disk; an actuator exiting non-zero after
+        # that (a watcher's own engagement wait timing out) is a stale verdict. Scored, it bumped
+        # the attempt and re-opened a MOVED record to RELAUNCHED (W5b real canary 3).
+        return "%s rc=%s after %s — the phase decides" % (pr.argv_hash, rc, rec.phase)
     disp, sub, reason = outcome(rec, rc, text)
     if pr.argv_hash in MOVE_ACTUATORS:
         # Whatever it was refused for, the NEXT move spawn is a new attempt: the double-typer audit

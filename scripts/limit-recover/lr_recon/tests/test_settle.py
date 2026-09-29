@@ -74,6 +74,23 @@ class Exits(unittest.TestCase):
         self.assertTrue(settle.reprobe(r, 100.0 + settle.REPROBE_S))
         self.assertEqual((r.substate, r.wait), ("DETECTED", None))
 
+    def test_a_late_failed_exit_never_reopens_a_moved_record(self):
+        """W5b real canary 3: B's relaunch worked (MOVED), then its watcher's turn wait timed out
+        rc 1; scored, it bumped the attempt and re-opened the record to RELAUNCHED."""
+        r = rec(phase="MOVED", sub=None)
+        r.attempt = 2
+        d = settle.settle_exit(
+            r, actuator("B"), 1, "!! RECYCLE FAILED — never engaged", 5.0
+        )
+        self.assertIn("the phase decides", d)
+        self.assertEqual((r.attempt, r.last_error), (2, None))
+        # CONTROL: the same exit before the move is proven still counts
+        r2 = rec(phase="RELAUNCHED", sub="UNPROMPTED")
+        settle.settle_exit(
+            r2, actuator("B"), 1, "!! RECYCLE FAILED — never engaged", 5.0
+        )
+        self.assertEqual(r2.attempt, 2)
+
     def test_a_held_husk_waits_a_reprobe_instead_of_respawning(self):
         """W5b real canary 3: past PRE-MOVE nothing held the phase table, and a held A-husk was
         re-derived and re-spawned every ~4 s — 181 spawns, each held."""
