@@ -4,7 +4,8 @@
 #
 # Usage: lr-transplant.sh --sid SID --from CFGDIR --to CFGDIR
 #                         [--task-list ID] [--keep-source] [--force]
-#                         [--phase admit|confirm] [--cause limit|voluntary]
+#                         [--phase admit|confirm|unconfirm|fold-stub|abort]
+#                         [--cause limit|voluntary] [--record-id R] [--watcher-record F]
 #
 # Copies: <slug>/<sid>.jsonl + <slug>/<sid>/ (subagents, workflows, journals)
 #         + tasks/<task-list>/ when given.
@@ -23,11 +24,28 @@
 #   no --phase       the legacy single-shot run. It copies and verifies exactly
 #                    as before and does NOT retire: nothing asserted quiescence.
 #
+# CUSTODY PHASES — each undoes or repairs a confirm, and each runs under the admit's lock:
+#   --phase unconfirm  the source never exited: restore <sid>.jsonl from .handed-off, file the
+#                      target copy as evidence, drop the lock.
+#   --phase fold-stub  a stub <sid>.jsonl reappeared beside .handed-off: append it to both copies.
+#   --phase abort      an unconfirmed move is given up: file the target copy as evidence, drop the lock.
+# Every rename here is link-then-unlink (`ln A B && unlink A`): it can never overwrite B.
+#
+# THE REFUSAL CONTRACT (every refusal added for the custody phases; W3 dispatches on <reason>):
+#   exit 2 · stderr `lr-transplant: REFUSED (<reason>) — <why>` · stdout
+#   {"ok":false,"reason":"<reason>","detail":"<short>","sid":"…"} — and the source is byte-identical.
+#   stub-beside-retired  <sid>.jsonl sits beside <sid>.jsonl.handed-off; a retire would overwrite one
+#   lock-mismatch        no lock, a lock naming another store or record id, or the wrong state for
+#                        this phase (detail says which)
+#   target-held          a live process holds the session, or the target moved on since the confirm
+#   stub-present         unconfirm would restore <sid>.jsonl over a stub that already exists
+#   source-dead          unconfirm restores only for a LIVE source; nobody would write to it
+#
 # Output: one JSON object on stdout.
 # Exit: 0 ok · 2 REFUSED / FATAL (nothing further attempted) · 3 usage.
 set -euo pipefail
 
-SID="" FROM="" TO="" TASK_LIST="" KEEP_SOURCE=0 FORCE=0 PHASE="" CAUSE=""
+SID="" FROM="" TO="" TASK_LIST="" KEEP_SOURCE=0 FORCE=0 PHASE="" CAUSE="" RECORD_ID="" WATCHER_RECORD=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --sid) SID="$2"; shift 2 ;;
@@ -40,13 +58,21 @@ while [[ $# -gt 0 ]]; do
     # the caller mistyping a flag, not this script declining to act on a real request. The pre-existing
     # arg errors below keep their rc 2 — changing them would move a contract nothing asked to move.
     --phase)
-      [[ $# -ge 2 ]] || { echo "lr-transplant: --phase needs a value (admit|confirm)" >&2; exit 3; }
+      [[ $# -ge 2 ]] || { echo "lr-transplant: --phase needs a value (admit|confirm|unconfirm|fold-stub|abort)" >&2; exit 3; }
       PHASE="$2"
       case "$PHASE" in
-        admit|confirm) ;;
-        *) echo "lr-transplant: --phase must be admit or confirm (got '$PHASE')" >&2; exit 3 ;;
+        admit|confirm|unconfirm|fold-stub|abort) ;;
+        *) echo "lr-transplant: --phase must be admit, confirm, unconfirm, fold-stub or abort (got '$PHASE')" >&2; exit 3 ;;
       esac
       shift 2 ;;
+    # The record id names the recovery that owns this move; it lands on the lock beside the actuator
+    # that holds it, so a second actuator can tell its own claim from a live stranger's.
+    --record-id)
+      [[ $# -ge 2 && -n "$2" && "$2" != --* ]] || { echo "lr-transplant: --record-id needs a value" >&2; exit 3; }
+      RECORD_ID="$2"; shift 2 ;;
+    --watcher-record)
+      [[ $# -ge 2 && -n "$2" && "$2" != --* ]] || { echo "lr-transplant: --watcher-record needs a value" >&2; exit 3; }
+      WATCHER_RECORD="$2"; shift 2 ;;
     # A FIELD, never a state token (DEC-3). It is recorded on the lock and the tombstone so an
     # artifact read weeks later says WHY the session moved; nothing in this script branches on it,
     # and no state/klass predicate anywhere may — a new STATE value would fall into klass()'s
@@ -63,6 +89,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ -n "$SID" && -n "$FROM" && -n "$TO" ]] || { echo "lr-transplant: --sid/--from/--to required" >&2; exit 2; }
+[[ -n "$RECORD_ID" ]] || RECORD_ID="${LR_RECORD_ID:-}"
+[[ -n "$WATCHER_RECORD" ]] || WATCHER_RECORD="${HF_WATCHER_RECORD:-}"
+# The actuator this run acts for: the caller, unless it names a longer-lived process that owns it.
+LRT_HOLDER_PID="${LR_HOLDER_PID:-$PPID}"
 
 # OPTIONAL FIELDS, ABSENT WHEN UNASKED — not defaulted. Both fragments carry their own leading comma
 # and are appended immediately before a closing brace, so with neither flag every record this script
@@ -155,6 +185,125 @@ lrt_lock_owner() { # who holds the session NOW: `owner`, falling back to `to` fo
   printf '%s' "$_o"
 }
 
+lrt_refuse() { # $1=reason $2=detail $3=plain why → the frozen refusal contract (header), then exit 2
+  echo "lr-transplant: REFUSED ($1) — $3" >&2
+  printf '{"ok":false,"reason":"%s","detail":"%s","sid":"%s"}\n' "$1" "$2" "$SID"
+  exit 2
+}
+lrt_lstart() { # $1=pid → its start time as `ps` renders it in UTC, trimmed; empty when there is none
+  TZ=UTC LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' || true
+}
+lrt_live() { # $1=pid $2=recorded lstart → rc 0 iff THAT process is alive (an empty lstart judges the pid alone)
+  local _l
+  [[ "$1" =~ ^[0-9]+$ ]] && [[ "$1" -gt 0 ]] || return 1
+  kill -0 "$1" 2>/dev/null || return 1
+  _l="$(printf '%s' "$2" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  [[ -n "$_l" ]] || return 0
+  [[ "$(lrt_lstart "$1")" == "$_l" ]]
+}
+lrt_holders() { # $1=config dir → one `pid<TAB>procStart` row per sessions/*.json naming $SID; malformed skipped
+  python3 - "$1" "$SID" 2>/dev/null <<'PY' || true
+import glob, json, os, sys
+for p in sorted(glob.glob(os.path.join(sys.argv[1], "sessions", "*.json"))):
+    try:
+        with open(p) as fh:
+            d = json.load(fh)
+    except Exception:
+        continue
+    if not isinstance(d, dict) or d.get("sessionId") != sys.argv[2]:
+        continue
+    pid = d.get("pid")
+    pid = str(pid) if isinstance(pid, int) and not isinstance(pid, bool) else (pid if isinstance(pid, str) else "")
+    if not pid.isdigit():
+        continue
+    ps = d.get("procStart")
+    ps = ps.replace("\t", " ").strip() if isinstance(ps, str) else ""
+    # TSV pad at the emitter (tsv-pad-lint): an empty procStart would shift nothing, but `-` says so.
+    print("%s\t%s" % (pid, ps or "-"))
+PY
+}
+lrt_held() { # $1=config dir → rc 0 when a LIVE process holds $SID under it
+  local _p _l
+  while IFS=$'\t' read -r _p _l; do
+    [[ "$_l" != "-" ]] || _l=""
+    lrt_live "$_p" "$_l" && return 0
+  done < <(lrt_holders "$1")
+  return 1
+}
+lrt_lock_json() { # $1=key or key.sub → that scalar off the lock; empty when the lock, the key or a scalar is absent
+  [[ -e "$LOCK" ]] || return 0
+  python3 - "$LOCK" "$1" 2>/dev/null <<'PY' || true
+import json, sys
+try:
+    with open(sys.argv[1]) as fh:
+        d = json.load(fh)
+except Exception:
+    sys.exit(0)
+for k in sys.argv[2].split("."):
+    d = d.get(k) if isinstance(d, dict) else None
+if d is not None and not isinstance(d, (bool, dict, list)):
+    print(d)
+PY
+}
+lrt_holder_json() { # → `,"record_id":R,"holder":{…}` with its own leading comma; empty with no record id
+  [[ -n "$RECORD_ID" ]] || return 0
+  python3 - "$RECORD_ID" "${LR_ATTEMPT:-}" "$LRT_HOLDER_PID" "$(lrt_lstart "$LRT_HOLDER_PID")" \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" <<'PY'
+import json, sys
+rid, att, pid, lst, at = sys.argv[1:6]
+holder = {"record_id": rid, "attempt": int(att) if att.isdigit() else None, "role": "actuator",
+          "pid": int(pid) if pid.isdigit() else None, "lstart": lst, "at": at}
+c = (",", ":")
+sys.stdout.write(',"record_id":%s,"holder":%s' % (json.dumps(rid, ensure_ascii=False),
+                                                   json.dumps(holder, ensure_ascii=False, separators=c)))
+PY
+}
+lrt_link_rename() { # $1=path $2=new path → link-then-unlink; rc 1 with NOTHING changed when $2 exists
+  [[ ! -e "$2" && ! -L "$2" ]] || return 1
+  ln "$1" "$2" 2>/dev/null || return 1
+  unlink "$1"
+}
+lrt_retired() { # → the first <FROM>/projects/*/<sid>.jsonl.handed-off, empty when none
+  local _c
+  for _c in "$FROM"/projects/*/"$SID".jsonl.handed-off; do [[ -f "$_c" ]] && { printf '%s' "$_c"; return 0; }; done
+  return 0
+}
+lrt_stub() { # → the <sid>.jsonl that sits beside a .handed-off in the same slug dir, empty when none
+  local _c
+  for _c in "$FROM"/projects/*/"$SID".jsonl.handed-off; do
+    [[ -f "$_c" && -e "${_c%.handed-off}" ]] && { printf '%s' "${_c%.handed-off}"; return 0; }
+  done
+  return 0
+}
+lrt_assert_lock() { # every custody phase runs under the admit's lock: present, owned by TO, and the caller's
+  local _o _id
+  [[ -e "$LOCK" ]] || lrt_refuse lock-mismatch no-lock "no custody lock at $LOCK; this phase runs only under an admit's lock"
+  _o="$(lrt_lock_owner)"
+  [[ -n "$_o" && "$(lrt_rp "$_o")" == "$(lrt_rp "$TO")" ]] \
+    || lrt_refuse lock-mismatch owner-mismatch "the lock names ${_o:-no owner} as the owner, not $TO"
+  _id="$(lrt_lock_json record_id)"
+  # A legacy lock carries no record id and passes; so does a caller that names none.
+  if [[ -n "$_id" && -n "$RECORD_ID" && "$_id" != "$RECORD_ID" ]]; then
+    lrt_refuse lock-mismatch record-id-mismatch "the lock belongs to record $_id, not $RECORD_ID"
+  fi
+}
+lrt_size() { wc -c < "$1" | tr -d ' '; }
+lrt_sha() { shasum -a 256 "$@" | cut -d' ' -f1; }
+lrt_sha_cat() { cat "$@" | shasum -a 256 | cut -d' ' -f1; }
+# EVIDENCE, NEVER DELETION. The target copy an unconfirm/abort disowns is moved into a directory made
+# fresh for this run, so the `mv` has nothing to overwrite. A tombstone left by an EARLIER cycle at
+# the renamed path is filed there too, so the link-then-unlink rename below always has a free name.
+lrt_file_evidence() { # $1=kind (unconfirmed|aborted) $2=slug $3=tombstone (may be absent) → sets EVIDENCE
+  EVIDENCE="$LOCK_DIR/$SID.$1-$(date -u +%Y%m%dT%H%M%SZ)"
+  mkdir "$EVIDENCE" 2>/dev/null || { EVIDENCE="$EVIDENCE.$$"; mkdir "$EVIDENCE"; }
+  [[ ! -e "$TO/projects/$2/$SID.jsonl" ]] || mv "$TO/projects/$2/$SID.jsonl" "$EVIDENCE/"
+  [[ ! -d "$TO/projects/$2/$SID" ]] || mv "$TO/projects/$2/$SID" "$EVIDENCE/"
+  if [[ -e "$3" ]]; then
+    [[ ! -e "$3.$1" ]] || mv "$3.$1" "$EVIDENCE/"
+    lrt_link_rename "$3" "$3.$1" || { echo "lr-transplant: FATAL — could not rename $3 to $3.$1" >&2; exit 2; }
+  fi
+}
+
 # ══ `--phase confirm` — THE SECOND HALF OF A TWO-PHASE TRANSPLANT (D2) ══════════════════════════
 # THE ASYMMETRY THIS EXISTS FOR. A quota-blocked source cannot append to its transcript after the
 # copy, which is why one `cp -p` plus a sha check has always sufficed. A HEALTHY source appends right
@@ -174,6 +323,11 @@ lrt_lock_owner() { # who holds the session NOW: `owner`, falling back to `to` fo
 #   rc 2  REFUSED / FATAL — sha mismatch after the re-copy, or the source vanished mid-flight
 #   rc 3  usage
 if [[ "$PHASE" == confirm ]]; then
+  # A STUB BESIDE THE RETIRED COPY is a session that kept writing after its retire. Confirming now
+  # would copy the stub over the target and retire it onto `.handed-off`; fold-stub owns that state.
+  CONFIRM_STUB="$(lrt_stub)"
+  [[ -z "$CONFIRM_STUB" ]] || lrt_refuse stub-beside-retired stub-beside-retired \
+    "$CONFIRM_STUB sits beside its .handed-off copy; run --phase fold-stub (or unconfirm) first"
   CONFIRM_HITS=()
   while IFS= read -r line; do [[ -n "$line" ]] && CONFIRM_HITS+=("$line"); done \
     < <(ls "$FROM"/projects/*/"$SID".jsonl 2>/dev/null || true)
@@ -193,13 +347,19 @@ if [[ "$PHASE" == confirm ]]; then
     if [[ -n "$CONFIRM_RETIRED" ]]; then
       CONFIRM_DST=""
       for _c in "$TO"/projects/*/"$SID".jsonl; do [[ -f "$_c" ]] && { CONFIRM_DST="$_c"; break; }; done
-      printf '{"ok":true,"already_confirmed":true,"sid":"%s","target_transcript":"%s","retired_source":"%s","source_retired":1,"source_retired_reason":"confirm","lock":"%s"%s%s}\n' \
-        "$SID" "$CONFIRM_DST" "$CONFIRM_RETIRED" "$LOCK" "$LRT_PHASE_JSON" "$LRT_CAUSE_JSON"
+      printf '{"ok":true,"already_confirmed":true,"sid":"%s","target_transcript":"%s","retired_source":"%s","source_retired":1,"source_retired_reason":"confirm","lock":"%s"%s%s,"confirm_len":%s}\n' \
+        "$SID" "$CONFIRM_DST" "$CONFIRM_RETIRED" "$LOCK" "$LRT_PHASE_JSON" "$LRT_CAUSE_JSON" \
+        "$(lrt_size "$CONFIRM_RETIRED")"
       exit 0
     fi
     echo "lr-transplant: FATAL — --phase confirm found no transcript $SID under $FROM/projects and no retired copy beside it; the source vanished between admit and confirm" >&2
     exit 2
   fi
+  # Only the move THIS lock records may be confirmed — checked after the rc-0 re-run above, which
+  # reports finished work and must keep answering even once the lock has gone. With NO lock and no
+  # record id this is lr-handoff's single-step confirm (--spawn / --close-source never admit), which
+  # stays as it was; a caller naming a record always admitted first, so for it a lock is required.
+  [[ ! -e "$LOCK" && -z "$RECORD_ID" ]] || lrt_assert_lock
   SRC="${CONFIRM_HITS[0]}"
   SRC_DIR=$(dirname "$SRC")
   SLUG=$(basename "$SRC_DIR")
@@ -207,7 +367,8 @@ if [[ "$PHASE" == confirm ]]; then
   DST="$DST_DIR/$SID.jsonl"
   mkdir -p "$DST_DIR"
   # OVERWRITE, deliberately: the whole point of this phase is that the admit-time copy is stale.
-  cp -p "$SRC" "$DST"
+  # An APFS clone first; clonefile refuses an existing DST, and the plain copy then overwrites it.
+  cp -c -p "$SRC" "$DST" 2>/dev/null || cp -p "$SRC" "$DST"
   SESSION_DIR_COPIED=0
   if [[ -d "$SRC_DIR/$SID" ]]; then
     # The session dir grows too — subagent transcripts, workflow journals — and for the same reason.
@@ -227,13 +388,16 @@ if [[ "$PHASE" == confirm ]]; then
     exit 2
   fi
   NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  CONFIRM_LEN="$(lrt_size "$DST")"
   TOMBSTONE="$SRC_DIR/$SID.HANDOFF.json"
-  printf '{"handed_off_to":"%s","target_transcript":"%s","ts":"%s","lock":"%s"%s}\n' \
-    "$TO" "$DST" "$NOW" "$LOCK" "$LRT_CAUSE_JSON" > "$TOMBSTONE"
+  printf '{"handed_off_to":"%s","target_transcript":"%s","ts":"%s","lock":"%s"%s,"confirm_len":%s}\n' \
+    "$TO" "$DST" "$NOW" "$LOCK" "$LRT_CAUSE_JSON" "$CONFIRM_LEN" > "$TOMBSTONE"
   SOURCE_RETIRED=0
   SOURCE_RETIRED_REASON="keep-source"
   if [[ $KEEP_SOURCE -ne 1 ]]; then
-    mv "$SRC" "$SRC.handed-off"
+    # Link-then-unlink: a `.handed-off` that appeared since the check above is never overwritten.
+    lrt_link_rename "$SRC" "$SRC.handed-off" || lrt_refuse stub-beside-retired stub-beside-retired \
+      "$SRC.handed-off already exists; the source was left in place"
     SOURCE_RETIRED=1
     SOURCE_RETIRED_REASON="confirm"
   fi
@@ -250,10 +414,139 @@ if [[ "$PHASE" == confirm ]]; then
   [[ $CONFIRM_HOPS -eq 0 ]] || CONFIRM_HOPS=$((CONFIRM_HOPS-1))
   CONFIRM_TS_FIRST="$(lrt_lock_str ts_first)"
   [[ -n "$CONFIRM_TS_FIRST" ]] || CONFIRM_TS_FIRST="$NOW"
-  printf '{"ok":true,"sid":"%s","slug":"%s","target_transcript":"%s","sha256":"%s","session_dir_copied":%s,"tasks_copied":%s,"source_retired":%s,"source_retired_reason":"%s","lock":"%s","tombstone":"%s","hop":%d,"ts_first":"%s","chain":[%s]%s%s}\n' \
+  printf '{"ok":true,"sid":"%s","slug":"%s","target_transcript":"%s","sha256":"%s","session_dir_copied":%s,"tasks_copied":%s,"source_retired":%s,"source_retired_reason":"%s","lock":"%s","tombstone":"%s","hop":%d,"ts_first":"%s","chain":[%s]%s%s,"confirm_len":%s}\n' \
     "$SID" "$SLUG" "$DST" "$SHA_DST" "$SESSION_DIR_COPIED" "$TASKS_COPIED" "$SOURCE_RETIRED" \
     "$SOURCE_RETIRED_REASON" "$LOCK" "$TOMBSTONE" "$CONFIRM_HOPS" "$CONFIRM_TS_FIRST" \
-    "$CONFIRM_CHAIN_JSON" "$LRT_PHASE_JSON" "$LRT_CAUSE_JSON"
+    "$CONFIRM_CHAIN_JSON" "$LRT_PHASE_JSON" "$LRT_CAUSE_JSON" "$CONFIRM_LEN"
+  exit 0
+fi
+
+# ══ `--phase unconfirm` — THE SOURCE NEVER EXITED ═══════════════════════════════════════════════
+# Confirm retired the source on the promise that `/exit` would follow, and the source is still
+# alive. Put its transcript back where it is writing, and file the target copy as evidence so no
+# second store can resume it. Restores only for a LIVE source with a quiet target: a dead source has
+# nobody to write to the restored path, and a held target is the move having already happened.
+if [[ "$PHASE" == unconfirm ]]; then
+  UC_RETIRED="$(lrt_retired)"
+  if [[ -z "$UC_RETIRED" ]]; then
+    for _c in "$FROM"/projects/*/"$SID".jsonl; do
+      if [[ -f "$_c" && -e "${_c%.jsonl}.HANDOFF.json.unconfirmed" ]]; then
+        printf '{"ok":true,"already_unconfirmed":true,"phase":"unconfirm","sid":"%s","restored":"%s"}\n' "$SID" "$_c"
+        exit 0
+      fi
+    done
+    lrt_refuse lock-mismatch not-retired "no $SID.jsonl.handed-off under $FROM/projects — nothing to unconfirm (an unconfirmed move is given up with --phase abort)"
+  fi
+  UC_SRC="${UC_RETIRED%.handed-off}"
+  [[ ! -e "$UC_SRC" ]] || lrt_refuse stub-present stub-present "$UC_SRC already exists beside its .handed-off copy"
+  lrt_held "$FROM" || lrt_refuse source-dead source-dead "no live process holds $SID under $FROM"
+  ! lrt_held "$TO" || lrt_refuse target-held target-held "a live process holds $SID under $TO"
+  lrt_assert_lock
+  lrt_link_rename "$UC_RETIRED" "$UC_SRC" || lrt_refuse stub-present stub-present "$UC_SRC appeared before the restore"
+  UC_DIR="$(dirname "$UC_SRC")"
+  lrt_file_evidence unconfirmed "$(basename "$UC_DIR")" "$UC_DIR/$SID.HANDOFF.json"
+  rm -f "$LOCK"
+  printf '{"ok":true,"phase":"unconfirm","sid":"%s","restored":"%s","evidence":"%s"}\n' "$SID" "$UC_SRC" "$EVIDENCE"
+  exit 0
+fi
+
+# ══ `--phase fold-stub` — BYTES WRITTEN AFTER THE RETIRE ════════════════════════════════════════
+# A source that wrote once more after confirm re-creates `<sid>.jsonl` holding only that tail. It
+# belongs at the end of BOTH copies, and only while nobody holds either: a live writer would keep
+# growing it under the fold. Folding appends to the retired copy first, so a re-run after a crash
+# recognises retired == target ∥ stub and finishes the target alone.
+if [[ "$PHASE" == fold-stub ]]; then
+  FS_STUB="$(lrt_stub)"
+  if [[ -z "$FS_STUB" ]]; then
+    printf '{"ok":true,"nothing_to_fold":true,"phase":"fold-stub","sid":"%s"}\n' "$SID"
+    exit 0
+  fi
+  if lrt_held "$FROM" || lrt_held "$TO"; then
+    lrt_refuse target-held holder-live "a live process holds $SID; fold only once both stores are quiet"
+  fi
+  lrt_assert_lock
+  FS_R="$FS_STUB.handed-off"
+  FS_T="$TO/projects/$(basename "$(dirname "$FS_STUB")")/$SID.jsonl"
+  [[ -f "$FS_T" ]] || lrt_refuse lock-mismatch target-missing "the lock names $TO but $FS_T is absent"
+  FS_SHA_R="$(lrt_sha "$FS_R")"
+  FS_BYTES="$(lrt_size "$FS_STUB")"
+  # A crash between the second append and the unlink leaves both copies equal AND ending in the
+  # stub's bytes; appending again would duplicate the tail. Transcript lines carry unique uuids, so a
+  # fresh stub never matches the tail it would be appended after.
+  if [[ "$FS_SHA_R" == "$(lrt_sha "$FS_T")" && "$(lrt_size "$FS_R")" -ge "$FS_BYTES" ]] \
+     && [[ "$(tail -c "$FS_BYTES" "$FS_R" | shasum -a 256 | cut -d' ' -f1)" == "$(lrt_sha "$FS_STUB")" ]]; then
+    :
+  elif [[ "$FS_SHA_R" == "$(lrt_sha "$FS_T")" ]]; then
+    cat "$FS_STUB" >> "$FS_R"
+    cat "$FS_STUB" >> "$FS_T"
+  elif [[ "$FS_SHA_R" == "$(lrt_sha_cat "$FS_T" "$FS_STUB")" ]]; then
+    cat "$FS_STUB" >> "$FS_T"
+  else
+    lrt_refuse target-held target-advanced "$FS_T no longer matches the retired copy — a resume wrote to the target"
+  fi
+  FS_SHA="$(lrt_sha "$FS_T")"
+  if [[ "$(lrt_sha "$FS_R")" != "$FS_SHA" ]]; then
+    echo "lr-transplant: FATAL — after the fold the retired copy and the target differ; the stub $FS_STUB was kept" >&2
+    exit 2
+  fi
+  unlink "$FS_STUB"
+  printf '{"ok":true,"phase":"fold-stub","sid":"%s","folded_bytes":%s,"sha256":"%s","confirm_len":%s}\n' \
+    "$SID" "$FS_BYTES" "$FS_SHA" "$(lrt_size "$FS_T")"
+  exit 0
+fi
+
+# ══ `--phase abort` — AN UNCONFIRMED MOVE IS GIVEN UP ═══════════════════════════════════════════
+# The source was never retired, so it stays exactly as it is; only the target copy, the tombstone and
+# the lock are withdrawn. Refused while anything could still be acting on the move: the actuator the
+# lock records (unless that is this caller), a watcher, or a live session on the target.
+if [[ "$PHASE" == abort ]]; then
+  AB_TOMB=""
+  for _c in "$FROM"/projects/*/"$SID".HANDOFF.json; do [[ -f "$_c" ]] && { AB_TOMB="$_c"; break; }; done
+  if [[ ! -e "$LOCK" && -z "$AB_TOMB" ]]; then
+    printf '{"ok":true,"already_aborted":true,"phase":"abort","sid":"%s"}\n' "$SID"
+    exit 0
+  fi
+  [[ -z "$(lrt_retired)" ]] || lrt_refuse lock-mismatch source-retired "the source is retired to .handed-off; run --phase unconfirm first"
+  if [[ -e "$LOCK" ]]; then
+    lrt_assert_lock
+    AB_HPID="$(lrt_lock_json holder.pid)"
+    AB_HLST="$(lrt_lock_json holder.lstart)"
+    if [[ "$AB_HPID" != "$LRT_HOLDER_PID" || "$AB_HLST" != "$(lrt_lstart "$LRT_HOLDER_PID")" ]] \
+       && lrt_live "$AB_HPID" "$AB_HLST"; then
+      lrt_refuse target-held live-actuator "the actuator the lock records (pid $AB_HPID) is still running"
+    fi
+  elif [[ "$(lrt_rp "$(sed -n 's/.*"handed_off_to":"\([^"]*\)".*/\1/p' "$AB_TOMB")")" != "$(lrt_rp "$TO")" ]]; then
+    lrt_refuse lock-mismatch no-lock "no lock, and the tombstone $AB_TOMB does not name $TO"
+  fi
+  if [[ -n "$WATCHER_RECORD" && -f "$WATCHER_RECORD" ]]; then
+    AB_W="$(python3 - "$WATCHER_RECORD" 2>/dev/null <<'PY' || true
+import json, sys
+try:
+    with open(sys.argv[1]) as fh:
+        d = json.load(fh)
+except Exception:
+    sys.exit(0)
+if isinstance(d, dict) and str(d.get("pid", "")).isdigit():
+    print("%s\t%s" % (d["pid"], str(d.get("lstart") or "-").replace("\t", " ")))
+PY
+)"
+    if [[ -n "$AB_W" ]]; then
+      AB_WPID="${AB_W%%$'\t'*}"
+      AB_WLST="${AB_W#*$'\t'}"
+      [[ "$AB_WLST" != "-" ]] || AB_WLST=""
+      ! lrt_live "$AB_WPID" "$AB_WLST" || lrt_refuse target-held live-watcher "the watcher in $WATCHER_RECORD (pid $AB_WPID) is still running"
+    fi
+  fi
+  ! lrt_held "$TO" || lrt_refuse target-held target-held "a live process holds $SID under $TO"
+  AB_SLUG="slug-unknown"
+  if [[ -n "$AB_TOMB" ]]; then
+    AB_SLUG="$(basename "$(dirname "$AB_TOMB")")"
+  else
+    for _c in "$FROM"/projects/*/"$SID".jsonl; do [[ -f "$_c" ]] && { AB_SLUG="$(basename "$(dirname "$_c")")"; break; }; done
+  fi
+  lrt_file_evidence aborted "$AB_SLUG" "$AB_TOMB"
+  rm -f "$LOCK"
+  printf '{"ok":true,"phase":"abort","sid":"%s","evidence":"%s"}\n' "$SID" "$EVIDENCE"
   exit 0
 fi
 
@@ -325,6 +618,26 @@ if [[ $FORCE -ne 1 && -e "$LOCK" && $SECOND_HOP -ne 1 ]]; then
 fi
 if [[ $FORCE -ne 1 ]]; then
   if LRT_DONE="$(lrt_already_done)"; then
+    # A SAME-TARGET retry by ANOTHER record. While the recorded actuator lives it still owns the
+    # move; once it is dead the retry takes the claim over, so the lock names who holds it now. A
+    # legacy lock, a caller with no record id, or the same record id is the plain retry above.
+    LRT_LOCK_ID="$(lrt_lock_json record_id)"
+    if [[ -n "$RECORD_ID" && -n "$LRT_LOCK_ID" && "$LRT_LOCK_ID" != "$RECORD_ID" ]]; then
+      if lrt_live "$(lrt_lock_json holder.pid)" "$(lrt_lock_json holder.lstart)"; then
+        lrt_refuse lock-mismatch live-actuator "record $LRT_LOCK_ID holds this move and its actuator is still running"
+      fi
+      python3 - "$LOCK" "$(lrt_holder_json)" <<'PY'
+import json, os, sys
+lock, frag = sys.argv[1], sys.argv[2]
+with open(lock) as fh:
+    d = json.load(fh)
+d.update(json.loads("{" + frag[1:] + "}"))
+tmp = "%s.tmp.%d" % (lock, os.getpid())
+with open(tmp, "w") as fh:
+    fh.write(json.dumps(d, ensure_ascii=False, separators=(",", ":")) + "\n")
+os.replace(tmp, lock)
+PY
+    fi
     printf '{"ok":true,"already_transplanted":true,"sid":"%s","target_transcript":"%s","lock":"%s","note":"same-target retry — the lock names this target and the copy is present; nothing was moved"%s%s}\n' \
       "$SID" "$LRT_DONE" "$LOCK" "$LRT_PHASE_JSON" "$LRT_CAUSE_JSON"
     exit 0
@@ -472,12 +785,14 @@ while IFS= read -r _line; do
   LRT_HOPS=$((LRT_HOPS+1))
 done <<< "$LRT_CHAIN"
 LRT_HOPS=$((LRT_HOPS-1))
-printf '{"sid":"%s","from":"%s","to":"%s","ts":"%s","pid":%d,"host":"%s","owner":"%s","ts_first":"%s","chain":[%s]%s%s}\n' \
+# The holder fragment is absent without a record id, so an ordinary lock stays byte-identical.
+LRT_HOLDER_JSON="$(lrt_holder_json)"
+printf '{"sid":"%s","from":"%s","to":"%s","ts":"%s","pid":%d,"host":"%s","owner":"%s","ts_first":"%s","chain":[%s]%s%s%s}\n' \
   "$SID" "$FROM" "$TO" "$NOW" "$$" "$(hostname -s)" "$TO" "$LRT_TS_FIRST" "$LRT_CHAIN_JSON" \
-  "$LRT_CUSTODY_JSON" "$LRT_CAUSE_JSON" > "$LOCK"
+  "$LRT_CUSTODY_JSON" "$LRT_CAUSE_JSON" "$LRT_HOLDER_JSON" > "$LOCK"
 
 mkdir -p "$DST_DIR"
-cp -p "$SRC" "$DST"
+cp -c -p "$SRC" "$DST" 2>/dev/null || cp -p "$SRC" "$DST"
 SESSION_DIR_COPIED=0
 if [[ -d "$SRC_DIR/$SID" ]]; then
   rsync -a "$SRC_DIR/$SID/" "$DST_DIR/$SID/"

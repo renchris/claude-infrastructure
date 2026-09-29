@@ -38,6 +38,7 @@ THE CLASSES — every one decided from files, never from a pid, a pane or a cloc
               copy is real. NEVER auto-expires; `release` accepts it (the operator's assertion).
   CUSTODY     the successor has run (written since the move) or the source is retired/absent. This
               is the lock doing its job. NEVER expires; `release` refuses without --force.
+              Also a stub `<sid>.jsonl` beside `<sid>.jsonl.handed-off` in the source store, ahead of ORPHAN.
   SPLIT       both copies were written since the move — the split brain the lock exists to prevent
               actually happened. NEVER expires; `release` refuses without --force: the lock is the
               evidence, and it names both stores.
@@ -121,6 +122,13 @@ def mtime(path):
         return None
 
 
+def stub_beside_retired(store: object, sid: str) -> bool:
+    """True when one slug dir of `store` holds both <sid>.jsonl and <sid>.jsonl.handed-off."""
+    if not isinstance(store, str) or not store:
+        return False
+    return any(os.path.isfile(p[:-len(".handed-off")]) for p in transcripts(store, sid, ".jsonl.handed-off"))
+
+
 def read_lock(path):
     try:
         with open(path, encoding="utf-8") as fh:
@@ -150,6 +158,11 @@ def classify(path):
                 "age": (NOW - ts) if ts is not None else None})
     if not owner or not isinstance(owner, str):
         row.update({"class": "UNPARSEABLE", "why": "names no owner — refusing to guess where %s went" % sid})
+        return row
+    # A session wrote again after its retire: which copy is whole is unresolved until fold-stub runs,
+    # so no age and no successor state may expire this lock.
+    if stub_beside_retired(rec.get("from"), sid):
+        row.update({"class": "CUSTODY", "why": "a stub sits beside the retired transcript — custody is unresolved; never expires"})
         return row
     succ = transcripts(owner, sid)
     if not succ:
