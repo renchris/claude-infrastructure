@@ -1,0 +1,35 @@
+[canary 18:27:08Z] canary 3: session 40b80c03-9439-4a3c-a793-8d8be963bbc6 in kitty window 1314 on next, cwd /tmp/lr-canary/work/c3-40b80c03
+prime 40b80c03: at rest · transcript ~/.claude-next/projects/-private-tmp-lr-canary-work-c3-40b80c03/40b80c03-9439-4a3c-a793-8d8be963bbc6.jsonl
+seeded ~/.reso/limit-recover/recon-canary/facts/next.5h.json resets_at=1790713638 (canary scope)
+[canary 18:27:15Z] canary daemon supervisor pid 1608 · LR_RECON_CANARY=b742e38b-dc80-468b-8791-b0be3046908c,97e01e47-0867-4fec-af44-86d6030465f7,29596290-2a1d-4e8d-9d36-3c99884e29f4,40b80c03-9439-4a3c-a793-8d8be963bbc6 · root ~/.reso/limit-recover/recon-canary
+[   0s] 40b80c03 None/None attempt=None target=None
+[   2s] 40b80c03 PRE-MOVE/PLANNED attempt=1 target=next4
+[  10s] 40b80c03 EXITING/None attempt=1 target=next4
+[  18s] 40b80c03 PRE-MOVE/IN-FLIGHT attempt=1 target=next4
+[  20s] 40b80c03 EXITED/None attempt=2 target=next4
+[  24s] 40b80c03 PRE-MOVE/IN-FLIGHT attempt=2 target=next4
+[ 242s] 40b80c03 EXITED/None attempt=3 target=next4
+[ 256s] 40b80c03 PRE-MOVE/IN-FLIGHT attempt=3 target=next4
+[ 477s] 40b80c03 EXITED/None attempt=4 target=next4
+Terminated: 15             python3 "$HERE/canary_lib.py" drive "$D" "$CR" "$SID" "$N" "${LR_CANARY_TIMEOUT:-1200}"
+
+$ cc-lr status --cohort next-5h-1790713638 --root ~/.reso/limit-recover/recon-canary
+cohort next-5h-1790713638  next 5h  1 escalated
+DoD: CLOSED 0/1 (ENGAGED 0, MOVED 0) · HOLD named 0/1 (draft 0, bgwork 0) · REPLACED-NEW-WINDOW 0 · NOT_NEEDED 0 · double-typer 0 · split-brain 0 · lost-records 0 · unowned-non-terminal 1
+  40b80c03  pane 73832:1314  EXITED  age 850s  attempt 4  err DETERMINISTIC  next: recover by hand, or cc-lr cohort refire 40b80c03  eta -
+
+canary 3 40b80c03: outcome=None via=None attempt=4 seen=PRE-MOVE,DETECTED,PLANNED,EXITING,IN-FLIGHT,EXITED,BACKOFF
+  transcript now: ~/.claude-quaternary/projects/-private-tmp-lr-canary-work-c3-40b80c03/40b80c03-9439-4a3c-a793-8d8be963bbc6.jsonl
+  launch.log rows for sid: 3 · move spawns per attempt {'1': 1, '2': 1, '3': 1} · lock takers per attempt {}
+  ✗ terminal CLOSED
+  ✓ cross-account (next → next4)
+  ✗ same window (record)
+  ✗ same uuid (record)
+  ✗ registry: window 1314 holds sid 40b80c03
+  ✗ registry: account is the target's config dir
+  ✓ double-typer 0
+hook log:
+1790706451 before-relaunch 40b80c03-9439-4a3c-a793-8d8be963bbc6: SIGKILL watcher pid 9518
+pages (canary log, not an inbox): 17
+[canary 18:41:27Z] canary daemon stopped (canary.on stays until --teardown)
+exit=1

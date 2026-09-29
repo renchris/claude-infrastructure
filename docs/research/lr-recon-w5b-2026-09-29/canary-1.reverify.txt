@@ -1,0 +1,10 @@
+canary 1 97e01e47: outcome=CLOSED via=MOVED attempt=1 seen=PRE-MOVE,DETECTED,PLANNED,TRANSPLANTED,EXITING,IN-FLIGHT,RELAUNCHED,UNPROMPTED,MOVED
+  transcript now: ~/.claude-quaternary/projects/-private-tmp-lr-canary-work-c1-97e01e47/97e01e47-0867-4fec-af44-86d6030465f7.jsonl
+  launch.log rows for sid: 2 · move spawns per attempt {'1': 1} · lock takers per attempt {'1': 1}
+  ✓ terminal CLOSED
+  ✓ cross-account (next → next4)
+  ✓ same window (record)
+  ✓ same uuid (record)
+  ✓ registry: window 1312 holds sid 97e01e47
+  ✓ registry: account is the target's config dir
+  ✓ double-typer 0

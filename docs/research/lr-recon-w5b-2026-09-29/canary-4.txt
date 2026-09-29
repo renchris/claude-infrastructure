@@ -1,0 +1,33 @@
+[canary 19:17:24Z] canary 4: session 7ff7c958-3c97-4ef3-bc38-8e4cd4546c25 in kitty window 1321 on next, cwd /tmp/lr-canary/work/c4-7ff7c958
+prime 7ff7c958: at rest · transcript ~/.claude-next/projects/-private-tmp-lr-canary-work-c4-7ff7c958/7ff7c958-3c97-4ef3-bc38-8e4cd4546c25.jsonl
+seeded ~/.reso/limit-recover/recon-canary/facts/next.5h.json resets_at=1790716656 (canary scope)
+[canary 19:17:32Z] canary daemon supervisor pid 6224 · LR_RECON_CANARY=b742e38b-dc80-468b-8791-b0be3046908c,97e01e47-0867-4fec-af44-86d6030465f7,29596290-2a1d-4e8d-9d36-3c99884e29f4,da0f282f-dd70-4eb5-9e61-e9a201d7c947,7ff7c958-3c97-4ef3-bc38-8e4cd4546c25 · root ~/.reso/limit-recover/recon-canary
+[   0s] 7ff7c958 None/None attempt=None target=None
+[   2s] 7ff7c958 PRE-MOVE/PLANNED attempt=1 target=next4
+[   4s] canary 4: SIGKILL reconciler pid 6227 mid-cohort (A spawned 5s ago)
+[  16s] 7ff7c958 PRE-MOVE/IN-FLIGHT attempt=1 target=next4
+[  24s] 7ff7c958 RELAUNCHED/UNPROMPTED attempt=1 target=next4
+[  38s] 7ff7c958 MOVED/None attempt=1 target=next4
+[ 340s] 7ff7c958 terminal {'outcome': 'CLOSED', 'proof': 'row6:READY', 'at': 1790709791.0624168}
+
+$ cc-lr status --cohort next-5h-1790716656 --root ~/.reso/limit-recover/recon-canary
+cohort next-5h-1790716656  next 5h  1 done
+DoD: CLOSED 1/1 (ENGAGED 0, MOVED 1) · HOLD named 0/1 (draft 0, bgwork 0) · REPLACED-NEW-WINDOW 0 · NOT_NEEDED 0 · double-typer 0 · split-brain 0 · lost-records 0 · unowned-non-terminal 0
+  7ff7c958  pane 73832:1321  MOVED  age 338s  attempt 1  err -  next: none  eta -
+
+canary 4 7ff7c958: outcome=CLOSED via=MOVED attempt=1 seen=PRE-MOVE,DETECTED,IN-FLIGHT,RELAUNCHED,UNPROMPTED,MOVED
+  transcript now: ~/.claude-quaternary/projects/-private-tmp-lr-canary-work-c4-7ff7c958/7ff7c958-3c97-4ef3-bc38-8e4cd4546c25.jsonl
+  launch.log rows for sid: 2 · move spawns per attempt {'1': 1} · lock takers per attempt {'1': 1}
+  ✓ terminal CLOSED
+  ✓ cross-account (next → next4)
+  ✓ same window (record)
+  ✓ same uuid (record)
+  ✓ registry: window 1321 holds sid 7ff7c958
+  ✓ registry: account is the target's config dir
+  ✓ double-typer 0
+hook log:
+pages (canary log, not an inbox): 46
+supervisor:
+1790709456 daemon exited; restart in 10 s
+[canary 19:23:14Z] canary daemon stopped (canary.on stays until --teardown)
+exit=0

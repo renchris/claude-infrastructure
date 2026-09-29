@@ -1,0 +1,35 @@
+[canary 18:59:04Z] canary 3: session 2729a080-d7d5-49a1-8b75-597e76773cc2 in kitty window 1317 on next, cwd /tmp/lr-canary/work/c3-2729a080
+prime 2729a080: at rest · transcript ~/.claude-next/projects/-private-tmp-lr-canary-work-c3-2729a080/2729a080-d7d5-49a1-8b75-597e76773cc2.jsonl
+seeded ~/.reso/limit-recover/recon-canary/facts/next.5h.json resets_at=1790715553 (canary scope)
+[canary 18:59:10Z] canary daemon supervisor pid 48383 · LR_RECON_CANARY=b742e38b-dc80-468b-8791-b0be3046908c,97e01e47-0867-4fec-af44-86d6030465f7,29596290-2a1d-4e8d-9d36-3c99884e29f4,da0f282f-dd70-4eb5-9e61-e9a201d7c947,2729a080-d7d5-49a1-8b75-597e76773cc2 · root ~/.reso/limit-recover/recon-canary
+[   0s] 2729a080 None/None attempt=None target=None
+[   2s] 2729a080 PRE-MOVE/PLANNED attempt=1 target=next4
+[  10s] 2729a080 TRANSPLANTED/None attempt=1 target=next4
+[  12s] 2729a080 EXITING/None attempt=1 target=next4
+[  16s] 2729a080 EXITED/None attempt=2 target=next4
+[  20s] 2729a080 PRE-MOVE/IN-FLIGHT attempt=2 target=next4
+[  28s] 2729a080 RELAUNCHED/UNPROMPTED attempt=2 target=next4
+[  46s] 2729a080 MOVED/None attempt=2 target=next4
+[ 230s] 2729a080 RELAUNCHED/UNPROMPTED attempt=3 target=next4
+Terminated: 15             python3 "$HERE/canary_lib.py" drive "$D" "$CR" "$SID" "$N" "${LR_CANARY_TIMEOUT:-1200}"
+
+$ cc-lr status --cohort next-5h-1790715553 --root ~/.reso/limit-recover/recon-canary
+cohort next-5h-1790715553  next 5h  1 moving
+DoD: CLOSED 0/1 (ENGAGED 0, MOVED 0) · HOLD named 0/1 (draft 0, bgwork 0) · REPLACED-NEW-WINDOW 0 · NOT_NEEDED 0 · double-typer 0 · split-brain 0 · lost-records 0 · unowned-non-terminal 0
+  2729a080  pane 73832:1317  RELAUNCHED/UNPROMPTED  age 715s  attempt 3  err DETERMINISTIC  next: the reconciler continues (relaunched)  eta -
+
+canary 3 2729a080: outcome=None via=MOVED attempt=3 seen=PRE-MOVE,DETECTED,PLANNED,TRANSPLANTED,EXITING,IN-FLIGHT,EXITED,RELAUNCHED,UNPROMPTED,MOVED
+  transcript now: ~/.claude-quaternary/projects/-private-tmp-lr-canary-work-c3-2729a080/2729a080-d7d5-49a1-8b75-597e76773cc2.jsonl
+  launch.log rows for sid: 3 · move spawns per attempt {'1': 1, '2': 1} · lock takers per attempt {'2': 1}
+  ✗ terminal CLOSED
+  ✓ cross-account (next → next4)
+  ✓ same window (record)
+  ✓ same uuid (record)
+  ✓ registry: window 1317 holds sid 2729a080
+  ✓ registry: account is the target's config dir
+  ✓ double-typer 0
+hook log:
+1790708365 before-relaunch 2729a080-d7d5-49a1-8b75-597e76773cc2: SIGKILL watcher pid 55482
+pages (canary log, not an inbox): 31
+[canary 19:11:08Z] canary daemon stopped (canary.on stays until --teardown)
+exit=1

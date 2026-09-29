@@ -1,0 +1,26 @@
+[canary 18:06:36Z] canary 1: session b742e38b-dc80-468b-8791-b0be3046908c in kitty window 1311 on next, cwd /tmp/lr-canary/work/c1-b742e38b
+prime b742e38b: at rest · transcript ~/.claude-next/projects/-private-tmp-lr-canary-work-c1-b742e38b/b742e38b-dc80-468b-8791-b0be3046908c.jsonl
+seeded ~/.reso/limit-recover/recon-canary/facts/next.5h.json resets_at=1790712407 (canary scope)
+[canary 18:06:46Z] canary daemon supervisor pid 13111 · LR_RECON_CANARY=b742e38b-dc80-468b-8791-b0be3046908c · root ~/.reso/limit-recover/recon-canary
+[   0s] b742e38b None/None attempt=None target=None
+[   2s] b742e38b PRE-MOVE/PLANNED attempt=1 target=next4
+Terminated: 15             python3 "$HERE/canary_lib.py" drive "$D" "$CR" "$SID" "$N" "${LR_CANARY_TIMEOUT:-1200}"
+
+$ cc-lr status --cohort next-5h-1790712407 --root ~/.reso/limit-recover/recon-canary
+cohort next-5h-1790712407  next 5h  1 escalated
+DoD: CLOSED 0/1 (ENGAGED 0, MOVED 0) · HOLD named 0/1 (draft 0, bgwork 0) · REPLACED-NEW-WINDOW 0 · NOT_NEEDED 0 · double-typer 0 · split-brain 0 · lost-records 0 · unowned-non-terminal 0
+  b742e38b  pane 73832:1311  PRE-MOVE/PLANNED  age 281s  attempt 3  err DETERMINISTIC  next: recover by hand, or cc-lr cohort refire b742e38b  eta -
+
+canary 1 b742e38b: outcome=None via=None attempt=3 seen=PRE-MOVE,DETECTED,BACKOFF,PLANNED
+  transcript now: ~/.claude-next/projects/-private-tmp-lr-canary-work-c1-b742e38b/b742e38b-dc80-468b-8791-b0be3046908c.jsonl
+  launch.log rows for sid: 2 · move spawns per attempt {'1': 1, '2': 1} · lock takers per attempt {}
+  ✗ terminal CLOSED
+  ✓ cross-account (next → next4)
+  ✗ same window (record)
+  ✗ same uuid (record)
+  ✓ registry: window 1311 holds sid b742e38b
+  ✗ registry: account is the target's config dir
+  ✓ double-typer 0
+pages (canary log, not an inbox): 2
+[canary 18:11:33Z] canary daemon stopped (canary.on stays until --teardown)
+exit=1

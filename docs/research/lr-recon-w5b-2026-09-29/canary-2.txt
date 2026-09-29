@@ -1,0 +1,37 @@
+[canary 18:18:40Z] canary 2: session 29596290-2a1d-4e8d-9d36-3c99884e29f4 in kitty window 1313 on next, cwd /tmp/lr-canary/work/c2-29596290
+prime 29596290: at rest · transcript ~/.claude-next/projects/-private-tmp-lr-canary-work-c2-29596290/29596290-2a1d-4e8d-9d36-3c99884e29f4.jsonl
+seeded ~/.reso/limit-recover/recon-canary/facts/next.5h.json resets_at=1790713130 (canary scope)
+[canary 18:18:48Z] canary daemon supervisor pid 53630 · LR_RECON_CANARY=b742e38b-dc80-468b-8791-b0be3046908c,97e01e47-0867-4fec-af44-86d6030465f7,29596290-2a1d-4e8d-9d36-3c99884e29f4 · root ~/.reso/limit-recover/recon-canary
+[   0s] 29596290 None/None attempt=None target=None
+[   2s] 29596290 PRE-MOVE/PLANNED attempt=1 target=next2
+[  10s] 29596290 TRANSPLANTED/None attempt=1 target=next2
+[  14s] 29596290 PRE-MOVE/None attempt=2 target=next2
+[  18s] 29596290 PRE-MOVE/HOLD-DRAFT attempt=3 target=next2
+[  38s] canary 2: draft cleared from the composer (was 'canary draft 1790705938')
+[ 138s] 29596290 PRE-MOVE/PLANNED attempt=3 target=next3
+[ 146s] 29596290 EXITING/None attempt=3 target=next3
+[ 156s] 29596290 PRE-MOVE/IN-FLIGHT attempt=3 target=next3
+[ 168s] 29596290 RELAUNCHED/UNPROMPTED attempt=3 target=next3
+[ 182s] 29596290 MOVED/None attempt=3 target=next3
+[ 483s] 29596290 terminal {'outcome': 'CLOSED', 'proof': 'row6:READY', 'at': 1790706410.4510562}
+
+$ cc-lr status --cohort next-5h-1790713130 --root ~/.reso/limit-recover/recon-canary
+cohort next-5h-1790713130  next 5h  1 done
+DoD: CLOSED 1/1 (ENGAGED 0, MOVED 1) · HOLD named 0/1 (draft 0, bgwork 0) · REPLACED-NEW-WINDOW 0 · NOT_NEEDED 0 · double-typer 0 · split-brain 0 · lost-records 0 · unowned-non-terminal 0
+  29596290  pane 73832:1313  MOVED  age 481s  attempt 3  err -  next: none  eta -
+
+canary 2 29596290: outcome=CLOSED via=MOVED attempt=3 seen=PRE-MOVE,DETECTED,PLANNED,TRANSPLANTED,HOLD-DRAFT,EXITING,IN-FLIGHT,RELAUNCHED,UNPROMPTED,MOVED
+  transcript now: ~/.claude-tertiary/projects/-private-tmp-lr-canary-work-c2-29596290/29596290-2a1d-4e8d-9d36-3c99884e29f4.jsonl
+  launch.log rows for sid: 3 · move spawns per attempt {'1': 1, '3': 1} · lock takers per attempt {'3': 1}
+  ✓ terminal CLOSED
+  ✓ cross-account (next → next3)
+  ✓ same window (record)
+  ✓ same uuid (record)
+  ✓ registry: window 1313 holds sid 29596290
+  ✓ registry: account is the target's config dir
+  ✓ double-typer 0
+hook log:
+1790705940 after-confirm 29596290-2a1d-4e8d-9d36-3c99884e29f4: draft typed into window 1313
+pages (canary log, not an inbox): 11
+[canary 18:26:52Z] canary daemon stopped (canary.on stays until --teardown)
+exit=0

@@ -1,0 +1,31 @@
+[canary 18:11:45Z] canary 1: session 97e01e47-0867-4fec-af44-86d6030465f7 in kitty window 1312 on next, cwd /tmp/lr-canary/work/c1-97e01e47
+prime 97e01e47: at rest · transcript ~/.claude-next/projects/-private-tmp-lr-canary-work-c1-97e01e47/97e01e47-0867-4fec-af44-86d6030465f7.jsonl
+seeded ~/.reso/limit-recover/recon-canary/facts/next.5h.json resets_at=1790712718 (canary scope)
+[canary 18:11:57Z] canary daemon supervisor pid 51652 · LR_RECON_CANARY=b742e38b-dc80-468b-8791-b0be3046908c,97e01e47-0867-4fec-af44-86d6030465f7 · root ~/.reso/limit-recover/recon-canary
+[   0s] 97e01e47 None/None attempt=None target=None
+[   2s] 97e01e47 PRE-MOVE/PLANNED attempt=1 target=next4
+[  10s] 97e01e47 TRANSPLANTED/None attempt=1 target=next4
+[  14s] 97e01e47 EXITING/None attempt=1 target=next4
+[  16s] 97e01e47 PRE-MOVE/IN-FLIGHT attempt=1 target=next4
+[  28s] 97e01e47 RELAUNCHED/UNPROMPTED attempt=1 target=next4
+[  46s] 97e01e47 MOVED/None attempt=1 target=next4
+[ 348s] 97e01e47 terminal {'outcome': 'CLOSED', 'proof': 'row6:READY', 'at': 1790705864.297428}
+
+$ cc-lr status --cohort next-5h-1790712718 --root ~/.reso/limit-recover/recon-canary
+cohort next-5h-1790712718  next 5h  1 done
+DoD: CLOSED 1/1 (ENGAGED 0, MOVED 1) · HOLD named 0/1 (draft 0, bgwork 0) · REPLACED-NEW-WINDOW 0 · NOT_NEEDED 0 · double-typer 0 · split-brain 0 · lost-records 0 · unowned-non-terminal 0
+  97e01e47  pane 73832:1312  MOVED  age 346s  attempt 1  err -  next: none  eta -
+
+canary 1 97e01e47: outcome=CLOSED via=MOVED attempt=1 seen=PRE-MOVE,DETECTED,PLANNED,TRANSPLANTED,EXITING,IN-FLIGHT,RELAUNCHED,UNPROMPTED,MOVED
+  transcript now: ~/.claude-quaternary/projects/-private-tmp-lr-canary-work-c1-97e01e47/97e01e47-0867-4fec-af44-86d6030465f7.jsonl
+  launch.log rows for sid: 1 · move spawns per attempt {'1': 1} · lock takers per attempt {}
+  ✓ terminal CLOSED
+  ✓ cross-account (next → next4)
+  ✓ same window (record)
+  ✓ same uuid (record)
+  ✓ registry: window 1312 holds sid 97e01e47
+  ✓ registry: account is the target's config dir
+  ✓ double-typer 0
+pages (canary log, not an inbox): 6
+[canary 18:17:47Z] canary daemon stopped (canary.on stays until --teardown)
+exit=0

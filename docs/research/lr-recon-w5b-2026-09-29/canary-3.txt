@@ -1,0 +1,34 @@
+[canary 19:11:16Z] canary 3: session c97525a2-7b47-443e-80f0-1aea42a1d27f in kitty window 1318 on next, cwd /tmp/lr-canary/work/c3-c97525a2
+prime c97525a2: at rest · transcript ~/.claude-next/projects/-private-tmp-lr-canary-work-c3-c97525a2/c97525a2-7b47-443e-80f0-1aea42a1d27f.jsonl
+seeded ~/.reso/limit-recover/recon-canary/facts/next.5h.json resets_at=1790716284 (canary scope)
+[canary 19:11:21Z] canary daemon supervisor pid 84353 · LR_RECON_CANARY=b742e38b-dc80-468b-8791-b0be3046908c,97e01e47-0867-4fec-af44-86d6030465f7,29596290-2a1d-4e8d-9d36-3c99884e29f4,da0f282f-dd70-4eb5-9e61-e9a201d7c947,c97525a2-7b47-443e-80f0-1aea42a1d27f · root ~/.reso/limit-recover/recon-canary
+[   0s] c97525a2 None/None attempt=None target=None
+[   2s] c97525a2 PRE-MOVE/PLANNED attempt=1 target=next2
+[  10s] c97525a2 EXITING/None attempt=1 target=next2
+[  14s] c97525a2 PRE-MOVE/IN-FLIGHT attempt=1 target=next2
+[  16s] c97525a2 EXITED/None attempt=2 target=next2
+[  20s] c97525a2 PRE-MOVE/IN-FLIGHT attempt=2 target=next2
+[  28s] c97525a2 RELAUNCHED/UNPROMPTED attempt=2 target=next2
+[  46s] c97525a2 MOVED/None attempt=2 target=next2
+[ 348s] c97525a2 terminal {'outcome': 'CLOSED', 'proof': 'row6:READY', 'at': 1790709428.704566}
+
+$ cc-lr status --cohort next-5h-1790716284 --root ~/.reso/limit-recover/recon-canary
+cohort next-5h-1790716284  next 5h  1 done
+DoD: CLOSED 1/1 (ENGAGED 0, MOVED 1) · HOLD named 0/1 (draft 0, bgwork 0) · REPLACED-NEW-WINDOW 0 · NOT_NEEDED 0 · double-typer 0 · split-brain 0 · lost-records 0 · unowned-non-terminal 0
+  c97525a2  pane 73832:1318  MOVED  age 346s  attempt 2  err -  next: none  eta -
+
+canary 3 c97525a2: outcome=CLOSED via=MOVED attempt=2 seen=PRE-MOVE,DETECTED,PLANNED,EXITING,IN-FLIGHT,EXITED,RELAUNCHED,UNPROMPTED,MOVED
+  transcript now: ~/.claude-secondary/projects/-private-tmp-lr-canary-work-c3-c97525a2/c97525a2-7b47-443e-80f0-1aea42a1d27f.jsonl
+  launch.log rows for sid: 3 · move spawns per attempt {'1': 1, '2': 1} · lock takers per attempt {'2': 1}
+  ✓ terminal CLOSED
+  ✓ cross-account (next → next2)
+  ✓ same window (record)
+  ✓ same uuid (record)
+  ✓ registry: window 1318 holds sid c97525a2
+  ✓ registry: account is the target's config dir
+  ✓ double-typer 0
+hook log:
+1790709096 before-relaunch c97525a2-7b47-443e-80f0-1aea42a1d27f: SIGKILL watcher pid 87755
+pages (canary log, not an inbox): 38
+[canary 19:17:11Z] canary daemon stopped (canary.on stays until --teardown)
+exit=0
