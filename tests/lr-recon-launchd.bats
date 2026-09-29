@@ -36,9 +36,9 @@ SH
 @test "dry run lints all three plists, changes nothing, exits 0" {
   run bash "$SUT"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"plutil -lint: 3 SSOT plists"* ]]
-  [[ "$output" == *"would: com.reso.lr-reconciler-rig (not loaded"* ]]
-  ! grep -q bootstrap "$FAKE_LOG" 2>/dev/null
+  [[ "$output" == *"plutil -lint: 3 SSOT plists"* ]] || false
+  [[ "$output" == *"would: com.reso.lr-reconciler-rig (not loaded"* ]] || false
+  ! grep -q bootstrap "$FAKE_LOG" 2>/dev/null || false
   [ ! -d "$LR_LAUNCHD_AGENTS_DIR" ]
 }
 
@@ -53,16 +53,16 @@ SH
 @test "apply installs and bootstraps rig, reconciler, watchdog in that order and verifies" {
   run bash "$SUT" --confirm lr-reconciler
   [ "$status" -eq 0 ]
-  [[ "$output" == *"verdict=ok"* ]]
+  [[ "$output" == *"verdict=ok"* ]] || false
   run grep -o 'bootstrap gui/[0-9]* .*/com.reso.lr-reconciler[a-z-]*.plist' "$FAKE_LOG"
   [ "${#lines[@]}" -eq 3 ]
-  [[ "${lines[0]}" == *lr-reconciler-rig.plist ]]
-  [[ "${lines[1]}" == *lr-reconciler.plist ]]
-  [[ "${lines[2]}" == *lr-reconciler-watchdog.plist ]]
+  [[ "${lines[0]}" == *lr-reconciler-rig.plist ]] || false
+  [[ "${lines[1]}" == *lr-reconciler.plist ]] || false
+  [[ "${lines[2]}" == *lr-reconciler-watchdog.plist ]] || false
   for l in com.reso.lr-reconciler-rig com.reso.lr-reconciler com.reso.lr-reconciler-watchdog; do
     cmp -s "$BATS_TEST_DIRNAME/../scripts/limit-recover/$l.plist" "$LR_LAUNCHD_AGENTS_DIR/$l.plist"
   done
-  [ -d "$LR_STATE_DIR/recon" ] && [ -d /tmp/lr-rig/state ]
+  [ -d "$LR_STATE_DIR/recon" ] && [ -d /tmp/lr-rig/state ] || false
   [ ! -e "$LR_STATE_DIR/recon.on" ]   # never writes the cutover file
 }
 

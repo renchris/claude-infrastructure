@@ -533,7 +533,8 @@ LIMIT_REC='"isApiErrorMessage":true,"error":"rate_limit","apiErrorStatus":429,"m
   local fix="$REPO/tests/fixtures/lr-recon/jsonl" f="$TARGET_CFG/projects/$SLUG/$SESS.jsonl"
   sed 's/"timestamp":"[^"]*"/"timestamp":"2026-09-09T01:05:00.000Z"/' "$fix/authentication-failed.jsonl" > "$f"
   run resume_target_error "$TARGET_CFG" "$SESS" "2026-09-09T01:04:00"
-  [ "$status" -eq 0 ] && [ "$output" = authentication_failed ] || { echo "status=$status $output"; false; }
+  [ "$status" -eq 0 ] || { echo "status=$status $output"; false; }
+  [ "$output" = authentication_failed ] || { echo "status=$status $output"; false; }
   sed 's/"timestamp":"[^"]*"/"timestamp":"2026-09-09T01:05:00.000Z"/' "$fix/api-error-529.jsonl" > "$f"
   run resume_target_error "$TARGET_CFG" "$SESS" "2026-09-09T01:04:00"
   [ "$status" -eq 1 ] || { echo "status=$status $output"; false; }
