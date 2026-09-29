@@ -6681,6 +6681,11 @@ def main():
                               creds and creds.get("refreshTokenExpiresAt"))}, indent=2))
         return
 
+    # FLEET_V2 C5: batch recovery placement. Cache-only by construction (cmd_place reads with
+    # max_wait 0), so it is dispatched before the get_data anchor below and can never sweep.
+    if "--place" in args:
+        sys.exit(cmd_place(args, cfg))
+
     # M7: record a fire-time assignment and exit — a WRITE, deliberately dispatched BEFORE the
     # get_data anchor below so telling the router about a fire can never itself trigger a sweep
     # (the caller is handoff-fire mid-launch; a 90s sweep here would sit inside every fire).
