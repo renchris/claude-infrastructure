@@ -74,6 +74,22 @@ class Exits(unittest.TestCase):
         self.assertTrue(settle.reprobe(r, 100.0 + settle.REPROBE_S))
         self.assertEqual((r.substate, r.wait), ("DETECTED", None))
 
+    def test_a_held_husk_waits_a_reprobe_instead_of_respawning(self):
+        """W5b real canary 3: past PRE-MOVE nothing held the phase table, and a held A-husk was
+        re-derived and re-spawned every ~4 s — 181 spawns, each held."""
+        r = rec(phase="HUSK-RETIRED", sub="stub")
+        held = (
+            "!! recycle ABORTED before /exit (held: bg-work): HELD:mid-turn — /exit NOT "
+            "submitted, watcher disarmed, pane lock released, unconfirm rc n/a. The session "
+            "stays alive.\n"
+        )
+        d = settle.settle_exit(r, actuator("A-husk"), 1, held, 100.0)
+        self.assertIn("HOLD", d)
+        self.assertEqual(r.next_eligible_at, 100.0 + settle.REPROBE_S)
+        self.assertEqual(
+            r.phase, "HUSK-RETIRED"
+        )  # the phase stays the table's to derive
+
     def test_a_successful_move_is_never_dispatched_again_in_the_relaunch_gap(self):
         """W5 rig: after A returned 0 the gap (source dead, target not up) derived PRE-MOVE, the
         record still read PLANNED, and a SECOND A ran over the transplanted session."""

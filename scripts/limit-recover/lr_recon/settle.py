@@ -171,6 +171,11 @@ def settle_exit(
         rec.last_error = T.LastError(cls="HOLD", fingerprint=fp, detail=detail, at=now)
         if pre:
             _hold(rec, sub or _hold_substate(text), now)
+        else:
+            # Past PRE-MOVE no hold substate stops the phase table, which re-derived the same
+            # actuator every pass: a held husk re-spawned A-husk every ~4 s (W5b real canary 3,
+            # 181 spawns, each held). A HOLD waits one re-probe before the next try.
+            rec.next_eligible_at = now + REPROBE_S
     elif disp == "WAIT":
         classify.apply_failure(rec, "WAIT", fp, detail, now)
         # Without an eligibility time the next pass re-spawned the actuator every few seconds
