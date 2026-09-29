@@ -25,6 +25,9 @@ Fail-closed: any unhandled exception emits deny.
 
 Audit: appends decision to ~/.reso/curl-audit.jsonl.
 
+An unresolved `$` or backtick in a URL's host or port asks on the main thread and denies in a
+subagent (payload agent_id) — see host_dollar_verdicts(); kill switch CC_CURL_HOST_DOLLAR=off.
+
 Kill switch: env CURL_GATE_DISABLED=1.
 """
 
@@ -1315,8 +1318,13 @@ def expand_token(tok: str, bindings: dict, depth: int = 0) -> list[str] | None:
     return out
 
 
-def expand_argv(argv: list[str], cmd: str) -> list[list[str]]:
+def expand_argv(argv: list[str], cmd: str, partial: bool = False) -> list[list[str]]:
     """The argv variants the command's own bindings allow; [argv] untouched when undecidable.
+
+    `partial=True` keeps every substitution that resolved even when another reference in the same
+    token did not (`https://$h/$p` over a literal `for h` → `https://a.com/$p`). decide() is fed the
+    whole-token form; the partial form feeds only host_dollar_verdicts(), which can tighten a verdict
+    and never loosen one — so it can surface `$` left in an authority without minting a new allow.
 
     A loop binds each name to ONE value per iteration, so a variant picks one value per NAME and
     substitutes it into every token. Crossing token against token instead invented pairings the
@@ -1356,9 +1364,107 @@ def expand_argv(argv: list[str], cmd: str) -> list[list[str]]:
         row = []
         for t in argv:
             s = _REF_RE.sub(sub, t)
-            row.append(t if "$" in s else s)
+            row.append(s if partial or "$" not in s else t)
         variants.append(row)
     return variants
+
+
+# ── An unresolved `$` or backtick in a URL's AUTHORITY (round 4, 2026-09-29) ─────────────────────
+#
+# THE HOLE. decide() judges the host as written, so `curl -s http://$H/latest` read the host as the
+# string `$h`: not internal, not loopback, a GET — an open-read allow, while the shell sent it to
+# wherever $H pointed (`read H <<< 169.254.169.254` is one line earlier in the measured trial). The
+# port is the same hole: a variable glued after host:port may start with `@`, which makes the part
+# before it userinfo and what follows a NEW host (measured: `curl -v "http://127.0.0.1:1@127.0.0.1:9/x"`
+# connects to port 9), so `https://harbour.reso.gl:443$A` passed as an allowlisted host.
+#
+# THE RULE. After same-command literal bindings resolve (partially — one unresolved name no longer
+# abandons the token), a `$` or backtick left in the authority of a URL this gate parsed is one it
+# cannot check: main thread → ask; agent context (payload agent_id) → deny with a reason that names
+# the sanctioned rewrites. A RESOLVED variable in the authority whose value contains `@` or `\`
+# counts too: `p='@127.0.0.1:65432/v'` after `:65431` turns the written host into userinfo, and
+# urlparse and curl disagree on where such an authority ends. A value that merely STARTS the path
+# (`for p in /guests /lists; do curl "https://x.reso.gl$p"`) ends the authority cleanly and the
+# resolved URL is judged by decide() as written, so it is not flagged.
+#
+# OUT OF SCOPE BY RULING: an argument whose WHOLE URL is a variable (`"$u"`, `"$BASE/a"`) is not a
+# URL to parse_argv and keeps its "No URL parsed" ask — a deny there would hit 216 of the 225 such
+# asks in the 45-day corpus (docs/research/hook-ask-confirmations-2026-09-28.md §7).
+#
+# Evidence: /tmp/hookdec6-verdict-91.json (29 trials; the host rule's 9 denies all adapted).
+# Kill switch: CC_CURL_HOST_DOLLAR=off.
+HOST_DOLLAR_AGENT_REASON = (
+    "Refused inside a subagent: the host or port in this URL is a variable the gate cannot check. "
+    "Write scheme://host:port/ literally in the curl command (one curl per host if needed), or loop "
+    'over a literal host list, e.g. for h in a.com b.com; do curl "https://$h/x"; done; a variable '
+    "may only come after the first literal '/', e.g. \"http://example.com/${p#/}\". Do not move the "
+    "request into a script, wget, python or nc."
+)
+_AUTH_SWITCH_CHARS = frozenset("@\\")
+_PUNCT_ONLY = frozenset("();<>|&")
+
+
+def url_authority(url: str) -> str:
+    """userinfo@host:port — everything between the scheme's `//` and the first `/`, `?` or `#`."""
+    rest = url.split("://", 1)[1] if "://" in url else url.removeprefix("//")
+    return re.split(r"[/?#]", rest, maxsplit=1)[0]
+
+
+def own_argv(argv: list[str]) -> list[str]:
+    """argv cut at the `)` that closes a group opened BEFORE this curl (`$(curl …) http://$H/x`).
+
+    The lexer emits parentheses as their own punctuation tokens and `)` is not a statement
+    separator, so the walk otherwise ran on into the enclosing command's arguments — the source of
+    all five false denies in the round-4 prototype. A quoted word holding a `(` is not counted.
+    """
+    depth = 0
+    for i, t in enumerate(argv):
+        if t and set(t) <= _PUNCT_ONLY:
+            depth += t.count("(") - t.count(")")
+            if depth < 0:
+                return argv[:i]
+    return argv
+
+
+def host_dollar_verdicts(
+    argv: list[str], cmd: str, agent: bool
+) -> list[tuple[str, str]]:
+    """Tighten-only verdicts for one raw curl argv: unresolvable authority, or a deny that only the
+    partial substitution exposes (`for h in 169.254.169.254; do curl "http://$h/$p"`)."""
+    a = own_argv(argv)
+    if not any("$" in t or "`" in t for t in a) or info_only(a):
+        return []
+    if any(_ZSH_POSTPARAM_RE.search(t) for t in a):
+        return []  # decide_command() already asks on these
+    out: list[tuple[str, str]] = []
+    bad: str | None = None
+    bindings = shell_bindings(cmd)
+    for u in parse_argv(a, cmd).get("urls") or []:
+        for m in _REF_RE.finditer(url_authority(u)):
+            vals = expand_token(m.group(0), bindings)
+            if vals and any(_AUTH_SWITCH_CHARS & set(v) for v in vals):
+                bad = bad or u
+    for v in expand_argv(a, cmd, partial=True):
+        parsed = parse_argv(v, cmd)
+        for u in parsed.get("urls") or []:
+            auth = url_authority(u)
+            if "$" in auth or "`" in auth:
+                bad = bad or u
+        if v != a:
+            d, r = decide(parsed)
+            if d == "deny":
+                out.append((d, r))
+    if bad:
+        out.append(
+            ("deny", HOST_DOLLAR_AGENT_REASON)
+            if agent
+            else (
+                "ask",
+                f"the host or port in {bad} is a shell variable the gate cannot check — write "
+                "scheme://host:port/ literally, or loop over a literal host list",
+            )
+        )
+    return out
 
 
 # `curl --version`, `curl --help all`, and the bare `curl` that `which curl` leaves behind in the
@@ -1405,8 +1511,12 @@ def curl_invocations_by_segment(cmd: str) -> list[list[str]] | None:
     return found
 
 
-def decide_command(cmd: str) -> tuple[str, str, dict]:
-    """Judge EVERY curl in the command; the strictest verdict wins (deny > ask > allow)."""
+def decide_command(cmd: str, agent: bool = False) -> tuple[str, str, dict]:
+    """Judge EVERY curl in the command; the strictest verdict wins (deny > ask > allow).
+
+    `agent` is True when the payload carries a non-empty agent_id (a subagent's call), where the
+    host-dollar rule denies instead of asking — there is nobody to answer a prompt in there.
+    """
     if _ssrf is None:
         return (
             "deny",
@@ -1484,6 +1594,9 @@ def decide_command(cmd: str) -> tuple[str, str, dict]:
             except ValueError:
                 meta["host"] = None
         verdicts.append((decision, reason))
+    if os.environ.get("CC_CURL_HOST_DOLLAR") != "off":
+        for a in invocations:
+            verdicts.extend(host_dollar_verdicts(a, cmd, agent))
 
     for want in ("deny", "ask"):
         for decision, reason in verdicts:
@@ -1565,7 +1678,9 @@ def main() -> None:
         )
 
     try:
-        decision, reason, meta = decide_command(cmd_trim)
+        decision, reason, meta = decide_command(
+            cmd_trim, agent=bool(payload.get("agent_id"))
+        )
         emit(decision, reason, meta, cmd, session_id, tool_use_id, cwd)
     except Exception:
         # Fail-closed on any error

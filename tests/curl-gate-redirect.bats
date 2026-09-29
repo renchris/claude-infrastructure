@@ -185,9 +185,11 @@ PY
 @test "7 a shell variable in the URL survives the rewrite verbatim" {
   # Re-joining the lexer's tokens would be the natural implementation and a real bug: posix shlex
   # has already stripped the quotes, so "$CHUNK" would come back as '$CHUNK' and stop expanding.
-  # This gate's own localhost arm exists because the model writes http://localhost:3000$CHUNK.
-  run rewritten 'curl -L "http://localhost:3000$CHUNK"'
-  echo "$output" | grep -q -- '"http://localhost:3000$CHUNK"'
+  # The variable sits after the first '/': glued straight onto host:port (localhost:3000$CHUNK) it is
+  # in the authority, where an `@` would switch hosts, and since round 4 that ASKS and is not
+  # rewritten (tests/curl-gate-host-dollar.bats).
+  run rewritten 'curl -L "http://localhost:3000/$CHUNK"'
+  echo "$output" | grep -q -- '"http://localhost:3000/$CHUNK"'
 }
 
 @test "8 an existing deny still wins — the rewrite never launders a blocked request" {
