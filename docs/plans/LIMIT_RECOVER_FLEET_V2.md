@@ -514,3 +514,30 @@ Dynamic Workflow wf_99ea9654-29f (22 agents, 0 errors: 8 subsystem maps, 4 desig
   - **Carried TODO:** W3's local stale predicate in `census.py` stays. The sibling's `rq_stale_reason` is on trunk (`49c16be7e`), but it lives inside the poller's executable body and has not been extracted into `lr-lib.sh`, so there is nothing to import. Moving it would edit sibling-owned drain code.
   - **For W5, not yet exercised:** (1) In the lapsed case, `lf_one`'s launch-lock holder is still alive when W2c's `lr-fire-resume` starts in the new pane. `lr_launch_guard` accepts only the same record and attempt, its own pid or a stale holder, so it would refuse with rc 10. The legacy lock needs a record/attempt hand-down across the pane boundary before a crashed reconciler can fall back to manual tools. This never happens today, because recon.on is absent. (2) cc-resume-debt's in-pane relaunch never fires, because `cc-pane` has no state verb, and it has not been run against W2b's real `--relaunch-at-shell`. (3) `lr-handoff` main has no fence of its own; its W4 callers (`lf_one`, cc-lr) fence before calling it, and `recycle_fire`'s fence belongs to W2b.
   - Blockers: none.
+- 2026-09-29, **W2b done** (session fire-w2b; teammates T-probe, then T-recycle-a and T-recycle-b in sequence, because all three edit `handoff-fire.sh`). The probe half landed first, as the plan's checkpoint (`6ed411ee0`, `95d54abd5`), and the recycle half lands with this entry: `git log origin/main -- scripts/handoff-fire.sh tests/handoff-fire-recycle-custody.bats`. Acceptance: `tests/handoff-fire-recycle-custody.bats`, which holds cases 1-13 plus 1b, 12b, F (focus), P (1 s poll) and X (launch-lock prefix). The existing handoff-fire*, handoff-recycle* and probe suites stay green. Learnings and decisions later waves need:
+  - **Probe output, which W3 T-observe and T-act parse:**
+    - After `pane_state: cc`: `tty:`, `window_id:`, `kitty_pid:`, `kitty_lstart:`, `pane_root: <pid> <comm>`, `focused:`.
+    - `bg_work: <none|watcher|work|unknown> shipland=<yes|no> pids=<…>`.
+    - Verdicts: `HELD:bg-work:ship-land` and `HELD:bg-work:other` (the reconciler pages at 60 or 20 minutes), `HELD:mid-turn` (voluntary path, transcript in flight or unreadable), `HELD:focused`.
+  - **The evidence bypass.** `--voluntary --account-evidence F` passes only a fact that is `rejected`, uncontradicted, `5h` or `7d`, has `resets_at − now ≥ 1800 s`, and names the pane's own account. The registry row's `.account` is a config-dir basename, so the probe maps it through the generated account map, and an unmapped basename refuses as `account-unmapped` (a W5-rig finding, fixed here). `--account-evidence` without `--voluntary` is a usage error (exit 2). Callers without the new flags get today's limit-gate lines byte-for-byte.
+  - `lr-predicate.sh is-teammate-head` takes a transcript PATH (with `LR_HEAD_BYTES`), not stdin. If it is unreachable, the probe falls back to the old substring test.
+  - **Recycle order is now:**
+    1. fence, focus gate, composer gate, pane recycle lock;
+    2. watcher armed, plus `HF_WATCHER_RECORD`;
+    3. wake guard, then confirm (`--record-id` only when set: W2a's CLI rejects an empty value);
+    4. the last read: composer, at rest or still limited, subagents, background work, focus;
+    5. debt, then `/exit` typed without Enter, read back, with Enter only on an exact match. Otherwise the watcher sends five DELs.
+
+    Any refusal after confirm calls `lr-transplant --phase unconfirm` and holds with `recycle-held-<reason>`, whose detail records `unconfirm rc N`. The blind anti-strand Enter is gone from the recycle path; self-close keeps its own.
+  - **The watcher:**
+    - It polls for the shell every 1 s.
+    - It FOLDs a stub through `--phase fold-stub`. An rc 2 holds without typing, and an rc 3 falls back to the legacy append.
+    - Before typing, it takes `locks/<sid>.launch` and re-checks `lr_holder_count`.
+    - The background-work dialog is recognized in both shapes. When the menu has no keep-work option, which is the agent-view-off shape and a W5-rig finding fixed here, or under `CC_RECYCLE_BGWORK_ANSWER=cancel`, the watcher sends exactly one Esc and records `recycle-held-bgwork … unconfirm=needed`. It never types a digit.
+  - **Launch-lock handover (W2c contract).** `lr_launch_guard` counts a holder as its own only when `record_id` and `attempt` both match, so the resume-mode relaunch is typed as `nocorrect env LR_LAUNCH_LOCK=… LR_RECORD_ID=… LR_ATTEMPT=… bash <launcher>`. With no reconciler record, the watcher mints one.
+  - **New verbs:**
+    - `--recycle --transplanted-source --husk` skips confirm. It asserts that `.handed-off` exists and that the tombstone names `--resume-cfg`.
+    - `--relaunch-at-shell` checks the launch lock, then H(sid), then `pane_cc_state=shell`, then the identity tuple. It then execs the same watcher.
+  - **Kill switches** (default on, `off` restores today's behaviour): `HF_RECYCLE_LOCK_GATE`, `HF_EXIT_READBACK`, `HF_FOLD_STUB`, `HF_LAUNCH_LOCK`, `HF_BGWORK_ANY_SHAPE`. Two more: `LR_MOVE_FOCUSED` (default off, so a focused pane is HELD, per the unruled decision 7) and `LR_WAKE_GUARD_S` (default 30).
+  - **Incident.** T-recycle-a stalled for 30 minutes on a Bash permission prompt for `rm -r` of its own /tmp scratch dir. A teammate's permission prompt routes to the lead, and nothing in the lead can answer it. The lead checkpointed the work, stopped the teammate, and fixed what it had not reached. Later briefs forbid deletes outside the repo and keep scratch under `$BATS_TEST_TMPDIR`; T-recycle-b ran clean under that rule.
+  - Blockers: none.
