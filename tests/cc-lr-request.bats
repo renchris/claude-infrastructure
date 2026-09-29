@@ -112,17 +112,18 @@ req_field() { python3 -c 'import json,sys; v=json.load(open(sys.argv[1]))[sys.ar
   [ ! -e "$MUTEX" ]
 }
 
-@test "recover, heartbeat STALE and the owned proc dead: direct path, the actuator runs holding cc-lr's launch lock" {
+@test "recover, heartbeat STALE and the owned proc dead: cc-lr acts under the launch lock, then hands it to the detached driver" {
   recon_on; heartbeat $((NOW - 1000)); owned 1 "Thu Jan 1 00:00:00 1970"
   run bash "$LR" recover 117 --target next3
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [ ! -e "$REQ" ]
   [ "$(cat "$BATS_TEST_TMPDIR/lr-fleet.sh.argv")" = "--one $SID --target next3 --source-pane 117 --detach" ]
+  # cc-lr took the lock itself (the double-typer audit names it) …
+  grep -q "	$SID	cc-lr	taken	" "$LR_RECON_ROOT/launch.log" || { cat "$LR_RECON_ROOT/launch.log"; false; }
+  # … and released it BEFORE firing: the detached driver outlives cc-lr, so it must not inherit a lock
+  # cc-lr's EXIT trap drops ~3 s later. lf_one re-takes it under the driver's own pid.
   env_f="$BATS_TEST_TMPDIR/lr-fleet.sh.env"
-  [ "$(sed -n 's/^lock=//p' "$env_f")" = "$LOCK" ] || { cat "$env_f"; false; }
-  hpid="$(sed -n 's/^holder=.*"pid":\([0-9]*\)[,}].*/\1/p' "$env_f")"
-  [ -n "$hpid" ] && { [ "$hpid" = "$(sed -n 's/^ppid=//p' "$env_f")" ] || [ "$hpid" = "$(sed -n 's/^gppid=//p' "$env_f")" ]; } \
-    || { cat "$env_f"; false; }
+  [ -z "$(sed -n 's/^lock=//p' "$env_f")" ] || { cat "$env_f"; false; }
   # The fence's own verdict lines stay out of cc-lr's output: its consumers grep `verdict=`.
   [[ "$output" != *"lr-recon-fence:"* ]] || { echo "$output"; false; }
   [ ! -e "$LOCK" ] || { echo "the launch lock outlived cc-lr"; false; }

@@ -520,7 +520,12 @@ EOF
 
   set -- --one "$sid" --target "$target"
   case "${pane:--}" in -|'') ;; *) set -- "$@" --source-pane "$pane" ;; esac
-  out="$(bash "$FLEET_BIN" "$@" --detach 2>&1)"; rc=$?
+  # The DETACHED driver outlives this process, so it must not inherit a launch lock that our EXIT trap
+  # releases ~3 s from now — it would keep acting on a lock nobody holds. Release it here and let
+  # lf_one take it under the driver's own pid (lr-fleet.sh fences lf_one); a racing actor that wins
+  # the gap makes the driver defer, which is the one-actuator rule working, not a failure.
+  lr_recon_act_done
+  out="$(env -u LR_LAUNCH_LOCK bash "$FLEET_BIN" "$@" --detach 2>&1)"; rc=$?
   if [ "$rc" -ne 0 ]; then
     lr_claim_release "$MUTEX_DIR" "$sid" "$$"
     printf '%s\n' "$out" >&2
