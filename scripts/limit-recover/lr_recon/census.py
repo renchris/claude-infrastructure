@@ -46,6 +46,20 @@ def _death(s: T.SessionObs) -> bool:
     return bool(last.get("limit")) and last.get("kind") == "limit"
 
 
+def death_key(s: T.SessionObs) -> str:
+    """uuid@ts of the death record the session sits on, or ''. A transplant copies it byte-for-byte
+    and R appends nothing, so the SAME key on the target is the death this daemon already recovered.
+    (uuid alone is not enough: the rig stub writes every limit with one fixture uuid.)"""
+    last = s.transcript.last or {}
+    return "%s@%s" % (last.get("uuid") or "", last.get("ts") or "") if _death(s) else ""
+
+
+def handled_death(rec: Optional[T.Record], s: T.SessionObs) -> bool:
+    """The session's current death is the one ``rec`` was opened to recover."""
+    k = death_key(s)
+    return bool(k) and rec is not None and rec.close.get("death") == k
+
+
 def _lane(s: T.SessionObs) -> str:
     return "fable" if "fable" in (s.model or "").lower() else "general"
 
@@ -263,6 +277,10 @@ def new_record(
             eta=b.resets_at,
             detail=b.detail,
         )
+    if b.kind == "limited":
+        rec.close["death"] = death_key(
+            s
+        )  # which death this record recovers (handled_death)
     rec.timeline.detected = now
     rec.updated_at = now
     merge_origin(rec, origin, autorecover_on)

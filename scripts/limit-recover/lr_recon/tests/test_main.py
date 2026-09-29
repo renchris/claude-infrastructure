@@ -276,6 +276,39 @@ class MainTests(unittest.TestCase):
         )
         self.assertIn("next3.7d", M._facts(ctx, snap, now))
 
+    def _recovered(self, ts):
+        import time
+
+        now = time.time()
+        snap = _snap(now, self.tmp)  # on next3, last record a limit
+        s = next(iter(snap.sessions.values()))
+        s.transcript.last.update(uuid="u", ts=ts)
+        ctx = M.Ctx(self.paths, None, self.home)
+        M.store.ensure_dirs(self.paths)
+        rec = T.Record(sid=s.sid, record_id="r1", source_acct="next")
+        rec.terminal = T.Terminal(outcome="REPLACED-NEW-WINDOW", at=now)
+        rec.close["death"] = "u@t"
+        ctx.records[s.sid] = rec
+        M._census(ctx, snap, {}, [], "act", now)
+        return rec, ctx, M._facts(ctx, snap, now)
+
+    def test_a_recovered_death_is_not_re_recorded(self):
+        """W5 rig 80294ba4: R resumes without typing, so the copied limit record re-opened the sid
+        as a new LAUNCHER-ROOTED record over REPLACED-NEW-WINDOW and wrote a false next2 fact."""
+        rec, ctx, facts = self._recovered("t")
+        self.assertIs(ctx.records[rec.sid], rec)
+        self.assertEqual(rec.terminal.outcome, "REPLACED-NEW-WINDOW")
+        self.assertNotIn("next3.7d", facts)
+
+    def test_a_new_death_after_recovery_is_a_new_record(self):
+        """CONTROL: a later death on the target has a new ts, so it is recovered too."""
+        rec, ctx, facts = self._recovered("t2")
+        new = ctx.records[rec.sid]
+        self.assertIsNot(new, rec)
+        self.assertTrue(new.open)
+        self.assertEqual(new.close.get("death"), "u@t2")
+        self.assertIn("next3.7d", facts)
+
     def _hop_pass(self, phase, facts=None, live_watcher=False):
         import time
 

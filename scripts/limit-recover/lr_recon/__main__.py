@@ -147,6 +147,10 @@ def _facts(ctx: Ctx, snap: T.Snapshot, now: float) -> Dict[str, T.Fact]:
             # a move's copied transcript ends in the SOURCE's death: read as the target's, it
             # blocked every freshly moved-to account until engagement (W5 rig, target-auth)
             continue
+        if mv is not None and s.acct != mv.source_acct and census.handled_death(mv, s):
+            # the SOURCE's death, still carried in the copied transcript once the move closed (R
+            # never types): written as the target's, it was a false fact (W5 rig 80294ba4)
+            continue
         f = (
             F.fact_from_death(s.acct, s.sid, s.transcript.last or {}, now, "census")
             if s.acct
@@ -214,6 +218,12 @@ def _census(
             or s.sid in ctx.records
         ):
             continue
+        old = ctx.records.get(s.sid)
+        if old is not None and not old.open and census.handled_death(old, s):
+            # the death this closed record already recovered, not a new one: R resumes without
+            # typing, so the copied limit record stays last and re-opened the sid over its terminal
+            # outcome (W5 rig 80294ba4: REPLACED-NEW-WINDOW overwritten by LAUNCHER-ROOTED)
+            continue
         _read_composer(s, snap, facts, now)
         b = census.bucket(s, snap, facts, now)
         buckets.append(b)
@@ -222,7 +232,6 @@ def _census(
         req = req_by_sid.get(s.sid)
         origin = req.origin if req else ("fanout" if b.kind == "idle" else "census")
         pane = snap.panes.get("%d:%d" % s.pane) if s.pane else None
-        old = ctx.records.get(s.sid)
         if old is not None and old.open and not act.live_procs(old, snap):
             if settle.rebucket(old, b.name, now):
                 _event(paths, "rebucket", s.sid, old.record_id, b.name)

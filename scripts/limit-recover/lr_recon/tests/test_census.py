@@ -139,6 +139,25 @@ class CensusRecords(unittest.TestCase):
         self.assertEqual((rec.origin, rec.plan_only), ("cc-lr", False))
         self.assertEqual(rec.record_id, "recon:c1:abcdef01:1")
 
+    def test_new_record_carries_its_death_key(self):
+        """W5 rig 80294ba4: a closed record must know which death it recovered (handled_death)."""
+        last = dict(limit=True, kind="limit", uuid="u", ts="t")
+        s = T.SessionObs(
+            sid="abcdef01-x",
+            acct="next3",
+            cfg="/c",
+            pid=10,
+            lstart=L,
+            transcript=T.TranscriptObs(path="/t.jsonl", last=last),
+        )
+        b = T.Bucket(sid=s.sid, name="LIMITED", acct="next3", scope="7d", resets_at=NOW)
+        rec, _created = C.upsert({}, b, s, None, "census", "c1", False, NOW)
+        self.assertEqual(rec.close["death"], "u@t")
+        rec.terminal = T.Terminal(outcome="CLOSED", at=NOW)
+        self.assertTrue(C.handled_death(rec, s))
+        s.transcript.last = dict(last, ts="t2")
+        self.assertFalse(C.handled_death(rec, s))
+
     def test_cohort_id_safe(self):
         self.assertEqual(
             C.cohort_id("next3", "model:opus", 12.7), "next3-model_opus-12"
