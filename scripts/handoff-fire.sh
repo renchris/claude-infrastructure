@@ -8117,9 +8117,16 @@ if [ "${1:-}" = "__recycle" ]; then
   # the engagement baseline. Positional-last + optional, like every argument above them.
   RCY_RESUME_CFG="${10:-}"; RCY_RESUME_SID="${11:-}"; RCY_T0="${12:-}"
   # The RESUME DEBT's subject (CLOSE_RESUME_CUSTODY D4): the sid the foreground opened the debt for
-  # just before /exit — the resumed sid in resume mode, else the closed session ($6). Resolved HERE,
-  # not from RCY_OLD_SID, because the vanished and never-confirmed arms fire before that is parsed.
+  # just before /exit — the resumed sid in resume mode, else the closed session ($6).
   RCY_DEBT_SID="${RCY_RESUME_SID:-${6:-}}"
+  # THE PREDECESSOR AND ITS INHERITED GOAL, parsed BEFORE the wait loop (recycle-bgwork-orphan,
+  # 2026-09-29). They used to be parsed after it, so every row and alarm the loop wrote —
+  # `recycle-bgwork-answered` above all — carried prev_sid:null: 5 answers on 2026-09-29, and not one
+  # could be joined to the session it backgrounded. The loop also CLEARS the predecessor's goal (the
+  # bgwork arm below), and $8 is what the successor re-arms, so it must be in hand before that: the
+  # foreground captured it with inherit_recycle_goal BEFORE typing /exit, and nothing here re-reads it.
+  RCY_OLD_SID="${6:-}"                             # pre-recycle CC sid — the ROW-CHANGE baseline
+  FIRE_GOAL="${8:-}"                               # --goal condition to re-arm as MESSAGE 2
   # Every arm that ends with NO claude in the pane after the /exit calls this after its row, alarm
   # and `!!` line: settle relaunches the same sid in a NEW window, or escalates. It may block for
   # minutes, which a detached watcher can afford.
@@ -8169,8 +8176,47 @@ if [ "${1:-}" = "__recycle" ]; then
   rcy_wait_max="${HF_RECYCLE_SHELL_WAIT_S:-600}"
   case "$rcy_wait_max" in ''|*[!0-9]*) rcy_wait_max=600 ;; esac
   rcy_vanished=0
-  rcy_bgwork_seen=0; rcy_bgwork_sent=0
+  rcy_bgwork_seen=0; rcy_bgwork_sent=0; rcy_goal_clear_tried=0; RCY_GOAL_CLEAR=none
   rcy_bgwork_max="${CC_RECYCLE_BGWORK_MAX:-2}"
+  # NOTHING LEFT TO DRIVE (recycle-bgwork-orphan, 2026-09-29). "Move to background and exit" hands
+  # the conversation to a background worker under a NEW session id, and that copy keeps the /goal:
+  # measured on 2.1.284, session 43ef47fc kept taking goal-driven turns for ~4 min beside its own
+  # successor. The menu's only other exit stops the tasks (the land we exist to keep alive) and the
+  # third is Stay, so the goal is what has to go: Esc back to the composer, `/goal clear`, confirm the
+  # clear ON DISK (the harness appends goal_status {met:true, sentinel:true} to the ORIGINAL sid's
+  # transcript, which goal_live_for_sid reads as terminal), then re-submit /exit and let the loop
+  # answer the dialog it raises again. Measured end to end on 2.1.284 under a PTY:
+  # docs/research/recycle-bgwork-orphan-2026-09-29/ — the relocated copy then took ONE turn, its
+  # task's completion notification, and stopped.
+  #
+  # The successor loses nothing: its goal is $8, captured by inherit_recycle_goal in the foreground
+  # before the first /exit, and never re-read. Resume mode is left alone — the successor IS the same
+  # session there and carries the goal in the transcript this would clear (and the reconciler, the
+  # only resume-mode caller, answers `cancel` anyway).
+  #   rc 0 /exit re-submitted (RCY_GOAL_CLEAR says whether the clear was proven) · 1 it could not be
+  rcy_bgwork_goal_clear() {
+    local prc=0 t=0 wmax="${CC_RECYCLE_GOAL_CLEAR_WAIT_S:-10}" pre="${CC_RECYCLE_GOAL_CLEAR_PREWAIT_S:-10}"
+    case "$wmax" in ''|*[!0-9]*) wmax=10 ;; esac
+    case "$pre" in ''|*[!0-9]*) pre=10 ;; esac
+    hf_bounded "$IT2" session send -s "$RSID" $'\e' >/dev/null 2>&1 || true
+    /bin/sleep "${FIRE_TYPE_SETTLE:-0.5}"
+    # Esc can leave OUR /exit in the composer (W5 rig, bgwork-after-confirm) — scrubbed only when it
+    # reads back as exactly that, the same attribution the cancel arm uses.
+    if [ "$(composer_content "$IT2" "$RSID" 2>/dev/null)" = "/exit" ]; then
+      composer_scrub_verified "$IT2" "$RSID" >/dev/null 2>&1 || true
+    fi
+    it2_paste_submit_verified "$IT2" "$RSID" "/goal clear" "$pre" >/dev/null || prc=$?
+    if [ "$prc" = 0 ]; then
+      while goal_live_for_sid "$RCY_OLD_SID" >/dev/null 2>&1 && [ "$t" -lt "$wmax" ]; do
+        /bin/sleep 1; t=$((t + 1))
+      done
+      if goal_live_for_sid "$RCY_OLD_SID" >/dev/null 2>&1; then RCY_GOAL_CLEAR=unverified
+      else RCY_GOAL_CLEAR=cleared; fi
+    else
+      RCY_GOAL_CLEAR="not-sent:rc$prc"
+    fi
+    it2_paste_submit_verified "$IT2" "$RSID" "/exit" "$pre" >/dev/null
+  }
   case "$rcy_bgwork_max" in ''|*[!0-9]*) rcy_bgwork_max=2 ;; esac
   # SELFTEST SEAM, same shape and same safety argument as HF_RECYCLE_SHELL_WAIT_S above: it moves
   # only how OFTEN the screen is read. It cannot make the watcher send a key it would not otherwise
@@ -8268,10 +8314,36 @@ if [ "${1:-}" = "__recycle" ]; then
           exit 1
         fi
         if [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" != off ]; then
+          # Once per watcher, and only while the predecessor provably holds a live goal: a pane
+          # without one answers exactly as before, with no extra keystroke.
+          if [ "$rcy_goal_clear_tried" = 0 ] && [ -z "${RCY_RESUME_SID:-}" ] \
+             && [ "${CC_RECYCLE_BGWORK_GOAL_CLEAR:-on}" != off ] \
+             && goal_live_for_sid "$RCY_OLD_SID" >/dev/null 2>&1; then
+            rcy_goal_clear_tried=1
+            if rcy_bgwork_goal_clear; then
+              echo "→ bgwork@${waited}s: the predecessor held a live /goal — Esc, /goal clear (${RCY_GOAL_CLEAR}), /exit re-submitted; the keep-work answer follows on the dialog it raises"
+              emit_recycle_event recycle-bgwork-goal-clear "" "$RSID" "goal=${RCY_GOAL_CLEAR}; /exit re-submitted at ${waited}s" || true
+              rcy_bgwork_next=$((waited + 3))
+              continue
+            fi
+            # The /exit did not go back in: the predecessor is alive IN THIS PANE at its composer,
+            # which is safe (nothing is orphaned, nothing is stranded) but is not a recycle. Hold
+            # loudly, as the cancel arm does, and name the goal so it can be re-armed by hand.
+            echo "!! recycle HELD at ${waited}s: the background-work dialog was dismissed to clear the predecessor's /goal (${RCY_GOAL_CLEAR}), and /exit could not be re-submitted — the session in $RSID is alive at its composer and NO relaunch was typed.$([ "$RCY_GOAL_CLEAR" = cleared ] && [ -n "${FIRE_GOAL:-}" ] && printf ' Its goal was cleared; re-arm it there with: /goal %s' "$FIRE_GOAL") Re-run the recycle." >&2
+            emit_recycle_event recycle-held-bgwork "" "$RSID" "goal-clear dismissed the dialog at ${waited}s (goal=${RCY_GOAL_CLEAR}); /exit re-submit failed; nothing typed; unconfirm=needed" || true
+            hf_alarm recycle-held-bgwork "$RSID" "${RCY_OLD_SID:-}" "" "HANDOFF-RECYCLE-HELD: pane $RSID — the recycle dismissed the background-work dialog to clear the predecessor's /goal (${RCY_GOAL_CLEAR}) and could not re-submit /exit. The predecessor is alive at its composer; no relaunch was typed.$([ "$RCY_GOAL_CLEAR" = cleared ] && [ -n "${FIRE_GOAL:-}" ] && printf ' Its goal was CLEARED — re-arm it in that pane: /goal %s' "$FIRE_GOAL") Re-run the recycle." || true
+            exit 1
+          fi
+          # A goal still live here (kill switch, resume mode, a clear that did not land) is a
+          # backgrounded copy that can keep driving — say so in the row, so the class is countable.
+          if [ "$RCY_GOAL_CLEAR" = none ] && goal_live_for_sid "$RCY_OLD_SID" >/dev/null 2>&1; then
+            RCY_GOAL_CLEAR=live
+          fi
+          # typed-send-lint:allow — a single menu digit read off the dialog on screen, never a command line; no shell ever sees it
           hf_bounded "$IT2" session send -s "$RSID" "$bgk" >/dev/null 2>&1 || true
           rcy_bgwork_sent=$((rcy_bgwork_sent + 1))
           echo "→ bgwork@${waited}s: the /exit raised the background-work dialog; answered '$bgk' (${CC_MODAL_BGWORK_KEEP:-keep-work}) — the session exits and its tasks are NOT stopped"
-          emit_recycle_event recycle-bgwork-answered "" "$RSID" "the /exit raised the background-work dialog at ${waited}s; answered with the menu index '$bgk' read off the screen (${CC_MODAL_BGWORK_KEEP:-keep-work})" || true
+          emit_recycle_event recycle-bgwork-answered "" "$RSID" "the /exit raised the background-work dialog at ${waited}s; answered with the menu index '$bgk' read off the screen (${CC_MODAL_BGWORK_KEEP:-keep-work}); predecessor goal=${RCY_GOAL_CLEAR}" || true
           continue
         fi
         echo "→ bgwork@${waited}s: the background-work dialog is up and answerable ('$bgk') but CC_RECYCLE_BGWORK_ANSWER=off — holding"
@@ -8428,9 +8500,8 @@ if [ "${1:-}" = "__recycle" ]; then
   RCWD="${5:-}"
   # Engagement inputs, positional-last + optional (an older watcher from a deployed-copy skew simply
   # ignores them, and this one degrades to the honest weaker verdict when they are absent).
-  RCY_OLD_SID="${6:-}"                             # pre-recycle CC sid — the ROW-CHANGE baseline
+  # RCY_OLD_SID ($6) and FIRE_GOAL ($8) are parsed above the wait loop, beside RCY_DEBT_SID.
   RCY_MARKER="${7:-}"                              # token embedded in the relaunch prompt copy
-  FIRE_GOAL="${8:-}"                               # --goal condition to re-arm as MESSAGE 2
   RCY_ENGAGE_TIMEOUT="${RCY_ENGAGE_TIMEOUT:-180}"  # env-overridable so tests run in seconds
   # 1 s, down from 5 (W3). The poll is now two cheap local file scans — a tail-bounded probe and the
   # oracle — not an it2 round trip, so the old spacing bought nothing and cost up to 5 s of latency

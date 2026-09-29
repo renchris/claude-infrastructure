@@ -237,3 +237,133 @@ SHIM
   run bash -c "LC_ALL=C grep -qaF -- '$CC_MODAL_BGWORK_KEEP' '$BIN'"
   [ "$status" -eq 0 ]
 }
+
+# ── the predecessor's /goal is CLEARED before keep-work (recycle-bgwork-orphan, 2026-09-29) ─────
+# "Move to background and exit" relocates the conversation to a background worker that KEEPS its
+# /goal: on 2.1.284 session 43ef47fc took goal-driven turns for ~4 min beside its own successor.
+# The remedy (measured end to end under a PTY, docs/research/recycle-bgwork-orphan-2026-09-29/):
+# Esc → /goal clear → proven on disk → /exit again → the keep-work index on the dialog it re-raises.
+#
+# The stub is STATEFUL, because the property is an ORDER across screens: `dialog` renders the captured
+# menu; Esc drops to a composer holding our /exit residue (the W5-rig shape); a bracketed paste fills
+# the composer; CR submits it — `/goal clear` appends the harness's own sentinel record to the
+# predecessor's transcript, `/exit` re-raises the dialog; a digit ends the session.
+_goal_stub() {
+  cat > "$H/.claude/bin/it2" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$HOME/it2-calls.log"
+st="$(cat "$HOME/stub.state" 2>/dev/null || echo dialog)"
+cm="$(cat "$HOME/stub.composer" 2>/dev/null || true)"
+case "$1 $2" in
+  "session list")
+    if [ "${3:-}" = --json ]; then printf '[{"id": "%s", "tty": "/dev/ttys999"}]\n' "${STUB_PANE:-BGWORK-PANE}"
+    else printf '%s\n' "${STUB_PANE:-BGWORK-PANE}"; fi
+    exit 0 ;;
+  "session read")
+    case "$st" in
+      dialog)   cat "$SCREEN" ;;
+      composer) printf '%s\n' "────────────────────" "❯ $cm" "────────────────────" ;;
+      *)        printf '%s\n' "(session ended)" ;;
+    esac
+    exit 0 ;;
+  "session send")
+    p="${5-}"
+    case "$p" in
+      $'\e')   [ "$st" = dialog ] && { echo composer > "$HOME/stub.state"; printf '/exit' > "$HOME/stub.composer"; } ;;
+      $'\x15') : > "$HOME/stub.composer" ;;
+      $'\x7f') printf '%s' "${cm%?}" > "$HOME/stub.composer" ;;
+      $'\r')
+        case "$cm" in
+          "/goal clear")
+            [ "${STUB_CLEAR_WRITES:-1}" = 1 ] && printf '%s\n' '{"type":"attachment","attachment":{"type":"goal_status","met":true,"sentinel":true,"condition":"ship it"}}' >> "$GOAL_TX"
+            printf '%s' "${STUB_AFTER_CLEAR:-}" > "$HOME/stub.composer" ;;
+          "/exit") echo dialog > "$HOME/stub.state"; : > "$HOME/stub.composer" ;;
+          *) : > "$HOME/stub.composer" ;;
+        esac ;;
+      $'\e[200~'*) t="${p#$'\e[200~'}"; printf '%s%s' "$cm" "${t%$'\e[201~'}" > "$HOME/stub.composer" ;;
+      [0-9]) echo gone > "$HOME/stub.state" ;;
+    esac
+    exit 0 ;;
+esac
+exit 0
+SH
+  chmod +x "$H/.claude/bin/it2"
+  export CC_PROJECTS_DIRS="$H/projects"
+  mkdir -p "$H/projects/-p"
+  export GOAL_TX="$H/projects/-p/sid-before.jsonl"
+  printf '%s\n' '{"type":"attachment","attachment":{"type":"goal_status","met":false,"sentinel":true,"condition":"ship it"}}' > "$GOAL_TX"
+  export CC_FIRE_COMPOSER_GATE=off FIRE_TYPE_SETTLE=0.05 FIRE_PASTE_PREIVL=1 CC_RECYCLE_GOAL_CLEAR_WAIT_S=2
+  export HF_RECYCLE_SHELL_WAIT_S=12
+}
+# $6 = the predecessor sid, $8 = the goal the foreground inherited (inherit_recycle_goal, pre-/exit).
+drive_goal() { bash "$HF" __recycle "$STUB_PANE" "$BATS_TEST_TMPDIR/no-such-tty" "$CMDFILE" "$BATS_TEST_TMPDIR" sid-before "" "ship it" "$@"; }
+row() { jq -c --arg c "$1" 'select(.class==$c)' "$H/.claude/logs/handoffs.jsonl" 2>/dev/null | tail -1; }
+send_line() { grep -n "session send" "$H/it2-calls.log" | grep -F -- "$1" | head -1 | cut -d: -f1; }
+
+@test "[RED] the goal is CLEARED, proven on disk, BEFORE the keep-work answer — and /exit goes back in" {
+  _goal_stub
+  drive_goal || true
+  gc="$(send_line '/goal clear')"; ex="$(grep -n 'session send' "$H/it2-calls.log" | grep -F '/exit' | tail -1 | cut -d: -f1)"
+  kw="$(send_line 'session send -s BGWORK-PANE 2')"
+  [ -n "$gc" ] && [ -n "$ex" ] && [ -n "$kw" ] || { cat "$H/it2-calls.log"; false; }
+  [ "$gc" -lt "$ex" ] && [ "$ex" -lt "$kw" ] || { cat "$H/it2-calls.log"; false; }
+  run jq -r 'select(.type=="attachment") | .attachment.met' "$GOAL_TX"
+  [ "$(printf '%s\n' "$output" | tail -1)" = true ]
+  run row recycle-bgwork-goal-clear
+  [[ "$output" == *'goal=cleared'* ]] || { echo "$output"; false; }
+}
+
+@test "[RED] the answered row NAMES the predecessor (prev_sid) and says its goal was cleared" {
+  _goal_stub
+  drive_goal || true
+  run row recycle-bgwork-answered
+  [ "$(printf '%s' "$output" | jq -r '.prev_sid')" = sid-before ] || { echo "$output"; false; }
+  [[ "$(printf '%s' "$output" | jq -r '.detail')" == *'predecessor goal=cleared'* ]] || { echo "$output"; false; }
+}
+
+@test "[RED] the successor still INHERITS: \$8 survives the clear (goal_requested stays true)" {
+  # The clear empties the predecessor's transcript goal; the successor's condition is the one the
+  # foreground captured before /exit. A watcher that re-read the transcript after the clear would
+  # arm nothing — this row is written AFTER the clear, so it sees what the successor will be given.
+  _goal_stub
+  drive_goal || true
+  run row recycle-bgwork-answered
+  [ "$(printf '%s' "$output" | jq -r '.goal_requested')" = true ] || { echo "$output"; false; }
+  run jq -r 'select(.type=="attachment") | .attachment.met' "$GOAL_TX"
+  [ "$(printf '%s\n' "$output" | tail -1)" = true ]
+}
+
+@test "a clear the harness did NOT record reads as unverified, never as cleared" {
+  _goal_stub
+  STUB_CLEAR_WRITES=0 drive_goal || true
+  run row recycle-bgwork-goal-clear
+  [[ "$output" == *'goal=unverified'* ]] || { echo "$output"; false; }
+}
+
+@test "KILL SWITCH: CC_RECYCLE_BGWORK_GOAL_CLEAR=off answers directly, and the row says the goal is LIVE" {
+  _goal_stub
+  CC_RECYCLE_BGWORK_GOAL_CLEAR=off drive_goal || true
+  run bash -c "grep -c 'session send' '$H/it2-calls.log'"
+  [ "$output" = 1 ] || { cat "$H/it2-calls.log"; false; }
+  run row recycle-bgwork-answered
+  [[ "$output" == *'predecessor goal=live'* ]] || { echo "$output"; false; }
+}
+
+@test "RESUME MODE is left alone — the successor is the same session and carries the goal itself" {
+  _goal_stub
+  drive_goal "" "$BATS_TEST_TMPDIR/cfg" sid-before || true
+  run bash -c "grep -F '/goal clear' '$H/it2-calls.log' || true"
+  [ -z "$output" ] || { cat "$H/it2-calls.log"; false; }
+  grep -q 'session send -s BGWORK-PANE 2' "$H/it2-calls.log"
+}
+
+@test "[RED] /exit cannot go back in ⇒ HELD loudly, nothing typed, and the alarm names the goal to re-arm" {
+  _goal_stub
+  STUB_AFTER_CLEAR="operator draft" CC_RECYCLE_GOAL_CLEAR_PREWAIT_S=0 run drive_goal
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"recycle HELD"*"/exit could not be re-submitted"* ]] || { echo "$output"; false; }
+  run bash -c "grep -c 'session send -s BGWORK-PANE 2' '$H/it2-calls.log' || true"
+  [ "$output" = 0 ]
+  run alarms
+  [[ "$output" == *'re-arm it in that pane: /goal ship it'* ]] || { echo "$output"; false; }
+}
