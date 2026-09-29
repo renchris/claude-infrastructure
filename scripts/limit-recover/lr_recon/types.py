@@ -69,6 +69,8 @@ PRE_MOVE_SUBSTATES = (
     "HELD:team",
     "PARKED-REBOOT",
     "BACKOFF",
+    # Operator decision 7 is unruled: a focused limited pane is HELD until LR_MOVE_FOCUSED=on.
+    "HOLD-FOCUS",
 )
 # Terminal outcomes (§4.2 Outcomes). ESCALATED is NOT terminal.
 OUTCOMES = ("CLOSED", "NOT_NEEDED", "REPLACED", "REPLACED-NEW-WINDOW", "IMPOSSIBLE")
@@ -115,6 +117,7 @@ MAX_AGE_S: Dict[str, Optional[int]] = {
     "WAIT_SLOT": 600,  # + earliest wake
     "WAIT_CAPACITY": 900,
     "HOLD-DRAFT": 900,
+    "HOLD-FOCUS": 900,
     "HOLD-BGWORK": 1200,  # decision 2: 3600 when the job is a ship-land (Wait.detail)
     "HOLD-SUBAGENTS": 1800,
     "HOLD-MENU": None,
@@ -704,6 +707,38 @@ def make_record_id(cohort_id: str, sid: str, attempt: int) -> str:
 
 
 # ── plan / placement (C5, §5) ────────────────────────────────────────────────────────────────────
+
+BUCKETS = (
+    "LIMITED",
+    "IDLE-ELIGIBLE",
+    "WORKING",
+    "HOLD-DRAFT",
+    "HOLD-BGWORK",
+    "HOLD-SUBAGENTS",
+    "HOLD-FOCUS",
+    "HOLD:iterm",
+    "HOLD:repo-bare",
+    "TEAMMATE",
+    "HELD:team",
+    "LAUNCHER-ROOTED",
+    "IMPOSSIBLE",
+    "SPLIT-BRAIN",
+    "STAY",
+)  # §3 step 5: every live session in an affected scope lands in exactly one
+
+
+@dataclass
+class Bucket:
+    """One census verdict (§3 step 5), handed from the census to placement and the records."""
+
+    sid: str
+    name: str  # BUCKETS
+    reason: str = ""
+    kind: str = "limited"  # "limited" | "idle" (for movers)
+    acct: str = ""
+    scope: str = ""
+    resets_at: Optional[float] = None
+    detail: str = ""  # e.g. "ship-land" for HOLD-BGWORK (decision 2 page age)
 
 
 @dataclass
