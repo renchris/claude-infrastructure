@@ -192,13 +192,38 @@ def to_dict(obj: Any) -> Dict[str, Any]:
 # ── paths (C7, §11). Every state dir the daemon writes is under LR_RECON_ROOT ───────────────────
 
 
+CANARY_ROOT = "recon-canary"  # the canary daemon's own tree under lr_root (W5b); the fence reads it
+
+
+def parse_canary(raw: str) -> typing.FrozenSet[str]:
+    """``LR_RECON_CANARY``: session ids separated by commas or blanks. Anything not uuid-shaped is
+    dropped, so a typo narrows the canary set and can never widen it."""
+    out = set()
+    for tok in raw.replace(",", " ").split():
+        t = tok.strip().lower()
+        if (
+            len(t) == 36
+            and all(c in "0123456789abcdef-" for c in t)
+            and t.count("-") == 4
+        ):
+            out.add(t)
+    return frozenset(out)
+
+
 @dataclass(frozen=True)
 class Paths:
     """Resolved state tree. ``lr_root`` is the shared limit-recover tree (requests, runs, locks);
-    ``root`` is the reconciler's own tree and the ONLY place it creates directories."""
+    ``root`` is the reconciler's own tree and the ONLY place it creates directories.
+
+    ``canary`` (W5b, ``LR_RECON_CANARY``) is a real-session canary daemon: it sees and acts on those
+    sids only, shares lr_root's locks, runs and ledger with every legacy actor (so the launch lock
+    still arbitrates), and keeps its cutover switch, facts and records in its OWN tree
+    (``lr_root/recon-canary`` by default). The operator's ``recon.on``, ``autorecover.on`` and
+    ``recon/`` are neither read as its switch nor written."""
 
     lr_root: str
     root: str
+    canary: typing.FrozenSet[str] = frozenset()
 
     @classmethod
     def from_env(
@@ -209,8 +234,19 @@ class Paths:
         lr_root = env.get("LR_STATE_DIR") or os.path.join(
             home, ".reso", "limit-recover"
         )
-        rroot = root or env.get("LR_RECON_ROOT") or os.path.join(lr_root, "recon")
-        return cls(lr_root=lr_root, root=rroot)
+        canary = parse_canary(env.get("LR_RECON_CANARY", ""))
+        default = os.path.join(lr_root, CANARY_ROOT if canary else "recon")
+        rroot = root or env.get("LR_RECON_ROOT") or default
+        return cls(lr_root=lr_root, root=rroot, canary=canary)
+
+    @property
+    def canary_in_live_root(self) -> bool:
+        """A canary daemon pointed at the live reconciler's tree would share its lock and
+        heartbeat: refused at startup."""
+        live = os.path.join(self.lr_root, "recon")
+        return bool(self.canary) and os.path.realpath(self.root) == os.path.realpath(
+            live
+        )
 
     def p(self, *parts: str) -> str:
         return os.path.join(self.root, *parts)
@@ -272,13 +308,19 @@ class Paths:
     def mode_file(self) -> str:
         return self.p("mode")
 
-    # shared (under lr_root) — read, and written only through the C7 lock pattern
+    # shared (under lr_root) — read, and written only through the C7 lock pattern. A canary daemon's
+    # switch is its own tree's canary.on for both: the canary list IS the consent to act on those
+    # sids, and the operator's files keep meaning what they mean for every other session.
     @property
     def recon_on(self) -> str:
+        if self.canary:
+            return self.p("canary.on")
         return os.path.join(self.lr_root, "recon.on")
 
     @property
     def autorecover_on(self) -> str:
+        if self.canary:
+            return self.p("canary.on")
         return os.path.join(self.lr_root, "autorecover.on")
 
     @property

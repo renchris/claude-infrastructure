@@ -546,6 +546,26 @@ class Observe(unittest.TestCase):
         self.assertNotIn(SIDB, s.rig_refused)
         self.assertIn(SIDBG, s.rig_refused)
 
+    def test_canary_sees_only_its_listed_sids(self):
+        # W5b: a canary daemon's census drops every real session before a bucket can exist
+        p = T.Paths(lr_root="/nx", root="/nx/recon-canary", canary=frozenset({SIDA}))
+        s = O.observe(
+            p,
+            self.home.dir,
+            run=FakeRun(),
+            glob_fn=fake_glob,
+            lstat_fn=fake_lstat,
+            kitten="k",
+            now=1.0,
+        )
+        self.assertEqual(sorted(s.sessions), [SIDA])
+        self.assertIn(SIDB, s.rig_refused)
+        self.assertIn(SIDBG, s.rig_refused)
+        # CONTROL: the same census without a canary set sees them all
+        s = self.snap()
+        self.assertIn(SIDB, s.sessions)
+        self.assertEqual(s.rig_refused, [])
+
     def test_rig_mode_from_env(self):
         self.assertTrue(O.rig_mode({"LR_RECON_RIG": "1"}))
         self.assertTrue(O.rig_mode({"LR_RIG": "1"}))

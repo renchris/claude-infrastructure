@@ -206,7 +206,9 @@ _ORD = {1: "1st", 2: "2nd", 3: "3rd"}
 MOVE_ROLES = ("recon-A", "recon-A-husk", "recon-B", "recon-R")
 
 
-def _typers(paths: T.Paths, sids: Sequence[str]) -> Dict[Tuple[str, str], Dict[str, set]]:
+def _typers(
+    paths: T.Paths, sids: Sequence[str]
+) -> Dict[Tuple[str, str], Dict[str, set]]:
     """(sid, attempt) → {"launch": distinct launch-lock taker pids, "move": move-actuator spawn pids}
     from recon/launch.log. lr-fire-resume and every fenced legacy actor log their launch-lock take;
     the daemon logs each move spawn. Either set above 1 is a double typer for that attempt: two
@@ -270,7 +272,11 @@ def dod_line(paths: T.Paths, records: Sequence[T.Record]) -> str:
     lost = _quarantined(paths, sids)
     via = [r.close.get("via") for r in records]
     outcomes = [r.terminal.outcome if r.terminal else None for r in records]
-    if n and all(v == "ENGAGED" for v in via) and all(o in (None, "CLOSED") for o in outcomes):
+    if (
+        n
+        and all(v == "ENGAGED" for v in via)
+        and all(o in (None, "CLOSED") for o in outcomes)
+    ):
         lat = [
             float(r.close.get("at", 0)) - float(r.timeline.detected or 0)
             for r in records
@@ -301,7 +307,11 @@ def dod_line(paths: T.Paths, records: Sequence[T.Record]) -> str:
     closed = [r for r in records if r.terminal and r.terminal.outcome == "CLOSED"]
     eng = sum(1 for r in closed if r.close.get("via") == "ENGAGED")
     mov = sum(1 for r in closed if r.close.get("via") == "MOVED")
-    held = [r for r in records if r.open and (r.substate or "").startswith("HOLD") and r.wait]
+    held = [
+        r
+        for r in records
+        if r.open and (r.substate or "").startswith("HOLD") and r.wait
+    ]
     draft = sum(1 for r in held if r.substate == "HOLD-DRAFT")
     bg = sum(1 for r in held if r.substate == "HOLD-BGWORK")
     rec_bg = sum(1 for r in closed if "HOLD-BGWORK" in (r.close.get("seen") or []))
@@ -394,7 +404,8 @@ def readout_line(
 
 
 def _cc_notify(*args: str) -> None:
-    exe = os.path.join(
+    # LR_NOTIFY_BIN: a canary or rig daemon pages into its own log, never the operator's inbox
+    exe = os.environ.get("LR_NOTIFY_BIN") or os.path.join(
         os.environ.get("HOME", os.path.expanduser("~")), ".claude", "bin", "cc-notify"
     )
     subprocess.run(

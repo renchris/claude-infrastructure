@@ -581,6 +581,10 @@ def list_requests(paths: T.Paths) -> List[T.Request]:
             continue
         if not _UUID.match(stem):
             continue
+        # a canary daemon shares the request dir with the poller: another session's request is
+        # never its to read, reconcile or move to claimed/
+        if paths.canary and stem not in paths.canary:
+            continue
         path = os.path.join(paths.requests, name)
         try:
             raw = _read_json(path)

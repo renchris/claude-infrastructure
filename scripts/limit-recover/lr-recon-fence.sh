@@ -169,7 +169,15 @@ lr_recon_defers() {
   state="$(_lr_recon_state_dir)"
   root="$(_lr_recon_root)"
   if [ ! -e "$state/recon.on" ]; then
-    _lr_recon_verdict act "$sid" "recon-off"; return 1
+    # W5b canary: a canary daemon (LR_RECON_CANARY) owns its listed sids from its own tree while
+    # the operator's recon.on is absent; rules 2-5 then run against that tree, so the poller's
+    # resume-debt sweep defers to it exactly as it would to the live reconciler.
+    case "$sid" in ''|*/*) _lr_recon_verdict act "$sid" "recon-off"; return 1 ;; esac
+    if [ -e "$state/recon-canary/canary.on" ] && [ -f "$state/recon-canary/owned/$sid" ]; then
+      root="$state/recon-canary"
+    else
+      _lr_recon_verdict act "$sid" "recon-off"; return 1
+    fi
   fi
   owned="$root/owned/$sid"
   case "$sid" in ''|*/*) owned="" ;; esac

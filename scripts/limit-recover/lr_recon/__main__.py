@@ -786,12 +786,17 @@ def run_pass(ctx: Ctx, force_observe: bool = False) -> Dict[str, Any]:
         rig_keep=frozenset(ctx.records),
     )
     ctx.degraded_streak = ctx.degraded_streak + 1 if snap.degraded else 0
-    for (
-        sid
-    ) in snap.rig_refused:  # rig mode: logged once per sid per process, never acted on
+    for sid in (
+        snap.rig_refused
+    ):  # rig/canary mode: logged once per sid per process, never acted on
         if sid not in ctx.rig_refused:
             ctx.rig_refused.add(sid)
-            _event(paths, "rig-refuse", sid, detail="no registry row carries rig:true")
+            if paths.canary:
+                _event(paths, "canary-refuse", sid, detail="not in LR_RECON_CANARY")
+            else:
+                _event(
+                    paths, "rig-refuse", sid, detail="no registry row carries rig:true"
+                )
     facts = _facts(ctx, snap, now)
     reqs = store.list_requests(paths)
     buckets, stale = _census(ctx, snap, facts, reqs, mode, now)
@@ -944,6 +949,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--root", help="reconciler state root (default LR_RECON_ROOT)")
     a = ap.parse_args(argv)
     paths = T.Paths.from_env(root=a.root)
+    if paths.canary_in_live_root:
+        print(
+            "lr_recon: REFUSED — LR_RECON_CANARY is set and the root is the live reconciler's "
+            "(%s); a canary runs in its own tree (default %s)"
+            % (paths.root, os.path.join(paths.lr_root, T.CANARY_ROOT)),
+            file=sys.stderr,
+        )
+        return 2
+    if os.environ.get("LR_RECON_CANARY", "").strip() and not paths.canary:
+        print(
+            "lr_recon: REFUSED — LR_RECON_CANARY is set but names no session id",
+            file=sys.stderr,
+        )
+        return 2
     ctx = Ctx(paths, a.mode, os.environ.get("HOME", os.path.expanduser("~")))
     if not a.once:
         return daemon(ctx)

@@ -79,6 +79,45 @@ defers() { run /bin/bash "$S" defers "$SID"; }
   [[ "$output" == *"verdict=act sid=abcdef01 reason=recon-off"* ]]
 }
 
+# W5b canary: recon.on absent, a canary daemon owns its listed sid from $LR_STATE_DIR/recon-canary
+canary_tree() { # [with canary.on: 1|0] — owned + a fresh heartbeat under the canary tree
+  local C="$LR_STATE_DIR/recon-canary"
+  mkdir -p "$C/owned"
+  [ "${1:-1}" = 1 ] && : >"$C/canary.on"
+  printf '{"record_id":"%s","attempt":1,"procs":[]}' "$RID" >"$C/owned/$SID"
+  printf '{"pid":1,"lstart":"x","progress":7,"wall":%s,"uptime_raw":1.0,"progress_wall":%s}' \
+    "$((NOW - 5))" "$((NOW - 5))" >"$C/heartbeat"
+}
+
+@test "canary: recon.on absent, a live canary daemon owns the sid ⇒ defer (heartbeat-fresh) from its tree" {
+  canary_tree 1
+  defers
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"reason=heartbeat-fresh"* ]] || { echo "$output"; false; }
+  # the resume-debt drain defers too — the double typer the canary exists to rule out
+  run /bin/bash -c ". '$S'; lr_recon_may_act '$SID' cc-resume-debt always; echo rc=\$?"
+  [[ "$output" == *"gate=defer"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"rc=1"* ]] || { echo "$output"; false; }
+  # its own actuator acts
+  LR_RECORD_ID="$RID" run /bin/bash "$S" defers "$SID"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"reason=own-actuator"* ]] || { echo "$output"; false; }
+}
+
+@test "canary: no canary.on, or the sid not owned there ⇒ act (recon-off), byte-identical to no canary" {
+  canary_tree 0
+  defers
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"reason=recon-off"* ]] || { echo "$output"; false; }
+  : >"$LR_STATE_DIR/recon-canary/canary.on"
+  run /bin/bash "$S" defers "0123456789abcdef"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"reason=recon-off"* ]] || { echo "$output"; false; }
+  run /bin/bash "$S" defers "../owned/$SID"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"reason=recon-off"* ]] || { echo "$output"; false; }
+}
+
 @test "owned/<sid> absent ⇒ act (not-owned)" {
   recon_on
   defers

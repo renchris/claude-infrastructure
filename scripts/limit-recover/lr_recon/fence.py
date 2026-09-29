@@ -190,7 +190,15 @@ def defers(
 ) -> Tuple[bool, str]:
     """The §C10 predicate. ``(True, reason)`` = DEFER, ``(False, reason)`` = ACT."""
     if not os.path.exists(paths.recon_on):
-        return False, "recon-off"
+        # the bash fence's W5b canary rule: a canary daemon's owned sid defers from its own tree
+        croot = os.path.join(paths.lr_root, T.CANARY_ROOT)
+        if not (
+            _valid_sid(sid)
+            and os.path.exists(os.path.join(croot, "canary.on"))
+            and os.path.isfile(os.path.join(croot, "owned", sid))
+        ):
+            return False, "recon-off"
+        paths = T.Paths(lr_root=paths.lr_root, root=croot, canary=frozenset((sid,)))
     if not _valid_sid(sid) or not os.path.isfile(os.path.join(paths.owned, sid)):
         return False, "not-owned"
     owned = read_owned(paths, sid)

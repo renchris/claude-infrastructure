@@ -68,6 +68,10 @@ def actuator_env(
             # account's folder-trust seed, and the batched per-target preseed it vouched for was
             # never built (W5b). Each move seeds its own target (idempotent, lock-guarded).
             "CLAUDE_CODE_DISABLE_AGENT_VIEW": "1",
+            # the daemon's own trees, explicitly: the fence an actuator sources logs to and reads
+            # owned/ under LR_RECON_ROOT, and a canary daemon's root is not the default one
+            "LR_STATE_DIR": paths.lr_root,
+            "LR_RECON_ROOT": paths.root,
         }
     )
     if pane_sock:

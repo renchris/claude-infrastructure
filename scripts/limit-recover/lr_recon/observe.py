@@ -367,6 +367,7 @@ def observe(
             transcript_fn,
             rig_mode() if rig is None else rig,
             rig_keep,
+            paths.canary if paths is not None else frozenset(),
         )
     except Exception:  # noqa: BLE001
         snap.degraded.append("sessions")
@@ -382,6 +383,7 @@ def _sessions(
     transcript_fn: Optional[TranscriptFn],
     rig: bool = False,
     rig_keep: FrozenSet[str] = frozenset(),
+    canary: FrozenSet[str] = frozenset(),
 ) -> None:
     procs = snap.procs
     kitty_ok = not any(d.startswith("kitty") for d in snap.degraded)
@@ -422,6 +424,11 @@ def _sessions(
         # ever get one), a pane-keyed registry file another process overwrote must not hide it
         # mid-move (W5 rig 0c95685d: a stray --version probe's row stranded it IN-FLIGHT)
         if rig and sid not in rig_keep and not any(r.get("rig") is True for r in rrows):
+            snap.rig_refused.append(sid)
+            continue
+        # a canary daemon (W5b) sees only its listed throwaway sids: every real session is dropped
+        # here, before a bucket, record or actuator can exist for it
+        if canary and sid not in canary:
             snap.rig_refused.append(sid)
             continue
         live_reg = [r for r in rrows if live(r.get("pid"), procs) is not None]
