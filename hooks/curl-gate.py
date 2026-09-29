@@ -456,13 +456,94 @@ def ansi_c_safe(cmd: str) -> str:
     return "".join(out)
 
 
+def midword_hash_safe(cmd: str) -> str:
+    """`cmd` with each unquoted `#` that sits INSIDE a word escaped as `\\#`, which shlex keeps literal.
+
+    Bash and zsh start a comment only at the beginning of a word; shlex's commenter fires on any
+    unquoted `#`, so `curl http://x/a#b; curl http://169.254.169.254/` read as ONE curl and the
+    metadata request was eaten as comment text (allow). Word-start comments are copied untouched.
+    """
+    if "#" not in cmd:
+        return cmd
+    out: list[str] = []
+    state: str | None = None  # None, "'" or '"'
+    prev = ""  # last unquoted-context character emitted; "" = start of a word boundary
+    pending: list[
+        tuple[str, bool]
+    ] = []  # heredoc delimiters opened on the current line
+    i, n = 0, len(cmd)
+    while i < n:
+        c = cmd[i]
+        if state is None and c == "\n" and pending:
+            # Heredoc bodies are data, not shell: copy each verbatim through its delimiter line, so
+            # an apostrophe in a Python body cannot desync the quote tracking (measured: a bottle-
+            # sourcing `cat > x.py <<'PY'` flipped to a fail-closed deny before this).
+            out.append(c)
+            i += 1
+            for delim, strip_tabs in pending:
+                while i < n:
+                    j = cmd.find("\n", i)
+                    j = n if j < 0 else j
+                    line = cmd[i:j]
+                    out.append(cmd[i : j + 1])
+                    i = j + 1
+                    if (line.lstrip("\t") if strip_tabs else line) == delim:
+                        break
+            pending = []
+            prev = ""
+            continue
+        if state is None and cmd.startswith("<<", i) and not cmd.startswith("<<<", i):
+            m = re.match(r"<<(-?)\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2", cmd[i:])
+            if m:
+                pending.append((m.group(3), m.group(1) == "-"))
+                out.append(m.group(0))
+                prev = m.group(0)[-1]
+                i += len(m.group(0))
+                continue
+        if state is None:
+            if c == "\\":
+                out.append(cmd[i : i + 2])
+                prev = "\\"
+                i += 2
+                continue
+            if c == "#":
+                if prev and not prev.isspace() and prev not in ";|&()<>":
+                    out.append("\\#")
+                    prev = "#"
+                    i += 1
+                    continue
+                j = cmd.find("\n", i)
+                j = n if j < 0 else j
+                out.append(cmd[i:j])
+                prev = ""
+                i = j
+                continue
+            if c in "'\"":
+                state = c
+        elif state == '"' and c == "\\":
+            out.append(cmd[i : i + 2])
+            i += 2
+            continue
+        elif c == state:
+            state = None
+        out.append(c)
+        prev = c
+        i += 1
+    return "".join(out)
+
+
+def fixed_lexing(cmd: str) -> str:
+    """The text shell_tokens() lexes under the corrected readings (ANSI-C strings, mid-word `#`)."""
+    return midword_hash_safe(ansi_c_safe(cmd))
+
+
 def shell_tokens(cmd: str, ansi_c: bool = True) -> list[str]:
     """The quote-aware token list every argv walk here uses; raises ValueError like shlex.
 
     `ansi_c=False` is the incumbent plain-shlex reading, kept so decide_command() can hold the
-    rewrite to tighten-only (see there)."""
+    rewrites to tighten-only (see there)."""
     lexer = shlex.shlex(
-        ansi_c_safe(cmd) if ansi_c else cmd, posix=True, punctuation_chars=True
+        fixed_lexing(cmd) if ansi_c else cmd, posix=True, punctuation_chars=True
     )
     lexer.whitespace_split = True
     return list(lexer)
@@ -1607,9 +1688,10 @@ def decide_command(cmd: str, agent: bool = False) -> tuple[str, str, dict]:
     tokenise at all, which it DENIED fail-closed, and there the right reading can be an allow (a
     `curl …` that is only text inside a `$'…'` argument). The ruling for round 6 was "loosens
     nothing", so when the rewrite changes the text both readings are judged and the stricter wins.
+    The mid-word `#` rewrite (midword_hash_safe) is held to the same rule.
     """
     fixed = judge_command(cmd, agent)
-    if ansi_c_safe(cmd) == cmd:
+    if fixed_lexing(cmd) == cmd:
         return fixed
     plain = judge_command(cmd, agent, ansi_c=False)
     return plain if _STRICTNESS[plain[0]] > _STRICTNESS[fixed[0]] else fixed
