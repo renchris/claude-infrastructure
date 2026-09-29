@@ -3925,6 +3925,22 @@ pane_bgwork_key() { # $1=it2-bin $2=session-id → echoes the menu key to press,
   printf '%s' "$key"
 }
 
+# THE DIALOG WITHOUT ITS KEEP-WORK OPTION (W5 rig, 2026-09-29). Under CLAUDE_CODE_DISABLE_AGENT_VIEW=1
+# the same dialog offers only "1 Exit and stop tasks · 2 Stay", so pane_bgwork_choice finds no
+# keep-work index and pane_bgwork_key returns 1 — and the watcher, keyed on that key, never saw the
+# dialog at all: no Esc, just a 600 s wait in front of a menu. This asks only WHETHER the dialog is on
+# screen, through the same anchored recognizer, so the caller can cancel it with Esc. It never
+# yields a key: in that shape index 2 means Stay and the cursor rests on Exit-and-stop, so any digit
+# or Enter is the wrong keystroke.
+pane_bgwork_seen() { # $1=it2-bin $2=session-id → 0 the dialog is on screen (any shape) / 1 not, or unreadable
+  local it2="$1" id="$2" screen
+  [ -n "$it2" ] && [ -n "$id" ] || return 1
+  command -v pane_bgwork_dialog >/dev/null 2>&1 || return 1
+  screen="$(hf_bounded "$it2" session read -s "$id" -n "${FIRE_TYPE_READLINES:-500}" 2>/dev/null || true)"
+  [ -n "$screen" ] || return 1
+  printf '%s\n' "$screen" | pane_bgwork_dialog
+}
+
 # ---- P0-11 engagement verification (FM2 / INC-4 cold-fire auto-submit race) -------------------
 # A non-recycle fire types the launch command + focuses, then historically printed "→ fired"
 # UNCONDITIONALLY. But a cold --worktree fire can race CC boot: the auto-submit keystroke is lost
@@ -8060,7 +8076,13 @@ if [ "${1:-}" = "__recycle" ]; then
     # mis-detect can cost at most two stray keystrokes, never a keystroke storm.
     if [ "$waited" -ge "$rcy_bgwork_next" ] && [ "$rcy_bgwork_sent" -lt "$rcy_bgwork_max" ]; then
       rcy_bgwork_next=$(( (waited / rcy_bgwork_every + 1) * rcy_bgwork_every ))
+      bgk="" rcy_bg_up=0
       if bgk="$(pane_bgwork_key "$IT2" "$RSID")" && [ -n "$bgk" ]; then
+        rcy_bg_up=1
+      elif [ "${HF_BGWORK_ANY_SHAPE:-on}" != off ] && pane_bgwork_seen "$IT2" "$RSID"; then
+        bgk="" rcy_bg_up=1
+      fi
+      if [ "$rcy_bg_up" = 1 ]; then
         rcy_bgwork_seen=1
         # CANCEL (cc-lr upgrade's team procedure, 2026-09-23): for an Agent-Team lead or member
         # neither exit is safe — "Move to background" hands the conversation to a background
@@ -8068,12 +8090,15 @@ if [ "${1:-}" = "__recycle" ]; then
         # "Exit and stop tasks" aborts tasks before shutdown commits (a live member's pane goes
         # with them). Esc is the dialog's own Stay: the session is left exactly as it was, and
         # this watcher ends WITHOUT typing a relaunch.
-        if [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" = cancel ]; then
+        # …and the SAME Esc when the menu has no keep-work option at all (the agent-view-off shape):
+        # its only exit stops the tasks, which recovery never chooses (operator decision 2).
+        if [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" = cancel ] \
+           || { [ -z "$bgk" ] && [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" != off ]; }; then
           hf_bounded "$IT2" session send -s "$RSID" $'\e' >/dev/null 2>&1 || true
-          echo "!! recycle HELD at ${waited}s: the /exit raised the background-work dialog and this relaunch may not choose either exit (CC_RECYCLE_BGWORK_ANSWER=cancel) — sent Esc (Stay); the session in $RSID is untouched and NO relaunch was typed. Re-run once its background work has ended." >&2
+          echo "!! recycle HELD at ${waited}s: the /exit raised the background-work dialog and this relaunch may not choose either exit ($(if [ -z "$bgk" ]; then printf 'the menu offers no keep-work option'; else printf 'CC_RECYCLE_BGWORK_ANSWER=cancel'; fi)) — sent Esc (Stay); the session in $RSID is untouched and NO relaunch was typed. Re-run once its background work has ended." >&2
           # unconfirm=needed: the transplant confirm ran before the /exit and the session stays in
           # this pane, so the source must be handed back — the reconciler UNCONFIRMs off this field.
-          emit_recycle_event recycle-held-bgwork "" "$RSID" "background-work dialog at ${waited}s cancelled with Esc (team relaunch); nothing typed; unconfirm=needed" || true
+          emit_recycle_event recycle-held-bgwork "" "$RSID" "background-work dialog at ${waited}s cancelled with Esc; nothing typed; unconfirm=needed" || true
           exit 1
         fi
         if [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" != off ]; then
@@ -9206,7 +9231,29 @@ if [ "${1:-}" = "--probe-recycle-preconditions" ]; then
     PRP_EV_OUT="" PRP_EV_RC=1
     if [ "$PRP_VOLUNTARY" = 1 ]; then
       PRP_ROW_ACCT="$(jq -r '.account // empty' "$REG_DIR/$PRP_PANE.json" 2>/dev/null || true)"
-      PRP_EV_OUT="$(hf_account_evidence_check "$PRP_EVIDENCE" "$PRP_ROW_ACCT")" && PRP_EV_RC=0 || PRP_EV_RC=$?
+      # THE ROW NAMES A CONFIG DIR, THE FACT NAMES AN ACCOUNT (W5 rig, 2026-09-29). session-register
+      # writes `.account` as the config-dir basename (claude-secondary), while a fact file is keyed on
+      # the account name (next2), so comparing them raw refused EVERY voluntary move as a mismatch.
+      # Translate through the accounts.json-generated map, the same one lr-handoff's evidence check
+      # uses. It is sourced here because the probe exits long before the main flow sources it. A
+      # basename the map does not know is a refusal of its own, never a pass: a fact we cannot tie
+      # to this pane's account admits nothing.
+      if [ -n "$PRP_ROW_ACCT" ]; then
+        if ! command -v cc_acct_name_for_dir_basename >/dev/null 2>&1; then
+          # shellcheck source=/dev/null
+          for _CC_AM in "${CC_ACCOUNT_MAP:-}" "$(dirname "$0")/../lib/account-map.generated.sh" "$HOME/.claude/lib/account-map.generated.sh"; do
+            [ -n "$_CC_AM" ] && [ -f "$_CC_AM" ] && { source "$_CC_AM"; break; }
+          done
+        fi
+        PRP_ROW_NAME=""
+        command -v cc_acct_name_for_dir_basename >/dev/null 2>&1 \
+          && PRP_ROW_NAME="$(cc_acct_name_for_dir_basename "${PRP_ROW_ACCT##*/}" 2>/dev/null || true)"
+      fi
+      if [ -n "$PRP_ROW_ACCT" ] && [ -z "$PRP_ROW_NAME" ]; then
+        PRP_EV_OUT="account-unmapped ($PRP_ROW_ACCT)" PRP_EV_RC=1
+      else
+        PRP_EV_OUT="$(hf_account_evidence_check "$PRP_EVIDENCE" "${PRP_ROW_NAME:-}")" && PRP_EV_RC=0 || PRP_EV_RC=$?
+      fi
     fi
     if [ "$PRP_EV_RC" = 0 ]; then
       echo "limit: bypassed — account evidence ${PRP_EV_OUT%% *} resets_at=${PRP_EV_OUT#* } (voluntary)"

@@ -50,7 +50,19 @@ setup() {
   export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg"; mkdir -p "$CC_REGISTRY_DIR"
   SID="a1b2c3d4-0000-4000-8000-000000000002"
   PANE=901
-  printf '{"session_id":"%s","pane":"%s","account":"acctA"}\n' "$SID" "$PANE" > "$CC_REGISTRY_DIR/$PANE.json"
+  # The row names the CONFIG DIR (what session-register writes); facts name the ACCOUNT. A stub
+  # account map ties the two, the way lib/account-map.generated.sh does on the box.
+  printf '{"session_id":"%s","pane":"%s","account":"claude-secondary"}\n' "$SID" "$PANE" > "$CC_REGISTRY_DIR/$PANE.json"
+  export CC_ACCOUNT_MAP="$BATS_TEST_TMPDIR/account-map.sh"
+  cat > "$CC_ACCOUNT_MAP" <<'MAP'
+cc_acct_name_for_dir_basename() {
+  case "$1" in
+    .claude-secondary|claude-secondary) echo next2 ;;
+    .claude-next|claude-next) echo next ;;
+    *) return 1 ;;
+  esac
+}
+MAP
   export CC_PROJECTS_DIRS="$BATS_TEST_TMPDIR/cfg/projects"
   mkdir -p "$CC_PROJECTS_DIRS/-some-repo"
   TX="$CC_PROJECTS_DIRS/-some-repo/$SID.jsonl"
@@ -76,36 +88,43 @@ probe() { run bash "$HF" --probe-recycle-preconditions --source-pane "$PANE" --s
   seed_healthy_transcript
   local later=$(( $(date +%s) + 7200 )) soon=$(( $(date +%s) + 600 ))
 
-  fact acctA.5h.json "{\"status\":\"rejected\",\"scope\":\"5h\",\"resets_at\":$later}"
-  probe --voluntary --account-evidence "$EV/acctA.5h.json"
-  [[ "$output" == *"limit: bypassed — account evidence acctA.5h resets_at=$later (voluntary)"* ]] || { echo "$output"; false; }
+  fact next2.5h.json "{\"status\":\"rejected\",\"scope\":\"5h\",\"resets_at\":$later}"
+  probe --voluntary --account-evidence "$EV/next2.5h.json"
+  [[ "$output" == *"limit: bypassed — account evidence next2.5h resets_at=$later (voluntary)"* ]] || { echo "$output"; false; }
   [[ "$output" != *"REFUSED:not-limited"* ]] || { echo "$output"; false; }
   [[ "$output" == *"teammate: no"* ]] || { echo "the probe stopped at the limit gate: $output"; false; }
 
   # An ISO-8601 reset time is read too, and the scope may come from the file name alone.
-  fact acctA.7d.json "{\"status\":\"rejected\",\"resets_at\":\"$(date -u -r "$later" +%Y-%m-%dT%H:%M:%SZ)\"}"
-  probe --voluntary --account-evidence "$EV/acctA.7d.json"
-  [[ "$output" == *"limit: bypassed — account evidence acctA.7d "* ]] || { echo "$output"; false; }
+  fact next2.7d.json "{\"status\":\"rejected\",\"resets_at\":\"$(date -u -r "$later" +%Y-%m-%dT%H:%M:%SZ)\"}"
+  probe --voluntary --account-evidence "$EV/next2.7d.json"
+  [[ "$output" == *"limit: bypassed — account evidence next2.7d "* ]] || { echo "$output"; false; }
 
   probe --voluntary
   [ "$status" -eq 5 ] || { echo "$output"; false; }
   [[ "$output" == *"verdict: REFUSED:not-limited"* ]] || { echo "$output"; false; }
   [[ "$output" == *"evidence: missing"* ]] || { echo "$output"; false; }
 
-  fact acctA.5h.json "{\"status\":\"rejected\",\"scope\":\"5h\",\"resets_at\":$soon}"
-  probe --voluntary --account-evidence "$EV/acctA.5h.json"
+  fact next2.5h.json "{\"status\":\"rejected\",\"scope\":\"5h\",\"resets_at\":$soon}"
+  probe --voluntary --account-evidence "$EV/next2.5h.json"
   [[ "$output" == *"verdict: REFUSED:not-limited"* ]] || { echo "$output"; false; }
   [[ "$output" == *"evidence: expiring"* ]] || { echo "$output"; false; }
 
-  fact acctA.5h.json "{\"status\":\"rejected\",\"scope\":\"5h\",\"resets_at\":$later,\"contradicted\":true}"
-  probe --voluntary --account-evidence "$EV/acctA.5h.json"
+  fact next2.5h.json "{\"status\":\"rejected\",\"scope\":\"5h\",\"resets_at\":$later,\"contradicted\":true}"
+  probe --voluntary --account-evidence "$EV/next2.5h.json"
   [[ "$output" == *"verdict: REFUSED:not-limited"* ]] || { echo "$output"; false; }
   [[ "$output" == *"evidence: contradicted"* ]] || { echo "$output"; false; }
 
   # The fact must be about the account this pane is on.
-  fact acctB.5h.json "{\"status\":\"rejected\",\"scope\":\"5h\",\"resets_at\":$later}"
-  probe --voluntary --account-evidence "$EV/acctB.5h.json"
+  fact next.5h.json "{\"status\":\"rejected\",\"scope\":\"5h\",\"resets_at\":$later}"
+  probe --voluntary --account-evidence "$EV/next.5h.json"
   [[ "$output" == *"evidence: account-mismatch"* ]] || { echo "$output"; false; }
+
+  # A row whose config dir the account map does not know admits nothing.
+  printf '{"session_id":"%s","pane":"%s","account":"claude-nowhere"}\n' "$SID" "$PANE" > "$CC_REGISTRY_DIR/$PANE.json"
+  probe --voluntary --account-evidence "$EV/next2.5h.json"
+  [[ "$output" == *"verdict: REFUSED:not-limited"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"evidence: account-unmapped (claude-nowhere)"* ]] || { echo "$output"; false; }
+  printf '{"session_id":"%s","pane":"%s","account":"claude-secondary"}\n' "$SID" "$PANE" > "$CC_REGISTRY_DIR/$PANE.json"
 
   # No new flags: today's refusal, byte-for-byte, and no evidence line.
   probe
@@ -118,7 +137,7 @@ limit: a healthy pane is moved by asking it to move itself — cc-lr switch --pa
   [[ "$output" != *"evidence:"* ]] || { echo "$output"; false; }
 
   # Evidence without --voluntary is a usage error, not a silently ignored flag.
-  probe --account-evidence "$EV/acctA.5h.json"
+  probe --account-evidence "$EV/next2.5h.json"
   [ "$status" -eq 2 ] || { echo "status=$status $output"; false; }
 }
 
@@ -720,6 +739,31 @@ wrows() { grep "\"class\":\"$1\"" "$HOME/.claude/logs/handoffs.jsonl" 2>/dev/nul
   [ "$(grep -c $'session send .*\e' "$HOME/it2-calls.log")" = 1 ] || { cat -v "$HOME/it2-calls.log"; false; }
   [ "$(typed_relaunch)" = 0 ] || { cat "$HOME/it2-calls.log"; false; }
   wrows recycle-held-bgwork | grep -q 'nothing typed; unconfirm=needed' || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
+}
+
+@test "12b the 2-option dialog (agent view off) gets one Esc and never a digit — under cancel AND by default" {
+  local mode
+  for mode in cancel on; do
+    watcher_world
+    rm -f "$HOME/it2-calls.log" "$HOME/.claude/logs/handoffs.jsonl"
+    export SCREEN="$REPO/tests/fixtures/lr-recon/screens/bgwork-dialog-2.1.284-agent-view-off.txt"
+    export CC_PANE_MODAL_LIB="$REPO/hooks/lib/pane-modal.sh" CC_RECYCLE_BGWORK_EVERY_S=3
+    echo $(( $(date +%s) + 600 )) > "$HOME/shell-at"
+    CC_RECYCLE_BGWORK_ANSWER="$mode" drive_watcher
+    [ "$status" -eq 1 ] || { echo "mode=$mode $output"; false; }
+    [ "$(grep -c $'session send .*\e' "$HOME/it2-calls.log")" = 1 ] || { echo "mode=$mode"; cat -v "$HOME/it2-calls.log"; false; }
+    ! grep -qE 'session send (-s [^ ]+ )?[0-9]$' "$HOME/it2-calls.log" || { echo "mode=$mode typed a digit"; cat -v "$HOME/it2-calls.log"; false; }
+    [ "$(typed_relaunch)" = 0 ] || { echo "mode=$mode"; cat "$HOME/it2-calls.log"; false; }
+    wrows recycle-held-bgwork | grep -q 'unconfirm=needed' || { echo "mode=$mode"; cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
+  done
+  # The 3-option shape in default mode still answers its READ keep-work index, with no Esc.
+  watcher_world
+  rm -f "$HOME/it2-calls.log"
+  export SCREEN="$REPO/tests/fixtures/lr-recon/screens/bgwork-dialog-2.1.284.txt"
+  echo $(( $(date +%s) + 8 )) > "$HOME/shell-at"
+  CC_RECYCLE_BGWORK_ANSWER=on drive_watcher
+  grep -qE 'session send (-s [^ ]+ )?2$' "$HOME/it2-calls.log" || { cat -v "$HOME/it2-calls.log"; echo "$output"; false; }
+  ! grep -q $'session send .*\e' "$HOME/it2-calls.log" || { cat -v "$HOME/it2-calls.log"; false; }
 }
 
 # ── P · THE 1 s SHELL POLL ─────────────────────────────────────────────────────────────────────
