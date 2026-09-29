@@ -1440,11 +1440,100 @@ def loop_words_literal(raw: str, words: list[str]) -> bool:
     )  # our reading must agree with shlex's, or the list is not understood
 
 
+# ── R (port of hookdec9 protoR): `u=${pair#*|}` over a literal `for pair in …` list ──────────────
+# A strip binding resolves per iteration of its ROOT loop variable, and only when the pattern is a
+# literal with one leading or trailing `*` (no ?, [, #, ^, ~ — so bash, zsh and zsh+extendedglob
+# agree). Kill switch: CC_CURL_R=off (also the attribution switch the replay uses).
+R_ON = os.environ.get("CC_CURL_R") != "off"
+_STRIP_OK = r"[|:,=@/._+A-Za-z0-9-]+"
+_STRIP_ASSIGN_RE = re.compile(
+    r"(?:^|(?<=[\s;&|(]))([A-Za-z_][A-Za-z0-9_]*)=(\"?)\$\{([A-Za-z_][A-Za-z0-9_]*)(##|#|%%|%)(\*"
+    + _STRIP_OK
+    + r"|"
+    + _STRIP_OK
+    + r"\*)\}\2(?=$|[\s;&|)])"
+)
+
+
+def _strip(v: str, op: str, pat: str) -> str:
+    import fnmatch
+
+    if op in ("#", "##"):
+        for k in range(0, len(v) + 1) if op == "#" else range(len(v), -1, -1):
+            if fnmatch.fnmatchcase(v[:k], pat):
+                return v[k:]
+        return v
+    for k in range(len(v), -1, -1) if op == "%" else range(0, len(v) + 1):
+        if fnmatch.fnmatchcase(v[k:], pat):
+            return v[:k]
+    return v
+
+
+def join_continuations(cmd: str) -> str:
+    """`cmd` with every backslash-newline the shell deletes removed (not replaced by a space).
+
+    Measured on /bin/zsh and /bin/bash: `x=abc\\⏎def` binds abcdef and `for w in a/x\\⏎y` loops once
+    over a/xy — the pair is DELETED, so replacing it by a space (the round-9 prototype) split one word
+    into two and resolved a value the shell never uses. Inside single quotes the pair is literal and
+    kept; a `#` comment is copied through to its newline untouched."""
+    if "\\\n" not in cmd:
+        return cmd
+    out: list[str] = []
+    q = None
+    prev = ""
+    i, n = 0, len(cmd)
+    while i < n:
+        c = cmd[i]
+        if q == "'":
+            out.append(c)
+            if c == "'":
+                q = None
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            if cmd[i + 1] == "\n":
+                i += 2
+                continue
+            out.append(cmd[i : i + 2])
+            prev = cmd[i + 1]
+            i += 2
+            continue
+        if q == '"':
+            out.append(c)
+            if c == '"':
+                q = None
+            i += 1
+            continue
+        if c in "'\"":
+            q = c
+        elif c == "#" and (not prev or prev.isspace() or prev in ";|&()<>"):
+            j = cmd.find("\n", i)
+            j = n if j < 0 else j
+            out.append(cmd[i:j])
+            prev = ""
+            i = j
+            continue
+        out.append(c)
+        prev = c
+        i += 1
+    return "".join(out)
+
+
 def shell_bindings(cmd: str) -> dict:
-    """{NAME: ("for", [words]) | ("assign", raw_value)} for names bound exactly once, decidably."""
+    """{NAME: ("for", [words]) | ("assign", raw_value) | ("strip", ROOT, op, pat)} for names bound
+    exactly once, decidably."""
+    if R_ON:
+        cmd = join_continuations(cmd)
     if _UNSEEN_BINDERS.search(cmd):
         return {}
     sites: dict = {}
+    starts = set()
+    if R_ON:
+        for m in _STRIP_ASSIGN_RE.finditer(cmd):
+            starts.add(m.start(1))
+            sites.setdefault(m.group(1), []).append(
+                ("strip", m.group(3), m.group(4), m.group(5))
+            )
     for m in _FOR_RE.finditer(cmd):
         raw = m.group(2)
         try:
@@ -1454,6 +1543,8 @@ def shell_bindings(cmd: str) -> dict:
         ok = bool(words) and loop_words_literal(raw, words)
         sites.setdefault(m.group(1), []).append(("for", words) if ok else None)
     for m in _ASSIGN_RE.finditer(cmd):
+        if m.start(1) in starts:
+            continue
         name, plus, bracket, raw = m.groups()
         bad = (
             plus
@@ -1465,7 +1556,13 @@ def shell_bindings(cmd: str) -> dict:
             and "$" in raw
         )
         sites.setdefault(name, []).append(None if bad else ("assign", raw))
-    return {n: s[0] for n, s in sites.items() if len(s) == 1 and s[0] is not None}
+    b = {n: s[0] for n, s in sites.items() if len(s) == 1 and s[0] is not None}
+    # A strip binding is decidable only over a literal `for` root.
+    return {
+        n: v
+        for n, v in b.items()
+        if v[0] != "strip" or (b.get(v[1]) or ("",))[0] == "for"
+    }
 
 
 def expand_token(tok: str, bindings: dict, depth: int = 0) -> list[str] | None:
@@ -1483,6 +1580,11 @@ def expand_token(tok: str, bindings: dict, depth: int = 0) -> list[str] | None:
         return None
     if site[0] == "for":
         values = list(site[1])
+    elif site[0] == "strip":
+        roots = expand_token("$" + site[1], bindings, depth + 1)
+        if roots is None:
+            return None
+        values = [_strip(v, site[2], site[3]) for v in roots]
     else:
         try:
             deq = shlex.split(site[1], posix=True) if site[1] else [""]
@@ -1531,9 +1633,13 @@ def expand_argv(argv: list[str], cmd: str, partial: bool = False) -> list[list[s
     values: dict[str, list[str]] = {}
     total = 1
     for name in names:
-        vals = expand_token("$" + name, bindings) if name in bindings else None
+        site = bindings.get(name)
+        root = site[1] if site and site[0] == "strip" else name
+        if root in values or root not in bindings:
+            continue
+        vals = expand_token("$" + root, bindings)
         if vals:
-            values[name] = vals
+            values[root] = vals
             total *= len(vals)
             if total > _EXPAND_CAP:
                 return [argv]
@@ -1543,6 +1649,10 @@ def expand_argv(argv: list[str], cmd: str, partial: bool = False) -> list[list[s
     variants: list[list[str]] = []
     for combo in itertools.product(*(values[k] for k in keys)):
         env = dict(zip(keys, combo))
+        for name in names:
+            site = bindings.get(name)
+            if site and site[0] == "strip" and site[1] in env:
+                env[name] = _strip(env[site[1]], site[2], site[3])
 
         def sub(m: re.Match, env: dict = env) -> str:
             return env.get(m.group(1) or m.group(2), m.group(0))
@@ -1719,7 +1829,9 @@ def curl_invocations_by_segment(
 _STRICTNESS = {"allow": 0, "ask": 1, "deny": 2}
 
 
-def decide_command(cmd: str, agent: bool = False) -> tuple[str, str, dict]:
+def _decide_command_trunk(
+    cmd: str, agent: bool = False, bind_text: str | None = None
+) -> tuple[str, str, dict]:
     """judge_command() under the `$'…'`-aware lexing, held to TIGHTEN-ONLY against plain shlex.
 
     Round 6 fixed the lexer's reading of `$'x\\' #'` (see ansi_c_safe), which exposes curls the old
@@ -1731,9 +1843,9 @@ def decide_command(cmd: str, agent: bool = False) -> tuple[str, str, dict]:
 
     An alias whose value holds curl is judged as that value (alias_curl_values), strictest wins.
     """
-    fixed = judge_command(cmd, agent)
+    fixed = judge_command(cmd, agent, bind_text=bind_text)
     if fixed_lexing(cmd) != cmd:
-        plain = judge_command(cmd, agent, ansi_c=False)
+        plain = judge_command(cmd, agent, ansi_c=False, bind_text=bind_text)
         if _STRICTNESS[plain[0]] > _STRICTNESS[fixed[0]]:
             fixed = plain
     aliases = alias_curl_values(cmd)
@@ -1751,7 +1863,7 @@ def decide_command(cmd: str, agent: bool = False) -> tuple[str, str, dict]:
 
 
 def judge_command(
-    cmd: str, agent: bool = False, ansi_c: bool = True
+    cmd: str, agent: bool = False, ansi_c: bool = True, bind_text: str | None = None
 ) -> tuple[str, str, dict]:
     """Judge EVERY curl in the command; the strictest verdict wins (deny > ask > allow).
 
@@ -1774,22 +1886,25 @@ def judge_command(
 
     meta: dict = {"host": None, "method": None}
     verdicts: list[tuple[str, str]] = []
+    # PORT: `ctx` is the WHOLE command when this is a substitution body (bind_text), so a binding,
+    # a proxy/curlrc variable or a `| bash` outside the $(…) is still seen. Tighten-only.
+    ctx = bind_text or cmd
     # Command-level routing: an environment variable or a curlrc steers curl without a flag in argv.
-    if _ssrf.ENV_PROXY_RE.search(cmd):
+    if _ssrf.ENV_PROXY_RE.search(ctx):
         verdicts.append(
             (
                 "ask",
                 "a *_proxy environment variable sends curl through a proxy the host check cannot see",
             )
         )
-    if _ssrf.ENV_CURLRC_RE.search(cmd):
+    if _ssrf.ENV_CURLRC_RE.search(ctx):
         verdicts.append(
             (
                 "ask",
                 "CURL_HOME/XDG_CONFIG_HOME/HOME is set, which moves the curlrc curl reads its options from",
             )
         )
-    for argv in [v for a in invocations for v in expand_argv(a, cmd)]:
+    for argv in [v for a in invocations for v in expand_argv(a, ctx)]:
         # A zsh subscript or modifier left unresolved can still sit in a URL's host ("https://$u:t/"),
         # where the literal text reads as a harmless public name — so it asks rather than being judged.
         zsh_ref = next(
@@ -1811,7 +1926,7 @@ def judge_command(
                 )
             )
             continue
-        parsed = parse_argv(argv, cmd)
+        parsed = parse_argv(argv, ctx)
         decision, reason = decide(parsed)
         if decision == "allow" and not parsed.get("disables_curlrc"):
             rc = _ssrf.default_curlrc_present()
@@ -1837,7 +1952,7 @@ def judge_command(
         verdicts.append((decision, reason))
     if os.environ.get("CC_CURL_HOST_DOLLAR") != "off":
         for a in invocations:
-            verdicts.extend(host_dollar_verdicts(a, cmd, agent))
+            verdicts.extend(host_dollar_verdicts(a, ctx, agent))
 
     for want in ("deny", "ask"):
         for decision, reason in verdicts:
@@ -1851,6 +1966,308 @@ _STMT_PREFIX_RE = re.compile(
     r"^(?:(?:do|then|else|elif|if|while|until|\{|!|time|nohup|exec|command|builtin"
     r"|env|[A-Za-z_][A-Za-z0-9_]*=\S*)\s+)+"
 )
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# PORT (hookdec10): curl hidden inside a double-quoted command substitution or a backtick.
+# shlex keeps `x="$(curl -s http://169.254.169.254/)"` as ONE word, so the per-command pipeline saw
+# no curl and allowed. A quote-aware scanner (hookdec8 skeptic-corrected, verbatim) lists every body
+# the shell would run; each curl-bearing body NOT already judged at top level is judged by the
+# unchanged pipeline with the whole command as binding context, and verdicts merge strictest-wins.
+# An unresolvable curl gets exactly the pipeline's own verdict (ask; agent deny only via the
+# host-dollar rule). Kill switch: CC_CURL_SUBST=off.
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+class _Unbalanced(Exception):
+    pass
+
+
+def _heredoc_head(s: str, i: int):
+    """At s[i:] == '<<' (not '<<<'): (delim, quoted, strip_tabs, index after the delimiter word)."""
+    j = i + 2
+    strip = False
+    if j < len(s) and s[j] == "-":
+        strip, j = True, j + 1
+    while j < len(s) and s[j] in " \t":
+        j += 1
+    word, quoted = [], False
+    while j < len(s) and s[j] not in " \t\n;|&<>()":
+        c = s[j]
+        if c in "'\"":
+            quoted = True
+            k = s.find(c, j + 1)
+            if k == -1:
+                raise _Unbalanced
+            word.append(s[j + 1 : k])
+            j = k + 1
+            continue
+        if c == "\\" and j + 1 < len(s):
+            quoted = True
+            word.append(s[j + 1])
+            j += 2
+            continue
+        word.append(c)
+        j += 1
+    if not word:
+        raise _Unbalanced
+    return "".join(word), quoted, strip, j
+
+
+def _backtick_end(s: str, i: int) -> int:
+    j = i + 1
+    while j < len(s):
+        if s[j] == "\\":
+            j += 2
+            continue
+        if s[j] == "`":
+            return j
+        j += 1
+    raise _Unbalanced
+
+
+def _bt_body(raw: str) -> str:
+    # Inside backticks a backslash quotes only $ ` and \ (bash man page, Command Substitution).
+    return re.sub(r"\\([$`\\])", r"\1", raw)
+
+
+def _scan_dq(s: str, i: int, out: list) -> int:
+    """s[i-1] was the opening '"'. Returns the index just past the closing '"'."""
+    n = len(s)
+    while i < n:
+        c = s[i]
+        if c == "\\":
+            i += 2
+            continue
+        if c == '"':
+            return i + 1
+        if c == "$" and i + 1 < n and s[i + 1] == "(":
+            end = _scan(s, i + 2, out, stop=")")
+            out.append(s[i + 2 : end])
+            i = end + 1
+            continue
+        if c == "`":
+            end = _backtick_end(s, i)
+            body = _bt_body(s[i + 1 : end])
+            out.append(body)
+            _scan(body, 0, out, stop=None)
+            i = end + 1
+            continue
+        i += 1
+    raise _Unbalanced
+
+
+def _scan_heredoc_body(body: str, out: list) -> None:
+    """An unquoted-delimiter heredoc body: quotes are literal, but $( ) and backticks run."""
+    i, n = 0, len(body)
+    while i < n:
+        c = body[i]
+        if c == "\\":
+            i += 2
+            continue
+        if c == "$" and i + 1 < n and body[i + 1] == "(":
+            end = _scan(body, i + 2, out, stop=")")
+            out.append(body[i + 2 : end])
+            i = end + 1
+            continue
+        if c == "`":
+            end = _backtick_end(body, i)
+            b = _bt_body(body[i + 1 : end])
+            out.append(b)
+            _scan(b, 0, out, stop=None)
+            i = end + 1
+            continue
+        i += 1
+
+
+# A `case`/`esac` keyword: in command position and a whole word. Inside `case … esac` every bare `)`
+# ends a pattern, so `$(case a in a) curl …;; esac)` must not close at `a)` (round-7 trunk hole 3,
+# which the top-level entry filter fixes via _STMT_SPLIT_RE and this scanner inherits).
+_CMD_POS_RE = re.compile(r"(?:\A|[;&|(\n{]|(?<![\w-])(?:do|then|else|elif|!))[ \t]*\Z")
+
+
+def _command_word(s: str, i: int, width: int) -> bool:
+    end = i + width
+    return (end == len(s) or s[end] in " \t\n;&|)") and bool(_CMD_POS_RE.search(s[:i]))
+
+
+def _scan(s: str, i: int, out: list, stop: str | None) -> int:
+    """Unquoted shell text from i. With stop=')' returns the index of the closing ')'."""
+    n = len(s)
+    pending: list = []
+    case_depth = 0
+    while i < n:
+        c = s[i]
+        if c == "\\":
+            i += 2
+            continue
+        if c == "'":
+            k = s.find("'", i + 1)
+            if k == -1:
+                raise _Unbalanced
+            i = k + 1
+            continue
+        if c == "$" and i + 1 < n and s[i + 1] == "'":  # $'…' ANSI-C string: literal
+            j = i + 2
+            while j < n and s[j] != "'":
+                j += 2 if s[j] == "\\" else 1
+            if j >= n:
+                raise _Unbalanced
+            i = j + 1
+            continue
+        if c == '"':
+            i = _scan_dq(s, i + 1, out)
+            continue
+        if c == "`":
+            end = _backtick_end(s, i)
+            b = _bt_body(s[i + 1 : end])
+            out.append(b)
+            _scan(b, 0, out, stop=None)
+            i = end + 1
+            continue
+        if c == "$" and i + 1 < n and s[i + 1] == "(":
+            end = _scan(s, i + 2, out, stop=")")
+            out.append(s[i + 2 : end])
+            i = end + 1
+            continue
+        if (s.startswith("case", i) or s.startswith("esac", i)) and _command_word(
+            s, i, 4
+        ):
+            case_depth = case_depth + 1 if c == "c" else max(case_depth - 1, 0)
+            i += 4
+            continue
+        if c == "(":
+            end = _scan(s, i + 1, out, stop=")")
+            i = end + 1
+            continue
+        if c == ")":
+            if case_depth:  # a case pattern's `)` (`a)`, `*)`) closes nothing
+                i += 1
+                continue
+            if stop == ")":
+                return i
+            i += 1
+            continue
+        if c == "#" and (i == 0 or s[i - 1] in " \t\n;&|("):
+            k = s.find("\n", i)
+            i = n if k == -1 else k
+            continue
+        if c == "<" and s.startswith("<<<", i):
+            i += 3
+            continue
+        if c == "<" and s.startswith("<<", i):
+            delim, quoted, strip, j = _heredoc_head(s, i)
+            pending.append((delim, quoted, strip))
+            i = j
+            continue
+        if c == "\n" and pending:
+            i += 1
+            for delim, quoted, strip in pending:
+                lines = []
+                while True:
+                    if i >= n:
+                        raise _Unbalanced
+                    k = s.find("\n", i)
+                    line = s[i:] if k == -1 else s[i:k]
+                    i = n if k == -1 else k + 1
+                    if (line.lstrip("\t") if strip else line) == delim:
+                        break
+                    lines.append(line)
+                if not quoted:
+                    _scan_heredoc_body("\n".join(lines), out)
+            pending = []
+            continue
+        i += 1
+    if stop == ")":
+        raise _Unbalanced
+    return n
+
+
+def substitution_bodies(cmd: str) -> list[str] | None:
+    """Every $(…)/backtick body bash would execute, at every nesting depth; None if unbalanced."""
+    out: list[str] = []
+    try:
+        _scan(cmd, 0, out, stop=None)
+    except (_Unbalanced, RecursionError):
+        return None
+    return out
+
+
+# `$(cat <<'EOF' … EOF)` — the commit-message idiom — only PRINTS its body; judging the prose as
+# commands would read the word curl in a message as a request. Any substitution inside an
+# unquoted-delimiter body was already collected by the scanner, so skipping the body itself hides
+# nothing that runs.
+_CAT_HEREDOC_RE = re.compile(
+    r"\A\s*cat\s+<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1[ \t]*\n.*\n[ \t]*\2[ \t]*\n?\s*\Z",
+    re.S,
+)
+_SUBST_CURL_RE = re.compile(r"(?:\$\(|`)[^`]*?(?<![\w.-])curl(?![\w.-])")
+
+
+def _curl_statement(c: str) -> bool:
+    return statement_has_curl(c) or alias_curl_values(c) != []
+
+
+def wants_judgement(cmd: str) -> bool:
+    """main()'s entry filter: a curl statement at top level or in any substitution body the shell
+    runs. The bodies matter only for what the top-level split cannot see, an alias value inside
+    `$(…)`; an undelimitable substitution near a curl is judged (decide_command asks on it)."""
+    if _curl_statement(cmd):
+        return True
+    if os.environ.get("CC_CURL_SUBST") == "off" or "curl" not in cmd:
+        return False
+    if "$(" not in cmd and "`" not in cmd:
+        return False
+    bodies = substitution_bodies(cmd)
+    if bodies is None:
+        return bool(_SUBST_CURL_RE.search(cmd))
+    return any(_curl_statement(b) for b in bodies)
+
+
+def _argv_seen(barg: list[str], invs: list[list[str]]) -> bool:
+    """Tight match: the body's argv is a PREFIX of an argv the top-level pass already judged."""
+    b = [t for t in barg if t not in (")", "(", ";")]
+    for inv in invs or []:
+        i = [t for t in inv if t not in (")", "(", ";")]
+        if i[: len(b)] == b:
+            return True
+    return False
+
+
+def _invocations(c: str) -> list[list[str]] | None:
+    inv = curl_invocations(c)
+    return curl_invocations_by_segment(c) if inv is None else inv
+
+
+def decide_command(cmd: str, agent: bool = False) -> tuple[str, str, dict]:
+    decision, reason, meta = _decide_command_trunk(cmd, agent)
+    verdicts = [(decision, reason)]
+    if os.environ.get("CC_CURL_SUBST") != "off" and ("$(" in cmd or "`" in cmd):
+        bodies = substitution_bodies(cmd)
+        if bodies is None:
+            if _SUBST_CURL_RE.search(cmd):
+                verdicts.append(
+                    (
+                        "ask",
+                        "a command substitution holding curl could not be delimited",
+                    )
+                )
+        else:
+            top = _invocations(cmd) or []
+            for b in bodies:
+                if _CAT_HEREDOC_RE.match(b) or not _curl_statement(b):
+                    continue
+                bs = b.strip()
+                binv = _invocations(bs)
+                # None (untokenisable) falls through to the pipeline, which denies it as trunk does.
+                if binv and all(_argv_seen(x, top) for x in binv):
+                    continue  # the top-level pass already judged this curl
+                d, r = _decide_command_trunk(bs, agent, bind_text=cmd)[:2]
+                verdicts.append((d, "inside a command substitution: " + r))
+    for want in ("deny", "ask"):
+        for d, r in verdicts:
+            if d == want:
+                return d, r, meta
+    return decision, reason, meta
+
 
 # `(`, `)`, `{` and `}` end a statement too: without them `f(){ curl …; }`, `function f { curl …; }`
 # and `case a in a) curl …;; esac` were never judged (the pipeline itself reads all three; only this
@@ -1951,8 +2368,9 @@ def main() -> None:
     # `startswith("curl")`, so `echo x⏎curl http://169.254.169.254/` and
     # `for u in …; do curl "$u"; done` were never gated at all — no IMDS deny, no pipe-to-shell deny
     # (measured 2026-09-24 while adding loop-variable resolution: the IMDS loop exited 0 unjudged).
-    # See _STMT_SPLIT_RE for `(){}`; an alias whose value holds curl is a curl statement.
-    if not statement_has_curl(cmd_trim) and alias_curl_values(cmd_trim) == []:
+    # See _STMT_SPLIT_RE for `(){}`; an alias whose value holds curl is a curl statement, and so is
+    # one inside a command substitution body (wants_judgement).
+    if not wants_judgement(cmd_trim):
         sys.exit(0)
 
     if cmd_trim.startswith("xargs curl"):
