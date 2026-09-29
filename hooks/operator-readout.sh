@@ -497,8 +497,9 @@ stranded_sessions() {
   fi
   { [ -n "$rd" ] && [ -x "$rd" ]; } || return 0
   command -v jq >/dev/null 2>&1 || return 0
-  for c in "$(command -v timeout 2>/dev/null)" "$(command -v gtimeout 2>/dev/null)" \
-           /opt/homebrew/bin/timeout /usr/local/bin/timeout; do
+  # Absolute paths only: a Stop hook may inherit the stock PATH, where a bare `timeout` resolves to
+  # nothing (unattended-path-lint). No bound found ⇒ the unbounded call below, which list keeps cheap.
+  for c in /opt/homebrew/bin/timeout /usr/local/bin/timeout /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
     [ -n "$c" ] && [ -x "$c" ] && { to="$c"; break; }
   done
   if [ -n "$to" ]; then raw="$("$to" -k 1 3 "$rd" list --escalated --json 2>/dev/null)" || return 0
