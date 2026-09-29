@@ -79,6 +79,8 @@ teardown() {
   fi
   # a window the daemon's R path opened is also in the rig OS window: close by its title
   [ -n "${SOCK:-}" ] && "$KITTEN" @ --to "$SOCK" close-window --match "title:^lr-rig" >/dev/null 2>&1
+  # the R path opens a NEW os-window in the rig's cwd: only rig windows ever run under /tmp/lr-rig
+  [ -n "${SOCK:-}" ] && "$KITTEN" @ --to "$SOCK" close-window --match "cwd:^(/private)?/tmp/lr-rig/" >/dev/null 2>&1
   pkill -f "$RIG/bin/claude" 2>/dev/null
   return 0
 }
@@ -98,7 +100,8 @@ python3 "$HERE/rig_lib.py" home "$RIG" || die "rig home"
 IDLE_FANOUT="$(python3 -c 'import json,sys;print("on" if json.load(open(sys.argv[1])).get("idle_fanout") else "off")' "$FAULTS")"
 write_env
 for d in scripts hooks lib model-config.yaml; do ln -s "$REPO/$d" "$RIG/home/.claude/$d"; done
-mkdir -p "$RIG/home/bin" "$RIG/home/.claude/autonomy/resume-debt"
+mkdir -p "$RIG/home/bin" "$RIG/home/.claude/autonomy/resume-debt" "$RIG/home/.reso/bin"
+ln -s "$REPO/bin/reso-resume-one" "$RIG/home/.reso/bin/reso-resume-one"   # the R path's launcher
 for b in "$REPO"/bin/*; do ln -s "$b" "$RIG/home/.claude/bin/$(basename "$b")"; done
 ln -sf "$REPO/bin/it2-wrapper" "$RIG/home/.claude/bin/it2"   # install.sh installs it under this name
 ln -sf "$HERE/claude" "$RIG/bin/claude"

@@ -510,6 +510,16 @@ class Tui:
 def write_dead(sid, cwd):
     cwd = os.path.realpath(cwd)
     s = Session(sid, os.path.join(os.environ["HOME"], ".claude-next"), cwd)
+    # the registry row a crashed session leaves behind: rig-tagged, its pid long dead
+    p = subprocess.Popen(["/usr/bin/true"])
+    p.wait()
+    reg = os.path.join(os.environ["HOME"], ".claude", "cc-registry")
+    os.makedirs(reg, exist_ok=True)
+    atomic(
+        os.path.join(reg, "dead-%s.json" % sid[:8]),
+        {"paneUUID": "", "name": "rig dead", "cwd": cwd, "account": "claude-next", "pid": p.pid,
+         "startedAt": int(time.time()) - 3600, "session_id": sid, "surface": "pane", "rig": True},
+    )
     s.user("Work on the rig task.")
     s.assistant("Working on it.")
     s.error("limit")
