@@ -157,6 +157,27 @@ if [[ -n "$LRP_LIB" ]]; then
   # shellcheck disable=SC1091
   . "$LRP_LIB"
 fi
+# ── lr-recon-fence.sh — one actuator family per session (LIMIT_RECOVER_FLEET_V2 W4, § C10) ──────
+# The reconciler daemon and this poller can both type into one pane. Every arm below that touches a
+# sid asks lrp_may_act first; a sid the reconciler owns is DEFERRED (left exactly as it is) rather
+# than driven twice. The fence reads $LR_STATE_DIR, so it is pointed at THIS daemon's state tree
+# when nothing else has set it — the recon.on it tests must be the one beside our requests/.
+# UNREACHABLE FENCE ⇒ ACT AS BEFORE: the reconciler is opt-in, and a missing file must not stop
+# the legacy recovery lane; it is said once per tick so the gap is visible.
+[[ -n "${LR_STATE_DIR:-}" ]] || LR_STATE_DIR="$STATE"
+LRP_FENCE=0
+for _lrp_f in "$(dirname "$_LRP_SELF")/lr-recon-fence.sh" "$LR/lr-recon-fence.sh" "${HOME:-}/.claude/scripts/limit-recover/lr-recon-fence.sh"; do
+  # shellcheck source=lr-recon-fence.sh
+  # shellcheck disable=SC1091
+  [[ -f "$_lrp_f" ]] && . "$_lrp_f" && declare -F lr_recon_may_act >/dev/null 2>&1 && { LRP_FENCE=1; break; }
+done
+lrp_may_act() { # $1=sid $2=arm → 0 ACT (pair with lrp_act_done on every exit path) · 1 DEFER (logged)
+  (( LRP_FENCE )) || return 0
+  lr_recon_may_act "$1" "poller-$2" 2>>"$LOG" && return 0
+  log "RECON-DEFER $2 $1"
+  return 1
+}
+lrp_act_done() { (( LRP_FENCE )) || return 0; lr_recon_act_done; }
 REQUESTS="$STATE/requests"; RESULTS="$STATE/results"
 # CLAIMED and RUN_CLAIMS are the request lane's two new stores (W5-A, 2026-09-20), created HERE
 # beside the other two because the loop that uses them must never be the thing that decides whether
@@ -212,6 +233,31 @@ echo $$ > "$LOCKD/pid"; _lstart_of $$ > "$LOCKD/lstart"
 trap 'rm -rf "$LOCKD" 2>/dev/null || true' EXIT INT TERM
 mkdir -p "$STATE" 2>/dev/null || true
 log "TICK start"        # the denominator: without it no rate, gap or duty cycle is computable
+(( LRP_FENCE )) || log "RECON-FENCE-MISSING lr-recon-fence.sh unreachable — every arm acts as before (legacy)"
+
+# ── THE RECONCILER BACKUP WATCHDOG (LIMIT_RECOVER_FLEET_V2 § C9) ──────────────────────────────────
+# With recon.on the operator has handed recovery to the reconciler, and every sid it owns is fenced
+# off from this daemon — so a reconciler that died silently leaves those sessions with NO actuator.
+# This tick is the independent observer: recon.on present and no fresh heartbeat ⇒ page (at most
+# once per 15 min, stamped on STATE, never on a log grep) and kick the job. Bare `kickstart`, never
+# `-k`: `-k` kills a running instance, and a reconciler that is alive but slow is exactly the one a
+# kill would turn into a dead one. recon.on absent ⇒ nothing at all.
+lrp_recon_watchdog() {
+  local stamp="$STATE/recon-backup.page" lc="${LR_LAUNCHCTL_BIN:-/bin/launchctl}"
+  (( LRP_FENCE )) || return 0
+  [[ -e "$LR_STATE_DIR/recon.on" ]] || return 0
+  lr_recon_live && return 0
+  if [[ $DRY -eq 1 ]]; then log "DRY   recon backup: reconciler heartbeat stale; would page and kickstart"; return 0; fi
+  if [[ ! -e "$stamp" ]] || [[ -n "$(find "$stamp" -mmin +"${LR_RECON_BACKUP_PAGE_MIN:-15}" 2>/dev/null)" ]]; then
+    : > "$stamp" 2>/dev/null || true
+    log "PAGE  recon backup — recon.on is set but the reconciler heartbeat is stale; kickstarting com.reso.lr-reconciler"
+    lrp_bounded osascript -e "display notification \"reconciler heartbeat stale — kickstarted; sessions it owns have no actuator until it returns\" with title \"lr-reset-poller\"" >/dev/null 2>&1 || true
+  fi
+  lrp_bounded "$lc" kickstart "gui/$(id -u)/com.reso.lr-reconciler" >/dev/null 2>>"$LOG" \
+    || log "RECON-BACKUP kickstart rc=$? (logged, tick continues)"
+  return 0
+}
+lrp_recon_watchdog
 
 # ── FIRE CLAIM (closes the pgrep race) ─────────────────────────────────────────────────
 # The "already running" guard is `pgrep -f "resume <sid>"` — it looks for the claude CHILD.
@@ -656,7 +702,8 @@ nudge_in_place() { # $1=sid $2=cfg $3=registry rows ("pane<TAB>pid<TAB>acct<TAB>
   [[ -x "$it2" ]] || { log "NUDGE-SKIP $sid — no it2 shim at $it2 (pane $pane, pid $pid stays parked)"; return 1; }
   sock="$(lr_kitty_socket 2>/dev/null || true)"
   t0="$(date -u +%FT%T)"
-  if ! CC_TERM_KITTY_TO="${sock:-${CC_TERM_KITTY_TO:-}}" lrp_bounded "$it2" session run -s "$pane" "/limit-recover" >/dev/null 2>&1; then
+  # stderr is KEPT (appended to the log): a failed type is the one moment the shim says why.
+  if ! CC_TERM_KITTY_TO="${sock:-${CC_TERM_KITTY_TO:-}}" lrp_bounded "$it2" session run -s "$pane" "/limit-recover" >/dev/null 2>>"$LOG"; then
     log "NUDGE-FAILED $sid — could not type into pane $pane (pid $pid, $acct)"; return 1
   fi
   max="${LR_NUDGE_ENGAGE_S:-120}"; ivl="${LR_NUDGE_IVL:-5}"
@@ -786,10 +833,16 @@ rq_record_attempt() { # $1=file $2=verdict — bumps .attempts and stamps the at
      '.attempts = ((.attempts // 0) + 1) | .last_attempt_epoch = $now | .last_verdict = $v' "$1" > "$t" 2>/dev/null \
     && mv -f "$t" "$1" 2>/dev/null || { rm -f "$t" 2>/dev/null; log "REQUEST-WARN could not record the attempt on $1"; }
 }
-_rq_held=0; _rq_held_sids=""
+_rq_held=0; _rq_held_sids=""; _rq_recon=0
 for _rq in "$REQUESTS"/*.json; do
   [[ -e "$_rq" ]] || continue
   _rq_name="$(basename "$_rq")"
+  # `<sid>.cc-lr.json` is ADDRESSED TO THE RECONCILER (cc-lr under recon.on). While it is live the
+  # request is its to read, so it is left untouched here; when it is not live the request drains
+  # through this loop exactly as a cc-lr-origin request always has, so none strands on a dead daemon.
+  case "$_rq_name" in
+    *.cc-lr.json) if (( LRP_FENCE )) && lr_recon_live; then _rq_recon=$(( _rq_recon + 1 )); continue; fi ;;
+  esac
   if [[ $DRY -eq 1 ]]; then log "DRY   request $_rq_name would be executed via $FLEET"; continue; fi
   # ONE reader, NUL-delimited, no interpreter in the path — the same shape as the parked-record
   # reader in § 2 and for the same reason: a JSON string may hold any byte EXCEPT NUL, so `read -d ''`
@@ -925,28 +978,37 @@ sys.stdout.write("".join(str(d.get(k) or "")+"\0"
     fi
   fi
 
+  # ── THE RECONCILER FENCE (§ C10) — the first point this iteration touches the sid ─────────────
+  # DEFER leaves the request exactly where it is: the reconciler owns the session now, and if it
+  # lapses the next tick finds the request again. ACT is paired with lrp_act_done on EVERY exit path
+  # below, so a lapsed-verdict launch lock never outlives this sid's iteration.
+  lrp_may_act "$_rq_sid" request || continue
+
   # ── THE PER-SID RUN CLAIM (defect 2) ──────────────────────────────────────────────────────────
   if (( _rq_hook == 1 )); then
     if (( _rq_att >= RQ_MAX_ATTEMPTS )); then
       log "REQUEST-EXHAUSTED $_rq_sid — $_rq_att dispatch(es) and the session is still LIMITED; filed as exhausted (cc-lr recover ${_rq_sid:0:8} retries it by hand)"
-      mv "$_rq" "$RESULTS/${_rq_name%.json}.exhausted.json" 2>/dev/null || true; continue
+      mv "$_rq" "$RESULTS/${_rq_name%.json}.exhausted.json" 2>/dev/null || true; lrp_act_done; continue
     fi
-    if (( _rq_last > 0 && $(date +%s) - _rq_last < RQ_RETRY_MIN * 60 )); then continue; fi
+    if (( _rq_last > 0 && $(date +%s) - _rq_last < RQ_RETRY_MIN * 60 )); then lrp_act_done; continue; fi
   fi
   _rq_crc=0; run_claim_take "$_rq_sid" || _rq_crc=$?
   if (( _rq_crc == 1 && _rq_hook == 1 )); then
     # A live run holds the sid. The request is KEPT: it retires on its own once the session is seen
     # recovered, and is retried if that run ends with the session still LIMITED.
     log "REQUEST-IN-FLIGHT $_rq_sid — a live run holds the claim; kept for re-check when it ends"
-    continue
+    lrp_act_done; continue
   fi
   if (( _rq_crc == 2 )); then
     log "REQUEST-SKIP $_rq_sid — the run claim could not be taken (no lib or an unwritable store); request left in place for the next tick"
-    continue
+    lrp_act_done; continue
   fi
   if (( _rq_crc != 0 )); then
-    log "SUPERSEDED-BY-LIVE-RUN $_rq_sid — $RUN_CLAIMS/$_rq_sid.active is held by a run already in flight; this request is dropped"
-    rm -f "$_rq"; continue
+    # MOVED to claimed/, never deleted — the same evidence rule as a drained request (defect 4). A
+    # superseded request is still one that reached this daemon, and its suffix names the outcome.
+    log "SUPERSEDED-BY-LIVE-RUN $_rq_sid — $RUN_CLAIMS/$_rq_sid.active is held by a run already in flight; this request is filed to $CLAIMED as superseded"
+    mv "$_rq" "$CLAIMED/${_rq_name%.json}.superseded.json" 2>/dev/null || rm -f "$_rq"
+    lrp_act_done; continue
   fi
 
   _rq_rc=0; _rq_verdict=""
@@ -996,11 +1058,15 @@ sys.stdout.write("".join(str(d.get(k) or "")+"\0"
   if (( _rq_hook == 1 )) && [[ "$_rq_mode" == relaunch ]]; then
     rq_record_attempt "$_rq" "$_rq_verdict"
     log "REQUEST $_rq_sid — $_rq_verdict rc=$_rq_rc, attempt $(( _rq_att + 1 ))/$RQ_MAX_ATTEMPTS; the request stays queued until the session is seen recovered (result $RESULTS/$_rq_sid.json)"
-    continue
+    lrp_act_done; continue
   fi
   mv "$_rq" "$CLAIMED/$_rq_name" 2>/dev/null || rm -f "$_rq"
   log "REQUEST $_rq_sid — $_rq_verdict rc=$_rq_rc (result $RESULTS/$_rq_sid.json)"
+  lrp_act_done
 done
+if (( _rq_recon > 0 )); then
+  log "RECON-OWNED $_rq_recon cc-lr request(s) left for the live reconciler"
+fi
 if (( _rq_held > 0 )); then
   log "HOOK-HELD $_rq_held hook-originated request(s) NOT drained — $STATE/autorecover.on is absent (sids: $_rq_held_sids); creating that file is the operator's call and releases the whole cohort"
 fi
@@ -1025,6 +1091,22 @@ lrp_upgrade_kick() {
   hp="$(cat "$STATE/upgrade-drain.lock/pid" 2>/dev/null || true)"
   if [[ "$hp" =~ ^[0-9]+$ ]] && kill -0 "$hp" 2>/dev/null; then
     log "UPGRADE-DRAIN already running (pid $hp)"; return 0
+  fi
+  # THE FENCE, per queue: a drainer started over a queue whose every sid the reconciler owns would
+  # only walk it and defer each one (the per-sid drive fences live in lr-upgrade.sh). One queued sid
+  # that may act is enough to start it. The raw predicate, not may_act: nothing is touched here.
+  if (( LRP_FENCE )); then
+    local f s n=0 nd=0
+    for f in "$UPG_QUEUE"/*.json "$UPG_DEFER"/*.json; do
+      [[ -e "$f" ]] || continue
+      s="$(jq -r '.sid // ""' "$f" 2>/dev/null || true)"
+      n=$(( n + 1 ))
+      [[ -n "$s" ]] && lr_recon_defers "$s" 2>/dev/null && nd=$(( nd + 1 ))
+    done
+    if (( n > 0 && nd == n )); then
+      log "UPGRADE-DEFER all $n queued request(s) are on sids the reconciler owns; drainer not started"
+      return 0
+    fi
   fi
   if [[ $DRY -eq 1 ]]; then log "DRY   upgrade drainer would start: $UPG_BIN --drain"; return 0; fi
   if [[ ! -f "$UPG_BIN" ]]; then log "UPGRADE-SKIP drainer not found at $UPG_BIN (queue left in place)"; return 0; fi
@@ -1106,70 +1188,18 @@ lrp_cap_of() { # <transcript> → the cap of the tail's LAST api-error record, e
   printf '%s' "$out" | jq -r 'if .limit then (.cap // "unknown") else "" end'
 }
 
-# ── 1. DETECT — ONE census per tick, then the transcript walk as backstop ──────────────
-# THE CENSUS IS ASKED ONCE, FOR ALL ACCOUNTS. Per-account calls were the obvious shape and are
-# the wrong one: the census memoizes `ps`, the registry and the marker read across every account
-# in a single process, so four calls pay that four times AND can disagree with each other — a
-# session that moved between two of them appears twice or not at all. One call, one instant.
-#
-# THE TRANSCRIPT WALK BELOW STAYS, for one release. It is the backstop while this path earns its
-# place: the census is marker- and parked-driven, so a session whose marker was GC'd (file-mtime
-# keyed) but whose transcript is still on disk is seen only by the walk. Both write the SAME
-# `$PARKED/<sid>.json` shape and both guard on `[[ ! -f ]]`, so whichever runs first wins and the
-# other is a no-op — they cannot double-park.
-CC_LIMITED_BIN="${CC_LIMITED:-$LR/../../bin/cc-limited}"
-if [[ -x "$CC_LIMITED_BIN" && "${LR_POLLER_NO_CENSUS:-0}" != 1 ]]; then
-  _cj=$(mktemp "${TMPDIR:-/tmp}/lrp-census.XXXXXX")
-  if "$CC_LIMITED_BIN" --all --json > "$_cj" 2>/dev/null; then
-    # `-` FOR EMPTY, from the emitter, because TAB is IFS *whitespace*: `IFS=$'\t' read` collapses
-    # a run of tabs and drops trailing empties, so a row with no cap and no reset would shift every
-    # column left of it and this loop would park the wrong session at the wrong account.
-    while IFS=$'\t' read -r sid state acct cap reset_iso reset_ep cwd cfg wait_ok; do
-      [[ -n "$sid" ]] || continue
-      for _f in cap reset_iso reset_ep cwd cfg; do
-        [[ "${!_f}" == "-" ]] && printf -v "$_f" '%s' ""
-      done
-      [[ "$reset_ep" == "0" ]] && reset_ep=""
-      case "$state" in
-        TEAMMATE)
-          if [[ ! -f "$STATE/teammate-skip/$sid" ]]; then
-            mkdir -p "$STATE/teammate-skip"; : > "$STATE/teammate-skip/$sid"
-            log "SKIP  $sid — teammate session (lead-owned recovery) [census]"
-          fi
-          continue ;;
-      esac
-      # NOT RECOVERABLE BY WAITING is a different fact from "not yet resettable", and only the
-      # census carries it. A Fable / monthly-spend cap has no reset to wait for, so parking one
-      # creates a record §2 can never discharge — it would sit in `parked/` forever, counted as
-      # pending recovery, and the operator would never be told why nothing happened. Say it once
-      # per tick instead and leave the record unwritten.
-      if [[ "$wait_ok" != "1" ]]; then
-        log "LIMITED-NOWAIT $sid ($acct, cap=${cap:-unknown}) — no reset to wait for; not parked${reset_iso:+, resets $reset_iso}"
-        continue
-      fi
-      case "$state" in
-        RECOVERABLE*|NO-PANE|PANE-REUSED|RESET-PASSED) : ;;
-        *) continue ;;                      # RE-ENGAGED, DUPLICATE, RESUMING, CWD-GONE, … : §2's or nobody's
-      esac
-      [[ -n "$reset_iso" && -n "$cwd" && -d "$cwd" ]] || continue
-      # the poller's own cap vocabulary — `kind` is what §2 and lr-select read
-      case "$cap" in
-        five_hour) kind=session ;; seven_day) kind=weekly ;;
-        model_scoped:*) kind=fable ;; *) kind="${cap:-session}" ;;
-      esac
-      if [[ -f "$RESUMED/$sid.json" ]]; then
-        prev=$(jq -r '.reset_at_utc // ""' "$RESUMED/$sid.json" 2>/dev/null || echo "")
-        if [[ -n "$prev" && ! "$reset_iso" > "$prev" ]]; then continue; fi
-        rm -f "$RESUMED/$sid.json"
-        log "REPARK $sid — new limit event (resets $reset_iso > handled ${prev:-unknown}) [census]"
-      fi
-      if [[ ! -f "$PARKED/$sid.json" ]]; then
-        printf '{"sid":"%s","acct":"%s","cfg":"%s","cwd":"%s","kind":"%s","reset_at_utc":"%s","parked_at":"%s"}\n' \
-          "$sid" "$acct" "$cfg" "$cwd" "$kind" "$reset_iso" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$PARKED/$sid.json"
-        log "PARKED $sid ($acct, $kind) resets $reset_iso  cwd=$cwd [census]"
-      fi
-      printf '%s\t%s\t%s\n' "$acct" "${cap:-unknown}" "${reset_ep:-0}" >> "$_cj.groups"
-    done < <(python3 - "$_cj" <<'PY'
+# ── the census ingest, as a function so it can be run on its own (LIMIT_RECOVER_FLEET_V2 W4) ─────
+# $1 = the census JSON (`cc-limited --all --json`). Parks every recoverable row and appends one
+# `<acct>\t<cap>\t<reset_ep>` line per parked row to "$1.groups" for the re-surface page below.
+# THE PYTHON IS A FILE, NOT A HEREDOC INSIDE `<( … )`. /bin/bash 3.2 — the shell launchd runs this
+# daemon under — re-scans a process substitution's text for its closing paren and does not honour
+# heredoc boundaries while doing so, so one apostrophe in the program ("the parked record's") made
+# the whole census die with `bad substitution: no closing ')'` every tick. A file under the per-uid
+# temp dir is parsed by nothing but python.
+lrp_census_ingest() {
+  local _cj="$1" _pyf sid state acct cap reset_iso reset_ep cwd cfg wait_ok _f kind prev
+  _pyf="$(mktemp "$(lrp_tmpdir)/lrp-census-py.XXXXXX" 2>/dev/null)" || { log "CENSUS-SKIP could not write the census reader under $(lrp_tmpdir)"; return 0; }
+  cat > "$_pyf" <<'PY'
 import json, sys
 from datetime import datetime, timezone
 # The census carries `resets_at` as an EPOCH and the parked record's `reset_at_utc` is ISO-8601,
@@ -1190,7 +1220,75 @@ for r in rows:
                       str(r.get("cwd") or ""), str(r.get("cfg") or ""))]
                     + ["1" if r.get("recoverable_by_waiting") else "0"]))
 PY
-    )
+  # `-` FOR EMPTY, from the emitter, because TAB is IFS *whitespace*: `IFS=$'\t' read` collapses
+  # a run of tabs and drops trailing empties, so a row with no cap and no reset would shift every
+  # column left of it and this loop would park the wrong session at the wrong account.
+  while IFS=$'\t' read -r sid state acct cap reset_iso reset_ep cwd cfg wait_ok; do
+    [[ -n "$sid" ]] || continue
+    for _f in cap reset_iso reset_ep cwd cfg; do
+      [[ "${!_f}" == "-" ]] && printf -v "$_f" '%s' ""
+    done
+    [[ "$reset_ep" == "0" ]] && reset_ep=""
+    case "$state" in
+      TEAMMATE)
+        if [[ ! -f "$STATE/teammate-skip/$sid" ]]; then
+          mkdir -p "$STATE/teammate-skip"; : > "$STATE/teammate-skip/$sid"
+          log "SKIP  $sid — teammate session (lead-owned recovery) [census]"
+        fi
+        continue ;;
+    esac
+    # NOT RECOVERABLE BY WAITING is a different fact from "not yet resettable", and only the
+    # census carries it. A Fable / monthly-spend cap has no reset to wait for, so parking one
+    # creates a record §2 can never discharge — it would sit in `parked/` forever, counted as
+    # pending recovery, and the operator would never be told why nothing happened. Say it once
+    # per tick instead and leave the record unwritten.
+    if [[ "$wait_ok" != "1" ]]; then
+      log "LIMITED-NOWAIT $sid ($acct, cap=${cap:-unknown}) — no reset to wait for; not parked${reset_iso:+, resets $reset_iso}"
+      continue
+    fi
+    case "$state" in
+      RECOVERABLE*|NO-PANE|PANE-REUSED|RESET-PASSED) : ;;
+      *) continue ;;                      # RE-ENGAGED, DUPLICATE, RESUMING, CWD-GONE, … : §2's or nobody's
+    esac
+    [[ -n "$reset_iso" && -n "$cwd" && -d "$cwd" ]] || continue
+    # the poller's own cap vocabulary — `kind` is what §2 and lr-select read
+    case "$cap" in
+      five_hour) kind=session ;; seven_day) kind=weekly ;;
+      model_scoped:*) kind=fable ;; *) kind="${cap:-session}" ;;
+    esac
+    if [[ -f "$RESUMED/$sid.json" ]]; then
+      prev=$(jq -r '.reset_at_utc // ""' "$RESUMED/$sid.json" 2>/dev/null || echo "")
+      if [[ -n "$prev" && ! "$reset_iso" > "$prev" ]]; then continue; fi
+      rm -f "$RESUMED/$sid.json"
+      log "REPARK $sid — new limit event (resets $reset_iso > handled ${prev:-unknown}) [census]"
+    fi
+    if [[ ! -f "$PARKED/$sid.json" ]]; then
+      printf '{"sid":"%s","acct":"%s","cfg":"%s","cwd":"%s","kind":"%s","reset_at_utc":"%s","parked_at":"%s"}\n' \
+        "$sid" "$acct" "$cfg" "$cwd" "$kind" "$reset_iso" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$PARKED/$sid.json"
+      log "PARKED $sid ($acct, $kind) resets $reset_iso  cwd=$cwd [census]"
+    fi
+    printf '%s\t%s\t%s\n' "$acct" "${cap:-unknown}" "${reset_ep:-0}" >> "$_cj.groups"
+  done < <(python3 "$_pyf" "$_cj")
+  rm -f "$_pyf"
+  return 0
+}
+
+# ── 1. DETECT — ONE census per tick, then the transcript walk as backstop ──────────────
+# THE CENSUS IS ASKED ONCE, FOR ALL ACCOUNTS. Per-account calls were the obvious shape and are
+# the wrong one: the census memoizes `ps`, the registry and the marker read across every account
+# in a single process, so four calls pay that four times AND can disagree with each other — a
+# session that moved between two of them appears twice or not at all. One call, one instant.
+#
+# THE TRANSCRIPT WALK BELOW STAYS, for one release. It is the backstop while this path earns its
+# place: the census is marker- and parked-driven, so a session whose marker was GC'd (file-mtime
+# keyed) but whose transcript is still on disk is seen only by the walk. Both write the SAME
+# `$PARKED/<sid>.json` shape and both guard on `[[ ! -f ]]`, so whichever runs first wins and the
+# other is a no-op — they cannot double-park.
+CC_LIMITED_BIN="${CC_LIMITED:-$LR/../../bin/cc-limited}"
+if [[ -x "$CC_LIMITED_BIN" && "${LR_POLLER_NO_CENSUS:-0}" != 1 ]]; then
+  _cj=$(mktemp "${TMPDIR:-/tmp}/lrp-census.XXXXXX")
+  if "$CC_LIMITED_BIN" --all --json > "$_cj" 2>/dev/null; then
+    lrp_census_ingest "$_cj"
     # THE RE-SURFACE PAGE, damped on STATE and never on a log grep. One page per
     # (account, cap, resetsAt, count): the same cap still holding an hour later is the same
     # fingerprint and is suppressed until page-damp's TTL lets it re-assert (a condition that
@@ -1498,7 +1596,10 @@ reroute_parked() { # $1=sid $2=acct $3=cfg → dispatches or does nothing; never
   fi
   cand="$(reroute_rank "$lane" | awk -v src="$acct" 'NF >= 2 && $1 != "none" && $1 != src && $2 ~ /^[0-9.eE+-]+$/ { print $1; exit }')"
   [[ -n "$cand" ]] || return 0
-  run_claim_take "$sid" || return 0
+  # The fence sits HERE, after the cheap reads and the router answer and before the first thing
+  # that touches the sid: a sid with no candidate never takes a launch lock at all.
+  lrp_may_act "$sid" reroute || return 0
+  run_claim_take "$sid" || { lrp_act_done; return 0; }
   mkdir -p "$REROUTE_DIR" 2>/dev/null; : > "$mark"
   _rr_n=$((_rr_n + 1))
   log "REROUTE $sid — parked on $acct, but $cand routes now ($lane lane); dispatching the recovery DETACHED (target auto)"
@@ -1509,6 +1610,7 @@ reroute_parked() { # $1=sid $2=acct $3=cfg → dispatches or does nothing; never
   else
     run_claim_handoff "$sid" "$RESULTS/$sid.log"
   fi
+  lrp_act_done
   return 0
 }
 
@@ -1648,9 +1750,12 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
     fi
     if ! account_has_headroom "$acct"; then log "WAIT  $sid — $acct still capped, retry next tick"; continue; fi
     (( fired >= MAX_PER_RUN )) && { log "CAP   per-run resume cap ($MAX_PER_RUN) reached; deferring rest"; break; }
+    lrp_may_act "$sid" nudge || continue
     if nudge_in_place "$sid" "$cfg" "$_lrp_rows"; then
+      lrp_act_done
       mv "$pf" "$RESUMED/$(basename "$pf")" 2>/dev/null; rm -f "$PARKED/$sid.notified"; fired=$((fired+1)); continue
     fi
+    lrp_act_done
     fire_fail_note "$sid" nudge-failed
     log "ERROR  $sid — nudge into the live pane failed; NOT spawning a duplicate over a live process (retry next tick)"
     continue
@@ -1682,6 +1787,8 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
   if ! account_has_headroom "$acct"; then log "WAIT  $sid — $acct still capped, retry next tick"; continue; fi
   (( fired >= MAX_PER_RUN )) && { log "CAP   per-run resume cap ($MAX_PER_RUN) reached; deferring rest"; break; }
   if [[ "$AUTOFIRE" == "1" && $DRY -eq 0 ]]; then
+    # The fence before anything is minted or claimed: a deferred sid leaves no launcher behind.
+    lrp_may_act "$sid" resume || continue
     # MINT THE UNIQUE NAME FIRST, ADD THE SUFFIX AFTER — the same idiom (and for the same reason)
     # as handoff-fire.sh's WT_DEPS. BSD mktemp substitutes only a TRAILING `XXXXXX`; given
     # `…-XXXXXX.sh` it creates the file named LITERALLY that, so the name carries ZERO entropy and
@@ -1692,7 +1799,7 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
     launch_dir="${LR_POLLER_LAUNCH_DIR:-$(lrp_tmpdir)}"   # seam: tests redirect off the shared /tmp
     if ! launcher="$(mktemp "$launch_dir/lr-poller-launch-${sid:0:8}-XXXXXX" 2>/dev/null)"; then
       log "ERROR  $sid — could not mint a launcher under $launch_dir; skipping this tick"
-      continue
+      lrp_act_done; continue
     fi
     mv "$launcher" "$launcher.sh" && launcher="$launcher.sh"
     # %q for EVERY interpolated value — this file is bash SOURCE, so each field is code until
@@ -1732,6 +1839,7 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
       # remedies, and collapsing them is what made this alarm unactionable for three weeks.
       log "ERROR  $sid — resume spawn failed (LR_POLLER_SPAWN=$SPAWN_MECH; tmux=${LRP_TMUX_BIN:-unresolved})"
     fi
+    lrp_act_done
   elif [[ ! -f "$PARKED/$sid.notified" ]]; then    # notify ONCE per parked session (no per-tick spam)
     # The REMEDY must match WHY this branch was reached. Both strings said "Set LR_POLLER_AUTOFIRE=1"
     # unconditionally until 2026-07-30 — but reaching here with AUTOFIRE=1 means --dry-run suppressed
