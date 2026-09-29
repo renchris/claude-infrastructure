@@ -65,15 +65,20 @@ if ! _PAYLOAD=$(printf '%s' "$INPUT" | jq -r '
                     | gsub("[\\t\\r\\n]"; " ") | if . == "" then ph else . end;
       ((.session_id | cell("-")) + "\t"
         + (.tool_input.run_in_background | cell("false")) + "\t"
+        + (.agent_id | cell("-")) + "\t"
         + (now | todateiso8601)),
       (.tool_input.command // empty)' 2>/dev/null); then
   abstain_unclear "unparseable PreToolUse payload on stdin"
 fi
 _META=${_PAYLOAD%%$'\n'*}
 if [[ "$_PAYLOAD" == *$'\n'* ]]; then CMD=${_PAYLOAD#*$'\n'}; else CMD=""; fi
-IFS=$'\t' read -r _P_SID _P_BG _P_TS <<<"$_META"
+IFS=$'\t' read -r _P_SID _P_BG _P_AID _P_TS <<<"$_META"
 [ -n "${_P_SID:-}" ] || _P_SID="-"
 [ -n "${_P_BG:-}" ] || _P_BG="false"
+# `agent_id` is present only when the call comes from a SUBAGENT (Agent tool); the main thread and a
+# pane teammate (its own process, `--agent-id` in ITS argv, not in this payload) carry none. "-" is
+# the pad cell's placeholder for absent/empty, never a real id.
+[ -n "${_P_AID:-}" ] || _P_AID="-"
 
 # Source the argv-aware flag detector. If unavailable, caller can force
 # legacy mode; otherwise fall back silently on a per-call basis below.
@@ -134,9 +139,9 @@ log_decision() { # <decision> <reason>
   while [ -n "$_r" ] && [ "$_n" -lt 4 ] && ! printf '%s' "$_r" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1; do
     _r="${_r%?}"; _n=$((_n + 1))
   done
-  printf '{"ts":%s,"sid":"%s","decision":"%s","reason":"%s"}\n' \
+  printf '{"ts":%s,"sid":"%s","aid":"%s","decision":"%s","reason":"%s"}\n' \
     "$(date -u +%s 2>/dev/null || echo 0)" \
-    "$(json_escape "${_P_SID:--}")" "$1" "$(json_escape "$_r")" \
+    "$(json_escape "${_P_SID:--}")" "$(json_escape "${_P_AID:--}")" "$1" "$(json_escape "$_r")" \
     >> "$_f" 2>/dev/null || true
   return 0
 }
@@ -2235,6 +2240,19 @@ is_safe_rm_target() {
   printf '%s' "$stripped" | grep -qE "^${SAFE_RM_TARGETS}(/|$)"
 }
 
+# rm_recursive_refuse <target> — the ONE exit for an unpermitted `rm -r`. Main thread and pane
+# teammates get the ask. Inside a SUBAGENT nobody can answer a prompt, so the ask stalls it; there it
+# is a deny whose reason says how to proceed. The reason is the round-4 text, VERBATIM: round 5 found
+# that adding "tell your lead…" made subagents stop without salvaging anything (0/10 vs 4/6,
+# p=0.008) — docs/research/hook-ask-confirmations-2026-09-28.md §7. Kill switch CC_VB_AGENT_RM_DENY=off.
+rm_recursive_refuse() {
+  if [[ "${_P_AID:--}" != "-" && "${CC_VB_AGENT_RM_DENY:-on}" != "off" ]]; then
+    # shellcheck disable=SC2016  # the $( ) and "$D" are literal text for the subagent to copy
+    deny 'Refused inside a subagent: no one can answer a prompt here. For a throwaway directory, create a fresh one in the same command: D=$(mktemp -d /tmp/<name>.XXXXXX) … rm -rf "$D". Do not reuse the old directory without clearing it — its old contents are still there; use a fresh mktemp directory. Do not delete it any other way (no find -delete, python, rsync or a script file). If the deletion is itself the task, stop and report the exact command to your lead.'
+  fi
+  warn "rm -r on non-build-artifact target: '$1'. Verify intentional."
+}
+
 if [[ "$RM_PRESENT" == "1" && "$RM_SCAN_OK" == "1" ]]; then
   # Same spelling blindness as the deny above lived here too, one flag-bundle enumeration further
   # on: `-(r|rf|fr)` knew neither `-R` nor `--recursive`, so `rm -Rf /etc` and
@@ -2243,7 +2261,7 @@ if [[ "$RM_PRESENT" == "1" && "$RM_SCAN_OK" == "1" ]]; then
   while IFS=$'\t' read -r rm_rec rm_force rm_target; do
     [[ "$rm_rec" == "1" ]] || continue
     if ! rm_target_is_permitted "$rm_target"; then
-      warn "rm -r on non-build-artifact target: '$rm_target'. Verify intentional."
+      rm_recursive_refuse "$rm_target"
     fi
   done <<<"$RM_SCAN"
 elif [[ "$RM_PRESENT" == "1" ]]; then
@@ -2253,8 +2271,8 @@ elif [[ "$RM_PRESENT" == "1" ]]; then
       printf '%s' "$occurrence" | grep -qE '(^|[[:space:]])-[a-zA-Z]*[rR][a-zA-Z]*([[:space:]]|$)|--recursive([[:space:]=]|$)' || continue
       target=$(printf '%s' "$occurrence" | sed -E 's/^rm[[:space:]]+(-[a-zA-Z-]+[[:space:]]+)*//')
       if ! rm_target_is_permitted "$target"; then
-        warn "rm -r on non-build-artifact target: '$target'. Verify intentional."
-        # shellcheck disable=SC2317  # reachable: warn() exits, so this only runs if warn is stubbed
+        rm_recursive_refuse "$target"
+        # shellcheck disable=SC2317  # reachable: rm_recursive_refuse exits, so this only runs if warn is stubbed
         break
       fi
     done <<<"$RM_OCCURRENCES"

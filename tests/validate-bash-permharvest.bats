@@ -193,7 +193,7 @@ logged() { wc -l < "$CC_VB_DECISION_LOG" 2>/dev/null | tr -d ' '; }
   logged_reason="$(printf '%s' "$line" | jq -r '.reason')"
   [ "${logged_reason}" = "$(reason | cut -c1-"${#logged_reason}")" ]
   printf '%s' "$logged_reason" | iconv -f UTF-8 -t UTF-8 >/dev/null   # no half a character survived
-  [ "$(printf '%s' "$line" | jq -r 'keys | sort | join(" ")')" = "decision reason sid ts" ]
+  [ "$(printf '%s' "$line" | jq -r 'keys | sort | join(" ")')" = "aid decision reason sid ts" ]
 }
 
 @test "CONTROL: a reason whose 200-BYTE cut lands mid-character still yields a parseable line" {
