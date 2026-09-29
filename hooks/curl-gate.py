@@ -407,6 +407,67 @@ def looks_like_bare_host(tok: str) -> bool:
     )
 
 
+def ansi_c_safe(cmd: str) -> str:
+    """`cmd` with each `\\'` inside an ANSI-C `$'…'` string spelled `'\\''`, which shlex understands.
+
+    ROUND 6 (2026-09-29). In bash and zsh `$'x\\' #'` is ONE word — `\\'` is an escaped quote there —
+    but shlex reads plain single quotes, closes the string at that `\\'`, and then takes the `#` for a
+    comment that runs to the end of the line. `echo $'x\\' #' ; curl -s http://169.254.169.254/` was
+    an allow because the real curl was eaten as comment text. Rewriting only the escaped quote keeps
+    every other byte, and every other `#` rule, exactly as shlex already read it.
+    """
+    if "$'" not in cmd:
+        return cmd
+    out: list[str] = []
+    state: str | None = None  # None, "'", '"', or "$'"
+    i, n = 0, len(cmd)
+    while i < n:
+        c = cmd[i]
+        if state is None:
+            if c == "\\":
+                out.append(cmd[i : i + 2])
+                i += 2
+                continue
+            if c == "#":  # shlex's commenter: nothing up to the newline opens a string
+                j = cmd.find("\n", i)
+                j = n if j < 0 else j
+                out.append(cmd[i:j])
+                i = j
+                continue
+            if c == "$" and cmd[i + 1 : i + 2] == "'":
+                state = "$'"
+                out.append("$'")
+                i += 2
+                continue
+            if c in "'\"":
+                state = c
+        elif state == "$'" and c == "\\":
+            out.append("'\\''" if cmd[i + 1 : i + 2] == "'" else cmd[i : i + 2])
+            i += 2
+            continue
+        elif state == '"' and c == "\\":
+            out.append(cmd[i : i + 2])
+            i += 2
+            continue
+        elif c == state[-1]:
+            state = None
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def shell_tokens(cmd: str, ansi_c: bool = True) -> list[str]:
+    """The quote-aware token list every argv walk here uses; raises ValueError like shlex.
+
+    `ansi_c=False` is the incumbent plain-shlex reading, kept so decide_command() can hold the
+    rewrite to tighten-only (see there)."""
+    lexer = shlex.shlex(
+        ansi_c_safe(cmd) if ansi_c else cmd, posix=True, punctuation_chars=True
+    )
+    lexer.whitespace_split = True
+    return list(lexer)
+
+
 def parse_curl(cmd: str) -> dict:
     """Tokenize a curl command and extract URLs + method + flags."""
     # PUNCTUATION-AWARE tokenisation, so the walk below sees ONLY curl's own argv.
@@ -420,9 +481,7 @@ def parse_curl(cmd: str) -> dict:
     # Falls back to the incumbent tokeniser rather than inventing a new deny on a shape only the
     # stricter lexer rejects.
     try:
-        lexer = shlex.shlex(cmd, posix=True, punctuation_chars=True)
-        lexer.whitespace_split = True
-        tokens = list(lexer)
+        tokens = shell_tokens(cmd)
     except ValueError:
         try:
             tokens = shlex.split(cmd, posix=True)
@@ -582,7 +641,7 @@ def parse_argv(tokens: list[str], cmd: str) -> dict:
             continue
         elif t in ("--url",):
             if i + 1 < len(tokens):
-                urls.append(tokens[i + 1])
+                urls.append(curl_url(tokens[i + 1]))
                 i += 2
                 continue
         elif (
@@ -623,7 +682,7 @@ def parse_argv(tokens: list[str], cmd: str) -> dict:
             # does NOT weaken the file:// deny below: both `file:///etc/passwd` and the single-slash
             # `file:/etc/passwd` still match here and still reach that arm.
             if "://" in t or t.startswith("//") or _SCHEME_RE.match(t):
-                urls.append(t)
+                urls.append(curl_url(t))
             elif looks_like_bare_host(t):
                 # Bare host/path like "harbour.reso.gl/api/health"
                 urls.append("https://" + t)
@@ -751,6 +810,22 @@ _CRED_SHORT_CHARS = frozenset("uUbE")
 
 # A URI scheme per RFC 3986 §3.1 — a letter then letters/digits/+/-/. then a colon.
 _SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*:")
+
+# EMPTY HOST (round 6, 2026-09-29). curl accepts ONE to THREE slashes after the scheme and connects to
+# whatever follows (measured, curl 8.7.1: `curl -v http:/127.0.0.1:9/x` and `http:///127.0.0.1:9/x`
+# both print "Trying 127.0.0.1:9"; four slashes are "URL rejected"). urlparse reads `http:/host/` as
+# an EMPTY host, so `curl http:/169.254.169.254/latest/` was an open-read allow reading "GET  —".
+# So a URL is rewritten to the `scheme://` form curl actually uses before any rule sees it; a host
+# that is still empty after that (`https:host`, `http:////x`) asks in decide().
+_CURL_SLASHES_RE = re.compile(r"^(https?):(/*)(.*)$", re.I | re.S)
+
+
+def curl_url(tok: str) -> str:
+    """`tok` spelled with the `scheme://` curl connects through, when curl accepts its slash count."""
+    m = _CURL_SLASHES_RE.match(tok)
+    if not m or len(m.group(2)) == 2 or not 1 <= len(m.group(2)) <= 3:
+        return tok
+    return f"{m.group(1)}://{m.group(3)}"
 
 
 def short_cluster_flags(body: str) -> str:
@@ -924,6 +999,13 @@ def decide(parsed: dict) -> tuple[str, str]:
         if u.scheme not in ("http", "https"):
             return "ask", f"Non-HTTP scheme: {u.scheme}"
         host = (u.hostname or "").lower()
+        if not host:
+            # curl_url() already rewrote every slash count curl accepts, so an empty host here is
+            # one this gate cannot name (`https:host` makes curl look up a host called "https").
+            return (
+                "ask",
+                f"cannot tell which host curl contacts for {raw_url} — write scheme://host/",
+            )
 
         if is_internal_host(host):
             return (
@@ -1009,7 +1091,7 @@ _STATEMENT_SEPS = frozenset(
 )
 
 
-def curl_invocations(cmd: str) -> list[list[str]] | None:
+def curl_invocations(cmd: str, ansi_c: bool = True) -> list[list[str]] | None:
     """Every curl invocation in a compound command, as separate argv lists.
 
     WHY EVERY ONE, NOT JUST THE FIRST (2026-08-23). decide() was only ever handed the first curl in
@@ -1030,9 +1112,7 @@ def curl_invocations(cmd: str) -> list[list[str]] | None:
     Returns None when the command cannot be tokenised at all, which the caller fails closed on.
     """
     try:
-        lexer = shlex.shlex(cmd, posix=True, punctuation_chars=True)
-        lexer.whitespace_split = True
-        tokens = list(lexer)
+        tokens = shell_tokens(cmd, ansi_c)
     except ValueError:
         return None
 
@@ -1117,9 +1197,7 @@ def _seam(name: str, default: str) -> str:
 def single_simple_curl(cmd: str) -> bool:
     """True only for one statement, whose first token is curl, with no shell separator anywhere."""
     try:
-        lexer = shlex.shlex(cmd, posix=True, punctuation_chars=True)
-        lexer.whitespace_split = True
-        tokens = list(lexer)
+        tokens = shell_tokens(cmd)
     except ValueError:
         return False
     if not tokens or not (tokens[0] == "curl" or tokens[0].endswith("/curl")):
@@ -1180,8 +1258,9 @@ def redirect_hardening(cmd: str, parsed: dict) -> str | None:
 # words>` list or a `NAME=<value>` assignment whose value is literal apart from references to other
 # decidable names. Anything that can bind a name out of our sight refuses resolution for the WHOLE
 # command: `read`, `mapfile`, `printf -v`, `eval`, `source`/`.`, `declare`/`local`/`typeset`, `let`,
-# `((…))`, `NAME+=`, `NAME[…]=`, `${NAME:=…}`, `select`, a command substitution or backtick in the
-# binding, a glob or brace in a loop word. An unresolved token stays `$u` and asks exactly as before.
+# `((…))`, `NAME+=`, `NAME[…]=`, `${NAME:=…}` and zsh's `${NAME::=…}` / `${(A)NAME=…}` (round 6:
+# /bin/zsh rebinds NAME there, so `for u in <ok>; do : ${u::=IMDS}; curl "$u"` went to IMDS),
+# `select`, a command substitution or backtick in the binding, a glob or brace in a loop word. An unresolved token stays `$u` and asks exactly as before.
 # The failure direction of every conditional or unexecuted binding is an EMPTY variable at runtime,
 # and curl with an empty URL makes no request — no reading here can turn an ask into a request to a
 # host this code did not see.
@@ -1195,7 +1274,7 @@ _EXPAND_CAP = 32
 _ZSH_POSTPARAM_RE = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*(?:\[|:[A-Za-z&])")
 _UNSEEN_BINDERS = re.compile(
     r"(?:^|[\s;&|(`])(?:read|mapfile|readarray|eval|source|declare|typeset|local|let|getopts|select)(?=\s)"
-    r"|(?:^|[\s;&|(])\.\s|printf\s+-v|\(\(|\$\{[A-Za-z_]\w*:?[=?]"
+    r"|(?:^|[\s;&|(])\.\s|printf\s+-v|\(\(|\$\{(?:\([^)]*\))?[A-Za-z_]\w*:{0,2}[=?]"
 )
 _ASSIGN_RE = re.compile(
     r"""(?:^|(?<=[\s;&|(]))([A-Za-z_][A-Za-z0-9_]*)(\+?)(\[?)=((?:"[^"]*"|'[^']*'|[^\s;&|()<>"'])*)"""
@@ -1502,20 +1581,43 @@ _FALLBACK_SPLIT_RE = re.compile(r"\n|;|&&|\|\||\|")
 _CURL_WORD_RE = re.compile(r"(?<![\w.-])curl(?![\w.-])")
 
 
-def curl_invocations_by_segment(cmd: str) -> list[list[str]] | None:
+def curl_invocations_by_segment(
+    cmd: str, ansi_c: bool = True
+) -> list[list[str]] | None:
     """curl_invocations() over each curl-bearing raw segment; None if any of them cannot tokenise."""
     found: list[list[str]] = []
     for seg in _FALLBACK_SPLIT_RE.split(cmd):
         if not _CURL_WORD_RE.search(seg):
             continue
-        invs = curl_invocations(seg)
+        invs = curl_invocations(seg, ansi_c)
         if invs is None:
             return None
         found.extend(invs)
     return found
 
 
+_STRICTNESS = {"allow": 0, "ask": 1, "deny": 2}
+
+
 def decide_command(cmd: str, agent: bool = False) -> tuple[str, str, dict]:
+    """judge_command() under the `$'…'`-aware lexing, held to TIGHTEN-ONLY against plain shlex.
+
+    Round 6 fixed the lexer's reading of `$'x\\' #'` (see ansi_c_safe), which exposes curls the old
+    reading ate as comment text. The same fix also reads some commands the old lexer could not
+    tokenise at all, which it DENIED fail-closed, and there the right reading can be an allow (a
+    `curl …` that is only text inside a `$'…'` argument). The ruling for round 6 was "loosens
+    nothing", so when the rewrite changes the text both readings are judged and the stricter wins.
+    """
+    fixed = judge_command(cmd, agent)
+    if ansi_c_safe(cmd) == cmd:
+        return fixed
+    plain = judge_command(cmd, agent, ansi_c=False)
+    return plain if _STRICTNESS[plain[0]] > _STRICTNESS[fixed[0]] else fixed
+
+
+def judge_command(
+    cmd: str, agent: bool = False, ansi_c: bool = True
+) -> tuple[str, str, dict]:
     """Judge EVERY curl in the command; the strictest verdict wins (deny > ask > allow).
 
     `agent` is True when the payload carries a non-empty agent_id (a subagent's call), where the
@@ -1527,9 +1629,9 @@ def decide_command(cmd: str, agent: bool = False) -> tuple[str, str, dict]:
             "curl-gate: hooks/lib/curl_ssrf.py is missing, so internal addresses cannot be checked (fail-closed)",
             {"host": None, "method": None},
         )
-    invocations = curl_invocations(cmd)
+    invocations = curl_invocations(cmd, ansi_c)
     if invocations is None:
-        invocations = curl_invocations_by_segment(cmd)
+        invocations = curl_invocations_by_segment(cmd, ansi_c)
     if invocations is None:
         return "deny", "curl-gate: shlex parse failed", {"host": None, "method": None}
     if not invocations:
