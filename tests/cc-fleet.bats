@@ -650,8 +650,11 @@ STUB
   # 46-public-repo-cutover.sh. A/B: 36 labels at the parent, 37 at 76f6cc2bc and on trunk.
   # postland-verify bisected it correctly and its auto-revert FAILED rc=90 (a 14-file feature under
   # the commits on top), so forward is the only remedy. The count moves WITH the repair.
-  if [ "$n" != 37 ]; then
-    echo "manifest declares $n labels, expected 37 — if a plist was legitimately added or retired,"
+  # 40 since 2026-09-29: com.reso.lr-reconciler, -watchdog and -rig (LIMIT_RECOVER_FLEET_V2 W3),
+  # all `staged` and not loaded — W5's operator step installs them. The count moved IN the same
+  # land as the rows, which is the point of this block.
+  if [ "$n" != 40 ]; then
+    echo "manifest declares $n labels, expected 40 — if a plist was legitimately added or retired,"
     echo "move this count and say why (see the block above); if not, a row is missing. Declared:"
     grep -vE '^[[:space:]]*(#|$)' "$M" | cut -d'|' -f1 | sed 's/[[:space:]]//g; s/^/  /'
     return 1
