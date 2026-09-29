@@ -1195,7 +1195,11 @@ lrh_precheck() { # → 0 admitted (token minted) / 6 HELD|REFUSED|PARKED, nothin
     local probe_extra=()
     if [[ -n "$ACCOUNT_EVIDENCE" ]]; then
       if grep -q -- '--account-evidence)' "$hf" 2>/dev/null; then
+        # The probe accepts evidence only beside --voluntary (handoff-fire refuses it alone, rc 2),
+        # and an evidence-bearing move IS the voluntary one: without the flag every idle move the
+        # reconciler placed read REFUSED:unknown and exited NOTMOVED (W5 rig finding B2).
         probe_extra=(--account-evidence "$ACCOUNT_EVIDENCE")
+        [[ $VOLUNTARY -eq 1 ]] && probe_extra+=(--voluntary)
       else
         echo "lr-handoff: note — the live $hf does not parse --account-evidence; the probe is run without it" >&2
       fi

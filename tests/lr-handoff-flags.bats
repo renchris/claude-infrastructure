@@ -174,6 +174,22 @@ in_s() { echo $(( $(date +%s) + $1 )); }
   [[ "$output" == *"REFUSED:evidence-invalid — account mismatch"* ]] || false
   [ ! -s "$TX_LOG" ]
 }
+@test "evidence: the precheck probe gets --voluntary beside --account-evidence (W5 B2)" {
+  # a live handoff-fire that parses the flag (lr-handoff greps for the case label)
+  printf '# --account-evidence) parsed\n' >> "$STUB/handoff-fire.sh"
+  f="$(fact next.5h.json "{\"status\":\"rejected\",\"scope\":\"5h\",\"resets_at\":$(in_s 7200)}")"
+  LRH_PRECHECK=on fire --voluntary --account-evidence "$f"
+  line="$(grep -- '--probe-recycle-preconditions' "$HF_LOG" | head -1)"
+  [[ "$line" == *"--account-evidence $f"* ]] || false
+  [[ "$line" == *"--voluntary"* ]] || false
+}
+@test "evidence: the precheck probe CONTROL — no evidence, no --voluntary added" {
+  printf '# --account-evidence) parsed\n' >> "$STUB/handoff-fire.sh"
+  LRH_PRECHECK=on fire
+  line="$(grep -- '--probe-recycle-preconditions' "$HF_LOG" | head -1)"
+  [ -n "$line" ]
+  [[ "$line" != *"--voluntary"* ]] || false
+}
 @test "evidence CONTROL: a healthy pane with no --account-evidence is refused not-limited, as today" {
   fire --voluntary
   [ "$status" -eq 6 ]
