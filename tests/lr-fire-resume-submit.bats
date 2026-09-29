@@ -649,11 +649,27 @@ SH
   [[ "$mode" == *"-echo"* ]] || { echo "pre-interact the pane tty still ECHOES: $mode"; false; }
 }
 
-@test "RED-PROOF submit poll: nothing in the transcript → ONE re-Enter, gated on OUR draft, then FAILED:submit" {
+@test "RED-PROOF submit poll: nothing in the transcript → re-Enters at the scheduled looks up to the cap, each gated on OUR draft, then FAILED:submit" {
+  # W2c: the count changed from one to LR_SUBMIT_RECR_MAX — the cap, not the deadline, now bounds re-sends.
   exp_setup
+  export LR_RECR_SCHEDULE=1,2   # the default 5,15 shape, compressed
   screen 1 empty          # quiet arm: safe to type
-  screen 2 mine           # poll at the bound: our prompt is still sitting in the composer
+  screen 2 mine           # every look: our prompt is still sitting in the composer
   : > "$TX"               # …and nothing ever reaches the transcript
+  lr_expect_run 90
+  # exactly THREE lines reached the stub: the prompt, and one re-Enter (an empty line) per look, to the cap of 2.
+  [ "$(wc -l < "$LR_TEST_GOT" | tr -d ' ')" = 3 ] || { cat "$LR_TEST_GOT"; false; }
+  [ "$(states | tr ' ' '\n' | grep -c '^SUBMIT-RECR$')" = 2 ] || { echo "states: $(states)"; false; }
+  [[ "$(said)" == *"NOT SUBMITTED"* ]] || { said; false; }
+  [[ "$(states)" == *"FAILED:submit"* ]] || { echo "states: $(states)"; false; }
+}
+
+@test "RED-PROOF submit poll: LR_SUBMIT_RECR_MAX=1 → exactly ONE re-Enter, then FAILED:submit" {
+  exp_setup
+  export LR_RECR_SCHEDULE=1,2 LR_SUBMIT_RECR_MAX=1
+  screen 1 empty
+  screen 2 mine
+  : > "$TX"
   lr_expect_run 90
   # exactly TWO lines reached the stub: the prompt, and the single re-Enter (an empty line).
   [ "$(wc -l < "$LR_TEST_GOT" | tr -d ' ')" = 2 ] || { cat "$LR_TEST_GOT"; false; }

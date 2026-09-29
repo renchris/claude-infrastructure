@@ -5,7 +5,7 @@
 #
 # Usage: lr-fire-resume.sh <account|cfg-dir> <worktree> <sid>
 #          [--branch BR] [--model M] [--effort E] [--prompt "ONE-LINE"] [--repo PATH]
-#          [--summary] [--force-split]
+#          [--summary] [--force-split] [--no-prompt]
 #
 # Account labels: next next2 next3 next4 (Opus@max) · fable fable2 fable3 fable4
 # (the SSOT frontier model @high — claude-fable-5-1 since 2026-09-03; this comment names the id
@@ -20,11 +20,18 @@
 #                  matters. The DEFAULT is a zero-loss as-is resume (see § THE AS-IS DEFAULT).
 #   --force-split  Resume a session that has already been TRANSPLANTED to another account,
 #                  deliberately creating two live copies. See § THE TOMBSTONE GUARD.
+#   --no-prompt    Resume and type NOTHING once the session is ready: the pre-ready menus are
+#                  still answered, then the composer is left alone and a READY / READY-QUIET note
+#                  is recorded instead. Refused together with a non-empty --prompt.
+#
+# Environment seams: LR_CLAUDE_BIN (a binary to run instead of cc-claude-bin's answer),
+# LR_PRESEED_DONE (skip lr-preseed-env.sh), LR_RECR_SCHEDULE (re-send look offsets, default 5,15,30,45),
+# LR_LAUNCH_GUARD=off (no launch lock, no holder re-check).
 set -euo pipefail
 
 ACCT="${1:?account}"; WT="${2:?worktree}"; SID="${3:?session-id}"; shift 3
 BR="" MODEL="" EFFORT="" PROMPT="" REPO="${LR_REPO:-$HOME/Development/reso-management-app}"
-SUMMARY=0 FORCE_SPLIT=0 EXTRA_ARGS="" EXTRA_ENV=""
+SUMMARY=0 FORCE_SPLIT=0 NO_PROMPT=0 EXTRA_ARGS="" EXTRA_ENV=""
 # --permission-mode: carried from the SOURCE session's argv (LIMIT_RECOVER_100P, 2026-09-09). This
 # used to be hardcoded `auto` in the spawn below, so a `plan` session silently came back as `auto`
 # — the same launch-vs-runtime confusion as the tier, one axis over. The default stays `auto`.
@@ -39,11 +46,18 @@ while [[ $# -gt 0 ]]; do
     --repo) REPO="$2"; shift 2 ;;
     --summary) SUMMARY=1; shift ;;
     --force-split) FORCE_SPLIT=1; shift ;;
+    --no-prompt) NO_PROMPT=1; shift ;;
     --extra-args) EXTRA_ARGS="$2"; shift 2 ;;
     --extra-env) EXTRA_ENV="$2"; shift 2 ;;
     *) echo "lr-fire-resume: unknown arg $1" >&2; exit 2 ;;
   esac
 done
+# --no-prompt is a promise that NOTHING is typed after ready, so a prompt beside it is a contradiction
+# the caller must resolve, never one this script silently picks a side of.
+if [[ $NO_PROMPT -eq 1 && -n "$PROMPT" ]]; then
+  echo "lr-fire-resume: --no-prompt and a non-empty --prompt are mutually exclusive" >&2; exit 2
+fi
+[[ $NO_PROMPT -eq 1 ]] && PROMPT=""
 # --extra-args / --extra-env: identity that must survive the relaunch (cc-lr upgrade's team
 # procedure, 2026-09-23). A TEAMMATE comes back only with its --agent-id/--agent-name/--team-name/...
 # flags and CLAUDECODE=1 CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 (without the gate var the team flags
@@ -352,11 +366,154 @@ else
   fi
 fi
 
+# >>> lr-launch-lock
+# ── ONE LAUNCHER PER SESSION, AND NO LAUNCH OVER A LIVE HOLDER (W2c, plan Phase 0 contract) ───────
+# Two launchers racing for one sid, or one launcher resuming a sid a live claude still holds, is the
+# split brain the tombstone guard cannot see: nothing was transplanted, the session is simply open
+# twice. Both locks below are a `mkdir` (atomic) plus a one-line JSON `holder`; a holder is STALE when
+# its pid is dead or zombie, when that pid now names a different process (lstart moved), or when the
+# holder is unreadable in a dir older than 60 s. lstart is always `TZ=UTC LC_ALL=C ps -o lstart=`
+# with runs of spaces squeezed, the form the registry rows carry. LR_PS_BIN is the test seam.
+_lrl_ps() { "${LR_PS_BIN:-/bin/ps}" "$@"; }
+_lrl_lstart() { TZ=UTC LC_ALL=C _lrl_ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ //;s/ $//'; }
+_lrl_alive() { # $1=pid → 0 when a non-zombie process holds it
+  local st
+  case "$1" in ''|*[!0-9]*) return 1 ;; esac
+  st="$(_lrl_ps -o stat= -p "$1" 2>/dev/null | tr -d ' ')" || st=""
+  [ -n "$st" ] && [ "${st#Z}" = "$st" ]
+}
+_lrl_holder_write() { # $1=lock dir $2=role $3=pid — atomic (tmp + mv), never concatenated JSON
+  local tmp="$1/holder.tmp.$$"
+  jq -cn --arg r "${LR_RECORD_ID:-}" --arg a "${LR_ATTEMPT:-}" --arg role "$2" --argjson pid "$3" \
+        --arg l "$(_lrl_lstart "$3")" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        '{record_id:$r,attempt:$a,role:$role,pid:$pid,lstart:$l,at:$at}' > "$tmp" 2>/dev/null \
+    && mv -f "$tmp" "$1/holder"
+}
+_lrl_field() { jq -r --arg k "$2" '.[$k] // "" | tostring' "$1" 2>/dev/null || true; } # $1=file $2=key → "" when unreadable
+_lrl_stale() { # $1=lock dir → 0 when its holder may be taken
+  local h="$1/holder" pid lst now mt
+  pid="$(_lrl_field "$h" pid)"
+  if [ -z "$pid" ]; then
+    mt="$(stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0)"; now="$(date +%s)"
+    [ $((now - mt)) -gt 60 ]; return
+  fi
+  _lrl_alive "$pid" || return 0
+  lst="$(_lrl_field "$h" lstart)"
+  [ -n "$lst" ] && [ "$lst" != "$(_lrl_lstart "$pid")" ]
+}
+lr_git_lock() { # $1=lock dir — waits LR_GIT_LOCK_WAIT_S (30) polling 0.5 s; rc 1 on timeout
+  local d="$1" tries=$(( ${LR_GIT_LOCK_WAIT_S:-30} * 2 ))
+  mkdir -p "$(dirname "$d")" 2>/dev/null || true
+  until mkdir "$d" 2>/dev/null; do
+    if _lrl_stale "$d"; then
+      echo "-- lr-fire-resume: stealing a stale git lock (holder: $(cat "$d/holder" 2>/dev/null || echo none))" >&2
+      rm -rf "$d"
+    else
+      [ "$tries" -gt 0 ] || return 1
+      sleep 0.5
+    fi
+    tries=$((tries - 1))
+  done
+  _lrl_holder_write "$d" lr-fire-resume-git "$$" || true
+}
+lr_sid_holders() { # $1=sid → one "pid P (source)" line per live holder of that session
+  local sid="$1" f row c
+  # A process that IS the session: `--resume <sid>` as a token pair, in a row that is not a shell
+  # string merely mentioning it, not a wrapper whose child also matches, and not this script's line.
+  _lrl_ps -axo pid=,ppid=,stat=,args= 2>/dev/null | awk -v sid="$sid" -v self="$$" '
+    { pp[$1] = $2; a = $0; sub(/^[ \t]*[0-9]+[ \t]+[0-9]+[ \t]+[^ \t]+[ \t]+/, "", a)
+      n = split(a, w, /[ \t]+/); hit = 0
+      for (i = 1; i < n; i++) if (w[i] == "--resume" && w[i + 1] == sid) hit = 1
+      if (!hit || $3 ~ /^Z/) next
+      b = w[1]; sub(/.*\//, "", b)
+      if (b ~ /^(bash|sh|zsh|expect|env|grep|ps|awk|sed|python3)$/) next
+      cand[$1] = $2 }
+    END { x = self; while (x != "" && x + 0 > 1 && !(x in anc)) { anc[x] = 1; x = pp[x] }
+          for (p in cand) par[cand[p]] = 1
+          for (p in cand) if (!(p in anc) && !(p in par)) print "pid " p " (process: --resume " sid ")" }'
+  # The registry row and the account session file, each read fail-open PER FILE: an unreadable row
+  # is skipped, never allowed to refuse a launch on its own.
+  for f in "${LR_REGISTRY_DIR:-$HOME/.claude/cc-registry}"/*.json; do
+    [ -f "$f" ] || continue
+    row="$(jq -r '[.session_id // "", (.pid // "" | tostring), .lstart // ""] | join("|")' "$f" 2>/dev/null)" || continue
+    IFS='|' read -r _r_sid _r_pid _r_lst <<<"$row" || true
+    [ "$_r_sid" = "$sid" ] && _lrl_alive "$_r_pid" || continue
+    _r_lst="$(printf '%s' "$_r_lst" | tr -s ' ' | sed 's/^ //;s/ $//')"
+    [ -z "$_r_lst" ] || [ "$_r_lst" = "$(_lrl_lstart "$_r_pid")" ] || continue
+    echo "pid $_r_pid (registry: $f)"
+  done
+  for c in ${LR_CFG_DIRS:-$HOME/.claude $HOME/.claude-next $HOME/.claude-secondary $HOME/.claude-tertiary $HOME/.claude-quaternary}; do
+    for f in "$c"/sessions/*.json; do
+      [ -f "$f" ] || continue
+      row="$(jq -r '[.sessionId // "", (.pid // "" | tostring)] | join("|")' "$f" 2>/dev/null)" || continue
+      IFS='|' read -r _r_sid _r_pid <<<"$row" || true
+      [ "$_r_sid" = "$sid" ] && _lrl_alive "$_r_pid" && echo "pid $_r_pid (sessions: $f)"
+    done
+  done
+  return 0
+}
+lr_launch_guard() { # (a) take or re-take the launch lock, (b) refuse over any live holder of $SID
+  local d h pid role rec hs
+  if [ "${LR_LAUNCH_GUARD:-on}" = off ]; then
+    echo "!! lr-fire-resume: LR_LAUNCH_GUARD=off — no launch lock and no holder re-check for $SID" >&2
+    return 0
+  fi
+  d="$LR_LOCK_DIR"; h="$d/holder"
+  mkdir -p "$(dirname "$d")" 2>/dev/null || true
+  if ! mkdir "$d" 2>/dev/null; then
+    pid="$(_lrl_field "$h" pid)"; rec="$(_lrl_field "$h" record_id)"; role="$(_lrl_field "$h" role)"
+    # OURS is this attempt of this record (a retry of the same attempt), or this very process.
+    if { [ -n "$rec" ] && [ "$rec" = "${LR_RECORD_ID:-}" ] && [ "$(_lrl_field "$h" attempt)" = "${LR_ATTEMPT:-}" ]; } \
+       || [ "$pid" = "$$" ] || _lrl_stale "$d"; then
+      :
+    else
+      echo "REFUSED — launch lock held by pid $pid (role ${role:-?}, record ${rec:-none})" >&2
+      lr_relaunch_rc 10 "launch-lock: held by pid $pid (role ${role:-?}, record ${rec:-none})"
+      exit 10
+    fi
+  fi
+  _lrl_holder_write "$d" lr-fire-resume "$$" || echo "!! lr-fire-resume: could not write $h" >&2
+  hs="$(lr_sid_holders "$SID")"
+  if [ -n "$hs" ]; then
+    echo "REFUSED — $SID already has a live holder; resuming it again would open it twice:" >&2
+    printf '%s\n' "$hs" | sed 's/^/  /' >&2
+    lr_relaunch_rc 11 "holder: $(printf '%s' "$hs" | tr '\n' ';')"
+    exit 11
+  fi
+}
+# <<< lr-launch-lock
+
 # Recreate a reaped worktree when a branch is known (reso-resume-one logic).
 if [[ ! -d "$WT" ]]; then
   if [[ -n "$BR" ]] && git -C "$REPO" show-ref --verify --quiet "refs/heads/$BR"; then
-    git -C "$REPO" worktree prune 2>/dev/null || true
-    git -C "$REPO" worktree add "$WT" "$BR" || exit 1
+    # NO PRUNE OF THE WORKTREE LIST HERE: it deletes the metadata of EVERY missing worktree, including a
+    # sibling's that is missing only for a moment, and that sibling then cannot be re-added as itself.
+    # The add is serialised on one lock per repository (keyed on the common dir), so two launchers
+    # recreating two worktrees of one repo cannot race on .git/worktrees either.
+    _lr_gcd="$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+    _lr_glock="${LR_STATE_DIR:-$HOME/.reso/limit-recover}/locks/git-$(printf '%s' "$_lr_gcd" | shasum | cut -c1-40)"
+    if ! lr_git_lock "$_lr_glock"; then
+      echo "✗ lr-fire-resume: git lock $_lr_glock still held after ${LR_GIT_LOCK_WAIT_S:-30}s (holder: $(cat "$_lr_glock/holder" 2>/dev/null || echo none))" >&2
+      exit 2
+    fi
+    _lr_wt_rc=0; _lr_wt_out="$(git -C "$REPO" worktree add "$WT" "$BR" 2>&1)" || _lr_wt_rc=$?
+    [ -z "$_lr_wt_out" ] || printf '%s\n' "$_lr_wt_out" >&2
+    # Without the prune, a worktree that is "missing but already registered" refuses the add. -f is
+    # safe for exactly that case and no other: only when the branch is registered at $WT alone, since
+    # -f would also let the branch be checked out twice.
+    if [ "$_lr_wt_rc" -ne 0 ] && [[ "$_lr_wt_out" == *"missing but already registered worktree"* ]]; then
+      _lr_wt_abs="$(cd "$(dirname "$WT")" 2>/dev/null && pwd -P)/$(basename "$WT")"
+      _lr_wt_else="$(git -C "$REPO" worktree list --porcelain | awk -v br="refs/heads/$BR" -v a="$WT" -v b="$_lr_wt_abs" '
+        /^worktree / { p = substr($0, 10) } $0 == "branch " br && p != a && p != b { print p }')"
+      if [ -z "$_lr_wt_else" ]; then
+        echo "-- lr-fire-resume: $WT is registered but missing — re-adding it with -f" >&2
+        _lr_wt_rc=0; git -C "$REPO" worktree add -f "$WT" "$BR" >&2 || _lr_wt_rc=$?
+      else
+        echo "✗ lr-fire-resume: $WT is registered but missing, and $BR is also checked out at: $_lr_wt_else — refusing -f" >&2
+      fi
+    fi
+    rm -rf "$_lr_glock"
+    [ "$_lr_wt_rc" -eq 0 ] || exit 1
   else
     echo "lr-fire-resume: worktree $WT missing and no --branch to recreate it" >&2; exit 2
   fi
@@ -371,7 +528,13 @@ printf '\033[?1000l\033[?1002l\033[?1003l\033[?1006l\033[?1015l'
 #   - the folder-trust arrow-menu (pre-accepted in the target account's config)
 # so the expect block below only has to fast-path benign, in-PTY prompts. Fail-open.
 _LR_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-"$_LR_DIR/lr-preseed-env.sh" "$cfg" "$WT" || true
+# LR_PRESEED_DONE: the caller already preseeded this account (the fleet does it once per account, the
+# W5 rig has no account at all), so a second pass here would only re-write the same config.
+if [[ -n "${LR_PRESEED_DONE:-}" ]]; then
+  echo "-- lr-fire-resume: preseed skipped (LR_PRESEED_DONE=$LR_PRESEED_DONE)" >&2
+else
+  "$_LR_DIR/lr-preseed-env.sh" "$cfg" "$WT" || true
+fi
 
 # Resolve the binary from the ONE SSOT (bin/cc-claude-bin), never a local constant. This used to
 # hardcode ~/.claude-183, which by 2026-08-01 was wrong twice over: that directory had been advanced
@@ -379,9 +542,15 @@ _LR_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # to ~/.claude-219 — so a limit-recover resume relaunched a session on a DIFFERENT binary than the
 # one it was recovering, and on a build with no claude-opus-5 at all. Fail CLOSED: a resume that
 # cannot name its binary must not silently pick another one.
-BIN="$("$_LR_DIR/../../bin/cc-claude-bin" 2>/dev/null)" || BIN=""
-if [[ -z "$BIN" || ! -x "$BIN" ]]; then
-  echo "✗ lr-fire-resume: cannot resolve the claude binary (cc-claude-bin found none)." >&2
+# LR_CLAUDE_BIN replaces that resolution outright (the W5 rig runs a stub TUI); it is held to the same
+# fail-closed check, so a typo is the error below and never a fall-back to the real binary.
+if [[ -n "${LR_CLAUDE_BIN:-}" ]]; then
+  BIN="$LR_CLAUDE_BIN"
+else
+  BIN="$("$_LR_DIR/../../bin/cc-claude-bin" 2>/dev/null)" || BIN=""
+fi
+if [[ -z "$BIN" || ! -f "$BIN" || ! -x "$BIN" ]]; then
+  echo "✗ lr-fire-resume: cannot resolve the claude binary (LR_CLAUDE_BIN='${LR_CLAUDE_BIN:-}', cc-claude-bin found none)." >&2
   echo "  Set CC_CLAUDE_BIN=/path/to/claude, or check the claude() _bin pin in ~/.zshrc." >&2
   exit 1
 fi
@@ -549,6 +718,25 @@ case "$PERM_MODE" in
 esac
 export LR_CFG="$cfg" LR_BIN="$BIN" LR_MODEL="$model" LR_EFFORT="$effort" LR_SID="$SID" LR_PROMPT="$PROMPT" LR_PERM="$PERM_MODE"
 export LR_EXTRA_ARGS="$EXTRA_ARGS" LR_EXTRA_ENV="$EXTRA_ENV"
+export LR_NO_PROMPT="$NO_PROMPT"
+# THE RE-SEND LOOK SCHEDULE: the seconds after the first CR at which a still-unsubmitted composer is
+# read again (W0: a stranded prompt is visible within seconds, and the old first look at poll-1 left
+# it sitting for ~29 s). Validated here because Tcl reads a leading-zero number as octal and an
+# unordered list would look twice at one instant; anything invalid falls back to the default, loudly.
+_lr_sched="${LR_RECR_SCHEDULE:-5,15,30,45}"; _lr_ok=1; _lr_prev=0
+case "$_lr_sched" in *[!0-9,]*|,*|*,|*,,*) _lr_ok=0 ;; esac
+if [ "$_lr_ok" = 1 ]; then
+  for _lr_n in ${_lr_sched//,/ }; do
+    case "$_lr_n" in 0*) _lr_ok=0; break ;; esac
+    [ "$_lr_n" -gt "$_lr_prev" ] || { _lr_ok=0; break; }
+    _lr_prev="$_lr_n"
+  done
+fi
+if [ "$_lr_ok" = 0 ]; then
+  echo "!! lr-fire-resume: LR_RECR_SCHEDULE='$_lr_sched' is not a list of strictly ascending positive integers — using 5,15,30,45" >&2
+  _lr_sched="5,15,30,45"
+fi
+export LR_RECR_SCHEDULE="$_lr_sched"
 # ── CLOSE-ATTRIBUTION WRAPPER ────────────────────────────────────────────────────────────────────
 # A RESUMED SESSION USED TO DIE UNATTRIBUTABLY. Every other launch path interposes
 # bin/cc-close-attrib (see ~/.zshrc's claude-next* launchers); the spawn below did not, so a session
@@ -681,7 +869,23 @@ command -v lr_state_append >/dev/null 2>&1 || {
   echo "!! lr-fire-resume: lr-lib.sh unreachable — state '${LR_ST_STATE:-}' NOT recorded" >&2; exit 0; }
 lr_state_append "$LR_RUN_DIR" "${LR_ST_STATE:-}" "${LR_ST_STAGE:-}" "${LR_ST_DETAIL:-}" || true
 LRNOTESH
+# The launch-lock holder handover (see lr_launch_guard): once expect has spawned claude, the lock is
+# held by THAT pid, so a later launcher finds a live holder while it runs and a stale one once it is
+# gone. Nothing ever releases it; empty when the guard is off, which makes the expect side a no-op.
+LR_LOCK_DIR="${LR_LAUNCH_LOCK:-${LR_STATE_DIR:-$HOME/.reso/limit-recover}/locks/$SID.launch}"
+IFS='' read -r -d '' LR_LOCK_SH <<'LRLOCKSH' || true
+d="${LR_LOCK_DIR:-}"; p="${LR_LOCK_PID:-}"
+[ -n "$d" ] && [ -d "$d" ] || exit 0
+case "$p" in ''|*[!0-9]*) exit 0 ;; esac
+l="$(TZ=UTC LC_ALL=C "${LR_PS_BIN:-/bin/ps}" -o lstart= -p "$p" 2>/dev/null | tr -s ' ' | sed 's/^ //;s/ $//')"
+jq -cn --arg r "${LR_RECORD_ID:-}" --arg a "${LR_ATTEMPT:-}" --argjson pid "$p" --arg l "$l" \
+      --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '{record_id:$r,attempt:$a,role:"claude",pid:$pid,lstart:$l,at:$at}' > "$d/holder.tmp.$$" \
+  && mv -f "$d/holder.tmp.$$" "$d/holder"
+LRLOCKSH
+[ "${LR_LAUNCH_GUARD:-on}" = off ] && LR_LOCK_SH=""
 export LR_PROBE LR_LIB_PATH LR_IT2 LR_PANE LR_SCREEN_WANT LR_SCREEN_NONCE LR_SCREEN_TAIL LR_SCREEN_SH LR_NOTE_SH
+export LR_LOCK_DIR LR_LOCK_SH
 # ══ NOTHING WRITES TO THE PANE TTY ONCE THE TUI OWNS IT (2026-09-28) ═════════════════════════════
 # The expect program used to report every step with send_user, i.e. raw bytes on the very tty
 # Claude Code was painting. Those lines landed inside the composer box, wrapped mid-word, and
@@ -701,6 +905,9 @@ LR_NOTIFY="${LR_NOTIFY_BIN:-$HOME/.claude/bin/cc-notify}"
 [ -x "$LR_NOTIFY" ] || LR_NOTIFY=""
 export LR_SAY_LOG LR_NOTIFY
 
+# A refusal here is a launcher failure before the TUI exists, so it runs before the trap is disarmed
+# and before relaunch-typed; still as late as possible, so the holder census is fresh (rc 10 / 11).
+lr_launch_guard
 lr_rc=0
 # THE RELAUNCH-RC TRAP IS DISARMED HERE, and this line is the whole of its scope rule: everything
 # above is "the launcher failed before the TUI existed" (a relaunch failure the watcher must see);
@@ -725,6 +932,9 @@ expect -c '
   set sid    $env(LR_SID)
   set prompt $env(LR_PROMPT)
   set injected 0
+  # With no prompt to type (--no-prompt), readiness is still a fact worth recording: the W3 phase
+  # oracle derives MOVED from these notes. Latched, so one run writes at most one.
+  set ready_noted 0
   set asis $env(LR_ASIS)
   set menu_answered 0
   # NO ECHO BEFORE interact (2026-09-24, pane 405). Until interact the pane tty stays cooked with
@@ -872,6 +1082,9 @@ expect -c '
   # rather than blanking: an empty string is a value, and a consumer testing presence rather than
   # truthiness would still read it as set.
   #
+  # CLAUDE_CODE_DISABLE_AGENT_VIEW=1 takes "Move to background and exit" out of the /exit
+  # background-work dialog (W0 item 3), so no later exit can hand this session to a bg worker.
+  #
   # The two branches differ ONLY by the cc-close-attrib prefix (see the LR_WRAP block in the bash
   # above for why an empty prefix cannot simply be interpolated). The wrapper execs the binary in
   # place, so the spawned pty, the process group and every pattern below are unchanged by it.
@@ -880,9 +1093,14 @@ expect -c '
   set xargs [expr {[info exists env(LR_EXTRA_ARGS)] ? [regexp -all -inline {\S+} $env(LR_EXTRA_ARGS)] : {}}]
   set xenv  [expr {[info exists env(LR_EXTRA_ENV)] ? [regexp -all -inline {\S+} $env(LR_EXTRA_ENV)] : {}}]
   if {$wrap ne ""} {
-    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION -u LR_RUN -u LR_RUN_DIR -u LR_ADMIT_TOKEN -u LR_SUBMIT_TOKEN -u LR_LOAD_TERM -u CC_ADMIT_TOKEN -u CC_ADMIT_WANT_SID -u CC_ADMIT_LOAD_TERM -u CC_ADMIT_BUDGET_KEY -u LR_EXTRA_ARGS -u LR_EXTRA_ENV DISABLE_AUTOUPDATER=1 {*}$xenv CLAUDE_CONFIG_DIR=$cfg $wrap $bin --permission-mode $perm --model $model --effort $effort --resume $sid {*}$xargs
+    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION -u LR_RUN -u LR_RUN_DIR -u LR_ADMIT_TOKEN -u LR_SUBMIT_TOKEN -u LR_LOAD_TERM -u CC_ADMIT_TOKEN -u CC_ADMIT_WANT_SID -u CC_ADMIT_LOAD_TERM -u CC_ADMIT_BUDGET_KEY -u LR_EXTRA_ARGS -u LR_EXTRA_ENV DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_AGENT_VIEW=1 {*}$xenv CLAUDE_CONFIG_DIR=$cfg $wrap $bin --permission-mode $perm --model $model --effort $effort --resume $sid {*}$xargs
   } else {
-    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION -u LR_RUN -u LR_RUN_DIR -u LR_ADMIT_TOKEN -u LR_SUBMIT_TOKEN -u LR_LOAD_TERM -u CC_ADMIT_TOKEN -u CC_ADMIT_WANT_SID -u CC_ADMIT_LOAD_TERM -u CC_ADMIT_BUDGET_KEY -u LR_EXTRA_ARGS -u LR_EXTRA_ENV DISABLE_AUTOUPDATER=1 {*}$xenv CLAUDE_CONFIG_DIR=$cfg $bin --permission-mode $perm --model $model --effort $effort --resume $sid {*}$xargs
+    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION -u LR_RUN -u LR_RUN_DIR -u LR_ADMIT_TOKEN -u LR_SUBMIT_TOKEN -u LR_LOAD_TERM -u CC_ADMIT_TOKEN -u CC_ADMIT_WANT_SID -u CC_ADMIT_LOAD_TERM -u CC_ADMIT_BUDGET_KEY -u LR_EXTRA_ARGS -u LR_EXTRA_ENV DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_AGENT_VIEW=1 {*}$xenv CLAUDE_CONFIG_DIR=$cfg $bin --permission-mode $perm --model $model --effort $effort --resume $sid {*}$xargs
+  }
+  # The launch lock now names the spawned claude (env and the wrapper both exec in place, so this
+  # pid IS the session). A failure here costs the handover, never the recovery.
+  if {[info exists env(LR_LOCK_SH)] && $env(LR_LOCK_SH) ne ""} {
+    catch { exec env LR_LOCK_PID=[exp_pid] /bin/bash -c $env(LR_LOCK_SH) }
   }
   # ══ THE RELAY IS BYTE-TRANSPARENT (2026-09-28) ═══════════════════════════════════════════════
   # /usr/bin/expect is 5.45 on Tcl 8.5, which cannot hold a 4-byte UTF-8 character. Decoding the
@@ -1032,6 +1250,9 @@ expect -c '
         sleep 0.2
         send -- $prompt_b
         lr_submit_cr
+      } elseif {$prompt eq "" && !$ready_noted} {
+        set ready_noted 1
+        lr_note READY ready "the ready signal matched and there is no prompt to type — nothing was sent"
       }
     }
     timeout {
@@ -1061,6 +1282,11 @@ expect -c '
         } else {
           lr_note READY-NOT-SEEN inject "screen reads $sv after ${quiet}s quiet — prompt NOT typed"
           lr_tell "✗ READY NEVER SEEN — prompt NOT typed: the pty went quiet for ${quiet}s and the screen reads $sv, not an empty composer. NOTHING was sent, because Enter on a parked menu takes its default. Type the prompt by hand in the pane."
+        }
+      } elseif {$prompt eq "" && !$ready_noted} {
+        if {[lr_screen] eq "EMPTY"} {
+          set ready_noted 1
+          lr_note READY-QUIET ready "READY never matched; the composer reads EMPTY after ${quiet}s quiet and there is no prompt to type"
         }
       }
     }
@@ -1110,7 +1336,22 @@ expect -c '
     # budgets (memory: predicate-refusal-is-not-a-negative, empty-vs-no-surface).
     set recr 0
     set recrmax [expr {[info exists env(LR_SUBMIT_RECR_MAX)] ? $env(LR_SUBMIT_RECR_MAX) : 2}]
-    set nextlook [expr {$poll - 1}]
+    # THE LOOK SCHEDULE (LR_RECR_SCHEDULE, validated in bash): the composer is looked at these many
+    # WALL-CLOCK seconds after the first CR, then every 15 s. Wall clock, not t: t counts loop turns,
+    # which run ~1.3 s each on a loaded box, so a look at t=5 landed at 9 s. A look that ran late skips
+    # the entries it already passed, so a slow box never fires two looks back to back. The deadline
+    # stays in turns; since a turn is never shorter than a second, t never passes el.
+    set sched {}
+    if {[info exists env(LR_RECR_SCHEDULE)]} {
+      foreach s [split $env(LR_RECR_SCHEDULE) ","] { if {$s ne ""} { lappend sched $s } }
+    }
+    if {[llength $sched] == 0} { set sched {5 15 30 45} }
+    set si 0
+    set nextlook [lindex $sched 0]
+    set tcr [clock milliseconds]
+    # The poll must outlive the first look: a deadline of `poll` turns shorter than it would end the
+    # run with FAILED:submit without ever reading the composer.
+    if {$deadline < $nextlook + 1} { set deadline [expr {$nextlook + 1}] }
     set unmeasured 0
     for {set t 0} {$t < $deadline} {incr t} {
       set r [lr_probe $t0]
@@ -1119,18 +1360,32 @@ expect -c '
       if {$verb eq "submitted"} { break }
       if {$verb eq "skip"} { break }
       if {$verb eq "queued" && $deadline < $qmax} { set deadline $qmax }
-      if {$verb eq "none" && $recr < $recrmax && $t >= $nextlook} {
-        set nextlook [expr {$t + 15}]
+      set el [expr {([clock milliseconds] - $tcr) / 1000}]
+      # Turns and seconds drift apart on a loaded box, so while a scheduled look is still ahead and
+      # could still act, the deadline is kept two turns out rather than trusted to line up.
+      if {$verb eq "none" && $recr < $recrmax && $si < [llength $sched] && $deadline < $t + 2} {
+        set deadline [expr {$t + 2}]
+      }
+      if {$verb eq "none" && $recr < $recrmax && $el >= $nextlook} {
+        while {$si < [llength $sched] && [lindex $sched $si] <= $el} { incr si }
+        if {$si < [llength $sched]} {
+          set nextlook [lindex $sched $si]
+        } else {
+          set nextlook [expr {$el + 15}]
+        }
         set sv [lr_screen]
         if {$sv eq "DRAFT-MINE"} {
           incr recr
-          lr_note SUBMIT-RECR submit "prompt still in the composer after ${poll}s — one more CR"
-          lr_say "the prompt is still sitting in the composer after ${poll}s (nothing in the transcript) — sending ONE more Enter."
+          lr_note SUBMIT-RECR submit "prompt still in the composer ${el}s after the first CR — one more CR"
+          lr_say "the prompt is still sitting in the composer ${el}s after the first CR (nothing in the transcript) — sending ONE more Enter."
           send "\r"
           # EXTEND, NEVER SHRINK. This used to be an unconditional `set deadline [expr {$t + 10}]`,
           # which on a run whose deadline had already been stretched to qmax CUT it back to 10s and
           # threw away both the remaining engage budget and the second re-CR the fix above buys.
-          if {$deadline < [expr {$t + 15}]} { set deadline [expr {$t + 15}] }
+          # It also covers the NEXT scheduled look, which may lie past t+15.
+          set dl [expr {$t + 15}]
+          if {$nextlook + 1 > $dl} { set dl [expr {$nextlook + 1}] }
+          if {$deadline < $dl} { set deadline $dl }
         } elseif {$sv eq "EMPTY" || $sv eq "UNKNOWN"} {
           # NOT MEASURED — and it must not share an action with DRAFT/MENU, which SETTLE the
           # question. EMPTY is the composer state a SUCCESSFUL submit LEAVES BEHIND, and UNKNOWN is
@@ -1174,12 +1429,14 @@ expect -c '
           # log and bury the verdict that follows them.
           if {!$unmeasured} {
             set unmeasured 1
-            lr_note SUBMIT-UNMEASURED submit "screen reads $sv after ${poll}s — not a negative; re-reading the composer every 15s and polling the transcript to ${deadline}s"
-            lr_say "nothing in the transcript after ${poll}s and the screen reads $sv — NOT a measured failure (an EMPTY composer is what a successful submit leaves, and UNKNOWN means no pane was read). No keystroke sent; re-reading the composer every 15s and polling the transcript to ${deadline}s."
+            lr_note SUBMIT-UNMEASURED submit "screen reads $sv ${el}s after the first CR — not a negative; re-reading the composer on the look schedule and polling the transcript to ${deadline}s"
+            lr_say "nothing in the transcript ${el}s after the first CR and the screen reads $sv — NOT a measured failure (an EMPTY composer is what a successful submit leaves, and UNKNOWN means no pane was read). No keystroke sent; re-reading the composer on the look schedule and polling the transcript to ${deadline}s."
           }
         } else {
-          lr_say "nothing in the transcript after ${poll}s and the composer reads $sv, not our prompt — NOT re-sending Enter."
-          break
+          lr_say "nothing in the transcript ${el}s after the first CR and the composer reads $sv, not our prompt — NOT re-sending Enter; polling the transcript to ${deadline}s."
+          # STOP LOOKING, KEEP POLLING. This used to `break`, which with the first look at 5 s ended
+          # the poll and wrote FAILED:submit while an accepted Enter can take 1.6-11 s (W0) to land.
+          set recr $recrmax
         }
       }
       lr_pump 1
