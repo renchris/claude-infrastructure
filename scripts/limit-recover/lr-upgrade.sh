@@ -210,13 +210,15 @@ lru_at_rest() { # $1=transcript → 0 at rest · 1 in flight · 2 unreadable
   [ -n "$tx" ] && [ -f "$tx" ] && command -v jq >/dev/null 2>&1 || return 2
   last="$(tail -n 400 "$tx" 2>/dev/null \
     | jq -rc --argjson win "${LRU_STALE_NOTIF_S:-600}" 'select((.type=="assistant" or .type=="user") and ((.isSidechain // false)|not))
-              | "\(.type) \(.message.stop_reason // "-")\(
+              | "\(.type) \(if .type == "assistant" and (.isApiErrorMessage // false) then "api-error" else (.message.stop_reason // "-") end)\(
                   if .type == "user" and ((.message.content | type) == "string")
                      and (.message.content | startswith("<task-notification>"))
                      and ((now - ((.timestamp // "") | sub("\\.[0-9]+Z$"; "Z") | (try fromdateiso8601 catch now))) > $win)
                   then " stale-notification" else "" end)"' 2>/dev/null | tail -n 1)"
   [ -n "$last" ] || return 2
   [ "$last" = "assistant end_turn" ] && return 0
+  # An API-error record (stop_reason "stop_sequence") ends the turn: see hf_transcript_at_rest.
+  [ "$last" = "assistant api-error" ] && return 0
   # A <task-notification> the harness appended with no turn after it, older than the window, is not a
   # turn in flight: a real turn writes its first assistant record within seconds. Measured 2026-09-23
   # on pane 480 — resumed onto 2.1.280 at 00:18Z with a lost background task, the harness appended

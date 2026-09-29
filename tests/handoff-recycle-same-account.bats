@@ -243,6 +243,29 @@ teammate_argv() { export PS_ARGS_OUT="/x/claude.exe --agent-id $TM_ID --agent-na
   [ "$status" -eq 0 ] || { echo "rc=$status"; false; }
 }
 
+@test "at-rest oracle: a trailing API-error record (captured auth cliff, stop_sequence) is REST, in both mirrors" {
+  # W5 rig: every voluntary auth hop was HELD:mid-turn, because Claude Code writes the auth cliff as
+  # isApiErrorMessage with stop_reason "stop_sequence" — which the oracle read as a turn in flight.
+  load_rest
+  local fx="$BATS_TEST_DIRNAME/fixtures/lr-recon/jsonl/authentication-failed.jsonl"
+  local lru="$BATS_TEST_TMPDIR/lru.sh"
+  awk '/^lru_at_rest\(\) \{/,/^\}/' "$BATS_TEST_DIRNAME/../scripts/limit-recover/lr-upgrade.sh" > "$lru"
+  [ -s "$lru" ] || { echo "lru_at_rest not found"; false; }
+  # shellcheck disable=SC1090
+  . "$lru"
+  : > "$TX"; tail -n 1 "$fx" >> "$TX"
+  run hf_transcript_at_rest "$TX"
+  [ "$status" -eq 0 ] || { echo "hf rc=$status"; false; }
+  run lru_at_rest "$TX"
+  [ "$status" -eq 0 ] || { echo "lru rc=$status"; false; }
+  # CONTROL: the same stop_reason WITHOUT the api-error flag stays in flight
+  rec '{"type":"assistant","message":{"role":"assistant","stop_reason":"stop_sequence"},"timestamp":"2026-09-22T10:00:06Z"}'
+  run hf_transcript_at_rest "$TX"
+  [ "$status" -eq 1 ] || { echo "hf control rc=$status"; false; }
+  run lru_at_rest "$TX"
+  [ "$status" -eq 1 ] || { echo "lru control rc=$status"; false; }
+}
+
 @test "at-rest oracle: a tool_result awaiting its next assistant record is in flight (rc 1)" {
   load_rest; at_rest_tx
   rec '{"type":"user","message":{"content":[{"type":"tool_result"}]},"timestamp":"2026-09-22T10:00:05Z"}'
