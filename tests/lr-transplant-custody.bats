@@ -112,6 +112,34 @@ _confirmed() { # admit + confirm: the source retired, the target a full copy
   [ "$status" -eq 0 ] && [ "$(_field already_unconfirmed)" = True ] || { echo "re-run: $output $stderr"; false; }
 }
 
+_recon_unconfirm() { # <source pid> <source lstart> → run the reconciler's OWN unconfirm argv (act.cmd_transplant)
+  local argv
+  argv="$(cd "$ROOT/scripts/limit-recover" && python3 -c 'import sys
+from lr_recon import act, types as T
+r = T.Record(sid=sys.argv[1], record_id="recon:c:" + sys.argv[1][:8] + ":1", source_cfg=sys.argv[2],
+             target_cfg=sys.argv[3], source_pid=int(sys.argv[4]), source_lstart=sys.argv[5])
+print("\n".join(act.cmd_transplant(r, "unconfirm")))' "$SID" "$T/from" "$T/to" "$1" "$2")" || return 1
+  local a=(); while IFS= read -r l; do a+=("$l"); done <<< "$argv"
+  run --separate-stderr "${a[@]}"
+}
+
+@test "custody 3b: unconfirm accepts the reconciler's own argv, and refuses a recorded source that died" {
+  # W5 rig: every UNCONFIRM the daemon built died "unknown arg --source-pid" (rc 2), 64 times.
+  _confirmed
+  _live; _register "$T/from" s1 "$LIVE_PID" "$LIVE_LSTART"
+  _dead
+  local before; before="$(_snap "$RET" "$DST" "$TOMB" "$LOCK")"
+  _recon_unconfirm "$DEAD_PID" "$DEAD_LSTART"
+  [ "$status" -eq 2 ] || { echo "rc=$status $output $stderr"; false; }
+  [ "$(_field reason)" = source-dead ] || { echo "$output $stderr"; false; }
+  [ "$(_snap "$RET" "$DST" "$TOMB" "$LOCK")" = "$before" ] || { echo "a refusal changed a file"; false; }
+  # the lstart is compared space-collapsed, as the daemon renders it ("Sep  9" → "Sep 9")
+  _recon_unconfirm "$LIVE_PID" "$(printf '%s' "$LIVE_LSTART" | tr -s ' ')"
+  [ "$status" -eq 0 ] || { echo "rc=$status $output $stderr"; false; }
+  [ -f "$SRC" ] || { echo "the source was not restored"; false; }
+  [ ! -e "$RET" ] || { echo "the source was not restored"; false; }
+}
+
 @test "custody 4: unconfirm with a stub present refuses stub-present, every file byte-identical" {
   _confirmed
   _live; _register "$T/from" s1 "$LIVE_PID" "$LIVE_LSTART"

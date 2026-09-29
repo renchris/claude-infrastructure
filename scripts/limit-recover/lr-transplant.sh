@@ -6,6 +6,7 @@
 #                         [--task-list ID] [--keep-source] [--force]
 #                         [--phase admit|confirm|unconfirm|fold-stub|abort]
 #                         [--cause limit|voluntary] [--record-id R] [--watcher-record F]
+#                         [--source-pid PID --source-lstart LSTART]   (unconfirm)
 #
 # Copies: <slug>/<sid>.jsonl + <slug>/<sid>/ (subagents, workflows, journals)
 #         + tasks/<task-list>/ when given.
@@ -46,6 +47,7 @@
 set -euo pipefail
 
 SID="" FROM="" TO="" TASK_LIST="" KEEP_SOURCE=0 FORCE=0 PHASE="" CAUSE="" RECORD_ID="" WATCHER_RECORD=""
+SOURCE_PID="" SOURCE_LSTART=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --sid) SID="$2"; shift 2 ;;
@@ -73,6 +75,15 @@ while [[ $# -gt 0 ]]; do
     --watcher-record)
       [[ $# -ge 2 && -n "$2" && "$2" != --* ]] || { echo "lr-transplant: --watcher-record needs a value" >&2; exit 3; }
       WATCHER_RECORD="$2"; shift 2 ;;
+    # The reconciler names the source process it recorded (architecture §C, "unconfirm (new)"), so
+    # unconfirm restores only for THAT process, never for a pid the OS has since handed to another.
+    # The W5 rig's first real UNCONFIRM died here 64 times with "unknown arg --source-pid".
+    --source-pid)
+      [[ $# -ge 2 && "$2" =~ ^[0-9]+$ ]] || { echo "lr-transplant: --source-pid needs a pid" >&2; exit 3; }
+      SOURCE_PID="$2"; shift 2 ;;
+    --source-lstart)
+      [[ $# -ge 2 ]] || { echo "lr-transplant: --source-lstart needs a value" >&2; exit 3; }
+      SOURCE_LSTART="$2"; shift 2 ;;
     # A FIELD, never a state token (DEC-3). It is recorded on the lock and the tombstone so an
     # artifact read weeks later says WHY the session moved; nothing in this script branches on it,
     # and no state/klass predicate anywhere may — a new STATE value would fall into klass()'s
@@ -447,6 +458,11 @@ if [[ "$PHASE" == unconfirm ]]; then
   UC_SRC="${UC_RETIRED%.handed-off}"
   [[ ! -e "$UC_SRC" ]] || lrt_refuse stub-present stub-present "$UC_SRC already exists beside its .handed-off copy"
   lrt_held "$FROM" || lrt_refuse source-dead source-dead "no live process holds $SID under $FROM"
+  # pid 0 is the reconciler's "never recorded": the holder check above is then the whole test.
+  if [[ -n "$SOURCE_PID" && "$SOURCE_PID" -gt 0 ]]; then
+    lrt_live "$SOURCE_PID" "$SOURCE_LSTART" \
+      || lrt_refuse source-dead source-dead "the recorded source $SOURCE_PID ($SOURCE_LSTART) is not alive"
+  fi
   ! lrt_held "$TO" || lrt_refuse target-held target-held "a live process holds $SID under $TO"
   lrt_assert_lock
   lrt_link_rename "$UC_RETIRED" "$UC_SRC" || lrt_refuse stub-present stub-present "$UC_SRC appeared before the restore"
