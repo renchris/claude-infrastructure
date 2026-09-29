@@ -550,6 +550,45 @@ class MainTests(unittest.TestCase):
         argv = M._command(ctx, rec, "A-husk")
         self.assertEqual(argv[argv.index("--resume-launcher") + 1], launcher)
 
+    def test_a_dead_sessions_stale_request_joins_its_accounts_cohort(self):
+        """W5 rig N=30: the stale reconcile was never given the account stores, so a dead session's
+        NOT_NEEDED member was filed under the orphan cohort unknown-none-0 and the run's cohort
+        counted 29 of 30."""
+        import shutil
+        import time
+
+        now = time.time()
+        sid = "abcdef01-0000-0000-0000-000000000009"
+        cfg = os.path.join(self.home, ".claude-next")
+        proj = os.path.join(cfg, "projects", "-x")
+        os.makedirs(proj)
+        fx = os.path.join(
+            os.path.dirname(__file__),
+            "..",
+            "..",
+            "..",
+            "..",
+            "tests",
+            "fixtures",
+            "lr-recon",
+            "jsonl",
+            "death-quota-limits.jsonl",
+        )
+        shutil.copy(os.path.realpath(fx), os.path.join(proj, sid + ".jsonl"))
+        os.makedirs(os.path.join(self.home, ".claude"), exist_ok=True)
+        with open(os.path.join(self.home, ".claude", "accounts.json"), "w") as fh:
+            json.dump({"accounts": [{"name": "next", "config_dir": cfg}]}, fh)
+        ctx = M.Ctx(self.paths, None, self.home)
+        M.store.ensure_dirs(self.paths)
+        snap = T.Snapshot(wall=now, uptime_raw=0.0, panes={}, sessions={})
+        req = T.Request(sid=sid, origin="cc-lr", path="", raw={})
+        with mock.patch.object(M.store, "claim_request"):
+            M._census(ctx, snap, {}, [req], "act", now)
+        rec = ctx.records[sid]
+        self.assertEqual(rec.terminal.outcome, "NOT_NEEDED")
+        self.assertEqual(rec.source_acct, "next")
+        self.assertTrue(rec.cohort_id.startswith("next-"), rec.cohort_id)
+
     def test_a_second_move_spawn_in_one_attempt_opens_a_new_attempt(self):
         """W5 rig N=30: A's /exit closed the pane, its exit code was unknown, and R went out under
         A's attempt, which the launch-log audit counts as a double typer."""

@@ -116,17 +116,22 @@ def _accounts(home: str) -> List[str]:
         return []
 
 
-def _cfg_of(home: str) -> Any:
+def _amap(home: str) -> Dict[str, str]:
+    """account name → its config dir, from accounts.json."""
     try:
         with open(
             os.path.join(home, ".claude", "accounts.json"), encoding="utf-8"
         ) as fh:
-            amap = {
-                a["name"]: os.path.expanduser(a["config_dir"])
+            return {
+                a["name"]: os.path.normpath(os.path.expanduser(a["config_dir"]))
                 for a in json.load(fh).get("accounts", [])
             }
     except (OSError, ValueError, KeyError, AttributeError):
-        amap = {}
+        return {}
+
+
+def _cfg_of(home: str) -> Any:
+    amap = _amap(home)
     return lambda acct: amap.get(acct, "")
 
 
@@ -194,7 +199,13 @@ def _census(
 ) -> Tuple[List[T.Bucket], List[Tuple[str, str, str]]]:
     paths = ctx.paths
     req_by_sid = {r.sid: r for r in reqs}
-    stale = census.stale_reconcile(ctx.records, reqs, snap, ctx.clock.boottime(), now)
+    # Every configured account store: a dead session has no live holder, so its own store is unknown
+    # and the reconcile must look in all of them (the parameter existed; nothing passed it, W5 rig).
+    amap = _amap(ctx.home)
+    stores = list(amap.values())
+    stale = census.stale_reconcile(
+        ctx.records, reqs, snap, ctx.clock.boottime(), now, stores=stores
+    )
     stale_sids = {sid for sid, verdict, _r in stale if verdict == "NOT_NEEDED"}
     for sid, verdict, reason in stale:
         _event(paths, "stale", sid, detail="%s %s" % (verdict, reason))
@@ -208,6 +219,8 @@ def _census(
                     req_by_sid[sid].origin,
                     reason,
                     now,
+                    stores=stores,
+                    amap=amap,
                 )
     autorecover = os.path.exists(paths.autorecover_on)
     buckets: List[T.Bucket] = []
