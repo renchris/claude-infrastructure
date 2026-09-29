@@ -2514,6 +2514,327 @@ hf_bg_work_gate() { # $1=registry pid $2=1 when limited $3=transcript → rc 0 p
   return 0
 }
 
+# ════ RECYCLE CUSTODY, FOREGROUND HALF (W2b, lr-reconciler) ════════════════════════════════════════
+# Defined HERE, above the `__recycle` watcher and the probe verb, because both execute top-level code
+# long before recycle_fire's definition is reached — a helper defined beside its first caller keeps
+# every site above it broken. Every piece ships behind a kill switch at its SAFE default, and every
+# refusal names what was (not) typed.
+
+# A sibling under limit-recover/, by the same three-path ladder every lookup in this file uses, rooted
+# at HF_DIR (this file resolved THROUGH its symlink) because ~/.claude/scripts is a per-file symlink
+# farm with no limit-recover/ beside $0. $2 names a path-override env var (a test seam): when it is
+# set it is the ONLY candidate, so a seam pointing at nothing reads as unreachable, never as "the
+# real one then".
+hf_lr_script() { # $1=file under limit-recover/ $2=override var name → path on stdout; rc 1 unreachable
+  local ov="" c
+  [ -n "${2:-}" ] && ov="${!2:-}"
+  if [ -n "$ov" ]; then
+    [ -f "$ov" ] && { printf '%s' "$ov"; return 0; }
+    return 1
+  fi
+  for c in "${HF_DIR:-}/limit-recover/$1" \
+           "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/limit-recover/$1" \
+           "$HOME/.claude/scripts/limit-recover/$1"; do
+    [ -f "$c" ] && { printf '%s' "$c"; return 0; }
+  done
+  return 1
+}
+
+# THE RECONCILER FENCE. When the lr-reconciler daemon owns a session, it is the ONLY actuator allowed
+# to type into that session's pane; a recycle arriving from any older rail would be a second hand on
+# the same keyboard. lr_recon_defers answers the ownership question (rc 0 = defer). An unreachable
+# fence library, or one that does not define the function, is a box the reconciler has not reached
+# yet — act exactly as before, never refuse on it.
+hf_recycle_fenced() { # $1=subject session id → rc 0 DEFER (the reconciler owns it) · 1 act
+  local lib
+  [ -n "${1:-}" ] || return 1
+  lib="$(hf_lr_script lr-recon-fence.sh HF_RECON_FENCE)" || return 1
+  # shellcheck disable=SC1090  # runtime-resolved sibling; sourcing only defines functions
+  . "$lib" 2>/dev/null || return 1
+  command -v lr_recon_defers >/dev/null 2>&1 || return 1
+  lr_recon_defers "$1" 2>/dev/null
+}
+
+# THE PER-PANE RECYCLE LOCK. Two recycles of one pane (a retry racing its own first attempt, the
+# reconciler racing an older rail) each arm a watcher, and both watchers type a relaunch into the
+# same shell. The lock is a directory (mkdir is the atomic test-and-set) holding one compact-JSON
+# `holder` in lr-recon-fence.sh's §C7 shape, so the daemon reads it with the parser it already has.
+# Identity is (pid, lstart): a pid alone is reused by the kernel. Keyed on socket + pane, because a
+# kitty window id is a per-kitty-process counter that restarts at 1.
+hf_recycle_lock_dir() { # $1=pane → the lock dir path; rc 1 when no digest could be taken
+  local sum
+  sum="$(printf '%s' "${CC_TERM_KITTY_TO:-iterm2}:${1:-}" | shasum -a 1 2>/dev/null | cut -c1-40)"
+  [ -n "$sum" ] || return 1
+  printf '%s/pane-%s.recycle' "${LR_LOCKS_DIR:-$HOME/.reso/limit-recover/locks}" "$sum"
+}
+_hf_lstart() { # $1=pid → its start time, TZ=UTC LC_ALL=C, runs of spaces collapsed; empty if gone
+  TZ=UTC LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ *//; s/ *$//'
+}
+_hf_lock_raw() { # $1=lock dir → the holder, one line, or nothing
+  [ -f "$1/holder" ] && tr -d '\r\n' < "$1/holder" 2>/dev/null
+  return 0
+}
+_hf_lock_field() { # $1=raw holder $2=pid|lstart → the value
+  case "$2" in
+    pid)    printf '%s' "$1" | sed -n 's/.*"pid":\([0-9][0-9]*\)[,}].*/\1/p' ;;
+    lstart) printf '%s' "$1" | sed -n 's/.*"lstart":"\([^"]*\)".*/\1/p' ;;
+  esac
+}
+# ALIVE = the pid runs AND started when the holder says it did. A holder we cannot parse is not
+# alive: an unreadable lock would otherwise wedge the pane for good.
+_hf_lock_holder_alive() { # $1=raw holder → 0 alive
+  local hp hl cur
+  hp="$(_hf_lock_field "$1" pid)"; hl="$(_hf_lock_field "$1" lstart)"
+  case "$hp" in ''|*[!0-9]*|0) return 1 ;; esac
+  [ -n "$hl" ] || return 1
+  cur="$(_hf_lstart "$hp")"
+  [ -n "$cur" ] && [ "$cur" = "$(printf '%s' "$hl" | tr -s ' ')" ]
+}
+hf_recycle_lock_write() { # $1=dir $2=role $3=pid → 0 written (atomically, tmp + mv)
+  local dir="$1" role="$2" pid="$3" ls rid att tmp
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  ls="$(_hf_lstart "$pid")"
+  [ -n "$ls" ] || return 1
+  rid="$(printf '%s' "${LR_RECORD_ID:-}" | tr -d '"\\[:cntrl:]')"
+  att="${HF_RECYCLE_ATTEMPT:-0}"; case "$att" in ''|*[!0-9]*) att=0 ;; esac
+  tmp="$dir.holder.tmp.$$"
+  printf '{"record_id":"%s","attempt":%s,"role":"%s","pid":%s,"lstart":"%s","at":%s.0}\n' \
+    "$rid" "$att" "$role" "$pid" "$ls" "$(date +%s)" > "$tmp" 2>/dev/null \
+    && mv -f "$tmp" "$dir/holder" 2>/dev/null && return 0
+  rm -f "$tmp" 2>/dev/null
+  return 1
+}
+hf_recycle_lock_take() { # $1=dir $2=role $3=pid → 0 taken · 1 held by a LIVE holder (HF_LOCK_HOLDER) · 2 cannot write
+  local dir="$1" role="$2" pid="$3" raw tomb try=0
+  HF_LOCK_HOLDER=""
+  mkdir -p "$(dirname "$dir")" 2>/dev/null || return 2
+  while [ "$try" -lt 3 ]; do
+    try=$((try + 1))
+    if mkdir "$dir" 2>/dev/null; then
+      hf_recycle_lock_write "$dir" "$role" "$pid" && return 0
+      rm -rf "$dir" 2>/dev/null
+      return 2
+    fi
+    [ -d "$dir" ] || return 2
+    raw="$(_hf_lock_raw "$dir")"
+    if _hf_lock_holder_alive "$raw"; then HF_LOCK_HOLDER="$raw"; return 1; fi
+    # DEAD OR UNREADABLE — steal. Rename away first, then check the tomb holds the SAME holder we
+    # judged: a different one means a racing taker won, and its lock goes back.
+    tomb="$dir.stolen.$$.${RANDOM:-0}"
+    mv "$dir" "$tomb" 2>/dev/null || continue
+    if [ "$(_hf_lock_raw "$tomb")" != "$raw" ]; then
+      [ -e "$dir" ] || mv "$tomb" "$dir" 2>/dev/null
+      HF_LOCK_HOLDER="$(_hf_lock_raw "$dir")"
+      return 1
+    fi
+    rm -rf "$tomb" 2>/dev/null
+  done
+  return 1
+}
+# Released ONLY by a pid it names: a recycle that lost the pane to a steal must never delete the
+# thief's lock on its way out.
+hf_recycle_lock_release() { # $1=dir $2...=pids that may release it → 0 released
+  local dir="${1:-}" hp p
+  [ -n "$dir" ] && [ -d "$dir" ] || return 1
+  shift
+  hp="$(_hf_lock_field "$(_hf_lock_raw "$dir")" pid)"
+  [ -n "$hp" ] || return 1
+  for p in "$@"; do
+    [ -n "$p" ] && [ "$p" = "$hp" ] && { rm -rf "$dir" 2>/dev/null; return 0; }
+  done
+  return 1
+}
+# The recycle_fire side: take it (or refuse), and EXPORT it so the detached watcher inherits the path
+# its EXIT trap releases. Kill switch HF_RECYCLE_LOCK_GATE=off: no lock, exactly as before.
+hf_recycle_lock_acquire() { # $1=pane → 0 held by us (or gate off) · 1 refused (row emitted, nothing typed)
+  local dir rc=0
+  HF_RECYCLE_LOCK=""; export HF_RECYCLE_LOCK
+  [ "${HF_RECYCLE_LOCK_GATE:-on}" != off ] || return 0
+  dir="$(hf_recycle_lock_dir "$1")" || rc=2
+  [ "$rc" = 0 ] && { hf_recycle_lock_take "$dir" recycle "$$" || rc=$?; }
+  if [ "$rc" = 0 ]; then HF_RECYCLE_LOCK="$dir"; export HF_RECYCLE_LOCK; return 0; fi
+  if [ "$rc" = 1 ]; then
+    emit_recycle_event recycle-held-locked "" "$1" "pane recycle lock held by a live holder: ${HF_LOCK_HOLDER:-<unreadable>}" || true
+    echo "!! recycle DEFERRED: another recycle of pane $1 is in flight (lock ${dir}, holder ${HF_LOCK_HOLDER:-<unreadable>}) — two watchers would both type a relaunch into one shell. Nothing typed; the session stays alive." >&2
+  else
+    emit_recycle_event recycle-held-locked "" "$1" "pane recycle lock could not be written: ${dir:-<no digest>}" || true
+    echo "!! recycle REFUSED: the pane recycle lock ${dir:-<no digest>} could not be written — without it a concurrent recycle cannot be excluded. Nothing typed; the session stays alive. HF_RECYCLE_LOCK_GATE=off skips the lock." >&2
+  fi
+  return 1
+}
+# Kill the watcher and give its lock back — the pair every post-arm abort needs, so no exit path can
+# do one and forget the other.
+hf_recycle_disarm() { # → always 0
+  if [ -n "${WATCHER_PID:-}" ]; then kill "$WATCHER_PID" 2>/dev/null || true; fi
+  hf_recycle_lock_release "${HF_RECYCLE_LOCK:-}" "$$" "${WATCHER_PID:-}" || true
+  return 0
+}
+
+# THE WAKE GUARD. A lid-open wake leaves the terminal, the network and the pane's TUI settling for
+# seconds, and a keystroke into that window lands in a redraw it cannot be read back from. So the two
+# irreversible steps — the transplant confirm and the /exit — wait until the machine has been awake
+# LR_WAKE_GUARD_S. An unreadable waketime proceeds: the guard defers, it never refuses.
+hf_wake_guard() { # $1=the step being deferred → always 0
+  local wt raw now guard left
+  guard="${LR_WAKE_GUARD_S:-30}"; case "$guard" in ''|*[!0-9]*) guard=30 ;; esac
+  if [ -n "${HF_KERN_WAKETIME:-}" ]; then wt="$HF_KERN_WAKETIME"
+  else
+    raw="$(sysctl -n kern.waketime 2>/dev/null || true)"
+    wt="$(printf '%s' "$raw" | sed -n 's/^{ *sec *= *\([0-9][0-9]*\).*/\1/p')"
+  fi
+  case "$wt" in ''|*[!0-9]*|0) return 0 ;; esac
+  now="$(date +%s)"
+  left=$(( guard - (now - wt) ))
+  [ "$left" -gt 0 ] || return 0
+  [ "$left" -le "$guard" ] || left="$guard"          # a waketime in the future is clock skew
+  echo "→ wake guard: the machine woke $(( now - wt ))s ago — deferring ${1:-the next step} ${left}s"
+  "${HF_SLEEP:-sleep}" "$left"
+  return 0
+}
+
+# THE FOCUS READ (operator decision 7, unruled ⇒ the gate runs). A pane the operator has FOCUSED is
+# one they may be typing into this second, and every composer read is a sample that is stale the
+# moment it returns. kitty says so directly; iTerm2 has no per-pane answer here, and an unreadable
+# answer is `unknown` — treated as not focused, since refusing every iTerm2 pane would gate the
+# whole rail on a signal it cannot have. LR_MOVE_FOCUSED=on lets a focused pane move, under a
+# stricter read (two empty composers HF_FOCUS_READ_GAP_S apart, suffix-anchored echo verify).
+hf_pane_focused() { # $1=pane → yes|no|unknown on stdout
+  local v
+  if [ "${CC_TERM:-}" != kitty ] || [ -z "${1##*:}" ]; then echo unknown; return 0; fi
+  v="$(kt_window_field "${1##*:}" is_focused 2>/dev/null || true)"
+  case "$v" in True|true) echo yes ;; False|false) echo no ;; *) echo unknown ;; esac
+}
+hf_focus_double_read() { # $1=it2 $2=pane → 0 two EMPTY reads, gap apart · 1 not (HF_FOCUS_READ holds what was read)
+  local c rc n=0
+  HF_FOCUS_READ=""
+  while [ "$n" -lt 2 ]; do
+    [ "$n" = 1 ] && "${HF_SLEEP:-sleep}" "${HF_FOCUS_READ_GAP_S:-10}"
+    n=$((n + 1))
+    rc=0; c="$(recycle_composer_gate "$1" "$2" 0 1)" || rc=$?
+    if [ "$rc" != 0 ]; then
+      [ "$rc" = 2 ] && c="<unreadable>"
+      HF_FOCUS_READ="$c"
+      return 1
+    fi
+  done
+  return 0
+}
+
+# UNCONFIRM — the inverse of `--phase confirm`, owed ONLY when a confirm actually ran in THIS call:
+# confirm retired the source, so a recycle that then stands down must hand the session back, or the
+# live source sits beside a tombstone that says it moved. Called BY CONTRACT (lr-transplant.sh
+# --phase unconfirm, W2a): rc 0 ok · 2 REFUSED (JSON reason on stdout) · 3 usage. Its rc is RECORDED,
+# never retried here — a refusal is the reconciler's evidence, not ours to override.
+hf_recycle_unconfirm() { # → sets RCY_UNCONFIRM_RC (the CLI's rc · "n/a" no confirm ran · "unreachable")
+  local tp rc=0 out
+  RCY_UNCONFIRM_RC="n/a"
+  [ "${RCY_CONFIRM_RAN:-0}" = 1 ] || return 0
+  RCY_CONFIRM_RAN=0
+  if ! tp="$(hf_lr_script lr-transplant.sh HF_LR_TRANSPLANT)"; then RCY_UNCONFIRM_RC="unreachable"; return 0; fi
+  out="$(bash "$tp" --phase unconfirm --sid "$RCY_TS_SID" --from "$HF_TS_CFG" --to "$HF_TS_TO" \
+           --record-id "${LR_RECORD_ID:-}" ${HF_WATCHER_RECORD:+--watcher-record "$HF_WATCHER_RECORD"} 2>/dev/null)" || rc=$?
+  RCY_UNCONFIRM_RC="$rc"
+  [ "$rc" = 0 ] || echo "⚠ recycle: lr-transplant --phase unconfirm rc $rc for ${RCY_TS_SID:0:8}: $(printf '%.160s' "$out")" >&2
+  return 0
+}
+
+# A HOLD AFTER THE ARM: unconfirm (if owed), disarm, one row, one line, exit 1. Nothing is typed by
+# any caller of this — the row class is recycle-held-<reason> and the detail carries the unconfirm rc.
+hf_recycle_hold() { # $1=reason $2=detail $3=what the operator reads → exit 1
+  hf_recycle_unconfirm
+  hf_recycle_disarm
+  emit_recycle_event "recycle-held-$1" "" "$SID" "$2; unconfirm rc $RCY_UNCONFIRM_RC" || true
+  echo "!! recycle ABORTED before /exit (held: $1): $3 — /exit NOT submitted, watcher disarmed, pane lock released, unconfirm rc $RCY_UNCONFIRM_RC. The session stays alive. Re-run: ${CMD:-<the recycle>}" >&2
+  exit 1
+}
+
+# THE LAST READ — AFTER the confirm, BEFORE the /exit, every class. The pre-confirm reads above it
+# can be seconds-to-minutes old by here (the confirm re-copies a transcript), and each of these is a
+# state the /exit would destroy: an operator draft (it MERGES), a turn in flight (it dies), a limit
+# that has since lifted (the move is no longer owed), a subagent or a background job (SIGKILLed).
+# THE SELF FORM READS THE COMPOSER ONLY: there the subject is the caller, mid-turn by construction —
+# this very Bash call is its turn and its job — so an at-rest or job read would refuse every
+# self-recycle while protecting nothing.
+hf_recycle_last_read() { # → 0 every read clean · 1 refused (HF_LR_REASON, HF_LR_WHAT)
+  local c rc tx kind limited=0 sa_dir sa_live lib
+  HF_LR_REASON="" HF_LR_WHAT=""
+  if [ "${RCY_REMOTE:-0}" = 1 ] && [ "$(hf_pane_focused "$SID")" = yes ] && [ "${LR_MOVE_FOCUSED:-off}" != on ]; then
+    HF_LR_REASON=focused; HF_LR_WHAT="pane $SID became focused"; return 1
+  fi
+  rc=0; c="$(recycle_composer_gate "$RCY_IT2" "$SID" 0 1)" || rc=$?
+  if [ "$rc" != 0 ]; then
+    [ "$rc" = 2 ] && c="<unreadable>"
+    HF_LR_REASON=draft; HF_LR_WHAT="composer: $c"; return 1
+  fi
+  [ "${RCY_REMOTE:-0}" = 1 ] || return 0
+  if [ "${RCY_SAME_ACCOUNT:-0}" = 1 ]; then
+    tx="${HF_SA_TX:-}"
+  else
+    tx="${RCY_SRC_TX:-}"
+    [ -z "$tx" ] && [ -n "${HF_TS_TOMBSTONE:-}" ] && tx="${HF_TS_TOMBSTONE%.HANDOFF.json}.jsonl"
+    # confirm RENAMES the source to .handed-off; a write after it re-creates a stub at the old path,
+    # and the stub is then the freshest fact there is.
+    [ -n "$tx" ] && [ ! -f "$tx" ] && [ -f "$tx.handed-off" ] && tx="$tx.handed-off"
+  fi
+  [ "${RCY_TRANSPLANT_CAUSE:-}" = limit ] && limited=1
+  if [ "$limited" = 1 ]; then
+    if ! command -v lr_last_api_error >/dev/null 2>&1 && lib="$(hf_lr_script lr-lib.sh)"; then
+      # shellcheck disable=SC1090  # runtime-resolved library ladder
+      . "$lib" 2>/dev/null || true
+    fi
+    if ! command -v lr_last_api_error >/dev/null 2>&1; then
+      HF_LR_REASON="limit-cleared"; HF_LR_WHAT="lr-lib unreachable — the limit cannot be re-read"; return 1
+    fi
+    kind="$(lr_last_api_error "$tx" 2>/dev/null | cut -f3)"
+    if [ "$kind" != limit ]; then
+      HF_LR_REASON="limit-cleared"; HF_LR_WHAT="last record is ${kind:-not an api error} ($tx)"; return 1
+    fi
+  else
+    rc=0; hf_transcript_at_rest "$tx" || rc=$?
+    if [ "$rc" != 0 ]; then
+      HF_LR_REASON=busy; HF_LR_WHAT="transcript not at rest (rc $rc — 1 in flight, 2 unreadable): ${tx:-<none>}"; return 1
+    fi
+  fi
+  if [ "${ALLOW_LIVE_SA:-0}" != 1 ] && [ "${RCY_TRANSPLANT_CAUSE:-}" != limit ] && [ "${CC_RECYCLE_SUBAGENT_GATE:-on}" != off ]; then
+    sa_dir="$(subagent_dir_for_sid "${RCY_SUBAGENT_SID:-${RCY_SOURCE_SESSION:-}}")"
+    sa_live=""
+    [ -n "$sa_dir" ] && sa_live="$(live_subagents_of "$sa_dir" "${RCY_SA_BORN:-}")"
+    if [ -n "$sa_live" ]; then
+      HF_LR_REASON=subagents; HF_LR_WHAT="$(printf '%s\n' "$sa_live" | grep -c .) subagent(s) in flight"; return 1
+    fi
+  fi
+  # Not inside `$(…)`: the verdict comes back in HF_BG_HOLD, which a subshell would drop.
+  rc=0; hf_bg_work_gate "${HF_REMOTE_ROW_PID:-}" "$limited" "$tx" || rc=$?
+  if [ "$rc" != 0 ]; then
+    HF_LR_REASON=bg-work; HF_LR_WHAT="${HF_BG_HOLD:-held}"; return 1
+  fi
+  return 0
+}
+
+# THE /exit READ-BACK. `/exit` goes in WITHOUT Enter and is read back; only the exact text earns its
+# CR, sent as its OWN keystroke. Anything else — an operator keystroke that landed between the last
+# read and this one, a torn read — gets exactly five DELs (our five characters, nobody else's) and a
+# hold. This replaces a blind 3x type-with-Enter plus a blind second Enter, either of which could
+# submit an operator's half-typed message fused to our /exit.
+hf_exit_readback() { # $1=pane → 0 exact /exit read back and CR sent · 1 not (HF_EXIT_RB_TEXT; five DELs sent)
+  local id="${1##*:}" c n=0
+  HF_EXIT_RB_TEXT="<unreadable>"
+  hf_bounded "$RCY_IT2" session send -s "$id" "/exit" >/dev/null 2>&1 || true
+  while [ "$n" -lt 3 ]; do
+    n=$((n + 1))
+    "${HF_SLEEP:-sleep}" 0.5
+    if c="$(composer_content "$RCY_IT2" "$id")"; then HF_EXIT_RB_TEXT="$c"; else HF_EXIT_RB_TEXT="<unreadable>"; fi
+    [ "$HF_EXIT_RB_TEXT" = /exit ] && break
+  done
+  if [ "$HF_EXIT_RB_TEXT" = /exit ]; then
+    # A failed CR leaves exactly `/exit` in the box, which the watcher's content-gated nudge submits.
+    hf_bounded "$RCY_IT2" session send -s "$id" $'\r' >/dev/null 2>&1 || true
+    return 0
+  fi
+  hf_bounded "$RCY_IT2" session send -s "$id" $'\x7f\x7f\x7f\x7f\x7f' >/dev/null 2>&1 || true
+  return 1
+}
+
 # THE SAME-ACCOUNT EVIDENCE (cc-lr upgrade, 2026-09-22). Called AFTER hf_remote_source_bind (the row
 # names S) and hf_remote_source_pin (the row's pid is alive on P's tty); adds the facts that make a
 # relaunch of S into its OWN uuid on its OWN account the only live copy, and safe to interrupt:
@@ -2820,10 +3141,14 @@ FIRE_NOCORRECT_LINE='unsetopt correct correct_all 2>/dev/null || true'
 # 2026-07-19). 500 > any pane height. Whitespace is stripped from both sides so a WRAPPED line still
 # matches. Breadth of the read surface was never the bug — the forgeability of what was sought was.
 _it2_type_line() { # $1=it2-bin $2=session-id $3=line → 0 verified+submitted / 1 fail-loud
-  local it2="$1" id="$2" line="$3" attempt mode reread want nonce wire
+  local it2="$1" id="$2" line="$3" attempt mode reread want nonce wire focused=0
   local attempts="${FIRE_TYPE_ATTEMPTS:-4}" settle="${FIRE_TYPE_SETTLE:-0.5}" nlines="${FIRE_TYPE_READLINES:-500}"
   local presettle="${FIRE_TYPE_PRESETTLE:-0.12}"
   [ -n "$(printf '%s' "$line" | tr -d '[:space:]')" ] || return 1
+  # A FOCUSED pane moved under LR_MOVE_FOCUSED=on (W2b): the operator's keystrokes can land after
+  # ours, and a substring match would CR a line with their text fused onto its end. So the wire
+  # must be the read-back's SUFFIX — nothing after it — before the CR is earned.
+  if [ "${LR_MOVE_FOCUSED:-off}" = on ] && [ "$(hf_pane_focused "$id")" = yes ]; then focused=1; fi
   for attempt in $(seq 1 "$attempts"); do
     # Fresh per ATTEMPT, not per call: attempt N must not be satisfiable by attempt N-1's echo.
     nonce="hfv-$$-${attempt}-${RANDOM:-0}"
@@ -2841,7 +3166,8 @@ _it2_type_line() { # $1=it2-bin $2=session-id $3=line → 0 verified+submitted /
     fi
     /bin/sleep "$settle"
     reread="$(hf_bounded "$it2" session read -s "$id" -n "$nlines" 2>/dev/null | tr -d '[:space:]' || true)"
-    if printf '%s' "$reread" | grep -qF -- "$want"; then
+    if { [ "$focused" = 0 ] && printf '%s' "$reread" | grep -qF -- "$want"; } \
+       || { [ "$focused" = 1 ] && [ "${reread%"$want"}" != "$reread" ]; }; then
       hf_bounded "$it2" session send -s "$id" $'\r' >/dev/null 2>&1 && return 0   # verified → submit
     fi
     hf_bounded "$it2" session send -s "$id" $'\x15' >/dev/null 2>&1 || true    # scrub the mangled/half line
@@ -7499,6 +7825,11 @@ if [ "${1:-}" = "__recycle" ]; then
   # The row nonce's watcher half: every emit_recycle_event from this re-exec names the watcher that
   # wrote it. $$ IS the pid recycle_fire's detach printed — Popen execs this script directly.
   WATCHER_PID=$$
+  # THE PANE LOCK'S LAST HOLDER (W2b). recycle_fire rewrites the lock's holder to this pid once the
+  # heartbeat proves it, and exports the dir as HF_RECYCLE_LOCK. Whatever arm this watcher leaves by,
+  # the lock goes with it — but only while it still names THIS pid, so a lock since stolen by a
+  # newer recycle is never deleted from under its thief. No lock inherited ⇒ a no-op.
+  trap 'hf_recycle_lock_release "${HF_RECYCLE_LOCK:-}" "$$" || true' EXIT
   RSID="${2:?__recycle needs a session id}"
   TTY_PATH="${3:?__recycle needs the pane tty}"
   CMDFILE="${4:?__recycle needs the command file}"
@@ -8705,6 +9036,12 @@ if [ "${1:-}" = "--probe-recycle-preconditions" ]; then
   #    recycle's own composer gate catches this — 180 s AFTER the transplant. Reading it here turns a
   #    tombstoned husk into a message.
   PRP_IT2="${IT2_BIN:-$HOME/.claude/bin/it2}"
+  #    4d. FOCUS (W2b, operator decision 7 unruled ⇒ the gate runs). A pane the operator has focused
+  #    may be taking keystrokes right now; the composer read below would be stale on arrival. HELD,
+  #    not refused — focus moves on. LR_MOVE_FOCUSED=on lets it through under a stricter read.
+  PRP_FOCUSED="$(hf_pane_focused "$PRP_PANE")"
+  echo "focused: $PRP_FOCUSED"
+  [ "$PRP_FOCUSED" = yes ] && [ "${LR_MOVE_FOCUSED:-off}" != on ] && prp_verdict "HELD:focused" 3
   #    …UNLESS IT IS NOT A DRAFT (2026-09-27). A stray keystroke, a leaked terminal reply or this
   #    rail's own unsubmitted prompt held every limited pane on the box through three recovery runs.
   #    Those get a residue RECEIPT for their exact content, and the recycle's own-residue arm clears
@@ -8713,7 +9050,11 @@ if [ "${1:-}" = "--probe-recycle-preconditions" ]; then
   if PRP_COMPOSER="$(composer_content "$PRP_IT2" "$PRP_PANE")"; then
     if [ -n "$PRP_COMPOSER" ]; then
       hf_composer_intent_load || true
-      if PRP_CLS="$(hf_composer_unintended "$PRP_COMPOSER")"; then
+      # On a FOCUSED pane a ≤2-char `stray` is the operator's first keystrokes, not a leak: it is
+      # never receipted (a receipt licenses the recycle's scrub to delete it) and reads as a draft.
+      PRP_CLS=""
+      if PRP_CLS="$(hf_composer_unintended "$PRP_COMPOSER")" \
+         && ! { [ "$PRP_FOCUSED" = yes ] && [ "${PRP_CLS#stray}" != "$PRP_CLS" ]; }; then
         composer_residue_record "$PRP_PANE" "$PRP_COMPOSER"
         command -v composer_discard_note >/dev/null 2>&1 && composer_discard_note "$PRP_PANE" "$PRP_CLS" "$PRP_COMPOSER"
         echo "composer: unintended:$PRP_CLS:$(printf '%s' "$PRP_COMPOSER" | cut -c1-80) — receipt filed; the recycle clears it"
@@ -13343,8 +13684,117 @@ spawn() {
 # Recycle executor: /exit foreground (held built-in — queues behind the calling turn, runs at
 # turn end; keystrokes MUST be foreground, detached AppleEvents fail silently), then a detached
 # watcher (__recycle) that ps-polls until claude exits and it2-types the relaunch into the shell.
+# THE IRREVERSIBLE TAIL of recycle_fire, entered with the watcher armed (heartbeat + pane proof) and
+# the pre-confirm reads passed. ORDER: confirm → last read → debt → /exit. Returns 0 once /exit is
+# submitted; every refusal exits 1 with nothing submitted. $1 = the pane's pre-recycle session id.
+recycle_fire_commit() {
+  local rcy_old_sid="${1:-}" rcy_tp="" rcy_tp_rc=0 rcy_debt_sid rcy_debt_cwd wrote
+  RCY_CONFIRM_RAN=0
+  # ── D2 — CONFIRM THE TRANSPLANT SNAPSHOT, HERE, BEFORE THE IRREVERSIBLE KEYSTROKE ─────────────
+  # lr-transplant's `--phase admit` does `cp -p` then sha-verifies source against destination. That
+  # proves the copy was faithful AT COPY TIME, which has always sufficed because the source was
+  # LIMIT-BLOCKED: a session that cannot take a turn cannot append after the copy. A VOLUNTARY
+  # move's source is HEALTHY and keeps appending until /exit lands — and /exit lands on the very
+  # next lines, after a composer gate that can wait up to CC_RECYCLE_DRAFT_WAIT (180s). The
+  # successor would resume a stale transcript with its tail orphaned, and the sha check that should
+  # have caught it passed minutes earlier.
+  #
+  # HERE and not earlier: this is the first point at which the source is PROVABLY quiesced — the
+  # composer gate and its freshness re-read have both cleared, and nothing types until the /exit
+  # below. `--phase confirm` re-copies, re-verifies, and retires the source; it is idempotent (rc 0
+  # again when the source was already retired).
+  #
+  # rc != 0 is FATAL and NOTHING is typed. The source is still live and still correct at that point;
+  # stranding it — a husk on a dead transcript with no live copy anywhere — is the one outcome worse
+  # than not moving at all. An unreachable lr-transplant.sh is treated identically: a snapshot that
+  # cannot be proven current is not a snapshot.
+  #
+  # Kill switch, never an enable flag: CC_TRANSPLANT_CONFIRM=off restores the pre-2026-09-22 path.
+  if [ "$RCY_TRANSPLANTED_SOURCE" = 1 ] && [ "${CC_TRANSPLANT_CONFIRM:-on}" != off ]; then
+    # The three operands are globals the pre-pass set on BOTH arms: RCY_TS_SID (the caller's
+    # --source-session on the remote form, $CLAUDE_CODE_SESSION_ID on the self form) and the two
+    # config dirs hf_transplant_evidence derived (HF_TS_CFG = the SOURCE dir = FROM; HF_TS_TO = its
+    # .handed_off_to = TO). Every input that reaches this line has already had its tombstone read
+    # and admitted, so empty here means the two halves have drifted apart, never that a caller
+    # omitted a flag. Nothing is guessed and nothing is looked up: an unresolvable operand gets the
+    # same verdict as a failed confirm, because a snapshot that cannot be proven current is not a
+    # snapshot.
+    if [ -z "$RCY_TS_SID" ] || [ -z "$HF_TS_CFG" ] || [ -z "$HF_TS_TO" ]; then
+      hf_recycle_disarm
+      emit_recycle_event recycle-held-transplant "" "$SID" "confirm operands unresolved: sid='${RCY_TS_SID}' from='${HF_TS_CFG}' to='${HF_TS_TO}'" || true
+      echo "!! recycle ABORTED: --transplanted-source, but the transplant operands are unresolved (sid='${RCY_TS_SID}' from='${HF_TS_CFG}' to='${HF_TS_TO}') — BOTH arms of the pre-pass read the tombstone, so reaching this line is an inconsistency, not a caller error. Nothing typed, watcher disarmed, session stays alive. CC_TRANSPLANT_CONFIRM=off accepts the admit-time sha instead." >&2
+      exit 1
+    fi
+    # hf_lr_script: the same three-path ladder rooted at HF_DIR; HF_LR_TRANSPLANT is its test seam.
+    if ! rcy_tp="$(hf_lr_script lr-transplant.sh HF_LR_TRANSPLANT)"; then
+      hf_recycle_disarm
+      emit_recycle_event recycle-held-transplant "" "$SID" "lr-transplant.sh unreachable on all three paths — --phase confirm could not run" || true
+      echo "!! recycle ABORTED: lr-transplant.sh is UNREACHABLE — looked at ${HF_LR_TRANSPLANT:-$HF_DIR/limit-recover/lr-transplant.sh, ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/limit-recover/lr-transplant.sh and $HOME/.claude/scripts/limit-recover/lr-transplant.sh}. The destination transcript cannot be proven current, so /exit was NOT typed, the watcher is disarmed and the session stays alive. Re-run: $CMD" >&2
+      exit 1
+    fi
+    hf_wake_guard "the transplant confirm"
+    bash "$rcy_tp" --phase confirm --sid "$RCY_TS_SID" --from "$HF_TS_CFG" --to "$HF_TS_TO" || rcy_tp_rc=$?
+    if [ "$rcy_tp_rc" != 0 ]; then
+      hf_recycle_disarm
+      emit_recycle_event recycle-held-transplant "" "$SID" "lr-transplant --phase confirm rc $rcy_tp_rc for ${RCY_TS_SID:0:8}" || true
+      echo "!! recycle ABORTED: lr-transplant.sh --phase confirm REFUSED (rc $rcy_tp_rc) for session ${RCY_TS_SID:0:8} — the destination transcript is NOT provably identical to the source, so resuming it would orphan the tail. Nothing typed, watcher disarmed, the source session stays alive and correct. Re-run: $CMD" >&2
+      exit 1
+    fi
+    # From here a stand-down owes an UNCONFIRM: the source is retired and must be handed back.
+    RCY_CONFIRM_RAN=1
+  fi
+  # The /exit's wake guard sits BEFORE the last read, not between it and the keystroke: a guard that
+  # slept after the read would re-open exactly the window the read exists to close.
+  hf_wake_guard "the /exit"
+  # ── THE LAST READ (W2b) — see hf_recycle_last_read. Any refusal unconfirms, disarms, holds. ────
+  if ! hf_recycle_last_read; then
+    hf_recycle_hold "$HF_LR_REASON" "last read after confirm: $HF_LR_WHAT" "$HF_LR_WHAT"
+  fi
+  # THE RESUME DEBT OPENS HERE, before the point of no return (CLOSE_RESUME_CUSTODY D4). From the
+  # /exit on, the only thing standing between this session and silent abandonment is the watcher,
+  # and on 2026-09-28 the watcher's failure arms wrote a row and an alarm nobody read. The debt is
+  # the durable claim that the session must come back; only a proven live successor discharges it.
+  # Same subject sid the watcher is handed: the resumed sid in resume mode, else the closed one.
+  rcy_debt_sid="$rcy_old_sid"
+  if [ -n "$RESUME_LAUNCHER" ] && [ -n "$RCY_SOURCE_SESSION" ]; then rcy_debt_sid="$RCY_SOURCE_SESSION"; fi
+  if [ -n "$rcy_debt_sid" ]; then
+    if [ -n "$RESUME_LAUNCHER" ]; then rcy_debt_cwd="$LAUNCH_DIR"; else rcy_debt_cwd="$PWD"; fi
+    _hf_resume_debt open --sid "$rcy_debt_sid" --cfg "${RESUME_CFG:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}" \
+      --cwd "$rcy_debt_cwd" --pane "$SID" --by "handoff-fire --recycle" \
+      --mode "$(if [ -n "$RESUME_LAUNCHER" ]; then printf resume; else printf fresh; fi)" \
+      --why "recycle of pane $SID ($(if [ -n "$RESUME_LAUNCHER" ]; then printf 'resume-launcher, same sid'; else printf 'fresh brief'; fi)) about to type /exit"
+  else
+    echo "⚠ resume-debt NOT opened: no session id resolved for pane $SID — this close is untracked" >&2
+  fi
+  # ── /exit, READ BACK (W2b) — see hf_exit_readback. Kill switch HF_EXIT_READBACK=off restores the
+  # as_write loop. The blind anti-strand Enter that used to follow it is GONE on both paths: an Enter
+  # nobody read back is exactly what submits an operator's draft, and the watcher's content-gated
+  # nudge already submits a stranded `/exit` — and only a stranded `/exit`.
+  if [ "${HF_EXIT_READBACK:-on}" != off ]; then
+    if ! hf_exit_readback "$SID"; then
+      [ -n "$rcy_debt_sid" ] && _hf_resume_debt abandon --sid "$rcy_debt_sid" --why "exit read-back mismatch; nothing submitted, session untouched"
+      hf_recycle_hold exit-readback "the /exit read back as '$HF_EXIT_RB_TEXT'" \
+        "the composer read back '$HF_EXIT_RB_TEXT', not '/exit' — five DELs sent to take our /exit back out"
+    fi
+    return 0
+  fi
+  wrote=0
+  for _ in 1 2 3; do
+    if as_write "$SID" "/exit" 2>/dev/null; then wrote=1; break; fi
+    osascript -e 'delay 2' >/dev/null 2>&1
+  done
+  # /exit untypeable → un-arm: a live watcher would eventually type the relaunch into a still-
+  # running CC session's composer. Same correction as the self-close twin (:4104): as_write now
+  # exhausts BOTH transports before returning non-zero, so this is a pane neither can reach.
+  if [ "$wrote" != 1 ] && [ -n "$rcy_debt_sid" ]; then
+    _hf_resume_debt abandon --sid "$rcy_debt_sid" --why "exit never typed; session untouched"
+  fi
+  [ "$wrote" = 1 ] || { hf_recycle_unconfirm; hf_recycle_disarm; echo "!! recycle: could not type /exit into $SID — every transport tried failed 3x ($(as_write_transports)); watcher disarmed, session stays alive, unconfirm rc $RCY_UNCONFIRM_RC" >&2; exit 1; }
+  return 0
+}
+
 recycle_fire() {
-  local tty cmdfile log ts wrote rcy_state rcy_tp rcy_tp_c rcy_tp_rc rcy_debt_sid rcy_debt_cwd
+  local tty cmdfile log ts rcy_state
   # ── THE INTENT ROW (2026-08-17, backlog 112d13aa0018 arm (c)) ───────────────────────────────────
   # Every other recycle class — recycle-engaged / recycle-unverified / recycle-dead — is emitted from
   # inside the detached `__recycle` re-exec (:4828, :4844, :4861). So the ONLY recycles that appear in
@@ -13367,6 +13817,21 @@ recycle_fire() {
   # Unlike every other caller, this one runs in the PARENT, where FIRING_SID IS assigned — so an
   # intent row carries a non-null firing_sid while its own outcome row cannot. That asymmetry is the
   # join key, not an inconsistency.
+  #
+  # THE RECONCILER FENCE comes first of all (W2b): a session the lr-reconciler owns is not this
+  # rail's to touch, so a deferred recycle is not an ATTEMPT and writes no intent row — only the one
+  # row that says why nothing happened. The subject is the session the watcher is handed: the
+  # resumed sid on the remote form, else the pane's own (the same read rcy_old_sid makes below).
+  # hf_recycle_fenced reads the pane's row only once a fence library is actually reachable.
+  local rcy_fence_sid="${RCY_SOURCE_SESSION:-}"
+  if hf_lr_script lr-recon-fence.sh HF_RECON_FENCE >/dev/null; then
+    [ -n "$rcy_fence_sid" ] || rcy_fence_sid="$(cc_sid_for_pane "$SID")"
+    if hf_recycle_fenced "$rcy_fence_sid"; then
+      emit_recycle_event recycle-held-fenced "" "$SID" "the lr-reconciler owns session ${rcy_fence_sid:0:8}" || true
+      echo "!! recycle DEFERRED: the reconciler owns session ${rcy_fence_sid:0:8} — nothing typed, no watcher armed, the session stays alive." >&2
+      exit 1
+    fi
+  fi
   emit_recycle_event recycle-intent "" "$SID" "recycle ATTEMPTED for pane $SID; no watcher detached yet" || true
   ts="$(date +%s)"
   # Per-uid 0700 temp dir, not the mode-1777 /tmp (CWE-377/CWE-59). $cmdfile is never executed as a
@@ -13624,11 +14089,36 @@ recycle_fire() {
       fi
     fi
   fi
+  # THE FOCUS GATE (W2b, operator decision 7 unruled ⇒ the gate runs). Remote form only: the self
+  # form's subject IS the actor, so the operator watching it is watching the session retire itself,
+  # and its composer gate above already owns the draft question. A focused remote pane is HELD —
+  # before the lock, so a deferral never holds the pane from the next attempt. LR_MOVE_FOCUSED=on
+  # moves it, but only past two EMPTY composer reads HF_FOCUS_READ_GAP_S apart.
+  if [ "$RCY_REMOTE" = 1 ] && [ "$(hf_pane_focused "$SID")" = yes ]; then
+    if [ "${LR_MOVE_FOCUSED:-off}" != on ]; then
+      emit_recycle_event recycle-held-focused "" "$SID" "pane $SID is focused and LR_MOVE_FOCUSED is off" || true
+      echo "!! recycle DEFERRED: pane $SID is FOCUSED — the operator may be typing into it. Nothing typed, no watcher armed, the session stays alive. LR_MOVE_FOCUSED=on moves a focused pane." >&2
+      exit 1
+    fi
+    if ! hf_focus_double_read "$RCY_IT2" "$SID"; then
+      emit_recycle_event recycle-held-draft "" "$SID" "focused pane: composer not empty on both reads ${HF_FOCUS_READ_GAP_S:-10}s apart: $HF_FOCUS_READ" || true
+      echo "!! recycle DEFERRED: pane $SID is focused and its composer did not read EMPTY twice ${HF_FOCUS_READ_GAP_S:-10}s apart ('$HF_FOCUS_READ'). Nothing typed, no watcher armed." >&2
+      exit 1
+    fi
+  fi
+  # THE PER-PANE LOCK (W2b) — taken right BEFORE the watcher exists, so no second recycle can arm a
+  # second watcher on this pane; exported so the watcher's EXIT trap releases it.
+  hf_recycle_lock_acquire "$SID" || exit 1
   WATCHER_PID="$(detach "$log" "$0" __recycle "$SID" "$tty" "$cmdfile" "$LAUNCH_DIR" "$rcy_old_sid" "$RECYCLE_MARKER" "$FIRE_GOAL" "${PROMPT_FILE_ORIG:-$PROMPT_FILE}" "$RESUME_CFG" "${RESUME_LAUNCHER:+${RCY_SOURCE_SESSION:-$rcy_old_sid}}" "$RCY_T0" "$RCY_SRC_TX" "$RCY_RUN_DIR_ARG" "$RCY_SUBMIT_TOKEN_ARG")"
   if ! await_armed "$log"; then
-    kill "$WATCHER_PID" 2>/dev/null || true
+    hf_recycle_disarm
     echo "!! recycle ABORTED: watcher heartbeat never appeared ($log) — /exit NOT typed, session stays alive. Run manually: $CMD" >&2
     exit 1
+  fi
+  # The heartbeat is proven: from here the WATCHER is the lock's holder, so it outlives this process
+  # (which the self form's own /exit SIGKILLs) and is released by the watcher's exit, not ours.
+  if [ -n "${HF_RECYCLE_LOCK:-}" ] && ! hf_recycle_lock_write "$HF_RECYCLE_LOCK" watcher "$WATCHER_PID"; then
+    echo "⚠ recycle: could not hand the pane lock $HF_RECYCLE_LOCK to watcher $WATCHER_PID — it stays ours and dies with this process (a later recycle steals it)" >&2
   fi
   # THE WATCHER RECORD (W2b). A caller that must later prove WHICH watcher owns this recycle (a
   # retry, a custody reconciler) names a file; pid + lstart is the identity, since a pid alone is
@@ -13652,7 +14142,7 @@ recycle_fire() {
   # Refused vs stalled are different diagnoses (see the self-close arm) and get different lines.
   RCY_PP=0; await_pane_proof "$log" || RCY_PP=$?
   if [ "$RCY_PP" != 0 ]; then
-    kill "$WATCHER_PID" 2>/dev/null || true
+    hf_recycle_disarm
     if [ "$RCY_PP" = 2 ]; then
       echo "!! recycle ABORTED: the watcher returned NO pane verdict for $SID inside the window — it neither reached the pane nor said it could not. That is a STALLED probe, not a refused one; $log names the transport it selected. /exit NOT typed, session stays alive. Run manually: $CMD" >&2
     else
@@ -13673,32 +14163,12 @@ recycle_fire() {
     rcy_cg_c="$(recycle_composer_gate "$RCY_IT2" "$SID" 0 1)" || rcy_cg_rc=$?
     if [ "$rcy_cg_rc" != 0 ]; then
       [ "$rcy_cg_rc" = 2 ] && rcy_cg_c="<unreadable>"
-      kill "$WATCHER_PID" 2>/dev/null || true
+      hf_recycle_disarm
       emit_recycle_event recycle-held-draft "" "$SID" "freshness re-read pre-/exit: ${rcy_cg_c}" || true
       echo "!! recycle ABORTED at the last read: composer became non-empty ('${rcy_cg_c}') between arming and /exit — nothing typed, watcher disarmed, session stays alive. Re-run: $CMD" >&2
       exit 1
     fi
   fi
-  # ── D2 — CONFIRM THE TRANSPLANT SNAPSHOT, HERE, BEFORE THE IRREVERSIBLE KEYSTROKE ─────────────
-  # lr-transplant's `--phase admit` does `cp -p` then sha-verifies source against destination. That
-  # proves the copy was faithful AT COPY TIME, which has always sufficed because the source was
-  # LIMIT-BLOCKED: a session that cannot take a turn cannot append after the copy. A VOLUNTARY
-  # move's source is HEALTHY and keeps appending until /exit lands — and /exit lands on the very
-  # next lines, after a composer gate that can wait up to CC_RECYCLE_DRAFT_WAIT (180s). The
-  # successor would resume a stale transcript with its tail orphaned, and the sha check that should
-  # have caught it passed minutes earlier.
-  #
-  # HERE and not earlier: this is the first point at which the source is PROVABLY quiesced — the
-  # composer gate and its freshness re-read have both cleared, and nothing types until the loop
-  # below. `--phase confirm` re-copies, re-verifies, and retires the source; it is idempotent (rc 0
-  # again when the source was already retired).
-  #
-  # rc != 0 is FATAL and NOTHING is typed. The source is still live and still correct at that point;
-  # stranding it — a husk on a dead transcript with no live copy anywhere — is the one outcome worse
-  # than not moving at all. An unreachable lr-transplant.sh is treated identically: a snapshot that
-  # cannot be proven current is not a snapshot.
-  #
-  # Kill switch, never an enable flag: CC_TRANSPLANT_CONFIRM=off restores the pre-2026-09-22 path.
   # ── SAME-ACCOUNT: THE TRANSCRIPT MUST STILL BE AT REST, AT THE LAST MOMENT ─────────────────────
   # The admission read in the pre-pass can be minutes old here (the composer gate alone may wait
   # CC_RECYCLE_DRAFT_WAIT), and /exit INTERRUPTS an in-flight turn. A peer message or an operator
@@ -13707,7 +14177,7 @@ recycle_fire() {
   if [ "$RCY_SAME_ACCOUNT" = 1 ]; then
     rcy_rest_rc=0; hf_transcript_at_rest "$HF_SA_TX" || rcy_rest_rc=$?
     if [ "$rcy_rest_rc" != 0 ]; then
-      kill "$WATCHER_PID" 2>/dev/null || true
+      hf_recycle_disarm
       emit_recycle_event recycle-held-busy "" "$SID" "same-account: transcript not at rest at the last read (rc $rcy_rest_rc): $HF_SA_TX" || true
       echo "!! recycle ABORTED at the last read: session ${RCY_SOURCE_SESSION:0:8} is no longer at rest (rc $rcy_rest_rc — 1 a turn is in flight, 2 unreadable) — nothing typed, watcher disarmed, session untouched. Re-run once it is idle." >&2
       exit 1
@@ -13720,83 +14190,16 @@ recycle_fire() {
       rcy_sa_live=""
       [ -n "$rcy_sa_dir" ] && rcy_sa_live="$(live_subagents_of "$rcy_sa_dir" "${RCY_SA_BORN:-}")"
       if [ -n "$rcy_sa_live" ]; then
-        kill "$WATCHER_PID" 2>/dev/null || true
+        hf_recycle_disarm
         emit_recycle_event recycle-held-subagents "" "$SID" "same-account: $(printf '%s\n' "$rcy_sa_live" | grep -c .) subagent(s) in flight at the last read" || true
         echo "!! recycle ABORTED at the last read: session ${RCY_SOURCE_SESSION:0:8} has $(printf '%s\n' "$rcy_sa_live" | grep -c .) Agent-tool subagent(s) IN FLIGHT that the earlier gate did not see — nothing typed, watcher disarmed, session untouched. Re-run once they return." >&2
         exit 1
       fi
     fi
   fi
-  if [ "$RCY_TRANSPLANTED_SOURCE" = 1 ] && [ "${CC_TRANSPLANT_CONFIRM:-on}" != off ]; then
-    rcy_tp="" rcy_tp_rc=0
-    # The three operands are globals the pre-pass set on BOTH arms: RCY_TS_SID (the caller's
-    # --source-session on the remote form, $CLAUDE_CODE_SESSION_ID on the self form) and the two
-    # config dirs hf_transplant_evidence derived (HF_TS_CFG = the SOURCE dir = FROM; HF_TS_TO = its
-    # .handed_off_to = TO). Every input that reaches this line has already had its tombstone read
-    # and admitted, so empty here means the two halves have drifted apart, never that a caller
-    # omitted a flag. Nothing is guessed and nothing is looked up: an unresolvable operand gets the
-    # same verdict as a failed confirm, because a snapshot that cannot be proven current is not a
-    # snapshot.
-    if [ -z "$RCY_TS_SID" ] || [ -z "$HF_TS_CFG" ] || [ -z "$HF_TS_TO" ]; then
-      kill "$WATCHER_PID" 2>/dev/null || true
-      emit_recycle_event recycle-held-transplant "" "$SID" "confirm operands unresolved: sid='${RCY_TS_SID}' from='${HF_TS_CFG}' to='${HF_TS_TO}'" || true
-      echo "!! recycle ABORTED: --transplanted-source, but the transplant operands are unresolved (sid='${RCY_TS_SID}' from='${HF_TS_CFG}' to='${HF_TS_TO}') — BOTH arms of the pre-pass read the tombstone, so reaching this line is an inconsistency, not a caller error. Nothing typed, watcher disarmed, session stays alive. CC_TRANSPLANT_CONFIRM=off accepts the admit-time sha instead." >&2
-      exit 1
-    fi
-    # Same three-path ladder every sibling lookup in this file uses, but rooted at HF_DIR (this
-    # file resolved THROUGH its symlink, :422-423) rather than `dirname "$0"`: ~/.claude/scripts is
-    # a per-file symlink farm, so $0's dir has no limit-recover/ sibling when invoked from there.
-    for rcy_tp_c in "$HF_DIR/limit-recover/lr-transplant.sh" \
-                    "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/limit-recover/lr-transplant.sh" \
-                    "$HOME/.claude/scripts/limit-recover/lr-transplant.sh"; do
-      [ -f "$rcy_tp_c" ] && { rcy_tp="$rcy_tp_c"; break; }
-    done
-    if [ -z "$rcy_tp" ]; then
-      kill "$WATCHER_PID" 2>/dev/null || true
-      emit_recycle_event recycle-held-transplant "" "$SID" "lr-transplant.sh unreachable on all three paths — --phase confirm could not run" || true
-      echo "!! recycle ABORTED: lr-transplant.sh is UNREACHABLE — looked at $HF_DIR/limit-recover/lr-transplant.sh, ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/limit-recover/lr-transplant.sh and $HOME/.claude/scripts/limit-recover/lr-transplant.sh. The destination transcript cannot be proven current, so /exit was NOT typed, the watcher is disarmed and the session stays alive. Re-run: $CMD" >&2
-      exit 1
-    fi
-    bash "$rcy_tp" --phase confirm --sid "$RCY_TS_SID" --from "$HF_TS_CFG" --to "$HF_TS_TO" || rcy_tp_rc=$?
-    if [ "$rcy_tp_rc" != 0 ]; then
-      kill "$WATCHER_PID" 2>/dev/null || true
-      emit_recycle_event recycle-held-transplant "" "$SID" "lr-transplant --phase confirm rc $rcy_tp_rc for ${RCY_TS_SID:0:8}" || true
-      echo "!! recycle ABORTED: lr-transplant.sh --phase confirm REFUSED (rc $rcy_tp_rc) for session ${RCY_TS_SID:0:8} — the destination transcript is NOT provably identical to the source, so resuming it would orphan the tail. Nothing typed, watcher disarmed, the source session stays alive and correct. Re-run: $CMD" >&2
-      exit 1
-    fi
-  fi
-  # THE RESUME DEBT OPENS HERE, before the point of no return (CLOSE_RESUME_CUSTODY D4). From the
-  # /exit on, the only thing standing between this session and silent abandonment is the watcher,
-  # and on 2026-09-28 the watcher's failure arms wrote a row and an alarm nobody read. The debt is
-  # the durable claim that the session must come back; only a proven live successor discharges it.
-  # Same subject sid the watcher is handed: the resumed sid in resume mode, else the closed one.
-  rcy_debt_sid="$rcy_old_sid"
-  if [ -n "$RESUME_LAUNCHER" ] && [ -n "$RCY_SOURCE_SESSION" ]; then rcy_debt_sid="$RCY_SOURCE_SESSION"; fi
-  if [ -n "$rcy_debt_sid" ]; then
-    if [ -n "$RESUME_LAUNCHER" ]; then rcy_debt_cwd="$LAUNCH_DIR"; else rcy_debt_cwd="$PWD"; fi
-    _hf_resume_debt open --sid "$rcy_debt_sid" --cfg "${RESUME_CFG:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}" \
-      --cwd "$rcy_debt_cwd" --pane "$SID" --by "handoff-fire --recycle" \
-      --mode "$(if [ -n "$RESUME_LAUNCHER" ]; then printf resume; else printf fresh; fi)" \
-      --why "recycle of pane $SID ($(if [ -n "$RESUME_LAUNCHER" ]; then printf 'resume-launcher, same sid'; else printf 'fresh brief'; fi)) about to type /exit"
-  else
-    echo "⚠ resume-debt NOT opened: no session id resolved for pane $SID — this close is untracked" >&2
-  fi
-  wrote=0
-  for _ in 1 2 3; do
-    if as_write "$SID" "/exit" 2>/dev/null; then wrote=1; break; fi
-    osascript -e 'delay 2' >/dev/null 2>&1
-  done
-  # /exit untypeable → un-arm: a live watcher would eventually type the relaunch into a still-
-  # running CC session's composer. Same correction as the self-close twin (:4104): as_write now
-  # exhausts BOTH transports before returning non-zero, so this is a pane neither can reach.
-  if [ "$wrote" != 1 ] && [ -n "$rcy_debt_sid" ]; then
-    _hf_resume_debt abandon --sid "$rcy_debt_sid" --why "exit never typed; session untouched"
-  fi
-  [ "$wrote" = 1 ] || { kill "$WATCHER_PID" 2>/dev/null; echo "!! recycle: could not type /exit into $SID — every transport tried failed 3x ($(as_write_transports)); watcher disarmed, session stays alive" >&2; exit 1; }
-  # Anti-strand best-effort: may never run if the interrupt kills us first — the watcher's CR
-  # nudges (@60/150/300s) cover a stranded /exit either way.
-  osascript -e 'delay 1.5' >/dev/null 2>&1
-  as_write "$SID" "" 2>/dev/null || true
+  # THE COMMIT — confirm, the last read, the debt, the /exit — is its own function so a suite can
+  # drive the whole irreversible tail over stubs (a full recycle_fire needs a real tty).
+  recycle_fire_commit "$rcy_old_sid"
   # --await (remote form only): the /exit went into ANOTHER pane, so this process survives it and
   # can carry the watcher's verdict back to its caller — the fleet driver and lr-handoff need a real
   # exit status, not a "watcher armed" line. Bounded by the watcher's own two windows plus slack.

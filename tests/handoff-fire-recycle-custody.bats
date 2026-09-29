@@ -235,3 +235,270 @@ wfagent() {
   [ "${lines[0]}" = "[2,$$,true]" ] || { echo "$output"; false; }
   [ "${lines[1]}" = "[null,null,false]" ] || { echo "$output"; false; }
 }
+
+# ══ THE RECYCLE HALF (W2b T-recycle-a): cases 5-8, 13 and the focus case ══════════════════════════
+# Driven through recycle_fire_commit and the helpers it calls, extracted from the subject: a full
+# recycle_fire needs a real tty holding a real claude (see case 2's note). Every stub appends to ONE
+# call log, so ORDER is assertable: the it2 stub (`send <%q text>` / `read`), HF_SLEEP (`sleep <s>`),
+# the lr-transplant stub (`transplant <argv>`) and the resume-debt stub (`debt <argv>`).
+# Mutants (one per case): 5 make _hf_lock_holder_alive always false · 6 make hf_recycle_last_read
+# return 0 · 7 make hf_exit_readback return 0 without the DEL send · 8 restore the blind
+# `as_write "$SID" ""` · 13 make hf_wake_guard return 0 · F make hf_pane_focused print `no`.
+
+load_tail_funcs() {
+  FUNCS="$BATS_TEST_TMPDIR/tail-funcs.sh"
+  local f
+  {
+    grep '^_iso_now() {' "$HF"
+    grep '^kt() {' "$HF"
+    for f in _under_test emit_recycle_event hf_bounded hf_bounded_s kt_window_field composer_content \
+             recycle_composer_gate hf_transcript_at_rest hf_bg_work_kind hf_bg_work_gate hf_lr_script \
+             hf_recycle_fenced hf_recycle_lock_dir _hf_lstart _hf_lock_raw _hf_lock_field \
+             _hf_lock_holder_alive hf_recycle_lock_write hf_recycle_lock_take hf_recycle_lock_release \
+             hf_recycle_lock_acquire hf_recycle_disarm hf_wake_guard hf_pane_focused hf_focus_double_read \
+             hf_recycle_unconfirm hf_recycle_hold hf_recycle_last_read hf_exit_readback recycle_fire_commit; do
+      sed -n "/^$f() {/,/^}/p" "$HF"
+    done
+  } > "$FUNCS"
+  bash -n "$FUNCS" || { echo "extraction from $HF is not valid bash" >&2; return 1; }
+  # shellcheck disable=SC1090
+  . "$FUNCS"
+  grep -q '^recycle_fire_commit() {' "$FUNCS" || { echo "recycle_fire_commit not extracted" >&2; return 1; }
+}
+
+# The stubbed world recycle_fire_commit runs in: a transplanted, LIMITED remote source whose every
+# last-read fact is clean unless a case changes one.
+tail_world() {
+  load_tail_funcs
+  STUB="$BATS_TEST_TMPDIR/stub"; mkdir -p "$STUB"
+  CALLS="$BATS_TEST_TMPDIR/calls.log"; : > "$CALLS"
+  READS="$STUB/reads"; : > "$READS"
+  export CALLS READS
+  # it2: `session read` serves the NEXT queued composer content (the last one repeats) inside a box.
+  cat > "$STUB/it2" <<'SH'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "session send") printf 'send %q\n' "${!#}" >> "$CALLS" ;;
+  "session read")
+    printf 'read\n' >> "$CALLS"
+    c="$(head -n 1 "$READS")"
+    [ "$(wc -l < "$READS" | tr -d ' ')" -gt 1 ] && { tail -n +2 "$READS" > "$READS.t"; mv "$READS.t" "$READS"; }
+    printf 'history\n────────────────────\n❯ %s\n────────────────────\n' "$c" ;;
+esac
+exit 0
+SH
+  printf '#!/usr/bin/env bash\nprintf "sleep %%s\\n" "$1" >> "$CALLS"\n' > "$STUB/sleep"
+  printf '#!/usr/bin/env bash\nprintf "transplant %%s\\n" "$*" >> "$CALLS"\nexit "${TRANSPLANT_RC:-0}"\n' > "$STUB/lr-transplant.sh"
+  chmod +x "$STUB/it2" "$STUB/sleep" "$STUB/lr-transplant.sh"
+  _hf_resume_debt() { printf 'debt %s\n' "$*" >> "$CALLS"; }
+  as_write() { printf 'as_write %q\n' "$2" >> "$CALLS"; }
+  as_write_transports() { echo stub; }
+  subagent_dir_for_sid() { :; }
+  live_subagents_of() { :; }
+  lr_last_api_error() { printf 'u1\terr\t%s\tts\n' "${LR_KIND:-limit}"; }
+  export HF_SLEEP="$STUB/sleep" HF_LR_TRANSPLANT="$STUB/lr-transplant.sh" HF_DIR="$REPO/scripts"
+  export HF_TIMEOUT_S="" HF_TIMEOUT_BIN=""
+  export HF_KERN_WAKETIME=1 LR_RECORD_ID="rec-1" HF_RECYCLE_LOCK_GATE=on
+  export LR_LOCKS_DIR="$BATS_TEST_TMPDIR/locks"
+  export HF_WATCHER_RECORD="$BATS_TEST_TMPDIR/watcher.json"
+  unset CC_TERM CC_TERM_KITTY_TO LR_MOVE_FOCUSED HF_EXIT_READBACK
+  SID="$PANE" CMD="relaunch-cmd" RCY_IT2="$STUB/it2" RCY_REMOTE=1 RCY_SAME_ACCOUNT=0
+  RCY_TRANSPLANTED_SOURCE=1 RCY_TRANSPLANT_CAUSE=limit ALLOW_LIVE_SA=1
+  SESS="$SID_UUID" RCY_TS_SID="$SID_UUID" RCY_SOURCE_SESSION="$SID_UUID"
+  HF_TS_CFG="$BATS_TEST_TMPDIR/from" HF_TS_TO="$BATS_TEST_TMPDIR/to"
+  RCY_SRC_TX="$TX" HF_TS_TOMBSTONE="" HF_REMOTE_ROW_PID="" RESUME_LAUNCHER="" RESUME_CFG=""
+  seed_healthy_transcript
+  # The watcher: a real process, so the kill and the lock's (pid, lstart) identity are real too.
+  sleep 300 >/dev/null 2>&1 3>&- & WATCHER_PID=$!
+  echo "$WATCHER_PID" > "$BATS_TEST_TMPDIR/watcher.$WATCHER_PID.pid"
+  export WATCHER_PID
+  hf_recycle_lock_acquire "$SID"
+  hf_recycle_lock_write "$HF_RECYCLE_LOCK" watcher "$WATCHER_PID"
+}
+# Every numbered pid this file started, killed however the case ended.
+teardown() {
+  local p
+  for p in "$BATS_TEST_TMPDIR"/*.pid; do
+    [ -f "$p" ] && kill "$(cat "$p")" 2>/dev/null
+  done
+  return 0
+}
+rows_of() { grep "\"class\":\"$1\"" "$HOME/.claude/logs/handoffs.jsonl" 2>/dev/null; }
+calls_n() { grep -cxF -- "$1" "$CALLS" || true; }
+SID_UUID="a1b2c3d4-0000-4000-8000-000000000002"
+
+# ── 5 · THE PER-PANE LOCK ──────────────────────────────────────────────────────────────────────
+
+@test "5 a second recycle of a pane whose lock a LIVE holder has is refused; a dead holder is stolen" {
+  load_tail_funcs
+  export LR_LOCKS_DIR="$BATS_TEST_TMPDIR/locks" HF_RECYCLE_LOCK_GATE=on
+  local dir holder
+  dir="$(hf_recycle_lock_dir 901)"
+  mkdir -p "$dir"
+  sleep 300 >/dev/null 2>&1 3>&- & holder=$!
+  echo "$holder" > "$BATS_TEST_TMPDIR/holder.pid"
+  hf_recycle_lock_write "$dir" watcher "$holder"
+
+  run hf_recycle_lock_acquire 901
+  [ "$status" -eq 1 ] || { echo "status=$status $output"; false; }
+  [[ "$output" == *"recycle DEFERRED: another recycle of pane 901 is in flight"* ]] || { echo "$output"; false; }
+  rows_of recycle-held-locked | grep -q "$holder" || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
+  [ "$(_hf_lock_field "$(_hf_lock_raw "$dir")" pid)" = "$holder" ] || { cat "$dir/holder"; false; }
+
+  kill "$holder"; wait "$holder" 2>/dev/null || true
+  hf_recycle_lock_acquire 901
+  [ "$HF_RECYCLE_LOCK" = "$dir" ] || { echo "lock=$HF_RECYCLE_LOCK"; false; }
+  [ "$(_hf_lock_field "$(_hf_lock_raw "$dir")" pid)" = "$$" ] || { cat "$dir/holder"; false; }
+  grep -q '"role":"recycle"' "$dir/holder"
+  grep -q '"record_id":"' "$dir/holder"
+  # Only a pid the holder names may release it.
+  run hf_recycle_lock_release "$dir" 1
+  [ -d "$dir" ] || { echo "a stranger released the lock"; false; }
+  hf_recycle_lock_release "$dir" "$$"
+  [ ! -d "$dir" ]
+}
+
+# ── 6 · THE LAST READ AFTER CONFIRM ────────────────────────────────────────────────────────────
+
+@test "6 a draft that appears after the gate is caught by the post-confirm read: unconfirm, no /exit, held-draft" {
+  tail_world
+  printf '%s\n' "" "operator draft" > "$READS"
+  # The gate the foreground ran before arming saw an empty composer…
+  run recycle_composer_gate "$RCY_IT2" "$SID" 0 1
+  [ "$status" -eq 0 ] || { echo "the gate did not read empty: $output"; false; }
+  # …and the last read, after the confirm, sees the draft.
+  run recycle_fire_commit "$SESS"
+  [ "$status" -eq 1 ] || { echo "status=$status $output"; cat "$CALLS"; false; }
+  local want="transplant --phase unconfirm --sid $SESS --from $HF_TS_CFG --to $HF_TS_TO --record-id rec-1 --watcher-record $HF_WATCHER_RECORD"
+  [ "$(calls_n "$want")" = 1 ] || { cat "$CALLS"; false; }
+  [ "$(calls_n "transplant --phase confirm --sid $SESS --from $HF_TS_CFG --to $HF_TS_TO")" = 1 ] || { cat "$CALLS"; false; }
+  ! grep -q '^send' "$CALLS" || { echo "a keystroke was sent:"; cat "$CALLS"; false; }
+  rows_of recycle-held-draft | grep -q 'operatordraft; unconfirm rc 0' || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
+  [ ! -d "$HF_RECYCLE_LOCK" ] || { echo "lock not released: $HF_RECYCLE_LOCK"; false; }
+  ! kill -0 "$WATCHER_PID" 2>/dev/null || { echo "watcher still alive"; false; }
+  # No confirm ran ⇒ nothing to unconfirm.
+  tail_world
+  printf '%s\n' "operator draft" > "$READS"
+  RCY_TRANSPLANTED_SOURCE=0
+  run recycle_fire_commit "$SESS"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  ! grep -q '^transplant' "$CALLS" || { cat "$CALLS"; false; }
+  rows_of recycle-held-draft | grep -q 'unconfirm rc n/a' || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
+}
+
+# ── 7 · /exit READ-BACK MISMATCH ───────────────────────────────────────────────────────────────
+
+@test "7 an /exit that reads back as anything else gets five DELs, an unconfirm and no CR" {
+  local rb
+  for rb in "/exi" "x/exit"; do
+    tail_world
+    printf '%s\n' "" "$rb" > "$READS"
+    run recycle_fire_commit "$SESS"
+    [ "$status" -eq 1 ] || { echo "[$rb] status=$status $output"; cat "$CALLS"; false; }
+    [ "$(calls_n "send /exit")" = 1 ] || { cat "$CALLS"; false; }
+    [ "$(calls_n "send \$'\\177\\177\\177\\177\\177'")" = 1 ] || { echo "[$rb]"; cat "$CALLS"; false; }
+    [ "$(calls_n "send \$'\\r'")" = 0 ] || { echo "[$rb] a CR was sent"; cat "$CALLS"; false; }
+    grep -q '^transplant --phase unconfirm ' "$CALLS" || { cat "$CALLS"; false; }
+    grep -q "^debt abandon --sid $SESS " "$CALLS" || { cat "$CALLS"; false; }
+    rows_of recycle-held-exit-readback | grep -qF "read back as '$rb'" || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
+    rm -f "$HOME/.claude/logs/handoffs.jsonl"
+    kill "$WATCHER_PID" 2>/dev/null || true
+  done
+}
+
+# ── 8 · NO BLIND SECOND ENTER ──────────────────────────────────────────────────────────────────
+
+@test "8 the blind anti-strand Enter is gone, and a matching read-back sends exactly one CR" {
+  local body
+  body="$(sed -n '/^recycle_fire_commit() {/,/^}/p; /^recycle_fire() {/,/^}/p' "$HF")"
+  [ -n "$body" ]
+  [[ "$body" != *'as_write "$SID" ""'* ]] || { echo "the blind Enter is back"; false; }
+  tail_world
+  printf '%s\n' "" "/exit" > "$READS"
+  run recycle_fire_commit "$SESS"
+  [ "$status" -eq 0 ] || { echo "status=$status $output"; cat "$CALLS"; false; }
+  [ "$(calls_n "send \$'\\r'")" = 1 ] || { cat "$CALLS"; false; }
+  [ "$(calls_n "send /exit")" = 1 ] || { cat "$CALLS"; false; }
+  ! grep -q '177' "$CALLS" || { cat "$CALLS"; false; }
+  ! grep -q '^as_write' "$CALLS" || { cat "$CALLS"; false; }
+  ! grep -q 'unconfirm' "$CALLS" || { cat "$CALLS"; false; }
+  # The debt opens before the keystroke, never after it.
+  local d s
+  d="$(grep -n '^debt open ' "$CALLS" | cut -d: -f1)"; s="$(grep -n '^send /exit$' "$CALLS" | cut -d: -f1)"
+  [ -n "$d" ] || { cat "$CALLS"; false; }
+  [ "$d" -lt "$s" ] || { cat "$CALLS"; false; }
+  # Kill switch: the as_write loop, still with no second Enter.
+  tail_world
+  printf '%s\n' "" > "$READS"
+  HF_EXIT_READBACK=off run recycle_fire_commit "$SESS"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(calls_n "as_write /exit")" = 1 ] || { cat "$CALLS"; false; }
+  [ "$(grep -c '^as_write' "$CALLS")" = 1 ] || { cat "$CALLS"; false; }
+}
+
+# ── 13 · THE WAKE GUARD ────────────────────────────────────────────────────────────────────────
+
+@test "13 a machine that woke 10s ago defers the confirm until the 30s guard has passed" {
+  tail_world
+  printf '%s\n' "" "/exit" > "$READS"
+  export HF_KERN_WAKETIME=$(( $(date +%s) - 10 )) LR_WAKE_GUARD_S=30
+  run recycle_fire_commit "$SESS"
+  [ "$status" -eq 0 ] || { echo "status=$status $output"; cat "$CALLS"; false; }
+  [[ "$output" == *"→ wake guard: the machine woke "*"s ago — deferring the transplant confirm "* ]] || { echo "$output"; false; }
+  local sl cf
+  sl="$(grep -nE '^sleep (19|20|21)$' "$CALLS" | head -n 1 | cut -d: -f1)"
+  cf="$(grep -n '^transplant --phase confirm ' "$CALLS" | cut -d: -f1)"
+  [ -n "$sl" ] || { echo "no guard sleep recorded"; cat "$CALLS"; false; }
+  [ -n "$cf" ] || { cat "$CALLS"; false; }
+  [ "$sl" -lt "$cf" ] || { cat "$CALLS"; false; }
+  # An unreadable waketime proceeds without a deferral.
+  tail_world
+  printf '%s\n' "" "/exit" > "$READS"
+  export HF_KERN_WAKETIME=garbage
+  run hf_wake_guard "x"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -z "$output" ] || { echo "$output"; false; }
+}
+
+# ── F · THE FOCUS GATE ─────────────────────────────────────────────────────────────────────────
+
+# kitty stub: `@ ls` lists window 901 focused and 902 not.
+kitty_stub() {
+  cat > "$STUB/kitty" <<'SH'
+#!/usr/bin/env bash
+printf '[{"tabs":[{"windows":[{"id":901,"is_focused":true,"pid":1},{"id":902,"is_focused":false,"pid":2}]}]}]\n'
+SH
+  chmod +x "$STUB/kitty"
+  export CC_TERM=kitty CC_KITTY_BIN="$STUB/kitty"
+}
+
+@test "F a FOCUSED pane is HELD — by the probe, and at the last read before /exit" {
+  tail_world
+  kitty_stub
+  [ "$(hf_pane_focused 901)" = yes ]
+  [ "$(hf_pane_focused 902)" = no ]
+  [ "$(CC_TERM=iterm2 hf_pane_focused 901)" = unknown ]
+
+  # The probe's own lines, executed: `focused:` prints and a focused pane is HELD:focused (exit 3).
+  local frag="$BATS_TEST_TMPDIR/probe-focus.sh"
+  {
+    echo 'prp_verdict() { echo "verdict: $1"; exit "$2"; }'
+    sed -n '/4d\. FOCUS (W2b/,/UNLESS IT IS NOT A DRAFT/p' "$HF"
+    echo 'echo "past the focus gate"'
+  } > "$frag"
+  PRP_PANE=901 run bash -c ". '$FUNCS'; . '$frag'"
+  [ "$status" -eq 3 ] || { echo "status=$status $output"; false; }
+  [[ "$output" == *"focused: yes"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"verdict: HELD:focused"* ]] || { echo "$output"; false; }
+  PRP_PANE=902 run bash -c ". '$FUNCS'; . '$frag'"
+  [[ "$output" == *"past the focus gate"* ]] || { echo "$output"; false; }
+  PRP_PANE=901 LR_MOVE_FOCUSED=on run bash -c ". '$FUNCS'; . '$frag'"
+  [[ "$output" == *"past the focus gate"* ]] || { echo "$output"; false; }
+
+  # The recycle: a pane that became focused by the last read is held, and nothing is sent.
+  printf '%s\n' "" "/exit" > "$READS"
+  run recycle_fire_commit "$SESS"
+  [ "$status" -eq 1 ] || { echo "status=$status $output"; cat "$CALLS"; false; }
+  ! grep -q '^send' "$CALLS" || { cat "$CALLS"; false; }
+  rows_of recycle-held-focused | grep -q 'unconfirm rc 0' || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
+}

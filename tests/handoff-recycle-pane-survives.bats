@@ -304,6 +304,13 @@ setup_recycle() {
   # file written here is un-fakeable evidence that the gate let the fire through. Returning 1 stops
   # the path there, loudly, before anything irreversible.
   await_armed() { : > "$BATS_TEST_TMPDIR/armed"; return 1; }
+  # The W2b custody helpers recycle_fire now calls are other suites' subjects
+  # (tests/handoff-fire-recycle-custody.bats): no fence library, no pane lock, focus unreadable.
+  hf_lr_script() { return 1; }
+  hf_recycle_lock_acquire() { :; }
+  hf_recycle_lock_write() { :; }
+  hf_recycle_disarm() { :; }
+  hf_pane_focused() { echo unknown; }
   rm -f "$BATS_TEST_TMPDIR/armed" "$BATS_TEST_TMPDIR/events.log"
   export CC_RECYCLE_COMPOSER_GATE=off          # a different gate; out of scope here
   eval "$(sed -n '/^recycle_fire() {/,/^}/p' "$HF")"

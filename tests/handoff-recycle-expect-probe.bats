@@ -252,6 +252,13 @@ setup_recycle() {
   write_teardown_marker() { :; }
   detach() { printf '4242'; }
   await_armed() { return 1; }                  # stop the cc path at its first gate, loudly
+  # The W2b custody helpers recycle_fire now calls are other suites' subjects
+  # (tests/handoff-fire-recycle-custody.bats): no fence library, no pane lock, focus unreadable.
+  hf_lr_script() { return 1; }
+  hf_recycle_lock_acquire() { :; }
+  hf_recycle_lock_write() { :; }
+  hf_recycle_disarm() { :; }
+  hf_pane_focused() { echo unknown; }
   eval "$(sed -n '/^recycle_fire() {/,/^}/p' "$HF")"
 }
 
