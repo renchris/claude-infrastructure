@@ -569,6 +569,14 @@ SH
   rows_of recycle-held-focused | grep -q 'unconfirm rc 0' || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
 }
 
+@test "R the MAIN parser takes --record-id: lr-handoff passes it to --recycle whenever the case exists (W5 rig)" {
+  run bash "$HF" --record-id recon:x:1 --help
+  [ "$status" -eq 0 ] || { echo "status=$status $output"; false; }
+  [[ "$output" != *"unknown arg"* ]] || { echo "$output"; false; }
+  # the detection lr-handoff runs is satisfied by the main parser, not only by --relaunch-at-shell's
+  [ "$(grep -c -- '--record-id)' "$HF")" -ge 2 ]
+}
+
 @test "F2 a background TAB's window is not focused, though kitty flags its window is_focused (W5 rig)" {
   tail_world
   # The shape kitty emits (measured in the W5 rig): the active window of EVERY tab of the focused OS

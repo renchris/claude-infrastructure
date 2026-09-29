@@ -10562,6 +10562,10 @@ while [ $# -gt 0 ]; do case "$1" in
   --resume-launcher) RESUME_LAUNCHER="${2:?--resume-launcher needs a path}"; shift 2 ;;
   --resume-cfg)      RESUME_CFG="${2:?--resume-cfg needs a config dir}"; shift 2 ;;
   --resume-cwd)      RESUME_CWD="${2:?--resume-cwd needs a directory}"; shift 2 ;;
+  # The reconciler's record id (FLEET_V2 frozen contract). lr-handoff passes it when a `--record-id)`
+  # case exists here, and only --relaunch-at-shell had one: every reconciler recycle died `unknown
+  # arg` AFTER its transplant, a STRANDED husk (W5 rig N=5, 5/5). Same variable the env path sets.
+  --record-id)       LR_RECORD_ID="${2:?--record-id needs a value}"; export LR_RECORD_ID; shift 2 ;;
   --await)           RECYCLE_AWAIT=1; shift ;;
   --allow-live-subagents) ALLOW_LIVE_SA=1; shift ;;
   --session-id)  SESSION_ID="${2:?--session-id needs a value}"; shift 2 ;;
