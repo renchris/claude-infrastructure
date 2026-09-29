@@ -356,6 +356,27 @@ def _derive(
             rec
         ):  # this pass entered the relaunch gap: owned, not orphaned
             _event(ctx.paths, "in-flight", rec.sid, rec.record_id, "relaunch gap")
+        if (
+            rec.phase == "PRE-MOVE"
+            and rec.substate == "IN-FLIGHT"
+            and not ev.holders
+            and not rec.escalated
+            and now - (rec.timeline.confirmed or rec.updated_at or now)
+            >= IN_FLIGHT_MAX_S
+        ):
+            # §4.4: a relaunch gap past its bound with no holder is a failure, not a flag. The
+            # lr-fire-resume relay lives as long as its child, so live_launcher cannot bound it (W5
+            # rig 0c95685d sat IN-FLIGHT, flagged every pass, nothing acting). It spawns nothing.
+            detail = "IN-FLIGHT %ds with no holder for the sid" % IN_FLIGHT_MAX_S
+            fp = classify.fingerprint(rec.phase, "DETERMINISTIC", "!! " + detail, 0, "")
+            d = classify.apply_failure(rec, "DETERMINISTIC", fp, detail, now)
+            _event(
+                ctx.paths,
+                "in-flight-expired",
+                rec.sid,
+                rec.record_id,
+                "%s → %s" % (detail, d),
+            )
         # after the substate write: a hop turns this record into a fresh PRE-MOVE/DETECTED
         src_auth = (facts or {}).get("%s.auth" % rec.source_acct)
         if (
@@ -724,7 +745,14 @@ def run_pass(ctx: Ctx, force_observe: bool = False) -> Dict[str, Any]:
     act.reap_children()  # before ps, so an exited actuator is gone AND its exit code is kept
     mode = "observe" if force_observe else read_mode(paths, ctx.mode_cap)
     now = time.time()
-    snap = observe.observe(paths, ctx.home, transcript_fn=transcript.observe, now=now)
+    # rig_keep: a sid the daemon holds a record for stays visible mid-move (observe._sessions)
+    snap = observe.observe(
+        paths,
+        ctx.home,
+        transcript_fn=transcript.observe,
+        now=now,
+        rig_keep=frozenset(ctx.records),
+    )
     ctx.degraded_streak = ctx.degraded_streak + 1 if snap.degraded else 0
     for (
         sid

@@ -423,7 +423,14 @@ class Composer(unittest.TestCase):
 
     FIX = os.path.join(
         os.path.dirname(os.path.realpath(__file__)),
-        "..", "..", "..", "..", "tests", "fixtures", "lr-recon", "screens",
+        "..",
+        "..",
+        "..",
+        "..",
+        "tests",
+        "fixtures",
+        "lr-recon",
+        "screens",
     )
 
     def frame(self, name):
@@ -444,9 +451,13 @@ class Composer(unittest.TestCase):
 
     def test_a_faint_suggestion_is_not_a_draft_but_plain_text_is(self):
         box = "x\n%s\n❯ %s\n%s\n" % ("─" * 20, "%s", "─" * 20)
-        self.assertEqual(O.composer_from_screen(box % "\x1b[2mship the film\x1b[22m"), "empty")
+        self.assertEqual(
+            O.composer_from_screen(box % "\x1b[2mship the film\x1b[22m"), "empty"
+        )
         self.assertEqual(O.composer_from_screen(box % "ship the film"), "draft")
-        self.assertEqual(O.composer_from_screen(box % "\x1b[38;2;1;2;3mship\x1b[0m"), "draft")
+        self.assertEqual(
+            O.composer_from_screen(box % "\x1b[38;2;1;2;3mship\x1b[0m"), "draft"
+        )
 
 
 class Observe(unittest.TestCase):
@@ -529,6 +540,11 @@ class Observe(unittest.TestCase):
         self.assertIn(SIDBG, s.rig_refused)  # a session row only
         self.assertEqual(s.sessions[SIDA].pane, (500, 1))
         self.assertEqual(self.snap(rig=False).rig_refused, [])
+        # W5 rig 0c95685d: a sid the daemon owns stays visible when its row loses the tag
+        s = self.snap(rig=True, rig_keep=frozenset({SIDB}))
+        self.assertIn(SIDB, s.sessions)
+        self.assertNotIn(SIDB, s.rig_refused)
+        self.assertIn(SIDBG, s.rig_refused)
 
     def test_rig_mode_from_env(self):
         self.assertTrue(O.rig_mode({"LR_RECON_RIG": "1"}))

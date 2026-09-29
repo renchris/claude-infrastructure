@@ -17,7 +17,7 @@ import shutil
 import stat
 import subprocess
 import time
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Optional, Tuple
 
 from lr_recon import types as T
 from lr_recon.observe_rows import (
@@ -238,7 +238,10 @@ BORDER = "─" * 12
 def _unfaint(line: str) -> str:
     """Drop escapes and every FAINT (SGR 2) run: CC's prompt suggestion is faint, input never is."""
     out, faint, i = [], False, 0
-    for m in re.finditer(r"\x1b\[([0-9;:]*)m|\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b.", line):
+    for m in re.finditer(
+        r"\x1b\[([0-9;:]*)m|\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b.",
+        line,
+    ):
         if not faint:
             out.append(line[i : m.start()])
         if m.group(1) is not None:
@@ -261,7 +264,7 @@ def _unfaint(line: str) -> str:
 
 
 def composer_from_screen(screen: str) -> str:
-    """"empty" | "draft" | "unknown" from a --ansi screen: the rows strictly between the last two
+    """ "empty" | "draft" | "unknown" from a --ansi screen: the rows strictly between the last two
     border rows, faint runs dropped, printable ASCII only; a whole-row `Try "…"` is the placeholder."""
     lines = screen.splitlines()
     plain = [_ESC.sub("", ln) for ln in lines]
@@ -324,6 +327,7 @@ def observe(
     kitten: Optional[str] = None,
     registry_dir: Optional[str] = None,
     rig: Optional[bool] = None,
+    rig_keep: FrozenSet[str] = frozenset(),
 ) -> T.Snapshot:
     """One census pass. Never raises: every instrument is fenced and degrades by name."""
     snap = T.Snapshot(
@@ -362,6 +366,7 @@ def observe(
             registry_dir,
             transcript_fn,
             rig_mode() if rig is None else rig,
+            rig_keep,
         )
     except Exception:  # noqa: BLE001
         snap.degraded.append("sessions")
@@ -376,6 +381,7 @@ def _sessions(
     registry_dir: Optional[str],
     transcript_fn: Optional[TranscriptFn],
     rig: bool = False,
+    rig_keep: FrozenSet[str] = frozenset(),
 ) -> None:
     procs = snap.procs
     kitty_ok = not any(d.startswith("kitty") for d in snap.degraded)
@@ -412,7 +418,10 @@ def _sessions(
             sids.append(s)
     for sid in sids:
         rrows = [r for r in reg if r["session_id"] == sid]
-        if rig and not any(r.get("rig") is True for r in rrows):
+        # membership is a property of the SID: once the daemon holds a record for it (only rig sids
+        # ever get one), a pane-keyed registry file another process overwrote must not hide it
+        # mid-move (W5 rig 0c95685d: a stray --version probe's row stranded it IN-FLIGHT)
+        if rig and sid not in rig_keep and not any(r.get("rig") is True for r in rrows):
             snap.rig_refused.append(sid)
             continue
         live_reg = [r for r in rrows if live(r.get("pid"), procs) is not None]

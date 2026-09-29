@@ -465,6 +465,50 @@ class MainTests(unittest.TestCase):
         rec.timeline.confirmed = now - 30
         self.assertEqual(M._invariant(ctx, snap, now), 1)
 
+    def _in_flight_pass(self, rec, now):
+        ctx = M.Ctx(self.paths, None, self.home)
+        M.store.ensure_dirs(self.paths)
+        ctx.records = {rec.sid: rec}
+        snap = T.Snapshot(wall=now, uptime_raw=0.0, panes={}, sessions={})
+        out = {
+            "result": T.PhaseResult(phase="PRE-MOVE", action="wait"),
+            "evidence": T.Evidence(),
+        }
+        with mock.patch.object(M.evidence, "derive", return_value=out):
+            M._derive(ctx, snap, now)
+        return ctx, snap
+
+    def test_in_flight_past_its_bound_fails_then_escalates(self):
+        """W5 rig 0c95685d: IN-FLIGHT past IN_FLIGHT_MAX_S with no holder was only flagged, every
+        pass, while the lr-fire-resume relay kept live_launcher true; nothing acted."""
+        import time
+
+        now = time.time()
+        rec = T.Record(sid="abcdef01-0000-0000-0000-000000000001", record_id="r1")
+        rec.phase, rec.substate = "PRE-MOVE", "IN-FLIGHT"
+        rec.timeline.confirmed = now - 601
+        ctx, snap = self._in_flight_pass(rec, now)
+        self.assertEqual(rec.last_error.cls, "DETERMINISTIC")
+        self.assertIsNotNone(rec.next_eligible_at)
+        self.assertFalse(rec.escalated)
+        self.assertEqual(M._invariant(ctx, snap, now), 0)
+        self.assertIn("in-flight-expired", [e["ev"] for e in self._events()])
+        self._in_flight_pass(rec, now)  # the identical failure again
+        self.assertTrue(rec.escalated)
+
+    def test_in_flight_inside_its_bound_is_left_alone(self):
+        """CONTROL: at 599 s the relaunch gap is still owned."""
+        import time
+
+        now = time.time()
+        rec = T.Record(sid="abcdef01-0000-0000-0000-000000000001", record_id="r1")
+        rec.phase, rec.substate = "PRE-MOVE", "IN-FLIGHT"
+        rec.timeline.confirmed = now - 599
+        self._in_flight_pass(rec, now)
+        self.assertEqual(
+            (rec.last_error, rec.next_eligible_at, rec.escalated), (None, None, False)
+        )
+
     def _rec(self, phase, target="next4"):
         rec = T.Record(sid="abcdef01-0000-0000-0000-000000000001", record_id="r1")
         rec.phase, rec.target_acct, rec.pane = phase, target, (5, 7)
