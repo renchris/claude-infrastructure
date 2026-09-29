@@ -340,12 +340,23 @@ _lr_recon_launch_log() {
 # ACT after a "lapsed" verdict — and after ANY act verdict when "always" is passed (the relaunch
 # typers: cc-resume-debt, boot-resume-launch) — happens only while this process holds
 # locks/<sid>.launch; its path is exported in LR_LAUNCH_LOCK (lr-fire-resume asserts it) and the
-# caller releases it with lr_recon_act_done. Otherwise LR_LAUNCH_LOCK is exported empty.
+# caller releases it with lr_recon_act_done. Otherwise LR_LAUNCH_LOCK is exported empty. A child
+# that inherits a LIVE LR_LAUNCH_LOCK for the same sid acts under it (lock=inherited) and never
+# releases it — the parent that took it does.
 # A launch lock held by a LIVE other process ⇒ DEFER. A lock that cannot be created: DEFER on
 # "lapsed" (the reconciler may still own the sid), ACT unlocked on "always" with the reconciler off
 # (the legacy world keeps working). Verdict: `lr-recon-fence: gate=act|defer sid=… role=… lock=…`.
 lr_recon_may_act() {
-  local sid="$1" role="${2:-legacy}" always="${3:-}" why dir rc
+  local sid="$1" role="${2:-legacy}" always="${3:-}" why dir rc inherited=""
+  dir="$(_lr_recon_launch_lock_dir "$sid")"
+  # INHERITED: a parent actor (cc-lr → lf_one → lr-handoff) already holds this sid's launch lock
+  # and exported it. Its live holder is the one legitimate "someone else holds it" — re-taking it
+  # would make the child defer to its own parent. Never released by the child (see act_done).
+  if [ -n "${LR_LAUNCH_LOCK:-}" ] && [ "$LR_LAUNCH_LOCK" = "$dir" ] \
+    && ! _lr_recon_holder_dead "$(_lr_recon_holder_raw "$dir")" "$dir"; then
+    inherited=1
+  fi
+  _LR_RECON_LOCK_MINE=""
   LR_LAUNCH_LOCK=""
   export LR_LAUNCH_LOCK
   why="$(lr_recon_defers "$sid" 2>&1 >/dev/null)"
@@ -360,12 +371,19 @@ lr_recon_may_act() {
     *) [ "$always" = always ] || { printf 'lr-recon-fence: gate=act sid=%s role=%s lock=none\n' \
          "$(printf '%s' "$sid" | cut -c1-8)" "$role" >&2; return 0; } ;;
   esac
-  dir="$(_lr_recon_launch_lock_dir "$sid")"
+  if [ -n "$inherited" ]; then
+    LR_LAUNCH_LOCK="$dir"
+    export LR_LAUNCH_LOCK
+    _lr_recon_launch_log "$sid" "$role" inherited
+    printf 'lr-recon-fence: gate=act sid=%s role=%s lock=inherited\n' "$(printf '%s' "$sid" | cut -c1-8)" "$role" >&2
+    return 0
+  fi
   lr_recon_lock_take "$dir" "legacy:$role" 0 "$role" "$$"
   rc=$?
   case "$rc" in
     0)
       LR_LAUNCH_LOCK="$dir"
+      _LR_RECON_LOCK_MINE=1
       export LR_LAUNCH_LOCK
       _lr_recon_launch_log "$sid" "$role" taken
       printf 'lr-recon-fence: gate=act sid=%s role=%s lock=taken\n' "$(printf '%s' "$sid" | cut -c1-8)" "$role" >&2
@@ -387,7 +405,8 @@ lr_recon_may_act() {
 # Release the launch lock lr_recon_may_act took (a no-op when it took none). Safe to repeat.
 lr_recon_act_done() {
   [ -n "${LR_LAUNCH_LOCK:-}" ] || return 0
-  lr_recon_lock_release "$LR_LAUNCH_LOCK" "$$" 2>/dev/null
+  [ "${_LR_RECON_LOCK_MINE:-}" = 1 ] && lr_recon_lock_release "$LR_LAUNCH_LOCK" "$$" 2>/dev/null
+  _LR_RECON_LOCK_MINE=""
   LR_LAUNCH_LOCK=""
   export LR_LAUNCH_LOCK
   return 0
