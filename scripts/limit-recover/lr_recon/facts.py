@@ -14,11 +14,15 @@ Never a limit signal here, by design: the usage endpoint integer >= 100, or a us
 
 from __future__ import annotations
 
+import argparse
 import dataclasses
 import datetime
 import json
 import os
+import re
+import sys
 import tempfile
+import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from lr_recon import types as T
@@ -363,3 +367,65 @@ def limited_rows(facts: Dict[str, T.Fact], now: float) -> List[Dict[str, Any]]:
     ]
     rows.sort(key=lambda r: (r["acct"], r["scope"]))
     return rows
+
+
+# ── hook CLI (hooks/stop-failure-marker.sh) ──────────────────────────────────────────────────────
+# The hook is the fastest producer (it fires at the instant of death) and it is shell, so it
+# reaches the ledger through this one entry rather than hand-writing JSON: the §C4 merge rules
+# (first observed_at wins, resets_at only rises) live in write_fact and nowhere else.
+
+_SAFE_ACCT_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+_SCOPE_RE = re.compile(r"^(5h|7d|auth|fable|model:[a-z0-9._-]{1,64})$")
+
+
+def fact_from_hook(
+    acct: str, sid: str, scope: str, resets_at: Optional[float], now: float
+) -> T.Fact:
+    """A hook death -> a fact. Same shape as fact_from_death, but the hook has already decided
+    the scope from the payload, so it is taken as given (validated by the caller)."""
+    return T.Fact(
+        acct=acct,
+        scope=scope,
+        window=_WINDOW_OF_SCOPE.get(scope, ""),
+        resets_at=resets_at,
+        first_sid=sid,
+        observed_at=float(now),
+        src="hook",
+        untested=(scope == "fable"),
+    )
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    ap = argparse.ArgumentParser(
+        prog="lr_recon.facts", description=__doc__.splitlines()[0]
+    )
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    hw = sub.add_parser(
+        "hook-write", help="merge one hook-observed fact into the ledger"
+    )
+    hw.add_argument("--acct", required=True)
+    hw.add_argument("--sid", default="")
+    hw.add_argument("--scope", required=True)
+    hw.add_argument("--resets-at", default="", help="epoch seconds; empty = unknown")
+    args = ap.parse_args(argv)
+    # A path-unsafe account or an unknown scope would name a file the reader never looks up,
+    # so it is refused rather than sanitized — the same "drop, never clean" rule the hook uses.
+    if not _SAFE_ACCT_RE.match(args.acct) or not _SCOPE_RE.match(args.scope):
+        print("hook-write: bad --acct or --scope", file=sys.stderr)
+        return 2
+    resets: Optional[float] = None
+    if args.resets_at:
+        try:
+            resets = float(args.resets_at)
+        except ValueError:
+            resets = None  # an unparseable reset is an unknown reset, never a refusal
+    merged = write_fact(
+        T.Paths.from_env(),
+        fact_from_hook(args.acct, args.sid, args.scope, resets, time.time()),
+    )
+    print(json.dumps(T.to_dict(merged), separators=(",", ":"), sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

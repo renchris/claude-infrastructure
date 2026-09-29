@@ -370,8 +370,80 @@ _sf_rq_enrich() { # $1=transcript → "<uuid>\t<reset_at_epoch>\t<rate_limit_typ
   return 0
 }
 
+# ONE enrich per death, shared by the request arm and the fact arm. The fact arm needs the same
+# `rateLimitType`/`resetsAt` pair, and a second tail+jq pass for it would double the one bounded
+# read this path was priced at.
+_SF_EN_DONE=""; _SF_EN_UUID=""; _SF_EN_RESET=""; _SF_EN_RLT=""
+_sf_enrich_once() {
+  local enrich
+  [ -n "$_SF_EN_DONE" ] && return 0
+  _SF_EN_DONE=1
+  enrich="$(_sf_rq_enrich "$TP")"
+  IFS="$(printf '\t')" read -r _SF_EN_UUID _SF_EN_RESET _SF_EN_RLT <<EOF
+$enrich
+EOF
+  return 0
+}
+
+# The bounded-fork binary, resolved lazily for the arms added in LIMIT_RECOVER_FLEET_V2 W4. Same
+# ladder as _sf_page and _sf_rq_enrich (hooks run without Homebrew on PATH), as a function so the
+# two new callers do not each grow a third copy; the two inherited copies are left as they are.
+_sf_timeout_bin() {
+  local c
+  for c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
+           /opt/homebrew/bin/timeout /usr/local/bin/timeout \
+           /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    [ -n "$c" ] && [ -x "$c" ] && { printf '%s' "$c"; return 0; }
+  done
+  return 0
+}
+
+# scripts/limit-recover, found the way idl-log.sh is found above: beside this file in the repo,
+# then through the per-file symlink farm (a symlinked hook's dirname is ~/.claude/hooks, whose
+# ../scripts/limit-recover is itself a symlink farm that still holds every module file).
+_sf_lr_dir() {
+  local d t
+  for d in "${STOP_FAILURE_LR_DIR:-}" "$_sfscd/../scripts/limit-recover"; do
+    [ -n "$d" ] && [ -f "$d/lr-predicate.sh" ] && { printf '%s' "$d"; return 0; }
+  done
+  t="${BASH_SOURCE[0]}"
+  if [ -L "$t" ]; then
+    d="$(cd "$(dirname "$(readlink "$t")")" 2>/dev/null && pwd)/../scripts/limit-recover"
+    [ -f "$d/lr-predicate.sh" ] && { printf '%s' "$d"; return 0; }
+  fi
+  d="$HOME/.claude/scripts/limit-recover"
+  [ -f "$d/lr-predicate.sh" ] && printf '%s' "$d"
+  return 0
+}
+
+# Is this transcript a TEAMMATE's? The PARSED predicate (lr_predicate.is_teammate_head via the
+# `is-teammate-head` verb) answers exactly — a non-empty string `agentName` on a top-level record —
+# where the old substring grep also said yes to `"agentName":null`. The grep stays as the fallback
+# for a predicate that is absent, times out or errors: a teammate wrongly recovered is a double
+# resume, a non-teammate wrongly skipped is one session not auto-recovered, so on any doubt the
+# SKIP side wins. `grep` is DRAINED, never `-q` (scripts/pipefail-sigpipe-lint.sh).
+_sf_is_teammate() { # $1=transcript → rc 0 teammate, rc 1 not
+  local f="${1:-}" lrd tb out
+  [ -n "$f" ] && [ -f "$f" ] || return 1
+  lrd="$(_sf_lr_dir)"
+  if [ -n "$lrd" ] && command -v python3 >/dev/null 2>&1; then
+    tb="$(_sf_timeout_bin)"
+    if [ -n "$tb" ]; then
+      out="$("$tb" -k 1 "${STOP_FAILURE_PRED_TIMEOUT_S:-2}" /bin/bash "$lrd/lr-predicate.sh" \
+               is-teammate-head "$f" 2>/dev/null)" || out=""
+    else
+      out="$(/bin/bash "$lrd/lr-predicate.sh" is-teammate-head "$f" 2>/dev/null)" || out=""
+    fi
+    case "$out" in
+      *'"teammate":true'*)  return 0 ;;
+      *'"teammate":false'*) return 1 ;;
+    esac
+  fi
+  head -c 8192 "$f" 2>/dev/null | grep '"agentName"' >/dev/null 2>&1
+}
+
 _sf_request() {
-  local rqdir latchdir tmp dest enrich uuid reset rlt duuid
+  local rqdir latchdir tmp dest uuid reset rlt duuid
   rqdir="$_SF_RQ_STATE/requests"; latchdir="$_SF_RQ_STATE/requests-latch"
 
   # A REQUEST IS ADDRESSED BY ITS SID, so a sid that is absent, unknown, or not path-safe cannot
@@ -387,14 +459,10 @@ _sf_request() {
   find "$latchdir" "$_SF_RQ_STATE/teammate-skip" -type f -mmin "+$TTL_MIN" -delete 2>/dev/null || true
 
   # SKIP 1 — A TEAMMATE. Its lead owns its life: an assignee is woken over the teammate channel,
-  # and transplanting it would put a second writer on one transcript. The test is the house idiom
-  # (handoff-fire.sh:7810, lr-fleet.sh:215) — `agentName` is a top-level key on an early `user`
-  # record, so the first 8 KB answers it. `grep` is DRAINED, never `-q`: an early-exiting consumer
-  # under `set -o pipefail` promotes the producer's SIGPIPE to the pipeline status and the `if`
-  # reads FALSE on a match (scripts/pipefail-sigpipe-lint.sh). The known false positive —
-  # `"agentName":null` also matches — errs toward SKIPPING, which is the safe direction here.
-  if [ -n "$TP" ] && [ -f "$TP" ] \
-     && head -c 8192 "$TP" 2>/dev/null | grep '"agentName"' >/dev/null 2>&1; then
+  # and transplanting it would put a second writer on one transcript. `agentName` is a top-level
+  # key on an early `user` record, so the first 8 KB answers it — read PARSED by _sf_is_teammate,
+  # which no longer skips a `"agentName":null` head, with the substring grep kept as its fallback.
+  if _sf_is_teammate "$TP"; then
     mkdir -p "$_SF_RQ_STATE/teammate-skip" 2>/dev/null || return 0
     # `( … ) 2>/dev/null`, never `: > f 2>/dev/null`. A FAILED REDIRECTION is reported by the shell
     # BEFORE the command runs, so a trailing `2>/dev/null` on the same simple command is applied
@@ -418,11 +486,8 @@ _sf_request() {
   # this a re-fire after a drain re-enqueues a recovery that already ran. This is not the race gate
   # — the O_EXCL create below is — and it cannot be: under concurrency both writers would produce
   # the identical per-sid request, which is benign. What it bounds is the SEQUENTIAL re-fire.
-  enrich="$(_sf_rq_enrich "$TP")"
-  uuid=""; reset=""; rlt=""
-  IFS="$(printf '\t')" read -r uuid reset rlt <<EOF
-$enrich
-EOF
+  _sf_enrich_once
+  uuid="$_SF_EN_UUID"; reset="$_SF_EN_RESET"; rlt="$_SF_EN_RLT"
   duuid="$(_sf_slug "$uuid")"
   # NEVER a constant fallback: that would latch the FIRST death for the life of the session and go
   # silent on every later one (lr-lib.sh:203-206 names the same trap). The payload-derived key is
@@ -495,6 +560,72 @@ case "$ERR" in
       _sf_request
     fi ;;
 esac
+
+# ── ARM 3 — THE ACCOUNT FACT (LIMIT_RECOVER_FLEET_V2 W4, architecture § C4) ──────────────────────
+# The reconciler's ledger says "account X cannot serve scope S". This hook sees the death first,
+# so it is the fastest producer — but ONLY under `$STATE/recon.on`, the operator's flag for the
+# reconciler, and with recon.on absent this arm costs zero forks. Scope, in order:
+#   auth    — the error or message says the account is logged out / its token is bad / 401
+#   5h, 7d  — `rateLimitType` five_hour / seven_day off the death record (the shared enrich)
+#   fable, model:<name> — the model-scoped cap text ("Fable limit", "model_scoped:<Name>",
+#             "You've reached your <Name> limit"); fable is written `untested` by facts.py
+#   anything else — no fact. A guessed scope blocks a whole account on the wrong window, which
+#   is worse than the census writing the fact one pass later.
+_SF_CAP_RE="You've (hit|reached) your ([A-Z][a-z]+) limit"
+_SF_MODEL_RE='model_scoped:([A-Za-z][A-Za-z0-9._-]*)'
+_sf_fact_scope() { # → the scope on stdout, or nothing
+  local name="" rc=1
+  # nocasematch for the auth phrases only, restored before any other test: the cap text below
+  # is case-significant ("session limit" is a 5h cap, "Sonnet limit" is a model cap).
+  shopt -s nocasematch
+  case "$ERR" in authentication_failed) rc=0 ;; esac
+  case "$LAST" in
+    *"not logged in"*|*"please run /login"*|*"logged out"*|*[!0-9]401[!0-9]*|401[!0-9]*|*"invalid api key"*|\
+    *"token invalid"*|*"invalid token"*|*"invalid_token"*|*"token has expired"*|*"token is invalid"*) rc=0 ;;
+  esac
+  shopt -u nocasematch
+  [ "$rc" -eq 0 ] && { printf 'auth'; return 0; }
+  case "$ERR" in rate_limit|rate_limit_error) ;; *) return 0 ;; esac
+  _sf_enrich_once
+  case "$_SF_EN_RLT" in
+    five_hour) printf '5h'; return 0 ;;
+    seven_day) printf '7d'; return 0 ;;
+  esac
+  if [[ $LAST =~ $_SF_MODEL_RE ]]; then
+    name="${BASH_REMATCH[1]}"
+  elif [[ $LAST =~ $_SF_CAP_RE ]]; then
+    name="${BASH_REMATCH[2]}"
+    # The account-wide caps spoken in prose. Without a rateLimitType their window is not known
+    # here, so they write nothing rather than a model fact named "session".
+    case "$name" in Session|Weekly|Fast|Monthly) name="" ;; esac
+  fi
+  [ -n "$name" ] || return 0
+  name="$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')"
+  if [ "$name" = fable ]; then printf 'fable'; else printf 'model:%s' "$name"; fi
+  return 0
+}
+
+if [ -e "$_SF_RQ_STATE/recon.on" ]; then
+  _sf_scope="$(_sf_fact_scope)"
+  _sf_lrd=""; [ -n "$_sf_scope" ] && _sf_lrd="$(_sf_lr_dir)"
+  if [ -n "$_sf_scope" ] && [ -n "$_sf_lrd" ] && [ -f "$_sf_lrd/lr_recon/facts.py" ]; then
+    # Only a numeric reset is passed on: facts.py would read anything else as "unknown" anyway,
+    # and an empty flag value is what that looks like on the wire.
+    case "$_SF_EN_RESET" in ''|*[!0-9.]*) _sf_reset="" ;; *) _sf_reset="$_SF_EN_RESET" ;; esac
+    _sf_tb="$(_sf_timeout_bin)"
+    # LR_STATE_DIR is the hook's own resolved state dir, so the ledger lands under the same tree
+    # the recon.on flag was read from; LR_RECON_ROOT, when set, passes through untouched. With no
+    # timeout(1) it runs unbounded rather than dropping the fact, as the page ladder above does.
+    if LR_STATE_DIR="$_SF_RQ_STATE" PYTHONPATH="$_sf_lrd" \
+         ${_sf_tb:+"$_sf_tb" -k 1 "${STOP_FAILURE_FACT_TIMEOUT_S:-2}"} python3 -m lr_recon.facts \
+         hook-write --acct "$ACCOUNT" --sid "$SID" --scope "$_sf_scope" --resets-at "$_sf_reset" \
+         >/dev/null 2>&1; then
+      log_idl fired "fact-written"
+    else
+      log_idl abstained "fact-write-failed"
+    fi
+  fi
+fi
 
 # Bounded: past the cap the FACT is long established and further lines only cost disk. The marker
 # stays in place — capping the file must never look like the cause resolved.
