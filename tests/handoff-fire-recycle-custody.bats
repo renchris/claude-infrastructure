@@ -559,6 +559,18 @@ watcher_world() {
 args="$*"
 cc=0; [ "$(date +%s)" -lt "$(cat "$HOME/shell-at" 2>/dev/null || echo 0)" ] && cc=1
 case "$args" in *pgid=*) printf '4242\n'; exit 0 ;; esac
+# RELATIVE CLOCK: with $HOME/shell-after-first holding N, claude stays up for N s counted from the
+# watcher's FIRST pane read, not from the test's start — a loaded box can spend longer than N s
+# just starting the watcher, which would put the shell there before the first look.
+if [ -f "$HOME/shell-after-first" ]; then
+  case "$args" in *"-o comm= -t"*|*"-axww -o args="*|*"-p 100"*)
+    [ -f "$HOME/first-read" ] || date +%s > "$HOME/first-read" ;;
+  esac
+  cc=0
+  if [ -f "$HOME/first-read" ] \
+     && [ "$(date +%s)" -lt $(( $(cat "$HOME/first-read") + $(cat "$HOME/shell-after-first") )) ]; then cc=1; fi
+  [ -f "$HOME/first-read" ] || cc=1
+fi
 case "$args" in *lstart=*) printf 'Tue Sep 29 10:00:00 2026\n'; exit 0 ;; esac
 case "$args" in
   *"-axww -o args="*) [ "$cc" = 1 ] && printf 'claude --resume x\n'; exit 0 ;;
@@ -776,7 +788,7 @@ wrows() { grep "\"class\":\"$1\"" "$HOME/.claude/logs/handoffs.jsonl" 2>/dev/nul
 
 @test "P a shell that appears ~1 s after the /exit is confirmed with waited < 3" {
   watcher_world
-  echo $(( $(date +%s) + 1 )) > "$HOME/shell-at"
+  echo 1 > "$HOME/shell-after-first"
   drive_watcher
   [[ "$output" =~ CONFIRMED\ at\ a\ shell\ prompt\ after\ ([0-9]+)s ]] || { echo "$output"; false; }
   [ "${BASH_REMATCH[1]}" -ge 1 ] || { echo "the shell was never claude first: $output"; false; }
