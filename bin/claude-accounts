@@ -4094,6 +4094,277 @@ def _rank_pass(rows, cfg, win, kind, cliff, recovery=False):
     return out, reasons
 
 
+# ---- batch recovery placement (--place, LIMIT_RECOVER_FLEET_V2 C5/§5) ----
+# `--route --recovery` answers "which ONE account for this session", so a wave of limited panes
+# asked it N times and every answer was the same rank[0] — the router cannot see its own previous
+# answers inside the cache TTL. --place answers for the whole batch at once: capacity is computed
+# per account ONCE, every pick is charged against it before the next, and the per-pick floors
+# charge each already-placed mover's burn, so the 7th mover sees the 6 before it.
+PLACE_B_SESS_DEFAULT = 0.07       # fraction/h: a mover with no measured pre-death burn
+PLACE_R_W_WORST_DEFAULT = 0.011   # weekly fraction/h per session: the worst measured rate (U13)
+PLACE_EXIT_WAIT_DATA, PLACE_EXIT_BAD_ARGS = 3, 64
+
+
+class _PlaceArgError(Exception):
+    pass
+
+
+def _place_epoch(v) -> "float | None":
+    """Epoch seconds from an epoch number or an ISO-8601 string; None when absent or unreadable."""
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return float(v)
+    if isinstance(v, str) and v.strip():
+        try:
+            t = datetime.fromisoformat(v.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return (t if t.tzinfo else t.replace(tzinfo=timezone.utc)).timestamp()
+    return None
+
+
+def _place_read_facts(d: str) -> dict:
+    """{acct: [fact, ...]} from `<acct>.<scope>.json`. An unreadable file is ignored with one
+    stderr line: a torn write by a concurrent reporter must not abort a whole placement."""
+    out: dict = {}
+    for p in sorted(glob.glob(os.path.join(d, "*.json"))):
+        acct, _, rest = os.path.basename(p)[:-len(".json")].partition(".")
+        try:
+            with open(p) as fh:
+                f = json.load(fh)
+            if not isinstance(f, dict):
+                raise ValueError("not an object")
+        except (OSError, ValueError) as e:
+            print(f"claude-accounts --place: ignoring unreadable fact {p}: {e}", file=sys.stderr)
+            continue
+        f.setdefault("scope", rest)
+        out.setdefault(acct, []).append(f)
+    return out
+
+
+def _place_fact_live(f: dict, row: "dict | None", now: float) -> bool:
+    """Unexpired = rejected, and before resets_at+60 (no resets_at never expires on time). A 5h/7d
+    fact also dies when the row's wire for THAT window reads allowed at a read time later than
+    observed_at+60 — the server has since said yes. No wire read time on the row ⇒ no such expiry:
+    a wire of unknown age cannot outrank a dated refusal."""
+    if f.get("status") != "rejected":
+        return False
+    ra = _place_epoch(f.get("resets_at"))
+    if ra is not None and now >= ra + 60:
+        return False
+    scope = f.get("scope")
+    if scope in ("5h", "7d") and row is not None:
+        w = row.get("wire") or {}
+        read = _place_epoch(w.get("read_at") or w.get("at") or row.get("wire_at"))
+        obs = _place_epoch(f.get("observed_at"))
+        if w.get(f"{scope}_status") == "allowed" and read is not None and obs is not None \
+                and read > obs + 60:
+            return False
+    return True
+
+
+def _place_covers(f: dict, lane: str, model: "str | None") -> bool:
+    s = str(f.get("scope") or "")
+    if s in ("5h", "7d", "auth"):
+        return True
+    if s == "fable":
+        return lane == "fable"
+    if s.startswith("model:"):
+        return bool(model) and s[len("model:"):] in model
+    return False
+
+
+def _place_load_inputs(args: list) -> tuple:
+    def val(flag: str) -> str:
+        if flag not in args or args.index(flag) + 1 >= len(args):
+            raise _PlaceArgError(f"{flag} is required")
+        return args[args.index(flag) + 1]
+    lane = val("--lane")
+    if lane not in ("general", "fable"):
+        raise _PlaceArgError(f"--lane must be general|fable, not {lane!r}")
+    movers, facts_dir = [], val("--facts")
+    try:
+        with open(val("--movers")) as fh:
+            for ln in fh:
+                if not ln.strip():
+                    continue
+                m = json.loads(ln)
+                w = m.get("w", 1)
+                if not isinstance(m, dict) or not m.get("sid") or not m.get("src") \
+                        or m.get("kind") not in ("limited", "idle") \
+                        or not isinstance(w, int) or isinstance(w, bool) or w < 1:
+                    raise ValueError(f"bad mover line: {ln.strip()[:120]}")
+                movers.append(dict(m, w=w))
+        with open(val("--kwork")) as fh:
+            kwork = json.load(fh)
+        if not isinstance(kwork, dict):
+            raise ValueError("--kwork is not a JSON object")
+    except (OSError, ValueError, AttributeError) as e:
+        raise _PlaceArgError(str(e)) from e
+    if not os.path.isdir(facts_dir):
+        raise _PlaceArgError(f"--facts {facts_dir} is not a directory")
+    return lane, movers, facts_dir, kwork
+
+
+def cmd_place(args: list, cfg: dict) -> int:
+    """Batch recovery placement: stdout {sid: {acct, reason, eta_s, weight}}; exit 0 = a plan
+    (unplaced movers included), 3 = WAIT_DATA (no servable cache), 64 = bad arguments/inputs.
+
+    INPUTS. --movers: JSONL {sid, src (account name OR config-dir path), kind limited|idle, w (int,
+    default 1), model?, burn_ph? (the mover's own pre-death 5h burn, pp/h), death_ts? (epoch)}.
+    --kwork: JSON {acct: int|null} — missing/null is UNMEASURED and gets no seats, because a count
+    nobody took is not zero. --facts: a dir of `<acct>.<scope>.json` {status:"rejected", scope,
+    window, resets_at, first_sid, observed_at, src, contradicted?}; 5h/7d/auth cover every lane,
+    fable the fable lane, model:<name> only movers whose model contains <name>.
+
+    Capacity is KMAX − kwork − phantoms and never KMAX_RESIDENT: the pane census is a RESIDENT
+    count, and charging it against a 40 cap placed 40−k movers on an account whose ACTIVE limit is
+    8. A source store already holding the sid is exempt from the store skip — staying is resuming
+    in place, not a second copy."""
+    try:
+        lane, movers, facts_dir, kwork = _place_load_inputs(args)
+    except _PlaceArgError as e:
+        print(f"claude-accounts --place: {e}", file=sys.stderr)
+        return PLACE_EXIT_BAD_ARGS
+    try:
+        rows, wj, _cached, _prev = get_data(cfg, max_wait=0, max_age=cfg.get("cache_grace_s", 600))
+    except CacheOnlyUnavailable:
+        print(json.dumps({m["sid"]: {"acct": None, "reason": "wait-data", "eta_s": None,
+                                     "weight": m["w"]} for m in movers}, sort_keys=True))
+        return PLACE_EXIT_WAIT_DATA
+    mark_self(rows, cfg)
+    refresh_login_countdown(rows)
+    apply_assignments(rows, cfg)
+    apply_burn(rows, cfg)
+    win = win_from_json(wj)
+    R, now = cfg["router"], time.time()
+    KMAX = R["KMAX"]
+    w_floor, s_ceil, _f = recovery_floors(R)
+    r_w_worst = _cliff_env("CC_ROUTE_RECOVERY_R_W_WORST",
+                           R.get("RECOVERY_R_W_WORST", PLACE_R_W_WORST_DEFAULT))
+    b_default = _cliff_env("CC_PLACE_B_SESS_DEFAULT", PLACE_B_SESS_DEFAULT)
+    facts = _place_read_facts(facts_dir)
+    dirs = {a["name"]: os.path.expanduser(a["config_dir"]).rstrip("/") for a in cfg["accounts"]}
+    by_dir = {d: n for n, d in dirs.items()}
+    mirror = next((n for n, d in dirs.items() if d.endswith(".claude-next")), None)
+    if mirror is not None:
+        by_dir.setdefault(os.path.join(HOME, ".claude"), mirror)
+    snap = {r["acct"]: r for r in rows
+            if r.get("acct") in dirs and r.get("acct") != "none"}
+
+    def live(acct: str, pred) -> list:
+        return [f for f in facts.get(acct, []) if pred(f) and _place_fact_live(f, snap.get(acct), now)]
+
+    def acct_facts(acct: str) -> list:
+        return live(acct, lambda f: not str(f.get("scope", "")).startswith("model:")
+                    and _place_covers(f, lane, None))
+
+    def phantom_w(a: str) -> int:
+        return snap[a].get("k_phantom") or 0
+
+    cap, why = {}, {}
+    for a, r in snap.items():
+        kw = kwork.get(a)
+        if not isinstance(kw, int) or isinstance(kw, bool):
+            cap[a], why[a] = 0, "k-unmeasured"
+            continue
+        af = acct_facts(a)
+        if af:
+            cap[a], why[a] = 0, f"fact:{sorted(str(f.get('scope')) for f in af)[0]}"
+            continue
+        rc = dict(r, k_work=kw, k_phantom=phantom_w(a))
+        x = _excluded(rc, R, recovery=True, k_of=lambda _r, _k=kw + phantom_w(a): _k)
+        x = None if x == "kmax-concurrency" else x
+        cap[a] = 0 if x else max(0, KMAX - kw - phantom_w(a))
+        why[a] = x or "kmax-concurrency"
+
+    def src_of(m: dict) -> "str | None":
+        s = str(m["src"])
+        return s if s in dirs else by_dir.get(os.path.expanduser(s).rstrip("/"))
+
+    def src_facts(m: dict) -> list:
+        s = src_of(m)
+        return [] if s is None else live(s, lambda f: _place_covers(f, lane, m.get("model")))
+
+    def order(m: dict) -> tuple:
+        if not src_facts(m):
+            return (0, 0.0, m["sid"])
+        if m["kind"] == "limited":
+            dt = m.get("death_ts")
+            return (1, float(dt) if isinstance(dt, (int, float)) else float("inf"), m["sid"])
+        return (2, 0.0, m["sid"])
+
+    def floors_ok(a: str, n: int, b_sess: float) -> "str | None":
+        r = snap[a]
+        wu5 = (r.get("wire") or {}).get("5h_util")
+        su = wu5 if wu5 is not None else (r.get("session_pct") or 0) / 100.0
+        b = r.get("burn_5h_ewma_ph")
+        b = b / 100.0 if isinstance(b, (int, float)) else r.get("burn_5h_ph")
+        b_native = b if isinstance(b, (int, float)) and b > 0 else 0.0
+        srh = r.get("session_reset_h")
+        ahead = min(1.0, max(0.0, srh)) if isinstance(srh, (int, float)) else 1.0
+        if su + (b_native + n * b_sess) * ahead >= s_ceil:
+            return "recovery-5h-thin"
+        w_rem = weekly_headroom(r)
+        wrh = r.get("weekly_reset_h")
+        span = min(max(0.0, wrh), 9.0) if isinstance(wrh, (int, float)) else 9.0
+        if w_rem is None or w_rem - (n + 1) * r_w_worst * span < w_floor:
+            return "recovery-weekly-thin"
+        return None
+
+    def holds(a: str, sid: str) -> bool:
+        return bool(glob.glob(os.path.join(dirs[a], "projects", "*", glob.escape(sid) + ".jsonl")))
+
+    placed_w = {a: 0 for a in snap}
+    placed_n = {a: 0 for a in snap}
+    out = {}
+    for m in sorted(movers, key=order):
+        sid, w, src = m["sid"], m["w"], src_of(m)
+        sf = src_facts(m)
+        b_sess = m["burn_ph"] / 100.0 if isinstance(m.get("burn_ph"), (int, float)) else b_default
+        reasons, zeroing, scored = set(), [], []
+        for a in snap:
+            mf = live(a, lambda f: str(f.get("scope", "")).startswith("model:")
+                      and _place_covers(f, lane, m.get("model")))
+            if cap[a] - placed_w[a] < w:
+                reasons.add(why[a])
+                zeroing += acct_facts(a)
+            elif a != src and holds(a, sid):
+                reasons.add("store-holds-sid")
+            elif mf:
+                reasons.add(f"fact:{sorted(str(f.get('scope')) for f in mf)[0]}")
+                zeroing += mf
+            elif a == src and sf:
+                reasons.add("src-fact")
+                zeroing += sf
+            elif (miss := floors_ok(a, placed_n[a] + 1, b_sess)):
+                reasons.add(miss)
+            else:
+                rc = dict(snap[a], k_work=kwork[a], k_phantom=phantom_w(a) + placed_w[a])
+                s, x = (score_fable(rc, cfg, win, recovery=True) if lane == "fable"
+                        else score_general(rc, cfg, recovery=True))
+                if s is None or s <= 0:
+                    reasons.add(x or "zero-score")
+                else:
+                    scored.append((a, s))
+        if not scored:
+            ras = [t for t in (_place_epoch(f.get("resets_at")) for f in sf) if t is not None] \
+                or [t for t in (_place_epoch(f.get("resets_at")) for f in zeroing) if t is not None]
+            out[sid] = {"acct": None, "reason": ",".join(sorted(reasons)) or "no-account",
+                        "eta_s": max(0, int(min(ras) - now)) if ras else None, "weight": w}
+            continue
+        if src in dict(scored):
+            best, reason = src, "stay"
+        else:
+            best = min(scored, key=lambda t: (-t[1], placed_n[t[0]],
+                                              sha256(f"{sid}\0{t[0]}".encode()).hexdigest()))[0]
+            reason = "placed"
+        placed_w[best] += w
+        placed_n[best] += 1
+        out[sid] = {"acct": best, "reason": reason, "eta_s": None, "weight": w}
+    print(json.dumps(out, sort_keys=True))
+    return 0
+
+
 # ── the DISPATCH floor (2026-09-27): demote, never exclude ──────────────────────────────────────
 # `handoff-fire.sh --account auto` takes `--rank general | head -1`, and on 2026-09-26 that put a
 # code-writing fire on next4 at weekly 96-99 %; it hit the weekly limit before closing. The only
