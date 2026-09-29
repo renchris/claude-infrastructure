@@ -144,6 +144,28 @@ class Exits(unittest.TestCase):
         self.assertEqual((r.phase, r.substate, r.attempt), ("PRE-MOVE", "DETECTED", 2))
         self.assertEqual((r.close["hop"], r.close["hops"]), ("limit", 1))
 
+    def test_an_auth_hop_round_trips_through_undo(self):
+        """W5 rig r2 target-auth: an auth hop must stay reversible until its attempt confirms."""
+        r = rec(phase="TARGET-AUTH", sub=None)
+        r.source_acct, r.target_cfg, r.assign_id = "next", "/c2", r.record_id
+        r.confirm_len, r.timeline.confirmed = 3724, 50.0
+        before = json.dumps(T.to_dict(r.timeline), sort_keys=True)
+        settle.new_attempt(r, None, "auth", 100.0)
+        r.target_acct = "next4"  # re-placed
+        self.assertTrue(settle.undo_hop(r))
+        self.assertEqual(
+            (r.target_acct, r.target_cfg, r.source_acct), ("next2", "/c2", "next")
+        )
+        self.assertEqual((r.confirm_len, r.timeline.confirmed), (3724, 50.0))
+        self.assertEqual(json.dumps(T.to_dict(r.timeline), sort_keys=True), before)
+        self.assertEqual((r.phase, r.attempt), ("TARGET-AUTH", 2))
+        self.assertFalse(settle.undo_hop(r))  # once
+        # a limit hop stashes nothing, so there is nothing to undo
+        r2 = rec(phase="TARGET-LIMITED", sub=None)
+        settle.new_attempt(r2, None, "limit", 100.0)
+        self.assertNotIn("pre_hop", r2.close)
+        self.assertFalse(settle.undo_hop(r2))
+
     def test_a_wait_is_not_retried_before_its_eligibility_time(self):
         r = rec()
         r.kind = "idle"

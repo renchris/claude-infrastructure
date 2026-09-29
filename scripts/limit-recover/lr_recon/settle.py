@@ -395,7 +395,29 @@ def new_attempt(
     rec: T.Record, holder: Optional[T.HolderObs], why: str, now: float
 ) -> None:
     """§4.2 rows 2-3: the session is live on the target and failed there — a NEW move FROM that
-    target (architecture §5 Pinning). The old target becomes the source; the target is re-placed."""
+    target (architecture §5 Pinning). The old target becomes the source; the target is re-placed.
+
+    An auth hop stays reversible until its new attempt confirms: the auth fact may yet be
+    contradicted (W5 rig r2 target-auth: another session served on it ~1.3 s after the hop, and A
+    refused the dead evidence to ESCALATED). So its pre-hop fields are stashed FIRST, before any is
+    cleared; undo_hop restores them."""
+    if why == "auth":
+        rec.close["pre_hop"] = {
+            "source": [
+                rec.source_acct,
+                rec.source_cfg,
+                rec.source_pid,
+                rec.source_lstart,
+            ],
+            "target": [rec.target_acct, rec.target_cfg],
+            "assign_id": rec.assign_id,
+            "submit_token": rec.submit_token,
+            "confirm_len": rec.confirm_len,
+            "bundle": rec.bundle,
+            "timeline": T.to_dict(rec.timeline),
+        }
+    else:
+        rec.close.pop("pre_hop", None)  # never undo into an older hop's world
     if holder is not None:
         rec.source_pid, rec.source_lstart = holder.pid, holder.lstart
     rec.source_acct, rec.source_cfg = rec.target_acct, rec.target_cfg
@@ -410,6 +432,29 @@ def new_attempt(
     rec.phase, rec.substate, rec.wait = "PRE-MOVE", "DETECTED", None
     rec.close["hop"] = why
     rec.close["hops"] = int(rec.close.get("hops", 0)) + 1
+
+
+def undo_hop(rec: T.Record) -> bool:
+    """An auth hop whose SOURCE auth fact was contradicted before the new attempt confirmed: the
+    account serves, so put the pre-hop move back and re-engage in place (the TARGET-AUTH guard's
+    C-retry). The attempt stays bumped: the hop's A may already have spawned under it."""
+    pre = rec.close.get("pre_hop")
+    if not isinstance(pre, dict) or rec.timeline.confirmed is not None:
+        return False
+    rec.close.pop("pre_hop")
+    rec.close.pop("hop", None)
+    rec.source_acct, rec.source_cfg, rec.source_pid, rec.source_lstart = pre["source"]
+    rec.target_acct, rec.target_cfg = pre["target"]
+    rec.assign_id, rec.submit_token = pre["assign_id"], pre["submit_token"]
+    rec.confirm_len, rec.bundle = pre["confirm_len"], pre["bundle"]
+    rec.timeline = T.from_dict(T.Timeline, pre["timeline"])
+    rec.phase, rec.substate, rec.wait, rec.next_eligible_at = (
+        "TARGET-AUTH",
+        None,
+        None,
+        None,
+    )
+    return True
 
 
 def target_holder(rec: T.Record, snap: T.Snapshot) -> Optional[T.HolderObs]:

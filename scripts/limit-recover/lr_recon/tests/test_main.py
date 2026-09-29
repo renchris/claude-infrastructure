@@ -305,6 +305,56 @@ class MainTests(unittest.TestCase):
             (rec.attempt, ctx.actions[rec.sid]), (2, "plan")
         )  # CONTROL: hops
 
+    def _unhop_pass(self, rec, ctx, facts):
+        import time
+
+        now = time.time()
+        out = {
+            "result": T.PhaseResult(phase="PRE-MOVE", action="plan"),
+            "evidence": T.Evidence(),
+        }
+        with (
+            mock.patch.object(M.evidence, "derive", return_value=out),
+            mock.patch.object(plan, "unassign", return_value=0) as un,
+        ):
+            M._derive(ctx, _snap(now, self.tmp), now, facts)
+        return un
+
+    def test_an_auth_hop_contradicted_before_confirm_is_undone(self):
+        """W5 rig r2 target-auth: the hop fired on a clean auth fact; ~1.3 s later another session
+        served on that account (contradicted), and A refused the dead evidence to ESCALATED."""
+        rec, ctx = self._hop_pass(
+            "TARGET-AUTH", {"next3.auth": T.Fact("next3", "auth")}
+        )
+        self.assertEqual(
+            (rec.attempt, rec.source_acct, rec.close.get("hop")), (2, "next3", "auth")
+        )
+        rec.target_acct, rec.assign_id = "next4", "r1"  # the hop was placed on next4
+        rec.escalated = True
+        bad = T.Fact(acct="next3", scope="auth", contradicted=True)
+        un = self._unhop_pass(rec, ctx, {"next3.auth": bad})
+        self.assertEqual(ctx.actions[rec.sid], "C-retry")
+        self.assertEqual((rec.target_acct, rec.phase), ("next3", "TARGET-AUTH"))
+        self.assertNotIn("hop", rec.close)
+        self.assertFalse(rec.escalated)
+        un.assert_called_once_with("r1")
+        self.assertIn("unhop", [e["ev"] for e in self._events()])
+
+    def test_a_confirmed_auth_hop_is_not_undone(self):
+        """CONTROL: once the new attempt confirmed, the hop is committed."""
+        import time
+
+        rec, ctx = self._hop_pass(
+            "TARGET-AUTH", {"next3.auth": T.Fact("next3", "auth")}
+        )
+        rec.target_acct = "next4"
+        rec.timeline.confirmed = time.time()
+        bad = T.Fact(acct="next3", scope="auth", contradicted=True)
+        un = self._unhop_pass(rec, ctx, {"next3.auth": bad})
+        self.assertNotEqual(ctx.actions[rec.sid], "C-retry")
+        self.assertEqual((rec.close.get("hop"), rec.target_acct), ("auth", "next4"))
+        un.assert_not_called()
+
     def test_no_hop_while_the_previous_moves_watcher_lives(self):
         """W5 rig target-limited: the hop ran under the old watcher's pane lock and STRANDED."""
         rec, ctx = self._hop_pass("TARGET-LIMITED", live_watcher=True)

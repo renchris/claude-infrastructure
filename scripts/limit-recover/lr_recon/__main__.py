@@ -348,6 +348,32 @@ def _derive(
         ):  # this pass entered the relaunch gap: owned, not orphaned
             _event(ctx.paths, "in-flight", rec.sid, rec.record_id, "relaunch gap")
         # after the substate write: a hop turns this record into a fresh PRE-MOVE/DETECTED
+        src_auth = (facts or {}).get("%s.auth" % rec.source_acct)
+        if (
+            rec.close.get("hop") == "auth"
+            and res.phase == "PRE-MOVE"
+            and src_auth is not None
+            and src_auth.contradicted
+            and not act.live_procs(rec, snap)
+        ):
+            # the auth hop fired on a fact another session contradicted before this attempt
+            # confirmed: the account serves, so undo the hop and re-engage in place (W5 rig r2
+            # target-auth: A refused the dead evidence to ESCALATED)
+            hop_assign = rec.assign_id or rec.record_id
+            if settle.undo_hop(rec):
+                plan.unassign(hop_assign)  # free the seat the hop was placed on
+                if rec.escalated:
+                    classify.rearm(rec, now)
+                ctx.actions[rec.sid] = "C-retry"
+                _event(
+                    ctx.paths,
+                    "unhop",
+                    rec.sid,
+                    rec.record_id,
+                    "auth on %s contradicted before the move confirmed: re-engage in place"
+                    % rec.target_acct,
+                )
+                continue
         auth = (facts or {}).get("%s.auth" % rec.target_acct)
         if res.phase == "TARGET-AUTH" and auth is not None and auth.contradicted:
             # another session served a healthy turn on that account since: it is proven to serve,
