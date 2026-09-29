@@ -42,6 +42,15 @@ Execution locus: L (lead-inline) — one hook edit, one trailer edit, one shared
 
 ## Status
 
-- [ ] lib + drain + trailer
-- [ ] bats red on pre-fix, green after
+- [x] lib + drain + trailer — 512679a5e
+- [x] bats red on pre-fix, green after — tests/mailbox-drain.bats 1..67 (0 failed),
+  tests/notify-back.bats 1..18 (0 failed). On the pre-fix drain, 5 of the 7 new drain cases fail
+  (progress, mid-status DONE, decision/blocker, cloud unverified/refused, lib absent); the two
+  positive cases (DONE returns, progress+DONE in one batch) pass both ways by design. The trailer
+  case fails on the pre-fix trailer. Adjacent suites green: cc-custody 1..15, mailbox-emit-then-commit
+  1..10, cc-cloud 1..51, cloud-retire-terminal 1..15.
 - [ ] /ship, content-verify, converge
+
+Learning: the first lib-absent case passed on pre-fix code — `seed` rewrote the inbox and the
+`.seen` line offset made the second ping look already read. Use `add` for a second delivery, and
+assert the ping was delivered before asserting it did not discharge.
