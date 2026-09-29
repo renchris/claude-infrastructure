@@ -569,11 +569,6 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
       # sources). Subdirs (lib/cc-upgrade-gate/) are NOT globbed and must not be demanded.
       lib/*/*)                   want=0 ;;
       lib/*.sh|lib/*.zsh)        want=1; cls='lib/*.{sh,zsh}' ;;
-      # install.sh links the lr_recon package per file (FLEET_V2 W3): its *.py and tests/*.py are
-      # demanded, and nothing else under limit-recover/*/ is. Must precede the */* catch-all.
-      # A case `*` also matches `/`, so this one pattern covers lr_recon/tests/*.py too.
-      scripts/limit-recover/lr_recon/*.py)
-                                 want=1; cls='scripts/limit-recover/lr_recon/{,tests/}*.py' ;;
       scripts/limit-recover/*/*) want=0 ;;
       scripts/limit-recover/*)   want=1; cls='scripts/limit-recover/*' ;;
       # scripts/lib/*.sh is its own install.sh loop (:475) and must precede the scripts/*/* catch-all

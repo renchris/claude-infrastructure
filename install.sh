@@ -827,22 +827,6 @@ if [[ -d "$REPO_DIR/scripts/limit-recover" ]]; then
       copy_file "$f" "$CONFIG_DIR/scripts/limit-recover/$(basename "$f")"
     fi
   done
-  # The lr_recon python package (FLEET_V2 W3). The loop above takes regular files only, so the
-  # package directory was skipped and com.reso.lr-reconciler's `cd …/limit-recover && python3 -m
-  # lr_recon` had nothing to import. Per-file links into REAL dirs, like everything else here, so
-  # python's __pycache__ lands in the live tree and never in the shared checkout.
-  for d in lr_recon lr_recon/tests; do
-    [[ -d "$REPO_DIR/scripts/limit-recover/$d" ]] || continue
-    ensure_real_dir "$CONFIG_DIR/scripts/limit-recover/$d"
-    for f in "$REPO_DIR"/scripts/limit-recover/"$d"/*.py; do
-      [[ -f "$f" ]] || continue
-      if $IS_GLOBAL; then
-        link_file "$f" "$CONFIG_DIR/scripts/limit-recover/$d/$(basename "$f")"
-      else
-        copy_file "$f" "$CONFIG_DIR/scripts/limit-recover/$d/$(basename "$f")"
-      fi
-    done
-  done
 fi
 
 # Convenience symlink (global only)

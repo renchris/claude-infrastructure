@@ -253,21 +253,6 @@ _track() { git -C "$CC_PARITY_REPO" add -A >/dev/null 2>&1; }   # ls-files reads
   done
 }
 
-@test "existence: the lr_recon package is demanded per .py file, like install.sh links it" {
-  _livefix
-  mkdir -p "$CC_PARITY_REPO/scripts/limit-recover/lr_recon/tests"
-  printf 'x\n' > "$CC_PARITY_REPO/scripts/limit-recover/lr_recon/types.py"
-  printf 'x\n' > "$CC_PARITY_REPO/scripts/limit-recover/lr_recon/tests/test_types.py"
-  printf 'x\n' > "$CC_PARITY_REPO/scripts/limit-recover/lr_recon/README.txt"   # not linked
-  _track
-  run "$ASSERT"
-  [ "$status" -eq 1 ]
-  [ "$(printf '%s\n' "$output" | grep -c '^MISSING: ln -sf')" -eq 2 ]
-  [[ "$output" == *"lr_recon/types.py"* ]] || false
-  [[ "$output" == *"lr_recon/tests/test_types.py"* ]] || false
-  [[ "$output" != *"README.txt"* ]] || false
-}
-
 # CORRECTED 2026-08-10 (P6). This case used to seed `lib/thing.sh` with the comment "top-level lib/
 # — install.sh has NO lib leg", and to require exit 0 over it. That was true when written and became
 # FALSE at 931641a4, which added install.sh:360 `for zlib in "$REPO_DIR"/lib/*.zsh
