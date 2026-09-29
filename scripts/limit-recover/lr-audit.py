@@ -204,9 +204,7 @@ def _iso_from_epoch(epoch):
     if epoch is None:
         return None
     return (
-        datetime.fromtimestamp(epoch, timezone.utc)
-        .isoformat()
-        .replace("+00:00", "Z")
+        datetime.fromtimestamp(epoch, timezone.utc).isoformat().replace("+00:00", "Z")
     )
 
 
@@ -227,7 +225,7 @@ def _audit_kind(v):
         # hiding it in the non-limit bucket is the `other_api_error` fold this wave removes.
         return "limit"
     if cap.startswith(_LP.MODEL_SCOPED_PREFIX):
-        return cap[len(_LP.MODEL_SCOPED_PREFIX):].lower()
+        return cap[len(_LP.MODEL_SCOPED_PREFIX) :].lower()
     return _AUDIT_KIND.get(cap, cap)
 
 
@@ -509,13 +507,10 @@ def lead_state(sid, lead, lr_lib=None):
     turn_open = bool(lead.get("turn_open"))
     if pids:
         state = LEAD_INFLIGHT if turn_open else LEAD_IDLE
-        ev = (
-            f"pid(s) {sorted(pids)} alive; "
-            + (
-                "no turn end after the last prompt"
-                if turn_open
-                else "turn end present after the last prompt"
-            )
+        ev = f"pid(s) {sorted(pids)} alive; " + (
+            "no turn end after the last prompt"
+            if turn_open
+            else "turn end present after the last prompt"
         )
     elif arms["reg_ok"] and arms["argv_ok"]:
         state = LEAD_DEAD
@@ -805,6 +800,149 @@ def scan_lead_transcript(path):
     return out
 
 
+# ── W4-wf: predict what a plain resumeFromRunId would RE-SPEND ───────────────
+# A resume replays "the longest unchanged prefix of agent() calls" (the Workflow
+# tool reference); the first call that differs at its call index, and every call
+# after it, runs live. Two things end that prefix early:
+#   1. an unfinished (dangling) call — a failed or null slot is never cached;
+#   2. a call whose INDEX shifts. Measured on wf_efe43f63-ce7 (session 7c395da7,
+#      2026-09-28, docs/research/lr-recon-w0-2026-09-29 § 8): the 608 verify calls
+#      were issued in find-agent COMPLETION order (a pipeline); the resume replayed
+#      the 8 cached finds at once and re-issued the verifies in find INDEX order
+#      (find 0's first verify, originally call 459, came first). Only the 8 finds
+#      hit the cache; 13 agents re-spawned before a TaskStop and 595 were queued
+#      to miss — although all 13 dangling slots were the LAST 13 calls.
+# Detection reads the run summary's own call timing (workflowProgress[].index,
+# queuedAt/startedAt = issue, startedAt+durationMs = end). Calls issued within
+# RESUME_BURST_MS of each other are one BURST (a synchronous map/parallel). A burst
+# issued while earlier calls are still in flight was RELEASED by a completion, so
+# its position follows completion timing. Two or more released bursts in one busy
+# window (no quiescent point between them) can come back in another order, and the
+# prediction CONSERVATIVELY ends the prefix at the first of them: the downstream
+# issue lags its trigger by up to seconds, so matching each burst to the completion
+# that released it is not reliable enough to certify an unchanged order. A single
+# released burst, a barrier stage, a sequential chain and a queued parallel map are
+# all index-stable. Kill switch: LR_AUDIT_RESUME_PREDICT=off.
+RESUME_BURST_MS = 50
+
+
+def predict_resume_respend(summary, completed_ids=()):
+    if (os.environ.get("LR_AUDIT_RESUME_PREDICT") or "").lower() in ("off", "0"):
+        return {"available": False, "reason": "LR_AUDIT_RESUME_PREDICT=off"}
+    calls = []
+    for e in summary.get("workflowProgress") or []:
+        if not isinstance(e, dict) or e.get("type") != "workflow_agent":
+            continue
+        idx, st = e.get("index"), e.get("startedAt")
+        issue = e.get("queuedAt") if e.get("queuedAt") is not None else st
+        if not isinstance(idx, int) or not isinstance(issue, (int, float)):
+            return {
+                "available": False,
+                "reason": "a workflowProgress call has no index or issue time",
+            }
+        if isinstance(st, (int, float)) and isinstance(
+            e.get("durationMs"), (int, float)
+        ):
+            end = st + e["durationMs"]
+        elif e.get("state") in ("done", "error"):
+            end = e.get("lastProgressAt") or st
+        else:
+            end = None  # never finished: in flight for the rest of the run
+        calls.append(
+            {
+                "index": idx,
+                "issue": issue,
+                "end": end,
+                "done": e.get("state") == "done" or e.get("agentId") in completed_ids,
+                "stage": str(e.get("label") or "?").split(":", 1)[0],
+            }
+        )
+    if not calls:
+        return {"available": False, "reason": "the run summary records no call order"}
+    calls.sort(key=lambda c: c["index"])
+
+    bursts = []
+    for c in calls:
+        if bursts and c["issue"] - bursts[-1][-1]["issue"] <= RESUME_BURST_MS:
+            bursts[-1].append(c)
+        else:
+            bursts.append([c])
+    windows, prior = [], []
+    for bi, b in enumerate(bursts):
+        t = b[0]["issue"]
+        busy = any(c["end"] is None or c["end"] > t + RESUME_BURST_MS for c in prior)
+        if bi == 0 or not busy:
+            windows.append([])
+        else:
+            windows[-1].append(bi)
+        prior.extend(b)
+    pos = {c["index"]: p for p, c in enumerate(calls)}
+    shift_pos, released = None, 0
+    for w in windows:
+        if len(w) >= 2:
+            shift_pos, released = pos[bursts[w[0]][0]["index"]], len(w)
+            break
+    dangling_pos = next((p for p, c in enumerate(calls) if not c["done"]), None)
+    cuts = [p for p in (shift_pos, dangling_pos) if p is not None]
+    cut = min(cuts) if cuts else None
+    respent = [c for c in calls[cut:] if c["done"]] if cut is not None else []
+    by_stage = {}
+    for c in respent:
+        by_stage[c["stage"]] = by_stage.get(c["stage"], 0) + 1
+    return {
+        "available": True,
+        "calls": len(calls),
+        "completed": sum(1 for c in calls if c["done"]),
+        "unfinished": sum(1 for c in calls if not c["done"]),
+        "cache_hits": cut if cut is not None else len(calls),
+        "predicted_respend": len(respent),
+        "respend_by_stage": by_stage,
+        "prefix_ends_at_index": calls[cut]["index"] if cut is not None else None,
+        "cause": None
+        if cut is None
+        else ("completion-order" if cut == shift_pos else "dangling"),
+        "order_shift_index": calls[shift_pos]["index"]
+        if shift_pos is not None
+        else None,
+        "released_bursts": released,
+        "first_unfinished_index": calls[dangling_pos]["index"]
+        if dangling_pos is not None
+        else None,
+    }
+
+
+def continuation_action(runid, p):
+    """Run-level action when a plain resume is predicted to re-spend > 0 slots."""
+    stages = ", ".join(f"{k} {v}" for k, v in sorted(p["respend_by_stage"].items()))
+    if p["cause"] == "completion-order":
+        why = (
+            f"from call #{p['order_shift_index']} on, calls were issued in upstream "
+            f"COMPLETION order ({p['released_bursts']} bursts released by completions "
+            "while other calls were in flight: the pipeline/as-completed pattern), and "
+            "a resume re-issues them in upstream INDEX order (measured on "
+            "wf_efe43f63-ce7), so their call indices shift and the cache prefix ends "
+            "there. This is conservative: any two such bursts in one busy window are "
+            "assumed to reorder"
+        )
+    else:
+        why = (
+            f"the first unfinished call is #{p['first_unfinished_index']}, and a resume "
+            "replays only the unchanged prefix of calls, so every completed call after "
+            "it re-runs"
+        )
+    return (
+        "SALVAGE-SEEDED CONTINUATION — do NOT resume. A plain Workflow({scriptPath, "
+        f"resumeFromRunId: {runid}}}) is predicted to RE-SPEND {p['predicted_respend']} "
+        f"of {p['completed']} completed slot(s) ({stages}); only the first "
+        f"{p['cache_hits']} call(s) would hit the cache. Why: {why}. Instead write a "
+        f"continuation script that runs ONLY the {p['unfinished']} unfinished slot(s) "
+        "and what depends on them, seeded with the completed slots' results "
+        f"(salvage/{runid}/slots.json, or the `result` events in the run's "
+        "journal.jsonl) through files the agents read, not through args; run it as a "
+        "fresh Workflow; re-audit after"
+    )
+
+
 def audit_workflow_run(run_summary_path, session_dir, lead):
     run = {"summary_path": run_summary_path, "slots": [], "problems": []}
     try:
@@ -866,6 +1004,7 @@ def audit_workflow_run(run_summary_path, session_dir, lead):
     else:
         run["problems"].append("journal.jsonl missing")
     run["journal_failed"] = journal_failed
+    run["resume_prediction"] = predict_resume_respend(summary, set(results))
 
     # The run's own terminal error, quoted and never parsed for keywords. This is
     # the STRUCTURAL discriminator between a watchdog stall and a human Ctrl-C:
@@ -990,9 +1129,7 @@ def audit_workflow_run(run_summary_path, session_dir, lead):
                 # "interrupted (TaskStop / user)" — and leaving that line in place
                 # next to the correction hands the reader both stories at once,
                 # with the wrong one naming a person.
-                evid = [
-                    e for e in evid if not e.startswith("interrupted (TaskStop")
-                ]
+                evid = [e for e in evid if not e.startswith("interrupted (TaskStop")]
                 evid.append(
                     "the harness exhausted its OWN retries under this key and the "
                     "run carries a terminal error — this is a watchdog stall, not a "
@@ -1110,7 +1247,9 @@ def audit_bare_subagents(session_dir, lead):
                 f"(carrier={notif.get('carrier')})"
             ]
         # ── D1: inherit the lead's process state ─────────────────────────────
-        verdict, evid = inherit_lead_state(verdict, evid, settled, lead.get("lead_state"))
+        verdict, evid = inherit_lead_state(
+            verdict, evid, settled, lead.get("lead_state")
+        )
         out.append(
             {
                 "agentId": aid,
@@ -1480,8 +1619,7 @@ def member_verdict(st, deliverables, git_ev, now_utc, member_state=None):
         return "RUNNING", evid
     if ms == "UNKNOWN":
         evid.append(
-            "member liveness UNDETERMINED — "
-            f"{(member_state or {}).get('evidence')}"
+            f"member liveness UNDETERMINED — {(member_state or {}).get('evidence')}"
         )
         return "UNVERIFIABLE", evid
     if ms == LEAD_DEAD:
@@ -1860,6 +1998,20 @@ def render_md(doc):
                 f"| {'yes' if r['delivered_to_lead'] else 'NO'} | `{r.get('scriptPath') or '?'}` |"
             )
         for r in doc["workflows"]:
+            p = r.get("resume_prediction") or {}
+            if r["run_verdict"] not in ("TAINTED_COMPLETE", "INCOMPLETE"):
+                continue
+            if not p.get("available"):
+                L.append(
+                    f"- {r['runId']} resume re-spend: UNPREDICTED ({p.get('reason')})"
+                )
+                continue
+            L.append(
+                f"- {r['runId']} resume re-spend: a plain resumeFromRunId would re-run "
+                f"**{p['predicted_respend']}** of {p['completed']} completed slot(s) "
+                f"(cache hits {p['cache_hits']}, cause {p['cause'] or 'none'})"
+            )
+        for r in doc["workflows"]:
             bad = [s for s in r["slots"] if s["verdict"] != "COMPLETE"]
             if not bad:
                 continue
@@ -2167,19 +2319,31 @@ def main():
                     "action": ACTION[r["run_verdict"]],
                 }
             )
+        pred = r.get("resume_prediction") or {}
+        # W4-wf: a resume predicted to re-spend finished slots is never offered;
+        # the run row names the count and prescribes the salvage-seeded continuation.
+        respends = bool(pred.get("available") and pred.get("predicted_respend"))
         if r["run_verdict"] in ("TAINTED_COMPLETE", "INCOMPLETE"):
             act = ACTION[r["run_verdict"]]
+            if respends:
+                act = continuation_action(r["runId"], pred)
             # A run holding STALLED slots must not offer a BARE resume at the run
             # level: that is the same blind re-fire the stall policy exists to
             # gate, one level up, and a reader following the run row would never
-            # see the slot row's guard.
+            # see the slot row's guard. The gate outranks the W4-wf prediction:
+            # it decides WHETHER to re-fire, the prediction only HOW.
             if r["slot_counts"].get("STALLED"):
                 act = (
-                    "GATED RESUME — this run holds "
+                    ("GATED CONTINUATION" if respends else "GATED RESUME")
+                    + " — this run holds "
                     f"{r['slot_counts']['STALLED']} STALLED slot(s). "
                     + ACTION["STALLED"]
-                    + " Only then resume via Workflow({scriptPath, resumeFromRunId}); "
-                    "re-audit after"
+                    + (
+                        " Only then: " + continuation_action(r["runId"], pred)
+                        if respends
+                        else " Only then resume via Workflow({scriptPath, "
+                        "resumeFromRunId}); re-audit after"
+                    )
                 )
             gap_units.append(
                 {
@@ -2206,11 +2370,18 @@ def main():
                 unit = f"{r['runId']}/{s.get('agentId')}"
                 if (s.get("attempts") or 1) > 1:
                     unit += f" [{s['attempts']} attempts, one journal key]"
+                sact = ACTION.get(s["verdict"], "?")
+                if respends and s["verdict"] in GAP_VERDICTS:
+                    sact += (
+                        f" — re-run it through the run row's SALVAGE-SEEDED "
+                        f"CONTINUATION, not a resume (a resume re-spends "
+                        f"{pred['predicted_respend']} completed slot(s))"
+                    )
                 gap_units.append(
                     {
                         "unit": unit,
                         "verdict": s["verdict"],
-                        "action": ACTION.get(s["verdict"], "?"),
+                        "action": sact,
                     }
                 )
     for s in subagents:

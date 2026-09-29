@@ -356,6 +356,15 @@ key five times into a live outage — 85 minutes, six attempts, nothing produced
      the rest of the run. Companion trap, same mechanism: inside ONE run an identical
      `(prompt, opts)` call is deduplicated by its key, so a script-level retry wrapper that
      re-issues the same request never actually runs — give the retry attempt a distinct `label`.
+   - 🚨 **The audit now computes the prefix for you, including the case the dangling position
+     cannot show** (W4-wf, 2026-09-29). A stage issued in upstream COMPLETION order (`pipeline`)
+     is re-issued by a resume in upstream INDEX order, so its call indices shift and every
+     completed slot from there on re-runs, even when every dangling slot is LAST (measured:
+     `wf_efe43f63-ce7`, 8 cache hits and 595 queued misses). When a run row reads
+     **`SALVAGE-SEEDED CONTINUATION — do NOT resume`** (or `GATED CONTINUATION` behind a stall),
+     it names the predicted re-spend count: skip the resume and go straight to step 5's
+     continuation. Only a run row that still reads `resume via Workflow(...)` predicts zero
+     re-spend. Kill switch `LR_AUDIT_RESUME_PREDICT=off`.
    - Then: ledger-append, `Workflow({scriptPath: <audit's scriptPath>, resumeFromRunId: <runId>,
      args: <original args from audit's lead.workflow_calls>})`. Results journaled BEFORE the first
      dangling call replay free; that call and everything after it re-run (prefix rule above). If

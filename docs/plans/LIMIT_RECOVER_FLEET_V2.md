@@ -130,6 +130,7 @@ Every teammate brief follows the agent-teams pre-spawn checklist:
 - `LR_HEAL_CORE_BARE=off` (default, until the operator rules).
 - `CC_RECYCLE_BGWORK_ANSWER` is forced to `cancel` for reconciler actuations.
 - `LR_RECR_SCHEDULE` (default `10,25,40` until W0 measures).
+- `LR_AUDIT_RESUME_PREDICT=off` (W4-wf; default on): lr-audit stops predicting Workflow resume re-spend and offers the old plain resume.
 
 ### Operator steps (filed with `cc-backlog needs`, one command each)
 1. **W5:** load the rig job, then the real reconciler and watchdog jobs: `bash /tmp/lr-recon-launchd.sh --confirm lr-reconciler`. The script runs `plutil -lint`, installs the plists from their repo SSOT, runs `launchctl bootstrap gui/$UID`, and verifies with `launchctl print` plus a fresh heartbeat read.
@@ -466,3 +467,7 @@ Dynamic Workflow wf_99ea9654-29f (22 agents, 0 errors: 8 subsystem maps, 4 desig
   - **HOLD-BGWORK:** 6 of 20 live panes hold only a `cc-await-ping` shell.
 
   No blockers.
+- 2026-09-29, **W4-wf done** (session fire-w4wf, lead-inline; the landed sha is in the lead's ping). `lr-audit.py` now predicts, per Workflow run, how many completed slots a plain `resumeFromRunId` would re-spend (`resume_prediction` in audit.json, one line in audit.md). When the count is > 0, the run's gap row reads `SALVAGE-SEEDED CONTINUATION — do NOT resume`, with the count, the cache hits, the cause and the salvage path. The unfinished slots' rows point at it, and a STALLED run reads `GATED CONTINUATION`, with the stall gate first. The text reaches the successor through `audit.md`'s gap ledger, which ingest reads, so `lr-handoff.sh` is untouched. Kill switch `LR_AUDIT_RESUME_PREDICT=off`. Tests: `tests/lr-audit-workflow-prefix.bats`, with the new timing fixture `tests/fixtures/lr-recon/workflow-prefix-7c395da7-calls.json`. It predicts 625 of 633 completed slots re-spent for 7c395da7 (608 verify), behind exactly the 8 measured index-stable hits. Learnings:
+  - **The open question is settled by measurement.** The resume re-issues a completion-ordered stage in upstream INDEX order. In `wf_efe43f63-ce7`, find 0's first verify had been call 459, because find 0 finished 7th, and it became call 9 on the resume. A resume replays only the unchanged prefix of calls (the Workflow tool reference), so the prefix ends at the first reordered call.
+  - **Detection keys on call timing, not labels.** It reads `workflowProgress[].index`, `queuedAt`/`startedAt` and `durationMs`. A burst issued while earlier calls are still in flight was released by a completion, and two or more such bursts in one busy window are assumed to reorder. The rule is conservative on purpose: the downstream issue lags its trigger by up to seconds, so matching each burst to the completion that released it misassigned triggers on the real run. On the last ~30 real runs, pipelines break at their first reordered stage, and barrier, sequential and queued-parallel runs predict 0.
+  - **Residual:** a run summary with no `workflowProgress` gets `UNPREDICTED` and keeps the plain resume text.
