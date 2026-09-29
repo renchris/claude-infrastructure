@@ -740,6 +740,52 @@ run_claim_handoff() { # $1=sid $2=the dispatch's output file
   log "RUN-CLAIM-RELEASED $1 — the dispatch named no driver pid${dp:+ (or the claim was no longer ours)}, so the claim guards nothing and is released"
   run_claim_release "$1"
 }
+# rq_stale_reason <sid> <transcript_path> → rc 0 + a reason on stdout when the request is STALE;
+# rc 1 (nothing printed) when the session is still a limited, movable, non-teammate session.
+rq_stale_reason() {
+  local sid="$1" tp="$2" cfg to="" kind="" c f
+  # The hook always writes .transcript_path; an older or hand-written request may not, so look the
+  # sid up across the account stores before calling it unconfirmable.
+  if [[ -z "$tp" ]] && command -v lr_config_dirs >/dev/null 2>&1; then
+    while IFS= read -r c; do
+      for f in "$c"/projects/*/"$sid".jsonl "$c"/projects/*/"$sid".jsonl.handed-off; do
+        [[ -e "$f" ]] && { tp="${f%.handed-off}"; break 2; }
+      done
+    done < <(lr_config_dirs 2>/dev/null)
+  fi
+  [[ -n "$tp" ]] || { echo "no transcript for this sid in any account store, so nothing on disk can confirm it"; return 0; }
+  cfg="${tp%%/projects/*}"
+  if [[ -e "$tp.handed-off" ]]; then echo "transplanted — the source transcript is tombstoned"; return 0; fi
+  if command -v lr_transplant_target >/dev/null 2>&1 && to="$(lr_transplant_target "$sid" "$cfg" 2>/dev/null)"; then
+    echo "transplanted to ${to:-another store}"; return 0
+  fi
+  [[ -f "$tp" ]] || { echo "the transcript is gone from $cfg"; return 0; }
+  if head -c 8192 "$tp" 2>/dev/null | grep '"agentName"' >/dev/null; then echo "a teammate — lead-owned, never a recovery target"; return 0; fi
+  command -v lr_last_api_error >/dev/null 2>&1 || { echo "lr-lib.sh is unreachable, so LIMITED cannot be confirmed"; return 0; }
+  IFS=$'\t' read -r _ _ kind _ <<<"$(lr_last_api_error "$tp" 2>/dev/null || true)"
+  [[ "$kind" == limit ]] || { echo "no longer LIMITED — its last assistant record is ${kind:+a $kind error}${kind:-not an api error} (recovered, resumed or working)"; return 0; }
+  return 1
+}
+rq_retire() { # $1=file $2=name $3=sid $4=requested_by $5=reason — files the request, acts on nothing
+  jq -n --arg sid "$3" --arg ts "$(date -u +%FT%TZ)" --arg by "$4" --arg why "$5" \
+    '{sid:$sid, rc:0, ts:$ts, requested_by:$by, mode:"relaunch", verdict:"retired", reason:$why}' \
+    > "$RESULTS/$3.json" 2>/dev/null || true
+  mv "$1" "$RESULTS/${2%.json}.retired.json" 2>/dev/null || rm -f "$1"
+  log "REQUEST-RETIRED $3 — $5; nothing was done"
+}
+# The hook lane's retry budget. A dispatched request STAYS in the queue until the session is seen
+# recovered (it then retires above as transplanted / no longer LIMITED), so a driver that dies after
+# a clean dispatch is retried instead of being consumed — the 2026-09-19 status-log defect: "a
+# consumed request that failed looks identical to one never filed". Bounded: at most
+# LR_REQUEST_MAX_ATTEMPTS dispatches, LR_REQUEST_RETRY_MIN apart, then filed as exhausted.
+RQ_MAX_ATTEMPTS="${LR_REQUEST_MAX_ATTEMPTS:-3}"; [[ "$RQ_MAX_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] || RQ_MAX_ATTEMPTS=3
+RQ_RETRY_MIN="${LR_REQUEST_RETRY_MIN:-10}"; [[ "$RQ_RETRY_MIN" =~ ^[0-9]+$ ]] || RQ_RETRY_MIN=10
+rq_record_attempt() { # $1=file $2=verdict — bumps .attempts and stamps the attempt, atomically
+  local t="$1.tmp.$$"
+  jq --arg v "$2" --argjson now "$(date +%s)" \
+     '.attempts = ((.attempts // 0) + 1) | .last_attempt_epoch = $now | .last_verdict = $v' "$1" > "$t" 2>/dev/null \
+    && mv -f "$t" "$1" 2>/dev/null || { rm -f "$t" 2>/dev/null; log "REQUEST-WARN could not record the attempt on $1"; }
+}
 _rq_held=0; _rq_held_sids=""
 for _rq in "$REQUESTS"/*.json; do
   [[ -e "$_rq" ]] || continue
@@ -756,14 +802,33 @@ import json,sys
 d=json.load(open(sys.argv[1]))
 if not isinstance(d,dict): raise SystemExit(1)
 sys.stdout.write("".join(str(d.get(k) or "")+"\0"
-  for k in ("sid","kind","mode","target","source_pane","requested_by","prompt_file")))
+  for k in ("sid","kind","mode","target","source_pane","requested_by","prompt_file",
+            "transcript_path","attempts","last_attempt_epoch")))
 ' "$_rq" 2>/dev/null)
-  if (( ${#_rqf[@]} != 7 )) || [[ -z "${_rqf[0]}" ]]; then
+  if (( ${#_rqf[@]} != 10 )) || [[ -z "${_rqf[0]}" ]]; then
     log "REQUEST-SKIP $_rq_name — unreadable or no sid; parked as malformed"
     mv "$_rq" "$RESULTS/${_rq_name%.json}.malformed.json" 2>/dev/null || true; continue
   fi
   _rq_sid="${_rqf[0]}"; _rq_kind="${_rqf[1]}"; _rq_mode="${_rqf[2]}"; _rq_target="${_rqf[3]}"
   _rq_pane="${_rqf[4]}"; _rq_by="${_rqf[5]}"; _rq_pfile="${_rqf[6]}"
+  _rq_tp="${_rqf[7]}"; _rq_att="${_rqf[8]}"; _rq_last="${_rqf[9]}"
+  [[ "$_rq_att" =~ ^[0-9]+$ ]] || _rq_att=0
+  [[ "$_rq_last" =~ ^[0-9]+$ ]] || _rq_last=0
+  _rq_hook=0; [[ "$_rq_by" == "stop-failure-marker" ]] && _rq_hook=1
+
+  # ── DRAIN-TIME REVALIDATION (D3, 2026-09-28) — the hook's request is a SNAPSHOT of one death ─────
+  # It was true when the session died and can be false by the time it is drained: on 2026-09-28 the
+  # held cohort still carried 415a3aac and 55120708, both already recovered by hand. Draining a stale
+  # request transplants a session that is fine. So every hook-originated request is re-checked
+  # against disk HERE, whether or not the lane is on, and retired with a named reason — never acted
+  # on — unless the session is still: on the store the hook saw (no tombstone, no transplant lock),
+  # not a teammate, and still LIMITED (its last assistant record is a usage-limit api error). A
+  # session that moved to or resumed on a healthy account fails one of the first or the last.
+  if (( _rq_hook == 1 )); then
+    if _rq_why="$(rq_stale_reason "$_rq_sid" "$_rq_tp")"; then
+      rq_retire "$_rq" "$_rq_name" "$_rq_sid" "$_rq_by" "$_rq_why"; continue
+    fi
+  fi
   [[ -n "$_rq_target" ]] || _rq_target=auto
   [[ -n "$_rq_by" ]] || _rq_by='?'
 
@@ -861,7 +926,20 @@ sys.stdout.write("".join(str(d.get(k) or "")+"\0"
   fi
 
   # ── THE PER-SID RUN CLAIM (defect 2) ──────────────────────────────────────────────────────────
+  if (( _rq_hook == 1 )); then
+    if (( _rq_att >= RQ_MAX_ATTEMPTS )); then
+      log "REQUEST-EXHAUSTED $_rq_sid — $_rq_att dispatch(es) and the session is still LIMITED; filed as exhausted (cc-lr recover ${_rq_sid:0:8} retries it by hand)"
+      mv "$_rq" "$RESULTS/${_rq_name%.json}.exhausted.json" 2>/dev/null || true; continue
+    fi
+    if (( _rq_last > 0 && $(date +%s) - _rq_last < RQ_RETRY_MIN * 60 )); then continue; fi
+  fi
   _rq_crc=0; run_claim_take "$_rq_sid" || _rq_crc=$?
+  if (( _rq_crc == 1 && _rq_hook == 1 )); then
+    # A live run holds the sid. The request is KEPT: it retires on its own once the session is seen
+    # recovered, and is retried if that run ends with the session still LIMITED.
+    log "REQUEST-IN-FLIGHT $_rq_sid — a live run holds the claim; kept for re-check when it ends"
+    continue
+  fi
   if (( _rq_crc == 2 )); then
     log "REQUEST-SKIP $_rq_sid — the run claim could not be taken (no lib or an unwritable store); request left in place for the next tick"
     continue
@@ -915,6 +993,11 @@ sys.stdout.write("".join(str(d.get(k) or "")+"\0"
     > "$RESULTS/$_rq_sid.json" 2>/dev/null || true
   # MOVED, NEVER DELETED (defect 4). `|| rm -f` only for a store that cannot be written at all —
   # leaving the record here under a held claim would re-log SUPERSEDED-BY-LIVE-RUN every tick.
+  if (( _rq_hook == 1 )) && [[ "$_rq_mode" == relaunch ]]; then
+    rq_record_attempt "$_rq" "$_rq_verdict"
+    log "REQUEST $_rq_sid — $_rq_verdict rc=$_rq_rc, attempt $(( _rq_att + 1 ))/$RQ_MAX_ATTEMPTS; the request stays queued until the session is seen recovered (result $RESULTS/$_rq_sid.json)"
+    continue
+  fi
   mv "$_rq" "$CLAIMED/$_rq_name" 2>/dev/null || rm -f "$_rq"
   log "REQUEST $_rq_sid — $_rq_verdict rc=$_rq_rc (result $RESULTS/$_rq_sid.json)"
 done

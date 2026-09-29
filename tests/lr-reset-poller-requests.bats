@@ -78,6 +78,13 @@ rq() { # $1=basename (without .json) ; stdin = the record
 }
 tick() { LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once; }
 plog() { cat "$STATE/poller.log" >&2; }
+# A hook request is re-checked against its transcript at drain time (D3), so a hook-origin fixture
+# needs a session that is really LIMITED on disk. Prints the transcript path.
+lim_tx() { # $1=sid
+  local d="$HOME/.claude-tertiary/projects/-Users-x-proj"; mkdir -p "$d"
+  printf '{"type":"assistant","timestamp":"2026-09-28T03:00:00Z","isApiErrorMessage":true,"error":"rate_limit","message":{"role":"assistant","content":[{"type":"text","text":"You'"'"'ve hit your weekly limit · resets Oct 1"}]}}\n' > "$d/$1.jsonl"
+  printf '%s' "$d/$1.jsonl"
+}
 mk_tui() { # a cc-tui.sh that records its two arguments and returns ${TUI_RC:-0}
   export LR_CC_TUI_LIB="$BATS_TEST_TMPDIR/cc-tui.sh"
   cat > "$LR_CC_TUI_LIB" <<'STUB'
@@ -212,7 +219,7 @@ EOF
 
 @test "autorecover: a stop-failure-marker request is NOT drained without the flag, and is LEFT in place" {
   rq "$SID" <<EOF
-{"sid":"$SID","requested_by":"stop-failure-marker"}
+{"sid":"$SID","requested_by":"stop-failure-marker","transcript_path":"$(lim_tx "$SID")"}
 EOF
   tick
   [ "$status" -eq 0 ]
@@ -226,11 +233,12 @@ EOF
 @test "autorecover: WITH the flag the same request drains" {
   : > "$STATE/autorecover.on"
   rq "$SID" <<EOF
-{"sid":"$SID","requested_by":"stop-failure-marker"}
+{"sid":"$SID","requested_by":"stop-failure-marker","transcript_path":"$(lim_tx "$SID")"}
 EOF
   tick
   grep -q -- "--one $SID" "$FLEET_LOG" || { cat "$FLEET_LOG"; plog; false; }
-  [ -f "$STATE/claimed/$SID.json" ]
+  # D3: a hook request stays queued, attempt recorded, until the session is seen recovered
+  [ "$(jq -r .attempts "$STATE/requests/$SID.json")" = 1 ] || { plog; false; }
 }
 
 @test "autorecover CONTROL: any other requester is unaffected by the gate" {
@@ -244,7 +252,7 @@ EOF
 
 @test "autorecover: the poller NEVER creates the flag file — its absence is the shipped default" {
   rq "$SID" <<EOF
-{"sid":"$SID","requested_by":"stop-failure-marker"}
+{"sid":"$SID","requested_by":"stop-failure-marker","transcript_path":"$(lim_tx "$SID")"}
 EOF
   tick
   [ ! -e "$STATE/autorecover.on" ] || { echo "the daemon granted itself the permission"; false; }
@@ -255,7 +263,7 @@ EOF
   for i in 1 2 3; do
     s="0000000$i-0000-4000-8000-00000000000$i"
     rq "$s" <<EOF
-{"sid":"$s","requested_by":"stop-failure-marker"}
+{"sid":"$s","requested_by":"stop-failure-marker","transcript_path":"$(lim_tx "$s")"}
 EOF
   done
   tick
