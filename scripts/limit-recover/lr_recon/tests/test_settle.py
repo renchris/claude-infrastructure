@@ -153,6 +153,20 @@ class Exits(unittest.TestCase):
         self.assertEqual(ex, {})
 
 
+class Replaced(unittest.TestCase):
+    def test_R_closes_once_the_session_is_live_in_another_window(self):
+        r = rec(phase="PANE-GONE", sub="R")
+        r.pane = (1, 2)
+        settle.settle_exit(r, actuator("R"), 0, "", 1.0)
+        sess = T.SessionObs(sid=r.sid, holders=[])
+        snap = T.Snapshot(wall=2.0, uptime_raw=0.0, sessions={r.sid: sess})
+        self.assertFalse(settle.replaced_elsewhere(r, snap, 2.0))  # not up yet
+        sess.holders = [T.HolderObs(pid=9, lstart="L", cfg="/c", src="session-row", pane=(1, 7))]
+        self.assertTrue(settle.replaced_elsewhere(r, snap, 3.0))
+        self.assertEqual(r.terminal.outcome, "REPLACED-NEW-WINDOW")
+        self.assertEqual((r.close["via"], r.close["same_window"]), ("R", False))
+
+
 class Rebucket(unittest.TestCase):
     def test_bgwork_clears_when_the_census_sees_limited_again(self):
         r = rec(sub="HOLD-BGWORK")

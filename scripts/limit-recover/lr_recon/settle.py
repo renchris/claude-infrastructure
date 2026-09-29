@@ -107,6 +107,8 @@ def settle_exit(
     if rc == 0:
         if pr.argv_hash in ("A", "A-husk") and rec.phase == "PRE-MOVE":
             rec.substate, rec.wait = "IN-FLIGHT", None
+        if pr.argv_hash == "R":
+            rec.close["replaced_at"] = now  # closed by replaced_elsewhere once it is seen
         return "%s rc=0" % pr.argv_hash
     if rc is None:
         # Adopted by argv, or exited before this daemon could reap it: no code is no verdict. The
@@ -297,3 +299,21 @@ def readiness(home: str, rec: T.Record) -> str:
             ):
                 return str(ev["state"])
     return "none"
+
+
+def replaced_elsewhere(rec: T.Record, snap: T.Snapshot, now: float) -> bool:
+    """After a successful R (§4.2 row 11), the session live in a DIFFERENT window closes the record
+    REPLACED-NEW-WINDOW: the pane it was detected in is gone, so same-window cannot hold."""
+    if not rec.close.get("replaced_at") or rec.terminal is not None:
+        return False
+    s = snap.sessions.get(rec.sid)
+    for h in s.holders if s else []:
+        if not h.bg and h.pane is not None and (not rec.pane or tuple(h.pane) != tuple(rec.pane)):
+            rec.close.update(via="R", pane=list(h.pane), same_window=False, at=now)
+            rec.terminal = T.Terminal(
+                outcome="REPLACED-NEW-WINDOW",
+                proof="live in window %d:%d after R" % tuple(h.pane),
+                at=now,
+            )
+            return True
+    return False

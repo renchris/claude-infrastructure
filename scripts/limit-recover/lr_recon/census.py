@@ -288,6 +288,37 @@ def upsert(
     return rec, True
 
 
+def not_needed_record(
+    sid: str,
+    s: Optional[T.SessionObs],
+    facts: Dict[str, T.Fact],
+    origin: str,
+    reason: str,
+    now: float,
+) -> T.Record:
+    """A terminal NOT_NEEDED member for a request the stale reconcile closed before any record
+    existed (a dead session, a session live elsewhere): the cohort counts it, so the operator sees
+    that the request was answered rather than silently dropped (W5 rig, stale-request fault)."""
+    acct = s.acct if s else ""
+    fact = _cover(s, facts, now) if s else None
+    scope, resets = (fact.scope, fact.resets_at) if fact else (_own_scope(s) if s else ("", None))
+    cid = cohort_id(acct, scope, resets)
+    rec = T.Record(
+        sid=sid,
+        record_id=T.make_record_id(cid, sid, 1),
+        scope=scope,
+        source_acct=acct,
+        source_cfg=s.cfg if s else "",
+        cwd=s.cwd if s else "",
+        cohort_id=cid,
+        origin=origin,
+    )
+    rec.timeline.detected = now
+    rec.updated_at = now
+    rec.terminal = T.Terminal(outcome="NOT_NEEDED", proof="stale request: " + reason, at=now)
+    return rec
+
+
 # ── §3 step 3: stale reconcile ──────────────────────────────────────────────────────────────────
 
 

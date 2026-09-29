@@ -181,6 +181,10 @@ def _census(
         _event(paths, "stale", sid, detail="%s %s" % (verdict, reason))
         if mode == "act" and sid in req_by_sid and verdict == "NOT_NEEDED":
             store.claim_request(paths, req_by_sid[sid], verdict, reason)
+            if sid not in ctx.records:
+                ctx.records[sid] = census.not_needed_record(
+                    sid, snap.sessions.get(sid), facts, req_by_sid[sid].origin, reason, now
+                )
     autorecover = os.path.exists(paths.autorecover_on)
     buckets: List[T.Bucket] = []
     for s in snap.sessions.values():
@@ -248,6 +252,9 @@ def _derive(ctx: Ctx, snap: T.Snapshot, now: float) -> None:
             continue
         if settle.reprobe(rec, now):
             _event(ctx.paths, "reprobe", rec.sid, rec.record_id, "hold re-probed")
+        if settle.replaced_elsewhere(rec, snap, now):
+            _event(ctx.paths, "replaced", rec.sid, rec.record_id, rec.terminal.proof)
+            continue
         settle.note_confirm(rec)
         if settle.mark_in_flight(rec):
             _event(ctx.paths, "in-flight", rec.sid, rec.record_id, "transplant confirmed")

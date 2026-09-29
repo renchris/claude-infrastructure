@@ -224,6 +224,23 @@ class MainTests(unittest.TestCase):
         self.assertIn("mode=observe actuations=0 recon.on=absent", out)
         popen.assert_not_called()  # no background --fresh sweep in shadow mode
 
+    def test_a_stale_request_leaves_a_terminal_not_needed_member(self):
+        """W5 rig: a request for a dead session was claimed NOT_NEEDED and left no cohort member."""
+        import time
+
+        now = time.time()
+        snap = _snap(now, self.tmp)
+        s = next(iter(snap.sessions.values()))
+        s.holders, s.pid, s.pane = [], 0, None  # the session is dead: no live holder
+        ctx = M.Ctx(self.paths, None, self.home)
+        M.store.ensure_dirs(self.paths)
+        reqs = M.store.list_requests(self.paths)
+        M._census(ctx, snap, {}, reqs, "act", now)
+        rec = ctx.records[s.sid]
+        self.assertEqual(rec.terminal.outcome, "NOT_NEEDED")
+        self.assertIn("dead-before-claim", rec.terminal.proof)
+        self.assertEqual(rec.cohort_id, "next3-7d-%d" % int(now + 7200))
+
     def test_an_auth_cliff_writes_an_auth_fact(self):
         """W5 rig: a TARGET-AUTH hop found no <acct>.auth.json — the census wrote limit facts only."""
         import time
