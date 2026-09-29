@@ -29,9 +29,12 @@
 # Output (last lines, parseable):
 #   verdict=projected tip=<sha> commits=<n> ruleset=<sha12>
 #   projection-verifier: 0 identifier hit(s), 0 gitleaks finding(s) over <n> commits   (or FAIL)
-#   ff=<yes|no|n-a> published=<sha|none>
-# Exit: 0 built+verified (and pushed if asked) · 1 verification failed · 2 bad args / precondition
-#       · 3 refused: non-fast-forward without --rebaseline, or push target not confirmed.
+#   ff=<yes|stale|no|n-a|unknown> published=<sha|none>
+#   verdict=stale-snapshot …   (ff=stale: a newer publish already landed; exits 0, persists nothing)
+#   verdict=locked …           (--push while another publish holds the shared lock; exits 0)
+# Exit: 0 built+verified (and pushed if asked), stale snapshot, or lock held elsewhere · 1 verification
+#       failed · 2 bad args / precondition / published commit unreadable · 3 refused: non-fast-forward
+#       without --rebaseline, or push target not confirmed.
 set -uo pipefail
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -81,8 +84,57 @@ if [ "$PUSH" = 1 ]; then
 fi
 
 mkdir -p "$OUT" || die "cannot create $OUT"
-cleanup() { [ "$KEEP" = 1 ] || rm -rf "$OUT"; }
+LOCK="$PRIV/public-projection/.publish.lock"
+LOCK_HELD=0
+cleanup() {
+  [ "$KEEP" = 1 ] || rm -rf "$OUT"
+  if [ "$LOCK_HELD" = 1 ]; then rm -f "$LOCK/owner"; rmdir "$LOCK" 2>/dev/null; fi
+}
 trap cleanup EXIT
+# A signal must reach cleanup too, or a TERM'd publish leaves its lock behind for a live-looking pid.
+trap 'exit 143' TERM
+trap 'exit 130' INT
+
+# ── ONE publish at a time: the tick and every manual --push share this lock ──────────────────────
+# On 2026-09-28 agents hand-published three times beside the launchd tick; a tick that had snapshot
+# an OLDER main then found the public tip "not a descendant" and refused with rc=3, the rule-set-
+# change message, which sent the next reader after a rule change that never happened. The lock is a
+# fixed path beside the rule set, so every caller on the box meets the same one. It holds the pid
+# AND that pid's start time: a dead pid, or a live pid that started at another time (reuse), is
+# reclaimed; anything else is a publish in progress, and this run steps aside.
+proc_start() { ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//; s/ *$//'; }
+take_publish_lock() {
+  local opid="" ostart="" oat="" stale
+  if mkdir "$LOCK" 2>/dev/null; then
+    printf '%s\n%s\n%s\n' "$$" "$(proc_start $$)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$LOCK/owner"
+    LOCK_HELD=1
+    return 0
+  fi
+  { read -r opid; read -r ostart; read -r oat; } < "$LOCK/owner" 2>/dev/null
+  if [ -z "$opid" ]; then
+    # mkdir and the owner write are two steps: an ownerless lock younger than a minute is a holder
+    # between them, never a corpse.
+    if [ -z "$(find "$LOCK" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then return 1; fi
+  elif kill -0 "$opid" 2>/dev/null && [ "$(proc_start "$opid")" = "$ostart" ]; then
+    echo "public-publish: another publish holds $LOCK (pid $opid, since $oat)" >&2
+    return 1
+  fi
+  # Reclaim by RENAME, which only one reclaimer can win, then prove the renamed lock is the corpse
+  # this run inspected (a fresh holder may have taken the path in between).
+  stale="$LOCK.stale.$$"
+  mv "$LOCK" "$stale" 2>/dev/null || return 1
+  if [ "$(head -1 "$stale/owner" 2>/dev/null)" != "$opid" ]; then
+    mv "$stale" "$LOCK" 2>/dev/null || true
+    return 1
+  fi
+  echo "public-publish: reclaimed a stale lock (pid ${opid:-none} is gone, taken ${oat:-?})" >&2
+  rm -f "$stale/owner"; rmdir "$stale" 2>/dev/null
+  take_publish_lock
+}
+if [ "$PUSH" = 1 ] && ! take_publish_lock; then
+  echo "verdict=locked lock=$LOCK"
+  exit 0
+fi
 
 # ── 1. rule inputs, normalised: filter-repo does NOT skip '#' lines in these files ─────────────
 grep -v -e '^[[:space:]]*#' -e '^[[:space:]]*$' "$MAP" > "$OUT/replace-text.txt"
@@ -132,16 +184,35 @@ for f in json.load(open(sys.argv[1]))[:20]: print("GITLEAKS", f["RuleID"], f["Fi
 fi
 
 # ── 4. fast-forward check against what is already public ──────────────────────────────────────
+# ff=yes   the published tip is an ancestor of this projection: an ordinary fast-forward
+# ff=stale this projection is an ancestor of the published tip: a snapshot of an OLDER main, and a
+#          newer publish has already landed. Nothing to do, and nothing wrong.
+# ff=no    neither: real divergence (the rule set changed); only --rebaseline pushes over it
+# A published object this clone has never seen is FETCHED before the ancestry test: merge-base
+# exits 128 on a missing object, and reading that as "not a descendant" is how a stale snapshot was
+# reported as a rule-set change (2026-09-28).
 FF=n-a; PUBLISHED=none
 if [ -n "$PUBLIC_URL" ]; then
   if PUBLISHED="$(git ls-remote "$PUBLIC_URL" "refs/heads/$REF" 2>/dev/null | cut -f1)" && [ -n "$PUBLISHED" ]; then
-    if git -C "$OUT/proj.git" merge-base --is-ancestor "$PUBLISHED" "$TIP" 2>/dev/null; then FF=yes; else FF=no; fi
+    if ! git -C "$OUT/proj.git" cat-file -e "$PUBLISHED^{commit}" 2>/dev/null; then
+      git -C "$OUT/proj.git" fetch -q --no-tags "$PUBLIC_URL" "refs/heads/$REF" 2>/dev/null
+    fi
+    git -C "$OUT/proj.git" cat-file -e "$PUBLISHED^{commit}" 2>/dev/null \
+      || { echo "ff=unknown published=$PUBLISHED"; echo "public-publish: cannot read the published commit $PUBLISHED from $PUBLIC_URL — no fast-forward verdict" >&2; exit 2; }
+    if git -C "$OUT/proj.git" merge-base --is-ancestor "$PUBLISHED" "$TIP"; then FF=yes
+    elif git -C "$OUT/proj.git" merge-base --is-ancestor "$TIP" "$PUBLISHED"; then FF=stale
+    else FF=no; fi
   else
     PUBLISHED=none; FF=n-a
   fi
 fi
 echo "ff=$FF published=$PUBLISHED"
 [ "$VERIFIED" = 1 ] || exit 1
+if [ "$FF" = stale ]; then
+  # Exit BEFORE the commit-map is persisted: an older snapshot's map would overwrite the newer one.
+  echo "verdict=stale-snapshot tip=$TIP published=$PUBLISHED"
+  exit 0
+fi
 
 # persist the commit-map beside the rule set: consumers map a private commit to its public sha
 if [ -r "$OUT/commit-map" ] && [ -d "$PRIV/public-projection" ]; then

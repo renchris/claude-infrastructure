@@ -37,15 +37,23 @@ if [ -z "$SLUG" ]; then
   echo "$(ts) public-publish-tick: REFUSED — publish-enabled is set but git config cc.publicRepo is empty"
   exit 1
 fi
-LOCK="${TMPDIR:-/tmp}/public-publish-tick.lock"
-if ! mkdir "$LOCK" 2>/dev/null; then
-  echo "$(ts) public-publish-tick: a previous tick still holds $LOCK — skipping"
-  exit 0
-fi
-trap 'rmdir "$LOCK" 2>/dev/null' EXIT
+# No lock of its own: launchd never runs two instances of one label, so a tick-only lock protected
+# nothing, while the race that mattered (a tick beside a MANUAL publish) went through it. The one
+# lock is inside public-publish.sh, shared by every --push caller.
+#
+# The publisher runs in its OWN process group (job control on), and a TERM/INT to the tick is
+# forwarded to that whole group, then waited for. Without this a TERM'd tick exits alone and leaves
+# git-filter-repo running, orphaned, still holding the publish lock for a live pid.
 echo "$(ts) public-publish-tick: publishing $REPO main → $SLUG"
+set -m
 bash "$SELF_DIR/public-publish.sh" --src "$REPO" --ref main \
-  --public-url "https://github.com/$SLUG.git" --push --confirm "$SLUG"
-rc=$?
+  --public-url "https://github.com/$SLUG.git" --push --confirm "$SLUG" &
+pub=$!
+set +m
+trap 'kill -TERM -- "-$pub" 2>/dev/null' TERM INT
+wait "$pub"; rc=$?
+# A trapped signal interrupts `wait` early; keep waiting until the publisher has actually exited so
+# its cleanup (build dir, lock) runs first and its real exit status is the one reported.
+while kill -0 "$pub" 2>/dev/null; do wait "$pub"; rc=$?; done
 echo "$(ts) public-publish-tick: rc=$rc"
 exit "$rc"

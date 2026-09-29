@@ -233,6 +233,71 @@ fake_token() { printf 'gh''p_%s' "1a2B3c4D5e6F7g8H9i0J1k2L3m4N5o6P7q8R"; }
   [[ "$output" == *"FORCE-PUSH"* ]]
 }
 
+@test "publish LOCK: a live holder makes --push step aside; a reused pid is reclaimed; the lock is released" {
+  command -v git-filter-repo >/dev/null || skip "git-filter-repo absent"
+  command -v gitleaks >/dev/null || skip "gitleaks absent"
+  r="$(mkrepo lk)"; mkdir -p "$r/config"; cp "$CONF" "$r/config/public-hygiene.conf"
+  git -C "$r" add -A; git -C "$r" "${G[@]}" commit -q -m conf
+  git init -q --bare "$T/owner/pubrepo.git"
+  L="$CC_PRIVATE_DIR/public-projection/.publish.lock"; mkdir "$L"
+  # a LIVE holder: this bats process, with its real start time
+  printf '%s\n%s\n%s\n' "$$" "$(ps -o lstart= -p $$ | sed 's/^ *//; s/ *$//')" "2026-09-29T00:00:00Z" > "$L/owner"
+  run bash "$PUB" --src "$r" --out "$T/o1" --public-url "$T/owner/pubrepo.git" --push --confirm owner/pubrepo
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=locked"* ]] || { echo "$output"; false; }
+  [ -z "$(git -C "$T/owner/pubrepo.git" for-each-ref)" ]          # nothing was pushed
+  [ -d "$L" ]                                                        # and the holder's lock is intact
+  # the same pid with a DIFFERENT start time is a reused pid, not the holder: reclaimed
+  printf '%s\n%s\n%s\n' "$$" "Thu Jan  1 00:00:00 1970" "1970-01-01T00:00:00Z" > "$L/owner"
+  run bash "$PUB" --src "$r" --out "$T/o2" --public-url "$T/owner/pubrepo.git" --push --confirm owner/pubrepo
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"reclaimed a stale lock"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"pushed="* ]] || { echo "$output"; false; }
+  [ ! -e "$L" ] || { ls -la "$L"; false; }                          # released on exit
+}
+
+@test "publish STALE SNAPSHOT: a projection OLDER than the published tip exits 0, not rc=3" {
+  command -v git-filter-repo >/dev/null || skip "git-filter-repo absent"
+  command -v gitleaks >/dev/null || skip "gitleaks absent"
+  r="$(mkrepo st)"; mkdir -p "$r/config"; cp "$CONF" "$r/config/public-hygiene.conf"
+  git -C "$r" add -A; git -C "$r" "${G[@]}" commit -q -m conf
+  commit_file "$r" a.md "TopSecretName one"
+  old="$(git -C "$r" rev-parse HEAD)"
+  commit_file "$r" b.md "two"
+  git init -q --bare "$T/owner/pubrepo.git"
+  run bash "$PUB" --src "$r" --out "$T/o1" --public-url "$T/owner/pubrepo.git" --push --confirm owner/pubrepo
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  published="$(git -C "$T/owner/pubrepo.git" rev-parse refs/heads/main)"
+  last="$(cat "$CC_PRIVATE_DIR/public-projection/last-projection")"
+  # a second checkout still at the OLDER main — the snapshot a racing tick would have taken
+  git clone -q "$r" "$T/stale"; git -C "$T/stale" reset -q --hard "$old"
+  run bash "$PUB" --src "$T/stale" --out "$T/o2" --public-url "$T/owner/pubrepo.git" --push --confirm owner/pubrepo
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"ff=stale published=$published"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=stale-snapshot"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"rule set changed"* ]] || { echo "$output"; false; }
+  [ "$(git -C "$T/owner/pubrepo.git" rev-parse refs/heads/main)" = "$published" ]
+  [ "$(cat "$CC_PRIVATE_DIR/public-projection/last-projection")" = "$last" ]   # newer map kept
+}
+
+@test "TICK: a TERM to the tick reaches the whole publisher group — no orphaned filter-repo" {
+  r="$(mkrepo tickterm)"; mkdir -p "$r/scripts"
+  cp "$REPO/scripts/public-publish-tick.sh" "$r/scripts/"
+  git -C "$r" config cc.publicRepo owner/public-fixture
+  # stub publisher: a long-running child stands in for git-filter-repo
+  printf '#!/bin/bash\nsleep 300 &\necho $! > "%s/child.pid"\nwait\n' "$T" > "$r/scripts/public-publish.sh"
+  touch "$CC_PRIVATE_DIR/public-projection/publish-enabled"
+  /bin/bash "$r/scripts/public-publish-tick.sh" > "$T/tick.out" 2>&1 3>&- &
+  tick=$!
+  for _ in $(seq 1 100); do [ -s "$T/child.pid" ] && break; sleep 0.1; done
+  child="$(cat "$T/child.pid")"; [ -n "$child" ]
+  kill -TERM "$tick"
+  for _ in $(seq 1 50); do kill -0 "$tick" 2>/dev/null || break; sleep 0.1; done
+  for _ in $(seq 1 20); do kill -0 "$child" 2>/dev/null || break; sleep 0.1; done
+  if kill -0 "$child" 2>/dev/null; then kill "$child"; echo "filter-repo stand-in ORPHANED"; cat "$T/tick.out"; false; fi
+  ! kill -0 "$tick" 2>/dev/null || { kill "$tick"; echo "tick did not exit"; false; }
+}
+
 @test "publish REFUSES to push an identity GitHub would not credit to the confirmed owner" {
   command -v git-filter-repo >/dev/null || skip "git-filter-repo absent"
   command -v gitleaks >/dev/null || skip "gitleaks absent"
