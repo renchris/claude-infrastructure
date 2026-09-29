@@ -87,6 +87,8 @@
 #             unsatisfied or unverifiable (above).
 #
 # Seams: CC_TERM_KITTY (kitty binary) · CC_TERM_KITTY_TO (socket) · IT2_KITTY_TIMEOUT_S
+#        · CC_TERM_KITTY_PID (optional: the kitty pid a delivery target must live in — prove_target
+#          refuses a window whose env.KITTY_PID differs or is absent; exit 1, like any refusal there)
 
 set -uo pipefail
 
@@ -395,15 +397,41 @@ armed(){ # $1=window id → 0 a runner is plausibly waiting · 1 type at the pan
   [ "$age" -le "$(_armed_ttl_s)" ]
 }
 
-pane_exists(){ # $1=window id → 0 present, 1 absent, 2 could not tell
-  local out; out="$(kt ls 2>/dev/null)" || return 2
+# pane_exists — asks kitty about ONE window (`ls --match id:N`), not the whole fleet (W2c).
+#   0 present · 1 provably absent · 2 could not tell · 3 proven WRONG KITTY (CC_TERM_KITTY_PID only)
+# Absent is either the GONE triple identity_ok documents (non-zero rc, EMPTY stdout, kitty SAYING
+# "No matching windows") or a parsed payload with no window carrying the id. The id is re-filtered
+# in python for the same reason identity_ok does it: a kitty that ignored --match must not pass by
+# luck. State 3 exists because a window id restarts at 1 with every kitty, so a recorded id can name
+# a live window in a DIFFERENT instance; a caller that recorded the kitty pid (the W3 reconciler)
+# passes it and the window's env.KITTY_PID must equal it — absent counts as unproven, i.e. wrong.
+# Unset ⇒ env.KITTY_PID is never read. The live pid lands in PANE_LIVE_KITTY_PID for the err line.
+PANE_LIVE_KITTY_PID=""
+pane_exists(){
+  local out rc _e
+  _e="$(mktemp "${TMPDIR:-/tmp}/it2-kitty-pe.XXXXXX" 2>/dev/null || printf '/tmp/it2-kitty-pe.%s' "$$")"
+  out="$(kt ls --match "id:$1" 2>"$_e")"; rc=$?
+  if [ "$rc" != 0 ]; then
+    if [ -z "$out" ] && grep -qi 'No matching windows' "$_e" 2>/dev/null; then rm -f "$_e"; return 1; fi
+    rm -f "$_e"; return 2
+  fi
+  rm -f "$_e"
   [ -n "$out" ] || return 2
-  printf '%s' "$out" | ID="$1" python3 -c '
+  PANE_LIVE_KITTY_PID="$(printf '%s' "$out" | ID="$1" WANT_KPID="${CC_TERM_KITTY_PID:-}" python3 -c '
 import json,os,sys
-try: d=json.load(sys.stdin)
-except Exception: sys.exit(2)
-want=os.environ["ID"]
-sys.exit(0 if any(str(w["id"])==want for ow in d for t in ow["tabs"] for w in t["windows"]) else 1)'
+try:
+    d = json.load(sys.stdin)
+    rows = [w for ow in d for t in ow.get("tabs", []) for w in t.get("windows", [])
+            if str(w.get("id")) == os.environ["ID"]]
+except Exception:
+    sys.exit(2)
+if not rows: sys.exit(1)
+if len(rows) != 1: sys.exit(2)
+want = os.environ.get("WANT_KPID", "")
+if not want: sys.exit(0)
+live = str((rows[0].get("env") or {}).get("KITTY_PID", ""))
+sys.stdout.write(live)
+sys.exit(0 if live == want else 3)')"
 }
 
 # deliver_argv — hand the command to an ARMED pane as a file, then ASSERT it was picked up.
@@ -473,11 +501,32 @@ deliver_argv(){ # $1=pane id  $2=command text
 #
 # Cost: one `kitty @ ls` (~100ms) on the NON-ARMED path only. The armed spawn path returns before
 # this and keeps its millisecond budget.
-prove_target(){ # $1=window id  $2=verb → 0 deliver · 1 refuse (proven absent)
+#
+# The kitty-pid proof (W2c) is a FOURTH outcome and it refuses: CC_TERM_KITTY_PID names the kitty
+# the caller recorded the id in, and a window in any other instance is the wrong target however
+# alive it is. A socket named for a different pid is refused before kitty is even asked.
+prove_target(){ # $1=window id  $2=verb → 0 deliver · 1 refuse (proven absent, or proven wrong kitty)
+  local want="${CC_TERM_KITTY_PID:-}" sock_pid
+  if [ -n "$want" ]; then
+    sock_pid="${CC_TERM_KITTY_TO:-}"; sock_pid="${sock_pid##*/kitty-}"
+    case "${CC_TERM_KITTY_TO:-}" in
+      unix:*/kitty-*) case "$sock_pid" in ''|*[!0-9]*) ;; *)
+        if [ "$sock_pid" != "$want" ]; then
+          err "refusing to $2 into window $1 — CC_TERM_KITTY_TO is kitty pid $sock_pid's socket,"
+          err "but the caller pinned kitty pid $want (CC_TERM_KITTY_PID). Window ids restart with"
+          err "every kitty, so this id names a window in a different instance."
+          return 1
+        fi ;; esac ;;
+    esac
+  fi
   pane_exists "$1"; case $? in
     1) err "refusing to $2 into window $1 — it is not in kitty's window list."
        err "kitty's send-text exits 0 for a nonexistent id, so delivering here would report"
        err "success while the text went nowhere. Re-derive the id and retry."
+       return 1 ;;
+    3) err "refusing to $2 into window $1 — it belongs to kitty pid ${PANE_LIVE_KITTY_PID:-<absent>},"
+       err "but the caller pinned kitty pid $want (CC_TERM_KITTY_PID). Window ids restart with"
+       err "every kitty, so this is a different window that happens to share the id."
        return 1 ;;
   esac
   return 0
