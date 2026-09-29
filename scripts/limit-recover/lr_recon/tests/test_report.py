@@ -390,6 +390,17 @@ class DodLine(unittest.TestCase):
             fh.write("4\t%s\tcc-resume-debt\ttaken\tpid=12\tattempt=2\n" % r.sid)
         self.assertIn("double-typer 1", R.dod_line(self.paths, [r]))
 
+    def test_inherited_takes_and_legacy_takes_are_not_counted_against_an_attempt(self):
+        """W5 rig: cc-resume-debt took the lock while the daemon was stopped (the designed fallback)
+        and its child boot-resume-launch inherited it; neither is a second typer of attempt 1."""
+        r = self._rec(1)
+        with open(self.paths.launch_log, "w") as fh:
+            fh.write("1\t%s\tcc-resume-debt\ttaken\tpid=30\n" % r.sid)
+            fh.write("2\t%s\tboot-resume-launch\tinherited\tpid=31\n" % r.sid)
+            fh.write("9\t%s\trecon-R\tspawn\tpid=32\tattempt=1\n" % r.sid)
+            fh.write("9\t%s\tboot-resume-launch\ttaken\tpid=33\tattempt=1\n" % r.sid)
+        self.assertIn("double-typer 0", R.dod_line(self.paths, [r]))
+
     def test_a_second_move_spawn_in_one_attempt_is_a_double_typer(self):
         r = self._rec(1)
         with open(self.paths.launch_log, "w") as fh:

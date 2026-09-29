@@ -219,15 +219,17 @@ def _typers(paths: T.Paths, sids: Sequence[str]) -> Dict[Tuple[str, str], Dict[s
                 if len(t) < 4 or t[1] not in want:
                     continue
                 kv = dict(x.split("=", 1) for x in t[4:] if "=" in x)
+                # "inherited" is a child acting under its parent's lock: the same typer chain
                 cls = (
                     "launch"
-                    if t[3] in ("taken", "inherited")
+                    if t[3] == "taken"
                     else "move"
                     if t[3] == "spawn" and t[2] in MOVE_ROLES
                     else ""
                 )
                 if cls:
-                    key = (t[1], kv.get("attempt", "?"))
+                    # a legacy actor has no attempt: each of its takes is its own key
+                    key = (t[1], kv.get("attempt") or "legacy@" + t[0])
                     out.setdefault(key, {"launch": set(), "move": set()})[cls].add(
                         kv.get("pid", "?")
                     )

@@ -130,14 +130,14 @@ def audit(root: str, specs: List[Dict[str, Any]], home: str) -> int:
                 if len(t) < 4 or t[1] not in want:
                     continue
                 kv = dict(x.split("=", 1) for x in t[4:] if "=" in x)
-                if t[3] in ("taken", "inherited"):
+                if t[3] == "taken":  # "inherited" = a child under its parent's lock: same chain
                     cls = "launch"
                 elif t[3] == "spawn" and t[2] in MOVE_ROLES:
                     cls = "move"
                 else:
                     continue
                 lines += 1
-                key = (t[1], kv.get("attempt", "?"))
+                key = (t[1], kv.get("attempt") or "legacy@" + t[0])  # a legacy take is its own key
                 keys.setdefault(key, {"launch": set(), "move": set()})[cls].add(kv.get("pid", "?"))
     except OSError:
         print("launch-log audit: %s/launch.log unreadable" % root)

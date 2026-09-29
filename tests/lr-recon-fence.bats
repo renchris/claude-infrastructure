@@ -245,6 +245,14 @@ defers() { run /bin/bash "$S" defers "$SID"; }
   grep -q "	$SID	t	taken	" "$LR_RECON_ROOT/launch.log"
 }
 
+@test "launch.log: a reconciler actuator's take carries its attempt and record; a legacy one does not (W5 audit)" {
+  recon_on; owned; heartbeat "$OLD_PW"
+  LR_ATTEMPT=3 LR_RECORD_ID=recon:c:x:1 /bin/bash -c ". '$S'; lr_recon_may_act '$SID' t; lr_recon_act_done" >/dev/null 2>&1
+  /bin/bash -c "unset LR_ATTEMPT LR_RECORD_ID; . '$S'; lr_recon_may_act '$SID' u; lr_recon_act_done" >/dev/null 2>&1
+  grep -q "	$SID	t	taken	pid=[0-9]*	attempt=3	record=recon:c:x:1\$" "$LR_RECON_ROOT/launch.log"
+  grep -q "	$SID	u	taken	pid=[0-9]*\$" "$LR_RECON_ROOT/launch.log"
+}
+
 @test "may_act: a launch lock held by a live other process defers" {
   recon_on; owned; heartbeat "$OLD_PW"; start_sleeper
   /bin/bash -c ". '$S'; lr_recon_lock_take '$LR_STATE_DIR/locks/$SID.launch' other 0 x '$SLEEP_PID'"

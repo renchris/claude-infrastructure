@@ -106,6 +106,11 @@ class Exits(unittest.TestCase):
         self.assertIn("WAIT", settle.settle_exit(r, actuator("R"), 9, txt, 5.0))
         self.assertEqual((r.next_eligible_at, r.escalated), (5.0 + settle.WAIT_RETRY_S, False))
 
+    def test_a_failed_R_makes_its_retry_a_new_attempt_outside_pre_move(self):
+        r = rec(phase="PANE-GONE", sub="R")
+        settle.settle_exit(r, actuator("R"), 4, "boot-resume-launch: kitty launch failed", 5.0)
+        self.assertEqual(r.attempt, 2)
+
     def test_not_limited_on_a_hop_waits_instead_of_closing(self):
         r = rec()
         r.close["hop"] = "auth"

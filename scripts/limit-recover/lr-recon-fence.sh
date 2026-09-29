@@ -332,7 +332,11 @@ _lr_recon_launch_log() {
   local root
   root="$(_lr_recon_root)"
   [ -d "$root" ] || return 0
-  printf '%s\t%s\t%s\t%s\tpid=%s\n' "$(date +%s)" "$1" "$2" "$3" "$$" >>"$root/launch.log" 2>/dev/null
+  # An actuator the reconciler spawned carries its record and attempt in the env (lr_recon act.py);
+  # the audit keys a take on them. A legacy actor has neither and is its own key.
+  printf '%s\t%s\t%s\t%s\tpid=%s%s%s\n' "$(date +%s)" "$1" "$2" "$3" "$$" \
+    "${LR_ATTEMPT:+	attempt=$LR_ATTEMPT}" "${LR_RECORD_ID:+	record=$LR_RECORD_ID}" \
+    >>"$root/launch.log" 2>/dev/null
   return 0
 }
 

@@ -115,7 +115,7 @@ def settle_exit(
         # derived phase is the truth; scoring it as a failure escalated a move that had engaged.
         return "%s exited, code unknown — the phase decides" % pr.argv_hash
     disp, sub, reason = outcome(rec, rc, text)
-    if pr.argv_hash in MOVE_ACTUATORS and rec.phase == "PRE-MOVE":
+    if pr.argv_hash in MOVE_ACTUATORS:
         # Whatever it was refused for, the NEXT move spawn is a new attempt: the double-typer audit
         # allows exactly one move spawn per (sid, attempt), so a retry must not share one.
         rec.attempt += 1
