@@ -9,6 +9,7 @@
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   export CA_BIN="$REPO/bin/claude-accounts"
   export CA_CFG="$BATS_TEST_TMPDIR/accounts.json"
   export CACHE="$BATS_TEST_TMPDIR/cache.json"
