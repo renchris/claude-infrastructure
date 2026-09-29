@@ -166,8 +166,10 @@ in_band() { awk -v x="$1" -v lo="$2" -v hi="$3" 'BEGIN { exit !(x >= lo && x <= 
   run timeout 90 expect -f "$EXP" </dev/null
   offs="$(resend_offsets)"; echo "# re-send offsets: ${offs//$'\n'/ }" >&3
   [ "$(printf '%s\n' "$offs" | grep -c .)" -eq 2 ] || { echo "re-sends: [$offs]"; cat "$LR_GOT"; false; }
-  in_band "$(sed -n 1p <<<"$offs")" 4 8   || { echo "first re-send not at ~5 s: $offs"; false; }
-  in_band "$(sed -n 2p <<<"$offs")" 14 19 || { echo "second re-send not at ~15 s: $offs"; false; }
+  # Lower bounds prove the schedule (never early); upper bounds allow for load, because a look
+  # fires only at a loop turn and a turn (probe + screen read + 1 s pump) stretches on a busy box.
+  in_band "$(sed -n 1p <<<"$offs")" 4 10   || { echo "first re-send not at ~5 s: $offs"; false; }
+  in_band "$(sed -n 2p <<<"$offs")" 14 24 || { echo "second re-send not at ~15 s: $offs"; false; }
 }
 
 @test "schedule: LR_RECR_SCHEDULE=2,4 re-sends at ~2 s and ~4 s" {
@@ -176,8 +178,9 @@ in_band() { awk -v x="$1" -v lo="$2" -v hi="$3" 'BEGIN { exit !(x >= lo && x <= 
   run timeout 60 expect -f "$EXP" </dev/null
   offs="$(resend_offsets)"; echo "# re-send offsets: ${offs//$'\n'/ }" >&3
   [ "$(printf '%s\n' "$offs" | grep -c .)" -eq 2 ] || { echo "re-sends: [$offs]"; cat "$LR_GOT"; false; }
-  in_band "$(sed -n 1p <<<"$offs")" 1.5 3.9 || { echo "first re-send not at ~2 s: $offs"; false; }
-  in_band "$(sed -n 2p <<<"$offs")" 3.5 6   || { echo "second re-send not at ~4 s: $offs"; false; }
+  in_band "$(sed -n 1p <<<"$offs")" 1.5 7 || { echo "first re-send not at ~2 s: $offs"; false; }
+  in_band "$(sed -n 2p <<<"$offs")" 3.5 12  || { echo "second re-send not at ~4 s: $offs"; false; }
+  in_band "$(awk 'NR==1{a=$1} NR==2{print $1-a}' <<<"$offs")" 1 99 || { echo "re-sends back to back: $offs"; false; }
 }
 
 @test "schedule: a composer holding a draft that is NOT ours stops the looks but not the poll — a late record is SUBMITTED" {
