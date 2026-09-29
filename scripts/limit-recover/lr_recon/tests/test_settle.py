@@ -56,10 +56,50 @@ class Exits(unittest.TestCase):
         self.assertTrue(settle.reprobe(r, 100.0 + settle.REPROBE_S))
         self.assertEqual((r.substate, r.wait), ("DETECTED", None))
 
-    def test_rc0_changes_nothing(self):
+    def test_a_successful_move_is_never_dispatched_again_in_the_relaunch_gap(self):
+        """W5 rig: after A returned 0 the gap (source dead, target not up) derived PRE-MOVE, the
+        record still read PLANNED, and a SECOND A ran over the transplanted session."""
+        from lr_recon import act
+
         r = rec()
         self.assertEqual(settle.settle_exit(r, actuator(), 0, "", 1.0), "A rc=0")
-        self.assertEqual((r.substate, r.last_error), ("PLANNED", None))
+        self.assertEqual((r.substate, r.last_error, r.attempt), ("IN-FLIGHT", None, 1))
+        gap = T.PhaseResult(phase="PRE-MOVE", substate=None, action="plan")
+        self.assertIsNone(act.choose(gap, r))
+
+    def test_a_confirmed_transplant_is_in_flight_even_before_A_exits(self):
+        from lr_recon import act
+
+        r = rec()
+        self.assertFalse(settle.mark_in_flight(r))  # no tombstone read yet: still PLANNED
+        r.confirm_len = 10
+        self.assertTrue(settle.mark_in_flight(r))
+        self.assertIsNone(act.choose(T.PhaseResult(phase="PRE-MOVE"), r))
+
+    def test_a_failed_move_makes_its_retry_a_new_attempt(self):
+        r = rec()
+        settle.settle_exit(r, actuator(), 6, PRECHECK_HELD % ("x", "draft", "draft"), 1.0)
+        self.assertEqual(r.attempt, 2)
+        settle.settle_exit(r, actuator("C"), 1, "cc_tui_submit mangled", 2.0)
+        self.assertEqual(r.attempt, 2)  # an engage is not a move
+
+    def test_hop_moves_from_the_failed_target_as_a_new_attempt(self):
+        r = rec(phase="TARGET-LIMITED", sub=None)
+        r.source_acct, r.source_cfg, r.target_cfg, r.confirm_len = "next", "/c/a", "/c/b", 99
+        r.submit_token = "lrr-1"
+        h = T.HolderObs(pid=77, lstart="L", cfg="/c/b", src="session-row", pane=(1, 2))
+        settle.new_attempt(r, h, "limit", 5.0)
+        self.assertEqual((r.source_acct, r.source_cfg, r.source_pid), ("next2", "/c/b", 77))
+        self.assertEqual((r.target_acct, r.confirm_len, r.submit_token), ("", None, ""))
+        self.assertEqual((r.phase, r.substate, r.attempt), ("PRE-MOVE", "DETECTED", 2))
+        self.assertEqual((r.close["hop"], r.close["hops"]), ("limit", 1))
+
+    def test_not_limited_on_a_hop_waits_instead_of_closing(self):
+        r = rec()
+        r.close["hop"] = "auth"
+        settle.settle_exit(r, actuator(), 6, "lr-handoff: PRECHECK REFUSED:not-limited — x", 5.0)
+        self.assertIsNone(r.terminal)
+        self.assertEqual(r.substate, "WAIT_SLOT")
 
     def test_unknown_exit_code_is_no_verdict(self):
         r = rec(phase="RELAUNCHED", sub="UNPROMPTED")

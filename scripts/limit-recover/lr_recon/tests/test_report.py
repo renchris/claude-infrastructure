@@ -390,6 +390,17 @@ class DodLine(unittest.TestCase):
             fh.write("4\t%s\tcc-resume-debt\ttaken\tpid=12\tattempt=2\n" % r.sid)
         self.assertIn("double-typer 1", R.dod_line(self.paths, [r]))
 
+    def test_a_second_move_spawn_in_one_attempt_is_a_double_typer(self):
+        r = self._rec(1)
+        with open(self.paths.launch_log, "w") as fh:
+            fh.write("1\t%s\trecon-A\tspawn\tpid=20\tattempt=1\n" % r.sid)
+            fh.write("2\t%s\tlr-fire-resume\ttaken\tpid=21\tattempt=1\n" % r.sid)
+            fh.write("3\t%s\trecon-C-retry\tspawn\tpid=22\tattempt=1\n" % r.sid)
+        self.assertIn("double-typer 0", R.dod_line(self.paths, [r]))  # one move, one launch
+        with open(self.paths.launch_log, "a") as fh:
+            fh.write("4\t%s\trecon-A\tspawn\tpid=23\tattempt=1\n" % r.sid)  # the re-dispatch
+        self.assertIn("double-typer 1", R.dod_line(self.paths, [r]))
+
 
 if __name__ == "__main__":
     unittest.main()

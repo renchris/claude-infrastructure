@@ -26,6 +26,7 @@ from lr_recon import types as T
 from lr_recon.evidence import transcript_path
 
 REPROBE_S = 120.0
+MOVE_ACTUATORS = ("A", "A-husk", "B", "R")
 TAIL_BYTES = 16 * 1024
 # Substates the census derives from a bucket; it may rewrite them while nothing is in flight.
 CENSUS_OWNED = (
@@ -85,6 +86,10 @@ def outcome(rec: T.Record, rc: Optional[int], text: str) -> Tuple[str, str, str]
     if reasons and rec.phase == "PRE-MOVE":
         reason = reasons[-1].rstrip(":")
         disp, sub = classify.map_notmoved(reason, rec.kind)
+        if disp == "NOT_NEEDED" and rec.close.get("hop"):
+            # a hop's source is the failed TARGET: "not limited" there is a gate to wait out,
+            # never proof the session is fine (it is still stuck on its last error)
+            disp, sub = "WAIT", "WAIT_SLOT"
         if disp == "DETERMINISTIC" and "unreadable" in reason:
             disp = "TRANSIENT"  # a screen we could not read is a retry, never a verdict
         return disp, sub, reason
@@ -99,12 +104,18 @@ def settle_exit(
     if pr.role != "actuator":
         return ""
     if rc == 0:
+        if pr.argv_hash in ("A", "A-husk") and rec.phase == "PRE-MOVE":
+            rec.substate, rec.wait = "IN-FLIGHT", None
         return "%s rc=0" % pr.argv_hash
     if rc is None:
         # Adopted by argv, or exited before this daemon could reap it: no code is no verdict. The
         # derived phase is the truth; scoring it as a failure escalated a move that had engaged.
         return "%s exited, code unknown — the phase decides" % pr.argv_hash
     disp, sub, reason = outcome(rec, rc, text)
+    if pr.argv_hash in MOVE_ACTUATORS and rec.phase == "PRE-MOVE":
+        # Whatever it was refused for, the NEXT move spawn is a new attempt: the double-typer audit
+        # allows exactly one move spawn per (sid, attempt), so a retry must not share one.
+        rec.attempt += 1
     detail = (reason or disp)[:200]
     fp = classify.fingerprint(rec.phase, disp, text, -1 if rc is None else rc, "")
     pre = rec.phase == "PRE-MOVE"
@@ -205,3 +216,41 @@ def dead_actuators(
 ) -> List[Tuple[T.ProcRole, Optional[int]]]:
     """Pair each dead actuator with its exit code (None: exited before this daemon, or adopted)."""
     return [(p, exits.pop(p.pid, None)) for p in procs if p.role == "actuator"]
+
+
+# ── attempts: in flight, hop, release (W5) ───────────────────────────────────────────────────────
+
+
+def mark_in_flight(rec: T.Record) -> bool:
+    """A PLANNED move whose transplant is confirmed (or whose A returned 0) is IN-FLIGHT: the relaunch
+    gap derives PRE-MOVE (source dead, target not up yet), and a PLANNED record there was dispatched
+    a SECOND A over a transplanted session (W5 rig, with and without a daemon restart)."""
+    if rec.phase == "PRE-MOVE" and rec.substate == "PLANNED" and rec.confirm_len is not None:
+        rec.substate, rec.wait = "IN-FLIGHT", None
+        return True
+    return False
+
+
+def new_attempt(rec: T.Record, holder: Optional[T.HolderObs], why: str, now: float) -> None:
+    """§4.2 rows 2-3: the session is live on the target and failed there — a NEW move FROM that
+    target (architecture §5 Pinning). The old target becomes the source; the target is re-placed."""
+    if holder is not None:
+        rec.source_pid, rec.source_lstart = holder.pid, holder.lstart
+    rec.source_acct, rec.source_cfg = rec.target_acct, rec.target_cfg
+    rec.attempt += 1
+    rec.target_acct = rec.target_cfg = rec.assign_id = rec.submit_token = rec.bundle = ""
+    rec.confirm_len, rec.sentinel_until, rec.intent = None, None, None
+    tl = rec.timeline
+    tl.planned = tl.confirmed = tl.exit_typed_by_me = tl.exited = None
+    tl.relaunched = tl.submitted = None
+    rec.phase, rec.substate, rec.wait = "PRE-MOVE", "DETECTED", None
+    rec.close["hop"] = why
+    rec.close["hops"] = int(rec.close.get("hops", 0)) + 1
+
+
+def target_holder(rec: T.Record, snap: T.Snapshot) -> Optional[T.HolderObs]:
+    s = snap.sessions.get(rec.sid)
+    for h in s.holders if s else []:
+        if not h.bg and rec.pane and h.pane is not None and tuple(h.pane) == tuple(rec.pane):
+            return h
+    return None

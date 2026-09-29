@@ -223,12 +223,22 @@ def _derive(ctx: Ctx, snap: T.Snapshot, now: float) -> None:
         if settle.reprobe(rec, now):
             _event(ctx.paths, "reprobe", rec.sid, rec.record_id, "hold re-probed")
         settle.note_confirm(rec)
+        if settle.mark_in_flight(rec):
+            _event(ctx.paths, "in-flight", rec.sid, rec.record_id, "transplant confirmed")
         out = evidence.derive(ctx.paths, rec, snap)
         res = out["result"]
         assert isinstance(res, T.PhaseResult)
         rec.phase = res.phase
         ctx.actions[rec.sid] = res.action
         _note_close(rec, res, snap, now)
+        if res.phase in ("TARGET-LIMITED", "TARGET-AUTH") and not act.live_procs(rec, snap):
+            why = "auth" if res.phase == "TARGET-AUTH" else "limit"
+            old_target = rec.target_acct
+            settle.new_attempt(rec, settle.target_holder(rec, snap), why, now)
+            plan.unassign(rec.record_id)
+            ctx.actions[rec.sid] = "plan"
+            _event(ctx.paths, "hop", rec.sid, rec.record_id,
+                   "%s on %s: attempt %d moves FROM it" % (res.phase, old_target, rec.attempt))
         if res.phase != "PRE-MOVE" or res.substate == "HOLD-MENU":
             rec.substate = res.substate
         if res.phase in ("ENGAGED", "MOVED"):
@@ -353,7 +363,7 @@ def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
         if not argv:
             continue
         pane = snap.panes.get("%d:%d" % rec.pane) if rec.pane else None
-        act.spawn(
+        pid = act.spawn(
             ctx.paths,
             rec,
             which,
@@ -361,6 +371,12 @@ def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
             act.actuator_env(rec, ctx.paths, pane.sock if pane else ""),
             now,
         )
+        if which in settle.MOVE_ACTUATORS + ("C", "C-retry"):
+            store.append_launch(
+                ctx.paths,
+                "%d\t%s\trecon-%s\tspawn\tpid=%d\tattempt=%d\trecord=%s"
+                % (now, rec.sid, which, pid, rec.attempt, rec.record_id),
+            )
         running += 1
         n += 1
     return n
@@ -369,6 +385,12 @@ def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
 def _command(ctx: Ctx, rec: T.Record, which: str) -> List[str]:
     if which == "A":
         rec.submit_token = act.new_token()  # a fresh token per spawn of the move
+        if rec.close.get("hop") == "auth":  # TARGET-AUTH hop: the source's auth fact admits it
+            return act.cmd_move(
+                rec,
+                os.path.join(ctx.paths.facts, "%s.auth.json" % rec.source_acct),
+                voluntary=True,
+            )
         return act.cmd_move(
             rec,
             os.path.join(ctx.paths.facts, "%s.%s.json" % (rec.source_acct, rec.scope)),

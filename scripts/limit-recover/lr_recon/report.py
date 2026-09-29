@@ -203,21 +203,45 @@ DOD_P95_S = 120.0
 _ORD = {1: "1st", 2: "2nd", 3: "3rd"}
 
 
-def _typers(paths: T.Paths, sids: Sequence[str]) -> Dict[Tuple[str, str], set]:
-    """(sid, attempt) → distinct typer pids, from recon/launch.log (fence takes, lr-fire-resume's
-    launch-lock take, and the daemon's own typing spawns all write one line each)."""
+MOVE_ROLES = ("recon-A", "recon-A-husk", "recon-B", "recon-R")
+
+
+def _typers(paths: T.Paths, sids: Sequence[str]) -> Dict[Tuple[str, str], Dict[str, set]]:
+    """(sid, attempt) → {"launch": distinct launch-lock taker pids, "move": move-actuator spawn pids}
+    from recon/launch.log. lr-fire-resume and every fenced legacy actor log their launch-lock take;
+    the daemon logs each move spawn. Either set above 1 is a double typer for that attempt: two
+    processes launching the session, or a second move actuator over the same attempt."""
     want, out = set(sids), {}  # type: ignore[var-annotated]
     try:
         with open(paths.launch_log, encoding="utf-8", errors="replace") as fh:
             for ln in fh:
                 t = ln.rstrip("\n").split("\t")
-                if len(t) < 4 or t[1] not in want or t[3] not in ("taken", "inherited", "typer"):
+                if len(t) < 4 or t[1] not in want:
                     continue
                 kv = dict(x.split("=", 1) for x in t[4:] if "=" in x)
-                out.setdefault((t[1], kv.get("attempt", "?")), set()).add(kv.get("pid", "?"))
+                cls = (
+                    "launch"
+                    if t[3] in ("taken", "inherited")
+                    else "move"
+                    if t[3] == "spawn" and t[2] in MOVE_ROLES
+                    else ""
+                )
+                if cls:
+                    key = (t[1], kv.get("attempt", "?"))
+                    out.setdefault(key, {"launch": set(), "move": set()})[cls].add(
+                        kv.get("pid", "?")
+                    )
     except OSError:
         pass
     return out
+
+
+def double_typers(paths: T.Paths, sids: Sequence[str]) -> int:
+    return sum(
+        1
+        for v in _typers(paths, sids).values()
+        if len(v["launch"]) > 1 or len(v["move"]) > 1
+    )
 
 
 def _quarantined(paths: T.Paths, sids: Sequence[str]) -> int:
@@ -239,7 +263,7 @@ def dod_line(paths: T.Paths, records: Sequence[T.Record]) -> str:
     otherwise the tally shape with CLOSED / HOLD named / REPLACED-NEW-WINDOW / NOT_NEEDED."""
     n = len(records)
     sids = [r.sid for r in records]
-    double = sum(1 for v in _typers(paths, sids).values() if len(v) > 1)
+    double = double_typers(paths, sids)
     split = sum(1 for r in records if "SPLIT-BRAIN" in (r.close.get("seen") or []))
     lost = _quarantined(paths, sids)
     via = [r.close.get("via") for r in records]

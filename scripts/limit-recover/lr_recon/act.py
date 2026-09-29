@@ -78,7 +78,9 @@ def _pane_id(rec: T.Record) -> str:
     return str(rec.pane[1]) if rec.pane else ""
 
 
-def cmd_move(rec: T.Record, evidence_file: str = "") -> List[str]:
+def cmd_move(
+    rec: T.Record, evidence_file: str = "", voluntary: bool = False
+) -> List[str]:
     argv = [
         "/bin/bash",
         _p(LR_DIR, "lr-handoff.sh"),
@@ -101,6 +103,8 @@ def cmd_move(rec: T.Record, evidence_file: str = "") -> List[str]:
     ]
     if rec.kind == "idle":
         argv += ["--voluntary", "--account-evidence", evidence_file, "--no-prompt"]
+    elif voluntary:  # a TARGET-AUTH hop: moved on the auth fact, and the prompt still goes
+        argv += ["--voluntary", "--account-evidence", evidence_file]
     return argv
 
 
