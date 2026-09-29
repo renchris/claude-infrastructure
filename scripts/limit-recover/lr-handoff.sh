@@ -537,10 +537,15 @@ if not isinstance(d, dict):
     print("bad not a JSON object"); sys.exit(0)
 if d.get("status") != "rejected":
     print("bad status=%s (want rejected)" % d.get("status")); sys.exit(0)
-if d.get("scope") not in ("5h", "7d"):
-    print("bad scope=%s (want 5h|7d)" % d.get("scope")); sys.exit(0)
+if d.get("scope") not in ("5h", "7d", "auth"):
+    print("bad scope=%s (want 5h|7d|auth)" % d.get("scope")); sys.exit(0)
 if d.get("contradicted") is True:
     print("bad contradicted=true"); sys.exit(0)
+if d.get("scope") == "auth":
+    # An auth fact (the account cannot serve at all) has no reset time: it EXPIRES by deletion,
+    # when the reconciler sees an auth-ok read and a healthy turn after it (lr_recon.facts).
+    # A live file is therefore current by construction (FLEET_V2 W5, TARGET-AUTH hop).
+    print("ok auth -"); sys.exit(0)
 r = d.get("resets_at")
 try:
     if isinstance(r, (int, float)) and not isinstance(r, bool):

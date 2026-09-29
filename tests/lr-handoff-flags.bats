@@ -174,6 +174,23 @@ in_s() { echo $(( $(date +%s) + $1 )); }
   [[ "$output" == *"REFUSED:evidence-invalid — account mismatch"* ]] || false
   [ ! -s "$TX_LOG" ]
 }
+@test "evidence: a live auth fact (no resets_at) admits a voluntary move — the TARGET-AUTH hop" {
+  f="$(fact next.auth.json '{"acct":"next","scope":"auth","status":"rejected","resets_at":null}')"
+  fire --voluntary --account-evidence "$f"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"voluntary move admitted on account evidence $f (auth, -)"* ]] || false
+}
+@test "evidence: a contradicted auth fact refuses rc 6" {
+  f="$(fact next.auth.json '{"acct":"next","scope":"auth","status":"rejected","contradicted":true}')"
+  fire --voluntary --account-evidence "$f"
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"REFUSED:evidence-invalid"*"contradicted=true"* ]] || false
+}
+@test "evidence: an auth fact without --voluntary admits nothing (not-limited, as today)" {
+  f="$(fact next.auth.json '{"acct":"next","scope":"auth","status":"rejected"}')"
+  fire --account-evidence "$f"
+  [[ "$output" != *"voluntary move admitted"* ]] || false
+}
 @test "evidence: the precheck probe gets --voluntary beside --account-evidence (W5 B2)" {
   # a live handoff-fire that parses the flag (lr-handoff greps for the case label)
   printf '# --account-evidence) parsed\n' >> "$STUB/handoff-fire.sh"
