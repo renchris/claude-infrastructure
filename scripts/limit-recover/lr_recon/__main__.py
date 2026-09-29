@@ -558,7 +558,7 @@ def daemon(ctx: Ctx) -> int:
     )
     hb.write_now()
     hb.start()
-    caf = Caffeinate()
+    caf = Caffeinate(os.getpid())
     try:
         while True:
             slept = ctx.clock.tick()

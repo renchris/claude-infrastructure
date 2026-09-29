@@ -224,6 +224,23 @@ class MainTests(unittest.TestCase):
         self.assertIn("mode=observe actuations=0 recon.on=absent", out)
         popen.assert_not_called()  # no background --fresh sweep in shadow mode
 
+    def test_daemon_loop_starts_and_runs_a_pass(self):
+        """W5 rig: the long-running path had never started (Caffeinate() without its pid)."""
+
+        class Stop(Exception):
+            pass
+
+        ctx = M.Ctx(self.paths, None, self.home)
+        summary = {"open": 0}
+        with (
+            mock.patch.object(M, "run_pass", return_value=summary) as rp,
+            mock.patch.object(M, "wait_for_change", side_effect=Stop),
+        ):
+            with self.assertRaises(Stop):
+                M.daemon(ctx)
+        rp.assert_called_once()
+        self.assertTrue(os.path.exists(self.paths.heartbeat))
+
 
 if __name__ == "__main__":
     unittest.main()
