@@ -213,6 +213,29 @@ run_launcher() { # $1=VERIFY_MODE → runs the launcher minted by the last gen
   run_launcher C3
   [ "$(last_argv)" = "$CONT Handoff audit: $BUNDLE/audit.md (lr-ingest-verify: FAIL C3 — target transcript sha mismatch). — $TOKEN" ]
 }
+@test "reconciler prompt: the reconciler's LR_RECON_SUBMIT_TOKEN is the token typed (W5 rig)" {
+  LR_PLACED_BY=reconciler LR_RECON_SUBMIT_TOKEN=lrr-0123456789ab gen
+  run_launcher rc0
+  [ "$TOKEN" = "lrr-0123456789ab" ]
+  [ "$(last_argv)" = "FAST-PATH PROMPT — lrr-0123456789ab" ]
+}
+@test "reconciler launcher: record id and attempt reach lr-fire-resume call-scoped, never exported (W5 rig)" {
+  LR_PLACED_BY=reconciler gen --record-id rec-7 --attempt 2
+  [ "$status" -eq 0 ]
+  l="$(launcher_from_output)"; [ -n "$l" ]
+  grep -q '^exec env LR_RECORD_ID=rec-7 LR_ATTEMPT=2 .*lr-fire-resume.sh' "$l"
+  ! grep -q '^export LR_RECORD_ID\|^export LR_ATTEMPT' "$l"
+}
+@test "reconciler launcher CONTROL: no --record-id, no env prefix" {
+  LR_PLACED_BY=reconciler gen
+  l="$(launcher_from_output)"; [ -n "$l" ]
+  ! grep -q 'LR_RECORD_ID' "$l"
+}
+@test "reconciler token CONTROL: without LR_PLACED_BY=reconciler an incoming token is ignored" {
+  LR_RECON_SUBMIT_TOKEN=lrr-0123456789ab gen
+  run_launcher rc0
+  [[ "$TOKEN" == run:* ]]
+}
 @test "reconciler prompt CONTROL: without LR_PLACED_BY the fallback is still /limit-recover ingest" {
   gen
   run_launcher C3

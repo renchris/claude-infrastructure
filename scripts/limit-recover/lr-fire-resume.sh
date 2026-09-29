@@ -473,6 +473,11 @@ lr_launch_guard() { # (a) take or re-take the launch lock, (b) refuse over any l
     fi
   fi
   _lrl_holder_write "$d" lr-fire-resume "$$" || echo "!! lr-fire-resume: could not write $h" >&2
+  # One line per typer acquisition in the reconciler's launch.log — the §C7 double-typer audit
+  # counts distinct typer pids per (sid, attempt). Best effort, and only where the dir exists.
+  _lrl_log="${LR_RECON_ROOT:-${LR_STATE_DIR:-$HOME/.reso/limit-recover}/recon}"
+  [ -d "$_lrl_log" ] && printf '%s\t%s\tlr-fire-resume\ttaken\tpid=%s\tattempt=%s\trecord=%s\n' \
+    "$(date +%s)" "$SID" "$$" "${LR_ATTEMPT:-?}" "${LR_RECORD_ID:-}" >>"$_lrl_log/launch.log" 2>/dev/null
   hs="$(lr_sid_holders "$SID")"
   if [ -n "$hs" ]; then
     echo "REFUSED — $SID already has a live holder; resuming it again would open it twice:" >&2
@@ -1093,9 +1098,9 @@ expect -c '
   set xargs [expr {[info exists env(LR_EXTRA_ARGS)] ? [regexp -all -inline {\S+} $env(LR_EXTRA_ARGS)] : {}}]
   set xenv  [expr {[info exists env(LR_EXTRA_ENV)] ? [regexp -all -inline {\S+} $env(LR_EXTRA_ENV)] : {}}]
   if {$wrap ne ""} {
-    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION -u LR_RUN -u LR_RUN_DIR -u LR_ADMIT_TOKEN -u LR_SUBMIT_TOKEN -u LR_LOAD_TERM -u CC_ADMIT_TOKEN -u CC_ADMIT_WANT_SID -u CC_ADMIT_LOAD_TERM -u CC_ADMIT_BUDGET_KEY -u LR_EXTRA_ARGS -u LR_EXTRA_ENV DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_AGENT_VIEW=1 {*}$xenv CLAUDE_CONFIG_DIR=$cfg $wrap $bin --permission-mode $perm --model $model --effort $effort --resume $sid {*}$xargs
+    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION -u LR_RUN -u LR_RUN_DIR -u LR_ADMIT_TOKEN -u LR_SUBMIT_TOKEN -u LR_LOAD_TERM -u CC_ADMIT_TOKEN -u CC_ADMIT_WANT_SID -u CC_ADMIT_LOAD_TERM -u CC_ADMIT_BUDGET_KEY -u LR_EXTRA_ARGS -u LR_EXTRA_ENV -u LR_RECORD_ID -u LR_ATTEMPT DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_AGENT_VIEW=1 {*}$xenv CLAUDE_CONFIG_DIR=$cfg $wrap $bin --permission-mode $perm --model $model --effort $effort --resume $sid {*}$xargs
   } else {
-    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION -u LR_RUN -u LR_RUN_DIR -u LR_ADMIT_TOKEN -u LR_SUBMIT_TOKEN -u LR_LOAD_TERM -u CC_ADMIT_TOKEN -u CC_ADMIT_WANT_SID -u CC_ADMIT_LOAD_TERM -u CC_ADMIT_BUDGET_KEY -u LR_EXTRA_ARGS -u LR_EXTRA_ENV DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_AGENT_VIEW=1 {*}$xenv CLAUDE_CONFIG_DIR=$cfg $bin --permission-mode $perm --model $model --effort $effort --resume $sid {*}$xargs
+    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION -u LR_RUN -u LR_RUN_DIR -u LR_ADMIT_TOKEN -u LR_SUBMIT_TOKEN -u LR_LOAD_TERM -u CC_ADMIT_TOKEN -u CC_ADMIT_WANT_SID -u CC_ADMIT_LOAD_TERM -u CC_ADMIT_BUDGET_KEY -u LR_EXTRA_ARGS -u LR_EXTRA_ENV -u LR_RECORD_ID -u LR_ATTEMPT DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_AGENT_VIEW=1 {*}$xenv CLAUDE_CONFIG_DIR=$cfg $bin --permission-mode $perm --model $model --effort $effort --resume $sid {*}$xargs
   }
   # The launch lock now names the spawned claude (env and the wrapper both exec in place, so this
   # pid IS the session). A failure here costs the handover, never the recovery.

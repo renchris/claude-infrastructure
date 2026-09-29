@@ -1481,6 +1481,11 @@ esac
 #   LR_SUBMIT_TOKEN      the run token W3 will look for in the TARGET transcript to prove SUBMITTED
 #   LR_LOAD_TERM         the term switch the driver's probe used, so both ends evaluate one gate
 LR_SUBMIT_TOKEN="run:${SID:0:8}:$TS:$(printf '%04x' $((RANDOM % 65536)))$(printf '%04x' $((RANDOM % 65536)))"
+# A reconciler placement types the RECONCILER's token (W5): lr_recon mints it per attempt and reads
+# it back in the target copy for §4.2 row 5 (ENGAGED), which a token minted here never reaches.
+if [ "${LR_PLACED_BY:-}" = reconciler ] && [ -n "${LR_RECON_SUBMIT_TOKEN:-}" ]; then
+  LR_SUBMIT_TOKEN="$LR_RECON_SUBMIT_TOKEN"
+fi
 cat > "$LAUNCHER" <<EOF
 #!/bin/bash
 # Resume the handed-off session $(printf '%q' "$SID") on account $(printf '%q' "$TARGET") with the ingest prompt.
@@ -1498,12 +1503,19 @@ EOF
 # always got, byte for byte (tests/lr-handoff-launcher-quoting.bats pins it); --no-prompt and a
 # reconciler placement each get their own. Split into appended heredocs so the legacy bytes are
 # the same bytes, not a re-typed copy of them.
+# A reconciler placement's record id and attempt ride CALL-SCOPED into lr-fire-resume (never exported
+# into the pane shell): its launch lock and the recon launch.log key on them, and its spawn line
+# `env -u`s both, so the resumed session never inherits a per-operation id.
+LRH_REC_ENV=""
+if [[ -n "${RECORD_ID:-}" ]]; then
+  LRH_REC_ENV="env LR_RECORD_ID=$(printf '%q' "$RECORD_ID") LR_ATTEMPT=$(printf '%q' "${ATTEMPT:-1}") "
+fi
 if [[ $NO_PROMPT -eq 1 ]]; then
   cat >> "$LAUNCHER" <<EOF
 # ── --no-prompt (W2a): THE CALLER OWNS THE CONTINUATION ─────────────────────────────────────────
 # Nothing is typed into the resumed session and lr-ingest-verify does not run: the caller delivers
 # its own continuation, so a verify here would only spend time deciding a prompt nobody sends.
-exec $(printf '%q ' "${FIRE_ARGV[@]}")--no-prompt
+exec ${LRH_REC_ENV}$(printf '%q ' "${FIRE_ARGV[@]}")--no-prompt
 EOF
 elif [[ "${LR_PLACED_BY:-}" == reconciler ]]; then
   cat >> "$LAUNCHER" <<EOF
@@ -1544,7 +1556,7 @@ if [ -n "\$LRP_WHY" ]; then
   esac
 fi
 
-exec $(printf '%q ' "${FIRE_ARGV[@]}")--prompt "\$LRP_PROMPT"
+exec ${LRH_REC_ENV}$(printf '%q ' "${FIRE_ARGV[@]}")--prompt "\$LRP_PROMPT"
 EOF
 else
   cat >> "$LAUNCHER" <<EOF
@@ -1583,7 +1595,7 @@ fi
 # whenever something went wrong, i.e. the path whose engagement most needs proving.
 [ -z "\$LRP_WHY" ] || LRP_PROMPT="\$LRP_PROMPT — lr-ingest-verify FAILED: \$LRP_WHY — \$LR_SUBMIT_TOKEN"
 
-exec $(printf '%q ' "${FIRE_ARGV[@]}")--prompt "\$LRP_PROMPT"
+exec ${LRH_REC_ENV}$(printf '%q ' "${FIRE_ARGV[@]}")--prompt "\$LRP_PROMPT"
 EOF
 fi
 chmod +x "$LAUNCHER"
