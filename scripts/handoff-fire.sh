@@ -1356,9 +1356,15 @@ kid, field = os.environ["KID"], os.environ["KFIELD"]
 for ow in d:
     for t in ow.get("tabs", []):
         for w in t.get("windows", []):
-            hit = (str(w.get("id")) == kid) if kid else bool(w.get("is_focused"))
+            # A window'"'"'s own is_focused is TRUE for the active window of EVERY tab in the focused
+            # OS window (kitty 0.4x, measured in the FLEET_V2 W5 rig: six tabs, six "focused"
+            # windows). UI focus is the conjunction of the OS window, the tab and the window; an
+            # absent flag (older kitty, fixtures) does not veto.
+            foc = bool(w.get("is_focused")) and ow.get("is_focused", True) is not False \
+                and t.get("is_focused", True) is not False
+            hit = (str(w.get("id")) == kid) if kid else foc
             if hit:
-                v = w.get(field)
+                v = foc if field == "is_focused" else w.get(field)
                 if v is not None:
                     print(v)
                 sys.exit(0)

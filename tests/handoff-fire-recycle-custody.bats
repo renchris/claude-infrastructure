@@ -569,6 +569,22 @@ SH
   rows_of recycle-held-focused | grep -q 'unconfirm rc 0' || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
 }
 
+@test "F2 a background TAB's window is not focused, though kitty flags its window is_focused (W5 rig)" {
+  tail_world
+  # The shape kitty emits (measured in the W5 rig): the active window of EVERY tab of the focused OS
+  # window carries is_focused:true; only the tab and OS-window flags say which one the operator sees.
+  cat > "$STUB/kitty" <<'SH'
+#!/usr/bin/env bash
+printf '[{"is_focused":true,"tabs":[{"is_focused":true,"windows":[{"id":901,"is_focused":true,"pid":1}]},{"is_focused":false,"windows":[{"id":903,"is_focused":true,"pid":3}]}]},{"is_focused":false,"tabs":[{"is_focused":true,"windows":[{"id":904,"is_focused":true,"pid":4}]}]}]\n'
+SH
+  chmod +x "$STUB/kitty"
+  export CC_TERM=kitty CC_KITTY_BIN="$STUB/kitty"
+  [ "$(hf_pane_focused 901)" = yes ]
+  [ "$(hf_pane_focused 903)" = no ]   # background tab of the focused OS window
+  [ "$(hf_pane_focused 904)" = no ]   # active tab of an unfocused OS window
+  [ "$(kt_window_field "" id)" = 901 ]
+}
+
 # ══ THE WATCHER HALF (W2b T-recycle-b): cases 9-12, the 1 s poll and the launch-lock prefix ═══════
 # Mutants (one per case, run by hand before landing): 9 make the husk branch `if false` (confirm
 # runs) · 10 make hf_launch_lock_take return 0 at its top · 11 make HF_FOLD_STUB default `off` ·
