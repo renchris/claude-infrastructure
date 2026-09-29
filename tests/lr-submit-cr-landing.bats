@@ -61,6 +61,8 @@ set SENT {}
 set LOOKS 0
 proc send {args} { global SENT; lappend SENT [lindex $args end] }
 proc send_user {args} {}
+proc lr_say {m} {}
+proc lr_tell {m} {}
 proc lr_note {a b c} {}
 proc sleep {n} {}
 proc lr_pump {n} {}

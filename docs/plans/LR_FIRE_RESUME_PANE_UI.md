@@ -7,6 +7,10 @@ status: in-progress
 Scope (frozen): the three defects below are fixed, each covered by a bats test that fails on the
 pre-fix code, landed via the project /ship, and converged live.
 
+Scope (grown): +the same byte-transparent relay in `bin/reso-resume-one` (the boot-resume launcher
+runs the same Tcl 8.5 expect relay, so every emoji in a boot-resumed pane was mangled the same way;
+its patterns are all ASCII, so the fix there is the two-channel block and the drain call site).
+
 Reported 2026-09-28 ~19:16-19:24 CDT with three screenshots of panes relaunched by `cc-lr upgrade`
 (runs `ddd154a9-20260929T001507Z`, `46bc0436-20260929T001856Z`, `e0487c53-20260929T002302Z`). The
 relaunches worked: each session resumed, received its prompt and answered it. The pane was broken.

@@ -682,6 +682,24 @@ command -v lr_state_append >/dev/null 2>&1 || {
 lr_state_append "$LR_RUN_DIR" "${LR_ST_STATE:-}" "${LR_ST_STAGE:-}" "${LR_ST_DETAIL:-}" || true
 LRNOTESH
 export LR_PROBE LR_LIB_PATH LR_IT2 LR_PANE LR_SCREEN_WANT LR_SCREEN_NONCE LR_SCREEN_TAIL LR_SCREEN_SH LR_NOTE_SH
+# ══ NOTHING WRITES TO THE PANE TTY ONCE THE TUI OWNS IT (2026-09-28) ═════════════════════════════
+# The expect program used to report every step with send_user, i.e. raw bytes on the very tty
+# Claude Code was painting. Those lines landed inside the composer box, wrapped mid-word, and
+# survived the next redraw (three panes relaunched by cc-lr upgrade that evening; cc-tui.bats models
+# the torn frame they leave). Status now goes to LR_SAY_LOG, beside the run state when there is a
+# run dir and under the limit-recover state dir when this is a by-hand run. A verdict that needs a
+# human also goes to the session inbox through cc-notify, which surfaces as context at the next
+# boundary and never as keystrokes. The stderr lines ABOVE this point stay: before the spawn this
+# pane is an ordinary shell.
+if [ -n "${LR_RUN_DIR:-}" ]; then
+  LR_SAY_LOG="$LR_RUN_DIR/lr-fire-resume.log"
+else
+  LR_SAY_LOG="${LR_STATE_DIR:-$HOME/.reso/limit-recover}/fire-resume/$SID.log"
+fi
+mkdir -p "$(dirname "$LR_SAY_LOG")" 2>/dev/null || true
+LR_NOTIFY="${LR_NOTIFY_BIN:-$HOME/.claude/bin/cc-notify}"
+[ -x "$LR_NOTIFY" ] || LR_NOTIFY=""
+export LR_SAY_LOG LR_NOTIFY
 
 lr_rc=0
 # THE RELAUNCH-RC TRAP IS DISARMED HERE, and this line is the whole of its scope rule: everything
@@ -734,6 +752,26 @@ expect -c '
     if {![info exists env(LR_NOTE_SH)]} { return }
     catch { exec env LR_ST_STATE=$state LR_ST_STAGE=$stage LR_ST_DETAIL=$detail \
                  /bin/bash -c $env(LR_NOTE_SH) }
+  }
+  # THE STATUS CHANNEL IS A FILE, NEVER THE PANE (2026-09-28). The pane tty belongs to the TUI from
+  # the spawn on, and bytes written to it by this program paint over the composer. lr_say appends
+  # one line to LR_SAY_LOG. lr_tell does that AND mails the session inbox, for the verdicts a human
+  # must act on. cc-notify runs in the background with every stream on /dev/null, because a Tcl exec
+  # in the background otherwise inherits this program stdout, which is the pane.
+  proc lr_say {msg} {
+    global env
+    if {![info exists env(LR_SAY_LOG)] || $env(LR_SAY_LOG) eq ""} { return }
+    catch {
+      set fh [open $env(LR_SAY_LOG) a]
+      puts $fh "[clock format [clock seconds] -format {%Y-%m-%dT%H:%M:%SZ} -gmt 1] $msg"
+      close $fh
+    }
+  }
+  proc lr_tell {msg} {
+    global env
+    lr_say $msg
+    if {![info exists env(LR_NOTIFY)] || $env(LR_NOTIFY) eq ""} { return }
+    catch { exec $env(LR_NOTIFY) --from lr-fire-resume $env(LR_SID) "lr-fire-resume: $msg" < /dev/null >& /dev/null & }
   }
   # WAIT BY READING, NEVER BY SLEEPING, once the prompt is typed (2026-09-24, pane 405). A bare
   # sleep reads nothing from the spawn, the pty buffer fills and claude BLOCKS on its own output:
@@ -793,7 +831,7 @@ expect -c '
       }
       if {$sv eq "MENU"} {
         lr_note CR-WITHHELD inject "a menu is parked over the composer — Enter would take its default, so NOTHING was sent"
-        send_user "\nlr-fire-resume: CR WITHHELD — a menu is parked over the composer. Enter would take its highlighted default, so nothing was sent. Read the pane.\n"
+        lr_tell "CR WITHHELD — a menu is parked over the composer. Enter would take its highlighted default, so nothing was sent. Read the pane."
         return
       }
       lr_pump 1
@@ -846,6 +884,46 @@ expect -c '
   } else {
     spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION -u LR_RUN -u LR_RUN_DIR -u LR_ADMIT_TOKEN -u LR_SUBMIT_TOKEN -u LR_LOAD_TERM -u CC_ADMIT_TOKEN -u CC_ADMIT_WANT_SID -u CC_ADMIT_LOAD_TERM -u CC_ADMIT_BUDGET_KEY -u LR_EXTRA_ARGS -u LR_EXTRA_ENV DISABLE_AUTOUPDATER=1 {*}$xenv CLAUDE_CONFIG_DIR=$cfg $bin --permission-mode $perm --model $model --effort $effort --resume $sid {*}$xargs
   }
+  # ══ THE RELAY IS BYTE-TRANSPARENT (2026-09-28) ═══════════════════════════════════════════════
+  # /usr/bin/expect is 5.45 on Tcl 8.5, which cannot hold a 4-byte UTF-8 character. Decoding the
+  # session output through the default utf-8 channel turned each byte of an emoji into its own
+  # Latin-1 character and re-encoded it, so the peer-mail line painted as `ð¬ peer mail` and every
+  # astral glyph the TUI draws was mangled for the life of the session, in the relay AND in
+  # interact. BMP characters survived, which is why the arrow on the same line looked fine. The
+  # locale is not the cause: this measured the same under UTF-8, LC_ALL=C and env -i.
+  # So both channels carry BYTES. Anything this program compares against that stream or types into
+  # it goes through lr_b, which re-encodes it with the encoding Tcl decoded it with, restoring its
+  # original bytes. If either fconfigure fails, BOTH stay as they were and lr_b is the identity: a
+  # half-binary relay would double-encode every non-ASCII byte, which is worse than the old defect.
+  set lr_bytes 0
+  if {![catch {fconfigure $user_spawn_id -encoding binary}]} {
+    if {[catch {fconfigure $spawn_id -encoding binary}]} {
+      catch {fconfigure $user_spawn_id -encoding [encoding system]}
+    } else {
+      set lr_bytes 1
+    }
+  }
+  proc lr_b {s} {
+    global lr_bytes
+    if {$lr_bytes} { return [encoding convertto [encoding system] $s] }
+    return $s
+  }
+  # The reply drain decodes what it keeps as utf-8 explicitly, so its keystrokes go back the same way.
+  proc lr_b_utf8 {s} {
+    global lr_bytes
+    if {$lr_bytes} { return [encoding convertto utf-8 $s] }
+    return $s
+  }
+  set re_menu        [lr_b $env(LR_RE_MENU)]
+  set re_asis_strong [lr_b $env(LR_RE_ASIS_STRONG)]
+  set re_asis        [lr_b $env(LR_RE_ASIS)]
+  set re_trust       [lr_b $env(LR_RE_TRUST)]
+  set re_trust_rb    [lr_b $env(LR_RE_TRUST_RB)]
+  set re_fs          [lr_b $env(LR_RE_FS)]
+  set re_fs_rb       [lr_b $env(LR_RE_FS_RB)]
+  set re_overage     [lr_b $env(LR_RE_OVERAGE)]
+  set re_ready       [lr_b $env(LR_RE_READY)]
+  set prompt_b       [lr_b $prompt]
 
   # Move the selector to option $steps+1 and CONFIRM it landed there before committing. Returns 1
   # when confirmed and the CR was sent, 0 when it could not be confirmed — in which case NOTHING is
@@ -861,7 +939,7 @@ expect -c '
       # readback needs has already been eaten, and with no keystroke sent nothing repaints it —
       # the readback would time out forever and park a prompt that was correctly identified.
       send "\r"
-      send_user "\nlr-fire-resume: $what — selector confirmed by the trigger, answered.\n"
+      lr_say "$what — selector confirmed by the trigger, answered."
       return 1
     }
     set timeout 10
@@ -877,11 +955,10 @@ expect -c '
     set timeout 300
     if {$seen ne ""} {
       send "\r"
-      send_user "\nlr-fire-resume: $what — selector confirmed by $seen, answered.\n"
+      lr_say "$what — selector confirmed by $seen, answered."
       return 1
     }
-    send_user "\nlr-fire-resume: WARNING — could not confirm the selector for $what; sent NOTHING.\n"
-    send_user "  Answer it by hand in this pane. Refusing to guess: the next option down is destructive.\n"
+    lr_tell "WARNING — could not confirm the selector for $what; sent NOTHING. Answer it by hand in the pane. Refusing to guess: the next option down is destructive."
     return 0
   }
   trap {
@@ -895,7 +972,7 @@ expect -c '
   # observed it fire. Each answer_menu arm restores it explicitly, because answer_menu leaves 300.
   set timeout $quiet
   expect {
-    -re $env(LR_RE_MENU) {
+    -re $re_menu {
       # The resume-return menu rendered anyway — the source suppression above did not take (an
       # older/newer binary, or LR_RESUME_SUPPRESS=off). The trigger is the selector line of option 1,
       # which renders only once the select is mounted and raw mode is on; that also preserves the
@@ -908,9 +985,9 @@ expect -c '
         set menu_answered 1
         sleep 1
         if {$asis} {
-          answer_menu 1 $env(LR_RE_ASIS_STRONG) $env(LR_RE_ASIS) "resume full session as-is"
+          answer_menu 1 $re_asis_strong $re_asis "resume full session as-is"
         } else {
-          answer_menu 0 $env(LR_RE_MENU) $env(LR_RE_MENU) "resume from summary (--summary)" 1
+          answer_menu 0 $re_menu $re_menu "resume from summary (--summary)" 1
         }
       }
       # answer_menu leaves `timeout` at 300; re-entering the loop with it would restore the
@@ -918,9 +995,9 @@ expect -c '
       set timeout $quiet
       exp_continue
     }
-    -re $env(LR_RE_TRUST) {
+    -re $re_trust {
       sleep 1
-      answer_menu 0 $env(LR_RE_TRUST_RB) $env(LR_RE_TRUST_RB) "folder trust"
+      answer_menu 0 $re_trust_rb $re_trust_rb "folder trust"
       # answer_menu leaves `timeout` at 300; re-entering the loop with it would restore the
       # silent 300 s give-up this wave deleted.
       set timeout $quiet
@@ -929,20 +1006,20 @@ expect -c '
     # informational overage NOTICE (Enter dismisses either way — safe). Opt-in upsells
     # (extra-usage/remote-control/passes) are declined at the SOURCE via lr-preseed-env.sh
     # raising their *SeenCount gates — never blindly answered here (Enter could enable them).
-    -re $env(LR_RE_OVERAGE) { send "\r"; exp_continue }
+    -re $re_overage { send "\r"; exp_continue }
     # fullscreen upsell: option 2 is "Not now" (options verified in the 2.1.220 bundle:
     # ["Yes, try it", "Not now"]). Previously this sent Down+CR BLIND, so a reordered menu would
     # have selected "Yes, try it" and restarted the session mid-recovery; now the selector is read
     # back first, and an unconfirmed selector parks instead of guessing.
-    -re $env(LR_RE_FS) {
+    -re $re_fs {
       sleep 1
-      answer_menu 1 $env(LR_RE_FS_RB) $env(LR_RE_FS_RB) "fullscreen upsell (Not now)"
+      answer_menu 1 $re_fs_rb $re_fs_rb "fullscreen upsell (Not now)"
       # answer_menu leaves `timeout` at 300; re-entering the loop with it would restore the
       # silent 300 s give-up this wave deleted.
       set timeout $quiet
       exp_continue
     }
-    -re $env(LR_RE_READY) {
+    -re $re_ready {
       if {$prompt ne "" && !$injected} {
         set injected 1
         # 0.3/0.2/0.2, down from 2/1/1. The three sleeps exist to let the composer mount and to keep
@@ -953,7 +1030,7 @@ expect -c '
         sleep 0.3
         send "\025"
         sleep 0.2
-        send -- $prompt
+        send -- $prompt_b
         lr_submit_cr
       }
     }
@@ -975,15 +1052,15 @@ expect -c '
         if {$sv eq "EMPTY"} {
           set injected 1
           lr_note READY-QUIET inject "READY never matched; composer reads EMPTY after ${quiet}s quiet — typing"
-          send_user "\nlr-fire-resume: READY never matched, but the composer reads EMPTY after ${quiet}s of quiet — typing the prompt on that evidence.\n"
+          lr_say "READY never matched, but the composer reads EMPTY after ${quiet}s of quiet — typing the prompt on that evidence."
           sleep 0.3
           send "\025"
           sleep 0.2
-          send -- $prompt
+          send -- $prompt_b
           lr_submit_cr
         } else {
           lr_note READY-NOT-SEEN inject "screen reads $sv after ${quiet}s quiet — prompt NOT typed"
-          send_user "\n✗ READY NEVER SEEN — prompt NOT typed: the pty went quiet for ${quiet}s and the screen reads $sv, not an empty composer. NOTHING was sent, because Enter on a parked menu takes its default. Type the prompt by hand in this pane.\n"
+          lr_tell "✗ READY NEVER SEEN — prompt NOT typed: the pty went quiet for ${quiet}s and the screen reads $sv, not an empty composer. NOTHING was sent, because Enter on a parked menu takes its default. Type the prompt by hand in the pane."
         }
       }
     }
@@ -1048,7 +1125,7 @@ expect -c '
         if {$sv eq "DRAFT-MINE"} {
           incr recr
           lr_note SUBMIT-RECR submit "prompt still in the composer after ${poll}s — one more CR"
-          send_user "\nlr-fire-resume: the prompt is still sitting in the composer after ${poll}s (nothing in the transcript) — sending ONE more Enter.\n"
+          lr_say "the prompt is still sitting in the composer after ${poll}s (nothing in the transcript) — sending ONE more Enter."
           send "\r"
           # EXTEND, NEVER SHRINK. This used to be an unconditional `set deadline [expr {$t + 10}]`,
           # which on a run whose deadline had already been stretched to qmax CUT it back to 10s and
@@ -1098,10 +1175,10 @@ expect -c '
           if {!$unmeasured} {
             set unmeasured 1
             lr_note SUBMIT-UNMEASURED submit "screen reads $sv after ${poll}s — not a negative; re-reading the composer every 15s and polling the transcript to ${deadline}s"
-            send_user "\nlr-fire-resume: nothing in the transcript after ${poll}s and the screen reads $sv — NOT a measured failure (an EMPTY composer is what a successful submit leaves, and UNKNOWN means no pane was read). No keystroke sent; re-reading the composer every 15s and polling the transcript to ${deadline}s.\n"
+            lr_say "nothing in the transcript after ${poll}s and the screen reads $sv — NOT a measured failure (an EMPTY composer is what a successful submit leaves, and UNKNOWN means no pane was read). No keystroke sent; re-reading the composer every 15s and polling the transcript to ${deadline}s."
           }
         } else {
-          send_user "\nlr-fire-resume: nothing in the transcript after ${poll}s and the composer reads $sv, not our prompt — NOT re-sending Enter.\n"
+          lr_say "nothing in the transcript after ${poll}s and the composer reads $sv, not our prompt — NOT re-sending Enter."
           break
         }
       }
@@ -1109,18 +1186,18 @@ expect -c '
     }
     if {$verb eq "submitted"} {
       lr_note submitted submit "user record carrying the run token at $ts"
-      send_user "\nlr-fire-resume: SUBMITTED — the prompt is in the transcript at $ts.\n"
+      lr_say "SUBMITTED — the prompt is in the transcript at $ts."
     } elseif {$verb eq "queued"} {
       lr_note queued submit "enqueued at $ts; still behind a running turn at the ${deadline}s bound"
-      send_user "\nlr-fire-resume: QUEUED — the prompt was accepted at $ts and is waiting behind a running turn. It has NOT started yet.\n"
+      lr_say "QUEUED — the prompt was accepted at $ts and is waiting behind a running turn. It has NOT started yet."
     } elseif {$verb eq "unreadable"} {
       lr_note INDETERMINATE:submit submit "the target transcript could not be read — submission NOT measured"
-      send_user "\nlr-fire-resume: submission NOT MEASURED — the target transcript could not be read. This is not a failure and it is not a success; read the pane.\n"
+      lr_say "submission NOT MEASURED — the target transcript could not be read. This is not a failure and it is not a success; read the pane."
     } elseif {$verb eq "skip"} {
-      send_user "\nlr-fire-resume: submission not verified — this run carries no submit token (a by-hand run, or lr-submit-probe.sh is unreachable).\n"
+      lr_say "submission not verified — this run carries no submit token (a by-hand run, or lr-submit-probe.sh is unreachable)."
     } else {
       lr_note FAILED:submit submit "no record of the prompt in the transcript within ${deadline}s"
-      send_user "\n✗ NOT SUBMITTED — the prompt never reached the transcript within ${deadline}s. The session is alive and TASK-LESS. Type the prompt by hand in this pane.\n"
+      lr_tell "✗ NOT SUBMITTED — the prompt never reached the transcript within ${deadline}s. The session is alive and may be TASK-LESS: check the composer, and type the prompt by hand only if it is not already answered."
     }
     set timeout 300
   }
@@ -1175,7 +1252,7 @@ expect -c '
   # echo back ON before the drain snapshots the tty, so the state it restores is the ORIGINAL one
   if {$lr_tty_orig ne ""} { catch {exec /bin/stty $lr_tty_orig <@ stdin 2>/dev/null} }
   set lr_keep [lr_drain_user]
-  if {$lr_keep ne ""} { send -- $lr_keep }
+  if {$lr_keep ne ""} { send -- [lr_b_utf8 $lr_keep] }
   interact
 ' || lr_rc=$?
 [ -z "$lr_tty_saved" ] || stty "$lr_tty_saved" 2>/dev/null || true

@@ -96,7 +96,7 @@ incident_bytes() {
     [ "$(grep -c '^  interact$' "$f")" = 1 ] || { echo "$f: expected exactly one interact"; false; }
     # shellcheck disable=SC2016  # the expected text is literal Tcl source, never a shell expansion
     [ "$(grep -B2 '^  interact$' "$f" | head -2 | tr -d '\n')" = \
-      '  set lr_keep [lr_drain_user]  if {$lr_keep ne ""} { send -- $lr_keep }' ] \
+      '  set lr_keep [lr_drain_user]  if {$lr_keep ne ""} { send -- [lr_b_utf8 $lr_keep] }' ] \
       || { echo "$f: the drain call does not immediately precede interact"; grep -B3 '^  interact$' "$f"; false; }
   done
 }

@@ -387,6 +387,8 @@ SH
   export LR_SUBMIT_TOKEN="$TOK"
   export LR_RUN_DIR="$BATS_TEST_TMPDIR/run"
   export LR_LIB_PATH="$REPO/scripts/limit-recover/lr-lib.sh"
+  # The program's status lines go to this log, never to the pane (tests/lr-fire-resume-pane-ui.bats).
+  export LR_SAY_LOG="$LR_RUN_DIR/lr-fire-resume.log"
 }
 screen() { # $1 = call ordinal, $2 = one of empty|menu|mine
   local b='────────────────────────────────' f="$LR_STUB_DIR/$1.txt"
@@ -419,6 +421,8 @@ states() { jq -r '.state' "$LR_RUN_DIR/events.jsonl" 2>/dev/null | tr '\n' ' '; 
 # The state alone cannot carry a verdict — READY-NOT-SEEN is the same word for MENU, DRAFT and
 # UNKNOWN, which is exactly how the MENU claim went unproven. The DETAIL is where $sv is written.
 details() { jq -r '.detail' "$LR_RUN_DIR/events.jsonl" 2>/dev/null | tr '\n' ' '; }
+# What the program SAID. It used to be painted on the pane ($output); it is now the status log.
+said() { cat "$LR_SAY_LOG" 2>/dev/null; }
 
 # ── THE ONE PLACE THESE CASES MEET A WALL CLOCK ───────────────────────────────────────────────────
 #
@@ -570,12 +574,12 @@ INNER
   screen 1 menu
   lr_expect_run 60
   [ ! -s "$LR_TEST_GOT" ] || { echo "something was typed: $(cat "$LR_TEST_GOT")"; false; }
-  [[ "$output" == *"READY NEVER SEEN"* ]] || { echo "$output"; false; }
+  [[ "$(said)" == *"READY NEVER SEEN"* ]] || { said; false; }
   [[ "$(states)" == *"READY-NOT-SEEN"* ]] || { echo "states: $(states)"; false; }
   # …and it parked because it RECOGNISED A MENU, which is a different fact from "not EMPTY". Without
   # this pair the case was satisfied by UNKNOWN, i.e. by the screen reader failing — see the fixture.
-  [[ "$output" == *"the screen reads MENU"* ]] \
-    || { echo "parked without recognising the menu: $output"; false; }
+  [[ "$(said)" == *"the screen reads MENU"* ]] \
+    || { echo "parked without recognising the menu: $(said)"; false; }
   [[ "$(details)" == *"screen reads MENU"* ]] \
     || { echo "the state log did not record the verdict: $(details)"; false; }
 }
@@ -587,7 +591,7 @@ INNER
   # program captures at spawn — the test is about the TOKEN, not about clock resolution.
   printf '{"type":"user","timestamp":"2099-01-01T00:00:00.000Z","message":{"role":"user","content":"ingest %s"}}\n' "$TOK" > "$TX"
   lr_expect_run 60
-  [[ "$output" == *"SUBMITTED"* ]] || { echo "$output"; false; }
+  [[ "$(said)" == *"SUBMITTED"* ]] || { said; false; }
   [[ "$(states)" == *"submitted"* ]] || { echo "states: $(states)"; false; }
 }
 
@@ -653,7 +657,7 @@ SH
   lr_expect_run 90
   # exactly TWO lines reached the stub: the prompt, and the single re-Enter (an empty line).
   [ "$(wc -l < "$LR_TEST_GOT" | tr -d ' ')" = 2 ] || { cat "$LR_TEST_GOT"; false; }
-  [[ "$output" == *"NOT SUBMITTED"* ]] || { echo "$output"; false; }
+  [[ "$(said)" == *"NOT SUBMITTED"* ]] || { said; false; }
   [[ "$(states)" == *"FAILED:submit"* ]] || { echo "states: $(states)"; false; }
 }
 
@@ -1214,8 +1218,8 @@ arm_over() { # $1 = launcher path — runs the REAL arming block and prints what
   # exactly ONE line reached the stub — our prompt. The re-Enter was NOT sent.
   [ "$(wc -l < "$LR_TEST_GOT" | tr -d ' ')" = 1 ] \
     || { echo "a CR was sent over someone else's composer text:"; cat "$LR_TEST_GOT"; false; }
-  [[ "$output" == *"the composer reads DRAFT, not our prompt — NOT re-sending Enter"* ]] \
-    || { echo "the refusal did not name what it saw: $output"; false; }
+  [[ "$(said)" == *"the composer reads DRAFT, not our prompt — NOT re-sending Enter"* ]] \
+    || { echo "the refusal did not name what it saw: $(said)"; false; }
   # …and the run does NOT record a re-CR it never sent
   [[ "$(states)" != *"SUBMIT-RECR"* ]] || { echo "states claim a re-CR was sent: $(states)"; false; }
 }
@@ -1241,8 +1245,8 @@ arm_over() { # $1 = launcher path — runs the REAL arming block and prints what
   lr_expect_run 90
   [ "$(wc -l < "$LR_TEST_GOT" | tr -d ' ')" = 1 ] \
     || { echo "a keystroke was sent on the strength of a refusal:"; cat "$LR_TEST_GOT"; false; }
-  [[ "$output" == *"submission NOT MEASURED"* ]] \
-    || { echo "the refusal was not reported as unmeasured: $output"; false; }
+  [[ "$(said)" == *"submission NOT MEASURED"* ]] \
+    || { echo "the refusal was not reported as unmeasured: $(said)"; false; }
   [[ "$(states)" == *"INDETERMINATE:submit"* ]] || { echo "states: $(states)"; false; }
   [[ "$(states)" != *"FAILED:submit"* ]] \
     || { echo "a refusal was recorded as a measured submission failure: $(states)"; false; }

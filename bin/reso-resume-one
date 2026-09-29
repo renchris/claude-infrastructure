@@ -558,6 +558,24 @@ expect -c '
   set mcplist [list]
   if {$mcpdec ne ""} { lappend mcplist $mcpdec }
   spawn -noecho env {*}$envpfx $bin --permission-mode auto --model $model --effort $effort {*}$mcplist --resume $sid
+  # THE RELAY IS BYTE-TRANSPARENT (2026-09-28), as in scripts/limit-recover/lr-fire-resume.sh, which
+  # carries the measurement. Tcl 8.5 cannot hold a 4-byte UTF-8 character, so a utf-8 channel turned
+  # every emoji the session painted into Latin-1 debris for the life of the pane. Both channels carry
+  # bytes; if either fconfigure fails, both stay as they were. Every pattern below is ASCII, so none
+  # of them needs converting; the only non-ASCII thing this program sends is the drained keystrokes.
+  set lr_bytes 0
+  if {![catch {fconfigure $user_spawn_id -encoding binary}]} {
+    if {[catch {fconfigure $spawn_id -encoding binary}]} {
+      catch {fconfigure $user_spawn_id -encoding [encoding system]}
+    } else {
+      set lr_bytes 1
+    }
+  }
+  proc lr_b_utf8 {s} {
+    global lr_bytes
+    if {$lr_bytes} { return [encoding convertto utf-8 $s] }
+    return $s
+  }
   # keep the claude UI responsive: propagate iTerm2 pane resizes (SIGWINCH) to the spawned pty.
   # interact does NOT forward window-size changes, so without this the Ink UI stays frozen at the
   # spawn-time width (verified 2026-07-05).
@@ -673,7 +691,7 @@ expect -c '
   }
   # <<< lr-reply-drain
   set lr_keep [lr_drain_user]
-  if {$lr_keep ne ""} { send -- $lr_keep }
+  if {$lr_keep ne ""} { send -- [lr_b_utf8 $lr_keep] }
   interact
 '
 rr_rc=$?
