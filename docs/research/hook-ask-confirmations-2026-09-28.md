@@ -85,10 +85,10 @@ Its own log holds 1,159 real asks and 19 test rows (L).
 | Candidate | Where | Evidence | Verdict |
 |---|---|---|---|
 | Resolve URLs in loop variables, `$(...)` and heredocs | curl-gate parser, `:832` | 76 of 151 post-fix (C) | **Do** |
-| Stop treating `EOF`, `}`, `done` as rm targets | validate-bash tokenizer | 66–79 asks (T, O) | **Do** |
+| Stop treating `EOF`, `}`, `done` as rm targets | validate-bash tokenizer | 66–79 asks (T, O) | **Done** before this census: efc0ef253 (09-23) + b1867c26c (09-24); 0 of 259 rm asks after both went live. CORRECTED (2026-09-29) |
 | Check `--connect-to`, `--resolve`, `-x`, `--socks*` | curl-gate `decide()`; flags parsed at `:271-359`, never checked | a bypass of the host check | **Tighten** |
 | Drop port 4040 (the ngrok API) from `is_localhost_dev` | `:660-666`, runs before the method check | a POST to it opens a public tunnel | **Tighten** |
-| Find why the mktemp resolver still misses | validate-bash (608155c7e) | 23 asks after the fix (R) | Investigate |
+| Find why the mktemp resolver still misses | validate-bash (608155c7e) | 23 asks after the fix (R) | By design — the remaining asks are intended. CORRECTED (2026-09-29) |
 | Add a reviewer | pr-gate `--reviewer` | 4 asks (T) | No change |
 
 **Refused or dangerous:**
@@ -132,3 +132,13 @@ Its own log holds 1,159 real asks and 19 test rows (L).
 | Were the curl waits of 2 s or less in August human clicks? | 30% |
 | Do auto-deny and a human No always leave different result text? | 80% |
 | Does the ≤1.9% hook ceiling still hold? | 25% |
+
+## 6. Decisions (2026-09-29, workflow wf_225e9394-f08: one researcher + one skeptic per decision)
+
+| Decision | Recommendation | Conviction | Deciding evidence |
+|---|---|---|---|
+| Fix validate-bash reading `EOF`/`}`/`done` as rm targets | **Skip — already shipped** (efc0ef253, b1867c26c) | 95% | 84 of 579 rm asks were misparses before; 0 of 259 after both went live |
+| Probe whether the `tool_decision` event reaches OpenTelemetry, to record the button | **Skip** | 85% | The 2.1.284 binary shows it does, but a pure hook ask carries no permission suggestions, so the dialog offers only Yes/No; transcripts already hold Yes vs No |
+| Tighten curl-gate | **Do**: normalize numeric IPs (decimal, hex, octal, IPv4-mapped IPv6) in `is_internal_host` and apply it to `--resolve`/`--connect-to` targets; ask on `-x`/`--proxy`/`--socks*`/`--unix-socket`; drop port 4040 from `is_localhost_dev` | 85% | Offline `decide_command()`: IMDS or LAN via `--connect-to`/`--resolve` or a numeric IP gets allow, defeating the "unconditional" deny; `smart-bash-allowlist` allows `--resolve`, so curl-gate is the only guard. At most ~5 extra prompts over 4 months |
+| Fix curl-gate's loop-URL resolver | **Do, narrowed**: quote-aware glob check in `shell_bindings()`, per-iteration expansion in `expand_argv()`, and close the `for u; do` / backslash-continued / zsh `for u (…)` decoys; do not add `while read` or `((` | 83% | The resolver already exists (03e9a2c6a); a `?` inside a quoted URL disables it (88 of 92 recoverable asks). ~100 fewer prompts/month, 0 phantom allows in replay |
+| Hook-ask ledger | **Fold into `cc-permission-harvest`**, no standalone file: exact join on `cleared_tool_use_id` reported as a hook × structural cross-tab; validate-bash logs `tool_use_id` + `cwd` (not the command); no pr-gate log | 77% | Harvest is the only reader of hook logs; 950 of 1,347 exactly joined hook asks are bucketed "structural" first. Disputed: "no archive row" is not "never shown" (851 of 1,160 unjoined asks ran after human-scale waits) |
