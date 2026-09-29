@@ -1,0 +1,8 @@
+#!/bin/bash
+# The rig's `claude` (FLEET_V2 W5): runs stub-claude.py so that the PROCESS is named claude.
+# Every identity test in the recovery scripts reads argv0's basename (claude|claude.exe); a shebang
+# or `exec -a` onto /usr/bin/python3 loses it, because that shim re-execs the framework's
+# Python.app binary. exec -a straight onto that binary keeps argv0 = this path.
+here="$(cd "$(dirname "$(/usr/bin/python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$0")")" && pwd)"
+py="${LR_RIG_PYAPP:-$(/usr/bin/python3 -c 'import sys;print(sys.base_prefix)')/Resources/Python.app/Contents/MacOS/Python}"
+exec -a "$0" "$py" "$here/stub-claude.py" "$@"

@@ -1,0 +1,25 @@
+{
+  "_what": "FLEET_V2 W5 N=30 fault matrix (plan § W5 table). Every knob is per sid; the rig expands each group into `count` sessions in order. `expect` is the terminal outcome the group must reach and is the ONLY input the expected status line is derived from (lr-recon-rig.sh derives it before the run). `recovers` marks a group that is held first and must then close on its own once its cause clears.",
+  "source": "next",
+  "scope": "5h",
+  "idle_fanout": true,
+  "groups": [
+    {"name": "swallowed-enter", "count": 6, "knobs": {"first_enter_swallow": true}, "expect": "ENGAGED"},
+    {"name": "bgwork-before-transplant", "count": 2, "knobs": {"bg_job": {"at": "boot", "seconds": 7200}}, "expect": "HOLD-BGWORK"},
+    {"name": "bgwork-after-confirm", "count": 1, "knobs": {"bg_job": {"at": "exit", "seconds": 150}}, "expect": "ENGAGED", "recovers": "HOLD-BGWORK"},
+    {"name": "draft-before", "count": 1, "knobs": {"draft": {"at": "boot", "text": "operator draft, do not send"}}, "expect": "HOLD-DRAFT"},
+    {"name": "draft-after-confirm", "count": 1, "knobs": {"draft": {"at": "confirm", "text": "operator draft typed after confirm"}}, "expect": "HOLD-DRAFT"},
+    {"name": "target-limited", "count": 2, "knobs": {"first_turn": "limit"}, "expect": "ENGAGED"},
+    {"name": "first-turn-529", "count": 3, "knobs": {"first_turn": "529"}, "expect": "ENGAGED"},
+    {"name": "target-auth", "count": 2, "knobs": {"first_turn": "auth"}, "expect": "ENGAGED"},
+    {"name": "stub-recreated-in-husk", "count": 1, "knobs": {"recreate_stub_on_append": true}, "expect": "ENGAGED", "fold": true},
+    {"name": "daemon-kill9", "count": 1, "knobs": {}, "daemon_fault": "kill9", "expect": "ENGAGED"},
+    {"name": "daemon-sigstop-200s", "count": 1, "knobs": {}, "daemon_fault": "sigstop200", "expect": "ENGAGED"},
+    {"name": "clock-skew-10min", "count": 1, "knobs": {}, "daemon_fault": "clockskew600", "expect": "ENGAGED"},
+    {"name": "pane-closed-after-exit", "count": 1, "knobs": {"close_pane_on_exit": true}, "expect": "REPLACED-NEW-WINDOW"},
+    {"name": "legacy-holder-dir", "count": 1, "knobs": {}, "legacy_holder": true, "expect": "ENGAGED"},
+    {"name": "stale-request-dead-session", "count": 1, "knobs": {}, "stale_request": true, "expect": "NOT_NEEDED"},
+    {"name": "clean-limited", "count": 2, "knobs": {}, "expect": "ENGAGED"},
+    {"name": "clean-idle", "count": 3, "knobs": {"idle": true}, "expect": "MOVED"}
+  ]
+}

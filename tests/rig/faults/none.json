@@ -1,0 +1,8 @@
+{
+  "_what": "FLEET_V2 W5 N=5 rig cohort: five clean LIMITED sessions on one source account, no faults.",
+  "source": "next",
+  "scope": "5h",
+  "groups": [
+    {"name": "clean", "count": 5, "knobs": {}, "expect": "ENGAGED"}
+  ]
+}
