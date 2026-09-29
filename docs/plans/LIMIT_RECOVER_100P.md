@@ -924,3 +924,15 @@ above; the ones that changed a DESIGN rather than an anchor are restated here so
     byte-for-byte the screen `soft-reset-onto-a-moved-ref` produces when it IS real (477 deletions
     across 11 files of siblings' landed work), and the only thing between the two readings is
     **reading the file list before acting**. After rebasing: 10 files, +3350/−29.
+
+### Status log — 2026-09-29: superseded in shape by LIMIT_RECOVER_FLEET_V2
+
+- **`docs/plans/LIMIT_RECOVER_FLEET_V2.md` supersedes this plan's open fleet shape**, in which
+  `lr-fleet.sh --recover` sequences recoveries one at a time behind the capacity probe (§7 item 8,
+  §4 line 89). FLEET_V2 replaces it with the `lr_recon` reconciler: every limited pane on every
+  limited (account, scope) is recycled in place concurrently, with a closed loop that re-fires every
+  non-completion and a fence (`lr_recon_defers <sid>`) that every legacy actor calls first. The
+  architecture is `docs/plans/LIMIT_RECOVER_FLEET_V2_ARCHITECTURE.md`. Nothing in this plan is
+  deleted; its landed mechanisms (in-place recycle, transplant, launcher, drill) are the parts the
+  reconciler drives. The sibling session's D4 (drain width / kickstart) is superseded by FLEET_V2's
+  W1, W3 and W4. FLEET_V2 W4 adds the measured result here as a new section when it lands.
