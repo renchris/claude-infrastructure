@@ -538,6 +538,9 @@ class Snapshot:
     degraded: List[str] = field(
         default_factory=list
     )  # e.g. "kitty:<sock>", "ps", "registry"
+    rig_refused: List[str] = field(
+        default_factory=list
+    )  # rig mode only: sids dropped because no registry row carries rig:true
 
     def alive(self, pid: int, lstart: str) -> bool:
         row = self.procs.get(pid)

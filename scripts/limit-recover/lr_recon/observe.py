@@ -45,6 +45,15 @@ PS_ENV_OVERRIDES = {"TZ": "UTC", "LC_ALL": "C"}
 KITTEN_APP = "/Applications/kitty.app/Contents/MacOS/kitten"
 
 
+def rig_mode(env: Optional[Mapping[str, str]] = None) -> bool:
+    """The W5 rig daemon (LR_RECON_RIG=1, the plist's name; LR_RIG=1, the plan's) sees ONLY sessions
+    whose registry row carries ``rig: true``. Every other sid — a real session found through its
+    ``--resume`` argv, a planted row without the tag — is dropped from the census before any bucket,
+    record or actuator can exist for it, and named in ``Snapshot.rig_refused``."""
+    e: Mapping[str, str] = os.environ if env is None else env
+    return e.get("LR_RECON_RIG") == "1" or e.get("LR_RIG") == "1"
+
+
 def _ps_env() -> Dict[str, str]:
     env = dict(os.environ)
     env.update(PS_ENV_OVERRIDES)
@@ -235,6 +244,7 @@ def observe(
     lstat_fn: Callable[[str], os.stat_result] = os.lstat,
     kitten: Optional[str] = None,
     registry_dir: Optional[str] = None,
+    rig: Optional[bool] = None,
 ) -> T.Snapshot:
     """One census pass. Never raises: every instrument is fenced and degrades by name."""
     snap = T.Snapshot(
@@ -264,7 +274,15 @@ def observe(
         except Exception:  # noqa: BLE001
             snap.degraded.append("kitty:" + sock)
     try:
-        _sessions(snap, home, glob_fn, roots, registry_dir, transcript_fn)
+        _sessions(
+            snap,
+            home,
+            glob_fn,
+            roots,
+            registry_dir,
+            transcript_fn,
+            rig_mode() if rig is None else rig,
+        )
     except Exception:  # noqa: BLE001
         snap.degraded.append("sessions")
     return snap
@@ -277,6 +295,7 @@ def _sessions(
     roots: Dict[int, Tuple[int, int]],
     registry_dir: Optional[str],
     transcript_fn: Optional[TranscriptFn],
+    rig: bool = False,
 ) -> None:
     procs = snap.procs
     kitty_ok = not any(d.startswith("kitty") for d in snap.degraded)
@@ -313,6 +332,9 @@ def _sessions(
             sids.append(s)
     for sid in sids:
         rrows = [r for r in reg if r["session_id"] == sid]
+        if rig and not any(r.get("rig") is True for r in rrows):
+            snap.rig_refused.append(sid)
+            continue
         live_reg = [r for r in rrows if live(r.get("pid"), procs) is not None]
         pick = live_reg or rrows
         rrow: Optional[Dict[str, Any]] = pick[-1] if pick else None

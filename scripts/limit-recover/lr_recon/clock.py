@@ -101,10 +101,23 @@ class Clock:
         self._last: Optional[Tuple[float, float]] = None
         self._observe_only = False
         self._boottime: Optional[float] = None
+        # Rig seam (W5): seconds ADDED to wall time as read by tick() only, from a file the rig
+        # writes, so a simulated suspend travels the real detection path (uptime stands still
+        # while wall jumps). Unset in production; an unreadable file reads as 0.
+        self._skew_file = env.get("LR_RECON_CLOCK_SKEW_FILE", "")
+
+    def _skew(self) -> float:
+        if not self._skew_file:
+            return 0.0
+        try:
+            with open(self._skew_file, encoding="utf-8") as fh:
+                return float(fh.read().strip() or 0)
+        except (OSError, ValueError):
+            return 0.0
 
     def tick(self) -> float:
         """Return seconds slept since the previous tick (0.0 below threshold or on first call)."""
-        now = (self.wall(), self.uptime())
+        now = (self.wall() + self._skew(), self.uptime())
         prev, self._last = self._last, now
         if prev is None:
             return 0.0

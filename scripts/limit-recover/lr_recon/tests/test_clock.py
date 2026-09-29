@@ -87,6 +87,26 @@ class SleepAccounting(unittest.TestCase):
         self.assertFalse(C.pause_is_sleep(4.9))
         self.assertTrue(C.pause_is_sleep(5.1))
 
+    def test_rig_skew_file_is_a_suspend_on_the_real_path(self) -> None:
+        d = tempfile.mkdtemp()
+        try:
+            f = os.path.join(d, "clock-skew")
+            ft = FakeTime()
+            clk = ft.clock(env={"LR_RECON_CLOCK_SKEW_FILE": f})
+            clk.tick()
+            ft.u += 1
+            ft.w += 1
+            self.assertEqual(clk.tick(), 0.0)  # no file: no skew
+            with open(f, "w") as fh:
+                fh.write("600\n")
+            slept = clk.tick()
+            self.assertAlmostEqual(slept, 600.0)
+            self.assertTrue(clk.take_observe_only())
+            self.assertEqual(clk.tick(), 0.0)  # the skew is a step, not a drift
+            self.assertEqual(ft.clock(env={}).tick(), 0.0)
+        finally:
+            shutil.rmtree(d)
+
     def test_threshold_env_override(self) -> None:
         ft = FakeTime()
         clk = ft.clock(env={"LR_SLEEP_THRESHOLD_S": "2"})

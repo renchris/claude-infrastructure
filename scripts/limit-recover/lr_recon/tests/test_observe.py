@@ -478,6 +478,33 @@ class Observe(unittest.TestCase):
             s.sessions[SIDA].registry_name, "alpha"
         )  # unbound, but not called iterm
 
+    def test_rig_mode_refuses_every_sid_without_a_rig_row(self):
+        self.home.put(
+            ".claude/cc-registry/1.json",
+            dict(
+                session_id=SIDA,
+                pid=503,
+                account="claude-secondary",
+                name="alpha",
+                cwd="/w/a",
+                paneUUID="1",
+                surface="pane",
+                rig=True,
+            ),
+        )
+        s = self.snap(rig=True)
+        self.assertEqual(sorted(s.sessions), [SIDA])
+        self.assertIn(SIDB, s.rig_refused)  # a registry row without the tag
+        self.assertIn(SIDBG, s.rig_refused)  # a session row only
+        self.assertEqual(s.sessions[SIDA].pane, (500, 1))
+        self.assertEqual(self.snap(rig=False).rig_refused, [])
+
+    def test_rig_mode_from_env(self):
+        self.assertTrue(O.rig_mode({"LR_RECON_RIG": "1"}))
+        self.assertTrue(O.rig_mode({"LR_RIG": "1"}))
+        self.assertFalse(O.rig_mode({"LR_RIG": "0"}))
+        self.assertFalse(O.rig_mode({}))
+
     def test_transcript_failure_degrades(self):
         def boom(c, d, sid):
             raise ValueError(sid)

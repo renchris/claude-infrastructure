@@ -82,6 +82,7 @@ class Ctx:
         self.actuations = 0
         self.degraded_streak = 0
         self.last_summary: Dict[str, Any] = {}
+        self.rig_refused: set = set()
 
 
 def _alive(pid: int, lstart: str) -> bool:
@@ -447,6 +448,10 @@ def run_pass(ctx: Ctx, force_observe: bool = False) -> Dict[str, Any]:
     now = time.time()
     snap = observe.observe(paths, ctx.home, transcript_fn=transcript.observe, now=now)
     ctx.degraded_streak = ctx.degraded_streak + 1 if snap.degraded else 0
+    for sid in snap.rig_refused:  # rig mode: logged once per sid per process, never acted on
+        if sid not in ctx.rig_refused:
+            ctx.rig_refused.add(sid)
+            _event(paths, "rig-refuse", sid, detail="no registry row carries rig:true")
     facts = _facts(ctx, snap, now)
     reqs = store.list_requests(paths)
     buckets, stale = _census(ctx, snap, facts, reqs, mode, now)
