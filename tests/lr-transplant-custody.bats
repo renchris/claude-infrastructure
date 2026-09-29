@@ -234,8 +234,21 @@ _confirmed() { # admit + confirm: the source retired, the target a full copy
   [ "$(_field detail)" = live-watcher ] || { echo "$output $stderr"; false; }
   _phase confirm; [ "$status" -eq 0 ] || { echo "$output $stderr"; false; }
   _phase abort
-  [ "$status" -eq 2 ] && [ "$(_field reason)" = lock-mismatch ] && [ "$(_field detail)" = source-retired ] \
-    || { echo "$output $stderr"; false; }
+  [ "$status" -eq 2 ] || { echo "$output $stderr"; false; }
+  [ "$(_field reason)" = lock-mismatch ] || { echo "$output $stderr"; false; }
+  [ "$(_field detail)" = source-retired ] || { echo "$output $stderr"; false; }
+}
+
+@test "custody 8c: a live watcher recorded with padded lstart spacing is still live" {
+  # `ps` pads a one-digit day (`Sep  9`) and the lr_recon store writes it collapsed; either writer's
+  # form must read as the SAME live process, or abort would move a target a live watcher still owns.
+  _admit; [ "$status" -eq 0 ] || { echo "$output"; false; }
+  _live
+  printf '{"pid":%s,"lstart":"  %s "}\n' "$LIVE_PID" "${LIVE_LSTART// /  }" > "$T/watcher.json"
+  _phase abort --watcher-record "$T/watcher.json"
+  [ "$status" -eq 2 ] || { echo "$output $stderr"; false; }
+  [ "$(_field detail)" = live-watcher ] || { echo "$output $stderr"; false; }
+  [ -e "$DST" ] || { echo "abort moved the target of a live watcher"; false; }
 }
 
 @test "custody 9: lr-lock classifies a stub beside the retired transcript as CUSTODY and reap keeps it" {

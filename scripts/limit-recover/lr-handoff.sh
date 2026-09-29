@@ -695,7 +695,11 @@ lrh_verdict() { # <TOKEN> <proven yes|no> <note>
 # this script cannot even construct (no common dir, unwritable state dir) proceeds UNLOCKED, which
 # is exactly the behaviour before the lock existed.
 LRH_GIT_LOCK=""
-lrh_git_lock_lstart() { TZ=UTC LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//; s/ *$//'; }
+# Space-collapsed, the programme's one lstart form (`Sep  9` → `Sep 9`): other takers of this lock
+# (lr-fire-resume, lr_recon) write it collapsed, and a raw compare would steal their LIVE lock on
+# days 1-9 of every month. lrh_lstart_norm is applied to the recorded side too.
+lrh_lstart_norm() { printf '%s' "$1" | tr -s '[:blank:]' ' ' | sed -e 's/^ //' -e 's/ $//'; }
+lrh_git_lock_lstart() { lrh_lstart_norm "$(TZ=UTC LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null || true)"; }
 lrh_git_lock_take() { # $1=cwd → 0 held or lock unavailable (proceed) / 1 timed out (skip the mutation)
   local common key root dir holder hpid hls i age mt
   common="$(git -C "$1" rev-parse --git-common-dir 2>/dev/null)" || common=""
@@ -727,7 +731,7 @@ lrh_git_lock_take() { # $1=cwd → 0 held or lock unavailable (proceed) / 1 time
     if [[ -f "$holder" ]]; then
       hpid="$(jq -r '.pid // empty' "$holder" 2>/dev/null || true)"
       hls="$(jq -r '.lstart // empty' "$holder" 2>/dev/null || true)"
-      if [[ ! "$hpid" =~ ^[0-9]+$ ]] || [[ "$(lrh_git_lock_lstart "$hpid")" != "$hls" ]]; then
+      if [[ ! "$hpid" =~ ^[0-9]+$ ]] || [[ "$(lrh_git_lock_lstart "$hpid")" != "$(lrh_lstart_norm "$hls")" ]]; then
         echo "lr-handoff: git lock $dir held by a dead holder (pid ${hpid:-?}) — stealing it" >&2
         rm -rf "$dir" 2>/dev/null || true; continue
       fi

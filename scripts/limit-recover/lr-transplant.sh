@@ -190,14 +190,21 @@ lrt_refuse() { # $1=reason $2=detail $3=plain why → the frozen refusal contrac
   printf '{"ok":false,"reason":"%s","detail":"%s","sid":"%s"}\n' "$1" "$2" "$SID"
   exit 2
 }
-lrt_lstart() { # $1=pid → its start time as `ps` renders it in UTC, trimmed; empty when there is none
-  TZ=UTC LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' || true
+# ONE lstart FORM, SPACE-COLLAPSED, on both sides of every comparison. `ps` pads a single-digit day
+# (`Sep  9`) and the lr_recon store writes the collapsed form (`Sep 9`), so a raw compare would read
+# a LIVE watcher or actuator recorded by the reconciler as dead on days 1-9 of every month — and a
+# dead verdict is what lets abort move a target copy. Collapsing both sides accepts either writer.
+lrt_norm() { # $1=an lstart string → trimmed, runs of blanks collapsed to one space
+  printf '%s' "$1" | tr -s '[:blank:]' ' ' | sed -e 's/^ //' -e 's/ $//'
+}
+lrt_lstart() { # $1=pid → its start time as `ps` renders it in UTC, normalised; empty when there is none
+  lrt_norm "$(TZ=UTC LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null || true)"
 }
 lrt_live() { # $1=pid $2=recorded lstart → rc 0 iff THAT process is alive (an empty lstart judges the pid alone)
   local _l
   [[ "$1" =~ ^[0-9]+$ ]] && [[ "$1" -gt 0 ]] || return 1
   kill -0 "$1" 2>/dev/null || return 1
-  _l="$(printf '%s' "$2" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  _l="$(lrt_norm "$2")"
   [[ -n "$_l" ]] || return 0
   [[ "$(lrt_lstart "$1")" == "$_l" ]]
 }
@@ -511,7 +518,7 @@ if [[ "$PHASE" == abort ]]; then
     lrt_assert_lock
     AB_HPID="$(lrt_lock_json holder.pid)"
     AB_HLST="$(lrt_lock_json holder.lstart)"
-    if [[ "$AB_HPID" != "$LRT_HOLDER_PID" || "$AB_HLST" != "$(lrt_lstart "$LRT_HOLDER_PID")" ]] \
+    if [[ "$AB_HPID" != "$LRT_HOLDER_PID" || "$(lrt_norm "$AB_HLST")" != "$(lrt_lstart "$LRT_HOLDER_PID")" ]] \
        && lrt_live "$AB_HPID" "$AB_HLST"; then
       lrt_refuse target-held live-actuator "the actuator the lock records (pid $AB_HPID) is still running"
     fi
