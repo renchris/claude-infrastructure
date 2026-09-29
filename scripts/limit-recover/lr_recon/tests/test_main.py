@@ -248,11 +248,17 @@ class MainTests(unittest.TestCase):
         now = time.time()
         snap = _snap(now, self.tmp)
         s = next(iter(snap.sessions.values()))
-        s.transcript.last = {"limit": False, "kind": "auth_cliff", "raw_error": "authentication_failed"}
+        s.transcript.last = {
+            "limit": False,
+            "kind": "auth_cliff",
+            "raw_error": "authentication_failed",
+        }
         ctx = M.Ctx(self.paths, None, self.home)
         facts = M._facts(ctx, snap, now)
         self.assertIn("next3.auth", facts)
-        self.assertTrue(os.path.exists(os.path.join(self.paths.facts, "next3.auth.json")))
+        self.assertTrue(
+            os.path.exists(os.path.join(self.paths.facts, "next3.auth.json"))
+        )
 
     def test_C_waits_until_the_move_chain_is_quiet(self):
         """W5 rig: C typed a second prompt while lr-fire-resume's own was still landing."""
@@ -295,6 +301,30 @@ class MainTests(unittest.TestCase):
         M._derive(ctx, snap, now)
         self.assertFalse(rec.escalated)
         self.assertIn("rearm", [e["ev"] for e in self._events()])
+
+    def test_a_move_in_its_relaunch_gap_is_owned_for_a_bounded_time(self):
+        """W5 rig N=5: every confirmed move read as an unowned §4.4 defect in its relaunch gap (no
+        live process, no wait). IN-FLIGHT is owned for IN_FLIGHT_MAX_S after confirm, then not."""
+        import time
+
+        now = time.time()
+        rec = T.Record(sid="abcdef01-0000-0000-0000-000000000001", record_id="r1")
+        rec.phase, rec.substate = "PRE-MOVE", "IN-FLIGHT"
+        rec.timeline.confirmed = now - 30
+        ctx = M.Ctx(self.paths, None, self.home)
+        M.store.ensure_dirs(self.paths)
+        ctx.records = {rec.sid: rec}
+        snap = T.Snapshot(wall=now, uptime_raw=0.0, panes={}, sessions={})
+        self.assertEqual(M._invariant(ctx, snap, now), 0)
+        self.assertNotIn("defect", rec.close)
+        rec.timeline.confirmed = now - M.IN_FLIGHT_MAX_S - 1
+        self.assertEqual(M._invariant(ctx, snap, now), 1)
+        self.assertTrue(rec.close.get("defect"))
+        rec.substate = (
+            None  # CONTROL: the gap before the fix (PRE-MOVE/None) is a defect at once
+        )
+        rec.timeline.confirmed = now - 30
+        self.assertEqual(M._invariant(ctx, snap, now), 1)
 
     def test_daemon_loop_starts_and_runs_a_pass(self):
         """W5 rig: the long-running path had never started (Caffeinate() without its pid)."""
