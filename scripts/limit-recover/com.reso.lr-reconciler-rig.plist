@@ -2,6 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- com.reso.lr-reconciler-rig — the same lr_recon daemon as com.reso.lr-reconciler, pointed at a
      throwaway rig root under /tmp for the W5 end-to-end rig (docs/plans/LIMIT_RECOVER_FLEET_V2.md, W5).
+     HOME is the rig's own home (tests/rig/lr-recon-rig.sh builds it: accounts.json over four throwaway
+     config dirs, a rig registry, and .claude/{scripts,bin} linked to the checkout), so neither the
+     daemon nor any actuator it spawns can read or write a real ~/.claude* dir.
      LR_RECON_RIG=1 makes it refuse every pane whose registry row lacks `rig:true`, so it can only
      ever act on rig-tagged panes, and its state never touches the real ~/.reso tree.
 
@@ -22,14 +25,15 @@
   </array>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>LR_STATE_DIR</key><string>/tmp/lr-recon-rig</string>
-    <key>LR_RECON_ROOT</key><string>/tmp/lr-recon-rig/recon</string>
+    <key>HOME</key><string>/tmp/lr-rig/home</string>
+    <key>LR_STATE_DIR</key><string>/tmp/lr-rig/lr</string>
+    <key>LR_RECON_ROOT</key><string>/tmp/lr-rig/state</string>
     <key>LR_RECON_RIG</key><string>1</string>
   </dict>
   <key>RunAtLoad</key><false/>
   <key>KeepAlive</key><false/>
   <key>ThrottleInterval</key><integer>10</integer>
-  <key>StandardOutPath</key><string>/tmp/lr-recon-rig/recon/reconciler.out</string>
-  <key>StandardErrorPath</key><string>/tmp/lr-recon-rig/recon/reconciler.err</string>
+  <key>StandardOutPath</key><string>/tmp/lr-rig/state/reconciler.out</string>
+  <key>StandardErrorPath</key><string>/tmp/lr-rig/state/reconciler.err</string>
 </dict>
 </plist>
