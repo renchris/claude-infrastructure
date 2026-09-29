@@ -2679,7 +2679,7 @@ hf_wake_guard() { # $1=the step being deferred → always 0
   guard="${LR_WAKE_GUARD_S:-30}"; case "$guard" in ''|*[!0-9]*) guard=30 ;; esac
   if [ -n "${HF_KERN_WAKETIME:-}" ]; then wt="$HF_KERN_WAKETIME"
   else
-    raw="$(sysctl -n kern.waketime 2>/dev/null || true)"
+    raw="$(/usr/sbin/sysctl -n kern.waketime 2>/dev/null || true)"
     wt="$(printf '%s' "$raw" | sed -n 's/^{ *sec *= *\([0-9][0-9]*\).*/\1/p')"
   fi
   case "$wt" in ''|*[!0-9]*|0) return 0 ;; esac

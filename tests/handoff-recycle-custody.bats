@@ -160,8 +160,15 @@ rows() { cat "$HOME/.claude/logs/handoffs.jsonl" 2>/dev/null; }
   [ -n "$exit_ln" ]
   [ -n "$aband_ln" ]
   [ -n "$refuse_ln" ]
+  # W2b: the PRIMARY keystroke is hf_exit_readback (typed, read back, then Enter); the as_write loop
+  # above survives only behind HF_EXIT_READBACK=off. The debt must open immediately before the first.
+  rb_ln="$(grep -n 'if ! hf_exit_readback "\$SID"; then' "$HF" | cut -d: -f1)"
+  echo "readback=$rb_ln"
+  [ -n "$rb_ln" ]
+  [ "$open_ln" -lt "$rb_ln" ]
+  [ $(( rb_ln - open_ln )) -lt 20 ]            # immediately before the keystroke, not somewhere upstream
   [ "$open_ln" -lt "$exit_ln" ]
-  [ $(( exit_ln - open_ln )) -lt 20 ]          # immediately before the loop, not somewhere upstream
+  [ "$rb_ln" -lt "$exit_ln" ]
   [ "$exit_ln" -lt "$aband_ln" ]
   [ "$aband_ln" -lt "$refuse_ln" ]
   # A fresh-brief recycle hands the pane to a NEW sid, so its debt must say so (--mode fresh) or a
