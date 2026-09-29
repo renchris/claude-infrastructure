@@ -305,8 +305,12 @@ send_line() { grep -n "session send" "$H/it2-calls.log" | grep -F -- "$1" | head
   drive_goal || true
   gc="$(send_line '/goal clear')"; ex="$(grep -n 'session send' "$H/it2-calls.log" | grep -F '/exit' | tail -1 | cut -d: -f1)"
   kw="$(send_line 'session send -s BGWORK-PANE 2')"
-  [ -n "$gc" ] && [ -n "$ex" ] && [ -n "$kw" ] || { cat "$H/it2-calls.log"; false; }
-  [ "$gc" -lt "$ex" ] && [ "$ex" -lt "$kw" ] || { cat "$H/it2-calls.log"; false; }
+  cat "$H/it2-calls.log"   # shown only on failure
+  [ -n "$gc" ]
+  [ -n "$ex" ]
+  [ -n "$kw" ]
+  [ "$gc" -lt "$ex" ]
+  [ "$ex" -lt "$kw" ]
   run jq -r 'select(.type=="attachment") | .attachment.met' "$GOAL_TX"
   [ "$(printf '%s\n' "$output" | tail -1)" = true ]
   run row recycle-bgwork-goal-clear
