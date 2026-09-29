@@ -123,6 +123,41 @@ Readiness, measured 2026-09-27T01:23Z on trunk `edb3112ac`: `public-hygiene-lint
 0 findings; cutover dry run rc=0 — bundle backup verified (1.1G), projection of 5,806 commits,
 `projection-verifier: 0 identifier hit(s), 0 gitleaks finding(s)`, ruleset `71771919c31e`.
 
+**Cutover DONE 2026-09-27** (public repo created 15:32Z; the cutover audit of 2026-09-29 found every
+coupling wired). The private repo being busier than the public one is the design, not a leak: every
+`/ship` lands on `claude-infrastructure-private`, and the public repo receives a filtered projection
+at most every 3 h plus run time.
+
+### Publisher stall 2026-09-29 — the public repo froze at `c3bcaf534` for ~20 h
+
+Measured by a 4-investigator + 4-verifier audit (2026-09-29). Three independent causes, each enough:
+
+1. **27 e-mail hits** (third-party addresses in the TrueMemory upstream drafts) failed the 02:46Z
+   tick's verifier. They are in intermediate commits only (tip clean). Fixed by path rows making the
+   drafts local-only (`ee65d8687`), plus `docs/research/truememory-upstream-2026-09-28.md` in this
+   change. Fast-forward safe: no published commit touches those paths.
+2. **4 fake test secrets** landed after that tick (`sk-live-SECRET` in
+   `tests/fixtures/cc-hook-asks/mkfixture.py`, `lrr-0123456789ab` in `tests/lr-handoff-flags.bats`)
+   and fail the verifier's gitleaks arm. Fixed by two value rows in `.gitleaks.toml` (values, not
+   paths, so a real secret in those files is still caught). `.gitleaks.toml` is not a projection rule.
+3. **`ProcessType Background`** pinned the tick at PRI 4: filter-repo's history pass took 86-137 s in
+   the foreground and 534-5,605 s under launchd; the 09:34Z tick sat runnable with 0 context
+   switches for 10+ h, holding the lock. The plist now execs via `taskpolicy -c utility`; applying
+   it is c10 (`migrations/0045`, `docs/activation/pending-activation/48-public-publish-band-activate.sh`,
+   which also stops the stuck tick and publishes once).
+
+**Root cause of 1 and 2 — the land gate is weaker than the publish verifier.** `ship-land.sh` lints
+the land range's NET diff (`--own-range`), so an address added in one commit and scrubbed in a later
+commit of the same land passes, and it never runs gitleaks. The projection verifier scans every
+historical blob, so the defect surfaces only at publish time, after history is fixed. Open work:
+per-commit added-line + message scan and a gitleaks arm in the land gate; one publish lock inside
+`public-publish.sh` shared by the tick and manual runs (agents hand-published 3 times on 09-28, which
+raced a tick into the misleading rc=3 "rule set changed?"); `cloud-create-api.py` must refuse rather
+than fall back to the PUBLIC slug when `_origin_slug()` returns None.
+
+Still open, operator-only: the `zeroxvee/claude-infrastructure` fork (public, with identifier hits at
+`44ed408`) and a GitHub Support purge of cached views of the old shas.
+
 ## Known constraints
 
 - One fork and two stars predate this work; whatever the fork copied cannot be recalled.
