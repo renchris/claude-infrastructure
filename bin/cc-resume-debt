@@ -34,6 +34,16 @@
 #   CC_RESUME_DEBT_RELAUNCH is a command PREFIX and is word-split on purpose (default
 #   `bash <repo>/scripts/boot-resume-launch.sh`); <account> <cwd> <sid> are appended.
 #   CC_RESUME_DEBT_NOW pins the state-machine clock (tests); settle's own deadline stays wall-clock.
+#   CC_RESUME_DEBT_{FENCE,LR_LIB,HF_BIN} pin lr-recon-fence.sh, lr-lib.sh and handoff-fire.sh;
+#   CC_RESUME_ONE_BIN is the program an in-pane launcher runs (boot-resume-launch's default).
+#
+# TAKEOVER (LIMIT_RECOVER_FLEET_V2_ARCHITECTURE.md §C10 "Relaunch"). A relaunch types a resume, so
+# it is a typer like every other: it runs only when the reconciler fence says act, under the
+# per-sid launch lock, and only while H(sid) — the live holders of the session — is empty. A
+# deferral leaves the debt state as it is and records one `deferred` event. The launcher child
+# inherits LR_LAUNCH_LOCK, so boot-resume-launch acts under this lock rather than deferring to it.
+# IN-PANE FIRST: a debt whose pane is at a shell is relaunched there by handoff-fire
+# --relaunch-at-shell (when that script carries the flag); a new window only otherwise.
 set -uo pipefail
 
 _SELF="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
@@ -96,7 +106,9 @@ _active() { case "$1" in open|retrying|escalated) return 0 ;; esac; return 1; }
 # ── lock (per sid; a lock older than LOCK_STALE_S by mtime may be taken) ─────────────────────────
 _HELD=""
 _release() { [ -n "$_HELD" ] && rmdir "$_HELD" 2>/dev/null; _HELD=""; }
-trap _release EXIT
+# The launch lock _relaunch may hold is released on exit too, whatever path ends the process.
+_on_exit() { _release; command -v lr_recon_act_done >/dev/null 2>&1 && lr_recon_act_done; return 0; }
+trap _on_exit EXIT
 _mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null; }
 _stale() { local m; m="$(_mtime "$1")"; [ -n "$m" ] && [ $(( $(date +%s) - m )) -ge "$LOCK_STALE_S" ]; }
 _lock() {
@@ -209,17 +221,97 @@ _abandon() { # <sid> <why>
   _ev "$1" abandoned "$2"
 }
 
-_relaunch() { # <sid> — the retry: a NEW window, the SAME sid.
-  local acct cwd rc
-  acct="$(_get "$1" account)"; cwd="$(_get "$1" cwd)"
+# _evnote <sid> <state> <note> — append an event WITHOUT changing .state; a repeat of the last
+# event is dropped, so a sweep that defers every tick does not grow the file without bound.
+_evnote() {
+  # shellcheck disable=SC2016  # $s $n $e are jq variables
+  _set "$1" 'if ((.events[-1].state // "") == $s and (.events[-1].note // "") == $n) then .
+             else .events += [{epoch: ($e|tonumber), state: $s, note: $n}] end' \
+    --arg s "$2" --arg n "$3" --arg e "$(_now)"
+}
+
+# The fence and lr-lib are sourced only on the relaunch path: every other verb stays a cheap CLI.
+_FENCE_OK=""
+_fence_load() {
+  local f
+  [ -n "$_FENCE_OK" ] && return 0
+  for f in "${CC_RESUME_DEBT_FENCE:-}" "$_REPO/scripts/limit-recover/lr-recon-fence.sh" \
+           "$HOME/.claude/scripts/limit-recover/lr-recon-fence.sh"; do
+    # shellcheck disable=SC1090  # runtime-resolved
+    [ -n "$f" ] && [ -f "$f" ] && . "$f" 2>/dev/null && { _FENCE_OK=1; return 0; }
+  done
+  # Legacy behaviour when the fence is not deployed: act, said once.
+  _note "recon fence unreachable - relaunching as before"
+  lr_recon_may_act() { return 0; }
+  lr_recon_act_done() { return 0; }
+  _FENCE_OK=1
+}
+_holders() { # <sid> → H(sid) on stdout; rc 1 when lr-lib is unreachable (the caller treats it as NOT empty)
+  local f
+  if ! command -v lr_holder_count >/dev/null 2>&1; then
+    for f in "${CC_RESUME_DEBT_LR_LIB:-}" "$_REPO/scripts/limit-recover/lr-lib.sh" \
+             "$HOME/.claude/scripts/limit-recover/lr-lib.sh"; do
+      # shellcheck disable=SC1090  # runtime-resolved
+      [ -n "$f" ] && [ -f "$f" ] && . "$f" 2>/dev/null && break
+    done
+  fi
+  command -v lr_holder_count >/dev/null 2>&1 || return 1
+  lr_holder_count "$1"
+}
+_hf_bin() {
+  if [ -n "${CC_RESUME_DEBT_HF_BIN:-}" ]; then printf '%s' "$CC_RESUME_DEBT_HF_BIN"
+  elif [ -f "$_REPO/scripts/handoff-fire.sh" ]; then printf '%s' "$_REPO/scripts/handoff-fire.sh"
+  else printf '%s' "$HOME/.claude/scripts/handoff-fire.sh"; fi
+}
+# In-pane is chosen only on three positive answers: a recorded pane, a handoff-fire that carries
+# --relaunch-at-shell (it lands in another wave and may be absent), and the pane helper reporting
+# the pane at a shell. cc-pane has no `state` verb today, so its refusal keeps the new-window path.
+_in_pane_ok() { # <pane> <hf>
+  local st
+  [ -n "$1" ] && [ -f "$2" ] || return 1
+  grep -q -- '--relaunch-at-shell' "$2" 2>/dev/null || return 1
+  st="$(_bounded "$PANE" state "$1" 2>/dev/null)" || return 1
+  [ "${st%%[[:space:]]*}" = shell ]
+}
+# A launcher handoff-fire types into the pane's shell: the same engine the new-window path runs.
+_mint_launcher() { # <sid> <acct> <cwd> → path
+  local l="$LOGS/$1.launcher.sh"
+  printf '#!/bin/bash\nexec %q %q %q %q\n' "${CC_RESUME_ONE_BIN:-$HOME/.reso/bin/reso-resume-one}" \
+    "$2" "$3" "$1" > "$l" 2>/dev/null && chmod +x "$l" 2>/dev/null && printf '%s' "$l"
+}
+
+_relaunch() { # <sid> — the retry: in the recorded pane when it is at a shell, else a NEW window; the SAME sid.
+  local acct cwd rc n pane cfg hf l
   mkdir -p "$LOGS" 2>/dev/null
+  _fence_load
+  if ! lr_recon_may_act "$1" cc-resume-debt always 2>>"$LOGS/$1.log"; then
+    _evnote "$1" deferred "reconciler owns it"
+    return 1
+  fi
+  if ! n="$(_holders "$1")"; then
+    _note "lr-lib.sh unreachable: H($1) unknown, treated as not empty - no relaunch"
+    _evnote "$1" deferred "holders unknown (lr-lib unreachable)"
+    lr_recon_act_done; return 1
+  fi
+  case "$n" in ''|*[!0-9]*) n=1 ;; esac
+  if [ "$n" -gt 0 ]; then
+    _evnote "$1" deferred "H(sid)=$n live holder(s)"
+    lr_recon_act_done; return 1
+  fi
+  acct="$(_get "$1" account)"; cwd="$(_get "$1" cwd)"
+  pane="$(_get "$1" pane)"; cfg="$(_get "$1" cfg)"; hf="$(_hf_bin)"
   if [ -z "$acct" ] || [ -z "$cwd" ]; then
     rc=64   # unresolvable subject: counts as a failed attempt, so the next step escalates
+  elif _in_pane_ok "$pane" "$hf" && l="$(_mint_launcher "$1" "$acct" "$cwd")" && [ -n "$l" ]; then
+    CC_RESUME_DEBT_SETTLING=1 bash "$hf" --relaunch-at-shell --source-pane "$pane" --source-session "$1" \
+      --resume-launcher "$l" ${cfg:+--resume-cfg "$cfg"} --resume-cwd "$cwd" </dev/null >>"$LOGS/$1.log" 2>&1
+    rc=$?
   else
     # shellcheck disable=SC2086  # RELAUNCH is a command PREFIX, word-split on purpose (header)
     CC_RESUME_DEBT_SETTLING=1 $RELAUNCH "$acct" "$cwd" "$1" </dev/null >>"$LOGS/$1.log" 2>&1
     rc=$?
   fi
+  lr_recon_act_done
   # shellcheck disable=SC2016  # jq variables
   _set "$1" '.attempts += 1 | .attempt_epoch = ($e|tonumber) | .relaunch_rc = ($rc|tonumber)' \
     --arg e "$(_now)" --arg rc "$rc"
