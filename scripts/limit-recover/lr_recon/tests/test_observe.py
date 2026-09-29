@@ -402,6 +402,27 @@ class Rows(unittest.TestCase):
             sorted(r["sessionId"] for _, r in rows), sorted([SIDA, SIDB, SIDBG])
         )
 
+    def test_a_row_shared_through_a_symlinked_sessions_dir_is_the_accounts(self):
+        # W5b canary 1: ~/.claude-next/sessions -> ~/.claude/sessions (one login). The row was read
+        # as ~/.claude first, which maps to no account, and lr-handoff refused every `next` move.
+        h = tempfile.mkdtemp(prefix="lr-rows-")
+        try:
+            os.makedirs(os.path.join(h, ".claude", "sessions"))
+            with open(os.path.join(h, ".claude", "sessions", "531.json"), "w") as fh:
+                json.dump({"sessionId": SIDB, "pid": 531, "kind": "interactive"}, fh)
+            os.makedirs(os.path.join(h, ".claude-next"))
+            os.symlink(
+                os.path.join(h, ".claude", "sessions"),
+                os.path.join(h, ".claude-next", "sessions"),
+            )
+            rows = R.read_session_rows(h, procs_of())
+            self.assertEqual(
+                [(c, r["sessionId"]) for c, r in rows],
+                [(os.path.join(h, ".claude-next"), SIDB)],
+            )
+        finally:
+            shutil.rmtree(h, ignore_errors=True)
+
     def test_account_fold(self):
         amap = R.acct_cfg_map(self.home.dir)
         h = self.home.dir

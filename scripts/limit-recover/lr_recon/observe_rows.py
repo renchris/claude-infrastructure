@@ -130,8 +130,15 @@ def read_registry(reg_dir: str, glob_fn: GlobFn = glob.glob) -> List[Dict[str, A
 def read_session_rows(
     home: str, procs: Dict[int, T.ProcRow], glob_fn: GlobFn = glob.glob
 ) -> List[Tuple[str, Dict[str, Any]]]:
-    """(cfg, row) for each `<cfg>/sessions/*.json` dict with a sessionId and a LIVE int pid (§C3.5)."""
-    out = []
+    """(cfg, row) for each `<cfg>/sessions/*.json` dict with a sessionId and a LIVE int pid (§C3.5).
+
+    ONE ROW FILE, ONE CFG. On this machine ``~/.claude-next/sessions`` (and ``projects``) is a symlink
+    to ``~/.claude``'s, the same login, so every `next` session's row is found twice. Read first as
+    ``~/.claude`` — a dir no account maps — it became the record's source_cfg, and every move of a
+    `next` session was refused by lr-handoff as "source config maps to no account name" (W5b canary
+    1). A file seen through several dirs is kept once, under the account's own dir."""
+    by_file: Dict[str, int] = {}
+    out: List[Tuple[str, Dict[str, Any]]] = []
     for name in CFG_DIRS:
         cfg = os.path.join(home, name)
         for f in sorted(glob_fn(os.path.join(cfg, "sessions", "*.json"))):
@@ -139,6 +146,14 @@ def read_session_rows(
             if not isinstance(d, dict) or not isinstance(d.get("sessionId"), str):
                 continue
             if d["sessionId"] and live(d.get("pid"), procs) is not None:
+                real = os.path.realpath(f)
+                if real in by_file:
+                    if (
+                        name != ".claude"
+                    ):  # CFG_DIRS lists .claude first: the alias wins
+                        out[by_file[real]] = (cfg, d)
+                    continue
+                by_file[real] = len(out)
                 out.append((cfg, d))
     return out
 
