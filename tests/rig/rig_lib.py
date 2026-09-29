@@ -130,15 +130,22 @@ def audit(root: str, specs: List[Dict[str, Any]], home: str) -> int:
                 if len(t) < 4 or t[1] not in want:
                     continue
                 kv = dict(x.split("=", 1) for x in t[4:] if "=" in x)
-                if t[3] == "taken":  # "inherited" = a child under its parent's lock: same chain
+                if (
+                    t[3] == "taken"
+                ):  # "inherited" = a child under its parent's lock: same chain
                     cls = "launch"
                 elif t[3] == "spawn" and t[2] in MOVE_ROLES:
                     cls = "move"
                 else:
                     continue
                 lines += 1
-                key = (t[1], kv.get("attempt") or "legacy@" + t[0])  # a legacy take is its own key
-                keys.setdefault(key, {"launch": set(), "move": set()})[cls].add(kv.get("pid", "?"))
+                key = (
+                    t[1],
+                    kv.get("attempt") or "legacy@" + t[0],
+                )  # a legacy take is its own key
+                keys.setdefault(key, {"launch": set(), "move": set()})[cls].add(
+                    kv.get("pid", "?")
+                )
     except OSError:
         print("launch-log audit: %s/launch.log unreadable" % root)
         return 1
@@ -153,12 +160,21 @@ def audit(root: str, specs: List[Dict[str, Any]], home: str) -> int:
     print(
         "launch-log audit: %d lines · %d (sid, attempt) keys · max launch-lock takers per key %d · "
         "max move spawns per key %d · double-typer %d%s"
-        % (lines, len(keys), worst_l, worst_m, len(bad), (" · OVER: " + ", ".join(bad)) if bad else "")
+        % (
+            lines,
+            len(keys),
+            worst_l,
+            worst_m,
+            len(bad),
+            (" · OVER: " + ", ".join(bad)) if bad else "",
+        )
     )
     for s in specs:
         if not s.get("fold"):
             continue
-        fold = os.path.join(root, "work", s["sid"] + ".fold.json")  # the daemon's fold witness
+        fold = os.path.join(
+            root, "work", s["sid"] + ".fold.json"
+        )  # the daemon's fold witness
         try:
             rec = load(fold)
             want_sha = _sha([rec["retired"], rec["stub"]])
@@ -259,13 +275,24 @@ def plant_foreign(rig: str) -> int:
     reg = os.path.join(rig, "home", ".claude", "cc-registry", "foreign-%d.json" % pid)
     with open(reg, "w") as fh:
         json.dump(
-            {"session_id": sid, "pid": pid, "account": "claude-next", "name": "foreign", "cwd": cwd, "surface": "pane"},
+            {
+                "session_id": sid,
+                "pid": pid,
+                "account": "claude-next",
+                "name": "foreign",
+                "cwd": cwd,
+                "surface": "pane",
+            },
             fh,
         )
-    proj = os.path.join(rig, "cfg-a", "projects", cwd.replace("/", "-").replace(".", "-"))
+    proj = os.path.join(
+        rig, "cfg-a", "projects", cwd.replace("/", "-").replace(".", "-")
+    )
     os.makedirs(proj, exist_ok=True)
     here = os.path.dirname(os.path.abspath(__file__))
-    death = os.path.join(here, "..", "fixtures", "lr-recon", "jsonl", "death-quota-limits.jsonl")
+    death = os.path.join(
+        here, "..", "fixtures", "lr-recon", "jsonl", "death-quota-limits.jsonl"
+    )
     with open(death) as src, open(os.path.join(proj, sid + ".jsonl"), "w") as dst:
         rec = json.loads(src.readline())
         rec["sessionId"], rec["cwd"] = sid, cwd
@@ -284,12 +311,23 @@ def plant_faults(rig: str) -> int:
             d = os.path.join(lr, "runs", "by-sid", s["sid"] + ".active")
             os.makedirs(d, exist_ok=True)
             pid = _spawn_sleep(rig, "legacy-" + s["sid"][:8])
-            with open(os.path.join(d, "holder"), "w") as fh:  # the pre-W3 shape: a pid, no lstart
-                json.dump({"pid": pid, "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}, fh)
+            with open(
+                os.path.join(d, "holder"), "w"
+            ) as fh:  # the pre-W3 shape: a pid, no lstart
+                json.dump(
+                    {
+                        "pid": pid,
+                        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    },
+                    fh,
+                )
         if s["stale_request"]:
             os.makedirs(os.path.join(lr, "requests"), exist_ok=True)
             with open(os.path.join(lr, "requests", s["sid"] + ".json"), "w") as fh:
-                json.dump({"sid": s["sid"], "at": time.time(), "reason": "rig stale request"}, fh)
+                json.dump(
+                    {"sid": s["sid"], "at": time.time(), "reason": "rig stale request"},
+                    fh,
+                )
     return 0
 
 
@@ -307,7 +345,12 @@ def refusal(rig: str) -> int:
     ok = seen > 0 and not rec
     print(
         "refusal: planted non-rig row %s — rig-refuse events %d · record %s · %s"
-        % (sid[:8], seen, "PRESENT" if rec else "none", "REFUSED" if ok else "NOT REFUSED")
+        % (
+            sid[:8],
+            seen,
+            "PRESENT" if rec else "none",
+            "REFUSED" if ok else "NOT REFUSED",
+        )
     )
     return 0 if ok else 1
 
@@ -332,7 +375,9 @@ def _daemon_pid(rig: str) -> int:
         return 0
 
 
-def _settled(spec: Dict[str, Any], rec: Dict[str, Any], held_since: Dict[str, float], now: float) -> bool:
+def _settled(
+    spec: Dict[str, Any], rec: Dict[str, Any], held_since: Dict[str, float], now: float
+) -> bool:
     exp = spec["expect"]
     if rec is None:
         return False
@@ -374,7 +419,11 @@ def drive(rig: str, timeout: float) -> int:
                 elif f == "clockskew600":
                     with open(os.path.join(rig, "state", "clock-skew"), "w") as fh:
                         fh.write("600\n")
-                print("[rig] fault %s fired on the daemon (pid %d) as %s entered %s" % (f, pid, s["sid"][:8], r.get("phase")), flush=True)
+                print(
+                    "[rig] fault %s fired on the daemon (pid %d) as %s entered %s"
+                    % (f, pid, s["sid"][:8], r.get("phase")),
+                    flush=True,
+                )
         if cont_at and now >= cont_at:
             try:
                 os.kill(stopped, signal.SIGCONT)
@@ -387,15 +436,70 @@ def drive(rig: str, timeout: float) -> int:
             phases: Dict[str, int] = {}
             for s in specs:
                 r = recs.get(s["sid"])
-                k = "no-record" if r is None else (r["terminal"]["outcome"] if r.get("terminal") else "%s/%s" % (r.get("phase"), r.get("substate")))
+                k = (
+                    "no-record"
+                    if r is None
+                    else (
+                        r["terminal"]["outcome"]
+                        if r.get("terminal")
+                        else "%s/%s" % (r.get("phase"), r.get("substate"))
+                    )
+                )
                 phases[k] = phases.get(k, 0) + 1
-            print("[rig %4ds] settled %d/%d · %s" % (now - t0, done, len(specs), ", ".join("%s=%d" % kv for kv in sorted(phases.items()))), flush=True)
+            print(
+                "[rig %4ds] settled %d/%d · %s"
+                % (
+                    now - t0,
+                    done,
+                    len(specs),
+                    ", ".join("%s=%d" % kv for kv in sorted(phases.items())),
+                ),
+                flush=True,
+            )
         if done == len(specs):
             return 0
         if now - t0 > timeout:
-            print("[rig] TIMEOUT after %ds: %d/%d settled" % (timeout, done, len(specs)), flush=True)
+            print(
+                "[rig] TIMEOUT after %ds: %d/%d settled" % (timeout, done, len(specs)),
+                flush=True,
+            )
             return 1
         time.sleep(2)
+
+
+def _pct(xs: List[float], q: float) -> float:
+    """Nearest-rank percentile, the same rank rule report._p95 uses for the DoD line."""
+    xs = sorted(xs)
+    return xs[max(0, int(round(q * len(xs) + 0.5)) - 1)] if xs else 0.0
+
+
+def timings(rig: str) -> str:
+    """The MEASURED timings beside the DoD line (programme DoD items 2 and 7): p50/p95 of
+    detect→engaged over the members that engaged in place or moved, and the cohort wall time from
+    the first detection to the last terminal verdict. Read from the daemon's records, never the rig's
+    own clock."""
+    recs = _records(rig)
+    sids = {s["sid"] for s in _specs(rig)}
+    lat: List[float] = []
+    first, last = None, None
+    for sid, r in recs.items():
+        if sid not in sids:
+            continue
+        tl = r.get("timeline") or {}
+        det = tl.get("detected")
+        if det:
+            first = det if first is None else min(first, det)
+        close = r.get("close") or {}
+        if det and close.get("via") in ("ENGAGED", "MOVED") and close.get("at"):
+            lat.append(float(close["at"]) - float(det))
+        end = (r.get("terminal") or {}).get("at")
+        if end:
+            last = end if last is None else max(last, end)
+    wall = (last - first) if first is not None and last is not None else 0.0
+    return (
+        "measured: detect→engaged p50 %.0fs · p95 %.0fs over %d engaged · cohort wall %.0fs (first detection → last terminal)"
+        % (_pct(lat, 0.50), _pct(lat, 0.95), len(lat), wall)
+    )
 
 
 def main(argv: List[str]) -> int:
@@ -424,6 +528,9 @@ def main(argv: List[str]) -> int:
         return refusal(argv[2])
     if cmd == "cohort":
         print(cohort(argv[2]))
+        return 0
+    if cmd == "timings":
+        print(timings(argv[2]))
         return 0
     if cmd == "drive":
         return drive(argv[2], float(argv[3]))

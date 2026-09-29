@@ -234,6 +234,7 @@ echo "\$ cc-lr status --cohort $CID --root $RIG/state"
 STATUS="$(rigenv "$REPO/bin/cc-lr" status --cohort "$CID" --root "$RIG/state")"
 printf '%s\n' "$STATUS"
 GOT="$(printf '%s\n' "$STATUS" | sed -n 's/^DoD: //p' | head -1)"
+python3 "$HERE/rig_lib.py" timings "$RIG"
 echo
 python3 "$HERE/rig_lib.py" audit "$RIG/state" "$RIG/specs.json" "$RIG/home"; audit_rc=$?
 python3 "$HERE/rig_lib.py" refusal "$RIG"; refusal_rc=$?
