@@ -272,6 +272,8 @@ fi
 resumed=0
 resume_fail=0
 resume_shed=0   # ghosts SELECTED but REFUSED by the capacity term — distinct from resume_fail (launcher error)
+resume_held=0   # rc 5: not ours to launch — the reconciler owns it, its launch lock is held, it already
+                # has a live holder, or it is PARKED-REBOOT in page mode. Not broken, not waiting on us.
 n_fire=0        # ghosts SELECTED to fire (post-consolidation) — distinct from n_open (ghosts found)
 if [ "$MODE" = "resume" ]; then
   if [ -z "$LAUNCH" ] || [ ! -x "$LAUNCH" ]; then
@@ -330,6 +332,7 @@ EOF
     case "$?" in
       0) resumed=$((resumed + 1)) ;;
       9) resume_shed=$((resume_shed + 1)) ;;
+      5) resume_held=$((resume_held + 1)) ;;
       *) resume_fail=$((resume_fail + 1)) ;;
     esac
   done <<EOF
@@ -370,6 +373,7 @@ if [ "$MODE" = "resume" ]; then
   # no other line is indistinguishable from three launcher failures (§12.4's whole concern is that
   # the boot storm silently eats the recovery).
   [ "$resume_shed" -gt 0 ] && msg="${msg} ⏸ ${resume_shed} shed by the capacity gate (box saturated at boot) — re-run /resume-sessions once it settles."
+  [ "$resume_held" -gt 0 ] && msg="${msg} ⏸ ${resume_held} not launched — owned by the limit-recovery reconciler, already running, or parked for the reboot (see cc-lr status --cohort)."
   msg="${msg}
 ${listing}desk-jobs: ${dj_up}/${dj_total} com.claude agent(s) up."
 else
@@ -385,7 +389,7 @@ DESK_TARGET=""
 if [ -n "$DESK_TARGET" ] && [ -n "$NOTIFY" ]; then
   "$NOTIFY" "$DESK_TARGET" "$msg" >/dev/null 2>&1 || true   # cc-notify's mailbox fallback ⇒ durable at exit 0
   mark_processed
-  log_idl fired ",\"n_open\":$n_open,\"resumed\":$resumed,\"resume_failed\":$resume_fail,\"resume_shed\":$resume_shed,\"desk_jobs_up\":$dj_up,\"desk_jobs_total\":$dj_total,\"notified\":\"$DESK_TARGET\",\"delivered\":true"
+  log_idl fired ",\"n_open\":$n_open,\"resumed\":$resumed,\"resume_failed\":$resume_fail,\"resume_shed\":$resume_shed,\"resume_held\":$resume_held,\"desk_jobs_up\":$dj_up,\"desk_jobs_total\":$dj_total,\"notified\":\"$DESK_TARGET\",\"delivered\":true"
   exit 0
 else
   # ── a wake with nobody to WAKE is not a wake with nobody to TELL. ────────────────────────────────
@@ -419,7 +423,7 @@ else
     # DELIVERED, durably, to a lane that is read. Marking here is what converts an unbounded silent
     # retry into one surfaced item — the whole point of the fallback.
     mark_processed
-    log_idl fired ",\"n_open\":$n_open,\"resumed\":$resumed,\"resume_failed\":$resume_fail,\"resume_shed\":$resume_shed,\"desk_jobs_up\":$dj_up,\"desk_jobs_total\":$dj_total,\"delivered\":true,\"channel\":\"backlog-needs\",\"backlog_id\":\"$bid\",\"reason\":\"$why\""
+    log_idl fired ",\"n_open\":$n_open,\"resumed\":$resumed,\"resume_failed\":$resume_fail,\"resume_shed\":$resume_shed,\"resume_held\":$resume_held,\"desk_jobs_up\":$dj_up,\"desk_jobs_total\":$dj_total,\"delivered\":true,\"channel\":\"backlog-needs\",\"backlog_id\":\"$bid\",\"reason\":\"$why\""
     echo "boot-resume: no desk role — the ${n_open}-session boot delta was filed as operator-blocked backlog item $bid (full text: $undeliv)" >&2
     exit 0
   fi
