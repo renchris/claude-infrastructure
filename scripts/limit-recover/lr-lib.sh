@@ -534,6 +534,114 @@ lr_holder_count() { # $1=sid → number of DISTINCT live holders (registry panes
   printf '%s\n' "$total"
 }
 
+# ── THE PER-SID RUN CLAIM: ONE FORMAT, ONE TAKER, ONE STEAL RULE (D2, 2026-09-28) ─────────────────
+# `<root>/<sid>.active` is the one-actuator-per-session mutex, and three writers take it: cc-lr
+# recover, lr-fleet's pool and the reset poller. Until 2026-09-28 each had its own copy, and the
+# poller's wrote NO holder file. On 2026-09-28 its REROUTE arm retook the claim for 415a3aac in that
+# shape, its detached driver then died (a bare-flipped checkout), and the empty directory refused
+# the retry ("names no pid; 421s old") until a 30-minute TTL — the operator ran the rmdir by hand.
+#
+# The contract, for every taker:
+#   · the holder file ALWAYS names a pid, written atomically (tmp + mv), and the taker RE-STAMPS it
+#     with the dispatched driver's pid, so the claim lives exactly as long as the work;
+#   · holder pid ALIVE → refuse · holder pid DEAD → steal at once, loudly;
+#   · NO holder (a legacy claim, or a taker between mkdir and its stamp) → steal once it is older
+#     than LR_CLAIM_ORPHAN_GRACE_S (default 10 s, which covers the stamp window) AND no live
+#     recovery process names the sid in its argv. Not after 30 minutes: an orphan is a fact, not age.
+#   · every failure path releases its own claim, and a release removes ONLY a claim whose holder
+#     names the releasing pid.
+# Why the "no live process" test is a recovery-DRIVER census and not lr_holder_count: a limit-blocked
+# session's own claude stays alive in its pane, so the session-holder count is >= 1 for exactly the
+# sessions this claim exists to recover; that count cannot tell a live recovery from an orphan.
+# Stealing goes through a rename, so two concurrent stealers cannot both delete a fresh claim.
+lr_claim_holder_pid() { # $1=claim dir → the holder's pid on stdout; rc 1 when no holder names one
+  local p
+  p="$(sed -n 's/.*"pid":\([0-9][0-9]*\).*/\1/p' "$1/holder" 2>/dev/null | sed -n '1p')"
+  [ -n "$p" ] || return 1
+  printf '%s' "$p"
+}
+lr_claim_age_s() { # $1=dir → age in seconds, 999999 when unreadable
+  local m
+  m="$(stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || true)"
+  case "${m:-x}" in ''|*[!0-9]*) printf '999999' ;; *) printf '%s' $(( $(date +%s) - m )) ;; esac
+}
+lr_claim_stamp() { # $1=dir $2=sid $3=pid $4=by [$5=pane] → writes the holder atomically; rc 1 on failure
+  local t="$1/.holder.$$.$RANDOM"
+  printf '{"sid":"%s","pane":"%s","pid":%d,"ts":"%s","by":"%s"}\n' \
+    "$2" "${5:--}" "$3" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$4" > "$t" 2>/dev/null \
+    && mv -f "$t" "$1/holder" 2>/dev/null && return 0
+  rm -f "$t" 2>/dev/null; return 1
+}
+lr_claim_drivers() { # $1=sid → pids of live limit-recover drivers naming the sid, minus this process's ancestry
+  local sid="${1:-}" anc p
+  [ -n "$sid" ] || return 1
+  # A forked subshell of lr-fleet.sh carries lr-fleet's argv, so the caller and its whole ancestry
+  # are excluded — a taker must never read ITSELF as the live driver it is waiting on.
+  p="${BASHPID:-$$}"; anc=" $p "
+  while p="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')" && [ -n "$p" ] && [ "$p" -gt 1 ]; do anc="$anc$p "; done
+  # The sid rides in the ENVIRONMENT, never in awk's argv (lr_resume_procs above: a pattern in argv
+  # matches the census itself).
+  ps -axo pid=,command= 2>/dev/null | LR_CD_SID="$sid" LR_CD_ANC="$anc" awk '
+    index($0, ENVIRON["LR_CD_SID"]) && $0 ~ /limit-recover\/lr-(fleet|handoff|fire-resume|transplant)\.sh/ \
+      && index(ENVIRON["LR_CD_ANC"], " " $1 " ") == 0 { print $1 }'
+}
+lr_claim_take() { # $1=root $2=sid $3=by [$4=pane] [$5=pid] → claim path on stdout; rc 0 taken · 1 held · 2 cannot create
+  local root="$1" sid="$2" by="$3" pane="${4:--}" pid="${5:-$$}" d hp age grace drv tomb thp
+  d="$root/$sid.active"
+  mkdir -p "$root" 2>/dev/null || { echo "lr-claim: verdict=cannot-create root=$root" >&2; return 2; }
+  if ! mkdir "$d" 2>/dev/null; then
+    if hp="$(lr_claim_holder_pid "$d")"; then
+      if kill -0 "$hp" 2>/dev/null; then
+        echo "lr-claim: verdict=held-live sid=${sid:0:8} pid=$hp claim=$d — already being recovered by pid $hp; one actuator per session" >&2; return 1
+      fi
+      echo "lr-claim: verdict=stolen-dead-holder sid=${sid:0:8} pid=$hp claim=$d — held by pid $hp, which is DEAD — stealing it" >&2
+    else
+      hp=""
+      grace="${LR_CLAIM_ORPHAN_GRACE_S:-10}"; case "$grace" in ''|*[!0-9]*) grace=10 ;; esac
+      age="$(lr_claim_age_s "$d")"
+      if [ "$age" -lt "$grace" ]; then
+        echo "lr-claim: verdict=held-fresh-orphan sid=${sid:0:8} age=${age}s claim=$d — no holder yet, inside the ${grace}s stamp window" >&2; return 1
+      fi
+      drv="$(lr_claim_drivers "$sid" | tr '\n' ' ')"
+      if [ -n "${drv// /}" ]; then
+        echo "lr-claim: verdict=held-orphan-driver-alive sid=${sid:0:8} pids=${drv% } claim=$d" >&2; return 1
+      fi
+      echo "lr-claim: verdict=stolen-orphan sid=${sid:0:8} age=${age}s claim=$d — no holder file and no live recovery process names the sid" >&2
+    fi
+    tomb="$d.stolen.$$.$RANDOM"
+    mv "$d" "$tomb" 2>/dev/null || { echo "lr-claim: verdict=lost-race sid=${sid:0:8} claim=$d" >&2; return 1; }
+    # What we renamed must be what we judged: a peer may have stolen and re-stamped in between.
+    thp="$(lr_claim_holder_pid "$tomb" 2>/dev/null || true)"
+    if [ "$thp" != "$hp" ]; then
+      mv "$tomb" "$d" 2>/dev/null || rm -rf "$tomb" 2>/dev/null
+      echo "lr-claim: verdict=lost-race sid=${sid:0:8} claim=$d — a peer re-took it first" >&2; return 1
+    fi
+    rm -rf "$tomb" 2>/dev/null || true
+    mkdir "$d" 2>/dev/null || { echo "lr-claim: verdict=lost-race sid=${sid:0:8} claim=$d" >&2; return 1; }
+  fi
+  if ! lr_claim_stamp "$d" "$sid" "$pid" "$by" "$pane"; then
+    rm -rf "$d" 2>/dev/null
+    echo "lr-claim: verdict=cannot-create sid=${sid:0:8} claim=$d — the holder could not be written" >&2; return 2
+  fi
+  printf '%s' "$d"
+}
+lr_claim_restamp() { # $1=root $2=sid $3=from-pid $4=to-pid $5=by [$6=pane] → rc 0 re-stamped · 1 not ours
+  local d="$1/$2.active"
+  [ "$(lr_claim_holder_pid "$d" 2>/dev/null)" = "$3" ] || return 1
+  lr_claim_stamp "$d" "$2" "$4" "$5" "${6:--}"
+}
+lr_claim_release() { # $1=root $2=sid [$3=pid] → removes the claim IFF its holder names pid (default $$)
+  local d="$1/$2.active"
+  [ -d "$d" ] || return 0
+  [ "$(lr_claim_holder_pid "$d" 2>/dev/null)" = "${3:-$$}" ] || return 0
+  rm -rf "$d" 2>/dev/null || true
+  return 0
+}
+# The driver pid `lr-fleet --one --detach` prints on its DETACHED line, or rc 1.
+lr_detached_driver_pid() { # stdin = lr-fleet's output
+  sed -n 's/.*driver pid \([0-9][0-9]*\).*/\1/p' | sed -n '1p' | grep -E '^[0-9]+$'
+}
+
 # ── TRANSPLANT: where did this session go? ───────────────────────────────────────────────────────
 # Reads the split-brain lock lr-transplant.sh writes. Prints the target config dir when the lock
 # names a target OTHER than $2 and that target still holds the transcript (the successor exists);

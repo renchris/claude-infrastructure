@@ -620,52 +620,21 @@ lf_admit_lock_release() {
 }
 
 # ── W5'S PER-SID RUN CLAIM, AS A POOL WORKER SEES IT ────────────────────────────────────────────
-# lr-reset-poller.sh:716 and bin/cc-lr:128 both reserve `$STATE/runs/by-sid/<sid>.active` before
-# driving a recovery. A fleet POOL is the third writer, and without taking the same reservation two
-# processes would type into one pane. Semantics are cc-lr's, because they are the stricter pair:
-#   holder pid ALIVE  → REFUSE (a live run owns this sid)
-#   holder pid DEAD   → steal, loudly (a corpse must not wedge a sid out of recovery)
-#   no holder file    → the poller's shape; steal only past LR_RUN_CLAIM_TTL_MIN, which is what the
-#                       poller itself uses and for the same reason.
+# lr-reset-poller.sh and bin/cc-lr reserve the same `$STATE/runs/by-sid/<sid>.active` before driving
+# a recovery, and a fleet POOL is the third writer. All three now call ONE implementation,
+# lr-lib.sh's lr_claim_take (D2, 2026-09-28): holder ALIVE → refuse, holder DEAD → steal, no holder
+# → steal once no live recovery process names the sid. The holder names THIS driver's pid, which
+# outlives every worker it forks (the reaper below releases each claim as its worker exits).
 lf_run_claim_take() { # $1=sid → 0 this worker owns the run · 1 a live run already holds it
-  local d="$RUN_CLAIMS/${1:?lf_run_claim_take needs a sid}.active" hp ttl
-  ttl="${LR_RUN_CLAIM_TTL_MIN:-30}"; case "$ttl" in ''|*[!0-9]*|0) ttl=30 ;; esac
-  mkdir -p "$RUN_CLAIMS" 2>/dev/null || true
-  if mkdir "$d" 2>/dev/null; then
-    printf '{"sid":"%s","pid":%d,"ts":"%s","by":"lr-fleet --recover"}\n' "$1" "$$" "$(lf_now)" \
-      > "$d/holder" 2>/dev/null || true
-    return 0
-  fi
-  hp="$(sed -n 's/.*"pid":\([0-9][0-9]*\).*/\1/p' "$d/holder" 2>/dev/null | sed -n '1p')"
-  if [ -n "$hp" ]; then
-    kill -0 "$hp" 2>/dev/null && return 1
-    echo "lr-fleet: run claim $d was held by pid $hp, which is DEAD — stealing it" >&2
-  else
-    # `-maxdepth 0`, exactly as lr-reset-poller.sh:722: the claim IS the directory and nothing is
-    # written inside it by the poller, so without it find descends and tests the empty contents.
-    [ -n "$(find "$d" -maxdepth 0 -mmin "+$ttl" 2>/dev/null)" ] || return 1
-    echo "lr-fleet: run claim $d aged past ${ttl}m with no holder — stealing it" >&2
-  fi
-  rm -rf "$d" 2>/dev/null || true
-  mkdir "$d" 2>/dev/null || return 1
-  printf '{"sid":"%s","pid":%d,"ts":"%s","by":"lr-fleet --recover"}\n' "$1" "$$" "$(lf_now)" \
-    > "$d/holder" 2>/dev/null || true
-  return 0
+  lr_claim_take "$RUN_CLAIMS" "${1:?lf_run_claim_take needs a sid}" "lr-fleet --recover" - "$$" >/dev/null
 }
 # 🚨 RELEASE ONLY WHAT THIS PROCESS TOOK. The pool's reaper runs once per worker, and a worker can
 # reach it WITHOUT ever having taken a claim — a `--dry-run` takes none by design. An unconditional
 # `rm -rf` there deletes whatever claim is at that path, which on a dry run is the claim cc-lr or
 # the poller is holding over a LIVE recovery: the fleet would hand a second driver the same pane.
-# Caught by `--dry-run neither TAKES a run claim nor OBEYS one` on the full-suite pass, having been
-# invisible to the same case run alone. The holder file is this process's own receipt, so matching
-# on it is the check; a claim with no holder (the poller's shape) was never ours and is left alone.
+# lr_claim_release matches the holder's pid against this process, so it can only remove our own.
 lf_run_claim_release() { # $1=sid → removes the claim IFF this process's holder names it
-  local d="$RUN_CLAIMS/${1:?lf_run_claim_release needs a sid}.active"
-  [ -d "$d" ] || return 0
-  case "$(cat "$d/holder" 2>/dev/null || true)" in
-    *"\"pid\":$$,"*) rm -rf "$d" 2>/dev/null || true ;;
-  esac
-  return 0
+  lr_claim_release "$RUN_CLAIMS" "${1:?lf_run_claim_release needs a sid}" "$$"
 }
 
 # ── ONE: the unit — one session, in place ────────────────────────────────────────────────────────

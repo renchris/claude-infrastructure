@@ -711,43 +711,35 @@ HUSK_REQS="$STATE/husk-requests"
 UPG_QUEUE="$STATE/upgrade-queue"
 UPG_DEFER="$STATE/upgrade-deferred"   # switch requests parked by `cc-lr switch --until-idle` (lr-upgrade.sh)
 UPG_BIN="${LR_UPGRADE_BIN:-$LR/lr-upgrade.sh}"
-# The run claim has no reaper here — the run REAPER is the sibling plan's and is out of scope — so it
-# is TTL-bounded, exactly as the fire claim above is and for the same reason: a driver that died
-# mid-run must not wedge its sid out of recovery forever. 30 min is ~2.7x lr-fleet's own worst-case
-# `--one` (658 s) and ~3 ticks. Junk falls back rather than letting an unattended daemon do
-# arithmetic on it (0 would make every claim instantly stale and re-drive every live run).
-RUN_CLAIM_TTL_MIN="${LR_RUN_CLAIM_TTL_MIN:-30}"
-[[ "$RUN_CLAIM_TTL_MIN" =~ ^[1-9][0-9]*$ ]] || RUN_CLAIM_TTL_MIN=30
-run_claim_take() { # $1=sid → 0 this tick owns the run, 1 a live run already holds it
-  local d="$RUN_CLAIMS/${1:?run_claim_take needs a sid}.active" hp
-  mkdir "$d" 2>/dev/null && return 0
-  # A HOLDER THAT NAMES A DEAD PID IS STOLEN AT ONCE (2026-09-26, ac0f0123). cc-lr re-stamps the
-  # claim with its detached driver's pid and nothing releases it when that driver exits, so reading
-  # the AGE alone dropped every repair request for 30 minutes behind a corpse (pid 85261). cc-lr's
-  # cl_mutex_take and lr-fleet's lf_run_claim_take already steal a dead holder; this is the same rule.
-  # A claim with no holder file is the poller's own shape and still waits out the TTL below.
-  hp="$(sed -n 's/.*"pid":\([0-9][0-9]*\).*/\1/p' "$d/holder" 2>/dev/null | sed -n '1p')"
-  if [[ -n "$hp" ]] && ! kill -0 "$hp" 2>/dev/null; then
-    rm -rf "$d" 2>/dev/null || true
-    if mkdir "$d" 2>/dev/null; then
-      log "RUN-CLAIM-DEAD-HOLDER $1 — the claim's holder pid $hp is dead; retaken"
-      return 0
-    fi
-    return 1
-  fi
-  # `-maxdepth 0`: the claim is a DIRECTORY, and without it find descends and tests the (empty)
-  # contents instead of the claim's own mtime. mkdir stamps it once and nothing writes inside, so
-  # that mtime is the moment the run was claimed.
-  if [[ -n $(find "$d" -maxdepth 0 -mmin "+$RUN_CLAIM_TTL_MIN" 2>/dev/null) ]]; then
-    rm -rf "$d" 2>/dev/null || true
-    if mkdir "$d" 2>/dev/null; then
-      log "RUN-CLAIM-STALE $1 — the previous claim aged past ${RUN_CLAIM_TTL_MIN}m with no terminal state; retaken"
-      return 0
-    fi
-  fi
-  return 1
+# THE RUN CLAIM IS lr-lib.sh's lr_claim_take (D2, 2026-09-28), the one implementation cc-lr and
+# lr-fleet's pool also call. This file used to take it as a bare `mkdir` with NO holder file and wait
+# out a 30-minute TTL on anyone else's; on 2026-09-28 the REROUTE arm below left exactly that shape
+# behind a detached driver that died at once, and the retry was refused for 30 minutes until the
+# operator ran the rmdir. Now: the claim is stamped with this tick's pid while it dispatches, then
+# RE-STAMPED with the detached driver's pid (read off lr-fleet's DETACHED line), so it lives exactly
+# as long as the work and is stolen the moment that driver dies. Every failure path releases it.
+run_claim_take() { # $1=sid → 0 this tick owns the run, 1 a live run already holds it, 2 no claim store
+  local note rc=0
+  command -v lr_claim_take >/dev/null 2>&1 || { log "RUN-CLAIM-NO-LIB $1 — lr-lib.sh is unreachable, so no run claim can be taken"; return 2; }
+  note="$(lr_claim_take "$RUN_CLAIMS" "${1:?run_claim_take needs a sid}" "lr-reset-poller" - "$$" 2>&1 >/dev/null)" || rc=$?
+  case "$note" in
+    *verdict=stolen-dead-holder*) log "RUN-CLAIM-DEAD-HOLDER $1 — ${note#lr-claim: }; retaken" ;;
+    *verdict=stolen-orphan*)      log "RUN-CLAIM-ORPHAN $1 — ${note#lr-claim: }; retaken" ;;
+    ?*)                           [[ $rc -eq 0 ]] || log "RUN-CLAIM-HELD $1 — ${note#lr-claim: }" ;;
+  esac
+  return "$rc"
 }
-run_claim_release() { rm -rf "$RUN_CLAIMS/${1:?run_claim_release needs a sid}.active" 2>/dev/null || true; }
+run_claim_release() { lr_claim_release "$RUN_CLAIMS" "${1:?run_claim_release needs a sid}" "$$"; }
+# After a detached dispatch: hand the claim to the driver, or release it when none is named.
+run_claim_handoff() { # $1=sid $2=the dispatch's output file
+  local dp
+  dp="$(lr_detached_driver_pid < "$2" 2>/dev/null || true)"
+  if [[ -n "$dp" ]] && lr_claim_restamp "$RUN_CLAIMS" "$1" "$$" "$dp" "lr-fleet --one --detach (lr-reset-poller)"; then
+    return 0
+  fi
+  log "RUN-CLAIM-RELEASED $1 — the dispatch named no driver pid${dp:+ (or the claim was no longer ours)}, so the claim guards nothing and is released"
+  run_claim_release "$1"
+}
 _rq_held=0; _rq_held_sids=""
 for _rq in "$REQUESTS"/*.json; do
   [[ -e "$_rq" ]] || continue
@@ -869,7 +861,12 @@ sys.stdout.write("".join(str(d.get(k) or "")+"\0"
   fi
 
   # ── THE PER-SID RUN CLAIM (defect 2) ──────────────────────────────────────────────────────────
-  if ! run_claim_take "$_rq_sid"; then
+  _rq_crc=0; run_claim_take "$_rq_sid" || _rq_crc=$?
+  if (( _rq_crc == 2 )); then
+    log "REQUEST-SKIP $_rq_sid — the run claim could not be taken (no lib or an unwritable store); request left in place for the next tick"
+    continue
+  fi
+  if (( _rq_crc != 0 )); then
     log "SUPERSEDED-BY-LIVE-RUN $_rq_sid — $RUN_CLAIMS/$_rq_sid.active is held by a run already in flight; this request is dropped"
     rm -f "$_rq"; continue
   fi
@@ -884,7 +881,8 @@ sys.stdout.write("".join(str(d.get(k) or "")+"\0"
       _rq_verdict=dispatched
       # rc != 0 from --detach means NOTHING was started (it refuses rather than blocking), so the
       # claim guards no run and must not hold the sid out of recovery until the TTL.
-      (( _rq_rc == 0 )) || { run_claim_release "$_rq_sid"; _rq_verdict=dispatch-failed; }
+      if (( _rq_rc == 0 )); then run_claim_handoff "$_rq_sid" "$RESULTS/$_rq_sid.log"
+      else run_claim_release "$_rq_sid"; _rq_verdict=dispatch-failed; fi
       ;;
     prompt)
       # C14: the pane is up with an EMPTY composer and nothing was ever submitted, so the repair is
@@ -1425,6 +1423,8 @@ reroute_parked() { # $1=sid $2=acct $3=cfg → dispatches or does nothing; never
   if (( rc != 0 )); then
     run_claim_release "$sid"
     log "REROUTE $sid — dispatch failed rc=$rc (nothing started); retried after ${REROUTE_EVERY_MIN}m, see $RESULTS/$sid.log"
+  else
+    run_claim_handoff "$sid" "$RESULTS/$sid.log"
   fi
   return 0
 }

@@ -286,16 +286,28 @@ transcript() { # <sid> <json line…> — a fixture transcript where cc-lr's cfg
   [ -e "$BATS_TEST_TMPDIR/fleet.argv" ]
 }
 
-@test "recover REFUSES an unlabelled mutex under the TTL and steals it over the TTL" {
-  mkdir -p "$MUTEX"                     # no holder file: a driver that has not written one yet
+@test "recover REFUSES an unlabelled mutex inside the stamp window and steals it past it (D2)" {
+  mkdir -p "$MUTEX"                     # no holder file: a taker between mkdir and its stamp
   find_stub 0 "$(row "$SID" 117 LIMITED)"
-  run env CC_LR_MUTEX_TTL_S=3600 bash "$LR" recover 117
+  run env LR_CLAIM_ORPHAN_GRACE_S=3600 bash "$LR" recover 117
   [ "$status" -eq 2 ]
-  [[ "$output" == *"names no pid"* ]] || false
+  [[ "$output" == *"verdict=held-fresh-orphan"* ]] || false
   [ ! -e "$BATS_TEST_TMPDIR/fleet.argv" ]
-  run env CC_LR_MUTEX_TTL_S=0 bash "$LR" recover 117
+  run env LR_CLAIM_ORPHAN_GRACE_S=0 bash "$LR" recover 117
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [[ "$output" == *"with no holder — stealing it"* ]] || false
+  [[ "$output" == *"verdict=stolen-orphan"* ]] || false
+}
+
+@test "[RED] D2: the 2026-09-28 wedge — a holder-less mutex 421 s old with no live driver is stolen" {
+  # The pre-change subject refused this for 30 minutes ("names no pid; 421s old") and the operator
+  # ran the rmdir by hand.
+  mkdir -p "$MUTEX"
+  python3 -c 'import os,sys,time; t=time.time()-421; os.utime(sys.argv[1],(t,t))' "$MUTEX"
+  find_stub 0 "$(row "$SID" 117 LIMITED)"
+  run bash "$LR" recover 117
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=stolen-orphan"* ]] || false
+  [ -e "$BATS_TEST_TMPDIR/fleet.argv" ]
 }
 
 @test "recover RELEASES the mutex when lr-fleet refuses, so the next attempt is not blocked" {

@@ -53,7 +53,6 @@ set -uo pipefail
 STATE="${LR_STATE_DIR:-$HOME/.reso/limit-recover}"
 MUTEX_DIR="$STATE/runs/by-sid"
 REQ_DIR="$STATE/requests"
-MUTEX_TTL_S="${CC_LR_MUTEX_TTL_S:-1800}"
 POLLER_LABEL="${CC_LR_POLLER_LABEL:-com.reso.lr-reset-poller}"
 
 # ── who we are, and the siblings we call ───────────────────────────────────────────────────────
@@ -178,53 +177,23 @@ cl_this_pane() {
 }
 
 # ── the mutex: one actuator per session ────────────────────────────────────────────────────────
-# `mkdir` is the atomic primitive (the same one lr_state_append uses for its event lock). A held
-# mutex is read, never assumed: the holder file names the pid that owns it, so
-#   holder pid ALIVE       → REFUSE. A second driver on one pane is the split brain W10 exists for.
-#   holder pid DEAD        → STEAL, loudly. The holder proved itself dead; waiting out a TTL for a
-#                            corpse is how a crashed driver silences every later attempt.
-#   no holder file at all  → steal only past CC_LR_MUTEX_TTL_S (1800 s ≈ 3× the 658 s worst
-#                            measured `--one`, U14 §2.1), because an unlabelled lock might be a
-#                            driver that has not written its holder yet.
-# Never `kill -0` alone as the liveness oracle for a LONG-lived holder — but a recovery driver's
-# whole life is minutes, so the recycled-pid window cc-find worries about does not open here.
-cl_mutex_age_s() { # <dir> → age in seconds, or 999999 when unreadable
-  local m now
-  now="$(date +%s)"
-  m="$(stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || true)"
-  case "${m:-x}" in ''|*[!0-9]*) printf '999999' ;; *) printf '%s' $(( now - m )) ;; esac
-}
-
+# ONE implementation, lr-lib.sh's lr_claim_take (D2, 2026-09-28) — shared with lr-fleet's pool and
+# the reset poller, which each carried their own copy and disagreed about a claim with no holder
+# file: this one waited out a 1800 s TTL on it, and on 2026-09-28 that refused a retry for a claim
+# the poller had left behind a dead driver. The rules now live in lr-lib.sh and read:
+#   holder pid ALIVE → REFUSE · holder pid DEAD → steal at once, loudly · no holder → steal once
+#   no live recovery process names the sid (past a 10 s stamp window), never on a clock.
 cl_mutex_take() { # <sid> <pane> → 0 taken (path on stdout), 2 refused
-  local sid="$1" pane="$2" dir hpid age
-  dir="$MUTEX_DIR/$sid.active"
-  mkdir -p "$MUTEX_DIR" 2>/dev/null || { echo "cc-lr: cannot create $MUTEX_DIR" >&2; return 2; }
-  if mkdir "$dir" 2>/dev/null; then
-    printf '{"sid":"%s","pane":"%s","pid":%d,"ts":"%s","by":"cc-lr"}\n' \
-      "$sid" "$pane" "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$dir/holder" 2>/dev/null || true
-    printf '%s' "$dir"; return 0
+  command -v lr_claim_take >/dev/null 2>&1 || {
+    echo "cc-lr: REFUSED — lr-lib.sh (lr_claim_take) is unreachable, so the one-actuator mutex cannot be taken. Nothing was started." >&2
+    return 2; }
+  local out rc=0
+  out="$(lr_claim_take "$MUTEX_DIR" "$1" cc-lr "$2" "$$")" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "cc-lr: REFUSED — ${1:0:8} is held by another recovery (mutex $MUTEX_DIR/$1.active). One actuator per session; nothing was started." >&2
+    return 2
   fi
-  hpid="$(sed -n 's/.*"pid":\([0-9][0-9]*\).*/\1/p' "$dir/holder" 2>/dev/null | head -1)"
-  if [ -n "$hpid" ]; then
-    if kill -0 "$hpid" 2>/dev/null; then
-      echo "cc-lr: REFUSED — ${sid:0:8} is already being recovered by pid $hpid (mutex $dir). One actuator per session; nothing was started." >&2
-      return 2
-    fi
-    echo "cc-lr: mutex $dir was held by pid $hpid, which is DEAD — stealing it" >&2
-    rm -rf "$dir" 2>/dev/null || true
-  else
-    age="$(cl_mutex_age_s "$dir")"
-    if [ "$age" -lt "$MUTEX_TTL_S" ]; then
-      echo "cc-lr: REFUSED — mutex $dir is held and names no pid; it is ${age}s old, under the ${MUTEX_TTL_S}s steal bound. Nothing was started." >&2
-      return 2
-    fi
-    echo "cc-lr: mutex $dir is ${age}s old with no holder — stealing it" >&2
-    rm -rf "$dir" 2>/dev/null || true
-  fi
-  mkdir "$dir" 2>/dev/null || { echo "cc-lr: REFUSED — could not take $dir after the steal" >&2; return 2; }
-  printf '{"sid":"%s","pane":"%s","pid":%d,"ts":"%s","by":"cc-lr"}\n' \
-    "$sid" "$pane" "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$dir/holder" 2>/dev/null || true
-  printf '%s' "$dir"; return 0
+  printf '%s' "$out"
 }
 
 # ── resolve a ref to ONE session row, or refuse ────────────────────────────────────────────────
@@ -460,14 +429,14 @@ EOF
   mutex="$(cl_mutex_take "$sid" "${pane:--}")" || exit 2
 
   [ -n "$FLEET_BIN" ] && [ -f "$FLEET_BIN" ] || {
-    rmdir "$mutex" 2>/dev/null || rm -rf "$mutex" 2>/dev/null || true
+    lr_claim_release "$MUTEX_DIR" "$sid" "$$"
     cl_die "cannot reach lr-fleet.sh (set CC_LR_FLEET_BIN); the mutex was released and nothing was started" 2; }
 
   set -- --one "$sid" --target "$target"
   case "${pane:--}" in -|'') ;; *) set -- "$@" --source-pane "$pane" ;; esac
   out="$(bash "$FLEET_BIN" "$@" --detach 2>&1)"; rc=$?
   if [ "$rc" -ne 0 ]; then
-    rmdir "$mutex" 2>/dev/null || rm -rf "$mutex" 2>/dev/null || true
+    lr_claim_release "$MUTEX_DIR" "$sid" "$$"
     printf '%s\n' "$out" >&2
     cl_die "lr-fleet --one exited $rc; the mutex was released and nothing is running" 2
   fi
@@ -475,8 +444,8 @@ EOF
   run="$(printf '%s\n' "$out" | sed -n 's/^run=\([^ ]*\).*/\1/p' | head -1)"
   # Re-stamp the holder with the DRIVER's pid: this process is about to exit, and a mutex naming a
   # dead pid is stolen by the next caller (above) — which for a live recovery is the split brain.
-  [ -n "$fpid" ] && printf '{"sid":"%s","pane":"%s","pid":%s,"ts":"%s","by":"lr-fleet --one --detach"}\n' \
-    "$sid" "${pane:--}" "$fpid" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$mutex/holder" 2>/dev/null || true
+  [ -n "$fpid" ] && { lr_claim_restamp "$MUTEX_DIR" "$sid" "$$" "$fpid" "lr-fleet --one --detach" "${pane:--}" \
+    || echo "cc-lr: WARNING — could not re-stamp $mutex with driver pid $fpid; it names this (exiting) process and is stealable" >&2; }
 
   # THE THREE LINES (D2 §1.2). Line 3 names the ONE command to run next.
   #
@@ -1008,10 +977,10 @@ cmd_switch() {
     # token minted from an rc alone is a second auditor over one population. The message below
     # deliberately does not spell the `verdict=` token either: a consumer greps for it, so putting
     # it in PROSE mints a row that names no outcome (memory: claimed-outcome-vs-checked-outcome).
-    rmdir "$mutex" 2>/dev/null || rm -rf "$mutex" 2>/dev/null || true
+    lr_claim_release "$MUTEX_DIR" "$sid" "$$"
     cl_die "lr-handoff exited $rc; the mutex was released — read the verdict line it printed above for what actually moved" "$rc"
   fi
-  rmdir "$mutex" 2>/dev/null || rm -rf "$mutex" 2>/dev/null || true
+  lr_claim_release "$MUTEX_DIR" "$sid" "$$"
   return 0
 }
 

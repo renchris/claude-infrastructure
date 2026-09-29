@@ -53,7 +53,7 @@ STUB
 printf '%s\n' "$*" >> "${FLEET_LOG:?}"
 _d=0; for _a in "$@"; do [ "$_a" = "--detach" ] && _d=1; done
 if [ "$_d" = 1 ]; then
-  echo "lr-fleet: DETACHED — driver pid 4242 is recovering; the verdict arrives as mail."
+  echo "lr-fleet: DETACHED — driver pid ${FLEET_DRIVER_PID:-4242} is recovering; the verdict arrives as mail."
   echo "run=/nowhere/run log=/nowhere/run/detached.log"
   exit "${FLEET_DETACH_RC:-0}"
 fi
@@ -63,6 +63,9 @@ exit "${FLEET_RC:-0}"
 STUB
   chmod +x "$LR_FLEET_BIN"
   export FLEET_LOG="$BATS_TEST_TMPDIR/fleet.log"; : > "$FLEET_LOG"
+  # The "driver" the stub names must be ALIVE for as long as the case runs: the poller re-stamps the
+  # claim with it (D2), and a dead one is stolen at once. The bats process outlives every tick.
+  export FLEET_DRIVER_PID="$$"
 
   # ── the cc-tui.sh seam. SET but pointing nowhere is the shipped state until W5-E converges. ──
   export LR_CC_TUI_LIB="$BATS_TEST_TMPDIR/absent-cc-tui.sh"
@@ -149,7 +152,7 @@ EOF
   [ "$(grep -c . "$FLEET_LOG")" = 1 ] || { echo "the second tick drove the sid a second time"; cat "$FLEET_LOG"; false; }
 }
 
-@test "claim CONTROL: a claim older than the TTL is retaken — a dead driver must not wedge the sid" {
+@test "claim CONTROL: a holder-less claim with no live driver is retaken — a dead driver must not wedge the sid" {
   mkdir -p "$STATE/runs/by-sid/$SID.active"
   python3 - "$STATE/runs/by-sid/$SID.active" <<'PY'
 import os,sys,time
@@ -160,11 +163,11 @@ PY
 {"sid":"$SID","requested_by":"driver-abc"}
 EOF
   tick
-  grep -q "RUN-CLAIM-STALE $SID" "$STATE/poller.log" || { plog; false; }
+  grep -q "RUN-CLAIM-ORPHAN $SID" "$STATE/poller.log" || { plog; false; }
   grep -q -- "--one $SID" "$FLEET_LOG" || { cat "$FLEET_LOG"; false; }
 }
 
-@test "claim CONTROL: a FRESH claim inside the TTL is honoured, not retaken" {
+@test "claim CONTROL: a FRESH holder-less claim inside the stamp window is honoured, not retaken" {
   mkdir -p "$STATE/runs/by-sid/$SID.active"
   rq "$SID" <<EOF
 {"sid":"$SID","requested_by":"driver-abc"}
@@ -390,4 +393,71 @@ EOF
   [ -f "$STATE/requests/$SID.json" ]
   [ ! -s "$FLEET_LOG" ]
   grep -qE "DRY +request $SID.json would be executed" "$STATE/poller.log" || { plog; false; }
+}
+
+# ── D2 (2026-09-28): one claim format, and it names a pid that lives as long as the work ────────
+# THE INCIDENT: REROUTE retook 415a3aac in the poller's old shape (a directory, NO holder), its
+# detached driver died at once, and cc-lr's retry was refused "names no pid; 421s old" until a
+# 30-minute TTL. The operator ran the rmdir. These cases pin the shape that makes that impossible.
+age_claim() { # $1=seconds old
+  python3 - "$STATE/runs/by-sid/$SID.active" "$1" <<'PY2'
+import os,sys,time
+t = time.time() - int(sys.argv[2]); os.utime(sys.argv[1], (t, t))
+PY2
+}
+
+@test "[RED] D2: a holder-less claim 421 s old with no live driver is retaken at once, not after 30 min" {
+  mkdir -p "$STATE/runs/by-sid/$SID.active"; age_claim 421
+  rq "$SID" <<EOF
+{"sid":"$SID","requested_by":"driver-abc"}
+EOF
+  tick
+  grep -q -- "--one $SID" "$FLEET_LOG" || { cat "$FLEET_LOG"; plog; false; }
+  grep -q "RUN-CLAIM-ORPHAN $SID" "$STATE/poller.log" || { plog; false; }
+}
+
+@test "D2 CONTROL: a holder-less claim is honoured while a live recovery driver names the sid" {
+  mkdir -p "$STATE/runs/by-sid/$SID.active"; age_claim 421
+  mkdir -p "$BATS_TEST_TMPDIR/fake/limit-recover"
+  printf '#!/bin/bash\nsleep 30\n' > "$BATS_TEST_TMPDIR/fake/limit-recover/lr-fleet.sh"
+  bash "$BATS_TEST_TMPDIR/fake/limit-recover/lr-fleet.sh" --one "$SID" & drv=$!
+  rq "$SID" <<EOF
+{"sid":"$SID","requested_by":"driver-abc"}
+EOF
+  tick
+  kill "$drv" 2>/dev/null || true
+  [ ! -s "$FLEET_LOG" ] || { cat "$FLEET_LOG"; false; }
+  grep -q "SUPERSEDED-BY-LIVE-RUN $SID" "$STATE/poller.log" || { plog; false; }
+}
+
+@test "[RED] D2: after a dispatch the claim's holder names the DETACHED driver's pid" {
+  rq "$SID" <<EOF
+{"sid":"$SID","requested_by":"driver-abc"}
+EOF
+  tick
+  grep -q "\"pid\":$FLEET_DRIVER_PID," "$STATE/runs/by-sid/$SID.active/holder" \
+    || { cat "$STATE/runs/by-sid/$SID.active/holder" 2>&1; plog; false; }
+}
+
+@test "D2: a dispatch that names no driver pid releases the claim — nothing is left to wedge the sid" {
+  cat > "$LR_FLEET_BIN" <<'STUB'
+printf '%s\n' "$*" >> "${FLEET_LOG:?}"
+echo "lr-fleet: something printed, but no driver line"
+exit 0
+STUB
+  rq "$SID" <<EOF
+{"sid":"$SID","requested_by":"driver-abc"}
+EOF
+  tick
+  [ ! -e "$STATE/runs/by-sid/$SID.active" ] || { ls -la "$STATE/runs/by-sid/$SID.active"; plog; false; }
+  grep -q "RUN-CLAIM-RELEASED $SID" "$STATE/poller.log" || { plog; false; }
+}
+
+@test "D2: a failed dispatch releases the claim" {
+  export FLEET_DETACH_RC=2
+  rq "$SID" <<EOF
+{"sid":"$SID","requested_by":"driver-abc"}
+EOF
+  tick
+  [ ! -e "$STATE/runs/by-sid/$SID.active" ] || { plog; false; }
 }
