@@ -245,6 +245,53 @@ print(json.loads(out)["hookSpecificOutput"].get("permissionDecisionReason","") i
   [ "$(decision 'curl -s "$(cat /tmp/sr.url)" -o x.zip')" = "ask" ]
 }
 
+# The Bash tool's shell is /bin/zsh, and zsh rewrites an UNBRACED reference followed by `[` (a
+# subscript) or `:<letter>` (a history modifier): "$u[1,8]" is the first 8 chars, "$u:s/a/b/"
+# substitutes. Reading such a token textually judged ok.com while zsh sent the request to the
+# metadata service or a private address. Braced ${u}[…] / ${u}:h and a port ($h:8080) stay literal.
+@test "ZSH: an unbraced subscript or history modifier is undecidable, never resolved to allow" {
+  [ "$(decision 'for u in https://ok.com/a; do curl -s "$u[1,8]169.254.169.254/"; done')" != "allow" ]
+  [ "$(decision 'u=https://ok.com/a; curl -s "$u:s/ok.com/10.0.0.1/"')" != "allow" ]
+  [ "$(decision 'u=https://ok.com/a; curl -s $u:gs/ok.com/10.0.0.1/')" != "allow" ]
+  [ "$(decision 'u=https://ok.com/10.0.0.1; curl -s "https://$u:t/"')" != "allow" ]
+  [ "$(decision 'u=https://ok.com/a; v="$u[1,8]10.0.0.1/"; curl -s "$v"')" != "allow" ]
+}
+
+@test "ZSH RED ON PARENT: 49134c399 allowed both bypasses and asked on the quoted-glob permit" {
+  local pre="$BATS_TEST_TMPDIR/parent"
+  mkdir -p "$pre/lib"
+  git -C "$REPO" show 49134c399:hooks/curl-gate.py > "$pre/curl-gate.py"
+  git -C "$REPO" show 49134c399:hooks/lib/curl_ssrf.py > "$pre/lib/curl_ssrf.py"
+  ! cmp -s "$GATE" "$pre/curl-gate.py" || false
+  GATE="$pre/curl-gate.py"
+  [ "$(decision 'for u in https://ok.com/a; do curl -s "$u[1,8]169.254.169.254/"; done')" = "allow" ]
+  [ "$(decision 'u=https://ok.com/a; curl -s "$u:s/ok.com/10.0.0.1/"')" = "allow" ]
+  [ "$(decision 'for u in "https://ok.com/s?q=1"; do curl -s "$u"; done')" = "ask" ]
+}
+
+@test "ZSH SIBLINGS: braced forms and a port after the name still resolve" {
+  [ "$(decision 'for u in https://ok.com/a; do curl -s "${u}[1]"; done')" = "allow" ]
+  [ "$(decision 'h=ok.com; curl -s "https://$h:8443/x"')" = "allow" ]
+  [ "$(decision 'u=https://ok.com/a; curl -s "${u}:h"')" = "allow" ]
+}
+
+# A `?` or `*` inside a QUOTED loop word is literal to the shell; only an unquoted one globs.
+@test "QUOTED GLOB: a quoted ? or * in a loop word resolves; an unquoted one still asks" {
+  [ "$(decision 'for u in "https://ok.com/s?q=1" "https://ok.com/a*b"; do curl -s "$u"; done')" = "allow" ]
+  [ "$(decision "for u in 'https://ok.com/s?q=1'; do curl -s \"\$u\"; done")" = "allow" ]
+  [ "$(decision 'for u in https://ok.com/s?q=1; do curl -s "$u"; done')" = "ask" ]
+  [ "$(decision 'for u in "https://ok.com/s?q=1" "http://169.254.169.254/?x"; do curl -s "$u"; done')" = "deny" ]
+  [ "$(decision "for u in 'https://ok.com/\$x'; do curl -s \"\$u\"; done")" = "ask" ]
+}
+
+# A loop binds each name to ONE value per iteration; the token-wise cross product invented
+# combinations the shell never runs and hit the expansion cap on ordinary two-variable loops.
+@test "PER-ITERATION: two references to one loop name expand together" {
+  [ "$(decision 'for u in https://a.com/1 https://b.com/2 https://c.com/3 https://d.com/4 https://e.com/5 https://f.com/6; do curl -s "$u" -o "$u.html" -e "$u" -A "$u"; done')" = "allow" ]
+  [ "$(decision 'for u in https://a.com/1 http://10.0.0.1/; do curl -s "$u" -e "$u"; done')" = "deny" ]
+  [ "$(decision 'for u in https://a.com/x; do for p in 1 2; do curl -s "$u?p=$p"; done; done')" = "allow" ]
+}
+
 @test "PERMITS: informational curl makes no request" {
   [ "$(decision 'which curl; curl --version | head -1')" = "allow" ]
   [ "$(decision 'curl --help all')" = "allow" ]

@@ -28,6 +28,7 @@ Audit: appends decision to ~/.reso/curl-audit.jsonl.
 Kill switch: env CURL_GATE_DISABLED=1.
 """
 
+import itertools
 import json
 import os
 import re
@@ -518,8 +519,15 @@ def parse_argv(tokens: list[str], cmd: str) -> dict:
             route_targets.append((t, tokens[i + 1]))
         elif t in _ssrf.PROXY_FLAGS:
             proxies.append(t)
-        elif t.startswith("-") and not t.startswith("--") and len(t) > 1 and "x" in short_cluster_flags(t[1:]):
-            proxies.append(t)  # -x in a cluster or with an attached value: -sx p:3128, -xhttp://p
+        elif (
+            t.startswith("-")
+            and not t.startswith("--")
+            and len(t) > 1
+            and "x" in short_cluster_flags(t[1:])
+        ):
+            proxies.append(
+                t
+            )  # -x in a cluster or with an attached value: -sx p:3128, -xhttp://p
         elif t in _ssrf.SOCKET_FLAGS:
             unix_socket = True
         elif t in _ssrf.DNS_FLAGS:
@@ -846,7 +854,10 @@ def decide(parsed: dict) -> tuple[str, str]:
     # ROUTING (2026-09-29). Every rule below judges the URL's host, but these flags make curl
     # connect somewhere else, so the host check would be judging the wrong machine.
     if parsed.get("unix_socket"):
-        return "ask", "--unix-socket sends the request to a local socket file, not to the URL's host"
+        return (
+            "ask",
+            "--unix-socket sends the request to a local socket file, not to the URL's host",
+        )
     if parsed.get("proxies"):
         return (
             "ask",
@@ -858,11 +869,17 @@ def decide(parsed: dict) -> tuple[str, str]:
             f"{parsed['dns_override'][0]} picks the DNS server, which can point any host name at an internal address",
         )
     if parsed.get("url_expansion"):
-        return "ask", "--variable/--expand-* builds the URL at run time, so the written URL is not the real one"
+        return (
+            "ask",
+            "--variable/--expand-* builds the URL at run time, so the written URL is not the real one",
+        )
     for flag, val in parsed.get("route_targets") or []:
         for tgt in _ssrf.route_target_hosts(flag, val):
             if tgt is None:
-                return "ask", f"{flag} {val}: cannot tell where this sends the connection"
+                return (
+                    "ask",
+                    f"{flag} {val}: cannot tell where this sends the connection",
+                )
             if is_internal_host(tgt):
                 return (
                     "deny",
@@ -875,7 +892,10 @@ def decide(parsed: dict) -> tuple[str, str]:
                 or parsed.get("has_file_upload")
                 or outbound_credentials(parsed)
             ):
-                return "ask", f"{flag} sends a write or a credential to {tgt} instead of the URL's host"
+                return (
+                    "ask",
+                    f"{flag} sends a write or a credential to {tgt} instead of the URL's host",
+                )
 
     # Sensitive output / upload paths
     op = parsed.get("output_path") or ""
@@ -1160,6 +1180,12 @@ def redirect_hardening(cmd: str, parsed: dict) -> str | None:
 # host this code did not see.
 _REF_RE = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")
 _EXPAND_CAP = 32
+# zsh — the Bash tool's shell — applies a subscript or a history modifier to an UNBRACED reference:
+# "$u[1,8]" is the first 8 chars and "$u:s/ok.com/10.0.0.1/" substitutes (measured on /bin/zsh:
+# :a :A :P resolve against the cwd, :e :h :r :t :u :s :gs rewrite). Textual substitution judged
+# ok.com while zsh sent the request to 169.254.169.254, so any such reference is undecidable. Braced
+# ${u}[1] and ${u}:h are literal in zsh, and `$h:8080` is a port — neither matches.
+_ZSH_POSTPARAM_RE = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*(?:\[|:[A-Za-z&])")
 _UNSEEN_BINDERS = re.compile(
     r"(?:^|[\s;&|(`])(?:read|mapfile|readarray|eval|source|declare|typeset|local|let|getopts|select)(?=\s)"
     r"|(?:^|[\s;&|(])\.\s|printf\s+-v|\(\(|\$\{[A-Za-z_]\w*:?[=?]"
@@ -1170,6 +1196,59 @@ _ASSIGN_RE = re.compile(
 _FOR_RE = re.compile(
     r"(?:^|(?<=[\s;&|(]))for\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+([^;\n]*?)\s*(?:;|\n)\s*do\b"
 )
+
+
+# A glob, brace or grouping character in a loop word is expanded by the shell only when it is
+# UNQUOTED: `"https://x/s?q=1"` is one literal word, `https://x/s?q=1` is a glob. So the check walks
+# the raw list with the shell's quoting rules instead of looking at the dequoted words, and a `$` or
+# backtick is refused anywhere, quoted or not, so no loop word is ever itself an expansion.
+_UNQUOTED_META = frozenset("*?[]{}()<>|&^#~=!")
+
+
+def loop_words_literal(raw: str, words: list[str]) -> bool:
+    """True iff no word of the raw `for` list is subject to expansion and shlex read it as we do."""
+    if "$" in raw or "`" in raw:
+        return False
+    vals: list[str] = []
+    cur: list[str] = []
+    started = False
+    quote = None
+    i = 0
+    while i < len(raw):
+        c = raw[i]
+        if quote is None:
+            if c in " \t\n":
+                if started:
+                    vals.append("".join(cur))
+                    cur, started = [], False
+            elif c in "'\"":
+                started, quote = True, c
+            elif c == "\\":
+                if i + 1 >= len(raw):
+                    return False
+                started = True
+                cur.append(raw[i + 1])
+                i += 1
+            elif c in _UNQUOTED_META:
+                return False
+            else:
+                started = True
+                cur.append(c)
+        elif c == quote:
+            quote = None
+        elif quote == '"' and c == "\\" and i + 1 < len(raw) and raw[i + 1] in '"\\':
+            cur.append(raw[i + 1])
+            i += 1
+        else:
+            cur.append(c)
+        i += 1
+    if quote is not None:
+        return False
+    if started:
+        vals.append("".join(cur))
+    return (
+        vals == words
+    )  # our reading must agree with shlex's, or the list is not understood
 
 
 def shell_bindings(cmd: str) -> dict:
@@ -1183,12 +1262,7 @@ def shell_bindings(cmd: str) -> dict:
             words = shlex.split(raw, posix=True)
         except ValueError:
             words = None
-        ok = (
-            words
-            and "$(" not in raw
-            and "`" not in raw
-            and not any(re.search(r"[$*?\[{]", w) for w in words)
-        )
+        ok = bool(words) and loop_words_literal(raw, words)
         sites.setdefault(m.group(1), []).append(("for", words) if ok else None)
     for m in _ASSIGN_RE.finditer(cmd):
         name, plus, bracket, raw = m.groups()
@@ -1197,6 +1271,7 @@ def shell_bindings(cmd: str) -> dict:
             or bracket
             or "$(" in raw
             or "`" in raw
+            or _ZSH_POSTPARAM_RE.search(raw)
             or raw.startswith("'")
             and "$" in raw
         )
@@ -1241,16 +1316,48 @@ def expand_token(tok: str, bindings: dict, depth: int = 0) -> list[str] | None:
 
 
 def expand_argv(argv: list[str], cmd: str) -> list[list[str]]:
-    """The argv variants the command's own bindings allow; [argv] untouched when undecidable."""
+    """The argv variants the command's own bindings allow; [argv] untouched when undecidable.
+
+    A loop binds each name to ONE value per iteration, so a variant picks one value per NAME and
+    substitutes it into every token. Crossing token against token instead invented pairings the
+    shell never runs (`"$u" -e "$u"` over six URLs is 6 runs, not 36) and blew the expansion cap on
+    ordinary loops. A token still holding a reference this reader does not model stays as written.
+    """
     if not any("$" in t for t in argv):
         return [argv]
+    if any(_ZSH_POSTPARAM_RE.search(t) for t in argv):
+        return [argv]
     bindings = shell_bindings(cmd)
-    variants: list[list[str]] = [[]]
+    names: list[str] = []
     for t in argv:
-        cands = expand_token(t, bindings) or [t]
-        variants = [v + [c] for v in variants for c in cands]
-        if len(variants) > _EXPAND_CAP:
-            return [argv]
+        for m in _REF_RE.finditer(t):
+            name = m.group(1) or m.group(2)
+            if name not in names:
+                names.append(name)
+    values: dict[str, list[str]] = {}
+    total = 1
+    for name in names:
+        vals = expand_token("$" + name, bindings) if name in bindings else None
+        if vals:
+            values[name] = vals
+            total *= len(vals)
+            if total > _EXPAND_CAP:
+                return [argv]
+    if not values:
+        return [argv]
+    keys = list(values)
+    variants: list[list[str]] = []
+    for combo in itertools.product(*(values[k] for k in keys)):
+        env = dict(zip(keys, combo))
+
+        def sub(m: re.Match, env: dict = env) -> str:
+            return env.get(m.group(1) or m.group(2), m.group(0))
+
+        row = []
+        for t in argv:
+            s = _REF_RE.sub(sub, t)
+            row.append(t if "$" in s else s)
+        variants.append(row)
     return variants
 
 
@@ -1319,13 +1426,32 @@ def decide_command(cmd: str) -> tuple[str, str, dict]:
     # Command-level routing: an environment variable or a curlrc steers curl without a flag in argv.
     if _ssrf.ENV_PROXY_RE.search(cmd):
         verdicts.append(
-            ("ask", "a *_proxy environment variable sends curl through a proxy the host check cannot see")
+            (
+                "ask",
+                "a *_proxy environment variable sends curl through a proxy the host check cannot see",
+            )
         )
     if _ssrf.ENV_CURLRC_RE.search(cmd):
         verdicts.append(
-            ("ask", "CURL_HOME/XDG_CONFIG_HOME/HOME is set, which moves the curlrc curl reads its options from")
+            (
+                "ask",
+                "CURL_HOME/XDG_CONFIG_HOME/HOME is set, which moves the curlrc curl reads its options from",
+            )
         )
     for argv in [v for a in invocations for v in expand_argv(a, cmd)]:
+        # A zsh subscript or modifier left unresolved can still sit in a URL's host ("https://$u:t/"),
+        # where the literal text reads as a harmless public name — so it asks rather than being judged.
+        zsh_ref = next(
+            (m.group(0) for t in argv if (m := _ZSH_POSTPARAM_RE.search(t))), None
+        )
+        if zsh_ref:
+            verdicts.append(
+                (
+                    "ask",
+                    f"{zsh_ref}… is a zsh subscript or modifier, which rewrites the value at run time",
+                )
+            )
+            continue
         if info_only(argv):
             verdicts.append(
                 (
@@ -1339,7 +1465,10 @@ def decide_command(cmd: str) -> tuple[str, str, dict]:
         if decision == "allow" and not parsed.get("disables_curlrc"):
             rc = _ssrf.default_curlrc_present()
             if rc:
-                decision, reason = "ask", f"{rc} exists and can add proxy/resolve options this gate cannot see"
+                decision, reason = (
+                    "ask",
+                    f"{rc} exists and can add proxy/resolve options this gate cannot see",
+                )
         # The rewrite rides in `meta` rather than widening this signature — every caller already
         # threads meta through to emit(), and single_simple_curl() means there is only ever one
         # invocation to compute it for.
