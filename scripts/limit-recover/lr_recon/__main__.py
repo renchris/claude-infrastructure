@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from lr_recon import (
     act,
     census,
+    classify,
     evidence,
     observe,
     plan,
@@ -374,6 +375,46 @@ def _report(ctx: Ctx, mode: str, now: float) -> None:
         _event(ctx.paths, "report-error", detail=repr(e)[:200])
 
 
+REFIRE_SUFFIX = ".refire.json"
+
+
+def _refire(ctx: Ctx, now: float) -> int:
+    """The daemon side of ``cc-lr cohort refire`` (§C11): each ``ctl/<sid>.refire.json`` re-arms one
+    OPEN member's budget through classify.rearm — the same entry point the 15-minute re-arm uses, so
+    a refire can never grant more than the clock would — then moves to ``ctl/done/`` so neither the
+    next pass nor a restart re-applies it. A sid with no open record is moved too, and logged."""
+    try:
+        names = sorted(
+            n for n in os.listdir(ctx.paths.ctl) if n.endswith(REFIRE_SUFFIX)
+        )
+    except OSError:
+        return 0
+    done = os.path.join(ctx.paths.ctl, "done")
+    n = 0
+    for name in names:
+        src = os.path.join(ctx.paths.ctl, name)
+        sid, by = name[: -len(REFIRE_SUFFIX)], "?"
+        try:
+            with open(src, encoding="utf-8") as fh:
+                doc = json.load(fh)
+            sid, by = str(doc.get("sid") or sid), str(doc.get("by") or by)
+        except (OSError, ValueError, AttributeError):
+            pass  # a torn or foreign body still names its sid in the file name
+        rec = ctx.records.get(sid)
+        if rec is not None and rec.open:
+            classify.rearm(rec, now)
+            _event(ctx.paths, "refire", sid, rec.record_id, "by=%s" % by)
+            n += 1
+        else:
+            _event(ctx.paths, "refire-unknown", sid, detail="by=%s" % by)
+        try:
+            os.makedirs(done, 0o700, exist_ok=True)
+            os.replace(src, os.path.join(done, name))
+        except OSError as e:
+            _event(ctx.paths, "refire-error", sid, detail=repr(e)[:200])
+    return n
+
+
 def _invariant(ctx: Ctx, snap: T.Snapshot) -> int:
     """§4.4: every non-terminal record has a live process, a next_eligible_at, or a named wait."""
     bad = 0
@@ -410,6 +451,8 @@ def run_pass(ctx: Ctx, force_observe: bool = False) -> Dict[str, Any]:
     reqs = store.list_requests(paths)
     buckets, stale = _census(ctx, snap, facts, reqs, mode, now)
     _derive(ctx, snap, now)
+    # before planning, so a re-armed member is placed and dispatched this pass
+    _refire(ctx, now)
     placed = _plan(ctx, snap, facts, mode, now)
     spawned = 0
     if mode == "act" and os.path.exists(paths.recon_on):

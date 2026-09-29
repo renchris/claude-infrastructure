@@ -150,6 +150,61 @@ class MainTests(unittest.TestCase):
         M._report(ctx, "observe", 2.0)
         self.assertEqual(os.path.getsize(self.paths.p("readout.line")), 0)
 
+    # ── cc-lr cohort refire: the ctl consumer ─────────────────────────────────────────────────
+    def _ctl(self, sid, by="cc-lr"):
+        os.makedirs(self.paths.ctl, exist_ok=True)
+        p = os.path.join(self.paths.ctl, sid + ".refire.json")
+        with open(p, "w") as fh:
+            json.dump({"sid": sid, "at": 1, "by": by}, fh)
+        return p
+
+    def _events(self):
+        with open(self.paths.events, encoding="utf-8") as fh:
+            return [json.loads(x) for x in fh if x.strip()]
+
+    def test_refire_rearms_an_open_member_and_moves_the_file(self):
+        sid = "abcdef01-0000-0000-0000-000000000009"
+        ctx = M.Ctx(self.paths, None, self.home)
+        r = T.Record(sid=sid, record_id="r9", escalated=True, next_eligible_at=None)
+        r.attempts_by_class = {"TRANSIENT": 7, "DETERMINISTIC": 2}
+        ctx.records[sid] = r
+        src = self._ctl(sid)
+        self.assertEqual(M._refire(ctx, 100.0), 1)
+        # classify.rearm's contract: escalation cleared, counted classes reset, eligible now
+        self.assertEqual(
+            (r.escalated, r.attempts_by_class, r.next_eligible_at), (False, {}, 100.0)
+        )
+        self.assertFalse(os.path.exists(src))
+        self.assertTrue(
+            os.path.exists(os.path.join(self.paths.ctl, "done", sid + ".refire.json"))
+        )
+        ev = self._events()[-1]
+        self.assertEqual((ev["ev"], ev["sid"]), ("refire", sid))
+        self.assertEqual(M._refire(ctx, 200.0), 0)  # consumed once, never re-applied
+
+    def test_refire_for_unknown_or_closed_sid_is_moved_and_logged(self):
+        ctx = M.Ctx(self.paths, None, self.home)
+        closed = T.Record(sid="closed01", record_id="rc", escalated=True)
+        closed.terminal = T.Terminal(outcome="CLOSED", at=1.0)
+        ctx.records["closed01"] = closed
+        for sid in ("nosuch01", "closed01"):
+            self._ctl(sid)
+        self.assertEqual(M._refire(ctx, 100.0), 0)
+        self.assertTrue(closed.escalated, "a closed record is never re-armed")
+        self.assertEqual(
+            sorted(os.listdir(os.path.join(self.paths.ctl, "done"))),
+            ["closed01.refire.json", "nosuch01.refire.json"],
+        )
+        self.assertEqual(
+            [e["ev"] for e in self._events()], ["refire-unknown", "refire-unknown"]
+        )
+
+    def test_refire_is_consumed_inside_a_pass(self):
+        src = self._ctl("abcdef01-0000-0000-0000-000000000001")
+        self._pass("observe")
+        self.assertFalse(os.path.exists(src))
+        self.assertIn("refire", [e["ev"] for e in self._events()])
+
     def test_once_prints_census_and_zero_actuations(self):
         import time
 
