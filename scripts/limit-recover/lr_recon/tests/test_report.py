@@ -334,5 +334,62 @@ class ReportTest(unittest.TestCase):
         self.assertIsNone(R.residue_needs(rec(3, wait=wait("HOLD-MENU")), T0 + 9999))
 
 
+
+class DodLine(unittest.TestCase):
+    """R.dod_line: the two shapes lr-recon-rig derives from its fault matrix (W5)."""
+
+    def setUp(self):
+        import tempfile
+
+        self.root = tempfile.mkdtemp()
+        self.paths = T.Paths(lr_root=self.root, root=self.root)
+
+    def _rec(self, i, via="ENGAGED", outcome="CLOSED", sub=None, seen=()):
+        r = T.Record(sid="%08d-0000-0000-0000-000000000000" % i, record_id="r%d" % i)
+        r.timeline.detected = 100.0
+        r.close = {"via": via, "at": 130.0 + i, "same_window": True, "same_uuid": True, "seen": list(seen)}
+        if outcome:
+            r.terminal = T.Terminal(outcome=outcome)
+        if sub:
+            r.substate, r.wait = sub, T.Wait(reason=sub)
+            r.close.pop("via")
+        return r
+
+    def test_short_shape(self):
+        recs = [self._rec(i) for i in range(5)]
+        self.assertEqual(
+            R.dod_line(self.paths, recs),
+            "ENGAGED 5/5 · same-window 5/5 · same-uuid 5/5 · double-typer 0 · "
+            "split-brain 0 · lost-records 0 · p95 detect→engaged <= 120s",
+        )
+
+    def test_slow_p95_is_stated_not_hidden(self):
+        r = self._rec(1)
+        r.close["at"] = 400.0
+        self.assertIn("p95 detect→engaged = 300s (> 120s)", R.dod_line(self.paths, [r]))
+
+    def test_tally_shape_with_a_recovered_bgwork(self):
+        recs = [self._rec(1), self._rec(2, via="MOVED"), self._rec(3, seen=["HOLD-BGWORK"])]
+        recs += [self._rec(4, outcome=None, sub="HOLD-DRAFT"), self._rec(5, outcome=None, sub="HOLD-BGWORK")]
+        recs += [self._rec(6, via=None, outcome="REPLACED-NEW-WINDOW"), self._rec(7, via=None, outcome="NOT_NEEDED")]
+        self.assertEqual(
+            R.dod_line(self.paths, recs),
+            "CLOSED 3/7 (ENGAGED 2, MOVED 1) · HOLD named 2/7 (draft 1, bgwork 1 — the 2nd bgwork "
+            "recovers after its job ends) · REPLACED-NEW-WINDOW 1 · NOT_NEEDED 1 · double-typer 0 · "
+            "split-brain 0 · lost-records 0 · unowned-non-terminal 0",
+        )
+
+    def test_double_typer_counts_distinct_pids_per_sid_attempt(self):
+        r = self._rec(1)
+        with open(self.paths.launch_log, "w") as fh:
+            fh.write("1\t%s\tlr-fire-resume\ttaken\tpid=10\tattempt=1\n" % r.sid)
+            fh.write("2\t%s\tlr-fire-resume\ttaken\tpid=10\tattempt=1\n" % r.sid)  # a re-take: same pid
+            fh.write("3\t%s\tlr-fire-resume\ttaken\tpid=11\tattempt=2\n" % r.sid)  # the next attempt
+        self.assertIn("double-typer 0", R.dod_line(self.paths, [r]))
+        with open(self.paths.launch_log, "a") as fh:
+            fh.write("4\t%s\tcc-resume-debt\ttaken\tpid=12\tattempt=2\n" % r.sid)
+        self.assertIn("double-typer 1", R.dod_line(self.paths, [r]))
+
+
 if __name__ == "__main__":
     unittest.main()

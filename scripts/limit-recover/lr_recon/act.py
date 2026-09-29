@@ -34,6 +34,8 @@ WRAPPER = 'shift 4; "$@"'  # $0 lr-recon-act $1..$4 = the four tokens
 ACTLOG_MAX_AGE_S = 7 * 86400  # stated bound on recon/actlogs (§C12)
 
 PopenFn = Callable[..., Any]
+# pid → exit code of our own actuators, filled by reap_children and drained by settle.dead_actuators.
+EXIT_CODES: Dict[int, int] = {}
 
 
 def _p(*parts: str) -> str:
@@ -64,6 +66,8 @@ def actuator_env(
         env["CC_TERM_KITTY_TO"] = pane_sock
     if rec.admit_token:
         env["LR_ADMIT_TOKEN_PATH"] = rec.admit_token
+    if rec.submit_token:  # lr-handoff types THIS token, so row 5 can find this attempt's prompt
+        env["LR_RECON_SUBMIT_TOKEN"] = rec.submit_token
     return env
 
 
@@ -329,6 +333,9 @@ def reap_children() -> int:
             return n
         if pid == 0:
             return n
+        EXIT_CODES[pid] = (
+            os.WEXITSTATUS(_status) if os.WIFEXITED(_status) else -os.WTERMSIG(_status)
+        )
         n += 1
 
 

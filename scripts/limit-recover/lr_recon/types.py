@@ -697,6 +697,9 @@ class Record:
     # MOVED needs the same target holder on two samples ≥15 s apart ({pid, lstart, at})
     pane_absent_obs: int = 0
     target_sample: Optional[Dict[str, Any]] = None
+    # close evidence for the cohort DoD line (report.dod_line): {via, at, pane, same_window,
+    # same_uuid, seen: [every phase/substate this record passed through]}
+    close: Dict[str, Any] = field(default_factory=dict)
     # terminal
     goal_snapshot: str = ""
     terminal: Optional[Terminal] = None

@@ -169,8 +169,8 @@ cc-lr — find · recover · status · repair, for a limit-blocked session.
                              composer) is queued too and re-judged every poller tick until it is
                              idle or S seconds pass; the verdict is mailed. Default off.
   cc-lr status [ref|--all]   one row per run's events.jsonl, with CAUSE / NEXT
-  cc-lr status --cohort [cid]
-                             the reconciler's cohorts: per member the phase, age, attempt,
+  cc-lr status --cohort [cid] [--root DIR]
+                             the reconciler's cohorts: the DoD line, then per member the phase, age, attempt,
                              last error class, next action and ETA
   cc-lr accounts --limited   the reconciler's unexpired limit facts, grouped by account
   cc-lr cohort refire <sid|sid8|pane>
@@ -1142,6 +1142,7 @@ cl_status_cohort() { # [cid] → rc 0 (also for "none") · 1 the named cohort is
     jq -r '.status as $s
       | "cohort \($s.cid)  \($s.acct // "?") \($s.scope // "?")  "
         + ([($s.tally // {}) | to_entries[] | select(.value > 0) | "\(.value) \(.key)"] | join(" · ")),
+        (if $s.dod then "DoD: \($s.dod)" else empty end),
         ( ($s.members // [])[]
           | [ "  " + ((.sid // "?")[0:8]),
               "pane " + (if (.pane | type) == "array" then (.pane | map(tostring) | join(":")) else "-" end),
@@ -1162,7 +1163,20 @@ cmd_status() {
   local FILES
   while [ $# -gt 0 ]; do
     case "$1" in
-      --cohort) shift; cl_status_cohort "${1:-}"; return $? ;;
+      --cohort) shift
+        # `--cohort [cid] [--root DIR]`: --root reads another reconciler state tree (the W5 rig's
+        # /tmp/lr-rig/state), in either order after --cohort.
+        local cid=""
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --root) [ -n "${2:-}" ] || { echo "cc-lr status: --root needs a directory" >&2; exit 3; }
+                    RECON_ROOT="$2"; shift 2 ;;
+            *) cid="$1"; shift ;;
+          esac
+        done
+        cl_status_cohort "$cid"; return $? ;;
+      --root) [ -n "${2:-}" ] || { echo "cc-lr status: --root needs a directory" >&2; exit 3; }
+              RECON_ROOT="$2"; shift 2 ;;
       --all) ref=""; shift ;;
       -h|--help) usage; exit 0 ;;
       --*) echo "cc-lr status: unknown option $1" >&2; usage; exit 3 ;;

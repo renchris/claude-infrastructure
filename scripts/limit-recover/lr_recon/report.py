@@ -198,6 +198,107 @@ def cohort_status(
     }
 
 
+# ── the cohort DoD line (W5): one renderer, two shapes, the same two rig_lib.expected_line derives ──
+DOD_P95_S = 120.0
+_ORD = {1: "1st", 2: "2nd", 3: "3rd"}
+
+
+def _typers(paths: T.Paths, sids: Sequence[str]) -> Dict[Tuple[str, str], set]:
+    """(sid, attempt) → distinct typer pids, from recon/launch.log (fence takes, lr-fire-resume's
+    launch-lock take, and the daemon's own typing spawns all write one line each)."""
+    want, out = set(sids), {}  # type: ignore[var-annotated]
+    try:
+        with open(paths.launch_log, encoding="utf-8", errors="replace") as fh:
+            for ln in fh:
+                t = ln.rstrip("\n").split("\t")
+                if len(t) < 4 or t[1] not in want or t[3] not in ("taken", "inherited", "typer"):
+                    continue
+                kv = dict(x.split("=", 1) for x in t[4:] if "=" in x)
+                out.setdefault((t[1], kv.get("attempt", "?")), set()).add(kv.get("pid", "?"))
+    except OSError:
+        pass
+    return out
+
+
+def _quarantined(paths: T.Paths, sids: Sequence[str]) -> int:
+    try:
+        names = os.listdir(paths.quarantine)
+    except OSError:
+        return 0
+    return sum(1 for sid in sids if any(n.startswith(sid) for n in names))
+
+
+def _p95(xs: List[float]) -> float:
+    xs = sorted(xs)
+    return xs[max(0, int(round(0.95 * len(xs) + 0.5)) - 1)] if xs else 0.0
+
+
+def dod_line(paths: T.Paths, records: Sequence[T.Record]) -> str:
+    """The cohort's measured DoD. Short shape (every member engaged in place):
+    ``ENGAGED k/n · same-window · same-uuid · double-typer · split-brain · lost-records · p95``;
+    otherwise the tally shape with CLOSED / HOLD named / REPLACED-NEW-WINDOW / NOT_NEEDED."""
+    n = len(records)
+    sids = [r.sid for r in records]
+    double = sum(1 for v in _typers(paths, sids).values() if len(v) > 1)
+    split = sum(1 for r in records if "SPLIT-BRAIN" in (r.close.get("seen") or []))
+    lost = _quarantined(paths, sids)
+    via = [r.close.get("via") for r in records]
+    outcomes = [r.terminal.outcome if r.terminal else None for r in records]
+    if n and all(v == "ENGAGED" for v in via) and all(o in (None, "CLOSED") for o in outcomes):
+        lat = [
+            float(r.close.get("at", 0)) - float(r.timeline.detected or 0)
+            for r in records
+            if r.timeline.detected
+        ]
+        p95 = _p95(lat)
+        tail = (
+            "p95 detect→engaged <= %ds" % DOD_P95_S
+            if p95 <= DOD_P95_S
+            else "p95 detect→engaged = %ds (> %ds)" % (p95, DOD_P95_S)
+        )
+        return (
+            "ENGAGED %d/%d · same-window %d/%d · same-uuid %d/%d · double-typer %d · "
+            "split-brain %d · lost-records %d · %s"
+            % (
+                n,
+                n,
+                sum(1 for r in records if r.close.get("same_window")),
+                n,
+                sum(1 for r in records if r.close.get("same_uuid")),
+                n,
+                double,
+                split,
+                lost,
+                tail,
+            )
+        )
+    closed = [r for r in records if r.terminal and r.terminal.outcome == "CLOSED"]
+    eng = sum(1 for r in closed if r.close.get("via") == "ENGAGED")
+    mov = sum(1 for r in closed if r.close.get("via") == "MOVED")
+    held = [r for r in records if r.open and (r.substate or "").startswith("HOLD") and r.wait]
+    draft = sum(1 for r in held if r.substate == "HOLD-DRAFT")
+    bg = sum(1 for r in held if r.substate == "HOLD-BGWORK")
+    rec_bg = sum(1 for r in closed if "HOLD-BGWORK" in (r.close.get("seen") or []))
+    hold = "HOLD named %d/%d (draft %d, bgwork %d" % (len(held), n, draft, bg)
+    if rec_bg:
+        hold += " — the %s bgwork recovers after its job ends" % _ORD.get(
+            bg + 1, "%dth" % (bg + 1)
+        )
+    unowned = sum(1 for r in records if r.open and r.close.get("defect"))
+    return " · ".join(
+        [
+            "CLOSED %d/%d (ENGAGED %d, MOVED %d)" % (len(closed), n, eng, mov),
+            hold + ")",
+            "REPLACED-NEW-WINDOW %d" % outcomes.count("REPLACED-NEW-WINDOW"),
+            "NOT_NEEDED %d" % outcomes.count("NOT_NEEDED"),
+            "double-typer %d" % double,
+            "split-brain %d" % split,
+            "lost-records %d" % lost,
+            "unowned-non-terminal %d" % unowned,
+        ]
+    )
+
+
 def write_cohort(
     paths: T.Paths, cohort: T.Cohort, records: Sequence[T.Record], now: float
 ) -> None:
@@ -206,6 +307,7 @@ def write_cohort(
     os.makedirs(paths.cohorts, exist_ok=True)
     doc = T.to_dict(cohort)
     doc["status"] = cohort_status(cohort, records, now)
+    doc["status"]["dod"] = dod_line(paths, records)
     store.atomic_write_json(os.path.join(paths.cohorts, cohort.cid + ".json"), doc)
 
 

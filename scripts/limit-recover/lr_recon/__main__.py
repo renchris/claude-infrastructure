@@ -30,6 +30,7 @@ from lr_recon import (
     observe,
     plan,
     report,
+    settle,
     store,
     transcript,
 )
@@ -83,6 +84,7 @@ class Ctx:
         self.degraded_streak = 0
         self.last_summary: Dict[str, Any] = {}
         self.rig_refused: set = set()
+        self.actions: Dict[str, str] = {}  # sid → the action this pass's derive_phase chose
 
 
 def _alive(pid: int, lstart: str) -> bool:
@@ -188,6 +190,10 @@ def _census(
         req = req_by_sid.get(s.sid)
         origin = req.origin if req else ("fanout" if b.kind == "idle" else "census")
         pane = snap.panes.get("%d:%d" % s.pane) if s.pane else None
+        old = ctx.records.get(s.sid)
+        if old is not None and old.open and not act.live_procs(old, snap):
+            if settle.rebucket(old, b.name, now):
+                _event(paths, "rebucket", s.sid, old.record_id, b.name)
         census.upsert(
             ctx.records,
             b,
@@ -207,11 +213,22 @@ def _derive(ctx: Ctx, snap: T.Snapshot, now: float) -> None:
         if not rec.open:
             continue
         act.adopt(rec, snap)
-        act.prune_dead(rec, snap)
+        for pr, rc in settle.dead_actuators(act.prune_dead(rec, snap), act.EXIT_CODES):
+            text = settle.tail(settle.actlog(ctx.paths, rec, pr.argv_hash))
+            detail = settle.settle_exit(rec, pr, rc, text, now)
+            if detail:
+                _event(ctx.paths, "exit", rec.sid, rec.record_id, detail)
+        if not rec.open:
+            continue
+        if settle.reprobe(rec, now):
+            _event(ctx.paths, "reprobe", rec.sid, rec.record_id, "hold re-probed")
+        settle.note_confirm(rec)
         out = evidence.derive(ctx.paths, rec, snap)
         res = out["result"]
         assert isinstance(res, T.PhaseResult)
         rec.phase = res.phase
+        ctx.actions[rec.sid] = res.action
+        _note_close(rec, res, snap, now)
         if res.phase != "PRE-MOVE" or res.substate == "HOLD-MENU":
             rec.substate = res.substate
         if res.phase in ("ENGAGED", "MOVED"):
@@ -224,6 +241,38 @@ def _derive(ctx: Ctx, snap: T.Snapshot, now: float) -> None:
             rec.terminal = T.Terminal(
                 outcome="NOT_NEEDED", proof="handed-to-resume-debt", at=now
             )
+
+
+def _note_close(
+    rec: T.Record, res: T.PhaseResult, snap: T.Snapshot, now: float
+) -> None:
+    """The cohort DoD's per-member evidence: every phase/substate passed through, and — once, at
+    the first ENGAGED or MOVED — whether the holder is in the SAME window (the pane the record was
+    detected in) and is this sid (same uuid: a holder under the target cfg in the sid's own row)."""
+    seen = rec.close.setdefault("seen", [])
+    for name in (res.phase, rec.substate or ""):
+        if name and name not in seen:
+            seen.append(name)
+    if res.phase not in ("ENGAGED", "MOVED") or rec.close.get("via"):
+        return
+    s = snap.sessions.get(rec.sid)
+    bound = [
+        h
+        for h in (s.holders if s else [])
+        if not h.bg and h.pane is not None and rec.pane and tuple(h.pane) == tuple(rec.pane)
+    ]
+    rec.close.update(
+        via=res.phase,
+        at=now,
+        pane=list(bound[0].pane) if bound else None,
+        same_window=bool(bound),
+        same_uuid=bool(bound) and settle_same_cfg(bound[0].cfg, rec.target_cfg),
+    )
+    rec.timeline.engaged = rec.timeline.engaged or now
+
+
+def settle_same_cfg(a: str, b: str) -> bool:
+    return bool(a and b) and os.path.realpath(a) == os.path.realpath(b)
 
 
 def _plan(
@@ -290,7 +339,7 @@ def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
         res = T.PhaseResult(
             phase=rec.phase,
             substate=rec.substate,
-            action="C" if rec.phase == "RELAUNCHED" else "",
+            action=ctx.actions.get(rec.sid, ""),
         )
         which = act.choose(res, rec)
         if which is None:
@@ -319,6 +368,7 @@ def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
 
 def _command(ctx: Ctx, rec: T.Record, which: str) -> List[str]:
     if which == "A":
+        rec.submit_token = act.new_token()  # a fresh token per spawn of the move
         return act.cmd_move(
             rec,
             os.path.join(ctx.paths.facts, "%s.%s.json" % (rec.source_acct, rec.scope)),
@@ -420,6 +470,7 @@ def _invariant(ctx: Ctx, snap: T.Snapshot) -> int:
     """§4.4: every non-terminal record has a live process, a next_eligible_at, or a named wait."""
     bad = 0
     for r in ctx.records.values():
+        r.close.pop("defect", None)
         if (
             not r.open
             or r.phase == "PRE-MOVE"
@@ -430,6 +481,7 @@ def _invariant(ctx: Ctx, snap: T.Snapshot) -> int:
             continue
         if r.phase in ("ENGAGED", "MOVED"):
             continue
+        r.close["defect"] = True
         bad += 1
         _event(
             ctx.paths,
@@ -444,6 +496,7 @@ def _invariant(ctx: Ctx, snap: T.Snapshot) -> int:
 def run_pass(ctx: Ctx, force_observe: bool = False) -> Dict[str, Any]:
     paths = ctx.paths
     store.ensure_dirs(paths)  # cheap, and a wiped root must never crash the loop
+    act.reap_children()  # before ps, so an exited actuator is gone AND its exit code is kept
     mode = "observe" if force_observe else read_mode(paths, ctx.mode_cap)
     now = time.time()
     snap = observe.observe(paths, ctx.home, transcript_fn=transcript.observe, now=now)
