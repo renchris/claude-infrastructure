@@ -40,6 +40,7 @@ from lr_recon.admit import Admission, BootSlots
 from lr_recon.clock import Caffeinate, Clock, Heartbeat, shift_record
 
 MOVING = ("TRANSPLANTED", "EXITING", "HUSK-RETIRED", "EXITED", "RELAUNCHED")
+IN_FLIGHT_MAX_S = 600.0  # a relaunch gap longer than this is unowned (the watcher --await caps at 1200)
 SENTINEL_S = 300.0  # §3 step 13: CLOSED after the 5-minute sentinel
 ACTIVE_FAST_S, ACTIVE_S, DORMANT_S = 3.0, 5.0, 20.0
 RESTART_PAGE_WINDOW_S = 600.0
@@ -297,6 +298,8 @@ def _derive(ctx: Ctx, snap: T.Snapshot, now: float) -> None:
         _note_close(rec, res, snap, now)
         if res.phase != "PRE-MOVE" or res.substate == "HOLD-MENU":
             rec.substate = res.substate
+        elif settle.mark_in_flight(rec):  # this pass entered the relaunch gap: owned, not orphaned
+            _event(ctx.paths, "in-flight", rec.sid, rec.record_id, "relaunch gap")
         # after the substate write: a hop turns this record into a fresh PRE-MOVE/DETECTED
         if res.phase in ("TARGET-LIMITED", "TARGET-AUTH") and not act.live_procs(rec, snap):
             why = "auth" if res.phase == "TARGET-AUTH" else "limit"
@@ -561,7 +564,7 @@ def _refire(ctx: Ctx, now: float) -> int:
     return n
 
 
-def _invariant(ctx: Ctx, snap: T.Snapshot) -> int:
+def _invariant(ctx: Ctx, snap: T.Snapshot, now: Optional[float] = None) -> int:
     """§4.4: every non-terminal record has a live process, a next_eligible_at, or a named wait."""
     bad = 0
     for r in ctx.records.values():
@@ -570,6 +573,15 @@ def _invariant(ctx: Ctx, snap: T.Snapshot) -> int:
             not r.open
             or r.phase == "PRE-MOVE"
             and r.substate in ("DETECTED", "PLANNED")
+        ):
+            continue
+        # A confirmed move in its relaunch gap is owned by the phase table (rows 10-11 dispatch B or
+        # R if the relaunch fails) — for a bounded time. Past IN_FLIGHT_MAX_S it is a defect again.
+        if (
+            r.phase == "PRE-MOVE"
+            and r.substate == "IN-FLIGHT"
+            and (now or time.time()) - (r.timeline.confirmed or r.updated_at or 0)
+            < IN_FLIGHT_MAX_S
         ):
             continue
         if act.live_procs(r, snap) or r.next_eligible_at or (r.wait and r.wait.reason):
@@ -616,7 +628,7 @@ def run_pass(ctx: Ctx, force_observe: bool = False) -> Dict[str, Any]:
         spawned = _dispatch(ctx, snap, mode, now)
         ctx.actuations += spawned
     _report(ctx, mode, now)
-    defects = _invariant(ctx, snap)
+    defects = _invariant(ctx, snap, now)
     for rec in ctx.records.values():
         store.save_record(paths, rec, now)
     act.reap_children()

@@ -105,7 +105,9 @@ def settle_exit(
     if pr.role != "actuator":
         return ""
     if rc == 0:
-        if pr.argv_hash in ("A", "A-husk") and rec.phase == "PRE-MOVE":
+        # TRANSPLANTED too: a confirmed move is usually derived TRANSPLANTED (row 12) in the pass
+        # before its A exits, and a PRE-MOVE-only test left the relaunch gap with no substate.
+        if pr.argv_hash in ("A", "A-husk") and rec.phase in ("PRE-MOVE", "TRANSPLANTED"):
             rec.substate, rec.wait = "IN-FLIGHT", None
         if pr.argv_hash == "R":
             rec.close["replaced_at"] = now  # closed by replaced_elsewhere once it is seen
@@ -231,7 +233,11 @@ def mark_in_flight(rec: T.Record) -> bool:
     """A PLANNED move whose transplant is confirmed (or whose A returned 0) is IN-FLIGHT: the relaunch
     gap derives PRE-MOVE (source dead, target not up yet), and a PLANNED record there was dispatched
     a SECOND A over a transplanted session (W5 rig, with and without a daemon restart)."""
-    if rec.phase == "PRE-MOVE" and rec.substate == "PLANNED" and rec.confirm_len is not None:
+    if (
+        rec.phase == "PRE-MOVE"
+        and rec.substate in ("PLANNED", None)  # None: PLANNED → TRANSPLANTED (row 12) → the gap
+        and rec.confirm_len is not None
+    ):
         rec.substate, rec.wait = "IN-FLIGHT", None
         return True
     return False

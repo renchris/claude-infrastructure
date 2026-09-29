@@ -76,6 +76,23 @@ class Exits(unittest.TestCase):
         self.assertTrue(settle.mark_in_flight(r))
         self.assertIsNone(act.choose(T.PhaseResult(phase="PRE-MOVE"), r))
 
+    def test_a_move_derived_transplanted_is_in_flight_when_its_A_exits(self):
+        """W5 rig N=5: the pass before A exits derives TRANSPLANTED (row 12), which clears the
+        substate; the PRE-MOVE-only test then left the relaunch gap at PRE-MOVE/None, and §4.4 read
+        every member of the cohort as unowned for two passes."""
+        r = rec(phase="TRANSPLANTED", sub=None)
+        r.confirm_len = 10
+        self.assertEqual(settle.settle_exit(r, actuator(), 0, "", 1.0), "A rc=0")
+        self.assertEqual(r.substate, "IN-FLIGHT")
+
+    def test_the_gap_after_transplanted_is_in_flight_without_an_exit(self):
+        r = rec(phase="PRE-MOVE", sub=None)  # PLANNED → TRANSPLANTED → the gap, A not reaped yet
+        r.confirm_len = 10
+        self.assertTrue(settle.mark_in_flight(r))
+        self.assertEqual(r.substate, "IN-FLIGHT")
+        r2 = rec(phase="PRE-MOVE", sub=None)  # never confirmed: a fresh record, not a move
+        self.assertFalse(settle.mark_in_flight(r2))
+
     def test_a_failed_move_makes_its_retry_a_new_attempt(self):
         r = rec()
         settle.settle_exit(r, actuator(), 6, PRECHECK_HELD % ("x", "draft", "draft"), 1.0)

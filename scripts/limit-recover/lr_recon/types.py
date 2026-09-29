@@ -56,6 +56,7 @@ RELAUNCH_SUBSTATES = ("UNPROMPTED", "DRAFTED", "SUBMITTED")
 PRE_MOVE_SUBSTATES = (
     "DETECTED",
     "PLANNED",
+    "IN-FLIGHT",  # a confirmed move in its relaunch gap (settle.mark_in_flight)
     "WAIT_SLOT",
     "WAIT_RESET",
     "WAIT_DATA",
