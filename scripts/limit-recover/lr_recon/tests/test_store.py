@@ -16,7 +16,7 @@ SID = "0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b"
 SID2 = "11111111-2222-3333-4444-555555555555"
 LSTART = "Tue Sep 29 06:19:17 2026"
 LR_LIB = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__)))),
     "lr-lib.sh",
 )
 

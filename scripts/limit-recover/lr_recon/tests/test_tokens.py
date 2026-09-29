@@ -9,7 +9,7 @@ from typing import Any, Dict, List
 from lr_recon import tokens
 
 JSONL = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
+    os.path.dirname(os.path.realpath(__file__)),
     "..",
     "..",
     "..",

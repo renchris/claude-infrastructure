@@ -16,7 +16,7 @@ from lr_recon import fence
 from lr_recon import types as T
 
 SCRIPT = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "lr-recon-fence.sh")
+    os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "lr-recon-fence.sh")
 )
 SID = "abcdef0123456789"
 RID = "recon:c1:abcdef01:1"
