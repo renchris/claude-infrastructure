@@ -62,6 +62,7 @@ export LR_PRESEED_DONE=1 LR_RIG_PYAPP="$PYAPP" CC_KITTY_CONF="$REAL_HOME/.config
 export CC_TERM_KITTY_PID="${SOCK##*-}" DISABLE_AUTOUPDATER=1 CC_TERM=kitty
 EOF
 }
+# shellcheck disable=SC2016 # $0/$@ are the inner shell's, on purpose
 rigenv() { env -i /bin/bash -c '. "$0"; exec "$@"' "$RIG/env.sh" "$@"; }
 
 # ── teardown (also the first act of every run: a previous rig never leaks into this one) ────────────
@@ -108,6 +109,7 @@ ln -sf "$HERE/claude" "$RIG/bin/claude"
 ln -sf "$HERE/fake-claude-accounts.py" "$RIG/bin/claude-accounts"
 ln -sf "$HERE/fake-claude-accounts.py" "$RIG/home/.claude/bin/claude-accounts"
 ln -sf "$HERE/fake-claude-accounts.py" "$RIG/home/bin/claude-accounts"   # LRH:619 reads $HOME/bin
+# shellcheck disable=SC2016 # the generated stub expands these, not this shell
 printf '#!/bin/sh\nprintf "%%s\\t%%s\\n" "$(date +%%s)" "$*" >> "%s/pages.log"\n' "$RIG/state" > "$RIG/bin/cc-notify"
 chmod +x "$RIG/bin/cc-notify"; ln -sf "$RIG/bin/cc-notify" "$RIG/home/.claude/bin/cc-notify"
 cat > "$RIG/home/.zshrc" <<EOF
@@ -135,9 +137,19 @@ PY
 : > "$RIG/windows"
 # A control window owns the OS window's active tab, so no session pane is ever the focused one
 # (a focused LIMITED pane is HOLD-FOCUS by the safe default, decision 7).
+# --keep-focus does not stop a NEW OS window taking focus (measured in the W5 rig), so the window the
+# operator had focused is read first and handed back once the rig window exists.
+prev_focus="$("$KITTEN" @ --to "$SOCK" ls 2>/dev/null | /usr/bin/python3 -c '
+import json, sys
+for ow in json.load(sys.stdin):
+    for t in ow.get("tabs", []):
+        for w in t.get("windows", []):
+            if ow.get("is_focused") and t.get("is_focused") and w.get("is_focused"):
+                print(w["id"]); sys.exit(0)' 2>/dev/null)"
 first="$("$KITTEN" @ --to "$SOCK" launch --type=os-window --os-window-title lr-rig --keep-focus \
         --title "lr-rig control" /usr/bin/env /bin/sleep 86400)" || die "kitty launch of the control window"
 echo "$first" >> "$RIG/windows"
+[ -n "$prev_focus" ] && "$KITTEN" @ --to "$SOCK" focus-window --match "id:$prev_focus" >/dev/null 2>&1
 while IFS=$'\t' read -r n sid stale; do
   cwd="$RIG/work/s$(printf %02d "$n")"
   if [ "$stale" = True ]; then # the dead session: a transcript and a request, never a process
@@ -190,7 +202,9 @@ while [ ! -e "$RIG/stop" ]; do
   [ -e "$RIG/stop" ] || { echo "\$(date +%s) daemon exited; restart in 10 s" >> "$RIG/state/supervisor.log"; sleep 10; }
 done
 EOF
+# shellcheck source=/dev/null
 . "$REPO/scripts/lib/detach.sh"
+# shellcheck disable=SC2016 # $0/$1 are the inner shell's, on purpose
 SUP="$(detach "$RIG/state/supervisor.out" /usr/bin/env -i /bin/bash -c '. "$0"; exec /bin/bash "$1"' \
        "$RIG/env.sh" "$RIG/supervisor.sh")" || die "supervisor spawn"
 echo "$SUP" > "$RIG/supervisor.pid"
@@ -205,7 +219,9 @@ until [ -n "$(find "$RIG/state/heartbeat" -newermt "-15 seconds" 2>/dev/null)" ]
 done
 SRC="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("source","next"))' "$FAULTS")"
 rigenv "$REPO/bin/cc-lr" recover --limited --account "$SRC" > "$RIG/state/cc-lr-recover.log" 2>&1
-log "cc-lr recover --limited --account $SRC → rc $? · $(ls "$RIG/lr/requests" 2>/dev/null | grep -c 'cc-lr.json') cc-lr request(s) queued"
+recover_rc=$? nq=0
+for f in "$RIG"/lr/requests/*cc-lr.json; do [ -e "$f" ] && nq=$((nq + 1)); done
+log "cc-lr recover --limited --account $SRC → rc $recover_rc · $nq cc-lr request(s) queued"
 
 # ── 5. drive: daemon faults at their moment, then wait for the cohort to settle ─────────────────
 [ -n "$TIMEOUT_S" ] || { [ "$N" -le 5 ] && TIMEOUT_S=900 || TIMEOUT_S=2700; }
