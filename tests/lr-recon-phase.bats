@@ -2,6 +2,7 @@
 # lr_recon.phase over the W0 derive_phase fixtures (§4.2 of LIMIT_RECOVER_FLEET_V2_ARCHITECTURE.md).
 
 setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   cd "$BATS_TEST_DIRNAME/../scripts/limit-recover" || return 1
   FIX="$BATS_TEST_DIRNAME/fixtures/lr-recon"
 }
