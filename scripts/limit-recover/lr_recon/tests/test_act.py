@@ -145,6 +145,24 @@ class ActTests(unittest.TestCase):
         )
         self.assertEqual(store.load_record(paths, rec.sid).procs[0].pid, 4242)
 
+    def test_an_actuator_exit_code_survives_other_subprocess_calls(self):
+        """A later Popen's subprocess._cleanup reaped a collected Popen first, so waitpid saw
+        nothing and the rc read "code unknown" (W5 rig: 32 of 113 exits lost)."""
+        paths = _paths()
+        pid = A.spawn(
+            paths,
+            _rec(),
+            "A",
+            ["/bin/sh", "-c", "sleep 0.2; exit 7"],
+            dict(os.environ),
+            NOW,
+            lstart_of=lambda p: L,
+        )
+        time.sleep(0.6)
+        subprocess.run(["/usr/bin/true"])
+        A.reap_children()
+        self.assertEqual(A.EXIT_CODES.pop(pid, None), 7)
+
     def test_wrapper_runs_command_with_token_in_argv(self):
         rec = _rec()
         argv = A.wrap(rec, "n9", ["/bin/sleep", "3"])

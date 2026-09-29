@@ -36,6 +36,10 @@ ACTLOG_MAX_AGE_S = 7 * 86400  # stated bound on recon/actlogs (§C12)
 PopenFn = Callable[..., Any]
 # pid → exit code of our own actuators, filled by reap_children and drained by settle.dead_actuators.
 EXIT_CODES: Dict[int, int] = {}
+# pid → the actuator's own Popen, held so it is never garbage-collected into subprocess._active:
+# every later Popen runs subprocess._cleanup, which reaped those and stole the exit code before
+# reap_children's waitpid saw it (W5 rig: 32 of 113 exits read "code unknown").
+_CHILDREN: Dict[int, "subprocess.Popen[bytes]"] = {}
 
 
 def _p(*parts: str) -> str:
@@ -277,6 +281,8 @@ def spawn(
             start_new_session=True,
         )
     pid = int(proc.pid)
+    if hasattr(proc, "poll"):  # tests inject fakes with only .pid
+        _CHILDREN[pid] = proc
     rec.procs.append(
         T.ProcRole(role="actuator", pid=pid, lstart=lstart_of(pid), argv_hash=actuator)
     )
@@ -340,6 +346,14 @@ def prune_dead(rec: T.Record, snap: T.Snapshot) -> List[T.ProcRole]:
 def reap_children() -> int:
     """waitpid(WNOHANG) on every pass so our own exited actuators never linger as zombies."""
     n = 0
+    # our own actuators first: poll() owns their waitpid and keeps returncode on the object, so
+    # no other reaper can race it (negative = signal, as below)
+    for pid, proc in list(_CHILDREN.items()):
+        rc = proc.poll()
+        if rc is not None:
+            EXIT_CODES[pid] = rc
+            del _CHILDREN[pid]
+            n += 1
     while True:
         try:
             pid, _status = os.waitpid(-1, os.WNOHANG)
