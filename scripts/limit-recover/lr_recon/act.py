@@ -64,7 +64,9 @@ def actuator_env(
             "LR_INPLACE_AWAIT": "0",
             "LR_PLACED_BY": "reconciler",
             "LR_ASSIGN_ID": rec.assign_id or rec.record_id,
-            "LR_PRESEED_DONE": rec.cohort_id,
+            # NO LR_PRESEED_DONE: it tells lr-handoff and lr-fire-resume to skip the target
+            # account's folder-trust seed, and the batched per-target preseed it vouched for was
+            # never built (W5b). Each move seeds its own target (idempotent, lock-guarded).
             "CLAUDE_CODE_DISABLE_AGENT_VIEW": "1",
         }
     )

@@ -114,6 +114,13 @@ class ActTests(unittest.TestCase):
             "LR_BARE_REPAIR", env
         )  # decision 5 SETTLED: the sibling heal stays on
 
+    def test_env_never_claims_a_preseed_the_daemon_did_not_run(self):
+        # W5b: LR_PRESEED_DONE makes lr-handoff and lr-fire-resume skip the target's folder-trust
+        # seed; nothing in lr_recon runs lr-preseed-env.sh, so a real move to an account where
+        # the cwd was never trusted stopped at the trust dialog
+        env = A.actuator_env(_rec(), _paths(), "", base={})
+        self.assertNotIn("LR_PRESEED_DONE", env)
+
     def test_spawn_write_order(self):
         paths = _paths()
         rec = _rec()
