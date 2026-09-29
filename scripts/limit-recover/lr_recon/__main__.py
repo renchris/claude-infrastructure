@@ -556,6 +556,15 @@ def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
         )
         if not ok:
             continue
+        if (
+            which in settle.MOVE_ACTUATORS
+            and rec.close.get("move_attempt") == rec.attempt
+        ):
+            # ONE MOVE SPAWN PER ATTEMPT (the launch-log audit's invariant). A failed exit already
+            # bumps the attempt; an exit with no code, or a phase change the move itself caused
+            # (A's /exit closed the pane, so R rescues), did not, and R went out under A's attempt:
+            # a double typer by the audit (W5 rig N=30, pane-closed-after-exit).
+            rec.attempt += 1
         argv = _command(ctx, rec, which)
         if not argv:
             continue
@@ -568,6 +577,8 @@ def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
             act.actuator_env(rec, ctx.paths, pane.sock if pane else ""),
             now,
         )
+        if which in settle.MOVE_ACTUATORS:
+            rec.close["move_attempt"] = rec.attempt
         if which in settle.MOVE_ACTUATORS + ("C", "C-retry"):
             store.append_launch(
                 ctx.paths,

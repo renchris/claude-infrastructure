@@ -550,6 +550,34 @@ class MainTests(unittest.TestCase):
         argv = M._command(ctx, rec, "A-husk")
         self.assertEqual(argv[argv.index("--resume-launcher") + 1], launcher)
 
+    def test_a_second_move_spawn_in_one_attempt_opens_a_new_attempt(self):
+        """W5 rig N=30: A's /exit closed the pane, its exit code was unknown, and R went out under
+        A's attempt, which the launch-log audit counts as a double typer."""
+        import time
+
+        now = time.time()
+        rec = T.Record(sid="abcdef01-0000-0000-0000-000000000001", record_id="r1")
+        rec.phase, rec.pane, rec.attempt = "PANE-GONE", (5, 7), 1
+        rec.close["move_attempt"] = 1  # A already spawned under attempt 1
+        ctx = M.Ctx(self.paths, None, self.home)
+        ctx.records = {rec.sid: rec}
+        snap = _snap(now, self.tmp)
+        with (
+            mock.patch.object(M.act, "choose", return_value="R"),
+            mock.patch.object(M.act, "may_actuate", return_value=(True, "ok")),
+            mock.patch.object(M, "_command", return_value=["true"]),
+            mock.patch.object(M.act, "spawn", return_value=4242),
+            mock.patch.object(M.store, "append_launch") as al,
+        ):
+            self.assertEqual(M._dispatch(ctx, snap, "act", now), 1)
+            self.assertEqual(rec.attempt, 2)
+            self.assertIn("attempt=2", al.call_args[0][1])
+            self.assertEqual(rec.close["move_attempt"], 2)
+            # CONTROL: a first move spawn in a fresh attempt keeps its number
+            rec.attempt = 3
+            self.assertEqual(M._dispatch(ctx, snap, "act", now), 1)
+            self.assertEqual(rec.attempt, 3)
+
     def test_daemon_loop_starts_and_runs_a_pass(self):
         """W5 rig: the long-running path had never started (Caffeinate() without its pid)."""
 
