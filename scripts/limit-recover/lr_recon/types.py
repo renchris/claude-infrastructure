@@ -283,7 +283,9 @@ class Paths:
 
     @property
     def claimed(self) -> str:
-        return os.path.join(self.lr_root, "requests", "claimed")
+        # The landed poller's CLAIMED="$STATE/claimed" (lr-reset-poller.sh:167): one drained-request
+        # store for both consumers, never a second one beside it.
+        return os.path.join(self.lr_root, "claimed")
 
     @property
     def runs_by_sid(self) -> str:
