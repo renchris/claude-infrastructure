@@ -276,6 +276,46 @@ class MainTests(unittest.TestCase):
         )
         self.assertIn("next3.7d", M._facts(ctx, snap, now))
 
+    def _hop_pass(self, phase, facts=None, live_watcher=False):
+        import time
+
+        now = time.time()
+        rec = self._rec(phase, target="next3")
+        ctx = M.Ctx(self.paths, None, self.home)
+        M.store.ensure_dirs(self.paths)
+        ctx.records = {rec.sid: rec}
+        out = {
+            "result": T.PhaseResult(phase=phase, action="wait"),
+            "evidence": T.Evidence(live_watcher=live_watcher),
+        }
+        with mock.patch.object(M.evidence, "derive", return_value=out):
+            M._derive(ctx, _snap(now, self.tmp), now, facts)
+        return rec, ctx
+
+    def test_a_contradicted_target_auth_retries_in_place(self):
+        """W5 rig: the auth fact on the target was contradicted (another session served a turn),
+        so the account serves; a hop moved it anyway and A refused the contradicted evidence."""
+        bad = T.Fact(acct="next3", scope="auth", contradicted=True)
+        rec, ctx = self._hop_pass("TARGET-AUTH", {"next3.auth": bad})
+        self.assertEqual((rec.attempt, ctx.actions[rec.sid]), (1, "C-retry"))
+        rec, ctx = self._hop_pass(
+            "TARGET-AUTH", {"next3.auth": T.Fact("next3", "auth")}
+        )
+        self.assertEqual(
+            (rec.attempt, ctx.actions[rec.sid]), (2, "plan")
+        )  # CONTROL: hops
+
+    def test_no_hop_while_the_previous_moves_watcher_lives(self):
+        """W5 rig target-limited: the hop ran under the old watcher's pane lock and STRANDED."""
+        rec, ctx = self._hop_pass("TARGET-LIMITED", live_watcher=True)
+        self.assertEqual((rec.attempt, rec.target_acct), (1, "next3"))
+        self.assertNotIn("hop", [e.get("ev") for e in self._events_or_none()])
+        rec, _ctx = self._hop_pass("TARGET-LIMITED")  # CONTROL: the watcher is gone
+        self.assertEqual((rec.attempt, rec.close.get("hop")), (2, "limit"))
+
+    def _events_or_none(self):
+        return self._events() if os.path.exists(self.paths.events) else []
+
     def test_C_waits_until_the_move_chain_is_quiet(self):
         """W5 rig: C typed a second prompt while lr-fire-resume's own was still landing."""
         import time

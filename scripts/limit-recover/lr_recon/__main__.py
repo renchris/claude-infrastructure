@@ -271,7 +271,12 @@ def _rearm_inputs(rec: T.Record, snap: T.Snapshot) -> Dict[str, str]:
     }
 
 
-def _derive(ctx: Ctx, snap: T.Snapshot, now: float) -> None:
+def _derive(
+    ctx: Ctx,
+    snap: T.Snapshot,
+    now: float,
+    facts: Optional[Dict[str, T.Fact]] = None,
+) -> None:
     """Level-triggered confirm (§3 step 10): the derived phase replaces the cached one."""
     for rec in ctx.records.values():
         if not rec.open:
@@ -343,8 +348,17 @@ def _derive(ctx: Ctx, snap: T.Snapshot, now: float) -> None:
         ):  # this pass entered the relaunch gap: owned, not orphaned
             _event(ctx.paths, "in-flight", rec.sid, rec.record_id, "relaunch gap")
         # after the substate write: a hop turns this record into a fresh PRE-MOVE/DETECTED
-        if res.phase in ("TARGET-LIMITED", "TARGET-AUTH") and not act.live_procs(
-            rec, snap
+        auth = (facts or {}).get("%s.auth" % rec.target_acct)
+        if res.phase == "TARGET-AUTH" and auth is not None and auth.contradicted:
+            # another session served a healthy turn on that account since: it is proven to serve,
+            # so re-engage in place (and A would refuse the contradicted fact as evidence anyway)
+            ctx.actions[rec.sid] = "C-retry"
+            continue
+        if (
+            res.phase in ("TARGET-LIMITED", "TARGET-AUTH")
+            and not act.live_procs(rec, snap)
+            # the previous move's watcher holds the pane lock: a hop now is DEFERRED into STRANDED
+            and not ev.live_watcher
         ):
             why = "auth" if res.phase == "TARGET-AUTH" else "limit"
             old_target = rec.target_acct
@@ -686,7 +700,7 @@ def run_pass(ctx: Ctx, force_observe: bool = False) -> Dict[str, Any]:
     facts = _facts(ctx, snap, now)
     reqs = store.list_requests(paths)
     buckets, stale = _census(ctx, snap, facts, reqs, mode, now)
-    _derive(ctx, snap, now)
+    _derive(ctx, snap, now, facts)
     for rec in (
         ctx.records.values()
     ):  # the fold audit's evidence (plan § W5): cheap, never raises
