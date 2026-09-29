@@ -360,7 +360,7 @@ print(rc, round(el - base, 3))'
                 '{"acct":"next2","id":"a2","w":0}' > "$f"
   run "$CA_BIN" --assign-many "$f"
   [ "$status" -eq 64 ] || { echo "$output"; false; }
-  [[ "$output" == *"line 2"* ]]
+  [[ "$output" == *"line 2"* ]] || false
   [ "$(cat "$CC_ASSIGN_LOG")" = "$before" ]
   # the good batch lands whole, with one shared t
   printf '%s\n' '{"acct":"next3","id":"a1","sid":"s-1","w":2,"ttl_s":60}' '' \
