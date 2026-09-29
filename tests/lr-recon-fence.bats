@@ -20,6 +20,7 @@ setup() {
   export LR_RECON_ROOT="$LR_STATE_DIR/recon"
   export LR_RECON_NOW="$NOW"
   export LR_RECON_WAKETIME=0
+  export CC_ADMIT_GATE=off   # no case here is about capacity; the fence must not read live load
   unset LR_RECORD_ID LR_RECON_FENCE_FRESH_S
   mkdir -p "$HOME" "$LR_RECON_ROOT/owned"
   SLEEP_PID=""
@@ -90,6 +91,18 @@ defers() { run /bin/bash "$S" defers "$SID"; }
   LR_RECORD_ID="$RID" run /bin/bash "$S" defers "$SID"
   [ "$status" -eq 1 ]
   [[ "$output" == *"reason=own-actuator"* ]]
+}
+
+@test "the resume-debt drain carrying the record id still defers: own-actuator is the reconciler's chain only" {
+  recon_on; owned; heartbeat "$((NOW - 1))"
+  LR_RECORD_ID="$RID" run /bin/bash -c ". '$S'; lr_recon_may_act '$SID' cc-resume-debt always; echo rc=\$?"
+  [[ "$output" == *"reason=debt-drain-not-own"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"gate=defer"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"rc=1"* ]] || { echo "$output"; false; }
+  # CONTROL: a reconciler actuator's child with the same id still acts
+  LR_RECORD_ID="$RID" run /bin/bash -c ". '$S'; lr_recon_may_act '$SID' boot-resume-launch always; echo rc=\$?"
+  [[ "$output" == *"reason=own-actuator"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"rc=0"* ]] || { echo "$output"; false; }
 }
 
 @test "fresh heartbeat ⇒ defer (heartbeat-fresh), stdout empty" {

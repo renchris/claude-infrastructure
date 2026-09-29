@@ -365,6 +365,16 @@ lr_recon_may_act() {
   export LR_LAUNCH_LOCK
   why="$(lr_recon_defers "$sid" 2>&1 >/dev/null)"
   rc=$?
+  # OWN-ACTUATOR IS FOR THE RECONCILER'S OWN CHAIN, and the resume-debt drain is never part of it:
+  # the reconciler never spawns cc-resume-debt, it rescues with R (phase row 11). The drain can still
+  # carry the record id, inherited from the env of the watcher the reconciler's A launched, and so it
+  # relaunched beside R under the same attempt: two launch-lock takers, one double typer (W5 N=30,
+  # pane-closed-after-exit). It defers exactly as a stranger would.
+  case "$role:$why" in
+    cc-resume-debt:*reason=own-actuator*)
+      why="lr-recon-fence: verdict=defer sid=$(printf '%s' "$sid" | cut -c1-8) reason=debt-drain-not-own"
+      rc=0 ;;
+  esac
   [ -n "$why" ] && printf '%s\n' "$why" >&2
   if [ "$rc" -eq 0 ]; then
     printf 'lr-recon-fence: gate=defer sid=%s role=%s lock=none\n' "$(printf '%s' "$sid" | cut -c1-8)" "$role" >&2
