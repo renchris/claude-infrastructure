@@ -44,7 +44,9 @@ IN_FLIGHT_MAX_S = 600.0  # a relaunch gap longer than this is unowned (the watch
 SENTINEL_S = 300.0  # §3 step 13: CLOSED after the 5-minute sentinel
 ACTIVE_FAST_S, ACTIVE_S, DORMANT_S = 3.0, 5.0, 20.0
 RESTART_PAGE_WINDOW_S = 600.0
-C_GRACE_S = 60.0  # quiet time after the last live actuator/launcher/watcher before C may type
+C_GRACE_S = (
+    60.0  # quiet time after the last live actuator/launcher/watcher before C may type
+)
 RECORD_TYPES = (
     "LIMITED",
     "STAY",
@@ -86,7 +88,9 @@ class Ctx:
         self.degraded_streak = 0
         self.last_summary: Dict[str, Any] = {}
         self.rig_refused: set = set()
-        self.actions: Dict[str, str] = {}  # sid → the action this pass's derive_phase chose
+        self.actions: Dict[
+            str, str
+        ] = {}  # sid → the action this pass's derive_phase chose
 
 
 def _alive(pid: int, lstart: str) -> bool:
@@ -184,7 +188,12 @@ def _census(
             store.claim_request(paths, req_by_sid[sid], verdict, reason)
             if sid not in ctx.records:
                 ctx.records[sid] = census.not_needed_record(
-                    sid, snap.sessions.get(sid), facts, req_by_sid[sid].origin, reason, now
+                    sid,
+                    snap.sessions.get(sid),
+                    facts,
+                    req_by_sid[sid].origin,
+                    reason,
+                    now,
                 )
     autorecover = os.path.exists(paths.autorecover_on)
     buckets: List[T.Bucket] = []
@@ -246,7 +255,9 @@ def _rearm_inputs(rec: T.Record, snap: T.Snapshot) -> Dict[str, str]:
     s = snap.sessions.get(rec.sid)
     return {
         "pane": "%d:%s" % (pane.root_pid, pane.root_lstart) if pane else "gone",
-        "holders": ",".join(sorted("%d:%s" % (h.pid, h.lstart) for h in (s.holders if s else []))),
+        "holders": ",".join(
+            sorted("%d:%s" % (h.pid, h.lstart) for h in (s.holders if s else []))
+        ),
     }
 
 
@@ -261,7 +272,13 @@ def _derive(ctx: Ctx, snap: T.Snapshot, now: float) -> None:
             prev = rec.close.get("rearm_inputs") or {}
             if classify.should_rearm(rec, now, inputs, prev):
                 classify.rearm(rec, now)
-                _event(ctx.paths, "rearm", rec.sid, rec.record_id, "15 min or an input changed")
+                _event(
+                    ctx.paths,
+                    "rearm",
+                    rec.sid,
+                    rec.record_id,
+                    "15 min or an input changed",
+                )
             rec.close["rearm_inputs"] = inputs
         for pr, rc in settle.dead_actuators(act.prune_dead(rec, snap), act.EXIT_CODES):
             text = settle.tail(settle.actlog(ctx.paths, rec, pr.argv_hash))
@@ -277,7 +294,9 @@ def _derive(ctx: Ctx, snap: T.Snapshot, now: float) -> None:
             continue
         settle.note_confirm(rec)
         if settle.mark_in_flight(rec):
-            _event(ctx.paths, "in-flight", rec.sid, rec.record_id, "transplant confirmed")
+            _event(
+                ctx.paths, "in-flight", rec.sid, rec.record_id, "transplant confirmed"
+            )
         out = evidence.derive(
             ctx.paths,
             rec,
@@ -290,7 +309,9 @@ def _derive(ctx: Ctx, snap: T.Snapshot, now: float) -> None:
         ev = out["evidence"]
         assert isinstance(res, T.PhaseResult) and isinstance(ev, T.Evidence)
         if ev.token_record_offset is not None and ev.token_is_this_attempt:
-            rec.timeline.submitted = rec.timeline.submitted or now  # rows 4 and 7 read it
+            rec.timeline.submitted = (
+                rec.timeline.submitted or now
+            )  # rows 4 and 7 read it
         if act.live_procs(rec, snap) or ev.live_launcher or ev.live_watcher:
             rec.close["busy_at"] = now
         rec.phase = res.phase
@@ -298,17 +319,27 @@ def _derive(ctx: Ctx, snap: T.Snapshot, now: float) -> None:
         _note_close(rec, res, snap, now)
         if res.phase != "PRE-MOVE" or res.substate == "HOLD-MENU":
             rec.substate = res.substate
-        elif settle.mark_in_flight(rec):  # this pass entered the relaunch gap: owned, not orphaned
+        elif settle.mark_in_flight(
+            rec
+        ):  # this pass entered the relaunch gap: owned, not orphaned
             _event(ctx.paths, "in-flight", rec.sid, rec.record_id, "relaunch gap")
         # after the substate write: a hop turns this record into a fresh PRE-MOVE/DETECTED
-        if res.phase in ("TARGET-LIMITED", "TARGET-AUTH") and not act.live_procs(rec, snap):
+        if res.phase in ("TARGET-LIMITED", "TARGET-AUTH") and not act.live_procs(
+            rec, snap
+        ):
             why = "auth" if res.phase == "TARGET-AUTH" else "limit"
             old_target = rec.target_acct
             settle.new_attempt(rec, settle.target_holder(rec, snap), why, now)
             plan.unassign(rec.record_id)
             ctx.actions[rec.sid] = "plan"
-            _event(ctx.paths, "hop", rec.sid, rec.record_id,
-                   "%s on %s: attempt %d moves FROM it" % (res.phase, old_target, rec.attempt))
+            _event(
+                ctx.paths,
+                "hop",
+                rec.sid,
+                rec.record_id,
+                "%s on %s: attempt %d moves FROM it"
+                % (res.phase, old_target, rec.attempt),
+            )
             continue
         if res.phase in ("ENGAGED", "MOVED"):
             if rec.sentinel_until is None:
@@ -338,7 +369,10 @@ def _note_close(
     bound = [
         h
         for h in (s.holders if s else [])
-        if not h.bg and h.pane is not None and rec.pane and tuple(h.pane) == tuple(rec.pane)
+        if not h.bg
+        and h.pane is not None
+        and rec.pane
+        and tuple(h.pane) == tuple(rec.pane)
     ]
     rec.close.update(
         via=res.phase,
@@ -459,7 +493,9 @@ def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
 def _command(ctx: Ctx, rec: T.Record, which: str) -> List[str]:
     if which == "A":
         rec.submit_token = act.new_token()  # a fresh token per spawn of the move
-        if rec.close.get("hop") == "auth":  # TARGET-AUTH hop: the source's auth fact admits it
+        if (
+            rec.close.get("hop") == "auth"
+        ):  # TARGET-AUTH hop: the source's auth fact admits it
             return act.cmd_move(
                 rec,
                 os.path.join(ctx.paths.facts, "%s.auth.json" % rec.source_acct),
@@ -608,7 +644,9 @@ def run_pass(ctx: Ctx, force_observe: bool = False) -> Dict[str, Any]:
     now = time.time()
     snap = observe.observe(paths, ctx.home, transcript_fn=transcript.observe, now=now)
     ctx.degraded_streak = ctx.degraded_streak + 1 if snap.degraded else 0
-    for sid in snap.rig_refused:  # rig mode: logged once per sid per process, never acted on
+    for (
+        sid
+    ) in snap.rig_refused:  # rig mode: logged once per sid per process, never acted on
         if sid not in ctx.rig_refused:
             ctx.rig_refused.add(sid)
             _event(paths, "rig-refuse", sid, detail="no registry row carries rig:true")
@@ -616,7 +654,9 @@ def run_pass(ctx: Ctx, force_observe: bool = False) -> Dict[str, Any]:
     reqs = store.list_requests(paths)
     buckets, stale = _census(ctx, snap, facts, reqs, mode, now)
     _derive(ctx, snap, now)
-    for rec in ctx.records.values():  # the fold audit's evidence (plan § W5): cheap, never raises
+    for rec in (
+        ctx.records.values()
+    ):  # the fold audit's evidence (plan § W5): cheap, never raises
         if evidence.fold_witness(paths, rec) == "fold":
             _event(paths, "fold-witness", rec.sid)
     # before planning, so a re-armed member is placed and dispatched this pass

@@ -68,7 +68,9 @@ def actuator_env(
         env["CC_TERM_KITTY_TO"] = pane_sock
     if rec.admit_token:
         env["LR_ADMIT_TOKEN_PATH"] = rec.admit_token
-    if rec.submit_token:  # lr-handoff types THIS token, so row 5 can find this attempt's prompt
+    if (
+        rec.submit_token
+    ):  # lr-handoff types THIS token, so row 5 can find this attempt's prompt
         env["LR_RECON_SUBMIT_TOKEN"] = rec.submit_token
     return env
 
@@ -105,7 +107,9 @@ def cmd_move(
     ]
     if rec.kind == "idle":
         argv += ["--voluntary", "--account-evidence", evidence_file, "--no-prompt"]
-    elif voluntary:  # a TARGET-AUTH hop: moved on the auth fact, and the prompt still goes
+    elif (
+        voluntary
+    ):  # a TARGET-AUTH hop: moved on the auth fact, and the prompt still goes
         argv += ["--voluntary", "--account-evidence", evidence_file]
     return argv
 

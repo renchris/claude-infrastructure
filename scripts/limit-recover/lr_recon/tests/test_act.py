@@ -85,7 +85,9 @@ class ActTests(unittest.TestCase):
         rec, snap = _rec(), _snap()
 
         def g(mode="act", r=None, a="A", wake=True):
-            return A.may_actuate(paths, mode, r or rec, a, snap, NOW, wake, 0, 16, env={})
+            return A.may_actuate(
+                paths, mode, r or rec, a, snap, NOW, wake, 0, 16, env={}
+            )
 
         self.assertEqual(g()[1], "recon-off")
         open(paths.recon_on, "w").close()
@@ -94,7 +96,9 @@ class ActTests(unittest.TestCase):
         self.assertEqual(g(r=_rec(plan_only=True))[1], "plan-only")
         self.assertEqual(g(a="HEAL")[1], "heal-disabled")
         self.assertEqual(g(wake=False)[1], "wake-guard")
-        self.assertEqual(g(a="C", wake=False), (True, "ok"))  # typing a prompt is reversible
+        self.assertEqual(
+            g(a="C", wake=False), (True, "ok")
+        )  # typing a prompt is reversible
         self.assertEqual(g(), (True, "ok"))
 
     def test_env_forces_bgwork_cancel(self):
