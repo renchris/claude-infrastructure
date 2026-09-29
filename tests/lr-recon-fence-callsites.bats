@@ -291,8 +291,9 @@ brl_deferred() {
   brl_fixture; scenario d "$BRSID"; brl_run
   [ "$STATUS" -eq 0 ] || { cat "$BATS_TEST_TMPDIR/out"; false; }
   assert_lapsed_lock "$BRSID"
-  # SHELL ROOT: argv after `--` is exactly zsh -ic '<the shq-quoted resume>; exec zsh -i'
-  want="'$STUBS/resume-one' 'next4' '$BRWT' '$BRSID'; exec zsh -i"
+  # SHELL ROOT: argv after `--` is exactly zsh -ic '<the shq-quoted resume>; exec zsh -i', and the
+  # admission mark rides in that command (the window does not inherit the launcher's env; W5 rig)
+  want="'env' 'CC_ADMIT_DONE=1' '$STUBS/resume-one' 'next4' '$BRWT' '$BRSID'; exec zsh -i"
   [ "$(sed -n '/^--$/{n;p;}' "$BATS_TEST_TMPDIR/kitty.argv")" = zsh ] || { cat "$BATS_TEST_TMPDIR/kitty.argv"; false; }
   [ "$(sed -n '/^--$/{n;n;p;}' "$BATS_TEST_TMPDIR/kitty.argv")" = -ic ] || false
   [ "$(tail -1 "$BATS_TEST_TMPDIR/kitty.argv")" = "$want" ] || { cat "$BATS_TEST_TMPDIR/kitty.argv"; false; }

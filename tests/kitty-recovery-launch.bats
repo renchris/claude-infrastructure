@@ -462,6 +462,23 @@ load_spawn_gui() {
   echo "$output" | grep -qE 'KITTY: .* -- .*reso-resume-one'
 }
 
+@test "boot-resume-launch: the admission mark reaches the engine INSIDE the new window (kitty arm)" {
+  # kitty builds the window from ITS env, not ours: an exported CC_ADMIT_DONE never arrives, and the
+  # engine re-gated in the window after we returned 0 (FLEET_V2 W5 rig, pane-closed-after-exit).
+  in_kitty 31
+  run env CC_RESUME_ONE_BIN=/Users/x/.reso/bin/reso-resume-one \
+      bash "$BRL" --dry-run next4 /Users/x/wt sid-123
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qE 'KITTY: .* -- .*CC_ADMIT_DONE=1.*reso-resume-one'
+}
+
+@test "boot-resume-launch: the admission mark reaches the engine (iTerm2 arm, typed line)" {
+  run env IT2_WRAPPER_NO_KITTY=1 CC_RESUME_ONE_BIN=/Users/x/.reso/bin/reso-resume-one \
+      bash "$BRL" --dry-run next4 /Users/x/wt sid-123
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qE 'CC_ADMIT_DONE=1.*reso-resume-one'
+}
+
 @test "boot-resume-launch: SURVIVABILITY — the default program ends the pane in an interactive shell" {
   # The subject is the program this launcher runs by DEFAULT, so first pin that the default is still
   # reso-resume-one; otherwise this case would certify a file the launcher no longer launches.

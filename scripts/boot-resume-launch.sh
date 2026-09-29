@@ -168,7 +168,11 @@ brl_kitty() { # bounded `kitty @ …` — socket seam kept out of the call sites
 # with spaces survives the osascript `write text` shell.
 shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
-CMD="$(shq "$RESUME_ONE") $(shq "$acct") $(shq "$cwd") $(shq "$sid")"
+# The admission mark rides IN the command (FLEET_V2 W5 rig): neither arm's window inherits this
+# process's environment (`kitty @ launch` builds it from KITTY's env; the iTerm2 arm types into a
+# fresh login shell), so the exported CC_ADMIT_DONE below never reached the engine, which re-gated
+# INSIDE the window after this launcher had returned 0. Every word stays single-quoted.
+CMD="'env' 'CC_ADMIT_DONE=1' $(shq "$RESUME_ONE") $(shq "$acct") $(shq "$cwd") $(shq "$sid")"
 [ -n "$branch" ] && CMD="$CMD $(shq "$branch")"
 
 if [ "$IN_KITTY" = 1 ]; then
@@ -344,7 +348,8 @@ fi
 # gate twice per resume, and the consecutive-refusal BUDGET is shared state — a double spend
 # releases the bound early on a box that never settled. This marks the admission that just happened;
 # nothing else sets it, so it can only ever suppress a REDUNDANT second evaluation, never admit a
-# spawn no gate saw. Exported so it survives the terminal-launch indirection to the engine.
+# spawn no gate saw. Exported for same-process callers; the terminal arms carry it in CMD (above),
+# because neither new window inherits this environment.
 export CC_ADMIT_DONE=1
 
 # ── RESUME DEBT (docs/plans/CLOSE_RESUME_CUSTODY.md §2 D2/D4) ─────────────────────────────────────
