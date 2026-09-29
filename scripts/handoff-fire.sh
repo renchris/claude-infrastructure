@@ -13526,6 +13526,7 @@ recycle_fire() {
     if [ -n "$RESUME_LAUNCHER" ]; then rcy_debt_cwd="$LAUNCH_DIR"; else rcy_debt_cwd="$PWD"; fi
     _hf_resume_debt open --sid "$rcy_debt_sid" --cfg "${RESUME_CFG:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}" \
       --cwd "$rcy_debt_cwd" --pane "$SID" --by "handoff-fire --recycle" \
+      --mode "$(if [ -n "$RESUME_LAUNCHER" ]; then printf resume; else printf fresh; fi)" \
       --why "recycle of pane $SID ($(if [ -n "$RESUME_LAUNCHER" ]; then printf 'resume-launcher, same sid'; else printf 'fresh brief'; fi)) about to type /exit"
   else
     echo "⚠ resume-debt NOT opened: no session id resolved for pane $SID — this close is untracked" >&2

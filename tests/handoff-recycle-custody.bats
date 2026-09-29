@@ -159,6 +159,9 @@ rows() { cat "$HOME/.claude/logs/handoffs.jsonl" 2>/dev/null; }
   [ "$open_ln" -lt "$exit_ln" ]
   [ $(( exit_ln - open_ln )) -lt 20 ]          # immediately before the loop, not somewhere upstream
   [ "$exit_ln" -lt "$aband_ln" ] && [ "$aband_ln" -lt "$refuse_ln" ]
+  # A fresh-brief recycle hands the pane to a NEW sid, so its debt must say so (--mode fresh) or a
+  # sweep after a dead watcher would resume the old sid beside its live successor.
+  sed -n "${open_ln},$(( open_ln + 4 ))p" "$HF" | grep -qF -- '--mode "$(if [ -n "$RESUME_LAUNCHER" ]; then printf resume; else printf fresh; fi)"'
 }
 
 @test "a missing cc-resume-debt leaves the watcher's verdict exactly as before" {

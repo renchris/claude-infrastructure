@@ -261,3 +261,26 @@ lines() { [ -f "$1" ] && grep -c -- "$2" "$1" || echo 0; }
   grep -q "^next4 $WT $SID SETTLING=1$" "$T/relaunch.log"
   jq -r '.events[0].note' "$CC_RESUME_DEBT_DIR/meta/$SID.json" | grep -q 'settle (no prior debt)'
 }
+
+@test "a FRESH-brief debt is discharged by a LIVE successor holding its pane (new sid)" {
+  "$BIN" open --sid "$SID" --cwd "$WT" --account next3 --pane 42 --mode fresh --by "handoff-fire --recycle"
+  printf 'DEAD\nLIVE\n' > "$T/find.seq"    # closed sid DEAD, then the pane read: a successor LIVE
+  run "$BIN" step --sid "$SID"
+  [ "$(state)" = proven ]
+  grep -qx 42 "$T/find.log"
+  [ ! -f "$T/relaunch.log" ]
+}
+
+@test "a RESUME debt is NOT discharged by some other session in its pane (control)" {
+  "$BIN" open --sid "$SID" --cwd "$WT" --account next3 --pane 42 --by lr-upgrade
+  [ "$(jq -r .mode "$CC_RESUME_DEBT_DIR/meta/$SID.json")" = resume ]
+  printf 'DEAD\nLIVE\n' > "$T/find.seq"
+  run "$BIN" step --sid "$SID"
+  [ "$(state)" = open ]
+  ! grep -qx 42 "$T/find.log"
+}
+
+@test "an unknown --mode is refused" {
+  run "$BIN" open --sid "$SID" --mode sideways
+  [ "$status" -eq 2 ]
+}

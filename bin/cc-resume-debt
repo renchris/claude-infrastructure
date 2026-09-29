@@ -124,6 +124,22 @@ _prove() { # <sid> <hold>
   [ "$2" -gt 0 ] && sleep "$2"
   _live_once "$1"
 }
+# A FRESH-brief recycle hands the pane to a NEW session id, so the closed sid never comes back and
+# its own proof can never pass. Its debt is also discharged by a LIVE successor holding the pane the
+# close happened in (`cc-find <pane>`, a sid other than the closed one) — without this, a watcher
+# that died after a good relaunch would leave the sweep to resume the old sid beside its successor.
+_successor_once() { # <closed sid> <pane>
+  "$FIND" "$2" 2>/dev/null | awk -F'\t' -v s="$1" -v p="$2" '$2 == p && $1 != s && $6 == "LIVE" { f = 1 } END { exit !f }'
+}
+_prove_debt() { # <sid> <hold> — the proof a debt's mode admits
+  local pane
+  _prove "$1" "$2" && return 0
+  [ "$(_get "$1" mode)" = fresh ] || return 1
+  pane="$(_get "$1" pane)"; [ -n "$pane" ] || return 1
+  _successor_once "$1" "$pane" || return 1
+  [ "$2" -gt 0 ] && sleep "$2"
+  _successor_once "$1" "$pane"
+}
 
 # ── verbs ───────────────────────────────────────────────────────────────────────────────────────
 _open() {
@@ -148,7 +164,8 @@ EOF
   cur="$(_meta "$SID")"
   jq -n --arg sid "$SID" --arg marker "$marker" --arg pane "$PANE_ID" --arg cfg "$CFG" \
     --arg account "$ACCOUNT" --arg cwd "$CWD" --arg by "$BY" --arg why "$WHY" --arg e "$now" \
-    '{sid:$sid, marker:$marker, pane:$pane, cfg:$cfg, account:$account, cwd:$cwd, by:$by, why:$why,
+    --arg mode "$MODE" \
+    '{sid:$sid, marker:$marker, pane:$pane, mode:$mode, cfg:$cfg, account:$account, cwd:$cwd, by:$by, why:$why,
       opened_epoch:($e|tonumber), state:"open", attempts:0, attempt_epoch:0, relaunch_rc:null,
       backlog_id:"", page_verdict:"", events:[{epoch:($e|tonumber), state:"open", note:("opened by "+$by)}]}' \
     > "$cur.tmp.$$" && mv -f "$cur.tmp.$$" "$cur" || _die "meta write failed" 3
@@ -234,7 +251,7 @@ _step() { # <sid> <now-flag 0|1> — ONE transition; a held lock makes it a no-o
   _lock "$1" || return 0
   st="$(_get "$1" state)"
   if _active "$st"; then
-    if _prove "$1" "$HOLD_S"; then
+    if _prove_debt "$1" "$HOLD_S"; then
       _discharge "$1" "proven LIVE by cc-find"
     else
       case "$st" in
@@ -317,6 +334,7 @@ _list() {
 usage() {
   cat <<'U'
 usage: cc-resume-debt open   --sid S [--cfg CFG] [--cwd C] [--pane P] [--account A] [--by WHO] [--why TEXT]
+                             [--mode resume|fresh]   fresh = a successor with a NEW sid in --pane also proves
        cc-resume-debt prove  --sid S [--hold N]
        cc-resume-debt discharge --sid S --why TEXT
        cc-resume-debt abandon   --sid S --why TEXT
@@ -330,7 +348,7 @@ U
 
 # ── args ────────────────────────────────────────────────────────────────────────────────────────
 cmd="${1:-}"; shift 2>/dev/null || true
-SID="" CFG="" CWD="" PANE_ID="" ACCOUNT="" BY="unknown" WHY="" HOLD="" WAIT=""
+SID="" CFG="" CWD="" PANE_ID="" ACCOUNT="" BY="unknown" WHY="" HOLD="" WAIT="" MODE="resume"
 WANT_OPEN=0 WANT_ESC=0 WANT_JSON=0
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -341,6 +359,7 @@ while [ $# -gt 0 ]; do
     --account) shift; ACCOUNT="${1:-}" ;;
     --by) shift; BY="${1:-}" ;;
     --why) shift; WHY="${1:-}" ;;
+    --mode) shift; MODE="${1:-}" ;;
     --hold) shift; HOLD="${1:-}" ;;
     --wait) shift; WAIT="${1:-}" ;;
     --open) WANT_OPEN=1 ;;
@@ -354,6 +373,7 @@ done
 # The sid names a file under meta/ and lock/ — refuse anything that could leave them.
 case "$SID" in ''|[A-Za-z0-9]*) ;; *) _die "bad --sid: $SID" ;; esac
 case "$SID" in *[!A-Za-z0-9._-]*) _die "bad --sid: $SID" ;; esac
+case "$MODE" in resume|fresh) ;; *) _die "bad --mode: $MODE (resume|fresh)" ;; esac
 _need_sid() { [ -n "$SID" ] || _die "$cmd needs --sid"; }
 
 case "$cmd" in
