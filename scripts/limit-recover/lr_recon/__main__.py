@@ -43,6 +43,7 @@ MOVING = ("TRANSPLANTED", "EXITING", "HUSK-RETIRED", "EXITED", "RELAUNCHED")
 SENTINEL_S = 300.0  # §3 step 13: CLOSED after the 5-minute sentinel
 ACTIVE_FAST_S, ACTIVE_S, DORMANT_S = 3.0, 5.0, 20.0
 RESTART_PAGE_WINDOW_S = 600.0
+C_GRACE_S = 60.0  # quiet time after the last live actuator/launcher/watcher before C may type
 RECORD_TYPES = (
     "LIMITED",
     "STAY",
@@ -133,7 +134,13 @@ def _facts(ctx: Ctx, snap: T.Snapshot, now: float) -> Dict[str, T.Fact]:
     for s in snap.sessions.values():
         f = (
             F.fact_from_death(s.acct, s.sid, s.transcript.last or {}, now, "census")
-            if s.acct and (s.transcript.last or {}).get("limit")
+            if s.acct
+            and (
+                (s.transcript.last or {}).get("limit")
+                # an auth cliff is an account fact too (scope "auth"): without it a TARGET-AUTH
+                # hop had no evidence to move on and placement kept choosing the dead account
+                or (s.transcript.last or {}).get("kind") == "auth_cliff"
+            )
             else None
         )
         if f is not None:
@@ -227,10 +234,18 @@ def _derive(ctx: Ctx, snap: T.Snapshot, now: float) -> None:
             _event(ctx.paths, "in-flight", rec.sid, rec.record_id, "transplant confirmed")
         out = evidence.derive(ctx.paths, rec, snap)
         res = out["result"]
-        assert isinstance(res, T.PhaseResult)
+        ev = out["evidence"]
+        assert isinstance(res, T.PhaseResult) and isinstance(ev, T.Evidence)
+        if ev.token_record_offset is not None and ev.token_is_this_attempt:
+            rec.timeline.submitted = rec.timeline.submitted or now  # rows 4 and 7 read it
+        if act.live_procs(rec, snap) or ev.live_launcher or ev.live_watcher:
+            rec.close["busy_at"] = now
         rec.phase = res.phase
         ctx.actions[rec.sid] = res.action
         _note_close(rec, res, snap, now)
+        if res.phase != "PRE-MOVE" or res.substate == "HOLD-MENU":
+            rec.substate = res.substate
+        # after the substate write: a hop turns this record into a fresh PRE-MOVE/DETECTED
         if res.phase in ("TARGET-LIMITED", "TARGET-AUTH") and not act.live_procs(rec, snap):
             why = "auth" if res.phase == "TARGET-AUTH" else "limit"
             old_target = rec.target_acct
@@ -239,8 +254,7 @@ def _derive(ctx: Ctx, snap: T.Snapshot, now: float) -> None:
             ctx.actions[rec.sid] = "plan"
             _event(ctx.paths, "hop", rec.sid, rec.record_id,
                    "%s on %s: attempt %d moves FROM it" % (res.phase, old_target, rec.attempt))
-        if res.phase != "PRE-MOVE" or res.substate == "HOLD-MENU":
-            rec.substate = res.substate
+            continue
         if res.phase in ("ENGAGED", "MOVED"):
             if rec.sentinel_until is None:
                 rec.sentinel_until = now + SENTINEL_S
@@ -354,6 +368,11 @@ def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
         which = act.choose(res, rec)
         if which is None:
             continue
+        if which == "C" and now - float(rec.close.get("busy_at", 0)) < C_GRACE_S:
+            # The move's own launcher types the prompt, and its user record lands 1.6-11 s after
+            # the Enter (W0) with re-sends up to 45 s: C only after that whole chain is quiet, or
+            # it types a SECOND prompt into a session that already has one (W5 rig).
+            continue
         ok, why = act.may_actuate(
             ctx.paths, mode, rec, which, snap, now, wake_ok, running, act.workers_cap()
         )
@@ -398,7 +417,8 @@ def _command(ctx: Ctx, rec: T.Record, which: str) -> List[str]:
     if which == "A-husk":
         return act.cmd_husk(rec)
     if which == "B":
-        ident = os.path.join(ctx.paths.sessions, rec.sid + ".identity.json")
+        os.makedirs(ctx.paths.p("work"), exist_ok=True)
+        ident = ctx.paths.p("work", rec.sid + ".identity.json")
         store.atomic_write_json(ident, T.to_dict(rec.identity))
         return act.cmd_relaunch_at_shell(rec, ident)
     if which == "UNCONFIRM":
@@ -407,7 +427,8 @@ def _command(ctx: Ctx, rec: T.Record, which: str) -> List[str]:
         return act.cmd_replace(rec)
     if which in ("C", "C-retry"):
         rec.submit_token = act.new_token()
-        payload = os.path.join(ctx.paths.sessions, rec.sid + ".prompt.txt")
+        os.makedirs(ctx.paths.p("work"), exist_ok=True)
+        payload = ctx.paths.p("work", rec.sid + ".prompt.txt")
         store.atomic_write_text(payload, act.continue_prompt(rec, rec.scope, "") + "\n")
         return act.cmd_engage(rec, payload)
     return []  # SPLIT needs a bg job id the census does not carry yet: it pages instead

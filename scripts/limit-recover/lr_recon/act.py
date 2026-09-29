@@ -52,7 +52,9 @@ def actuator_env(
             "LR_RECORD_ID": rec.record_id,
             "LR_ATTEMPT": str(rec.attempt),
             "HF_RECYCLE_ATTEMPT": "%s:%d" % (rec.record_id, rec.attempt),
-            "HF_WATCHER_RECORD": _p(paths.sessions, rec.sid + ".watcher.json"),
+            # NOT under sessions/: load_all reads every sessions/*.json as a record and quarantines
+            # anything else (the W5 rig quarantined one watcher file per move)
+            "HF_WATCHER_RECORD": _p(paths.root, "work", rec.sid + ".watcher.json"),
             "CC_RECYCLE_BGWORK_ANSWER": "cancel",
             "LR_WAKE_GUARD_S": "30",
             "LR_INPLACE_AWAIT": "0",

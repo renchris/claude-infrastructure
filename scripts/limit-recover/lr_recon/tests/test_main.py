@@ -224,6 +224,42 @@ class MainTests(unittest.TestCase):
         self.assertIn("mode=observe actuations=0 recon.on=absent", out)
         popen.assert_not_called()  # no background --fresh sweep in shadow mode
 
+    def test_an_auth_cliff_writes_an_auth_fact(self):
+        """W5 rig: a TARGET-AUTH hop found no <acct>.auth.json — the census wrote limit facts only."""
+        import time
+
+        now = time.time()
+        snap = _snap(now, self.tmp)
+        s = next(iter(snap.sessions.values()))
+        s.transcript.last = {"limit": False, "kind": "auth_cliff", "raw_error": "authentication_failed"}
+        ctx = M.Ctx(self.paths, None, self.home)
+        facts = M._facts(ctx, snap, now)
+        self.assertIn("next3.auth", facts)
+        self.assertTrue(os.path.exists(os.path.join(self.paths.facts, "next3.auth.json")))
+
+    def test_C_waits_until_the_move_chain_is_quiet(self):
+        """W5 rig: C typed a second prompt while lr-fire-resume's own was still landing."""
+        import time
+
+        now = time.time()
+        rec = T.Record(sid="abcdef01-0000-0000-0000-000000000001", record_id="r1")
+        rec.phase, rec.substate, rec.pane = "RELAUNCHED", "UNPROMPTED", (5, 7)
+        ctx = M.Ctx(self.paths, None, self.home)
+        ctx.records = {rec.sid: rec}
+        ctx.actions = {rec.sid: "C"}
+        snap = _snap(now, self.tmp)
+        with (
+            mock.patch.object(M.act, "may_actuate", return_value=(True, "ok")),
+            mock.patch.object(M.act, "spawn", return_value=4242) as sp,
+            mock.patch.object(M.store, "append_launch"),
+        ):
+            rec.close["busy_at"] = now - 5  # the launcher was live 5 s ago
+            self.assertEqual(M._dispatch(ctx, snap, "act", now), 0)
+            sp.assert_not_called()
+            rec.close["busy_at"] = now - M.C_GRACE_S - 1
+            self.assertEqual(M._dispatch(ctx, snap, "act", now), 1)
+            self.assertEqual(sp.call_args[0][2], "C")
+
     def test_daemon_loop_starts_and_runs_a_pass(self):
         """W5 rig: the long-running path had never started (Caffeinate() without its pid)."""
 
