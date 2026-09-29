@@ -680,6 +680,12 @@ lrh_verdict() { # <TOKEN> <proven yes|no> <note>
   msg="lr-handoff ${SID:0:8}: verdict=$tok from=${LRH_FROM_ACCT:--} to=${TARGET:--} proven=$proven trigger=$LRH_CAUSE — $note"
   printf '%s\n' "$msg" >&2
   [[ $VOLUNTARY -eq 1 ]] || return 0
+  # A RECONCILER PLACEMENT IS NOT THE SESSION ASKING. The pane mail exists for `cc-lr switch`, where
+  # the session moved itself and waits for its own verdict. A placed move's subject asked nothing,
+  # and the mail lands in its inbox the moment the recycle is armed, before the /exit: its watcher
+  # wakes it, it takes a turn mid-move, and the last read holds it (W5b real canary 3). The
+  # reconciler reads the outcome from its own records; the verdict stays on stderr, its actuator log.
+  [[ "${LR_PLACED_BY:-}" == reconciler ]] && return 0
   to="${LRH_SELF_PANE:-$SOURCE_PANE}"
   if [[ -z "$to" ]]; then
     echo "lr-handoff: the verdict names no pane to mail (neither a self pane nor --source-pane), so it is stderr-only: $msg" >&2

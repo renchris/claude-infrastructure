@@ -256,6 +256,16 @@ count() { printf '%s\n' "$2" | grep -c -e "$1" || true; }
   [ ! -s "$HF_LOG" ] || { echo "the recycle ran after a failed transplant"; false; }
 }
 
+@test "a RECONCILER-placed voluntary move mails nothing into the pane it is moving (W5b canary 3)" {
+  # The mail is for cc-lr switch, where the session asked. A placed move's subject asked nothing,
+  # and the mail woke it mid-move: its inbox watcher fired, it took a turn before the /exit, and the
+  # last read held it. The verdict stays on stderr (the reconciler's actuator log).
+  LR_PLACED_BY=reconciler fire --voluntary
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=SWITCHED"* ]] || { echo "$output"; false; }
+  [ ! -s "$NOTIFY_LOG" ] || { echo "the placed move mailed its subject: $(cat "$NOTIFY_LOG")"; false; }
+}
+
 @test "the LIMIT path emits its verdict to stderr and mails NOTHING — lr-fleet owns that lane" {
   # A second mailer over one population is two auditors that disagree the first time they derive
   # differently (repo memory: sibling-auditors-must-share-the-state-model). lr-fleet.sh:1163-1172
