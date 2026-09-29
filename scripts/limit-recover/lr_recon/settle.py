@@ -313,8 +313,15 @@ def note_unconfirm(paths: T.Paths, rec: T.Record, now: float) -> str:
     """lr-transplant --phase unconfirm undid this attempt's confirm: the tombstone is now
     <sid>.HANDOFF.json.unconfirmed and <sid>.jsonl is back. Level-triggered on that rename, so a
     lost actuator exit code (a daemon restart) cannot leave a latched confirm_len that marks the
-    record IN-FLIGHT for good (W5 rig, draft-after-confirm). Returns the new substate, or ''."""
-    if rec.confirm_len is None or rec.phase != "PRE-MOVE":
+    record IN-FLIGHT for good (W5 rig, draft-after-confirm). Returns the new substate, or ''.
+
+    Not gated on a latched confirm_len: latching needs a pass inside the 4-8 s confirm→unconfirm
+    window, and the W5 rig's draft-after-confirm missed it and sat at PRE-MOVE/None. Unlatched, only
+    a record through custody (None) or in the gap (IN-FLIGHT) is pulled back; PLANNED/DETECTED
+    never, so a re-planned attempt is not re-held off an old rename."""
+    if rec.phase != "PRE-MOVE":
+        return ""
+    if rec.confirm_len is None and rec.substate not in (None, "IN-FLIGHT"):
         return ""
     src = transcript_path(rec.source_cfg, rec.cwd, rec.sid)
     if not src.endswith(".jsonl"):
@@ -326,22 +333,32 @@ def note_unconfirm(paths: T.Paths, rec: T.Record, now: float) -> str:
         or not os.path.exists(base + ".HANDOFF.json.unconfirmed")
     ):
         return ""  # still confirmed (the real relaunch gap), or never was
-    rec.confirm_len, rec.timeline.confirmed = None, None
+    try:
+        st = os.stat(base + ".HANDOFF.json.unconfirmed")
+    except OSError:
+        return ""
+    # lr_file_evidence moves an older one aside, so a new unconfirm is a new inode: once per rename
+    key = "%d:%d" % (st.st_ino, int(st.st_mtime))
+    if rec.close.get("unconfirmed") == key:
+        return ""
+    rec.close["unconfirmed"] = key
     sub = ""
     for att in (rec.attempt, rec.attempt - 1):  # settle_exit may already have bumped it
         for a in ("A", "A-husk"):
             p = os.path.join(paths.p("actlogs"), "%s.%d.%s.log" % (rec.sid[:8], att, a))
             sub = sub or _held_after_confirm(tail(p))
-    if rec.substate not in ("IN-FLIGHT", "PLANNED", None):
-        return sub or "DETECTED"
     if sub:
         rec.attempts_by_class["HOLD"] = rec.attempts_by_class.get("HOLD", 0) + 1
-        _hold(
-            rec, sub, now
-        )  # HOLD-DRAFT is REPROBED: re-planned after the draft clears
-    else:
-        rec.substate, rec.wait = "DETECTED", None
-    return sub or "DETECTED"
+        rec.last_error = T.LastError(
+            cls="HOLD",
+            fingerprint="unconfirmed|" + sub,
+            detail="%s: held after the confirm; unconfirmed" % sub,
+            at=now,
+        )
+    # the one path UNCONFIRM rc 0 takes: attempt += 1 (one move spawn per (sid, attempt)), confirm
+    # cleared, then the hold (HOLD-DRAFT is REPROBED) or DETECTED
+    _unconfirmed(rec, now)
+    return rec.substate or ""
 
 
 def dead_actuators(

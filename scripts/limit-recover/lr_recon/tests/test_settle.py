@@ -420,6 +420,34 @@ class Unconfirm(unittest.TestCase):
         self.assertIsNotNone(self.r.wait.eta)  # REPROBED
         self.assertFalse(settle.mark_in_flight(self.r))
 
+    def test_an_unconfirm_bumps_the_attempt(self):
+        """The latched case: the re-probe's A must be a new attempt (one move spawn per attempt)."""
+        self._unconfirm(ABORT)
+        self.assertEqual(settle.note_unconfirm(self.paths, self.r, 100.0), "HOLD-DRAFT")
+        self.assertEqual(self.r.attempt, 2)
+
+    def test_an_unconfirm_the_daemon_never_latched_still_holds(self):
+        """W5 rig 398fd593: no pass landed in the confirm→unconfirm window, so confirm_len never
+        latched and the record sat at PRE-MOVE/None."""
+        self.r.confirm_len, self.r.timeline.confirmed, self.r.substate = (
+            None,
+            None,
+            None,
+        )
+        self._unconfirm(ABORT)
+        self.assertEqual(settle.note_unconfirm(self.paths, self.r, 100.0), "HOLD-DRAFT")
+        self.assertEqual((self.r.attempt, self.r.substate), (2, "HOLD-DRAFT"))
+        self.assertIsNotNone(self.r.wait.eta)
+        self.r.substate = None  # the same rename, seen again: once per inode
+        self.assertEqual(settle.note_unconfirm(self.paths, self.r, 101.0), "")
+        self.assertEqual(self.r.attempt, 2)
+
+    def test_a_replanned_attempt_is_not_reheld_by_an_old_rename(self):
+        self.r.confirm_len, self.r.substate = None, "PLANNED"
+        self._unconfirm(ABORT)
+        self.assertEqual(settle.note_unconfirm(self.paths, self.r, 100.0), "")
+        self.assertEqual((self.r.substate, self.r.attempt), ("PLANNED", 1))
+
     def test_the_real_relaunch_gap_is_untouched(self):
         self.assertEqual(settle.note_unconfirm(self.paths, self.r, 100.0), "")
         self.assertTrue(settle.mark_in_flight(self.r))
