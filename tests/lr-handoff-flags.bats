@@ -83,6 +83,7 @@ STUB
   cat > "$LRD/lr-fire-resume.sh" <<'STUB'
 #!/bin/bash
 echo "argc=$#"
+echo "pair=<${LR_RECORD_ID:-}|${LR_ATTEMPT:-}>"
 i=0; for a in "$@"; do i=$((i+1)); printf 'argv[%d]=<%s>\n' "$i" "$a"; done
 STUB
   # lr-ingest-verify: VERIFY_MODE picks the receipt (rc0 | A1 | A2 | C3)
@@ -264,8 +265,23 @@ run_launcher() { # $1=VERIFY_MODE → runs the launcher minted by the last gen
   LR_PLACED_BY=reconciler gen --record-id rec-7 --attempt 2
   [ "$status" -eq 0 ]
   l="$(launcher_from_output)"; [ -n "$l" ]
-  grep -q '^exec env LR_RECORD_ID=rec-7 LR_ATTEMPT=2 .*lr-fire-resume.sh' "$l"
+  grep -q '^exec env LR_RECORD_ID="${LR_RECORD_ID:-rec-7}" LR_ATTEMPT="${LR_ATTEMPT:-2}" .*lr-fire-resume.sh' "$l"
   ! grep -q '^export LR_RECORD_ID\|^export LR_ATTEMPT' "$l"
+}
+@test "reconciler launcher: the actor that TYPES it owns the pair; a bare run gets the minted one (W5b canary 3)" {
+  LR_PLACED_BY=reconciler gen --record-id rec-7 --attempt 2
+  l="$(launcher_from_output)"; [ -n "$l" ]
+  run env -u LR_RECORD_ID -u LR_ATTEMPT VERIFY_MODE=rc0 /bin/bash "$l"
+  [[ "$output" == *"pair=<rec-7|2>"* ]] || { echo "$output"; false; }
+  # the reconciler's in-place rescue (B) re-types this launcher under a NEW attempt after taking the
+  # launch lock as that attempt: lr-fire-resume must see the new one, or it refuses its own rescuer
+  run env LR_RECORD_ID=rec-7 LR_ATTEMPT=5 VERIFY_MODE=rc0 /bin/bash "$l"
+  [[ "$output" == *"pair=<rec-7|5>"* ]] || { echo "$output"; false; }
+}
+@test "reconciler launcher: a record id that is not a plain token keeps the pinned, quoted form" {
+  LR_PLACED_BY=reconciler gen --record-id 'rec 7;x' --attempt 2
+  l="$(launcher_from_output)"; [ -n "$l" ]
+  grep -q '^exec env LR_RECORD_ID=rec\\ 7\\;x LR_ATTEMPT=2 ' "$l"
 }
 @test "reconciler launcher CONTROL: no --record-id, no env prefix" {
   LR_PLACED_BY=reconciler gen

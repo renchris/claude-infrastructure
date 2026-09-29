@@ -1519,9 +1519,20 @@ EOF
 # A reconciler placement's record id and attempt ride CALL-SCOPED into lr-fire-resume (never exported
 # into the pane shell): its launch lock and the recon launch.log key on them, and its spawn line
 # `env -u`s both, so the resumed session never inherits a per-operation id.
+# THE ACTOR THAT TYPES THE LAUNCHER OWNS THE PAIR (W5b real canary 3). This launcher outlives the
+# attempt that minted it: the reconciler's in-place rescue (B) re-types it under a NEW attempt,
+# after taking the launch lock as `env LR_LAUNCH_LOCK=… LR_RECORD_ID=… LR_ATTEMPT=<new> bash <this>`.
+# Pinning the minted attempt here overrode that, lr-fire-resume read its own rescuer's holder as
+# foreign and refused rc 10, and B could never succeed (canary 3: two B attempts, both rc 10). So the
+# typed pair wins and the minted one is the fallback for a bare run. Only plain tokens take that
+# form; anything else keeps the pinned %q form.
 LRH_REC_ENV=""
 if [[ -n "${RECORD_ID:-}" ]]; then
-  LRH_REC_ENV="env LR_RECORD_ID=$(printf '%q' "$RECORD_ID") LR_ATTEMPT=$(printf '%q' "${ATTEMPT:-1}") "
+  if [[ "$RECORD_ID" =~ ^[A-Za-z0-9:._-]+$ && "${ATTEMPT:-1}" =~ ^[0-9]+$ ]]; then
+    LRH_REC_ENV="env LR_RECORD_ID=\"\${LR_RECORD_ID:-$RECORD_ID}\" LR_ATTEMPT=\"\${LR_ATTEMPT:-${ATTEMPT:-1}}\" "
+  else
+    LRH_REC_ENV="env LR_RECORD_ID=$(printf '%q' "$RECORD_ID") LR_ATTEMPT=$(printf '%q' "${ATTEMPT:-1}") "
+  fi
 fi
 if [[ $NO_PROMPT -eq 1 ]]; then
   cat >> "$LAUNCHER" <<EOF
