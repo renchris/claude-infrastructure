@@ -324,6 +324,9 @@ site_is_converted() { # $1=file $2=class-token $3=hf_alarm class
   # relaunch rc and no launcher refusal — a state that is deliberately NOT recycle-relaunch-failed,
   # because one is re-drivable with a fresh probe and the other needs someone to look. It moved this
   # count silently and left trunk red; found by a sibling's docs-only land, not by its own wave.
+  # EIGHTH added 2026-09-28 (CLOSE_RESUME_CUSTODY D3, feat/crc-recycle), class recycle-dead: the
+  # SURFACE-GONE arm, raised when the pane vanished between the confirmed shell and the relaunch
+  # write, so nothing was typed and the session's resume debt is settled in a new window.
   [ "$(grep -c 'if \[ -x "\$HOME/.claude/bin/cc-notify" \]' "$FIRE")" -eq 1 ]
-  [ "$(grep -c '^    hf_alarm ' "$FIRE")" -eq 7 ]
+  [ "$(grep -c '^    hf_alarm ' "$FIRE")" -eq 8 ]
 }

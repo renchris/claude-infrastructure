@@ -4417,6 +4417,29 @@ _hf_custody() {
   return 0
 }
 
+# RESUME-DEBT passthrough (CLOSE_RESUME_CUSTODY D4) — the same best-effort contract as _hf_custody:
+# a recycle's close becomes a debt that only a PROVEN live successor discharges, but the bookkeeping
+# never gates the recycle itself. A set CC_RESUME_DEBT_BIN is authoritative (an absent path there
+# disables the passthrough, which is what keeps a test hermetic); unset, the ladder mirrors
+# _hf_custody. Output goes to stderr, i.e. the watcher's log, with the rc named — `settle` can take
+# minutes and its verdict is only ever read there.
+_hf_resume_debt() {
+  local bin="" rc=0
+  if [ -n "${CC_RESUME_DEBT_BIN+x}" ]; then
+    bin="$CC_RESUME_DEBT_BIN"
+  else
+    for bin in "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/../bin/cc-resume-debt" \
+               "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/bin/cc-resume-debt" \
+               "$HOME/.claude/bin/cc-resume-debt"; do
+      [ -x "$bin" ] && break; bin=""
+    done
+  fi
+  [ -n "$bin" ] && [ -x "$bin" ] || return 0
+  "$bin" "$@" </dev/null >&2 2>&1 || rc=$?
+  echo "→ resume-debt ${1:-?}: rc $rc" >&2
+  return 0
+}
+
 # ── THE LEDGER STAMP AT RETIREMENT — ONE COPY FOR BOTH ACTUATORS (self-close and --recycle) ──────
 # 56% of this fleet's sessions end inside this script, and until now the only thing either actuator
 # asked about the state it was retiring was "is the tree dirty". Dirtiness is one rung of seven. A
@@ -7342,6 +7365,20 @@ if [ "${1:-}" = "__recycle" ]; then
   # Resume mode (LIMIT_RECOVER_100P): $10-$12 are the TARGET config dir, the sid being resumed and
   # the engagement baseline. Positional-last + optional, like every argument above them.
   RCY_RESUME_CFG="${10:-}"; RCY_RESUME_SID="${11:-}"; RCY_T0="${12:-}"
+  # The RESUME DEBT's subject (CLOSE_RESUME_CUSTODY D4): the sid the foreground opened the debt for
+  # just before /exit — the resumed sid in resume mode, else the closed session ($6). Resolved HERE,
+  # not from RCY_OLD_SID, because the vanished and never-confirmed arms fire before that is parsed.
+  RCY_DEBT_SID="${RCY_RESUME_SID:-${6:-}}"
+  # Every arm that ends with NO claude in the pane after the /exit calls this after its row, alarm
+  # and `!!` line: settle relaunches the same sid in a NEW window, or escalates. It may block for
+  # minutes, which a detached watcher can afford.
+  rcy_debt_settle() {
+    if [ -z "$RCY_DEBT_SID" ]; then
+      echo "⚠ resume-debt settle skipped: no session id was handed to this watcher" >&2
+      return 0
+    fi
+    _hf_resume_debt settle --sid "$RCY_DEBT_SID"
+  }
   # $15: THIS RUN's submit token (W3), positional-last + optional like every argument above it. It is
   # resolved in the FOREGROUND, out of the launcher the recycle is about to type, and handed over only
   # when the launcher provably carries it in the PROMPT as well as in its export block — see the
@@ -7493,6 +7530,7 @@ if [ "${1:-}" = "__recycle" ]; then
     emit_recycle_event recycle-dead "" "$RSID" "pane VANISHED after ${waited}s — destroyed by its own /exit (no shell under the session); successor never typed" || true
     hf_alarm recycle-dead "$RSID" "${RCY_OLD_SID:-}" "" "HANDOFF-RECYCLE-DEAD (PANE GONE): pane $RSID no longer exists — 'session list' enumerates other panes but not this one, ${waited}s after the /exit. The pane had no shell under its session, so the /exit destroyed the window itself and the successor could never be typed. This session's continuation is STRANDED. Its brief: ${RCY_PROMPT_FILE:-<none recorded>}. Fire it into a NEW pane: scripts/handoff-fire.sh --prompt-file ${RCY_PROMPT_FILE:-<brief>} --split-right. Raw relaunch line: $(cat "$CMDFILE")" || true
     echo "!! pane $RSID VANISHED ${waited}s after the /exit (enumerated by session list at arm time, absent now) — the pane had no shell under its session, so its own /exit closed it. Nothing was typed; the successor never started. Fire it into a NEW pane: scripts/handoff-fire.sh --prompt-file ${RCY_PROMPT_FILE:-<brief>} --split-right" >&2
+    rcy_debt_settle
     exit 1
   fi
   # The bound expired with no confirmation: one last read, as the old loop condition gave it.
@@ -7546,6 +7584,7 @@ if [ "${1:-}" = "__recycle" ]; then
     # have to know that exemption to see that this line is conditional.
     if [ -n "$rcy_bgwork_note" ]; then echo "!!${rcy_bgwork_note}" >&2; fi
     echo "!! pane $RSID never reached a CONFIRMED shell prompt in ${waited}s (probe verdict: $rcy_dead_verdict) — NOT typing onto an unconfirmed pane. Relaunch manually: $(cat "$CMDFILE")" >&2
+    rcy_debt_settle
     exit 1
   fi
   echo "→ pane $RSID CONFIRMED at a shell prompt after ${waited}s — typing relaunch"
@@ -7598,6 +7637,19 @@ if [ "${1:-}" = "__recycle" ]; then
     rm -f "$RCY_RUN_DIR/relaunch.rc" 2>/dev/null || true
   fi
   rcy_typed_at="$(date +%s 2>/dev/null || echo 0)"
+  # SURFACE RE-CHECK between exit and relaunch (CLOSE_RESUME_CUSTODY D3; the 2026-09-28 pane-405
+  # incident). A shell confirmed by TTY alone does not prove the PANE survived: that window was
+  # destroyed seconds after its /exit and its tty reused by a new window, so at_shell "CONFIRMED" a
+  # stranger's shell and both writes failed against a pane id that no longer existed. `absent` is
+  # the only verdict that acts (pane_enumerated's contract); `unknown` still attempts the writes.
+  rcy_surface="$(pane_enumerated "$IT2" "$RSID")"
+  if [ "$rcy_surface" = absent ]; then
+    emit_recycle_event recycle-dead "" "$RSID" "pane vanished between exit and relaunch — relaunch surface gone" || true
+    hf_alarm recycle-dead "$RSID" "${RCY_OLD_SID:-}" "" "HANDOFF-RECYCLE-DEAD (SURFACE GONE): pane $RSID reached a shell after the /exit and then vanished before the relaunch could be typed — 'session list' enumerates other panes but not this one. Nothing was typed into it. The session is being relaunched in a NEW window by cc-resume-debt settle; if that escalates, run: $(cat "$CMDFILE") in a new pane" || true
+    echo "!! pane $RSID vanished between exit and relaunch — relaunch surface gone; nothing typed, settling the session's resume debt" >&2
+    rcy_debt_settle
+    exit 1
+  fi
   ok=0
   for _ in 1 2; do
     if it2_type_verified "$IT2" "$RSID" "$(cat "$CMDFILE")"; then ok=1; break; fi
@@ -7607,9 +7659,14 @@ if [ "${1:-}" = "__recycle" ]; then
     # The pane-88 incident class (2026-08-20): this branch stranded a pane at a bare shell and left
     # NOTHING in the ledger — 100% success by row census while the pane sat dead. Emit + durable
     # alarm before exiting; the alarm is what the desk sweeps, the row is what the rate queries see.
-    emit_recycle_event recycle-dead "" "$RSID" "relaunch write failed twice — pane stranded at a bare shell" || true
+    # The surface is re-read AFTER the failures so the row says which failure this was: a pane that
+    # is gone now needs a new window, a present one refused keystrokes.
+    rcy_surface="$(pane_enumerated "$IT2" "$RSID")"
+    emit_recycle_event recycle-dead "" "$RSID" "relaunch write failed twice — pane stranded at a bare shell (pane $rcy_surface after the failed writes)" || true
     hf_alarm recycle-relaunch-failed "$RSID" "${RCY_OLD_SID:-}" "" "HANDOFF-RECYCLE-RELAUNCH-FAILED: relaunch write into $RSID failed twice — the pane is at a bare shell with NO claude. Run manually in that pane: $(cat "$CMDFILE")" || true
-    echo "!! it2 relaunch write failed twice — run manually in the pane: $(cat "$CMDFILE")" >&2; exit 1; }
+    echo "!! it2 relaunch write failed twice — run manually in the pane: $(cat "$CMDFILE")" >&2
+    rcy_debt_settle
+    exit 1; }
   echo "→ relaunch typed into $RSID: $(cat "$CMDFILE")"
   # ══ THE BOOT WAIT — POSITIVE DISCRIMINATORS ONLY, AND NO RETYPE (W2, 2026-09-19) ═══════════════
   # WHAT THIS REPLACES, and why the replacement is not a tuning. The old form waited 15 × 3 s for a
@@ -7778,6 +7835,7 @@ if [ "${1:-}" = "__recycle" ]; then
           if rcy_pp_up; then
             echo "→ relaunched + ENGAGEMENT CONFIRMED BY PROCESS in $RSID (--resume ${RCY_RESUME_SID:0:8} alive ${rcy_pp_hold}s past boot; no prompt by design)"
             emit_recycle_event recycle-engaged 1 "$RSID" "recycled in place; engagement by process (no-prompt relaunch) within ${rcy_pp_t}s" || true
+            _hf_resume_debt discharge --sid "$RCY_DEBT_SID" --why "recycle engaged in pane $RSID"
             exit 0
           fi
         fi
@@ -7786,6 +7844,7 @@ if [ "${1:-}" = "__recycle" ]; then
       echo "!! RECYCLE FAILED — the no-prompt relaunch in $RSID never held a live '--resume ${RCY_RESUME_SID:0:8}' claude for ${rcy_pp_hold}s within ${RCY_ENGAGE_TIMEOUT:-180}s. Relaunch manually: $(cat "$CMDFILE")" >&2
       emit_recycle_event recycle-dead 0 "$RSID" "no-prompt relaunch never held a live --resume process" || true
       hf_alarm recycle-dead "$RSID" "" "" "HANDOFF-RECYCLE-DEAD: pane $RSID - the no-prompt (team member) relaunch never held a live --resume process. Relaunch: $(cat "$CMDFILE")"
+      rcy_debt_settle
       exit 1
     fi
     rcy_t=0
@@ -7820,6 +7879,7 @@ if [ "${1:-}" = "__recycle" ]; then
         # …and RECORD the success. Strictly after arm_goal so the row's goal_requested sits beside a
         # goal-arm row that already carries the verdict, rather than promising one that never comes.
         emit_recycle_event recycle-engaged 1 "$RSID" "recycled in place; a real assistant turn within ${rcy_t}s" || true
+        _hf_resume_debt discharge --sid "$RCY_DEBT_SID" --why "recycle engaged in pane $RSID"
         exit 0
       fi
       sleep "$RCY_ENGAGE_INTERVAL"; rcy_t=$((rcy_t + RCY_ENGAGE_INTERVAL))
@@ -7850,6 +7910,9 @@ if [ "${1:-}" = "__recycle" ]; then
     emit_recycle_event recycle-dead 0 "$RSID" "relaunched pane $RSID; no assistant turn within ${RCY_ENGAGE_TIMEOUT}s (brief consumed or rejected)" || true
     goal_unreachable recycle-dead || true
     hf_alarm recycle-dead "$RSID" "" "" "HANDOFF-RECYCLE-DEAD: pane $RSID relaunched but never engaged (no assistant turn in ${RCY_ENGAGE_TIMEOUT}s) — claude is alive at an empty composer, the continuation did NOT start. Re-send the brief or relaunch: $(cat "$CMDFILE")"
+    # DISCHARGE, not settle: a claude IS alive in this pane, so relaunching the sid elsewhere would
+    # make two sessions. The HANDOFF-RECYCLE-DEAD alarm above owns what remains.
+    _hf_resume_debt discharge --sid "$RCY_DEBT_SID" --why "relaunched claude alive in pane $RSID, unengaged; HANDOFF-RECYCLE-DEAD alarm owns it"
     exit 1
   fi
   # ── THE ONE SILENT TERMINAL ARM, made to speak (W1, LIMIT_RECOVER_100P § 12.1) ─────────────────
@@ -7907,6 +7970,7 @@ if [ "${1:-}" = "__recycle" ]; then
   # controlling terminal (memory: a verdict goes WHERE THE OPERATOR LOOKS).
   printf '\n!! HANDOFF RECYCLE FAILED — %s\n!!   run manually here: %s\n' "$rcy_detail" "$(cat "$CMDFILE")" > "$TTY_PATH" 2>/dev/null || true
   echo "!! $rcy_detail — verdict painted to $TTY_PATH, row + alarm written" >&2
+  rcy_debt_settle
   exit 1
 fi
 
@@ -13048,7 +13112,7 @@ spawn() {
 # turn end; keystrokes MUST be foreground, detached AppleEvents fail silently), then a detached
 # watcher (__recycle) that ps-polls until claude exits and it2-types the relaunch into the shell.
 recycle_fire() {
-  local tty cmdfile log ts wrote rcy_state rcy_tp rcy_tp_c rcy_tp_rc
+  local tty cmdfile log ts wrote rcy_state rcy_tp rcy_tp_c rcy_tp_rc rcy_debt_sid rcy_debt_cwd
   # ── THE INTENT ROW (2026-08-17, backlog 112d13aa0018 arm (c)) ───────────────────────────────────
   # Every other recycle class — recycle-engaged / recycle-unverified / recycle-dead — is emitted from
   # inside the detached `__recycle` re-exec (:4828, :4844, :4861). So the ONLY recycles that appear in
@@ -13451,6 +13515,21 @@ recycle_fire() {
       exit 1
     fi
   fi
+  # THE RESUME DEBT OPENS HERE, before the point of no return (CLOSE_RESUME_CUSTODY D4). From the
+  # /exit on, the only thing standing between this session and silent abandonment is the watcher,
+  # and on 2026-09-28 the watcher's failure arms wrote a row and an alarm nobody read. The debt is
+  # the durable claim that the session must come back; only a proven live successor discharges it.
+  # Same subject sid the watcher is handed: the resumed sid in resume mode, else the closed one.
+  rcy_debt_sid="$rcy_old_sid"
+  if [ -n "$RESUME_LAUNCHER" ] && [ -n "$RCY_SOURCE_SESSION" ]; then rcy_debt_sid="$RCY_SOURCE_SESSION"; fi
+  if [ -n "$rcy_debt_sid" ]; then
+    if [ -n "$RESUME_LAUNCHER" ]; then rcy_debt_cwd="$LAUNCH_DIR"; else rcy_debt_cwd="$PWD"; fi
+    _hf_resume_debt open --sid "$rcy_debt_sid" --cfg "${RESUME_CFG:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}" \
+      --cwd "$rcy_debt_cwd" --pane "$SID" --by "handoff-fire --recycle" \
+      --why "recycle of pane $SID ($(if [ -n "$RESUME_LAUNCHER" ]; then printf 'resume-launcher, same sid'; else printf 'fresh brief'; fi)) about to type /exit"
+  else
+    echo "⚠ resume-debt NOT opened: no session id resolved for pane $SID — this close is untracked" >&2
+  fi
   wrote=0
   for _ in 1 2 3; do
     if as_write "$SID" "/exit" 2>/dev/null; then wrote=1; break; fi
@@ -13459,6 +13538,9 @@ recycle_fire() {
   # /exit untypeable → un-arm: a live watcher would eventually type the relaunch into a still-
   # running CC session's composer. Same correction as the self-close twin (:4104): as_write now
   # exhausts BOTH transports before returning non-zero, so this is a pane neither can reach.
+  if [ "$wrote" != 1 ] && [ -n "$rcy_debt_sid" ]; then
+    _hf_resume_debt abandon --sid "$rcy_debt_sid" --why "exit never typed; session untouched"
+  fi
   [ "$wrote" = 1 ] || { kill "$WATCHER_PID" 2>/dev/null; echo "!! recycle: could not type /exit into $SID — every transport tried failed 3x ($(as_write_transports)); watcher disarmed, session stays alive" >&2; exit 1; }
   # Anti-strand best-effort: may never run if the interrupt kills us first — the watcher's CR
   # nudges (@60/150/300s) cover a stranded /exit either way.
@@ -13495,7 +13577,7 @@ recycle_await_verdict() { # $1=watcher log → 0 engaged / 1 dead-or-failed / 3 
       echo "→ recycle VERIFIED: $(grep -m1 'ENGAGEMENT CONFIRMED' "$log")"
       return 0
     fi
-    if grep -qE 'RECYCLE FAILED|VANISHED|never reached a CONFIRMED shell|relaunch write failed|no claude process appeared|FAILED:relaunch|STALE:boot|PROCESS-ALIVE' "$log" 2>/dev/null; then
+    if grep -qE 'RECYCLE FAILED|VANISHED|relaunch surface gone|never reached a CONFIRMED shell|relaunch write failed|no claude process appeared|FAILED:relaunch|STALE:boot|PROCESS-ALIVE' "$log" 2>/dev/null; then
       echo "!! recycle did NOT verify — watcher verdict:" >&2
       # `| head -5` would SIGPIPE grep and, under pipefail, make this line's status the failure —
       # awk drains instead (pipefail-sigpipe ratchet).
