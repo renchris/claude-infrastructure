@@ -239,6 +239,42 @@ class Replaced(unittest.TestCase):
         self.assertTrue(settle.replaced_elsewhere(r, snap, 3.0))
         self.assertEqual(r.terminal.outcome, "REPLACED-NEW-WINDOW")
         self.assertEqual((r.close["via"], r.close["same_window"]), ("R", False))
+        self.assertFalse(
+            settle.replacement_unproven(r, 500.0)
+        )  # proven: never consulted
+
+    def test_r_rc0_backs_off_one_window_per_r(self):
+        """W5 rig: the pass after an R rc 0 re-derived PANE-GONE/R and opened a second window."""
+        from lr_recon import act
+
+        r = rec(phase="PANE-GONE", sub="R")
+        settle.settle_exit(r, actuator("R"), 0, "", 100.0)
+        self.assertEqual(r.close["replaced_at"], 100.0)
+        snap = T.Snapshot(wall=101.0, uptime_raw=0.0)
+        p = T.Paths(lr_root=self.tmp, root=self.tmp)
+        open(p.recon_on, "w").close()
+        got = act.may_actuate(p, "act", r, "R", snap, 101.0, True, 0, 16, env={})
+        self.assertEqual(got, (False, "backoff"))
+
+    def test_unproven_r_counts_and_escalates_on_the_second(self):
+        """W5 rig: the engine refused inside the new window after R returned 0; one window per
+        capacity admit opened forever."""
+        r = rec(phase="PANE-GONE", sub="R")
+        r.close["replaced_at"] = 100.0
+        self.assertFalse(settle.replacement_unproven(r, 150.0))
+        self.assertEqual((r.last_error, r.close["replaced_at"]), (None, 100.0))
+        self.assertTrue(settle.replacement_unproven(r, 221.0))
+        self.assertNotIn("replaced_at", r.close)
+        self.assertEqual((r.last_error.cls, r.escalated), ("DETERMINISTIC", False))
+        r.close["replaced_at"] = 230.0
+        self.assertTrue(settle.replacement_unproven(r, 351.0))
+        self.assertTrue(r.escalated)
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
 
 
 class Rebucket(unittest.TestCase):

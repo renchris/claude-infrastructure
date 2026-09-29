@@ -27,6 +27,9 @@ from lr_recon.evidence import transcript_path
 
 REPROBE_S = 120.0
 WAIT_RETRY_S = 60.0
+R_PROOF_S = (
+    120.0  # an R rc 0 opened a WINDOW; the session must show up in it within this
+)
 MOVE_ACTUATORS = ("A", "A-husk", "B", "R")
 TAIL_BYTES = 16 * 1024
 # Substates the census derives from a bucket; it may rewrite them while nothing is in flight.
@@ -141,6 +144,8 @@ def settle_exit(
             rec.close["replaced_at"] = (
                 now  # closed by replaced_elsewhere once it is seen
             )
+            # one window per R: the same pass re-derived PANE-GONE/R and spawned another
+            rec.next_eligible_at = now + R_PROOF_S
         return "%s rc=0" % pr.argv_hash
     if rc is None:
         # Adopted by argv, or exited before this daemon could reap it: no code is no verdict. The
@@ -487,3 +492,19 @@ def replaced_elsewhere(rec: T.Record, snap: T.Snapshot, now: float) -> bool:
             )
             return True
     return False
+
+
+def replacement_unproven(rec: T.Record, now: float) -> bool:
+    """R rc 0 proves a window opened, never that the session is live in it: the engine can refuse
+    INSIDE the window after the launcher returned (W5 rig). No holder in another window by
+    R_PROOF_S ⇒ the R failed, DETERMINISTIC, so a second identical one ESCALATES instead of opening
+    one window per capacity admit forever."""
+    at = rec.close.get("replaced_at")
+    if not at or rec.terminal is not None or now - float(at) < R_PROOF_S:
+        return False
+    rec.close.pop("replaced_at", None)
+    detail = "R rc 0 but no live holder in a new window after %ds" % R_PROOF_S
+    fp = classify.fingerprint(rec.phase, "DETERMINISTIC", "!! " + detail, 0, "")
+    rec.attempt += 1
+    classify.apply_failure(rec, "DETERMINISTIC", fp, detail, now)
+    return True

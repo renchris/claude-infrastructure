@@ -294,6 +294,10 @@ def _derive(ctx: Ctx, snap: T.Snapshot, now: float) -> None:
         if settle.replaced_elsewhere(rec, snap, now):
             _event(ctx.paths, "replaced", rec.sid, rec.record_id, rec.terminal.proof)
             continue
+        if settle.replacement_unproven(rec, now):
+            _event(
+                ctx.paths, "r-unproven", rec.sid, rec.record_id, rec.last_error.detail
+            )
         settle.note_confirm(rec)
         un = settle.note_unconfirm(ctx.paths, rec, now)
         if un:
