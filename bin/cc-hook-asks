@@ -1,0 +1,586 @@
+#!/usr/bin/env python3
+"""cc-hook-asks — a read-only record of every hook "ask" (a PreToolUse hook that answered
+permissionDecision "ask", so Claude Code put a confirmation prompt in front of someone).
+
+    cc-hook-asks [DAYS] [--hook validate-bash|curl-gate|pr-gate]
+                 [--outcome ran|rejected|interrupted|auto-denied|pending|unknown]
+                 [--json] [--out PATH] [--deadline SECONDS]
+
+One row per ask: time, session, agent (main | subagent | workflow | teammate), hook, reason,
+command (curl-gate's redacted form when its log has one), outcome, seconds waited. DAYS defaults
+to 7. The table ends with a per-hook summary and a COVERAGE line that names its denominator.
+
+HOW A ROW IS BUILT — mined from stores that already exist; nothing here is captured anew
+(docs/research/hook-ask-confirmations-2026-09-28.md §1, §6, §7):
+
+  1. Transcripts (~/.claude*/projects/**/*.jsonl, subagent and workflow files included). An ask is
+     a `hook_success` attachment whose stdout carries permissionDecision "ask"; its toolUseID finds
+     the tool_use (command, agent) and the tool_result (outcome). Files are deduped by real path
+     (~/.claude-next/projects is a symlink) and rows by (tool_use_id, hook): the same ids sit in
+     2-3 account dirs.
+  2. The permission archive (~/.claude/autonomy/permission-archive/*.jsonl): a row whose
+     `cleared_tool_use_id` is the ask's id proves the prompt was SHOWN and gives `waited_s`.
+     `resolved_by=Stop` is NOT read as a refusal — for hook asks it is almost always a grant.
+  3. Hook logs, for asks the transcript does not hold (an interrupted prompt often leaves no
+     attachment): ~/.reso/curl-audit.jsonl carries tool_use_id, so it joins exactly;
+     ~/.claude/logs/validate-bash-decisions.jsonl does not, so it joins heuristically — narrow by
+     the rm/git target the reason names, fall back to session + time + "no result or rejected",
+     and when several agents asked the same thing together, assign in time order (round-4
+     leave-one-out: 1,177/1,178 right, 0 wrong). Those rows say joined=heuristic.
+
+Outcome: ran (the command produced output) · rejected (the operator said No; feedback kept) ·
+interrupted (No followed by "[Request interrupted by user") · auto-denied ("Permission to use … has
+been denied" within 2 s and no archive row — the dialog could not be shown) · pending (no result
+yet) · unknown (a log row whose transcript holds no matching call).
+
+READ-ONLY: it opens every store for reading and writes nothing, except the file named by --out.
+Synthetic rows are skipped (non-UUID or all-zero session ids; curl-gate's 2026-09-10 replay rows,
+whose tool_use_id is "unknown"). A deadline (default 120 s) bounds the scan; if it is hit the
+verdict says PARTIAL and names how many files were left unread.
+
+Environment (tests): CC_HOOK_ASKS_NOW (epoch "now"), CC_HOOK_ASKS_DEADLINE (seconds).
+"""
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import glob
+import json
+import os
+import re
+import sys
+import time
+from collections import Counter, defaultdict
+
+HOOKS = ("validate-bash", "curl-gate", "pr-gate")
+OUTCOMES = ("ran", "rejected", "interrupted", "auto-denied", "pending", "unknown")
+UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+ASK_RE = re.compile(r'"permissionDecision"\s*:\s*"ask"')
+# The ask sits JSON-escaped inside the attachment's stdout string, compact or pretty-printed.
+PREFILTER = (b'permissionDecision\\":\\"ask', b'permissionDecision\\": \\"ask')
+REJECT = "doesn't want to proceed"
+INTERRUPT = b"[Request interrupted by user"
+FULL_ATTACHMENT_VERSION = (2, 1, 260)  # older transcripts often lack hook attachments
+
+
+def parse_ts(v) -> float | None:
+    if v is None or v == "":
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    try:
+        return dt.datetime.fromisoformat(str(v).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        try:
+            return float(v)
+        except ValueError:
+            return None
+
+
+def vtuple(v) -> tuple | None:
+    m = re.match(r"(\d+)\.(\d+)\.(\d+)", v or "")
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
+def hook_name(cmd: str | None) -> str:
+    c = cmd or ""
+    for h in HOOKS:
+        if h in c:
+            return h
+    return os.path.basename(c.split()[-1]) if c.strip() else "?"
+
+
+def real_sid(sid) -> bool:
+    return bool(sid) and bool(UUID_RE.match(sid)) and not sid.startswith("00000000")
+
+
+def agent_kind(path: str, head: bytes) -> str:
+    if "/subagents/workflows/" in path:
+        return "workflow"
+    if "/subagents/" in path:
+        return "subagent"
+    if b'"agentName"' in head and b'"teamName"' in head:
+        return "teammate"
+    return "main"
+
+
+def result_text(item: dict) -> str:
+    c = item.get("content")
+    if isinstance(c, list):
+        c = " ".join(x.get("text", "") for x in c if isinstance(x, dict))
+    return str(c or "")
+
+
+class Scan:
+    def __init__(self, home: str, since: float, deadline_at: float):
+        self.home = home
+        self.since = since
+        self.deadline_at = deadline_at
+        self.partial = False
+        self.unread = 0
+        self.files_in_window = 0
+        self.files_parsed = 0
+        self.asks: dict[tuple, dict] = {}  # (tid, hook) -> ask
+        self.uses: dict[str, dict] = {}  # tid -> tool_use
+        self.results: dict[str, dict] = {}  # tid -> tool_result
+        self.parsed: set[str] = set()
+        self.by_sid: dict[str, list[str]] = defaultdict(list)  # sid -> files (main + subagents)
+
+    # -- file discovery ------------------------------------------------------------------------
+    def discover(self) -> list[str]:
+        seen, files = set(), []
+        for root in sorted(glob.glob(os.path.join(self.home, ".claude*", "projects"))):
+            for dp, _dn, fn in os.walk(root, followlinks=True):
+                for f in fn:
+                    if not f.endswith(".jsonl"):
+                        continue
+                    p = os.path.realpath(os.path.join(dp, f))
+                    if p in seen:
+                        continue
+                    seen.add(p)
+                    try:
+                        if os.path.getmtime(p) < self.since:
+                            continue
+                    except OSError:
+                        continue
+                    files.append(p)
+                    sid = self.sid_of(p)
+                    if sid:
+                        self.by_sid[sid].append(p)
+        files.sort(key=lambda p: -os.path.getmtime(p))  # newest first: a deadline keeps recent data
+        self.files_in_window = len(files)
+        return files
+
+    @staticmethod
+    def sid_of(p: str) -> str | None:
+        parts = p.split(os.sep)
+        if "subagents" in parts:
+            return parts[parts.index("subagents") - 1]
+        base = os.path.basename(p)[:-6]
+        return base if UUID_RE.match(base) else None
+
+    def prefilter(self, files: list[str]) -> list[str]:
+        """The files that can hold an ask attachment (~7% of them); only those are parsed.
+        An in-process byte search, not `grep -l`: measured over 3,174 files / 4.4 GB, 4 s here
+        against 39 s for /usr/bin/grep -E and 77 s for grep -F with two patterns."""
+        hits: list[str] = []
+        for i, p in enumerate(files):
+            if time.time() > self.deadline_at:
+                self.partial = True
+                self.unread += len(files) - i
+                break
+            try:
+                with open(p, "rb") as fh:
+                    b = fh.read()
+            except OSError:
+                continue
+            if any(x in b for x in PREFILTER):
+                hits.append(p)
+        return hits
+
+    # -- parsing -------------------------------------------------------------------------------
+    def parse(self, p: str) -> None:
+        if p in self.parsed:
+            return
+        if time.time() > self.deadline_at:
+            self.partial = True
+            self.unread += 1
+            return
+        self.parsed.add(p)
+        try:
+            with open(p, "rb") as fh:
+                b = fh.read()
+        except OSError:
+            return
+        self.files_parsed += 1
+        kind = agent_kind(p, b[:8000])
+        lines = b.split(b"\n")
+        for i, line in enumerate(lines):
+            if not line:
+                continue
+            has_att = b"hook_success" in line
+            has_use = b'"tool_use"' in line
+            has_res = b"tool_result" in line
+            if not (has_att or has_use or has_res):
+                continue
+            try:
+                o = json.loads(line)
+            except ValueError:
+                continue
+            a = o.get("attachment") if isinstance(o.get("attachment"), dict) else {}
+            if a.get("type") == "hook_success":
+                self._ask(o, a, p, kind)
+                continue
+            content = (o.get("message") or {}).get("content")
+            if not isinstance(content, list):
+                continue
+            for it in content:
+                if not isinstance(it, dict):
+                    continue
+                if it.get("type") == "tool_use" and it.get("id") and it["id"] not in self.uses:
+                    inp = it.get("input") if isinstance(it.get("input"), dict) else {}
+                    self.uses[it["id"]] = dict(
+                        ts=parse_ts(o.get("timestamp")),
+                        sid=o.get("sessionId"),
+                        agent=kind,
+                        agent_id=o.get("agentId"),
+                        name=it.get("name"),
+                        cmd=str(inp.get("command") or ""),
+                        version=o.get("version"),
+                        file=p,
+                    )
+                elif it.get("type") == "tool_result" and it.get("tool_use_id"):
+                    nxt = b" ".join(lines[i + 1 : i + 4])
+                    self.results.setdefault(
+                        it["tool_use_id"],
+                        dict(
+                            ts=parse_ts(o.get("timestamp")),
+                            text=result_text(it),
+                            is_error=bool(it.get("is_error")),
+                            interrupt=INTERRUPT in nxt,
+                        ),
+                    )
+
+    def _ask(self, o: dict, a: dict, p: str, kind: str) -> None:
+        so = a.get("stdout") or ""
+        if not ASK_RE.search(so):
+            return
+        reason = ""
+        try:
+            hso = json.loads(so).get("hookSpecificOutput") or {}
+            if hso.get("permissionDecision") != "ask":
+                return
+            reason = str(hso.get("permissionDecisionReason") or "")
+        except (ValueError, AttributeError):
+            m = re.search(r'permissionDecisionReason"\s*:\s*"((?:[^"\\]|\\.)*)', so)
+            reason = m.group(1) if m else ""
+        tid = a.get("toolUseID")
+        hook = hook_name(a.get("command") or a.get("hookName"))
+        if not tid or (tid, hook) in self.asks:
+            return
+        self.asks[(tid, hook)] = dict(
+            tid=tid,
+            hook=hook,
+            reason=reason,
+            ts=parse_ts(o.get("timestamp")),
+            sid=o.get("sessionId"),
+            agent=kind,
+            version=o.get("version"),
+            file=p,
+        )
+
+    def session(self, sid: str, earliest: float) -> None:
+        """Parse a session's files (main + subagents) that were still being written at `earliest`."""
+        for p in self.by_sid.get(sid, []):
+            try:
+                if os.path.getmtime(p) < earliest:
+                    continue
+            except OSError:
+                continue
+            self.parse(p)
+
+
+# -- stores other than transcripts ---------------------------------------------------------------
+def read_jsonl(path: str):
+    try:
+        fh = open(path, encoding="utf-8", errors="replace")
+    except OSError:
+        return
+    with fh:
+        for ln in fh:
+            try:
+                o = json.loads(ln)
+            except ValueError:
+                continue
+            if isinstance(o, dict):
+                yield o
+
+
+def load_archive(home: str) -> dict[str, dict]:
+    out: dict[str, dict] = {}
+    for f in sorted(glob.glob(os.path.join(home, ".claude", "autonomy", "permission-archive", "*.jsonl"))):
+        for o in read_jsonl(f):
+            tid = o.get("cleared_tool_use_id")
+            if tid and tid not in out:
+                out[tid] = o
+    return out
+
+
+def load_logs(home: str, since: float, until: float):
+    """Hook-log ask rows, synthetic rows dropped. Returns (vb_rows, curl_rows, skipped)."""
+    vb, curl, skipped = [], [], 0
+    for o in read_jsonl(os.path.join(home, ".claude", "logs", "validate-bash-decisions.jsonl")):
+        if o.get("decision") != "ask":
+            continue
+        t = parse_ts(o.get("ts"))
+        if t is None or not (since <= t <= until):
+            continue
+        if not real_sid(o.get("sid")):
+            skipped += 1
+            continue
+        vb.append(dict(ts=t, sid=o["sid"], reason=str(o.get("reason") or ""), hook="validate-bash"))
+    for o in read_jsonl(os.path.join(home, ".reso", "curl-audit.jsonl")):
+        if o.get("decision") != "ask":
+            continue
+        t = parse_ts(o.get("ts"))
+        if t is None or not (since <= t <= until):
+            continue
+        sid, tid = o.get("session_id"), o.get("tool_use_id")
+        if not real_sid(sid) or tid in (None, "", "unknown"):
+            skipped += 1  # the 2026-09-10 replay rows carry tool_use_id "unknown"
+            continue
+        curl.append(
+            dict(ts=t, sid=sid, tid=tid, reason=str(o.get("reason") or ""),
+                 cmd=o.get("cmd_redacted"), hook="curl-gate")
+        )
+    return vb, curl, skipped
+
+
+def target_of(reason: str) -> str | None:
+    m = re.search(r"target: '(.*)'\. Verify", reason)
+    if m:
+        return m.group(1).strip("\"'`")
+    for k in ("stash drop", "reset --hard", "clean -", "git restore"):
+        if k in reason:
+            return k.split()[-1] if k == "reset --hard" else k.rstrip(" -")
+    return None
+
+
+def norm(s: str) -> str:
+    return s.replace('\\"', '"').replace("\\\\", "\\")
+
+
+# -- outcome -------------------------------------------------------------------------------------
+def outcome_of(ask_ts, res, arch) -> tuple[str, str | None]:
+    if res is None:
+        return "pending", None
+    text = res["text"]
+    if text.startswith("Permission to use") and "has been denied" in text[-400:]:
+        quick = res["ts"] is not None and ask_ts is not None and res["ts"] - ask_ts <= 2.0
+        return ("auto-denied" if quick and arch is None else "rejected"), None
+    if REJECT in text[:400]:
+        fb = None
+        m = re.search(r"the user said:\s*(.+)", text, re.S)
+        if m:
+            fb = m.group(1).strip()[:300]
+        return ("interrupted" if res["interrupt"] else "rejected"), fb
+    return "ran", None
+
+
+def build_row(ask: dict, use: dict | None, res: dict | None, arch: dict | None,
+              joined: str, curl_cmd: dict[str, str]) -> dict:
+    # Timed from the hook's own attachment/log row, never the tool_use: an assistant message carrying
+    # several calls is stamped once, and the hook for a later call can fire minutes after it.
+    outcome, feedback = outcome_of(ask["ts"], res, arch)
+    if use is None and joined != "transcript":
+        outcome = "unknown"
+    waited = None
+    if arch is not None and arch.get("waited_s") is not None:
+        waited = arch.get("waited_s")
+    elif res and res.get("ts") is not None and ask.get("ts") is not None:
+        waited = round(max(0.0, res["ts"] - ask["ts"]), 1)
+    cmd = curl_cmd.get(ask["tid"]) if ask.get("tid") and ask["hook"] == "curl-gate" else None
+    cmd = cmd or (use or {}).get("cmd") or ask.get("cmd") or ""
+    version = (use or {}).get("version") or ask.get("version")
+    vt = vtuple(version)
+    coverage = "partial" if (vt is not None and vt < FULL_ATTACHMENT_VERSION) or use is None else "full"
+    shown = "yes" if arch is not None else ("no" if outcome == "auto-denied" else "?")
+    return dict(
+        ts=ask["ts"],
+        time=dt.datetime.fromtimestamp(ask["ts"]).strftime("%Y-%m-%d %H:%M:%S") if ask["ts"] else "",
+        session=ask.get("sid") or (use or {}).get("sid"),
+        agent=(use or {}).get("agent") or ask.get("agent") or "?",
+        agent_id=(use or {}).get("agent_id"),
+        hook=ask["hook"],
+        reason=norm(ask.get("reason") or ""),
+        command=cmd,
+        outcome=outcome,
+        feedback=feedback,
+        waited_s=waited,
+        shown=shown,
+        tool_use_id=ask.get("tid"),
+        joined=joined,
+        coverage=coverage,
+        version=version,
+    )
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(prog="cc-hook-asks", description=__doc__.split("\n\n")[0])
+    ap.add_argument("days", nargs="?", type=float, default=7.0)
+    ap.add_argument("--hook", choices=HOOKS)
+    ap.add_argument("--outcome", choices=OUTCOMES)
+    ap.add_argument("--json", action="store_true", help="one JSON object per row, then a summary object")
+    ap.add_argument("--out", help="also write the JSON rows to this path (the only write it makes)")
+    ap.add_argument("--deadline", type=float, default=float(os.environ.get("CC_HOOK_ASKS_DEADLINE", "120")))
+    args = ap.parse_args(argv)
+
+    home = os.path.expanduser("~")
+    now = float(os.environ.get("CC_HOOK_ASKS_NOW") or time.time())
+    since = now - args.days * 86400
+    scan = Scan(home, since, time.time() + args.deadline)
+
+    files = scan.discover()
+    for p in scan.prefilter(files):
+        scan.parse(p)
+    archive = load_archive(home)
+    vb_log, curl_log, skipped = load_logs(home, since, now)
+
+    # validate-bash log: rows that no transcript attachment accounts for, then the heuristic join.
+    att = defaultdict(list)
+    for (tid, hook), a in scan.asks.items():
+        if hook == "validate-bash" and a["ts"] is not None:
+            att[a["sid"]].append([a["ts"], norm(a["reason"])[:60], tid, False])
+    orphans = []
+    for r in sorted(vb_log, key=lambda r: r["ts"]):
+        best = None
+        for cand in att.get(r["sid"], []):
+            if cand[3] or cand[1] != norm(r["reason"])[:60] or not (-5 <= cand[0] - r["ts"] <= 15):
+                continue
+            if best is None or abs(cand[0] - r["ts"]) < abs(best[0] - r["ts"]):
+                best = cand
+        if best is not None:
+            best[3] = True
+        else:
+            orphans.append(r)
+
+    # Only the sessions holding a log row that no attachment accounts for need a full parse: an
+    # interrupted ask can leave no attachment, so its tool_use sits in a file the prefilter skipped.
+    need: dict[str, float] = {}
+    for r in orphans + [c for c in curl_log if (c["tid"], "curl-gate") not in scan.asks]:
+        need[r["sid"]] = min(need.get(r["sid"], r["ts"]), r["ts"] - 120)
+    for sid, earliest in sorted(need.items()):
+        scan.session(sid, earliest)
+
+    curl_cmd = {r["tid"]: r["cmd"] for r in curl_log if r.get("cmd")}
+    rows: list[dict] = []
+    for (tid, _hook), ask in scan.asks.items():
+        if ask["ts"] is None or not (since <= ask["ts"] <= now):
+            continue
+        rows.append(build_row(ask, scan.uses.get(tid), scan.results.get(tid), archive.get(tid),
+                              "transcript", curl_cmd))
+
+    have = {(r["tool_use_id"], r["hook"]) for r in rows}
+    # curl-gate log: exact by tool_use_id.
+    for c in curl_log:
+        if (c["tid"], "curl-gate") in have:
+            continue
+        have.add((c["tid"], "curl-gate"))
+        use = scan.uses.get(c["tid"])
+        rows.append(build_row(dict(c), use, scan.results.get(c["tid"]), archive.get(c["tid"]),
+                              "log-exact" if use else "none", curl_cmd))
+
+    claimed = {tid for (tid, hook) in scan.asks if hook == "validate-bash"}
+
+    def unresolved(tid):
+        res = scan.results.get(tid)
+        return res is None or REJECT in res["text"][:400]
+
+    uses_by_sid = defaultdict(list)
+    for tid, u in scan.uses.items():
+        if u["name"] == "Bash" and u["ts"] is not None:
+            uses_by_sid[u["sid"]].append((tid, u))
+
+    def candidates(r, use_key):
+        key = target_of(norm(r["reason"])) if use_key else None
+        out = []
+        for tid, u in uses_by_sid.get(r["sid"], []):
+            if not (-3 <= r["ts"] - u["ts"] <= 60) or tid in claimed or not unresolved(tid):
+                continue
+            if key and key not in u["cmd"]:
+                continue
+            out.append(tid)
+        return out
+
+    cand_sets = []
+    for r in orphans:
+        cs = candidates(r, True) or candidates(r, False)
+        cand_sets.append((r, cs))
+    # Order-preserving assignment: log rows in time order take the earliest free candidate, so
+    # a batch of same-reason asks from different agents is matched in the order it was asked.
+    taken: set[str] = set()
+    for r, cs in cand_sets:
+        pick = next((t for t in sorted(cs, key=lambda t: scan.uses[t]["ts"]) if t not in taken), None)
+        ask = dict(r, tid=pick, agent="?")
+        if pick:
+            taken.add(pick)
+            rows.append(build_row(ask, scan.uses[pick], scan.results.get(pick), archive.get(pick),
+                                  "heuristic", curl_cmd))
+        else:
+            rows.append(build_row(ask, None, None, None, "none", curl_cmd))
+
+    rows.sort(key=lambda r: r["ts"] or 0)
+    total_all = len(rows)
+    if args.hook:
+        rows = [r for r in rows if r["hook"] == args.hook]
+    if args.outcome:
+        rows = [r for r in rows if r["outcome"] == args.outcome]
+
+    by_hook = Counter(r["hook"] for r in rows)
+    by_out = defaultdict(Counter)
+    for r in rows:
+        by_out[r["hook"]][r["outcome"]] += 1
+    joined = Counter(r["joined"] for r in rows)
+    partial_rows = sum(1 for r in rows if r["coverage"] == "partial")
+    verdict = "PARTIAL" if scan.partial else "COMPLETE"
+    summary = dict(
+        verdict=verdict,
+        days=args.days,
+        rows=len(rows),
+        rows_before_filters=total_all,
+        by_hook=dict(by_hook),
+        by_outcome={h: dict(c) for h, c in by_out.items()},
+        joined=dict(joined),
+        coverage_partial=partial_rows,
+        files_in_window=scan.files_in_window,
+        files_parsed=scan.files_parsed,
+        files_unread=scan.unread,
+        synthetic_skipped=skipped,
+    )
+
+    if args.out:
+        with open(args.out, "w", encoding="utf-8") as fh:
+            for r in rows:
+                fh.write(json.dumps(r) + "\n")
+
+    if args.json:
+        for r in rows:
+            print(json.dumps(r))
+        print(json.dumps(dict(summary=summary)))
+        return 0
+
+    def cut(s, n):
+        s = " ".join(str(s or "").split())
+        return s if len(s) <= n else s[: n - 1] + "…"
+
+    print(f"{'time':19}  {'session':8}  {'agent':9}  {'hook':13}  {'outcome':11}  {'wait_s':>7}  reason  │  command")
+    for r in rows:
+        w = "" if r["waited_s"] is None else f"{r['waited_s']:.0f}"
+        mark = "~" if r["joined"] == "heuristic" else ("?" if r["joined"] == "none" else " ")
+        print(f"{r['time']:19}  {(r['session'] or '')[:8]:8}  {r['agent']:9}  {r['hook']:13}  "
+              f"{r['outcome']:11}  {w:>7}{mark} {cut(r['reason'], 60)}  │  {cut(r['command'], 70)}")
+    print()
+    for h in sorted(by_hook, key=lambda h: -by_hook[h]):
+        parts = " · ".join(f"{k} {v}" for k, v in sorted(by_out[h].items(), key=lambda kv: -kv[1]))
+        print(f"{h}: {by_hook[h]} asks — {parts}")
+    if not rows:
+        print("no hook asks in the window")
+    print(
+        f"coverage: {len(rows)} asks over {args.days:g} days · from transcripts {joined.get('transcript', 0)}"
+        f" · curl log exact {joined.get('log-exact', 0)} · heuristic (~) {joined.get('heuristic', 0)}"
+        f" · unjoined (?) {joined.get('none', 0)} · coverage=partial {partial_rows}"
+        f" (pre-2.1.260 transcript or no transcript) · synthetic skipped {skipped}"
+        f" · files {scan.files_parsed} parsed of {scan.files_in_window} in window"
+    )
+    if scan.partial:
+        print(f"verdict: PARTIAL — deadline {args.deadline:g}s hit, {scan.unread} file(s) unread")
+    else:
+        print("verdict: COMPLETE")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except BrokenPipeError:
+        sys.exit(0)
