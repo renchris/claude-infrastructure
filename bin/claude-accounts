@@ -94,6 +94,12 @@ Usage:
       TTL walk DOWN the ranking instead of stacking on rank[0]. Pure ledger append — never
       sweeps, never blocks a fire (callers `|| true`). Unknown account exits 64: a misspelled
       charge must never be a silent no-op the caller believes spread the load.
+      v2 (lr-reconciler), all optional: --id ID (rows sharing an id charge ONCE, newest wins)
+      --sid S (not charged once the account's census counts that session) --w N (weight,
+      default 1) --ttl-s T (this row's lifetime; default ASSIGN_TTL_MIN). Bad value exits 64.
+  claude-accounts --assign-many FILE  JSONL of {acct,id,sid,w,ttl_s}: every line validated
+      first (one bad line ⇒ exit 64, nothing written), then ONE locked append, one shared t.
+  claude-accounts --unassign ID       append {t,ts,void:ID}: that id stops charging at once.
       Both print the EXCLUDED accounts and why on stderr, on every invocation — a winner is
       "best of what we could see", and a transient throttle silently removes a candidate.
       Exit: 0 routable · 2 data was fine but nothing routable by POLICY (exhausted / 5h
@@ -151,6 +157,8 @@ Usage:
       never sweep, never heal. This is the interactive-launcher contract: without it a launch can
       inherit the sweeper's tail, whose documented worst case is minutes and whose floor behind a
       wedged holder is 240s then exit 5. Composes with --route/--rank/--json.
+      `--max-wait N` (N>0) is a REAL bound: a cache inside TTL is served; else the lock is tried
+      until N, a miss serves the grace cache or exits 3, and a won sweep past N exits 3.
   claude-accounts --max-age S         staleness ceiling for a served cache (default cache_ttl_s).
       600 is free by measurement: at <=10 min staleness the stale pick is now-excluded in 0.8% of
       pairs (median score-ratio 1.000), and across 931 recorded routing decisions the grace band
@@ -591,10 +599,16 @@ class _Census(dict):
     caller and every test stub already uses, while collect() can read one more number off the
     same pass: `headless` (live `claude -p` processes) and `top` (top-level transcripts, the
     subset of the walk's total that is one-per-session). A stub returning a plain dict carries
-    neither, and collect() then applies no bound — the pre-bound behaviour exactly."""
+    neither, and collect() then applies no bound — the pre-bound behaviour exactly.
+
+    `sids` ({acct: set of top-level transcript stems}) and `at` (the walk's wall-clock start) name
+    WHICH sessions the census counted, so apply_assignments can refuse to charge a phantom for a
+    session the sweep already counts in k_work. Default empty/None: a stub skips nothing."""
 
     def __init__(self, counts, **extra):
         super().__init__(counts)
+        self.sids = {}
+        self.at = None
         for k, v in extra.items():
             setattr(self, k, v)
 
@@ -787,6 +801,7 @@ def working_concurrency(cfg, window_min=None, budget_s=None):
     scanned = 0
     counts = {a["name"]: 0 for a in cfg["accounts"]}
     top = {a["name"]: 0 for a in cfg["accounts"]}
+    sids = {a["name"]: set() for a in cfg["accounts"]}
     by_dir = {a["config_dir"].rstrip("/"): a["name"] for a in cfg["accounts"]}
     mirror_next = next((a["name"] for a in cfg["accounts"]
                         if a["config_dir"].rstrip("/").endswith(".claude-next")), None)
@@ -842,6 +857,7 @@ def working_concurrency(cfg, window_min=None, budget_s=None):
                                     counts[name] += 1
                                     if wroot == slug.path:
                                         top[name] += 1
+                                        sids[name].add(fname[:-len(".jsonl")])
                             except OSError:
                                 continue
                 except OSError:
@@ -853,7 +869,7 @@ def working_concurrency(cfg, window_min=None, budget_s=None):
         log_event(f"working_concurrency: walk aborted by {type(e).__name__}: {e} — k_work "
                   "UNMEASURED for this sweep, router charges the pane census")
         return None
-    return _Census(counts, top=top)
+    return _Census(counts, top=top, sids=sids, at=now)
 
 
 # ---- usage endpoint (urllib in-process: no tokens in argv/ps) ---------------------------------
@@ -1851,6 +1867,11 @@ def collect(cfg, no_heal=False, prev=None):
         # not measure, so k_eff's census fallback — not a fabricated 0 — is what cached rows
         # replay for the TTL.
         row["k_work"] = wcounts.get(acct["name"]) if wcounts is not None else None
+        # WHICH sessions k_work counted, and when — apply_assignments' double-charge guard. Rides
+        # the cached row like k_work does, so a cache replay skips exactly what this sweep saw.
+        row["k_sids"] = (sorted(getattr(wcounts, "sids", {}).get(acct["name"], ()))
+                         if wcounts is not None else None)
+        row["k_sids_at"] = getattr(wcounts, "at", None) if wcounts is not None else None
         bound_kwork(row, acct["name"], counts, wcounts)
         # HERE, not at the probe's k_live argument, and that placement is the safety property:
         # heal()'s rotation gate reads the argument and must keep seeing None (inherit_k's
@@ -2360,7 +2381,11 @@ def k_eff_desk(r):
 def _assignment_rows(path=None):
     """Every parseable assignment row, oldest first. One read, two readings (all-srcs for the
     dispatch lanes, launcher-exempt for the desk) — a second open() would race the appender and
-    could hand the two lanes different ledgers for the same decision."""
+    could hand the two lanes different ledgers for the same decision.
+
+    Two row shapes: a CHARGE ({t, acct, ...}) and a VOID ({t, void: id}, `--unassign`). Voids are
+    returned too — a void is only meaningful against the whole ledger — so every consumer must
+    skip rows without `acct`."""
     out = []
     try:
         with open(path or ASSIGN_PATH) as f:
@@ -2369,29 +2394,62 @@ def _assignment_rows(path=None):
                     e = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if isinstance(e, dict) and isinstance(e.get("t"), (int, float)) and e.get("acct"):
+                if isinstance(e, dict) and isinstance(e.get("t"), (int, float)) and (
+                        e.get("acct") or isinstance(e.get("void"), str)):
                     out.append(e)
     except OSError:
         pass
     return out
 
 
-def assignment_counts(cfg, path=None, now=None, exempt_src=()):
-    """Live per-account count of assignments younger than the TTL. Read at INVOCATION time, not
-    sweep time — acting inside the 90s cache TTL is this term's entire purpose. A malformed line
-    or missing ledger is silence, never an error: spread is advisory.
+def assignment_counts(cfg, path=None, now=None, exempt_src=(), sweep=None):
+    """Live per-account WEIGHTED count of assignments younger than their TTL. Read at INVOCATION
+    time, not sweep time — acting inside the 90s cache TTL is this term's entire purpose. A
+    malformed line or missing ledger is silence, never an error: spread is advisory.
 
     `exempt_src` drops rows by their `--src` (W1.5) — used only by the desk lane; the default is
-    empty, so general/fable charging is byte-identical to pre-W1."""
+    empty, so general/fable charging is byte-identical to pre-W1.
+
+    The v2 ledger (lr-reconciler) adds four optional row fields, and each rule exists so a
+    reconciler can RE-PLAN without inflating the charge: `w` weights a row (default 1 — one
+    session); an `id` with ANY void row anywhere in the ledger charges nothing (a cancelled plan
+    must stop repelling routing at once, not after its TTL); rows sharing an `id` charge ONCE, the
+    newest winning (a re-plan replaces, never stacks); `ttl_s` bounds that row's own age, and a row
+    without it keeps ASSIGN_TTL_MIN. A ledger holding no v2 fields reads exactly as before.
+
+    `sweep` ({acct: (sids, sids_at)}, from the rows' k_sids/k_sids_at) drops a row whose `sid`
+    the same account's census already counted in k_work AFTER the row was written — the session
+    is live on disk, so charging its phantom too would count it twice."""
     counts = {}
     if not _term_on("CC_ROUTE_ASSIGN"):
         return counts
     ttl_s = 60.0 * _cliff_env("CC_ROUTE_ASSIGN_TTL_MIN",
                               cfg["router"].get("ASSIGN_TTL_MIN", ASSIGN_TTL_MIN))
     now = time.time() if now is None else now
-    for e in _assignment_rows(path):
-        if 0 <= now - e["t"] <= ttl_s and e.get("src") not in exempt_src:
-            counts[e["acct"]] = counts.get(e["acct"], 0) + 1
+    rows = _assignment_rows(path)
+    voided = {e["void"] for e in rows if isinstance(e.get("void"), str)}
+    live, newest = [], {}
+    for e in rows:
+        if not e.get("acct"):
+            continue
+        i = e.get("id")
+        if i is None:
+            live.append(e)
+        elif i not in voided and (i not in newest or e["t"] >= newest[i]["t"]):
+            newest[i] = e
+    for e in live + list(newest.values()):
+        t_ttl = e.get("ttl_s")
+        if isinstance(t_ttl, bool) or not isinstance(t_ttl, (int, float)) or not t_ttl > 0:
+            t_ttl = ttl_s
+        if not 0 <= now - e["t"] <= t_ttl or e.get("src") in exempt_src:
+            continue
+        sid, seen = e.get("sid"), (sweep or {}).get(e["acct"])
+        if sid and seen and seen[1] is not None and seen[1] > e["t"] and sid in seen[0]:
+            continue
+        w = e.get("w")
+        if isinstance(w, bool) or not isinstance(w, int) or w < 1:
+            w = 1
+        counts[e["acct"]] = counts.get(e["acct"], 0) + w
     return counts
 
 
@@ -2414,7 +2472,7 @@ def desk_incumbent(cfg, path=None, now=None):
     now = time.time() if now is None else now
     best = None
     for e in _assignment_rows(path):
-        if e.get("src") not in DESK_EXEMPT_SRC:
+        if not e.get("acct") or e.get("src") not in DESK_EXEMPT_SRC:
             continue
         if not 0 <= now - e["t"] <= ttl_s:
             continue
@@ -2423,33 +2481,115 @@ def desk_incumbent(cfg, path=None, now=None):
     return best["acct"] if best else None
 
 
-def record_assignment(cfg, acct, src=None, path=None):
+_ASSIGN_ID_RE = re.compile(r"[A-Za-z0-9:._-]+")
+_ASSIGN_MANY_KEYS = ("acct", "id", "sid", "w", "ttl_s")
+
+
+def assignment_row(cfg, acct, src=None, id=None, sid=None, w=None, ttl_s=None, t=None):
+    """Build one validated charge row, or raise ValueError (the CLI's exit 64). A row carries only
+    the fields GIVEN, in {t, ts, acct[, src][, id][, sid][, w][, ttl_s]} order, so a legacy
+    `--assign next --src X` stays byte-identical to the pre-v2 row. The account name is NOT
+    checked here: record_assignment never checked it (its caller does), and pinned tests rely on
+    that; parse_assign_many checks it itself."""
+    for k, v in (("id", id), ("sid", sid)):
+        if v is not None and not (isinstance(v, str) and _ASSIGN_ID_RE.fullmatch(v)):
+            raise ValueError(f"{k} must match [A-Za-z0-9:._-]+ (got {v!r})")
+    if w is not None and (isinstance(w, bool) or not isinstance(w, int) or w < 1):
+        raise ValueError(f"w must be a positive integer (got {w!r})")
+    if ttl_s is not None and (isinstance(ttl_s, bool) or not isinstance(ttl_s, (int, float))
+                              or not math.isfinite(ttl_s) or ttl_s <= 0):
+        raise ValueError(f"ttl_s must be a positive number (got {ttl_s!r})")
+    t = time.time() if t is None else t
+    row = {"t": t, "ts": datetime.fromtimestamp(t, timezone.utc).isoformat(), "acct": acct}
+    for k, v in (("src", src), ("id", id), ("sid", sid), ("w", w), ("ttl_s", ttl_s)):
+        if v is not None and (k != "src" or v):
+            row[k] = v
+    return row
+
+
+def append_assignments(rows, path=None):
+    """Append rows in ONE write under ONE exclusive flock on `<ledger>.lock`, and prune inside the
+    same hold. -> error string or None. The prune used to run unlocked after the append — "worst
+    case one phantom is lost" — which was tolerable for a lone handoff-fire append and is not for
+    a reconciler whose void or batched re-plan the unlocked rewrite could silently drop. Readers
+    stay lockless: the prune swaps the file by os.replace, so a reader sees old or new, whole."""
+    path = path or ASSIGN_PATH
+    if not rows:
+        return None
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path + ".lock", "a") as lock:
+            # BOUNDED, like every flock in this file: a hold is one append plus a <=400-line
+            # rewrite (milliseconds), so 5 s only ever expires behind a wedged holder — and then
+            # the caller gets exit 5, never a fire stalled on the ledger.
+            deadline = time.monotonic() + 5.0
+            while True:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        return f"assign append failed: {path}.lock held for 5s"
+                    time.sleep(0.02)
+            with open(path, "a") as f:
+                f.write("".join(json.dumps(r, separators=(",", ":")) + "\n" for r in rows))
+            try:
+                with open(path) as f:
+                    lines = f.readlines()
+                if len(lines) > ASSIGN_PRUNE_LINES:
+                    tmp = path + f".{os.getpid()}.tmp"
+                    with open(tmp, "w") as f:
+                        f.writelines(lines[-(ASSIGN_PRUNE_LINES // 2):])
+                    os.replace(tmp, path)
+            except OSError:
+                pass
+    except OSError as e:
+        return f"assign append failed: {e}"
+    return None
+
+
+def record_assignment(cfg, acct, src=None, path=None, *, id=None, sid=None, w=None, ttl_s=None):
     """Append one fire-time assignment — called by the consumer that COMMITS to launching a NEW
     session on the account (handoff-fire, post-pick). Returns an error string or None; the
     caller decides fatality (handoff-fire deliberately does not care — a lost append degrades
-    spread by one phantom for one TTL, never a fire). The prune races a concurrent append
-    unlocked, same trade record_utilization already made: worst case one phantom is lost."""
-    path = path or ASSIGN_PATH
-    row = {"t": time.time(), "ts": datetime.now(timezone.utc).isoformat(), "acct": acct}
-    if src:
-        row["src"] = src
-    try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "a") as f:
-            f.write(json.dumps(row, separators=(",", ":")) + "\n")
-    except OSError as e:
-        return f"assign append failed: {e}"
-    try:
-        with open(path) as f:
-            lines = f.readlines()
-        if len(lines) > ASSIGN_PRUNE_LINES:
-            tmp = path + f".{os.getpid()}.tmp"
-            with open(tmp, "w") as f:
-                f.writelines(lines[-(ASSIGN_PRUNE_LINES // 2):])
-            os.replace(tmp, path)
-    except OSError:
-        pass
-    return None
+    spread by one phantom for one TTL, never a fire). Raises ValueError on an invalid v2 field
+    (id/sid/w/ttl_s) — a malformed charge is a usage error, not a lost append."""
+    return append_assignments([assignment_row(cfg, acct, src, id=id, sid=sid, w=w, ttl_s=ttl_s)],
+                              path)
+
+
+def record_void(assign_id, path=None):
+    """Append {t, ts, void: id} — `--unassign`. Idempotent: assignment_counts treats ANY void for
+    an id as final, so a repeat changes nothing. Raises ValueError on a malformed id."""
+    if not (isinstance(assign_id, str) and _ASSIGN_ID_RE.fullmatch(assign_id)):
+        raise ValueError(f"id must match [A-Za-z0-9:._-]+ (got {assign_id!r})")
+    t = time.time()
+    return append_assignments([{"t": t, "ts": datetime.fromtimestamp(t, timezone.utc).isoformat(),
+                                "void": assign_id}], path)
+
+
+def parse_assign_many(cfg, text):
+    """Validate EVERY line of an --assign-many JSONL before anything is written -> [row], all
+    sharing one t/ts. Raises ValueError naming the first bad line: all-or-nothing, because a
+    half-applied re-plan is a charge the reconciler never meant to make."""
+    t, out = time.time(), []
+    for n, line in enumerate(text.splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            o = json.loads(line)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"line {n}: not JSON ({e})")
+        if not isinstance(o, dict) or set(o) - set(_ASSIGN_MANY_KEYS):
+            raise ValueError(f"line {n}: want an object with keys ⊆ {_ASSIGN_MANY_KEYS}")
+        if o.get("acct") not in {x["name"] for x in cfg["accounts"]}:
+            raise ValueError(f"line {n}: unknown account {o.get('acct')!r}")
+        try:
+            out.append(assignment_row(cfg, o.get("acct"), id=o.get("id"), sid=o.get("sid"),
+                                      w=o.get("w"), ttl_s=o.get("ttl_s"), t=t))
+        except ValueError as e:
+            raise ValueError(f"line {n}: {e}")
+    return out
 
 
 def _route_records_path():
@@ -2526,8 +2666,13 @@ def apply_assignments(rows, cfg):
     (W1.4). The desk facts are stamped HERE, beside the phantom count, rather than read inside
     score_interactive, because a scorer runs once per row and would otherwise re-read the ledger
     four times per decision and could see it change mid-ranking."""
-    counts = assignment_counts(cfg)
-    desk_counts = assignment_counts(cfg, exempt_src=DESK_EXEMPT_SRC)
+    # A row whose sweep named its sessions (k_sids, as of k_sids_at) lends that list to the
+    # ledger read, so a phantom with a `sid` the SAME account's census already counts is not
+    # charged a second time. Rows without k_sids_at (walk unmeasured, stub) skip nothing.
+    sweep = {r.get("acct"): (set(r.get("k_sids") or ()), r.get("k_sids_at"))
+             for r in rows if r.get("k_sids_at") is not None}
+    counts = assignment_counts(cfg, sweep=sweep)
+    desk_counts = assignment_counts(cfg, exempt_src=DESK_EXEMPT_SRC, sweep=sweep)
     inc = desk_incumbent(cfg)
     for r in rows:
         r["k_phantom"] = counts.get(r.get("acct"), 0)
@@ -4348,7 +4493,49 @@ def _acquire_lock(lock, cfg, allow_degrade):
             time.sleep(0.15)
 
 
+def _acquire_lock_until(lock, deadline):
+    """Non-blocking attempts on the single-flight lock until a monotonic deadline -> held?
+    The --max-wait N>0 path: a caller that named a wall-clock bound waits for NOTHING past it."""
+    while True:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except BlockingIOError:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return False
+            time.sleep(min(0.1, left))
+
+
+def _arm_sweep_bound(deadline):
+    """Bound the sweep by the time --max-wait has left -> a disarm callable (no-op when unbounded).
+
+    A timer, not an exception: the sweep blocks on worker threads (probes, the census walk, a heal
+    subprocess), and an exception raised into the main thread would sit in the executor's join —
+    the very tail --max-wait exists to refuse. On expiry the handler writes ONE stderr line and
+    exits 3 (data unavailable) at once; the flock dies with the process, no cache is written.
+    Signals exist only on the main thread, so any other caller runs unbounded, as before."""
+    if deadline is None or threading.current_thread() is not threading.main_thread():
+        return lambda: None
+
+    def _expire(_sig, _frm):
+        os.write(2, b"claude-accounts: --max-wait expired mid-sweep; no answer (exit 3)\n")
+        os._exit(3)
+
+    old = signal.signal(signal.SIGALRM, _expire)
+    signal.setitimer(signal.ITIMER_REAL, max(deadline - time.monotonic(), 0.01))
+
+    def _disarm():
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, old)
+    return _disarm
+
+
 def get_data(cfg, fresh=False, no_heal=False, max_wait=None, max_age=None):
+    # --max-wait N>0 is a REAL wall-clock bound from here (it used to be parsed and ignored):
+    # a cache inside TTL is served as always; otherwise the lock is tried only until the deadline,
+    # a miss serves the grace cache or abstains (exit 3), and a won lock sweeps under a timer.
+    deadline = (time.monotonic() + max_wait) if max_wait is not None and max_wait > 0 else None
     if not fresh:
         c = cache_read(cfg, want_heal=not no_heal, grace_s=max_age)
         if c:
@@ -4369,7 +4556,16 @@ def get_data(cfg, fresh=False, no_heal=False, max_wait=None, max_age=None):
         # fetch_usage retry ladders) — and a bare blocking flock made every other caller
         # (statuslines, cc-board, a handoff wave) wait it out with no way to fall back to the
         # cache it had just declined by a few seconds.
-        if not _acquire_lock(lock, cfg, allow_degrade=not fresh):
+        if deadline is not None:
+            if not _acquire_lock_until(lock, deadline):
+                c = None if fresh else cache_read(cfg, want_heal=not no_heal,
+                                                  grace_s=cfg.get("cache_grace_s", 600))
+                if c:
+                    return c["rows"], c["window"], True, c.get("prev")
+                raise CacheOnlyUnavailable(
+                    f"--max-wait {max_wait:g}s expired behind the single-flight lock with no "
+                    f"servable cache (grace {cfg.get('cache_grace_s', 600)}s)")
+        elif not _acquire_lock(lock, cfg, allow_degrade=not fresh):
             c = cache_read(cfg, want_heal=not no_heal,
                            grace_s=cfg.get("cache_grace_s", 600))
             if c:
@@ -4403,9 +4599,13 @@ def get_data(cfg, fresh=False, no_heal=False, max_wait=None, max_age=None):
             if c:
                 return c["rows"], c["window"], True, c.get("prev")
         prev = _prev_snapshot(cfg)
-        win = frontier_window(cfg)
-        rows = collect(cfg, no_heal=no_heal, prev=prev)
-        record_utilization(rows)
+        disarm = _arm_sweep_bound(deadline)
+        try:
+            win = frontier_window(cfg)
+            rows = collect(cfg, no_heal=no_heal, prev=prev)
+            record_utilization(rows)
+        finally:
+            disarm()
         wj = {"active": win["active"], "end": win["end"], "permanent": win.get("permanent", False),
               # permanent is carried explicitly: without it a null deadline cannot be told
               # apart from "the SSOT deadline was unparseable" by any --json consumer.
@@ -6227,7 +6427,50 @@ def main():
         if "--src" in args:
             j = args.index("--src")
             src = args[j + 1] if j + 1 < len(args) else None
-        err = record_assignment(cfg, name, src)
+
+        def _opt(flag, conv):
+            if flag not in args:
+                return None
+            j = args.index(flag)
+            try:
+                return conv(args[j + 1])
+            except (IndexError, ValueError):
+                raise ValueError(f"{flag} needs a value of the right type "
+                                 f"(got {args[j + 1] if j + 1 < len(args) else None!r})")
+        try:
+            err = record_assignment(cfg, name, src, id=_opt("--id", str), sid=_opt("--sid", str),
+                                    w=_opt("--w", int), ttl_s=_opt("--ttl-s", float))
+        except ValueError as e:
+            print(f"claude-accounts: --assign: {e}", file=sys.stderr)
+            sys.exit(64)
+        if err:
+            print(f"claude-accounts: {err}", file=sys.stderr)
+            sys.exit(5)
+        return
+    # v2 ledger writes (lr-reconciler) — same pre-sweep placement and exit contract as --assign:
+    # 64 = a malformed charge (nothing written), 5 = the append itself failed.
+    for verb in ("--assign-many", "--unassign"):
+        if verb not in args:
+            continue
+        i = args.index(verb)
+        arg = args[i + 1] if i + 1 < len(args) else None
+        try:
+            if verb == "--unassign":
+                err = record_void(arg)
+            else:
+                if arg is None:
+                    raise ValueError("needs a JSONL file path")
+                try:
+                    with open(arg) as f:
+                        text = f.read()
+                except OSError as e:
+                    print(f"claude-accounts: --assign-many: cannot read {arg}: {e}",
+                          file=sys.stderr)
+                    sys.exit(5)
+                err = append_assignments(parse_assign_many(cfg, text))
+        except ValueError as e:
+            print(f"claude-accounts: {verb}: {e}", file=sys.stderr)
+            sys.exit(64)
         if err:
             print(f"claude-accounts: {err}", file=sys.stderr)
             sys.exit(5)
