@@ -237,12 +237,31 @@ def _read_composer(
         s.composer = observe.composer_state(pane.sock, pane.window_id)
 
 
+def _rearm_inputs(rec: T.Record, snap: T.Snapshot) -> Dict[str, str]:
+    """What an ESCALATED record re-arms on besides the 15-minute clock (§7.2): the pane's current
+    root process and the session's holder set. Either changing means the world the escalation was
+    judged in is gone."""
+    pane = snap.panes.get("%d:%d" % rec.pane) if rec.pane else None
+    s = snap.sessions.get(rec.sid)
+    return {
+        "pane": "%d:%s" % (pane.root_pid, pane.root_lstart) if pane else "gone",
+        "holders": ",".join(sorted("%d:%s" % (h.pid, h.lstart) for h in (s.holders if s else []))),
+    }
+
+
 def _derive(ctx: Ctx, snap: T.Snapshot, now: float) -> None:
     """Level-triggered confirm (§3 step 10): the derived phase replaces the cached one."""
     for rec in ctx.records.values():
         if not rec.open:
             continue
         act.adopt(rec, snap)
+        if rec.escalated:
+            inputs = _rearm_inputs(rec, snap)
+            prev = rec.close.get("rearm_inputs") or {}
+            if classify.should_rearm(rec, now, inputs, prev):
+                classify.rearm(rec, now)
+                _event(ctx.paths, "rearm", rec.sid, rec.record_id, "15 min or an input changed")
+            rec.close["rearm_inputs"] = inputs
         for pr, rc in settle.dead_actuators(act.prune_dead(rec, snap), act.EXIT_CODES):
             text = settle.tail(settle.actlog(ctx.paths, rec, pr.argv_hash))
             detail = settle.settle_exit(rec, pr, rc, text, now)

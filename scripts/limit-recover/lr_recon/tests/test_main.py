@@ -277,6 +277,25 @@ class MainTests(unittest.TestCase):
             self.assertEqual(M._dispatch(ctx, snap, "act", now), 1)
             self.assertEqual(sp.call_args[0][2], "C")
 
+    def test_an_escalated_record_rearms_after_15_minutes(self):
+        """should_rearm existed and nothing called it: an escalation was permanent (W5 rig)."""
+        import time
+
+        now = time.time()
+        rec = T.Record(sid="abcdef01-0000-0000-0000-000000000001", record_id="r1")
+        rec.phase, rec.substate, rec.escalated = "PANE-GONE", "R", True
+        rec.last_error = T.LastError(cls="DETERMINISTIC", fingerprint="f", at=now - 60)
+        ctx = M.Ctx(self.paths, None, self.home)
+        M.store.ensure_dirs(self.paths)
+        ctx.records = {rec.sid: rec}
+        snap = _snap(now, self.tmp)
+        M._derive(ctx, snap, now)
+        self.assertTrue(rec.escalated)  # a minute in: still escalated
+        rec.last_error.at = now - 901
+        M._derive(ctx, snap, now)
+        self.assertFalse(rec.escalated)
+        self.assertIn("rearm", [e["ev"] for e in self._events()])
+
     def test_daemon_loop_starts_and_runs_a_pass(self):
         """W5 rig: the long-running path had never started (Caffeinate() without its pid)."""
 
