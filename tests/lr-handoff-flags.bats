@@ -131,7 +131,7 @@ in_s() { echo $(( $(date +%s) + $1 )); }
   f="$(fact next.5h.json "{\"status\":\"rejected\",\"scope\":\"5h\",\"resets_at\":$(in_s 7200)}")"
   fire --voluntary --account-evidence "$f"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"voluntary move admitted on account evidence $f (5h, "* ]]
+  [[ "$output" == *"voluntary move admitted on account evidence $f (5h, "* ]] || false
   [ -s "$TX_LOG" ]
 }
 @test "evidence: an ISO-8601 UTC resets_at is accepted" {
@@ -144,36 +144,36 @@ in_s() { echo $(( $(date +%s) + $1 )); }
 @test "evidence: a missing file refuses rc 6 evidence-invalid, NOTMOVED, nothing transplanted" {
   fire --voluntary --account-evidence "$BATS_TEST_TMPDIR/ev/next.5h.json"
   [ "$status" -eq 6 ]
-  [[ "$output" == *"REFUSED:evidence-invalid — unreadable"* ]]
-  [[ "$output" == *"verdict=NOTMOVED from=- to=next2 proven=no trigger=voluntary"* ]]
+  [[ "$output" == *"REFUSED:evidence-invalid — unreadable"* ]] || false
+  [[ "$output" == *"verdict=NOTMOVED from=- to=next2 proven=no trigger=voluntary"* ]] || false
   [ ! -s "$TX_LOG" ]
 }
 @test "evidence: resets_at only 10 minutes away is expired — rc 6" {
   f="$(fact next.5h.json "{\"status\":\"rejected\",\"scope\":\"5h\",\"resets_at\":$(in_s 600)}")"
   fire --voluntary --account-evidence "$f"
   [ "$status" -eq 6 ]
-  [[ "$output" == *"REFUSED:evidence-invalid — expired"* ]]
+  [[ "$output" == *"REFUSED:evidence-invalid — expired"* ]] || false
   [ ! -s "$TX_LOG" ]
 }
 @test "evidence: a contradicted fact refuses rc 6" {
   f="$(fact next.5h.json "{\"status\":\"rejected\",\"scope\":\"5h\",\"contradicted\":true,\"resets_at\":$(in_s 7200)}")"
   fire --voluntary --account-evidence "$f"
   [ "$status" -eq 6 ]
-  [[ "$output" == *"REFUSED:evidence-invalid — contradicted"* ]]
+  [[ "$output" == *"REFUSED:evidence-invalid — contradicted"* ]] || false
   [ ! -s "$TX_LOG" ]
 }
 @test "evidence: a fact for ANOTHER account refuses rc 6" {
   f="$(fact next3.5h.json "{\"status\":\"rejected\",\"scope\":\"5h\",\"resets_at\":$(in_s 7200)}")"
   fire --voluntary --account-evidence "$f"
   [ "$status" -eq 6 ]
-  [[ "$output" == *"REFUSED:evidence-invalid — account mismatch"* ]]
+  [[ "$output" == *"REFUSED:evidence-invalid — account mismatch"* ]] || false
   [ ! -s "$TX_LOG" ]
 }
 @test "evidence CONTROL: a healthy pane with no --account-evidence is refused not-limited, as today" {
   fire --voluntary
   [ "$status" -eq 6 ]
-  [[ "$output" == *"REFUSED:not-limited"* ]]
-  [[ "$output" != *"evidence-invalid"* ]]
+  [[ "$output" == *"REFUSED:not-limited"* ]] || false
+  [[ "$output" != *"evidence-invalid"* ]] || false
   [ ! -s "$TX_LOG" ]
 }
 
@@ -229,7 +229,7 @@ run_launcher() { # $1=VERIFY_MODE → runs the launcher minted by the last gen
   printf '#!/bin/bash\n# --branch) --model) --effort) --permission-mode) --prompt)\n' > "$LRD/lr-fire-resume.sh"
   LRH_LIVE_PARSER_CHECK=on gen --no-prompt
   [ "$status" -eq 5 ]
-  [[ "$output" == *"does not parse: --no-prompt"* ]]
+  [[ "$output" == *"does not parse: --no-prompt"* ]] || false
   # CONTROL: the same live copy is not refused over --no-prompt when this run does not emit it
   LRH_LIVE_PARSER_CHECK=on gen
   [[ "$output" != *"--no-prompt"* ]]
@@ -239,7 +239,7 @@ run_launcher() { # $1=VERIFY_MODE → runs the launcher minted by the last gen
 @test "LR_INPLACE_AWAIT=0: the success line says engagement NOT awaited, never 'engagement verified'" {
   LR_INPLACE_AWAIT=0 fire
   [ "$status" -eq 0 ]
-  [[ "$output" == *"recycled IN PLACE — /exit landed and the watcher took over; engagement NOT awaited (see handoffs.jsonl)"* ]]
+  [[ "$output" == *"recycled IN PLACE — /exit landed and the watcher took over; engagement NOT awaited (see handoffs.jsonl)"* ]] || false
   [[ "$output" != *"engagement verified"* ]]
 }
 
@@ -248,7 +248,7 @@ run_launcher() { # $1=VERIFY_MODE → runs the launcher minted by the last gen
   CC_ACCOUNTS_BIN="$STUB/claude-accounts" LRH_PRECHECK=on LR_PLACED_BY=reconciler \
     CC_RECYCLE_BGWORK_ANSWER=wait fire
   [ "$status" -eq 0 ]
-  [[ "$output" == *"router check is skipped"* ]]
+  [[ "$output" == *"router check is skipped"* ]] || false
   [ ! -s "$ACCT_LOG" ]
   grep -q '^BGWORK=cancel ' "$HF_LOG"
 }
@@ -296,7 +296,7 @@ run_launcher() { # $1=VERIFY_MODE → runs the launcher minted by the last gen
   [ "$status" -eq 0 ]
   grep -q -- '--record-id rec-7' "$TX_LOG"
   grep -q '^BGWORK= ATTEMPT=rec-7:3$' "$HF_LOG"
-  [[ "$output" == *"does not parse --record-id"* ]]
+  [[ "$output" == *"does not parse --record-id"* ]] || false
   [ "$(grep -c -- '--recycle.*--record-id' "$HF_LOG")" -eq 0 ]
 }
 
@@ -305,15 +305,15 @@ run_launcher() { # $1=VERIFY_MODE → runs the launcher minted by the last gen
   printf '  tok-caller-42  \nsecond line\n' > "$BATS_TEST_TMPDIR/token"
   LRH_PRECHECK=on LR_ADMIT_TOKEN_PATH="$BATS_TEST_TMPDIR/token" fire
   [ "$status" -eq 0 ]
-  [[ "$output" == *"admission owned by the caller: token tok-caller-42"* ]]
-  [[ "$output" != *"precheck admitted — admission token"* ]]
+  [[ "$output" == *"admission owned by the caller: token tok-caller-42"* ]] || false
+  [[ "$output" != *"precheck admitted — admission token"* ]] || false
   grep -qx 'export LR_ADMIT_TOKEN=tok-caller-42' "$(bundle_launcher)"
 }
 @test "LR_ADMIT_TOKEN_PATH: an empty file is no token, logged" {
   : > "$BATS_TEST_TMPDIR/token"
   LRH_PRECHECK=on LR_ADMIT_TOKEN_PATH="$BATS_TEST_TMPDIR/token" fire
   [ "$status" -eq 0 ]
-  [[ "$output" == *"holds no token"* ]]
+  [[ "$output" == *"holds no token"* ]] || false
   grep -qx "export LR_ADMIT_TOKEN=''" "$(bundle_launcher)"
 }
 
@@ -321,7 +321,7 @@ run_launcher() { # $1=VERIFY_MODE → runs the launcher minted by the last gen
 @test "LR_PRESEED_DONE skips lr-preseed-env; unset, it runs" {
   LR_PRESEED_DONE=1 fire
   [ "$status" -eq 0 ]
-  [[ "$output" == *"skipping lr-preseed-env.sh"* ]]
+  [[ "$output" == *"skipping lr-preseed-env.sh"* ]] || false
   [ ! -s "$PRESEED_LOG" ]
   fire
   [ -s "$PRESEED_LOG" ]
@@ -335,15 +335,15 @@ run_launcher() { # $1=VERIFY_MODE → runs the launcher minted by the last gen
   chmod +x "$STUB/sysctl"
   LR_WAKE_GUARD_S=60 fire
   [ "$status" -eq 6 ]
-  [[ "$output" == *"HELD:wake-guard (woke "* ]]
-  [[ "$output" == *"verdict=NOTMOVED"* ]]
+  [[ "$output" == *"HELD:wake-guard (woke "* ]] || false
+  [[ "$output" == *"verdict=NOTMOVED"* ]] || false
   [ ! -s "$TX_LOG" ]
 }
 @test "LR_WAKE_GUARD_S: an unreadable waketime proceeds (fail-open)" {
   printf '#!/bin/bash\nexit 1\n' > "$STUB/sysctl"; chmod +x "$STUB/sysctl"
   LR_WAKE_GUARD_S=60 fire
   [ "$status" -eq 0 ]
-  [[ "$output" == *"kern.waketime unreadable; proceeding"* ]]
+  [[ "$output" == *"kern.waketime unreadable; proceeding"* ]] || false
   [ -s "$TX_LOG" ]
 }
 
@@ -363,7 +363,7 @@ mkpool() { # → $POOL: a repo on branch pool/x; $LOCKDIR: its lock path
   printf '{"pid":999999,"lstart":"Thu Jan  1 00:00:00 1970"}\n' > "$LOCKDIR/holder"
   gen --cwd "$POOL"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"dead holder"* ]]
+  [[ "$output" == *"dead holder"* ]] || false
   [ "$(git -C "$POOL" branch --show-current)" = "recovered/${SID:0:8}" ]
   [ ! -e "$LOCKDIR" ]
 }
@@ -374,8 +374,8 @@ mkpool() { # → $POOL: a repo on branch pool/x; $LOCKDIR: its lock path
   jq -nc --argjson pid $$ --arg ls "$ls" '{pid:$pid, lstart:$ls}' > "$LOCKDIR/holder"
   gen --cwd "$POOL"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"held by a live process"* ]]
-  [[ "$output" == *"WARNING — branch pool/x is pool/* and the rename"* ]]
+  [[ "$output" == *"held by a live process"* ]] || false
+  [[ "$output" == *"WARNING — branch pool/x is pool/* and the rename"* ]] || false
   [ "$(git -C "$POOL" branch --show-current)" = "pool/x" ]
   [ -f "$LOCKDIR/holder" ]
 }

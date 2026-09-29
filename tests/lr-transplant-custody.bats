@@ -98,14 +98,16 @@ _confirmed() { # admit + confirm: the source retired, the target a full copy
   _live; _register "$T/from" s1 "$LIVE_PID" "$LIVE_LSTART"
   _phase unconfirm
   [ "$status" -eq 0 ] || { echo "$output $stderr"; false; }
-  [ -f "$SRC" ] && [ ! -e "$RET" ] || { echo "the source was not restored"; false; }
+  [ -f "$SRC" ] || { echo "the source was not restored"; false; }
+  [ ! -e "$RET" ] || { echo "the source was not restored"; false; }
   [ "$(_sha "$SRC")" = "$pre" ] || { echo "the restored source differs from the pre-confirm source"; false; }
   [ ! -e "$DST" ] || { echo "the target copy is still resumable"; false; }
   local ev; ev="$(_field evidence)"
   [[ "$ev" == "$LR_STATE_DIR/locks/$SID.unconfirmed-"* ]] || { echo "evidence=$ev"; false; }
   [ -f "$ev/$SID.jsonl" ] || { echo "no target copy in $ev"; false; }
   [ ! -e "$LOCK" ] || { echo "the lock survived"; false; }
-  [ -f "$TOMB.unconfirmed" ] && [ ! -e "$TOMB" ] || { echo "the tombstone was not retired"; false; }
+  [ -f "$TOMB.unconfirmed" ] || { echo "the tombstone was not retired"; false; }
+  [ ! -e "$TOMB" ] || { echo "the tombstone was not retired"; false; }
   _phase unconfirm
   [ "$status" -eq 0 ] && [ "$(_field already_unconfirmed)" = True ] || { echo "re-run: $output $stderr"; false; }
 }
@@ -126,11 +128,13 @@ _confirmed() { # admit + confirm: the source retired, the target a full copy
   _dead; _register "$T/from" s1 "$DEAD_PID" "$DEAD_LSTART"
   local before; before="$(_snap "$RET" "$DST" "$TOMB" "$LOCK")"
   _phase unconfirm
-  [ "$status" -eq 2 ] && [ "$(_field reason)" = source-dead ] || { echo "$output $stderr"; false; }
+  [ "$status" -eq 2 ] || { echo "$output $stderr"; false; }
+  [ "$(_field reason)" = source-dead ] || { echo "$output $stderr"; false; }
   _live; _register "$T/from" s1 "$LIVE_PID" "$LIVE_LSTART"
   _register "$T/to" s2 "$LIVE_PID" "$LIVE_LSTART"
   _phase unconfirm
-  [ "$status" -eq 2 ] && [ "$(_field reason)" = target-held ] || { echo "$output $stderr"; false; }
+  [ "$status" -eq 2 ] || { echo "$output $stderr"; false; }
+  [ "$(_field reason)" = target-held ] || { echo "$output $stderr"; false; }
   [ "$(_snap "$RET" "$DST" "$TOMB" "$LOCK")" = "$before" ] || { echo "a refusal changed a file"; false; }
 }
 
@@ -166,7 +170,8 @@ _confirmed() { # admit + confirm: the source retired, the target a full copy
   local before; before="$(_snap "$RET" "$SRC" "$DST" "$LOCK")"
   _phase fold-stub
   [ "$status" -eq 2 ] || { echo "$output $stderr"; false; }
-  [ "$(_field reason)" = target-held ] && [ "$(_field detail)" = target-advanced ] || { echo "$output"; false; }
+  [ "$(_field reason)" = target-held ] || { echo "$output"; false; }
+  [ "$(_field detail)" = target-advanced ] || { echo "$output"; false; }
   [ "$(_snap "$RET" "$SRC" "$DST" "$LOCK")" = "$before" ] || { echo "a refusal changed a file"; false; }
 }
 
@@ -174,19 +179,23 @@ _confirmed() { # admit + confirm: the source retired, the target a full copy
   _live
   LR_HOLDER_PID="$LIVE_PID" LR_ATTEMPT=1 _admit --record-id R1
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [ "$(_lockf record_id)" = R1 ] && [ "$(_lockf holder.pid)" = "$LIVE_PID" ] || { cat "$LOCK"; false; }
-  [ "$(_lockf holder.attempt)" = 1 ] && [ "$(_lockf holder.role)" = actuator ] || { cat "$LOCK"; false; }
+  [ "$(_lockf record_id)" = R1 ] || { cat "$LOCK"; false; }
+  [ "$(_lockf holder.pid)" = "$LIVE_PID" ] || { cat "$LOCK"; false; }
+  [ "$(_lockf holder.attempt)" = 1 ] || { cat "$LOCK"; false; }
+  [ "$(_lockf holder.role)" = actuator ] || { cat "$LOCK"; false; }
   local lock_before; lock_before="$(cat "$LOCK")"
   _phase admit --record-id R2
   [ "$status" -eq 2 ] || { echo "$output $stderr"; false; }
-  [ "$(_field reason)" = lock-mismatch ] && [ "$(_field detail)" = live-actuator ] || { echo "$output"; false; }
+  [ "$(_field reason)" = lock-mismatch ] || { echo "$output"; false; }
+  [ "$(_field detail)" = live-actuator ] || { echo "$output"; false; }
   [ "$(cat "$LOCK")" = "$lock_before" ] || { echo "a refusal rewrote the lock"; false; }
   # control: the same claim once its actuator is gone
   kill "$LIVE_PID" 2>/dev/null || true; wait "$LIVE_PID" 2>/dev/null || true
   _phase admit --record-id R2
   [ "$status" -eq 0 ] || { echo "$output $stderr"; false; }
   [ "$(_field already_transplanted)" = True ] || { echo "$output"; false; }
-  [ "$(_lockf record_id)" = R2 ] && [ "$(_lockf holder.record_id)" = R2 ] || { cat "$LOCK"; false; }
+  [ "$(_lockf record_id)" = R2 ] || { cat "$LOCK"; false; }
+  [ "$(_lockf holder.record_id)" = R2 ] || { cat "$LOCK"; false; }
   [ "$(_lockf owner)" = "$(cd "$T/to" && pwd)" ] || { cat "$LOCK"; false; }
 }
 
@@ -197,17 +206,21 @@ _confirmed() { # admit + confirm: the source retired, the target a full copy
   local before src; before="$(_snap "$SRC" "$DST" "$TOMB" "$LOCK")"; src="$(_sha "$SRC")"
   _phase abort --record-id R1
   [ "$status" -eq 2 ] || { echo "$output $stderr"; false; }
-  [ "$(_field reason)" = target-held ] && [ "$(_field detail)" = live-actuator ] || { echo "$output"; false; }
+  [ "$(_field reason)" = target-held ] || { echo "$output"; false; }
+  [ "$(_field detail)" = live-actuator ] || { echo "$output"; false; }
   [ "$(_snap "$SRC" "$DST" "$TOMB" "$LOCK")" = "$before" ] || { echo "a refusal changed a file"; false; }
   # control: a dead recorded actuator
   kill "$LIVE_PID" 2>/dev/null || true; wait "$LIVE_PID" 2>/dev/null || true
   _phase abort --record-id R1
   [ "$status" -eq 0 ] || { echo "$output $stderr"; false; }
   local ev; ev="$(_field evidence)"
-  [[ "$ev" == "$LR_STATE_DIR/locks/$SID.aborted-"* ]] && [ -f "$ev/$SID.jsonl" ] || { echo "evidence=$ev"; false; }
-  [ ! -e "$DST" ] && [ ! -e "$LOCK" ] || { echo "target or lock survived"; false; }
+  [[ "$ev" == "$LR_STATE_DIR/locks/$SID.aborted-"* ]] || { echo "evidence=$ev"; false; }
+  [ -f "$ev/$SID.jsonl" ] || { echo "evidence=$ev"; false; }
+  [ ! -e "$DST" ] || { echo "target or lock survived"; false; }
+  [ ! -e "$LOCK" ] || { echo "target or lock survived"; false; }
   [ "$(_sha "$SRC")" = "$src" ] || { echo "abort touched the source"; false; }
-  [ -f "$TOMB.aborted" ] && [ ! -e "$TOMB" ] || { echo "the tombstone was not retired"; false; }
+  [ -f "$TOMB.aborted" ] || { echo "the tombstone was not retired"; false; }
+  [ ! -e "$TOMB" ] || { echo "the tombstone was not retired"; false; }
   _phase abort --record-id R1
   [ "$status" -eq 0 ] && [ "$(_field already_aborted)" = True ] || { echo "$output"; false; }
 }
@@ -217,7 +230,8 @@ _confirmed() { # admit + confirm: the source retired, the target a full copy
   _live
   printf '{"pid":%s,"lstart":"%s"}\n' "$LIVE_PID" "$LIVE_LSTART" > "$T/watcher.json"
   _phase abort --watcher-record "$T/watcher.json"
-  [ "$status" -eq 2 ] && [ "$(_field detail)" = live-watcher ] || { echo "$output $stderr"; false; }
+  [ "$status" -eq 2 ] || { echo "$output $stderr"; false; }
+  [ "$(_field detail)" = live-watcher ] || { echo "$output $stderr"; false; }
   _phase confirm; [ "$status" -eq 0 ] || { echo "$output $stderr"; false; }
   _phase abort
   [ "$status" -eq 2 ] && [ "$(_field reason)" = lock-mismatch ] && [ "$(_field detail)" = source-retired ] \
@@ -256,8 +270,11 @@ _confirmed() { # admit + confirm: the source retired, the target a full copy
   local src; src="$(_sha "$SRC")"
   _phase confirm --record-id R1
   [ "$status" -eq 2 ] || { echo "$output $stderr"; false; }
-  [ "$(_field reason)" = lock-mismatch ] && [ "$(_field detail)" = no-lock ] || { echo "$output"; false; }
-  [ "$(_sha "$SRC")" = "$src" ] && [ ! -e "$RET" ] && [ ! -e "$DST" ] || { echo "a refusal moved something"; false; }
+  [ "$(_field reason)" = lock-mismatch ] || { echo "$output"; false; }
+  [ "$(_field detail)" = no-lock ] || { echo "$output"; false; }
+  [ "$(_sha "$SRC")" = "$src" ] || { echo "a refusal moved something"; false; }
+  [ ! -e "$RET" ] || { echo "a refusal moved something"; false; }
+  [ ! -e "$DST" ] || { echo "a refusal moved something"; false; }
   # control: lr-handoff's single-step confirm (no admit, no record id) still retires
   _phase confirm
   [ "$status" -eq 0 ] && [ -f "$RET" ] || { echo "$output $stderr"; false; }
