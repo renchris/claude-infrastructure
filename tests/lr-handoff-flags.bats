@@ -118,7 +118,12 @@ gen() {
       --cwd "$BATS_TEST_TMPDIR/plain" --no-transplant --print-only "$@"
 }
 launcher_from_output() { printf '%s\n' "$output" | sed -n 's/^lr-handoff: launch script ready (not fired): //p' | tail -1; }
-bundle_launcher() { ls "$HOME/.reso/limit-recover/$SID"/bundle-*/lr-launch-*.sh 2>/dev/null | tail -1; }
+last_match() { # $@=a glob's expansion → the last existing path (the shell sorts a glob as ls does)
+  local f last=""
+  for f in "$@"; do [ -e "$f" ] && last="$f"; done
+  printf '%s' "$last"
+}
+bundle_launcher() { last_match "$HOME/.reso/limit-recover/$SID"/bundle-*/lr-launch-*.sh; }
 # the value of the LAST argv element the stub lr-fire-resume printed
 last_argv() { printf '%s\n' "$output" | grep '^argv\[' | tail -1 | sed 's/^argv\[[0-9]*\]=<//; s/>$//'; }
 fact() { # $1=basename $2=json → path
@@ -182,7 +187,6 @@ CONT="[limit-recover] Moved from next to next2 after a usage limit; same session
 run_launcher() { # $1=VERIFY_MODE → runs the launcher minted by the last gen
   local l tok
   l="$(launcher_from_output)"; [ -n "$l" ]
-  LAUNCHER="$l"
   BUNDLE="$(dirname "$l")"
   tok="$(sed -n 's/^export LR_SUBMIT_TOKEN=//p' "$l")"; TOKEN="$tok"
   run env VERIFY_MODE="$1" /bin/bash "$l"
@@ -246,7 +250,7 @@ run_launcher() { # $1=VERIFY_MODE → runs the launcher minted by the last gen
 # ── LR_PLACED_BY=reconciler ───────────────────────────────────────────────────────────────────
 @test "LR_PLACED_BY=reconciler skips the router and forces CC_RECYCLE_BGWORK_ANSWER=cancel" {
   CC_ACCOUNTS_BIN="$STUB/claude-accounts" LRH_PRECHECK=on LR_PLACED_BY=reconciler \
-    CC_RECYCLE_BGWORK_ANSWER=wait fire
+    CC_RECYCLE_BGWORK_ANSWER="wait" fire
   [ "$status" -eq 0 ]
   [[ "$output" == *"router check is skipped"* ]] || false
   [ ! -s "$ACCT_LOG" ]
@@ -259,7 +263,7 @@ run_launcher() { # $1=VERIFY_MODE → runs the launcher minted by the last gen
   [ ! -s "$TX_LOG" ]
 }
 @test "CC_RECYCLE_BGWORK_ANSWER passes through untouched for a legacy caller" {
-  CC_RECYCLE_BGWORK_ANSWER=wait fire
+  CC_RECYCLE_BGWORK_ANSWER="wait" fire
   [ "$status" -eq 0 ]
   grep -q '^BGWORK=wait ' "$HF_LOG"
 }
@@ -274,19 +278,19 @@ run_launcher() { # $1=VERIFY_MODE → runs the launcher minted by the last gen
 @test "LR_ASSIGN_ID, --record-id and --attempt land in the manifest and the run's state log" {
   LR_ASSIGN_ID=as-9 LR_PLACED_BY=reconciler fire --record-id rec-7 --attempt 2
   [ "$status" -eq 0 ]
-  m="$(ls "$HOME/.reso/limit-recover/$SID"/bundle-*/MANIFEST.json | tail -1)"
+  m="$(last_match "$HOME/.reso/limit-recover/$SID"/bundle-*/MANIFEST.json)"
   [ "$(jq -r '[.record_id,.attempt,.placed_by,.assign_id]|join(",")' "$m")" = "rec-7,2,reconciler,as-9" ]
   grep -q '"placed"' "$(dirname "$m")/events.jsonl"
   grep -q 'assign_id=as-9' "$(dirname "$m")/events.jsonl"
 }
 @test "manifest CONTROL: with nothing set the four fields are absent (the legacy manifest is unchanged)" {
   gen
-  m="$(ls "$HOME/.reso/limit-recover/$SID"/bundle-*/MANIFEST.json | tail -1)"
+  m="$(last_match "$HOME/.reso/limit-recover/$SID"/bundle-*/MANIFEST.json)"
   [ "$(jq -r '[has("record_id"),has("attempt"),has("placed_by"),has("assign_id")]|join(",")' "$m")" = "false,false,false,false" ]
 }
 @test "manifest: one field set carries all four, the unset ones empty" {
   LR_PLACED_BY=reconciler gen
-  m="$(ls "$HOME/.reso/limit-recover/$SID"/bundle-*/MANIFEST.json | tail -1)"
+  m="$(last_match "$HOME/.reso/limit-recover/$SID"/bundle-*/MANIFEST.json)"
   [ "$(jq -r '[.record_id,.attempt,.placed_by,.assign_id]|join(",")' "$m")" = ",,reconciler," ]
 }
 
