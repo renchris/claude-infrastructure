@@ -321,10 +321,14 @@ SH
   export LR_LOCKS_DIR="$BATS_TEST_TMPDIR/locks"
   export HF_WATCHER_RECORD="$BATS_TEST_TMPDIR/watcher.json"
   unset CC_TERM CC_TERM_KITTY_TO LR_MOVE_FOCUSED HF_EXIT_READBACK
+  # shellcheck disable=SC2034  # globals read by the handoff-fire functions under test
   SID="$PANE" CMD="relaunch-cmd" RCY_IT2="$STUB/it2" RCY_REMOTE=1 RCY_SAME_ACCOUNT=0
+  # shellcheck disable=SC2034  # globals read by the handoff-fire functions under test
   RCY_TRANSPLANTED_SOURCE=1 RCY_TRANSPLANT_CAUSE=limit ALLOW_LIVE_SA=1
+  # shellcheck disable=SC2034  # globals read by the handoff-fire functions under test
   SESS="$SID_UUID" RCY_TS_SID="$SID_UUID" RCY_SOURCE_SESSION="$SID_UUID"
   HF_TS_CFG="$BATS_TEST_TMPDIR/from" HF_TS_TO="$BATS_TEST_TMPDIR/to"
+  # shellcheck disable=SC2034  # globals read by the handoff-fire functions under test
   RCY_SRC_TX="$TX" HF_TS_TOMBSTONE="" HF_REMOTE_ROW_PID="" RESUME_LAUNCHER="" RESUME_CFG=""
   seed_healthy_transcript
   # A case that builds a second world must not inherit the first one's watcher: its live holder
@@ -345,7 +349,7 @@ SH
 teardown() {
   local p
   for p in "$BATS_TEST_TMPDIR"/*.pid; do
-    [ -f "$p" ] && kill "$(cat "$p")" 2>/dev/null
+    [ -f "$p" ] && { kill "$(cat "$p")" 2>/dev/null || true; }
   done
   return 0
 }
@@ -405,6 +409,7 @@ SID_UUID="a1b2c3d4-0000-4000-8000-000000000002"
   # No confirm ran ⇒ nothing to unconfirm.
   tail_world
   printf '%s\n' "operator draft" > "$READS"
+  # shellcheck disable=SC2034  # globals read by the handoff-fire functions under test
   RCY_TRANSPLANTED_SOURCE=0
   run recycle_fire_commit "$SESS"
   [ "$status" -eq 1 ] || { echo "$output"; false; }
@@ -629,6 +634,7 @@ wrows() { grep "\"class\":\"$1\"" "$HOME/.claude/logs/handoffs.jsonl" 2>/dev/nul
 
   # Retired, but handed to a config dir other than --resume-cfg: held too.
   tail_world
+  # shellcheck disable=SC2034  # globals read by the handoff-fire functions under test
   RCY_HUSK=1 HF_TS_TOMBSTONE="$tomb" RESUME_CFG="$BATS_TEST_TMPDIR/elsewhere"
   printf '%s\n' "" "/exit" > "$READS"
   run recycle_fire_commit "$SESS"
@@ -787,6 +793,7 @@ wrows() { grep "\"class\":\"$1\"" "$HOME/.claude/logs/handoffs.jsonl" 2>/dev/nul
   done
   export LR_LOCKS_DIR="$BATS_TEST_TMPDIR/lk" LR_RECORD_ID=rec-x LR_ATTEMPT=2
   unset HF_LAUNCH_REC HF_LAUNCH_ATT NC
+  # shellcheck disable=SC2034  # globals read by the handoff-fire functions under test
   RCY_CWD="/w d" RESUME_LAUNCHER="/l/lr-launch.sh"
   hf_resume_cmd_set "$SID_UUID"
   [ "$CMD" = "cd /w\\ d && nocorrect env LR_LAUNCH_LOCK=$BATS_TEST_TMPDIR/lk/$SID_UUID.launch LR_RECORD_ID=rec-x LR_ATTEMPT=2 bash /l/lr-launch.sh" ] || { echo "$CMD"; false; }
