@@ -211,6 +211,19 @@ print(json.loads(out)["hookSpecificOutput"].get("permissionDecisionReason","") i
   [ "$output" = "deny" ]
 }
 
+@test "bundled -k in a short-flag cluster is denied (-sk, -kL, -skI)" {
+  [ "$(decision 'curl -sk https://pay.reso.com/')" = "deny" ]
+  [ "$(decision 'curl -kL https://example.com')" = "deny" ]
+  [ "$(decision 'curl -skI https://example.com')" = "deny" ]
+}
+
+@test "a k inside an attached value is not -k (-o/tmp/k.txt, -XPATCH, -Hk:v)" {
+  [ "$(decision 'curl -s -o/tmp/k.txt https://example.com/a')" != "deny" ]
+  [ "$(decision 'curl -s -XPATCH https://example.com/a')" != "deny" ]
+  [ "$(decision 'curl -s -Hk:v https://example.com/a')" != "deny" ]
+  [ "$(decision 'curl -sS https://example.com/a')" = "allow" ]
+}
+
 @test "writing into .ssh is denied" {
   run decision 'curl https://example.com/k -o /Users/x/.ssh/authorized_keys'
   [ "$output" = "deny" ]

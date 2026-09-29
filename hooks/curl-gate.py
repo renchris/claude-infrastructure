@@ -600,6 +600,10 @@ def parse_argv(tokens: list[str], cmd: str) -> dict:
             # Short option or a cluster of them. Only the LAST character of a cluster may take a
             # value (`-sSLo out.html`), and an attached value (`-mo30`, `-A"UA"`) consumes nothing.
             body = t[1:]
+            # `-sk`, `-kL`, `-skI` carry -k inside a cluster; the exact-token arm above only
+            # matches a lone `-k`, so the insecure-TLS deny missed every bundled spelling.
+            if "k" in short_cluster_flags(body):
+                has_insecure = True
             if body[0] in _VALUE_FLAGS_SHORT and len(body) > 1:
                 i += 1  # attached value, e.g. -m30 / -XPOST
                 continue
