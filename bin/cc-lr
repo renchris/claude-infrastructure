@@ -36,8 +36,16 @@
 #                [--until-idle S]     ask ANOTHER idle session to move itself (the driver form);
 #                                     --until-idle waits out a busy one for up to S seconds (default off)
 #   cc-lr status [ref | --all]
+#   cc-lr status --cohort [cid]       the reconciler's cohorts, one line per member
 #   cc-lr repair <bundle|ref> [--mode relaunch|prompt] [--target A] [--source-pane P]
 #   cc-lr upgrade (--all | <pane|sid8>) [--dry-run] [--wait S | --no-wait] · cc-lr upgrade --report
+#   cc-lr accounts --limited          the reconciler's unexpired limit facts, grouped by account
+#   cc-lr cohort refire <sid|sid8|pane>
+#                                     ask the reconciler to reset one member's retry budget
+#
+# WHILE THE RECONCILER IS LIVE (recon.on + a fresh heartbeat), `recover` and `switch` do not act:
+# they write requests/<sid>.cc-lr.json and the reconciler — the one actuator for that sid — drives
+# it (LIMIT_RECOVER_FLEET_V2 §C2, §C10).
 #
 # rc 0 ok · 1 nothing matched · 2 REFUSED (and nothing was created) · 3 usage
 set -uo pipefail
@@ -112,6 +120,22 @@ for _cl_lib in "$_CL_BIN/../scripts/limit-recover/lr-lib.sh" \
   [ -f "$_cl_lib" ] && { . "$_cl_lib"; break; }
 done
 
+# THE §C10 FENCE. It answers two questions this file asks: is the reconciler live (then queue, never
+# act), and — when it is not — does it still own this sid through a process it started (then
+# refuse). Unreachable ⇒ the legacy world keeps working: never live, always act, one line at the act.
+for _cl_fence in "$_CL_BIN/../scripts/limit-recover/lr-recon-fence.sh" \
+                 "$HOME/.claude/scripts/limit-recover/lr-recon-fence.sh"; do
+  # shellcheck disable=SC1090  # runtime-resolved library ladder, same shape as the one above
+  [ -f "$_cl_fence" ] && { . "$_cl_fence"; break; }
+done
+command -v lr_recon_may_act >/dev/null 2>&1 || {
+  lr_recon_live() { return 1; }
+  lr_recon_may_act() { echo "cc-lr: lr-recon-fence.sh unreachable — acting on ${1:0:8} unfenced (legacy)" >&2; return 0; }
+  lr_recon_act_done() { :; }
+}
+# The reconciler's own tree: the same default lr-recon-fence.sh and lr_recon.types.Paths derive.
+RECON_ROOT="${LR_RECON_ROOT:-$STATE/recon}"
+
 usage() {
   cat >&2 <<'USAGE'
 cc-lr — find · recover · status · repair, for a limit-blocked session.
@@ -145,6 +169,14 @@ cc-lr — find · recover · status · repair, for a limit-blocked session.
                              composer) is queued too and re-judged every poller tick until it is
                              idle or S seconds pass; the verdict is mailed. Default off.
   cc-lr status [ref|--all]   one row per run's events.jsonl, with CAUSE / NEXT
+  cc-lr status --cohort [cid]
+                             the reconciler's cohorts: per member the phase, age, attempt,
+                             last error class, next action and ETA
+  cc-lr accounts --limited   the reconciler's unexpired limit facts, grouped by account
+  cc-lr cohort refire <sid|sid8|pane>
+                             ask the reconciler to reset one member's retry budget (writes a
+                             ctl request; the daemon acts on it)
+  While the reconciler is live, recover and switch QUEUE a request for it instead of acting.
   cc-lr repair <bundle|ref> [--mode relaunch|prompt] [--target A] [--source-pane P]
                              write a poller request and kick the daemon — NEVER types
   cc-lr upgrade (--all | <pane|sid8>) [--dry-run] [--wait S | --no-wait] [--scrub-composer TEXT]
@@ -163,6 +195,53 @@ USAGE
 }
 
 cl_die() { echo "cc-lr: $1" >&2; exit "${2:-2}"; }
+
+# ── the reconciler's request lane (§C2 origin `cc-lr`) ─────────────────────────────────────────
+# While the reconciler is live it is the ONE actuator for every sid it can see, so a direct
+# recover/switch here would be a second typer racing it into one pane. The request carries what the
+# direct path would have acted on; the reconciler re-judges it at ingest. tmp is a dotfile that does
+# not end in .cc-lr.json, so neither drainer can read it half-written.
+cl_recon_queue() { # <sid> <mode> <pane> <config_dir> [target] → rc 0 queued (dies rc 2 otherwise)
+  local sid="$1" mode="$2" pane="$3" cfg="$4" target="${5:-}" dest tmp
+  case "$pane" in -) pane="" ;; esac
+  command -v jq >/dev/null 2>&1 || cl_die "the reconciler is live but jq is not on PATH, so nothing was queued and nothing was started" 2
+  mkdir -p "$REQ_DIR" 2>/dev/null || cl_die "cannot create $REQ_DIR; nothing was queued and nothing was started" 2
+  dest="$REQ_DIR/$sid.cc-lr.json"
+  tmp="$REQ_DIR/.$sid.cc-lr.$$.tmp"
+  if jq -nc --arg sid "$sid" --argjson at "$(date +%s)" --arg mode "$mode" --arg pane "$pane" \
+        --arg cfg "$cfg" --arg target "$target" \
+        '{sid:$sid, at:$at, requested_by:"cc-lr", mode:$mode, pane:$pane, config_dir:$cfg}
+         + (if $target != "" then {target:$target} else {} end)' > "$tmp" 2>/dev/null \
+     && mv -f "$tmp" "$dest" 2>/dev/null; then
+    printf 'cc-lr: QUEUED for the reconciler %s → %s\n' "${sid:0:8}" "$dest"
+    return 0
+  fi
+  rm -f "$tmp" 2>/dev/null || true
+  cl_die "the reconciler is live but $dest could not be written; nothing was queued and nothing was started" 2
+}
+
+# The direct path's fence. Not live, but the reconciler may still own the sid through a process it
+# started (a relaunch mid-flight): acting now would put two actuators in one pane. On ACT the launch
+# lock this may take is exported as LR_LAUNCH_LOCK — lr-fleet's lf_one and lr-handoff inherit it —
+# and released by the EXIT trap on every exit path, the subshells of `recover --limited` included.
+# The fence's own lines carry a `verdict=` token, and this file's consumers grep `verdict=` for
+# cc-lr's OWN outcome; so they go to a scratch file (never `$( )`, which would drop the exported
+# lock with the subshell) and only a refusal quotes the reason from them.
+cl_fence_or_refuse() { # <sid> → returns on ACT; exits 2 on DEFER
+  local errf why="" rc=0
+  errf="$(mktemp "${TMPDIR:-/tmp}/cc-lr-fence.XXXXXX" 2>/dev/null)" || errf=/dev/null
+  lr_recon_may_act "$1" cc-lr 2>"$errf" || rc=$?
+  if [ "$errf" != /dev/null ]; then
+    why="$(sed -nE 's/.*reason=([^ ]+).*/\1/p; s/.*gate=defer.* lock=(held|cannot).*/launch-lock-\1/p' "$errf" | tr '\n' ' ')"
+    grep -v 'lr-recon-fence: ' "$errf" >&2
+    rm -f "$errf"
+  fi
+  if [ "$rc" -ne 0 ]; then
+    echo "cc-lr: REFUSED — the reconciler still owns ${1:0:8} (${why% }): a process it started for this session is alive, or another actuator holds its launch lock. Nothing was started and no mutex was created." >&2
+    exit 2
+  fi
+  trap 'lr_recon_act_done' EXIT
+}
 
 # THE REQUESTER, ratcheted. CC_PANE_ID FIRST and ITERM_SESSION_ID only as the fallback — copied
 # from lr-fleet.sh:757-762, whose class-B cases name the failure: a STALE ITERM_SESSION_ID can sit
@@ -426,6 +505,13 @@ EOF
   fi
 
   [ -n "$pane_arg" ] && pane="$pane_arg"
+  # AFTER the three refusals (a teammate or a non-limited sid is no more the reconciler's to drive
+  # than ours), BEFORE the mutex: a queued request takes no lock and fires nothing.
+  if lr_recon_live; then
+    cl_recon_queue "$sid" recover "${pane:--}" "$cfg" "$([ "$target" = auto ] || printf '%s' "$target")"
+    return 0
+  fi
+  cl_fence_or_refuse "$sid"
   mutex="$(cl_mutex_take "$sid" "${pane:--}")" || exit 2
 
   [ -n "$FLEET_BIN" ] && [ -f "$FLEET_BIN" ] || {
@@ -917,6 +1003,17 @@ cmd_switch() {
     cl_verdict NOTMOVED "$target" "no pane holds this process; an in-place move has no subject window"
     exit 2
   fi
+  # THE RECONCILER IS LIVE ⇒ it moves this session, not us. Before `auto` is resolved: the pick is
+  # the reconciler's to make at act time, and an explicit target rides in the request.
+  if lr_recon_live; then
+    if [ "$dry" -eq 1 ]; then
+      printf 'cc-lr: DRY RUN — the reconciler is live; a real run would QUEUE %s (pane %s) for it in %s. Nothing was written.\n' \
+        "${sid:0:8}" "$pane" "$REQ_DIR/$sid.cc-lr.json"
+      return 0
+    fi
+    cl_recon_queue "$sid" switch "$pane" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" "$([ "$target" = auto ] || printf '%s' "$target")"
+    return 0
+  fi
   [ -n "$HANDOFF_BIN" ] && [ -f "$HANDOFF_BIN" ] || {
     cl_die "cannot reach lr-handoff.sh (set CC_LR_HANDOFF_BIN); nothing was started and no mutex was created" 2; }
 
@@ -959,6 +1056,7 @@ cmd_switch() {
   # session is the same invariant `recover` holds, and it binds harder here: two movers of ONE
   # session race a transcript copy against a /exit.
   local mutex
+  cl_fence_or_refuse "$sid"
   mutex="$(cl_mutex_take "$sid" "$pane")" || exit 2
 
   # FOREGROUND, AND THE PROCESS IS EXPECTED TO DIE INSIDE THIS CALL. The recycle types /exit into
@@ -1017,11 +1115,49 @@ cl_events_bulk() { # <file…> → "file\tts\tstate\tstage\tdetail" per LINE
   jq -r '[input_filename, (.ts // "-"), (.state // "-"), (.stage // "-"), (.detail // "-")] | @tsv' "$@" 2>/dev/null
 }
 
+# ── the reconciler's cohorts (W4) ──────────────────────────────────────────────────────────────
+# report.py's cohort_status is the ONE renderer of a member's state; its output is persisted as the
+# `status` key of recon/cohorts/<cid>.json, so this only lays those fields out and derives none of
+# them. One jq per file, so a cohort file caught mid-rewrite costs its own lines, never every line.
+cl_status_cohort() { # [cid] → rc 0 (also for "none") · 1 the named cohort is absent · 2 unreadable
+  local cid="${1:-}" dir="$RECON_ROOT/cohorts" f bad=0 files=()
+  command -v jq >/dev/null 2>&1 || cl_die "jq is not on PATH; cannot read $dir" 2
+  if [ -n "$cid" ]; then
+    case "$cid" in */*|.*) cl_die "'$cid' cannot be a cohort id" 3 ;; esac
+    [ -f "$dir/$cid.json" ] || { echo "cc-lr: no reconciler cohort '$cid' under $dir" >&2; return 1; }
+    files=("$dir/$cid.json")
+  else
+    for f in "$dir"/*.json; do [ -f "$f" ] && files+=("$f"); done
+  fi
+  [ "${#files[@]}" -gt 0 ] || { echo "cc-lr: no reconciler cohorts"; return 0; }
+  for f in "${files[@]}"; do
+    jq -er '.status as $s | $s.cid | type == "string"' "$f" >/dev/null 2>&1 || {
+      echo "cc-lr: $f has no readable status (the reconciler may be mid-write); skipped" >&2
+      bad=$((bad + 1)); continue; }
+    jq -r '.status as $s
+      | "cohort \($s.cid)  \($s.acct // "?") \($s.scope // "?")  "
+        + ([($s.tally // {}) | to_entries[] | select(.value > 0) | "\(.value) \(.key)"] | join(" · ")),
+        ( ($s.members // [])[]
+          | [ "  " + ((.sid // "?")[0:8]),
+              "pane " + (if (.pane | type) == "array" then (.pane | map(tostring) | join(":")) else "-" end),
+              (.phase // "-") + (if .substate then "/" + .substate else "" end),
+              "age " + (if (.age_s | type) == "number" then "\(.age_s | floor)s" else "-" end),
+              "attempt \(.attempt // 0)",
+              "err " + (.last_error // "-"),
+              "next: " + (.next_action // "-"),
+              "eta " + (if (.eta | type) == "number" then (.eta | floor | todate) else "-" end) ]
+          | join("  ") )' "$f" 2>/dev/null || bad=$((bad + 1))
+  done
+  [ "$bad" -lt "${#files[@]}" ] || return 2
+  return 0
+}
+
 cmd_status() {
   local ref="" f n out mt st
   local FILES
   while [ $# -gt 0 ]; do
     case "$1" in
+      --cohort) shift; cl_status_cohort "${1:-}"; return $? ;;
       --all) ref=""; shift ;;
       -h|--help) usage; exit 0 ;;
       --*) echo "cc-lr status: unknown option $1" >&2; usage; exit 3 ;;
@@ -1369,6 +1505,105 @@ EOF3
   return 0
 }
 
+# ── accounts --limited: the reconciler's limit facts (W4) ──────────────────────────────────────
+# facts.limited_rows is the one definition of "still limited" (a fact whose reset has not passed,
+# with the grace the expiry uses), so it is CALLED, never re-derived here. The layout is cc-limited's:
+# one header per account, its limited scopes beneath.
+cl_recon_pkg() { # → the directory holding lr_recon/, script-relative first
+  local d
+  for d in "$_CL_BIN/../scripts/limit-recover" "$HOME/.claude/scripts/limit-recover"; do
+    [ -f "$d/lr_recon/facts.py" ] && { (cd "$d" && pwd); return 0; }
+  done
+  return 1
+}
+cmd_accounts() {
+  local lim=0 pkg
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --limited) lim=1; shift ;;
+      -h|--help) usage; exit 0 ;;
+      *) echo "cc-lr accounts: unknown argument $1" >&2; usage; exit 3 ;;
+    esac
+  done
+  [ "$lim" -eq 1 ] || { echo "cc-lr accounts: name what to list — --limited (the reconciler's limit facts); for quota use claude-accounts" >&2; exit 3; }
+  pkg="$(cl_recon_pkg)" || cl_die "cannot reach scripts/limit-recover/lr_recon; nothing was read" 2
+  LR_STATE_DIR="$STATE" LR_RECON_ROOT="$RECON_ROOT" PYTHONPATH="$pkg${PYTHONPATH:+:$PYTHONPATH}" python3 -c '
+import sys, time
+from lr_recon import facts as F
+from lr_recon import types as T
+
+now = time.time()
+rows = F.limited_rows(F.load_facts(T.Paths.from_env()), now)
+if not rows:
+    print("cc-lr: no limited accounts in the reconciler facts")
+    sys.exit(0)
+
+
+def when(ts):
+    if ts is None:
+        return "no reset known"
+    at = time.strftime("%Y-%m-%dT%H:%MZ", time.gmtime(ts))
+    left = int(ts - now)
+    if left <= 0:
+        return "resets %s (passed)" % at
+    h, m = divmod(left // 60, 60)
+    return "resets %s (in %dh%02dm)" % (at, h, m)
+
+
+groups = {}
+for r in rows:
+    groups.setdefault(r["acct"], []).append(r)
+for acct in sorted(groups):
+    members = groups[acct]
+    print("%-7s %d limited scope%s" % (acct, len(members), "" if len(members) == 1 else "s"))
+    for r in members:
+        flags = [k for k in ("contradicted", "untested") if r.get(k)]
+        print("  %-12s %-38s src=%s%s" % (r["scope"], when(r["resets_at"]), r["src"] or "-",
+                                          "  " + ",".join(flags) if flags else ""))
+' || cl_die "could not read the reconciler facts under $RECON_ROOT/facts" 2
+}
+
+# ── cohort refire: reset ONE member's retry budget (W4) ────────────────────────────────────────
+# The daemon owns the budget; this only drops a ctl request it watches (recon/ctl/ is in its kqueue
+# set), so the verb stays inside this file's iron rule — it writes, and something else acts.
+cl_recon_sid() { # <sid|sid8|pane> → the full sid on stdout; rc 1 no match · 2 ambiguous
+  local ref="$1" f hits="" n=0 row
+  for f in "$RECON_ROOT/sessions/$ref"*.json; do
+    [ -f "$f" ] || continue
+    hits="$(basename "$f" .json)"; n=$((n + 1))
+  done
+  if [ "$n" -eq 1 ]; then printf '%s' "$hits"; return 0; fi
+  if [ "$n" -gt 1 ]; then echo "cc-lr: REFUSED — '$ref' names $n reconciler records; pass the full sid" >&2; return 2; fi
+  # No record by that name: a bare number is a pane id, and cc-find is the pane resolver.
+  case "$ref" in *[!0-9]*) echo "cc-lr: '$ref' names no reconciler record under $RECON_ROOT/sessions" >&2; return 1 ;; esac
+  row="$(cl_resolve "$ref")" || return $?
+  printf '%s' "$row" | cut -f1
+}
+cmd_cohort() {
+  local sub="${1:-}" ref sid dir dest tmp
+  [ $# -gt 0 ] && shift
+  case "$sub" in
+    refire) ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "cc-lr cohort: unknown or missing verb '${sub}' — expected: cc-lr cohort refire <sid|sid8|pane>" >&2; exit 3 ;;
+  esac
+  [ $# -eq 1 ] || { echo "cc-lr cohort refire: exactly one ref (sid, sid8 or pane id)" >&2; exit 3; }
+  ref="$1"
+  case "$ref" in ''|*[!0-9a-fA-F-]*) echo "cc-lr cohort refire: '$ref' is not a sid, sid8 or pane id" >&2; exit 3 ;; esac
+  sid="$(cl_recon_sid "$ref")" || exit $?
+  [ -n "$sid" ] || exit 1
+  dir="$RECON_ROOT/ctl"
+  mkdir -p "$dir" 2>/dev/null || cl_die "cannot create $dir; nothing was written" 2
+  dest="$dir/$sid.refire.json"; tmp="$dir/.$sid.refire.$$.tmp"
+  if printf '{"sid":"%s","at":%s,"by":"cc-lr"}\n' "$sid" "$(date +%s)" > "$tmp" 2>/dev/null \
+     && mv -f "$tmp" "$dest" 2>/dev/null; then
+    printf '%s\n' "$dest"
+    return 0
+  fi
+  rm -f "$tmp" 2>/dev/null || true
+  cl_die "could not write $dest; nothing was requested" 2
+}
+
 # ── argv ───────────────────────────────────────────────────────────────────────────────────────
 [ $# -ge 1 ] || { usage; exit 3; }
 CMD="$1"; shift
@@ -1383,6 +1618,8 @@ case "$CMD" in
   status)  cmd_status  "$@"; exit $? ;;
   repair)  cmd_repair  "$@"; exit $? ;;
   upgrade) cmd_upgrade "$@"; exit $? ;;
-  *) echo "cc-lr: unknown subcommand '$CMD' — expected find | recover | switch | status | repair | upgrade" >&2
+  accounts) cmd_accounts "$@"; exit $? ;;
+  cohort)  cmd_cohort  "$@"; exit $? ;;
+  *) echo "cc-lr: unknown subcommand '$CMD' — expected find | recover | switch | status | repair | upgrade | accounts | cohort (status --cohort, accounts --limited, cohort refire)" >&2
      usage; exit 3 ;;
 esac
