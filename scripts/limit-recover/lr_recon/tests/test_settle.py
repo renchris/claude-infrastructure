@@ -100,6 +100,12 @@ class Exits(unittest.TestCase):
         settle.settle_exit(r, actuator(), 6, "lr-handoff: PRECHECK REFUSED:not-limited — x", 5.0)
         self.assertEqual((r.substate, r.next_eligible_at), ("WAIT_DATA", 5.0 + settle.WAIT_RETRY_S))
 
+    def test_a_capacity_shed_R_waits_its_retry_time(self):
+        r = rec(phase="PANE-GONE", sub="R")
+        txt = "boot-resume-launch: capacity-admit: REFUSING resume x on next3 — load 54.30 on 10 cores"
+        self.assertIn("WAIT", settle.settle_exit(r, actuator("R"), 9, txt, 5.0))
+        self.assertEqual((r.next_eligible_at, r.escalated), (5.0 + settle.WAIT_RETRY_S, False))
+
     def test_not_limited_on_a_hop_waits_instead_of_closing(self):
         r = rec()
         r.close["hop"] = "auth"

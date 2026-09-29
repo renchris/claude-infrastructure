@@ -61,6 +61,9 @@ _CLASSES: Tuple[Tuple[str, List[Pattern[str]]], ...] = (
         _rx(
             r"\bno routable target\b",
             r"\bcapacity\b.{0,10}\brefused\b|\bcapacity-refused\b",
+            # capacity-admit's own shed wording (boot-resume-launch exit 9, lr-fire-resume):
+            # "capacity-admit: REFUSING resume <sid> on <acct> — load …"
+            r"\bcapacity-admit\b.{0,20}\brefus",
             r"\bevery account\b.{0,10}\blimited\b|\ball accounts\b.{0,10}\blimited\b",
             r"\brouter (?:exit|rc)[ =:]*3\b",
             r"\btarget[-_]limited\b",

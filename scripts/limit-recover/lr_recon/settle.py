@@ -134,12 +134,12 @@ def settle_exit(
             _hold(rec, sub or _hold_substate(text), now)
     elif disp == "WAIT":
         classify.apply_failure(rec, "WAIT", fp, detail, now)
+        # Without an eligibility time the next pass re-spawned the actuator every few seconds
+        # (W5 rig: refused idle moves in PRE-MOVE, a capacity-shed R in PANE-GONE).
+        rec.next_eligible_at = now + WAIT_RETRY_S
         if pre:
             rec.substate = sub or "WAIT_SLOT"
             rec.wait = T.Wait(reason=rec.substate, since=now, eta=now + WAIT_RETRY_S)
-            # the WAIT_* substates are movers: without an eligibility time the next pass re-placed
-            # and re-spawned the move every few seconds (W5 rig, idle moves refused by the probe)
-            rec.next_eligible_at = now + WAIT_RETRY_S
     elif disp in ("TRANSIENT", "DETERMINISTIC", "IMPOSSIBLE"):
         d = classify.apply_failure(rec, disp, fp, detail, now)
         if d == "IMPOSSIBLE":
