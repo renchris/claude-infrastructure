@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: complete
 ---
 
 # Custody — only a TERMINAL HANDOFF-PING discharges
@@ -49,7 +49,9 @@ Execution locus: L (lead-inline) — one hook edit, one trailer edit, one shared
   positive cases (DONE returns, progress+DONE in one batch) pass both ways by design. The trailer
   case fails on the pre-fix trailer. Adjacent suites green: cc-custody 1..15, mailbox-emit-then-commit
   1..10, cc-cloud 1..51, cloud-retire-terminal 1..15.
-- [ ] /ship, content-verify, converge
+- [x] /ship, content-verify, converge — landed 6cee2b622 on origin/main (ship-land: 6 paths
+  present + content-identical, stranded-sweep clean); deploy-live at trunk tip, and
+  `~/.claude/hooks/lib/handoff-ping-terminal.sh` is linked live.
 
 Learning: the first lib-absent case passed on pre-fix code — `seed` rewrote the inbox and the
 `.seen` line offset made the second ping look already read. Use `add` for a second delivery, and
