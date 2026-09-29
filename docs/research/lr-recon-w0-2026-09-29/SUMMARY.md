@@ -15,6 +15,7 @@ closed afterwards. No live pane was typed into.
 | 6 | 65 fixture rows (50 real, 15 synthetic) in 14 files: 13 real incidents plus a synthetic set | W3's `lr_recon.phase` fixture suite |
 | 7 | 10 screen frames, 9 JSONL record shapes | W5 rig stub |
 | 8 | resumed run `wf_efe43f63-ce7`: 646 slots, first dangling slot at index 633, 0 completed slots after it | the prefix rule as briefed is refuted for this run; the measured rule is below |
+| 9 | burst of N = 2..6 simultaneous cold starts per account, 2 accounts: 0 of 40 first turns failed, 0 retried, 0 "temporarily limiting", 0 529 | the first-turn pacer of 3 is not binding on evidence; KMAX=8 stays (decision 8); the "5-6 concurrent" band is unmeasured folklore |
 
 ## 1. Readiness to accept Enter → `LR_RECR_SCHEDULE=5,15,30,45`
 
@@ -176,3 +177,27 @@ So the rule the ingest check must enforce is this: **a resume re-uses a complete
 `lr-audit` has two gaps here:
 - It cannot open the source account's `.jsonl.handed-off`, because full mode ignores `--transcript`.
 - It prints no call index. The index came from `workflowProgress[].index` in the pre-move run summary, and that order matches the journal's start order.
+
+## 9. Burst probe: first-turn failures against N simultaneous cold starts (operator decision 8)
+
+Added by the programme lead mid-wave. Script: `raw/m9-burst-probe.py`. Raw output: `raw/m9-burst-probe.txt`. This is the unrun C5 probe from `docs/research/codex-vs-claude-200-2026-09-16/README.md`.
+
+**Method.** One account at a time; for each N in 2, 3, 4, 5, 6:
+- a barrier starts N headless `claude -p` cold sessions at the same instant (CC 2.1.284, `claude-opus-5-5`, full CLAUDE.md context, a one-word reply);
+- 60 s gap between rounds;
+- each session's `stream-json` is read for `api_retry` events, because CC retries 529 and rate-limit errors silently and the final result alone would hide them.
+
+Run at 05:45-05:59Z, load1 about 41.
+
+| account | live fleet sessions on it at the time | N = 2 | 3 | 4 | 5 | 6 | wall time per first turn |
+|---|---|---|---|---|---|---|---|
+| next4 | 11 | 0/2 | 0/3 | 0/4 | 0/5 | 0/6 | 19.8-26.3 s |
+| next | 6 | 0/2 | 0/3 | 0/4 | 0/5 | 0/6 | 15.5-34.2 s |
+
+Each cell is failed-or-retried first turns / N. Across all 40 sessions there were 0 `api_retry` events, 0 "Server is temporarily limiting requests (not your usage limit)", and 0 529. The worst wall time was at N=6 on `next` (32-34 s against 16 s at N=2), which suggests queueing rather than refusal.
+
+**What it means.**
+- **The claimed limiter did not appear.** The "~3-4 simultaneous cold starts" limiter from the GitHub issues cited in C5 did not reproduce at N ≤ 6, even with the account's own live fleet running on top. So the first-turn pacer of 3 per account (architecture C6 item 3 and §6) is a conservative default, not a measured bound. It can stay at 3, since it costs about 20 s per extra wave, or be raised to 6 with no measured 529 risk. This probe gives no evidence above 6.
+- **The "5-6 concurrent requests" band is unmeasured.** The design cites a band of 5-6 concurrent requests per account that produces 529s. It was never measured on this machine: it came from GH#62426 plus habit, and this probe does not reproduce it at 6.
+- **KMAX is a different quantity.** KMAX=8 counts sessions whose transcripts were written in the last `KWORK_WINDOW_MIN` (10 min), not concurrent requests. A burst of first turns is not what KMAX meters, so nothing here argues for changing it. Operator decision 8 (keep 8) stands on its own reasons.
+- **Limits of the probe.** It is one sample per cell, taken outside a limit storm, and a limiter that keys on the whole organization or on a time of day would not show here. W5's canaries should log `api_retry` on every relaunch, so a real cohort re-measures this.

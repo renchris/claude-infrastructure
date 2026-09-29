@@ -1,0 +1,56 @@
+$ python3 raw/m9-burst-probe.py /tmp/lrw0/m9-burst.jsonl next4=~/.claude-quaternary next=~/.claude-next   # 2026-09-29T05:45:50Z NS=2,3,4,5,6 GAP_S=60 MODEL=claude-opus-5-5 CC 2.1.284 load1=40.68
+{"kind": "round", "acct": "next4", "n": 2, "at": "2026-09-29T05:45:50Z", "first_turn_failed": 0, "retried": 0, "limiting_text": 0, "s529": 0, "wall_s": [24.2, 26.0]}
+{"kind": "round", "acct": "next4", "n": 3, "at": "2026-09-29T05:47:16Z", "first_turn_failed": 0, "retried": 0, "limiting_text": 0, "s529": 0, "wall_s": [19.8, 19.8, 21.3]}
+{"kind": "round", "acct": "next4", "n": 4, "at": "2026-09-29T05:48:37Z", "first_turn_failed": 0, "retried": 0, "limiting_text": 0, "s529": 0, "wall_s": [19.8, 19.9, 19.9, 20.1]}
+{"kind": "round", "acct": "next4", "n": 5, "at": "2026-09-29T05:49:57Z", "first_turn_failed": 0, "retried": 0, "limiting_text": 0, "s529": 0, "wall_s": [22.7, 22.7, 22.7, 22.7, 22.8]}
+{"kind": "round", "acct": "next4", "n": 6, "at": "2026-09-29T05:51:20Z", "first_turn_failed": 0, "retried": 0, "limiting_text": 0, "s529": 0, "wall_s": [24.0, 24.8, 25.3, 25.7, 25.9, 26.3]}
+{"kind": "round", "acct": "next", "n": 2, "at": "2026-09-29T05:52:46Z", "first_turn_failed": 0, "retried": 0, "limiting_text": 0, "s529": 0, "wall_s": [15.5, 16.0]}
+{"kind": "round", "acct": "next", "n": 3, "at": "2026-09-29T05:54:02Z", "first_turn_failed": 0, "retried": 0, "limiting_text": 0, "s529": 0, "wall_s": [22.9, 22.9, 23.1]}
+{"kind": "round", "acct": "next", "n": 4, "at": "2026-09-29T05:55:26Z", "first_turn_failed": 0, "retried": 0, "limiting_text": 0, "s529": 0, "wall_s": [20.4, 20.4, 20.4, 20.4]}
+{"kind": "round", "acct": "next", "n": 5, "at": "2026-09-29T05:56:46Z", "first_turn_failed": 0, "retried": 0, "limiting_text": 0, "s529": 0, "wall_s": [24.1, 24.1, 24.2, 24.3, 24.4]}
+{"kind": "round", "acct": "next", "n": 6, "at": "2026-09-29T05:58:10Z", "first_turn_failed": 0, "retried": 0, "limiting_text": 0, "s529": 0, "wall_s": [32.4, 32.5, 33.0, 33.5, 33.6, 34.2]}
+EXIT=0
+--- per-session rows
+{"kind": "session", "acct": "next4", "n": 2, "i": 0, "wall_s": 26.0, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next4", "n": 2, "i": 1, "wall_s": 24.2, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next4", "n": 3, "i": 0, "wall_s": 19.8, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next4", "n": 3, "i": 1, "wall_s": 21.3, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next4", "n": 3, "i": 2, "wall_s": 19.8, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next4", "n": 4, "i": 0, "wall_s": 19.9, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next4", "n": 4, "i": 1, "wall_s": 20.1, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next4", "n": 4, "i": 2, "wall_s": 19.9, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next4", "n": 4, "i": 3, "wall_s": 19.8, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next4", "n": 5, "i": 0, "wall_s": 22.7, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next4", "n": 5, "i": 1, "wall_s": 22.7, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next4", "n": 5, "i": 2, "wall_s": 22.7, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next4", "n": 5, "i": 3, "wall_s": 22.8, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next4", "n": 5, "i": 4, "wall_s": 22.7, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next4", "n": 6, "i": 0, "wall_s": 26.3, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next4", "n": 6, "i": 1, "wall_s": 24.0, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next4", "n": 6, "i": 2, "wall_s": 25.3, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next4", "n": 6, "i": 3, "wall_s": 24.8, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next4", "n": 6, "i": 4, "wall_s": 25.9, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next4", "n": 6, "i": 5, "wall_s": 25.7, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next", "n": 2, "i": 0, "wall_s": 15.5, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next", "n": 2, "i": 1, "wall_s": 16.0, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next", "n": 3, "i": 0, "wall_s": 23.1, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next", "n": 3, "i": 1, "wall_s": 22.9, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next", "n": 3, "i": 2, "wall_s": 22.9, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next", "n": 4, "i": 0, "wall_s": 20.4, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next", "n": 4, "i": 1, "wall_s": 20.4, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next", "n": 4, "i": 2, "wall_s": 20.4, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next", "n": 4, "i": 3, "wall_s": 20.4, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next", "n": 5, "i": 0, "wall_s": 24.1, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next", "n": 5, "i": 1, "wall_s": 24.3, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next", "n": 5, "i": 2, "wall_s": 24.2, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next", "n": 5, "i": 3, "wall_s": 24.4, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next", "n": 5, "i": 4, "wall_s": 24.1, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next", "n": 6, "i": 0, "wall_s": 34.2, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next", "n": 6, "i": 1, "wall_s": 33.5, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next", "n": 6, "i": 2, "wall_s": 33.6, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next", "n": 6, "i": 3, "wall_s": 32.5, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next", "n": 6, "i": 4, "wall_s": 33.0, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+{"kind": "session", "acct": "next", "n": 6, "i": 5, "wall_s": 32.4, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": false, "retry_detail": []}
+--- smoke run (N=1, before the detector fix: its s529=true was a substring false positive, fixed in the script)
+{"kind": "session", "acct": "next4", "n": 1, "i": 0, "wall_s": 19.3, "rc": 0, "is_error": false, "result": "OK", "retries": 0, "retry_statuses": [], "limiting_text": false, "s529": true, "retry_detail": []}
+{"kind": "round", "acct": "next4", "n": 1, "at": "2026-09-29T05:45:06Z", "first_turn_failed": 0, "retried": 0, "limiting_text": 0, "s529": 1, "wall_s": [19.3]}

@@ -456,6 +456,7 @@ Dynamic Workflow wf_99ea9654-29f (22 agents, 0 errors: 8 subsystem maps, 4 desig
   - The goal survives a usage-limit death (12 of 12), so no re-arm is needed on the same-uuid path.
   - Under `CLAUDE_CODE_DISABLE_AGENT_VIEW=1`, `pane_bgwork_key` returns no key and option 2 becomes "Stay".
   - Launchd resolves the socket through the `/tmp` glob, and needs the absolute `kitten` path.
+  - Item 9, the burst probe: 0 of 40 first turns failed or retried at N = 2..6 simultaneous cold starts on `next4` and `next`, with their live fleets running on top. So the first-turn pacer of 3 is conservative rather than measured; KMAX=8 is unaffected; and the design's "5-6 concurrent requests" band is unmeasured on this machine.
 
   Learnings for later waves:
   - **W2c:** `cc-kitty-socket --all` is silently ignored today.
