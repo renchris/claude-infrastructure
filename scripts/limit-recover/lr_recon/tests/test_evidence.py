@@ -199,5 +199,50 @@ class EvidenceTests(unittest.TestCase):
         self.assertTrue(self._build(s3).holder_stable_two_samples)
 
 
+    def test_fold_witness_proves_target_is_retired_plus_stub(self):
+        """The W5 fold audit: snapshots while the stub stands, the target's prefix sha after the fold."""
+        import hashlib
+
+        src = os.path.join(self.src, "projects", "-w-x", "sid1.jsonl")
+        tgt = os.path.join(self.tgt, "projects", "-w-x", "sid1.jsonl")
+        for p, b in ((src + ".handed-off", b"A\n"), (tgt, b"A\n")):
+            with open(p, "wb") as fh:
+                fh.write(b)
+        self.assertEqual(E.fold_witness(self.paths, self.rec), "")  # no stub, nothing to keep
+        with open(src, "wb") as fh:
+            fh.write(b"STUB\n")  # the source wrote once after the retire
+        self.assertEqual(E.fold_witness(self.paths, self.rec), "snap")
+        for p in (src + ".handed-off", tgt):  # lr-transplant --phase fold-stub
+            with open(p, "ab") as fh:
+                fh.write(b"STUB\n")
+        os.unlink(src)
+        with open(tgt, "ab") as fh:
+            fh.write(b"RESUMED\n")  # the relaunched session already appended
+        self.assertEqual(E.fold_witness(self.paths, self.rec), "fold")
+        out = os.path.join(self.paths.root, "work", "sid1.fold.json")
+        rec = json.load(open(out))
+        want = hashlib.sha256(open(rec["retired"], "rb").read() + open(rec["stub"], "rb").read())
+        self.assertEqual(rec["target_sha"], want.hexdigest())
+        self.assertNotIn(os.sep + "sessions" + os.sep, out)  # load_all would quarantine it there
+        self.assertEqual(E.fold_witness(self.paths, self.rec), "")  # written once
+
+    def test_fold_witness_differs_when_the_fold_lost_the_stub(self):
+        src = os.path.join(self.src, "projects", "-w-x", "sid1.jsonl")
+        tgt = os.path.join(self.tgt, "projects", "-w-x", "sid1.jsonl")
+        for p, b in ((src + ".handed-off", b"A\n"), (tgt, b"A\n"), (src, b"STUB\n")):
+            with open(p, "wb") as fh:
+                fh.write(b)
+        E.fold_witness(self.paths, self.rec)
+        os.unlink(src)  # the stub vanished without being appended to the target
+        with open(tgt, "ab") as fh:
+            fh.write(b"RESUMED\n")
+        self.assertEqual(E.fold_witness(self.paths, self.rec), "fold")
+        rec = json.load(open(os.path.join(self.paths.root, "work", "sid1.fold.json")))
+        import hashlib
+
+        want = hashlib.sha256(b"A\nSTUB\n").hexdigest()
+        self.assertNotEqual(rec["target_sha"], want)
+
+
 if __name__ == "__main__":
     unittest.main()

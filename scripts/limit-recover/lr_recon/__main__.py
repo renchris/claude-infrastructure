@@ -604,6 +604,9 @@ def run_pass(ctx: Ctx, force_observe: bool = False) -> Dict[str, Any]:
     reqs = store.list_requests(paths)
     buckets, stale = _census(ctx, snap, facts, reqs, mode, now)
     _derive(ctx, snap, now)
+    for rec in ctx.records.values():  # the fold audit's evidence (plan § W5): cheap, never raises
+        if evidence.fold_witness(paths, rec) == "fold":
+            _event(paths, "fold-witness", rec.sid)
     # before planning, so a re-armed member is placed and dispatched this pass
     _refire(ctx, now)
     placed = _plan(ctx, snap, facts, mode, now)

@@ -15,10 +15,11 @@ over a pane we simply could not read).
 from __future__ import annotations
 
 import glob
+import hashlib
 import os
 from typing import Callable, Dict, List, Optional
 
-from lr_recon import tokens
+from lr_recon import store, tokens
 from lr_recon import types as T
 from lr_recon.transcript import slug
 
@@ -297,3 +298,59 @@ def derive(
     res = derive_phase(ev)
     advance_history(rec, ev, snap)
     return {"evidence": ev, "result": res}
+
+
+def _file_sha(path: str, limit: int = -1) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        h.update(fh.read(limit) if limit >= 0 else fh.read())
+    return h.hexdigest()
+
+
+def fold_witness(paths: T.Paths, rec: T.Record) -> str:
+    """Keep the evidence a fold of a re-created stub is judged by (plan § W5 audit): sha(target) ==
+    sha(retired + stub). While a stub sits beside the retired copy, snapshot both into work/ — the
+    fold appends the stub to BOTH copies and unlinks it, so after the fold neither original is left.
+    Once the stub is gone, hash the target's first len(retired + stub) bytes: a resumed session
+    appends to the target at once, so its whole-file sha stops meaning anything within seconds.
+    The record lives in work/, never sessions/, which load_all would quarantine as a bad record.
+    Returns what it did ("snap", "fold", or "") and never raises."""
+    try:
+        src = transcript_path(rec.source_cfg, rec.cwd, rec.sid)
+        if not src or not os.path.exists(src + ".handed-off"):
+            return ""
+        work = paths.p("work")
+        out = os.path.join(work, rec.sid + ".fold.json")
+        snap_r = os.path.join(work, rec.sid + ".fold.retired")
+        snap_s = os.path.join(work, rec.sid + ".fold.stub")
+        if os.path.exists(out):
+            return ""
+        if os.path.exists(src):  # a stub: snapshot it and the retired copy it will be folded onto
+            os.makedirs(work, exist_ok=True)
+            for a, b in ((src + ".handed-off", snap_r), (src, snap_s)):
+                with open(a, "rb") as fh:
+                    data = fh.read()
+                with open(b + ".tmp", "wb") as fh:
+                    fh.write(data)
+                os.replace(b + ".tmp", b)
+            return "snap"
+        if not (os.path.exists(snap_r) and os.path.exists(snap_s)):
+            return ""
+        tgt = transcript_path(rec.target_cfg, rec.cwd, rec.sid)
+        n = os.path.getsize(snap_r) + os.path.getsize(snap_s)
+        if not tgt or not os.path.exists(tgt) or os.path.getsize(tgt) < n:
+            return ""
+        store.atomic_write_json(
+            out,
+            {
+                "sid": rec.sid,
+                "retired": snap_r,
+                "stub": snap_s,
+                "target": tgt,
+                "target_bytes": n,
+                "target_sha": _file_sha(tgt, n),
+            },
+        )
+        return "fold"
+    except OSError:
+        return ""

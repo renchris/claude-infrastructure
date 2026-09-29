@@ -158,7 +158,7 @@ def audit(root: str, specs: List[Dict[str, Any]], home: str) -> int:
     for s in specs:
         if not s.get("fold"):
             continue
-        fold = os.path.join(root, "sessions", s["sid"] + ".fold.json")
+        fold = os.path.join(root, "work", s["sid"] + ".fold.json")  # the daemon's fold witness
         try:
             rec = load(fold)
             want_sha = _sha([rec["retired"], rec["stub"]])
