@@ -26,6 +26,7 @@ from lr_recon import types as T
 from lr_recon.evidence import transcript_path
 
 REPROBE_S = 120.0
+WAIT_RETRY_S = 60.0
 MOVE_ACTUATORS = ("A", "A-husk", "B", "R")
 TAIL_BYTES = 16 * 1024
 # Substates the census derives from a bucket; it may rewrite them while nothing is in flight.
@@ -133,7 +134,10 @@ def settle_exit(
         classify.apply_failure(rec, "WAIT", fp, detail, now)
         if pre:
             rec.substate = sub or "WAIT_SLOT"
-            rec.wait = T.Wait(reason=rec.substate, since=now, eta=now + 60.0)
+            rec.wait = T.Wait(reason=rec.substate, since=now, eta=now + WAIT_RETRY_S)
+            # the WAIT_* substates are movers: without an eligibility time the next pass re-placed
+            # and re-spawned the move every few seconds (W5 rig, idle moves refused by the probe)
+            rec.next_eligible_at = now + WAIT_RETRY_S
     elif disp in ("TRANSIENT", "DETERMINISTIC", "IMPOSSIBLE"):
         d = classify.apply_failure(rec, disp, fp, detail, now)
         if d == "IMPOSSIBLE":
@@ -254,3 +258,42 @@ def target_holder(rec: T.Record, snap: T.Snapshot) -> Optional[T.HolderObs]:
         if not h.bg and rec.pane and h.pane is not None and tuple(h.pane) == tuple(rec.pane):
             return h
     return None
+
+
+# ── readiness (§4.2 row 6, MOVED): lr-fire-resume --no-prompt notes READY / READY-QUIET ─────────
+
+READY_STATES = ("READY", "READY-QUIET")
+
+
+def bundles_dir(home: str, sid: str) -> str:
+    """lr-handoff writes its run bundle under $HOME/.reso/limit-recover/<sid>/ (no other seam)."""
+    return os.path.join(home, ".reso", "limit-recover", sid)
+
+
+def readiness(home: str, rec: T.Record) -> str:
+    """The newest bundle of THIS attempt that noted READY/READY-QUIET, else "none". A bundle is this
+    attempt's when its events carry attempt == rec.attempt (lr-fire-resume stamps LR_ATTEMPT)."""
+    import glob
+
+    runs = sorted(
+        glob.glob(os.path.join(glob.escape(bundles_dir(home, rec.sid)), "bundle-*", "events.jsonl")),
+        reverse=True,
+    )
+    for f in runs[:4]:
+        try:
+            with open(f, encoding="utf-8", errors="replace") as fh:
+                lines = fh.readlines()[-200:]
+        except OSError:
+            continue
+        for ln in reversed(lines):
+            try:
+                ev = json.loads(ln)
+            except ValueError:
+                continue
+            if (
+                isinstance(ev, dict)
+                and ev.get("state") in READY_STATES
+                and str(ev.get("attempt", "")) == str(rec.attempt)
+            ):
+                return str(ev["state"])
+    return "none"

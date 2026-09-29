@@ -418,6 +418,37 @@ class Rows(unittest.TestCase):
         )
 
 
+class Composer(unittest.TestCase):
+    """composer_from_screen over W0's captured frames: only a real box reads empty."""
+
+    FIX = os.path.join(
+        os.path.dirname(os.path.realpath(__file__)),
+        "..", "..", "..", "..", "tests", "fixtures", "lr-recon", "screens",
+    )
+
+    def frame(self, name):
+        with open(os.path.join(self.FIX, name), encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_w0_frames(self):
+        want = {
+            "composer-empty-2.1.284.txt": "empty",
+            "composer-empty-2.1.114.txt": "empty",
+            "composer-resumed-2.1.284.txt": "empty",
+            "composer-draft-2.1.284.txt": "draft",
+            "bgwork-dialog-2.1.284.txt": "unknown",
+            "trust-dialog-2.1.284.txt": "unknown",
+        }
+        for name, state in want.items():
+            self.assertEqual(O.composer_from_screen(self.frame(name)), state, name)
+
+    def test_a_faint_suggestion_is_not_a_draft_but_plain_text_is(self):
+        box = "x\n%s\n❯ %s\n%s\n" % ("─" * 20, "%s", "─" * 20)
+        self.assertEqual(O.composer_from_screen(box % "\x1b[2mship the film\x1b[22m"), "empty")
+        self.assertEqual(O.composer_from_screen(box % "ship the film"), "draft")
+        self.assertEqual(O.composer_from_screen(box % "\x1b[38;2;1;2;3mship\x1b[0m"), "draft")
+
+
 class Observe(unittest.TestCase):
     def setUp(self):
         self.home = Home()

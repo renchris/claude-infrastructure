@@ -94,6 +94,12 @@ class Exits(unittest.TestCase):
         self.assertEqual((r.phase, r.substate, r.attempt), ("PRE-MOVE", "DETECTED", 2))
         self.assertEqual((r.close["hop"], r.close["hops"]), ("limit", 1))
 
+    def test_a_wait_is_not_retried_before_its_eligibility_time(self):
+        r = rec()
+        r.kind = "idle"
+        settle.settle_exit(r, actuator(), 6, "lr-handoff: PRECHECK REFUSED:not-limited — x", 5.0)
+        self.assertEqual((r.substate, r.next_eligible_at), ("WAIT_DATA", 5.0 + settle.WAIT_RETRY_S))
+
     def test_not_limited_on_a_hop_waits_instead_of_closing(self):
         r = rec()
         r.close["hop"] = "auth"

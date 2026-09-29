@@ -12,6 +12,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -224,6 +225,84 @@ def panes_from_ls(
                     )
                 )
     return out
+
+
+# ── the composer (idle fan-out only): the same box read as handoff-fire's composer_content ──────
+
+_ESC = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b.")
+_SGR = re.compile(r"\x1b\[([0-9;:]*)m")
+_PLACEHOLDER = re.compile(r'^\s*Try "[^"]*("|\.\.\.)\s*$')
+BORDER = "─" * 12
+
+
+def _unfaint(line: str) -> str:
+    """Drop escapes and every FAINT (SGR 2) run: CC's prompt suggestion is faint, input never is."""
+    out, faint, i = [], False, 0
+    for m in re.finditer(r"\x1b\[([0-9;:]*)m|\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b.", line):
+        if not faint:
+            out.append(line[i : m.start()])
+        if m.group(1) is not None:
+            params = m.group(1).split(";") if m.group(1) else [""]
+            k = 0
+            while k < len(params):
+                c = params[k].split(":")[0]
+                if c in ("", "0", "22"):
+                    faint = False
+                elif c == "2":
+                    faint = True
+                elif c in ("38", "48", "58") and ":" not in params[k]:
+                    nxt = params[k + 1] if k + 1 < len(params) else ""
+                    k += 2 if nxt == "5" else 4 if nxt == "2" else 0
+                k += 1
+        i = m.end()
+    if not faint:
+        out.append(line[i:])
+    return "".join(out)
+
+
+def composer_from_screen(screen: str) -> str:
+    """"empty" | "draft" | "unknown" from a --ansi screen: the rows strictly between the last two
+    border rows, faint runs dropped, printable ASCII only; a whole-row `Try "…"` is the placeholder."""
+    lines = screen.splitlines()
+    plain = [_ESC.sub("", ln) for ln in lines]
+    borders = [i for i, ln in enumerate(plain) if BORDER in ln]
+    if len(borders) < 2 or borders[-1] - borders[-2] < 2:
+        return "unknown"
+    rows = []
+    for ln in lines[borders[-2] + 1 : borders[-1]]:
+        txt = "".join(ch for ch in _unfaint(ln) if " " <= ch <= "~")
+        if not _PLACEHOLDER.match(txt):
+            rows.append(txt)
+    return "draft" if "".join("".join(rows).split()) else "empty"
+
+
+def composer_state(
+    sock: str,
+    window_id: int,
+    run: RunFn = subprocess.run,
+    kitten: Optional[str] = None,
+    timeout: float = 5.0,
+) -> str:
+    try:
+        scr = _run_ok(
+            run,
+            [
+                kitten or kitten_bin(),
+                "@",
+                "--to",
+                sock,
+                "get-text",
+                "--match",
+                "id:%d" % window_id,
+                "--extent",
+                "screen",
+                "--ansi",
+            ],
+            timeout,
+        )
+    except Exception:  # noqa: BLE001 — a read we could not make is unknown, never empty
+        return "unknown"
+    return composer_from_screen(scr)
 
 
 # ── C3.4-5, 7: sessions ──────────────────────────────────────────────────────────────────────────

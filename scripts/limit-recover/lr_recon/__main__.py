@@ -190,6 +190,7 @@ def _census(
             or s.sid in ctx.records
         ):
             continue
+        _read_composer(s, snap, facts, now)
         b = census.bucket(s, snap, facts, now)
         buckets.append(b)
         if b.name not in RECORD_TYPES or s.sid in stale_sids:
@@ -214,6 +215,24 @@ def _census(
     return buckets, stale
 
 
+def _read_composer(
+    s: T.SessionObs, snap: T.Snapshot, facts: Dict[str, T.Fact], now: float
+) -> None:
+    """An idle fan-out candidate needs an affirmatively EMPTY composer (census._idle); nothing else
+    ever reads it, so the one kitty read per pass is spent only there, and only with fan-out on."""
+    if (
+        os.environ.get("LR_IDLE_FANOUT", "off") != "on"
+        or not s.pane
+        or not s.transcript.at_rest
+        or (s.transcript.last or {}).get("limit")
+        or census._cover(s, facts, now) is None
+    ):
+        return
+    pane = snap.panes.get("%d:%d" % s.pane)
+    if pane is not None and pane.state == "claude":
+        s.composer = observe.composer_state(pane.sock, pane.window_id)
+
+
 def _derive(ctx: Ctx, snap: T.Snapshot, now: float) -> None:
     """Level-triggered confirm (§3 step 10): the derived phase replaces the cached one."""
     for rec in ctx.records.values():
@@ -232,7 +251,14 @@ def _derive(ctx: Ctx, snap: T.Snapshot, now: float) -> None:
         settle.note_confirm(rec)
         if settle.mark_in_flight(rec):
             _event(ctx.paths, "in-flight", rec.sid, rec.record_id, "transplant confirmed")
-        out = evidence.derive(ctx.paths, rec, snap)
+        out = evidence.derive(
+            ctx.paths,
+            rec,
+            snap,
+            readiness=(lambda r: settle.readiness(ctx.home, r))
+            if rec.kind == "idle"
+            else evidence._no_readiness,
+        )
         res = out["result"]
         ev = out["evidence"]
         assert isinstance(res, T.PhaseResult) and isinstance(ev, T.Evidence)
