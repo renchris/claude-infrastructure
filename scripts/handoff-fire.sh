@@ -6228,6 +6228,20 @@ live_subagents_of() { # $1=transcript dir (…/projects/<slug>/<sid>) [$2=owner 
       _mt="$(stat -f %m "$_j" 2>/dev/null || stat -c %Y "$_j" 2>/dev/null || true)"
       case "$_mt" in ''|*[!0-9]*) ;; *) [ "$_mt" -lt "$_born" ] && continue ;; esac
     fi
+    # A WORKFLOW AGENT SETTLES IN ITS RUN'S JOURNAL, and nowhere else. The harness sends the parent no
+    # task-notification for it, and it ends on its structured-output call, so its last stop_reason is
+    # `tool_use`: both predicates below read every finished workflow agent as IN FLIGHT forever.
+    # Measured 2026-09-29: run wf_99ea9654-29f, 22 `result` rows and no live process, refused a
+    # recycle as "22 … still IN FLIGHT". The run's journal.jsonl writes one `result` or `failed` row
+    # per agentId when that agent ends; over 439 runs / 17,573 rows no agentId ever started again
+    # after one. The keys are BARE (a result payload is an escaped string), so the match cannot be
+    # forged by content. No journal, or no row ⇒ fall through to the predicates below (the safe side).
+    case "$_m" in
+      */subagents/workflows/*)
+        awk -v a="\"agentId\":\"$_id\"" \
+          'index($0, a) && (index($0, "\"type\":\"result\"") || index($0, "\"type\":\"failed\"")) { f = 1 }
+           END { exit !f }' "${_m%/*}/journal.jsonl" 2>/dev/null && continue ;;
+    esac
     # PRIMARY: the harness recorded a stop, and the agent has written NOTHING since. The latest stop
     # record wins; the agent's LATEST timestamp is taken as a max over every bare one in its file, so
     # a stray nested value can only push it later — toward IN FLIGHT, the safe side.

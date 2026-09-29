@@ -7,6 +7,7 @@
 #   2  a background job the session still runs HOLDs the probe (hf_bg_work_gate / hf_bg_work_kind),
 #      and the idle inbox watcher does not.
 #   3  live_subagents_of counts a Workflow's in-flight agents (subagents/workflows/<run>/…).
+#   3b …and a Workflow agent with a `result`/`failed` row in its run's journal.jsonl is settled.
 #   4  emit_recycle_event rows carry the attempt + watcher nonce.
 #
 # WHY CASE 2 IS DRIVEN THROUGH THE EXTRACTED FUNCTIONS, NOT THE PROBE VERB: the bg-work gate sits
@@ -16,7 +17,8 @@
 # Every case is RED on its feature's revert (one mutant per case, run by hand before landing):
 #   1 drop the `--voluntary` bypass branch · 1b drop the parsed true/false arms (substring fallback) ·
 #   2 make hf_bg_work_kind print `none` ·
-#   3 drop the workflows glob · 4 drop the three nonce keys from the jq object.
+#   3 drop the workflows glob · 3b drop the journal-settle `case` arm ·
+#   4 drop the three nonce keys from the jq object.
 # Run a mutant from scripts/ (the script resolves its libraries beside itself):
 #   HF_OVERRIDE="$PWD/scripts/.hf-mutant.sh" bats tests/handoff-fire-recycle-custody.bats
 
@@ -265,6 +267,24 @@ wfagent() {
   wfagent wf_x a2 "done"
   run bash "$HF" --probe-live-subagents --source-session "$SID"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$output" = "live_subagents: 1" ] || { echo "$output"; false; }
+}
+
+# The REAL finished shape (wf_99ea9654-29f, 2026-09-29): every agent's last stop_reason is `tool_use`
+# (its structured-output call) and the parent transcript holds no task-notification for it; only the
+# run's journal.jsonl says it ended. `result` and `failed` both settle; `started` alone does not.
+@test "3b a Workflow agent settled in its run's journal is not counted" {
+  wfagent wf_y b1 live; wfagent wf_y b2 live; wfagent wf_y b3 live
+  printf '%s\n' '{"type":"launched"}' \
+    '{"type":"started","key":"v2:k1","agentId":"b1","label":"x","phase":"Map"}' \
+    '{"type":"started","key":"v2:k2","agentId":"b2","label":"y","phase":"Map"}' \
+    '{"type":"started","key":"v2:k3","agentId":"b3","label":"z","phase":"Map"}' \
+    '{"type":"result","key":"v2:k1","agentId":"b1","result":"{\"agentId\":\"b3\"}"}' \
+    '{"type":"failed","key":"v2:k2","agentId":"b2"}' \
+    > "$CC_PROJECTS_DIRS/-some-repo/$SID/subagents/workflows/wf_y/journal.jsonl"
+  run bash "$HF" --probe-live-subagents --source-session "$SID"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # b3 is still in flight — and b1's payload naming it (escaped) must not settle it.
   [ "$output" = "live_subagents: 1" ] || { echo "$output"; false; }
 }
 
