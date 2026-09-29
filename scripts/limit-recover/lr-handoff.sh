@@ -576,22 +576,38 @@ lrh_verdict() { # <TOKEN> <proven yes|no> <note>
 }
 
 # --- repo guards -----------------------------------------------------------
-BRANCH="" HEAD="" WT_TOP=""
+# 🚨 NOTHING IN THIS BLOCK MAY ABORT THE RECOVERY (D1, 2026-09-28). Every read here is CONTEXT for
+# the bundle and the successor; none is a precondition. Under `set -euo pipefail` a bare
+# `WT_TOP=$(git rev-parse --show-toplevel)` on a checkout flipped to core.bare=true died rc 128 and
+# took the whole recovery with it (fleet run one-20260929T030419Z-415a3aac). So: heal a flipped
+# checkout when the discriminators hold (lr_heal_bare_checkout, lr-lib.sh), and otherwise DEGRADE —
+# log the unreadable context and carry on with WT_TOP/BRANCH empty, which every consumer below
+# already defaults (`${WT_TOP:-$CWD}`, `${BRANCH:-?}`).
+BRANCH="" HEAD="" WT_TOP="" DIRTY=""
 if git -C "$CWD" rev-parse --git-dir >/dev/null 2>&1; then
-  WT_TOP=$(git -C "$CWD" rev-parse --show-toplevel)
-  BRANCH=$(git -C "$CWD" branch --show-current || true)
-  HEAD=$(git -C "$CWD" rev-parse --short HEAD 2>/dev/null || true)
+  lr_heal_bare_checkout "$CWD" || true
+fi
+if [[ "$(git -C "$CWD" rev-parse --is-inside-work-tree 2>/dev/null)" != true ]]; then
+  git -C "$CWD" rev-parse --git-dir >/dev/null 2>&1 \
+    && echo "lr-handoff: repo context UNREADABLE at $CWD (not a work tree) — recovering without the branch and dirty-path guards" >&2
+else
+  WT_TOP=$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null) || WT_TOP=""
+  BRANCH=$(git -C "$CWD" branch --show-current 2>/dev/null) || BRANCH=""
+  HEAD=$(git -C "$CWD" rev-parse --short HEAD 2>/dev/null) || HEAD=""
   if [[ "$BRANCH" == pool/* ]]; then
     NEWBR="recovered/${SID:0:8}"
-    git -C "$CWD" switch -C "$NEWBR" >&2
-    echo "lr-handoff: branch was $BRANCH (pool refresher would hard-reset it) — renamed to $NEWBR" >&2
-    BRANCH="$NEWBR"
+    if git -C "$CWD" switch -C "$NEWBR" >&2; then
+      echo "lr-handoff: branch was $BRANCH (pool refresher would hard-reset it) — renamed to $NEWBR" >&2
+      BRANCH="$NEWBR"
+    else
+      echo "lr-handoff: WARNING — branch $BRANCH is pool/* and the rename to $NEWBR FAILED; the pool refresher may hard-reset it" >&2
+    fi
   fi
-  DIRTY=$(git -C "$CWD" status --porcelain | wc -l | tr -d ' ')
+  DIRTY=$(git -C "$CWD" status --porcelain 2>/dev/null | wc -l | tr -d ' ') || DIRTY="?"
   # NAME the paths, never a bare count: the reader cannot act on "1 dirty paths", and the list it
   # points at lives inside a bundle nobody opens mid-recovery (§ close message S6: named, never
   # counted). Capped at 5 so a genuinely dirty tree cannot flood the recovery log.
-  [[ "$DIRTY" != "0" ]] && {
+  [[ "$DIRTY" =~ ^[0-9]+$ && "$DIRTY" != "0" ]] && {
     echo "lr-handoff: WARNING — $DIRTY dirty path(s); commit in-scope WIP before firing:" >&2
     git -C "$CWD" status --porcelain 2>/dev/null | awk 'NR<=5' | sed 's/^/  /' >&2
     [[ "$DIRTY" -gt 5 ]] && echo "  … $((DIRTY-5)) more (full list: git-status.txt in the bundle)" >&2

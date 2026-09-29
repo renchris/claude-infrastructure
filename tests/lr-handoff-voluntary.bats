@@ -368,3 +368,43 @@ S55_NOTICE="Sonnet 5.5 reasoning does not cross accounts; the resumed session re
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" != *"does not cross accounts"* ]] || { echo "$output"; false; }
 }
+
+# ── 4. D1 (2026-09-28): the repo guard never aborts a recovery ──────────────────────────────────
+# RED PROOF against the pre-change subject: `WT_TOP=$(git rev-parse --show-toplevel)` under
+# `set -euo pipefail` died rc 128 on a checkout flipped to core.bare=true, before any bundle existed
+# (fleet run one-20260929T030419Z-415a3aac). These cases run the LIMIT path (no --voluntary).
+flipped_repo() { # $1=dir
+  git init -q "$1" && printf 'a\n' > "$1/a" && git -C "$1" add a \
+    && git -C "$1" -c user.email=t@t -c user.name=t commit -qm init \
+    && git -C "$1" config core.bare true
+}
+
+@test "D1: a flipped-but-healable checkout is healed by the driver and the recovery completes" {
+  local d="$BATS_TEST_TMPDIR/repo"; flipped_repo "$d"
+  run env PATH="$STUB:$PATH" CLAUDE_CONFIG_DIR="$HOME/.claude" \
+      "$HANDOFF" --sid "$SID" --target next2 --cwd "$d" --launch --in-place --source-pane 31
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=healed"* ]] || { echo "$output"; false; }
+  [ "$(git -C "$d" rev-parse --is-inside-work-tree)" = true ]
+  grep -q -- '--recycle' "$HF_LOG"
+}
+
+@test "D1: an UNHEALABLE bare state degrades — logged, no abort, the recovery still fires" {
+  local d="$BATS_TEST_TMPDIR/repo"; flipped_repo "$d"; : > "$d/.git/logs/HEAD"
+  run env PATH="$STUB:$PATH" CLAUDE_CONFIG_DIR="$HOME/.claude" \
+      "$HANDOFF" --sid "$SID" --target next2 --cwd "$d" --launch --in-place --source-pane 31
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"repo context UNREADABLE"* ]] || { echo "$output"; false; }
+  [ "$(git -C "$d" config --bool core.bare)" = true ]
+  grep -q -- '--recycle' "$HF_LOG"
+}
+
+@test "D1: on a healthy repo the pool/* rename and the dirty-path warning still work" {
+  local d="$BATS_TEST_TMPDIR/repo"; flipped_repo "$d"; git -C "$d" config --unset core.bare
+  git -C "$d" switch -qc pool/x; printf 'b\n' > "$d/dirty"
+  run env PATH="$STUB:$PATH" CLAUDE_CONFIG_DIR="$HOME/.claude" \
+      "$HANDOFF" --sid "$SID" --target next2 --cwd "$d" --launch --in-place --source-pane 31
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(git -C "$d" branch --show-current)" = "recovered/${SID:0:8}" ]
+  [[ "$output" == *"dirty path(s)"* && "$output" == *"dirty"* ]] || { echo "$output"; false; }
+}

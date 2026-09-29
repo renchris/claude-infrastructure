@@ -709,6 +709,63 @@ sys.exit(rc)' "$hlog" && return 1
   return 0
 }
 
+# ── A CHECKOUT FLIPPED TO core.bare=true: HEALED BY THE DRIVER, NEVER BY A HUMAN (D1, 2026-09-28) ─
+# `git worktree add|remove` against a shared checkout can leave core.bare=true on it while every
+# working file stays on disk (memory: worktree-ops-can-bare-the-shared-checkout). Every work-tree git
+# op then dies rc 128, and on 2026-09-28 one of them (`rev-parse --show-toplevel`, an INFORMATIONAL
+# read) killed a recovery under `set -e`; the lead's own `git config core.bare false` was refused by
+# the auto-mode classifier, so the operator typed it. This runs inside the DETACHED driver, outside
+# every classifier, so the repair needs nobody.
+#
+# It repairs only when all three discriminators from that memory hold, and degrades otherwise:
+#   1. `rev-parse --is-inside-work-tree` is not true AND core.bare reads true on THIS checkout;
+#   2. working files are present: the git dir is `<top>/.git` and <top> holds something besides it
+#      (a real bare conversion removes the files; a genuinely bare repo has no `.git` entry at all);
+#   3. the HEAD reflog records normal work-tree operations (commit/checkout/merge/rebase/reset/pull).
+# A linked worktree is never the subject: git ignores the common core.bare there (measured on 2.54).
+# .git/config is copied aside first, and the verdict is read back by DIFFERENT calls than the unset.
+# Prints ONE line `lr-bare: verdict=<v> ...` on stderr. rc 0 = usable work tree (healthy or healed),
+# 1 = still not a work tree (degrade), 2 = not a git checkout at all. LR_BARE_REPAIR=off: detect only.
+lr_heal_bare_checkout() { # $1=dir → rc 0/1/2 and one verdict line on stderr
+  local dir="$1" gd top ent bak err rc=0 try
+  git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || { echo "lr-bare: verdict=not-a-repo dir=$dir" >&2; return 2; }
+  if [ "$(git -C "$dir" rev-parse --is-inside-work-tree 2>/dev/null)" = true ]; then return 0; fi
+  if [ "$(git -C "$dir" config --bool --get core.bare 2>/dev/null)" != true ]; then
+    echo "lr-bare: verdict=refused-not-bare-flag dir=$dir — not a work tree, but core.bare is not true; leaving it" >&2; return 1
+  fi
+  gd="$(git -C "$dir" rev-parse --absolute-git-dir 2>/dev/null)" || gd=""
+  case "$gd" in */.git) top="${gd%/.git}" ;; *)
+    echo "lr-bare: verdict=refused-no-dotgit dir=$dir gitdir=${gd:-?} — a genuinely bare layout; leaving it" >&2; return 1 ;;
+  esac
+  ent="$(find "$top" -mindepth 1 -maxdepth 1 ! -name .git 2>/dev/null | awk 'NR<=1')"
+  if [ -z "$ent" ]; then
+    echo "lr-bare: verdict=refused-no-working-files dir=$top — core.bare=true and nothing checked out (a real conversion?); leaving it" >&2; return 1
+  fi
+  if ! grep -Eq $'\t(commit|checkout|merge|rebase|reset|pull|cherry-pick|am|revert)' "$gd/logs/HEAD" 2>/dev/null; then
+    echo "lr-bare: verdict=refused-no-worktree-reflog dir=$top — the HEAD reflog shows no work-tree operation; leaving it" >&2; return 1
+  fi
+  if [ "${LR_BARE_REPAIR:-on}" = off ]; then
+    echo "lr-bare: verdict=detected-repair-off dir=$top — core.bare=true on a checkout with a working tree (LR_BARE_REPAIR=off)" >&2; return 1
+  fi
+  bak="$gd/config.lr-bare-backup-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  if ! cp -p "$gd/config" "$bak" 2>/dev/null; then
+    echo "lr-bare: verdict=refused-backup-failed dir=$top — could not copy $gd/config aside; not repairing without a backup" >&2; return 1
+  fi
+  # `git worktree add|remove` holds config.lock while it flips the key, so a lost lock is retryable.
+  for try in 1 2 3; do
+    err="$(git -C "$top" config --unset core.bare 2>&1)"; rc=$?
+    [ "$rc" -eq 0 ] && break
+    [ "$try" -lt 3 ] && sleep 1
+  done
+  if [ "$(git -C "$top" rev-parse --is-inside-work-tree 2>/dev/null)" = true ] \
+     && [ "$(git -C "$top" rev-parse --show-toplevel 2>/dev/null)" = "$(cd "$top" && pwd -P)" ]; then
+    echo "lr-bare: verdict=healed dir=$top — REPAIRED core.bare=true (a worktree add/remove flips it); backup $bak" >&2
+    return 0
+  fi
+  echo "lr-bare: verdict=repair-failed dir=$top — the unset did not restore a work tree (git exited $rc${err:+: $err}); backup $bak" >&2
+  return 1
+}
+
 # ── KITTY from ANY context (launchd has no $KITTY_WINDOW_ID) ─────────────────────────────────────
 lr_kitty_socket() { # → unix:/tmp/kitty-<pid> of a LIVE kitty, via bin/cc-kitty-socket; rc 1 when none
   [ -n "${CC_TERM_KITTY_TO:-}" ] && { printf '%s' "$CC_TERM_KITTY_TO"; return 0; }

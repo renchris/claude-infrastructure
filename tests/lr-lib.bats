@@ -602,3 +602,65 @@ hk_tomb() { # $1=target cfg → a TRANSPLANT tombstone in CFG pointing at it, an
   run lr_transplant_target "$SID" "$CFG"
   [ "$status" -ne 0 ] || { echo "$output"; false; }
 }
+
+# ── lr_heal_bare_checkout (D1, 2026-09-28): the driver heals a flipped checkout, or degrades ─────
+# A checkout with core.bare=true answers every work-tree op rc 128; on 2026-09-28 that killed a
+# recovery and the lead's repair was classifier-denied, so a human typed it. RED PROOFS: before this
+# function existed the heal case has no subject at all. The refusal cases are the discriminators
+# from memory worktree-ops-can-bare-the-shared-checkout — each must leave core.bare=true untouched.
+bare_fixture() { # $1=dir → a normal checkout with a commit (reflog), then flipped
+  git init -q "$1" && printf 'a\n' > "$1/a" && git -C "$1" add a \
+    && git -C "$1" -c user.email=t@t -c user.name=t commit -qm init \
+    && git -C "$1" config core.bare true
+}
+
+@test "bare-heal: a flipped checkout with files and a work-tree reflog is HEALED, with a backup" {
+  local d="$BATS_TEST_TMPDIR/co"; bare_fixture "$d"
+  [ "$(git -C "$d" rev-parse --is-inside-work-tree)" = false ]
+  run lr_heal_bare_checkout "$d"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=healed"* ]] || false
+  [ "$(git -C "$d" rev-parse --is-inside-work-tree)" = true ]
+  ls "$d/.git/"config.lr-bare-backup-* >/dev/null
+  grep -q 'bare = true' "$d/.git/"config.lr-bare-backup-*
+}
+
+@test "bare-heal: no working files ⇒ refused, core.bare stays true" {
+  local d="$BATS_TEST_TMPDIR/co"; bare_fixture "$d"; rm -f "$d/a"
+  run lr_heal_bare_checkout "$d"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"verdict=refused-no-working-files"* ]] || false
+  [ "$(git -C "$d" config --bool core.bare)" = true ]
+}
+
+@test "bare-heal: no work-tree operation in the HEAD reflog ⇒ refused, core.bare stays true" {
+  local d="$BATS_TEST_TMPDIR/co"; bare_fixture "$d"; : > "$d/.git/logs/HEAD"
+  run lr_heal_bare_checkout "$d"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"verdict=refused-no-worktree-reflog"* ]] || false
+  [ "$(git -C "$d" config --bool core.bare)" = true ]
+}
+
+@test "bare-heal: a genuinely bare repository is never touched" {
+  local d="$BATS_TEST_TMPDIR/real.git"; git init -q --bare "$d"; printf 'x\n' > "$d/stray"
+  run lr_heal_bare_checkout "$d"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"verdict=refused-no-dotgit"* ]] || false
+  [ "$(git -C "$d" config --bool core.bare)" = true ]
+  ! ls "$d/"config.lr-bare-backup-* >/dev/null 2>&1
+}
+
+@test "bare-heal: LR_BARE_REPAIR=off detects and writes nothing" {
+  local d="$BATS_TEST_TMPDIR/co"; bare_fixture "$d"
+  LR_BARE_REPAIR=off run lr_heal_bare_checkout "$d"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"verdict=detected-repair-off"* ]] || false
+  [ "$(git -C "$d" config --bool core.bare)" = true ]
+}
+
+@test "bare-heal: a healthy checkout and a non-repo are silent no-ops" {
+  local d="$BATS_TEST_TMPDIR/co"; bare_fixture "$d"; git -C "$d" config --unset core.bare
+  run lr_heal_bare_checkout "$d"; [ "$status" -eq 0 ]; [ -z "$output" ]
+  mkdir -p "$BATS_TEST_TMPDIR/plain"
+  run lr_heal_bare_checkout "$BATS_TEST_TMPDIR/plain"; [ "$status" -eq 2 ]
+}
