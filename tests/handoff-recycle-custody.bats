@@ -155,10 +155,15 @@ rows() { cat "$HOME/.claude/logs/handoffs.jsonl" 2>/dev/null; }
   exit_ln="$(grep -n 'as_write "\$SID" "/exit" 2>/dev/null' "$HF" | cut -d: -f1)"
   aband_ln="$(grep -n '_hf_resume_debt abandon --sid "\$rcy_debt_sid" --why "exit never typed; session untouched"' "$HF" | cut -d: -f1)"
   refuse_ln="$(grep -n 'could not type /exit into \$SID' "$HF" | cut -d: -f1)"
-  [ -n "$open_ln" ] && [ -n "$exit_ln" ] && [ -n "$aband_ln" ] && [ -n "$refuse_ln" ] || { echo "$open_ln/$exit_ln/$aband_ln/$refuse_ln"; false; }
+  echo "open=$open_ln exit=$exit_ln abandon=$aband_ln refuse=$refuse_ln"
+  [ -n "$open_ln" ]
+  [ -n "$exit_ln" ]
+  [ -n "$aband_ln" ]
+  [ -n "$refuse_ln" ]
   [ "$open_ln" -lt "$exit_ln" ]
   [ $(( exit_ln - open_ln )) -lt 20 ]          # immediately before the loop, not somewhere upstream
-  [ "$exit_ln" -lt "$aband_ln" ] && [ "$aband_ln" -lt "$refuse_ln" ]
+  [ "$exit_ln" -lt "$aband_ln" ]
+  [ "$aband_ln" -lt "$refuse_ln" ]
   # A fresh-brief recycle hands the pane to a NEW sid, so its debt must say so (--mode fresh) or a
   # sweep after a dead watcher would resume the old sid beside its live successor.
   sed -n "${open_ln},$(( open_ln + 4 ))p" "$HF" | grep -qF -- '--mode "$(if [ -n "$RESUME_LAUNCHER" ]; then printf resume; else printf fresh; fi)"'
