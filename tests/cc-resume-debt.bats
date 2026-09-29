@@ -251,3 +251,13 @@ lines() { [ -f "$1" ] && grep -c -- "$2" "$1" || echo 0; }
   run "$BIN" discharge --sid nobody --why x
   [ "$status" -eq 0 ]
 }
+
+@test "settle with NO prior debt opens one from the resolver and relaunches the same sid" {
+  # An older mover (or a failed open) closed the session without a debt on file: settle must not
+  # be a silent no-op — the caller is reporting a close it could not undo.
+  run "$BIN" settle --sid "$SID" --wait 0
+  [ -f "$CC_RESUME_DEBT_DIR/meta/$SID.json" ]
+  [ "$(jq -r .account "$CC_RESUME_DEBT_DIR/meta/$SID.json")" = next4 ]
+  grep -q "^next4 $WT $SID SETTLING=1$" "$T/relaunch.log"
+  jq -r '.events[0].note' "$CC_RESUME_DEBT_DIR/meta/$SID.json" | grep -q 'settle (no prior debt)'
+}

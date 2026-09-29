@@ -253,7 +253,13 @@ _step() { # <sid> <now-flag 0|1> — ONE transition; a held lock makes it a no-o
 
 _settle() { # <sid> <wait> — rc 0 proven · 1 escalated · 3 undecided · 4 abandoned
   local deadline st
-  [ -f "$(_meta "$1")" ] || { _note "no debt for $1"; return 3; }
+  # A settle IS the caller saying "I closed this session and could not bring it back". No debt on
+  # file (an older mover closed it, or its open failed) must not turn that into a silent no-op:
+  # open one now from what cc-resume-resolve knows, then settle it like any other.
+  if [ ! -f "$(_meta "$1")" ] || ! _active "$(_get "$1" state)"; then
+    [ "$BY" = unknown ] && BY="settle (no prior debt)"
+    _open >/dev/null || [ -f "$(_meta "$1")" ] || { _note "no debt for $1 and none could be opened"; return 3; }
+  fi
   deadline=$(( SECONDS + $2 ))
   while :; do
     _step "$1" 1
