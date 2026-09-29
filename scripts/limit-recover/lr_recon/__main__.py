@@ -295,6 +295,9 @@ def _derive(ctx: Ctx, snap: T.Snapshot, now: float) -> None:
             _event(ctx.paths, "replaced", rec.sid, rec.record_id, rec.terminal.proof)
             continue
         settle.note_confirm(rec)
+        un = settle.note_unconfirm(ctx.paths, rec, now)
+        if un:
+            _event(ctx.paths, "unconfirmed", rec.sid, rec.record_id, un)
         if settle.mark_in_flight(rec):
             _event(
                 ctx.paths, "in-flight", rec.sid, rec.record_id, "transplant confirmed"

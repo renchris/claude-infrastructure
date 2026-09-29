@@ -57,6 +57,10 @@ RCY_HELD_SUB = {
     "subagents": "HOLD-SUBAGENTS",
     "focused": "HOLD-FOCUS",
 }
+# handoff-fire's hf_recycle_hold line: held after the confirm, and whether the unconfirm undid it
+_RCY_HELD = re.compile(
+    r"recycle ABORTED before /exit \(held: ([A-Za-z-]+)\):.*\bunconfirm rc (\w+)\."
+)
 _STRANDED = re.compile(r"^lr-handoff \S+: verdict=STRANDED\b", re.M)
 _HOLD_SUB = (
     (re.compile(r"\bdraft\b", re.I), "HOLD-DRAFT"),
@@ -92,6 +96,10 @@ def _hold_substate(text: str) -> str:
 def outcome(rec: T.Record, rc: Optional[int], text: str) -> Tuple[str, str, str]:
     """(disposition, substate, reason). A precheck's named refusal wins over the free-text classes,
     because it is the actuator's own verdict on why nothing was done."""
+    held = _held_after_confirm(text)
+    if held and rec.phase == "PRE-MOVE":
+        # lr-handoff calls this STRANDED too, but unconfirm rc 0 restored the source: a named hold
+        return "HOLD", held, "HELD:%s after the confirm (unconfirm rc 0)" % held
     if _STRANDED.search(text):
         # lr-handoff's own verdict: the transplant is DONE and the relaunch did not verify. The
         # session now lives on the target, so no free-text class may close it (W5 rig: a usage dump
@@ -141,8 +149,10 @@ def settle_exit(
     disp, sub, reason = outcome(rec, rc, text)
     if pr.argv_hash in MOVE_ACTUATORS:
         # Whatever it was refused for, the NEXT move spawn is a new attempt: the double-typer audit
-        # allows exactly one move spawn per (sid, attempt), so a retry must not share one.
+        # allows exactly one move spawn per (sid, attempt), so a retry must not share one. Nor may it
+        # inherit this attempt's confirm: note_confirm re-reads it while the tombstone stands.
         rec.attempt += 1
+        rec.confirm_len = rec.timeline.confirmed = None
     detail = (reason or disp)[:200]
     fp = classify.fingerprint(rec.phase, disp, text, -1 if rc is None else rc, "")
     pre = rec.phase == "PRE-MOVE"
@@ -286,6 +296,47 @@ def note_watcher_hold(home: str, rec: T.Record, now: float) -> bool:
             )
             return True
     return False
+
+
+def _held_after_confirm(text: str) -> str:
+    """The PRE-MOVE hold an `ABORTED before /exit (held: <r>) … unconfirm rc 0` line names, or ''."""
+    hits = [m for m in _RCY_HELD.finditer(text) if m.group(2) == "0"]
+    return RCY_HELD_SUB.get(hits[-1].group(1).lower(), "HOLD-COMPOSER") if hits else ""
+
+
+def note_unconfirm(paths: T.Paths, rec: T.Record, now: float) -> str:
+    """lr-transplant --phase unconfirm undid this attempt's confirm: the tombstone is now
+    <sid>.HANDOFF.json.unconfirmed and <sid>.jsonl is back. Level-triggered on that rename, so a
+    lost actuator exit code (a daemon restart) cannot leave a latched confirm_len that marks the
+    record IN-FLIGHT for good (W5 rig, draft-after-confirm). Returns the new substate, or ''."""
+    if rec.confirm_len is None or rec.phase != "PRE-MOVE":
+        return ""
+    src = transcript_path(rec.source_cfg, rec.cwd, rec.sid)
+    if not src.endswith(".jsonl"):
+        return ""
+    base = src[: -len(".jsonl")]
+    if (
+        os.path.exists(base + ".HANDOFF.json")
+        or os.path.exists(src + ".handed-off")
+        or not os.path.exists(base + ".HANDOFF.json.unconfirmed")
+    ):
+        return ""  # still confirmed (the real relaunch gap), or never was
+    rec.confirm_len, rec.timeline.confirmed = None, None
+    sub = ""
+    for att in (rec.attempt, rec.attempt - 1):  # settle_exit may already have bumped it
+        for a in ("A", "A-husk"):
+            p = os.path.join(paths.p("actlogs"), "%s.%d.%s.log" % (rec.sid[:8], att, a))
+            sub = sub or _held_after_confirm(tail(p))
+    if rec.substate not in ("IN-FLIGHT", "PLANNED", None):
+        return sub or "DETECTED"
+    if sub:
+        rec.attempts_by_class["HOLD"] = rec.attempts_by_class.get("HOLD", 0) + 1
+        _hold(
+            rec, sub, now
+        )  # HOLD-DRAFT is REPROBED: re-planned after the draft clears
+    else:
+        rec.substate, rec.wait = "DETECTED", None
+    return sub or "DETECTED"
 
 
 def dead_actuators(

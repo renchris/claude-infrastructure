@@ -343,5 +343,73 @@ class Confirm(unittest.TestCase):
         self.assertIsNone(r.confirm_len)
 
 
+ABORT = (
+    "!! recycle ABORTED before /exit (held: draft): composer: operatordrafttypedafterconfirm"
+    " — /exit NOT submitted, watcher disarmed, pane lock released, unconfirm rc 0. The session"
+    " stays alive.\n"
+)
+
+
+class Unconfirm(unittest.TestCase):
+    """W5 rig draft-after-confirm: lr-transplant --phase unconfirm renamed the tombstone, nothing
+    cleared confirm_len, and mark_in_flight kept the record IN-FLIGHT until RECON-DEFECT."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.paths = T.Paths(lr_root=self.tmp, root=os.path.join(self.tmp, "recon"))
+        os.makedirs(self.paths.p("actlogs"))
+        self.r = rec(sub=None)
+        self.r.source_cfg, self.r.cwd = self.tmp, "/w/x"
+        self.d = os.path.join(self.tmp, "projects", "-w-x")
+        os.makedirs(self.d)
+        self.base = os.path.join(self.d, self.r.sid)
+        open(self.base + ".jsonl.handed-off", "w").close()
+        with open(self.base + ".HANDOFF.json", "w") as fh:
+            json.dump({"confirm_len": 3724}, fh)
+        self.assertTrue(settle.note_confirm(self.r))
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def _unconfirm(self, actlog=""):
+        os.rename(self.base + ".jsonl.handed-off", self.base + ".jsonl")
+        os.rename(self.base + ".HANDOFF.json", self.base + ".HANDOFF.json.unconfirmed")
+        with open(settle.actlog(self.paths, self.r, "A"), "w") as fh:
+            fh.write(actlog)
+
+    def test_an_unconfirmed_move_holds_instead_of_in_flight(self):
+        self._unconfirm(ABORT)
+        self.assertEqual(settle.note_unconfirm(self.paths, self.r, 100.0), "HOLD-DRAFT")
+        self.assertEqual((self.r.confirm_len, self.r.substate), (None, "HOLD-DRAFT"))
+        self.assertIsNotNone(self.r.wait.eta)  # REPROBED
+        self.assertFalse(settle.mark_in_flight(self.r))
+
+    def test_the_real_relaunch_gap_is_untouched(self):
+        self.assertEqual(settle.note_unconfirm(self.paths, self.r, 100.0), "")
+        self.assertTrue(settle.mark_in_flight(self.r))
+
+    def test_unconfirm_without_a_named_hold_goes_back_to_detected(self):
+        self._unconfirm()
+        self.assertEqual(settle.note_unconfirm(self.paths, self.r, 100.0), "DETECTED")
+        self.assertEqual(self.r.substate, "DETECTED")
+
+    def test_held_after_confirm_beats_stranded(self):
+        r = rec()
+        r.confirm_len = 3724
+        d = settle.settle_exit(r, actuator(), 4, ABORT + STRANDED, 1.0)
+        self.assertIn("HOLD", d)
+        self.assertEqual((r.substate, r.confirm_len), ("HOLD-DRAFT", None))
+
+    def test_a_failed_attempt_forgets_its_confirm(self):
+        r = rec()
+        r.confirm_len = 3724
+        settle.settle_exit(
+            r, actuator(), 6, PRECHECK_HELD % ("x", "draft", "draft"), 1.0
+        )
+        self.assertIsNone(r.confirm_len)
+        r.substate = "PLANNED"
+        self.assertFalse(settle.mark_in_flight(r))
+
+
 if __name__ == "__main__":
     unittest.main()
