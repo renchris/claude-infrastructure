@@ -89,15 +89,18 @@ probe() { run bash "$HF" --probe-recycle-preconditions --source-pane "$PANE" --s
 
   probe --voluntary
   [ "$status" -eq 5 ] || { echo "$output"; false; }
-  [[ "$output" == *"verdict: REFUSED:not-limited"* ]] && [[ "$output" == *"evidence: missing"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"verdict: REFUSED:not-limited"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"evidence: missing"* ]] || { echo "$output"; false; }
 
   fact acctA.5h.json "{\"status\":\"rejected\",\"scope\":\"5h\",\"resets_at\":$soon}"
   probe --voluntary --account-evidence "$EV/acctA.5h.json"
-  [[ "$output" == *"verdict: REFUSED:not-limited"* ]] && [[ "$output" == *"evidence: expiring"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"verdict: REFUSED:not-limited"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"evidence: expiring"* ]] || { echo "$output"; false; }
 
   fact acctA.5h.json "{\"status\":\"rejected\",\"scope\":\"5h\",\"resets_at\":$later,\"contradicted\":true}"
   probe --voluntary --account-evidence "$EV/acctA.5h.json"
-  [[ "$output" == *"verdict: REFUSED:not-limited"* ]] && [[ "$output" == *"evidence: contradicted"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"verdict: REFUSED:not-limited"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"evidence: contradicted"* ]] || { echo "$output"; false; }
 
   # The fact must be about the account this pane is on.
   fact acctB.5h.json "{\"status\":\"rejected\",\"scope\":\"5h\",\"resets_at\":$later}"
@@ -160,7 +163,8 @@ L="Tue Sep 29 10:00:00 2026"
   run hf_bg_work_kind 5000
   [ "$output" = "work shipland=yes pids=5100" ] || { echo "$output"; false; }
   rc=0; hf_bg_work_gate 5000 1 "" > "$BATS_TEST_TMPDIR/gate.out" || rc=$?
-  [ "$rc" = 3 ] && [ "$HF_BG_HOLD" = "HELD:bg-work:ship-land" ] || { cat "$BATS_TEST_TMPDIR/gate.out"; echo "rc=$rc hold=$HF_BG_HOLD"; false; }
+  [ "$rc" = 3 ] || { cat "$BATS_TEST_TMPDIR/gate.out"; echo "rc=$rc hold=$HF_BG_HOLD"; false; }
+  [ "$HF_BG_HOLD" = "HELD:bg-work:ship-land" ] || { cat "$BATS_TEST_TMPDIR/gate.out"; echo "rc=$rc hold=$HF_BG_HOLD"; false; }
   grep -qx 'bg_work: work shipland=yes pids=5100' "$BATS_TEST_TMPDIR/gate.out"
 
   snap "$S" \
@@ -169,7 +173,8 @@ L="Tue Sep 29 10:00:00 2026"
     "5201 5200 $L /bin/bash \$HOME/.claude/bin/cc-await-ping --timeout 3300" \
     "5202 5200 $L tail -n 5"
   rc=0; hf_bg_work_gate 5000 1 "" > "$BATS_TEST_TMPDIR/gate.out" || rc=$?
-  [ "$rc" = 0 ] && [ -z "$HF_BG_HOLD" ] || { cat "$BATS_TEST_TMPDIR/gate.out"; echo "rc=$rc"; false; }
+  [ "$rc" = 0 ] || { cat "$BATS_TEST_TMPDIR/gate.out"; echo "rc=$rc"; false; }
+  [ -z "$HF_BG_HOLD" ] || { cat "$BATS_TEST_TMPDIR/gate.out"; echo "rc=$rc"; false; }
   grep -qx 'bg_work: watcher shipland=no pids=5200' "$BATS_TEST_TMPDIR/gate.out"
   # …unless the kill switch counts watchers as work.
   HF_WATCHER_IS_JOB=1 run hf_bg_work_kind 5000
@@ -178,7 +183,8 @@ L="Tue Sep 29 10:00:00 2026"
   # A voluntary (non-limited) pane mid-turn is HELD before any census: its own Bash call is a job.
   printf '%s\n' '{"type":"assistant","message":{"role":"assistant","stop_reason":"tool_use"}}' > "$BATS_TEST_TMPDIR/tx.jsonl"
   rc=0; hf_bg_work_gate 5000 0 "$BATS_TEST_TMPDIR/tx.jsonl" > "$BATS_TEST_TMPDIR/gate.out" || rc=$?
-  [ "$rc" = 3 ] && [ "$HF_BG_HOLD" = "HELD:mid-turn" ] || { cat "$BATS_TEST_TMPDIR/gate.out"; false; }
+  [ "$rc" = 3 ] || { cat "$BATS_TEST_TMPDIR/gate.out"; false; }
+  [ "$HF_BG_HOLD" = "HELD:mid-turn" ] || { cat "$BATS_TEST_TMPDIR/gate.out"; false; }
   grep -qx 'bg_work: unknown (turn in flight)' "$BATS_TEST_TMPDIR/gate.out"
 
   # No registry pid: unknown, and the probe proceeds.
