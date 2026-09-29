@@ -21,7 +21,8 @@
 #      by the stamp's firedBy — never by process ancestry — with every peer-side guard intact.
 
 setup() {
-  export CC_FIRE_CAPACITY_GATE=off CC_FIRE_HEADROOM_GATE=off
+  export CC_FIRE_CAPACITY_GATE=off
+  export CC_FIRE_HEADROOM_GATE=off
   unset KITTY_WINDOW_ID
   export IT2_WRAPPER_NO_KITTY=1 CC_TERM=iterm2
 
