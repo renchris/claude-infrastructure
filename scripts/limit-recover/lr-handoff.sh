@@ -1736,6 +1736,17 @@ if [[ $IN_PLACE -eq 1 ]]; then
     LRH_REPLACE=1
     [[ -n "$SOURCE_PANE" ]] && CLOSE_SOURCE=1
     rm -f "$LRH_RCY_ERR" 2>/dev/null || true
+  elif _lrh_held="$(grep -oE 'recycle ABORTED before /exit \(held: [A-Za-z-]+\)' "$LRH_RCY_ERR" 2>/dev/null | tail -1)" \
+       && [[ -n "$_lrh_held" ]] && grep -q 'unconfirm rc 0\.' "$LRH_RCY_ERR" 2>/dev/null; then
+    # HELD AFTER THE CONFIRM, AND UNDONE (W5 rig, draft-after-confirm). handoff-fire's last read held
+    # the move before /exit and lr-transplant --phase unconfirm rc 0 restored the source: nothing is
+    # stranded, and STRANDED would send the daemon down the "transplant done" path. The `verdict:
+    # HELD:<reason>` line is the one lr_recon's settle already maps to its named HOLD.
+    _lrh_held="${_lrh_held##*held: }"; _lrh_held="${_lrh_held%)}"; [[ "$_lrh_held" == bgwork ]] && _lrh_held=bg-work
+    echo "lr-handoff: verdict: HELD:$_lrh_held — held after the confirm; lr-transplant --phase unconfirm rc 0 restored the source" >&2
+    lrh_verdict NOTMOVED no "HELD:$_lrh_held after the confirm — unconfirmed (rc 0): the source transcript is restored and the session is alive in pane ${SOURCE_PANE:-<this pane>}; nothing was typed, a retry is safe"
+    rm -f "$LRH_RCY_ERR" 2>/dev/null || true
+    echo "$BUNDLE"; exit 6
   else
     # STRANDED, AND IT IS THE LOAD-BEARING TOKEN. The source is RETIRED — a tombstoned husk whose
     # prompts the handed-off-session-guard blocks — and no successor is carrying the session. That

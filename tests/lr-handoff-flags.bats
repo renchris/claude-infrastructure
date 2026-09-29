@@ -49,6 +49,7 @@ printf 'BGWORK=%s ATTEMPT=%s\n' "${CC_RECYCLE_BGWORK_ANSWER:-}" "${HF_RECYCLE_AT
 case " $* " in
   *" --probe-recycle-preconditions "*) printf 'live_subagents: 0\nverdict: OK\n'; exit 0 ;;
 esac
+[ -n "${HF_ERR:-}" ] && printf '%s\n' "$HF_ERR" >&2
 exit "${HF_RC:-0}"
 STUB
   printf '#!/bin/bash\nexit 0\n' > "$STUB/cc-notify"
@@ -308,6 +309,22 @@ run_launcher() { # $1=VERIFY_MODE → runs the launcher minted by the last gen
   [ "$status" -eq 0 ]
   [[ "$output" == *"recycled IN PLACE — /exit landed and the watcher took over; engagement NOT awaited (see handoffs.jsonl)"* ]] || false
   [[ "$output" != *"engagement verified"* ]]
+}
+
+# ── a recycle held after the confirm and UNDONE is not a strand (W5 rig, draft-after-confirm) ─────
+ABORT='!! recycle ABORTED before /exit (held: draft): composer: operator draft typed after confirm — /exit NOT submitted, watcher disarmed, pane lock released, unconfirm rc 0. The session stays alive. Re-run: x'
+@test "a recycle held after the confirm with unconfirm rc 0 is NOTMOVED HELD:draft, rc 6, never STRANDED" {
+  HF_RC=1 HF_ERR="$ABORT" fire
+  [ "$status" -eq 6 ] || { echo "status=$status $output"; false; }
+  [[ "$output" == *"verdict: HELD:draft"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=NOTMOVED"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"verdict=STRANDED"* ]] || { echo "$output"; false; }
+}
+@test "CONTROL: held but the unconfirm FAILED (rc 2) is still STRANDED, rc 4" {
+  HF_RC=1 HF_ERR="${ABORT/unconfirm rc 0/unconfirm rc 2}" fire
+  [ "$status" -eq 4 ] || { echo "status=$status $output"; false; }
+  [[ "$output" == *"verdict=STRANDED"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"verdict=NOTMOVED"* ]] || { echo "$output"; false; }
 }
 
 # ── LR_PLACED_BY=reconciler ───────────────────────────────────────────────────────────────────
