@@ -55,7 +55,7 @@ export HOME="$RIG/home" USER="${USER:-rig}" LOGNAME="${LOGNAME:-rig}" TERM="${TE
 export PATH="$RIG/bin:$RIG/home/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export LANG=en_US.UTF-8 TMPDIR="$RIG/tmp/" LR_RIG="$RIG" LR_RIG_SPECS="$RIG/specs"
 export LR_STATE_DIR="$RIG/lr" LR_RECON_ROOT="$RIG/state" LR_RECON_RIG=1
-export LR_CLAUDE_BIN="$RIG/bin/claude" LR_ACCOUNTS_BIN="$RIG/bin/claude-accounts"
+export LR_CLAUDE_BIN="$RIG/bin/claude" LR_ACCOUNTS_BIN="$RIG/bin/claude-accounts" CC_RESUME_CLAUDE_BIN="$RIG/bin/claude"
 export CC_TERM_KITTY_TO="$SOCK" LR_KITTEN_BIN="$KITTEN" LR_IDLE_FANOUT="${IDLE_FANOUT:-off}"
 export LR_RECON_CLOCK_SKEW_FILE="$RIG/state/clock-skew" CC_RESUME_DEBT_DIR="$RIG/home/.claude/autonomy/resume-debt"
 export LR_PRESEED_DONE=1 LR_RIG_PYAPP="$PYAPP" CC_KITTY_CONF="$REAL_HOME/.config/kitty/kitty.conf"
@@ -95,6 +95,7 @@ if [ "$TEARDOWN_ONLY" -eq 1 ]; then teardown; log "torn down"; exit 0; fi
 teardown
 case "$RIG" in /tmp/lr-rig) rm -rf /tmp/lr-rig ;; *) die "refusing to clear $RIG" ;; esac
 mkdir -p "$RIG"/{bin,specs,work,tmp,lr,state,home/.claude/bin} || die "mkdir $RIG"
+: > "$RIG/started"   # the mtime the real-HOME check below compares against
 
 # ── 1. the rig HOME ───────────────────────────────────────────────────────────────────────────────
 python3 "$HERE/rig_lib.py" home "$RIG" || die "rig home"
@@ -102,7 +103,18 @@ IDLE_FANOUT="$(python3 -c 'import json,sys;print("on" if json.load(open(sys.argv
 write_env
 for d in scripts hooks lib model-config.yaml; do ln -s "$REPO/$d" "$RIG/home/.claude/$d"; done
 mkdir -p "$RIG/home/bin" "$RIG/home/.claude/autonomy/resume-debt" "$RIG/home/.reso/bin"
-ln -s "$REPO/bin/reso-resume-one" "$RIG/home/.reso/bin/reso-resume-one"   # the R path's launcher
+# The R path's launcher. The R window is created by `kitty @ launch` from KITTY's environment (the
+# operator's HOME, zshrc and PATH), never the daemon's, so an unwrapped engine gated against the real
+# ~/.claude budget and would have resumed on the real claude and a real config dir (W5 N=30,
+# pane-closed-after-exit). The wrapper re-enters the rig before the engine runs.
+cat > "$RIG/home/.reso/bin/reso-resume-one" <<EOF
+#!/bin/bash
+for v in \$(compgen -e | grep -E '^(CLAUDE|ANTHROPIC)'); do unset "\$v"; done
+. "$RIG/env.sh"
+export ZDOTDIR="$RIG/home" CC_PANE_ID="\${KITTY_WINDOW_ID:-}" ITERM_SESSION_ID="w0t0p0:\${KITTY_WINDOW_ID:-}"
+exec "$REPO/bin/reso-resume-one" "\$@"
+EOF
+chmod +x "$RIG/home/.reso/bin/reso-resume-one"
 for b in "$REPO"/bin/*; do ln -s "$b" "$RIG/home/.claude/bin/$(basename "$b")"; done
 ln -sf "$REPO/bin/it2-wrapper" "$RIG/home/.claude/bin/it2"   # install.sh installs it under this name
 ln -sf "$HERE/claude" "$RIG/bin/claude"
@@ -238,6 +250,10 @@ python3 "$HERE/rig_lib.py" timings "$RIG"
 echo
 python3 "$HERE/rig_lib.py" audit "$RIG/state" "$RIG/specs.json" "$RIG/home"; audit_rc=$?
 python3 "$HERE/rig_lib.py" refusal "$RIG"; refusal_rc=$?
+# The header's promise, checked: nothing the rig runs may write the real capacity-admit store. Report
+# only — a real session elsewhere on the box may legitimately write it during the run.
+real_w="$(find "$REAL_HOME/.claude/autonomy/capacity-admit" -maxdepth 1 -name '*.refusals' -newer "$RIG/started" 2>/dev/null | tr '\n' ' ')"
+echo "real-HOME capacity-admit writes during the run: ${real_w:-none}"
 echo
 if [ "$GOT" = "$EXPECTED" ]; then log "DoD line MATCHES the matrix-derived expectation"; line_rc=0
 else log "DoD line MISMATCH"; echo "  expected: $EXPECTED"; echo "  got:      $GOT"; line_rc=1; fi
