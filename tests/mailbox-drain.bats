@@ -561,6 +561,105 @@ CC_DRAIN_CUSTODY_PREFIX_SHA="${CC_DRAIN_CUSTODY_PREFIX_SHA:-73ceb76aa}"
   printf '%s' "$ctx" | grep -q 'cloud/session_test' || false
 }
 
+# ── ONLY A TERMINAL PING DISCHARGES (2026-09-28, docs/plans/CUSTODY_TERMINAL_PING.md) ───────────
+# The trailer asks peers to ping on progress, at decision gates and on blockers too, and each of
+# those used to return the row: "step 0 part 1 DONE" discharged fire-close-resume-custody ~2 h
+# before the peer finished. The status's FIRST whole token must be in
+# hooks/lib/handoff-ping-terminal.sh's vocabulary; everything else is mail and leaves custody open.
+
+@test "custody TERMINAL: a progress ping is delivered but keeps the row OPEN" {
+  custody_setup
+  "$CUSTODY" open --cwd "$ORIG_CWD" --target 91 --marker M-TERM-1 --slug wave20
+  seed "2026-09-28T23:39:00+0000 [peer] HANDOFF-PING wave20: W2 in progress, 3 of 5 files"
+  run drain_at "$ORIG_CWD"
+  [ "$status" -eq 0 ]
+  [ "$("$CUSTODY" count --open --cwd "$ORIG_CWD")" = 1 ]
+  ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
+  printf '%s' "$ctx" | grep -q 'W2 in progress' || false          # the mail itself still delivered
+  ! printf '%s' "$ctx" | grep -q 'DISCHARGED' || false
+  printf '%s' "$ctx" | grep -q 'non-final ping does not discharge — wave20' || false
+}
+
+@test "custody TERMINAL: DONE mid-status (the incident shape) keeps the row OPEN" {
+  custody_setup
+  "$CUSTODY" open --cwd "$ORIG_CWD" --target 92 --marker M-TERM-2 --slug fire-close-resume-custody
+  seed "2026-09-28T23:39:32+0000 [peer] HANDOFF-PING fire-close-resume-custody: step 0 part 1 DONE (plan committed)"
+  run drain_at "$ORIG_CWD"
+  [ "$status" -eq 0 ]
+  [ "$("$CUSTODY" count --open --cwd "$ORIG_CWD")" = 1 ]
+}
+
+@test "custody TERMINAL: decision-gate and blocker pings keep the row OPEN" {
+  custody_setup
+  "$CUSTODY" open --cwd "$ORIG_CWD" --target 93 --marker M-TERM-3 --slug wave21
+  seed "2026-09-28T10:00:00+0000 [peer] HANDOFF-PING wave21: DECISION needed — drop column X?" \
+       "2026-09-28T10:01:00+0000 [peer] HANDOFF-PING wave21: BLOCKED on a red gate"
+  run drain_at "$ORIG_CWD"
+  [ "$status" -eq 0 ]
+  [ "$("$CUSTODY" count --open --cwd "$ORIG_CWD")" = 1 ]
+}
+
+@test "custody TERMINAL: a DONE-led final ping RETURNS the row, case-insensitive" {
+  custody_setup
+  "$CUSTODY" open --cwd "$ORIG_CWD" --target 94 --marker M-TERM-4 --slug wave22
+  "$CUSTODY" open --cwd "$ORIG_CWD" --target 95 --marker M-TERM-5 --slug wave23
+  seed "2026-09-28T10:00:00+0000 [peer] HANDOFF-PING wave22: DONE — landed abc1234, self-closing" \
+       "2026-09-28T10:01:00+0000 [peer] HANDOFF-PING wave23: Closed: nothing to land"
+  run drain_at "$ORIG_CWD"
+  [ "$status" -eq 0 ]
+  [ "$("$CUSTODY" count --open --cwd "$ORIG_CWD")" = 0 ]
+  ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
+  printf '%s' "$ctx" | grep -q 'custody: 2 dispatched session(s) DISCHARGED' || false
+}
+
+@test "custody TERMINAL: progress then DONE in ONE drain batch still returns the row" {
+  custody_setup
+  "$CUSTODY" open --cwd "$ORIG_CWD" --target 96 --marker M-TERM-6 --slug wave24
+  seed "2026-09-28T10:00:00+0000 [peer] HANDOFF-PING wave24: step 2 of 3" \
+       "2026-09-28T10:05:00+0000 [peer] HANDOFF-PING wave24: LANDED 9da394a9c"
+  run drain_at "$ORIG_CWD"
+  [ "$status" -eq 0 ]
+  [ "$("$CUSTODY" count --open --cwd "$ORIG_CWD")" = 0 ]
+  ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
+  ! printf '%s' "$ctx" | grep -q 'non-final ping' || false   # a slug that terminated is not "still out"
+}
+
+@test "custody TERMINAL: cloud-return's unverified and refused wakes keep the row OPEN" {
+  custody_setup
+  # scripts/cloud-return.sh itself leaves custody open on both of these; the drain must not
+  # override it. LANDED-UNVERIFIED is one token, so its LANDED prefix is not a match.
+  "$CUSTODY" open --cwd "$ORIG_CWD" --target 97 --marker M-TERM-7 --slug cloud/session_a
+  "$CUSTODY" open --cwd "$ORIG_CWD" --target 98 --marker M-TERM-8 --slug cloud/session_b
+  seed "2026-09-28T10:00:00+0000 [cloud] HANDOFF-PING cloud/session_a: LANDED-UNVERIFIED on main — paths: x" \
+       "2026-09-28T10:01:00+0000 [cloud] HANDOFF-PING cloud/session_b: LAND REFUSED (exit 3) on feat/x"
+  run drain_at "$ORIG_CWD"
+  [ "$status" -eq 0 ]
+  [ "$("$CUSTODY" count --open --cwd "$ORIG_CWD")" = 2 ]
+}
+
+@test "custody TERMINAL: with the vocabulary lib absent, nothing discharges (safe direction)" {
+  custody_setup
+  # A copied layout (hooks/ + lib/ + bin/cc-custody) so no fallback path reaches the checkout.
+  local d="$BATS_TEST_TMPDIR/nolib"; mkdir -p "$d/hooks/lib" "$d/bin"
+  cp "$DRAIN" "$d/hooks/"; cp "$REPO"/hooks/lib/*.sh "$d/hooks/lib/"; cp "$CUSTODY" "$d/bin/"
+  "$CUSTODY" open --cwd "$ORIG_CWD" --target 99 --marker M-TERM-9 --slug wave25
+  "$CUSTODY" open --cwd "$ORIG_CWD" --target 100 --marker M-TERM-10 --slug wave26
+  # positive control: the SAME copied layout WITH the lib discharges, so the negative below is
+  # the lib's absence and not a layout that could never discharge anything.
+  seed "2026-09-28T10:00:00+0000 [peer] HANDOFF-PING wave26: DONE"
+  run bash -c 'printf "{\"cwd\":\"%s\"}" "$1" | "$0" prompt' "$d/hooks/mailbox-drain.sh" "$ORIG_CWD"
+  [ "$status" -eq 0 ]
+  [ "$("$CUSTODY" count --open --cwd "$ORIG_CWD")" = 1 ]
+  rm -f "$d/hooks/lib/handoff-ping-terminal.sh"
+  add "2026-09-28T10:01:00+0000 [peer] HANDOFF-PING wave25: DONE"   # add, not seed: .seen counts lines
+  # CLAUDE_CONFIG_DIR is the operator's in a live shell and reaches the deployed lib; unset it.
+  run env -u CLAUDE_CONFIG_DIR bash -c 'printf "{\"cwd\":\"%s\"}" "$1" | "$0" prompt' "$d/hooks/mailbox-drain.sh" "$ORIG_CWD"
+  [ "$status" -eq 0 ]
+  ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
+  printf '%s' "$ctx" | grep -q 'HANDOFF-PING wave25: DONE' || false   # the ping WAS delivered
+  [ "$("$CUSTODY" count --open --cwd "$ORIG_CWD")" = 1 ]
+}
+
 # ── E2: THE ARM THAT WAS ALREADY THERE WHEN THE GOAL ARRIVED (2026-08-15) ────────────────────────
 # docs/research/goal-safe-2way-comms-2026-08-13.md §8 E2. The goal-aware nag above fires only when
 # the session is UNWATCHED, so it covers the arm that has not happened yet and misses the one that

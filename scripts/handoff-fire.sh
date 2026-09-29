@@ -11472,12 +11472,30 @@ if [ -n "$NOTIFY_BACK" ] || [ "$SELF_RETIRE_TRAILER" = 1 ] || [ "$ENGAGE_VERIFY"
     # back-channel that was never written into the brief would make self-close demand a ping the peer
     # was never asked for.
     NB_ARMED_TARGET="$BACK_SID"
+    # THE TERMINAL FORM comes from the one vocabulary the drain discharges on
+    # (hooks/lib/handoff-ping-terminal.sh). Only a ping whose status STARTS with a terminal word
+    # returns the originator's custody row; progress, decision and blocker pings keep it open, so the
+    # peer has to be told which is which or its final ping may not count (docs/plans/CUSTODY_TERMINAL_PING.md).
+    HANDOFF_PING_TERMINAL_HINT=""
+    for _hpt_c in "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/../hooks/lib/handoff-ping-terminal.sh" \
+                  "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/handoff-ping-terminal.sh" \
+                  "$HOME/.claude/hooks/lib/handoff-ping-terminal.sh"; do
+      # shellcheck source=../hooks/lib/handoff-ping-terminal.sh
+      # shellcheck disable=SC1090,SC1091
+      [ -f "$_hpt_c" ] && { . "$_hpt_c"; break; }
+    done
+    NB_DONE_WORD="${HANDOFF_PING_TERMINAL_HINT:-DONE}"
     # shellcheck disable=SC2016  # $HOME below is LITERAL guidance for the fired reader, not shell expansions
     {
       printf '\n'
       printf '## BACK-CHANNEL — ping the originator (%s)\n' "$BACK_SID"
       printf '%s\n' 'On completion, at a decision gate, or on a blocker, ping the session that fired this handoff:'
       printf '  cc-notify %s "HANDOFF-PING %s: <one-line status>"\n' "$BACK_SID" "$NB_SLUG"
+      printf '%s\n' 'Progress, decision-gate and blocker pings keep your custody open. Your FINAL ping — and only'
+      printf 'that one — must start its status with %s, e.g.:\n' "$NB_DONE_WORD"
+      printf '  cc-notify %s "HANDOFF-PING %s: %s — <what landed, sha>"\n' "$BACK_SID" "$NB_SLUG" "$NB_DONE_WORD"
+      printf 'Never lead a non-final ping with %s ("step 1 %s" is fine; "%s step 1" closes custody).\n' \
+        "$NB_DONE_WORD" "$NB_DONE_WORD" "$NB_DONE_WORD"
       printf '%s\n' '(cc-notify is on PATH at $HOME/.claude/bin/cc-notify — v2 INBOX transport: it'
       printf '%s\n' "APPENDS the ping to the originator's inbox \$HOME/.claude/mailbox/<uuid>.md;"
       printf '%s\n' 'NO keystrokes — nothing is ever typed into any composer. The originator reads it'

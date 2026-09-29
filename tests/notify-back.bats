@@ -46,6 +46,24 @@ cmd_prompt_of() { printf '%s\n' "$1" | sed -n 's/.*cat \([^)]*\)).*/\1/p'; }
   grep -q 'ORIGINAL PROMPT BODY' "$copy"        # the copy preserves the original body first
 }
 
+# The drain returns custody only on a ping whose status STARTS with a word in
+# hooks/lib/handoff-ping-terminal.sh (docs/plans/CUSTODY_TERMINAL_PING.md). A peer never told that
+# either closes custody early ("DONE step 1") or never closes it, so the trailer must print the
+# exact final form, and the word it prints must be one the drain actually accepts.
+@test "--notify-back: trailer tells the peer the exact TERMINAL ping form the drain discharges on" {
+  run env ITERM_SESSION_ID="w1t0p0:AAAAAAAA-0000-0000-0000-000000000003" \
+    bash "$HF" --prompt-file "$PF" --launcher claude-test \
+    --notify-back 1234ABCD-5678-90EF-1234-567890ABCDEF --dry-run
+  [ "$status" -eq 0 ]
+  copy="$(copy_of "$output")"
+  [ -n "$copy" ]; [ -f "$copy" ]
+  grep -q 'keep your custody open' "$copy"
+  # shellcheck source=../hooks/lib/handoff-ping-terminal.sh
+  . "$REPO/hooks/lib/handoff-ping-terminal.sh"
+  grep -qF "cc-notify 1234ABCD-5678-90EF-1234-567890ABCDEF \"HANDOFF-PING prompt: $HANDOFF_PING_TERMINAL_HINT — " "$copy"
+  case " $HANDOFF_PING_TERMINAL_WORDS " in *" $HANDOFF_PING_TERMINAL_HINT "*) ;; *) false ;; esac
+}
+
 @test "--notify-back NEVER mutates the caller's prompt file" {
   before="$(shasum "$PF" | awk '{print $1}')"
   run env ITERM_SESSION_ID="w1t0p0:AAAAAAAA-0000-0000-0000-000000000001" \

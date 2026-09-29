@@ -583,8 +583,27 @@ fi
 # slugs are deduped and capped at 8 per drain; the whole block is gated on a `grep -q` that the
 # overwhelming majority of drains fail; a missing binary, an unreadable store or a malformed line
 # all leave the drain exactly as it was. Kill switch: CC_DRAIN_CUSTODY_RETURN=0.
-_cust_n=0 _cust_slugs="" _cust_note=""
-if [ "${CC_DRAIN_CUSTODY_RETURN:-1}" != 0 ] && printf '%s\n' "$body" | grep -q 'HANDOFF-PING'; then
+#
+# ONLY A TERMINAL PING DISCHARGES (2026-09-28, docs/plans/CUSTODY_TERMINAL_PING.md). The trailer
+# asks peers to ping at decision gates and on blockers too, and every one of those used to return
+# the row: a "step 0 part 1 DONE" progress ping discharged custody ~2 h before the peer finished,
+# so custody-deathwatch stopped watching a live wave. A ping now returns custody only when the
+# FIRST whole token of its status is in hooks/lib/handoff-ping-terminal.sh's vocabulary; any other
+# ping is delivered as mail and noted, and the row stays open. A missing lib discharges nothing —
+# under-discharge is the safe direction, since self-close and `cc-custody return` still close it.
+_cust_n=0 _cust_slugs="" _cust_note="" _cust_open_slugs=""
+_hpt="$_scd/lib/handoff-ping-terminal.sh"
+# through $0's own symlink next: a brand-new lib has no ~/.claude/hooks/lib link until install.sh
+# runs, and the checkout this hook resolves into already carries it (forks only on that miss).
+[ -f "$_hpt" ] || _hpt="$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/lib/handoff-ping-terminal.sh"
+[ -f "$_hpt" ] || _hpt="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/handoff-ping-terminal.sh"
+[ -f "$_hpt" ] || _hpt="$HOME/.claude/hooks/lib/handoff-ping-terminal.sh"
+HANDOFF_PING_TERMINAL_WORDS=""
+# shellcheck source=lib/handoff-ping-terminal.sh
+# shellcheck disable=SC1091
+[ -f "$_hpt" ] && . "$_hpt" 2>/dev/null
+if [ "${CC_DRAIN_CUSTODY_RETURN:-1}" != 0 ] && [ -n "$HANDOFF_PING_TERMINAL_WORDS" ] \
+   && printf '%s\n' "$body" | grep -q 'HANDOFF-PING'; then
   _cust_bin=""
   for _c in "$_scd/../bin/cc-custody" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/bin/cc-custody" \
             "$HOME/.claude/bin/cc-custody"; do
@@ -600,8 +619,15 @@ if [ "${CC_DRAIN_CUSTODY_RETURN:-1}" != 0 ] && printf '%s\n' "$body" | grep -q '
     # slug-LESS shapes are excluded by construction rather than by a filter: `HANDOFF-PING:` has no
     # space, and sc_announce_before_retire's `HANDOFF-PING (auto, …)` opens on `(`. Neither carries
     # a join key, and neither needs one — the self-close path they belong to discharges by marker.
-    while IFS= read -r _slug; do
+    # One awk pass classifies every ping line: `T <slug>` when the status's first whole token is
+    # terminal, `P <slug>` otherwise. A slug with any terminal ping in this drain is T (a DONE
+    # after a progress ping in one batch still discharges). Each class is deduped and capped at 8.
+    while IFS=' ' read -r _kind _slug; do
       [ -n "$_slug" ] || continue
+      if [ "$_kind" = P ]; then
+        _cust_open_slugs="${_cust_open_slugs:+$_cust_open_slugs, }$_slug"
+        continue
+      fi
       # rc is 0 either way BY CONTRACT (an unmatched return must never fail a peer's close path),
       # so the discharge/no-discharge verdict is read off stderr — empty means a row was matched.
       # Any unexpected stderr therefore under-reports the note and never over-reports it.
@@ -610,15 +636,37 @@ if [ "${CC_DRAIN_CUSTODY_RETURN:-1}" != 0 ] && printf '%s\n' "$body" | grep -q '
         _cust_slugs="${_cust_slugs:+$_cust_slugs, }$_slug"
       fi
     done <<CUSTODYSLUGS
-$(printf '%s\n' "$body" \
-  | sed -n 's/.*HANDOFF-PING \([A-Za-z0-9][A-Za-z0-9._\/-]*\):.*/\1/p' \
-  | awk '!s[$0]++' | head -8)
+$(printf '%s\n' "$body" | awk -v words="$HANDOFF_PING_TERMINAL_WORDS" '
+  BEGIN { n = split(words, w, " "); for (i = 1; i <= n; i++) term[w[i]] = 1 }
+  {
+    # the LAST `HANDOFF-PING <slug>:` on the line, as the old greedy sed took it
+    rest = $0; slug = ""; status = ""
+    while ((p = index(rest, "HANDOFF-PING ")) > 0) {
+      rest = substr(rest, p + 13)
+      if (match(rest, /^[A-Za-z0-9][A-Za-z0-9._\/-]*:/)) {
+        slug = substr(rest, 1, RLENGTH - 1); status = substr(rest, RLENGTH + 1)
+      }
+    }
+    if (slug == "") next
+    sub(/^[ \t]+/, "", status)
+    tok = ""
+    if (match(status, /^[A-Za-z0-9+_-]+/)) tok = toupper(substr(status, 1, RLENGTH))
+    if (tok in term) { if (!(slug in T)) { T[slug] = 1; to[++nt] = slug } }
+    else if (!(slug in P)) { P[slug] = 1; po[++np] = slug }
+  }
+  END {
+    for (i = 1; i <= nt && i <= 8; i++) print "T " to[i]
+    c = 0; for (i = 1; i <= np && c < 8; i++) if (!(po[i] in T)) { print "P " po[i]; c++ }
+  }')
 CUSTODYSLUGS
   fi
 fi
 [ "$_cust_n" -gt 0 ] && _cust_note="
      (custody: $_cust_n dispatched session(s) DISCHARGED by this ping — $_cust_slugs. Their work is
       reported, not yet collected: land/synthesize it. Still out: cc-custody list --open --cwd .)"
+[ -n "$_cust_open_slugs" ] && _cust_note="$_cust_note
+     (custody: a non-final ping does not discharge — $_cust_open_slugs. Only a status whose first
+      word is one of [$HANDOFF_PING_TERMINAL_WORDS] returns a custody row.)"
 
 # ── BLOCK RENDERING (operator request 2026-07-28) ───────────────────────────────────────────────
 # Peer mail used to arrive as a bare paragraph, visually identical to every other scrap of
