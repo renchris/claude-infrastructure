@@ -472,7 +472,9 @@ def proc_lstart(pid: int, run: Callable[..., Any] = subprocess.run) -> str:
         )
     except OSError:
         return ""
-    return str(cp.stdout or "").strip() if cp.returncode == 0 else ""
+    # Collapse runs of spaces ("Sep  9" → "Sep 9"): the one rendering observe.py, the fence and the
+    # watchdog all compare, so a padded day never reads as a different process.
+    return " ".join(str(cp.stdout or "").split()) if cp.returncode == 0 else ""
 
 
 # ── §4.5 write order: claim → owned/<sid> → record-with-intent ───────────────────────────────────
