@@ -27,6 +27,17 @@
 # so the first line is routinely a fragment — it fails to parse and is SKIPPED, exactly as
 # lr_last_api_error does; a partial line is not a verdict.
 #
+# ══ …BUT THE TAIL MUST REACH BACK TO <t0>, AND A FIXED BYTE COUNT DOES NOT (2026-09-28) ═════════
+# LR_PROBE_TAIL_BYTES is the FIRST window, not the only one. On 2.1.284 the prompt's own user record
+# is followed within half a second by an `instructions` attachment of ~335 KB and a
+# `prompt_snapshot` of ~67 KB, and a second snapshot at the end of the turn. Measured on the three
+# cc-lr upgrade runs of that evening (ddd154a9, 46bc0436, e0487c53): 490-568 KB sat AFTER the
+# record, so a 400 KB tail never contained it, the probe said `none` for the whole poll, and the
+# pane was told `NOT SUBMITTED — type the prompt by hand` over a prompt it had already answered.
+# The window now widens ×4 until the oldest timestamped record it parses is at or before <t0>
+# (everything newer is then inside it, because records are appended in time order) or the whole
+# file is read. The question stays scoped to this run; the window just stops guessing its size.
+#
 # READ-ONLY AND RE-RUNNABLE BY CONSTRUCTION: it opens files, writes none, and holds no state, so the
 # 1 s poll and the watcher's own call can both run it without interfering.
 set -uo pipefail
@@ -51,9 +62,9 @@ best_sub=""; best_q=""
 for f in "$CFG"/projects/*/"$SID".jsonl; do
   [ -f "$f" ] && [ -r "$f" ] || continue
   found=1
-  hit="$(tail -c "$LRP_TAIL" "$f" 2>/dev/null | /usr/bin/python3 -c '
-import json, re, sys
-t0, tok = sys.argv[1], sys.argv[2]
+  hit="$(/usr/bin/python3 -c '
+import json, os, re, sys
+t0, tok, path, win = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
 sub = q = ""
 # A PASTE BOUNDARY CAN SPLIT THE TOKEN (measured 2026-09-24, pane 405). A typed prompt arrives in
 # pieces; Claude Code wraps the first piece in <pasted_content id=…> and the tail lands after the
@@ -69,7 +80,37 @@ def flat(c):
     else:
         t = json.dumps(c) if c else ""
     return PASTE_TAG.sub("", t)
-for line in sys.stdin:
+def window(n):
+    """The last n bytes as lines (the first dropped when it starts mid-record) and whether they
+    reach back to t0: a parsed timestamp at or before it, or the start of the file."""
+    with open(path, "rb") as fh:
+        fh.seek(0, os.SEEK_END)
+        size = fh.tell()
+        start = max(0, size - n)
+        fh.seek(start)
+        raw = fh.read()
+    lines = raw.decode("utf-8", "replace").split("\n")
+    if start > 0:
+        lines = lines[1:]
+    reached = start == 0
+    if not reached:
+        for line in lines:
+            if "\"timestamp\"" not in line:
+                continue
+            try:
+                ts = json.loads(line).get("timestamp") or ""
+            except Exception:
+                continue
+            if ts and ts <= t0:
+                reached = True
+                break
+    return lines, reached
+while True:
+    lines, reached = window(win)
+    if reached:
+        break
+    win *= 4
+for line in lines:
     if tok not in line and "pasted_content" not in line:
         continue                   # cheap prefilter: the token is plain ASCII, so JSON escaping
                                    # cannot alter it; only a paste boundary can split it
@@ -94,7 +135,7 @@ for line in sys.stdin:
             q = ts
 print(sub)
 print(q)
-' "$T0" "$TOK" 2>/dev/null)" || hit=""
+' "$T0" "$TOK" "$f" "$LRP_TAIL" 2>/dev/null)" || hit=""
   # TWO LINES, never one tab-separated line: a literal tab in shell source is the kind of byte an
   # editor, a patch tool or a copy-paste silently turns into spaces, and the split would then read
   # the WHOLE output as the submitted ts — a fabricated verdict rather than a parse error.
