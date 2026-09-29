@@ -13,9 +13,17 @@ because the IO thread walks the client list every cycle, and each overload it mi
 Swift-formatted analytics report. The operator's restart dropped CPU to 0%, and the fresh daemon has
 held 0 contexts since.
 
-**Why it recurs daily.** Heavy fleet periods (load ≥ 40) happen daily. Contexts leak only while the box
-is starved, but nothing ever releases them, so each heavy period ratchets the count up and the CPU
-stays high after the load drops. A restart is the only thing that resets it.
+**The leak is a latch, not a per-play rate.** On daemon 36954, 3 of 2,553 plays leaked (0.1%) before
+the latch, at every load. After it, 553 of 599 leaked (92%). The latch fired at 2026-09-29 00:18:51,
+in the burstiest minute of the whole log (13 chimes, 4 in one second at 00:22:09), at load ~75.
+Daemon 391's onset (Sep 24 16:00) was the headless-harness burst of ~16 afplay/min. Checked live on
+the fresh daemon: 0 contexts at load 77 and again at load 112 with ~100 chimes since the restart but
+no burst. So the trigger is a burst of new clients while the box is starved. Load alone isn't enough.
+
+**Why it recurs daily.** Heavy fleet periods with bursts of session completions happen daily. Once the
+latch trips, every new audio client leaks, nothing ever releases a leaked context, and CPU stays
+high after the load drops. A restart is the only thing that resets it. The sound gate limits the
+burst side (one chime per 2 s machine-wide at most). The watchdog clears whatever gets through.
 
 **Not the cause (measured):** the Pioneer DJ HAL plug-ins and the Microsoft Teams virtual device
 (0 of 108 sampled coreaudiod frames in either report are in any third-party image; the Pioneer
@@ -85,6 +93,19 @@ holds have p50 = 23 min, p90 = 16 h.
   | ≥ 40 | 115 | 3,988 | 3,085 | **1.29** |
 
   Plays are concentrated at high load: load ≥ 40 in 12% of samples, but 39% of all plays.
+  This table mixes pre- and post-latch periods. Split by the latch (next bullet), the load effect is
+  mostly the latch's timing.
+- Latch split on daemon 36954 (a play "leaked" if ≥ 1 context was created within −1…+3 s of it;
+  "clustered" if another play was within 5 s):
+
+  | period | clustered | leaked / plays |
+  |---|---|---|
+  | before 09-29 00:00 | no | 1 / 2,105 |
+  | before 09-29 00:00 | yes | 2 / 448 |
+  | after | no | 376 / 397 |
+  | after | yes | 177 / 202 |
+
+  The first run of 5 consecutive leaking plays is at 00:18:51.
 
 ### E4. CPU follows the held count
 
