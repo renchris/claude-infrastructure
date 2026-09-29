@@ -2237,8 +2237,15 @@ def _invocations(c: str) -> list[list[str]] | None:
     return curl_invocations_by_segment(c) if inv is None else inv
 
 
-def decide_command(cmd: str, agent: bool = False) -> tuple[str, str, dict]:
-    decision, reason, meta = _decide_command_trunk(cmd, agent)
+def decide_command(
+    cmd: str, agent: bool = False, bind_text: str | None = None
+) -> tuple[str, str, dict]:
+    if FN_ON:
+        resolved = resolve_functions(cmd)
+        if resolved is not None:
+            return _decide_resolved(resolved, agent, bind_text)
+    ctx = bind_text or cmd
+    decision, reason, meta = _decide_command_trunk(cmd, agent, bind_text=bind_text)
     verdicts = [(decision, reason)]
     if os.environ.get("CC_CURL_SUBST") != "off" and ("$(" in cmd or "`" in cmd):
         bodies = substitution_bodies(cmd)
@@ -2260,7 +2267,7 @@ def decide_command(cmd: str, agent: bool = False) -> tuple[str, str, dict]:
                 # None (untokenisable) falls through to the pipeline, which denies it as trunk does.
                 if binv and all(_argv_seen(x, top) for x in binv):
                     continue  # the top-level pass already judged this curl
-                d, r = _decide_command_trunk(bs, agent, bind_text=cmd)[:2]
+                d, r = _decide_command_trunk(bs, agent, bind_text=ctx)[:2]
                 verdicts.append((d, "inside a command substitution: " + r))
     for want in ("deny", "ask"):
         for d, r in verdicts:
@@ -2323,6 +2330,355 @@ def alias_curl_values(cmd: str) -> list[str] | None:
                 out.append(value)
             i += 1
     return out
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# FN (commit 3): `$1…$9` inside a function body, resolved from LITERAL call sites.
+# `fetch(){ curl -sL "$1"; }; fetch https://a/x` — once the trunk-hole fix made the body visible,
+# its curl is a whole-URL variable and asks ("No URL parsed": ~300 corpus rows, mostly subagents,
+# where an ask is a stall). Each call site is judged as its own statement: fresh bindings
+# `__cgpf<F>_<C>_<N>=<arg N>` followed by the body with `$N` renamed, judged against the WHOLE
+# command (loop bindings, proxy variables, `| bash`), so a call inside `for u in …; do fetch "$u"`
+# resolves per iteration through the ordinary binding reader. The definition's body is blanked in
+# the top-level judgement. A function resolves only when every occurrence of its name is a call in
+# code position with decidable arguments and its body uses only $1…$9 / ${N} (and "$@"/"$*" when
+# every call passes exactly one argument); anything else keeps trunk's verdict. Kill switch:
+# CC_CURL_FN=off (also the attribution switch the replay uses).
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+FN_ON = os.environ.get("CC_CURL_FN") != "off"
+_CODE, _DQ, _INERT, _HEREDOC = 0, 1, 2, 3
+
+
+def _mask_dq(s: str, i: int, m: bytearray) -> int:
+    """s[i-1] was an opening '"'; marks the string _DQ and any $(…) inside it as code."""
+    n = len(s)
+    while i < n:
+        c = s[i]
+        m[i] = _DQ
+        if c == "\\":
+            if i + 1 < n:
+                m[i + 1] = _DQ
+            i += 2
+            continue
+        if c == '"':
+            return i + 1
+        if c == "$" and i + 1 < n and s[i + 1] == "(":
+            m[i + 1] = _DQ
+            i = (
+                _mask(s, i + 2, m, stop=")") + 1
+            )  # its `)` stays code: it ends a statement
+            continue
+        if c == "`":
+            end = _backtick_end(s, i)
+            m[i : end + 1] = bytes([_INERT]) * (end + 1 - i)
+            i = end + 1
+            continue
+        i += 1
+    raise _Unbalanced
+
+
+def _mask(s: str, i: int, m: bytearray, stop: str | None) -> int:
+    """_scan()'s walk, recording each character's quoting state instead of collecting bodies.
+    Backtick bodies are marked inert, so nothing inside one is ever read as a call or a def."""
+    n = len(s)
+    pending: list = []
+    case_depth = 0
+    while i < n:
+        c = s[i]
+        if c == "\\":
+            i += 2
+            continue
+        if c == "'":
+            k = s.find("'", i + 1)
+            if k == -1:
+                raise _Unbalanced
+            m[i : k + 1] = bytes([_INERT]) * (k + 1 - i)
+            i = k + 1
+            continue
+        if c == "$" and i + 1 < n and s[i + 1] == "'":
+            j = i + 2
+            while j < n and s[j] != "'":
+                j += 2 if s[j] == "\\" else 1
+            if j >= n:
+                raise _Unbalanced
+            m[i : j + 1] = bytes([_INERT]) * (j + 1 - i)
+            i = j + 1
+            continue
+        if c == '"':
+            m[i] = _DQ
+            i = _mask_dq(s, i + 1, m)
+            continue
+        if c == "`":
+            end = _backtick_end(s, i)
+            m[i : end + 1] = bytes([_INERT]) * (end + 1 - i)
+            i = end + 1
+            continue
+        if c == "$" and i + 1 < n and s[i + 1] == "(":
+            i = _mask(s, i + 2, m, stop=")") + 1
+            continue
+        if (s.startswith("case", i) or s.startswith("esac", i)) and _command_word(
+            s, i, 4
+        ):
+            case_depth = case_depth + 1 if c == "c" else max(case_depth - 1, 0)
+            i += 4
+            continue
+        if c == "(":
+            i = _mask(s, i + 1, m, stop=")") + 1
+            continue
+        if c == ")":
+            if case_depth:
+                i += 1
+                continue
+            if stop == ")":
+                return i
+            i += 1
+            continue
+        if c == "#" and (i == 0 or s[i - 1] in " \t\n;&|("):
+            k = s.find("\n", i)
+            k = n if k == -1 else k
+            m[i:k] = bytes([_INERT]) * (k - i)
+            i = k
+            continue
+        if c == "<" and s.startswith("<<<", i):
+            i += 3
+            continue
+        if c == "<" and s.startswith("<<", i):
+            delim, quoted, strip, j = _heredoc_head(s, i)
+            pending.append((delim, quoted, strip))
+            i = j
+            continue
+        if c == "\n" and pending:
+            i += 1
+            for delim, quoted, strip in pending:
+                while True:
+                    if i >= n:
+                        raise _Unbalanced
+                    k = s.find("\n", i)
+                    line = s[i:] if k == -1 else s[i:k]
+                    end = n if k == -1 else k + 1
+                    m[i:end] = bytes([_INERT if quoted else _HEREDOC]) * (end - i)
+                    i = end
+                    if (line.lstrip("\t") if strip else line) == delim:
+                        break
+            pending = []
+            continue
+        i += 1
+    if stop == ")":
+        raise _Unbalanced
+    return n
+
+
+def quote_mask(s: str) -> bytearray | None:
+    m = bytearray(len(s))
+    try:
+        _mask(s, 0, m, stop=None)
+    except (_Unbalanced, RecursionError, ValueError):
+        return None
+    return m
+
+
+_FN_DEF_RE = re.compile(
+    r"\bfunction[ \t]+([A-Za-z_][\w-]*)(?:[ \t]*\([ \t]*\))?[ \t\n]*\{"
+    r"|(?<![\w./-])([A-Za-z_][\w-]*)[ \t]*\([ \t]*\)[ \t\n]*\{"
+)
+# A positional reference the renamer understands, and the ones that make a body undecidable.
+_POS_OK_RE = re.compile(r"\$(?:([1-9])(?![0-9])|\{([1-9])\}|([@*])|\{([@*])\})")
+_POS_BAD_RE = re.compile(
+    r"\$(?:0|#|\{(?:0|#[^}]*|![^}]*|[0-9]{2,}[^}]*|[1-9@*][^}]+)\}|[1-9@*](?:[0-9\[]|:[A-Za-z&]))"
+)
+_FN_BODY_BAD_RE = re.compile(
+    r"(?:^|[\s;&|(){}])(?:shift|set|getopts|unset|return)(?=\s|;|$)"
+)
+
+
+def _brace_end(s: str, m: bytearray, i: int) -> int | None:
+    """s[i] is a def's `{`: the index of its matching `}`, counting only code braces."""
+    depth = 0
+    n = len(s)
+    while i < n:
+        if m[i] == _CODE:
+            c = s[i]
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    return i
+        i += 1
+    return None
+
+
+def _call_args(s: str, m: bytearray, i: int) -> tuple[list[str], int] | None:
+    """Raw argument words of a call whose name ends at i, up to its statement end; None when any
+    word is not a literal the shell and shlex read alike or a plain `$name` / fully double-quoted
+    word of `$name` references."""
+    n = len(s)
+    words: list[str] = []
+    cur: list[str] = []
+    target = False  # the next word is a redirection's target, not an argument
+    while True:
+        at_end = i >= n or (m[i] == _CODE and s[i] in ";&|\n)}")
+        if at_end or (m[i] == _CODE and s[i] in " \t"):
+            if cur:
+                if not target:
+                    words.append("".join(cur))
+                target, cur = False, []
+            if at_end:
+                break
+            i += 1
+            continue
+        if m[i] == _CODE and s[i] in "<>":
+            if target or (cur and not "".join(cur).isdigit()):
+                return None
+            cur = []
+            while i < n and m[i] == _CODE and s[i] in "<>&":
+                i += 1
+            target = True
+            continue
+        if (
+            m[i] == _CODE and s[i] in "\\("
+        ):  # an escape, or a <(…)/>(…) process substitution
+            return None
+        cur.append(s[i])
+        i += 1
+    if target:
+        return None
+    for w in words:
+        if "`" in w or "$(" in w:
+            return None
+        if "$" in w:
+            inner = w[1:-1] if len(w) >= 2 and w[0] == w[-1] == '"' else w
+            if inner is w and not re.fullmatch(
+                r"\$(?:[A-Za-z_]\w*|\{[A-Za-z_]\w*\})", w
+            ):
+                return None
+            if any(ch in inner for ch in "\"'\\") or _ZSH_POSTPARAM_RE.search(inner):
+                return None
+            if _REF_RE.sub("", inner).count("$"):
+                return None
+            continue
+        try:
+            deq = shlex.split(w, posix=True)
+        except ValueError:
+            return None
+        if len(deq) != 1 or not loop_words_literal(w, deq):
+            return None
+    return words, i
+
+
+def resolve_functions(cmd: str) -> tuple[str, list[tuple[str, str, str]]] | None:
+    """(the command with each resolved function's body blanked, [(name, call text, context)]) or
+    None when no curl-bearing function resolves."""
+    if "curl" not in cmd or "(" not in cmd and "function" not in cmd:
+        return None
+    m = quote_mask(cmd)
+    if m is None:
+        return None
+    defs = []
+    for d in _FN_DEF_RE.finditer(cmd):
+        name = d.group(1) or d.group(2)
+        start = d.start()
+        if m[start] != _CODE or not _CMD_POS_RE.search(cmd[:start]):
+            continue
+        close = _brace_end(cmd, m, d.end() - 1)
+        if close is None:
+            return None
+        defs.append((name, start, d.end(), close))
+    names = [x[0] for x in defs]
+    blanks: list[tuple[int, int]] = []
+    synths: list[tuple[str, str, str]] = []
+    for fi, (name, start, body0, close) in enumerate(defs):
+        body = cmd[body0:close]
+        if names.count(name) != 1 or name == "curl" or not statement_has_curl(body):
+            continue
+        if not re.search(r"[;\n&][ \t\n]*\Z", body) or _FN_DEF_RE.search(body):
+            continue
+        live = [k for k, ch in enumerate(body) if ch == "$" and m[body0 + k] != _INERT]
+        if any(_POS_BAD_RE.match(body, k) for k in live) or _FN_BODY_BAD_RE.search(
+            body
+        ):
+            continue
+        refs = [k for k in live if _POS_OK_RE.match(body, k)]
+        if not refs or any(m[body0 + k] == _HEREDOC for k in refs):
+            continue
+        calls = []
+        ok = True
+        for occ in re.finditer(r"(?<![\w./-])" + re.escape(name) + r"(?![\w./-])", cmd):
+            k = occ.start()
+            if start <= k < close + 1:
+                if k == start + (cmd[start:body0].find(name)):
+                    continue
+                ok = False
+                break
+            if m[k] != _CODE or not _CMD_POS_RE.search(cmd[:k]):
+                ok = False
+                break
+            got = _call_args(cmd, m, occ.end())
+            if got is None:
+                ok = False
+                break
+            calls.append(got[0])
+        if not ok or not calls:
+            continue
+        splat = any(
+            _POS_OK_RE.match(body, k).group(3) or _POS_OK_RE.match(body, k).group(4)
+            for k in refs
+        )
+        if splat and any(len(a) != 1 for a in calls):
+            continue
+        blanks.append((body0, close))
+        for ci, args in enumerate(calls):
+            tag = f"__cgpf{fi}_{ci}_"
+            assigns = []
+            for pos in range(1, 10):
+                raw = args[pos - 1] if pos <= len(args) else "''"
+                if "$" not in raw:
+                    raw = (
+                        shlex.quote(shlex.split(raw, posix=True)[0])
+                        if raw != "''"
+                        else raw
+                    )
+                assigns.append(f"{tag}{pos}={raw}")
+
+            def ren(mm: re.Match, tag: str = tag) -> str:
+                pos = mm.group(1) or mm.group(2) or "1"
+                return "${" + tag + pos + "}"
+
+            out, last = [], 0
+            for k in refs:
+                mm = _POS_OK_RE.match(body, k)
+                out.append(body[last:k] + ren(mm))
+                last = mm.end()
+            out.append(body[last:])
+            synth = "; ".join(assigns) + "\n" + "".join(out)
+            synths.append((name, synth, synth))
+    if not blanks:
+        return None
+    blanked, last = [], 0
+    for b0, b1 in sorted(blanks):
+        blanked.append(cmd[last:b0] + " :; ")
+        last = b1
+    blanked.append(cmd[last:])
+    text = "".join(blanked)
+    return text, [(n, sy, text + "\n" + sy) for n, sy, _ in synths]
+
+
+def _decide_resolved(
+    resolved, agent: bool, bind_text: str | None
+) -> tuple[str, str, dict]:
+    text, synths = resolved
+    decision, reason, meta = decide_command(text, agent, bind_text=bind_text)
+    verdicts = [(decision, reason)]
+    for name, synth, ctx in synths:
+        if bind_text:
+            ctx = bind_text + "\n" + synth
+        d, r, _ = decide_command(synth, agent, bind_text=ctx)
+        verdicts.append((d, f"inside function {name}: " + r))
+    for want in ("deny", "ask"):
+        for d, r in verdicts:
+            if d == want:
+                return d, r, meta
+    return decision, reason, meta
 
 
 def main() -> None:
