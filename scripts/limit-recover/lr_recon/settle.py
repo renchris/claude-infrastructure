@@ -278,10 +278,14 @@ def note_watcher_hold(home: str, rec: T.Record, now: float) -> bool:
     """§7 step 5: the detached watcher cancels a dialog AFTER the confirm and says so only in its
     handoffs row (`recycle-held-<reason>`, `…; unconfirm=needed`); A has already exited, usually
     rc 0, so no actuator exit carries it and row 9 picked A-husk over UNCONFIRM (W5 rig). Keyed on
-    this attempt's HF_RECYCLE_ATTEMPT label."""
-    if rec.last_error is not None and rec.last_error.cls == "HOLD":
-        return False
+    this attempt's HF_RECYCLE_ATTEMPT label.
+
+    Latched once per attempt in rec.close["watcher_hold"]: re-stamping HOLD after each UNCONFIRM
+    failure erased the DETERMINISTIC last_error, so the identical second failure never escalated (W5
+    rig 0f71c0d5: 57 rc 2 retries, never ESCALATED). Row 9 reads the latch instead (evidence)."""
     want = "%s:%d" % (rec.record_id, rec.attempt)
+    if rec.close.get("watcher_hold") == want:
+        return False
     path = os.path.join(home, ".claude", "logs", "handoffs.jsonl")
     for ln in reversed(tail(path, 256 * 1024).splitlines()):
         try:
@@ -292,6 +296,7 @@ def note_watcher_hold(home: str, rec: T.Record, now: float) -> bool:
             continue
         sub = RCY_HELD_SUB.get(str(row.get("class", ""))[len("recycle-held-") :])
         if sub and "unconfirm=needed" in str(row.get("detail", "")):
+            rec.close["watcher_hold"] = want
             rec.attempts_by_class["HOLD"] = rec.attempts_by_class.get("HOLD", 0) + 1
             rec.last_error = T.LastError(
                 cls="HOLD",

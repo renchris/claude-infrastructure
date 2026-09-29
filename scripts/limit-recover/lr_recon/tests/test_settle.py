@@ -8,6 +8,7 @@ import shutil
 import tempfile
 import unittest
 
+from lr_recon import evidence
 from lr_recon import settle
 from lr_recon import types as T
 
@@ -371,6 +372,28 @@ class Confirm(unittest.TestCase):
         self.assertFalse(settle.note_watcher_hold(self.cfg, r, 8.0))
         r.phase = "PRE-MOVE"
         self.assertTrue(settle.rebucket(r, "LIMITED", 9.0))  # the job ended: move again
+
+    def test_a_deterministic_unconfirm_failure_escalates_despite_the_watcher_row(self):
+        """W5 rig 0f71c0d5: each pass re-stamped HOLD over the UNCONFIRM's rc 2, so the identical
+        second failure never escalated (57 DETERMINISTIC, 58 HOLD, never ESCALATED)."""
+        r = rec(phase="HUSK-RETIRED", sub="no-stub")
+        self._handoffs(
+            (
+                "recycle-held-bgwork",
+                "recon:c:4ac4c35d:1:1",
+                "background-work dialog at 15s cancelled with Esc; unconfirm=needed",
+            )
+        )
+        bad = "lr-transplant: unknown arg --source-pid\n"
+        self.assertTrue(settle.note_watcher_hold(self.cfg, r, 5.0))
+        settle.settle_exit(r, actuator("UNCONFIRM"), 2, bad, 6.0)
+        self.assertFalse(settle.note_watcher_hold(self.cfg, r, 7.0))
+        settle.settle_exit(r, actuator("UNCONFIRM"), 2, bad, 8.0)
+        self.assertTrue(r.escalated)
+        snap = T.Snapshot(wall=9.0, uptime_raw=0.0, procs={})
+        paths = T.Paths(lr_root=self.cfg, root=os.path.join(self.cfg, "recon"))
+        ev = evidence.build(paths, r, snap, debt_open=lambda s: False)
+        self.assertEqual(ev.last_error_class, "HOLD")  # row 9 still picks UNCONFIRM
 
     def test_no_tombstone_leaves_it_unknown(self):
         r = rec()

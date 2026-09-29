@@ -123,7 +123,9 @@ def _tty_present(rec: T.Record, snap: T.Snapshot) -> bool:
         return False
     if snap.ttys:
         return os.path.basename(ident.tty) in snap.ttys
-    return os.path.exists(ident.tty if ident.tty.startswith("/") else "/dev/" + ident.tty)
+    return os.path.exists(
+        ident.tty if ident.tty.startswith("/") else "/dev/" + ident.tty
+    )
 
 
 def _identity_match(rec: T.Record, pane: Optional[T.PaneObs]) -> bool:
@@ -218,7 +220,11 @@ def build(
         confirm_len=rec.confirm_len,
         readiness=readiness(rec),
         relaunch_substate="DRAFTED" if rec.substate == "DRAFTED" else None,
-        last_error_class=rec.last_error.cls if rec.last_error else "",
+        # row 9 keeps choosing UNCONFIRM off the watcher's per-attempt latch, so the UNCONFIRM's own
+        # DETERMINISTIC failure can stay in last_error and escalate (W5 rig 0f71c0d5)
+        last_error_class="HOLD"
+        if rec.close.get("watcher_hold") == "%s:%d" % (rec.record_id, rec.attempt)
+        else (rec.last_error.cls if rec.last_error else ""),
         pre_move=(rec.substate or "") if rec.phase == "PRE-MOVE" else "",
     )
     _target_reads(rec, ev)
@@ -325,7 +331,9 @@ def fold_witness(paths: T.Paths, rec: T.Record) -> str:
         snap_s = os.path.join(work, rec.sid + ".fold.stub")
         if os.path.exists(out):
             return ""
-        if os.path.exists(src):  # a stub: snapshot it and the retired copy it will be folded onto
+        if os.path.exists(
+            src
+        ):  # a stub: snapshot it and the retired copy it will be folded onto
             os.makedirs(work, exist_ok=True)
             for a, b in ((src + ".handed-off", snap_r), (src, snap_s)):
                 with open(a, "rb") as fh:
