@@ -9,6 +9,20 @@
 #                      [--no-transplant] [--keep-source] [--force] [--close-source]
 #                      [--source-pane PANE-ID] [--in-place] [--spawn]
 #                      [--voluntary] [--reason TEXT]
+#                      [--record-id R] [--attempt N] [--account-evidence FILE] [--no-prompt]
+#
+# RECONCILER INTERFACE (LIMIT_RECOVER_FLEET_V2 W2a). Every item below is INERT unless its caller
+# sets it, so a legacy caller's launcher and every argv this script emits stay byte-identical.
+#   --record-id R / --attempt N  the reconciler's work-record identity: passed to lr-transplant,
+#                    exported as LR_RECORD_ID / LR_ATTEMPT, defaults HF_RECYCLE_ATTEMPT="R:N", and
+#                    passed to the handoff-fire recycle only when the live copy parses it.
+#   --account-evidence FILE  a quota fact (`<acct>.<scope>.json`) that admits a --voluntary move
+#                    of a pane that is not limit-blocked; an invalid fact refuses rc 6.
+#   --no-prompt      the launcher resumes with lr-fire-resume --no-prompt and runs no ingest verify.
+#   env LR_PLACED_BY=reconciler  skips the router check, forces CC_RECYCLE_BGWORK_ANSWER=cancel and
+#                    selects the reconciler continue prompt. LR_ASSIGN_ID is recorded and demands an
+#                    explicit --target. LR_ADMIT_TOKEN_PATH hands admission to the caller.
+#                    LR_PRESEED_DONE skips lr-preseed-env. LR_WAKE_GUARD_S holds a just-woken box.
 #
 # Defaults: sid/config from the live session env; --target auto routes via
 # claude-accounts; --print-only mints $TMPDIR/lr-launch-<sid8>-XXXXXX.sh instead of firing.
@@ -242,6 +256,7 @@ LRH_SPAWN_SHAPE=""
 
 CWD="$(pwd)" CONTEXT="" LAUNCH=0 PRINT_ONLY=0 NO_TRANSPLANT=0 KEEP_SOURCE=0 FORCE=0 CLOSE_SOURCE=0 IN_PLACE=0 SPAWN=0
 VOLUNTARY=0 REASON=""
+RECORD_ID="" ATTEMPT="" ACCOUNT_EVIDENCE="" NO_PROMPT=0
 MODEL_EXPLICIT=0 EFFORT_EXPLICIT=0
 SOURCE_PANE=""
 # Set by lrh_resolve_implied_pane branch (b) and read by lrh_precheck. It MUST be initialised
@@ -268,10 +283,29 @@ while [[ $# -gt 0 ]]; do
     --spawn) SPAWN=1; shift ;;
     --voluntary) VOLUNTARY=1; shift ;;
     --reason) REASON="$2"; shift 2 ;;
+    --record-id) RECORD_ID="$2"; shift 2 ;;
+    --attempt) ATTEMPT="$2"; shift 2 ;;
+    --account-evidence) ACCOUNT_EVIDENCE="$2"; shift 2 ;;
+    --no-prompt) NO_PROMPT=1; shift ;;
     *) echo "lr-handoff: unknown arg $1" >&2; exit 2 ;;
   esac
 done
 [[ -n "$SID" ]] || { echo "lr-handoff: no --sid and CLAUDE_CODE_SESSION_ID unset" >&2; exit 2; }
+[[ -z "$ATTEMPT" || "$ATTEMPT" =~ ^[0-9]+$ ]] || { echo "lr-handoff: --attempt must be a non-negative integer (got '$ATTEMPT')" >&2; exit 2; }
+# A PLACED ACTUATOR CARRIES ITS TARGET. The reconciler chose the account when it wrote the
+# assignment; letting `auto` re-route here would move the session somewhere the assignment does not
+# name, and the reconciler would then reconcile against a placement that never happened.
+if [[ -n "${LR_ASSIGN_ID:-}" && "$TARGET" == auto ]]; then
+  echo "lr-handoff: REFUSED — LR_ASSIGN_ID=$LR_ASSIGN_ID is set but --target is auto; a placed actuator must carry an explicit --target" >&2
+  exit 2
+fi
+# THE RECORD IDENTITY RIDES THE ENVIRONMENT TO EVERY CHILD (lr-transplant, handoff-fire and its
+# watcher), so an artifact any of them writes can be joined back to the reconciler's record.
+# HF_RECYCLE_ATTEMPT is only defaulted: a caller that already names the attempt wins.
+if [[ -n "$RECORD_ID" ]]; then
+  export LR_RECORD_ID="$RECORD_ID" LR_ATTEMPT="$ATTEMPT"
+  export HF_RECYCLE_ATTEMPT="${HF_RECYCLE_ATTEMPT:-$RECORD_ID:${ATTEMPT:-1}}"
+fi
 
 # ── THE CAUSE IS ONE VALUE, DERIVED ONCE, AND IT IS A FIELD (§5 DEC-3) ──────────────────────────
 # Two consumers read it and they are peers landing the other half of this contract:
@@ -477,6 +511,76 @@ CFG="${CFG/#\~/$HOME}"
 # through the poller's prompt lane, so the SELF verb's own gates still run inside the subject.
 # FAIL-OPEN on an unreadable transcript: the probe below still decides, exactly as before.
 # Kill switch: LRH_VOLUNTARY_FAILFAST=off restores the old path byte-for-byte.
+#
+# THE ACCOUNT MAP IS SOURCED HERE, ABOVE THE FAIL-FAST, because the evidence check below resolves
+# the source account through it. It was sourced a few lines further down; nothing between the two
+# positions reads it, so the move changes no other path.
+# Backed by the accounts.json-generated map (any N accounts) — see lib/account-map.generated.sh.
+# shellcheck source=/dev/null
+for _CC_AM in "${CC_ACCOUNT_MAP:-}" "$(dirname "$0")/../../lib/account-map.generated.sh" "$HOME/.claude/lib/account-map.generated.sh"; do
+  [ -n "$_CC_AM" ] && [ -f "$_CC_AM" ] && { source "$_CC_AM"; break; }
+done
+# ── ACCOUNT EVIDENCE: A VOLUNTARY MOVE OF A HEALTHY PANE, ADMITTED ON A QUOTA FACT (W2a) ─────────
+# The reconciler moves a pane BEFORE it hits the wall, on a fact the account poller wrote: the
+# account's own API answered `rejected` for a 5h/7d window. The transcript cannot show that yet,
+# so the fail-fast below would refuse the one move that avoids the outage. The fact is admitted
+# only when EVERY field holds — a stale, contradicted or foreign fact is a refusal, never a pass,
+# because a move made on a wrong fact costs a whole recovery for nothing.
+# One parse, one verdict: `ok <scope> <resets_at>` or `bad <which check>`. A variable, not a heredoc
+# inside $( ): bash 3.2 mis-counts parentheses in a heredoc nested in a command substitution.
+LRH_EV_PY='import json, sys, time, datetime
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    print("bad not JSON"); sys.exit(0)
+if not isinstance(d, dict):
+    print("bad not a JSON object"); sys.exit(0)
+if d.get("status") != "rejected":
+    print("bad status=%s (want rejected)" % d.get("status")); sys.exit(0)
+if d.get("scope") not in ("5h", "7d"):
+    print("bad scope=%s (want 5h|7d)" % d.get("scope")); sys.exit(0)
+if d.get("contradicted") is True:
+    print("bad contradicted=true"); sys.exit(0)
+r = d.get("resets_at")
+try:
+    if isinstance(r, (int, float)) and not isinstance(r, bool):
+        t = int(r)
+    elif isinstance(r, str) and r.strip().isdigit():
+        t = int(r.strip())
+    elif isinstance(r, str):
+        s = r.strip().replace("Z", "+00:00")
+        dt = datetime.datetime.fromisoformat(s)
+        if dt.tzinfo is None or dt.utcoffset() != datetime.timedelta(0):
+            raise ValueError("not UTC")
+        t = int(dt.timestamp())
+    else:
+        raise ValueError("absent")
+except Exception:
+    print("bad resets_at unparseable (%r)" % (r,)); sys.exit(0)
+left = t - int(time.time())
+if left < 1800:
+    print("bad expired: resets_at is %ds away (need >= 1800)" % left); sys.exit(0)
+print("ok %s %d" % (d["scope"], t))
+'
+lrh_evidence_check() { # $1=fact file → 0 valid (LRH_EV_SCOPE, LRH_EV_RESETS set) / 1 invalid (LRH_EV_WHY set)
+  local f="$1" out acct src base
+  LRH_EV_WHY="" LRH_EV_SCOPE="" LRH_EV_RESETS=""
+  [[ -n "$f" && -r "$f" ]] || { LRH_EV_WHY="unreadable: ${f:-<none>}"; return 1; }
+  out="$(python3 -c "$LRH_EV_PY" "$f" 2>/dev/null)" || out="bad parse error"
+  case "$out" in
+    ok\ *) ;;
+    *) LRH_EV_WHY="${out#bad }"; return 1 ;;
+  esac
+  base="${f##*/}"; acct="${base%%.*}"
+  src=""
+  if command -v cc_acct_name_for_dir_basename >/dev/null 2>&1; then
+    src="${CFG%/}"; src="$(cc_acct_name_for_dir_basename "${src##*/}" 2>/dev/null || true)"
+  fi
+  [[ -n "$src" ]] || { LRH_EV_WHY="account unresolvable: source config $CFG maps to no account name"; return 1; }
+  [[ "$acct" == "$src" ]] || { LRH_EV_WHY="account mismatch: fact is for '$acct', source account is '$src'"; return 1; }
+  read -r _ LRH_EV_SCOPE LRH_EV_RESETS <<<"$out"
+  return 0
+}
 if [[ $VOLUNTARY -eq 1 && -n "$SOURCE_PANE" && "${LRH_VOLUNTARY_FAILFAST:-on}" != off ]] \
    && command -v lr_last_api_error >/dev/null 2>&1; then
   _lrh_vtx=""
@@ -485,7 +589,18 @@ if [[ $VOLUNTARY -eq 1 && -n "$SOURCE_PANE" && "${LRH_VOLUNTARY_FAILFAST:-on}" !
     # `|| true`: rc 1 IS the healthy answer ("not an api error"), and under set -e + pipefail it
     # would otherwise end this script silently at rc 1 — the one outcome that names nothing.
     _lrh_vkind="$(lr_last_api_error "$_lrh_vtx" 2>/dev/null | cut -f3 || true)"
-    if [[ "$_lrh_vkind" != limit ]]; then
+    _lrh_ev_ok=0
+    if [[ "$_lrh_vkind" != limit && -n "$ACCOUNT_EVIDENCE" ]]; then
+      if lrh_evidence_check "$ACCOUNT_EVIDENCE"; then
+        echo "lr-handoff: voluntary move admitted on account evidence $ACCOUNT_EVIDENCE ($LRH_EV_SCOPE, $LRH_EV_RESETS)" >&2
+        _lrh_ev_ok=1
+      else
+        echo "lr-handoff: REFUSED:evidence-invalid — $LRH_EV_WHY (pane $SOURCE_PANE, session ${SID:0:8}, evidence ${ACCOUNT_EVIDENCE}). Nothing was planned, transplanted, locked or waited on." >&2
+        echo "lr-handoff: verdict=NOTMOVED from=- to=${TARGET:--} proven=no trigger=voluntary — refused before planning: the account evidence is not a valid, current fact for the source account ($LRH_EV_WHY)" >&2
+        exit 6
+      fi
+    fi
+    if [[ "$_lrh_vkind" != limit && $_lrh_ev_ok -eq 0 ]]; then
       echo "lr-handoff: REFUSED:not-limited — pane $SOURCE_PANE (session ${SID:0:8}) is not limit-blocked (last api error: ${_lrh_vkind:-none}), and a --voluntary move of ANOTHER pane is refused by the recycle probe's limit gate every time. Nothing was planned, transplanted, locked or waited on." >&2
       echo "lr-handoff: to move a healthy peer, ask it to move itself: cc-lr switch --pane $SOURCE_PANE --target $TARGET" >&2
       echo "lr-handoff: verdict=NOTMOVED from=- to=${TARGET:--} proven=no trigger=voluntary — refused before planning: a healthy peer is moved by cc-lr switch --pane, not by lr-handoff --voluntary --source-pane" >&2
@@ -495,11 +610,7 @@ if [[ $VOLUNTARY -eq 1 && -n "$SOURCE_PANE" && "${LRH_VOLUNTARY_FAILFAST:-on}" !
 fi
 
 # --- account routing --------------------------------------------------------
-# Backed by the accounts.json-generated map (any N accounts) — see lib/account-map.generated.sh.
-# shellcheck source=/dev/null
-for _CC_AM in "${CC_ACCOUNT_MAP:-}" "$(dirname "$0")/../../lib/account-map.generated.sh" "$HOME/.claude/lib/account-map.generated.sh"; do
-  [ -n "$_CC_AM" ] && [ -f "$_CC_AM" ] && { source "$_CC_AM"; break; }
-done
+# The account map is sourced above the voluntary fail-fast, whose evidence check reads it.
 acct_to_cfg() {
   if cc_acct_dir_for_name "$1"; then echo "$CC_ACCT_DIR"; else echo ""; fi
 }
@@ -575,6 +686,74 @@ lrh_verdict() { # <TOKEN> <proven yes|no> <note>
   return 0
 }
 
+# ── ONE GIT MUTATOR PER REPOSITORY AT A TIME (W2a) ──────────────────────────────────────────────
+# The reconciler runs recoveries in PARALLEL, and two of them in worktrees of one repository share
+# its common dir — so two concurrent `switch -C` race on the same ref locks and one dies
+# `cannot lock ref`. A mkdir lock keyed on the ABSOLUTE common dir serialises them. It is a lock
+# that can only DEGRADE: a stolen dead holder is reclaimed at once, a live one is waited on for
+# 10 s, and a timeout skips the rename through the existing WARNING path — never an abort. A lock
+# this script cannot even construct (no common dir, unwritable state dir) proceeds UNLOCKED, which
+# is exactly the behaviour before the lock existed.
+LRH_GIT_LOCK=""
+lrh_git_lock_lstart() { TZ=UTC LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//; s/ *$//'; }
+lrh_git_lock_take() { # $1=cwd → 0 held or lock unavailable (proceed) / 1 timed out (skip the mutation)
+  local common key root dir holder hpid hls i age mt
+  common="$(git -C "$1" rev-parse --git-common-dir 2>/dev/null)" || common=""
+  if [[ -n "$common" ]]; then
+    common="$(cd "$1" 2>/dev/null && cd "$common" 2>/dev/null && pwd -P)" || common=""
+  fi
+  if [[ -z "$common" ]]; then
+    echo "lr-handoff: git lock unavailable (no common dir for $1) — proceeding unlocked" >&2; return 0
+  fi
+  key="$(printf '%s' "$common" | shasum -a 1 2>/dev/null | cut -d' ' -f1)" || key=""
+  root="${LR_STATE_DIR:-$HOME/.reso/limit-recover}/locks"
+  if [[ -z "$key" ]] || ! mkdir -p "$root" 2>/dev/null; then
+    echo "lr-handoff: git lock unavailable (cannot key or create $root) — proceeding unlocked" >&2; return 0
+  fi
+  dir="$root/git-$key"
+  for i in $(seq 1 21); do
+    if mkdir "$dir" 2>/dev/null; then
+      LRH_GIT_LOCK="$dir"
+      jq -nc --arg rid "$RECORD_ID" --arg att "$ATTEMPT" --argjson pid "$$" \
+         --arg ls "$(lrh_git_lock_lstart "$$")" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+         '{record_id:$rid, attempt:$att, role:"lr-handoff", pid:$pid, lstart:$ls, at:$at}' \
+         > "$dir/holder" 2>/dev/null || true
+      return 0
+    fi
+    # STEAL A DEAD HOLDER AT ONCE. Dead = its pid is gone or now names a different process (pid
+    # reuse is why lstart is in the holder). A holder-less dir is a writer caught between mkdir and
+    # the holder write; it is only stale once it has outlived the whole wait window.
+    holder="$dir/holder"
+    if [[ -f "$holder" ]]; then
+      hpid="$(jq -r '.pid // empty' "$holder" 2>/dev/null || true)"
+      hls="$(jq -r '.lstart // empty' "$holder" 2>/dev/null || true)"
+      if [[ ! "$hpid" =~ ^[0-9]+$ ]] || [[ "$(lrh_git_lock_lstart "$hpid")" != "$hls" ]]; then
+        echo "lr-handoff: git lock $dir held by a dead holder (pid ${hpid:-?}) — stealing it" >&2
+        rm -rf "$dir" 2>/dev/null || true; continue
+      fi
+    else
+      mt="$(stat -f %m "$dir" 2>/dev/null || stat -c %Y "$dir" 2>/dev/null || echo "")"
+      age=0; [[ "$mt" =~ ^[0-9]+$ ]] && age=$(( $(date +%s) - mt ))
+      if [[ $age -ge 10 ]]; then
+        echo "lr-handoff: git lock $dir has no holder after ${age}s — stealing it" >&2
+        rm -rf "$dir" 2>/dev/null || true; continue
+      fi
+    fi
+    [[ $i -lt 21 ]] && sleep 0.5
+  done
+  echo "lr-handoff: git lock $dir is held by a live process (pid ${hpid:-?}) after 10s — skipping the git mutation" >&2
+  return 1
+}
+lrh_git_lock_drop() { # removes ONLY a lock this pid wrote — safe from the EXIT trap and inline alike
+  local dir="$LRH_GIT_LOCK" hpid
+  [[ -n "$dir" ]] || return 0
+  hpid="$(jq -r '.pid // empty' "$dir/holder" 2>/dev/null || true)"
+  if [[ "$hpid" == "$$" || ! -f "$dir/holder" ]]; then rm -rf "$dir" 2>/dev/null || true; fi
+  LRH_GIT_LOCK=""
+  return 0
+}
+trap 'lrh_git_lock_drop' EXIT
+
 # --- repo guards -----------------------------------------------------------
 # 🚨 NOTHING IN THIS BLOCK MAY ABORT THE RECOVERY (D1, 2026-09-28). Every read here is CONTEXT for
 # the bundle and the successor; none is a precondition. Under `set -euo pipefail` a bare
@@ -596,10 +775,12 @@ else
   HEAD=$(git -C "$CWD" rev-parse --short HEAD 2>/dev/null) || HEAD=""
   if [[ "$BRANCH" == pool/* ]]; then
     NEWBR="recovered/${SID:0:8}"
-    if git -C "$CWD" switch -C "$NEWBR" >&2; then
+    if lrh_git_lock_take "$CWD" && git -C "$CWD" switch -C "$NEWBR" >&2; then
+      lrh_git_lock_drop
       echo "lr-handoff: branch was $BRANCH (pool refresher would hard-reset it) — renamed to $NEWBR" >&2
       BRANCH="$NEWBR"
     else
+      lrh_git_lock_drop
       echo "lr-handoff: WARNING — branch $BRANCH is pool/* and the rename to $NEWBR FAILED; the pool refresher may hard-reset it" >&2
     fi
   fi
@@ -798,6 +979,10 @@ fi
 # capacity-park path much older than that). MANIFEST.ingest_prompt therefore records the FALLBACK
 # — what the recovery degrades to — not a prediction of what will be typed.
 INGEST_PROMPT="/limit-recover ingest $BUNDLE"
+# THE FOUR RECONCILER FIELDS (record_id, attempt, placed_by, assign_id) APPEAR ONLY WHEN ONE IS SET,
+# all four together (empty strings for the unset ones). The 1 KB manifest budget pinned by
+# tests/lr-handoff-launcher-quoting.bats has no room for ~90 B of empties on every legacy run, and a
+# legacy manifest therefore stays byte-identical. Readers default an absent field to "".
 jq -n \
   --arg sid "$SID" --arg source_cfg "$CFG" --arg target "$TARGET" --arg target_cfg "$TCFG" \
   --arg cwd "$CWD" --arg wt "$WT_TOP" --arg branch "$BRANCH" --arg head "$HEAD" \
@@ -809,13 +994,17 @@ jq -n \
   --arg src_pane "${SOURCE_PANE:-}" --arg in_place "$IN_PLACE" \
   --arg implied "${LRH_IMPLIED_INPLACE:-0}" \
   --arg trigger "$LRH_CAUSE" --arg reason "$REASON" \
+  --arg record_id "$RECORD_ID" --arg attempt "$ATTEMPT" \
+  --arg placed_by "${LR_PLACED_BY:-}" --arg assign_id "${LR_ASSIGN_ID:-}" \
   '{sid:$sid, source_cfg:$source_cfg, target:$target, target_cfg:$target_cfg, cwd:$cwd,
     worktree:$wt, branch:$branch, head:$head, ts:$ts, model:$model, task_list:$task_list,
     transcript_sha256:$sha, gaps_at_handoff:($gaps|tonumber), ingest_prompt:$ingest,
     runtime_model:$rt_model, runtime_effort:$rt_effort, permission_mode:$perm,
     source_pane:$src_pane, in_place:($in_place=="1"),
     in_place_implied:($implied=="1"),
-    trigger:$trigger, reason:$reason}' \
+    trigger:$trigger, reason:$reason}
+   + (if ($record_id + $attempt + $placed_by + $assign_id) == "" then {} else
+       {record_id:$record_id, attempt:$attempt, placed_by:$placed_by, assign_id:$assign_id} end)' \
   > "$BUNDLE/MANIFEST.json"
 # `source_argv` IS DELIBERATELY ABSENT (W3). It was the source process's FULL `ps -Eww` line — argv
 # plus the entire inherited environment — and on bundle 09e64dcb/bundle-20260919T172203Z it was
@@ -843,7 +1032,11 @@ jq -n \
 # parser accepts it — that subject has its own cases below this file's own tests.
 _lrh_missing=""
 [[ "${LRH_LIVE_PARSER_CHECK:-on}" == off ]] && _lrh_skip_parser=1 || _lrh_skip_parser=0
-for _lrh_f in --branch --model --effort --permission-mode --prompt; do
+# --no-prompt joins the list ONLY when this run emits it: a live lr-fire-resume that predates the
+# flag must refuse THIS run, and must not refuse every legacy run that never sends it.
+_lrh_parse_flags=(--branch --model --effort --permission-mode --prompt)
+[[ $NO_PROMPT -eq 1 ]] && _lrh_parse_flags+=(--no-prompt)
+for _lrh_f in "${_lrh_parse_flags[@]}"; do
   [[ $_lrh_skip_parser -eq 1 ]] && break
   grep -q -- "$_lrh_f)" "$LR/lr-fire-resume.sh" 2>/dev/null || _lrh_missing="$_lrh_missing $_lrh_f"
 done
@@ -975,7 +1168,12 @@ lrh_target_routable() { # → 0 routable / 1 the router excludes it (reason prin
 lrh_precheck() { # → 0 admitted (token minted) / 6 HELD|REFUSED|PARKED, nothing moved
   local hf out rc state lrh_ki
   # FIRST, because it is the cheapest refusal and the one that costs a whole session when skipped.
-  if ! lrh_target_routable; then
+  # A RECONCILER PLACEMENT HAS ALREADY ASKED THE ROUTER: it chose the target from the same ranking
+  # when it wrote the assignment, so a second read here can only disagree with a decision already
+  # recorded — and a disagreement at this layer strands the assignment instead of re-placing it.
+  if [[ "${LR_PLACED_BY:-}" == reconciler ]]; then
+    echo "lr-handoff: precheck — LR_PLACED_BY=reconciler: the router check is skipped (the reconciler ranked '$TARGET' when it placed this move)" >&2
+  elif ! lrh_target_routable; then
     lrh_state REFUSED precheck "target $TARGET not ranked by the router"
     return 6
   fi
@@ -987,7 +1185,18 @@ lrh_precheck() { # → 0 admitted (token minted) / 6 HELD|REFUSED|PARKED, nothin
       return 6
     fi
     rc=0
-    out="$("$hf" --probe-recycle-preconditions --source-pane "$SOURCE_PANE" --source-session "$SID" 2>&1)" || rc=$?
+    # THE EVIDENCE MUST REACH THE PROBE TOO, or its unconditional limit gate refuses the very move the
+    # fail-fast just admitted. Only a live handoff-fire that parses the flag gets it (it gains it in
+    # a sibling wave); an older one would die `unknown arg`, so it is told nothing and says so.
+    local probe_extra=()
+    if [[ -n "$ACCOUNT_EVIDENCE" ]]; then
+      if grep -q -- '--account-evidence)' "$hf" 2>/dev/null; then
+        probe_extra=(--account-evidence "$ACCOUNT_EVIDENCE")
+      else
+        echo "lr-handoff: note — the live $hf does not parse --account-evidence; the probe is run without it" >&2
+      fi
+    fi
+    out="$("$hf" --probe-recycle-preconditions --source-pane "$SOURCE_PANE" --source-session "$SID" ${probe_extra[@]+"${probe_extra[@]}"} 2>&1)" || rc=$?
     printf '%s\n' "$out" | sed 's/^/lr-handoff: precheck /' >&2
     state="$(printf '%s\n' "$out" | sed -n 's/^verdict: //p' | tail -1)"
     if [[ $rc -ne 0 ]]; then
@@ -1049,7 +1258,21 @@ lrh_precheck() { # → 0 admitted (token minted) / 6 HELD|REFUSED|PARKED, nothin
   fi
   # THE CAPACITY DECISION, TAKEN ONCE. One evaluation, no wait: the fleet driver owns the waiting
   # (lf_capacity_wait) and an interactive caller wants a verdict now, not a 2-minute park.
-  if command -v lr_capacity_probe_corrected >/dev/null 2>&1; then
+  #
+  # …UNLESS THE CALLER OWNS ADMISSION (W2a). The reconciler admits a whole batch against one
+  # capacity reading and mints each move's token itself; a second probe here would re-decide on a
+  # box its own batch is loading, and a second mint would be a token nobody redeems. So the token
+  # is READ from the path it names. An empty or missing file is no token: the relaunch then
+  # evaluates the gate fresh in the pane, which is the caller's design, and it is logged as such.
+  if [[ -n "${LR_ADMIT_TOKEN_PATH:-}" ]]; then
+    LRH_ADMIT_TOKEN="$(head -n 1 "$LR_ADMIT_TOKEN_PATH" 2>/dev/null | tr -d '[:space:]' || true)"
+    if [[ -n "$LRH_ADMIT_TOKEN" ]]; then
+      echo "lr-handoff: precheck — admission owned by the caller: token $LRH_ADMIT_TOKEN read from $LR_ADMIT_TOKEN_PATH (no probe, no mint)" >&2
+      lrh_state admitted gate "token $LRH_ADMIT_TOKEN (caller-owned, $LR_ADMIT_TOKEN_PATH)"
+    else
+      echo "lr-handoff: precheck — admission owned by the caller, but $LR_ADMIT_TOKEN_PATH holds no token; the relaunch will evaluate the gate fresh in the pane" >&2
+    fi
+  elif command -v lr_capacity_probe_corrected >/dev/null 2>&1; then
     rc=0
     lr_capacity_probe_corrected lr-handoff "in-place recovery of ${SID:0:8} onto $TARGET" || rc=$?
     if [[ $rc -ne 0 ]]; then
@@ -1074,6 +1297,11 @@ lrh_precheck() { # → 0 admitted (token minted) / 6 HELD|REFUSED|PARKED, nothin
   fi
   return 0
 }
+# THE PLACEMENT IS A RECORD IN THE RUN'S OWN LOG, so the reconciler can join a run back to the
+# assignment that caused it without trusting the manifest alone.
+if [[ -n "${LR_ASSIGN_ID:-}" ]]; then
+  lrh_state placed assign "assign_id=$LR_ASSIGN_ID placed_by=${LR_PLACED_BY:--} record_id=${RECORD_ID:--} attempt=${ATTEMPT:--} target=$TARGET"
+fi
 if [[ $IN_PLACE -eq 1 && "${LRH_PRECHECK:-on}" != off ]]; then
   # `lrh_precheck || exit $?` was correct and stays correct; the rc is captured into a variable
   # first only so the verdict can be emitted between the refusal and the exit. NOTMOVED is
@@ -1087,9 +1315,30 @@ if [[ $IN_PLACE -eq 1 && "${LRH_PRECHECK:-on}" != off ]]; then
   fi
 fi
 
+# ── WAKE GUARD (W2a): A BOX THAT JUST WOKE HAS NOT YET SEEN ITS OWN STATE ────────────────────────
+# For the first seconds after a wake, sessions are reconnecting and the quota facts that caused
+# this move may predate the sleep. A caller that sets LR_WAKE_GUARD_S=S holds any move made within
+# S seconds of the last wake — BEFORE the transplant, so the hold is a NOTMOVED, never a husk.
+# FAIL-OPEN: an unreadable waketime says nothing about the box, so the move proceeds, logged.
+if [[ "${LR_WAKE_GUARD_S:-}" =~ ^[0-9]+$ && "${LR_WAKE_GUARD_S}" -gt 0 ]]; then
+  _lrh_wake="$(sysctl -n kern.waketime 2>/dev/null | sed -n 's/^[^0-9]*sec = \([0-9][0-9]*\).*/\1/p' | head -n 1 || true)"
+  if [[ -z "$_lrh_wake" ]]; then
+    echo "lr-handoff: wake guard — kern.waketime unreadable; proceeding (fail-open)" >&2
+  else
+    _lrh_woke=$(( $(date +%s) - _lrh_wake ))
+    if [[ $_lrh_woke -lt $LR_WAKE_GUARD_S ]]; then
+      echo "lr-handoff: HELD:wake-guard (woke ${_lrh_woke}s ago) — LR_WAKE_GUARD_S=${LR_WAKE_GUARD_S}; nothing was transplanted" >&2
+      lrh_state HELD wake-guard "woke ${_lrh_woke}s ago"
+      lrh_verdict NOTMOVED no "HELD:wake-guard (woke ${_lrh_woke}s ago) — held before the first irreversible step; the source session is untouched and a retry is safe"
+      exit 6
+    fi
+  fi
+fi
+
 # --- transplant ------------------------------------------------------------
 if [[ $NO_TRANSPLANT -ne 1 ]]; then
   TARGS=(--sid "$SID" --from "$CFG" --to "$TCFG")
+  [[ -n "$RECORD_ID" ]] && TARGS+=(--record-id "$RECORD_ID")
   [[ -n "$SRC_TASK_LIST" ]] && TARGS+=(--task-list "$SRC_TASK_LIST")   # the SOURCE's board, never the driver's
   [[ $KEEP_SOURCE -eq 1 ]] && TARGS+=(--keep-source)
   [[ $FORCE -eq 1 ]] && TARGS+=(--force)
@@ -1131,7 +1380,13 @@ fi
 # osascript opens the pane, so iTerm2's async cross-process pref-read has SECONDS to
 # land before the new pane's TUI emits CSI 3 J — closing the write-then-launch race
 # (lr-fire-resume.sh re-runs it too; idempotent, fail-open).
-"$LR/lr-preseed-env.sh" "$TCFG" "${WT_TOP:-$CWD}" || true
+# A caller that already pre-seeded (the reconciler does it once per target, before its batch)
+# says so with LR_PRESEED_DONE, and this run does not repeat it.
+if [[ -n "${LR_PRESEED_DONE:-}" ]]; then
+  echo "lr-handoff: LR_PRESEED_DONE is set — skipping lr-preseed-env.sh (the caller pre-seeded $TCFG)" >&2
+else
+  "$LR/lr-preseed-env.sh" "$TCFG" "${WT_TOP:-$CWD}" || true
+fi
 
 # --- launch ----------------------------------------------------------------
 # Per-uid 0700 temp dir, not the mode-1777 /tmp (CWE-377/CWE-59). This file is written, chmod +x'd
@@ -1234,6 +1489,61 @@ export LR_ADMIT_TOKEN=$(printf '%q' "$LRH_ADMIT_TOKEN")
 export LR_SUBMIT_TOKEN=$(printf '%q' "$LR_SUBMIT_TOKEN")
 export LR_LOAD_TERM=$(printf '%q' "${LR_LOAD_TERM:-off}")
 
+EOF
+# THE LAUNCHER'S TAIL IS ONE OF THREE, CHOSEN AT MINT TIME (W2a). A legacy caller gets the tail it
+# always got, byte for byte (tests/lr-handoff-launcher-quoting.bats pins it); --no-prompt and a
+# reconciler placement each get their own. Split into appended heredocs so the legacy bytes are
+# the same bytes, not a re-typed copy of them.
+if [[ $NO_PROMPT -eq 1 ]]; then
+  cat >> "$LAUNCHER" <<EOF
+# ── --no-prompt (W2a): THE CALLER OWNS THE CONTINUATION ─────────────────────────────────────────
+# Nothing is typed into the resumed session and lr-ingest-verify does not run: the caller delivers
+# its own continuation, so a verify here would only spend time deciding a prompt nobody sends.
+exec $(printf '%q ' "${FIRE_ARGV[@]}")--no-prompt
+EOF
+elif [[ "${LR_PLACED_BY:-}" == reconciler ]]; then
+  cat >> "$LAUNCHER" <<EOF
+# ── THE RECONCILER'S CONTINUE PROMPT (W2a), DECIDED HERE IN THE PANE LIKE THE LEGACY ONE ─────────
+# A placed move tells the session in plain words what happened and to carry on; only a failed
+# verify points it at the audit, and a gap failure (A1/A2) says how much is owed. Fail-closed the
+# same three ways as the legacy block, and every degraded branch carries the run token.
+LRP_BUNDLE=$(printf '%q' "$BUNDLE")
+LRP_VERIFY=$(printf '%q' "$LR/lr-ingest-verify.sh")
+LRP_TCFG=$(printf '%q' "$TCFG")
+LRP_CONT=$(printf '%q' "[limit-recover] Moved from ${LRH_FROM_ACCT:-?} to $TARGET after a usage limit; same session, full transcript. Continue the task you were on.")
+LRP_PROMPT=""
+LRP_WHY=""
+LRP_RC=0
+if [ -x "\$LRP_VERIFY" ]; then
+  CLAUDE_CONFIG_DIR="\$LRP_TCFG" "\$LRP_VERIFY" "\$LRP_BUNDLE" > "\$LRP_BUNDLE/INGEST-VERIFIED.txt" 2>&1 || LRP_RC=\$?
+  if [ "\$LRP_RC" = 0 ]; then
+    LRP_LINE="\$(tail -1 "\$LRP_BUNDLE/INGEST-VERIFIED.txt" 2>/dev/null)"
+    case "\$LRP_LINE" in
+      ''|FAIL*|verdict:*) LRP_WHY="rc 0 but the receipt's last line is not a prompt" ;;
+      *) LRP_PROMPT="\$LRP_LINE" ;;
+    esac
+  else
+    LRP_WHY="\$(grep -m1 '^FAIL' "\$LRP_BUNDLE/INGEST-VERIFIED.txt" 2>/dev/null | cut -c1-160)"
+    [ -n "\$LRP_WHY" ] || LRP_WHY="no FAIL line in the receipt"
+  fi
+else
+  LRP_WHY="lr-ingest-verify.sh is not executable on the live layer (\$LRP_VERIFY)"
+fi
+if [ -n "\$LRP_WHY" ]; then
+  case "\$LRP_RC:\$LRP_WHY" in
+    "1:FAIL A1 "*|"1:FAIL A2 "*)
+      LRP_G="\$(jq -r '.counts.gaps // empty' "\$LRP_BUNDLE/audit.json" 2>/dev/null)" || LRP_G=""
+      LRP_W="\$(jq -r '.counts.waiting // empty' "\$LRP_BUNDLE/audit.json" 2>/dev/null)" || LRP_W=""
+      LRP_PROMPT="\$LRP_CONT The handoff audit found \${LRP_G:-?} gap(s) and \${LRP_W:-?} waiting agent(s); read the Gaps section of \$LRP_BUNDLE/audit.md and re-run what is incomplete. — \$LR_SUBMIT_TOKEN" ;;
+    *)
+      LRP_PROMPT="\$LRP_CONT Handoff audit: \$LRP_BUNDLE/audit.md (lr-ingest-verify: \$LRP_WHY). — \$LR_SUBMIT_TOKEN" ;;
+  esac
+fi
+
+exec $(printf '%q ' "${FIRE_ARGV[@]}")--prompt "\$LRP_PROMPT"
+EOF
+else
+  cat >> "$LAUNCHER" <<EOF
 # ── THE PROMPT IS DECIDED HERE, IN THE PANE, SECONDS BEFORE THE SESSION WAKES (W3) ───────────────
 # Measured (U12 §3-§6): a /limit-recover ingest costs 6-9 model round trips, 6-8 tool calls and
 # ~26.5 K PERMANENTLY RESIDENT tokens, and on 24 of 24 of 2026-09-19's bundles it re-established a
@@ -1271,6 +1581,7 @@ fi
 
 exec $(printf '%q ' "${FIRE_ARGV[@]}")--prompt "\$LRP_PROMPT"
 EOF
+fi
 chmod +x "$LAUNCHER"
 
 # handoff-fire.sh — the ONE actuator for both the in-place recycle and the close-source retirement.
@@ -1313,6 +1624,29 @@ if [[ $IN_PLACE -eq 1 ]]; then
   # and cc-lr recover all reach that safe default and would meet the refusal if the flag were
   # emitted only under --voluntary. It is appended unconditionally for exactly that reason.
   RCY_ARGS+=(--transplant-cause "$LRH_CAUSE")
+  # THE RECORD ID REACHES THE RECYCLE ONLY WHERE THE LIVE ACTUATOR PARSES IT (W2a). handoff-fire
+  # gains the flag in a sibling wave, and an older copy dies `unknown arg` — which here would be a
+  # STRANDED husk, since the transplant is already done. The env (LR_RECORD_ID, HF_RECYCLE_ATTEMPT)
+  # carries the identity either way.
+  if [[ -n "$RECORD_ID" ]]; then
+    if grep -q -- '--record-id)' "$HF" 2>/dev/null; then
+      RCY_ARGS+=(--record-id "$RECORD_ID")
+    else
+      echo "lr-handoff: note — the live $HF does not parse --record-id; the record id rides the environment only (LR_RECORD_ID, HF_RECYCLE_ATTEMPT)" >&2
+    fi
+  fi
+  # A PLACED MOVE NEVER WAITS ON A HUMAN. The recycle's background-work prompt would otherwise sit
+  # until someone answers it, and a reconciler batch has nobody to answer; its in-flight units were
+  # counted by the precheck (killed_inflight) and are re-audited by the ingest. Forced, whatever the
+  # caller set — a legacy caller's value passes through untouched.
+  if [[ "${LR_PLACED_BY:-}" == reconciler ]]; then
+    export CC_RECYCLE_BGWORK_ANSWER=cancel
+  fi
+  # The recycle and its watcher CONSUME these; exported explicitly so a value this process holds as
+  # a plain shell variable (HF_RECYCLE_ATTEMPT is defaulted above) still reaches them.
+  for _lrh_ev in HF_WATCHER_RECORD HF_RECYCLE_ATTEMPT LR_WAKE_GUARD_S CC_RECYCLE_BGWORK_ANSWER; do
+    if [[ -n "${!_lrh_ev:-}" ]]; then export "${_lrh_ev?}"; fi
+  done
   if [[ -n "$SOURCE_PANE" ]]; then
     RCY_ARGS+=(--source-pane "$SOURCE_PANE" --source-session "$SID")
     # `--await` blocks this process for up to 900 s (handoff-fire.sh:11788) and can return rc 3 over
@@ -1346,7 +1680,14 @@ if [[ $IN_PLACE -eq 1 ]]; then
   LRH_RCY_RC=$?
   set -e
   if [[ $LRH_RCY_RC -eq 0 ]]; then
-    echo "lr-handoff: recycled IN PLACE — pane ${SOURCE_PANE:-<this pane>} continues session ${SID:0:8} on '$TARGET' (same window id, same uuid; engagement verified by a new assistant turn in $TCFG's copy)" >&2
+    # THE SUCCESS LINE CLAIMS ONLY WHAT WAS AWAITED. Without --await (no source pane, or
+    # LR_INPLACE_AWAIT=0) rc 0 means the /exit landed and the watcher took over; saying
+    # "engagement verified" there was a claim nothing had checked.
+    if [[ -n "$SOURCE_PANE" && "${LR_INPLACE_AWAIT:-1}" != 0 ]]; then
+      echo "lr-handoff: recycled IN PLACE — pane ${SOURCE_PANE:-<this pane>} continues session ${SID:0:8} on '$TARGET' (same window id, same uuid; engagement verified by a new assistant turn in $TCFG's copy)" >&2
+    else
+      echo "lr-handoff: recycled IN PLACE — /exit landed and the watcher took over; engagement NOT awaited (see handoffs.jsonl) — pane ${SOURCE_PANE:-<this pane>}, session ${SID:0:8}, target '$TARGET'" >&2
+    fi
     # PROVEN IS THE AWAIT, NOT THE rc. Without --await, rc 0 means the /exit landed and the watcher
     # took over — ARMED, not engaged — which is a different claim and gets a different token.
     if [[ -n "$SOURCE_PANE" && "${LR_INPLACE_AWAIT:-1}" != 0 ]]; then
