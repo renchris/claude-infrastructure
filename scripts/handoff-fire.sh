@@ -2436,11 +2436,18 @@ fscope = rest[:-len(".json")] if rest.endswith(".json") else rest
 if d.get("status") != "rejected":
     say("not-rejected", 1)
 scope = d.get("scope") or fscope
-if scope not in ("5h", "7d"):
+if scope not in ("5h", "7d", "auth"):
     say("scope", 1)
 if d.get("contradicted") is True:
     say("contradicted", 1)
 r = d.get("resets_at")
+if scope == "auth" and r in (None, ""):
+    # AUTH (FLEET_V2 W5, the TARGET-AUTH hop): the account cannot serve at all, so there is no
+    # reset to wait for. lr_recon.facts expires it by deletion (an auth-ok read plus a healthy turn)
+    # or contradiction, so a live, uncontradicted file with no resets_at is current by construction.
+    if row_acct and row_acct != acct:
+        say("account-mismatch", 1)
+    say("%s.auth -" % acct, 0)
 at = None
 if isinstance(r, (int, float)) and not isinstance(r, bool):
     at = float(r)
@@ -2455,7 +2462,12 @@ elif isinstance(r, str):
         at = None
 if at is None:
     say("unreadable", 1)
-if at - time.time() < min_s:
+if scope == "auth":
+    # An auth fact that DOES carry resets_at expires on lr_recon.facts' own rule (reset_passed:
+    # resets_at + GRACE_S 60 < now), not on the 30-min window a 5h/7d wall needs to be worth a move.
+    if at + 60 < time.time():
+        say("expired", 1)
+elif at - time.time() < min_s:
     say("expiring", 1)
 if row_acct and row_acct != acct:
     say("account-mismatch", 1)

@@ -544,7 +544,11 @@ if d.get("contradicted") is True:
 if d.get("scope") == "auth":
     # An auth fact (the account cannot serve at all) has no reset time: it EXPIRES by deletion,
     # when the reconciler sees an auth-ok read and a healthy turn after it (lr_recon.facts).
-    # A live file is therefore current by construction (FLEET_V2 W5, TARGET-AUTH hop).
+    # A live file is therefore current by construction (FLEET_V2 W5, TARGET-AUTH hop). One that
+    # does carry resets_at expires on the facts module rule, resets_at + 60 < now (reset_passed).
+    ra = d.get("resets_at")
+    if isinstance(ra, (int, float)) and not isinstance(ra, bool) and ra + 60 < time.time():
+        print("bad expired (resets_at %s passed)" % ra); sys.exit(0)
     print("ok auth -"); sys.exit(0)
 r = d.get("resets_at")
 try:

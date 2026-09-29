@@ -141,6 +141,41 @@ limit: a healthy pane is moved by asking it to move itself — cc-lr switch --pa
   [ "$status" -eq 2 ] || { echo "status=$status $output"; false; }
 }
 
+@test "1a an auth fact admits the TARGET-AUTH hop with --voluntary; expired, foreign or flagless refuses" {
+  seed_healthy_transcript
+  local past=$(( $(date +%s) - 120 )) later=$(( $(date +%s) + 600 ))
+
+  # Live: no resets_at (expires by deletion in lr_recon.facts) — admitted.
+  fact next2.auth.json '{"status":"rejected","scope":"auth","resets_at":null}'
+  probe --voluntary --account-evidence "$EV/next2.auth.json"
+  [[ "$output" == *"limit: bypassed — account evidence next2.auth resets_at=- (voluntary)"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"REFUSED:not-limited"* ]] || { echo "$output"; false; }
+
+  # A resets_at 10 min out is live for auth (the 30-min rule is a 5h/7d rule).
+  fact next2.auth.json "{\"status\":\"rejected\",\"scope\":\"auth\",\"resets_at\":$later}"
+  probe --voluntary --account-evidence "$EV/next2.auth.json"
+  [[ "$output" == *"limit: bypassed — account evidence next2.auth "* ]] || { echo "$output"; false; }
+
+  # Expired on the facts rule (resets_at + 60 < now).
+  fact next2.auth.json "{\"status\":\"rejected\",\"scope\":\"auth\",\"resets_at\":$past}"
+  probe --voluntary --account-evidence "$EV/next2.auth.json"
+  [[ "$output" == *"verdict: REFUSED:not-limited"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"evidence: expired"* ]] || { echo "$output"; false; }
+
+  # Contradicted and foreign auth facts refuse.
+  fact next2.auth.json '{"status":"rejected","scope":"auth","contradicted":true}'
+  probe --voluntary --account-evidence "$EV/next2.auth.json"
+  [[ "$output" == *"evidence: contradicted"* ]] || { echo "$output"; false; }
+  fact next.auth.json '{"status":"rejected","scope":"auth"}'
+  probe --voluntary --account-evidence "$EV/next.auth.json"
+  [[ "$output" == *"evidence: account-mismatch"* ]] || { echo "$output"; false; }
+
+  # Without --voluntary it is still a usage error.
+  fact next2.auth.json '{"status":"rejected","scope":"auth"}'
+  probe --account-evidence "$EV/next2.auth.json"
+  [ "$status" -eq 2 ] || { echo "status=$status $output"; false; }
+}
+
 @test "1b the teammate test is PARSED: a real agentName refuses, a null one does not" {
   local lim='{"type":"assistant","timestamp":"2026-09-20T00:00:01.000Z","isApiErrorMessage":true,"message":{"role":"assistant","model":"<synthetic>","content":[{"type":"text","text":"You'"'"'ve hit your weekly limit · resets 4am (America/Chicago)"}]}}'
   printf '%s\n' '{"type":"summary"}' '{"type":"user","agentName":"mate-1","message":{"role":"user","content":"hi"}}' "$lim" > "$TX"

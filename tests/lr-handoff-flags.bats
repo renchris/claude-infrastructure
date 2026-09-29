@@ -186,6 +186,13 @@ in_s() { echo $(( $(date +%s) + $1 )); }
   [ "$status" -eq 6 ]
   [[ "$output" == *"REFUSED:evidence-invalid"*"contradicted=true"* ]] || false
 }
+@test "evidence: an auth fact whose resets_at has passed (+60 s grace) is expired — rc 6" {
+  f="$(fact next.auth.json "{\"acct\":\"next\",\"scope\":\"auth\",\"status\":\"rejected\",\"resets_at\":$(in_s -120)}")"
+  fire --voluntary --account-evidence "$f"
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"REFUSED:evidence-invalid"*"expired"* ]] || false
+  [ ! -s "$TX_LOG" ]
+}
 @test "evidence: an auth fact without --voluntary admits nothing (not-limited, as today)" {
   f="$(fact next.auth.json '{"acct":"next","scope":"auth","status":"rejected"}')"
   fire --account-evidence "$f"
