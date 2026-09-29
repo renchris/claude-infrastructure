@@ -325,8 +325,8 @@ row() { printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"claude-se
   blocked_tx "$SEC" "$SID"; row 616 "$SID"
   run bash "$FLEET" --enqueue --target next4
   [ "$status" -eq 0 ]
-  [ -f "$LR_STATE_DIR/requests/$SID.json" ]
-  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["source_pane"]=="616" and d["target"]=="next4", d' "$LR_STATE_DIR/requests/$SID.json"
+  [ -f "$LR_STATE_DIR/requests/$SID.cc-lr.json" ]
+  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["source_pane"]=="616" and d["target"]=="next4", d' "$LR_STATE_DIR/requests/$SID.cc-lr.json"
   # NO `-k` (LIMIT_DETECT_100P W3). `kickstart -k` KILLS a running poller before restarting it,
   # and the tick a caller has just enqueued work for is exactly the one that may be mid-transplant.
   [[ "$output" == *"launchctl kickstart gui/"* ]] || { echo "$output"; false; }
@@ -466,13 +466,13 @@ assert r["disposition"]=="RECOVERABLE", r
   mixed_tx "$SEC" "$SID"; row 616 "$SID"
   run bash "$FLEET" --enqueue --target next3
   # IDLE-AFTER-ERROR is not RECOVERABLE/NO-PANE, and `kind` is network: refused twice over.
-  [ ! -f "$LR_STATE_DIR/requests/$SID.json" ] || { echo "a transplant was enqueued for a network death"; false; }
+  [ ! -f "$LR_STATE_DIR/requests/$SID.cc-lr.json" ] || { echo "a transplant was enqueued for a network death"; false; }
 }
 
 @test "D7 CONTROL: enqueue still accepts a genuine cap" {
   blocked_tx "$SEC" "$SID"; row 616 "$SID"
   run bash "$FLEET" --enqueue --target next3
-  [ -f "$LR_STATE_DIR/requests/$SID.json" ] || { echo "$output"; false; }
+  [ -f "$LR_STATE_DIR/requests/$SID.cc-lr.json" ] || { echo "$output"; false; }
 }
 
 @test "D7: THE REGISTRY HOLE — a session held only by an argv leaf reports that pid, not '-'" {
@@ -1307,7 +1307,7 @@ SH
   blocked_tx "$SEC" "$SID"; row 616 "$SID"; mark "$SEC" "$SID" 616
   LF_SLOW_SCAN=0 run bash "$FLEET" --enqueue --target next3
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [ -f "$LR_STATE_DIR/requests/$SID.json" ] || { echo "$output"; ls -R "$LR_STATE_DIR"; false; }
+  [ -f "$LR_STATE_DIR/requests/$SID.cc-lr.json" ] || { echo "$output"; ls -R "$LR_STATE_DIR"; false; }
   run bash -c 'set -- "$1"/requests/*.json; echo $#' _ "$LR_STATE_DIR"
   [ "$output" = 1 ] || { echo "$output"; false; }
   [[ "$output" != *"kickstart -k"* ]] || { echo "$output"; false; }

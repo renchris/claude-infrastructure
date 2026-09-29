@@ -44,6 +44,18 @@ for _lf_am in "${CC_ACCOUNT_MAP:-}" "$LR/../../lib/account-map.generated.sh" "$H
   # shellcheck disable=SC1090
   [ -n "$_lf_am" ] && [ -f "$_lf_am" ] && { . "$_lf_am"; break; }
 done
+# THE §C10 FENCE (LIMIT_RECOVER_FLEET_V2 W4). While the reconciler owns a sid, lf_one must not type
+# into its pane — two actuators in one pane is the failure the fence exists to prevent. A fence that
+# cannot be sourced leaves today's behaviour intact (the legacy world keeps working), and says so
+# once, at the call, rather than on every --locate.
+for _lf_fence in "$LR/lr-recon-fence.sh" "$HOME/.claude/scripts/limit-recover/lr-recon-fence.sh"; do
+  # shellcheck disable=SC1090  # runtime-resolved library ladder
+  [ -f "$_lf_fence" ] && { . "$_lf_fence"; break; }
+done
+command -v lr_recon_may_act >/dev/null 2>&1 || {
+  lr_recon_may_act() { echo "lr-fleet: lr-recon-fence.sh unreachable — acting on $1 unfenced (legacy)" >&2; return 0; }
+  lr_recon_act_done() { :; }
+}
 # Resolve a sid PREFIX to the one full sid it names. `--locate` renders ${sid:0:8}, so its own
 # printed SID column was rejected by --one/--mark ("no transcript in any store") and the caller had
 # to round-trip through --locate --json. An identifier a tool prints must be one it accepts.
@@ -830,7 +842,26 @@ lf_await_relaunch() {
     sleep "$poll"; waited=$((waited + poll))
   done
 }
+# THE FENCE WRAPS THE WHOLE UNIT, ONE TAKE AND ONE RELEASE — the admit lock's discipline, for the
+# same reason: _lf_one_act has five return sites, and a release beside each is one waiting to be
+# missed. The fence runs before the admit lock, the rank and the capacity probe, so a sid the
+# reconciler owns costs this run nothing. DEFER returns the park rc (1): the session was not moved.
+# The launch lock the fence may take (a "lapsed" owner) is exported as LR_LAUNCH_LOCK and inherited
+# by lr-handoff, so the actuator acts under it instead of deferring to its own caller.
 lf_one() { # $1=sid $2=cfg $3=acct $4=pane $5=cwd $6=tier → rc of the recovery; prints the result row
+  local rc=0
+  LF_ONE_DEFERRED=""
+  if ! lr_recon_may_act "$1" lr-fleet; then
+    mkdir -p "$FLEET_DIR/$RUN"
+    lf_row "$1" "$4" "$4" "$3" "-" "reconciler/DEFERRED" "reconciler owns it"
+    LF_ONE_DEFERRED=1
+    return 1
+  fi
+  _lf_one_act "$@" || rc=$?
+  lr_recon_act_done
+  return "$rc"
+}
+_lf_one_act() {
   local sid="$1" cfg="$2" acct="$3" pane="$4" cwd="$5" tier="$6" target rc=0 out rdir="$FLEET_DIR/$RUN" model="" effort="" arc=0
   mkdir -p "$rdir"
   # ONE TAKE, ONE RELEASE. The actuator below is DELIBERATELY outside the lock: it is the 115-658 s
@@ -1064,14 +1095,15 @@ lf_report() { # $1=run dir
       *RECOVERED) if [ "$pa" = "?" ]; then gaps=$((gaps+1))
                   elif [ "$pa" = "$pb" ]; then inplace=$((inplace+1))
                   else newp=$((newp+1)); fi ;;
-      *by-design) bydesign=$((bydesign+1)) ;;
+      # A sid the reconciler owns is owed nothing by THIS run: another actuator is driving it.
+      *by-design|*DEFERRED) bydesign=$((bydesign+1)) ;;
       *dry-run) : ;;
       *) gaps=$((gaps+1)) ;;
     esac
   done < "$f"
   echo
   if [ "$gaps" -eq 0 ]; then
-    echo "RECOVERY COMPLETE — $inplace in place (same pane id), $newp replaced beside their source, 0 left over ($n session(s), $bydesign not owed: teammate/resuming/already-transplanted; evidence: $d)"
+    echo "RECOVERY COMPLETE — $inplace in place (same pane id), $newp replaced beside their source, 0 left over ($n session(s), $bydesign not owed: teammate/resuming/already-transplanted/reconciler-owned; evidence: $d)"
   else
     echo "RECOVERY PARTIAL — $gaps named gap(s) above ($inplace in place, $newp replaced, $bydesign not owed; evidence: $d)"
   fi
@@ -1215,7 +1247,10 @@ print(json.dumps(out,indent=1))'
       # The worker is a SUBSHELL, not a setsid'd process: this driver stays alive until every
       # worker is done (it still has a report to render), so the detach `--one` needs — surviving
       # a tool call's process group being reaped — buys nothing here and would cost the rc.
-      lf_one "$sid" "$cfg" "$acct" "$pane" "$cwd" "$tier" &
+      # A DEFERRED sid is driven by the reconciler, and lf_report counts it as owed nothing; the
+      # worker's exit says the same, or the run would exit PARTIAL under a COMPLETE report.
+      { lf_one "$sid" "$cfg" "$acct" "$pane" "$cwd" "$tier"; _lf_wrc=$?
+        [ "${LF_ONE_DEFERRED:-}" = 1 ] && _lf_wrc=0; exit "$_lf_wrc"; } &
       LF_PIDS="$LF_PIDS $!:$sid"
     done <<EOF
 $rows
@@ -1376,7 +1411,10 @@ EOF
         # its own: the caller's question is "was anything done to this session", and by-design is a
         # REASON, carried in the note that rides beside it.
         skipped*)    _lf_v=SKIPPED ;;
-        '')          _lf_v=FAILED; _lf_note="${_lf_note:-no results row was written — the driver died before lf_one returned}" ;;
+        # Nothing was attempted: the reconciler owns the sid (§C10). FAILED would page for a fence
+        # doing its job.
+        *DEFERRED)   _lf_v=DEFERRED ;;
+        '')        _lf_v=FAILED; _lf_note="${_lf_note:-no results row was written — the driver died before lf_one returned}" ;;
         *)           _lf_v=FAILED ;;
       esac
       # HONEST QUALIFIER, not a fourth token. Under --detach the actuator is called WITHOUT --await
@@ -1415,9 +1453,20 @@ EOF
       # whose latest death is a network drop must not be transplanted however many caps it hit
       # earlier: the account is fine and the move would be spent on a problem that no longer exists.
       [ "$kind" = limit ] || continue
-      jq -n --arg sid "$sid" --arg target "$TARGET" --arg pane "$([ "$pane" != "-" ] && printf '%s' "$pane")" --arg by "${CLAUDE_CODE_SESSION_ID:-lr-fleet}" --arg ts "$(lf_now)" \
-        '{sid:$sid, target:$target, source_pane:$pane, requested_by:$by, ts:$ts}' > "$STATE/requests/$sid.json"
-      echo "lr-fleet: enqueued ${sid:0:8} (pane ${pane}, $acct → $TARGET) for the reset poller: $STATE/requests/$sid.json"; n=$((n+1))
+      # THE cc-lr ORIGIN (§C2), not the poller's own `<sid>.json`: the poller drains `*.cc-lr.json`
+      # only while the reconciler is not live, and the reconciler ingests the same file when it is,
+      # so a request enqueued here reaches exactly one actuator either way. `at` is the epoch the
+      # ingest ages it by. tmp+mv so a drain never reads a half-written request.
+      _eq_req="$STATE/requests/$sid.cc-lr.json"
+      _eq_tmp="$_eq_req.tmp.$$"
+      if jq -n --arg sid "$sid" --arg target "$TARGET" --arg pane "$([ "$pane" != "-" ] && printf '%s' "$pane")" --arg ts "$(lf_now)" --argjson at "$(date +%s)" \
+          '{sid:$sid, target:$target, source_pane:$pane, requested_by:"lr-fleet --enqueue", ts:$ts, at:$at}' > "$_eq_tmp" \
+         && mv -f "$_eq_tmp" "$_eq_req"; then
+        echo "lr-fleet: enqueued ${sid:0:8} (pane ${pane}, $acct → $TARGET) for the reset poller: $_eq_req"; n=$((n+1))
+      else
+        rm -f "$_eq_tmp"
+        echo "lr-fleet: --enqueue could not write $_eq_req — ${sid:0:8} was NOT enqueued" >&2
+      fi
     done <<EOF
 $_eq_rows
 EOF
