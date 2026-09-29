@@ -174,15 +174,22 @@ def record(root: str, sid: str) -> Dict[str, Any]:
 
 
 def _launch_lines(root: str, sid: str) -> List[List[str]]:
-    try:
-        with open(os.path.join(root, "launch.log"), encoding="utf-8") as fh:
-            return [
-                t
-                for t in (ln.rstrip("\n").split("\t") for ln in fh)
-                if len(t) > 3 and t[1] == sid
-            ]
-    except OSError:
-        return []
+    """The sid's rows from the canary tree's launch.log AND the live recon/launch.log: the relaunch
+    launcher runs in the pane, outside the daemon's env, so lr-fire-resume logs its launch-lock take
+    under the default root (the lock itself is in the shared locks/, where every actor looks)."""
+    out: List[List[str]] = []
+    live = os.path.join(os.path.dirname(os.path.abspath(root)), "recon")
+    for d in dict.fromkeys((os.path.abspath(root), live)):
+        try:
+            with open(os.path.join(d, "launch.log"), encoding="utf-8") as fh:
+                out += [
+                    t
+                    for t in (ln.rstrip("\n").split("\t") for ln in fh)
+                    if len(t) > 3 and t[1] == sid
+                ]
+        except OSError:
+            pass
+    return sorted(out, key=lambda t: t[0])
 
 
 def _daemon_pid(root: str) -> int:
