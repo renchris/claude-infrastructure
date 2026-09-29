@@ -171,6 +171,7 @@ The window size is mostly unrecorded and cannot be imputed from the model id: tr
 ## Communication Discipline (All Projects)
 
 - Chat: focused and brief; caveats short; high-level unless depth was asked for.
+- Plain American English, the most common word: the operator is Canadian and the audience is American, so write US English and prefer the everyday word to the regional or literary one ("more expensive", not "dearer"; "two weeks", not "a fortnight"; "while", not "whilst").
 - Rendered output: when a tool has rendered canonical output for the operator (`claude-accounts --readout`, `operator-readout.sh --render`, a `cc-do` command block, any generated table, diff or report), reproduce it verbatim and in full, then add at most 3 lines of interpretation. Brevity applies to your prose, never to a rendered artifact.
 - Mid-task narration: one sentence before the first tool call saying what you are about to do; after that, speak only on a real finding or a change of direction; finish with the outcome first and detail after it.
 - Files you write (plans, docs, reports, commit messages): length matches what the task needs, with no filler sections, redundant summaries or boilerplate. Integrating rather than overwriting (Updating existing files) preserves history; it is not a reason to pad.

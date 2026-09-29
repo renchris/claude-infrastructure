@@ -437,6 +437,11 @@ as stuck; and **whole-file rewrites for small edits**, which makes § File Updat
 
 - **Chat.** Focused and brief. Spend the words on the answer; keep caveats and disclaimers short.
   High-level unless depth was asked for.
+- **Plain American English, the most common word.** The operator is Canadian and the audience is
+  American, so write in US English and pick the everyday word over the regional or literary one:
+  "more expensive", not "dearer"; "two weeks", not "a fortnight"; "while", not "whilst". A word the
+  operator would have to look up costs a round trip. (Added 2026-09-28 after "David is 52% dearer per gram"
+  drew "what does dearer mean?")
 - 🚨 **Brevity governs YOUR prose, never a rendered artifact.** When a tool has already rendered a
   canonical output for the operator — `claude-accounts --readout`, `operator-readout.sh --render`,
   a `cc-do` command block, any generated table/diff/report — **reproduce it verbatim, in full**,
