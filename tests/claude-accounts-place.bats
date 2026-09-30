@@ -470,3 +470,44 @@ print("OK")'
   [ "$status" -eq 3 ]
   [[ "$output" == *'"wait-data"'* ]]
 }
+
+# ---- FLEET_V2 W6 (operator rulings 2026-09-30) ---------------------------------------------------
+
+# D3.2, router half. Decision 3 ruled WAIT when no account passes the floors. The reconciler keeps a
+# waiting mover re-offered only while `wait.eta` is STRICTLY before the source reset (plan.apply),
+# and that holds because this router FLOORS eta_s. A ceil here turns the record into WAIT_RESET,
+# which stops re-checking until the source's own reset — up to 36.6 h away for a weekly cap.
+@test "W6 D3.2: all candidates thin + a live source fact => no account, eta_s is the FLOOR of the source reset" {
+  run python3 -c "$LOAD"'
+resets = time.time() + 3600.7
+t0 = time.time()
+rc, plan = place({"a": {}, "b": {"weekly_pct": 95}, "c": {"weekly_pct": 95}},
+                 {"a": 0, "b": 0, "c": 0}, movers(1, src="a"),
+                 facts=[("a", "5h", {"resets_at": resets})])
+assert rc == 0, rc
+p = plan["s00"]
+assert p["acct"] is None, p
+assert set(p["reason"].split(",")) == {"fact:5h", "recovery-weekly-thin"}, p
+assert isinstance(p["eta_s"], int), p
+assert p["eta_s"] <= resets - t0, (p, resets - t0)          # floored, never rounded up
+assert p["eta_s"] >= int(resets - time.time()) , p          # and within the call, not stale
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]]
+}
+
+# D3.6(a). No caller supplies burn_ph today; when one does, a raw pre-death burn below the fleet
+# default must not undercharge (it bounded the post-move burn for 19 of 56 transplant pairs;
+# max(pre, default) bounded 51). Same geometry as case (e): 0.45 used, reset in 20 min.
+@test "W6 D3.6a: a supplied burn below the default is charged the default; one above it is kept" {
+  run python3 -c "$LOAD"'
+geo = {"a": {"session_pct": 45, "session_reset_h": 1/3, "weekly_reset_h": 2.0}}
+rc, plan = place(geo, {"a": 0}, movers(7, burn_ph=1))
+assert tally(plan).get("a") == 6, plan                     # 1 pp/h is charged as 7
+assert plan["s06"]["reason"] == "recovery-5h-thin", plan
+rc, plan = place(geo, {"a": 0}, movers(7, burn_ph=20))
+assert tally(plan).get("a") == 2, plan                     # 20 pp/h stays 20
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]]
+}

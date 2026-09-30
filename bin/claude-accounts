@@ -4516,7 +4516,11 @@ def cmd_place(args: list, cfg: dict) -> int:
     for m in sorted(movers, key=order):
         sid, w, src = m["sid"], m["w"], src_of(m)
         sf = src_facts(m)
-        b_sess = m["burn_ph"] / 100.0 if isinstance(m.get("burn_ph"), (int, float)) else b_default
+        # A SUPPLIED burn is a floor-raiser, never an undercharge (W6 D3.6a): raw pre-death burn
+        # bounded post-move burn for only 19 of 56 transplant pairs, max(pre, default) for 51.
+        # No caller supplies burn_ph today, so this is defensive; the default is unchanged.
+        b_sess = max(m["burn_ph"] / 100.0, b_default) \
+            if isinstance(m.get("burn_ph"), (int, float)) else b_default
         reasons, zeroing, scored = set(), [], []
         for a in snap:
             mf = live(a, lambda f: str(f.get("scope", "")).startswith("model:")
