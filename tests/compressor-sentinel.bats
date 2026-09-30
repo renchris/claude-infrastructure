@@ -139,9 +139,13 @@ SH
   # comes back truncated to 16 characters and cannot yield a basename at all. PS_CENSUS therefore
   # feeds BOTH the census and `exe_table`, which is the point — one node-ness predicate, one fixture.
   # The routing test in §5 is the positive control that keeps this order honest from here on.
+  # 2026-09-30: `exe_table gui` adds a `pid=,args=` read (the automation-switch pid list). Its
+  # substring is DISJOINT from the four above — `pid=,args=` occurs in none of them, since every
+  # longer format has `rss=` before `args=` — so it can sit first without shadowing anything.
   cat > "$STUB/ps" <<'SH'
 #!/bin/bash
 case "$*" in
+  *"pid=,args="*)                  cat "$PS_ARGV"   2>/dev/null ;;
   *"pid=,ppid=,rss=,pcpu=,args="*) cat "$PS_SNAP"   2>/dev/null ;;
   *"pid=,ppid=,rss=,args="*)       cat "$PS_ACT"    2>/dev/null ;;
   *"pid=,ppid=,rss=,comm="*)       cat "$PS_CENSUS" 2>/dev/null ;;
@@ -150,8 +154,9 @@ case "$*" in
 esac
 SH
 
-  : > "$D/ps.census"; : > "$D/ps.act"; : > "$D/ps.snap"; : > "$D/ps.exe"
-  export PS_CENSUS="$D/ps.census" PS_ACT="$D/ps.act" PS_SNAP="$D/ps.snap" PS_EXE="$D/ps.exe"
+  : > "$D/ps.census"; : > "$D/ps.act"; : > "$D/ps.snap"; : > "$D/ps.exe"; : > "$D/ps.argv"
+  export PS_CENSUS="$D/ps.census" PS_ACT="$D/ps.act" PS_SNAP="$D/ps.snap" PS_EXE="$D/ps.exe" \
+         PS_ARGV="$D/ps.argv"
   chmod +x "$STUB"/pick "$STUB"/vm_stat "$STUB"/sysctl "$STUB"/ps
 }
 
@@ -1479,6 +1484,9 @@ mkcohort() { # <psmap>  — TAB-separated "pid<TAB>lstart" rows. A pid ABSENT fr
   FDB="$D/frozen.tsv"; : > "$FDB"
   PROBDB="$D/probation.tsv"; : > "$PROBDB"
   KILLLOG="$D/kill.calls"; : > "$KILLLOG"
+  # A FULL-TABLE read (no -p) prints NOTHING: kill_escalate now reads `exe_table gui` when handed no
+  # capture, and an empty table is the belt ABSTAINING — so every custody case below keeps its exact
+  # pre-2026-09-30 output, and the fail direction of that belt is pinned by all of them at once.
   cat > "$STUB/ps" <<'SH'
 #!/bin/bash
 pid=""
@@ -1486,6 +1494,7 @@ while [ $# -gt 0 ]; do
   if [ "$1" = "-p" ]; then pid="$2"; shift; fi
   shift
 done
+[ -n "$pid" ] || exit 0
 awk -F'\t' -v p="$pid" '$1==p {print $2}' "$PSMAP"
 SH
   chmod +x "$STUB/ps"
@@ -1501,12 +1510,12 @@ have_arm() { # <fn>
   grep -q "^$1() {" "$D/lib.sh" || false
 }
 
-run_rel() { # <now-epoch> <mode> [<parent_ok 0|1>] [<cliff 0|1>]
+run_rel() { # <now-epoch> <mode> [<parent_ok 0|1>] [<cliff 0|1>] [<protected " pid " list>]
   run env PATH="$STUB:$PATH" PSMAP="$PSMAP" FROZEN_DB="$FDB" SNAP="$SNAPLOG" KILLLOG="$KILLLOG" \
       HOLD_MIN_S="${HOLD_MIN_S:-60}" HOLD_MAX_S="${HOLD_MAX_S:-600}" \
       PARENT_HOLD_MIN_S="${PARENT_HOLD_MIN_S:-600}" PROBATION_DB="$PROBDB" \
-      bash -c 'kill() { printf "%s\n" "$*" >> "$KILLLOG"; }; . "$1"; release_frozen "$2" "$3" "$4" "$5"' \
-      _ "$D/lib.sh" "$1" "$2" "${3:-0}" "${4:-0}"
+      bash -c 'kill() { printf "%s\n" "$*" >> "$KILLLOG"; }; . "$1"; release_frozen "$2" "$3" "$4" "$5" "$6"' \
+      _ "$D/lib.sh" "$1" "$2" "${3:-0}" "${4:-0}" "${5:- }"
 }
 
 @test "unfreeze: the breach clearing after the minimum hold SIGCONTs the WORKERS — never the spawner" {
@@ -1817,11 +1826,11 @@ run_kd() { # <pct> <srate> <trip_now> <debt_n>
   run_kd 59 100 0 2;    [ "$status" -ne 0 ] || false   # below the line, no trip: the freeze is holding
 }
 
-run_ke() { # <now-epoch> <reason>
+run_ke() { # <now-epoch> <reason> [<exe_file>]
   run env PATH="$STUB:$PATH" PSMAP="$PSMAP" FROZEN_DB="$FDB" SNAP="$SNAPLOG" KILLLOG="$KILLLOG" \
       KILL_MIN_HOLD_S="${KILL_MIN_HOLD_S:-30}" \
-      bash -c 'kill() { printf "%s\n" "$*" >> "$KILLLOG"; }; . "$1"; kill_escalate "$2" "$3"' \
-      _ "$D/lib.sh" "$1" "$2"
+      bash -c 'kill() { printf "%s\n" "$*" >> "$KILLLOG"; }; . "$1"; kill_escalate "$2" "$3" "$4"' \
+      _ "$D/lib.sh" "$1" "$2" "${3:-}"
 }
 
 @test "kill_escalate: kills only ledger-verified custody — the young, the claude-shaped and the recycled survive" {
@@ -1853,6 +1862,16 @@ run_ke() { # <now-epoch> <reason>
   grep -qF '[ "$CLIFF" = "0" ] && [ $((TICK % CENSUS_EVERY)) -eq 0 ]' "$S" || false
   grep -qF 'release_frozen "$NOW" "$RELMODE" "$PARENT_OK" "$CLIFF"' "$S" || false
   grep -qF 'snapshot_trip "$TS" "$WHY" "$HEAD_LINE" "$CLIFF"' "$S" || false
+  # 2026-09-30: the trip reads the GUI-classed table, keeps it past the selection, and hands the SAME
+  # capture to the kill rung — which is what makes the protected-class belt free on every kill tick.
+  grep -qF 'exe_table gui > "$EXEF"' "$S" || false
+  grep -qF 'kill_escalate "$NOW" "$KREASON" "$EXEF"' "$S" || false
+  grep -qF 'TRIP_FIRED=0; EXEF=""' "$S" || false
+  local between; between="$(sed -n '/exe_table gui > "\$EXEF"/,/kill_escalate "\$NOW"/p' "$S")"
+  [ -n "$between" ] || false                                         # ANTI-VACUITY: both anchors hit
+  ! printf '%s\n' "$between" | grep -qF 'rm -f "$EXEF"' || false     # not deleted before the kill rung
+  grep -qF "printf 'actuator: protected-class spared" "$S" || false
+  grep -qF 'release_frozen "$(date +%s)" sweep' "$S" || false
 }
 
 # ── 8f. the panic reader's dotfile shadow, the boot-jitter dedupe, and the mutex ──────────────────
@@ -2147,8 +2166,12 @@ PSEOF
   # A long-running editor over the floor is both realistic (the live box had 87 such processes) and
   # load-bearing: it is on the roster, so it is NOT new, so sparing it is the assertion that
   # separates "selected the storm" from "selected everything above the floor".
-  printf '999790 1 900000 /Applications/Cursor.app/Contents/MacOS/Cursor\n999800 1 40000 /bin/zsh\n999801 999800 32768 %s\n' "$PY" > "$D/pre.census"
-  printf '999790 1 900000 /Applications/Cursor.app/Contents/MacOS/Cursor\n999800 1 40000 /bin/zsh -l\n999801 999800 32768 python3 ./autoformat\n' > "$D/pre.act"
+  # 999795 (redis-server) is the LIVE positive control on the newness gate. Since 2026-09-30 the
+  # Cursor row is spared by class 2 (a launchd-started GUI bundle), not by newness, so without a
+  # second long-running process over the floor the assertion below it would no longer exercise the
+  # gate at all (memory: sibling-guard-makes-the-fixture-vacuous).
+  printf '999790 1 900000 /Applications/Cursor.app/Contents/MacOS/Cursor\n999795 1 900000 /opt/homebrew/bin/redis-server\n999800 1 40000 /bin/zsh\n999801 999800 32768 %s\n' "$PY" > "$D/pre.census"
+  printf '999790 1 900000 /Applications/Cursor.app/Contents/MacOS/Cursor\n999795 1 900000 /opt/homebrew/bin/redis-server\n999800 1 40000 /bin/zsh -l\n999801 999800 32768 python3 ./autoformat\n' > "$D/pre.act"
   cp "$D/pre.census" "$D/storm.census"; cp "$D/pre.act" "$D/storm.act"
   for p in 999810 999811 999812 999813 999814 999815 999816 999817 999818 999819; do
     printf '%s 999801 900000 %s\n' "$p" "$CF" >> "$D/storm.census"
@@ -2193,10 +2216,293 @@ SH
   # 3. THE PRE-STORM POPULATION IS SPARED. The shell that launched it was over no floor and is not
   #    new; asserting its ABSENCE is what separates "selected the storm" from "selected everything".
   ! grep -q 'pid=999800 ' "$SNAPLOG" || false
-  # 4. AND THE LONG-RUNNING EDITOR IS SPARED THOUGH IT IS 900 MB AND UNPROTECTED BY PATH. The only
-  #    thing keeping it out is that the census saw it a tick earlier. This is the newness gate, and
-  #    it is the whole safety argument for selecting on anything other than one executable name.
+  # 4. AND THE LONG-RUNNING PROCESSES ARE SPARED THOUGH THEY ARE 900 MB. redis-server is unprotected
+  #    by path and by class: the only thing keeping it out is that the census saw it a tick earlier.
+  #    This is the newness gate. The editor is spared too, now by class 2 (a GUI bundle launchd
+  #    started) — which is why redis, not Cursor, is the row that keeps the newness gate under test.
+  ! grep -q 'pid=999795 ' "$SNAPLOG" || false
   ! grep -q 'pid=999790 ' "$SNAPLOG" || false
+}
+
+# ══ 5e. 2026-09-30 — THE OPERATOR'S APPS ARE NOT A STORM ═════════════════════════════════════════
+#
+# A browser starts a FRESH renderer per tab, so the newness gate that was supposed to keep GUI apps
+# out of the generic cohort lets every recently-opened tab in. Three of them clear ACT_MIN_COHORT,
+# the browser then owns the whole burst, and the parent-breaker freezes the browser. Since 790f2dc2d:
+# 7 Dia parent freezes and 4 Dia SIGKILLs, the latest at 2026-09-30T15:51:34Z. exe_table field 6 is
+# now a CLASS, and 2 (operator GUI app) / 3 (simulator OS image) are never selectable.
+#
+# THE PRE-FIX ARTIFACT, pinned and marked for the reason setup() gives: 861bc8a95 is the last commit
+# before the class existed, and `exe_classify` is the identifier this change INTRODUCES, so its
+# absence proves the replayed code is the old one.
+prefix_lib3() {
+  [ -s "$D/prelib3.sh" ] && return 0
+  git -C "$REPO" show 861bc8a95:scripts/compressor-sentinel.sh 2>/dev/null \
+    | sed -n '/^[a-z_]*() {/,/^}/p' > "$D/prelib3.sh"
+  [ -s "$D/prelib3.sh" ] || skip "pre-fix commit 861bc8a95 unavailable (shallow clone?)"
+  ! grep -q 'exe_classify' "$D/prelib3.sh" || false
+  grep -q '^exe_table() {' "$D/prelib3.sh" || false        # …and it IS a sentinel lib, not an empty file
+}
+
+# THE WHOLE TRIP-TIME PATH through a <lib>, under launchd's interpreter: `exe_table gui` over the
+# stubbed ps (PS_CENSUS comm rows, PS_ARGV args rows), then the cohort and the parent-breaker over
+# PS_ACT, exactly as the loop chains them. Sets RP_COHORT (" pid pid ") and RP_PARENTS ("line;line;").
+# A pre-fix lib ignores the `gui` argument, which is the point: it replays what the box actually ran.
+replay_trip() { # <lib> <roster> [<floor> <cap>]
+  run env PATH="$STUB:$PATH" /bin/bash -c '. "$1"; exe_table gui' _ "$1"
+  [ "$status" -eq 0 ] || false
+  printf '%s\n' "$output" > "$D/rp.exe"
+  run /bin/bash -c '. "$1"; select_stop_targets "$2" "$3" "$4" "$5"' _ "$1" "$D/rp.exe" "$2" "${3:-40960}" "${4:-400}" < "$PS_ACT"
+  [ "$status" -eq 0 ] || false
+  RP_COHORT=" $(awk '$1 ~ /^[0-9]+$/ { printf "%s ", $1 }' <<< "$output")"
+  run /bin/bash -c '. "$1"; select_break_parents "$2" "$3" 3 4 70001 70002' _ "$1" "$D/rp.exe" "$RP_COHORT" < "$PS_ACT"
+  [ "$status" -eq 0 ] || false
+  RP_PARENTS="$(printf '%s\n' "$output" | awk 'NF { printf "%s;", $0 }')"
+}
+
+# The args fixture for `ps -axwwo pid=,args=` derived from an actuator table: drop ppid and rss.
+argv_of() { awk '$1 ~ /^[0-9]+$/ { $2 = ""; $3 = ""; print }' "$1"; }
+
+DIA='/Applications/Dia.app/Contents/MacOS/Dia'
+DIAR='/Applications/Dia.app/Contents/Frameworks/ArcCore.framework/Helpers/Browser Helper (Renderer).app/Contents/MacOS/Browser Helper (Renderer)'
+
+@test "exe_classify: every row gets its class — GUI roots and helpers 2, the near-misses 0, simulator OS 3" {
+  have_arm exe_classify
+  local SIM='/Library/Developer/CoreSimulator/Volumes/iOS_22A/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS 18.0.simruntime/Contents/Resources/RuntimeRoot'
+  local GC='/Applications/Google Chrome.app/Contents'
+  local GCR="$GC/Frameworks/Google Chrome Framework.framework/Versions/140/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer)"
+  local PYS='/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python'
+  {
+    printf '@A 200\n'
+    printf '5 99 90000 /Applications/Slack.app/Contents/Frameworks/Slack Helper (Renderer).app/Contents/MacOS/Slack Helper (Renderer)\n'
+    printf '100 1 400000 %s\n101 100 90000 %s\n' "$DIA" "$DIAR"
+    printf '102 100 51744 /Applications/Dia.app/Contents/Resources/agent-server-resources/dist/agent-server\n'
+    printf '110 1 200000 %s/MacOS/Google Chrome\n111 110 90000 %s\n' "$GC" "$GCR"
+    printf '120 1 300000 /Applications/kitty.app/Contents/MacOS/kitty\n121 120 20000 /Applications/kitty.app/Contents/MacOS/kitten\n'
+    printf '130 1 90000 /Applications/Xcode.app/Contents/Developer/Applications/Simulator.app/Contents/MacOS/Simulator\n'
+    printf '140 1 90000 /Applications/OneDrive.app/Contents/OneDrive Sync Service.app/Contents/MacOS/OneDrive Sync Service\n'
+    printf '150 1 90000 /Applications/Utilities/Adobe Creative Cloud Experience/CCXProcess/CCXProcess.app/Contents/MacOS/CCXProcess\n'
+    printf '160 1 90000 /Users/x/Applications/VoiceInk.app/Contents/MacOS/VoiceInk\n'
+    printf '200 1 200000 %s/MacOS/Google Chrome\n201 200 90000 %s\n' "$GC" "$GCR"
+    printf '300 120 200000 /opt/homebrew/bin/node\n'
+    printf '400 1 32768 %s\n410 1 900000 /Applications/Xcode.app/Contents/MacOS/Xcode\n411 410 32768 %s\n' "$PYS" "$PYS"
+    printf '420 411 900000 /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang-format\n'
+    printf '430 1 90000 /Users/x/Library/Developer/CoreSimulator/Devices/0A1B/data/Containers/Bundle/Application/2C3D/MyApp.app/MyApp\n'
+    printf '500 1 90000 %s/usr/libexec/lsd\n' "$SIM"
+    printf '600 1 90000 /usr/libexec/coreduetd\n601 1 90000 (git)\n602 1 90000 node\n'
+    printf '99 1 300000 /Applications/Slack.app/Contents/MacOS/Slack\n'
+  } > "$D/cls.in"
+  run /bin/bash -c '. "$1"; exe_classify gui' _ "$D/lib.sh" < "$D/cls.in"
+  [ "$status" -eq 0 ] || false
+  printf '%s\n' "$output" > "$D/cls.out"
+  cls() { awk -v p="$1" '$1 == p { print $6 }' "$D/cls.out"; }
+  [ "$(awk 'NF != 6' "$D/cls.out" | wc -l | tr -d ' ')" -eq 0 ] || false          # six fields, always
+  [ "$(wc -l < "$D/cls.out" | tr -d ' ')" -eq 25 ] || false                         # markers are not rows
+  local p
+  for p in 100 101 110 111 120 121 130 140 150 160 99; do [ "$(cls "$p")" = "2" ] || { echo "pid $p: $(cls "$p")"; false; }; done
+  [ "$(cls 5)" = "2" ] || false            # PID WRAP: a helper listed before its root still resolves
+  for p in 102 200 201 300 400 411 420 430; do [ "$(cls "$p")" = "0" ] || { echo "pid $p: $(cls "$p")"; false; }; done
+  [ "$(cls 410)" = "2" ] || false          # the Xcode IDE is an app — its Python stub child is NOT
+  [ "$(cls 500)" = "3" ] || false
+  for p in 600 601 602; do [ "$(cls "$p")" = "1" ] || { echo "pid $p: $(cls "$p")"; false; }; done
+  # Rows of classes 0 and 1 are BYTE-IDENTICAL to the pre-class table's shape: basename and full path
+  # underscore-collapsed, field 6 the old flag value.
+  grep -qxF '102 100 51744 agent-server /Applications/Dia.app/Contents/Resources/agent-server-resources/dist/agent-server 0' "$D/cls.out" || false
+  grep -qxF '601 1 90000 (git) (git) 1' "$D/cls.out" || false
+  # PLAIN MODE (the census): no class 2 at all — the same Dia root reads 0 — while class 3 does not
+  # depend on the mode.
+  run /bin/bash -c '. "$1"; exe_classify' _ "$D/lib.sh" < "$D/cls.in"
+  printf '%s\n' "$output" > "$D/cls.out"
+  [ "$(cls 100)" = "0" ] || false
+  [ "$(cls 101)" = "0" ] || false
+  [ "$(cls 500)" = "3" ] || false
+  [ "$(awk '$6 == "2"' "$D/cls.out" | wc -l | tr -d ' ')" -eq 0 ] || false
+}
+
+@test "RED-PROOF 2026-09-30T15:39:16Z: Dia's fresh renderers froze Dia — pre-fix selects 4 and breaks Dia; now nothing" {
+  mkstubs 0 0 0
+  printf '18285 1 400000 %s\n' "$DIA" > "$PS_CENSUS"
+  printf '18285 1 400000 %s\n' "$DIA" > "$PS_ACT"
+  for p in 43930 45904 46829 47473; do
+    printf '%s 18285 90000 %s\n' "$p" "$DIAR" >> "$PS_CENSUS"
+    printf '%s 18285 90000 %s --type=renderer\n' "$p" "$DIAR" >> "$PS_ACT"
+  done
+  printf '20405 18285 51744 /Applications/Dia.app/Contents/Resources/agent-server-resources/dist/agent-server\n' | tee -a "$PS_CENSUS" >> "$PS_ACT"
+  argv_of "$PS_ACT" > "$PS_ARGV"
+  local roster=" 1 18285 20405 "                  # Dia and its agent-server predate the trip
+  # PRE-FIX, the real artifact at the live floor and cap: the incident, reproduced.
+  prefix_lib3
+  replay_trip "$D/prelib3.sh" "$roster"
+  [ "$RP_COHORT" = " 43930 45904 46829 47473 " ] || { echo "pre cohort: $RP_COHORT"; false; }
+  [ "$RP_PARENTS" = "18285 4 Dia;" ] || { echo "pre parents: $RP_PARENTS"; false; }
+  # FIXED: the renderers are class 2 helpers of a class 2 root — no cohort, no spawner.
+  replay_trip "$D/lib.sh" "$roster"
+  [ "$RP_COHORT" = " " ] || { echo "cohort: $RP_COHORT"; false; }
+  [ -z "$RP_PARENTS" ] || { echo "parents: $RP_PARENTS"; false; }
+  # POSITIVE CONTROL, same run: the SAME four children under a node parent are a burst and break it —
+  # so the silence above is the class, not a selector that stopped working.
+  sed -i '' "s|^18285 1 400000 .*|18285 1 400000 /opt/homebrew/bin/node|" "$PS_CENSUS" "$PS_ACT"
+  argv_of "$PS_ACT" > "$PS_ARGV"
+  replay_trip "$D/lib.sh" "$roster"
+  [ "$RP_COHORT" = " 43930 45904 46829 47473 " ] || { echo "control cohort: $RP_COHORT"; false; }
+  [ "$RP_PARENTS" = "18285 4 node;" ] || { echo "control parents: $RP_PARENTS"; false; }
+}
+
+@test "09-16 STORM through exe_table: the Xcode Python stub stays the spawner under every parent" {
+  # The near-miss, now carried by the ppid-1 anchor plus the /Contents/Developer/ carve-out rather
+  # than a substring: whether autoformat's python3 was run from a shell, reparented to launchd, or
+  # launched by the Xcode IDE (itself a class 2 app), it is NEVER an app, and neither is clang-format.
+  local CF='/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang-format'
+  local PYS='/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python'
+  local pp
+  mkstubs 0 0 0
+  for pp in 91880 1 633; do
+    printf '1 0 1000 /sbin/launchd\n91880 1 40000 /bin/zsh\n633 1 900000 /Applications/Xcode.app/Contents/MacOS/Xcode\n91887 %s 32768 %s\n' "$pp" "$PYS" > "$PS_CENSUS"
+    printf '633 1 900000 /Applications/Xcode.app/Contents/MacOS/Xcode\n91887 %s 32768 python3 ./autoformat\n' "$pp" > "$PS_ACT"
+    for p in 92423 92469 92467 92462 92461 92458 92459 92476 96492 92460; do
+      printf '%s 91887 900000 %s\n' "$p" "$CF" >> "$PS_CENSUS"
+      printf '%s 91887 900000 clang-format --style=file x.h\n' "$p" >> "$PS_ACT"
+    done
+    argv_of "$PS_ACT" > "$PS_ARGV"
+    replay_trip "$D/lib.sh" " 1 91880 633 "
+    [ "$(wc -w <<< "$RP_COHORT" | tr -d ' ')" -eq 10 ] || { echo "ppid $pp cohort: $RP_COHORT"; false; }
+    [ "$RP_PARENTS" = "91887 10 Python;" ] || { echo "ppid $pp parents: $RP_PARENTS"; false; }
+  done
+}
+
+@test "kitty-direct: node workers kitty spawned are a burst, but kitty is never their spawner" {
+  mkstubs 0 0 0
+  printf '73832 1 300000 /Applications/kitty.app/Contents/MacOS/kitty\n73900 73832 20000 /Applications/kitty.app/Contents/MacOS/kitten\n' > "$PS_CENSUS"
+  printf '73832 1 300000 /Applications/kitty.app/Contents/MacOS/kitty\n' > "$PS_ACT"
+  for p in 80011 80012 80013 80014; do
+    printf '%s 73832 200000 /opt/homebrew/bin/node\n' "$p" >> "$PS_CENSUS"
+    printf '%s 73832 200000 /opt/homebrew/bin/node w.js\n' "$p" >> "$PS_ACT"
+  done
+  argv_of "$PS_ACT" > "$PS_ARGV"
+  prefix_lib3
+  replay_trip "$D/prelib3.sh" " 1 73832 73900 "
+  [ "$RP_PARENTS" = "73832 4 kitty;" ] || { echo "pre parents: $RP_PARENTS"; false; }   # the terminal, frozen
+  replay_trip "$D/lib.sh" " 1 73832 73900 "
+  [ "$RP_COHORT" = " 80011 80012 80013 80014 " ] || { echo "cohort: $RP_COHORT"; false; }
+  [ -z "$RP_PARENTS" ] || { echo "parents: $RP_PARENTS"; false; }
+}
+
+@test "AUTOMATION REACH: a flagged Chrome at ppid 1 stays breakable; the operator's Chrome beside it does not" {
+  # Reparenting to launchd is routine for automation browsers — all twelve ppid-1 Google Chrome roots
+  # in the snap log carried --headless, --remote-debugging-port or --user-data-dir — so ppid alone
+  # cannot be the GUI test. The argv switch is what keeps the 177-stop automation class reachable.
+  local GC='/Applications/Google Chrome.app/Contents'
+  local GCR="$GC/Frameworks/Google Chrome Framework.framework/Versions/140/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer)"
+  mkstubs 0 0 0
+  printf '30035 1 200000 %s/MacOS/Google Chrome\n40000 1 200000 %s/MacOS/Google Chrome\n' "$GC" "$GC" > "$PS_CENSUS"
+  printf '30035 1 200000 %s/MacOS/Google Chrome --headless=new --remote-debugging-port=9987 --user-data-dir=/tmp/bf-1\n40000 1 200000 %s/MacOS/Google Chrome\n' "$GC" "$GC" > "$PS_ACT"
+  for p in 30101 30102 30103; do
+    printf '%s 30035 90000 %s\n' "$p" "$GCR" >> "$PS_CENSUS"; printf '%s 30035 90000 %s --type=renderer\n' "$p" "$GCR" >> "$PS_ACT"
+  done
+  for p in 40101 40102 40103; do
+    printf '%s 40000 90000 %s\n' "$p" "$GCR" >> "$PS_CENSUS"; printf '%s 40000 90000 %s --type=renderer\n' "$p" "$GCR" >> "$PS_ACT"
+  done
+  argv_of "$PS_ACT" > "$PS_ARGV"
+  replay_trip "$D/lib.sh" " 1 30035 40000 "
+  [ "$RP_COHORT" = " 30101 30102 30103 " ] || { echo "cohort: $RP_COHORT"; false; }
+  [ "$RP_PARENTS" = "30035 3 Google_Chrome;" ] || { echo "parents: $RP_PARENTS"; false; }
+}
+
+@test "END TO END 2026-09-30: under /bin/bash, the storm is stopped and Dia's new tabs are spared and COUNTED" {
+  # The L2123 end-to-end with Dia added at the live floor (40960 kB): a Dia that has been up for
+  # hours, two old renderers, four renderers opened in the minute before the storm, a long-running
+  # redis, and the 2026-09-16 clang-format storm. Run by /bin/bash explicitly — launchd's
+  # interpreter is 3.2, and this is the one case that drives the whole loop through it.
+  mkstubs "$(printf '800000\n800000\n2600000\n2600000')" 0 0
+  local CF='/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang-format'
+  local PYS='/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python'
+  {
+    printf '999700 1 400000 %s\n999701 999700 90000 %s\n999702 999700 90000 %s\n' "$DIA" "$DIAR" "$DIAR"
+    printf '999795 1 900000 /opt/homebrew/bin/redis-server\n999800 1 40000 /bin/zsh\n999801 999800 32768 %s\n' "$PYS"
+  } > "$D/pre.census"
+  {
+    printf '999700 1 400000 %s\n999701 999700 90000 %s --type=renderer\n999702 999700 90000 %s --type=renderer\n' "$DIA" "$DIAR" "$DIAR"
+    printf '999795 1 900000 /opt/homebrew/bin/redis-server\n999800 1 40000 /bin/zsh -l\n999801 999800 32768 python3 ./autoformat\n'
+  } > "$D/pre.act"
+  cp "$D/pre.census" "$D/storm.census"; cp "$D/pre.act" "$D/storm.act"
+  for p in 999703 999704 999705 999706; do
+    printf '%s 999700 90000 %s\n' "$p" "$DIAR" >> "$D/storm.census"
+    printf '%s 999700 90000 %s --type=renderer\n' "$p" "$DIAR" >> "$D/storm.act"
+  done
+  for p in 999810 999811 999812 999813 999814 999815 999816 999817 999818 999819; do
+    printf '%s 999801 900000 %s\n' "$p" "$CF" >> "$D/storm.census"
+    printf '%s 999801 900000 clang-format --style=file x.h\n' "$p" >> "$D/storm.act"
+  done
+  # Same tick-aware switch as the L2123 case (storm from tick 3, after the tick-2 census), plus the
+  # two reads exe_table adds: kernel exec names (none here) and the pid,args automation read.
+  cat > "$STUB/ps" <<'SH'
+#!/bin/bash
+if [ "$(cat "$TICKF")" -ge 3 ]; then P="$STORM_CENSUS"; A="$STORM_ACT"; else P="$PRE_CENSUS"; A="$PRE_ACT"; fi
+case "$*" in
+  *"pid=,ucomm="*)                 : ;;
+  *"pid=,args="*)                  awk '{ $2 = ""; $3 = ""; print }' "$A" ;;
+  *"pid=,ppid=,rss=,pcpu=,args="*) cat "$A" 2>/dev/null ;;
+  *"pid=,ppid=,rss=,args="*)       cat "$A" 2>/dev/null ;;
+  *"pid=,ppid=,rss=,comm="*)       cat "$P" 2>/dev/null ;;
+  *) echo "stub-ps $*" ;;
+esac
+SH
+  chmod +x "$STUB/ps"
+  export PRE_CENSUS="$D/pre.census" PRE_ACT="$D/pre.act" \
+         STORM_CENSUS="$D/storm.census" STORM_ACT="$D/storm.act"
+  run env PATH="$STUB:$PATH" CC_SENTINEL_LOG="$LOG" CC_SENTINEL_INTERVAL=1 \
+    CC_SENTINEL_CENSUS_EVERY=2 CC_SENTINEL_FOLLOWUP_N=1 CC_SENTINEL_FOLLOWUP_SEC=1 \
+    CC_SENTINEL_ACT=observe CC_SENTINEL_ACT_RSS_KB=40960 \
+    /bin/bash "$S" --ticks 4
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -qE 'actuator: INTENT WOULD-STOP cohort_n=10 ' "$SNAPLOG" || false
+  grep -qF 'WOULD-STOP parent pid=999801 kids=10 comm=Python' "$SNAPLOG" || false
+  # THE BROWSER: never selected, never a spawner — and the sparing is a NUMBER in the record.
+  ! grep -q 'comm=Dia' "$SNAPLOG" || false
+  ! grep -q 'Browser_Helper' "$SNAPLOG" || false
+  grep -qF 'actuator: protected-class spared app=4 sim=0 new over-floor proc(s)' "$SNAPLOG" || false
+  # THE NEWNESS GATE, still live beside the class: redis is 900 MB, unprotected, and old.
+  ! grep -q 'pid=999795 ' "$SNAPLOG" || false
+}
+
+@test "kill_escalate: a ledgered pid the trip's table classes as protected is SIGCONTed and dropped, never killed" {
+  have_arm kill_escalate
+  mkcohort "$(printf '7001\tMon 30 Sep 15:39:16 2026\n7002\tMon 30 Sep 15:39:17 2026')"
+  ledger 7001 "Mon 30 Sep 15:39:16 2026" parent 1000 Dia
+  ledger 7002 "Mon 30 Sep 15:39:17 2026" parent 1000 'next-server_(v16.2.6)'
+  printf '7001 1 400000 Dia %s 2\n7002 1 700000 next-server_(v16.2.6) /w/.bin/next-server 0\n' "${DIA// /_}" > "$D/exe.k"
+  run_ke 1100 climbing-at-60pct "$D/exe.k"
+  [ "$output" = "killed=1 spared=1" ] || false
+  [ "$(grep -cF -- '-CONT 7001' "$KILLLOG")" -eq 1 ] || false
+  [ "$(grep -cF -- '-KILL 7001' "$KILLLOG")" -eq 0 ] || false
+  [ "$(grep -cF -- '-KILL 7002' "$KILLLOG")" -eq 1 ] || false            # control: the class-0 spawner IS killed
+  grep -qF 'SIGCONT pid=7001 held_s=100 kind=parent comm=Dia reason=protected-at-kill' "$SNAPLOG" || false
+  ! grep -q '^7001	' "$FDB" || false                                     # dropped, not re-owed
+  # THE FAIL DIRECTION: no capture, and the stub's full table is empty ⇒ the belt ABSTAINS and the
+  # rung behaves exactly as before the class existed. (The L1827 case pins the same thing unchanged.)
+  mkcohort "$(printf '7001\tMon 30 Sep 15:39:16 2026\n7002\tMon 30 Sep 15:39:17 2026')"
+  ledger 7001 "Mon 30 Sep 15:39:16 2026" parent 1000 Dia
+  ledger 7002 "Mon 30 Sep 15:39:17 2026" parent 1000 'next-server_(v16.2.6)'
+  run_ke 1100 climbing-at-60pct "$D/no-such-exe"
+  [ "$output" = "killed=2 spared=0" ] || false
+}
+
+@test "release_frozen sweep: a protected row is SIGCONTed and dropped; every other row keeps its hold" {
+  have_arm release_frozen
+  mkcohort "$(printf '4001\tMon 30 Sep 15:39:16 2026\n4002\tMon 30 Sep 15:39:17 2026')"
+  ledger 4001 "Mon 30 Sep 15:39:16 2026" parent 1000 Dia
+  ledger 4002 "Mon 30 Sep 15:39:17 2026" proc 1000 node
+  run_rel 1900 sweep 0 0 " 4001 "                     # 4002 is 900 s old — past the worker ceiling
+  [ "$output" = "released=1 held=1 stale=0" ] || false
+  [ "$(grep -cF -- '-CONT 4001' "$KILLLOG")" -eq 1 ] || false
+  [ "$(grep -cF -- '-CONT 4002' "$KILLLOG")" -eq 0 ] || false
+  grep -qF 'SIGCONT pid=4001 held_s=900 kind=parent comm=Dia reason=protected' "$SNAPLOG" || false
+  [ "$(cut -f1 < "$FDB")" = "4002" ] || false
+  [ ! -s "$PROBDB" ] || false                          # a protected release is not a spawner on probation
+  # CONTROL: the identical ledger under mode=ceiling releases the aged worker — so the hold above is
+  # the sweep's scope, not a row the runner could not reach.
+  run_rel 1900 ceiling
+  [ "$output" = "released=1 held=0 stale=0" ] || false
 }
 
 # ══ SELF-RESTART ON CHANGED SOURCE ════════════════════════════════════════════════════════════════

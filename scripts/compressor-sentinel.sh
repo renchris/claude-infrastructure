@@ -120,9 +120,10 @@ ACT_CAP="${CC_SENTINEL_ACT_CAP:-200}"
 # (CC_SENTINEL_ACT_PARENT=off), the arming decision stays the single one the operator already made,
 # and the snapshot prints a parent-break verdict on EVERY armed trip, including "none".
 # A STORM HAS MEMBERS; A ONE-OFF DOES NOT. With the cohort generalised off the `^node` name
-# (2026-09-16), a single freshly-spawned unprotected process over the floor — a browser renderer, a
-# compile step that happened to start during someone else s storm — would be selectable where before
-# it could not be. This floor says the actuator acts on a POPULATION or not at all. It costs nothing
+# (2026-09-16), a single freshly-spawned unprotected process over the floor — a compile step that
+# happened to start during someone else s storm — would be selectable where before it could not be.
+# (This used to name "a browser renderer" as the other example. Renderers are class 2 since
+# 2026-09-30 and never reach the cohort at all — see exe_table: three of them cleared this floor.) This floor says the actuator acts on a POPULATION or not at all. It costs nothing
 # on any storm this box has ever recorded: the smallest measured cohort is 10 (clang-format, both
 # 2026-09-16 panics) and the August node storms ran 250-736. It is the cheap half of the safety
 # argument for widening the cohort; the newness gate is the other half.
@@ -457,19 +458,29 @@ classify_breach() { # <seg_est> <seg_limit> <seg_rate_per_s> <dcbu_bytes_per_s> 
 # this file tests for, so collapsing is lossless for every decision made on it.
 #
 # FIELDS 5 AND 6 WERE ADDED 2026-09-16, AFTER TWO PANICS IN 35 MINUTES. Field 5 is the FULL
-# executable path and field 6 is a PATH-PROTECTION flag. Both exist because the cohort test used to
-# be the executable NAME `^node`, and on 2026-09-16 the thing that killed this box twice was named
-# `clang-format`: the actuator selected 0 processes on all 12 trips across both storms while ten
-# processes carried 242 GB and 274 GB of anonymous footprint (docs/research/
+# executable path and field 6 is a PROTECTION CLASS (a 0/1 flag until 2026-09-30). Both exist because
+# the cohort test used to be the executable NAME `^node`, and on 2026-09-16 the thing that killed this
+# box twice was named `clang-format`: the actuator selected 0 processes on all 12 trips across both
+# storms while ten processes carried 242 GB and 274 GB of anonymous footprint (docs/research/
 # kernel-watchdog-panic-2026-09-16.md). Generalising the cohort means the actuator now has to be
 # told what it must NEVER touch, and that judgement is made HERE, ONCE, rather than in each of the
 # three consumers — three copies of a safety predicate is three chances to drift apart.
 #
-# THE FLAG IS PATH-ONLY. The argv-based exclusions (claude-shaped, mcp-shaped) stay in the
-# consumers, which are the readers that have argv. This split is deliberate: every consumer applies
-# BOTH, and neither file can weaken the other.
+# FIELD 6 IS A CLASS, AND EVERY CONSUMER READS IT THE SAME WAY: "0" is selectable, ANY other value is
+# protected. The selectors test `$6 == "0"`, so adding a class changes no selector body; the value
+# says WHY, which is what lets a trip count what it spared instead of reading as a quiet box.
+#   0  selectable.
+#   1  the path rules below — Apple daemons, claude, the unidentifiable.
+#   2  an operator GUI app: a bundle root launchd started, and its direct helpers. `exe_table gui` only.
+#   3  a simulator OS image — `….simruntime/Contents/Resources/RuntimeRoot/` is the simulated
+#      device's own launchd, lsd and friends. The app UNDER TEST (CoreSimulator/Devices) stays 0.
 #
-# WHAT IS PROTECTED, and each line is a different failure:
+# THE ARGV-BASED EXCLUSIONS (claude-shaped, mcp-shaped) STAY IN THE CONSUMERS, which are the readers
+# that have argv. This split is deliberate: every consumer applies BOTH, and neither file can weaken
+# the other. The one argv fact read here is the automation switch set below, and only as a pid list —
+# argv itself is never buffered.
+#
+# CLASS 1, and each line is a different failure:
 #   · a comm that is not an absolute path — a zombie or exiting process renders as `(git)`, and
 #     UNIDENTIFIABLE ⇒ NEVER ACTED ON is this file's polarity throughout. (It also covers pid 0,
 #     whose comm is the bare string `kernel_task`.)
@@ -482,27 +493,86 @@ classify_breach() { # <seg_est> <seg_limit> <seg_rate_per_s> <dcbu_bytes_per_s> 
 #     (both of 2026-09-16's clang-formats did — one in an Xcode toolchain, one in a venv), and a
 #     transient CLI tool's death is not an OS event.
 #
-# NOT USED AS A GUI TEST, and the near-miss is worth recording: `.app/Contents/MacOS/` looks like a
-# clean way to spare the operator's apps, and it would ALSO have spared the 2026-09-16 spawner,
-# because `python3` on this box resolves to Xcode's
+# CLASS 2, AND THE CLAIM IT REPLACES. This comment used to say a GUI app is kept out of the cohort by
+# the NEWNESS gate in select_stop_targets, because "a browser that has been up for hours is in the
+# previous census". REFUTED 2026-09-30: a browser starts a FRESH renderer for every tab, so the tabs
+# opened in the minute before a trip are new, unprotected and over the floor, and three of them clear
+# ACT_MIN_COHORT — whereupon the browser itself owns the burst and the parent-breaker freezes it.
+# Since 790f2dc2d that froze Dia's main process 7 times and SIGKILLed it 4 times (the latest at
+# 2026-09-30T15:51:34Z), with WindowServer logging the operator's browser unresponsive in between.
+# So a GUI app is now recognised by structure, from three facts:
+#   · TOP BUNDLE — the path through the FIRST `.app` component at or below /Applications/ or
+#     /Users/<u>/Applications/. Found by split, so vendor folders count (/Applications/Utilities/
+#     Adobe…/CCXProcess/CCXProcess.app, /Applications/Pioneer/…).
+#   · ROOT — comm ends `.app|.appex|.xpc/Contents/MacOS/<name>` inside a top bundle, the parent is
+#     launchd (ppid 1), and argv carries none of the automation switches (--remote-debugging-*,
+#     --enable-automation, --headless, --test-type, --user-data-dir=). Automation browsers are
+#     routinely reparented to launchd — all twelve ppid-1 Google Chrome roots in the snap log carry one
+#     of those switches — so ppid 1 alone cannot tell the operator's app from a harness.
+#   · HELPER — bundle-shaped the same way and a DIRECT child of a root with the same top bundle.
+#     Grandchildren (an editor's language servers), plain in-bundle binaries (Dia's agent-server) and
+#     anything a shell exec'd directly (agent-run headless Blender) stay 0.
+#
+# THE NEAR-MISS, still binding, and now carried by the ppid-1 anchor plus one carve-out rather than
+# by a substring test: `python3` on this box resolves to Xcode's
 # /Applications/Xcode.app/.../Python3.framework/.../Python.app/Contents/MacOS/Python — a framework
-# stub, not a GUI app. A GUI app is instead kept out of the cohort by the NEWNESS gate in
-# select_stop_targets (a browser that has been up for hours is in the previous census), which is
-# the gate doing nearly all of the work here: 175 processes over the floor, 2 of them new.
-exe_table() {
-  ps -axwwo pid=,ppid=,rss=,comm= 2>/dev/null | awk '
+# stub, not a GUI app, and the 2026-09-16 spawner. Nothing under `/Contents/Developer/` is ever class
+# 2, whatever its parent (the Xcode IDE included), except exactly
+# `…/Contents/Developer/Applications/<X>.app/Contents/MacOS/<name>` — which keeps Simulator.app.
+#
+# CLASS 2 IS COMPUTED ONLY IN `gui` MODE (the trip, the kill belt, the startup sweep): it needs the
+# argv read, and the census that runs every minute stays on the plain table. In plain mode a GUI
+# process reads 0, which is what puts the long-running ones on the census roster.
+exe_classify() { # [gui] — stdin: optional "@A <pid>" (automation argv) marker rows, then "pid ppid rss comm..." rows → six fields, input order, field 6 = class 0|1|2|3
+  awk -v gui="${1:-}" '
+    function topb(c,   k, q, i, s, t) {
+      if (c ~ /^\/Applications\//) s = 3
+      else if (c ~ /^\/Users\/[^\/]+\/Applications\//) s = 5
+      else return ""
+      k = split(c, q, "/"); t = ""
+      for (i = 2; i < k; i++) { t = t "/" q[i]; if (i >= s && q[i] ~ /\.app$/) return t }
+      return ""
+    }
+    $1 == "@A" { auto[$2] = 1; next }
     $1 ~ /^[0-9]+$/ {
+      n++; P[n] = $1; PP[n] = $2; R[n] = $3
       comm = $4; for (i = 5; i <= NF; i++) comm = comm " " $i
-      n = split(comm, p, "/"); base = p[n]
+      k = split(comm, parts, "/"); base = parts[k]
       prot = 0
       if (comm !~ /^\//) prot = 1
       else if (comm ~ /^\/System\// || comm ~ /^\/usr\/libexec\// \
             || comm ~ /^\/usr\/sbin\// || comm ~ /^\/sbin\//) prot = 1
       if (base == "claude" || base == "claude.exe") prot = 1
+      if (!prot && comm ~ /\.simruntime\/Contents\/Resources\/RuntimeRoot\//) prot = 3
+      if (gui == "gui" && !prot && comm ~ /\.(app|appex|xpc)\/Contents\/MacOS\/[^\/]+$/ \
+          && !(comm ~ /\/Contents\/Developer\// \
+               && comm !~ /\/Contents\/Developer\/Applications\/[^\/]+\.app\/Contents\/MacOS\/[^\/]+$/)) {
+        tb = topb(comm)
+        if (tb != "") { TB[$1] = tb; if ($2 == 1 && !($1 in auto)) ROOT[$1] = tb }
+      }
       gsub(/[[:space:]]+/, "_", base)
       full = comm; gsub(/[[:space:]]+/, "_", full)
-      print $1, $2, $3, base, full, prot
+      B[n] = base; F[n] = full; X[n] = prot
+    }
+    END {
+      # z and y, never p: the array-name clash select_break_parents records below. A helper listed
+      # BEFORE its root (pid wrap) still resolves here, because every root is known by END.
+      for (j = 1; j <= n; j++) {
+        z = P[j]; y = PP[j]
+        if (X[j] == 0 && ((z in ROOT) || ((z in TB) && (y in ROOT) && ROOT[y] == TB[z]))) X[j] = 2
+        print P[j], PP[j], R[j], B[j], F[j], X[j]
+      }
     }'
+}
+
+exe_table() { # [gui] → exe_classify over the live table; `gui` adds the automation-argv read and class 2
+  local mode="${1:-}"
+  { if [ "$mode" = gui ]; then
+      ps -axwwo pid=,args= 2>/dev/null \
+        | awk '$1 ~ /^[0-9]+$/ && /--remote-debugging-|--enable-automation|--headless|--test-type|--user-data-dir=/ { print "@A", $1 }'
+    fi
+    ps -axwwo pid=,ppid=,rss=,comm= 2>/dev/null
+  } | exe_classify "$mode"
 }
 
 # ── node census (every CENSUS_EVERY ticks) ────────────────────────────────────────────────────────
@@ -521,10 +591,15 @@ exe_table() {
 # THE FLOOR IS THE ACTUATOR'S OWN. Roster and cohort must be drawn from the same population or the
 # newness test compares two different sets: a process under the floor is never a target, so putting
 # it on the roster would only cost string length.
+#
+# PROTECTED CLASSES 2 AND 3 ARE ON THE ROSTER TOO (class 1 is not: it is never selectable and never
+# counted). The census reads the PLAIN table, so a GUI process reads 0 here anyway; class 3 is listed
+# explicitly. Neither is ever a target — the point is the trip's "protected-class spared" count, which
+# is "class 2/3 over the floor and NOT on the roster", i.e. only the genuinely new ones.
 census() { # <rss_floor_kb>
   exe_table | awk -v floor="${1:-0}" '
     $4 ~ /^node/ { c++; rss += $3; if ($2 == 1) orph++ }
-    $6 == "0" && $3 + 0 >= floor + 0 { pids = pids " " $1 }
+    ($6 == "0" || $6 == "2" || $6 == "3") && $3 + 0 >= floor + 0 { pids = pids " " $1 }
     END { printf "%d %d %d|%s", c + 0, orph + 0, rss / 1024, pids }'
 }
 
@@ -873,7 +948,10 @@ write_page() { # <ts> <why> <headline> <detail>
 #             (<parent_ok>: pct < REL_PARENT_PCT for REL_PARENT_TICKS consecutive clear ticks —
 #             level, not rate; level subsumes swap since swapped segments are half of SEG_EST) AND
 #             the freeze has been held ≥ PARENT_HOLD_MIN_S (the observed multi-wave horizon is
-#             ~10 min; 68 s was the fatal hold). A released spawner goes on PROBATION.
+#             ~10 min; 68 s was the fatal hold). A released spawner goes on PROBATION. There is NO
+#             spawner ceiling, on purpose: a ceiling is a release on a clock, and a clock is what
+#             resumed panic #5's primed spawner into a 72%-full compressor. A spawner still held when
+#             the freeze starts losing belongs to the kill rung, not to a timer.
 #   ceiling — WORKERS ONLY, held HOLD_MAX_S, released even if still in breach — but never in the
 #             cliff regime. A frozen worker past its ceiling on a calm-enough box is the guard
 #             outliving its emergency; the same worker at 80% full is stored margin, and the
@@ -882,6 +960,12 @@ write_page() { # <ts> <why> <headline> <detail>
 #             daemon restart strands the whole cohort permanently — and a stranded SIGSTOP with no
 #             living SIGCONT sender is strictly worse than a released spawner, because nothing can
 #             ever fix it.
+#   sweep   — the startup custody pass (a loop-owning daemon, ACT=stop). Releases ONLY rows whose
+#             pid is on the caller's protected-class list — a GUI app or simulator runtime adopted
+#             from a predecessor killed before it could release (a launchd ExitTimeOut during a
+#             121-146 s cliff tick defers the TERM trap) — and holds every other row as it stands.
+#   Every SIGCONT line carries reason=<exit|protected|calm|clear|hold-max>, so a release can be
+#   attributed to its arm from the snap log alone.
 #
 # WHAT MAKES THIS SAFE TO RUN UNATTENDED: we resume ONLY what we froze. Every release is gated on
 # (pid, lstart) matching the ledger, TZ-pinned on BOTH sides because ps renders lstart in the
@@ -902,9 +986,9 @@ record_frozen() { # <pid> <kind> <comm> — ledger one REAL SIGSTOP so it can be
   printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$ls" "$2" "$(date +%s)" "$3" >> "$FROZEN_DB" 2>/dev/null || true
 }
 
-release_frozen() { # <now-epoch> <mode: clear|ceiling|exit> [<parent_ok 0|1>] [<cliff 0|1>] → "released=N held=N stale=N"
-  local now="$1" mode="$2" parent_ok="${3:-0}" cliff="${4:-0}"
-  local keep rel=0 held=0 stale=0 pid ls kind at comm cur age due
+release_frozen() { # <now-epoch> <mode: clear|ceiling|exit|sweep> [<parent_ok 0|1>] [<cliff 0|1>] [<protected " pid " list>] → "released=N held=N stale=N"
+  local now="$1" mode="$2" parent_ok="${3:-0}" cliff="${4:-0}" protp="${5:- }"
+  local keep rel=0 held=0 stale=0 pid ls kind at comm cur age due why
   [ -s "$FROZEN_DB" ] || { printf 'released=0 held=0 stale=0'; return 0; }
   keep="$(mktemp -t cc-sentinel-frozen)" || { printf 'released=0 held=0 stale=0'; return 0; }
   while IFS="$(printf '\t')" read -r pid ls kind at comm; do
@@ -913,33 +997,40 @@ release_frozen() { # <now-epoch> <mode: clear|ceiling|exit> [<parent_ok 0|1>] [<
     # Gone, or the pid now belongs to someone else. Either way we owe it nothing and must not signal.
     if [ -z "$cur" ] || [ "$cur" != "$ls" ]; then stale=$((stale + 1)); continue; fi
     age=$((now - at))
-    due=0
+    due=0; why=""
     if [ "$mode" = "exit" ]; then
-      due=1
+      due=1; why="exit"
+    elif case "$protp" in *" $pid "*) true ;; *) false ;; esac; then
+      # The caller's protected-class list (the startup sweep): a row whose process is NOW a GUI app or a
+      # simulator runtime was adopted from a predecessor that froze it before those classes existed,
+      # or before a KeepAlive restart. It was never ours to hold.
+      due=1; why=protected
+    elif [ "$mode" = "sweep" ]; then
+      :   # the sweep releases protected rows and nothing else — every other row keeps its hold
     elif [ "$kind" = "parent" ]; then
       # A spawner never rides the worker rules: not clear-mode (one lull tick is how panic #5
       # happened), not the ceiling (a still-loaded spawner past its ceiling is kill_due's case).
       # Only the caller's sustained-calm certificate, after the parent's own longer minimum hold.
-      [ "$parent_ok" = "1" ] && [ "$age" -ge "$PARENT_HOLD_MIN_S" ] && due=1
+      [ "$parent_ok" = "1" ] && [ "$age" -ge "$PARENT_HOLD_MIN_S" ] && { due=1; why=calm; }
     else
       # Never resume anything in the cliff regime — a resumed worker allocates into a compressor
       # that has no room to hold the margin the freeze bought.
       if [ "$cliff" != "1" ]; then
-        [ "$age" -ge "$HOLD_MAX_S" ] && due=1
-        [ "$mode" = "clear" ] && [ "$age" -ge "$HOLD_MIN_S" ] && due=1
+        [ "$age" -ge "$HOLD_MAX_S" ] && { due=1; why=hold-max; }
+        [ "$mode" = "clear" ] && [ "$age" -ge "$HOLD_MIN_S" ] && { due=1; why=clear; }
       fi
     fi
     if [ "$due" -eq 1 ]; then
       kill -CONT "$pid" 2>/dev/null
       rel=$((rel + 1))
-      printf 'SIGCONT pid=%s held_s=%s kind=%s comm=%s\n' "$pid" "$age" "$kind" "$comm" \
+      printf 'SIGCONT pid=%s held_s=%s kind=%s comm=%s reason=%s\n' "$pid" "$age" "$kind" "$comm" "$why" \
         >> "$SNAP" 2>/dev/null || true
       # A released spawner is on probation: the first breach tick inside PROBATION_S re-freezes it
-      # without waiting for streak or cooldown (probation_refreeze). Exit-mode releases are exempt —
-      # the daemon leaving has no later tick to act on the stamp, and a stale stamp would then
-      # convict the pid s successor after reuse (the lstart gate already forecloses that, but a
-      # stamp nothing can consume is still litter).
-      if [ "$kind" = "parent" ] && [ "$mode" != "exit" ]; then
+      # without waiting for streak or cooldown (probation_refreeze). Only a CALM release earns the
+      # stamp: exit has no later tick to consume it (and a stale stamp would then convict the pid s
+      # successor after reuse — the lstart gate already forecloses that, but a stamp nothing can
+      # consume is still litter), and a protected row was never a spawner to watch.
+      if [ "$kind" = "parent" ] && [ "$why" = "calm" ]; then
         printf '%s\t%s\t%s\t%s\n' "$pid" "$ls" "$now" "$comm" >> "$PROBATION_DB" 2>/dev/null || true
       fi
     else
@@ -1009,12 +1100,28 @@ kill_due() { # <pct> <srate> <trip_now 0|1> <debt_n> → reason | rc 1
 # exit is the only observed reclaim, and a frozen worker at kill time is exactly the storm cohort
 # the selectors chose under their exclusions. Age-gated (KILL_MIN_HOLD_S) so the freeze always gets
 # its chance first on the very trip that created the debt.
-kill_escalate() { # <now-epoch> <reason> → "killed=N spared=N" on stdout
-  local now="$1" reason="$2" keep killed=0 spared=0 pid ls kind at comm cur age
+#
+# THE PROTECTED-CLASS BELT (2026-09-30). Custody was the whole blast-radius argument, and custody
+# was wrong about Dia: the parent-breaker froze the operator's browser as the "spawner" of its own
+# fresh tab renderers, and on the next retrip this rung SIGKILLed it (15:51:34Z). The selectors no
+# longer choose GUI apps, but a ledger can hold rows written before that was true, so the class is
+# re-derived HERE from the trip's own `exe_table gui` capture (<exe_file>, reused — or read fresh when
+# the caller has none) and a ledgered pid whose class is not 0 is SIGCONTed and dropped, never killed.
+# The fail direction is the belt ABSTAINING: an empty or unreadable table protects nothing extra and
+# leaves the rules above exactly as they were.
+# REJECTED ON PURPOSE: exempting kind=parent from the kill, and gating retrip-over-debt on a
+# non-empty cohort. Both reopen panic #5, whose spawners are exactly the rows this rung exists for.
+kill_escalate() { # <now-epoch> <reason> [<exe_file>] → "killed=N spared=N" on stdout
+  local now="$1" reason="$2" exef="${3:-}" own="" prot keep killed=0 spared=0 pid ls kind at comm cur age
   [ -s "$FROZEN_DB" ] || { printf 'killed=0 spared=0'; return 0; }
   printf 'actuator: KILL-INTENT reason=%s debt=%s (write-ahead: signals follow this line)\n' \
     "$reason" "$(wc -l < "$FROZEN_DB" 2>/dev/null | tr -d ' ' || echo '?')" >> "$SNAP" 2>/dev/null || true
-  keep="$(mktemp -t cc-sentinel-frozen)" || { printf 'killed=0 spared=0'; return 0; }
+  if [ -z "$exef" ] || [ ! -s "$exef" ]; then
+    own="$(mktemp -t cc-sentinel-exe)" && exe_table gui > "$own" 2>/dev/null
+    exef="$own"
+  fi
+  prot=" $(awk '$1 ~ /^[0-9]+$/ && NF >= 6 && $6 != "0" { printf "%s ", $1 }' "$exef" 2>/dev/null) "
+  keep="$(mktemp -t cc-sentinel-frozen)" || { [ -n "$own" ] && rm -f "$own"; printf 'killed=0 spared=0'; return 0; }
   while IFS="$(printf '\t')" read -r pid ls kind at comm; do
     [ -n "$pid" ] || continue
     cur="$(proc_lstart "$pid")"
@@ -1028,6 +1135,14 @@ kill_escalate() { # <now-epoch> <reason> → "killed=N spared=N" on stdout
         printf '%s\t%s\t%s\t%s\t%s\n' "$pid" "$ls" "$kind" "$at" "$comm" >> "$keep"
         continue ;;
     esac
+    case "$prot" in
+      *" $pid "*)
+        kill -CONT "$pid" 2>/dev/null
+        spared=$((spared + 1))
+        printf 'SIGCONT pid=%s held_s=%s kind=%s comm=%s reason=protected-at-kill\n' \
+          "$pid" "$age" "$kind" "$comm" >> "$SNAP" 2>/dev/null || true
+        continue ;;
+    esac
     if [ "$age" -lt "$KILL_MIN_HOLD_S" ]; then
       spared=$((spared + 1))
       printf '%s\t%s\t%s\t%s\t%s\n' "$pid" "$ls" "$kind" "$at" "$comm" >> "$keep"
@@ -1039,6 +1154,7 @@ kill_escalate() { # <now-epoch> <reason> → "killed=N spared=N" on stdout
       "$pid" "$age" "$kind" "$comm" "$reason" >> "$SNAP" 2>/dev/null || true
   done < "$FROZEN_DB"
   mv -f "$keep" "$FROZEN_DB" 2>/dev/null || rm -f "$keep" 2>/dev/null
+  [ -n "$own" ] && rm -f "$own"
   printf 'killed=%s spared=%s' "$killed" "$spared"
 }
 
@@ -1458,6 +1574,24 @@ cleanup() {
 }
 trap cleanup TERM INT
 
+# ── startup custody: a loop-owning daemon settles what it inherited ───────────────────────────────
+# The ledger outlives the process that wrote it whenever that process dies without its TERM trap —
+# a launchd ExitTimeOut during a 121-146 s cliff tick is enough, because bash defers the trap until
+# the running command returns. The KeepAlive successor then ADOPTS every row, including rows written
+# before GUI apps had a class of their own. So once, before the first tick, the owner of the loop
+# sweeps both ledgers: a row whose pid is NOW protected (class 2 or 3) is SIGCONTed and dropped, and
+# its probation stamp with it. Every other row keeps its hold — the sweep is not a release policy.
+if [ "$TICKS" -eq 0 ] && [ "$ACT" = stop ]; then
+  if [ -s "$FROZEN_DB" ] || [ -s "$PROBATION_DB" ]; then
+    _prot=" $(exe_table gui 2>/dev/null | awk '$1 ~ /^[0-9]+$/ && NF >= 6 && $6 != "0" { printf "%s ", $1 }') "
+    [ -s "$FROZEN_DB" ] && printf '%s compressor-sentinel: STARTUP-SWEEP %s\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(release_frozen "$(date +%s)" sweep 0 0 "$_prot")" >&2
+    if [ -s "$PROBATION_DB" ] && _pk="$(mktemp -t cc-sentinel-probation)"; then
+      awk -F'\t' -v p="$_prot" 'index(p, " " $1 " ") == 0' "$PROBATION_DB" > "$_pk" && mv -f "$_pk" "$PROBATION_DB"
+    fi
+  fi
+fi
+
 PREV_T=""; PREV_SEG=""; PREV_CBU=""; PREV_SWAP=""; PREV_CMP=""; PREV_DCMP=""
 # THREE SEPARATE KEYS, not one comma-joined field. The first draft emitted `"n":8,2,3404` — three
 # bare values under one key, which no JSON parser accepts, so a single census would have poisoned
@@ -1609,7 +1743,7 @@ while :; do
   # up; at 60%+ a false positive costs a snapshot, a miss costs the box) and the cooldown no longer
   # gates — the 60 s cooldown was a spawner's whole working day at the measured rate, and wave 2
   # re-ignited inside it.
-  TRIP_FIRED=0
+  TRIP_FIRED=0; EXEF=""
   STREAK_REQ=2; [ "$CLIFF" = "1" ] && STREAK_REQ=1
   if [ -n "$WHY" ] && [ "$STREAK" -ge "$STREAK_REQ" ] && { [ "$CLIFF" = "1" ] || [ "$NOW" -ge "$COOLDOWN_UNTIL" ]; }; then
     HEAD_LINE="$(printf 'segments %s of %s (%s%%) · %s seg/s · compressor +%s B/s · swap +%s B/s' \
@@ -1628,8 +1762,10 @@ while :; do
       # TWO reads, back-to-back, and the split between them is load-bearing — select_stop_targets'
       # header has the measurement. exe_table FIRST so the args table is the later instant: a pid
       # that dies between them is simply absent from the table that selects.
+      # `gui` mode, so class 2 (the operator's apps) is computed for the one read that selects. The
+      # capture outlives this block: the kill rung below reuses it as its protected-class belt.
       EXEF="$(mktemp -t cc-sentinel-exe)"
-      exe_table > "$EXEF" 2>/dev/null || true
+      exe_table gui > "$EXEF" 2>/dev/null || true
       PSTABLE="$(ps -axwwo pid=,ppid=,rss=,args= 2>/dev/null)"
       TARGETS="$(printf '%s\n' "$PSTABLE" | select_stop_targets "$EXEF" "$CENSUS_PIDS" "$ACT_RSS_KB" "$ACT_CAP")"
       COHORT="$(printf '%s\n' "$TARGETS" | awk '$1 ~ /^[0-9]+$/ { printf "%s ", $1 }')"
@@ -1644,6 +1780,13 @@ while :; do
           "$COHORT_N" "$ACT_MIN_COHORT" >> "$SNAP" 2>/dev/null || true
         TARGETS=""; COHORT=""; COHORT_N=0
       fi
+      # THE PROTECTED-CLASS VERDICT, on every armed trip including the zero. Without it a cohort left
+      # empty because Dia's fresh renderers were spared reads exactly like a quiet box — and "spared"
+      # is the fact a post-mortem needs. Counted the way the cohort would have been: over the floor
+      # and NOT on the census roster, i.e. new since the last census.
+      SPARED="$(awk -v prev=" $CENSUS_PIDS " -v floor="$ACT_RSS_KB" '($6 == "2" || $6 == "3") && $3 + 0 > floor + 0 && index(prev, " " $1 " ") == 0 { n[$6]++ } END { printf "app=%d sim=%d", n["2"] + 0, n["3"] + 0 }' "$EXEF" 2>/dev/null)" || SPARED="app=? sim=?"
+      printf 'actuator: protected-class spared %s new over-floor proc(s) (GUI app bundle / simulator runtime — never selectable)\n' \
+        "$SPARED" >> "$SNAP" 2>/dev/null || true
       # WRITE-AHEAD (panic #5, trip 4): the intent reaches disk BEFORE the first signal, so an
       # actuation the storm kills mid-flight is distinguishable from one that never ran. The
       # per-signal lines that follow are the confirmations.
@@ -1684,7 +1827,6 @@ while :; do
           printf '%s pid=%s rss_kb=%s comm=%s\n' "$ACTVERB" "$spid" "$srss" "$scomm" >> "$SNAP" 2>/dev/null || true
         fi
       done <<< "$TARGETS"
-      rm -f "$EXEF" 2>/dev/null || true
       printf 'actuator: %s %s process(es) (cap %s, floor %s kB)\n' \
         "$([ "$ACT" = observe ] && echo 'WOULD have SIGSTOPped' || echo SIGSTOPped)" \
         "$STOPPED" "$ACT_CAP" "$ACT_RSS_KB" >> "$SNAP" 2>/dev/null || true
@@ -1704,9 +1846,12 @@ while :; do
       # parent-break verdict above it: before this arm existed the snapshot looked exactly as it
       # would if a release path were wired and simply had nothing to do, which is why 59 one-way
       # freezes went unnoticed across 109 trips. A number here makes the two states distinguishable.
-      printf 'actuator: freeze debt %s pid(s) awaiting SIGCONT (hold min %ss / ceiling %ss)\n' \
+      # The hold rule is spelled out per kind. The old text, "(hold min 60s / ceiling 600s)", was
+      # true only of WORKERS and read as a 600 s ceiling on spawners — which do not have one.
+      printf 'actuator: freeze debt %s pid(s) awaiting SIGCONT (workers: min %ss / ceiling %ss; spawners: min %ss, then %s calm ticks < %s%%, no ceiling; nothing releases in cliff)\n' \
         "$(wc -l < "$FROZEN_DB" 2>/dev/null | tr -d ' ' || echo 0)" \
-        "$HOLD_MIN_S" "$HOLD_MAX_S" >> "$SNAP" 2>/dev/null || true
+        "$HOLD_MIN_S" "$HOLD_MAX_S" "$PARENT_HOLD_MIN_S" "$REL_PARENT_TICKS" "$REL_PARENT_PCT" \
+        >> "$SNAP" 2>/dev/null || true
     else
       printf 'actuator: DISARMED (CC_SENTINEL_ACT=%s) — detection only\n' "$ACT" >> "$SNAP" 2>/dev/null || true
     fi
@@ -1733,11 +1878,15 @@ while :; do
       'NF >= 4 && ($4 + 0) > 0 && (now - $4) >= min { n++ } END { print n + 0 }' "$FROZEN_DB" 2>/dev/null || echo 0)"
     KREASON="$(kill_due "${SEG_PCT:-0}" "${SEG_RATE:-0}" "$TRIP_FIRED" "$DEBT_ELIG")" || KREASON=""
     if [ -n "$KREASON" ]; then
-      KV="$(kill_escalate "$NOW" "$KREASON")"
+      KV="$(kill_escalate "$NOW" "$KREASON" "$EXEF")"
       printf '%s compressor-sentinel: KILL-ESCALATE reason=%s %s\n' "$TS" "$KREASON" "$KV" >&2
       printf 'actuator: kill-escalate reason=%s %s\n' "$KREASON" "$KV" >> "$SNAP" 2>/dev/null || true
     fi
   fi
+  # The trip's exe capture lives until here so the kill rung can reuse it. Free at the defaults:
+  # retrip-over-debt needs TRIP_FIRED=1, and climbing-at-60pct needs pct >= KILL_PCT = CLIFF_PCT,
+  # where every breach tick trips — so every kill tick already holds one.
+  [ -n "$EXEF" ] && rm -f "$EXEF" 2>/dev/null; EXEF=""
 
   # THE RELEASE RUNS ON EVERY TICK, INCLUDING THE QUIET ONES, and that placement is the mechanism
   # rather than tidiness: a cohort frozen at tick N is owed its SIGCONT by a LATER tick, and the
