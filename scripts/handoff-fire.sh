@@ -11981,15 +11981,59 @@ ranked_accounts() {
   # that order from the SSOT: $CC_ACCT_NAMES is generated in accounts[] order and, until item
   # 253e4d4254d9, had no consumer at all while this loop restated its value as a literal — the
   # same defect as launcher_for() below, one field over. A 5th account was invisible here.
-  local i=0 a
+  local i=0 a names skip
+  # The proxy is blind to limits, and an EXHAUSTED account is by construction the LEAST active one,
+  # so the proxy ranks it FIRST. Measured 2026-09-30: two post-reboot fires in a row (router off
+  # PATH, then its lock wedged at load 194) went to next2 at 100% weekly and hit the limit on their
+  # first turn. So drop what the router's last good reading says is exhausted until a future reset
+  # (hf_lastgood_exhausted), unless that would drop every account: a degraded rank must never
+  # become a refusal the live router did not make.
+  # shellcheck disable=SC2086  # deliberate word-splitting: the generated map declares a
+  # space-separated name list, matching how postland-verify.sh:356 splits its own seam list.
+  names="$(printf '%s\n' $CC_ACCT_NAMES)"
+  skip="$(hf_lastgood_exhausted 2>/dev/null || true)"
+  if [ -n "$skip" ] && printf '%s\n' "$names" | grep -vxF -f <(printf '%s\n' "$skip") >/dev/null; then
+    echo "⚠ rank degraded: skipping $(printf '%s' "$skip" | tr '\n' ' ')(exhausted in the router's last good reading)" >&2
+    names="$(printf '%s\n' "$names" | grep -vxF -f <(printf '%s\n' "$skip"))"
+  fi
   {
     printf '# activity-proxy (DEGRADED: live limits unavailable)\n'
-    # shellcheck disable=SC2086  # deliberate word-splitting: the generated map declares a
-    # space-separated name list, matching how postland-verify.sh:356 splits its own seam list.
-    for a in $CC_ACCT_NAMES; do
+    for a in $names; do
       printf '%s %s %s\n' "$(activity "$a")" "$i" "$a"; i=$((i+1))
     done | sort -s -k1,1n -k2,2n | awk '{print $3, $1}'
   }
+}
+
+# The accounts claude-accounts' last good reading shows at 100% of the weekly or 5-hour limit with
+# the reset still ahead, one per line. Unreadable, absent or malformed ⇒ prints nothing, so the
+# caller ranks exactly as it did before this existed. CC_ACCOUNTS_LASTGOOD is the test seam.
+hf_lastgood_exhausted() {
+  local f="${CC_ACCOUNTS_LASTGOOD:-${HOME:-}/.claude/logs/claude-accounts-lastgood.json}" py=""
+  [ -s "$f" ] || return 0
+  for py in /usr/bin/python3 "$(command -v python3 2>/dev/null || true)"; do [ -n "$py" ] && [ -x "$py" ] && break; py=""; done
+  [ -n "$py" ] || return 0
+  "$py" - "$f" <<'PY' 2>/dev/null || true
+import json, sys, datetime as dt
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+now = dt.datetime.now(dt.timezone.utc)
+def future(s):
+    try:
+        return dt.datetime.fromisoformat(str(s).replace("Z", "+00:00")) > now
+    except Exception:
+        return False
+if isinstance(d, dict):
+    for name, r in d.items():
+        if not isinstance(r, dict):
+            continue
+        for pct, reset in (("weekly_pct", "weekly_reset_at"), ("session_pct", "session_reset_at")):
+            v = r.get(pct)
+            if isinstance(v, (int, float)) and v >= 100 and future(r.get(reset)):
+                print(name)
+                break
+PY
 }
 
 launcher_for() { # $1=account → launcher name. ACCOUNT ONLY — the model is a FLAG, never a name.
