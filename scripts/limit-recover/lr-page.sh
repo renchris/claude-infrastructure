@@ -4,7 +4,7 @@
 # failed, an exhausted request) pages through here.
 #
 #   lr-page.sh [--title <tail>] [--] <message>   page; prints ONE verdict line on stdout
-#   lr-page.sh --failures                        print how many pages reached no channel
+#   lr-page.sh --failures                        print how many pages failed (see below)
 #   source lr-page.sh                            defines lr_page (same contract) without running
 #
 # Why a new helper rather than cc-notify: the reconciler paged with `cc-notify --page`, an option
@@ -19,13 +19,16 @@
 #          Capped at 200 characters, bounded at LR_PAGE_OS_TIMEOUT_S (10). Moved from
 #          lead-supervisor.sh page_escalate_os, same contract.
 #   phone  Pushover via scripts/push-send.sh, which trusts only an API status:1. Runs only when
-#          PUSHOVER_TOKEN and PUSHOVER_USER are both set; otherwise it is skipped silently, since
-#          wiring the credentials is an operator step (D6.9).
+#          PUSHOVER_TOKEN and PUSHOVER_USER are both set, in the environment or else in
+#          ~/.config/lr-page/pushover.env (LR_PAGE_CREDS; KEY=VALUE lines, read, never sourced;
+#          launchd daemons inherit no shell env). That file must be yours and mode 0600, or the
+#          leg is `refused` and counted. No credentials at all ⇒ skipped silently: wiring them is
+#          an operator step (D6.9).
 #
-# Verdict (stdout): `lr-page: verdict=<posted|failed> os=<posted|failed|off> phone=<sent|failed|skipped>`
+# Verdict (stdout): `lr-page: verdict=<posted|failed> os=<posted|failed|off> phone=<sent|failed|skipped|refused>`
 # Exit: 0 = at least one leg put the page in front of a human · 1 = no leg did (counted) · 2 = usage.
 # Every attempt appends one line to LR_PAGE_LOG (no message text, so a draft never lands on disk);
-# `--failures` counts the failed ones.
+# `--failures` counts the pages no leg took, plus every refused credentials file.
 #
 # Env: LR_PAGE_OS_CHANNEL=auto|on|off (default: CC_SUP_OS_CHANNEL, else auto — `off` is the switch
 # for a box where Notification Center is the wrong surface) · LR_PAGE_OSASCRIPT_BIN (osascript) ·
@@ -91,14 +94,58 @@ OSA
   fi
 }
 
-_lr_page_phone() { # $1=title-tail $2=message → echoes sent|failed|skipped
-  if [ -z "${PUSHOVER_TOKEN:-}" ] || [ -z "${PUSHOVER_USER:-}" ]; then
+_lr_page_mode() { # $1=file → octal permission bits (BSD stat, else GNU)
+  stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null
+}
+
+# The credentials file, for callers with no shell environment: a launchd daemon never inherits
+# ~/.zshenv. Read as KEY=VALUE lines (never sourced, so nothing in it executes), and only when it is
+# ours and mode 0600 — a group- or world-readable secret is refused, and the refusal is counted.
+# Sets _LR_PAGE_TOKEN/_LR_PAGE_USER. rc 0 loaded · 1 no file · 2 refused.
+_lr_page_creds_file() {
+  local f="${LR_PAGE_CREDS:-$HOME/.config/lr-page/pushover.env}" mode line k v
+  [ -f "$f" ] || return 1
+  mode="$(_lr_page_mode "$f")"
+  if [ ! -O "$f" ] || [ -z "$mode" ] || [ "${mode: -2}" != "00" ]; then
+    echo "lr-page: refusing $f — mode ${mode:-unknown}, it must be yours and 0600" >&2
+    return 2
+  fi
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line#export }"
+    k="${line%%=*}"
+    v="${line#*=}"
+    v="${v%\"}"
+    v="${v#\"}"
+    v="${v%\'}"
+    v="${v#\'}"
+    case "$k" in
+      PUSHOVER_TOKEN) _LR_PAGE_TOKEN="$v" ;;
+      PUSHOVER_USER) _LR_PAGE_USER="$v" ;;
+    esac
+  done <"$f"
+  return 0
+}
+
+_lr_page_phone() { # $1=title-tail $2=message → echoes sent|failed|skipped|refused
+  local push="${LR_PAGE_PUSH_BIN:-$_lr_page_here/../push-send.sh}"
+  _LR_PAGE_TOKEN="${PUSHOVER_TOKEN:-}"
+  _LR_PAGE_USER="${PUSHOVER_USER:-}"
+  if [ -z "$_LR_PAGE_TOKEN" ] || [ -z "$_LR_PAGE_USER" ]; then
+    _lr_page_creds_file
+    case $? in
+      2)
+        echo refused
+        return 0
+        ;;
+    esac
+  fi
+  if [ -z "$_LR_PAGE_TOKEN" ] || [ -z "$_LR_PAGE_USER" ]; then
     echo skipped
     return 0
   fi
-  local push="${LR_PAGE_PUSH_BIN:-$_lr_page_here/../push-send.sh}"
   # push-send bounds its own curl (--max-time 8); the outer bound only catches a wedged interpreter.
-  if _lr_page_bounded 20 bash "$push" send --title "Claude fleet — $1" --message "$2" >/dev/null 2>&1; then
+  if PUSHOVER_TOKEN="$_LR_PAGE_TOKEN" PUSHOVER_USER="$_LR_PAGE_USER" \
+    _lr_page_bounded 20 bash "$push" send --title "Claude fleet — $1" --message "$2" >/dev/null 2>&1; then
     echo sent
   else
     echo failed
@@ -165,14 +212,14 @@ lr_page_failures() {
   local log n
   log="$(_lr_page_log)"
   n=0
-  [ -f "$log" ] && n="$(grep -c "	failed	" "$log" 2>/dev/null)"
+  [ -f "$log" ] && n="$(grep -cE "	failed	|phone=refused" "$log" 2>/dev/null)"
   echo "${n:-0}"
 }
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   case "${1:-}" in
     --failures) lr_page_failures ;;
-    -h | --help) sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//' ;;
+    -h | --help) sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//' ;;
     *)
       lr_page "$@"
       exit $?

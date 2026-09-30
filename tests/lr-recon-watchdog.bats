@@ -151,6 +151,24 @@ tick() {  # $1=now — one launchd tick
   [ ! -e "$PLOG" ]
 }
 
+@test "the default page goes through lr-page.sh, and only a posted page latches" {
+  unset LR_RECON_PAGE
+  printf '#!/bin/sh\nprintf "%%s\\n" "$@" >> "%s"\nexit "${OSA_RC:-0}"\n' "$PLOG" > "$BATS_TEST_TMPDIR/bin/osa"
+  chmod +x "$BATS_TEST_TMPDIR/bin/osa"
+  export LR_PAGE_OS_CHANNEL=on LR_PAGE_OSASCRIPT_BIN="$BATS_TEST_TMPDIR/bin/osa"
+  export LR_PAGE_LOG="$BATS_TEST_TMPDIR/pages.log" LR_PAGE_CREDS="$BATS_TEST_TMPDIR/none"
+  hb 999991 "$DEAD_LSTART" 1 $((T - 61)) $((T - 61))
+  OSA_RC=1 tick "$T"
+  grep -q "PAGE FAILED" "$LR_RECON_ROOT/watchdog.log"
+  [ "$(grep -c "PAGE: lr-reconciler" "$LR_RECON_ROOT/watchdog.log")" = 0 ]
+  tick $((T + 30))  # the failure did not latch: this run pages, through Notification Center
+  [ "$(grep -c "PAGE: lr-reconciler" "$LR_RECON_ROOT/watchdog.log")" = 1 ]
+  grep -q "reconciler-watchdog" "$PLOG"
+  grep -q "heartbeat stale" "$PLOG"
+  tick $((T + 60))  # the posted page latched
+  [ "$(grep -c "PAGE: lr-reconciler" "$LR_RECON_ROOT/watchdog.log")" = 1 ]
+}
+
 @test "bash -n under /bin/bash (the launchd interpreter)" {
   run /bin/bash -n "$SUT"
   [ "$status" -eq 0 ]

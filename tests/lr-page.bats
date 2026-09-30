@@ -23,10 +23,17 @@ EOF
   cat >"$STUB/push-send.sh" <<'EOF'
 #!/bin/bash
 printf '%s\n' "$@" >"$BATS_TEST_TMPDIR/push.argv"
+printf '%s %s\n' "${PUSHOVER_TOKEN:-}" "${PUSHOVER_USER:-}" >"$BATS_TEST_TMPDIR/push.creds"
 exit "${PUSH_RC:-0}"
 EOF
   chmod +x "$STUB/osascript" "$STUB/push-send.sh"
   export LR_PAGE_OSASCRIPT_BIN="$STUB/osascript" LR_PAGE_PUSH_BIN="$STUB/push-send.sh"
+  export LR_PAGE_CREDS="$BATS_TEST_TMPDIR/pushover.env"
+}
+
+creds() { # $1=mode — a credentials file the way the operator would write it
+  printf 'export PUSHOVER_TOKEN="tok-from-file"\nPUSHOVER_USER=usr-from-file\n' >"$LR_PAGE_CREDS"
+  chmod "$1" "$LR_PAGE_CREDS"
 }
 
 @test "Notification Center posts: verdict=posted, phone skipped silently without credentials" {
@@ -137,4 +144,39 @@ EOF
   run /bin/bash "$PAGE" --title t "x"
   [ "$status" -eq 0 ]
   [ "$output" = "lr-page: verdict=posted os=posted phone=skipped" ]
+}
+
+@test "a launchd caller with no env reads the 0600 credentials file" {
+  creds 600
+  run bash "$PAGE" "held draft"
+  [ "$status" -eq 0 ]
+  [ "$output" = "lr-page: verdict=posted os=posted phone=sent" ]
+  [ "$(cat "$BATS_TEST_TMPDIR/push.creds")" = "tok-from-file usr-from-file" ]
+  # the caller's own environment is not modified by the read
+  run bash -c "source '$PAGE'; lr_page x >/dev/null; echo \"[\${PUSHOVER_TOKEN:-}]\""
+  [ "$output" = "[]" ]
+}
+
+@test "a group- or world-readable credentials file is refused, and the refusal is counted" {
+  for mode in 640 604; do
+    creds "$mode"
+    rm -f "$BATS_TEST_TMPDIR/push.argv"
+    run bash "$PAGE" "x"
+    [ "$status" -eq 0 ]
+    [ "${lines[0]}" = "lr-page: refusing $LR_PAGE_CREDS — mode $mode, it must be yours and 0600" ]
+    [ "${lines[1]}" = "lr-page: verdict=posted os=posted phone=refused" ]
+    [ ! -e "$BATS_TEST_TMPDIR/push.argv" ]
+  done
+  run bash "$PAGE" --failures
+  [ "$output" = "2" ]
+}
+
+@test "the environment wins over the file, and the file is never executed" {
+  printf 'touch "%s/pwned"\nPUSHOVER_TOKEN=f\nPUSHOVER_USER=f\n' "$BATS_TEST_TMPDIR" >"$LR_PAGE_CREDS"
+  chmod 600 "$LR_PAGE_CREDS"
+  run bash "$PAGE" "x"
+  [ "$output" = "lr-page: verdict=posted os=posted phone=sent" ]
+  [ ! -e "$BATS_TEST_TMPDIR/pwned" ]
+  PUSHOVER_TOKEN=e PUSHOVER_USER=e run bash "$PAGE" "x"
+  [ "$(cat "$BATS_TEST_TMPDIR/push.creds")" = "e e" ]
 }

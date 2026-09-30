@@ -29,6 +29,7 @@
 #             LR_RECON_PS.
 set -u
 
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LR_STATE_DIR="${LR_STATE_DIR:-$HOME/.reso/limit-recover}"
 ROOT="${LR_RECON_ROOT:-$LR_STATE_DIR/recon}"
 HB="$ROOT/heartbeat"
@@ -148,11 +149,17 @@ page() {  # $1=reason — latched once per PAGE_LATCH_S across every reason
   fi
   errline="$(tail -n 1 "$ERR" 2>/dev/null)"
   text="lr-reconciler: $1 — last stderr: ${errline:-<none>}"
+  # lr-page.sh, the liveness-free page (FLEET_V2 W6 D6.5). This used `cc-notify --page`, an option
+  # cc-notify never had: exit 2, discarded, and the latch set anyway, so no page ever reached anyone.
+  # Only a posted page latches; a failed one is logged and tried again on the next run.
   if [ -n "${LR_RECON_PAGE:-}" ]; then
     "$LR_RECON_PAGE" "$text" >/dev/null 2>&1
   else
-    "$HOME/.claude/bin/cc-notify" --page "$text" >/dev/null 2>&1
-  fi
+    /bin/bash "$HERE/lr-page.sh" --title reconciler-watchdog "$text" >/dev/null 2>&1
+  fi || {
+    log "PAGE FAILED (no channel took it): $text"
+    return 0
+  }
   LAST_PAGE="$NOW"
   log "PAGE: $text"
 }
