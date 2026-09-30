@@ -8391,8 +8391,12 @@ if [ "${1:-}" = "__recycle" ]; then
         # defaulted to "Move to background and exit", which still runs cleanupSessionTeams. Keyed on
         # the live-process test only (hf_team_live), so a lead whose team has finished is released; a
         # read that cannot tell also answers Stay, the one answer that loses nothing.
+        # An UNKNOWN subject (no pre-recycle sid resolved) names nobody to ask about, so it is not a
+        # lead; the probe and the last read already checked the members of the session they bound.
         rcy_team_rc=1
-        if [ "${HF_TEAM_HOLD:-on}" != off ]; then rcy_team_rc=0; hf_team_live "${RCY_OLD_SID:-}" || rcy_team_rc=$?; fi
+        if [ "${HF_TEAM_HOLD:-on}" != off ] && [ -n "${RCY_OLD_SID:-}" ]; then
+          rcy_team_rc=0; hf_team_live "$RCY_OLD_SID" || rcy_team_rc=$?
+        fi
         if [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" = cancel ] || [ "$rcy_team_rc" != 1 ] \
            || { [ -z "$bgk" ] && [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" != off ]; }; then
           hf_bounded "$IT2" session send -s "$RSID" $'\e' >/dev/null 2>&1 || true
