@@ -722,13 +722,19 @@ lf_charge_assign() { # $1=account → always 0; the stderr line IS the record wh
 # (LR_RANK_RETRY_WAIT_S, default 15). An empty answer after that still parks: a park is the fallback,
 # never a move without a routed target. Every attempt's rc and wall time go to <run>/rank.timing,
 # the evidence that says whether a park was the router's answer or the router's clock.
-lf_rank_timed() { # $1=kind $2=stderr file $3=run dir → the router's ranking on stdout (empty = none)
-  local kind="$1" err="$2" rdir="$3" w="${LR_RANK_WAIT_S:-3}" rw="${LR_RANK_RETRY_WAIT_S:-15}" out rc try t0 t1
+# THE SOURCE ACCOUNT RIDES WITH THE RANK (W6c, resolution 11): with `--src` the router refuses any
+# cached sweep taken before that account's latest reset — a pre-reset cache is what moved a cohort
+# 5 s after the 06:30Z reset — and says so with the same rc 3, which the retry above then answers
+# with a fresh sweep. Passed only for a name the account map declares: the router exits 64 on an
+# unknown one, and that would park a recovery over a spelling.
+lf_rank_timed() { # $1=kind $2=stderr file $3=run dir [$4=source account] → the router's ranking on stdout (empty = none)
+  local kind="$1" err="$2" rdir="$3" src="${4:-}" w="${LR_RANK_WAIT_S:-3}" rw="${LR_RANK_RETRY_WAIT_S:-15}" out rc try t0 t1 srcarg=""
+  if [ -n "$src" ] && command -v cc_acct_dir_for_name >/dev/null 2>&1 && cc_acct_dir_for_name "$src" >/dev/null 2>&1; then srcarg="$src"; fi
   case "$w" in ''|*[!0-9]*) w=3 ;; esac
   case "$rw" in ''|*[!0-9]*) rw=15 ;; esac
   for try in 1 2; do
     t0="$(/usr/bin/perl -MTime::HiRes=time -e 'printf "%d", time*1000' 2>/dev/null || echo 0)"
-    rc=0; out="$("$ACCOUNTS" --rank "$kind" --recovery --max-wait "$w" 2>>"$err")" || rc=$?
+    rc=0; out="$("$ACCOUNTS" --rank "$kind" --recovery --max-wait "$w" ${srcarg:+--src "$srcarg"} 2>>"$err")" || rc=$?
     t1="$(/usr/bin/perl -MTime::HiRes=time -e 'printf "%d", time*1000' 2>/dev/null || echo 0)"
     printf '%s kind=%s try=%s max_wait=%s rc=%s wall_ms=%s\n' "$(date -u +%FT%TZ)" "$kind" "$try" "$w" "$rc" "$(( t1 - t0 ))" \
       >> "$rdir/rank.timing" 2>/dev/null || true
@@ -790,7 +796,7 @@ lf_pick_target() { # $1=source account $2=tier $3=sid → 0 and LF_PICK_TARGET s
     lf_charge_assign "$cand"
     LF_PICK_TARGET="$cand"; return 0
   done <<EOF
-$(lf_rank_timed "$kind" "$rankerr" "$rdir")
+$(lf_rank_timed "$kind" "$rankerr" "$rdir" "$1")
 EOF
   # THE RANK IS ASKED IN THE RECOVERY LANE, AND THAT IS NOT A STYLE CHOICE (W6a). A recovery is not
   # a dispatch: a dispatch places a NEW unit that can be cut to fit the quota, a recovery
@@ -946,6 +952,7 @@ _lf_one_act() {
          if [ "$held" = HELD:draft ]; then
            lf_draft_snapshot "$sid" "$pane" "$rdir"
            note="$note; screen kept at ${LF_DRAFT_SNAP:-<not captured>}${LF_DRAFT_ROW:+; draft: $LF_DRAFT_ROW}"
+           lf_draft_page "$sid" "$pane" "$acct"
          fi
        else
          verdict="FAILED"; note="lr-handoff rc=6${cause:+; $cause}; see $rdir/$sid.stderr"
@@ -1102,6 +1109,22 @@ lf_nudge() { # $1=sid $2=holder cfg $3=source acct $4=pane → 0 engaged · 1 no
 # de-fainted draft row is lifted for the page. A read only — it types nothing, and a capture that
 # fails leaves the hold exactly as it was. Focus rides along from the probe's own `focused:` line so
 # the revisit counter can tell an unfocused pane from one the operator was typing in.
+# THE DRAFT REACHES A PERSON (D6.6). The verdict mail goes to the requester or `--role desk`, and
+# with no desk alive cc-notify rings nobody and the hold sits on disk. So a draft hold is ALSO posted
+# through scripts/limit-recover/lr-page.sh (liveness-free; the text rides as AppleScript ARGV, so a
+# quoted draft cannot become code). Damped to one page per sid per LR_DRAFT_PAGE_MIN (60): the poller
+# retries a held request every 10 min, and one unsent draft is one fact.
+lf_draft_page() { # $1=sid $2=pane $3=acct → always 0; the page's verdict line goes to stderr
+  local sid="$1" pane="$2" acct="$3" pg="" c mark="$STATE/draft-paged/$1"
+  for c in "${LF_PAGE_BIN:-}" "$LR/lr-page.sh" "$HOME/.claude/scripts/limit-recover/lr-page.sh"; do
+    [ -n "$c" ] && [ -f "$c" ] && { pg="$c"; break; }
+  done
+  [ -n "$pg" ] || { echo "lr-fleet: lr-page.sh unreachable — the draft hold on pane $pane was not paged" >&2; return 0; }
+  [ -n "$(find "$mark" -mmin -"${LR_DRAFT_PAGE_MIN:-60}" 2>/dev/null)" ] && return 0
+  mkdir -p "${mark%/*}" 2>/dev/null; : > "$mark" 2>/dev/null || true
+  /bin/bash "$pg" --title "unsent draft" -- "Pane ${pane:-?} holds an unsent draft, so session ${sid:0:8} ($acct) was not moved off its limit${LF_DRAFT_ROW:+: \"$LF_DRAFT_ROW\"}. Send or clear it; the recovery retries.${LF_DRAFT_SNAP:+ Screen: $LF_DRAFT_SNAP}" >&2 || true
+  return 0
+}
 LF_DRAFT_SNAP=""; LF_DRAFT_ROW=""
 lf_draft_snapshot() { # $1=sid $2=pane $3=run dir → sets LF_DRAFT_SNAP / LF_DRAFT_ROW; always 0
   local sid="$1" pane="$2" rdir="$3" lcs="" c foc

@@ -1970,3 +1970,29 @@ held_run() { # $1 = the HELD token lr-handoff prints (empty = none); $2 = focus
   local r; r="$(cat "$(cat "$LR_STATE_DIR/fleet/last")/results.tsv")"
   [[ "$r" == *"screen kept at /snaps/win616.ansi; draft: half a reply, café"* ]] || { echo "$r"; false; }
 }
+
+# ── W6c resolution 11 via lr-fleet: the source account rides with the rank as --src ────────────────
+@test "[R11] the recovery rank carries --src <source> for an account the map declares" {
+  rank_expiry_stub 0
+  run _pick next2 claude-opus-5 "$SID"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -q -- '--rank general --recovery --max-wait 3 --src next2' "$ACC_LOG" || { cat "$ACC_LOG"; false; }
+}
+
+@test "R11 CONTROL: a source name the map does not declare is not passed (the router exits 64 on one)" {
+  rank_expiry_stub 0
+  run _pick nosuchacct claude-opus-5 "$SID"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -qx -- '--rank general --recovery --max-wait 3' "$ACC_LOG" || { cat "$ACC_LOG"; false; }
+}
+
+@test "[D6.6] a HELD:draft is PAGED through lr-page.sh — once per sid per hour, the draft quoted" {
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"; held_notify_stub
+  export LF_PAGE_BIN="$BATS_TEST_TMPDIR/lr-page" PAGE_LOG="$BATS_TEST_TMPDIR/page.log"; : > "$PAGE_LOG"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$PAGE_LOG"\necho "lr-page: verdict=posted os=posted phone=skipped"\n' > "$LF_PAGE_BIN"; chmod +x "$LF_PAGE_BIN"
+  held_run HELD:draft 0
+  grep -q -- '--title unsent draft -- Pane 616 holds an unsent draft, so session 52e35019' "$PAGE_LOG" || { cat "$PAGE_LOG"; false; }
+  grep -q 'half a reply, café' "$PAGE_LOG" || { cat "$PAGE_LOG"; false; }
+  held_run HELD:draft 0
+  [ "$(grep -c 'unsent draft' "$PAGE_LOG")" = 1 ] || { cat "$PAGE_LOG"; false; }
+}
