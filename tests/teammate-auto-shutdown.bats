@@ -976,6 +976,30 @@ EOF
   [ "$(grep -c 'cc-notify' "$D/notify-calls.log")" -eq 1 ]
 }
 
+# ══ A REFUSED CLOSE OVER A PANE ANOTHER RUN ALREADY CLOSED (2026-09-30) ═══════════════════════════
+# Panes 447, 613 and 767 each logged `pane close FAILED (rc=67)` and `✓ closed pane` in the same
+# second: two runs of this hook raced, the loser's composer read landed on a vanishing window. The
+# failure arm paged "still standing" over a gone pane and deleted the winner's teardown marker.
+
+@test "a refused close (rc 67) over a VERIFIED-absent pane is 'already gone': no page, marker kept" {
+  _cik 0; _it2_says "SOME-OTHER-PANE" 67      # enumerator readable, our pane genuinely gone
+  _close_run PANE-Z
+  wait_for "$D/it2-calls.log"
+  grep -q "PANE-Z (.*) already gone (refused rc=67" "$LOGF"
+  run grep -c "pane close FAILED" "$LOGF"
+  [ "$output" -eq 0 ]
+  [ ! -e "$D/notify-calls.log" ]
+  [ -e "$HOME/.claude/watchdog/teardown/PANE-Z.json" ]
+}
+
+@test "CONTROL: a refused close over an UNREADABLE enumerator stays a failure and pages" {
+  _cik 0; _it2_says "" 67                      # empty enumeration = cannot tell, never 'gone'
+  _close_run PANE-Z
+  wait_for "$D/it2-calls.log"
+  grep -q "pane close FAILED (rc=67)" "$LOGF"
+  grep -q "could NOT be closed" "$D/notify-calls.log"
+}
+
 @test "a close that LIED (rc=0, pane survives) PAGES the desk — the worse of the two silences" {
   _cik 0; _it2_says "PANE-Z" 0                # enumerator still lists it after a 'successful' close
   _close_run PANE-Z

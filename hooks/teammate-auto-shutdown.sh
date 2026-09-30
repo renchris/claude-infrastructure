@@ -343,7 +343,7 @@ close_and_log() {
   write_teardown_marker "$pane" "${SESSION_ID:-}" teammate-idle
   close_pane "$pane" "$who"
   local rc=$?
-  local err="${CLOSE_ERR//$'\n'/ ; }"
+  local err="${CLOSE_ERR//$'\n'/ ; }" _tas_pp=0
   # ── 66 = IDENTITY PIN UNSATISFIED OR UNVERIFIABLE (bin/it2-kitty) ─────────────────────────────
   # Handled ahead of every other outcome because it is the one rc that means "I did NOT act". The
   # generic failure arm below would also refuse to log a ✓, but it would file this under "close
@@ -388,6 +388,16 @@ close_and_log() {
     fi
   elif [[ "$err" == *"not found"* || "$err" == *"find pane"* ]]; then
     log "  ~ pane $pane ($who) already gone (${err:-not found})"
+  elif pane_present "$pane" || _tas_pp=$?; (( _tas_pp == 1 )); then
+    # ── A REFUSAL OVER A PANE THAT IS NOW VERIFIABLY ABSENT: A CONCURRENT CLOSE WON (2026-09-30) ──
+    # Two runs of this hook can fire for one member. The winner closes the pane; the loser's
+    # composer read lands on a window that is going away, reads UNKNOWN, and returns rc 67. The arm
+    # below then paged "still standing — close it manually" over a pane that was gone, AND deleted
+    # the winner's teardown marker (same pane key), so lead-crash-watchdog would read the intended
+    # teardown as a crash. Measured: 3 of the 4 rc-67 incidents in the week after W2 (panes 447,
+    # 613, 767; each logged `✓ closed pane` in the same second as its rc 67). Only a POSITIVE
+    # absence (pane_present rc 1) takes this arm; an unreadable enumerator (rc 2) stays a failure.
+    log "  ~ pane $pane ($who) already gone (refused rc=$rc, then verified absent — a concurrent close won)"
   else
     # ── A FAILED CLOSE MUST PAGE — it is the one refusal class that REACHED the actuator ─────────
     # Every other refusal path in this file already pages (_page_desk_damped at :489, :945, :985,
