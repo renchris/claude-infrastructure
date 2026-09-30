@@ -747,7 +747,172 @@ def _kwork_unmeasured(budget_s, scanned):
     return None
 
 
-def working_concurrency(cfg, window_min=None, budget_s=None):
+# ---- WHAT "WORKING" MEANS (FLEET_V2 W6 D1.8) -----------------------------------------------------
+# The walk used to call a transcript working when its MTIME fell inside the window. That counts
+# THROUGHPUT, and on 2026-09-29 06:16:09Z it logged next=14 and next4=11 against KMAX 8 while the
+# sessions actually in flight were ~3-5 and ~2 — mostly SUBAGENT files a finished agent had written
+# minutes earlier (bound_kwork caps only the top-level term, so nothing capped them). Three rules:
+#   1. A file is working from its LAST TIMESTAMPED USER OR ASSISTANT RECORD, not its mtime: hook
+#      attachments, summaries and queue bookkeeping touch the file without a turn happening.
+#   2. A session whose last turn record is an assistant tool_use is WAITING ON A TOOL and counts as
+#      working however long the tool runs — up to KWORK_TOOLWAIT_MIN, which bounds a corpse killed
+#      mid-tool (the top-level term is also capped at live processes by bound_kwork).
+#   3. A SUBAGENT counts only while UNFINISHED. Finished = its final answer is written (last turn
+#      record an assistant with no tool_use), OR its workflow run journal holds a `result`/`failed`
+#      row for its agentId (a workflow agent ends ON a tool call, so rule 2 alone would hold it live
+#      for the whole horizon), OR its parent recorded a task-notification for it at/after its last
+#      record. The last two are the same serializer-only bare-key matches handoff-fire.sh's
+#      live_subagents_of uses (memory: bare-json-key-is-unforgeable-by-content,
+#      workflow-agent-settles-only-in-its-run-journal).
+# A file with no parseable turn record at all is judged by the OLD mtime rule: no record to judge by
+# is not evidence of idleness. Every record-reading helper takes `now` and ignores records after it,
+# which is a no-op live and is what makes the census REPLAYABLE at a past instant (kmax-rebase.md).
+# Kill switch: CC_ROUTE_KWORK_TURNS=off restores the mtime-only census.
+KWORK_TOOLWAIT_MIN = 30.0
+KWORK_TAIL_BYTES = (64 * 1024, 1024 * 1024)     # tail read, then one wider retry
+_RE_TS = re.compile(rb'"timestamp":"([0-9][0-9:.TZ+-]*)"')
+_RE_NOTIF = re.compile(rb'"(?:content|prompt)":"<task-notification>\\n<task-id>([A-Za-z0-9_-]+)</task-id>')
+
+
+def _iso_epoch(s):
+    if isinstance(s, bytes):
+        s = s.decode("ascii", "replace")
+    try:
+        t = datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
+    return t.timestamp()
+
+
+def _tail_lines(path, size, nbytes):
+    """Complete lines of the last `nbytes` of the file, newest first, and whether the read reached
+    the start of the file."""
+    with open(path, "rb") as f:
+        off = max(0, size - nbytes)
+        f.seek(off)
+        data = f.read(nbytes)
+    lines = data.split(b"\n")
+    if off > 0:
+        lines = lines[1:]                           # the first piece is a partial line
+    return lines[::-1], off == 0
+
+
+def _turn_state(lines, now=None):
+    """(ts, waiting_on_tool, answered) of the newest user/assistant record in `lines` (newest
+    first) whose timestamp is not after `now`, or None when there is none. `answered` = an
+    assistant record with no tool_use block: the turn is over (a subagent's final answer, or a
+    top-level session back at its prompt). A user record means the model owes a reply."""
+    for ln in lines:
+        if b'"type":"assistant"' not in ln and b'"type":"user"' not in ln:
+            continue
+        try:
+            rec = json.loads(ln)
+        except ValueError:
+            continue                                # a line still being written
+        if not isinstance(rec, dict) or rec.get("type") not in ("user", "assistant"):
+            continue
+        ts = _iso_epoch(rec.get("timestamp"))
+        if now is not None and ts is not None and ts > now:
+            continue
+        if rec["type"] == "user":
+            return ts, False, False
+        content = (rec.get("message") or {}).get("content")
+        tool = isinstance(content, list) and any(
+            isinstance(b, dict) and b.get("type") == "tool_use" for b in content)
+        return ts, tool, not tool
+    return None
+
+
+def _last_turn(path, size, now=None):
+    for nbytes in KWORK_TAIL_BYTES:
+        lines, whole = _tail_lines(path, size, nbytes)
+        st = _turn_state(lines, now)
+        if st is not None or whole:
+            return st
+    return None
+
+
+def _session_settled(sdir, now=None):
+    """Agent ids under session dir `sdir` that the harness has recorded as ended:
+    {id: ts_or_0}. Workflow journals (`result`/`failed` rows, keyed by bare agentId) settle
+    unconditionally (ts 0); a parent task-notification settles an agent whose last record is not
+    after it. Records after `now` are ignored."""
+    out = {}
+    wroot = os.path.join(sdir, "subagents", "workflows")
+    try:
+        runs = list(os.scandir(wroot))
+    except OSError:
+        runs = []
+    for run in runs:
+        try:
+            with open(os.path.join(run.path, "journal.jsonl"), "rb") as f:
+                for ln in f:
+                    if b'"type":"result"' not in ln and b'"type":"failed"' not in ln:
+                        continue
+                    m = re.search(rb'"agentId":"([A-Za-z0-9_-]+)"', ln)
+                    if not m:
+                        continue
+                    t = _RE_TS.search(ln)
+                    ts = _iso_epoch(t.group(1)) if t else None
+                    if now is not None and ts is not None and ts > now:
+                        continue
+                    out[m.group(1).decode()] = 0.0
+        except OSError:
+            continue
+    parent = sdir + ".jsonl"
+    try:
+        size = os.path.getsize(parent)
+        lines, _whole = _tail_lines(parent, size, KWORK_TAIL_BYTES[-1])
+    except OSError:
+        lines = []
+    for ln in lines:
+        if (b'"origin":{"kind":"task-notification"}' not in ln
+                and b'"type":"queue-operation"' not in ln and b'"type":"queued_command"' not in ln):
+            continue
+        m = _RE_NOTIF.search(ln)
+        if not m:
+            continue
+        t = _RE_TS.search(ln)
+        ts = _iso_epoch(t.group(1)) if t else None
+        if ts is None or (now is not None and ts > now):
+            continue
+        aid = m.group(1).decode()
+        if out.get(aid) != 0.0:
+            out[aid] = max(out.get(aid) or 0.0, ts)
+    return out
+
+
+def _file_working(path, mtime, size, now, window_s, sub=False, settled=None, turns=True):
+    """THE predicate (see the block above). `settled` is a thunk returning _session_settled for
+    this file's session, called only when a subagent is otherwise live."""
+    age = now - mtime
+    if not turns:
+        return age <= window_s
+    horizon_s = max(window_s, 60.0 * _cliff_env("CC_ROUTE_KWORK_TOOLWAIT_MIN", KWORK_TOOLWAIT_MIN))
+    if age > horizon_s:
+        return False
+    st = _last_turn(path, size, now)
+    if st is None:
+        return age <= window_s                      # no record to judge by: the old rule
+    ts, waiting, answered = st
+    if sub and answered:
+        return False
+    if ts is None:
+        live = waiting or age <= window_s
+    else:
+        live = now - ts <= (horizon_s if waiting else window_s)
+    if not live or not sub or settled is None:
+        return live
+    aid = os.path.basename(path)[len("agent-"):-len(".jsonl")]
+    stop = settled().get(aid)
+    if stop is None:
+        return True
+    return not (stop == 0.0 or ts is None or ts <= stop)
+
+
+def working_concurrency(cfg, window_min=None, budget_s=None, now=None):
     """WORKING sessions per account: transcripts (projects/<slug>/*.jsonl) written within the
     window. concurrency() above counts every live interactive PROCESS — measured 28 on an
     account whose 5h window sat at 60%, i.e. mostly idle desks — so it over-states burn
@@ -803,7 +968,9 @@ def working_concurrency(cfg, window_min=None, budget_s=None):
         budget_s = _cliff_env("CC_ROUTE_KWORK_BUDGET_S",
                               R.get("KWORK_BUDGET_S", KWORK_BUDGET_S))
     deadline = time.monotonic() + budget_s
-    now = time.time()
+    now = time.time() if now is None else now
+    turns = _term_on("CC_ROUTE_KWORK_TURNS")
+    settled_by_sdir = {}
     scanned = 0
     counts = {a["name"]: 0 for a in cfg["accounts"]}
     top = {a["name"]: 0 for a in cfg["accounts"]}
@@ -858,10 +1025,23 @@ def working_concurrency(cfg, window_min=None, budget_s=None):
                             # the KMAX exclusion.
                             if wroot != slug.path and not fname.startswith("agent-"):
                                 continue
+                            fpath = os.path.join(wroot, fname)
+                            sub = wroot != slug.path
+                            settled = None
+                            if sub:
+                                sdir = os.path.join(slug.path, os.path.relpath(
+                                    wroot, slug.path).split(os.sep)[0])
+
+                                def settled(_d=sdir):
+                                    if _d not in settled_by_sdir:
+                                        settled_by_sdir[_d] = _session_settled(_d, now)
+                                    return settled_by_sdir[_d]
                             try:
-                                if now - os.lstat(os.path.join(wroot, fname)).st_mtime <= window_s:
+                                st = os.lstat(fpath)
+                                if _file_working(fpath, st.st_mtime, st.st_size, now, window_s,
+                                                 sub=sub, settled=settled, turns=turns):
                                     counts[name] += 1
-                                    if wroot == slug.path:
+                                    if not sub:
                                         top[name] += 1
                                         sids[name].add(fname[:-len(".jsonl")])
                             except OSError:

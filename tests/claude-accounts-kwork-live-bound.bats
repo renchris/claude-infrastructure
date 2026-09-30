@@ -99,3 +99,113 @@ assert c.headless == {"a": 2}, c.headless
 print("ok")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
+
+# ---- WHAT "WORKING" MEANS (FLEET_V2 W6 D1.8) ---------------------------------------------------
+# 2026-09-29 06:16:09Z logged k_work next=14 / next4=11 against KMAX 8 while ~3-5 / ~2 sessions
+# were in flight: the mtime census counted every subagent file a FINISHED agent had written in the
+# last 10 min, and bound_kwork caps only the top-level term. Replayed on the same transcripts the
+# new rule reads 3 and 7 (docs/research/lr-fleet-v2-decisions-2026-09-30/kmax-rebase.md). Each case
+# below FAILS on the pre-fix tree, where every fresh file counts.
+
+_kw() {
+  # the leading blank line survives $( ) and separates this from _pre's last line
+  cat <<'PY'
+
+import json, os, time
+from datetime import datetime, timezone
+NOW = time.time()
+def iso(t): return datetime.fromtimestamp(t, timezone.utc).isoformat().replace("+00:00", "Z")
+BASE = os.path.join(os.environ["BATS_TEST_TMPDIR"], "cfg")
+SLUG = os.path.join(BASE, "projects", "slug")
+os.makedirs(SLUG, exist_ok=True)
+CFG = {"accounts": [{"name": "a", "config_dir": BASE}]}
+def user(ago, text="go"):
+    return {"type": "user", "timestamp": iso(NOW - ago), "message": {"role": "user", "content": text}}
+def said(ago, text="done"):
+    return {"type": "assistant", "timestamp": iso(NOW - ago),
+            "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}}
+def tool(ago):
+    return {"type": "assistant", "timestamp": iso(NOW - ago),
+            "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": "Bash", "input": {}}]}}
+def attach(ago):
+    return {"type": "attachment", "timestamp": iso(NOW - ago), "attachment": {"k": 1}}
+def write(path, recs, mtime_ago=0):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        for r in recs: f.write(json.dumps(r, separators=(",", ":")) + "\n")
+    os.utime(path, (NOW - mtime_ago, NOW - mtime_ago))
+def sub(sid, aid, recs, wf=None, **kw):
+    d = os.path.join(SLUG, sid, "subagents") if wf is None else os.path.join(SLUG, sid, "subagents", "workflows", wf)
+    write(os.path.join(d, f"agent-{aid}.jsonl"), recs, **kw)
+def census(**kw):
+    c = ca.working_concurrency(CFG, window_min=10, budget_s=30.0, **kw)
+    return c["a"], c.top["a"]
+PY
+}
+
+@test "D1.8: a subagent that has written its final answer no longer counts; one mid-work does" {
+  run python3 -c "$(_pre)$(_kw)"'
+write(os.path.join(SLUG, "s1.jsonl"), [user(60), tool(30)])            # parent, waiting on Agent
+sub("s1", "done1", [user(300), tool(200), user(190), said(120)])      # finished 2 min ago
+sub("s1", "busy1", [user(300), tool(100), user(90)])                  # the model owes a reply
+sub("s1", "tool1", [user(300), tool(20)])                             # waiting on its own tool
+sub("s1", "big1", [user(300), said(100, "x" * 100000)])               # final answer > the 64 KiB first read
+assert census() == (3, 1), census()
+os.environ["CC_ROUTE_KWORK_TURNS"] = "off"                            # the old mtime census
+assert census() == (5, 1), census()
+print("ok")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "D1.8: a workflow agent ending on its tool call is settled only by its run journal" {
+  run python3 -c "$(_pre)$(_kw)"'
+write(os.path.join(SLUG, "s2.jsonl"), [user(60), said(50)])
+sub("s2", "wfa", [user(300), tool(40)], wf="wf_1")
+sub("s2", "wfb", [user(300), tool(40)], wf="wf_1")
+jr = os.path.join(SLUG, "s2", "subagents", "workflows", "wf_1", "journal.jsonl")
+with open(jr, "w") as f:
+    f.write(json.dumps({"type": "started", "agentId": "wfa", "timestamp": iso(NOW - 300)}, separators=(",", ":")) + "\n")
+    f.write(json.dumps({"type": "result", "agentId": "wfa", "timestamp": iso(NOW - 35),
+                        "result": "{\"agentId\":\"wfb\",\"type\":\"result\"}"}, separators=(",", ":")) + "\n")
+# wfa has a bare result row; wfb appears only INSIDE an escaped payload, which must not settle it.
+assert census() == (2, 1), census()
+print("ok")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "D1.8: a parent task-notification settles its agent, unless the agent wrote after it" {
+  run python3 -c "$(_pre)$(_kw)"'
+note = lambda aid, ago: {"type": "queue-operation", "timestamp": iso(NOW - ago),
+                         "content": "<task-notification>\n<task-id>" + aid + "</task-id>\n<status>killed</status>"}
+write(os.path.join(SLUG, "s3.jsonl"), [user(200), said(190), note("killed1", 60), note("resumed1", 60)])
+sub("s3", "killed1", [user(300), tool(70)])                            # killed mid-tool, notified after
+sub("s3", "resumed1", [user(300), tool(70), user(30)])                 # wrote AFTER the notification
+assert census() == (2, 1), census()
+print("ok")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "D1.8: top level is judged by its last turn record, and a tool wait counts up to the horizon" {
+  run python3 -c "$(_pre)$(_kw)"'
+write(os.path.join(SLUG, "idle.jsonl"), [user(1900), said(1800), attach(5)])      # hook touched it
+write(os.path.join(SLUG, "wait20.jsonl"), [user(1300), tool(1200)], mtime_ago=1200)  # 20-min tool
+write(os.path.join(SLUG, "wait40.jsonl"), [user(2500), tool(2400)], mtime_ago=100)   # past horizon
+write(os.path.join(SLUG, "empty.jsonl"), [])                                         # nothing to judge
+assert census() == (2, 2), census()        # wait20 + empty (old mtime rule)
+os.environ["CC_ROUTE_KWORK_TOOLWAIT_MIN"] = "15"
+assert census() == (1, 1), census()
+print("ok")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "D1.8: the census replays at a past instant — records after now= are ignored" {
+  run python3 -c "$(_pre)$(_kw)"'
+write(os.path.join(SLUG, "s5.jsonl"), [user(3000), tool(900)])         # parent mid-tool at NOW-850
+sub("s5", "later", [user(900), said(800), user(100), tool(60)])
+# at NOW-850 the agent was mid-turn (its answer came at NOW-800); at NOW it is waiting on a tool
+assert census(now=NOW - 850) == (2, 1), census(now=NOW - 850)
+C = lambda r: json.dumps(r, separators=(",", ":")).encode()      # the serializer compact form
+assert ca._turn_state([C(said(800)), C(user(900))], NOW - 850)[2] is False
+print("ok")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
