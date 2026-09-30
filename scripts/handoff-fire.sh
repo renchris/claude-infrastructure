@@ -2522,13 +2522,30 @@ hf_bg_work_kind() { # $1=pid → "<none|watcher|work|unknown> shipland=<yes|no> 
 }
 
 # The probe's use of it. ONLY AT REST is a job census meaningful: mid-turn, the turn's own
-# foreground Bash call is a shell-snapshots child too, and would read as WORK. A limited pane is at
-# rest by construction (the API refused its turn); a voluntary one must prove it from the
-# transcript, and one that cannot is HELD rather than guessed at. No registry pid ⇒ unknown and
-# proceed: the recycle's Esc backstop still guards the /exit. Prints the one `bg_work:` line.
+# foreground Bash call is a shell-snapshots child too, and would read as WORK. A voluntary pane must
+# prove it from the transcript, and one that cannot is HELD rather than guessed at. No registry pid
+# ⇒ unknown and proceed: the recycle's Esc backstop still guards the /exit. Prints the one
+# `bg_work:` line.
+# A LIMITED PANE IS NOT AT REST BY CONSTRUCTION (FLEET_V2 W6, D1.2 / lead resolution 10). This
+# branch used to say it was, because the API refused its turn. But a prompt typed AFTER the limit is
+# invisible to the limit read (lr_last_api_error reads assistant records only) until its reply lands
+# 3.5-4.0 s later — measured 2026-09-29 on 84f3533b and a87593c9, both with a live driver moving
+# them. hf_transcript_at_rest counts a trailing api-error as at rest and a user prompt after it as
+# in flight, so it is the mutual exclusion between a driver and a human /limit-recover: a session
+# mid-turn is HELD:busy here, and one whose human turn finished is refused as not-limited upstream.
+# It runs BEFORE the pid test, so a pane with no registry pid is still held while its turn runs.
 hf_bg_work_gate() { # $1=registry pid $2=1 when limited $3=transcript → rc 0 proceed · 3 hold (verdict in HF_BG_HOLD)
   local pid="${1:-}" limited="${2:-0}" tx="${3:-}" rest=0 kind
   HF_BG_HOLD=""
+  if [ "$limited" = 1 ]; then
+    hf_transcript_at_rest "$tx" || rest=$?
+    if [ "$rest" != 0 ]; then
+      if [ "$rest" = 1 ]; then echo "bg_work: unknown (limited, but a turn is in flight after the limit)"
+      else echo "bg_work: unknown (limited, but the transcript is unreadable — at rest cannot be shown)"; fi
+      HF_BG_HOLD="HELD:busy"
+      return 3
+    fi
+  fi
   case "$pid" in ''|*[!0-9]*) echo "bg_work: unknown (no registry pid)"; return 0 ;; esac
   if [ "$limited" != 1 ]; then
     hf_transcript_at_rest "$tx" || rest=$?
@@ -2916,9 +2933,17 @@ hf_recycle_last_read() { # → 0 every read clean · 1 refused (HF_LR_REASON, HF
       HF_LR_REASON="limit-cleared"; HF_LR_WHAT="lr-lib unreachable — the limit cannot be re-read"; return 1
     fi
     kind="$(lr_last_api_error "${tx_read:-$tx}" 2>/dev/null | cut -f3)"
-    [ -n "$joined" ] && rm -f "$joined"
     if [ "$kind" != limit ]; then
+      [ -n "$joined" ] && rm -f "$joined"
       HF_LR_REASON="limit-cleared"; HF_LR_WHAT="last record is ${kind:-not an api error} ($tx)"; return 1
+    fi
+    # STILL LIMITED IS NOT AT REST (D1.2): a prompt typed after the limit is a turn in flight that the
+    # limit read cannot see until its reply lands. The joined file stays until the bg-work gate below,
+    # which re-reads it.
+    rc=0; hf_transcript_at_rest "${tx_read:-$tx}" || rc=$?
+    if [ "$rc" != 0 ]; then
+      [ -n "$joined" ] && rm -f "$joined"
+      HF_LR_REASON=busy; HF_LR_WHAT="limited, but not at rest (rc $rc — 1 a prompt after the limit is in flight, 2 unreadable): ${tx:-<none>}"; return 1
     fi
   else
     rc=0; hf_transcript_at_rest "${tx_read:-$tx}" || rc=$?

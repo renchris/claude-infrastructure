@@ -206,6 +206,15 @@ load_bg_funcs() {
 # snap <file> <line>… — a ps snapshot in the probe's own `pid ppid lstart(5) args` shape.
 snap() { local f="$1"; shift; printf '%s\n' "$@" > "$f"; }
 L="Tue Sep 29 10:00:00 2026"
+# ltx <file> [prompt] — a LIMITED transcript: a turn, then the API's limit record; with a second
+# argument, a user prompt typed AFTER the limit and not yet answered (D1.2: a turn in flight).
+LIMIT_REC='{"type":"assistant","timestamp":"2026-09-29T06:30:57.000Z","isApiErrorMessage":true,"message":{"role":"assistant","stop_reason":"stop_sequence","content":[{"type":"text","text":"You'"'"'ve hit your session limit · resets 7:50am"}]}}'
+ltx() {
+  printf '%s\n' '{"type":"user","timestamp":"2026-09-29T06:30:50.000Z","message":{"role":"user","content":"go"}}' "$LIMIT_REC" > "$1"
+  if [ -n "${2:-}" ]; then
+    printf '{"type":"user","timestamp":"2026-09-29T06:31:00.603Z","message":{"role":"user","content":"%s"}}\n' "$2" >> "$1"
+  fi
+}
 
 @test "2 a ship-land under a Bash-tool job HOLDS; the idle inbox watcher does not" {
   load_bg_funcs
@@ -216,9 +225,10 @@ L="Tue Sep 29 10:00:00 2026"
     "5101 5100 $L bash scripts/ship-wrapper" \
     "5102 5101 $L bash scripts/ship-land.sh --lock"
   export HF_PS_SNAPSHOT="$S"
+  local LT="$BATS_TEST_TMPDIR/limited.jsonl"; ltx "$LT"
   run hf_bg_work_kind 5000
   [ "$output" = "work shipland=yes pids=5100" ] || { echo "$output"; false; }
-  rc=0; hf_bg_work_gate 5000 1 "" > "$BATS_TEST_TMPDIR/gate.out" || rc=$?
+  rc=0; hf_bg_work_gate 5000 1 "$LT" > "$BATS_TEST_TMPDIR/gate.out" || rc=$?
   [ "$rc" = 3 ] || { cat "$BATS_TEST_TMPDIR/gate.out"; echo "rc=$rc hold=$HF_BG_HOLD"; false; }
   [ "$HF_BG_HOLD" = "HELD:bg-work:ship-land" ] || { cat "$BATS_TEST_TMPDIR/gate.out"; echo "rc=$rc hold=$HF_BG_HOLD"; false; }
   grep -qx 'bg_work: work shipland=yes pids=5100' "$BATS_TEST_TMPDIR/gate.out"
@@ -228,7 +238,7 @@ L="Tue Sep 29 10:00:00 2026"
     "5200 5000 $L /bin/zsh -c source \$HOME/.claude/shell-snapshots/snapshot-zsh-x.sh && eval '\$HOME/.claude/bin/cc-await-ping --timeout 3300'" \
     "5201 5200 $L /bin/bash \$HOME/.claude/bin/cc-await-ping --timeout 3300" \
     "5202 5200 $L tail -n 5"
-  rc=0; hf_bg_work_gate 5000 1 "" > "$BATS_TEST_TMPDIR/gate.out" || rc=$?
+  rc=0; hf_bg_work_gate 5000 1 "$LT" > "$BATS_TEST_TMPDIR/gate.out" || rc=$?
   [ "$rc" = 0 ] || { cat "$BATS_TEST_TMPDIR/gate.out"; echo "rc=$rc"; false; }
   [ -z "$HF_BG_HOLD" ] || { cat "$BATS_TEST_TMPDIR/gate.out"; echo "rc=$rc"; false; }
   grep -qx 'bg_work: watcher shipland=no pids=5200' "$BATS_TEST_TMPDIR/gate.out"
@@ -244,8 +254,34 @@ L="Tue Sep 29 10:00:00 2026"
   grep -qx 'bg_work: unknown (turn in flight)' "$BATS_TEST_TMPDIR/gate.out"
 
   # No registry pid: unknown, and the probe proceeds.
-  rc=0; hf_bg_work_gate "" 1 "" > "$BATS_TEST_TMPDIR/gate.out" || rc=$?
-  [ "$rc" = 0 ] && grep -qx 'bg_work: unknown (no registry pid)' "$BATS_TEST_TMPDIR/gate.out"
+  rc=0; hf_bg_work_gate "" 1 "$LT" > "$BATS_TEST_TMPDIR/gate.out" || rc=$?
+  [ "$rc" = 0 ] || { cat "$BATS_TEST_TMPDIR/gate.out"; false; }
+  grep -qx 'bg_work: unknown (no registry pid)' "$BATS_TEST_TMPDIR/gate.out"
+}
+
+# D1.2 (FLEET_V2 W6, lead resolution 10). Mutant: restore the old `limited ⇒ at rest by
+# construction` (drop the limited block) — both halves go green-to-red.
+@test "2b a LIMITED pane with a prompt typed after the limit is HELD:busy, pid or no pid; a bare limit is at rest" {
+  load_bg_funcs
+  local LT="$BATS_TEST_TMPDIR/limited.jsonl" rc p
+  export HF_PS_SNAPSHOT="$BATS_TEST_TMPDIR/ps.txt"
+  snap "$HF_PS_SNAPSHOT" "5000 4000 $L claude --resume x"
+  ltx "$LT" "are you there?"
+  for p in 5000 ""; do
+    rc=0; hf_bg_work_gate "$p" 1 "$LT" > "$BATS_TEST_TMPDIR/gate.out" || rc=$?
+    [ "$rc" = 3 ] || { echo "pid=[$p] rc=$rc"; cat "$BATS_TEST_TMPDIR/gate.out"; false; }
+    [ "$HF_BG_HOLD" = HELD:busy ] || { echo "pid=[$p] hold=$HF_BG_HOLD"; false; }
+    grep -q 'limited, but a turn is in flight after the limit' "$BATS_TEST_TMPDIR/gate.out"
+  done
+  # An unreadable transcript cannot show at rest either.
+  rc=0; hf_bg_work_gate 5000 1 "$BATS_TEST_TMPDIR/absent.jsonl" > "$BATS_TEST_TMPDIR/gate.out" || rc=$?
+  [ "$rc" = 3 ] || { cat "$BATS_TEST_TMPDIR/gate.out"; false; }
+  [ "$HF_BG_HOLD" = HELD:busy ] || { echo "hold=$HF_BG_HOLD"; false; }
+  # The limit record alone is where the turn ended: at rest, and the census runs.
+  ltx "$LT"
+  rc=0; hf_bg_work_gate 5000 1 "$LT" > "$BATS_TEST_TMPDIR/gate.out" || rc=$?
+  [ "$rc" = 0 ] || { cat "$BATS_TEST_TMPDIR/gate.out"; false; }
+  grep -qx 'bg_work: none shipland=no pids=-' "$BATS_TEST_TMPDIR/gate.out"
 }
 
 # ── 3 · WORKFLOW AGENTS ────────────────────────────────────────────────────────────────────────
@@ -875,6 +911,26 @@ drive_watcher_locked() {
   hf_recycle_lock_write "$HF_RECYCLE_LOCK" watcher "$wp"
   status=0; wait "$wp" || status=$?
   output="$(cat "$W/watcher.out")"; elapsed=$((SECONDS - t0))
+}
+
+# D1.2(b). Mutant: drop the at-rest read in hf_recycle_last_read's limited branch — the /exit goes in
+# over the operator's in-flight prompt.
+@test "14c a LIMITED source whose operator typed after the limit is held busy at the last read: unconfirm, no /exit" {
+  tail_world
+  ltx "$TX" "are you there?"
+  printf '%s\n' "" "/exit" > "$READS"
+  run recycle_fire_commit "$SESS"
+  [ "$status" -eq 1 ] || { echo "status=$status $output"; cat "$CALLS"; false; }
+  ! grep -q '^send' "$CALLS" || { cat "$CALLS"; false; }
+  grep -q '^transplant --phase unconfirm ' "$CALLS" || { cat "$CALLS"; false; }
+  rows_of recycle-held-busy | grep -q 'unconfirm rc 0' || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
+  [[ "$output" == *"held: busy"* ]] || { echo "$output"; false; }
+  # The limit alone, with no prompt after it, still moves.
+  tail_world
+  ltx "$TX"
+  printf '%s\n' "" "/exit" > "$READS"
+  run recycle_fire_commit "$SESS"
+  [ "$status" -eq 0 ] || { echo "status=$status $output"; cat "$CALLS"; false; }
 }
 
 @test "15 a target that answers with a limit ends the watcher at once: target-limited row, lock released, no dead page" {
