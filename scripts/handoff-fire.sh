@@ -3612,10 +3612,16 @@ recycle_composer_gate() { # $1=it2-bin $2=sid $3=max-wait-s $4=interval-s
 #   cr      composer holds exactly the stranded /exit the nudge exists to submit
 #   retype  composer empty AND claude alive (typed-but-lost /exit) — caller may retype ONCE, gated
 #   hold    composer holds anything else — a CR would submit someone else's buffer
+#   bg-work-dialog  no composer box because the background-work modal replaced it (the bgwork arm
+#           answers it); named, so a held nudge says what it saw instead of `unknown`
 #   unknown composer unreadable — typing needs the affirmative
 recycle_nudge_decision() { # $1=it2-bin $2=sid
   local c
-  c="$(composer_content "$1" "$2")" || { printf 'unknown'; return 0; }
+  if ! c="$(composer_content "$1" "$2")"; then
+    if command -v pane_bgwork_seen >/dev/null 2>&1 && pane_bgwork_seen "$1" "$2"; then printf 'bg-work-dialog'
+    else printf 'unknown'; fi
+    return 0
+  fi
   case "$c" in
     /exit) printf 'cr' ;;
     "")    printf 'retype' ;;
@@ -4091,6 +4097,28 @@ pane_wedge_reason() { # $1=it2-bin $2=session-id → echoes the modal slug, 0 we
 #
 # Fails CLOSED in every direction — absent lib, unreadable pane, reworded dialog, an unindexed or
 # ambiguous menu each yield rc 1 and NOTHING is sent, which is byte-for-byte today's behaviour.
+# THE DIALOG AT ANY WIDTH (FLEET_V2 W6, grown scope, 2026-09-30). Claude Code word-wraps its own
+# modal to the pane: at 29 columns the header renders `Background work is` / `running` and the keep
+# label `2. Move to background` / `and exit` (repro on pane 1371, 2.1.284; pane 1308 is 29 columns
+# too). pane-modal.sh's matchers are row-anchored, so both returned rc 1 on that screen, the watcher
+# never answered the dialog, and the nudge read the box-less screen as `unknown` until its 600 s
+# give-up: the self-recycle "goal deadlock". This hands the SAME matchers the screen plus, for every
+# row, that row joined to its next HF_UNWRAP_ROWS rows with whitespace collapsed. A wrapped header or
+# label then starts at a row start exactly as an unwrapped one does, so the anchor rule (a pane that
+# merely DISPLAYS the text is not at the dialog) still holds, and the index is read off that row.
+hf_screen_unwrapped() { # stdin = a screen → stdout: its rows, then each row joined to its next HF_UNWRAP_ROWS rows
+  LC_ALL=C awk -v k="${HF_UNWRAP_ROWS:-4}" '
+    { row[NR] = $0 }
+    END {
+      for (i = 1; i <= NR; i++) print row[i]
+      for (i = 1; i <= NR; i++) {
+        j = row[i]
+        for (n = 1; n <= k && i + n <= NR; n++) j = j " " row[i + n]
+        gsub(/[ \t]+/, " ", j)
+        print j
+      }
+    }'
+}
 pane_bgwork_key() { # $1=it2-bin $2=session-id → echoes the menu key to press, 0 answerable / 1 not
   local it2="$1" id="$2" screen key
   [ -n "$it2" ] && [ -n "$id" ] || return 1
@@ -4098,6 +4126,7 @@ pane_bgwork_key() { # $1=it2-bin $2=session-id → echoes the menu key to press,
   command -v pane_bgwork_choice >/dev/null 2>&1 || return 1
   screen="$(hf_bounded "$it2" session read -s "$id" -n "${FIRE_TYPE_READLINES:-500}" 2>/dev/null || true)"
   [ -n "$screen" ] || return 1
+  screen="$(printf '%s\n' "$screen" | hf_screen_unwrapped)"
   printf '%s\n' "$screen" | pane_bgwork_dialog || return 1
   key="$(printf '%s\n' "$screen" | pane_bgwork_choice)" || return 1
   [ -n "$key" ] || return 1
@@ -4117,7 +4146,7 @@ pane_bgwork_seen() { # $1=it2-bin $2=session-id → 0 the dialog is on screen (a
   command -v pane_bgwork_dialog >/dev/null 2>&1 || return 1
   screen="$(hf_bounded "$it2" session read -s "$id" -n "${FIRE_TYPE_READLINES:-500}" 2>/dev/null || true)"
   [ -n "$screen" ] || return 1
-  printf '%s\n' "$screen" | pane_bgwork_dialog
+  printf '%s\n' "$screen" | hf_screen_unwrapped | pane_bgwork_dialog
 }
 
 # ---- P0-11 engagement verification (FM2 / INC-4 cold-fire auto-submit race) -------------------

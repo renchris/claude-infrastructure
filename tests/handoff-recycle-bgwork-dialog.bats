@@ -115,6 +115,45 @@ alarms() { cat "$CC_HANDOFF_ALARM_DIR"/* 2>/dev/null; }
   [ "$status" -ne 0 ]
 }
 
+# THE DIALOG AT ANY WIDTH (FLEET_V2 W6 grown scope, 2026-09-30). At 29 columns Claude Code wraps its
+# own modal (`Background work is` / `running`, `2. Move to background` / `and exit`; repro on pane
+# 1371), the row-anchored matchers returned rc 1, the watcher never answered it and the nudge said
+# `unknown` for 600 s. The fixtures are the measured 2.1.284 screen re-wrapped at 29, 40 and 80
+# columns (.RECONSTRUCTED: word wrap with a 2-column right pad, which reproduces the measured split).
+# Mutants: drop hf_screen_unwrapped from pane_bgwork_key (29 loses its key) · from pane_bgwork_seen
+# (29 is not seen) · drop the nudge's bg-work-dialog arm (29 reads `unknown`).
+wrap_funcs() {
+  local f
+  { echo 'hf_bounded() { "$@"; }'
+    for f in hf_screen_unwrapped pane_bgwork_key pane_bgwork_seen composer_content recycle_nudge_decision; do
+      sed -n "/^$f() {/,/^}/p" "$HF"; done; } > "$BATS_TEST_TMPDIR/wrap-funcs.sh"
+}
+@test "WIDTH: the dialog is seen, keyed 2, and named by the nudge at 29, 40 and 80 columns" {
+  wrap_funcs
+  local w fx="$REPO_SRC/tests/fixtures/lr-recon/screens"
+  for w in 29 40 80; do
+    export SCREEN="$fx/bgwork-dialog-2.1.284-${w}col.RECONSTRUCTED.txt"
+    [ -s "$SCREEN" ] || { echo "no fixture for $w"; false; }
+    run bash -c ". '$LIB'; . '$BATS_TEST_TMPDIR/wrap-funcs.sh'; pane_bgwork_key '$H/.claude/bin/it2' P"
+    [ "$status" -eq 0 ] || { echo "[$w] key rc=$status"; false; }
+    [ "$output" = 2 ] || { echo "[$w] key=[$output]"; false; }
+    run bash -c ". '$LIB'; . '$BATS_TEST_TMPDIR/wrap-funcs.sh'; pane_bgwork_seen '$H/.claude/bin/it2' P"
+    [ "$status" -eq 0 ] || { echo "[$w] seen rc=$status"; false; }
+    run bash -c ". '$LIB'; . '$BATS_TEST_TMPDIR/wrap-funcs.sh'; recycle_nudge_decision '$H/.claude/bin/it2' P"
+    [ "$output" = bg-work-dialog ] || { echo "[$w] nudge=[$output]"; false; }
+  done
+  # The 29-column screen really is wrapped: the unchanged row-anchored matcher alone misses it.
+  run bash -c ". '$LIB'; pane_bgwork_dialog < '$fx/bgwork-dialog-2.1.284-29col.RECONSTRUCTED.txt'"
+  [ "$status" -ne 0 ] || { echo "the 29-col fixture is not wrapped"; false; }
+  # Prose that merely quotes the dialog mid-sentence is still not a pane sitting at it.
+  printf '%s\n' "It said Background work is running and offered 2. Move to background and exit." > "$BATS_TEST_TMPDIR/prose.txt"
+  export SCREEN="$BATS_TEST_TMPDIR/prose.txt"
+  run bash -c ". '$LIB'; . '$BATS_TEST_TMPDIR/wrap-funcs.sh'; pane_bgwork_seen '$H/.claude/bin/it2' P"
+  [ "$status" -ne 0 ] || { echo "prose read as the dialog"; false; }
+  run bash -c ". '$LIB'; . '$BATS_TEST_TMPDIR/wrap-funcs.sh'; recycle_nudge_decision '$H/.claude/bin/it2' P"
+  [ "$output" = unknown ] || { echo "nudge=[$output]"; false; }
+}
+
 @test "PROSE quoting the dialog is NOT a pane sitting at it (the cfdd9fc3 class)" {
   printf '%s\n' "It said Background work is running and offered 2. Move to background and exit." \
     > "$BATS_TEST_TMPDIR/prose.txt"
