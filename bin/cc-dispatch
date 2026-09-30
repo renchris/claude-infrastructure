@@ -3233,11 +3233,11 @@ EOF
       local t_done t_block t_info
       if [ "$venue" = cloud ]; then
         t_done="On completion: commit and PUSH this branch. Do NOT run cc-backlog done — the backlog store is on the operator box and the verb writes nothing from here; the desk closes the row from your landed content."
-        t_block="If blocked on an OPERATOR-only step (a key, a launchctl bootout, any human action you cannot do): run bash scripts/cloud-park.sh $id --needs \"<the exact step>\", then commit and PUSH it. That landed park is what the desk turns into cc-backlog block. Do NOT run cc-backlog block or cc-notify from here — both are no-ops off-box, and a row that reads open is re-dispatched over the top of you."
+        t_block="If blocked on an OPERATOR-only step (a key, a launchctl bootout, any human action you cannot do): run bash scripts/cloud-park.sh $id --needs \"needs-human: <the exact step>\" (needs-credential: for a key or login), then commit and PUSH it. That landed park is what the desk turns into cc-backlog block. Do NOT run cc-backlog block or cc-notify from here — both are no-ops off-box, and a row that reads open is re-dispatched over the top of you."
         t_info="If the row is already cured, refuted, or unworkable: land a VERDICT ARTIFACT — a docs/research/<topic>-<date>.md naming the cure sha (assert it with git merge-base --is-ancestor <sha> origin/main), what you actually ran, and the evidence — then commit and PUSH. Do NOT push nothing: a branch with no commits is indistinguishable from a VM that never booted, and the row re-dispatches forever. Do NOT invent code work to justify a push either."
       else
         t_done="On completion: cc-backlog done $id --evidence \"<landed sha>\"."
-        t_block="If blocked on an OPERATOR-only step (a key, a launchctl bootout, any human action you cannot do): cc-backlog block $id --needs \"<the exact step>\" — this PARKS the item OUT of the dispatch wave (no re-dispatch loop, no burned worker slot) until the operator acts, then cc-notify --role desk \"<the step>\". Do NOT reopen an operator-gated item — that re-cycles it."
+        t_block="If blocked on an OPERATOR-only step (a key, a launchctl bootout, any human action you cannot do): cc-backlog block $id --class needs-human --conviction <N> --receipt \"<what you ran> => <what it said>\" --needs \"<the exact step>\" (--class needs-credential for a key or login) — this PARKS the item OUT of the dispatch wave (no re-dispatch loop, no burned worker slot) until the operator acts, then cc-notify --role desk \"<the step>\". Do NOT reopen an operator-gated item — that re-cycles it."
         t_info="If blocked on info or a decision instead (not an operator step): cc-backlog reopen $id and cc-notify --role desk \"<the blocker>\"."
       fi
       if ! printf '%s\n' \
@@ -3391,7 +3391,7 @@ EOF
             # strictly better than a row silently stranded as `claimed` with no owner.
             wblocked=reopened
             if [ -n "$backlog" ] && [ -x "$backlog" ] \
-               && "$backlog" block "$id" --needs "$wnote. Salvage or retire it, then unblock: inspect with \`git -C $wcwd status --porcelain && git -C $wcwd log $wbase..HEAD\`; if there is nothing to keep, \`git -C $wrepo worktree remove --force $wcwd\` — then \`cc-backlog unblock $id\`." >/dev/null 2>&1
+               && "$backlog" block "$id" --class needs-human --conviction 80 --receipt "git -C $wcwd status --porcelain => $wnote" --needs "$wnote. Salvage or retire it, then unblock: inspect with \`git -C $wcwd status --porcelain && git -C $wcwd log $wbase..HEAD\`; if there is nothing to keep, \`git -C $wrepo worktree remove --force $wcwd\` — then \`cc-backlog unblock $id\`." >/dev/null 2>&1
             then wblocked=blocked; fi
             FAILED=$((FAILED + 1))
             idl failed "$id: $wnote — not fired ($wblocked${wsr2})"

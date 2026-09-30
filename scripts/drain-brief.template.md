@@ -51,7 +51,7 @@ dirty with files you did not write, leave them alone; they are a sibling's.
      the row is closed in step 3 AFTER the land, with the landed sha as evidence — a commit on a
      branch is not a close.
    - **OPERATOR-ONLY** — needs a credential, sudo, a GUI, money, or a value judgment that is theirs.
-     `cc-backlog block <id> --needs "<one plain-English line>" [--run "<the exact command>"]`. One turn,
+     `cc-backlog block <id> --class needs-human --conviction <N> --receipt "<cmd> => <output>" --needs "<one plain-English line>" [--run "<the exact command>"]`. One turn,
      no more. If it is already blocked, do not touch it.
    - **TOO BIG** — more than ~40% of your context. Do the first concrete step, commit it, record the
      remaining steps on the row (`cc-backlog add --project {{PROJECT}} --title "<its exact title>"

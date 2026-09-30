@@ -821,8 +821,8 @@ refusal_escalate() { # <class> <msg> <n> <first-epoch> <now>
     # …and the row is filed WITHOUT --run when there is none, rather than with a placeholder: an
     # operator-facing row whose command cannot help is what `cc-do` would offer to run for them.
     if [ -n "$run" ]
-      then id="$("$BACKLOG_BIN" needs "$title" --run "$run" --project claude-infrastructure 2>/dev/null || true)"
-      else id="$("$BACKLOG_BIN" needs "$title" --project claude-infrastructure 2>/dev/null || true)"
+      then id="$("$BACKLOG_BIN" needs "$title" --class needs-human --run "$run" --project claude-infrastructure 2>/dev/null || true)"
+      else id="$("$BACKLOG_BIN" needs "$title" --class needs-human --project claude-infrastructure 2>/dev/null || true)"
     fi
     id="$(printf '%s' "$id" | tr -d '[:space:]')"
   fi

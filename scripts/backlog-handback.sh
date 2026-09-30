@@ -324,7 +324,11 @@ cmd_apply() {
     if [ "$R_VERB" = "done" ]; then
       "$CB" "done" "$R_ID" --evidence "$R_EVIDENCE" >/dev/null 2>&1 || rc=$?
     else
-      "$CB" block "$R_ID" --needs "$R_NEEDS" >/dev/null 2>&1 || rc=$?
+      # THE CLASS GATE: the relayed needs text keeps its own class prefix; else it is an operator step
+      # (needs-human), and the handback record it came from is the receipt.
+      local hcls=needs-human
+      case "$R_NEEDS" in needs-credential*|needs-human*|not-yet-true*|no-capacity*|"On or after "*) hcls="" ;; esac
+      "$CB" block "$R_ID" --needs "$R_NEEDS" ${hcls:+--class "$hcls"} --conviction 80 --receipt "$f" >/dev/null 2>&1 || rc=$?
     fi
     if [ "$rc" -ne 0 ]; then
       warn "✗ ${R_ID} ${R_VERB} — cc-backlog exited $rc ($f)"; failed=$((failed + 1)); continue

@@ -386,7 +386,7 @@ if [ "$n_orphan" -gt 0 ]; then
     { printf 'marker\tdisposition\tage\tslug\ttarget\tcwd\n'; printf '%s' "$ORPHANS" | tr '\037' '\t'; } > "$manifest"
     if [ -n "$BACKLOG_BIN" ]; then
       step="$n_orphan dispatched peer(s) are gone/unreturned with custody OPEN and NO reachable originator — decide each: collect+land then \`cc-custody return <marker>\`, or \`cc-custody abandon <marker> --why …\`. Manifest: $manifest"
-      "$BACKLOG_BIN" needs "$step" --run "column -t -s\$'\t' $manifest" >/dev/null 2>&1 \
+      "$BACKLOG_BIN" needs "$step" --class needs-human --run "column -t -s\$'\t' $manifest" >/dev/null 2>&1 \
         || say "custody-deathwatch: could NOT file the operator row (cc-backlog refused) — manifest still at $manifest"
     else
       say "custody-deathwatch: cc-backlog absent — manifest at $manifest, nothing filed"

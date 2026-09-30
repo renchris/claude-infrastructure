@@ -201,7 +201,7 @@ file_need() {   # <condition-slug> <operator-facing step sentence>   → always 
     return 0
   fi
   mkdir -p "$FILED_DIR" 2>/dev/null || return 0
-  if "$BACKLOG_BIN_P" needs "$step" --project claude-infrastructure >/dev/null 2>&1; then
+  if "$BACKLOG_BIN_P" needs "$step" --class needs-human --project claude-infrastructure >/dev/null 2>&1; then
     : > "$marker" 2>/dev/null || true
     report "FILED" "($slug)" "operator-owned step filed to cc-backlog — it renders at the next close"
   fi

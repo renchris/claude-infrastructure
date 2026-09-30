@@ -99,7 +99,7 @@ can only render what a STORE holds. A step you discovered this session ("authent
 "restart Cursor") exists in no store until you file it, so it can only be prose — and prose is where
 it gets buried. Filing it is what makes it renderable, and what makes scripts/wrap-ledger.sh compute
 👤 instead of ✅ for you.
-  cc-backlog needs "<the exact step>" [--run "<command>"]
+  cc-backlog needs "<the exact step>" --class needs-human|needs-credential [--run "<command>"]
 The test for filing rather than DOING is strict: file it only if you genuinely cannot — a
 credential, sudo, a GUI-only action, something physical, or a value judgment that is theirs. An
 operator-only step is not an escape hatch from work you could have done. "Out of scope", "it needs

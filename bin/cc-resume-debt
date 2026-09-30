@@ -325,7 +325,7 @@ _escalate() { # <sid> — once per debt: one backlog row, one page.
   run="$(printf 'bash %s %q %q %q' "$HOME/.claude/scripts/boot-resume-launch.sh" "$acct" "$cwd" "$1")"
   title="Resume stranded session $1 ($(basename "${cwd:-?}"), account ${acct:-?}) — ${by:-a mover} closed it and the relaunch failed (debt opened $(_utc "$opened"))"
   out="$(env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_SESSION_ID -u CC_SESSION_ID \
-           "$BACKLOG" needs "$title" --project claude-infrastructure --run "$run" </dev/null 2>/dev/null)"
+           "$BACKLOG" needs "$title" --class needs-human --project claude-infrastructure --run "$run" </dev/null 2>/dev/null)"
   rc=$?
   id=""; [ "$rc" -eq 0 ] && id="$(printf '%s\n' "$out" | grep -xE '[0-9a-f]{12}' | tail -1)"
   # Latch BEFORE the page: a crash after this point cannot mint a second row.

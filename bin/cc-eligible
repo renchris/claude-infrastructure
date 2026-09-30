@@ -1320,7 +1320,7 @@ PARKED_NOTE = (
     "  row is still in cc-dispatch's fire predicate. This refusal is the INTERLOCK that holds until\n"
     "  it does — it writes nothing and substitutes for nothing. There is no spelling list to correct\n"
     "  here. Run the step named above, then record the transition and the arm retires itself:\n"
-    "      cc-backlog block <id> --needs \"<the step above>\"   (or `unblock <id>` if it is moot)"
+    "      cc-backlog block <id> --class needs-human --needs \"<the step above>\"   (or `unblock <id>` if it is moot)"
 )
 
 DEEP_HISTORY_NOTE = (

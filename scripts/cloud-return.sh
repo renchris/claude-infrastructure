@@ -949,7 +949,12 @@ handle() { # <row-json> → prints outcome lines
           done_err="malformed park artifact: $_pf"
           done_unsettled=1
         elif [ "$_park" -eq 1 ]; then
-          if "$BACKLOG_BIN" block "$item" --needs "$_pneeds" >"$_derr" 2>&1; then
+          # THE CLASS GATE (bin/cc-backlog class_gate_block): the park's own class prefix wins; an
+          # unprefixed park is an operator step the remote worker could not do, i.e. needs-human, and
+          # the park document it read is the receipt.
+          _pcls=needs-human
+          case "$_pneeds" in needs-credential*|needs-human*|not-yet-true*|no-capacity*|"On or after "*) _pcls="" ;; esac
+          if "$BACKLOG_BIN" block "$item" --needs "$_pneeds" ${_pcls:+--class "$_pcls"} --conviction 80 --receipt "git show $trunk:$_pf => needs: $_pneeds" >"$_derr" 2>&1; then
             done_note="PARKED $item on the operator: $_pneeds"
           else
             done_err="$(tr '\n\t' '  ' <"$_derr" 2>/dev/null | tr -cd '\40-\176' | tail -c 300)"

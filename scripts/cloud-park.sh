@@ -212,4 +212,4 @@ echo
 echo "The park is NOT in effect until this file is on trunk — the ledger's only writer is the desk."
 echo "Finish it the ordinary way:"
 echo "    git add $PARK_DIR/$ID.md && git commit && /ship"
-echo "cloud-return's next pass reads it and calls: cc-backlog block $ID --needs \"$NEEDS\""
+echo "cloud-return's next pass reads it and calls: cc-backlog block $ID --class <the needs text's class, else needs-human> --needs \"$NEEDS\""
