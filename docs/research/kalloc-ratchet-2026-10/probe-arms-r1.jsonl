@@ -1,0 +1,15 @@
+{"round": 0, "arm": "ps", "n": 150, "dt": 14.81, "dz": 421, "ctrl_dz": 349, "ctrl_rate": 22.76, "excess": 83.9, "per_op": 0.5596}
+{"round": 0, "arm": "ps_pid_only", "n": 150, "dt": 4.57, "dz": 109, "ctrl_dz": 80, "ctrl_rate": 15.15, "excess": 39.8, "per_op": 0.2651}
+{"round": 0, "arm": "pgrep_f", "n": 150, "dt": 10.43, "dz": 313, "ctrl_dz": 222, "ctrl_rate": 19.85, "excess": 105.9, "per_op": 0.7059}
+{"round": 0, "arm": "procargs_inproc", "n": 20, "dt": 0.75, "dz": 47, "ctrl_dz": 55, "ctrl_rate": 41.4, "excess": 15.9, "per_op": 0.7951}
+{"round": 0, "arm": "spawn_true", "n": 1500, "dt": 8.92, "dz": 487, "ctrl_dz": 384, "ctrl_rate": 40.79, "excess": 123.1, "per_op": 0.0821}
+{"round": 1, "arm": "ps", "n": 150, "dt": 14.1, "dz": 543, "ctrl_dz": 391, "ctrl_rate": 26.55, "excess": 168.8, "per_op": 1.1254}
+{"round": 1, "arm": "ps_pid_only", "n": 150, "dt": 4.63, "dz": 188, "ctrl_dz": 140, "ctrl_rate": 27.01, "excess": 62.8, "per_op": 0.4189}
+{"round": 1, "arm": "pgrep_f", "n": 150, "dt": 7.68, "dz": 311, "ctrl_dz": 159, "ctrl_rate": 19.07, "excess": 164.5, "per_op": 1.0968}
+{"round": 1, "arm": "procargs_inproc", "n": 20, "dt": 0.82, "dz": 122, "ctrl_dz": -52, "ctrl_rate": -31.88, "excess": 148.2, "per_op": 7.4077}
+{"round": 1, "arm": "spawn_true", "n": 1500, "dt": 7.0, "dz": 144, "ctrl_dz": 141, "ctrl_rate": 18.53, "excess": 14.3, "per_op": 0.0095}
+{"round": 2, "arm": "ps", "n": 150, "dt": 14.33, "dz": -89, "ctrl_dz": 379, "ctrl_rate": 25.64, "excess": -456.4, "per_op": -3.0424}
+{"round": 2, "arm": "ps_pid_only", "n": 150, "dt": 4.58, "dz": 160, "ctrl_dz": 174, "ctrl_rate": 33.52, "excess": 6.4, "per_op": 0.0424}
+{"round": 2, "arm": "pgrep_f", "n": 150, "dt": 7.31, "dz": 141, "ctrl_dz": 291, "ctrl_rate": 36.48, "excess": -125.7, "per_op": -0.8381}
+{"round": 2, "arm": "procargs_inproc", "n": 20, "dt": 1.12, "dz": 183, "ctrl_dz": 190, "ctrl_rate": 115.7, "excess": 53.6, "per_op": 2.6818}
+{"round": 2, "arm": "spawn_true", "n": 1500, "dt": 8.07, "dz": 43, "ctrl_dz": 535, "ctrl_rate": 62.13, "excess": -458.3, "per_op": -0.3055}

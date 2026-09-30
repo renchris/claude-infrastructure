@@ -1,0 +1,101 @@
+[
+ {
+  "first": "2026-09-10T11:39Z",
+  "last": "2026-09-16T20:41Z",
+  "samples": 555,
+  "hours": 6,
+  "gb_first": 10.52,
+  "gb_last": 14.53,
+  "days": 6.38,
+  "slope_gb_day": 0.571,
+  "bucket_hours": 24.0,
+  "r_hourly_increment_vs": {
+   "sessions": 0.657,
+   "load_1m": 0.958,
+   "coal_procs": 0.563,
+   "coal_true_procs": 0.617,
+   "auto_coal_procs": 0.164,
+   "ptys_used": -0.111,
+   "active_gb": -0.497,
+   "max_proc_gb": 0.357,
+   "swapfiles": -0.056
+  },
+  "r_detrended_cumulative_vs": {
+   "sessions": 0.597,
+   "load_1m": 0.298,
+   "coal_procs": 0.748,
+   "coal_true_procs": 0.65,
+   "auto_coal_procs": 0.33,
+   "ptys_used": 0.177,
+   "active_gb": -0.131,
+   "max_proc_gb": 0.082,
+   "swapfiles": -0.051
+  }
+ },
+ {
+  "first": "2026-09-16T20:56Z",
+  "last": "2026-09-30T15:29Z",
+  "samples": 993,
+  "hours": 14,
+  "gb_first": 0.0,
+  "gb_last": 14.78,
+  "days": 13.77,
+  "slope_gb_day": 1.047,
+  "bucket_hours": 24.0,
+  "r_hourly_increment_vs": {
+   "sessions": 0.276,
+   "load_1m": 0.573,
+   "coal_procs": 0.303,
+   "coal_true_procs": 0.383,
+   "auto_coal_procs": -0.112,
+   "ptys_used": 0.022,
+   "active_gb": -0.493,
+   "max_proc_gb": 0.314,
+   "swapfiles": 0.517
+  },
+  "r_detrended_cumulative_vs": {
+   "sessions": 0.556,
+   "load_1m": 0.71,
+   "coal_procs": 0.181,
+   "coal_true_procs": 0.615,
+   "auto_coal_procs": -0.572,
+   "ptys_used": -0.157,
+   "active_gb": -0.732,
+   "max_proc_gb": 0.703,
+   "swapfiles": 0.818
+  }
+ },
+ {
+  "first": "2026-09-30T20:48Z",
+  "last": "2026-09-30T21:43Z",
+  "samples": 4,
+  "hours": 0,
+  "gb_first": 0.01,
+  "gb_last": 0.09,
+  "days": 0.04,
+  "slope_gb_day": 2.14,
+  "bucket_hours": 24.0,
+  "r_hourly_increment_vs": {
+   "sessions": null,
+   "load_1m": null,
+   "coal_procs": null,
+   "coal_true_procs": null,
+   "auto_coal_procs": null,
+   "ptys_used": null,
+   "active_gb": null,
+   "max_proc_gb": null,
+   "swapfiles": null
+  },
+  "r_detrended_cumulative_vs": {
+   "sessions": null,
+   "load_1m": null,
+   "coal_procs": null,
+   "coal_true_procs": null,
+   "auto_coal_procs": null,
+   "ptys_used": null,
+   "active_gb": null,
+   "max_proc_gb": null,
+   "swapfiles": null
+  }
+ }
+]

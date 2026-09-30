@@ -1,0 +1,11 @@
+{"round": 0, "arm": "spawn_true", "n": 750, "dt": 3.71, "dz": 148, "ctrl_dz": 84, "ctrl_rate": 16.11, "excess": 88.3, "per_op": 0.1177}
+{"round": 0, "arm": "spawn_true_captured", "n": 750, "dt": 8.65, "dz": 227, "ctrl_dz": -88, "ctrl_rate": -6.77, "excess": 285.6, "per_op": 0.3807}
+{"round": 0, "arm": "fork_only", "n": 750, "dt": 5.47, "dz": -161, "ctrl_dz": 261, "ctrl_rate": 39.34, "excess": -376.1, "per_op": -0.5015}
+{"round": 0, "arm": "sh_c", "n": 750, "dt": 10.71, "dz": 311, "ctrl_dz": 294, "ctrl_rate": 23.04, "excess": 64.2, "per_op": 0.0856}
+{"round": 0, "arm": "pty", "n": 1500, "dt": 2.38, "dz": 122, "ctrl_dz": 228, "ctrl_rate": 42.07, "excess": 22.1, "per_op": 0.0147}
+{"round": 0, "arm": "pipe_900", "n": 10000, "dt": 2.47, "dz": -16, "ctrl_dz": 130, "ctrl_rate": 28.0, "excess": -85.1, "per_op": -0.0085}
+{"round": 0, "arm": "socketpair_900", "n": 10000, "dt": 3.0, "dz": 138, "ctrl_dz": 155, "ctrl_rate": 31.96, "excess": 42.1, "per_op": 0.0042}
+{"round": 0, "arm": "kqueue", "n": 10000, "dt": 1.64, "dz": 211, "ctrl_dz": 326, "ctrl_rate": 113.02, "excess": 25.3, "per_op": 0.0025}
+{"round": 0, "arm": "ps", "n": 75, "dt": 10.26, "dz": 443, "ctrl_dz": -27, "ctrl_rate": -2.36, "excess": 467.2, "per_op": 6.2298}
+{"round": 0, "arm": "notifyutil", "n": 400, "dt": 3.86, "dz": 158, "ctrl_dz": 229, "ctrl_rate": 51.52, "excess": -40.9, "per_op": -0.1023}
+{"round": 0, "arm": "git", "n": 200, "dt": 5.47, "dz": 98, "ctrl_dz": 233, "ctrl_rate": 38.42, "excess": -112.0, "per_op": -0.5602}

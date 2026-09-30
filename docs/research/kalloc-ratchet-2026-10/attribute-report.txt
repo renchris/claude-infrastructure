@@ -1,0 +1,29 @@
+windows=48  Δdata.kalloc.1024 total=36070  (35.2 MiB)
+
+     r elts/birth  births   share  name
+ 0.377      72.33     168   33.7%  sb:(tr)
+ 0.328       6.25    5296   91.8%  sb:(bash)
+ 0.239      46.43     217   27.9%  sb:(awk)
+ 0.209      74.54      83   17.2%  sb:(dirname)
+ 0.195      56.40     150   23.5%  head
+ 0.171      11.06     745   22.8%  sb:(Python)
+ 0.169      38.72     152   16.3%  zsh
+ 0.105      24.30     234   15.8%  sb:(sed)
+ 0.102      33.10      97    8.9%  cut
+ 0.085       4.78    1086   14.4%  git
+ 0.079       4.82    1173   15.7%  sb:<defunct>
+ 0.058       9.69     399   10.7%  awk
+
+joint least squares over top 12 names: R^2 = 0.297; intercept 0.6 elts/window
+      69.42 elts/birth  x    168 births =     11663  sb:(tr)
+      14.69 elts/birth  x    745 births =     10943  sb:(Python)
+      42.51 elts/birth  x    217 births =      9225  sb:(awk)
+       1.13 elts/birth  x   5296 births =      5989  sb:(bash)
+      69.16 elts/birth  x     83 births =      5740  sb:(dirname)
+      31.13 elts/birth  x    152 births =      4731  zsh
+      15.05 elts/birth  x    150 births =      2258  head
+       1.58 elts/birth  x   1086 births =      1717  git
+     -16.93 elts/birth  x     97 births =     -1642  cut
+      -6.32 elts/birth  x    399 births =     -2521  awk
+      -4.64 elts/birth  x   1173 births =     -5442  sb:<defunct>
+     -28.29 elts/birth  x    234 births =     -6620  sb:(sed)

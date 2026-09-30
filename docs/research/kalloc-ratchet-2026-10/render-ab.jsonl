@@ -1,0 +1,12 @@
+{"arm":"control","dz":323,"dt":42,"rate":7.7}
+{"arm":"idle","dz":368,"dt":45,"rate":8.2}
+{"arm":"flood","dz":369,"dt":45,"rate":8.2}
+{"arm":"control","dz":634,"dt":45,"rate":14.1}
+{"arm":"idle","dz":892,"dt":44,"rate":20.3}
+{"arm":"flood","dz":1118,"dt":44,"rate":25.4}
+{"arm":"control","dz":-266,"dt":43,"rate":-6.2}
+{"arm":"idle","dz":1560,"dt":47,"rate":33.2}
+{"arm":"flood","dz":890,"dt":46,"rate":19.3}
+{"arm":"control","dz":1305,"dt":43,"rate":30.3}
+{"arm":"idle","dz":1211,"dt":47,"rate":25.8}
+{"arm":"flood","dz":721,"dt":43,"rate":16.8}

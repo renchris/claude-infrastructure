@@ -1,0 +1,36 @@
+rows=77 span=1.27 h  data.kalloc.1024: 54746 -> 161907 (+107161 elements = 104.6 MiB, 1.94 GiB/day)
+  r(d_kalloc, forks(pid delta)) = 0.371   total=4092873
+  r(d_kalloc, nprocs delta) = -0.105   total=174
+  r(d_kalloc, load1) = -0.021   total=10250
+
+Top 12 co-growers by r(delta, d_kalloc):
+       r  kind   net growth  per kalloc elt  name
+   0.929  zones       -2864         -0.0267  cred
+   0.859  zones       10218          0.0954  kalloc.48
+   0.392  zones      -19761         -0.1844  cluster_read
+   0.385  zones        -166         -0.0015  data.kalloc.24576
+   0.341  zones      -67786         -0.6326  data.kalloc.96
+   0.334  zones     -116054         -1.0830  vnode.pager.structures
+   0.334  zones     -116054         -1.0830  ubc_info.zone
+   0.307  zones      -70349         -0.6565  vm.objects
+   0.287  zones         328          0.0031  iokit.OSString
+   0.285  io            328          0.0031  OSString
+   0.279  zones      -58733         -0.5481  data.kalloc.64
+   0.258  zones      -18744         -0.1749  data.kalloc.48
+
+Net-growth leaders (any r):
+   0.141  zones      285686          2.6660  VM.map.entries
+  -0.402  zones      134772          1.2577  data.kalloc.16
+   0.334  zones     -116054         -1.0830  vnode.pager.structures
+   0.334  zones     -116054         -1.0830  ubc_info.zone
+   0.307  zones      -70349         -0.6565  vm.objects
+   0.341  zones      -67786         -0.6326  data.kalloc.96
+   0.279  zones      -58733         -0.5481  data.kalloc.64
+   0.190  zones      -47761         -0.4457  vfsstringcache
+   0.217  zones      -36147         -0.3373  cluster_write
+  -0.015  zones       34766          0.3244  APFS_BTREE_NODES
+  -0.011  zones       33121          0.3091  APFS_4K_OBJS
+   0.392  zones      -19761         -0.1844  cluster_read
+   0.043  zones       18859          0.1760  compressor_segment
+   0.258  zones      -18744         -0.1749  data.kalloc.48
+  -0.415  zones       18484          0.1725  zcc_magazine_zone
