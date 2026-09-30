@@ -2844,19 +2844,33 @@ hf_pane_focused() { # $1=pane → yes|no|unknown on stdout
   v="$(kt_window_field "${1##*:}" is_focused 2>/dev/null || true)"
   case "$v" in True|true) echo yes ;; False|false) echo no ;; *) echo unknown ;; esac
 }
-hf_focus_double_read() { # $1=it2 $2=pane → 0 two EMPTY reads, gap apart · 1 not (HF_FOCUS_READ holds what was read)
-  local c rc n=0
-  HF_FOCUS_READ=""
-  while [ "$n" -lt 2 ]; do
-    [ "$n" = 1 ] && "${HF_SLEEP:-sleep}" "${HF_FOCUS_READ_GAP_S:-10}"
-    n=$((n + 1))
-    rc=0; c="$(recycle_composer_gate "$1" "$2" 0 1)" || rc=$?
-    if [ "$rc" != 0 ]; then
-      [ "$rc" = 2 ] && c="<unreadable>"
-      HF_FOCUS_READ="$c"
-      return 1
-    fi
-  done
+# THE ONE FOCUS RULE (FLEET_V2 W6, lead resolution 1) lives in lr-lib.sh as lr_focus_gate, shared
+# with the poller, the nudge and the HELD:team wake. This file passes it the readers it already owns:
+# hf_pane_focused (kitty's tab-aware focus) and the composer gate's single read. An unreachable
+# lr-lib FAILS CLOSED for a focused pane — "could not ask the rule" must not read as "allowed".
+hf_lr_lib_load() { # → 0 lr_focus_gate is defined · 1 lr-lib unreachable
+  local lib
+  command -v lr_focus_gate >/dev/null 2>&1 && return 0
+  lib="$(hf_lr_script lr-lib.sh)" || return 1
+  # shellcheck disable=SC1090  # runtime-resolved library ladder
+  . "$lib" 2>/dev/null || true
+  command -v lr_focus_gate >/dev/null 2>&1
+}
+_hf_focus_composer() { # $1=pane → rc 0 empty · 1 occupied (content on stdout) · 2 unreadable
+  recycle_composer_gate "${HF_FOCUS_IT2:-}" "$1" 0 1
+}
+hf_focus_gate() { # $1=it2 $2=pane → 0 proceed · 3 held (HF_FOCUS_HOLD HELD:focused|HELD:draft, HF_FOCUS_READ, HF_FOCUS_STATE)
+  local rc=0
+  HF_FOCUS_IT2="${1:-}" HF_FOCUS_HOLD="" HF_FOCUS_READ=""
+  if ! hf_lr_lib_load; then
+    HF_FOCUS_STATE="$(hf_pane_focused "$2")"
+    [ "$HF_FOCUS_STATE" = yes ] || return 0
+    HF_FOCUS_HOLD="HELD:focused"; HF_FOCUS_READ="<lr-lib unreachable>"; return 3
+  fi
+  lr_focus_gate "$2" hf_pane_focused _hf_focus_composer || rc=$?
+  # shellcheck disable=SC2153  # LR_FOCUS_* are lr_focus_gate's verdict globals (lr-lib.sh)
+  HF_FOCUS_STATE="$LR_FOCUS_STATE" HF_FOCUS_HOLD="$LR_FOCUS_HOLD" HF_FOCUS_READ="$LR_FOCUS_READ"
+  [ "$rc" = 0 ] || return 3
   return 0
 }
 
@@ -2898,8 +2912,10 @@ hf_recycle_hold() { # $1=reason $2=detail $3=what the operator reads → exit 1
 hf_recycle_last_read() { # → 0 every read clean · 1 refused (HF_LR_REASON, HF_LR_WHAT)
   local c rc tx kind limited=0 sa_dir sa_live lib tx_read="" joined=""
   HF_LR_REASON="" HF_LR_WHAT=""
-  if [ "${RCY_REMOTE:-0}" = 1 ] && [ "$(hf_pane_focused "$SID")" = yes ] && [ "${LR_MOVE_FOCUSED:-off}" != on ]; then
-    HF_LR_REASON=focused; HF_LR_WHAT="pane $SID became focused"; return 1
+  if [ "${RCY_REMOTE:-0}" = 1 ] && ! hf_focus_gate "$RCY_IT2" "$SID"; then
+    if [ "$HF_FOCUS_HOLD" = HELD:focused ]; then HF_LR_REASON=focused; HF_LR_WHAT="pane $SID became focused"
+    else HF_LR_REASON=draft; HF_LR_WHAT="focused pane, composer not empty twice ${HF_FOCUS_READ_GAP_S:-10}s apart: $HF_FOCUS_READ"; fi
+    return 1
   fi
   rc=0; c="$(recycle_composer_gate "$RCY_IT2" "$SID" 0 1)" || rc=$?
   if [ "$rc" != 0 ]; then
@@ -8800,7 +8816,7 @@ if [ "${1:-}" = "__recycle" ]; then
           "submitted "*)
             rcy_submit_ts="${rcy_p#submitted }"
             echo "→ SUBMITTED in $RSID — the relaunch prompt is in the transcript at $rcy_submit_ts (${rcy_t}s); engagement is measured from THAT record, not from the clock"
-            emit_recycle_event recycle-submitted "" "$RSID" "the relaunch prompt reached the transcript at $rcy_submit_ts after ${rcy_t}s" || true
+            emit_recycle_event recycle-submitted "" "$RSID" "the relaunch prompt reached the transcript at $rcy_submit_ts after ${rcy_t}s; focused=${RCY_FOCUSED:-unlogged} hid_idle_s=${RCY_HID_IDLE_S:-unlogged}" || true
             [ -n "${RCY_RUN_DIR:-}" ] && command -v lr_state_append >/dev/null 2>&1 \
               && { lr_state_append "$RCY_RUN_DIR" submitted engage "prompt in the transcript at $rcy_submit_ts" || true; }
             ;;
@@ -9643,12 +9659,21 @@ if [ "${1:-}" = "--probe-recycle-preconditions" ]; then
   #    recycle's own composer gate catches this — 180 s AFTER the transplant. Reading it here turns a
   #    tombstoned husk into a message.
   PRP_IT2="${IT2_BIN:-$HOME/.claude/bin/it2}"
-  #    4d. FOCUS (W2b, operator decision 7 unruled ⇒ the gate runs). A pane the operator has focused
+  #    4d. FOCUS (W2b; ruled by operator decision 7, FLEET_V2 W6). A pane the operator has focused
   #    may be taking keystrokes right now; the composer read below would be stale on arrival. HELD,
-  #    not refused — focus moves on. LR_MOVE_FOCUSED=on lets it through under a stricter read.
-  PRP_FOCUSED="$(hf_pane_focused "$PRP_PANE")"
+  #    not refused — focus moves on. lr_focus_gate is the one rule (lead resolution 1): under
+  #    LR_MOVE_FOCUSED=on it passes a focused pane only past two EMPTY composer reads a gap apart, and
+  #    running it HERE, before the caller's admit, is what keeps a focused pane's tombstone window
+  #    shut until those reads are in (D7.2c). The operator's idle time is logged beside it (D7.5):
+  #    the later idle-time rule is decided from these lines.
+  PRP_FG_RC=0; hf_focus_gate "$PRP_IT2" "$PRP_PANE" || PRP_FG_RC=$?
+  PRP_FOCUSED="$HF_FOCUS_STATE"
   echo "focused: $PRP_FOCUSED"
-  [ "$PRP_FOCUSED" = yes ] && [ "${LR_MOVE_FOCUSED:-off}" != on ] && prp_verdict "HELD:focused" 3
+  echo "hid_idle_s: $(lr_hid_idle_s 2>/dev/null || echo unreadable)"
+  if [ "$PRP_FG_RC" != 0 ]; then
+    [ "$HF_FOCUS_HOLD" = HELD:draft ] && echo "composer: held:$(printf '%s' "$HF_FOCUS_READ" | cut -c1-80)"
+    prp_verdict "$HF_FOCUS_HOLD" 3
+  fi
   #    …UNLESS IT IS NOT A DRAFT (2026-09-27). A stray keystroke, a leaked terminal reply or this
   #    rail's own unsubmitted prompt held every limited pane on the box through three recovery runs.
   #    Those get a residue RECEIPT for their exact content, and the recycle's own-residue arm clears
@@ -14731,18 +14756,25 @@ recycle_fire() {
   # and its composer gate above already owns the draft question. A focused remote pane is HELD —
   # before the lock, so a deferral never holds the pane from the next attempt. LR_MOVE_FOCUSED=on
   # moves it, but only past two EMPTY composer reads HF_FOCUS_READ_GAP_S apart.
-  if [ "$RCY_REMOTE" = 1 ] && [ "$(hf_pane_focused "$SID")" = yes ]; then
-    if [ "${LR_MOVE_FOCUSED:-off}" != on ]; then
+  # FOCUS AND OPERATOR IDLE TIME ARE LOGGED ON EVERY DISPATCH (FLEET_V2 W6, D7.5): exported, so the
+  # detached watcher's recycle-submitted row carries them. The self form reads no focus (`n/a`).
+  RCY_FOCUSED=n/a
+  if [ "$RCY_REMOTE" = 1 ]; then
+    rcy_fg_rc=0; hf_focus_gate "$RCY_IT2" "$SID" || rcy_fg_rc=$?
+    RCY_FOCUSED="$HF_FOCUS_STATE"
+    if [ "$rcy_fg_rc" != 0 ] && [ "$HF_FOCUS_HOLD" = HELD:focused ]; then
       emit_recycle_event recycle-held-focused "" "$SID" "pane $SID is focused and LR_MOVE_FOCUSED is off" || true
       echo "!! recycle DEFERRED: pane $SID is FOCUSED — the operator may be typing into it. Nothing typed, no watcher armed, the session stays alive. LR_MOVE_FOCUSED=on moves a focused pane." >&2
       exit 1
     fi
-    if ! hf_focus_double_read "$RCY_IT2" "$SID"; then
+    if [ "$rcy_fg_rc" != 0 ]; then
       emit_recycle_event recycle-held-draft "" "$SID" "focused pane: composer not empty on both reads ${HF_FOCUS_READ_GAP_S:-10}s apart: $HF_FOCUS_READ" || true
       echo "!! recycle DEFERRED: pane $SID is focused and its composer did not read EMPTY twice ${HF_FOCUS_READ_GAP_S:-10}s apart ('$HF_FOCUS_READ'). Nothing typed, no watcher armed." >&2
       exit 1
     fi
   fi
+  RCY_HID_IDLE_S="$( { hf_lr_lib_load && lr_hid_idle_s; } 2>/dev/null || echo unreadable)"
+  export RCY_FOCUSED RCY_HID_IDLE_S
   # THE PER-PANE LOCK (W2b) — taken right BEFORE the watcher exists, so no second recycle can arm a
   # second watcher on this pane; exported so the watcher's EXIT trap releases it.
   hf_recycle_lock_acquire "$SID" || exit 1

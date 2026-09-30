@@ -365,7 +365,7 @@ load_tail_funcs() {
              recycle_composer_gate hf_transcript_at_rest hf_bg_work_kind hf_bg_work_gate hf_lr_script \
              hf_recycle_fenced hf_recycle_lock_dir _hf_lstart _hf_lock_raw _hf_lock_field \
              _hf_lock_holder_alive hf_recycle_lock_write hf_recycle_lock_take hf_recycle_lock_release \
-             hf_recycle_lock_acquire hf_recycle_disarm hf_wake_guard hf_pane_focused hf_focus_double_read \
+             hf_recycle_lock_acquire hf_recycle_disarm hf_wake_guard hf_pane_focused hf_lr_lib_load _hf_focus_composer hf_focus_gate \
              hf_recycle_unconfirm hf_recycle_hold hf_recycle_last_read hf_exit_readback recycle_fire_commit; do
       sed -n "/^$f() {/,/^}/p" "$HF"
     done
@@ -380,6 +380,9 @@ load_tail_funcs() {
 # last-read fact is clean unless a case changes one.
 tail_world() {
   load_tail_funcs
+  # The focus gate sources lr-lib.sh on first use, which would redefine the lr_last_api_error stub
+  # below with the real reader. Load it FIRST, so the stubs are the last definitions standing.
+  HF_DIR="$REPO/scripts" hf_lr_lib_load || { echo "lr-lib.sh did not load" >&2; return 1; }
   STUB="$BATS_TEST_TMPDIR/stub"; mkdir -p "$STUB"
   CALLS="$BATS_TEST_TMPDIR/calls.log"; : > "$CALLS"
   READS="$STUB/reads"; : > "$READS"
@@ -608,14 +611,25 @@ SH
     sed -n '/4d\. FOCUS (W2b/,/UNLESS IT IS NOT A DRAFT/p' "$HF"
     echo 'echo "past the focus gate"'
   } > "$frag"
+  export PRP_IT2="$RCY_IT2" LR_HID_IDLE_S=2044
   PRP_PANE=901 run bash -c ". '$FUNCS'; . '$frag'"
   [ "$status" -eq 3 ] || { echo "status=$status $output"; false; }
   [[ "$output" == *"focused: yes"* ]] || { echo "$output"; false; }
   [[ "$output" == *"verdict: HELD:focused"* ]] || { echo "$output"; false; }
   PRP_PANE=902 run bash -c ". '$FUNCS'; . '$frag'"
   [[ "$output" == *"past the focus gate"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"hid_idle_s: 2044"* ]] || { echo "$output"; false; }
+  printf '%s\n' "" "" > "$READS"
   PRP_PANE=901 LR_MOVE_FOCUSED=on run bash -c ". '$FUNCS'; . '$frag'"
   [[ "$output" == *"past the focus gate"* ]] || { echo "$output"; false; }
+  [ "$(calls_n read)" = 2 ] || { cat "$CALLS"; false; }
+  # D7.2(c): under on, a composer that is not empty on the second read HOLDS in the probe, before
+  # any caller's admit, as a draft.
+  printf '%s\n' "" "typing" > "$READS"
+  PRP_PANE=901 LR_MOVE_FOCUSED=on run bash -c ". '$FUNCS'; . '$frag'"
+  [ "$status" -eq 3 ] || { echo "status=$status $output"; false; }
+  [[ "$output" == *"verdict: HELD:draft"* ]] || { echo "$output"; false; }
+  printf '%s\n' "" > "$READS"
 
   # The recycle: a pane that became focused by the last read is held, and nothing is sent.
   printf '%s\n' "" "/exit" > "$READS"
@@ -623,6 +637,114 @@ SH
   [ "$status" -eq 1 ] || { echo "status=$status $output"; cat "$CALLS"; false; }
   ! grep -q '^send' "$CALLS" || { cat "$CALLS"; false; }
   rows_of recycle-held-focused | grep -q 'unconfirm rc 0' || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
+}
+
+# ── D7.4 · THE ON-PATH (FLEET_V2 W6): the pre-flip coverage of LR_MOVE_FOCUSED=on ────────────────
+# Mutants: F3 make hf_focus_gate return 0 at its top (a focused draft passes) · F4 turn the suffix
+# test in _it2_type_line into the substring one (a CR over operator text) · F5 drop the focused-stray
+# exclusion in the probe (a first keystroke is receipted for scrubbing) · F6 skip the gate in
+# hf_recycle_last_read (a draft typed after the first read gets /exit merged into it).
+
+@test "F3 hf_focus_gate: off holds a focused pane unread; on passes two empty reads a gap apart and holds a draft; no lr-lib holds" {
+  tail_world
+  kitty_stub
+  local rc
+  rc=0; hf_focus_gate "$RCY_IT2" 901 || rc=$?
+  [ "$rc" = 3 ] || { echo "rc=$rc"; false; }
+  [ "$HF_FOCUS_HOLD" = HELD:focused ] || { echo "hold=$HF_FOCUS_HOLD"; false; }
+  [ "$(calls_n read)" = 0 ] || { cat "$CALLS"; false; }
+  rc=0; hf_focus_gate "$RCY_IT2" 902 || rc=$?
+  [ "$rc" = 0 ] || { echo "rc=$rc"; false; }
+  [ "$HF_FOCUS_STATE" = no ] || { echo "state=$HF_FOCUS_STATE"; false; }
+  export LR_MOVE_FOCUSED=on HF_FOCUS_READ_GAP_S=10
+  printf '%s\n' "" "" > "$READS"
+  rc=0; hf_focus_gate "$RCY_IT2" 901 || rc=$?
+  [ "$rc" = 0 ] || { echo "rc=$rc"; cat "$CALLS"; false; }
+  [ "$(grep -E '^(read|sleep)' "$CALLS" | tr '\n' ,)" = "read,sleep 10,read," ] || { cat "$CALLS"; false; }
+  : > "$CALLS"; printf '%s\n' "" "half a thought" > "$READS"
+  rc=0; hf_focus_gate "$RCY_IT2" 901 || rc=$?
+  [ "$rc" = 3 ] || { echo "rc=$rc"; false; }
+  [ "$HF_FOCUS_HOLD" = HELD:draft ] || { echo "hold=$HF_FOCUS_HOLD"; false; }
+  [ "$HF_FOCUS_READ" = halfathought ] || { echo "read=$HF_FOCUS_READ"; false; }
+  # The rule unreachable: a focused pane is HELD, never waved through.
+  unset -f lr_focus_gate; unset LR_LIB_LOADED
+  HF_DIR="$BATS_TEST_TMPDIR/nowhere" CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/nowhere" hf_focus_gate "$RCY_IT2" 901 || rc=$?
+  [ "$HF_FOCUS_HOLD" = HELD:focused ] || { echo "hold=$HF_FOCUS_HOLD"; false; }
+}
+
+@test "F4 _it2_type_line on a FOCUSED pane under on withholds the CR when operator text trails the command" {
+  tail_world
+  kitty_stub
+  local T="$BATS_TEST_TMPDIR/tl.sh"
+  { grep '^BP_START=' "$HF"; grep '^BP_END=' "$HF"; sed -n '/^_it2_type_line() {/,/^}/p' "$HF"; } > "$T"
+  # shellcheck disable=SC1090
+  . "$T"
+  # it2 stub: `send` remembers the last non-control text; `read` shows it with TRAIL typed after it.
+  cat > "$STUB/it2e" <<'SH'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "session send")
+    t="${!#}"; printf 'send %q\n' "$t" >> "$CALLS"
+    case "$t" in $'\x15'|$'\r') ;; *) t="${t#$'\e[200~'}"; printf '%s' "${t%$'\e[201~'}" > "$CALLS.last" ;; esac ;;
+  "session read") printf '$ %s%s\n' "$(cat "$CALLS.last" 2>/dev/null)" "${TRAIL:-}" ;;
+esac
+exit 0
+SH
+  chmod +x "$STUB/it2e"
+  export LR_MOVE_FOCUSED=on FIRE_TYPE_ATTEMPTS=2 FIRE_TYPE_SETTLE=0 FIRE_TYPE_PRESETTLE=0
+  TRAIL="ab" run _it2_type_line "$STUB/it2e" 901 "claude --resume x"
+  [ "$status" -eq 1 ] || { echo "status=$status"; cat "$CALLS"; false; }
+  [ "$(calls_n "send \$'\\r'")" = 0 ] || { echo "a CR was sent over operator text"; cat "$CALLS"; false; }
+  : > "$CALLS"
+  TRAIL="" run _it2_type_line "$STUB/it2e" 901 "claude --resume x"
+  [ "$status" -eq 0 ] || { echo "status=$status"; cat "$CALLS"; false; }
+  [ "$(calls_n "send \$'\\r'")" = 1 ] || { cat "$CALLS"; false; }
+  # An unfocused pane keeps the substring match: trailing text is not the operator's there.
+  : > "$CALLS"
+  TRAIL="ab" run _it2_type_line "$STUB/it2e" 902 "claude --resume x"
+  [ "$status" -eq 0 ] || { echo "status=$status"; cat "$CALLS"; false; }
+}
+
+@test "F5 the probe reads a FOCUSED pane's two-character composer as a draft, never as a stray to scrub" {
+  tail_world
+  kitty_stub
+  local frag="$BATS_TEST_TMPDIR/probe-composer.sh" F2="$BATS_TEST_TMPDIR/f5-funcs.sh" f
+  { for f in composer_residue_dir composer_residue_record hf_composer_intent_load hf_composer_unintended; do
+      sed -n "/^$f() {/,/^}/p" "$HF"; done; } > "$F2"
+  {
+    echo 'prp_verdict() { echo "verdict: $1"; exit "$2"; }'
+    sed -n '/4d\. FOCUS (W2b/,/^  prp_verdict OK 0$/p' "$HF"
+  } > "$frag"
+  export PRP_IT2="$RCY_IT2" LR_HID_IDLE_S=0 LR_MOVE_FOCUSED=on CC_COMPOSER_RESIDUE_DIR="$BATS_TEST_TMPDIR/residue"
+  printf '%s\n' "" "" "ab" > "$READS"
+  PRP_PANE=901 run bash -c ". '$FUNCS'; . '$F2'; . '$frag'"
+  [ "$status" -eq 3 ] || { echo "status=$status $output"; false; }
+  [[ "$output" == *"verdict: HELD:draft"* ]] || { echo "$output"; false; }
+  [ ! -e "$BATS_TEST_TMPDIR/residue" ] || { echo "a receipt was filed:"; ls -R "$BATS_TEST_TMPDIR/residue"; false; }
+  # The same two characters in an UNFOCUSED pane are a stray keystroke: receipted, not held.
+  printf '%s\n' "ab" > "$READS"
+  PRP_PANE=902 run bash -c ". '$FUNCS'; . '$F2'; . '$frag'"
+  [ "$status" -eq 0 ] || { echo "status=$status $output"; false; }
+  [[ "$output" == *"composer: unintended:stray"* ]] || { echo "$output"; false; }
+}
+
+@test "F6 hf_recycle_last_read under on: a focused pane moves past two empty reads, and a draft between them holds" {
+  tail_world
+  kitty_stub
+  export LR_MOVE_FOCUSED=on HF_FOCUS_READ_GAP_S=10
+  printf '%s\n' "" "" "" "/exit" > "$READS"
+  run recycle_fire_commit "$SESS"
+  [ "$status" -eq 0 ] || { echo "status=$status $output"; cat "$CALLS"; false; }
+  [ "$(calls_n "send \$'\\r'")" = 1 ] || { cat "$CALLS"; false; }
+  grep -qx 'sleep 10' "$CALLS" || { cat "$CALLS"; false; }
+  tail_world
+  kitty_stub
+  export LR_MOVE_FOCUSED=on   # tail_world unsets it
+  printf '%s\n' "" "draft" > "$READS"
+  run recycle_fire_commit "$SESS"
+  [ "$status" -eq 1 ] || { echo "status=$status $output"; cat "$CALLS"; false; }
+  ! grep -q '^send' "$CALLS" || { cat "$CALLS"; false; }
+  rows_of recycle-held-draft | grep -q 'unconfirm rc 0' || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
 }
 
 @test "R the MAIN parser takes --record-id: lr-handoff passes it to --recycle whenever the case exists (W5 rig)" {
@@ -866,7 +988,7 @@ wrows() { grep "\"class\":\"$1\"" "$HOME/.claude/logs/handoffs.jsonl" 2>/dev/nul
 @test "14 a stub re-created after confirm is read JOINED with .handed-off: the limit still stands (W5 rig)" {
   tail_world
   local fix="$REPO/tests/fixtures/lr-recon/jsonl"
-  unset -f lr_last_api_error
+  unset -f lr_last_api_error; unset LR_LIB_LOADED   # tail_world preloaded lr-lib; load it again
   # shellcheck disable=SC1091  # the REAL reader, not tail_world's stub
   . "$REPO/scripts/limit-recover/lr-lib.sh"
   cp "$fix/death-quota-limits.jsonl" "$TX.handed-off"
