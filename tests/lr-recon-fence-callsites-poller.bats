@@ -137,6 +137,9 @@ request() { # $1=file basename (default $SID) — a cc-lr-origin recovery (no ho
   printf '{"sid":"%s","requested_by":"cc-lr","target":"auto"}\n' "$SID" > "$STATE/requests/${1:-$SID}.json"
 }
 park_future() {
+  # § 2a is an unattended move, so it runs only under the zero-human switch (ruling 1, resolution 8):
+  # the fixture sets it in its own $HOME, never the real one.
+  : > "$STATE/autorecover.on"
   printf '{"sid":"%s","acct":"next4","cfg":"%s","cwd":"%s","kind":"weekly","reset_at_utc":"2099-01-01T00:00:00Z","parked_at":"2026-09-26T20:55:27Z"}\n' \
     "$SID" "$HOME/.claude-quaternary" "$CWD" > "$STATE/parked/$SID.json"
 }
