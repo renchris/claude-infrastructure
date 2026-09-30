@@ -571,7 +571,7 @@ done
 # is a live symlink that did not exist — and at that moment ~/.claude/bin/ms365-reply-splice.py
 # was in fact absent, with the live email hook prescribing it. Derived coverage is pinned by
 # tests/ms365-reply-splice.bats, which reads install.sh's families and asserts each is walked here.
-for f in "$REPO"/bin/cc-* "$REPO"/bin/desk-* "$REPO"/bin/ms365-*; do check_one "bin/$(basename "$f")"       "$CFG/bin/$(basename "$f")"; done
+for f in "$REPO"/bin/cc-* "$REPO"/bin/desk-* "$REPO"/bin/ms365-* "$REPO"/bin/dl; do check_one "bin/$(basename "$f")"       "$CFG/bin/$(basename "$f")"; done
 for d in "$REPO"/skills/*/; do
   [ -d "$d" ] || continue
   n="$(basename "$d")"

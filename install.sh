@@ -1074,11 +1074,16 @@ fi
 # to RUN it, at RECIPE step 3c and inside the rule-6 denial, exactly as commands/desk.md told it to
 # run desk-register. Globbed, not named, per the paragraph above: a second ms365-* tool deploys
 # without another edit here.
+#
+# bin/dl is the FOURTH entry (2026-09-30): the deadline store's CLI. Named, not globbed: the
+# class-coverage test refuses an install class that matches no tracked file, so the reconciler
+# (bin/dl-sync) joins here in the commit that adds it. Agents are told to run `dl add` in the
+# turn that hands the operator a date, so a bin/dl on trunk but absent from PATH is a silent no-op.
 if $IS_GLOBAL; then
   echo ""
   echo "PATH tools → $CONFIG_DIR/bin/"
   mkdir -p "$CONFIG_DIR/bin"
-  for tool in "$REPO_DIR"/bin/cc-* "$REPO_DIR"/bin/desk-* "$REPO_DIR"/bin/ms365-*; do
+  for tool in "$REPO_DIR"/bin/cc-* "$REPO_DIR"/bin/desk-* "$REPO_DIR"/bin/ms365-* "$REPO_DIR"/bin/dl; do
     [[ -f "$tool" ]] || continue
     link_file "$tool" "$CONFIG_DIR/bin/$(basename "$tool")"
   done
