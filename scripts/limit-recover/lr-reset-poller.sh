@@ -415,43 +415,58 @@ for _elb in "$(dirname "$_LRP_SELF")/../../hooks/lib/engagement.sh" \
   # shellcheck disable=SC1090,SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
   [ -r "$_elb" ] && . "$_elb" 2>/dev/null && { LRP_ENGAGE_LIB=1; break; }
 done
-if [[ "$LRP_ENGAGE_LIB" != 1 ]] || ! command -v cc_engaged_sid >/dev/null 2>&1; then
-  # Log ONCE, then stay quiet: this runs every ~10 min forever, and a per-tick line would bury the
-  # very records this audit exists to write. The marker is cleared the moment the lib resolves
-  # again, so a LATER outage is a fresh line rather than a silence inherited from the first one.
-  if [[ ! -f "$LRP_ENGAGE_MISSING" ]]; then
-    : > "$LRP_ENGAGE_MISSING"
-    log "ENGAGE-SKIP hooks/lib/engagement.sh unavailable — engagement audit off (recovery UNAFFECTED)"
-  fi
-else
-  rm -f "$LRP_ENGAGE_MISSING" 2>/dev/null || true
-  mkdir -p "$ENGAGE_NOTED"
-  for cf in "$CLAIMS"/*; do
-    [[ -e "$cf" ]] || continue
-    esid="$(basename "$cf")"
-    # THE SETTLE WINDOW IS LOAD-BEARING. A claim is written BEFORE the launcher→expect→claude chain
-    # even starts, so a just-claimed sid has no transcript and no assistant turn BY CONSTRUCTION —
-    # asking immediately would report every healthy fire as not-engaged. Wall-clock, like the TTL
-    # beside it, and shorter than it so a fire is judged while its claim is still live.
-    [[ -n $(find "$cf" -mmin "+$LR_ENGAGE_SETTLE_MIN" 2>/dev/null) ]] || continue
-    if cc_engaged_sid "$esid"; then
-      # Re-arm: this sid engaged, so a FUTURE fire of the same session that wedges must still be
-      # able to report. A marker that is never cleared silences the second incident on any session
-      # that ever succeeded once.
-      rm -f "$ENGAGE_NOTED/$esid" 2>/dev/null || true
-      fire_fail_clear "$esid"   # a session that STARTED carries no failure history into its next fire
-      continue
+# RUN AFTER THE REQUEST DRAIN, NOT HERE (LIMIT_RECOVER_FLEET_V2 W6, D1.5). It used to run inline at
+# this point, on every claim ever written: ENGAGED claims are never deleted (the only `rm` is §2's
+# failed-spawn release), so by 2026-09-29 it re-judged 25 claims dated Aug 4 to Sep 22 and one
+# sampled tick spent ~600 of its 602 s here BEFORE the first request was read; tonight's measured
+# death-to-dispatch ran 4m50s-8m31s. A request is a live session waiting; an audit of an old fire is
+# a report. The call below the drain still precedes §1b and the fire_latched readers (the candidacy
+# filter and reroute_parked), which are what its strikes feed. A claim older than
+# LR_ENGAGE_MAX_AGE_MIN (default 360 = 6 h, the latch window its strike would feed) is skipped.
+LR_ENGAGE_MAX_AGE_MIN="${LR_ENGAGE_MAX_AGE_MIN:-360}"
+[[ "$LR_ENGAGE_MAX_AGE_MIN" =~ ^[1-9][0-9]*$ ]] || LR_ENGAGE_MAX_AGE_MIN=360
+lrp_engagement_audit() {
+  local cf esid
+  if [[ "$LRP_ENGAGE_LIB" != 1 ]] || ! command -v cc_engaged_sid >/dev/null 2>&1; then
+    # Log ONCE, then stay quiet: this runs every ~10 min forever, and a per-tick line would bury the
+    # very records this audit exists to write. The marker is cleared the moment the lib resolves
+    # again, so a LATER outage is a fresh line rather than a silence inherited from the first one.
+    if [[ ! -f "$LRP_ENGAGE_MISSING" ]]; then
+      : > "$LRP_ENGAGE_MISSING"
+      log "ENGAGE-SKIP hooks/lib/engagement.sh unavailable — engagement audit off (recovery UNAFFECTED)"
     fi
-    [[ -f "$ENGAGE_NOTED/$esid" ]] && continue     # notify ONCE per claim (no per-tick spam)
-    # --dry-run REPORTS but must never CLAIM the one report. Writing the damping marker under a
-    # preview flag would let an operator's look-first silence the real tick 10 minutes later — the
-    # same class as the --dry-run defect this file already carries a header about.
-    # The fire-fail count rides the SAME guard, and for the same reason: a preview must not spend a
-    # strike either. Both are once-per-fire because claim_sid() re-arms the marker.
-    if (( DRY == 0 )); then : > "$ENGAGE_NOTED/$esid"; fire_fail_note "$esid" not-engaged; fi
-    log "NOT-ENGAGED $esid — claimed >${LR_ENGAGE_SETTLE_MIN}m ago, no assistant turn (why=${CC_ENGAGE_WHY:-unknown}); claim untouched, counted toward the fire latch"
-  done
-fi
+  else
+    rm -f "$LRP_ENGAGE_MISSING" 2>/dev/null || true
+    mkdir -p "$ENGAGE_NOTED"
+    for cf in "$CLAIMS"/*; do
+      [[ -e "$cf" ]] || continue
+      esid="$(basename "$cf")"
+      # THE SETTLE WINDOW IS LOAD-BEARING. A claim is written BEFORE the launcher→expect→claude chain
+      # even starts, so a just-claimed sid has no transcript and no assistant turn BY CONSTRUCTION —
+      # asking immediately would report every healthy fire as not-engaged. Wall-clock, like the TTL
+      # beside it, and shorter than it so a fire is judged while its claim is still live.
+      [[ -n $(find "$cf" -mmin "+$LR_ENGAGE_SETTLE_MIN" 2>/dev/null) ]] || continue
+      # PAST THE AGE CAP ⇒ NOT JUDGED (D1.5): its strike would land after the latch it feeds expired.
+      [[ -n $(find "$cf" -mmin "+$LR_ENGAGE_MAX_AGE_MIN" 2>/dev/null) ]] && continue
+      if cc_engaged_sid "$esid"; then
+        # Re-arm: this sid engaged, so a FUTURE fire of the same session that wedges must still be
+        # able to report. A marker that is never cleared silences the second incident on any session
+        # that ever succeeded once.
+        rm -f "$ENGAGE_NOTED/$esid" 2>/dev/null || true
+        fire_fail_clear "$esid"   # a session that STARTED carries no failure history into its next fire
+        continue
+      fi
+      [[ -f "$ENGAGE_NOTED/$esid" ]] && continue     # notify ONCE per claim (no per-tick spam)
+      # --dry-run REPORTS but must never CLAIM the one report. Writing the damping marker under a
+      # preview flag would let an operator's look-first silence the real tick 10 minutes later — the
+      # same class as the --dry-run defect this file already carries a header about.
+      # The fire-fail count rides the SAME guard, and for the same reason: a preview must not spend a
+      # strike either. Both are once-per-fire because claim_sid() re-arms the marker.
+      if (( DRY == 0 )); then : > "$ENGAGE_NOTED/$esid"; fire_fail_note "$esid" not-engaged; fi
+      log "NOT-ENGAGED $esid — claimed >${LR_ENGAGE_SETTLE_MIN}m ago, no assistant turn (why=${CC_ENGAGE_WHY:-unknown}); claim untouched, counted toward the fire latch"
+    done
+  fi
+}
 
 # account headroom: session_pct AND weekly_pct < 100 (never resume into a still-capped acct).
 # ⚠️ Blind-check fix (2026-07-15, caught by LR-c): the original captured the JSON into $j but ran
@@ -1070,6 +1085,7 @@ fi
 if (( _rq_held > 0 )); then
   log "HOOK-HELD $_rq_held hook-originated request(s) NOT drained — $STATE/autorecover.on is absent (sids: $_rq_held_sids); creating that file is the operator's call and releases the whole cohort"
 fi
+lrp_engagement_audit   # AFTER the drain, never before it (D1.5 — see the function header)
 
 # ── the upgrade drainer: ONE, detached, kicked whenever the queue holds work ────────────────────
 # Keyed on the QUEUE, not on "a request arrived this tick": a drainer that died with work left is

@@ -56,8 +56,13 @@ setup() {
 
 # ── fixtures ─────────────────────────────────────────────────────────────────────────────────────
 
-# A claim aged past the settle window. `touch -t` with a fixed past stamp, never a sleep.
-_claim_old() { : > "$CLAIMS/${1:-$SID}"; touch -t 200001010000 "$CLAIMS/${1:-$SID}"; }
+# A claim aged past the settle window. `touch -t` with a past stamp, never a sleep. TEN MINUTES
+# back, not a fixed year-2000 stamp: since D1.5 a claim older than LR_ENGAGE_MAX_AGE_MIN (6 h) is
+# skipped, so "aged past the settle window" must also be "inside the age cap" or no case below
+# judges anything. _claim_ancient is the other side of that cap.
+_ago() { date -v-"${1:?}"M +%Y%m%d%H%M; }
+_claim_old() { : > "$CLAIMS/${1:-$SID}"; touch -t "$(_ago 10)" "$CLAIMS/${1:-$SID}"; }
+_claim_ancient() { : > "$CLAIMS/${1:-$SID}"; touch -t "$(_ago 400)" "$CLAIMS/${1:-$SID}"; }
 # A claim written THIS INSTANT — the shape §2 leaves behind on the tick that fires.
 _claim_fresh() { : > "$CLAIMS/${1:-$SID}"; }
 
@@ -131,7 +136,7 @@ _not_engaged_lines() { local n; n="$(grep -c "NOT-ENGAGED" "$LOG" 2>/dev/null)" 
   [ "$status" -eq 0 ]
   run _not_engaged_lines
   [ "$output" -eq 0 ]
-  touch -t 200001010000 "$CLAIMS/$SID"      # same claim, now aged past the window
+  touch -t "$(_ago 10)" "$CLAIMS/$SID"      # same claim, now aged past the window
   run bash "$POLLER"
   [ "$status" -eq 0 ]
   run _not_engaged_lines
@@ -257,7 +262,7 @@ _orphan_poller() {
 # A NEW FIRE, in the two respects this suite can observe: a fresh claim, and the audit's
 # once-per-fire marker re-armed. Both are what production's claim_sid() does — pinned against the
 # real thing by A7 in tests/lr-reset-poller.bats, so this helper cannot drift into fiction.
-_refire() { rm -f "$NOTED/${1:-$SID}"; : > "$CLAIMS/${1:-$SID}"; touch -t 200001010000 "$CLAIMS/${1:-$SID}"; }
+_refire() { rm -f "$NOTED/${1:-$SID}"; : > "$CLAIMS/${1:-$SID}"; touch -t "$(_ago 10)" "$CLAIMS/${1:-$SID}"; }
 
 _ff_count() { local n; n="$(cat "$FF/${1:-$SID}" 2>/dev/null)" || n=0; printf '%s' "${n:-0}"; }
 
@@ -324,4 +329,36 @@ _ff_count() { local n; n="$(cat "$FF/${1:-$SID}" 2>/dev/null)" || n=0; printf '%
   run grep -c "LATCHED $SID" "$LOG"
   [ "$status" -eq 0 ]
   [ "$output" -eq 1 ]
+}
+
+# ── D1.5 (LIMIT_RECOVER_FLEET_V2 W6): the audit runs AFTER the request drain, and skips old claims ─
+
+@test "D1.5: a claim older than the 6 h cap is not judged — no NOT-ENGAGED, no strike" {
+  _claim_ancient; _silent_transcript
+  run bash "$POLLER"
+  [ "$status" -eq 0 ]
+  [ "$(_not_engaged_lines)" -eq 0 ] || { cat "$LOG"; false; }
+  [ ! -e "$FF/$SID" ]
+}
+
+@test "D1.5 CONTROL: the same claim inside the cap IS judged" {
+  _claim_old; _silent_transcript
+  run bash "$POLLER"
+  [ "$(_not_engaged_lines)" -eq 1 ] || { cat "$LOG"; false; }
+}
+
+@test "D1.5: a queued request is dispatched BEFORE any claim is audited" {
+  local fl="$BATS_TEST_TMPDIR/fleet" rsid="52e35019-17e8-40f6-a54f-3a04de70d2e6"
+  printf '#!/bin/bash\necho "lr-fleet: DETACHED — driver pid %s is recovering"\n' "$$" > "$fl"; chmod +x "$fl"
+  mkdir -p "$STATE/requests"
+  printf '{"sid":"%s","requested_by":"driver-abc"}\n' "$rsid" > "$STATE/requests/$rsid.json"
+  _claim_old; _silent_transcript
+  LR_FLEET_BIN="$fl" LR_POLLER_AUTOFIRE=1 run bash "$POLLER"
+  [ "$status" -eq 0 ]
+  local rq ne
+  rq="$(grep -n "REQUEST $rsid — dispatching" "$LOG" | head -1 | cut -d: -f1)"
+  ne="$(grep -n "NOT-ENGAGED $SID" "$LOG" | head -1 | cut -d: -f1)"
+  [ -n "$rq" ] || { cat "$LOG"; false; }
+  [ -n "$ne" ] || { cat "$LOG"; false; }
+  [ "$rq" -lt "$ne" ] || { echo "the audit (line $ne) ran before the drain (line $rq)"; cat "$LOG"; false; }
 }
