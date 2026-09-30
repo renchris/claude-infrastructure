@@ -3,6 +3,7 @@
 # inside each, instead of piling every session into tabs of the operator's own window.
 #
 #   Usage: cc-resume-layout.sh [--per-window N] [--stagger SECS] [--use-all-screens] [--dry-run]
+#          cc-resume-layout.sh --desktops [--to unix:/path] [--per-window N<=4] [--stagger SECS] [--dry-run]
 #          ... reading a TSV on stdin (or --file PATH):
 #              account <TAB> session-id <TAB> worktree <TAB> branch [<TAB> label]
 #          i.e. lr-select.py's own output, with an optional 5th label column.
@@ -36,6 +37,17 @@
 #    "will override any titles set by programs running in kitty" — a fixed handle, so placement
 #    matches on a marker WE own. (Generalisable: never key an automation on a string the subject
 #    repaints.)
+#
+# --desktops (2026-09-30, operator ruling after the 15:24 reboot recovery): the per-monitor layout put
+# five panes side by side, 37 columns each at this font, which wraps Claude Code's footer. The
+# operator's layout is ONE native-fullscreen OS window per macOS Desktop, at most 4 panes each as a
+# 2x2, grouped by project. Built from the recipe measured that afternoon: A|B by vsplit, then C
+# beside A and D beside B, each turned under its neighbour with `layout_action rotate` (the splits
+# layout only — never switch layouts); then native fullscreen through System Events AXFullScreen on
+# the window whose title carries a temporary marker, one window at a time, verdict by READING
+# AXFullScreen back (kitty @ ls has no fullscreen field, and back-to-back toggles are dropped).
+# Prints one `cc-resume-layout: verdict=… launched=… shed=… failed=… windows=… fullscreen_ok=…
+# fullscreen_failed=…` line on stdout; scripts/boot-resume.sh parses it. Exit 3 = no live kitty.
 #
 # PLACEMENT is Accessibility (System Events), because kitty has no move-to-display remote command —
 # `kitty @ resize-os-window --action` offers resize/hide/toggle-*, and nothing that moves. Screen
@@ -100,6 +112,8 @@ OSASCRIPT="${CC_OSASCRIPT_BIN:-osascript}"
 SWIFT_BIN="${CC_SWIFT_BIN:-/usr/bin/swift}"
 
 PER_WINDOW=0          # 0 = derive from the screen count
+DESKTOPS=0
+TO_ARG=""
 STAGGER="${CC_RESUME_STAGGER:-12}"
 USE_ALL_SCREENS=0
 DRY_RUN=0
@@ -114,6 +128,8 @@ while [ $# -gt 0 ]; do
     --stagger)         STAGGER="${2:?--stagger needs seconds}"; shift 2 ;;
     --file)            FILE="${2:?--file needs a path}"; shift 2 ;;
     --use-all-screens) USE_ALL_SCREENS=1; shift ;;
+    --desktops)        DESKTOPS=1; shift ;;
+    --to)              TO_ARG="${2:?--to needs unix:/path}"; shift 2 ;;
     --dry-run)         DRY_RUN=1; shift ;;
     -h|--help)         sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; exit 0 ;;
     *)                 die "unknown argument: $1" ;;
@@ -138,6 +154,170 @@ done < <(if [ -n "$FILE" ]; then cat -- "$FILE"; else cat; fi)
 
 N=${#ROWS[@]}
 [ "$N" -gt 0 ] || die "no rows on stdin — nothing to lay out"
+
+# ── --desktops ──────────────────────────────────────────────────────────────────────────────────
+if [ "$DESKTOPS" = 1 ]; then
+  SETTLE="${CC_DESKTOP_SETTLE:-1.5}"
+  FS_DELAY="${CC_DESKTOP_FS_DELAY:-2.5}"
+  [ "$PER_WINDOW" -ge 1 ] 2>/dev/null && [ "$PER_WINDOW" -le 4 ] || PER_WINDOW=4
+
+  # The control socket. boot-resume runs this from launchd, where no KITTY_WINDOW_ID exists, so
+  # an explicit socket (or the live one cc-kitty-socket finds) is what makes kitty reachable.
+  SOCK="${TO_ARG:-${CC_TERM_KITTY_TO:-}}"
+  if [ -z "$SOCK" ] && [ -z "${KITTY_WINDOW_ID:-}" ] && [ "$DRY_RUN" = 0 ]; then
+    for _ks in "${CC_KITTY_SOCKET_BIN:-}" \
+               "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/cc-kitty-socket" \
+               "${HOME:-}/.claude/bin/cc-kitty-socket"; do
+      [ -n "$_ks" ] && [ -x "$_ks" ] && { SOCK="$("$_ks" 2>/dev/null | head -1)"; break; }
+    done
+    [ -n "$SOCK" ] || { note "cc-resume-layout: no live kitty control socket — nothing to lay out into"; exit 3; }
+  fi
+  k() { if [ -n "$SOCK" ]; then "$KITTY_BIN" @ --to "$SOCK" "$@"; else "$KITTY_BIN" @ "$@"; fi; }
+  shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+  fs_osa() { # <marker> → "true" | "false" | "nomatch" | "" — the AXFullScreen READ-BACK
+    "$OSASCRIPT" <<EOF 2>/dev/null
+tell application "System Events" to tell process "kitty"
+  repeat with x in windows
+    if name of x contains "$1" then
+      if value of attribute "AXFullScreen" of x is false then set value of attribute "AXFullScreen" of x to true
+      delay $FS_DELAY
+      return (value of attribute "AXFullScreen" of x) as text
+    end if
+  end repeat
+  return "nomatch"
+end tell
+EOF
+  }
+
+  # PLAN: group by project (the repo a worktree belongs to), pack projects into windows of at most
+  # PER_WINDOW panes, first-fit-decreasing; a project bigger than a window is chunked. Output:
+  # "<window#>\t<row index>\t<group label>", in launch order.
+  PLAN="$(i=0; for r in "${ROWS[@]}"; do printf '%s\t%s\n' "$i" "$(printf '%s' "$r" | cut -f3)"; i=$((i + 1)); done \
+    | python3 -c '
+import os, subprocess, sys
+per = int(sys.argv[1])
+def key(wt):
+    try:
+        out = subprocess.run(["git", "-C", wt, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                             capture_output=True, text=True, timeout=10)
+        if out.returncode == 0 and out.stdout.strip():
+            return os.path.basename(os.path.dirname(out.stdout.strip().rstrip("/")))
+    except Exception:
+        pass
+    return os.path.basename(wt.rstrip("/")) or "?"
+groups, order = {}, []
+for line in sys.stdin:
+    i, _, wt = line.rstrip("\n").partition("\t")
+    g = key(wt) if wt else "?"
+    if g not in groups:
+        groups[g] = []; order.append(g)
+    groups[g].append(int(i))
+chunks = [(g, groups[g][j:j + per]) for g in order for j in range(0, len(groups[g]), per)]
+chunks.sort(key=lambda c: -len(c[1]))
+bins = []
+for g, idx in chunks:
+    for b in bins:
+        if len(b[0]) + len(idx) <= per:
+            b[0].extend(idx); b[1].append(g); break
+    else:
+        bins.append([list(idx), [g]])
+for n, (idx, gs) in enumerate(bins, 1):
+    for i in idx:
+        print("%d\t%d\t%s" % (n, i, "+".join(gs)))
+' "$PER_WINDOW")" || die "the window planner failed"
+
+  launched=0; failed=0; shed=0; done_rows=0; nwin=0
+  WIN_HEAD=(); WIN_PANES=()          # per window: head id; space-separated pane ids
+  cur=""; A=""; B=""; pos=0; panes=""
+  close_window() { # equalize the window just built and remember it for the fullscreen pass
+    [ -n "$A" ] || return 0
+    [ "$DRY_RUN" = 1 ] || KITTY_WINDOW_ID="$A" k action --self layout_action equalize >/dev/null 2>&1 \
+      || note "  [CC-DESK-$cur] equalize refused — panes may be uneven"
+    WIN_HEAD+=("$A"); WIN_PANES+=("${panes# }"); nwin=$((nwin + 1))
+  }
+  while IFS=$'\t' read -r win idx grp; do
+    [ -n "$win" ] || continue
+    if [ "$win" != "$cur" ]; then close_window; cur="$win"; A=""; B=""; pos=0; panes=""; fi
+    row="${ROWS[$idx]}"
+    acct="$(printf '%s' "$row" | cut -f1)"; sid="$(printf '%s' "$row" | cut -f2)"
+    wt="$(printf '%s' "$row" | cut -f3)";   br="$(printf '%s' "$row" | cut -f4)"
+    case "$pos" in 0) how="head" ;; 1) how="vsplit" ;; *) how="vsplit+rotate" ;; esac
+    if [ "$DRY_RUN" = 1 ]; then
+      note "DRY [CC-DESK-$win $grp] $how $acct $sid $wt"
+      A="dry"; pos=$((pos + 1)); continue
+    fi
+    # ADMIT per pane; a refusal SHEDS the rest of the batch (capacity does not recover in a loop).
+    if [ "$CC_ADMIT_OK" = 1 ] && ! cc_capacity_admit cc-resume-layout "resume ${sid} on ${acct}"; then
+      note "cc-resume-layout: SHED — $(cc_capacity_admit_reason)"
+      shed=$((N - done_rows)); break
+    fi
+    done_rows=$((done_rows + 1))
+    # SHELL ROOT, as scripts/boot-resume-launch.sh's kitty arm: the pane must outlive the session
+    # in it, or a later recycle of this pane strands (tests/kitty-recovery-launch.bats SURVIVABILITY).
+    cmd="'env' 'CC_ADMIT_DONE=1' $(shq "$RESUME_ONE") $(shq "$acct") $(shq "$wt") $(shq "$sid")"
+    [ -n "$br" ] && cmd="$cmd $(shq "$br")"
+    LA=(launch)
+    case "$pos" in
+      0) LA+=(--type=os-window) ;;
+      1|2) LA+=(--location=vsplit --match "window_id:$A" --next-to "id:$A") ;;
+      *) anc="${B:-$A}"; LA+=(--location=vsplit --match "window_id:$anc" --next-to "id:$anc") ;;
+    esac
+    { [ -n "$wt" ] && [ -d "$wt" ]; } && LA+=(--cwd "$wt")
+    LA+=(--env CC_ADMIT_DONE=1 -- zsh -ic "$cmd; exec zsh -i")
+    wid="$(k "${LA[@]}" 2>&1)"
+    case "$wid" in
+      ''|*[!0-9]*) note "cc-resume-layout: launch failed for $sid: $wid"; failed=$((failed + 1)); continue ;;
+    esac
+    if [ "$pos" = 0 ]; then
+      cc_log_pane_spawn os-window kitty "$wid" "$wt" "resume-layout CC-DESK-$win head sid=$sid acct=$acct"
+      A="$wid"
+    else
+      cc_log_pane_spawn split kitty "$wid" "$wt" "resume-layout CC-DESK-$win $how sid=$sid acct=$acct"
+      [ "$pos" = 1 ] && B="$wid"
+      # C and D: launched beside A / B, then turned UNDER it — the 2x2 without leaving `splits`.
+      [ "$pos" -ge 2 ] && { KITTY_WINDOW_ID="$wid" k action --self layout_action rotate >/dev/null 2>&1 \
+        || note "  [CC-DESK-$win] rotate refused for $wid — pane stays beside its neighbour"; }
+    fi
+    panes="$panes $wid"; pos=$((pos + 1)); launched=$((launched + 1))
+    note "  [CC-DESK-$win $grp] win $wid  $acct  $(basename "$wt")"
+    sleep "$STAGGER"
+  done <<EOF
+$PLAN
+EOF
+  close_window
+  [ "$DRY_RUN" = 1 ] && nwin="$(printf '%s\n' "$PLAN" | cut -f1 | sort -u | grep -c . || true)"
+
+  # FULLSCREEN, one window at a time: each becomes its own Desktop (Space).
+  fs_ok=0; fs_bad=0
+  if [ "$DRY_RUN" = 0 ]; then
+    w=0
+    while [ "$w" -lt "${#WIN_HEAD[@]}" ]; do
+      marker="CC-DESK-$((w + 1))"; hd="${WIN_HEAD[$w]}"
+      # The OS window's title is its ACTIVE pane's, and Claude Code repaints pane titles — so the
+      # marker goes on every pane, and it is a title WE own rather than one we read.
+      for p in ${WIN_PANES[$w]}; do k set-window-title --match "id:$p" "$marker" >/dev/null 2>&1; done
+      k focus-window --match "id:$hd" >/dev/null 2>&1
+      sleep "$SETTLE"
+      r="$(fs_osa "$marker")"
+      [ "$r" = true ] || { sleep "$SETTLE"; r="$(fs_osa "$marker")"; }
+      if [ "$r" = true ]; then fs_ok=$((fs_ok + 1)); note "  [$marker] fullscreen (read back)"
+      else fs_bad=$((fs_bad + 1)); note "  [$marker] NOT fullscreen (read back: ${r:-no answer}) — Accessibility for kitty?"; fi
+      for p in ${WIN_PANES[$w]}; do k set-window-title --match "id:$p" "" >/dev/null 2>&1; done
+      w=$((w + 1))
+    done
+    [ -n "${KITTY_WINDOW_ID:-}" ] && k focus-window --match "id:$KITTY_WINDOW_ID" >/dev/null 2>&1
+  fi
+
+  if [ "$DRY_RUN" = 1 ]; then verdict=ok
+  elif [ "$launched" -eq 0 ]; then verdict=failed
+  elif [ "$failed" -eq 0 ] && [ "$fs_bad" -eq 0 ] && [ "$shed" -eq 0 ]; then verdict=ok
+  elif [ "$failed" -eq 0 ] && [ "$fs_bad" -eq 0 ]; then verdict=shed
+  else verdict=degraded; fi
+  printf 'cc-resume-layout: verdict=%s launched=%s shed=%s failed=%s windows=%s fullscreen_ok=%s fullscreen_failed=%s\n' \
+    "$verdict" "$launched" "$shed" "$failed" "$nwin" "$fs_ok" "$fs_bad"
+  [ "$verdict" = failed ] && exit 4
+  exit 0
+fi
 
 # ── 2. screens, in System Events (top-left origin, y down) coordinates ──────────────────────────
 # NSScreen is bottom-left origin with y up; AX is top-left origin with y down, anchored at the top
