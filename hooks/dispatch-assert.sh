@@ -61,6 +61,17 @@ SID="?"
 
 input="$(cat 2>/dev/null || printf '{}')"
 
+# ── DEADLINE CAPTURE (C2/C2b, hooks/lib/deadline-capture.sh) — its own latch, cap and kill switch
+# (CC_DEADLINE_CAPTURE=off); runs in $( ) so it can never exit or fail this hook. A block from it
+# ends this Stop; NAME_TELL below runs unchanged at the next one.
+_dlc_lib="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/lib/deadline-capture.sh"
+[ -f "$_dlc_lib" ] || { _dlc_t="$0"; [ -L "$_dlc_t" ] && _dlc_t="$(readlink "$_dlc_t")"
+  _dlc_lib="$(cd "$(dirname "$_dlc_t")" 2>/dev/null && pwd)/lib/deadline-capture.sh"; }
+# shellcheck source=lib/deadline-capture.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+_dlc_out="$( { [ -f "$_dlc_lib" ] && . "$_dlc_lib" && dl_capture_stop "$input"; } 2>/dev/null || true)"
+[ -n "$_dlc_out" ] && { printf '%s\n' "$_dlc_out"; exit 0; }
+
 log_idl() { # $1=disposition $2=reason $3=extra JSON OBJECT (optional, jq-built; default {})
   mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
   local ts extra; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')"

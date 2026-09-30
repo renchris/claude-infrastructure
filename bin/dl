@@ -808,6 +808,50 @@ def capture_hit(text: str):
     return text[max(0, m.start() - 80): m.end() + 80] if m else None
 
 
+# Life vocabulary (C2b arm b outside a personal cwd). Case-sensitive acronyms stay upper-case only,
+# so "irs" inside a word or "cra" in "craft" cannot match.
+LIFE = re.compile(r"\b(tax(es)?|insurance|lease|landlord|rent|renewal|doctor|dentist|clinic|"
+                  r"appointment|pharmacy|prescription|passport|visa|licen[cs]e|registration|voter|"
+                  r"bank|credit card|refund|invoice|bill|subscription|birthday|anniversary|flight|"
+                  r"reservation|warranty|enrollment|mom|dad)\b", re.I)
+LIFE_UC = re.compile(r"\b(IRS|CRA|FBAR|CPAP|HSA|KPMG|Concur|DMV)\b")
+
+
+def token_date(tok: str, t: dt.date):
+    """A DATE_TOK match → a date. `Oct 5` takes this year, or next year once it is >30 days past."""
+    try:
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", tok):
+            return dt.date.fromisoformat(tok)
+        mon, day = re.match(r"([A-Za-z]{3})[a-z]*\.? (\d{1,2})", tok).groups()
+        x = dt.date(t.year, MONTHS[mon.lower()], int(day))
+        return x.replace(year=t.year + 1) if x < t - dt.timedelta(days=30) else x
+    except (ValueError, AttributeError, KeyError):
+        return None
+
+
+def capture_scan(text: str, t: dt.date) -> dict:
+    """C2/C2b in one pass: arm a (a cued date, preferring one inside 60 days), arm b (an undated
+    deferral), and whether life vocabulary is present. Shared by the Stop hook and `harvest`."""
+    a = None
+    for m in DATE_TOK.finditer(text):
+        win = text[max(0, m.start() - 80): m.end() + 80]
+        if not CUE.search(win):
+            continue
+        x = token_date(m.group(0), t)
+        soon = bool(x) and t <= x <= t + dt.timedelta(days=60)
+        cand = {"snippet": " ".join(win.split()), "date": x.isoformat() if x else None, "soon": soon}
+        if a is None or (soon and not a["soon"]):
+            a = cand
+    m = DEFER.search(text)
+    b = {"snippet": " ".join(text[max(0, m.start() - 80): m.end() + 80].split())} if m else None
+    return {"hit": bool(a or b), "a": a, "b": b,
+            "life": bool(LIFE.search(text) or LIFE_UC.search(text))}
+
+
+def cmd_capture_scan(a):
+    print(json.dumps(capture_scan(sys.stdin.read(), today())))
+
+
 def cmd_harvest(a):
     m = re.fullmatch(r"(\d+)h", a.since)
     cutoff = time.time() - int(m[1]) * 3600 if m else 0
@@ -1042,6 +1086,8 @@ def main(argv=None):
     s = sub.add_parser("harvest", help="C4: deferrals in cli transcripts with no dl event -> proposals")
     s.add_argument("--since", default="26h"); s.set_defaults(fn=cmd_harvest)
     sub.add_parser("propose", help="C5 sweep admission: candidates JSON on stdin").set_defaults(fn=cmd_propose)
+    sub.add_parser("capture-scan", help="C2 scanner for the Stop hook: text on stdin, JSON out"
+                   ).set_defaults(fn=cmd_capture_scan)
     a = p.parse_args(argv)
     try:
         return a.fn(a) or 0
