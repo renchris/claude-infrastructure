@@ -916,6 +916,36 @@ def classify(text: str, table: dict, default: str) -> str:
     return default
 
 
+OVERRIDABLE = ("title", "kind", "lost", "since", "resurface", "activate_when", "void_if", "falsifier",
+               "bundle", "domain", "owner")
+
+
+def apply_override(item: dict, ov: dict) -> None:
+    """Personal import-map `overrides[ref]`: curate one imported item (title, kind, dates, consequence).
+    Dates the kind forbids are cleared, and resurface is recomputed unless the override names one."""
+    unknown = set(ov) - set(OVERRIDABLE) - {"id", "class", "usd", "text", "effort"}
+    if unknown:
+        raise SystemExit(f"import-map overrides: unknown field(s) {sorted(unknown)}")
+    for f in OVERRIDABLE:
+        if f in ov:
+            item[f] = ov[f]
+    c = item["consequence"]
+    for f in ("class", "usd", "text"):
+        if f in ov:
+            c[f] = ov[f]
+    kind = item["kind"]
+    if kind in ("decay", "someday"):
+        item["lost"] = None
+    if kind != "decay":
+        item["since"] = None
+    if kind != "someday" and "activate_when" not in ov:
+        item["activate_when"] = None
+    item["state"] = "someday" if kind == "someday" else "open"
+    if "resurface" not in ov:
+        item["resurface"] = (resurface_for(kind, item["lost"], c["class"], ov.get("effort", 0)) if item["lost"]
+                             else (d(item["since"]) + dt.timedelta(days=3)).isoformat() if item["since"] else None)
+
+
 def cmd_import(a):
     path = Path(a.path)
     lines = path.read_text().splitlines()
@@ -932,7 +962,10 @@ def cmd_import(a):
                                                r"\b(legal|lawsuit|arbitration|dispute)\b": "legal",
                                                r"\b(reply|answer|text|message|thank)\b": "relationship",
                                                r"\$\d": "money"})
-    merges = imap.get("merges", {})
+    # merges: {ref: into} or {ref: {"into": ref, "why": text}}; to_backlog: {ref: why}; overrides: {ref: {field: value}}
+    merges = {k: (v if isinstance(v, dict) else {"into": v, "why": "inventory overlap"})
+              for k, v in imap.get("merges", {}).items()}
+    to_backlog, overrides = imap.get("to_backlog", {}), imap.get("overrides", {})
     appx, ref = {}, None
     for l in lines:
         m = APPX.match(l)
@@ -958,10 +991,10 @@ def cmd_import(a):
         cons = detail.strip().split(" · owner:")[0][:240]
         src = [f"{path.name}:{n}"]
         if rf in merges:
-            buckets["reject"].append((rf, n, f"merged into {merges[rf]} (inventory overlap)"))
+            buckets["reject"].append((rf, n, f"merged into {merges[rf]['into']} ({merges[rf]['why']})"))
             continue
-        if owner_raw == "an agent session":
-            buckets["backlog"].append((rf, n, "agent-owned: cc-backlog, not dl"))
+        if owner_raw == "an agent session" or rf in to_backlog:
+            buckets["backlog"].append((rf, n, to_backlog.get(rf) or "agent-owned: cc-backlog, not dl"))
             continue
         owner = {"you": "operator", "you + an agent session": "both"}.get(
             owner_raw, "third-party" if owner_raw.startswith("third party") else "operator")
@@ -1001,7 +1034,11 @@ def cmd_import(a):
                 "bundle": None, "state": "someday" if kind == "someday" else "open",
                 "ext": {"reminder_id": None, "event_id": None, "channel": None},
                 "created": now_iso(), "updated": now_iso(), "import_ref": rf}
-        base = f"{dom}.{slug(title)}"
+        ov = overrides.get(rf) or {}
+        if ov:
+            apply_override(item, ov)
+            kind, dom = item["kind"], item["domain"]
+        base = ov.get("id") or f"{dom}.{slug(item['title'])}"
         iid, k = base, 2
         while iid in staged:
             iid, k = f"{base}-{k}", k + 1
@@ -1014,9 +1051,9 @@ def cmd_import(a):
         staged.add(iid)
         by_ref[rf] = item
         buckets["someday" if kind == "someday" else "admitted"].append((rf, n, item))
-    for rf, into in merges.items():
-        if into in by_ref:
-            by_ref[into]["source"].append(f"merged:{rf}")
+    for rf, m in merges.items():
+        if m["into"] in by_ref:
+            by_ref[m["into"]]["source"].append(f"merged:{rf}")
     adm = buckets["admitted"]
     kinds = {k: sum(x[2]["kind"] == k for x in adm) for k in DATED + ("decay",)}
     total = sum(len(v) for v in buckets.values())

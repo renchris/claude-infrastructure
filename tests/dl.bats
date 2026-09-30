@@ -319,6 +319,37 @@ EOF
   [ -f "$DL_DIR/import-rejects.md" ]
 }
 
+@test "import overrides: curated title/kind/dates, merge reasons and to_backlog come from the personal import-map" {
+  inv="$BATS_TEST_TMPDIR/inventory.md"
+  # shellcheck disable=SC2016  # '$10,000' is literal fixture text, not an expansion
+  printf '%s\n' '- [ ] **Thu Aug 20, 2020 (overdue)** — Pat Example is waiting on the guest list — Reply.' \
+    '    Pat waits. · owner: you · ~5 min · ref P0-1 · source: fixture' \
+    '- [ ] **Thu Oct 15, 2020** — FBAR retirement account — Pull balances.' \
+    '    Penalty up to $10,000. · owner: you · ~10 min · ref P0-2 · source: fixture' \
+    '- [ ] **Sat Aug 8, 2020 (overdue)** — Old invoice nobody is chasing — Check.' \
+    '    About $40. · owner: you · ~5 min · ref P0-3 · source: fixture' \
+    '- [ ] **Sat Aug 8, 2020 (overdue)** — Token rotation — Rotate.' \
+    '    Exposure. · owner: you · ~5 min · ref P0-4 · source: fixture' \
+    '### P0-1 — x' '- Due (2020-08-20, overdue-running): f' '### P0-2 — y' '- Due (2020-10-15, hard): f' \
+    '### P0-3 — z' '- Due (2020-08-08, overdue-running): f' '### P0-4 — w' '- Due (2020-08-08, overdue-running): f' > "$inv"
+  cat > "$DL_DIR/import-map.json" <<'JSON'
+{"merges": {"P0-2": {"into": "P0-1", "why": "bundled: same domain, same date"}},
+ "to_backlog": {"P0-4": "agent-owned credential rotation: cc-backlog"},
+ "overrides": {"P0-1": {"title": "Reply to Pat Example with the guest-list link", "id": "customer.pat-guest-list"},
+               "P0-3": {"title": "Check the old invoice is paid", "kind": "someday", "activate_when": "date>=2020-11-01"}}}
+JSON
+  run "$DL" import "$inv" --apply
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"merged into P0-1 (bundled: same domain, same date)"* ]] || false
+  [[ "$output" == *"agent-owned credential rotation: cc-backlog"* ]] || false
+  [[ "$output" == *"title lint: 0 imported"* ]] || false
+  run jq -r '"\(.title)|\(.kind)|\(.since)"' "$DL_DIR/items/customer.pat-guest-list.json"
+  [ "$output" = "Reply to Pat Example with the guest-list link|decay|2020-08-20" ]
+  run jq -r 'select(.kind=="someday") | "\(.state)|\(.since)|\(.lost)|\(.activate_when)"' "$DL_DIR"/items/*.json
+  [ "$output" = "someday|null|null|date>=2020-11-01" ]
+}
+
 @test "harvest: a cli deferral in a session with no dl event becomes a proposal; a discharged session does not" {
   root="$BATS_TEST_TMPDIR/tx"; mkdir -p "$root/p"
   printf '%s\n' \
