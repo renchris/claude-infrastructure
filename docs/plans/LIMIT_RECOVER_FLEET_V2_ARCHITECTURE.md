@@ -1,6 +1,10 @@
+---
+status: in-progress
+---
+
 # Pane-in-place parallel limit recovery: architecture, revision 2
 
-*Line numbers refer to `/Users/chrisren/Development/claude-infrastructure` near trunk tip `097255b53`. "(verified)" means the line was re-read this session. `handoff-fire.sh` moves often, so re-grep every anchor before editing it.*
+*Lines marked "as built" or "corrected 2026-09-30" were re-read on origin/main at `27a007c40` or later (FLEET_V2 W6e); every other anchor is from the original revision.* *Line numbers refer to `/Users/chrisren/Development/claude-infrastructure` near trunk tip `097255b53`. "(verified)" means the line was re-read this session. `handoff-fire.sh` moves often, so re-grep every anchor before editing it.*
 
 ## 0. Summary
 
@@ -88,6 +92,7 @@ There is no per-pane mail.
 | Stale state on disk: `requests/` holds 18 files, `runs/by-sid/` holds 23 claim dirs, and all holders are `{sid,pane,pid,ts,by}` with no lstart. | `ls` this session (verified); skeptic's holder read | Stale reconcile runs before anything acts. A legacy holder is judged by argv match, never by bare pid liveness. |
 | Measured stage times: bundle→painted 20-27 s for one pane and 28-45 s at N=4. First Enter swallowed in 4 of 6 recoveries, costing 32-43 s. Submitted→engaged 12-25 s. | bundle `events.jsonl` and `handoffs.jsonl`, 2026-09-29 | These are the latency inputs in §8. |
 | A fresh `claude-accounts` sweep takes median 8.3 s, p90 22 s, max 62 s. Keep-warm runs every 180 s against a 90 s TTL. | keepwarm log, 200 rows | `--place` is cache-only up to `cache_grace_s` (600 s). The fresh sweep runs in the background. |
+| *(Added 2026-09-30, decision 4, D4.6.)* Claude Code's own usage-limit continue never arms on this fleet. On 2.1.284 the auto-arm and the auto-opened `/rate-limit-options` menu both return early on `Sm()` = `replBridgeActive \|\| bg-session \|\| teammateAgentId`, and `remoteControlAtStartup` is true in all 5 config dirs. | 86 of 88 limited non-teammate transcripts on 2.1.260+ carry bridge-session records (the other 2 are sdk-cli); the vendor prompt occurs in 0 real transcripts; 0 of 45 undisturbed or notification-only episodes fired; the same gate is in 2.1.260 and 2.1.280, and 2.1.220 has no auto-continue at all | Our typed `continue` is the only wake, not a fallback. (1) The "press enter to continue" state and the >24 h menu do not occur while Remote Control is on, so the wake finds a plain, empty composer. (2) The gate rests on an untracked per-machine setting (`git grep` finds no `remoteControlAtStartup` in the repo), and a failed bridge re-enables the vendor wait for that session (secondary and quaternary each record `bridgeOauthDeadFailCount=1`). So the wake waits until reset + 120 s, past the 90 s jitter maximum, and checks `lr_engaged_after` first (`lr-reset-poller.sh:792-796`). (3) If the menu ever does open, `cc_tui_submit` abstains with rc 2 and types nothing (`scripts/lib/cc-tui.sh:11`, `:531-535`), so the wake pages. Change neither `remoteControlAtStartup` nor `autoContinueAtUsageLimit`; no limit-menu recognizer, held-lead marker for `cc-pane send`, or reso-keepalive fix is needed. |
 
 ---
 
@@ -203,7 +208,7 @@ Four independent gates apply to a limited session's **first turn**, i.e. the con
    - A new session the operator starts after entry raises `active` and reduces restore headroom. Restoring is allowed; growth is refused.
    - The check is `cc_sp_active + unredeemed_tokens + 1 ≤ R`. The library gets `CC_ADMIT_RESTORE_R=<R>` in the active term (`:1352-1365`), and **all** callers now count unredeemed, unexpired admission tokens as in-flight active.
 2. **CPU brake at the pre-limit operating point.** A first turn is admitted only while `load1/ncpu ≤ max(2.5, L_open)`, where `L_open = max(load1, load5)/ncpu` at ACTIVE entry. load5 lags, so it reflects the load before the limit. There is a floor of one admission per 20 s, so nothing starves.
-3. **Per-target-account first-turn pacer.** At most 3 first turns may be submitted-but-not-ENGAGED per account. The next is released on ENGAGED, on a TARGET-* verdict, or after 20 s. The same pacer, with 0-60 s jitter, covers in-place reset wakes (WAIT_RESET, HELD:team leads). This keeps one account under the 5-6-concurrent infra band that produces 529s.
+3. **Per-target-account first-turn pacer.** At most 3 first turns may be submitted-but-not-ENGAGED per account. The next is released on ENGAGED, on a TARGET-* verdict, or after 20 s. The same pacer, with 0-60 s jitter, covers in-place reset wakes (WAIT_RESET, HELD:team leads). This is burst protection; limiter behaviour is unmeasured above N=6 (0/40 failures at N≤6). *Corrected 2026-09-30 (decision 8): the "5-6-concurrent infra band that produces 529s" was never measured here; it came from GH#62426 (`docs/research/lr-fleet-v2-decisions-2026-09-30/kmax-decision-8.md`).* As built, the pacer is `Admission` (`lr_recon/admit.py:87`, `LR_PACER_PER_ACCT`, default 3; slots free after `PACER_RELEASE_S` 20 s at `:38`), and the reset wake uses `Admission.pace_wake` (`:162`). It was wired to the act path only by W6d `f8f1e07ea` (D1.12); before that nothing called it.
 4. **Memory terms:** headroom ≥4 GB and compressor segments ≤50%, via `cc_capacity_probe`. The load term stays off (`lr-lib.sh:417`).
 
 - **What a refusal does.** A LIMITED session whose first turn is refused is still relaunched with no prompt (RELAUNCHED-UNPROMPTED, a named wait). That frees its source seat and keeps it ready to prompt.
@@ -347,6 +352,8 @@ It prefers an in-pane `--relaunch-at-shell` when the recorded pane is at a shell
 - **Readout:** one counted line in `hooks/operator-readout.sh`.
 - **Mail:** one mail per cohort, only to a cc-lr requester pane. Nothing goes to the desk role.
 - **Human residue:** a real draft or a background job held past its maximum age is filed through `cc-backlog needs`.
+  - *Corrected 2026-09-30 (decision 6, D6.2), as built:* a held draft is **paged**, not filed. The page sink sends `cc-notify --role desk` and, unless that reports `verdict=delivered`, posts through `scripts/limit-recover/lr-page.sh` (macOS Notification Center, plus a Pushover phone leg once the operator's credentials exist) (W6d `6cd769a08`, `f8f1e07ea` D6.5). The page quotes the draft from a raw screen snapshot (`b5740ca25`, D6.7). The old sink passed `--page`, which `cc-notify` rejects with exit 2, so no reconciler page had ever been delivered.
+  - *HELD:team (decision 4, D4.11):* the page fires when the hold starts, whatever the reset distance (the immediate-page set, `report.py:732-748`), so a lead with a far reset is visible at once and the operator can shut idle members down to let it move alone. There is no idle-age release rule: in the one true hold, members idle 36-40 min went back to work, and in the false hold the member had been idle only 13 min.
 
 ### C12. Repository hygiene
 The daemon reads `core.bare` twice for each git-common-dir the cohort touches: before dispatch and after any actuator that ran a `git worktree` command.
@@ -529,6 +536,8 @@ for a in accounts:
 movers = own-account returners (source fact expired) first, then LIMITED by death ts, then IDLE
 for m in movers:
     w = 1 + distinct subagents/**/agent-*.jsonl of m written in KWORK_WINDOW before death + killed_inflight(m)
+        # as built (W6d f8f1e07ea, D3.6(d)): 1 + subagents written in the 10 min before the death
+        # (timeline.detected), lr_recon/plan.py:135-138; killed_inflight is not built
     cands = [a for a in accounts if cap[a]-placed_w[a] >= w and a != "none" and a in account_map
              and not store_holds(a, m.sid)
              and (a != fold(m.src) or not fact(m.src, m.lane))                 # the source is eligible once it resets
@@ -543,7 +552,13 @@ for m in movers:
   - `s_proj(a,n) = su + (b_native + n·b_sess)·min(1 h, session_reset_h) < RECOVERY_S_CEIL`
   - `w_rem − (n+1)·r_w_worst·min(weekly_reset_h, 9 h) ≥ RECOVERY_W_FLOOR`
   - `b_sess` is the mover's own pre-death burn when it can be measured; otherwise the fleet p75, about 7 pp/h as measured tonight.
+    - *As built (W6c `ad21bf402`, D3.6):* `b_sess = max(the mover's own pre-death burn, 7 pp/h)` (`bin/claude-accounts:4533-4534`; default `PLACE_B_SESS_DEFAULT` 0.07/h at `:4303`, env `CC_PLACE_B_SESS_DEFAULT`). A supplied burn only ever raises the charge: raw pre-death burn bounded the post-move burn for 19 of 56 transplant pairs, `max(pre, default)` for 51. A model-cap death, and a weekly-cap death within 1 h of a 5h reset, count as unmeasured, because their pre-death burn says nothing about the post-move burn. No caller supplies `burn_ph` today (the field is `lr_recon/types.py:819`, never set), so every mover is charged the default.
   - `r_w_worst` comes from `accounts.json router._recovery`.
+  - **What the `(n+1)` weekly term does, and where it diverges** (decision 3, D3.5; left unchanged, the reconciler only observes):
+    - (a) The weekly term has no native-burn term (`bin/claude-accounts:4514-4518`), against `b_native` in the 5h term (`:4506-4512`), so the `+1` is its only reserve for the target account's own load.
+    - (b) It makes the reconciler stricter than the live lane. With `r_w_worst` 0.011/h, the first mover needs about 29.8% of the week left (`0.10 + 2·0.011·9`) when the reset is 9 h or more away, against the flat 10% (`RECOVERY_W_FLOOR_DEFAULT`, `:2358`) that the poller's `--rank --recovery` applies (`_excluded`, `:3963-3966`). On 09-12 `next3` had 23-24% left: the live lane would have moved that session and the reconciler would not.
+    - (c) The one case it decided (09-12) replays as roughly a wash (about +4.7 h against -5.2 h, estimated), so n against n+1 is unsettled.
+    - (d) Before `recon.on` is set, count the shadow passes where `--place` says wait on `recovery-weekly-thin` while `--rank --recovery` routes, and settle n against n+1 from that count.
 - **No herd:** every pick re-scores KF with the earlier picks' weights included.
 - **Phantoms:** charged with the mover's weight at PLANNED, with `ttl_s=1200` refreshed on every pass while the record is non-terminal. A dead daemon's phantoms heal within 20 minutes. They are voided:
   - at CLOSED, once a cached sweep newer than `engaged_at` includes the session;
@@ -562,7 +577,7 @@ for m in movers:
 | Observe and plan | 1 thread | one pass per cohort decision |
 | Actuator subprocesses | W = 16 | mostly waiting |
 | TUI boots (relaunch typed → painted) | **B, AIMD:** start 6; +2 after a wave where every relaunch-typed→painted ≤ 15 s (measured 5-9 s); halve on any > 45 s or a boot INDETERMINATE; floor 2, cap 12 | the resource that failed at load 40+ on 2026-09-19 |
-| First turns per target account | 3 submitted-not-ENGAGED; next on ENGAGED, TARGET-*, or 20 s | the infra band of 5-6 concurrent per account |
+| First turns per target account | 3 submitted-not-ENGAGED; next on ENGAGED, TARGET-*, or 20 s | burst protection; limiter behaviour unmeasured above N=6 (0/40 failures at N≤6) — *corrected 2026-09-30, decision 8* |
 | First turns, box-wide | frozen R, CPU brake at `max(2.5, L_open)` per core with a floor of 1 per 20 s, memory terms | C6 |
 | Per target account seats | `KMAX − kwork − Σ phantom weights` | C5 |
 | iTerm2 panes | none (HOLD:iterm) | detached osascript fails 3/3 |
@@ -570,7 +585,7 @@ for m in movers:
 | `.claude.json.lock` | once per (target, cwd) per cohort | preseed; drivers honour `LR_PRESEED_DONE` |
 | Git writes | one lock per git-common-dir, with a holder | C7 |
 | Launch / recycle | one typer per sid; one watcher per pane | C7 |
-| Team units | disabled; HELD:team | C11 |
+| Team units | disabled; HELD:team, unconditional in v1 (no switch); the lead is continued in its own pane at the reset | C11, § 15 |
 
 ---
 
@@ -590,7 +605,7 @@ The fingerprint is (phase, class, the first `!!` line with digits and paths norm
 |---|---|---|
 | **TRANSIENT** (allowlist) | kitty RPC timeout; `surface rc 3`; "resolved to no tty"; slow boot ("no claude process appeared within 90s"); lock busy; router exit 5; usage 429; swallowed Enter; killed actuator or watcher; `cc_tui_submit` MANGLED; a background dialog that reappears | Backoff 10/30/60/120 s, capped at 5 min. **Never escalates.** Pages at 6 attempts, then hourly while retries continue. |
 | **WAIT** | no routable target (with the router's reason); capacity refused; every account limited; router exit 3; TARGET-LIMITED; TARGET-AUTH | WAIT_* with named wakes. Does not count as an attempt. |
-| **HOLD** | foreign draft; background work; live subagents on an idle move; HELD:team; composer unreadable; parked menu; repo bare; iTerm2 | Re-checked every pass. Each has a maximum age (C11). No keystroke over a draft. The stash is opt-in. |
+| **HOLD** | foreign draft; background work; live subagents on an idle move; HELD:team; composer unreadable; parked menu; repo bare; iTerm2 | Re-checked every pass. Each has a maximum age (C11). No keystroke over a draft. No stash exists (decision 6, 2026-09-30); a ≤2-character stray composer on an unfocused pane is scrubbed with a receipt (`scripts/lib/composer-intent.sh:29,67-70`; non-ASCII is never a stray). |
 | **DETERMINISTIC** | a fingerprint **outside** the TRANSIENT allowlist, seen on 2 consecutive attempts | **ESCALATED:** stop, page with evidence, keep ownership. Re-arms (attempt counter reset, one re-fire) when any of these happens: a live-layer sha change in the actuator scripts; a change in the repo's `core.bare` or worktree list; a change in the account eligibility set; the pane's process (pid, lstart) changes; a lock holder dies; load falls below its level at the time of failure; **or 15 minutes pass**. |
 | **IMPOSSIBLE-IN-PLACE** | launcher-rooted; the pane gone after our `/exit`; headless | R, verified by the same rules, ending REPLACED or REPLACED-NEW-WINDOW. A cwd that is gone and cannot be recreated is IMPOSSIBLE. |
 
@@ -729,12 +744,12 @@ Measured tonight:
 | # | Invariant | Kept by |
 |---|---|---|
 | 1 | A teammate is never a recovery target | Parsed `is_teammate_head` in the census and the hook. The probe still refuses (`handoff-fire.sh:8452-8460`). No keystroke into members; a HELD:team lead is continued in place without `/exit`. |
-| 2 | A lead with live members is never `/exit`ed without the team hold | HELD:team via `live_teammates_of` (`handoff-fire.sh:9097-9130`). The team unit is disabled in v1. |
+| 2 | A lead with live members is never `/exit`ed without the team hold | HELD:team via `live_teammates_of` (`handoff-fire.sh:9097-9130`). The team unit is disabled in v1. *Corrected 2026-09-30 (D4.10), as built:* the hold keys on one shared live-member test, `lr_has_live_teammate <sid>` in `scripts/limit-recover/lr-team.sh` (W6d `4c3fc715f`), mirrored in the census; `live_teammates_of` (`handoff-fire.sh:6163`) is a self-close gate, and the old range was stale. The hold is unconditional in v1: there is no team-unit switch (`LR_TEAM_UNIT` was never read by any code). The lead is continued in its own pane at the reset (W6d `3ba89226e`; § 15). |
 | 3 | Refusable reads come before the irreversible step; a refusal leaves nothing behind | The precheck, now with launcher-root and background-work checks. **After confirm**, the last read and the read-back, with UNCONFIRM restoring the pre-move state. |
 | 4 | One actuator per session | One record per sid; `owned/` with procs; claims with (pid, lstart); the fence inside every entry function; transplant locks carrying a record id. |
 | 5 | Exactly one live copy per uuid | Two-phase transplant; stub refusal; link-then-unlink renames; fold-stub into both copies; bg rows in H; the post-close sentinel with `claude stop`; the launch lock with the H re-check before spawn; `lr-fire-resume --force-split` refusal (`:339-352`). |
 | 6 | Watcher first, `/exit` last | Unchanged, plus the per-pane recycle lock and the attempt nonce. |
-| 7 | Never type over a foreign draft | The composer gate plus the post-confirm last read, `/exit` without Enter plus read-back, 5 backspaces only for our own `/exit`, the stash opt-in. |
+| 7 | Never type over a foreign draft | The composer gate plus the post-confirm last read, `/exit` without Enter plus read-back, 5 backspaces only for our own `/exit`, the stash opt-in. *Corrected 2026-09-30 (decision 6):* no stash exists; the one exception is a ≤2-character stray composer on an unfocused pane, scrubbed with a receipt. |
 | 8 | Typing only on an affirmative pane state; relaunch lines nonce-verified | `pane_cc_state` (`:4042`), `it2_type_verified` (`:2715`). |
 | 9 | Enter only on DRAFT-MINE, never while queued; expect never exits | `lr-fire-resume` rules; only the re-send schedule changes. |
 | 10 | Subagents are killed only for cause=limit | ALLOW_LIVE_SA forced only for limit (`:10582-10587`). Idle moves use `voluntary` and require zero subagents, workflow slots included. |
@@ -857,6 +872,8 @@ Measured tonight:
 ## 12. Rollout
 Rollout is in the implementation plan. It runs W0 measurement, then W1-W4 builds, then W5 gates: the 5- and 30-session synthetic rig, real canaries, and an OBSERVE-mode shadow over 2 cohorts. After that it cuts over by writing `recon.on` with `mode=act`. Zero-human recovery then needs only the operator's `autorecover.on`. HEAL stays off until the operator rules on it.
 
+*As built after W6 (2026-09-30):* the reconciler acts on a non-cc-lr (hook- or census-origin) record only when BOTH `~/.reso/limit-recover/autorecover.on` and its own `recon/autorecover.on` exist (D1.9, W6d `f8f1e07ea`; the daemon never creates either). The operator creates the second only after the first attended reconciler cohort closes clean (D1.14). `autorecover.on` stays the single zero-human switch for the legacy lanes: the poller's hook requests and `reroute_parked` both check it (`lr-reset-poller.sh:1070`, `:1834`). Decision 5 is settled "allow": the legacy heal `lr_heal_bare_checkout` runs under `LR_BARE_REPAIR` (`b509a51f4`), and the reconciler's own HEAL actuator stays off unless `LR_HEAL_CORE_BARE=on` (`lr_recon/act.py:459`).
+
 ## 13. Grafts rejected, and why
 - **`lr-upgrade --switch-drive` for idle moves.** It submits `Run in Bash now: cc-lr switch …` (`lr-upgrade.sh:789-791`), which needs a turn on the rejected account.
 - **A SQLite ledger.** It creates two stores that can disagree. A file per sid with `owned/` gives the same invariant.
@@ -874,3 +891,18 @@ Rollout is in the implementation plan. It runs W0 measurement, then W1-W4 builds
 - **`/goal` survival across a limit** is measured in W0. A lost goal is flagged after ENGAGED, not re-armed, in v1.
 - **The reconciler is a single orchestrator.** It is mitigated by KeepAlive, the standalone watchdog, adoption, evidence-derived state, fences that hold for live processes and lapse for dead ones, the resume-debt backstop, the fixture matrix and the shadow phase.
 - **HOLD-DRAFT, HOLD-BGWORK and HELD:team need the operator or a reset by design.** The operator decisions set that policy.
+
+## 15. Team leads: the v1 hold and wake as built, and the v2 move (decision 4, ruled 2026-09-30)
+
+**v1, as built.** A LIMITED lead with live members is HELD:team on every lane, decided in the census before placement runs (`lr_has_live_teammate`, `scripts/limit-recover/lr-team.sh`, W6d `4c3fc715f`). Decision 3 now always waits, so the hold overrides nothing in it (lead resolution 6 corrects D4.11). Nothing sends it `/exit` or relaunches it. The two wakes, one text (a plain `continue`, lead resolution 2), both behind `lr_focus_gate` (lead resolution 1):
+- **Reconciler** (`act.cmd_wake`, W6d `3ba89226e`): at reset + 120 s + the sid's 0-60 s jitter, paced per account by `Admission.pace_wake`, only while the source has headroom, members are still live and the pane is at a claude prompt, once per reset. It types through `cc_tui_submit`, which refuses an occupied composer (rc 3). A fresh non-error turn after the reset closes the record CLOSED via IN-PLACE. A failed submit pages once (WAKE-FAILED) and is never retyped; the HELD:team page at reset + 10 min stays. A HELD:team record opens only for a LIMITED lead.
+- **Hook lane** (`nudge_in_place`, W6b `17fbdee45`): at reset + `LR_NUDGE_AFTER_RESET_S` (120 s) plus a 0-90 s per-sid jitter, and only if no assistant turn has appeared since the reset (`lr-reset-poller.sh:782-796`); held leads route to the parked lane and stay out of the latch-expiry resume arm (D4.8).
+
+**v2: the cross-account team move, not built** (D4.15). It needs a two-account throwaway-team probe first. Prerequisites and hazards:
+- Move the members first: they inherit the lead's `CLAUDE_CONFIG_DIR`, and were limited in the same tick as their lead in all 5 poller-log pairings.
+- Team dirs and inboxes are per config dir, so copy the team dir to the target account, and set `CLAUDE_INTERNAL_ASSISTANT_TEAM_NAME`.
+- Accept the vendor's deaf-lead limit.
+- On 2.1.284, cleanup kills only panes the exiting process spawned, but always deletes the team dir it registered.
+- A `--resume`d lead registers a new, empty team (13 of 13 observable), which explains 8ad3a9d2's lost team on 08-18.
+- A lead message that reaches a limited member before the member's reset is spent.
+- Dialog rows and `config.json` keep members that have already exited. Before relying on either, send each member a `shutdown_request` and wait for its `shutdown_approved`, or `TaskStop` it.
