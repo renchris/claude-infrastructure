@@ -87,6 +87,88 @@ compared and recorded as evidence.
 Still waiting at 02:53Z: no real limit since 19:40Z. The first likely one is a weekly limit (`next2`
 at 79%, rising about 1 point an hour).
 
+### Second run (W5b2), counted from the reboot
+
+**Cutoff.** The host rebooted at 20:26Z on 2026-09-30, which restarted the reconciler onto the final
+code (W6f and W7a had been on the shared checkout since 19:43Z): pid 68005, started 20:43:55Z, the last
+row of `recon/restarts.jsonl` (t=1790801043.8), confirmed by `launchctl print` (running, pid 68005).
+The five `lr_recon` modules it imports are byte-identical to origin/main at `cda13e6a1`, and no
+`lr_recon` commit has landed since. Mode is observe: `recon/mode` and `recon.on` are both absent, and
+`autorecover.on` is present, so the hook lane is the actuator. Only cohorts whose limit began after
+20:43:55Z count toward the 2. If the reconciler restarts again, its new start time is the cutoff and
+the count starts over.
+
+**Watcher.** The reboot killed the first one. Restarted at 21:39Z as pid 73698, detached (parent 1,
+its own process group), `watch ~/.reso/limit-recover --interval 20 --notify lr-fv2-w5b2-38`, log
+`~/.reso/limit-recover/shadow-archive/watch-w5b2.log`; it is the only `shadow_lib.py` process.
+
+**Cohorts at 21:47Z.** None has opened since the cutoff. The one open cohort is
+`next2-7d-1791025200`, next2's weekly limit: opened 07:09:55Z (the `open` stamp in its
+`.pages.json`), resets 2026-10-03 11:00Z, 9 members. It began before the cutoff, so it is evidence
+only. Compared while still open, at 21:40Z:
+
+```
+SHADOW next2-7d-1791025200: members 9 · legacy found 17 · census misses 11 (0715cd0c,3c85fe54,3d42fa49,46bc0436,4a956c3b,7c395da7,84f3533b,8ea01453,a87593c9,cfb177b2,e44c8e8c) · placements feasible 3/3 · phase agree 0/6 (false-RECOVERED resolved 3, plan differed 2) → FAIL
+```
+
+- The 11 census misses are not misses. All 11 are stop markers from 2026-09-24 and 2026-09-29, earlier
+  next2 limits that came days before this cohort. They count because the cohort record carries
+  `opened_at: 0.0`, so the compare's marker window starts at the epoch, and `resets_at: null`, so no
+  hook request can match (defect A).
+- The placements were all feasible (3 of 3).
+- Phase: 2 plan differed (46d14e14 and 68691067: the recon planned next3, legacy moved them to next4)
+  and 4 disagree: c28362b6 and c8c2adc0 (legacy recovered them before the cutoff; the recon had no
+  target), cd3bd860 (defect B) and 4d7c9bce, this session and the only member limited after the
+  cutoff (defect C).
+
+**Instrument fix, same run.** Defect A reached the gate through `shadow_lib.py`, which trusted the
+cohort record's reset and opening time; the pin's fixture wrote both, a shape the daemon never writes.
+The compare now takes the reset from the cid and the opening from the open page's stamp (the cohort's
+`.pages.json`, archived beside it as `pages.json`), falling back to the earliest member detection, and
+prints a `window:` line whenever it had to. The watcher also stopped archiving `<cid>.pages.json` as a
+cohort of its own: the archive index still holds the one stale `next2-7d-1791025200.pages` row it made.
+Pinned in `tests/lr-recon-shadow.bats` with the daemon's real record shape. The same cohort, at 21:52Z:
+
+```
+SHADOW next2-7d-1791025200: members 9 · legacy found 6 · census misses 0 · placements feasible 3/3 · phase agree 0/6 (false-RECOVERED resolved 0, plan differed 2) → FAIL
+  window: opened 2026-09-30T07:09:55Z, resets 2026-10-03T11:00:00Z (reset from the cid, opened at the open page's stamp; the cohort record left it unset)
+```
+
+Checks 1 and 2 now pass, and the FAIL is check 3 alone. One more pre-cutoff fact: for cd3bd860 the
+recon planned next3 and legacy used next3, yet between its 07:18Z engagement there and the reboot the
+recon never derived ENGAGED. The final code never judged that session live, so this is evidence only.
+
+**Defects on the final code.** Messaged to the lead at 21:48Z. Not fixed here: `lr_recon/**` is
+outside this wave.
+
+- **A. The cohort record loses its key.** Each pass, `_report` (`lr_recon/__main__.py:992`) rebuilds
+  `T.Cohort(cid, acct, scope, members)` without `resets_at` or `opened_at`, and `report.write_cohort`
+  persists it. `recon/cohorts/next2-7d-1791025200.json` therefore reads `resets_at: null,
+  opened_at: 0.0`, though its own cid encodes the reset. The same object feeds the pages: the open page
+  renders `until ?` (`report.py:619`), and an all-good close page would time the cohort from the epoch
+  (`report.py:700-701`). Every future cohort carries it, and so does the shadow gate's check 2.
+- **B. A reboot-parked record flaps every pass.** cd3bd860 (legacy recovered it to next3 at 07:18Z;
+  its pane died in the reboot) is set to `PARKED-REBOOT` by the census stale pass ("planned before
+  kern.boottime", `census.py:497-505`), and the same pass's derive overwrites that with
+  `PANE-GONE/R` (row 11, "resume owed", `phase.py:147-149`). The §4.4 invariant then flags it:
+  408 `stale` and 408 `RECON-DEFECT PANE-GONE/R` events from 20:46:46Z to 21:43:51Z, one each per
+  pass. The cohort status buckets it "moving". In act mode `act.may_actuate` has no reboot-park guard
+  and `act.choose` returns `R`, so `cmd_replace` would run `boot-resume-launch.sh` for a session the
+  daemon's own status says to relaunch by hand.
+- **C. A session legacy recovers to an account the recon did not place never reads as engaged.** This
+  session was limited on next2 at 21:26:29Z; the hook lane recovered it to next at 21:37:08Z (watcher
+  ENGAGED) and it has worked there since. Its record is plan-only with no target: it went `IN-FLIGHT`
+  at 21:36:33Z ("relaunch gap"), is still `PRE-MOVE/IN-FLIGHT` at 21:47Z, and has drawn
+  `RECON-DEFECT PRE-MOVE/IN-FLIGHT` every pass since its 600 s bound ran out at 21:46Z. The four
+  pre-cutoff records of the same shape (46d14e14, 68691067, c28362b6, c8c2adc0) expired `IN-FLIGHT`
+  and were paged ESCALATED at 18:38Z and IMPOSSIBLE at 19:13Z, while legacy had recovered all four
+  and each had engaged.
+
+Wherever B or C occurs it fails gate check 3. C occurs whenever legacy recovers a session the recon
+did not place, which is what happened to the only member limited since the cutoff. B occurs for a
+record that straddles a reboot. A fix to either means a reconciler restart, and that resets the
+cutoff.
+
 ## Census step
 
 Operator step `f0df9145b73a` (the live observe census) was closed with the launchd daemon's own pass:
