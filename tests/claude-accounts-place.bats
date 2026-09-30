@@ -572,5 +572,5 @@ p = rank("--src", "ghost")
 assert p.returncode == 64, (p.returncode, p.stderr)
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [[ "$output" == *OK* ]]
+  [[ "$output" == *OK* ]] || false
 }
