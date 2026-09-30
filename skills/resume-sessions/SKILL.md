@@ -1,6 +1,7 @@
 ---
 name: resume-sessions
 description: "Resume every Claude Code session across the 4 accounts after a crash or reboot, or un-stick sessions stuck after /compact: recreate worktrees, take the full session not the summary, clear terminal gibberish, re-engage and keep them alive."
+argument-hint: "[sid or account to resume just one] [--dry-run — show the triage table and fire nothing]"
 ---
 
 # Resume Sessions — crash recovery + autonomous restart (100th-percentile runbook)

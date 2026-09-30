@@ -5,6 +5,10 @@ allowed-tools: Bash(scripts/wrap-ledger.sh*), Bash(*/wrap-ledger.sh*), Bash(hook
 argument-hint: [--full]
 ---
 
+> **Project rail first.** If the current repo's root holds `.claude/commands/wrap.md` or
+> `.claude/skills/wrap/SKILL.md` (Read it; a missing file is the answer), stop reading this file
+> and follow that one: a repo's own `/wrap` owns the name inside that repo.
+
 Compute the Session-Close readout from FACTS, not memory. This is the "un-fakeable ledger"
 the resident CLAUDE.md §Session Close Protocol refers to: `scripts/wrap-ledger.sh` runs the
 git/gate/DoD reads itself, so the rung reports ground truth.

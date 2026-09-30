@@ -3,6 +3,11 @@ name: test-audit
 description: "Gate for writing, changing or reviewing bats tests, and the workflow to audit and prune low-value tests: re-asserted source, duplicated contracts, stubs that prove themselves, test-only seams. Adapted from OpenClaw's test-audit."
 ---
 
+> **Project rail first.** If the current repo's root holds `.claude/skills/test-audit/SKILL.md`
+> (Read it; a missing file is the answer), stop reading this file and follow that one. This
+> version is tuned to claude-infrastructure's bats suites; reso's is tuned to vitest, and each
+> repo's own copy owns the name inside it.
+
 # Test Audit
 
 Adapted from OpenClaw's `test-audit` skill

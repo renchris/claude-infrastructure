@@ -5,6 +5,10 @@ allowed-tools: Bash(git *), Bash(pnpm generate), Read
 argument-hint: [task context]
 ---
 
+> **Project rail first.** If the current repo's root holds `.claude/commands/commit.md` or
+> `.claude/skills/commit/SKILL.md` (Read it; a missing file is the answer), stop reading this file
+> and follow that one: a repo's own `/commit` owns the name inside that repo.
+
 Task context: $ARGUMENTS
 
 ## State

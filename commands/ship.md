@@ -1,6 +1,12 @@
 ---
 description: "Land the current work onto the remote trunk: preflight, commit, backup, rebase, gate, push. Typing /ship is the user's authorization to push."
 ---
+> **Project rail first.** If the current repo's root holds `.claude/commands/ship.md` or
+> `.claude/skills/ship/SKILL.md` (Read it; a missing file is the answer), stop reading this file
+> and follow that one. A repo's own `/ship` owns the name inside that repo: on 2026-08-21 this
+> global version loaded in reso instead of its ship-land rail. Everything below applies only
+> where the repo has no `/ship` of its own.
+
 Land the current work onto the remote trunk, safely. `/ship` is the explicit
 "push / land" action referenced by the Session Close Protocol's 📦 Parked state —
 invoking it IS the authorization to push (that is the whole point of the command).
