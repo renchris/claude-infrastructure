@@ -1,0 +1,4 @@
+# Fixture roots — a checkout or cwd under one of these is a test fixture, not real work.
+# Read by bin/cc-backlog (fixture_root_refusal) and bin/cc-memory-extract (TMP_ROOTS).
+/tmp
+/private/tmp

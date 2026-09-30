@@ -60,7 +60,18 @@ CALL_TIMEOUT = 300
 POLICY_HEADING = re.compile(r"^###\s+Memory Hygiene\s+—\s+Anti-Capture List", re.M)
 FENCE_BEGIN = "<<<UNTRUSTED TRANSCRIPT DATA: BEGIN>>>"
 FENCE_END = "<<<UNTRUSTED TRANSCRIPT DATA: END>>>"
-TMP_ROOTS = ("/tmp", "/private/tmp")
+def _tmp_roots() -> tuple[str, ...]:
+    """Fixture roots, shared with bin/cc-backlog via scripts/lib/tmp-roots.list."""
+    path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "scripts", "lib", "tmp-roots.list")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            roots = tuple(ln.strip() for ln in fh if ln.strip() and not ln.lstrip().startswith("#"))
+    except OSError:
+        roots = ()
+    return roots or ("/tmp", "/private/tmp")
+
+
+TMP_ROOTS = _tmp_roots()
 
 PROMPT = """You read one Claude Code session transcript and propose candidate long-term memory \
 entries for the AI coding agent that works for this operator.

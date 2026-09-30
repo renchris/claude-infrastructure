@@ -120,11 +120,28 @@
 #                                                                  cmd_transition).
 #                                                                  CC_BACKLOG_OPERATOR_CONDITION
 #                                                                  names the slug; `off` disables.
+#           block … [--class C] [--conviction N --receipt R]      THE CLASS GATE (2026-09-30): every block and
+#                                                                  needs names C, one of needs-credential |
+#                                                                  needs-human | not-yet-true | no-capacity, by
+#                                                                  --class or by needs text opening "C:" or
+#                                                                  "On or after YYYY-MM-DD" (= not-yet-true).
+#                                                                  needs-human on block carries conviction +
+#                                                                  receipt; a re-block that rewrites needs
+#                                                                  carries --receipt. Warn-only (logged to
+#                                                                  backlog-gate.jsonl) until 7 days pass with
+#                                                                  0 unclassed events, then enforced;
+#                                                                  --force bypasses and logs.
+#                                                                  CC_BACKLOG_CLASS_GATE=warn|enforce|off pins.
+#   class-gate [--enforcing]                                     → the gate's mode + unclassed callers in the
+#                                                                  window; --enforcing exits 0 iff enforcing.
+#   add|needs|block from a checkout under /tmp or /private/tmp   → REFUSED (fixture root) unless
+#                                                                  CC_BACKLOG_FILE names a non-default ledger
+#                                                                  or CC_BACKLOG_ALLOW_TMP=1 (logged).
 #   unblock <id> [--by <sid>] [--force]                          → back to "open"; REFUSED on a
 #                                                                 done-latched item or a live claim,
 #                                                                 exactly as `reopen` is
 #                                                                 (see RE-OPEN EFFECT)
-#   needs   "<step>" [--run C] [--project P] [--session S]       → file it ALREADY blocked; echoes the id.
+#   needs   "<step>" [--class C] [--run C] [--project P] [--session S] → file it ALREADY blocked; echoes the id.
 #           add … [--why-not-now "<class>: <detail>"] [--session S] → the hand-off record: WHY this session
 #                                                                  COULD NOT drive it. The class is one of
 #                                                                  needs-credential | needs-human |
@@ -1554,6 +1571,13 @@ fold() { # [--strict] [--as-of <iso>] — handed to valid_records; pipefail carr
         # (null when never stated) so a reader can compare it, not parse it.
         conviction:    ($r.conviction    // $p.conviction    // null),
         receipt:       ($r.receipt       // $p.receipt       // ""),
+        # blockClass rides `block` (THE CLASS GATE). A re-block REPLACES it, never inherits it: the
+        # class describes the CURRENT needs text, and a carried-forward class would mislabel a new one.
+        rosterOf:      ($r.rosterOf      // $p.rosterOf      // ""),
+        rosterDod:     ($r.rosterDod     // $p.rosterDod     // ""),
+        closeKind:     ($r.closeKind     // $p.closeKind     // ""),
+        closePointer:  ($r.closePointer  // $p.closePointer  // ""),
+        blockClass:    (if $r.event == "block" then ($r.blockClass // "") else ($p.blockClass // "") end),
         # VENUE — where the CURRENT holder runs, which decides which liveness oracles can see it
         # (see VENUE in the header). Note the shape: unlike every sibling above, a `claim` RESETS
         # it rather than carrying forward. `$r.venue // $p.venue` would be wrong in a way that
@@ -1741,6 +1765,477 @@ self_path() {
   printf '%s' "$s"
 }
 
+# ── THE ADMISSION GATE (2026-09-30, BACKLOG_MASTER W0 ledger-admission) ─────────────────────────
+# Three checks every add / needs / block passes through, all logging to ONE side-file beside the
+# ledger (never into the ledger itself, whose fold would have to learn a new event type):
+#   · a FIXTURE ROOT refusal — a checkout (or non-git cwd) under a tmp root is a test fixture, and
+#     its filings belong in its own ledger. The token-efficiency harness minted 73 project=fx rows
+#     plus ~88 project=null lines into the real store on 09-24/25 because an explicit --project
+#     bypasses project_default, so this keys on the RESOLVED CHECKOUT, never on the label;
+#   · a CLASS gate on block/needs — the four impossibility classes `add --why-not-now` already
+#     enforces, which block and needs skipped (270 of 294 blocked rows carried none, 2026-09-30);
+#   · the gate log that makes the class gate's warn→enforce flip a measurement, not a date.
+GATE_LOG="${CC_BACKLOG_GATE_LOG:-$(dirname "$BACKLOG")/backlog-gate.jsonl}"
+
+# _bl_caller → who invoked this cc-backlog, for the gate log. CC_BACKLOG_CALLER wins; otherwise the
+# parent's argv, script-first (`bash /x/scripts/foo.sh a b` → `scripts/foo.sh`), because an
+# unclassed-transition event is only useful if it names the file to migrate.
+_bl_caller() {
+  [ -n "${CC_BACKLOG_CALLER:-}" ] && { printf '%s' "$CC_BACKLOG_CALLER"; return 0; }
+  local a w
+  a="$(ps -o args= -p "$PPID" 2>/dev/null | head -1)"
+  for w in $a; do
+    case "$w" in
+      bash|sh|zsh|*/bash|*/sh|*/zsh|python3|*/python3|python|*/python|-*) continue ;;
+      */scripts/*|*/bin/*|*/hooks/*) printf '%s' "${w#"${w%/*/*}"/}"; return 0 ;;
+      *) printf '%s' "$w"; return 0 ;;
+    esac
+  done
+  printf 'unknown'
+}
+
+# gate_log <event> [key value]… — one JSON line; fail-open (a log that cannot be written must never
+# fail the filing it describes).
+gate_log() {
+  local ev="$1"; shift
+  local -a a=(--arg ev "$ev" --arg ts "$(now_iso)" --arg caller "$(_bl_caller)")
+  # shellcheck disable=SC2016  # a jq program: $ts/$ev/$caller are jq variables, not shell ones
+  local q='{ts:$ts, event:$ev, caller:$caller}'
+  while [ $# -ge 2 ]; do
+    a+=(--arg "$1" "$2"); q="$q + {\"$1\": \$$1}"; shift 2
+  done
+  mkdir -p "$(dirname "$GATE_LOG")" 2>/dev/null || true
+  jq -nc "${a[@]}" "$q" >> "$GATE_LOG" 2>/dev/null || true
+}
+
+# tmp_roots → the fixture roots, one per line. SHARED with bin/cc-memory-extract (TMP_ROOTS), both
+# reading scripts/lib/tmp-roots.list; the built-in pair is the fallback for a deployed layer that
+# has not linked the list yet.
+tmp_roots() {
+  # CC_BACKLOG_TMP_ROOTS (colon-separated) ADDS roots — a suite's seam for a root it owns.
+  [ -n "${CC_BACKLOG_TMP_ROOTS:-}" ] && printf '%s\n' "${CC_BACKLOG_TMP_ROOTS//:/$'\n'}"
+  local list; list="$(dirname "$(self_path)")/../scripts/lib/tmp-roots.list"
+  if [ -r "$list" ]; then grep -v '^[[:space:]]*\(#\|$\)' "$list"; else printf '/tmp\n/private/tmp\n'; fi
+}
+
+# fixture_root_refusal <verb> — rc 0 to proceed, rc 2 (message printed) to refuse. The checkout
+# root comes from the cwd through git-common-dir, the path project_default follows, so a worktree
+# under /tmp (e.g. /tmp/wt-foo) resolves to its main checkout and is admitted without a clause of
+# its own. A non-default CC_BACKLOG_FILE is exempt: that is a fixture's OWN ledger, which is exactly
+# where its filings should go (the tokeff harness grades them there).
+fixture_root_refusal() {
+  local verb="$1" top common root r
+  case "${CC_BACKLOG_FILE:-}" in
+    ""|"$HOME/.claude/autonomy/backlog.jsonl") ;;
+    *) return 0 ;;
+  esac
+  top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  if [ -n "$top" ]; then
+    common="$(git -C "$top" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+    case "$common" in
+      ""|"$top/.git") root="$top" ;;
+      */.git)         root="${common%/.git}" ;;
+      *)              root="$(dirname "$common")" ;;
+    esac
+  else
+    root="$(pwd -P 2>/dev/null || pwd)"
+  fi
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    case "$root" in
+      "$r"|"$r"/*)
+        if [ "${CC_BACKLOG_ALLOW_TMP:-0}" = 1 ]; then
+          gate_log tmp-override verb "$verb" root "$root"
+          return 0
+        fi
+        { printf 'cc-backlog %s: REFUSED — fixture root %s is under %s.\n' "$verb" "$root" "$r"
+          printf '  A checkout (or non-git cwd) under a tmp root is a test fixture; its filings belong in\n'
+          printf '  its own ledger: export CC_BACKLOG_FILE=<fixture>/backlog.jsonl. Override for real work\n'
+          printf '  that genuinely lives there (logged): CC_BACKLOG_ALLOW_TMP=1\n'
+        } >&2
+        return 2 ;;
+    esac
+  done < <(tmp_roots)
+  return 0
+}
+
+# needs_class <needs-text> → the impossibility class the text OPENS with, or nothing. Text that opens
+# "On or after YYYY-MM-DD" is a dated park and counts as not-yet-true: that is the anchor
+# scripts/dated-park-arm.sh already reads, so it needs no second spelling.
+needs_class() {
+  local t="$1"
+  case "$t" in
+    needs-credential|needs-credential:*) printf 'needs-credential' ;;
+    needs-human|needs-human:*)           printf 'needs-human' ;;
+    not-yet-true|not-yet-true:*)         printf 'not-yet-true' ;;
+    no-capacity|no-capacity:*)           printf 'no-capacity' ;;
+    "On or after "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*) printf 'not-yet-true' ;;
+  esac
+}
+
+# CLASS_GATE_WARN_DAYS clean days of warn-only before `auto` enforces. The flip is COMPUTED from the
+# gate log, so it happens on evidence (0 unclassed-transition events across the window, measured
+# from the log's own `gate-armed` record) rather than on a date somebody must remember to act on.
+CLASS_GATE_WARN_DAYS="${CC_BACKLOG_CLASS_GATE_DAYS:-7}"
+
+# class_gate_mode → warn | enforce | off. CC_BACKLOG_CLASS_GATE pins it; the default `auto` is warn
+# until the log has been armed CLASS_GATE_WARN_DAYS and holds no unclassed-transition event inside
+# that window. A missing or unreadable log is warn: a fixture's fresh log can never enforce by age.
+class_gate_mode() {
+  case "${CC_BACKLOG_CLASS_GATE:-auto}" in
+    warn|enforce|off) printf '%s' "$CC_BACKLOG_CLASS_GATE"; return 0 ;;
+  esac
+  [ -s "$GATE_LOG" ] || { printf 'warn'; return 0; }
+  local cut armed dirty
+  cut="$(cutoff_iso "$CLASS_GATE_WARN_DAYS" 2>/dev/null || true)"
+  [ -n "$cut" ] || { printf 'warn'; return 0; }
+  armed="$(jq -r 'select(.event=="gate-armed") | .ts' "$GATE_LOG" 2>/dev/null | head -1)"
+  if [ -z "$armed" ] || [[ "$armed" > "$cut" ]]; then printf 'warn'; return 0; fi
+  dirty="$(jq -r --arg c "$cut" 'select(.event=="unclassed-transition" and .ts > $c) | .ts' \
+            "$GATE_LOG" 2>/dev/null | head -1)"
+  if [ -n "$dirty" ]; then printf 'warn'; else printf 'enforce'; fi
+}
+
+# ensure_gate_armed — writes the log's `gate-armed` record once, on the first gated transition, so
+# the warn window starts from when the gate first SAW traffic in this store.
+ensure_gate_armed() {
+  [ -s "$GATE_LOG" ] && jq -e 'select(.event=="gate-armed")' "$GATE_LOG" >/dev/null 2>&1 && return 0
+  gate_log gate-armed days "$CLASS_GATE_WARN_DAYS"
+}
+
+# ── CLOSE KINDS (2026-09-30, BACKLOG_MASTER W0 ledger-retraction.10) ───────────────────────────
+# A bulk close must name WHAT closed each row, as a kind plus a pointer this file can check. The W4a
+# sweep dropped 9a522a8fa6fb and 7e81da1a7f83 with live work undone because disproving one number in
+# a row was treated as closing it; that is not one of these seven kinds, so it cannot be spelled.
+#   landed      a sha that is an ancestor of origin/main (repo: the row's project checkout, else cwd)
+#   moved       a dl ref that `dl show` resolves
+#   ruled       a decision packet id whose status is no longer open
+#   falsified   a probe command that exits 0 now ("stored" = the row's own stored falsifier)
+#   superseded  a superseding sha (resolves in the repo) or row id (known to this ledger)
+#   duplicate   a different row id known to this ledger
+#   stale       a receipt path that exists
+CLOSE_KINDS="landed moved ruled falsified superseded duplicate stale"
+
+_close_repo() { # <id> → a git dir to check a sha in
+  local proj d
+  proj="$(item_json "$1" | jq -r '.project // ""' 2>/dev/null)"
+  for d in "${CC_BACKLOG_CLOSE_REPO:-}" "$HOME/Development/$proj" "$(git rev-parse --show-toplevel 2>/dev/null)"; do
+    [ -n "$d" ] && git -C "$d" rev-parse --git-dir >/dev/null 2>&1 && { printf '%s' "$d"; return 0; }
+  done
+  return 1
+}
+
+# close_pointer_check <id> <kind> <pointer> → rc 0 when the pointer proves the kind; else prints why.
+close_pointer_check() {
+  local id="$1" kind="$2" ptr="$3" repo probe dlb dd st
+  [ -n "$kind" ] || { printf 'a bulk close needs --kind (one of: %s) and a --pointer' "$CLOSE_KINDS"; return 1; }
+  case " $CLOSE_KINDS " in *" $kind "*) ;; *) printf 'unknown --kind "%s" (one of: %s)' "$kind" "$CLOSE_KINDS"; return 1 ;; esac
+  [ -n "$ptr" ] || { printf 'kind %s needs a --pointer' "$kind"; return 1; }
+  case "$kind" in
+    landed)
+      repo="$(_close_repo "$id")" || { printf 'no git repo to check %s in' "$ptr"; return 1; }
+      git -C "$repo" merge-base --is-ancestor "$ptr" origin/main 2>/dev/null \
+        || { printf '%s is not an ancestor of origin/main in %s' "$ptr" "$repo"; return 1; } ;;
+    moved)
+      dlb="${CC_BACKLOG_DL_BIN:-dl}"
+      "$dlb" show "$ptr" >/dev/null 2>&1 || { printf 'dl show %s does not resolve' "$ptr"; return 1; } ;;
+    ruled)
+      dd="${CC_DECISIONS_DIR:-$HOME/.claude/autonomy/decisions}"
+      [ -f "$dd/$ptr.json" ] || { printf 'no decision packet %s' "$ptr"; return 1; }
+      st="$(jq -r '.status // ""' "$dd/$ptr.json" 2>/dev/null)"
+      case "$st" in ""|open) printf 'decision %s has no ruling yet (status %s)' "$ptr" "${st:-open}"; return 1 ;; esac ;;
+    falsified)
+      probe="$ptr"
+      [ "$ptr" = stored ] && probe="$(item_json "$id" | jq -r '.falsifier // ""' 2>/dev/null)"
+      [ -n "$probe" ] || { printf 'row %s stores no falsifier' "$id"; return 1; }
+      local tb; tb="$(timeout_bin)"
+      if [ -n "$tb" ]; then "$tb" 60 bash -c "$probe" >/dev/null 2>&1; else bash -c "$probe" >/dev/null 2>&1; fi \
+        || { printf 'falsifier did not exit 0: %s' "$probe"; return 1; } ;;
+    superseded)
+      if has_id "$ptr" && [ "$ptr" != "$id" ]; then return 0; fi
+      repo="$(_close_repo "$id")" && git -C "$repo" rev-parse -q --verify "$ptr^{commit}" >/dev/null 2>&1 \
+        || { printf '%s is neither a known row nor a commit' "$ptr"; return 1; } ;;
+    duplicate)
+      { has_id "$ptr" && [ "$ptr" != "$id" ]; } || { printf '%s is not another known row' "$ptr"; return 1; } ;;
+    stale)
+      [ -f "$ptr" ] || { printf 'receipt %s does not exist' "$ptr"; return 1; } ;;
+  esac
+  return 0
+}
+
+# cmd_done — `done <id> --evidence E` behaves as it always has; --kind/--pointer, when given, are
+# checked and recorded. A BULK close — more than one id, or --from-file with lines
+# `<id>\t<kind>\t<pointer>\t<evidence>` — REQUIRES a valid kind and pointer per row and refuses each
+# row that lacks one (rc 4 when any row was refused; the valid rows still close).
+cmd_done() {
+  local -a ids=() rest=()
+  local from="" kind="" ptr="" ev=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --from-file) from="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
+      --kind)      kind="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
+      --pointer)   ptr="${2:-}";  shift; [ $# -gt 0 ] && shift ;;
+      --evidence)  ev="${2:-}";   shift; [ $# -gt 0 ] && shift ;;
+      --by|--needs|--run|--session|--venue|--role|--self-release|--class|--conviction|--receipt)
+                   rest+=("$1" "${2:-}"); shift; [ $# -gt 0 ] && shift ;;
+      --*)         rest+=("$1"); shift ;;
+      *)           ids+=("$1"); shift ;;
+    esac
+  done
+  local why
+  if [ -z "$from" ] && [ "${#ids[@]}" -le 1 ]; then
+    if [ -n "$kind$ptr" ]; then
+      why="$(close_pointer_check "${ids[0]:-}" "$kind" "$ptr")" \
+        || { printf 'cc-backlog done: REFUSED — %s\n' "$why" >&2; return 2; }
+    fi
+    _BL_CLOSE_KIND="$kind" _BL_CLOSE_PTR="$ptr" \
+      cmd_transition "done" ${ids[@]+"${ids[@]}"} ${ev:+--evidence "$ev"} ${rest[@]+"${rest[@]}"}
+    return $?
+  fi
+  local -a rows=()
+  local line i refused=0 closed=0 rk rp re
+  if [ -n "$from" ]; then
+    [ -r "$from" ] || { printf 'cc-backlog done: --from-file %s is not readable\n' "$from" >&2; return 2; }
+    while IFS= read -r line || [ -n "$line" ]; do
+      case "$line" in ""|"#"*) continue ;; esac
+      rows+=("$line")
+    done < "$from"
+  fi
+  for i in ${ids[@]+"${ids[@]}"}; do rows+=("$i"$'\t'"$kind"$'\t'"$ptr"$'\t'"$ev"); done
+  for line in ${rows[@]+"${rows[@]}"}; do
+    # \x1f, not a tab, as IFS: tab is IFS-whitespace, so an EMPTY pointer column would collapse and
+    # shift the evidence into the pointer slot — the exact line this guard must refuse.
+    IFS=$'\x1f' read -r i rk rp re <<< "${line//$'\t'/$'\x1f'}"
+    [ -n "$re" ] || re="$ev"
+    [ -n "$re" ] || re="$rk: $rp"
+    if ! why="$(close_pointer_check "$i" "$rk" "$rp")"; then
+      printf 'cc-backlog done: REFUSED %s — %s\n' "$i" "$why" >&2
+      refused=$((refused + 1)); continue
+    fi
+    if _BL_CLOSE_KIND="$rk" _BL_CLOSE_PTR="$rp" cmd_transition "done" "$i" --evidence "$re" ${rest[@]+"${rest[@]}"}; then
+      closed=$((closed + 1))
+    else
+      refused=$((refused + 1))
+    fi
+  done
+  printf 'cc-backlog done: bulk — %d closed, %d refused\n' "$closed" "$refused" >&2
+  [ "$refused" -eq 0 ] || return 4
+  return 0
+}
+
+# operator_act_class <class> → rc 0 iff a block of this class is an act only the operator can do,
+# i.e. may join the operator-gated batch. During the warn window an UNCLASSED block still joins, as
+# before, so a not-yet-migrated producer does not silently lose its batch placement.
+operator_act_class() {
+  case "$1" in
+    needs-human|needs-credential) return 0 ;;
+    "") [ "$(class_gate_mode)" != enforce ] ;;
+    *) return 1 ;;
+  esac
+}
+
+# ── ACTIVATION + ROSTER HYGIENE (2026-09-30, BACKLOG_MASTER W0 ledger-admission.6) ────────────
+# activation_labels <text> → the launchd labels an ACTIVATION-shaped text names, one per line. A
+# label is also its launchd/fleet.manifest line, so one key covers both. Only activation-shaped text
+# counts (load/bootstrap/activate/enable/flip …): a row that merely MENTIONS a job is not a second
+# filing of its activation. The f8b768eaaebd / 4f31ab82428c pair filed com.claude.desk-invariant twice.
+activation_labels() {
+  printf '%s' "$1" | grep -qiE '\b(activate|activation|load|bootstrap|enable|flip|launchctl|staged)\b' || return 0
+  printf '%s' "$1" | grep -oE '\bcom\.(claude|chrisren)\.[A-Za-z0-9_.-]*[A-Za-z0-9]' | sort -u
+}
+
+# activation_dup <id-or-empty> <text> → echoes "<label> <other-id>" and rc 0 when another non-done
+# row is an activation filing of the same label.
+activation_dup() {
+  local self="$1" text="$2" lab
+  lab="$(activation_labels "$text")"
+  [ -n "$lab" ] || return 1
+  fold 2>/dev/null | jq -r --arg self "$self" '.[] | select(.id != $self and .status != "done")
+      | [.id, ((.title // "") + " " + (.needs // "") + " " + (.run // ""))] | @tsv' 2>/dev/null \
+  | while IFS=$'\t' read -r oid otext; do
+      local l
+      while IFS= read -r l; do
+        [ -n "$l" ] || continue
+        if activation_labels "$otext" | grep -qxF "$l"; then printf '%s %s\n' "$l" "$oid"; exit 0; fi
+      done <<< "$lab"
+    done | head -1 | grep .
+}
+
+# dead_activation_run <run> → echoes the marker and rc 0 when the run names a pending-activation
+# script that already carries a .done or .superseded marker (the b448ceafa0ca case: a run line
+# recommending a script that had already run, whose step 2 re-broke every fire).
+dead_activation_run() {
+  local run="$1" dir name m
+  dir="${CC_BACKLOG_PENDING_DIR:-$HOME/.claude/autonomy/pending-activation}"
+  for name in $(printf '%s' "$run" | grep -oE 'pending-activation/[A-Za-z0-9._-]+\.sh' | sed 's#.*/##'); do
+    for m in "$dir/$name.done" "$dir/$name.superseded"; do
+      [ -e "$m" ] && { printf '%s' "$m"; return 0; }
+    done
+  done
+  return 1
+}
+
+# activation_refusal <verb> <id-or-empty> <text> <run> → rc 2 (message printed) to refuse.
+activation_refusal() {
+  local verb="$1" self="$2" text="$3" run="$4" hit
+  [ "${CC_BACKLOG_ACTIVATION_GUARD:-on}" = off ] && return 0
+  if [ -n "$run" ] && hit="$(dead_activation_run "$run")"; then
+    { printf 'cc-backlog %s: REFUSED — the run names an activation script that already ran or was superseded:\n' "$verb"
+      printf '  %s\n  A row recommending it would re-run a finished (or retired) activation.\n' "$hit"
+    } >&2
+    return 2
+  fi
+  if hit="$(activation_dup "$self" "$text $run")"; then
+    { printf 'cc-backlog %s: REFUSED — %s is already filed as an activation by row %s.\n' "$verb" "${hit%% *}" "${hit#* }"
+      printf '  One row per activation: update that row (cc-backlog block %s --needs … --receipt …).\n' "${hit#* }"
+      printf '  Override (a genuinely different act on the same job): CC_BACKLOG_ACTIVATION_GUARD=off\n'
+    } >&2
+    return 2
+  fi
+  return 0
+}
+
+# cmd_roster <id> --of <condition> — marks a roster / coordination-header row: it names a group and
+# holds no work of its own. A roster row cannot be claimed, and it CLOSES when its last member does
+# (roster_close_if_empty, run on every done). b22e519e06cb, 93e2f7730466 and 8f59467c92b0 sat open
+# as work for weeks after their members had closed.
+cmd_roster() {
+  local id="${1:-}" of="" dod=""; [ $# -gt 0 ] && shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --of)  of="${2:-}";  shift; [ $# -gt 0 ] && shift ;;
+      # --dod: the members are the rows whose dodRef is this plan — a PROGRAMME row over its waves
+      # (ledger-retraction.3). Keyed on dodRef, not a condition, so the waves never serialize
+      # behind one condition lease the way siblings of a condition do.
+      --dod) dod="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
+      *) printf 'cc-backlog roster: unknown arg %s\n' "$1" >&2; return 2 ;;
+    esac
+  done
+  [ -n "$id" ] && [ -n "$of$dod" ] && { [ -z "$of" ] || [ -z "$dod" ]; } \
+    || { printf 'usage: cc-backlog roster <id> --of <condition> | --dod <plan-path>\n' >&2; return 2; }
+  if [ -n "$of" ] && ! valid_condition "$of"; then
+    printf 'cc-backlog roster: --of "%s" is not a condition slug\n' "$of" >&2; return 2
+  fi
+  ensure_file
+  has_id "$id" || { printf 'cc-backlog roster: unknown id %s\n' "$id" >&2; return 3; }
+  if [ -n "$of" ]; then
+    jq -nc --arg id "$id" --arg ts "$(now_iso)" --arg of "$of" \
+       '{id:$id, ts:$ts, event:"update", rosterOf:$of}' >> "$BACKLOG"
+    echo "$id"; roster_close_if_empty condition "$of" "$id"
+  else
+    jq -nc --arg id "$id" --arg ts "$(now_iso)" --arg d "$dod" \
+       '{id:$id, ts:$ts, event:"update", rosterDod:$d}' >> "$BACKLOG"
+    echo "$id"; roster_close_if_empty dodRef "$dod" "$id"
+  fi
+}
+
+# roster_close_if_empty <condition> <closer-id> — closes every open roster row of <condition> once no
+# non-done member of that condition remains. Fail-open: a close that fails leaves the roster open.
+roster_close_if_empty() { # <condition|dodRef> <value> <closer-id>
+  local key="$1" val="$2" closer="$3" all rid rfield
+  [ -n "$val" ] || return 0
+  case "$key" in condition) rfield=rosterOf ;; dodRef) rfield=rosterDod ;; *) return 0 ;; esac
+  all="$(fold 2>/dev/null)" || return 0
+  printf '%s' "$all" | jq -e --arg f "$rfield" --arg v "$val" 'any(.[]; (.[$f] // "") == $v and .status != "done")' \
+    >/dev/null 2>&1 || return 0
+  # a MEMBER is a row keyed to the group that is not itself a roster; none may remain open
+  printf '%s' "$all" | jq -e --arg k "$key" --arg v "$val" \
+    'any(.[]; (.[$k] // "") == $v and (.rosterOf // "") == "" and (.rosterDod // "") == "" and .status != "done")' \
+    >/dev/null 2>&1 && return 0
+  for rid in $(printf '%s' "$all" | jq -r --arg f "$rfield" --arg v "$val" \
+                 '.[] | select((.[$f] // "") == $v and .status != "done") | .id'); do
+    _BL_CLOSE_KIND=superseded _BL_CLOSE_PTR="$closer" \
+      cmd_transition "done" "$rid" --evidence "roster of $val: last member $closer closed" >/dev/null 2>&1 || true
+  done
+  return 0
+}
+
+# cmd_class_gate [--enforcing] — the gate's state from its log. `--enforcing` exits 0 iff the gate
+# enforces now: the falsifier for "block/needs enforce the four classes" (row 12b4209cb7fc).
+cmd_class_gate() {
+  local mode armed cut n
+  mode="$(class_gate_mode)"
+  if [ "${1:-}" = --enforcing ]; then [ "$mode" = enforce ]; return $?; fi
+  cut="$(cutoff_iso "$CLASS_GATE_WARN_DAYS" 2>/dev/null || true)"
+  armed="$(jq -r 'select(.event=="gate-armed") | .ts' "$GATE_LOG" 2>/dev/null | head -1)"
+  n="$(jq -r --arg c "$cut" 'select(.event=="unclassed-transition" and .ts > $c) | .ts' "$GATE_LOG" 2>/dev/null | grep -c . || true)"
+  printf 'mode=%s armed=%s window_days=%s unclassed_in_window=%s log=%s\n' \
+    "$mode" "${armed:-never}" "$CLASS_GATE_WARN_DAYS" "${n:-0}" "$GATE_LOG"
+  jq -r --arg c "$cut" 'select(.event=="unclassed-transition" and .ts > $c) | .caller' "$GATE_LOG" 2>/dev/null \
+    | sort | uniq -c | sort -rn | sed 's/^/  /'
+  return 0
+}
+
+# Set by the in-file callers that have already settled a class question, so the gate does not ask
+# it twice: `needs` is the HANDS verb (sudo · physical · GUI), so its needs-human is not a value call
+# and carries no conviction; add's born-blocked path already enforced conviction + receipt.
+_BL_VERB=block
+_BL_CONVICTION_CHECKED=0
+
+# class_gate_block <id> <needs> <class> <conviction> <receipt> <force> → echoes the resolved class
+# (possibly empty); rc 2 refuses. Every block must carry one of the four impossibility classes —
+# `--class C`, or needs text opening `C:` or `On or after YYYY-MM-DD` — needs-human must carry a
+# conviction and a receipt, and a re-block that REWRITES the needs text must carry a fresh receipt
+# (the 08-18 and 09-23 re-verification passes rewrote needs over dead premises with none).
+# Warn mode logs one unclassed-transition event naming the caller and proceeds; enforce refuses;
+# --force proceeds and logs. Reap's internal non-verdict blocks are exempt: they file no step.
+class_gate_block() {
+  local id="$1" needs="$2" klass="$3" conviction="$4" receipt="$5" force="$6" cls mode cur cst cneeds
+  local -a whyr=()
+  [ "${REAP_INTERNAL_BLOCK:-0}" -eq 1 ] && return 0
+  if [ -n "$klass" ] && ! valid_why_not_now "$klass"; then
+    printf 'cc-backlog %s: --class "%s" is not one of needs-credential, needs-human, not-yet-true, no-capacity\n' \
+      "$_BL_VERB" "$klass" >&2
+    return 2
+  fi
+  cls="${klass%%:*}"; [ -n "$cls" ] || cls="$(needs_class "$needs")"
+  if [ -n "$conviction" ] && ! valid_conviction "$conviction"; then
+    printf 'cc-backlog %s: --conviction "%s" is not an integer 0..100\n' "$_BL_VERB" "$conviction" >&2; return 2
+  fi
+  if [ -n "$receipt" ] && ! valid_receipt "$receipt"; then
+    printf 'cc-backlog %s: --receipt "%s" is neither an existing file nor "<command> => <output>"\n' \
+      "$_BL_VERB" "$receipt" >&2; return 2
+  fi
+  mode="$(class_gate_mode)"
+  [ "$mode" = off ] && { printf '%s' "$cls"; return 0; }
+  [ -n "$cls" ] || whyr+=(unclassed)
+  if [ "$cls" = needs-human ] && [ "$_BL_VERB" = block ] && [ "$_BL_CONVICTION_CHECKED" != 1 ] \
+     && { [ -z "$conviction" ] || [ -z "$receipt" ]; }; then
+    whyr+=(needs-human-without-conviction)
+  fi
+  cur="$(item_json "$id")"
+  cst="$(printf '%s' "$cur" | jq -r '.status // ""' 2>/dev/null)"
+  cneeds="$(printf '%s' "$cur" | jq -r '.needs // ""' 2>/dev/null)"
+  if [ "$cst" = blocked ] && [ "$cneeds" != "$needs" ] && [ -z "$receipt" ]; then
+    whyr+=(reblock-without-receipt)
+  fi
+  ensure_gate_armed
+  [ "${#whyr[@]}" -eq 0 ] && { printf '%s' "$cls"; return 0; }
+  local reasons; reasons="$(IFS=,; printf '%s' "${whyr[*]}")"
+  if [ "$force" -eq 1 ]; then
+    gate_log forced-transition id "$id" verb "$_BL_VERB" reasons "$reasons"
+    printf '%s' "$cls"; return 0
+  fi
+  if [ "$mode" = enforce ]; then
+    gate_log refused-transition id "$id" verb "$_BL_VERB" reasons "$reasons"
+    { printf 'cc-backlog %s: REFUSED (%s) — %s\n' "$_BL_VERB" "$reasons" "$id"
+      printf '  Every block/needs names its impossibility: --class needs-credential|needs-human|not-yet-true|no-capacity\n'
+      printf '  (or needs text opening "<class>:" or "On or after YYYY-MM-DD,"). needs-human on block is a value\n'
+      printf '  call and carries --conviction N --receipt R; a re-block that rewrites the needs carries --receipt R.\n'
+      printf '  Override deliberately (logged): add --force.\n'
+    } >&2
+    return 2
+  fi
+  # LOG-ONLY in warn mode: hooks relay stderr into transcripts, so a warning line here would be noise
+  # in every caller not yet migrated. `cc-backlog class-gate` names them; CC_BACKLOG_CLASS_WARN=1
+  # prints the line for a human migrating a caller.
+  gate_log unclassed-transition id "$id" verb "$_BL_VERB" reasons "$reasons"
+  [ "${CC_BACKLOG_CLASS_WARN:-0}" = 1 ] && \
+    printf 'cc-backlog %s: WARN %s (%s) — classify it with --class; enforced after %s clean days\n' \
+      "$_BL_VERB" "$id" "$reasons" "$CLASS_GATE_WARN_DAYS" >&2
+  printf '%s' "$cls"
+}
+
 # dispatch_conf → the path of the dispatch-set SSOT, same env knob and same resolution as
 # bin/cc-dispatch. $0's SYMLINK is resolved first because production invokes this as
 # $HOME/.claude/bin/cc-backlog: a dirname($0)-relative read would look in ~/.claude/scripts/, where
@@ -1919,6 +2414,7 @@ cmd_add() {
   # files a bare row (ship-land, postland-verify, deploy-live, cc-discover), and an omitted
   # why-not-now is ALREADY the filer's own 🔧 via FILED_MINE. The two arms compose and leave no
   # third door: omit it and your close is 🔧; supply it and it must name a class.
+  fixture_root_refusal add || return $?
   # shellcheck disable=SC2016  # the backticks below are MARKDOWN code spans in an operator-facing
   #                              message, not command substitutions — single quotes are exactly what
   #                              keeps them literal (same reason as drain-brief.sh:86).
@@ -2263,6 +2759,9 @@ cmd_add() {
     fi
     echo "$id"; return 0
   fi
+  # ONE ROW PER ACTIVATION, NO DEAD RUN SCRIPT (ledger-admission.6). Only a NEW row is judged: an
+  # idempotent re-add of a known id returned above.
+  activation_refusal add "$id" "$title" "$run" || return $?
   # FILING IS ATTRIBUTED (2026-09-05). Before this, an `add` recorded no author at all — `by` was
   # null on every one of the 108 adds in the 7 days to 2026-09-04 (inflow.md §7.6) — while `needs`
   # stamped its session and `done` its lane. So the store could say who FILED an operator step and
@@ -2301,10 +2800,10 @@ born_blocked_transition() {
   detail="${detail#"${detail%%[![:space:]]*}"}"; detail="${detail%"${detail##*[![:space:]]}"}"
   [ -n "$detail" ] || detail="$title"
   local -a targs
-  targs=(block "$id" --needs "$detail")
+  targs=(block "$id" --needs "$detail" --class needs-human)
   [ -n "$run" ]     && targs=("${targs[@]}" --run "$run")
   [ -n "$session" ] && targs=("${targs[@]}" --session "$session")
-  cmd_transition "${targs[@]}" >/dev/null || return $?
+  _BL_CONVICTION_CHECKED=1 cmd_transition "${targs[@]}" >/dev/null || return $?
   _ADD_BORN_BLOCKED=1
   return 0
 }
@@ -2481,10 +2980,15 @@ cmd_transition() {
   local event="$1"; shift
   local id="${1:-}"; [ $# -gt 0 ] && shift
   local by="" evidence="" needs="" run="" session="" venue="" force=0 selfrel="" role=""
+  local klass="" conviction="" receipt="" kind=""
   while [ $# -gt 0 ]; do
     local key="$1"; shift
     case "$key" in
       --by)       by="${1:-}";       [ $# -gt 0 ] && shift ;;
+      # --class / --conviction / --receipt ride `block` (THE CLASS GATE, see class_gate_block).
+      --class)      klass="${1:-}";      [ $# -gt 0 ] && shift ;;
+      --conviction) conviction="${1:-}"; [ $# -gt 0 ] && shift ;;
+      --receipt)    receipt="${1:-}";    [ $# -gt 0 ] && shift ;;
       --evidence) evidence="${1:-}"; [ $# -gt 0 ] && shift ;;
       --needs)    needs="${1:-}";    [ $# -gt 0 ] && shift ;;
       # --self-release names a reopen the CLAIMER issued because it could not START the work (see
@@ -2505,6 +3009,7 @@ cmd_transition() {
     esac
   done
   [ -n "$id" ] || { printf 'cc-backlog %s: <id> is required\n' "$event" >&2; return 2; }
+  if [ "$event" = block ]; then fixture_root_refusal block || return $?; fi
   # `block` MUST carry the pending operator step — that IS the desk-surfaced payload.
   if [ "$event" = block ] && [ -z "$needs" ]; then
     printf 'cc-backlog block: --needs "<operator-only step>" is required\n' >&2; return 2
@@ -2579,8 +3084,22 @@ cmd_transition() {
       printf 'cc-backlog reopen: --self-release requires --by <the claimer that is releasing>\n' >&2; return 2
     fi
   fi
+  if [ "$event" != block ] && [ -n "$klass$conviction$receipt" ]; then
+    printf 'cc-backlog %s: --class/--conviction/--receipt apply only to block\n' "$event" >&2; return 2
+  fi
   ensure_file
   has_id "$id" || { printf 'cc-backlog %s: unknown id %s\n' "$event" "$id" >&2; return 3; }
+  local bclass=""
+  if [ "$event" = block ]; then
+    bclass="$(class_gate_block "$id" "$needs" "$klass" "$conviction" "$receipt" "$force")" || return $?
+    if [ -n "$run" ] && [ "$force" -eq 0 ]; then activation_refusal block "$id" "" "$run" || return $?; fi
+  fi
+  # A ROSTER row holds no work of its own, so nothing may claim it (see cmd_roster).
+  if [ "$event" = claim ] && [ "$force" -eq 0 ] \
+     && [ -n "$(item_json "$id" | jq -r '(.rosterOf // "") + (.rosterDod // "")' 2>/dev/null)" ]; then
+    printf 'cc-backlog claim: REFUSED — %s is a roster row (no work of its own); it closes with its last member\n' "$id" >&2
+    return 4
+  fi
   # The claimer check runs OUTSIDE the reopen-guard block below, and therefore also under --force:
   # --force exists to override the reopen guards, and this is not one of them. It is the flag's own
   # authenticity condition — without it any caller could stamp `selfRelease` onto a reopen of work a
@@ -3355,7 +3874,13 @@ cmd_transition() {
      --arg run "$run" --arg session "$session" --arg venue "$venue" --argjson force "$force" \
      --arg selfrel "$selfrel" --arg role "$role" \
      --arg lane "$lane" --arg closedby "$closedby" --arg closedsess "$closedsess" \
+     --arg bclass "$bclass" --arg conviction "$conviction" --arg receipt "$receipt" \
+     --arg ckind "${_BL_CLOSE_KIND:-}" --arg cptr "${_BL_CLOSE_PTR:-}" \
      '{id:$id, ts:$ts, event:$event}
+      + (if $ckind != ""    then {closeKind:$ckind, closePointer:$cptr} else {} end)
+      + (if $bclass != ""   then {blockClass:$bclass} else {} end)
+      + (if $conviction != "" then {conviction:($conviction|tonumber)} else {} end)
+      + (if $receipt != ""  then {receipt:$receipt}   else {} end)
       + (if $lane != ""     then {lane:$lane}         else {} end)
       + (if $closedby != "" then {closedBy:$closedby} else {} end)
       + (if $closedsess != "" then {closedSession:$closedsess} else {} end)
@@ -3370,6 +3895,17 @@ cmd_transition() {
       + (if $force == 1     then {force:true}         else {} end)
       + (if $selfrel != ""  then {selfRelease:true, releaseReason:$selfrel} else {} end)' \
      >> "$BACKLOG"
+  # A member closing may empty its roster (cmd_roster). Fail-open: this can only ADD a close.
+  if [ "$event" = "done" ]; then
+    local rj rcond rdod
+    rj="$(item_json "$id")"
+    if [ -z "$(printf '%s' "$rj" | jq -r '(.rosterOf // "") + (.rosterDod // "")' 2>/dev/null)" ]; then
+      rcond="$(printf '%s' "$rj" | jq -r '.condition // ""' 2>/dev/null)"
+      rdod="$(printf '%s' "$rj" | jq -r '.dodRef // ""' 2>/dev/null)"
+      [ -n "$rcond" ] && roster_close_if_empty condition "$rcond" "$id"
+      [ -n "$rdod" ] && roster_close_if_empty dodRef "$rdod" "$id"
+    fi
+  fi
   # (6b) THE UNEVIDENCED CLOSE (2026-08-16, BACKLOG_DRAIN_24_7 §4 C3). A `done` carrying no
   # `--evidence` writes a record whose entire claim is that somebody ran the verb. That is not what
   # this store means by done — §6's operating invariant is "the unit of done is CONTENT ON TRUNK
@@ -3542,6 +4078,15 @@ cmd_transition() {
     # like an arm that was never reached (memory: liveness-proxy-cannot-be-output-age).
     printf 'cc-backlog block: %s is a reap NON-VERDICT, not an operator step — NOT keyed into "%s"\n' \
       "$id" "$OPERATOR_CONDITION" >&2
+  elif [ "$event" = block ] && [ "$OPERATOR_CONDITION" != off ] && valid_condition "$OPERATOR_CONDITION" \
+       && ! operator_act_class "$bclass"; then
+    # KEYED ON THE CLASS (2026-09-30, BACKLOG_MASTER W0 ledger-admission.5). pile-census 2026-09-04
+    # measured ~70% misrouting when every block joined: a not-yet-true park waits on the WORLD and
+    # a no-capacity one on the fleet, and neither is something the operator can do. They stay
+    # blocked and ungrouped; the operator batch holds only needs-human / needs-credential acts.
+    [ -n "$bclass" ] && [ "${CC_BACKLOG_CLASS_WARN:-0}" = 1 ] && \
+      printf 'cc-backlog block: %s is %s, not an operator act — NOT keyed into "%s"\n' \
+        "$id" "$bclass" "$OPERATOR_CONDITION" >&2
   elif [ "$event" = block ] && [ "$OPERATOR_CONDITION" != off ] && valid_condition "$OPERATOR_CONDITION"; then
     local olerr olrc=0
     # stderr captured, stdout dropped: cmd_link echoes the id on success and stdout here is the
@@ -3650,7 +4195,9 @@ filing_day_warn() {
 # The positional step is BOTH the item title and the `--needs` prose: they are the same sentence,
 # and asking the caller to write it twice is the friction this verb removes.
 cmd_needs() {
-  local step="" run="" project="" session="" falsifier=""
+  local step="" run="" project="" session="" falsifier="" klass="" nforce=0 nsuffix="" nreceipt=""
+  local -a dlargs=()
+  _BL_VERB=needs
   while [ $# -gt 0 ]; do
     local key="$1"; shift
     case "$key" in
@@ -3668,6 +4215,16 @@ cmd_needs() {
       --falsifier) falsifier="${1:-}"; [ $# -gt 0 ] && shift ;;
       --project) project="${1:-}"; [ $# -gt 0 ] && shift ;;
       --session) session="${1:-}"; [ $# -gt 0 ] && shift ;;
+      # --class names the impossibility (THE CLASS GATE, class_gate_block); a `needs` step is the
+      # operator's HANDS, so it is needs-human or needs-credential in practice. --force: logged bypass.
+      --class)   klass="${1:-}";   [ $# -gt 0 ] && shift ;;
+      # --receipt: what this filing read — required by the gate when a re-file REWRITES a live row's
+      # needs (the mint brake below re-blocks onto it), e.g. the proposal a weekly re-block cites.
+      --receipt) nreceipt="${1:-}"; [ $# -gt 0 ] && shift ;;
+      --force)   nforce=1 ;;
+      # The dl route's fields (see THE DL ROUTE below), passed straight to scripts/lib/dl-route.py.
+      --dl-kind|--dl-lost|--dl-since|--dl-resurface|--dl-activate-when|--dl-class|--dl-usd|--dl-text|--dl-domain|--dl-source|--replaces)
+                 local f="${key#--dl-}"; dlargs+=("--${f#--}" "${1:-}"); [ $# -gt 0 ] && shift ;;
       --*) printf 'cc-backlog needs: unknown arg %s\n' "$key" >&2; return 2 ;;
       *)
         # Exactly one positional. A second is far more likely an unquoted step than a real
@@ -3681,6 +4238,19 @@ cmd_needs() {
         fi ;;
     esac
   done
+  fixture_root_refusal needs || return $?
+  # The class is judged BEFORE the add, so a refused `needs` never leaves an orphan open row behind.
+  if [ -n "$klass" ] && ! valid_why_not_now "$klass"; then
+    printf 'cc-backlog needs: --class "%s" is not one of needs-credential, needs-human, not-yet-true, no-capacity\n' \
+      "$klass" >&2
+    return 2
+  fi
+  if [ -z "$klass" ] && [ -z "$(needs_class "$step")" ] && [ "$nforce" -eq 0 ] \
+     && [ "$(class_gate_mode)" = enforce ]; then
+    gate_log refused-transition id "" verb needs reasons unclassed
+    printf 'cc-backlog needs: REFUSED (unclassed) — add --class needs-human|needs-credential|not-yet-true|no-capacity (or --force, logged)\n' >&2
+    return 2
+  fi
   [ -n "$step" ] || {
     { printf 'cc-backlog needs: "<operator-only step>" is required\n'
       printf '  usage: cc-backlog needs "<step>" [--run "<cmd>"] [--falsifier "<probe>"] [--project P] [--session SID]\n'
@@ -3765,6 +4335,35 @@ cmd_needs() {
   # brake that cannot ask must not answer "yes" (memory: lookup-miss-is-not-absence): swallowing a
   # step on a broken read would delete an operator's work item silently, which is the one outcome
   # worse than a duplicate row.
+  # ── THE DL ROUTE (2026-09-30, BACKLOG_MASTER W0 ledger-admission.7) ───────────────────────────
+  # A real-world act (project=personal, or a dl verb with an external clock) belongs in dl, where the
+  # operator's deadlines live — but only in a form dl's own admit() accepts, so the helper runs dl's
+  # build_item() + admit() and prints the exact `dl add` line. Admitted ⇒ print it and refuse here
+  # (rc 3) unless --force. Refused by dl (no clock, a chore word, a FULL KIND without a valid
+  # --replaces — decay 15/15, soft 18/20, someday 18/25 on 2026-09-30) ⇒ it stays a classed
+  # needs-human row here that records dl's refusal. This never writes to dl.
+  if [ "${CC_BACKLOG_DL_ROUTE:-on}" != off ] && [ -n "$step" ]; then
+    local rproj rj rh
+    rproj="$project"; [ -n "$rproj" ] || rproj="$(project_default 2>/dev/null || true)"
+    rh="$(dirname "$(self_path)")/../scripts/lib/dl-route.py"
+    if [ -r "$rh" ]; then
+      rj="$(python3 "$rh" --title "$step" --project "$rproj" ${dlargs[@]+"${dlargs[@]}"} 2>/dev/null || true)"
+      if [ "$(printf '%s' "$rj" | jq -r '.real_act // false' 2>/dev/null)" = true ]; then
+        if [ "$(printf '%s' "$rj" | jq -r '.admitted' 2>/dev/null)" = true ]; then
+          { printf 'cc-backlog needs: this is a real-world act — it belongs in dl. File it there:\n'
+            printf '  %s\n' "$(printf '%s' "$rj" | jq -r '.line')"
+            printf '  (to keep it in the backlog anyway: add --force)\n'
+          } >&2
+          [ "$nforce" -eq 1 ] || return 3
+        else
+          [ -n "$klass" ] || klass="needs-human"
+          nsuffix=" [dl refused: $(printf '%s' "$rj" | jq -r '.reason' 2>/dev/null)]"
+          printf 'cc-backlog needs: dl would refuse this act (%s) — kept here as a classed %s row\n' \
+            "$(printf '%s' "$rj" | jq -r '.reason' 2>/dev/null)" "$klass" >&2
+        fi
+      fi
+    fi
+  fi
   local brake_id=""
   if [ "${CC_BACKLOG_NEEDS_BRAKE:-on}" != "off" ] && command -v jq >/dev/null 2>&1; then
     local bproj="$project"
@@ -3791,10 +4390,20 @@ cmd_needs() {
       printf '  To mint anyway:  CC_BACKLOG_NEEDS_BRAKE=off cc-backlog needs ...\n'
     } >&2
     local -a rargs
-    rargs=(block "$brake_id" --needs "$step")
+    rargs=(block "$brake_id" --needs "$step$nsuffix")
+    [ -n "$klass" ]   && rargs=("${rargs[@]}" --class "$klass")
+    [ -n "$nreceipt" ] && rargs=("${rargs[@]}" --receipt "$nreceipt")
+    [ "$nforce" -eq 1 ] && rargs=("${rargs[@]}" --force)
     [ -n "$run" ]     && rargs=("${rargs[@]}" --run "$run")
     [ -n "$session" ] && rargs=("${rargs[@]}" --session "$session")
     cmd_transition "${rargs[@]}" >/dev/null || return $?
+    # RETITLE the standing row to the step it now carries (ledger-retraction.6): a weekly re-file
+    # whose digits moved (a new proposal id, a new count) folds onto the old row, and a title frozen
+    # at the first filing then names a proposal that no longer exists.
+    if [ "$(item_json "$brake_id" | jq -r '.title // ""' 2>/dev/null)" != "$step" ]; then
+      jq -nc --arg id "$brake_id" --arg ts "$(now_iso)" --arg t "$step" \
+         '{id:$id, ts:$ts, event:"update", title:$t}' >> "$BACKLOG"
+    fi
     echo "$brake_id"
     return 0
   fi
@@ -3825,7 +4434,10 @@ cmd_needs() {
   # Built as an array so a step or command containing spaces survives — an unquoted
   # ${run:+--run "$run"} would word-split the command back apart.
   local -a targs
-  targs=(block "$id" --needs "$step")
+  targs=(block "$id" --needs "$step$nsuffix")
+  [ -n "$klass" ]   && targs=("${targs[@]}" --class "$klass")
+  [ -n "$nreceipt" ] && targs=("${targs[@]}" --receipt "$nreceipt")
+  [ "$nforce" -eq 1 ] && targs=("${targs[@]}" --force)
   [ -n "$run" ]     && targs=("${targs[@]}" --run "$run")
   [ -n "$session" ] && targs=("${targs[@]}" --session "$session")
   cmd_transition "${targs[@]}" >/dev/null; rc=$?
@@ -4086,12 +4698,15 @@ cmd_link() {
   # id of "--plan". Everything else keeps the original parse exactly.
   local plan=""
   if [ "${1:-}" = "--plan" ]; then plan="${2:-}"; shift 2 2>/dev/null || shift $#; fi
-  local id="" condition="" force=0
+  local id="" condition="" force=0 clear=0
   if [ -z "$plan" ]; then id="${1:-}"; [ $# -gt 0 ] && shift; fi
   while [ $# -gt 0 ]; do
     case "$1" in
       --plan)      shift; plan="${1:-}"; [ $# -gt 0 ] && shift ;;
       --condition) shift; condition="${1:-}"; [ $# -gt 0 ] && shift ;;
+      # --clear takes a row OUT of its group (a link record with condition ""; the fold keeps "").
+      # Moving a row out of a group is the same act as re-keying it, so it needs --force too.
+      --clear)     clear=1; shift ;;
       --force)     force=1; shift ;;
       *) printf 'cc-backlog link: unknown arg %s\n' "$1" >&2; return 2 ;;
     esac
@@ -4104,8 +4719,12 @@ cmd_link() {
     return $?
   fi
   [ -n "$id" ]        || { printf 'cc-backlog link: <id> is required (or --plan <file|->)\n' >&2; return 2; }
-  [ -n "$condition" ] || { printf 'cc-backlog link: --condition <slug> is required\n' >&2; return 2; }
-  if ! valid_condition "$condition"; then
+  if [ "$clear" -eq 1 ]; then
+    [ -z "$condition" ] || { printf 'cc-backlog link: --clear takes no --condition\n' >&2; return 2; }
+    [ "$force" -eq 1 ]  || { printf 'cc-backlog link: --clear moves a row out of its group — add --force\n' >&2; return 2; }
+  fi
+  [ -n "$condition" ] || [ "$clear" -eq 1 ] || { printf 'cc-backlog link: --condition <slug> is required\n' >&2; return 2; }
+  if [ "$clear" -eq 0 ] && ! valid_condition "$condition"; then
     { printf 'cc-backlog link: --condition "%s" is not a stable key.\n' "$condition"
       printf '  A condition names a recurring STATE, so it must hold still: lowercase letters and\n'
       printf '  hyphens only, no digits. A slug carrying a measurement mints one GROUP per\n'
@@ -7020,13 +7639,15 @@ case "${1:-}" in
   # `backfill --apply` writes only `link` records, via cmd_link — same reasoning as `link` above:
   # a link cannot make an item newly dispatchable, so a kick would be backwards.
   backfill) shift; cmd_backfill "$@" ;;
-  done)    shift; cmd_transition "done" "$@" ;;
+  done)    shift; cmd_done "$@" ;;
   reopen)  shift; cmd_transition reopen "$@" ;;
   block)   shift; cmd_transition block "$@" ;;
   unblock) shift; cmd_transition unblock "$@" ;;
   # NO dispatch_kick — unlike `add` above. The item is born `blocked`, i.e. already outside the
   # dispatch wave, so a kick is pure waste and risks a worker on a human-only step (header § needs).
   needs)   shift; cmd_needs "$@" ;;
+  class-gate) shift; cmd_class_gate "$@" ;;
+  roster)  shift; cmd_roster "$@" ;;
   reap)    shift; cmd_reap "$@" ;;
   # Pure read, no dispatch_kick: rendering a population cannot make an item newly dispatchable.
   fold)    shift; cmd_fold "$@" ;;
