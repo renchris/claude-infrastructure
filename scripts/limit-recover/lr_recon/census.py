@@ -494,13 +494,29 @@ def stale_reconcile(
             out.append((req.sid, "NOT_NEEDED", "dead-before-claim"))
     for sid, rec in records.items():
         born = rec.timeline.planned or rec.timeline.detected
-        if (
-            rec.open
-            and boottime
-            and born
-            and born < boottime
-            and rec.substate != "PARKED-REBOOT"
-        ):
-            rec.substate = "PARKED-REBOOT"
+        if rec.open and boottime and born and born < boottime and not parked(rec):
+            park(rec, now)
             out.append((sid, "PARKED-REBOOT", "planned before kern.boottime"))
     return out
+
+
+def parked(rec: T.Record) -> bool:
+    """Parked with its own wait. An older daemon set the substate alone, which left a record with
+    no wait (a §4.4 defect every pass) or with its old HOLD:iterm wait (paged hourly as that)."""
+    return (
+        rec.substate == "PARKED-REBOOT"
+        and rec.wait is not None
+        and rec.wait.reason == "PARKED-REBOOT"
+    )
+
+
+def park(rec: T.Record, now: float) -> None:
+    """A plan made before kern.boottime opens no new window: boot-resume, which honours
+    PARKED-REBOOT (boot-resume-launch.sh), is the one path that relaunches it. The census owns this
+    state and the phase table defers to it (``__main__._derive``); re-derived, the dead pane read
+    PANE-GONE/R and un-parked it every pass (W5b2 cd3bd860). PRE-MOVE, because a record parked in
+    a moving phase kept its phantom seat; a named wait, so §4.4 reads it as owned."""
+    rec.phase, rec.substate = "PRE-MOVE", "PARKED-REBOOT"
+    rec.wait = T.Wait(
+        reason="PARKED-REBOOT", since=now, detail="planned before kern.boottime"
+    )

@@ -107,7 +107,11 @@ class ActTests(unittest.TestCase):
         open(paths.recon_on, "w").close()
         rec = _rec()
         member = T.ProcRow(
-            77, 1, "S", L, "claude.exe --agent-id w@session-x --parent-session-id %s" % rec.sid
+            77,
+            1,
+            "S",
+            L,
+            "claude.exe --agent-id w@session-x --parent-session-id %s" % rec.sid,
         )
         snap = _snap(member)
         self.assertEqual(
@@ -123,6 +127,25 @@ class ActTests(unittest.TestCase):
             (True, "ok"),
         )
 
+    def test_a_reboot_parked_record_never_actuates(self):
+        """W5b2 cd3bd860: the census parked it, the same pass re-derived PANE-GONE/R, and nothing in
+        the gate stopped R from running boot-resume-launch.sh over boot-resume's own posture."""
+        paths = _paths()
+        open(paths.recon_on, "w").close()
+        rec = _rec(phase="PRE-MOVE", substate="PARKED-REBOOT")
+        self.assertIsNone(A.choose(T.PhaseResult("PRE-MOVE", "PARKED-REBOOT", ""), rec))
+        for a in ("R", "A", "B", "C"):
+            self.assertEqual(
+                A.may_actuate(paths, "act", rec, a, _snap(), NOW, True, 0, 16, env={}),
+                (False, "parked-reboot"),
+            )
+        rec.phase, rec.substate = "PANE-GONE", "R"  # CONTROL: what the old pass derived
+        self.assertEqual(A.choose(T.PhaseResult("PANE-GONE", "R", "R"), rec), "R")
+        self.assertEqual(
+            A.may_actuate(paths, "act", rec, "R", _snap(), NOW, True, 0, 16, env={}),
+            (True, "ok"),
+        )
+
     def test_the_wake_asks_the_focus_gate_before_it_types(self):
         """D4.9 + resolution 1: cmd_wake runs lr_focus_gate first; held ⇒ rc 6, nothing typed; no
         gate at all ⇒ rc 8, nothing typed; otherwise cc_tui_submit's own rc comes back."""
@@ -132,7 +155,10 @@ class ActTests(unittest.TestCase):
         os.makedirs(lib)
         typed = os.path.join(tmp, "typed")
         with open(os.path.join(lib, "cc-tui.sh"), "w") as fh:
-            fh.write('cc_tui_submit() { cat "$2" > "%s"; echo "$1" >> "%s"; return "${SUBMIT_RC:-0}"; }\n' % (typed, typed))
+            fh.write(
+                'cc_tui_submit() { cat "$2" > "%s"; echo "$1" >> "%s"; return "${SUBMIT_RC:-0}"; }\n'
+                % (typed, typed)
+            )
         gate = os.path.join(lr, "lr-lib.sh")
         payload = os.path.join(tmp, "p.txt")
         with open(payload, "w") as fh:

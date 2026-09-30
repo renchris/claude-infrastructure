@@ -1019,6 +1019,36 @@ class MainTests(unittest.TestCase):
             (rec.last_error, rec.next_eligible_at, rec.escalated), (None, None, False)
         )
 
+    def test_a_reboot_parked_record_is_not_re_derived(self):
+        """W5b2 cd3bd860: the census parked it and the same pass's derive read the dead pane as
+        PANE-GONE/R, so every pass parked it again: 408 stale and 408 RECON-DEFECT events in an
+        hour, and R choosable in act mode. The census owns the park; the phase table defers."""
+        import time
+
+        now = time.time()
+        ctx = M.Ctx(self.paths, None, self.home)
+        M.store.ensure_dirs(self.paths)
+        rec = self._rec("PANE-GONE", target="next3")
+        rec.substate, rec.timeline.planned = "R", now - 7200
+        ctx.records = {rec.sid: rec}
+        snap = T.Snapshot(wall=now, uptime_raw=0.0, panes={}, sessions={})
+        out = {
+            "result": T.PhaseResult("PANE-GONE", "R", "R", "row11:resume-owed"),
+            "evidence": T.Evidence(),
+        }
+        with (
+            mock.patch.object(ctx.clock, "boottime", return_value=now - 3600),
+            mock.patch.object(M.evidence, "derive", return_value=out) as derive,
+        ):
+            for _ in range(2):
+                M._census(ctx, snap, {}, [], "observe", now)
+                M._derive(ctx, snap, now)
+                self.assertEqual(M._invariant(ctx, snap, now), 0)
+        derive.assert_not_called()
+        self.assertEqual((rec.phase, rec.substate), ("PRE-MOVE", "PARKED-REBOOT"))
+        self.assertNotIn(rec.sid, ctx.actions)
+        self.assertEqual([e["ev"] for e in self._events()], ["stale"])
+
     def _rec(self, phase, target="next4"):
         rec = T.Record(sid="abcdef01-0000-0000-0000-000000000001", record_id="r1")
         rec.phase, rec.target_acct, rec.pane = phase, target, (5, 7)

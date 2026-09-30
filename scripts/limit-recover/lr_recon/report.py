@@ -51,9 +51,10 @@ _SAY: Dict[str, str] = {
     "HOLD:iterm": "held: an iTerm pane cannot be relaunched in place",
     "HELD:team": "held: team lead; continued in place at the reset",
     "BACKOFF": "backing off after an error",
-    "PARKED-REBOOT": "parked until the machine reboots",
+    "PARKED-REBOOT": "parked: planned before the machine rebooted",
 }
 _NEXT: Dict[str, str] = {
+    "PARKED-REBOOT": "boot-resume relaunches it in resume mode; in page mode, by hand",
     "HOLD-DRAFT": "send or clear the draft",
     "HOLD-BGWORK": "moves when the job ends",
     "HOLD-SUBAGENTS": "moves when the subagents finish",

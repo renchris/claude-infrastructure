@@ -456,6 +456,8 @@ def may_actuate(
         return False, "plan-only"
     if not rec.open:
         return False, "terminal"
+    if rec.substate == "PARKED-REBOOT":
+        return False, "parked-reboot"  # boot-resume owns a pre-boot plan's relaunch
     if actuator == "HEAL" and env.get("LR_HEAL_CORE_BARE", "off") != "on":
         return False, "heal-disabled"
     if live_procs(rec, snap):

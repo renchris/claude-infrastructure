@@ -507,6 +507,8 @@ def _derive(
         if not rec.open:
             continue
         act.adopt(rec, snap)
+        if rec.substate == "PARKED-REBOOT":
+            continue  # the census owns the reboot park (census.park); the phase table defers
         if rec.escalated:
             inputs = _rearm_inputs(rec, snap)
             prev = rec.close.get("rearm_inputs") or {}

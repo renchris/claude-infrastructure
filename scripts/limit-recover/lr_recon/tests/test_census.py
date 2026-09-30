@@ -5,6 +5,7 @@ import tempfile
 import unittest
 
 from lr_recon import census as C
+from lr_recon import plan
 from lr_recon import types as T
 
 L = "Tue Sep 29 11:19:17 2026"
@@ -238,6 +239,25 @@ class CensusRecords(unittest.TestCase):
         self.assertIn("no transcript", got["b"])
         self.assertEqual(got["c"], "dead-before-claim")
         self.assertEqual(rec.substate, "PARKED-REBOOT")
+
+    def test_a_reboot_park_is_a_named_pre_move_wait_set_once(self):
+        """A record parked in a moving phase kept its phantom seat, and one an older daemon parked
+        kept its HOLD:iterm wait; a correct park is left alone, so its event fires once."""
+        rec = T.Record(sid="p", record_id="r", phase="RELAUNCHED", target_acct="next3")
+        rec.substate, rec.timeline.planned = "UNPROMPTED", NOW - 100
+        self.assertEqual(len(plan.phantom_rows([rec])), 1)
+        old = T.Record(sid="q", record_id="r2", substate="PARKED-REBOOT")
+        old.wait, old.timeline.detected = T.Wait(reason="HOLD:iterm"), NOW - 100
+        recs, snap = {"p": rec, "q": old}, T.Snapshot(wall=NOW, uptime_raw=0.0)
+        out = C.stale_reconcile(recs, [], snap, NOW - 50, NOW)
+        self.assertEqual(sorted(sid for sid, _v, _r in out), ["p", "q"])
+        for r in (rec, old):
+            self.assertEqual(
+                (r.phase, r.substate, r.wait.reason),
+                ("PRE-MOVE", "PARKED-REBOOT", "PARKED-REBOOT"),
+            )
+        self.assertEqual(plan.phantom_rows([rec]), [])
+        self.assertEqual(C.stale_reconcile(recs, [], snap, NOW - 50, NOW), [])
 
     def _stores(self):
         """cfg-a holds only the source tombstone, cfg-b the target copy (a confirmed move)."""

@@ -231,6 +231,16 @@ class ReportTest(unittest.TestCase):
             % (R._hm(T0 + 3600), R._hm(T0 + 4200)),
         )
 
+    def test_a_reboot_parked_record_names_boot_resume(self) -> None:
+        """The reconciler never relaunches a parked record, so its status must not say it does."""
+        r = rec(1, substate="PARKED-REBOOT", wait=wait("PARKED-REBOOT"))
+        self.assertEqual(R.bucket(r), "waiting")
+        self.assertEqual(R.say(r), "parked: planned before the machine rebooted")
+        self.assertEqual(
+            R.next_action(r),
+            "boot-resume relaunches it in resume mode; in page mode, by hand",
+        )
+
     def test_a_failed_wake_pages_once_with_its_reason(self) -> None:
         rep = self.reporter()
         r = rec(1, wait=wait("HELD:team", eta=T0 + 3600))
