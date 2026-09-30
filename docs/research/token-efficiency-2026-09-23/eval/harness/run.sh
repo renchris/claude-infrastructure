@@ -20,7 +20,34 @@ T="${GATE_TASKS:-$H/tasks}/$TASK"
 
 RUN="$G/runs/$TASK/r$REP"
 case "$RUN" in "$G"/runs/*/r*) ;; *) echo "refusing run dir $RUN" >&2; exit 2;; esac
-rm -rf "${RUN:?}"; mkdir -p "$RUN/out" "$RUN/tmp"
+# PER-RUN OPERATOR STORES (BACKLOG_MASTER W0 ledger-admission.1). The 09-24/25 gate set none of these,
+# so every run's cc-backlog / cc-decide / cc-notify filing landed in the REAL ~/.claude stores: 73
+# project=fx rows plus ~88 project=null lines. They are ALWAYS pointed into $RUN/out (a caller's value
+# is overridden, never inherited), and the run refuses to start if any of them resolves inside the
+# real autonomy store or mailbox. GATE_GUARD stays a separate, explicit arm: denying cc-backlog would
+# change the filing behaviour T03, T07, T08 and T12 grade; a private ledger isolates without that.
+export CC_BACKLOG_FILE="$RUN/out/backlog.jsonl" CC_BACKLOG_IDL="$RUN/out/idl.jsonl" \
+       CC_BACKLOG_VALIDATED="$RUN/out/backlog-validated.json" CC_BACKLOG_GATE_LOG="$RUN/out/backlog-gate.jsonl" \
+       CC_DECISIONS_DIR="$RUN/out/decisions" CC_IDL="$RUN/out/decide-idl.jsonl" \
+       CC_MAILBOX_DIR="$RUN/out/mailbox" CC_COMMS_ALARM_DIR="$RUN/out/comms-alarm"
+# _canon <path> → the path with symlinks resolved through its deepest EXISTING ancestor (creates nothing).
+_canon() {
+  local p="$1" tail=""
+  while [ ! -d "$p" ] && [ "$p" != / ] && [ -n "$p" ]; do tail="/${p##*/}$tail"; p="${p%/*}"; [ -n "$p" ] || p=/; done
+  printf '%s%s' "$(cd "$p" 2>/dev/null && pwd -P)" "$tail"
+}
+for _store in "$HOME/.claude/autonomy" "$HOME/.claude/mailbox"; do
+  [ -d "$_store" ] || continue
+  _rs="$(_canon "$_store")"
+  for _p in "$CC_BACKLOG_FILE" "$CC_BACKLOG_IDL" "$CC_BACKLOG_VALIDATED" "$CC_BACKLOG_GATE_LOG" \
+            "$CC_DECISIONS_DIR" "$CC_IDL" "$CC_MAILBOX_DIR" "$CC_COMMS_ALARM_DIR"; do
+    case "$(_canon "$_p")" in
+      "$_rs"|"$_rs"/*)
+        echo "refusing to start: store override $_p resolves inside the real store $_rs" >&2; exit 2 ;;
+    esac
+  done
+done
+rm -rf "${RUN:?}"; mkdir -p "$RUN/out" "$RUN/tmp" "$CC_DECISIONS_DIR" "$CC_MAILBOX_DIR"
 FX="$RUN/fx"
 "$T/fixture.sh" "$FX" "$RUN/origin.git" > "$RUN/out/fixture.log" 2>&1 || { echo "fixture build failed: $TASK" >&2; exit 3; }
 
