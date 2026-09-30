@@ -26,6 +26,10 @@ setup() {
   ORIGIN="$TDIR/origin.git"
   SCRIPT="$BATS_TEST_DIRNAME/../scripts/branch-prune-landed.sh"
   MANIFEST="$TDIR/manifest.tsv"
+  # The deletion journal defaults under CLAUDE_CONFIG_DIR, which a session exports as the REAL
+  # store — so every case pins it here, or a fixture delete would journal into the live one.
+  unset CLAUDE_CONFIG_DIR CC_CLOUD_STATE
+  export CC_PRUNE_JOURNAL="$TDIR/journal.tsv"
   NOW="$(date +%s)"
 
   git init -q --bare "$ORIGIN"
@@ -239,4 +243,56 @@ verdict() { awk -F'\t' -v b="$1" '$1==b {print $6}' "$MANIFEST"; }
   default_path="$TDIR/repo/docs/research/branch-prune-manifest-$(date -u +%Y-%m-%d).tsv"
   [ -f "$default_path" ]
   [ ! -f "$MANIFEST" ]
+}
+
+# ── cases 16-17: the deletion journal — the record the manifest's truncation could never be ──────
+# The manifest is rewritten from its header every run, so a second same-day run erased the first
+# run's DELETED rows (26 of 26 real manifests held none). cloud-lane-liveness counts deletions from
+# THIS file instead; a journal that lost a row would read as an unaccounted deletion forever.
+@test "16. every deleted branch gains a journal line, and a second run appends rather than truncates" {
+  bash "$SCRIPT" --manifest "$MANIFEST" >/dev/null
+  [ "$(grep -vc '^#' "$CC_PRUNE_JOURNAL")" -eq 1 ]
+  local sha; sha="$(awk -F'\t' '$1=="landed-rewritten" {print $2}' "$MANIFEST")"
+  [ -n "$sha" ]
+  awk -F'\t' -v s="$sha" '$2=="landed-rewritten" && $3==s && $1 ~ /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$/ {f=1} END {exit !f}' "$CC_PRUNE_JOURNAL"
+
+  CC_PRUNE_MIN_AGE_H=0 bash "$SCRIPT" --manifest "$MANIFEST" >/dev/null   # the same-day second run
+  ! grep -q 'landed-rewritten' "$MANIFEST" || { echo "fixture: the rerun manifest should no longer list it" >&2; return 1; }
+  [ "$(grep -vc '^#' "$CC_PRUNE_JOURNAL")" -eq 2 ]
+  grep -q $'\tlanded-rewritten\t' "$CC_PRUNE_JOURNAL"
+  grep -q $'\tfresh-landed\t' "$CC_PRUNE_JOURNAL"
+}
+
+@test "17. --backfill journals only evidenced, now-absent branches, and is idempotent" {
+  local st="$TDIR/state"; mkdir -p "$st"
+  export CC_CLOUD_STATE="$st"
+  # A manifest PRUNE row for a branch the remote no longer has, and one for a branch it still has.
+  printf '# branch\tsha\tstranded\tlanded\tlast_commit_utc\tverdict\n' > "$st/branch-prune-manifest-2026-09-05.tsv"
+  printf 'claude/fire-20260901T000000Z-1-1\t%040d\t0\t1\tx\tPRUNE\n' 1 >> "$st/branch-prune-manifest-2026-09-05.tsv"
+  printf 'landed-rewritten\t%040d\t0\t1\tx\tPRUNE\n' 2 >> "$st/branch-prune-manifest-2026-09-05.tsv"
+  # A decl the watcher SAW pushed (counts), and one it never saw (a dispatch is not a push).
+  printf 'branch=claude/fire-20260902T000000Z-2-1\n' > "$st/s1.decl"; printf 'sha=%040d\n' 3 > "$st/s1.seen"
+  printf 'branch=claude/fire-20260903T000000Z-3-1\n' > "$st/s2.decl"
+
+  run bash "$SCRIPT" --backfill
+  [ "$status" -eq 0 ]
+  [ "$(grep -vc '^#' "$CC_PRUNE_JOURNAL")" -eq 2 ]
+  grep -q $'\tclaude/fire-20260901T000000Z-1-1\t.*\tbackfill$' "$CC_PRUNE_JOURNAL"
+  grep -q $'\tclaude/fire-20260902T000000Z-2-1\t.*\tbackfill$' "$CC_PRUNE_JOURNAL"
+  ! grep -qE 'landed-rewritten|20260903' "$CC_PRUNE_JOURNAL" || return 1
+  on_origin landed-rewritten                # backfill reads the remote; it never deletes
+
+  run bash "$SCRIPT" --backfill
+  [ "$status" -eq 0 ]
+  [ "$(grep -vc '^#' "$CC_PRUNE_JOURNAL")" -eq 2 ]
+}
+
+@test "18. --backfill refuses when it cannot read the remote — cannot look is not absent" {
+  local st="$TDIR/state"; mkdir -p "$st"
+  export CC_CLOUD_STATE="$st"
+  printf 'branch=claude/fire-20260902T000000Z-2-1\n' > "$st/s1.decl"; printf 'sha=%040d\n' 3 > "$st/s1.seen"
+  git remote set-url origin "$TDIR/no-such-remote.git"
+  run bash "$SCRIPT" --backfill
+  [ "$status" -eq 1 ]
+  [ ! -s "$CC_PRUNE_JOURNAL" ] || [ "$(grep -vc '^#' "$CC_PRUNE_JOURNAL")" -eq 0 ]
 }

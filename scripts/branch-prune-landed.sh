@@ -18,20 +18,37 @@
 # Everything it does delete is recorded first, with its sha, so any deletion is reversible:
 #   git push origin <sha>:refs/heads/<branch>
 #
+# ── THE DELETION JOURNAL, WHICH IS NEVER TRUNCATED (backlog 529aebcb4992) ───────────────────────
+# The manifest is a per-RUN record and is rewritten from its header every run, so a second run on
+# the same day erased the first run's DELETED rows: all 26 manifests on disk held 0 DELETED rows
+# while this script had deleted ~92 fire refs. `cloud-lane-liveness.sh` needs the opposite — the
+# set of every branch ever deleted — because its population control reads a missing fire ref as
+# a deletion it cannot account for, and so read UNKNOWN forever. Every successful delete is
+# therefore APPENDED to a journal (`--journal`, CC_PRUNE_JOURNAL, default
+# $CC_CLOUD_STATE/branch-prune-deleted.tsv), one `<deleted_at_utc>\t<branch>\t<sha>` line each.
+# FAIL-OPEN: a journal that cannot be written is reported on stderr and never fails the prune.
+# `--backfill` reconstructs the deletions made before the journal existed (see backfill() below).
+#
 # Usage:  scripts/branch-prune-landed.sh [--dry-run] [--trunk <branch>] [--manifest <path>]
+#                                        [--journal <path>] [--backfill]
 set -uo pipefail
 
 TRUNK="${CC_PRUNE_TRUNK:-main}"
 MIN_AGE_H="${CC_PRUNE_MIN_AGE_H:-6}"
 DRY=0
 MANIFEST=""
+STATE_D="${CC_CLOUD_STATE:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/autonomy/cloud}"   # autonomy-sweep's own expression
+JOURNAL="${CC_PRUNE_JOURNAL:-$STATE_D/branch-prune-deleted.tsv}"
+BACKFILL=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run)  DRY=1; shift ;;
     --trunk)    TRUNK="${2:?--trunk needs a branch}"; shift 2 ;;
     --manifest) MANIFEST="${2:?--manifest needs a path}"; shift 2 ;;
-    -h|--help)  sed -n '2,30p' "$0"; exit 0 ;;
+    --journal)  JOURNAL="${2:?--journal needs a path}"; shift 2 ;;
+    --backfill) BACKFILL=1; shift ;;
+    -h|--help)  sed -n '2,33p' "$0"; exit 0 ;;
     *) echo "branch-prune-landed: unknown arg $1" >&2; exit 2 ;;
   esac
 done
@@ -39,6 +56,75 @@ done
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || {
   echo "branch-prune-landed: not in a git repo" >&2; exit 2; }
 cd "$repo_root" || exit 2
+
+# journal_open — create the journal with its header when absent. Appends even the header (`>>`), so
+# two racing runs can never truncate each other's rows: the file only ever grows.
+journal_open() {
+  [ -e "$JOURNAL" ] && return 0
+  mkdir -p "$(dirname "$JOURNAL")" && printf '# deleted_at_utc\tbranch\tsha\tsource\n' >> "$JOURNAL"
+}
+
+# journal_deleted <branch>... — one line per branch this run just deleted. The sha comes from the
+# manifest, which is written before any push; the remote-tracking ref is already gone by now.
+journal_deleted() {
+  local at; at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  if ! { journal_open && printf '%s\n' "$@" | awk -F'\t' -v OFS='\t' -v at="$at" -v m="$MANIFEST" '
+      BEGIN { while ((getline l < m) > 0) { split(l, f, "\t"); S[f[1]] = f[2] } }
+      NF { print at, $0, S[$0] }' >> "$JOURNAL"; } 2>/dev/null; then
+    echo "  WARNING: deletion journal $JOURNAL NOT written for $# branch(es) — cloud-lane-liveness" >&2
+    echo "           will read their absence as an unaccounted deletion (UNKNOWN)" >&2
+  fi
+  return 0
+}
+
+# ── --backfill: the deletions made before the journal existed ──────────────────────────────────
+# One-shot and idempotent. A branch is journaled as `backfill` only when BOTH hold:
+#   · on-disk evidence that it EXISTED on the remote — a manifest PRUNE/DELETED row (this script
+#     saw it), or a cloud `.decl` naming it whose `.seen` carries `sha=` (the watcher saw it pushed).
+#     A `.decl` alone is NOT enough: it proves a session was dispatched, never that it pushed.
+#   · it is absent from `git ls-remote --heads origin` right now.
+# A failed or trunk-less ls-remote aborts with nothing written: "cannot look" is not "absent", and
+# reading it as absent would journal every live branch as deleted. Column 1 of a backfill row is
+# the backfill instant — the deletion happened ON OR BEFORE it — and column 4 says `backfill`.
+backfill() {
+  local heads names cand at before after
+  heads="$(git ls-remote --heads origin 2>/dev/null)" || {
+    echo "backfill: ls-remote failed — cannot look is not absent; nothing journaled" >&2; return 1; }
+  names="$(printf '%s\n' "$heads" | sed -E 's#^[0-9a-f]+[[:space:]]+refs/heads/##')"
+  printf '%s\n' "$names" | grep -xF "$TRUNK" >/dev/null || {
+    echo "backfill: the remote listing lacks the trunk '$TRUNK' — not a trustworthy census; nothing journaled" >&2; return 1; }
+
+  cand="$(mktemp)"
+  awk -F'\t' -v OFS='\t' '!/^#/ && ($6=="PRUNE" || $6=="DELETED") && $1!="" { sub(/^origin\//, "", $1); print $1, $2 }' \
+    "$STATE_D"/branch-prune-manifest-*.tsv 2>/dev/null >> "$cand"
+  echo "backfill: $(wc -l < "$cand" | tr -d ' ') manifest PRUNE/DELETED row(s) in $STATE_D"
+  local d b s sha n_decl=0
+  for d in "$STATE_D"/*.decl; do
+    [ -f "$d" ] || continue
+    b="$(sed -n 's/^branch=//p' "$d" | head -1)"; s="${d%.decl}.seen"
+    [ -n "$b" ] && [ -f "$s" ] || continue
+    sha="$(sed -n 's/^sha=//p' "$s" | head -1)"
+    [ -n "$sha" ] || continue
+    printf '%s\t%s\n' "$b" "$sha" >> "$cand"; n_decl=$((n_decl+1))
+  done
+  echo "backfill: $n_decl .decl branch(es) with a .seen sha"
+
+  journal_open || { echo "backfill: cannot create $JOURNAL" >&2; rm -f "$cand"; return 1; }
+  before=$(grep -vc '^#' "$JOURNAL" 2>/dev/null); before="${before:-0}"
+  at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  # First evidence row per branch wins; drop anything still on the remote or already journaled.
+  printf '%s\n' "$names" > "$cand.live"
+  awk -F'\t' -v OFS='\t' -v at="$at" -v j="$JOURNAL" -v live="$cand.live" '
+    BEGIN { while ((getline l < live) > 0) L[l] = 1
+            while ((getline l < j) > 0) { if (l ~ /^#/) continue; split(l, f, "\t"); J[f[2]] = 1 } }
+    NF && !($1 in L) && !($1 in J) && !($1 in seen) { seen[$1] = 1; print at, $1, $2, "backfill" }
+  ' "$cand" >> "$JOURNAL" || { echo "backfill: append to $JOURNAL failed" >&2; rm -f "$cand" "$cand.live"; return 1; }
+  rm -f "$cand" "$cand.live"
+  after=$(grep -vc '^#' "$JOURNAL" 2>/dev/null); after="${after:-0}"
+  echo "backfill: appended $((after - before)) deletion(s) to $JOURNAL ($after journaled in total)"
+}
+
+if [ "$BACKFILL" = 1 ]; then backfill; exit $?; fi
 
 [ -n "$MANIFEST" ] || MANIFEST="$repo_root/docs/research/branch-prune-manifest-$(date -u +%Y-%m-%d).tsv"
 
@@ -142,6 +228,7 @@ while [ "$i" -lt "${#safe[@]}" ]; do
   if git push origin --delete "${batch[@]}" >/dev/null 2>&1; then
     echo "  deleted ${#batch[@]}"
     printf '%s\n' "${batch[@]}" >> "$deleted_list"
+    journal_deleted "${batch[@]}"   # per batch, so a run killed mid-loop still journals what it did
   else
     echo "  BATCH FAILED (${#batch[@]} branches) — see manifest to retry" >&2; rc=1
     printf '%s\n' "${batch[@]}" >> "$failed_list"
