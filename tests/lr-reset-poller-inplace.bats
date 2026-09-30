@@ -455,9 +455,9 @@ lead_of() { printf '999%s S /opt/cc/bin/claude --agent-id w@session-t --parent-s
   [ -f "$STATE/resumed/$SID.json" ]
 }
 
-@test "[R1] a FOCUSED pane is held (lr_focus_gate): nothing typed, no strike, the hold named" {
+@test "[R1] under the kill switch LR_MOVE_FOCUSED=off a FOCUSED pane is held (lr_focus_gate): nothing typed, no strike, the hold named" {
   mk_parked "$SID"; row 616 "$SID"
-  export LR_FOCUS_LS_FILE="$BATS_TEST_TMPDIR/ls.json"
+  export LR_FOCUS_LS_FILE="$BATS_TEST_TMPDIR/ls.json" LR_MOVE_FOCUSED=off
   printf '[{"is_focused":true,"tabs":[{"is_focused":true,"windows":[{"id":616,"is_focused":true}]}]}]' > "$LR_FOCUS_LS_FILE"
   TUI_ENGAGE=1 tick1
   [ ! -s "$TUI_LOG" ] || { cat "$TUI_LOG"; false; }

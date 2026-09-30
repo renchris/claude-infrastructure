@@ -148,7 +148,8 @@ PY
 # ── 2. panes: one tab per session in one OS window titled lr-rig ──────────────────────────────────
 : > "$RIG/windows"
 # A control window owns the OS window's active tab, so no session pane is ever the focused one
-# (a focused LIMITED pane is HOLD-FOCUS by the safe default, decision 7).
+# (decision 7, ruled 2026-09-30, moves a focused LIMITED pane by default; the rig keeps every
+# session pane unfocused so it never types beside the operator. LR_MOVE_FOCUSED=off holds instead).
 # --keep-focus does not stop a NEW OS window taking focus (measured in the W5 rig), so the window the
 # operator had focused is read first and handed back once the rig window exists.
 prev_focus="$("$KITTEN" @ --to "$SOCK" ls 2>/dev/null | /usr/bin/python3 -c '

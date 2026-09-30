@@ -2857,12 +2857,13 @@ hf_wake_guard() { # $1=the step being deferred → always 0
   return 0
 }
 
-# THE FOCUS READ (operator decision 7, unruled ⇒ the gate runs). A pane the operator has FOCUSED is
-# one they may be typing into this second, and every composer read is a sample that is stale the
-# moment it returns. kitty says so directly; iTerm2 has no per-pane answer here, and an unreadable
-# answer is `unknown` — treated as not focused, since refusing every iTerm2 pane would gate the
-# whole rail on a signal it cannot have. LR_MOVE_FOCUSED=on lets a focused pane move, under a
-# stricter read (two empty composers HF_FOCUS_READ_GAP_S apart, suffix-anchored echo verify).
+# THE FOCUS READ (operator decision 7, ruled 2026-09-30: move focused panes; LR_MOVE_FOCUSED=off is
+# the kill switch). A pane the operator has FOCUSED is one they may be typing into this second, and
+# every composer read is a sample that is stale the moment it returns. kitty says so directly;
+# iTerm2 has no per-pane answer here, and an unreadable answer is `unknown` — treated as not
+# focused, since refusing every iTerm2 pane would gate the whole rail on a signal it cannot have. A
+# focused pane moves by default, under a stricter read (two empty composers HF_FOCUS_READ_GAP_S
+# apart, suffix-anchored echo verify); LR_MOVE_FOCUSED=off holds it instead.
 hf_pane_focused() { # $1=pane → yes|no|unknown on stdout
   local v
   if [ "${CC_TERM:-}" != kitty ] || [ -z "${1##*:}" ]; then echo unknown; return 0; fi
@@ -3417,10 +3418,11 @@ _it2_type_line() { # $1=it2-bin $2=session-id $3=line → 0 verified+submitted /
   local attempts="${FIRE_TYPE_ATTEMPTS:-4}" settle="${FIRE_TYPE_SETTLE:-0.5}" nlines="${FIRE_TYPE_READLINES:-500}"
   local presettle="${FIRE_TYPE_PRESETTLE:-0.12}"
   [ -n "$(printf '%s' "$line" | tr -d '[:space:]')" ] || return 1
-  # A FOCUSED pane moved under LR_MOVE_FOCUSED=on (W2b): the operator's keystrokes can land after
-  # ours, and a substring match would CR a line with their text fused onto its end. So the wire
-  # must be the read-back's SUFFIX — nothing after it — before the CR is earned.
-  if [ "${LR_MOVE_FOCUSED:-off}" = on ] && [ "$(hf_pane_focused "$id")" = yes ]; then focused=1; fi
+  # A FOCUSED pane being moved (the default since decision 7; LR_MOVE_FOCUSED=off holds it before
+  # anything is typed): the operator's keystrokes can land after ours, and a substring match would
+  # CR a line with their text fused onto its end. So the wire must be the read-back's SUFFIX —
+  # nothing after it — before the CR is earned.
+  if [ "${LR_MOVE_FOCUSED:-on}" != off ] && [ "$(hf_pane_focused "$id")" = yes ]; then focused=1; fi
   for attempt in $(seq 1 "$attempts"); do
     # Fresh per ATTEMPT, not per call: attempt N must not be satisfiable by attempt N-1's echo.
     nonce="hfv-$$-${attempt}-${RANDOM:-0}"
@@ -9778,9 +9780,9 @@ if [ "${1:-}" = "--probe-recycle-preconditions" ]; then
   PRP_IT2="${IT2_BIN:-$HOME/.claude/bin/it2}"
   #    4d. FOCUS (W2b; ruled by operator decision 7, FLEET_V2 W6). A pane the operator has focused
   #    may be taking keystrokes right now; the composer read below would be stale on arrival. HELD,
-  #    not refused — focus moves on. lr_focus_gate is the one rule (lead resolution 1): under
-  #    LR_MOVE_FOCUSED=on it passes a focused pane only past two EMPTY composer reads a gap apart, and
-  #    running it HERE, before the caller's admit, is what keeps a focused pane's tombstone window
+  #    not refused — focus moves on. lr_focus_gate is the one rule (lead resolution 1): by default
+  #    it passes a focused pane only past two EMPTY composer reads a gap apart (LR_MOVE_FOCUSED=off
+  #    holds it outright), and running it HERE, before the caller's admit, is what keeps a focused pane's tombstone window
   #    shut until those reads are in (D7.2c). The operator's idle time is logged beside it (D7.5):
   #    the later idle-time rule is decided from these lines.
   PRP_FG_RC=0; hf_focus_gate "$PRP_IT2" "$PRP_PANE" || PRP_FG_RC=$?
@@ -14868,11 +14870,12 @@ recycle_fire() {
       fi
     fi
   fi
-  # THE FOCUS GATE (W2b, operator decision 7 unruled ⇒ the gate runs). Remote form only: the self
-  # form's subject IS the actor, so the operator watching it is watching the session retire itself,
-  # and its composer gate above already owns the draft question. A focused remote pane is HELD —
-  # before the lock, so a deferral never holds the pane from the next attempt. LR_MOVE_FOCUSED=on
-  # moves it, but only past two EMPTY composer reads HF_FOCUS_READ_GAP_S apart.
+  # THE FOCUS GATE (W2b; operator decision 7, ruled 2026-09-30: move focused panes;
+  # LR_MOVE_FOCUSED=off is the kill switch). Remote form only: the self form's subject IS the actor,
+  # so the operator watching it is watching the session retire itself, and its composer gate above
+  # already owns the draft question. A focused remote pane moves, but only past two EMPTY composer
+  # reads HF_FOCUS_READ_GAP_S apart; under LR_MOVE_FOCUSED=off (or with lr-lib unreachable) it is
+  # HELD — before the lock, so a deferral never holds the pane from the next attempt.
   # FOCUS AND OPERATOR IDLE TIME ARE LOGGED ON EVERY DISPATCH (FLEET_V2 W6, D7.5): exported, so the
   # detached watcher's recycle-submitted row carries them. The self form reads no focus (`n/a`).
   RCY_FOCUSED=n/a
@@ -14880,8 +14883,10 @@ recycle_fire() {
     rcy_fg_rc=0; hf_focus_gate "$RCY_IT2" "$SID" || rcy_fg_rc=$?
     RCY_FOCUSED="$HF_FOCUS_STATE"
     if [ "$rcy_fg_rc" != 0 ] && [ "$HF_FOCUS_HOLD" = HELD:focused ]; then
-      emit_recycle_event recycle-held-focused "" "$SID" "pane $SID is focused and LR_MOVE_FOCUSED is off" || true
-      echo "!! recycle DEFERRED: pane $SID is FOCUSED — the operator may be typing into it. Nothing typed, no watcher armed, the session stays alive. LR_MOVE_FOCUSED=on moves a focused pane." >&2
+      rcy_fg_why="LR_MOVE_FOCUSED=off holds a focused pane"
+      [ "$HF_FOCUS_READ" = "<lr-lib unreachable>" ] && rcy_fg_why="lr-lib is unreachable, so the focus rule could not be asked"
+      emit_recycle_event recycle-held-focused "" "$SID" "pane $SID is focused and $rcy_fg_why" || true
+      echo "!! recycle DEFERRED: pane $SID is FOCUSED and $rcy_fg_why. Nothing typed, no watcher armed, the session stays alive." >&2
       exit 1
     fi
     if [ "$rcy_fg_rc" != 0 ]; then

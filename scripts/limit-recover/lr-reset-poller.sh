@@ -775,8 +775,9 @@ lrp_draft_hold() {
 # KITTY_WINDOW_ID, no CC_TERM=kitty) the shim routed to iTerm2. Now:
 #   · DELIVERY through cc_tui_submit (scripts/lib/cc-tui.sh), the path request prompt mode already
 #     uses: kitty by socket, a composer gate that never types over a draft, and transcript proof.
-#   · ONE FOCUS RULE (resolution 1): lr_focus_gate (lr-lib.sh) holds a focused pane unless
-#     LR_MOVE_FOCUSED=on, and then only after two empty composer reads. Never re-implemented here.
+#   · ONE FOCUS RULE (resolution 1): lr_focus_gate (lr-lib.sh) lets a focused pane through only
+#     after two empty composer reads, and LR_MOVE_FOCUSED=off holds it outright (decision 7, ruled
+#     2026-09-30: move focused panes; =off is the kill switch). Never re-implemented here.
 #   · ONE WAKE TEXT (resolution 2): a plain continue. `/limit-recover` runs the skill, which can
 #     choose a MOVE — the opposite of an in-place wake.
 #   · TIMING (D4.7): at reset + LR_NUDGE_AFTER_RESET_S (120 s) or later, and only if no assistant

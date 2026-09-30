@@ -433,7 +433,10 @@ SH
   export LR_LOCKS_DIR="$BATS_TEST_TMPDIR/locks"
   export HF_WATCHER_RECORD="$BATS_TEST_TMPDIR/watcher.json"
   export LR_TEAM_PS_SNAPSHOT="$BATS_TEST_TMPDIR/team-ps.txt"; printf '1 Ss /sbin/launchd\n' > "$LR_TEAM_PS_SNAPSHOT"
-  unset CC_TERM CC_TERM_KITTY_TO LR_MOVE_FOCUSED HF_EXIT_READBACK
+  unset CC_TERM CC_TERM_KITTY_TO HF_EXIT_READBACK
+  # The kill switch, pinned: every test written before the flip (D7.6) ran under off. The default
+  # (unset ⇒ on) is pinned on its own by F8.
+  export LR_MOVE_FOCUSED=off
   # shellcheck disable=SC2034  # globals read by the handoff-fire functions under test
   SID="$PANE" CMD="relaunch-cmd" RCY_IT2="$STUB/it2" RCY_REMOTE=1 RCY_SAME_ACCOUNT=0
   # shellcheck disable=SC2034  # globals read by the handoff-fire functions under test
@@ -762,7 +765,7 @@ SH
   grep -qx 'sleep 10' "$CALLS" || { cat "$CALLS"; false; }
   tail_world
   kitty_stub
-  export LR_MOVE_FOCUSED=on   # tail_world unsets it
+  export LR_MOVE_FOCUSED=on   # tail_world pins off
   printf '%s\n' "" "draft" > "$READS"
   run recycle_fire_commit "$SESS"
   [ "$status" -eq 1 ] || { echo "status=$status $output"; cat "$CALLS"; false; }
@@ -794,6 +797,44 @@ SH
   ltx "$TX"
   RCY_REMOTE=1 RCY_SAME_ACCOUNT=0 RCY_FOCUSED=yes RCY_SRC_TX="$TX" run bash -c ". '$FUNCS'; hf_recycle_disarm() { :; }; . '$frag'"
   [[ "$output" == *"past the at-rest read"* ]] || { echo "$output"; false; }
+}
+
+# D7.6 THE FLIP (operator decision 7, ruled 2026-09-30): LR_MOVE_FOCUSED unset means ON, and only
+# =off holds (F and F3 pin that half). Mutants: `${LR_MOVE_FOCUSED:-off}` back in lr_focus_gate (the
+# recycle holds) · back in _it2_type_line (a CR over operator text on a focused pane).
+@test "F8 LR_MOVE_FOCUSED unset moves a focused pane: the gate reads twice, the recycle sends /exit, the typed line is suffix-verified" {
+  tail_world
+  kitty_stub
+  unset LR_MOVE_FOCUSED
+  export HF_FOCUS_READ_GAP_S=10
+  printf '%s\n' "" "" "" "/exit" > "$READS"
+  run recycle_fire_commit "$SESS"
+  [ "$status" -eq 0 ] || { echo "status=$status $output"; cat "$CALLS"; false; }
+  [ "$(calls_n "send \$'\\r'")" = 1 ] || { cat "$CALLS"; false; }
+  grep -qx 'sleep 10' "$CALLS" || { cat "$CALLS"; false; }
+  [ -z "$(rows_of recycle-held-focused)" ] || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
+  # _it2_type_line treats the focused pane as focused by default: operator text trailing our line
+  # withholds the CR.
+  local T="$BATS_TEST_TMPDIR/tl.sh"
+  { grep '^BP_START=' "$HF"; grep '^BP_END=' "$HF"; sed -n '/^_it2_type_line() {/,/^}/p' "$HF"; } > "$T"
+  # shellcheck disable=SC1090
+  . "$T"
+  cat > "$STUB/it2e" <<'SH'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "session send")
+    t="${!#}"; printf 'send %q\n' "$t" >> "$CALLS"
+    case "$t" in $'\x15'|$'\r') ;; *) t="${t#$'\e[200~'}"; printf '%s' "${t%$'\e[201~'}" > "$CALLS.last" ;; esac ;;
+  "session read") printf '$ %s%s\n' "$(cat "$CALLS.last" 2>/dev/null)" "${TRAIL:-}" ;;
+esac
+exit 0
+SH
+  chmod +x "$STUB/it2e"
+  export FIRE_TYPE_ATTEMPTS=2 FIRE_TYPE_SETTLE=0 FIRE_TYPE_PRESETTLE=0
+  : > "$CALLS"
+  TRAIL="ab" run _it2_type_line "$STUB/it2e" 901 "claude --resume x"
+  [ "$status" -eq 1 ] || { echo "status=$status"; cat "$CALLS"; false; }
+  [ "$(calls_n "send \$'\\r'")" = 0 ] || { echo "a CR was sent over operator text"; cat "$CALLS"; false; }
 }
 
 @test "R the MAIN parser takes --record-id: lr-handoff passes it to --recycle whenever the case exists (W5 rig)" {

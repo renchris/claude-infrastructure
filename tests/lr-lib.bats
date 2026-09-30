@@ -704,7 +704,7 @@ fg_world() {
 
 @test "focus gate: not focused or unknown proceeds without a read; focused under off is HELD:focused, nothing read" {
   fg_world "" ""
-  unset LR_MOVE_FOCUSED
+  export LR_MOVE_FOCUSED=off
   FG_FOCUS=no lr_focus_gate 901 fg_focus fg_comp
   [ "$LR_FOCUS_STATE" = no ]
   [ -z "$LR_FOCUS_HOLD" ]
@@ -738,6 +738,24 @@ fg_world() {
   rc=0; lr_focus_gate 901 fg_focus fg_comp || rc=$?
   [ "$rc" = 3 ] || { echo "rc=$rc"; false; }
   [ "$LR_FOCUS_READ" = "<unreadable>" ] || { echo "read=[$LR_FOCUS_READ]"; false; }
+}
+
+# D7.6 the flip (decision 7, ruled 2026-09-30): unset is ON, and so is any value but `off`.
+# Mutant: `${LR_MOVE_FOCUSED:-off}` back in lr_focus_gate — the unset case holds unread.
+@test "focus gate by default (LR_MOVE_FOCUSED unset, or not 'off') reads twice and proceeds; only =off holds" {
+  export LR_FOCUS_READ_GAP_S=10
+  local v rc
+  for v in "" on yes; do
+    fg_world "" ""
+    if [ -z "$v" ]; then unset LR_MOVE_FOCUSED; else export LR_MOVE_FOCUSED="$v"; fi
+    rc=0; lr_focus_gate 901 fg_focus fg_comp || rc=$?
+    [ "$rc" = 0 ] || { echo "v=[$v] rc=$rc hold=$LR_FOCUS_HOLD"; false; }
+    [ "$(tr '\n' ',' < "$FG_LOG")" = "read,sleep 10,read," ] || { echo "v=[$v]"; cat "$FG_LOG"; false; }
+  done
+  fg_world "" ""
+  export LR_MOVE_FOCUSED=off
+  rc=0; lr_focus_gate 901 fg_focus fg_comp || rc=$?
+  [ "$rc" = 3 ] && [ "$LR_FOCUS_HOLD" = HELD:focused ] || { echo "rc=$rc hold=$LR_FOCUS_HOLD"; false; }
 }
 
 @test "focus gate default reader: UI focus is OS window AND tab AND window; an unparseable listing is unknown" {

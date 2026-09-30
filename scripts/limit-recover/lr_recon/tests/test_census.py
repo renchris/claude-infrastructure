@@ -1,4 +1,4 @@
-"""census: one bucket per session in order, safe defaults for unruled decisions, records, stale."""
+"""census: one bucket per session in order, the ruled defaults and their switches, records, stale."""
 
 import os
 import tempfile
@@ -102,14 +102,21 @@ class CensusBuckets(unittest.TestCase):
             "claude --agent-id w@session-abcdef01 --parent-session-id abcdef01-x",
         )
         self.assertEqual(self.b(self._s()).name, "HELD:team")
-        self.assertNotIn("unruled", self.b(self._s()).reason)  # D4.10: decision 4 is ruled
+        self.assertNotIn(
+            "unruled", self.b(self._s()).reason
+        )  # D4.10: decision 4 is ruled
 
-    def test_focus_default_hold_and_switch(self):
+    def test_focus_default_moves_and_off_holds(self):
+        # Decision 7, ruled 2026-09-30: a focused pane moves by default; =off is the kill switch.
         self.pane.is_focused = True
-        self.assertEqual(self.b(self._s()).name, "HOLD-FOCUS")
-        self.assertEqual(
-            self.b(self._s(), env={"LR_MOVE_FOCUSED": "on"}).name, "LIMITED"
-        )
+        self.assertEqual(self.b(self._s()).name, "LIMITED")
+        for v in ("on", "yes", ""):
+            self.assertEqual(
+                self.b(self._s(), env={"LR_MOVE_FOCUSED": v}).name, "LIMITED", v
+            )
+        held = self.b(self._s(), env={"LR_MOVE_FOCUSED": "off"})
+        self.assertEqual(held.name, "HOLD-FOCUS")
+        self.assertNotIn("unruled", held.reason)
 
     def test_bgwork(self):
         ship = T.BgWork(kind="shell", pid=3, ship_land=True)

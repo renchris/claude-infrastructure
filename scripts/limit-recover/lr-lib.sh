@@ -981,8 +981,10 @@ lr_kitty_spawn() { # $1=launcher $2=cwd $3=sid $4=target account [$5=anchor pane
 #   focused ∉ {yes}                 → rc 0 proceed. `unknown` (iTerm2, an unreadable kitty) is NOT
 #                                     focused: refusing it would gate the whole rail on a signal it
 #                                     cannot have — the rule handoff-fire has carried since W2b.
-#   focused=yes, LR_MOVE_FOCUSED≠on → rc 3, LR_FOCUS_HOLD=HELD:focused. Nothing is read or typed.
-#   focused=yes, LR_MOVE_FOCUSED=on → two composer reads LR_FOCUS_READ_GAP_S apart (default 10);
+#   focused=yes, LR_MOVE_FOCUSED=off → rc 3, LR_FOCUS_HOLD=HELD:focused. Nothing is read or typed.
+#                                     (operator decision 7, ruled 2026-09-30: move focused panes;
+#                                     =off is the kill switch, any other value or unset moves.)
+#   focused=yes, otherwise          → two composer reads LR_FOCUS_READ_GAP_S apart (default 10);
 #                                     either one non-empty or unreadable → rc 3, HELD:draft; then
 #                                     focus is re-read and recorded in LR_FOCUS_STATE, so the state
 #                                     at the keystroke is the one that gets logged.
@@ -1037,7 +1039,7 @@ lr_focus_gate() { # $1=pane [$2=focus reader] [$3=composer reader] → 0 proceed
   LR_FOCUS_STATE="$("$fr" "$pane" 2>/dev/null || true)"; LR_FOCUS_HOLD="" LR_FOCUS_READ=""
   case "$LR_FOCUS_STATE" in yes|no) ;; *) LR_FOCUS_STATE=unknown ;; esac
   [ "$LR_FOCUS_STATE" = yes ] || return 0
-  if [ "${LR_MOVE_FOCUSED:-off}" != on ]; then LR_FOCUS_HOLD="HELD:focused"; return 3; fi
+  if [ "${LR_MOVE_FOCUSED:-on}" = off ]; then LR_FOCUS_HOLD="HELD:focused"; return 3; fi
   while [ "$n" -lt 2 ]; do
     [ "$n" = 1 ] && "${LR_SLEEP:-${HF_SLEEP:-sleep}}" "${LR_FOCUS_READ_GAP_S:-${HF_FOCUS_READ_GAP_S:-10}}"
     n=$((n + 1))

@@ -70,7 +70,8 @@ PRE_MOVE_SUBSTATES = (
     "HELD:team",
     "PARKED-REBOOT",
     "BACKOFF",
-    # Operator decision 7 is unruled: a focused limited pane is HELD until LR_MOVE_FOCUSED=on.
+    # Operator decision 7, ruled 2026-09-30: move focused panes. HOLD-FOCUS is the kill switch's
+    # bucket — a focused limited pane is HELD only under LR_MOVE_FOCUSED=off.
     "HOLD-FOCUS",
 )
 # Terminal outcomes (§4.2 Outcomes). ESCALATED is NOT terminal.
