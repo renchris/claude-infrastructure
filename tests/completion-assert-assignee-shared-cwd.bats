@@ -225,3 +225,40 @@ blocked() { printf '%s' "$1" | grep -q '"decision":"block"'; }
   [ "$status" -eq 0 ]
   blocked "$output"
 }
+
+# ── THE DRAIN FLOOR IS THE LEAD'S (2026-09-30, A5 read) ──────────────────────────────────────────
+# The frozen DoD is repo-keyed, so a teammate inherits its lead's "about the backlog" scope; the one
+# post-W1 block inside a shared-cwd teammate (tma-11-history, 2026-09-28) was CLOSE_FLOOR. The ledger
+# is stubbed clean except for the floor, so the floor is the only arm that can fire.
+floor_ledger() {
+  WRAP_LEDGER_BIN="$D/wl-floor.sh"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'printf "%s\n" DIRTY=0 DIRTY_N=0 UNLANDED=0 AHEAD=0 REMAINDER=0 TRUNK=origin/main BLOCKED=0 CUSTODY_OPEN=0 FILED_MINE=0 CLOSE_FLOOR=1 RUNG=🔧' \
+    > "$WRAP_LEDGER_BIN"
+  chmod +x "$WRAP_LEDGER_BIN"; export WRAP_LEDGER_BIN
+}
+
+@test "drain floor: a confirmed assignee is NOT blocked for closing no row — the floor is its lead's" {
+  local w; w="$(mkrepo_unlanded fl1 src/h.ts)"
+  git -C "$w" push -q origin main >/dev/null 2>&1
+  pstable wkrFloor t8
+  teamcfg t8 wkrFloor "$w" "$w"
+  floor_ledger
+  local tr; tr="$(tr_wrote "$D/tr-fl.jsonl" "$w/src/h.ts")"
+  run run_ca "$tr" "$w" S-fl
+  [ "$status" -eq 0 ]
+  ! blocked "$output" || false
+}
+
+@test "drain floor CONTROL: the same close from a session that is NOT an assignee is still blocked" {
+  local w; w="$(mkrepo_unlanded fl2 src/i.ts)"
+  git -C "$w" push -q origin main >/dev/null 2>&1
+  printf '%s\n' "  9001  9002 /bin/bash /tmp/hook.sh" "  9002     1 /usr/local/bin/claude.exe" > "$D/pstable.txt"
+  export CC_WF_PSTABLE_FILE="$D/pstable.txt" CC_WF_START_PID=9001
+  floor_ledger
+  local tr; tr="$(tr_wrote "$D/tr-fl2.jsonl" "$w/src/i.ts")"
+  run run_ca "$tr" "$w" S-fl2
+  [ "$status" -eq 0 ]
+  blocked "$output"
+  printf '%s' "$output" | grep -q 'closed NO row'
+}

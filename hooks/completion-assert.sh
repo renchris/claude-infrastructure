@@ -744,7 +744,13 @@ UNCONV="$(lfield UNCONVICTED_MINE)"; case "$UNCONV" in ''|*[!0-9]*) UNCONV=0 ;; 
 # fix the backlog certified on commits and closed 0 (W1, W2a, W3, §5's own session). The ledger owns
 # the predicate (scope match · attributable session · a binary that stamps closedSession — each
 # fail-OPEN, CLOSE_FLOOR_SRC says which); this only consumes CLOSE_FLOOR=1.
+# A CONFIRMED ASSIGNEE DOES NOT CARRY ITS LEAD'S FLOOR (2026-09-30, SUBAGENT_LIFECYCLE A5 read). The
+# frozen DoD is keyed by repo, so a teammate in its lead's repo inherits the lead's "about the
+# backlog" scope and was blocked for not closing rows its lead owns: the one post-W1 completion-assert
+# block inside a shared-cwd teammate (tma-11-history, 2026-09-28) was this arm. The floor is not lost:
+# the lead's own done-claim still meets it, and closing a row is the lead's act, as the commit is.
 CLOSEF="$(lfield CLOSE_FLOOR)"; case "$CLOSEF" in ''|*[!0-9]*) CLOSEF=0 ;; esac
+[ "$CLOSEF" -gt 0 ] && _ca_assignee && CLOSEF=0
 [ "$CLOSEF" -gt 0 ] && { contra=1; facts="${facts}your frozen scope is about the backlog and this session has closed NO row (CLOSED_MINE=0) — machinery is not a close: pick one (\`\$HOME/.claude/scripts/drain-pick.sh --project <project>\`), drive or adjudicate it, then \`cc-backlog done <id> --evidence …\`; "; }
 
 # ── LANDED ≠ LIVE — the 🚀 rung this guard could not see (2026-08-07) ────────────────────────────
