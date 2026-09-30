@@ -21,6 +21,16 @@ setup() {
   export CC_LANE_BASELINE_DATE=20260907
   export CC_LANE_FIRE_CEILING_H=24
   export CC_LANE_WINDOW_DAYS=7
+  # The deletion journal defaults under CLAUDE_CONFIG_DIR — the REAL store in a live session — so
+  # it is pinned to an ABSENT fixture path; the journal cases below create it when they need it.
+  JOURNAL="$BATS_TEST_TMPDIR/branch-prune-deleted.tsv"
+  export CC_LANE_PRUNE_JOURNAL="$JOURNAL"
+}
+
+# journal <branch>... — a deletion journal in branch-prune-landed.sh's own row shape
+journal() {
+  printf '# deleted_at_utc\tbranch\tsha\tsource\n' >"$JOURNAL"
+  for b in "$@"; do printf '2026-09-30T00:00:00Z\t%s\t%040d\n' "$b" 7 >>"$JOURNAL"; done
 }
 
 # refs <stamp>...   — write a fixture of well-formed fire refs at the given YYYYMMDDTHHMMSSZ stamps
@@ -125,6 +135,50 @@ EOF
   run bash "$SUT" --assert
   [ "$status" -eq 3 ] || false
   [[ "$output" == *"a branch was DELETED"* ]] || false
+}
+
+# ── the deletion journal: the pruner DOES delete, so the floor counts live refs + journaled ones ──
+# backlog 529aebcb4992: branch-prune-landed.sh deletes landed fire refs every sweep tick, and the
+# live-only census read 334 against the 426 floor, so this instrument returned UNKNOWN forever.
+@test "JOURNAL: pruned refs that were journaled clear the floor — LIVE, not UNKNOWN" {
+  refs 20260911T000000Z
+  journal claude/fire-20260901T000000Z-1234-1 claude/fire-20260902T000000Z-1234-1 \
+          claude/fire-20260903T000000Z-1234-1 feature/not-a-fire
+  export CC_LANE_BASELINE_N=3
+  export CC_LANE_NOW=$(( $(epoch 20260911T000000Z) + 3600 ))
+  run bash "$SUT" --json
+  [ "$status" -eq 0 ] || false
+  printf '%s' "$output" | jq -e '.verdict=="LIVE" and .baseline_obs==3 and .journaled_deletions==3 and .refs_seen==4' >/dev/null || false
+}
+
+@test "JOURNAL: the same pruned population with NO journal is UNKNOWN — the journal is what cleared it" {
+  refs 20260911T000000Z
+  export CC_LANE_BASELINE_N=3
+  export CC_LANE_NOW=$(( $(epoch 20260911T000000Z) + 3600 ))
+  [ ! -e "$JOURNAL" ] || false
+  run bash "$SUT" --assert
+  [ "$status" -eq 3 ] || false
+  [[ "$output" == *"a branch was DELETED without a journal line"* ]] || false
+}
+
+@test "JOURNAL: a malformed journal row is UNKNOWN — a row that cannot be parsed cannot be counted" {
+  refs 20260901T000000Z 20260902T000000Z 20260903T000000Z 20260911T000000Z
+  journal claude/fire-20260904T000000Z-1234-1
+  printf 'not a journal row\n' >>"$JOURNAL"
+  export CC_LANE_BASELINE_N=3             # the live refs alone clear it: only the journal can fail
+  export CC_LANE_NOW=$(( $(epoch 20260911T000000Z) + 3600 ))
+  run bash "$SUT" --assert
+  [ "$status" -eq 3 ] || false
+  [[ "$output" == *"deletion journal exists but is unreadable or malformed"* ]] || false
+}
+
+@test "JOURNAL: a pruned NEWEST fire still closes the gap — deletion must not fake a silence" {
+  refs 20260910T000000Z
+  journal claude/fire-20260911T000000Z-1234-1
+  export CC_LANE_NOW=$(( $(epoch 20260911T000000Z) + 3600 ))   # 25 h after the newest LIVE ref
+  run bash "$SUT" --assert
+  [ "$status" -eq 0 ] || false
+  [[ "$output" == *"VERDICT       LIVE"* ]] || false
 }
 
 @test "a GROWING ref population is the healthy direction and does not trip the control" {

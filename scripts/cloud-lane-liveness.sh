@@ -67,13 +67,30 @@
 # and every numeric field is null. A zeroed reading would be a claim this script has no evidence for.
 #
 # ── THE POPULATION CONTROL, WHICH CAN GO RED ─────────────────────────────────────────────────────
-# The whole method rests on "nothing in this pipeline deletes a branch" (cloud-return.sh:529,
-# cloud-retire-terminal.sh:55) — only that makes an ABSENT date a real absence rather than a
-# collection artifact. It is pinned rather than trusted: refs dated on or before CC_LANE_BASELINE_DATE
-# must number at least CC_LANE_BASELINE_N. Measured 425 by W9 (09-07), 426 by W10 (09-11) and 426
-# again here (09-12) — monotone, as a never-deleting population must be. If it ever reads LOWER, a
-# branch was deleted, an absent date stops being evidence, and this script must say UNKNOWN rather
-# than report the shrunken census as a low fire rate.
+# The whole method rests on every fire that ever happened being COUNTABLE — only that makes an
+# ABSENT date a real absence rather than a collection artifact. It was first written as "nothing in
+# this pipeline deletes a branch" (cloud-return.sh:529, cloud-retire-terminal.sh:55), and that was
+# false: `branch-prune-landed.sh`, run by autonomy-sweep every tick, deletes landed claude/* refs.
+# Measured 2026-09-30: 334 live refs dated <=20260907 against the pinned 426, so the control read
+# UNKNOWN forever and the instrument never returned a verdict (backlog 529aebcb4992). Re-pinning the
+# constant alone would have been wrong — the pruner keeps deleting, so any pin decays again.
+#
+# THE LAW NOW: the census is the UNION, by ref name, of the live refs and the fire refs the pruner
+# JOURNALED as deleted (CC_LANE_PRUNE_JOURNAL, default $CC_CLOUD_STATE/branch-prune-deleted.tsv,
+# append-only). Refs in that union dated on or before CC_LANE_BASELINE_DATE must number at least
+# CC_LANE_BASELINE_N. The union feeds EVERY arm, not just the floor: a pruned fire still happened,
+# so it also closes the gaps it closed — without it, deleting the newest ref (the pruner's 6 h age
+# hold is inside the 24 h ceiling) would fake an open silence. A deletion that bypasses the journal
+# still shrinks the union, still trips the floor, and still reads UNKNOWN — the control keeps its
+# teeth. A journal that EXISTS but cannot be read, or holds a malformed row, is UNKNOWN ("cannot
+# look"); an ABSENT journal is zero deletions, and on this box that too reads UNKNOWN via the floor.
+#
+# The pin stays 426 (W10's 09-11 census). The deletions made before the journal existed were
+# backfilled from on-disk evidence (`branch-prune-landed.sh --backfill`, 2026-09-30: 182 fire refs,
+# 142 of them dated <=20260907), so 334 live + 142 journaled = 476 >= 426. The excess over 426 is
+# real — pruning began 09-05, before W9/W10 ever counted — and it is slack only against a deletion
+# that skips the journal. From 2026-09-30 every pruner deletion is journaled, which is what makes
+# the pin hold from here on; a plain re-pin to 334 would have decayed with the next prune.
 #
 # ── THE CEILING COMES FROM THE PLAN'S NAME, NOT FROM A BURST ─────────────────────────────────────
 # 24 h, because the plan is "the 24/7 pipeline is an open loop" and a lane that is 24/7 and has not
@@ -85,7 +102,7 @@
 # Env seams: CC_LANE_REMOTE (origin) · CC_LANE_REPO · CC_LANE_FIRE_CEILING_H (24) ·
 #   CC_LANE_WINDOW_DAYS (7) · CC_LANE_BASELINE_N (426) · CC_LANE_BASELINE_DATE (20260907) ·
 #   CC_LANE_NOW (epoch override, tests) · CC_LANE_REFS_CMD (stub the ref read) ·
-#   CC_LANE_SELF_BRANCH (override the self-exclusion)
+#   CC_LANE_SELF_BRANCH (override the self-exclusion) · CC_LANE_PRUNE_JOURNAL (the deletion journal)
 # Exits: 0 LIVE · 1 STALLED (--assert only) · 2 usage · 3 UNKNOWN (sensor/control failed)
 set -uo pipefail
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:${PATH}"
@@ -96,6 +113,8 @@ CEILING_H="${CC_LANE_FIRE_CEILING_H:-24}"
 WINDOW_D="${CC_LANE_WINDOW_DAYS:-7}"
 BASE_N="${CC_LANE_BASELINE_N:-426}"
 BASE_DATE="${CC_LANE_BASELINE_DATE:-20260907}"
+# The same default path branch-prune-landed.sh journals to (autonomy-sweep's own state expression).
+JOURNAL="${CC_LANE_PRUNE_JOURNAL:-${CC_CLOUD_STATE:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/autonomy/cloud}/branch-prune-deleted.tsv}"
 
 MODE="report"
 case "${1:-}" in
@@ -110,7 +129,8 @@ esac
 # ── the verdict function, factored out so --selftest can drive every state with no box ───────────
 # $1 sensor_ok (1 ok, 0 could not look)   $2 observed baseline count   $3 wanted baseline count
 # $4 malformed `claude/*` ref count       $5 open gap seconds ("" = no fire ref at all)
-# $6 ceiling seconds
+# $6 ceiling seconds   $7 deletion journal readable (1, the default) or present-but-unreadable (0)
+# $2 counts the UNION of live refs and journaled deletions, never the live refs alone.
 # Echoes "<TOKEN>\t<one line>". TOKEN ∈ LIVE | STALLED | UNKNOWN.
 #
 # ORDER IS THE CONTRACT. Every UNKNOWN arm outranks the gap compare, because each one says the
@@ -118,15 +138,18 @@ esac
 # a busy one, so letting any of them fall through to the compare would mint STALLED out of an
 # instrument failure. That direction is not symmetric and it is the reason for the ordering.
 verdict() {
-  local sok="$1" obs="$2" want="$3" bad="$4" gap="$5" ceil="$6"
+  local sok="$1" obs="$2" want="$3" bad="$4" gap="$5" ceil="$6" jok="${7:-1}"
   if [ "$sok" != "1" ]; then
     printf 'UNKNOWN\tthe ref read failed — this is "cannot look", not "no fires"; nothing is claimed\n'; return
+  fi
+  if [ "$jok" != "1" ]; then
+    printf 'UNKNOWN\tthe deletion journal exists but is unreadable or malformed — the pruned fires cannot be counted, so an absent date is not evidence\n'; return
   fi
   if [ "$bad" -gt 0 ]; then
     printf 'UNKNOWN\t%d claude/* ref(s) are not well-formed fire refs — the lane may have been renamed, so an absent date is not evidence\n' "$bad"; return
   fi
   if [ "$obs" -lt "$want" ]; then
-    printf 'UNKNOWN\trefs dated <=%s read %d against a pinned floor of %d — a branch was DELETED, so an absent date is a collection artifact and the census is void\n' "$BASE_DATE" "$obs" "$want"; return
+    printf 'UNKNOWN\trefs dated <=%s read %d (live + journaled deletions) against a pinned floor of %d — a branch was DELETED without a journal line, so an absent date is a collection artifact and the census is void\n' "$BASE_DATE" "$obs" "$want"; return
   fi
   if [ -z "$gap" ]; then
     printf 'UNKNOWN\tno fire ref survives the self-exclusion — there is nothing to measure a gap from\n'; return
@@ -190,7 +213,9 @@ if [ "$MODE" = "selftest" ]; then
   printf 'cloud-lane-liveness --selftest\n'
   chk UNKNOWN 0 426 426 0 3600 86400            # sensor could not look
   chk UNKNOWN 1 426 426 2 3600 86400            # lane renamed / malformed refs
-  chk UNKNOWN 1 425 426 0 3600 86400            # population SHRANK -> a branch was deleted
+  chk UNKNOWN 1 425 426 0 3600 86400            # live+journaled SHRANK -> an UNJOURNALED deletion
+  chk UNKNOWN 1 476 426 0 3600 86400 0          # journal present but unreadable/malformed
+  chk LIVE    1 476 426 0 3600 86400 1          # 334 live + 142 journaled clears the 426 floor
   chk UNKNOWN 1 426 426 0 '' 86400              # nothing left to measure from
   chk STALLED 1 426 426 0 211536 86400          # W9's 58.76 h deadlock
   chk STALLED 1 426 426 0 112104 86400          # W10's 31.14 h gap
@@ -214,8 +239,33 @@ names="$(printf '%s\n' "$raw" | sed -E 's#^[0-9a-f]+[[:space:]]+##; s#^refs/head
 
 self="$(self_branch)"; self="${self#refs/heads/}"
 
+# The deletion journal (see THE POPULATION CONTROL above). Row shape, written only by
+# branch-prune-landed.sh: `<YYYY-MM-DDTHH:MM:SSZ>\t<branch>\t<sha>[\t<source>]`. One bad row voids
+# the whole read, because a row that cannot be parsed is a deletion that cannot be counted.
+journal_ok=1; jnames=""
+if [ -e "$JOURNAL" ]; then
+  if [ ! -f "$JOURNAL" ] || [ ! -r "$JOURNAL" ]; then
+    journal_ok=0
+  else
+    jbad="$(awk -F'\t' '/^#/ || NF == 0 { next }
+      !(NF >= 3 && $1 ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z$/ &&
+        $2 ~ /^[^[:space:]]+$/ && $3 ~ /^[0-9a-f]*$/) { b++ }
+      END { print b+0 }' "$JOURNAL" 2>/dev/null)" || journal_ok=0
+    [ "${jbad:-x}" = "0" ] || journal_ok=0
+    [ "$journal_ok" = 1 ] && jnames="$(awk -F'\t' '!/^#/ && NF >= 3 { print $2 }' "$JOURNAL" | grep -E '^claude/fire-[0-9]{8}T[0-9]{6}Z' || true)"
+  fi
+fi
+
 # The two censuses: well-formed fire stamps, and anything under claude/ that is NOT one.
 stamps="$(printf '%s\n' "$names" | grep -E '^claude/fire-[0-9]{8}T[0-9]{6}Z' || true)"
+n_live=0; [ -n "$stamps" ] && n_live=$(printf '%s\n' "$stamps" | wc -l | tr -d ' ')
+# THE UNION, deduped by ref name: a pruned fire still fired. A restored branch (live AND journaled)
+# counts once. The malformed census below stays live-only — a rename is a fact about the remote now.
+if [ -n "$jnames" ]; then
+  stamps="$(printf '%s\n%s\n' "$stamps" "$jnames" | grep -E '^claude/fire-[0-9]{8}T[0-9]{6}Z' | sort -u || true)"
+fi
+n_union=0; [ -n "$stamps" ] && n_union=$(printf '%s\n' "$stamps" | wc -l | tr -d ' ')
+n_journaled=$(( n_union - n_live ))
 malformed=$(printf '%s\n' "$names" | grep -cvE '^claude/fire-[0-9]{8}T[0-9]{6}Z' 2>/dev/null || true)
 malformed="$(printf '%s' "${malformed:-0}" | tr -d ' ')"
 case "$malformed" in ''|*[!0-9]*) malformed=0 ;; esac   # `wc`/`grep -c` pad on BSD; a digit guard
@@ -283,7 +333,7 @@ max_closed="$(printf '%s' "$hist" | awk '{print $2+0}')"
 stalls="$(printf '%s' "$hist" | awk '{print $3+0}')"
 rate="$(awk -v n="${win_n:-0}" -v d="$WINDOW_D" 'BEGIN{ printf "%.2f", (d>0? n/d : 0) }')"
 
-V="$(verdict "$sensor_ok" "$baseline_obs" "$BASE_N" "$malformed" "$open_gap" "$CEIL_S")"
+V="$(verdict "$sensor_ok" "$baseline_obs" "$BASE_N" "$malformed" "$open_gap" "$CEIL_S" "$journal_ok")"
 TOKEN="$(printf '%s' "$V" | cut -f1)"
 WHY="$(printf '%s' "$V" | cut -f2-)"
 
@@ -297,19 +347,19 @@ iso() { # YYYYMMDDHHMMSS -> ISO-8601 Z, for humans and for the journal
 # reading, it is no reading, and a consumer summing these rows must not be handed a zero to add.
 if [ "$MODE" = "json" ]; then
   if [ "$TOKEN" = "UNKNOWN" ]; then
-    printf '{"verdict":"UNKNOWN","why":%s,"open_gap_h":null,"ceiling_h":%s,"last_fire":null,"self_excluded":%s,"window_days":%s,"fires_in_window":null,"rate_per_day":null,"stalls_in_window":null,"max_closed_gap_h":null,"refs_seen":null,"baseline_obs":null,"baseline_want":%s}\n' \
+    printf '{"verdict":"UNKNOWN","why":%s,"open_gap_h":null,"ceiling_h":%s,"last_fire":null,"self_excluded":%s,"window_days":%s,"fires_in_window":null,"rate_per_day":null,"stalls_in_window":null,"max_closed_gap_h":null,"refs_seen":null,"journaled_deletions":null,"baseline_obs":null,"baseline_want":%s}\n' \
       "$(printf '%s' "$WHY" | sed 's/\\/\\\\/g; s/"/\\"/g; s/^/"/; s/$/"/')" \
       "$CEILING_H" \
       "$( [ -n "$excluded" ] && printf '"%s"' "$excluded" || printf 'null' )" \
       "$WINDOW_D" "$BASE_N"
   else
-    printf '{"verdict":"%s","why":%s,"open_gap_h":%s,"ceiling_h":%s,"last_fire":"%s","self_excluded":%s,"window_days":%s,"fires_in_window":%s,"rate_per_day":%s,"stalls_in_window":%s,"max_closed_gap_h":%s,"refs_seen":%s,"baseline_obs":%s,"baseline_want":%s}\n' \
+    printf '{"verdict":"%s","why":%s,"open_gap_h":%s,"ceiling_h":%s,"last_fire":"%s","self_excluded":%s,"window_days":%s,"fires_in_window":%s,"rate_per_day":%s,"stalls_in_window":%s,"max_closed_gap_h":%s,"refs_seen":%s,"journaled_deletions":%s,"baseline_obs":%s,"baseline_want":%s}\n' \
       "$TOKEN" \
       "$(printf '%s' "$WHY" | sed 's/\\/\\\\/g; s/"/\\"/g; s/^/"/; s/$/"/')" \
       "$(hours "$open_gap")" "$CEILING_H" "$(iso "$last_ts")" \
       "$( [ -n "$excluded" ] && printf '"%s"' "$excluded" || printf 'null' )" \
       "$WINDOW_D" "${win_n:-0}" "$rate" "${stalls:-0}" "$(hours "${max_closed:-0}")" \
-      "${n_refs:-0}" "${baseline_obs:-0}" "$BASE_N"
+      "${n_refs:-0}" "${n_journaled:-0}" "${baseline_obs:-0}" "$BASE_N"
   fi
 else
   printf 'cloud-lane-liveness — the cloud FIRE lane, read from %s\n' "$REMOTE"
@@ -320,7 +370,7 @@ else
     printf '  ceiling       %s h  — from the plan name (24/7), not from an observed rate\n' "$CEILING_H"
     printf '  window        %s d  · %s fire(s) · %s/day  ← CONTEXT, never the verdict\n' "$WINDOW_D" "${win_n:-0}" "$rate"
     printf '  history       %s stall(s) over the ceiling in-window · widest closed gap %s h\n' "${stalls:-0}" "$(hours "${max_closed:-0}")"
-    printf '  population    %s fire refs · %s dated <=%s against a pinned floor of %s\n' "${n_refs:-0}" "${baseline_obs:-0}" "$BASE_DATE" "$BASE_N"
+    printf '  population    %s fire refs (%s journaled deletions) · %s dated <=%s against a pinned floor of %s\n' "${n_refs:-0}" "${n_journaled:-0}" "${baseline_obs:-0}" "$BASE_DATE" "$BASE_N"
   fi
   [ -n "$excluded" ] && printf '  self-excluded %s  (this reader IS a fire; without this the live arm cannot trip)\n' "$excluded"
   printf '  VERDICT       %s — %s\n' "$TOKEN" "$WHY"
