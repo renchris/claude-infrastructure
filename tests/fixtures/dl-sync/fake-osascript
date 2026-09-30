@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# osascript stub: records the notification argv (title-tail, message), one line per post.
+cat >/dev/null
+printf '%s | %s\n' "$2" "$3" >> "$STUB/notify.log"

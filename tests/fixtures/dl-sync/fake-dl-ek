@@ -1,0 +1,37 @@
+#!/usr/bin/env python3
+"""EventKit stub for tests/dl-sync.bats: dl-ek's CLI over $STUB/rem.json and $STUB/cal.json.
+$STUB/ek-auth (optional) = the auth status; anything but fullAccess exits 3 like the real binary."""
+import json, os, sys, uuid
+S = os.environ["STUB"]
+a = sys.argv[1:]
+with open(os.path.join(S, "ek-calls.log"), "a") as f:
+    f.write(" ".join(a) + "\n")
+auth = open(os.path.join(S, "ek-auth")).read().strip() if os.path.exists(os.path.join(S, "ek-auth")) else "fullAccess"
+if auth != "fullAccess":
+    print(json.dumps({"status": auth})); sys.exit(3)
+def opt(n): return a[a.index(n) + 1] if n in a else None
+def load(n):
+    p = os.path.join(S, n)
+    return json.load(open(p)) if os.path.exists(p) else []
+def save(n, v): json.dump(v, open(os.path.join(S, n), "w"), indent=1)
+if a[0] == "auth":
+    print(json.dumps({"status": "fullAccess"})); sys.exit(0)
+fn = "rem.json" if a[0] == "rem" else "cal.json"
+rows, verb, tag = load(fn), a[1], opt("--tag")
+if verb == "list":
+    print(json.dumps([r for r in rows if not tag or f"[{tag}]" in r["notes"]]))
+elif verb == "upsert":
+    j = json.load(sys.stdin)
+    r = next((r for r in rows if j.get("id") and r["id"] == j["id"]), None) or \
+        next((r for r in rows if tag and f"[{tag}]" in r["notes"]), None)
+    created = r is None
+    if created:
+        r = {"id": "x-" + uuid.uuid4().hex[:8], "completed": False}; rows.append(r)
+    for k in ("title", "notes", "due", "alarms", "start", "completed"):
+        if k in j: r[k] = j[k]
+    save(fn, rows); print(json.dumps({"id": r["id"], "created": created}))
+elif verb in ("delete", "complete"):
+    i = opt("--id")
+    if not any(r["id"] == i for r in rows): sys.exit(4)
+    rows = [r for r in rows if r["id"] != i] if verb == "delete" else [dict(r, completed=True) if r["id"] == i else r for r in rows]
+    save(fn, rows); print(json.dumps({"id": i, "ok": True}))

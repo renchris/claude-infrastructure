@@ -655,8 +655,11 @@ STUB
   # land as the rows, which is the point of this block.
   # 41 since 2026-09-29: com.claude.coreaudiod-watch (coreaudiod-spin-2026-09-29.md), `run`, row and
   # plist in the same land. Its root twin lives in launchd/system/ and is deliberately undeclared.
-  if [ "$n" != 41 ]; then
-    echo "manifest declares $n labels, expected 41 — if a plist was legitimately added or retired,"
+  # 43 since 2026-09-30: the deadline system's two jobs, both `run` — com.chrisren.dl-sweep (W3,
+  # ccaaa09fa, which landed its row without moving this count) and com.chrisren.dl-sync (W2, the
+  # phone reconciler; DL_SYNC_ONLY=test.canary until go-live).
+  if [ "$n" != 43 ]; then
+    echo "manifest declares $n labels, expected 43 — if a plist was legitimately added or retired,"
     echo "move this count and say why (see the block above); if not, a row is missing. Declared:"
     grep -vE '^[[:space:]]*(#|$)' "$M" | cut -d'|' -f1 | sed 's/[[:space:]]//g; s/^/  /'
     return 1

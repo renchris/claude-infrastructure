@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>                    <string>com.chrisren.dl-ek</string>
+  <key>CFBundleName</key>                          <string>dl-ek</string>
+  <key>CFBundleVersion</key>                       <string>1</string>
+  <key>CFBundleShortVersionString</key>            <string>1.0</string>
+  <key>NSRemindersUsageDescription</key>           <string>dl-sync mirrors your real-world deadlines into the Reminders list "Deadlines".</string>
+  <key>NSRemindersFullAccessUsageDescription</key> <string>dl-sync mirrors your real-world deadlines into the Reminders list "Deadlines" and reads back what you ticked or deleted.</string>
+  <key>NSCalendarsUsageDescription</key>           <string>dl-sync adds a "DEADLINE" event three days before hard deadlines.</string>
+  <key>NSCalendarsFullAccessUsageDescription</key> <string>dl-sync adds a "DEADLINE" event three days before hard deadlines and reads it back to verify.</string>
+</dict>
+</plist>

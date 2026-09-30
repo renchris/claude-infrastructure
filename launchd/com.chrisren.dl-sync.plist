@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>            <string>com.chrisren.dl-sync</string>
+  <!--
+      The dl phone reconciler (bin/dl-sync; design personal/deadlines/DESIGN-2026-09-29.md §4.1).
+      launchd, not Terminal, because TCC attributes a Reminders grant differently under each — A1
+      must pass HERE. dl-ek disclaims responsibility so the grant lands on dl-ek, not on python3.
+      DL_SYNC_ONLY=test.canary keeps the real store off the phone until go-live (W4) removes it.
+      No ProcessType Background: this job is seconds long and user-facing.
+  -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>/Users/chrisren/.claude/bin/dl-sync</string>
+    <string>run</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>                 <string>/Users/chrisren/.local/bin:/Users/chrisren/.claude/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>MS365_MCP_TENANT_ID</key>  <string>consumers</string>
+    <key>DL_SYNC_ONLY</key>         <string>test.canary</string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Hour</key><integer>7</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Hour</key><integer>12</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Hour</key><integer>18</integer><key>Minute</key><integer>0</integer></dict>
+  </array>
+  <key>RunAtLoad</key>        <true/>
+  <key>StandardOutPath</key>  <string>/Users/chrisren/.claude/logs/dl-sync.out.log</string>
+  <key>StandardErrorPath</key><string>/Users/chrisren/.claude/logs/dl-sync.err.log</string>
+</dict>
+</plist>

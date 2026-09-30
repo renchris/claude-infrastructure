@@ -1,0 +1,704 @@
+#!/usr/bin/env python3
+"""dl-sync — the deterministic phone reconciler for the dl deadline store (no model anywhere in it).
+
+Mirrors near-term items of $DL_DIR (contract: personal/deadlines/SCHEMA.md) into the Reminders list
+"Deadlines", reads back what the phone did, and applies DESIGN §4.2 (T-minus), §4.3 (calendar),
+§5.2 (closing paths) and §6 (self-monitoring). It writes ONLY `ext` and `state` on items, each
+transition with a log.jsonl event (actor dl-sync | phone); its own bookkeeping lives in .state/.
+
+  dl-sync run            reconcile once (launchd: 07:00, 12:00, 18:00 + RunAtLoad)
+  dl-sync channel-test   A1: walk the writer ladder with the canary only; record channels.json
+  dl-sync canary --at YYYY-MM-DDTHH:MM   seed items/test.canary.json with that single alarm
+  dl-sync status         print last_ok, the active rung and the health line
+
+Env seams: DL_DIR · DL_EK · DL_JXA · DL_GRAPH · DL_OSASCRIPT (off = no notifications) · DL_JXA_OSASCRIPT · DL_NOW
+(YYYY-MM-DDTHH:MM) · DL_SYNC_ONLY (comma ids) · DL_LIST · DL_ALARM_HHMM · DL_BUDGET.
+"""
+import datetime as dt, hashlib, json, os, re, subprocess, sys, tempfile, time
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+DL_DIR = os.path.expanduser(os.environ.get("DL_DIR", "~/Development/personal/deadlines"))
+ITEMS, STATE = os.path.join(DL_DIR, "items"), os.path.join(DL_DIR, ".state")
+LIST = os.environ.get("DL_LIST", "Deadlines")
+EK = os.path.expanduser(os.environ.get("DL_EK", "~/.local/bin/dl-ek"))
+JXA = os.environ.get("DL_JXA", os.path.join(HERE, "..", "scripts", "lib", "dl_reminders.js"))
+GRAPH = os.environ.get("DL_GRAPH", os.path.join(HERE, "..", "scripts", "lib", "dl_calendar_graph.py"))
+OSA = os.environ.get("DL_OSASCRIPT", "/usr/bin/osascript")
+JXA_OSA = os.environ.get("DL_JXA_OSASCRIPT", "/usr/bin/osascript")  # separate seam: tests must never reach Reminders
+HHMM = os.environ.get("DL_ALARM_HHMM", "09:00")
+BUDGET = int(os.environ.get("DL_BUDGET", "3"))
+LADDER = ["eventkit", "jxa", "graph", "caldav"]
+STALE_H, WINDOW_D = 12, 30
+NOW = dt.datetime.strptime(os.environ["DL_NOW"], "%Y-%m-%dT%H:%M") if os.environ.get("DL_NOW") else dt.datetime.now().replace(second=0, microsecond=0)
+TODAY = NOW.date()
+CLASS_RANK = {c: i for i, c in enumerate("tax legal coverage money health employment customer credential relationship".split())}
+KIND_RANK = {k: i for i, k in enumerate("hard window appointment soft decay".split())}
+TAG_RE = re.compile(r"\[dl:([a-z0-9.:-]+)\]")
+
+
+class ChannelError(Exception):
+    pass
+
+
+# ── store I/O ────────────────────────────────────────────────────────────────────────────────────
+def jload(path, default):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return default
+
+
+def jsave(path, obj):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".tmp-")
+    with os.fdopen(fd, "w") as f:
+        json.dump(obj, f, indent=2, sort_keys=False)
+        f.write("\n")
+    os.replace(tmp, path)
+
+
+NOW_UTC = NOW.astimezone(dt.timezone.utc) if os.environ.get("DL_NOW") else dt.datetime.now(dt.timezone.utc)
+
+
+def utcnow():
+    return NOW_UTC.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def log(event, iid, actor="dl-sync", **data):
+    rec = {"ts": utcnow(), "event": event, "id": iid, "session_id": os.environ.get("CLAUDE_CODE_SESSION_ID"),
+           "actor": actor, "data": data}
+    with open(os.path.join(DL_DIR, "log.jsonl"), "a") as f:
+        f.write(json.dumps(rec) + "\n")
+
+
+class Lock:  # the store's mkdir lock (SCHEMA: .state/lock, 30 s stale) — held only around writes
+    def __enter__(self):
+        d = os.path.join(STATE, "lock")
+        os.makedirs(STATE, exist_ok=True)
+        for _ in range(300):
+            try:
+                os.mkdir(d)
+                return self
+            except FileExistsError:
+                try:
+                    if time.time() - os.stat(d).st_mtime > 30:
+                        os.rmdir(d)
+                        continue
+                except OSError:
+                    continue
+                time.sleep(0.1)
+        raise SystemExit("dl-sync: store lock busy")
+
+    def __exit__(self, *a):
+        try:
+            os.rmdir(os.path.join(STATE, "lock"))
+        except OSError:
+            pass
+
+
+def write_item(iid, state=None, ext=None, event=None, actor="dl-sync", **data):
+    """Re-read under the lock and change ONLY state/ext, so a concurrent `dl` edit is never clobbered."""
+    with Lock():
+        path = os.path.join(ITEMS, iid + ".json")
+        it = jload(path, None)
+        if it is None:
+            return None
+        if state:
+            it["state"] = state
+        if ext:
+            it["ext"] = dict(it.get("ext") or {}, **ext)
+        it["updated"] = utcnow()
+        jsave(path, it)
+        if event:
+            log(event, iid, actor, **data)
+        return it
+
+
+def d(s):
+    return dt.date.fromisoformat(s) if s else None
+
+
+def at(day, hhmm=None):
+    h, m = map(int, (hhmm or HHMM).split(":"))
+    return dt.datetime.combine(day, dt.time(h, m))
+
+
+def fmt(t):
+    return t.strftime("%Y-%m-%dT%H:%M")
+
+
+def strict(it):  # §5.2 right-hand column: a tick is not proof
+    c = it.get("consequence") or {}
+    return it.get("kind") in ("hard", "window") and (c.get("class") in ("tax", "legal", "coverage")
+                                                      or (c.get("class") == "money" and (c.get("usd") or 0) >= 500))
+
+
+# ── channels ─────────────────────────────────────────────────────────────────────────────────────
+def sh(argv, stdin=None, timeout=60):
+    try:
+        p = subprocess.run(argv, input=stdin, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise ChannelError(f"{os.path.basename(argv[0])}: {type(e).__name__}")
+    if p.returncode != 0:
+        raise ChannelError(f"{os.path.basename(argv[0])} rc={p.returncode}: {(p.stderr or p.stdout).strip()[:200]}")
+    return json.loads(p.stdout or "null")
+
+
+def graph(*a, stdin=None):
+    return sh(["python3", GRAPH, *a], stdin=stdin, timeout=120)
+
+
+class EventKitSink:
+    name, can_read = "eventkit", True
+
+    def read(self):  # every reminder in the list, completed included — the phone's verdicts
+        return sh([EK, "rem", "list", "--list", LIST])
+
+    def write(self, tag, j):
+        return sh([EK, "rem", "upsert", "--list", LIST, "--tag", tag], stdin=json.dumps(j))["id"]
+
+    def remove(self, rid, tag):
+        try:
+            sh([EK, "rem", "delete", "--id", rid])
+        except ChannelError as e:
+            if "rc=4" not in str(e):
+                raise
+
+    def readback(self):  # a SEPARATE process from every write above
+        return [t for r in self.read() if not r.get("completed") for t in TAG_RE.findall(r.get("notes") or "")]
+
+
+class JxaSink(EventKitSink):  # writes only; its read-back is the narrow `tags` verb
+    name, can_read = "jxa", False
+
+    def _osa(self, *a):
+        return sh([JXA_OSA, "-l", "JavaScript", JXA, *a], timeout=60)
+
+    def read(self):
+        return None
+
+    def write(self, tag, j):
+        return self._osa("upsert", LIST, tag, json.dumps(j))["id"]
+
+    def remove(self, rid, tag):
+        self._osa("delete", LIST, tag)
+
+    def readback(self):
+        return [t[3:] for t in self._osa("tags", LIST)]
+
+
+class GraphSink(EventKitSink):  # rung 3: every phone item becomes an Outlook event at its next alarm
+    name, can_read = "graph", False
+
+    def read(self):
+        return None
+
+    def write(self, tag, j):
+        start = (j.get("alarms") or [fmt(at(d(j["due"]) if d(j["due"]) >= TODAY else TODAY))])[0]
+        return graph("upsert", stdin=json.dumps({"tag": tag, "event_id": j.get("id"), "title": j["title"],
+                                                 "notes": j["notes"], "start": start, "reminder": 0}))["id"]
+
+    def remove(self, rid, tag):
+        graph("delete", rid)
+
+    def readback(self):
+        return [t[3:] for t in graph("tags", str(TODAY - dt.timedelta(days=7)), str(TODAY + dt.timedelta(days=WINDOW_D + 7)))]
+
+
+SINKS = {"eventkit": EventKitSink, "jxa": JxaSink, "graph": GraphSink}
+
+
+def calendar_write(active, tag, title, notes, start, eid):
+    """The T−3 event: iCloud 'Deadlines' via dl-ek when EventKit holds calendar access, else Outlook."""
+    if active == "eventkit":
+        try:
+            sh([EK, "auth", "calendar"])
+            return "eventkit", sh([EK, "cal", "upsert", "--calendar", LIST, "--tag", tag], stdin=json.dumps(
+                {"id": eid, "title": title, "notes": notes, "start": fmt(start), "alarms": [0]}))["id"]
+        except ChannelError:
+            pass
+    return "graph", graph("upsert", stdin=json.dumps({"tag": tag, "event_id": eid, "title": title,
+                                                      "notes": f"[{tag}] {notes}", "start": fmt(start), "reminder": 0}))["id"]
+
+
+def notify(title, msg):
+    """Mac notification, text as argv (scripts/autonomy-sweep.sh:2080-2095 pattern, never interpolated)."""
+    if OSA == "off":
+        return False
+    script = ('on run argv\nset v to item 1 of argv\nset m to item 2 of argv\n'
+              'if (count of m) > 200 then set m to (text 1 thru 200 of m)\n'
+              'display notification m with title ("Deadlines — " & v) sound name "Funk"\nend run')
+    try:
+        return subprocess.run([OSA, "-", title, msg], input=script, text=True, capture_output=True, timeout=10).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+# ── planning ─────────────────────────────────────────────────────────────────────────────────────
+def load_items():
+    out = []
+    if os.path.isdir(ITEMS):
+        for n in sorted(os.listdir(ITEMS)):
+            if n.endswith(".json"):
+                it = jload(os.path.join(ITEMS, n), None)
+                if isinstance(it, dict) and it.get("id"):
+                    out.append(it)
+    return out
+
+
+def selected(it, sj):
+    only = [x for x in os.environ.get("DL_SYNC_ONLY", "").split(",") if x]
+    if only and it["id"] not in only:
+        return False
+    if it.get("state") not in ("open", "done-unverified"):
+        return False
+    res = d((sj.get(it["id"]) or {}).get("due_override")) or d(it.get("resurface"))
+    lost = d(it.get("lost"))
+    if it.get("kind") == "decay":
+        return res is None or res <= TODAY + dt.timedelta(days=WINDOW_D)
+    return (res is not None and res <= TODAY + dt.timedelta(days=WINDOW_D)) or (lost is not None and lost < TODAY)
+
+
+def groups_of(items):
+    """§4.2 bundling: an explicit `bundle`, else items sharing domain + lost, become ONE reminder."""
+    by = {}
+    for it in items:
+        key = it.get("bundle") or (f"{it.get('domain')}|{it['lost']}" if it.get("lost") and it.get("kind") != "decay" else it["id"])
+        by.setdefault(key, []).append(it)
+    gs = []
+    for key, ms in by.items():
+        ms.sort(key=lambda x: x["id"])
+        gs.append({"gid": ms[0]["id"], "members": ms, "bundle": key if len(ms) > 1 else None})
+    return gs
+
+
+def group_title(g, base):
+    ms = g["members"]
+    if len(ms) == 1:
+        return base(ms[0])
+    lost = min(d(m["lost"]) for m in ms if m.get("lost"))
+    head = (ms[0].get("bundle") or ms[0].get("domain") or "").split("|")[0]
+    t = f"{head} by {lost:%b} {lost.day}: " + " · ".join(m["title"] for m in ms)
+    return t if len(t) <= 120 else t[:119] + "…"
+
+
+def notes_of(g):
+    return "\n".join(f"Lost {m.get('lost') or 'n/a'}: {(m.get('consequence') or {}).get('text', '')}. [dl:{m['id']}]"
+                     for m in g["members"])
+
+
+def alarm_candidates(g, sj):
+    """Every alarm this group wants inside the 30-day window, as (datetime, is_event)."""
+    lead = g["members"][0]
+    st = sj.get(lead["id"]) or {}
+    if st.get("alarm_at"):
+        return [(dt.datetime.strptime(st["alarm_at"], "%Y-%m-%dT%H:%M"), False)] + (
+            [(dt.datetime.strptime(st["alarm_at"], "%Y-%m-%dT%H:%M"), True)] if g["kind"] in ("hard", "window") else [])
+    lost, res, kind = g["lost"], g["resurface"], g["kind"]
+    days = []
+    if kind in ("hard", "window"):
+        days = [(res, False), (lost - dt.timedelta(days=1), False), (lost, False), (lost - dt.timedelta(days=3), True)]
+    elif kind == "soft":
+        days = [(res, False)]
+    elif kind == "appointment":
+        return [(at(lost - dt.timedelta(days=1), "19:00"), False), (at(lost, "07:00"), False)]
+    elif kind == "decay":
+        since = d(lead.get("since")) or TODAY
+        n, k = [3, 7, 14, 28], 56
+        while since + dt.timedelta(days=k) <= TODAY + dt.timedelta(days=WINDOW_D):
+            n.append(k)
+            k += 28
+        days = [(since + dt.timedelta(days=x), False) for x in n]
+    return [(at(day), ev) for day, ev in days if day]
+
+
+def plan_alarms(groups, sj):
+    """≤ BUDGET firings a day, ranked by lost then class; hard items move EARLIER, never past lost−1;
+    everything else that overflows goes to the digest, not to the lock screen."""
+    horizon = at(TODAY + dt.timedelta(days=WINDOW_D), "23:59")
+    wants = []
+    for g in groups:
+        for t, ev in alarm_candidates(g, sj):
+            if NOW < t <= horizon:
+                wants.append((t, ev, g))
+    wants.sort(key=lambda w: (w[0].date(), w[2]["lost"] or dt.date.max, w[2]["crank"], w[0]))
+    used, overflow = {}, []
+    for g in groups:
+        g["alarms"], g["event_at"] = [], None
+    for t, ev, g in wants:
+        day = t.date()
+        if used.get(day, 0) >= BUDGET and g["kind"] in ("hard", "window"):
+            for back in range(1, (day - TODAY).days + 1):
+                cand = day - dt.timedelta(days=back)
+                if used.get(cand, 0) < BUDGET and at(cand, t.strftime("%H:%M")) > NOW:
+                    day, t = cand, at(cand, t.strftime("%H:%M"))
+                    break
+        if used.get(day, 0) >= BUDGET:
+            overflow.append({"id": g["gid"], "at": fmt(t)})
+            continue
+        used[day] = used.get(day, 0) + 1
+        if ev:
+            g["event_at"] = t
+        else:
+            g["alarms"].append(fmt(t))
+    return overflow
+
+
+# ── the reconcile ────────────────────────────────────────────────────────────────────────────────
+def reconcile(active, sj, report):
+    items = load_items()
+    known = {it["id"]: it for it in items}
+    sink = SINKS[active]()
+    phone = sink.read()  # None for write-only rungs
+    by_tag = {}
+    for r in phone or []:
+        for t in TAG_RE.findall(r.get("notes") or ""):
+            by_tag.setdefault(t, r)
+
+    # §5.2 mass disappearance ⇒ channel failure, never deletions
+    synced = [it for it in items if it.get("state") == "open" and (it.get("ext") or {}).get("reminder_id")
+              and (it.get("ext") or {}).get("channel") == active]
+    if phone is not None and synced:
+        gone = [it for it in synced if it["id"] not in by_tag]
+        if not phone or (len(gone) >= 2 and len(gone) > 0.3 * len(synced)):
+            raise ChannelError(f"read-back vanished {len(gone)}/{len(synced)} synced reminders — treated as channel failure")
+
+    # phone verdicts: tick · delete · date edit
+    if phone is not None:
+        for it in synced + [it for it in items if it.get("state") == "done-unverified" and (sj.get(it["id"]) or {}).get("bounce_rid")]:
+            iid, st = it["id"], sj.setdefault(it["id"], {})
+            r = by_tag.get(iid)
+            if it.get("state") == "done-unverified":  # the "Not confirmed" bounce
+                if r and r.get("completed") and r.get("id") == st.get("bounce_rid"):
+                    it.update(write_item(iid, "done", event="done", actor="phone", evidence=f"phone confirm {utcnow()}"))
+                    report["done"].append(iid)
+                continue
+            if r and r.get("completed"):
+                new = "done-unverified" if strict(it) else "done"
+                it.update(write_item(iid, new, event=new, actor="phone", evidence=f"phone {utcnow()}"))
+                report[new.replace("-", "_")].append(iid)
+            elif r is None:
+                if strict(it) and not st.get("deleted_once"):
+                    st["deleted_once"] = utcnow()
+                    it.setdefault("ext", {})["reminder_id"] = None
+                    log("update", iid, "phone", note="deleted once; disposition requested")
+                    report["redisposition"].append(iid)
+                else:
+                    it.update(write_item(iid, "dropped", {"reminder_id": None}, event="drop", actor="phone",
+                                         why="deleted twice on the phone" if strict(it) else "deleted on the phone"))
+                    report["dropped"].append(iid)
+            elif r.get("due") and st.get("last_due") and r["due"] != st["last_due"]:
+                if strict(it) and it.get("lost") and d(r["due"]) > d(it["lost"]):
+                    log("update", iid, "phone", note=f"date edit {r['due']} past lost {it['lost']} refused; restored")
+                else:
+                    st["due_override"] = r["due"]
+                    log("update", iid, "phone", note=f"date edit accepted: {r['due']}")
+
+    # done-unverified: strong falsifier promotes; else ONE bounce at lost−3
+    for it in items:
+        if it.get("state") != "done-unverified":
+            continue
+        iid, st = it["id"], sj.setdefault(it["id"], {})
+        verdict = probe(it.get("falsifier"))
+        if verdict:
+            it.update(write_item(iid, "done", event="done", evidence=verdict))
+            report["done"].append(iid)
+        elif it.get("lost") and TODAY >= d(it["lost"]) - dt.timedelta(days=3) and not st.get("bounced"):
+            st["bounced"] = utcnow()
+            st["bounce_pending"] = True
+
+    # hygiene: T+7 missed · soft T+14 expired · appointment T+1 expired
+    for it in items:
+        lost = d(it.get("lost"))
+        if it.get("state") != "open" or not lost:
+            continue
+        k, late = it.get("kind"), (TODAY - lost).days
+        new = ("missed" if k in ("hard", "window") and late >= 7 else
+               "expired" if (k == "soft" and late >= 14) or (k == "appointment" and late >= 1) else None)
+        if new:
+            rid = (it.get("ext") or {}).get("reminder_id")
+            if rid:
+                sink.remove(rid, f"dl:{it['id']}")
+            it.update(write_item(it["id"], new, {"reminder_id": None}, event="miss" if new == "missed" else "expire"))
+            report[new].append(it["id"])
+
+    # build the desired phone state
+    want = [it for it in items if selected(it, sj)]
+    live = [it for it in want if it.get("state") == "open"]
+    groups = groups_of(live)
+    for g in groups:
+        ms = g["members"]
+        g["kind"] = min((m.get("kind") for m in ms), key=lambda k: KIND_RANK.get(k, 9))
+        g["lost"] = min((d(m["lost"]) for m in ms if m.get("lost")), default=None)
+        g["resurface"] = min((d((sj.get(m["id"]) or {}).get("due_override")) or d(m.get("resurface")) or TODAY for m in ms))
+        g["crank"] = min(CLASS_RANK.get((m.get("consequence") or {}).get("class"), 99) for m in ms)
+        late = (TODAY - g["lost"]).days if g["lost"] else None
+        g["missed"] = late is not None and late >= 1 and g["kind"] != "decay"
+    overflow = plan_alarms([g for g in groups if not g["missed"]], sj)
+    for g in groups:
+        lost = g["lost"]
+        if g["missed"]:
+            clears = lost + dt.timedelta(days=14 if g["kind"] == "soft" else 7)
+            title = group_title(g, lambda m: f"MISSED — {m['title']} (clears {clears:%b} {clears.day})")
+            g["alarms"], g["event_at"] = [], None
+        elif lost and g["kind"] in ("hard", "window") and 0 <= (lost - TODAY).days <= 1:
+            title = group_title(g, lambda m: f"LAST DAY: {m['title']}")
+        elif (sj.get(g["gid"]) or {}).get("deleted_once") and len(g["members"]) == 1:
+            title = f"Deleted — still due {lost:%b} {lost.day}? Tick = done, delete again = drop"
+        else:
+            title = group_title(g, lambda m: m["title"])
+        g["payload"] = {"title": title, "notes": notes_of(g), "due": str(g["resurface"]), "alarms": g["alarms"], "completed": False}
+
+    # write — only what changed
+    expected = set()
+    for g in groups:
+        lead, st = g["members"][0], sj.setdefault(g["gid"], {})
+        tag = f"dl:{g['gid']}"
+        rid = (lead.get("ext") or {}).get("reminder_id") if (lead.get("ext") or {}).get("channel") == active else None
+        payload = dict(g["payload"], id=rid)
+        h = hashlib.sha1(json.dumps(g["payload"], sort_keys=True).encode()).hexdigest()
+        cur = by_tag.get(g["gid"]) if phone is not None else None
+        stale = (st.get("hash") != h or not rid or (phone is not None and (cur is None or cur.get("completed")
+                 or cur.get("title") != payload["title"] or cur.get("due") != payload["due"] or sorted(cur.get("alarms") or []) != sorted(payload["alarms"]))))
+        if stale:
+            if not rid:
+                report["created"] = report.get("created", 0) + 1
+            rid = sink.write(tag, payload)
+            st.update(hash=h, last_due=payload["due"])
+            report["written"].append(g["gid"])
+        for m in g["members"]:
+            expected.add(m["id"])
+            if (m.get("ext") or {}).get("reminder_id") != rid or (m.get("ext") or {}).get("channel") != active:
+                m.update(write_item(m["id"], ext={"reminder_id": rid, "channel": active}, event="sync", rung=active))
+        if g["event_at"] and sink.name != "graph":
+            eh = hashlib.sha1(f"{g['event_at']}|{g['payload']['title']}".encode()).hexdigest()
+            if st.get("event_hash") != eh:
+                ch, eid = calendar_write(active, tag, f"DEADLINE: {g['payload']['title']}", g["payload"]["notes"],
+                                         g["event_at"], (lead.get("ext") or {}).get("event_id"))
+                st["event_hash"] = eh
+                for m in g["members"]:
+                    m.update(write_item(m["id"], ext={"event_id": eid}, event="sync", calendar=ch))
+                report["events"].append(g["gid"])
+    for it in items:  # the one-time "Not confirmed" bounce; an unticked bounce stays expected
+        st = sj.get(it["id"]) or {}
+        if it.get("state") == "done-unverified" and st.get("bounce_rid"):
+            expected.add(it["id"])
+        if it.get("state") == "done-unverified" and st.pop("bounce_pending", None):
+            t = max(NOW + dt.timedelta(minutes=5), at(TODAY)) if NOW < at(TODAY, "21:00") else at(TODAY + dt.timedelta(days=1))
+            st["bounce_rid"] = sink.write(f"dl:{it['id']}", {"title": f"Not confirmed: {it['title']} — was it filed? Tick = yes",
+                                                             "notes": notes_of({"members": [it]}), "due": str(TODAY), "alarms": [fmt(t)],
+                                                             "completed": False})
+            log("update", it["id"], note="not-confirmed bounce created")
+            report["bounced"].append(it["id"])
+            expected.add(it["id"])
+    # items that left the window through the CLI (dl done/drop/void) leave the phone too
+    for tag, r in by_tag.items():
+        it = known.get(tag)
+        if it and tag not in expected and not r.get("completed") and it.get("state") not in ("open", "done-unverified"):
+            sink.remove(r["id"], f"dl:{tag}")
+            report["removed"].append(tag)
+
+    # read-back through a DIFFERENT call than any write above
+    back = [t for t in sink.readback() if t in known]
+    ok = set(back) >= expected and len(back) == len(expected)
+    report.update(expected=len(expected), readback=len(back), readback_ok=ok, overflow=overflow)
+    if not ok:
+        raise ChannelError(f"read-back mismatch: expected {len(expected)} [dl:] reminders, found {len(back)}")
+    return groups
+
+
+def probe(f):
+    """Strong falsifiers only (§5.1): a pass returns its evidence string, anything else None."""
+    if not f:
+        return None
+    m = re.match(r"(mail-sent|mail-recv):(.*)$", f)
+    if m:
+        try:
+            hits = graph("mail", "sent" if m.group(1) == "mail-sent" else "recv", m.group(2).strip('"'))
+        except ChannelError:
+            return None
+        real = [h for h in hits if m.group(1) == "mail-recv" or h.get("isDraft") is False]
+        return f"{m.group(1)} {real[0].get('id')}" if real else None
+    return None
+
+
+# ── self-monitoring (§6) and failover ────────────────────────────────────────────────────────────
+def last_ok_age_h():
+    try:
+        with open(os.path.join(STATE, "last_ok")) as f:
+            t = dt.datetime.strptime(f.read().strip(), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc)
+    except (OSError, ValueError):
+        return None
+    return (NOW_UTC - t).total_seconds() / 3600
+
+
+def failover(sj, report):
+    """last_ok > 12 h: hard and window items go to the Outlook calendar on their own."""
+    moved = 0
+    for it in load_items():
+        if not selected(it, sj) or it.get("state") != "open" or it.get("kind") not in ("hard", "window"):
+            continue
+        st, lost = sj.setdefault(it["id"], {}), d(it["lost"])
+        day = max(lost - dt.timedelta(days=3), TODAY)
+        t = at(day) if at(day) > NOW else (NOW + dt.timedelta(minutes=15)).replace(second=0)
+        if t.hour >= 22 or t.hour < 7:
+            t = at(day + dt.timedelta(days=1))
+        if st.get("alarm_at"):
+            t = max(dt.datetime.strptime(st["alarm_at"], "%Y-%m-%dT%H:%M"), NOW + dt.timedelta(minutes=5))
+        h = hashlib.sha1(f"fo|{fmt(t)}|{it['title']}".encode()).hexdigest()
+        if st.get("fo_hash") == h:
+            continue
+        ext = it.get("ext") or {}
+        eid = graph("upsert", stdin=json.dumps({
+            "tag": f"dl:{it['id']}", "event_id": ext.get("event_id") if ext.get("channel") == "graph" else st.get("fo_event_id"),
+            "title": f"DEADLINE: {it['title']}", "notes": f"[dl:{it['id']}] Lost {it['lost']}: {(it.get('consequence') or {}).get('text', '')}.",
+            "start": fmt(t), "reminder": 0}))["id"]
+        first = "fo_event_id" not in st
+        st.update(fo_hash=h, fo_event_id=eid)
+        if first:
+            log("failover", it["id"], event_id=eid, at=fmt(t))
+        moved += 1
+    report["failover"] = moved
+    return moved
+
+
+def write_banner(sj, health, phone_ok):
+    rows = []
+    for it in load_items():
+        if it.get("state") != "open" or not it.get("lost"):
+            continue
+        left = (d(it["lost"]) - TODAY).days
+        if left <= 3:
+            rows.append((left, f"{it['title']} ({'%dd over' % -left if left < 0 else 'today' if left == 0 else d(it['lost']).strftime('%a')})"))
+    rows.sort()
+    lines = []
+    if rows:
+        lines.append("⏰ " + " · ".join(r[1] for r in rows[:3]) + (f" — {len(rows) - 3} more" + (" on your phone" if phone_ok else ": dl list") if len(rows) > 3 else ""))
+    if health:
+        lines.append("⚠ deadlines: " + health)
+    p = os.path.join(STATE, "banner.txt")
+    if lines:
+        with open(p, "w") as f:
+            f.write("\n".join(lines) + "\n")
+    elif os.path.exists(p):
+        os.remove(p)
+
+
+def latch(sj, key):
+    n = sj.setdefault("_notified", {})
+    if n.get(key) == str(TODAY):
+        return False
+    n[key] = str(TODAY)
+    return True
+
+
+def run(test_only=False):
+    os.makedirs(STATE, exist_ok=True)
+    sjp = os.path.join(STATE, "sync.json")
+    sj = jload(sjp, {})
+    chp = os.path.join(DL_DIR, "channels.json")
+    ch = jload(chp, {"tested_at": None, "ladder": LADDER, "active": None, "results": {}})
+    req = os.path.join(STATE, "channel-test")
+    rungs = ch.get("ladder", LADDER) if (test_only or not ch.get("active") or os.path.exists(req)) else [ch["active"]]
+    report = {k: [] for k in ("done", "done_unverified", "dropped", "redisposition", "missed", "expired", "written",
+                              "events", "bounced", "removed")}
+    health, used = None, None
+    for rung in rungs:
+        if rung not in SINKS:
+            ch["results"][rung] = {"ok": False, "proof": "not built: needs an iCloud app-specific password (operator)"}
+            continue
+        try:
+            groups = reconcile(rung, sj, report)
+            used = rung
+            ch["results"][rung] = {"ok": True, "proof": f"{utcnow()} read-back {report['readback']}/{report['expected']} "
+                                   f"[dl:] tags via a separate {rung} read"}
+            break
+        except ChannelError as e:
+            ch["results"][rung] = {"ok": False, "proof": f"{utcnow()} {e}"}
+            log("channel-fail", "-", rung=rung, error=str(e)[:300])
+            report.setdefault("channel_errors", []).append(f"{rung}: {e}")
+    if len(rungs) > 1:
+        ch.update(tested_at=utcnow(), active=used or ch.get("active"))
+        if os.path.exists(req):
+            os.remove(req)
+    if used:
+        with open(os.path.join(STATE, "last_ok"), "w") as f:
+            f.write(utcnow() + "\n")
+    old = jload(chp, None)
+    if {k: v for k, v in ch.items() if k != "results"} != {k: v for k, v in (old or {}).items() if k != "results"} or \
+            {r: v.get("ok") for r, v in ch["results"].items()} != {r: v.get("ok") for r, v in ((old or {}).get("results") or {}).items()}:
+        jsave(chp, ch)
+    # go-live burst guard (§4.2): a run that puts more than a day's budget on the phone at once
+    # announces itself with ONE push instead of N alarms
+    if report.get("created", 0) > BUDGET and latch(sj, "burst"):
+        soon = sum(1 for it in load_items() if it.get("state") == "open" and it.get("lost")
+                   and d(it["lost"]) <= TODAY + dt.timedelta(days=7) and selected(it, sj))
+        notify("system live", f"{report['created']} deadlines are on your phone; {soon} need you within 7 days.")
+    # T−0 Mac notification for open hard items (once per item-day)
+    for it in load_items():
+        if it.get("state") == "open" and it.get("kind") in ("hard", "window") and it.get("lost") == str(TODAY) \
+                and NOW.hour >= 7 and selected(it, sj) and latch(sj, "t0:" + it["id"]):
+            notify("due today", f"{it['title']} — lost today")
+    age = last_ok_age_h()
+    if age is None or age > STALE_H:
+        health = f"phone channel down ({'never synced' if age is None else '%dh since last good sync' % age}); hard items moved to Outlook"
+        try:
+            n = failover(sj, report)
+        except ChannelError as e:
+            n, health = 0, health + f"; Outlook failover FAILED: {str(e)[:80]}"
+        if latch(sj, "failover"):
+            report["notified"] = notify("phone channel down", f"{n} hard deadline(s) moved to your Outlook calendar. Fix: run dl-sync channel-test.")
+    jsave(sjp, sj)
+    write_banner(sj, health, bool(used) or any(r.get("ok") for r in ch["results"].values() if isinstance(r, dict)))
+    report.update(active=used, health=health or "ok", last_ok_age_h=None if age is None else round(age, 2))
+    print(json.dumps({k: v for k, v in report.items() if v not in ([], None)}, sort_keys=True))
+    return 0 if used else 1
+
+
+def canary(at_s):
+    t = dt.datetime.strptime(at_s, "%Y-%m-%dT%H:%M")
+    if t.hour < 7 or t.hour >= 22:
+        raise SystemExit("dl-sync: refusing a night alarm (07:00–22:00 only)")
+    lost = t.date() + dt.timedelta(days=3)
+    it = {"id": "test.canary", "title": "Check that this Deadlines canary alarmed on the lock screen, then tick it",
+          "kind": "hard", "lost": str(lost), "since": None, "resurface": str(t.date()),
+          "consequence": {"class": "money", "usd": 25, "text": "A1 phone-reach test: 1 alarm expected at " + t.strftime("%H:%M")},
+          "owner": "operator", "domain": "admin", "source": ["operator"], "falsifier": None, "void_if": None,
+          "activate_when": None, "recur": None, "bundle": None, "state": "open",
+          "ext": {"reminder_id": None, "event_id": None, "channel": None}, "created": utcnow(), "updated": utcnow()}
+    with Lock():
+        p = os.path.join(ITEMS, "test.canary.json")
+        if not os.path.exists(p):
+            jsave(p, it)
+            log("add", "test.canary", note="A1 canary")
+    sjp = os.path.join(STATE, "sync.json")
+    sj = jload(sjp, {})
+    sj.setdefault("test.canary", {})["alarm_at"] = at_s
+    jsave(sjp, sj)
+    print(json.dumps({"seeded": "test.canary", "alarm_at": at_s, "lost": str(lost)}))
+
+
+def main(argv):
+    v = argv[0] if argv else "run"
+    if v == "run":
+        return run()
+    if v == "channel-test":
+        return run(test_only=True)
+    if v == "canary" and len(argv) == 3 and argv[1] == "--at":
+        canary(argv[2])
+        return 0
+    if v == "status":
+        ch = jload(os.path.join(DL_DIR, "channels.json"), {})
+        age = last_ok_age_h()
+        print(json.dumps({"active": ch.get("active"), "tested_at": ch.get("tested_at"), "results": ch.get("results"),
+                          "last_ok_age_h": None if age is None else round(age, 2),
+                          "banner": open(os.path.join(STATE, "banner.txt")).read().strip() if os.path.exists(os.path.join(STATE, "banner.txt")) else None},
+                         indent=2))
+        return 0
+    print(__doc__, file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
