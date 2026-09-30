@@ -216,6 +216,17 @@ class CensusRecords(unittest.TestCase):
             C.cohort_id("next3", "model:opus", 12.7), "next3-model_opus-12"
         )
 
+    def test_cohort_resets_reads_the_cid_back(self):
+        """The reset is the cohort's key, so a rebuilt cohort takes it from its own id (defect A)."""
+        for scope, resets in (
+            ("7d", 1791025200.0),
+            ("model:claude-opus-5-5", 1790000000.0),
+        ):
+            self.assertEqual(
+                C.cohort_resets(C.cohort_id("next2", scope, resets)), resets
+            )
+        self.assertIsNone(C.cohort_resets(C.cohort_id("next2", "7d", None)))
+
     def test_stale_reconcile(self):
         tmp = tempfile.mkdtemp()
         tp = os.path.join(tmp, "s.jsonl")

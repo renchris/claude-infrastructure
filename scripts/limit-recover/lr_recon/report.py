@@ -391,6 +391,16 @@ def write_cohort(
     store.atomic_write_json(os.path.join(paths.cohorts, cohort.cid + ".json"), doc)
 
 
+def load_cohort(paths: T.Paths, cid: str) -> Optional[T.Cohort]:
+    """``recon/cohorts/<cid>.json`` as a ``T.Cohort`` (its ``status`` key is ignored), or None."""
+    try:
+        with open(os.path.join(paths.cohorts, cid + ".json"), encoding="utf-8") as fh:
+            doc = json.load(fh)
+        return T.from_dict(T.Cohort, doc) if isinstance(doc, dict) else None
+    except (OSError, ValueError, TypeError):
+        return None
+
+
 # The readout is one line: name at most three bg-held panes, count the rest.
 BG_HELD_SHOWN = 3
 

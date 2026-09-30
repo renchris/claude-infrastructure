@@ -980,6 +980,27 @@ def _command(ctx: Ctx, rec: T.Record, which: str) -> List[str]:
     return []  # SPLIT needs a bg job id the census does not carry yet: it pages instead
 
 
+def _cohort(ctx: Ctx, cid: str, recs: List[T.Record], now: float) -> T.Cohort:
+    """The cohort one pass reports on. Its reset is the cid's own key and its opening its first
+    member's detection, and once set both are kept from its file, which every pass rewrites.
+    Rebuilt bare every pass, the file read resets_at null and opened_at 0 (W5b2 defect A): the open
+    page said "until ?", an all-good close page would have timed the cohort from the epoch, and the
+    shadow's stop-marker window reached back to every earlier limit on the account."""
+    prev = report.load_cohort(ctx.paths, cid)
+    resets = prev.resets_at if prev is not None else None
+    opened = prev.opened_at if prev is not None else 0.0
+    det = [r.timeline.detected for r in recs if r.timeline.detected]
+    r0 = recs[0]
+    return T.Cohort(
+        cid=cid,
+        acct=r0.source_acct,
+        scope=r0.scope,
+        resets_at=resets or census.cohort_resets(cid),
+        opened_at=opened or (min(det) if det else now),
+        members=[r.sid for r in recs],
+    )
+
+
 def _report(ctx: Ctx, mode: str, now: float) -> None:
     rep = ctx.reporter or report.Reporter(ctx.paths, mode)
     # The mode is re-read every pass (D6.4): the Reporter outlives a `recon/mode` write on the
@@ -990,10 +1011,7 @@ def _report(ctx: Ctx, mode: str, now: float) -> None:
     for r in ctx.records.values():
         by_cid.setdefault(r.cohort_id, []).append(r)
     for cid, recs in by_cid.items():
-        r0 = recs[0]
-        cohort = T.Cohort(
-            cid=cid, acct=r0.source_acct, scope=r0.scope, members=[r.sid for r in recs]
-        )
+        cohort = _cohort(ctx, cid, recs, now)
         try:
             rep.open_page(cohort, recs, {})
             rep.delta_page(cohort, recs)

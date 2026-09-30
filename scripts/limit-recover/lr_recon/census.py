@@ -227,6 +227,12 @@ def cohort_id(acct: str, scope: str, resets_at: Optional[float]) -> str:
     return "%s-%s-%d" % (acct or "unknown", safe, int(resets_at or 0))
 
 
+def cohort_resets(cid: str) -> Optional[float]:
+    """The reset a cohort id is keyed on (cohort_id's suffix); None for a cohort keyed on none."""
+    tail = cid.rsplit("-", 1)[-1]
+    return float(tail) if tail.isdigit() and int(tail) > 0 else None
+
+
 def cohorts_for(buckets: List[T.Bucket], now: float) -> Dict[str, T.Cohort]:
     out: Dict[str, T.Cohort] = {}
     for b in buckets:

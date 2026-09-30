@@ -22,6 +22,20 @@ def _tx(cwd):
     return p
 
 
+def _shadow_lib():
+    """The W5b shadow gate (tests/rig/shadow_lib.py), loaded read-only by path."""
+    import importlib.util
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(here, "..", "..", "..", "..", "tests", "rig", "shadow_lib.py")
+    if not os.path.exists(path):
+        raise unittest.SkipTest("no shadow gate at %s" % path)
+    spec = importlib.util.spec_from_file_location("shadow_lib", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def _snap(now, cwd):
     s = T.SessionObs(
         sid="abcdef01-0000-0000-0000-000000000001",
@@ -1048,6 +1062,97 @@ class MainTests(unittest.TestCase):
         self.assertEqual((rec.phase, rec.substate), ("PRE-MOVE", "PARKED-REBOOT"))
         self.assertNotIn(rec.sid, ctx.actions)
         self.assertEqual([e["ev"] for e in self._events()], ["stale"])
+
+    def _cohort_recs(self, now):
+        """Two members of next2's weekly cohort (resets 2026-10-03 11:00Z), detected 10 and 5
+        minutes ago."""
+        cid, recs = "next2-7d-1791025200", []
+        for i in range(2):
+            sid = "%08d-0000-0000-0000-000000000000" % i
+            r = T.Record(sid=sid, record_id="r%d" % i, cohort_id=cid, pane=(5, i))
+            r.source_acct, r.scope, r.timeline.detected = (
+                "next2",
+                "7d",
+                now - 600 + 300 * i,
+            )
+            recs.append(r)
+        return cid, recs
+
+    def _reported(self, recs, now, ctx=None):
+        ctx = ctx or M.Ctx(self.paths, None, self.home)
+        M.store.ensure_dirs(self.paths)
+        ctx.records = {r.sid: r for r in recs}
+        M._report(ctx, "observe", now)
+        with open(os.path.join(self.paths.cohorts, recs[0].cohort_id + ".json")) as fh:
+            return ctx, json.load(fh)
+
+    def _shadow_pages(self, kind):
+        with open(os.path.join(self.paths.shadow, "pages.jsonl")) as fh:
+            rows = [json.loads(x) for x in fh]
+        return [r["text"] for r in rows if r["kind"] == kind]
+
+    def test_a_rebuilt_cohort_keeps_its_reset_and_opening(self):
+        """W5b2 defect A: _report rebuilt T.Cohort(cid, acct, scope, members) every pass, so the file
+        read resets_at null and opened_at 0.0, and the open page said "until ?"."""
+        import time
+
+        now = time.time()
+        cid, recs = self._cohort_recs(now)
+        ctx, coh = self._reported(recs, now)
+        ctx, coh = self._reported(recs, now + 60, ctx)
+        self.assertEqual(
+            (coh["resets_at"], coh["opened_at"]), (1791025200.0, now - 600)
+        )
+        self.assertIn("LIMITED (7d) until 11:00Z", self._shadow_pages("OPEN")[0])
+        # a restart keeps the file's opening even without the member that set it
+        _ctx, coh = self._reported(recs[1:], now + 120)
+        self.assertEqual(
+            (coh["resets_at"], coh["opened_at"]), (1791025200.0, now - 600)
+        )
+        # a file the old code wrote (null, 0) is repaired from the cid and the detections
+        with open(os.path.join(self.paths.cohorts, cid + ".json"), "w") as fh:
+            json.dump(dict(coh, resets_at=None, opened_at=0.0), fh)
+        _ctx, coh = self._reported(recs[1:], now + 180)
+        self.assertEqual(
+            (coh["resets_at"], coh["opened_at"]), (1791025200.0, now - 300)
+        )
+
+    def test_an_all_good_close_page_times_the_cohort_from_its_opening(self):
+        """W5b2 defect A: with opened_at 0.0 an all-good cohort would close "in 497000h"."""
+        import time
+
+        now = time.time()
+        _cid, recs = self._cohort_recs(now)
+        for r in recs:
+            r.terminal = T.Terminal(outcome="CLOSED", at=r.timeline.detected + 221)
+        self._reported(recs, now)
+        self.assertEqual(
+            self._shadow_pages("CLOSE"), ["next2 7d cohort closed: 2/2 in 8m41s"]
+        )
+
+    def test_stop_markers_from_before_the_cohort_opened_are_not_census_misses(self):
+        """W5b2 defect A: the shadow's stop-marker window starts at the cohort's opened_at; at 0.0 it
+        reached the epoch, and 11 markers from earlier next2 limits read as census misses. Fed the
+        cohort file _report really writes, the window leaves them out."""
+        import time
+
+        shadow = _shadow_lib()
+        now = time.time()
+        _cid, recs = self._cohort_recs(now)
+        _ctx, coh = self._reported(recs, now)
+        d = os.path.join(self.home, ".claude", "autonomy", "stop-failure")
+        os.makedirs(d)
+        with open(os.path.join(d, "rate_limit__next2.jsonl"), "w") as fh:
+            for sid, t in (
+                ("old-sep24-limit", now - 6 * 86400),
+                (recs[0].sid, now - 605),
+            ):
+                ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+                fh.write(json.dumps({"ts": ts, "session_id": sid}) + "\n")
+        lr = self.paths.lr_root
+        self.assertEqual(shadow._legacy_found(lr, self.home, coh), {recs[0].sid})
+        coh["opened_at"] = 0.0  # CONTROL: the record the old code wrote
+        self.assertIn("old-sep24-limit", shadow._legacy_found(lr, self.home, coh))
 
     def _rec(self, phase, target="next4"):
         rec = T.Record(sid="abcdef01-0000-0000-0000-000000000001", record_id="r1")
