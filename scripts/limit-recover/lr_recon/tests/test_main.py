@@ -1154,6 +1154,134 @@ class MainTests(unittest.TestCase):
         coh["opened_at"] = 0.0  # CONTROL: the record the old code wrote
         self.assertIn("old-sep24-limit", shadow._legacy_found(lr, self.home, coh))
 
+    def _moved(self, now, holder="next", target="", substate="IN-FLIGHT", **kw):
+        """W5b2 defect C's shape: limited on next2, detected 700 s ago, moved by another recovery
+        path to ``holder`` and working there; a plan-only record, IN-FLIGHT in its relaunch gap."""
+        cfg = {
+            a: os.path.join(self.tmp, "cfg-" + a) for a in ("next", "next2", "next3")
+        }
+        for d in cfg.values():
+            os.makedirs(os.path.join(d, "projects"), exist_ok=True)
+        rec = T.Record(sid="abcdef01-0000-0000-0000-000000000001", record_id="r1")
+        rec.plan_only, rec.substate, rec.pane = True, substate, (610, 38)
+        rec.source_acct, rec.source_cfg = "next2", cfg["next2"]
+        rec.target_acct, rec.target_cfg = target, cfg.get(target, "")
+        rec.timeline.detected, rec.timeline.confirmed = now - 700, now - 650
+        for k, v in kw.items():
+            setattr(rec, k, v)
+        h = T.HolderObs(22872, L, cfg[holder], "session-row", pane=(610, 38))
+        tx = T.TranscriptObs(path="/t.jsonl", last={}, last_assistant_ok_at=now - 30)
+        s = T.SessionObs(
+            sid=rec.sid, cfg=h.cfg, acct=holder, holders=[h], transcript=tx
+        )
+        ctx = M.Ctx(self.paths, None, self.home)
+        M.store.ensure_dirs(self.paths)
+        ctx.records = {rec.sid: rec}
+        return ctx, rec, s, T.Snapshot(wall=now, uptime_raw=0.0, sessions={rec.sid: s})
+
+    def test_a_session_moved_and_engaged_elsewhere_settles(self):
+        """W5b2 defect C: 4d7c9bce was limited on next2 at 21:26:29Z and the hook lane recovered it to
+        next at 21:37:08Z; its plan-only record with no target sat PRE-MOVE/IN-FLIGHT and drew
+        RECON-DEFECT every pass, and four like it expired ESCALATED, then IMPOSSIBLE."""
+        import time
+
+        now = time.time()
+        ctx, rec, _s, snap = self._moved(now)
+        self.assertEqual(
+            M._invariant(ctx, snap, now), 1
+        )  # the defect, before any derive
+        M._derive(ctx, snap, now)
+        self.assertEqual(rec.terminal.outcome, "CLOSED")
+        self.assertEqual((rec.phase, rec.substate), ("ENGAGED", None))
+        close = {k: rec.close.get(k) for k in ("via", "by", "acct", "at", "pane")}
+        self.assertEqual(
+            close,
+            dict(via="ENGAGED", by="elsewhere", acct="next", at=now, pane=[610, 38]),
+        )
+        self.assertEqual(
+            (rec.close["same_window"], rec.close["same_uuid"]), (True, True)
+        )
+        self.assertIn("engaged on next", rec.terminal.proof)
+        self.assertEqual(M._invariant(ctx, snap, now), 0)
+        evs = [e["ev"] for e in self._events()]
+        self.assertIn("engaged-elsewhere", evs)
+        self.assertNotIn("in-flight-expired", evs)
+
+    def test_engaged_elsewhere_covers_the_target_the_park_and_an_escalation(self):
+        """The planned target is elsewhere too until this attempt moves there itself (cd3bd860: the
+        recon planned next3, legacy used next3, and boot-resume relaunched it after the reboot); a
+        parked or escalated record settles instead of paging IMPOSSIBLE."""
+        import time
+
+        now = time.time()
+        err = T.LastError(cls="DETERMINISTIC", fingerprint="f", at=now - 60)
+        for why, kw in (
+            (
+                "planned target",
+                dict(holder="next3", target="next3", phase="RELAUNCHED"),
+            ),
+            ("parked", dict(holder="next3", target="next3", substate="PARKED-REBOOT")),
+            ("escalated", dict(escalated=True, last_error=err)),
+        ):
+            with self.subTest(why):
+                ctx, rec, _s, snap = self._moved(now, **kw)
+                rec.wait = T.Wait(reason=rec.substate)
+                M._derive(ctx, snap, now)
+                self.assertEqual(
+                    (rec.terminal.outcome, rec.close.get("by")), ("CLOSED", "elsewhere")
+                )
+                self.assertEqual((rec.wait, rec.escalated), (None, False))
+                rep = M.report.Reporter(self.paths, "observe")
+                self.assertEqual(
+                    rep.immediate_pages(T.Cohort("c", "next2", "7d"), rec), []
+                )
+
+    def test_a_live_actuator_of_the_reconcilers_own_is_never_preempted(self):
+        """CONTROL: while this record's own actuator runs, the move is in flight and it decides."""
+        import time
+
+        now = time.time()
+        ctx, rec, _s, snap = self._moved(now)
+        rec.procs = [T.ProcRole("actuator", 4242, L, "A")]
+        snap.procs[4242] = T.ProcRow(4242, 1, "S", L, "lr-recon-act")
+        M._derive(ctx, snap, now)
+        self.assertIsNone(rec.terminal)
+
+    def test_engaged_elsewhere_leaves_what_it_cannot_prove(self):
+        """CONTROLS: nothing settles without a healthy turn after the death, on a holder that is
+        neither the source nor this attempt's own move, alone."""
+        import time
+
+        now = time.time()
+        for why, kw, tx, extra in (
+            ("no turn since the death", {}, {"last_assistant_ok_at": now - 800}, None),
+            (
+                "limited again there",
+                {},
+                {"last": {"limit": True, "kind": "limit"}},
+                None,
+            ),
+            ("on the source account", dict(holder="next2"), {}, None),
+            ("its own move", dict(holder="next3", target="next3"), {}, "own"),
+            ("two holders", {}, {}, "second"),
+            ("a background row", {}, {}, "bg"),
+            ("an unknown config", {}, {}, "nocfg"),
+        ):
+            with self.subTest(why):
+                _ctx, rec, s, snap = self._moved(now, **kw)
+                for k, v in tx.items():
+                    setattr(s.transcript, k, v)
+                if extra == "own":
+                    rec.close["move_attempt"] = rec.attempt
+                elif extra == "second":
+                    s.holders.append(T.HolderObs(22873, L, s.cfg, "resume-argv"))
+                elif extra == "bg":
+                    s.holders[0].bg = True
+                elif extra == "nocfg":
+                    s.holders[0].cfg = ""
+                self.assertEqual(M.settle.engaged_elsewhere(rec, snap, now), "")
+                self.assertIsNone(rec.terminal)
+
     def _rec(self, phase, target="next4"):
         rec = T.Record(sid="abcdef01-0000-0000-0000-000000000001", record_id="r1")
         rec.phase, rec.target_acct, rec.pane = phase, target, (5, 7)

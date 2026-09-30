@@ -507,6 +507,14 @@ def _derive(
         if not rec.open:
             continue
         act.adopt(rec, snap)
+        proof = (
+            ""
+            if act.live_procs(rec, snap)
+            else settle.engaged_elsewhere(rec, snap, now)
+        )
+        if proof:
+            _event(ctx.paths, "engaged-elsewhere", rec.sid, rec.record_id, proof)
+            continue
         if rec.substate == "PARKED-REBOOT":
             continue  # the census owns the reboot park (census.park); the phase table defers
         if rec.escalated:

@@ -23,7 +23,7 @@ from typing import Dict, List, Optional, Tuple
 
 from lr_recon import classify
 from lr_recon import types as T
-from lr_recon.evidence import transcript_path
+from lr_recon.evidence import _same_cfg, transcript_path
 
 REPROBE_S = 120.0
 WAIT_RETRY_S = 60.0
@@ -625,6 +625,51 @@ def replaced_elsewhere(rec: T.Record, snap: T.Snapshot, now: float) -> bool:
             )
             return True
     return False
+
+
+def engaged_elsewhere(rec: T.Record, snap: T.Snapshot, now: float) -> str:
+    """W5b2 defect C: a session another recovery path moved (legacy limit-recover, a hand move,
+    boot-resume) and that is working again never read as engaged. Row 5 needs this attempt's own
+    submit token and a holder under the target, so the record sat IN-FLIGHT, drew RECON-DEFECT
+    every pass, and expired ESCALATED then IMPOSSIBLE while the session worked.
+
+    The census's own evidence settles it: the sid's one live holder runs under neither the source
+    nor this attempt's own move target, and its newest assistant record is a healthy turn after the
+    death was detected. Two holders stay with row 1 (split brain). The target counts as elsewhere
+    until this attempt spawns a move of its own, because only that move's token proves anything
+    there. An escalation is dropped, or the closed record would still page ESCALATED. Returns the
+    proof ('' = not settled)."""
+    s = snap.sessions.get(rec.sid)
+    if rec.terminal is not None or s is None or len(s.holders) != 1:
+        return ""
+    ok, h = s.transcript.last_assistant_ok_at, s.holders[0]
+    if (
+        (s.transcript.last or {}).get("limit")
+        or ok is None
+        or ok <= (rec.timeline.detected or now)
+        or h.bg
+        or not h.cfg
+        or _same_cfg(h.cfg, rec.source_cfg)
+    ):
+        return ""
+    if rec.close.get("move_attempt") == rec.attempt and _same_cfg(
+        h.cfg, rec.target_cfg
+    ):
+        return ""  # this attempt's own move: row 5 proves it by its own token
+    acct = s.acct if s.acct and _same_cfg(h.cfg, s.cfg) else os.path.basename(h.cfg)
+    rec.phase, rec.substate, rec.wait, rec.escalated = "ENGAGED", None, None, False
+    rec.close.update(
+        via="ENGAGED",
+        by="elsewhere",
+        acct=acct,
+        at=now,
+        pane=list(h.pane) if h.pane else None,
+        same_window=bool(rec.pane and h.pane and tuple(h.pane) == tuple(rec.pane)),
+        same_uuid=True,
+    )
+    proof = "engaged on %s, moved there by another recovery path" % acct
+    rec.terminal = T.Terminal(outcome="CLOSED", proof=proof, at=now)
+    return proof
 
 
 def replacement_unproven(rec: T.Record, now: float) -> bool:
