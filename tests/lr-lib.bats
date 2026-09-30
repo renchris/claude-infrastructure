@@ -755,7 +755,8 @@ fg_world() {
   fg_world "" ""
   export LR_MOVE_FOCUSED=off
   rc=0; lr_focus_gate 901 fg_focus fg_comp || rc=$?
-  [ "$rc" = 3 ] && [ "$LR_FOCUS_HOLD" = HELD:focused ] || { echo "rc=$rc hold=$LR_FOCUS_HOLD"; false; }
+  [ "$rc" = 3 ] || { echo "rc=$rc"; false; }
+  [ "$LR_FOCUS_HOLD" = HELD:focused ] || { echo "hold=$LR_FOCUS_HOLD"; false; }
 }
 
 @test "focus gate default reader: UI focus is OS window AND tab AND window; an unparseable listing is unknown" {

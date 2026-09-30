@@ -69,7 +69,7 @@ setup() {
   run bash -c "sed -n '/^page_escalate_os()/,/^}/p' '$SUP'"
   [ "$status" -eq 0 ]
   echo "$output" | grep -q 'lr_page --title'
-  ! echo "$output" | grep -q 'osascript'
+  ! echo "$output" | grep -q 'osascript' || false
   run bash -c "sed -n '/^_lr_page_os()/,/^}/p' '$REPO/scripts/limit-recover/lr-page.sh'"
   [ "$status" -eq 0 ]
   echo "$output" | grep -q 'on run argv'
