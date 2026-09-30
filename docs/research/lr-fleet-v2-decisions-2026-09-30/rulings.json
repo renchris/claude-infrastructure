@@ -1,0 +1,561 @@
+{
+  "finals": [
+    {
+      "n": 1,
+      "id": "7d93315f2591",
+      "recommendation": "Keep zero-human automatic recovery on: leave ~/.reso/limit-recover/autorecover.on in place. Seven conditions come with it. (1) Close the race between a recovery driver and a person or turn using the same pane: add the existing at-rest check to lr-handoff's precheck (lr-handoff.sh:594-600) and to handoff-fire's final limit check before /exit (handoff-fire.sh:2908-2922). Both read only assistant records today. (2) Stop the recovery lane parking when the router's 3-second answer window runs out under load. That happened to 2 of the 3 sessions in tonight's 06:26Z cohort. (3) Fix the poller's hook lane, which stays the unattended actuator until cutover: add a stay-near-reset rule that is paced per account, move the stale-claim audit out of the request path, and cap dispatches per tick. (4) Fix the router exemption that put 3 new workers on an account the server was refusing, together with the working-session over-count. (5) Do not turn the reconciler on to act until four defects are fixed: the reset/stay path, admission that is never called, owned/<sid> never being released, and limited cohorts being moved to another account 5 s after reset. (6) Give reconciler acting on non-cc-lr sessions its own operator-created marker. (7) Treat the first real unattended move on the current build as the evidence check, and remove the flag if it shows harm.",
+      "conviction": 84,
+      "changed_from_prior": false,
+      "why": "Since the flag appeared at 05:22:55Z the lane picked up all 4 limit hits and did no harm, but only 1 of them was actually moved: pane 918, limit to reply in 6m21s. Two parked because the router's 3-second answer window ran out, and one was correctly refused because the operator had already recovered it by hand. So the unattended safety record is one real move, made on a build that 109 commits have touched since. The wider record for the same move mechanism supports it: 62 moves with 0 bytes lost, and 0 of 42 limited again. Turning the flag off falls back to nothing automatic. The in-place nudge that failed 85 of 85 times runs under a different switch, so off just leaves limited sessions waiting until the operator returns, which costs most when nobody is around. Conviction drops from 92 to 84 for two reasons: the benefit has been measured once, and two drivers were still running while the operator typed into the same panes. Only timing kept that harmless, and it stays that way until the at-rest check guards both the precheck and the final check.",
+      "implementation_steps": [
+        {
+          "step": "Keep ~/.reso/limit-recover/autorecover.on in place",
+          "kind": "flag-file",
+          "detail": "Created 2026-09-29T05:22:55Z (stat: 00:22:55-0500). It is read only by the poller's hook-request gate (lr-reset-poller.sh:899) and the hook kick (stop-failure-marker.sh:548). The in-place nudge is gated by LR_POLLER_AUTOFIRE (lr-reset-poller.sh:1747), not by this file. HEAD and origin/main are both 69ddcd35a. Kill switch: remove the file. It takes effect from the next tick and does not stop lr-fleet drivers already running. Wider switches: LR_POLLER_DISABLED=1, unloading the LaunchAgent, or CC_SF_REQUEST=off / ~/.reso/limit-recover/.request-off.",
+          "already_in_effect": true,
+          "operator_only": false
+        },
+        {
+          "step": "Record the ruling on decision packet 7d93315f2591 as 'on'",
+          "kind": "none",
+          "detail": "The user's 'proceed with all as recommended' is the ruling. Record it at conviction 84, with a receipt pointing to ~/.reso/limit-recover/fleet/one-20260929T053657Z-0715cd0c, one-20260929T062558Z-3c85fe54, one-20260929T062605Z-84f3533b and one-20260929T062640Z-a87593c9 (results.tsv: 1 RECOVERED, 2 parked on 'max-wait expired mid-sweep (exit 3)', 1 FAILED rc=6 PRECHECK REFUSED:not-limited). Note that the stated precondition (rig and canaries) was met only after the flag was created.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Add the at-rest check to both limit gates: lr-handoff's precheck and handoff-fire's final check before /exit",
+          "kind": "code",
+          "detail": "(a) lr-handoff.sh:594-600 decides 'limited' from lr_last_api_error alone, and that reads only assistant records (lr-lib.sh:174-201). A prompt typed after the limit is invisible to it until the first reply lands, 3.5-4.0 s tonight (84f3533b: prompt 06:31:00.603Z, reply 06:31:04.065Z; a87593c9: 06:30:57.228Z → 06:31:01.221Z). Two drivers were still running on those sessions at those times (a87593c9 parked at 06:31:17Z, 84f3533b refused at 06:35:19Z). After the limit verdict, run hf_transcript_at_rest (or the same logic from lr-lib) and refuse as busy on a non-zero rc, before any lock or tombstone. (b) hf_recycle_last_read limited branch, handoff-fire.sh:2908-2922: run `hf_transcript_at_rest \"${tx_read:-$tx}\"` before the `rm -f \"$joined\"` at :2919, and on a non-zero rc set HF_LR_REASON=busy and return 1. hf_transcript_at_rest treats a trailing assistant api-error as at rest (:2404), and it made 0 wrong holds on tonight's 7 limited sources. Together these are the mutual exclusion between a live driver and a human /limit-recover: a session mid-turn is refused as busy, and a session whose human turn has finished is refused as not-limited. Bats: add a case to tests/handoff-fire-recycle-custody.bats and one to the lr-handoff precheck suite, each with a limit record followed by a user prompt and no assistant record, which must refuse as busy.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Stop the recovery lane parking when the router's 3-second window expires under load",
+          "kind": "code",
+          "detail": "lr-fleet.sh:764 calls `--rank \"$kind\" --recovery --max-wait 3` inside the admit section. That deadline counts from process start (bin/claude-accounts:4815, _PROC_T0), so Python start-up under a loaded machine counts against it, and on expiry the router exits 3 with no answer (:4799). At 06:30:44-06:31:17Z both 3c85fe54 and a87593c9 parked this way, and a park waits at least LR_REQUEST_RETRY_MIN=10 min before retrying (lr-reset-poller.sh:829). Fix: on exit 3 in the recovery lane, retry the rank once with a longer bound, or accept the cached rank no older than cache_grace_s (the max_wait=0 cached path used at bin/claude-accounts:4235), and log the router's wall time into the run dir. A park must stay the fallback, never a transplant without a routed target. Add a bats case using a router stub that sleeps past 3 s.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Add a stay-near-reset rule to the poller's hook request lane, paced per account",
+          "kind": "code",
+          "detail": "lr-reset-poller.sh: add reset_at_epoch as the 11th key of the NUL reader (:853-859) and change the `!= 10` check at :861 to 11 (requests already carry it). Before the run claim (~:995), if 0 < reset_at_epoch - now < 900, leave the request queued, spend no attempt, and log REQUEST-STAY. After the reset, if the session is still limited and at rest, dispatch through the existing mode:prompt path (:1027-1049; cc_tui_submit rc 3 means the composer was occupied and nothing was typed). Pace it: at most 3 same-account post-reset dispatches per account per tick, with per-session jitter. The reason is the 2026-09-10 cascade (docs/research/limit-cascade-2026-09-10.md:3-7): /limit-recover reached about 13 panes in 8 s, one workflow re-ran its slots and consumed next's whole 5h window, and 74 of 92 re-runs were lost. On tonight's data the 3 dispatches sent 3-4 min before the 06:30Z reset would have waited. Add a case to tests/lr-reset-poller-requests.bats.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Move the engagement audit out of the request path and cap claim age",
+          "kind": "code",
+          "detail": "The audit (lr-reset-poller.sh:418-454) re-checks every fire-claim before the request drain (:837), and ENGAGED claims are never deleted (the only rm is at :1832). There are 25 claims dated Aug 4 to Sep 22, 22 of them ENGAGED. In one sampled tick the audit took about 600 of the 602 s before the drain, and tonight's measured time from death to dispatch was 4m50s-8m31s. Move the block after the request loop (after ~:1066), still ahead of the fire_latched readers (:1528/:1582), and skip claims older than about 6 h. Add a bats case asserting a request is dispatched before any stale claim is audited.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Cap the hook request lane per tick at cohort scale",
+          "kind": "code",
+          "detail": "The request loop (lr-reset-poller.sh:837-1066) has no counter, so a 30-death cohort would start 30 detached drivers. Add LR_REQUEST_MAX_PER_TICK, default 4 (matching MAX_PER_RUN at :351); requests over the cap stay queued without spending an attempt. Raise the LR_ADMIT_LOCK_WAIT_S default at lr-fleet.sh:601 from 300 to at least 600, so a waiter never takes the lock from a live holder parked on capacity (park is 120 s, lr-fleet.sh:547). Add a bats case.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Stop the general (dispatch) router lane from placing fresh fires on an account the server refuses",
+          "kind": "code",
+          "detail": "bin/claude-accounts:3745-3747 skips the 5h-cutoff exclusion for a wire-rejected account whose reset is under EPS_H (0.25 h). At 06:16-06:19Z next2 was refused with its reset 0.186-0.231 h away, it was the only routable account, and all 3 new workers hit the limit within 3 s. For recovery=False lanes, exclude a wire-5h-rejected account whenever its reset is still in the future, and keep the exemption for the recovery lane. Add a bats case with that fixture.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Fix the working-session over-count before or together with the router fix",
+          "kind": "code",
+          "detail": "working_concurrency (bin/claude-accounts:750) counts every top-level and agent-*.jsonl whose mtime is within 10 min, and bound_kwork (:2200) caps only the top-level term. At 06:16:09Z the logged values were next=14 and next4=11 against a cap of 8, while estimated in-flight counts were 3-5 and about 2. Across 129 sweeps, the router fix alone would have halted every fire in 6. Count a file as working from its last timestamped user or assistant record, count subagents only while unfinished, and count a session waiting on a tool_use as working. Apply the same definition to the reconciler's census (LIMIT_RECOVER_FLEET_V2_ARCHITECTURE.md:185).",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Separate the reconciler's zero-human scope from the poller's hook lane before recon.on is created",
+          "kind": "code",
+          "detail": "census.py:231 computes plan_only as `not autorecover_on and rec.origin != \"cc-lr\"`, and __main__.py:225 reads the flag. Treat non-cc-lr records as acting only when autorecover.on AND a second operator-created marker (for example ~/.reso/limit-recover/recon/autorecover.on) both exist; the daemon must never create it. Gate store.claim_request (__main__.py:210-213) on recon.on plus not plan_only, so act mode cannot claim hook requests on verdicts the poller does not share (census.py:458-469). At cutover, write recon.on before recon/mode=act. Tests: all four flag states, and a hook request that survives an act-mode pass without recon.on (extend test_main.py:136).",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Release owned/<sid> at terminal states, add an abandon verb, and cap re-arms before any act-mode cutover",
+          "kind": "code",
+          "detail": "store.release_fence (store.py:216) has no caller outside tests, and claim_release runs only inside take_ownership's failure path (store.py:506). design-v2/findings.json:44 marks this 'Fixed', but trunk does not implement it. While the daemon is alive, every sid it ever owned stays DEFER for every other recovery path (lr-recon-fence.sh:195-205), including the cc-resume-debt handoff (cc-resume-debt:287). A deterministic failure re-arms every 900 s with no cap (classify.py:23,196-201). Fix: call release_fence and claim_release at every terminal outcome, add an operator abandon verb, page and release after N re-arms, and let _own_and_charge take over an owned file whose record is terminal. Add a test that a closed record's sid returns 'not-owned'.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Wire the reconciler's reset handling to an in-place continue, and stop moving limited cohorts to another account at reset+5 s",
+          "kind": "code",
+          "detail": "(a) A stay placement (bin/claude-accounts:4361-4362) becomes PLANNED with target = source (plan.py:268-273). act.choose then returns a move (act.py:450-451), lr-handoff refuses it with exit 2 (lr-handoff.sh:633-637), and settle loops RETRY/ESCALATED. (b) The first pass after a reset still sees the source's stale live fact (until resets_at+60, :4150-4168) and a cached 100% row (grace 600 s, :4235), so an in-memory replay placed all 3 of tonight's stay sessions cross-account at 06:30:05Z. Fix: at reset + jitter, or when placement equals the source, dispatch the in-place continue through cc_tui_submit, gated by the pacer and an at-rest check. Do not offer the record to another account until the source has been re-read after its reset. Make ENGAGED accept a same-account continue, set an eta on the rebucket path (settle.py:225-233), and add a stay-capable fake --place to the rig (tests/rig/fake-claude-accounts.py:80).",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Connect the reconciler's admission to its act path, with the load term off, before it may act",
+          "kind": "code",
+          "detail": "Admission() and BootSlots() are created at lr_recon/__main__.py:83-84 and used nowhere else outside tests, so the only concurrency cap is LR_RECON_WORKERS=16 (act.py:442). Call Admission.decide before spawning each move or continue, store the token in rec.admit_token, and wrap relaunches in BootSlots. admit.py:176 builds the probe without CC_ADMIT_LOAD_TERM=off (unlike lr-lib.sh:420), and all 89 of its IDL rows refused on load, mislabelled 'memory' at admit.py:183. Set the load term off. Point test_admit.py:169-178 at a temp IDL. Add a test that a 30-record cohort spawns at most R at once and at most 3 first turns per account.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Review the first real unattended move on the current build as the evidence check",
+          "kind": "none",
+          "detail": "All 4 of tonight's dispatches ran on builds 6d631691b/55e4cbf07. Since then 109 commits have touched the lane's files (git log 6d631691b..HEAD over scripts/limit-recover, handoff-fire.sh, claude-accounts, capacity-admit.sh, stop-failure-marker.sh), and the current build has made 0 real hook-request dispatches (the last REQUEST dispatch was 06:26:35Z). When the next one happens, read its results.tsv, handoffs.jsonl rows and the source and target transcripts for lost input, a double session, the wrong account or a second limit. On any harm, remove autorecover.on and file the cause. Read-only; no actuator is needed.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Operator creates the reconciler zero-human marker only after the first attended reconciler cohort closes clean and the four reconciler fixes have landed",
+          "kind": "flag-file",
+          "detail": "This grant is the operator's. Create the second marker from the scope-split step only after the reset/stay path, admission, and owned/ release are in place, and the first real cc-lr-origin acting cohort under the reconciler has closed with zero split-brain and a 'not-owned' fence afterwards (LIMIT_RECOVER_FLEET_V2.md:406-407).",
+          "already_in_effect": false,
+          "operator_only": true
+        },
+        {
+          "step": "Repair the poller's in-place resume nudge (independent, lower priority)",
+          "kind": "code",
+          "detail": "nudge_in_place (lr-reset-poller.sh:698-717) types through `it2 session run` with only CC_TERM_KITTY_TO set. Under launchd it falls through to iTerm2, and all 85 of 85 attempts (09-10 to 09-22) failed with 'could not type into pane'. It is gated by LR_POLLER_AUTOFIRE (:1747), not by autorecover.on, so it is not the fallback for this flag. Route it through cc_tui_submit, stop :1647 and :1436 silently retiring a parked sid whose only `resume <sid>` process is its still-limited holder, and add bats cases.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Correct the plan, the design finding and the packet text, and track the cutover blockers",
+          "kind": "doc",
+          "detail": "Append to docs/plans/LIMIT_RECOVER_FLEET_V2.md; never overwrite. (1) Replace 'recoveries start seconds after a death' (~line 413) with the measured values: death to dispatch 4m50s-8m31s (n=4); 1 of 4 moved (6m21s to reply), 2 parked on the router's 3 s bound, 1 refused because the operator had recovered it. (2) The hand-driven median is 9m20s (n=6), and 3 of those 6 were the sessions the unattended lane failed to recover, so it is not an independent comparison. (3) The 0/85 nudge runs under AUTOFIRE, not this flag. (4) Record the ruling, the reconciler-scope split, and that the first-turn pacer is not wired on trunk (decision 8, line 435). (5) List the reconciler cutover blockers and note that findings.json:44 marks owned/ release 'Fixed' while trunk has no caller. Any blocker not driven in the same session gets a backlog row linked to the W5b cutover row 8e67a18de9ad.",
+          "already_in_effect": false,
+          "operator_only": false
+        }
+      ],
+      "residual": "These cannot be settled by reading logs. (1) Behavior on the current build: 0 real unattended dispatches have run on it, and the 4 measured ran on builds that 109 commits have touched since. (2) A tight harm rate for the unattended move itself: 0 harms in 1 real move leaves a 95% upper bound of 95%. The tighter base (62 moves with 0 bytes lost, 0 of 42 limited again) comes from attended use of the same mechanism, not the unattended lane. (3) How the poller lane or the reconciler behaves on a real cohort of 10-30 simultaneous limits: the largest live cohort was 3, prior clusters had a median of 4 and a max of 8, and the N=30 rig ran with admission not called. (4) The router's real wall time under load at a reset boundary: tonight's 3 s expiries left no timing record. (5) Whether the StopFailure 'limited' beat lands and holds until resume (0 of 6503 beat files carry it). (6) Whether a stale owned file plus a daemon death can produce two typers, and whether a handed-to-resume-debt session is fenced out at runtime. Both need an act-mode rig or fault injection. (7) Real per-driver memory and CPU, and the quota cost of a same-account post-reset /limit-recover at cohort scale. Tonight's 3 cost next2 2-4 percentage points, and the 2026-09-10 cascade of about 13 cost a whole 5h window. (8) Who typed /limit-recover into panes 998-1000 at 06:30:54Z is settled only by elimination (the operator's keyboard), because kitty keeps no send-text history."
+    },
+    {
+      "n": 3,
+      "id": "0fb99f3a4668",
+      "recommendation": "Wait, and do not build the least-thin move. When no account passes the recovery floors, a limited session waits, whether its cap is 5-hour or weekly and however far off its reset is. Every pass re-places it: the reconciler keeps it in WAIT_SLOT, and the poller reroutes it every 15 minutes. It moves as soon as any account passes, and otherwise resumes in place at its own reset. Every waiting session and its wake time stay on the page. Leave the reconciler's first-mover weekly charge (n+1) unchanged for now; it has no live effect while the reconciler only observes. Write down two things about it: it makes the reconciler stricter than today's live lane (the first mover needs about 29.8% of the week left, against 10%), and the one past case it decided is roughly a wash. So settle n against n+1 from shadow data before the reconciler is armed. Add the guard that keeps a supplied mover burn from falling below the 7 pp/h default. It is defensive only, because no caller supplies a burn today. Reopen this decision if the shadow records the weekly-cap, reset-over-6h, all-thin case 3 or more times in 30 days. The trigger must watch recon/shadow, which is what observe mode writes.",
+      "conviction": 85,
+      "changed_from_prior": true,
+      "why": "In 7 weeks, 25 limited sessions hit a weekly cap more than 6 h before its reset. Under the floors the live lane uses today, none of them found every account thin; under the reconciler's stricter floors, one did (09-12). Replayed on today's code, moving that session is roughly a wash (estimated): about 4.7 h expected gain against about 5.2 extra hours stranded for the 3 target-account sessions that would have capped 5-6 h earlier, at tonight's 7-of-10 session recovery rate. The earlier '16-19 h lost against 6.7 h gained' figure is withdrawn: it came from 09-14 failures that today's code no longer has (a pane with no tty, no reroute of parked sessions). The hybrid is also unbuilt and contradicts itself (the floors that make every account thin reject every pick), so waiting, which is already live, wins on rarity and cost.",
+      "implementation_steps": [
+        {
+          "step": "Wait is already the live behaviour in both lanes",
+          "kind": "none",
+          "detail": "Re-read on main 69ddcd35a. Reconciler: when nothing scores, --place returns acct None with eta_s = int(min(source resets_at) - now) (bin/claude-accounts:4358-4359). plan.apply then falls through to WAIT_SLOT (plan.py:245-288), and movers() re-offers WAIT_SLOT on every pass (plan.py:132). The page fires 600 s after the ETA (report.py:129-130, types.py:118). Hook lane: lr-reset-poller.sh reroute_parked (:1577, called at :1644) asks `--rank <lane> --recovery` (:1569-1572) every 15 minutes, and otherwise the session waits for its reset. The live lane's weekly floor is a flat 10% (bin/claude-accounts:3771), the packet's own floor. Tonight 10 sessions went through fleet recovery and 7 recovered (12 runs: 7 RECOVERED, 3 FAILED, 2 PARKED; ~/.reso/limit-recover/fleet/one-20260929T*/verdict.txt). Waiting is only as good as that resume path.",
+          "already_in_effect": true,
+          "operator_only": false
+        },
+        {
+          "step": "Remove the dead switch and the false 'hybrid is read' claim",
+          "kind": "code",
+          "detail": "`grep -rn 'no_floor\\|NO_FLOOR' scripts bin tests` finds only plan.py:14 (docstring) and plan.py:407-409 (the def), so it has 0 callers. Delete no_floor_policy() and the LR_NO_FLOOR_POLICY name. Reword plan.py:13-15 to say 'Decision 3 ruled wait (2026-09-30): no least-thin pick, no switch'. Fix the LR_NO_FLOOR_POLICY sentence in LIMIT_RECOVER_FLEET_V2.md:481 the same way.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Add a test that pins the all-thin wait",
+          "kind": "code",
+          "detail": "In scripts/limit-recover/lr_recon/tests/test_plan.py, feed a limited mover the --place result {acct:None, reason:'recovery-weekly-thin,src-fact', eta_s:int(resets-now)} and assert: substate WAIT_SLOT; movers() re-offers it on the next pass; wait.eta equals the source reset within 1 s; the page deadline is eta+600. Today this rests on the int() floor at bin/claude-accounts:4359 and the strict `resets < eta` comparison in plan.apply. If either changes (ceil, or <=), the record becomes WAIT_RESET and stops re-checking until its own reset, which for a weekly cap can be up to 36.6 h away.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Make the page say why an all-thin session is waiting",
+          "kind": "code",
+          "detail": "report.py:33 labels every WAIT_SLOT 'waiting for a free slot on another account'. When the placement reason contains recovery-5h-thin or recovery-weekly-thin, show 'no account has safe room; re-checked every pass' followed by the existing wake time.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Record the ruling and correct the evidence",
+          "kind": "doc",
+          "detail": "Change LIMIT_RECOVER_FLEET_V2.md:430 row 3 from 'Hybrid (75%)' to 'Wait (85%)' and cite: (1) 0 of 25 weekly parks with a reset over 6 h were all-thin under the live floors, and 1 (09-12) under --place's floors. (2) On today's code the 09-12 move is roughly a wash (estimated about +4.7 h against -5.2 h at a 7/10 recovery rate). The old 16-19 h cost came from the pane-341 no-tty failure and the missing reroute (results/5e0d69f7-...log; poller.log:2522-2528; fixes 08bdf357d and b4eef1cb8). (3) The hybrid's floor re-check rejects every pick. Replace the row's 'second cascade measured 2026-09-19' with the attribution estimate (about 93% of next3's burn came from its own sessions, about 6.5% from 2 movers), labelled estimated. Mirror the change in ~/.reso/limit-recover/design-v2/decision-research-2026-09-29.md row 3. Close packet 0fb99f3a4668 as ruled 'wait' at 85% with this receipt; the relayed 'proceed with all as recommended' is the ruling.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Leave (n+1) unchanged; write down what it does and where it diverges",
+          "kind": "doc",
+          "detail": "Add to ARCHITECTURE.md:544 four facts. (a) The weekly term has no native-burn term (bin/claude-accounts:4316, against b_native in the 5h term at :4309), so the +1 is its only reserve for the target account's own load. (b) It makes the reconciler stricter than the live lane: the first mover needs about 29.8% of the week left when the reset is 9 h or more away, against the flat 10% the poller's --rank --recovery applies (bin/claude-accounts:3771). On 09-12 next3 had 23-24% left, so the live lane would have moved the session and the reconciler would not. (c) The one case it decided (09-12) replays as roughly a wash, so n against n+1 is unsettled. (d) Before recon.on is set, count the shadow passes where --place says wait on recovery-weekly-thin but --rank --recovery routes, and decide n against n+1 from that count. No code change now; the reconciler only observes.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Adjacent: guard the mover-burn input; do not wire pre-death burn yet",
+          "kind": "code",
+          "detail": "Not part of the ruling, and defensive only: no caller supplies burn_ph today (grep finds only types.py:809 and bin/claude-accounts:4219/4329), so every mover already gets b_default. (a) Change bin/claude-accounts:4329 to b_sess = max(burn_ph/100, b_default), so a future supplied burn cannot undercharge. Raw pre-death burn bounds post-move burn for only 19 of 56 transplant pairs; max(pre, 7) bounds 51. (b) Amend ARCHITECTURE.md:545 to say max(pre-death, 7 pp/h), with model-cap deaths and weekly-cap deaths within 1 h of a 5h reset treated as unmeasured. (c) Leave Mover.burn_ph unset in plan.py:141-148. (d) Make mover_weight (plan.py:106-108, which counts subagents before `now`) count the 10 minutes before death_ts, per ARCHITECTURE.md:531.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Write down a reopen trigger that can actually fire",
+          "kind": "doc",
+          "detail": "Add to the plan's W5b section: reopen decision 3 if, 3 or more times in 30 days, the reconciler's plan output records a weekly-scope limited mover with resets_at - now > 6 h whose reason set holds only recovery-*-thin plus the source account's own src-fact (bin/claude-accounts:4343), and no kmax, missing-data or seat reason. Read recon/shadow/<cid>.json (skipping last-pass.json) while in observe mode and recon/plans/<cid>.json in plan mode (plan.py:389-392). Observe mode, the current mode, writes nothing to recon/plans (0 files there now), so a trigger keyed only on recon/plans can never fire.",
+          "already_in_effect": false,
+          "operator_only": false
+        }
+      ],
+      "residual": "Four things cannot be settled by reading files. (1) The future base rate: only time on the shadow can say whether the weekly-cap, reset-over-6h, all-thin case recurs. Under the reconciler's stricter floors, all-thin time also shows up on 08-28/29 and 09-25, not only in 09-10..13 (the skeptic measured this; I did not re-derive it). (2) The (n+1) weekly charge: neither d4d7e4aec nor f2a2c66f9 records why it is there. Whether the reconciler should match the live lane's 10% floor is a separate question to settle from shadow counts before the reconciler is armed. (3) The value of any move depends on recovery reliability: tonight 7 of 10 sessions recovered, and the 09-12 mover itself was not resumed until 09-13 20:25Z after its nudges failed. The move-against-wait sign in that one case is estimated at about ±5 h. (4) How the Max plan weights token types is unpublished, so the pp magnitudes use API-price weights. That moves the size of the estimates, not their direction."
+    },
+    {
+      "n": 4,
+      "id": "46ed0af12b01",
+      "recommendation": "Hold. In v1, recovery does not move a team lead that still has live members, on any lane. The lead stays in its own pane on its own account, and nothing sends /exit to it or relaunches it. At the reset our own rail types one continue into that pane: no /exit, no --resume, no relaunch, so the team stays whole. The cross-account team move stays in v2.\n\nClaude Code will not wake the lead by itself on this machine. Its built-in auto-continue, and the usage-limit menu it would otherwise open, both refuse while Remote Control is active. remoteControlAtStartup is true in all 5 config dirs, and the vendor prompt appeared 0 times across 98 limit episodes on 2.1.260 and later. So our typed continue is the only wake, not a fallback, and it has to ship in the same land as the hold. Landing the hold alone would repeat the one real hold on record: a lead that sat idle 3 h 26 min past its reset.\n\nThe v1 wake:\n1. Leave the held lead alone until the reset.\n2. At reset + 2 min, if there is no fresh assistant turn since the reset, type one continue through cc_tui_submit into the lead's own pane.\n3. If that fails, or the composer cannot be read, page the operator. Never retry blind, and never let the parked lane's latch-expiry --resume arm fire on a held lead.\n\nMissing today:\n- The hook lane's REQUEST and REROUTE paths have no team check.\n- lr-upgrade's auto-enqueue treats a rate-limited session as idle.\n- The reconciler's hold can leak after a single 0-member pass.\n- The poller's in-place nudge is misrouted and has failed 85 of 85 times.\n- After a 6 h latch expires, the poller will --resume a held lead into a new pane.",
+      "conviction": 90,
+      "changed_from_prior": true,
+      "why": "Moving a lead with live members breaks the team. On Claude Code 2.1.284 every graceful exit deletes the team it registered, a resumed lead starts a new, empty team (13 of 13 observable cases), and a cross-account team move has never been run. The worst a hold can do is stall. The one real hold kept its team intact but sat idle 3 h 26 min past its reset, because all 85 of our in-place nudges have failed. The case is rare: 1-2 of 109 limit episodes since 08-19 (0.9-1.8%), 0 on 2.1.280 or later, and 5 of 108 parked events if August is counted. Claude Code's own continue never fires here because Remote Control blocks it (0 vendor prompts in 98 episodes), so our typed continue at reset + 2 min is the only wake and must land together with the hold.",
+      "implementation_steps": [
+        {
+          "step": "Hold a lead with live members on the hook lane, in the shared recycle probe, and land it together with the wake",
+          "kind": "code",
+          "detail": "Location: handoff-fire.sh --probe-recycle-preconditions, next to REFUSED:teammate (:9552) and before the background-work gate (:9612-9614).\n- Resolve the lead sid the same way the self-close gate does (:10242-10252).\n- Emit prp_verdict \"HELD:team\" 3 when the shared live-member test (next step) finds any member.\n- Fail closed if ps cannot be read.\n\nEvery hook-lane move reaches this probe through lr-fleet --one and the lr-handoff precheck (lr-handoff.sh:1223-1228), which already maps HELD:* to NOTMOVED. That covers REQUEST (lr-reset-poller.sh:1022-1025) and REROUTE (reroute_parked, :1577-1615). REROUTE has no autorecover.on check and no team check. It fired on 415a3aac at 2026-09-29T03:07:23Z while that sid's hook request was HOOK-HELD (poller.log:5754). autorecover.on is present (mtime 2026-09-29T05:22Z), so both lanes are live. Note that hf_bg_work_gate counts only shell-snapshot children of the lead pid (handoff-fire.sh:2497-2521), so pane teammates never trigger a hold today.\n\nOrder: ship this gate in the same land as the fixed wake and page (the nudge_in_place, poller-routing and reconciler-wake steps). Landed alone, it turns every held lead into 3c73a9d9's silent multi-hour stall.\n\nAdd a bats case: a lead with a live member returns HELD:team and nothing is typed.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "One live-member test, shared by the census, the probe and the last read",
+          "kind": "code",
+          "detail": "Move lru_snapshot and lru_has_live_teammate (lr-upgrade.sh:241-274) into a sourced lib.\n\nThe test: a live, non-zombie process whose argv0 basename is claude or claude.exe and whose args contain --parent-session-id <full sid>.\n\nSwitch census.live_members (census.py:34-37) to the same rule. Today it matches the substring '@session-<sid8>' against every process, and that has matched quoted prose twice (cc-teardown:446-448, probe.md:45-47). The three current tests agree on 12 of 12 real producer argvs, and only the lr-upgrade form also catches named teams.\n\nPin the bash and Python copies equal with a parity test over the 8-row fixture: a real member, plus shell, claude-brief, jq, zombie, named-team and node-argv0 rows.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Re-check members just before /exit, and answer Stay for leads, keyed only on live processes",
+          "kind": "code",
+          "detail": "Run the shared test inside hf_recycle_last_read (handoff-fire.sh:2881-2940), right before /exit is typed, so a member that appears after the probe still blocks the exit.\n\nBelt, on every lane: when the subject leads live members, answer the 'Background work is running' dialog with cancel (Stay). Only three callers do this today: act.py:62, lr-handoff with LR_PLACED_BY=reconciler (:1688-1690), and lr-upgrade with a role set. The hook lane defaults to 'Move to background and exit' (5 answers on 09-29), which still runs cleanupSessionTeams.\n\nWhat the belt keys on:\n- On 2.1.284, a pane member that exits by itself keeps its lead-side task at status 'running' for the life of the lead. Only TaskStop and a shutdown_approved frame change it, and no pane-liveness poll exists.\n- The member also stays listed in teams/<t>/config.json.\n- So the dialog can show ghost 'teammate' rows, and the config can list ghost members.\n\nKey the belt on the live-process test only, never on dialog rows, teamContext or config.json. Otherwise a lead whose team has finished is held forever. A resumed lead has no teammate tasks at all, so for it the argv re-check is the only guard.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Stop lr-upgrade's auto-enqueue from treating a rate-limited session as idle",
+          "kind": "code",
+          "detail": "lru_at_rest counts an 'assistant api-error' tail as at rest (lr-upgrade.sh:221-222). lr-upgrade.sh has no limit or headroom gate: grep for rate_limit|limited|headroom finds 0 hits. lru_auto_enqueue (:1461-1480) queues the upgrade, upgrade-teammate and upgrade-lead dispositions on every poller tick, and lru_lead_block allows upgrade-lead once the members run the target binary.\n\nThe result: a held, limited lead and its members could get /exit (plus Ctrl-C twice on the background-job path, :1007-1008) and a relaunch on the still-limited account. The relaunched lead cannot hear its pane members.\n\nFix: in the census and auto-enqueue, skip any session whose last record is a rate_limit API error until a fresh assistant turn follows it. Add a bats case.\n\nThis is latent today. poller.log shows 11 distinct sids queued by UPGRADE-AUTO on 09-29 (0715cd0c, 1395d071, 139798ad, 2729a080, 29596290, 7c395da7, 7e77a8ce, 97e01e47, b742e38b, dcbd2f8e, ebb8bb8c), and none was limited when it was queued. The closest was 0715cd0c: last queued 05:30:11Z, limited 05:32:07Z, and every drain skipped it as relaunch-surface-unverified.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Close the reconciler's flicker leak out of HELD:team",
+          "kind": "code",
+          "detail": "(a) classify.map_notmoved (classify.py:121-142): add a 'team' row mapping to ('HOLD','HELD:team'). Without it, a HELD:team precheck refusal is scored DETERMINISTIC, then BACKOFF, then ESCALATED.\n(b) settle.rebucket (settle.py:236-247): when the bucket is HELD:team, rewrite WAIT_SLOT, WAIT_DATA, WAIT_CAPACITY, BACKOFF and PLANNED to HELD:team. For PLANNED, also call plan.unassign.\n(c) Leave HELD:team only after members read 0 on 2 consecutive passes. A finished team is still released (d83af9ce's false hold cleared after 31 min), but a one-pass flicker is ignored.\n(d) may_actuate (act.py:403-437): refuse A while live members > 0.\n\nUnit tests: sim case A (member counts 1,0,1; today A fires on the 0 pass) and sim case B (1,0,1,1 with no source fact; today WAIT_SLOT, then PLANNED, then A).",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Reconciler: hold a lead with live members",
+          "kind": "none",
+          "detail": "Already coded and unconditional on origin/main: census.py:131-134 returns HELD:team before placement, HELD:team is not a mover state (plan.py:130-136), and act.choose returns A only for PLANNED (act.py:450-451). It shows in plans only, because recon.on is absent. The flicker-leak step closes its leak.",
+          "already_in_effect": true,
+          "operator_only": false
+        },
+        {
+          "step": "Record that Claude Code's own continue does not run here, and design the wake around that",
+          "kind": "doc",
+          "detail": "In the plan and architecture docs, record that the vendor wait never arms on this fleet. Evidence:\n- On 2.1.284, the auto-arm and the auto-opened /rate-limit-options menu both return early on Sm(). Sm() = replBridgeActive || bg-session || teammateAgentId.\n- remoteControlAtStartup is true in all 5 config dirs.\n- 86 of 88 limited non-teammate transcripts on 2.1.260 or later carry bridge-session records; the other 2 are sdk-cli.\n- The vendor prompt occurs in 0 real transcripts.\n- 0 of 45 undisturbed or notification-only episodes fired.\n- The same gate is in 2.1.260 and 2.1.280, and 2.1.220 has no auto-continue at all.\n\nConsequences:\n(1) The stale ('press enter to continue') state and the >24 h menu do not occur while Remote Control is on, so the wake finds a plain, empty composer.\n(2) The gate depends on an untracked, per-machine setting: git grep finds no remoteControlAtStartup in the repo. Secondary and quaternary each record bridgeOauthDeadFailCount=1, and a failed bridge re-enables the vendor wait for that session. That is why the wake waits until reset + 2 min (past the 90 s jitter maximum) and checks lr_engaged_after first.\n(3) If the menu ever does open, cc_tui_submit abstains with rc 2 and never types into it (it has no composer rule pair), so the wake pages.\n\nChange neither remoteControlAtStartup nor autoContinueAtUsageLimit. None of these is needed: a pane-modal recognizer for the limit menu, a held-lead marker for cc-pane send, or a reso-keepalive fix.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Fix the hook lane's in-place wake (nudge_in_place)",
+          "kind": "code",
+          "detail": "Root cause of 0 NUDGED and 85 NUDGE-FAILED rows (all 'could not type', 09-10 to 09-22): lr-reset-poller.sh:707 sets only CC_TERM_KITTY_TO. The it2 shim's kitty gate reads KITTY_WINDOW_ID or CC_TERM=kitty, and launchd sets neither, so `session run -s <kitty id>` went to the real iTerm2 it2. This was reproduced without side effects.\n\nFix:\n- Replace the call with `( . cc-tui.sh && cc_tui_submit \"$pane\" \"$pf\" )`, as REQUEST prompt mode already does at :1041. That adds the composer gate and the transcript proof.\n- Type a plain continue text in the lf_nudge style, not '/limit-recover', which runs the skill and can choose a move.\n- Fire at reset + 2 min or later, and only if no assistant turn has appeared since the reset.\n- Add a bats case that runs the real shim with IT2_WRAPPER_REAL stubbed, replacing the LR_IT2_BIN stub (tests/lr-reset-poller-inplace.bats:87-98).",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Poller: route a held lead to the parked lane, stop re-dispatching it, and keep it out of the latch-expiry resume arm",
+          "kind": "code",
+          "detail": "The request lane never writes parked/<sid>.json. Only §1 (:1265-1268) and §1a (:1467-1470) do, and §0 sees 'dispatched' (rc 0), never the NOTMOVED verdict.\n\nChanges:\n- In rq_stale_reason / §0, retire a live-team lead's request as 'held:team, resumes in place at reset'. Otherwise it burns RQ_MAX_ATTEMPTS=3 at RQ_RETRY_MIN=10 (:828-829).\n- Let §1/§1a keep parking it.\n- Make reroute_parked (§2a) skip it.\n- Keep §2 (the fixed nudge_in_place) as the at-reset wake, and page if no fresh turn follows.\n- A held lead must never reach §2's --resume spawn arm (:1829). Today, after 3 failed nudges and a 6 h LATCH (poller.log:2961/2973/2986/2987), the arm RESUMED 3c73a9d9 into a new GUI pane at 18:42:24Z (poller.log:3070). By then the session had recovered and recycled itself 2 h 17 min earlier. For a held lead, the fresh-turn check must retire the record, and a latch expiry must page, never spawn.\n- The latch's only signal is an osascript banner (:332). For a held lead, send the page instead.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Reconciler: the reset-time wake for HELD:team",
+          "kind": "code",
+          "detail": "This is the only wake, so it is required, not optional.\n\nFlow:\n1. Record the reset ETA on the HELD:team wait record.\n2. Select records where wait.eta + 120 s + admit.jitter_s(sid) <= now (admit.py:66), and admit them through Admission.pace_wake (admit.py:162). Both have 0 callers today.\n3. If lr_engaged_after(eta) is already true, close the record as 'continued in place'.\n4. Otherwise act.choose (act.py:447-456) returns C, and act.cmd_engage (act.py:206-209, cc_tui_submit) types one continue into the lead's own pane.\n5. Just before typing, re-check headroom, an empty composer, an unfocused pane and live members.\n6. On cc_tui_submit rc 2, 3 or 4, page with the reason and do not retype. Keep the page at 600 s after the reset (types.py:127).\n\nThe wake text tells the lead that members whose last turn hit the limit resume when it messages them. That claim rests on a static trace of 2.1.284 only: a member's InboxPoller has no gate on its last error, and its own auto-resume is off. No team-member transcript on disk has a rate_limit record, and 0 of 3c73a9d9's 8 members were limited, so that case does not prove it.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Make the wording true",
+          "kind": "code",
+          "detail": "- census.py:133: change 'decision 4 unruled' to 'lead with live members: hold; continued in place at reset (decision 4)'.\n- Remove the phantom LR_TEAM_UNIT flag, which nothing reads, from LIMIT_RECOVER_FLEET_V2.md:129 and :481 and from the census.py:9 docstring. State that the hold is unconditional in v1.\n- report.py:43 ('resumes after the reset') and :115-116 ('wakes at <reset>') are true only once the wake lands. Until then, say 'held: team lead; paged 10 min after reset'.\n- LIMIT_RECOVER_FLEET_V2_ARCHITECTURE.md:732: live_teammates_of is a self-close gate (:10253), and the cited range :9097-9130 is stale.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "State that HELD:team overrides decision 3's weekly move, and page early",
+          "kind": "doc",
+          "detail": "The census returns HELD:team before placement runs, so decision 3's rule (move weekly caps with more than 6 h to reset) never reaches such a lead.\n\nMeasured waits:\n- Team pairings: 0.6, 1.3, 3.5, 3.8 and 5.2 h, plus one 10.9 h weekly re-park (ff519bfd).\n- Corpus seven_day waits: median 7.9-9.9 h, max 36.7 h.\n\nIf the reset is more than 6 h away, page when the hold starts. The operator can then shut idle members down and let the lead move alone.\n\nDo not add an idle-age release rule. In the one true hold, members idle 36-40 min went back to work. In the false hold, the member had been idle only 13 min.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Stop named leads from being misread as teammates",
+          "kind": "code",
+          "detail": "lr_predicate.is_teammate_head (lr_predicate.py:441-457) returns True for Claude Code's type:\"agent-name\" header. 13 heads carry that header, and none has a teamName. They include lead 40a4b816, and adb89f78 was actually filed under teammate-skip.\n\nThe census checks TEAMMATE first (census.py:115-116) and writes no record, so such a lead is never held, moved or paged.\n\nFix: require type=='user' or a teamName. Add a regression fixture.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Rig and plan tests for the wake",
+          "kind": "code",
+          "detail": "Plan/act tests:\n- A HELD:team record past reset + 2 min with no fresh turn chooses C under pace_wake.\n- It chooses nothing when a fresh turn already exists, when the members are gone, when the composer holds a draft, or when the pane is focused.\n\nRig case: a lead with a live-member fixture is woken after the reset, its members are never exited or relaunched, and the record closes on lr_engaged_after.\n\nPoller bats cases:\n- Nothing with /exit is typed into a held lead before its reset.\n- A latched held lead is paged at latch expiry and never --resume'd into a new pane.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Record the ruling and correct the evidence in packet 46ed0af12b01",
+          "kind": "doc",
+          "detail": "The packet reads open / 75 / 'hold in v1, build the cross-account team move in v2'.\n\nRecord the ruling: hold; continue in place at reset with our typed continue at reset + 2 min (Claude Code's own continue is blocked here by Remote Control); page on failure; 90%. Cite the operator's 'proceed with all as recommended'.\n\nIn the receipt and in decision-research-2026-09-29.md, correct four things.\n\n(1) Frequency. Give both figures with the period each covers:\n- Current period (2.1.260+, transcripts from 08-19): 1-2 of 109 limit episodes (0.9-1.8%). Only 3c73a9d9 had a member write after the limit, and 0 episodes were on 2.1.280/2.1.284.\n- 08-01..08-18 (2.1.220; poller blind to 'next' until eaf0ff66d on 09-10): 5 poller-log team pairings, which is 5 of 108 PARKED events (4.6%) overall and 0 of the 70 PARKED events from 08-19 on.\n\n(2) Resume base. Write '13 of 13 observable resumes made a new team (10 historical with a surviving team dir, 3 live processes)', not '0 of 267'. 257 of the 267 left no team dir to observe.\n\n(3) The 3c73a9d9 hold kept the team intact, but that is all it shows:\n- The lead was not continued at its 12:00Z reset: 3 NUDGE-FAILED, then LATCHED.\n- It sat idle until 15:25:51Z. What woke it is unmeasured.\n- 0 of its 8 members were limited, and only 5 of 8 wrote again.\n- The poller later --resume'd it into a new pane at 18:42:24Z.\n\n(4) The W0 premise. Change it to '0/12 goals cleared, 5/12 proven armed'.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Keep the cross-account team move in v2, behind a throwaway-team probe",
+          "kind": "doc",
+          "detail": "Record the prerequisites and hazards:\n- Move the members first; they inherit the lead's CLAUDE_CONFIG_DIR and were limited in the same tick as their lead in all 5 poller-log pairings.\n- Team dirs and inboxes are per config dir, so copy the team dir to the target account.\n- Set CLAUDE_INTERNAL_ASSISTANT_TEAM_NAME.\n- Accept the vendor's deaf-lead limit.\n- On 2.1.284, cleanup kills only panes the exiting process spawned, but always deletes the team dir it registered.\n- A --resume'd lead registers a new, empty team (13 of 13 observable). This explains 8ad3a9d2's lost team on 08-18.\n- A lead message that reaches a limited member before the member's reset is spent.\n- Dialog rows and config.json keep members that have already exited. Before relying on either, send a shutdown_request to each member and wait for its shutdown_approved, or TaskStop it.",
+          "already_in_effect": false,
+          "operator_only": false
+        }
+      ],
+      "residual": "Five things cannot be settled read-only:\n\n- **The live wake.** Whether one continue typed at reset + 2 min wakes a held lead unattended on 2.1.284. The evidence so far is cc_tui_submit's 4 of 6 clean outcomes under launchd. No wake at a reset has ever been observed on a held lead: 3c73a9d9's lead was never continued at its reset.\n- **Limited members.** Whether limited members resume when the lead messages them. This rests on a static trace only. No team-member transcript on disk has a rate_limit record, and 0 of 3c73a9d9's 8 members were limited.\n- **The 3c73a9d9 stall.** Why the lead and member r7 both stalled until 15:25:51Z, 3 h 26 min past the reset. The cause is unidentified, and what delivered the batched idle notifications then is unmeasured.\n- **The cleanup at runtime.** Whether 'Move to background and exit' runs cleanupSessionTeams on 2.1.284, and whether the 2000 ms shutdown race cuts the pane close short. The trace is static only; a runtime check needs a throwaway lead with --debug.\n- **The v2 move, and historical liveness.** Whether a cross-account whole-team move works end to end needs a two-account throwaway-team probe. Whether members were running processes at the historical limit moments cannot be known: no ps history exists, and 94 of 378 member transcripts have no exit stamp.\n\nOne standing dependency: the vendor wait stays off only while Remote Control stays on, and that is an untracked per-machine setting. The wake's reset + 2 min wait and its fresh-turn check keep it correct either way."
+    },
+    {
+      "n": 6,
+      "id": "7561eb4a4dfb",
+      "recommendation": "Keep the draft stash off. Recovery must not stash, move or restore an unsent draft. A limited pane holding a real draft stays where it is. Nothing needs switching off, because no code implements the stash; it exists only in doc prose. What needs fixing is the record and the page. First, rewrite the receipt using the corrected counts: at least 26 holds, at least 8 of them unreadable, and 1 genuine operator draft, which came from a focused self-recycle rather than a limited pane. Also record that \"nothing is typed into a draft pane\" has one exception: unfocused composers of 2 characters or fewer are treated as stray keystrokes and scrubbed. Second, send draft-hold pages through the one channel measured to deliver: macOS Notification Center, via the supervisor's argv-safe osascript helper. The desk mailbox becomes a second copy, and the phone joins once the operator sets up Pushover. Revisit only if the raw-screen capture added by this ruling finds 3 or more genuine one-line drafts in unfocused limited panes. Genuine multi-line drafts are routine, but they are outside the stash's one-line scope, so they do not count toward the trigger. Even at the trigger, quoting the draft in the page comes before any stash-and-restore.",
+      "conviction": 90,
+      "changed_from_prior": false,
+      "why": "At least 26 draft holds were logged from Aug 23 to Sep 30. Only one was a real operator message: a roughly 200-character instruction in pane 513 on Sep 24. The composer reader returned it with every space stripped, so a restore would have typed back a corrupted copy, and the same readers also drop all non-ASCII text, which appears in 12.1% of the operator's 40,332 past prompts. Every hold in a limited pane was junk, such as a stray \"I\" that held pane 815 for 8 h 11 m, and a stray-keystroke rule now clears that without any stash. What actually fails is the alert: the desk role reads dead, all 677 phone sends were inert, and the reconciler's page call exits 2, while all 100 recent Notification Center banners were shown.",
+      "implementation_steps": [
+        {
+          "step": "Runtime state: the stash is off by absence, and both lanes hold a real draft pane without typing, with one scrub exception",
+          "kind": "none",
+          "detail": "`git grep -i -E 'draft.?stash|LR_DRAFT' origin/main -- scripts bin hooks tests` returns nothing, so the stash exists only in docs: LIMIT_RECOVER_FLEET_V2.md:128 and :418, and ARCHITECTURE.md:593 and :737 ('the stash opt-in'). Hook lane: handoff-fire.sh:9643-9644 gives HELD:draft, then lr-handoff exits 6 and nothing moves. A draft typed after the confirm is caught and the move undone (lr-handoff.sh:1757-1766; handoffs.jsonl 2026-09-29T18:19:00Z class=recycle-held-draft, 'unconfirm rc 0'). Reconciler: HOLD-DRAFT, re-probed every 120 s (settle.py:28). The exception: on an UNFOCUSED pane, a composer of 2 characters or fewer is classed stray-keystroke (composer-intent.sh:65-67). It gets a receipt and the recycle's Ctrl-U scrubs it (handoff-fire.sh:9636-9642). composer-discarded.log shows pane 815 'I' at 06:54:08Z and 07:22:37Z, and pane 849 'e' at 09-29T04:17:27Z.",
+          "already_in_effect": true,
+          "operator_only": false
+        },
+        {
+          "step": "Record the ruling 'off' in decision packet 7561eb4a4dfb with the corrected receipt",
+          "kind": "none",
+          "detail": "Record with cc-decide at conviction 90; the packet currently reads conviction 70, status open. Receipt: at least 26 holds from 08-23 to 09-30. Sources: transcript 'composer holds unsubmitted text' rows (17 panes); fleet/one-*/detached.log 'precheck composer:' rows; the desk dead-letter ~/.claude/mailbox/dead-letter/672.md:1173, :1586, :1589 and :1854 (panes 237 'd', 265 unreadable twice, 341). At least 8 unreadable. One genuine operator draft: pane 513, 2026-09-24T17:34Z, a focused self-recycle, read back with every space stripped ('PyramidPrinciplesleadingwiththeanswer,…'). One operator drag-test sentence (pane 341). The rest junk: stray keys, queued-message hints, faint suggestions, a paste chip, a key-mash. No hold in a limited pane was genuine. Wait cost measured: pane 815 held 8 h 11 m on a stray 'I' (fleet results 23:11:24Z to 07:23:00Z). Also cite the prior finding that genuine drafts are routine but multi-line: recycle-100p-2026-08-22.md:26 (≥8 swallowed real messages before the gate) and bin/it2-kitty:790-793 (2 multi-paragraph drafts in 27 windows). The operator's 'proceed with all as recommended' covers recording it.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Correct the recorded reason, conviction and what ends a draft hold in the plan and architecture docs",
+          "kind": "doc",
+          "detail": "LIMIT_RECOVER_FLEET_V2.md:418: change conviction 70 to 90. Row 6 at :433 currently reads 'reader strips spaces and truncates by width … only 3 real draft holds (80%)'. Replace it with the corrected receipt above, and note that height cuts text off (cc-tui.sh:280-282) while width only wraps it. :128: change 'LR_DRAFT_STASH=off (default)' to 'not built; nothing reads it'. ARCHITECTURE.md:593 and :737 ('The stash is opt-in'): change to 'no stash exists; a ≤2-character stray composer on an unfocused pane is scrubbed with a receipt'. ARCHITECTURE.md:349: say a held draft is paged through Notification Center, not 'filed through cc-backlog needs'. Make the same corrections to row 6 of ~/.reso/limit-recover/design-v2/decision-research-2026-09-29.md.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Move the supervisor's liveness-free Notification Center page into a shared helper",
+          "kind": "code",
+          "detail": "scripts/lead-supervisor.sh:315-342 (page_escalate_os and os_channel_available) passes text as AppleScript argv, which is injection-safe. It caps text at 200 characters, is bounded by sup_bounded 10, returns 0 only when the post succeeds, and honors CC_SUP_OS_CHANNEL=off|on|auto. Move it to scripts/lib/ so lr-fleet.sh, lr-reset-poller.sh and lr_recon/report.py can call it. Do not reuse lr-reset-poller.sh's notifications at :254, :332, :671, :1307 and :1854: they interpolate text into the AppleScript source, and quoting an operator draft that way opens an injection hole. Measured delivery: usernoted db2 has 100 of 100 com.apple.scripteditor2 records presented, 2026-09-29 15:54Z to 09-30 01:37:38Z. That is only about a 10-hour window, and 35 of the 100 are one repeated fallback.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Reconciler page, fix 1: re-read the mode on every pass",
+          "kind": "code",
+          "detail": "lr_recon/__main__.py:655-659 builds the Reporter once. Writing recon/mode=act on the running daemon (pid 20253, KeepAlive) therefore leaves every page, including the HOLD-DRAFT max-age page (types.py:120, 900 s), in shadow mode until a restart. Set rep.mode from the current mode on each pass. Key the report.py latches (:471-478, :669-681) by mode, so latches saved in observe mode cannot suppress act-mode pages. Add a test_main case that flips observe to act inside one process and asserts the sink is called.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Reconciler page, fix 2: a sink that parses, with failures counted and the OS channel as fallback",
+          "kind": "code",
+          "detail": "report.py:432 `_cc_notify('--page', text)` and lr-recon-watchdog.sh:154 pass an option that bin/cc-notify:566 rejects with exit 2. The option never existed (`git log -S--page -- bin/cc-notify` finds nothing). _cc_notify (report.py:406-417) sends output to DEVNULL with check=False, so failures stay at 0 and the hourly latch is set anyway. Send with `--role desk`. On any non-zero exit (today rc 3 role-unset, since `cc-roles read desk` gives 'ABSENT (reason=dead-target)') or 'verdict=unverified', post through the shared Notification Center helper. Count a failure only when both fail. Add a test that the default sink's argv parses under bin/cc-notify.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Hook lane: name the draft in the verdict, reach a person, and page when retries run out",
+          "kind": "code",
+          "detail": "lr-fleet.sh:904-907 and :1407-1421 turn a precheck HELD rc 6 into 'verdict=FAILED rc=6', which reads the same as REFUSED:not-limited. Parse 'precheck verdict: HELD:<reason>' from the run's stderr into the verdict token. lr-fleet.sh:1432-1433 sends to `--role desk` while the desk is dead, so cc-notify takes the role-unset path (bin/cc-notify:936-942), rings the inert phone, exits 3, and the verdict sits on disk only. For HELD:draft, also post through the Notification Center helper. REQUEST-EXHAUSTED (lr-reset-poller.sh:989-991, after RQ_MAX_ATTEMPTS=3 at :828) only logs. Make it page once through the same helper, naming the pane and 'unsent draft'.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "No-keystroke capture: save the raw screen at every draft hold, quote the draft in the page, and measure the revisit count",
+          "kind": "code",
+          "detail": "On HELD:draft, HOLD-DRAFT or a stray-keystroke receipt, write `kitten @ get-text --ansi` of the pane under ~/.claude/logs/composer-snapshots/, keyed by pane and sid. Today bin/it2-kitty:1402-1404 saves plain text only, and at least 8 historical holds survive only as '<unreadable>'. Put the de-fainted composer row, spaces and non-ASCII kept, in the page body as argv. The revisit trigger counts only genuine one-line drafts in unfocused limited panes found in these snapshots: 3 or more reopens the question. Multi-line drafts, focused panes, hints and stray keys do not count. This types nothing.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Close the non-ASCII holes in the promise that drafts are never touched",
+          "kind": "code",
+          "detail": "observe.py:266-279 keeps only ' '..'~', and handoff-fire.sh:3489-3495 runs `LC_ALL=C tr -cd '[:print:]' | tr -d '[:space:]'`. This opens two holes. (a) A draft written only in non-ASCII reads EMPTY, and /exit could merge into it. (b) The stray-keystroke class (composer-intent.sh:65) is judged on that stripped read, so a mostly non-ASCII draft whose ASCII part is 2 characters or fewer is receipted and scrubbed whole. Strip only the known chrome ('❯' and U+00A0), count any other non-space character as content, and classify stray on the full read. Add fixtures under tests/fixtures/lr-recon/screens and bats cases for both holes. Exposure from history: 4,872 of 40,332 deduped prompts (12.1%) contain non-ASCII; 1 is non-ASCII only.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Arm the phone leg (Pushover credentials) so pages reach the operator away from the Mac",
+          "kind": "env",
+          "detail": "All 677 push-records (09-22 to 09-30) are 'inert / creds unset'. scripts/push-send.sh:60-65 reads only $PUSHOVER_TOKEN and $PUSHOVER_USER, which appear in no shell rc or LaunchAgent plist. The operator exports both in ~/.zshenv and the launchd environment, then runs `scripts/delivery-verify.sh --receipt` once. Success is a PASS row in ~/.claude/autonomy/delivery-probe.log. Only the operator can do this, since it needs their secret. It does not block 'off'. It is the only path for overnight holds, because a banner reaches no one while the operator is away.",
+          "already_in_effect": false,
+          "operator_only": true
+        }
+      ],
+      "residual": "Six things cannot be settled by reading. (1) How often genuine one-line drafts will appear in unfocused limited panes. None has been observed so far; the one genuine draft on record, pane 513, came from a focused self-recycle, and the --ansi capture is what makes the W5b count on pane 1308 readable. (2) What the 8 or more unreadable holds contained (panes 195, 314, 330, 338, 127, 480, 810, 265). No keyed snapshot survives. (3) Whether the operator sees and acts on a Notification Center page. The 100 of 100 banners marked presented cover only a 10-hour daytime window, delivery overnight or under Focus is unmeasured, and the channel carries noisy digests. (4) Whether the phone leg delivers once Pushover credentials exist; that needs the operator's secret and one live send. (5) Whether a queued message, which is also rendered faint (it2-kitty:795-801) and so reads as empty, is lost or merged when /exit runs in a limited pane. (6) Whether kitty get-text keeps runs of spaces in the 2.1.284 prompt box, and whether a short restore paste turns into a '[Pasted text #N]' chip. Both need a live keystroke probe. None of these would flip 'off'. They decide only whether the revisit trigger ever fires and how fast a real hold clears."
+    },
+    {
+      "n": 7,
+      "id": "ad16e2858036",
+      "recommendation": "Rule MOVE, but only once the on-path is safe. Apply it by changing the code default: LR_MOVE_FOCUSED defaults to on, and =off becomes the kill switch. HOLD stays in force until five fixes and focus logging have landed green.\n\nBoth skeptics' refutations hold on the code. They change the conditions for the flip and the conviction, not the direction.\n\nFive fixes before the flip:\n1. Decide stranding from the lower layer. If lr-handoff's in-place recycle fails and no confirm retired the source (no `<sid>.jsonl.handed-off`), call `lr-transplant --phase abort` and report NOTMOVED HELD instead of STRANDED. Today five distinct exits fall through to STRANDED, not the two the prior fix matched.\n2. Stop the guard from eating prompts during an unconfirmed admit. If the tombstone exists but the source is not retired, let the prompt through, and have the move abort when the transcript is no longer at rest. Also run the focused double read before the admit writes the tombstone, not only after it.\n3. Send the /exit undo DELs only when the read-back ends with '/exit'.\n4. Add bats coverage for the on-path.\n5. Log focus and operator idle time on every dispatch, before the flip. No data threshold is required first.\n\nKeep the poller's nudge_in_place. When its routing is repaired, gate it in the same change. Do not use plist env.",
+      "conviction": 70,
+      "changed_from_prior": true,
+      "why": "Holding a focused pane costs at most one pane at a time. The focus read requires the window, its tab and its OS window all to be focused, and a live read found 0 of 13 windows focused. Six of tonight's 7 recoveries were manual runs typed by the operator into a different pane. But the one pane held is usually the one the operator last worked in, and it stays stuck all night if kitty is left in front. Moving is not ready yet. In the only multi-pane batch since auto-recovery went on, the operator typed into 3 of 3 target panes at the reset. Under 'on', a focused pane also carries a tombstone for 12-21 s (up to about 3 min) before its /exit, and any prompt submitted then is erased with a false 'close this pane'. Conviction is 70% because focus at the moment of action has never been measured. The flip is one env var to reverse, and every fix it waits on is needed under either setting.",
+      "implementation_steps": [
+        {
+          "step": "Record the ruling in decision packet ad16e2858036: move via a code default, gated on the pre-flip fixes and logging, conviction 70",
+          "kind": "none",
+          "detail": "The packet reads status open, conviction 75. The relayed 'proceed with all as recommended' is the ruling. Record it at 70, not 86: both skeptics' refutations held on re-read at HEAD 69ddcd35a. Cite this adjudication.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Decide 'stranded' from whether the source was retired, not from stderr text; abort an unconfirmed admit",
+          "kind": "code",
+          "detail": "In-place mode runs only `--phase admit` (lr-handoff.sh:1388). The HELD branch (1755-1757) needs 'recycle ABORTED before /exit (held:' plus 'unconfirm rc 0.'. Everything else falls to STRANDED, exit 4 (1767). Five exits fall through while the source is still unretired:\n- the DEFERRED lines at handoff-fire.sh:14712 and 14717\n- the composer gate's 'recycle REFUSED after 180s' (14580)\n- the heartbeat ABORTED (after await_armed)\n- the pane-proof ABORTED\n- 'recycle ABORTED at the last read' (~14780)\nA text match on 'DEFERRED|REFUSED' misses the last three, and the repo lesson 'two causes, one rc: ask the layer below' applies. Fix: at the fallthrough, if `<sid>.jsonl.handed-off` is absent under the source store (no confirm ran), call `lr-transplant --phase abort --record-id <rid>`. Take the reason from handoff-fire's recycle-held-* event, or 'unknown'. Emit 'verdict: HELD:<reason>' plus NOTMOVED, exit 6, and extend settle.py's _RCY_HELD mapping. abort refuses while the lock's recorded actuator or a watcher is alive (lr-transplant.sh ~534-539), so call it after handoff-fire exits, with lr-handoff as the holder. `--phase abort` has 0 production callers today. Add one bats case per exit: admit, then that exit, then assert the tombstone and lock are gone and rc is 6. Needed under either flag value.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Stop the handed-off guard from blocking prompts during an unconfirmed admit, and make an operator prompt win over the move",
+          "kind": "code",
+          "detail": "The guard blocks on the tombstone file alone (hooks/handed-off-session-guard.sh:62-63). It prints 'THIS PANE IS A RETIRED SOURCE ... Then close this pane' and exits 2 (:161-175). Admit writes that tombstone without retiring anything (lr-transplant.sh:21, :856). Under on, a focused pane passes the probe (handoff-fire.sh:9626) and gets its tombstone before the 10 s double read (14715) and the composer gate (up to 180 s, 14545). On 6 canary runs, admit to relaunch took 12-21 s. Fix:\n(a) Guard: when the tombstone is present, `<sid>.jsonl` is present and `<sid>.jsonl.handed-off` is absent, allow the prompt (exit 0) and log it. The source is still canonical, and confirm re-copies anything appended after admit (lr-transplant.sh:22-24). This also frees orphaned admit tombstones such as 07e30aeb.\n(b) handoff-fire: extend the last-moment hf_transcript_at_rest check (today same-account only, ~14786) to remote recycles of a pane read as focused. A prompt that got through then aborts the move, and step 2 aborts the admit.\n(c) Under on, run hf_focus_double_read inside the probe before admit, so a focused pane's tombstone window opens only after two empty reads.\nAdd bats cases for (a) and (b).",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Stop the /exit read-back undo from deleting operator keystrokes typed after our /exit",
+          "kind": "code",
+          "detail": "hf_exit_readback (handoff-fire.sh:2956-2977) sends five DELs on any mismatch. A read-back of '/exitab' becomes '/e'. Send the DELs only when the read-back ends with '/exit'. Otherwise hold without typing (unconfirm plus the held row). Add bats cases for '/exitab' (no DEL, held) and 'ab/exit' (DELs sent) next to test 7 (bats:477-493).",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Add bats coverage for the on-path",
+          "kind": "code",
+          "detail": "Today the only on-path assertion is the probe fragment in bats F (:581). Add these to tests/handoff-fire-recycle-custody.bats beside F (:561) and F2 (:600):\n- hf_focus_double_read passing and failing at 14715\n- _it2_type_line with focused=1 (the suffix anchor at 3339 and 3357-3358 withholds CR when operator text trails the command)\n- a focused stray of 2 characters or fewer read as a draft (9635-9639)\n- hf_recycle_last_read under on (2884)",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Log focus and operator idle time on every dispatch, before the flip",
+          "kind": "code",
+          "detail": "Focus has never been logged: 0 recycle-held-focused rows in handoffs.jsonl, and no 'focused:' lines in the fleet or bundle dirs. The probe already prints 'focused: $PRP_FOCUSED' (handoff-fire.sh:9625). Carry it into the bundle's state/verdict row, the recycle-submitted row in handoffs.jsonl, and the nudge's log row. Record HIDIdleTime at the same moment. It is readable with `ioreg -c IOHIDSystem`; it read 2044 s from a user shell, and from a LaunchAgent it is unmeasured. Record 'unreadable' where it fails. In the reconciler, append a per-pass count of LIMITED sessions read as focused to an append-only shadow ledger (observe.py:214-217 reads it, but last-pass.json is overwritten each pass). This must land before the flip; it does not wait for a data threshold. The data decides the later idle-time hybrid (move a focused pane only after N seconds of no input).",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Flip the default in code: LR_MOVE_FOCUSED defaults to on, =off is the kill switch",
+          "kind": "code",
+          "detail": "Do this only after steps 2-6 are landed and green. Change ${LR_MOVE_FOCUSED:-off} to :-on at handoff-fire.sh:2884, :3339, :9626 and :14710, and census.py:141's default to \"on\". Update bats F (:561-590, which must now set =off explicitly) and lr_recon/tests/test_census.py:93-95. This reaches the hook lane, the reconciler actuators and manual cc-lr, because each runs a fresh handoff-fire, and no launchctl is needed. Focus reads work under launchd because hf_remote_pane_term exports CC_TERM=kitty once a numeric pane resolves (2243, called at 9563 and 11615). Follows the plan's 'default on, off restores' convention (LIMIT_RECOVER_FLEET_V2.md:541).",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Keep the poller's nudge_in_place, and gate it when its routing is repaired",
+          "kind": "code",
+          "detail": "It is the only automated route that resumes a live limited pane on its own account after reset (lr-reset-poller.sh:1643-1646, 1732-1760). The request lane never targets the source account (lr-fleet.sh:745, :803), and recon.on is absent. Today it cannot type: 85 of 85 NUDGE-FAILED, 0 NUDGED. Under launchd, bin/it2:111-112 routes to iTerm2 without KITTY_WINDOW_ID or CC_TERM=kitty. Reset is exactly when the operator was at the panes tonight (3 of 3 at 06:30:54-06:31:00Z), so repair routing and the gate together:\n- deliver through cc_tui_submit, as request prompt mode does at :1040-1041\n- read focus with CC_TERM=kitty pinned, and honor LR_MOVE_FOCUSED\n- take the request lane's run claim\n- add a bats case under an env -i launchd-shaped env\nRetire it only when recon.on makes the reconciler the owner.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Remove the 'unruled' wording and record the ruling and the corrected facts in the plan",
+          "kind": "doc",
+          "detail": "Update census.py:8 and :142, types.py:73, and the handoff-fire.sh comments at 2818, 9621 and 14704. In docs/plans/LIMIT_RECOVER_FLEET_V2.md, fix :481 and :541, and append to the decisions table and the status log. Record these facts:\n- focus is a three-way conjunction, so at most one pane is focused (handoff-fire.sh:1360-1364)\n- 6 of tonight's 7 recoveries were manual runs typed from lead session 83010792 at 03:04Z and 04:16Z; only pane 918 was unattended\n- the only multi-pane batch since autorecover.on (05:22Z) had the operator at 3 of 3 target panes at the reset\n- the presence proxy is 6 of 192 limit records (3.1%, 4 of 85 sessions)\n- the gate landed at 10:09Z (18910dd50), after every event cited",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Land with the project /ship and converge the live layer",
+          "kind": "none",
+          "detail": "Standing-land and standing-converge are authorized in this repo: `CC_DEPLOY_MAX_LAG_COMMITS=0 bash scripts/deploy-live.sh`, never --force. Land steps 2-6 first. The flip (step 7) can ride the same land only if steps 2-6 are green in it. The hook-lane handoff-fire.sh and hooks/handed-off-session-guard.sh go live through their per-file symlinks.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Restart the reconciler daemon so census.py's new default loads",
+          "kind": "none",
+          "detail": "com.reso.lr-reconciler is KeepAlive and runs one persistent `python3 -m lr_recon` with no reload path. deploy-live.sh never boots out daemons (:1295-1300). Run `launchctl kickstart -k gui/$UID/com.reso.lr-reconciler`. Low urgency: until recon.on exists, the census change affects only shadow records.",
+          "already_in_effect": false,
+          "operator_only": true
+        }
+      ],
+      "residual": "Seven things remain unmeasured:\n1. How often a limited pane is kitty-focused when recovery acts. Nothing has logged it yet; the only reads are 9 canary panes, all 'no', and one live read with 0 of 13 focused.\n2. How often the operator is actually present at a pane that reads as focused.\n3. Whether a screen lock or display sleep clears kitty's is_focused. If it stays true, HOLD strands the pane left in front overnight.\n4. Whether HIDIdleTime can be read from a LaunchAgent. It can from a user shell (2044 s).\n5. How wide the races are between each exact read and its CR (2966-2968, 3357-3359).\n6. Whether keystrokes typed while Claude Code exits land in zsh.\n7. Who typed /limit-recover into panes 998, 999 and 1000 at 06:30:54-06:31:00Z. Transcripts mark it origin human and no automated typer was found, so it was most likely the operator.\n\nAfter the fixes, MOVE's remaining risk is a sub-second race that loses or strays a few keystrokes. HOLD's remaining cost is one pane stalled until the operator returns.\n\nTwo other lanes also type into focused panes and are outside this ruling: the lr-upgrade shim retype, which uses a substring check (it2-kitty:625), and cc_tui_submit engage, which has no focus read."
+    },
+    {
+      "n": 8,
+      "id": "4a08882545c5",
+      "recommendation": "Keep the per-account cap at 8 sessions (KMAX) and do not add a raise that applies only during a storm, including a separate recovery-only setting. Record the ruling with corrected reasons.\n\nThe reason on record, \"a measured 5-6 concurrent-request limit\", was never measured on this machine. It came from GitHub issue GH#62426. The 5-hour floor is also the wrong mechanism to cite, because it limits only one placement pass.\n\nThree reasons hold up on the evidence:\n1. **A raise buys almost nothing.** Tonight it would have saved 0 recovery-minutes, and 0 of 12 hook-lane runs parked on the cap. Across all 31 parked recoveries on record, it would have saved about 18 minutes for one session and 0 extra recoveries.\n2. **The cap is the only limit that builds up across passes.** Movers placed in recent passes count against the cap as phantom sessions for 15 minutes, and nothing else carries over. The floor's per-pass count resets on every call, and the reconciler runs a pass about every 3 seconds. So at 16, up to 15 movers could pile onto the top-ranked account before its burn shows up. That is the second-cascade pattern seen on 2026-09-19.\n3. **Where the cap does bite, the session count is the problem, not the number 8.** 63% of tonight's session count on fully capped accounts was subagent transcripts. For heavy movers, the weight rule causes about 154 of 155 modeled wait minutes.\n\nBurst protection stays as it is. Today the live legacy lane allows 2 concurrent recoveries. From the reconciler cutover (the recon.on flag), the first-turn pacer allows 3 per account.\n\nThe count and weight fixes are separate items. Revisit the cap only when either of these shows a real storm waiting on it:\n- the reconciler in act mode (live, after the cutover) holds a cohort on the cap (reason kmax-concurrency) for more than about 10 minutes, or\n- a hook-lane request uses up its 3 attempts with every account excluded by the cap.\n\nThe current shadow run cannot show this: it never charges its own placements, so its plans never count against later passes.",
+      "conviction": 86,
+      "changed_from_prior": false,
+      "why": "Raising the cap would have saved 0 recovery-minutes tonight. Across all 31 parked recoveries on record it would have saved about 18 minutes for one session, with 0 extra recoveries. At the same time, the cap is the only limit that stops a cohort piling onto one fresh account across passes, since movers placed in recent passes count against it for 15 minutes. Where the cap did block every account, the count was at fault: 63% of it was subagent transcripts. A raise to 12 barely moves the worst waits (90th percentile 38 to 40 minutes). Conviction drops from 92% to 86% because the evidence against the raise's server-side cost is weaker than first stated. Only 40 probe first turns cover it, and retried refusals are not saved in interactive transcripts. Also, 29 of the 32 overload errors come from before 09-04, when the count did not yet include subagents.",
+      "implementation_steps": [
+        {
+          "step": "Keep router.KMAX = 8",
+          "kind": "none",
+          "detail": "accounts.json:44 holds \"KMAX\": 8 at 69ddcd35a, which is both HEAD and origin/main. ~/.claude/accounts.json is a symlink to it. It is read at bin/claude-accounts:2363 (the --rank --recovery hook lane), at :4283 (--place: cap = KMAX - kw - phantom_w) and in bin/cc-wave-plan:492-496. Nothing to change.",
+          "already_in_effect": true,
+          "operator_only": false
+        },
+        {
+          "step": "Keep burst protection as it is: 2 concurrent recoveries on the live legacy lane, then the 3-per-account first-turn pacer after the reconciler cutover",
+          "kind": "none",
+          "detail": "Live today: scripts/limit-recover/lr-fleet.sh:1136 lf_pool_max defaults LR_RECOVER_MAX_CONCURRENT to 2.\n\nNot yet live: lr_recon/admit.py:87 (LR_PACER_PER_ACCT 3) with :38 (PACER_RELEASE_S 20). This applies only after recon.on exists; `ls ~/.reso/limit-recover/*.on` shows only autorecover.on.\n\nNeither value changes.",
+          "already_in_effect": true,
+          "operator_only": false
+        },
+        {
+          "step": "Write the evidence note for the ruling, with both skeptics' corrections included",
+          "kind": "doc",
+          "detail": "Create docs/research/lr-kmax-decision-8-2026-09-30.md with Write in your own worktree, and copy the surviving /tmp/kmaxq/*.py and /tmp/kmax_an*.py scripts into docs/research/lr-kmax-decision-8-2026-09-30/.\n\nRecord these measurements:\n\n(1) Tonight\n- 12 hook-lane recovery runs. 5 had an account excluded by kmax-concurrency, and all 5 went to next4 at k_work 7, 2, 2, 2, 2. 0 parked on the cap.\n- The 2 parks at 06:30-06:31Z were --max-wait router timeouts.\n- Every account was at the cap in the sweeps at 06:16 and 06:21. The 06:26 three-session cohort still routed, because next was not excluded by the cap.\n\n(2) All 31 parked rows in fleet/*/results.tsv, classified as in the synthesis:\n- ac0f0123 on 09-26 waited 17.6 min or less.\n- The 09-19 22:35-22:36Z cap parks would have saved about 4 min and 0 recoveries.\n- 75c7e2a5 cannot be recovered from disk.\n\n(3) Share of storm sweeps with every account at the cap:\n- Tonight: 10 of 29 at 8, 3 at 12, 1 at 16.\n- History: 4.9%, 3.0% and 1.6%, with blocked accounts at a median k_work of 20.\n- Wall episodes: at K=8, p50 13, p90 38, max 78 min. At K=12, p90 40, max 59. At K=16, max 33.\n\n(4) What the count is made of:\n- 223 of 354 (63%) were subagent transcripts, 81% of them Workflow agents.\n- The probe's finished headless runs caused the next4 readings at 05:50 and 05:56Z.\n\n(5) Corrected floor mechanism:\n- floors_ok charges only placed_n, which resets on every --place call (bin/claude-accounts:4324-4325).\n- Passes run every 3 s (lr_recon/__main__.py:45), so the floor limits seats per pass, not over time.\n- The accumulating guard against pile-on is KMAX through phantoms, which last 15 min (ASSIGN_TTL_MIN, accounts.json:56).\n- The hook lane's floor (_su_projected, :2689-2713) charges no phantoms at all.\n- State this as the reason to keep 8. Drop the '22-40% cancelled' claim.\n\n(6) Heavy movers:\n- 155 modeled wait-minutes at K=8.\n- K=12 saves 21, K=16 saves 76-88, and treating their weight as 1 saves about 154.\n\n(7) Server side, with its limits:\n- 0 terminal limiter errors.\n- Retries are not kept on disk: 2 of about 15.9k transcripts have retryAttempt, both sdk-cli.\n- 32 terminal 529s, all at k_work of 5 or less. But 30 came from CC 2.1.220, 29 predate the 09-04 change that started counting subagents, and the 08-24 pair looks fleet-wide.\n- 0 of 40 probe first turns failed, all one-word claude -p cold starts.\n\n(8) Hook-lane tail:\n- 3 attempts at least 10 min apart (lr-reset-poller.sh:828-829); tick gaps have p50 11.3 min and p90 20.0 min.\n- 0 REQUEST-EXHAUSTED so far.\n\n(9) Shadow blindness:\n- Phantoms are charged only in act mode with recon.on (lr_recon/__main__.py:813-814), so the W5b shadow cannot show a cap filled by the cohort itself.\n\nLand via /ship.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Correct the '5-6 measured limit' premise in the plan and architecture docs, mark row 8 ruled, and set the corrected revisit condition",
+          "kind": "doc",
+          "detail": "Use Edit only, in a worktree, and land via /ship.\n\nIn docs/plans/LIMIT_RECOVER_FLEET_V2.md:\n- At :420, replace 'against a measured infrastructure limit of 5-6 concurrent requests per account' and 'no added 529 risk' with 'limit unmeasured here: 0/40 probe failures at N≤6, 0 terminal limiter errors, retries not persisted'.\n- In row 8 at :435, which already carries a Correction note, add 'Ruled 2026-09-30: keep 8 (86%); a recovery-only raise is also rejected' and the evidence path.\n- Append one status-log line. Revisit condition: act-mode plans.jsonl shows a cohort waiting on kmax-concurrency for more than about 10 min, or a REQUEST-EXHAUSTED whose attempts were all kmax-excluded.\n- In the same line, name the real levers as separate items:\n  - (a) mover weight is recomputed from 'now' with no clamp (lr_recon/plan.py:106-108, :139; bin/claude-accounts:4334).\n  - (b) bound_kwork compares counts, not session ids (bin/claude-accounts:2200-2231).\n  - (c) the source-account skip at lr-fleet.sh:745.\n  - (d) the hook lane falls back to KMAX_RESIDENT 40 when k_work is unmeasured (:2362-2364).\n\nIn docs/plans/LIMIT_RECOVER_FLEET_V2_ARCHITECTURE.md:\n- At :206 ('This keeps one account under the 5-6-concurrent infra band that produces 529s') and :565 ('the infra band of 5-6 concurrent per account'), use 'burst protection; limiter behaviour unmeasured above N=6 (0/40 failures at N≤6)'.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Correct the same premise in the comments next to the value",
+          "kind": "code",
+          "detail": "In the bin/claude-accounts:2339 docstring, '8 is right — the measured infra-limiter band is 5-6 (GH#62426)', and in the accounts.json:45 `_kmax` note, change only the wording. The new text should say:\n- 8 is kept,\n- the 5-6 band came from GH#62426 and was never measured here,\n- it is backed by 0/40 probe failures at N≤6,\n- and 8 is the only cap that builds up across passes, through phantoms.\n\nChange no values. accounts.json is live through the symlink, so check that `jq . accounts.json` still parses, and run the claude-accounts router bats suites, checking the 1..N plan line. Then /ship and converge with `CC_DEPLOY_MAX_LAG_COMMITS=0 bash scripts/deploy-live.sh`.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Correct the untracked design bundle",
+          "kind": "doc",
+          "detail": "~/.reso/limit-recover/design-v2/decisions.md:8 repeats 'against a measured infrastructure limit of 5-6 concurrent requests per account' and 'no added 529 risk'. Edit it in place to match the plan's wording. The file is untracked, so there is nothing to commit.",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Open a separate decision for the mover-weight rule, which is not part of decision 8",
+          "kind": "none",
+          "detail": "This is a design fork below 90% conviction. After the evidence note lands, run:\n`cc-decide open --class C --what \"Should a limited session's seat weight be fixed at the moment it hit its limit and capped at 8, instead of recomputed every pass from the last 10 minutes?\" --option \"fix at limit, cap at 8::heavy sessions place on the first pass and the target is charged their real re-spawn load (9-32 subagents seen after resume)\" --option \"keep recomputing::10 of 131 limit deaths in 6 weeks wait 7-31 min for a seat, then the target is charged about 1 seat\" --conviction 80 --receipt docs/research/lr-kmax-decision-8-2026-09-30.md`",
+          "already_in_effect": false,
+          "operator_only": false
+        },
+        {
+          "step": "Record the ruling on decision packet 4a08882545c5",
+          "kind": "none",
+          "detail": "After the note lands, run `cc-decide action 4a08882545c5 --evidence docs/research/lr-kmax-decision-8-2026-09-30.md` (open → actioned). The operator's relayed request 'proceed with all as recommended' is the ruling this records. The packet's 'raise' option text cannot be edited, so the evidence note carries the correction.",
+          "already_in_effect": false,
+          "operator_only": false
+        }
+      ],
+      "residual": "Five things read-only research cannot settle.\n\n1. **Server behavior above 6 concurrent first turns per account.** Only 40 one-word cold starts have been measured, at N of 6 or less and outside a storm. Retried refusals are not saved in interactive transcripts, so disk evidence cannot see them. Measuring more needs an actuating probe with large-context resumes, or retry capture on the W5 canary relaunches.\n\n2. **How the cap behaves in a real storm under the reconciler.** The W5b shadow has recorded 0 cohorts. Even when one arrives, the shadow cannot show a cap filled by the cohort itself: it charges no phantoms without recon.on, and the live legacy lane cuts every wait short. The answer only becomes observable in act mode after the cutover.\n\n3. **Two design rulings.** The mover-weight rule is staged as its own decision at 80%. Whether the cap should count subagent transcripts at all is not settled: it depends on whether the cap is meant to spread burn or to limit session seats.\n\n4. **Two count defects need code outside this decision.** bound_kwork compares counts, not session ids. The hook lane falls back to a cap of 40 when k_work is unmeasured; this held in 13 of 37 storm snapshots.\n\n5. **One park cannot be explained from disk.** The 2026-09-19 22:38Z park (75c7e2a5) left no trace: its rank stderr went to /dev/null and the assignment ledger was pruned in place."
+    }
+  ],
+  "critic": "**Consistency and completeness check of the six rulings: 22 issues found**\n\nChecked against origin/main 69ddcd35a (HEAD is the same commit) and ~/.reso/limit-recover. The issues fall into three groups: rulings that conflict, steps that are missing, wrong or not actually in effect, and convictions their reasons don't support.\n\nOne rule breach to report: I ran `bin/cc-notify --page x`. It stopped at argument parsing (`cc-notify: unknown option '--page'`) and delivered nothing, but the task's rules forbid running cc-notify at all.\n\n**(1) Conflicts between rulings**\n\n1. **Three typing paths use three different focus rules.**\n   - Decision 4's wake refuses a focused pane (\"re-check … an unfocused pane\"; its test expects nothing typed when the pane is focused).\n   - Decision 7 has nudge_in_place follow LR_MOVE_FOCUSED, which it flips to default on.\n   - Decision 1's new post-reset dispatch goes through cc_tui_submit (lr-reset-poller.sh:1041), which reads no focus at all. Decision 7's residual names that path as outside its ruling.\n   - Decision 7's own evidence is that the operator was at 3 of 3 panes at the 06:30Z reset. One rule is needed for all three.\n\n2. **Decisions 1 and 4 type different wake text.**\n   - Decision 1's post-reset dispatch uses the mode:prompt path, which types `.prompt // \"/limit-recover\"` (lr-reset-poller.sh:1034). Hook requests carry no `.prompt` field (stop-failure-marker.sh:521-524), so it types /limit-recover.\n   - Decision 4 says to type a plain continue, because /limit-recover \"runs the skill and can choose a move\".\n\n3. **nudge_in_place (lr-reset-poller.sh:698-717) gets three different specs and priorities.**\n   - Decision 1: \"independent, lower priority\".\n   - Decision 4: required, and must ship in the same land as the hold.\n   - Decision 7: repair the routing and add the focus gate together.\n   - It needs one owner and one spec.\n\n4. **Decision 8 says burst protection \"stays as it is\", but decision 1 adds new limits.** Decision 1 adds LR_REQUEST_MAX_PER_TICK=4, a post-reset pace of 3 per account per tick, and admission wiring.\n   - The poller's StartInterval is 600 s, and real ticks run about 14-16 min apart (poller.log TICK rows at 02:12:15, 02:28:27 and 02:42:20).\n   - At those gaps, a cohort of 30 needs about 8 ticks under the per-tick cap, roughly 1.6-1.9 h. On one account under the pace of 3, it needs 10 ticks, roughly 2.5 h.\n   - Neither decision states this trickle cost.\n\n5. **Decision 1 settles a question decision 8 calls open.** Decision 8's residual 3 says whether KMAX should count subagent transcripts \"is not settled\". Decision 1's over-count fix settles it: subagents count only while unfinished.\n   - Decision 8 found that 63% of tonight's count on capped accounts was subagent transcripts, so this change is in effect the raise decision 8 rejected.\n   - Decision 8's evidence needs to be re-based after decision 1's fix.\n\n6. **Decision 4 cites decision 3's old rule.** Its step \"HELD:team overrides decision 3's weekly move\" refers to the superseded hybrid rule (move weekly caps with reset > 6 h). Decision 3 now rules wait.\n\n7. **Decision 6's revisit trigger skips focused panes, which decision 7 is about to start moving.** After the flip, focused limited panes become move candidates, and the one genuine draft on record (pane 513) was in a focused pane.\n\n**(2) Steps that are missing, wrong, or claimed in effect when they are not**\n\n8. **Decision 1's kill switch is incomplete, and \"off falls back to nothing automatic\" is false.**\n   - reroute_parked (lr-reset-poller.sh:1577-1612) runs `lr-fleet --one --target auto` unattended. It is gated only by AUTOFIRE, which the plist sets to 1, and LR_POLLER_REROUTE. It never checks autorecover.on.\n   - Proof: `03:07:23Z REROUTE 415a3aac` ran before the flag existed (created 05:22:55Z). Its run one-20260929T030724Z-415a3aac ended `verdict=FAILED rc=128`.\n   - So the unattended record is 1 move out of 5 attempts, not 1 out of 4.\n   - The listed kill switches leave out LR_POLLER_REROUTE=off.\n   - \"Read only by :899 and :548\" is also false: lr_recon/__main__.py:225 and census.py:231 read the flag too.\n\n9. **Decision 1's stay-near-reset rule covers only the request loop.** §2a checks only `now < reset_epoch` (lr-reset-poller.sh:1643-1644), so it can still move a parked session in the last 15 min before its reset. The rule must apply to reroute_parked too.\n\n10. **Decision 1 step 1(a) points at the wrong code.**\n    - lr-handoff.sh:594-600 sits inside `if [[ $VOLUNTARY -eq 1 …`, which only voluntary (non-limit) moves reach.\n    - The hook lane's limit verdict comes from the probe (lr-handoff.sh:1222, then handoff-fire.sh's REFUSED:not-limited at :9522).\n    - hf_bg_work_gate skips the at-rest check when a session is limited (handoff-fire.sh:2533-2540: \"A limited pane is at rest by construction\"). The fix belongs there.\n\n11. **Decision 1's cached-rank fallback contradicts decision 1's own finding.** The fallback accepts a cached rank up to cache_grace_s (600 s) old. Decision 1 itself blames a cached row inside that same 600 s grace for moving tonight's cohort to another account 5 s after reset. Tonight's two timeouts both came at a reset boundary (06:30-06:31Z). The fallback must reject a cache taken before the source account's reset.\n\n12. **Decision 8 marks both burst limits as in effect; neither applies to the unattended lane today.**\n    - `lf_pool_max` (lr-fleet.sh:1136) applies only in `recover` batch mode (:1213). Hook requests and reroutes use `--one`, which it does not cover.\n    - Admission() and BootSlots() are created at lr_recon/__main__.py:83-84, and `self.admission` / `self.boots` are referenced nowhere else.\n    - So the pacer exists only once decision 1's admission step lands. Until then the live lane has no concurrency cap: only the admit lock serializes routing, and decision 1 itself says 30 deaths would start 30 drivers.\n\n13. **Decisions 1, 3 and 4 rely on paging that has no working channel.** Decision 3 counts \"page fires 600 s after the ETA\" as in effect, decision 4 pages on wake failure, and decision 1 pages after N re-arms.\n    - The reconciler's page call `_cc_notify(\"--page\", …)` (report.py:432) is rejected by cc-notify as an unknown option.\n    - In observe mode, pages go only to recon/shadow/pages.jsonl (report.py:454-468).\n    - The hook lane's REQUEST-EXHAUSTED only writes a log line.\n    - All three depend on decision 6's page fix, and none says so. Overnight delivery also needs Pushover, which only the operator can set up.\n\n14. **Decision 3's \"resumes in place at its own reset\" is not in effect.** That path is nudge_in_place: poller.log has 85 NUDGE-FAILED rows and 0 NUDGED. The fallback is a latch followed by `--resume` into a new pane (35 RESUMED rows). Decision 3 doesn't list the nudge repair as a dependency.\n\n15. **The steps that record rulings can't be run as written.**\n    - cc-decide's verbs are open, veto, action, list and expire-sweep. `action <id> [--evidence ref]` only moves a packet from open to actioned. Nothing can set a ruling or change the conviction of an existing packet.\n    - That breaks the recording steps in decisions 1 (\"on\", 84), 3 (\"wait\", 85), 4 (90), 6 (90) and 7 (70). Only decision 8's `action --evidence` form works; the ruling and conviction have to go in the evidence document.\n    - The packets currently read open at 85, 80, 75, 70, 75 and 80.\n\n16. **Decision 8 mislabels tonight's runs.** It calls 12 runs \"hook-lane\". The 12 fleet directories are: 4 hook requests (05:36, 06:25, and two at 06:26), 1 REROUTE (03:07), and 7 manual or other runs (03:04-04:17). The kmax-exclusion statistics need relabelling.\n\n17. **Several rulings edit the same functions, with no owner named.**\n    - hf_recycle_last_read (handoff-fire.sh:2881-2940) is edited by decisions 1, 4 and 7. Decision 1's at-rest check in the limited branch already covers decision 7's step 2(b) for limit-caused recycles.\n    - The exit-6 HELD mapping in lr-handoff/lr-fleet is edited by both decision 6 and decision 7.\n\n**(3) Convictions the reasons don't support**\n\n18. **Decision 1 (84):** the argument for keeping the flag on rests on \"off falls back to nothing automatic\", which issue 8 shows is false. Its record also leaves out the failed 03:07 reroute.\n\n19. **Decision 7 (70):**\n    - Its reasons support the fixes and the focus logging (which it says are needed \"under either setting\"), not the flip itself.\n    - Its only direct evidence is the operator at 3 of 3 panes at the reset, which is the hazard of moving focused panes.\n    - The flip is not gated on any of the focus data its own step 5 starts collecting.\n\n20. **Decision 3 (85):** the ±5 h \"wash\" replay uses a 7-of-10 recovery rate. Six of those 7 recoveries were run by the operator; the unattended rate is 1 in 4-5. The correction favors waiting even more, but the estimate is built on the wrong base, and the resume path that waiting depends on has 0 successes in 85 tries (issue 14).\n\n21. **Decision 8 (86):** one of its supports, \"burst protection stays as it is\", is not in effect for the live lane (issue 12).\n\n22. **Decision 4 (90):** \"the worst a hold can do is stall\" assumes a page reaches the operator. No page channel works today, and 677 of 677 phone pushes were inert. Unless decision 6's page fix ships in the same land, a failed wake is a silent 3 h 26 min stall like 3c73a9d9's."
+}

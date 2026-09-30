@@ -29,8 +29,14 @@ Architecture: the revision-2 architecture delivered with this plan. On landing, 
 | W3 `lr_recon` package | **S** (sub-wave W3a: 6 teammates, then sub-wave W3b: 5 teammates) | — |
 | W4 fences and operator surfaces | **S** (3 teammates inside, split by file ownership) | — |
 | W5 rig, canaries, shadow, cutover | **S**, plus one filed operator step (loading the launchd jobs) | — |
+| W6a handoff-fire + lr-handoff ruling fixes | **S** | — |
+| W6b poller + lr-fleet ruling fixes | **S** | — |
+| W6c router ruling fixes | **S** | — |
+| W6d reconciler + page channel ruling fixes | **S** | — |
+| W6e architecture/design doc corrections to as-built | **S** | — |
+| W6f flip `LR_MOVE_FOCUSED` default to on | **S** (small; gated on W6a+W6d green) | — |
 
-No wave runs as T or L on the lead.
+No wave runs as T or L on the lead. The W6 rulings section and its evidence note are written by the lead inline (doc-only synthesis of a workflow the lead ran; no code).
 
 ### Lead context budget and succession
 - The lead keeps at least 50% of its window free for decisions.
@@ -64,6 +70,12 @@ Each wave starts with `git -C ~/Development/claude-infrastructure log --oneline 
 | `bin/cc-lr`, `bin/cc-resume-debt`, `lr-fleet.sh`, `lr-upgrade.sh`, `boot-resume-launch.sh` | W4 T-actors |
 | `hooks/operator-readout.sh`, `scripts/launchd-parity-lint.sh`, plan doc | W4 T-surface |
 | `tests/rig/**` | W5 |
+| W6: `handoff-fire.sh`, `lr-handoff.sh`, `lr-lib.sh` + their bats | W6a |
+| W6: `lr-reset-poller.sh`, `lr-fleet.sh`, `lr-upgrade.sh`, `hooks/stop-failure-marker.sh`, `lead-supervisor.sh` + their bats | W6b |
+| W6: `bin/claude-accounts` + its bats | W6c |
+| W6: `lr_recon/**`, new `scripts/limit-recover/lr-page.sh`, `tests/rig/**` (shared with W5b: W6d messages pane 1308 before editing rig files) | W6d |
+| W6: `docs/plans/LIMIT_RECOVER_FLEET_V2_ARCHITECTURE.md`, `~/.reso/limit-recover/design-v2/*` | W6e |
+| W6: this plan's W6 section and rulings | lead |
 
 ### Interface contract (frozen in Phase 0; W3 builds against it while W1/W2 build it)
 - **claude-accounts:**
@@ -396,6 +408,54 @@ Write `recon.on` and `recon/mode=act`. The first real cc-lr-origin cohort (the o
 
 ---
 
+## W6: implement the operator's rulings (S; four parallel code waves by file owner, then docs, then the focused-pane flip)
+
+Scope (frozen): the six operator decisions are ruled as the exhaustive re-research recommended (operator, 2026-09-30 ~00:20Z: "exhaustively research all decisions until exhausted. then. proceed with all as recommended"). W6 builds every non-operator implementation step of those rulings, with the lead's resolutions of the critic's 22 issues below, lands them, and records each ruling. Evidence: `docs/research/lr-fleet-v2-decisions-2026-09-30/` (`rulings.json` holds each decision's full recommendation, `why`, and numbered `implementation_steps`; a step is cited below as D<n>.<index>).
+
+### The rulings (final, after 3 lenses + up to 3 drivable-question rounds + 2 skeptics + adjudication per decision)
+
+| # | Ruling | Conviction |
+|---|---|---|
+| 1 | Keep `autorecover.on`. It becomes the single zero-human switch: every unattended move (hook requests AND `reroute_parked`) checks it. The reconciler may act only after its four cutover defects are fixed, under its own operator-created marker. | 84% |
+| 3 | **Changed:** always wait when no account passes the floors, for 5-hour and weekly caps alike; do not build the least-thin move. Wait is already live; W6 pins it with a test and makes the page say why. | 85% |
+| 4 | Hold a lead with live members on every lane; at its reset, type one plain continue into its own pane (no `/exit`, no relaunch). Cross-account team move stays v2. | 90% |
+| 6 | Draft stash stays off (it exists only in prose). Fix the page channel so a held draft reaches the operator. | 90% |
+| 7 | **Changed:** move a focused pane, but only after five on-path fixes and focus logging land green (W6a), then flip the code default (W6f). Until then hold stays in force. | 70% |
+| 8 | Keep KMAX=8; no storm raise. Correct the "5-6 measured" premise (it came from GH#62426). Re-measure KMAX binding after D1.8's over-count fix, which counts subagents only while unfinished. | 86% |
+
+### Lead resolutions of the critic's cross-decision issues (bind every W6 wave)
+
+1. **One focus rule for every typing path** (poller `cc_tui_submit`, `nudge_in_place`, the HELD:team wake, handoff-fire's `/exit`): a single helper `lr_focus_gate <pane>` in `lr-lib.sh` (W6a) — refuse while focused unless `LR_MOVE_FOCUSED=on`; when on, require 2 empty composer reads ~10 s apart and re-check focus immediately before the keystroke. W6b and W6d call it; nobody re-implements it.
+2. **One wake text:** a still-limited, at-rest session woken in place at its reset gets a plain `continue`, never `/limit-recover` (which runs the skill and can choose a move). Applies to D1.4's post-reset dispatch and D4's HELD:team wake.
+3. **`nudge_in_place` has one owner (W6b) and one spec:** repair its routing (85 NUDGE-FAILED / 0 NUDGED), gate it with rule 1, type rule 2's text. It is REQUIRED, not low priority: decisions 3 and 4 both rely on the in-place resume.
+4. **Trickle cost is stated, not hidden:** real poller ticks run ~14-16 min apart, so a per-tick cap of 4 drains a 30-session cohort in ~1.6-1.9 h. W6b sets the cap per account per tick and logs queue depth + ETA on the page.
+5. **KMAX evidence is re-based after D1.8** (W6c): record the before/after count on tonight's capped accounts in the evidence dir.
+6. **D4.11 is corrected:** HELD:team overrides nothing in decision 3, which now always waits; the note records that instead.
+7. **D6's revisit trigger includes focused panes** (the one real draft, pane 513, was focused), because W6f starts moving them.
+8. **`reroute_parked` (lr-reset-poller.sh:1577-1612) checks `autorecover.on`**, and the kill-switch list names `LR_POLLER_REROUTE=off`. The unattended record is 1 move in 5 attempts (the 03:07Z reroute failed rc=128), not 1 in 4.
+9. **Stay-near-reset applies to `reroute_parked` §2a too** (lr-reset-poller.sh:1643-1644), not only the request loop.
+10. **D1.2 targets the right code:** the at-rest check goes in `hf_bg_work_gate`'s limited branch (handoff-fire.sh:~2533-2540, which today calls a limited pane "at rest by construction") and in `hf_recycle_last_read`'s limited branch (~2908-2922) — not `lr-handoff.sh:594-600`, which only voluntary moves reach.
+11. **D1.3's cached-rank fallback rejects any cache taken before the source account's reset** (tonight's timeouts sat on the 06:30Z reset boundary; a pre-reset cache is what moved a cohort 5 s after reset).
+12. **The `--one` lane gets a real concurrency cap** (W6b): `lf_pool_max` covers only batch mode; until the reconciler's admission is wired (D1.12, W6d) the unattended lane has none.
+13. **Paging works before any hold relies on it:** W6d lands `scripts/limit-recover/lr-page.sh` (liveness-free Notification Center + phone leg when configured) as its FIRST commit and pings the lead; `report.py` stops calling the non-existent `cc-notify --page`. W6b's hook-lane pages (D6.6, REQUEST-EXHAUSTED) and D4's wake-failure page use it. The phone leg needs Pushover credentials (operator step, filed).
+14. **Rulings are recorded as `cc-decide action <id> --evidence <rulings doc>`**: the tool cannot store a ruling or conviction on an existing packet, so the evidence doc carries both.
+15. **`hf_recycle_last_read` has one editor (W6a)**, covering D1.2, D4.2 and D7.2-7.3 together; the exit-6 HELD mapping is W6a's in `lr-handoff.sh` and W6b's in `lr-fleet.sh`, with the verdict names frozen here: `HELD:draft`, `HELD:focused`, `HELD:team`, `HELD:busy`.
+
+### Waves (each a dispatched session with its own worktree; each reads its steps' full `detail` from `rulings.json`)
+
+- **W6a** (`handoff-fire.sh`, `lr-handoff.sh`, `lr-lib.sh`): resolutions 1, 10, 15; D1.2, D4.0 (probe + lr-handoff parts), D4.2, D6.8, D7.1, D7.2, D7.3, D7.4, D7.5. Land `lr_focus_gate` early and ping the lead (W6b consumes it).
+- **W6b** (`lr-reset-poller.sh`, `lr-fleet.sh`, `lr-upgrade.sh`, `stop-failure-marker.sh`, `lead-supervisor.sh`): resolutions 2, 3, 4, 8, 9, 12; D1.3 (lr-fleet side), D1.4, D1.5, D1.6, D1.15/D4.7/D7.7 (one nudge spec), D4.0 (poller part), D4.3, D4.8, D6.6, D6.7. The nudge + page work rebases onto W6a's helper and W6d's `lr-page.sh` once they land.
+- **W6c** (`bin/claude-accounts`): resolutions 5, 11; D1.3 (router side), D1.7, D1.8, D3.1, D3.2 (router test), D3.6, D8.4.
+- **W6d** (`lr_recon/**`, `lr-page.sh`, rig): resolution 13 first; D1.9, D1.10, D1.11, D1.12, D3.2 (reconciler test), D3.3, D4.1, D4.4, D4.9, D4.10, D4.12, D4.13, D6.3, D6.4, D6.5. `recon.on` stays absent.
+- **W6e** (after W6a-d land): the doc steps D1.16, D3.4, D3.5, D3.7, D4.6, D4.11 (as corrected by resolution 6), D4.14, D4.15, D6.2, D7.8, D8.2, D8.3, D8.5, written against the as-built code.
+- **W6f** (after W6a and W6d are green): D7.6, flip `LR_MOVE_FOCUSED` to default on in handoff-fire and `census.py`; `=off` is the kill switch. Operator step afterwards: restart the reconciler so the new default loads.
+
+Operator-only steps (filed, not built): D1.14 create the reconciler zero-human marker after the first attended reconciler cohort closes clean; D6.9 Pushover credentials for the phone leg; the reconciler restart after W6d/W6f.
+
+Every W6 wave: explicit-path commits, its suites' `1..N` plan line printed, shellcheck bare on touched shell, one mutant per new site, land via project `/ship` (never wrapped in a timeout), converge with `CC_DEPLOY_MAX_LAG_COMMITS=0 bash scripts/deploy-live.sh`, then ping the lead `DONE <shas>`.
+
+---
+
 ## Measured Definition of Done (the whole programme)
 
 1. **Unit gates:** every bats suite named in W1-W4 plus `python3 -m unittest discover scripts/limit-recover/lr_recon/tests` print 0 failures on the landed trunk sha, and are re-run after the last rebase.
@@ -577,3 +637,4 @@ Dynamic Workflow wf_99ea9654-29f (22 agents, 0 errors: 8 subsystem maps, 4 desig
   - **Shadow.** `tests/rig/shadow_lib.py` computes the three gate checks per cohort; its `watch` archives each live cohort (the observe daemon reaps facts and overwrites `shadow/<cid>.json` every pass) and mails the waiting session. No real limit since the observe daemon started at 17:42Z.
   - **Census step** `f0df9145b73a` closed with the launchd daemon's own observe pass (0 actuations, degraded none).
   - **Learning — a peer's mail is a keystroke.** A real session's inbox watcher turns any mail into a turn; the mover must not be the sender, and any mid-move turn must leave the husk path recoverable. **Learning — engagement proof must match the prompt.** A no-prompt move owes no turn; judging it by one is a coin flip on whether something else woke the session.
+- 2026-09-30 (origin lead, pane 954): **operator ruled all six open decisions "as recommended" after an exhaustive re-research** (Dynamic Workflow `wf_4da836fc-d58`: 115 agents, 0 errors; 3 lenses per decision, up to 3 drivable-question rounds, 2 skeptics + adjudication, a cross-decision critic that raised 22 issues). Two recommendations changed: decision 3 is now always-wait (the hybrid's least-thin move is not built), and decision 7 moves a focused pane only after five on-path fixes land. The critic's issues change how each ruling is built, not its direction; the lead's 15 resolutions and the W6 waves are in § W6. Evidence: `docs/research/lr-fleet-v2-decisions-2026-09-30/rulings.json`. Also landed today by a lead-fired session: a recycle clears the predecessor's `/goal` before moving it to the background (`c26948b8d`, `981cb302c`, research `077e401ab`).
