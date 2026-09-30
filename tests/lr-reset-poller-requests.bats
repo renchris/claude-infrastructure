@@ -530,3 +530,80 @@ cohort_sid() { printf '0000000%s-0000-4000-8000-0000000000%02d' "$(( $1 % 10 ))"
   [ "$(grep -c -- '--one ' "$FLEET_LOG")" = 1 ] || { cat "$FLEET_LOG"; false; }
   grep -q 'queue depth 2, ETA ~30 min' "$STATE/poller.log" || { plog; false; }
 }
+
+# ══ W6b: PAST THE RESET THE REQUEST LANE WAKES IN PLACE (D1.4, resolution 2); A HELD LEAD IS RETIRED (D4.8)
+wake_rq() { # $1=sid $2=pane — a hook request whose account reset 10 min ago, its pane live
+  local tp; tp="$(lim_tx "$1")"
+  rq "$1" <<JSON
+{"sid":"$1","requested_by":"stop-failure-marker","account":"next3","source_pane":"$2","transcript_path":"$tp","reset_at_epoch":"$(( $(date +%s) - 600 ))"}
+JSON
+  printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"claude-tertiary","cwd":"/tmp"}\n' "$2" "$1" "$$" > "$CC_REGISTRY_DIR/$2.json"
+}
+
+@test "[D1.4] past its reset, a still-limited hook request with a live pane gets a continue typed IN PLACE — never a move" {
+  : > "$STATE/autorecover.on"; mk_tui
+  wake_rq "$SID" 616
+  tick
+  [ ! -s "$FLEET_LOG" ] || { echo "moved after its own account reset: $(cat "$FLEET_LOG")"; false; }
+  grep -q '^pane=616$' "$TUI_LOG" || { cat "$TUI_LOG"; plog; false; }
+  grep -q '^prompt=\[limit-recover\] The usage limit has reset on claude-tertiary. Continue the work' "$TUI_LOG" || { cat "$TUI_LOG"; false; }
+  ! grep -q '/limit-recover' "$TUI_LOG" || { cat "$TUI_LOG"; false; }
+  [ "$(jq -r .last_verdict "$STATE/requests/$SID.json")" = woken-in-place ] || { cat "$STATE/requests/$SID.json"; false; }
+  grep -q "REQUEST-WAKE $SID (next3)" "$STATE/poller.log" || { plog; false; }
+}
+
+@test "[D1.4] the in-place wake is paced: at most 3 per account per tick" {
+  : > "$STATE/autorecover.on"; mk_tui
+  local i
+  for i in 1 2 3 4; do wake_rq "$(cohort_sid "$i")" "70$i"; done
+  tick
+  [ "$(grep -c '^pane=' "$TUI_LOG")" = 3 ] || { cat "$TUI_LOG"; plog; false; }
+  grep -q 'REQUEST-QUEUED 1 request(s)' "$STATE/poller.log" || { plog; false; }
+}
+
+@test "D1.4 CONTROL: with no live pane the request keeps the relaunch path" {
+  : > "$STATE/autorecover.on"; mk_tui
+  wake_rq "$SID" 616; rm -f "$CC_REGISTRY_DIR/616.json"
+  tick
+  [ ! -s "$TUI_LOG" ]
+  grep -q -- "--one $SID" "$FLEET_LOG" || { plog; false; }
+}
+
+@test "[D4.8] a hook request for a lead with LIVE members is retired as held:team — never dispatched" {
+  : > "$STATE/autorecover.on"
+  export LR_TEAM_PS_SNAPSHOT="$BATS_TEST_TMPDIR/ps.snapshot"
+  printf '4242 S /opt/cc/bin/claude --agent-id w@session-t --parent-session-id %s\n' "$SID" > "$LR_TEAM_PS_SNAPSHOT"
+  hook_rq "$SID" next3
+  tick
+  [ ! -s "$FLEET_LOG" ] || { cat "$FLEET_LOG"; false; }
+  grep -q "REQUEST-RETIRED $SID — held:team, resumes in place at reset" "$STATE/poller.log" || { plog; false; }
+  [ -e "$STATE/results/$SID.retired.json" ]
+}
+
+@test "[D6.6] REQUEST-EXHAUSTED pages ONCE, naming the pane and the likely unsent draft" {
+  : > "$STATE/autorecover.on"
+  export LR_PAGE_OS_CHANNEL=on LR_PAGE_OSASCRIPT_BIN="$BATS_TEST_TMPDIR/stubs/page-osa" LR_PAGE_LOG="$BATS_TEST_TMPDIR/pages.log"
+  export PAGE_ARGV="$BATS_TEST_TMPDIR/page.argv"; : > "$PAGE_ARGV"
+  printf '#!/bin/bash\ncat >/dev/null; printf "%%s\\n" "$*" >> "$PAGE_ARGV"\n' > "$LR_PAGE_OSASCRIPT_BIN"; chmod +x "$LR_PAGE_OSASCRIPT_BIN"
+  local tp; tp="$(lim_tx "$SID")"
+  rq "$SID" <<JSON
+{"sid":"$SID","requested_by":"stop-failure-marker","account":"next3","source_pane":"616","transcript_path":"$tp","attempts":3,"last_attempt_epoch":1}
+JSON
+  tick
+  grep -q "REQUEST-EXHAUSTED $SID" "$STATE/poller.log" || { plog; false; }
+  grep -q 'pane 616' "$PAGE_ARGV" || { cat "$PAGE_ARGV"; false; }
+  grep -q 'unsent draft' "$PAGE_ARGV" || { cat "$PAGE_ARGV"; false; }
+  tick
+  [ "$(grep -c 'unsent draft' "$PAGE_ARGV")" = 1 ] || { cat "$PAGE_ARGV"; false; }
+}
+
+@test "[R4] the queue is PAGED with its depth and ETA — once per depth, not once per tick" {
+  : > "$STATE/autorecover.on"
+  export LR_PAGE_OS_CHANNEL=on LR_PAGE_OSASCRIPT_BIN="$BATS_TEST_TMPDIR/stubs/page-osa" LR_PAGE_LOG="$BATS_TEST_TMPDIR/pages.log"
+  export PAGE_ARGV="$BATS_TEST_TMPDIR/page.argv"; : > "$PAGE_ARGV"
+  printf '#!/bin/bash\ncat >/dev/null; printf "%%s\\n" "$*" >> "$PAGE_ARGV"\n' > "$LR_PAGE_OSASCRIPT_BIN"; chmod +x "$LR_PAGE_OSASCRIPT_BIN"
+  local i
+  for i in 1 2 3 4 5 6; do hook_rq "$(cohort_sid "$i")" next3; done
+  tick
+  grep -q '2 limited session(s) are queued for recovery (by account: next3=2).*about 15 min' "$PAGE_ARGV" || { cat "$PAGE_ARGV"; plog; false; }
+}

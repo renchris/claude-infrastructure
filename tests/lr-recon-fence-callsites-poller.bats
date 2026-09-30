@@ -57,13 +57,15 @@ STUB
 echo "lr-fleet: DETACHED — driver pid \$\$ is recovering; the verdict arrives as mail."
 exit 0
 STUB
-  export LR_IT2_BIN="$S/it2"
-  cat > "$LR_IT2_BIN" <<STUB
-#!/bin/bash
-"$S/record-act" it2 "\$@"
-printf '{"type":"assistant","timestamp":"%s","message":{"role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"resumed"}]}}\n' \
-  "\$(date -u -v+5S +%FT%T.000Z 2>/dev/null || date -u +%FT%T.000Z)" >> "\${IT2_TX:?}"
-exit 0
+  # § 2's wake types through cc-tui.sh's cc_tui_submit (W6b, resolution 3), so the actuator stub is
+  # a cc-tui library, recorded under the name `tui`. Nudge cases set LR_CC_TUI_LIB to it.
+  cat > "$S/cc-tui-stub.sh" <<STUB
+cc_tui_submit() {
+  "$S/record-act" tui "\$@"
+  printf '{"type":"assistant","timestamp":"%s","message":{"role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"resumed"}]}}\n' \
+    "\$(date -u -v+5S +%FT%T.000Z 2>/dev/null || date -u +%FT%T.000Z)" >> "\${IT2_TX:?}"
+  return 0
+}
 STUB
   cat > "$S/tmux" <<STUB
 #!/bin/bash
@@ -146,18 +148,21 @@ park_future() {
 park_ready() { # a reset that has passed, with the transcript §2 and lr-select read
   local proj ts
   proj="$HOME/.claude-quaternary/projects/$(printf '%s' "$CWD" | tr '/' '-')"; mkdir -p "$proj"
-  ts="$(date -u +%FT%T.000Z)"
+  # The death precedes its reset (records 3 h back, reset 10 min back): a turn stamped AFTER the
+  # reset is what § 2's wake reads as "it continued on its own", and it would then type nothing.
+  ts="$(date -u -v-3H +%FT%T.000Z)"
   {
     printf '{"type":"user","cwd":"%s","gitBranch":"main","timestamp":"%s"}\n' "$CWD" "$ts"
     printf '{"type":"assistant","timestamp":"%s"}\n' "$ts"
     printf '{"type":"assistant","timestamp":"%s","isApiErrorMessage":true,"message":{"role":"assistant","content":[{"type":"text","text":"limit"}]}}\n' "$ts"
   } > "$proj/$SID.jsonl"
   export IT2_TX="$proj/$SID.jsonl"
-  printf '{"sid":"%s","acct":"next4","cfg":"%s","cwd":"%s","kind":"session","reset_at_utc":"2026-01-01T00:00:00Z","parked_at":"2026-01-01T00:00:00Z"}\n' \
-    "$SID" "$HOME/.claude-quaternary" "$CWD" > "$STATE/parked/$SID.json"
+  printf '{"sid":"%s","acct":"next4","cfg":"%s","cwd":"%s","kind":"session","reset_at_utc":"%s","parked_at":"2026-01-01T00:00:00Z"}\n' \
+    "$SID" "$HOME/.claude-quaternary" "$CWD" "$(date -u -v-10M +%Y-%m-%dT%H:%M:%SZ)" > "$STATE/parked/$SID.json"
 }
 live_row() { # the original pane is alive (pid = this bats process) ⇒ §2 takes the nudge arm
   printf '{"paneUUID":"616","session_id":"%s","pid":%d,"account":"claude-quaternary","cwd":"%s"}\n' "$SID" "$$" "$CWD" > "$CC_REGISTRY_DIR/616.json"
+  export LR_CC_TUI_LIB="$S/cc-tui-stub.sh"
 }
 
 # ══ § 0 REQUEST ══════════════════════════════════════════════════════════════════════════════════
@@ -227,20 +232,20 @@ live_row() { # the original pane is alive (pid = this bats process) ⇒ §2 take
 # ══ § 2 NUDGE (the original pane is live) ════════════════════════════════════════════════════════
 @test "nudge (a) fresh heartbeat: nothing typed" {
   fence_fresh; park_ready; live_row; tick
-  [ "$(acted it2)" -eq 0 ] || { plog; false; }
+  [ "$(acted tui)" -eq 0 ] || { plog; false; }
   grep -q "RECON-DEFER nudge $SID" "$STATE/poller.log" || { plog; false; }
 }
 @test "nudge (b) stale heartbeat, owned proc alive: nothing typed" {
   fence_alive; park_ready; live_row; tick
-  [ "$(acted it2)" -eq 0 ] || { plog; false; }
+  [ "$(acted tui)" -eq 0 ] || { plog; false; }
 }
 @test "nudge (c) lapsed: typed under the launch lock, lock released after" {
   fence_lapsed; park_ready; live_row; tick
-  assert_locked_act it2 nudge
+  assert_locked_act tui nudge
 }
 @test "nudge (d) recon.on absent: typed as before, no lock" {
   park_ready; live_row; tick
-  assert_unlocked_act it2
+  assert_unlocked_act tui
 }
 
 # ══ the cc-lr.json lane ══════════════════════════════════════════════════════════════════════════

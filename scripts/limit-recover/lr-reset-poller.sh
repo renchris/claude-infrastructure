@@ -329,6 +329,12 @@ fire_fail_note() { # $1=sid $2=why — count ONE failed fire; report at the cros
   printf '%s\n' "$n" > "$FIRE_FAIL/$sid" 2>/dev/null || return 0
   (( n == LR_FIRE_FAIL_MAX )) || return 0
   log "LATCHED $sid — $n consecutive fires produced no working session (last: $why); not a candidate for ${LR_FIRE_LATCH_HOURS}h"
+  # A LEAD WITH LIVE MEMBERS IS PAGED (D4.8). The banner is this latch's only signal, and for a held
+  # lead the latch is the moment its only wake has failed three times — a person has to look.
+  if command -v lrp_held_lead >/dev/null 2>&1 && lrp_held_lead "$sid"; then
+    lrp_page "held lead" "Team lead ${sid:0:8} was not woken after its limit reset ($n attempts, last: $why). It holds live teammates, so it is never moved or re-spawned; wake it by hand."
+    return 0
+  fi
   lrp_bounded osascript -e "display notification \"${sid:0:8} — $n resumes produced no working session; auto-resume paused ${LR_FIRE_LATCH_HOURS}h.\" with title \"lr-reset-poller\"" >/dev/null 2>&1 || true
 }
 fire_fail_clear() { rm -f "$FIRE_FAIL/${1:?}" 2>/dev/null || true; }
@@ -342,6 +348,11 @@ fire_latched() { # $1=sid -> 0 while this sid is suppressed; EXPIRES the latch i
   if [[ -z $(find "$f" -mmin "-$(( LR_FIRE_LATCH_HOURS * 60 ))" 2>/dev/null) ]]; then
     rm -f "$f" 2>/dev/null || true
     log "UNLATCHED $sid — ${LR_FIRE_LATCH_HOURS}h latch expired; eligible to fire again"
+    # A held lead's latch expiring PAGES and never leads to a spawn (D4.8 — 3c73a9d9 was resumed into
+    # a new pane at 18:42:24Z on 2026-09-29, 2 h 17 min after it had recovered by itself).
+    if command -v lrp_held_lead >/dev/null 2>&1 && lrp_held_lead "$sid"; then
+      lrp_page "held lead" "Team lead ${sid:0:8}: its ${LR_FIRE_LATCH_HOURS}h wake latch expired. It is never re-spawned; the next tick tries one in-place wake only."
+    fi
     return 1
   fi
   return 0
@@ -705,30 +716,147 @@ open_spend_packet() {
 }
 
 fired=0
-# ── nudge_in_place — the recovery for a session whose ORIGINAL pane is still alive ────────────────
-# Types the recovery prompt into that pane over the it2 shim (kitty via the resolved socket) and
-# proves engagement by a fresh non-error assistant turn in THIS store's copy — the one thing a
-# blocked husk can never produce. Never spawns. rc 0 engaged / 1 not (the caller counts a failure
-# and retries next tick; it never falls back to a spawn, because the pane is LIVE).
-nudge_in_place() { # $1=sid $2=cfg $3=registry rows ("pane<TAB>pid<TAB>acct<TAB>cwd", first wins) → 0/1
-  local sid="$1" cfg="$2" rows="$3" pane pid acct cwd it2 t0 waited=0 max ivl sock
+# ── SIBLING LIBRARIES THE WAKE AND THE HOLDS USE (W6, resolutions 1, 3, 13; D4.1) ───────────────
+# lr-page.sh — the liveness-free page (Notification Center + phone). lr-team.sh — the ONE live-member
+# test. Both are landed siblings; a missing one is said once per tick and degrades that arm only.
+LRP_PAGE_BIN=""
+for _c in "$(dirname "$_LRP_SELF")/lr-page.sh" "$LR/lr-page.sh" "${HOME:-}/.claude/scripts/limit-recover/lr-page.sh"; do
+  [[ -f "$_c" ]] && { LRP_PAGE_BIN="$_c"; break; }
+done
+for _c in "$(dirname "$_LRP_SELF")/lr-team.sh" "$LR/lr-team.sh" "${HOME:-}/.claude/scripts/limit-recover/lr-team.sh"; do
+  # shellcheck disable=SC1090  # runtime-resolved sibling
+  [[ -f "$_c" ]] && . "$_c" 2>/dev/null && break
+done
+# lrp_page <title tail> <message> → pages through lr-page.sh, logs its verdict line; never fatal.
+# The text rides as ARGV (lr-page passes it to AppleScript as an argument, never as source), so an
+# operator draft quoted in a page cannot become code — the older notifications in this file
+# interpolate and must never carry one.
+lrp_page() {
+  local v
+  if [[ $DRY -eq 1 ]]; then log "DRY   page ($1): $2"; return 0; fi
+  if [[ -z "$LRP_PAGE_BIN" ]]; then log "PAGE-LOST ($1) lr-page.sh unreachable — $2"; return 0; fi
+  v="$(/bin/bash "$LRP_PAGE_BIN" --title "$1" -- "$2" 2>>"$LOG" | tail -1)"
+  log "PAGE  ($1) ${v:-lr-page: no verdict} — $2"
+  return 0
+}
+# lrp_held_lead <sid> → 0 when the session LEADS live members (decision 4: held on every lane, woken
+# in place at its reset, never moved and never re-spawned). Unknown (no lr-team.sh) is NOT a lead.
+lrp_held_lead() { command -v lr_has_live_teammate >/dev/null 2>&1 && lr_has_live_teammate "${1:?}"; }
+# lrp_tx_of <cfg> <sid> → that store's transcript path; rc 1 when none
+lrp_tx_of() { local f; for f in "$1"/projects/*/"$2".jsonl; do [[ -f "$f" ]] && { printf '%s' "$f"; return 0; }; done; return 1; }
+# lrp_still_limited <transcript> → 0 when its LAST assistant record is a usage-limit api error
+lrp_still_limited() {
+  local k=""
+  command -v lr_last_api_error >/dev/null 2>&1 || return 1
+  IFS=$'\t' read -r _ _ k _ <<<"$(lr_last_api_error "${1:-}" 2>/dev/null || true)"
+  [[ "$k" == limit ]]
+}
+# lrp_iso <epoch> → %FT%T UTC (lr_engaged_after's baseline form)
+lrp_iso() { date -u -r "${1:?}" +%FT%T 2>/dev/null || python3 -c 'import sys,time;print(time.strftime("%Y-%m-%dT%H:%M:%S",time.gmtime(int(sys.argv[1]))))' "$1"; }
+# lrp_draft_hold <sid> <pane> <how> <focused> → keeps the screen and pages ONCE per sid+pane (D6.6, D6.7)
+lrp_draft_hold() {
+  local sid="$1" pane="$2" how="$3" foc="${4:-}" lcs="" snap="" rowtxt="" mark="$PARKED/$1.draft-paged"
+  for lcs in "$LR/../lib/lr-composer-snapshot.sh" "${HOME:-}/.claude/scripts/lib/lr-composer-snapshot.sh" ""; do
+    [[ -n "$lcs" && -f "$lcs" ]] && break
+  done
+  if [[ -n "$lcs" && -f "$lcs" && $DRY -eq 0 ]]; then
+    snap="$(/bin/bash "$lcs" snap "$pane" "$sid" "$how" --focused "$foc" --limited 1 2>>"$LOG" || true)"
+    [[ -n "$snap" ]] && rowtxt="$(/bin/bash "$lcs" row "$snap" 2>/dev/null | head -1 | cut -c1-120 || true)"
+  fi
+  [[ -e "$mark" ]] && return 0
+  : > "$mark" 2>/dev/null || true
+  lrp_page "unsent draft" "Pane $pane holds an unsent draft, so session ${sid:0:8} was not woken after its limit reset${rowtxt:+: \"$rowtxt\"}. Send or clear it; the next tick retries.${snap:+ Screen: $snap}"
+}
+
+# ── nudge_in_place — THE AT-RESET WAKE, ONE SPEC (resolution 3; D1.15, D4.7, D7.7) ───────────────
+# The only automated route that resumes a live limited pane on its OWN account after its reset, and
+# it never once worked: 85 of 85 attempts (09-10 to 09-22) logged NUDGE-FAILED "could not type",
+# because it typed through `it2 session run` with only CC_TERM_KITTY_TO set, and under launchd (no
+# KITTY_WINDOW_ID, no CC_TERM=kitty) the shim routed to iTerm2. Now:
+#   · DELIVERY through cc_tui_submit (scripts/lib/cc-tui.sh), the path request prompt mode already
+#     uses: kitty by socket, a composer gate that never types over a draft, and transcript proof.
+#   · ONE FOCUS RULE (resolution 1): lr_focus_gate (lr-lib.sh) holds a focused pane unless
+#     LR_MOVE_FOCUSED=on, and then only after two empty composer reads. Never re-implemented here.
+#   · ONE WAKE TEXT (resolution 2): a plain continue. `/limit-recover` runs the skill, which can
+#     choose a MOVE — the opposite of an in-place wake.
+#   · TIMING (D4.7): at reset + LR_NUDGE_AFTER_RESET_S (120 s) or later, and only if no assistant
+#     turn has appeared since the reset — a session that resumed on its own is left alone.
+#   · THE RUN CLAIM (D7.7): the request lane's per-sid claim, so the wake and a request drain never
+#     drive one pane at once.
+# rc 0 engaged (or already continued) · 1 failed (counts toward the fire latch) · 2 not yet / not
+# ours this tick (no strike) · 3 HELD (a person's draft or focus; no strike, paged once).
+nudge_in_place() { # $1=sid $2=cfg $3=registry rows ("pane<TAB>pid<TAB>acct<TAB>cwd", first wins) $4=reset epoch [$5=1 await the turn · 0 return once typed]
+  local sid="$1" cfg="$2" rows="$3" reset_ep="${4:-0}" await="${5:-1}" pane pid acct cwd tui="" pf t0 waited=0 max ivl rc=0 lead=0 idle crc leadnote=""
   IFS=$'\t' read -r pane pid acct cwd <<<"$(printf '%s\n' "$rows" | head -1)"
-  it2="${LR_IT2_BIN:-$HOME/.claude/bin/it2}"
-  [[ -x "$it2" ]] || { log "NUDGE-SKIP $sid — no it2 shim at $it2 (pane $pane, pid $pid stays parked)"; return 1; }
-  sock="$(lr_kitty_socket 2>/dev/null || true)"
+  [[ "$reset_ep" =~ ^[0-9]+$ ]] || reset_ep=0
+  if (( reset_ep > 0 && $(date +%s) < reset_ep + ${LR_NUDGE_AFTER_RESET_S:-120} )); then
+    log "NUDGE-WAIT $sid — reset at $(lrp_iso "$reset_ep")Z; the wake fires ${LR_NUDGE_AFTER_RESET_S:-120}s after it"
+    return 2
+  fi
+  if (( reset_ep > 0 )) && lr_engaged_after "$cfg" "$sid" "$(lrp_iso "$reset_ep")"; then
+    log "NUDGE-SKIP $sid — an assistant turn followed the reset; it continued on its own, nothing typed"
+    return 0
+  fi
+  if [[ -n "${LR_CC_TUI_LIB+x}" ]]; then
+    [[ -f "${LR_CC_TUI_LIB:-}" ]] && tui="$LR_CC_TUI_LIB"
+  else
+    for _t in "$LR/../lib/cc-tui.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/cc-tui.sh" "${HOME:-}/.claude/scripts/lib/cc-tui.sh"; do
+      [[ -f "$_t" ]] && { tui="$_t"; break; }
+    done
+  fi
+  [[ -n "$tui" ]] || { log "NUDGE-SKIP $sid — scripts/lib/cc-tui.sh unreachable; nothing typed (pane $pane stays parked)"; return 2; }
+  command -v lr_focus_gate >/dev/null 2>&1 || { log "NUDGE-SKIP $sid — lr-lib.sh has no lr_focus_gate (the live layer is behind); nothing typed"; return 2; }
+  crc=0; run_claim_take "$sid" || crc=$?
+  if (( crc != 0 )); then log "NUDGE-DEFER $sid — the run claim is held (a live request run drives it); nothing typed"; return 2; fi
+  idle="$(command -v lr_hid_idle_s >/dev/null 2>&1 && lr_hid_idle_s || echo unreadable)"
+  # Called DIRECTLY, never in $( ): the verdict comes back in LR_FOCUS_* globals.
+  lr_focus_gate "$pane" || rc=$?
+  if (( rc == 3 )); then
+    run_claim_release "$sid"
+    log "NUDGE-HELD $sid in pane $pane — ${LR_FOCUS_HOLD:-held} (focused=${LR_FOCUS_STATE:-unknown} idle=${idle}s); nothing typed"
+    [[ "${LR_FOCUS_HOLD:-}" == HELD:draft ]] && lrp_draft_hold "$sid" "$pane" HELD:draft 1
+    return 3
+  fi
+  rc=0
+  lrp_held_lead "$sid" && { lead=1; leadnote=", a lead with live members"; }
+  pf="$RESULTS/$sid.nudge.txt"
+  if (( lead )); then
+    printf '[limit-recover] The usage limit has reset on %s. Continue the work you were doing before the limit. Teammates whose last turn hit the limit resume when you message them.\n' "$acct" > "$pf"
+  else
+    printf '[limit-recover] The usage limit has reset on %s. Continue the work you were doing before the limit.\n' "$acct" > "$pf"
+  fi
   t0="$(date -u +%FT%T)"
-  # stderr is KEPT (appended to the log): a failed type is the one moment the shim says why.
-  if ! CC_TERM_KITTY_TO="${sock:-${CC_TERM_KITTY_TO:-}}" lrp_bounded "$it2" session run -s "$pane" "/limit-recover" >/dev/null 2>>"$LOG"; then
-    log "NUDGE-FAILED $sid — could not type into pane $pane (pid $pid, $acct)"; return 1
+  # SOURCED IN A SUBSHELL, as request prompt mode does: cc-tui.sh must not replace this file's own
+  # `log`/`lrp_bounded` for the rest of the tick.
+  # shellcheck disable=SC1090  # runtime-resolved sibling
+  ( . "$tui" && cc_tui_submit "$pane" "$pf" ) >> "$RESULTS/$sid.nudge.log" 2>&1 || rc=$?
+  case "$rc" in
+    0|5) : ;;
+    3) run_claim_release "$sid"
+       log "NUDGE-HELD $sid in pane $pane — HELD:draft (the composer holds text; focused=${LR_FOCUS_STATE:-unknown} idle=${idle}s); nothing typed"
+       lrp_draft_hold "$sid" "$pane" HELD:draft "$([[ "${LR_FOCUS_STATE:-}" == yes ]] && echo 1 || echo 0)"
+       return 3 ;;
+    *) run_claim_release "$sid"
+       log "NUDGE-FAILED $sid — cc_tui_submit rc $rc into pane $pane (pid $pid, $acct; focused=${LR_FOCUS_STATE:-unknown} idle=${idle}s); see $RESULTS/$sid.nudge.log"
+       return 1 ;;
+  esac
+  if [[ "$await" == 0 ]]; then
+    run_claim_release "$sid"
+    log "NUDGE-TYPED $sid in pane $pane (in place on $acct$leadnote; focused=${LR_FOCUS_STATE:-unknown} idle=${idle}s) — the caller re-checks it next tick"
+    return 0
   fi
   max="${LR_NUDGE_ENGAGE_S:-120}"; ivl="${LR_NUDGE_IVL:-5}"
   while (( waited < max )); do
     if lr_engaged_after "$cfg" "$sid" "$t0"; then
-      log "NUDGED $sid in pane $pane (in place on $acct, pid $pid) — engaged after ${waited}s"; return 0
+      run_claim_release "$sid"
+      log "NUDGED $sid in pane $pane (in place on $acct, pid $pid$leadnote) — engaged after ${waited}s (focused=${LR_FOCUS_STATE:-unknown} idle=${idle}s)"
+      return 0
     fi
     sleep "$ivl"; waited=$((waited + ivl))
   done
-  log "NUDGE-FAILED $sid — typed into pane $pane but no assistant turn within ${max}s"; return 1
+  run_claim_release "$sid"
+  log "NUDGE-FAILED $sid — typed a continue into pane $pane but no assistant turn within ${max}s (focused=${LR_FOCUS_STATE:-unknown} idle=${idle}s)"
+  return 1
 }
 
 # ── 0. REQUESTS — a driver's hand-off to this daemon (LIMIT_RECOVER_100P) ────────────────────────
@@ -823,6 +951,9 @@ rq_stale_reason() {
   fi
   [[ -f "$tp" ]] || { echo "the transcript is gone from $cfg"; return 0; }
   if head -c 8192 "$tp" 2>/dev/null | grep '"agentName"' >/dev/null; then echo "a teammate — lead-owned, never a recovery target"; return 0; fi
+  # DECISION 4: a lead with live members is held on every lane. Retired HERE rather than dispatched,
+  # or it spends RQ_MAX_ATTEMPTS on moves the precheck refuses as HELD:team; §2's wake owns it.
+  if lrp_held_lead "$sid"; then echo "held:team, resumes in place at reset — a lead with live members is never moved"; return 0; fi
   command -v lr_last_api_error >/dev/null 2>&1 || { echo "lr-lib.sh is unreachable, so LIMITED cannot be confirmed"; return 0; }
   IFS=$'\t' read -r _ _ kind _ <<<"$(lr_last_api_error "$tp" 2>/dev/null || true)"
   [[ "$kind" == limit ]] || { echo "no longer LIMITED — its last assistant record is ${kind:+a $kind error}${kind:-not an api error} (recovered, resumed or working)"; return 0; }
@@ -853,9 +984,10 @@ rq_record_attempt() { # $1=file $2=verdict — bumps .attempts and stamps the at
 RQ_STAY_S="${LR_REQUEST_STAY_S:-900}"; [[ "$RQ_STAY_S" =~ ^[0-9]+$ ]] || RQ_STAY_S=900
 RQ_MAX_PER_TICK="${LR_REQUEST_MAX_PER_TICK:-4}"; [[ "$RQ_MAX_PER_TICK" =~ ^[1-9][0-9]*$ ]] || RQ_MAX_PER_TICK=4
 RQ_TICK_MIN="${LR_POLLER_TICK_MIN:-15}"; [[ "$RQ_TICK_MIN" =~ ^[1-9][0-9]*$ ]] || RQ_TICK_MIN=15
-_rq_disp=""; _rq_over=0; _rq_over_by=""
-rq_acct_n() { # $1=acct → this tick's dispatch count for it
-  local e; for e in $_rq_disp; do [[ "${e%=*}" == "$1" ]] && { printf '%s' "${e##*=}"; return 0; }; done
+_rq_disp=""; _rq_over=0; _rq_over_by=""; _rq_woke=""
+rq_acct_n() { rq_acct_n_of _rq_disp "$1"; } # $1=acct → this tick's dispatch count for it
+rq_acct_n_of() { # $1=counter variable name $2=acct → that account's count in that counter
+  local e; for e in ${!1}; do [[ "${e%=*}" == "$2" ]] && { printf '%s' "${e##*=}"; return 0; }; done
   printf 0
 }
 rq_acct_bump() { # $1=counter variable name $2=acct → +1 for that account in that counter
@@ -1032,6 +1164,28 @@ sys.stdout.write("".join(str(d.get(k) or "")+"\0"
         continue
       fi
     fi
+    # D1.4 — PAST THE RESET, WAKE IN PLACE; NEVER MOVE. The account the session died on has headroom
+    # again, so a transplant elsewhere buys nothing. A hook request whose session is still limited,
+    # with a live pane, gets ONE plain continue through nudge_in_place (focus gate, composer gate,
+    # run claim, the wake text) — without its engagement wait: the request stays queued and the next
+    # tick retires it the moment the session is no longer LIMITED. Paced: at most LR_WAKE_PER_ACCT
+    # (3) per account per tick, each sid a stable 0-LR_WAKE_JITTER_S (90) s after reset + 120 s.
+    if (( _rq_hook == 1 && _rq_reset > 0 && $(date +%s) >= _rq_reset )) \
+       && command -v lr_registry_live_rows >/dev/null 2>&1 && _rq_rows="$(lr_registry_live_rows "$_rq_sid" 2>/dev/null)"; then
+      _rq_jit=$(( $(printf '%s' "$_rq_sid" | cksum | cut -d' ' -f1) % ${LR_WAKE_JITTER_S:-90} ))
+      if (( $(date +%s) < _rq_reset + ${LR_NUDGE_AFTER_RESET_S:-120} + _rq_jit )); then continue; fi
+      if (( $(rq_acct_n_of _rq_woke "$_rq_acct") >= ${LR_WAKE_PER_ACCT:-3} )); then _rq_over=$(( _rq_over + 1 )); rq_acct_bump _rq_over_by "$_rq_acct"; continue; fi
+      lrp_may_act "$_rq_sid" wake || continue
+      _rq_nrc=0; nudge_in_place "$_rq_sid" "${_rq_tp%%/projects/*}" "$_rq_rows" "$_rq_reset" 0 || _rq_nrc=$?
+      lrp_act_done
+      case "$_rq_nrc" in
+        0) rq_acct_bump _rq_woke "$_rq_acct"; rq_record_attempt "$_rq" woken-in-place
+           log "REQUEST-WAKE $_rq_sid ($_rq_acct) — a continue was typed into its own pane after the reset; the request stays queued until the session is seen recovered" ;;
+        1) rq_acct_bump _rq_woke "$_rq_acct"; rq_record_attempt "$_rq" wake-failed ;;
+        *) : ;;   # not yet, or held by a person: nothing spent
+      esac
+      continue
+    fi
     # D1.6 — at most RQ_MAX_PER_TICK dispatches per ACCOUNT per tick (default 4, MAX_PER_RUN's
     # number). A 30-death cohort otherwise started 30 detached drivers in one tick. The excess stays
     # queued; the tick's summary line names the depth and the ETA the cap implies.
@@ -1051,7 +1205,10 @@ sys.stdout.write("".join(str(d.get(k) or "")+"\0"
   if (( _rq_hook == 1 )); then
     if (( _rq_att >= RQ_MAX_ATTEMPTS )); then
       log "REQUEST-EXHAUSTED $_rq_sid — $_rq_att dispatch(es) and the session is still LIMITED; filed as exhausted (cc-lr recover ${_rq_sid:0:8} retries it by hand)"
-      mv "$_rq" "$RESULTS/${_rq_name%.json}.exhausted.json" 2>/dev/null || true; lrp_act_done; continue
+      mv "$_rq" "$RESULTS/${_rq_name%.json}.exhausted.json" 2>/dev/null || true; lrp_act_done
+      # ONCE: the request leaves the queue on this line, so there is no later tick to repeat it.
+      lrp_page "recovery exhausted" "Session ${_rq_sid:0:8} (pane ${_rq_pane:-?}, $_rq_acct) is still limited after $_rq_att recovery attempts. The usual cause is an unsent draft in that pane. cc-lr recover ${_rq_sid:0:8} retries it."
+      continue
     fi
     if (( _rq_last > 0 && $(date +%s) - _rq_last < RQ_RETRY_MIN * 60 )); then lrp_act_done; continue; fi
   fi
@@ -1135,6 +1292,14 @@ if (( _rq_over > 0 )); then
   _rq_ticks=$(( (_rq_deep + RQ_MAX_PER_TICK - 1) / RQ_MAX_PER_TICK ))   # whole ticks: a partial one still costs a tick
   _rq_eta=$(( _rq_ticks * RQ_TICK_MIN ))
   log "REQUEST-QUEUED $_rq_over request(s) over the ${RQ_MAX_PER_TICK}/account/tick cap left queued (by account: ${_rq_over_by% }); queue depth $_rq_over, ETA ~${_rq_eta} min at ~${RQ_TICK_MIN} min/tick"
+  # PAGED ONCE PER DEPTH: a new depth is news (a cohort arriving, or draining), the same depth again
+  # is not. The stamp is state, never a log grep.
+  if [[ "$(cat "$STATE/request-queue.page" 2>/dev/null || true)" != "$_rq_over" ]]; then
+    printf '%s\n' "$_rq_over" > "$STATE/request-queue.page" 2>/dev/null || true
+    lrp_page "recovery queue" "$_rq_over limited session(s) are queued for recovery (by account: ${_rq_over_by% }). At ${RQ_MAX_PER_TICK} per account per tick the queue drains in about ${_rq_eta} min."
+  fi
+else
+  rm -f "$STATE/request-queue.page" 2>/dev/null || true
 fi
 if (( _rq_recon > 0 )); then
   log "RECON-OWNED $_rq_recon cc-lr request(s) left for the live reconciler"
@@ -1506,7 +1671,13 @@ for cfg in "$HOME"/.claude-next "$HOME"/.claude-secondary "$HOME"/.claude-tertia
       continue
     fi
     # already running, OR a fresh claim from an in-flight spawn chain (see FIRE CLAIM above)
-    { pgrep -f "resume $sid" >/dev/null 2>&1 || sid_claimed "$sid"; } && continue
+    sid_claimed "$sid" && continue
+    # …but a `--resume` process that is itself sitting on this limit in a LIVE pane is the session to
+    # WAKE, not proof it recovered (D1.15): skipping it here meant no parked record, so §2's wake
+    # never saw it. Only a live registry row qualifies — without one, §2 could only spawn a duplicate.
+    if pgrep -f "resume $sid" >/dev/null 2>&1; then
+      { command -v lr_registry_live_rows >/dev/null 2>&1 && lr_registry_live_rows "$sid" >/dev/null 2>&1 && lrp_still_limited "$tx"; } || continue
+    fi
     # cwd from the transcript itself (avoids lossy slug-decoding)
     cwd=$(cwd_of "$tx")
     [[ -n "$cwd" && -d "$cwd" ]] || continue
@@ -1661,6 +1832,10 @@ reroute_parked() { # $1=sid $2=acct $3=cfg $4=reset epoch → dispatches or does
   [[ "${LR_POLLER_REROUTE:-on}" != off ]] || return 0
   (( AUTOFIRE == 1 && DRY == 0 )) || return 0
   if [[ ! -e "$STATE/autorecover.on" ]]; then _rr_held=$(( _rr_held + 1 )); return 0; fi
+  if lrp_held_lead "$sid"; then
+    [[ -e "$PARKED/$sid.team-noted" ]] || { log "REROUTE-SKIP $sid — held:team, a lead with live members is never moved; it is woken in place at its reset"; : > "$PARKED/$sid.team-noted"; }
+    return 0
+  fi
   if [[ "$reset_ep" =~ ^[0-9]+$ ]] && (( reset_ep > 0 )); then
     left=$(( reset_ep - $(date +%s) ))
     if (( left > 0 && left < RQ_STAY_S )); then
@@ -1734,7 +1909,15 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
     reroute_parked "$sid" "$acct" "$cfg" "$reset_epoch"      # …but another account may route now
     continue
   fi
-  { pgrep -f "resume $sid" >/dev/null 2>&1 || sid_claimed "$sid"; } && { mv "$pf" "$RESUMED/$(basename "$pf")" 2>/dev/null; rm -f "$PARKED/$sid.notified"; continue; }
+  _lrp_keep=0
+  if ! sid_claimed "$sid" && pgrep -f "resume $sid" >/dev/null 2>&1 \
+     && command -v lr_registry_live_rows >/dev/null 2>&1 && lr_registry_live_rows "$sid" >/dev/null 2>&1 \
+     && _lrp_tx="$(lrp_tx_of "$cfg" "$sid")" && lrp_still_limited "$_lrp_tx"; then
+    _lrp_keep=1   # D1.15: its only `resume <sid>` holder is still limited in a live pane — wake it, below
+  fi
+  if (( _lrp_keep == 0 )); then
+    { pgrep -f "resume $sid" >/dev/null 2>&1 || sid_claimed "$sid"; } && { mv "$pf" "$RESUMED/$(basename "$pf")" 2>/dev/null; rm -f "$PARKED/$sid.notified"; continue; }
+  fi
   # ── TRANSPLANTED elsewhere (LIMIT_RECOVER_100P): /limit-recover moved this session to another
   # account and its successor is on disk, so THIS store's copy is retired. Re-firing it here would be
   # refused by lr-fire-resume's tombstone verdict every tick until the fire latch tripped — a loop
@@ -1841,13 +2024,28 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
     if ! account_has_headroom "$acct"; then log "WAIT  $sid — $acct still capped, retry next tick"; continue; fi
     (( fired >= MAX_PER_RUN )) && { log "CAP   per-run resume cap ($MAX_PER_RUN) reached; deferring rest"; break; }
     lrp_may_act "$sid" nudge || continue
-    if nudge_in_place "$sid" "$cfg" "$_lrp_rows"; then
-      lrp_act_done
-      mv "$pf" "$RESUMED/$(basename "$pf")" 2>/dev/null; rm -f "$PARKED/$sid.notified"; fired=$((fired+1)); continue
-    fi
+    _lrp_nrc=0; nudge_in_place "$sid" "$cfg" "$_lrp_rows" "$reset_epoch" 1 || _lrp_nrc=$?
     lrp_act_done
-    fire_fail_note "$sid" nudge-failed
-    log "ERROR  $sid — nudge into the live pane failed; NOT spawning a duplicate over a live process (retry next tick)"
+    case "$_lrp_nrc" in
+      0) mv "$pf" "$RESUMED/$(basename "$pf")" 2>/dev/null; rm -f "$PARKED/$sid.notified" "$PARKED/$sid.draft-paged" "$PARKED/$sid.team-noted"; fired=$((fired+1)) ;;
+      2|3) : ;;     # not yet, or held by a person: the record waits, no strike
+      *) fire_fail_note "$sid" nudge-failed
+         log "ERROR  $sid — nudge into the live pane failed; NOT spawning a duplicate over a live process (retry next tick)" ;;
+    esac
+    continue
+  fi
+  # ── A HELD LEAD IS NEVER SPAWNED (D4.8). Its members are live, so a `--resume` in a new pane is a
+  # second lead they cannot hear. It continued on its own ⇒ the record retires; otherwise it is
+  # paged ONCE and left parked for a person.
+  if lrp_held_lead "$sid"; then
+    if lr_engaged_after "$cfg" "$sid" "$(lrp_iso "$reset_epoch")"; then
+      log "CONTINUED $sid — a held lead took an assistant turn after its reset; record retired"
+      mv "$pf" "$RESUMED/$(basename "$pf")" 2>/dev/null; rm -f "$PARKED/$sid.notified" "$PARKED/$sid.team-paged"; continue
+    fi
+    if [[ ! -e "$PARKED/$sid.team-paged" ]]; then
+      : > "$PARKED/$sid.team-paged" 2>/dev/null || true
+      lrp_page "held lead" "Team lead ${sid:0:8} ($acct) has live teammates but no live pane to wake after its limit reset. It is never re-spawned; resume it by hand."
+    fi
     continue
   fi
   # Not the winner for its worktree → LIST it and retire THIS limit event. Leaving it parked

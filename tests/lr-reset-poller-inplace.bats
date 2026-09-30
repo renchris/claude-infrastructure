@@ -82,34 +82,52 @@ STUB
 echo '{"rows":[{"acct":"next4","session_pct":12,"weekly_pct":40}]}'
 STUB
   chmod +x "$HOME/bin/claude-accounts"
-  # the it2 shim seam: records the nudge; when IT2_ENGAGE=1 it appends a fresh assistant turn to the
-  # transcript, which is exactly what a real nudge produces and what the oracle looks for
-  export LR_IT2_BIN="$BATS_TEST_TMPDIR/stubs/it2"
-  cat > "$LR_IT2_BIN" <<'STUB'
-#!/bin/bash
-printf '%s\n' "$*" >> "${IT2_LOG:?}"
-if [ "${IT2_ENGAGE:-0}" = 1 ]; then
-  sleep 1
-  printf '{"type":"assistant","timestamp":"%s","message":{"role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"resumed"}]}}\n' \
-    "$(date -u -v+5S +%FT%T.000Z 2>/dev/null || date -u +%FT%T.000Z)" >> "${IT2_TX:?}"
-fi
-exit "${IT2_RC:-0}"
+  # THE DELIVERY SEAM (W6b, resolution 3): the nudge types through cc-tui.sh's cc_tui_submit, never
+  # the it2 shim (85 of 85 it2 attempts failed under launchd). The stub records pane + prompt; with
+  # TUI_ENGAGE=1 it appends a fresh assistant turn — what a real submit produces and what the oracle
+  # reads. The real library is exercised under env -i by its own case at the end of this file.
+  export LR_CC_TUI_LIB="$BATS_TEST_TMPDIR/cc-tui-stub.sh"
+  cat > "$LR_CC_TUI_LIB" <<'STUB'
+cc_tui_submit() {
+  printf 'pane=%s prompt=%s\n' "$1" "$(cat "$2")" >> "${TUI_LOG:?}"
+  if [ "${TUI_ENGAGE:-0}" = 1 ]; then
+    sleep 1
+    printf '{"type":"assistant","timestamp":"%s","message":{"role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"resumed"}]}}\n' \
+      "$(date -u -v+5S +%FT%T.000Z 2>/dev/null || date -u +%FT%T.000Z)" >> "${TUI_TX:?}"
+  fi
+  return "${TUI_RC:-0}"
+}
 STUB
-  chmod +x "$LR_IT2_BIN"; export IT2_LOG="$BATS_TEST_TMPDIR/it2.log"; : > "$IT2_LOG"
+  export TUI_LOG="$BATS_TEST_TMPDIR/tui.log"; : > "$TUI_LOG"
+  # lr-team.sh reads this snapshot instead of ps (its documented seam); empty = no live members.
+  export LR_TEAM_PS_SNAPSHOT="$BATS_TEST_TMPDIR/ps.snapshot"; : > "$LR_TEAM_PS_SNAPSHOT"
+  # the page channel: lr-page.sh's osascript leg, forced on and stubbed; the phone leg stays off
+  export LR_PAGE_OS_CHANNEL=on LR_PAGE_OSASCRIPT_BIN="$BATS_TEST_TMPDIR/stubs/page-osa" LR_PAGE_LOG="$BATS_TEST_TMPDIR/pages.log"
+  unset PUSHOVER_TOKEN PUSHOVER_USER
+  export PAGE_ARGV="$BATS_TEST_TMPDIR/page.argv"; : > "$PAGE_ARGV"
+  printf '#!/bin/bash\ncat >/dev/null; printf "%%s\\n" "$*" >> "$PAGE_ARGV"\n' > "$LR_PAGE_OSASCRIPT_BIN"; chmod +x "$LR_PAGE_OSASCRIPT_BIN"
+  unset LR_MOVE_FOCUSED LR_FOCUS_LS_FILE
 }
 SLUG() { printf '%s' "$1" | tr '/' '-'; }
 mk_parked() { # $1=sid [$2=model $3=effort]
   local sid="$1" proj ts
   proj="$HOME/.claude-quaternary/projects/$(SLUG "$CWD")"; mkdir -p "$proj"
-  ts="$(python3 -c "from datetime import datetime,timezone;print(datetime.now(timezone.utc).isoformat().replace('+00:00','Z'))")"
+  # The death precedes its reset, as a real one does: records 3 h back, the reset ${RESET_AGO_S:-600} s
+  # back. (Records stamped NOW would be turns AFTER the reset, which the wake reads as "it continued".)
+  # A NEGATIVE RESET_AGO_S puts the reset in the FUTURE (a session still before its reset).
+  ts="$(python3 -c "from datetime import datetime,timezone,timedelta;print((datetime.now(timezone.utc)-timedelta(hours=3)).isoformat().replace('+00:00','Z'))")"
+  case "${RESET_AGO_S:-600}" in
+    -*) RESET_ISO="$(date -u -v+"${RESET_AGO_S#-}"S +%Y-%m-%dT%H:%M:%SZ)" ;;
+    *)  RESET_ISO="$(date -u -v-"${RESET_AGO_S:-600}"S +%Y-%m-%dT%H:%M:%SZ)" ;;
+  esac
   {
     printf '{"type":"user","cwd":"%s","gitBranch":"main","timestamp":"%s"}\n' "$CWD" "$ts"
     if [ -n "${2:-}" ]; then printf '{"type":"assistant","timestamp":"%s","effort":"%s","message":{"role":"assistant","model":"%s","content":[{"type":"text","text":"work"}]}}\n' "$ts" "$3" "$2"; else printf '{"type":"assistant","timestamp":"%s"}\n' "$ts"; fi
     printf '{"type":"assistant","timestamp":"%s","isApiErrorMessage":true,"message":{"role":"assistant","content":[{"type":"text","text":"You'"'"'ve hit your session limit"}]}}\n' "$ts"
   } > "$proj/$sid.jsonl"
-  export IT2_TX="$proj/$sid.jsonl"
-  printf '{"sid":"%s","acct":"next4","cfg":"%s","cwd":"%s","kind":"session","reset_at_utc":"2026-01-01T00:00:00Z","parked_at":"2026-01-01T00:00:00Z"}\n' \
-    "$sid" "$HOME/.claude-quaternary" "$CWD" > "$STATE/parked/$sid.json"
+  export TUI_TX="$proj/$sid.jsonl"
+  printf '{"sid":"%s","acct":"next4","cfg":"%s","cwd":"%s","kind":"session","reset_at_utc":"%s","parked_at":"2026-01-01T00:00:00Z"}\n' \
+    "$sid" "$HOME/.claude-quaternary" "$CWD" "$RESET_ISO" > "$STATE/parked/$sid.json"
 }
 row() { printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"claude-quaternary","cwd":"%s"}\n' "$1" "$2" "${3:-$$}" "$CWD" > "$CC_REGISTRY_DIR/$1.json"; }
 # The incident sid, with a ZEROED tail. The full 2026-09-09 uuid is LIVE on this box (a tmux
@@ -124,9 +142,9 @@ row() { printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"claude-qu
 
 @test "D1: the original pane is ALIVE → the poller NUDGES it in place; nothing is spawned; the record retires as handled" {
   mk_parked "$SID"; row 616 "$SID"
-  IT2_ENGAGE=1 LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
+  TUI_ENGAGE=1 LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
   [ "$status" -eq 0 ] || { echo "$output"; cat "$STATE/poller.log"; false; }
-  grep -q 'session run -s 616 /limit-recover' "$IT2_LOG"
+  grep -q '^pane=616 prompt=\[limit-recover\] The usage limit has reset on claude-quaternary. Continue the work' "$TUI_LOG" || { cat "$TUI_LOG"; false; }
   grep -qE "NUDGED $SID in pane 616 \(in place on claude-quaternary, pid $$\) — engaged" "$STATE/poller.log" || { cat "$STATE/poller.log"; false; }
   [ ! -s "$TMUX_LOG" ]; [ ! -s "$OSA_LOG" ]
   [ -z "$(ls "$LR_POLLER_LAUNCH_DIR" 2>/dev/null)" ]                 # no launcher minted ⇒ no second process
@@ -134,7 +152,7 @@ row() { printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"claude-qu
 }
 @test "D1: a nudge that does NOT engage leaves the record PARKED and still spawns nothing over the live process" {
   mk_parked "$SID"; row 616 "$SID"
-  IT2_ENGAGE=0 LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
+  TUI_ENGAGE=0 LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
   [ "$status" -eq 0 ]
   grep -qE "NUDGE-FAILED $SID" "$STATE/poller.log" || { cat "$STATE/poller.log"; false; }
   grep -qE "ERROR +$SID — nudge into the live pane failed; NOT spawning a duplicate" "$STATE/poller.log"
@@ -145,14 +163,14 @@ row() { printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"claude-qu
   mk_parked "$SID"; row 616 "$SID" 4194105
   LR_POLLER_SPAWN=tmux LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
   [ "$status" -eq 0 ]
-  [ ! -s "$IT2_LOG" ]
+  [ ! -s "$TUI_LOG" ]
   grep -q 'new-session' "$TMUX_LOG"
 }
 @test "D1: --dry-run with a live original says it WOULD nudge and types nothing" {
   mk_parked "$SID"; row 616 "$SID"
   LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once --dry-run
   grep -qE "LIVE +$SID — original pane 616 is alive \(pid $$\); would NUDGE in place, never spawn \(dry-run\)" "$STATE/poller.log" || { cat "$STATE/poller.log"; false; }
-  [ ! -s "$IT2_LOG" ]
+  [ ! -s "$TUI_LOG" ]
 }
 @test "SELF: a tick reads no variable before assigning it — _LRP_SELF is set before the lr-lib ladder" {
   # 59e415e12 read _LRP_SELF at the lr-lib ladder and assigned it ~190 lines later. set -u killed
@@ -404,4 +422,206 @@ teardown() {
   # LISTED line never gets written — the verdict is real, the place it surfaces is not poller.log.
   grep -q "already-running" "$STATE/last-triage.txt" || { cat "$STATE/last-triage.txt"; false; }
   [ ! -f "$STATE/parked/$SID.json" ]; [ ! -s "$TMUX_LOG" ]
+}
+
+# ══ W6b (LIMIT_RECOVER_FLEET_V2): ONE WAKE SPEC — resolution 3; D1.15, D4.7, D7.7; D4.8, D4.13 ════
+plog() { cat "$STATE/poller.log" >&2 2>/dev/null || true; }
+tick1() { LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once; }
+lead_of() { printf '999%s S /opt/cc/bin/claude --agent-id w@session-t --parent-session-id %s --model claude-opus-5\n' "$RANDOM" "$1" >> "$LR_TEAM_PS_SNAPSHOT"; }
+
+@test "[R2] the wake text is a plain continue — never /limit-recover, which runs the skill and can MOVE" {
+  mk_parked "$SID"; row 616 "$SID"
+  TUI_ENGAGE=1 tick1
+  [ -s "$TUI_LOG" ] || { plog; false; }
+  ! grep -q '/limit-recover' "$TUI_LOG" || { cat "$TUI_LOG"; false; }
+}
+
+@test "[D4.7] before reset + 120 s nothing is typed, the record waits, and no strike is counted" {
+  RESET_AGO_S=30 mk_parked "$SID"; row 616 "$SID"
+  TUI_ENGAGE=1 tick1
+  [ ! -s "$TUI_LOG" ] || { cat "$TUI_LOG"; false; }
+  grep -q "NUDGE-WAIT $SID" "$STATE/poller.log" || { plog; false; }
+  [ -f "$STATE/parked/$SID.json" ]
+  [ ! -e "$STATE/fire-fail/$SID" ]
+}
+
+@test "[D4.7] a session that took an assistant turn after its reset is left alone and its record retires" {
+  mk_parked "$SID"; row 616 "$SID"
+  printf '{"type":"assistant","timestamp":"%s","message":{"role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"back"}]}}\n' \
+    "$(date -u +%FT%T.000Z)" >> "$TUI_TX"
+  tick1
+  [ ! -s "$TUI_LOG" ] || { cat "$TUI_LOG"; false; }
+  grep -q "NUDGE-SKIP $SID — an assistant turn followed the reset" "$STATE/poller.log" || { plog; false; }
+  [ -f "$STATE/resumed/$SID.json" ]
+}
+
+@test "[R1] a FOCUSED pane is held (lr_focus_gate): nothing typed, no strike, the hold named" {
+  mk_parked "$SID"; row 616 "$SID"
+  export LR_FOCUS_LS_FILE="$BATS_TEST_TMPDIR/ls.json"
+  printf '[{"is_focused":true,"tabs":[{"is_focused":true,"windows":[{"id":616,"is_focused":true}]}]}]' > "$LR_FOCUS_LS_FILE"
+  TUI_ENGAGE=1 tick1
+  [ ! -s "$TUI_LOG" ] || { cat "$TUI_LOG"; false; }
+  grep -q "NUDGE-HELD $SID in pane 616 — HELD:focused (focused=yes" "$STATE/poller.log" || { plog; false; }
+  [ ! -e "$STATE/fire-fail/$SID" ]; [ -f "$STATE/parked/$SID.json" ]
+}
+
+@test "R1 CONTROL: the same pane UNFOCUSED is woken" {
+  mk_parked "$SID"; row 616 "$SID"
+  export LR_FOCUS_LS_FILE="$BATS_TEST_TMPDIR/ls.json"
+  printf '[{"is_focused":true,"tabs":[{"is_focused":true,"windows":[{"id":616,"is_focused":false}]}]}]' > "$LR_FOCUS_LS_FILE"
+  TUI_ENGAGE=1 tick1
+  grep -q '^pane=616 ' "$TUI_LOG" || { plog; false; }
+}
+
+@test "[D7.7] the wake takes the request lane's run claim — a live run holding it means nothing is typed" {
+  mk_parked "$SID"; row 616 "$SID"
+  mkdir -p "$STATE/runs/by-sid/$SID.active"
+  printf '{"pid":%d,"by":"lr-fleet --one --detach (lr-reset-poller)"}\n' "$$" > "$STATE/runs/by-sid/$SID.active/holder"
+  TUI_ENGAGE=1 tick1
+  [ ! -s "$TUI_LOG" ] || { cat "$TUI_LOG"; false; }
+  grep -q "NUDGE-DEFER $SID" "$STATE/poller.log" || { plog; false; }
+  [ -d "$STATE/runs/by-sid/$SID.active" ]
+}
+
+@test "D7.7 CONTROL: after a wake the claim is released, never left to wedge the sid" {
+  mk_parked "$SID"; row 616 "$SID"
+  TUI_ENGAGE=1 tick1
+  grep -q "NUDGED $SID" "$STATE/poller.log" || { plog; false; }
+  [ ! -d "$STATE/runs/by-sid/$SID.active" ] || { ls -la "$STATE/runs/by-sid"; false; }
+}
+
+@test "[D6.6] a draft in the composer (cc_tui_submit rc 3) is HELD and PAGED once, never retyped, no strike" {
+  mk_parked "$SID"; row 616 "$SID"
+  TUI_RC=3 tick1
+  grep -q "NUDGE-HELD $SID in pane 616 — HELD:draft" "$STATE/poller.log" || { plog; false; }
+  grep -q 'unsent draft' "$PAGE_ARGV" || { cat "$PAGE_ARGV"; plog; false; }
+  [ ! -e "$STATE/fire-fail/$SID" ]
+  TUI_RC=3 tick1
+  [ "$(grep -c 'unsent draft' "$PAGE_ARGV")" = 1 ] || { cat "$PAGE_ARGV"; false; }
+}
+
+@test "[D1.15] a --resume holder still on its limit in a LIVE pane is woken, not retired as running" {
+  mk_parked "$SID"; row 616 "$SID"
+  LR_TEST_PGREP_RC=0 TUI_ENGAGE=1 tick1
+  grep -q '^pane=616 ' "$TUI_LOG" || { plog; false; }
+  grep -q "NUDGED $SID" "$STATE/poller.log" || { plog; false; }
+}
+
+@test "[D4.13] a held lead at its reset gets ONE plain continue in its own pane — no /exit, no move, no spawn" {
+  mk_parked "$SID"; row 616 "$SID"; lead_of "$SID"
+  TUI_ENGAGE=1 tick1
+  grep -q "^pane=616 prompt=.*Teammates whose last turn hit the limit resume when you message them" "$TUI_LOG" || { cat "$TUI_LOG"; plog; false; }
+  ! grep -q '/exit' "$TUI_LOG" || { cat "$TUI_LOG"; false; }
+  [ ! -s "$TMUX_LOG" ]; [ -z "$(ls "$LR_POLLER_LAUNCH_DIR" 2>/dev/null)" ]
+  grep -q "NUDGED $SID in pane 616 (in place on claude-quaternary, pid $$, a lead with live members)" "$STATE/poller.log" || { plog; false; }
+}
+
+@test "[D4.13] a held lead BEFORE its reset is never moved: no reroute, nothing typed" {
+  RESET_AGO_S=-3600 mk_parked "$SID"; row 616 "$SID"; lead_of "$SID"
+  : > "$STATE/autorecover.on"
+  export FLEET_ARGV="$BATS_TEST_TMPDIR/fleet.argv"; : > "$FLEET_ARGV"
+  export LR_FLEET_BIN="$BATS_TEST_TMPDIR/stubs/lr-fleet"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$FLEET_ARGV"\n' > "$LR_FLEET_BIN"; chmod +x "$LR_FLEET_BIN"
+  cat > "$HOME/bin/claude-accounts" <<'ACC'
+#!/bin/bash
+case " $* " in *" --rank "*) echo "next2 0.9" ;; *) echo '{"rows":[]}' ;; esac
+ACC
+  tick1
+  [ ! -s "$FLEET_ARGV" ] || { echo "a held lead was moved: $(cat "$FLEET_ARGV")"; false; }
+  [ ! -s "$TUI_LOG" ]
+  grep -q "REROUTE-SKIP $SID — held:team" "$STATE/poller.log" || { plog; false; }
+}
+
+@test "[D4.8] a held lead with NO live pane at its reset is paged once and NEVER spawned" {
+  mk_parked "$SID"; lead_of "$SID"
+  LR_POLLER_SPAWN=tmux tick1
+  [ ! -s "$TMUX_LOG" ] || { cat "$TMUX_LOG"; false; }
+  [ -z "$(ls "$LR_POLLER_LAUNCH_DIR" 2>/dev/null)" ]
+  grep -q 'has live teammates but no live pane' "$PAGE_ARGV" || { cat "$PAGE_ARGV"; plog; false; }
+  [ -f "$STATE/parked/$SID.json" ]
+  LR_POLLER_SPAWN=tmux tick1
+  [ "$(grep -c 'has live teammates' "$PAGE_ARGV")" = 1 ] || { cat "$PAGE_ARGV"; false; }
+}
+
+@test "[D4.13] a LATCHED held lead is paged at latch expiry and never --resume'd" {
+  mk_parked "$SID"; lead_of "$SID"
+  mkdir -p "$STATE/fire-fail"; printf '3\n' > "$STATE/fire-fail/$SID"
+  touch -t "$(date -v-7H +%Y%m%d%H%M)" "$STATE/fire-fail/$SID"
+  LR_POLLER_SPAWN=tmux tick1
+  grep -q "UNLATCHED $SID" "$STATE/poller.log" || { plog; false; }
+  grep -q 'wake latch expired' "$PAGE_ARGV" || { cat "$PAGE_ARGV"; plog; false; }
+  [ ! -s "$TMUX_LOG" ] || { echo "a latched held lead was re-spawned: $(cat "$TMUX_LOG")"; false; }
+  [ -z "$(ls "$LR_POLLER_LAUNCH_DIR" 2>/dev/null)" ]
+}
+
+@test "D4.8 CONTROL: the same session with NO live members still takes the spawn arm" {
+  mk_parked "$SID"
+  LR_POLLER_SPAWN=tmux tick1
+  grep -q 'new-session' "$TMUX_LOG" || { plog; false; }
+}
+
+# ── D4.7 / D7.7: the REAL cc-tui.sh under a launchd-shaped env (env -i: no KITTY_WINDOW_ID, no CC_TERM,
+# no Homebrew PATH). The it2 path failed 85 of 85 here because routing keyed on those; cc-tui reaches
+# kitty by socket. The kitty stub is stateful: get-text renders the composer from a state file,
+# send-text --from-file fills it, a CR submits (and appends the turn a real submit produces).
+@test "[D7.7] under env -i the real cc-tui.sh reaches kitty by socket and the wake engages" {
+  mk_parked "$SID"; row 616 "$SID"
+  local K="$BATS_TEST_TMPDIR/stubs/kitty" ST="$BATS_TEST_TMPDIR/composer.state" KA="$BATS_TEST_TMPDIR/kitty.argv"
+  : > "$ST"; : > "$KA"
+  printf '#!/bin/bash\necho unix:%s/kitty.sock\n' "$BATS_TEST_TMPDIR" > "$BATS_TEST_TMPDIR/stubs/kitty-socket"
+  cat > "$K" <<STUB
+#!/bin/bash
+printf '%s\n' "\$*" >> "$KA"
+B="────────────────────────────────────────"
+case " \$* " in
+  *" ls "*) echo '[{"is_focused":false,"tabs":[{"is_focused":true,"windows":[{"id":616,"is_focused":false}]}]}]' ;;
+  *" get-text "*) printf 'x\n%s\n❯ %s\n%s\n  status\n' "\$B" "\$(cat "$ST")" "\$B" ;;
+  *" --from-file "*) f=""; p=""; for a in "\$@"; do [ "\$p" = --from-file ] && f="\$a"; p="\$a"; done; tr -d '\n' < "\$f" > "$ST" ;;
+  *) last=""; for a in "\$@"; do last="\$a"; done
+     if [ "\$last" = \$'\r' ]; then : > "$ST"
+       printf '{"type":"assistant","timestamp":"%s","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}\n' "\$(date -u -v+5S +%FT%T.000Z)" >> "$TUI_TX"
+     fi ;;
+esac
+exit 0
+STUB
+  chmod +x "$K" "$BATS_TEST_TMPDIR/stubs/kitty-socket"
+  run env -i HOME="$HOME" PATH="$BATS_TEST_TMPDIR/stubs:/usr/bin:/bin:/usr/sbin:/sbin" \
+    LR_POLLER_AUTOFIRE=1 LR_POLLER_NO_CENSUS=1 LR_UPGRADE_AUTO=off LR_RESUME_DEBT_SWEEP=off \
+    CC_REGISTRY_DIR="$CC_REGISTRY_DIR" LR_POLLER_LAUNCH_DIR="$LR_POLLER_LAUNCH_DIR" LR_SELECT_PGREP_BIN="$LR_SELECT_PGREP_BIN" \
+    PGREP_LOG="$PGREP_LOG" OSA_LOG="$OSA_LOG" TMUX_LOG="$TMUX_LOG" LR_TEAM_PS_SNAPSHOT="$LR_TEAM_PS_SNAPSHOT" \
+    CC_KITTY_SOCKET_BIN="$BATS_TEST_TMPDIR/stubs/kitty-socket" CC_TERM_KITTY="$K" \
+    CC_TUI_PREWAIT=0 CC_TUI_SETTLE=0.1 CC_TUI_RECORD_TRIES=2 CC_TUI_RECORD_IVL=1 LR_NUDGE_ENGAGE_S=8 LR_NUDGE_IVL=1 \
+    LR_PAGE_OS_CHANNEL=off \
+    /bin/bash "$POLLER" --once
+  [ "$status" -eq 0 ] || { echo "$output"; plog; false; }
+  grep -q -- "--to unix:$BATS_TEST_TMPDIR/kitty.sock send-text --match id:616 --bracketed-paste=enable --from-file" "$KA" || { cat "$KA"; plog; false; }
+  grep -q "NUDGED $SID in pane 616" "$STATE/poller.log" || { cat "$KA"; plog; false; }
+}
+
+@test "[D1.15] detection PARKS a --resume holder that sits on its limit in a live pane (it was skipped as running)" {
+  local sid real ts
+  sid="0f0f0f0f-0000-4000-8000-00000000abce"
+  real="$HOME/.claude-quaternary/projects/$(SLUG "$CWD")"; mkdir -p "$real"
+  ts="$(python3 -c "from datetime import datetime,timezone;print(datetime.now(timezone.utc).isoformat().replace('+00:00','Z'))")"
+  {
+    printf '{"type":"user","cwd":"%s","gitBranch":"main","timestamp":"%s","message":{"role":"user","content":"work"}}\n' "$CWD" "$ts"
+    printf '{"type":"assistant","uuid":"u2","sessionId":"%s","timestamp":"%s","error":"rate_limit","apiErrorStatus":429,"isApiErrorMessage":true,"message":{"id":"m2","type":"message","role":"assistant","model":"<synthetic>","content":[{"type":"text","text":"You'"'"'ve hit your session limit · resets 11:40am (America/Chicago)"}]}}\n' "$sid" "$ts"
+  } > "$real/$sid.jsonl"
+  row 617 "$sid"
+  LR_TEST_PGREP_RC=0 LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once --dry-run
+  [ "$status" -eq 0 ]
+  grep -qE "PARKED $sid \(next4, session\)" "$STATE/poller.log" || { echo "$output"; plog; false; }
+}
+
+@test "D1.15 CONTROL: the same holder with NO live pane is still skipped as running" {
+  local sid real ts
+  sid="0f0f0f0f-0000-4000-8000-00000000abcf"
+  real="$HOME/.claude-quaternary/projects/$(SLUG "$CWD")"; mkdir -p "$real"
+  ts="$(python3 -c "from datetime import datetime,timezone;print(datetime.now(timezone.utc).isoformat().replace('+00:00','Z'))")"
+  {
+    printf '{"type":"user","cwd":"%s","gitBranch":"main","timestamp":"%s","message":{"role":"user","content":"work"}}\n' "$CWD" "$ts"
+    printf '{"type":"assistant","uuid":"u2","sessionId":"%s","timestamp":"%s","error":"rate_limit","apiErrorStatus":429,"isApiErrorMessage":true,"message":{"id":"m2","type":"message","role":"assistant","model":"<synthetic>","content":[{"type":"text","text":"You'"'"'ve hit your session limit · resets 11:40am (America/Chicago)"}]}}\n' "$sid" "$ts"
+  } > "$real/$sid.jsonl"
+  LR_TEST_PGREP_RC=0 LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once --dry-run
+  ! grep -q "PARKED $sid" "$STATE/poller.log" || { plog; false; }
 }
