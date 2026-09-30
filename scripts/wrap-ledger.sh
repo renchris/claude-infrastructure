@@ -186,7 +186,7 @@
 #                    WRAP_RESIDENT · WRAP_RESIDENT_TIMEOUT_S · CC_WF_TEAM_ROOTS ·
 #                    CC_WF_PSTABLE_FILE · CC_SESSIONS_BIN · CC_FIRED_DIR ·
 #                    WRAP_CACHE · WRAP_CACHE_DIR · WRAP_CACHE_WAIT_MS · WRAP_CACHE_WAIT_TRIES ·
-#                    WRAP_CACHE_LOCK_STALE_S
+#                    WRAP_CACHE_LOCK_STALE_S · WRAP_CACHE_HOLDER_MAX_S
 set -uo pipefail
 
 MODE="readout"
@@ -361,7 +361,20 @@ _wl_cache_store() {
 _wl_lock_release() {
   [ "$WL_LOCK_HELD" -eq 1 ] || return 0
   WL_LOCK_HELD=0
-  rmdir "$WL_LOCK" 2>/dev/null || rm -rf "$WL_LOCK" 2>/dev/null || true
+  # `rm -rf`, not `rmdir`: the lock now holds its owner record, so rmdir would always fail first
+  # and cost a second fork. $WL_LOCK is always "$WL_DIR/m-<digest>.lock" once a lock was held.
+  [ -n "$WL_LOCK" ] || return 0
+  rm -rf "$WL_LOCK" 2>/dev/null || true
+}
+
+# The lock's OWNER RECORD (2026-09-30): rc 0 with the winner's pid in $_wl_hpid, rc 1 when there is
+# no record to read — lock released, an older winner that wrote none, or garbage. A global rather
+# than an echo, because `$(…)` is a fork on the path whose purpose is not spending them.
+_wl_lock_holder() {
+  _wl_hpid=""
+  { IFS= read -r _wl_hpid < "$WL_LOCK/pid"; } 2>/dev/null
+  case "$_wl_hpid" in ''|*[!0-9]*) _wl_hpid=""; return 1 ;; esac
+  return 0
 }
 
 # rc 0 iff the lock dir is older than the stale bound — i.e. its winner died mid-compute. Costs two
@@ -420,6 +433,9 @@ if [ -n "$WL_KEY" ]; then
   if mkdir "$WL_LOCK" 2>/dev/null; then
     WL_LOCK_HELD=1
     trap _wl_lock_release EXIT
+    # The owner record losers read to tell a slow winner from a dead one. A builtin redirect, so no
+    # fork; a failed write leaves losers on the pre-2026-09-30 ladder, which is the fail-open side.
+    { printf '%s\n' "$$" > "$WL_LOCK/pid"; } 2>/dev/null || true
   else
     # A FIXED wait cannot be right at both ends and a POLL is the fork bomb the header rejects, so
     # the sleeps DOUBLE: 50, 100, 200, 400 ms — ≤4 forks for a ≤750 ms bound. Measured, six
@@ -433,20 +449,53 @@ if [ -n "$WL_KEY" ]; then
     # this whole script under six-way contention, so the worst case degrades to "uncached, plus the
     # wait" — never to an unbounded hold. Tunable, deliberately: a box where the winner routinely
     # overruns 750 ms wants more rungs, not fewer.
+    # 2026-09-30 (backlog dee95d7ff286): THE WALL-TIME TRADE ABOVE IS NOW REMOVED. Under box load a
+    # winner routinely overran 750 ms, every loser gave up and computed, and the six-caller case went
+    # deterministically red. The winner now leaves its pid in the lock, so a loser past the ladder
+    # keeps waiting only while that pid is ALIVE (bounded by WRAP_CACHE_HOLDER_MAX_S, default 20 s,
+    # so a wedged-but-alive winner cannot hold a Stop hook unboundedly), and stops the moment it is
+    # DEAD — at whichever rung sees it. Extra waiting is paid only while a live winner is working;
+    # a dead winner costs nothing. `kill -0` and `read` are builtins, so the check adds no fork.
+    _wl_wait0=$SECONDS
     _wl_tries="${WRAP_CACHE_WAIT_TRIES:-4}"
     case "$_wl_tries" in ''|*[!0-9]*) _wl_tries=4 ;; esac
     _wl_ms_wait="${WRAP_CACHE_WAIT_MS:-50}"
     case "$_wl_ms_wait" in ''|*[!0-9]*) _wl_ms_wait=50 ;; esac
+    _wl_tail_ms="$_wl_ms_wait"
+    # A corpse already on arrival: not even the first rung is worth sleeping.
+    if _wl_lock_holder && ! kill -0 "$_wl_hpid" 2>/dev/null; then _wl_tries=0; fi
     while [ "$_wl_tries" -gt 0 ]; do
       printf -v _wl_sleep '%d.%03d' "$((_wl_ms_wait / 1000))" "$((_wl_ms_wait % 1000))"
       sleep "$_wl_sleep" 2>/dev/null || true
       if _wl_cache_serve; then exit 0; fi
+      _wl_tail_ms="$_wl_ms_wait"
+      # An owner record naming a dead pid will never be followed by a memo: stop waiting now.
+      if _wl_lock_holder && ! kill -0 "$_wl_hpid" 2>/dev/null; then break; fi
       _wl_tries=$((_wl_tries - 1))
       _wl_ms_wait=$((_wl_ms_wait * 2))
     done
-    # The winner overran the wait or died. Clear a provably stale lock so the NEXT event does not
-    # queue behind a corpse, then compute — never wait behind one.
-    if _wl_lock_stale; then rmdir "$WL_LOCK" 2>/dev/null || rm -rf "$WL_LOCK" 2>/dev/null || true; fi
+    if _wl_lock_holder; then
+      # A LIVE winner is still computing: poll the memo at the last rung's interval (never under
+      # 50 ms — WAIT_MS=0 must not become a 20 s spin) until it dies or the ceiling passes.
+      _wl_hmax="${WRAP_CACHE_HOLDER_MAX_S:-20}"
+      case "$_wl_hmax" in ''|*[!0-9]*) _wl_hmax=20 ;; esac
+      [ "$_wl_tail_ms" -ge 50 ] || _wl_tail_ms=50
+      printf -v _wl_sleep '%d.%03d' "$((_wl_tail_ms / 1000))" "$((_wl_tail_ms % 1000))"
+      while kill -0 "$_wl_hpid" 2>/dev/null && [ $((SECONDS - _wl_wait0)) -lt "$_wl_hmax" ]; do
+        sleep "$_wl_sleep" 2>/dev/null || true
+        if _wl_cache_serve; then exit 0; fi
+        # Released with no memo (its store failed): nothing left to wait for.
+        _wl_lock_holder || break
+      done
+      # A DEAD winner never released: clear its corpse so the NEXT caller does not wait on it, then
+      # compute. A live one that hit the ceiling keeps its lock — it is not a corpse.
+      if [ -n "$_wl_hpid" ] && ! kill -0 "$_wl_hpid" 2>/dev/null; then
+        rm -rf "$WL_LOCK" 2>/dev/null || true
+      fi
+    # No owner record (an older winner, or its write failed): the pre-2026-09-30 rule. Clear a
+    # provably stale lock so the NEXT event does not queue behind a corpse, then compute — never
+    # wait behind one.
+    elif _wl_lock_stale; then rmdir "$WL_LOCK" 2>/dev/null || rm -rf "$WL_LOCK" 2>/dev/null || true; fi
   fi
 fi
 
