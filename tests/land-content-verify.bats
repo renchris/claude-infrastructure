@@ -518,3 +518,83 @@ fx_landed_other_sha() {
   [ "$status" -eq 1 ]
   echo "$output" | grep -qF 'wrap.md — ABSENT from origin/main' || { echo "strand not named: $output"; false; }
 }
+
+# ══ DECLARED SUPERSESSION (backlog 46da1266c6f1) ═══════════════════════════════════════════════
+# The shape of refs/land/failed/…-wt-82b87a8a2945: the failed work was redone as a CORRECTED
+# REWRITE on trunk, sharing no line with the ref, so every lineage arm convicts it. Leaves $FREF set
+# (a refs/land/failed/* ref) and trunk holding the rewrite, pushed but not declared.
+fx_rewrite() {
+  git -C "$W" checkout -q -b feat
+  printf 'gate says nothing\nold host spelling\n' > "$W/g.sh"; wcommit 'first attempt'
+  FREF="refs/land/failed/20260911T000000Z-fx-wt-rewrite"
+  git -C "$W" update-ref "$FREF" HEAD
+  git -C "$W" checkout -q main
+  printf 'gate reports on every path\nhost_id\n' > "$W/g.sh"; wcommit 'corrected rewrite'
+  push_main
+}
+
+@test "CONTROL — a corrected rewrite with no declaration ⇒ 1 (no fuzzy match forgives it)" {
+  fx_rewrite
+  run verify "$FREF"
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -qF 'NOT landed'
+}
+
+@test "DECLARED by a trunk trailer naming the ref ⇒ 0, says LANDED BY DECLARATION and keeps the evidence" {
+  fx_rewrite
+  git -C "$W" commit -q --allow-empty -m 'declare it' -m "Supersedes-ref: $FREF"
+  push_main
+  run verify "$FREF"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qF 'LANDED BY DECLARATION' || { echo "no declaration named: $output"; false; }
+  echo "$output" | grep -qF 'Supersedes-ref:' || { echo "declarer not named: $output"; false; }
+  echo "$output" | grep -qF 'g.sh' || { echo "differing path hidden: $output"; false; }
+}
+
+@test "DECLARED by ≥12 hex of the ref's tip sha ⇒ 0" {
+  fx_rewrite
+  local tip; tip="$(git -C "$W" rev-parse "$FREF")"
+  git -C "$W" commit -q --allow-empty -m 'declare by sha' -m "Supersedes-ref: ${tip:0:12}"
+  push_main
+  run verify "$FREF"
+  [ "$status" -eq 0 ]
+}
+
+@test "CONTROL — a declaration that is not ON TRUNK forgives nothing ⇒ 1" {
+  fx_rewrite
+  git -C "$W" commit -q --allow-empty -m 'declare it' -m "Supersedes-ref: $FREF"   # committed, never pushed
+  run verify "$FREF"
+  [ "$status" -eq 1 ]
+}
+
+@test "CONTROL — a declaration naming ANOTHER ref, or a short sha prefix, forgives nothing ⇒ 1" {
+  fx_rewrite
+  local tip; tip="$(git -C "$W" rev-parse "$FREF")"
+  git -C "$W" commit -q --allow-empty -m 'declare others' \
+    -m "Supersedes-ref: ${FREF}-other
+Supersedes-ref: ${tip:0:7}"
+  push_main
+  run verify "$FREF"
+  [ "$status" -eq 1 ]
+}
+
+@test "DECLARED by a refs/land/superseded/<name> note at a trunk commit ⇒ 0; off trunk ⇒ 1" {
+  fx_rewrite
+  git -C "$W" checkout -q -b elsewhere
+  git -C "$W" commit -q --allow-empty -m 'not on trunk'
+  git -C "$W" update-ref "refs/land/superseded/20260911T000000Z-fx-wt-rewrite" HEAD
+  run verify "$FREF"
+  [ "$status" -eq 1 ]
+  git -C "$W" update-ref "refs/land/superseded/20260911T000000Z-fx-wt-rewrite" main
+  run verify "$FREF"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qF 'refs/land/superseded/20260911T000000Z-fx-wt-rewrite' || { echo "note not named: $output"; false; }
+}
+
+@test "LCV_DECLARED=off disables the hatch — the same declared ref reads 1" {
+  fx_rewrite
+  git -C "$W" commit -q --allow-empty -m 'declare it' -m "Supersedes-ref: $FREF"
+  push_main
+  LCV_DECLARED=off run verify "$FREF"
+  [ "$status" -eq 1 ]
+}

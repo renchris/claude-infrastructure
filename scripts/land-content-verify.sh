@@ -42,7 +42,19 @@
 #                    AND subject) and touches this path: the ref holds the PRE-AMENDMENT form of a
 #                    commit that landed. Censused 2026-09-10 over the 21 live `re-land …` rows: 11
 #                    are fully twinned this way and no other arm can retract them.
-# Exit 0 iff every path is landed.
+# Exit 0 iff every path is landed — or trunk DECLARES the whole ref superseded (below).
+#
+# DECLARED SUPERSESSION (2026-09-30, backlog 46da1266c6f1). Every arm above needs textual lineage,
+# so a CORRECTED REWRITE — the failed work redone with no line in common — is invisible to all of
+# them and its row can never retract. A looser automatic match (same subject, similar paths) was
+# rejected: a wrong match would silently drop genuinely stranded work. Instead an agent that has
+# checked the rewrite by hand DECLARES it, and the declaration lives where the verdict is judged:
+#   * a commit on trunk carrying the trailer `Supersedes-ref: <ref>` — the ref's full name, the name
+#     as given here, or ≥12 hex of its tip sha; or
+#   * a ref `refs/land/superseded/<name>` (name = the ref minus `refs/land/failed/`, else minus
+#     `refs/`, or the tip sha) pointing at a commit that is an ANCESTOR of trunk.
+# Exact name or sha, never a pattern. The declaration ends the verdict, not the evidence: the paths
+# that still differ are printed under it. LCV_DECLARED=off disables the hatch (controls).
 #
 # THE PATH SET IS THREE-DOT, and that is load-bearing. Two-dot (`<base> <ref>`) drags in every path
 # a SIBLING changed since the ref branched, judges the ref's stale copies of them, and reports "not
@@ -295,6 +307,44 @@ trunk_landed_this_commit_amended() {   # $1=path → 0 iff a ref commit touching
   done < <(git -C "$REPO" log --format='%aI%x09%s' "$BASE" -- "$p" 2>/dev/null)
   return 1
 }
+# DECLARED SUPERSESSION — see the header. Asked only once a path has already failed every content
+# arm, so it costs nothing on the common path. Sets DECL_BY to what declared it.
+DECL_BY=""
+declared_superseded() {   # → 0 iff trunk declares $REF superseded, by trailer or by note ref
+  [ "${LCV_DECLARED:-on}" = "off" ] && return 1
+  local tip full name n t h v
+  tip="$(git -C "$REPO" rev-parse -q --verify "${REF}^{commit}" 2>/dev/null)" || return 1
+  full="$(git -C "$REPO" rev-parse -q --symbolic-full-name "$REF" 2>/dev/null || true)"
+  name=""
+  case "$full" in
+    refs/land/failed/*) name="${full#refs/land/failed/}" ;;
+    refs/*)             name="${full#refs/}" ;;
+  esac
+  for n in ${name:+"$name"} "$tip"; do
+    t="$(git -C "$REPO" rev-parse -q --verify "refs/land/superseded/${n}^{commit}" 2>/dev/null || true)"
+    if [ -n "$t" ] && git -C "$REPO" merge-base --is-ancestor "$t" "$BASE" 2>/dev/null; then
+      DECL_BY="refs/land/superseded/${n} → $(git -C "$REPO" log -1 --format='%h %s' "$t" 2>/dev/null)"
+      return 0
+    fi
+  done
+  # One record per declaring commit: its sha, then one trailer value per line, then a lone `--`.
+  git -C "$REPO" log -E --grep='^Supersedes-ref:' \
+    --format='%H%n%(trailers:key=Supersedes-ref,valueonly)%n--' "$BASE" > "$TMP/decl" 2>/dev/null || return 1
+  h=""
+  while IFS= read -r v; do
+    if [ -z "$h" ]; then h="$v"; continue; fi
+    if [ "$v" = "--" ]; then h=""; continue; fi
+    v="${v#"${v%%[![:space:]]*}"}"; v="${v%"${v##*[![:space:]]}"}"
+    [ -n "$v" ] || continue
+    if [ "$v" = "$REF" ] || { [ -n "$full" ] && [ "$v" = "$full" ]; } \
+       || { [ "${#v}" -ge 12 ] && [[ "$v" =~ ^[0-9a-f]+$ ]] && [ "${tip#"$v"}" != "$tip" ]; }; then
+      DECL_BY="$(git -C "$REPO" log -1 --format='%h %s' "$h" 2>/dev/null) (trailer Supersedes-ref: $v)"
+      return 0
+    fi
+  done < "$TMP/decl"
+  return 1
+}
+
 while IFS= read -r -d '' P; do
   N=$((N + 1))
   RB="$(git -C "$REPO" rev-parse -q --verify "${REF}:${P}" 2>/dev/null || true)"
@@ -388,6 +438,15 @@ if [ "$BAD" -eq 0 ]; then
     printf '✓ land-content-verify: all %s path(s) of %s are on %s — LANDED (trunk is a superset).\n' \
       "$N" "$REF" "$BASE"
   fi
+  exit 0
+fi
+
+if declared_superseded; then
+  printf '✓ land-content-verify: %s of %s path(s) of %s differ from %s, but trunk DECLARES the ref superseded — LANDED BY DECLARATION: %s\n' \
+    "$BAD" "$N" "$REF" "$BASE" "$DECL_BY"
+  head -40 "$TMP/report"
+  [ "$BAD" -gt 40 ] && printf '  … and %s more\n' "$((BAD - 40))"
+  printf '  ⚠ re-landing this ref would overwrite the rewrite that superseded it.\n'
   exit 0
 fi
 
