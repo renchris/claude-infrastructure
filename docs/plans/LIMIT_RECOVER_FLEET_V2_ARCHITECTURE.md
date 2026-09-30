@@ -1,8 +1,10 @@
 ---
-status: in-progress
+status: complete
 ---
 
 # Pane-in-place parallel limit recovery: architecture, revision 2
+
+*Status (2026-09-30): this is the DESIGN, and the design is complete: revision 2, skeptic-passed, corrected to the as-built W6 code (`a14dd4362`). It carries no work of its own; its sections describe components, not phases. The remaining BUILD work (W5b canaries, shadow and cutover; W6f; the operator's `autorecover.on` steps) lives in `docs/plans/LIMIT_RECOVER_FLEET_V2.md`, which stays `in-progress`, and in its backlog rows. `complete` here does NOT mean the reconciler is live. It was marked complete because an `in-progress` design doc kept minting a duplicate "advance" backlog row (6117aef7168f) beside the implementation plan's own. Keep correcting it to the as-built code as the waves land.*
 
 *Lines marked "as built" or "corrected 2026-09-30" were re-read on origin/main at `27a007c40` or later (FLEET_V2 W6e); every other anchor is from the original revision.* *Line numbers refer to `/Users/chrisren/Development/claude-infrastructure` near trunk tip `097255b53`. "(verified)" means the line was re-read this session. `handoff-fire.sh` moves often, so re-grep every anchor before editing it.*
 
