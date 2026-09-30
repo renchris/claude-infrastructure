@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import glob
 import hashlib
+import json
 import os
 from typing import Callable, Dict, List, Optional
 
@@ -153,19 +154,23 @@ def _lock_names_target(paths: T.Paths, rec: T.Record) -> bool:
 
 
 def _debt_open(sid: str) -> bool:
-    """An open resume debt (bin/cc-resume-debt, states open|retrying|escalated) names the sid."""
+    """An open resume debt (bin/cc-resume-debt, states open|retrying|escalated) names the sid. The
+    meta's own top-level state decides, as ``cc-resume-debt`` reads it: every debt's event history
+    begins with an "open" event, so a text match read a proven or abandoned debt as open forever
+    (cd3bd860: proven, derived PANE-GONE/R "resume owed"). Unreadable is not open: no R on it."""
     d = os.environ.get("CC_RESUME_DEBT_DIR") or os.path.expanduser(
         "~/.claude/autonomy/resume-debt"
     )
     meta = os.path.join(d, "meta", sid + ".json")
     try:
         with open(meta, encoding="utf-8", errors="replace") as fh:
-            body = fh.read(8192)
-    except OSError:
+            doc = json.load(fh)
+    except (OSError, ValueError):
         return False
-    return any(
-        '"state":"%s"' % s in body.replace(" ", "")
-        for s in ("open", "retrying", "escalated")
+    return isinstance(doc, dict) and doc.get("state") in (
+        "open",
+        "retrying",
+        "escalated",
     )
 
 

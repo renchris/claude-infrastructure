@@ -137,6 +137,37 @@ class EvidenceTests(unittest.TestCase):
             json.dump({"sid": "sid1", "to": self.tgt}, fh, separators=(",", ":"))
         self.assertTrue(self._build(_snap()).lock_names_target)
 
+    def test_only_an_open_debt_is_open(self):
+        """cc-resume-debt appends every state to the debt's events, and every debt opens "open":
+        the text match read a proven debt as open forever (cd3bd860 derived PANE-GONE/R, "resume
+        owed", over a debt proven hours before). The top-level state decides."""
+        from unittest import mock
+
+        d = os.path.join(self.tmp, "debt")
+        os.makedirs(os.path.join(d, "meta"))
+        meta = os.path.join(d, "meta", "s.json")
+        with mock.patch.dict(os.environ, {"CC_RESUME_DEBT_DIR": d}):
+            for state, want in (
+                ("open", True),
+                ("retrying", True),
+                ("escalated", True),
+                ("proven", False),
+                ("abandoned", False),
+            ):
+                events = [{"state": "open"}, {"state": state}]
+                with open(meta, "w") as fh:
+                    json.dump(
+                        {"sid": "s", "state": state, "events": events}, fh, indent=2
+                    )
+                self.assertIs(E._debt_open("s"), want, state)
+            with open(meta, "w") as fh:
+                fh.write('{"sid": "s", "state": "open", "events": [')  # torn mid-write
+            self.assertFalse(E._debt_open("s"))
+            with open(meta, "w") as fh:
+                fh.write('["open"]')  # parses, but is no debt
+            self.assertFalse(E._debt_open("s"))
+            self.assertFalse(E._debt_open("no-such-sid"))
+
     def test_source_alive_exact_lstart(self):
         p = T.ProcRow(10, 1, "S", L, "claude")
         self.assertTrue(self._build(_snap(procs=[p])).source_alive)
