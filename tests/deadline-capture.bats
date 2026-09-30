@@ -13,7 +13,7 @@ setup() {
   export DL_DIR="$BATS_TEST_TMPDIR/personal/deadlines"
   export DL_PERSONAL_ROOT="$BATS_TEST_TMPDIR/personal"
   export DL_CAPTURE_STATE_DIR="$BATS_TEST_TMPDIR/capstate"
-  export DL_TODAY=2026-09-30
+  export DL_TODAY=2020-09-30
   export CC_FIRED_DIR="$BATS_TEST_TMPDIR/fired"
   export CC_PANE_ID="pane-fixture"
   export DISPATCH_ASSERT_STATE_DIR="$BATS_TEST_TMPDIR/dastate"
@@ -64,18 +64,18 @@ queued() { [ -s "$DL_DIR/.state/capture-queue.jsonl" ] && grep -c . "$DL_DIR/.st
 }
 
 @test "A12: a dl park stamped with THIS session's id discharges the block" {
-  CLAUDE_CODE_SESSION_ID=sid-A "$DL" park --resurface 2026-10-20 --snippet "bring this up" >/dev/null
+  CLAUDE_CODE_SESSION_ID=sid-A "$DL" park --resurface 2020-10-20 --snippet "bring this up" >/dev/null
   run stop "$(mktx "$DEFER")" "$PERSONAL"
   [ "$status" -eq 0 ]; ! blocked "$output"
   [ "$(queued)" = 1 ]    # discharge stops the block, never the queue
 }
 
 @test "A12: a dl add from this session discharges; the same add from ANOTHER session does not" {
-  CLAUDE_CODE_SESSION_ID=sid-OTHER "$DL" add "Pay the storage balance" --kind soft --lost 2026-10-20 \
+  CLAUDE_CODE_SESSION_ID=sid-OTHER "$DL" add "Pay the storage balance" --kind soft --lost 2020-10-20 \
     --class money --usd 100 --text "late fee of 100" --source operator --domain money >/dev/null
   run stop "$(mktx "$DEFER")" "$PERSONAL"
   blocked "$output"
-  CLAUDE_CODE_SESSION_ID=sid-B "$DL" add "Pay the parking permit" --kind soft --lost 2026-10-21 \
+  CLAUDE_CODE_SESSION_ID=sid-B "$DL" add "Pay the parking permit" --kind soft --lost 2020-10-21 \
     --class money --usd 100 --text "late fee of 100" --source operator --domain money >/dev/null
   run stop "$(mktx "$DEFER")" "$PERSONAL" sid-B
   ! blocked "$output"
@@ -92,7 +92,7 @@ queued() { [ -s "$DL_DIR/.state/capture-queue.jsonl" ] && grep -c . "$DL_DIR/.st
   run stop "$(mktx "File the FBAR by Oct 15 or the penalty applies.")" "$ELSEWHERE"
   blocked "$output"
   [[ "$output" == *"FBAR by Oct 15"* ]]
-  run stop "$(mktx "The lease renews 2027-08-01, due then.")" "$ELSEWHERE" sid-far
+  run stop "$(mktx "The lease renews 2021-08-01, due then.")" "$ELSEWHERE" sid-far
   ! blocked "$output"
   [ "$(queued)" = 2 ]
 }
