@@ -1225,7 +1225,30 @@ build_hub_table() {
 # verdict prints `durability=unavailable` rather than implying a ranking that never ran.
 CITED_LIST=""
 CITE_SCAN=unavailable
+# THE DEADLINE UNION (personal/deadlines/DESIGN-2026-09-29.md §6, "Memory eviction"). A memory topic
+# file cited in `source[]` of an OPEN `dl` item is evidence a real-world deadline still depends on,
+# so it ranks 2 (protected) exactly like a file executable code cites. Unioned AFTER the scan, and
+# independent of it: it applies even when CLAUDE_PROJECT_DIR is unset (CITE_SCAN stays honest about
+# the scan itself). Only names already in the candidate set are added. Seam: DL_DIR.
+dl_cited_names() { # $1=newline-separated candidate names → the subset open dl items cite
+  local items="${DL_DIR:-$HOME/Development/personal/deadlines}/items"
+  [ -d "$items" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  find "$items" -maxdepth 1 -name '*.json' -type f -print0 2>/dev/null \
+    | xargs -0 jq -r 'select(.state == "open" or .state == "done-unverified")
+                      | .source[]? | strings' 2>/dev/null \
+    | sed -E 's/:[0-9]+(-[0-9]+)?$//; s#.*/##' | grep '\.md$' | LC_ALL=C sort -u \
+    | grep -Fxf <(printf '%s\n' "$1" | grep -v '^[[:space:]]*$') 2>/dev/null || true
+}
 build_cited_set() {
+  _build_cited_scan "$1"
+  local dl
+  dl="$(dl_cited_names "$1")"
+  [ -n "$dl" ] || return 0
+  CITED_LIST="$(printf '%s\n%s\n' "$CITED_LIST" "$dl" | grep -v '^$' | LC_ALL=C sort -u)"
+  return 0
+}
+_build_cited_scan() {
   local names="$1" root d dirs pat lst
   CITED_LIST=""; CITE_SCAN=unavailable
   root="${CLAUDE_PROJECT_DIR:-}"

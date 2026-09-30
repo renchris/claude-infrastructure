@@ -1128,3 +1128,40 @@ mkbreach() {
   if cmp -s "$d/MEMORY.md" "$BATS_TEST_TMPDIR/cite3.before"; then return 1; fi
 }
 
+
+# ── THE DEADLINE UNION (personal/deadlines/DESIGN-2026-09-29.md §6) ─────────────────────────────
+# A memory file cited in source[] of an OPEN dl item ranks 2 even with NO project scan at all; a
+# closed item's citation protects nothing (the control: same fixture, only `state` differs).
+mkdlitem() { # <state> <source> — one dl item in a fixture store
+  mkdir -p "$DL_DIR/items"
+  jq -nc --arg s "$1" --arg src "$2" '{id:"admin.fixture",title:"Call the fixture office",state:$s,source:[$src]}' \
+    > "$DL_DIR/items/admin.fixture.json"
+}
+
+@test "durability: a memory file cited by an OPEN dl item is demoted last, with no project scan" {
+  export DL_DIR="$BATS_TEST_TMPDIR/dl"
+  mkdlitem open "~/.claude/projects/x/memory/wired.md:3"
+  d="$(mkmem dldur1)"
+  addentry "$d" wired.md project old "a rule a deadline depends on $(pad 100)"
+  addentry "$d" orphan.md project old "a rule nothing cites $(pad 100)"
+  touch -t 202512011200 "$d/wired.md" "$d/orphan.md"
+  mkbulk "$d"
+  run "$SCRIPT" "$d/MEMORY.md"
+  [ "$status" -eq 0 ]
+  has "$output" 'verdict=rotated'
+  grep -qF -- '(wired.md)' "$d/MEMORY.md"
+  if grep -qF -- '(orphan.md)' "$d/MEMORY.md"; then return 1; fi
+}
+
+@test "control: the same citation on a CLOSED dl item protects nothing" {
+  export DL_DIR="$BATS_TEST_TMPDIR/dl"
+  mkdlitem done "~/.claude/projects/x/memory/wired.md:3"
+  d="$(mkmem dldur2)"
+  addentry "$d" wired.md project old "a rule a deadline depends on $(pad 100)"
+  addentry "$d" orphan.md project old "a rule nothing cites $(pad 100)"
+  touch -t 202512011200 "$d/wired.md" "$d/orphan.md"
+  mkbulk "$d"
+  run "$SCRIPT" "$d/MEMORY.md"
+  [ "$status" -eq 0 ]
+  if grep -qF -- '(wired.md)' "$d/MEMORY.md"; then return 1; fi
+}
