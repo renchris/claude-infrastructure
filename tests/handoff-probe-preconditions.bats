@@ -54,6 +54,9 @@ setup() {
   ROOT_A="$BATS_TEST_TMPDIR/cfgA/projects"; ROOT_B="$BATS_TEST_TMPDIR/cfgB/projects"
   mkdir -p "$ROOT_A/-some-repo" "$ROOT_B/-some-repo"
   export CC_PROJECTS_DIRS="$ROOT_A $ROOT_B"
+  # The live-member census (lr-team.sh) reads ONE ps snapshot through this seam: never the box's.
+  export LR_TEAM_PS_SNAPSHOT="$BATS_TEST_TMPDIR/team-ps.txt"
+  printf '1 Ss /sbin/launchd\n' > "$LR_TEAM_PS_SNAPSHOT"
 }
 
 # a transcript whose LAST assistant record is a usage-limit error
@@ -103,6 +106,32 @@ seed_limited_transcript() { # $1=dir
   after="$(snap)"
   [ "$before" = "$after" ] || {
     echo "the READ-ONLY probe changed something:"; diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") || true; false; }
+}
+
+# D4.0 (FLEET_V2 W6, operator decision 4): a lead with a live member is HELD:team, next to the teammate
+# refusal and before any pane read. Mutants: drop the 3b block (the lead reaches the pane read) · make
+# an unreadable census pass (the empty-snapshot row goes green-to-red).
+@test "probe: a LEAD with a live member is HELD:team; a zombie member does not hold; an unreadable ps holds" {
+  seed_limited_transcript "$ROOT_A"
+  printf '4242 S+ /Users/x/.claude-284/node_modules/.bin/claude --agent-id w@session-t --parent-session-id %s\n' "$SID" > "$LR_TEAM_PS_SNAPSHOT"
+  run bash "$HF" --probe-recycle-preconditions --source-pane "$PANE" --source-session "$SID"
+  [ "$status" -eq 3 ] || { echo "status=$status $output"; false; }
+  [[ "$output" == *"team: LEAD — 1 live member(s)"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"verdict: HELD:team"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"pane_state:"* ]] || { echo "the pane was read before the team hold: $output"; false; }
+  # A member that exited is not a member: the lead is released.
+  printf '4242 Z /Users/x/.claude-284/node_modules/.bin/claude --parent-session-id %s\n' "$SID" > "$LR_TEAM_PS_SNAPSHOT"
+  run bash "$HF" --probe-recycle-preconditions --source-pane "$PANE" --source-session "$SID"
+  [[ "$output" == *"team: no live members"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"HELD:team"* ]] || { echo "$output"; false; }
+  # Cannot tell a lead from a solo session: held, never guessed.
+  : > "$LR_TEAM_PS_SNAPSHOT"
+  run bash "$HF" --probe-recycle-preconditions --source-pane "$PANE" --source-session "$SID"
+  [ "$status" -eq 3 ] || { echo "status=$status $output"; false; }
+  [[ "$output" == *"team: UNREADABLE — ps unreadable"* ]] || { echo "$output"; false; }
+  # Kill switch.
+  HF_TEAM_HOLD=off run bash "$HF" --probe-recycle-preconditions --source-pane "$PANE" --source-session "$SID"
+  [[ "$output" != *"team:"* ]] || { echo "$output"; false; }
 }
 
 @test "subagent_dir_for_sid: a subagents dir in the FIRST of two config roots is FOUND" {

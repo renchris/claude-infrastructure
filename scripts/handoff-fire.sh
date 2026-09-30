@@ -2568,6 +2568,31 @@ hf_bg_work_gate() { # $1=registry pid $2=1 when limited $3=transcript → rc 0 p
   return 0
 }
 
+# A LEAD WITH LIVE MEMBERS (FLEET_V2 W6, operator decision 4 / D4.0, D4.2). The ONE live-member
+# test is lr-team.sh's lr_team_members (D4.1: a live, non-zombie claude whose argv carries
+# `--parent-session-id <full lead sid>`), shared with the reconciler's census; this only resolves it
+# and reads ONE ps snapshot through its seam. Keyed on live processes and nothing else — never on
+# dialog rows, teamContext or teams/<t>/config.json, which outlive their members (2.1.284 keeps an
+# exited pane member `running` lead-side for the life of the lead), so a finished team is released.
+# FAIL CLOSED: an unreadable ps or an unreachable lr-team.sh is rc 2, and every caller holds on it.
+hf_team_live() { # $1=lead sid → rc 0 live members (HF_TEAM_N) · 1 none · 2 cannot tell (HF_TEAM_WHY)
+  local lib snap
+  HF_TEAM_N=0 HF_TEAM_WHY=""
+  [ -n "${1:-}" ] || { HF_TEAM_WHY="no lead session id"; return 2; }
+  if ! command -v lr_team_members >/dev/null 2>&1; then
+    lib="$(hf_lr_script lr-team.sh HF_LR_TEAM)" || { HF_TEAM_WHY="lr-team.sh unreachable"; return 2; }
+    # shellcheck disable=SC1090  # runtime-resolved library ladder
+    . "$lib" 2>/dev/null || true
+    command -v lr_team_members >/dev/null 2>&1 || { HF_TEAM_WHY="lr-team.sh did not load"; return 2; }
+  fi
+  snap="$(lr_team_snapshot 2>/dev/null)"
+  [ -n "$snap" ] || { HF_TEAM_WHY="ps unreadable"; return 2; }
+  HF_TEAM_N="$(lr_team_members "$1" "$snap" 2>/dev/null)"
+  case "$HF_TEAM_N" in ''|*[!0-9]*) HF_TEAM_N=0; HF_TEAM_WHY="member count unreadable"; return 2 ;; esac
+  [ "$HF_TEAM_N" -gt 0 ] && return 0
+  return 1
+}
+
 # ════ RECYCLE CUSTODY, FOREGROUND HALF (W2b, lr-reconciler) ════════════════════════════════════════
 # Defined HERE, above the `__recycle` watcher and the probe verb, because both execute top-level code
 # long before recycle_fire's definition is reached — a helper defined beside its first caller keeps
@@ -2975,6 +3000,18 @@ hf_recycle_last_read() { # → 0 every read clean · 1 refused (HF_LR_REASON, HF
     if [ -n "$sa_live" ]; then
       [ -n "$joined" ] && rm -f "$joined"
       HF_LR_REASON=subagents; HF_LR_WHAT="$(printf '%s\n' "$sa_live" | grep -c .) subagent(s) in flight"; return 1
+    fi
+  fi
+  # D4.2: MEMBERS ARE RE-READ HERE, right before /exit, so a member that appeared after the probe still
+  # blocks it. A resumed lead has no teammate tasks at all, so for it this argv read is the only guard.
+  if [ "${HF_TEAM_HOLD:-on}" != off ]; then
+    rc=0; hf_team_live "${RCY_SOURCE_SESSION:-${RCY_TS_SID:-}}" || rc=$?
+    if [ "$rc" != 1 ]; then
+      [ -n "$joined" ] && rm -f "$joined"
+      HF_LR_REASON=team
+      if [ "$rc" = 0 ]; then HF_LR_WHAT="$HF_TEAM_N live member(s) appeared after the probe"
+      else HF_LR_WHAT="live members unreadable ($HF_TEAM_WHY)"; fi
+      return 1
     fi
   fi
   # Not inside `$(…)`: the verdict comes back in HF_BG_HOLD, which a subshell would drop. The gate
@@ -8350,7 +8387,13 @@ if [ "${1:-}" = "__recycle" ]; then
         # this watcher ends WITHOUT typing a relaunch.
         # …and the SAME Esc when the menu has no keep-work option at all (the agent-view-off shape):
         # its only exit stops the tasks, which recovery never chooses (operator decision 2).
-        if [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" = cancel ] \
+        # …AND FOR A LEAD WITH LIVE MEMBERS, ON EVERY LANE (FLEET_V2 W6, D4.2 belt). The hook lane
+        # defaulted to "Move to background and exit", which still runs cleanupSessionTeams. Keyed on
+        # the live-process test only (hf_team_live), so a lead whose team has finished is released; a
+        # read that cannot tell also answers Stay, the one answer that loses nothing.
+        rcy_team_rc=1
+        if [ "${HF_TEAM_HOLD:-on}" != off ]; then rcy_team_rc=0; hf_team_live "${RCY_OLD_SID:-}" || rcy_team_rc=$?; fi
+        if [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" = cancel ] || [ "$rcy_team_rc" != 1 ] \
            || { [ -z "$bgk" ] && [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" != off ]; }; then
           hf_bounded "$IT2" session send -s "$RSID" $'\e' >/dev/null 2>&1 || true
           # OUR /exit MAY OUTLIVE THE DIALOG (W5 rig N=30, bgwork-after-confirm): Esc cancels the
@@ -8362,7 +8405,7 @@ if [ "${1:-}" = "__recycle" ]; then
           if [ "$(composer_content "$IT2" "$RSID" 2>/dev/null)" = "/exit" ]; then
             composer_scrub_verified "$IT2" "$RSID" >/dev/null 2>&1 || true
           fi
-          echo "!! recycle HELD at ${waited}s: the /exit raised the background-work dialog and this relaunch may not choose either exit ($(if [ -z "$bgk" ]; then printf 'the menu offers no keep-work option'; else printf 'CC_RECYCLE_BGWORK_ANSWER=cancel'; fi)) — sent Esc (Stay); the session in $RSID is untouched and NO relaunch was typed. Re-run once its background work has ended." >&2
+          echo "!! recycle HELD at ${waited}s: the /exit raised the background-work dialog and this relaunch may not choose either exit ($(if [ -z "$bgk" ]; then printf 'the menu offers no keep-work option'; elif [ "$rcy_team_rc" != 1 ]; then printf 'the subject leads live team members'; else printf 'CC_RECYCLE_BGWORK_ANSWER=cancel'; fi)) — sent Esc (Stay); the session in $RSID is untouched and NO relaunch was typed. Re-run once its background work has ended." >&2
           # unconfirm=needed: the transplant confirm ran before the /exit and the session stays in
           # this pane, so the source must be handed back — the reconciler UNCONFIRMs off this field.
           emit_recycle_event recycle-held-bgwork "" "$RSID" "background-work dialog at ${waited}s cancelled with Esc; nothing typed; unconfirm=needed" || true
@@ -9607,6 +9650,20 @@ if [ "${1:-}" = "--probe-recycle-preconditions" ]; then
     prp_verdict "REFUSED:teammate" 5
   fi
   echo "teammate: no"
+
+  # 3b. A LEAD WITH LIVE MEMBERS IS HELD (operator decision 4, FLEET_V2 W6 D4.0) on every lane that
+  #     reaches this probe: /exit would run cleanupSessionTeams and a relaunched lead cannot hear its
+  #     pane members. HELD, not refused — its members finish and the probe passes; the lead's reset
+  #     is answered by a plain `continue` typed into its own pane (W6b/W6d), never a move.
+  #     HF_TEAM_HOLD=off is the kill switch.
+  if [ "${HF_TEAM_HOLD:-on}" != off ]; then
+    PRP_TEAM_RC=0; hf_team_live "$PRP_SESSION" || PRP_TEAM_RC=$?
+    case "$PRP_TEAM_RC" in
+      0) echo "team: LEAD — $HF_TEAM_N live member(s)"; prp_verdict "HELD:team" 3 ;;
+      1) echo "team: no live members" ;;
+      *) echo "team: UNREADABLE — $HF_TEAM_WHY (held: a lead cannot be told from a solo session)"; prp_verdict "HELD:team" 3 ;;
+    esac
+  fi
 
   # 4. THE PANE MUST BE HOLDING A CLAUDE. `unknown` is an ABSTENTION, not a finding — seven branches
   #    of pane_cc_state return it and not one means "there is no claude here" — and it REFUSES for

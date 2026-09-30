@@ -362,7 +362,7 @@ load_tail_funcs() {
     grep '^_iso_now() {' "$HF"
     grep '^kt() {' "$HF"
     for f in _under_test emit_recycle_event hf_bounded hf_bounded_s kt_window_field composer_content \
-             recycle_composer_gate hf_transcript_at_rest hf_bg_work_kind hf_bg_work_gate hf_lr_script \
+             recycle_composer_gate hf_transcript_at_rest hf_bg_work_kind hf_bg_work_gate hf_lr_script hf_team_live \
              hf_recycle_fenced hf_recycle_lock_dir _hf_lstart _hf_lock_raw _hf_lock_field \
              _hf_lock_holder_alive hf_recycle_lock_write hf_recycle_lock_take hf_recycle_lock_release \
              hf_recycle_lock_acquire hf_recycle_disarm hf_wake_guard hf_pane_focused hf_lr_lib_load _hf_focus_composer hf_focus_gate \
@@ -414,6 +414,7 @@ SH
   export HF_KERN_WAKETIME=1 LR_RECORD_ID="rec-1" HF_RECYCLE_LOCK_GATE=on
   export LR_LOCKS_DIR="$BATS_TEST_TMPDIR/locks"
   export HF_WATCHER_RECORD="$BATS_TEST_TMPDIR/watcher.json"
+  export LR_TEAM_PS_SNAPSHOT="$BATS_TEST_TMPDIR/team-ps.txt"; printf '1 Ss /sbin/launchd\n' > "$LR_TEAM_PS_SNAPSHOT"
   unset CC_TERM CC_TERM_KITTY_TO LR_MOVE_FOCUSED HF_EXIT_READBACK
   # shellcheck disable=SC2034  # globals read by the handoff-fire functions under test
   SID="$PANE" CMD="relaunch-cmd" RCY_IT2="$STUB/it2" RCY_REMOTE=1 RCY_SAME_ACCOUNT=0
@@ -814,6 +815,7 @@ SH
 watcher_world() {
   W="$BATS_TEST_TMPDIR/w"; mkdir -p "$W/shim"
   export HOME="$BATS_TEST_TMPDIR/whome"; mkdir -p "$HOME/.claude/bin" "$HOME/.claude/logs" "$HOME/.claude/autonomy"
+  export LR_TEAM_PS_SNAPSHOT="$BATS_TEST_TMPDIR/team-ps.txt"; printf '1 Ss /sbin/launchd\n' > "$LR_TEAM_PS_SNAPSHOT"
   export CC_HANDOFF_ALARM_DIR="$HOME/.claude/handoff-alarms"
   export CC_ADMIT_IDL="$HOME/.claude/autonomy/idl.jsonl"; : > "$CC_ADMIT_IDL"
   export CC_NOTIFY_BIN="$HOME/.claude/bin/cc-notify"
@@ -1142,6 +1144,37 @@ drive_watcher_locked() {
   CC_RECYCLE_BGWORK_ANSWER=on drive_watcher
   grep -qE 'session send (-s [^ ]+ )?2$' "$HOME/it2-calls.log" || { cat -v "$HOME/it2-calls.log"; echo "$output"; false; }
   ! grep -q $'session send .*\e' "$HOME/it2-calls.log" || { cat -v "$HOME/it2-calls.log"; false; }
+}
+
+# D4.2 belt (FLEET_V2 W6): a subject that leads live members answers the dialog with Stay on EVERY
+# lane — the default answer included — keyed on the live-process census only. Mutant: drop
+# `|| [ "$rcy_team_rc" != 1 ]` from the answer test (the 3-option menu gets its keep-work digit).
+@test "12d the background-work dialog of a LEAD with a live member gets Esc (Stay) even under the default answer" {
+  watcher_world
+  rm -f "$HOME/it2-calls.log" "$HOME/.claude/logs/handoffs.jsonl"
+  export SCREEN="$REPO/tests/fixtures/lr-recon/screens/bgwork-dialog-2.1.284.txt"
+  export CC_PANE_MODAL_LIB="$REPO/hooks/lib/pane-modal.sh" CC_RECYCLE_BGWORK_EVERY_S=3
+  export LR_TEAM_PS_SNAPSHOT="$BATS_TEST_TMPDIR/team-ps.txt"
+  printf '4242 S+ /usr/local/bin/claude --parent-session-id %s\n' "$SID_UUID" > "$LR_TEAM_PS_SNAPSHOT"
+  echo $(( $(date +%s) + 600 )) > "$HOME/shell-at"
+  CC_RECYCLE_BGWORK_ANSWER=on drive_watcher
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [ "$(grep -c $'session send .*\e' "$HOME/it2-calls.log")" = 1 ] || { cat -v "$HOME/it2-calls.log"; false; }
+  ! grep -qE 'session send (-s [^ ]+ )?[0-9]$' "$HOME/it2-calls.log" || { echo "typed a digit"; cat -v "$HOME/it2-calls.log"; false; }
+  [[ "$output" == *"the subject leads live team members"* ]] || { echo "$output"; false; }
+  wrows recycle-held-bgwork | grep -q 'unconfirm=needed' || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
+}
+
+# D4.2 (FLEET_V2 W6): members are re-read at the last read, right before /exit. Mutant: drop the block.
+@test "14d a member that appears after the probe holds the recycle at the last read: team, unconfirm, no /exit" {
+  tail_world
+  printf '4242 S+ /usr/local/bin/claude --parent-session-id %s\n' "$SESS" > "$LR_TEAM_PS_SNAPSHOT"
+  printf '%s\n' "" "/exit" > "$READS"
+  run recycle_fire_commit "$SESS"
+  [ "$status" -eq 1 ] || { echo "status=$status $output"; cat "$CALLS"; false; }
+  ! grep -q '^send' "$CALLS" || { cat "$CALLS"; false; }
+  rows_of recycle-held-team | grep -q 'appeared after the probe; unconfirm rc 0' || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
+  [[ "$output" == *"held: team"* ]] || { echo "$output"; false; }
 }
 
 @test "12c after the Esc, our own /exit left in the composer is scrubbed; an operator's text is not" {
