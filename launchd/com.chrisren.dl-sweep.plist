@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>            <string>com.chrisren.dl-sweep</string>
+  <!--
+      The deadline store's nightly capture pass (personal/deadlines/DESIGN-2026-09-29.md §3 C4+C5):
+      transcript harvest, then a tool-less `claude -p` over the last 36 h of redacted mail and
+      unanswered iMessage threads, whose candidates W1's admission code admits or proposes.
+      05:30, before the 07:00 dl-sync pass pushes to the phone. No RunAtLoad: a load must not
+      spend a model call. MS365_MCP_TENANT_ID=consumers is exported by the script itself.
+  -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>export PATH="$HOME/.claude/bin:$PATH"; exec ~/.claude/scripts/dl-sweep.sh</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>   <integer>5</integer>
+    <key>Minute</key> <integer>30</integer>
+  </dict>
+  <key>RunAtLoad</key>        <false/>
+  <key>StandardOutPath</key>  <string>/Users/chrisren/.claude/logs/dl-sweep.out.log</string>
+  <key>StandardErrorPath</key><string>/Users/chrisren/.claude/logs/dl-sweep.err.log</string>
+</dict>
+</plist>
