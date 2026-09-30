@@ -259,6 +259,8 @@ calls() { if [ -f "$D/zprint.calls" ]; then wc -l < "$D/zprint.calls" | tr -d ' 
   [ -f "$P/capacity-alarm-kalloc.page" ] || false
   [ -f "$P/capacity-alarm-swapfiles.page" ] || false
   grep -q 'SCHEDULE A REBOOT' "$P/capacity-alarm-kalloc.page" || false
+  # host-memory.2: the page carries the standing safe-order procedure, not just the advice to reboot
+  grep -q 'REBOOT PROCEDURE .*scripts/alarm-reboot-prep.sh' "$P/capacity-alarm-kalloc.page" || false
   grep -q 'data.kalloc.1024 holds 7.00 GB' "$P/capacity-alarm-kalloc.page" || false
   grep -q '^20 swapfiles at ' "$P/capacity-alarm-swapfiles.page" || false
   ! grep -q 'shed by CLOSING' "$P/capacity-alarm-kalloc.page" || false   # not the lever for a leak

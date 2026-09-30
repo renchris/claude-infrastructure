@@ -1358,8 +1358,12 @@ chronic_advice() { # → the scheduled-reboot advisory, one line, with the measu
     eta="$(awk -v g="$KALLOC_GB" -v r="$rate" -v a="$KALLOC_ALARM_GB" \
              'BEGIN{ if (r+0 > 0 && g+0 < a+0) printf "%.0f", (a-g)/r }')"
   fi
-  printf 'SCHEDULE A REBOOT — the one measured reset (data.kalloc.1024 read 81 MB after the 2026-08-25 reboot and only ratchets up while sessions come and go) · up %s d%s%s · panic #5 died at 9.89 GB / 73 swapfiles on day 10.9, so a weekly reboot stays under it.\n' \
+  printf 'SCHEDULE A REBOOT — the one measured reset (data.kalloc.1024 read 81 MB after the 2026-08-25 reboot and only ratchets up while sessions come and go) · up %s d%s%s · panic #5 died at 9.89 GB / 73 swapfiles on day 10.9; at the 1.0-1.9 GB/day measured since (docs/research/kalloc-ratchet-2026-10.md) that level comes 5-9 days after a boot, so a weekly reboot no longer stays under it — reboot at each ALARM.\n' \
     "${UPTIME_DAYS:-?}" "${rate:+ · kalloc +${rate} GB/day since boot}" "${eta:+ · ALARM floor in ~${eta} d}"
+  # The standing procedure (host-memory.2): the same safe order as the 2026-09-30 reboot, driven by
+  # one script so no alarm reboot is improvised. It never reboots; it prepares and prints the steps.
+  printf 'REBOOT PROCEDURE — reboot within 24 h, in the safe order: run  bash %s/scripts/alarm-reboot-prep.sh  (records the start epoch + session roster, refuses while a land is in flight, prints any staged root zone capture to run first); leads write a handoff; then reboot. Evidence: docs/research/kalloc-ratchet-2026-10.md\n' \
+    "${CC_CAP_PREP_ROOT:-$HOME/.claude}"
 }
 
 # ── positive control (R6) — prove the ladder can reach every rung ─────────────────────────────────
