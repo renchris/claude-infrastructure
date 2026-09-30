@@ -491,7 +491,8 @@ classify_breach() { # <seg_est> <seg_limit> <seg_rate_per_s> <dcbu_bytes_per_s> 
 # says WHY, which is what lets a trip count what it spared instead of reading as a quiet box.
 #   0  selectable.
 #   1  the path rules below — Apple daemons, claude, the unidentifiable.
-#   2  an operator GUI app: a bundle root launchd started, and its direct helpers. `exe_table gui` only.
+#   2  an operator GUI app: a bundle root launchd started, and its whole family at any depth (HELPER,
+#      below). `exe_table gui` only.
 #   3  a simulator OS image — `….simruntime/Contents/Resources/RuntimeRoot/` is the simulated
 #      device's own launchd, lsd and friends. The app UNDER TEST (CoreSimulator/Devices) stays 0.
 #
@@ -504,6 +505,15 @@ classify_breach() { # <seg_est> <seg_limit> <seg_rate_per_s> <dcbu_bytes_per_s> 
 #   · a comm that is not an absolute path — a zombie or exiting process renders as `(git)`, and
 #     UNIDENTIFIABLE ⇒ NEVER ACTED ON is this file's polarity throughout. (It also covers pid 0,
 #     whose comm is the bare string `kernel_task`.)
+#     ONE NARROWING, because on macOS `ps -o comm` is argv[0], NOT the executable. A process started
+#     by bare name prints `node`; one that rewrites its title prints the title — the 08-09 spawner
+#     rendered as `next-server (v16.2.6)`, and panic #5's 249 workers ran as `node /…/postcss.js`.
+#     Protecting every non-absolute comm (790f2dc2d until 2026-09-30) therefore protected exactly the
+#     two classes the parent-breaker was written for: replayed, the panic-#5 fixture selected 0 and
+#     broke nothing where it must select 5 and break `42897 5 next-server_(v16.2.6)`. So the kernel's
+#     exec name (`ps -axo pid=,ucomm=`, which argv rewriting cannot change) is read alongside: when it
+#     is exactly `node`, and the comm neither starts with `(` or `<` nor mentions claude, the process
+#     is class 0 again, as before 2026-09-16. A failed ucomm read keeps the protection.
 #   · /System/, /usr/libexec/, /usr/sbin/, /sbin/ — Apple's own daemons and launchd itself. These
 #     are the only processes on the box whose death is an OS-level event rather than a lost job.
 #     Measured: the 60 s newness control on a healthy box under load 29 left exactly two survivors,
@@ -529,9 +539,21 @@ classify_breach() { # <seg_est> <seg_limit> <seg_rate_per_s> <dcbu_bytes_per_s> 
 #     --enable-automation, --headless, --test-type, --user-data-dir=). Automation browsers are
 #     routinely reparented to launchd — all twelve ppid-1 Google Chrome roots in the snap log carry one
 #     of those switches — so ppid 1 alone cannot tell the operator's app from a harness.
-#   · HELPER — bundle-shaped the same way and a DIRECT child of a root with the same top bundle.
-#     Grandchildren (an editor's language servers), plain in-bundle binaries (Dia's agent-server) and
-#     anything a shell exec'd directly (agent-run headless Blender) stay 0.
+#   · HELPER — a child, at ANY depth, of the root's family that either lives in the same top bundle
+#     (bundle-shaped or a plain in-bundle binary — Dia's agent-server), or is TITLE-REWRITTEN (a
+#     non-absolute comm that is not a zombie, a shell, claude or a bare `node`). The depth is what Cursor needs: its root runs an extension host that retitles
+#     itself `Cursor Helper (Plugin): extension-host …` (class 1 — no path, ucomm not node), which runs
+#     `tsserver[6.0.3]: semantic` on the bundled node (ucomm node). The kernel exec name made that
+#     tsserver class 0, a grandchild the direct-child rule never reached — selectable, and killable on
+#     a retrip. A class 1 member stays 1; it only carries the family on.
+#     The chain ENDS at any absolute path outside the bundle — a shell (/bin/zsh, /usr/bin/login), a
+#     homebrew node — so an editor's terminal, kitty's shells and everything run in them stay 0, as
+#     does anything a shell exec'd directly, in-bundle or not (agent-run headless Blender).
+#     THE PLAIN IN-BUNDLE BINARY WAS LEFT AT 0 UNTIL 2026-09-30, on purpose, and it was the one path
+#     left into a GUI app: Dia's agent-server (Contents/Resources/agent-server-resources/dist/
+#     agent-server, a direct child of the Dia root) is fresh whenever Dia or it restarts, and the live
+#     daemon SIGSTOPped it 6 times — so one fresh over-floor node beside it cleared the cohort floor, and
+#     the next retrip-over-debt SIGKILLed it, the kill belt listing only classes 2 and 3.
 #
 # THE NEAR-MISS, still binding, and now carried by the ppid-1 anchor plus one carve-out rather than
 # by a substring test: `python3` on this box resolves to Xcode's
@@ -543,7 +565,7 @@ classify_breach() { # <seg_est> <seg_limit> <seg_rate_per_s> <dcbu_bytes_per_s> 
 # CLASS 2 IS COMPUTED ONLY IN `gui` MODE (the trip, the kill belt, the startup sweep): it needs the
 # argv read, and the census that runs every minute stays on the plain table. In plain mode a GUI
 # process reads 0, which is what puts the long-running ones on the census roster.
-exe_classify() { # [gui] — stdin: optional "@A <pid>" (automation argv) marker rows, then "pid ppid rss comm..." rows → six fields, input order, field 6 = class 0|1|2|3
+exe_classify() { # [gui] — stdin: optional "@N <pid>" (kernel exec name is node), "@A <pid>" (automation argv) and "@OK N|A" (that read completed) marker rows, then "pid ppid rss comm..." rows → six fields, input order, field 6 = class 0|1|2|3
   awk -v gui="${1:-}" '
     function topb(c,   k, q, i, s, t) {
       if (c ~ /^\/Applications\//) s = 3
@@ -553,23 +575,37 @@ exe_classify() { # [gui] — stdin: optional "@A <pid>" (automation argv) marker
       for (i = 2; i < k; i++) { t = t "/" q[i]; if (i >= s && q[i] ~ /\.app$/) return t }
       return ""
     }
+    $1 == "@N" { knode[$2] = 1; next }
     $1 == "@A" { auto[$2] = 1; next }
+    $1 == "@OK" { okm[$2] = 1; next }
     $1 ~ /^[0-9]+$/ {
       n++; P[n] = $1; PP[n] = $2; R[n] = $3
       comm = $4; for (i = 5; i <= NF; i++) comm = comm " " $i
       k = split(comm, parts, "/"); base = parts[k]
       prot = 0
-      if (comm !~ /^\//) prot = 1
+      if (comm !~ /^\//) prot = (($1 in knode) && comm !~ /^[(<]/ && comm !~ /claude/) ? 0 : 1
       else if (comm ~ /^\/System\// || comm ~ /^\/usr\/libexec\// \
             || comm ~ /^\/usr\/sbin\// || comm ~ /^\/sbin\//) prot = 1
       if (base == "claude" || base == "claude.exe") prot = 1
       if (!prot && comm ~ /\.simruntime\/Contents\/Resources\/RuntimeRoot\//) prot = 3
-      if (gui == "gui" && !prot && comm ~ /\.(app|appex|xpc)\/Contents\/MacOS\/[^\/]+$/ \
+      # IN THE BUNDLE is any path through a top bundle, bundle-shaped or not (the Dia agent-server is
+      # a plain binary under Contents/Resources); only a bundle-SHAPED one can be a ROOT.
+      if (gui == "gui" && !prot \
           && !(comm ~ /\/Contents\/Developer\// \
                && comm !~ /\/Contents\/Developer\/Applications\/[^\/]+\.app\/Contents\/MacOS\/[^\/]+$/)) {
         tb = topb(comm)
-        if (tb != "") { TB[$1] = tb; if ($2 == 1 && !($1 in auto)) ROOT[$1] = tb }
+        if (tb != "") {
+          TB[$1] = tb
+          if ($2 == 1 && !($1 in auto) && comm ~ /\.(app|appex|xpc)\/Contents\/MacOS\/[^\/]+$/) ROOT[$1] = tb
+        }
       }
+      # TITLE-REWRITTEN: no path to judge by, so it inherits its parent family (END). Not a zombie,
+      # never claude, never a SHELL — a login shell renders `-zsh`, and a shell is where the operator
+      # or an agent starts its OWN work, so it is where a GUI family ends — and never a BARE `node`:
+      # argv[0] equal to the exec name is a program something launched by name, not a title, and a
+      # node that kitty or an editor launched that way is exactly the storm worker that must stay 0.
+      if (gui == "gui" && comm !~ /^\// && comm !~ /^[(<-]/ && comm !~ /claude/ && comm !~ /^node( |$)/ \
+          && comm !~ /^(sh|bash|zsh|fish|dash|ksh|tcsh|csh)( |$)/) NA[$1] = 1
       gsub(/[[:space:]]+/, "_", base)
       full = comm; gsub(/[[:space:]]+/, "_", full)
       B[n] = base; F[n] = full; X[n] = prot
@@ -577,22 +613,69 @@ exe_classify() { # [gui] — stdin: optional "@A <pid>" (automation argv) marker
     END {
       # z and y, never p: the array-name clash select_break_parents records below. A helper listed
       # BEFORE its root (pid wrap) still resolves here, because every root is known by END.
+      # THE FAMILY, to a fixpoint (any depth, in any row order): a root, then every child of a member
+      # that is a helper of the SAME top bundle or is title-rewritten. An absolute path outside the
+      # bundle (a shell, /usr/bin/login, a homebrew node) ends the chain. A member that is class 1
+      # stays 1 — it only carries the family on to its children (the Cursor extension host).
+      for (z in ROOT) FAM[z] = ROOT[z]
+      ch = 1
+      while (ch) {
+        ch = 0
+        for (j = 1; j <= n; j++) {
+          z = P[j]; y = PP[j]
+          if ((z in FAM) || !(y in FAM)) continue
+          if (((z in TB) && TB[z] == FAM[y]) || (z in NA)) { FAM[z] = FAM[y]; ch = 1 }
+        }
+      }
       for (j = 1; j <= n; j++) {
-        z = P[j]; y = PP[j]
-        if (X[j] == 0 && ((z in ROOT) || ((z in TB) && (y in ROOT) && ROOT[y] == TB[z]))) X[j] = 2
+        if (X[j] == 0 && (P[j] in FAM)) X[j] = 2
         print P[j], PP[j], R[j], B[j], F[j], X[j]
       }
+      # The completion markers ride AFTER the rows, and only when they came in: every reader of
+      # this table keys on a numeric $1 or on $6, so they are invisible to all of them but one.
+      if ("N" in okm) print "@OK", "N"
+      if ("A" in okm) print "@OK", "A"
     }'
 }
 
 exe_table() { # [gui] → exe_classify over the live table; `gui` adds the automation-argv read and class 2
   local mode="${1:-}"
-  { if [ "$mode" = gui ]; then
-      ps -axwwo pid=,args= 2>/dev/null \
-        | awk '$1 ~ /^[0-9]+$/ && /--remote-debugging-|--enable-automation|--headless|--test-type|--user-data-dir=/ { print "@A", $1 }'
+  # Three reads, three instants: a pid reused between them can be misread for one tick, and the
+  # selectors' ppid-agreement guard still applies to anything this table would let through. ucomm
+  # is read in BOTH modes — the census and the trip must agree on who is node.
+  # COMPLETION MARKERS. A marker read that fails is SILENT — no @N rows reads as "no node", no @A rows
+  # as "no automation" — and each silence moves a class: every bare or retitled node falls back to 1,
+  # a flagged Chrome at ppid 1 rises to 2. Selection is safe either way (any class but 0 is spared),
+  # but a reader that RESUMES protected rows is not (gui_protected), so each read that ran to exit 0
+  # with at least one row says so with `@OK N` / `@OK A`, and exe_classify passes them through.
+  { { ps -axo pid=,ucomm= 2>/dev/null && echo '@DONE'; } \
+      | awk '$1 == "@DONE" { ok = 1; next } $1 ~ /^[0-9]+$/ { r++ }
+             $1 ~ /^[0-9]+$/ && NF == 2 && $2 == "node" { print "@N", $1 }
+             END { if (ok && r) print "@OK", "N" }'
+    if [ "$mode" = gui ]; then
+      { ps -axwwo pid=,args= 2>/dev/null && echo '@DONE'; } \
+        | awk '$1 == "@DONE" { ok = 1; next } $1 ~ /^[0-9]+$/ { r++ }
+               $1 ~ /^[0-9]+$/ && /--remote-debugging-|--enable-automation|--headless|--test-type|--user-data-dir=/ { print "@A", $1 }
+               END { if (ok && r) print "@OK", "A" }'
     fi
     ps -axwwo pid=,ppid=,rss=,comm= 2>/dev/null
   } | exe_classify "$mode"
+}
+
+# THE RESUME LIST — the one reader of the class that turns it into a SIGCONT (the kill rung's belt and
+# the startup sweep), so it is narrower than "protected": a selector may spare anything that is not 0,
+# because sparing is free, but resuming a frozen storm into the cliff is not. Two conditions:
+#   · classes 2 and 3 ONLY. Class 1 is also what a FAILED ucomm read makes of every bare or retitled
+#     node pid — the whole panic-#5 cohort and its spawner — and the belt read "not 0" as "SIGCONT and
+#     drop", so one failed read on a retrip resumed the storm instead of killing it.
+#   · a COMPLETE capture: both `@OK N` and `@OK A`. A failed argv read turns a flagged Chrome at ppid 1
+#     into a class 2 root with class 2 helpers, and nothing in the rows says so.
+# Otherwise the list is empty and the belt ABSTAINS — the rung behaves as it did before the class
+# existed, which is design rule (iii): an unreadable table protects nothing extra.
+gui_protected() { # [<exe_file>] (else stdin) → " pid pid " of classes 2/3 from a complete capture, else " "
+  awk '$1 == "@OK" { ok[$2] = 1; next }
+       $1 ~ /^[0-9]+$/ && NF >= 6 && ($6 == "2" || $6 == "3") { l = l " " $1 }
+       END { printf "%s ", (("N" in ok) && ("A" in ok)) ? l : "" }' "${1:--}" 2>/dev/null
 }
 
 # ── node census (every CENSUS_EVERY ticks) ────────────────────────────────────────────────────────
@@ -719,7 +802,7 @@ select_stop_targets() { # <exe_file> <prev_census_pids> <rss_floor_kb> <cap>
 # per-parent and ranked: every parent owning >= <min> of the selected burst is a spawner, biggest
 # first, at most <cap> of them. That also answers the two-`next dev` case, which unanimity cannot.
 #
-# THE FIVE EXCLUSIONS, each for a different failure:
+# THE FOUR EXCLUSIONS, each for a different failure:
 #   · pid <= 1 — launchd. It is also where the kernel REPARENTS the children of a spawner that has
 #     already exited, so the one bucket guaranteed to clear any threshold is exactly the one whose
 #     "parent" no longer exists. (Those ownerless servers are devserver-gc's job, not a signal's.)
@@ -727,10 +810,17 @@ select_stop_targets() { # <exe_file> <prev_census_pids> <rss_floor_kb> <cap>
 #   · claude/claude.exe by comm, anything claude/mcp-shaped by argv — the same double test the cohort
 #     uses, and for the stronger reason: SIGSTOP is only reversible if something is left running to
 #     send SIGCONT, and that something is the operator's session.
-#   · a parent already in the selected cohort — it is about to be frozen as a child; counting it
-#     twice would inflate the reported spawner count over a process that gets exactly one signal.
 #   · a parent with no row of its own in this table — it exited between spawning and this read, so
 #     there is nothing to stop and nothing to name. Printing it would fabricate a comm.
+#
+# A SPAWNER THAT IS ITSELF IN THE COHORT IS STILL A SPAWNER. This used to be a fifth exclusion ("it is
+# about to be frozen as a child; counting it twice would inflate the count"), and it decided the
+# spawner's CUSTODY, not just its count: frozen as a child it was ledgered kind=proc, and the worker
+# rules released it after one clear tick past 60 s — the release-into-relapse the spawner rule
+# exists to block. It became reachable once the kernel exec name made a retitled next-server class 0:
+# a spawner younger than the last census (`next build` always is; panic #5's 42897 spawned at the very
+# census that first saw the storm, 13 s before TRIP 1) is new, over the floor, and so IN the cohort.
+# It is now printed here like any other spawner, and the loop freezes it once — as a parent.
 #
 # Only pid → (comm, protected?) is retained, never argv: agent briefs travel in argv (memory
 # pgrep-f-matches-agent-briefs), so buffering the table's argv to answer a question about parentage
@@ -763,7 +853,6 @@ select_break_parents() { # <exe_file> <cohort_pids> <min_children> <cap> <self_p
         if (kids[pp] < min) continue
         if (pp + 0 <= 1) continue
         if (pp + 0 == self + 0 || pp + 0 == selfp + 0) continue
-        if (index(cohort, " " pp " ") > 0) continue
         if (!(pp in seen)) continue
         if (pp in protect) continue
         cand[++k] = pp
@@ -1233,9 +1322,10 @@ kill_due() { # <pct> <srate> <trip_now 0|1> <debt_n> → reason | rc 1
 # fresh tab renderers, and on the next retrip this rung SIGKILLed it (15:51:34Z). The selectors no
 # longer choose GUI apps, but a ledger can hold rows written before that was true, so the class is
 # re-derived HERE from the trip's own `exe_table gui` capture (<exe_file>, reused — or read fresh when
-# the caller has none) and a ledgered pid whose class is not 0 is SIGCONTed and dropped, never killed.
-# The fail direction is the belt ABSTAINING: an empty or unreadable table protects nothing extra and
-# leaves the rules above exactly as they were.
+# the caller has none) and a ledgered pid of class 2 or 3 is SIGCONTed and dropped, never killed.
+# The fail direction is the belt ABSTAINING: an empty or unreadable table — or one whose ucomm or argv
+# read failed, which is neither, and which moves classes silently — protects nothing extra and leaves
+# the rules above exactly as they were (gui_protected has the two failures this closes).
 # REJECTED ON PURPOSE: exempting kind=parent from the kill, and gating retrip-over-debt on a
 # non-empty cohort. Both reopen panic #5, whose spawners are exactly the rows this rung exists for.
 kill_escalate() { # <now-epoch> <reason> [<exe_file>] → "killed=N spared=N" on stdout
@@ -1248,7 +1338,7 @@ kill_escalate() { # <now-epoch> <reason> [<exe_file>] → "killed=N spared=N" on
     own="$(mktemp -t cc-sentinel-exe)" && exe_table gui > "$own" 2>/dev/null
     exef="$own"
   fi
-  prot=" $(awk '$1 ~ /^[0-9]+$/ && NF >= 6 && $6 != "0" { printf "%s ", $1 }' "$exef" 2>/dev/null) "
+  prot="$(gui_protected "$exef")"; [ -n "$prot" ] || prot=" "      # classes 2/3, complete capture — else abstain
   keep="$(mktemp -t cc-sentinel-frozen)" || {
     [ -n "$own" ] && rm -f "$own"; [ "$src" = "$FROZEN_DB" ] || rm -f "$src"; printf 'killed=0 spared=0'; return 0; }
   while IFS="$(printf '\t')" read -r pid ls kind at comm; do
@@ -1746,15 +1836,16 @@ trap cleanup TERM INT
 # a launchd ExitTimeOut during a 121-146 s cliff tick is enough, because bash defers the trap until
 # the running command returns. The KeepAlive successor then ADOPTS every row, including rows written
 # before GUI apps had a class of their own. So once, before the first tick, the owner of the loop
-# sweeps both ledgers: a row whose pid is NOW protected (class 2 or 3) is SIGCONTed and dropped, and
-# its probation stamp with it. Every other row keeps its hold — the sweep is not a release policy.
+# sweeps both ledgers: a row whose pid is NOW protected (class 2 or 3, from a complete capture — see
+# gui_protected) is SIGCONTed and dropped, and its probation stamp with it. Every other row keeps its
+# hold — the sweep is not a release policy, and an incomplete capture sweeps nothing.
 # A loop owner that is NOT armed (ACT off/observe) can never release anything on its own ticks, so
 # it hands the whole ledger back at once (exit mode) and truncates probation: without this, an
 # armed daemon restarted disarmed leaves its predecessor's cohort stopped for good.
 if [ "$TICKS" -eq 0 ]; then
   if [ "$ACT" = stop ]; then
     if [ -s "$FROZEN_DB" ] || [ -s "$PROBATION_DB" ]; then
-      _prot=" $(exe_table gui 2>/dev/null | awk '$1 ~ /^[0-9]+$/ && NF >= 6 && $6 != "0" { printf "%s ", $1 }') "
+      _prot="$(exe_table gui 2>/dev/null | gui_protected)"; [ -n "$_prot" ] || _prot=" "
       [ -s "$FROZEN_DB" ] && printf '%s compressor-sentinel: STARTUP-SWEEP %s\n' \
         "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(release_frozen "$(date +%s)" sweep 0 0 "$_prot")" >&2
       if [ -s "$PROBATION_DB" ] && _pk="$(mktemp -t cc-sentinel-probation)"; then
@@ -1929,7 +2020,7 @@ while :; do
     write_page "$TS" "$WHY" "$HEAD_LINE" "$ROW"
 
     if [ "$ACT" = "stop" ] || [ "$ACT" = "observe" ]; then
-      STOPPED=0; PARENT_N=0; PARENT_STOPPED=0
+      STOPPED=0; PARENT_N=0; PARENT_STOPPED=0; PARENT_PIDS=" "
       # OBSERVE runs the whole selection and signals nothing. It is the rung this actuator was
       # supposed to have on 2026-08-09 and did not: `off` computes no selection at all, so the only
       # way to learn what the predicate would touch was to arm it. Every later change to the
@@ -1978,7 +2069,7 @@ while :; do
                    | select_break_parents "$EXEF" "$COHORT" "$ACT_PARENT_MIN" "$ACT_PARENT_CAP" "$$" "$PPID")"
         while read -r ppid pkids pcomm; do
           [ -n "$ppid" ] || continue
-          PARENT_N=$((PARENT_N + 1))
+          PARENT_N=$((PARENT_N + 1)); PARENT_PIDS="$PARENT_PIDS$ppid "
           if [ "$ACT" = "observe" ]; then
             PARENT_STOPPED=$((PARENT_STOPPED + 1))
             printf '%s parent pid=%s kids=%s comm=%s\n' "$ACTVERB" "$ppid" "$pkids" "$pcomm" >> "$SNAP" 2>/dev/null || true
@@ -1992,6 +2083,9 @@ while :; do
 
       while read -r spid srss scomm; do
         [ -n "$spid" ] || continue
+        # A cohort member the breaker named a spawner has had its one signal, as a PARENT — freezing
+        # it again here would ledger it a second time under the worker rules (select_break_parents).
+        case "$PARENT_PIDS" in *" $spid "*) continue ;; esac
         # SIGSTOP only. Never SIGKILL — we are the only actor above the kernel here (§4a: jetsam is
         # off and no_paging_space_action is untrippable by a fleet), so we must be the reversible one.
         if [ "$ACT" = "observe" ]; then

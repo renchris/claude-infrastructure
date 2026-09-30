@@ -142,9 +142,12 @@ SH
   # 2026-09-30: `exe_table gui` adds a `pid=,args=` read (the automation-switch pid list). Its
   # substring is DISJOINT from the four above — `pid=,args=` occurs in none of them, since every
   # longer format has `rss=` before `args=` — so it can sit first without shadowing anything.
+  # …and a `pid=,ucomm=` read (the kernel exec names), disjoint the same way: `ucomm=` occurs in no
+  # other format, and `rss=,comm=` never matches it because `ucomm` is preceded by `pid=,`.
   cat > "$STUB/ps" <<'SH'
 #!/bin/bash
 case "$*" in
+  *"pid=,ucomm="*)                 cat "$PS_UCOMM"  2>/dev/null ;;
   *"pid=,args="*)                  cat "$PS_ARGV"   2>/dev/null ;;
   *"pid=,ppid=,rss=,pcpu=,args="*) cat "$PS_SNAP"   2>/dev/null ;;
   *"pid=,ppid=,rss=,args="*)       cat "$PS_ACT"    2>/dev/null ;;
@@ -157,8 +160,9 @@ esac
 SH
 
   : > "$D/ps.census"; : > "$D/ps.act"; : > "$D/ps.snap"; : > "$D/ps.exe"; : > "$D/ps.argv"; : > "$D/ps.lstart"
+  : > "$D/ps.ucomm"
   export PS_CENSUS="$D/ps.census" PS_ACT="$D/ps.act" PS_SNAP="$D/ps.snap" PS_EXE="$D/ps.exe" \
-         PS_ARGV="$D/ps.argv" PS_LSTART="$D/ps.lstart"
+         PS_ARGV="$D/ps.argv" PS_LSTART="$D/ps.lstart" PS_UCOMM="$D/ps.ucomm"
   chmod +x "$STUB"/pick "$STUB"/vm_stat "$STUB"/sysctl "$STUB"/ps
 }
 
@@ -585,15 +589,21 @@ brk() { # <cohort pids> <stdin lines> [min] [cap] [exe_file]
   [ -z "$output" ] || false   # …and its launcher
 }
 
-@test "a parent already IN the cohort is not counted a second time" {
-  # It is about to be frozen as a child. Naming it again would report two spawners stopped over one
-  # process that receives exactly one signal — the inflated-count defect, in a log read after a panic.
+@test "a parent already IN the cohort is STILL a spawner — named here, and frozen once, as a parent" {
+  # THE PREMISE CHANGED 2026-09-30, AND SO DID THE ASSERTION. This case used to require silence: "it is
+  # about to be frozen as a child, so naming it would count one signal twice". But being frozen as a
+  # child is what decided its CUSTODY — ledgered kind=proc, released by the worker rules after one
+  # clear tick — and a spawner younger than the last census is in the cohort by construction (panic
+  # #5's next-server spawned at the census that first saw the storm). The one-signal property now
+  # lives in the loop, which skips a broken parent in the worker pass (panic5 wiring locator).
   brk "500 40001 40002 40003" "$(printf '500 1 900000 /opt/homebrew/bin/node orchestrator.js\n40001 500 900000 /opt/homebrew/bin/node p.js\n40002 500 900000 /opt/homebrew/bin/node p.js\n40003 500 900000 /opt/homebrew/bin/node p.js')"
-  [ -z "$output" ] || false
-  # POSITIVE CONTROL: the same node orchestrator, this time NOT in the cohort (it predates the burst,
-  # so the census spared it) — which is precisely the spawner this mechanism exists to reach.
+  [ "$output" = "500 3 node" ] || false
+  # CONTROL: the same orchestrator NOT in the cohort (it predates the burst) reads identically.
   brk "40001 40002 40003" "$(printf '500 1 900000 /opt/homebrew/bin/node orchestrator.js\n40001 500 900000 /opt/homebrew/bin/node p.js\n40002 500 900000 /opt/homebrew/bin/node p.js\n40003 500 900000 /opt/homebrew/bin/node p.js')"
   [ "$output" = "500 3 node" ] || false
+  # …and a cohort member owning FEWER than <min> of the burst is still just a worker.
+  brk "500 40001 40002" "$(printf '500 1 900000 /opt/homebrew/bin/node orchestrator.js\n40001 500 900000 /opt/homebrew/bin/node p.js\n40002 500 900000 /opt/homebrew/bin/node p.js')"
+  [ -z "$output" ] || false
 }
 
 @test "a parent with no row of its own is never named — a comm cannot be fabricated" {
@@ -2323,15 +2333,15 @@ DIAR='/Applications/Dia.app/Contents/Frameworks/ArcCore.framework/Helpers/Browse
   [ "$(awk 'NF != 6' "$D/cls.out" | wc -l | tr -d ' ')" -eq 0 ] || false          # six fields, always
   [ "$(wc -l < "$D/cls.out" | tr -d ' ')" -eq 25 ] || false                         # markers are not rows
   local p
-  for p in 100 101 110 111 120 121 130 140 150 160 99; do [ "$(cls "$p")" = "2" ] || { echo "pid $p: $(cls "$p")"; false; }; done
+  for p in 100 101 102 110 111 120 121 130 140 150 160 99; do [ "$(cls "$p")" = "2" ] || { echo "pid $p: $(cls "$p")"; false; }; done
   [ "$(cls 5)" = "2" ] || false            # PID WRAP: a helper listed before its root still resolves
-  for p in 102 200 201 300 400 411 420 430; do [ "$(cls "$p")" = "0" ] || { echo "pid $p: $(cls "$p")"; false; }; done
+  for p in 200 201 300 400 411 420 430; do [ "$(cls "$p")" = "0" ] || { echo "pid $p: $(cls "$p")"; false; }; done
   [ "$(cls 410)" = "2" ] || false          # the Xcode IDE is an app — its Python stub child is NOT
   [ "$(cls 500)" = "3" ] || false
   for p in 600 601 602; do [ "$(cls "$p")" = "1" ] || { echo "pid $p: $(cls "$p")"; false; }; done
   # Rows of classes 0 and 1 are BYTE-IDENTICAL to the pre-class table's shape: basename and full path
   # underscore-collapsed, field 6 the old flag value.
-  grep -qxF '102 100 51744 agent-server /Applications/Dia.app/Contents/Resources/agent-server-resources/dist/agent-server 0' "$D/cls.out" || false
+  grep -qxF '300 120 200000 node /opt/homebrew/bin/node 0' "$D/cls.out" || false
   grep -qxF '601 1 90000 (git) (git) 1' "$D/cls.out" || false
   # PLAIN MODE (the census): no class 2 at all — the same Dia root reads 0 — while class 3 does not
   # depend on the mode.
@@ -2341,6 +2351,57 @@ DIAR='/Applications/Dia.app/Contents/Frameworks/ArcCore.framework/Helpers/Browse
   [ "$(cls 101)" = "0" ] || false
   [ "$(cls 500)" = "3" ] || false
   [ "$(awk '$6 == "2"' "$D/cls.out" | wc -l | tr -d ' ')" -eq 0 ] || false
+}
+
+@test "exe_classify: the KERNEL exec name un-protects bare and retitled node — and only node, and never claude" {
+  have_arm exe_classify
+  # `ps -o comm` is argv[0] on macOS, so "not an absolute path" was never a zombie test for these.
+  printf '%s\n' '@N 10' '@N 11' '@N 12' '@N 13' '@N 14' \
+    '10 1 170000 node' \
+    '11 1 715792 next-server (v16.2.6)' \
+    '12 1 170000 (node)' \
+    '13 1 170000 claude bg-spare' \
+    '14 1 170000 node /x/claude/agent.js' \
+    '15 1 170000 node' \
+    '16 1 170000 claude bg-spare' > "$D/n.in"
+  run /bin/bash -c '. "$1"; exe_classify gui' _ "$D/lib.sh" < "$D/n.in"
+  [ "$status" -eq 0 ] || false
+  printf '%s\n' "$output" > "$D/n.out"
+  cls() { awk -v p="$1" '$1 == p { print $6 }' "$D/n.out"; }
+  [ "$(cls 10)" = "0" ] || false             # bare `node`, kernel says node
+  [ "$(cls 11)" = "0" ] || false             # title-rewritten next-server, kernel says node
+  grep -qxF '11 1 715792 next-server_(v16.2.6) next-server_(v16.2.6) 0' "$D/n.out" || false
+  [ "$(cls 12)" = "1" ] || false             # `(node)` is an exiting process — still unidentifiable
+  [ "$(cls 13)" = "1" ] || false             # claude-shaped comm: never, whatever the kernel says
+  [ "$(cls 14)" = "1" ] || false
+  [ "$(cls 15)" = "1" ] || false             # NO marker ⇒ fails closed, exactly as before
+  [ "$(cls 16)" = "1" ] || false             # `claude bg-spare` (ucomm claude.exe) carries no marker
+}
+
+@test "RED-PROOF panic #5 / 08-09: a retitled next-server and its bare-node workers are reachable again" {
+  # The replay the design measured: the pre-fix rule (non-absolute comm ⇒ protected) selects NOTHING
+  # from the very shape the parent-breaker was written for; the kernel exec name restores it.
+  mkstubs 0 0 0
+  printf '%s\n' '1 0 1000 /sbin/launchd' '42856 1 30000 /bin/zsh' '42897 42856 715792 next-server (v16.2.6)' > "$PS_CENSUS"
+  printf '%s\n' '42897 42856 715792 next-server (v16.2.6)' > "$PS_ACT"
+  printf '42897 node\n' > "$PS_UCOMM"
+  for p in 46610 46615 46619 46727 46730; do
+    printf '%s 42897 170000 node\n' "$p" >> "$PS_CENSUS"
+    printf '%s 42897 170000 node /w/reso/.next/dev/build/postcss.js 588\n' "$p" >> "$PS_ACT"
+    printf '%s node\n' "$p" >> "$PS_UCOMM"
+  done
+  argv_of "$PS_ACT" > "$PS_ARGV"
+  prefix_lib3
+  replay_trip "$D/prelib3.sh" " 1 42856 42897 "
+  [ "$RP_COHORT" = " " ] || { echo "pre cohort: $RP_COHORT"; false; }        # cohort_n=0 — the blindness
+  [ -z "$RP_PARENTS" ] || { echo "pre parents: $RP_PARENTS"; false; }
+  replay_trip "$D/lib.sh" " 1 42856 42897 "
+  [ "$RP_COHORT" = " 46610 46615 46619 46727 46730 " ] || { echo "cohort: $RP_COHORT"; false; }
+  [ "$RP_PARENTS" = "42897 5 next-server_(v16.2.6);" ] || { echo "parents: $RP_PARENTS"; false; }
+  # FAIL-CLOSED CONTROL: the same fixture with the ucomm read EMPTY restores the protection.
+  : > "$PS_UCOMM"
+  replay_trip "$D/lib.sh" " 1 42856 42897 "
+  [ "$RP_COHORT" = " " ] || { echo "empty-ucomm cohort: $RP_COHORT"; false; }
 }
 
 @test "RED-PROOF 2026-09-30T15:39:16Z: Dia's fresh renderers froze Dia — pre-fix selects 4 and breaks Dia; now nothing" {
@@ -2494,7 +2555,8 @@ SH
   mkcohort "$(printf '7001\tMon 30 Sep 15:39:16 2026\n7002\tMon 30 Sep 15:39:17 2026')"
   ledger 7001 "Mon 30 Sep 15:39:16 2026" parent 1000 Dia
   ledger 7002 "Mon 30 Sep 15:39:17 2026" parent 1000 'next-server_(v16.2.6)'
-  printf '7001 1 400000 Dia %s 2\n7002 1 700000 next-server_(v16.2.6) /w/.bin/next-server 0\n' "${DIA// /_}" > "$D/exe.k"
+  # A COMPLETE capture carries both completion markers (exe_table); without them the belt abstains.
+  printf '7001 1 400000 Dia %s 2\n7002 1 700000 next-server_(v16.2.6) /w/.bin/next-server 0\n@OK N\n@OK A\n' "${DIA// /_}" > "$D/exe.k"
   run_ke 1100 climbing-at-60pct "$D/exe.k"
   [ "$output" = "killed=1 spared=1" ] || false
   [ "$(grep -cF -- '-CONT 7001' "$KILLLOG")" -eq 1 ] || false
@@ -2893,4 +2955,245 @@ SH
   [ "$(stat_of "$CHILD2_PID" | cut -c1)" = "T" ] || false                  # the worker: still held
   [ "$(cut -f1 < "${LOG%.jsonl}-frozen.tsv")" = "$C2" ] || false
   [ "$(cut -f1 < "${LOG%.jsonl}-frozen-probation.tsv")" = "$C2" ] || false # only the protected stamp dropped
+}
+
+# One `exe_table gui` capture over the stubbed ps into <file>, under launchd's interpreter.
+gui_capture() { # <file>
+  run env PATH="$STUB:$PATH" /bin/bash -c '. "$1"; exe_table gui' _ "$D/lib.sh"
+  [ "$status" -eq 0 ] || false
+  printf '%s\n' "$output" > "$1"
+}
+
+@test "RESUME LIST: the kill belt and the sweep act only on classes 2/3 from a COMPLETE capture — a failed marker read never resumes the storm" {
+  have_arm kill_escalate
+  # The panic-#5 cohort through exe_table gui. A failed ucomm read makes every node pid class 1, and
+  # on f8b4184be the belt read "not 0" as "SIGCONT and drop": the retrip resumed the storm (killed=0
+  # spared=3) instead of killing it. A failed argv read makes a flagged Chrome at ppid 1 class 2 —
+  # the same resume, for the automation class.
+  mkstubs 0 0 0
+  printf '%s\n' '1 0 1000 /sbin/launchd' '42856 1 30000 /bin/zsh' '42897 42856 715792 next-server (v16.2.6)' \
+    '46610 42897 170000 node' '46615 42897 170000 node' > "$PS_CENSUS"
+  printf '%s\n' '1 0 1000 /sbin/launchd' '42856 1 30000 /bin/zsh -l' '42897 42856 715792 next-server (v16.2.6)' \
+    '46610 42897 170000 node postcss.js' '46615 42897 170000 node postcss.js' > "$PS_ACT"
+  argv_of "$PS_ACT" > "$PS_ARGV"
+  printf '%s\n' '1 launchd' '42856 zsh' '42897 node' '46610 node' '46615 node' > "$PS_UCOMM"
+  gui_capture "$D/exef.full"
+  : > "$PS_UCOMM"; gui_capture "$D/exef.noucomm"                                   # the read FAILED
+  [ "$(awk '$1 == 46610 { print $6 }' "$D/exef.noucomm")" = "1" ] || false         # …and moved the class
+  # A ucomm read that COMPLETED but does not name 46615 node: class 1 from a complete capture — the
+  # class filter alone, with both markers present, must still leave it killable.
+  printf '%s\n' '1 launchd' '42856 zsh' '42897 node' '46610 node' '46615 sh' > "$PS_UCOMM"
+  gui_capture "$D/exef.partial"
+  # AUTOMATION: argv read OK ⇒ 30035 is a flagged root, class 0; argv read EMPTY ⇒ class 2 rows.
+  local GC='/Applications/Google Chrome.app/Contents'
+  printf '30035 1 200000 %s/MacOS/Google Chrome\n30101 30035 90000 %s/Frameworks/GCH.app/Contents/MacOS/Google Chrome Helper\n' "$GC" "$GC" > "$PS_CENSUS"
+  printf '30035 1 200000 %s/MacOS/Google Chrome --headless=new --user-data-dir=/tmp/bf-1\n30101 30035 90000 %s/Frameworks/GCH.app/Contents/MacOS/Google Chrome Helper --type=renderer\n' "$GC" "$GC" > "$PS_ACT"
+  printf '%s\n' '30035 Google Chrome' '30101 Google Chrome He' > "$PS_UCOMM"
+  : > "$PS_ARGV"; gui_capture "$D/exef.noargv"
+  [ "$(awk '$1 == 30035 { print $6 }' "$D/exef.noargv")" = "2" ] || false
+  argv_of "$PS_ACT" | sed 's/ --headless=new --user-data-dir=\/tmp\/bf-1//' > "$PS_ARGV"   # an operator Chrome
+  gui_capture "$D/exef.op"
+  # A read that PRINTED ROWS AND THEN FAILED is not complete either: the marker needs exit 0, not just
+  # rows. Each knob makes the stub exit 1 after its rows — here the argv read loses the flagged root's
+  # row (30035) and fails, which without the exit test reads as an operator Chrome: class 2, resumed.
+  mv "$STUB/ps" "$STUB/ps.fx"
+  cat > "$STUB/ps" <<'SH'
+#!/bin/bash
+"${0%/*}/ps.fx" "$@"; rc=$?
+case "$*" in
+  *"pid=,ucomm="*) [ -z "${PS_FAIL_UCOMM:-}" ] || exit 1 ;;
+  *"pid=,args="*)  [ -z "${PS_FAIL_ARGV:-}" ] || exit 1 ;;
+esac
+exit "$rc"
+SH
+  chmod +x "$STUB/ps"
+  argv_of "$PS_ACT" | grep -v '^30035 ' > "$D/argv.cut"
+  cp "$PS_ARGV" "$D/argv.op"; cp "$D/argv.cut" "$PS_ARGV"
+  export PS_FAIL_ARGV=1; gui_capture "$D/exef.argvrc"; unset PS_FAIL_ARGV
+  cp "$D/argv.op" "$PS_ARGV"
+  export PS_FAIL_UCOMM=1; gui_capture "$D/exef.ucommrc"; unset PS_FAIL_UCOMM
+  [ "$(awk '$1 == 30035 { print $6 }' "$D/exef.argvrc")" = "2" ] || false         # the rows DID move the class
+  ! grep -q '^@OK A' "$D/exef.argvrc" || false
+  ! grep -q '^@OK N' "$D/exef.ucommrc" || false
+  # …and the sweep's own shape — the capture piped straight in on stdin (before mkcohort replaces ps).
+  run env PATH="$STUB:$PATH" /bin/bash -c '. "$1"; exe_table gui | gui_protected' _ "$D/lib.sh"
+  printf '%s' "$output" > "$D/stdin.list"
+  seed5() {
+    mkcohort "$(printf '42897\tMon 24 Aug 19:49:50 2026\n46610\tMon 24 Aug 19:50:00 2026\n46615\tMon 24 Aug 19:50:01 2026')"
+    ledger 42897 "Mon 24 Aug 19:49:50 2026" parent 1000 'next-server_(v16.2.6)'
+    ledger 46610 "Mon 24 Aug 19:50:00 2026" proc 1000 node
+    ledger 46615 "Mon 24 Aug 19:50:01 2026" proc 1000 node
+  }
+  local f
+  for f in full noucomm partial; do
+    seed5; run_ke 1300 retrip-over-debt "$D/exef.$f"
+    [ "$output" = "killed=3 spared=0" ] || { echo "$f: $output"; false; }
+    [ "$(grep -c -- '-CONT' "$KILLLOG")" -eq 0 ] || { echo "$f: resumed"; false; }
+  done
+  mkcohort "$(printf '30035\tMon 30 Sep 10:00:00 2026\n30101\tMon 30 Sep 10:00:01 2026')"
+  ledger 30035 "Mon 30 Sep 10:00:00 2026" parent 1000 Google_Chrome
+  ledger 30101 "Mon 30 Sep 10:00:01 2026" proc 1000 Google_Chrome_Helper
+  run_ke 1300 retrip-over-debt "$D/exef.noargv"
+  [ "$output" = "killed=2 spared=0" ] || { echo "noargv: $output"; false; }
+  mkcohort "$(printf '30035\tMon 30 Sep 10:00:00 2026\n30101\tMon 30 Sep 10:00:01 2026')"
+  ledger 30035 "Mon 30 Sep 10:00:00 2026" parent 1000 Google_Chrome
+  ledger 30101 "Mon 30 Sep 10:00:01 2026" proc 1000 Google_Chrome_Helper
+  run_ke 1300 retrip-over-debt "$D/exef.argvrc"
+  [ "$output" = "killed=2 spared=0" ] || { echo "argvrc: $output"; false; }
+  # THE SWEEP'S LIST, from the same reader: empty for each incomplete capture, the class-2 root for a
+  # complete one (positive control: the reader is not simply always empty).
+  run /bin/bash -c '. "$1"; gui_protected "$2"' _ "$D/lib.sh" "$D/exef.noucomm"; [ "$output" = " " ] || false
+  run /bin/bash -c '. "$1"; gui_protected "$2"' _ "$D/lib.sh" "$D/exef.noargv";  [ "$output" = " " ] || false
+  run /bin/bash -c '. "$1"; gui_protected "$2"' _ "$D/lib.sh" "$D/exef.partial"; [ "$output" = " " ] || false
+  run /bin/bash -c '. "$1"; gui_protected "$2"' _ "$D/lib.sh" "$D/exef.argvrc";  [ "$output" = " " ] || { echo "argvrc: [$output]"; false; }
+  run /bin/bash -c '. "$1"; gui_protected "$2"' _ "$D/lib.sh" "$D/exef.ucommrc"; [ "$output" = " " ] || { echo "ucommrc: [$output]"; false; }
+  run /bin/bash -c '. "$1"; gui_protected "$2"' _ "$D/lib.sh" "$D/exef.op"; [ "$output" = " 30035 30101 " ] || { echo "op: [$output]"; false; }
+  [ "$(cat "$D/stdin.list")" = " 30035 30101 " ] || { echo "stdin: [$(cat "$D/stdin.list")]"; false; }
+  grep -qxF '@OK N' "$D/exef.full" && grep -qxF '@OK A' "$D/exef.full" || false    # the markers exist…
+  ! grep -q '^@OK N' "$D/exef.noucomm" || false                                     # …and only when read
+  grep -qF '_prot="$(exe_table gui 2>/dev/null | gui_protected)"' "$S" || false
+  grep -qF 'prot="$(gui_protected "$exef")"' "$S" || false
+}
+
+@test "FRESH SPAWNER panic #5: a next-server younger than the census is IN the cohort — and is still broken as the parent" {
+  # The implementer's panic-#5 red-proof replayed a roster that already held 42897. The real spawner
+  # started at the census that first saw the storm (docs/research/panic-2026-08-24-fifth-watchdog.md
+  # :55-56), and `next build` is fresh by nature. Off the roster it is new, over the floor, class 0 —
+  # in the cohort — and on f8b4184be the breaker then skipped it: PARENTS=[], ledgered kind=proc.
+  mkstubs 0 0 0
+  printf '%s\n' '1 0 1000 /sbin/launchd' '42856 1 30000 /bin/zsh' '42897 42856 715792 next-server (v16.2.6)' > "$PS_CENSUS"
+  printf '%s\n' '42897 42856 715792 next-server (v16.2.6)' > "$PS_ACT"
+  printf '42897 node\n' > "$PS_UCOMM"
+  for p in 46610 46615 46619 46727 46730; do
+    printf '%s 42897 170000 node\n' "$p" >> "$PS_CENSUS"
+    printf '%s 42897 170000 node /w/reso/.next/dev/build/postcss.js 588\n' "$p" >> "$PS_ACT"
+    printf '%s node\n' "$p" >> "$PS_UCOMM"
+  done
+  argv_of "$PS_ACT" > "$PS_ARGV"
+  replay_trip "$D/lib.sh" " 1 42856 "
+  [ "$RP_COHORT" = " 42897 46610 46615 46619 46727 46730 " ] || { echo "cohort: $RP_COHORT"; false; }
+  [ "$RP_PARENTS" = "42897 5 next-server_(v16.2.6);" ] || { echo "parents: $RP_PARENTS"; false; }
+  # CONTROL: the implementer's roster (42897 already on it) breaks the same parent — the two orders
+  # of a sub-second race now give ONE answer.
+  replay_trip "$D/lib.sh" " 1 42856 42897 "
+  [ "$RP_PARENTS" = "42897 5 next-server_(v16.2.6);" ] || { echo "roster parents: $RP_PARENTS"; false; }
+}
+
+@test "FRESH SPAWNER through the loop: frozen ONCE, as the parent — never a second time as a worker" {
+  # The whole trip path under launchd's /bin/bash, observe mode (no signal leaves the test). Storm from
+  # tick 3, after the tick-2 census: a next-server and five postcss workers, all new. redis is the
+  # standing baseline the generic arm needs, and stays spared by the newness gate.
+  mkstubs "$(printf '800000\n800000\n2600000\n2600000')" 0 0
+  printf '999795 1 900000 /opt/homebrew/bin/redis-server\n999856 1 30000 /bin/zsh\n' > "$D/pre.census"
+  printf '999795 1 900000 /opt/homebrew/bin/redis-server\n999856 1 30000 /bin/zsh -l\n' > "$D/pre.act"
+  printf '999795 redis-server\n999856 zsh\n' > "$D/pre.ucomm"
+  cp "$D/pre.census" "$D/storm.census"; cp "$D/pre.act" "$D/storm.act"; cp "$D/pre.ucomm" "$D/storm.ucomm"
+  printf '999897 999856 715792 next-server (v16.2.6)\n' | tee -a "$D/storm.census" >> "$D/storm.act"
+  printf '999897 node\n' >> "$D/storm.ucomm"
+  for p in 999910 999911 999912 999913 999914; do
+    printf '%s 999897 170000 node\n' "$p" >> "$D/storm.census"
+    printf '%s 999897 170000 node /w/reso/.next/dev/build/postcss.js 588\n' "$p" >> "$D/storm.act"
+    printf '%s node\n' "$p" >> "$D/storm.ucomm"
+  done
+  cat > "$STUB/ps" <<'SH'
+#!/bin/bash
+if [ "$(cat "$TICKF")" -ge 3 ]; then P="$STORM_CENSUS"; A="$STORM_ACT"; U="$STORM_UCOMM"; else P="$PRE_CENSUS"; A="$PRE_ACT"; U="$PRE_UCOMM"; fi
+case "$*" in
+  *"pid=,ucomm="*)                 cat "$U" ;;
+  *"pid=,args="*)                  awk '{ $2 = ""; $3 = ""; print }' "$A" ;;
+  *"pid=,ppid=,rss=,pcpu=,args="*) cat "$A" 2>/dev/null ;;
+  *"pid=,ppid=,rss=,args="*)       cat "$A" 2>/dev/null ;;
+  *"pid=,ppid=,rss=,comm="*)       cat "$P" 2>/dev/null ;;
+  *) echo "stub-ps $*" ;;
+esac
+SH
+  chmod +x "$STUB/ps"
+  export PRE_CENSUS="$D/pre.census" PRE_ACT="$D/pre.act" PRE_UCOMM="$D/pre.ucomm" \
+         STORM_CENSUS="$D/storm.census" STORM_ACT="$D/storm.act" STORM_UCOMM="$D/storm.ucomm"
+  run env PATH="$STUB:$PATH" CC_SENTINEL_LOG="$LOG" CC_SENTINEL_INTERVAL=1 \
+    CC_SENTINEL_CENSUS_EVERY=2 CC_SENTINEL_FOLLOWUP_N=1 CC_SENTINEL_FOLLOWUP_SEC=1 \
+    CC_SENTINEL_ACT=observe CC_SENTINEL_ACT_RSS_KB=40960 \
+    /bin/bash "$S" --ticks 4
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -qF 'WOULD-STOP parent pid=999897 kids=5 comm=next-server_(v16.2.6)' "$SNAPLOG" || { cat "$SNAPLOG"; false; }
+  ! grep -q 'WOULD-STOP pid=999897 ' "$SNAPLOG" || false                    # not ALSO a worker
+  [ "$(grep -c 'WOULD-STOP pid=9999' "$SNAPLOG")" -ge 5 ] || false           # the five workers are
+  ! grep -q 'pid=999795 ' "$SNAPLOG" || false                               # the old redis is not
+  grep -qF 'case "$PARENT_PIDS" in *" $spid "*) continue ;; esac' "$S" || false
+}
+
+@test "GUI FAMILY: Cursor's tsserver (retitled, under a retitled extension host) is protected — terminals and their node are not" {
+  have_arm exe_classify
+  # Live 2026-09-30: `tsserver[6.0.3]: semantic` (ucomm node) under `Cursor Helper (Plugin):
+  # extension-host …` (ucomm not node) under the Cursor root. On HEAD it was class 1 (no path); the
+  # kernel exec name made it 0, and the direct-child helper rule never reached a grandchild — so on
+  # f8b4184be it was selectable and SIGKILLed on a retrip. Rows are listed CHILD FIRST on purpose:
+  # the family resolves to a fixpoint, whatever the pid order.
+  local CUR='/Applications/Cursor.app/Contents'
+  {
+    printf '@N 949383\n@N 949382\n@N 969001\n@N 967002\n@N 967003\n@N 967011\n@N 874\n@N 901\n@N 920\n'
+    printf '949383 968155 900000 tsserver[6.0.3]: semantic\n949382 968155 300000 tsserver[6.0.3]: syntax\n'
+    printf '968155 966602 400000 Cursor Helper (Plugin): extension-host lakehouse-lecture [1-2]\n'
+    printf '965325 968155 44848 %s/Frameworks/Cursor Helper (Plugin).app/Contents/MacOS/Cursor Helper (Plugin)\n' "$CUR"
+    printf '969001 968155 200000 node\n969002 968155 200000 /opt/homebrew/bin/node\n'
+    printf '966602 1 900000 %s/MacOS/Cursor\n' "$CUR"
+    printf '967000 966602 60000 Cursor Helper: pty-host\n967001 967000 30000 /bin/zsh\n'
+    printf '967002 967001 200000 node\n967003 967001 700000 next-server (v16.2.6)\n'
+    printf '967010 967000 30000 -zsh\n967011 967010 700000 next-server (v16.2.6)\n'
+    printf '120 1 300000 /Applications/kitty.app/Contents/MacOS/kitty\n856 120 3000 /usr/bin/login\n873 856 30000 -zsh\n874 873 200000 node\n'
+    printf '900 120 30000 /bin/zsh\n901 900 200000 node x.js\n910 120 30000 zsh\n920 120 200000 node w.js\n'
+  } > "$D/fam.in"
+  run /bin/bash -c '. "$1"; exe_classify gui' _ "$D/lib.sh" < "$D/fam.in"
+  [ "$status" -eq 0 ] || false
+  printf '%s\n' "$output" > "$D/fam.out"
+  cls() { awk -v p="$1" '$1 == p { print $6 }' "$D/fam.out"; }
+  local p
+  for p in 966602 949383 949382 965325 120; do [ "$(cls "$p")" = "2" ] || { echo "pid $p: $(cls "$p") (want 2)"; false; }; done
+  for p in 968155 967000 967010 873; do [ "$(cls "$p")" = "1" ] || { echo "pid $p: $(cls "$p") (want 1)"; false; }; done
+  # CONTROLS — the chain ends at a shell or any absolute path outside the bundle, and a bare `node` is
+  # a launched program, not a title: all of these stay selectable.
+  for p in 969001 969002 967001 967002 967003 967011 856 874 900 901 920; do
+    [ "$(cls "$p")" = "0" ] || { echo "pid $p: $(cls "$p") (want 0)"; false; }
+  done
+  # PLAIN MODE (the census) is untouched: tsserver reads 0 there, so a long-running one is on the roster.
+  run /bin/bash -c '. "$1"; exe_classify' _ "$D/lib.sh" < "$D/fam.in"
+  printf '%s\n' "$output" > "$D/fam.out"
+  [ "$(cls 949383)" = "0" ] || false
+}
+
+@test "AGENT-SERVER: Dia's plain in-bundle agent-server is family — never selected, never killed; the same binary from a shell is" {
+  have_arm exe_classify
+  # Live 2026-09-30: agent-server (pid 56506, 149 MB) is a direct child of the Dia root, a plain binary
+  # under Contents/Resources — neither bundle-shaped nor retitled, so on 03776ecce it was class 0. Fresh
+  # whenever Dia or it restarts, it joined any cohort beside one fresh node (the live daemon SIGSTOPped
+  # it 6 times), and the kill belt, listing classes 2/3 only, let the next retrip SIGKILL it.
+  local AS='/Applications/Dia.app/Contents/Resources/agent-server-resources/dist/agent-server'
+  local CF='/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang-format'
+  mkstubs 0 0 0
+  {
+    printf '1 0 1000 /sbin/launchd\n952104 1 400000 %s\n945818 952104 90000 %s\n' "$DIA" "$DIAR"
+    printf '956506 952104 149152 %s\n' "$AS"
+    printf '942856 1 30000 /bin/zsh\n960001 942856 300000 /opt/homebrew/bin/node\n'
+    printf '960003 942856 149152 %s\n' "$AS"                                       # the same binary, run by a shell
+    printf '633 1 900000 /Applications/Xcode.app/Contents/MacOS/Xcode\n960010 633 900000 %s\n' "$CF"   # DEV under the IDE
+  } > "$PS_CENSUS"
+  awk '$1 != 1 { print $0 ($1 ~ /^9600/ ? " w.js" : "") }' "$PS_CENSUS" > "$PS_ACT"
+  argv_of "$PS_ACT" > "$PS_ARGV"
+  printf '%s\n' '1 launchd' '952104 Dia' '945818 Browser Helper' '956506 agent-server' '942856 zsh' \
+    '960001 node' '960003 agent-server' '633 Xcode' '960010 clang-format' > "$PS_UCOMM"
+  replay_trip "$D/lib.sh" " 1 952104 945818 942856 633 "
+  awk -v p=956506 '$1 == p { print $6 }' "$D/rp.exe" | grep -qx 2 || { cat "$D/rp.exe"; false; }
+  [ "$RP_COHORT" = " 960001 960003 960010 " ] || { echo "cohort: $RP_COHORT"; false; }   # controls: still reachable
+  [ -z "$RP_PARENTS" ] || { echo "parents: $RP_PARENTS"; false; }
+  run /bin/bash -c '. "$1"; gui_protected "$2"' _ "$D/lib.sh" "$D/rp.exe"
+  [ "$output" = " 952104 945818 956506 633 " ] || { echo "prot: [$output]"; false; }   # 633: the Xcode IDE
+  # THE KILL BELT: a row ledgered before this rule existed is resumed and dropped, never killed.
+  mkcohort "$(printf '956506\tMon 30 Sep 16:00:00 2026\n960001\tMon 30 Sep 16:00:01 2026')"
+  ledger 956506 "Mon 30 Sep 16:00:00 2026" proc 1180 agent-server
+  ledger 960001 "Mon 30 Sep 16:00:01 2026" proc 1180 node                      # control: killed
+  run_ke 1300 retrip-over-debt "$D/rp.exe"
+  [ "$output" = "killed=1 spared=1" ] || { echo "$output"; false; }
+  [ "$(grep -cF -- '-KILL 956506' "$KILLLOG")" -eq 0 ] || false
+  [ "$(grep -cF -- '-CONT 956506' "$KILLLOG")" -eq 1 ] || false
+  [ "$(grep -cF -- '-KILL 960001' "$KILLLOG")" -eq 1 ] || false
 }
