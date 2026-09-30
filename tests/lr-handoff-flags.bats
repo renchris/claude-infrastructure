@@ -49,6 +49,11 @@ printf 'BGWORK=%s ATTEMPT=%s\n' "${CC_RECYCLE_BGWORK_ANSWER:-}" "${HF_RECYCLE_AT
 case " $* " in
   *" --probe-recycle-preconditions "*) printf 'live_subagents: 0\nverdict: OK\n'; exit 0 ;;
 esac
+[ -n "${TOMB_CHECK:-}" ] && [ -e "$TOMB_CHECK" ] && echo "tombstone-present-at-fire" >> "${HF_LOG:?}"
+if [ -n "${HF_HELD_CLASS:-}" ]; then
+  mkdir -p "$HOME/.claude/logs"
+  printf '{"ts":"%s","class":"%s","target_pane":"31"}\n' "$(date -u +%FT%TZ)" "$HF_HELD_CLASS" >> "$HOME/.claude/logs/handoffs.jsonl"
+fi
 [ -n "${HF_ERR:-}" ] && printf '%s\n' "$HF_ERR" >&2
 exit "${HF_RC:-0}"
 STUB
@@ -337,10 +342,60 @@ ABORT='!! recycle ABORTED before /exit (held: draft): composer: operator draft t
   [[ "$output" != *"verdict=STRANDED"* ]] || { echo "$output"; false; }
 }
 @test "CONTROL: held but the unconfirm FAILED (rc 2) is still STRANDED, rc 4" {
+  # a refused unconfirm leaves the confirm's retirement in place: the source IS retired
+  : > "$HOME/.claude-next/projects/-x-y/$SID.jsonl.handed-off"
   HF_RC=1 HF_ERR="${ABORT/unconfirm rc 0/unconfirm rc 2}" fire
   [ "$status" -eq 4 ] || { echo "status=$status $output"; false; }
   [[ "$output" == *"verdict=STRANDED"* ]] || { echo "$output"; false; }
   [[ "$output" != *"verdict=NOTMOVED"* ]] || { echo "$output"; false; }
+}
+
+# ── D7.1 (FLEET_V2 W6): a recycle that stands down BEFORE any confirm is not a strand ──────────────
+# In-place mode runs only `--phase admit`; five handoff-fire exits leave the source unretired. Each
+# must abort the admit — tombstone and lock really gone (the REAL lr-transplant runs here) — and read
+# NOTMOVED HELD:<reason>, rc 6. The reason is handoff-fire's own recycle-held-* row, else `unknown`.
+# Mutant: drop the `elif ! lrh_source_retired` arm — every row goes STRANDED, rc 4.
+D71_CASES=(
+  "recycle-held-focused|focused|!! recycle DEFERRED: pane 31 is FOCUSED — the operator may be typing into it. Nothing typed, no watcher armed, the session stays alive."
+  "recycle-held-draft|draft|!! recycle DEFERRED: pane 31 is focused and its composer did not read EMPTY twice 10s apart ('x'). Nothing typed, no watcher armed."
+  "recycle-held-draft|draft|!! recycle REFUSED after 180s: pane 31's composer holds unsubmitted text ('x') — Nothing was typed; the session stays alive."
+  "-|unknown|!! recycle ABORTED: watcher heartbeat never appeared (log) — /exit NOT typed, session stays alive. Run manually: x"
+  "-|unknown|!! recycle ABORTED: the watcher cannot write pane 31 (see log) — /exit NOT typed, session stays alive. Run manually: x"
+  "recycle-held-draft|draft|!! recycle ABORTED at the last read: composer became non-empty ('x') between arming and /exit — nothing typed, watcher disarmed, session stays alive. Re-run: x"
+  "recycle-held-busy|busy|!! recycle ABORTED at the last read: session 0000bbbb is no longer at rest (rc 1 — 1 a turn is in flight, 2 unreadable) — nothing typed, watcher disarmed, session untouched. Re-run once it is idle."
+)
+@test "D7.1 every pre-confirm exit of the recycle aborts the admit: tombstone and lock gone, NOTMOVED HELD:<reason>, rc 6" {
+  cp "$REPO/scripts/limit-recover/lr-transplant.sh" "$LRD/lr-transplant.sh"; chmod +x "$LRD/lr-transplant.sh"
+  local c cls reason err tomb="$HOME/.claude-next/projects/-x-y/$SID.HANDOFF.json" lock="$LR_STATE_DIR/locks/$SID.lock"
+  for c in "${D71_CASES[@]}"; do
+    cls="${c%%|*}"; reason="${c#*|}"; reason="${reason%%|*}"; err="${c#*|*|}"
+    [ "$cls" = - ] && cls=""
+    : > "$HF_LOG"
+    TOMB_CHECK="$tomb" HF_HELD_CLASS="$cls" HF_RC=1 HF_ERR="$err" fire
+    [ "$status" -eq 6 ] || { echo "[$reason] status=$status $output"; false; }
+    grep -q '^tombstone-present-at-fire$' "$HF_LOG" || { echo "[$reason] the admit never tombstoned"; cat "$HF_LOG"; false; }
+    [[ "$output" == *"verdict: HELD:$reason"* ]] || { echo "[$reason] $output"; false; }
+    [[ "$output" == *"verdict=NOTMOVED"* ]] || { echo "[$reason] $output"; false; }
+    [[ "$output" != *"verdict=STRANDED"* ]] || { echo "[$reason] $output"; false; }
+    [ ! -e "$tomb" ] || { echo "[$reason] tombstone still there"; false; }
+    [ ! -e "$lock" ] || { echo "[$reason] lock still there"; false; }
+    [ -f "$HOME/.claude-next/projects/-x-y/$SID.jsonl" ] || { echo "[$reason] the source transcript is gone"; false; }
+  done
+}
+@test "D7.1 CONTROL: an abort lr-transplant refuses is FAILED rc 4, and names the retry" {
+  cat > "$LRD/lr-transplant.sh" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "${TX_LOG:?}"
+case " $* " in *" --phase abort "*) echo '{"ok":false,"reason":"target-held"}'; exit 2 ;; esac
+printf '{"ok":true,"target_transcript":"/dev/null"}\n'
+STUB
+  chmod +x "$LRD/lr-transplant.sh"
+  HF_RC=1 HF_ERR="!! recycle ABORTED: watcher heartbeat never appeared (log) — /exit NOT typed" fire
+  [ "$status" -eq 4 ] || { echo "status=$status $output"; false; }
+  [[ "$output" == *"verdict=FAILED"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"abort refused (rc 2"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"verdict=STRANDED"* ]] || { echo "$output"; false; }
+  grep -q -- '--phase abort --sid '"$SID"' ' "$TX_LOG" || { cat "$TX_LOG"; false; }
 }
 
 # ── LR_PLACED_BY=reconciler ───────────────────────────────────────────────────────────────────

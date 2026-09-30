@@ -226,6 +226,8 @@ count() { printf '%s\n' "$2" | grep -c -e "$1" || true; }
   # RED PROOF, and the load-bearing split of the whole vocabulary: the source is a tombstoned husk
   # and NO successor is carrying the session. Today this hides inside lr-fleet's PARTIAL beside
   # NOTMOVED's PARKED, and the two demand opposite actions.
+  # the confirm ran: the source is retired (D7.1 — an unretired one is NOTMOVED, not STRANDED)
+  mkdir -p "$HOME/.claude/projects/-fx"; : > "$HOME/.claude/projects/-fx/$SID.jsonl.handed-off"
   HF_RC=7 fire --voluntary
   [ "$status" -eq 4 ]
   [[ "$output" == *"verdict=STRANDED"* ]] || { echo "$output"; false; }

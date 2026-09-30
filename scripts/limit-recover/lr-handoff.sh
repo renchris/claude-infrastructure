@@ -1131,6 +1131,25 @@ for _lrh_ca in "$(dirname "$_CC_KS")/../lib/capacity-admit.sh" "$(dirname "$0")/
   # shellcheck disable=SC1090  # runtime-resolved library ladder
   [[ -f "$_lrh_ca" ]] && { . "$_lrh_ca" 2>/dev/null || true; break; }
 done
+# Was the SOURCE retired (a confirm ran)? The source store answers, never the recycle's stderr.
+lrh_source_retired() { # → 0 when <sid>.jsonl.handed-off exists under the source config dir
+  local f
+  for f in "$CFG"/projects/*/"$SID".jsonl.handed-off; do [[ -e "$f" ]] && return 0; done
+  return 1
+}
+# The reason handoff-fire held with: its newest recycle-held-* row for this pane since the fire.
+lrh_held_reason() { # → draft|focused|busy|team|… on stdout, `unknown` when no row names it
+  local log="$HOME/.claude/logs/handoffs.jsonl" r=""
+  if [[ -n "$SOURCE_PANE" && -f "$log" ]] && command -v jq >/dev/null 2>&1; then
+    r="$(tail -n 400 "$log" 2>/dev/null | jq -rR --arg p "$SOURCE_PANE" --arg t "${LRH_RCY_T0:-}" \
+          'fromjson? | select(((.class // "") | startswith("recycle-held-")) and ((.target_pane // "") == $p) and ((.ts // "") >= $t)) | .class' \
+          2>/dev/null | tail -n 1)"
+  fi
+  r="${r#recycle-held-}"
+  [[ "$r" == bgwork ]] && r=bg-work
+  [[ "$r" =~ ^[A-Za-z-]+$ ]] || r=unknown
+  printf '%s' "$r"
+}
 lrh_state() { # $1=state $2=stage $3=detail — the run's own append-only log; loud, never silent
   command -v lr_state_append >/dev/null 2>&1 || return 0
   lr_state_append "$BUNDLE" "$1" "$2" "$3" || true
@@ -1721,6 +1740,7 @@ if [[ $IN_PLACE -eq 1 ]]; then
   # i.e. the driver form, or a recycle that refused before typing anything.
   lrh_verdict SWITCHED-UNPROVEN no "armed: the transplant is done and the recycle is firing on pane ${SOURCE_PANE:-<this pane>}; the watcher carries the relaunch and its outcome lands in ~/.claude/logs/handoffs.jsonl"
   LRH_RCY_ERR="$(mktemp "$(lrh_tmpdir)/lr-inplace-XXXXXX")" || LRH_RCY_ERR=/dev/null
+  LRH_RCY_T0="$(date -u +%FT%TZ)"
   set +e
   "$HF" "${RCY_ARGS[@]}" 2> >(tee "$LRH_RCY_ERR" >&2)
   LRH_RCY_RC=$?
@@ -1764,6 +1784,31 @@ if [[ $IN_PLACE -eq 1 ]]; then
     lrh_verdict NOTMOVED no "HELD:$_lrh_held after the confirm — unconfirmed (rc 0): the source transcript is restored and the session is alive in pane ${SOURCE_PANE:-<this pane>}; nothing was typed, a retry is safe"
     rm -f "$LRH_RCY_ERR" 2>/dev/null || true
     echo "$BUNDLE"; exit 6
+  elif ! lrh_source_retired; then
+    # ── NOT RETIRED IS NOT STRANDED (FLEET_V2 W6, D7.1) ───────────────────────────────────────────
+    # In-place mode runs only `--phase admit`, and five of handoff-fire's exits fall through to here
+    # with the source still unretired: the focus DEFERRED lines, the composer gate's REFUSED after
+    # 180 s, the heartbeat ABORTED, the pane-proof ABORTED and the last-read ABORTED. A text match on
+    # their stderr misses three of the five; "two causes, one rc: ask the layer below" — so the
+    # question is the source store's own: was <sid>.jsonl retired to .handed-off? It was not, so no
+    # confirm ran, and the move is given up properly: lr-transplant --phase abort withdraws the
+    # target copy, the tombstone and the lock (this process is the lock's recorded actuator, and
+    # handoff-fire has exited, so abort's live-holder refusals cannot fire on us). The reason comes
+    # from handoff-fire's own recycle-held-* row, or `unknown`.
+    _lrh_reason="$(lrh_held_reason)"
+    _lrh_ab_rc=0
+    _lrh_ab_out="$("$LR/lr-transplant.sh" --phase abort --sid "$SID" --from "$CFG" --to "$TCFG" \
+        ${RECORD_ID:+--record-id "$RECORD_ID"} ${HF_WATCHER_RECORD:+--watcher-record "$HF_WATCHER_RECORD"} 2>&1)" || _lrh_ab_rc=$?
+    if [[ $_lrh_ab_rc -eq 0 ]]; then
+      echo "lr-handoff: verdict: HELD:$_lrh_reason — the recycle stood down before any confirm (handoff-fire rc=$LRH_RCY_RC); lr-transplant --phase abort rc 0 withdrew the admit" >&2
+      lrh_state HELD recycle "HELD:$_lrh_reason before confirm; admit aborted"
+      lrh_verdict NOTMOVED no "HELD:$_lrh_reason before the confirm — the admit is aborted (tombstone, lock and target copy withdrawn); the source was never retired and the session is alive in pane ${SOURCE_PANE:-<this pane>}; a retry is safe"
+      rm -f "$LRH_RCY_ERR" 2>/dev/null || true
+      echo "$BUNDLE"; exit 6
+    fi
+    lrh_verdict FAILED no "the recycle stood down before any confirm (handoff-fire rc=$LRH_RCY_RC, HELD:$_lrh_reason), but lr-transplant --phase abort refused (rc $_lrh_ab_rc: $(printf '%.160s' "$_lrh_ab_out")): the source was never retired, yet its admit tombstone and lock remain — retry the recovery, which re-drives the same move: lr-fleet.sh --one $SID"
+    rm -f "$LRH_RCY_ERR" 2>/dev/null || true
+    echo "$BUNDLE"; exit 4
   else
     # STRANDED, AND IT IS THE LOAD-BEARING TOKEN. The source is RETIRED — a tombstoned husk whose
     # prompts the handed-off-session-guard blocks — and no successor is carrying the session. That
