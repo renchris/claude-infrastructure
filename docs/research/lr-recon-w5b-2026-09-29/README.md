@@ -75,6 +75,18 @@ checks per real cohort. `watch` runs detached, archiving each cohort's records, 
 waiting session per new cohort. No real limit has happened since the observe daemon started at 17:42Z;
 all four accounts sat at 0-6% of their 5-hour window.
 
+**Which cohorts count (agreed with the origin lead, 2026-09-30 02:53Z).** The observe daemon was
+restarted onto the W5b fixes at 21:14Z (operator step `ff7bd8ba875e`). The operator then ruled the six
+open decisions (plan § W6), and W6d rewrites `lr_recon/**` to match. A cohort shadowed before the W6
+code runs validates a planner that cutover will not run, so each cohort's verdict names the planner
+code it ran (compare the cohort's time with the latest `recon/restarts.jsonl` row and the W6d/W6f land
+times), and only cohorts judged by post-W6 code (W6d and W6f landed, then the reconciler restarted —
+an operator step the lead files) count toward the 2 needed for cutover. Earlier cohorts are still
+compared and recorded as evidence.
+
+Still waiting at 02:53Z: no real limit since 19:40Z. The first likely one is a weekly limit (`next2`
+at 79%, rising about 1 point an hour).
+
 ## Census step
 
 Operator step `f0df9145b73a` (the live observe census) was closed with the launchd daemon's own pass:
