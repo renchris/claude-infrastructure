@@ -48,6 +48,9 @@ exit "${FLEET_DETACH_RC:-0}"
 STUB
   chmod +x "$LR_FLEET_BIN"
   export FLEET_LOG="$BATS_TEST_TMPDIR/fleet.log"; : > "$FLEET_LOG"
+  # The zero-human switch (ruling 1): reroute is an unattended move, so every case below that expects
+  # a dispatch runs with it set — in this fixture $HOME, never the real one.
+  : > "$STATE/autorecover.on"
 }
 
 park() { # $1=reset iso (default far future) — the § 1 record shape (lr-reset-poller.sh:1267)
@@ -119,4 +122,28 @@ plog() { cat "$STATE/poller.log" >&2 2>/dev/null || true; }
   RANK_OUT="next2 0.8" LR_POLLER_AUTOFIRE=1 run /bin/bash "$POLLER" --once
   [ "$status" -eq 0 ] || { echo "$output"; plog; false; }
   grep -q -- "--one $SID --target auto --from-daemon --detach" "$FLEET_LOG" || { plog; false; }
+}
+
+# ══ W6b (LIMIT_RECOVER_FLEET_V2 resolutions 8, 9) ══════════════════════════════════════════════
+@test "[R8] without autorecover.on nothing is rerouted, the router is not even asked, and ONE line says why" {
+  rm -f "$STATE/autorecover.on"
+  park; export RANK_OUT='next2 0.9'
+  tick
+  [ ! -s "$FLEET_LOG" ] || { echo "rerouted with the switch absent: $(cat "$FLEET_LOG")"; false; }
+  [ ! -s "$RANK_LOG" ] || { cat "$RANK_LOG"; false; }
+  [ "$(grep -c 'REROUTE-HELD 1 parked session' "$STATE/poller.log")" = 1 ] || { plog; false; }
+  [ ! -e "$STATE/autorecover.on" ]
+}
+
+@test "[R9] a parked session whose reset is under 15 min away stays put, even with a routable account" {
+  park "$(date -u -v+300S +%Y-%m-%dT%H:%M:%SZ)"; export RANK_OUT='next2 0.9'
+  tick
+  [ ! -s "$FLEET_LOG" ] || { cat "$FLEET_LOG"; false; }
+  grep -q "REROUTE-STAY $SID (next) — its account resets in" "$STATE/poller.log" || { plog; false; }
+}
+
+@test "R9 CONTROL: 20 min before its reset the same session IS rerouted" {
+  park "$(date -u -v+1200S +%Y-%m-%dT%H:%M:%SZ)"; export RANK_OUT='next2 0.9'
+  tick
+  grep -q -- "--one $SID" "$FLEET_LOG" || { plog; false; }
 }

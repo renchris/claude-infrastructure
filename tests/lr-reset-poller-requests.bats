@@ -469,3 +469,64 @@ EOF
   tick
   [ ! -e "$STATE/runs/by-sid/$SID.active" ] || { plog; false; }
 }
+
+# ══ W6b (LIMIT_RECOVER_FLEET_V2): STAY NEAR THE RESET (D1.4) AND PACE THE COHORT (D1.6) ═════════
+hook_rq() { # $1=sid $2=account $3=reset epoch (optional)
+  # The optional key is built OUTSIDE the heredoc: `${3:+…"…"}` inside one loses its inner quotes.
+  local extra=""; [ -n "${3:-}" ] && extra=",\"reset_at_epoch\":\"$3\""
+  rq "$1" <<JSON
+{"sid":"$1","requested_by":"stop-failure-marker","account":"$2","transcript_path":"$(lim_tx "$1")"$extra}
+JSON
+}
+cohort_sid() { printf '0000000%s-0000-4000-8000-0000000000%02d' "$(( $1 % 10 ))" "$1"; }
+
+@test "[D1.4] a hook request whose account resets inside 15 min STAYS queued — no dispatch, no attempt spent" {
+  : > "$STATE/autorecover.on"
+  hook_rq "$SID" next3 "$(( $(date +%s) + 300 ))"
+  tick
+  [ ! -s "$FLEET_LOG" ] || { echo "moved minutes before its reset: $(cat "$FLEET_LOG")"; false; }
+  [ "$(jq -r '.attempts // "none"' "$STATE/requests/$SID.json")" = none ] || { cat "$STATE/requests/$SID.json"; false; }
+  grep -q "REQUEST-STAY $SID (next3) — its account resets in" "$STATE/poller.log" || { plog; false; }
+}
+
+@test "D1.4 CONTROL: a reset further than 15 min away, or already past, is dispatched as before" {
+  : > "$STATE/autorecover.on"
+  local s2; s2="$(cohort_sid 2)"
+  hook_rq "$SID" next3 "$(( $(date +%s) + 1200 ))"
+  hook_rq "$s2" next3 "$(( $(date +%s) - 60 ))"
+  tick
+  grep -q -- "--one $SID" "$FLEET_LOG" || { cat "$FLEET_LOG"; plog; false; }
+  grep -q -- "--one $s2" "$FLEET_LOG" || { cat "$FLEET_LOG"; plog; false; }
+  ! grep -q 'REQUEST-STAY' "$STATE/poller.log"
+}
+
+@test "[D1.6] a 6-death cohort on ONE account dispatches 4 this tick; 2 stay queued, unspent, with depth and ETA" {
+  : > "$STATE/autorecover.on"
+  local i
+  for i in 1 2 3 4 5 6; do hook_rq "$(cohort_sid "$i")" next3; done
+  tick
+  [ "$(grep -c -- '--one ' "$FLEET_LOG")" = 4 ] || { cat "$FLEET_LOG"; plog; false; }
+  local unspent=0 f
+  for f in "$STATE/requests"/*.json; do [ "$(jq -r '.attempts // 0' "$f")" = 0 ] && unspent=$(( unspent + 1 )); done
+  [ "$unspent" = 2 ] || { echo "unspent=$unspent"; false; }
+  grep -q "REQUEST-QUEUED 2 request(s) over the 4/account/tick cap left queued (by account: next3=2); queue depth 2, ETA ~15 min" "$STATE/poller.log" || { plog; false; }
+}
+
+@test "D1.6: the cap is PER ACCOUNT — 4 on next3 and 2 on next4 all go in one tick" {
+  : > "$STATE/autorecover.on"
+  local i
+  for i in 1 2 3 4; do hook_rq "$(cohort_sid "$i")" next3; done
+  for i in 5 6; do hook_rq "$(cohort_sid "$i")" next4; done
+  tick
+  [ "$(grep -c -- '--one ' "$FLEET_LOG")" = 6 ] || { cat "$FLEET_LOG"; plog; false; }
+  ! grep -q 'REQUEST-QUEUED' "$STATE/poller.log" || false
+}
+
+@test "D1.6: LR_REQUEST_MAX_PER_TICK is honoured" {
+  : > "$STATE/autorecover.on"
+  local i
+  for i in 1 2 3; do hook_rq "$(cohort_sid "$i")" next3; done
+  LR_REQUEST_MAX_PER_TICK=1 LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
+  [ "$(grep -c -- '--one ' "$FLEET_LOG")" = 1 ] || { cat "$FLEET_LOG"; false; }
+  grep -q 'queue depth 2, ETA ~30 min' "$STATE/poller.log" || { plog; false; }
+}

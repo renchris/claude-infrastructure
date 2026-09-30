@@ -848,6 +848,24 @@ rq_record_attempt() { # $1=file $2=verdict — bumps .attempts and stamps the at
      '.attempts = ((.attempts // 0) + 1) | .last_attempt_epoch = $now | .last_verdict = $v' "$1" > "$t" 2>/dev/null \
     && mv -f "$t" "$1" 2>/dev/null || { rm -f "$t" 2>/dev/null; log "REQUEST-WARN could not record the attempt on $1"; }
 }
+# THE PER-ACCOUNT TICK COUNTERS. /bin/bash 3.2 (launchd's interpreter) has no associative arrays,
+# so each counter is one "acct=n " string; rq_acct_n reads one account's count, rq_acct_bump adds one.
+RQ_STAY_S="${LR_REQUEST_STAY_S:-900}"; [[ "$RQ_STAY_S" =~ ^[0-9]+$ ]] || RQ_STAY_S=900
+RQ_MAX_PER_TICK="${LR_REQUEST_MAX_PER_TICK:-4}"; [[ "$RQ_MAX_PER_TICK" =~ ^[1-9][0-9]*$ ]] || RQ_MAX_PER_TICK=4
+RQ_TICK_MIN="${LR_POLLER_TICK_MIN:-15}"; [[ "$RQ_TICK_MIN" =~ ^[1-9][0-9]*$ ]] || RQ_TICK_MIN=15
+_rq_disp=""; _rq_over=0; _rq_over_by=""
+rq_acct_n() { # $1=acct → this tick's dispatch count for it
+  local e; for e in $_rq_disp; do [[ "${e%=*}" == "$1" ]] && { printf '%s' "${e##*=}"; return 0; }; done
+  printf 0
+}
+rq_acct_bump() { # $1=counter variable name $2=acct → +1 for that account in that counter
+  local e out="" hit=0 v="${!1}"
+  for e in $v; do
+    if [[ "${e%=*}" == "$2" ]]; then out+="$2=$(( ${e##*=} + 1 )) "; hit=1; else out+="$e "; fi
+  done
+  (( hit )) || out+="$2=1 "
+  printf -v "$1" '%s' "$out"
+}
 _rq_held=0; _rq_held_sids=""; _rq_recon=0
 for _rq in "$REQUESTS"/*.json; do
   [[ -e "$_rq" ]] || continue
@@ -871,17 +889,23 @@ d=json.load(open(sys.argv[1]))
 if not isinstance(d,dict): raise SystemExit(1)
 sys.stdout.write("".join(str(d.get(k) or "")+"\0"
   for k in ("sid","kind","mode","target","source_pane","requested_by","prompt_file",
-            "transcript_path","attempts","last_attempt_epoch")))
+            "transcript_path","attempts","last_attempt_epoch","reset_at_epoch","account")))
 ' "$_rq" 2>/dev/null)
-  if (( ${#_rqf[@]} != 10 )) || [[ -z "${_rqf[0]}" ]]; then
+  if (( ${#_rqf[@]} != 12 )) || [[ -z "${_rqf[0]}" ]]; then
     log "REQUEST-SKIP $_rq_name — unreadable or no sid; parked as malformed"
     mv "$_rq" "$RESULTS/${_rq_name%.json}.malformed.json" 2>/dev/null || true; continue
   fi
   _rq_sid="${_rqf[0]}"; _rq_kind="${_rqf[1]}"; _rq_mode="${_rqf[2]}"; _rq_target="${_rqf[3]}"
   _rq_pane="${_rqf[4]}"; _rq_by="${_rqf[5]}"; _rq_pfile="${_rqf[6]}"
   _rq_tp="${_rqf[7]}"; _rq_att="${_rqf[8]}"; _rq_last="${_rqf[9]}"
+  _rq_reset="${_rqf[10]}"; _rq_acct="${_rqf[11]}"
   [[ "$_rq_att" =~ ^[0-9]+$ ]] || _rq_att=0
   [[ "$_rq_last" =~ ^[0-9]+$ ]] || _rq_last=0
+  [[ "$_rq_reset" =~ ^[0-9]+$ ]] || _rq_reset=0
+  # The account the session died on: the hook writes it; an older or hand-written request is placed
+  # by its transcript's store, and one with neither shares a single "unknown" bucket for the cap.
+  if [[ -z "$_rq_acct" && -n "$_rq_tp" ]]; then _rq_acct="$(acct_of_cfg "${_rq_tp%%/projects/*}" 2>/dev/null || true)"; fi
+  [[ -n "$_rq_acct" ]] || _rq_acct=unknown
   _rq_hook=0; [[ "$_rq_by" == "stop-failure-marker" ]] && _rq_hook=1
 
   # ── DRAIN-TIME REVALIDATION (D3, 2026-09-28) — the hook's request is a SNAPSHOT of one death ─────
@@ -993,6 +1017,30 @@ sys.stdout.write("".join(str(d.get(k) or "")+"\0"
     fi
   fi
 
+  # ── STAY NEAR THE RESET, AND PACE THE COHORT (W6b: D1.4, D1.6, resolution 4) ─────────────────
+  # Both are checked BEFORE the fence and the claim, and neither spends an attempt: a request held
+  # here is exactly as it was, and the next tick sees it again.
+  if [[ "$_rq_mode" == relaunch ]]; then
+    # D1.4 — a session whose own account resets within LR_REQUEST_STAY_S (default 900 s) stays put.
+    # Moving it minutes before its reset buys nothing and costs a transplant and a cold replay; the
+    # three dispatches sent 3-4 min before the 06:30Z reset on 2026-09-29 are the measured case, and
+    # the 2026-09-10 cascade (13 panes in 8 s, 74 of 92 re-runs lost) is what an unpaced cohort costs.
+    if (( _rq_reset > 0 )); then
+      _rq_left=$(( _rq_reset - $(date +%s) ))
+      if (( _rq_left > 0 && _rq_left < RQ_STAY_S )); then
+        log "REQUEST-STAY $_rq_sid ($_rq_acct) — its account resets in ${_rq_left}s (< ${RQ_STAY_S}s); left queued, no attempt spent"
+        continue
+      fi
+    fi
+    # D1.6 — at most RQ_MAX_PER_TICK dispatches per ACCOUNT per tick (default 4, MAX_PER_RUN's
+    # number). A 30-death cohort otherwise started 30 detached drivers in one tick. The excess stays
+    # queued; the tick's summary line names the depth and the ETA the cap implies.
+    if (( $(rq_acct_n "$_rq_acct") >= RQ_MAX_PER_TICK )); then
+      _rq_over=$(( _rq_over + 1 )); rq_acct_bump _rq_over_by "$_rq_acct"
+      continue
+    fi
+  fi
+
   # ── THE RECONCILER FENCE (§ C10) — the first point this iteration touches the sid ─────────────
   # DEFER leaves the request exactly where it is: the reconciler owns the session now, and if it
   # lapses the next tick finds the request again. ACT is paired with lrp_act_done on EVERY exit path
@@ -1038,6 +1086,7 @@ sys.stdout.write("".join(str(d.get(k) or "")+"\0"
       # claim guards no run and must not hold the sid out of recovery until the TTL.
       if (( _rq_rc == 0 )); then run_claim_handoff "$_rq_sid" "$RESULTS/$_rq_sid.log"
       else run_claim_release "$_rq_sid"; _rq_verdict=dispatch-failed; fi
+      rq_acct_bump _rq_disp "$_rq_acct"
       ;;
     prompt)
       # C14: the pane is up with an EMPTY composer and nothing was ever submitted, so the repair is
@@ -1079,6 +1128,14 @@ sys.stdout.write("".join(str(d.get(k) or "")+"\0"
   log "REQUEST $_rq_sid — $_rq_verdict rc=$_rq_rc (result $RESULTS/$_rq_sid.json)"
   lrp_act_done
 done
+if (( _rq_over > 0 )); then
+  # THE TRICKLE IS STATED, NOT HIDDEN (resolution 4): real ticks run ~14-16 min apart, so the ETA is
+  # the deepest account's backlog in ticks times LR_POLLER_TICK_MIN.
+  _rq_deep=0; for _e in $_rq_over_by; do (( ${_e##*=} > _rq_deep )) && _rq_deep=${_e##*=}; done
+  _rq_ticks=$(( (_rq_deep + RQ_MAX_PER_TICK - 1) / RQ_MAX_PER_TICK ))   # whole ticks: a partial one still costs a tick
+  _rq_eta=$(( _rq_ticks * RQ_TICK_MIN ))
+  log "REQUEST-QUEUED $_rq_over request(s) over the ${RQ_MAX_PER_TICK}/account/tick cap left queued (by account: ${_rq_over_by% }); queue depth $_rq_over, ETA ~${_rq_eta} min at ~${RQ_TICK_MIN} min/tick"
+fi
 if (( _rq_recon > 0 )); then
   log "RECON-OWNED $_rq_recon cc-lr request(s) left for the live reconciler"
 fi
@@ -1575,6 +1632,14 @@ fi
 # under the same run claim. The record stays: § 2's transplant arm retires it only on proof.
 # One rank call per lane per tick; one dispatch per sid per LR_REROUTE_EVERY_MIN.
 # Kill: LR_POLLER_REROUTE=off.
+# TWO GATES ADDED BY W6b (LIMIT_RECOVER_FLEET_V2 ruling 1, resolutions 8 and 9):
+#   · $STATE/autorecover.on is the ONE zero-human switch, and this arm is an unattended move exactly
+#     like a hook request, so it is held when the file is absent. It had no such check: on
+#     2026-09-29T03:07Z it fired on 415a3aac while that sid's own hook request was HOOK-HELD (and
+#     that dispatch failed, rc=128 — the unattended record is 1 move in 5 attempts). ONE summary
+#     line per tick names what was held.
+#   · a record whose reset is less than LR_REQUEST_STAY_S (900 s) away stays put, the request lane's
+#     own stay-near-reset rule: a move minutes before the reset buys nothing and costs a transplant.
 REROUTE_EVERY_MIN="${LR_REROUTE_EVERY_MIN:-15}"
 [[ "$REROUTE_EVERY_MIN" =~ ^[1-9][0-9]*$ ]] || REROUTE_EVERY_MIN=15
 REROUTE_DIR="$STATE/reroute"
@@ -1590,10 +1655,19 @@ reroute_rank() { # $1=lane → the router's stdout, asked at most once per tick 
   fi
   printf '%s\n' "$out"
 }
-reroute_parked() { # $1=sid $2=acct $3=cfg → dispatches or does nothing; never fatal
-  local sid="$1" acct="$2" cfg="$3" lane=general tier cand mark rc=0
+_rr_held=0
+reroute_parked() { # $1=sid $2=acct $3=cfg $4=reset epoch → dispatches or does nothing; never fatal
+  local sid="$1" acct="$2" cfg="$3" reset_ep="${4:-0}" lane=general tier cand mark rc=0 left
   [[ "${LR_POLLER_REROUTE:-on}" != off ]] || return 0
   (( AUTOFIRE == 1 && DRY == 0 )) || return 0
+  if [[ ! -e "$STATE/autorecover.on" ]]; then _rr_held=$(( _rr_held + 1 )); return 0; fi
+  if [[ "$reset_ep" =~ ^[0-9]+$ ]] && (( reset_ep > 0 )); then
+    left=$(( reset_ep - $(date +%s) ))
+    if (( left > 0 && left < RQ_STAY_S )); then
+      log "REROUTE-STAY $sid ($acct) — its account resets in ${left}s (< ${RQ_STAY_S}s); not moved"
+      return 0
+    fi
+  fi
   (( _rr_n < MAX_PER_RUN )) || return 0
   fire_latched "$sid" && return 0
   { pgrep -f "resume $sid" >/dev/null 2>&1 || sid_claimed "$sid"; } && return 0
@@ -1657,7 +1731,7 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
   cwd="${_fields[3]}"; reset_at_utc="${_fields[4]}"
   reset_epoch=$(python3 -c "import sys,calendar,time; from datetime import datetime; print(int(calendar.timegm(datetime.fromisoformat(sys.argv[1].replace('Z','+00:00')).utctimetuple())))" "$reset_at_utc" 2>/dev/null || echo 0)
   if (( now < reset_epoch )); then                           # reset not reached yet —
-    reroute_parked "$sid" "$acct" "$cfg"                     # …but another account may route now
+    reroute_parked "$sid" "$acct" "$cfg" "$reset_epoch"      # …but another account may route now
     continue
   fi
   { pgrep -f "resume $sid" >/dev/null 2>&1 || sid_claimed "$sid"; } && { mv "$pf" "$RESUMED/$(basename "$pf")" 2>/dev/null; rm -f "$PARKED/$sid.notified"; continue; }
@@ -1872,4 +1946,7 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
     log "READY $sid on $acct — $mode, notified once ($hint)"
   fi
 done
+if (( _rr_held > 0 )); then
+  log "REROUTE-HELD $_rr_held parked session(s) not rerouted — $STATE/autorecover.on is absent; the zero-human switch is the operator's to set"
+fi
 exit 0
