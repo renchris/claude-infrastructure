@@ -235,7 +235,9 @@ add_row() {
   # unfireable, consuming a dispatch consideration forever. 19 rows were in that state on the live
   # store when this landed.
   local dead; dead="$(add_row "dead row" "true")"
-  run python3 "$CP" sweep --record --close-falsified 5 --json
+  # ONE reading suffices here by construction: this case's subject is the ACTUATOR. The spaced-reading
+  # bound on sampled probes has its own cases (14-16).
+  run env CC_PREMISE_READINGS_REQUIRED=1 python3 "$CP" sweep --record --close-falsified 5 --json
   [ "$status" -eq 0 ]
   [ "$(printf '%s' "$output" | jq -r '.closed_falsified')" = "1" ]
   run "$CB" list --all --json
@@ -259,7 +261,7 @@ add_row() {
   add_row "dead one"   "true" >/dev/null
   add_row "dead two"   "true" >/dev/null
   add_row "dead three" "true" >/dev/null
-  run python3 "$CP" sweep --record --close-falsified 1 --json
+  run env CC_PREMISE_READINGS_REQUIRED=1 python3 "$CP" sweep --record --close-falsified 1 --json
   [ "$(printf '%s' "$output" | jq -r '.closed_falsified')" = "1" ]
   [ "$(printf '%s' "$output" | jq -r '.close_skipped')" = "2" ]
 }
@@ -404,4 +406,44 @@ add_row() {
   [[ "$output" == *"UNKNOWN"* ]] || false
   run bash "$REPO/scripts/backlog-ratchet.sh" --json
   [ "$(printf '%s' "$output" | jq -r '.validation_snapshot')" = "absent" ]
+}
+
+# ── SPACED READINGS (BACKLOG_MASTER W0 ledger-retraction.2, row 228e30f8adce) ─────────────────────
+# A probe that reads runtime state is a SAMPLE: b7252a3bb015 closed on a 1-in-3 coin. The stub below
+# is that coin landing "falsified" (exit 0); the question is how many landings it takes to close.
+@test "14 a sampled probe: 0 closes after 1 sweep, and 1 close after 3 sweeps spaced 6 h apart" {
+  local coin="$BATS_TEST_TMPDIR/coin.sh"
+  printf '#!/bin/bash\nexit 0\n' > "$coin"; chmod +x "$coin"
+  local dead; dead="$(add_row "one-in-three" "bash $coin")"
+  t0=1790000000
+  run env CC_PREMISE_NOW="$t0" python3 "$CP" sweep --record --close-falsified 5 --json
+  [ "$(printf '%s' "$output" | jq -r '.closed_falsified')" = "0" ]
+  run env CC_PREMISE_NOW="$((t0 + 3600))" python3 "$CP" sweep --record --close-falsified 5 --json
+  [ "$(printf '%s' "$output" | jq -r '.closed_falsified')" = "0" ]     # 1 h later: not a new reading
+  run env CC_PREMISE_NOW="$((t0 + 21600))" python3 "$CP" sweep --record --close-falsified 5 --json
+  [ "$(printf '%s' "$output" | jq -r '.closed_falsified')" = "0" ]     # 2 of 3
+  run env CC_PREMISE_NOW="$((t0 + 43200))" python3 "$CP" sweep --record --close-falsified 5 --json
+  [ "$(printf '%s' "$output" | jq -r '.closed_falsified')" = "1" ]
+  run "$CB" list --all --json
+  [ "$(printf '%s' "$output" | jq -r --arg i "$dead" '.[]|select(.id==$i)|.status')" = "done" ]
+}
+
+@test "15 a still-live reading between them restarts the count" {
+  local coin="$BATS_TEST_TMPDIR/coin.sh"
+  printf '#!/bin/bash\n[ -e %q ] && exit 1\nexit 0\n' "$BATS_TEST_TMPDIR/live" > "$coin"; chmod +x "$coin"
+  add_row "flapping" "bash $coin" >/dev/null
+  t0=1790000000
+  env CC_PREMISE_NOW="$t0" python3 "$CP" sweep --record --close-falsified 5 --json >/dev/null
+  env CC_PREMISE_NOW="$((t0 + 21600))" python3 "$CP" sweep --record --close-falsified 5 --json >/dev/null
+  : > "$BATS_TEST_TMPDIR/live"
+  env CC_PREMISE_NOW="$((t0 + 43200))" python3 "$CP" sweep --record --close-falsified 5 --json >/dev/null
+  rm -f "$BATS_TEST_TMPDIR/live"
+  run env CC_PREMISE_NOW="$((t0 + 64800))" python3 "$CP" sweep --record --close-falsified 5 --json
+  [ "$(printf '%s' "$output" | jq -r '.closed_falsified')" = "0" ]     # 1 of 3 since the live reading
+}
+
+@test "16 a monotone git-content probe still closes on ONE reading" {
+  local dead; dead="$(add_row "landed content" "git -C $REPO merge-base --is-ancestor HEAD HEAD")"
+  run python3 "$CP" sweep --record --close-falsified 5 --json
+  [ "$(printf '%s' "$output" | jq -r '.closed_falsified')" = "1" ]
 }

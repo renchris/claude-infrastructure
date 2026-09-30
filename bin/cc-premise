@@ -2800,6 +2800,93 @@ def _record_validations(verdicts, sha, merge=False):
     return len(verdicts), "ok"
 
 
+# ── SPACED READINGS FOR SAMPLED PROBES (2026-09-30, BACKLOG_MASTER W0 ledger-retraction.2) ────────
+# Row 228e30f8adce asked how `--close-falsified` should stop closing live rows on a probe whose one
+# reading is a SAMPLE of runtime state (b7252a3bb015 closed on a 1-in-3 coin). Decided on the row's
+# own numbers, option (b): a probe the filing-day screen cannot re-ask as a tree question
+# (UNDECIDABLE — a script call, a pipe, an absolute path: every shape a runtime probe has) closes a
+# row only after READINGS_REQUIRED falsified readings from separate `--record` sweeps, each at least
+# READING_SPACING_S after the last one counted, with no still-live reading after the run started.
+# At the row's 1-in-3 false-pass rate that is (1/3)^3 ≈ 4% false closes instead of 33%. Deterministic
+# probes keep closing on one reading: DISCRIMINATING tree probes, derived plan falsifiers (no stored
+# probe), and probes that ask a MONOTONE git-content question (MONOTONE_PROBE_RE) — content that
+# reached trunk does not leave it, so one reading of it is not a sample.
+READINGS = os.environ.get(
+    "CC_PREMISE_READINGS", os.path.join(os.path.dirname(BACKLOG), "premise-readings.jsonl"))
+READINGS_REQUIRED = max(1, int(os.environ.get("CC_PREMISE_READINGS_REQUIRED", "3")))
+READING_SPACING_S = int(os.environ.get("CC_PREMISE_READING_SPACING_S", str(6 * 3600)))
+MONOTONE_PROBE_RE = re.compile(
+    r"land-content-verify\.sh|merge-base\s+--is-ancestor|\bgit\s+(-C\s+\S+\s+)?(ls-tree|cat-file\s+-e)\b")
+
+
+def _now_epoch():
+    """Wall clock, or CC_PREMISE_NOW (epoch seconds) — the suite's seam for spaced sweeps."""
+    v = os.environ.get("CC_PREMISE_NOW", "")
+    return int(v) if v.isdigit() else int(datetime.datetime.now(datetime.timezone.utc).timestamp())
+
+
+def _is_sampled(ent):
+    """True when the row's STORED probe reads runtime state, i.e. one reading of it is a sample."""
+    probe = (ent.get("falsifier") or "").strip()
+    if not probe or MONOTONE_PROBE_RE.search(probe):
+        return False
+    verdict, _ = filing_day_screen(ent)
+    return verdict == UNDECIDABLE
+
+
+def _record_readings(verdicts):
+    """Append one reading per probed row whose verdict is falsified, plus a `clear` reading for a
+    row that already HAS readings (it is what ends a run). Fail-open: a lost reading only delays."""
+    have = set()
+    try:
+        with open(READINGS, encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    have.add(json.loads(line).get("id"))
+                except ValueError:
+                    continue
+    except OSError:
+        pass
+    ts = _now_epoch()
+    rows = [(i, v) for i, v in verdicts if v == "falsified" or (v == "clear" and i in have)]
+    if not rows:
+        return
+    try:
+        os.makedirs(os.path.dirname(READINGS) or ".", exist_ok=True)
+        with open(READINGS, "a", encoding="utf-8") as fh:
+            for i, v in rows:
+                fh.write(json.dumps({"id": i, "ts": ts, "verdict": v}, sort_keys=True) + "\n")
+    except OSError:
+        pass
+
+
+def _spaced_falsified(item_id):
+    """How many falsified readings of `item_id` count toward a close: the trailing run since its last
+    `clear` reading, counting only readings at least READING_SPACING_S after the previous counted one."""
+    rows = []
+    try:
+        with open(READINGS, encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if r.get("id") == item_id:
+                    rows.append(r)
+    except OSError:
+        return 0
+    rows.sort(key=lambda r: r.get("ts") or 0)
+    n, last = 0, None
+    for r in rows:
+        if r.get("verdict") != "falsified":
+            n, last = 0, None
+            continue
+        t = r.get("ts") or 0
+        if last is None or t - last >= READING_SPACING_S:
+            n, last = n + 1, t
+    return n
+
+
 def _close_falsified(candidates, idx, sha, cap):
     """Retire rows a probe has just proven dead. Returns (closed, skipped, lines).
 
@@ -2851,11 +2938,10 @@ def _close_falsified(candidates, idx, sha, cap):
     close). The screen is a TREE question; the dangerous probes are RUNTIME questions. It is not weak,
     it is out of population (memory: filter-inherits-its-producers-population).
 
-    THE FIX IS A VALUE FORK AND IS NOT TAKEN HERE — filed and BLOCKED rather than guessed. Making
-    UNDECIDABLE refuse an auto-close is the conservative direction, but it retires auto-close for the
-    MAJORITY of probes by this file's own count, and how much unattended drain the operator wants to
-    trade for that is theirs to decide. Do not narrow this quietly: the shape to fix is
-    "a probe whose reading is a SAMPLE", and a sample needs a rate, not a retry.
+    FIXED 2026-09-30 (bound 5, SPACED READINGS above): a sample needs a rate, not a retry, so a
+    SAMPLED probe closes only after READINGS_REQUIRED falsified readings from separate `--record`
+    sweeps spaced READING_SPACING_S apart. Refusing UNDECIDABLE outright would have retired auto-close
+    for the majority of probes; spacing keeps it and cuts the 1-in-3 false close to ~4%.
     """
     closed, skipped, lines = 0, 0, []
     if cap <= 0:
@@ -2907,6 +2993,15 @@ def _close_falsified(candidates, idx, sha, cap):
             lines.append("  %s SKIPPED — re-run says %s, not falsified (the sweep's verdict was stale)"
                          % (cid, verdict))
             continue
+        # (5) A SAMPLED probe needs READINGS_REQUIRED spaced falsified readings (see SPACED READINGS).
+        _ent = idx.get(cid) or {}
+        if READINGS_REQUIRED > 1 and _is_sampled(_ent):
+            _n = _spaced_falsified(cid)
+            if _n < READINGS_REQUIRED:
+                skipped += 1
+                lines.append("  %s HELD — runtime probe, %d of %d spaced falsified reading(s) (>= %d h apart)"
+                             % (cid, _n, READINGS_REQUIRED, READING_SPACING_S // 3600))
+                continue
         probe = (idx.get(cid, {}).get("falsifier") or "").strip() or "(derived)"
         ev = "falsifier passed: %s @ %s (auto-closed by cc-premise sweep --close-falsified)" % (
             probe[:160], sha or "unknown-sha")
@@ -3145,6 +3240,7 @@ def cmd_sweep(as_json, record=False, close_cap=0, limit=0):
         # metric. The caller's `--limit` is what declares the pass a shard, so the writer is told
         # rather than left to infer it from a count that could be whole by coincidence.
         recorded, record_note = _record_validations(all_verdicts, sha, merge=limit > 0)
+        _record_readings(all_verdicts)
 
     # THE CURSOR ADVANCES ONLY AFTER THE PROBES RAN AND THE STAMP WAS OFFERED. Advancing it first
     # would let a pass that dies mid-shard skip the rows it never reached — permanently, since
