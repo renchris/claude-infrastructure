@@ -1,0 +1,21 @@
+# carried_seeds.out  (cert_sim.py; DIV8; b=0.1; K=3; stop on K dry rounds; REPS=1000 per row)
+
+## N0 = 60 real material holes at the first freeze
+  s    | truth left mean | mu_hat mean | mu_up holds | n_pred95 flat holds  median | scale holds | total n_pred95 holds  median | stated P(>=1) mean vs true P(>=1)
+  20   | 0.56            | 1.93        | 100.0%       | 100.0%               6   | 100.0%      | 100.0%                 7      | 0.62 vs 0.46
+  40   | 0.56            | 1.28        | 99.9%       | 99.9%               4   | 99.8%      | 99.7%                 4      | 0.56 vs 0.47
+  60   | 0.56            | 0.99        | 98.6%       | 98.9%               3   | 98.6%      | 99.2%                 3      | 0.52 vs 0.46
+  100  | 0.53            | 0.86        | 95.0%       | 98.4%               3   | 97.6%      | 98.7%                 3      | 0.51 vs 0.45
+  200  | 0.56            | 0.69        | 86.8%       | 98.0%               2   | 98.1%      | 98.1%                 3      | 0.49 vs 0.47
+  300  | 0.52            | 0.66        | 86.0%       | 97.8%               2   | 97.7%      | 98.4%                 3      | 0.50 vs 0.45
+
+## N0 = 20 real material holes at the first freeze
+  s    | truth left mean | mu_hat mean | mu_up holds | n_pred95 flat holds  median | scale holds | total n_pred95 holds  median | stated P(>=1) mean vs true P(>=1)
+  20   | 0.29            | 0.72        | 99.8%       | 99.8%               3   | 99.8%      | 100.0%                 3      | 0.45 vs 0.28
+  40   | 0.28            | 0.51        | 98.1%       | 98.7%               2   | 98.7%      | 99.1%                 2      | 0.40 vs 0.28
+  60   | 0.28            | 0.44        | 88.8%       | 98.7%               2   | 98.7%      | 98.7%                 2      | 0.38 vs 0.27
+  100  | 0.28            | 0.39        | 86.6%       | 98.8%               2   | 98.7%      | 99.5%                 2      | 0.37 vs 0.28
+  200  | 0.28            | 0.32        | 79.2%       | 98.0%               1   | 97.6%      | 99.5%                 2      | 0.35 vs 0.27
+  300  | 0.29            | 0.32        | 76.9%       | 98.0%               1   | 98.0%      | 98.9%                 2      | 0.34 vs 0.29
+
+Reading: the stated bound (n_pred95, flat prior) must hold >= 95%; its median width is the price of s.

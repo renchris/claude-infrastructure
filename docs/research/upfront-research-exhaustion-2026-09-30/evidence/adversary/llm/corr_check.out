@@ -1,0 +1,6 @@
+rho(D,A)=0.6 N0=20 rounds p50/p90 5/7  desk-left mean 0.064  P(>=1) 0.062  npred95 holds 99.8%
+rho(D,A)=0.6 N0=60 rounds p50/p90 6/8  desk-left mean 0.154  P(>=1) 0.142  npred95 holds 100.0%
+rho(D,A)=0.9 N0=20 rounds p50/p90 5/7  desk-left mean 0.088  P(>=1) 0.088  npred95 holds 100.0%
+rho(D,A)=0.9 N0=60 rounds p50/p90 6/9  desk-left mean 0.154  P(>=1) 0.140  npred95 holds 99.8%
+rho(D,A)=1.0 N0=20 rounds p50/p90 5/7  desk-left mean 0.096  P(>=1) 0.092  npred95 holds 99.8%
+rho(D,A)=1.0 N0=60 rounds p50/p90 6/8  desk-left mean 0.154  P(>=1) 0.134  npred95 holds 99.8%

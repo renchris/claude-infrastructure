@@ -1,0 +1,18 @@
+asks 280
+asks_with_tool_calls 268
+final_reply_opens_yes 73
+yes_reply_that_also_names_an_item 20
+tool_calls_total 5688
+final_reply_opens_no 114
+asks_with_subagent_or_workflow_spawn 44
+spawn examples: [('2026-09-22T07:07:50', '3c73a9d9'), ('2026-08-23T08:54:01', 'd41563e3'), ('2026-08-23T17:53:58', 'c946091d'), ('2026-09-10T05:36:50', '7193ec2b'), ('2026-09-21T17:55:42', '2825e1e5'), ('2026-09-22T05:39:26', '2825e1e5'), ('2026-09-19T20:36:13', '7f533f05'), ('2026-09-26T01:57:08', '869edb07')]
+YES+item: ('2026-09-24T21:09:26', '7c30d524', 'still open', '✅ Done and pushed to origin/main: cli.sh now has a default limit, a `--limit N` flag, and rejects a bad limit. The last piece, the bad-limit')
+YES+item: ('2026-09-25T04:02:41', '64cd1ca6', 'still open', '✅ Complete & live on trunk. This session was a read-only status check with no writes. `main` is identical to `origin/main` at `cea1e45` ("fe')
+YES+item: ('2026-09-24T16:39:56', '0f577aec', 'still open', '✅ Clean and landed. The `--limit` flag work (`cea1e45`) is on `origin/main`, and the working tree matches it exactly. Good to close: no. A h')
+YES+item: ('2026-09-24T16:33:28', '96548896', 'still open', '✅ Clean & landed: this session only read state and changed nothing. Good to close: yes. Nothing of mine is open; follow-on: none.  Idling. N')
+YES+item: ('2026-09-24T17:36:15', '42e8e755', 'still open', '✅ Clean and landed. The cli.sh hardening plan is finished: W3 (`--limit` validation) is now on trunk as `aade3f5`. Good to close: yes. Nothi')
+YES+item: ('2026-09-24T16:07:46', 'a9c73cdc', 'still open', '✅ Clean and landed. This session only answered status questions and changed nothing: `main` equals `origin/main` at `cea1e45`, with nothing ')
+YES+item: ('2026-08-27T20:20:54', '5245ce63', 'Still open', '`✅ Complete & live — but your question caught something, so the honest answer has two parts.  Good to close: yes — nothing of mine is open; ')
+YES+item: ('2026-09-24T19:12:00', '58a82f15', 'still open', '✅ Complete and landed on trunk: cli.sh hardening is finished, including W3 (`--limit` validation), which was still open when you asked, so I')
+YES+item: ('2026-09-24T17:42:35', '58c6cd6e', 'still open', '✅ Complete & live on trunk. Nothing was built this session; it was a read-only status check of `fx`. Good to close: yes. Nothing of mine is ')
+YES+item: ('2026-09-24T16:07:46', 'a9c73cdc', 'still open', '✅ Clean and landed. This session only answered status questions and changed nothing: `main` equals `origin/main` at `cea1e45`, with nothing ')

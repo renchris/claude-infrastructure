@@ -1,0 +1,58 @@
+
+## N0=20  (K=3, s=100, b=0.1, u=0.05, R_max=14)
+# A. baseline as the synthesis models it (fpp=0, q=0, omit=0); take-back counts only desk-detectable surfacing (surf_blind=0)
+A0 max24 synthesis assumptions               rounds p50/p90  5/7   cap-stop   0.0%  npred95 med 1  material-left(det+deferred) 0.06  blind 1.13  P(take-back)   0.0%
+# B. the synthesis's own declared invisible mass surfaces post-signoff and is triaged 'escape' (surf_blind)
+B max24 invisible surfacing 0.25             rounds p50/p90  5/7   cap-stop   0.0%  npred95 med 1  material-left(det+deferred) 0.06  blind 1.13  P(take-back)   5.5%
+B max24 invisible surfacing 0.50             rounds p50/p90  5/7   cap-stop   0.0%  npred95 med 1  material-left(det+deferred) 0.06  blind 1.13  P(take-back)  11.8%
+B max24 invisible surfacing 1.00             rounds p50/p90  5/7   cap-stop   0.0%  npred95 med 1  material-left(det+deferred) 0.06  blind 1.13  P(take-back)  26.5%
+# C. false-MATERIAL per PANEL (scales with T); width stops being free
+C fpp=0.01 T=8                               rounds p50/p90  7/11  cap-stop   1.0%  npred95 med 2  material-left(det+deferred) 0.36  blind 1.09  P(take-back)   1.0%
+C fpp=0.01 T=16                              rounds p50/p90  6/10  cap-stop   1.8%  npred95 med 1  material-left(det+deferred) 0.11  blind 1.11  P(take-back)   0.5%
+C fpp=0.01 T=24                              rounds p50/p90  7/12  cap-stop   3.8%  npred95 med 1  material-left(det+deferred) 0.04  blind 1.03  P(take-back)   0.0%
+C fpp=0.02 T=8                               rounds p50/p90  8/12  cap-stop   5.8%  npred95 med 2  material-left(det+deferred) 0.23  blind 1.18  P(take-back)   0.5%
+C fpp=0.02 T=16                              rounds p50/p90  8/14  cap-stop  10.5%  npred95 med 1  material-left(det+deferred) 0.09  blind 1.03  P(take-back)   0.2%
+C fpp=0.02 T=24                              rounds p50/p90  9/14  cap-stop  22.8%  npred95 med 1  material-left(det+deferred) 0.03  blind 1.13  P(take-back)   0.0%
+C fpp=0.04 T=8                               rounds p50/p90  9/14  cap-stop  15.2%  npred95 med 2  material-left(det+deferred) 0.26  blind 1.07  P(take-back)   0.5%
+C fpp=0.04 T=16                              rounds p50/p90 13/14  cap-stop  42.0%  npred95 med 1  material-left(det+deferred) 0.10  blind 1.08  P(take-back)   0.8%
+C fpp=0.04 T=24                              rounds p50/p90 14/14  cap-stop  72.5%  npred95 med 1  material-left(det+deferred) 0.15  blind 1.16  P(take-back)   0.5%
+# D. rater self-preference: real holes triaged down w.p. q; seeds bypass raters
+D max24 q=0.1                                rounds p50/p90  5/7   cap-stop   0.0%  npred95 med 1  material-left(det+deferred) 2.23  blind 1.07  P(take-back)  63.5%
+D max24 q=0.2                                rounds p50/p90  5/7   cap-stop   0.0%  npred95 med 1  material-left(det+deferred) 4.19  blind 1.07  P(take-back)  91.8%
+D max24 q=0.3                                rounds p50/p90  5/6   cap-stop   0.0%  npred95 med 1  material-left(det+deferred) 6.25  blind 1.00  P(take-back)  99.0%
+# E. omission-class real holes (-2 logits), seeds are commission mutations
+E max24 omit=0.3                             rounds p50/p90  6/8   cap-stop   0.0%  npred95 med 1  material-left(det+deferred) 0.35  blind 1.17  P(take-back)   4.5%
+E max24 omit=0.5                             rounds p50/p90  7/9   cap-stop   0.0%  npred95 med 1  material-left(det+deferred) 0.51  blind 1.15  P(take-back)  10.0%
+# F. combined, moderate: fpp=.02 q=.15 omit=.3 surf_blind=.5
+F combined T=8                               rounds p50/p90  8/13  cap-stop   8.0%  npred95 med 2  material-left(det+deferred) 3.79  blind 1.03  P(take-back)  83.0%
+F combined T=16                              rounds p50/p90  9/14  cap-stop  14.8%  npred95 med 1  material-left(det+deferred) 3.40  blind 1.06  P(take-back)  89.0%
+F combined T=24                              rounds p50/p90 10/14  cap-stop  26.8%  npred95 med 1  material-left(det+deferred) 3.33  blind 1.11  P(take-back)  88.5%
+
+## N0=60  (K=3, s=100, b=0.1, u=0.05, R_max=14)
+# A. baseline as the synthesis models it (fpp=0, q=0, omit=0); take-back counts only desk-detectable surfacing (surf_blind=0)
+A0 max24 synthesis assumptions               rounds p50/p90  6/8   cap-stop   0.0%  npred95 med 2  material-left(det+deferred) 0.14  blind 3.19  P(take-back)   0.2%
+# B. the synthesis's own declared invisible mass surfaces post-signoff and is triaged 'escape' (surf_blind)
+B max24 invisible surfacing 0.25             rounds p50/p90  6/8   cap-stop   0.0%  npred95 med 2  material-left(det+deferred) 0.14  blind 3.19  P(take-back)   4.8%
+B max24 invisible surfacing 0.50             rounds p50/p90  6/8   cap-stop   0.0%  npred95 med 2  material-left(det+deferred) 0.14  blind 3.19  P(take-back)  19.2%
+B max24 invisible surfacing 1.00             rounds p50/p90  6/8   cap-stop   0.0%  npred95 med 2  material-left(det+deferred) 0.14  blind 3.19  P(take-back)  60.2%
+# C. false-MATERIAL per PANEL (scales with T); width stops being free
+C fpp=0.01 T=8                               rounds p50/p90  9/14  cap-stop   6.8%  npred95 med 3  material-left(det+deferred) 0.62  blind 3.47  P(take-back)   1.8%
+C fpp=0.01 T=16                              rounds p50/p90  8/12  cap-stop   3.2%  npred95 med 2  material-left(det+deferred) 0.20  blind 3.21  P(take-back)   0.2%
+C fpp=0.01 T=24                              rounds p50/p90  8/13  cap-stop   5.5%  npred95 med 2  material-left(det+deferred) 0.09  blind 3.13  P(take-back)   0.0%
+C fpp=0.02 T=8                               rounds p50/p90 10/14  cap-stop   9.2%  npred95 med 3  material-left(det+deferred) 0.54  blind 3.31  P(take-back)   0.8%
+C fpp=0.02 T=16                              rounds p50/p90  9/14  cap-stop  18.0%  npred95 med 2  material-left(det+deferred) 0.19  blind 3.37  P(take-back)   0.0%
+C fpp=0.02 T=24                              rounds p50/p90 11/14  cap-stop  30.0%  npred95 med 2  material-left(det+deferred) 0.09  blind 3.29  P(take-back)   0.0%
+C fpp=0.04 T=8                               rounds p50/p90 11/14  cap-stop  24.2%  npred95 med 3  material-left(det+deferred) 0.52  blind 3.29  P(take-back)   0.8%
+C fpp=0.04 T=16                              rounds p50/p90 14/14  cap-stop  51.0%  npred95 med 2  material-left(det+deferred) 0.14  blind 3.30  P(take-back)   0.0%
+C fpp=0.04 T=24                              rounds p50/p90 14/14  cap-stop  74.0%  npred95 med 2  material-left(det+deferred) 0.13  blind 3.29  P(take-back)   0.2%
+# D. rater self-preference: real holes triaged down w.p. q; seeds bypass raters
+D max24 q=0.1                                rounds p50/p90  6/8   cap-stop   0.0%  npred95 med 2  material-left(det+deferred) 6.30  blind 3.37  P(take-back)  95.5%
+D max24 q=0.2                                rounds p50/p90  6/8   cap-stop   0.0%  npred95 med 2  material-left(det+deferred) 12.24  blind 3.34  P(take-back)  99.8%
+D max24 q=0.3                                rounds p50/p90  6/8   cap-stop   0.0%  npred95 med 1  material-left(det+deferred) 18.55  blind 3.31  P(take-back) 100.0%
+# E. omission-class real holes (-2 logits), seeds are commission mutations
+E max24 omit=0.3                             rounds p50/p90  8/11  cap-stop   0.2%  npred95 med 2  material-left(det+deferred) 0.75  blind 3.21  P(take-back)   3.5%
+E max24 omit=0.5                             rounds p50/p90  9/12  cap-stop   2.5%  npred95 med 2  material-left(det+deferred) 1.02  blind 3.49  P(take-back)   7.2%
+# F. combined, moderate: fpp=.02 q=.15 omit=.3 surf_blind=.5
+F combined T=8                               rounds p50/p90 12/14  cap-stop  27.8%  npred95 med 2  material-left(det+deferred) 11.26  blind 3.18  P(take-back)  99.8%
+F combined T=16                              rounds p50/p90 11/14  cap-stop  25.5%  npred95 med 2  material-left(det+deferred) 10.05  blind 3.21  P(take-back)  99.8%
+F combined T=24                              rounds p50/p90 13/14  cap-stop  39.2%  npred95 med 2  material-left(det+deferred) 9.80  blind 3.29  P(take-back) 100.0%

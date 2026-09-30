@@ -1,0 +1,30 @@
+# profile_sim.out  (cert_sim.py model + red-team corrections; b=0.1; u_hi=0.2; surf_det=1.0; REPS=500)
+# base = fpp 0.01/panel, q 0.05, omit 0.3, u 0.05, invisible surfacing 0.5
+# stress = fpp 0.02/panel, q 0.10, omit 0.5, u 0.10, invisible surfacing 1.0
+
+## N0=10 material holes at the first freeze
+lite     base                                  rounds  5/6  cap 21.8% named-at-cap 0.08 | desk-left 1.43 P(>=1) 0.77 npred95 med 5 | invisible 0.54 bound med 6 | P(any post-gate material) 0.83 P(take-back)  1.2%
+lite     stress                                rounds  5/6  cap 31.2% named-at-cap 0.18 | desk-left 2.12 P(>=1) 0.90 npred95 med 8 | invisible 1.12 bound med 6 | P(any post-gate material) 0.98 P(take-back)  1.2%
+standard base                                  rounds  7/10 cap 12.6% named-at-cap 0.05 | desk-left 0.87 P(>=1) 0.58 npred95 med 4 | invisible 0.62 bound med 6 | P(any post-gate material) 0.70 P(take-back)  2.2%
+standard stress                                rounds  8/10 cap 33.0% named-at-cap 0.16 | desk-left 1.35 P(>=1) 0.76 npred95 med 6 | invisible 1.09 bound med 6 | P(any post-gate material) 0.94 P(take-back)  1.4%
+full     base                                  rounds  7/12 cap  5.8% named-at-cap 0.02 | desk-left 0.73 P(>=1) 0.50 npred95 med 3 | invisible 0.55 bound med 6 | P(any post-gate material) 0.63 P(take-back)  0.6%
+full     stress                                rounds 10/14 cap 28.4% named-at-cap 0.18 | desk-left 1.16 P(>=1) 0.70 npred95 med 5 | invisible 1.15 bound med 7 | P(any post-gate material) 0.91 P(take-back)  0.2%
+
+## N0=20 material holes at the first freeze
+lite     base                                  rounds  6/6  cap 48.4% named-at-cap 0.26 | desk-left 2.69 P(>=1) 0.93 npred95 med 7 | invisible 1.13 bound med 9 | P(any post-gate material) 0.96 P(take-back)  4.2%
+lite     stress                                rounds  6/6  cap 53.6% named-at-cap 0.39 | desk-left 3.94 P(>=1) 0.99 npred95 med 11 | invisible 2.16 bound med 9 | P(any post-gate material) 1.00 P(take-back)  3.2%
+standard base                                  rounds  8/10 cap 23.4% named-at-cap 0.07 | desk-left 1.57 P(>=1) 0.79 npred95 med 5 | invisible 1.12 bound med 10 | P(any post-gate material) 0.87 P(take-back)  3.2%
+standard stress                                rounds 10/10 cap 41.4% named-at-cap 0.24 | desk-left 2.58 P(>=1) 0.93 npred95 med 8 | invisible 2.19 bound med 10 | P(any post-gate material) 0.99 P(take-back)  3.2%
+full     base                                  rounds  8/14 cap  9.8% named-at-cap 0.04 | desk-left 1.35 P(>=1) 0.77 npred95 med 5 | invisible 1.12 bound med 10 | P(any post-gate material) 0.87 P(take-back)  1.4%
+full     stress                                rounds 12/14 cap 36.0% named-at-cap 0.23 | desk-left 2.39 P(>=1) 0.93 npred95 med 7 | invisible 2.22 bound med 11 | P(any post-gate material) 0.99 P(take-back)  1.0%
+
+## N0=60 material holes at the first freeze
+lite     base                                  rounds  6/6  cap 90.6% named-at-cap 1.00 | desk-left 7.39 P(>=1) 1.00 npred95 med 17 | invisible 3.33 bound med 23 | P(any post-gate material) 1.00 P(take-back)  4.4%
+lite     stress                                rounds  6/6  cap 92.4% named-at-cap 1.25 | desk-left 11.39 P(>=1) 1.00 npred95 med 24 | invisible 6.48 bound med 21 | P(any post-gate material) 1.00 P(take-back)  5.6%
+standard base                                  rounds 10/10 cap 48.6% named-at-cap 0.24 | desk-left 4.41 P(>=1) 0.99 npred95 med 11 | invisible 3.28 bound med 23 | P(any post-gate material) 1.00 P(take-back)  3.4%
+standard stress                                rounds 10/10 cap 72.8% named-at-cap 0.52 | desk-left 7.47 P(>=1) 1.00 npred95 med 17 | invisible 6.64 bound med 22 | P(any post-gate material) 1.00 P(take-back)  3.2%
+full     base                                  rounds 10/14 cap 19.0% named-at-cap 0.08 | desk-left 3.77 P(>=1) 0.98 npred95 med 9 | invisible 3.34 bound med 23 | P(any post-gate material) 1.00 P(take-back)  4.4%
+full     stress                                rounds 14/14 cap 47.4% named-at-cap 0.30 | desk-left 6.44 P(>=1) 1.00 npred95 med 15 | invisible 6.62 bound med 23 | P(any post-gate material) 1.00 P(take-back)  1.8%
+
+## the old accounting on the same stress runs, for contrast: no omission seeds, seeds bypass raters,
+## invisible mass unpriced (it would be booked against the desk bound). See attack_sim.out rows D-F.

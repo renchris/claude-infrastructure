@@ -1,0 +1,200 @@
+  1 s0 C1   DC  D | reso floor plan | 1 of 4 divergence mechanisms closed after 'Good to close: yes' | verdict-scoped-to-diff-not-goal | T0 855b332e L1135 vs L1185
+  2 s0 C5   REF D | reso floor plan | AC1 cannot do its job; AC7/AC9 fail on trunk | unexecuted-acceptance-criteria | T0 L1185
+  3 s0 C1   DC  D | reso resize jitter | known items 3-6 (stale zoom; empty-HMAC deploy broadcast) held as follow-on | known-item-excluded-from-done | a31477d9 L1059,L1102,L1504
+  4 s0 C3   REF P | reso resize jitter | deferral cost '~0.7px every VRT baseline' measured zero | unmeasured-deferral-cost | a31477d9 L1526,L1696
+  5 s0 C10  REF N | reso FLOOR_PLAN | R-39 stale; concurrent 'deploy is a NO-OP' false an hour later | reality-moved-plan-stale | a31477d9 L1177,L1210
+  6 s0 C7   DC  D | reso FLOOR_PLAN | five §19.2 rows asserted states measured false (R-38 credential instruction) | appended-findings-leave-stale-rows | d41563e3 L77,L107,L304
+  7 s0 C5   DC  D | reso FLOOR_PLAN | DoD Arrow B violated, Arrow C open, while 0-🔧 tally read 'nothing open' | tally-measures-classification-not-dod | d41563e3 L107 vs L304
+  8 s0 C1   DC  D | reso FLOOR_PLAN | OP-2/3/5 and a money decision fell out of every list | open-items-buried-in-plan-prose | d41563e3 L446,L596,L918
+  9 s0 C3   DC  D | reso FLOOR_PLAN | 'only you can say The Key's tiers' wrong: clone script existed | unverified-blocker-premise | d41563e3 L944,L1005
+ 10 s0 C4   DC  D | reso FLOOR_PLAN | both write instruments unsafe (seed reassigns Heist live rows) | hazard-found-only-by-adversarial-read | d41563e3 L1052,L1075
+ 11 s0 C11  DC  P | reso oxlint | 'maximally fast' never measured against the 0.14 s engine ceiling | superlative-never-operationalized | 39e7380e L1118,L1191
+ 12 s0 C5   REF P | reso oxlint | timings load-contaminated ±20% | measurement-validity-unchecked | 39e7380e L1191
+ 13 s0 C1   REF D | reso oxlint | stale-suppression detection lost, framed as closed decision | known-item-excluded-from-done | 39e7380e L1158 vs L1191
+ 14 s0 C5   REF P | reso oxlint | parity proof blind to 13 of 14 zero-firing rules | instrument-blind-to-zero-signal | 39e7380e L1254,L1291
+ 15 s0 C4   DC  P | reso oxlint | 'no lever left' without decomposing the 88% JS-plugin leg | premature-ceiling-claim | 39e7380e L1232 vs L1313
+ 16 s0 C9   DC  P | sevenrooms | auto-relogin 0/1, Chrome/CDP crash-looped 8x | runtime-only-evidence | 0c9e2b7a L968
+ 17 s0 C3   REF D | sevenrooms | 'confirmation email -> SevenRooms' step does not exist | operator-frame-vs-architecture | 0c9e2b7a L968
+ 18 s0 C3   DC  D | sevenrooms | login-credentials secret does not exist | unverified-premise | 0c9e2b7a L1049
+ 19 s0 C3   DC  D | reso FLOOR_PLAN | 'Key Q1' was a live Heist defect (7 seats unbookable) | untraced-question-hides-live-defect | c946091d L171,L280
+ 20 s0 C5   REF O | reso FLOOR_PLAN | clipped focus ring after R-33 'not reproduced' | visual-defect-invisible-to-gates | c946091d L326,L396
+ 21 s0 C1   DC  D | sevenrooms | 'Good to close: yes' but pipeline never wrote to SevenRooms | verdict-scoped-to-diff-not-goal | 6ee03e6e L1483 vs L1518
+ 22 s0 C5   DC  D | sevenrooms | preflight PASS 46/0/0 false green (secret missing) | green-gate-blind-to-property | 6ee03e6e L1562,L1576
+ 23 s0 C1   REF D | sevenrooms | 3 named loose ends behind '✅ Nothing … no command for you' | known-item-excluded-from-done | c262a75c L669 vs L689
+ 24 s0 C5   REF P | sevenrooms | 'invariants running in production' — deployed, never executed | claimed-not-executed | c262a75c L698,L720
+ 25 s0 C1   DC  D | infra drain chain | email-safety hook fix only uncommitted in shared checkout, dismissed 'not mine' | attribution-dismissal-without-content-check | c1527422 L1990,L2025
+ 26 s0 C9   DC  P | infra drain chain | every headless fire held 18 days (UUID vs window id) | runtime-only-evidence | c1527422 L2060,L2084
+ 27 s1 C3   REF D | reso launch film | 3 false published facts (raw count, stale comment, blind getAnimations) | stale-secondary-source | 5a8dd03a @2026-08-26T20:02:44Z
+ 28 s1 C9   DC  P | reso launch film | window.__resoMotion prerequisite | probe-only-unknown | 5a8dd03a @20:07:24Z
+ 29 s1 C3   DC  D | reso launch film | bespoke rAF loops WAAPI can't see; plan path wrong | unverified-codebase-assumption | 5a8dd03a @20:47:19Z
+ 30 s1 C3   DC  D | reso-web-app | 'Amplify doesn't support streaming' from a rescoped doc list | stale-secondary-source | d0630e1c @21:28:56Z
+ 31 s1 C3   DC  D | reso-web-app | 'App Router forces s-maxage' false; override already in prod | unprobed-premise | d0630e1c @21:28:56Z
+ 32 s1 C5   DC  D | reso-web-app | TBT quoted 50-90 ms was simulated; real 456 ms | instrument-misread | d0630e1c @20:43:18Z
+ 33 s1 C4   DC  D | reso-web-app | Speculation Rules off by default in Safari | unchecked-platform-matrix | d0630e1c @22:38:55Z
+ 34 s1 C9   DC  P | reso-web-app | Vary-blind CDN premise needs a deploy | probe-only-unknown | d0630e1c @2026-08-27T03:49:23Z
+ 35 s1 C8   DC  D | reso-web-app | 'prefetch storm' was a curl artifact; red team after synthesis | publish-before-verify | d0630e1c @20:14:13Z
+ 36 s1 C2u  NEW O | reso launch film | M17 gate misread; 26-human-hour programme replaced by smaller real need | frame-exceeds-need | a5c0ee39 @2026-08-27T08:13:10Z
+ 37 s1 C5   REF P | reso-web-app H15 | liveness check had the defect it targets (presence-only) | claim-by-recall | 5245ce63 @20:26:24Z
+ 38 s1 C3   COS D | reso-web-app H15 | 'probe may create a reservation' never measured | assertion-without-measurement | 5245ce63 @20:22:12Z
+ 39 s1 C1   NEW D | reso-web-app H15 | H15 not standing: nothing runs the instrument | scope-narrowing | 5245ce63 @21:56:38Z
+ 40 s1 C1   DC  D | infra hook surface | 'wire' verb 0/9 under repeated 'safe to close' | frame-silently-narrowed | 2c6c3a09 @2026-09-07T17:12:41Z
+ 41 s1 C9   DC  P | infra hook surface | user settings.local.json not read as hook source | probe-only-unknown | 2c6c3a09 @17:16:26Z
+ 42 s1 C4   REF D | infra hook surface | ConfigChange source enum partial | partial-enumeration | 2c6c3a09 @21:28:50Z
+ 43 s1 C5   REF P | infra hook surface | W3-E reported 'firing', never launched | claim-without-observation | 2c6c3a09 @22:15:50Z
+ 44 s1 C4   DC  D | personal email guard | SEND_TOOLS shrink made crash handler fail open | partial-enumeration | 944732ae @2026-09-09T04:06:39Z
+ 45 s1 C5   REF P | infra /read-twitter | --images silently skipped X Article figures | verification-misses-claimed-path | ed157f54 @05:39:20Z
+ 46 s1 C10  REF N | infra /read-twitter | syndication CDN degraded to 200 + '{}' mid-session | environment-drift | ed157f54 @05:07:34Z
+ 47 s1 C8   DC  D | hammerspoon | K3/K4 refuted after KB v1 landed | publish-before-verify | screenshot-pipeline-2026-09-10.md:534-535
+ 48 s1 C5   REF P | hammerspoon | F4 latencies were first-call artifacts (n=1 cold) | instrument-misread | screenshot-pipeline-2026-09-10.md:336
+ 49 s1 C10  REF N | hammerspoon | research probe launched a 2nd instance, killed the subject | research-perturbs-subject | 2d71c6d8 @2026-09-10T20:15:31Z
+ 50 s1 C9   REF P | hammerspoon | bench idle gate locks screen; prober owns p100; SIGTRAP | probe-only-unknown | 2d71c6d8 @2026-09-14T02:34:22Z
+ 51 s1 C4   DC  D | hammerspoon | 4 prior in-frame 'fix' commits before deep research | in-frame-symptom-fixing | git log 8e0173a..fd706a9
+ 52 s1 C3   REF D | reso land/deploy | battery refusal reason never measured | inherited-unmeasured-premise | 6b8b69c2 @2026-09-14T02:33:59Z
+ 53 s1 C9   DC  P | reso land/deploy | W0 measure wave reshaped W3 (102 s vs 126 s; caps 5-10x) | probe-only-unknown | 6b8b69c2 @04:25:18Z
+ 54 s1 C4   REF D | reso land/deploy | pnpm build arm fires on 39% of commits, unnamed | decomposition-gap | 6b8b69c2 @01:07:16Z
+ 55 s1 C6   REF D | reso warm leads | Studio 60 method already recovered 08-27 | prior-research-lost | 7193ec2b @13:18:18Z
+ 56 s1 C11  DC  D | reso warm leads | warm lead unanswered 21 d under 'reply once 100th percentile' | perfection-gate-blocks-delivery | 7193ec2b @16:58:32Z
+ 57 s1 C4   DC  D | reso warm leads | 'no way to ask' searched only our own stores | search-bounded-by-own-stores | 00-mission-board.md fleet.bottle-menu-cross-contamination
+ 58 s2 C1   REF D | mac-bootstrap | 884 opaque ids in a 'validated' installer | house-rule-not-applied-as-acceptance | T22 c019f240 18:47:44
+ 59 s2 C5   REF D | mac-bootstrap | no tests/ under an installer called 'proven' | one-shot-probe-called-proof | T22 18:47:44
+ 60 s2 C1   REF D | voiceink-transcripts | 'everything done' while headline doc did not exist | done-claim-not-diffed-against-ask | T23 22100d17 04:37:54 / 04:38:42
+ 61 s2 C6   DC  D | voiceink-transcripts | 744-line design axis dropped from synthesis | synthesis-drops-research-on-disk | T23 04:44:30
+ 62 s2 C11  DC  O | voiceink-transcripts | design was template 'AI slop' judged by structural proxies | unfalsifiable-criterion-verified-by-proxy | T23 04:47:26
+ 63 s2 C1   DC  D | voiceink-transcripts | operator-named uidotsh dropped after OAuth wall | named-input-silently-dropped | T23 04:49:34
+ 64 s2 C5   REF P | voiceink-transcripts | whisper -dtw inert; compared against itself | vacuous-comparison | T23 04:41:35
+ 65 s2 C11  DC  O | transcript-companion | ban-list gate as acceptance; palette by avoidance | negative-gate-as-acceptance | T24 4be23526 18:57:44, 18:59:07
+ 66 s2 C11  DC  D | transcript-companion | no positive reference set curated | missing-positive-reference | T24 19:00:01
+ 67 s2 C5   DC  D | voiceink | bake-off config != production request (think) | harness-invocation-mismatch | T25 61853387 04:35:45
+ 68 s2 C4   DC  D | voiceink | free ladder capacity not enumerated | incomplete-enumeration | T25 04:23:03
+ 69 s2 C4   DC  D | voiceink | only <=4B models tested; ranking never produced | candidate-space-truncated-question-substituted | T25 05:06:24, 05:25:24
+ 70 s2 C4   REF D | voiceink | two-pass pipeline shape never questioned | unquestioned-architecture-premise | T25 05:30:26
+ 71 s2 C5   DC  P | voiceink | few-shot leak; idempotence set never run; nothing in-app | harness-invocation-mismatch | T25 13:53:12, 14:24:32
+ 72 s2 C5   DC  D | voiceink | headline fallback can never fire (DoD was a grep) | dod-as-format-check-misses-system-property | T27 ba08cab8 16:41:11 vs 19:04:07
+ 73 s2 C5   REF D | voiceink | no tests planned, nothing compiled, 8/10 single-sourced | dod-omits-verification | T27 19:04:07
+ 74 s2 C8   DC  D | voiceink | pass 2 found 7 new defects, corrected 2 fixes | single-pass-not-saturated | T27 19:08:58
+ 75 s2 C8   REF D | voiceink | pass 3 found 2 more (curve 10->7->2) | single-pass-not-saturated | T27 19:28:54
+ 76 s2 C6   REF D | voiceink | 5 of 9 cited artifacts only in /tmp | evidence-not-persisted | T27 19:45:53
+ 77 s2 C6   DC  D | voiceink | lead integrated 2 of 5 findings (truncated read) | synthesis-truncation | T27 20:10:19
+ 78 s2 C5   COS D | voiceink | 'all ten processes dead' false (broken grep) | false-negative-instrument | T27 21:27:29
+ 79 s2 C1   DC  D | mac-bootstrap | repo is a subset, installs no agent; success = 'profile exits 0' | success-proxy-substituted-for-goal | T29 eda3a683 18:43:49; op 09-16 02:52:00
+ 80 s2 C2n  NEW O | mac-bootstrap | corporate-network constraints | operator-new-requirement | T29 18:58:35
+ 81 s2 C5   REF P | mac-bootstrap | 3 dry-run findings retracted (PATH hiding != absence) | instrument-fidelity | T29 09-16 02:43:37
+ 82 s2 C9   DC  P | mac-bootstrap | CLAUDE_CONFIG_DIR ignored x7; unsigned gemini; --version writes HOME | build-time-discovery | T29 04:16:17, 04:30:38
+ 83 s2 C5   DC  D | fde email | 4 statements its own source refutes (provenance-only check) | provenance-not-contradiction-check | T30 04235d35 17:12:09 vs 17:54:16
+ 84 s2 C2n  NEW O | fde email | 'no openings for alternatives' bar | operator-new-requirement | T30 17:19:39
+ 85 s2 C7   DC  D | fde email | rev 4.1 do-not-send: 3 fatal errors in fresh prose | rewrite-reintroduces-defects | T30 17:57:10
+ 86 s2 C7   REF D | fde email | rev 5.0 argued against an excluded option | rewrite-reintroduces-defects | T30 19:18:05
+ 87 s2 C4   DC  D | fde email | data residency (the deciding gate) omitted | omission-blind-review | T30 22:32:30
+ 88 s2 C4   DC  D | kernel-panic kitty | fix applied to wiped checkout; loaded ~/kdev still armed | wrong-subject-instance | T31 089dda26 03:51:45
+ 89 s2 C5   REF P | kernel-panic kitty | only the selector proven, not the 4-gate actuator path | unit-proof-as-system-proof | T31 04:28:01, 04:59:06
+ 90 s2 C4   DC  D | kernel-panic kitty | invisible caller gen/config.py:76; plan /goal ordered the fatal command | diagnosis-frame-excludes-remediation-surface | T31 03:09:44, 03:22:19
+ 91 s2 C9   DC  P | reso browse mirror | pipefail SIGPIPE; bare timeout absent under launchd | test-env-not-deployment-env | T32 4bc1159f 17:10:11, 17:30:23
+ 92 s2 C9   DC  P | reso browse mirror | launchd job crashed every trigger (bash 3.2) after ✅ | close-on-one-shot-not-steady-state | T32 18:00:31 vs 18:31:29
+ 93 s2 C5   REF P | reso browse mirror | HEAD==origin/main verifier fails forever | racy-oracle | T32 19:07:25
+ 94 s2 C9   REF P | reso browse mirror | plist without fleet.manifest row reddened trunk | repo-invariant-unknown | T32 09-21 02:35:39
+ 95 s3 C9   DC  P | reso-web-app NavGuard | Linux Amplify build lacks lsof; only macOS verified | prod-env-parity-gap | d02d8feb 16:35:05 vs 17:21:55
+ 96 s3 C10  DC  P | reso-web-app NavGuard | Fly login token's session caveat expired | environment-changed-credential-expiry | d02d8feb 17:44:35
+ 97 s3 C5   REF D | reso-web-app NavGuard | handed rotation command failed 3x (xargs 255 B, macaroon shape) | handed-command-unexecuted | d02d8feb 17:51:22, 17:59:36
+ 98 s3 C9   REF P | infra kitty equalize | running kitty never re-read layout_opts | landed-not-live-process-state | 26cd14be 21:22:35
+ 99 s3 C1   DC  D | infra kitty equalize | 'follow-on: none' beside 5 named reds; 4 of 5 not red | stale-measurement-and-undriven-known-item | 26cd14be 21:48:43; 00:25:40
+100 s3 C4   REF D | infra kitty equalize | ⌘D/⌘⇧D fourth arrival route uncovered | incomplete-enumeration-search-frame | 26cd14be 01:06:31
+101 s3 C1   DC  D | infra git-forest | 8 known items behind '✅ follow-on: none' | ledger-scope-vs-job-scope | cb227486 18:16:28 vs 18:28:30
+102 s3 C9   REF P | infra git-forest | gone+locked registrations get false remedy | found-only-while-implementing | cb227486 19:34:06
+103 s3 C10  DC  N | infra limit-recover | same-day sibling commit 226b73888 moved the premise | reality-moved-concurrent-commits | 11569d45 21:35:35
+104 s3 C6   DC  D | infra limit-detect | sibling declared dead while alive; parallel plan written | duplicate-parallel-research-stale-liveness | 7f533f05 20:55:21 vs 11569d45 21:35:35
+105 s3 C3   COS D | reso-web-app | CI Linux baseline backlog row stale | stale-claim-not-rechecked | c0f857b6 19:10:42 vs 19:17:43
+106 s3 C3   DC  D | reso-web-app | blocker is wildcard *.example.com, not www (apex exposed) | option-space-frozen-early | c0f857b6 19:17:08
+107 s3 C2u  DC  O | reso-web-app | apex example.com is the primary entry (prior operator decision) | operator-requirement-not-mined | c0f857b6 op 2026-09-20T17:47:22
+108 s3 C6   DC  D | reso-web-app | 08-26 ranking scored keep-warm 5.6x; never re-read | prior-research-not-reread | c0f857b6 17:51:29
+109 s3 C3   REF D | reso-web-app | keep-warm $0.50 was $2.50 + 1.3M requests | unverified-estimate | c0f857b6 21:32:42
+110 s3 C4   DC  D | reso-web-app | existing Amplify CDN honors s-maxage; A/B decision moot | option-space-frozen-early | c0f857b6 21:41:03, 22:47:47
+111 s3 C4   DC  D | reso-web-app | apex-301 recommendation inverted by access logs (89% scanners) | available-data-not-consulted | c0f857b6 23:46:07
+112 s3 C9   REF P | reso-web-app | link rel=alternate points at non-markdown URL | found-only-while-implementing | c0f857b6 21:44:06
+113 s3 C1   DC  D | infra limit-detect | '✅ safe to close' on plan-only land; 0 of 7 waves built | ledger-scope-vs-job-scope | 7f533f05 09:06:30 vs 09:08:24
+114 s3 C5   REF D | infra accounts-wire-truth | re-land verified by presence not content; abandoned rebase; known defect dropped | weak-verification-and-dropped-known-item | 7730a605 09:15:34, 09:17:05
+115 s3 C7   DC  D | infra LIMIT_DETECT | §3 table CAP 5000 vs §11 #7 'CAP stays 500'; implementer followed stale row | plan-amendment-not-integrated | 101dc59a 09:22:23
+116 s3 C9   REF P | infra LIMIT_DETECT | KITTY_WINDOW_ID ambient-dependent control test | found-only-by-executing-in-real-env | 101dc59a 16:24:47
+117 s4 C5   REF P | personal ethernet | watchdog: no verdict on steady state; exit 0 on FALLBACK | checked-by-claim-not-execution | 90dc6e32 rec 416/428
+118 s4 C3   REF D | personal ethernet | 'stale, don't send' warning false (grep -c 153 = 0) | inherited-claim-unverified | 90dc6e32 rec 509, 535
+119 s4 C10  DC  D | reso-web-app | Option A recommended; sibling had landed Option B 4 h earlier | concurrent-reality-change | c0f857b6 22:27:00, 22:30:05
+120 s4 C4   DC  D | reso-web-app | CloudFront work unnecessary; the lever was Vary: Accept | wrong-question-frame | c0f857b6 22:52:25; 443b50d
+121 s4 C9   REF P | reso-web-app | s-maxage on compute-excluded page settled only by deploy | environment-only-verification | c0f857b6 22:30:05, 22:45:45
+122 s4 C5   DC  P | personal Bennu wifi | shaper KEPT on n=1; pipe+mask semantics wrong | premature-verdict-small-n | d71e8e48 03:22:21, 03:28:35
+123 s4 C6   DC  D | personal Bennu wifi | Houndstooth sitting never written down; tether lever missed | prior-research-lost-across-sessions | d71e8e48 04:02:37, 04:04:44
+124 s4 C9   COS P | personal Bennu wifi | awk 3-arg match; SNR off-by-one | build-time-defects | d71e8e48 04:07:11
+125 s4 C2n  NEW O | personal Bennu wifi | 'does café network slow Claude Code?' telemetry | operator-new-requirement | d71e8e48 rec 860 04:30:39
+126 s4 C4   DC  D | reso bottle-menu | generator last-writer-wins clobbered operator's rankings | concurrency-never-in-frame | bc3d026d 04:01:12; cda3f6ac5
+127 s4 C5   REF D | reso bottle-menu | 'XMP layer broken' was exiftool absent + stderr suppressed | broken-instrument-false-negative | bc3d026d 03:35:05
+128 s4 C1   DC  D | infra LIMIT_RECOVER_100P | 'built, landed, live' omitted 8 DoD gaps | completeness-frame-narrowed | d90959db 16:38:01 vs 18:02:38
+129 s4 C5   REF P | infra LIMIT_RECOVER_100P | lr-drill --assert spins forever; 'exits 4' repeated unexecuted | checked-by-claim-not-execution | d90959db 20:24:34; 63a0584ea
+130 s4 C3   REF D | infra LIMIT_RECOVER_100P | 3 decision figures never derived (fleet size as blast radius) | unrederived-inherited-figures | d90959db 00:36:21, 00:38:31
+131 s4 C9   DC  P | infra LIMIT_RECOVER_100P | drill verbs stubbed; it2 send rc 0 delivers nothing | stubbed-path-never-executed | d90959db rec 2371 03:59:36; 04:01:51
+132 s4 C7   REF D | infra docs-sync | review integration created 28 defects (1 critical) | integration-generated-contradictions | 2825e1e5 06:22:03; docs/lessons/integrating-review-findings-…md
+133 s4 C9   REF P | infra docs-sync | drivable probes deferred (LibreOffice re-save changes 3 parts) | drivable-probes-deferred | 2825e1e5 07:15:37
+134 s4 C9   UNC P | infra docs-sync | 5 tenant-only probes + unprototyped dependency map | environment-gated-unknowns | 2825e1e5 07:15:37
+135 s4 C6   DC  D | infra security skill | diff method wrong x4; fleet's own diff research not consulted | adjacent-research-not-consulted | 696eb098 05:40:05 vs 05:43:36
+136 s4 C3   REF D | infra security skill | vendor README trusted over rule R5 | vendor-claim-trusted | 696eb098 05:36:35
+137 s4 C8   REF D | reso BackgroundBeams | W1 fired while r4/r7 open; 5 spec refinements after build | implementation-before-research-closed | 3c73a9d9 rec 1152
+138 s4 C3   REF D | reso BackgroundBeams | brief premises from docblocks (detect-gpu never ran, 50 not 51) | premise-from-docblock-not-measured | 3c73a9d9 rec 1129, 1232
+139 s4 C6   DC  D | infra account switch | capability ~80% shipped; false resident rule; no prior-art sweep | no-prior-art-sweep-plus-false-resident-rule | 1a1a6a75 16:40:12, 16:47:26
+140 s4 C3   DC  D | infra account switch | consumers ask --rank general, inverse of intent | consumer-uses-wrong-lane | 1a1a6a75 16:43:07
+141 s4 C4   DC  D | infra account switch | healthy-source frame breaks transplant invariants | frame-shift-invalidates-invariants | 1a1a6a75 16:44:15
+142 s4 C9   REF P | infra account switch | lock-less 2nd hop erases custody; TTL below floor | multi-step-state-sequence-untested | commits 0ee1b0e36, 3255edb57, 826cfbb13
+143 s5 C1   NEW D | reso security audit | 19 surfaces, 20 leads, 6 findings behind 'complete for the scope' | scope-relative-completeness | T55 696eb098 15:50:49 vs 18:12:20
+144 s5 C9   REF P | agent-context-sync | pandoc recommended, never run (colspan tables) | claimed-not-executed | T56 2825e1e5 19:54:21, 20:35:31
+145 s5 C3   REF D | agent-context-sync | 3 'corporate-only' probes runnable on this Mac | reachability-misclassification | T56 19:54:21
+146 s5 C9   DC  P | agent-context-sync | launchd EDEADLK on dataless files; Office re-save not byte-stable | probe-only-reality | T62 0612873d 04:25:02, 04:55:46
+147 s5 C4   DC  D | agent-context-sync | operator's example.com M365 tenant existed all along | environment-inventory-gap | T62 03:48:12, 05:20:00
+148 s5 C11  DC  D | agent-context-sync | no falsifiable DoD; 5 week-0 decisions never asked | missing-dod-prerequisites | T62 05:20:00
+149 s5 C7   COS D | agent-context-sync | doc summary status lines stale | stale-summary | T62 05:20:00; 78d834065
+150 s5 C8   DC  D | background-beams | best-in-class survey r6 died on quota, written off | partial-wave-accepted | T58 7a375ee2 01:54:43, 02:01:09
+151 s5 C3   DC  D | background-beams | ~10 months of SMIL on false 'compositor thread' premise | lost-rationale-unmeasured-premise | T58 01:58:30; b9d6cb65c
+152 s5 C3   REF P | background-beams | '120 fps doubles GPU work' false (0.1 ms) | premise-asserted | T58 01:54:43
+153 s5 C9   REF D | background-beams | all iOS figures from iOS 26.3 Simulator; phone is 18.7.8 | environment-mismatch | T58 02:01:09
+154 s5 C3   DC  P | reso key rotation | SSM 'one source of truth' held stale Dec-Mar keys | live-state-premise-unverified | T59 43055acd 15:58:34 vs 17:24:09
+155 s5 C4   REF D | reso key rotation | typed-yes gate reads EOF under ! | execution-context-gap | T59 18:03:19; ff98573c2
+156 s5 C9   REF P | natural-tts | release script SIGPIPE race (26 of 30) after 'built, verified' | claimed-not-executed | T60 4a956c3b 00:53:50 vs 01:05:50
+157 s5 C9   REF P | natural-tts | Kokoro peaky; -16 LUFS needs a limiter | build-time-discovery | T60 00:53:50
+158 s5 C1   REF D | background-beams | 7 residual gaps behind ✅ (macOS Safari unmeasured, criterion redefined) | dod-vs-optimum-frame | T61 859e9d56 01:21:15 vs 01:43:24
+159 s5 C4   REF P | background-beams | deployed renderer regressed iOS PWA white flash | unpinned-invariant-regression | T64 bd160b01 16:28:44
+160 s5 C1   DC  D | token-efficiency | 'two small decisions' became 8 decisions + 6 work items | inventory-by-memory | T65 ff4a9767 22:26:33 vs 22:34:35
+161 s5 C7   REF D | token-efficiency | migration 0036 invalidated by session's own settings symlink | self-invalidated-artifact | T65 22:34:35
+162 s5 C3   COS D | token-efficiency | test cost $330 vs ledger $545 | memory-not-ledger | T65 22:27:51
+163 s6 C1   REF D | reso deps | close 'follow-on: none' outside plan's own residual list | close-scoped-to-narrow-dod | T66 3d42fa49 22:33:13 vs rec 484
+164 s6 C10  COS D | reso deps | @simplewebauthn 13.3.3 patch missing from audit snapshot | stale-external-snapshot | T66 22:46:38
+165 s6 C10  DC  D | reso nav latency | Stage A (82%) ~0 ms: sibling 84a9e0e1a changed code 5.7 h earlier | stale-baseline-sibling-change | T67 869edb07 22:54:37 vs 02:36:20
+166 s6 C3   DC  D | reso nav latency | <Activity> gains nothing (blog tier vs react-dom source) | shallow-evidence-tier | T67 tool-results/bqcixvld1.txt B1
+167 s6 C3   REF D | reso nav latency | runner needs 40-char sha; tenant list cached at boot | shallow-evidence-tier | T67 02:36:20
+168 s6 C2n  NEW O | sevenrooms | ✅ on diagnostic DoD; laptop independence never researched | close-scoped-to-narrow-dod | T68 78badb85 03:57:12, 04:09:49
+169 s6 C1   REF D | sevenrooms | 'exhaustively done' re-scored 93/100; every gap already dated | rubric-switch-rerender | T69 ac0f0123 19:48:24 vs 20:20:22
+170 s6 C9   REF P | sevenrooms | scheduled trust roll / re-login check only provable by operation | verification-needs-operation | T69 20:20:22
+171 s6 C3   REF D | VoiceInk latency | 32-agent research ungrounded: 3 errors vs code | ungrounded-research-claims | T71 989f6dbf rec 434; 23:53:48
+172 s6 C6   REF D | VoiceInk latency | plan dropped research's warm-connection fix; no rollback | research-to-plan-transcription-loss | T71 21:40:36 vs 23:53:23
+173 s6 C4   DC  P | VoiceInk latency | Parakeet Unified (already in fork) never a candidate | candidate-frame-not-enumerated | T71 2026-09-28T05:21:27
+174 s6 C8   DC  D | VoiceInk latency | 5 design flaws found only when 'no take-backs' demanded | design-unreviewed-until-pushed | T71 05:21:27
+175 s6 C4   DC  D | VoiceInk latency | daily job pushes working branch to public fork | environment-outside-frame | T71 03:46:02
+176 s6 C6   REF D | TrueMemory | harness/gold set/patch only in /tmp; finding dropped 5->3 | ephemeral-evidence | T74 41eee6a5 02:16:11, 02:12:09
+177 s6 C2n  NEW O | TrueMemory | scope grew to maximal extraction + out-of-box baseline | operator-scope-growth | T74 02:21:05
+178 s6 C6   REF D | TrueMemory | 'rules in context not followed' class had no plan item (later DROPPED) | research-to-plan-transcription-loss | T74 02:23:05; research doc :44; 7640e8326
+179 s6 C11  REF D | TrueMemory | no pre-registered thresholds; no negative-result branch | missing-methodology-checklist | T74 02:23:05; 8dce1b64f
+180 s7 C7   REF D | VoiceInk latency | script-assembled plan v2 never re-read: 20 defects | unverified-integrated-artifact | 989f6dbf 05:26:16, 05:30:58; dbc073f7
+181 s7 C4   DC  D | VoiceInk latency | rebase onto v2.20 first; base settled silently by freeze clause | unexamined-baseline-premise | 989f6dbf line 134, 813; 05:56:57
+182 s7 C4   REF D | VoiceInk latency | silent recordings = upstream bug #956; tracker never a source | source-outside-search-frame | 989f6dbf 06:11:56
+183 s7 C3   DC  D | TrueMemory upstream | 'author never replied' false; index stale despite warning | stale-instrument-read-as-truth | 7c395da7 23:04:24 vs 01:21:32
+184 s7 C3   REF D | TrueMemory upstream | 'you'd sign a licence' wrong; CLA by PR | claim-not-checked-against-source | 7c395da7 01:21:32
+185 s7 C2u  NEW O | TrueMemory upstream | operator wanted a release program, not yes/no | frame-narrower-than-operator-intent | 7c395da7 op 23:07:02
+186 s7 C2u  NEW O | TrueMemory 2.0 | 'TrueMemory 2.0, EVERYTHING to 100th percentile' | frame-narrower-than-operator-intent | 7c395da7 op 01:36:04
+187 s7 C4   DC  D | TrueMemory 2.0 | unfiled security advisory on a 3-hourly public-mirrored trunk | publication-surface-unmodeled | 7c395da7 09:58:27
+188 s7 C7   REF P | TrueMemory 2.0 | critic loop 23/21/24/28 new, none repeated; fixes add surface | critic-loop-generates-own-surface | 7c395da7 15:58:52
+189 s7 C8   REF D | TrueMemory 2.0 | 3 quota-killed critics read as 'no gaps' | absent-verdict-read-as-clean | 7c395da7 04:20:53
+190 s7 C4   REF D | TrueMemory 2.0 | issue in 4 public places not 2; decision flipped | decision-on-partial-facts | 7c395da7 17:43:40
+191 s7 C9   DC  P | limit-recover | COMPLETE on n=1; n=5 production run: 1 recovered, 4 partial; bare-checkout set -e; ownerless lock | validated-in-unrepresentative-conditions | LIMIT_RECOVER_100P.md:7,:319-321; 83010792 03:36:09
+192 s7 C1   REF D | limit-recover | 'zero human' impossible: auto-recover shipped OFF, unruled | open-decision-parked-under-complete | LIMIT_RECOVER_100P.md:384
+193 s7 C4   DC  D | limit-recover | fleet-parallel case unmodeled; superseded by FLEET_V2 | single-instance-frame-misses-fleet-case | LIMIT_RECOVER_100P.md:933-942; 83010792 04:18:45
+194 s7 C2u  DC  O | TrueMemory 2.0 | in-person agreement with the author; plan built on 'unresponsive' | operator-private-context-not-elicited | TM2 dcbd2f8e op 20:31:36
+195 s7 C7   REF P | TrueMemory 2.0 | replan critic loop 13+ rounds (37..16) without converging | critic-loop-no-stop-rule | TM2 03:04:40, 09:22:43, 18:24:30
+196 s7 C4   REF D | TrueMemory 2.0 | release-methodology exemplars (bridge release) missing | research-question-framed-narrow | TM2 01:29:14, 01:29:37
+197 s7 C4   REF D | TrueMemory 2.0 | public-sentences decision oscillated 78/85/80/85 | no-fixed-fact-list | TM1 17:43:40; TM2 20:27:50, 20:32:03, 21:14:51
+198 s7 C2u  NEW D | agent-context-sync | deploy was a 4-step human doc; operator needed one-prompt | deliverable-consumer-not-established | ACS 46d14e14 02:51:54; op 03:23:19
+199 s7 C9   REF P | agent-context-sync | online-only files ARE downloaded; done-check passes without job | claim-read-not-executed | ACS 04:32:07
+200 s7 C2n  NEW D | agent-context-sync | no friction/failure report from the real corporate run | operator-added-feedback-requirement | ACS op 04:39:24; 04:39:45

@@ -1,0 +1,11 @@
+# seed_realism.out  (cert_sim.py; DIV8; b=0.1; K=3; s=100; REPS=1500 per row)
+  scenario       N0 mean | truth left mean | mu_hat mean | n_pred95 holds (claims 95%%) | MW flag | Q6 flag | Mills/truth median | JK2/truth median
+  matched         60.0   | 0.70            | 0.97        | 99.2%                       |  5.5%   |  0.0%   | 1.00               | 1.03
+  easy+0.5        60.0   | 0.64            | 0.59        | 98.1%                       | 39.9%   |  0.0%   | 0.93               | 1.03
+  easy+1          60.0   | 0.65            | 0.42        | 97.2%                       | 90.4%   |  0.0%   | 0.88               | 1.04
+  disc            59.3   | 0.98            | 0.84        | 95.5%                       | 51.7%   |  0.0%   | 0.89               | 1.03
+  disc+screen     59.0   | 0.90            | 1.23        | 98.2%                       |  4.4%   |  0.0%   | 1.00               | 1.02
+  discweak        54.8   | 0.76            | 0.85        | 97.3%                       | 20.1%   |  0.0%   | 0.95               | 1.03
+  discweak+scr    55.3   | 0.77            | 1.07        | 98.2%                       |  4.8%   |  0.0%   | 1.00               | 1.03
+Reading: a guard that fires in ~5% of matched runs and far more often in mismatched runs has power;
+a mismatch the guards cannot see must be caught by the W0 backtest on historical snapshots.

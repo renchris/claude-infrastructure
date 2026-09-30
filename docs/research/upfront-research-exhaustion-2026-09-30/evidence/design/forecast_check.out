@@ -1,0 +1,15 @@
+# forecast_check.out  (cert_sim.py; DIV8; K=3; s=60; stop on K dry rounds)
+  calibration table alpha -> mean round-1 seed recall: -3.00:0.48, -2.50:0.60, -2.00:0.68, -1.50:0.77, -1.00:0.84, -0.50:0.90, 0.00:0.95, 0.50:0.98, 1.00:0.98
+
+## truth=spec  (actual rounds p50/p90 = 9/11)
+  simulation forecast: actual <= forecast p90 in 90.7% of programs; actual - p50: median +0, P10 -2, P90 +3
+  timebox coverage:    actual <= p90+2 in 99.3%, actual <= p90+4 in 99.3%
+  closed form:         actual <= forecast in 17.3% of programs; actual - forecast: median +2, P10 +0, P90 +5
+
+## truth=misspec  (actual rounds p50/p90 = 11/15)
+  simulation forecast: actual <= forecast p90 in 66.0% of programs; actual - p50: median +2, P10 -1, P90 +6
+  timebox coverage:    actual <= p90+2 in 84.7%, actual <= p90+4 in 93.3%
+  closed form:         actual <= forecast in 5.3% of programs; actual - forecast: median +5, P10 +1, P90 +8
+
+Reading: the round-1 forecast is a plan, not a promise; the timebox R_max = forecast p90 + 2 absorbs model error
+of the size in the 'misspec' row, and every later round re-forecasts from observed counts.

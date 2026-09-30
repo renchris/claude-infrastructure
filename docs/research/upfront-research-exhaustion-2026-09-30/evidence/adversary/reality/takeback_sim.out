@@ -1,0 +1,9 @@
+# takeback_sim.out (max24 K=3 T=24; b=0.1 u=0.05 s=100; REPS=400)
+N0=20 fp=0.00  stop=cap 0.00  rounds p50/p90 5/7  npred95 median 1  blind mean 1.15 | f=1.00 P(take-back)=0.29 | f=0.50 P(take-back)=0.12 | f=0.25 P(take-back)=0.03
+N0=20 fp=0.25  stop=cap 0.07  rounds p50/p90 7/13  npred95 median 1  blind mean 1.18 | f=1.00 P(take-back)=0.31 | f=0.50 P(take-back)=0.12 | f=0.25 P(take-back)=0.02
+N0=20 fp=1.00  stop=cap 0.75  rounds p50/p90 14/14  npred95 median 2  blind mean 1.23 | f=1.00 P(take-back)=0.26 | f=0.50 P(take-back)=0.10 | f=0.25 P(take-back)=0.02
+N0=20 fp=2.00  stop=cap 0.98  rounds p50/p90 14/14  npred95 median 2  blind mean 1.27 | f=1.00 P(take-back)=0.15 | f=0.50 P(take-back)=0.05 | f=0.25 P(take-back)=0.02
+N0=60 fp=0.00  stop=cap 0.00  rounds p50/p90 6/8  npred95 median 2  blind mean 3.30 | f=1.00 P(take-back)=0.65 | f=0.50 P(take-back)=0.25 | f=0.25 P(take-back)=0.08
+N0=60 fp=0.25  stop=cap 0.08  rounds p50/p90 8/14  npred95 median 2  blind mean 3.23 | f=1.00 P(take-back)=0.62 | f=0.50 P(take-back)=0.23 | f=0.25 P(take-back)=0.08
+N0=60 fp=1.00  stop=cap 0.75  rounds p50/p90 14/14  npred95 median 2  blind mean 3.32 | f=1.00 P(take-back)=0.61 | f=0.50 P(take-back)=0.22 | f=0.25 P(take-back)=0.07
+N0=60 fp=2.00  stop=cap 0.99  rounds p50/p90 14/14  npred95 median 3  blind mean 3.56 | f=1.00 P(take-back)=0.53 | f=0.50 P(take-back)=0.19 | f=0.25 P(take-back)=0.06

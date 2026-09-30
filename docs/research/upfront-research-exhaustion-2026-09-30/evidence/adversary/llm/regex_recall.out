@@ -1,0 +1,11 @@
+files_scanned=6593 unique_human_prompts=2985 wide_regex_hits=284 gap_seeking=19 gap_seeking_MISSED_by_wide_regex=10
+  2026-09-28T17:30:53 bc33dcec | Finish the post-migration wrap-up in desk/staging/README.md, then tell me what's left for me.
+  2026-09-24T22:27:18 ff4a9767 | "Cost and what's left. The tests used about $330 of quota across next, next3 and next4; next2 was left out at 95% weekly"  What are the expected cost savings go
+  2026-09-10T01:02:43 32c0d1ab | "※ recap: Your 16 sessions died to a macOS logout, not a limit, and no work was lost. An Opus session is now investigating the cause and has a lead. Next: run `
+  2026-09-14T02:35:18 8cdb0aaf | Are you sure these colors are optimal against black background for legibility? https://tailwindcss.com/docs/colors
+  2026-09-14T02:48:59 8cdb0aaf | Lets just park this for now. Is this all before we close?
+  2026-09-28T00:36:17 d21716a7 | "Why it's safe: Claude runs in a sandbox where the only thing it can write is its own workspace folder"  Are you sure about that? I thought it works against you
+  2026-09-02T08:11:52 6d405232 | im not even sure how i cancelled all subagents. are you sure that was me and not some bug?
+  2026-09-28T03:16:19 989f6dbf | (Checking in with our Dynamic Workflow to ensure we aren't stuck by accident '   ◯ voiceink-plan-endgame  Close… 8/9 agents done · 3h 17m 34s · ↓ 2.4m tokens')
+  2026-08-27T06:53:09 a5c0ee39 | Are you sure with "Segmind."? It looks AI-slop created wrapper. im not familiar with the name either its not one of the top palyers
+  2026-08-29T23:41:36 dacebc4c | are you sure no steamer? i swear that was the one thing that helped last time

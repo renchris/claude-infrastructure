@@ -1,0 +1,15 @@
+# synth_width.out  (cert_sim.py; b=0.1; u=0.05; s=100; REPS=600 per row)
+
+## N0=20
+  rule                          rounds p50/p90  panel-runs p50/p90 | desk-detectable left mean  P(>=1) | universally-blind left mean | stated n_pred95 median holds
+  max      K=3,T=16               6 / 8           96 / 128         | 0.13                      0.11   | 1.10                        | 1   99.0%
+  wide24   K=2,T=24               4 / 6           96 / 144         | 0.09                      0.09   | 1.09                        | 1   100.0%
+  max24    K=3,T=24               5 / 7          120 / 168         | 0.06                      0.05   | 1.08                        | 1   99.7%
+  max+fp   K=3,T=16 fp.25 cap16   7 / 13         112 / 208         | 0.10                      0.09   | 1.06                        | 1   99.0%
+
+## N0=60
+  rule                          rounds p50/p90  panel-runs p50/p90 | desk-detectable left mean  P(>=1) | universally-blind left mean | stated n_pred95 median holds
+  max      K=3,T=16               7 / 9          112 / 144         | 0.28                      0.24   | 3.21                        | 2   99.8%
+  wide24   K=2,T=24               5 / 7          120 / 168         | 0.20                      0.17   | 3.20                        | 2   99.7%
+  max24    K=3,T=24               6 / 8          144 / 192         | 0.15                      0.14   | 3.34                        | 2   99.8%
+  max+fp   K=3,T=16 fp.25 cap16   9 / 14         144 / 224         | 0.15                      0.14   | 3.33                        | 2   100.0%

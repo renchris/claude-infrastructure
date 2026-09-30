@@ -1,0 +1,9 @@
+# cert_calibration.out  (cert_sim.py; DIV8; K=3; stop on K dry rounds; REPS=1500 per row)
+  claimed confidence of every bound below: 95%
+  N0  b    fresh  | naive(point) holds  naive(CP-lower) holds | carried n_pred95 holds  median stated | fresh recall median
+  20  0.1  20     |  86.5%              96.2%                  |  98.9%                  2               |  0.95
+  20  0.3  20     |  86.3%              96.1%                  |  99.1%                  3               |  0.95
+  60  0.1  20     |  74.0%              87.9%                  |  99.3%                  3               |  0.95
+  60  0.3  20     |  70.7%              87.9%                  |  99.6%                  4               |  0.95
+  Reading: fresh end-seeds measure recall on YOUNG holes; the residual is SURVIVORS of several rounds,
+  so the naive bound overstates recall on exactly the holes that remain. Carried seeds survive the same filter.

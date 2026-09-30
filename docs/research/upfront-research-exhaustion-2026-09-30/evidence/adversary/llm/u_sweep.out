@@ -1,0 +1,7 @@
+# u = universally-blind fraction (cert_sim hard-codes 0.05; no procedure in the protocol measures it). max24, surf_blind=0.5
+u=0.05 N0=20                                 rounds p50/p90  5/7   cap-stop   0.0%  npred95 med 1  material-left(det+deferred) 0.06  blind 1.13  P(take-back)  11.8%
+u=0.10 N0=20                                 rounds p50/p90  5/7   cap-stop   0.0%  npred95 med 1  material-left(det+deferred) 0.06  blind 2.25  P(take-back)  24.8%
+u=0.20 N0=20                                 rounds p50/p90  5/6   cap-stop   0.0%  npred95 med 1  material-left(det+deferred) 0.06  blind 4.28  P(take-back)  62.3%
+u=0.05 N0=60                                 rounds p50/p90  6/8   cap-stop   0.0%  npred95 med 2  material-left(det+deferred) 0.14  blind 3.19  P(take-back)  19.2%
+u=0.10 N0=60                                 rounds p50/p90  6/8   cap-stop   0.0%  npred95 med 2  material-left(det+deferred) 0.15  blind 6.78  P(take-back)  66.5%
+u=0.20 N0=60                                 rounds p50/p90  6/8   cap-stop   0.0%  npred95 med 2  material-left(det+deferred) 0.12  blind 13.00  P(take-back)  96.2%

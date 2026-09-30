@@ -1,0 +1,41 @@
+# stopping_model.out  (cert_sim.py; REPS=1000 per row; DIV8 = Opus x2, codex x2, gemini x2, Opus/Fable x2 rho 0.6)
+
+## 1 Null-run arithmetic (exact): 95% upper bound on a miss rate after 0 misses in s seeds = 1-0.05^(1/s)
+  s=10   bound=0.2589   (rule of three 3/s=0.3000)
+  s=20   bound=0.1391   (rule of three 3/s=0.1500)
+  s=30   bound=0.0950   (rule of three 3/s=0.1000)
+  s=60   bound=0.0487   (rule of three 3/s=0.0500)
+  s=100  bound=0.0295   (rule of three 3/s=0.0300)
+  s=200  bound=0.0149   (rule of three 3/s=0.0150)
+  s=300  bound=0.0099   (rule of three 3/s=0.0100)
+  'P(>=1 desk-detectable hole left) <= 5%' with F=20 real holes found: s >= 209 seeds all caught (posterior mean), s >= 1257 (95% confidence)
+  'P(>=1 desk-detectable hole left) <= 5%' with F=60 real holes found: s >= 609 seeds all caught (posterior mean), s >= 3654 (95% confidence)
+
+## 2 Panel composition (N0=60, u=0.05, b=0.1, K=3, stop on K dry rounds alone, s=60 carried seeds)
+  comp     rounds p50/p90   panel-runs p50/p90   desk-detectable left: mean  P(>=1)   universally-blind left: mean
+  SAME8      10 / 14            80 / 112             1.50        0.76          3.32
+  DIV8        9 / 12            72 / 96              0.70        0.50          3.45
+  DIV8IND     8 / 11            64 / 88              0.58        0.42          3.29
+  DIV16       7 / 9            112 / 144             0.27        0.23          3.34
+
+## 3 Round-1 population estimates vs truth (desk-detectable holes at the first freeze), medians [P10, P90]
+  SAME8  truth 57.0 [55.0, 59.0] | S_obs 43.0 [39.0, 48.0] | Chao2-bc 48.9 [42.7, 56.9] | JK2 55.7 [46.6, 64.6] | Mills(seeds) 57.3 [49.6, 65.6]
+  DIV8   truth 57.0 [55.0, 59.0] | S_obs 47.0 [43.0, 51.0] | Chao2-bc 52.4 [46.8, 59.6] | JK2 59.4 [50.6, 68.7] | Mills(seeds) 57.6 [50.9, 64.7]
+  DIV16  truth 57.0 [55.0, 59.0] | S_obs 53.0 [49.0, 56.0] | Chao2-bc 54.9 [50.9, 60.2] | JK2 58.4 [51.3, 66.4] | Mills(seeds) 56.8 [53.3, 61.2]
+
+## 4 Fix-born rate b (DIV8, N0=60, K=3, R_max=40): convergence needs q = 1 - R(1-b) < 1, i.e. b < 1
+  b      rounds p50/p90   no stop (R_max=40 or >800 live)   desk-detectable left mean   fix-born holes born mean
+  0.0       8 / 11            0.0%               0.64                       0.0
+  0.1       9 / 12            0.0%               0.64                       6.1
+  0.3      10 / 14            0.0%               0.70                       23.9
+  0.6      15 / 21            0.0%               0.70                       78.8
+  0.9      33 / 40           29.0%               1.97                       359.8
+  1.0      40 / 40           89.0%               14.46                       859.1
+  1.2      24 / 29          100.0%               609.84                       4666.9
+
+## 5 Found-per-round shape (mean over programs, rounds 1-8): what the lead SEES before any estimator
+  b=0.1  47.1  9.0  3.0  1.4  0.7  0.5  0.2  0.2
+  b=0.6  47.0  27.2  17.3  11.2  7.5  5.2  3.9  2.7
+  b=1.2  47.3  49.1  53.3  58.8  63.2  69.1  76.5  83.0
+  Reading: at b>=1 the per-round count stops falling (the 23/21/24/28 critic loop, 7c395da7 15:58:52Z);
+  the diagnostic is the ratio of consecutive round counts, observable from round 2.
