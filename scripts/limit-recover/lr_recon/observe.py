@@ -233,6 +233,7 @@ _ESC = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\
 _SGR = re.compile(r"\x1b\[([0-9;:]*)m")
 _PLACEHOLDER = re.compile(r'^\s*Try "[^"]*("|\.\.\.)\s*$')
 BORDER = "─" * 12
+_CHROME = frozenset("\u276f")  # ❯; the U+00A0 after it is not printable, so isprintable() drops it
 
 
 def _unfaint(line: str) -> str:
@@ -265,7 +266,11 @@ def _unfaint(line: str) -> str:
 
 def composer_from_screen(screen: str) -> str:
     """ "empty" | "draft" | "unknown" from a --ansi screen: the rows strictly between the last two
-    border rows, faint runs dropped, printable ASCII only; a whole-row `Try "…"` is the placeholder."""
+    border rows, faint runs dropped; a whole-row `Try "…"` is the placeholder.
+
+    Only the known chrome is stripped — the prompt glyph ❯, and the U+00A0 after it, which is not
+    printable — and every other printable non-space character is content (D6.8). Keeping printable ASCII only read a
+    draft written wholly in non-ASCII as EMPTY, and /exit could then merge into it."""
     lines = screen.splitlines()
     plain = [_ESC.sub("", ln) for ln in lines]
     borders = [i for i, ln in enumerate(plain) if BORDER in ln]
@@ -273,7 +278,9 @@ def composer_from_screen(screen: str) -> str:
         return "unknown"
     rows = []
     for ln in lines[borders[-2] + 1 : borders[-1]]:
-        txt = "".join(ch for ch in _unfaint(ln) if " " <= ch <= "~")
+        txt = "".join(
+            ch for ch in _unfaint(ln) if ch not in _CHROME and ch.isprintable()
+        )
         if not _PLACEHOLDER.match(txt):
             rows.append(txt)
     return "draft" if "".join("".join(rows).split()) else "empty"

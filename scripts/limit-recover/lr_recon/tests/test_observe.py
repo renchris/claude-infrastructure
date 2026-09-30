@@ -480,6 +480,16 @@ class Composer(unittest.TestCase):
             O.composer_from_screen(box % "\x1b[38;2;1;2;3mship\x1b[0m"), "draft"
         )
 
+    def test_a_non_ascii_draft_is_a_draft(self):
+        """D6.8: only ❯ and U+00A0 are chrome. 12.1% of real prompts carry non-ASCII; a draft
+        written wholly in it used to read EMPTY, which let /exit merge into it."""
+        box = "x\n%s\n\u276f\u00a0%s\n%s\n" % ("─" * 20, "%s", "─" * 20)
+        for text in ("日本語のメモ", "🚀", "café → prod", "ok 日本語"):
+            self.assertEqual(O.composer_from_screen(box % text), "draft", text)
+        self.assertEqual(O.composer_from_screen(box % ""), "empty")
+        self.assertEqual(O.composer_from_screen(box % "\u00a0 \u00a0"), "empty")
+        self.assertEqual(O.composer_from_screen(box % 'Try "fix the \u00e9 bug"'), "empty")
+
 
 class Observe(unittest.TestCase):
     def setUp(self):
