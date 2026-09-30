@@ -50,7 +50,11 @@ stale, BOUNCED; signed in fresh (~2026-09-22 20:50 CDT) it read AUTHORIZE PAGE, 
 later, and still did after **18 idle hours** (last use Tue 23:02, probe Wed 17:16). So a private
 copy is usable for at least a day after a human touches it — which is exactly why it needs a human
 touch on a cadence, and why the operator's own browser (`cc-relogin --dia`) stays the fallback.
-The upper bound is unmeasured; each probe visit may reset it, so measure with gaps of days.
+The upper bound was measured on 2026-09-30: after ~7 idle days (probe 09-23 17:16 → probe 09-30
+16:07 CDT) the same profile BOUNCED while still showing the account as signed in. The half-life
+therefore sits between 18 hours and 7 days, and a private copy needs a human touch more often than
+weekly to stay usable. That is the cadence this lesson says not to build, so `--dia` stays the
+default route rather than the fallback.
 
 ## The generalisation
 

@@ -102,9 +102,14 @@ per account, credential-free (dummy PKCE, never clicks): `AUTHORIZE PAGE` = that
 finish a relogin with no human; `BOUNCED` = its session is missing or stale, so use `--dia` or
 re-sign that profile. A fresh sign-in measured `AUTHORIZE PAGE` and still held ~90 min later
 (2026-09-22), and still read `AUTHORIZE PAGE` after **18 idle hours** (2026-09-23, last use
-Tue 23:02 → probe Wed 17:16 CDT). So a fresh sign-in makes that account unattended for at least
-most of a day; the upper bound is not yet measured. Every probe visit may itself refresh the
-session, so leave a gap of days between readings when measuring it.
+Tue 23:02 → probe Wed 17:16 CDT). The upper bound was measured on 2026-09-30: after **~7 idle days**
+(probe Wed 09-23 17:16 → probe Wed 09-30 16:07 CDT, no use between) `next` read `BOUNCED`, while
+its profile still showed the account as signed in. So a sign-in holds for more than 18 idle hours
+and less than ~7 idle days. The dedicated login browsers are therefore not a standing unattended
+route: keeping one warm would take a human touch more often than weekly, which is the manual step
+the route was meant to remove. `cc-relogin <acct> --dia` stays the default, and signing next2–next4
+in once is not worth doing. Every probe visit may itself refresh the session, so leave a gap of
+days between readings if the bound is ever narrowed further.
 
 ## The cadence layer — built, staged, NOT running
 
