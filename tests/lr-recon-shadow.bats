@@ -39,6 +39,14 @@ req() { printf '{"sid":"%s","account":"next2","reset_at_epoch":"1790663400","rat
 legacy() { printf '%s\t841\t841\tnext2\t%s\trecycle-in-place/%s\t-\t%s\n' "$1" "$2" "$3" "$4" >> "$LR/fleet/one-x/results.tsv"; }
 engaged() { printf '{"ts":"%s","class":"recycle-engaged","engaged":true,"prev_sid":"%s"}\n' "$2" "$1" >> "$HOME/.claude/logs/handoffs.jsonl"; }
 archive() { /usr/bin/python3 "$L" watch "$LR" --once >/dev/null; }
+# The cohort record as the daemon really writes it (W5b2 defect A: rebuilt every pass without a
+# reset or an opening time); the opening survives only in the page arm's stamps beside it.
+daemon_shape() {
+  printf '{"cid":"%s","acct":"next2","scope":"5h","resets_at":null,"opened_at":0.0,"members":["%s","%s"]}' \
+    "$CID" "$SIDA" "$SIDB" > "$LR/recon/cohorts/$CID.json"
+  printf '{"open":1790654300.5}' > "$LR/recon/cohorts/$CID.pages.json"
+}
+marker() { printf '{"ts":"%s","session_id":"%s","error":"rate_limit"}\n' "$2" "$1" >> "$HOME/.claude/autonomy/stop-failure/rate_limit__next2.jsonl"; }
 
 @test "statics: py_compile under the box's /usr/bin/python3" {
   /usr/bin/python3 -m py_compile "$L"
@@ -84,6 +92,40 @@ archive() { /usr/bin/python3 "$L" watch "$LR" --once >/dev/null; }
   run /usr/bin/python3 "$L" compare "$LR" "$CID" --home "$HOME"
   [ "$status" -eq 1 ] || { echo "$output"; false; }
   [[ "$output" == *"DISAGREE"* ]] || { echo "$output"; false; }
+}
+
+@test "the daemon's real cohort record: an earlier limit's stop marker is no miss, one inside the window is" {
+  daemon_shape
+  marker "$SIDC" 2026-09-24T22:18:50Z
+  archive
+  run /usr/bin/python3 "$L" compare "$LR" "$CID" --home "$HOME"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"census misses 0"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"window: opened 2026-09-29T03:58:20Z"*"the open page's stamp"* ]] || { echo "$output"; false; }
+  # CONTROL: the same pane limited inside the cohort's window is a miss
+  marker "$SIDC" 2026-09-29T04:08:20Z
+  run /usr/bin/python3 "$L" compare "$LR" "$CID" --home "$HOME"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"census misses 1 (cccccccc)"* ]] || { echo "$output"; false; }
+}
+
+@test "a cohort record with no reset still matches the hook's requests by the cid's reset" {
+  daemon_shape
+  req "$SIDC"
+  archive
+  run /usr/bin/python3 "$L" compare "$LR" "$CID" --home "$HOME"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"census misses 1 (cccccccc)"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"reset from the cid"* ]] || { echo "$output"; false; }
+}
+
+@test "the watcher archives a cohort's pages file beside it, never as a cohort of its own" {
+  daemon_shape
+  archive
+  [ -s "$LR/shadow-archive/$CID/pages.json" ]
+  run /usr/bin/python3 "$L" list "$LR"
+  [ "${#lines[@]}" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" != *".pages"* ]] || { echo "$output"; false; }
 }
 
 @test "the archive keeps a fact the daemon later reaped" {

@@ -9,8 +9,8 @@ lane actually did (docs/plans/LIMIT_RECOVER_FLEET_V2.md § W5 "Shadow").
 WHY AN ARCHIVE. In observe mode the daemon keeps records (recon/sessions) and cohorts, but it
 REAPS a fact once it expires and OVERWRITES recon/shadow/<cid>.json every pass, so the facts a
 placement was judged against are gone by the time the cohort is over. ``watch`` copies them out
-(LR/shadow-archive/<cid>/: cohort.json, records/<sid>.json, facts.jsonl and plans.jsonl, each
-distinct content once, stamped). It only reads the daemon's tree.
+(LR/shadow-archive/<cid>/: cohort.json, pages.json, records/<sid>.json, facts.jsonl and plans.jsonl,
+the last two each distinct content once, stamped). It only reads the daemon's tree.
 
 THE GATE (plan § Shadow), per cohort:
   1. every planned placement was feasible — a target that is not the source and that no archived
@@ -106,6 +106,8 @@ def watch_once(lr: str, now: Optional[float] = None) -> List[str]:
     new = []
     facts = sorted(glob.glob(os.path.join(root, "facts", "*.json")))
     for cpath in sorted(glob.glob(os.path.join(root, "cohorts", "*.json"))):
+        if cpath.endswith(".pages.json"):
+            continue  # a cohort's page stamps, archived beside it below; not a cohort
         try:
             coh = _load(cpath)
         except (OSError, ValueError):
@@ -118,6 +120,9 @@ def watch_once(lr: str, now: Optional[float] = None) -> List[str]:
             with open(os.path.join(arch, "index.jsonl"), "a", encoding="utf-8") as fh:
                 fh.write(json.dumps({"at": now, "cid": cid}) + "\n")
         shutil.copyfile(cpath, os.path.join(d, "cohort.json"))
+        pages = cpath[:-5] + ".pages.json"
+        if os.path.exists(pages):
+            shutil.copyfile(pages, os.path.join(d, "pages.json"))
         for sid in coh.get("members") or []:
             src = os.path.join(root, "sessions", sid + ".json")
             if os.path.exists(src):
@@ -193,7 +198,49 @@ def _recon_side(
             except (OSError, ValueError):
                 continue
     hist = [r for r in _jsonl(os.path.join(d, "facts.jsonl"))]
-    return coh, recs, hist
+    return _window(lr, coh, recs), recs, hist
+
+
+def _window(
+    lr: str, coh: Dict[str, Any], recs: Dict[str, Dict[str, Any]]
+) -> Dict[str, Any]:
+    """The cohort's reset and opening time, as the daemon means them. The daemon rebuilds the
+    record every pass without either (W5b2 defect A: ``resets_at: null, opened_at: 0.0`` on disk),
+    so no hook request could match and the stop-marker window reached back to the epoch: every
+    earlier limit on the account read as a census miss. The reset is the cid's own suffix
+    (census.cohort_id); the opening is the open page's stamp, else the earliest member detection."""
+    out = dict(coh)
+    cid = str(out.get("cid") or "")
+    tail = cid.rsplit("-", 1)[-1]
+    if out.get("resets_at") is None and tail.isdigit() and int(tail) > 0:
+        out["resets_at"] = float(tail)
+        out["window_from"] = "reset from the cid"
+    if not out.get("opened_at"):
+        pages: Dict[str, Any] = {}
+        for p in (
+            os.path.join(lr, "recon", "cohorts", cid + ".pages.json"),
+            os.path.join(lr, "shadow-archive", cid, "pages.json"),
+        ):
+            try:
+                pages = _load(p)
+                break
+            except (OSError, ValueError):
+                continue
+        opened = _epoch(pages.get("open")) if isinstance(pages, dict) else None
+        src = "the open page's stamp"
+        if opened is None:
+            det = [
+                _epoch((r.get("timeline") or {}).get("detected")) for r in recs.values()
+            ]
+            det = [t for t in det if t]
+            opened = min(det) if det else None
+            src = "the earliest detection"
+        if opened is not None:
+            out["opened_at"] = opened
+            out["window_from"] = ", ".join(
+                x for x in (out.get("window_from"), "opened at %s" % src) if x
+            )
+    return out
 
 
 def _facts_at(hist: List[Dict[str, Any]], t: float) -> Dict[str, T.Fact]:
@@ -415,6 +462,19 @@ def compare(lr: str, cid: str, home: str) -> int:
             "PASS" if passed else "FAIL",
         )
     )
+    if coh.get("window_from"):
+        print(
+            "  window: opened %s, resets %s (%s; the cohort record left it unset)"
+            % (
+                time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(coh["opened_at"]))
+                if coh.get("opened_at")
+                else "?",
+                time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(coh["resets_at"]))
+                if coh.get("resets_at")
+                else "?",
+                coh["window_from"],
+            )
+        )
     if elsewhere:
         print(
             "  filed in another cohort (not a miss): %s"
@@ -436,6 +496,7 @@ def compare(lr: str, cid: str, home: str) -> int:
                     "agree": agree,
                     "false_recovered": false_rec,
                     "plan_differed": differed,
+                    "window_from": coh.get("window_from") or "",
                     "pass": passed,
                 },
                 fh,
