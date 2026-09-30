@@ -6357,11 +6357,24 @@ live_subagents_of() { # $1=transcript dir (…/projects/<slug>/<sid>) [$2=owner 
     # per agentId when that agent ends; over 439 runs / 17,573 rows no agentId ever started again
     # after one. The keys are BARE (a result payload is an escaped string), so the match cannot be
     # forged by content. No journal, or no row ⇒ fall through to the predicates below (the safe side).
+    # …AND A STALL-RETRIED ATTEMPT SETTLES WITH ITS SLOT (FLEET_V2 W6, 2026-09-30). When the harness
+    # retries a stalled slot (`[stall] … retrying (1/5)`), the retry starts under a NEW agentId with the
+    # SAME slot `key`, and the stalled original never gets a row of its own. Measured on the completed
+    # run wf_4da836fc-d58 (115/115 results): 124 `started`, 9 of them stall-retried originals, each
+    # still counted in flight after the run ended. So an agent is settled when a `result`/`failed` row
+    # names it OR names its slot key. Keys are bare top-level fields (a payload is an escaped string),
+    # so neither match can be forged by content.
     case "$_m" in
       */subagents/workflows/*)
-        awk -v a="\"agentId\":\"$_id\"" \
-          'index($0, a) && (index($0, "\"type\":\"result\"") || index($0, "\"type\":\"failed\"")) { f = 1 }
-           END { exit !f }' "${_m%/*}/journal.jsonl" 2>/dev/null && continue ;;
+        LC_ALL=C awk -v id="$_id" '
+          { a = ""; k = ""
+            if (match($0, /"agentId":"[^"]*"/)) a = substr($0, RSTART + 11, RLENGTH - 12)
+            if (match($0, /"key":"[^"]*"/)) k = substr($0, RSTART, RLENGTH)
+            done = index($0, "\"type\":\"result\"") || index($0, "\"type\":\"failed\"")
+            if (a == id && done) f = 1
+            if (a == id && index($0, "\"type\":\"started\"") && k != "") mine = k
+            if (done && k != "") settled[k] = 1 }
+          END { exit !(f || (mine != "" && (mine in settled))) }' "${_m%/*}/journal.jsonl" 2>/dev/null && continue ;;
     esac
     # PRIMARY: the harness recorded a stop, and the agent has written NOTHING since. The latest stop
     # record wins; the agent's LATEST timestamp is taken as a max over every bare one in its file, so

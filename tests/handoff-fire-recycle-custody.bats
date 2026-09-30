@@ -326,6 +326,24 @@ wfagent() {
 
 # ── 4 · THE ROW NONCE ──────────────────────────────────────────────────────────────────────────
 
+# A stall-retried slot (FLEET_V2 W6, 2026-09-30, wf_4da836fc-d58: 124 started, 115 results, 9 stalled
+# originals still counted after the run ended). Mutant: drop the slot-key arm (c1 counts again).
+@test "3c a stall-retried Workflow attempt settles with its slot; an unfinished slot still counts; a payload cannot forge a key" {
+  wfagent wf_z c1 live; wfagent wf_z c2 live; wfagent wf_z c3 live; wfagent wf_z c4 live
+  printf '%s\n' '{"type":"launched"}' \
+    '{"type":"started","key":"v2:K1","agentId":"c1","label":"x","phase":"Map"}' \
+    '{"type":"started","key":"v2:K2","agentId":"c3","label":"y","phase":"Map"}' \
+    '{"type":"started","key":"v2:K1","agentId":"c2","label":"x","phase":"Map"}' \
+    '{"type":"started","key":"v2:K3","agentId":"c4","label":"z","phase":"Map"}' \
+    '{"type":"result","key":"v2:K1","agentId":"c2","result":"done"}' \
+    '{"type":"result","key":"v2:K3","agentId":"c4","result":"{\"key\":\"v2:K2\",\"type\":\"result\"}"}' \
+    > "$CC_PROJECTS_DIRS/-some-repo/$SID/subagents/workflows/wf_z/journal.jsonl"
+  run bash "$HF" --probe-live-subagents --source-session "$SID"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # c1 (retried, its slot K1 has c2's result) and c2, c4 settle; c3's slot K2 has no result of its own.
+  [ "$output" = "live_subagents: 1" ] || { echo "$output"; false; }
+}
+
 @test "4 emit_recycle_event rows carry attempt, watcher_pid and watcher_lstart" {
   command -v jq >/dev/null 2>&1 || skip "row shape needs jq"
   FUNCS="$BATS_TEST_TMPDIR/ev-funcs.sh"
