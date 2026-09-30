@@ -94,7 +94,7 @@ through a key mismatch (#466); the entity boost is never written back into the s
   (`mcp_server.py:373-376`).
 - Telemetry is on by default, and a hook extracts email addresses (`telemetry.py:45,160-184`;
   `user_prompt_submit.py:681-731`).
-- A remote message is injected into context unsanitised (`session_start.py:200-205`).
+- One further security finding is withheld until the author has fixed it; it goes to the author privately.
 - On 2026-09-27, HEAD failed with mcp 2.2.0 and CI had been red since 2026-08-29; the PyPI 0.7.6.2
   release still installed.
 - Importing the ingest pipeline resolves `Path.home()` at import time (`ingest/pipeline.py:84-87`),

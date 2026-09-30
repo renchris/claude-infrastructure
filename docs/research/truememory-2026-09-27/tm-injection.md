@@ -45,7 +45,7 @@ Sandbox runs used `HOME=/tmp/tm-research/home-inj`, `HF_HUB_OFFLINE=1`, `TRUEMEM
 |---|---|---|---|---|---|---|
 | C1 | SessionStart `<truememory-directives>` | every session start | unconditional SQL `directive=1` | count ≤ 50 (`TRUEMEMORY_DIRECTIVE_LIMIT`), bytes ≤ 50% of recall budget | yes (`_sanitize.py`) | **No**: top-level key ignored (finding 1) |
 | C2 | SessionStart `<truememory-context>` | every session start (5-minute cache) | 5 fixed generic queries | ≤ 25 items (35 for enhanced/max), ≤ 500 chars each, total 8,192 chars (16,384 for max) | yes | **No** (same) |
-| C3 | SessionStart `<truememory-update>` | once per available update | telemetry server response | none | **no** | No (same) |
+| C3 | SessionStart `<truememory-update>` | once per available update | telemetry server response | none | withheld (reported privately) | No (same) |
 | C4 | SessionStart `<truememory-email-request>` | every session while the email is unset | config lacks email | none | n/a | No (same) |
 | C5 | SessionStart `<truememory-first-run>` | first run | no `.onboarded` marker | none (banner plus guide) | n/a | No (same) |
 | C6 | UserPromptSubmit `<truememory-recall>` (auto) | recall-shaped prompts (regex) | `_RECALL_RE` | 5 × 200 chars | yes | **No** (same) |
@@ -226,7 +226,7 @@ Sandbox runs used `HOME=/tmp/tm-research/home-inj`, `HF_HUB_OFFLINE=1`, `TRUEMEM
   1. **Newlines and markdown pass through.** A memory can forge a `## User Directives (always loaded)` section inside `<truememory-context>` (sandbox demo, §2.3). Entries are not flattened to a single line and bullets are not quoted.
   2. **Other authority-looking tags are not covered:** `<important>`, `<instructions>`, `<claude…>`, `<human>`, `<assistant>`, `<function_calls>`, `<antml…>`, full-width `＜system＞`, or zero-width-joined variants.
   3. **The per-prompt path slices to `[:200]` before sanitizing** (`user_prompt_submit.py:612, 669`). That is harmless for tag neutralization but inconsistent with the session path, which sanitizes first.
-  4. **The update notice is remote-controlled and unsanitized.** The telemetry server's JSON response is written verbatim to `~/.truememory/.update_available` (`telemetry.py:139-150, 268-277`). SessionStart interpolates `data.get('message')` raw into `Tell the user: "…"` inside `<truememory-update>` (`session_start.py:200-205`). The only gate is a client-side semver-newer check (`telemetry.py:283-309`). This is a remote → context string channel.
+  4. *Withheld: one further security finding is withheld until the author has fixed it.*
   5. **MCP tool results return raw content JSON** (`mcp_server.py:1142, 1145, 1213`) with no sanitizer. JSON-escaping does not neutralize `<system-reminder>` text for the model.
   6. **No provenance or trust marking.** Injected memories are framed as "facts from TrueMemory (the primary long-horizon memory system). Use these to answer user questions." (`session_start.py:1091-1093`). The header raises trust in the content rather than marking it as untrusted recalled data.
 - **Directive authority is itself a risk.** Anything stored as a directive is injected under "These directives override defaults and apply to every session" (`session_start.py:978`). Classification is model-decided from trigger phrases, so a poisoned transcript or web page that makes the model store "from now on …" gets a persistent override channel. There is no human-review gate.
@@ -284,7 +284,6 @@ What they do and do not cover:
   - any test of the host-facing JSON shape (`hookSpecificOutput`) or the host's caps (10,000-char `additionalContext`, 2,048-char MCP instructions);
   - render-escape at the per-prompt sites;
   - markdown/newline forgery;
-  - the update-notice sanitization.
 
 ---
 
@@ -342,7 +341,7 @@ Candidate transfers:
 2. MCP instructions of 4,865 chars are truncated to 2,048 by CC. The directive, recall and proactive sections never reach the model, and tests 564/565 check only the source string.
 3. Installing TrueMemory writes a global `~/.claude/CLAUDE.md` block telling the model that MEMORY.md is a "lossy, potentially stale cache", not to store user facts there, and to prefer TrueMemory. That would directly conflict with our auto-memory workflow.
 4. MCP instructions push storing and recalling API keys, passwords and SSH credentials (`mcp_server.py:373-376`).
-5. A remote telemetry response `message` is injected unsanitized into session context (`session_start.py:200-205`, `telemetry.py:139-150`). The user's email is auto-captured from prompts and sent in telemetry.
+5. The user's email is auto-captured from prompts and sent in telemetry (one further security finding is withheld until the author has fixed it).
 6. The sanitizer does not neutralize newlines or markdown, so a memory can forge a "User Directives (always loaded)" section (sandbox-demonstrated).
 7. `_apply_budget` drops by scores that are not comparable across queries or score spaces.
 8. Per-prompt recall has no relevance floor, so an irrelevant top-5 is injected on any recall-shaped prompt.

@@ -117,8 +117,7 @@ Each item: the defect with its evidence, the change, and the test that proves it
   (`mcp_server.py:373-376`).
 - Telemetry is on by default, and a hook extracts email addresses (`telemetry.py:45,160-184`;
   `ingest/hooks/user_prompt_submit.py:681-731`).
-- A remote message is injected unsanitised (`ingest/hooks/session_start.py:200-205`);
-  `sanitize_injection_content` (`_sanitize.py:26-47`) escapes too little.
+- `sanitize_injection_content` (`_sanitize.py:26-47`) escapes too little, and one further security finding is withheld until the author has fixed it.
 - The installer rewrites Claude Code hooks and adds a CLAUDE.md block calling MEMORY.md "a lossy,
   potentially stale cache" (`ingest/CLAUDE_TEMPLATE.md:3-18`).
 
