@@ -1,5 +1,5 @@
 ---
-status: open
+status: complete
 ---
 
 # MASTER: account facts — which account, which model, and whether it can still authenticate
@@ -9,6 +9,12 @@ status: open
 operator-gated; there is no agent work left on this condition. Read that census with the excluded
 stratum stated, never as "0 open" alone (memory: `zero-claim-must-name-its-excluded-strata`) — the
 13 are decisions and human actions, not absence of work.
+**Re-measured 2026-09-30 — COMPLETE:** 28 members — **25 done · 3 blocked · 0 open.** E1 was ruled
+from measured data (§ A2, E1 verdict) and the desk-router plan closed, which discharged
+`01487ffd8417` and `180d38b29912`. The 3 still blocked are value calls, each owned by its own ticket
+in the 2026-09-30 backlog master plan rather than by this plan: `66be078a3f50` (refresh jitter and
+`heal()` with live sessions), `137d46537375` (multi-provider plans) and `f3e662d4e2a8` (the
+session-count target). The DoD below is met, so the plan is complete with those three named.
 **Inventory:**
 `cc-backlog list --all --json | jq -r '.[]|select(.condition=="master-account-facts" and .status!="done")|"\(.id) \(.status) \(.title[0:90])"'`
 
@@ -102,6 +108,39 @@ precisely the mass logout the row exists to prevent. Blocked on an operator ruli
 The jitter half IS agent-safe — and measured, there is **no jitter anywhere** in `bin/claude-accounts`
 today — but tuning a herd wants the time series first, so the sequence is: activate the recorder,
 measure, then decide the invariant.
+
+**E1 verdict, 2026-09-30 — the logout race is not observed; Phase 5 is not needed; E1 is not run**
+(row `01487ffd8417`). Read from 37 days of the recorder (2026-08-24 → 2026-09-30, ~44,800 rows):
+
+- **Keychain logouts:** 10 OK→EMPTY transitions across all six keychain items, every one at **0-3
+  live sessions** (8 at 0). Over the same window the four `next*` items spent ~13,400 OK samples at
+  **4 or more** live sessions, up to 31. A shared-token race that logged accounts out would show
+  up at high counts; it does not. These 10 are login-cliff shaped.
+- **In-session 401s while the keychain stays OK** (the signal the recorder cannot see; transcript
+  scan of every config dir's `projects/**/*.jsonl` for `isApiErrorMessage` auth errors, excluding
+  the reso QA cron's own daily 401): the race **is** present, as a transient. 2026-08-29 next4 at 8
+  live sessions: "access token has been revoked" 7 s after the keychain item's mdat moved, the
+  session recovered ~3 min later. 2026-09-11 next3 at 8 live: the same 2 min after a refresh, and
+  that unattended session stopped there. 2026-09-09 next4: three sessions got "access token has
+  expired" in the same second, all recovered within 2 min. The other in-session errors are "Not
+  logged in" (a keychain logout or a sandboxed probe dir), not the race.
+- **Ruling:** about one transient per 12 days, two of three self-recovering, and
+  `hooks/stop-failure-marker.sh` (2026-09-06) now turns an auth death into an event. Per-slot
+  logins (Phase 5, `bin/cc-config-slot`) are not worth that, so E1's real login is not spent.
+  Variant B stays dropped (2026-09-08). The same evidence bears on `66be078a3f50`: letting `heal()`
+  refresh under live sessions would add rotations, and each rotation is what produced the revokes.
+- **Reopen trigger.** Reopen E1 only if either reading turns positive. It is a check, not a stored
+  falsifier: a falsifier's exit 0 means "this row is no longer needed" and would close a row at the
+  moment the trigger fired (`docs/lessons/arming-and-mootness-cannot-share-one-falsifier.md`).
+  1. A keychain logout at 4+ live sessions:
+     `python3 -c 'import json;p={};n=0
+for l in open("/Users/chrisren/.claude/logs/auth-timeseries.jsonl"):
+ r=json.loads(l);q=p.get(r["acct"]);p[r["acct"]]=r
+ n+=bool(q and q["state"]=="OK" and r["state"]=="EMPTY" and (r["n_live"] or 0)>=4)
+print(n)'` prints more than 0.
+  2. Three or more `has been revoked` 401s in any 7 days: `grep -l '"isApiErrorMessage":true' -r
+     ~/.claude*/projects --include='*.jsonl' | xargs grep -h 'has been revoked'` over the window.
+
 `next2` carries a `.linked` marker but cannot create and falls back to bundle mode. A PARITY GUARD row
 names two hand-copied implementations (`cc-relogin live_sessions()` vs `claude-accounts concurrency()`)
 that must not drift.
@@ -291,3 +330,8 @@ skill or provider row is enforced from an untracked file.
   one web-only token mint, one authenticated-Google check, the next2 re-link, the `pyramid-principle`
   ownership write, and the roster row that closes when its members do. Nothing here is unblocked by
   more measurement, which is the reason this pass produced corrections rather than closures.
+- **2026-09-30 — plan COMPLETE (backlog master plan W1, verdicts-due.3 and .5).** Two of the 13 were
+  not operator acts after all. E1 was settled from the recorder plus a transcript scan instead of a
+  real login (§ A2, E1 verdict), and D-B/D-C were recorded from code already built
+  (`DESK_ROUTER_AND_STARTUP_V1.md` § 4). Ten other members had closed through their own tickets
+  since 09-09. Census 25 done · 3 blocked · 0 open; the three are named at the top of this file.

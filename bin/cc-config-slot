@@ -20,7 +20,20 @@ refresh chain. Sessions in different classes then cannot rotate each other's tok
 race is gone by construction, with ZERO capability loss (every slot holds a real,
 full-scope login).
 
-  ⚠️ NOT DECIDED YET. Variant A rests on one unverified assumption: that a second
+  ✅ DECIDED 2026-09-30: PHASE 5 IS NOT NEEDED, and E1 is not run (backlog 01487ffd8417).
+  The mass logout this file was built against is not observed: 37 days of
+  ~/.claude/logs/auth-timeseries.jsonl hold 10 keychain OK->EMPTY transitions, every one at
+  0-3 live sessions, against ~13,400 OK samples taken at 4+ live sessions (up to 31). The
+  race does show up, but only as a transient in-session 401 "access token has been revoked"
+  seconds after a sibling session refreshed the shared item: 2 at 8 live sessions in 37 days
+  (08-29 next4, recovered in ~3 min; 09-11 next3, which ended an unattended session), plus
+  one 3-session "expired" burst on next4 09-09 that recovered in under 2 min.
+  hooks/stop-failure-marker.sh already turns such a death into an event. Per-slot logins
+  are not worth that rate. Reopen only on a keychain OK->EMPTY at 4+ live sessions, or 3+
+  "has been revoked" 401s inside any 7 days; the check is in docs/plans/MASTER_ACCOUNT_FACTS.md
+  § A2. Variant B was ruled DROP on 2026-09-08. The scaffolding below stays inert.
+
+  (Pre-decision text, kept for history.) Variant A rests on one unverified assumption: that a second
   full-scope login for the same account (into a different config dir) does NOT invalidate
   the first. Experiment E1 settles it (scripts/relogin-probes/e1-concurrent-logins.sh).
   If E1 shows logins do NOT coexist, Variant A collapses and the fallback is Variant B —
