@@ -441,6 +441,72 @@ def cmd_touch(args: list[str]) -> int:
     return 0
 
 
+def cmd_add(args: list[str]) -> int:
+    """cc-mission add <id> --lead <l> --venue <v> --artifact <a> [--tenant <t>] [--repo <path>]
+    [--state <s>] [--owner <o>] [--budget-days N] [--next <text>] [--path <p>]... [--source <s>]...
+
+    A board row for a customer artifact that `seed` never measured (Club Vinyl floor plans, a
+    Studio 60 bottle menu), so a new deliverable stops needing an edit to cmd_seed. `touch`
+    still refuses unknown ids; this is the one verb that creates. Never overwrites a row, and
+    the operator-only states are refused here exactly as in `touch`."""
+    usage = ("usage: cc-mission add <id> --lead <l> --venue <v> --artifact <a> [--tenant <t>] "
+             "[--repo <path>] [--state <s>] [--owner <o>] [--budget-days N] [--next <text>] "
+             "[--path <p>]... [--source <s>]...")
+    if not args or args[0].startswith("-"):
+        print(usage, file=sys.stderr)
+        return 2
+    rid, opts = args[0], args[1:]
+    if not rid.replace(".", "").replace("-", "").isalnum() or rid != rid.lower():
+        print(f"bad id '{rid}': lower-case [a-z0-9.-] only, e.g. <tenant>.<venue>.<artifact>",
+              file=sys.stderr)
+        return 2
+    if (ROWS / f"{rid}.json").exists():
+        print(f"row exists: {rid} (use `cc-mission touch {rid}`)", file=sys.stderr)
+        return 2
+    row: dict = {"id": rid, "tenant": "", "repo": "", "state": "lead", "owner": "agent",
+                 "budget_days": 2, "paths": [], "source": [], "next": "", "ask": None,
+                 "ask_sent_at": None, "signoff": None}
+    flags = {"--lead": "lead", "--venue": "venue", "--artifact": "artifact", "--tenant": "tenant",
+             "--repo": "repo", "--state": "state", "--owner": "owner", "--next": "next"}
+    i = 0
+    while i < len(opts):
+        o = opts[i]
+        if i + 1 >= len(opts):
+            print(f"{o} needs a value\n{usage}", file=sys.stderr)
+            return 2
+        v = opts[i + 1]
+        if o in flags:
+            row[flags[o]] = v
+        elif o == "--budget-days" and v.isdigit():
+            row["budget_days"] = int(v)
+        elif o == "--path":
+            row["paths"].append(v)
+        elif o == "--source":
+            row["source"].append(v)
+        else:
+            print(f"unknown option: {o}\n{usage}", file=sys.stderr)
+            return 2
+        i += 2
+    missing = [k for k in ("lead", "venue", "artifact") if not row.get(k)]
+    if missing:
+        print(f"missing --{' --'.join(missing)}\n{usage}", file=sys.stderr)
+        return 2
+    if row["state"] in OPERATOR_STATES:
+        print(f"REFUSED: '{row['state']}' is operator-only; only `cc-signoff {rid}` reaches it.",
+              file=sys.stderr)
+        return 3
+    if row["state"] not in AGENT_STATES:
+        print(f"unknown state '{row['state']}'; allowed: {sorted(AGENT_STATES)}", file=sys.stderr)
+        return 2
+    if row["state"] == "awaiting-signoff":
+        row["awaiting_since"] = time.time()
+    save_row(row)
+    cmd_render([])
+    print(f"added {rid} -> {row['state']}\n"
+          f"  the matching deadline, if it has a real date: dl add … --source cc-mission:{rid}")
+    return 0
+
+
 def cmd_seed(_args: list[str]) -> int:
     """Seed the rows the 2026-09-09 investigation measured. Idempotent: never
     overwrites a row that already exists, so a re-run cannot erase progress."""
@@ -528,6 +594,8 @@ USAGE = """cc-mission — the customer deal board (the one queue that outranks c
                              exists; CC_MISSION_COMPACT=1|0 overrides)
   cc-mission touch <id> [--state <s>] [--next <t>] [--headline <t, <=200 chars>] [--ask-sent]
   cc-mission seed            create the measured starting rows (idempotent)
+  cc-mission add <id> --lead <l> --venue <v> --artifact <a> [--tenant <t>] [--repo <p>]
+                     [--state <s>] [--owner <o>] [--budget-days N] [--next <t>] [--path <p>]...
 
   cc-signoff <id> --evidence <url|sha>    OPERATOR ONLY — the only path to `signed`
 """
@@ -535,7 +603,7 @@ USAGE = """cc-mission — the customer deal board (the one queue that outranks c
 
 def main() -> int:
     cmds = {"render": cmd_render, "next": cmd_next, "list": cmd_list,
-            "show": cmd_show, "touch": cmd_touch, "seed": cmd_seed}
+            "show": cmd_show, "touch": cmd_touch, "seed": cmd_seed, "add": cmd_add}
     if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help", "help"):
         print(USAGE)
         return 0
