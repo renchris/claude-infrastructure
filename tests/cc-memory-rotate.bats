@@ -1140,7 +1140,7 @@ mkdlitem() { # <state> <source> — one dl item in a fixture store
 
 @test "durability: a memory file cited by an OPEN dl item is demoted last, with no project scan" {
   export DL_DIR="$BATS_TEST_TMPDIR/dl"
-  mkdlitem open "~/.claude/projects/x/memory/wired.md:3"
+  mkdlitem open "projects/x/memory/wired.md:3"
   d="$(mkmem dldur1)"
   addentry "$d" wired.md project old "a rule a deadline depends on $(pad 100)"
   addentry "$d" orphan.md project old "a rule nothing cites $(pad 100)"
@@ -1155,7 +1155,7 @@ mkdlitem() { # <state> <source> — one dl item in a fixture store
 
 @test "control: the same citation on a CLOSED dl item protects nothing" {
   export DL_DIR="$BATS_TEST_TMPDIR/dl"
-  mkdlitem done "~/.claude/projects/x/memory/wired.md:3"
+  mkdlitem "done" "projects/x/memory/wired.md:3"
   d="$(mkmem dldur2)"
   addentry "$d" wired.md project old "a rule a deadline depends on $(pad 100)"
   addentry "$d" orphan.md project old "a rule nothing cites $(pad 100)"

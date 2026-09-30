@@ -48,7 +48,7 @@ setup() {
 @test "A11 via the sweep: only authority + dmarc=pass + verbatim date is admitted; the rest are proposals" {
   run "$SWEEP"
   [ "$status" -eq 0 ]
-  [ "$(ls "$DL_DIR/items" | wc -l | tr -d ' ')" -eq 1 ]
+  [ "$(find "$DL_DIR/items" -type f -name "*.json" | wc -l | tr -d ' ')" -eq 1 ]
   item="$(cat "$DL_DIR"/items/*.json)"
   [ "$(printf '%s' "$item" | jq -r .title)" = "File the fixture extension return" ]
   [ "$(printf '%s' "$item" | jq -r '.source[0]')" = "graph:AAMk-irs" ]
