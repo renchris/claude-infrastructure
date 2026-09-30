@@ -88,6 +88,14 @@ sess() {
             '{"type":"assistant","message":{"stop_reason":"end_turn","content":[{"type":"text"}]}}' > "$tx" ;;
     busy) printf '%s\n' '{"type":"assistant","message":{"stop_reason":"tool_use","content":[{"type":"tool_use"}]}}' > "$tx" ;;
     none) rm -f "$tx" ;;
+    # D4.3: the shape a session leaves when it dies on its cap — at rest by lru_at_rest's own rule
+    limited) printf '%s\n' '{"type":"user","message":{"content":"hi"}}' \
+            '{"type":"assistant","isApiErrorMessage":true,"error":"rate_limit","message":{"stop_reason":"stop_sequence","content":[{"type":"text","text":"You have hit your limit"}]}}' > "$tx" ;;
+    recovered) printf '%s\n' '{"type":"assistant","isApiErrorMessage":true,"error":"rate_limit","message":{"stop_reason":"stop_sequence","content":[{"type":"text"}]}}' \
+            '{"type":"user","message":{"content":"continue"}}' \
+            '{"type":"assistant","message":{"stop_reason":"end_turn","content":[{"type":"text"}]}}' > "$tx" ;;
+    limited-typed) printf '%s\n' '{"type":"assistant","isApiErrorMessage":true,"error":"rate_limit","message":{"stop_reason":"stop_sequence","content":[{"type":"text"}]}}' \
+            '{"type":"user","message":{"content":"are you there"}}' > "$tx" ;;
   esac
   LASTPID="$pid"
 }
@@ -777,4 +785,25 @@ STUB
   run bash "$LRU" --drive abcd1234-0000-4000-8000-000000000030 703
   kill "$LIVE_PID" 2>/dev/null || true
   grep -qx 'bgwork=on' "$BATS_TEST_TMPDIR/bg.log" || { cat "$BATS_TEST_TMPDIR/bg.log"; false; }
+}
+
+# ── D4.3 (LIMIT_RECOVER_FLEET_V2 W6b): a rate-limited session is never "idle" ──────────────────────
+@test "[D4.3] a session whose last assistant record is a rate-limit error is RATE-LIMITED, never UPGRADE" {
+  sess 781 d4d4d4d4-0000-4000-8000-000000000001 "$OLD --permission-mode auto --model claude-opus-5 --effort high" limited
+  sess 782 d4d4d4d4-0000-4000-8000-000000000002 "$OLD --permission-mode auto --model claude-opus-5 --effort high" limited-typed
+  census
+  [ "$(disp_of 781)" = rate-limited ] || { echo "$output"; false; }
+  [ "$(disp_of 782)" = rate-limited ] || { echo "a typed prompt is not a fresh assistant turn: $output"; false; }
+}
+
+@test "D4.3 CONTROL: a fresh assistant turn after the limit error ends it — UPGRADE again" {
+  sess 783 d4d4d4d4-0000-4000-8000-000000000003 "$OLD --permission-mode auto --model claude-opus-5 --effort high" recovered
+  census
+  [ "$(disp_of 783)" = upgrade ] || { echo "$output"; false; }
+}
+
+@test "[D4.3] auto-enqueue does not queue a rate-limited session" {
+  sess 784 d4d4d4d4-0000-4000-8000-000000000004 "$OLD --model claude-opus-5 --effort high" limited
+  run bash "$LRU" --auto-enqueue
+  [ ! -e "$LRU_STATE/upgrade-queue/auto-upgrade-d4d4d4d4-0000-4000-8000-000000000004.json" ] || { echo "queued a limited session: $output"; false; }
 }

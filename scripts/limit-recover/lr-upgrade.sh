@@ -229,6 +229,23 @@ lru_at_rest() { # $1=transcript → 0 at rest · 1 in flight · 2 unreadable
   return 1
 }
 
+# ── is the session sitting on a RATE LIMIT (W6b, D4.3) ──────────────────────────────────────────
+# lru_at_rest counts an api-error tail as at rest, and nothing in this file asked WHICH error: so a
+# held, limited lead and its members could be queued by the auto-trigger, /exit'ed and relaunched onto
+# the same still-limited account — where the relaunched lead cannot hear its pane members. The rule:
+# the newest main-thread ASSISTANT record is a rate-limit API error (`error:"rate_limit"` or status
+# 429). A fresh assistant turn after it ends the state; a user record typed after it does not.
+# Latent today (11 sids queued by UPGRADE-AUTO on 2026-09-29, none limited when queued; 0715cd0c was
+# limited two minutes after its last queue), which is why it is closed before the census can meet one.
+lru_rate_limited() { # $1=transcript → 0 limited · 1 not (or unreadable: the census judges that elsewhere)
+  local tx="${1:-}" last
+  [ -n "$tx" ] && [ -f "$tx" ] && command -v jq >/dev/null 2>&1 || return 1
+  last="$(tail -n 400 "$tx" 2>/dev/null | jq -rc 'select(.type=="assistant" and ((.isSidechain // false)|not))
+            | if (.isApiErrorMessage // false) and ((.error // "") == "rate_limit" or (.apiErrorStatus // 0) == 429)
+              then "limit" else "turn" end' 2>/dev/null | tail -n 1)"
+  [ "$last" = limit ]
+}
+
 # ── the process snapshot: ONE ps, then every question is asked of the snapshot ──────────────────
 # THE SELF-MATCH TRAP (brief item, measured 2026-09-22): `ps … | grep -- "--parent-session-id $sid"`
 # lists the grep ITSELF, because ps runs concurrently with it and the pattern is in grep's argv — so
@@ -589,6 +606,7 @@ EOF
       if [ -z "$disp" ]; then
         tx="$(lru_transcript "$cfg" "$sid" || true)"
         if [ -z "$tx" ]; then disp=no-transcript
+        elif lru_rate_limited "$tx"; then disp=rate-limited      # D4.3: never "idle" on its limit error
         elif ! lru_at_rest "$tx"; then
           case "$hostpids" in *" $pid "*) disp=bg-host ;; *) disp=mid-turn ;; esac
         fi
