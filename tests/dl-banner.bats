@@ -80,12 +80,12 @@ latch() { cat "$DL_DIR/.state/banner-latch" 2>/dev/null; }
 }
 
 # ── A13: byte-identical without banner.txt ────────────────────────────────────────────────────────
-@test "A13: with banner.txt absent the hook's stdout is byte-identical to trunk's hook" {
-  git -C "$REPO" cat-file -e origin/main:hooks/accounts-board.sh 2>/dev/null || skip "no origin/main"
-  git -C "$REPO" show 2792a2911:hooks/accounts-board.sh > "$D/before.sh" 2>/dev/null \
-    || git -C "$REPO" show origin/main:hooks/accounts-board.sh > "$D/before.sh"
+@test "A13: with banner.txt absent the hook's stdout is byte-identical to the pre-change hook" {
+  # The pre-change hook, replayed from a LITERAL sha (W1's last commit before this wave), and
+  # proven to be pre-change by the marker the change introduced.
+  git -C "$REPO" show 2792a2911:hooks/accounts-board.sh > "$D/before.sh"
   chmod +x "$D/before.sh"
-  grep -q 'dl_banner' "$D/before.sh" && skip "trunk already carries the banner; compare against a pre-banner sha"
+  ! grep -q 'dl_banner' "$D/before.sh" || false
   for src in startup resume clear compact; do
     for state in fresh empty; do
       if [ "$state" = empty ]; then : > "$CC_ACCOUNTS_BOARD"; else printf 'board\nZZ\n' > "$CC_ACCOUNTS_BOARD"; fi
