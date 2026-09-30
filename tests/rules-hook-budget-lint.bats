@@ -269,6 +269,20 @@ S_=.claude/rules/agent-operating-lessons-situational.md
   [[ "$output" != *"RESIDENT ADD"* ]] || false
 }
 
+@test "--own-range: rewording an existing resident hook (same link) is not an add" {
+  d="$(_resident_fixture "printf '# r\n\n- [A](../../docs/lessons/a.md) — rule a, now wider.\n' > $R_")"
+  cd "$d"; run "$LINT" --file "$R_" --own-range HEAD~1..HEAD
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *"RESIDENT ADD"* ]] || false
+}
+
+@test "--own-range: swapping a resident hook for one with a NEW link is still an add" {
+  d="$(_resident_fixture "printf '# r\n\n- [N](../../docs/lessons/n.md) — new.\n' > $R_")"
+  cd "$d"; run "$LINT" --file "$R_" --own-range HEAD~1..HEAD
+  [ "$status" -eq 1 ] || false
+  [[ "$output" == *"RESIDENT ADD"*"- [N](../../docs/lessons/n.md)"* ]] || false
+}
+
 @test "--own-range: a new bullet in the situational file is not a resident add" {
   d="$(_resident_fixture "printf -- '- [N](../../docs/lessons/n.md) — new.\n' >> $S_")"
   cd "$d"; run "$LINT" --file "$S_" --own-range HEAD~1..HEAD

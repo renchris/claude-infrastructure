@@ -58,7 +58,8 @@
 #
 # RESIDENT ADDS. Under --own-range, a bullet the range adds to the resident file is refused unless
 # the same range removes that line from one of the two files (a move or a re-indent, as the split
-# itself does). New lessons go to the situational file; copies of the rotor, drain and nudge that
+# itself does), or removes a bullet with the same link target (an in-place edit of an existing
+# hook, which is not a new lesson). New lessons go to the situational file; copies of the rotor, drain and nudge that
 # predate the split keep appending to the resident file until their sessions end, and this is what
 # stops them. RULES_RESIDENT_ADD_OK=1 turns it advisory for a lesson that really must load in every
 # session.
@@ -305,11 +306,12 @@ resident_adds() {
     echo "rules-hook-budget-lint: NON-VERDICT — could not read the diff for $OWN_RANGE -- $res $sit" >&2; return 2; }
   hits=$(printf '%s\n' "$d" | awk -v resbase="$(basename "$res")" '
     function norm(x) { sub(/^[ \t]+/, "", x); sub(/[ \t\r]+$/, "", x); return x }
+    function tgt(x) { return match(x, /\]\([^)]*\)/) ? substr(x, RSTART + 2, RLENGTH - 3) : "" }
     /^\+\+\+ / { p = $2; n = split(p, a, "/"); cur = a[n]; next }
     /^--- / { next }
-    /^-/ { rm[norm(substr($0, 2))] = 1; next }
+    /^-/ { l = norm(substr($0, 2)); rm[l] = 1; t = tgt(l); if (t != "" && t != ".") rmt[t] = 1; next }
     /^\+/ { if (cur == resbase) { l = norm(substr($0, 2)); if (l ~ /^- /) add[++k] = l }; next }
-    END { for (i = 1; i <= k; i++) if (!(add[i] in rm)) print add[i] }')
+    END { for (i = 1; i <= k; i++) if (!(add[i] in rm) && !(tgt(add[i]) in rmt)) print add[i] }')
   [ -n "$hits" ] || return 0
   local tag="" rc=1
   if [ "${RULES_RESIDENT_ADD_OK:-0}" = 1 ]; then tag="advisory: "; rc=0; fi
