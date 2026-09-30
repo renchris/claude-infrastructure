@@ -1241,6 +1241,12 @@ lrh_precheck() { # → 0 admitted (token minted) / 6 HELD|REFUSED|PARKED, nothin
     out="$("$hf" --probe-recycle-preconditions --source-pane "$SOURCE_PANE" --source-session "$SID" ${probe_extra[@]+"${probe_extra[@]}"} 2>&1)" || rc=$?
     printf '%s\n' "$out" | sed 's/^/lr-handoff: precheck /' >&2
     state="$(printf '%s\n' "$out" | sed -n 's/^verdict: //p' | tail -1)"
+    # FOCUS AND OPERATOR IDLE TIME, ON EVERY DISPATCH (FLEET_V2 W6, D7.5): the later idle-time rule
+    # (move a focused pane only after N s of no input) is decided from these rows. A probe that
+    # refused before its focus read prints neither, and the row says `unread`.
+    lrh_foc="$(printf '%s\n' "$out" | sed -n 's/^focused: //p' | tail -1)"
+    lrh_idle="$(printf '%s\n' "$out" | sed -n 's/^hid_idle_s: //p' | tail -1)"
+    lrh_state probed focus "focused=${lrh_foc:-unread} hid_idle_s=${lrh_idle:-unread} verdict=${state:-none}"
     if [[ $rc -ne 0 ]]; then
       echo "lr-handoff: PRECHECK ${state:-REFUSED:unknown} — NOTHING has been transplanted, no lock and no tombstone were written, and the source session is untouched." >&2
       lrh_state "${state%%:*}" precheck "${state:-REFUSED:unknown}"

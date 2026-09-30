@@ -47,7 +47,7 @@ setup() {
 printf '%s\n' "$*" >> "${HF_LOG:?}"
 printf 'BGWORK=%s ATTEMPT=%s\n' "${CC_RECYCLE_BGWORK_ANSWER:-}" "${HF_RECYCLE_ATTEMPT:-}" >> "${HF_LOG:?}"
 case " $* " in
-  *" --probe-recycle-preconditions "*) printf 'live_subagents: 0\nverdict: OK\n'; exit 0 ;;
+  *" --probe-recycle-preconditions "*) printf 'live_subagents: 0\n%s' "${PROBE_EXTRA:-}"; printf 'verdict: OK\n'; exit 0 ;;
 esac
 [ -n "${TOMB_CHECK:-}" ] && [ -e "$TOMB_CHECK" ] && echo "tombstone-present-at-fire" >> "${HF_LOG:?}"
 if [ -n "${HF_HELD_CLASS:-}" ]; then
@@ -396,6 +396,20 @@ STUB
   [[ "$output" == *"abort refused (rc 2"* ]] || { echo "$output"; false; }
   [[ "$output" != *"verdict=STRANDED"* ]] || { echo "$output"; false; }
   grep -q -- '--phase abort --sid '"$SID"' ' "$TX_LOG" || { cat "$TX_LOG"; false; }
+}
+
+# D7.5 (FLEET_V2 W6): the probe's focus and operator-idle lines land in the run's own state log on every
+# dispatch, before the LR_MOVE_FOCUSED flip. Mutant: drop the `lrh_state probed focus` row.
+@test "D7.5 the probe's focused: and hid_idle_s: lines become a state row; a probe without them says unread" {
+  LRH_PRECHECK=on PROBE_EXTRA=$'focused: yes\nhid_idle_s: 12\n' fire
+  [ "$status" -eq 0 ] || { echo "status=$status $output"; false; }
+  local ev
+  ev="$(last_match "$HOME/.reso/limit-recover/$SID"/bundle-*/events.jsonl)"
+  [ -n "$ev" ] || { find "$HOME/.reso" 2>&1 | head; false; }
+  grep -q '"stage":"focus","detail":"focused=yes hid_idle_s=12 verdict=OK"' "$ev" || { cat "$ev"; false; }
+  LRH_PRECHECK=on fire
+  ev="$(last_match "$HOME/.reso/limit-recover/$SID"/bundle-*/events.jsonl)"
+  grep -q '"detail":"focused=unread hid_idle_s=unread verdict=OK"' "$ev" || { cat "$ev"; false; }
 }
 
 # ── LR_PLACED_BY=reconciler ───────────────────────────────────────────────────────────────────
