@@ -540,6 +540,16 @@ for f in "$REPO"/scripts/*.py;    do check_one "scripts/$(basename "$f")"   "$CF
 for f in "$REPO"/scripts/limit-recover/*; do
   check_one "scripts/limit-recover/$(basename "$f")" "$CFG/scripts/limit-recover/$(basename "$f")"
 done
+# The lr_recon package (FLEET_V2 W3), linked per file into real dirs by install.sh's lr_recon leg.
+# THE FOURTH INSTANCE: f411768d7 extended install.sh and deploy-parity-assert.sh but not this file,
+# case 42 went red post-land, and the auto-revert (ada067ae2) took the deploy fix out with it —
+# leaving com.reso.lr-reconciler to import whatever an older install happened to link.
+for d in lr_recon lr_recon/tests; do
+  for f in "$REPO"/scripts/limit-recover/"$d"/*.py; do
+    [ -f "$f" ] || continue
+    check_one "scripts/limit-recover/$d/$(basename "$f")" "$CFG/scripts/limit-recover/$d/$(basename "$f")"
+  done
+done
 # THE THIRD INSTANCE OF THE DEFECT THE TWO COMMENTS ABOVE RECORD, and the first one caught by the
 # coverage arm BEFORE it could sit on trunk. `scripts/jev/` landed as a new install.sh class on
 # 2026-09-19 (the Jev evaluation shim). Its author extended install.sh AND
