@@ -931,9 +931,25 @@ _lf_one_act() {
     mech="spawn"; pane_after="new"
   fi
   local cause; cause="$(lf_idl_cause "$sid" "$t0" || true)"
+  # rc 6 IS "NOTHING MOVED", and a HOLD is its most common reason (W6b, D6.6). It used to fall to
+  # `*)` and mail `verdict=FAILED rc=6`, which reads exactly like REFUSED:not-limited — so an operator
+  # draft sitting in the pane was indistinguishable from a tool fault. The reason is lr-handoff's own
+  # `verdict: HELD:<reason>` line (the precheck probe's, prefixed `precheck `, or the post-confirm
+  # undo's); the names are frozen by resolution 15: HELD:draft, HELD:focused, HELD:team, HELD:busy.
+  local held=""
+  [ "$rc" = 6 ] && held="$(grep -o 'verdict: HELD:[A-Za-z0-9_-]*' "$rdir/$sid.stderr" 2>/dev/null | tail -1 | sed 's/^verdict: //')"
   case "$rc" in
     0) verdict="RECOVERED" ;;
     4) verdict="PARTIAL"; note="transplanted but the relaunch did not verify — source is a tombstoned husk; ${cause:-no launcher refusal in the IDL for this attempt — read the watcher log}; see $rdir/$sid.stderr" ;;
+    6) if [ -n "$held" ]; then
+         verdict="$held"; note="held before anything moved (lr-handoff rc 6) — the session is untouched in pane ${pane:--}; see $rdir/$sid.stderr"
+         if [ "$held" = HELD:draft ]; then
+           lf_draft_snapshot "$sid" "$pane" "$rdir"
+           note="$note; screen kept at ${LF_DRAFT_SNAP:-<not captured>}${LF_DRAFT_ROW:+; draft: $LF_DRAFT_ROW}"
+         fi
+       else
+         verdict="FAILED"; note="lr-handoff rc=6${cause:+; $cause}; see $rdir/$sid.stderr"
+       fi ;;
     *) verdict="FAILED"; note="lr-handoff rc=$rc${cause:+; $cause}; see $rdir/$sid.stderr" ;;
   esac
   # A PROOF THAT CAN FAIL. `pane_after` was initialised to `pane` and only ever moved when
@@ -1079,6 +1095,25 @@ lf_nudge() { # $1=sid $2=holder cfg $3=source acct $4=pane → 0 engaged · 1 no
   lf_row "$sid" "$pane" "$pane" "$acct" "$hacct" "nudge-in-place/UNPROVEN" \
     "typed a continue prompt in pane $pane on $hacct (cc_tui_submit rc $rc) but no assistant turn followed within ${max}s"
   return 1
+}
+# ── A DRAFT HOLD KEEPS THE SCREEN (W6b, D6.7) ─────────────────────────────────────────────────────
+# Draft stash stays off (ruling 6), so the operator's unsent text exists only in the pane's memory.
+# At the hold, the raw --ansi screen is written under ~/.claude/logs/composer-snapshots/ and the
+# de-fainted draft row is lifted for the page. A read only — it types nothing, and a capture that
+# fails leaves the hold exactly as it was. Focus rides along from the probe's own `focused:` line so
+# the revisit counter can tell an unfocused pane from one the operator was typing in.
+LF_DRAFT_SNAP=""; LF_DRAFT_ROW=""
+lf_draft_snapshot() { # $1=sid $2=pane $3=run dir → sets LF_DRAFT_SNAP / LF_DRAFT_ROW; always 0
+  local sid="$1" pane="$2" rdir="$3" lcs="" c foc
+  LF_DRAFT_SNAP=""; LF_DRAFT_ROW=""
+  for c in "${LF_COMPOSER_SNAPSHOT:-}" "$LR/../lib/lr-composer-snapshot.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/lr-composer-snapshot.sh" "$HOME/.claude/scripts/lib/lr-composer-snapshot.sh"; do
+    [ -n "$c" ] && [ -f "$c" ] && { lcs="$c"; break; }
+  done
+  [ -n "$lcs" ] || { echo "lr-fleet: lr-composer-snapshot.sh unreachable — the held draft's screen was not kept" >&2; return 0; }
+  foc="$(sed -n 's/.*precheck focused: \([01]\).*/\1/p' "$rdir/$sid.stderr" 2>/dev/null | tail -1)"
+  LF_DRAFT_SNAP="$(bash "$lcs" snap "$pane" "$sid" HELD:draft --focused "$foc" --limited 1 2>>"$rdir/$sid.stderr" || true)"
+  [ -n "$LF_DRAFT_SNAP" ] && LF_DRAFT_ROW="$(bash "$lcs" row "$LF_DRAFT_SNAP" 2>/dev/null | head -1 | cut -c1-160 || true)"
+  return 0
 }
 # STRANDED IS A FAILED ROW, NEVER A RELAUNCH FROM HERE. The source pane is gone, so an in-place
 # recycle has nowhere to type, and a new window opened by an unattended driver is a second live copy
@@ -1498,6 +1533,9 @@ EOF
         # Nothing was attempted: the reconciler owns the sid (§C10). FAILED would page for a fence
         # doing its job.
         *DEFERRED)   _lf_v=DEFERRED ;;
+        # A HOLD names its reason in the token itself (D6.6, resolution 15): HELD:draft is a person's
+        # unsent text, HELD:team a lead with live members — never the FAILED of a broken tool.
+        */HELD:*)    _lf_v="${_lf_mv##*/}" ;;
         '')        _lf_v=FAILED; _lf_note="${_lf_note:-no results row was written — the driver died before lf_one returned}" ;;
         *)           _lf_v=FAILED ;;
       esac

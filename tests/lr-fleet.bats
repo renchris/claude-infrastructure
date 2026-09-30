@@ -61,6 +61,10 @@ printf '%s\n' "$*" >> "${LRH_LOG:?}"
 case "${LRH_MODE:-inplace}" in
   inplace) echo "lr-handoff: recycled IN PLACE — pane X continues session Y" >&2 ;;
   replace) echo "lr-handoff: REPLACED in place — successor pane 701 fired beside source pane 616 on 'next3'" >&2 ;;
+  # D6.6: the precheck probe's own lines, as lr-handoff re-prints them (prefixed `precheck `)
+  held) echo "lr-handoff: precheck focused: ${LRH_FOCUSED:-0}" >&2
+        [ -n "${LRH_HELD:-}" ] && echo "lr-handoff: precheck verdict: $LRH_HELD" >&2
+        echo "lr-handoff: PRECHECK ${LRH_HELD:-REFUSED:not-limited} — NOTHING has been transplanted" >&2 ;;
 esac
 echo "/bundle/path"
 exit "${LRH_RC:-0}"
@@ -1922,3 +1926,47 @@ one_slots_held() { # $1 = holder pid for slot-1 and slot-2
   [[ "$output" == *"for >600s — STEALING"* ]] || { echo "$output"; false; }
 }
 
+# ══ D6.6 / D6.7 (LIMIT_RECOVER_FLEET_V2 W6b): a HOLD names itself, and a draft hold keeps the screen ═
+held_notify_stub() {
+  export CC_NOTIFY_BIN="$BATS_TEST_TMPDIR/cc-notify" NOTIFY_LOG="$BATS_TEST_TMPDIR/notify.log"; : > "$NOTIFY_LOG"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$NOTIFY_LOG"\n' > "$CC_NOTIFY_BIN"; chmod +x "$CC_NOTIFY_BIN"
+  export LF_COMPOSER_SNAPSHOT="$BATS_TEST_TMPDIR/lcs" LCS_LOG="$BATS_TEST_TMPDIR/lcs.log"; : > "$LCS_LOG"
+  cat > "$LF_COMPOSER_SNAPSHOT" <<'SH'
+printf '%s\n' "$*" >> "${LCS_LOG:?}"
+case "$1" in snap) echo "/snaps/win616.ansi" ;; row) echo "half a reply, café" ;; esac
+SH
+}
+held_run() { # $1 = the HELD token lr-handoff prints (empty = none); $2 = focus
+  run env LR_FLEET_DETACHED=1 LRH_MODE=held LRH_RC=6 LRH_HELD="$1" LRH_FOCUSED="${2:-0}" \
+    bash "$FLEET" --one "$SID" --target next3 --source-pane 616
+}
+
+@test "[D6.6] a precheck HELD:draft is verdict=HELD:draft in the row AND the mail — never FAILED rc=6" {
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"; held_notify_stub
+  held_run HELD:draft
+  [ "$status" -eq 6 ] || { echo "$output"; false; }
+  grep -q 'recycle-in-place/HELD:draft' "$(cat "$LR_STATE_DIR/fleet/last")/results.tsv" || { cat "$(cat "$LR_STATE_DIR/fleet/last")/results.tsv"; false; }
+  grep -q 'verdict=HELD:draft rc=6' "$NOTIFY_LOG" || { cat "$NOTIFY_LOG"; false; }
+  ! grep -q 'verdict=FAILED' "$NOTIFY_LOG"
+}
+
+@test "D6.6: HELD:team is its own token, and takes no draft snapshot" {
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"; held_notify_stub
+  held_run HELD:team
+  grep -q 'verdict=HELD:team rc=6' "$NOTIFY_LOG" || { cat "$NOTIFY_LOG"; false; }
+  [ ! -s "$LCS_LOG" ] || { echo "a team hold captured a screen: $(cat "$LCS_LOG")"; false; }
+}
+
+@test "D6.6 CONTROL: rc 6 with no HELD line (a REFUSED precheck) is still FAILED" {
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"; held_notify_stub
+  held_run ""
+  grep -q 'verdict=FAILED rc=6' "$NOTIFY_LOG" || { cat "$NOTIFY_LOG"; false; }
+}
+
+@test "[D6.7] a HELD:draft keeps the pane's screen — pane, sid and focus reach the snapshot, the row names it" {
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"; held_notify_stub
+  held_run HELD:draft 0
+  grep -q "^snap 616 $SID HELD:draft --focused 0 --limited 1$" "$LCS_LOG" || { cat "$LCS_LOG"; false; }
+  local r; r="$(cat "$(cat "$LR_STATE_DIR/fleet/last")/results.tsv")"
+  [[ "$r" == *"screen kept at /snaps/win616.ansi; draft: half a reply, café"* ]] || { echo "$r"; false; }
+}
