@@ -1096,9 +1096,16 @@ land_failure_inbox() {  # $1=exit code $2=cause word
   #   (its stored command, for the record:)
   #   cmd="cd ${land_root} && "'_oh="$(git symbolic-ref -q --short HEAD 2>/dev/null || git rev-parse HEAD 2>/dev/nul …
   # ───────────────────────────────────────────────────────────────────────────────────────────────
+  # TWO EXITS BEFORE ANY WORKTREE IS TOUCHED (BACKLOG_MASTER W0 ledger-retraction.7, row 3b7e5c253f38):
+  #   · exit 0 "already on trunk" when the pinned head is an ancestor of origin/main, or trunk's live
+  #     land-content-verify says its content landed (a squash) — re-landing it could only revert trunk;
+  #   · exit 12 when a REGISTERED worktree already holds the branch and is dirty. `worktree add
+  #     --force` below would land the branch head WITHOUT that dirt, silently dropping a dead author's
+  #     uncommitted cure (measured on b7f3e1524736). The refusal names the path and its diffstat so
+  #     the drain worker commits the dirt forward explicitly; the author's files are never touched.
   # shellcheck disable=SC2016  # the single quotes are the POINT — $_wt/$_bw/$_tw/$_rc must survive
   # unexpanded into the stored command and be evaluated by the shell that RUNS it, not by this one.
-  cmd="cd ${land_root} && _br=${BRANCH} && _pin=${ref:-${BRANCH}} && "'git fetch origin --quiet && _wt="$(mktemp -d)" && _bw="$_wt/branch" && _tw="$_wt/trunk" && { git worktree add --force "$_bw" "$_br" >/dev/null 2>&1 || git worktree add --force -B "$_br" "$_bw" "$_pin" >/dev/null; } && git worktree add --detach "$_tw" origin/main >/dev/null && ( cd "$_bw" && bash "$_tw/scripts/ship-land.sh" ); _rc=$?; [ -n "${_bw:-}" ] && git worktree remove --force "$_bw" >/dev/null 2>&1; [ -n "${_tw:-}" ] && git worktree remove --force "$_tw" >/dev/null 2>&1; [ -n "${_wt:-}" ] && rmdir "$_wt" 2>/dev/null; exit $_rc'
+  cmd="cd ${land_root} && _br=${BRANCH} && _pin=${ref:-${BRANCH}} && "'git fetch origin --quiet && _lcv="$HOME/.claude/scripts/land-content-verify.sh" && { if git merge-base --is-ancestor "$_pin" origin/main 2>/dev/null || { [ -x "$_lcv" ] && bash "$_lcv" "$_pin" --no-fetch --repo . >/dev/null 2>&1; }; then echo "already on trunk: $_pin — nothing to re-land"; exit 0; fi; } && { _dw=""; while read -r _k _v; do case "$_k" in worktree) _cw="$_v" ;; branch) [ "$_v" = "refs/heads/$_br" ] && _dw="$_cw" ;; esac; done < <(git worktree list --porcelain); true; } && { if [ -n "$_dw" ] && [ -n "$(git -C "$_dw" status --porcelain 2>/dev/null)" ]; then echo "re-land REFUSED (rc 12): the author worktree $_dw holds uncommitted work on $_br — commit it forward there, then re-run this recipe:" >&2; git -C "$_dw" diff --stat HEAD >&2; exit 12; fi; } && _wt="$(mktemp -d)" && _bw="$_wt/branch" && _tw="$_wt/trunk" && { git worktree add --force "$_bw" "$_br" >/dev/null 2>&1 || git worktree add --force -B "$_br" "$_bw" "$_pin" >/dev/null; } && git worktree add --detach "$_tw" origin/main >/dev/null && ( cd "$_bw" && bash "$_tw/scripts/ship-land.sh" ); _rc=$?; [ -n "${_bw:-}" ] && git worktree remove --force "$_bw" >/dev/null 2>&1; [ -n "${_tw:-}" ] && git worktree remove --force "$_tw" >/dev/null 2>&1; [ -n "${_wt:-}" ] && rmdir "$_wt" 2>/dev/null; exit $_rc'
   # A FIXTURE pipeline must never file into the operator's live ledger — tests/ship-land.bats
   # drives ~50 of them, several deliberately non-zero. Same discipline as gate_home_setup's
   # bats detection, and `on` forces it so the suite can prove the real thing against its own
@@ -1803,7 +1810,52 @@ with open(sys.argv[3], "a") as log:
     fi
   fi
 
+  land_retract_rows "$TRUNK" || true
   echo "✓ ship-land: LANDED $(git rev-parse --short "$LANDED_HEAD") → origin/$TRUNK; content-verified; sweep=$sweep_field."
+  return 0
+}
+
+# land_retract_rows <trunk> — after a CONTENT-VERIFIED land, close the ledger rows it makes moot
+# (BACKLOG_MASTER W0 ledger-retraction.7 + .8). Two kinds, both checked by cc-backlog itself:
+#   · this branch's own open `re-land <branch>` rows, closed `--kind falsified --pointer stored`, so
+#     each closes only if ITS stored land-content-verify probe exits 0 now. Until this ran, a re-land
+#     row outlived the author's own successful retry (11843e7ebef1 and 4e327234f4b1, 2026-09-30).
+#   · every `Closes-backlog: <id>` trailer in the landed range, closed `--kind landed` with the
+#     landed sha, which cc-backlog verifies is an ancestor of origin/<trunk>.
+# Fail-open everywhere: one log line per row, never the land's exit code. Fixtures never reach the
+# live ledger (same guard as land_failure_inbox; SHIP_LAND_FAILURE_INBOX=on forces it for a suite).
+land_retract_rows() {
+  local trunk="$1" bl rows id tid ids short
+  if [[ -n "${BATS_TEST_TMPDIR:-}${BATS_SUITE_TMPDIR:-}" && "${SHIP_LAND_FAILURE_INBOX:-auto}" != "on" ]]; then
+    return 0
+  fi
+  [[ "${SHIP_LAND_FAILURE_INBOX:-auto}" = "off" ]] && return 0
+  bl="${CC_BACKLOG_BIN:-$HOME/.claude/bin/cc-backlog}"
+  [[ -x "$bl" && -n "${LANDED_HEAD:-}" ]] || return 0
+  short="$(git rev-parse --short "$LANDED_HEAD" 2>/dev/null || printf '%s' "$LANDED_HEAD")"
+  if [[ -n "${BRANCH:-}" ]]; then
+    rows="$("$bl" list --all --json 2>/dev/null | jq -r --arg t "re-land ${BRANCH}: ship-land could not complete and its author's pane may be gone" \
+             '.[] | select(.status != "done" and .title == $t and (.falsifier // "") != "") | .id' 2>/dev/null || true)"
+    for id in $rows; do
+      if CC_BACKLOG_KICK=off "$bl" "done" "$id" --kind falsified --pointer stored \
+           --evidence "${short}: the author re-landed ${BRANCH}; the row's own land-content-verify probe exits 0" >/dev/null 2>&1; then
+        printf '· ship-land: re-land row %s CLOSED — %s is now on %s\n' "$id" "$BRANCH" "$trunk" >&2
+      else
+        printf '· ship-land: re-land row %s left open — its stored probe does not pass yet\n' "$id" >&2
+      fi
+    done
+  fi
+  [[ -n "${ATTEST_BASE:-}" && "$ATTEST_BASE" != "?" ]] || return 0
+  ids="$(git log --format='%(trailers:key=Closes-backlog,valueonly)' "${ATTEST_BASE}..${LANDED_HEAD}" 2>/dev/null \
+         | grep -owE '[0-9a-f]{12}' | sort -u || true)"
+  for tid in $ids; do
+    if CC_BACKLOG_KICK=off CC_BACKLOG_CLOSE_REPO="$REPO_ROOT" "$bl" "done" "$tid" --kind landed --pointer "$LANDED_HEAD" \
+         --evidence "${short}: landed with a Closes-backlog trailer; content-verified by ship-land" >/dev/null 2>&1; then
+      printf '· ship-land: backlog %s CLOSED by its Closes-backlog trailer (%s)\n' "$tid" "$short" >&2
+    else
+      printf '· ship-land: backlog %s named by a Closes-backlog trailer could NOT be closed — close it by hand\n' "$tid" >&2
+    fi
+  done
   return 0
 }
 

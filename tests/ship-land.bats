@@ -4368,3 +4368,99 @@ _dl_settle() {  # the fire is DETACHED; wait for the marker rather than racing i
     false
   fi
 }
+
+# ── ledger-retraction.7/.8 (BACKLOG_MASTER W0): a re-land never reverts trunk, never drops a dead
+# author's dirt, and a land closes the rows it makes moot ─────────────────────────────────────────
+_w0_fail_land() { # <branch> <file> — commit an SC2164 script so the gate is RED (rc 6), row filed
+  git checkout -q -b "$1" main
+  mkdir -p scripts
+  cp "$REPO/scripts/land-content-verify.sh" scripts/land-content-verify.sh
+  chmod +x scripts/land-content-verify.sh
+  printf '#!/usr/bin/env bash\ncd /tmp/nope\necho ok\n' > "$2"
+  git add -A && git commit -q -m "feat: $2"
+  run env SHIP_LAND_FAILURE_INBOX=on CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl" \
+      bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+}
+
+@test "W0 re-land: content squash-landed after filing ⇒ the stored recipe exits 0 'already on trunk', trunk untouched" {
+  _w0_fail_land feat/w6a-shape badw6a.sh
+  cmd="$(_reland_run_of "$BATS_TEST_TMPDIR/backlog.jsonl")"
+  [ -n "$cmd" ] && [ "$cmd" != null ] || false
+  # the same CONTENT lands on trunk under a DIFFERENT sha (the w6a case)
+  git checkout -q main
+  git checkout -q feat/w6a-shape -- badw6a.sh scripts/land-content-verify.sh
+  git commit -q -m "squash of feat/w6a-shape" && git push -q origin main
+  trunk_before="$(git rev-parse origin/main)"
+  mkdir -p "$BATS_TEST_TMPDIR/fh/.claude/scripts"
+  cp "$REPO/scripts/land-content-verify.sh" "$BATS_TEST_TMPDIR/fh/.claude/scripts/"
+  run env HOME="$BATS_TEST_TMPDIR/fh" bash -c "$cmd"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"already on trunk"* ]] || false
+  git fetch -q origin
+  [ "$(git rev-parse origin/main)" = "$trunk_before" ]
+  [ -z "$(git diff origin/main)" ]
+}
+
+@test "W0 re-land: a DIRTY registered author worktree is refused (rc 12), its files byte-identical" {
+  _w0_fail_land feat/dirty-author baddirty.sh
+  cmd="$(_reland_run_of "$BATS_TEST_TMPDIR/backlog.jsonl")"
+  [ -n "$cmd" ] && [ "$cmd" != null ] || false
+  # the author's uncommitted cure, left in the worktree that holds the branch
+  printf '#!/usr/bin/env bash\ncd /tmp/nope || exit 1\necho ok\n' > baddirty.sh
+  echo "uncommitted note" > cure-notes.txt
+  before="$(shasum baddirty.sh cure-notes.txt)"
+  run bash -c "$cmd"
+  [ "$status" -eq 12 ]
+  [[ "$output" == *"re-land REFUSED (rc 12)"* ]] || false
+  [[ "$output" == *"$WORK"* ]] || false
+  [[ "$output" == *"baddirty.sh"* ]] || false
+  [ "$(shasum baddirty.sh cure-notes.txt)" = "$before" ]
+}
+
+@test "W0 re-land: the author's next successful land CLOSES its open re-land row (its probe passes)" {
+  git checkout -q main
+  mkdir -p scripts && cp "$REPO/scripts/land-content-verify.sh" scripts/ && chmod +x scripts/land-content-verify.sh
+  git add -A && git commit -q -m "chore: oracle" && git push -q origin main
+  # the origin refuses pushes while a flag exists — a transient failure the author later retries
+  printf '#!/bin/sh\n[ -e "%s" ] && { echo "refused by fixture" >&2; exit 1; }\nexit 0\n' "$BATS_TEST_TMPDIR/refuse" \
+    > "$ORIGIN/hooks/pre-receive"
+  chmod +x "$ORIGIN/hooks/pre-receive"
+  : > "$BATS_TEST_TMPDIR/refuse"
+  git checkout -q -b feat/transient main
+  echo "good" > good.txt && git add good.txt && git commit -q -m "feat: good"
+  run env SHIP_LAND_FAILURE_INBOX=on CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl" \
+      bash "$SHIPLAND" --trunk main
+  [ "$status" -ne 0 ]
+  row="$(jq -r 'select(.event=="add" and (.title|startswith("re-land feat/transient"))) | .id' "$BATS_TEST_TMPDIR/backlog.jsonl" | head -1)"
+  [ -n "$row" ]
+  rm -f "$BATS_TEST_TMPDIR/refuse"
+  run env SHIP_LAND_FAILURE_INBOX=on CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl" \
+      bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"re-land row $row CLOSED"* ]] || false
+  CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl" run bash "$REPO/bin/cc-backlog" list --all --json
+  [ "$(printf '%s' "$output" | jq -r --arg i "$row" '.[]|select(.id==$i)|.status+" "+.closeKind')" = "done falsified" ]
+}
+
+@test "W0 Closes-backlog: a trailer closes its row after a confirmed land, and never after a refused one" {
+  export CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl" CC_BACKLOG_KICK=off CC_BACKLOG_PROJECT_WARN=off \
+         CC_BACKLOG_COVERAGE_WARN=off CC_BACKLOG_PREMISE=off
+  a="$(bash "$REPO/bin/cc-backlog" add --title "trailer target a" --project work 2>/dev/null)"
+  b="$(bash "$REPO/bin/cc-backlog" add --title "trailer target b" --project work 2>/dev/null)"
+  # a REFUSED land carrying b's trailer leaves b open
+  git checkout -q -b feat/trailer-bad main
+  printf '#!/usr/bin/env bash\ncd /tmp/nope\necho ok\n' > badtrailer.sh
+  git add -A && git commit -q -m "feat: bad" -m "Closes-backlog: $b"
+  run env SHIP_LAND_FAILURE_INBOX=on bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  st() { bash "$REPO/bin/cc-backlog" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)|.status+" "+.closeKind'; }
+  [ "$(st "$b")" = "open " ]
+  # a CONFIRMED land carrying a's trailer closes a, kind landed, pointer the landed sha
+  git checkout -q -b feat/trailer-good main
+  echo t > trailer.txt && git add trailer.txt && git commit -q -m "feat: trailer" -m "Closes-backlog: $a"
+  run env SHIP_LAND_FAILURE_INBOX=on bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  [ "$(st "$a")" = "done landed" ]
+  [ "$(st "$b")" = "open " ]
+}
