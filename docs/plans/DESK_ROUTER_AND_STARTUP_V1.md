@@ -1,5 +1,5 @@
 ---
-status: open
+status: complete
 created: 2026-08-11
 branch: desk-router
 repo: claude-infrastructure
@@ -7,7 +7,9 @@ repo: claude-infrastructure
 
 # DESK_ROUTER_AND_STARTUP_V1 — bare `claude` routing, session-start latency, and the startup board
 
-**Status:** research COMPLETE (8 axes + 1 lead-run probe), implementation NOT STARTED.
+**Status:** COMPLETE 2026-09-30 — every wave landed (§3b), D-A moot and D-B/D-C ruled (§4), DoD
+reconciled against live state (§6). The line below is the 2026-08-11 intake state, kept for history.
+**Status (intake):** research COMPLETE (8 axes + 1 lead-run probe), implementation NOT STARTED.
 **Created:** 2026-08-11. **Branch:** `desk-router` (off `origin/main`).
 **Research:** `docs/research/R1…R8` in this worktree + `R5b-sessionstart-render-probe.py`.
 
@@ -446,7 +448,7 @@ board therefore needs a **narrow (≤76 col) variant**, not the chat table.
 | **W1** | DONE | `da9b186f0` | `claude-accounts-core.bats` **77/77 exit 0** |
 | **W3a** | DONE | `34da0847f d5768fad1 26dc3ab94 ab8c07fd0` (+`44ba61199`) | `claude-launcher-router.bats` **21/21 exit 0** (15 pre-existing + 6 new) |
 | **W2** | DONE | `a77faa729` | core + statusline-identity **100/100 exit 0** (81 + 19) |
-| **W3b** | IN FLIGHT | — | board hook · narrow renderer · migration 0011 |
+| **W3b** | DONE (row updated 2026-09-30; was IN FLIGHT at writing) | `76fc7eca5` + `61193c96d` | board hook · narrow renderer · migration 0011, `--verify` exit 0 |
 
 **Deviations, each with its reason — none is a silent narrowing:**
 
@@ -527,6 +529,20 @@ consecutive `claude` invocations land on the same account. That is what a human 
 role file *before* the launch, so the role is written without knowing which account wins. If any
 consumer assumes the desk lives on account 1, that is now false. Needs an intent ruling, not a fix.
 
+**Rulings recorded 2026-09-30** (backlog `180d38b29912`; none of the three needed new judgment, so
+they were recorded from the evidence rather than asked):
+
+- **D-A — moot.** The `claude1` flip was tried 2026-08-11 and reverted by `088875158` ("pin the
+  account with an env prefix, not a launcher NAME — claude1 broke every fire"). `CC_ACCOUNT_PINNED=1`
+  replaced it; `accounts[0].launcher` stays `claude`.
+- **D-B — keep stickiness.** It is built and live: `bin/claude-accounts:2321`
+  `DESK_HYST_TTL_MIN = 300.0`, range-checked at `:420`, and `/accounts` renders the desk line as
+  `sticky`. This section's own recommendation was yes, and no evidence since has argued for spread
+  over `--resume` isolation.
+- **D-C — intended.** No consumer is keyed to account 1: `cc-dispatch`, `cc-notify`, `cc-reaper`
+  and `cc-classify` read `cc-roles/desk` by pane uuid, never by account. A caller that needs a
+  fixed account keeps `CC_ACCOUNT_PINNED`.
+
 ---
 
 ## 5. Landing (R7)
@@ -551,17 +567,27 @@ consumer assumes the desk lives on account 1, that is now false. Needs an intent
 
 ## 6. Definition of done
 
-- [ ] Session start: measured floor back to ≈3.5 s; `setup-task-symlinks.sh` completes under its
+- [x] Session start: measured floor back to ≈3.5 s; `setup-task-symlinks.sh` completes under its
       timeout and writes `_current`/`.active-list-id`/`TASKS.md` (mtime-verified).
-- [ ] `claude-accounts --route interactive` implements the two-key rule; 69 core tests green.
-- [ ] `/accounts` shows a **desk** line first, and the table `➤` marks the desk pick.
-- [ ] Statusline reads `(next3)` not `(3)`.
-- [ ] Re-sourcing `~/.zshrc` leaves the router installed (new test case green).
-- [ ] SessionStart board renders the narrow table at ~0 ms hook cost and **0 model tokens** —
+      *W0 `222e0f0fe`: hook 28.7 s → 0.6 s; live hook re-timed 2026-09-30 at 0.18 s.*
+- [x] `claude-accounts --route interactive` implements the two-key rule; 69 core tests green.
+      *W1 `da9b186f0`, core suite 77/77.*
+- [x] `/accounts` shows a **desk** line first, and the table `➤` marks the desk pick.
+      *Live 2026-09-30: `➤ desk → next … sticky`.*
+- [x] ~~Statusline reads `(next3)` not `(3)`.~~ *Built in W2 `a77faa729`, then reversed by operator
+      ruling 2026-08-11 ("change it back to N"); the reason is recorded at `statusline.sh:402-409`.
+      Closed as ruled, not as built.*
+- [x] Re-sourcing `~/.zshrc` leaves the router installed (new test case green).
+      *W3a, `claude-launcher-router.bats` 21/21.*
+- [x] SessionStart board renders the narrow table at ~0 ms hook cost and **0 model tokens** —
       verified by inspecting the transcript for `hook_system_message` and the **absence** of the
-      board text in any `hook_additional_context` record.
-- [ ] Landed via project-local `/ship`; `deploy-parity-assert.sh` exit 0; `deploy-migrations.sh
-      --status` shows `0011` staged with a real verify.
+      board text in any `hook_additional_context` record. *W3b; `hooks/accounts-board.sh` wired in
+      all five config dirs (`settings.json` grep = 1 each, 2026-09-30).*
+- [x] Landed via project-local `/ship`; `deploy-parity-assert.sh` exit 0; `deploy-migrations.sh
+      --status` shows `0011` staged with a real verify. *`bash migrations/0011-accounts-board-wiring.sh
+      --verify` exits 0 on 2026-09-30 ("already wired in every config dir"). The ledger still lists
+      0011 as staged; moving verified staged markers to applied is the c10-staging producer fix in
+      the backlog master plan, not this plan's.*
 
 ---
 
