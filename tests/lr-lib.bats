@@ -682,3 +682,79 @@ bare_fixture() { # $1=dir → a normal checkout with a commit (reflog), then fli
   [ "$status" -eq 0 ]
   [ "$output" = 3 ]
 }
+
+# ── the focus gate (FLEET_V2 W6, resolution 1): one rule for every typing path ──────────────────
+# Readers are stubbed by NAME, the way callers pass theirs. Mutants: drop the LR_MOVE_FOCUSED test
+# (off stops holding) · drop the second read (a draft that appears in the gap passes) · treat
+# `unknown` as focused (the iTerm2 case holds) · read the window flag alone (a background tab holds).
+fg_focus() { printf '%s' "${FG_FOCUS:-yes}"; }
+fg_comp() { # serves the next queued read from FG_READS: "" empty · "!" unreadable · else content
+  local c; c="$(head -n 1 "$FG_READS")"; tail -n +2 "$FG_READS" > "$FG_READS.t"; mv "$FG_READS.t" "$FG_READS"
+  echo "read" >> "$FG_LOG"
+  [ "$c" = "!" ] && return 2
+  [ -z "$c" ] && return 0
+  printf '%s' "$c"; return 1
+}
+fg_world() {
+  FG_READS="$BATS_TEST_TMPDIR/fg-reads"; FG_LOG="$BATS_TEST_TMPDIR/fg-log"; : > "$FG_LOG"
+  printf '%s\n' "$@" > "$FG_READS"
+  export LR_SLEEP="$BATS_TEST_TMPDIR/fg-sleep"
+  printf '#!/usr/bin/env bash\necho "sleep $1" >> "%s"\n' "$FG_LOG" > "$LR_SLEEP"; chmod +x "$LR_SLEEP"
+}
+
+@test "focus gate: not focused or unknown proceeds without a read; focused under off is HELD:focused, nothing read" {
+  fg_world "" ""
+  unset LR_MOVE_FOCUSED
+  FG_FOCUS=no lr_focus_gate 901 fg_focus fg_comp
+  [ "$LR_FOCUS_STATE" = no ]
+  [ -z "$LR_FOCUS_HOLD" ]
+  FG_FOCUS=garbage lr_focus_gate 901 fg_focus fg_comp
+  [ "$LR_FOCUS_STATE" = unknown ]
+  [ -z "$LR_FOCUS_HOLD" ]
+  [ ! -s "$FG_LOG" ] || { cat "$FG_LOG"; false; }
+  local rc=0; lr_focus_gate 901 fg_focus fg_comp || rc=$?
+  [ "$rc" = 3 ] || { echo "rc=$rc"; false; }
+  [ "$LR_FOCUS_HOLD" = HELD:focused ] || { echo "hold=$LR_FOCUS_HOLD"; false; }
+  [ ! -s "$FG_LOG" ] || { cat "$FG_LOG"; false; }
+}
+
+@test "focus gate under on: two empty reads a gap apart proceed; a draft or an unreadable box on either read is HELD:draft" {
+  export LR_MOVE_FOCUSED=on LR_FOCUS_READ_GAP_S=10
+  fg_world "" ""
+  lr_focus_gate 901 fg_focus fg_comp
+  [ "$(tr '\n' ',' < "$FG_LOG")" = "read,sleep 10,read," ] || { cat "$FG_LOG"; false; }
+  [ "$LR_FOCUS_STATE" = yes ]
+  [ -z "$LR_FOCUS_HOLD" ]
+  local first want rc
+  for first in "" "hi"; do
+    fg_world "$first" "operator typing"
+    want="${first:-operator typing}"
+    rc=0; lr_focus_gate 901 fg_focus fg_comp || rc=$?
+    [ "$rc" = 3 ] || { echo "rc=$rc"; false; }
+    [ "$LR_FOCUS_HOLD" = HELD:draft ] || { echo "hold=$LR_FOCUS_HOLD"; false; }
+    [ "$LR_FOCUS_READ" = "$want" ] || { echo "read=[$LR_FOCUS_READ] want=[$want]"; false; }
+  done
+  fg_world "" "!"
+  rc=0; lr_focus_gate 901 fg_focus fg_comp || rc=$?
+  [ "$rc" = 3 ] || { echo "rc=$rc"; false; }
+  [ "$LR_FOCUS_READ" = "<unreadable>" ] || { echo "read=[$LR_FOCUS_READ]"; false; }
+}
+
+@test "focus gate default reader: UI focus is OS window AND tab AND window; an unparseable listing is unknown" {
+  export LR_FOCUS_LS_FILE="$BATS_TEST_TMPDIR/ls.json"
+  printf '[{"is_focused":true,"tabs":[{"is_focused":true,"windows":[{"id":901,"is_focused":true}]},{"is_focused":false,"windows":[{"id":903,"is_focused":true}]}]},{"is_focused":false,"tabs":[{"is_focused":true,"windows":[{"id":904,"is_focused":true}]}]}]\n' > "$LR_FOCUS_LS_FILE"
+  [ "$(lr_pane_focused 901)" = yes ]
+  [ "$(lr_pane_focused 903)" = no ]
+  [ "$(lr_pane_focused 904)" = no ]
+  [ "$(lr_pane_focused w1t0p0:901)" = yes ]
+  [ "$(lr_pane_focused 999)" = unknown ]
+  [ "$(lr_pane_focused abc)" = unknown ]
+  echo 'not json' > "$LR_FOCUS_LS_FILE"
+  [ "$(lr_pane_focused 901)" = unknown ]
+}
+
+@test "operator idle time: an integer passes, anything else reads unreadable, never a guessed 0" {
+  [ "$(LR_HID_IDLE_S=2044 lr_hid_idle_s)" = 2044 ]
+  [ "$(LR_HID_IDLE_S='' lr_hid_idle_s)" = unreadable ]
+  [ "$(LR_HID_IDLE_S=x lr_hid_idle_s)" = unreadable ]
+}

@@ -972,3 +972,93 @@ lr_kitty_spawn() { # $1=launcher $2=cwd $3=sid $4=target account [$5=anchor pane
     cc_log_pane_spawn "$surface" kitty "$id" "$cwd" "lr_kitty_spawn ${LR_SPAWN_SHAPE:-?}-rooted continuation_of:${sid:0:8} target:$acct${anchor:+ anchor:$anchor}"
   printf '%s' "$id"
 }
+
+# ── THE FOCUS GATE — one rule for every path that types into a live pane (FLEET_V2 W6, res. 1) ───
+# Four paths type into a pane the operator may be looking at: the poller's cc_tui_submit, the
+# in-place nudge, the HELD:team wake, and handoff-fire's /exit. Each used to decide focus for itself,
+# and a rule spelled four times is four rules (memory: sibling-auditors-must-share-the-state-model).
+# This is the ONE copy; callers pass it their own readers when they hold a better transport.
+#   focused ∉ {yes}                 → rc 0 proceed. `unknown` (iTerm2, an unreadable kitty) is NOT
+#                                     focused: refusing it would gate the whole rail on a signal it
+#                                     cannot have — the rule handoff-fire has carried since W2b.
+#   focused=yes, LR_MOVE_FOCUSED≠on → rc 3, LR_FOCUS_HOLD=HELD:focused. Nothing is read or typed.
+#   focused=yes, LR_MOVE_FOCUSED=on → two composer reads LR_FOCUS_READ_GAP_S apart (default 10);
+#                                     either one non-empty or unreadable → rc 3, HELD:draft; then
+#                                     focus is re-read and recorded in LR_FOCUS_STATE, so the state
+#                                     at the keystroke is the one that gets logged.
+# The gate's LAST read is the pre-keystroke check, so a caller runs it with nothing between it and
+# the keystroke. Call it directly, never inside `$(…)`: its verdict comes back in globals —
+# LR_FOCUS_STATE (yes|no|unknown), LR_FOCUS_HOLD ("" or the verdict), LR_FOCUS_READ (what a failed
+# read saw) — and a subshell drops them.
+# Readers, by name: $2 prints yes|no|unknown for a pane; $3 answers rc 0 empty · 1 occupied (content
+# on stdout) · 2 unreadable. Defaults: lr_pane_focused and lr_focus_composer (kitty).
+lr_pane_focused() { # $1=kitty window id → yes|no|unknown on stdout; always rc 0
+  local id="${1##*:}" kb sock js v
+  case "$id" in ''|*[!0-9]*) echo unknown; return 0 ;; esac
+  if [ -n "${LR_FOCUS_LS_FILE:-}" ]; then js="$(cat "$LR_FOCUS_LS_FILE" 2>/dev/null || true)"
+  else
+    kb="$(lr_kitty_bin 2>/dev/null)" && sock="$(lr_kitty_socket 2>/dev/null)" || { echo unknown; return 0; }
+    js="$("$kb" @ --to "$sock" ls 2>/dev/null || true)"
+  fi
+  # UI focus is the conjunction of the OS window, the tab and the window: kitty flags the active
+  # window of EVERY tab in the focused OS window (handoff-fire kt_window_field, measured in the W5
+  # rig). An absent flag does not veto; an unparseable listing is `unknown`.
+  v="$(printf '%s' "$js" | LR_FW="$id" /usr/bin/python3 -c '
+import json, os, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for ow in d:
+    for t in ow.get("tabs", []):
+        for w in t.get("windows", []):
+            if str(w.get("id")) == os.environ["LR_FW"]:
+                print("yes" if bool(w.get("is_focused")) and ow.get("is_focused", True) is not False
+                      and t.get("is_focused", True) is not False else "no")
+                sys.exit(0)' 2>/dev/null || true)"
+  case "$v" in yes|no) echo "$v" ;; *) echo unknown ;; esac
+}
+lr_focus_composer() { # $1=kitty window id → rc 0 empty · 1 occupied (content on stdout) · 2 unreadable
+  local c lib
+  if ! command -v cc_tui_composer >/dev/null 2>&1; then
+    for lib in "${LR_LIB_DIR:-}/../lib/cc-tui.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/cc-tui.sh" "$HOME/.claude/scripts/lib/cc-tui.sh"; do
+      # shellcheck disable=SC1090  # runtime-resolved library ladder
+      [ -f "$lib" ] && { . "$lib" 2>/dev/null || true; break; }
+    done
+  fi
+  command -v cc_tui_composer >/dev/null 2>&1 || return 2
+  c="$(cc_tui_composer "${1##*:}")" || return 2
+  [ -z "$c" ] && return 0
+  printf '%s' "$c"; return 1
+}
+# shellcheck disable=SC2034  # LR_FOCUS_* are the verdict globals the caller reads
+lr_focus_gate() { # $1=pane [$2=focus reader] [$3=composer reader] → 0 proceed · 3 held (LR_FOCUS_HOLD)
+  local pane="${1:-}" fr="${2:-lr_pane_focused}" cr="${3:-lr_focus_composer}" n=0 c rc
+  LR_FOCUS_STATE="$("$fr" "$pane" 2>/dev/null || true)"; LR_FOCUS_HOLD="" LR_FOCUS_READ=""
+  case "$LR_FOCUS_STATE" in yes|no) ;; *) LR_FOCUS_STATE=unknown ;; esac
+  [ "$LR_FOCUS_STATE" = yes ] || return 0
+  if [ "${LR_MOVE_FOCUSED:-off}" != on ]; then LR_FOCUS_HOLD="HELD:focused"; return 3; fi
+  while [ "$n" -lt 2 ]; do
+    [ "$n" = 1 ] && "${LR_SLEEP:-${HF_SLEEP:-sleep}}" "${LR_FOCUS_READ_GAP_S:-${HF_FOCUS_READ_GAP_S:-10}}"
+    n=$((n + 1))
+    rc=0; c="$("$cr" "$pane")" || rc=$?
+    if [ "$rc" != 0 ]; then
+      [ "$rc" = 1 ] && [ -n "$c" ] || c="<unreadable>"
+      LR_FOCUS_READ="$c"; LR_FOCUS_HOLD="HELD:draft"; return 3
+    fi
+  done
+  LR_FOCUS_STATE="$("$fr" "$pane" 2>/dev/null || true)"
+  case "$LR_FOCUS_STATE" in yes|no) ;; *) LR_FOCUS_STATE=unknown ;; esac
+  return 0
+}
+
+# OPERATOR IDLE TIME (FLEET_V2 W6, D7.5): seconds since the last keyboard/mouse input, logged beside
+# every focus read so the later idle-time rule ("move a focused pane only after N s of no input")
+# is decided from data. `unreadable` when ioreg fails — from a LaunchAgent it is unmeasured, and a
+# guessed 0 would read as "the operator is typing". LR_HID_IDLE_S is the test seam.
+lr_hid_idle_s() { # → integer seconds, or `unreadable`; always rc 0
+  local v
+  if [ -n "${LR_HID_IDLE_S+x}" ]; then v="$LR_HID_IDLE_S"
+  else v="$(/usr/sbin/ioreg -c IOHIDSystem 2>/dev/null | awk '/"HIDIdleTime"/ { print int($NF / 1000000000); exit }')"; fi
+  case "$v" in ''|*[!0-9]*) echo unreadable ;; *) echo "$v" ;; esac
+}
