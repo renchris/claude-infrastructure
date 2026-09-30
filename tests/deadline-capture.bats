@@ -54,8 +54,8 @@ queued() { [ -s "$DL_DIR/.state/capture-queue.jsonl" ] && grep -c . "$DL_DIR/.st
   tx="$(mktx "$DEFER")"
   run stop "$tx" "$PERSONAL"
   [ "$status" -eq 0 ]; blocked "$output"
-  [[ "$output" == *"dl park --resurface"* ]]
-  [[ "$output" == *"dl skip --why"* ]]
+  [[ "$output" == *"dl park --resurface"* ]] || false
+  [[ "$output" == *"dl skip --why"* ]] || false
   [ "$(jq -r .arm "$DL_DIR/.state/capture-queue.jsonl")" = b ]
   [ "$(jq -r .session_id "$DL_DIR/.state/capture-queue.jsonl")" = sid-A ]
   run stop "$tx" "$PERSONAL"
@@ -91,27 +91,29 @@ queued() { [ -s "$DL_DIR/.state/capture-queue.jsonl" ] && grep -c . "$DL_DIR/.st
 @test "arm a: a cued date inside 60 days blocks anywhere; a far date only queues" {
   run stop "$(mktx "File the FBAR by Oct 15 or the penalty applies.")" "$ELSEWHERE"
   blocked "$output"
-  [[ "$output" == *"FBAR by Oct 15"* ]]
+  [[ "$output" == *"FBAR by Oct 15"* ]] || false
   run stop "$(mktx "The lease renews 2021-08-01, due then.")" "$ELSEWHERE" sid-far
-  ! blocked "$output"
+  ! blocked "$output" || false
   [ "$(queued)" = 2 ]
 }
 
 @test "arm b outside a personal cwd blocks only beside life vocabulary" {
   run stop "$(mktx "Let's revisit the retry budget later.")" "$ELSEWHERE"
-  ! blocked "$output"
+  ! blocked "$output" || false
   run stop "$(mktx "Let's revisit the insurance renewal later.")" "$ELSEWHERE" sid-life
   blocked "$output"
 }
 
 @test "exempt: kill switch, headless transcript, fired peer — nothing blocks" {
   CC_DEADLINE_CAPTURE=off run stop "$(mktx "$DEFER")" "$PERSONAL" sid-k
-  ! blocked "$output"; [ ! -e "$DL_DIR/.state/capture-queue.jsonl" ]
+  ! blocked "$output" || false
+  [ ! -e "$DL_DIR/.state/capture-queue.jsonl" ]
   run stop "$(mktx "$DEFER" sdk-cli)" "$PERSONAL" sid-h
-  ! blocked "$output"; [ ! -e "$DL_DIR/.state/capture-queue.jsonl" ]
+  ! blocked "$output" || false
+  [ ! -e "$DL_DIR/.state/capture-queue.jsonl" ]
   jq -nc --arg c "$PERSONAL" '{cwd:$c, marker:"HANDOFF-ENGAGE-fixture"}' > "$CC_FIRED_DIR/pane-fixture.json"
   run stop "$(mktx "$DEFER")" "$PERSONAL" sid-f
-  ! blocked "$output"
+  ! blocked "$output" || false
   [ "$(queued)" = 1 ]    # a fired peer's hit is still queued; only the block is exempt
 }
 
@@ -123,7 +125,7 @@ queued() { [ -s "$DL_DIR/.state/capture-queue.jsonl" ] && grep -c . "$DL_DIR/.st
 
 @test "NAME_TELL is untouched: a naming tell alone still gets dispatch-assert's block" {
   run stop "$(mktx "The inbox guard deserves its own scoped pass.")" "$ELSEWHERE" sid-n
-  [[ "$output" == *"Dispatch-assert"* ]]
+  [[ "$output" == *"Dispatch-assert"* ]] || false
   ! blocked "$output"
 }
 

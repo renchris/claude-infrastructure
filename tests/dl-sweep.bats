@@ -56,7 +56,7 @@ setup() {
   [ "$(grep -c '"source": "sweep"' "$DL_DIR/proposals.jsonl")" -eq 3 ]
   grep -q 'no dmarc=pass' "$DL_DIR/proposals.jsonl"
   # the invented ref is dropped outright
-  ! grep -q 'invented' "$DL_DIR/proposals.jsonl"
+  ! grep -q 'invented' "$DL_DIR/proposals.jsonl" || false
   grep -q ' ok acct=fixture messages=4 candidates=4 admitted=1 proposals=3' "$DL_DIR/.state/sweep-status"
 }
 
@@ -66,8 +66,8 @@ setup() {
   p="$BATS_TEST_TMPDIR/prompt-seen.txt"
   grep -q 'You extract real-world deadlines' "$p"
   grep -q 'October 15, 2020' "$p"
-  ! grep -q 'fixture.person@example.com' "$p"
-  ! grep -q '800-555-0100' "$p"
+  ! grep -q 'fixture.person@example.com' "$p" || false
+  ! grep -q '800-555-0100' "$p" || false
   grep -q '\[email\]' "$p"; grep -q '\[number\]' "$p"
 }
 

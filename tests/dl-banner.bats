@@ -36,8 +36,8 @@ latch() { cat "$DL_DIR/.state/banner-latch" 2>/dev/null; }
   printf '%s\n' "$BANNER" > "$DL_DIR/.state/banner.txt"
   CLAUDE_CODE_ENTRYPOINT=sdk-cli run board
   [ "$status" -eq 0 ]
-  [[ "$output" == *ZZBOARDPAYLOADZZ* ]]
-  [[ "$output" != *"⏰"* ]]
+  [[ "$output" == *ZZBOARDPAYLOADZZ* ]] || false
+  [[ "$output" != *"⏰"* ]] || false
   [ -z "$(latch)" ]
 }
 
@@ -45,7 +45,8 @@ latch() { cat "$DL_DIR/.state/banner-latch" 2>/dev/null; }
   printf '%s\n' "$BANNER" > "$DL_DIR/.state/banner.txt"
   jq -nc --arg c "$WORK" '{cwd:$c, marker:"HANDOFF-ENGAGE-fixture"}' > "$CC_FIRED_DIR/pane-fixture.json"
   run board
-  [[ "$output" != *"⏰"* ]]; [ -z "$(latch)" ]
+  [[ "$output" != *"⏰"* ]] || false
+  [ -z "$(latch)" ]
   jq -nc --arg c "$D" '{cwd:$c, marker:"HANDOFF-ENGAGE-fixture"}' > "$CC_FIRED_DIR/pane-fixture.json"
   run board
   [[ "$output" == *"⏰ Pay the fixture bill"* ]]
@@ -55,10 +56,11 @@ latch() { cat "$DL_DIR/.state/banner-latch" 2>/dev/null; }
   printf '%s\n' "$BANNER" > "$DL_DIR/.state/banner.txt"
   run board
   [ "${lines[0]}" = "$BANNER" ]
-  [[ "$output" == *ZZBOARDPAYLOADZZ* ]]
-  [[ "$(latch)" == "$(date +%F) "* ]]
+  [[ "$output" == *ZZBOARDPAYLOADZZ* ]] || false
+  [[ "$(latch)" == "$(date +%F) "* ]] || false
   run board
-  [[ "$output" != *"⏰"* ]]; [[ "$output" == *ZZBOARDPAYLOADZZ* ]]
+  [[ "$output" != *"⏰"* ]] || false
+  [[ "$output" == *ZZBOARDPAYLOADZZ* ]] || false
   printf '%s\n' "⏰ Pay the fixture bill — today" > "$DL_DIR/.state/banner.txt"
   run board
   [ "${lines[0]}" = "⏰ Pay the fixture bill — today" ]
@@ -67,7 +69,8 @@ latch() { cat "$DL_DIR/.state/banner-latch" 2>/dev/null; }
 @test "A3: a cwd under /tmp, or unset entrypoint with -p in the parent's argv, emits nothing" {
   printf '%s\n' "$BANNER" > "$DL_DIR/.state/banner.txt"
   run board /tmp/some-fire
-  [[ "$output" != *"⏰"* ]]; [ -z "$(latch)" ]
+  [[ "$output" != *"⏰"* ]] || false
+  [ -z "$(latch)" ]
   # the fallback discriminator: CLAUDE_CODE_ENTRYPOINT unset, parent argv carries -p
   run env -u CLAUDE_CODE_ENTRYPOINT bash -c 'printf "{\"source\":\"startup\",\"cwd\":\"%s\"}" "$1" | "$2" | jq -r .systemMessage; true' -p "$WORK" "$BOARD_HOOK"
   [[ "$output" != *"⏰"* ]]; [ -z "$(latch)" ]
@@ -143,9 +146,9 @@ or_stop() { # <sid> <transcript>
   run or_stop s1 "$tx"
   [ "$status" -eq 0 ]
   [ "$(printf '%s' "$output" | jq -r .systemMessage)" = "⏰ 2 due ≤72h — top: Pay the fixture bill" ]
-  ! printf '%s' "$output" | grep -q '"decision"'
+  ! printf '%s' "$output" | grep -q '"decision"' || false
   run or_stop s1 "$tx"
-  [[ "$output" != *"⏰"* ]]
+  [[ "$output" != *"⏰"* ]] || false
   run or_stop s2 "$tx"
   [[ "$output" == *"⏰ 2 due"* ]]
 }
@@ -156,16 +159,19 @@ or_stop() { # <sid> <transcript>
   printf '#!/bin/sh\necho hi\n' > "$CC_ACTIVATION_DIR/01-fixture-activate.sh"
   run or_stop s3 "$(mk_or_tx)"
   msg="$(printf '%s' "$output" | jq -r .systemMessage)"
-  [[ "$msg" == *"01-fixture-activate"* ]]
+  [[ "$msg" == *"01-fixture-activate"* ]] || false
   [ "$(printf '%s\n' "$msg" | tail -1)" = "⏰ 2 due ≤72h — top: Pay the fixture bill" ]
 }
 
 @test "⏰ line: silent for a headless transcript, a payload with no transcript, the kill switch, or no due72" {
   or_env
   printf '2\tPay the fixture bill\n' > "$DL_DIR/.state/due72"
-  run or_stop h1 "$(mk_or_tx sdk-cli)";            [[ "$output" != *"⏰"* ]]
-  run or_stop h2 "$D/no-such-transcript.jsonl";   [[ "$output" != *"⏰"* ]]
-  CC_DEADLINE_LINE=off run or_stop h3 "$(mk_or_tx)"; [[ "$output" != *"⏰"* ]]
+  run or_stop h1 "$(mk_or_tx sdk-cli)"
+  [[ "$output" != *"⏰"* ]] || false
+  run or_stop h2 "$D/no-such-transcript.jsonl"
+  [[ "$output" != *"⏰"* ]] || false
+  CC_DEADLINE_LINE=off run or_stop h3 "$(mk_or_tx)"
+  [[ "$output" != *"⏰"* ]] || false
   tx="$(mk_or_tx)"
   base="$(CC_DEADLINE_LINE=off or_stop h4 "$tx")"
   rm -f "$DL_DIR/.state/due72" "$CC_OPREADOUT_STATE_DIR"/*
