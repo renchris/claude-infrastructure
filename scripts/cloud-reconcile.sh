@@ -6,6 +6,8 @@
 #   scripts/cloud-reconcile.sh --list
 #   scripts/cloud-reconcile.sh --land <branch> [--dry-run]
 #   CONFIRM=1 scripts/cloud-reconcile.sh --all [--dry-run] [--include-undeclared]
+#   scripts/cloud-reconcile.sh --rescue-docs --count
+#   CONFIRM=1 scripts/cloud-reconcile.sh --rescue-docs [--dry-run]
 #
 # WHY THIS EXISTS. A cloud VM can push only its own working branch (named `claude/*`). It has no
 # ~/.claude, no `gh`, and cannot run this repo's project-local /ship. Nothing LOCAL ever looks for
@@ -47,6 +49,27 @@
 # with no declaration is one nothing on this machine vouches for; landing it automatically would be
 # this script deciding, unattended, that an unknown remote branch belongs on trunk. `--land <branch>`
 # lands it (the operator named it), and `--all --include-undeclared` opts the sweep in explicitly.
+#
+# DOC RESCUE — WORK THAT NO DECLARATION STATE CAN LAND (2026-09-30, backlog e924e89f8dd1). A fire
+# branch's content reaches trunk only through its declaration, and two states end that route with
+# the content still off trunk: NO declaration at all (skipped above), and a RETIRED one. Retirement
+# is a custody verdict, not a content verdict — `superseded` means the backlog item closed, `conflict`
+# means SOME file conflicts — so a verdict doc the session wrote is abandoned with it. Measured
+# 2026-09-30: the four 2026-09-28 fire branches carrying the TrueMemory verdict docs and the
+# autonomy-core close doc are all declared, three were refused at land (ship-land's outer-timeout
+# preflight, rc 2) and all four were then retired, so nothing would ever land them.
+# `--rescue-docs` lands exactly the part of such a branch that cannot conflict and cannot revert
+# anything: files the branch ADDS under docs/ (CLOUD_RECONCILE_RESCUE_PREFIX) that trunk does not
+# hold AND never held at that path (a path trunk once carried and removed stays removed). They go
+# into one fresh commit on trunk's tip, on a local `claude/rescue-*` branch, through the same
+# desk-land → ship-land rail as every other land. The rest of the branch is left exactly where it
+# is — the peer-WIP ruling still governs whole-branch landing. A live declared branch is never
+# touched (cloud-return owns it), nor any branch whose tip is younger than
+# CLOUD_RECONCILE_RESCUE_MIN_AGE_H (12). Each branch head is examined once: the outcome is cached
+# under $CC_CLOUD_STATE/rescue/ until the head moves, except a retryable lander code (9, 75).
+# `--count` is read-only, needs no CONFIRM, and prints the number of rescuable doc paths — the
+# content falsifier for "stranded cloud docs", replacing one that compared SHAs and so could never
+# pass after a squash land.
 #
 # "CANNOT LOOK" IS NEVER "NOTHING FOUND". A failed `git ls-remote` exits 69 with zero rows emitted,
 # never 0-with-no-candidates. A caller that read a sensor failure as an empty fleet would report the
@@ -117,7 +140,12 @@ LAND_BRANCH_RE='^(claude|feat|fix|chore|docs|refactor|test|perf|style|build|ci)/
 PREFIX="refs/heads/claude/"
 TAB="$(printf '\t')"
 
-MODE="" TARGET="" DRY_RUN=0 INCLUDE_UNDECLARED=0
+MODE="" TARGET="" DRY_RUN=0 INCLUDE_UNDECLARED=0 COUNT_ONLY=0
+RESCUE_PREFIX="${CLOUD_RECONCILE_RESCUE_PREFIX:-docs/}"
+RESCUE_MIN_AGE_H="${CLOUD_RECONCILE_RESCUE_MIN_AGE_H:-12}"
+case "$RESCUE_MIN_AGE_H" in ''|*[!0-9]*) RESCUE_MIN_AGE_H=12 ;; esac
+RESCUE_LIMIT="${CLOUD_RECONCILE_RESCUE_LIMIT:-50}"
+case "$RESCUE_LIMIT" in ''|*[!0-9]*) RESCUE_LIMIT=50 ;; esac
 
 # Self path (for the usage banner), symlink-resolved.
 SELF="$0"; while [ -L "$SELF" ]; do _t="$(readlink "$SELF")"; case "$_t" in /*) SELF="$_t" ;; *) SELF="$(dirname "$SELF")/$_t" ;; esac; done
@@ -133,6 +161,8 @@ while [ $# -gt 0 ]; do
     --land=*)              MODE=land; TARGET="${1#--land=}"; shift ;;
     --dry-run)             DRY_RUN=1; shift ;;
     --include-undeclared)  INCLUDE_UNDECLARED=1; shift ;;
+    --rescue-docs)         MODE=rescue; shift ;;
+    --count)               COUNT_ONLY=1; shift ;;
     -h|--help)             usage 0 ;;
     *)                     die 64 "unknown argument '$1' (see --help)." ;;
   esac
@@ -845,6 +875,176 @@ if [ "$MODE" = list ]; then
 $CANDS
 EOF
   handback_report
+  exit 0
+fi
+
+# ── --rescue-docs (see "DOC RESCUE" in the header) ───────────────────────────────────────────
+rescue_key() { printf '%s' "${1//\//_}"; }
+
+# <trunk-ref> <ref> → the rescuable paths, one per line: ADDED by the ref under RESCUE_PREFIX,
+# absent from trunk now, and never carried by trunk at that path.
+rescue_paths() {
+  local trunk="$1" ref="$2" p
+  while IFS= read -r -d '' p; do
+    case "$p" in "$RESCUE_PREFIX"*) ;; *) continue ;; esac
+    case "$p" in *$'\n'*) continue ;; esac
+    "$GIT_BIN" -C "$REPO" cat-file -e "$trunk:$p" 2>/dev/null && continue
+    [ -z "$("$GIT_BIN" -C "$REPO" log -1 --format=%H "$trunk" -- "$p" 2>/dev/null)" ] || continue
+    printf '%s\n' "$p"
+  done < <("$GIT_BIN" -C "$REPO" diff --name-only --diff-filter=A -z "$trunk...$ref" 2>/dev/null)
+  return 0
+}
+
+# <fire-branch> <tip> <paths-file> <decl-id> <parent> → 0 and RESCUE_COMMIT set (one commit on
+# <parent> adding those paths at the tip's blobs), or 1 with RESCUE_DETAIL. Commits CHAIN: the whole
+# pass lands as one branch, so the gate runs once however many sessions it rescues, while each
+# commit still names its own source branch, tip and declaration in its trailers.
+RESCUE_COMMIT="" RESCUE_DETAIL=""
+rescue_commit() {
+  local b="$1" tip="$2" pf="$3" id="$4" base="$5" idx msg p mode blob tree c n st="undeclared"
+  RESCUE_COMMIT="" RESCUE_DETAIL=""
+  [ -n "$id" ] && st="retired (declaration $id)"
+  idx="$(mktemp "${TMPDIR:-/tmp}/cloud-rescue-idx.XXXXXX")"; msg="$(mktemp "${TMPDIR:-/tmp}/cloud-rescue-msg.XXXXXX")"
+  rm -f "$idx"
+  if ! GIT_INDEX_FILE="$idx" "$GIT_BIN" -C "$REPO" read-tree "$base" 2>/dev/null; then
+    rm -f "$idx" "$msg"; RESCUE_DETAIL="read-tree of trunk failed"; return 1
+  fi
+  n=0
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    mode="$("$GIT_BIN" -C "$REPO" ls-tree "$tip" -- "$p" 2>/dev/null | awk 'NR==1 {print $1}')"
+    blob="$("$GIT_BIN" -C "$REPO" rev-parse --verify --quiet "$tip:$p" 2>/dev/null)" || blob=""
+    if [ -z "$mode" ] || [ -z "$blob" ]; then rm -f "$idx" "$msg"; RESCUE_DETAIL="could not read $p from $b"; return 1; fi
+    GIT_INDEX_FILE="$idx" "$GIT_BIN" -C "$REPO" update-index --add --cacheinfo "$mode,$blob,$p" 2>/dev/null \
+      || { rm -f "$idx" "$msg"; RESCUE_DETAIL="update-index failed on $p"; return 1; }
+    n=$((n + 1))
+  done < "$pf"
+  tree="$(GIT_INDEX_FILE="$idx" "$GIT_BIN" -C "$REPO" write-tree 2>/dev/null)" || tree=""
+  rm -f "$idx"
+  [ -n "$tree" ] || { rm -f "$msg"; RESCUE_DETAIL="write-tree failed"; return 1; }
+  {
+    printf 'docs(cloud): %s file(s) rescued from %s\n\n' "$n" "$b"
+    printf 'The cloud session that wrote these files never landed them: its branch\n'
+    printf 'is %s, so no declaration route reaches it. Only files the branch\n' "$st"
+    printf 'ADDS under %s that trunk never held are carried here; the rest of\n' "$RESCUE_PREFIX"
+    printf 'the branch is untouched on the remote.\n\n'
+    sed 's/^/- /' "$pf"
+    printf '\n'
+  } > "$msg"
+  add_trailers "$REPO" "$msg" "$tip" "$b" "$id" || true
+  if msg_hook_refuses "$REPO" "$msg"; then rm -f "$msg"; RESCUE_DETAIL="the repo's commit-msg hook refuses the rescue message"; return 1; fi
+  c="$("$GIT_BIN" -C "$REPO" commit-tree "$tree" -p "$base" -F "$msg" 2>/dev/null)" || c=""
+  rm -f "$msg"
+  [ -n "$c" ] || { RESCUE_DETAIL="commit-tree failed"; return 1; }
+  RESCUE_COMMIT="$c"
+  return 0
+}
+
+if [ "$MODE" = rescue ]; then
+  if [ "$COUNT_ONLY" != 1 ] && [ "$DRY_RUN" != 1 ]; then
+    [ "${CONFIRM:-0}" = "1" ] || die 65 "refusing to act without CONFIRM=1 — re-run as: CONFIRM=1 $0 --rescue-docs. (--count and --dry-run are read-only.)"
+  fi
+  # One bounded fetch of trunk and every fire branch into remote-tracking refs. Nothing below
+  # answers from a ref this pass did not refresh — a stale trunk would call landed docs stranded.
+  _tb="$(trunk_arg "$DEF_TRUNK")"
+  _fcmd=()
+  [ -n "$NET_BOUND" ] && _fcmd=("$NET_BOUND" "$NET_TIMEOUT")
+  GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/usr/bin/true "${_fcmd[@]+"${_fcmd[@]}"}" "$GIT_BIN" -C "$REPO" fetch --quiet --prune "$REMOTE" \
+      "+refs/heads/$_tb:refs/remotes/$REMOTE/$_tb" "+refs/heads/claude/fire-*:refs/remotes/$REMOTE/claude/fire-*" >/dev/null 2>&1 \
+    || die 69 "SENSOR FAILED — could not fetch trunk and the fire branches from '$REMOTE'. 'Cannot look', NOT 'nothing to rescue'."
+  # One pass over the declarations instead of one per branch (decl_for_branch scans every file).
+  _dix="$(mktemp "${TMPDIR:-/tmp}/cloud-rescue-dix.XXXXXX")"
+  for _f in "$STATE"/*.decl; do
+    [ -f "$_f" ] || continue
+    _db="$(dfield "$_f" branch)"; [ -n "$_db" ] || continue
+    _di="${_f##*/}"; printf '%s\t%s\n' "$_db" "${_di%.decl}" >> "$_dix"
+  done
+  RDIR="$STATE/rescue"; mkdir -p "$RDIR" 2>/dev/null || true
+  _now="$(date +%s)"; _paths_total=0; _br_total=0; _done=0; _fail=0
+  _pf="$(mktemp "${TMPDIR:-/tmp}/cloud-rescue-paths.XXXXXX")"
+  _chain_seen="$(mktemp "${TMPDIR:-/tmp}/cloud-rescue-seen.XXXXXX")"   # paths already in the chain
+  _chain_keys="$(mktemp "${TMPDIR:-/tmp}/cloud-rescue-keys.XXXXXX")"   # <key>\t<tip> per chained branch
+  _head="$("$GIT_BIN" -C "$REPO" rev-parse --verify --quiet "$DEF_TRUNK^{commit}" 2>/dev/null)" \
+    || die 69 "trunk $DEF_TRUNK does not resolve after the fetch — cannot tell what it lacks."
+  while IFS= read -r b || [ -n "$b" ]; do
+    case "$b" in claude/fire-*) ;; *) continue ;; esac
+    ref="refs/remotes/$REMOTE/$b"
+    tip="$("$GIT_BIN" -C "$REPO" rev-parse --verify --quiet "$ref^{commit}" 2>/dev/null)" || continue
+    id="$(awk -F'\t' -v b="$b" '$1==b {print $2; exit}' "$_dix")"
+    if [ -n "$id" ] && [ ! -f "$STATE/$id.retired" ]; then continue; fi   # live: cloud-return owns it
+    key="$(rescue_key "$b")"
+    # The cache spares the ACT a re-ask; it never shapes the COUNT, which is a content census — a
+    # refused rescue is still a stranded doc, and the falsifier must keep saying so.
+    if [ "$COUNT_ONLY" != 1 ] && [ -f "$RDIR/$key" ] \
+       && [ "$(sed -n 's/^seen_sha=//p' "$RDIR/$key" | head -1)" = "$tip" ]; then continue; fi
+    ct="$("$GIT_BIN" -C "$REPO" log -1 --format=%ct "$tip" 2>/dev/null)" || ct=""
+    case "$ct" in ''|*[!0-9]*) continue ;; esac
+    [ $(( _now - ct )) -ge $(( RESCUE_MIN_AGE_H * 3600 )) ] || continue
+    rescue_paths "$DEF_TRUNK" "$tip" > "$_pf"
+    _np="$(grep -c . "$_pf" 2>/dev/null)" || _np=0
+    if [ "$_np" -eq 0 ]; then
+      [ "$COUNT_ONLY" = 1 ] || [ "$DRY_RUN" = 1 ] || printf 'seen_sha=%s\nverdict=nothing-to-rescue\nat=%s\n' "$tip" "$_now" > "$RDIR/$key" 2>/dev/null || true
+      continue
+    fi
+    _paths_total=$((_paths_total + _np)); _br_total=$((_br_total + 1))
+    if [ "$COUNT_ONLY" = 1 ]; then continue; fi
+    echo "→ $b (${id:-undeclared}${id:+, retired}) — $_np doc path(s) trunk never held:"
+    sed 's/^/    /' "$_pf"
+    [ "$DRY_RUN" = 1 ] && continue
+    [ "$_done" -lt "$RESCUE_LIMIT" ] || { echo "· $b — deferred: this pass's limit of $RESCUE_LIMIT source branch(es) is spent"; continue; }
+    # Two sessions can write the same new doc; the first in the chain carries it, the later one
+    # carries only what is still new.
+    grep -vxF -f "$_chain_seen" "$_pf" > "$_pf.new" 2>/dev/null || true
+    [ -s "$_chain_seen" ] || cp "$_pf" "$_pf.new"
+    if [ ! -s "$_pf.new" ]; then
+      echo "· $b — every doc path is already carried by an earlier branch in this pass"
+      printf '%s\t%s\n' "$key" "$tip" >> "$_chain_keys"; continue
+    fi
+    if ! rescue_commit "$b" "$tip" "$_pf.new" "$id" "$_head"; then
+      echo "✗ $b — rescue commit NOT built: $RESCUE_DETAIL" >&2; _fail=$((_fail + 1)); continue
+    fi
+    _head="$RESCUE_COMMIT"; _done=$((_done + 1))
+    cat "$_pf.new" >> "$_chain_seen"
+    printf '%s\t%s\n' "$key" "$tip" >> "$_chain_keys"
+  done <<EOF
+$CANDS
+EOF
+  rm -f "$_pf" "$_pf.new" "$_dix" "$_chain_seen"
+  if [ "$COUNT_ONLY" = 1 ]; then
+    rm -f "$_chain_keys"
+    printf '%s\n' "$_paths_total"
+    echo "cloud-reconcile: $_paths_total rescuable doc path(s) on $_br_total fire branch(es) (retired or undeclared, tip ≥ ${RESCUE_MIN_AGE_H}h old)." >&2
+    exit 0
+  fi
+  _landed=0
+  if [ "$DRY_RUN" != 1 ] && [ "$_done" -gt 0 ]; then
+    RESCUE_BRANCH="claude/rescue-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+    "$GIT_BIN" -C "$REPO" update-ref "refs/heads/$RESCUE_BRANCH" "$_head" 2>/dev/null \
+      || { rm -f "$_chain_keys"; die 70 "could not write refs/heads/$RESCUE_BRANCH for the $_done-commit rescue chain."; }
+    C_REPO="$REPO"; C_TRUNK="$DEF_TRUNK"
+    rc=0; land_one "$RESCUE_BRANCH" || rc=$?
+    if [ "$rc" -eq 0 ]; then
+      echo "✓ rescue — $_done commit(s) landed via $RESCUE_BRANCH."
+      _landed="$_done"
+      while IFS="$TAB" read -r k t; do
+        printf 'seen_sha=%s\nverdict=rescued\nbranch=%s\nat=%s\n' "$t" "$RESCUE_BRANCH" "$_now" > "$RDIR/$k" 2>/dev/null || true
+      done < "$_chain_keys"
+      "$GIT_BIN" -C "$REPO" update-ref -d "refs/heads/$RESCUE_BRANCH" 2>/dev/null || true
+    else
+      echo "✗ rescue — lander exited $rc on $RESCUE_BRANCH; the chain stays on that local branch for inspection." >&2
+      # 9 GATE-KILLED and 75 LOCK-STARVED are machine non-verdicts: re-ask next pass, never latch.
+      case "$rc" in
+        9|75) ;;
+        *) while IFS="$TAB" read -r k t; do
+             printf 'seen_sha=%s\nverdict=refused\nrc=%s\nbranch=%s\nat=%s\n' "$t" "$rc" "$RESCUE_BRANCH" "$_now" > "$RDIR/$k" 2>/dev/null || true
+           done < "$_chain_keys" ;;
+      esac
+      _fail=$((_fail + 1))
+    fi
+  fi
+  rm -f "$_chain_keys"
+  echo "cloud-reconcile: rescue — $_br_total branch(es) with $_paths_total doc path(s); $_landed commit(s) landed, $_fail failed$([ "$DRY_RUN" = 1 ] && echo ' (dry run: nothing built)')."
+  [ "$_fail" -eq 0 ] || exit "$(lander_exit "${rc:-70}")"
   exit 0
 fi
 

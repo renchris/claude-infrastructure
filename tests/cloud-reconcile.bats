@@ -1147,3 +1147,122 @@ dead_pid() {
   [ "$status" -eq 0 ]
   [ "$output" = "0" ]
 }
+
+# ══ --rescue-docs (backlog e924e89f8dd1) ═══════════════════════════════════════════════════════
+# The 2026-09-28 shape: a fire branch whose declaration is RETIRED (or absent) holds a verdict doc
+# trunk never received. Only docs/ files the branch ADDS are carried; its other paths stay put.
+
+# $1=branch $2=decl state (retired|live|none) $3=age in hours $4..=docs/ paths to add
+push_fire_doc() {
+  local b="$1" st="$2" age="$3" w id when p; shift 3
+  w="$D/w-$(printf '%s' "$b" | tr / -)"
+  git -C "$REPO" worktree add -q -b "$b" "$w" main
+  for p in "$@"; do mkdir -p "$w/$(dirname "$p")"; printf 'verdict for %s\n' "$b" > "$w/$p"; done
+  printf 'half-done\n' > "$w/wip-$(printf '%s' "$b" | tr / -).sh"
+  git -C "$w" add -A
+  when="$(( $(date +%s) - age * 3600 )) +0000"
+  GIT_AUTHOR_DATE="$when" GIT_COMMITTER_DATE="$when" \
+    git -C "$w" -c user.email=t@e.com -c user.name=tester commit -q -m "work $b"
+  git -C "$w" push -q origin "HEAD:refs/heads/$b"
+  git -C "$REPO" worktree remove --force "$w"
+  git -C "$REPO" branch -q -D "$b"
+  id="sess_$(printf '%s' "$b" | tr -c 'A-Za-z0-9' _)"
+  if [ "$st" != none ]; then
+    printf 'id=%s\nbranch=%s\nrepo=%s\npaths=\n' "$id" "$b" "$REPO" > "$CC_CLOUD_STATE/$id.decl"
+    [ "$st" = retired ] && printf 'retired_at=1\nverdict=superseded\n' > "$CC_CLOUD_STATE/$id.retired"
+  fi
+  true
+}
+
+@test "rescue: a RETIRED fire branch's new doc is counted, landed alone, and the count reads 0 after" {
+  push_fire_doc claude/fire-20260928T000000Z-1-1 retired 48 docs/research/v1.md
+  run cr --rescue-docs --count
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "1" ] || { echo "count: $output"; false; }
+  CONFIRM=1 run cr --rescue-docs
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  git -C "$REPO" fetch -q origin
+  git -C "$REPO" cat-file -e origin/main:docs/research/v1.md
+  # the branch's other path is NOT carried — whole-branch landing stays the peer-WIP ruling's
+  run git -C "$REPO" cat-file -e "origin/main:wip-claude-fire-20260928T000000Z-1-1.sh"
+  [ "$status" -ne 0 ]
+  grep -q 'ARGS=--branch claude/rescue-' "$LAND_STUB_LOG"
+  run cr --rescue-docs --count
+  [ "${lines[0]}" = "0" ] || { echo "count after: $output"; false; }
+}
+
+@test "rescue: an UNDECLARED fire branch is rescued too; a LIVE declared one is cloud-return's, never touched" {
+  push_fire_doc claude/fire-20260928T000001Z-1-1 none 48 docs/parks/aa.md
+  push_fire_doc claude/fire-20260928T000002Z-1-1 live 48 docs/parks/bb.md
+  run cr --rescue-docs --count
+  [ "${lines[0]}" = "1" ] || { echo "$output"; false; }
+  CONFIRM=1 run cr --rescue-docs
+  [ "$status" -eq 0 ]
+  git -C "$REPO" fetch -q origin
+  git -C "$REPO" cat-file -e origin/main:docs/parks/aa.md
+  run git -C "$REPO" cat-file -e origin/main:docs/parks/bb.md
+  [ "$status" -ne 0 ]
+}
+
+@test "rescue: a tip younger than the age gate is a session still working — not counted" {
+  push_fire_doc claude/fire-20260930T000000Z-1-1 retired 1 docs/research/young.md
+  run cr --rescue-docs --count
+  [ "${lines[0]}" = "0" ] || { echo "$output"; false; }
+  CLOUD_RECONCILE_RESCUE_MIN_AGE_H=0 run cr --rescue-docs --count
+  [ "${lines[0]}" = "1" ]
+}
+
+@test "CONTROL — a doc trunk once held and then removed stays removed" {
+  mkdir -p "$REPO/docs/research"; printf 'old\n' > "$REPO/docs/research/gone.md"
+  git -C "$REPO" add -A; git -C "$REPO" commit -q -m 'trunk had it'
+  git -C "$REPO" rm -q docs/research/gone.md; git -C "$REPO" commit -q -m 'trunk removed it'
+  git -C "$REPO" push -q origin main
+  local w="$D/w-gone"
+  git -C "$REPO" worktree add -q -b claude/fire-20260901T000000Z-1-1 "$w" main~2
+  mkdir -p "$w/docs/research"; printf 'resurrect\n' > "$w/docs/research/gone.md"; git -C "$w" add -A
+  GIT_COMMITTER_DATE="$(( $(date +%s) - 172800 )) +0000" git -C "$w" -c user.email=t@e.com -c user.name=tester commit -q -m 'side edits it'
+  git -C "$w" push -q origin HEAD:refs/heads/claude/fire-20260901T000000Z-1-1
+  git -C "$REPO" worktree remove --force "$w"
+  run cr --rescue-docs --count
+  [ "${lines[0]}" = "0" ] || { echo "$output"; false; }
+}
+
+@test "rescue: acting needs CONFIRM=1; --dry-run and --count build and land nothing" {
+  push_fire_doc claude/fire-20260928T000003Z-1-1 retired 48 docs/research/v3.md
+  run cr --rescue-docs
+  [ "$status" -eq 65 ]
+  run cr --rescue-docs --dry-run
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qF 'docs/research/v3.md'
+  [ ! -s "$LAND_STUB_LOG" ]
+  run git -C "$REPO" for-each-ref 'refs/heads/claude/rescue-*'
+  [ -z "$output" ]
+}
+
+@test "rescue: two sessions writing the SAME doc chain into ONE land, the doc carried once" {
+  push_fire_doc claude/fire-20260928T000004Z-1-1 retired 48 docs/research/same.md docs/research/a.md
+  push_fire_doc claude/fire-20260928T000005Z-1-1 retired 48 docs/research/same.md docs/research/b.md
+  CONFIRM=1 run cr --rescue-docs
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(grep -c '^ARGS=' "$LAND_STUB_LOG")" -eq 1 ]
+  git -C "$REPO" fetch -q origin
+  for p in same a b; do git -C "$REPO" cat-file -e "origin/main:docs/research/$p.md"; done
+}
+
+@test "rescue: a refused land latches the ACT on that head (75 is re-asked) and never hides the COUNT" {
+  push_fire_doc claude/fire-20260928T000006Z-1-1 retired 48 docs/research/r.md
+  # every rescue branch name is fresh, so the stub fails by exit code for ANY branch
+  export CLOUD_RECONCILE_LAND_BIN="$D/fail-stub.sh"
+  printf '#!/bin/sh\necho "ARGS=$*" >> "$LAND_STUB_LOG"\nexit "${FAIL_RC:-6}"\n' > "$CLOUD_RECONCILE_LAND_BIN"
+  chmod +x "$CLOUD_RECONCILE_LAND_BIN"
+  FAIL_RC=75 CONFIRM=1 run cr --rescue-docs
+  [ "$status" -eq 75 ]
+  FAIL_RC=6 CONFIRM=1 run cr --rescue-docs
+  [ "$status" -eq 6 ] || { echo "75 latched, so the second pass never asked: $output"; false; }
+  [ "$(grep -c '^ARGS=' "$LAND_STUB_LOG")" -eq 2 ]
+  FAIL_RC=6 CONFIRM=1 run cr --rescue-docs
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^ARGS=' "$LAND_STUB_LOG")" -eq 2 ] || { echo "rc 6 did not latch: re-asked"; false; }
+  run cr --rescue-docs --count
+  [ "${lines[0]}" = "1" ] || { echo "a refused doc vanished from the count: $output"; false; }
+}
