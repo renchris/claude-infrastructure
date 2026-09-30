@@ -3,6 +3,7 @@
 # migration-step: RULE decision packet 4194644aea26 first (cc-decide list --open), then run this to set CC_INSTALL_RESIDENT_RELOAD=1 in the com.claude.deploy-live launchd plist — it lets the unattended converger bootout/bootstrap a resident daemon that is running stale bytes. It edits a launchd plist AND widens what the unattended path may do, which is C10 twice over.
 # migration-run: bash ~/Development/claude-infrastructure/migrations/0031-resident-reload-flip.sh
 # migration-subject: ~/Library/LaunchAgents/com.claude.deploy-live.plist
+# migration-superseded-by: daemon self-restart — a resident daemon that finds itself running stale bytes restarts itself, so the converger never needs this flag (BACKLOG_MASTER 2026-09-30 audit, SUPERSEDED class; decision 4194644aea26 actioned)
 # migration-verify: [ "$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:CC_INSTALL_RESIDENT_RELOAD' "$HOME/Library/LaunchAgents/com.claude.deploy-live.plist" 2>/dev/null)" = 1 ]
 # migration-conflict: v="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:CC_INSTALL_RESIDENT_RELOAD' "$HOME/Library/LaunchAgents/com.claude.deploy-live.plist" 2>/dev/null)"; [ -n "$v" ] && [ "$v" != 1 ]
 #

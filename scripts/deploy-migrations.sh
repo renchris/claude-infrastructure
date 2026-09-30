@@ -294,9 +294,9 @@ stage_c10() { # <file> <name> → 0 staged / 1 malformed
   id=""
   if [ -x "$BACKLOG_BIN" ]; then
     if [ -n "$run" ]; then
-      id="$("$BACKLOG_BIN" needs "$step" --run "$run" --project claude-infrastructure 2>/dev/null | tr -d '[:space:]')"
+      id="$("$BACKLOG_BIN" needs "$step" --class needs-human --run "$run" --project claude-infrastructure 2>/dev/null | tr -d '[:space:]')"
     else
-      id="$("$BACKLOG_BIN" needs "$step" --project claude-infrastructure 2>/dev/null | tr -d '[:space:]')"
+      id="$("$BACKLOG_BIN" needs "$step" --class needs-human --project claude-infrastructure 2>/dev/null | tr -d '[:space:]')"
     fi
   fi
   record staged "$name" "class=c10" "step=$step" "run=$run" "backlog=${id:-unfiled}"
@@ -342,6 +342,83 @@ run_mechanical() { # <file> <name> → 0 applied / 1 failed
     "the conclusion this migration carries is NOT in the enforcing store; wrap-ledger will refuse ✅ until it clears" \
     "retry: bash $REPO/scripts/deploy-migrations.sh --migrate"
   return 1
+}
+
+# ── SETTLE THE STAGED LEDGER (BACKLOG_MASTER W0 ledger-retraction.4) ───────────────────────────
+# A staged c10 marker used to be permanent: nothing ever noticed that the operator had run the step
+# (or that a later design made it moot), so its backlog row kept its staging-time title and stayed
+# open with the effect already live — 30 of 47 staged markers read `registered` in every config dir
+# on 2026-09-30. At each converge, for every staged marker:
+#   · `# migration-superseded-by:` in the header ⇒ marker moves to superseded/, its row closes;
+#   · scripts/registration-state.sh says `registered` (the migration's own `# migration-verify:`
+#     oracle exits 0 in every config dir — ONE reader of that oracle, never a second) ⇒ the marker
+#     moves to applied/ and its row closes, citing that verdict;
+#   · otherwise the header's CURRENT `# migration-step:` is re-filed when it differs from the
+#     staged one, so a row's title tracks the migration it describes (0004's was frozen), and the
+#     old row closes as superseded by the new one when the re-file mints a different id.
+# The staged markers that remain are the c10 batch's input. Fail-open: a settle failure never fails
+# the converge; CC_MIGRATIONS_SETTLE=off disables it.
+REGSTATE_BIN="${CC_REGISTRATION_STATE_BIN:-$(dirname "$SELF")/registration-state.sh}"
+settle_staged() {
+  [ "${CC_MIGRATIONS_SETTLE:-on}" = off ] && return 0
+  [ -d "$STATE/staged" ] || return 0
+  local j name f sup verdicts v bl step nstep run nid moved=0 applied=0 retitled=0
+  verdicts=""
+  if [ -x "$REGSTATE_BIN" ] || [ -f "$REGSTATE_BIN" ]; then
+    verdicts="$(CC_MIGRATION_DIR="$MIG_DIR" CC_MIGRATION_STATE="$STATE" timeout 600 bash "$REGSTATE_BIN" --json 2>/dev/null \
+                | grep '^\[' | tail -1)"
+  fi
+  for j in "$STATE"/staged/*.json; do
+    [ -f "$j" ] || continue
+    name="$(basename "$j" .json)"; f="$MIG_DIR/$name.sh"
+    [ -f "$f" ] || continue
+    bl="$(sed -n 's/.*"backlog":"\([0-9a-f]\{12\}\)".*/\1/p' "$j" | head -1)"
+    sup="$(mig_field "$f" 'migration-superseded-by')"
+    v=""; [ -n "$verdicts" ] && v="$(printf '%s' "$verdicts" | jq -r --arg n "$name" '.[] | select(.migration == $n) | .verdict' 2>/dev/null | head -1)"
+    if [ -n "$sup" ] || [ "$v" = registered ]; then
+      if [ "$DRY" -eq 1 ]; then
+        say "settle: would move $name to $([ -n "$sup" ] && echo superseded || echo applied)${bl:+ and close cc-backlog $bl}"
+        continue
+      fi
+      if [ -n "$sup" ]; then
+        record superseded "$name" "class=c10" "by=$sup" "backlog=${bl:-unfiled}"
+        moved=$(( moved + 1 ))
+        [ -n "$bl" ] && [ -x "$BACKLOG_BIN" ] && "$BACKLOG_BIN" "done" "$bl" \
+          --evidence "migrations/$name.sh declares migration-superseded-by: $sup — its step will never run" >/dev/null 2>&1
+      else
+        record applied "$name" "class=c10" "settled=registration-state" "backlog=${bl:-unfiled}"
+        applied=$(( applied + 1 ))
+        [ -n "$bl" ] && [ -x "$BACKLOG_BIN" ] && "$BACKLOG_BIN" "done" "$bl" \
+          --evidence "registration-state verdict=registered for $name: its migration-verify oracle exits 0 in every config dir (settled at converge $(now_s))" >/dev/null 2>&1
+      fi
+      rm -f "$j"
+      say "settle: $name → $([ -n "$sup" ] && echo superseded || echo applied)${bl:+ (closed cc-backlog $bl)}"
+      continue
+    fi
+    # still staged — re-derive the row from the CURRENT header
+    step="$(sed -n 's/.*"step":"\(.*\)","run".*/\1/p' "$j" | head -1)"
+    nstep="$(mig_field "$f" 'migration-step')"
+    run="$(mig_field "$f" 'migration-run')"
+    # compared in the record's own (escaped) spelling, so an unchanged step never re-files
+    [ -n "$nstep" ] && [ "$(json_escape "$nstep")" != "$step" ] || continue
+    if [ "$DRY" -eq 1 ]; then say "settle: would re-title $name from its current header"; continue; fi
+    [ -x "$BACKLOG_BIN" ] || continue
+    if [ -n "$run" ]; then
+      nid="$("$BACKLOG_BIN" needs "$nstep" --class needs-human --run "$run" --project claude-infrastructure ${bl:+--receipt "$f"} 2>/dev/null | tr -d '[:space:]')"
+    else
+      nid="$("$BACKLOG_BIN" needs "$nstep" --class needs-human --project claude-infrastructure ${bl:+--receipt "$f"} 2>/dev/null | tr -d '[:space:]')"
+    fi
+    [ -n "$nid" ] || continue
+    if [ -n "$bl" ] && [ "$nid" != "$bl" ]; then
+      "$BACKLOG_BIN" "done" "$bl" --kind superseded --pointer "$nid" \
+        --evidence "re-titled from migrations/$name.sh's current migration-step; carried by $nid" >/dev/null 2>&1 || true
+    fi
+    record staged "$name" "class=c10" "step=$nstep" "run=$run" "backlog=$nid"
+    retitled=$(( retitled + 1 ))
+    say "settle: $name re-titled from its header → cc-backlog $nid"
+  done
+  [ $(( applied + moved + retitled )) -eq 0 ] || say "settle: $applied applied, $moved superseded, $retitled re-titled"
+  return 0
 }
 
 migrate() { # → 0 all applied/staged · 1 a migration FAILED
@@ -536,4 +613,5 @@ esac
 RC=0
 [ "$DO_MATERIALISE" -eq 1 ] && { materialise || RC=1; }
 [ "$DO_MIGRATE" -eq 1 ] && { migrate || RC=1; }
+[ "$DO_MIGRATE" -eq 1 ] && settle_staged
 exit "$RC"

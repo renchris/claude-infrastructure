@@ -249,3 +249,55 @@ setup() {
   ! jq -e 'has("env") and (.env | has("CLAUDE_CODE_ENABLE_TASKS"))' "$HOME/.claude/settings.json" >/dev/null \
     || { echo "0023 wrote CLAUDE_CODE_ENABLE_TASKS — that is the kill switch"; false; }
 }
+
+# ── SETTLE THE STAGED LEDGER (BACKLOG_MASTER W0 ledger-retraction.4) ─────────────────────────────
+settle_fixture() {
+  D="$BATS_TEST_TMPDIR/settle"; mkdir -p "$D/repo/migrations" "$D/state" "$D/queue" "$HOME/.claude"
+  export CC_MIGRATIONS_REPO="$D/repo" CC_MIGRATIONS_STATE="$D/state" CC_MIGRATIONS_DIR="$D/repo/migrations" \
+         CC_ACTIVATION_DIR="$D/queue" CC_CLAUDE_DIR="$HOME/.claude" CC_BACKLOG_BIN="$REPO/bin/cc-backlog" \
+         CC_BACKLOG_FILE="$D/backlog.jsonl" CC_BACKLOG_KICK=off CC_BACKLOG_PROJECT_WARN=off \
+         CC_BACKLOG_COVERAGE_WARN=off CC_BACKLOG_PREMISE=off CC_PAGES_DIR="$D/pages"
+  printf '#!/bin/bash\n# migration-class: c10\n# migration-step: %s\n# migration-verify: test -e %q\nexit 0\n' \
+    "flip the fixture switch" "$D/effect" > "$D/repo/migrations/0001-live-later.sh"
+  printf '#!/bin/bash\n# migration-class: c10\n# migration-step: %s\n# migration-superseded-by: %s\n# migration-verify: test -e %q\nexit 0\n' \
+    "flip the retired switch" "a later design" "$D/never" > "$D/repo/migrations/0002-retired.sh"
+}
+row_status() { bash "$REPO/bin/cc-backlog" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)|.status'; }
+
+@test "11: a staged c10 whose effect is already LIVE moves to applied and its row closes" {
+  settle_fixture
+  run bash "$RUNNER" --migrate
+  [ -f "$D/state/staged/0001-live-later.json" ]
+  bl="$(sed -n 's/.*"backlog":"\([0-9a-f]\{12\}\)".*/\1/p' "$D/state/staged/0001-live-later.json")"
+  [ -n "$bl" ]
+  [ "$(row_status "$bl")" = blocked ]
+  : > "$D/effect"                                   # the operator ran the step
+  run bash "$RUNNER" --migrate
+  [ "$status" -eq 0 ]
+  [ ! -f "$D/state/staged/0001-live-later.json" ]
+  [ -f "$D/state/applied/0001-live-later.json" ]
+  [ "$(row_status "$bl")" = done ]
+  [[ "$(bash "$REPO/bin/cc-backlog" list --all --json | jq -r --arg i "$bl" '.[]|select(.id==$i)|.evidence')" == *"verdict=registered"* ]]
+}
+
+@test "12: a staged c10 declaring migration-superseded-by moves to superseded and its row closes" {
+  settle_fixture
+  run bash "$RUNNER" --migrate
+  [ "$status" -eq 0 ]
+  [ ! -f "$D/state/staged/0002-retired.json" ]
+  [ -f "$D/state/superseded/0002-retired.json" ]
+}
+
+@test "13: a staged c10 whose header step changed is re-titled; the old row closes as superseded" {
+  settle_fixture
+  run bash "$RUNNER" --migrate
+  old="$(sed -n 's/.*"backlog":"\([0-9a-f]\{12\}\)".*/\1/p' "$D/state/staged/0001-live-later.json")"
+  printf '#!/bin/bash\n# migration-class: c10\n# migration-step: %s\n# migration-verify: test -e %q\nexit 0\n' \
+    "run the fixture switch script with --confirm" "$D/effect" > "$D/repo/migrations/0001-live-later.sh"
+  run bash "$RUNNER" --migrate
+  new="$(sed -n 's/.*"backlog":"\([0-9a-f]\{12\}\)".*/\1/p' "$D/state/staged/0001-live-later.json")"
+  [ -n "$new" ] && [ "$new" != "$old" ]
+  [ "$(row_status "$old")" = done ]
+  [ "$(row_status "$new")" = blocked ]
+  [[ "$(bash "$REPO/bin/cc-backlog" list --all --json | jq -r --arg i "$new" '.[]|select(.id==$i)|.title')" == "run the fixture switch script"* ]]
+}
