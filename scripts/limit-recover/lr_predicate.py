@@ -111,6 +111,9 @@ TEXT_NET_RE = re.compile(
 # renders as \"agentName\", and the lookbehind is what keeps a record that merely QUOTES the key
 # from answering yes to being a teammate.
 _AGENT_NAME_KEY_RE = re.compile(r'(?<!\\)"agentName"\s*:\s*"([^"\\]{1,200})"')
+# Claude Code's own session-name header (`claude --name`, /rename) is a separate record type that
+# also carries agentName: {"type":"agent-name","agentName":…,"sessionId":…}. It names a LEAD (D4.12).
+_AGENT_NAME_TYPE_RE = re.compile(r'(?<!\\)"type"\s*:\s*"agent-name"')
 
 _MONTHS = {
     m: i + 1
@@ -448,12 +451,16 @@ def is_teammate_head(data):
         except ValueError:
             # Truncated by the head bound — the 3-of-55 class above, not an error.
             match = _AGENT_NAME_KEY_RE.search(line)
-            if match and match.group(1).strip():
+            if match and match.group(1).strip() and not _AGENT_NAME_TYPE_RE.search(line):
                 return True
             continue
         if isinstance(rec, dict):
             name = rec.get("agentName")
-            if isinstance(name, str) and name.strip():
+            team = rec.get("teamName")
+            member_shaped = rec.get("type") == "user" or (
+                isinstance(team, str) and bool(team.strip())
+            )
+            if isinstance(name, str) and name.strip() and member_shaped:
                 return True
     return False
 

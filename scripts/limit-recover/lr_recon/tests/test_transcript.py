@@ -88,6 +88,33 @@ class Observe(Base):
         self.assertFalse(obs.teammate)
         self.assertEqual(obs.live_subagents, 0)
 
+    def test_a_named_lead_is_not_a_teammate(self):
+        """D4.12: Claude Code's session-name header also carries agentName (13 heads on disk, lead
+        40a4b816 among them). The census checks TEAMMATE first and writes no record, so a named
+        lead read as a teammate was never held, moved or paged."""
+        named = (
+            '{"type":"agent-name","agentName":"/limit-recover zero human","sessionId":"%s"}\n'
+            % SID
+        )
+        self.write(X.slug("/w/lead"), named + fixture("death-quota-limits.jsonl"))
+        self.assertFalse(X.observe(self.cfg, "/w/lead", SID).teammate)
+        member = (
+            '{"parentUuid":null,"teamName":"session-ad311bcd","agentName":"t2",'
+            '"type":"user","message":{"role":"user","content":"brief"}}\n'
+        )
+        self.write(X.slug("/w/member"), member + fixture("death-quota-limits.jsonl"))
+        self.assertTrue(X.observe(self.cfg, "/w/member", SID).teammate)
+        # a user-typed record needs no teamName (3 of 55 real member heads lack it)
+        bare = member.replace('"teamName":"session-ad311bcd",', "")
+        self.write(X.slug("/w/bare"), bare + fixture("death-quota-limits.jsonl"))
+        self.assertTrue(X.observe(self.cfg, "/w/bare", SID).teammate)
+
+    def test_a_truncated_named_lead_header_is_not_a_teammate(self):
+        """D4.12, the unparseable branch: an agent-name record cut mid-line stays a lead."""
+        cut = '{"type":"agent-name","agentName":"lead name","sessionId":"%s' % SID
+        self.write(X.slug("/w/cut"), cut + "\n" + fixture("death-quota-limits.jsonl"))
+        self.assertFalse(X.observe(self.cfg, "/w/cut", SID).teammate)
+
     def test_errors_are_not_ok_turns(self):
         for name in (
             "api-error-529.jsonl",
