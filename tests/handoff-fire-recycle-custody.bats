@@ -751,6 +751,32 @@ SH
   rows_of recycle-held-draft | grep -q 'unconfirm rc 0' || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
 }
 
+# D7.2(b): a focused remote transplant's operator can submit straight past the composer reads (the
+# guard admits prompts while the admit is unconfirmed), so the last-moment at-rest read covers it.
+# Driven as the recycle's own lines. Mutant: restrict the read to same-account again — case 1 passes.
+@test "F7 a FOCUSED remote transplant whose operator submitted a prompt is held busy at the last moment; unfocused is not read" {
+  tail_world
+  local frag="$BATS_TEST_TMPDIR/rest-frag.sh"
+  {
+    sed -n '/A FOCUSED REMOTE TRANSPLANT GETS THE SAME READ/,/^  if \[ "\$RCY_SAME_ACCOUNT" = 1 \]; then$/p' "$HF"
+    echo '  :; fi'
+    echo 'echo "past the at-rest read"'
+  } > "$frag"
+  grep -q 'hf_transcript_at_rest "\$rcy_rest_tx"' "$frag" || { cat "$frag"; false; }
+  ltx "$TX" "wait, one more thing"
+  RCY_REMOTE=1 RCY_SAME_ACCOUNT=0 RCY_FOCUSED=yes RCY_SRC_TX="$TX" run bash -c ". '$FUNCS'; hf_recycle_disarm() { :; }; . '$frag'"
+  [ "$status" -eq 1 ] || { echo "status=$status $output"; false; }
+  [[ "$output" == *"recycle ABORTED at the last read"* ]] || { echo "$output"; false; }
+  rows_of recycle-held-busy | grep -q 'focused-remote: transcript not at rest' || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
+  # Unfocused: not read at all (the pre-confirm limit read and the post-confirm last read own it).
+  RCY_REMOTE=1 RCY_SAME_ACCOUNT=0 RCY_FOCUSED=no RCY_SRC_TX="$TX" run bash -c ". '$FUNCS'; hf_recycle_disarm() { :; }; . '$frag'"
+  [[ "$output" == *"past the at-rest read"* ]] || { echo "$output"; false; }
+  # Focused, and the limit is where the turn ended: at rest, and the move goes on.
+  ltx "$TX"
+  RCY_REMOTE=1 RCY_SAME_ACCOUNT=0 RCY_FOCUSED=yes RCY_SRC_TX="$TX" run bash -c ". '$FUNCS'; hf_recycle_disarm() { :; }; . '$frag'"
+  [[ "$output" == *"past the at-rest read"* ]] || { echo "$output"; false; }
+}
+
 @test "R the MAIN parser takes --record-id: lr-handoff passes it to --recycle whenever the case exists (W5 rig)" {
   run bash "$HF" --record-id recon:x:1 --help
   [ "$status" -eq 0 ] || { echo "status=$status $output"; false; }

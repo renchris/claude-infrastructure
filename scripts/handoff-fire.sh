@@ -14849,14 +14849,27 @@ recycle_fire() {
   # CC_RECYCLE_DRAFT_WAIT), and /exit INTERRUPTS an in-flight turn. A peer message or an operator
   # prompt that woke the session in between is exactly the turn this must not kill. No kill switch:
   # the class is new, and a turn killed mid-flight is not a state anyone should be able to opt into.
-  if [ "$RCY_SAME_ACCOUNT" = 1 ]; then
-    rcy_rest_rc=0; hf_transcript_at_rest "$HF_SA_TX" || rcy_rest_rc=$?
+  # A FOCUSED REMOTE TRANSPLANT GETS THE SAME READ (FLEET_V2 W6, D7.2b). Its operator can submit a
+  # prompt straight past the composer reads above — the handed-off guard lets it through while the
+  # admit is unconfirmed — and that prompt is exactly the turn /exit would kill. The source is still
+  # the canonical transcript here (confirm has not run), so the read is of the file it lands in.
+  rcy_rest_tx=""
+  if [ "$RCY_SAME_ACCOUNT" = 1 ]; then rcy_rest_tx="$HF_SA_TX"
+  elif [ "$RCY_REMOTE" = 1 ] && [ "${RCY_FOCUSED:-no}" = yes ]; then
+    rcy_rest_tx="${RCY_SRC_TX:-}"
+    [ -z "$rcy_rest_tx" ] && [ -n "${HF_TS_TOMBSTONE:-}" ] && rcy_rest_tx="${HF_TS_TOMBSTONE%.HANDOFF.json}.jsonl"
+    [ -n "$rcy_rest_tx" ] || rcy_rest_tx="<no source transcript resolved>"
+  fi
+  if [ -n "$rcy_rest_tx" ]; then
+    rcy_rest_rc=0; hf_transcript_at_rest "$rcy_rest_tx" || rcy_rest_rc=$?
     if [ "$rcy_rest_rc" != 0 ]; then
       hf_recycle_disarm
-      emit_recycle_event recycle-held-busy "" "$SID" "same-account: transcript not at rest at the last read (rc $rcy_rest_rc): $HF_SA_TX" || true
+      emit_recycle_event recycle-held-busy "" "$SID" "$([ "$RCY_SAME_ACCOUNT" = 1 ] && echo same-account || echo focused-remote): transcript not at rest at the last read (rc $rcy_rest_rc): $rcy_rest_tx" || true
       echo "!! recycle ABORTED at the last read: session ${RCY_SOURCE_SESSION:0:8} is no longer at rest (rc $rcy_rest_rc — 1 a turn is in flight, 2 unreadable) — nothing typed, watcher disarmed, session untouched. Re-run once it is idle." >&2
       exit 1
     fi
+  fi
+  if [ "$RCY_SAME_ACCOUNT" = 1 ]; then
     # …AND NO SUBAGENT WAS SPAWNED SINCE THE GATE (Q4 gap b). A background Agent-tool subagent
     # leaves its lead AT REST, so the re-read above cannot see one launched inside the composer
     # window; the pre-pass gate ran minutes ago. Same predicate, same corpse rule, same override.
