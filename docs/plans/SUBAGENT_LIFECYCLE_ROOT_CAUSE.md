@@ -244,6 +244,44 @@ cleared (`docs/lessons/arming-and-mootness-cannot-share-one-falsifier.md`). It c
 So A5 and A6 are not waiting on anyone's memory: `2aa99648bd80` arms 2026-09-26 (read A6, then
 re-park it for A5) and `b1432e348362` arms 2026-10-03.
 
+### Readings, 2026-09-30 (backlog master plan W1, verdicts-due.4)
+
+| # | reading | verdict | what it changed |
+|---|---|---|---|
+| A6 | `rc=67` all-time 173 against the post-land anchor 166: **7 lines, 4 incidents** (09-21 ×1, 09-22 ×5, 09-25 ×1) | **FAIL on the raw count**; 1 of 4 is the W2 cause | two fixes, below |
+| A5 | completion-assert Stop blocks inside teammate transcripts, deduped by realpath: pre-fix control 09-05 → 09-20 **27** (25 shared-cwd); post-fix 09-20 → 09-30 **1** shared-cwd, 0 own-worktree | **FAIL, and final**: one block already sits inside the two-week window, so its count cannot return to 0 | one fix, below |
+| D1 | W3's verbatim heredoc (`git show f710200f8`) over transcripts written since W3 (mtime ≥ 2026-09-20T01:06Z, 10.9 of 14 days): 59 leads, **24 sent to EVERY member (40.7%)**, 16 some, 19 none; 67 of 190 members got nothing (35.3%). The 30-day sliding form W3 used reads 33/113 (29.2%) because it still carries pre-W3 leads | **interim only — not decided.** 40.7% is above the 36.7% bar, but about 7 more no-send leads in the remaining 3 days would put it under, at ~5.4 leads/day | `b1432e348362` stays parked to 2026-10-03 |
+
+**A6, each incident attributed.**
+- **Window 527, r7-device-tier-and-adaptive-quality, 09-22 (5 lines) — the W2 cause, in a form W2
+  missed.** At 38 columns the 36-character name painted ` @<name> ` as a whole row and the rule's
+  `─` on the next, so `is_rule` saw neither half. W2's reflow branch keyed on `cols < thresh` (below
+  20 columns), which a 38-column pane never meets. The composer was empty. W2 reopened and fixed in
+  `ae99fe4c3`: the branch also fires when `len(agent) + 3 >= cols`, the wrap itself; every other
+  conjunct is unchanged, and the verbatim snapshot is now a fixture (red before, green after).
+- **Windows 447 (09-21), 613 (09-22), 767 (09-25) — a different cause: two closer runs raced.**
+  Each logged `pane close FAILED (rc=67)` and `✓ closed pane` in the same second; snapshot "(not
+  captured)" because the window was already going. The loser then paged "still standing — close it
+  manually" over a gone pane and deleted the winner's teardown marker, so a later crash check would
+  have read an intended teardown as a crash. Fixed in `74d8722d0`: a failed close re-reads the
+  enumerator, and a POSITIVE absence logs `~ already gone`, pages nobody and keeps the marker. So
+  A6 is PASS-by-cause for these three; no row filed, the cause is driven.
+
+**A5, attributed.** The one block (tma-11-history, 2026-09-28, shared cwd with its lead) was not
+RC-3's arm. It was the drain floor (`CLOSE_FLOOR`, 2026-09-05), which RC-3 predates: the frozen DoD
+is repo-keyed, so a teammate inherits its lead's "about the backlog" scope and was blocked for not
+closing rows its lead owns. Fixed in `ab5e0e149`: a confirmed assignee
+does not carry the floor, which still binds the lead's own close. A second hit in the scan was a
+tool result quoting old output, not a block. Method: every `~/.claude*/projects/**/*.jsonl` since
+09-05, a record carrying `teamName` and `agentName` whose content holds `Stop hook` and
+`Completion-assert`; shared-cwd means the teammate's `cwd` equals the cwd of the lead session named
+by its `teamName`.
+
+**D1 on 2026-10-03** (owner: `b1432e348362`, paged by `scripts/dated-park-arm.sh`): re-run the same
+post-W3 form of W3's heredoc over the full 14 days and apply `D1-preflight.md` § 1. If EVERY stays
+above 36.7% (P1 already passed, W5 `dd070aaa1`), D1 is (b), and the implementation is restricting
+`hooks/teammate-auto-shutdown.sh` to dead-lead members with the residency-p90 falsifier; otherwise (a).
+
 ## Decisions and why
 
 - **Why no actuator is added anywhere.** Every candidate actuator (timer, idle count, sweeper,
