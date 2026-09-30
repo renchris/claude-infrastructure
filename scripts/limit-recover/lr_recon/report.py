@@ -170,6 +170,12 @@ def max_age_due(rec: T.Record, now: float) -> bool:
     return d is not None and now >= d
 
 
+def _draft(rec: T.Record) -> str:
+    """D6.7: the held draft, quoted, when a snapshot recovered it (the page leaves as argv)."""
+    text = rec.close.get("draft_text") if rec.substate == "HOLD-DRAFT" else ""
+    return ' — the draft reads: "%s"' % text if text else ""
+
+
 def residue_needs(rec: T.Record, now: float) -> Optional[str]:
     """The ``cc-backlog needs`` line for human residue: a real draft or a background job held past
     its max age (§C11). The caller files it."""
@@ -178,7 +184,7 @@ def residue_needs(rec: T.Record, now: float) -> Optional[str]:
         return None
     since = rec.wait.since if rec.wait else rec.updated_at
     detail = " (%s)" % rec.wait.detail if rec.wait and rec.wait.detail else ""
-    return "limit-recover on %s %s: %s is %s%s for %s — %s" % (
+    return "limit-recover on %s %s: %s is %s%s for %s — %s%s" % (
         rec.source_acct or "?",
         rec.scope or "?",
         who(rec),
@@ -186,6 +192,7 @@ def residue_needs(rec: T.Record, now: float) -> Optional[str]:
         detail,
         _dur(now - since),
         next_action(rec),
+        _draft(rec),
     )
 
 
@@ -764,12 +771,13 @@ class Reporter:
         if isinstance(last, (int, float)) and now - last < REFIRE_S:
             return None
         since = rec.wait.since if rec.wait else rec.updated_at
-        text = "%s: %s — %s for %s, past its maximum age — next: %s" % (
+        text = "%s: %s — %s for %s, past its maximum age — next: %s%s" % (
             self._head(cohort),
             who(rec),
             say(rec) or st,
             _dur(now - since),
             next_action(rec),
+            _draft(rec),
         )
         latch[key] = now
         self._save(cohort.cid, latch)

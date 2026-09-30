@@ -18,6 +18,7 @@ import argparse
 import fcntl
 import json
 import os
+import subprocess
 import sys
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -349,6 +350,69 @@ def _wakes(ctx: Ctx, snap: T.Snapshot, facts: Dict[str, T.Fact], now: float) -> 
             continue
         ctx.actions[rec.sid] = "wake"  # marked typed (wake_eta) only once _dispatch spawns it
         _event(ctx.paths, "wake", rec.sid, rec.record_id, rec.substate)
+        n += 1
+    return n
+
+
+SNAP_TIMEOUT_S = 20
+
+
+def snap_bin() -> str:
+    """W6b's lr-composer-snapshot.sh (LR_COMPOSER_SNAP_BIN is the seam)."""
+    return os.environ.get("LR_COMPOSER_SNAP_BIN") or os.path.join(
+        act.SCRIPTS, "lib", "lr-composer-snapshot.sh"
+    )
+
+
+def _run_snap(args: List[str]) -> Tuple[int, str]:
+    try:
+        cp = subprocess.run(
+            ["/bin/bash", snap_bin()] + args,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=SNAP_TIMEOUT_S,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return 124, ""
+    return cp.returncode, cp.stdout
+
+
+def _draft_snapshots(ctx: Ctx, snap: T.Snapshot) -> int:
+    """D6.7: once per attempt, a record held on an operator draft (HOLD-DRAFT) gets its pane's raw
+    --ansi screen saved (lr-composer-snapshot.sh snap: a read, it types nothing) and the draft row
+    kept, so the page can quote what the operator wrote. Draft stash stays off (decision 6): this
+    snapshot is the only record of the draft. A failed read records nothing and says so."""
+    n = 0
+    for rec in ctx.records.values():
+        if not rec.open or rec.substate != "HOLD-DRAFT" or not rec.pane:
+            continue
+        if rec.close.get("draft_snap_attempt") == rec.attempt:
+            continue
+        rec.close["draft_snap_attempt"] = rec.attempt
+        pane = snap.panes.get("%d:%d" % rec.pane)
+        rc, out = _run_snap(
+            [
+                "snap",
+                str(rec.pane[1]),
+                rec.sid,
+                "HOLD-DRAFT",
+                "--focused",
+                "1" if pane is not None and pane.is_focused else "0",
+                "--limited",
+                "1" if rec.kind == "limited" else "0",
+            ]
+        )
+        lines = [x for x in out.splitlines() if x.strip()]
+        if rc != 0 or not lines:
+            _event(ctx.paths, "draft-snap-none", rec.sid, rec.record_id, "rc=%d" % rc)
+            continue
+        rec.close["draft_snap"] = lines[-1]
+        rc, rows = _run_snap(["row", lines[-1]])
+        text = " / ".join(r.strip() for r in rows.splitlines() if r.strip())
+        if rc == 0 and text:
+            rec.close["draft_text"] = text[:300]
+        _event(ctx.paths, "draft-snap", rec.sid, rec.record_id, lines[-1])
         n += 1
     return n
 
@@ -1108,6 +1172,7 @@ def run_pass(ctx: Ctx, force_observe: bool = False) -> Dict[str, Any]:
     buckets, stale = _census(ctx, snap, facts, reqs, mode, now)
     _focus_ledger(paths, snap, buckets, mode, now)
     _derive(ctx, snap, now, facts)
+    _draft_snapshots(ctx, snap)
     for rec in (
         ctx.records.values()
     ):  # the fold audit's evidence (plan § W5): cheap, never raises

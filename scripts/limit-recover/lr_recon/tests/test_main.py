@@ -366,6 +366,66 @@ class MainTests(unittest.TestCase):
         with open(sp.call_args.args[3][5], encoding="utf-8") as fh:
             self.assertEqual(fh.read(), "continue\n")
 
+    # ── D6.7: the held draft is snapshotted (a read) and quoted in the page ───────────────────
+    def _snapper(self, snap_rc=0):
+        """snap is stubbed (no kitty in a unit test); row runs W6b's REAL parser on W0's frame."""
+        repo = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
+        real = os.path.join(repo, "scripts", "lib", "lr-composer-snapshot.sh")
+        frame = os.path.join(repo, "tests", "fixtures", "lr-recon", "screens", "composer-draft-2.1.284.txt")
+        if not os.path.exists(real):
+            self.skipTest("lr-composer-snapshot.sh not on this tree")
+        stub = os.path.join(self.tmp, "snapper")
+        with open(stub, "w") as fh:
+            fh.write(
+                '#!/bin/bash\necho "$*" >> "%s/snap.argv"\n'
+                'case "$1" in snap) echo "%s"; exit %d ;; '  # a failure may still print
+                'row) exec /bin/bash "%s" row "$2" ;; esac\n'
+                % (self.tmp, frame, snap_rc, real)
+            )
+        os.chmod(stub, 0o755)
+        return stub
+
+    def test_a_held_draft_is_snapshotted_once_per_attempt_and_quoted(self):
+        M.store.ensure_dirs(self.paths)
+        ctx = M.Ctx(self.paths, None, self.home)
+        snap = _snap(1.0, self.tmp)
+        r = T.Record(sid=self.LEAD, record_id="r1", kind="limited", pane=(5, 7), substate="HOLD-DRAFT")
+        ctx.records[self.LEAD] = r
+        with mock.patch.dict(os.environ, {"LR_COMPOSER_SNAP_BIN": self._snapper()}):
+            self.assertEqual(M._draft_snapshots(ctx, snap), 1)
+            self.assertEqual(M._draft_snapshots(ctx, snap), 0)  # once per attempt
+            r.attempt += 1
+            self.assertEqual(M._draft_snapshots(ctx, snap), 1)
+        with open(os.path.join(self.tmp, "snap.argv")) as fh:
+            first = fh.readline().split()
+        self.assertEqual(first[:4], ["snap", "7", self.LEAD, "HOLD-DRAFT"])
+        self.assertEqual(first[4:], ["--focused", "0", "--limited", "1"])
+        self.assertTrue(r.close["draft_text"].startswith("Use the Bash tool with run_in_background"))
+        r.wait = T.Wait(reason="HOLD-DRAFT", since=0.0, max_age_s=900)
+        from lr_recon import report
+
+        line = report.residue_needs(r, 2000.0)
+        self.assertIn('the draft reads: "Use the Bash tool', line)
+        pages = []
+        rep = report.Reporter(self.paths, "act", page=pages.append, now=lambda: 2000.0)
+        cohort = T.Cohort(cid="c", acct="next3", scope="7d")
+        self.assertIn('the draft reads: "Use the Bash tool', rep.max_age_page(cohort, r))
+
+    def test_every_pass_takes_the_draft_snapshots(self):
+        with mock.patch.object(M, "_draft_snapshots", return_value=0) as ds:
+            self._pass("observe")
+        ds.assert_called_once()
+
+    def test_a_failed_snapshot_records_nothing_and_says_so(self):
+        M.store.ensure_dirs(self.paths)
+        ctx = M.Ctx(self.paths, None, self.home)
+        r = T.Record(sid=self.LEAD, record_id="r1", kind="limited", pane=(5, 7), substate="HOLD-DRAFT")
+        ctx.records[self.LEAD] = r
+        with mock.patch.dict(os.environ, {"LR_COMPOSER_SNAP_BIN": self._snapper(snap_rc=1)}):
+            self.assertEqual(M._draft_snapshots(ctx, _snap(1.0, self.tmp)), 0)
+        self.assertNotIn("draft_text", r.close)
+        self.assertIn("draft-snap-none", [e["ev"] for e in self._events()])
+
     def test_pass_writes_the_readout_line(self):
         ctx, _s, _am, _popen = self._pass("observe")
         with open(self.paths.p("readout.line"), encoding="utf-8") as fh:
