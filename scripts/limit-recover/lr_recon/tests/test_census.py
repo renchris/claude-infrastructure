@@ -83,8 +83,23 @@ class CensusBuckets(unittest.TestCase):
             self.b(self._s(transcript=T.TranscriptObs())).name, "IMPOSSIBLE"
         )
         self.assertEqual(self.b(self._s(cwd="/nonexistent/gone")).reason, "cwd-gone")
+        # a brief that merely names the lead's '@session-<sid8>' tag is not a member (D4.1)
+        self.snap.procs[98] = T.ProcRow(
+            98, 1, "S", L, "claude -p ping w@session-abcdef01"
+        )
+        self.assertNotEqual(self.b(self._s()).name, "HELD:team")
+        member = "claude --agent-id w@session-abcdef01 --parent-session-id abcdef01-x"
+        self.snap.procs[97] = T.ProcRow(97, 1, "Z", L, member)  # a zombie is not live
+        self.assertNotEqual(self.b(self._s()).name, "HELD:team")
+        self.assertFalse(
+            C.is_member_argv(member, "abcdef01")
+        )  # a sid prefix is not the sid
         self.snap.procs[99] = T.ProcRow(
-            99, 1, "S", L, "claude --agent-id w@session-abcdef01"
+            99,
+            1,
+            "S",
+            L,
+            "claude --agent-id w@session-abcdef01 --parent-session-id abcdef01-x",
         )
         self.assertEqual(self.b(self._s()).name, "HELD:team")
 

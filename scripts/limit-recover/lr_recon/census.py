@@ -31,10 +31,28 @@ def _pane(s: T.SessionObs, snap: T.Snapshot) -> Optional[T.PaneObs]:
     return snap.panes.get("%d:%d" % s.pane) if s.pane else None
 
 
+_CLAUDE_ARGV0 = ("claude", "claude.exe")
+
+
+def is_member_argv(args: str, sid: str) -> bool:
+    """A teammate of lead ``sid``: argv[0] is claude/claude.exe and the argv carries the adjacent
+    tokens ``--parent-session-id <sid>``. The Python copy of scripts/limit-recover/lr-team.sh
+    (D4.1); tests/lr-team.bats pins the two equal. The old '@session-<sid8>' substring matched
+    quoted prose and missed named teams."""
+    toks = args.split()
+    if not sid or not toks or os.path.basename(toks[0]) not in _CLAUDE_ARGV0:
+        return False
+    return any(
+        toks[i] == "--parent-session-id" and toks[i + 1] == sid
+        for i in range(1, len(toks) - 1)
+    )
+
+
 def live_members(sid: str, snap: T.Snapshot) -> int:
-    """Teammates of lead ``sid``: their argv carries ``--agent-id <name>@session-<lead sid8>``."""
-    tag = "@session-" + sid[:8]
-    return sum(1 for r in snap.procs.values() if not r.zombie and tag in r.args)
+    """Live, non-zombie teammates of lead ``sid`` (see ``is_member_argv``)."""
+    return sum(
+        1 for r in snap.procs.values() if not r.zombie and is_member_argv(r.args, sid)
+    )
 
 
 def _distinct_holders(s: T.SessionObs) -> int:
