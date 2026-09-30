@@ -513,15 +513,19 @@ SID_UUID="a1b2c3d4-0000-4000-8000-000000000002"
 
 # ── 7 · /exit READ-BACK MISMATCH ───────────────────────────────────────────────────────────────
 
-@test "7 an /exit that reads back as anything else gets five DELs, an unconfirm and no CR" {
-  local rb
-  for rb in "/exi" "x/exit"; do
+# D7.3 (FLEET_V2 W6): the five DELs erase from the END, so they are ours only when our `/exit` IS the
+# end. `ab/exit` (the operator typed first) gets them; `/exitab` (typed after) and a torn `/exi` are
+# held with nothing typed. Mutant: send the DELs on every mismatch again — `/exitab` goes red.
+@test "7 an /exit that reads back as anything else holds with an unconfirm and no CR; DELs only over a trailing /exit" {
+  local rb dels
+  for rb in "/exi" "x/exit" "ab/exit" "/exitab"; do
+    case "$rb" in */exit) dels=1 ;; *) dels=0 ;; esac
     tail_world
     printf '%s\n' "" "$rb" > "$READS"
     run recycle_fire_commit "$SESS"
     [ "$status" -eq 1 ] || { echo "[$rb] status=$status $output"; cat "$CALLS"; false; }
     [ "$(calls_n "send /exit")" = 1 ] || { cat "$CALLS"; false; }
-    [ "$(calls_n "send \$'\\177\\177\\177\\177\\177'")" = 1 ] || { echo "[$rb]"; cat "$CALLS"; false; }
+    [ "$(calls_n "send \$'\\177\\177\\177\\177\\177'")" = "$dels" ] || { echo "[$rb] want $dels DEL send(s)"; cat "$CALLS"; false; }
     [ "$(calls_n "send \$'\\r'")" = 0 ] || { echo "[$rb] a CR was sent"; cat "$CALLS"; false; }
     grep -q '^transplant --phase unconfirm ' "$CALLS" || { cat "$CALLS"; false; }
     grep -q "^debt abandon --sid $SESS " "$CALLS" || { cat "$CALLS"; false; }

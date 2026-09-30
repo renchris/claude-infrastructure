@@ -2990,11 +2990,15 @@ hf_recycle_last_read() { # → 0 every read clean · 1 refused (HF_LR_REASON, HF
 }
 
 # THE /exit READ-BACK. `/exit` goes in WITHOUT Enter and is read back; only the exact text earns its
-# CR, sent as its OWN keystroke. Anything else — an operator keystroke that landed between the last
-# read and this one, a torn read — gets exactly five DELs (our five characters, nobody else's) and a
-# hold. This replaces a blind 3x type-with-Enter plus a blind second Enter, either of which could
-# submit an operator's half-typed message fused to our /exit.
-hf_exit_readback() { # $1=pane → 0 exact /exit read back and CR sent · 1 not (HF_EXIT_RB_TEXT; five DELs sent)
+# CR, sent as its OWN keystroke. Anything else is a hold, and this replaces a blind 3x
+# type-with-Enter plus a blind second Enter, either of which could submit an operator's half-typed
+# message fused to our /exit.
+# THE UNDO IS FIVE DELs, AND ONLY WHEN OUR FIVE CHARACTERS ARE LAST (FLEET_V2 W6, D7.3). DEL erases
+# from the cursor end, so five of them over `/exitab` — an operator typing after our /exit — delete
+# `ab` and three of ours and leave `/e`. They are sent only when the read-back ENDS with `/exit`
+# (`ab/exit`: the operator typed first, our keystrokes are the tail). Any other read — `/exitab`, a
+# torn `/exi`, an unreadable box — holds without typing: an operator's text is never ours to edit.
+hf_exit_readback() { # $1=pane → 0 exact /exit read back and CR sent · 1 not (HF_EXIT_RB_TEXT; DELs only over a trailing /exit)
   local id="${1##*:}" c n=0
   HF_EXIT_RB_TEXT="<unreadable>"
   hf_bounded "$RCY_IT2" session send -s "$id" "/exit" >/dev/null 2>&1 || true
@@ -3009,7 +3013,9 @@ hf_exit_readback() { # $1=pane → 0 exact /exit read back and CR sent · 1 not 
     hf_bounded "$RCY_IT2" session send -s "$id" $'\r' >/dev/null 2>&1 || true
     return 0
   fi
-  hf_bounded "$RCY_IT2" session send -s "$id" $'\x7f\x7f\x7f\x7f\x7f' >/dev/null 2>&1 || true
+  case "$HF_EXIT_RB_TEXT" in
+    */exit) hf_bounded "$RCY_IT2" session send -s "$id" $'\x7f\x7f\x7f\x7f\x7f' >/dev/null 2>&1 || true ;;
+  esac
   return 1
 }
 
