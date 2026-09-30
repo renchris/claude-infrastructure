@@ -1,3 +1,7 @@
+---
+status: in-progress
+---
+
 # Stop-hook message tiering — what is blocked, and on what
 
 **Source:** workflow `wf_ed0162bc-930`, 11 agents, 2026-08-23. Produced while applying the recap prompt

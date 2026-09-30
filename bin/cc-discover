@@ -146,7 +146,8 @@ add_candidate() {
   # Array-built: a probe is a shell command line, so it contains spaces by construction and an
   # unquoted ${falsifier:+…} expansion would word-split it back into separate arguments.
   [ -n "$falsifier" ] && aargs=("${aargs[@]}" --falsifier "$falsifier")
-  if ! "$BACKLOG_BIN" "${aargs[@]}" >/dev/null 2>&1; then
+  LAST_ADD_ID=""
+  if ! LAST_ADD_ID="$("$BACKLOG_BIN" "${aargs[@]}" 2>/dev/null | tail -1)"; then
     idl_log "$source" failed "cc-backlog add nonzero: $title"
     return 1
   fi
@@ -191,8 +192,27 @@ critic_frontier_hole() {
 # ── C2 plan-open ─────────────────────────────────────────────────────────────
 # `find-plan.sh --list-open` emits `STATUS | PROJECT | PATH | TITLE` (space-pipe-space).
 # Unresolvable find-plan → abstain (a missing source, never a fabricated candidate).
+# link_programme <advance-id> <plan-path> <folded-json> — the PROGRAMME link (BACKLOG_MASTER W0
+# ledger-retraction.3). A plan whose waves are filed as their own rows (dodRef = the plan) makes its
+# `advance <plan>` row a coordination header: marked a roster over that dodRef it cannot be
+# dispatched, and it closes when its last wave row closes (cc-backlog roster --dod). A plan with no
+# open wave rows keeps its advance row as ordinary work.
+link_programme() {
+  local aid="$1" path="$2" all="$3" nmem
+  [ -n "$aid" ] && [ -n "$all" ] || return 0
+  printf '%s' "$all" | jq -e --arg a "$aid" --arg d "$path" \
+    'any(.[]; .id == $a and (.rosterDod // "") == $d)' >/dev/null 2>&1 && return 0
+  nmem="$(printf '%s' "$all" | jq --arg a "$aid" --arg d "$path" \
+    '[.[] | select(.id != $a and (.dodRef // "") == $d and .status != "done")] | length' 2>/dev/null)"
+  case "$nmem" in ''|*[!0-9]*|0) return 0 ;; esac
+  if "$BACKLOG_BIN" roster "$aid" --dod "$path" >/dev/null 2>&1; then
+    printf 'link [plan-open] %s is the programme row over %s wave row(s) of %s\n' "$aid" "$nmem" "$path"
+  fi
+  return 0
+}
+
 critic_plan_open() {
-  local added=0 cands=0 line proj path title rc bin scan
+  local added=0 cands=0 line proj path title rc bin scan folded=""
   bin="$(resolve_helper "$FINDPLAN_RAW")" || { abstain plan-open "find-plan absent: $FINDPLAN_RAW"; return 0; }
   # THE PRE-MINT RE-CHECK (2026-08-16, BACKLOG_DRAIN_24_7 §4 C2). Resolved ONCE per run, outside the
   # loop: an unresolvable scanner is a property of the deployment, not of a plan, and re-asking it per
@@ -291,6 +311,10 @@ critic_plan_open() {
     add_candidate "advance $title" "$proj" "$path" "plan-open" \
       "out=\$(\"\$HOME/.claude/scripts/plan-phase-scan.sh\" $(sq "$path") --falsify 2>/dev/null); rc=\$?; [ \"\$out\" = FALSIFIED ] && exit 0; case \$rc in 2|124|126|127) exit \$rc;; esac; exit 1"; rc=$?
     cands=$((cands + 1)); [ "$rc" -eq 0 ] && added=$((added + 1))
+    if [ "$DRY_RUN" -eq 0 ] && [ -n "${LAST_ADD_ID:-}" ]; then
+      [ -n "$folded" ] || folded="$("$BACKLOG_BIN" list --all --json 2>/dev/null || true)"
+      link_programme "$LAST_ADD_ID" "$path" "$folded"
+    fi
   done < <("$bin" --list-open 2>/dev/null)
   emit_critic_result plan-open "$added" "$cands"
 }

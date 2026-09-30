@@ -48,7 +48,9 @@ plan_status() {
   [[ -n "$val" ]] || { printf 'unknown\n'; return 0; }
   val=${val#*:}
   val=$(printf '%s' "$val" | tr -d ' \t"'\''`' | tr '[:upper:]' '[:lower:]')
-  case "$val" in in_progress) val=in-progress ;; completed) val=complete ;; esac
+  # `done` / `finished` are how prose plans spell complete (AUTONOMY_CORE_INSTALL says `status: done`
+  # and sat in --list-open as UNKNOWN; BACKLOG_MASTER W0 ledger-retraction.3).
+  case "$val" in in_progress) val=in-progress ;; completed|done|finished) val=complete ;; esac
   case "$val" in
     open|in-progress|complete|superseded) printf '%s\n' "$val" ;;
     *) printf 'unknown\n' ;;

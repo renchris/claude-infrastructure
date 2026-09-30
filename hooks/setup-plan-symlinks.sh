@@ -74,7 +74,7 @@ if [ -n "$PROJ_LIST" ]; then
         fm && st=="unknown" && tolower($0) ~ /^status:/ {
             v=$0; sub(/^[^:]*:/, "", v)
             gsub(/[[:space:]"]|'\''|`/, "", v); v=tolower(v)
-            if (v=="completed") v="complete"
+            if (v=="completed" || v=="done" || v=="finished") v="complete"
             if (v=="complete" || v=="superseded") st=v
             nextfile
         }

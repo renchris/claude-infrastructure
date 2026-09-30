@@ -1,3 +1,7 @@
+---
+status: in-progress
+---
+
 # RESO_SECURITY_100P — every finding of the 2026-09-22 Cloudflare audit, driven to done
 
 **Scope (frozen):** every unit the Cloudflare `security-audit` run left open on reso — the **6

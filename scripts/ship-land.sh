@@ -3841,6 +3841,34 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
   fi
 
+  # ── PLAN FRONTMATTER (BACKLOG_MASTER W0 ledger-retraction.3) ─────────────────────────────────
+  # A plan with no `status:` frontmatter reads UNKNOWN in find-plan.sh --list-open forever, so its
+  # plan-open row can never retract. Diff-scoped like the rules arm: only plans this land adds or
+  # edits can block. gate_bounded: SHIP_LAND_PLANFM_LINT=/nonexistent disarms a broken detector,
+  # and --selftest runs first so a detector that stopped discriminating refuses loudly.
+  PLANFM_LINT="${SHIP_LAND_PLANFM_LINT:-scripts/plan-frontmatter-lint.sh}"
+  if [[ -x "$PLANFM_LINT" ]]; then
+    local planfm_own=""
+    planfm_own="$(git diff --name-only --diff-filter=AM "$range" -- 'docs/plans/*.md' 2>/dev/null || true)"
+    if [[ -n "$planfm_own" ]]; then
+      echo "→ gate: plan frontmatter (this land adds/edits $(printf '%s\n' "$planfm_own" | grep -c .) plan file(s))" >&2
+      if ! selftest_ok "$PLANFM_LINT"; then
+        echo "✗ gate: plan-frontmatter-lint --selftest FAILED — fix the lint before landing." >&2
+        echo "  Escape if it is the detector that is broken: SHIP_LAND_PLANFM_LINT=/nonexistent" >&2
+        gate_red plan-frontmatter-selftest
+        return 1
+      fi
+      local -a _pfa=()
+      while IFS= read -r _pf; do [[ -n "$_pf" ]] && _pfa+=(--file "$_pf"); done <<< "$planfm_own"
+      if ! "$PLANFM_LINT" "${_pfa[@]}" >&2; then
+        echo "✗ gate: plan frontmatter RED — open each named plan with ---/status: …/--- (or mark a" >&2
+        echo "  design companion with a first line <!-- plan-companion: <PLAN> -->)." >&2
+        gate_red plan-frontmatter
+        return 1
+      fi
+    fi
+  fi
+
   # ── PUBLIC-REPO HYGIENE: personal identifiers and local-only content ─────────────────────────
   # This repo is public (docs/plans/PUBLIC_REPO_HYGIENE.md). The tree was cleaned once; this is
   # what keeps it clean. Every land runs it, OWN-SCOPE: only lines and paths the range ADDS can

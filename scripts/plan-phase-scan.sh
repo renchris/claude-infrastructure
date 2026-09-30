@@ -157,7 +157,17 @@ trap "rm -f '$tmp_records'" EXIT
 
 # Single awk over SCAN_OUT which contains both H: headings and S: body statuses.
 # Avoids -v newline limitations that broke body-status passing.
-awk -v total="$TOTAL_LINES" '
+# A plan written as PROSE carries no per-section markers, so every heading defaults to PENDING and a
+# finished plan reads as open work forever. Its frontmatter is the plan's own declaration: when it
+# says complete (find-plan.sh --status, which maps done/completed too), an unmarked section is DONE
+# with status_source "frontmatter". Explicit section markers still win (BACKLOG_MASTER W0 ret.3).
+FM_COMPLETE=0
+_fp_bin="$(dirname "${BASH_SOURCE[0]}")/find-plan.sh"
+if [[ -x "$_fp_bin" ]] && [[ "$("$_fp_bin" --status "$FILE" 2>/dev/null | head -1)" == complete ]]; then
+  FM_COMPLETE=1
+fi
+
+awk -v total="$TOTAL_LINES" -v fm_complete="$FM_COMPLETE" '
   BEGIN { n = 0; bs_n = 0 }
   /^H:[0-9]+:#{1,6} / {
     # Strip "H:" prefix — lines[n] holds "LINENUM:#### Title"
@@ -234,6 +244,8 @@ awk -v total="$TOTAL_LINES" '
           }
         }
       }
+
+      if (status == "PENDING" && fm_complete == 1) { status = "DONE"; status_source = "frontmatter" }
 
       # Commit-hash detection: 7+ lowercase hex chars, surrounded by backticks or word boundaries
       # (Accept 7-40 to match short + long hashes. Exclude purely numeric strings.)

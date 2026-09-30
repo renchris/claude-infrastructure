@@ -1,3 +1,7 @@
+---
+status: complete
+---
+
 # Ship/Land Concurrency Hardening — claude-infrastructure + global /ship
 
 **Scope (frozen):** make concurrent-session landings unable to silently drop a sibling
