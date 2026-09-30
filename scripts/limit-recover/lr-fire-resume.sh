@@ -807,9 +807,11 @@ LR_IT2="$HOME/.claude/bin/it2"
 # CC_PANE_ID after a transplant, and this file runs INSIDE a transplanted pane, which is
 # exactly the population that inverts. The `##*:` strip is safe for either spelling.
 LR_PANE="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; LR_PANE="${LR_PANE##*:}"
-# The needle the composer must contain for a re-Enter to be allowed: the head of the prompt, printable
-# ASCII only and whitespace-stripped, because that is the exact shape the screen reader produces.
-LR_SCREEN_WANT="$(printf '%s' "$PROMPT" | LC_ALL=C tr -cd '[:print:]' | LC_ALL=C tr -d '[:space:]' | cut -c1-40)"
+# The needle the composer must contain for a re-Enter to be allowed: the head of the prompt, filtered
+# and whitespace-stripped exactly as the screen reader below filters the box (D6.8: non-ASCII is
+# content, only ❯, U+00A0 and control bytes are dropped), and cut on CHARACTERS, never bytes.
+_lrf_ink() { LC_ALL=C perl -0777 -pe 's/\xE2\x9D\xAF|\xC2\xA0//g; tr/\x00-\x1F\x7F//d' | LC_ALL=C tr -d '[:space:]'; }
+LR_SCREEN_WANT="$(printf '%s' "$PROMPT" | _lrf_ink | perl -CS -0777 -ne 'print substr($_, 0, 40)')"
 # …AND THE RUN'S NONCE, for the composer that shows no head at all (2026-09-27, pane 751). Claude Code
 # collapses a long paste into a `[Pasted text #1]` chip, so the 40-char head above is never on screen
 # and a pristine paste read DRAFT: no re-Enter, and the session sat TASK-LESS for hours. The submit
@@ -822,7 +824,7 @@ case "$LR_SCREEN_NONCE" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a
 # prompt is collapsed into the chip and only the last few keystrokes land as text after it — `2bd7`,
 # half the nonce — so the whole-nonce needle above misses too. The tail of OUR prompt is random
 # (it ends in the nonce), so a fragment of it after a chip is ours; a fragment must be ≥2 characters.
-LR_SCREEN_TAIL="$(printf '%s' "$PROMPT" | LC_ALL=C tr -cd '[:print:]' | LC_ALL=C tr -d '[:space:]' | tail -c 48)"
+LR_SCREEN_TAIL="$(printf '%s' "$PROMPT" | _lrf_ink | perl -CS -0777 -ne 'print length($_) > 48 ? substr($_, -48) : $_')"
 IFS='' read -r -d '' LR_SCREEN_SH <<'LRSCREENSH' || true
 # EMPTY | DRAFT | DRAFT-MINE | MENU | UNKNOWN — the composer, read out of band from the pane itself.
 # The box is found by its BORDER RUNS (a repeat of U+2500), never by a literal TUI phrase: a phrase
@@ -838,8 +840,9 @@ body="$(LC_ALL=C awk -v b='────────────' '
   { line[NR] = $0; if (index($0, b) > 0) { b2 = b1; b1 = NR } }
   END { if (b1 == 0 || b2 == 0 || b1 - b2 < 2) exit 9; for (i = b2 + 1; i < b1; i++) print line[i] }' <<<"$scr")" \
   || { printf UNKNOWN; exit 0; }
-# [:print:] drops the newlines AND the box ink, so an empty composer reduces to the empty string.
-body="$(printf '%s' "$body" | LC_ALL=C tr -cd '[:print:]')"
+# The box ink (❯, U+00A0) and the control bytes go; every other character is content (D6.8), so an
+# empty composer reduces to the empty string and a non-ASCII draft does not.
+body="$(printf '%s' "$body" | LC_ALL=C perl -0777 -pe 's/\xE2\x9D\xAF|\xC2\xA0//g; tr/\x00-\x1F\x7F//d')"
 # The never-typed-in placeholder, matched as a WHOLE row: a real draft that merely starts with
 # `Try "` must still read as a draft, because the cost of a loose match is typing over live text.
 if LC_ALL=C grep -qE '^[[:space:]]*Try "[^"]*("|\.\.\.)[[:space:]]*$' <<<"$body"; then body=""; fi

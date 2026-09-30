@@ -64,6 +64,9 @@ EOF
   fi
   if [ "${#c}" -le "${CC_COMPOSER_STRAY_MAX:-2}" ]; then
     case "$c" in /*) return 1 ;; esac
+    # Non-ASCII is never a stray (D6.8): one CJK character is one keystroke of a real draft, and
+    # ${#c} counts it as 1 under a UTF-8 locale.
+    printf '%s' "$c" | LC_ALL=C grep -q '[^ -~]' && return 1
     printf 'stray-keystroke'; return 0
   fi
   return 1

@@ -3533,7 +3533,15 @@ composer_content() { # $1=it2-bin $2=session-id → stdout: printable composer c
       } elsif (defined $2) { $o .= $2 unless $d }
     }
     print $o;')"
-  raw="$(printf '%s' "$raw" | LC_ALL=C tr -cd '[:print:]')"
+  # NON-ASCII IS CONTENT (FLEET_V2 W6, D6.8). This used to keep only printable ASCII, so a draft
+  # written only in non-ASCII (日本語, emoji) read EMPTY and /exit could merge into it, and a mostly
+  # non-ASCII draft whose ASCII part was ≤2 characters read as a stray keystroke and was scrubbed
+  # whole. 12.1% of 40,332 deduped prompts contain non-ASCII. The only non-ASCII ink an empty box
+  # renders is the prompt glyph ❯ (U+276F) and U+00A0 after it (every fixture screen, and the rig's
+  # captures), so exactly those two and the control bytes are dropped; everything else counts. The
+  # read-back needles (paste_readback_ok) use the same filter so a payload compares equal to itself.
+  # scripts/lib/cc-tui.sh and lr-fire-resume.sh carry the same line; tests/cc-tui.bats pins all three.
+  raw="$(printf '%s' "$raw" | LC_ALL=C perl -0777 -pe 's/\xE2\x9D\xAF|\xC2\xA0//g; tr/\x00-\x1F\x7F//d')"
   # Anchored placeholder: exact-whole-row only — a real draft that merely STARTS with `Try "` must
   # still read as a draft (the failure direction of a loose match is typing over operator text).
   if printf '%s' "$raw" | LC_ALL=C grep -qE '^[[:space:]]*Try "[^"]*("|\.\.\.)[[:space:]]*$'; then
@@ -3793,7 +3801,7 @@ PASTE_TAIL_MIN="${PASTE_TAIL_MIN:-64}"
 
 paste_readback_ok() { # $1=pasted-text $2=space-stripped read-back → rc 0 proven / 1 mismatch
   local text="${1-}" got="${2-}" nl want ere min="${PASTE_TAIL_MIN:-64}"
-  want="$(printf '%s' "$text" | LC_ALL=C tr -cd '[:print:]' | LC_ALL=C tr -d '[:space:]')"
+  want="$(printf '%s' "$text" | LC_ALL=C perl -0777 -pe 's/\xE2\x9D\xAF|\xC2\xA0//g; tr/\x00-\x1F\x7F//d' | LC_ALL=C tr -d '[:space:]')"
   [ -n "$want" ] && [ "$got" = "$want" ] && return 0            # inline form (short, ≤2 newlines)
   # Scrolled-tail form: the composer is height-capped and follows the cursor, so a payload taller
   # than the box shows only its END. Tail-anchored on purpose — see the truncation-direction note

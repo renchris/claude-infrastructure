@@ -382,7 +382,8 @@ torn_hf_bounded() {
 _hf_goal_payload_20260825() {
   printf '%s' "/goal docs/research/SPATIAL_CV_TOOLING.md is landed on origin/main carrying a scored comparison and exactly one recommendation, including an explicit verdict on whether anything beats Opus 5 plus a screenshot — proven by printing the scored table and running git merge-base --is-ancestor HEAD origin/main; do not modify any tracked file outside docs/research/; full brief in the prompt above, DoD at docs/plans/HUMAN_SEO_VISUAL_REBUILD.md section W2"
 }
-_hf_strip() { printf '%s' "$1" | LC_ALL=C tr -cd '[:print:]' | LC_ALL=C tr -d '[:space:]'; }
+# The composer read's own filter (D6.8): non-ASCII is content, only ❯, U+00A0 and control bytes drop.
+_hf_strip() { printf '%s' "$1" | LC_ALL=C perl -0777 -pe 's/\xE2\x9D\xAF|\xC2\xA0//g; tr/\x00-\x1F\x7F//d' | LC_ALL=C tr -d '[:space:]'; }
 
 @test "readback: the pane-49 payload shown as its SCROLLED TAIL verifies (RED before the fix)" {
   local text want got

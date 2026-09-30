@@ -555,6 +555,52 @@ print(json.dumps({"type": "user",
   [ "$a" = "alivedrafthere" ]
 }
 
+# D6.8 (FLEET_V2 W6): non-ASCII is CONTENT. The two holes, on real-shaped screens: a draft written only
+# in non-ASCII used to read EMPTY (so /exit could merge into it), and `ok 谢谢…` read as the 2-character
+# stray `ok` (so it was receipted and scrubbed whole). All three parses must agree, and an empty box —
+# `❯` and U+00A0 are its only non-ASCII ink — must still read empty. Mutant: restore the ASCII-only
+# filter in any one parse and its agreement row goes red.
+@test "D6.8 non-ASCII drafts are content in all three composer parses; ❯ and U+00A0 alone still read empty" {
+  U="$BATS_TEST_TMPDIR/units.sh"
+  sed -n '/^composer_content() {/,/^}/p' "$HF" > "$U"
+  # shellcheck disable=SC1090
+  . "$U"
+  SCREEN_FILE="$SDIR/default"
+  hf_bounded() { cat "$SCREEN_FILE" 2>/dev/null; }
+  LRF="$REPO/scripts/limit-recover/lr-fire-resume.sh"
+  BLK="$BATS_TEST_TMPDIR/lr-screen.sh"
+  awk '/<<.LRSCREENSH./ { f = 1; next } /^LRSCREENSH$/ { f = 0 } f' "$LRF" > "$BLK"
+  export LR_IT2="$BATS_TEST_TMPDIR/lr-it2" LR_PANE=42 LR_SCREEN_WANT="" LRSCREEN="$SCREEN_FILE"
+  printf '#!/usr/bin/env bash\ncat "$LRSCREEN"\n' > "$LR_IT2"; chmod +x "$LR_IT2"
+  local FX="$REPO/tests/fixtures/lr-recon/screens" fx want a b lrv arc brc
+  for fx in composer-draft-nonascii-only-2.1.284 composer-draft-mostly-nonascii-2.1.284 empty-nbsp; do
+    rm -f "$SDIR/.n"
+    case "$fx" in
+      empty-nbsp) printf 'scrollback line\n%s\n\xe2\x9d\xaf\xc2\xa0 \n%s\n' "$B" "$B" > "$SCREEN_FILE"; want="" ;;
+      *nonascii-only*) cp "$FX/$fx.txt" "$SCREEN_FILE"; want="日本語のメモ" ;;
+      *) cp "$FX/$fx.txt" "$SCREEN_FILE"; want="ok谢谢你的帮助" ;;
+    esac
+    arc=0; a="$(cc_tui_composer 42)" || arc=$?
+    brc=0; b="$(composer_content it2 42)" || brc=$?
+    [ "$arc" = 0 ] || { echo "[$fx] cc-tui rc=$arc"; false; }
+    [ "$brc" = 0 ] || { echo "[$fx] handoff-fire rc=$brc"; false; }
+    [ "$a" = "$want" ] || { echo "[$fx] cc-tui read [$a] want [$want]"; false; }
+    [ "$b" = "$want" ] || { echo "[$fx] handoff-fire read [$b] want [$want]"; false; }
+    lrv="$(bash "$BLK")"
+    if [ -z "$want" ]; then [ "$lrv" = EMPTY ] || { echo "[$fx] lr-fire-resume $lrv"; false; }
+    else [ "$lrv" = DRAFT ] || { echo "[$fx] lr-fire-resume $lrv"; false; }; fi
+  done
+  # The stray class never takes non-ASCII: one CJK character is a keystroke of a real draft.
+  # shellcheck disable=SC1091
+  . "$REPO/scripts/lib/composer-intent.sh"
+  ! composer_unintended_class "好" >/dev/null || { echo "a CJK character read as a stray"; false; }
+  ! composer_unintended_class "ok谢谢" >/dev/null || { echo "a mostly non-ASCII draft read as a stray"; false; }
+  [ "$(composer_unintended_class ok)" = stray-keystroke ]
+  # A payload with non-ASCII reads back equal to itself (the needle uses the same filter).
+  printf '%s' "résumé — 続けて" > "$BATS_TEST_TMPDIR/p.txt"
+  cc_tui_readback_ok "$BATS_TEST_TMPDIR/p.txt" "résumé—続けて" || { echo "a non-ASCII payload read back as mangled"; false; }
+}
+
 @test "the never-typed-in placeholder row reads EMPTY, but a draft that merely starts with it does not" {
   printf 'x\n%s\n Try "fix the tests" \n%s\n' "$B" "$B" > "$SDIR/default"
   run cc_tui_composer 42

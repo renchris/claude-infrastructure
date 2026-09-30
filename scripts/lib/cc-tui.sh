@@ -187,7 +187,9 @@ cc_tui_composer() { # $1=window id → stdout: printable content, space-stripped
       } elsif (defined $2) { $o .= $2 unless $d }
     }
     print $o;')"
-  raw="$(printf '%s' "$raw" | LC_ALL=C tr -cd '[:print:]')"
+  # Non-ASCII is content; only the ❯ glyph, U+00A0 and control bytes are box ink (D6.8, the same
+  # line as handoff-fire.sh composer_content).
+  raw="$(printf '%s' "$raw" | LC_ALL=C perl -0777 -pe 's/\xE2\x9D\xAF|\xC2\xA0//g; tr/\x00-\x1F\x7F//d')"
   # The never-typed-in placeholder, matched as a WHOLE row only: a real draft that merely STARTS
   # with `Try "` must still read as a draft — a loose match types over operator text.
   if printf '%s' "$raw" | LC_ALL=C grep -qE '^[[:space:]]*Try "[^"]*("|\.\.\.)[[:space:]]*$'; then
@@ -275,7 +277,7 @@ cc_tui_readback_expect() { # $1=payload file → the forms a human should look f
 # ~1.7 rows of a 40-column composer.
 cc_tui_readback_ok() { # $1=payload file $2=space-stripped read-back → rc 0 proven / 1 mismatch
   local f="${1:-}" got="${2-}" want nl ere min="${CC_TUI_TAIL_MIN:-64}"
-  want="$(LC_ALL=C tr -cd '[:print:]' < "$f" 2>/dev/null | LC_ALL=C tr -d '[:space:]')"
+  want="$(LC_ALL=C perl -0777 -pe 's/\xE2\x9D\xAF|\xC2\xA0//g; tr/\x00-\x1F\x7F//d' < "$f" 2>/dev/null | LC_ALL=C tr -d '[:space:]')"
   [ -n "$want" ] && [ "$got" = "$want" ] && return 0                 # inline form
   # Scrolled-tail form: the composer is height-capped and follows the CURSOR, which after a
   # bracketed paste sits at the END, so a payload taller than the box shows only its tail. Anchored
@@ -421,7 +423,7 @@ cc_tui_cr() { # $1=id → 0 sent / 1 the RPC failed
 # differs — this only ever explains a clipboard attachment, never a mangled text.
 _cc_tui_trailing_image_chips() { # $1=payload file $2=space-stripped read-back → count on stdout
   local want rest n=0
-  want="$(LC_ALL=C tr -cd '[:print:]' < "${1:-}" 2>/dev/null | LC_ALL=C tr -d '[:space:]')"
+  want="$(LC_ALL=C perl -0777 -pe 's/\xE2\x9D\xAF|\xC2\xA0//g; tr/\x00-\x1F\x7F//d' < "${1:-}" 2>/dev/null | LC_ALL=C tr -d '[:space:]')"
   case "${2-}" in "$want"?*) rest="${2#"$want"}" ;; *) printf 0; return 0 ;; esac
   while [ -n "$rest" ]; do
     case "$rest" in
