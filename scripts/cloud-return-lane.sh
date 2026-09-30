@@ -44,7 +44,8 @@
 #     the stubs — which is what tests/autonomy-sweep.bats relies on.
 #
 # Env seams: CC_LANE_RETURN_BOUND_S (5400) · CC_LANE_RETIRE_BOUND_S (900) · CC_LANE_ANSWER_BOUND_S
-#   (300) · CC_LANE_ANSWER (1; 0 disables the answer pass) · CC_LANE_RETURN_LIMIT (25)
+#   (300) · CC_LANE_ANSWER (1; 0 disables the answer pass) · CC_LANE_RESCUE_BOUND_S (5400) ·
+#   CC_LANE_RESCUE (1; 0 disables the doc-rescue pass) · CC_LANE_RETURN_LIMIT (25)
 #   · CC_LANE_RETIRE_MAX (200) · CC_LANE_REPO (else CC_SWEEP_PRUNE_REPO, else the shared checkout) ·
 #   CC_CLOUD_STATE · CC_IDL · CC_LANE_TIMEOUT_BIN · CC_LANE_NOW (epoch override, tests)
 # Exits: 0 ran · 4 another lane holds the lock · 3 jq missing · 2 usage
@@ -70,10 +71,13 @@ RETURN_LIMIT="${CC_LANE_RETURN_LIMIT:-25}";     case "$RETURN_LIMIT" in ''|*[!0-
 RETIRE_MAX="${CC_LANE_RETIRE_MAX:-200}";        case "$RETIRE_MAX" in ''|*[!0-9]*) RETIRE_MAX=200 ;; esac
 ANSWER_BOUND="${CC_LANE_ANSWER_BOUND_S:-300}";  case "$ANSWER_BOUND" in ''|*[!0-9]*) ANSWER_BOUND=300 ;; esac
 ANSWER_ON="${CC_LANE_ANSWER:-1}"
+RESCUE_BOUND="${CC_LANE_RESCUE_BOUND_S:-5400}"; case "$RESCUE_BOUND" in ''|*[!0-9]*) RESCUE_BOUND=5400 ;; esac
+RESCUE_ON="${CC_LANE_RESCUE:-1}"
+RECONCILE_SH="$DIR/cloud-reconcile.sh"
 TMO="${CC_LANE_TIMEOUT_BIN:-$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)}"
 LOCK="$STATE/.lane.lock"
 # The lock outlives one whole tick and no more: a holder past both bounds plus the grace is dead.
-LOCK_TTL=$(( RETURN_BOUND + RETIRE_BOUND + 120 ))
+LOCK_TTL=$(( RETURN_BOUND + RETIRE_BOUND + RESCUE_BOUND + 120 ))
 
 now() { if [ -n "${CC_LANE_NOW:-}" ]; then printf '%s' "$CC_LANE_NOW"; else date +%s; fi; }
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -181,11 +185,19 @@ log_idl cloud-fire-gap "$(jq -cn --arg c "$frc" --arg e "$ftook" --argjson b "$F
 # ── 1. RETURN: land what has come back ─────────────────────────────────────────────────────────
 # The child is TOLD the bound (CC_RETURN_BOUND_S) so its own deadline pacing and lock TTL derive
 # from the same number that will kill it — one fact, one place.
+#
+# SHIP_ALLOW_OUTER_TIMEOUT=1 (2026-09-30, backlog e924e89f8dd1). ship-land's outer-timeout preflight
+# (ba8e5c24a, 2026-09-28) refuses any land with timeout/gtimeout among its ancestors, and this bound
+# is one — so from that day every automated cloud land exited 2 `reason=outer-timeout` before it
+# began (3 of 3 `.land-refused` artifacts since, including the TrueMemory verdict branches, which
+# were then retired with their docs never landed). This is the case the override exists for: the
+# bound is deliberate, sized to the unit, and cloud-return prices each land against it and never
+# STARTS one that would not fit (cloud-return.sh, "STARTING, NEVER INTERRUPTING").
 rc="skipped"; took=""; note=""
 if [ -x "$RETURN_SH" ]; then
   t0="$(date +%s)"
   if [ -n "$TMO" ] && [ -x "$TMO" ]; then
-    CC_RETURN_BOUND_S="$RETURN_BOUND" "$TMO" -k 10 "$RETURN_BOUND" bash "$RETURN_SH" --sweep --limit "$RETURN_LIMIT"
+    SHIP_ALLOW_OUTER_TIMEOUT=1 CC_RETURN_BOUND_S="$RETURN_BOUND" "$TMO" -k 10 "$RETURN_BOUND" bash "$RETURN_SH" --sweep --limit "$RETURN_LIMIT"
   else
     bash "$RETURN_SH" --sweep --limit "$RETURN_LIMIT"
   fi
@@ -296,5 +308,33 @@ if [ "$ANSWER_ON" != "0" ] && [ -f "$ANSWER_PY" ]; then
 fi
 log_idl cloud-answer "$(jq -cn --arg c "$arc" --arg e "$atook" --argjson b "$ANSWER_BOUND" --arg s "$atally" \
   '{cloud_answer_rc:$c, elapsed_s:($e|tonumber? // null), bound_s:$b, tally:$s}')"
+
+# ── 4. RESCUE: the docs no declaration state will ever land (2026-09-30, backlog e924e89f8dd1) ──────
+# A RETIRED or undeclared fire branch is outside the return pass by construction, and retirement
+# abandons content (`superseded` = the item closed; `conflict` = SOME file conflicts). Measured
+# 2026-09-30: 40 verdict/park docs on 39 such branches that trunk never received.
+# `cloud-reconcile.sh --rescue-docs` carries only the new docs/ files, chained into ONE land through
+# desk-land → ship-land. LAST, after every cheaper pass, and under its own deliberate bound for the
+# same reason as the return pass (hence the same override). A pass with nothing to rescue is one
+# fetch and a census — seconds. CC_LANE_RESCUE=0 disables it.
+xrc="skipped"; xtook=""; xline=""
+if [ "$RESCUE_ON" != "0" ] && [ -x "$RECONCILE_SH" ]; then
+  t0="$(date +%s)"
+  xout_f="$(mktemp -t cloud-lane-rescue.XXXXXX 2>/dev/null || printf '/tmp/cloud-lane-rescue.%s' "$$")"
+  if [ -n "$TMO" ] && [ -x "$TMO" ]; then
+    CONFIRM=1 SHIP_ALLOW_OUTER_TIMEOUT=1 CLOUD_RECONCILE_REPO="$REPO" CC_CLOUD_STATE="$STATE" \
+      "$TMO" -k 10 "$RESCUE_BOUND" bash "$RECONCILE_SH" --rescue-docs >"$xout_f" 2>&1
+  else
+    CONFIRM=1 CLOUD_RECONCILE_REPO="$REPO" CC_CLOUD_STATE="$STATE" bash "$RECONCILE_SH" --rescue-docs >"$xout_f" 2>&1
+  fi
+  xrc=$?
+  xtook=$(( $(date +%s) - t0 ))
+  xline="$(grep -E '^cloud-reconcile: rescue — ' "$xout_f" 2>/dev/null | tail -1)"
+  sed 's/^/    /' "$xout_f" 2>/dev/null
+  rm -f "$xout_f" 2>/dev/null
+  say "rescue pass rc=$xrc took=${xtook}s ${xline:+— $xline}"
+fi
+log_idl cloud-rescue "$(jq -cn --arg c "$xrc" --arg e "$xtook" --argjson b "$RESCUE_BOUND" --arg s "$xline" \
+  '{cloud_rescue_rc:$c, elapsed_s:($e|tonumber? // null), bound_s:$b, summary:$s}')"
 
 exit 0

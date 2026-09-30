@@ -306,3 +306,37 @@ EOF
   # the journal itself must still be wholly parseable — the property the guard exists for
   jq -e . "$CC_IDL" >/dev/null || false
 }
+
+# ── the outer-timeout override and the rescue pass (backlog e924e89f8dd1) ──────────────────────
+# ship-land refuses any land with timeout/gtimeout among its ancestors unless
+# SHIP_ALLOW_OUTER_TIMEOUT=1. The lane's bound is deliberate, so its land-bearing children must
+# carry the override — without it every automated cloud land exits 2 before it begins.
+@test "the return child carries SHIP_ALLOW_OUTER_TIMEOUT=1 under the lane's deliberate bound" {
+  printf '#!/bin/bash\necho "return allow=${SHIP_ALLOW_OUTER_TIMEOUT:-UNSET}" >>"$CALLS"\n' > "$D/cloud-return.sh"
+  chmod +x "$D/cloud-return.sh"
+  run bash "$LANE"
+  [ "$status" -eq 0 ]
+  grep -q '^return allow=1$' "$CALLS" || { cat "$CALLS"; false; }
+}
+
+@test "the RESCUE pass runs last with CONFIRM and the override, and journals its summary line" {
+  printf '#!/bin/bash\necho "rescue confirm=${CONFIRM:-UNSET} allow=${SHIP_ALLOW_OUTER_TIMEOUT:-UNSET} $*" >>"$CALLS"\necho "cloud-reconcile: rescue — 2 branch(es) with 3 doc path(s); 2 commit(s) landed, 0 failed."\n' > "$D/cloud-reconcile.sh"
+  chmod +x "$D/cloud-reconcile.sh"
+  run bash "$LANE"
+  [ "$status" -eq 0 ]
+  [ "$(tail -1 "$CALLS")" = "rescue confirm=1 allow=1 --rescue-docs" ] || { cat "$CALLS"; false; }
+  x="$(row cloud-rescue)"; [ -n "$x" ]
+  [ "$(printf '%s' "$x" | jq -r '.cloud_rescue_rc')" = "0" ]
+  printf '%s' "$x" | jq -e '.summary | test("2 commit\\(s\\) landed")' >/dev/null
+}
+
+@test "CC_LANE_RESCUE=0 disables the rescue pass, journalled skipped with null fields" {
+  printf '#!/bin/bash\necho "rescue ran" >>"$CALLS"\n' > "$D/cloud-reconcile.sh"
+  chmod +x "$D/cloud-reconcile.sh"
+  CC_LANE_RESCUE=0 run bash "$LANE"
+  [ "$status" -eq 0 ]
+  ! grep -q '^rescue' "$CALLS" || false
+  x="$(row cloud-rescue)"
+  [ "$(printf '%s' "$x" | jq -r '.cloud_rescue_rc')" = "skipped" ]
+  printf '%s' "$x" | jq -e '.elapsed_s == null' >/dev/null
+}
