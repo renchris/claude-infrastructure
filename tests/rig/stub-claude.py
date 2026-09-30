@@ -147,8 +147,8 @@ class Session:
         rec["session_id"] = self.sid
         if kind.startswith(
             "limit"
-        ):  # a reset 3 h out, so the stay rule never parks the rig
-            at = int(time.time()) + 3 * 3600
+        ):  # a reset 3 h out, so the stay rule never parks the rig — unless the knob asks
+            at = int(time.time()) + int(self.knobs.get("reset_in_s") or 3 * 3600)
             rec["quotaLimits"]["resetsAt"] = at
             word = "weekly" if kind == "limit7d" else "session"
             when = time.strftime("%-I:%M%p", time.localtime(at)).lower()

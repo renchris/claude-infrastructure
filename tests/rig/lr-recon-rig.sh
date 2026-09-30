@@ -196,7 +196,8 @@ printf 'act\n' > "$RIG/state/mode"; : > "$RIG/lr/recon.on"
 # A matrix with idle sessions exercises the idle fan-out, which is OFF by default twice over
 # (LR_IDLE_FANOUT, and fan-out-origin records are PLAN-ONLY without autorecover.on). The rig turns
 # both on for ITS OWN root only; the real ~/.reso/limit-recover is never touched.
-[ "$IDLE_FANOUT" = on ] && : > "$RIG/lr/autorecover.on"
+# D1.9: the reconciler acts on a record nobody asked for only with its OWN zero-human marker too.
+[ "$IDLE_FANOUT" = on ] && : > "$RIG/lr/autorecover.on" && : > "$RIG/state/autorecover.on"
 cat > "$RIG/supervisor.sh" <<EOF
 #!/bin/bash
 # KeepAlive + ThrottleInterval 10 for the daemon, StartInterval 30 for the watchdog.

@@ -5,6 +5,7 @@
         each mover → the next account (round-robin, rig accounts.json order) that is neither its
         source nor covered by an unexpired, uncontradicted fact in DIR. No eligible account ⇒
         {acct: null, reason: "no-eligible"} (the daemon's WAIT). Deterministic, network-free.
+        RIG_PLACE_STAY=1: a mover whose source is uncovered stays ({acct: <source>, reason: stay}).
   --assign-many F · --assign … · --unassign ID      recorded to $LR_RECON_ROOT/fake-accounts.log, rc 0
   anything else                                       recorded, prints {} and exits 0
 
@@ -77,6 +78,15 @@ def place(argv):
             m = json.loads(line)
             src = m.get("src", "")
             src = by_cfg.get(os.path.realpath(src), by_cfg.get(src, src))
+            if os.environ.get("RIG_PLACE_STAY") == "1" and src not in no:
+                # D1.11: --place's "stay" — the source itself has room (after its reset)
+                out[m["sid"]] = {
+                    "acct": src,
+                    "reason": "stay",
+                    "eta_s": None,
+                    "weight": m.get("w", 1),
+                }
+                continue
             elig = [n for n, _r, _c in accts if n != src and n not in no]
             if not elig:
                 out[m["sid"]] = {
