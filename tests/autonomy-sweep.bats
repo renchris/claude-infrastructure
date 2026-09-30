@@ -2008,3 +2008,91 @@ PY
   n="$(grep -c '_DETECTORS_HOISTED:-0' "$subj")" || true
   [ "${n:-0}" -eq 2 ] || { echo "expected 2 guarded fallback sites, found ${n:-0}"; false; }
 }
+
+# ══ desk-reach · THE STANDING ARMS PAGE THROUGH cc-desk-page, AND THE PAGE ARRIVES ═════════════════
+# Each arm used to page with `cc-notify --role desk … || true`. With the desk role dead (rc 3) that
+# page reached nobody and nothing said so. These cases force each arm to fire against a DEAD desk and
+# assert the one property that matters: exactly ONE page lands on a surface (a delivered:true idl line
+# from cc-desk-page, via the stub Notification Center), a second sweep does not repeat it, and the arm
+# writes nothing to the backlog — arming is not closing.
+arm_pages() { # <source> → delivered:true lines cc-desk-page wrote for that arm
+  local n; n="$(grep -c "\"tool\":\"cc-desk-page\".*\"source\":\"$1\".*\"delivered\":true" "$CC_IDL" 2>/dev/null)" || true
+  printf '%s' "${n:-0}"
+}
+# CLAUDE_CONFIG_DIR is fixtured too: the arms keep their damping stamps under "$_cc_cfg/autonomy",
+# and an operator's session exports CLAUDE_CONFIG_DIR, so without this a run from a live pane reads
+# the REAL stamps (a real same-day stamp silently damps the page under test) and writes them.
+dead_desk() {
+  export CLAUDE_CONFIG_DIR="$HOME/.claude"
+  export CC_STUB_RC=3 CC_STUB_VERDICT=unresolvable CC_SWEEP_OS_CHANNEL=auto
+}
+
+@test "desk-reach propose-goal arm: a flip pages the operator once when the desk is dead" {
+  dead_desk
+  export CC_SWEEP_PGW_BIN="$BATS_TEST_TMPDIR/pgw-flipped"
+  printf '#!/bin/bash\nexit 0\n' > "$CC_SWEEP_PGW_BIN"; chmod +x "$CC_SWEEP_PGW_BIN"
+  run "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ "$(arm_pages propose-goal-arm)" -eq 1 ]
+  grep -q '"channel":"notification-center"' "$CC_IDL"
+  run "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$(arm_pages propose-goal-arm)" -eq 1 ]          # damped to one delivered page per day
+  ! grep -q 'ProposeGoal' "$CC_BACKLOG_FILE" 2>/dev/null
+}
+
+@test "desk-reach propose-goal arm: an UNDELIVERED page is retried, not damped for the day" {
+  dead_desk; export CC_SWEEP_OS_CHANNEL=off
+  export CC_SWEEP_PGW_BIN="$BATS_TEST_TMPDIR/pgw-flipped"
+  printf '#!/bin/bash\nexit 0\n' > "$CC_SWEEP_PGW_BIN"; chmod +x "$CC_SWEEP_PGW_BIN"
+  run "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ ! -f "$HOME/.claude/autonomy/propose-goal-arm.paged" ]
+  grep -q '"source":"propose-goal-arm".*"delivered":false' "$CC_IDL"
+}
+
+@test "desk-reach dated-park arm: an armed park pages once, and the park stays blocked" {
+  dead_desk
+  printf '%s\n' '{"id":"aaaaaaaaaaaa","event":"add","title":"dated park","project":"p"}' \
+    '{"id":"aaaaaaaaaaaa","event":"block","needs":"On or after 2020-01-10, unblock this row."}' >> "$CC_BACKLOG_FILE"
+  run "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ "$(arm_pages dated-park-arm)" -eq 1 ]
+  run "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$(arm_pages dated-park-arm)" -eq 1 ]
+  [ "$(grep -c '"id":"aaaaaaaaaaaa"' "$CC_BACKLOG_FILE")" -eq 2 ]   # no unblock, no close
+}
+
+@test "desk-reach freeze arm: a second distinct freeze pages once; the third pages again" {
+  dead_desk
+  export CC_PANIC_LEDGER="$BATS_TEST_TMPDIR/panic.jsonl"
+  printf '%s\n' '{"kind":"freeze","boot":1786686149}' '{"kind":"freeze","boot":1786686150}' \
+    '{"kind":"freeze","boot":1790000000}' > "$CC_PANIC_LEDGER"
+  run "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ "$(arm_pages freeze-arm)" -eq 1 ]
+  run "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$(arm_pages freeze-arm)" -eq 1 ]
+  printf '%s\n' '{"kind":"freeze","boot":1791000000}' >> "$CC_PANIC_LEDGER"
+  run "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$(arm_pages freeze-arm)" -eq 2 ]
+  ! grep -qi 'freeze' "$CC_BACKLOG_FILE" 2>/dev/null
+}
+
+@test "desk-reach freeze arm: ONE distinct freeze (two rows 1 s apart) does not fire" {
+  dead_desk
+  export CC_PANIC_LEDGER="$BATS_TEST_TMPDIR/panic.jsonl"
+  printf '%s\n' '{"kind":"freeze","boot":1786686149}' '{"kind":"freeze","boot":1786686150}' > "$CC_PANIC_LEDGER"
+  run "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ "$(arm_pages freeze-arm)" -eq 0 ]
+  grep -q '"freeze_arm_verdict":"below-threshold"' "$CC_IDL"
+}
+
+@test "desk-reach drain arm: journals its would-fire decision and never fires by default" {
+  export CLAUDE_CONFIG_DIR="$HOME/.claude"
+  export CC_SWEEP_DRAIN_ARM_BIN="$BATS_TEST_TMPDIR/dra"
+  printf '#!/bin/bash\necho "{\\"mode\\":\\"${CC_DRAIN_AUTOFIRE:-would-fire}\\",\\"decision\\":\\"would-fire\\"}"\n' > "$CC_SWEEP_DRAIN_ARM_BIN"
+  run "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  grep -q '"drain_autofire_mode":"would-fire"' "$CC_IDL"
+  grep -q '"drain_revival":{"mode":"would-fire","decision":"would-fire"}' "$CC_IDL"
+}

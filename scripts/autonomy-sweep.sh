@@ -1564,7 +1564,26 @@ sweep_yield 2b-iii-b-propose-goal-arm
 #
 # PURE READ + one notify: it reads cache JSON and greps a binary. It writes no store, marks nothing
 # and spends no quota, so like 2f it needs no deployed-copy guard.
-_pgw="$_SWEEP_DIR/propose-goal-flag-watch.sh"
+#
+# HOW EVERY ARM BELOW PAGES — sweep_desk_page, not a bare `cc-notify --role desk … || true`. The
+# desk role has named dead pane 672 since 2026-09-09, so the bare form gave up (rc 3, or rc 124 at
+# the bound) and the `|| true` swallowed it: an arm built to fire once a month dropped that one page
+# and recorded nothing (idl.jsonl held 38 role:desk lines, 0 delivered). bin/cc-desk-page tries the
+# desk and, when no live desk takes it, pages the operator through lr-page.sh (Notification Center,
+# plus Pushover once ~/.config/lr-page/pushover.env exists), and writes ONE idl line saying which
+# channel took it. rc 0 = some channel took it. Where that binary is missing (a live layer that has
+# not converged it yet), the old desk-only call is the fallback, so an arm never goes quieter.
+_desk_page_bin="${CC_SWEEP_DESK_PAGE_BIN:-$_SWEEP_DIR/../bin/cc-desk-page}"
+sweep_desk_page() { # <source> <message> → rc 0 delivered on some channel · non-zero otherwise
+  if [ -x "$_desk_page_bin" ]; then
+    CC_DESK_PAGE_NOTIFY_BIN="$NOTIFY" CC_DESK_PAGE_IDL="$IDL" CC_ROLES_DIR="$ROLES_DIR" \
+      sweep_bounded 90 "$_desk_page_bin" --source "$1" -- "$2" >/dev/null 2>&1
+    return $?
+  fi
+  CC_ROLES_DIR="$ROLES_DIR" sweep_bounded "$NOTIFY_TIMEOUT_S" "$NOTIFY" --role desk "$2" >/dev/null 2>&1
+}
+
+_pgw="${CC_SWEEP_PGW_BIN:-$_SWEEP_DIR/propose-goal-flag-watch.sh}"   # seam: forced-fire tests
 _pgw_rc=""
 if [ -x "$_pgw" ]; then
   # Bounded and at `utility` like every other probe here, so the Background band's E-core
@@ -1574,8 +1593,18 @@ if [ -x "$_pgw" ]; then
   if [ "$_pgw_rc" -eq 0 ]; then
     # The page names the ROW and the ONE command, and says explicitly what must NOT happen — the
     # close this whole fix exists to prevent. Addressed to the desk ROLE, resolved at send time,
-    # exactly as §3 does below.
-    CC_ROLES_DIR="$ROLES_DIR" sweep_bounded "$NOTIFY_TIMEOUT_S" "$NOTIFY" --role desk       "🚩 tengu_propose_goal FLIPPED TRUE — cc-backlog 2a65b9bf722d is now ACTIONABLE. Adopt ProposeGoal: cc-backlog unblock 2a65b9bf722d. Do NOT close it as falsified; the flip is the START of this work, not the end of it. Read: bash scripts/propose-goal-flag-watch.sh --report"       >/dev/null 2>&1 || true
+    # exactly as §3 does below, with the operator fallback sweep_desk_page adds. This arm is the
+    # DURABLE OWNER of row 2a65b9bf722d, which is closed on it: the page text below carries the whole
+    # of the row's remaining work, so re-file from it when it fires. A flip is permanent, so the
+    # page repeats until someone adopts it — damped to ONE DELIVERED page per UTC day, because the
+    # fallback is now a banner and a banner every 300 s is a storm. The stamp is written only on
+    # delivery, so an undelivered page is retried next sweep rather than skipped for a day.
+    _pgw_stamp="$_cc_cfg/autonomy/propose-goal-arm.paged"
+    _pgw_today="$(date -u +%Y-%m-%d)"
+    if [ "$(cat "$_pgw_stamp" 2>/dev/null)" != "$_pgw_today" ] \
+       && sweep_desk_page propose-goal-arm "🚩 tengu_propose_goal FLIPPED TRUE — adopt ProposeGoal now (was backlog 2a65b9bf722d, closed on this arm). Re-file it: cc-backlog add --title 'adopt ProposeGoal (tengu_propose_goal flipped true)'. The flip is the start of the work, not the end. Read: bash scripts/propose-goal-flag-watch.sh --report"; then
+      printf '%s' "$_pgw_today" >"$_pgw_stamp" 2>/dev/null || true
+    fi
   fi
 fi
 # Journalled on EVERY sweep, including the quiet ones. "the watcher is absent", "the bound cut it"
@@ -1640,10 +1669,12 @@ if [ -x "$_dpa" ]; then
     _dpa_ids="$(awk '{print $3}' "$_dpa_f" | tr '\n' ' ' | sed 's/ $//')"
     _dpa_stamp="$_cc_cfg/autonomy/dated-park-arm.paged"
     _dpa_today="$(date -u +%Y-%m-%d)"
-    if [ "$(cat "$_dpa_stamp" 2>/dev/null)" != "$_dpa_today" ]; then
-      CC_ROLES_DIR="$ROLES_DIR" sweep_bounded "$NOTIFY_TIMEOUT_S" "$NOTIFY" --role desk \
-        "⏰ DATED PARK ARMED — $_dpa_ids. The clock these rows were waiting on has arrived; each is BLOCKED and therefore invisible to cc-dispatch until it is released. Read the park (it carries the exact command and, where the row has a second window, how to re-park it): bash scripts/dated-park-arm.sh --report. Then for each id: cc-backlog unblock <id>. Do NOT close them as falsified — arming is the START of the work." \
-        >/dev/null 2>&1 || true
+    # The day stamp is written only when a channel TOOK the page (sweep_desk_page rc 0). It used to
+    # be written unconditionally after a `|| true` send, so a page into the dead desk role spent the
+    # whole day's budget on a delivery that never happened.
+    if [ "$(cat "$_dpa_stamp" 2>/dev/null)" != "$_dpa_today" ] \
+       && sweep_desk_page dated-park-arm \
+        "⏰ DATED PARK ARMED — $_dpa_ids. The clock these rows were waiting on has arrived; each is BLOCKED and therefore invisible to cc-dispatch until it is released. Read the park (it carries the exact command and, where the row has a second window, how to re-park it): bash scripts/dated-park-arm.sh --report. Then for each id: cc-backlog unblock <id>. Do NOT close them as falsified — arming is the START of the work."; then
       printf '%s' "$_dpa_today" >"$_dpa_stamp" 2>/dev/null || true
     fi
   fi
@@ -1661,6 +1692,49 @@ case "${_dpa_rc:-absent}" in
   *)   _dpa_verdict="watcher-absent" ;;
 esac
 log_idl dated-park-arm "$(jq -nc --arg rc "${_dpa_rc:-absent}" --arg v "$_dpa_verdict" --arg ids "$_dpa_ids" '{dated_park_rc:$rc, dated_park_verdict:$v, dated_park_ids:$ids}')"
+
+sweep_yield 2b-iii-d-freeze-arm
+
+# ── 2b-iii-d. THE FREEZE ARM — the second no-panic freeze is the signal to build its detector ──────
+# backlog dabe706c9d79 asked for a detector for the NO-PANIC freeze class (the 2026-08-13 WindowServer
+# lock-storm) once a SECOND distinct freeze gives a second data point. compressor-sentinel.sh records
+# each freeze in the panic ledger and `--freeze-incidents` counts DISTINCT ones (±5 s boot clustering),
+# but nothing read that count, so the row could never learn its own precondition had arrived. This arm
+# is the owner, and the row is closed on it: the page text below carries the whole remaining work.
+#
+# SAME DISPOSITION AS 2b-iii-b/c: it PAGES and touches no store. The count is an ARMING signal, so it
+# must never be stored as a row's `--falsifier` — exit 0 there means "close the row", which would
+# delete the work at the instant it became actionable
+# (docs/lessons/arming-and-mootness-cannot-share-one-falsifier.md).
+#
+# ALARM BUDGET. One distinct freeze in seven weeks today, so steady state is zero pages. It pages once
+# per NEW count at or above CC_FREEZE_ARM_MIN (2): the stamp holds the last count a channel TOOK, so a
+# third freeze pages again, and an undelivered page retries next sweep instead of being forgotten.
+_frz="${CC_SWEEP_SENTINEL_BIN:-$_SWEEP_DIR/compressor-sentinel.sh}"
+_frz_min="${CC_FREEZE_ARM_MIN:-2}"
+_frz_n=""; _frz_verdict="sentinel-absent"
+if [ -f "$_frz" ]; then
+  _frz_n="$(_bounded bash "$_frz" --freeze-incidents 2>/dev/null | tail -1 | tr -d '[:space:]')"
+  case "$_frz_n" in
+    ''|*[!0-9]*) _frz_n=""; _frz_verdict="non-verdict" ;;
+    *)
+      if [ "$_frz_n" -lt "$_frz_min" ]; then
+        _frz_verdict="below-threshold"
+      else
+        _frz_stamp="$_cc_cfg/autonomy/freeze-arm.paged"
+        _frz_last="$(cat "$_frz_stamp" 2>/dev/null)"; case "$_frz_last" in ''|*[!0-9]*) _frz_last=0 ;; esac
+        if [ "$_frz_n" -le "$_frz_last" ]; then
+          _frz_verdict="armed-already-paged"
+        elif sweep_desk_page freeze-arm "🧊 NO-PANIC FREEZE #$_frz_n recorded — the freeze class now has a second data point, so build its detector (was backlog dabe706c9d79, closed on this arm). Re-file it: cc-backlog add --title 'build the no-panic freeze (WindowServer lock-storm) detector'. Read the incidents: grep '\"kind\":\"freeze\"' ~/.claude/logs/panic-attribution.jsonl, and docs/research on the 2026-08-13 freeze. Design an in-window sensor; compressor-sentinel covers only segment exhaustion."; then
+          printf '%s' "$_frz_n" >"$_frz_stamp" 2>/dev/null || true
+          _frz_verdict="ARMED-paged"
+        else
+          _frz_verdict="ARMED-page-undelivered"
+        fi
+      fi ;;
+  esac
+fi
+log_idl freeze-arm "$(jq -nc --arg n "${_frz_n:-}" --arg v "${_frz_verdict:-absent}" '{freeze_incidents:$n, freeze_arm_verdict:$v}')"
 
 sweep_yield 2b-iv-ratchet-consumer
 
@@ -1740,6 +1814,22 @@ _drain_rc="skipped"
 _drain="$_SWEEP_DIR/drain-chain-assert.sh"
 if [ -x "$_drain" ]; then _bounded bash "$_drain" --file >/dev/null 2>&1; _drain_rc=$?; fi
 fi
+
+# ── 2b-v-b. THE DRAIN-REVIVAL ARM — the actuator the check above never had (backlog c109e9e850fb) ──
+# 2b-v DETECTS a dead chain and files one row; nothing ever restarted the chain, so it waited for a
+# human (dead 2026-08-16, 2026-09-09, and since recycle #336 on 2026-09-22). scripts/drain-revival-arm.sh
+# revives it: verdict==dead from drain-chain-assert.sh only, a 3600 s cooldown stamp claimed BEFORE any
+# fire, fail-closed on every unreadable input. CC_DRAIN_AUTOFIRE selects the mode — off (kill switch),
+# would-fire (the DEFAULT: decides and journals, fires nothing, spends nothing) or on. It ships in
+# would-fire so it lands without a ruling on unattended quota spend; the operator rules the default
+# after 7 days of these journal lines (count them: grep '"drain-revival-arm"' ~/.claude/autonomy/idl.jsonl).
+# THE PRODUCTION DEFAULT LIVES ON THE NEXT LINE and nowhere else: this site passes the mode
+# explicitly, so the arm's own fallback only governs a hand-run. Ruling the default = editing it here.
+_dra_mode="${CC_DRAIN_AUTOFIRE:-would-fire}"
+_dra="${CC_SWEEP_DRAIN_ARM_BIN:-$_SWEEP_DIR/drain-revival-arm.sh}"
+_dra_out=""
+if [ -f "$_dra" ]; then _dra_out="$(CC_DRAIN_AUTOFIRE="$_dra_mode" _bounded bash "$_dra" --tick 2>/dev/null | tail -1)"; fi
+log_idl drain-revival-arm "$(jq -nc --arg o "${_dra_out:-}" --arg m "${_dra_mode:-}" '{drain_autofire_mode:$m, drain_revival:(try ($o|fromjson) catch null)}')"
 
 # ── 2b-vi. THE FLOW REPORT (BACKLOG_DRAIN_24_7 §6) — is the draining WINNING? ─────────────────────
 # The arm above asks whether anything is draining; this asks whether the draining is winning, and a
@@ -2224,6 +2314,16 @@ ladder_v2() {
   if [ "$unbannered" -gt 0 ] && sweep_escalate_os "${total_new} new escalation record(s)" \
        "${unbannered} escalation record(s) nobody has read. ${summary}"; then
     mark_surfaced_bannered
+    # r2's PHONE leg, on the same per-record damping as the banner. Gated on the shared credential
+    # set EXISTING, so a box without Pushover wired never logs a phone "failure" into lr-page's
+    # counter: that is the operator's step (desk-reach.4), not a fault. lr-page reads the file
+    # itself (0600, read never sourced); its OS leg is off here because the banner just went out.
+    if [ -n "${PUSHOVER_TOKEN:-}" ] || [ -f "${LR_PAGE_CREDS:-$HOME/.config/lr-page/pushover.env}" ]; then
+      _r2_lrp="${CC_SWEEP_LR_PAGE_BIN:-$_SWEEP_DIR/limit-recover/lr-page.sh}"
+      [ -f "$_r2_lrp" ] && LR_PAGE_OS_CHANNEL=off sweep_bounded 30 bash "$_r2_lrp" \
+        --title "${total_new} new escalation record(s)" -- "${unbannered} escalation record(s) nobody has read. ${summary}" \
+        >/dev/null 2>&1
+    fi
     log_idl fired "$(jq -cn --arg summary "$summary" --argjson n "$unbannered" \
       '{notified:"os-banner",delivered:false,channel:"notification-center-advisory",bannered:$n,
         summary:$summary,

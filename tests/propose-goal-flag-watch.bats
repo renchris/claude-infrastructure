@@ -272,7 +272,9 @@ PY
   # … and its consequence must be a NOTIFY, never a close: nothing in that arm may touch the store.
   local arm; arm="$(sed -n '/2b-iii-b. THE ARMING WATCH/,/2b-iv-ratchet-consumer/p' "$sweep")"
   [ -n "$arm" ] || { echo "the arm is not where its marker says it is"; false; }
-  printf '%s' "$arm" | grep -q -- '--role desk' || { echo "the arm does not page the desk"; false; }
+  # Since desk-reach (2026-09-30) the arm pages through sweep_desk_page → bin/cc-desk-page, which
+  # tries `cc-notify --role desk` and then the operator's liveness-free channels.
+  printf '%s' "$arm" | grep -q 'sweep_desk_page propose-goal-arm' || { echo "the arm does not page the desk"; false; }
   ! printf '%s' "$arm" | grep -qE 'cc-backlog (done|close)' || { echo "the arm writes to the backlog — it must only page"; false; }
   true
 }
