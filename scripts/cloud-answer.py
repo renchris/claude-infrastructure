@@ -195,13 +195,35 @@ def compose(disp: str, sid: str, item: str) -> tuple[str, str]:
     )
 
 
-def file_row(step: str, run: str, project: str, timeout: int) -> tuple[str, str]:
-    """File one operator step. Returns (id, error). The mint brake dedupes recurrences for us."""
-    cmd = [BACKLOG, "needs", step, "--project", project]
+def marker(state: str, sid: str) -> str:
+    """The path of the session's end marker (.retired or .returned), or "" while it is live."""
+    for suf in (".retired", ".returned"):
+        m = os.path.join(state, sid + suf)
+        if os.path.exists(m):
+            return m
+    return ""
+
+
+def file_row(step: str, run: str, project: str, timeout: int, state: str = "",
+             sid: str = "") -> tuple[str, str]:
+    """File one operator step for ONE session. Returns (id, error).
+
+    ONE ROW PER SESSION (BACKLOG_MASTER W0 ledger-retraction.5). The step names its session id, so
+    it is stable per session and distinct across sessions; the `needs` mint brake is turned OFF
+    here because it folded sibling sessions onto one row (43238e2ca2bd carried 3), and then the
+    first session to end could not retract its own ask without retracting the others'. A re-run for
+    the same session is still idempotent: same title, same id. The row is classed needs-human and
+    carries a falsifier on the session's own end marker as a backstop to retract_ended().
+    """
+    cmd = [BACKLOG, "needs", step, "--project", project, "--class", "needs-human"]
     if run:
         cmd += ["--run", run]
+    if state and SID_RE.match(sid or ""):
+        cmd += ["--falsifier", "test -e %s -o -e %s" % (
+            os.path.join(state, sid + ".retired"), os.path.join(state, sid + ".returned"))]
+    env = dict(os.environ, CC_BACKLOG_NEEDS_BRAKE="off")
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
     except subprocess.TimeoutExpired:
         return "", f"cc-backlog needs timed out after {timeout}s"
     except OSError as e:
@@ -211,7 +233,61 @@ def file_row(step: str, run: str, project: str, timeout: int) -> tuple[str, str]
         return "", f"cc-backlog needs rc={p.returncode}; {why[-1][:160] if why else 'no output'}"
     # `needs` echoes the id (a new mint or the existing row the brake folded onto).
     out = (p.stdout or "").strip().splitlines()
-    return (out[-1].strip() if out else ""), ""
+    rid = out[-1].strip() if out else ""
+    if rid and state and SID_RE.match(sid or ""):
+        try:
+            with open(os.path.join(state, sid + ".answer-row"), "w") as fh:
+                fh.write(rid + "\n")
+        except OSError:
+            pass
+    return rid, ""
+
+
+def retract_ended(state: str, timeout: int, dry: bool) -> list[str]:
+    """Close each filed row whose session has ended. Returns one line per row acted on.
+
+    A row filed for session S is keyed to S by `<S>.answer-row` (written by file_row). When S's own
+    `.retired` or `.returned` marker appears its question is moot, so the row closes — citing the
+    marker, which is the discharge measuring its own subject. Fail-open: a close that fails keeps
+    the pointer, and the next pass tries again.
+    """
+    lines = []
+    try:
+        names = sorted(os.listdir(state))
+    except OSError:
+        return lines
+    for n in names:
+        if not n.endswith(".answer-row"):
+            continue
+        sid = n[: -len(".answer-row")]
+        if not SID_RE.match(sid):
+            continue
+        m = marker(state, sid)
+        if not m:
+            continue
+        ptr = os.path.join(state, n)
+        try:
+            rid = open(ptr).read().strip()
+        except OSError:
+            continue
+        if not re.fullmatch(r"[0-9a-f]{12}", rid):
+            continue
+        if dry:
+            lines.append("WOULD-CLOSE %s  %s — %s" % (rid, sid, os.path.basename(m)))
+            continue
+        try:
+            p = subprocess.run([BACKLOG, "done", rid, "--evidence",
+                                "%s: cloud session %s ended; its question is moot" % (m, sid)],
+                               capture_output=True, text=True, timeout=timeout)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if p.returncode == 0:
+            try:
+                os.rename(ptr, ptr + ".closed")
+            except OSError:
+                pass
+            lines.append("CLOSED      %s  %s — %s" % (rid, sid, os.path.basename(m)))
+    return lines
 
 
 def main() -> int:
@@ -237,6 +313,8 @@ def main() -> int:
     if args.item:
         extra += ["--item", args.item]
 
+    for line in retract_ended(args.state, 120, args.dry_run):
+        print(line)
     rows, err = read_rows(args.state, args.timeout, extra)
     if err:
         print(f"cloud-answer: {err}", file=sys.stderr)
@@ -268,7 +346,7 @@ def main() -> int:
             "asked": (row.get("needs_action") or row.get("detail") or "").strip(),
         }
         if not args.dry_run:
-            rid, ferr = file_row(step, run, args.project, 120)
+            rid, ferr = file_row(step, run, args.project, 120, args.state, sid)
             rec["filed"] = rid
             if ferr:
                 rec["error"] = ferr

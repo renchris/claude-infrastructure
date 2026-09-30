@@ -228,3 +228,37 @@ EOF
   grep -q -- '--json' "$REPO/scripts/cloud-inbox.py"
   grep -q -- '"--all"' "$REPO/scripts/cloud-inbox.py"
 }
+
+@test "15 three sessions on ONE item file THREE rows (never folded), and each closes when its OWN marker appears" {
+  # The REAL board, on a fixture ledger: the fold is the property under test (43238e2ca2bd folded 3).
+  export CC_ANSWER_BACKLOG_BIN="$REPO/bin/cc-backlog" CC_BACKLOG_FILE="$C/backlog.jsonl"
+  export CC_BACKLOG_KICK=off CC_BACKLOG_PROJECT_WARN=off CC_BACKLOG_COVERAGE_WARN=off CC_BACKLOG_PREMISE=off
+  : > "$CC_BACKLOG_FILE"
+  python3 - "$C/rows.json" <<'EOF'
+import json, sys
+rows = [{"id": "session_01L%s" % n, "state": "read", "category": "need_input", "detail": "",
+         "needs_action": "run cloud-return.sh", "requires_action": [], "item": "sameitem0001",
+         "branch": "b", "url": "", "ask": "PROSE"} for n in ("AAA", "BBB", "CCC")]
+json.dump(rows, open(sys.argv[1], "w"))
+EOF
+  run python3 "$ANS" --project p
+  [ "$status" -eq 0 ]
+  open_ids() { bash "$REPO/bin/cc-backlog" list --blocked --json | jq -r '.[].id' | sort; }
+  [ "$(open_ids | grep -c .)" -eq 3 ]
+  [ "$(bash "$REPO/bin/cc-backlog" list --blocked --json | jq -r '[.[].blockClass] | unique | join(",")')" = needs-human ]
+  # a re-run is idempotent — still three
+  run python3 "$ANS" --project p
+  [ "$(open_ids | grep -c .)" -eq 3 ]
+  a="$(cat "$C/state/session_01LAAA.answer-row")"
+  : > "$C/state/session_01LAAA.returned"
+  run python3 "$ANS" --project p
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"CLOSED      $a"* ]] || false
+  [ "$(open_ids | grep -c .)" -eq 2 ]
+  ! open_ids | grep -qx "$a"
+  b="$(cat "$C/state/session_01LBBB.answer-row")"
+  : > "$C/state/session_01LBBB.retired"
+  run python3 "$ANS" --project p
+  [ "$(open_ids | grep -c .)" -eq 1 ]
+  ! open_ids | grep -qx "$b"
+}
