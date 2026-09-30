@@ -5,16 +5,31 @@
 # supervisor's /tmp telemetry is wiped — so previously-open desk sessions sit dead until a human acts.
 #
 # Each run (idempotent PER BOOT — exactly one page per reboot):
-#   1. DETECT: kern.boottime + the DURABLE cross-account session registry (~/.claude/cc-registry,
-#      survives reboot — NOT /tmp). A "session open at last boot" = a registry ghost whose startedAt
-#      (ms) is BEFORE boottime: its process died in the reboot. Post-boot live sessions (startedAt >
-#      boottime) are excluded — a live process cannot predate its own boot.
+#   1. DETECT the sessions that were live when the box went down, from the first source that has
+#      them (the page and the IDL record name which one answered):
+#        roster     — the newest ~/.claude/autonomy/reboot-*.roster.json whose sibling .start epoch
+#                     falls after the previous boot and before this one (s1-reboot.sh writes both
+#                     before a scripted reboot; it is `cc-sessions --json` taken at that moment).
+#        tombstones — ~/.claude/autonomy/shutdown-tombstones/*.json, written by
+#                     hooks/session-deregister.sh when a session dies by signal (reason=other). The
+#                     last BURST before this boot is the shutdown; see the DETECT block.
+#        registry   — the old rule, now the fallback for a hard power loss, where no SessionEnd ran:
+#                     a ~/.claude/cc-registry row whose startedAt predates the boot and whose
+#                     transcript was written within 24h of it.
+#      WHY THE ORDER (measured at the 2026-09-30 15:24 scripted reboot): a GRACEFUL shutdown runs
+#      every session's SessionEnd hook, which used to DELETE its registry row, so the registry held
+#      only 11 stale crash ghosts from earlier days, overlap 0 with the 20 sessions that were live.
+#      The registry rule is right only for the one case where no hook ran at all.
 #   2. DECIDE: the boot-epoch marker dedups multiple logins within one boot; the POSTURE mode is the
 #      OPERATOR's reboot-posture call (this is "reboot posture is operator; resume code is agent"):
 #        page   (DEFAULT) — page the delta once, do NOT resume. Ruling #1 (supervisor PAGES, never
 #                 auto-recovers) is the safe default → this is the DoD's "or pages once if deferred".
-#        resume — invoke the resume launcher per ghost (config-dir basename → reso-resume-one account
-#                 alias, mapped) + start keepalive once, then page a summary. Operator opts in.
+#        resume — check each session's ownership (boot-resume-launch.sh --check-only), classify it
+#                 (bin/cc-resume-classify.py: INTERRUPTED / AT-REST / UNKNOWN), open them all through
+#                 cc-resume-layout.sh --desktops (<=4 panes per native-fullscreen OS window, one
+#                 macOS Desktop each), start the keepalive scoped to the INTERRUPTED rows only, then
+#                 page a summary. AT-REST and UNKNOWN sessions are restored and never nudged — they
+#                 stopped at a pause point on purpose. Operator opts in.
 #   3. ACT + LOG: always emit ONE {fired|abstained|failed} IDL record (abstention-logged, B-3). A
 #      delta with no reachable desk role does not drain to nobody (a17 S-7) — it falls back to a
 #      channel that needs NO address: the full page is written to <state>/undelivered-<boot>.page and
@@ -44,7 +59,10 @@
 # Env (config + tests): CC_REGISTRY_DIR · CC_ROLES_DIR · CC_IDL · CC_BOOT_RESUME_STATE_DIR ·
 #   CC_BOOT_RESUME_MODE (page|resume; else <state>/mode; else page) · CC_BOOTTIME_OVERRIDE (sec) ·
 #   CC_NOTIFY_BIN · CC_RESUME_LAUNCH_BIN · CC_KEEPALIVE_BIN · CC_LAUNCHCTL_BIN · CC_KEEPALIVE_INTERVAL ·
-#   CC_BACKLOG_BIN (the no-role durable fallback; a test MUST stub it or it writes the live ledger).
+#   CC_BACKLOG_BIN (the no-role durable fallback; a test MUST stub it or it writes the live ledger) ·
+#   CC_BOOT_RESUME_ROSTER_DIR · CC_SHUTDOWN_TOMB_DIR · CC_BOOT_RESUME_TOMB_BURST (s, default 120) ·
+#   CC_RESUME_LAYOUT_BIN · CC_RESUME_CLASSIFY_BIN · CC_KITTY_SOCKET_BIN · CC_OPEN_BIN ·
+#   CC_BOOT_RESUME_KITTY_TRIES / _KITTY_POLL (wait for a kitty to come up; tests set POLL=0).
 # BSD+GNU portable, no eval, fail-loud. bash 3.2-safe.
 set -uo pipefail
 
@@ -80,6 +98,17 @@ NOTIFY="$(resolve_bin "${CC_NOTIFY_BIN:-}" cc-notify)"
 # one path that reads it, never a bare name hitting the launchd PATH (/usr/bin:/bin).
 BACKLOG="$(resolve_bin "${CC_BACKLOG_BIN:-}" cc-backlog)"
 LAUNCH="$(resolve_bin "${CC_RESUME_LAUNCH_BIN:-}" boot-resume-launch.sh boot-resume-launch.sh)"
+# The batch opener (2x2 per native-fullscreen Desktop) and the nudge classifier. Both live in bin/;
+# resolve_bin's ../bin rung finds them from scripts/. An absent layout falls back to one window per
+# session through $LAUNCH (the pre-2026-09-30 path); an absent classifier makes every row UNKNOWN,
+# which is the fail-safe direction (restored, never nudged).
+LAYOUT="$(resolve_bin "${CC_RESUME_LAYOUT_BIN:-}" cc-resume-layout.sh)"
+CLASSIFY="$(resolve_bin "${CC_RESUME_CLASSIFY_BIN:-}" cc-resume-classify.py)"
+KSOCK_BIN="$(resolve_bin "${CC_KITTY_SOCKET_BIN:-}" cc-kitty-socket)"
+OPEN_BIN="${CC_OPEN_BIN:-/usr/bin/open}"
+ROSTER_DIR="${CC_BOOT_RESUME_ROSTER_DIR:-$HOME/.claude/autonomy}"
+TOMB_DIR="${CC_SHUTDOWN_TOMB_DIR:-$HOME/.claude/autonomy/shutdown-tombstones}"
+TOMB_BURST="${CC_BOOT_RESUME_TOMB_BURST:-120}"
 
 # ── machine-capacity admission (MACHINE_CAPACITY_V2 §12.1 / §12.4) lives in the LAUNCHER. ──────
 # §12.4 called this script a LATENT BOMB in precise terms: it resumes at GUI login, i.e. INTO the
@@ -156,9 +185,13 @@ transcript_mtime() {
   if [ -n "${CC_TRANSCRIPT_MTIME_BIN:-}" ]; then "$CC_TRANSCRIPT_MTIME_BIN" "$1" "$2" "$3" 2>/dev/null; return 0; fi
   local cfg="$HOME/.$1" path
   [ -d "$cfg/projects" ] || return 0
-  # -H: ~/.claude-next/projects is a symlink; BSD find returns nothing for a symlinked start without it.
-  path="$(find -H "$cfg/projects" -name "$2.jsonl" -print -quit 2>/dev/null | head -1)"
-  [ -n "$path" ] && stat -f %m "$path" 2>/dev/null
+  # A GLOB, not `find`: a session transcript is always projects/<slug>/<sid>.jsonl, one level down.
+  # The recursive find walked every subagent file under every project and, at login under launchd's
+  # LowPriorityIO, kept this job running for more than 17 minutes on 2026-09-30. The glob costs one
+  # stat per project directory, and it follows the ~/.claude-next/projects symlink on its own.
+  for path in "$cfg"/projects/*/"$2".jsonl; do
+    [ -f "$path" ] && { stat -f %m "$path" 2>/dev/null; return 0; }
+  done
 }
 
 # ── config-dir basename (registry `account` field) → reso-resume-one account alias. ──
@@ -183,14 +216,15 @@ resolve_mode() {
 
 BOOT="$(boottime)"
 MODE="$(resolve_mode)"
+SOURCE=""; SOURCE_LABEL=""
 MARKER="$STATE_DIR/last-boot-epoch"
 
 case "${1:-}" in --print-boottime) printf '%s\n' "$BOOT"; exit 0 ;; esac
 
 log_idl() { # <disposition> <extra-json>
   mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
-  printf '{"ts":"%s","tool":"boot-resume","disposition":"%s","boot":"%s","mode":"%s"%s}\n' \
-    "$(now_iso)" "$1" "$BOOT" "$MODE" "${2:-}" >> "$IDL" 2>/dev/null || true
+  printf '{"ts":"%s","tool":"boot-resume","disposition":"%s","boot":"%s","mode":"%s","source":"%s"%s}\n' \
+    "$(now_iso)" "$1" "$BOOT" "$MODE" "$SOURCE" "${2:-}" >> "$IDL" 2>/dev/null || true
 }
 
 # ── guard: unreadable boottime is a blind check → abstain LOUD, never mark, never act. ──
@@ -219,36 +253,116 @@ TSV_PAD=$'\037'
 pad()   { [ -n "$1" ] && printf '%s' "$1" || printf '%s' "$TSV_PAD"; }
 unpad() { [ "$1" = "$TSV_PAD" ] || printf '%s' "$1"; }
 
-# ── DETECT: a session "open at last boot" = a durable registry entry whose process predates this
-#    boot (startedAt/1000 < boottime → killed by the reboot) AND whose transcript was written within
-#    RECENCY_WINDOW before the boot (the resume-sessions "written just before that boot" rule, which
-#    excludes long-dead crashed-and-never-deregistered cruft). Rows: "<config-acct>\t<cwd>\t<sid>\t<name>". ──
+# ── DETECT (see the header for why the sources are tried in this order). Every source yields the
+#    same rows: "<config-acct>\t<cwd>\t<sid>\t<name>\t<branch>", padded (see TSV_PAD above).
+#    ANCHOR is the moment the sessions died — the classifier's crash anchor. For a graceful reboot
+#    that is the SHUTDOWN, not the boot: after an overnight power-off the boot is hours later, and
+#    against it every session would read as long at rest and none would be nudged. ──
+# shellcheck disable=SC2016  # a jq program: $pad is jq's variable, not the shell's
+JQ_CELL='def cell: (if . == null then "" else . end) | tostring
+                   | gsub("[\\t\\r\\n]"; " ") | if . == "" then $pad else . end;'
 GHOSTS=""
 n_open=0
-if [ -d "$REGISTRY_DIR" ]; then
-  for f in "$REGISTRY_DIR"/*.json; do
-    [ -e "$f" ] || continue
-    row="$(jq -r --arg pad "$TSV_PAD" '
-             def cell: (if . == null then "" else . end) | tostring
-                       | gsub("[\\t\\r\\n]"; " ") | if . == "" then $pad else . end;
-             [((.startedAt // 0) | cell), ((.account // "") | cell), ((.cwd // "") | cell),
-              ((.session_id // "") | cell), ((.name // "") | cell)] | @tsv' "$f" 2>/dev/null)" || continue
-    [ -n "$row" ] || continue
-    IFS=$'\t' read -r started_ms g_acct g_cwd g_sid g_name <<GHOST_ROW
+ANCHOR="$BOOT"
+add_row() { # <acct> <cwd> <sid> <name> <branch>, each already padded
+  GHOSTS="${GHOSTS}$1	$2	$3	$4	$5
+"
+  n_open=$((n_open + 1))
+}
+read_rows() { # <tsv> → add_row per line (cells arrive padded from jq)
+  local r_acct r_cwd r_sid r_name r_br
+  while IFS=$'\t' read -r r_acct r_cwd r_sid r_name r_br _; do
+    [ -n "$r_sid" ] && [ "$r_sid" != "$TSV_PAD" ] || continue
+    add_row "$r_acct" "$r_cwd" "$r_sid" "$r_name" "$r_br"
+  done <<ROWS
+$1
+ROWS
+}
+
+# The window a source must fall in: after the PREVIOUS boot (this script's own marker, when it ran
+# then) and never more than RECENCY_WINDOW before this one — a roster from three reboots ago is
+# history, not the set that was live.
+LOWER=$((BOOT - RECENCY_WINDOW))
+prev_boot="$(tr -d '[:space:]' < "$MARKER" 2>/dev/null)"
+case "$prev_boot" in
+  ''|*[!0-9]*) ;;
+  *) [ "$prev_boot" -lt "$BOOT" ] && [ "$prev_boot" -gt "$LOWER" ] && LOWER="$prev_boot" ;;
+esac
+
+# 1. roster — the snapshot a scripted reboot takes of `cc-sessions --json`. A roster that parses and
+#    lists nobody is an answer ("nothing was live"), so it ends the search; one that does not parse
+#    is not, so the search goes on.
+roster=""; roster_start=0
+for f in "$ROSTER_DIR"/reboot-*.roster.json; do
+  [ -f "$f" ] || continue
+  st="$(tr -d '[:space:]' < "${f%.roster.json}.start" 2>/dev/null)"
+  case "$st" in ''|*[!0-9]*) continue ;; esac
+  { [ "$st" -gt "$LOWER" ] && [ "$st" -lt "$BOOT" ] && [ "$st" -gt "$roster_start" ]; } || continue
+  roster="$f"; roster_start="$st"
+done
+if [ -n "$roster" ]; then
+  if rows="$(jq -r --arg pad "$TSV_PAD" "$JQ_CELL"'
+        [ (if type == "array" then . else (.sessions // []) end)[]
+          | select(type == "object" and (.session_id // "") != "") ]
+        | unique_by(.session_id)[]
+        | [(.account|cell), (.cwd|cell), (.session_id|cell), (.name|cell), (.branch|cell)] | @tsv' \
+        "$roster" 2>/dev/null)"; then
+    SOURCE=roster; SOURCE_LABEL="roster $(basename "$roster" .roster.json)"; ANCHOR="$roster_start"
+    read_rows "$rows"
+  fi
+fi
+
+# 2. shutdown tombstones (hooks/session-deregister.sh). reason=other also fires when the operator
+#    closes ONE pane, so a tombstone alone is not a shutdown. What is: the LAST burst before the boot.
+#    A shutdown SIGHUPs every pane together (measured: 19 sessions ended inside 4 s at 15:25:27-31
+#    on 2026-09-30), while a closed pane is a lone earlier stamp. Where the kernel had already set
+#    kern.willshutdown when the hook ran, those tombstones are taken outright instead.
+if [ -z "$SOURCE" ] && [ -d "$TOMB_DIR" ]; then
+  tomb_rows="$(for t in "$TOMB_DIR"/*.json; do
+                 [ -f "$t" ] && jq -c 'select(type == "object")' "$t" 2>/dev/null
+               done | jq -rs --arg pad "$TSV_PAD" --argjson lo "$LOWER" --argjson hi "$BOOT" \
+                     --argjson burst "$TOMB_BURST" "$JQ_CELL"'
+        [ .[] | select((.session_id // "") != "" and ((.endedAt // 0) | type) == "number")
+              | select(.endedAt > $lo and .endedAt <= $hi) ]
+        | (if any(.[]; .hostShutdown == true) then map(select(.hostShutdown == true)) else . end)
+        | if length == 0 then empty else
+            (map(.endedAt) | max) as $last
+            | map(select(.endedAt >= $last - $burst)) | group_by(.session_id) | map(max_by(.endedAt))[]
+            | [(.account|cell), (.cwd|cell), (.session_id|cell), (.name|cell), (.branch|cell),
+               (.endedAt|tostring)] | @tsv
+          end' 2>/dev/null)"
+  if [ -n "$tomb_rows" ]; then
+    SOURCE=tombstones; SOURCE_LABEL="shutdown tombstones"
+    ANCHOR="$(printf '%s\n' "$tomb_rows" | awk -F'\t' '$6 > m { m = $6 } END { print m + 0 }')"
+    read_rows "$tomb_rows"
+  fi
+fi
+
+# 3. registry ghosts — a durable cc-registry row whose process predates this boot (startedAt/1000 <
+#    boottime → killed by it) AND whose transcript was written within RECENCY_WINDOW before the
+#    boot (excludes long-dead crashed-and-never-deregistered cruft). Only a death with no SessionEnd
+#    at all — a power loss, a kernel panic — leaves these, so this is the fallback, never the rule.
+if [ -z "$SOURCE" ]; then
+  SOURCE=registry; SOURCE_LABEL="registry ghosts"
+  if [ -d "$REGISTRY_DIR" ]; then
+    for f in "$REGISTRY_DIR"/*.json; do
+      [ -e "$f" ] || continue
+      row="$(jq -r --arg pad "$TSV_PAD" "$JQ_CELL"'
+               [((.startedAt // 0) | cell), (.account | cell), (.cwd | cell),
+                (.session_id | cell), (.name | cell)] | @tsv' "$f" 2>/dev/null)" || continue
+      [ -n "$row" ] || continue
+      IFS=$'\t' read -r started_ms g_acct g_cwd g_sid g_name <<GHOST_ROW
 $row
 GHOST_ROW
-    started_ms="$(unpad "$started_ms")"; g_acct="$(unpad "$g_acct")"; g_cwd="$(unpad "$g_cwd")"
-    g_sid="$(unpad "$g_sid")";           g_name="$(unpad "$g_name")"
-    case "$started_ms" in ''|*[!0-9]*) continue ;; esac
-    [ "$((started_ms / 1000))" -lt "$BOOT" ] || continue     # live/post-boot session → not a ghost
-    [ -n "$g_sid" ] || continue
-    mt="$(transcript_mtime "$g_acct" "$g_sid" "$g_cwd")"     # stale/absent transcript → cruft, skip
-    { [ -n "$mt" ] && [ "$mt" -gt "$((BOOT - RECENCY_WINDOW))" ]; } || continue
-    # GHOSTS is itself re-read with `IFS=$'\t' read` twice below, so it stores the PADDED cells.
-    GHOSTS="${GHOSTS}$(pad "$g_acct")	$(pad "$g_cwd")	$(pad "$g_sid")	$(pad "$g_name")
-"
-    n_open=$((n_open + 1))
-  done
+      started_ms="$(unpad "$started_ms")"
+      case "$started_ms" in ''|*[!0-9]*) continue ;; esac
+      [ "$((started_ms / 1000))" -lt "$BOOT" ] || continue     # live/post-boot session → not a ghost
+      [ "$g_sid" != "$TSV_PAD" ] || continue
+      mt="$(transcript_mtime "$(unpad "$g_acct")" "$(unpad "$g_sid")" "$(unpad "$g_cwd")")"
+      { [ -n "$mt" ] && [ "$mt" -gt "$((BOOT - RECENCY_WINDOW))" ]; } || continue
+      add_row "$g_acct" "$g_cwd" "$g_sid" "$g_name" "$TSV_PAD"
+    done
+  fi
 fi
 
 mark_processed() { mkdir -p "$STATE_DIR" 2>/dev/null || true; printf '%s\n' "$BOOT" > "$MARKER" 2>/dev/null || true; }
@@ -268,81 +382,187 @@ if command -v "${LAUNCHCTL%% *}" >/dev/null 2>&1 || [ -x "$LAUNCHCTL" ]; then
   done < <("$LAUNCHCTL" list 2>/dev/null || true)
 fi
 
-# ── ACT: resume (posture=resume) per ghost, else page-only (posture=page). ──
+# ── ACT: resume (posture=resume), else page-only (posture=page). ──
 resumed=0
 resume_fail=0
-resume_shed=0   # ghosts SELECTED but REFUSED by the capacity term — distinct from resume_fail (launcher error)
+resume_shed=0   # sessions SELECTED but REFUSED by the capacity term — distinct from resume_fail (launcher error)
 resume_held=0   # rc 5: not ours to launch — the reconciler owns it, its launch lock is held, it already
                 # has a live holder, or it is PARKED-REBOOT in page mode. Not broken, not waiting on us.
-n_fire=0        # ghosts SELECTED to fire (post-consolidation) — distinct from n_open (ghosts found)
+n_fire=0        # sessions SELECTED to fire (post-consolidation) — distinct from n_open (sessions found)
+n_int=0         # classifier verdicts over the sessions that passed the ownership check
+n_rest=0
+opener=""       # desktops (cc-resume-layout --desktops) | windows (one launcher window per session)
+desk_windows=0; desk_fs_ok=0; desk_fs_bad=0
+nudged=""       # the keepalive's markers: cwds of INTERRUPTED sessions only
+kv() { printf '%s\n' "$2" | tr ' ' '\n' | sed -n "s/^$1=//p" | head -1; }   # <key> <summary-line>
+num() { case "$1" in ''|*[!0-9]*) printf 0 ;; *) printf '%s' "$1" ;; esac; }
 if [ "$MODE" = "resume" ]; then
   if [ -z "$LAUNCH" ] || [ ! -x "$LAUNCH" ]; then
     log_idl failed ",\"n_open\":$n_open,\"resumed\":0,\"delivered\":false,\"reason\":\"no-resume-launcher\""
     echo "boot-resume: mode=resume but no executable resume launcher — not marking boot; will retry" >&2
     exit 3
   fi
-  # ── CONSOLIDATE before firing. A reboot can leave many ghosts sharing ONE worktree; resuming
-  #    each is the 2026-07-21 sprawl incident. lr-select groups by worktree, picks the single
-  #    session per group that holds the most real state, and lists the rest. Missing selector =
-  #    FAIL LOUD and resume NOTHING (same discipline as a missing launcher above) — never fall
-  #    back to firing every ghost, which is the exact bug. ──
-  if [ -z "$SELECT" ] || [ ! -x "$SELECT" ]; then
-    log_idl failed ",\"n_open\":$n_open,\"resumed\":0,\"delivered\":false,\"reason\":\"no-resume-selector\""
-    echo "boot-resume: mode=resume but no executable lr-select — refusing to resume unconsolidated" >&2
-    exit 3
-  fi
-  # An ARRAY, not a word-split string: a worktree path containing a space would otherwise break
-  # into two argv entries and silently skip that session. bash 3.2 supports indexed arrays.
-  SEL_ARGS=()
-  while IFS=$'\t' read -r acct cwd sid _name; do
-    acct="$(unpad "$acct")"; cwd="$(unpad "$cwd")"; sid="$(unpad "$sid")"
-    [ -n "$sid" ] || continue
-    SEL_ARGS[${#SEL_ARGS[@]}]="--candidate"
-    SEL_ARGS[${#SEL_ARGS[@]}]="$(map_account "$acct"):$sid:$cwd"
-  done <<EOF
+  mkdir -p "$STATE_DIR" 2>/dev/null || true
+  # WINNERS rows: "<alias>\t<sid>\t<cwd>\t<branch>\t<label>", padded.
+  WINNERS=""
+  if [ "$SOURCE" = registry ]; then
+    # ── CONSOLIDATE before firing. A reboot can leave many GHOSTS sharing ONE worktree; resuming
+    #    each is the 2026-07-21 sprawl incident. lr-select groups by worktree, picks the single
+    #    session per group that holds the most real state, and lists the rest. Missing selector =
+    #    FAIL LOUD and resume NOTHING — never fall back to firing every ghost, which is the exact bug.
+    #    Roster and tombstone rows skip this: each one was a LIVE session when the box went down,
+    #    so none of them is sprawl, and two live sessions in one checkout both come back. ──
+    if [ -z "$SELECT" ] || [ ! -x "$SELECT" ]; then
+      log_idl failed ",\"n_open\":$n_open,\"resumed\":0,\"delivered\":false,\"reason\":\"no-resume-selector\""
+      echo "boot-resume: mode=resume but no executable lr-select — refusing to resume unconsolidated" >&2
+      exit 3
+    fi
+    # An ARRAY, not a word-split string: a worktree path containing a space would otherwise break
+    # into two argv entries and silently skip that session. bash 3.2 supports indexed arrays.
+    SEL_ARGS=()
+    while IFS=$'\t' read -r acct cwd sid _name _br; do
+      acct="$(unpad "$acct")"; cwd="$(unpad "$cwd")"; sid="$(unpad "$sid")"
+      [ -n "$sid" ] || continue
+      SEL_ARGS[${#SEL_ARGS[@]}]="--candidate"
+      SEL_ARGS[${#SEL_ARGS[@]}]="$(map_account "$acct"):$sid:$cwd"
+    done <<EOF
 $GHOSTS
 EOF
-  if [ "${#SEL_ARGS[@]}" -eq 0 ]; then
-    log_idl failed ",\"n_open\":$n_open,\"resumed\":0,\"delivered\":false,\"reason\":\"no-usable-ghosts\""
-    echo "boot-resume: ${n_open} ghost(s) but none carried a session id — not marking boot" >&2
-    exit 3
+    if [ "${#SEL_ARGS[@]}" -eq 0 ]; then
+      log_idl failed ",\"n_open\":$n_open,\"resumed\":0,\"delivered\":false,\"reason\":\"no-usable-ghosts\""
+      echo "boot-resume: ${n_open} ghost(s) but none carried a session id — not marking boot" >&2
+      exit 3
+    fi
+    # lr-select pads its winner cells for the same field-collapse reason (its `branch` is routinely "").
+    WINNERS="$("$SELECT" "${SEL_ARGS[@]}" --max-per-worktree "$MAX_PER_WT" --max-total "$MAX_TOTAL" \
+      --allow-missing-cwd --json "$STATE_DIR/last-selection.json" 2>"$STATE_DIR/last-triage.txt")"
+  else
+    while IFS=$'\t' read -r acct cwd sid name br; do
+      [ -n "$sid" ] && [ "$sid" != "$TSV_PAD" ] || continue
+      WINNERS="${WINNERS}$(pad "$(map_account "$(unpad "$acct")")")	${sid}	${cwd}	${br:-$TSV_PAD}	${name:-$TSV_PAD}
+"
+    done <<EOF
+$GHOSTS
+EOF
   fi
-  mkdir -p "$STATE_DIR" 2>/dev/null || true
-  WINNERS="$("$SELECT" "${SEL_ARGS[@]}" --max-per-worktree "$MAX_PER_WT" --max-total "$MAX_TOTAL" \
-    --allow-missing-cwd --json "$STATE_DIR/last-selection.json" 2>"$STATE_DIR/last-triage.txt")"
-  n_fire=0
   [ -n "$WINNERS" ] && n_fire="$(printf '%s\n' "$WINNERS" | grep -c . || true)"
 
-  # Resume each WINNER through the (TTY-coupled) launcher seam. Order is irrelevant; each is independent.
-  # lr-select pads its winner cells for the same field-collapse reason (its `branch` is routinely "",
-  # and a winner with no cwd would otherwise slide the BRANCH NAME into $cwd and launch there).
-  while IFS=$'\t' read -r alias sid cwd _br; do
+  # 1. OWNERSHIP, per session, before any window opens: the launcher's own fence, PARKED-REBOOT
+  #    rule and second-writer check (--check-only opens nothing). ADMITTED is plain TSV for the
+  #    layout and the classifier, which both split on single tabs (cut / awk / str.split), so an
+  #    empty branch cell is safe there.
+  ADMITTED=""
+  while IFS=$'\t' read -r alias sid cwd br label; do
     alias="$(unpad "$alias")"; sid="$(unpad "$sid")"; cwd="$(unpad "$cwd")"
+    br="$(unpad "$br")"; label="$(unpad "$label")"
     [ -n "$sid" ] || continue
-    branch=""
-    [ -n "$cwd" ] && [ -d "$cwd" ] && branch="$(git -C "$cwd" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-    # The capacity term lives in the LAUNCHER (the seam that actually opens the window and runs
-    # reso-resume-one), not here — see its header. Evaluated per ghost, so the batch SHEDS its tail
-    # instead of being all-or-nothing: what fits is resumed, the rest is deferred.
-    #
-    # rc 9 is the launcher's capacity refusal and is NOT a failure. Keeping the two apart is the
-    # whole point: `resume_fail` means the launcher broke and needs fixing, `resume_shed` means the
-    # box was full and the session is waiting — same count, opposite operator action.
-    "$LAUNCH" "$alias" "$cwd" "$sid" "$branch" >/dev/null 2>&1
+    if [ -z "$br" ] && [ -n "$cwd" ] && [ -d "$cwd" ]; then
+      br="$(git -C "$cwd" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+      [ "$br" = HEAD ] && br=""
+    fi
+    "$LAUNCH" --check-only "$alias" "$cwd" "$sid" "$br" >/dev/null 2>&1
     case "$?" in
-      0) resumed=$((resumed + 1)) ;;
-      9) resume_shed=$((resume_shed + 1)) ;;
-      5) resume_held=$((resume_held + 1)) ;;
-      *) resume_fail=$((resume_fail + 1)) ;;
+      0) ;;
+      5) resume_held=$((resume_held + 1)); continue ;;
+      *) resume_fail=$((resume_fail + 1)); continue ;;
     esac
+    ADMITTED="${ADMITTED}${alias}	${sid}	${cwd}	${br}	${label:-${sid:0:8}}
+"
   done <<EOF
 $WINNERS
 EOF
-  # start the keepalive watcher ONCE so the resumed panes keep working (their /goal Stop-hook is gone
-  # after a resume-from-summary /compact). Best-effort; a stub in tests just records the call.
-  if [ -n "$KEEPALIVE" ] && [ -x "$KEEPALIVE" ]; then
-    nohup "$KEEPALIVE" "$KEEPALIVE_INTERVAL" >>"$HOME/.reso/keepalive.out" 2>&1 &
-    disown 2>/dev/null || true
+
+  # 2. CLASSIFY: which of them the shutdown INTERRUPTED mid-turn. Only those are nudged. A failed
+  #    classifier, or one that returned a different number of rows, is no evidence at all, so every
+  #    row becomes UNKNOWN — restored, never nudged (the classifier's own fail-safe polarity).
+  n_adm="$(printf '%s' "$ADMITTED" | grep -c . || true)"
+  CLASSIFIED=""
+  if [ "$n_adm" -gt 0 ] && [ -n "$CLASSIFY" ] && [ -x "$CLASSIFY" ]; then
+    CL_ARGS=()
+    [ "$SOURCE" != registry ] && CL_ARGS=(--boot-epoch "$ANCHOR")
+    CLASSIFIED="$(printf '%s' "$ADMITTED" | "$CLASSIFY" ${CL_ARGS[@]+"${CL_ARGS[@]}"} 2>"$STATE_DIR/last-classify.txt")" || CLASSIFIED=""
+  fi
+  if [ "$(printf '%s' "$CLASSIFIED" | grep -c . || true)" != "$n_adm" ]; then
+    CLASSIFIED="$(printf '%s' "$ADMITTED" | awk -F'\t' 'NF { print $0 "\tUNKNOWN" }')"
+  fi
+  n_int="$(printf '%s\n' "$CLASSIFIED" | awk -F'\t' '$NF == "INTERRUPTED"' | grep -c . || true)"
+  n_rest=$((n_adm - n_int))
+
+  # 3. OPEN. The operator's layout: <=4 panes per OS window as a 2x2, each window native-fullscreen
+  #    on its own Desktop (cc-resume-layout.sh --desktops). At login there may be no kitty yet — exit
+  #    3 means no live control socket — so open one and give it a moment before falling back.
+  layout_rc=127; layout_sum=""
+  if [ "$n_adm" -gt 0 ] && [ -n "$LAYOUT" ] && [ -x "$LAYOUT" ]; then
+    tries="${CC_BOOT_RESUME_KITTY_TRIES:-10}"; poll="${CC_BOOT_RESUME_KITTY_POLL:-3}"; opened=0
+    while :; do
+      # To a file, not $( … | grep): the layout's exit status is the verdict (3 = no kitty), and a
+      # command substitution's pipeline status never reaches this shell. pipefail makes $? the
+      # layout's own, since printf cannot fail here.
+      printf '%s' "$ADMITTED" | "$LAYOUT" --desktops >"$STATE_DIR/last-layout.out" 2>>"$STATE_DIR/last-layout.txt"
+      layout_rc=$?
+      layout_sum="$(grep '^cc-resume-layout: verdict=' "$STATE_DIR/last-layout.out" 2>/dev/null | tail -1)"
+      [ "$layout_rc" = 3 ] && [ "$tries" -gt 0 ] || break
+      [ "$opened" = 1 ] || { "$OPEN_BIN" -a kitty >/dev/null 2>&1; opened=1; }
+      tries=$((tries - 1)); sleep "$poll"
+    done
+  fi
+  if { [ "$layout_rc" = 0 ] || [ "$layout_rc" = 4 ]; } && [ -n "$layout_sum" ]; then
+    opener=desktops
+    resumed="$(num "$(kv launched "$layout_sum")")"
+    resume_shed=$((resume_shed + $(num "$(kv shed "$layout_sum")")))
+    resume_fail=$((resume_fail + $(num "$(kv failed "$layout_sum")")))
+    desk_windows="$(num "$(kv windows "$layout_sum")")"
+    desk_fs_ok="$(num "$(kv fullscreen_ok "$layout_sum")")"
+    desk_fs_bad="$(num "$(kv fullscreen_failed "$layout_sum")")"
+  elif [ "$n_adm" -gt 0 ]; then
+    # No layout, or it could not reach a kitty: one window per session through the launcher, the
+    # pre-2026-09-30 path. rc 9 is the launcher's capacity refusal and is NOT a failure: resume_fail
+    # means the launcher broke and needs fixing, resume_shed means the box was full — same count,
+    # opposite operator action.
+    opener=windows
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      alias="$(printf '%s' "$line" | cut -f1)"; sid="$(printf '%s' "$line" | cut -f2)"
+      cwd="$(printf '%s' "$line" | cut -f3)";   br="$(printf '%s' "$line" | cut -f4)"
+      "$LAUNCH" "$alias" "$cwd" "$sid" "$br" >/dev/null 2>&1
+      case "$?" in
+        0) resumed=$((resumed + 1)) ;;
+        9) resume_shed=$((resume_shed + 1)) ;;
+        5) resume_held=$((resume_held + 1)) ;;
+        *) resume_fail=$((resume_fail + 1)) ;;
+      esac
+    done <<EOF
+$ADMITTED
+EOF
+  fi
+
+  # 4. KEEPALIVE, scoped to the INTERRUPTED sessions. It re-nudges any idle pane whose cwd CONTAINS
+  #    a marker, and it cannot tell a parked session from a stalled one — so a marker must never
+  #    reach an AT-REST pane: a cwd shared with (or a prefix of) any non-INTERRUPTED row is dropped,
+  #    and so is a cwd with a space (the marker list is space-separated). No marker ⇒ no keepalive.
+  nudged="$(printf '%s\n' "$CLASSIFIED" | awk -F'\t' '
+      NF && $3 != "" { if ($NF == "INTERRUPTED") intr[$3] = 1; else rest[$3] = 1 }
+      END { for (c in intr) { bad = (c ~ / /); for (r in rest) if (index(r, c)) bad = 1
+                              if (!bad) print c } }' | sort | tr '\n' ' ')"
+  nudged="${nudged% }"
+  if [ -n "$nudged" ] && [ "$resumed" -gt 0 ] && [ -n "$KEEPALIVE" ] && [ -x "$KEEPALIVE" ]; then
+    # Under launchd there is no KITTY_WINDOW_ID, and the keepalive's kitty arm is inert without a
+    # socket, so hand it the live one. Detached into its own session: launchd reaps the job's
+    # process group when this script exits, and a nohup'd child shares that group.
+    ka_sock="${CC_TERM_KITTY_TO:-}"
+    [ -z "$ka_sock" ] && [ -n "$KSOCK_BIN" ] && ka_sock="$("$KSOCK_BIN" 2>/dev/null | head -1)"
+    mkdir -p "$HOME/.reso" 2>/dev/null || true
+    _dl="$(dirname "$0")/lib/detach.sh"
+    # shellcheck source=lib/detach.sh
+    # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+    if [ -f "$_dl" ] && . "$_dl" 2>/dev/null && command -v detach >/dev/null 2>&1; then
+      detach "$HOME/.reso/keepalive.out" env CC_KEEPALIVE_MARKERS="$nudged" CC_TERM_KITTY_TO="$ka_sock" \
+        "$KEEPALIVE" "$KEEPALIVE_INTERVAL" >/dev/null 2>&1 || true
+    else
+      CC_KEEPALIVE_MARKERS="$nudged" CC_TERM_KITTY_TO="$ka_sock" \
+        nohup "$KEEPALIVE" "$KEEPALIVE_INTERVAL" >>"$HOME/.reso/keepalive.out" 2>&1 &
+      disown 2>/dev/null || true
+    fi
   fi
 fi
 
@@ -350,7 +570,7 @@ fi
 boot_h="$(date -u -r "$BOOT" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '%s' "$BOOT")"
 listing=""
 shown=0
-while IFS=$'\t' read -r acct cwd sid name; do
+while IFS=$'\t' read -r acct cwd sid name _br; do
   acct="$(unpad "$acct")"; cwd="$(unpad "$cwd")"; sid="$(unpad "$sid")"; name="$(unpad "$name")"
   [ -n "$sid" ] || continue
   if [ "$shown" -lt 8 ]; then
@@ -365,19 +585,23 @@ EOF
 "
 
 if [ "$MODE" = "resume" ]; then
-  msg="🔄 boot-delta: rebooted ${boot_h} · resumed ${resumed}/${n_fire} desk session(s), keepalive started."
+  where="one window each"
+  [ "$opener" = desktops ] && where="${desk_windows} fullscreen Desktop(s), ${desk_fs_ok} verified fullscreen"
+  msg="🔄 boot-delta: rebooted ${boot_h} · source: ${SOURCE_LABEL} · resumed ${resumed}/${n_fire} session(s) into ${where}.
+  ${n_int} were cut off mid-turn and are being nudged to continue; ${n_rest} had stopped at a pause point (or could not be read) and were restored WITHOUT a nudge."
+  [ "$desk_fs_bad" -gt 0 ] && msg="${msg} ⚠ ${desk_fs_bad} window(s) did not go fullscreen (Accessibility permission for kitty?) — the panes are fine, only the Desktop placement is not."
   [ "$n_open" -gt "$n_fire" ] && msg="${msg}
   consolidated: ${n_open} ghost(s) → ${n_fire} fired (max ${MAX_PER_WT}/worktree, ${MAX_TOTAL} total). The rest are LISTED, not lost — ${STATE_DIR}/last-triage.txt"
   [ "$resume_fail" -gt 0 ] && msg="${msg} ⚠ ${resume_fail} failed to launch — check /resume-sessions."
-  # A shed ghost is deferred, not lost, and it must SAY so: a boot-delta reading "resumed 1/4" with
-  # no other line is indistinguishable from three launcher failures (§12.4's whole concern is that
-  # the boot storm silently eats the recovery).
+  # A shed session is deferred, not lost, and it must SAY so: a boot-delta reading "resumed 1/4"
+  # with no other line is indistinguishable from three launcher failures (§12.4's whole concern is
+  # that the boot storm silently eats the recovery).
   [ "$resume_shed" -gt 0 ] && msg="${msg} ⏸ ${resume_shed} shed by the capacity gate (box saturated at boot) — re-run /resume-sessions once it settles."
   [ "$resume_held" -gt 0 ] && msg="${msg} ⏸ ${resume_held} not launched — owned by the limit-recovery reconciler, already running, or parked for the reboot (see cc-lr status --cohort)."
   msg="${msg}
 ${listing}desk-jobs: ${dj_up}/${dj_total} com.claude agent(s) up."
 else
-  msg="🔄 boot-delta: rebooted ${boot_h} · ${n_open} desk session(s) were open at last boot (NOT auto-resumed, posture=page):
+  msg="🔄 boot-delta: rebooted ${boot_h} · ${n_open} session(s) were live when the box went down (source: ${SOURCE_LABEL}; NOT auto-resumed, posture=page):
 ${listing}desk-jobs: ${dj_up}/${dj_total} com.claude agent(s) up.
 → resume: /resume-sessions   ·   enable auto-resume: echo resume > ${STATE_DIR}/mode"
 fi
@@ -389,7 +613,7 @@ DESK_TARGET=""
 if [ -n "$DESK_TARGET" ] && [ -n "$NOTIFY" ]; then
   "$NOTIFY" "$DESK_TARGET" "$msg" >/dev/null 2>&1 || true   # cc-notify's mailbox fallback ⇒ durable at exit 0
   mark_processed
-  log_idl fired ",\"n_open\":$n_open,\"resumed\":$resumed,\"resume_failed\":$resume_fail,\"resume_shed\":$resume_shed,\"resume_held\":$resume_held,\"desk_jobs_up\":$dj_up,\"desk_jobs_total\":$dj_total,\"notified\":\"$DESK_TARGET\",\"delivered\":true"
+  log_idl fired ",\"n_open\":$n_open,\"resumed\":$resumed,\"resume_failed\":$resume_fail,\"resume_shed\":$resume_shed,\"resume_held\":$resume_held,\"interrupted\":$n_int,\"at_rest\":$n_rest,\"opener\":\"$opener\",\"fullscreen_ok\":$desk_fs_ok,\"fullscreen_failed\":$desk_fs_bad,\"desk_jobs_up\":$dj_up,\"desk_jobs_total\":$dj_total,\"notified\":\"$DESK_TARGET\",\"delivered\":true"
   exit 0
 else
   # ── a wake with nobody to WAKE is not a wake with nobody to TELL. ────────────────────────────────
@@ -423,7 +647,7 @@ else
     # DELIVERED, durably, to a lane that is read. Marking here is what converts an unbounded silent
     # retry into one surfaced item — the whole point of the fallback.
     mark_processed
-    log_idl fired ",\"n_open\":$n_open,\"resumed\":$resumed,\"resume_failed\":$resume_fail,\"resume_shed\":$resume_shed,\"resume_held\":$resume_held,\"desk_jobs_up\":$dj_up,\"desk_jobs_total\":$dj_total,\"delivered\":true,\"channel\":\"backlog-needs\",\"backlog_id\":\"$bid\",\"reason\":\"$why\""
+    log_idl fired ",\"n_open\":$n_open,\"resumed\":$resumed,\"resume_failed\":$resume_fail,\"resume_shed\":$resume_shed,\"resume_held\":$resume_held,\"interrupted\":$n_int,\"at_rest\":$n_rest,\"opener\":\"$opener\",\"fullscreen_ok\":$desk_fs_ok,\"fullscreen_failed\":$desk_fs_bad,\"desk_jobs_up\":$dj_up,\"desk_jobs_total\":$dj_total,\"delivered\":true,\"channel\":\"backlog-needs\",\"backlog_id\":\"$bid\",\"reason\":\"$why\""
     echo "boot-resume: no desk role — the ${n_open}-session boot delta was filed as operator-blocked backlog item $bid (full text: $undeliv)" >&2
     exit 0
   fi

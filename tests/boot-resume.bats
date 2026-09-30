@@ -53,13 +53,47 @@ cat "$0.out" 2>/dev/null || echo "beef1234cafe"
 SH
   chmod +x "$CC_BACKLOG_BIN"
 
-  # stub the resume launcher: log "<acct> <cwd> <sid> <branch>" per invocation, exit 0.
+  # stub the resume launcher: log "<acct> <cwd> <sid> <branch>" per LAUNCH, exit 0. The ownership
+  # probe (--check-only) logs to .checks instead, and exits 5 for any sid listed in .held.
   export CC_RESUME_LAUNCH_BIN="$BATS_TEST_TMPDIR/stub-launch"
   cat > "$CC_RESUME_LAUNCH_BIN" <<'SH'
 #!/bin/bash
+if [ "$1" = --check-only ]; then
+  shift; printf '%s\n' "$*" >> "$0.checks"
+  grep -qx "$3" "$0.held" 2>/dev/null && exit 5
+  exit 0
+fi
 printf '%s\n' "$*" >> "$0.log"
 SH
   chmod +x "$CC_RESUME_LAUNCH_BIN"
+
+  # Every new resolution must be redirected, or a test reads the operator's real reboot roster and
+  # tombstones, or drives the real kitty through the real layout. The layout is ABSENT by default,
+  # which is the launcher-per-window fallback the older cases below were written against.
+  export CC_BOOT_RESUME_ROSTER_DIR="$BATS_TEST_TMPDIR/autonomy"
+  export CC_SHUTDOWN_TOMB_DIR="$BATS_TEST_TMPDIR/tombs"
+  mkdir -p "$CC_BOOT_RESUME_ROSTER_DIR" "$CC_SHUTDOWN_TOMB_DIR"
+  export CC_RESUME_LAYOUT_BIN="$BATS_TEST_TMPDIR/no-layout"
+  export CC_OPEN_BIN="$BATS_TEST_TMPDIR/stub-open"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$0.log"\n' > "$CC_OPEN_BIN"; chmod +x "$CC_OPEN_BIN"
+  export CC_BOOT_RESUME_KITTY_POLL=0
+  export CC_KITTY_SOCKET_BIN="$BATS_TEST_TMPDIR/stub-ksock"
+  printf '#!/bin/bash\necho unix:/tmp/kitty-test\n' > "$CC_KITTY_SOCKET_BIN"; chmod +x "$CC_KITTY_SOCKET_BIN"
+  # classifier stub: append a verdict per row — the sid's line in .verdicts, else INTERRUPTED — and
+  # log its argv. A test that wants it to fail writes .fail.
+  export CC_RESUME_CLASSIFY_BIN="$BATS_TEST_TMPDIR/stub-classify"
+  cat > "$CC_RESUME_CLASSIFY_BIN" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >> "$0.log"
+[ -f "$0.fail" ] && exit 3
+while IFS= read -r row; do
+  [ -n "$row" ] || continue
+  sid="$(printf '%s' "$row" | cut -f2)"
+  v="$(awk -v s="$sid" '$1 == s { print $2 }' "$0.verdicts" 2>/dev/null)"
+  printf '%s\t%s\n' "$row" "${v:-INTERRUPTED}"
+done
+SH
+  chmod +x "$CC_RESUME_CLASSIFY_BIN"
 
   # stub lr-select (session-sprawl consolidation seam, 2026-07-21). Default = identity pass-through:
   # every --candidate becomes a winner, so the launcher-wiring tests stay about boot-resume's seam
@@ -85,6 +119,7 @@ SH
   cat > "$CC_KEEPALIVE_BIN" <<'SH'
 #!/bin/bash
 printf 'started\n' >> "$0.log"
+printf '%s\n' "${CC_KEEPALIVE_MARKERS-<unset>}" >> "$0.markers"
 SH
   chmod +x "$CC_KEEPALIVE_BIN"
 
@@ -118,6 +153,9 @@ reg_entry() {
         '{paneUUID:$p,name:$n,cwd:$c,account:$a,pid:999999,startedAt:$s,session_id:$sid}' \
         > "$CC_REGISTRY_DIR/$sid.json"
 }
+# The keepalive is DETACHED into its own session (launchd reaps the job's group on exit), so its
+# log lands asynchronously — wait for it rather than racing it.
+keepalive_log() { local i=0; while [ ! -s "$CC_KEEPALIVE_BIN.markers" ] && [ "$i" -lt 30 ]; do sleep 0.1; i=$((i + 1)); done; cat "$CC_KEEPALIVE_BIN.markers" 2>/dev/null; }
 notify_count() { [ -f "$CC_NOTIFY_BIN.calls" ] && wc -l < "$CC_NOTIFY_BIN.calls" | tr -d ' ' || echo 0; }
 launch_count() { [ -f "$CC_RESUME_LAUNCH_BIN.log" ] && wc -l < "$CC_RESUME_LAUNCH_BIN.log" | tr -d ' ' || echo 0; }
 marker() { cat "$CC_BOOT_RESUME_STATE_DIR/last-boot-epoch" 2>/dev/null || echo ""; }
@@ -224,7 +262,7 @@ SH
   grep -q '^next2 ' "$CC_RESUME_LAUNCH_BIN.log"           # claude-secondary  → next2
   grep -q '^next '  "$CC_RESUME_LAUNCH_BIN.log"           # claude (mirror)   → next
   grep -q '^next3 ' "$CC_RESUME_LAUNCH_BIN.log"           # claude-tertiary   → next3
-  [ -f "$CC_KEEPALIVE_BIN.log" ]                          # keepalive started
+  [ -n "$(keepalive_log)" ]                               # keepalive started (all four INTERRUPTED)
   [ "$(wc -l < "$CC_KEEPALIVE_BIN.log" | tr -d ' ')" -eq 1 ]  # exactly once
   [ "$(notify_count)" -eq 1 ]                             # summary page still sent
   grep -q '"mode":"resume"' "$CC_IDL"
@@ -372,4 +410,206 @@ SH
   [ "$status" -eq 0 ]
   grep -qF -- '--candidate next4:gs:/Users/x/My Dev Worktree' "$CC_RESUME_SELECT_BIN.log"
   grep -qF 'My Dev Worktree' "$CC_RESUME_LAUNCH_BIN.log"
+}
+
+# ══ SOURCES: roster → shutdown tombstones → registry ghosts (2026-09-30) ══════════════════════════
+# The 15:24 scripted reboot: 20 sessions live, 11 registry ghosts from earlier crashes, overlap 0 —
+# a graceful shutdown runs every SessionEnd hook, which deleted the rows this script looked for.
+# RED-proof: against the pre-change script the first case lists the stale ghost and neither roster
+# session, and the tombstone cases see no tombstones at all.
+roster() { # <tag> <start-epoch> <json>
+  printf '%s' "$3" > "$CC_BOOT_RESUME_ROSTER_DIR/reboot-$1.roster.json"
+  echo "$2" > "$CC_BOOT_RESUME_ROSTER_DIR/reboot-$1.start"
+}
+rrow() { # <sid> <config-acct> <cwd> <name>
+  printf '{"session_id":"%s","account":"%s","cwd":"%s","name":"%s","pid":1,"startedAt":1}' "$1" "$2" "$3" "$4"
+}
+tomb() { # <sid> <endedAt> [hostShutdown] [cwd]
+  jq -n --arg s "$1" --argjson t "$2" --argjson h "${3:-false}" --arg c "${4:-/Users/x/wt-$1}" \
+    '{session_id:$s,account:"claude-next",cwd:$c,name:("T-"+$s),endedAt:$t,endReason:"other",hostShutdown:$h}' \
+    > "$CC_SHUTDOWN_TOMB_DIR/$1.json"
+}
+stub_layout() { # <summary line>; a file .rc3=N makes the first N calls exit 3 (no live kitty)
+  export CC_RESUME_LAYOUT_BIN="$BATS_TEST_TMPDIR/stub-layout"
+  cat > "$CC_RESUME_LAYOUT_BIN" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >> "$0.log"; cat >> "$0.rows"
+n=$(cat "$0.n" 2>/dev/null || echo 0); echo $((n + 1)) > "$0.n"
+[ -f "$0.rc3" ] && [ "$n" -lt "$(cat "$0.rc3")" ] && exit 3
+cat "$0.sum"
+SH
+  chmod +x "$CC_RESUME_LAYOUT_BIN"
+  printf '%s\n' "$1" > "$CC_RESUME_LAYOUT_BIN.sum"
+}
+SUM_OK2='cc-resume-layout: verdict=ok launched=2 shed=0 failed=0 windows=1 fullscreen_ok=1 fullscreen_failed=0'
+
+@test "roster: the sessions live at a scripted reboot are the delta, not the stale registry ghosts" {
+  reg_entry gstale 1784700000000 claude-quaternary /Users/x/wt-stale STALE-GHOST
+  roster 2026-09-30 1784799900 "[$(rrow r1 claude-quaternary /Users/x/wt-a ROSTER-ONE),$(rrow r2 claude-next /Users/x/wt-b ROSTER-TWO)]"
+  export CC_BOOT_RESUME_MODE=page
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  grep -q 'ROSTER-ONE' "$CC_NOTIFY_BIN.log"
+  grep -q 'ROSTER-TWO' "$CC_NOTIFY_BIN.log"
+  ! grep -q 'STALE-GHOST' "$CC_NOTIFY_BIN.log" || false
+  grep -q 'source: roster reboot-2026-09-30' "$CC_NOTIFY_BIN.log"
+  grep -q '"source":"roster"' "$CC_IDL"
+  grep -q '"n_open":2' "$CC_IDL"
+}
+
+@test "roster: one from before the previous boot, or after this boot, is not this reboot's roster" {
+  mkdir -p "$CC_BOOT_RESUME_STATE_DIR"; echo 1784790000 > "$CC_BOOT_RESUME_STATE_DIR/last-boot-epoch"
+  roster old  1784780000 "[$(rrow o1 claude-next /Users/x/wt-o OLD-ROSTER)]"
+  roster late 1784800100 "[$(rrow l1 claude-next /Users/x/wt-l LATE-ROSTER)]"
+  reg_entry g1 1784795000000 claude-quaternary /Users/x/wt-g GHOST-ONE
+  export CC_BOOT_RESUME_MODE=page
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  ! grep -q 'OLD-ROSTER\|LATE-ROSTER' "$CC_NOTIFY_BIN.log" || false
+  grep -q 'GHOST-ONE' "$CC_NOTIFY_BIN.log"
+  grep -q '"source":"registry"' "$CC_IDL"
+}
+
+@test "roster: of two in the window, the newest wins" {
+  roster a 1784799000 "[$(rrow x1 claude-next /Users/x/wt-x EARLIER)]"
+  roster b 1784799900 "[$(rrow y1 claude-next /Users/x/wt-y LATER)]"
+  export CC_BOOT_RESUME_MODE=page
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  grep -q 'LATER' "$CC_NOTIFY_BIN.log"
+  ! grep -q 'EARLIER' "$CC_NOTIFY_BIN.log" || false
+}
+
+@test "roster: an in-window roster listing nobody is an answer — no page, ghosts NOT reported" {
+  roster empty 1784799900 '[]'
+  reg_entry g1 1784700000000 claude-quaternary
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [ "$(notify_count)" -eq 0 ]
+  grep -q 'no-open-sessions' "$CC_IDL"
+  grep -q '"source":"roster"' "$CC_IDL"
+}
+
+@test "tombstones: only the LAST burst before the boot is the shutdown; a pane closed earlier is not" {
+  tomb closed 1784790000
+  tomb t1 1784799800
+  tomb t2 1784799803
+  export CC_BOOT_RESUME_MODE=page
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  grep -q 'T-t1' "$CC_NOTIFY_BIN.log"
+  grep -q 'T-t2' "$CC_NOTIFY_BIN.log"
+  ! grep -q 'T-closed' "$CC_NOTIFY_BIN.log" || false
+  grep -q '"source":"tombstones"' "$CC_IDL"
+}
+
+@test "tombstones: kern.willshutdown evidence outranks the burst rule" {
+  tomb flagged 1784795000 true
+  tomb unflagged 1784799900 false
+  export CC_BOOT_RESUME_MODE=page
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  grep -q 'T-flagged' "$CC_NOTIFY_BIN.log"
+  ! grep -q 'T-unflagged' "$CC_NOTIFY_BIN.log" || false
+}
+
+@test "tombstones: one older than the window falls through to the registry ghosts" {
+  tomb ancient 1784700000
+  reg_entry g1 1784795000000 claude-quaternary /Users/x/wt-g GHOST-ONE
+  export CC_BOOT_RESUME_MODE=page
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  ! grep -q 'T-ancient' "$CC_NOTIFY_BIN.log" || false
+  grep -q 'GHOST-ONE' "$CC_NOTIFY_BIN.log"
+}
+
+# ══ RESUME through --desktops, nudging only what the shutdown INTERRUPTED ═══════════════════════
+@test "resume: roster rows skip consolidation — two live sessions in one checkout both open via --desktops" {
+  roster r 1784799900 "[$(rrow r1 claude-quaternary /Users/x/shared ONE),$(rrow r2 claude-next /Users/x/shared TWO)]"
+  stub_layout "$SUM_OK2"
+  export CC_BOOT_RESUME_MODE=resume
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [ ! -f "$CC_RESUME_SELECT_BIN.log" ]                               # no lr-select for a roster
+  grep -qx -- '--desktops' "$CC_RESUME_LAYOUT_BIN.log"
+  grep -q "^next4	r1	/Users/x/shared	" "$CC_RESUME_LAYOUT_BIN.rows"
+  grep -q "^next	r2	/Users/x/shared	" "$CC_RESUME_LAYOUT_BIN.rows"
+  [ "$(wc -l < "$CC_RESUME_LAUNCH_BIN.checks" | tr -d ' ')" -eq 2 ]   # both ownership-checked
+  [ ! -f "$CC_RESUME_LAUNCH_BIN.log" ]                               # no per-session window
+  grep -q -- '--boot-epoch 1784799900' "$CC_RESUME_CLASSIFY_BIN.log" # anchored on the SHUTDOWN
+  grep -q '"resumed":2' "$CC_IDL"
+  grep -q '"opener":"desktops"' "$CC_IDL"
+  grep -q '"fullscreen_ok":1' "$CC_IDL"
+}
+
+@test "resume: only INTERRUPTED cwds reach the keepalive; an AT-REST session in the same cwd vetoes it" {
+  roster r 1784799900 "[$(rrow a claude-next /x/a A),$(rrow b claude-next /x/b B),$(rrow c1 claude-next /x/c C1),$(rrow c2 claude-next /x/c C2)]"
+  printf 'b AT-REST\nc2 AT-REST\n' > "$CC_RESUME_CLASSIFY_BIN.verdicts"
+  stub_layout 'cc-resume-layout: verdict=ok launched=4 shed=0 failed=0 windows=1 fullscreen_ok=1 fullscreen_failed=0'
+  export CC_BOOT_RESUME_MODE=resume
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [ "$(keepalive_log)" = "/x/a" ]
+  grep -q '"interrupted":2' "$CC_IDL"
+  grep -q '"at_rest":2' "$CC_IDL"
+  grep -q '2 were cut off mid-turn' "$CC_NOTIFY_BIN.log"
+}
+
+@test "resume: nothing INTERRUPTED, or a failed classifier ⇒ no keepalive at all" {
+  roster r 1784799900 "[$(rrow a claude-next /x/a A),$(rrow b claude-next /x/b B)]"
+  touch "$CC_RESUME_CLASSIFY_BIN.fail"
+  stub_layout "$SUM_OK2"
+  export CC_BOOT_RESUME_MODE=resume
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  sleep 0.5
+  [ ! -f "$CC_KEEPALIVE_BIN.log" ]
+  grep -q '"interrupted":0' "$CC_IDL"
+  grep -q '"resumed":2' "$CC_IDL"                                     # still restored
+}
+
+@test "resume: a session the ownership check holds (rc 5) is never handed to the layout" {
+  roster r 1784799900 "[$(rrow a claude-next /x/a A),$(rrow b claude-next /x/b B)]"
+  echo b > "$CC_RESUME_LAUNCH_BIN.held"
+  stub_layout 'cc-resume-layout: verdict=ok launched=1 shed=0 failed=0 windows=1 fullscreen_ok=1 fullscreen_failed=0'
+  export CC_BOOT_RESUME_MODE=resume
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  grep -q '	a	' "$CC_RESUME_LAYOUT_BIN.rows"
+  ! grep -q '	b	' "$CC_RESUME_LAYOUT_BIN.rows" || false
+  grep -q '"resume_held":1' "$CC_IDL"
+}
+
+@test "resume: no live kitty at login ⇒ opens kitty ONCE, waits, then lays out" {
+  roster r 1784799900 "[$(rrow a claude-next /x/a A),$(rrow b claude-next /x/b B)]"
+  stub_layout "$SUM_OK2"
+  echo 2 > "$CC_RESUME_LAYOUT_BIN.rc3"
+  export CC_BOOT_RESUME_MODE=resume
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$CC_OPEN_BIN.log")" = "-a kitty" ]
+  [ "$(cat "$CC_RESUME_LAYOUT_BIN.n")" -eq 3 ]
+  grep -q '"opener":"desktops"' "$CC_IDL"
+}
+
+@test "resume: kitty never comes up ⇒ falls back to one launcher window per session" {
+  roster r 1784799900 "[$(rrow a claude-next /x/a A),$(rrow b claude-next /x/b B)]"
+  stub_layout "$SUM_OK2"
+  echo 99 > "$CC_RESUME_LAYOUT_BIN.rc3"
+  export CC_BOOT_RESUME_MODE=resume CC_BOOT_RESUME_KITTY_TRIES=2
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [ "$(launch_count)" -eq 2 ]
+  grep -q '"opener":"windows"' "$CC_IDL"
+  grep -q '"resumed":2' "$CC_IDL"
+}
+
+@test "resume: a window that did not go fullscreen is named in the page" {
+  roster r 1784799900 "[$(rrow a claude-next /x/a A),$(rrow b claude-next /x/b B)]"
+  stub_layout 'cc-resume-layout: verdict=degraded launched=2 shed=0 failed=0 windows=1 fullscreen_ok=0 fullscreen_failed=1'
+  export CC_BOOT_RESUME_MODE=resume
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  grep -q 'did not go fullscreen' "$CC_NOTIFY_BIN.log"
+  grep -q '"fullscreen_failed":1' "$CC_IDL"
 }

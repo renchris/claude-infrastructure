@@ -10,6 +10,8 @@
 #   Usage: boot-resume-launch.sh <account-alias> <cwd> <session-id> [branch]
 #     account-alias: next|next2|next3|next4|fable.. (already MAPPED by boot-resume.sh)
 #   --dry-run (or CC_LAUNCH_DRYRUN=1): print the reso-resume-one command + the osascript, run nothing.
+#   --check-only: run only the ownership checks (PARKED-REBOOT, recon fence, live holder) and exit
+#     0 (may launch) or 5 (not ours); opens nothing. boot-resume.sh's --desktops batch path uses it.
 #
 # Env: CC_RESUME_ONE_BIN (default ~/.reso/bin/reso-resume-one) · CC_OSASCRIPT_BIN (default osascript)
 #      · CC_TERM_KITTY (kitty binary) · CC_TERM_KITTY_TO (kitty control socket) · IT2_WRAPPER_NO_KITTY=1
@@ -60,9 +62,11 @@ brl_bounded() {
 
 
 DRYRUN="${CC_LAUNCH_DRYRUN:-0}"
+CHECKONLY=0
 case "${1:-}" in
   -h|--help) sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; exit 0 ;;
   --dry-run) DRYRUN=1; shift ;;
+  --check-only) CHECKONLY=1; shift ;;
 esac
 
 acct="${1:-}"; cwd="${2:-}"; sid="${3:-}"; branch="${4:-}"
@@ -287,6 +291,13 @@ case "$_brl_h" in
   ''|*[!0-9]*) echo "boot-resume-launch: H($sid) unknown (lr-lib.sh unreachable) - treated as held, not launching" >&2; exit 5 ;;
   *) echo "boot-resume-launch: $sid already has $_brl_h live holder(s) - a second resume would be a second writer, not launching" >&2; exit 5 ;;
 esac
+
+# --check-only: the three questions above, and nothing else. boot-resume.sh asks them per session
+# before handing the batch to cc-resume-layout.sh --desktops, which opens the windows itself (2x2
+# per fullscreen Desktop) and so never runs this file's terminal arms. Without this exit the batch
+# path would skip the fence, the PARKED-REBOOT rule and the second-writer check. Capacity is NOT
+# asked here: the layout admits per pane, and admitting twice double-spends the refusal budget.
+[ "$CHECKONLY" = 1 ] && exit 0
 
 # ── MACHINE-CAPACITY ADMISSION — the reso-resume-one seam (MACHINE_CAPACITY_V2 §12.1/§12.4). ───
 # §12.1's bypass table listed `reso-resume-one` as an ungated spawn path. Every in-repo invocation
