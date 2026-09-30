@@ -157,6 +157,26 @@ a p50. Fix 3 did not fire on this land (it went green on round 1, so no re-round
 did fire ("unattended-path own-scope scan CARRIED"). This land's arms were 745s at load ~200, so
 one land at that load cannot show fix 2's ~72s.
 
+**Post-fix readout, 2026-09-30** (same cut, re-run at 21:06Z; post window 2026-09-25T03:08Z →
+2026-09-30T21:06Z, 5.75 days, so the full 7-day window is not yet closed):
+
+| landed lands | baseline 09-18T03:08 → 09-25T03:08 (n=338) | post 09-25T03:08 → 09-30T21:06 (n=223) |
+|---|---|---|
+| landed / terminal | 338 / 555 (60.9%) | 223 / 336 (66.4%) |
+| attempts per landed branch p50 / p90 | 1 / 3 | 1 / 2 |
+| total_s p50 / p90 | 1037 / 2869 | **382 / 1911** |
+| gate_s p50 / p90 | 348 / 1987 | 347 / 1790 |
+| gate_arms_s p50 / p90 | 228 / 809 | 177 / 567 |
+| **post_s** p50 / p90 | **593 / 883** | **2 / 3** |
+
+The headline is fix 1: post_s fell from a 593s median to 2s, which accounts for most of the
+total_s drop (1037s → 382s median). Arms fell 22% at the median and 30% at p90 (fix 2).
+gate_s is flat at the median; it is dominated by the bats corpus, which this plan did not touch.
+First-round success rose from 218/338 (64%) to 167/223 (75%) of landed branches. Exit 11
+(re-round exhaustion) went from 28 to 0, which is fix 3's target. Exit 6 (gate red) is the
+remaining large class, 87 of 336, led by `dead-assertion` and `bats-shellcheck`: real findings,
+not rail latency.
+
 Pre-existing red found and fixed on the way (`a476baecc`, rebased on land): `tests/ship-land.bats`
 "shellcheck ABSENT" was red on trunk at the same load. Since `362811da6` the lint searches
 `/opt/homebrew/bin` when PATH misses, and the fixture sealed only PATH. It also pinned
@@ -167,4 +187,5 @@ pre-rewording text.
 - **Move the unattended-path arm last in run_gate.** Arms fail fast, and ~21 reds/week sit behind
   it, so they would surface ~100s sooner. Not done: it is a ~90-line block move in a file siblings
   edit weekly, for about 35 min/week of red latency. It passes F1 but not the size bar for this land.
-- **Publish post-fix p50s** once the post window reaches n ≥ 30 (same `--compare` cut).
+- ~~**Publish post-fix p50s** once the post window reaches n ≥ 30 (same `--compare` cut).~~
+  Done 2026-09-30 with n=223 (the readout above); backlog `e8010ba4b98a` closed on it.
