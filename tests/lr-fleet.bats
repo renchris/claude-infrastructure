@@ -1202,7 +1202,7 @@ _pick() { # <source acct> <tier> <sid> → lf_pick_target's answer, with only wh
   # W6b: lf_pick_target now calls lf_charge_assign and lf_rank_why, and writes the rank's stderr
   # under $FLEET_DIR/$RUN. An extraction that omits either helper does not test a smaller program,
   # it tests a DIFFERENT one — `command not found` is rc 127, which `|| true` would launder.
-  sed -n '/^lf_acct_of_cfg() {/,/^}/p;/^_lf_target_holds_sid() {/,/^}/p;/^lf_rank_why() {/,/^}/p;/^lf_charge_assign() {/,/^}/p;/^lf_pick_target() {/,/^}/p' \
+  sed -n '/^lf_acct_of_cfg() {/,/^}/p;/^_lf_target_holds_sid() {/,/^}/p;/^lf_rank_why() {/,/^}/p;/^lf_charge_assign() {/,/^}/p;/^lf_rank_timed() {/,/^}/p;/^lf_pick_target() {/,/^}/p' \
     "$FLEET" > "$BATS_TEST_TMPDIR/pick.sh"
   bash -c '
     . "$1" 2>/dev/null
@@ -1244,6 +1244,51 @@ _pick() { # <source acct> <tier> <sid> → lf_pick_target's answer, with only wh
   LR_CONFIG_DIRS="$SEC:$TER:$HOME/.claude-quaternary" run _pick next2 claude-opus-5 "$SID"
   [ "$status" -eq 1 ]
   [[ "$output" == *"SKIPPED=next3 next4"* ]]
+}
+
+# ── D1.3 (LIMIT_RECOVER_FLEET_V2 W6b): the router's own 3 s window is not a routing answer ─────────
+# bin/claude-accounts counts --max-wait from its PROCESS start, so a loaded box can spend it on
+# Python start-up and exit 3 with no answer; two sessions parked that way at the 06:30Z reset.
+rank_expiry_stub() { # $1 = how many leading calls expire (rc 3, no stdout); later calls answer next3
+  export RANK_N="$BATS_TEST_TMPDIR/rank.n"; : > "$RANK_N"; export RANK_EXPIRE="$1"
+  export ACC_LOG="$BATS_TEST_TMPDIR/acct.argv"; : > "$ACC_LOG"
+  cat > "$CC_ACCOUNTS_BIN" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >> "${ACC_LOG:?}"
+case "$*" in *--rank*) : ;; *) exit 0 ;; esac
+echo x >> "${RANK_N:?}"
+[ "$(wc -l < "$RANK_N")" -le "${RANK_EXPIRE:?}" ] && { echo "claude-accounts: max-wait expired" >&2; exit 3; }
+printf 'next3 0.8\n'
+SH
+  chmod +x "$CC_ACCOUNTS_BIN"
+}
+
+@test "[D1.3] a router rc 3 (its window ran out) is asked ONCE more with a longer bound, and routes" {
+  rank_expiry_stub 1
+  run _pick next2 claude-opus-5 "$SID"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -qx next3 <<<"$output" || { echo "$output"; false; }
+  [[ "$output" == *"window ran out (rc 3"*"asking once more with --max-wait 15"* ]] || { echo "$output"; false; }
+  [ "$(grep -c -- '--rank' "$ACC_LOG")" = 2 ] || { cat "$ACC_LOG"; false; }
+  grep -q -- '--rank general --recovery --max-wait 15' "$ACC_LOG" || { cat "$ACC_LOG"; false; }
+  local tf="$BATS_TEST_TMPDIR/pickfleet/pick/rank.timing"
+  grep -q 'try=1 max_wait=3 rc=3 wall_ms=' "$tf" && grep -q 'try=2 max_wait=15 rc=0 wall_ms=' "$tf" || { cat "$tf"; false; }
+}
+
+@test "D1.3: two expiries still PARK — never a move without a routed target" {
+  rank_expiry_stub 9
+  run _pick next2 claude-opus-5 "$SID"
+  [ "$status" -eq 1 ]
+  [ "$(grep -c -- '--rank' "$ACC_LOG")" = 2 ] || { cat "$ACC_LOG"; false; }
+}
+
+@test "D1.3 CONTROL: a genuine no (rc 1, nothing routable) is final — not retried" {
+  export ACC_LOG="$BATS_TEST_TMPDIR/acct.argv"; : > "$ACC_LOG"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$ACC_LOG"\ncase "$*" in *--rank*) echo "claude-accounts: no routable account for general: next3=5h-cutoff" >&2; exit 1 ;; esac\n' > "$CC_ACCOUNTS_BIN"
+  run _pick next2 claude-opus-5 "$SID"
+  [ "$status" -eq 1 ]
+  [ "$(grep -c -- '--rank' "$ACC_LOG")" = 1 ] || { cat "$ACC_LOG"; false; }
+  [[ "$output" == *"WHY=next3=5h-cutoff"* ]] || { echo "$output"; false; }
 }
 
 # ══════════════════════════════════════════════════════════════════════════════

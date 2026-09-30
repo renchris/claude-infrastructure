@@ -709,6 +709,31 @@ lf_charge_assign() { # $1=account → always 0; the stderr line IS the record wh
     || echo "lr-fleet: --assign $1 was NOT recorded — the router cannot see this recovery until it burns; a concurrent pick may stack onto the same account" >&2
   return 0
 }
+# ── THE RANK, TIMED, AND ASKED TWICE WHEN THE ROUTER'S OWN WINDOW RAN OUT (W6b, D1.3) ─────────────
+# `--max-wait 3` counts from the ROUTER's process start (bin/claude-accounts _PROC_T0), so Python
+# start-up on a loaded box spends it, and on expiry the router exits 3 with no answer. At
+# 06:30:44-06:31:17Z on 2026-09-29 two sessions parked that way, and a park waits at least
+# LR_REQUEST_RETRY_MIN (10 min) before the poller tries again. So rc 3 — and only rc 3, the one code
+# that means "out of time, not out of accounts" — earns ONE retry with a longer bound
+# (LR_RANK_RETRY_WAIT_S, default 15). An empty answer after that still parks: a park is the fallback,
+# never a move without a routed target. Every attempt's rc and wall time go to <run>/rank.timing,
+# the evidence that says whether a park was the router's answer or the router's clock.
+lf_rank_timed() { # $1=kind $2=stderr file $3=run dir → the router's ranking on stdout (empty = none)
+  local kind="$1" err="$2" rdir="$3" w="${LR_RANK_WAIT_S:-3}" rw="${LR_RANK_RETRY_WAIT_S:-15}" out rc try t0 t1
+  case "$w" in ''|*[!0-9]*) w=3 ;; esac
+  case "$rw" in ''|*[!0-9]*) rw=15 ;; esac
+  for try in 1 2; do
+    t0="$(/usr/bin/perl -MTime::HiRes=time -e 'printf "%d", time*1000' 2>/dev/null || echo 0)"
+    rc=0; out="$("$ACCOUNTS" --rank "$kind" --recovery --max-wait "$w" 2>>"$err")" || rc=$?
+    t1="$(/usr/bin/perl -MTime::HiRes=time -e 'printf "%d", time*1000' 2>/dev/null || echo 0)"
+    printf '%s kind=%s try=%s max_wait=%s rc=%s wall_ms=%s\n' "$(date -u +%FT%TZ)" "$kind" "$try" "$w" "$rc" "$(( t1 - t0 ))" \
+      >> "$rdir/rank.timing" 2>/dev/null || true
+    [ "$rc" = 3 ] && [ "$try" = 1 ] || break
+    echo "lr-fleet: the router's ${w}s window ran out (rc 3, $(( t1 - t0 )) ms wall) — asking once more with --max-wait $rw" >&2
+    w="$rw"
+  done
+  printf '%s\n' "$out"
+}
 # 🚨 IT SETS A GLOBAL AND PRINTS NOTHING, and that is a BUG FIX, not a style change. The caller
 # read this function as `target="$(lf_pick_target …)"` — a COMMAND SUBSTITUTION, i.e. a subshell —
 # so every one of the four facts it carries OUT of the loop (`LF_PICK_SKIPPED_HOLDER` and, new in
@@ -761,7 +786,7 @@ lf_pick_target() { # $1=source account $2=tier $3=sid → 0 and LF_PICK_TARGET s
     lf_charge_assign "$cand"
     LF_PICK_TARGET="$cand"; return 0
   done <<EOF
-$("$ACCOUNTS" --rank "$kind" --recovery --max-wait 3 2>"$rankerr" || true)
+$(lf_rank_timed "$kind" "$rankerr" "$rdir")
 EOF
   # THE RANK IS ASKED IN THE RECOVERY LANE, AND THAT IS NOT A STYLE CHOICE (W6a). A recovery is not
   # a dispatch: a dispatch places a NEW unit that can be cut to fit the quota, a recovery
@@ -770,7 +795,8 @@ EOF
   # (bin/claude-accounts `recovery_floors`), so an account with room for a fire but not for a
   # transplant is excluded HERE rather than discovered two hours later.
   # `--max-wait 3` is the ROUTER's own wall-clock bound. No outer timeout is wrapped around it: a
-  # bound you guess can only convict a healthy call, and this one already bounds itself.
+  # bound you guess can only convict a healthy call, and this one already bounds itself. Its expiry
+  # is retried once with a longer bound (lf_rank_timed above).
   LF_RANK_WHY="$(lf_rank_why "$rankerr")"
   return 1
 }
