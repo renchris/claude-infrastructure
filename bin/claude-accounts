@@ -4421,8 +4421,15 @@ def cmd_place(args: list, cfg: dict) -> int:
     except _PlaceArgError as e:
         print(f"claude-accounts --place: {e}", file=sys.stderr)
         return PLACE_EXIT_BAD_ARGS
+    # W6 resolution 11: a cache taken before any mover's SOURCE reset is unservable here too.
+    _dirs0 = {os.path.expanduser(a["config_dir"]).rstrip("/"): a["name"] for a in cfg["accounts"]}
+    _names0 = {a["name"] for a in cfg["accounts"]}
+    _srcs = tuple(sorted({str(m["src"]) if str(m["src"]) in _names0
+                          else _dirs0.get(os.path.expanduser(str(m["src"])).rstrip("/"))
+                          for m in movers} - {None}))
     try:
-        rows, wj, _cached, _prev = get_data(cfg, max_wait=0, max_age=cfg.get("cache_grace_s", 600))
+        rows, wj, _cached, _prev = get_data(cfg, max_wait=0, max_age=cfg.get("cache_grace_s", 600),
+                                            src=_srcs)
     except CacheOnlyUnavailable:
         print(json.dumps({m["sid"]: {"acct": None, "reason": "wait-data", "eta_s": None,
                                      "weight": m["w"]} for m in movers}, sort_keys=True))
@@ -4693,9 +4700,43 @@ BAD_AUTH = ("stale", "logged-out", "token-invalid", "keychain-error", "no-oauth-
             "probe-error")
 
 
-def cache_read(cfg, want_heal=False, grace_s=None):
+CACHE_SRC = ()     # accounts whose reset a served cache must not predate — set by main() from --src
+
+
+def _cache_predates_reset(c, src, now=None):
+    """(acct, window, reset_at) for the first SOURCE account whose 5h or weekly reset fell between
+    the cache's sweep and now, else None. FLEET_V2 W6 resolution 11 (D1.3 router side).
+
+    A cache is a picture of every account AS OF ITS SWEEP, and a reset is the one event that
+    invalidates that picture wholesale for the account it hits: the source that read `5h-cutoff`
+    a minute ago now has a fresh window. Measured 2026-09-30: the recovery lane's timeouts sat on
+    the 06:30Z reset boundary, and a pre-reset cache moved a cohort OFF its source 5 s after the
+    source had already rolled. The reset instants are read from the cached rows themselves (the
+    ABSOLUTE stamps, never the as-of-the-sweep countdowns), so no caller has to supply them."""
+    if not src:
+        return None
+    now = time.time() if now is None else now
+    ts = c.get("ts", 0)
+    for r in c.get("rows", []):
+        if not isinstance(r, dict) or r.get("acct") not in src:
+            continue
+        for window in ("session", "weekly"):
+            at = r.get(f"{window}_reset_at")
+            h = hrs_until(at)
+            if h is None:
+                continue
+            t = now + h * 3600.0
+            if ts < t <= now:
+                return r["acct"], window, at
+    return None
+
+
+def cache_read(cfg, want_heal=False, grace_s=None, src=None):
     """grace_s overrides the TTL — used ONLY by the lock-degrade path, which prefers a
-    slightly-expired sweep over blocking behind another caller's multi-minute one."""
+    slightly-expired sweep over blocking behind another caller's multi-minute one.
+
+    `src` (default CACHE_SRC) names the accounts a caller is moving work OFF; a cache taken before
+    any of their resets is unservable on EVERY path — TTL, grace and cache-only alike."""
     try:
         with open(cfg["cache_file"]) as f:
             c = json.load(f)
@@ -4714,6 +4755,15 @@ def cache_read(cfg, want_heal=False, grace_s=None):
         # that would defer the heal for the whole TTL and mislabel the state.
         if want_heal and c.get("no_heal") and any(
                 (r.get("auth") in BAD_AUTH or "error" in r) for r in c.get("rows", [])):
+            return None
+        stale = _cache_predates_reset(c, CACHE_SRC if src is None else src)
+        if stale:
+            acct, window, at = stale
+            msg = (f"cache from {datetime.fromtimestamp(c.get('ts', 0), timezone.utc).isoformat()} "
+                   f"predates {acct}'s {window} reset at {at} — refused (a pre-reset rank would "
+                   f"move work off a source that has already rolled)")
+            log_event(f"cache_read: {msg}")
+            print(f"claude-accounts: {msg}", file=sys.stderr)
             return None
         return c
     except (OSError, json.JSONDecodeError):
@@ -5002,14 +5052,14 @@ def _arm_sweep_bound(deadline):
     return _disarm
 
 
-def get_data(cfg, fresh=False, no_heal=False, max_wait=None, max_age=None):
+def get_data(cfg, fresh=False, no_heal=False, max_wait=None, max_age=None, src=None):
     # --max-wait N>0 is a REAL wall-clock bound from here (it used to be parsed and ignored):
     # a cache inside TTL is served as always; otherwise the lock is tried only until the deadline,
     # a miss serves the grace cache or abstains (exit 3), and a won lock sweeps under a timer.
     deadline = ((_PROC_T0 if _CLI else time.monotonic()) + max_wait) \
         if max_wait is not None and max_wait > 0 else None
     if not fresh:
-        c = cache_read(cfg, want_heal=not no_heal, grace_s=max_age)
+        c = cache_read(cfg, want_heal=not no_heal, src=src, grace_s=max_age)
         if c:
             return c["rows"], c["window"], True, c.get("prev")
     # CACHE-ONLY: abstain before touching the lock. Everything below this line can block —
@@ -5030,7 +5080,7 @@ def get_data(cfg, fresh=False, no_heal=False, max_wait=None, max_age=None):
         # cache it had just declined by a few seconds.
         if deadline is not None:
             if not _acquire_lock_until(lock, deadline):
-                c = None if fresh else cache_read(cfg, want_heal=not no_heal,
+                c = None if fresh else cache_read(cfg, want_heal=not no_heal, src=src,
                                                   grace_s=cfg.get("cache_grace_s", 600))
                 if c:
                     return c["rows"], c["window"], True, c.get("prev")
@@ -5038,7 +5088,7 @@ def get_data(cfg, fresh=False, no_heal=False, max_wait=None, max_age=None):
                     f"--max-wait {max_wait:g}s expired behind the single-flight lock with no "
                     f"servable cache (grace {cfg.get('cache_grace_s', 600)}s)")
         elif not _acquire_lock(lock, cfg, allow_degrade=not fresh):
-            c = cache_read(cfg, want_heal=not no_heal,
+            c = cache_read(cfg, want_heal=not no_heal, src=src,
                            grace_s=cfg.get("cache_grace_s", 600))
             if c:
                 return c["rows"], c["window"], True, c.get("prev")
@@ -5067,7 +5117,7 @@ def get_data(cfg, fresh=False, no_heal=False, max_wait=None, max_age=None):
             # reported "served-cache", and never refreshed, so the cache expired anyway and the
             # daemon's entire job went undone while it logged success. Measured on --max-age 0,
             # which served a 15s cache instead of sweeping.
-            c = cache_read(cfg, want_heal=not no_heal, grace_s=max_age)
+            c = cache_read(cfg, want_heal=not no_heal, src=src, grace_s=max_age)
             if c:
                 return c["rows"], c["window"], True, c.get("prev")
         prev = _prev_snapshot(cfg)
@@ -6955,6 +7005,21 @@ def main():
             sys.exit(5)
         return
 
+    # `--rank/--route … --src <acct>`: the account the caller is moving work OFF (W6 resolution 11).
+    # Set as the module default rather than passed to get_data, because the call below is a
+    # source-patch anchor and must stay byte-identical. Name or config dir, like --place's `src`.
+    if ("--rank" in args or "--route" in args) and "--src" in args:
+        global CACHE_SRC
+        j = args.index("--src")
+        sv = args[j + 1] if j + 1 < len(args) else None
+        dirs = {os.path.expanduser(a["config_dir"]).rstrip("/"): a["name"] for a in cfg["accounts"]}
+        names = {a["name"] for a in cfg["accounts"]}
+        sname = sv if sv in names else dirs.get(os.path.expanduser(sv or "").rstrip("/"))
+        if sname is None:
+            print(f"claude-accounts: --src requires an account name or config dir "
+                  f"({'|'.join(sorted(names))}; got {sv!r})", file=sys.stderr)
+            sys.exit(64)
+        CACHE_SRC = (sname,)
     # NOTE FOR EDITORS: the next line is an ANCHOR. tests/claude-accounts-core.bats patches this
     # file's SOURCE by exact string match on it (to stub rows without a live sweep), so changing its
     # text or its indentation silently turns that patch into a no-op and the test then exercises a

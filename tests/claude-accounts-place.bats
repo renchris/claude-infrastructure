@@ -511,3 +511,66 @@ print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]]
 }
+
+# Resolution 11 (D1.3 router half). A cache swept BEFORE a mover source's reset is a picture of a
+# capped source that has since rolled; on 2026-09-30 such a cache moved a cohort off its source 5 s
+# after the 06:30Z reset. --place (cache-only) must refuse it as WAIT_DATA, on every path.
+@test "W6 res11: --place refuses a cache that predates a mover source's reset; a post-reset cache serves" {
+  run python3 -c "$LOAD"'
+from datetime import datetime, timezone
+iso = lambda t: datetime.fromtimestamp(t, timezone.utc).isoformat()
+now = time.time()
+def seed(cache_age, src_reset_ago):
+    rows = {"a": {"session_pct": 100, "session_reset_at": iso(now - src_reset_ago)}, "b": {}}
+    rc, plan = place(rows, {"a": 0, "b": 0}, movers(1, src="a"), cache=False)
+    cfg["accounts"] = [{"name": x, "config_dir": os.path.join(T, "cfg-" + x)} for x in rows]
+    json.dump({"ts": now - cache_age, "cfg_key": ca._cfg_key(cfg), "no_heal": False,
+               "rows": [row(x, **o) for x, o in rows.items()], "window": WIN, "prev": None},
+              open(os.environ["CACHE"], "w"))
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = ca.cmd_place(["--place", "--lane", "general", "--recovery", "--movers",
+                           os.path.join(T, "movers.jsonl"), "--facts", os.path.join(T, "facts"),
+                           "--kwork", os.path.join(T, "kwork.json")], cfg)
+    return rc, json.loads(buf.getvalue())
+rc, plan = seed(cache_age=120, src_reset_ago=60)           # swept 2 min ago, source rolled 1 min ago
+assert rc == 3 and plan["s00"]["reason"] == "wait-data", (rc, plan)
+rc, plan = seed(cache_age=30, src_reset_ago=60)            # swept AFTER the roll: served
+assert rc == 0 and plan["s00"]["reason"] != "wait-data", (rc, plan)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]]
+}
+
+@test "W6 res11: CLI --rank --src refuses a pre-reset cache even at --max-wait 0; without --src it serves" {
+  run python3 -c "$LOAD"'
+from datetime import datetime, timezone
+import subprocess
+iso = lambda t: datetime.fromtimestamp(t, timezone.utc).isoformat()
+now = time.time()
+cfg["accounts"] = [{"name": x, "config_dir": os.path.join(T, "cfg-" + x), "launcher": "c",
+                    "email": "t@example.com", "mailbox": "t@example.com", "dia_profile": "T"}
+                   for x in ("a", "b")]
+json.dump(cfg, open(os.environ["CA_CFG"], "w"))
+json.dump({"ts": now - 120, "cfg_key": ca._cfg_key(cfg), "no_heal": False,
+           "rows": [row("a", session_pct=100, session_reset_at=iso(now - 60)), row("b")],
+           "window": WIN, "prev": None}, open(os.environ["CACHE"], "w"))
+def rank(*extra):
+    return subprocess.run([os.environ["CA_BIN"], "--rank", "general", "--recovery",
+                           "--max-wait", "0", "--max-age", "600", *extra],
+                          capture_output=True, text=True)
+p = rank("--src", "a")
+assert p.returncode == 3 and p.stdout.strip() == "none", (p.returncode, p.stdout, p.stderr)
+assert "predates a" in p.stderr and "session reset" in p.stderr, p.stderr
+p = rank("--src", os.path.join(T, "cfg-a") + "/")           # a config dir names the same account
+assert p.returncode == 3, (p.returncode, p.stderr)
+p = rank()
+assert p.returncode == 0 and p.stdout.split()[0] == "b", (p.returncode, p.stdout, p.stderr)
+p = rank("--src", "b")                                      # b has not reset: served
+assert p.returncode == 0, (p.returncode, p.stderr)
+p = rank("--src", "ghost")
+assert p.returncode == 64, (p.returncode, p.stderr)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]]
+}
