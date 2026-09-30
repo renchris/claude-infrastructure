@@ -123,6 +123,12 @@ are on, opens one OS window per monitor with the group's panes split inside it, 
 places each window on its screen. `--per-window N` · `--stagger SECS` · `--use-all-screens` ·
 `--dry-run`.
 
+**Prefer `--desktops` for a batch of more than a few sessions** (operator ruling 2026-09-30, after
+the 15:24 reboot recovery): one native-fullscreen OS window per macOS Desktop, at most 4 panes each
+as a 2x2, grouped by project. The per-monitor mode put 5 panes side by side at 37 columns, which
+wraps Claude Code's footer; the 2x2 gives ~77x22 per pane. Same TSV in; `--dry-run --desktops`
+prints the plan. It is what `scripts/boot-resume.sh` uses in resume mode.
+
 **Why this is a rule and not a preference.** The two sentences below said "a window per account"
 and "anchor the split to the CALLING pane" — neither says where the WINDOWS go. Recovering 10
 sessions on kitty, that under-specification resolved to `kitty @ launch --type=tab` ten times: ten
