@@ -743,6 +743,31 @@ if [ "$_cloudret_rc" != "lane-done" ]; then
       note:"detached = the cloud lane (scripts/cloud-return-lane.sh: return pass, then retire pass) is running in its own session past this tick; it journals its own cloud-return / cloud-retire rows (tool: cloud-return-lane) with rc, elapsed_s and load1. skipped = the lane script is absent from the deployed tree (NOT clean); skipped-not-deployed = a checkout/suite copy, which may never land, mark done or spend quota; skipped-no-detach = /usr/bin/perl is missing, so a lane could not be put in its own session and was not spawned"}')"
 fi
 
+# ── refs/land/failed pin bound (2026-09-30, BACKLOG_MASTER land-truth.5) ─────────────────────────
+# ship-land pins every failed land's head and nothing removed one: 2,112 pins on 2026-09-30.
+# scripts/land-failed-gc.sh prunes only pins ≥14 d old that land-content-verify proves landed and
+# no open row names, journaling each deletion first. One verify costs seconds under this box's load,
+# so a pass runs DETACHED like the cloud lane, at most every CC_SWEEP_PIN_GC_EVERY_S (12 h), bounded
+# by --max. Same deployed-tree discriminator as the lane: a suite or checkout copy never spawns it.
+_pingc="$_SWEEP_DIR/land-failed-gc.sh"
+_pingc_rc="skipped"
+_pingc_mark="$_cc_cfg/autonomy/.land-failed-gc.last-spawn"
+if [ "$_cloudret_deployed" != 1 ]; then
+  _pingc_rc="skipped-not-deployed"
+elif [ ! -x "$_pingc" ] || [ ! -x /usr/bin/perl ]; then
+  _pingc_rc="skipped"
+elif [ -f "$_pingc_mark" ] && [ $(( $(date +%s) - $(stat -f %m "$_pingc_mark" 2>/dev/null || echo 0) )) -lt "${CC_SWEEP_PIN_GC_EVERY_S:-43200}" ]; then
+  _pingc_rc="not-due"
+else
+  touch "$_pingc_mark" 2>/dev/null || true
+  /usr/bin/perl -e 'use POSIX; POSIX::setsid() or die "setsid: $!"; exec @ARGV or die "exec: $!"' -- \
+    /bin/bash "$_pingc" --max "${CC_SWEEP_PIN_GC_MAX:-200}" --repo "${CC_SWEEP_PRUNE_REPO:-$HOME/Development/claude-infrastructure}" \
+    </dev/null >>"$_cc_cfg/logs/land-failed-gc.log" 2>&1 &
+  disown "$!" 2>/dev/null || true
+  _pingc_rc="detached"
+fi
+[ "$_pingc_rc" = "not-due" ] || log_idl land-failed-gc "$(jq -cn --arg c "$_pingc_rc" '{land_failed_gc_rc:$c}')"
+
 # ── the REFUSAL LOOP (W3) — immediately after the return pass, and under ITS OWN guard ────────────
 # The return pass above is what WRITES `<id>.land-refused`, so routing in the same tick closes the
 # circuit at the earliest moment it can be closed: a refusal filed at 12:00 reaches the VM at 12:00
