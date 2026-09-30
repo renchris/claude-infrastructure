@@ -35,6 +35,11 @@ export CC_SUP_OWNER_PAT=sleep     # the live-session fixtures below are `sleep` 
 # and never take its verdict from it either.
 export CC_WAIT_CONTRACTS_DIR="$SBX/wait-contracts"; mkdir -p "$CC_WAIT_CONTRACTS_DIR"
 export CC_FIRED_DIR="$SBX/cc-fired";                mkdir -p "$CC_FIRED_DIR"
+# Pages go through lr-page.sh (D6.3). Its attempt log and its phone leg default to the REAL
+# ~/.reso and ~/.config: sandbox the log, and point the credentials at a file that does not exist, so
+# a gate run never counts a failed page on the live box or sends a push to the operator's phone.
+export LR_PAGE_LOG="$SBX/lr-pages.log" LR_PAGE_CREDS="$SBX/no-pushover.env"
+unset PUSHOVER_TOKEN PUSHOVER_USER LR_PAGE_OS_CHANNEL LR_PAGE_OSASCRIPT_BIN
 # The permpend ladder's dispatched-ness oracle. Seamed at the REPO's copy, never $HOME/.claude's: the
 # live layer is reached by per-file symlinks and can lag trunk, so an unseamed test would grade this
 # diff against a DEPLOYED predecessor of the very lib it is testing (memory

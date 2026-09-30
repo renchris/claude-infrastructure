@@ -65,7 +65,12 @@ setup() {
 }
 
 @test "the escalation passes text as AppleScript ARGV, never interpolated into the script" {
+  # D6.3: the post itself lives in lr-page.sh, the fleet's one page channel; the supervisor delegates.
   run bash -c "sed -n '/^page_escalate_os()/,/^}/p' '$SUP'"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'lr_page --title'
+  ! echo "$output" | grep -q 'osascript'
+  run bash -c "sed -n '/^_lr_page_os()/,/^}/p' '$REPO/scripts/limit-recover/lr-page.sh'"
   [ "$status" -eq 0 ]
   echo "$output" | grep -q 'on run argv'
   echo "$output" | grep -q 'item 2 of argv'
@@ -79,12 +84,35 @@ setup() {
   # …and it must be able to say NO: a caller that keeps a damping marker on the strength of this call
   # has to distinguish "posted" from "there was no channel" (claimed-outcome-vs-checked-outcome).
   echo "$output" | grep -q 'return 1'
-  echo "$output" | grep -q 'os_channel_available'
   # the capability probe itself, with an operator/test seam — a `command -v` with no seam leaves the
   # no-channel branch untestable, since no suite can un-find /usr/bin/osascript via PATH
   run bash -c "sed -n '/^os_channel_available()/,/^}/p' '$SUP'"
   echo "$output" | grep -q 'command -v osascript'
   echo "$output" | grep -q 'CC_SUP_OS_CHANNEL'
+}
+
+# D6.3, executed: the supervisor's page goes through lr_page, keeps 0 = posted / 1 = not posted, and
+# CC_SUP_OS_CHANNEL=off still posts nothing. Mutants: drop `|| return 1` after lr_page (a failed post
+# reads as posted) · drop the LR_PAGE_OS_CHANNEL hand-off (off posts anyway).
+@test "page_escalate_os pages through lr-page.sh: posted 0, a failed post 1, CC_SUP_OS_CHANNEL=off 1 with nothing posted, no lr-page 1" {
+  local F="$BATS_TEST_TMPDIR/pe.sh" OSA="$BATS_TEST_TMPDIR/osa" CAP="$BATS_TEST_TMPDIR/osa.log"
+  sed -n '/^page_escalate_os()/,/^}/p' "$SUP" > "$F"
+  printf '#!/bin/bash\ncat >/dev/null; printf "%%s\\n" "$*" >> "%s"; exit "${OSA_RC:-0}"\n' "$CAP" > "$OSA"; chmod +x "$OSA"
+  export LR_PAGE_OSASCRIPT_BIN="$OSA" LR_PAGE_LOG="$BATS_TEST_TMPDIR/pages.log" LR_PAGE_CREDS="$BATS_TEST_TMPDIR/none.env"
+  unset PUSHOVER_TOKEN PUSHOVER_USER LR_PAGE_OS_CHANNEL
+  local run_pe=". '$REPO/scripts/limit-recover/lr-page.sh'; . '$F'; page_escalate_os 'tail' 'msg'"
+  CC_SUP_OS_CHANNEL=on run bash -c "$run_pe"
+  [ "$status" -eq 0 ] || { echo "status=$status $output"; false; }
+  [ "$(grep -c 'tail msg' "$CAP")" = 1 ] || { cat "$CAP"; false; }
+  CC_SUP_OS_CHANNEL=on OSA_RC=1 run bash -c "$run_pe"
+  [ "$status" -eq 1 ] || { echo "status=$status $output"; false; }
+  : > "$CAP"
+  LR_PAGE_OS_CHANNEL=on CC_SUP_OS_CHANNEL=off run bash -c "$run_pe"
+  [ "$status" -eq 1 ] || { echo "status=$status $output"; false; }
+  [ ! -s "$CAP" ] || { echo "posted despite CC_SUP_OS_CHANNEL=off"; cat "$CAP"; false; }
+  CC_SUP_OS_CHANNEL=on run bash -c ". '$F'; page_escalate_os 'tail' 'msg'"
+  [ "$status" -eq 1 ] || { echo "status=$status $output"; false; }
+  [ ! -s "$CAP" ] || { cat "$CAP"; false; }
 }
 
 @test "lead-supervisor.sh still parses" {

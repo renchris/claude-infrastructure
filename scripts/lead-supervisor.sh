@@ -310,16 +310,21 @@ done
 # (0 = posted · 1 = no channel, or the post failed/was cut) instead of always claiming 0. A caller
 # that keeps a damping marker on the strength of this call must be able to tell whether anything was
 # actually put in front of a human (memory: claimed-outcome-vs-checked-outcome).
+#
+# DELIVERY IS lr-page.sh's (FLEET_V2 W6, resolution 13 / D6.3): one page channel for the fleet, so
+# the ARGV-not-interpolated osascript post, its 200-character cap and its bound live in ONE copy, and
+# a supervisor page also reaches the phone leg once Pushover credentials exist. CC_SUP_OS_CHANNEL
+# stays this daemon's switch: it is handed to lr-page as LR_PAGE_OS_CHANNEL, so `off` still posts
+# nothing to Notification Center. An unreachable lr-page is `not posted` (rc 1) — the caller then
+# retries, which is the honest reading of "could not ask the channel".
+for _c in "${CC_SUP_LR_PAGE_LIB:-}" "$(cd "$(dirname "$0")" 2>/dev/null && pwd)/limit-recover/lr-page.sh" \
+          "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/limit-recover/lr-page.sh" "$HOME/.claude/scripts/limit-recover/lr-page.sh"; do
+  # shellcheck disable=SC1090,SC1091
+  [ -n "$_c" ] && [ -f "$_c" ] && { . "$_c" 2>/dev/null || true; break; }
+done
 page_escalate_os(){ # $1=title-tail  $2=message → 0 = POSTED · 1 = not posted
-  os_channel_available || return 1
-  sup_bounded 10 osascript - "$1" "$2" >/dev/null 2>&1 <<'OSA' || return 1
-on run argv
-  set v to item 1 of argv
-  set m to item 2 of argv
-  if (count of m) > 200 then set m to (text 1 thru 200 of m)
-  display notification m with title ("Claude fleet — " & v) sound name "Funk"
-end run
-OSA
+  command -v lr_page >/dev/null 2>&1 || return 1
+  LR_PAGE_OS_CHANNEL="${CC_SUP_OS_CHANNEL:-auto}" lr_page --title "$1" -- "$2" >/dev/null 2>&1 || return 1
   return 0
 }
 
