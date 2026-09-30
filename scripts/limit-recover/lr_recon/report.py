@@ -412,16 +412,21 @@ def _bg_held(rec: T.Record) -> str:
 
 
 def readout_line(
-    paths: T.Paths, now: float, records: Optional[Sequence[T.Record]] = None
+    paths: T.Paths,
+    now: float,
+    records: Optional[Sequence[T.Record]] = None,
+    abstain: str = "",
 ) -> str:
     """One counted line for hooks/operator-readout.sh; "" when nothing is open. ``records`` lets the
     daemon pass its in-memory set: its pass writes records AFTER reporting, so a disk read here
-    would render the previous pass."""
+    would render the previous pass. ``abstain`` (W7a) is why this pass decided nothing; it is shown
+    even with nothing open, because an abstaining census cannot know that nothing is open."""
     if records is None:
         records = list(store.load_all(paths, lambda _p, _r: None).values())
     live = [r for r in records if r.open]
+    note = " · census abstained, no decisions: " + abstain if abstain else ""
     if not live:
-        return ""
+        return "lr-recon: 0 known open" + note if abstain else ""
     t = _tally(live)
     n = len({r.cohort_id or r.sid for r in live})
     line = (
@@ -443,7 +448,7 @@ def readout_line(
         line += " · bg-held: " + _bg_held(r)
     if len(bg) > BG_HELD_SHOWN:
         line += " · +%d more" % (len(bg) - BG_HELD_SHOWN)
-    return line
+    return line + note
 
 
 class PageFailed(Exception):

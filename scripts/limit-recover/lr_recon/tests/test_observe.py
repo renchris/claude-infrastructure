@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import stat
+import subprocess
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -488,7 +489,9 @@ class Composer(unittest.TestCase):
             self.assertEqual(O.composer_from_screen(box % text), "draft", text)
         self.assertEqual(O.composer_from_screen(box % ""), "empty")
         self.assertEqual(O.composer_from_screen(box % "\u00a0 \u00a0"), "empty")
-        self.assertEqual(O.composer_from_screen(box % 'Try "fix the \u00e9 bug"'), "empty")
+        self.assertEqual(
+            O.composer_from_screen(box % 'Try "fix the \u00e9 bug"'), "empty"
+        )
 
 
 class Observe(unittest.TestCase):
@@ -609,6 +612,183 @@ class Observe(unittest.TestCase):
 
         s = self.snap(transcript_fn=boom)
         self.assertIn("transcript:" + SIDA, s.degraded)
+
+
+# ── W7a: a ps read that survives load, and a census the pass may not decide on ────────────────────
+
+
+class FlakyPs(FakeRun):
+    """FakeRun whose first /bin/ps calls follow ``script``: "timeout", "rc" (exit 1), "empty"
+    (exit 0, no output) or "ok"; once the script is spent every call is the normal fixture."""
+
+    def __init__(self, script, clock=None, **kw):
+        super().__init__(**kw)
+        self.script, self.clock = list(script), clock
+
+    def __call__(self, argv, **kw):
+        if argv[0] == "/bin/ps" and self.script:
+            how = self.script.pop(0)
+            if how == "timeout":
+                self.calls.append((argv, kw))
+                if self.clock is not None:
+                    self.clock[0] += kw["timeout"]
+                raise subprocess.TimeoutExpired(argv, kw["timeout"])
+            if how in ("rc", "empty"):
+                self.calls.append((argv, kw))
+                return SimpleNamespace(returncode=1 if how == "rc" else 0, stdout="")
+        return super().__call__(argv, **kw)
+
+    def ps_calls(self):
+        return [kw["timeout"] for argv, kw in self.calls if argv[0] == "/bin/ps"]
+
+
+class PsRead(unittest.TestCase):
+    def test_a_retry_saves_a_timed_out_read(self):
+        stats = {}
+        procs, ttys = O.read_ps(FlakyPs(["timeout"]), bound=20.0, stats=stats)
+        self.assertEqual((procs, ttys), O.read_ps(FakeRun(), bound=20.0))
+        self.assertEqual(stats["attempts"], 2)
+
+    def test_empty_output_and_a_failed_exit_are_retried(self):
+        for how in ("empty", "rc"):
+            stats = {}
+            procs, _ = O.read_ps(FlakyPs([how]), bound=20.0, stats=stats)
+            self.assertIn(503, procs)
+            self.assertEqual(stats["attempts"], 2, how)
+
+    def test_the_tty_read_is_retried_too(self):
+        for how in ("timeout", "empty"):
+            stats = {}
+            _, ttys = O.read_ps(FlakyPs(["ok", how]), bound=20.0, stats=stats)
+            self.assertEqual(ttys[501], "ttys001")
+            self.assertEqual(stats["attempts"], 2, how)
+
+    def test_a_first_try_success_is_one_attempt(self):
+        stats = {}
+        O.read_ps(FakeRun(), bound=20.0, stats=stats)
+        self.assertEqual(stats["attempts"], 1)
+
+    def test_two_failures_raise_naming_both(self):
+        run = FlakyPs(["timeout", "rc"])
+        with self.assertRaises(RuntimeError) as cm:
+            O.read_ps(run, bound=33.0)
+        self.assertIn("timed out at 33s", str(cm.exception))
+        self.assertIn("exited 1", str(cm.exception))
+        self.assertEqual(run.ps_calls(), [33.0, 33.0])  # exactly one retry
+        with self.assertRaises(RuntimeError) as cm:
+            O.read_ps(FlakyPs(["empty", "empty"]), bound=20.0)
+        self.assertIn("no rows", str(cm.exception))
+
+    def test_the_budget_caps_each_try_and_skips_a_retry_it_cannot_afford(self):
+        clock = [0.0]
+        run = FlakyPs(["timeout", "timeout"], clock=clock)
+        with self.assertRaises(RuntimeError) as cm:
+            O.read_ps(run, bound=40.0, budget=30.0, clock=lambda: clock[0])
+        self.assertEqual(run.ps_calls(), [30.0])  # capped at the budget, no retry
+        self.assertIn("ps budget spent", str(cm.exception))
+        clock = [0.0]
+        run = FlakyPs(["timeout"], clock=clock)
+        O.read_ps(run, bound=40.0, budget=60.0, clock=lambda: clock[0])
+        self.assertEqual(
+            run.ps_calls()[:2], [40.0, 20.0]
+        )  # the retry gets what is left
+        # CONTROL: 5 s left is still a try (PS_MIN_CALL_S), 4.9 s is not
+        clock = [0.0]
+        run = FlakyPs(["timeout"], clock=clock)
+        O.read_ps(run, bound=40.0, budget=45.0, clock=lambda: clock[0])
+        self.assertEqual(run.ps_calls()[:2], [40.0, 5.0])
+
+    def test_the_bound_grows_with_load_per_cpu(self):
+        self.assertEqual(O.ps_bound(lambda: (0.0, 0.0, 0.0), ncpu=10), 20.0)
+        self.assertEqual(O.ps_bound(lambda: (50.0, 0.0, 0.0), ncpu=10), 30.0)
+        self.assertEqual(O.ps_bound(lambda: (1000.0, 0.0, 0.0), ncpu=10), 40.0)
+
+    def test_an_unreadable_load_keeps_the_flat_bound(self):
+        def boom():
+            raise OSError("no loadavg")
+
+        self.assertEqual(O.ps_bound(boom, ncpu=10), 20.0)
+
+    def test_each_try_is_bounded_by_the_bound(self):
+        run = FakeRun()
+        O.read_ps(run, bound=27.0)
+        self.assertEqual({kw["timeout"] for _a, kw in run.calls}, {27.0})
+
+
+def _trust_snap(n_claude, n_claude_panes):
+    procs = {
+        600 + i: T.ProcRow(600 + i, 1, "S+", L, "/x/claude.exe")
+        for i in range(n_claude)
+    }
+    procs[1] = T.ProcRow(1, 0, "Ss", L, "/sbin/launchd")
+    panes = {
+        "500:%d" % i: T.PaneObs(500, i, "unix:/tmp/kitty-500", state="claude")
+        for i in range(n_claude_panes)
+    }
+    panes["500:99"] = T.PaneObs(500, 99, "unix:/tmp/kitty-500", state="shell")
+    return T.Snapshot(wall=1.0, uptime_raw=0.0, procs=procs, panes=panes)
+
+
+class Trust(unittest.TestCase):
+    def test_ps_degraded_is_untrusted_and_names_why(self):
+        s = T.Snapshot(wall=1.0, uptime_raw=0.0, degraded=["ps"])
+        s.degraded_why["ps"] = "/bin/ps pid=,tty=: timed out at 40s"
+        self.assertEqual(
+            O.untrusted(s, None), "ps degraded: /bin/ps pid=,tty=: timed out at 40s"
+        )
+
+    def test_zero_claude_procs_while_kitty_shows_claude_is_untrusted(self):
+        self.assertIn(
+            "ps read 0 claude procs while kitty shows claude in 1 panes",
+            O.untrusted(_trust_snap(0, 1), None),
+        )
+        self.assertTrue(O.untrusted(_trust_snap(1, 3), None))
+
+    def test_ps_seeing_half_of_kittys_claude_panes_is_trusted(self):
+        self.assertEqual(O.untrusted(_trust_snap(1, 2), None), "")
+        self.assertEqual(O.untrusted(_trust_snap(0, 0), None), "")
+
+    def test_a_collapse_against_the_previous_pass_is_untrusted(self):
+        self.assertEqual(
+            O.untrusted(_trust_snap(7, 0), 30),
+            "claude procs fell from 30 to 7 in one pass",
+        )
+        self.assertTrue(
+            O.untrusted(_trust_snap(1, 0), 8)
+        )  # the floor itself can collapse
+        self.assertTrue(O.untrusted(_trust_snap(0, 0), 8))
+
+    def test_a_drop_to_a_quarter_or_from_below_the_floor_is_trusted(self):
+        self.assertEqual(O.untrusted(_trust_snap(7, 0), 28), "")  # exactly a quarter
+        self.assertEqual(O.untrusted(_trust_snap(0, 0), 7), "")  # below the floor
+        self.assertEqual(O.untrusted(_trust_snap(0, 0), None), "")  # first pass
+
+
+class ObserveUnderLoad(unittest.TestCase):
+    """observe() over a flaky ps, on Observe's fixture home (borrowed, so its tests do not re-run)."""
+
+    setUp = Observe.setUp
+    tearDown = Observe.tearDown
+    snap = Observe.snap
+
+    def test_a_retried_read_is_a_normal_census(self):
+        normal = self.snap()
+        s = self.snap(run=FlakyPs(["timeout"]))
+        self.assertEqual(s.degraded, [])
+        self.assertEqual(
+            (sorted(s.panes), sorted(s.sessions)),
+            (sorted(normal.panes), sorted(normal.sessions)),
+        )
+        self.assertEqual(O.untrusted(s, O.claude_count(normal)), "")
+        self.assertEqual((normal.ps_attempts, s.ps_attempts), (1, 2))
+        self.assertIn("· ps took 2 tries", O.census_line(s))
+        self.assertNotIn("tries", O.census_line(normal))
+
+    def test_a_failed_read_records_why(self):
+        s = self.snap(run=FlakyPs(["timeout", "timeout"]))
+        self.assertEqual((s.degraded, s.procs, s.panes), (["ps"], {}, {}))
+        self.assertIn("timed out at", s.degraded_why["ps"])
+        self.assertTrue(O.untrusted(s, None).startswith("ps degraded: /bin/ps"))
 
 
 if __name__ == "__main__":

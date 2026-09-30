@@ -57,8 +57,11 @@ def _snap(now, cwd):
         root_shape="shell",
         state="claude",
     )
+    # pane 5:7's foreground is claude, so ps must see one too, or the pass abstains (W7a). Pid 99
+    # is no holder, member or actuator of anything, so no other stage reads it.
+    ps = {99: T.ProcRow(99, 1, "S+", L, "/x/claude.exe")}
     return T.Snapshot(
-        wall=now, uptime_raw=0.0, panes={"5:7": pane}, sessions={s.sid: s}
+        wall=now, uptime_raw=0.0, procs=ps, panes={"5:7": pane}, sessions={s.sid: s}
     )
 
 
@@ -76,9 +79,7 @@ class MainTests(unittest.TestCase):
         self.probe = mock.patch(
             "lr_recon.admit.Admission.probe", return_value=(True, "admit")
         )
-        self.mint = mock.patch(
-            "lr_recon.admit.Admission.mint_token", return_value=None
-        )
+        self.mint = mock.patch("lr_recon.admit.Admission.mint_token", return_value=None)
         self.probe.start()
         self.mint.start()
         self.paths = T.Paths.from_env(root=os.path.join(self.tmp, "lr", "recon"))
@@ -222,7 +223,10 @@ class MainTests(unittest.TestCase):
         self.assertEqual({r.target_acct for r in recs}, {"next"})
         ev = [json.loads(x) for x in open(self.paths.events)]
         self.assertTrue(
-            any(e["ev"] == "admit-refused" and "pacer" in e.get("detail", "") for e in ev)
+            any(
+                e["ev"] == "admit-refused" and "pacer" in e.get("detail", "")
+                for e in ev
+            )
         )
 
     def test_boot_slots_cap_relaunches_across_accounts(self):
@@ -269,7 +273,11 @@ class MainTests(unittest.TestCase):
         s = snap.sessions[self.LEAD]
         s.transcript.last_assistant_ok_at = eta - 600  # the last turn before the limit
         snap.procs[77] = T.ProcRow(
-            77, 1, "S", L, "claude.exe --agent-id w@session-x --parent-session-id %s" % self.LEAD
+            77,
+            1,
+            "S",
+            L,
+            "claude.exe --agent-id w@session-x --parent-session-id %s" % self.LEAD,
         )
         r = T.Record(
             sid=self.LEAD,
@@ -355,7 +363,9 @@ class MainTests(unittest.TestCase):
         self.assertEqual(M._wakes(ctx, snap, later, self._due()), 0)  # limited again
         ctx, snap, r = self._held()
         r.close["wake_failed"] = "the composer holds a draft (rc 3)"
-        self.assertEqual(M._wakes(ctx, snap, {}, self._due()), 0)  # paged, never retyped
+        self.assertEqual(
+            M._wakes(ctx, snap, {}, self._due()), 0
+        )  # paged, never retyped
 
     def test_a_stay_is_woken_at_once_with_a_plain_continue(self):
         ctx, snap, r = self._held(sub="WAIT_RESET", eta=500.0, detail="stay")
@@ -369,9 +379,18 @@ class MainTests(unittest.TestCase):
     # ── D6.7: the held draft is snapshotted (a read) and quoted in the page ───────────────────
     def _snapper(self, snap_rc=0):
         """snap is stubbed (no kitty in a unit test); row runs W6b's REAL parser on W0's frame."""
-        repo = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
+        repo = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "..", "..", "..")
+        )
         real = os.path.join(repo, "scripts", "lib", "lr-composer-snapshot.sh")
-        frame = os.path.join(repo, "tests", "fixtures", "lr-recon", "screens", "composer-draft-2.1.284.txt")
+        frame = os.path.join(
+            repo,
+            "tests",
+            "fixtures",
+            "lr-recon",
+            "screens",
+            "composer-draft-2.1.284.txt",
+        )
         if not os.path.exists(real):
             self.skipTest("lr-composer-snapshot.sh not on this tree")
         stub = os.path.join(self.tmp, "snapper")
@@ -389,7 +408,13 @@ class MainTests(unittest.TestCase):
         M.store.ensure_dirs(self.paths)
         ctx = M.Ctx(self.paths, None, self.home)
         snap = _snap(1.0, self.tmp)
-        r = T.Record(sid=self.LEAD, record_id="r1", kind="limited", pane=(5, 7), substate="HOLD-DRAFT")
+        r = T.Record(
+            sid=self.LEAD,
+            record_id="r1",
+            kind="limited",
+            pane=(5, 7),
+            substate="HOLD-DRAFT",
+        )
         ctx.records[self.LEAD] = r
         with mock.patch.dict(os.environ, {"LR_COMPOSER_SNAP_BIN": self._snapper()}):
             self.assertEqual(M._draft_snapshots(ctx, snap), 1)
@@ -400,7 +425,9 @@ class MainTests(unittest.TestCase):
             first = fh.readline().split()
         self.assertEqual(first[:4], ["snap", "7", self.LEAD, "HOLD-DRAFT"])
         self.assertEqual(first[4:], ["--focused", "0", "--limited", "1"])
-        self.assertTrue(r.close["draft_text"].startswith("Use the Bash tool with run_in_background"))
+        self.assertTrue(
+            r.close["draft_text"].startswith("Use the Bash tool with run_in_background")
+        )
         r.wait = T.Wait(reason="HOLD-DRAFT", since=0.0, max_age_s=900)
         from lr_recon import report
 
@@ -409,7 +436,9 @@ class MainTests(unittest.TestCase):
         pages = []
         rep = report.Reporter(self.paths, "act", page=pages.append, now=lambda: 2000.0)
         cohort = T.Cohort(cid="c", acct="next3", scope="7d")
-        self.assertIn('the draft reads: "Use the Bash tool', rep.max_age_page(cohort, r))
+        self.assertIn(
+            'the draft reads: "Use the Bash tool', rep.max_age_page(cohort, r)
+        )
 
     def test_every_pass_takes_the_draft_snapshots(self):
         with mock.patch.object(M, "_draft_snapshots", return_value=0) as ds:
@@ -419,9 +448,17 @@ class MainTests(unittest.TestCase):
     def test_a_failed_snapshot_records_nothing_and_says_so(self):
         M.store.ensure_dirs(self.paths)
         ctx = M.Ctx(self.paths, None, self.home)
-        r = T.Record(sid=self.LEAD, record_id="r1", kind="limited", pane=(5, 7), substate="HOLD-DRAFT")
+        r = T.Record(
+            sid=self.LEAD,
+            record_id="r1",
+            kind="limited",
+            pane=(5, 7),
+            substate="HOLD-DRAFT",
+        )
         ctx.records[self.LEAD] = r
-        with mock.patch.dict(os.environ, {"LR_COMPOSER_SNAP_BIN": self._snapper(snap_rc=1)}):
+        with mock.patch.dict(
+            os.environ, {"LR_COMPOSER_SNAP_BIN": self._snapper(snap_rc=1)}
+        ):
             self.assertEqual(M._draft_snapshots(ctx, _snap(1.0, self.tmp)), 0)
         self.assertNotIn("draft_text", r.close)
         self.assertIn("draft-snap-none", [e["ev"] for e in self._events()])
@@ -518,7 +555,8 @@ class MainTests(unittest.TestCase):
         self.assertTrue(path.endswith(sid + ".abandon.json"))
         self.assertEqual(M._abandon(ctx, 5.0), 1)
         self.assertEqual(
-            (r.terminal.outcome, r.terminal.proof), ("IMPOSSIBLE", "abandoned by operator")
+            (r.terminal.outcome, r.terminal.proof),
+            ("IMPOSSIBLE", "abandoned by operator"),
         )
         M._release_terminal(ctx)
         self.assertEqual(self._defers(sid), (False, "not-owned"))
@@ -543,7 +581,9 @@ class MainTests(unittest.TestCase):
         t = 0.0
         for i in range(classify.REARM_CAP + 1):
             r.escalated = True
-            r.last_error = T.LastError(cls="DETERMINISTIC", fingerprint="f", detail="d", at=t)
+            r.last_error = T.LastError(
+                cls="DETERMINISTIC", fingerprint="f", detail="d", at=t
+            )
             t += classify.REARM_S
             M._derive(ctx, snap, t)
             if i < classify.REARM_CAP:
@@ -564,7 +604,9 @@ class MainTests(unittest.TestCase):
         old = T.Record(sid=sid, record_id="old-1")
         self._own(old)
         ctx = M.Ctx(self.paths, None, self.home)
-        new = T.Record(sid=sid, record_id="new-2", substate="PLANNED", target_acct="next4")
+        new = T.Record(
+            sid=sid, record_id="new-2", substate="PLANNED", target_acct="next4"
+        )
         ctx.records[sid] = new
         with mock.patch.object(plan, "assign_many", return_value=0):
             M._own_and_charge(ctx, 3.0)
@@ -652,7 +694,11 @@ class MainTests(unittest.TestCase):
         now = time.time()
         snap = _snap(now, self.tmp)
         s = next(iter(snap.sessions.values()))
-        s.holders, s.pid, s.pane = [], 0, None  # dead ⇒ the stale reconcile says NOT_NEEDED
+        s.holders, s.pid, s.pane = (
+            [],
+            0,
+            None,
+        )  # dead ⇒ the stale reconcile says NOT_NEEDED
         M.store.ensure_dirs(self.paths)
         for flags in (
             {},  # recon.on absent: act mode is not acting
@@ -1029,7 +1075,9 @@ class MainTests(unittest.TestCase):
         M.store.ensure_dirs(self.paths)
         snap = T.Snapshot(wall=now, uptime_raw=0.0, panes={}, sessions={})
         req = T.Request(sid=sid, origin="cc-lr", path="", raw={})
-        self._flags(recon_on=True)  # a cc-lr request needs no zero-human marker, only recon.on
+        self._flags(
+            recon_on=True
+        )  # a cc-lr request needs no zero-human marker, only recon.on
         with mock.patch.object(M.store, "claim_request"):
             M._census(ctx, snap, {}, [req], "act", now)
         rec = ctx.records[sid]
@@ -1064,6 +1112,148 @@ class MainTests(unittest.TestCase):
             rec.attempt = 3
             self.assertEqual(M._dispatch(ctx, snap, "act", now), 1)
             self.assertEqual(rec.attempt, 3)
+
+    # ── W7a: a census the pass cannot trust decides nothing ─────────────────────────────────────
+    DECIDERS = (
+        "_facts",
+        "_census",
+        "_focus_ledger",
+        "_derive",
+        "_refire",
+        "_abandon",
+        "_wakes",
+        "_plan",
+        "_own_and_charge",
+        "_dispatch",
+        "_report",
+        "_release_terminal",
+        "_invariant",
+    )
+
+    def _second_pass(self, snap, prev=None):
+        """An act-mode pass (recon.on) that records the limited session, then one pass over
+        ``snap`` with a refire and an abandon queued and every deciding stage spied on."""
+        import copy
+        import dataclasses
+
+        open(self.paths.recon_on, "w").close()
+        ctx, _s, _am, _popen = self._pass(None, mode_file="act\n")
+        if prev is not None:
+            ctx.last_nclaude = prev
+        sid = "abcdef01-0000-0000-0000-000000000001"
+        before = copy.deepcopy(dataclasses.asdict(ctx.records[sid]))
+        ctl = [self._ctl(sid), M.request_abandon(self.paths, sid)]
+        n_events = len(self._events_or_none())
+        spies = {n: mock.patch.object(M, n, wraps=getattr(M, n)) for n in self.DECIDERS}
+        called = {n: p.start() for n, p in spies.items()}
+        try:
+            with (
+                mock.patch("lr_recon.observe.observe", return_value=snap),
+                mock.patch.object(M.act, "spawn") as popen,
+            ):
+                summary = M.run_pass(ctx)
+        finally:
+            for p in spies.values():
+                p.stop()
+        new = self._events_or_none()[n_events:]
+        after = dataclasses.asdict(ctx.records[sid])
+        return ctx, summary, called, popen, before, after, ctl, new
+
+    def _assert_abstained(self, snap, why, prev=None):
+        ctx, summary, called, popen, before, after, ctl, new = self._second_pass(
+            snap, prev
+        )
+        self.assertEqual({n for n, m in called.items() if m.called}, set())
+        popen.assert_not_called()
+        self.assertEqual(before, after, "the record must not move, close or die")
+        self.assertTrue(all(os.path.exists(p) for p in ctl), "ctl left for next pass")
+        self.assertEqual([e["ev"] for e in new], ["abstain"])
+        self.assertIn(why, new[0]["detail"])
+        self.assertEqual(summary["abstain"], new[0]["detail"].rsplit(" (", 1)[0])
+        with open(self.paths.p("readout.line"), encoding="utf-8") as fh:
+            line = fh.read()
+        self.assertTrue(line.startswith("lr-recon: 1 cohort open · "), line)
+        self.assertIn(" · census abstained, no decisions: " + why, line)
+        return ctx
+
+    def test_a_ps_degraded_pass_decides_nothing(self):
+        snap = T.Snapshot(wall=0.0, uptime_raw=0.0, degraded=["ps"])
+        snap.degraded_why["ps"] = (
+            "/bin/ps pid=,tty=: timed out at 40s; timed out at 40s"
+        )
+        ctx = self._assert_abstained(snap, "ps degraded: /bin/ps pid=,tty=: timed out")
+        self.assertEqual(ctx.last_nclaude, 1, "a failed read replaces no reading")
+
+    def test_zero_claude_procs_under_a_claude_pane_decides_nothing(self):
+        import time
+
+        snap = _snap(time.time(), self.tmp)
+        snap.procs = {}
+        self._assert_abstained(
+            snap, "ps read 0 claude procs while kitty shows claude in 1 panes"
+        )
+
+    def test_a_collapsed_count_abstains_once_then_the_next_pass_decides(self):
+        import time
+
+        ctx = self._assert_abstained(
+            _snap(time.time(), self.tmp),
+            "claude procs fell from 30 to 1 in one pass",
+            prev=30,
+        )
+        self.assertEqual((ctx.last_nclaude, ctx.abstain_streak), (1, 1))
+        _c, s, _am, _p = self._pass(None, mode_file="act\n", ctx=ctx)
+        self.assertNotIn("abstain", s)
+        self.assertEqual(ctx.abstain_streak, 0)
+
+    def test_a_failed_read_keeps_the_last_count_for_the_collapse_check(self):
+        import time
+
+        ctx = self._assert_abstained(
+            T.Snapshot(wall=0.0, uptime_raw=0.0, degraded=["ps"]),
+            "ps degraded: no reason recorded",
+            prev=30,
+        )
+        self.assertEqual(ctx.last_nclaude, 30)
+        with mock.patch(
+            "lr_recon.observe.observe", return_value=_snap(time.time(), self.tmp)
+        ):
+            s = M.run_pass(ctx)
+        self.assertEqual(s["abstain"], "claude procs fell from 30 to 1 in one pass")
+        self.assertEqual(ctx.abstain_streak, 2)
+        self.assertIn("(2 in a row)", self._events()[-1]["detail"])
+
+    def test_an_abstaining_observe_pass_says_so_in_the_shadow(self):
+        ctx = M.Ctx(self.paths, "observe", self.home)
+        with mock.patch(
+            "lr_recon.observe.observe",
+            return_value=T.Snapshot(wall=0.0, uptime_raw=0.0, degraded=["ps"]),
+        ):
+            M.run_pass(ctx)
+        with open(os.path.join(self.paths.shadow, "last-pass.json")) as fh:
+            doc = json.load(fh)
+        self.assertEqual(doc["abstain"], "ps degraded: no reason recorded")
+        self.assertIn("degraded: ps", doc["census"])
+        with open(self.paths.p("readout.line"), encoding="utf-8") as fh:
+            self.assertEqual(
+                fh.read(),
+                "lr-recon: 0 known open · census abstained, no decisions: "
+                "ps degraded: no reason recorded",
+            )
+
+    def test_control_a_trusted_census_runs_every_stage_as_before(self):
+        import time
+
+        ctx, summary, called, popen, _b, _a, ctl, new = self._second_pass(
+            _snap(time.time(), self.tmp), prev=1
+        )
+        self.assertEqual(
+            {n for n, m in called.items() if not m.called}, set(), "every stage ran"
+        )
+        self.assertNotIn("abstain", summary)
+        self.assertNotIn("abstain", [e["ev"] for e in new])
+        self.assertFalse(any(os.path.exists(p) for p in ctl), "ctl consumed")
+        self.assertIn("abandon", [e["ev"] for e in new])
 
     def test_daemon_loop_starts_and_runs_a_pass(self):
         """W5 rig: the long-running path had never started (Caffeinate() without its pid)."""

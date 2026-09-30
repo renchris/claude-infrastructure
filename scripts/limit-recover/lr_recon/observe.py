@@ -74,14 +74,32 @@ def _run_ok(
 # ── C3.1: processes ──────────────────────────────────────────────────────────────────────────────
 
 
-def read_ps(run: RunFn = subprocess.run) -> Tuple[Dict[int, T.ProcRow], Dict[int, str]]:
-    """The two ps reads. macOS ps has no `lstat` keyword, so the state column is `stat`; lstart's
-    padded day (`Sep  9`) is collapsed to single spaces, the rendering `tr -s ' '` gives the shell
-    side, so holders compare equal across the package. Raises on failure (observe degrades "ps")."""
-    env = _ps_env()
-    out = _run_ok(
-        run, ["/bin/ps", "-axww", "-o", "pid=,ppid=,stat=,lstart=,args="], 20.0, env
-    )
+# W7a: at load 87-116 the census read "0 claude procs · degraded: ps" — ps failed under a flat 20 s
+# bound with no second try. The bound now grows with load per cpu (vm.loadavg, the fleet's load
+# source) and each call gets one retry, all inside one budget that leaves most of the watchdog's
+# 180 s stall window to the rest of the pass. A read that fails past its retry still degrades "ps",
+# and the pass then decides nothing (``untrusted`` below, __main__.run_pass).
+PS_BOUND_S = 20.0  # per call on a quiet box: the flat pre-W7a bound
+PS_BOUND_MAX_S = 40.0  # per call at 10+ runnable threads per cpu
+PS_ATTEMPTS = 2  # the first try and one retry
+PS_BUDGET_S = 90.0  # every ps call of one pass together, retries included
+PS_MIN_CALL_S = 5.0  # a try with less budget left than this is not started
+
+
+def ps_bound(
+    load_fn: Callable[[], Tuple[float, ...]] = os.getloadavg,
+    ncpu: Optional[int] = None,
+) -> float:
+    """PS_BOUND_S × (1 + load-per-cpu / 10), capped at PS_BOUND_MAX_S; an unreadable load keeps
+    the flat bound."""
+    try:
+        per_cpu = float(load_fn()[0]) / max(1, ncpu or os.cpu_count() or 1)
+    except (OSError, ValueError, TypeError, IndexError):
+        return PS_BOUND_S
+    return min(PS_BOUND_MAX_S, PS_BOUND_S * (1.0 + max(0.0, per_cpu) / 10.0))
+
+
+def _parse_procs(out: str) -> Dict[int, T.ProcRow]:
     procs: Dict[int, T.ProcRow] = {}
     for line in out.splitlines():
         t = line.split(None, 8)
@@ -89,13 +107,85 @@ def read_ps(run: RunFn = subprocess.run) -> Tuple[Dict[int, T.ProcRow], Dict[int
             continue
         args = t[8].strip() if len(t) > 8 else ""
         procs[int(t[0])] = T.ProcRow(int(t[0]), int(t[1]), t[2], " ".join(t[3:8]), args)
+    return procs
+
+
+def _parse_ttys(out: str) -> Dict[int, str]:
     ttys: Dict[int, str] = {}
-    for line in _run_ok(run, ["/bin/ps", "-axo", "pid=,tty="], 20.0, env).splitlines():
+    for line in out.splitlines():
         t = line.split()
         if len(t) == 2 and t[0].isdigit() and t[1] not in ("??", "-"):
             ttys[int(t[0])] = t[1]
-    if not procs:
-        raise RuntimeError("ps returned no rows")
+    return ttys
+
+
+def _ps_read(
+    run: RunFn,
+    argv: List[str],
+    env: Dict[str, str],
+    bound: float,
+    deadline: float,
+    clock: Callable[[], float],
+    accept: Callable[[str], Optional[Any]],
+) -> Tuple[Any, int]:
+    """(parsed, tries) for one ps call. A timeout, a non-zero exit or output ``accept`` rejects
+    (None) is retried once; each try is bounded by min(bound, the budget left). Raises naming every
+    try's failure, so the abstain event says whether ps hung, failed or returned nothing."""
+    why: List[str] = []
+    for attempt in range(1, PS_ATTEMPTS + 1):
+        left = deadline - clock()
+        if left < PS_MIN_CALL_S:
+            why.append("ps budget spent")
+            break
+        t = min(bound, left)
+        try:
+            got = accept(_run_ok(run, argv, t, env))
+        except subprocess.TimeoutExpired:
+            why.append("timed out at %.0fs" % t)
+            continue
+        except Exception as e:  # noqa: BLE001 — every failure is one more try
+            why.append(str(e)[:80] or type(e).__name__)
+            continue
+        if got is not None:
+            return got, attempt
+        why.append("no rows")
+    raise RuntimeError("%s %s: %s" % (argv[0], argv[-1], "; ".join(why)))
+
+
+def read_ps(
+    run: RunFn = subprocess.run,
+    bound: Optional[float] = None,
+    budget: float = PS_BUDGET_S,
+    clock: Callable[[], float] = time.monotonic,
+    stats: Optional[Dict[str, int]] = None,
+) -> Tuple[Dict[int, T.ProcRow], Dict[int, str]]:
+    """The two ps reads. macOS ps has no `lstat` keyword, so the state column is `stat`; lstart's
+    padded day (`Sep  9`) is collapsed to single spaces, the rendering `tr -s ' '` gives the shell
+    side, so holders compare equal across the package. Raises on failure (observe degrades "ps").
+    ``stats["attempts"]`` gets the most tries either call took."""
+    env = _ps_env()
+    b = ps_bound() if bound is None else bound
+    deadline = clock() + budget
+    procs, n1 = _ps_read(
+        run,
+        ["/bin/ps", "-axww", "-o", "pid=,ppid=,stat=,lstart=,args="],
+        env,
+        b,
+        deadline,
+        clock,
+        lambda out: _parse_procs(out) or None,
+    )
+    ttys, n2 = _ps_read(
+        run,
+        ["/bin/ps", "-axo", "pid=,tty="],
+        env,
+        b,
+        deadline,
+        clock,
+        lambda out: _parse_ttys(out) if out.strip() else None,
+    )
+    if stats is not None:
+        stats["attempts"] = max(n1, n2)
     return procs, ttys
 
 
@@ -233,7 +323,9 @@ _ESC = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\
 _SGR = re.compile(r"\x1b\[([0-9;:]*)m")
 _PLACEHOLDER = re.compile(r'^\s*Try "[^"]*("|\.\.\.)\s*$')
 BORDER = "─" * 12
-_CHROME = frozenset("\u276f")  # ❯; the U+00A0 after it is not printable, so isprintable() drops it
+_CHROME = frozenset(
+    "\u276f"
+)  # ❯; the U+00A0 after it is not printable, so isprintable() drops it
 
 
 def _unfaint(line: str) -> str:
@@ -340,11 +432,14 @@ def observe(
     snap = T.Snapshot(
         wall=time.time() if now is None else now, uptime_raw=_uptime_raw()
     )
+    stats: Dict[str, int] = {}
     try:
-        snap.procs, ttys = read_ps(run)
+        snap.procs, ttys = read_ps(run, stats=stats)
         snap.ttys = sorted(set(ttys.values()))
-    except Exception:  # noqa: BLE001
+        snap.ps_attempts = stats.get("attempts", 0)
+    except Exception as e:  # noqa: BLE001
         snap.degraded.append("ps")
+        snap.degraded_why["ps"] = str(e)[:200] or type(e).__name__
         return snap
     procs = snap.procs
     try:
@@ -496,11 +591,40 @@ def _sessions(
         snap.sessions[sid] = obs
 
 
+def claude_count(snap: T.Snapshot) -> int:
+    """Live, non-zombie claude processes in the ps read."""
+    return sum(1 for r in snap.procs.values() if not r.zombie and is_claude(r.args))
+
+
+# W7a: a census the pass may not decide on. A drop from at least COLLAPSE_FLOOR claude processes to
+# under 1/COLLAPSE_RATIO of that in one pass is implausible; the next pass compares against this
+# pass's reading, so a real mass exit costs one abstained pass and a stalled ps is never believed.
+COLLAPSE_FLOOR = 8
+COLLAPSE_RATIO = 4
+
+
+def untrusted(snap: T.Snapshot, prev: Optional[int]) -> str:
+    """Why this census may decide nothing, or "" when it may. Three cases: ps degraded (the census
+    is empty, not the world); ps sees fewer than half as many claude processes as kitty shows panes
+    whose foreground is claude (kitty is a second, independent witness: every such pane holds at
+    least one); or the count collapsed against ``prev``, the previous pass's ps reading."""
+    if "ps" in snap.degraded:
+        return "ps degraded: " + snap.degraded_why.get("ps", "no reason recorded")
+    n = claude_count(snap)
+    panes = sum(1 for p in snap.panes.values() if p.state == "claude")
+    if n * 2 < panes:
+        return "ps read %d claude procs while kitty shows claude in %d panes" % (
+            n,
+            panes,
+        )
+    if prev is not None and prev >= COLLAPSE_FLOOR and n * COLLAPSE_RATIO < prev:
+        return "claude procs fell from %d to %d in one pass" % (prev, n)
+    return ""
+
+
 def census_line(snapshot: T.Snapshot) -> str:
     """One human line for the `--mode observe --once` proof."""
-    nclaude = sum(
-        1 for r in snapshot.procs.values() if not r.zombie and is_claude(r.args)
-    )
+    nclaude = claude_count(snapshot)
     ss = snapshot.sessions.values()
     nbg = sum(1 for s in ss if s.bg_work)
     nit = sum(1 for s in ss if s.registry_name.startswith("iterm:"))
@@ -514,5 +638,11 @@ def census_line(snapshot: T.Snapshot) -> str:
             nbg,
             nit,
             ", ".join(snapshot.degraded) or "none",
+        )
+        # W7a: a pass its ps retry saved says so, so the shadow shows how close the census came
+        + (
+            " · ps took %d tries" % snapshot.ps_attempts
+            if snapshot.ps_attempts > 1
+            else ""
         )
     )

@@ -87,6 +87,10 @@ class Ctx:
         self.reporter: Optional[report.Reporter] = None
         self.actuations = 0
         self.degraded_streak = 0
+        self.last_nclaude: Optional[int] = (
+            None  # the last ps reading's claude count (W7a)
+        )
+        self.abstain_streak = 0
         self.last_summary: Dict[str, Any] = {}
         self.rig_refused: set = set()
         self.actions: Dict[
@@ -348,7 +352,9 @@ def _wakes(ctx: Ctx, snap: T.Snapshot, facts: Dict[str, T.Fact], now: float) -> 
         ok, _why = ctx.admission.pace_wake(rec.sid, rec.source_acct, now)
         if not ok:
             continue
-        ctx.actions[rec.sid] = "wake"  # marked typed (wake_eta) only once _dispatch spawns it
+        ctx.actions[rec.sid] = (
+            "wake"  # marked typed (wake_eta) only once _dispatch spawns it
+        )
         _event(ctx.paths, "wake", rec.sid, rec.record_id, rec.substate)
         n += 1
     return n
@@ -1141,6 +1147,45 @@ def _invariant(ctx: Ctx, snap: T.Snapshot, now: Optional[float] = None) -> int:
     return bad
 
 
+def _abstain(
+    ctx: Ctx, snap: T.Snapshot, mode: str, now: float, why: str
+) -> Dict[str, Any]:
+    """W7a: a census this pass cannot trust decides nothing — no move, close, dead verdict, HOLD
+    release or wake. Records, requests and ctl files are left as they are for the next pass, which
+    decides; this one leaves one ``abstain`` event and says so on the readout line and in the
+    shadow's last-pass.json, so a persistent outage is visible rather than a quiet empty world."""
+    ctx.abstain_streak += 1
+    _event(ctx.paths, "abstain", detail="%s (%d in a row)" % (why, ctx.abstain_streak))
+    try:
+        store.atomic_write_text(
+            ctx.paths.p("readout.line"),
+            report.readout_line(
+                ctx.paths, now, list(ctx.records.values()), abstain=why
+            ),
+        )
+    except Exception as e:
+        _event(ctx.paths, "report-error", detail=repr(e)[:200])
+    summary = {
+        "mode": mode,
+        "census": observe.census_line(snap),
+        "abstain": why,
+        "buckets": {},
+        "open": sum(1 for r in ctx.records.values() if r.open),
+        "stale": 0,
+        "placed": 0,
+        "actuations": 0,
+        "defects": 0,
+        "degraded": list(snap.degraded),
+        "facts": 0,
+    }
+    if mode == "observe":
+        store.atomic_write_json(
+            os.path.join(ctx.paths.shadow, "last-pass.json"), summary
+        )
+    ctx.last_summary = summary
+    return summary
+
+
 def run_pass(ctx: Ctx, force_observe: bool = False) -> Dict[str, Any]:
     paths = ctx.paths
     store.ensure_dirs(paths)  # cheap, and a wiped root must never crash the loop
@@ -1156,6 +1201,15 @@ def run_pass(ctx: Ctx, force_observe: bool = False) -> Dict[str, Any]:
         rig_keep=frozenset(ctx.records),
     )
     ctx.degraded_streak = ctx.degraded_streak + 1 if snap.degraded else 0
+    # W7a: the one gate between the census and every decision. It stands before facts, census,
+    # derive, refire/abandon, wakes, plan, dispatch, release and the invariant, so an empty or
+    # collapsed census can move, close, kill, release or wake nothing.
+    why = observe.untrusted(snap, ctx.last_nclaude)
+    if "ps" not in snap.degraded:
+        ctx.last_nclaude = observe.claude_count(snap)
+    if why:
+        return _abstain(ctx, snap, mode, now, why)
+    ctx.abstain_streak = 0
     for sid in (
         snap.rig_refused
     ):  # rig/canary mode: logged once per sid per process, never acted on

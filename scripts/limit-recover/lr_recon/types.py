@@ -598,6 +598,12 @@ class Snapshot:
     ttys: List[str] = field(
         default_factory=list
     )  # controlling ttys held by any live process ("ttys022"), from the same ps read
+    degraded_why: Dict[str, str] = field(
+        default_factory=dict
+    )  # instrument → why it failed ("ps" → "timed out at 40s; …"), for the abstain event
+    ps_attempts: int = (
+        0  # tries the successful ps read took (2 = its retry saved the pass)
+    )
 
     def alive(self, pid: int, lstart: str) -> bool:
         row = self.procs.get(pid)
