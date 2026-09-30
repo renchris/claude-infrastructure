@@ -314,17 +314,26 @@ cached_n() {
 
 # Run $1 concurrent `--machine` callers of script $2; echo the number of git subprocesses they
 # spent, counted by a PATH shim. Every caller's output is written to $D/out.<i>.
+# The loser-wait seams are PINNED here, so a result never depends on a default or on ambient load.
+# The holder ceiling is pinned HIGH: at a 1-min load of ~150 on 10 cores a winner's compute was
+# measured running past the 20 s default, and a ceiling hit is a correct fail-open that makes every
+# loser compute — a verdict on the box, not on single-flight. The ceiling has its own case below.
+# WLB_SLOW=<marker path> stubs a SLOW WINNER: no caller spends git before a memo exists except the
+# lock winner, so the first git call on the box is the winner's — it claims the marker with an
+# atomic mkdir and sleeps 3 s, 4x the pre-2026-09-30 750 ms loser ladder.
 concurrent_git_count() {
-  local n="$1" script="$2" i p pids=()
+  local n="$1" script="$2" i p pids=() slow="${WLB_SLOW:-}"
   mkdir -p "$D/shim"
   { printf '#!/bin/sh\n'
     printf 'printf "g\\n" >> "$WLB_COUNT"\n'
+    printf '[ -n "${WLB_SLOW:-}" ] && mkdir "$WLB_SLOW" 2>/dev/null && sleep 3\n'
     printf 'exec %s "$@"\n' "$(command -v git)"
   } > "$D/shim/git"
   chmod +x "$D/shim/git"
   : > "$D/gitcount"
   for (( i=0; i<n; i++ )); do
-    ( WLB_COUNT="$D/gitcount" PATH="$D/shim:$PATH" \
+    ( WLB_COUNT="$D/gitcount" WLB_SLOW="$slow" PATH="$D/shim:$PATH" \
+        WRAP_CACHE_WAIT_TRIES=4 WRAP_CACHE_WAIT_MS=50 WRAP_CACHE_HOLDER_MAX_S=120 \
         bash "$script" --machine --transcript "$TP" > "$D/out.$i" 2>/dev/null ) &
     pids+=($!)
   done
@@ -348,6 +357,104 @@ concurrent_git_count() {
   # and every caller must have got the SAME real ledger — a cheap wrong answer is not the goal
   for i in 1 2 3 4 5; do cmp -s "$D/out.0" "$D/out.$i" || false; done
   grep -q '^RUNG=' "$D/out.0" || false
+}
+
+# backlog dee95d7ff286: the case above went deterministically red under box load, because a winner
+# slower than the 750 ms ladder made every loser give up and compute. The winner is made slow ON
+# PURPOSE here, so this is the loaded box reproduced rather than hoped for.
+@test "six CONCURRENT cold callers behind a SLOW winner (3 s) still spend ONE compute's worth" {
+  baseline="$(concurrent_git_count 1 "$LEDGER")"
+  [ "$baseline" -gt 5 ]
+  rm -rf "$WRAP_CACHE_DIR"; tick 2
+  six="$(WLB_SLOW="$D/slow-claimed" concurrent_git_count 6 "$LEDGER")"
+  [ -d "$D/slow-claimed" ]                  # the stub engaged — else this is the fast case again
+  [ "$six" -le $((baseline * 2)) ]
+  for i in 1 2 3 4 5; do cmp -s "$D/out.0" "$D/out.$i" || false; done
+  grep -q '^RUNG=' "$D/out.0" || false
+}
+
+# This event's memo file name, learned by computing it once into a SIDE store. The name is the key's
+# digest alone and WRAP_CACHE_DIR is not a key term, so it names this event's memo (and, with
+# `.lock`, its single-flight lock) in $WRAP_CACHE_DIR too. The computed ledger lands in $D/pre.out.
+memo_name() {
+  WRAP_CACHE_DIR="$D/pre" bash "$LEDGER" --machine --transcript "$TP" > "$D/pre.out" 2>/dev/null
+  local m
+  for m in "$D"/pre/m-*; do [ -f "$m" ] && { printf '%s' "${m##*/}"; return 0; }; done
+  return 1
+}
+
+@test "a loser waits out a LIVE slow holder past the ladder and is SERVED, spending zero git" {
+  name="$(memo_name)"; [ -n "$name" ]
+  mkdir -p "$WRAP_CACHE_DIR/$name.lock"
+  sleep_shim
+  # The "winner" publishes only once the loser has slept a FIFTH rung — i.e. is past the 4-rung
+  # ladder — so "past the ladder" is a fact of this run, not a wall-clock race a loaded box can
+  # lose (a 2 s publish passed on the OLD code once its ladder alone outlasted 2 s). /bin/sleep, so
+  # its own waits never reach the shim's log. Bounded at 60 s, and killed below.
+  ( i=0
+    while [ "$(grep -cE '^[0-9]+\.[0-9]{3}$' "$D/sleeps" 2>/dev/null)" -lt 5 ] && [ "$i" -lt 600 ]; do
+      /bin/sleep 0.1; i=$((i + 1))
+    done
+    cp "$D/pre/$name" "$WRAP_CACHE_DIR/.w.test" && mv -f "$WRAP_CACHE_DIR/.w.test" "$WRAP_CACHE_DIR/$name"
+    /bin/sleep 5 ) 3>&- &
+  holder=$!
+  printf '%s\n' "$holder" > "$WRAP_CACHE_DIR/$name.lock/pid"
+  export PATH="$D/sshim:$PATH"
+  g="$(concurrent_git_count 1 "$LEDGER")"
+  kill "$holder" 2>/dev/null || true; wait "$holder" 2>/dev/null || true
+  [ "$(rungs_slept)" -ge 5 ]                # it waited past the ladder…
+  [ "$g" -eq 0 ]                            # …and was served, never computed
+  cmp -s "$D/pre.out" "$D/out.0" || false
+  grep -q '^RUNG=' "$D/out.0" || false
+}
+
+# A `sleep` shim logging every argument to $D/sleeps: the loser's ladder and tail sleep through
+# PATH, so their rungs are COUNTED here rather than inferred from a wall clock the box's load owns.
+sleep_shim() {
+  mkdir -p "$D/sshim"; : > "$D/sleeps"
+  { printf '#!/bin/sh\n'
+    printf 'printf "%%s\\n" "$*" >> "%s"\n' "$D/sleeps"
+    printf 'exec /bin/sleep "$@"\n'
+  } > "$D/sshim/sleep"
+  chmod +x "$D/sshim/sleep"
+}
+
+# A rung is a `sleep N.NNN` — the ladder's own printf format; nothing else in a compute sleeps so.
+rungs_slept() { grep -cE '^[0-9]+\.[0-9]{3}$' "$D/sleeps" 2>/dev/null || true; }
+
+@test "a loser behind a DEAD holder sleeps no rung, computes, and clears the corpse" {
+  name="$(memo_name)"; [ -n "$name" ]
+  mkdir -p "$WRAP_CACHE_DIR/$name.lock"
+  ( : ) & dead=$!; wait "$dead" || true
+  ! kill -0 "$dead" 2>/dev/null || false
+  printf '%s\n' "$dead" > "$WRAP_CACHE_DIR/$name.lock/pid"
+  sleep_shim
+  # the stale bound is pinned ABOVE the test's reach, so only the owner record can clear the lock
+  run env PATH="$D/sshim:$PATH" WRAP_CACHE_WAIT_TRIES=4 WRAP_CACHE_WAIT_MS=50 \
+      WRAP_CACHE_HOLDER_MAX_S=20 WRAP_CACHE_LOCK_STALE_S=30 \
+      bash "$LEDGER" --machine --transcript "$TP"
+  [ "$status" -eq 0 ]
+  [ "$(rungs_slept)" -eq 0 ]                # a dead winner costs nothing — not even rung 1
+  [ "$(field "$output" RUNG)" = "$(field "$(cat "$D/pre.out")" RUNG)" ]
+  [ ! -d "$WRAP_CACHE_DIR/$name.lock" ]
+}
+
+@test "a LIVE holder that never publishes is waited out only to WRAP_CACHE_HOLDER_MAX_S" {
+  name="$(memo_name)"; [ -n "$name" ]
+  mkdir -p "$WRAP_CACHE_DIR/$name.lock"
+  sleep 120 3>&- & holder=$!                # fd 3 closed, or bats waits the full 120 s on it
+  printf '%s\n' "$holder" > "$WRAP_CACHE_DIR/$name.lock/pid"
+  sleep_shim
+  run env PATH="$D/sshim:$PATH" WRAP_CACHE_WAIT_TRIES=4 WRAP_CACHE_WAIT_MS=50 \
+      WRAP_CACHE_HOLDER_MAX_S=2 bash "$LEDGER" --machine --transcript "$TP"
+  # still alive when the loser answered ⇒ the CEILING ended the wait, not the holder's death
+  kill -0 "$holder" 2>/dev/null; alive=$?
+  kill "$holder" 2>/dev/null || true
+  [ "$alive" -eq 0 ]
+  [ "$status" -eq 0 ]
+  [ "$(rungs_slept)" -ge 4 ]                # it did wait: the whole ladder, at least
+  [ "$(field "$output" RUNG)" = "$(field "$(cat "$D/pre.out")" RUNG)" ]
+  [ -d "$WRAP_CACHE_DIR/$name.lock" ]       # a live holder is not a corpse: its lock stays
 }
 
 @test "six CONCURRENT callers on a WARM event spend ZERO git" {
