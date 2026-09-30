@@ -14,6 +14,9 @@ _Relocated VERBATIM from `.claude/rules/agent-operating-lessons.md` (always-load
 ⇒ **Every fire brief, not only subagent briefs, bans the forms by name, with the reason:**
 - edit files only with Edit/Write, never a heredoc, `sed -i`, `perl -i` or `cat >` on a tracked file;
 - never `git stash`; set work aside with a WIP commit or a `/tmp` patch;
-- never `rm -r`.
+- never `rm -r`;
+- never `git reset --hard` (to catch a worktree up with trunk, use `git rebase origin/main` or `git merge --ff-only origin/main` on a clean tree).
+
+**Extended 2026-09-30 (FLEET_V2 W6):** the W6a wave session, briefed against heredocs, `git stash` and `rm -r`, ran `git fetch -q origin && git reset -q --hard origin/main` to catch its clean worktree up with trunk before a new task. The reset escalated to an ask and the session sat on it from 07:17Z for more than three hours, while the lead's status mail queued unread behind the pending `tool_use`. The command was harmless (a clean tree behind trunk, so it only fast-forwarded), which is exactly why it was not on the list. A ban list names spellings, not the class, so name every destructive-looking git verb a session might reach for between tasks.
 
 Recovery without typing into the frozen pane: read its worktree's `git diff` into a patch, which is read-only on the pane, and fire a continuation branched from its tip that applies the patch. Mail the frozen pane a stand-down for the moment its prompt resolves, and have the operator answer the prompt "No". A finished teammate is not a reusable worker either: round-1 teammates went idle and never drained later assignments.
