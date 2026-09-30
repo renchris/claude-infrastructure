@@ -480,6 +480,14 @@ def cmd_render(a):
         atomic_write(bp, banner)
     elif bp.exists():
         bp.unlink()  # absent banner => the accounts board prints byte-identical output
+    # `N<TAB>top title` for operator-readout's ⏰ line (DESIGN §4.5): the Stop hook only reads it.
+    hot = sorted([i for i in items if i.get("state") in LIVE and i.get("kind") in DATED
+                  and due_of(i) <= t + dt.timedelta(days=3)], key=lambda i: i["lost"])
+    dp = STATE / "due72"
+    if hot:
+        atomic_write(dp, f"{len(hot)}\t{hot[0]['title']}\n")
+    elif dp.exists():
+        dp.unlink()
     print(f"rendered {RULES_FILE} ({len(body.splitlines())} lines); banner "
           f"{'written' if banner else 'absent'}")
 

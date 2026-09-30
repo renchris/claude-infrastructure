@@ -1540,6 +1540,44 @@ if [ -n "$CWD" ]; then
   { [ -n "$sc" ] && [ -f "$sc" ]; } && abstain "continue-armed"
 fi
 
+# ── ⏰ DEADLINE LINE (personal/deadlines/DESIGN-2026-09-29.md §4.5) ──────────────────────────────
+# `⏰ N due ≤72h — top: <title>`, once per SESSION, at the first Stop while anything is overdue or
+# due within 72 h. It reads `dl render`'s pre-rendered .state/due72 (`N<TAB>title`) and spawns no
+# Python. It joins the fire predicate as `∨ due72 > 0` by riding every exit that follows: appended to
+# whichever systemMessage this hook emits, and emitted ALONE where the hook would otherwise abstain
+# (the abstain override below). Pure systemMessage, never a block. The per-session latch lives here,
+# so headless runs cannot use up an interactive session's line; they are skipped outright anyway:
+# the gate is the transcript's OWN last `entrypoint` (`cli` interactive, `sdk-cli` for `claude -p`),
+# which a synthetic Stop payload without a real transcript never carries — so no hook suite run from
+# a live session can pick up the operator's real store. Placed after the continue-armed guard: a
+# session mid-drive gets it at its real close. Kill switch: CC_DEADLINE_LINE=off.
+_DL_LINE=""; _DL_LATCH=""
+_dl_tp="${TP/#\~/$HOME}"
+if [ "${CC_DEADLINE_LINE:-on}" != off ] && [ "$SID" != "?" ] && [ -f "$_dl_tp" ] \
+   && [ "$(tail -c 262144 "$_dl_tp" 2>/dev/null | grep -o '"entrypoint":"[a-z-]*"' | tail -1)" = '"entrypoint":"cli"' ]; then
+  _dl_f="${DL_DIR:-$HOME/Development/personal/deadlines}/.state/due72"
+  _DL_LATCH="$STATE_DIR/dl72-$(printf '%s' "$SID" | shasum 2>/dev/null | cut -c1-16)"
+  if [ -s "$_dl_f" ] && [ ! -f "$_DL_LATCH" ]; then
+    IFS=$'\t' read -r _dl_n _dl_top < "$_dl_f" 2>/dev/null || _dl_n=""
+    case "$_dl_n" in ''|*[!0-9]*|0) ;; *) _DL_LINE="⏰ ${_dl_n} due ≤72h — top: ${_dl_top}" ;; esac
+  fi
+fi
+_dl_msg() {  # <message> → the message, plus the ⏰ line once per session
+  printf '%s' "$1"
+  if [ -n "$_DL_LINE" ]; then
+    printf '\n%s' "$_DL_LINE"
+    mkdir -p "$STATE_DIR" 2>/dev/null; : > "$_DL_LATCH" 2>/dev/null || true
+  fi
+}
+if [ -n "$_DL_LINE" ]; then
+  abstain() {  # nothing else to say ⇒ the ⏰ line alone (the `∨ due72 > 0` arm of the predicate)
+    mkdir -p "$STATE_DIR" 2>/dev/null; : > "$_DL_LATCH" 2>/dev/null || true
+    log_idl fired "deadline-due72" "$(jq -cn --arg r "$1" '{instead_of:$r}' 2>/dev/null || echo '{}')"
+    jq -nc --arg m "$_DL_LINE" '{systemMessage:$m}' 2>/dev/null || true
+    exit 0
+  }
+fi
+
 # ── PRE-RENDER CHEAP STAMP (row 13 M3 — MACHINE_CAPACITY_V2.md §8.5.3) ─────────────────────────
 # The damping latch below is correct but PAID FOR AFTER THE FACT: its input is the RENDERED block,
 # so the 900 s TTL suppressed OUTPUT and saved ZERO CPU. render_block costs ~2711 ms (73% of the
@@ -1672,7 +1710,7 @@ if [ -z "$BLOCK" ]; then
       log_idl fired "busy-notice" \
         "$(jq -cn --arg st "${OR_BUSY_STATE:-?}" --arg src "${OR_BUSY_SRC:-?}" --arg rung "${RUNG:-?}" \
             '{busy_state:$st,busy_src:$src,rung:$rung}' 2>/dev/null || echo '{}')"
-      jq -nc --arg m "$_bz_line" '{systemMessage:$m}' 2>/dev/null || true
+      jq -nc --arg m "$(_dl_msg "$_bz_line")" '{systemMessage:$m}' 2>/dev/null || true
       exit 0
     fi
   fi
@@ -1718,7 +1756,7 @@ if [ -z "$BLOCK" ]; then
   log_idl fired "close-certificate" \
     "$(jq -cn --arg rung "$RUNG" --arg trunk "${_ctrunk:-?}" --arg dod "${_cdod:-?}" \
         '{rung:$rung,trunk:$trunk,dod:$dod}' 2>/dev/null || echo '{}')"
-  jq -nc --arg m "$_cert" '{systemMessage:$m}' 2>/dev/null || true
+  jq -nc --arg m "$(_dl_msg "$_cert")" '{systemMessage:$m}' 2>/dev/null || true
   exit 0
 fi
 
@@ -1758,5 +1796,5 @@ case "$Q_N"    in ''|*[!0-9]*) Q_N=0    ;; esac
 log_idl fired "steps-surfaced" \
   "$(jq -cn --arg rung "$RUNG" --argjson total "$TOTAL" --argjson shown "$NSTEPS" --argjson q "$Q_N" \
       '{rung:$rung,steps_total:$total,steps_shown:$shown,queue_open:$q}' 2>/dev/null || echo '{}')"
-jq -nc --arg m "$BLOCK" '{systemMessage:$m}' 2>/dev/null || true
+jq -nc --arg m "$(_dl_msg "$BLOCK")" '{systemMessage:$m}' 2>/dev/null || true
 exit 0

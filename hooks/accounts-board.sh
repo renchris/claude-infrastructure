@@ -82,11 +82,46 @@ producer_state() {
 }
 
 emit() {  # <message> → the ONE sanctioned channel, top-level, never nested, never additionalContext
-  jq -nc --arg m "$1" '{systemMessage:$m}' 2>/dev/null || true
+  jq -nc --arg m "${DL_BANNER:-}$1" '{systemMessage:$m}' 2>/dev/null || true
   exit 0
 }
 
 input="$(cat 2>/dev/null || true)"
+
+# ── DEADLINE BANNER (personal/deadlines/DESIGN-2026-09-29.md §4.4) ──────────────────────────────
+# Prepends `dl render`'s pre-rendered .state/banner.txt to whatever this hook emits. Only a `cat`:
+# no Python under this hook's 5 s timeout. With banner.txt absent DL_BANNER is empty and every
+# output below is byte-identical to the board without this block (test A13).
+# GATED so headless runs cannot use it up: CLAUDE_CODE_ENTRYPOINT=cli (headless `claude -p` reports
+# sdk-cli; when the variable is unset, the parent's argv must carry no -p/--print), not a fired peer
+# (oi_origin_class), and a cwd outside /tmp. LATCH on (date, content hash): once a day in the first
+# real interactive session, and again whenever the content changes. Subshell + `|| true`: a fault
+# here costs the banner, never the board.
+dl_banner() {
+  local f latch cur cwd ent pane lib tp
+  f="${DL_DIR:-$HOME/Development/personal/deadlines}/.state/banner.txt"
+  [ -s "$f" ] || return 0
+  ent="${CLAUDE_CODE_ENTRYPOINT:-}"
+  if [ -z "$ent" ]; then
+    ps -o args= -p "$PPID" 2>/dev/null | grep -E '(^|[[:space:]])(-p|--print)([[:space:]]|$)' >/dev/null && return 0
+  elif [ "$ent" != cli ]; then return 0; fi
+  cwd="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)"; cwd="${cwd:-$PWD}"
+  case "$cwd/" in /tmp/*|/private/tmp/*) return 0 ;; esac
+  lib="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/lib/origin-identity.sh"
+  [ -f "$lib" ] || { lib="$0"; [ -L "$lib" ] && lib="$(readlink "$lib")"
+    lib="$(cd "$(dirname "$lib")" 2>/dev/null && pwd)/lib/origin-identity.sh"; }
+  # shellcheck source=lib/origin-identity.sh
+  # shellcheck disable=SC1091
+  . "$lib" 2>/dev/null || return 0
+  pane="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; pane="${pane##*:}"
+  tp="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)"
+  [ "$(oi_origin_class "$pane" "$cwd" "$tp")" = fired-peer ] && return 0
+  cur="$(date +%F) $(shasum < "$f" 2>/dev/null | cut -c1-16)"
+  latch="${f%/*}/banner-latch"
+  [ "$(cat "$latch" 2>/dev/null)" = "$cur" ] && return 0
+  printf '%s\n' "$cur" > "$latch" 2>/dev/null || true
+  printf '%s\n' "$(cat "$f")"
+}
 
 # `compact` is excluded and the other sources are not. A board answers "which account am I on and
 # what is left" — a question a human asks when a session BEGINS (startup), when it is reset
@@ -95,6 +130,10 @@ input="$(cat 2>/dev/null || true)"
 # the board's whole value, which is that its appearance means something.
 src="$(printf '%s' "$input" | jq -r '.source // ""' 2>/dev/null || true)"
 [ "$src" = "compact" ] && exit 0
+
+DL_BANNER="$( (dl_banner) 2>/dev/null || true)"
+[ -n "$DL_BANNER" ] && DL_BANNER="$DL_BANNER
+"
 
 [ -f "$BOARD" ] || emit "accounts board unavailable — nothing pre-rendered at $BOARD.
   Producer $PRODUCER $(producer_state)
