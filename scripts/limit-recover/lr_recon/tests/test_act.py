@@ -101,6 +101,28 @@ class ActTests(unittest.TestCase):
         )  # typing a prompt is reversible
         self.assertEqual(g(), (True, "ok"))
 
+    def test_gate_refuses_a_move_while_the_lead_has_live_members(self):
+        """D4.4(d): the last line against a flicker — A never runs over a live member."""
+        paths = _paths()
+        open(paths.recon_on, "w").close()
+        rec = _rec()
+        member = T.ProcRow(
+            77, 1, "S", L, "claude.exe --agent-id w@session-x --parent-session-id %s" % rec.sid
+        )
+        snap = _snap(member)
+        self.assertEqual(
+            A.may_actuate(paths, "act", rec, "A", snap, NOW, True, 0, 16, env={}),
+            (False, "team-live"),
+        )
+        self.assertEqual(  # typing a continue into the lead is not a move
+            A.may_actuate(paths, "act", rec, "C", snap, NOW, True, 0, 16, env={}),
+            (True, "ok"),
+        )
+        self.assertEqual(
+            A.may_actuate(paths, "act", rec, "A", _snap(), NOW, True, 0, 16, env={}),
+            (True, "ok"),
+        )
+
     def test_env_forces_bgwork_cancel(self):
         env = A.actuator_env(
             _rec(),

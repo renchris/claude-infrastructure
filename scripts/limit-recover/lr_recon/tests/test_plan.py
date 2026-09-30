@@ -58,6 +58,24 @@ class PlanTests(unittest.TestCase):
         now = os.stat(tx).st_mtime + 1
         self.assertEqual(P.kwork(snap, ["next", "next2"], now), {"next": 2, "next2": 0})
 
+    def test_mover_weight_counts_the_window_before_death_not_before_now(self):
+        """D3.6(d): a record that has waited an hour keeps its subagents' weight."""
+        tmp = tempfile.mkdtemp()
+        tx = os.path.join(tmp, "s1.jsonl")
+        open(tx, "w").close()
+        sub = os.path.join(tmp, "s1", "subagents")
+        os.makedirs(sub)
+        agent = os.path.join(sub, "agent-a.jsonl")
+        open(agent, "w").close()
+        death = (
+            os.stat(agent).st_mtime + 300
+        )  # the subagent wrote 5 min before the death
+        s = T.SessionObs(sid="s1", acct="next3", transcript=T.TranscriptObs(path=tx))
+        snap = T.Snapshot(wall=NOW, uptime_raw=0, sessions={"s1": s})
+        rec = _rec("s1", detected=death)
+        [m] = P.movers([rec], snap, death + 3600)
+        self.assertEqual(m.w, 2)
+
     def test_movers_limited_first_then_oldest(self):
         recs = [
             _rec("idle0001", kind="idle", detected=NOW - 900),
@@ -139,14 +157,74 @@ class PlanTests(unittest.TestCase):
         snap = T.Snapshot(wall=NOW, uptime_raw=0)
         self.assertEqual([m.sid for m in P.movers([rec], snap, NOW)], ["a"])
 
+    def test_all_thin_waits_as_a_rechecked_slot_not_a_reset(self):
+        """D3.2, decision 3 (always wait): no account passes the floors. --place floors the eta
+        (int(), bin/claude-accounts) and apply compares strictly (resets < eta), so the record is
+        WAIT_SLOT and re-offered every pass. With ceil or <= it would become WAIT_RESET and sleep
+        until its own reset — up to 36.6 h for a weekly cap."""
+        from lr_recon import report as R
+
+        # a whole-second reset: int() is exact, so only the STRICT comparison keeps it a slot
+        whole = _rec("w")
+        facts_w = {"next3.7d": T.Fact(acct="next3", scope="7d", resets_at=NOW + 7200)}
+        P.apply(
+            {"w": whole},
+            {"w": T.Placement(acct=None, reason="recovery-5h-thin", eta_s=7200)},
+            facts_w,
+            str,
+            NOW,
+        )
+        self.assertEqual(whole.substate, "WAIT_SLOT")
+        resets = NOW + 36.6 * 3600 + 0.4  # a real reset is not on a whole second
+        rec = _rec("a")
+        facts = {"next3.7d": T.Fact(acct="next3", scope="7d", resets_at=resets)}
+        placed = {
+            "a": T.Placement(
+                acct=None,
+                reason="recovery-weekly-thin,src-fact",
+                eta_s=int(resets - NOW),
+            )
+        }
+        P.apply({"a": rec}, placed, facts, str, NOW)
+        self.assertEqual(rec.substate, "WAIT_SLOT")
+        self.assertAlmostEqual(rec.wait.eta, resets, delta=1.0)
+        snap = T.Snapshot(wall=NOW, uptime_raw=0)
+        self.assertEqual([m.sid for m in P.movers([rec], snap, NOW + 60)], ["a"])
+        self.assertEqual(R.max_age_deadline(rec), rec.wait.eta + 600)
+
     def test_wait_reset_is_a_mover_once_its_eta_passes(self):
         """The "reset" wake: a WAIT_RESET record is re-offered to --place after its ETA, so a
-        record whose session stops bucketing LIMITED cannot wait forever."""
+        record whose session stops bucketing LIMITED cannot wait forever — but a LIMITED one only
+        once its source was read limited again after the reset, or once the in-place wake had
+        REOFFER_AFTER_S (D1.11: offered at the reset, a stale fact moved a cohort 5 s after it)."""
         rec = _rec("a", substate="WAIT_RESET")
         rec.wait = T.Wait(reason="WAIT_RESET", since=NOW, eta=NOW + 300)
         snap = T.Snapshot(wall=NOW, uptime_raw=0)
         self.assertEqual(P.movers([rec], snap, NOW + 299), [])
-        self.assertEqual([m.sid for m in P.movers([rec], snap, NOW + 300)], ["a"])
+        self.assertEqual(P.movers([rec], snap, NOW + 305), [])  # the reset + 5 s
+        stale = {"next3.7d": T.Fact(acct="next3", scope="7d", observed_at=NOW + 200)}
+        self.assertEqual(P.movers([rec], snap, NOW + 305, stale), [])
+        fresh = {"next3.7d": T.Fact(acct="next3", scope="7d", observed_at=NOW + 301)}
+        self.assertEqual([m.sid for m in P.movers([rec], snap, NOW + 305, fresh)], ["a"])
+        later = NOW + 300 + P.REOFFER_AFTER_S
+        self.assertEqual([m.sid for m in P.movers([rec], snap, later)], ["a"])
+        idle = _rec("b", kind="idle", substate="WAIT_RESET")
+        idle.wait = T.Wait(reason="WAIT_RESET", since=NOW, eta=NOW + 300)
+        self.assertEqual([m.sid for m in P.movers([idle], snap, NOW + 300)], ["b"])
+
+    def test_a_stay_placement_is_an_in_place_wake_not_a_move(self):
+        """D1.11(a): --place answering the source itself became PLANNED with target = source, and
+        lr-handoff refuses that move with exit 2, looping RETRY/ESCALATED."""
+        rec = _rec("a")
+        P.apply(
+            {"a": rec},
+            {"a": T.Placement(acct="next3", reason="stay")},
+            {},
+            str,
+            NOW,
+        )
+        self.assertEqual((rec.substate, rec.target_acct), ("WAIT_RESET", ""))
+        self.assertEqual((rec.wait.eta, rec.wait.detail), (NOW, "stay"))
 
     def test_phantoms_skip_plan_only_and_waits(self):
         a = _rec("a", target_acct="next4", substate="PLANNED")

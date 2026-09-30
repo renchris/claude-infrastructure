@@ -8,7 +8,7 @@ import shutil
 import tempfile
 import unittest
 
-from lr_recon import evidence
+from lr_recon import classify, evidence
 from lr_recon import settle
 from lr_recon import types as T
 
@@ -350,6 +350,81 @@ class Rebucket(unittest.TestCase):
             settle.rebucket(rec(phase="EXITING", sub="HOLD-BGWORK"), "LIMITED", 1.0)
         )
         self.assertFalse(settle.rebucket(rec(sub="HOLD-DRAFT"), "LIMITED", 1.0))
+
+
+class AbortedAdmitHeld(unittest.TestCase):
+    """D7.1: lr-handoff's in-place admit, ABORTED before /exit, now ends `verdict: HELD:<reason>`
+    with NOTMOVED and exit 6. Every reason is a hold; none escalates as DETERMINISTIC."""
+
+    ABORTED = (
+        "handoff-fire: recycle REFUSED after 180s\n"
+        "lr-handoff: verdict: HELD:%s\n"
+        "lr-handoff 4ac4c35d: verdict=NOTMOVED from=next to=next2 proven=no trigger=limit (rc 6)\n"
+    )
+
+    def test_each_reason_maps_to_its_hold(self):
+        for reason, sub in (
+            ("draft", "HOLD-DRAFT"),
+            ("focused", "HOLD-FOCUS"),
+            ("busy", "HOLD-COMPOSER"),
+            ("team", "HELD:team"),
+            ("unknown", "HOLD-COMPOSER"),
+        ):
+            r = rec(sub="PLANNED")
+            self.assertEqual(
+                settle.outcome(r, 6, self.ABORTED % reason)[:2], ("HOLD", sub), reason
+            )
+            r = rec(sub="PLANNED")
+            settle.settle_exit(r, actuator(), 6, self.ABORTED % reason, 1.0)
+            self.assertFalse(r.escalated, reason)
+            self.assertEqual(r.substate, sub, reason)
+
+    def test_recycle_held_rows_name_team_and_busy(self):
+        self.assertEqual(settle.RCY_HELD_SUB["team"], "HELD:team")
+        self.assertEqual(settle.RCY_HELD_SUB["busy"], "HOLD-COMPOSER")
+
+
+class TeamFlicker(unittest.TestCase):
+    """D4.4: member counts flicker; one pass reading 0 must not release a held lead."""
+
+    @staticmethod
+    def bucket(members):
+        return "HELD:team" if members else "LIMITED"
+
+    def test_sim_case_a_one_zero_one_stays_held(self):
+        r = rec(sub="DETECTED")
+        r.target_acct = ""
+        for t, m in enumerate((1, 0, 1)):
+            settle.rebucket(r, self.bucket(m), float(t), eta=100.0)
+            self.assertEqual(r.substate, "HELD:team", "pass %d" % t)
+        self.assertEqual(r.wait.eta, 100.0)  # the reset, which the wake keys on
+
+    def test_a_rebucketed_wait_reset_keeps_its_reset(self):
+        """D1.11: WAIT_RESET via rebucket had no eta, so it never woke."""
+        r = rec(sub="DETECTED")
+        self.assertTrue(settle.rebucket(r, "STAY", 1.0, eta=50.0))
+        self.assertEqual((r.substate, r.wait.eta), ("WAIT_RESET", 50.0))
+
+    def test_two_member_free_passes_release_it(self):
+        r = rec(sub="HELD:team")
+        self.assertFalse(settle.rebucket(r, "LIMITED", 1.0))
+        self.assertEqual(r.substate, "HELD:team")
+        self.assertTrue(settle.rebucket(r, "LIMITED", 2.0))
+        self.assertEqual(r.substate, "DETECTED")
+        self.assertNotIn("team_zero", r.close)
+
+    def test_sim_case_b_held_team_takes_over_waits_and_plans(self):
+        for sub in ("WAIT_SLOT", "WAIT_DATA", "WAIT_CAPACITY", "BACKOFF", "PLANNED"):
+            r = rec(sub=sub)
+            self.assertTrue(settle.rebucket(r, "HELD:team", 1.0), sub)
+            self.assertEqual(r.substate, "HELD:team", sub)
+            if sub == "PLANNED":
+                self.assertEqual(r.target_acct, "")  # the caller voids its phantom
+        # the takeover is HELD:team's alone: another hold still leaves a plan to the settle path
+        self.assertFalse(settle.rebucket(rec(sub="WAIT_SLOT"), "HOLD-BGWORK", 1.0))
+
+    def test_a_team_notmoved_is_a_hold_never_deterministic(self):
+        self.assertEqual(classify.map_notmoved("team", "limited"), ("HOLD", "HELD:team"))
 
 
 class Confirm(unittest.TestCase):

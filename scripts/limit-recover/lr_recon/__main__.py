@@ -20,7 +20,7 @@ import json
 import os
 import sys
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from lr_recon import (
     act,
@@ -189,6 +189,15 @@ def _facts(ctx: Ctx, snap: T.Snapshot, now: float) -> Dict[str, T.Fact]:
     return facts
 
 
+def zero_human(paths: T.Paths) -> bool:
+    """D1.9: the reconciler may act on a record nobody asked for (origin hook/census/fanout) only
+    when BOTH autorecover.on and its own recon/autorecover.on exist. Separates its scope from the
+    poller's hook lane, which answers to autorecover.on alone."""
+    return os.path.exists(paths.autorecover_on) and os.path.exists(
+        paths.recon_autorecover_on
+    )
+
+
 def _census(
     ctx: Ctx,
     snap: T.Snapshot,
@@ -207,9 +216,19 @@ def _census(
         ctx.records, reqs, snap, ctx.clock.boottime(), now, stores=stores
     )
     stale_sids = {sid for sid, verdict, _r in stale if verdict == "NOT_NEEDED"}
+    autorecover = zero_human(paths)
     for sid, verdict, reason in stale:
         _event(paths, "stale", sid, detail="%s %s" % (verdict, reason))
-        if mode == "act" and sid in req_by_sid and verdict == "NOT_NEEDED":
+        req = req_by_sid.get(sid)
+        # Claiming drains the request from the poller too, on a verdict the poller does not share:
+        # only an ACTING reconciler (recon.on) may, and only for a request it may act on (D1.9).
+        if (
+            mode == "act"
+            and req is not None
+            and verdict == "NOT_NEEDED"
+            and os.path.exists(paths.recon_on)
+            and (autorecover or req.origin == "cc-lr")
+        ):
             store.claim_request(paths, req_by_sid[sid], verdict, reason)
             if sid not in ctx.records:
                 ctx.records[sid] = census.not_needed_record(
@@ -222,7 +241,6 @@ def _census(
                     stores=stores,
                     amap=amap,
                 )
-    autorecover = os.path.exists(paths.autorecover_on)
     buckets: List[T.Bucket] = []
     for s in snap.sessions.values():
         if not (
@@ -246,8 +264,11 @@ def _census(
         origin = req.origin if req else ("fanout" if b.kind == "idle" else "census")
         pane = snap.panes.get("%d:%d" % s.pane) if s.pane else None
         if old is not None and old.open and not act.live_procs(old, snap):
-            if settle.rebucket(old, b.name, now):
+            was, assign_id = old.substate, old.assign_id or old.record_id
+            if settle.rebucket(old, b.name, now, b.resets_at):
                 _event(paths, "rebucket", s.sid, old.record_id, b.name)
+                if was == "PLANNED" and mode == "act":
+                    plan.unassign(assign_id)  # HELD:team took it over: void its phantom
         census.upsert(
             ctx.records,
             b,
@@ -259,6 +280,45 @@ def _census(
             now,
         )
     return buckets, stale
+
+
+FOCUS_LEDGER_MAX = 4 * 1024 * 1024
+
+
+def _focus_ledger(
+    paths: T.Paths,
+    snap: T.Snapshot,
+    buckets: List[T.Bucket],
+    mode: str,
+    now: float,
+) -> Optional[Dict[str, Any]]:
+    """D7.5: one append-only row per pass that saw a LIMITED session — how many, and how many sat
+    in the focused pane. Focus had never been logged (0 recycle-held-focused rows), and
+    last-pass.json is overwritten every pass; this is the data the focused-pane move (decision 7)
+    and its idle-time follow-up are judged on."""
+    limited = [b for b in buckets if b.kind == "limited"]
+    if not limited:
+        return None
+    focused = 0
+    for b in limited:
+        s = snap.sessions.get(b.sid)
+        pane = snap.panes.get("%d:%d" % s.pane) if s and s.pane else None
+        focused += bool(pane and pane.is_focused)
+    row = {
+        "t": now,
+        "mode": mode,
+        "limited": len(limited),
+        "focused": focused,
+        "held_focus": sum(1 for b in limited if b.name == "HOLD-FOCUS"),
+    }
+    try:
+        os.makedirs(paths.shadow, exist_ok=True)
+        store.append_bounded(
+            os.path.join(paths.shadow, "focus.jsonl"), store.dumps(row), FOCUS_LEDGER_MAX
+        )
+    except OSError as e:
+        _event(paths, "focus-ledger-error", detail=repr(e)[:200])
+    return row
 
 
 def _read_composer(
@@ -308,6 +368,19 @@ def _derive(
             inputs = _rearm_inputs(rec, snap)
             prev = rec.close.get("rearm_inputs") or {}
             if classify.should_rearm(rec, now, inputs, prev):
+                n = int(rec.close.get("rearms", 0)) + 1
+                if n > classify.REARM_CAP:
+                    # D1.10: page (IMPOSSIBLE is an immediate page) and release the session to the
+                    # other recovery paths, which defer to owned/<sid> for as long as it stands
+                    rec.terminal = T.Terminal(
+                        outcome="IMPOSSIBLE",
+                        proof="escalated again after %d re-arms; released to the other "
+                        "recovery paths" % classify.REARM_CAP,
+                        at=now,
+                    )
+                    _event(ctx.paths, "rearm-cap", rec.sid, rec.record_id, str(n - 1))
+                    continue
+                rec.close["rearms"] = n
                 classify.rearm(rec, now)
                 _event(
                     ctx.paths,
@@ -494,7 +567,7 @@ def _plan(
     ctx: Ctx, snap: T.Snapshot, facts: Dict[str, T.Fact], mode: str, now: float
 ) -> int:
     paths, recs = ctx.paths, ctx.records
-    mvs = plan.movers(list(recs.values()), snap, now)
+    mvs = plan.movers(list(recs.values()), snap, now, facts)
     if not mvs:
         return 0
     kw = plan.kwork(snap, _accounts(ctx.home), now)
@@ -529,12 +602,17 @@ def _own_and_charge(ctx: Ctx, now: float) -> None:
         pid=os.getpid(), lstart=store.proc_lstart(os.getpid()), owner="lr-reconciler"
     )
     for rec in ctx.records.values():
-        if (
-            rec.open
-            and not rec.plan_only
-            and rec.substate == "PLANNED"
-            and store.read_fence(ctx.paths, rec.sid) is None
-        ):
+        if not rec.open or rec.plan_only or rec.substate != "PLANNED":
+            continue
+        fence = store.read_fence(ctx.paths, rec.sid)
+        if fence is not None and fence.record_id != rec.record_id:
+            # D1.10: owned/<sid> left by an earlier record of this sid. A sid has at most one open
+            # record, so that one is terminal: its fence and claim are stale, not a live owner.
+            store.release_fence(ctx.paths, rec.sid, fence.record_id)
+            store.claim_release(ctx.paths, rec.sid, fence.record_id)
+            _event(ctx.paths, "own-takeover", rec.sid, rec.record_id, fence.record_id)
+            fence = None
+        if fence is None:
             me.record_id = rec.record_id
             verdict = store.take_ownership(
                 ctx.paths, rec, me, _alive, lambda pid: "", now
@@ -543,10 +621,89 @@ def _own_and_charge(ctx: Ctx, now: float) -> None:
     plan.assign_many(plan.phantom_rows(list(ctx.records.values())))
 
 
+FIRST_TURN = settle.MOVE_ACTUATORS + ("C", "C-retry")
+
+
+def _active_now(snap: T.Snapshot) -> int:
+    """The live mid-turn sessions (cc_sp_active's meaning): held and not at rest."""
+    return sum(
+        1 for s in snap.sessions.values() if s.holders and not s.transcript.at_rest
+    )
+
+
+def _ceiling() -> int:
+    try:
+        return max(0, int(os.environ.get("CC_ADMIT_ACTIVE_CEILING", "8")))
+    except ValueError:
+        return 8
+
+
+def _admission_period(ctx: Ctx, snap: T.Snapshot, now: float) -> None:
+    """ACTIVE while any limited record is open: R and L_open freeze on entry (§C6 gate 1-2). Pacer
+    slots free on ENGAGED or a closed record; a boot slot frees once no relaunching actuator of its
+    record is alive."""
+    adm = ctx.admission
+    corpses = [r for r in ctx.records.values() if r.open and r.kind == "limited"]
+    if not corpses:
+        adm.leave_active()
+    else:
+        l1, l5, _l15 = os.getloadavg()
+        adm.enter_active(
+            _active_now(snap), len(corpses), _ceiling(), l1, l5, os.cpu_count() or 1, now
+        )
+    for r in ctx.records.values():
+        if not r.open or r.phase in ("ENGAGED", "MOVED"):
+            adm.pacer_release(r.sid)
+    for sid in list(ctx.boots.held):
+        r = ctx.records.get(sid)
+        if r is None or not any(
+            p.argv_hash in act.BOOTING for p in act.live_procs(r, snap)
+        ):
+            ctx.boots.release(sid)
+
+
+def _admit(
+    ctx: Ctx, rec: T.Record, which: str, snap: T.Snapshot, now: float
+) -> Tuple[bool, str]:
+    """D1.12: the only concurrency cap used to be LR_RECON_WORKERS (16). A relaunch now holds a boot
+    slot, and a limited session's first turn (a move that types its prompt, or a continue) must
+    pass Admission.decide: restore budget, CPU brake, per-account pacer, then the probe. The token
+    rides to the actuator as LR_ADMIT_TOKEN_PATH."""
+    if which in act.BOOTING and not ctx.boots.acquire(rec.sid):
+        return False, "boot-slots"
+    if rec.kind != "limited" or which not in FIRST_TURN:
+        return True, "no-first-turn"
+    unredeemed = sum(
+        1
+        for r in ctx.records.values()
+        if r.open and r.admit_token and r.phase not in ("ENGAGED", "MOVED")
+        and r.sid != rec.sid
+    )
+    l1, l5, _l15 = os.getloadavg()
+    ok, why = ctx.admission.decide(
+        rec.sid,
+        rec.target_acct or rec.source_acct,
+        now,
+        _active_now(snap),
+        unredeemed,
+        l1,
+        l5,
+        os.cpu_count() or 1,
+        rec.cohort_id,
+    )
+    if not ok:
+        if which in act.BOOTING:
+            ctx.boots.release(rec.sid)
+        return False, why
+    rec.admit_token = ctx.admission.mint_token(rec.sid) or ""
+    return True, why
+
+
 def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
     n = 0
     running = act.running_count(ctx.records, snap)
     wake_ok = ctx.clock.wake_guard_ok()
+    _admission_period(ctx, snap, now)
     for rec in sorted(
         ctx.records.values(),
         key=lambda r: (r.kind != "limited", r.timeline.detected or now),
@@ -569,6 +726,13 @@ def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
         )
         if not ok:
             continue
+        ok, why = _admit(ctx, rec, which, snap, now)
+        if not ok:
+            if rec.close.get("admit_refused") != why:
+                rec.close["admit_refused"] = why
+                _event(ctx.paths, "admit-refused", rec.sid, rec.record_id, why)
+            continue
+        rec.close.pop("admit_refused", None)
         if (
             which in settle.MOVE_ACTUATORS
             and rec.close.get("move_attempt") == rec.attempt
@@ -653,9 +817,10 @@ def _command(ctx: Ctx, rec: T.Record, which: str) -> List[str]:
 
 
 def _report(ctx: Ctx, mode: str, now: float) -> None:
-    rep = ctx.reporter or report.Reporter(
-        ctx.paths, "observe" if mode == "observe" else mode
-    )
+    rep = ctx.reporter or report.Reporter(ctx.paths, mode)
+    # The mode is re-read every pass (D6.4): the Reporter outlives a `recon/mode` write on the
+    # running daemon, and built once it kept every page in observe until a restart.
+    rep.mode = mode
     ctx.reporter = rep
     by_cid: Dict[str, List[T.Record]] = {}
     for r in ctx.records.values():
@@ -688,24 +853,24 @@ def _report(ctx: Ctx, mode: str, now: float) -> None:
 
 
 REFIRE_SUFFIX = ".refire.json"
+ABANDON_SUFFIX = ".abandon.json"
 
 
-def _refire(ctx: Ctx, now: float) -> int:
-    """The daemon side of ``cc-lr cohort refire`` (§C11): each ``ctl/<sid>.refire.json`` re-arms one
-    OPEN member's budget through classify.rearm — the same entry point the 15-minute re-arm uses, so
-    a refire can never grant more than the clock would — then moves to ``ctl/done/`` so neither the
-    next pass nor a restart re-applies it. A sid with no open record is moved too, and logged."""
+def _consume_ctl(
+    ctx: Ctx, suffix: str, verb: str, apply: Callable[[T.Record, str], None]
+) -> int:
+    """One ``ctl/<sid><suffix>`` file per request: applied to the sid's OPEN record, then moved to
+    ``ctl/done/`` so neither the next pass nor a restart re-applies it. A sid with no open record is
+    moved too, and logged."""
     try:
-        names = sorted(
-            n for n in os.listdir(ctx.paths.ctl) if n.endswith(REFIRE_SUFFIX)
-        )
+        names = sorted(n for n in os.listdir(ctx.paths.ctl) if n.endswith(suffix))
     except OSError:
         return 0
     done = os.path.join(ctx.paths.ctl, "done")
     n = 0
     for name in names:
         src = os.path.join(ctx.paths.ctl, name)
-        sid, by = name[: -len(REFIRE_SUFFIX)], "?"
+        sid, by = name[: -len(suffix)], "?"
         try:
             with open(src, encoding="utf-8") as fh:
                 doc = json.load(fh)
@@ -714,17 +879,66 @@ def _refire(ctx: Ctx, now: float) -> int:
             pass  # a torn or foreign body still names its sid in the file name
         rec = ctx.records.get(sid)
         if rec is not None and rec.open:
-            classify.rearm(rec, now)
-            _event(ctx.paths, "refire", sid, rec.record_id, "by=%s" % by)
+            apply(rec, by)
+            _event(ctx.paths, verb, sid, rec.record_id, "by=%s" % by)
             n += 1
         else:
-            _event(ctx.paths, "refire-unknown", sid, detail="by=%s" % by)
+            _event(ctx.paths, verb + "-unknown", sid, detail="by=%s" % by)
         try:
             os.makedirs(done, 0o700, exist_ok=True)
             os.replace(src, os.path.join(done, name))
         except OSError as e:
-            _event(ctx.paths, "refire-error", sid, detail=repr(e)[:200])
+            _event(ctx.paths, verb + "-error", sid, detail=repr(e)[:200])
     return n
+
+
+def _refire(ctx: Ctx, now: float) -> int:
+    """The daemon side of ``cc-lr cohort refire`` (§C11): re-arms one OPEN member's budget through
+    classify.rearm — the same entry point the 15-minute re-arm uses, so a refire can never grant
+    more than the clock would. An operator refire also resets the automatic re-arm count."""
+
+    def apply(rec: T.Record, _by: str) -> None:
+        classify.rearm(rec, now)
+        rec.close.pop("rearms", None)
+
+    return _consume_ctl(ctx, REFIRE_SUFFIX, "refire", apply)
+
+
+def _abandon(ctx: Ctx, now: float) -> int:
+    """D1.10, ``python3 -m lr_recon --abandon <sid>``: the operator gives a session up. The record
+    goes terminal (IMPOSSIBLE, proof names who abandoned it), which pages and, in the same pass,
+    releases owned/<sid> and the run claim to the other recovery paths."""
+
+    def apply(rec: T.Record, by: str) -> None:
+        rec.terminal = T.Terminal(
+            outcome="IMPOSSIBLE", proof="abandoned by %s" % by, at=now
+        )
+
+    return _consume_ctl(ctx, ABANDON_SUFFIX, "abandon", apply)
+
+
+def _release_terminal(ctx: Ctx) -> int:
+    """D1.10: a terminal record gives up owned/<sid> and its run claim. release_fence had no caller,
+    so every sid the daemon ever owned stayed DEFER for every other recovery path (the fence, and
+    cc-resume-debt's handoff) for as long as the daemon lived. Keyed by record_id: a newer record's
+    fence is never touched."""
+    n = 0
+    for rec in ctx.records.values():
+        if rec.open:
+            continue
+        if store.release_fence(ctx.paths, rec.sid, rec.record_id):
+            _event(ctx.paths, "release", rec.sid, rec.record_id, rec.terminal.outcome)
+            n += 1
+        store.claim_release(ctx.paths, rec.sid, rec.record_id)
+    return n
+
+
+def request_abandon(paths: T.Paths, sid: str, by: str = "operator") -> str:
+    """The CLI half of --abandon: one ctl file the running daemon consumes on its next pass."""
+    os.makedirs(paths.ctl, 0o700, exist_ok=True)
+    path = os.path.join(paths.ctl, sid + ABANDON_SUFFIX)
+    store.atomic_write_json(path, {"sid": sid, "at": time.time(), "by": by})
+    return path
 
 
 def _invariant(ctx: Ctx, snap: T.Snapshot, now: Optional[float] = None) -> int:
@@ -800,6 +1014,7 @@ def run_pass(ctx: Ctx, force_observe: bool = False) -> Dict[str, Any]:
     facts = _facts(ctx, snap, now)
     reqs = store.list_requests(paths)
     buckets, stale = _census(ctx, snap, facts, reqs, mode, now)
+    _focus_ledger(paths, snap, buckets, mode, now)
     _derive(ctx, snap, now, facts)
     for rec in (
         ctx.records.values()
@@ -808,6 +1023,7 @@ def run_pass(ctx: Ctx, force_observe: bool = False) -> Dict[str, Any]:
             _event(paths, "fold-witness", rec.sid)
     # before planning, so a re-armed member is placed and dispatched this pass
     _refire(ctx, now)
+    _abandon(ctx, now)
     placed = _plan(ctx, snap, facts, mode, now)
     spawned = 0
     if mode == "act" and os.path.exists(paths.recon_on):
@@ -815,6 +1031,7 @@ def run_pass(ctx: Ctx, force_observe: bool = False) -> Dict[str, Any]:
         spawned = _dispatch(ctx, snap, mode, now)
         ctx.actuations += spawned
     _report(ctx, mode, now)
+    _release_terminal(ctx)
     defects = _invariant(ctx, snap, now)
     for rec in ctx.records.values():
         store.save_record(paths, rec, now)
@@ -947,8 +1164,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--once", action="store_true", help="one pass, print the census, exit"
     )
     ap.add_argument("--root", help="reconciler state root (default LR_RECON_ROOT)")
+    ap.add_argument(
+        "--abandon",
+        metavar="SID",
+        help="give up recovering SID: the running daemon closes its record and releases it",
+    )
     a = ap.parse_args(argv)
     paths = T.Paths.from_env(root=a.root)
+    if a.abandon:
+        if "/" in a.abandon or not a.abandon.strip():
+            print("lr_recon: --abandon needs a session id", file=sys.stderr)
+            return 2
+        print(request_abandon(paths, a.abandon.strip()))
+        return 0
     if paths.canary_in_live_root:
         print(
             "lr_recon: REFUSED — LR_RECON_CANARY is set and the root is the live reconciler's "

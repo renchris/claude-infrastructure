@@ -72,6 +72,15 @@ class MainTests(unittest.TestCase):
             {"LR_STATE_DIR": os.path.join(self.tmp, "lr"), "HOME": self.home},
         )
         self.env.start()
+        # admission's probe and token mint shell out to capacity-admit.sh: never from a unit test
+        self.probe = mock.patch(
+            "lr_recon.admit.Admission.probe", return_value=(True, "admit")
+        )
+        self.mint = mock.patch(
+            "lr_recon.admit.Admission.mint_token", return_value=None
+        )
+        self.probe.start()
+        self.mint.start()
         self.paths = T.Paths.from_env(root=os.path.join(self.tmp, "lr", "recon"))
         os.makedirs(self.paths.requests)
         self.req = os.path.join(
@@ -81,6 +90,8 @@ class MainTests(unittest.TestCase):
             json.dump({"sid": "abcdef01-0000-0000-0000-000000000001"}, fh)
 
     def tearDown(self):
+        self.mint.stop()
+        self.probe.stop()
         self.env.stop()
 
     def test_mode_cap_only_lowers(self):
@@ -97,11 +108,11 @@ class MainTests(unittest.TestCase):
             fh.write("garbage\n")
         self.assertEqual(M.read_mode(self.paths, None), "observe")
 
-    def _pass(self, mode_cap, mode_file=None):
+    def _pass(self, mode_cap, mode_file=None, ctx=None):
         import time
 
         now = time.time()
-        ctx = M.Ctx(self.paths, mode_cap, self.home)
+        ctx = ctx or M.Ctx(self.paths, mode_cap, self.home)
         if mode_file:
             os.makedirs(self.paths.root, exist_ok=True)
             with open(self.paths.mode_file, "w") as fh:
@@ -138,6 +149,112 @@ class MainTests(unittest.TestCase):
         self.assertEqual((s["mode"], s["actuations"]), ("act", 0))
         popen.assert_not_called()
         am.assert_not_called()
+
+    def test_mode_flip_reaches_the_page_sink_without_a_restart(self):
+        """D6.4: one daemon process, observe then act — the act pass must page."""
+        from lr_recon import report
+
+        pages = []
+        ctx = M.Ctx(self.paths, None, self.home)
+        ctx.reporter = report.Reporter(
+            self.paths, "observe", page=pages.append, mail=lambda p, t: None
+        )
+        self._pass(None, ctx=ctx)
+        self.assertEqual(pages, [])
+        self._pass(None, mode_file="act\n", ctx=ctx)
+        self.assertEqual(ctx.reporter.mode, "act")
+        self.assertTrue(pages, "the act pass never reached the sink")
+
+    def test_every_pass_with_a_limited_session_appends_a_focus_row(self):
+        """D7.5: focus is logged per pass, append-only (last-pass.json is overwritten)."""
+        path = os.path.join(self.paths.shadow, "focus.jsonl")
+        for _ in range(2):
+            self._pass("observe")
+        with open(path, encoding="utf-8") as fh:
+            rows = [json.loads(x) for x in fh]
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(
+            (rows[0]["limited"], rows[0]["focused"], rows[0]["held_focus"]), (1, 0, 0)
+        )
+        snap = _snap(1.0, self.tmp)
+        snap.panes["5:7"].is_focused = True
+        b = T.Bucket(sid=next(iter(snap.sessions)), name="HOLD-FOCUS")
+        row = M._focus_ledger(self.paths, snap, [b], "act", 1.0)
+        self.assertEqual((row["focused"], row["held_focus"]), (1, 1))
+        idle = T.Bucket(sid=b.sid, name="IDLE-ELIGIBLE", kind="idle")
+        self.assertIsNone(M._focus_ledger(self.paths, snap, [idle], "act", 2.0))
+
+    # ── D1.12: admission caps the act path ────────────────────────────────────────────────────
+    def _cohort(self, n, accts):
+        import time
+
+        now = time.time()
+        M.store.ensure_dirs(self.paths)
+        open(self.paths.recon_on, "w").close()
+        ctx = M.Ctx(self.paths, None, self.home)
+        for i in range(n):
+            sid = "c%07d-0000-0000-0000-000000000000" % i
+            r = T.Record(
+                sid=sid,
+                record_id="recon:c:%s:1" % sid[:8],
+                kind="limited",
+                source_acct="next3",
+                source_cfg="/c3",
+                scope="7d",
+                cohort_id="c",
+                target_acct=accts[i % len(accts)],
+                target_cfg="/t",
+                substate="PLANNED",
+            )
+            ctx.records[sid] = r
+        snap = T.Snapshot(wall=now, uptime_raw=0.0)
+        return ctx, snap, now
+
+    def _spawned(self, ctx, snap, now):
+        with mock.patch.object(M.act, "spawn", return_value=4242) as sp:
+            n = M._dispatch(ctx, snap, "act", now)
+        return n, [c.args[1] for c in sp.call_args_list]
+
+    def test_a_30_record_cohort_takes_3_first_turns_per_account(self):
+        ctx, snap, now = self._cohort(30, ["next"])
+        n, recs = self._spawned(ctx, snap, now)
+        self.assertEqual(n, 3)  # the pacer: 3 first turns per target account
+        self.assertEqual({r.target_acct for r in recs}, {"next"})
+        ev = [json.loads(x) for x in open(self.paths.events)]
+        self.assertTrue(
+            any(e["ev"] == "admit-refused" and "pacer" in e.get("detail", "") for e in ev)
+        )
+
+    def test_boot_slots_cap_relaunches_across_accounts(self):
+        ctx, snap, now = self._cohort(30, ["a1", "a2", "a3", "a4"])
+        n, _recs = self._spawned(ctx, snap, now)
+        self.assertEqual(n, M.BootSlots.START)  # 12 pacer slots, 6 boots
+
+    def test_the_frozen_restore_budget_binds(self):
+        ctx, snap, now = self._cohort(30, ["a1", "a2", "a3", "a4"])
+        # R frozen at 2 before this pass; L_open high so the CPU brake is not what binds
+        ctx.admission.enter_active(0, 2, 0, load1=1e6, now=now)
+        with mock.patch(
+            "lr_recon.admit.Admission.mint_token", side_effect=lambda sid: "/tok/" + sid
+        ):
+            n, recs = self._spawned(ctx, snap, now)
+        self.assertEqual(n, 2)
+        self.assertTrue(all(r.admit_token.startswith("/tok/") for r in recs))
+
+    def test_an_engaged_record_frees_its_pacer_slot(self):
+        ctx, snap, now = self._cohort(3, ["next"])
+        for r in ctx.records.values():
+            ctx.admission.pacer_take(r.sid, "next", now)
+            r.phase = "ENGAGED"
+        M._admission_period(ctx, snap, now)
+        self.assertTrue(ctx.admission.pacer_ok("next", now))
+
+    def test_an_idle_move_needs_no_first_turn_admission(self):
+        ctx, snap, now = self._cohort(4, ["next"])
+        for r in ctx.records.values():
+            r.kind = "idle"
+        n, _recs = self._spawned(ctx, snap, now)
+        self.assertEqual(n, 4)  # no pacer on a relaunch with no prompt
 
     def test_pass_writes_the_readout_line(self):
         ctx, _s, _am, _popen = self._pass("observe")
@@ -182,6 +299,107 @@ class MainTests(unittest.TestCase):
         self.assertEqual((ev["ev"], ev["sid"]), ("refire", sid))
         self.assertEqual(M._refire(ctx, 200.0), 0)  # consumed once, never re-applied
 
+    # ── D1.10: ownership ends with the record ─────────────────────────────────────────────────
+    def _own(self, rec):
+        M.store.ensure_dirs(self.paths)
+        me = T.RunClaimHolder(pid=os.getpid(), lstart="x", owner="lr-reconciler")
+        me.record_id = rec.record_id
+        v = M.store.take_ownership(
+            self.paths, rec, me, lambda pid, ls: True, lambda pid: "", 1.0
+        )
+        self.assertNotEqual(v, "owned-by-other")
+
+    def _defers(self, sid):
+        from lr_recon import fence
+
+        open(self.paths.recon_on, "w").close()
+        return fence.defers(self.paths, sid, "", 1e12, 0.0, lambda p, l: False)
+
+    def test_a_closed_records_sid_is_not_owned(self):
+        sid = "abcdef01-0000-0000-0000-000000000009"
+        ctx = M.Ctx(self.paths, None, self.home)
+        r = T.Record(sid=sid, record_id="r9")
+        ctx.records[sid] = r
+        self._own(r)
+        self.assertEqual(M._release_terminal(ctx), 0)  # open: kept
+        self.assertEqual(self._defers(sid)[1], "lapsed")
+        r.terminal = T.Terminal(outcome="CLOSED", at=2.0)
+        self.assertEqual(M._release_terminal(ctx), 1)
+        self.assertEqual(self._defers(sid), (False, "not-owned"))
+        self.assertIsNone(M.store.read_claim(self.paths, sid))
+
+    def test_every_pass_releases_a_closed_records_fence(self):
+        sid = "abcdef01-0000-0000-0000-000000000009"
+        ctx = M.Ctx(self.paths, None, self.home)
+        r = T.Record(sid=sid, record_id="r9")
+        r.terminal = T.Terminal(outcome="CLOSED", at=1.0)
+        self._own(r)
+        ctx.records[sid] = r
+        self._pass("observe", ctx=ctx)
+        self.assertEqual(self._defers(sid), (False, "not-owned"))
+
+    def test_abandon_closes_and_releases(self):
+        sid = "abcdef01-0000-0000-0000-000000000009"
+        ctx = M.Ctx(self.paths, None, self.home)
+        r = T.Record(sid=sid, record_id="r9", escalated=True)
+        ctx.records[sid] = r
+        self._own(r)
+        path = M.request_abandon(self.paths, sid)
+        self.assertTrue(path.endswith(sid + ".abandon.json"))
+        self.assertEqual(M._abandon(ctx, 5.0), 1)
+        self.assertEqual(
+            (r.terminal.outcome, r.terminal.proof), ("IMPOSSIBLE", "abandoned by operator")
+        )
+        M._release_terminal(ctx)
+        self.assertEqual(self._defers(sid), (False, "not-owned"))
+        self.assertFalse(os.path.exists(path))
+        self.assertEqual(M._abandon(ctx, 6.0), 0)  # consumed once
+
+    def test_abandon_cli_writes_the_ctl_file(self):
+        with redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(M.main(["--abandon", "abcdef01-x"]), 0)
+        self.assertTrue(os.path.exists(out.getvalue().strip()))
+        self.assertEqual(M.main(["--abandon", "../x"]), 2)
+
+    def test_rearms_are_capped_then_released(self):
+        from lr_recon import classify
+
+        sid = "abcdef01-0000-0000-0000-000000000009"
+        M.store.ensure_dirs(self.paths)
+        ctx = M.Ctx(self.paths, None, self.home)
+        r = T.Record(sid=sid, record_id="r9")
+        ctx.records[sid] = r
+        snap = T.Snapshot(wall=0.0, uptime_raw=0.0)
+        t = 0.0
+        for i in range(classify.REARM_CAP + 1):
+            r.escalated = True
+            r.last_error = T.LastError(cls="DETERMINISTIC", fingerprint="f", detail="d", at=t)
+            t += classify.REARM_S
+            M._derive(ctx, snap, t)
+            if i < classify.REARM_CAP:
+                self.assertTrue(r.open, "re-arm %d" % (i + 1))
+                self.assertFalse(r.escalated)
+        self.assertEqual(r.terminal.outcome, "IMPOSSIBLE")
+        self.assertIn("re-arms", r.terminal.proof)
+        # an operator refire resets the automatic count
+        r2 = T.Record(sid="s2", record_id="r2", escalated=True)
+        r2.close["rearms"] = classify.REARM_CAP
+        ctx.records["s2"] = r2
+        self._ctl("s2")
+        M._refire(ctx, t)
+        self.assertNotIn("rearms", r2.close)
+
+    def test_own_takes_over_a_fence_left_by_a_finished_record(self):
+        sid = "abcdef01-0000-0000-0000-000000000009"
+        old = T.Record(sid=sid, record_id="old-1")
+        self._own(old)
+        ctx = M.Ctx(self.paths, None, self.home)
+        new = T.Record(sid=sid, record_id="new-2", substate="PLANNED", target_acct="next4")
+        ctx.records[sid] = new
+        with mock.patch.object(plan, "assign_many", return_value=0):
+            M._own_and_charge(ctx, 3.0)
+        self.assertEqual(M.store.read_fence(self.paths, sid).record_id, "new-2")
+
     def test_refire_for_unknown_or_closed_sid_is_moved_and_logged(self):
         ctx = M.Ctx(self.paths, None, self.home)
         closed = T.Record(sid="closed01", record_id="rc", escalated=True)
@@ -224,6 +442,64 @@ class MainTests(unittest.TestCase):
         self.assertIn("mode=observe actuations=0 recon.on=absent", out)
         popen.assert_not_called()  # no background --fresh sweep in shadow mode
 
+    def _flags(self, recon_on=False, autorecover=False, recon_marker=False):
+        os.makedirs(self.paths.root, exist_ok=True)
+        for path, want in (
+            (self.paths.recon_on, recon_on),
+            (self.paths.autorecover_on, autorecover),
+            (self.paths.recon_autorecover_on, recon_marker),
+        ):
+            if want:
+                open(path, "w").close()
+            elif os.path.exists(path):
+                os.unlink(path)
+
+    def test_zero_human_scope_needs_both_markers(self):
+        """D1.9: a hook-origin record acts (plan_only False) only with autorecover.on AND the
+        reconciler's own recon/autorecover.on — all four states."""
+        for autorecover in (False, True):
+            for marker in (False, True):
+                self._flags(autorecover=autorecover, recon_marker=marker)
+                ctx, _s, _am, _popen = self._pass("observe")
+                rec = next(iter(ctx.records.values()))
+                self.assertEqual(
+                    rec.plan_only,
+                    not (autorecover and marker),
+                    (autorecover, marker),
+                )
+        self._flags()
+        self._pass(None, mode_file="act\n")
+        self.assertFalse(
+            os.path.exists(self.paths.recon_autorecover_on),
+            "the daemon must never create its own zero-human marker",
+        )
+
+    def test_act_mode_never_claims_a_hook_request_it_may_not_act_on(self):
+        """D1.9: the stale NOT_NEEDED claim drains the request from the poller too, so it needs
+        recon.on AND acting scope. A hook request survives act mode without either."""
+        import time
+
+        now = time.time()
+        snap = _snap(now, self.tmp)
+        s = next(iter(snap.sessions.values()))
+        s.holders, s.pid, s.pane = [], 0, None  # dead ⇒ the stale reconcile says NOT_NEEDED
+        M.store.ensure_dirs(self.paths)
+        for flags in (
+            {},  # recon.on absent: act mode is not acting
+            {"recon_on": True},  # acting, but a hook request is outside its scope
+            {"recon_on": True, "autorecover": True},  # the poller's switch alone
+            {"autorecover": True, "recon_marker": True},  # scope, but not acting
+        ):
+            self._flags(**flags)
+            ctx = M.Ctx(self.paths, None, self.home)
+            M._census(ctx, snap, {}, M.store.list_requests(self.paths), "act", now)
+            self.assertTrue(os.path.exists(self.req), flags)
+            self.assertNotIn(s.sid, ctx.records, flags)
+        self._flags(recon_on=True, autorecover=True, recon_marker=True)
+        ctx = M.Ctx(self.paths, None, self.home)
+        M._census(ctx, snap, {}, M.store.list_requests(self.paths), "act", now)
+        self.assertFalse(os.path.exists(self.req), "both markers + recon.on: claimed")
+
     def test_a_stale_request_leaves_a_terminal_not_needed_member(self):
         """W5 rig: a request for a dead session was claimed NOT_NEEDED and left no cohort member."""
         import time
@@ -234,6 +510,7 @@ class MainTests(unittest.TestCase):
         s.holders, s.pid, s.pane = [], 0, None  # the session is dead: no live holder
         ctx = M.Ctx(self.paths, None, self.home)
         M.store.ensure_dirs(self.paths)
+        self._flags(recon_on=True, autorecover=True, recon_marker=True)
         reqs = M.store.list_requests(self.paths)
         M._census(ctx, snap, {}, reqs, "act", now)
         rec = ctx.records[s.sid]
@@ -582,6 +859,7 @@ class MainTests(unittest.TestCase):
         M.store.ensure_dirs(self.paths)
         snap = T.Snapshot(wall=now, uptime_raw=0.0, panes={}, sessions={})
         req = T.Request(sid=sid, origin="cc-lr", path="", raw={})
+        self._flags(recon_on=True)  # a cc-lr request needs no zero-human marker, only recon.on
         with mock.patch.object(M.store, "claim_request"):
             M._census(ctx, snap, {}, [req], "act", now)
         rec = ctx.records[sid]

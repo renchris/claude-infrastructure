@@ -10,9 +10,8 @@ for every mover, and one bounded background sweep is started so the next pass ca
 Invariant 16 (rank → assign → probe is one decision): one pass, one ``--assign-many``, under
 ``locks/admit.lock`` whose holder a manual ``lr-fleet --one`` can see and wait on.
 
-Operator decision 3 (no account passes the floors: wait vs least-thin) is unruled. Its switch
-``LR_NO_FLOOR_POLICY`` defaults to ``wait``; the recommended ``hybrid`` needs a least-thin pick
-inside --place, which W1 did not build, so ``hybrid`` is read, logged, and behaves as ``wait``.
+Decision 3 ruled wait (2026-09-30): no least-thin pick, no switch. When no account passes the
+floors, --place answers acct None and the record waits (WAIT_SLOT, re-offered every pass).
 RECOVERY_IDLE_SEATS is the constant ``active``: W0 SUMMARY item 2 measured a no-prompt --resume
 writing 17 records within 7 s, so a relaunched session already counts as an active seat.
 """
@@ -29,6 +28,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from lr_recon import store
 from lr_recon import types as T
+from lr_recon import working as W
 
 KWORK_WINDOW_S = 600  # KWORK_WINDOW_MIN = 10 (§C5)
 PHANTOM_TTL_S = 1200  # §3 step 6: ttl_s=1200, refreshed every pass while non-terminal
@@ -86,29 +86,77 @@ def subagents_written(
     return sum(1 for p in seen if _fresh(p, now, window))
 
 
+def _subagent_paths(tx_path: str, sid: str) -> List[str]:
+    if not tx_path:
+        return []
+    base = os.path.join(os.path.dirname(tx_path), sid, "subagents")
+    pats = (
+        os.path.join(base, "agent-*.jsonl"),
+        os.path.join(base, "**", "agent-*.jsonl"),
+    )
+    return sorted({p for pat in pats for p in glob.glob(pat, recursive=True)})
+
+
+def working_count(tx_path: str, sid: str, now: float) -> int:
+    """A session and its unfinished subagents, by claude-accounts' working rule (D1.8): judged on
+    the last turn record, a tool wait counts up to 30 min, and a subagent counts only while
+    unfinished. The same rule as --place's own census, so both count one population."""
+    if not tx_path:
+        return 0
+    n = 1 if W.path_working(tx_path, now, KWORK_WINDOW_S) else 0
+    sdir = os.path.join(os.path.dirname(tx_path), sid)
+    cache: Dict[str, Dict[str, float]] = {}
+
+    def settled() -> Dict[str, float]:
+        if "v" not in cache:
+            cache["v"] = W.session_settled(sdir, now)
+        return cache["v"]
+
+    for p in _subagent_paths(tx_path, sid):
+        n += W.path_working(p, now, KWORK_WINDOW_S, sub=True, settled=settled)
+    return n
+
+
 def kwork(
     snap: T.Snapshot, accounts: Sequence[str], now: float
 ) -> Dict[str, Optional[int]]:
-    """Per account: top-level + subagent transcripts written in the last 10 min (§C5). Any
-    census degradation that could hide sessions makes EVERY account unmeasured (None)."""
+    """Per account: WORKING top-level sessions + unfinished subagents (§C5, D1.8). Any census
+    degradation that could hide sessions makes EVERY account unmeasured (None)."""
     if "ps" in snap.degraded or "registry" in snap.degraded:
         return {a: None for a in accounts}
     out: Dict[str, Optional[int]] = {a: 0 for a in accounts}
     for s in snap.sessions.values():
         if s.acct not in out:
             continue
-        n = 1 if _fresh(s.transcript.path, now, KWORK_WINDOW_S) else 0
-        n += subagents_written(s.transcript.path, s.sid, now)
-        out[s.acct] = (out[s.acct] or 0) + n
+        out[s.acct] = (out[s.acct] or 0) + working_count(s.transcript.path, s.sid, now)
     return out
 
 
-def mover_weight(s: T.SessionObs, now: float) -> int:
-    """§5: 1 + distinct subagent transcripts written in the window before death."""
-    return 1 + subagents_written(s.transcript.path, s.sid, now)
+def mover_weight(s: T.SessionObs, death_ts: float) -> int:
+    """§5: 1 + distinct subagent transcripts written in the 10 min before death (D3.6(d)). Keyed on
+    the death, not the pass: a record that waits an hour must not lose its subagents' weight."""
+    return 1 + subagents_written(s.transcript.path, s.sid, death_ts)
 
 
-def movers(records: Sequence[T.Record], snap: T.Snapshot, now: float) -> List[T.Mover]:
+# D1.11: a reset-due WAIT_RESET is first continued in place. It is offered to another account
+# only once its source has been seen limited again after the reset (a fact observed after the
+# ETA), or once the in-place wake has had this long. Offering it at the reset itself read the
+# source's stale fact and cached 100% row, and moved a cohort to other accounts 5 s after reset.
+REOFFER_AFTER_S = 900.0
+
+
+def _source_reread(rec: T.Record, facts: Optional[Dict[str, T.Fact]]) -> bool:
+    f = (facts or {}).get("%s.%s" % (rec.source_acct, rec.scope))
+    eta = rec.wait.eta if rec.wait else None
+    return f is not None and eta is not None and f.observed_at > eta
+
+
+def movers(
+    records: Sequence[T.Record],
+    snap: T.Snapshot,
+    now: float,
+    facts: Optional[Dict[str, T.Fact]] = None,
+) -> List[T.Mover]:
     """PRE-MOVE records that want a target, LIMITED before IDLE, then oldest death first."""
     rows: List[Tuple[int, float, T.Mover]] = []
     for rec in records:
@@ -126,6 +174,11 @@ def movers(records: Sequence[T.Record], snap: T.Snapshot, now: float) -> List[T.
             and rec.wait is not None
             and rec.wait.eta is not None
             and rec.wait.eta <= now
+            and (
+                rec.kind != "limited"
+                or _source_reread(rec, facts)
+                or now >= rec.wait.eta + REOFFER_AFTER_S
+            )
         )
         if not reset_due and rec.substate not in (
             "DETECTED",
@@ -136,8 +189,8 @@ def movers(records: Sequence[T.Record], snap: T.Snapshot, now: float) -> List[T.
         ):
             continue
         s = snap.sessions.get(rec.sid)
-        w = mover_weight(s, now) if s else rec.weight
         death = rec.timeline.detected or now
+        w = mover_weight(s, death) if s else rec.weight
         m = T.Mover(
             sid=rec.sid,
             src=rec.source_cfg or rec.source_acct,
@@ -265,6 +318,14 @@ def apply(
         if rec is None or not rec.open:
             continue
         rec.weight = p.weight or rec.weight
+        if p.acct and p.acct == rec.source_acct and rec.kind == "limited":
+            # --place's "stay": the source has room again. Not a move (lr-handoff refuses a move to
+            # its own account with exit 2); the in-place wake continues it (D1.11).
+            rec.substate = "WAIT_RESET"
+            rec.wait = T.Wait(
+                reason="WAIT_RESET", since=now, eta=now, detail="stay", wakes=["reset"]
+            )
+            continue
         if p.acct:
             rec.target_acct, rec.target_cfg = p.acct, cfg_of(p.acct)
             rec.substate, rec.wait = "PLANNED", None
@@ -403,7 +464,3 @@ def write_plan(
     )
     return path
 
-
-def no_floor_policy() -> str:
-    """Decision 3 switch; only ``wait`` is implemented (see module docstring)."""
-    return os.environ.get("LR_NO_FLOOR_POLICY", "wait")

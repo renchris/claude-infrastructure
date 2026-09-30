@@ -102,6 +102,7 @@ class CensusBuckets(unittest.TestCase):
             "claude --agent-id w@session-abcdef01 --parent-session-id abcdef01-x",
         )
         self.assertEqual(self.b(self._s()).name, "HELD:team")
+        self.assertNotIn("unruled", self.b(self._s()).reason)  # D4.10: decision 4 is ruled
 
     def test_focus_default_hold_and_switch(self):
         self.pane.is_focused = True

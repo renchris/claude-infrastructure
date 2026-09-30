@@ -2,8 +2,11 @@
 
 Hermetic: the bash library is a fake runner; one optional test probes the real library, read-only."""
 
+import json
 import os
+import shlex
 import shutil
+import tempfile
 import unittest
 from typing import List, Tuple
 
@@ -143,7 +146,7 @@ class Library(unittest.TestCase):
         )
         self.assertNotIn("cc_capacity_admit", cmd)
         r.rc = 9
-        self.assertEqual(adm.probe(8), (False, "memory"))
+        self.assertEqual(adm.probe(8), (False, "capacity"))
         r.rc = 1
         self.assertEqual(adm.probe(8), (False, "probe-error"))
 
@@ -159,7 +162,7 @@ class Library(unittest.TestCase):
     def test_memory_refusal_is_named(self) -> None:
         adm = active(FakeRunner(rc=9))
         self.assertEqual(
-            adm.decide("s", "a", 1.0, 0, 0, 1.0, 1.0, 10), (False, "memory")
+            adm.decide("s", "a", 1.0, 0, 0, 1.0, 1.0, 10), (False, "capacity")
         )
 
     @unittest.skipUnless(
@@ -167,15 +170,29 @@ class Library(unittest.TestCase):
         "library missing",
     )
     def test_real_probe_answers(self) -> None:
-        rc, _ = A.default_runner(
-            [
-                "bash",
-                "-c",
-                "source %s; CC_ADMIT_RESTORE_R=8 cc_capacity_probe lr-reconciler first-turn"
-                % os.path.join(A.REPO_ROOT, A.LIB_REL),
-            ]
+        """The probe writes one IDL row per call: point it at a temp one, never the live IDL."""
+        tmp = tempfile.mkdtemp(prefix="lr-admit-")
+        idl = os.path.join(tmp, "idl.jsonl")
+        adm = A.Admission(
+            runner=lambda argv: A.default_runner(
+                argv[:2]
+                + [
+                    "export HOME=%s CC_ADMIT_IDL=%s CC_ADMIT_NOTIFY_BIN=/usr/bin/true; %s"
+                    % (shlex.quote(tmp), shlex.quote(idl), argv[2])
+                ]
+            )
         )
-        self.assertIn(rc, (0, 9))
+        ok, reason = adm.probe(8)
+        self.assertIn(reason, ("admit", "capacity"))
+        with open(idl, encoding="utf-8") as fh:
+            rows = [json.loads(x) for x in fh if x.strip()]
+        self.assertTrue(rows, "the probe wrote no row to the temp IDL")
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_the_probe_runs_with_the_load_term_off(self) -> None:
+        r = FakeRunner(rc=0)
+        active(r).probe(8)
+        self.assertIn("CC_ADMIT_LOAD_TERM=off", r.calls[-1][2])
 
 
 class Drip(unittest.TestCase):
@@ -187,7 +204,7 @@ class Drip(unittest.TestCase):
             return adm.decide(sid, "a%s" % sid, t, 0, 0, 1.0, 1.0, 10, cohort="c1")
 
         self.assertEqual(
-            [ask("1", 1.0), ask("2", 2.0), ask("3", 3.0)], [(False, "memory")] * 3
+            [ask("1", 1.0), ask("2", 2.0), ask("3", 3.0)], [(False, "capacity")] * 3
         )
         self.assertFalse(adm.page_due)
         self.assertEqual(ask("4", 4.0), (True, "admit:drip"))
@@ -200,7 +217,7 @@ class Drip(unittest.TestCase):
         self.assertEqual(ask("6", 35.0), (True, "admit"))
         r.rc = 9
         self.assertEqual(
-            ask("7", 36.0), (False, "memory")
+            ask("7", 36.0), (False, "capacity")
         )  # a real admission reset the run
 
     def test_cohorts_count_separately(self) -> None:
@@ -209,7 +226,7 @@ class Drip(unittest.TestCase):
             adm.decide("x%d" % i, "q%d" % i, 1.0, 0, 0, 1.0, 1.0, 10, cohort="c1")
         self.assertEqual(
             adm.decide("y", "z", 2.0, 0, 0, 1.0, 1.0, 10, cohort="c2"),
-            (False, "memory"),
+            (False, "capacity"),
         )
 
 

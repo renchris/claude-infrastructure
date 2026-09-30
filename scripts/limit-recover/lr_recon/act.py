@@ -22,7 +22,7 @@ import time
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from lr_recon import store
+from lr_recon import census, store
 from lr_recon import types as T
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -426,6 +426,8 @@ def may_actuate(
         return False, "heal-disabled"
     if live_procs(rec, snap):
         return False, "process-live"
+    if actuator == "A" and census.live_members(rec.sid, snap) > 0:
+        return False, "team-live"  # D4.4: never move a lead out from under its members
     if rec.next_eligible_at and now < rec.next_eligible_at:
         return False, "backoff"
     if rec.escalated:

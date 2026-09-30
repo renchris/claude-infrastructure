@@ -324,6 +324,16 @@ class Paths:
         return os.path.join(self.lr_root, "autorecover.on")
 
     @property
+    def recon_autorecover_on(self) -> str:
+        """The reconciler's OWN zero-human marker (D1.9), created by the operator after the first
+        attended reconciler cohort closes clean and never by the daemon. autorecover.on alone keeps
+        meaning what it means for the poller's hook lane; the reconciler acts on a non-cc-lr
+        record only when both exist."""
+        if self.canary:
+            return self.p("canary.on")
+        return self.p("autorecover.on")
+
+    @property
     def requests(self) -> str:
         return os.path.join(self.lr_root, "requests")
 

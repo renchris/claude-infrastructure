@@ -2,13 +2,20 @@
 SLO pages, the per-cohort status file and the readout line.
 
 Why one class holds latches on disk: a daemon restart must never re-page (§C11 "latched once"), so
-every fired page is recorded in ``recon/cohorts/<cid>.pages.json`` before this returns. Every
-external effect goes through the injectable ``page``/``mail`` sinks; in mode "observe" nothing is
-sent — would-be pages go to ``recon/shadow/pages.jsonl`` and to ``digest()`` instead."""
+every fired page is recorded in ``recon/cohorts/<cid>.pages[.<mode>].json`` before this returns.
+Latches are kept per mode, so a page withheld in observe mode never suppresses the real one after
+the switch to act (D6.4). Every external effect goes through the injectable ``page``/``mail`` sinks;
+in mode "observe" nothing is sent — would-be pages go to ``recon/shadow/pages.jsonl`` and to
+``digest()`` instead.
+
+The default page sink (D6.5) tries the desk (``cc-notify --role desk``) and, unless that reports
+``verdict=delivered``, posts through ``lr-page.sh`` (Notification Center, plus the phone when
+Pushover is configured). A page counts as failed only when both fail."""
 
 import hashlib
 import json
 import os
+import re
 import subprocess
 import time
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
@@ -24,6 +31,8 @@ REFIRE_S = 3600  # §C11 max-age pages re-fire hourly
 SLO_AFTER_DEATH_S = 600  # §7.4: judged 10 minutes after the cohort's last death
 SHADOW_MAX = 4 * 1024 * 1024
 NOTIFY_TIMEOUT_S = 10
+PAGE_TIMEOUT_S = 45  # lr-page.sh: Notification Center (10 s) + phone (20 s) + slack
+_NOTIFY_VERDICT = re.compile(r"cc-notify: verdict=([A-Za-z-]+)")
 GOOD = ("CLOSED", "NOT_NEEDED", "REPLACED", "REPLACED-NEW-WINDOW")
 
 # Pages expand identifiers (§C11): the operator reads plain words, the status file keeps codes.
@@ -40,7 +49,7 @@ _SAY: Dict[str, str] = {
     "HOLD-MENU": "held: a menu is open in the pane",
     "HOLD:repo-bare": "held: the checkout is a bare repository",
     "HOLD:iterm": "held: an iTerm pane cannot be relaunched in place",
-    "HELD:team": "held: a team session, resumes after the reset",
+    "HELD:team": "held: team lead; paged 10 min after the reset",
     "BACKOFF": "backing off after an error",
     "PARKED-REBOOT": "parked until the machine reboots",
 }
@@ -58,6 +67,19 @@ _IMMEDIATE: Dict[str, str] = {
     "IMPOSSIBLE": "impossible: this session cannot be recovered",
     "HELD:team": "held: a team session",
 }
+
+
+# D3.3: --place's reasons for "no account passes the floors". Decision 3 ruled wait, so such a
+# session is not waiting for a slot to free up; it waits until an account has safe room again.
+_THIN = ("recovery-5h-thin", "recovery-weekly-thin")
+
+
+def say(rec: T.Record) -> str:
+    """The plain-words state of an open record, or '' when it has no named WAIT/HOLD state."""
+    st = _state(rec) or ""
+    if st == "WAIT_SLOT" and rec.wait and any(t in rec.wait.detail for t in _THIN):
+        return "no account has safe room; re-checked every pass"
+    return _SAY.get(st, "")
 
 
 def _hm(ts: Optional[float]) -> str:
@@ -112,7 +134,9 @@ def next_action(rec: T.Record) -> str:
     if st in _NEXT:
         return _NEXT[st]
     eta = rec.wait.eta if rec.wait else None
-    if st == "HELD:team" or st.startswith("WAIT"):
+    if st == "HELD:team":
+        return "paged at %s" % _hm(eta + 600) if eta else "paged 10 min after the reset"
+    if st.startswith("WAIT"):
         return "wakes at %s" % _hm(eta) if eta else "the reconciler retries"
     return "the reconciler continues (%s)" % rec.phase.lower()
 
@@ -403,18 +427,70 @@ def readout_line(
     return line
 
 
-def _cc_notify(*args: str) -> None:
+class PageFailed(Exception):
+    """No channel took the page; Reporter._emit counts it."""
+
+
+def _run(argv: List[str], timeout: float) -> Tuple[int, str]:
+    """(rc, stderr). A timeout is rc 124 and a missing binary rc 127, never an exception."""
+    try:
+        cp = subprocess.run(
+            argv,
+            timeout=timeout,
+            check=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except subprocess.TimeoutExpired:
+        return 124, ""
+    except OSError:
+        return 127, ""
+    return cp.returncode, cp.stderr or ""
+
+
+def notify_argv(*args: str) -> List[str]:
     # LR_NOTIFY_BIN: a canary or rig daemon pages into its own log, never the operator's inbox
     exe = os.environ.get("LR_NOTIFY_BIN") or os.path.join(
         os.environ.get("HOME", os.path.expanduser("~")), ".claude", "bin", "cc-notify"
     )
-    subprocess.run(
-        [exe] + list(args),
-        timeout=NOTIFY_TIMEOUT_S,
-        check=False,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+    return [exe] + list(args)
+
+
+def page_argv(text: str) -> List[str]:
+    # LR_PAGE_BIN: the rig's own stub; else lr-page.sh beside this package
+    exe = os.environ.get("LR_PAGE_BIN") or os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lr-page.sh"
     )
+    return ["/bin/bash", exe, "--title", "reconciler", text]
+
+
+def _cc_notify(*args: str) -> Tuple[int, str]:
+    """(rc, verdict) of one cc-notify send; verdict is '' when none was printed."""
+    rc, err = _run(notify_argv(*args), NOTIFY_TIMEOUT_S)
+    m = _NOTIFY_VERDICT.findall(err)
+    return rc, (m[-1] if m else "")
+
+
+def default_page(text: str) -> None:
+    """The desk first; anything short of ``verdict=delivered`` (a non-zero exit such as rc 3 for an
+    unset role, or mailbox-only / unverified) also goes through lr-page.sh. Raises PageFailed only
+    when neither reached anyone. The desk has been dead for weeks, so lr-page is the working leg."""
+    rc, verdict = _cc_notify("--role", "desk", text)
+    if rc == 0 and verdict == "delivered":
+        return
+    prc, _err = _run(page_argv(text), PAGE_TIMEOUT_S)
+    if prc != 0:
+        raise PageFailed(
+            "cc-notify rc=%d verdict=%s; lr-page rc=%d" % (rc, verdict or "-", prc)
+        )
+
+
+def default_mail(pane: str, text: str) -> None:
+    rc, verdict = _cc_notify(pane, text)
+    if rc != 0:
+        raise PageFailed("cc-notify %s rc=%d verdict=%s" % (pane, rc, verdict or "-"))
 
 
 class Reporter:
@@ -429,14 +505,17 @@ class Reporter:
         now: Callable[[], float] = time.time,
     ) -> None:
         self.paths, self.mode, self.now = paths, mode, now
-        self._page: PageSink = page or (lambda text: _cc_notify("--page", text))
-        self._mail: MailSink = mail or (lambda pane, text: _cc_notify(pane, text))
+        self._page: PageSink = page or default_page
+        self._mail: MailSink = mail or default_mail
         self.failures = 0
         self._shadowed: List[str] = []
 
     # ── latches ────────────────────────────────────────────────────────────────────────────────
     def _latch_path(self, cid: str) -> str:
-        return os.path.join(self.paths.cohorts, (cid or "_") + ".pages.json")
+        # Keyed by mode (D6.4). observe keeps the historical name: every latch on disk today was
+        # written by the observe-mode daemon, so act must not read that file.
+        suffix = "" if self.mode == "observe" else "." + self.mode
+        return os.path.join(self.paths.cohorts, (cid or "_") + ".pages%s.json" % suffix)
 
     def _latch(self, cid: str) -> Dict[str, object]:
         try:
@@ -617,7 +696,7 @@ class Reporter:
                 " after %s" % r.last_error.cls.lower() if r.last_error else ""
             )
         st = _state(r)
-        return _SAY.get(st or "", "in phase %s" % r.phase.lower())
+        return say(r) or "in phase %s" % r.phase.lower()
 
     def mail_requester(self, cohort: T.Cohort, pane: str, text: str) -> bool:
         """§C11 Mail: one mail per cohort, only to a cc-lr requester pane."""
@@ -674,7 +753,7 @@ class Reporter:
         text = "%s: %s — %s for %s, past its maximum age — next: %s" % (
             self._head(cohort),
             who(rec),
-            _SAY.get(st, st),
+            say(rec) or st,
             _dur(now - since),
             next_action(rec),
         )

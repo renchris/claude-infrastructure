@@ -49,6 +49,10 @@ BUCKET_SUBSTATE = {
     "STAY": "WAIT_RESET",
     "IDLE-ELIGIBLE": "DETECTED",
 }
+# D4.4: a lead's live members hold it (HELD:team) over these too, and only this many consecutive
+# member-free passes release it.
+TEAM_ABSORBS = ("WAIT_SLOT", "WAIT_DATA", "WAIT_CAPACITY", "BACKOFF", "PLANNED")
+TEAM_EXIT_PASSES = 2
 # Holds the census cannot observe: re-probed through the actuator's own precheck.
 REPROBED = ("HOLD-DRAFT", "HOLD-MENU", "HOLD-COMPOSER")
 _REASON = re.compile(r"(?:PRECHECK |verdict: )(?:HELD|REFUSED):([A-Za-z:-]+)")
@@ -59,6 +63,8 @@ RCY_HELD_SUB = {
     "bgwork": "HOLD-BGWORK",
     "subagents": "HOLD-SUBAGENTS",
     "focused": "HOLD-FOCUS",
+    "team": "HELD:team",
+    "busy": "HOLD-COMPOSER",  # mid-turn: re-probed through the precheck
 }
 # handoff-fire's hf_recycle_hold line: held after the confirm, and whether the unconfirm undid it
 _RCY_HELD = re.compile(
@@ -233,17 +239,40 @@ def _hold(rec: T.Record, sub: str, now: float) -> None:
     )
 
 
-def rebucket(rec: T.Record, bucket_name: str, now: float) -> bool:
-    """Let the census rewrite a substate it owns while the record is idle in PRE-MOVE."""
-    if not rec.open or rec.phase != "PRE-MOVE" or rec.substate not in CENSUS_OWNED:
+def rebucket(
+    rec: T.Record, bucket_name: str, now: float, eta: Optional[float] = None
+) -> bool:  # eta: the bucket's reset, kept on WAIT_RESET and HELD:team (D1.11, D4.9)
+    """Let the census rewrite a substate it owns while the record is idle in PRE-MOVE.
+
+    HELD:team is sticky both ways (D4.4). Entering, it also takes over a waiting, backing-off or
+    PLANNED record: without that, a member-count flicker (1, 0, 1) left the lead WAIT_SLOT, then
+    PLANNED, then moved by A with its members still live. Leaving needs TEAM_EXIT_PASSES
+    consecutive member-free passes, so a finished team is still released but a one-pass read of 0
+    is ignored. A PLANNED record taken over drops its target; the caller voids the phantom."""
+    if not rec.open or rec.phase != "PRE-MOVE":
         return False
     new = BUCKET_SUBSTATE.get(bucket_name, bucket_name)
-    if new not in CENSUS_OWNED or new == rec.substate:
+    if new == "HELD:team":
+        rec.close.pop("team_zero", None)
+    elif rec.substate == "HELD:team":
+        n = int(rec.close.get("team_zero", 0)) + 1
+        rec.close["team_zero"] = n
+        if n < TEAM_EXIT_PASSES:
+            return False
+        rec.close.pop("team_zero", None)
+    owned = rec.substate in CENSUS_OWNED or (
+        new == "HELD:team" and rec.substate in TEAM_ABSORBS
+    )
+    if not owned or new not in CENSUS_OWNED or new == rec.substate:
         return False
+    if rec.substate == "PLANNED":
+        rec.target_acct = rec.target_cfg = ""
     if new == "DETECTED":
         rec.substate, rec.wait = new, None
     else:
         _hold(rec, new, now)
+        if new in ("HELD:team", "WAIT_RESET") and eta is not None and rec.wait is not None:
+            rec.wait.eta = eta  # the reset: the in-place wake and the page deadline key on it
     return True
 
 

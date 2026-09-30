@@ -21,6 +21,9 @@ PAGE_EVERY = (
     12  # at the 300 s cap, 12 attempts ~ one hour: "hourly after" with no clock field
 )
 REARM_S = 900.0  # an ESCALATED record re-arms after 15 minutes regardless of inputs
+# D1.10: a deterministic failure used to re-arm every 15 min forever, and the record kept owned/<sid>
+# so every other recovery path deferred to it. After this many automatic re-arms it is released.
+REARM_CAP = 4
 COUNTED = ("TRANSIENT", "DETERMINISTIC", "IMPOSSIBLE")  # WAIT and HOLD are not attempts
 
 _PATH = re.compile(r"(?:~|(?<![\w.~])/)[^\s:'\"()\[\],;]*[^\s:'\"()\[\],;.]")
@@ -127,6 +130,14 @@ def map_notmoved(reason: str, kind: str, pane_at_shell: bool = True) -> Tuple[st
         return ("NOT_NEEDED", "") if kind == "limited" else ("WAIT", "WAIT_DATA")
     if r == "teammate":
         return ("NOT_NEEDED", "")  # the lead owns it
+    if r == "team":
+        return ("HOLD", "HELD:team")  # a lead with live members (D4.4), never DETERMINISTIC
+    # D7.1: lr-handoff's `verdict: HELD:<reason>` after an ABORTED admit (exit 6, NOTMOVED, the
+    # source restored). Each is a hold to re-probe, never a DETERMINISTIC candidate that escalates.
+    if r == "focused":
+        return ("HOLD", "HOLD-FOCUS")
+    if r in ("busy", "unknown"):
+        return ("HOLD", "HOLD-COMPOSER")
     if r == "draft":
         return ("HOLD", "HOLD-DRAFT")
     if r == "bg-work":

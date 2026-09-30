@@ -171,9 +171,14 @@ class Admission:
         return shlex.quote(os.path.join(self.repo, LIB_REL))
 
     def probe(self, restore_r: int) -> Tuple[bool, str]:
-        """rc 0 admit, rc 9 refuse ("memory"); anything else is not an admission ("probe-error")."""
+        """rc 0 admit, rc 9 refuse ("capacity"); anything else is not an admission ("probe-error").
+
+        The load term is OFF, as lr-lib.sh's probe runs it: the CPU brake (gate 2) is this module's
+        load gate. With it on, all 89 of the probe's IDL rows refused on load, and rc 9 was
+        reported as "memory" (D1.12). rc 9 now means a memory, segment or active-count term."""
         cmd = (
-            "source %s; CC_ADMIT_RESTORE_R=%d cc_capacity_probe lr-reconciler first-turn"
+            "source %s; CC_ADMIT_LOAD_TERM=off CC_ADMIT_RESTORE_R=%d "
+            "cc_capacity_probe lr-reconciler first-turn"
             % (
                 self._lib(),
                 int(restore_r),
@@ -182,7 +187,7 @@ class Admission:
         rc, _ = self.runner(["bash", "-c", cmd])
         if rc == 0:
             return True, "admit"
-        return False, "memory" if rc == 9 else "probe-error"
+        return False, "capacity" if rc == 9 else "probe-error"
 
     def library_probe(self, restore_r: int) -> bool:
         return self.probe(restore_r)[0]
@@ -212,7 +217,7 @@ class Admission:
         cohort: str = "",
     ) -> Tuple[bool, str]:
         """Apply R, the brake, the pacer, then the probe. The reason names the first gate that refused
-        ("restore-r", "cpu", "pacer:<acct>", "memory", "probe-error", "drip"); "admit" or "admit:drip"
+        ("restore-r", "cpu", "pacer:<acct>", "capacity", "probe-error", "drip"); "admit" or "admit:drip"
         otherwise. An admission takes a pacer slot and resets the cohort's refusal run.
 
         load5 is accepted for the caller's symmetry with ``enter_active``; the brake reads load1 only,
