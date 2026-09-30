@@ -1,0 +1,1057 @@
+#!/usr/bin/env python3
+"""dl — the store of real-world deadlines.
+
+One JSON file per item under $DL_DIR/items, an append-only log.jsonl, and a
+statutory seed (recurring.json). The contract is SCHEMA.md beside the store;
+the phone reconciler (dl-sync) reads the same files. This CLI owns admission,
+kinds, recurrence, typed falsifiers and the agent/terminal renders.
+
+Only real deadlines get in: an external clock, a stated loss, and an act in the
+world. Agent chores are refused at the door (exit 3), and nothing is ever
+evicted by size — a full lane needs --replaces.
+
+Test seams: DL_DIR (store), DL_TODAY (YYYY-MM-DD), DL_MAIL_FIXTURE (JSON
+{"sent": [...], "inbox": [...]} instead of Graph), DL_CHAT_DB (chat.db path),
+DL_TRANSCRIPT_ROOTS (colon list for harvest), DL_RULES_FILE.
+"""
+import argparse, datetime as dt, json, os, re, sqlite3, subprocess, sys, time
+import urllib.request
+from pathlib import Path
+
+DL_DIR = Path(os.environ.get("DL_DIR") or os.path.expanduser("~/Development/personal/deadlines"))
+ITEMS, LOG, STATE = DL_DIR / "items", DL_DIR / "log.jsonl", DL_DIR / ".state"
+RULES_FILE = Path(os.environ.get("DL_RULES_FILE") or DL_DIR.parent / ".claude/rules/01-deadlines.md")
+EXIT_REFUSED = 3
+
+KINDS = ("hard", "window", "soft", "decay", "appointment", "someday")
+DATED = ("hard", "window", "soft", "appointment")
+CLASSES = ("money", "coverage", "legal", "tax", "employment", "customer",
+           "relationship", "credential", "health")
+FLOORS = {"tax": 21, "legal": 14, "coverage": 14, "money": 7, "employment": 3, "customer": 3,
+          "relationship": 3, "credential": 3, "health": 7}
+DOMAINS = ("kpmg", "taxes", "health", "money", "housing", "customer", "admin", "people", "subs", "vehicle")
+OWNERS = ("operator", "both", "third-party")
+STATES = ("open", "done", "done-unverified", "dropped", "missed", "expired", "someday", "void")
+CAPS = {"soft": 20, "decay": 15, "someday": 25}
+VERBS = ("call", "send", "reply", "pay", "file", "sign", "book", "return", "cancel", "decide",
+         "visit", "confirm", "register", "check", "submit", "claim")
+CHORE = re.compile(r"\b(commit|land|lint|refactor|test|hook|migration|deploy|backlog|memory)"
+                   r"(s|ed|ing)?\b(?<!\btest)|\btest(s|ed|ing)?\b(?!\s+(results?|drive)\b)", re.I)
+CHORE_PR = re.compile(r"\bPRs?\b")  # case-sensitive: "pr" inside prose is not a pull request
+STRICT = ("tax", "legal", "coverage")
+NOT_NAMES = set("The A An And But If It Its This That These Those He She They We You I His Her Their "
+                "Our Your My No Not Late Every Each Any Some All When Once Then Otherwise".split())
+DECAY_CADENCE = (3, 7, 14, 28)
+LIVE = ("open", "done-unverified")
+DEFAULT_AUTHORITIES = ("irs.gov", "treasury.gov", "fincen.gov", "cra-arc.gc.ca", "canada.ca",
+                       "txdmv.gov", "texas.gov", "ftb.ca.gov", "ssa.gov", "votetexas.gov")
+CHROME_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+             "(KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36")
+MONTHS = {m: i for i, m in enumerate(
+    ("jan feb mar apr may jun jul aug sep oct nov dec").split(), 1)}
+
+
+class Refused(Exception):
+    """An admission or verb refusal: printed, exit 3."""
+
+
+# ------------------------------------------------------------------ primitives
+
+def today() -> dt.date:
+    t = os.environ.get("DL_TODAY")
+    return dt.date.fromisoformat(t) if t else dt.date.today()
+
+
+def d(s):
+    return dt.date.fromisoformat(s) if s else None
+
+
+def now_iso() -> str:
+    return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def atomic_write(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(text)
+    tmp.replace(path)  # atomic: four accounts' sessions must never read half a file
+
+
+class Lock:
+    """mkdir lock, 30 s stale (SCHEMA .state/lock/). Serializes the 4 accounts."""
+    def __enter__(self):
+        p = STATE / "lock"
+        STATE.mkdir(parents=True, exist_ok=True)
+        deadline = time.time() + 35
+        while True:
+            try:
+                p.mkdir()
+                return self
+            except FileExistsError:
+                try:
+                    if time.time() - p.stat().st_mtime > 30:
+                        os.rmdir(p)
+                        continue
+                except OSError:
+                    continue
+                if time.time() > deadline:
+                    raise Refused("store lock held >35 s: .state/lock")
+                time.sleep(0.1)
+
+    def __exit__(self, *a):
+        try:
+            os.rmdir(STATE / "lock")
+        except OSError:
+            pass
+
+
+def log(event: str, iid, data=None, actor="dl") -> None:
+    rec = {"ts": now_iso(), "event": event, "id": iid,
+           "session_id": os.environ.get("CLAUDE_CODE_SESSION_ID") or None,
+           "actor": actor, "data": data or {}}
+    DL_DIR.mkdir(parents=True, exist_ok=True)
+    with open(LOG, "a") as f:
+        f.write(json.dumps(rec) + "\n")
+
+
+def read_log():
+    if not LOG.exists():
+        return []
+    out = []
+    for line in LOG.read_text().splitlines():
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            continue
+    return out
+
+
+def load_items() -> list:
+    if not ITEMS.is_dir():
+        return []
+    out = []
+    for f in sorted(ITEMS.glob("*.json")):
+        try:
+            out.append(json.loads(f.read_text()))
+        except (OSError, ValueError):
+            continue  # a malformed item must never take the store down; doctor reports it
+    return out
+
+
+def get(iid: str) -> dict:
+    f = ITEMS / f"{iid}.json"
+    if not f.exists():
+        raise Refused(f"no such item: {iid}")
+    return json.loads(f.read_text())
+
+
+def save(item: dict) -> None:
+    item["updated"] = now_iso()
+    atomic_write(ITEMS / f"{item['id']}.json", json.dumps(item, indent=2) + "\n")
+
+
+def load_seed() -> dict:
+    f = DL_DIR / "recurring.json"
+    try:
+        return {e["id"]: e for e in json.loads(f.read_text()).get("entries", [])}
+    except (OSError, ValueError, KeyError):
+        return {}
+
+
+def slug(s: str, n=4) -> str:
+    words = re.findall(r"[a-z0-9]+", s.lower())
+    return "-".join(words[:n]) or "item"
+
+
+def unique_id(base: str) -> str:
+    iid, k = base, 2
+    while (ITEMS / f"{iid}.json").exists():
+        iid, k = f"{base}-{k}", k + 1
+    return iid
+
+
+def resurface_for(kind, lost, cls, effort=0):
+    if not lost:
+        return None
+    lead = max(int(effort or 0) + 2, FLOORS.get(cls, 0))
+    return (d(lost) - dt.timedelta(days=lead)).isoformat()
+
+
+def due_of(it):
+    """The date that governs ordering: lost for dated kinds, None otherwise."""
+    return d(it.get("lost")) if it.get("kind") in DATED else None
+
+
+def waiting_days(it, on=None):
+    s = d(it.get("since"))
+    return ((on or today()) - s).days if s else None
+
+
+def decay_alarm(it, on=None) -> bool:
+    """Cadence 3, 7, 14, 28 days after since, then every 28 (DESIGN §4.2)."""
+    n = waiting_days(it, on)
+    if n is None or n <= 0:
+        return False
+    return n in DECAY_CADENCE or (n > 28 and n % 28 == 0)
+
+
+# ------------------------------------------------------------------- admission
+
+def admit(item: dict, phone=False, replaces=None, items=None) -> None:
+    """DESIGN §2.3. Raises Refused with the reason; phone-sourced items skip checks 1-3."""
+    kind, c = item["kind"], item.get("consequence") or {}
+    if item.get("owner") == "agent":
+        raise Refused("owner=agent refused: do it now, or `cc-backlog add`")
+    if item.get("owner") not in OWNERS:
+        raise Refused(f"owner must be one of {OWNERS}")
+    if kind not in KINDS:
+        raise Refused(f"kind must be one of {KINDS}")
+    if item.get("domain") not in DOMAINS:
+        raise Refused(f"domain must be one of {DOMAINS}")
+    if not re.fullmatch(r"[a-z0-9.-]+", item["id"]):
+        raise Refused(f"id must match [a-z0-9.-]+: {item['id']}")
+    if len(item["title"]) > 90:
+        raise Refused(f"title is {len(item['title'])} chars; the limit is 90")
+    if kind in DATED and not item.get("lost"):
+        raise Refused(f"kind {kind} requires --lost")
+    if kind in ("decay", "someday") and item.get("lost"):
+        raise Refused(f"kind {kind} forbids a lost date (no invented dates)")
+    if kind == "decay" and not item.get("since"):
+        raise Refused("kind decay requires --since (the date the clock started)")
+    if not item.get("source"):
+        raise Refused("at least one --source is required")
+    # 4. not a chore — checked for every source, phone included
+    if CHORE.search(item["title"]) or CHORE_PR.search(item["title"]):
+        raise Refused(f"chore refused (title matches the chore list): {item['title']!r}")
+    repo_src = [s for s in item["source"] if re.search(r"/Development/(?!personal\b)[^/:]+/", s)]
+    person_src = [s for s in item["source"] if re.match(r"(graph|msg|cc-mission):", s)]
+    if repo_src and not person_src:
+        raise Refused(f"source is inside a code repo and is not a message to a person: {repo_src[0]}")
+    if not phone:
+        # 1. external clock: the kind's own clock must be stated
+        if kind == "someday" and not item.get("activate_when") and not item.get("resurface"):
+            raise Refused("someday needs --activate-when or --resurface (an undated deferral needs a date)")
+        # 2. real stake
+        if c.get("class") not in CLASSES:
+            raise Refused(f"consequence class must be one of {CLASSES}")
+        text = c.get("text") or ""
+        names = [w for w in re.findall(r"\b[A-Z][A-Za-z]+", text) if w not in NOT_NAMES]
+        if not (re.search(r"\d", text) or names):
+            raise Refused("consequence text needs a number or a named person")
+        if c["class"] == "money" and (c.get("usd") is None or c["usd"] < 25):
+            raise Refused("money items need usd >= 25")
+        # 3. an act in the world
+        first = re.split(r"\W+", item["title"].strip(), 1)[0].lower()
+        if first not in VERBS:
+            raise Refused(f"title must start with one of: {', '.join(VERBS)} (got {first!r})")
+    cap = CAPS.get(kind)
+    if cap is not None:
+        items = items if items is not None else load_items()
+        live = [i for i in items if i.get("kind") == kind and i.get("state") in ("open", "someday")]
+        if len(live) >= cap:
+            if not replaces:
+                raise Refused(f"{kind} is at its cap ({len(live)}/{cap}); pass --replaces <id>")
+            r = next((i for i in live if i["id"] == replaces), None)
+            if not r:
+                raise Refused(f"--replaces {replaces}: not a live {kind} item")
+
+
+# ----------------------------------------------------------------------- probes
+
+def _mail(folder: str, kql: str) -> list:
+    fx = os.environ.get("DL_MAIL_FIXTURE")
+    if fx:
+        rows = json.loads(Path(fx).read_text()).get(folder, [])
+        return [r for r in rows if kql.lower().strip('"') in json.dumps(r).lower()]
+    os.environ.setdefault("MS365_MCP_TENANT_ID", "consumers")
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts/lib"))
+    from ms365_stdio import MS365  # noqa: E402
+    q = {"search": f'"{kql}"', "top": 10, "select": "id,subject,isDraft,sentDateTime,receivedDateTime"}
+    with MS365(timeout=60) as m:
+        if folder == "sent":
+            res = m.call("list-mail-folder-messages", dict(q, mailFolderId="sentitems"))
+        else:
+            res = m.call("list-mail-messages", q)
+    return res.get("value") or []
+
+
+def probe(spec: str):
+    """Run a typed probe. Returns (verdict, detail): True pass, False fail, None unknown."""
+    if not spec:
+        return None, "no probe"
+    kind, _, arg = spec.partition(":")
+    try:
+        if spec == "manual":
+            return None, "manual: no automatic check"
+        if spec.startswith("date>="):
+            return today() >= d(spec[6:]), f"today {today()} vs {spec[6:]}"
+        if kind == "mail-sent":
+            rows = _mail("sent", arg)
+            sent = [r for r in rows if r.get("isDraft") is False]
+            return bool(sent), f"{len(sent)} sent (isDraft:false) of {len(rows)} matched"
+        if kind == "mail-recv":
+            rows = [r for r in _mail("inbox", arg) if r.get("isDraft") is not True]
+            return bool(rows), f"{len(rows)} received"
+        if kind == "msg-sent":
+            digits, _, since = arg.partition(":")
+            if not digits.isdigit():
+                return None, "msg-sent needs <digits>:<YYYY-MM-DD>"
+            db = os.environ.get("DL_CHAT_DB") or os.path.expanduser("~/Library/Messages/chat.db")
+            conn = sqlite3.connect(":memory:", uri=True)  # uri=True: ATTACH of a file: URI needs it
+            conn.execute(f"ATTACH DATABASE 'file:{db}?mode=ro' AS live")
+            epoch = dt.datetime.combine(d(since) if since else dt.date(2001, 1, 1),
+                                        dt.time()).timestamp() - 978307200
+            n = conn.execute(
+                "SELECT count(*) FROM live.message m JOIN live.handle h ON m.handle_id = h.ROWID "
+                "WHERE m.is_from_me = 1 AND h.id LIKE ? AND m.date / 1000000000.0 >= ?",
+                (f"%{digits}%", epoch)).fetchone()[0]
+            return n > 0, f"{n} sent to *{digits} since {since or 'ever'}"
+        if kind == "file":
+            p = Path(os.path.expanduser(arg))
+            return p.exists(), str(p)
+        if kind == "url":
+            url, _, rx = arg.rpartition("|")
+            url = url or arg
+            req = urllib.request.Request(url, headers={"User-Agent": CHROME_UA})
+            body = urllib.request.urlopen(req, timeout=20).read().decode("utf-8", "replace")
+            return bool(re.search(rx, body)), f"/{rx}/ on {url}"
+    except Exception as e:  # an unreachable channel is unknown, never a verdict
+        return None, f"{type(e).__name__}: {e}"
+    return None, f"unknown probe type: {spec}"
+
+
+# ------------------------------------------------------------------ transitions
+
+def needs_proof(it) -> bool:
+    c = it.get("consequence") or {}
+    strict = it["kind"] in ("hard", "window") and (
+        c.get("class") in STRICT or (c.get("class") == "money" and (c.get("usd") or 0) >= 500))
+    return strict or (it["kind"] == "hard" and not it.get("falsifier"))
+
+
+def next_lost(rule: str, after: dt.date):
+    m = re.fullmatch(r"annual (\d\d)-(\d\d)", rule or "")
+    if m:
+        mo, dy = int(m[1]), int(m[2])
+        y = after.year
+        while dt.date(y, mo, dy) <= after:
+            y += 1
+        return dt.date(y, mo, dy)
+    m = re.fullmatch(r"annual (\d)(?:st|nd|rd|th)-(mon|tue|wed|thu|fri|sat|sun)-(\d\d)", rule or "")
+    if m:
+        n, wd, mo = int(m[1]), "mon tue wed thu fri sat sun".split().index(m[2]), int(m[3])
+        for y in (after.year, after.year + 1):
+            first = dt.date(y, mo, 1)
+            cand = first + dt.timedelta(days=(wd - first.weekday()) % 7 + 7 * (n - 1))
+            if cand > after:
+                return cand
+    m = re.fullmatch(r"every (\d+)d", rule or "")
+    if m:
+        return after + dt.timedelta(days=int(m[1]))
+    if rule == "fy-end":
+        y = after.year if after < dt.date(after.year, 9, 30) else after.year + 1
+        return dt.date(y, 9, 30)
+    return None
+
+
+def spawn_next(it: dict):
+    """Closing a recurring item creates the next instance (idempotent by id)."""
+    rec = it.get("recur")
+    if not rec:
+        return None
+    m = re.search(r"-(\d{4})$", it["id"])
+    stem = it["id"][:m.start()] if m else it["id"]
+    seed = load_seed().get(stem) or {}
+    rule = seed.get("rule") or rec.get("rule")
+    base = d(it.get("lost")) or today()
+    nl = next_lost(rule, base)
+    if not nl:
+        log("recur-next", it["id"], {"error": f"unsupported rule {rule!r}; no next instance"})
+        return None
+    if m:
+        year = int(m[1])
+        nid = f"{stem}-{year + 1}"
+        title = re.sub(rf"\b{year}\b", str(year + 1), it["title"])
+    else:
+        nid, title = f"{stem}-{nl.year}", it["title"]
+    if (ITEMS / f"{nid}.json").exists():
+        return nid
+    nxt = json.loads(json.dumps(it))
+    kind = rec.get("next_kind") or it["kind"]
+    nxt.update(id=nid, title=title, kind=kind, lost=nl.isoformat(), state="open",
+               ext={"reminder_id": None, "event_id": None, "channel": None},
+               created=now_iso(), source=list(it["source"]) + [f"recur:{it['id']}"])
+    nxt["resurface"] = resurface_for(kind, nxt["lost"], (it.get("consequence") or {}).get("class"))
+    nxt["recur"] = dict(rec, rule=rule, verified_at=seed.get("verified_at", rec.get("verified_at")),
+                        verify_url=seed.get("verify_url", rec.get("verify_url")))
+    save(nxt)
+    log("recur-next", nid, {"from": it["id"], "lost": nxt["lost"], "rule": rule})
+    return nid
+
+
+def close(it: dict, evidence: str, confirmed=False) -> str:
+    verdict, detail = probe(it.get("falsifier")) if it.get("falsifier") else (None, "no falsifier")
+    if needs_proof(it) and verdict is not True and not confirmed:
+        state = "done-unverified"
+    else:
+        state = "done"
+    it["state"] = state
+    it.setdefault("evidence", []).append({"ts": now_iso(), "text": evidence, "probe": detail})
+    save(it)
+    log(state, it["id"], {"evidence": evidence, "probe": detail})
+    nid = spawn_next(it)
+    return f"{it['id']} -> {state} ({detail})" + (f"; next instance {nid}" if nid else "")
+
+
+# ----------------------------------------------------------------------- render
+
+def fmt_line(it, t) -> str:
+    if it["kind"] == "decay":
+        return f"{it['title']} — {waiting_days(it, t)} days waiting"
+    lost = d(it["lost"])
+    delta = (lost - t).days
+    when = (f"{-delta}d over" if delta < 0 else "today" if delta == 0 else "tomorrow" if delta == 1
+            else lost.strftime("%a %b %-d"))
+    return f"{it['title']} — {when}"
+
+
+def ranked(items, t, horizon):
+    """Overdue dated items, then decay waiting, then dated items due within horizon."""
+    live = [i for i in items if i.get("state") in LIVE and i.get("kind") != "someday"]
+    over = sorted([i for i in live if due_of(i) and due_of(i) < t], key=lambda i: i["lost"])
+    decay = sorted([i for i in live if i["kind"] == "decay"], key=lambda i: i["since"])
+    soon = sorted([i for i in live if due_of(i) and t <= due_of(i) <= t + dt.timedelta(days=horizon)],
+                  key=lambda i: i["lost"])
+    return over, decay, soon
+
+
+HEADER_RULE = ("If the operator's topic shares a domain with a line below, name that line in your "
+               "first sentence. When you hand him a real-world date he must act on, `dl add` it in "
+               "the same turn.")
+
+
+def personal_worktrees():
+    root = DL_DIR.parent
+    try:
+        out = subprocess.run(["git", "-C", str(root), "worktree", "list", "--porcelain"],
+                             capture_output=True, text=True, timeout=5).stdout
+    except Exception:
+        return []
+    return [Path(l[9:]) for l in out.splitlines() if l.startswith("worktree ")]
+
+
+def render_rules(items, t) -> str:
+    over, decay, soon = ranked(items, t, 7)
+    lines = [f"- [{i['domain']}] {fmt_line(i, t)}" for i in over + decay + soon]
+    more = max(0, len(lines) - 7)
+    health = doctor_checks(items)[1]
+    head = [f"# Deadlines ({t.isoformat()}, `dl list` for all{f'; {more} more not shown' if more else ''})",
+            "", HEADER_RULE] + ([f"⚠ dl health: {'; '.join(health)}"] if health else []) + [""]
+    return "\n".join(head + (lines[:7] or ["- nothing overdue or due within 7 days"])) + "\n"
+
+
+def render_banner(items, t):
+    live = [i for i in items if i.get("state") in LIVE and i.get("kind") in DATED]
+    hot = sorted([i for i in live if due_of(i) <= t + dt.timedelta(days=3)], key=lambda i: i["lost"])
+    hot += [i for i in items if i.get("state") in LIVE and i.get("kind") == "decay" and decay_alarm(i, t)]
+    health = doctor_checks(items)[1]
+    if not hot and not health:
+        return None
+    parts = [fmt_line(i, t) for i in hot[:3]]
+    text = "⏰ " + " · ".join(parts) if parts else "⏰ nothing due ≤72h"
+    if len(hot) > 3:
+        text += f" — {len(hot) - 3} more on your phone"
+    if health:
+        text += f"\n⚠ dl health: {health[0]}"
+    return text + "\n"
+
+
+def cmd_render(a):
+    items, t = load_items(), today()
+    body = render_rules(items, t)
+    targets = [RULES_FILE] + [w / ".claude/rules/01-deadlines.md" for w in personal_worktrees()
+                              if not os.environ.get("DL_RULES_FILE")]
+    for p in dict.fromkeys(targets):
+        if not p.exists() or p.read_text() != body:  # day stamp: no re-inject on every render
+            atomic_write(p, body)
+    banner = render_banner(items, t)
+    bp = STATE / "banner.txt"
+    if banner:
+        atomic_write(bp, banner)
+    elif bp.exists():
+        bp.unlink()  # absent banner => the accounts board prints byte-identical output
+    print(f"rendered {RULES_FILE} ({len(body.splitlines())} lines); banner "
+          f"{'written' if banner else 'absent'}")
+
+
+def cmd_brief(a):
+    items, t = load_items(), today()
+    over, decay, soon = ranked(items, t, 7)
+    print(f"dl: {len(over)} overdue · {len(decay)} waiting · {len(soon)} due ≤7d · "
+          f"{sum(i.get('state') == 'done-unverified' for i in items)} done-unverified")
+    for i in (over + decay + soon)[: a.n]:
+        print(f"  {fmt_line(i, t)}  [{i['id']}]")
+
+
+# ----------------------------------------------------------------------- doctor
+
+def doctor_checks(items):
+    """Returns (report lines, red lines)."""
+    rep, red, t = [], [], today()
+    lo = STATE / "last_ok"
+    if lo.exists():
+        try:
+            age = (dt.datetime.now(dt.timezone.utc) -
+                   dt.datetime.fromisoformat(lo.read_text().strip().replace("Z", "+00:00"))).total_seconds() / 3600
+            (red if age > 12 else rep).append(f"phone sync last_ok {age:.1f}h ago")
+        except ValueError:
+            red.append("last_ok unreadable")
+    else:
+        rep.append("phone sync: never (dl-sync not live)")
+    for k, cap in CAPS.items():
+        n = sum(i.get("kind") == k and i.get("state") in ("open", "someday") for i in items)
+        (red if n > cap else rep).append(f"{k} {n}/{cap}")
+    stale = [i for i in items if i.get("state") == "done-unverified" and
+             (t - d(i["updated"][:10])).days > 14]
+    (red if len(stale) > 3 else rep).append(f"done-unverified >14d: {len(stale)}")
+    for e in load_seed().values():
+        v = e.get("verified_at")
+        if e.get("verify") == "pending":
+            rep.append(f"seed {e['id']}: verify pending")
+        elif v and (t - d(v)).days > 330:
+            red.append(f"re-verify seed {e['id']} (verified {v})")
+    bad = []
+    for f in (sorted(ITEMS.glob("*.json")) if ITEMS.is_dir() else []):
+        try:
+            it = json.loads(f.read_text())
+            assert it["kind"] in KINDS and it["state"] in STATES and it["id"] == f.stem
+            assert (it["kind"] in DATED) == bool(it.get("lost")) or it["kind"] == "someday"
+        except Exception:
+            bad.append(f.name)
+    if bad:
+        red.append(f"malformed items: {', '.join(bad[:3])}")
+    ss = STATE / "sweep-status"
+    if ss.exists() and "fail" in ss.read_text().lower():
+        rep.append(f"sweep: {ss.read_text().strip()[:80]}")
+    return rep, red
+
+
+def cmd_doctor(a):
+    rep, red = doctor_checks(load_items())
+    for l in rep:
+        print(f"ok   {l}")
+    for l in red:
+        print(f"RED  {l}")
+    print(f"verdict={'red' if red else 'green'}")
+    return 1 if red else 0
+
+
+# ----------------------------------------------------------------------- digest
+
+def cmd_digest(a):
+    items, t = load_items(), today()
+    wk = t - dt.timedelta(days=7)
+    ev = [e for e in read_log() if e.get("ts", "")[:10] >= wk.isoformat()]
+    archived = archive_proposals(t)
+    props = [json.loads(l) for l in (DL_DIR / "proposals.jsonl").read_text().splitlines()
+             if l.strip()] if (DL_DIR / "proposals.jsonl").exists() else []
+    nxt = sorted([i for i in items if i.get("state") in LIVE and due_of(i) and
+                  due_of(i) <= t + dt.timedelta(days=14)], key=lambda i: i["lost"])
+    out = [f"# Deadlines digest — week of {t.isoformat()}", "", "## Next 14 days"]
+    out += [f"- {fmt_line(i, t)}" for i in nxt] or ["- nothing"]
+    out += ["", "## People waiting"]
+    out += [f"- {fmt_line(i, t)}" for i in items if i.get("state") in LIVE and i["kind"] == "decay"] or ["- nobody"]
+    out += ["", "## Done but unverified (was it filed?)"]
+    out += [f"- {i['title']}" for i in items if i.get("state") == "done-unverified"] or ["- none"]
+    out += ["", "## Missed or expired this week"]
+    out += [f"- {e['id']} ({e['event']})" for e in ev if e["event"] in ("miss", "expire")] or ["- none"]
+    out += ["", "## Top proposals"]
+    out += [f"- {p.get('title') or p.get('snippet', '')[:90]}" for p in props[:5]] or ["- none"]
+    leak = sum(e["event"] == "proposal" and (e.get("data") or {}).get("source") == "harvest" for e in ev)
+    rep, red = doctor_checks(items)
+    out += ["", f"Dropped unreviewed this run: {archived} · capture leak this week: {leak} · "
+            f"health: {'RED — ' + '; '.join(red) if red else 'green'}"]
+    atomic_write(DL_DIR / "DIGEST.md", "\n".join(out) + "\n")
+    print("\n".join(out))
+
+
+def archive_proposals(t) -> int:
+    p = DL_DIR / "proposals.jsonl"
+    if not p.exists():
+        return 0
+    keep, gone = [], []
+    for l in p.read_text().splitlines():
+        if not l.strip():
+            continue
+        r = json.loads(l)
+        (gone if (t - d(r.get("ts", t.isoformat())[:10])).days > 21 else keep).append(l)
+    if gone:
+        with open(DL_DIR / "proposals-archive.jsonl", "a") as f:
+            f.write("\n".join(gone) + "\n")
+        atomic_write(p, "\n".join(keep) + ("\n" if keep else ""))
+    return len(gone)
+
+
+def propose(rec: dict) -> None:
+    rec.setdefault("ts", now_iso())
+    with open(DL_DIR / "proposals.jsonl", "a") as f:
+        f.write(json.dumps(rec) + "\n")
+    log("proposal", None, {k: rec.get(k) for k in ("source", "title", "snippet", "session_id")})
+
+
+# ------------------------------------------------------------------------ verbs
+
+def build_item(a) -> dict:
+    kind = a.kind
+    cls = a.cls
+    item = {
+        "id": a.id or "", "title": a.title.strip(), "kind": kind, "lost": a.lost,
+        "since": a.since if kind == "decay" else None, "resurface": None,
+        "consequence": {"class": cls, "usd": a.usd, "text": a.text or ""},
+        "owner": a.owner, "domain": a.domain,
+        "source": (a.source or []) + (["phone"] if a.phone else []),
+        "falsifier": a.falsifier, "void_if": a.void_if, "activate_when": a.activate_when,
+        "recur": ({"rule": a.recur, "next_kind": kind, "verified_at": None, "verify_url": None}
+                  if a.recur else None),
+        "bundle": a.bundle, "state": "someday" if kind == "someday" else "open",
+        "ext": {"reminder_id": None, "event_id": None, "channel": None},
+        "created": now_iso(), "updated": now_iso(),
+    }
+    item["resurface"] = a.resurface or resurface_for(kind, a.lost, cls, a.effort)
+    if kind == "decay" and not a.resurface and a.since:
+        item["resurface"] = (d(a.since) + dt.timedelta(days=3)).isoformat()
+    if not item["id"]:
+        item["id"] = unique_id(f"{a.domain or 'admin'}.{slug(item['title'])}")
+    return item
+
+
+def cmd_add(a):
+    with Lock():
+        item = build_item(a)
+        if (ITEMS / f"{item['id']}.json").exists():
+            raise Refused(f"id exists: {item['id']}")
+        for p in ("lost", "since", "resurface"):
+            if item.get(p):
+                d(item[p])  # ValueError on a malformed date
+        admit(item, phone=a.phone, replaces=a.replaces)
+        if a.replaces:
+            r = get(a.replaces)
+            r["state"] = "dropped"
+            save(r)
+            log("drop", r["id"], {"why": f"replaced by {item['id']}"})
+        save(item)
+        log("add", item["id"], {"title": item["title"], "kind": item["kind"]})
+    print(f"added: {item['title']} (lost {item['lost'] or '—'}, resurface {item['resurface'] or '—'})"
+          f" [{item['id']}]")
+
+
+def cmd_skip(a):
+    log("skip", a.id, {"why": a.why, "snippet": a.snippet})
+    print("skip logged")
+
+
+def cmd_park(a):
+    d(a.resurface)
+    with Lock():
+        if a.id:
+            it = get(a.id)
+            it["resurface"] = a.resurface
+            save(it)
+        log("park", a.id, {"snippet": a.snippet, "resurface": a.resurface})
+    print(f"parked until {a.resurface}")
+
+
+def cmd_done(a):
+    if not (a.evidence or "").strip():
+        raise Refused("done needs --evidence \"…\"; a bare assertion is refused")
+    with Lock():
+        print(close(get(a.id), a.evidence, a.confirmed))
+
+
+def _retire(a, state, event):
+    if not (a.why or "").strip():
+        raise Refused(f"{event} needs --why")
+    with Lock():
+        it = get(a.id)
+        it["state"] = state
+        save(it)
+        log(event, it["id"], {"why": a.why})
+    print(f"{it['id']} -> {state}")
+
+
+def cmd_list(a):
+    items, t = load_items(), today()
+    if not a.all:
+        items = [i for i in items if i.get("state") in LIVE + ("someday",)]
+    if a.kind:
+        items = [i for i in items if i["kind"] == a.kind]
+    items.sort(key=lambda i: (i.get("lost") or i.get("since") or "9999", i["id"]))
+    if a.json:
+        print(json.dumps([dict(i, waiting_days=waiting_days(i, t), alarm_today=(
+            decay_alarm(i, t) if i["kind"] == "decay" else i.get("resurface") == t.isoformat()))
+            for i in items], indent=2))
+        return
+    for i in items:
+        when = i.get("lost") or (f"since {i['since']}" if i.get("since") else "someday")
+        extra = f"  {waiting_days(i, t)}d waiting" if i["kind"] == "decay" else ""
+        print(f"{when:>16}  {i['kind']:<11} {i['state']:<15} {i['title']}{extra}  [{i['id']}]")
+
+
+def cmd_show(a):
+    print(json.dumps(get(a.id), indent=2))
+
+
+def cmd_probe(a):
+    if a.id or a.all:
+        with Lock():
+            items = [get(a.id)] if a.id else [i for i in load_items() if i.get("state") in LIVE + ("someday",)]
+            for it in items:
+                apply_probes(it)
+        return 0
+    v, detail = probe(a.spec)
+    print(f"{'PASS' if v else 'FAIL' if v is False else 'UNKNOWN'} {a.spec} — {detail}")
+    return 0 if v else 1 if v is False else 2
+
+
+def apply_probes(it):
+    for field, want in (("void_if", LIVE + ("someday",)), ("activate_when", ("someday",)),
+                        ("falsifier", ("done-unverified", "open"))):
+        spec = it.get(field)
+        if not spec or it["state"] not in want:
+            continue
+        v, detail = probe(spec)
+        log("probe", it["id"], {"field": field, "probe": spec, "verdict": v, "detail": detail})
+        print(f"{it['id']} {field}: {'PASS' if v else 'FAIL' if v is False else 'UNKNOWN'} — {detail}")
+        if v is not True:
+            continue
+        if field == "void_if":
+            it["state"] = "void"
+            save(it)
+            log("void", it["id"], {"why": f"void_if passed: {detail}"})
+            return
+        if field == "activate_when":
+            it["state"] = "open"
+            save(it)
+            log("activate", it["id"], {"detail": detail})
+        elif field == "falsifier" and spec.split(":")[0] in ("mail-sent", "mail-recv", "msg-sent"):
+            it["state"] = "done"  # strong probes auto-close and attach their output (§5.1)
+            it.setdefault("evidence", []).append({"ts": now_iso(), "text": "falsifier", "probe": detail})
+            save(it)
+            log("done", it["id"], {"evidence": detail})
+            spawn_next(it)
+
+
+# ------------------------------------------------------------ sweep admission
+
+def authorities():
+    extra = []
+    try:
+        extra = json.loads((DL_DIR / "authorities.json").read_text()).get("domains", [])
+    except (OSError, ValueError):
+        pass
+    return tuple(DEFAULT_AUTHORITIES) + tuple(extra)
+
+
+def sweep_admit(c: dict):
+    """DESIGN §3 C5: auto-admit only an authority sender AND dmarc=pass AND the date verbatim
+    in the body AND §2.3. Everything else is a soft proposal that never reaches the phone.
+    The candidate text is data: nothing in it can change this decision."""
+    dom = (c.get("sender") or "").rpartition("@")[2].lower()
+    auth = any(dom == x or dom.endswith("." + x) for x in authorities())
+    dmarc = bool(re.search(r"\bdmarc=pass\b", c.get("auth_results") or "", re.I))
+    verbatim = bool(c.get("date_text")) and c["date_text"] in (c.get("body") or "")
+    why = [w for ok, w in ((auth, "sender not an authority"), (dmarc, "no dmarc=pass"),
+                           (verbatim, "date not verbatim in body")) if not ok]
+    if not why:
+        cls = c.get("class") or "tax"
+        item = {"id": unique_id(f"{c.get('domain') or 'admin'}.{slug(c['title'])}"),
+                "title": c["title"][:90], "kind": c.get("kind") or "hard", "lost": c.get("lost"),
+                "since": None, "resurface": resurface_for("hard", c.get("lost"), cls),
+                "consequence": {"class": cls, "usd": c.get("usd"), "text": c.get("text") or ""},
+                "owner": "operator", "domain": c.get("domain") or "admin",
+                "source": [f"graph:{c.get('message_id') or 'unknown'}"], "falsifier": None,
+                "void_if": None, "activate_when": None, "recur": None, "bundle": None,
+                "state": "open", "ext": {"reminder_id": None, "event_id": None, "channel": None},
+                "created": now_iso(), "updated": now_iso()}
+        try:
+            admit(item)
+            save(item)
+            log("add", item["id"], {"title": item["title"], "via": "sweep", "sender": dom})
+            return "admitted", item["id"]
+        except Refused as e:
+            why = [str(e)]
+    propose({"source": "sweep", "kind": "soft", "title": (c.get("title") or "")[:90],
+             "sender": dom, "why": why, "message_id": c.get("message_id")})
+    return "proposal", "; ".join(why)
+
+
+def cmd_propose(a):
+    cands = json.load(sys.stdin)
+    with Lock():
+        for c in cands if isinstance(cands, list) else [cands]:
+            v, detail = sweep_admit(c)
+            print(f"{v}: {(c.get('title') or '')[:60]} — {detail}")
+
+
+# ------------------------------------------------------------------------ harvest
+
+CUE = re.compile(r"\b(by|before|due|expires?|renews?|cancel|return)\b|Good to close: no|follow-on:", re.I)
+DATE_TOK = re.compile(r"\b(\d{4}-\d{2}-\d{2}|(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.? \d{1,2})\b")
+DEFER = re.compile(r"(when|once) it'?s time|bring (this|it) up|revisit|come back to|park(ed)? (this|it)", re.I)
+
+
+def capture_hit(text: str):
+    for m in DATE_TOK.finditer(text):
+        if CUE.search(text[max(0, m.start() - 80): m.end() + 80]):
+            return text[max(0, m.start() - 80): m.end() + 80]
+    m = DEFER.search(text)
+    return text[max(0, m.start() - 80): m.end() + 80] if m else None
+
+
+def cmd_harvest(a):
+    m = re.fullmatch(r"(\d+)h", a.since)
+    cutoff = time.time() - int(m[1]) * 3600 if m else 0
+    roots = os.environ.get("DL_TRANSCRIPT_ROOTS")
+    roots = [Path(r) for r in roots.split(":")] if roots else [
+        p / "projects" for p in Path.home().glob(".claude*") if (p / "projects").is_dir()]
+    discharged = {e.get("session_id") for e in read_log() if e.get("session_id")}
+    seen = {json.loads(l).get("snippet") for l in (DL_DIR / "proposals.jsonl").read_text().splitlines()
+            if l.strip()} if (DL_DIR / "proposals.jsonl").exists() else set()
+    hits = leaks = 0
+    for root in roots:
+        for f in root.rglob("*.jsonl"):
+            try:
+                if f.stat().st_mtime < cutoff:
+                    continue
+                lines = f.read_text(errors="replace").splitlines()
+            except OSError:
+                continue
+            for l in lines:
+                try:
+                    r = json.loads(l)
+                except ValueError:
+                    continue
+                if r.get("type") != "assistant" or r.get("entrypoint") != "cli":
+                    continue
+                content = (r.get("message") or {}).get("content") or []
+                text = " ".join(c.get("text", "") for c in content if isinstance(c, dict)) \
+                    if isinstance(content, list) else str(content)
+                snip = capture_hit(text)
+                if not snip:
+                    continue
+                hits += 1
+                sid = r.get("sessionId")
+                if sid in discharged or snip in seen:
+                    continue
+                leaks += 1
+                seen.add(snip)
+                propose({"source": "harvest", "session_id": sid, "cwd": r.get("cwd"),
+                         "snippet": snip.strip(), "ts": now_iso()})
+    print(f"harvest: {hits} deferral hit(s); leak {leaks} (no dl event in that session) -> proposals")
+
+
+# ------------------------------------------------------------------------- import
+
+INV_ITEM = re.compile(r"^- \[ \] \*\*(?P<label>[^*]+)\*\* — (?P<rest>.*)$")
+APPX = re.compile(r"^### (P\d-\d+) — ")
+APPX_DUE = re.compile(r"^- Due \((?P<dates>[^,]+), (?P<tag>[^)]+)\)")
+
+
+def classify(text: str, table: dict, default: str) -> str:
+    for rx, v in table.items():
+        if re.search(rx, text, re.I):
+            return v
+    return default
+
+
+def cmd_import(a):
+    path = Path(a.path)
+    lines = path.read_text().splitlines()
+    imap = {}
+    try:
+        imap = json.loads((DL_DIR / "import-map.json").read_text())
+    except (OSError, ValueError):
+        pass
+    domains = dict(imap.get("domains", {}), **{r"\b(tax|irs|cra|fbar|1040|gst|hst|t1|8938|540nr)\b": "taxes",
+                                               r"\b(car|vehicle|registration|licen[cs]e|insurance)\b": "vehicle",
+                                               r"\b(lease|rent|landlord|address|move)\b": "housing"})
+    classes = dict(imap.get("classes", {}), **{r"\b(tax|irs|cra|fbar|1040|gst|hst|t1|8938|540nr)\b": "tax",
+                                               r"\b(insurance|coverage|deductible)\b": "coverage",
+                                               r"\b(legal|lawsuit|arbitration|dispute)\b": "legal",
+                                               r"\b(reply|answer|text|message|thank)\b": "relationship",
+                                               r"\$\d": "money"})
+    merges = imap.get("merges", {})
+    appx, ref = {}, None
+    for l in lines:
+        m = APPX.match(l)
+        if m:
+            ref = m[1]
+            continue
+        m = APPX_DUE.match(l)
+        if m and ref and ref not in appx:
+            appx[ref] = (m["dates"], m["tag"])
+    buckets = {"admitted": [], "someday": [], "backlog": [], "reject": []}
+    parsed, by_ref = 0, {}
+    staged = {i["id"] for i in load_items()}
+    for n, l in enumerate(lines, 1):
+        m = INV_ITEM.match(l)
+        if not m:
+            continue
+        parsed += 1
+        detail = lines[n] if n < len(lines) else ""
+        title_full, _, action = m["rest"].partition(" — ")
+        r = re.search(r"\bref (P\d-\d+)", detail)
+        rf = r[1] if r else f"L{n}"
+        owner_raw = (re.search(r"owner: ([^·]+)", detail) or [None, "you"])[1].strip()
+        cons = detail.strip().split(" · owner:")[0][:240]
+        src = [f"{path.name}:{n}"]
+        if rf in merges:
+            buckets["reject"].append((rf, n, f"merged into {merges[rf]} (inventory overlap)"))
+            continue
+        if owner_raw == "an agent session":
+            buckets["backlog"].append((rf, n, "agent-owned: cc-backlog, not dl"))
+            continue
+        owner = {"you": "operator", "you + an agent session": "both"}.get(
+            owner_raw, "third-party" if owner_raw.startswith("third party") else "operator")
+        dates, tag = appx.get(rf, ("none", "none"))
+        iso = re.findall(r"\d{4}-\d{2}-\d{2}", dates)
+        blob = f"{title_full} {action} {cons}"
+        cls = classify(blob, classes, "money")
+        dom = classify(blob, domains, "admin")
+        usd = next((float(x.replace(",", "")) for x in re.findall(r"\$([\d,]+(?:\.\d+)?)", blob)), None)
+        title = title_full if len(title_full) <= 90 else title_full[:89].rsplit(" ", 1)[0] + "…"
+        kind, lost, since, act = None, None, None, None
+        if not iso:
+            kind = "someday"
+            am = re.search(r"after (?:the )?(%s)[a-z]* (\d{1,2})" % "|".join(
+                m.capitalize() for m in MONTHS), blob)
+            if am:
+                ad = dt.date(today().year, MONTHS[am[1].lower()[:3]], int(am[2])) + dt.timedelta(days=1)
+                act = f"date>={ad.isoformat()}"
+        elif tag == "overdue-running":
+            kind, since = "decay", iso[0]
+        elif tag == "recurring":
+            kind, lost = ("hard" if cls == "tax" else "soft"), iso[0]
+        else:
+            kind = {"hard": "hard", "window-closes": "window", "soft": "soft",
+                    "appointment": "appointment"}.get(tag, "soft")
+            lost = iso[-1]
+        seed = next((e for e in load_seed().values() if e.get("match") and
+                     re.search(e["match"], title_full, re.I)), None)
+        item = {"id": "", "title": title, "kind": kind, "lost": lost, "since": since,
+                "resurface": resurface_for(kind, lost, cls) if lost else (
+                    (d(since) + dt.timedelta(days=3)).isoformat() if since else None),
+                "consequence": {"class": cls, "usd": usd, "text": cons},
+                "owner": owner, "domain": dom, "source": src, "falsifier": None,
+                "void_if": None, "activate_when": act,
+                "recur": ({"rule": seed["rule"], "next_kind": kind, "verified_at": seed.get("verified_at"),
+                           "verify_url": seed.get("verify_url")} if seed and tag == "recurring" else None),
+                "bundle": None, "state": "someday" if kind == "someday" else "open",
+                "ext": {"reminder_id": None, "event_id": None, "channel": None},
+                "created": now_iso(), "updated": now_iso(), "import_ref": rf}
+        base = f"{dom}.{slug(title)}"
+        iid, k = base, 2
+        while iid in staged:
+            iid, k = f"{base}-{k}", k + 1
+        item["id"] = iid
+        try:
+            admit(item, phone=True, items=[])  # operator-curated inventory: checks 1-3 skipped, caps reported
+        except Refused as e:
+            buckets["reject"].append((rf, n, str(e)))
+            continue
+        staged.add(iid)
+        by_ref[rf] = item
+        buckets["someday" if kind == "someday" else "admitted"].append((rf, n, item))
+    for rf, into in merges.items():
+        if into in by_ref:
+            by_ref[into]["source"].append(f"merged:{rf}")
+    adm = buckets["admitted"]
+    kinds = {k: sum(x[2]["kind"] == k for x in adm) for k in DATED + ("decay",)}
+    total = sum(len(v) for v in buckets.values())
+    print(f"import {'DRY RUN' if not a.apply else 'APPLY'}: {path} — {parsed} `- [ ]` lines parsed")
+    for rf, n, why in buckets["reject"]:
+        print(f"  reject  {rf:6} :{n:<4} {why}")
+    for rf, n, why in buckets["backlog"]:
+        print(f"  backlog {rf:6} :{n:<4} {why}")
+    over = {k: kinds.get(k, 0) + (len(buckets["someday"]) if k == "someday" else 0)
+            for k in CAPS if kinds.get(k, 0) + (len(buckets["someday"]) if k == "someday" else 0) > CAPS[k]}
+    for k, v in over.items():
+        print(f"  CAP     {k} {v} > {CAPS[k]}: import admits past the cap (nothing is evicted by size); "
+              f"`dl add {k}` needs --replaces until it drains")
+    noverb = sum(re.split(r"\W+", x[2]["title"], 1)[0].lower() not in VERBS for x in adm + buckets["someday"])
+    print(f"  title lint: {noverb} imported title(s) do not start with an action verb (refine at go-live)")
+    ok = total == parsed
+    print(f"A16 import accounting: admitted {len(adm)} (" +
+          ", ".join(f"{k} {v}" for k, v in kinds.items()) +
+          f") + someday {len(buckets['someday'])} + to-backlog {len(buckets['backlog'])} + "
+          f"rejects {len(buckets['reject'])} = {total} of {parsed} parsed {'✓' if ok else '✗ MISMATCH'}")
+    if a.apply:
+        with Lock():
+            for _, _, it in adm + buckets["someday"]:
+                save(it)
+                log("import", it["id"], {"ref": it["import_ref"]})
+            atomic_write(DL_DIR / "import-rejects.md", "# Import rejects\n\n" + "\n".join(
+                f"- {rf} (:{n}) — {why}" for rf, n, why in buckets["reject"] + buckets["backlog"]) + "\n")
+            for rf, n, why in buckets["reject"]:
+                log("reject", None, {"ref": rf, "why": why})
+    return 0 if ok else 1
+
+
+# ---------------------------------------------------------------------------- CLI
+
+def main(argv=None):
+    p = argparse.ArgumentParser(prog="dl", description=__doc__.split("\n\n")[0])
+    sub = p.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("add", help="admit a real-world deadline (exit 3 on refusal)")
+    s.add_argument("title")
+    s.add_argument("--kind", required=True, choices=KINDS)
+    s.add_argument("--lost"); s.add_argument("--since"); s.add_argument("--resurface")
+    s.add_argument("--class", dest="cls", choices=CLASSES)
+    s.add_argument("--usd", type=float); s.add_argument("--text")
+    s.add_argument("--owner", default="operator"); s.add_argument("--domain", default="admin")
+    s.add_argument("--source", action="append"); s.add_argument("--phone", action="store_true")
+    s.add_argument("--falsifier"); s.add_argument("--void-if"); s.add_argument("--activate-when")
+    s.add_argument("--recur"); s.add_argument("--bundle"); s.add_argument("--effort", type=int, default=0)
+    s.add_argument("--replaces"); s.add_argument("--id")
+    s.set_defaults(fn=cmd_add)
+    s = sub.add_parser("skip", help="log a deliberate non-add (C2b discharge)")
+    s.add_argument("id", nargs="?"); s.add_argument("--why", required=True); s.add_argument("--snippet")
+    s.set_defaults(fn=cmd_skip)
+    s = sub.add_parser("park", help="defer to a resurface date (C2b discharge)")
+    s.add_argument("id", nargs="?"); s.add_argument("--resurface", required=True); s.add_argument("--snippet")
+    s.set_defaults(fn=cmd_park)
+    s = sub.add_parser("done", help="close with evidence; strict items without proof -> done-unverified")
+    s.add_argument("id"); s.add_argument("--evidence"); s.add_argument("--confirmed", action="store_true")
+    s.set_defaults(fn=cmd_done)
+    for verb, state in (("drop", "dropped"), ("void", "void")):
+        s = sub.add_parser(verb, help=f"retire as {state}")
+        s.add_argument("id"); s.add_argument("--why")
+        s.set_defaults(fn=lambda a, st=state, v=verb: _retire(a, st, v))
+    s = sub.add_parser("list"); s.add_argument("--all", action="store_true")
+    s.add_argument("--kind"); s.add_argument("--json", action="store_true"); s.set_defaults(fn=cmd_list)
+    s = sub.add_parser("show"); s.add_argument("id"); s.set_defaults(fn=cmd_show)
+    sub.add_parser("render", help="write the personal rules file and .state/banner.txt").set_defaults(fn=cmd_render)
+    s = sub.add_parser("brief"); s.add_argument("-n", type=int, default=7); s.set_defaults(fn=cmd_brief)
+    sub.add_parser("digest").set_defaults(fn=cmd_digest)
+    sub.add_parser("doctor").set_defaults(fn=cmd_doctor)
+    s = sub.add_parser("import", help="migrate the inventory (dry run unless --apply)")
+    s.add_argument("path"); s.add_argument("--apply", action="store_true"); s.set_defaults(fn=cmd_import)
+    s = sub.add_parser("probe", help="run a typed probe, or an item's probes (--id / --all)")
+    s.add_argument("spec", nargs="?"); s.add_argument("--id"); s.add_argument("--all", action="store_true")
+    s.set_defaults(fn=cmd_probe)
+    s = sub.add_parser("harvest", help="C4: deferrals in cli transcripts with no dl event -> proposals")
+    s.add_argument("--since", default="26h"); s.set_defaults(fn=cmd_harvest)
+    sub.add_parser("propose", help="C5 sweep admission: candidates JSON on stdin").set_defaults(fn=cmd_propose)
+    a = p.parse_args(argv)
+    try:
+        return a.fn(a) or 0
+    except Refused as e:
+        print(f"dl: refused: {e}", file=sys.stderr)
+        return EXIT_REFUSED
+    except ValueError as e:
+        print(f"dl: refused: bad value: {e}", file=sys.stderr)
+        return EXIT_REFUSED
+
+
+if __name__ == "__main__":
+    sys.exit(main())
