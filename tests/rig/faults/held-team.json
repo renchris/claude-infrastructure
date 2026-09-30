@@ -1,0 +1,10 @@
+{
+  "_what": "FLEET_V2 W6 D4.13: a team lead limited with a live member is HELD:team (never exited, never relaunched, never moved) and, after its reset + 2 min + its jitter, is continued in its OWN pane with one typed continue; the record closes CLOSED via IN-PLACE on the fresh turn. The member process is planted by rig_lib and reaped by the rig's teardown. A limited session without members, on the same account and reset, is a STAY: WAIT_RESET, continued in place by the same wake. (Facts only raise resets_at, so every session on the account must share the short reset, or the cohort's fact reads the longest.)",
+  "source": "next",
+  "scope": "5h",
+  "idle_fanout": false,
+  "groups": [
+    {"name": "held-team-lead", "count": 2, "knobs": {"team_member": true, "reset_in_s": 60}, "expect": "IN-PLACE"},
+    {"name": "stay-limited", "count": 1, "knobs": {"reset_in_s": 60}, "expect": "IN-PLACE"}
+  ]
+}

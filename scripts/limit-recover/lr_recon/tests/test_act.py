@@ -123,6 +123,55 @@ class ActTests(unittest.TestCase):
             (True, "ok"),
         )
 
+    def test_the_wake_asks_the_focus_gate_before_it_types(self):
+        """D4.9 + resolution 1: cmd_wake runs lr_focus_gate first; held ⇒ rc 6, nothing typed; no
+        gate at all ⇒ rc 8, nothing typed; otherwise cc_tui_submit's own rc comes back."""
+        tmp = tempfile.mkdtemp()
+        lr, lib = os.path.join(tmp, "lr"), os.path.join(tmp, "lib")
+        os.makedirs(lr)
+        os.makedirs(lib)
+        typed = os.path.join(tmp, "typed")
+        with open(os.path.join(lib, "cc-tui.sh"), "w") as fh:
+            fh.write('cc_tui_submit() { cat "$2" > "%s"; echo "$1" >> "%s"; return "${SUBMIT_RC:-0}"; }\n' % (typed, typed))
+        gate = os.path.join(lr, "lr-lib.sh")
+        payload = os.path.join(tmp, "p.txt")
+        with open(payload, "w") as fh:
+            fh.write("continue\n")
+        rec = _rec(pane=(5, 7))
+
+        def run(gate_body, **env):
+            if gate_body is None:
+                open(gate, "w").close()
+            else:
+                with open(gate, "w") as fh:
+                    fh.write(gate_body)
+            if os.path.exists(typed):
+                os.unlink(typed)
+            orig = (A.LR_DIR, A.SCRIPTS)
+            A.LR_DIR, A.SCRIPTS = lr, tmp
+            try:
+                argv = A.cmd_wake(rec, payload)
+            finally:
+                A.LR_DIR, A.SCRIPTS = orig
+            return subprocess.run(
+                argv, capture_output=True, text=True, env=dict(os.environ, **env)
+            )
+
+        held = 'lr_focus_gate() { LR_FOCUS_HOLD="HELD:focused"; return 3; }\n'
+        cp = run(held)
+        self.assertEqual(cp.returncode, A.WAKE_HELD_RC)
+        self.assertIn("verdict: HELD:focused", cp.stdout)
+        self.assertFalse(os.path.exists(typed))
+        cp = run(None)
+        self.assertEqual(cp.returncode, A.WAKE_NO_GATE_RC)
+        self.assertFalse(os.path.exists(typed))
+        cp = run("lr_focus_gate() { return 0; }\n")
+        self.assertEqual(cp.returncode, 0)
+        with open(typed) as fh:
+            self.assertEqual(fh.read(), "continue\n7\n")
+        cp = run("lr_focus_gate() { return 0; }\n", SUBMIT_RC="3")
+        self.assertEqual(cp.returncode, 3)
+
     def test_env_forces_bgwork_cancel(self):
         env = A.actuator_env(
             _rec(),

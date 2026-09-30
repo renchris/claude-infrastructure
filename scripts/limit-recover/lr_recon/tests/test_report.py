@@ -221,11 +221,25 @@ class ReportTest(unittest.TestCase):
         plain = rec(2, wait=wait("WAIT_SLOT", eta=T0 + 900, detail="next=kmax"))
         self.assertEqual(R.say(plain), "waiting for a free slot on another account")
 
-    def test_held_team_wording_names_the_page_not_a_wake(self) -> None:
-        """D4.10: until the reset-time wake lands, a held lead is only paged after the reset."""
+    def test_held_team_wording_names_the_wake_and_its_page(self) -> None:
+        """D4.10 + D4.9: a held lead is continued in place at the reset, paged 10 min after it."""
         r = rec(1, wait=wait("HELD:team", eta=T0 + 3600))
-        self.assertEqual(R.say(r), "held: team lead; paged 10 min after the reset")
-        self.assertEqual(R.next_action(r), "paged at %s" % R._hm(T0 + 4200))
+        self.assertEqual(R.say(r), "held: team lead; continued in place at the reset")
+        self.assertEqual(
+            R.next_action(r),
+            "continued in place after %s; paged at %s if not"
+            % (R._hm(T0 + 3600), R._hm(T0 + 4200)),
+        )
+
+    def test_a_failed_wake_pages_once_with_its_reason(self) -> None:
+        rep = self.reporter()
+        r = rec(1, wait=wait("HELD:team", eta=T0 + 3600))
+        r.close["wake_failed"] = "the composer holds a draft (rc 3)"
+        pages = rep.immediate_pages(self.cohort, r)
+        self.assertEqual(len(pages), 2)  # HELD:team, then WAKE-FAILED
+        self.assertIn("could not be typed", pages[1])
+        self.assertIn("continue it by hand: the composer holds a draft", pages[1])
+        self.assertEqual(rep.immediate_pages(self.cohort, r), [])
 
     def test_bgwork_shipland_sixty_minutes_else_twenty(self) -> None:
         plain = rec(1, wait=wait("HOLD-BGWORK", detail="npm test"))

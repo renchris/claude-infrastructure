@@ -384,6 +384,41 @@ class AbortedAdmitHeld(unittest.TestCase):
         self.assertEqual(settle.RCY_HELD_SUB["busy"], "HOLD-COMPOSER")
 
 
+class WakeExit(unittest.TestCase):
+    """D4.9 step 6: the wake's own exits. Held by the focus gate ⇒ re-probed; a submit failure ⇒
+    paged once and never retyped; typed ⇒ wait for the turn."""
+
+    def _rec(self):
+        r = rec(sub="HELD:team")
+        r.close["wake_eta"] = 100.0
+        return r
+
+    def test_focus_held_is_reprobed_not_paged(self):
+        r = self._rec()
+        d = settle.settle_exit(
+            r, actuator("C"), 6, "lr-recon-wake: verdict: HELD:focused\n", 1.0
+        )
+        self.assertIn("focused", d)
+        self.assertNotIn("wake_eta", r.close)
+        self.assertNotIn("wake_failed", r.close)
+        self.assertEqual((r.substate, r.next_eligible_at), ("HELD:team", 1.0 + settle.REPROBE_S))
+
+    def test_a_submit_failure_pages_and_is_never_retyped(self):
+        for rc in (1, 2, 3, 4, 8):
+            r = self._rec()
+            settle.settle_exit(r, actuator("C"), rc, "", 1.0)
+            self.assertIn("rc %d" % rc, r.close["wake_failed"])
+            self.assertEqual(r.close["wake_eta"], 100.0)  # kept: the pass never retypes
+            self.assertFalse(r.escalated)
+            self.assertEqual(r.substate, "HELD:team")
+
+    def test_typed_waits_for_the_turn(self):
+        for rc in (0, 5):
+            r = self._rec()
+            self.assertIn("waiting for a turn", settle.settle_exit(r, actuator("C"), rc, "", 1.0))
+            self.assertNotIn("wake_failed", r.close)
+
+
 class TeamFlicker(unittest.TestCase):
     """D4.4: member counts flicker; one pass reading 0 must not release a held lead."""
 

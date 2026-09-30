@@ -7,8 +7,7 @@ step-3 stale reconcile that runs before anything acts.
 Unruled operator decisions stay on their safe defaults here: a focused limited pane is HELD
 (decision 7, ``LR_MOVE_FOCUSED=on`` to move it), idle fan-out is off (``LR_IDLE_FANOUT=on`` to
 enable). A team lead with live members is HELD:team, unconditionally in v1 (decision 4, ruled
-2026-09-30: hold, then continue in place at the reset; a cross-account team move is v2). Until the
-reset-time wake lands the hold is paged 10 min after the reset.
+2026-09-30: hold, then continue in place at the reset; a cross-account team move is v2).
 Decision 2 is SETTLED: a pane with live background work holds until the job ends.
 """
 
@@ -152,7 +151,7 @@ def bucket(
         return _mk(
             s,
             "HELD:team",
-            "lead with live members: hold; paged 10 min after the reset (decision 4)",
+            "lead with live members: hold; continued in place at reset (decision 4)",
             kind,
             fact,
         )

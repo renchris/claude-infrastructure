@@ -256,6 +256,116 @@ class MainTests(unittest.TestCase):
         n, _recs = self._spawned(ctx, snap, now)
         self.assertEqual(n, 4)  # no pacer on a relaunch with no prompt
 
+    # ── D1.11 / D4.9 / D4.13: the in-place reset wake ─────────────────────────────────────────
+    LEAD = "abcdef01-0000-0000-0000-000000000001"
+
+    def _held(self, sub="HELD:team", eta=1000.0, detail=""):
+        import time
+
+        M.store.ensure_dirs(self.paths)
+        open(self.paths.recon_on, "w").close()
+        ctx = M.Ctx(self.paths, None, self.home)
+        snap = _snap(time.time(), self.tmp)
+        s = snap.sessions[self.LEAD]
+        s.transcript.last_assistant_ok_at = eta - 600  # the last turn before the limit
+        snap.procs[77] = T.ProcRow(
+            77, 1, "S", L, "claude.exe --agent-id w@session-x --parent-session-id %s" % self.LEAD
+        )
+        r = T.Record(
+            sid=self.LEAD,
+            record_id="recon:c:abcdef01:1",
+            kind="limited",
+            source_acct="next3",
+            scope="7d",
+            pane=(5, 7),
+            substate=sub,
+        )
+        r.wait = T.Wait(reason=sub, since=0.0, eta=eta, detail=detail)
+        ctx.records[self.LEAD] = r
+        return ctx, snap, r
+
+    def _due(self, eta=1000.0):
+        return eta + M.WAKE_AFTER_S + M.jitter_s(self.LEAD)
+
+    def test_a_held_lead_past_its_reset_is_woken_in_its_own_pane(self):
+        ctx, snap, r = self._held()
+        self.assertEqual(M._wakes(ctx, snap, {}, self._due() - 1), 0)  # not yet
+        self.assertEqual(M._wakes(ctx, snap, {}, self._due()), 1)
+        self.assertEqual(ctx.actions[self.LEAD], "wake")
+        with mock.patch.object(M.act, "spawn", return_value=4242) as sp:
+            self.assertEqual(M._dispatch(ctx, snap, "act", self._due()), 1)
+        which, argv = sp.call_args.args[2], sp.call_args.args[3]
+        self.assertEqual(which, "C")
+        self.assertEqual(argv[3], "lr-recon-wake")
+        self.assertEqual(argv[4], "7")  # the lead's OWN pane; nothing else is touched
+        self.assertIn("lr_focus_gate", argv[2])
+        with open(argv[5], encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertTrue(text.startswith("continue"))
+        self.assertIn("teammate", text)
+        self.assertNotIn("/limit-recover", text)
+        self.assertNotIn("/exit", text)
+        # typed once for this reset: the next pass waits for the turn instead of retyping
+        ctx.actions.clear()
+        self.assertEqual(M._wakes(ctx, snap, {}, self._due() + 30), 0)
+
+    def test_a_wake_refused_by_admission_is_tried_again(self):
+        """W6d rig: a CPU-brake refusal marked the wake typed, so it never came back."""
+        ctx, snap, r = self._held()
+        self.assertEqual(M._wakes(ctx, snap, {}, self._due()), 1)
+        with mock.patch.object(M, "_admit", return_value=(False, "cpu")):
+            with mock.patch.object(M.act, "spawn", return_value=4242) as sp:
+                self.assertEqual(M._dispatch(ctx, snap, "act", self._due()), 0)
+        sp.assert_not_called()
+        self.assertNotIn("wake_eta", r.close)
+        ctx.actions.clear()
+        self.assertEqual(M._wakes(ctx, snap, {}, self._due() + 5), 1)
+
+    def test_a_fresh_turn_after_the_reset_closes_it_as_continued_in_place(self):
+        ctx, snap, r = self._held()
+        snap.sessions[self.LEAD].transcript.last_assistant_ok_at = 1001.0
+        self.assertEqual(M._wakes(ctx, snap, {}, self._due()), 0)
+        self.assertEqual(r.terminal.outcome, "CLOSED")
+        self.assertIn("continued in place", r.terminal.proof)
+        line = M.report.dod_line(self.paths, [r])
+        self.assertIn("CLOSED 1/1 (ENGAGED 0, MOVED 0, IN-PLACE 1)", line)
+
+    def test_a_lead_continued_in_place_is_not_re_recorded_as_held(self):
+        """W6d rig: after the wake closed a lead IN-PLACE, its members were still live, and the next
+        pass opened a fresh idle HELD:team record with no reset to wake at, held and paged forever."""
+        ctx, snap, r = self._held()
+        r.terminal = T.Terminal(outcome="CLOSED", proof="continued in place", at=1.0)
+        s = snap.sessions[self.LEAD]
+        s.transcript.last = {"kind": "ok"}  # the lead answered: no longer limited
+        M.store.ensure_dirs(self.paths)
+        M._census(ctx, snap, {}, [], "observe", 2000.0)
+        self.assertIs(ctx.records[self.LEAD], r)
+        # CONTROL: a lead still LIMITED with live members is recorded HELD:team, as before
+        ctx2, snap2, _r = self._held()
+        del ctx2.records[self.LEAD]
+        M._census(ctx2, snap2, {}, [], "observe", 2000.0)
+        self.assertEqual(ctx2.records[self.LEAD].substate, "HELD:team")
+
+    def test_the_wake_chooses_nothing_without_members_or_headroom(self):
+        ctx, snap, r = self._held()
+        del snap.procs[77]  # members gone: the census releases it to an ordinary move
+        self.assertEqual(M._wakes(ctx, snap, {}, self._due()), 0)
+        ctx, snap, r = self._held()
+        later = {"next3.7d": T.Fact(acct="next3", scope="7d", resets_at=9e9)}
+        self.assertEqual(M._wakes(ctx, snap, later, self._due()), 0)  # limited again
+        ctx, snap, r = self._held()
+        r.close["wake_failed"] = "the composer holds a draft (rc 3)"
+        self.assertEqual(M._wakes(ctx, snap, {}, self._due()), 0)  # paged, never retyped
+
+    def test_a_stay_is_woken_at_once_with_a_plain_continue(self):
+        ctx, snap, r = self._held(sub="WAIT_RESET", eta=500.0, detail="stay")
+        del snap.procs[77]
+        self.assertEqual(M._wakes(ctx, snap, {}, 500.0), 1)
+        with mock.patch.object(M.act, "spawn", return_value=4242) as sp:
+            M._dispatch(ctx, snap, "act", 500.0)
+        with open(sp.call_args.args[3][5], encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "continue\n")
+
     def test_pass_writes_the_readout_line(self):
         ctx, _s, _am, _popen = self._pass("observe")
         with open(self.paths.p("readout.line"), encoding="utf-8") as fh:

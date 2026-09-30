@@ -130,12 +130,39 @@ def outcome(rec: T.Record, rc: Optional[int], text: str) -> Tuple[str, str, str]
     return classify.classify(last, -1 if rc is None else rc), "", ""
 
 
+# The reset wake's non-zero exits that page instead of retyping (D4.9 step 6): cc_tui_submit rc 1-4,
+# and a missing focus gate. rc 5 (CR sent, no record yet) and rc 0 wait for the fresh turn instead.
+WAKE_FAILED = {
+    1: "the pane is gone",
+    2: "the composer could not be read, or a dialog is open",
+    3: "the composer holds a draft",
+    4: "the typed text read back wrong and was scrubbed",
+    8: "no lr_focus_gate to ask; nothing was typed",
+}
+
+
+def wake_exit(rec: T.Record, rc: Optional[int], text: str, now: float) -> str:
+    """One reset wake's exit. rc 6 = the focus gate held it: re-probed later, never paged. A failure
+    in WAKE_FAILED is paged once and never retyped; the operator owns the pane from there."""
+    if rc == 6:
+        rec.close.pop("wake_eta", None)
+        rec.next_eligible_at = now + REPROBE_S
+        held = _REASON.findall(text)
+        return "wake held (%s), re-probed" % (held[-1] if held else "focused")
+    if rc in WAKE_FAILED:
+        rec.close["wake_failed"] = "%s (rc %d)" % (WAKE_FAILED[rc], rc)
+        return "wake failed: " + rec.close["wake_failed"]
+    return "wake rc=%s — waiting for a turn after the reset" % rc
+
+
 def settle_exit(
     rec: T.Record, pr: T.ProcRole, rc: Optional[int], text: str, now: float
 ) -> str:
     """Apply one dead actuator's exit to its record. Returns the event detail ('' = nothing)."""
     if pr.role != "actuator":
         return ""
+    if pr.argv_hash == "C" and rec.phase == "PRE-MOVE" and "wake_eta" in rec.close:
+        return wake_exit(rec, rc, text, now)
     if rc == 0 and pr.argv_hash == "UNCONFIRM":
         return _unconfirmed(rec, now)
     if rc == 0:

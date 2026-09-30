@@ -49,7 +49,7 @@ _SAY: Dict[str, str] = {
     "HOLD-MENU": "held: a menu is open in the pane",
     "HOLD:repo-bare": "held: the checkout is a bare repository",
     "HOLD:iterm": "held: an iTerm pane cannot be relaunched in place",
-    "HELD:team": "held: team lead; paged 10 min after the reset",
+    "HELD:team": "held: team lead; continued in place at the reset",
     "BACKOFF": "backing off after an error",
     "PARKED-REBOOT": "parked until the machine reboots",
 }
@@ -66,6 +66,7 @@ _IMMEDIATE: Dict[str, str] = {
     "ESCALATED": "escalated: automatic recovery gave up",
     "IMPOSSIBLE": "impossible: this session cannot be recovered",
     "HELD:team": "held: a team session",
+    "WAKE-FAILED": "the continue at the reset could not be typed",
 }
 
 
@@ -134,8 +135,15 @@ def next_action(rec: T.Record) -> str:
     if st in _NEXT:
         return _NEXT[st]
     eta = rec.wait.eta if rec.wait else None
+    if rec.close.get("wake_failed"):
+        return "continue it by hand: %s" % rec.close["wake_failed"]
     if st == "HELD:team":
-        return "paged at %s" % _hm(eta + 600) if eta else "paged 10 min after the reset"
+        if not eta:
+            return "continued in place after the reset; paged 10 min after it if not"
+        return "continued in place after %s; paged at %s if not" % (
+            _hm(eta),
+            _hm(eta + 600),
+        )
     if st.startswith("WAIT"):
         return "wakes at %s" % _hm(eta) if eta else "the reconciler retries"
     return "the reconciler continues (%s)" % rec.phase.lower()
@@ -331,6 +339,9 @@ def dod_line(paths: T.Paths, records: Sequence[T.Record]) -> str:
     closed = [r for r in records if r.terminal and r.terminal.outcome == "CLOSED"]
     eng = sum(1 for r in closed if r.close.get("via") == "ENGAGED")
     mov = sum(1 for r in closed if r.close.get("via") == "MOVED")
+    # D1.11/D4.9: continued in its own pane at the reset (named only when there is one, so every
+    # cohort that has none renders exactly as before)
+    inplace = sum(1 for r in closed if r.close.get("via") == "IN-PLACE")
     held = [
         r
         for r in records
@@ -347,7 +358,8 @@ def dod_line(paths: T.Paths, records: Sequence[T.Record]) -> str:
     unowned = sum(1 for r in records if r.open and r.close.get("defect"))
     return " · ".join(
         [
-            "CLOSED %d/%d (ENGAGED %d, MOVED %d)" % (len(closed), n, eng, mov),
+            "CLOSED %d/%d (ENGAGED %d, MOVED %d%s)"
+            % (len(closed), n, eng, mov, ", IN-PLACE %d" % inplace if inplace else ""),
             hold + ")",
             "REPLACED-NEW-WINDOW %d" % outcomes.count("REPLACED-NEW-WINDOW"),
             "NOT_NEEDED %d" % outcomes.count("NOT_NEEDED"),
@@ -720,6 +732,8 @@ class Reporter:
             kinds.append("IMPOSSIBLE")
         if _state(rec) == "HELD:team":
             kinds.append("HELD:team")
+        if rec.open and rec.close.get("wake_failed"):
+            kinds.append("WAKE-FAILED")  # D4.9 step 6: paged once, never retyped
         out = []
         for k in kinds:
             extra = (

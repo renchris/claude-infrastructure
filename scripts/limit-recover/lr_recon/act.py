@@ -209,6 +209,40 @@ def cmd_engage(rec: T.Record, payload_file: str) -> List[str]:
     return ["/bin/bash", "-c", script, "lr-recon-engage", _pane_id(rec), payload_file]
 
 
+# The in-place reset wake (D1.11, D4.9, resolution 2): a plain continue, never /limit-recover, which
+# runs the skill and can choose a move. A held team lead is also told how its members resume.
+WAKE_TEXT = "continue"
+WAKE_TEXT_TEAM = (
+    "continue — the usage limit has reset. Any teammate whose last turn hit the limit resumes "
+    "when you message it."
+)
+# The wake's own exits beside cc_tui_submit's table: 6 = lr_focus_gate held it (nothing typed,
+# retry), 8 = no lr_focus_gate to ask (nothing typed; every typing path must ask it, resolution 1).
+WAKE_HELD_RC = 6
+WAKE_NO_GATE_RC = 8
+
+
+def cmd_wake(rec: T.Record, payload_file: str) -> List[str]:
+    """Type one continue into the session's OWN pane: lr_focus_gate first (resolution 1: one focus
+    rule for every typing path), then cc_tui_submit, which refuses an occupied composer (rc 3)."""
+    script = (
+        'source "%s" 2>/dev/null; '
+        "if ! command -v lr_focus_gate >/dev/null 2>&1; then "
+        'echo "lr-recon-wake: no lr_focus_gate; nothing typed" >&2; exit %d; fi; '
+        'lr_focus_gate "$1"; g=$?; '
+        'if [ "$g" != 0 ]; then echo "lr-recon-wake: verdict: ${LR_FOCUS_HOLD:-HELD:focused}"; '
+        "exit %d; fi; "
+        'source "%s"; cc_tui_submit "$1" "$2"'
+        % (
+            _p(LR_DIR, "lr-lib.sh"),
+            WAKE_NO_GATE_RC,
+            WAKE_HELD_RC,
+            _p(SCRIPTS, "lib", "cc-tui.sh"),
+        )
+    )
+    return ["/bin/bash", "-c", script, "lr-recon-wake", _pane_id(rec), payload_file]
+
+
 def cmd_replace(rec: T.Record) -> List[str]:
     return [
         "/bin/bash",
@@ -450,6 +484,8 @@ def choose(res: T.PhaseResult, rec: T.Record) -> Optional[str]:
     """PhaseResult.action → the actuator to run, or None for wait/sentinel/page/plan-only."""
     a = res.action
     if res.phase == "PRE-MOVE":
+        if a == "wake" and rec.substate in ("WAIT_RESET", "HELD:team"):
+            return "C"  # the in-place reset wake (D1.11, D4.9)
         return "A" if rec.substate == "PLANNED" and rec.target_acct else None
     if a in ("A", "A-husk", "B", "R", "UNCONFIRM", "SPLIT", "C-retry"):
         return a

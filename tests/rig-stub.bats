@@ -46,3 +46,35 @@ setup() {
   RIG_PLACE_STAY=1 run python3 "$FAKE" --place --movers "$BATS_TEST_TMPDIR/m.jsonl" --facts "$BATS_TEST_TMPDIR/facts"
   [ "$(printf '%s' "$output" | python3 -c 'import json,sys; print(json.load(sys.stdin)["s1"]["acct"])')" = next2 ]
 }
+
+@test "the held-team case derives an IN-PLACE line; the existing matrices are unchanged" {
+  LIB="$REPO/tests/rig/rig_lib.py"
+  run python3 "$LIB" expected "$REPO/tests/rig/faults/held-team.json"
+  [[ "$output" == "CLOSED 3/3 (ENGAGED 0, MOVED 0, IN-PLACE 3) · "* ]] || { echo "$output"; false; }
+  run python3 "$LIB" expected "$REPO/tests/rig/faults/matrix30.json"
+  [[ "$output" == "CLOSED 24/30 (ENGAGED 21, MOVED 3) · "* ]] || { echo "$output"; false; }
+}
+
+@test "a planted member is a live teammate by lr-team.sh, and the rig teardown pattern reaps it" {
+  RIG="$BATS_TEST_TMPDIR/rig"; mkdir -p "$RIG/bin"
+  lead=22222222-0000-4000-8000-000000000002
+  pid="$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import rig_lib; print(rig_lib._spawn_member(sys.argv[2], sys.argv[3]))' "$REPO/tests/rig" "$RIG" "$lead")"
+  snap="$(LC_ALL=C ps -o pid=,stat=,args= -p "$pid")"
+  kill "$pid" 2>/dev/null || true
+  run bash -c 'source "$1"; lr_team_members "$2" "$3"' _ "$REPO/scripts/limit-recover/lr-team.sh" "$lead" "$snap"
+  [ "$output" = 1 ] || { echo "snap: $snap"; false; }
+  [[ "$snap" == *"$RIG/bin/claude"* ]]
+}
+
+@test "the launch-log audit counts an in-place cohort's typed continues, and is still not blind" {
+  R="$BATS_TEST_TMPDIR/state"; mkdir -p "$R"
+  sid=33333333-0000-4000-8000-000000000003
+  printf '[{"sid":"%s","fold":false}]\n' "$sid" > "$BATS_TEST_TMPDIR/specs.json"
+  : > "$R/launch.log"
+  run python3 -c 'import sys,json; sys.path.insert(0, sys.argv[1]); import rig_lib; sys.exit(rig_lib.audit(sys.argv[2], json.load(open(sys.argv[3])), ""))' "$REPO/tests/rig" "$R" "$BATS_TEST_TMPDIR/specs.json"
+  [ "$status" -eq 1 ]  # nothing logged: no verdict
+  printf '1\t%s\trecon-C\tspawn\tpid=9\tattempt=1\trecord=r\n' "$sid" > "$R/launch.log"
+  run python3 -c 'import sys,json; sys.path.insert(0, sys.argv[1]); import rig_lib; sys.exit(rig_lib.audit(sys.argv[2], json.load(open(sys.argv[3])), ""))' "$REPO/tests/rig" "$R" "$BATS_TEST_TMPDIR/specs.json"
+  [ "$status" -eq 0 ]
+  [[ "$output" == "launch-log audit: 1 lines · "* ]]
+}

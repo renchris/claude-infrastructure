@@ -36,7 +36,7 @@ from lr_recon import (
 )
 from lr_recon import facts as F
 from lr_recon import types as T
-from lr_recon.admit import Admission, BootSlots
+from lr_recon.admit import Admission, BootSlots, jitter_s
 from lr_recon.clock import Caffeinate, Clock, Heartbeat, shift_record
 
 MOVING = ("TRANSPLANTED", "EXITING", "HUSK-RETIRED", "EXITED", "RELAUNCHED")
@@ -260,6 +260,15 @@ def _census(
         buckets.append(b)
         if b.name not in RECORD_TYPES or s.sid in stale_sids:
             continue
+        if (
+            b.name == "HELD:team"
+            and b.kind != "limited"
+            and (old is None or not old.open)
+        ):
+            # A lead with live members that is NOT limited is a working team, never a recovery: no
+            # record. The W6d rig caught the case: a lead continued in place at its reset closed
+            # IN-PLACE, and the next pass re-opened it as an idle HELD:team with no reset to wake at.
+            continue
         req = req_by_sid.get(s.sid)
         origin = req.origin if req else ("fanout" if b.kind == "idle" else "census")
         pane = snap.panes.get("%d:%d" % s.pane) if s.pane else None
@@ -280,6 +289,68 @@ def _census(
             now,
         )
     return buckets, stale
+
+
+WAKE_AFTER_S = (
+    120.0  # past the source's stale live fact (resets_at + 60) and its cached row
+)
+WAKE_SUBSTATES = ("WAIT_RESET", "HELD:team")
+
+
+def engaged_after(s: Optional[T.SessionObs], t: float) -> bool:
+    """lr_engaged_after's reading: a non-error assistant turn after ``t``."""
+    ok = s.transcript.last_assistant_ok_at if s is not None else None
+    return ok is not None and ok > t
+
+
+def _wakes(ctx: Ctx, snap: T.Snapshot, facts: Dict[str, T.Fact], now: float) -> int:
+    """The in-place reset wake (D1.11 WAIT_RESET and --place's stay, D4.9 HELD:team). At the reset
+    + 120 s + the sid's jitter (the stay: at once), a limited session is continued in its OWN pane:
+    no /exit, no relaunch, no other account. A fresh turn after the reset closes it as continued in
+    place. The wake is paced per account (Admission.pace_wake); the focus gate, the composer read
+    and the member re-check happen just before the keystroke (act.cmd_wake, may_actuate)."""
+    n = 0
+    for rec in ctx.records.values():
+        w = rec.wait
+        if (
+            not rec.open
+            or rec.phase != "PRE-MOVE"
+            or rec.kind != "limited"
+            or rec.substate not in WAKE_SUBSTATES
+            or w is None
+            or w.eta is None
+        ):
+            continue
+        s = snap.sessions.get(rec.sid)
+        if engaged_after(s, w.eta):
+            rec.terminal = T.Terminal(
+                outcome="CLOSED",
+                proof="continued in place after the reset at %s" % report._hm(w.eta),
+                at=now,
+            )
+            rec.close["via"] = "IN-PLACE"
+            _event(ctx.paths, "wake-engaged", rec.sid, rec.record_id)
+            continue
+        stay = w.detail == "stay"
+        if now < w.eta + (0.0 if stay else WAKE_AFTER_S + jitter_s(rec.sid)):
+            continue
+        if rec.close.get("wake_failed") or rec.close.get("wake_eta") == w.eta:
+            continue  # paged and never retyped, or typed and waiting for its turn
+        if rec.substate == "HELD:team" and census.live_members(rec.sid, snap) == 0:
+            continue  # the team is gone: the census releases it to an ordinary move
+        f = facts.get("%s.%s" % (rec.source_acct, rec.scope))
+        if f is not None and not f.contradicted and (f.resets_at or 0) > now:
+            continue  # no headroom: the source is limited again, on a later reset
+        pane = snap.panes.get("%d:%d" % rec.pane) if rec.pane else None
+        if pane is None or pane.state != "claude":
+            continue
+        ok, _why = ctx.admission.pace_wake(rec.sid, rec.source_acct, now)
+        if not ok:
+            continue
+        ctx.actions[rec.sid] = "wake"  # marked typed (wake_eta) only once _dispatch spawns it
+        _event(ctx.paths, "wake", rec.sid, rec.record_id, rec.substate)
+        n += 1
+    return n
 
 
 FOCUS_LEDGER_MAX = 4 * 1024 * 1024
@@ -314,7 +385,9 @@ def _focus_ledger(
     try:
         os.makedirs(paths.shadow, exist_ok=True)
         store.append_bounded(
-            os.path.join(paths.shadow, "focus.jsonl"), store.dumps(row), FOCUS_LEDGER_MAX
+            os.path.join(paths.shadow, "focus.jsonl"),
+            store.dumps(row),
+            FOCUS_LEDGER_MAX,
         )
     except OSError as e:
         _event(paths, "focus-ledger-error", detail=repr(e)[:200])
@@ -649,7 +722,13 @@ def _admission_period(ctx: Ctx, snap: T.Snapshot, now: float) -> None:
     else:
         l1, l5, _l15 = os.getloadavg()
         adm.enter_active(
-            _active_now(snap), len(corpses), _ceiling(), l1, l5, os.cpu_count() or 1, now
+            _active_now(snap),
+            len(corpses),
+            _ceiling(),
+            l1,
+            l5,
+            os.cpu_count() or 1,
+            now,
         )
     for r in ctx.records.values():
         if not r.open or r.phase in ("ENGAGED", "MOVED"):
@@ -676,7 +755,9 @@ def _admit(
     unredeemed = sum(
         1
         for r in ctx.records.values()
-        if r.open and r.admit_token and r.phase not in ("ENGAGED", "MOVED")
+        if r.open
+        and r.admit_token
+        and r.phase not in ("ENGAGED", "MOVED")
         and r.sid != rec.sid
     )
     l1, l5, _l15 = os.getloadavg()
@@ -756,6 +837,11 @@ def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
         )
         if which in settle.MOVE_ACTUATORS:
             rec.close["move_attempt"] = rec.attempt
+        if which == "C" and ctx.actions.get(rec.sid) == "wake" and rec.wait:
+            # typed for this reset: the next pass waits for the turn instead of retyping. Set here,
+            # not when the wake was chosen, or a wake refused by admission was never tried again
+            # (W6d rig: one CPU-brake refusal left a STAY session unwoken for good).
+            rec.close["wake_eta"] = rec.wait.eta
         if which in settle.MOVE_ACTUATORS + ("C", "C-retry"):
             store.append_launch(
                 ctx.paths,
@@ -807,6 +893,12 @@ def _command(ctx: Ctx, rec: T.Record, which: str) -> List[str]:
         return act.cmd_transplant(rec, "unconfirm")
     if which == "R":
         return act.cmd_replace(rec)
+    if which == "C" and ctx.actions.get(rec.sid) == "wake" and rec.phase == "PRE-MOVE":
+        os.makedirs(ctx.paths.p("work"), exist_ok=True)
+        payload = ctx.paths.p("work", rec.sid + ".wake.txt")
+        text = act.WAKE_TEXT_TEAM if rec.substate == "HELD:team" else act.WAKE_TEXT
+        store.atomic_write_text(payload, text + "\n")
+        return act.cmd_wake(rec, payload)
     if which in ("C", "C-retry"):
         rec.submit_token = act.new_token()
         os.makedirs(ctx.paths.p("work"), exist_ok=True)
@@ -1024,6 +1116,7 @@ def run_pass(ctx: Ctx, force_observe: bool = False) -> Dict[str, Any]:
     # before planning, so a re-armed member is placed and dispatched this pass
     _refire(ctx, now)
     _abandon(ctx, now)
+    _wakes(ctx, snap, facts, now)
     placed = _plan(ctx, snap, facts, mode, now)
     spawned = 0
     if mode == "act" and os.path.exists(paths.recon_on):

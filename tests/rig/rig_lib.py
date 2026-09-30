@@ -81,10 +81,14 @@ def expected_line(faults: Dict[str, Any]) -> str:
             % (n, n, n, n, n, n)
         )
     eng, mov = exp.count("ENGAGED"), exp.count("MOVED")
+    inplace = exp.count("IN-PLACE")  # continued in its own pane at the reset (D4.13)
     draft, bg = exp.count("HOLD-DRAFT"), exp.count("HOLD-BGWORK")
     rec_bg = sum(1 for s in specs if s["recovers"] == "HOLD-BGWORK")
     held = draft + bg
-    parts = ["CLOSED %d/%d (ENGAGED %d, MOVED %d)" % (eng + mov, n, eng, mov)]
+    parts = [
+        "CLOSED %d/%d (ENGAGED %d, MOVED %d%s)"
+        % (eng + mov + inplace, n, eng, mov, ", IN-PLACE %d" % inplace if inplace else "")
+    ]
     hold = "HOLD named %d/%d (draft %d, bgwork %d" % (held, n, draft, bg)
     if rec_bg:
         hold += " — the %s bgwork recovers after its job ends" % ORDINAL.get(
@@ -136,6 +140,10 @@ def audit(root: str, specs: List[Dict[str, Any]], home: str) -> int:
                     cls = "launch"
                 elif t[3] == "spawn" and t[2] in MOVE_ROLES:
                     cls = "move"
+                elif t[3] == "spawn" and t[2] == "recon-C":
+                    # a typed continue: the whole launch record of an in-place cohort (D4.13), so it
+                    # counts toward `lines` (the audit is not blind), with no per-key limit of its own
+                    cls = "type"
                 else:
                     continue
                 lines += 1
@@ -143,7 +151,7 @@ def audit(root: str, specs: List[Dict[str, Any]], home: str) -> int:
                     t[1],
                     kv.get("attempt") or "legacy@" + t[0],
                 )  # a legacy take is its own key
-                keys.setdefault(key, {"launch": set(), "move": set()})[cls].add(
+                keys.setdefault(key, {"launch": set(), "move": set(), "type": set()})[cls].add(
                     kv.get("pid", "?")
                 )
     except OSError:
@@ -303,10 +311,41 @@ def plant_foreign(rig: str) -> int:
     return 0
 
 
+def _spawn_member(rig: str, lead_sid: str) -> int:
+    """A live TEAMMATE of ``lead_sid`` as lr-team.sh reads one: argv[0] basename claude.exe and the
+    adjacent tokens --parent-session-id <lead sid> (D4.13). perl sleeps under that argv[0]; the path
+    is under $RIG/bin, so the rig's teardown (`pkill -f $RIG/bin/claude`) reaps it."""
+    import subprocess
+
+    p = subprocess.Popen(
+        [
+            os.path.join(rig, "bin", "claude.exe"),
+            "-e",
+            "sleep 3600",
+            "--",
+            "--agent-id",
+            "w@session-rig",
+            "--parent-session-id",
+            lead_sid,
+        ],
+        executable="/usr/bin/perl",
+        start_new_session=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    with open(os.path.join(rig, "member-%s.pid" % lead_sid[:8]), "w") as fh:
+        fh.write(str(p.pid))
+    return p.pid
+
+
 def plant_faults(rig: str) -> int:
-    """Rig-side faults that are state, not stub behaviour: legacy holder dirs and stale requests."""
+    """Rig-side faults that are state, not stub behaviour: legacy holder dirs, stale requests, and
+    a live teammate process for a team lead (never exited, never relaunched: D4.13)."""
     lr = os.path.join(rig, "lr")
     for s in _specs(rig):
+        if s["knobs"].get("team_member"):
+            _spawn_member(rig, s["sid"])
         if s["legacy_holder"]:
             d = os.path.join(lr, "runs", "by-sid", s["sid"] + ".active")
             os.makedirs(d, exist_ok=True)
