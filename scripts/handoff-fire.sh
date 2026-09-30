@@ -1095,6 +1095,20 @@ for _CC_KI in "$(dirname "$_CC_KS")/../bin/it2-kitty" "$(dirname "$0")/../bin/it
   [ -x "$_CC_KI" ] && { KITTY_IT2="$_CC_KI"; break; }
 done
 
+# ~/.claude/bin on PATH, APPENDED when absent. Dozens of sites below call claude-accounts, cc-custody
+# and cc-notify by bare name, so a caller whose PATH lacks the fleet's bin dir (a shell started right
+# after a reboot, a detached or launchd caller) silently loses the router: measured 2026-09-30, a
+# post-reboot fire printed "pre-fire account sweep: skipped (claude-accounts not on PATH)", fell to
+# the activity proxy and routed W5b2 onto next2 at 100% weekly, where its first turn hit the limit.
+# Appended, never prepended, so it can only fill a gap and never shadow a caller's own stub; only
+# $HOME's copy, so a suite that fixtures $HOME to test the router's absence still sees it absent.
+hf_path_repair() {
+  local d="${HOME:-}/.claude/bin"
+  [ -d "$d" ] || return 0
+  case ":${PATH:-}:" in *":$d:"*) ;; *) PATH="${PATH:+$PATH:}$d"; export PATH ;; esac
+}
+hf_path_repair
+
 # bin/cc-pane-runner, resolved identically — the argv transport below cannot work without it, and an
 # unresolvable runner must DEGRADE TO TYPING rather than launch a pane whose argv is a missing file.
 CC_RUNNER_BIN="${CC_PANE_RUNNER_BIN:-}"
