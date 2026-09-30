@@ -2516,8 +2516,12 @@ def k_cap(r, R):
     charge onto `k_work`, an ACTIVE census, and left the integer alone. So one number now answers
     two different questions, and it is wrong for whichever one it is not answering:
 
-      · against k_work (ACTIVE): 8 is right — the measured infra-limiter band is 5-6 (GH#62426),
-        and residency itself costs ~0 quota (07 §4).
+      · against k_work (ACTIVE): 8 is KEPT (operator ruling, FLEET_V2 decision 8, 2026-09-30).
+        The "5-6 infra-limiter band" once cited here came from GH#62426 and was never measured on
+        this machine; what backs 8 is 0 failures in 40 probe first turns at N<=6, and that 8 is
+        the only cap that builds up ACROSS placement passes (movers placed in the last 15 min
+        count as phantoms against it, while every other floor resets per pass). Residency itself
+        costs ~0 quota (07 §4).
       · against the pane census (RESIDENT): 8 x 4 accounts = 32, and the 33rd session fleet-wide
         is refused `kmax-concurrency` -> rc 2 -> handoff-fire HALTS. The 150-resident design point
         breaks 4.7x early, on one integer in one JSON file, on the path CLAUDE.md makes the
