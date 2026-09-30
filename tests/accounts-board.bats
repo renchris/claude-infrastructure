@@ -444,6 +444,41 @@ PY
   took="${output##*took=}"; [ "${took%%.*}" -lt 10 ] || { echo "outlived its deadline: $output"; false; }
 }
 
+@test "19c any lock holder (--login-status) dies at the hold ceiling and frees the lock" {
+  # 2026-09-30: cc-relogin-poll's --login-status wedged 21 min holding the single-flight lock
+  # (19b's deadline covers --keepwarm only) and a limit recovery PARKED on "no routable target".
+  # The sweep hangs; the kernel must end the holder on time, and the lock must be takeable after.
+  export CLAUDE_ACCOUNTS_JSON="$D/acct.json"; mk_cfg; rm -f "$D/cache.json"
+  run python3 - "$CA_BIN" "$D/cache.json.lock" <<'PY'
+import fcntl, subprocess, sys, time, os
+src = open(sys.argv[1]).read()
+anchor = "                rows = collect(cfg, no_heal=no_heal, prev=prev)"
+new = src.replace(anchor, "                time.sleep(30)\n" + anchor, 1)
+assert new != src, "anchor moved"
+def run(hold, bound):
+    env = dict(os.environ, CC_ACCOUNTS_HOLD_DEADLINE_S=hold)
+    t0 = time.time()
+    try:
+        p = subprocess.run([sys.executable, "-c", new, "--login-status"], env=env,
+                           capture_output=True, text=True, timeout=bound)
+        rc = p.returncode
+    except subprocess.TimeoutExpired:
+        rc = "outlived"
+    return rc, time.time() - t0
+rc, took = run("2", 20)
+with open(sys.argv[2], "w") as f:
+    fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)   # raises if the holder left it held
+print(f"rc={rc} took={took:.1f}")
+rc0, _ = run("0", 5)                                 # control: the kill switch really disables it
+print(f"off={rc0}")
+PY
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"rc=-14 "* ]] || { echo "not killed by SIGALRM: $output"; false; }
+  took="${output##*took=}"; took="${took%%$'\n'*}"
+  [ "${took%%.*}" -lt 10 ] || { echo "outlived its ceiling: $output"; false; }
+  [[ "$output" == *"off=outlived"* ]] || { echo "CC_ACCOUNTS_HOLD_DEADLINE_S=0 did not disable: $output"; false; }
+}
+
 @test "19 --keepwarm writes the board it claims to write" {
   export CLAUDE_ACCOUNTS_JSON="$D/acct.json"; mk_cfg
   export CC_ACCOUNTS_BOARD="$D/produced.txt"; rm -f "$CC_ACCOUNTS_BOARD"

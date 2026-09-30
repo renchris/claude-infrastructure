@@ -5056,6 +5056,38 @@ def _arm_sweep_bound(deadline):
     return _disarm
 
 
+def _arm_hold_ceiling():
+    """Kernel-enforced ceiling on how long THIS process may hold the single-flight lock -> disarm.
+
+    --keepwarm got a SIG_DFL deadline on 2026-09-24 (b8dbe299a) after one tick wedged holding this
+    lock for 52 min. Every OTHER holder stayed unbounded, and on 2026-09-30 the same outage came
+    back through one of them: cc-relogin-poll's `--login-status`, launched in the Background QoS
+    band, sat 21 min at 0.38 s of CPU inside SSL_CTX_new while the cache aged past its 600 s grace,
+    and a limit recovery PARKED on "no routable target" exactly as on the 24th. The bound belongs
+    to the lock, not to one caller. SIG_DFL, so the kill needs no cooperation from a wedged or
+    starved interpreter; the fd closes with the process and cache writes are os.replace'd.
+
+    Skipped when a timer is already pending (--keepwarm's own deadline, or --max-wait's sweep
+    bound, which is armed after this and replaces it) and off the main thread, where signals do
+    not exist. Default 300 s: above every completed sweep in the keepwarm log (p99 146 s over the
+    last ~2,500), below the 510 s at which a sweep begun on a TTL-expired cache pushes it past the
+    600 s grace. CC_ACCOUNTS_HOLD_DEADLINE_S=0 disables it."""
+    try:
+        hold_s = int(os.environ.get("CC_ACCOUNTS_HOLD_DEADLINE_S", "300"))
+    except ValueError:
+        hold_s = 300
+    if hold_s <= 0 or threading.current_thread() is not threading.main_thread() \
+            or signal.getitimer(signal.ITIMER_REAL)[0] > 0:
+        return lambda: None
+    old = signal.signal(signal.SIGALRM, signal.SIG_DFL)
+    signal.alarm(hold_s)
+
+    def _disarm():
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old)
+    return _disarm
+
+
 def get_data(cfg, fresh=False, no_heal=False, max_wait=None, max_age=None, src=None):
     # --max-wait N>0 is a REAL wall-clock bound from here (it used to be parsed and ignored):
     # a cache inside TTL is served as always; otherwise the lock is tried only until the deadline,
@@ -5112,33 +5144,38 @@ def get_data(cfg, fresh=False, no_heal=False, max_wait=None, max_age=None, src=N
                             f"no servable cache and the single-flight lock stayed held for "
                             f"{_fresh_lock_wait_s(cfg):.0f}s: a live holder is wedged.")
                     time.sleep(0.15)
-        if not fresh:
-            # grace_s=max_age, NOT the default TTL. This post-lock re-read exists to catch the
-            # case where another caller swept while we waited, but it must honour the SAME
-            # staleness bound the caller asked for. Passing no bound here meant `--max-age 30`
-            # was silently upgraded to the 90s default the moment the first read missed — which
-            # made the keep-warm producer a NO-OP: every tick found a <90s cache at this line,
-            # reported "served-cache", and never refreshed, so the cache expired anyway and the
-            # daemon's entire job went undone while it logged success. Measured on --max-age 0,
-            # which served a 15s cache instead of sweeping.
-            c = cache_read(cfg, want_heal=not no_heal, src=src, grace_s=max_age)
-            if c:
-                return c["rows"], c["window"], True, c.get("prev")
-        prev = _prev_snapshot(cfg)
-        disarm = _arm_sweep_bound(deadline)
+        hold_disarm = _arm_hold_ceiling()
         try:
-            win = frontier_window(cfg)
-            rows = collect(cfg, no_heal=no_heal, prev=prev)
-            record_utilization(rows)
+            if not fresh:
+                # grace_s=max_age, NOT the default TTL. This post-lock re-read exists to catch the
+                # case where another caller swept while we waited, but it must honour the SAME
+                # staleness bound the caller asked for. Passing no bound here meant `--max-age 30`
+                # was silently upgraded to the 90s default the moment the first read missed —
+                # which made the keep-warm producer a NO-OP: every tick found a <90s cache at this
+                # line, reported "served-cache", and never refreshed, so the cache expired anyway
+                # and the daemon's entire job went undone while it logged success. Measured on
+                # --max-age 0, which served a 15s cache instead of sweeping.
+                c = cache_read(cfg, want_heal=not no_heal, src=src, grace_s=max_age)
+                if c:
+                    return c["rows"], c["window"], True, c.get("prev")
+            prev = _prev_snapshot(cfg)
+            disarm = _arm_sweep_bound(deadline)
+            try:
+                win = frontier_window(cfg)
+                rows = collect(cfg, no_heal=no_heal, prev=prev)
+                record_utilization(rows)
+            finally:
+                disarm()
+            wj = {"active": win["active"], "end": win["end"],
+                  "permanent": win.get("permanent", False),
+                  # permanent is carried explicitly: without it a null deadline cannot be told
+                  # apart from "the SSOT deadline was unparseable" by any --json consumer.
+                  "deadline": win["deadline"].isoformat() if win["deadline"] else None}
+            cache_write(cfg, {"ts": time.time(), "cfg_key": _cfg_key(cfg), "no_heal": no_heal,
+                              "rows": rows, "window": wj, "prev": prev})
+            return rows, wj, False, prev
         finally:
-            disarm()
-        wj = {"active": win["active"], "end": win["end"], "permanent": win.get("permanent", False),
-              # permanent is carried explicitly: without it a null deadline cannot be told
-              # apart from "the SSOT deadline was unparseable" by any --json consumer.
-              "deadline": win["deadline"].isoformat() if win["deadline"] else None}
-        cache_write(cfg, {"ts": time.time(), "cfg_key": _cfg_key(cfg), "no_heal": no_heal,
-                          "rows": rows, "window": wj, "prev": prev})
-        return rows, wj, False, prev
+            hold_disarm()
 
 
 def mark_self(rows, cfg):
