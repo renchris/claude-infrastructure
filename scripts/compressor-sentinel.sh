@@ -84,7 +84,7 @@
 #         CC_SENTINEL_REL_PARENT_PCT (15) · CC_SENTINEL_REL_PARENT_TICKS (3) ·
 #         CC_SENTINEL_PARENT_HOLD_MIN_S (600) · CC_SENTINEL_PROBATION_S (300) ·
 #         CC_SENTINEL_KILL (on — rides ACT=stop, opt-out) · CC_SENTINEL_KILL_PCT (60) ·
-#         CC_SENTINEL_KILL_MIN_HOLD_S (30)
+#         CC_SENTINEL_KILL_MIN_HOLD_S (30) · CC_SENTINEL_RELINQUISH_GRACE_S (30)
 set -uo pipefail
 
 INTERVAL="${CC_SENTINEL_INTERVAL:-10}"
@@ -159,6 +159,12 @@ HOLD_MAX_S="${CC_SENTINEL_HOLD_MAX_S:-600}"
 #   · PROBATION_S — a released parent stays on probation: the FIRST breach tick inside the window
 #     re-freezes it immediately, before streak or cooldown are consulted.
 #   · KILL_* — the escalation rung (see the header). kill_due says when; custody says whom.
+#   · RELINQUISH_GRACE_S — custody reads PROCESS STATE, not only identity. A ledgered pid whose
+#     stat reads running/sleeping/idle (R, S, I) was resumed by someone else; once the row is at
+#     least this old it is dropped with a belt SIGCONT, never killed. The grace must be at least
+#     2 x INTERVAL, so a SIGSTOP sent earlier on the same tick is never misread as a resume; it is
+#     raised to that floor when set lower. (2026-09-30T15:51:34Z: the lead SIGCONTed Dia by hand,
+#     custody compared only lstart, still owed the row, and the next retrip SIGKILLed the browser.)
 CLIFF_PCT="${CC_SENTINEL_CLIFF_PCT:-60}"
 REL_PARENT_PCT="${CC_SENTINEL_REL_PARENT_PCT:-15}"
 REL_PARENT_TICKS="${CC_SENTINEL_REL_PARENT_TICKS:-3}"
@@ -167,6 +173,11 @@ PROBATION_S="${CC_SENTINEL_PROBATION_S:-300}"
 KILL="${CC_SENTINEL_KILL:-on}"
 KILL_PCT="${CC_SENTINEL_KILL_PCT:-60}"
 KILL_MIN_HOLD_S="${CC_SENTINEL_KILL_MIN_HOLD_S:-30}"
+RELINQUISH_GRACE_S="${CC_SENTINEL_RELINQUISH_GRACE_S:-30}"
+case "$RELINQUISH_GRACE_S" in ''|*[!0-9]*) RELINQUISH_GRACE_S=30 ;; esac
+case "$INTERVAL" in ''|*[!0-9]*) : ;; *)
+  [ "$RELINQUISH_GRACE_S" -ge $((2 * INTERVAL)) ] || RELINQUISH_GRACE_S=$((2 * INTERVAL)) ;;
+esac
 FOLLOWUP_N="${CC_SENTINEL_FOLLOWUP_N:-12}"       # 12 x 5 s = the 60 s cooldown, by construction
 FOLLOWUP_SEC="${CC_SENTINEL_FOLLOWUP_SEC:-5}"
 SNAP_TOPN="${CC_SENTINEL_SNAP_TOPN:-30}"         # trip snapshot: how many RSS ranks carry full argv
@@ -313,9 +324,18 @@ done
 # daemon is disabled — and the falsifier on backlog row dabe706c9d79 is that count, so a silent
 # empty answer there restores the immortal-row failure the count exists to end. Read-only queries
 # answer regardless of whether the sensor is armed.
+#
+# THE ONE THING THE KILL SWITCH MUST STILL DO IS HAND BACK CUSTODY. A daemon restarted with
+# CC_SENTINEL=off over a non-empty ledger would otherwise exit and leave its predecessor's frozen
+# pids stopped with no living SIGCONT sender — the stranded state the unfreeze arm exists to end. So
+# a would-be loop owner (no --ticks, no read-only mode) with a ledger defers the exit to the drain
+# block before the mode dispatch, where the release functions exist; every other off-run exits here
+# byte for byte as before.
+SENTINEL_OFF_DRAIN=0
 if [ "${CC_SENTINEL:-on}" = "off" ] && [ "$TICKS_FREEZE_COUNT" != "1" ]; then
-  echo "compressor-sentinel: disabled (CC_SENTINEL=off)" >&2
-  exit 0
+  if [ "$TICKS" -eq 0 ] && [ "$TICKS_PANIC_ONLY" != 1 ] && [ "$TICKS_FREEZE_ONLY" != 1 ] \
+     && { [ -s "$FROZEN_DB" ] || [ -s "$PROBATION_DB" ]; }; then SENTINEL_OFF_DRAIN=1
+  else echo "compressor-sentinel: disabled (CC_SENTINEL=off)" >&2; exit 0; fi
 fi
 
 # A non-numeric snapshot seam must never reach awk: there `-v n=abc` becomes 0, an n of 0 renders an
@@ -960,15 +980,21 @@ write_page() { # <ts> <why> <headline> <detail>
 #             daemon restart strands the whole cohort permanently — and a stranded SIGSTOP with no
 #             living SIGCONT sender is strictly worse than a released spawner, because nothing can
 #             ever fix it.
+#   relinquish — ANY kind, ANY mode but exit: the row is at least RELINQUISH_GRACE_S old and its
+#             stat reads R/S/I — someone else resumed it. Dropped with a belt SIGCONT, no probation
+#             stamp, and never a kill (kill_escalate applies the same test). The 15:51:34Z Dia kill
+#             was a row the lead had resumed by hand, still owed because custody read only lstart.
 #   sweep   — the startup custody pass (a loop-owning daemon, ACT=stop). Releases ONLY rows whose
 #             pid is on the caller's protected-class list — a GUI app or simulator runtime adopted
 #             from a predecessor killed before it could release (a launchd ExitTimeOut during a
 #             121-146 s cliff tick defers the TERM trap) — and holds every other row as it stands.
-#   Every SIGCONT line carries reason=<exit|protected|calm|clear|hold-max>, so a release can be
-#   attributed to its arm from the snap log alone.
+#   Every SIGCONT line carries reason=<exit|protected|calm|clear|hold-max>, a relinquish writes its
+#   own RELINQUISH line, a row dropped as gone or reused writes DROP-STALE, and a live row whose
+#   frozen-at is unreadable is resumed and writes DROP-MALFORMED — so every custody row ends in the
+#   snap log with the arm that ended it.
 #
 # WHAT MAKES THIS SAFE TO RUN UNATTENDED: we resume ONLY what we froze. Every release is gated on
-# (pid, lstart) matching the ledger, TZ-pinned on BOTH sides because ps renders lstart in the
+# (pid, lstart) matching the ledger — read together with the process state in one fork, TZ-pinned on BOTH sides because ps renders lstart in the
 # ambient zone and a DST flip would otherwise convict every row at once (memory:
 # process-start-time-renders-in-ambient-timezone). A pid that has been recycled onto a different
 # process fails that compare and is dropped WITHOUT a signal — SIGCONT to an innocent stopped
@@ -976,6 +1002,29 @@ write_page() { # <ts> <why> <headline> <detail>
 # what forecloses it.
 proc_lstart() { # <pid> → TZ-pinned start time, empty if the pid is gone
   TZ=UTC ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//'
+}
+
+# THE SAME READ, PLUS THE PROCESS STATE, in ONE fork — so custody costs what it cost before. The
+# lstart half is byte-identical to proc_lstart (verified live under /bin/bash 3.2 for $$, 1 and a GUI
+# pid); callers split it as `st="${sl%% *}"; cur="${sl#* }"`. Darwin reports a SIGSTOPped task as T,
+# which is what lets custody notice that someone ELSE resumed a pid it still thinks it holds.
+proc_stat_lstart() { # <pid> → "<stat> <lstart>", empty if the pid is gone
+  TZ=UTC ps -o stat=,lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//'
+}
+
+# A ledger row's age for a LOG line only. Never arithmetic on an unchecked field: under `set -u` a
+# non-numeric frozen-at aborts the caller (see DROP-MALFORMED in release_frozen).
+frozen_age() { # <now-epoch> <frozen-at> → seconds held, or `?` when frozen-at is not a number
+  case "$2" in ''|*[!0-9]*) printf '?' ;; *) printf '%s' "$(($1 - $2))" ;; esac
+}
+
+# The mutex's liveness test, factored so the CC_SENTINEL=off drain asks the same question. Identity
+# is (pid, lstart), so a stale pidfile — a dead pid, or a reused one — never reads as an owner.
+loop_owner_live() { # <pidfile> → rc 0 when it names a LIVE instance other than $$
+  local pid ls
+  pid="$(sed -n 1p "$1" 2>/dev/null)"
+  ls="$(sed -n 2p "$1" 2>/dev/null)"
+  [ -n "$pid" ] && [ -n "$ls" ] && [ "$pid" != "$$" ] && [ "$(proc_lstart "$pid")" = "$ls" ]
 }
 
 record_frozen() { # <pid> <kind> <comm> — ledger one REAL SIGSTOP so it can be undone
@@ -986,16 +1035,82 @@ record_frozen() { # <pid> <kind> <comm> — ledger one REAL SIGSTOP so it can be
   printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$ls" "$2" "$(date +%s)" "$3" >> "$FROZEN_DB" 2>/dev/null || true
 }
 
+# ONE ROW PER FROZEN PROCESS. Identity is (pid, lstart), and nothing used to enforce it: a fresh
+# spawner ledgered as a worker on one trip and re-frozen as a parent on the next (panic #5 re-froze
+# 42897 at TRIP 2) held TWO rows. release_frozen then SIGCONTed the worker row on the first clear
+# tick — resuming the spawner — and read its own SIGCONT, on the parent row later in the same pass,
+# as a resume from OUTSIDE: relinquished, no probation stamp, nothing left for the kill rung.
+# Merged: kind=parent wins (the stricter custody), the EARLIEST frozen-at is kept (a freeze is as old
+# as its first signal), first-seen order is preserved.
+#
+# WHERE IT RUNS, and why not inside record_frozen: a trip can SIGSTOP up to ACT_CAP (400) processes,
+# and a rewrite per signal would spend the actuation window the cliff regime exists to protect. So
+# record_frozen stays an append, the loop compacts ONCE after each trip's stop loops, and every
+# custody pass (release_frozen, kill_escalate) reads through this — which also settles a ledger
+# adopted from a predecessor that wrote duplicates.
+frozen_merge() { # <ledger> → the same rows, one per (pid, lstart)
+  awk -F'\t' -v OFS='\t' '
+    $1 == "" { next }
+    {
+      k = $1 SUBSEP $2
+      if (!(k in A)) { A[k] = $4; K[k] = $3; C[k] = $5; n++; O[n] = k; I[n] = $1; L[n] = $2; next }
+      if ($3 == "parent" && K[k] != "parent") { K[k] = "parent"; C[k] = $5 }
+      if ($4 ~ /^[0-9]+$/ && (A[k] !~ /^[0-9]+$/ || $4 + 0 < A[k] + 0)) A[k] = $4
+    }
+    END { for (j = 1; j <= n; j++) { k = O[j]; print I[j], L[j], K[k], A[k], C[k] } }' "$1"
+}
+
+# The ledger as custody reads it: merged into a temp file, or the raw ledger if the merge produced
+# nothing — a failed merge must never read as an empty ledger, which would drop every row unsignalled.
+frozen_read() { # → path to read (the caller removes it when it is not $FROZEN_DB)
+  local m
+  if m="$(mktemp -t cc-sentinel-frozen)" && frozen_merge "$FROZEN_DB" > "$m" 2>/dev/null && [ -s "$m" ]; then
+    printf '%s' "$m"
+  else
+    [ -n "$m" ] && rm -f "$m" 2>/dev/null
+    printf '%s' "$FROZEN_DB"
+  fi
+}
+
+frozen_compact() { # rewrite the ledger merged — once per trip, after the stop loops
+  local m
+  [ -s "$FROZEN_DB" ] || return 0
+  m="$(frozen_read)"
+  [ "$m" = "$FROZEN_DB" ] || mv -f "$m" "$FROZEN_DB" 2>/dev/null || rm -f "$m" 2>/dev/null
+}
+
 release_frozen() { # <now-epoch> <mode: clear|ceiling|exit|sweep> [<parent_ok 0|1>] [<cliff 0|1>] [<protected " pid " list>] → "released=N held=N stale=N"
   local now="$1" mode="$2" parent_ok="${3:-0}" cliff="${4:-0}" protp="${5:- }"
-  local keep rel=0 held=0 stale=0 pid ls kind at comm cur age due why
+  local keep src rel=0 held=0 stale=0 pid ls kind at comm cur age due why sl st
   [ -s "$FROZEN_DB" ] || { printf 'released=0 held=0 stale=0'; return 0; }
   keep="$(mktemp -t cc-sentinel-frozen)" || { printf 'released=0 held=0 stale=0'; return 0; }
+  src="$(frozen_read)"                        # one row per process — see frozen_merge
   while IFS="$(printf '\t')" read -r pid ls kind at comm; do
     [ -n "$pid" ] || continue
-    cur="$(proc_lstart "$pid")"
+    sl="$(proc_stat_lstart "$pid")"; st="${sl%% *}"; cur="${sl#* }"
     # Gone, or the pid now belongs to someone else. Either way we owe it nothing and must not signal.
-    if [ -z "$cur" ] || [ "$cur" != "$ls" ]; then stale=$((stale + 1)); continue; fi
+    # Logged per pid: before this line a custody row that ended this way left no record at all, and
+    # 73 recorded stops had no recorded end.
+    if [ -z "$sl" ] || [ "$cur" != "$ls" ]; then
+      stale=$((stale + 1))
+      printf 'DROP-STALE pid=%s held_s=%s kind=%s comm=%s (gone or pid reused; no signal)\n' \
+        "$pid" "$(frozen_age "$now" "$at")" "$kind" "$comm" >> "$SNAP" 2>/dev/null || true
+      continue
+    fi
+    # AN UNREADABLE FROZEN-AT, on a row whose identity still matches. `read` with a tab IFS collapses
+    # an EMPTY field, so a partial write shifts the comm into `at` — and `$((now - at))` under the
+    # daemon's `set -u` then aborted this whole function: nothing released, the ledger never rewritten,
+    # every frozen pid stranded on every later tick, and self-restart held for good. Without an age no
+    # rule can hold it and none may kill it, so the row is handed back with a SIGCONT and dropped —
+    # a resumed process is recoverable, a stranded one is not.
+    case "$at" in
+      ''|*[!0-9]*)
+        kill -CONT "$pid" 2>/dev/null
+        stale=$((stale + 1))
+        printf 'DROP-MALFORMED pid=%s kind=%s comm=%s at=%s (frozen-at unreadable; resumed, custody dropped)\n' \
+          "$pid" "$kind" "$comm" "$at" >> "$SNAP" 2>/dev/null || true
+        continue ;;
+    esac
     age=$((now - at))
     due=0; why=""
     if [ "$mode" = "exit" ]; then
@@ -1005,6 +1120,12 @@ release_frozen() { # <now-epoch> <mode: clear|ceiling|exit|sweep> [<parent_ok 0|
       # simulator runtime was adopted from a predecessor that froze it before those classes existed,
       # or before a KeepAlive restart. It was never ours to hold.
       due=1; why=protected
+    elif [ "$age" -ge "$RELINQUISH_GRACE_S" ] 2>/dev/null && case "$st" in [RSI]*) true ;; *) false ;; esac; then
+      # RESUMED OUTSIDE THE SENTINEL. It is our identity (lstart matched) but no longer our freeze:
+      # someone sent SIGCONT. Owing it a later SIGCONT is harmless; owing it a later SIGKILL is what
+      # killed Dia at 15:51:34Z. So custody is relinquished — with a belt SIGCONT, a no-op on a
+      # running process, so if the T-means-stopped premise were ever wrong it resumes, not strands.
+      due=1; why=relinquish
     elif [ "$mode" = "sweep" ]; then
       :   # the sweep releases protected rows and nothing else — every other row keeps its hold
     elif [ "$kind" = "parent" ]; then
@@ -1023,8 +1144,13 @@ release_frozen() { # <now-epoch> <mode: clear|ceiling|exit|sweep> [<parent_ok 0|
     if [ "$due" -eq 1 ]; then
       kill -CONT "$pid" 2>/dev/null
       rel=$((rel + 1))
-      printf 'SIGCONT pid=%s held_s=%s kind=%s comm=%s reason=%s\n' "$pid" "$age" "$kind" "$comm" "$why" \
-        >> "$SNAP" 2>/dev/null || true
+      if [ "$why" = "relinquish" ]; then
+        printf 'RELINQUISH pid=%s held_s=%s kind=%s comm=%s stat=%s (resumed outside the sentinel; custody dropped, no kill)\n' \
+          "$pid" "$age" "$kind" "$comm" "$st" >> "$SNAP" 2>/dev/null || true
+      else
+        printf 'SIGCONT pid=%s held_s=%s kind=%s comm=%s reason=%s\n' "$pid" "$age" "$kind" "$comm" "$why" \
+          >> "$SNAP" 2>/dev/null || true
+      fi
       # A released spawner is on probation: the first breach tick inside PROBATION_S re-freezes it
       # without waiting for streak or cooldown (probation_refreeze). Only a CALM release earns the
       # stamp: exit has no later tick to consume it (and a stale stamp would then convict the pid s
@@ -1037,7 +1163,8 @@ release_frozen() { # <now-epoch> <mode: clear|ceiling|exit|sweep> [<parent_ok 0|
       held=$((held + 1))
       printf '%s\t%s\t%s\t%s\t%s\n' "$pid" "$ls" "$kind" "$at" "$comm" >> "$keep"
     fi
-  done < "$FROZEN_DB"
+  done < "$src"
+  [ "$src" = "$FROZEN_DB" ] || rm -f "$src" 2>/dev/null
   mv -f "$keep" "$FROZEN_DB" 2>/dev/null || rm -f "$keep" 2>/dev/null
   printf 'released=%s held=%s stale=%s' "$rel" "$held" "$stale"
 }
@@ -1112,20 +1239,34 @@ kill_due() { # <pct> <srate> <trip_now 0|1> <debt_n> → reason | rc 1
 # REJECTED ON PURPOSE: exempting kind=parent from the kill, and gating retrip-over-debt on a
 # non-empty cohort. Both reopen panic #5, whose spawners are exactly the rows this rung exists for.
 kill_escalate() { # <now-epoch> <reason> [<exe_file>] → "killed=N spared=N" on stdout
-  local now="$1" reason="$2" exef="${3:-}" own="" prot keep killed=0 spared=0 pid ls kind at comm cur age
+  local now="$1" reason="$2" exef="${3:-}" own="" prot keep src killed=0 spared=0 pid ls kind at comm cur age sl st
   [ -s "$FROZEN_DB" ] || { printf 'killed=0 spared=0'; return 0; }
+  src="$(frozen_read)"                        # one row per process — see frozen_merge
   printf 'actuator: KILL-INTENT reason=%s debt=%s (write-ahead: signals follow this line)\n' \
-    "$reason" "$(wc -l < "$FROZEN_DB" 2>/dev/null | tr -d ' ' || echo '?')" >> "$SNAP" 2>/dev/null || true
+    "$reason" "$(wc -l < "$src" 2>/dev/null | tr -d ' ' || echo '?')" >> "$SNAP" 2>/dev/null || true
   if [ -z "$exef" ] || [ ! -s "$exef" ]; then
     own="$(mktemp -t cc-sentinel-exe)" && exe_table gui > "$own" 2>/dev/null
     exef="$own"
   fi
   prot=" $(awk '$1 ~ /^[0-9]+$/ && NF >= 6 && $6 != "0" { printf "%s ", $1 }' "$exef" 2>/dev/null) "
-  keep="$(mktemp -t cc-sentinel-frozen)" || { [ -n "$own" ] && rm -f "$own"; printf 'killed=0 spared=0'; return 0; }
+  keep="$(mktemp -t cc-sentinel-frozen)" || {
+    [ -n "$own" ] && rm -f "$own"; [ "$src" = "$FROZEN_DB" ] || rm -f "$src"; printf 'killed=0 spared=0'; return 0; }
   while IFS="$(printf '\t')" read -r pid ls kind at comm; do
     [ -n "$pid" ] || continue
-    cur="$(proc_lstart "$pid")"
-    if [ -z "$cur" ] || [ "$cur" != "$ls" ]; then continue; fi   # gone/recycled: drop, never signal
+    sl="$(proc_stat_lstart "$pid")"; st="${sl%% *}"; cur="${sl#* }"
+    if [ -z "$sl" ] || [ "$cur" != "$ls" ]; then                  # gone/recycled: drop, never signal
+      printf 'DROP-STALE pid=%s held_s=%s kind=%s comm=%s (gone or pid reused; no signal)\n' \
+        "$pid" "$(frozen_age "$now" "$at")" "$kind" "$comm" >> "$SNAP" 2>/dev/null || true
+      continue
+    fi
+    case "$at" in                                                 # no age ⇒ never killed (release_frozen)
+      ''|*[!0-9]*)
+        kill -CONT "$pid" 2>/dev/null
+        spared=$((spared + 1))
+        printf 'DROP-MALFORMED pid=%s kind=%s comm=%s at=%s (frozen-at unreadable; resumed, custody dropped)\n' \
+          "$pid" "$kind" "$comm" "$at" >> "$SNAP" 2>/dev/null || true
+        continue ;;
+    esac
     age=$((now - at))
     case "$comm" in
       claude*|*mcp*)
@@ -1143,7 +1284,22 @@ kill_escalate() { # <now-epoch> <reason> [<exe_file>] → "killed=N spared=N" on
           "$pid" "$age" "$kind" "$comm" >> "$SNAP" 2>/dev/null || true
         continue ;;
     esac
-    if [ "$age" -lt "$KILL_MIN_HOLD_S" ]; then
+    # Resumed outside the sentinel (release_frozen's relinquish arm, same test): the ROOT CAUSE of the
+    # 15:51:34Z kill, where a hand SIGCONT left row 18285 owed and the next retrip killed Dia for it.
+    if [ "$age" -ge "$RELINQUISH_GRACE_S" ] 2>/dev/null && case "$st" in [RSI]*) true ;; *) false ;; esac; then
+      kill -CONT "$pid" 2>/dev/null
+      spared=$((spared + 1))
+      printf 'RELINQUISH pid=%s held_s=%s kind=%s comm=%s stat=%s (resumed outside the sentinel; custody dropped, no kill)\n' \
+        "$pid" "$age" "$kind" "$comm" "$st" >> "$SNAP" 2>/dev/null || true
+      continue
+    fi
+    # …and a RUNNING row still inside the grace is not ours to kill either. The grace is at least
+    # 2×INTERVAL while KILL_MIN_HOLD_S is its own knob, so whenever the grace is the longer of the two
+    # (CC_SENTINEL_INTERVAL > 15, or a raised CC_SENTINEL_RELINQUISH_GRACE_S) a row resumed from
+    # outside and aged between them fell through to the SIGKILL below — the 15:51:34Z kill again, by
+    # configuration. Such a row is held, not killed: the next pass past the grace relinquishes it.
+    if [ "$age" -lt "$RELINQUISH_GRACE_S" ] 2>/dev/null && case "$st" in [RSI]*) true ;; *) false ;; esac \
+       || [ "$age" -lt "$KILL_MIN_HOLD_S" ]; then
       spared=$((spared + 1))
       printf '%s\t%s\t%s\t%s\t%s\n' "$pid" "$ls" "$kind" "$at" "$comm" >> "$keep"
       continue
@@ -1152,7 +1308,8 @@ kill_escalate() { # <now-epoch> <reason> [<exe_file>] → "killed=N spared=N" on
     killed=$((killed + 1))
     printf 'SIGKILL pid=%s held_s=%s kind=%s comm=%s reason=%s\n' \
       "$pid" "$age" "$kind" "$comm" "$reason" >> "$SNAP" 2>/dev/null || true
-  done < "$FROZEN_DB"
+  done < "$src"
+  [ "$src" = "$FROZEN_DB" ] || rm -f "$src" 2>/dev/null
   mv -f "$keep" "$FROZEN_DB" 2>/dev/null || rm -f "$keep" 2>/dev/null
   [ -n "$own" ] && rm -f "$own"
   printf 'killed=%s spared=%s' "$killed" "$spared"
@@ -1482,6 +1639,17 @@ freeze_scan() {
   return 0
 }
 
+# The CC_SENTINEL=off drain (see the kill-switch gate): release a predecessor's ledger, unless
+# another live instance owns the loop — a hand-run with the switch off must never release the live
+# daemon's cohort.
+if [ "$SENTINEL_OFF_DRAIN" = 1 ]; then
+  loop_owner_live "${LOG%.jsonl}.pid" || {
+    printf '%s compressor-sentinel: RELEASE-ON-DISABLE %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      "$(release_frozen "$(date +%s)" exit)" >&2
+    : > "$PROBATION_DB" 2>/dev/null || true
+  }
+  echo "compressor-sentinel: disabled (CC_SENTINEL=off)" >&2; exit 0
+fi
 if [ "$TICKS_PANIC_ONLY" = "1" ]; then
   panic_scan; exit $?
 fi
@@ -1541,12 +1709,9 @@ case "$SELFCHK_EVERY" in ''|0|*[!0-9]*) SELFCHK_EVERY=6 ;; esac
 # daemon, and refusing them while the daemon lives would make every hand-run read as broken.
 if [ "$TICKS" -eq 0 ]; then
   PIDFILE="${LOG%.jsonl}.pid"
-  _mx_pid="$(sed -n 1p "$PIDFILE" 2>/dev/null)"
-  _mx_ls="$(sed -n 2p "$PIDFILE" 2>/dev/null)"
-  if [ -n "$_mx_pid" ] && [ -n "$_mx_ls" ] && [ "$_mx_pid" != "$$" ] \
-     && [ "$(proc_lstart "$_mx_pid")" = "$_mx_ls" ]; then
+  if loop_owner_live "$PIDFILE"; then
     printf 'compressor-sentinel: another live instance owns the loop (pid %s) — exiting 0\n' \
-      "$_mx_pid" >&2
+      "$(sed -n 1p "$PIDFILE" 2>/dev/null)" >&2
     exit 0
   fi
   mkdir -p "$(dirname "$PIDFILE")" 2>/dev/null || true
@@ -1564,8 +1729,10 @@ cleanup() {
   # a daemon that freezes a cohort and is then restarted (launchd reload, an upgrade, a reboot that
   # kills it before the box goes down) leaves those pids stopped with the only record of the debt
   # sitting in a file nothing will read again. The exiting process is the last actor that still
-  # knows what it owes.
-  if [ "$ACT" = "stop" ] && [ -s "$FROZEN_DB" ]; then
+  # knows what it owes. A LOOP-OWNING daemon (TICKS=0) releases whatever its ACT, because it may
+  # have adopted a predecessor's ledger; a bounded run with ACT off/observe (a hand smoke on the
+  # default ledger path) still cannot release the live daemon's cohort on Ctrl-C.
+  if { [ "$ACT" = "stop" ] || [ "$TICKS" -eq 0 ]; } && [ -s "$FROZEN_DB" ]; then
     printf '%s compressor-sentinel: RELEASE-ON-EXIT %s\n' \
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(release_frozen "$(date +%s)" exit)" >&2
   fi
@@ -1581,14 +1748,23 @@ trap cleanup TERM INT
 # before GUI apps had a class of their own. So once, before the first tick, the owner of the loop
 # sweeps both ledgers: a row whose pid is NOW protected (class 2 or 3) is SIGCONTed and dropped, and
 # its probation stamp with it. Every other row keeps its hold — the sweep is not a release policy.
-if [ "$TICKS" -eq 0 ] && [ "$ACT" = stop ]; then
-  if [ -s "$FROZEN_DB" ] || [ -s "$PROBATION_DB" ]; then
-    _prot=" $(exe_table gui 2>/dev/null | awk '$1 ~ /^[0-9]+$/ && NF >= 6 && $6 != "0" { printf "%s ", $1 }') "
-    [ -s "$FROZEN_DB" ] && printf '%s compressor-sentinel: STARTUP-SWEEP %s\n' \
-      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(release_frozen "$(date +%s)" sweep 0 0 "$_prot")" >&2
-    if [ -s "$PROBATION_DB" ] && _pk="$(mktemp -t cc-sentinel-probation)"; then
-      awk -F'\t' -v p="$_prot" 'index(p, " " $1 " ") == 0' "$PROBATION_DB" > "$_pk" && mv -f "$_pk" "$PROBATION_DB"
+# A loop owner that is NOT armed (ACT off/observe) can never release anything on its own ticks, so
+# it hands the whole ledger back at once (exit mode) and truncates probation: without this, an
+# armed daemon restarted disarmed leaves its predecessor's cohort stopped for good.
+if [ "$TICKS" -eq 0 ]; then
+  if [ "$ACT" = stop ]; then
+    if [ -s "$FROZEN_DB" ] || [ -s "$PROBATION_DB" ]; then
+      _prot=" $(exe_table gui 2>/dev/null | awk '$1 ~ /^[0-9]+$/ && NF >= 6 && $6 != "0" { printf "%s ", $1 }') "
+      [ -s "$FROZEN_DB" ] && printf '%s compressor-sentinel: STARTUP-SWEEP %s\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(release_frozen "$(date +%s)" sweep 0 0 "$_prot")" >&2
+      if [ -s "$PROBATION_DB" ] && _pk="$(mktemp -t cc-sentinel-probation)"; then
+        awk -F'\t' -v p="$_prot" 'index(p, " " $1 " ") == 0' "$PROBATION_DB" > "$_pk" && mv -f "$_pk" "$PROBATION_DB"
+      fi
     fi
+  elif [ -s "$FROZEN_DB" ] || [ -s "$PROBATION_DB" ]; then
+    printf '%s compressor-sentinel: RELEASE-ON-DISARM (ACT=%s) %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      "$ACT" "$(release_frozen "$(date +%s)" exit)" >&2
+    : > "$PROBATION_DB" 2>/dev/null || true
   fi
 fi
 
@@ -1827,6 +2003,9 @@ while :; do
           printf '%s pid=%s rss_kb=%s comm=%s\n' "$ACTVERB" "$spid" "$srss" "$scomm" >> "$SNAP" 2>/dev/null || true
         fi
       done <<< "$TARGETS"
+      # ONE REWRITE PER TRIP, after every signal: a pid this trip froze as a parent may already be
+      # owed as a worker from an earlier trip, and custody must see one row (frozen_merge).
+      [ "$ACT" = "stop" ] && [ $((PARENT_STOPPED + STOPPED)) -gt 0 ] && frozen_compact
       printf 'actuator: %s %s process(es) (cap %s, floor %s kB)\n' \
         "$([ "$ACT" = observe ] && echo 'WOULD have SIGSTOPped' || echo SIGSTOPped)" \
         "$STOPPED" "$ACT_CAP" "$ACT_RSS_KB" >> "$SNAP" 2>/dev/null || true

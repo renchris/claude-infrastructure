@@ -150,13 +150,15 @@ case "$*" in
   *"pid=,ppid=,rss=,args="*)       cat "$PS_ACT"    2>/dev/null ;;
   *"pid=,ppid=,rss=,comm="*)       cat "$PS_CENSUS" 2>/dev/null ;;
   *"rss=,comm="*)                  cat "$PS_EXE"    2>/dev/null ;;
+  *"lstart="*) st=0; case "$*" in *stat=*) st=1 ;; esac; p=""; while [ $# -gt 0 ]; do [ "$1" = "-p" ] && p="$2"; shift; done
+               awk -F'\t' -v p="$p" -v s="$st" '$1 == p { if (s) print ($3 == "" ? "T" : $3) " " $2; else print $2 }' "$PS_LSTART" 2>/dev/null ;;
   *) echo "stub-ps $*" ;;
 esac
 SH
 
-  : > "$D/ps.census"; : > "$D/ps.act"; : > "$D/ps.snap"; : > "$D/ps.exe"; : > "$D/ps.argv"
+  : > "$D/ps.census"; : > "$D/ps.act"; : > "$D/ps.snap"; : > "$D/ps.exe"; : > "$D/ps.argv"; : > "$D/ps.lstart"
   export PS_CENSUS="$D/ps.census" PS_ACT="$D/ps.act" PS_SNAP="$D/ps.snap" PS_EXE="$D/ps.exe" \
-         PS_ARGV="$D/ps.argv"
+         PS_ARGV="$D/ps.argv" PS_LSTART="$D/ps.lstart"
   chmod +x "$STUB"/pick "$STUB"/vm_stat "$STUB"/sysctl "$STUB"/ps
 }
 
@@ -1479,7 +1481,7 @@ mkfreezerow() { # <file> <boot_epoch>
 # its explicit locator assertion. NO case carries `skip` — a skipped case renders as `ok` and would
 # make this whole block vacuous (memory: red-proof-fixture-must-not-call-the-subject).
 
-mkcohort() { # <psmap>  — TAB-separated "pid<TAB>lstart" rows. A pid ABSENT from the map is gone.
+mkcohort() { # <psmap>  — TAB-separated "pid<TAB>lstart[<TAB>stat]" rows. A pid ABSENT from the map is gone.
   PSMAP="$D/psmap"; printf '%s\n' "$1" > "$PSMAP"
   FDB="$D/frozen.tsv"; : > "$FDB"
   PROBDB="$D/probation.tsv"; : > "$PROBDB"
@@ -1487,15 +1489,24 @@ mkcohort() { # <psmap>  — TAB-separated "pid<TAB>lstart" rows. A pid ABSENT fr
   # A FULL-TABLE read (no -p) prints NOTHING: kill_escalate now reads `exe_table gui` when handed no
   # capture, and an empty table is the belt ABSTAINING — so every custody case below keeps its exact
   # pre-2026-09-30 output, and the fail direction of that belt is pinned by all of them at once.
+  #
+  # THE STAT COLUMN (2026-09-30). Custody now reads `-o stat=,lstart=` in one fork; for that format
+  # the stub prints "<stat> <lstart>", stat from an optional third map column and T (stopped) when
+  # absent — the state a ledgered row is in unless a case says someone resumed it. `-o lstart=` alone
+  # (record_frozen, probation, the mutex) prints the lstart exactly as before.
   cat > "$STUB/ps" <<'SH'
 #!/bin/bash
-pid=""
+pid=""; o=""
 while [ $# -gt 0 ]; do
-  if [ "$1" = "-p" ]; then pid="$2"; shift; fi
+  if [ "$1" = "-p" ]; then pid="$2"; shift
+  elif [ "$1" = "-o" ]; then o="$2"; shift; fi
   shift
 done
 [ -n "$pid" ] || exit 0
-awk -F'\t' -v p="$pid" '$1==p {print $2}' "$PSMAP"
+case "$o" in
+  *stat=*) awk -F'\t' -v p="$pid" '$1==p { print ($3 == "" ? "T" : $3) " " $2 }' "$PSMAP" ;;
+  *)       awk -F'\t' -v p="$pid" '$1==p {print $2}' "$PSMAP" ;;
+esac
 SH
   chmod +x "$STUB/ps"
 }
@@ -1510,11 +1521,16 @@ have_arm() { # <fn>
   grep -q "^$1() {" "$D/lib.sh" || false
 }
 
+# Both custody runners run under the daemon's own `set -uo pipefail` (L88): an unbound expansion that
+# aborts the function in the daemon must abort it here too, or the suite passes code that strands.
+# APPLYSIG (optional, exported): a script the kill stub also calls, so a case can make the stub table
+# FOLLOW the signals — custody that reads state must be tested against its own SIGCONT's effect.
 run_rel() { # <now-epoch> <mode> [<parent_ok 0|1>] [<cliff 0|1>] [<protected " pid " list>]
   run env PATH="$STUB:$PATH" PSMAP="$PSMAP" FROZEN_DB="$FDB" SNAP="$SNAPLOG" KILLLOG="$KILLLOG" \
       HOLD_MIN_S="${HOLD_MIN_S:-60}" HOLD_MAX_S="${HOLD_MAX_S:-600}" \
       PARENT_HOLD_MIN_S="${PARENT_HOLD_MIN_S:-600}" PROBATION_DB="$PROBDB" \
-      bash -c 'kill() { printf "%s\n" "$*" >> "$KILLLOG"; }; . "$1"; release_frozen "$2" "$3" "$4" "$5" "$6"' \
+      RELINQUISH_GRACE_S="${RELINQUISH_GRACE_S:-30}" \
+      bash -c 'set -uo pipefail; kill() { printf "%s\n" "$*" >> "$KILLLOG"; [ -z "${APPLYSIG:-}" ] || "$APPLYSIG" "$@"; }; . "$1"; release_frozen "$2" "$3" "$4" "$5" "$6"' \
       _ "$D/lib.sh" "$1" "$2" "${3:-0}" "${4:-0}" "${5:- }"
 }
 
@@ -1828,9 +1844,9 @@ run_kd() { # <pct> <srate> <trip_now> <debt_n>
 
 run_ke() { # <now-epoch> <reason> [<exe_file>]
   run env PATH="$STUB:$PATH" PSMAP="$PSMAP" FROZEN_DB="$FDB" SNAP="$SNAPLOG" KILLLOG="$KILLLOG" \
-      KILL_MIN_HOLD_S="${KILL_MIN_HOLD_S:-30}" \
-      bash -c 'kill() { printf "%s\n" "$*" >> "$KILLLOG"; }; . "$1"; kill_escalate "$2" "$3" "$4"' \
-      _ "$D/lib.sh" "$1" "$2" "${3:-}"
+      KILL_MIN_HOLD_S="${KILL_MIN_HOLD_S:-30}" RELINQUISH_GRACE_S="${RELINQUISH_GRACE_S:-30}" \
+      bash -c 'set -uo pipefail; kill() { printf "%s\n" "$*" >> "$KILLLOG"; [ -z "${APPLYSIG:-}" ] || "$APPLYSIG" "$@"; }; . "$1"; kill_escalate "$2" "$3" "$4"' \
+      _ "${KE_LIB:-$D/lib.sh}" "$1" "$2" "${3:-}"
 }
 
 @test "kill_escalate: kills only ledger-verified custody — the young, the claude-shaped and the recycled survive" {
@@ -1872,6 +1888,14 @@ run_ke() { # <now-epoch> <reason> [<exe_file>]
   ! printf '%s\n' "$between" | grep -qF 'rm -f "$EXEF"' || false     # not deleted before the kill rung
   grep -qF "printf 'actuator: protected-class spared" "$S" || false
   grep -qF 'release_frozen "$(date +%s)" sweep' "$S" || false
+  # …and custody returns what a loop owner inherited, whatever its ACT, through the one liveness test
+  # the mutex uses — so no hand-run can release the live daemon's cohort.
+  grep -qF 'RELEASE-ON-DISARM' "$S" || false
+  grep -qF 'RELEASE-ON-DISABLE' "$S" || false
+  [ "$(grep -cF 'loop_owner_live "' "$S")" -ge 2 ] || false         # the mutex AND the off-drain
+  # One ledger row per process: compacted once per trip after the stop loops, and read merged.
+  grep -qF '[ $((PARENT_STOPPED + STOPPED)) -gt 0 ] && frozen_compact' "$S" || false
+  [ "$(grep -cF 'src="$(frozen_read)"' "$S")" -eq 2 ] || false      # release_frozen AND kill_escalate
 }
 
 # ── 8f. the panic reader's dotfile shadow, the boot-jitter dedupe, and the mutex ──────────────────
@@ -2527,8 +2551,10 @@ SH
 sentinel_daemon_bg() { # <script-copy> <errlog> → the DAEMON's pid on stdout; its exit code lands in <errlog>.rc
   # A wrapper subshell owns the daemon so its rc survives: the caller gets this pid from `$(…)`,
   # which makes it no child of the test shell, so `wait` there cannot read it.
+  # ACT is off unless the caller sets BG_ACT — the one case that needs an ARMED loop owner is the
+  # STARTUP-SWEEP, which runs only when ACT=stop.
   ( env PATH="$STUB:$PATH" CC_SENTINEL_LOG="$LOG" CC_SENTINEL_INTERVAL=1 \
-      CC_SENTINEL_SELFCHK_TICKS=1 CC_PANIC_SCAN=off CC_FREEZE_SCAN=off CC_SENTINEL_ACT=off \
+      CC_SENTINEL_SELFCHK_TICKS=1 CC_PANIC_SCAN=off CC_FREEZE_SCAN=off CC_SENTINEL_ACT="${BG_ACT:-off}" \
       bash "$1" 2>"$2" >/dev/null &
     echo $! > "$2.pid"; wait $!; echo $? > "$2.rc" ) >/dev/null 2>&1 &
   local i=0
@@ -2558,9 +2584,17 @@ wait_exit() { # <pid> <max-seconds> → rc 0 once the pid is gone
 }
 
 @test "self-restart: HELD while the freeze ledger is non-empty — the daemon keeps running" {
+  # THE PREMISE CHANGED 2026-09-30, AND THE ASSERTION DID NOT. This case used to seed the ledger
+  # BEFORE starting an ACT=off daemon — i.e. a disarmed loop owner adopting a predecessor's custody,
+  # which is exactly the stranded state RELEASE-ON-DISARM now hands back at startup (the row would be
+  # gone before the first self-check, and this case would pass only by pinning the strand). So the
+  # row is written AFTER the loop is running: a ledger that is non-empty while the daemon ticks, which
+  # is the state the hold exists for (memory: stale-assertion-becomes-an-inverted-guard).
   cp "$S" "$D/sentinel-copy.sh"
-  printf '%s\t%s\tworker\t%s\tnode\n' 999999 "x" "$(date +%s)" > "${LOG%.jsonl}-frozen.tsv"
   pid="$(sentinel_daemon_bg "$D/sentinel-copy.sh" "$D/err.log")"
+  i=0; while [ "$(rows)" -lt 1 ] && [ "$i" -lt 40 ]; do sleep 0.25; i=$((i + 1)); done
+  [ "$(rows)" -ge 1 ] || { kill "$pid" 2>/dev/null; cat "$D/err.log" >&2; false; }
+  printf '%s\t%s\tworker\t%s\tnode\n' 999999 "x" "$(date +%s)" > "${LOG%.jsonl}-frozen.tsv"
   sleep 2
   printf '\n# a landed change\n' >> "$D/sentinel-copy.sh"
   sleep 5
@@ -2578,4 +2612,285 @@ wait_exit() { # <pid> <max-seconds> → rc 0 once the pid is gone
   kill "$pid" 2>/dev/null || true
   [ "$alive" -eq 1 ] || { cat "$D/err.log" >&2; false; }
   ! grep -q 'SELF-RESTART' "$D/err.log" || false
+}
+
+# ══ 5f. 2026-09-30 — CUSTODY READS PROCESS STATE ══════════════════════════════════════════════════
+#
+# ROOT CAUSE OF THE 15:51:34Z KILL. The lead resumed Dia by hand (SIGCONT), but custody compared only
+# (pid, lstart), so row 18285 stayed owed — and the next retrip-over-debt SIGKILLed the browser for
+# it. Custody now reads `stat=,lstart=` in the same one fork: a ledgered pid that reads running,
+# sleeping or idle past RELINQUISH_GRACE_S was resumed by someone else and is dropped, never killed.
+#
+# REAL SIGNALS, IN THIS BLOCK ONLY, AND ONLY TO THE TEST'S OWN CHILD: a `sleep` this case started.
+# Darwin's report of a stopped task is the premise the relinquish arm rests on, so it is pinned
+# against the kernel rather than a stub. The teardown resumes and ends that child whatever happens.
+teardown() {
+  if [ -n "${CHILD_PID:-}" ]; then kill -CONT "$CHILD_PID" 2>/dev/null || true; kill "$CHILD_PID" 2>/dev/null || true; fi
+  if [ -n "${CHILD2_PID:-}" ]; then kill -CONT "$CHILD2_PID" 2>/dev/null || true; kill "$CHILD2_PID" 2>/dev/null || true; fi
+  if [ -n "${DAEMON_PID:-}" ]; then kill "$DAEMON_PID" 2>/dev/null || true; fi
+  true
+}
+
+stat_of() { ps -o stat= -p "$1" 2>/dev/null | tr -d ' '; }
+
+# STOP THE TEST'S OWN CHILD, AND MAKE THE STOP STICK. `kill -STOP` sent right after `sleep … &`
+# races the child's exec, and Darwin loses a stop that lands inside exec — measured ~30% of rounds
+# under load: the child reads S and finishes its sleep, and the case reddens as "premise refuted"
+# when the premise was never tested. So wait until the exec has happened (comm reads `sleep`), THEN
+# stop, and re-send the stop on every poll until the state reads T.
+stop_own_child() { # <pid> → rc 0 once the child reads T
+  local i=0
+  while [ "$(ps -o comm= -p "$1" 2>/dev/null | sed 's|.*/||')" != "sleep" ] && [ "$i" -lt 50 ]; do
+    sleep 0.05; i=$((i + 1))
+  done
+  i=0
+  while [ "$(stat_of "$1" | cut -c1)" != "T" ] && [ "$i" -lt 40 ]; do
+    kill -STOP "$1" 2>/dev/null || true; sleep 0.1; i=$((i + 1))
+  done
+  [ "$(stat_of "$1" | cut -c1)" = "T" ]
+}
+
+# A STOPPED child of this test, ledgered the way record_frozen would have written it.
+own_frozen_child() { # <ledger> <age_s>
+  sleep 120 & CHILD_PID=$!
+  stop_own_child "$CHILD_PID" || false
+  printf '%s\t%s\tproc\t%s\tsleep\n' "$CHILD_PID" \
+    "$(TZ=UTC ps -o lstart= -p "$CHILD_PID" | tr -s ' ' | sed 's/^ *//;s/ *$//')" \
+    "$(( $(date +%s) - $2 ))" > "$1"
+}
+
+@test "DARWIN PREMISE: a SIGSTOPped task reads T, and a resumed one does not (own child only)" {
+  sleep 30 & CHILD_PID=$!
+  stop_own_child "$CHILD_PID" || false
+  kill -CONT "$CHILD_PID"
+  local i=0; while [ "$(stat_of "$CHILD_PID" | cut -c1)" = "T" ] && [ "$i" -lt 20 ]; do sleep 0.1; i=$((i + 1)); done
+  [ -n "$(stat_of "$CHILD_PID")" ] || false                              # still alive: the read is real
+  [ "$(stat_of "$CHILD_PID" | cut -c1)" != "T" ] || false
+  # And the helper custody uses reads the same state, with lstart byte-identical to proc_lstart.
+  run /bin/bash -c '. "$1"; a="$(proc_stat_lstart "$2")"; b="$(proc_lstart "$2")"; [ "${a#* }" = "$b" ] && printf "%s" "${a%% *}"' _ "$D/lib.sh" "$CHILD_PID"
+  [ "$status" -eq 0 ] || false
+  [ "$(printf '%s' "$output" | cut -c1)" != "T" ] || false
+  run /bin/bash -c '. "$1"; proc_stat_lstart 999999' _ "$D/lib.sh"         # a gone pid reads EMPTY
+  [ -z "$output" ] || false
+}
+
+@test "custody reads process state: a row resumed outside the sentinel is RELINQUISHED — never re-owed" {
+  have_arm proc_stat_lstart
+  mkcohort "$(printf '5001\tMon 30 Sep 15:39:16 2026\tS\n5002\tMon 30 Sep 15:39:17 2026\tS\n5003\tMon 30 Sep 15:39:18 2026\tT')"
+  ledger 5001 "Mon 30 Sep 15:39:16 2026" parent 1000 Dia     # resumed, 40 s old   → relinquished
+  ledger 5002 "Mon 30 Sep 15:39:17 2026" parent 1035 Dia     # resumed, 5 s old    → inside the grace
+  ledger 5003 "Mon 30 Sep 15:39:18 2026" proc 940 node       # still stopped (T)   → the old rules: clear
+  ledger 5009 "Mon 30 Sep 15:39:19 2026" proc 1000 node      # gone                → DROP-STALE
+  run_rel 1040 clear
+  [ "$output" = "released=2 held=1 stale=1" ] || false
+  [ "$(grep -cF -- '-CONT 5001' "$KILLLOG")" -eq 1 ] || false   # the belt SIGCONT: resumes, never strands
+  [ "$(grep -cF -- '-CONT 5002' "$KILLLOG")" -eq 0 ] || false
+  [ "$(grep -cF -- '-CONT 5003' "$KILLLOG")" -eq 1 ] || false
+  grep -qF 'RELINQUISH pid=5001 held_s=40 kind=parent comm=Dia stat=S (resumed outside the sentinel' "$SNAPLOG" || false
+  grep -qF 'SIGCONT pid=5003 held_s=100 kind=proc comm=node reason=clear' "$SNAPLOG" || false
+  [ "$(grep -c 'DROP-STALE pid=5009 ' "$SNAPLOG")" -eq 1 ] || false
+  [ "$(cut -f1 < "$FDB")" = "5002" ] || false
+  # A relinquished SPAWNER is not on probation: it was not our release, so there is nothing to watch.
+  [ ! -s "$PROBDB" ] || false
+}
+
+@test "kill_escalate REPLAY 2026-09-30T15:51:34Z: the hand-resumed Dia row is relinquished, the stopped spawner is killed" {
+  have_arm kill_escalate
+  mkcohort "$(printf '18285\tMon 30 Sep 15:39:10 2026\tR\n42897\tMon 30 Sep 15:48:00 2026\tT')"
+  ledger 18285 "Mon 30 Sep 15:39:10 2026" parent 1000 Dia                       # held 734 s, resumed by hand
+  ledger 42897 "Mon 30 Sep 15:48:00 2026" parent 1634 'next-server_(v16.2.6)'   # held 100 s, still stopped
+  run_ke 1734 retrip-over-debt
+  [ "$output" = "killed=1 spared=1" ] || false
+  [ "$(grep -cF -- '-CONT 18285' "$KILLLOG")" -eq 1 ] || false
+  [ "$(grep -cF -- '-KILL 18285' "$KILLLOG")" -eq 0 ] || false
+  [ "$(grep -cF -- '-KILL 42897' "$KILLLOG")" -eq 1 ] || false                  # control: the rung still kills
+  grep -qF 'RELINQUISH pid=18285 held_s=734 kind=parent comm=Dia stat=R' "$SNAPLOG" || false
+  [ ! -s "$FDB" ] || false                                                       # both rows settled
+  # PRE-FIX (861bc8a95): the same ledger, the same map — and Dia is killed. The incident, replayed.
+  prefix_lib3
+  mkcohort "$(printf '18285\tMon 30 Sep 15:39:10 2026\tR\n42897\tMon 30 Sep 15:48:00 2026\tT')"
+  ledger 18285 "Mon 30 Sep 15:39:10 2026" parent 1000 Dia
+  ledger 42897 "Mon 30 Sep 15:48:00 2026" parent 1634 'next-server_(v16.2.6)'
+  KE_LIB="$D/prelib3.sh" run_ke 1734 retrip-over-debt
+  [ "$output" = "killed=2 spared=0" ] || false
+  [ "$(grep -cF -- '-KILL 18285' "$KILLLOG")" -eq 1 ] || false
+}
+
+@test "startup custody: an ACT=off loop owner hands an inherited freeze back (RELEASE-ON-DISARM)" {
+  own_frozen_child "${LOG%.jsonl}-frozen.tsv" 100
+  cp "$S" "$D/sentinel-copy.sh"
+  DAEMON_PID="$(sentinel_daemon_bg "$D/sentinel-copy.sh" "$D/err.log")"
+  local i=0; while [ "$(rows)" -lt 1 ] && [ "$i" -lt 40 ]; do sleep 0.25; i=$((i + 1)); done
+  [ "$(rows)" -ge 1 ] || { cat "$D/err.log" >&2; false; }
+  grep -q 'RELEASE-ON-DISARM (ACT=off) released=1 held=0 stale=0' "$D/err.log" || { cat "$D/err.log" >&2; false; }
+  [ "$(stat_of "$CHILD_PID" | cut -c1)" != "T" ] || false               # the child is running again
+  [ ! -s "${LOG%.jsonl}-frozen.tsv" ] || false                          # and nothing is owed for it
+}
+
+@test "startup custody: CC_SENTINEL=off drains an inherited ledger — unless a live instance owns the loop" {
+  own_frozen_child "${LOG%.jsonl}-frozen.tsv" 100
+  # CONTROL FIRST: a pidfile naming a LIVE owner (the child itself stands in — any live pid with its
+  # own true lstart is an owner to loop_owner_live) ⇒ the off-run must NOT release: a hand-run with
+  # the switch off can never hand back the live daemon's cohort.
+  printf '%s\n%s\n' "$CHILD_PID" "$(TZ=UTC ps -o lstart= -p "$CHILD_PID" | tr -s ' ' | sed 's/^ *//;s/ *$//')" > "${LOG%.jsonl}.pid"
+  run env CC_SENTINEL=off CC_SENTINEL_LOG="$LOG" CC_PANIC_SCAN=off CC_FREEZE_SCAN=off bash "$S"
+  [ "$status" -eq 0 ] || false
+  ! printf '%s\n' "$output" | grep -q 'RELEASE-ON-DISABLE' || false
+  [ "$(stat_of "$CHILD_PID" | cut -c1)" = "T" ] || false
+  [ -s "${LOG%.jsonl}-frozen.tsv" ] || false
+  # No owner ⇒ the predecessor's ledger is returned, then the switch is honoured: no rows, rc 0.
+  rm -f "${LOG%.jsonl}.pid"
+  run env CC_SENTINEL=off CC_SENTINEL_LOG="$LOG" CC_PANIC_SCAN=off CC_FREEZE_SCAN=off bash "$S"
+  [ "$status" -eq 0 ] || false
+  printf '%s\n' "$output" | grep -q 'RELEASE-ON-DISABLE released=1 held=0 stale=0' || false
+  printf '%s\n' "$output" | grep -q 'disabled (CC_SENTINEL=off)' || false
+  [ "$(rows)" = "0" ] || false
+  [ "$(stat_of "$CHILD_PID" | cut -c1)" != "T" ] || false
+  [ ! -s "${LOG%.jsonl}-frozen.tsv" ] || false
+}
+
+# ══ 5g. 2026-09-30 REVIEW — the custody defects the first pass left ═══════════════════════════════
+
+@test "custody under set -u: an EMPTY frozen-at no longer aborts the pass — the good rows still settle" {
+  have_arm release_frozen
+  # `read` with a tab IFS collapses the empty field, so the comm lands in `at` and `$((now - at))`
+  # reads the unbound variable `node`. On f8b4184be that aborted the pass: nothing released, the
+  # ledger never rewritten, every frozen pid stranded on every later tick.
+  mkcohort "$(printf '7001\tMon 30 Sep 15:39:16 2026\n7002\tMon 30 Sep 15:39:17 2026')"
+  printf '999991\tMon 30 Sep 15:00:00 2026\tproc\t\tnode\n' >> "$FDB"       # GONE, empty frozen-at
+  printf '7002\tMon 30 Sep 15:39:17 2026\tproc\t\tnode\n' >> "$FDB"          # LIVE, empty frozen-at
+  ledger 7001 "Mon 30 Sep 15:39:16 2026" proc 1000 node                       # live, 100 s — a clear release
+  run_rel 1100 clear
+  [ "$output" = "released=1 held=0 stale=2" ] || { echo "$output"; false; }
+  [ "$(grep -cF -- '-CONT 7001' "$KILLLOG")" -eq 1 ] || false
+  [ "$(grep -cF -- '-CONT 7002' "$KILLLOG")" -eq 1 ] || false               # no age ⇒ resumed, never stranded
+  [ "$(grep -cF -- '999991' "$KILLLOG")" -eq 0 ] || false                   # gone ⇒ never signalled
+  grep -qF 'DROP-STALE pid=999991 held_s=? kind=proc' "$SNAPLOG" || false
+  grep -qF 'DROP-MALFORMED pid=7002 kind=proc' "$SNAPLOG" || false
+  [ ! -s "$FDB" ] || false
+  # THE KILL RUNG, same seed: the aged row is killed, the malformed one is resumed — never killed.
+  mkcohort "$(printf '7001\tMon 30 Sep 15:39:16 2026\n7002\tMon 30 Sep 15:39:17 2026')"
+  printf '999991\tMon 30 Sep 15:00:00 2026\tproc\t\tnode\n7002\tMon 30 Sep 15:39:17 2026\tproc\t\tnode\n' >> "$FDB"
+  ledger 7001 "Mon 30 Sep 15:39:16 2026" proc 1000 node
+  run_ke 1100 retrip-over-debt
+  [ "$output" = "killed=1 spared=1" ] || { echo "$output"; false; }
+  [ "$(grep -cF -- '-KILL 7001' "$KILLLOG")" -eq 1 ] || false
+  [ "$(grep -cF -- '-KILL 7002' "$KILLLOG")" -eq 0 ] || false
+  [ "$(grep -cF -- '-CONT 7002' "$KILLLOG")" -eq 1 ] || false
+}
+
+@test "kill_escalate: a row resumed from outside and still inside a grace longer than KILL_MIN_HOLD_S is HELD, never killed" {
+  have_arm kill_escalate
+  # Age 35: past KILL_MIN_HOLD_S (30), inside a raised grace (40). On f8b4184be this fell through to
+  # SIGKILL — the 15:51:34Z failure reopened by a knob.
+  mkcohort "$(printf '7001\tMon 30 Sep 15:39:16 2026\tS\n7003\tMon 30 Sep 15:39:18 2026\tT')"
+  ledger 7001 "Mon 30 Sep 15:39:16 2026" parent 1000 Dia
+  ledger 7003 "Mon 30 Sep 15:39:18 2026" parent 1000 'next-server_(v16.2.6)'   # control: stopped, same age
+  RELINQUISH_GRACE_S=40 run_ke 1035 retrip-over-debt
+  [ "$output" = "killed=1 spared=1" ] || { echo "$output"; false; }
+  [ "$(grep -cF -- '7001' "$KILLLOG")" -eq 0 ] || false                     # neither killed nor resumed yet
+  [ "$(grep -cF -- '-KILL 7003' "$KILLLOG")" -eq 1 ] || false               # the stopped row IS killed
+  [ "$(cut -f1 < "$FDB")" = "7001" ] || false                                # held: still owed
+  # …and once past the grace the same row is relinquished (SIGCONT, dropped) — still never killed.
+  mkcohort "$(printf '7001\tMon 30 Sep 15:39:16 2026\tS')"
+  ledger 7001 "Mon 30 Sep 15:39:16 2026" parent 1000 Dia
+  RELINQUISH_GRACE_S=40 run_ke 1041 retrip-over-debt
+  [ "$output" = "killed=0 spared=1" ] || false
+  [ "$(grep -cF -- '-CONT 7001' "$KILLLOG")" -eq 1 ] || false
+  [ ! -s "$FDB" ] || false
+}
+
+# The stub table follows the signals: after -CONT the pid reads S, after -KILL it is gone.
+mkapplysig() {
+  cat > "$D/applysig" <<'SH'
+#!/bin/bash
+t="$PSMAP.t"
+case "$1" in
+  -CONT) awk -F'\t' -v OFS='\t' -v p="$2" '$1 == p { $3 = "S" } { print }' "$PSMAP" > "$t" ;;
+  -KILL) awk -F'\t' -v p="$2" '$1 != p' "$PSMAP" > "$t" ;;
+  *) exit 0 ;;
+esac
+mv -f "$t" "$PSMAP"
+SH
+  chmod +x "$D/applysig"
+  export APPLYSIG="$D/applysig"
+}
+
+@test "ONE ROW PER PROCESS: a spawner owed as worker AND parent is held as a parent — its own SIGCONT is never read as an outside resume" {
+  have_arm release_frozen
+  # Panic #5's order: trip 1 ledgered the fresh spawner 42897 as a worker, TRIP 2 re-froze it as a
+  # parent. On f8b4184be the first clear tick SIGCONTed the worker row (resuming the spawner), then
+  # read that SIGCONT on the parent row as a resume from outside — released=2, no probation, and the
+  # next retrip-over-debt had nothing left to kill.
+  mkcohort "$(printf '42897\tMon 24 Aug 19:49:50 2026')"
+  mkapplysig
+  ledger 42897 "Mon 24 Aug 19:49:50 2026" proc 1000 'next-server_(v16.2.6)'
+  ledger 42897 "Mon 24 Aug 19:49:50 2026" parent 1131 'next-server_(v16.2.6)'
+  run_rel 1200 clear 0 0
+  [ "$output" = "released=0 held=1 stale=0" ] || { echo "$output"; false; }
+  [ ! -s "$KILLLOG" ] || false                                              # no signal at all
+  ! grep -q 'RELINQUISH' "$SNAPLOG" || false
+  # ONE row, the stricter kind, the EARLIEST freeze.
+  [ "$(wc -l < "$FDB" | tr -d ' ')" -eq 1 ] || false
+  [ "$(cut -f1,3,4 < "$FDB")" = "$(printf '42897\tparent\t1000')" ] || false
+  run_ke 1300 retrip-over-debt
+  [ "$output" = "killed=1 spared=0" ] || { echo "$output"; false; }
+  [ "$(grep -cF -- '-KILL 42897' "$KILLLOG")" -eq 1 ] || false
+  # THE KILL RUNG reads through the same merge: seeded with the pair directly, one kill, one debt.
+  # "One kill" alone cannot tell: read raw, the first row kills and the stub then reports the second
+  # gone (DROP-STALE). What only the merged row gives is the kill logged as the PARENT, at the
+  # earliest freeze, with no stale second row behind it.
+  mkcohort "$(printf '42897\tMon 24 Aug 19:49:50 2026')"
+  ledger 42897 "Mon 24 Aug 19:49:50 2026" proc 1000 'next-server_(v16.2.6)'
+  ledger 42897 "Mon 24 Aug 19:49:50 2026" parent 1131 'next-server_(v16.2.6)'
+  : > "$SNAPLOG"
+  run_ke 1300 retrip-over-debt
+  [ "$output" = "killed=1 spared=0" ] || { echo "$output"; false; }
+  grep -qF 'KILL-INTENT reason=retrip-over-debt debt=1 ' "$SNAPLOG" || false
+  grep -qF 'SIGKILL pid=42897 held_s=300 kind=parent ' "$SNAPLOG" || { cat "$SNAPLOG"; false; }
+  ! grep -q 'DROP-STALE pid=42897 ' "$SNAPLOG" || false
+  [ ! -s "$FDB" ] || false
+  # frozen_merge alone: parent wins, earliest frozen-at, first-seen order, distinct processes untouched.
+  printf '5\tA\tproc\t300\tx\n6\tB\tproc\t200\ty\n5\tA\tparent\t100\tx\n5\tZ\tproc\t50\tx\n' > "$D/m.tsv"
+  run /bin/bash -c '. "$1"; frozen_merge "$2"' _ "$D/lib.sh" "$D/m.tsv"
+  [ "$output" = "$(printf '5\tA\tparent\t100\tx\n6\tB\tproc\t200\ty\n5\tZ\tproc\t50\tx')" ] || { echo "$output"; false; }
+}
+
+@test "STARTUP-SWEEP: an ARMED loop owner resumes an inherited protected row and its stamp, and keeps every other hold" {
+  # The self-heal for GUI rows stranded by a daemon killed before its TERM trap ran. Until this case
+  # only a text grep and the release_frozen unit covered it — a startup protected list forced EMPTY
+  # passed every test. Real loop, ACT=stop; real signals to this test's OWN two
+  # children only. The stub ps names child 1 a Dia root (class 2) and child 2 a plain node (class 0);
+  # every `-p` read goes to the real ps, so custody sees the children's true state and lstart.
+  mkstubs 0 0 0
+  sleep 120 & CHILD_PID=$!; stop_own_child "$CHILD_PID" || false
+  sleep 120 & CHILD2_PID=$!; stop_own_child "$CHILD2_PID" || false
+  export C1="$CHILD_PID" C2="$CHILD2_PID" DIA_BIN="$DIA"
+  cat > "$STUB/ps" <<'SH'
+#!/bin/bash
+case " $* " in *" -p "*) exec /bin/ps "$@" ;; esac
+case "$*" in
+  *"pid=,ucomm="*)           printf '1 launchd\n%s sleep\n%s sleep\n' "$C1" "$C2" ;;
+  *"pid=,args="*)            printf '1 /sbin/launchd\n%s sleep 120\n%s sleep 120\n' "$C1" "$C2" ;;
+  *"pid=,ppid=,rss=,comm="*) printf '1 0 1000 /sbin/launchd\n%s 1 400000 %s\n%s 1 200000 /opt/homebrew/bin/node\n' "$C1" "$DIA_BIN" "$C2" ;;
+  *) : ;;
+esac
+SH
+  chmod +x "$STUB/ps"
+  local lt1 lt2 now; now="$(date +%s)"
+  lt1="$(TZ=UTC /bin/ps -o lstart= -p "$C1" | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  lt2="$(TZ=UTC /bin/ps -o lstart= -p "$C2" | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  printf '%s\t%s\tparent\t%s\tDia\n%s\t%s\tproc\t%s\tnode\n' "$C1" "$lt1" "$((now - 100))" "$C2" "$lt2" "$now" \
+    > "${LOG%.jsonl}-frozen.tsv"
+  printf '%s\t%s\t%s\tDia\n%s\t%s\t%s\tnode\n' "$C1" "$lt1" "$now" "$C2" "$lt2" "$now" \
+    > "${LOG%.jsonl}-frozen-probation.tsv"
+  cp "$S" "$D/sentinel-copy.sh"
+  DAEMON_PID="$(BG_ACT=stop sentinel_daemon_bg "$D/sentinel-copy.sh" "$D/err.log")"
+  local i=0; while [ "$(rows)" -lt 1 ] && [ "$i" -lt 40 ]; do sleep 0.25; i=$((i + 1)); done
+  [ "$(rows)" -ge 1 ] || { cat "$D/err.log" >&2; false; }                 # the loop is running: the sweep ran
+  grep -q 'STARTUP-SWEEP released=1 held=1 stale=0' "$D/err.log" || { cat "$D/err.log" >&2; false; }
+  [ "$(stat_of "$CHILD_PID" | cut -c1)" != "T" ] || false                  # the GUI row: resumed
+  [ "$(stat_of "$CHILD2_PID" | cut -c1)" = "T" ] || false                  # the worker: still held
+  [ "$(cut -f1 < "${LOG%.jsonl}-frozen.tsv")" = "$C2" ] || false
+  [ "$(cut -f1 < "${LOG%.jsonl}-frozen-probation.tsv")" = "$C2" ] || false # only the protected stamp dropped
 }
