@@ -596,10 +596,14 @@ lf_capacity_wait() { # $1=what → 0 admitted / 1 parked at the cap
 # lr_state_append's 2 s steal and cc-lr's mutex both keep). The time-based steal is the backstop
 # for a holder that is alive but wedged; it is loud, because a steal past a LIVE holder can
 # double-admit and that is a fact the operator gets to read.
+# THE WAIT IS 600 s, NOT 300 (W6b, D1.6). A live holder can legitimately sit in this section for the
+# whole capacity park (LR_FLEET_CAP_WAIT_S, 120 s) plus a cold probe, and on a 30-death cohort several
+# waiters queue behind it; at 300 s the second or third waiter reached the time-based steal while the
+# holder was still alive and parked — the double-admission the lock exists to prevent.
 lf_admit_lock_take() { # → 0 this process owns $LF_ADMIT_LOCK · 1 could not take it at all
   local t=0 maxt hp
-  maxt=$(( ${LR_ADMIT_LOCK_WAIT_S:-300} * 5 ))          # ticks of 0.2 s
-  [ "$maxt" -gt 0 ] 2>/dev/null || maxt=1500
+  maxt=$(( ${LR_ADMIT_LOCK_WAIT_S:-600} * 5 ))          # ticks of 0.2 s
+  [ "$maxt" -gt 0 ] 2>/dev/null || maxt=3000
   mkdir -p "$STATE" 2>/dev/null || true
   while :; do
     if mkdir "$LF_ADMIT_LOCK" 2>/dev/null; then
@@ -1164,6 +1168,53 @@ lf_pool_max() { # → the configured concurrency, junk falling back rather than 
   printf '%s' "$m"
 }
 lf_pool_count() { local e n=0; for e in $LF_PIDS; do [ -n "$e" ] && n=$((n+1)); done; printf '%s' "$n"; }
+
+# ── THE --one LANE'S OWN CONCURRENCY CAP (W6b, resolution 12) ──────────────────────────────────
+# lf_pool_max bounds `--recover` only. The unattended lane — the poller's request drain and its
+# reroute arm, each a DETACHED `--one` — had no cap at all, so a cohort drained as fast as the poller
+# could start drivers (D1.6 caps the poller at 4 per account per tick; four accounts is sixteen).
+# Until the reconciler's admission is wired (D1.12) this is the lane's bound: N slot directories,
+# `mkdir` the atomic take, the holder's pid inside. A dead holder is stolen at once; a slot with no
+# pid file older than a minute is a crash between mkdir and write, and is stolen too. The wait is
+# LR_ONE_SLOT_WAIT_S (default 900 s): a detached driver has nobody waiting on it, so waiting is
+# cheaper than a park, which spends one of the request's three attempts. Every `--one` process is
+# its own process, so `$$` is an honest holder (a pool worker is a subshell sharing its parent's
+# `$$`, which is why the batch pool keeps its own cap and never takes a slot).
+LF_ONE_SLOTS="$STATE/one-slots"; LF_ONE_SLOT=""
+lf_one_slot_max() { # → LR_ONE_MAX_CONCURRENT, default the pool's own default (2, D8.1)
+  local m="${LR_ONE_MAX_CONCURRENT:-2}"
+  case "$m" in ''|*[!0-9]*|0) m=2 ;; esac
+  printf '%s' "$m"
+}
+lf_one_slot_take() { # → 0 and LF_ONE_SLOT set · 1 every slot stayed held for the whole wait
+  local n i d hp waited=0 max="${LR_ONE_SLOT_WAIT_S:-900}" ivl="${LR_ONE_SLOT_IVL_S:-10}"
+  case "$max" in ''|*[!0-9]*) max=900 ;; esac
+  case "$ivl" in ''|*[!0-9]*|0) ivl=10 ;; esac
+  n="$(lf_one_slot_max)"; mkdir -p "$LF_ONE_SLOTS" 2>/dev/null || return 0   # no store ⇒ no cap, never no recovery
+  while :; do
+    i=1
+    while [ "$i" -le "$n" ]; do
+      d="$LF_ONE_SLOTS/slot-$i"; i=$((i + 1))
+      if mkdir "$d" 2>/dev/null; then printf '%s\n' "$$" > "$d/pid"; LF_ONE_SLOT="$d"; return 0; fi
+      hp="$(cat "$d/pid" 2>/dev/null || true)"
+      case "$hp" in
+        ''|*[!0-9]*) [ -n "$(find "$d" -maxdepth 0 -mmin +1 2>/dev/null)" ] || continue ;;
+        *) kill -0 "$hp" 2>/dev/null && continue ;;
+      esac
+      echo "lr-fleet: --one slot $d held by ${hp:-no pid}, which is gone — taking it" >&2
+      rm -rf "$d" 2>/dev/null
+      mkdir "$d" 2>/dev/null && { printf '%s\n' "$$" > "$d/pid"; LF_ONE_SLOT="$d"; return 0; }
+    done
+    [ "$waited" -lt "$max" ] || return 1
+    [ "$waited" = 0 ] && echo "lr-fleet: the --one lane is at its cap ($n live recoveries); waiting up to ${max}s for a slot" >&2
+    sleep "$ivl"; waited=$((waited + ivl))
+  done
+}
+lf_one_slot_release() {
+  [ -n "$LF_ONE_SLOT" ] || return 0
+  [ "$(cat "$LF_ONE_SLOT/pid" 2>/dev/null || true)" = "$$" ] && rm -rf "$LF_ONE_SLOT" 2>/dev/null
+  LF_ONE_SLOT=""; return 0
+}
 # Reap every worker bash has already collected, release its per-sid run claim, and fold its rc into
 # $LF_POOL_WORST. The claim is released HERE and nowhere else: a worker that released its own claim
 # would have to do it before its last line, leaving a window where the sid is free while the run is
@@ -1406,8 +1457,14 @@ EOF
       lf_nudge "$SID" "$LF_NUDGE_TO" "$acct" "$pane"; rc=$?
     elif [ -n "${LF_STRANDED_TO:-}" ]; then
       lf_stranded "$SID" "$LF_STRANDED_TO" "$acct" "$pane" "$cwd" "$tier"; rc=$?
+    elif [ "$DRY" != 1 ] && ! lf_one_slot_take; then
+      # PARKED, and named as the lane's cap — nothing was ranked, charged, probed or typed.
+      lf_row "$SID" "$pane" "$pane" "$acct" "-" "parked" "the --one lane is at its concurrency cap ($(lf_one_slot_max) live recoveries, LR_ONE_MAX_CONCURRENT) for ${LR_ONE_SLOT_WAIT_S:-900}s — nothing was ranked, charged or probed"
+      rc=1
     else
+      trap 'lf_one_slot_release' EXIT
       lf_one "$SID" "$cfg" "$acct" "$pane" "$cwd" "$tier"; rc=$?
+      lf_one_slot_release
     fi
     echo "$FLEET_DIR/$RUN" > "$FLEET_DIR/last"
     lf_report "$FLEET_DIR/$RUN" >&2 || true

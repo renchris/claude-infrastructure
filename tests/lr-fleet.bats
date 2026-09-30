@@ -1867,3 +1867,58 @@ SH
   # which is the mutation a careless `*) _lf_v=SKIPPED` would introduce.
   grep -q 'verdict=FAILED' <<<"$m" || { echo "a broken actuator no longer reports FAILED: $m"; false; }
 }
+
+# ══ RESOLUTION 12 (LIMIT_RECOVER_FLEET_V2 W6b): the unattended --one lane has its own cap ════════
+# lf_pool_max bounds --recover only; every detached `--one` the poller starts was unbounded.
+one_slots_held() { # $1 = holder pid for slot-1 and slot-2
+  local i; for i in 1 2; do mkdir -p "$LR_STATE_DIR/one-slots/slot-$i"; printf '%s\n' "$1" > "$LR_STATE_DIR/one-slots/slot-$i/pid"; done
+}
+
+@test "[R12] --one PARKS, named, while every slot is held by a live recovery — nothing is ranked or moved" {
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  one_slots_held "$$"
+  run env LR_ONE_SLOT_WAIT_S=0 bash "$FLEET" --one "$SID" --target next3 --source-pane 616
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [ ! -s "$LRH_LOG" ] || { echo "the actuator ran past a full lane: $(cat "$LRH_LOG")"; false; }
+  grep -q 'parked.*concurrency cap (2 live recoveries' "$(cat "$LR_STATE_DIR/fleet/last")/results.tsv" \
+    || { cat "$(cat "$LR_STATE_DIR/fleet/last")/results.tsv"; false; }
+}
+
+@test "R12 CONTROL: a slot whose holder is DEAD is taken, the recovery runs, and the slot is released" {
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  one_slots_held 999999
+  run env LR_ONE_SLOT_WAIT_S=0 bash "$FLEET" --one "$SID" --target next3 --source-pane 616
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -s "$LRH_LOG" ] || { echo "$output"; false; }
+  local n=0 d; for d in "$LR_STATE_DIR"/one-slots/slot-*; do [ -d "$d" ] && n=$((n + 1)); done
+  [ "$n" = 1 ] || { echo "slots left: $n (the run's own slot was not released, or the dead one was not taken)"; ls -la "$LR_STATE_DIR/one-slots"; false; }
+}
+
+@test "R12: LR_ONE_MAX_CONCURRENT raises the cap — a third slot admits the run" {
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  one_slots_held "$$"
+  run env LR_ONE_SLOT_WAIT_S=0 LR_ONE_MAX_CONCURRENT=3 bash "$FLEET" --one "$SID" --target next3 --source-pane 616
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -s "$LRH_LOG" ]
+  [ ! -d "$LR_STATE_DIR/one-slots/slot-3" ] || { echo "slot-3 was not released"; false; }
+}
+
+@test "R12: a --dry-run takes no slot, even with the lane full" {
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  one_slots_held "$$"
+  run env LR_ONE_SLOT_WAIT_S=0 bash "$FLEET" --one "$SID" --target next3 --source-pane 616 --dry-run
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  ! grep -q 'concurrency cap' "$(cat "$LR_STATE_DIR/fleet/last")/results.tsv"
+}
+
+@test "D1.6: with no override the admit lock waits 600 s on a LIVE holder before stealing" {
+  # The loop is run with `sleep` stubbed to a no-op, so its 0.2 s ticks cost nothing and the steal it
+  # finally performs reports the bound it actually waited — the default, read off the behaviour.
+  sed -n '/^lf_admit_lock_take() {/,/^}/p' "$FLEET" > "$BATS_TEST_TMPDIR/lock.sh"
+  mkdir -p "$BATS_TEST_TMPDIR/st/admit.lock"; printf '%s\n' "$$" > "$BATS_TEST_TMPDIR/st/admit.lock/pid"
+  run env -u LR_ADMIT_LOCK_WAIT_S bash -c '. "$1"; sleep() { :; }; STATE="$2"; LF_ADMIT_LOCK="$2/admit.lock"; lf_admit_lock_take' _ \
+    "$BATS_TEST_TMPDIR/lock.sh" "$BATS_TEST_TMPDIR/st"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"for >600s — STEALING"* ]] || { echo "$output"; false; }
+}
+
