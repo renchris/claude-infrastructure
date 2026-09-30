@@ -238,12 +238,13 @@ stub_world() { # stub_world <token-tail…>
   [ "${s%% *}" -lt "${s##* }" ]
 }
 
-@test "the plist is DECLARED in the fleet manifest, staged, with its verdict exits" {
+@test "the plist is DECLARED in the fleet manifest, run, with its verdict exits" {
   run grep -E "^com\.claude\.teammate-reap-alarm[[:space:]]*\|" "$REPO/launchd/fleet.manifest"
   [ "$status" -eq 0 ]
-  # staged, not run: loading a launchd job is a C10 operator decision, and this commit does not make
-  # it. `staged` renders as exactly ONE UNDECIDED row — "declared, decision pending", never silent.
-  echo "$output" | grep -qE "\|[[:space:]]*staged[[:space:]]*\|"
+  # `run` since 2026-09-30 (backlog d8f8987f79ca): it was declared `staged` when the label was not
+  # loaded, and the label has since been loaded and running (runs=1012, last exit 0). The manifest
+  # states disk truth, so it now says `run`; the flip changes no launchd state.
+  echo "$output" | grep -qE "\|[[:space:]]*run[[:space:]]*\|"
   # ok_exits must cover every DESIGNED verdict. Without it cc-fleet files a permanent, unfixable
   # daemon-fault row for as long as the outage the alarm is correctly reporting lasts.
   echo "$output" | grep -qE "\|[[:space:]]*0,1,2,3[[:space:]]*$"

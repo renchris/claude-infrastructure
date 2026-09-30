@@ -36,6 +36,16 @@ EOF
   exit 0
 }
 
+# ---- DO NOT RUN step 2 — it is HARMFUL, and it is refused before anything is changed ------------
+# This script was executed 2026-08-11. Its step 2 (accounts.json launcher claude -> claude1) made
+# handoff-fire type `claude1` into every pane it fired, and it killed every fire on the box until
+# 088875158 reverted it. The routing need is now met by CC_ACCOUNT_PINNED=1, and the queue audit
+# marked this script superseded (docs/research/activation-queue-audit-2026-09-04.md). The guard sits
+# in the preflight, not at step 2, because the header's contract is "both or neither": refusing
+# after step 1 had already edited ~/.zshrc would leave exactly the half-applied state it forbids.
+# Override only with a new ruling that re-establishes step 2 is safe: CC_36_ALLOW_STEP2=1.
+[ "${CC_36_ALLOW_STEP2:-}" = 1 ] || die "DO NOT RUN — step 2 (accounts.json launcher -> claude1) killed every fire on 2026-08-11 and was reverted by 088875158; superseded by CC_ACCOUNT_PINNED=1. Nothing was changed. Override only on a new ruling: CC_36_ALLOW_STEP2=1"
+
 # ---- preflight: refuse on anything we cannot put back ------------------------------------------
 [ -w "$ZSHRC" ]                    || die "$ZSHRC not writable"
 [ -r "$LIB_LIVE" ]                 || die "$LIB_LIVE absent — land + deploy-live first (it is an ADD, so it needs the converger to symlink it)"

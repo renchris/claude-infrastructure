@@ -147,7 +147,11 @@ com.claude.team-orphan-reaper     | staged | 600  | auto | 11 | 18-fleet-activat
 # every `expect = run` label unattended every 600s (install.sh:755-760), so flipping this field IS
 # the launchd mutation, and C10 puts that in the operator's hands. THE OPERATOR'S ONE LINE: change
 # `staged` to `run` below. It then converges on the next deploy-live tick, or immediately via
-# `bash docs/activation/pending-activation/18-fleet-activate.sh`.
+# `bash docs/activation/pending-activation/18-fleet-activate.sh` — but ONLY AFTER the flip: 18 skips
+# every `staged` row (`[ "$expect" = run ] || continue`), so running it with this row still staged
+# loads nothing. (Corrected 2026-09-30: backlog rows 4f31ab82428c/f8b768eaaebd told the operator to
+# "run 18" as though it could load this job on its own.) The flip is prepared as branch
+# desk-reach-desk-invariant-flip for the operator to land (backlog f8b768eaaebd).
 # `activate` retargeted 06-desk-bootstrap → 18-fleet in the same commit: 06 wires the desk BOOTSTRAP
 # (desk-register, /desk, the brief hook) and names this launchd label nowhere, so as a recover_cmd it
 # pointed at a script that cannot load the job. 06 remains the right companion for wiring the desk
@@ -350,9 +354,13 @@ com.claude.worktree-gc-infra      | run    | 0    | ~/.claude/logs/worktree-gc-i
 # days with twelve assignee panes resident, and the instrument built to say so was simply never
 # invoked. Declared here in the SAME commit as the plist, so this file never goes RED on the lander
 # who comes after (capacity-alarm and scratchpad-reaper each cost that).
-# `staged` from DISK TRUTH, read not assumed: absent from ~/Library/LaunchAgents, and
-# `launchctl print gui/501/com.claude.teammate-reap-alarm` → not found. Loading it is a C10 operator
-# decision, and ONE UNDECIDED row is exactly what "declared, decision pending" means.
+# `run` from DISK TRUTH, re-read 2026-09-30 (backlog d8f8987f79ca): the plist is in
+# ~/Library/LaunchAgents (since 2026-08-04) and `launchctl print gui/501/com.claude.teammate-reap-alarm`
+# reads state=running, runs=1012, last exit code 0. The row said `staged` because at declaration time
+# the label was absent and not found; the load happened outside this file, and the queue audit marked
+# 30-teammate-reap-alarm-activate.sh superseded ("effect already in place"). So this flip changes no
+# launchd state — install.sh finds the label already loaded — it only stops the manifest contradicting
+# the machine. (It was `staged` "from DISK TRUTH" then; this is the same rule applied to today's disk.)
 # ok_exits 0,1,2,3 — every one of those is a DESIGNED verdict (OK/NOT-EXERCISED 0 · WARN 1 · ALARM 2
 # · NO-DATA 3), and a job correctly reporting an unhealthy fleet must not read as a broken job. Key
 # S4 on `exit != 0` here and cc-fleet would file a permanent, unfixable daemon-fault row for exactly
@@ -360,7 +368,7 @@ com.claude.worktree-gc-infra      | run    | 0    | ~/.claude/logs/worktree-gc-i
 # evidence `auto` is honest here: the job prints its full report to StandardOutPath on EVERY tick
 # (no --quiet), so the artifact's mtime really does prove execution — unlike lead-supervisor and
 # worktree-gc-infra, whose runners route their output elsewhere and leave stdout at 0 bytes.
-com.claude.teammate-reap-alarm    | staged | 600  | auto | 4  | 30-teammate-reap-alarm-activate.sh | 0,1,2,3
+com.claude.teammate-reap-alarm    | run    | 600  | auto | 4  | 30-teammate-reap-alarm-activate.sh | 0,1,2,3
 
 # ── com.claude.devserver-gc (row 13) — the hourly idle-reaper for per-worktree `next dev` servers ──
 # `195d91f5 feat(devserver-gc)` landed launchd/com.claude.devserver-gc.plist with NO manifest row,
