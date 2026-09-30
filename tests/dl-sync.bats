@@ -194,6 +194,7 @@ print("A10 PROOF: max firings/day=%d over %d days · %d reminders carry %d tags 
       (max(per.values()), len(per), len(rem), len(tags), len(bundles)))
 PY
   [ "$(grep -c 'system live' "$STUB/notify.log")" = 1 ]
+  grep -q 'system live | Deadline system live: 0 need you by Fri Oct 17 (11 on your phone)' "$STUB/notify.log"
   "$SYNC" run
   [ "$(grep -c 'system live' "$STUB/notify.log")" = 1 ]
 }
@@ -275,4 +276,29 @@ assert c["active"]=="graph" and c["results"]["eventkit"]["ok"] is False and c["r
   DL_SYNC_ONLY=admin.x run "$SYNC" run
   [ "$(rem admin.y title)" = ABSENT ]
   [ "$(rem admin.x title)" != ABSENT ]
+}
+
+@test "adopt: an upcoming hand-written event stands in for the T−3 event; a past one does not" {
+  item tax.up hard 2025-10-20 2025-10-12 tax
+  item tax.past hard 2025-10-21 2025-10-12 tax - - other
+  printf '%s\n' '[{"id":"g-w0up","title":"TAX DAY","notes":"hand-written","start":"2025-10-19T09:00"},
+                  {"id":"g-w0past","title":"old","notes":"hand-written","start":"2025-10-09T09:00"}]' > "$STUB/graph.json"
+  run "$SYNC" adopt tax.up g-nope
+  [ "$status" -ne 0 ]
+  "$SYNC" adopt tax.up g-w0up
+  "$SYNC" adopt tax.past g-w0past
+  run "$SYNC" run; echo "$output"
+  [ "$status" -eq 0 ]
+  python3 - "$STUB" "$DL_DIR/items" <<'PY'
+import json, os, sys
+cal = json.load(open(os.path.join(sys.argv[1], "cal.json")))
+assert not any("[dl:tax.up]" in e["notes"] for e in cal), cal          # never duplicated
+assert [e for e in cal if "[dl:tax.past]" in e["notes"]], cal           # a past adoption gets its own
+g = {e["id"]: e for e in json.load(open(os.path.join(sys.argv[1], "graph.json")))}
+assert g["g-w0up"]["title"] == "TAX DAY" and g["g-w0up"]["start"] == "2025-10-19T09:00", g  # untouched
+up = json.load(open(os.path.join(sys.argv[2], "tax.up.json")))["ext"]
+past = json.load(open(os.path.join(sys.argv[2], "tax.past.json")))["ext"]
+assert up["event_id"] == "g-w0up" and up["event_channel"] == "adopted", up
+assert past["event_channel"] == "eventkit" and past["event_id"] != "g-w0past", past
+PY
 }

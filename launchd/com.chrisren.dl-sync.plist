@@ -7,7 +7,7 @@
       The dl phone reconciler (bin/dl-sync; design personal/deadlines/DESIGN-2026-09-29.md §4.1).
       launchd, not Terminal, because TCC attributes a Reminders grant differently under each — A1
       must pass HERE. dl-ek disclaims responsibility so the grant lands on dl-ek, not on python3.
-      DL_SYNC_ONLY=test.canary keeps the real store off the phone until go-live (W4) removes it.
+      Live since W4b (2026-09-30): the whole 30-day window syncs; DL_SYNC_ONLY is a test seam only.
       No ProcessType Background: this job is seconds long and user-facing.
   -->
   <key>ProgramArguments</key>
@@ -20,7 +20,6 @@
   <dict>
     <key>PATH</key>                 <string>/Users/chrisren/.local/bin:/Users/chrisren/.claude/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     <key>MS365_MCP_TENANT_ID</key>  <string>consumers</string>
-    <key>DL_SYNC_ONLY</key>         <string>test.canary</string>
   </dict>
   <key>StartCalendarInterval</key>
   <array>

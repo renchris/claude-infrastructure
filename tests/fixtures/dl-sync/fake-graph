@@ -17,6 +17,11 @@ if a[0] == "upsert":
         e = {"id": "g-" + uuid.uuid4().hex[:8]}; ev.append(e)
     e.update(title=j["title"], notes=j["notes"], start=j["start"])
     json.dump(ev, open(p, "w"), indent=1); print(json.dumps({"id": e["id"], "created": False}))
+elif a[0] == "get":
+    e = next((e for e in ev if e["id"] == a[1]), None)
+    if e is None:
+        sys.exit(1)
+    print(json.dumps({"id": e["id"], "subject": e.get("title"), "start": e.get("start")}))
 elif a[0] == "tags":
     print(json.dumps([t[1:-1] for e in ev for t in re.findall(r"\[dl:[a-z0-9.:-]+\]", e["notes"])]))
 elif a[0] == "mail":

@@ -10,6 +10,8 @@ transition with a log.jsonl event (actor dl-sync | phone); its own bookkeeping l
   dl-sync channel-test   A1: walk the writer ladder with the canary only; record channels.json
   dl-sync canary --at YYYY-MM-DDTHH:MM   seed items/test.canary.json with that single alarm
   dl-sync status         print last_ok, the active rung and the health line
+  dl-sync adopt <item-id> <outlook-event-id>   link an existing event by id; while it is upcoming it
+                         stands in for the item's T−3 event, so it is never duplicated (§4.3)
 
 Env seams: DL_DIR · DL_EK · DL_JXA · DL_GRAPH · DL_OSASCRIPT (off = no notifications) · DL_JXA_OSASCRIPT · DL_NOW
 (YYYY-MM-DDTHH:MM) · DL_SYNC_ONLY (comma ids) · DL_LIST · DL_ALARM_HHMM · DL_BUDGET.
@@ -222,6 +224,24 @@ def calendar_write(active, tag, title, notes, start, eid):
                                                       "notes": f"[{tag}] {notes}", "start": fmt(start), "reminder": 0}))["id"]
 
 
+def adopted_upcoming(it):
+    """An event adopted by id (`dl-sync adopt`) that has not started yet stands in for the T−3 event."""
+    ext = it.get("ext") or {}
+    return ext.get("event_channel") == "adopted" and (ext.get("event_start") or "") > fmt(NOW)
+
+
+def adopt(iid, eid):
+    """§4.3/§8: link an existing Outlook event to an item by id, proven by a separate `get` read-back."""
+    if not os.path.exists(os.path.join(ITEMS, iid + ".json")):
+        raise SystemExit(f"dl-sync: no item {iid}")
+    ev = graph("get", eid)
+    if not isinstance(ev, dict) or ev.get("id") != eid:
+        raise SystemExit(f"dl-sync: event {eid[-12:]} did not read back")
+    write_item(iid, ext={"event_id": eid, "event_channel": "adopted", "event_start": ev.get("start")},
+               event="sync", calendar="adopted", subject=ev.get("subject"))
+    print(json.dumps({"adopted": iid, "start": ev.get("start"), "subject": ev.get("subject")}, ensure_ascii=False))
+
+
 def notify(title, msg):
     """Mac notification, text as argv (scripts/autonomy-sweep.sh:2080-2095 pattern, never interpolated)."""
     if OSA == "off":
@@ -278,7 +298,7 @@ def group_title(g, base):
     if len(ms) == 1:
         return base(ms[0])
     lost = min(d(m["lost"]) for m in ms if m.get("lost"))
-    head = (ms[0].get("bundle") or ms[0].get("domain") or "").split("|")[0]
+    head = (ms[0].get("bundle") or ms[0].get("domain") or "").split("|")[0].split(".")[-1].replace("-", " ")  # never an id
     t = f"{head} by {lost:%b} {lost.day}: " + " · ".join(m["title"] for m in ms)
     return t if len(t) <= 120 else t[:119] + "…"
 
@@ -472,13 +492,17 @@ def reconcile(active, sj, report):
             if (m.get("ext") or {}).get("reminder_id") != rid or (m.get("ext") or {}).get("channel") != active:
                 m.update(write_item(m["id"], ext={"reminder_id": rid, "channel": active}, event="sync", rung=active))
         if g["event_at"] and sink.name != "graph":
+            if any(adopted_upcoming(m) for m in g["members"]):  # §4.3: a hand-written event already covers it
+                report["adopted"].append(g["gid"])
+                continue
             eh = hashlib.sha1(f"{g['event_at']}|{g['payload']['title']}".encode()).hexdigest()
             if st.get("event_hash") != eh:
+                lext = lead.get("ext") or {}
                 ch, eid = calendar_write(active, tag, f"DEADLINE: {g['payload']['title']}", g["payload"]["notes"],
-                                         g["event_at"], (lead.get("ext") or {}).get("event_id"))
+                                         g["event_at"], None if lext.get("event_channel") == "adopted" else lext.get("event_id"))
                 st["event_hash"] = eh
                 for m in g["members"]:
-                    m.update(write_item(m["id"], ext={"event_id": eid}, event="sync", calendar=ch))
+                    m.update(write_item(m["id"], ext={"event_id": eid, "event_channel": ch}, event="sync", calendar=ch))
                 report["events"].append(g["gid"])
     for it in items:  # the one-time "Not confirmed" bounce; an unticked bounce stays expected
         st = sj.get(it["id"]) or {}
@@ -537,7 +561,8 @@ def failover(sj, report):
     """last_ok > 12 h: hard and window items go to the Outlook calendar on their own."""
     moved = 0
     for it in load_items():
-        if not selected(it, sj) or it.get("state") != "open" or it.get("kind") not in ("hard", "window"):
+        if not selected(it, sj) or it.get("state") != "open" or it.get("kind") not in ("hard", "window") \
+                or adopted_upcoming(it):
             continue
         st, lost = sj.setdefault(it["id"], {}), d(it["lost"])
         day = max(lost - dt.timedelta(days=3), TODAY)
@@ -602,7 +627,7 @@ def run(test_only=False):
     req = os.path.join(STATE, "channel-test")
     rungs = ch.get("ladder", LADDER) if (test_only or not ch.get("active") or os.path.exists(req)) else [ch["active"]]
     report = {k: [] for k in ("done", "done_unverified", "dropped", "redisposition", "missed", "expired", "written",
-                              "events", "bounced", "removed")}
+                              "events", "bounced", "removed", "adopted")}
     health, used = None, None
     for rung in rungs:
         if rung not in SINKS:
@@ -632,9 +657,11 @@ def run(test_only=False):
     # go-live burst guard (§4.2): a run that puts more than a day's budget on the phone at once
     # announces itself with ONE push instead of N alarms
     if report.get("created", 0) > BUDGET and latch(sj, "burst"):
+        by = TODAY + dt.timedelta(days=7)
         soon = sum(1 for it in load_items() if it.get("state") == "open" and it.get("lost")
-                   and d(it["lost"]) <= TODAY + dt.timedelta(days=7) and selected(it, sj))
-        notify("system live", f"{report['created']} deadlines are on your phone; {soon} need you within 7 days.")
+                   and d(it["lost"]) <= by and selected(it, sj))
+        report["burst"] = f"Deadline system live: {soon} need you by {by:%a %b} {by.day}"
+        notify("system live", f"{report['burst']} ({report['created']} on your phone).")
     # T−0 Mac notification for open hard items (once per item-day)
     for it in load_items():
         if it.get("state") == "open" and it.get("kind") in ("hard", "window") and it.get("lost") == str(TODAY) \
@@ -687,6 +714,9 @@ def main(argv):
         return run(test_only=True)
     if v == "canary" and len(argv) == 3 and argv[1] == "--at":
         canary(argv[2])
+        return 0
+    if v == "adopt" and len(argv) == 3:
+        adopt(argv[1], argv[2])
         return 0
     if v == "status":
         ch = jload(os.path.join(DL_DIR, "channels.json"), {})
