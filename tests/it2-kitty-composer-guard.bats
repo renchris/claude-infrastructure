@@ -426,6 +426,34 @@ fg_for() { printf '[{"cmdline":["/opt/claude/bin/claude.exe","--agent-id","%s@se
   [ "$(attempts)" = "0" ]
 }
 
+@test "RC-4 LABEL WRAP: a 38-column pane whose 36-char agent name wraps its rule resolves — win527" {
+  # Verbatim kitty capture, window 527 / r7-device-tier-and-adaptive-quality, 2026-09-22 15:56:41Z,
+  # one of the rc-67 refusals in the week after W2. 38 columns is above the rule floor (20), so the
+  # width conjunct alone never fired; the label " @<name> " filled the row and its "─" wrapped.
+  ALT=true; WCOLS=38; FG_JSON="$(fg_for r7-device-tier-and-adaptive-quality)"
+  cp "$FIX/label-wrap-agent-pane.txt" "$SCREEN"
+  run "$SHIM" session close -f -s 300
+  [ "$status" -eq 0 ]
+  closed
+}
+
+@test "RC-4 LABEL WRAP CONTROL: the same screen at 100 columns is refused — the label cannot wrap there" {
+  ALT=true; WCOLS=100; FG_JSON="$(fg_for r7-device-tier-and-adaptive-quality)"
+  cp "$FIX/label-wrap-agent-pane.txt" "$SCREEN"
+  run "$SHIM" session close -f -s 300
+  [ "$status" -eq 67 ]
+  [ "$(attempts)" = "0" ]
+}
+
+@test "RC-4 LABEL WRAP MUST-NOT-WRAP: one typed character in win527's composer refuses" {
+  ALT=true; WCOLS=38; FG_JSON="$(fg_for r7-device-tier-and-adaptive-quality)"
+  awk '/❯/ && !done { print $0 "x"; done=1; next } { print }' "$FIX/label-wrap-agent-pane.txt" > "$SCREEN"
+  grep -q '❯.*x' "$SCREEN"
+  run "$SHIM" session close -f -s 300
+  [ "$status" -eq 67 ]
+  [ "$(attempts)" = "0" ]
+}
+
 @test "RC-4 HONEST NEGATIVE: band-hooks, a recorded TRUE POSITIVE, was a bare reflow and now closes" {
   # W2 was briefed to pin one of the guard 20/24 measured true positives so the fix could not wrap
   # it. Read at the source, it is not one: window 542 / band-hooks (session-dc73c0ce), refused twice

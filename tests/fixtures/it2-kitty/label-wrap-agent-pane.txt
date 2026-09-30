@@ -1,0 +1,46 @@
+  Everything else is present. Re-read
+  the file to pick it up.
+
+  Nothing else is open on my side. The
+  three findings most worth carrying
+  into the implementation:
+
+  1. detect-gpu has never executed —
+     import('detect-gpu') is a bare
+     specifier inside a <Script>
+     template literal with no import
+     map; it throws at resolution
+     (measured: Chromium 149 + WebKit
+     26.5, with a blob-URL positive
+     control) before any network call.
+     Removal is a
+     zero-behaviour-change cleanup,
+     not a perf win.
+  2. The brief's "<1 px per frame" is 
+     off by ~10× — real figure is 12.5
+     device px/frame peak at 60 fps /
+     10 s sweep. 30 fps still 
+     defensible on angular velocity
+     (4–8 °/s); 20 fps is not.
+  3. It's 50 beams, not 51 —
+     EXPECTED_PATH_COUNT = 51 vs 50
+     entries, so the schema guard
+     warns on every load; and mobile
+     currently renders 34, so "all
+     beams everywhere" is a content
+     increase.
+  ⎿  TeammateIdle hook stopped 
+     continuation: Idle teammate 
+     auto-shutdown (work preserved in 
+     refs/wip/LAST + /tmp/*.patch; 
+     pane closed via it2/tmux)
+
+✻ Worked for 16s · done 10:56 AM
+  ✔ Update installed · Restart to a…
+ @r7-device-tier-and-adaptive-quality 
+─
+❯ 
+──────────────────────────────────────
+─
+  (3) #527 7d646622 34% · wt-pool-5…
+  ⏵⏵ auto mode on (shift+tab to  · …

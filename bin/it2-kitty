@@ -1068,9 +1068,17 @@ if not body or "❯" not in plain(body[0]):
             if s and set(s) == set("─"):
                 return j
         return -1
+    #
+    # The width conjunct is really "the labelled top rule WRAPPED", and a pane narrower than the
+    # floor is only one way to get there. The other is a long agent name (2026-09-30, A6 read):
+    # window 527, r7-device-tier-and-adaptive-quality, 38 columns, painted " @<36-char name> " as a
+    # full row and its "─" on the next, so is_rule saw neither half at a width the floor (20) never
+    # calls narrow. Label plus its two spaces filling the row is the wrap itself, measured rather
+    # than inferred from width; a short name on a wide pane still never reaches this branch.
     narrow_pane = False
+    label_wraps = bool(cols) and agent != "-" and len(agent) + 3 >= cols
     glyph_rows = [i for i, l in enumerate(flat) if "❯" in l]
-    if (agent != "-" and cols and cols < thresh and len(glyph_rows) == 1
+    if (agent != "-" and cols and (cols < thresh or label_wraps) and len(glyph_rows) == 1
             and ("@" + agent) in "".join(flat)):
         _end = _box_below(glyph_rows[0])
         narrow_pane = _end > glyph_rows[0] and not has_content(lines[glyph_rows[0]:_end])
