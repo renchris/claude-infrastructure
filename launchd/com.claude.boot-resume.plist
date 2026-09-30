@@ -27,7 +27,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; exec "$HOME/.claude/scripts/boot-resume.sh"</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; if [ -x /usr/sbin/taskpolicy ]; then exec /usr/sbin/taskpolicy -c utility "$HOME/.claude/scripts/boot-resume.sh"; fi; exec "$HOME/.claude/scripts/boot-resume.sh"</string>
     </array>
 
     <key>RunAtLoad</key>
@@ -42,8 +42,17 @@
     <key>Nice</key>
     <integer>5</integer>
 
-    <key>ProcessType</key>
-    <string>Background</string>
+    <!--
+      NO ProcessType KEY, DELIBERATELY (2026-09-30). `ProcessType Background` is Darwin's darwinbg
+      TASK ROLE: every descendant is pinned at PRI 4 on the E-cores and nothing inside can lift it
+      (the measurement is in com.claude.postland-verify.plist, which dropped the key for the same
+      reason). This job runs at login, INTO the boot storm (loadavg 346 at boot+2 min), and at PRI 4
+      it starves: measured 2026-09-30 at load 185, one run sat 10 minutes inside
+      `sysctl -n kern.boottime` alone, and the login run took more than 17 minutes, all of it time
+      the resumed fleet was not coming back. Demoted to `utility` instead (still below interactive,
+      P-core eligible), fail-open to a direct exec with no taskpolicy(8). The storm it runs into is
+      bounded where the spawning happens: capacity admission per pane in cc-resume-layout.sh.
+    -->
 
     <key>StandardOutPath</key>
     <string>/tmp/claude-boot-resume.stdout.log</string>

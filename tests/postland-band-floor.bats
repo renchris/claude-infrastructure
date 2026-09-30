@@ -193,3 +193,15 @@ _descendant_pris() {
   run grep -q 'taskpolicy -c utility' "$plist"
   [ "$status" -eq 0 ] || false                             # and an explicit demotion present
 }
+
+@test "(viii) the boot-resume plist SSOT declares no darwinbg ProcessType, and does demote explicitly" {
+  # Same invariant as (vi), on the login job that resumes the fleet INTO the boot storm. Under the
+  # task role it starved: 10 min inside `sysctl -n kern.boottime` at load 185 (2026-09-30), >17 min
+  # for the login run — every minute of it a fleet not yet coming back.
+  local plist="$REPO/launchd/com.claude.boot-resume.plist"
+  [ -f "$plist" ] || false
+  run grep -qE '<string>Background</string>' "$plist"
+  [ "$status" -ne 0 ] || false                             # the task role must be absent
+  run grep -q 'taskpolicy -c utility' "$plist"
+  [ "$status" -eq 0 ] || false                             # and an explicit demotion present
+}
