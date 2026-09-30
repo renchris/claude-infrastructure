@@ -1,0 +1,127 @@
+#!/bin/bash
+# cc-desk-page — page the DESK, and when no live desk takes it, page the OPERATOR instead.
+#
+#   cc-desk-page [--source <name>] [--] <message>
+#
+# ── WHY THIS EXISTS ───────────────────────────────────────────────────────────────────────────────
+# Every standing arm in autonomy-sweep paged with `cc-notify --role desk … >/dev/null 2>&1 || true`.
+# The desk role has named dead pane 672 since 2026-09-09, so cc-notify gives up (rc 3 role-unset, or
+# rc 124 when its caller's bound cuts it) and the `|| true` swallowed the give-up: the page reached
+# nobody and nothing recorded that it had not. Measured 2026-09-30: 38 role:desk lines in idl.jsonl,
+# 0 of them delivered:true. An arm whose whole job is to fire once in a month (an upstream flag flip,
+# a parked date arriving) is worthless if that one page drops.
+#
+# ── THE LADDER — each rung gated on its OWN precondition, never nested under the one above ────────
+#   1. desk     cc-notify --role desk, bounded. Delivered only on rc 0 AND verdict=delivered — the
+#               verdict token is the outcome, the exit code alone is not (memory:
+#               claimed-outcome-vs-checked-outcome). Its own phone fallback is switched OFF for this
+#               call, because rung 2 carries the message itself rather than an "undeliverable" stub.
+#   2. operator scripts/limit-recover/lr-page.sh — Notification Center and, once
+#               ~/.config/lr-page/pushover.env exists, Pushover. Needs no pane, no role file and no
+#               session, so it cannot rot the way cc-roles/desk did. Runs whenever rung 1 did not
+#               deliver, INCLUDING rc 124: a cut cc-notify is exactly when this rung matters.
+#
+# ── WHAT idl.jsonl RECORDS, and why `delivered` and `read` are different fields ───────────────────
+# One line per page: {tool:"cc-desk-page", notified:"role:desk", delivered, channel, read_proven, …}.
+#   delivered:true   the page is on a surface a human sees — a live desk, the Notification Center
+#                    or the phone. `channel` names which.
+#   read_proven      true only for the desk rung (a session holds the message). A banner or a push
+#                    proves the operator was SHOWN it, never that he read it; the field says so
+#                    instead of letting `delivered` imply it. (autonomy-sweep's own record ladder
+#                    keeps its stricter rule — its `.seen` markers forget records, so they key on a
+#                    proven read; a page forgets nothing, so it may honestly claim delivery.)
+#   delivered:false  nothing took it; the line says what each rung answered.
+# Exit: 0 delivered on some channel · 1 nothing took it · 2 usage.
+#
+# Env seams: CC_DESK_PAGE_NOTIFY_BIN · CC_DESK_PAGE_LRPAGE_BIN · CC_DESK_PAGE_IDL (else CC_IDL) ·
+# CC_DESK_PAGE_TIMEOUT_S (25) · CC_DESK_PAGE_OS_CHANNEL (else CC_SWEEP_OS_CHANNEL, else auto) ·
+# CC_DESK_PAGE_OSASCRIPT (else CC_SWEEP_OSASCRIPT, else /usr/bin/osascript — absolute, for launchd).
+# CC_ROLES_DIR passes through to cc-notify. bash 3.2-safe.
+set -uo pipefail
+
+usage() { sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; }
+
+SOURCE="unnamed"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --source) [ $# -ge 2 ] || { echo "cc-desk-page: --source needs a name" >&2; exit 2; }; SOURCE="$2"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    --) shift; break ;;
+    -*) echo "cc-desk-page: unknown option $1" >&2; exit 2 ;;
+    *) break ;;
+  esac
+done
+[ $# -eq 1 ] && [ -n "$1" ] || { echo "cc-desk-page: exactly one non-empty message" >&2; exit 2; }
+MSG="$1"
+command -v jq >/dev/null 2>&1 || { echo "cc-desk-page: jq required" >&2; exit 2; }
+
+# Resolve the real file behind a per-file symlink (~/.claude/bin/cc-desk-page → checkout), so the
+# sibling scripts below are found in the checkout rather than beside the link.
+_self="${BASH_SOURCE[0]}"
+while [ -L "$_self" ]; do
+  _d="$(cd -P "$(dirname "$_self")" && pwd)"; _self="$(readlink "$_self")"
+  case "$_self" in /*) ;; *) _self="$_d/$_self" ;; esac
+done
+HERE="$(cd -P "$(dirname "$_self")" && pwd)"
+
+pick() { # <env value> <candidate…> → first executable
+  local c
+  for c in "$@"; do [ -n "$c" ] && [ -x "$c" ] && { printf '%s' "$c"; return 0; }; done
+  return 1
+}
+NOTIFY="$(pick "${CC_DESK_PAGE_NOTIFY_BIN:-}" "$HERE/cc-notify" "$HOME/.claude/bin/cc-notify")" || NOTIFY=""
+# lr-page.sh is tracked mode 0644 and is run through `bash`, so it is found by -f, never -x.
+LRPAGE=""
+for _c in "${CC_DESK_PAGE_LRPAGE_BIN:-}" "$HERE/../scripts/limit-recover/lr-page.sh" \
+          "$HOME/.claude/scripts/limit-recover/lr-page.sh"; do
+  [ -n "$_c" ] && [ -f "$_c" ] && { LRPAGE="$_c"; break; }
+done
+IDL="${CC_DESK_PAGE_IDL:-${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}}"
+TIMEOUT_S="${CC_DESK_PAGE_TIMEOUT_S:-25}"
+
+TIMEOUT_BIN="$(pick "" "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
+  /opt/homebrew/bin/timeout /opt/homebrew/bin/gtimeout /usr/local/bin/timeout)" || TIMEOUT_BIN=""
+bounded() { # <seconds> <cmd…> — rc 124 on a cut
+  local s="$1"; shift
+  if [ -z "$TIMEOUT_BIN" ]; then "$@"; return $?; fi
+  "$TIMEOUT_BIN" -k 5 "$s" "$@"
+}
+
+# ── rung 1 · desk ──
+notify_rc=-1; notify_verdict="no-notify-bin"
+if [ -n "$NOTIFY" ]; then
+  out="$(CC_NOTIFY_PHONE_FALLBACK=0 bounded "$TIMEOUT_S" "$NOTIFY" --role desk "$MSG" 2>&1 >/dev/null)"
+  notify_rc=$?
+  notify_verdict="$(printf '%s' "$out" | grep -oE 'verdict=[a-z-]+' | head -1 | cut -d= -f2)"
+  : "${notify_verdict:=unreadable}"
+fi
+
+delivered=false; read_proven=false; channel="none"; os="not-tried"; phone="not-tried"
+if [ "$notify_rc" -eq 0 ] && [ "$notify_verdict" = delivered ]; then
+  delivered=true; read_proven=true; channel="desk"
+elif [ -n "$LRPAGE" ]; then
+  # ── rung 2 · operator ──
+  lp="$(LR_PAGE_OS_CHANNEL="${CC_DESK_PAGE_OS_CHANNEL:-${CC_SWEEP_OS_CHANNEL:-auto}}" \
+        LR_PAGE_OSASCRIPT_BIN="${CC_DESK_PAGE_OSASCRIPT:-${CC_SWEEP_OSASCRIPT:-/usr/bin/osascript}}" \
+        bounded 40 bash "$LRPAGE" --title "$SOURCE" -- "$MSG" 2>/dev/null)"
+  os="$(printf '%s' "$lp" | grep -oE 'os=[a-z-]+' | head -1 | cut -d= -f2)"; : "${os:=unreadable}"
+  phone="$(printf '%s' "$lp" | grep -oE 'phone=[a-z-]+' | head -1 | cut -d= -f2)"; : "${phone:=unreadable}"
+  if [ "$os" = posted ] && [ "$phone" = sent ]; then channel="notification-center+pushover"
+  elif [ "$os" = posted ]; then channel="notification-center"
+  elif [ "$phone" = sent ]; then channel="pushover"
+  fi
+  [ "$channel" != none ] && delivered=true
+else
+  os="no-lr-page"; phone="no-lr-page"
+fi
+
+rec="$(jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg src "$SOURCE" --argjson d "$delivered" \
+  --arg ch "$channel" --argjson rp "$read_proven" --argjson rc "$notify_rc" --arg v "$notify_verdict" \
+  --arg os "$os" --arg ph "$phone" --arg m "${MSG:0:160}" \
+  '{ts:$ts,tool:"cc-desk-page",disposition:"fired",source:$src,notified:"role:desk",delivered:$d,
+    channel:$ch,read_proven:$rp,notify_rc:$rc,notify_verdict:$v,os:$os,phone:$ph,summary:$m}')"
+mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
+printf '%s\n' "$rec" >> "$IDL" 2>/dev/null || true
+
+echo "cc-desk-page: verdict=$([ "$delivered" = true ] && echo delivered || echo undelivered) channel=$channel notify_rc=$notify_rc notify_verdict=$notify_verdict os=$os phone=$phone" >&2
+[ "$delivered" = true ]
