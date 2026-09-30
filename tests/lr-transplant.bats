@@ -194,6 +194,25 @@ _cause_normalise() { # strip the arm's own fixture path and the three fields tha
   [[ "$output" == *'"source_retired_reason":"keep-source"'* ]] || { echo "$output"; false; }
 }
 
+@test "D7.2a: only a non-keep-source admit tombstones phase admit; confirm and unphased runs carry none" {
+  # handed-off-session-guard.sh lets a prompt through only on a phase=admit tombstone, so the writer
+  # is half the contract: keep-source never retires its source (a prompt there would fork forever),
+  # and confirm retires it, so neither may carry the field.
+  TOMB="$T/from/projects/slug/$SID.HANDOFF.json"
+  _admit; [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -q '"phase":"admit"' "$TOMB" || { echo "admit tombstone: $(cat "$TOMB")"; false; }
+  _confirm; [ "$status" -eq 0 ] || { echo "$output"; false; }
+  if grep -q '"phase"' "$TOMB"; then echo "confirm kept a phase: $(cat "$TOMB")"; false; fi
+  rm -f "$LOCK" "$DST" "$TOMB" "$SRC.handed-off"
+  printf '{"type":"assistant","message":{"role":"assistant"}}\n' > "$SRC"
+  run bash "$LRT" --phase admit --keep-source --sid "$SID" --from "$T/from" --to "$T/to"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  if grep -q '"phase"' "$TOMB"; then echo "keep-source admit tombstoned a phase: $(cat "$TOMB")"; false; fi
+  rm -f "$LOCK" "$DST" "$TOMB"
+  _transplant; [ "$status" -eq 0 ] || { echo "$output"; false; }
+  if grep -q '"phase"' "$TOMB"; then echo "an unphased run tombstoned a phase: $(cat "$TOMB")"; false; fi
+}
+
 # ══ DEC-3 — `cause` is a FIELD, never a state token ══════════════════════════════════════════════
 
 @test "cause: the field lands on the receipt, the lock and the tombstone — and is OMITTED when unasked" {

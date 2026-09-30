@@ -157,6 +157,34 @@ hog_acct() {
 ME="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 [ "$(hog_acct "$TARGET")" = "$(hog_acct "$ME")" ] && exit 0
 
+# ── A HALF-DONE MOVE IS STILL THE SOURCE'S (D7.2a, operator ruling 28740361e7dd, 2026-09-30) ───────
+# `--phase admit` copies and tombstones but never retires: the source stays the live writer until a
+# `--phase confirm` asserts it has stopped. A prompt typed in that window belongs to the source, and
+# refusing it strands the operator in a focused pane mid-move. So the guard steps aside only when all
+# three say "not yet retired": the tombstone's phase is admit (lr-transplant writes it for a
+# non-keep-source admit only; confirm rewrites the tombstone without it), <sid>.jsonl is still here,
+# and no <sid>.jsonl.handed-off sits beside it. Anything else — keep-source, a legacy tombstone with no
+# phase, an unasserted run — falls through to the block below.
+PHASE=""
+if [ -n "$HOG_PY" ]; then
+  PHASE=$("$HOG_PY" -c '
+import json,sys
+try: d=json.load(open(sys.argv[1]))
+except Exception: sys.exit(0)
+v=d.get("phase")
+print(v if isinstance(v,str) else "")
+' "$TOMB" 2>/dev/null)
+else
+  PHASE=$(sed -n 's/.*[{,[:space:]]"phase"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$TOMB" | head -1)
+fi
+SRC_JSONL="$(dirname "$TP")/$SID.jsonl"
+if [ "$PHASE" = admit ] && [ -f "$SRC_JSONL" ] && [ ! -e "$SRC_JSONL.handed-off" ]; then
+  _log="$HOME/.claude/logs/handed-off-guard.log"
+  mkdir -p "$(dirname "$_log")" 2>/dev/null \
+    && printf '%s allow-admit sid=%s target=%s tomb=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SID" "$TARGET" "$TOMB" >>"$_log" 2>/dev/null
+  exit 0
+fi
+
 cat >&2 <<EOF
 ⛔ THIS PANE IS A RETIRED SOURCE — your prompt was NOT delivered.
 

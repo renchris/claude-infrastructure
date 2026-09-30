@@ -150,3 +150,45 @@ write_tombstone() { # $1=dir  $2=handed_off_to  $3=target_transcript
   run env -u CLAUDE_CONFIG_DIR "$HOOK" <<<"{\"session_id\":\"$SID\",\"transcript_path\":\"$HOME_TP\"}"
   [ "$status" -eq 2 ]
 }
+
+# ── D7.2a: a half-done move (admit) still belongs to the source (operator ruling 28740361e7dd) ─────
+write_phase_tombstone() { # $1=phase — the admit shape lr-transplant.sh prints, phase last
+  printf '{"handed_off_to":"%s","target_transcript":"%s","ts":"2026-09-30T16:00:00Z","lock":"/tmp/l.lock","phase":"%s"}\n' \
+    "$DST_CFG" "$DST_TP" "$1" >"$SRC_DIR/$SID.HANDOFF.json"
+}
+
+@test "D7.2a: SOURCE pane during an ADMIT → exit 0, and the allow is logged" {
+  write_phase_tombstone admit
+  run env CLAUDE_CONFIG_DIR="$SRC_CFG" "$HOOK" <<<"$PAYLOAD_SRC"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -z "$output" ]
+  grep -q "allow-admit sid=$SID" "$HOME/.claude/logs/handed-off-guard.log"
+}
+
+@test "D7.2a: admit tombstone but the source is already retired (.handed-off beside it) → exit 2" {
+  write_phase_tombstone admit
+  : >"$SRC_TP.handed-off"
+  run env CLAUDE_CONFIG_DIR="$SRC_CFG" "$HOOK" <<<"$PAYLOAD_SRC"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"RETIRED SOURCE"* ]] || false
+}
+
+@test "D7.2a: admit tombstone but <sid>.jsonl is gone → exit 2" {
+  write_phase_tombstone admit
+  rm -f "$SRC_TP"
+  run env CLAUDE_CONFIG_DIR="$SRC_CFG" "$HOOK" <<<"$PAYLOAD_SRC"
+  [ "$status" -eq 2 ]
+}
+
+@test "D7.2a: a keep-source / legacy / unasserted tombstone (no phase) still → exit 2, nothing logged" {
+  write_tombstone "$SRC_DIR" "$DST_CFG" "$DST_TP"
+  run env CLAUDE_CONFIG_DIR="$SRC_CFG" "$HOOK" <<<"$PAYLOAD_SRC"
+  [ "$status" -eq 2 ]
+  [ ! -e "$HOME/.claude/logs/handed-off-guard.log" ]
+}
+
+@test "D7.2a: a phase other than admit → exit 2" {
+  write_phase_tombstone confirm
+  run env CLAUDE_CONFIG_DIR="$SRC_CFG" "$HOOK" <<<"$PAYLOAD_SRC"
+  [ "$status" -eq 2 ]
+}

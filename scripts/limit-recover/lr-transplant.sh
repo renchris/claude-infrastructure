@@ -852,8 +852,14 @@ fi
 # enumerates and the tombstone below already blocks from resuming; a renamed live transcript costs
 # the tail of a working session, silently, with the sha check passing.
 TOMBSTONE="$SRC_DIR/$SID.HANDOFF.json"
-printf '{"handed_off_to":"%s","target_transcript":"%s","ts":"%s","lock":"%s"%s}\n' \
-  "$TO" "$DST" "$NOW" "$LOCK" "$LRT_CAUSE_JSON" > "$TOMBSTONE"
+# The phase rides on the tombstone so handed-off-session-guard.sh can tell a half-done move (admit:
+# the source is still the live writer, so a typed prompt belongs there) from a finished one (D7.2a,
+# operator ruling 28740361e7dd). A keep-source run never retires its source, so it carries no phase
+# and the guard keeps blocking it; without --phase the fragment is empty and the shape is unchanged.
+LRT_TOMB_PHASE_JSON="$LRT_PHASE_JSON"
+[[ $KEEP_SOURCE -eq 1 ]] && LRT_TOMB_PHASE_JSON=""
+printf '{"handed_off_to":"%s","target_transcript":"%s","ts":"%s","lock":"%s"%s%s}\n' \
+  "$TO" "$DST" "$NOW" "$LOCK" "$LRT_CAUSE_JSON" "$LRT_TOMB_PHASE_JSON" > "$TOMBSTONE"
 SOURCE_RETIRED=0
 if [[ $KEEP_SOURCE -eq 1 ]]; then
   SOURCE_RETIRED_REASON="keep-source"
