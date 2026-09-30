@@ -134,6 +134,10 @@ title() { argval needs; }
   t="$(title)"
   [[ "$t" =~ ^Apply\ the\ 3\ harvested\ allow\ rules\ in\ proposal-[0-9TZ]+\.json\ \(proposed\ [0-9]{4}-[0-9]{2}-[0-9]{2}\)$ ]] || false
   [ "$(argval --project)" = claude-infrastructure ]
+  # THE CLASS GATE (ledger-retraction.6): an operator-hands step, and the proposal it read is the
+  # receipt the weekly re-block needs when it rewrites the standing row's needs.
+  [ "$(argval --class)" = needs-human ]
+  [[ "$(argval --receipt)" == "$CC_PERMHARVEST_OUT"/proposal-*.json ]] || false
   # --run names the LIVE tool under $HOME, never the CC_PERMHARVEST_BIN seam, and carries the
   # consent flag cc-do's `bash -c` does not inject (see the wrapper's CONFIRM=1 note). No path
   # into the out dir, no proposal file name, no rule text may ride the queue.
@@ -459,7 +463,7 @@ print(" ".join(sorted(i for i in ids if i)))'
   live_tool
   # SWEEP 1 — work outstanding. The row must SURVIVE. This is the arm that would have failed on the
   # shipped wiring: `--check` exits 0 here, and the sweep closes on 0.
-  run python3 "$REPO/bin/cc-premise" sweep --record --close-falsified 5
+  run env CC_PREMISE_READINGS_REQUIRED=1 python3 "$REPO/bin/cc-premise" sweep --record --close-falsified 5
   [ "$status" -eq 0 ]
   run bash -c 'python3 -c "import json,os,sys
 print(any(json.loads(l).get(\"event\") == \"done\" for l in open(os.environ[\"CC_BACKLOG_FILE\"])))"'
@@ -467,12 +471,26 @@ print(any(json.loads(l).get(\"event\") == \"done\" for l in open(os.environ[\"CC
   # SWEEP 2 — the operator has applied it. NOW the row closes itself, which is the whole point of
   # storing a falsifier at all.
   printf '{"permissions":{"allow":["Bash(gh pr view:*)"]}}\n' > "$HOME/.claude/settings.json"
-  run python3 "$REPO/bin/cc-premise" sweep --record --close-falsified 5
+  run env CC_PREMISE_READINGS_REQUIRED=1 python3 "$REPO/bin/cc-premise" sweep --record --close-falsified 5
   [ "$status" -eq 0 ]
   [[ "$output" == *"$row"* ]] || false
   run bash -c 'python3 -c "import json,os,sys
 print(any(json.loads(l).get(\"event\") == \"done\" for l in open(os.environ[\"CC_BACKLOG_FILE\"])))"'
   [ "$output" = True ]
+}
+
+@test "the weekly re-block RETITLES the standing row to the current proposal and logs no unclassed transition" {
+  export CC_BACKLOG_FILE="$D/backlog.jsonl"
+  : > "$CC_BACKLOG_FILE"
+  CC_PERMHARVEST_BACKLOG="$REPO/bin/cc-backlog" FAKE_N=3 FAKE_STAMP=20260907T041700Z run bash "$RUN"
+  [ "$status" -eq 0 ]
+  CC_PERMHARVEST_BACKLOG="$REPO/bin/cc-backlog" FAKE_N=12 FAKE_STAMP=20260914T041700Z run bash "$RUN"
+  [ "$status" -eq 0 ]
+  run bash -c "bash '$REPO/bin/cc-backlog' list --all --json | jq -r '.[].title'"
+  [ "${#lines[@]}" -eq 1 ]
+  [[ "$output" == "Apply the 12 harvested allow rules in proposal-20260914T041700Z.json"* ]] || false
+  [ "$(bash "$REPO/bin/cc-backlog" list --all --json | jq -r '.[0].blockClass')" = needs-human ]
+  ! grep -q unclassed-transition "$D/backlog-gate.jsonl" 2>/dev/null
 }
 
 @test "a consolidation entry already PRESENT in its file is NOT actionable — no row is queued for a no-op" {

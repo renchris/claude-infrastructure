@@ -350,6 +350,7 @@ if [ "$VERDICT" = "proposed" ] && [ "$ACTIONABLE" -gt 0 ]; then
     "$BACKLOG" needs \
       "Apply the $ACTIONABLE harvested allow rules in $BASENAME (proposed $RUN_DATE)" \
       --project claude-infrastructure \
+      --class needs-human --receipt "$OUT/$BASENAME" \
       --run "CONFIRM=1 $LIVE_TOOL --apply" \
       --falsifier "$LIVE_TOOL --falsify" >> "$LOG" 2>&1 \
       || note "backlog needs FAILED rc=$?"
