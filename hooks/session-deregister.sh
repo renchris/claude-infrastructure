@@ -62,5 +62,40 @@ sid=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)
 have=$(jq -r '.session_id // empty' "$row" 2>/dev/null)
 [ -n "$sid" ] && [ -n "$have" ] && [ "$sid" = "$have" ] || exit 0
 
+# ── SHUTDOWN TOMBSTONE: a death by signal leaves a record boot-resume can read ─────────────────
+# A graceful host shutdown SIGHUPs every pane, and each session's SessionEnd lands here with
+# reason=other — measured at the 2026-09-30 15:25 reboot: all 19 roster sessions logged
+# `Session ended … reason=other` inside 4 seconds (15:25:27-31, ~/.claude/logs/sessions.log). This
+# hook then deleted their rows, so scripts/boot-resume.sh — which looked for rows that OUTLIVED
+# the boot — saw only 11 stale crash ghosts from earlier days, overlap 0 with the 20 sessions that
+# were actually live. So a signal-shaped end moves the row to a tombstone instead of erasing it.
+# The registry itself stays clean: the live-pane table must not carry the dead.
+# Deliberate ends (prompt_input_exit = /exit or ^D, logout, resume) delete as before — those
+# sessions were closed on purpose and must never come back after a reboot. `other` also covers an
+# operator closing one pane; boot-resume separates the shutdown from those by taking only the LAST
+# burst of tombstones before the boot (see its DETECT block), with kern.willshutdown as extra
+# evidence where the kernel had already set it. The branch is recorded so reso-resume-one's
+# identity check can refuse a pooled slot that was re-let while the box was down.
+if [ "$reason" = "other" ]; then
+  tomb_dir="${CC_SHUTDOWN_TOMB_DIR:-$HOME/.claude/autonomy/shutdown-tombstones}"
+  sysctl_bin="${CC_SYSCTL_BIN:-/usr/sbin/sysctl}"
+  wsd=$("$sysctl_bin" -n kern.willshutdown 2>/dev/null)
+  cwd=$(jq -r '.cwd // empty' "$row" 2>/dev/null)
+  br=""
+  # symbolic-ref, not rev-parse: a detached HEAD yields nothing (no identity to check), never "HEAD".
+  [ -n "$cwd" ] && [ -d "$cwd" ] && br=$(git -C "$cwd" symbolic-ref -q --short HEAD 2>/dev/null)
+  if mkdir -p "$tomb_dir" 2>/dev/null; then
+    tmp="$tomb_dir/.$sid.$$.tmp"
+    if jq --argjson t "$(date +%s)" --arg r "$reason" --arg b "$br" --argjson w "$([ "$wsd" = 1 ] && echo true || echo false)" \
+         '. + {endedAt:$t, endReason:$r, hostShutdown:$w} + (if $b == "" then {} else {branch:$b} end)' \
+         "$row" > "$tmp" 2>/dev/null; then
+      mv -f "$tmp" "$tomb_dir/$sid.json" 2>/dev/null
+    fi
+    rm -f "$tmp" 2>/dev/null
+    # A week of tombstones is far more than the one-boot window boot-resume reads.
+    find "$tomb_dir" -name '*.json' -mtime +7 -delete 2>/dev/null
+  fi
+fi
+
 rm -f "$row" 2>/dev/null
 exit 0

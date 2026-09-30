@@ -42,6 +42,11 @@ SH
   # operator's live ~/.claude/autonomy/idl.jsonl — a test that writes production state is not
   # hermetic, and cc-audit/cc-digest read that file.
   export SESSION_REGISTER_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
+  # The deregister hook turns a signal-shaped end (reason=other) into a shutdown tombstone. Without
+  # this every reason=other case below would write into the live boot-resume store.
+  export CC_SHUTDOWN_TOMB_DIR="$BATS_TEST_TMPDIR/tombs"
+  export CC_SYSCTL_BIN="$BATS_TEST_TMPDIR/sysctl"
+  printf '#!/bin/bash\necho "${SYSCTL_WSD:-0}"\n' > "$CC_SYSCTL_BIN"; chmod +x "$CC_SYSCTL_BIN"
 }
 
 # helper: write a registry entry file directly
@@ -224,6 +229,40 @@ deadpid() { sleep 1 & local p=$!; kill "$p" 2>/dev/null || true; wait "$p" 2>/de
   printf '{"reason":"clear","session_id":"SID-OWNER"}' \
     | ITERM_SESSION_ID="w1t0p0:AAAAAAAA-1111-2222-3333-444444444444" bash "$DEREG"
   [ -f "$CC_REGISTRY_DIR/AAAAAAAA-1111-2222-3333-444444444444.json" ]
+}
+
+# ── SHUTDOWN TOMBSTONE (2026-09-30). A host shutdown SIGHUPs every pane and each SessionEnd arrives
+# as reason=other; this hook used to delete those rows, which left boot-resume nothing to find (11
+# stale ghosts, 0 of the 20 live sessions). RED-proof: against the pre-change hook the first case
+# fails on the missing tombstone file.
+@test "deregister: reason=other moves the owned row to a shutdown tombstone (endedAt, branch, hostShutdown)" {
+  wt="$BATS_TEST_TMPDIR/wt"; git init -q -b feat/x "$wt"
+  mkdir -p "$CC_REGISTRY_DIR"
+  printf '{"paneUUID":"P1","name":"n","cwd":"%s","account":"claude-next","pid":1,"startedAt":1,"session_id":"SID-OWNER"}' \
+    "$wt" > "$CC_REGISTRY_DIR/P1.json"
+  printf '{"reason":"other","session_id":"SID-OWNER"}' | SYSCTL_WSD=1 CC_PANE_ID=P1 bash "$DEREG"
+  [ ! -f "$CC_REGISTRY_DIR/P1.json" ]                        # the live table stays clean
+  t="$CC_SHUTDOWN_TOMB_DIR/SID-OWNER.json"
+  [ "$(jq -r '.session_id' "$t")" = "SID-OWNER" ]
+  [ "$(jq -r '.cwd' "$t")" = "$wt" ]
+  [ "$(jq -r '.branch' "$t")" = "feat/x" ]
+  [ "$(jq -r '.endReason' "$t")" = "other" ]
+  [ "$(jq -r '.hostShutdown' "$t")" = "true" ]
+  [ "$(jq -r '.endedAt' "$t")" -ge "$(( $(date +%s) - 60 ))" ]
+}
+
+@test "deregister: a deliberate end (prompt_input_exit) deletes the row and leaves NO tombstone" {
+  mkentry "P2" "bye" "$$" "SID-OWNER"
+  printf '{"reason":"prompt_input_exit","session_id":"SID-OWNER"}' | CC_PANE_ID=P2 bash "$DEREG"
+  [ ! -f "$CC_REGISTRY_DIR/P2.json" ]
+  [ ! -e "$CC_SHUTDOWN_TOMB_DIR/SID-OWNER.json" ]
+}
+
+@test "deregister: the mcp-list phantom (reason=other, foreign sid) writes no tombstone" {
+  mkentry "P3" "live" "$$" "SID-OWNER"
+  printf '{"reason":"other","session_id":"PHANTOM"}' | CC_PANE_ID=P3 bash "$DEREG"
+  [ -f "$CC_REGISTRY_DIR/P3.json" ]
+  [ ! -d "$CC_SHUTDOWN_TOMB_DIR" ] || [ -z "$(ls -A "$CC_SHUTDOWN_TOMB_DIR")" ]
 }
 
 # ── TENANCY: the `claude mcp list` phantom (2026-08-05) ───────────────────────────────────────
