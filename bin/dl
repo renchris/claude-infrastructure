@@ -442,7 +442,9 @@ def personal_worktrees():
 
 def render_rules(items, t) -> str:
     over, decay, soon = ranked(items, t, 7)
-    lines = [f"- [{i['domain']}] {fmt_line(i, t)}" for i in over + decay + soon]
+    # DESIGN §4.6: overdue dated items first, then anything due within 7 days; people-waiting decay
+    # items fill what is left, so a long decay list can never push a dated deadline out of the 7 lines.
+    lines = [f"- [{i['domain']}] {fmt_line(i, t)}" for i in over + soon + decay]
     more = max(0, len(lines) - 7)
     health = doctor_checks(items)[1]
     head = [f"# Deadlines ({t.isoformat()}, `dl list` for all{f'; {more} more not shown' if more else ''})",

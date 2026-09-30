@@ -214,6 +214,17 @@ PY
   grep -q 'more on your phone' "$b"
 }
 
+@test "render: a dated item due within 7 days outranks a full page of people-waiting decay items" {
+  for n in 1 2 3 4 5 6 7 8; do
+    "$DL" add "Reply to Person$n about the guest list" --kind decay --since 2020-08-0$n --class relationship \
+      --text "Person$n waiting" --source operator --id "people.p$n" >/dev/null
+  done
+  "$DL" add "File the fixture return" --kind hard --lost 2020-10-03 --class tax --text "Penalty 5%" \
+    --source operator --id tax.fixture >/dev/null
+  DL_TODAY=2020-09-30 "$DL" render
+  grep -q "File the fixture return" "$BATS_TEST_TMPDIR/personal/.claude/rules/01-deadlines.md"
+}
+
 @test "render: nothing hot removes banner.txt so the accounts board prints byte-identical output" {
   mkdir -p "$DL_DIR/.state"
   echo stale > "$DL_DIR/.state/banner.txt"
