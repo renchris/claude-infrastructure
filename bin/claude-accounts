@@ -3742,9 +3742,19 @@ def _excluded(r, R, cliff=True, k_of=None, recovery=False):
     # account becomes routable through this branch and a missing probe degrades to today exactly.
     if wire_rejects(r, "7d"):
         return "weekly-exhausted"
-    if wire_rejects(r, "5h") and (r.get("session_reset_h") is None
-                                  or r.get("session_reset_h") >= R["EPS_H"]):
-        return "5h-cutoff"
+    # THE EPS_H GRACE IS A RECOVERY-LANE ALLOWANCE, NOT A DISPATCH ONE (FLEET_V2 W6 D1.7). A session
+    # parked until its source rolls is served by an account that rolls in minutes; a FRESH fire is
+    # not — it starts at once, and the server refuses it until the reset actually happens. Measured
+    # 2026-09-30 06:16-06:19Z: next2 wire-rejected with its reset 0.186-0.231 h away, the grace kept
+    # it routable as the ONLY candidate, and all three new workers hit the limit within 3 s. So a
+    # non-recovery lane refuses a wire-rejected 5h window for as long as its reset is still ahead,
+    # read off the ABSOLUTE stamp where the row carries one (a cached countdown is as-of the sweep).
+    if wire_rejects(r, "5h"):
+        sr_now = hrs_until(r.get("session_reset_at"))
+        if sr_now is None:
+            sr_now = r.get("session_reset_h")
+        if sr_now is None or sr_now >= R["EPS_H"] or (not recovery and sr_now > 0):
+            return "5h-cutoff"
     # The 5h utilisation, unclamped where the wire carries it: the endpoint reports `percent: 100`
     # for a window measured at 1.02, and a ratio that cannot exceed 1 cannot express overage.
     wu5 = ((r.get("wire") or {}).get("5h_util"))

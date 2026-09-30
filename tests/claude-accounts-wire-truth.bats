@@ -281,3 +281,33 @@ assert ca._rolled(prev, rec, "weekly_reset_at", "weekly_pct") is False, \
 print("OK")'
   [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
+
+# ---- W-10: the EPS_H rollover grace is a RECOVERY allowance only (FLEET_V2 W6 D1.7) ------------
+# 2026-09-30 06:16-06:19Z: next2 wire-rejected on 5h with its reset 0.186-0.231 h away. The grace
+# (reset < EPS_H 0.25 h => routable) kept it as the ONLY dispatch candidate, and all three fresh
+# workers hit the limit within 3 s. A fresh fire starts now, so every non-recovery lane refuses a
+# wire-rejected 5h window while its reset is still ahead; the recovery lane keeps the grace.
+
+@test "W-10: a wire-5h-rejected account inside EPS_H is refused for dispatch, kept for recovery" {
+  run python3 -c "$LOAD"'
+from datetime import datetime, timezone, timedelta
+W = {"5h_util": 1.01, "5h_status": "rejected", "7d_util": 0.4, "7d_status": "allowed",
+     "status": "rejected", "http": 429}
+at = (datetime.now(timezone.utc) + timedelta(hours=0.2)).isoformat()
+r = dict(acct="next2", auth="ok", session_pct=100, session_reset_h=0.2, session_reset_at=at,
+         weekly_pct=40, weekly_reset_h=40.0, fable_pct=0, fable_reset_h=40.0, k=0, k_work=0,
+         credits_on=False, wire=W)
+assert 0 < 0.2 < R["EPS_H"], R["EPS_H"]
+assert ca._excluded(r, R) == "5h-cutoff", ca._excluded(r, R)
+assert ca.score_general(r, cfg)[1] == "5h-cutoff", ca.score_general(r, cfg)
+assert ca._excluded(r, R, recovery=True) != "5h-cutoff", ca._excluded(r, R, recovery=True)
+# The ABSOLUTE stamp decides, not the as-of-the-sweep countdown: a row whose cached countdown
+# still reads 0.2 h but whose reset has already passed is no longer refused on the stale wire.
+past = dict(r, session_reset_at=(datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat())
+assert ca._excluded(past, R) != "5h-cutoff", ca._excluded(past, R)
+# Reset unknown => refused, as before, on every lane.
+unk = dict(r, session_reset_at=None, session_reset_h=None)
+assert ca._excluded(unk, R) == "5h-cutoff" and ca._excluded(unk, R, recovery=True) == "5h-cutoff"
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
