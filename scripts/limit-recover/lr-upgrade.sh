@@ -55,6 +55,11 @@ LRU_FIRE_RESUME="${LRU_FIRE_RESUME:-$LRU_DIR/lr-fire-resume.sh}"
 LRU_TUI_LIB="${LRU_TUI_LIB:-$LRU_DIR/../lib/cc-tui.sh}"
 LRU_CA_LIB="${LRU_CA_LIB:-$LRU_DIR/../lib/capacity-admit.sh}"
 LRU_LR_LIB="${LRU_LR_LIB:-$LRU_DIR/lr-lib.sh}"
+# THE ONE LIVE-MEMBER TEST (FLEET_V2 W6, D4.1): scripts/limit-recover/lr-team.sh, shared with the
+# reconciler's census and handoff-fire's probe. Sourced at load; see lru_has_live_teammate.
+LRU_TEAM_LIB="${LRU_TEAM_LIB:-$LRU_DIR/lr-team.sh}"
+# shellcheck disable=SC1090  # runtime-resolved sibling
+[ -f "$LRU_TEAM_LIB" ] && . "$LRU_TEAM_LIB" 2>/dev/null
 LRU_IT2_BIN="${LRU_IT2_BIN:-$HOME/.claude/bin/it2}"
 LRU_TRANSPLANT="${LRU_TRANSPLANT:-$LRU_DIR/lr-transplant.sh}"
 LRU_NOTIFY_BIN="${LRU_NOTIFY_BIN:-$HOME/.claude/bin/cc-notify}"
@@ -285,9 +290,15 @@ lru_snap_args() { # $1=snapshot $2=pid → that pid's argv (its first line)
 lru_snap_lstart() { # $1=snapshot $2=pid → "Tue Sep 22 06:47:13 2026"
   printf '%s\n' "$1" | LRU_P="$2" awk "$LRU_PROC_LINE"' && $1 == ENVIRON["LRU_P"] { print $3" "$4" "$5" "$6" "$7; exit }'
 }
+# THE RULE IS lr-team.sh's, NOT THIS FILE'S (D4.1). This file carried its own copy — the one that
+# also caught named teams — and census.py a looser third; the three agreed on 12 of 12 real argvs by
+# luck of the fixtures, not by construction. The snapshot is still THIS census's one ps (lstart and
+# ppid are read from it too), re-shaped into lr-team's "<pid> <stat> <args>" so the test runs over
+# the same instant rather than a second ps. No lr-team.sh ⇒ the census refuses to call anyone idle
+# (LRU_TEAM_MISSING, read by lru_census), never a silent "no members".
 lru_has_live_teammate() { # $1=snapshot $2=lead sid → 0 when a live CLAUDE process names it as parent
-  printf '%s\n' "$1" | LRU_PAT="--parent-session-id $2" awk "$LRU_PROC_LINE"' && $8 ~ /(^|\/)claude(\.exe)?$/ && index($0, ENVIRON["LRU_PAT"]) { f = 1 }
-    END { exit !f }'
+  command -v lr_has_live_teammate >/dev/null 2>&1 || { LRU_TEAM_MISSING=1; return 0; }
+  lr_has_live_teammate "$2" "$(printf '%s\n' "$1" | awk "$LRU_PROC_LINE"' { printf "%s S", $1; for (i = 8; i <= NF; i++) printf " %s", $i; print "" }')"
 }
 lru_teammate_argvs() { # $1=snapshot $2=lead sid → "<pid> <argv>" of every live claude naming it as parent
   printf '%s\n' "$1" | LRU_PAT="--parent-session-id $2" awk "$LRU_PROC_LINE"' && $8 ~ /(^|\/)claude(\.exe)?$/ && index($0, ENVIRON["LRU_PAT"]) {
@@ -572,6 +583,8 @@ $pass
 EOF
   # pass 2: judge each live row
   local out="" line
+  LRU_TEAM_MISSING=0
+  command -v lr_has_live_teammate >/dev/null 2>&1 || { LRU_TEAM_MISSING=1; lru_say "lr-team.sh unreachable at $LRU_TEAM_LIB — no session can be proven memberless, so none is judged idle"; }
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     case "$line" in *$'\tLIVE') ;; *) out="$out$line"$'\n'; continue ;; esac
@@ -587,6 +600,7 @@ EOF
     cfg="$(lru_cfg_of "$acct")"
     if [ -z "$tgt" ]; then disp="no-target-model"
     elif [ "$bin" = "$target_bin" ] && [ "$model" = "$tgt" ]; then disp=current
+    elif [ "$LRU_TEAM_MISSING" = 1 ]; then disp="team-test-unavailable"
     elif [ -n "$LRU_SELF_SID" ] && [ "$sid" = "$LRU_SELF_SID" ]; then disp=self
     else
       # ROLE: a teammate (its own argv carries --agent-id) or a lead (a live claude names it as

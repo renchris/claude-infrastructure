@@ -807,3 +807,27 @@ STUB
   run bash "$LRU" --auto-enqueue
   [ ! -e "$LRU_STATE/upgrade-queue/auto-upgrade-d4d4d4d4-0000-4000-8000-000000000004.json" ] || { echo "queued a limited session: $output"; false; }
 }
+
+# ── D4.1 via lr-upgrade: the live-member test is lr-team.sh's, not a copy ───────────────────────────
+@test "[D4.1] a member is matched on the EXACT --parent-session-id token (lr-team.sh's rule)" {
+  S=e4e4e4e4-0000-4000-8000-000000000001
+  sess 791 "$S" "$OLD --permission-mode auto --model claude-opus-5 --effort high"
+  # a claude whose parent is a DIFFERENT session that merely starts with this sid: not a member
+  proc 61011 1 "/opt/cc/.claude-260/node_modules/@anthropic-ai/claude-code/bin/claude.exe --agent-id w@session-x --parent-session-id ${S}0 --model claude-opus-5"
+  census
+  [ "$(disp_of 791)" = upgrade ] || { echo "a non-member made it a lead: $output"; false; }
+}
+
+@test "D4.1 CONTROL: the real member still makes it a lead" {
+  S=e4e4e4e4-0000-4000-8000-000000000002
+  sess 792 "$S" "$OLD --permission-mode auto --model claude-opus-5 --effort high"
+  proc 61012 1 "/opt/cc/.claude-260/node_modules/@anthropic-ai/claude-code/bin/claude.exe --agent-id w@session-x --parent-session-id $S --model claude-opus-5"
+  LRU_TEAM_PROC=off census
+  [ "$(disp_of 792)" = lead-with-teammate ] || { echo "$output"; false; }
+}
+
+@test "[D4.1] with lr-team.sh unreachable no session is judged idle — the census fails closed" {
+  sess 793 e4e4e4e4-0000-4000-8000-000000000003 "$OLD --permission-mode auto --model claude-opus-5 --effort high"
+  LRU_TEAM_LIB="$BATS_TEST_TMPDIR/no-lr-team.sh" census
+  [ "$(disp_of 793)" = team-test-unavailable ] || { echo "$output"; false; }
+}
