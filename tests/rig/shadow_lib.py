@@ -25,7 +25,9 @@ THE GATE (plan § Shadow), per cohort:
      that is not ENGAGED is corrected to ENGAGED ("legacy-corrected", its own count) only when the
      sid's transcript under the moved-to account's config dir holds an assistant turn after the
      legacy relaunch AND a claude process for the sid is live now or was at an archive pass after
-     the relaunch (lead ruling W5b2).
+     the relaunch (lead ruling W5b2). A nudge-in-place RECOVERED row has no watcher row at all: it
+     is legacy ENGAGED only when the sid's transcript under acct_after's config dir holds an
+     assistant turn after the row's timestamp.
 """
 
 import calendar
@@ -355,6 +357,7 @@ def _legacy_outcome(lr: str, sid: str, since: float) -> Optional[Dict[str, Any]]
                 "acct_before": t[3],
                 "acct_after": t[4],
                 "verdict": t[5].split("/")[-1],
+                "mech": t[5].split("/")[0],
                 "run": os.path.basename(os.path.dirname(p)),
             }
             if best is None or ts > best["ts"]:
@@ -573,10 +576,20 @@ def compare(lr: str, cid: str, home: str) -> int:
         lo = _legacy_outcome(lr, sid, since)
         if not lo or lo["verdict"] != "RECOVERED":
             continue
-        truth = _watcher_truth(home, sid, lo["ts"])
         r = recs.get(sid)
+        nudge = lo["mech"] == "nudge-in-place"
+        if nudge:
+            # a nudge writes no watcher row; its truth is a turn after the row, in the sid's
+            # transcript under acct_after's config dir (lead ruling W5b2: live 3a06361f, 46bc0436)
+            truth = (
+                "nudge:ENGAGED"
+                if _transcript_engaged(_acct_cfg(home, lo["acct_after"]), sid, lo["ts"])
+                else "nudge:NO-TURN"
+            )
+        else:
+            truth = _watcher_truth(home, sid, lo["ts"])
         fix = False
-        if truth != "ENGAGED" and r is not None:
+        if truth != "ENGAGED" and not nudge and r is not None:
             moved_to = r.get("target_acct") or (r.get("close") or {}).get("acct") or ""
             if _transcript_engaged(_acct_cfg(home, moved_to), sid, lo["ts"]):
                 if live_now is None:
@@ -586,7 +599,7 @@ def compare(lr: str, cid: str, home: str) -> int:
             # its own count, never folded into agree: the legacy truth moved off the watcher
             corrected.append(sid)
             truth = "%s→ENGAGED (legacy-corrected)" % truth
-        legacy_engaged = truth == "ENGAGED" or fix
+        legacy_engaged = truth in ("ENGAGED", "nudge:ENGAGED") or fix
         if not legacy_engaged:
             false_rec += 1
         if r is None:

@@ -209,6 +209,39 @@ dead_watch() {
   [[ "$output" == *"legacy-corrected 1: bbbbbbbb"* ]] || { echo "$output"; false; }
 }
 
+# Lead ruling W5b2 (live 3a06361f, 46bc0436: nudged in place, working, while the recon held them
+# PRE-MOVE). A nudge writes no watcher row; it is legacy ENGAGED only with a turn after the row in the
+# transcript under acct_after's config dir.
+nudge() { printf '%s\t841\t841\tnext2\t%s\tnudge-in-place/RECOVERED\t-\t%s\n' "$1" "$2" "$3" >> "$LR/fleet/one-x/results.tsv"; }
+
+@test "a nudge followed by a turn on its account is legacy ENGAGED: a recon still holding it PRE-MOVE disagrees" {
+  dead_watch
+  nudge "$SIDB" next4 2026-09-29T04:30:00Z
+  turn .claude-quaternary "$SIDB" 2026-09-29T04:30:40.000Z
+  rec "$SIDB" next4 PRE-MOVE ""
+  run /usr/bin/python3 "$L" compare "$LR" "$CID" --home "$HOME"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"watcher=nudge:ENGAGED · recon PRE-MOVE"*"DISAGREE"* ]] || { echo "$output"; false; }
+  rec "$SIDB" next4 ENGAGED ENGAGED
+  run /usr/bin/python3 "$L" compare "$LR" "$CID" --home "$HOME"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "nudge arms: a turn before the row, or on another account, is not ENGAGED" {
+  dead_watch
+  nudge "$SIDB" next4 2026-09-29T04:30:00Z
+  rec "$SIDB" next4 ENGAGED ENGAGED
+  turn .claude-quaternary "$SIDB" 2026-09-29T04:29:00.000Z
+  run /usr/bin/python3 "$L" compare "$LR" "$CID" --home "$HOME"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"watcher=nudge:NO-TURN"*"DISAGREE"* ]] || { echo "$output"; false; }
+  rm -f "$HOME/.claude-quaternary/projects/-wt/$SIDB.jsonl"
+  turn .claude-tertiary "$SIDB" 2026-09-29T04:30:40.000Z
+  run /usr/bin/python3 "$L" compare "$LR" "$CID" --home "$HOME"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"watcher=nudge:NO-TURN"*"DISAGREE"* ]] || { echo "$output"; false; }
+}
+
 @test "the daemon's real cohort record: an earlier limit's stop marker is no miss, one inside the window is" {
   daemon_shape
   marker "$SIDC" 2026-09-24T22:18:50Z
