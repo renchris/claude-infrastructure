@@ -828,7 +828,15 @@ compute_research() {
   bin="${CC_RESEARCH_BIN:-}"
   if [ -z "$bin" ]; then
     bin="$HOME/.claude/bin/cc-research"
-    [ -x "$bin" ] || bin="$(dirname "$0")/../bin/cc-research"
+    if [ ! -x "$bin" ]; then
+      # ~/.claude/scripts/ is a per-file symlink farm: resolve $0 before deriving the repo root.
+      local self="$0" sd
+      while [ -L "$self" ]; do
+        sd="$(cd "$(dirname "$self")" && pwd)"; self="$(readlink "$self")"
+        case "$self" in /*) ;; *) self="$sd/$self" ;; esac
+      done
+      bin="$(cd "$(dirname "$self")/.." 2>/dev/null && pwd)/bin/cc-research"
+    fi
   fi
   [ -x "$bin" ] || return 0
   out="$(_bounded "${WRAP_RESEARCH_TIMEOUT_S:-5}" "$bin" verdict --json "$slug" 2>/dev/null)" || return 0
