@@ -1291,7 +1291,9 @@ EOF
 # THE SCHEMA IS FIXED BY ITS CONSUMER, verified 2026-09-20 at lr-reset-poller.sh:674-679:
 #   .sid          REQUIRED — absent, the file is renamed `<name>.malformed.json` into results/ and
 #                 is LOST, not retried. So a request whose sid cannot be derived is REFUSED here.
-#   .target       default "auto"      .source_pane  optional     .requested_by  default "?"
+#   .target       default "auto"      .requested_by  default "?"
+#   .source_pane  optional for relaunch; REQUIRED for mode prompt (lr-reset-poller.sh:1148 parks a
+#                 prompt request without one as malformed), so cmd_repair resolves it or refuses.
 #   .mode         W5-A is adding the consumer this wave. NOT READ BY THE POLLER ON THIS TREE — it
 #                 is written per the W5 spec so the field is there when W5-A's reader lands, and
 #                 an unread extra key is inert to jq. Re-check lr-reset-poller.sh before relying
@@ -1334,6 +1336,18 @@ cmd_repair() {
     *) cl_die "REFUSED — '$bundle' does not sit under a session-uuid directory (read '$sid'), so .sid cannot be derived. The poller DISCARDS a request with no sid (lr-reset-poller.sh:675), so nothing was written" 2 ;;
   esac
   command -v jq >/dev/null 2>&1 || cl_die "jq is not on PATH; a hand-built request risks a malformed line and nothing was written" 2
+  # MODE PROMPT TYPES INTO A PANE, SO IT NEEDS ONE. The poller parks a prompt request with no
+  # .source_pane as `.malformed.json` and never retries it (lr-reset-poller.sh:1148) — measured
+  # 2026-10-01: three repairs queued without --source-pane were all lost that way while cc-lr
+  # reported "queued". Resolve the pane from the registry; refuse when it cannot be named.
+  if [ "$mode" = prompt ] && [ -z "$pane" ]; then
+    local row
+    row="$(cl_resolve "$sid" 2>/dev/null || true)"
+    pane="$(printf '%s' "$row" | cut -f2)"
+    case "$pane" in
+      ''|-) cl_die "REFUSED — --mode prompt types into the session's pane and no live pane holds ${sid:0:8}; pass --source-pane <P>. The poller DISCARDS a prompt request with no pane (lr-reset-poller.sh:1148), so nothing was written" 2 ;;
+    esac
+  fi
 
   by="$(cl_this_pane)"
   mkdir -p "$REQ_DIR" 2>/dev/null || cl_die "cannot create $REQ_DIR" 2

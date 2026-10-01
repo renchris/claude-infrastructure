@@ -227,3 +227,35 @@ JSON
   [[ "$output" == *"unknown subcommand 'nope'"*"status --cohort, accounts --limited, cohort refire"* ]] || { echo "$output"; false; }
   [[ "$output" == *"cc-lr status --cohort [cid]"* ]] || { echo "$output"; false; }
 }
+
+repair_bundle() { mkdir -p "$LR_STATE_DIR/$SID/bundle-20261001T000000Z"; printf '%s' "$LR_STATE_DIR/$SID/bundle-20261001T000000Z"; }
+
+@test "repair --mode prompt with no --source-pane writes the pane cc-find resolves" {
+  b="$(repair_bundle)"
+  run bash "$LR" repair "$b" --mode prompt
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  REQ="$LR_STATE_DIR/requests/cc-lr-repair-$SID.json"
+  [ "$(req_field source_pane)" = 117 ]
+  [ "$(req_field mode)" = prompt ]
+}
+
+@test "repair --mode prompt REFUSES rc 2 and writes nothing when no live pane holds the session" {
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$CC_LR_FIND_BIN"
+  b="$(repair_bundle)"
+  run bash "$LR" repair "$b" --mode prompt
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"pass --source-pane"* ]] || { echo "$output"; false; }
+  [ ! -e "$LR_STATE_DIR/requests/cc-lr-repair-$SID.json" ]
+}
+
+@test "repair --mode prompt keeps an explicit --source-pane and relaunch still needs none" {
+  b="$(repair_bundle)"
+  run bash "$LR" repair "$b" --mode prompt --source-pane 42
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  REQ="$LR_STATE_DIR/requests/cc-lr-repair-$SID.json"
+  [ "$(req_field source_pane)" = 42 ]
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$CC_LR_FIND_BIN"
+  run bash "$LR" repair "$b"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(req_field source_pane)" = "" ]
+}
