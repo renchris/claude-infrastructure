@@ -94,8 +94,9 @@ Before composing your final report, run one explicit adversarial pass:
 > "What am I missing? What would a hostile reviewer say I didn't check?
 > What axis did I assume was irrelevant?"
 
-Find 2-3 gaps. Investigate with real tool calls (not assumptions).
-Integrate findings into your report.
+List the gaps this pass actually finds — **zero is a valid answer**; never
+invent one to fill a count. Investigate each with real tool calls (not
+assumptions). Integrate findings into your report.
 
 > Floor, not the strong check — fresh-context lead-level adversarial sampling is the
 > load-bearing verification, not this self-critique (Fable 5 guide, 2026-06-11). See the

@@ -184,7 +184,11 @@ Before composing your final report, run one explicit adversarial pass:
 > "What am I missing? What would a hostile reviewer say I didn't check?
 > What axis did I assume was irrelevant?"
 
-Find 2-3 gaps. Investigate them with real tool calls (not assumptions).
+List the gaps this pass actually finds — **zero is a valid answer**, and an
+invented gap to fill a count costs more than a clean "none found" (a quota can
+never come back empty, so a stop rule waiting on a quiet round could never fire:
+REPORT.md §8 item 2 in docs/research/upfront-research-exhaustion-2026-09-30/).
+Investigate each one you do find with real tool calls (not assumptions).
 Integrate findings into your report. Then synthesize. This counters
 within-subagent satisficing the same way lead-level adversarial sampling
 counters within-fan-out blind spots.

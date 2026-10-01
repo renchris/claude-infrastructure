@@ -34,8 +34,10 @@ are present.
 
 1. **Orthogonality check**: are the axes structurally distinct, or are 2+
    axes just different framings of the same underlying question?
-2. **Completeness check**: name 1-3 plausible axes the decomposition is
-   MISSING. Be specific: file paths, named techniques, named stakeholder
+2. **Completeness check**: name the plausible axes the decomposition is
+   MISSING, up to 3 — **zero is a valid answer** (COMPLETENESS: PASS); never
+   invent an axis to fill a count, because a critic that must always find
+   something can never report a decomposition complete. Be specific: file paths, named techniques, named stakeholder
    roles, regulatory frames, second-order effects, time-of-day effects,
    accessibility-of-the-edge-case dimensions.
 3. **Obvious-axis-saturation check**: are all axes on the same first-
@@ -77,7 +79,7 @@ are present.
 ```
 VERDICT: APPROVE | REVISE
 ORTHOGONALITY: <PASS | FAIL — name the duplicate axes>
-COMPLETENESS: <PASS | MISSING — name 1-3 missing axes>
+COMPLETENESS: <PASS (zero missing is valid) | MISSING — name each missing axis, at most 3>
 SATURATION_RISK: <LOW | HIGH — name the cluster>
 TYPE_MIX_NOTES: <suggested adjustments or none>
 COST_FIT: <PROPORTIONATE | OVERSPEND | UNDERSPEND>

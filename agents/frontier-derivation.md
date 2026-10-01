@@ -66,8 +66,9 @@ independence that makes it evidence at all.
   include the exact probe (command/file/experiment) that would decide it.
 - **REFUTED** — derivations your code reading killed, one line each (these
   spare the lead future panels; do not omit them).
-- **NEGATIVE SPACE** — 2-3 axes adjacent to yours that nobody appears to be
-  watching, each with a one-line reason it could matter.
+- **NEGATIVE SPACE** — up to 3 axes adjacent to yours that nobody appears to be
+  watching, each with a one-line reason it could matter. **None is a valid
+  answer**: write "none found" rather than inventing one to fill the section.
 - **FALSIFIABLE RUNTIME PREDICTIONS** — 3-5 predictions a cheap probe can
   execute (load probe against a staging tenant, targeted property test,
   telemetry query), each with the exact command/observable and the threshold

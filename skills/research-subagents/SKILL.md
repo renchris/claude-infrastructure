@@ -350,7 +350,7 @@ blind spots:
 | **Hostile reviewer** | "What dimension would a hostile reviewer say we missed?" | Same wave as productive subagents | Full (3-15K) |
 | **Devil's advocate** | "Argue the strongest version of the position contrary to the current working hypothesis." | Wave 2 (against lead's synthesis) | ≤500 tokens |
 | **Red-team** | "Find evidence this approach FAILS, not evidence it works." | Wave 2 (against lead's synthesis) | ≤500 tokens |
-| **Negative space** | "What dimensions am I NOT exploring, and why not? List 3 with reasons." | Lead inline, not a subagent | Inline only |
+| **Negative space** | "What dimensions am I NOT exploring, and why not? List each with its reason; none is a valid answer." | Lead inline, not a subagent | Inline only |
 
 Raise to 25-33% under high-stakes irreversibility (security, data integrity,
 alignment) or when productive subagents are all reading the same source files
@@ -795,7 +795,15 @@ race conditions). Tells:
 
 **Before declaring saturation**, run the negative-space trigger verbatim:
 
-> "What dimensions am I NOT exploring, and why not? List 3 with reasons."
+> "What dimensions am I NOT exploring, and why not? List each with its reason; none is a valid answer."
+
+**Zero is a valid answer** (REPORT.md §8 item 2, `docs/research/upfront-research-exhaustion-2026-09-30/`):
+a trigger that demanded 3 could never come back empty, so saturation could never be declared and
+every re-ask found a "gap". Name only dimensions you can cite; never pad to a count. **Inside an
+active research program** (`bash ~/.claude/scripts/lib/research-program.sh is-active "$PWD"` exits
+0), this open-ended "what is missing?" belongs to the program's bounded frame critique alone
+(REPORT.md §3.2 step 6), not to saturation or gap-fill decisions — after the frame is signed, a
+missing dimension is a frame omission handled by the change rules (§5.4), not a new wave.
 
 If any reason is *"I forgot"* or *"not obviously relevant"* → promote into
 scope, spawn the missing subagent(s). If the reason is *"explicitly out of scope
@@ -820,7 +828,7 @@ research strategy. Manifest before the first sub-batch:
 pattern)**: after Wave 1 returns and lead synthesizes, run the negative-space
 trigger:
 
-> "What dimensions am I NOT exploring, and why not? List 3."
+> "What dimensions am I NOT exploring, and why not? List each; none is a valid answer."
 
 If any reason is *"I forgot"* or *"not obviously relevant"* with a citable
 file:line or named technique → spawn Wave 2 of 3-8 narrow gap-fill subagents
