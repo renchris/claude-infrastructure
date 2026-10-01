@@ -33,12 +33,17 @@ shutdown can message a freed NSLock.
 `scripts/checks/kitty-upstream-defects.sh` reads a release's source (default: the latest GitHub
 release) and tests each defect's structure, not line numbers. Exit 1 = still present (the row stays
 open), 0 = fixed upstream (the row's premise is gone), 2 = could not tell (abstain). Pinned by
-`tests/kitty-upstream-defects.bats`. The rows store:
+`tests/kitty-upstream-defects.bats`. Run it from the checkout — `scripts/checks/` is not part of
+the deployed `~/.claude` layer:
 
 ```
-bash ~/.claude/scripts/checks/kitty-upstream-defects.sh --defect fonts_data
-bash ~/.claude/scripts/checks/kitty-upstream-defects.sh --defect tick_lock
+bash ~/Development/claude-infrastructure/scripts/checks/kitty-upstream-defects.sh --defect fonts_data
+bash ~/Development/claude-infrastructure/scripts/checks/kitty-upstream-defects.sh --defect tick_lock
 ```
+
+Both rows closed on 2026-09-30 with the decision "record, do not patch separately": the guards ride
+the one staged patched build (decision `0a8ffe58562a`), so the falsifier is the check to re-run on a
+new kitty release rather than a stored probe on an open row.
 
 Run on 2026-09-30 with no `--src`: both `state=present`, `verdict=PRESENT ref=v0.49.2`, exit 1.
 The same run against v0.49.1 and against the local 0.48.2 tree also exits 1.
