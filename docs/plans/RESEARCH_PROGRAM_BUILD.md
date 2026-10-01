@@ -118,6 +118,44 @@ Owns §10 items 1 (deny half), 2, 3, 8, 11, 12, 13 (populating the set). Reads, 
   lines do not carry.
 - **Settings migration** as a `c10` migration (next free number after `migrations/0049-*`), operator-run: one
   PreToolUse entry matching every tool, Workflow included; the router hook's timeout raised to 10 s.
+- Status: **built off-box 2026-10-01** (cloud session, branch `claude/fire-20261001T094944Z-86287-1`; the desk
+  lands it). What exists:
+  - `scripts/research-kit/router.py` — `classify` (gate row 15's contract), `prompt` (UserPromptSubmit), `tool`
+    (PreToolUse), `relay-check` (Stop), `status`. Labels are `heldout.ROUTES` plus `unavailable` (§10 item 3).
+    Per-session route records in `$CC_RESEARCH_HOME/route-state/` (7-day reaper, `growth-coverage.conf` row).
+  - `hooks/research-precognition-nudge.sh` — the router branch: cwd, then slug/alias in the prompt
+    (`rp_resolve_prompt`, added to `scripts/lib/research-program.sh` with `rp_program_state`); no single-active
+    fallback (§10 item 2). Routes only in `certifying|certified`.
+  - `hooks/research-block.sh` (+ `hooks/lib/research-router.sh`) — the deny; `hooks/completion-assert.sh` ARM R —
+    the relay check, its own `relay` latch class, cap 2.
+  - `migrations/0050-research-block-registration.sh` — the c10 migration.
+  - `scripts/research-kit/heldout-candidates.py` (mines the four strata from transcripts; prints counts, never a
+    prompt) and `heldout-rate.py` (one rater per vendor family through `courier.resolve`/`call`).
+  - Suites: `research-router` (23), `research-relay-check` (15), `research-router-heldout` (9),
+    `migration-0050-research-block` (6) — §10 items 1 (deny), 2, 3, 8, 11, 12, 13 each with a planted input.
+- Decisions made in the build (no ruling needed; each is the narrower reading of the report):
+  - A `research-order` while `certifying` allows the kit's own `round.sh`/`courier.sh`: certification IS the
+    scheduled research of that state, and §10 item 1 turns the block on at the freeze. Agent/Workflow/vendor CLIs
+    stay denied. While `certified` it allows nothing.
+  - A concern, `other` and `unavailable` deny the research verbs only; completeness/pushback deny every tool but
+    `gate.sh --render --program <slug>` (or `cc-research verdict <slug>`). A session with no routed prompt in a
+    blocking state counts as completeness (§4.2).
+  - Open activities (§10 item 8) live in `$CC_RESEARCH_HOME/activities.json`, not the registry, because
+    `kit.registry_set` keeps only its four keys. Tag: `CC_RESEARCH_ACTIVITY=<id>` on the Bash clause,
+    `[activity:<id>]` in an Agent description or prompt. Its writer is wave C (triage).
+  - Program resolution by alias is per prompt: a pane that named the program once is ordinary again on its next
+    prompt that does not.
+  - Kill switches, all launch-environment only (no tool call can set them): `CC_RESEARCH_BLOCK=0`,
+    `CC_RESEARCH_ROUTER=off`, `CC_RESEARCH_RELAY_CHECK=0`.
+  - The router was written from the route table in REPORT.md §4.1, never from candidate prompts: the evidence
+    files carry counts, and the off-box session could not mine transcripts. So the held-out set is uncontaminated.
+- **On-box steps left (the cloud VM has no transcripts, keychain or vendor logins):**
+  1. Operator: after the land converges, `bash ~/Development/claude-infrastructure/migrations/0050-research-block-registration.sh --confirm settings.json`.
+  2. Any on-box session: `python3 scripts/research-kit/heldout-candidates.py --out /tmp/cands.jsonl`, then
+     `scripts/research-kit/heldout.py seal --candidates /tmp/cands.jsonl --tuning-out ~/.claude/autonomy/research/router-heldout/tuning.jsonl` (operator prompts: kept out of the repo),
+     then `scripts/research-kit/heldout-rate.py --vendor anthropic` and `--vendor openai` (Google is down until
+     its login is restored), then `CC_RESEARCH_ROUTER="python3 $PWD/scripts/research-kit/router.py classify"
+     scripts/research-kit/heldout.py evaluate` — row 15's first real reading of the classifier.
 
 ### B2 — `research-program` skill, `/research-program` command, intake (REPORT.md §8 item 8)
 - Intake script: the two §3.1 rulings into `frame.json` `rulings` (`scripts/research-kit/RECORDS.md`), the contract

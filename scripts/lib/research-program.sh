@@ -19,6 +19,12 @@
 #                         prints nothing. Always exits 0.
 #   rp_is_active <dir>    exit 0 iff <dir> resolves to a program in state registered, certifying or
 #                         certified; exit 1 otherwise (closed, unregistered, no registry).
+#   rp_resolve_prompt <text>  prints "<slug> <state>" for the program whose slug or one of whose
+#                         aliases appears in <text> as a whole word, case-insensitively (the longest
+#                         match wins; two programs tied on it is ambiguous and prints nothing), else
+#                         nothing. The re-ask router's second key (REPORT.md §4.1). There is NO third
+#                         key: the single-active fallback was deleted (§10 open item 2). Exits 0.
+#   rp_program_state <slug>   prints the registry state of <slug>, else nothing. Exits 0.
 #
 # A missing or unparseable registry means NO PROGRAM, so every exemption stays off: the failure
 # direction is "the standing rules apply", which is what they did before this existed. It is said
@@ -110,10 +116,65 @@ rp_is_active() {
   return 1
 }
 
+# The registry read shared by the two keys below: one TSV row per program, "<slug> TAB <state> TAB
+# <name>" for the slug and each alias. Same void-on-bad-shape rule as _rp_resolve.
+_rp_names() {
+  local reg
+  reg="$(_rp_registry)"
+  [ -f "$reg" ] || { _rp_warn_once "registry $reg is missing"; return 1; }
+  command -v jq >/dev/null 2>&1 || { _rp_warn_once "jq is not on PATH, so registry $reg cannot be read"; return 1; }
+  jq -r '
+      if (.programs | type) != "array" then error("programs is not an array") else . end
+      | .programs[]
+      | if (.slug | type) != "string" or (.state | type) != "string"
+        then error("program without a string slug and state") else . end
+      | . as $p
+      | ([$p.slug] + [($p.aliases // [])[] | select(type == "string" and length > 0)])[]
+      | [$p.slug, $p.state, .] | @tsv' "$reg" 2>/dev/null \
+    || { _rp_warn_once "registry $reg is unparseable"; return 1; }
+}
+
+rp_program_state() {
+  local want="${1:-}" rows slug state name
+  [ -n "$want" ] || return 0
+  rows="$(_rp_names)" || return 0
+  while IFS="$(printf '\t')" read -r slug state name; do
+    if [ "$slug" = "$want" ]; then printf '%s\n' "$state"; return 0; fi
+  done <<EOF
+$rows
+EOF
+  return 0
+}
+
+rp_resolve_prompt() {
+  local text="${1:-}" rows slug state name lt ln best="" best_len=0 tie=0
+  [ -n "$text" ] || return 0
+  rows="$(_rp_names)" || return 0
+  lt="$(printf '%s' "$text" | tr '[:upper:]' '[:lower:]')"
+  while IFS="$(printf '\t')" read -r slug state name; do
+    [ -n "$name" ] || continue
+    ln="$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')"
+    # Whole word: the name is bounded by a non-word character or the text's edge on both sides.
+    # Pure-shell matching (no regex built from the name), so an alias holding regex syntax is literal.
+    case " $lt " in
+      *[!a-z0-9_-]"$ln"[!a-z0-9_-]*) ;;
+      *) continue ;;
+    esac
+    if [ "${#ln}" -gt "$best_len" ]; then best_len="${#ln}"; best="$slug $state"; tie=0
+    elif [ "${#ln}" -eq "$best_len" ] && [ "${best%% *}" != "$slug" ]; then tie=1; fi
+  done <<EOF
+$rows
+EOF
+  [ "$tie" -eq 0 ] && [ -n "$best" ] && printf '%s\n' "$best"
+  return 0
+}
+
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   case "${1:-}" in
     resolve)   rp_resolve_cwd "${2:-$PWD}" ;;
     is-active) rp_is_active "${2:-$PWD}" ;;
-    *) printf 'usage: %s resolve|is-active [dir]\n' "${0##*/}" >&2; exit 2 ;;
+    resolve-prompt) rp_resolve_prompt "${2:-}" ;;
+    state)     rp_program_state "${2:-}" ;;
+    *) printf 'usage: %s resolve|is-active [dir] | resolve-prompt <text> | state <slug>\n' "${0##*/}" >&2; exit 2 ;;
   esac
 fi

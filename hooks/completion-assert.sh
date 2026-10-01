@@ -261,6 +261,53 @@ LASTJSON="$(jq -c 'select(.type=="assistant" and (.isSidechain != true))
 MSG="$(printf '%s' "$LASTJSON" | jq -r '. // empty' 2>/dev/null || true)"
 [ -n "$MSG" ] || abstain "no-assistant-text"
 
+# ── ARM R — THE RESEARCH RELAY CHECK (wave B1; REPORT.md §4.4, §8 item 6) ─────────────────────
+# In a turn the re-ask router (hooks/research-precognition-nudge.sh) routed as a completeness
+# question or pushback, inside a research program in state certifying or certified (§10 open item
+# 1), a reply may add nothing the relayed certificate does not carry — whether it opens "yes" or
+# "no": no item, location, row or id beyond the lines, no "one more thing", at most 3 explaining
+# lines, and a "no" must cite one of the three events. The census that motivated it: 20 of 73
+# "yes" replies to completeness asks also named a new item (evidence/adversary/llm/ask_turns.out).
+# The decision lives in scripts/research-kit/router.py `relay-check`; this arm only latches and
+# blocks. Sited ABOVE the close-tell gate on purpose: a relay reply need carry no close token.
+# The exemption ruling it waited on was made 2026-10-01 (packet 83adb541ea19), so it BLOCKS rather
+# than warns. Own class `relay`, latched by message hash like every arm, cap COMPLETION_RELAY_MAX
+# (default 2). Kill switch: CC_RESEARCH_RELAY_CHECK=0. Any failure to locate or run the router is
+# "cannot tell" and falls through to the arms below, unchanged.
+if [ "${CC_RESEARCH_RELAY_CHECK:-1}" != 0 ]; then
+  _ca_rr="${CC_RESEARCH_ROUTER_PY:-}"
+  if [ -z "$_ca_rr" ]; then
+    _ca_t="$0"; [ -L "$_ca_t" ] && _ca_t="$(readlink "$_ca_t")"
+    _ca_rr="$(cd "$(dirname "$_ca_t")/.." 2>/dev/null && pwd)/scripts/research-kit/router.py"
+    [ -f "$_ca_rr" ] || _ca_rr="$HOME/.claude/scripts/research-kit/router.py"
+  fi
+  if [ -f "$_ca_rr" ] && [ "$SID" != "?" ]; then
+    _ca_rreason="$(printf '%s' "$MSG" | /usr/bin/env python3 "$_ca_rr" relay-check --session "$SID" 2>/dev/null)"
+    _ca_rrc=$?
+    if [ "$_ca_rrc" -eq 1 ] && [ -n "$_ca_rreason" ]; then
+      mkdir -p "$STATE_DIR" 2>/dev/null || true
+      _ca_rkey="$(printf '%s|%s|%s' "$CFG" "$SID" "$CWD" | shasum 2>/dev/null | cut -c1-16)"
+      _ca_rhash="$(printf '%s' "$MSG" | shasum 2>/dev/null | cut -c1-16)"
+      [ -n "$_ca_rkey" ] && [ -n "$_ca_rhash" ] || abstain "relay-no-hash"
+      _ca_rfired="$STATE_DIR/$_ca_rkey.fired"
+      if [ -f "$_ca_rfired" ] && awk -v h="$_ca_rhash" '$1 == h { hit = 1 } END { exit(hit ? 0 : 1) }' "$_ca_rfired" 2>/dev/null
+      then abstain "latched-already-fired"; fi
+      _ca_rmax="${COMPLETION_RELAY_MAX:-2}"
+      case "$_ca_rmax" in ''|*[!0-9]*) _ca_rmax=2 ;; esac
+      _ca_rn=0
+      [ -f "$_ca_rfired" ] && _ca_rn="$(awk '$2 == "relay" { n++ } END { print n+0 }' "$_ca_rfired" 2>/dev/null || printf 0)"
+      case "$_ca_rn" in ''|*[!0-9]*) _ca_rn=0 ;; esac
+      [ "$_ca_rn" -ge "$_ca_rmax" ] && abstain "capped:relay:${_ca_rn}>=${_ca_rmax}"
+      printf '%s relay\n' "$_ca_rhash" >> "$_ca_rfired" 2>/dev/null || true
+      log_idl fired "research-relay" \
+        "$(jq -cn --arg arm relay --arg class relay --argjson count "$((_ca_rn+1))" --argjson max "$_ca_rmax" \
+            '{arm:$arm,class:$class,count:$count,max:$max}' 2>/dev/null)"
+      jq -nc --arg r "$_ca_rreason (completion-assert relay $((_ca_rn+1))/${_ca_rmax})" '{decision:"block",reason:$r}'
+      exit 0
+    fi
+  fi
+fi
+
 # ── A done-assertion or a soft/scope-narrow close (broad — the LEDGER is the discriminator). ──
 CLOSE='(^|[^a-z])done([^a-z]|$)|complete([ds]|ly)?([^a-z]|$)|finished|nothing (left|more|else)?[a-z ]{0,12}to do|(^|[^a-z])landed([^a-z]|$)|shipped|pushed to (main|trunk|origin)|📦|✅|that (covers|wraps|completes|was the main ask)|main ask|remaining [a-z ]{0,20}items?|ready to implement|whenever you.?d? ?(like|want)|prioriti[sz]e|natural follow.?up|follow.?up|flagging (it|this)|for planning|larger effort|happy to (go|proceed|do|help)|either direction|let me know if|everything [a-z ]{0,20}is done|(^|[^a-z])remains?([^a-z]|$)|comes up'
 
