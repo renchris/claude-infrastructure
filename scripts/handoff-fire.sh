@@ -9410,6 +9410,44 @@ if [ "${1:-}" = "__recycle" ]; then
       fi
       sleep "$RCY_ENGAGE_INTERVAL"; rcy_t=$((rcy_t + RCY_ENGAGE_INTERVAL))
     done
+    # ── W7e: READ THE TARGET BEFORE CALLING A RESUME DEAD ─────────────────────────────────────────
+    # Measured 2026-10-01 (sessions 89bdedfa, 8e18da3f, moved to .claude-tertiary): lr-fire-resume
+    # logged READY-NOT-SEEN and typed NOTHING, so the run token could never reach the transcript and
+    # the token-gated oracle above was rc 1 for the whole window — while the target copy held real
+    # claude-opus-5-5 turns ~35 s after the relaunch (the session woke on peer mail and worked). The
+    # path was right; the verdict was not. "No answer to OUR prompt" is not "no answer": a resumed
+    # session carries its whole transcript, so a fresh non-error turn on the target is the session
+    # ANSWERING, and the dead alarm below ("alive at an empty composer") was false on every such run.
+    # The token stays the FIRST proof (it alone can say our prompt landed); this is read only once it
+    # has had the full window, and the line says which proof it is. ~40 false HANDOFF-RECYCLE-DEAD.
+    if [ -n "$RCY_RESUME_SID" ]; then
+      rcy_tx_n=0
+      if [ -n "$RCY_RESUME_CFG" ]; then
+        for rcy_tx in "$RCY_RESUME_CFG"/projects/*/"$RCY_RESUME_SID".jsonl; do
+          [ -r "$rcy_tx" ] && rcy_tx_n=$((rcy_tx_n + 1))
+        done
+      fi
+      if [ "$rcy_tx_n" = 0 ]; then
+        # NO READABLE TARGET COPY = NO MEASUREMENT. Silence from a file we could not open is not the
+        # session's silence, so this is an abstention: a row, no page, and never recycle-dead.
+        echo "→ relaunched in $RSID — PROCESS-ALIVE, engagement UNKNOWN: could not read transcript ${RCY_RESUME_CFG:-<no target cfg>}/projects/*/${RCY_RESUME_SID}.jsonl — read the pane, not this line"
+        emit_recycle_event recycle-unverified "" "$RSID" "unknown — could not read transcript ${RCY_RESUME_CFG:-<no target cfg>}/projects/*/${RCY_RESUME_SID}.jsonl after ${rcy_t}s" || true
+        goal_unreachable recycle-unverified || true
+        _hf_resume_debt discharge --sid "$RCY_DEBT_SID" --why "relaunched claude alive in pane $RSID; transcript unreadable, engagement unknown"
+        exit 0
+      fi
+      if [ -n "${RCY_SUBMIT_TOKEN:-}" ] && resume_engaged "$RCY_RESUME_CFG" "$RCY_RESUME_SID" "$RCY_T0" ""; then
+        rcy_ans_why="the relaunch prompt never reached the transcript"
+        [ -n "$rcy_submit_ts" ] && rcy_ans_why="the relaunch prompt reached the transcript at $rcy_submit_ts and the turn after it is not tied to it"
+        [ -n "${RCY_RUN_DIR:-}" ] && grep -q 'READY-NOT-SEEN' "$RCY_RUN_DIR/events.jsonl" 2>/dev/null \
+          && rcy_ans_why="$rcy_ans_why (the launcher logged READY-NOT-SEEN: it typed no prompt)"
+        echo "→ relaunched + ENGAGEMENT CONFIRMED BY TRANSCRIPT in $RSID — the session is ANSWERING on $RCY_RESUME_CFG (a real assistant turn after the relaunch), but $rcy_ans_why"
+        arm_goal "$IT2" "$RSID" "$FIRE_GOAL"
+        emit_recycle_event recycle-engaged 1 "$RSID" "recycled in place; ANSWERING on the target within ${rcy_t}s, without the relaunch prompt: $rcy_ans_why" || true
+        _hf_resume_debt discharge --sid "$RCY_DEBT_SID" --why "recycle answering in pane $RSID"
+        exit 0
+      fi
+    fi
     # DEAD RECYCLE. Deliberately NO re-type: unlike the fire path, this pane holds a LIVE claude, and
     # pasting the brief into a session that IS working but whose transcript we simply could not read
     # would interrupt its turn. A recycle's only reader is the operator/desk, so the truthful verdict
