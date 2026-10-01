@@ -14,6 +14,10 @@ setup() {
   REPO_SRC="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HF="$REPO_SRC/scripts/handoff-fire.sh"
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # Seams that do NOT resolve under $HOME (test-hermeticity-lint 5a/5b): absent paths, sensors fail open.
+  export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/account-sweep.json"
+  export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/no-such-claude-accounts"
+  export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/heal-"
   unset KITTY_WINDOW_ID KITTY_LISTEN_ON CC_TERM_KITTY_TO
   eval "$(sed -n '/^kt_launch() {/,/^}/p;/^spawn_frontmost() {/,/^}/p;/^spawn() {/,/^}/p;/^fire_cleanup() {/,/^}/p' "$HF")"
   in_kitty() { return 0; }
