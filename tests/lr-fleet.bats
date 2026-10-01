@@ -153,6 +153,18 @@ row() { printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"claude-se
   # it now covers caps AND network/stall deaths, so it can no longer say "limit-blocked".
   [[ "$output" == *"(no blocked session anywhere"* ]] || { echo "$output"; false; }
 }
+@test "recover: a session NO pane holds is SPAWNED, never handed a bare --in-place (which recycles the caller's pane)" {
+  blocked_tx "$SEC" "$SID"
+  run bash "$FLEET" --one "$SID" --target next3
+  grep -q -- "--launch --spawn" "$LRH_LOG" || { echo "$output"; cat "$LRH_LOG"; false; }
+  ! grep -q -- "--in-place" "$LRH_LOG" || { cat "$LRH_LOG"; false; }
+}
+@test "recover CONTROL: a session a live pane holds still goes --in-place with that pane" {
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  run bash "$FLEET" --one "$SID" --target next3
+  grep -q -- "--launch --in-place --source-pane 616" "$LRH_LOG" || { echo "$output"; cat "$LRH_LOG"; false; }
+}
+
 @test "locate: no live process holding it is NO-PANE; a teammate transcript is TEAMMATE" {
   blocked_tx "$SEC" "$SID"; mark "$SEC" "$SID"
   tm="9b9b9b9b-0000-4000-8000-000000000002"; blocked_tx "$SEC" "$tm"

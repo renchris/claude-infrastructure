@@ -977,8 +977,12 @@ _lf_one_act() {
   target="$LF_ADMIT_TARGET"
   local t0="$LF_ADMIT_T0"
   case "$tier" in */*) model="${tier%%/*}"; effort="${tier#*/}" ;; esac
-  local args=(--sid "$sid" --config-dir "$cfg" --cwd "$cwd" --target "$target" --launch --in-place)
-  [ -n "$pane" ] && [ "$pane" != "-" ] && args+=(--source-pane "$pane")
+  local args=(--sid "$sid" --config-dir "$cfg" --cwd "$cwd" --target "$target" --launch)
+  # NO PANE ⇒ --spawn, NEVER a bare --in-place (2026-10-01). lr-handoff reads --in-place with no
+  # --source-pane as "recycle THIS pane", and THIS pane is whoever ran the driver: the operator ran
+  # `lr-fleet.sh --one <closed pane's sid>` through `!` in pane 52 and the recycle aimed /exit at
+  # pane 52's own session. handoff-fire's tombstone gate refused it; the spawn is what was meant.
+  if [ -n "$pane" ] && [ "$pane" != "-" ]; then args+=(--in-place --source-pane "$pane"); else args+=(--spawn); fi
   [ -n "$model" ] && args+=(--model "$model"); [ -n "$effort" ] && args+=(--effort "$effort")
   echo "lr-fleet: recovering ${sid:0:8} — pane ${pane:-<new>} on $acct → $target (tier ${tier:-default})$([ "$FROM_DAEMON" = 1 ] && printf ' [daemon-run: lr-reset-poller request drain]')" >&2
   out="$("$HANDOFF" "${args[@]}" 2> >(tee "$rdir/$sid.stderr" >&2))" || rc=$?
