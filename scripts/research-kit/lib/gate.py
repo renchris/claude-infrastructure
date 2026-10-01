@@ -16,8 +16,8 @@ Invoked through scripts/research-kit/gate.sh. Verbs:
                                                             --project and --default-effect no-change
   close     --program P                                     state -> closed
 
-Rows 1-8 and the freeze/render/certificate verbs live in gate_rows_a.py; rows 9-16, the sweep and
-file-packet in gate_rows_b.py. Each row function takes a Ctx and returns a Row. A row that cannot
+Rows 1-8 live in gate_rows_a.py; rows 9-16 and the plan lint in gate_rows_b.py; the sweep and
+file-packet verbs in gate_sweep.py; freeze, render and the certificate in gate_cert.py. Each row function takes a Ctx and returns a Row. A row that cannot
 be evaluated is FAIL ("Unknown fails", §3.10); a row function that raises is FAIL with the error.
 Exit codes: 0 all rows PASS/FILED (or verb succeeded) · 1 a row FAILed · 2 usage or refusal.
 """
@@ -128,7 +128,7 @@ def cmd_run(a: argparse.Namespace) -> int:
     print_rows(rows, a.json)
     if any(r.status not in (PASS, FILED) for r in rows):
         return 1
-    cert = gate_rows_a.write_certificate(ctx, rows)
+    cert = gate_cert.write_certificate(ctx, rows)
     kit.registry_set(a.program, "certified")
     if not a.json:
         print(f"CERTIFIED {a.program}: {cert}")

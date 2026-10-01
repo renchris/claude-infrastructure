@@ -1,8 +1,9 @@
-"""gate_rows_b.py — gate rows 9-16, the due-date sweep and file-packet. (stub: teammate gate-b)"""
+"""gate_rows_b.py — gate rows 9-16 and the plan lint. Owner: teammate gateb."""
 from __future__ import annotations
 
 ROWS = []
 
 
-def add_verbs(sub):
-    return None
+def lint(ctx):
+    """Errors as a list of strings; empty means 0 errors (§3.7 step 4)."""
+    raise NotImplementedError
