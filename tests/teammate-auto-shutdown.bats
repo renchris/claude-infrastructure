@@ -1470,6 +1470,47 @@ txtasknotif(){ printf '{"type":"queue-operation","operation":"enqueue","timestam
   [ ! -e "$D/it2-calls.log" ]
 }
 
+# (C5b/C5c) THE TWO LAUNCH SHAPES THE ARM MISSED (husk panes 2026-10-01). A foreground Bash the harness
+#      MOVES to the background at its timeout carries no run_in_background flag, and a Monitor watch
+#      is not a Bash at all — but both run on after their tool_result and both finish with the same
+#      task-notification. Teammate husk-fa was waiting on exactly this pair when the hook removed its
+#      worktree (2026-10-01 00:16), and husk-fc's pane was closed under its live process at 23:54.
+@test "a foreground Bash auto-moved to the background at its timeout, unnotified → IN FLIGHT" {
+  local sid=sidA3b team=teamA3b member=wkrBgMoved pane=%214 wt="$D/wtA3b"
+  mkdir -p "$wt"; worktreetsv "$team" "$member" "$wt"; teamcfg "$team" "$member" "$pane"
+  reg "$sid" PANE-A3B "$wt" 3600
+  tx "$sid" 9100
+  {
+    printf '{"type":"assistant","timestamp":"%s.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"bg-moved","name":"Bash","input":{"command":"bats tests/x.bats"}}]}}\n' "$(iso 9000)"
+    printf '{"type":"user","timestamp":"%s.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"bg-moved","content":"Command did not complete within its 600s timeout and was moved to the background (ID: bwtw1). Output is being written to: /tmp/o"}]}}\n' "$(iso 8990)"
+    printf '{"type":"assistant","timestamp":"%s.000Z","message":{"role":"assistant","content":[{"type":"text","text":"waiting for the suite"}]}}\n' "$(iso 8980)"
+  } >> "$D/proj/slug/$sid.jsonl"
+  run hookrun "$member" "$team" "$sid" "$wt"
+  [ "$status" -eq 0 ]
+  grep -q "tool in flight" "$LOGF"
+  ! grep -q "Auto-shutdown idle teammate: $member" "$LOGF" || false
+}
+
+@test "an armed Monitor watch, unnotified → IN FLIGHT; once its notification lands → closes" {
+  local sid=sidA3c team=teamA3c member=wkrMonitor pane=%215 wt="$D/wtA3c"
+  mkdir -p "$wt"; worktreetsv "$team" "$member" "$wt"; teamcfg "$team" "$member" "$pane"
+  reg "$sid" PANE-A3C "$wt" 3600
+  tx "$sid" 9100
+  {
+    printf '{"type":"assistant","timestamp":"%s.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"mon-1","name":"Monitor","input":{"command":"until grep -q done /tmp/o; do sleep 5; done"}}]}}\n' "$(iso 9000)"
+    printf '{"type":"user","timestamp":"%s.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"mon-1","content":"Monitor started (task bi9r1, expires in 30m unless the source ends first)."}]}}\n' "$(iso 8990)"
+    printf '{"type":"assistant","timestamp":"%s.000Z","message":{"role":"assistant","content":[{"type":"text","text":"waiting on the monitor"}]}}\n' "$(iso 8980)"
+  } >> "$D/proj/slug/$sid.jsonl"
+  run hookrun "$member" "$team" "$sid" "$wt"
+  grep -q "tool in flight" "$LOGF"
+  ! grep -q "Auto-shutdown idle teammate: $member" "$LOGF" || false
+  txtasknotif "$sid" 8800 mon-1
+  printf '{"type":"assistant","timestamp":"%s.000Z","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}\n' "$(iso 8700)" >> "$D/proj/slug/$sid.jsonl"
+  : > "$LOGF"
+  run hookrun "$member" "$team" "$sid" "$wt"
+  grep -q "Auto-shutdown idle teammate: $member" "$LOGF"
+}
+
 # (C6) The other direction — the notification landed, so the job is DONE and the member closes as
 #      before. Without this, (C5) passes against "any background launch ever ⇒ never close again".
 @test "RC-5a control: background Bash WITH its task-notification ⇒ NOT in flight" {

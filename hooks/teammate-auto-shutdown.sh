@@ -736,17 +736,27 @@ _tool_in_flight() {  # <session-id> → 0 if a tool call is outstanding
   # now read IN FLIGHT indefinitely, and that is the SAFE direction this predicate has always taken
   # (unknown ⇒ keep the member alive; the lead resolves it, register RC-8). It is a hold, never a
   # reap, and nothing here closes anything.
-  bg_ids="$(jq -r 'select(.type=="assistant") | (.message.content // [])[]?
-                   | select(.type=="tool_use" and (.input.run_in_background == true)) | .id // empty' "$f" 2>/dev/null)"
+  #
+  # ── …AND A BACKGROUND JOB HAS THREE LAUNCH SHAPES, NOT ONE (husk panes 2026-10-01) ────────────
+  # This arm keyed on `run_in_background == true` and missed the other two ways a job outlives its
+  # tool call, both measured in the live transcript corpus that day: a foreground Bash the harness
+  # MOVES to the background when it hits its timeout ("…was moved to the background (ID: <bid>)",
+  # 2,818 results) and a Monitor watch ("Monitor started (task <bid>, …", 646). Both complete with
+  # the same `<tool-use-id>` task-notification. Teammate husk-fa (2026-10-01 00:16) was waiting on an
+  # auto-backgrounded bats run through a Monitor; this predicate read it idle, so the hook removed
+  # its worktree under the running suite, and the same shape closed husk-fc's pane at 23:54 while its
+  # process lived on. The launch set is therefore read off the RESULT text — which already carries
+  # the launch-confirmation guard above (a denied or empty launch has no such text) — not off the
+  # tool_use's input flag.
+  bg_launched="$(jq -rc 'select(.type=="user") | (.message.content // []) | if type=="array" then .[] else empty end
+                         | select(.type=="tool_result")
+                         | select((.content // "" | tostring)
+                                  | test("running in background with ID:|moved to the background \\(ID:|Monitor started \\(task "))
+                         | .tool_use_id // empty' "$f" 2>/dev/null)"
+  bg_ids="$bg_launched"
   if [[ -n "$bg_ids" ]]; then
-    bg_launched="$(jq -rc 'select(.type=="user") | (.message.content // []) | if type=="array" then .[] else empty end
-                           | select(.type=="tool_result")
-                           | select((.content // "" | tostring) | test("running in background with ID:"))
-                           | .tool_use_id // empty' "$f" 2>/dev/null)"
     while IFS= read -r bg_id; do
       [[ -n "$bg_id" ]] || continue
-      # never actually launched (deny / unavailable / empty result) ⇒ nothing is running
-      case $'\n'"$bg_launched"$'\n' in *$'\n'"$bg_id"$'\n'*) ;; *) continue ;; esac
       # the harness notified its completion ⇒ the job is done. `grep -qF` on a FILE, not a pipeline:
       # no producer to take SIGPIPE, so pipefail cannot invert it here.
       grep -qF "<tool-use-id>$bg_id</tool-use-id>" "$f" 2>/dev/null && continue
