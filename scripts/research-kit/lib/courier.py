@@ -277,7 +277,14 @@ def cmd_preflight(a: argparse.Namespace) -> int:
     return DEAD if any(not r["ok"] for r in out.values()) else 0
 
 
-def bundle_dir(slug: str, k: int) -> Path:
+def round_id(v: str) -> str:
+    """A round id: a certification round number, `fc<n>` for the frame critique, `delta-<hole>-<n>`."""
+    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9-]{0,63}$", v):
+        raise argparse.ArgumentTypeError(f"bad round id {v!r}")
+    return v
+
+
+def bundle_dir(slug: str, k: str) -> Path:
     return kit.sealed_dir(slug) / "rounds" / str(k) / "bundle"
 
 
@@ -321,7 +328,7 @@ def cmd_bundle(a: argparse.Namespace) -> int:
     return 0
 
 
-def panel_dir(slug: str, k: int) -> Path:
+def panel_dir(slug: str, k: str) -> Path:
     return kit.records_dir(slug) / "rounds" / str(k) / "panels"
 
 
@@ -439,13 +446,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.set_defaults(fn=cmd_preflight)
     p = sub.add_parser("bundle")
     p.add_argument("--program", required=True)
-    p.add_argument("--round", type=int, required=True)
+    p.add_argument("--round", type=round_id, required=True)
     p.add_argument("--plan", required=True)
     p.add_argument("--extra", action="append")
     p.set_defaults(fn=cmd_bundle)
     p = sub.add_parser("run")
     p.add_argument("--program", required=True)
-    p.add_argument("--round", type=int, required=True)
+    p.add_argument("--round", type=round_id, required=True)
     p.add_argument("--pid", required=True)
     p.add_argument("--vendor", required=True, choices=kit.VENDORS)
     p.add_argument("--strategy", required=True)
@@ -455,7 +462,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.set_defaults(fn=cmd_run)
     p = sub.add_parser("integrity")
     p.add_argument("--program", required=True)
-    p.add_argument("--round", type=int, required=True)
+    p.add_argument("--round", type=round_id, required=True)
     p.set_defaults(fn=cmd_integrity)
     a = ap.parse_args(argv)
     try:
