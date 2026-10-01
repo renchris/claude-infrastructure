@@ -1,0 +1,447 @@
+{"date": "2026-07-25", "path": "docs/research/BATS_DEAD_ASSERTIONS_2026-07-25.md", "status": "unknown", "topic": "bats dead assertions — census, mechanism, fix, ratchet"}
+{"date": "2026-07-29", "path": "docs/research/CLAWD_SPRITE_EXTRACTION_2026-07-29.md", "status": "unknown", "topic": "The Claude Code mascot, extracted from the shipping binary"}
+{"date": "2026-07-18", "path": "docs/research/FRONTIER_HOLES.md", "status": "unknown", "topic": "FRONTIER_HOLES — claude-infrastructure"}
+{"date": "2026-07-25", "path": "docs/research/GATE_RELIABILITY_2026-07-25.md", "status": "research complete", "topic": "Gate Reliability — the non-queued landing gate for a deploy-free repo (2026-07-25)"}
+{"date": "2026-07-10", "path": "docs/research/HANDOFF_BACKCHANNEL_2026-07-10.md", "status": "unknown", "topic": "Handoff Back-Channel — can a /handoff-fired peer session ping its originator?"}
+{"date": "2026-07-26", "path": "docs/research/LANDING_GATE_ROOT_CAUSE_2026-07-26.md", "status": "unknown", "topic": "Landing-pipeline failure — root-cause reconciliation, keystone, architecture"}
+{"date": "2026-07-24", "path": "docs/research/OPUS5_ADOPTION_AND_PROMPTING_2026-07-24.md", "status": "lateral model bump", "topic": "Claude Opus 5 — Adoption + Optimal-Use Guide (2026-07-24)"}
+{"date": "2026-07-29", "path": "docs/research/POSTLAND-CELL-BISECT-2026-07-29.md", "status": "unknown", "topic": "BISECT of the 0-green-stamp cell — reused vs fresh worktree"}
+{"date": "2026-08-11", "path": "docs/research/R1-route-replay.md", "status": "unknown", "topic": "R1 — Route replay: was `next3` at 2026-08-11T20:05:28Z correct-by-policy?"}
+{"date": "2026-08-11", "path": "docs/research/R2-policy-design.md", "status": "unknown", "topic": "R2 — Which objective is right for the human desk, and how the disagreement resolves"}
+{"date": "2026-08-11", "path": "docs/research/R3-shell-latency.md", "status": "unknown", "topic": "R3 — Pre-exec shell-chain latency for bare `claude`"}
+{"date": "2026-08-11", "path": "docs/research/R4-cc-latency.md", "status": "unknown", "topic": "R4 — Claude Code post-exec startup latency: measured attribution"}
+{"date": "2026-08-11", "path": "docs/research/R5-startup-print.md", "status": "unknown", "topic": "SessionStart Hook Output Channels: Token Cost Analysis"}
+{"date": "2026-08-11", "path": "docs/research/R5b-sessionstart-render-probe.py", "status": "unknown", "topic": "R5b-sessionstart-render-probe"}
+{"date": "2026-08-11", "path": "docs/research/R6-observability.md", "status": "unknown", "topic": "R6 — why `◆ routed → next3` never reached the operator, and the 100th-percentile fix"}
+{"date": "2026-08-11", "path": "docs/research/R7-landing-ground-map.md", "status": "unknown", "topic": "R7 — Landing Ground Map: `claude-infrastructure`"}
+{"date": "2026-08-11", "path": "docs/research/R8-entrypoint-audit.md", "status": "unknown", "topic": "R8 — entrypoint split: completeness & edge-case audit"}
+{"date": "2026-08-16", "path": "docs/research/R9-desk-weekly-strand.md", "status": "unknown", "topic": "R9 — Why the desk lane strands weekly quota, and the one-line reason"}
+{"date": "2026-07-28", "path": "docs/research/README-rewrite-2026-07-28.pyramid-worklog.md", "status": "unknown", "topic": "README rewrite — Pyramid Principle worklog (2026-07-28)"}
+{"date": "2026-09-24", "path": "docs/research/README-rewrite-2026-09-24.pyramid-worklog.md", "status": "unknown", "topic": "README rewrite 2026-09-24 — Pyramid worklog"}
+{"date": "2026-07-31", "path": "docs/research/README-section6.pyramid-worklog.md", "status": "unknown", "topic": "Pyramid worklog — README §6 (the next ceiling)"}
+{"date": "2026-07-25", "path": "docs/research/RELOGIN_E1_E3_VERDICT_TEMPLATE.md", "status": "UNRUN — no experiment in this document has been executed", "topic": "Relogin Phase-1 verdicts — E1 / E2 / E3"}
+{"date": "2026-07-27", "path": "docs/research/RESTART-BRIEF-2026-07-27.md", "status": "unknown", "topic": "RESTART BRIEF — 2026-07-27 00:45 local"}
+{"date": "2026-07-14", "path": "docs/research/SESSION_AUTONOMY_RESEARCH.md", "status": "convergence of the wave-2 design researc", "topic": "SESSION_AUTONOMY — Research Convergence & Build Blueprint"}
+{"date": "2026-07-26", "path": "docs/research/SESSION_CLOSE_AND_LAG_2026-07-26.md", "status": "unknown", "topic": "Session-close attribution + machine lag — forensics, 2026-07-26"}
+{"date": "2026-07-26", "path": "docs/research/STRANDED_EXPOSURE_2026-07-26.md", "status": "unknown", "topic": "Stranded-commit exposure of the gate runaway loop — re-derived (2026-07-26)"}
+{"date": "2026-08-10", "path": "docs/research/STRANDED_LEDGER_2026-08-10.md", "status": "unknown", "topic": "Stranded work ledger — claude-infrastructure, 2026-08-10"}
+{"date": "2026-09-19", "path": "docs/research/SUBAGENT_LIFECYCLE_ROOT_CAUSE_2026-09-19.md", "status": "unknown", "topic": "Why our spawned agents do not close down — root-cause register (2026-09-19)"}
+{"date": "2026-08-04", "path": "docs/research/SUBAGENT_LIFECYCLE_SIGNAL_DISCONNECT_2026-08-04.md", "status": "unknown", "topic": "Subagent lifecycle: the idle/working signal is wrong in BOTH directions, and nothing self-closes"}
+{"date": "2026-07-25", "path": "docs/research/TSV_FIELD_COLLAPSE_2026-07-25.md", "status": "SWEPT (2026-07-26) — see \"Sweep record\" at the foot; two sites left to their owning streams", "topic": "`IFS=$'\\t' read` silently shifts fields left when any field is empty"}
+{"date": "2026-07-14", "path": "docs/research/W0-W3_INTERVENTION_AUDIT.md", "status": "evidence-base deliverable", "topic": "W0–W3 Operator-Intervention Audit — the ground truth SESSION_AUTONOMY optimizes"}
+{"date": "2026-09-19", "path": "docs/research/accounts-wire-truth-2026-09-19.md", "status": "unknown", "topic": "`/accounts` weekly 100% is three states, not one — 2026-09-19"}
+{"date": "2026-09-04", "path": "docs/research/activation-queue-audit-2026-09-04.md", "status": "unknown", "topic": "Activation queue audit — 2026-09-04"}
+{"date": "2026-08-09", "path": "docs/research/active-session-occupancy-2026-08-09.md", "status": "unknown", "topic": "Active-session occupancy — Phase B, measured"}
+{"date": "2026-09-21", "path": "docs/research/agent-context-sync-2026-09-21/", "status": "unknown", "topic": "A1 — Cursor's incremental index sync: what is actually documented, and what transfers to a `/docs` pipeline"}
+{"date": "2026-09-21", "path": "docs/research/agent-context-sync-2026-09-21.md", "status": "unknown", "topic": "Always-synced agent context: `docs-source` → `docs`, diff-only — the architecture"}
+{"date": "2026-09-17", "path": "docs/research/agent-secrets-adoption-2026-09-17.md", "status": "unknown", "topic": "agent-secrets adopted on this box — and the one setting that must stay unwired"}
+{"date": "2026-07-26", "path": "docs/research/agent-video-understanding-2026-07-26.md", "status": "reference. the pipeline is reproducible", "topic": "How an agent actually ingests video — capability, method, and the honest ceiling"}
+{"date": "2026-07-31", "path": "docs/research/agent-view-coverage-2026-07-31.md", "status": "unknown", "topic": "Agent View coverage across a 4-account fleet — settled"}
+{"date": "2026-09-26", "path": "docs/research/agents-omit-claudemd-autorevert-failed-2026-09-26.md", "status": "unknown", "topic": "Post-land AUTO-REVERT FAILED (step=land rc=124) for `tests/agents-omit-claudemd.bats` @ 2be051f3: moot, the revert and the corrected re-land are both on trunk"}
+{"date": "2026-09-26", "path": "docs/research/agents-omit-claudemd-red-2026-09-26.md", "status": "unknown", "topic": "Post-land RED `tests/agents-omit-claudemd.bats::3` at 2be051f3: already cured on trunk by revert e7321f2a"}
+{"date": "2026-09-17", "path": "docs/research/api-error-rewake-proof-2026-09.md", "status": "unknown", "topic": "W2-0 / T9 — does a Stop hook run when the turn it is ending died with an API error?"}
+{"date": "2026-09-30", "path": "docs/research/apple-feedback-compressor-panic-draft.md", "status": "draft, not yet filed. the operator files", "topic": "Apple Feedback draft — VM compressor segment-limit panic, and a per-boot data.kalloc.1024 ratchet"}
+{"date": "2026-07-25", "path": "docs/research/autonomous-relogin-100pct-design-2026-07-25.md", "status": "converged — ready to greenlight", "topic": "The uniform 100% design — keep all four Claude Max accounts signed in, zero recurring human action, full scope preserved"}
+{"date": "2026-07-25", "path": "docs/research/autonomous-relogin-methods-2026-07-25.md", "status": "research-complete", "topic": "Fully-autonomous Claude Max relogin — ranked methods"}
+{"date": "2026-09-28", "path": "docs/research/autonomy-core-install-close-2026-09-28.md", "status": "superseded", "topic": "Autonomy core install — close verdict (2026-09-28)"}
+{"date": "2026-09-08", "path": "docs/research/autorevert-precision-2026-09-08.md", "status": "unknown", "topic": "post-land AUTO-REVERT is ~62% precise, and its errors are silent in the wrong direction"}
+{"date": "2026-08-07", "path": "docs/research/await-ping-exit-144-2026-08-07.md", "status": "unknown", "topic": "`cc-await-ping` exit 144 is an external process-GROUP SIGTERM — not SIGURG, and not a 25-minute reap"}
+{"date": "2026-09-22", "path": "docs/research/backlog-drain-audit-2026-09-22/", "status": "unknown", "topic": "cc-backlog drain pipelines — productivity audit, 2026-09-22"}
+{"date": "2026-08-25", "path": "docs/research/backlog-drain-netpositivity-2026-08-25.md", "status": "unknown", "topic": "Is the backlog net-positive, and can it drain to zero? — 2026-08-25"}
+{"date": "2026-09-17", "path": "docs/research/backlog-flow-falsifier-polarity-2026-09-17.md", "status": "unknown", "topic": "The inflow alarm could retract itself — `backlog-flow-assert.sh --assert`, 2026-09-17"}
+{"date": "2026-08-12", "path": "docs/research/backlog-pipeline-recon-2026-08-12/", "status": "unknown", "topic": "Backlog pipeline recon — 2026-08-12"}
+{"date": "2026-08-07", "path": "docs/research/backlog-premise-triage-2026-08-07.md", "status": "unknown", "topic": "Backlog premise triage — the S3 mechanical sweep, and why the durable fix is not a sweep"}
+{"date": "2026-09-23", "path": "docs/research/backlog-reconcile-2026-09-23/", "status": "unknown", "topic": "cc-backlog reconcile — every live row adjudicated against current repo state, 2026-09-23"}
+{"date": "2026-09-04", "path": "docs/research/backlog-zero-2026-09-04/", "status": "unknown", "topic": "The cloud 24/7 lane: why it closes ~0.7 rows/day and what would change it"}
+{"date": "2026-09-07", "path": "docs/research/backlog-zero-close-2026-09-07.md", "status": "unknown", "topic": "BACKLOG_ZERO — close adjudication (2026-09-07, off-box cloud fire, row `64c150ba2a8e`)"}
+{"date": "2026-07-29", "path": "docs/research/banner-microevent-grammar-2026-07-29.md", "status": "unknown", "topic": "Ambient micro-event grammar for a looping decorative scene — derived"}
+{"date": "2026-09-11", "path": "docs/research/bash32-ratchet-red-2026-09-11.md", "status": "unknown", "topic": "The bash-3.2 ratchet went standing-red on a prose apostrophe — and the ratchet is not a gate arm"}
+{"date": "2026-09-13", "path": "docs/research/bats-assert-liveness-ratchet-red-2026-09-13.md", "status": "unknown", "topic": "The `bats-assert-liveness` ratchet red at `fd74695bec91` — confirmed, cured, and what it hid"}
+{"date": "2026-09-09", "path": "docs/research/beat-vs-telemetry-cadence-2026-09-09.md", "status": "unknown", "topic": "The beat producer was never broken — cc-backlog 02c8b96e55b9, REFUTED"}
+{"date": "2026-09-25", "path": "docs/research/bg-session-semantics-2026-09-25.md", "status": "unknown", "topic": "Claude Code 2.1.280: background-session (bg) semantics, read from the binary"}
+{"date": "2026-09-08", "path": "docs/research/bg-shell-pressure-reap-2026-09-08.md", "status": "unknown", "topic": "What reaps a live session's background Bash — backlog `95fcadde830e`, population (C)"}
+{"date": "2026-09-22", "path": "docs/research/board-render-2026-09-22.md", "status": "unknown", "topic": "What a SessionStart `systemMessage` can actually render — measured, 2026-09-22"}
+{"date": "2026-08-19", "path": "docs/research/branch-prune-manifest-2026-08-19.tsv", "status": "unknown", "topic": "branch-prune-manifest-2026-08-19"}
+{"date": "2026-08-19", "path": "docs/research/breaking-the-ceiling-2026-08-19/", "status": "unknown", "topic": "B1-VERIFY — adversarial verification of B1 (in-process teammate, lever L5)"}
+{"date": "2026-08-19", "path": "docs/research/breaking-the-ceiling-2026-08-19.md", "status": "unknown", "topic": "Breaking the ~15 ceiling — the actionable ladder"}
+{"date": "2026-09-09", "path": "docs/research/browser-tree-aggregation-2026-09-09.md", "status": "unknown", "topic": "The idle-browser-tree aggregation gap — cc-backlog `6c55ce7364d4`, REFUTED as filed"}
+{"date": "2026-09-30", "path": "docs/research/c10-staged-residuals-2026-10.md", "status": "superseded", "topic": "The four doubtful staged c10 activations, settled on measurement (2026-09-30)"}
+{"date": "2026-08-04", "path": "docs/research/cc-startup-modals-2026-08-04.md", "status": "unknown", "topic": "Claude Code startup modals — which block a spawned pane, and the measured suppression"}
+{"date": "2026-09-28", "path": "docs/research/cc-upgrade-skill-2026-09-28.md", "status": "unknown", "topic": "cc-upgrade skill — auto-load probe (2026-09-28)"}
+{"date": "2026-09-08", "path": "docs/research/cc-version-audit-2026-09-08.md", "status": "unknown", "topic": "The hold was already over — and its decider is refuted on the binary we are running"}
+{"date": "2026-09-22", "path": "docs/research/cf-audit-reso-actions-2026-09-22.md", "status": "unknown", "topic": "Cloudflare security-audit — reso `src/app/actions/` — 2026-09-22"}
+{"date": "2026-09-22", "path": "docs/research/cf-audit-reso-lead-verdicts-2026-09-22/", "status": "unknown", "topic": "Adjudication artifacts — the 20 cloudflare leads, 2026-09-22"}
+{"date": "2026-09-22", "path": "docs/research/cf-audit-reso-lead-verdicts-2026-09-22.md", "status": "unknown", "topic": "The 20 cloudflare leads, adjudicated to verdicts — 2026-09-22"}
+{"date": "2026-09-22", "path": "docs/research/cf-audit-reso-uncovered-surfaces-2026-09-22.md", "status": "unknown", "topic": "The 19 surfaces the 2026-09-22 Cloudflare audit did not cover — enumerated"}
+{"date": "2026-09-22", "path": "docs/research/cf-audit-setguestsession-reachability-2026-09-22.md", "status": "unknown", "topic": "setGuestSession is a network-callable, unauthenticated Server Action — measured 2026-09-22"}
+{"date": "2026-08-15", "path": "docs/research/ci-notification-flap-2026-08-15/", "status": "unknown", "topic": "A — Cross-repo GitHub Actions notification-producer census"}
+{"date": "2026-09-05", "path": "docs/research/clawd-power-user-box-2026-09-05.md", "status": "unknown", "topic": "The Anthropic \"Claude Code power user\" box — there is no condition to meet"}
+{"date": "2026-08-20", "path": "docs/research/close-integrity-recensus-2026-08-20.md", "status": "unknown", "topic": "CLOSE_INTEGRITY efficacy re-census — backlog row `62363cac1e39`"}
+{"date": "2026-08-23", "path": "docs/research/close-scannability-2026-08-23.md", "status": "unknown", "topic": "CLOSE SCANNABILITY — W1 measurement"}
+{"date": "2026-08-23", "path": "docs/research/close-shape-2026-08-23.md", "status": "unknown", "topic": "CLOSE SHAPE — W3: the structure of the whole close message"}
+{"date": "2026-08-26", "path": "docs/research/cloud-already-cured-redispatch-2026-08-26.md", "status": "unknown", "topic": "A cured row that no cloud worker can close, and the one channel that can"}
+{"date": "2026-09-01", "path": "docs/research/cloud-boot-contract-restrand-2026-09-01.md", "status": "unknown", "topic": "The boot contract was built four times. None of the four reached trunk."}
+{"date": "2026-09-02", "path": "docs/research/cloud-boot-contract-restrandings-2026-09-02.md", "status": "unknown", "topic": "The boot contract was implemented nine times and landed zero times"}
+{"date": "2026-09-02", "path": "docs/research/cloud-boot-contract-second-lane-2026-09-02.md", "status": "unknown", "topic": "The boot contract was cured on one lane, and the fire lane still times its push at the end"}
+{"date": "2026-09-03", "path": "docs/research/cloud-boot-contract-verdict-2026-09-03.md", "status": "unknown", "topic": "The boot contract landed on 09-02, and the dispatcher that re-fired the row on 09-03 was still not running it"}
+{"date": "2026-09-04", "path": "docs/research/cloud-boot-ping-verdict-2026-09-04.md", "status": "unknown", "topic": "The boot-ping contract row is CURED — and the cure did not merely land, it RAN"}
+{"date": "2026-09-09", "path": "docs/research/cloud-dispatch-delivery-2026-09-09.md", "status": "unknown", "topic": "Cloud dispatch delivery — backlog 42ab9ce1a2e7 re-measured and CLOSED as already-cured"}
+{"date": "2026-08-25", "path": "docs/research/cloud-land-arm-step-2026-08-25.md", "status": "unknown", "topic": "The cloud return/land arm's 08-17 step — real, and separately, the probe that could not see it"}
+{"date": "2026-08-27", "path": "docs/research/cloud-land-arm-strand-2026-08-27.md", "status": "unknown", "topic": "The cloud land arm — `f85fce7c26f5` is cured, and its headline is true anyway"}
+{"date": "2026-09-10", "path": "docs/research/cloud-lane-redesign-2026-09-10/", "status": "unknown", "topic": "A1 — reach under SPLIT over the agent-drainable stratum (read serially on the lead; spawn refused by capacity-admit at 8 mid-turn)"}
+{"date": "2026-09-10", "path": "docs/research/cloud-lane-redesign-2026-09-10.md", "status": "measured", "topic": "Cloud backlog lane — retire, repair, or redesign? (2026-09-10)"}
+{"date": "2026-08-11", "path": "docs/research/cloud-local-cost-ab-2026-08-11.md", "status": "measured", "topic": "Cloud vs local — a controlled cost A/B on the same brief"}
+{"date": "2026-08-07", "path": "docs/research/cloud-observability-2026-08-07.md", "status": "open", "topic": "Cloud-session observability — the observable set, designed before the first fire"}
+{"date": "2026-09-07", "path": "docs/research/cloud-return-row-stratifiers-2026-09-07.md", "status": "unknown", "topic": "The cloud-return row already carries `load1` and `elapsed_s` — it landed, was auto-reverted, and was re-landed"}
+{"date": "2026-08-29", "path": "docs/research/cloud-shallow-horizon-2026-08-29.md", "status": "unknown", "topic": "Every cloud worker reads trunk through a 50-commit horizon, and the horizon moves"}
+{"date": "2026-08-21", "path": "docs/research/cloud-venue-foreign-project-2026-08-21.md", "status": "unknown", "topic": "The cloud venue gate never asks which REPO an item is for"}
+{"date": "2026-08-16", "path": "docs/research/cloud-venue-project-repo-mismatch-2026-08-16.md", "status": "unknown", "topic": "A cloud fire attaches the FIRING repo, never the ITEM's repo — measured 2026-08-16"}
+{"date": "2026-08-22", "path": "docs/research/cloud-venue-repo-identity-2026-08-22.md", "status": "unknown", "topic": "The venue gate asks whether the VM can REACH the repo, never whether it CLONES it"}
+{"date": "2026-08-23", "path": "docs/research/cloud-vm-reachability-2026-08-23.md", "status": "unknown", "topic": "Cloud VM reachability — 2026-08-23"}
+{"date": "2026-08-10", "path": "docs/research/cloud-vm-roundtrip-2026-08-10.md", "status": "unknown", "topic": "Cloud VM round-trip — testimony from the machine, 2026-08-10"}
+{"date": "2026-08-11", "path": "docs/research/cloud-vm-shallow-clone-blast-radius-2026-08-11.md", "status": "unknown", "topic": "What a 50-commit shallow clone breaks in this repo's own scripts"}
+{"date": "2026-08-11", "path": "docs/research/cloud-w2-return-rails-2026-08-11.md", "status": "unknown", "topic": "W2 return rails — the second round trip"}
+{"date": "2026-08-11", "path": "docs/research/cloud-w2-roundtrip-2026-08-11.md", "status": "unknown", "topic": "W2 managed round trip — the VM's side"}
+{"date": "2026-08-11", "path": "docs/research/cloud-w3-refusal-loop-2026-08-11.md", "status": "unknown", "topic": "W3 refusal loop — the VM's side of a routed gate refusal"}
+{"date": "2026-07-31", "path": "docs/research/cmux-external-control-2026-07-31.md", "status": "unknown", "topic": "cmux external socket control — GAP 2 closed (2026-07-31)"}
+{"date": "2026-08-10", "path": "docs/research/codex-probe-screen-2026-08-10/", "status": "triaged 2026-08-15 → [`triage-2026-08-15", "topic": "Adversarial screen fallout — 11 reports, 7 DEFECTIVE (2026-08-10)"}
+{"date": "2026-08-11", "path": "docs/research/codex-probe-w3-verdict-2026-08-11.md", "status": "unknown", "topic": "W3 — Codex adversarial-slot probe: the judged grid and the verdict"}
+{"date": "2026-07-29", "path": "docs/research/codex-security-in-claude-code-2026-07-29.md", "status": "unknown", "topic": "Can we employ `openai/codex-security` within Claude Code, without Codex?"}
+{"date": "2026-07-29", "path": "docs/research/codex-security-scans/", "status": "unknown", "topic": "Codex Security scan ledger"}
+{"date": "2026-07-29", "path": "docs/research/codex-security-three-repos-2026-07-29.md", "status": "unknown", "topic": "Running Codex Security against our three repositories"}
+{"date": "2026-09-16", "path": "docs/research/codex-vs-claude-200-2026-09-16/", "status": "unknown", "topic": "Which $200/mo plan gets more usage: OpenAI Pro 20x (GPT-6 Astra) or Claude Max 20x (Fable 5.1)?"}
+{"date": "2026-09-09", "path": "docs/research/composer-scrub-2026-09-09/", "status": "unknown", "topic": "Composer scrub — the instrument, so the claim can be re-measured instead of quoted"}
+{"date": "2026-08-07", "path": "docs/research/concurrency-census-2026-08-07.md", "status": "unknown", "topic": "Concurrency census — what actually saturates the M1 Max, measured 2026-08-07"}
+{"date": "2026-09-22", "path": "docs/research/context-ceiling-397428c4-2026-09-22/", "status": "unknown", "topic": "H1 — \"the deadlock\": does an armed session-continue chain suppress boundary-handoff?"}
+{"date": "2026-09-22", "path": "docs/research/context-ceiling-397428c4-2026-09-22.md", "status": "unknown", "topic": "Context ceiling post-mortem — session `397428c4` (2026-09-22) died because its 29 subagent returns, injected into the lead in full, were 46 % of the 1,000,000-token window; the Stop-hook re-injections were 0.7 %"}
+{"date": "2026-07-20", "path": "docs/research/context-econ-2026-07-20.md", "status": "unknown", "topic": "Context-economics: continuous recycle policy (2026-07-20)"}
+{"date": "2026-08-11", "path": "docs/research/context-economy-100p-2026-08-11/", "status": "closed", "topic": "Do the recycle/handoff actuators actually fire, and are they running HEAD bytes"}
+{"date": "2026-08-11", "path": "docs/research/context-economy-100p-2026-08-11.md", "status": "closed", "topic": "Are we at 100th-percentile context economy? — NO"}
+{"date": "2026-09-17", "path": "docs/research/continuous-delivery-2026-09-17/", "status": "unknown", "topic": "T1 — Why commits in the SHARED checkout block the fleet-wide converge"}
+{"date": "2026-09-08", "path": "docs/research/conviction-close-2026-09-08.md", "status": "unknown", "topic": "The conviction threshold at close — measurement, protocol, worked example"}
+{"date": "2026-09-29", "path": "docs/research/coreaudiod-spin-2026-09-29.md", "status": "unknown", "topic": "coreaudiod at ~200% CPU, day after day — 2026-09-29"}
+{"date": "2026-08-09", "path": "docs/research/crash-rootcause-2026-08-09.md", "status": "root cause confirmed from primary eviden", "topic": "Why this box keeps panicking — root cause, and why five \"resolutions\" did not stick"}
+{"date": "2026-07-20", "path": "docs/research/cross-session-mail-2026-07-20.md", "status": "unknown", "topic": "Cross-session mail to 100th percentile — reliably receivable, reliably sendable, human-visible in the Claude Code UI"}
+{"date": "2026-08-15", "path": "docs/research/cursor-crashpad-2026-08-15.md", "status": "unknown", "topic": "The Cursor crashpad loop: three findings from trunk, and the venue gap that stopped the fourth"}
+{"date": "2026-08-23", "path": "docs/research/custody-integrity-2026-08-23.md", "status": "unknown", "topic": "Custody integrity — why a finished or dying peer vanished silently"}
+{"date": "2026-09-09", "path": "docs/research/custody-landing-backlog-2026-09-09.md", "status": "unknown", "topic": "The 62-row custody landing backlog, adjudicated — 2026-09-09"}
+{"date": "2026-09-09", "path": "docs/research/custody-landing-manifest-2026-09-09.tsv", "status": "unknown", "topic": "custody-landing-manifest-2026-09-09"}
+{"date": "2026-08-26", "path": "docs/research/cv-design-review-2026-08-26/", "status": "unknown", "topic": "Computer vision for 100th-percentile web design review"}
+{"date": "2026-09-07", "path": "docs/research/cv-design-review-pipeline-verdict-2026-09-07.md", "status": "unknown", "topic": "Verdict: the design-review perception pipeline was already built"}
+{"date": "2026-09-11", "path": "docs/research/cv-design-review-pipeline-verification-2026-09-11.md", "status": "unknown", "topic": "The design-review perception pipeline was already built — verified by running it"}
+{"date": "2026-09-16", "path": "docs/research/cv-pipeline-already-built-2026-09-16.md", "status": "unknown", "topic": "The design-review perception pipeline was already built — verdict on cc-backlog `badb132df232`"}
+{"date": "2026-09-07", "path": "docs/research/d3-control-verdict-2026-09-07.md", "status": "unknown", "topic": "VERDICT — `backlog-pipeline-unwedge.bats::D3 CONTROL` was already cured on trunk"}
+{"date": "2026-07-31", "path": "docs/research/data/", "status": "unknown", "topic": "Bun-GC A/B — raw measurements, 2026-08-18"}
+{"date": "2026-09-08", "path": "docs/research/death-attribution-coverage-2026-09-08.md", "status": "unknown", "topic": "Crash-cause attribution coverage — why 80% of session deaths land in the catch-all"}
+{"date": "2026-09-08", "path": "docs/research/deploy-install-deadlock-refuted-2026-09-08.md", "status": "unknown", "topic": "The deploy/install deadlock described by backlog `991fcb666976` does not exist"}
+{"date": "2026-09-30", "path": "docs/research/desk-672-mailbox-digest-2026-09-30.md", "status": "unknown", "topic": "Desk mailbox 672 — digest of the pages nobody read (2026-09-08 → 2026-09-30)"}
+{"date": "2026-07-19", "path": "docs/research/desk-anti-hitl-2026-07-19.md", "status": "design", "topic": "Desk anti-HITL design — cross-account visibility · permission autonomy · handoff-fire reliability"}
+{"date": "2026-07-18", "path": "docs/research/desk-audit-2026-07-18/", "status": "unknown", "topic": "Synthesis workspace — orchestrator-desk investigation"}
+{"date": "2026-09-08", "path": "docs/research/desk-husk-2026-09-08.md", "status": "unknown", "topic": "The desk died at a shell prompt that looked like a clean exit — 2026-09-08"}
+{"date": "2026-09-01", "path": "docs/research/desk-router-abstention-2026-09-01.md", "status": "unknown", "topic": "Why a bare `claude` lands on the pinned account — desk-router abstention"}
+{"date": "2026-09-11", "path": "docs/research/desk-router-inherit-k-already-cured-2026-09-11.md", "status": "unknown", "topic": "cc-backlog `1f6208064577` — ALREADY CURED on trunk; verdict, not a re-derivation"}
+{"date": "2026-07-19", "path": "docs/research/desk-self-handoff-2026-07-19/", "status": "unknown", "topic": "Desk self-handoff — UNIFIED DESIGN (synthesis of both Fable panels + lead reconciliation)"}
+{"date": "2026-09-14", "path": "docs/research/dia-zero-human-browser-2026-09-14/", "status": "unknown", "topic": "Pre-spawn decomposition — zero-human agent-browser on real Dia (2026-09-14)"}
+{"date": "2026-08-18", "path": "docs/research/dod-crosstalk-2026-08-18.md", "status": "unknown", "topic": "Repo-keyed DoD crosstalk — the fix needs an identity this tree does not record"}
+{"date": "2026-07-26", "path": "docs/research/dormant-bin-tools-decision-2026-07-26.md", "status": "unknown", "topic": "DORMANT-7 bin tools — decision"}
+{"date": "2026-09-22", "path": "docs/research/drain-100p-design-2026-09-22.md", "status": "unknown", "topic": "The 100th-percentile local drain — derived from the system model, 2026-09-22"}
+{"date": "2026-09-22", "path": "docs/research/drain-100p-q5-pilot-2026-09-22.md", "status": "unknown", "topic": "Q5 pilot — the premise-first drain, measured. The recommendation survives; its ACTUATOR does not."}
+{"date": "2026-09-07", "path": "docs/research/drain-circuit-collection-vs-retirement-2026-09-07.md", "status": "unknown", "topic": "The drain circuit closed on RETIREMENT, not on COLLECTION — and the pile cap cannot tell them apart (2026-09-07)"}
+{"date": "2026-09-12", "path": "docs/research/drain-circuit-fire-lane-instrument-2026-09-12.md", "status": "unknown", "topic": "DRAIN CIRCUIT — the fire arm gets an instrument, and the statistic is the GAP (2026-09-12)"}
+{"date": "2026-09-11", "path": "docs/research/drain-circuit-w9-prediction-readjudication-2026-09-11.md", "status": "unknown", "topic": "DRAIN CIRCUIT — W9's prediction re-adjudicated four days on (2026-09-11)"}
+{"date": "2026-09-16", "path": "docs/research/drain-pipeline-productivity-2026-09-16.md", "status": "unknown", "topic": "Drain pipeline audit — productivity and outcomes of the two 24/7 lanes (2026-09-16)"}
+{"date": "2026-08-25", "path": "docs/research/drain-telemetry-2026-08-25/", "status": "unknown", "topic": "Weekly-drain planner — synthesis of six measurement axes"}
+{"date": "2026-09-14", "path": "docs/research/email-formatting-2026-09-14.md", "status": "unknown", "topic": "Agent-drafted email: the formatting standard"}
+{"date": "2026-08-25", "path": "docs/research/email-guardrails-2026-08-25.md", "status": "unknown", "topic": "Email guardrails — drafts-only, and alias continuity"}
+{"date": "2026-07-30", "path": "docs/research/emote-design-criteria-2026-07-30.md", "status": "unknown", "topic": "What makes a good clawd micro-event — the criteria, before the candidates"}
+{"date": "2026-08-07", "path": "docs/research/eslint-cache-cross-worktree-2026-08-07.md", "status": "unknown", "topic": "S2b — sharing reso's ESLint cache across worktrees is impossible, and the blocker is one field"}
+{"date": "2026-07-29", "path": "docs/research/event-adversary.md", "status": "unknown", "topic": "event-adversary"}
+{"date": "2026-07-29", "path": "docs/research/event-generator.md", "status": "unknown", "topic": "Hero-banner event set — independent design"}
+{"date": "2026-07-29", "path": "docs/research/event-grammar.md", "status": "unknown", "topic": "event-grammar"}
+{"date": "2026-09-08", "path": "docs/research/exhaustive-drive-2026-09-08/", "status": "unknown", "topic": "SYNTHESIS — exhaustive-drive wave, 2026-09-08"}
+{"date": "2026-09-11", "path": "docs/research/exhaustive-drive-plan-redispatch-2026-09-11.md", "status": "unknown", "topic": "EXHAUSTIVE DRIVE re-dispatched 1 h 13 m after its own close landed — verdict: ALREADY CURED"}
+{"date": "2026-08-19", "path": "docs/research/exit-144-population-2026-08-19.md", "status": "unknown", "topic": "exit 144 is not a rare cc-await-ping event — it is 352 measured deaths, 99% of them mid-session"}
+{"date": "2026-09-10", "path": "docs/research/exit-bgwork-dialog-2026-09-10/", "status": "unknown", "topic": "The exit-time background-work dialog — the instrument, so the claim can be re-measured"}
+{"date": "2026-09-10", "path": "docs/research/fable51-effort-sweep-2026-09-10/", "status": "unknown", "topic": "Fable 5.1 effort re-sweep — 2026-09-10"}
+{"date": "2026-09-16", "path": "docs/research/fable51-vs-opus5-routing-2026-09-16/", "status": "unknown", "topic": "Fable 5.1 @ low/medium vs Opus 5 @ high — should the fleet default move?"}
+{"date": "2026-08-08", "path": "docs/research/final-response-shaping-2026-08-08.md", "status": "unknown", "topic": "Shaping the agent's final response — entrypoints and methodologies"}
+{"date": "2026-08-09", "path": "docs/research/fire-telemetry-actionability-2026-08-09.md", "status": "closed", "topic": "What the fire/handoff/recycle ledger can and cannot answer, and what was instrumented"}
+{"date": "2026-09-09", "path": "docs/research/fire-worktree-typegen-refutation-2026-09-09.md", "status": "unknown", "topic": "The fire path's missing `next typegen` — REFUTED (cc-backlog c0a5a968c79d)"}
+{"date": "2026-08-02", "path": "docs/research/forced-relogin-rootcause-2026-08-02.md", "status": "unknown", "topic": "Forced re-authentication — root cause, per account"}
+{"date": "2026-08-13", "path": "docs/research/freeze-2026-08-13.md", "status": "unknown", "topic": "The 2026-08-13 21:22:39 freeze — a no-panic wedge, and the reader that was blind to it"}
+{"date": "2026-09-04", "path": "docs/research/frontier-track-gate-2026-09-04.md", "status": "unknown", "topic": "The frontier tier was gated on a deleted launcher — in FOUR places the filing did not name"}
+{"date": "2026-09-08", "path": "docs/research/fseventsd-churn-2026-09-08.md", "status": "unknown", "topic": "fseventsd saturation, 2026-09-08 — the mechanism is a LIVELOCK, not client churn"}
+{"date": "2026-09-03", "path": "docs/research/function-hooks-91870-2026-09-03.md", "status": "unknown", "topic": "Function Hooks (anthropics/claude-code#91870) — provenance, and what it means for claude-infrastructure"}
+{"date": "2026-08-24", "path": "docs/research/gate-select-direct-empty-2026-08-24.md", "status": "unknown", "topic": "`gate-select --direct` returns empty at rc 0 — REFUTED as a gate defect (row f1a9146c7f2f)"}
+{"date": "2026-08-18", "path": "docs/research/gc-cpu-vs-session-ceiling-2026-08-18.md", "status": "unknown", "topic": "The 2× p99 CPU win is not our concurrency lever — and the constant that actually stops us was never measured"}
+{"date": "2026-09-19", "path": "docs/research/git-forest-adjudication-2026-09-19.md", "status": "unknown", "topic": "Is hiradp/git-forest worth applying to our worktree workflows?"}
+{"date": "2026-08-05", "path": "docs/research/git-identity-leak-2026-08-05.md", "status": "unknown", "topic": "Git-identity leak — census of every path that can write `user.email`/`user.name` into a real repo"}
+{"date": "2026-09-07", "path": "docs/research/git-identity-leak-suspect-refuted-2026-09-07.md", "status": "unknown", "topic": "The 2026-09-04 identity leak: the named suspect is refuted, and so is the obvious exoneration"}
+{"date": "2026-08-13", "path": "docs/research/goal-asyncrewake-ab-2026-08-13/", "status": "unknown", "topic": "The 0007 A/B — an `asyncRewake` watcher keeps the wake path AND lets the goal evaluate"}
+{"date": "2026-08-09", "path": "docs/research/goal-condition-best-practice-2026-08-09.md", "status": "open", "topic": "What makes a good `/goal` condition, and why `--goal` has to be the DEFAULT"}
+{"date": "2026-08-08", "path": "docs/research/goal-in-handoff-2026-08-08.md", "status": "closed", "topic": "Why fired `/handoff` sessions stopped carrying a `/goal`, and the two-message methodology"}
+{"date": "2026-08-13", "path": "docs/research/goal-safe-2way-comms-2026-08-13.md", "status": "open", "topic": "Goal-safe 2-way comms — the ground-up architecture (2026-08-13)"}
+{"date": "2026-07-29", "path": "docs/research/gpu-vs-cpu-lag-2026-07-29.md", "status": "unknown", "topic": "Can claude-infrastructure use the Mac GPU to cut lag / memory pressure? — 2026-07-29"}
+{"date": "2026-08-10", "path": "docs/research/grok-wiki-audit-2026-08-10/", "status": "open", "topic": "grok-wiki audit, 2026-08-10 — five shards over claude-infrastructure"}
+{"date": "2026-09-01", "path": "docs/research/halving-context-lever-verdict-2026-09-01.md", "status": "unknown", "topic": "The \"halving context ≈ +50% capacity\" lever is cured on trunk — verdict on a third dispatch"}
+{"date": "2026-08-19", "path": "docs/research/handoff-high-value-capture-2026-08-19.md", "status": "unknown", "topic": "Does `/handoff` silently drop high-value information at every succession? — a two-round research wave"}
+{"date": "2026-07-22", "path": "docs/research/handoff-memory-review-2026-07-22.md", "status": "unknown", "topic": "/handoff mechanism + per-session memory review (2026-07-22)"}
+{"date": "2026-08-28", "path": "docs/research/hardware-procurement-2026-08-28.md", "status": "measured", "topic": "What hardware, if any, addresses the ~15-session ceiling — and the recommendation this wave refuted"}
+{"date": "2026-09-28", "path": "docs/research/hook-ask-confirmations-2026-09-28/", "status": "unknown", "topic": "curl-gate: unresolved $ in a URL authority — resolve-then-close"}
+{"date": "2026-09-28", "path": "docs/research/hook-ask-confirmations-2026-09-28.md", "status": "unknown", "topic": "Hook \"confirm intent\" prompts: what is recorded, how many, and what to change"}
+{"date": "2026-09-08", "path": "docs/research/hook-chain-occupancy-readjudication-2026-09-08.md", "status": "unknown", "topic": "Re-adjudicating the hook-chain collapse on the occupancy axis"}
+{"date": "2026-09-30", "path": "docs/research/husk-panes-2026-09-30.md", "status": "unknown", "topic": "Husk panes after the 2026-09-30 reboot: why seven panes sat at a bare shell"}
+{"date": "2026-09-04", "path": "docs/research/husk-panes-pkill-selection-2026-09-04.md", "status": "unknown", "topic": "Five panes at a bare shell were not failed self-recycles — one `pkill -f` killed five sessions"}
+{"date": "2026-08-08", "path": "docs/research/idle-recycle-not-proactive-2026-08-08.md", "status": "unknown", "topic": "Why proactive idle self-recycle never fires — root cause, 2026-08-08"}
+{"date": "2026-08-27", "path": "docs/research/idle-scoped-arm-turn-2026-08-27.md", "status": "unknown", "topic": "`--idle-scoped` could not survive the turn that armed it"}
+{"date": "2026-08-09", "path": "docs/research/idle-session-occupancy-2026-08-09.md", "status": "unknown", "topic": "Idle sessions are already free — Phase A, measured"}
+{"date": "2026-07-30", "path": "docs/research/inert-mechanism-generator-panel-2026-07-30.md", "status": "unknown", "topic": "H-INERT-1 — Fable panel: what GENERATES built-but-inert mechanisms"}
+{"date": "2026-08-07", "path": "docs/research/inertness-generator-2026-08-07.md", "status": "unknown", "topic": "The inertness generator — why correct analyses do not change this machine"}
+{"date": "2026-07-22", "path": "docs/research/infra-reliability-audit-2026-07-22/", "status": "unknown", "topic": "Infra Reliability Audit — 2026-07-22"}
+{"date": "2026-09-11", "path": "docs/research/install-fixture-claude-global-rename-2026-09-11.md", "status": "unknown", "topic": "The `CLAUDE.global.md` rename left five install.sh fixtures seeding the pre-rename name"}
+{"date": "2026-09-11", "path": "docs/research/install-fixture-ssot-drift-2026-09-11.md", "status": "unknown", "topic": "The SSOT rename reddened five install fixtures, and the walk convicted a commit 32 later"}
+{"date": "2026-07-31", "path": "docs/research/it2-contract-surface-2026-07-31.md", "status": "closed", "topic": "The `it2` contract surface Claude Code calls — CLOSED"}
+{"date": "2026-07-30", "path": "docs/research/iterm2-freeze-30-sessions-2026-07-30.md", "status": "unknown", "topic": "iTerm2 freeze at ~30 concurrent Claude Code sessions — 2026-07-30"}
+{"date": "2026-08-11", "path": "docs/research/jcode-due-diligence-2026-08-11/", "status": "closed", "topic": "Grade the operator bottleneck statement clause by clause"}
+{"date": "2026-08-11", "path": "docs/research/jcode-due-diligence-2026-08-11.md", "status": "closed", "topic": "jcode due diligence — does it address the 150-session bottleneck?"}
+{"date": "2026-09-10", "path": "docs/research/jetsam-reachability-2026-09-10/", "status": "unknown", "topic": "jetsam-reachability-2026-09-10"}
+{"date": "2026-09-10", "path": "docs/research/jetsam-reachability-2026-09-10.md", "status": "unknown", "topic": "Jetsam reachability for the dev-worker class — what actually reaches a non-daemon child"}
+{"date": "2026-09-21", "path": "docs/research/jev-100p-2026-09-21/", "status": "unknown", "topic": "Jev, 100th-percentile utilisation — the decision and what it rests on"}
+{"date": "2026-09-18", "path": "docs/research/jev-at-cost-api-2026-09-18.md", "status": "unknown", "topic": "Is Jev real value-per-cost signal for this fleet? — 2026-09-18"}
+{"date": "2026-09-26", "path": "docs/research/jev-postmortem-2026-09-26/", "status": "unknown", "topic": "A1 — Origin and target selection"}
+{"date": "2026-09-26", "path": "docs/research/jev-postmortem-2026-09-26.md", "status": "unknown", "topic": "Jev post-mortem — a week, ~605M Claude tokens, and no applied outcome"}
+{"date": "2026-09-21", "path": "docs/research/jev-predict-land-2026-09-21.md", "status": "unknown", "topic": "Pre-flight land-refusal predictor — the instrument, and the arithmetic that may kill the candidate"}
+{"date": "2026-09-30", "path": "docs/research/kalloc-ratchet-2026-10/", "status": "unknown", "topic": "kalloc-ratchet-2026-10"}
+{"date": "2026-09-30", "path": "docs/research/kalloc-ratchet-2026-10.md", "status": "unknown", "topic": "The data.kalloc.1024 ratchet: what drives it, measured without root (2026-09-30)"}
+{"date": "2026-09-16", "path": "docs/research/kernel-watchdog-panic-2026-09-16.md", "status": "diagnosed and fixed", "topic": "Kernel watchdog panic, 2026-09-16 — the whole kitty fleet died at once"}
+{"date": "2026-09-16", "path": "docs/research/kitty-build-recipe-2026-09-16.md", "status": "unknown", "topic": "Rebuilding the kitty trees from scratch — the four things a fresh clone lacks"}
+{"date": "2026-09-17", "path": "docs/research/kitty-childmon-crash-attribution-2026-09-17.md", "status": "unknown", "topic": "The KittyChildMon SIGSEGV is in the STOCK build too — the patched sandbox is exonerated (2026-09-17)"}
+{"date": "2026-09-17", "path": "docs/research/kitty-crash-attribution-2026-09-17.md", "status": "unknown", "topic": "The kitty title-band SIGSEGV IS attributable on this box — `viewport_for_window`, NULL `fonts_data`"}
+{"date": "2026-09-16", "path": "docs/research/kitty-drag-action-implementation-2026-09-16.md", "status": "unknown", "topic": "Beginning a kitty window drag from a front-end-drawn region — implementation research"}
+{"date": "2026-09-16", "path": "docs/research/kitty-drag-w3-deploy-verification-2026-09-16.md", "status": "unknown", "topic": "W3 — deploy the kitten (route A′): the measurements"}
+{"date": "2026-09-16", "path": "docs/research/kitty-drag-w4-adversarial-verify-2026-09-16.md", "status": "unknown", "topic": "W4 adversarial verification — the witness rule, re-derived not graded"}
+{"date": "2026-09-16", "path": "docs/research/kitty-drag-w4-gate-2026-09-16.md", "status": "unknown", "topic": "W4 — the operator gate: what was built, and what it was measured against"}
+{"date": "2026-09-16", "path": "docs/research/kitty-drag-w4-verification-2026-09-16.md", "status": "unknown", "topic": "W4 adversarial verification — what I re-derived, and the two defects I found"}
+{"date": "2026-09-16", "path": "docs/research/kitty-drag-w7-adversarial-verification-2026-09-16.md", "status": "unknown", "topic": "W7 adversarial verification — \"the landed diff arms nothing\""}
+{"date": "2026-09-16", "path": "docs/research/kitty-drag-w7-coupling-test-mutation-audit-2026-09-16.md", "status": "unknown", "topic": "W7 — is the coupling test DECORATIVE? A per-case mutation audit"}
+{"date": "2026-09-19", "path": "docs/research/kitty-equalize-on-arrival-2026-09-19.md", "status": "unknown", "topic": "Panes that even themselves out — removal is free, arrival costs one call"}
+{"date": "2026-09-13", "path": "docs/research/kitty-pane-attention-2026-09-13/", "status": "unknown", "topic": "Making a kitty pane say \"I am waiting for YOU\" — design record"}
+{"date": "2026-09-14", "path": "docs/research/kitty-pane-title-overlay-2026-09-14.md", "status": "solved", "topic": "A pane title that does not move the content — what is actually possible in kitty 0.48.2"}
+{"date": "2026-08-04", "path": "docs/research/kitty-selfclose-chain-2026-08-04.md", "status": "unknown", "topic": "The assignee self-close chain in kitty — convicted end to end"}
+{"date": "2026-09-16", "path": "docs/research/kitty-title-band-2026-09-16/", "status": "unknown", "topic": "The kitty pane title band — implementation plan"}
+{"date": "2026-09-16", "path": "docs/research/kitty-title-band-crash-population-2026-09-16.md", "status": "unknown", "topic": "kitty title-band SIGSEGV — the crash population is FIVE, not one (2026-09-16)"}
+{"date": "2026-09-30", "path": "docs/research/kitty-upstream-defects-2026-09-30.md", "status": "unknown", "topic": "Two upstream kitty defects: recorded, not patched into the daily terminal"}
+{"date": "2026-09-16", "path": "docs/research/kitty-upstream-drag-action-2026-09-16.md", "status": "draft for the operator's review. not pos", "topic": "Upstream feature request for kitty — a bindable mouse action that begins a window drag"}
+{"date": "2026-07-31", "path": "docs/research/l3-l4-terminal-and-workflow-2026-07-31.md", "status": "unknown", "topic": "The terminal and the workflow for 30+ visible Claude Code panes — adjudicating two AI reports against this box — 2026-07-31"}
+{"date": "2026-09-17", "path": "docs/research/ladder-r3-control-arm-2026-09-17.md", "status": "unknown", "topic": "R3 receipt — the one unrun experiment that is the whole 72-vs-90 gap"}
+{"date": "2026-08-07", "path": "docs/research/lag-meltdown-2026-08-07.md", "status": "unknown", "topic": "The load-781 meltdown — root cause + fixes (2026-08-07)"}
+{"date": "2026-08-10", "path": "docs/research/land-architecture-100p-2026-08-10/", "status": "unknown", "topic": "A — Landing path mechanism, as the code ships it (2026-08-10)"}
+{"date": "2026-08-10", "path": "docs/research/land-architecture-100p-2026-08-10.md", "status": "investigation open 2026-08-10", "topic": "Commit → land → deployed-live at 15+ sessions — is the architecture at its 100th percentile?"}
+{"date": "2026-07-25", "path": "docs/research/land-gate-serialization-2026-07-25.md", "status": "landed on trunk**", "topic": "Land-gate serialization — gate outside the lock (2026-07-25)"}
+{"date": "2026-07-28", "path": "docs/research/land-pipeline-v2-research-2026-07-28/", "status": "unknown", "topic": "land-pipeline-v2-research-2026-07-28"}
+{"date": "2026-08-17", "path": "docs/research/land-sigterm143-2026-08-17.md", "status": "unknown", "topic": "The SIGTERM-143 land bleed — what was fixed, what was refuted, what is still open"}
+{"date": "2026-09-10", "path": "docs/research/limit-cascade-2026-09-10.md", "status": "unknown", "topic": "Three 5h limits in 90 minutes — 2026-09-10"}
+{"date": "2026-09-19", "path": "docs/research/limit-recover-capacity-park-2026-09-19.md", "status": "unknown", "topic": "The capacity park is the design, and an env override is what turned it into a husk"}
+{"date": "2026-09-09", "path": "docs/research/literal-install-coverage-cured-2026-09-09.md", "status": "unknown", "topic": "LITERAL INSTALL COVERAGE was already cured on trunk — verdict for backlog 8e67a1fa2d40"}
+{"date": "2026-08-24", "path": "docs/research/load-ceiling-derivation-2026-08-24.md", "status": "unknown", "topic": "Deriving `CC_HW_DEFAULT_MAX_LOAD_PER_CORE` — the axis admits no capacity constant, and the blocking measurement is discharged"}
+{"date": "2026-09-19", "path": "docs/research/lr-detect-2026-09-19/", "status": "unknown", "topic": "lr-detect research, 2026-09-19 — receipts for `docs/plans/LIMIT_DETECT_100P.md`"}
+{"date": "2026-09-30", "path": "docs/research/lr-fleet-v2-decisions-2026-09-30/", "status": "unknown", "topic": "Decision 8: keep KMAX = 8 — evidence note"}
+{"date": "2026-09-04", "path": "docs/research/lr-handoff-quoting-test4-verdict-2026-09-04.md", "status": "unknown", "topic": "VERDICT: cc-backlog `b3a3f5b694e6` is ALREADY CURED — `ac341e51` landed 5h39m before the row was fired"}
+{"date": "2026-09-22", "path": "docs/research/lr-ingest-verify-a6-verdict-2026-09-22.md", "status": "unknown", "topic": "lr-ingest-verify 0/3 clean, first failure A6: the fault was the ingest, not the verifier (2026-09-22)"}
+{"date": "2026-09-30", "path": "docs/research/lr-recon-census-2026-09-30.md", "status": "unknown", "topic": "lr-reconciler census: which failure read 0 claude processes (W7a step 0, 2026-09-30)"}
+{"date": "2026-09-29", "path": "docs/research/lr-recon-w0-2026-09-29/", "status": "unknown", "topic": "W0 of LIMIT_RECOVER_FLEET_V2: measurements, fixtures, rig assets (2026-09-29)"}
+{"date": "2026-09-29", "path": "docs/research/lr-recon-w5b-2026-09-29/", "status": "unknown", "topic": "FLEET_V2 W5b — real canaries, shadow, cutover (2026-09-29)"}
+{"date": "2026-09-20", "path": "docs/research/lr-resume-expect-encoding-2026-09-20.md", "status": "superseded", "topic": "The resume regex expect refused — a locale pin that stopped one hop short"}
+{"date": "2026-09-23", "path": "docs/research/lr-transplant-lockless-hop-verdict-2026-09-23.md", "status": "unknown", "topic": "Verdict — cc-backlog `ac7bdd4b2f9d`: lock-less second hop erases the first hop (ALREADY CURED)"}
+{"date": "2026-09-09", "path": "docs/research/lr100p-2026-09-09/", "status": "unknown", "topic": "LIMIT_RECOVER_100P research wave — shared context (lead-verified facts, 2026-09-09T02:00Z)"}
+{"date": "2026-09-19", "path": "docs/research/lr100p-2026-09-19/", "status": "unknown", "topic": "lr100p — 2026-09-19 research corpus (the n=5 production run)"}
+{"date": "2026-09-21", "path": "docs/research/lr100p-decisions-2026-09-21/", "status": "unknown", "topic": "The two LIMIT_RECOVER spend decisions, re-measured (2026-09-21)"}
+{"date": "2026-08-06", "path": "docs/research/machine-lag-and-kitty-2026-08-06.md", "status": "unknown", "topic": "Machine lag triage + claude-infrastructure-on-kitty audit — 2026-08-06"}
+{"date": "2026-08-19", "path": "docs/research/marginal-load-per-active-session-2026-08-19.md", "status": "unknown", "topic": "Marginal load per ACTIVE session — the four published values cannot be repaired, and the instrument that produced them cannot measure the quantity"}
+{"date": "2026-08-25", "path": "docs/research/marginal-load-per-session-2026-08-25.md", "status": "unknown", "topic": "The denominator's 30× spread is four estimators, not four readings — and only one of them can identify a marginal"}
+{"date": "2026-09-09", "path": "docs/research/mass-app-termination-2026-09-09.md", "status": "unknown", "topic": "Mass application termination — 2026-09-09 18:55:16 local (23:55:16Z)"}
+{"date": "2026-08-25", "path": "docs/research/max-load-per-core-derivation-2026-08-25.md", "status": "unknown", "topic": "`CC_HW_DEFAULT_MAX_LOAD_PER_CORE` — the derivation, and why the answer is \"no number exists on this axis\""}
+{"date": "2026-09-08", "path": "docs/research/mcp-config-ssot-wave1-2026-09-08/", "status": "unknown", "topic": "MCP_CONFIG_SSOT — Wave 1 research artifacts (2026-09-08)"}
+{"date": "2026-08-10", "path": "docs/research/mcp-memory-groundup-2026-08-10/", "status": "unknown", "topic": "MCP memory census — live trees, ownership, true cost"}
+{"date": "2026-08-10", "path": "docs/research/mcp-memory-groundup-2026-08-10.md", "status": "unknown", "topic": "MCP per-session memory — the ground-up optimal, measured (2026-08-10)"}
+{"date": "2026-08-15", "path": "docs/research/mcp-modal-fire-stall-2026-08-15.md", "status": "unknown", "topic": "A fired session stalls at the project `.mcp.json` approval modal — root cause and the fix's shape"}
+{"date": "2026-07-29", "path": "docs/research/mechanical-wake-asyncrewake-2026-07-29.md", "status": "unknown", "topic": "The wake path can be MECHANICAL: `asyncRewake` falsifies the harness floor"}
+{"date": "2026-08-10", "path": "docs/research/memory-econ-rearchitecture-2026-08-10/", "status": "unknown", "topic": "Pre-spawn decomposition — memory-economy ground-up investigation (2026-08-10)"}
+{"date": "2026-08-10", "path": "docs/research/memory-econ-rearchitecture-2026-08-10.md", "status": "unknown", "topic": "Memory-economy ground-up re-architecture — 15-axis wave verdict (2026-08-10)"}
+{"date": "2026-09-28", "path": "docs/research/memory-eval/", "status": "unknown", "topic": "memory-eval: does the right memory reach the agent?"}
+{"date": "2026-08-24", "path": "docs/research/memory-index-premise-refuted-2026-08-24.md", "status": "unknown", "topic": "MEMORY.md \"over the loader cap\" — the premise is refuted, and the item is a re-mint"}
+{"date": "2026-08-12", "path": "docs/research/model-in-the-loop-permissions-2026-08-12.md", "status": "unknown", "topic": "Model-in-the-loop permission decisions — feasibility settled, engineering open"}
+{"date": "2026-07-30", "path": "docs/research/nightly-regression-triage-2026-07-30.md", "status": "unknown", "topic": "nightly-regression RED @ 2026-07-25T20:33:06Z — triage"}
+{"date": "2026-08-31", "path": "docs/research/offbox-census-attribution-2026-08-31.md", "status": "unknown", "topic": "The off-box census was taken in the wrong venue — and one of its seven reds is a real bug"}
+{"date": "2026-09-10", "path": "docs/research/offbox-deterministic-floor-2026-09-10.md", "status": "unknown", "topic": "The off-box producer could not emit a green, and the reason was one apostrophe"}
+{"date": "2026-09-08", "path": "docs/research/offbox-green-floor-2026-09-08.md", "status": "unknown", "topic": "The off-box producer has two floors, and the row saw only the lower one"}
+{"date": "2026-09-08", "path": "docs/research/offbox-green-floor-refutation-2026-09-08.md", "status": "unknown", "topic": "The off-box green rate was projected against a cadence that does not exist, and the residual is a flow"}
+{"date": "2026-09-04", "path": "docs/research/offbox-notgreen-lane-2026-09-04.md", "status": "unknown", "topic": "The off-box lane re-proved trunk 364 times in 22 days and could not say \"no\""}
+{"date": "2026-09-05", "path": "docs/research/offbox-red-triage-2026-09-05.md", "status": "unknown", "topic": "The off-box partition's reds are mostly REAL — T1H is blocked by the tree, not by machine coupling"}
+{"date": "2026-09-19", "path": "docs/research/operator-readout-sid-2026-09-19.md", "status": "unknown", "topic": "The ⏳ sensor reads UNKNOWN because its caller withholds the session id it is holding"}
+{"date": "2026-08-01", "path": "docs/research/opus5-adaptation-2026-08-01.md", "status": "unknown", "topic": "Adapting to Opus 5 — what the infrastructure and the operator should change"}
+{"date": "2026-09-22", "path": "docs/research/opus55-effort-sweep-2026-09-22/", "status": "unknown", "topic": "Opus 5.5 effort sweep + quota-draw read — 2026-09-22"}
+{"date": "2026-09-22", "path": "docs/research/opus55-feature-adoption-2026-09-22/", "status": "unknown", "topic": "Opus 5.5 + CC 2.1.280 feature adoption — four levers, measured (2026-09-22)"}
+{"date": "2026-09-22", "path": "docs/research/opus55-synth-reprobe-2026-09-22/", "status": "unknown", "topic": "Opus 5.5 synthesis-worker re-probe (2026-09-22): INCONCLUSIVE, because the tool conditions were unequal"}
+{"date": "2026-09-22", "path": "docs/research/opus55-utilization-2026-09-22/", "status": "unknown", "topic": "Opus 5.5 — which model, at which effort, for which use case (2026-09-22)"}
+{"date": "2026-08-19", "path": "docs/research/orchestration-units-2026-08-19/", "status": "unknown", "topic": "A1-VERIFY — adversarial verification of the process taxonomy"}
+{"date": "2026-08-19", "path": "docs/research/orchestration-units-2026-08-19.md", "status": "unknown", "topic": "Orchestration units and the ~15-session ceiling — what each unit actually costs"}
+{"date": "2026-07-26", "path": "docs/research/orphan-harvest-2026-07-26/", "status": "unknown", "topic": "r1-impact-map  (session 27ffbc7c-e8aa-4cdf-8414-cb92d66d7e9e)"}
+{"date": "2026-08-19", "path": "docs/research/oversight-at-scale-2026-08-19/", "status": "unknown", "topic": "O1-VERIFY — adversarial verification of \"the stop button\""}
+{"date": "2026-08-19", "path": "docs/research/oversight-at-scale-2026-08-19.md", "status": "unknown", "topic": "Oversight at scale — how to run 30–50 units you actually oversee"}
+{"date": "2026-08-07", "path": "docs/research/pane-theft-composer-guard.md", "status": "SHIPPED — see §6. The research below stands; §3.3's pseudocode does NOT (two corrections).", "topic": "The composer guard — can the loss be made impossible?"}
+{"date": "2026-08-07", "path": "docs/research/pane-theft-log-timeline.md", "status": "unknown", "topic": "Pane-theft — on-disk log timeline, 2026-08-07 06:35–06:55Z"}
+{"date": "2026-08-09", "path": "docs/research/panels/", "status": "unknown", "topic": "panels"}
+{"date": "2026-08-24", "path": "docs/research/panic-2026-08-24-evidence/", "status": "unknown", "topic": "Adversarial verification — GUARD-FAILURE claim (2026-08-24 20:01 PDT panic #5)"}
+{"date": "2026-08-24", "path": "docs/research/panic-2026-08-24-fifth-watchdog.md", "status": "unknown", "topic": "Panic #5 — 2026-08-24 20:01:23 PDT — cross-axis synthesis"}
+{"date": "2026-09-16", "path": "docs/research/panic-clang-format-swarm-2026-09-16.md", "status": "unknown", "topic": "Two watchdog panics in 37 minutes — the clang-format swarm is in both"}
+{"date": "2026-08-05", "path": "docs/research/panic-compressor-2026-08-05.md", "status": "unknown", "topic": "The 2026-08-05 00:18 panic — the allocator finally has a face: a 670-process node spawn storm into a cold swapper"}
+{"date": "2026-07-31", "path": "docs/research/panic-iterm2-coalition-2026-07-31.md", "status": "unknown", "topic": "The 2026-07-31 18:13 panic — iTerm2 was blamed for its 1,002 children"}
+{"date": "2026-07-31", "path": "docs/research/panic-threadprice-2026-07-31.md", "status": "unknown", "topic": "The measuring instrument panicked the machine — 2026-07-31T11:46:47"}
+{"date": "2026-09-09", "path": "docs/research/permission-allow-automode-audit-2026-09-09.md", "status": "unknown", "topic": "The 339 `permissions.allow` entries, audited against the auto-mode drop list"}
+{"date": "2026-09-08", "path": "docs/research/permission-harvest-acceptances-2026-09-08.md", "status": "unknown", "topic": "Permission-harvest acceptance census — 2026-09-08 (wave A2)"}
+{"date": "2026-09-11", "path": "docs/research/permission-harvest-completion-2026-09-11.md", "status": "unknown", "topic": "PERMISSION_HARVEST is finished in fact and open only in its frontmatter — 2026-09-11"}
+{"date": "2026-09-11", "path": "docs/research/permission-harvest-deadline-arm-margin-2026-09-11.md", "status": "unknown", "topic": "The BOUNDED deadline arm is a race on core speed — 2026-09-11"}
+{"date": "2026-09-10", "path": "docs/research/permission-harvest-hook-ceiling-2026-09-10/", "status": "unknown", "topic": "permission-harvest-hook-ceiling-2026-09-10"}
+{"date": "2026-09-10", "path": "docs/research/permission-harvest-hook-ceiling-2026-09-10.md", "status": "unknown", "topic": "The hook-layer ceiling — what a PreToolUse lever can ever clear on the structural cluster"}
+{"date": "2026-09-08", "path": "docs/research/permission-harvest-profile-2026-09-08.md", "status": "unknown", "topic": "Permission-harvest profile — what prefix allow rules can ACTUALLY clear, measured on the oracle"}
+{"date": "2026-08-20", "path": "docs/research/permission-matcher-truth-2026-08-20.md", "status": "unknown", "topic": "Permission-matcher ground truth — Claude Code 2.1.220"}
+{"date": "2026-09-10", "path": "docs/research/permission-prompt-census-2026-09-10.md", "status": "unknown", "topic": "Permission-prompt census, 30 days to 2026-09-10"}
+{"date": "2026-08-20", "path": "docs/research/permission-prompts-2026-08-20.md", "status": "unknown", "topic": "Permission prompts: what actually blocks us, and why the allowlist was the wrong lever"}
+{"date": "2026-08-23", "path": "docs/research/permission-prompts-2026-08-23.md", "status": "unknown", "topic": "Where the permission prompts actually come from — 2026-08-23"}
+{"date": "2026-08-20", "path": "docs/research/permission-settings-store-2026-08-20.md", "status": "unknown", "topic": "The enforcing store for Claude Code permission settings on this box"}
+{"date": "2026-08-07", "path": "docs/research/phase-execution-locus-2026-08-07.md", "status": "unknown", "topic": "Why per-phase dispatched sessions were not the default — and what now makes them one"}
+{"date": "2026-09-17", "path": "docs/research/pipefail-continuation-join-2026-09-17.md", "status": "unknown", "topic": "pipefail-sigpipe-lint is blind to a pipeline split across a line continuation"}
+{"date": "2026-08-20", "path": "docs/research/plan-open-falsifier-cannot-report-unaskable-2026-08-20.md", "status": "finding + reproduction. **no fix applied", "topic": "The plan-open falsifier cannot say \"I could not ask\" — measured 2026-08-20"}
+{"date": "2026-09-03", "path": "docs/research/plan-status-done-2026-09-03.md", "status": "unknown", "topic": "A finished plan re-dispatched itself, and the cause was one word — 2026-09-03"}
+{"date": "2026-09-26", "path": "docs/research/plugin-packaging-2026-09-26/", "status": "unknown", "topic": "Packaging claude-infrastructure as Claude plugins — should we, and what?"}
+{"date": "2026-08-16", "path": "docs/research/pool-slot-node-modules-2026-08-16.md", "status": "unknown", "topic": "Pool slots 6/7/8 lost `node_modules` while `styled-system` survived — what a cloud VM can and cannot settle"}
+{"date": "2026-09-08", "path": "docs/research/postland-ancestry-2026-09-08.md", "status": "unknown", "topic": "The postland stamp store was never mis-keyed — and trunk has had no green since 2026-09-03"}
+{"date": "2026-09-16", "path": "docs/research/postland-autorevert-1aa535891-2026-09-16.md", "status": "unknown", "topic": "A post-land AUTO-REVERT that was right about guilt, wrong about trunk, and did not fail"}
+{"date": "2026-09-17", "path": "docs/research/postland-autorevert-2909762748ee-2026-09-17.md", "status": "unknown", "topic": "post-land AUTO-REVERT `tests/effort-parity.bats` @ `2909762748ee` — ALREADY CURED"}
+{"date": "2026-09-07", "path": "docs/research/postland-c29-alternation-2026-09-07.md", "status": "unknown", "topic": "The post-land conviction that named `e39aa0be1546` is false at its own tree"}
+{"date": "2026-09-07", "path": "docs/research/postland-conviction-oscillation-2026-09-07.md", "status": "unknown", "topic": "The verifier's disjoint REDs are a period-2 oscillation, not a rerolling population"}
+{"date": "2026-09-23", "path": "docs/research/postland-fd-exhaustion-2026-09-23.md", "status": "unknown", "topic": "Postland Errno 24 — the \"runner fd budget\" premise is unmeasured, and bats cannot supply the fds"}
+{"date": "2026-09-04", "path": "docs/research/postland-green-starvation-verdict-2026-09-04.md", "status": "unknown", "topic": "postland-verify \"INERT\" (`01ab05685857`) — verdict, and the residual it was hiding"}
+{"date": "2026-09-20", "path": "docs/research/postland-hung-poll-floor-2026-09-20.md", "status": "unknown", "topic": "post-land HUNG `tests/postland-verify.bats` @ 11426/14327 — the premise is refuted, the effect is cured"}
+{"date": "2026-09-20", "path": "docs/research/postland-hung-poll-floor-reverify-2026-09-20.md", "status": "unknown", "topic": "`4f7bf7b75181` re-dispatched 1h28m AFTER its own cure landed — re-verification on trunk"}
+{"date": "2026-09-02", "path": "docs/research/postland-inert-already-cured-2026-09-02.md", "status": "unknown", "topic": "`postland-verify is INERT` was the wrong fault name, and the fix landed a week ago"}
+{"date": "2026-09-19", "path": "docs/research/postland-revert-0e5e2c3b-2026-09-19.md", "status": "unknown", "topic": "The revert remedy on `postland-revert-0e5e2c3bb7c2` is disproved — fix forward instead"}
+{"date": "2026-09-08", "path": "docs/research/postland-sigkill-sender-2026-09-08.md", "status": "unknown", "topic": "The postland corpus SIGKILL sender — named, cured, and verified cured"}
+{"date": "2026-09-30", "path": "docs/research/premise-autoclose-audit-2026-10.md", "status": "complete", "topic": "cc-premise auto-close audit, 2026-09-01 to 2026-09-30"}
+{"date": "2026-07-29", "path": "docs/research/prior-art.md", "status": "unknown", "topic": "A. OSS/dev-tool README hero banners"}
+{"date": "2026-08-05", "path": "docs/research/prompt-suggestion-filter-2026-08-05.md", "status": "unknown", "topic": "Quantifying Claude Code's prompt-suggestion content filter"}
+{"date": "2026-09-10", "path": "docs/research/propose-goal-flag-recheck-2026-09-10.md", "status": "unknown", "topic": "`tengu_propose_goal` is still OFF at 2.1.267 — backlog `2a65b9bf722d` re-anchored, NOT closed"}
+{"date": "2026-09-11", "path": "docs/research/propose-goal-flag-recheck-2026-09-11.md", "status": "unknown", "topic": "`tengu_propose_goal` still OFF at 2.1.268 — and the row's falsifier now has a second reading"}
+{"date": "2026-09-11", "path": "docs/research/propose-goal-row-park-2026-09-11.md", "status": "unknown", "topic": "The third dispatch in eight hours: `2a65b9bf722d` is not unfinished, it is **operator-gated**"}
+{"date": "2026-08-09", "path": "docs/research/pty-ceiling-2026-08-09.md", "status": "unknown", "topic": "The pty ceiling is real, is not where it was reported, and headless is free — Phase E, measured"}
+{"date": "2026-07-20", "path": "docs/research/pyramid-deployment-2026-07-20.md", "status": "unknown", "topic": "Deploying `pyramid-principle-full` without a 1M-token run"}
+{"date": "2026-09-30", "path": "docs/research/quota-429-drift-2026-09-30/", "status": "unknown", "topic": "Quota drift across a 429 poll-throttle — can routing trust the last-good read?"}
+{"date": "2026-08-19", "path": "docs/research/reaped-uncommitted-peer-2026-08-19.md", "status": "unknown", "topic": "What closed pane B2D1CE68 at 2026-07-30T04:39Z — and why its own safety guard could not fire"}
+{"date": "2026-08-23", "path": "docs/research/recap-prompt-extraction-2026-08-23.md", "status": "unknown", "topic": "Claude Code's built-in recap prompt, extracted verbatim"}
+{"date": "2026-08-22", "path": "docs/research/recycle-100p-2026-08-22.md", "status": "unknown", "topic": "/handoff self-recycle at the 100th percentile — clear-vs-exit, the injection window, mangle detection"}
+{"date": "2026-07-30", "path": "docs/research/recycle-banner-source-fidelity-2026-07-30.md", "status": "v1 landed", "topic": "The self-recycle banner must RECREATE the BMO clip, not reference it"}
+{"date": "2026-09-29", "path": "docs/research/recycle-bgwork-orphan-2026-09-29/", "status": "unknown", "topic": "Recycle background-work orphan — the remedy, measured on 2.1.284"}
+{"date": "2026-08-26", "path": "docs/research/recycle-pane-survivability-2026-08-26.md", "status": "unknown", "topic": "A recycle can only work in a pane that outlives the session in it"}
+{"date": "2026-09-09", "path": "docs/research/recycle-peer-contract-2026-09-09.md", "status": "unknown", "topic": "A `--recycle` inherits a fired peer's self-retire contract — the design call, and the half of the filing that was wrong"}
+{"date": "2026-09-09", "path": "docs/research/refused-worker-standdown-2026-09-09.md", "status": "unknown", "topic": "A refused duplicate worker DOES stand down — cc-backlog `b03eb3f28845`, REFUTED"}
+{"date": "2026-08-05", "path": "docs/research/registry-row-removal-2026-08-05.md", "status": "unknown", "topic": "cc-registry: a fired peer's row IS written, then removed ~1s later (2026-08-05)"}
+{"date": "2026-09-17", "path": "docs/research/reland-row-supersession-2026-09-17.md", "status": "superseded", "topic": "A re-land row's falsifier measures BYTES, so a superseded branch never retracts"}
+{"date": "2026-08-25", "path": "docs/research/reply-chain-preservation-2026-08-25.md", "status": "unknown", "topic": "Preserving a genuine, multi-level quoted chain on an ms365 reply"}
+{"date": "2026-07-29", "path": "docs/research/repo-semantics.md", "status": "unknown", "topic": "Micro-event source material — ranked"}
+{"date": "2026-09-22", "path": "docs/research/reso-landing-architecture-2026-09-22/", "status": "unknown", "topic": "reso-landing-architecture-2026-09-22"}
+{"date": "2026-09-22", "path": "docs/research/reso-landing-architecture-2026-09-22.md", "status": "unknown", "topic": "reso landing architecture at 15+ concurrent landers — bottlenecks, target design, phased plan"}
+{"date": "2026-09-23", "path": "docs/research/reso-latency-2026-09-23/", "status": "unknown", "topic": "A1: per-request auth, session and tenant path: DB round-trip census"}
+{"date": "2026-09-22", "path": "docs/research/reso-w1b-route-b-fk-packet-2026-09-22.md", "status": "not landed. not started. this is the pac", "topic": "W1b route (b) — schema FOREIGN KEYs with ON DELETE — OPERATOR RULING REQUIRED"}
+{"date": "2026-08-08", "path": "docs/research/resource-guard-2026-08-08.md", "status": "unknown", "topic": "Resource guard for runaway agent-spawned commands — the ceiling that exists, and the fork resolved"}
+{"date": "2026-09-08", "path": "docs/research/resume-batch-rot-2026-09-08.md", "status": "unknown", "topic": "A recovery batch is a PERISHABLE artifact, and nothing on the resume path knew that"}
+{"date": "2026-09-22", "path": "docs/research/review-judge-followup-2026-09-22/", "status": "unknown", "topic": "Review-class follow-up — 3 samples per arm, and a mixed-model judge panel — 2026-09-22"}
+{"date": "2026-07-28", "path": "docs/research/robobun-architecture-2026-07-28.md", "status": "unknown", "topic": "robobun — architecture, configuration, and a recreation blueprint"}
+{"date": "2026-07-28", "path": "docs/research/robobun-recreation-kit/", "status": "unknown", "topic": "robobun recreation kit"}
+{"date": "2026-09-08", "path": "docs/research/rotor-scan-equivalence-2026-09-08.md", "status": "unknown", "topic": "The rotor's 118s, and the \"unexplained\" verdict flip that blocked the fix"}
+{"date": "2026-09-22", "path": "docs/research/routing-policy-ruling-2026-09-22.md", "status": "unknown", "topic": "Account-routing policy — the ruling (2026-09-22)"}
+{"date": "2026-08-09", "path": "docs/research/scaling-bottlenecks-2026-08-09/", "status": "unknown", "topic": "Pre-spawn decomposition — true bottlenecks, 15 → 150+ sessions (2026-08-09)"}
+{"date": "2026-08-09", "path": "docs/research/scaling-bottlenecks-2026-08-09.md", "status": "unknown", "topic": "The true bottlenecks: 15 → 150+ concurrent sessions on the fixed M1 Max — verdict and drive plan"}
+{"date": "2026-09-21", "path": "docs/research/security-auditor-ab-cloudflare-vs-codex-2026-09-21.md", "status": "unknown", "topic": "Cloudflare security-audit-skill vs codex-security — matched-scope A/B on `hooks/` @ dc12c8db"}
+{"date": "2026-09-21", "path": "docs/research/security-auditor-class-applicability-reso-2026-09-21.md", "status": "unknown", "topic": "Which Cloudflare attack classes reach reso — and the three nobody has run there"}
+{"date": "2026-09-30", "path": "docs/research/selfrecycle-agentview-off-2026-09-30/", "status": "unknown", "topic": "A self-recycle's /exit, under agent-view-off: what the exit dialog counts"}
+{"date": "2026-08-09", "path": "docs/research/session-capacity-blind-terms-2026-08-09.md", "status": "unknown", "topic": "The resources that exhaust while every gauge reads healthy — H-CAP-1 panel verdict"}
+{"date": "2026-08-09", "path": "docs/research/session-capacity-ceiling-2026-08-09.md", "status": "unknown", "topic": "What actually caps concurrent sessions on this box — and the path to 150+"}
+{"date": "2026-08-02", "path": "docs/research/session-closure-and-resume-2026-08-02.md", "status": "unknown", "topic": "The vanished pane and the unresumable session — 2026-08-02"}
+{"date": "2026-07-22", "path": "docs/research/session-crash-diagnosis-2026-07-22.md", "status": "unknown", "topic": "Session-crash diagnosis — \"sessions keep closing on themselves abruptly\" (2026-07-22)"}
+{"date": "2026-08-09", "path": "docs/research/session-sigterm-forensics-2026-08-09.md", "status": "root cause **convicted 2026-08-09**", "topic": "Three sessions died at one instant, and nothing said so — 2026-08-09"}
+{"date": "2026-09-08", "path": "docs/research/setup-token-scope-refutation-2026-09-08.md", "status": "unknown", "topic": "`claude setup-token` is inference-only by server-side construction — backlog `170a3b38f8c9` refuted"}
+{"date": "2026-07-29", "path": "docs/research/shared-task-board-2026-07-29.md", "status": "unknown", "topic": "Shared task board across the four accounts — investigation + design"}
+{"date": "2026-08-24", "path": "docs/research/ship-land-branch-subshell-refuted-2026-08-24.md", "status": "unknown", "topic": "ship-land.sh `BRANCH` in a `$( )` child — REFUTED; the bisect half was cured six days after filing"}
+{"date": "2026-09-03", "path": "docs/research/sigkill-attribution-2026-09-03.md", "status": "unknown", "topic": "W6 — WHO SENDS THE SIGKILL: attributed, and it is `timeout` killing itself"}
+{"date": "2026-08-25", "path": "docs/research/sigterm-forensics-2026-08-25.md", "status": "unknown", "topic": "SIGTERM forensics — who killed pid 50399, and why nothing said so"}
+{"date": "2026-09-12", "path": "docs/research/silver-platter-enforcement-2026-09-12/", "status": "unknown", "topic": "Silver-platter enforcement — research, 2026-09-12"}
+{"date": "2026-09-28", "path": "docs/research/sonnet55-effort-sweep-2026-09-28/", "status": "unknown", "topic": "sonnet55-effort-sweep-2026-09-28"}
+{"date": "2026-09-28", "path": "docs/research/sonnet55-synth-probe-2026-09-28/", "status": "unknown", "topic": "Sonnet 5.5 synthesis probe: tally (2026-09-28)"}
+{"date": "2026-09-28", "path": "docs/research/sonnet55-utilization-2026-09-28/", "status": "unknown", "topic": "Sonnet 5.5 + Claude Code 2.1.284 — which model, at which effort, for which use case (2026-09-28)"}
+{"date": "2026-08-11", "path": "docs/research/spawn-lineage-probe-2026-08-11.md", "status": "unknown", "topic": "Does a spawn stamp survive the boundary? — the probe backlog `bffbce207f12` demanded first"}
+{"date": "2026-08-16", "path": "docs/research/startup-2026-08-16/", "status": "unknown", "topic": "Cold start, 100th percentile — the architecture"}
+{"date": "2026-07-31", "path": "docs/research/step3-to-step4-pathway-2026-07-31.md", "status": "unknown", "topic": "Step 3 → Step 4: the actual blocker is legibility, not permissions — 2026-07-31"}
+{"date": "2026-09-03", "path": "docs/research/stop-chain-wave2-2026-09-03/", "status": "unknown", "topic": "d8147be371cd — \"Agent-tool report delivery drops final output\" · drivability research"}
+{"date": "2026-09-04", "path": "docs/research/stop-chain-wave2-verdict-2026-09-04.md", "status": "unknown", "topic": "STOP_CHAIN_WAVE2 (`a507762b0a0d`) — already cured; the row re-dispatched on a spelling"}
+{"date": "2026-08-17", "path": "docs/research/stop-hook-wedge-2026-08-17.md", "status": "unknown", "topic": "Stop-hook wedge (backlog `50627335fe9b`) — the frame the row keys on does not exist"}
+{"date": "2026-09-09", "path": "docs/research/stranded-branch-recovery-2026-09-09.md", "status": "unknown", "topic": "Stranded-branch recovery, final pass — 2026-09-09"}
+{"date": "2026-09-19", "path": "docs/research/subagent-lifecycle-2026-09-19/", "status": "unknown", "topic": "A — Vendor exit paths for a teammate child process (2.1.260 vs 2.1.220)"}
+{"date": "2026-08-01", "path": "docs/research/succession-observability-2026-08-01/", "status": "unknown", "topic": "Inventory — succession state at arm time vs. what anything reads (2026-08-01)"}
+{"date": "2026-09-08", "path": "docs/research/superseded-ambig-branch-triage-2026-09-08.md", "status": "superseded", "topic": "Triaging the SUPERSEDED-AMBIG local branches — 2026-09-08"}
+{"date": "2026-08-05", "path": "docs/research/system-prompt-parity-decision-2026-08-05.md", "status": "unknown", "topic": "Decision: do NOT set `CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT` — parity already holds for every model we run"}
+{"date": "2026-09-23", "path": "docs/research/team-inplace-upgrade-2026-09-23/", "status": "unknown", "topic": "In-place upgrade of Agent Teams and subagent-holding sessions (2026-09-23)"}
+{"date": "2026-09-19", "path": "docs/research/teammate-reaper-discriminator-2026-09-19.md", "status": "unknown", "topic": "The duplicated teammate discriminator was a redundant pre-filter, not a weaker check"}
+{"date": "2026-08-24", "path": "docs/research/tenant-drift-venue-refusal-2026-08-24.md", "status": "unknown", "topic": "`485f8f87eb5f` (reso tenant-drift) is cloud-INELIGIBLE, and the shipped arm cannot say so"}
+{"date": "2026-07-30", "path": "docs/research/terminal-config-30-sessions-decision-2026-07-30.md", "status": "unknown", "topic": "Decision: stay on iTerm2, change the LAYOUT, do not fork and do not migrate"}
+{"date": "2026-07-31", "path": "docs/research/terminal-for-30-panes-2026-07-31.md", "status": "unknown", "topic": "Which terminal survives 30+ concurrent Claude Code panes on this M1 Max? — 2026-07-31"}
+{"date": "2026-09-23", "path": "docs/research/token-efficiency-2026-09-23/", "status": "unknown", "topic": "Token-efficiency pass on the Claude Code harness — report (2026-09-23)"}
+{"date": "2026-09-27", "path": "docs/research/truememory-2026-09-27/", "status": "parked.** on 2026-09-27 the findings wen", "topic": "TrueMemory upstream fix kit"}
+{"date": "2026-09-27", "path": "docs/research/truememory-2026-09-27.md", "status": "unknown", "topic": "TrueMemory study: what to take into our agent memory"}
+{"date": "2026-09-28", "path": "docs/research/truememory-adoption-cloud-verdict-2026-09-28.md", "status": "unknown", "topic": "TrueMemory adoption, cloud dispatch — verdict: already cured on trunk (2026-09-28)"}
+{"date": "2026-09-28", "path": "docs/research/truememory-adoption-status-2026-09-28.md", "status": "unknown", "topic": "TrueMemory adoption — status verdict for cc-backlog 4efda83b9d14 (2026-09-28)"}
+{"date": "2026-09-28", "path": "docs/research/truememory-upstream-2026-09-28/", "status": "unknown", "topic": "A1: TrueMemory's contribution process and CLA, as an outside contributor meets them"}
+{"date": "2026-09-28", "path": "docs/research/truememory-upstream-2026-09-28.md", "status": "unknown", "topic": "TrueMemory upstream: research for contributing our fixes (2026-09-28)"}
+{"date": "2026-09-28", "path": "docs/research/truememory-waves-a-c-already-landed-2026-09-28.md", "status": "unknown", "topic": "TrueMemory build-now Waves A-C were already landed — verdict on cc-backlog `eb41b669e5e6`"}
+{"date": "2026-08-22", "path": "docs/research/tui-systemmessage-render-2026-08-22.md", "status": "unknown", "topic": "What a Stop-hook `systemMessage` ACTUALLY renders as — measured, not assumed"}
+{"date": "2026-08-22", "path": "docs/research/tui-systemmessage-render-2026-08-22.py", "status": "unknown", "topic": "tui-systemmessage-render-2026-08-22"}
+{"date": "2026-09-17", "path": "docs/research/union-alpha-drain-2026-09-17/", "status": "unknown", "topic": "Should the 24/7 cc-backlog drain run on free Union Alpha via Cloudflare AI Gateway / OpenRouter?"}
+{"date": "2026-09-30", "path": "docs/research/upfront-research-exhaustion-2026-09-30/", "status": "**method version 1.1, frozen", "topic": "Upfront research that ends: a no-take-backs method for \"100.00/100.00 complete\""}
+{"date": "2026-08-16", "path": "docs/research/usage-telemetry-100p-2026-08-16/", "status": "complete", "topic": "Completeness critic — what this wave did not run, and what it cannot yet answer"}
+{"date": "2026-08-17", "path": "docs/research/validate-bash-fork-census-2026-08-17.md", "status": "unknown", "topic": "Executed-path fork census — `hooks/validate-bash.sh`"}
+{"date": "2026-08-17", "path": "docs/research/validate-bash-grep-differential-2026-08-17.md", "status": "unknown", "topic": "The grep → bash-native differential for hooks/validate-bash.sh"}
+{"date": "2026-08-07", "path": "docs/research/vendor-convergence-2026-08-07.md", "status": "unknown", "topic": "The order converges. The precedence does not."}
+{"date": "2026-08-07", "path": "docs/research/vendor-convergence-2026-08-07.pyramid-worklog.md", "status": "unknown", "topic": "Pyramid worklog — vendor-convergence note (2026-08-07)"}
+{"date": "2026-08-08", "path": "docs/research/vendor-report-cc-authstore-write-loss.md", "status": "unknown", "topic": "Vendor report — a rotated OAuth refresh token can be lost silently"}
+{"date": "2026-08-29", "path": "docs/research/venue-darwin-instrument-capacity-cf1-2026-08-29.md", "status": "unknown", "topic": "A Darwin kernel instrument names no local-only word, so its post-land RED was dispatched off-box"}
+{"date": "2026-08-19", "path": "docs/research/venue-declared-foreign-tree-2026-08-19.md", "status": "unknown", "topic": "The third fire of the same row — and why all three filed remedies would have let it through"}
+{"date": "2026-08-24", "path": "docs/research/venue-dod-offtrunk-2026-08-24.md", "status": "unknown", "topic": "A cloud dispatch whose specification was never committed — item 4ce239d21d67"}
+{"date": "2026-08-26", "path": "docs/research/venue-foreign-master-postremedy-2026-08-26.md", "status": "unknown", "topic": "The cross-repo arm SHIPPED, it works, and `8f59467c92b0` is the case it cannot reach"}
+{"date": "2026-08-17", "path": "docs/research/venue-foreign-master-redispatch-2026-08-17.md", "status": "unknown", "topic": "The row that BOTH filed options pass — and the first re-dispatch of an already-disproved item"}
+{"date": "2026-08-26", "path": "docs/research/venue-foreign-master-third-dispatch-2026-08-26.md", "status": "unknown", "topic": "The third dispatch of `8f59467c92b0`, and why the filed remedy would not have stopped it"}
+{"date": "2026-08-27", "path": "docs/research/venue-foreign-master-third-fire-2026-08-27.md", "status": "unknown", "topic": "The third cloud fire of `8f59467c92b0` — the return rails are rc-0 no-ops, and that is the generator"}
+{"date": "2026-08-14", "path": "docs/research/venue-foreign-project-repo-2026-08-14.md", "status": "unknown", "topic": "A cloud VM attaches ONE repo, and nothing in the venue decision asks whether it is the item's"}
+{"date": "2026-08-17", "path": "docs/research/venue-foreign-repo-recurrence-2026-08-17.md", "status": "unknown", "topic": "The 08-16 prediction came true in 24 hours, on the second project it named"}
+{"date": "2026-08-15", "path": "docs/research/venue-foreign-subject-repo-2026-08-15.md", "status": "unknown", "topic": "The label is not the subject: a row labelled THIS repo, about ANOTHER, defeats the 08-14 guard"}
+{"date": "2026-08-24", "path": "docs/research/venue-foreign-subject-residue-2026-08-24.md", "status": "unknown", "topic": "The label-foreign guard shipped and works; the subject-foreign route is what is left"}
+{"date": "2026-08-24", "path": "docs/research/venue-foreign-tree-declared-2026-08-24.md", "status": "unknown", "topic": "The third fire of one row, the first one the landed guard should have stopped — and both filed repairs refuted"}
+{"date": "2026-08-28", "path": "docs/research/venue-master-redispatch-3rd-2026-08-28.md", "status": "unknown", "topic": "The third dispatch of `8f59467c92b0`, and the finding is that ALL THREE specified remedies miss it"}
+{"date": "2026-08-26", "path": "docs/research/venue-master-subject-foreign-2026-08-26.md", "status": "unknown", "topic": "The cross-repo arm landed, is healthy, and still admits the row it was predicted to miss"}
+{"date": "2026-08-29", "path": "docs/research/venue-plan-open-pointer-span-2026-08-29.md", "status": "unknown", "topic": "The venue classifier reads a POINTER for `plan-open` rows — and the obvious fix starves the tap"}
+{"date": "2026-08-29", "path": "docs/research/venue-runner-version-2026-08-29.md", "status": "unknown", "topic": "The fifth lock: `bats` present, `bats` the wrong version, and a land that means nothing"}
+{"date": "2026-09-22", "path": "docs/research/voluntary-inplace-switch-2026-09-22/", "status": "unknown", "topic": "A01 — the front door for a VOLUNTARY in-place account switch"}
+{"date": "2026-07-30", "path": "docs/research/w0-asyncrewake-proof/", "status": "unknown", "topic": "W0 probe — durable evidence that `asyncRewake` wakes an idle session"}
+{"date": "2026-09-17", "path": "docs/research/w2-0-api-error-stop-proof/", "status": "unknown", "topic": "Files as run — W2-0 / T9"}
+{"date": "2026-08-16", "path": "docs/research/w2-stop-rewake-proof/", "status": "unknown", "topic": "W2 probe — durable evidence that a **Stop**-declared `asyncRewake` hook wakes an idle session"}
+{"date": "2026-09-07", "path": "docs/research/w4-fire-gate-adjudication-2026-09-07.md", "status": "unknown", "topic": "W4 · the spawn economy — adjudicated against trunk, 2026-09-07"}
+{"date": "2026-09-09", "path": "docs/research/w4-product-repos-premise-2026-09-09.md", "status": "unknown", "topic": "W4 \"the operator's actual products\" — three of four premises refuted, one driven"}
+{"date": "2026-07-26", "path": "docs/research/wake-on-ping-2026-07-26.md", "status": "unknown", "topic": "Wake-on-ping — making the cross-session wake path MECHANICAL, and what to absorb from AgentMail"}
+{"date": "2026-09-10", "path": "docs/research/wake-socket-repricing-2026-09-10.md", "status": "unknown", "topic": "Re-pricing the 2.1.221–2.1.237 hold — the hold is gone, the cost it named is not"}
+{"date": "2026-09-04", "path": "docs/research/wall-projection-abstain-verdict-2026-09-04.md", "status": "unknown", "topic": "VERDICT — `wall_projection()`'s abstain window was already widened; backlog `70ed289c10fb` is cured"}
+{"date": "2026-08-13", "path": "docs/research/wedge-2026-08-13.md", "status": "cause chain evidenced from primary instr", "topic": "The 2026-08-13 21:22 wedge — an 80-minute dead shutdown, not a memory storm"}
+{"date": "2026-08-25", "path": "docs/research/weekly-reset-utilization-2026-08-25/", "status": "unknown", "topic": "C — Alternative sources for weekly-limit utilization over time (esp. pre-2026-08-10)"}
+{"date": "2026-08-25", "path": "docs/research/weekly-reset-utilization-2026-08-25.md", "status": "unknown", "topic": "Weekly-reset utilization telemetry — do we have it, and what does it say?"}
+{"date": "2026-08-20", "path": "docs/research/workflows-vs-teams-2026-08-20/", "status": "unknown", "topic": "W1-VERIFY-2 — the deny control, the write-staleness guard, and the leak-remedy correction"}
+{"date": "2026-08-20", "path": "docs/research/workflows-vs-teams-2026-08-20.md", "status": "unknown", "topic": "Do Dynamic Workflows supersede the Agent-Teams implementation rule?"}
+{"date": "2026-07-26", "path": "docs/research/worktree-backlog-triage-2026-07-26.md", "status": "unknown", "topic": "Worktree Backlog Triage — 2026-07-26"}
+{"date": "2026-07-24", "path": "docs/research/worktree-wrapper-pattern-2026-07-24.md", "status": "unknown", "topic": "The per-instance worktree wrapper — provenance, mechanism, and whether it extends here"}
