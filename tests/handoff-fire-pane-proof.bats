@@ -257,7 +257,10 @@ exit 3
 SH
   chmod +x "$HOMEDIR/.claude/bin/it2"
   run pane_proof "$HOMEDIR/.claude/bin/it2" 218 __selfclose
-  [ "$status" -eq 1 ]
+  # rc 2, not 1 (amended 2026-10-01, husk panes root cause 5): a listing that FAILED is a terminal
+  # that did not answer — pane-NO-ANSWER — never evidence the pane is gone. Still non-zero: no kill.
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"!! pane-NO-ANSWER:"* ]] || false
   [[ "$output" == *"problem connecting to iTerm2"* ]] || false
   [[ "$output" == *"listing rc=3"* ]]
 }

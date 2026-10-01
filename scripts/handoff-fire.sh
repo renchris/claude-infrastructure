@@ -1835,15 +1835,74 @@ await_armed() { # $1=logfile → 0 once armed, 1 on timeout
 # kill grace = 13s worst case: an honest-but-slow probe was GUARANTEED to be read as failure,
 # with the verdict landing in the log ~1s after the foreground had already given up on it. A
 # bound that cannot fit what it bounds can only ever convict (memory: exoneration-bound-must-fit).
-await_pane_proof() { # $1=logfile → 0 pane-reachable, 1 explicitly unreachable, 2 NO verdict yet
+await_pane_proof() { # $1=logfile → 0 pane-reachable, 1 explicitly unreachable, 2 NO verdict yet, 3 the terminal did NOT answer
   local n=0 max
   max="${HANDOFF_PANE_PROOF_TICKS:-$(( ( ${HF_TIMEOUT_S:-10} + 3 + 5 ) * 5 ))}"   # bound + kill-grace + slack
   while [ "$n" -lt "$max" ]; do
     grep -q '^→ pane-reachable:'    "$1" 2>/dev/null && return 0
     grep -q '^!! pane-UNREACHABLE:' "$1" 2>/dev/null && return 1
+    grep -q '^!! pane-NO-ANSWER:'   "$1" 2>/dev/null && return 3
     /bin/sleep 0.2; n=$((n+1))
   done
   return 2
+}
+
+# ── SELF-CLOSE OVER A TERMINAL THAT IS NOT ANSWERING (husk panes 2026-09-30, root cause 5) ──────
+# kitty's remote control goes deaf for 10-60 s at a time. Between 01:40 and 02:36Z ten
+# `self-close --terminal` runs aborted on it before /exit (safe), nothing retried and nothing durable
+# recorded it, and five sessions still held the panes they meant to close. These three helpers are
+# the remedy: wait (bounded) for the terminal to answer and re-arm; record the wait in the durable
+# pane-close queue the moment it starts, so a pass that dies mid-wait still leaves a row for
+# scripts/pane-close-retry.sh; and on giving up, say so loudly and leave the row.
+# Seams: CC_SELFCLOSE_NOANSWER_WAIT_S (75 — fits the default 120 s tool call with the arm's own
+# proof window), CC_SELFCLOSE_NOANSWER_POLL_S (10), CC_SELFCLOSE_NOANSWER_ARMS (3), CC_PCQ_LIB.
+sc_pcq_load() { # → 0 when pcq_add is defined (the shared queue lib sourced)
+  command -v pcq_add >/dev/null 2>&1 && return 0
+  local c
+  for c in "${CC_PCQ_LIB:-}" "$(cd "$(dirname "$0")" 2>/dev/null && pwd)/lib/pane-close-queue.sh" \
+           "$HOME/.claude/scripts/lib/pane-close-queue.sh"; do
+    # shellcheck disable=SC1090  # runtime-resolved sibling; sourcing only defines functions
+    [ -n "$c" ] && [ -f "$c" ] && . "$c" 2>/dev/null && command -v pcq_add >/dev/null 2>&1 && return 0
+  done
+  return 1
+}
+sc_noanswer_record() { # $1=pane $2=tty $3=proof rc $4=watcher log → the row path on stdout (empty if none)
+  local ls row
+  if ! sc_pcq_load; then
+    echo "⚠ self-close: pane-close queue lib unreachable — this no-answer wait is NOT durably recorded" >&2
+    return 0
+  fi
+  ls="$(_hf_lstart "$$")"
+  pcq_add self-close "$1" sid="$(cc_sid_for_pane "$1" 2>/dev/null || true)" tty="${2:-}" \
+    reason="pane probe got no answer (proof rc $3)" rc="$3" cwd="$PWD" log="${4:-}" \
+    retrier_pid="$$" retrier_lstart="$ls" \
+    argv="$([ "${SC_TERMINAL:-0}" = 1 ] && printf -- '--terminal' || printf -- '--successor %s' "${SC_SUCCESSOR:-}")" \
+    >/dev/null 2>&1 || { echo "⚠ self-close: could not write the pane-close queue row" >&2; return 0; }
+  row="$(pcq_list 2>/dev/null | grep -F "/self-close-" | grep -F "$(printf '%s' "$1" | tr -c 'A-Za-z0-9_.:-' '_')" | head -1 || true)"
+  [ -n "$row" ] && echo "→ self-close: no-answer wait recorded durably at $row" >&2
+  printf '%s' "$row"
+}
+sc_noanswer_wait() { # $1=passes so far → 0 the terminal answers again (re-arm) · 1 give up
+  local max="${CC_SELFCLOSE_NOANSWER_ARMS:-3}" wait="${CC_SELFCLOSE_NOANSWER_WAIT_S:-75}" poll="${CC_SELFCLOSE_NOANSWER_POLL_S:-10}" t=0 out
+  case "$max$wait$poll" in *[!0-9]*) max=3 wait=75 poll=10 ;; esac
+  [ "$1" -lt "$max" ] || return 1
+  echo "→ self-close: the terminal did not answer the pane probe — waiting up to ${wait}s for it to answer before re-arming (nothing typed)" >&2
+  while [ "$t" -lt "$wait" ]; do
+    /bin/sleep "$poll"; t=$((t + poll))
+    if out="$(hf_bounded "$HOME/.claude/bin/it2" session list --json 2>/dev/null)" && [ -n "$out" ]; then return 0; fi
+  done
+  return 1
+}
+sc_noanswer_giveup() { # $1=pane $2=proof rc $3=watcher log $4=queue row → always 0; the caller exits 1
+  echo "!! self-close ABORTED: the terminal never answered the pane probe for $1 (proof rc $2; last log $3) across ${SC_ARM:-1} pass(es) — a deaf terminal, NOT a missing pane. /exit NOT typed, session stays alive. ${4:+A durable retry row is at $4; }re-run 'self-close' once the terminal answers." >&2
+  hf_alarm selfclose-no-answer "$1" "$(cc_sid_for_pane "$1" 2>/dev/null || true)" "${SC_SUCCESSOR:-}" "HANDOFF-SELFCLOSE-NO-ANSWER: self-close of pane $1 aborted before /exit because the terminal's remote control never answered (proof rc $2, ${SC_ARM:-1} pass(es)). The session is ALIVE and still holds its pane; it meant to close. Re-run its self-close once the terminal answers. ${4:+Queue row: $4.}" || true
+  return 0
+}
+sc_noanswer_clear() { # $1=queue row → the wait ended in a proven arm; the row is spent
+  [ -n "${1:-}" ] || return 0
+  if sc_pcq_load && command -v pcq_remove >/dev/null 2>&1; then pcq_remove "$1" >/dev/null 2>&1 || true
+  else rm -f "$1" 2>/dev/null || true; fi
+  return 0
 }
 
 # Hand the FOREGROUND-verified terminal verdict down to the detached watcher.
@@ -3354,6 +3413,18 @@ pane_proof() { # $1=it2 shim  $2=pane id  $3=label → 0 reachable, 1 unreachabl
   if grep -qxF -e "$pane" <<<"$ids"; then
     echo "→ pane-reachable: $pane enumerated by '$it2 session list --json' (shape=$shape, CC_TERM=${CC_TERM:-unset})"
     return 0
+  fi
+  # A LISTING THAT FAILED IS NOT AN ANSWER (husk panes 2026-09-30, root cause 5). kitty's remote
+  # control stops accepting connections for 10-60 s at a time; every call in such an episode dies
+  # on the bound (rc 124) with nothing enumerated, and this function used to read that as "pane
+  # UNREACHABLE". Between 01:40 and 02:36Z ten `self-close --terminal` runs aborted on it, and five
+  # sessions still held the panes they meant to close, because "absent" is terminal and nothing
+  # retries a terminal verdict. A non-zero listing that does not name the pane is a terminal that
+  # did not answer: its own marker, its own rc, so the caller can wait and ask again instead of
+  # giving up. Still fail-closed — rc 2 kills nothing, exactly like rc 1.
+  if [ "$rc" != 0 ]; then
+    echo "!! pane-NO-ANSWER: $label — '$it2 session list --json' failed (rc=$rc in ${dt}s, shape=$shape, ids=$n, CC_TERM=${CC_TERM:-unset}) without naming pane $pane. A failed listing is a terminal that did not answer, NOT evidence the pane is gone (rc 124 is the bound firing). Nothing is killed; ask again once the terminal answers."
+    return 2
   fi
   echo "!! pane-UNREACHABLE: $label — pane $pane is NOT among the $n id(s) '$it2 session list --json' enumerated (rc=$rc shape=$shape CC_TERM=${CC_TERM:-unset}). Every write to it would fail, so the predecessor is NOT being killed."
   [ "$shape" = RENDERED-TABLE ] && echo "   ↳ the listing came back as a RENDERED TABLE, whose Session ID column is ellipsis-truncated — NO id can match it at any width, so this verdict is an artefact of the FORMAT, not evidence about the pane. '$it2' did not honour --json."
@@ -8264,6 +8335,16 @@ if [ "${1:-}" = "__selfclose" ]; then
   # page rides along best-effort), never a silent husk.
   _close_ok=0
   for _try in 1 2 3 4; do
+    # CLOSED FROM INSIDE IS CLOSED (husk panes 2026-09-30, fix F-a). bin/cc-pane-runner now exits
+    # its pane when claude exits 0 with no recycle pending, so by the time this loop runs the window
+    # this /exit belonged to may already be gone. Closing a pane that no longer exists fails every
+    # attempt, and the arm below would then page close-failed-unknown over a close that SUCCEEDED.
+    # Only a POSITIVE absence counts (pane_enumerated: a listing that answered and named other
+    # panes); `unknown` falls through to the ordinary close attempt.
+    if [ "$(pane_enumerated "$HOME/.claude/bin/it2" "$SID")" = absent ]; then
+      echo "→ pane $SID is already gone (closed from inside when claude exited) — nothing to close"
+      _close_ok=1; break
+    fi
     # mode=self: the pane IS the caller. The ownership guard is deliberately NOT applied — a
     # session retiring itself is always authorized, and an operator's own pane carries no
     # fired-peer marker, so guarding here would retire the common case rather than the hazard.
@@ -11009,6 +11090,17 @@ MSG
     detach "$SC_LOG" "$0" __selfclose "$SC_SID" "$SC_TTY" "$SC_SUCCESSOR" "$SUC_TTY" "$SUC_PIN" >/dev/null
   else
     pin_term_verdict_for_watcher
+    # THE ARM IS RETRIED WHILE THE TERMINAL IS NOT ANSWERING (husk panes 2026-09-30, root cause 5).
+    # Each pass detaches a fresh watcher into a fresh log (await_pane_proof greps the log, so a
+    # reused one would re-read the previous pass's verdict). Only rc 3 (the listing FAILED — the
+    # terminal did not answer) and rc 2 (no verdict at all) are retried, and only after the terminal
+    # answers a probe again; rc 1 (it answered and the pane is not there) stays terminal. Every pass
+    # that fails kills its watcher before the next one, and nothing is typed until a pass proves
+    # the pane, so the retry can only cost time — see sc_noanswer_wait.
+    SC_ARM=0 SC_LOG0="$SC_LOG" SC_PCQ_ROW=""
+    while :; do
+    SC_ARM=$((SC_ARM + 1))
+    [ "$SC_ARM" -gt 1 ] && SC_LOG="$SC_LOG0.arm$SC_ARM"
     SC_WATCHER="$(detach "$SC_LOG" "$0" __selfclose "$SC_SID" "$SC_TTY" "$SC_SUCCESSOR" "$SUC_TTY" "$SUC_PIN")"
     if ! await_armed "$SC_LOG"; then
       kill "$SC_WATCHER" 2>/dev/null || true
@@ -11020,15 +11112,28 @@ MSG
     # probe has not answered" send an investigator to different places, and folding them is what
     # made this failure unreadable twice (item 191d1fc4143c).
     SC_PP=0; await_pane_proof "$SC_LOG" || SC_PP=$?
+    [ "$SC_PP" = 0 ] && break
+    kill "$SC_WATCHER" 2>/dev/null || true
+    if [ "$SC_PP" = 2 ] || [ "$SC_PP" = 3 ]; then
+      [ -n "$SC_PCQ_ROW" ] || SC_PCQ_ROW="$(sc_noanswer_record "$SC_SID" "$SC_TTY" "$SC_PP" "$SC_LOG")"
+      if sc_noanswer_wait "$SC_ARM"; then
+        echo "→ self-close: the terminal answers again — re-arming (pass $((SC_ARM + 1)))" >&2
+        continue
+      fi
+    fi
     if [ "$SC_PP" != 0 ]; then
-      kill "$SC_WATCHER" 2>/dev/null || true
       if [ "$SC_PP" = 2 ]; then
-        echo "!! self-close ABORTED: the watcher returned NO pane verdict for $SC_SID inside the window — it neither reached the pane nor said it could not. That is a STALLED probe, not a refused one; $SC_LOG names the transport it selected. /exit NOT typed, session stays alive" >&2
+        echo "!! self-close: the watcher returned NO pane verdict for $SC_SID inside the window — it neither reached the pane nor said it could not. That is a STALLED probe, not a refused one; $SC_LOG names the transport it selected." >&2
+        sc_noanswer_giveup "$SC_SID" "$SC_PP" "$SC_LOG" "$SC_PCQ_ROW"
+      elif [ "$SC_PP" = 3 ]; then
+        sc_noanswer_giveup "$SC_SID" "$SC_PP" "$SC_LOG" "$SC_PCQ_ROW"
       else
         echo "!! self-close ABORTED: the watcher cannot write pane $SC_SID (see $SC_LOG) — /exit NOT typed, session stays alive" >&2
       fi
       exit 1
     fi
+    done
+    sc_noanswer_clear "$SC_PCQ_ROW"
     echo "→ self-close armed for $SC_SID: watcher pid $SC_WATCHER session-detached, heartbeat verified (log: $SC_LOG)"
     [ -n "$SC_SUCCESSOR" ] && echo "→ post-close: operator focus hands to successor $SC_SUCCESSOR" || echo "→ post-close: terminal (nothing continues this session's work)"
     # Teardown marker BEFORE the first /exit — the crash watchdog must read a planned self-close,
@@ -15226,9 +15331,12 @@ recycle_fire() {
     hf_recycle_disarm
     case "$RCY_PP" in
       1) emit_recycle_event recycle-refused-unreachable "" "$SID" "the watcher's pane probe answered: pane not enumerated (see $log)" || true ;;
+      3) emit_recycle_event recycle-held-unreachable "" "$SID" "the watcher's pane probe got NO ANSWER from the terminal (failed listing) — not evidence the pane is gone (see $log)" || true ;;
       *) emit_recycle_event recycle-held-unreachable "" "$SID" "the watcher returned no pane verdict inside the window (stalled probe; see $log)" || true ;;
     esac
-    if [ "$RCY_PP" = 2 ]; then
+    if [ "$RCY_PP" = 3 ]; then
+      echo "!! recycle ABORTED: the terminal did not answer the watcher's pane probe for $SID (a failed listing, typically the 10 s bound firing while kitty's socket is stalled) — that is NOT a missing pane. /exit NOT typed, session stays alive. Re-run once the terminal answers: $CMD" >&2
+    elif [ "$RCY_PP" = 2 ]; then
       echo "!! recycle ABORTED: the watcher returned NO pane verdict for $SID inside the window — it neither reached the pane nor said it could not. That is a STALLED probe, not a refused one; $log names the transport it selected. /exit NOT typed, session stays alive. Run manually: $CMD" >&2
     else
       echo "!! recycle ABORTED: the watcher cannot write pane $SID (see $log) — /exit NOT typed, session stays alive. Run manually: $CMD" >&2
