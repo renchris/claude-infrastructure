@@ -362,7 +362,14 @@ esac
 # A bare argument. `⌗117` / `#117` are what the statusline renders, so they are accepted verbatim —
 # an identifier a tool PRINTS must be one it ACCEPTS (the D8 lesson from lr-fleet's own --one).
 ARG="${1#⌗}"; ARG="${ARG#\#}"
+# AN ALL-DIGIT SID8 IS STILL A SID8 (2026-10-01). A sid is hex, so about 1 in 20 sid8s is all
+# digits — `68691067` was one — and this case used to send it to pane_resolve and stop, so
+# `cc-lr recover 68691067` said "matched no live session" for a live, limited pane. A pane id that
+# names no registry file is retried as a sid prefix, but only at sid8 length or longer: a short
+# number is a pane id the operator mistyped, never a prefix that should match some session.
 case "$ARG" in
   ''|*[!0-9]*) sid_resolve "$ARG"; exit $? ;;
-  *)           pane_resolve "$ARG"; exit $? ;;
+  *)           pane_resolve "$ARG" && exit 0
+               [ "${#ARG}" -ge 8 ] || exit 1
+               sid_resolve "$ARG"; exit $? ;;
 esac

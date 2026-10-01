@@ -145,6 +145,22 @@ forkbin() { # <tool> — a PATH shim that counts calls and execs the real one
   [ "$(col "$output" 2)" = "122" ]
 }
 
+@test "an ALL-DIGIT sid8 resolves as a sid, not as a missing pane id" {
+  local D="68691067-162c-4000-8000-000000000006"
+  reg 16 "$D" claude-secondary; plain_tx "$SEC" "$D"; tel_row "$D" "$SEC" high 30
+  run bash "$FIND" "${D:0:8}"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(col "$output" 1)" = "$D" ]
+  [ "$(col "$output" 2)" = "16" ]
+}
+@test "CONTROL: a short number that names no pane is rc 1, never a sid-prefix match" {
+  local D="12345678-162c-4000-8000-000000000007"
+  reg 16 "$D" claude-secondary; plain_tx "$SEC" "$D"; tel_row "$D" "$SEC" high 30
+  run bash "$FIND" 12
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [ -z "$output" ] || { echo "$output"; false; }
+}
+
 @test "the mark the statusline renders is accepted as part of the pane id" {
   reg 117 "$A" claude-secondary; plain_tx "$SEC" "$A"; tel_row "$A" "$SEC" xhigh 45
   run bash "$FIND" '#117'
