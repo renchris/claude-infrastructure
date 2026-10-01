@@ -25,6 +25,7 @@ setup() {
   CFG="$BATS_TEST_TMPDIR/cfg"; TEAMD="$CFG/teams/session-aaaa1111"; mkdir -p "$TEAMD/inboxes"
   STUBS="$BATS_TEST_TMPDIR/stubs"; mkdir -p "$STUBS"
   # it2: `session list` prints the ids in panes.txt; every other call is RECORDED, never run.
+  # shellcheck disable=SC2016  # the stub's own $1/$2 must stay literal
   printf '#!/bin/bash\nif [ "$1 $2" = "session list" ]; then cat %s/panes.txt; exit 0; fi\necho "$*" >> %s/it2.log\n' \
     "$BATS_TEST_TMPDIR" "$BATS_TEST_TMPDIR" > "$STUBS/it2"; chmod +x "$STUBS/it2"
   printf '545\n579\n' > "$BATS_TEST_TMPDIR/panes.txt"
@@ -117,7 +118,7 @@ await_args() { local i=0; while [ ! -s "$BATS_TEST_TMPDIR/closer.args" ] && [ "$
   hook_env
   ITERM_SESSION_ID=w0t0p0:545 SE_TEAMMATE_ARGV="/x/claude --resume s1 --agent-id m@session-aaaa1111 --agent-name m" end_hook
   await_args
-  [ "$(cat "$BATS_TEST_TMPDIR/closer.args" 2>/dev/null)" = "--cfg $CFG --team session-aaaa1111 --name m --agent-id m@session-aaaa1111" ] \
+  [ "$(cat "$BATS_TEST_TMPDIR/closer.args" 2>/dev/null)" = "--cfg $CFG --team session-aaaa1111 --name m --agent-id m@session-aaaa1111 --pane 545" ] \
     || { cat "$BATS_TEST_TMPDIR/closer.args" 2>/dev/null; false; }
 }
 

@@ -22,16 +22,30 @@
 #      and that pane is still listed by `it2 session list`.
 # Anything else logs one line and closes nothing.
 #
-# Usage: teammate-orphan-pane-close.sh --cfg DIR --team T --name N --agent-id ID
+# THE PANE, when the approval cannot name it (2026-09-30, husk panes root cause 4). The vendor has
+# written `[invalid id]` as the approval's paneId (census panes 57, 60), so the close had nowhere to
+# go. --pane is the member's own pane as its SessionEnd measured it (KITTY_WINDOW_ID / the it2 tail):
+# used only when the approval's paneId is empty or unusable, and an approval with NO backendType is
+# then driven through the it2 shim (which routes to kitty here). Every other gate still applies.
+#
+# A CLOSE THAT FAILS IS NOT FORGOTTEN (F-b). A close that fails or times out, and a pane listing that
+# fails rather than answering, writes a row to the shared pane-close queue
+# (`pcq_add teammate <pane> …`) so a retrier can act once `kitty @ ls` answers. rc 124 on the close
+# means "may still execute": it is queued, never retried inline. No queue lib ⇒ the log says NOT
+# queued; never silent, never fatal.
+#
+# Usage: teammate-orphan-pane-close.sh --cfg DIR --team T --name N --agent-id ID [--pane P]
 # Seams: TOPC_GRACE_S (20) · TOPC_WINDOW_S (300) · TOPC_NOW (epoch) · TOPC_IT2 · TOPC_REG_DIR · TOPC_PS_SNAPSHOT
-#        (file of `ps -axww -o args=` lines) · TOPC_LOG. Kill switch: CC_TEAMMATE_ORPHAN_CLOSE=off.
+#        (file of `ps -axww -o args=` lines) · TOPC_LOG · CC_PCQ_LIB (the queue lib). Kill switch:
+#        CC_TEAMMATE_ORPHAN_CLOSE=off.
 # bash 3.2 (a detached child of a hook runs /bin/bash semantics): no arrays of maps, no ${x,,}.
 set -uo pipefail
 export PATH="$PATH:$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin"
 
-CFG="" TEAM="" NAME="" AID=""
+CFG="" TEAM="" NAME="" AID="" ARG_PANE=""
 while [ $# -gt 0 ]; do
   case "$1" in
+    --pane)     [ $# -ge 2 ] || exit 3; ARG_PANE="$2"; shift 2 ;;
     --cfg)      [ $# -ge 2 ] || exit 3; CFG="$2"; shift 2 ;;
     --team)     [ $# -ge 2 ] || exit 3; TEAM="$2"; shift 2 ;;
     --name)     [ $# -ge 2 ] || exit 3; NAME="$2"; shift 2 ;;
@@ -65,8 +79,27 @@ age="$(printf '%s' "$appr" | jq -r '.age | floor')"
 if [ "$age" -lt 0 ] || [ "$age" -gt "${TOPC_WINDOW_S:-300}" ]; then say "approval is ${age}s old (window ${TOPC_WINDOW_S:-300}s) - not this exit's; nothing closed"; exit 0; fi
 [ "$(printf '%s' "$appr" | jq -r '.read')" = true ] && { say "the lead READ the approval - the close is the lead's; nothing closed"; exit 0; }
 pane="$(printf '%s' "$appr" | jq -r '.paneId')"; backend="$(printf '%s' "$appr" | jq -r '.backendType')"
-case "$pane" in ''|*[!A-Za-z0-9_:%.-]*) say "approval names no usable pane ('$pane') - nothing closed"; exit 0 ;; esac
+usable_pane() { case "$1" in ''|*[!A-Za-z0-9_:%.-]*) return 1 ;; esac; return 0; }
+if ! usable_pane "$pane"; then
+  usable_pane "$ARG_PANE" || { say "approval names no usable pane ('$pane') and --pane gives none ('$ARG_PANE') - nothing closed"; exit 0; }
+  say "approval names no usable pane ('$pane') - using the member's own pane $ARG_PANE"
+  pane="$ARG_PANE"
+fi
+# A missing backendType with a measured --pane is this box's own spawn: drive it through the it2 shim.
+[ -z "$backend" ] && [ -n "$ARG_PANE" ] && backend=iterm2
 [ "$backend" = iterm2 ] || { say "backend '$backend' for pane $pane is not driven here - nothing closed"; exit 0; }
+
+# queue_failed <reason> <rc> — hand an unfinished close to the shared pane-close queue.
+queue_failed() {
+  local lib="${CC_PCQ_LIB:-$HOME/.claude/scripts/lib/pane-close-queue.sh}"
+  # shellcheck disable=SC1090  # runtime-resolved library
+  if [ -f "$lib" ] && . "$lib" 2>/dev/null && command -v pcq_add >/dev/null 2>&1 \
+     && pcq_add teammate "$pane" agent_id="$AID" team="$TEAM" reason="$1" rc="$2"; then
+    say "queued pane $pane for retry (reason=$1 rc=$2)"
+  else
+    say "pane $pane NOT queued for retry (reason=$1 rc=$2; queue lib $lib unusable) - it stays open until a person closes it"
+  fi
+}
 
 # 3. The member is gone — decided by IDENTITY, never by argv text. A `--agent-id ID` substring is
 #    forgeable by any session whose brief QUOTES it (measured: the session that wrote this file
@@ -89,12 +122,20 @@ fi
 
 IT2="${TOPC_IT2:-$HOME/.claude/bin/it2}"
 [ -x "$IT2" ] || { say "it2 unreachable at $IT2 - pane $pane left open"; exit 0; }
-listing="$("$IT2" session list 2>/dev/null)" || { say "it2 session list failed - pane $pane left open (unknown is not absent)"; exit 0; }
+# Only an ANSWERED listing that lacks the pane means gone. A listing that failed or timed out is
+# UNKNOWN, and unknown is queued: reading it as absent is how a live husk got forgotten.
+lrc=0; listing="$("$IT2" session list 2>/dev/null)" || lrc=$?
+if [ "$lrc" -ne 0 ]; then
+  say "it2 session list failed (rc=$lrc) - pane $pane left open (unknown is not absent)"
+  queue_failed orphan-close-unknown "$lrc"; exit 0
+fi
 case $'\n'"$listing"$'\n' in *$'\n'"$pane"$'\n'*) ;; *) say "pane $pane is already gone - nothing to close"; exit 0 ;; esac
 
-if err="$("$IT2" session close -f -s "$pane" 2>&1)"; then
+crc=0; err="$("$IT2" session close -f -s "$pane" 2>&1)" || crc=$?
+if [ "$crc" -eq 0 ]; then
   say "✓ closed pane $pane: $NAME approved a shutdown the lead never read (a resumed lead cannot close its members' panes)"
 else
-  say "✗ close of pane $pane FAILED: $(printf '%s' "$err" | tr '\n' ' ' | cut -c1-240)"
+  say "✗ close of pane $pane FAILED (rc=$crc): $(printf '%s' "$err" | tr '\n' ' ' | cut -c1-240)"
+  queue_failed orphan-close-failed "$crc"
 fi
 exit 0

@@ -58,17 +58,42 @@ if [ "${CC_TEAMMATE_ORPHAN_CLOSE:-on}" != off ] && command -v jq >/dev/null 2>&1
       [ -n "$_se_member" ] && { _se_team="$(basename "$(dirname "$_se_tc")")"; break; }
     done
   fi
+  _se_tm_argv="${SE_TEAMMATE_ARGV:-}"
+  if [ -n "$_se_pane" ] && [ -z "$_se_tm_argv" ]; then
+    _se_p=$PPID _se_i=0
+    while [ "$_se_i" -lt 5 ] && [ -n "$_se_p" ] && [ "$_se_p" -gt 1 ] 2>/dev/null; do
+      _se_a="$(ps -o args= -p "$_se_p" 2>/dev/null || true)"
+      case "${_se_a%% *}" in */claude|*/claude.exe|claude|claude.exe) _se_tm_argv="$_se_a"; break ;; esac
+      _se_p="$(ps -o ppid= -p "$_se_p" 2>/dev/null | tr -d ' ')"; _se_i=$((_se_i + 1))
+    done
+  fi
+  # FALLBACK — the member's OWN process, when config.json has already forgotten it (2026-09-30, husk
+  # panes root cause 4). By the time a member's SessionEnd runs the vendor has removed the approved
+  # member from config.json (and has recorded panes 57/60 as `[invalid id]`), so the lookup above
+  # found nothing on every census pane and no closer was ever detached. The dying claude ancestor
+  # still carries what the vendor spawned it with. It qualifies only as hooks/lib/agent-identity.sh
+  # agent_assignee_argv qualifies a process: argv[0] is claude, the three flags appear as FLAG PAIRS,
+  # and the record agrees with itself (`--agent-id N@T` with `--agent-name N --team-name T`), which
+  # quoted prose does not reproduce by accident. That function walks a ps table from a pid; this
+  # hook already holds the one argv (or the SE_TEAMMATE_ARGV seam), so the same rule is applied to it.
+  if [ -z "$_se_member" ] && [ -n "$_se_pane" ] && [ -n "$_se_tm_argv" ]; then
+    _se_member="$(printf '%s\n' "$_se_tm_argv" | awk '
+      $1 !~ /(^|\/)claude(\.exe)?$/ { exit 1 }
+      { id = ""; nm = ""; tm = ""
+        for (i = 2; i < NF; i++) {
+          if ($i == "--agent-id"   && id == "") id = $(i + 1)
+          if ($i == "--agent-name" && nm == "") nm = $(i + 1)
+          if ($i == "--team-name"  && tm == "") tm = $(i + 1)
+        }
+        if (nm == "" || nm == "team-lead" || tm == "" || id != nm "@" tm) exit 1
+        printf "%s\t%s\t%s\n", id, nm, tm; exit 0 }' 2>/dev/null)" || _se_member=""
+    case "$_se_member" in
+      *[!A-Za-z0-9_.@$'\t'-]*) _se_member="" ;;
+      ?*) _se_team="${_se_member##*$'\t'}"; _se_member="${_se_member%$'\t'*}" ;;
+    esac
+  fi
   if [ -n "$_se_member" ]; then
     _se_aid="${_se_member%%$'\t'*}"; _se_name="${_se_member#*$'\t'}"
-    _se_tm_argv="${SE_TEAMMATE_ARGV:-}"
-    if [ -z "$_se_tm_argv" ]; then
-      _se_p=$PPID _se_i=0
-      while [ "$_se_i" -lt 5 ] && [ -n "$_se_p" ] && [ "$_se_p" -gt 1 ] 2>/dev/null; do
-        _se_a="$(ps -o args= -p "$_se_p" 2>/dev/null || true)"
-        case "${_se_a%% *}" in */claude|*/claude.exe|claude|claude.exe) _se_tm_argv="$_se_a"; break ;; esac
-        _se_p="$(ps -o ppid= -p "$_se_p" 2>/dev/null | tr -d ' ')"; _se_i=$((_se_i + 1))
-      done
-    fi
     _se_closer="${SE_TOPC_BIN:-$HOME/.claude/scripts/teammate-orphan-pane-close.sh}"
     _se_detach="${SE_DETACH_LIB:-$HOME/.claude/scripts/lib/detach.sh}"
     case " $_se_tm_argv " in
@@ -81,7 +106,7 @@ if [ "${CC_TEAMMATE_ORPHAN_CLOSE:-on}" != off ] && command -v jq >/dev/null 2>&1
           fi
           # shellcheck disable=SC1090  # runtime-resolved library
           ( . "$_se_detach" && detach "${SE_TOPC_LOG:-/dev/null}" env ${_se_term:+CC_TERM="$_se_term"} \
-              bash "$_se_closer" --cfg "$_se_cfg" --team "$_se_team" --name "$_se_name" --agent-id "$_se_aid" ) >/dev/null 2>&1 || true
+              bash "$_se_closer" --cfg "$_se_cfg" --team "$_se_team" --name "$_se_name" --agent-id "$_se_aid" --pane "$_se_pane" ) >/dev/null 2>&1 || true
         fi ;;
     esac
   fi
