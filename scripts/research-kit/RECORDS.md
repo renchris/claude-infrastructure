@@ -53,8 +53,10 @@ failed, 2 usage or refusal, 3 a dead vendor lane, 4 a voided slot. Python is 3.9
 - `courier.sh bundle --round K` → builds `<sealed>/rounds/K/bundle/`, prints `<path> <sha256 of manifest>`.
 - `courier.sh run --round K --pid P --vendor V --strategy S --role reviewer|rater|verifier --brief F` → panel json
   + raw; exit 3 on a missing or failing CLI (dead slot), 4 on an integrity hit or model-id mismatch (void slot).
-- `courier.sh integrity --round K` → greps every raw output for the real program path and the vault path.
-- Vendor binaries resolve by absolute path; tests override with `CC_RESEARCH_BIN_ANTHROPIC|OPENAI|GOOGLE`.
+- `courier.sh integrity --round K` → greps every raw output for the real records path, the deliverable repo path and
+  the vault path (`<sealed>/vault`); a hit voids that slot.
+- Vendor binaries resolve by absolute path through the interactive shell (Anthropic: the newest versioned binary the
+  `claude` launcher names); tests override with `CC_RESEARCH_BIN_ANTHROPIC|OPENAI|GOOGLE`.
 - `round.sh --kind frame-critique|certification|delta --round K` → refuses past `kit.r_max` (+1 only with a VALID
   `extra-round` signature), refuses a third frame-critique round; writes `rounds/K/matrix.json`. Tests override the
   courier with `CC_RESEARCH_COURIER`.
