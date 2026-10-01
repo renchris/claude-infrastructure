@@ -420,3 +420,50 @@ def conviction(decision: Dict[str, Any], premises: Dict[str, Dict[str, Any]],
     if ok == len(ids) and flip_negative:
         return 90
     return (89 * ok) // len(ids)
+
+
+# ── 6. sealed-at-rest encryption (seed vault §3.9; sealed router held-out set, §10 item 13) ─────
+# Same-uid processes can still read the keychain, so this is detection-grade isolation, never
+# prevention (§3.8, §7). /usr/bin/openssl (LibreSSL) is used because launchd resolves it.
+
+OPENSSL = "/usr/bin/openssl"
+_ENC = ("enc", "-aes-256-cbc", "-pbkdf2", "-iter", "200000", "-salt", "-a")
+
+
+def vault_key(item: str, account: str, create: bool = False) -> str:
+    """The key for keychain item <item>/<account>; env CC_RESEARCH_VAULT_KEY overrides (tests)."""
+    import secrets
+    import subprocess
+    env = os.environ.get("CC_RESEARCH_VAULT_KEY")
+    if env:
+        return env
+    out = subprocess.run(("/usr/bin/security", "find-generic-password", "-s", item, "-a", account,
+                          "-w"), capture_output=True, text=True)
+    if out.returncode == 0 and out.stdout.strip():
+        return out.stdout.strip()
+    if not create:
+        raise KitError(f"no keychain item {item}/{account}; nothing sealed under it can be read")
+    key = secrets.token_hex(32)
+    add = subprocess.run(("/usr/bin/security", "add-generic-password", "-s", item, "-a", account,
+                          "-w", key), capture_output=True, text=True)
+    if add.returncode != 0:
+        raise KitError(f"cannot create keychain item {item}/{account}: {add.stderr.strip()}")
+    return key
+
+
+def encrypt(plaintext: bytes, key: str) -> bytes:
+    import subprocess
+    out = subprocess.run((OPENSSL,) + _ENC + ("-pass", "env:CC_KIT_K"), input=plaintext,
+                         capture_output=True, env=dict(os.environ, CC_KIT_K=key))
+    if out.returncode != 0:
+        raise KitError(f"encrypt failed: {out.stderr.decode(errors='replace').strip()}")
+    return out.stdout
+
+
+def decrypt(ciphertext: bytes, key: str) -> bytes:
+    import subprocess
+    out = subprocess.run((OPENSSL,) + _ENC + ("-d", "-pass", "env:CC_KIT_K"), input=ciphertext,
+                         capture_output=True, env=dict(os.environ, CC_KIT_K=key))
+    if out.returncode != 0:
+        raise KitError("decrypt failed: wrong key or corrupted vault")
+    return out.stdout
