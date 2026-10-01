@@ -1028,6 +1028,39 @@ if printf '%s' "$MSG_UNQ" | grep -iqE "$CA_OFFER"; then
   ca_rest="$(printf '%s' "$MSG_UNQ" | grep -ivE "$CA_OFFER" || true)"
   printf '%s' "$ca_rest" | grep -iqE "$CA_WORKLEFT" && d4=1
 fi
+# ACTIVE RESEARCH PROGRAM EXEMPTION (operator ruling 2026-10-01, packet 83adb541ea19; REPORT.md
+#   §3.1 ruling 2 in docs/research/upfront-research-exhaustion-2026-09-30/). Inside a program, a
+#   refinement is FILED to the apply-at-build list and the certificate's named residuals are not
+#   open work, so a close that names them is relaying the program's state, not offering drivable
+#   work — the "answer is always yes" premise of D4 is exactly the loop that ruling stops. Keyed on
+#   the program REGISTRY resolved from the hook's cwd (scripts/lib/research-program.sh), never on a
+#   DoD marker no step writes. Only D4 is exempted: the ledger, hedge, handoff, fence, placeholder,
+#   shape and act arms are facts about this session's own state and still bind. No registry, an
+#   unparseable one, or a closed program ⇒ not active ⇒ D4 stays exactly as strict as before.
+_ca_rp_exempt=""
+_ca_rp_active() {   # rc 0 ⇒ $1 resolves to an ACTIVE program; _RP_RESULT = "<slug> <state>"
+  local lib t
+  if [ -n "${CC_RESEARCH_PROGRAM_LIB:-}" ]; then
+    lib="$CC_RESEARCH_PROGRAM_LIB"   # hard override, same reason as AGENT_IDENTITY_LIB above
+  else
+    # The lib is per-file symlinked into ~/.claude/scripts/lib only once install.sh runs, so follow
+    # this hook's own symlink into the checkout first (the idl-log.sh resolution above, same cause).
+    t="$0"; [ -L "$t" ] && t="$(readlink "$t")"
+    lib="$(cd "$(dirname "$t")/.." 2>/dev/null && pwd)/scripts/lib/research-program.sh"
+    [ -f "$lib" ] || lib="$_cascd/../scripts/lib/research-program.sh"
+    [ -f "$lib" ] || lib="$HOME/.claude/scripts/lib/research-program.sh"
+  fi
+  [ -f "$lib" ] || return 1
+  # shellcheck source=../scripts/lib/research-program.sh
+  # shellcheck disable=SC1091
+  . "$lib" 2>/dev/null || return 1
+  # stderr dropped: a Stop hook's stderr is operator-visible noise, and "no registry" already
+  # resolves to the strict side here.
+  rp_is_active "$1" 2>/dev/null
+}
+if [ "$d4" -eq 1 ] && [ -n "$CWD" ] && _ca_rp_active "$CWD"; then
+  d4=0; _ca_rp_exempt="${_RP_RESULT:-active}"
+fi
 
 # D5 — a command offered for copy-paste that STILL CONTAINS A PLACEHOLDER.
 #   Found the only way it gets found: the operator pasted one and their shell answered
@@ -1216,7 +1249,7 @@ fi
 # the next person debugging a missed conviction cannot tell which happened.
 [ "$contra" -eq 1 ] || [ "$d1" -eq 1 ] || [ "$d2" -eq 1 ] || [ "$d3" -eq 1 ] || [ "$d4" -eq 1 ] \
   || [ "$d5" -eq 1 ] || [ "$d6" -eq 1 ] || [ "$d7" -eq 1 ] \
-  || abstain "ledger-clean${_ca_exon:+:exonerated:${_ca_exon% }}"
+  || abstain "ledger-clean${_ca_exon:+:exonerated:${_ca_exon% }}${_ca_rp_exempt:+:research-program-exempt:${_ca_rp_exempt%% *}}"
 
 # ── Latch-set + hard cap, PER CLASS (RED-proofed L + C). ──
 mkdir -p "$STATE_DIR" 2>/dev/null || true

@@ -77,6 +77,9 @@ setup() {
   export CONTINUE_IDL="$BATS_TEST_TMPDIR/continue-idl.jsonl"
   export CONTINUE_LOG="$BATS_TEST_TMPDIR/continue.log"
   export CC_IDL="$BATS_TEST_TMPDIR/cc-idl.jsonl"
+  # Research-program registry (D4's active-program exemption): never the operator's live
+  # ~/.claude/autonomy/research/programs.json. Absent = no program = the strict disposition.
+  export CC_RESEARCH_REGISTRY="$BATS_TEST_TMPDIR/no-programs.json"
 }
 
 # Reap the fake peers the LIVE-PEER-OWNED tests spawn. Reading the pid list from a FILE, not a
@@ -575,6 +578,42 @@ Say the word and I'll pick up either; otherwise this is a clean stopping point."
 
 Two out-of-scope items found in this worktree are now filed as backlog rows (2 counted): cc-010333-23674 and the DESIGN_GATE_V2 sequence.")" "$w" "a2-d4-ok"
   [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+# ── D4's ACTIVE RESEARCH PROGRAM exemption (REPORT.md §3.1 ruling 2; §10 open item 10). Planted
+#    input: a temp registry whose program's cwd_root is the session's worktree. The SAME close that
+#    fires D4 above abstains while the program is active, and fires again once it is closed — so
+#    the key is the registry state, not the wording. ──
+_rp_close='✅ Done — closeable. Certificate relayed: frame rows 100.00% closed, everything landed.
+
+Remaining residuals the certificate names, parked for the next version:
+- R-4 tenant-side latency check, owner build wave 2.
+- Two parked ideas in the apply-at-build list.
+
+Say the word and I'\''ll pick up either; otherwise this is a clean stopping point.'
+_rp_reg() { # <state> <root>
+  jq -n --arg st "$1" --arg r "$2" \
+    '{programs:[{slug:"pilot",aliases:["the pilot"],cwd_roots:[$r],state:$st}]}' > "$CC_RESEARCH_REGISTRY"
+}
+@test "D4 abstains inside an ACTIVE research program (registry cwd_root contains the cwd)" {
+  local w; w="$(mkrepo_landed rpact)"
+  _rp_reg certifying "$w"
+  run run_ca "$(mkfix "$_rp_close")" "$w" "rp-act"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q 'research-program-exempt:pilot' "$COMPLETION_IDL"
+}
+@test "D4 still fires when the registry's program is CLOSED, or the cwd is outside it, or there is no registry" {
+  local w; w="$(mkrepo_landed rpclosed)"
+  _rp_reg closed "$w"
+  run run_ca "$(mkfix "$_rp_close")" "$w" "rp-closed"
+  fired "$output"
+  _rp_reg certified "$BATS_TEST_TMPDIR/some-other-program"
+  run run_ca "$(mkfix "$_rp_close")" "$w" "rp-outside"
+  fired "$output"
+  rm -f "$CC_RESEARCH_REGISTRY"
+  run run_ca "$(mkfix "$_rp_close")" "$w" "rp-none"
+  fired "$output"
+  [ "$(grep -c '"arm":"offer"' "$COMPLETION_IDL")" -eq 3 ]
 }
 
 # ── Predicate (b) is what stops D4 firing on ordinary sign-off politeness: an offer phrase with
