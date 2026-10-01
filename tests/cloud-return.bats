@@ -923,7 +923,11 @@ EOF
   # gate reads the clock where the old always-run-one clause did not, so a budget smaller than the
   # pass's own fixed cost (one `cc-cloud list --state`, one `poll`) made admission a coin flip —
   # observed failing 1 run in 2. 6 s leaves the fixed cost room and still cannot fit a second unit.
-  CC_RETURN_RECONCILE_BIN="$STUBDIR/slow-reconcile.sh" CC_RETURN_BOUND_S=6 CC_RETURN_LAND_RESERVE_S=0 \
+  # …and 6 s was still a coin flip on a loaded box: its 4 s budget was spent before the land check at
+  # load ~40 (trunkref unmoved, 1 run in 3). 60 s is safe in BOTH directions. Its 48 s budget covers
+  # the fixed cost, and a second unit still cannot fit: the loop reserves max(worst unit,
+  # UNIT_RESERVE_S = 120 s) for it, and that is larger than the whole budget.
+  CC_RETURN_RECONCILE_BIN="$STUBDIR/slow-reconcile.sh" CC_RETURN_BOUND_S=60 CC_RETURN_LAND_RESERVE_S=0 \
     run bash "$SUT" --sweep --limit 3
   [ "$status" -eq 0 ]
   # 🚨 THE LOAD-BEARING PAIR. One land was STARTED and ran to completion — trunkref carries its
