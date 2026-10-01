@@ -30,6 +30,12 @@ cls() { composer_unintended_class "$1" || printf 'DRAFT'; }
   [ "$(cls '[operator-rulingcc-lr-switchreq=abc]RuninBashnow')" = rail-prompt ]
 }
 
+@test "handoff-fire's own unsubmitted /goal arm is rail-goal; a hand-typed /goal stays a draft" {
+  [ "$(cls '/goaldocs/research/session-durability.mdlandedonorigin/main—provenbygitls-tree;donotchangecodeoutsidedocs/;fullbriefinthepromptabove,DoDatdocs/plans/kitty-deadlock-recovery-2026-10-01.md')" = rail-goal ]   # pane 41
+  [ "$(cls '/goalthetestsaregreen')" = DRAFT ]
+  [ "$(cls 'pleasereadthefullbriefinthepromptabove')" = DRAFT ]
+}
+
 @test "a submit token counts only at the END, alone or behind a paste chip" {
   [ "$(cls 'anything(submittoken:run:18e3fd78:20260927T054318Z:16ba1a46)')" = rail-token ]
   [ "$(cls '[Pastedtext#2+3lines]Z:16ba1a46)')" = rail-token ]

@@ -52,6 +52,13 @@ composer_unintended_class() { # $1=space-stripped composer content → class on 
   done <<EOF
 $COMPOSER_RAIL_MARKERS
 EOF
+  # handoff-fire --goal's own arm, typed and never submitted (pane 41, 2026-10-01: a fired session
+  # hit its weekly limit with `/goal … full brief in the prompt above, DoD at docs/plans/…` sitting
+  # in the composer, and the recovery held on it as a "draft"). The fixed clause the house --goal
+  # template ends every condition with is the signature (commands/handoff.md § Autonomous fire
+  # item 1). The condition itself is not lost by clearing it: handoff-fire's GOAL-ARM mail and
+  # ~/.claude/logs/handoffs.jsonl both carry it, and the discard log keeps this copy.
+  case "$c" in /goal*fullbriefinthepromptabove*) printf 'rail-goal'; return 0 ;; esac
   # The token must END the content: a draft that merely quotes a token (a pasted log line) keeps
   # typing after it, and the chip form admits nothing but token text between the chip and the end.
   if printf '%s' "$c" | LC_ALL=C grep -qE '\(submittoken:run:[0-9a-f]{8}:[0-9]{8}T[0-9]{6}Z:[0-9a-f]{8}\)?$' \
