@@ -43,17 +43,33 @@
 # inherited here. Measured on kitty 0.48.2 / zsh, pane 331: ITERM_SESSION_ID=w0t0p0:331 (the NEW
 # pane's own id, not the leader's), shims on PATH, --env values present.
 #
-# ── AFTER THE COMMAND, THE PANE BECOMES AN ORDINARY SHELL ────────────────────────────────────────
-# Exact parity with the pane this replaced: today's split yields an interactive shell that runs the
-# command and returns to a prompt. So do we — `exec` an interactive login shell when the command
-# returns. That also keeps every LATER `it2 session run/send` against this pane behaving as it always
-# did (there is a real prompt to type at again), which is what makes this change safe for the
+# ── AFTER THE COMMAND: A CLAUDE THAT EXITED CLEANLY CLOSES ITS PANE; ANYTHING ELSE KEEPS A SHELL ───
+# Exact parity with the pane this replaced was the original rule: today's split yields an interactive
+# shell that runs the command and returns to a prompt, so we `exec` an interactive login shell when
+# the command returns. That keeps every LATER `it2 session run/send` against this pane behaving as it
+# always did (there is a real prompt to type at again), which is what makes this safe for the
 # multi-send callers that legitimately type.
+# ONE EXCEPTION (2026-09-30, docs/research/husk-panes-2026-09-30.md root cause 2, fix F-a): when the
+# command was a CLAUDE SESSION and it exited 0, the runner exits instead and the pane closes from
+# inside. A clean exit is the intentional one — /exit, ^D, an approved teammate shutdown,
+# self-close's /exit — and the shell left behind it was a "husk": seven of 39 windows that night,
+# because the only thing that ever closed such a pane was an external kitty remote-control close,
+# and that socket was intermittently unresponsive. Three cases still keep the shell, each for a
+# reason a closed pane would destroy:
+#   · a non-zero or signal exit (143 = SIGTERM) — lead-crash-watchdog paints its resume verdict into
+#     this pane and the operator resumes HERE;
+#   · a recycle pending for this pane (lib/pane-recycle-pending.sh) — handoff-fire typed the /exit
+#     and is about to type the relaunch at this shell;
+#   · CC_PANE_CLOSE_ON_EXIT=0 — the kill switch.
 #
 # Env contract (all set by bin/it2-kitty split):
 #   CC_PANE_CMD_DIR   directory holding <pane-id>.armed / <pane-id>.cmd
 #   KITTY_WINDOW_ID   set by kitty in the new window; THIS pane's id, and the key for both files
 #   CC_PANE_CMD_WAIT_S  how long to wait for a command before giving up (default 300)
+#   CC_PANE_CLOSE_ON_EXIT  0 keeps a shell even after a clean claude exit (default 1)
+# Exported to the command: CC_PANE_RUNNER_OWNS_CLOSE=1 — this runner closes its own pane, so the
+#   opt-in close in bin/cc-close-attrib must stand down. (Not CC_PANE_RUNNER: that already carries
+#   this file's PATH into every runner pane, including the ordinary shell it degrades to.)
 
 set -u
 
@@ -77,10 +93,109 @@ _wait="${CC_PANE_CMD_WAIT_S:-300}"
 #
 # Best-effort and unconditional: a pane degrading to a shell has no further use for the marker, and
 # a failure to remove it must never keep this pane from becoming the shell it promised to be.
+# The ownership marker goes too: once this file has exec'd away the pane is an ordinary shell, and a
+# claude the operator resumes at that prompt is no longer one this runner will close.
 _fallback() {
   [ -n "${_armed:-}" ] && rm -f "$_armed" 2>/dev/null
   [ -n "${1:-}" ] && printf 'cc-pane-runner: %s — this pane is an ordinary shell.\n' "$1" >&2
+  unset CC_PANE_RUNNER_OWNS_CLOSE
   exec "${SHELL:-/bin/zsh}" -l -i
+}
+
+# THIS file's real directory. It is reached through ~/.claude/bin's per-file symlinks as often as
+# through the checkout, so siblings are found from the resolved path. Every candidate is
+# unset-guarded: a bare $HOME here would abort the whole runner under `set -u` and take the pane's
+# command with it — the resolver failing wider than the thing it resolves. Empty when unresolvable.
+_self_dir() {
+  local _s="$0" _t
+  while [ -L "$_s" ]; do
+    _t="$(readlink "$_s" 2>/dev/null)" || break
+    case "$_t" in /*) _s="$_t" ;; *) _s="$(dirname "$_s")/$_t" ;; esac
+  done
+  (cd "$(dirname "$_s")" 2>/dev/null && pwd) || true
+}
+
+# The launch VERB, iff the command starts a Claude session: strip a leading `nocorrect`, take the
+# first word, then its basename. rc 1 (and no output) for any other command. ONE list, read by both
+# the wedge watch and the close-on-exit decision, so the two cannot drift on what "a claude pane" is.
+# `claude.exe` is listed as an EXACT spelling, not as `claude.*`: the two families here are the two
+# that were measured, and a wildcard would annex any future `claude.<anything>` — a probe, a wrapper,
+# a shim — into a pager that has no business watching it and a pane that has no business closing
+# (memory: denylist-enumerates-spellings-not-the-class — widening past the evidence is the twin
+# defect of missing a spelling, and this gate has now made both mistakes once).
+#
+# THE VERB IS THE LAUNCHER, NOT THE FIRST WORD (2026-10-01, husk panes 69 and 76). Claude Code
+# 2.1.284 hands a teammate pane `cd <dir> && env CLAUDECODE=1 … <path>/claude.exe --agent-id …`, so
+# the first word is `cd` and the `claude.exe` spelling measured below never matched: a retired
+# member's clean exit fell through to a shell (a husk), and the wedge watch never armed for a team
+# pane at all. So skip the two PREFIXES that only set up the launch — one leading `cd <dir> && `
+# and an `env` with its `VAR=value` words (or bare leading assignments) — and judge the word after
+# them. The spelling list itself is unchanged: this widens where we look, not what counts.
+# `read -a` WITHOUT -r on purpose: printf %q escapes a space in a path as `\ `, and read's
+# backslash handling keeps such a word whole.
+_claude_verb() { # $1=command → prints the verb; rc 0 iff it is a claude session
+  local _l="${1#nocorrect }" _v="" _w _words
+  case "$_l" in "cd "*" && "*) _l="${_l#* && }"; _l="${_l#nocorrect }" ;; esac
+  # shellcheck disable=SC2162  # backslash processing is wanted — see the comment above
+  read -a _words <<<"$_l"
+  for _w in ${_words[@]+"${_words[@]}"}; do
+    case "$_w" in
+      env) continue ;;
+      [A-Za-z_]*=*) continue ;;   # VAR=value, as env operands or as leading assignments
+      *) _v="$_w"; break ;;
+    esac
+  done
+  _v="${_v##*/}"
+  case "$_v" in
+    claude|claude[0-9]|claude-*|claude.exe|fable|fable[0-9]|cc) printf '%s' "$_v" ;;
+    *) return 1 ;;
+  esac
+}
+
+# Decide what the pane becomes after the command returned. Exits the runner (the pane closes) on a
+# clean claude exit with no recycle pending; otherwise RETURNS, and the caller falls back to a shell.
+# The recycle check's lib is a sibling of bin/ in the checkout, else the live layer; an unreadable lib
+# keeps the shell — the fail-safe direction (lib/pane-recycle-pending.sh says why).
+#
+# A FLEET LAUNCH LINE IS A CLAUDE SESSION TOO, even though its first word is `cd` or `{`. The
+# interactive delivery mode (CC_PANE_CMD_INTERACTIVE=1) is set by exactly two callers —
+# scripts/handoff-fire.sh (:1175, :14233), whose CMD is always `cd <dir> && [env …] <launcher> …`
+# or `{ cd … ; } && <launcher> …`, and scripts/limit-recover/lr-lib.sh (:932), `bash <resume
+# script>` — and in every shape the session launcher is the LAST command, so the line's exit status
+# IS the session's. Keying the close on the verb alone left every handoff successor a husk after its
+# own clean /exit, which is the "fleet-launched pane" case this decision exists for. A failed `cd`
+# is non-zero and keeps the shell like any other failure. The verb list itself is NOT widened: the
+# wedge watch reads it too, and what it may page is a separate question from what may close.
+_close_on_exit() { # $1=command $2=its exit status $3=1 iff a fleet launcher delivered it (interactive mode)
+  local _v _sd _c _lib=""
+  if ! _v="$(_claude_verb "$1")"; then
+    [ "${3:-0}" = 1 ] || return 0
+    _v="the fleet launch line"
+  fi
+  if [ "${CC_PANE_CLOSE_ON_EXIT:-1}" = 0 ]; then
+    printf 'cc-pane-runner: %s exited %s — CC_PANE_CLOSE_ON_EXIT=0, keeping the shell\n' "$_v" "$2" >&2
+    return 0
+  fi
+  if [ "$2" != 0 ]; then
+    printf 'cc-pane-runner: %s exited %s — keeping a shell for diagnosis/resume\n' "$_v" "$2" >&2
+    return 0
+  fi
+  _sd="$(_self_dir)"
+  for _c in "${_sd:+$_sd/../lib/pane-recycle-pending.sh}" "${HOME:-}/.claude/lib/pane-recycle-pending.sh"; do
+    [ -n "$_c" ] && [ -r "$_c" ] && { _lib="$_c"; break; }
+  done
+  # shellcheck source=/dev/null  # runtime-resolved: checkout sibling, else the live layer
+  if [ -z "$_lib" ] || ! . "$_lib" 2>/dev/null; then
+    printf 'cc-pane-runner: %s exited 0 — recycle check unavailable, keeping the shell\n' "$_v" >&2
+    return 0
+  fi
+  if cc_pane_recycle_pending "${KITTY_WINDOW_ID:-}"; then
+    printf 'cc-pane-runner: %s exited 0 — recycle pending, keeping the shell\n' "$_v" >&2
+    return 0
+  fi
+  printf 'cc-pane-runner: %s exited 0 — closing this pane (CC_PANE_CLOSE_ON_EXIT=0 keeps it)\n' "$_v" >&2
+  [ -n "${_armed:-}" ] && rm -f "$_armed" 2>/dev/null
+  exit 0
 }
 
 # ── RUNNING THE COMMAND: two eval shells, because two callers name things differently ────────────
@@ -152,28 +267,12 @@ _arm_wedge_watch() { # $1=the command about to run
   [ "${CC_PANE_WEDGE_WATCH:-1}" = 0 ] && return 0
   [ -n "${KITTY_WINDOW_ID:-}" ] || return 0
 
-  # The launch VERB: strip a leading `nocorrect`, take the first word, then its basename.
-  # `claude.exe` is listed as an EXACT spelling, not as `claude.*`: the two families above are the
-  # two that were measured, and a wildcard here would annex any future `claude.<anything>` — a probe,
-  # a wrapper, a shim — into a pager that has no business watching it (memory:
-  # denylist-enumerates-spellings-not-the-class — widening past the evidence is the twin defect of
-  # missing a spelling, and this gate has now made both mistakes once).
-  local _v="${1#nocorrect }"; _v="${_v%% *}"; _v="${_v##*/}"
-  case "$_v" in
-    claude|claude[0-9]|claude-*|claude.exe|fable|fable[0-9]|cc) ;;
-    *) return 0 ;;
-  esac
+  # The launch VERB (_claude_verb above owns the list and why it is exact spellings).
+  local _v _sd _c _w=""
+  _v="$(_claude_verb "$1")" || return 0
 
-  # Resolve THIS file's real directory (it is reached through ~/.claude/bin's per-file symlinks as
-  # often as through the checkout), then fall back to the live layer. Every candidate is
-  # unset-guarded: a bare $HOME here would abort the whole runner under `set -u` and take the pane's
-  # command with it — the resolver failing wider than the thing it resolves.
-  local _s="$0" _t _sd _c _w=""
-  while [ -L "$_s" ]; do
-    _t="$(readlink "$_s" 2>/dev/null)" || break
-    case "$_t" in /*) _s="$_t" ;; *) _s="$(dirname "$_s")/$_t" ;; esac
-  done
-  _sd="$(cd "$(dirname "$_s")" 2>/dev/null && pwd)" || _sd=""
+  # This file's real directory first, then the live layer.
+  _sd="$(_self_dir)"
   for _c in "${_sd:+$_sd/cc-wedge-watch}" "${HOME:-}/.claude/bin/cc-wedge-watch"; do
     [ -n "$_c" ] && [ -x "$_c" ] && { _w="$_c"; break; }
   done
@@ -205,11 +304,14 @@ _launch() { # $1=command — never returns
   # command that reads an unset variable, i.e. this file would change the meaning of commands it is
   # only supposed to transport. The guard exists for the runner's own logic above, and its job is done.
   set +u
+  local _rc
+  export CC_PANE_RUNNER_OWNS_CLOSE=1
   if [ "$_interactive" = 1 ]; then
-    "${SHELL:-/bin/zsh}" -l -i -c "$1"
+    "${SHELL:-/bin/zsh}" -l -i -c "$1"; _rc=$?
   else
-    eval "$1"
+    eval "$1"; _rc=$?
   fi
+  _close_on_exit "$1" "$_rc" "$_interactive"
   _fallback ""
 }
 
@@ -256,5 +358,5 @@ rm -f "$_cmdfile" "$_armed" 2>/dev/null
 
 # _launch echoes the command first: the operator watching this pane sees the same line they would
 # have seen typed, and a `kitty @ get-text` progress probe has something to anchor on. It never
-# returns — it ends in a shell either way.
+# returns — it ends in a shell, or in a closed pane after a clean claude exit (_close_on_exit).
 _launch "$_cmd"

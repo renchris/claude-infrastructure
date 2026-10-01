@@ -487,4 +487,70 @@ fi
 #    to fd2 after this point is noise by definition. Exact-pid, never a pattern; best-effort —
 #    an empty TEE_PID (bash 3.2) costs a lingering tee, exactly the pre-fix behaviour. ─────────
 [[ -n "$TEE_PID" ]] && kill -TERM "$TEE_PID" 2>/dev/null || true
+
+# ── OPT-IN: A CLEAN /exit CLOSES THE OPERATOR'S OWN WINDOW (2026-09-30; default OFF) ───────────
+#    docs/research/husk-panes-2026-09-30.md root cause 2 / fix F-a. A window the operator opened
+#    is a plain `zsh -l` and the claude() launcher runs this wrapper as its CHILD, so /exit returns
+#    to that login shell and the window is a husk until something outside closes it. With
+#    CC_CLOSE_PANE_ON_EXIT=1 we close it from inside instead: SIGHUP to the window's login shell —
+#    the ancestor whose PARENT is kitty — which is exactly what kitty's own close sends. Whether this
+#    should be the default is the operator's call, so it ships off.
+#    Every condition below fails toward DOING NOTHING (a husk), never toward closing a window
+#    something still needs:
+#      · exit 0 only — a crash or a 143 keeps the shell so the session can be resumed there;
+#      · a kitty window, and no recycle pending for it (lib/pane-recycle-pending.sh — the recycler
+#        types the relaunch at this shell; no lib ⇒ no close);
+#      · not inside cc-pane-runner (CC_PANE_RUNNER_OWNS_CLOSE) — it closes its own pane;
+#      · an interactive session — `claude -p`, `--version`, `--help` and the management subcommands
+#        also run through the launcher, and typing one at a prompt must not close the window;
+#      · every ancestor between here and the login shell is itself a SHELL. A claude nested inside
+#        a session (a Bash-tool `claude -p`) walks up through node/claude and stands down, where a
+#        plain walk would have reached the OUTER session's login shell and closed its window.
+#    Seams: CC_CLOSE_ATTRIB_PS_BIN (the ancestry read) and CC_CLOSE_ATTRIB_KILL_BIN (the actuator),
+#    so a suite never signals a real process. Runs after the record and the tee reap, and never
+#    touches $code: the exit status and the record are exactly what they were without it.
+_cca_interactive_argv() { # → rc 0 iff BIN_ARGV starts an interactive session
+  local a first=1
+  for a in ${BIN_ARGV[@]+"${BIN_ARGV[@]}"}; do
+    case "$a" in -p|--print|-v|--version|-h|--help) return 1 ;; esac
+    if [[ "$first" -eq 1 ]]; then
+      first=0
+      case "$a" in mcp|config|update|upgrade|doctor|install|setup-token|plugin|migrate-installer|auth) return 1 ;; esac
+    fi
+  done
+  return 0
+}
+_cca_close_pane() {
+  [[ "${CC_CLOSE_PANE_ON_EXIT:-0}" == 1 && "$code" -eq 0 ]] || return 0
+  [[ -n "${KITTY_WINDOW_ID:-}" && -z "${CC_PANE_RUNNER_OWNS_CLOSE:-}" ]] || return 0
+  _cca_interactive_argv || return 0
+  local s="$0" t sd c lib="" ps_bin="${CC_CLOSE_ATTRIB_PS_BIN:-ps}" kill_bin="${CC_CLOSE_ATTRIB_KILL_BIN:-kill}"
+  local cur pp cm ppp pcm n=0
+  while [[ -L "$s" ]]; do
+    t="$(readlink "$s" 2>/dev/null)" || break
+    case "$t" in /*) s="$t" ;; *) s="$(dirname "$s")/$t" ;; esac
+  done
+  sd="$(cd "$(dirname "$s")" 2>/dev/null && pwd)" || sd=""
+  for c in "${sd:+$sd/../lib/pane-recycle-pending.sh}" "${HOME:-}/.claude/lib/pane-recycle-pending.sh"; do
+    [[ -n "$c" && -r "$c" ]] && { lib="$c"; break; }
+  done
+  # shellcheck source=/dev/null  # runtime-resolved: checkout sibling, else the live layer
+  [[ -n "$lib" ]] && . "$lib" 2>/dev/null || return 0
+  cc_pane_recycle_pending "$KITTY_WINDOW_ID" && return 0
+  cur="$PPID"
+  read -r pp cm <<<"$("$ps_bin" -o ppid=,comm= -p "$cur" 2>/dev/null)"
+  while (( n++ < 8 )); do
+    cm="${cm##*/}"; cm="${cm#-}"
+    case "$cm" in zsh|bash|sh) ;; *) return 0 ;; esac
+    [[ "$pp" =~ ^[0-9]+$ && "$pp" -gt 1 ]] || return 0
+    read -r ppp pcm <<<"$("$ps_bin" -o ppid=,comm= -p "$pp" 2>/dev/null)"
+    if [[ "${pcm##*/}" == kitty ]]; then
+      "$kill_bin" -HUP "$cur" 2>/dev/null || true
+      return 0
+    fi
+    cur="$pp"; pp="$ppp"; cm="$pcm"
+  done
+  return 0
+}
+_cca_close_pane || true
 exit "$code"
