@@ -19,6 +19,9 @@
 # Unverifiable ⇒ do not close, count an attempt, and page once at CC_PCQ_MAX_ATTEMPTS so a row that
 # can never resolve is still heard. A wrong-window close kills a live session; a held row costs a pane.
 #
+# recycle rows (pane-lifecycle fixes item 4d) are a record of a recycle handoff-fire held on a deaf
+# kitty: once kitty answers, the session is told once to re-run it; see drain_recycle below.
+#
 # self-close rows belong to handoff-fire's own retrier: this never acts on them. If that retrier is
 # gone it pages the desk once, BEFORE the kitty gate (a dead retrier is news precisely while kitty is
 # deaf), and once kitty answers it tells the session once, via cc-notify, to re-run its self-close.
@@ -88,14 +91,15 @@ drain_self_close() {
   [[ "$(pcq_get "$row" notified)" == 1 ]] || NOTIFY_ROWS="$NOTIFY_ROWS$row"$'\n'
 }
 
-N_TEAM=0
+N_TEAM=0 N_RCY=0
 while IFS= read -r _row <&3; do
   case "$(pcq_get "$_row" kind)" in
     self-close) drain_self_close "$_row" ;;
     teammate)   N_TEAM=$((N_TEAM + 1)) ;;
+    recycle)    N_RCY=$((N_RCY + 1)) ;;
   esac
 done 3<<<"$ROWS"
-(( N_TEAM > 0 )) || [[ -n "$NOTIFY_ROWS" ]] || exit 0
+(( N_TEAM > 0 || N_RCY > 0 )) || [[ -n "$NOTIFY_ROWS" ]] || exit 0
 
 # ── the gate: does kitty remote control answer? ────────────────────────────────────────────────
 # The LIVE socket first, then a row's recorded one. A row's socket can name a kitty that has since
@@ -142,6 +146,7 @@ if ! _ls_fresh; then
     fi
     _out=""
   done 3<<<"$ROWS"
+  (( N_RCY == 0 )) || log "kitty unresponsive — $N_RCY owed recycle(s) held until it answers"
   log "kitty unresponsive — $_held row(s) held (sock=${SOCK:-none})"
   exit 0
 fi
@@ -159,7 +164,7 @@ while IFS= read -r _row <&3; do
   pcq_add self-close "$_p" notified=1 >/dev/null 2>&1 || true
   log "self-close pane=$_p terminal answers — told the session to re-run its self-close (cc-notify rc=$_rc)"
 done 3<<<"$NOTIFY_ROWS"
-(( N_TEAM > 0 )) || exit 0
+(( N_TEAM > 0 || N_RCY > 0 )) || exit 0
 
 pane_window() { # <pane> → that window's JSON from $LS, or nothing
   jq -c --arg p "$1" '[.[]?.tabs[]?.windows[]? | select((.id | tostring) == $p)][0] // empty' <<<"$LS" 2>/dev/null
@@ -232,7 +237,36 @@ drain_teammate() {
   fi
 }
 
+# ── recycle rows: a recycle handoff-fire HELD because kitty did not answer (pane-lifecycle item 4d) ─
+# Never an act on the pane: nothing here types, closes or waits. Once kitty answers, the session is
+# told ONCE to re-run its own recycle as its own Bash call — the call's output then reaches the session
+# that owns the consequences, which no helper here could arrange. Measured before this was built
+# (2026-10-01, /tmp/wake-coverage-2026-10-01.md): mail to an idle session woke it 92.9% of the time
+# (287/309, 95% CI 89.5-95.3), falling to 31% after 1-4 h idle and 0% past ~4 h, so a note that lands
+# during a long outage may wait for the next human turn; the row is the durable record either way.
+# Removed, never acted on, when its window is gone or kitty has restarted (ids restart at 1, so the id
+# names a stranger); a later recycle of the pane that arms its watcher removes it from handoff-fire.
+drain_recycle() {
+  local row="$1" pane id gen
+  pane="$(pcq_get "$row" pane)"; id="${pane##*:}"
+  [[ "$(pcq_get "$row" kitty_sock)" =~ .*kitty-([0-9]+) ]] && gen="${BASH_REMATCH[1]}" || gen=""
+  if [[ -n "$gen" && -n "$LIVE_GEN" && "$gen" != "$LIVE_GEN" ]]; then
+    pcq_remove "$row"; log "recycle pane=$pane kitty generation changed ($gen → $LIVE_GEN) — row removed, nobody told"; return
+  fi
+  if [[ "$id" =~ ^[0-9]+$ && -z "$(pane_window "$id")" ]]; then
+    pcq_remove "$row"; log "recycle pane=$pane ✓ pane gone — row removed"; return
+  fi
+  if [[ "$(pcq_get "$row" notified)" == 1 ]]; then log "recycle pane=$pane already told — held until it recycles"; return; fi
+  bounded "$NOTIFY_BIN" "$pane" "RECYCLE RETRY: your --recycle of pane $pane was held at $(pcq_get "$row" first_ts) because the terminal did not answer ($(pcq_get "$row" reason)); it answers now — re-run it as its own Bash call, bare (no outer timeout, no grep filter): handoff-fire.sh $(pcq_get "$row" argv)" \
+    >/dev/null 2>&1 </dev/null; _rc=$?
+  pcq_add recycle "$pane" notified=1 >/dev/null 2>&1 || true
+  log "recycle pane=$pane terminal answers — told the session to re-run its recycle (cc-notify rc=$_rc)"
+}
+
 while IFS= read -r _row <&3; do
-  [[ "$(pcq_get "$_row" kind)" == teammate ]] && drain_teammate "$_row"
+  case "$(pcq_get "$_row" kind)" in
+    teammate) drain_teammate "$_row" ;;
+    recycle)  drain_recycle "$_row" ;;
+  esac
 done 3<<<"$ROWS"
 exit 0

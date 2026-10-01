@@ -24,6 +24,7 @@ setup() {
   # The kitty-independent closer is a stub that REFUSES unless a test says otherwise: the real one
   # would read this machine's watchdog log and signal real shells.
   export CC_PCQ_PANE_CLOSE_BIN="$D/bin/cc-pane-close"
+  # shellcheck disable=SC2016   # stub source written literally; its ${2} must expand in the stub, not here
   printf '#!/bin/bash\necho "pane ${2:-?}: REFUSED — stub"\nexit 1\n' > "$CC_PCQ_PANE_CLOSE_BIN"; chmod +x "$CC_PCQ_PANE_CLOSE_BIN"
   export KITTY_LISTEN_ON="unix:$D/kitty-610"
   # The session running this suite may itself sit in a kitty or iTerm2 pane; none of that may leak.
@@ -221,6 +222,44 @@ husk_row() { q teammate 33 agent_id=m1@session-t team=session-t kitty_pid="${1:-
   run "$DRAIN"
   [ ! -e "$D/page-calls.log" ]
   [ ! -e "$D/pcqnotify-calls.log" ]
+}
+
+# ── recycle rows (pane-lifecycle fixes item 4d, 2026-10-01) ─────────────────────────────────────────
+recycle_row() { q recycle 41 sid=s41 reason=unreachable argv="--prompt-file /tmp/b.md --recycle " kitty_sock="${1:-$D/kitty-610}"; }
+
+@test "recycle row, kitty answers, window present: the session is told ONCE to re-run its recycle, nothing else" {
+  recycle_row; lsjson 41 ls.json claude
+  run "$DRAIN"
+  [ "$(grep -c '^notify ' "$D/pcqnotify-calls.log")" -eq 1 ]
+  grep -q "^notify 41 RECYCLE RETRY: your --recycle of pane 41 was held at .* re-run it as its own Bash call, bare (no outer timeout, no grep filter): handoff-fire.sh --prompt-file /tmp/b.md --recycle" "$D/pcqnotify-calls.log"
+  [ ! -e "$D/it2-calls.log" ]                      # never a close, never a keystroke
+  [ "$(qget "$D/q/recycle-41.json" notified)" = 1 ]
+  run "$DRAIN"
+  [ "$(grep -c '^notify ' "$D/pcqnotify-calls.log")" -eq 1 ]
+  [ -e "$D/q/recycle-41.json" ]                    # held until the recycle itself spends it
+}
+
+@test "recycle row whose window is gone: removed, nobody told" {
+  recycle_row; echo '[]' > "$D/ls.json"
+  run "$DRAIN"
+  [ ! -e "$D/q/recycle-41.json" ]
+  [ ! -e "$D/pcqnotify-calls.log" ]
+}
+
+@test "recycle row from an earlier kitty: removed, never told (the id names a stranger now)" {
+  recycle_row "$D/kitty-500"; lsjson 41 ls.json claude
+  run "$DRAIN"
+  [ ! -e "$D/q/recycle-41.json" ]
+  [ ! -e "$D/pcqnotify-calls.log" ]
+  grep -q "recycle pane=41 kitty generation changed (500 → 610)" "$D/pcq.log"
+}
+
+@test "recycle row while kitty is deaf: kept, nobody told" {
+  recycle_row; echo 124 > "$D/kitty.rc"
+  run "$DRAIN"
+  [ -e "$D/q/recycle-41.json" ]
+  [ ! -e "$D/pcqnotify-calls.log" ]
+  grep -q "1 owed recycle(s) held" "$D/pcq.log"
 }
 
 @test "an empty queue never asks kitty anything" {
