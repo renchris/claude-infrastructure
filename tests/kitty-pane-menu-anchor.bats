@@ -79,20 +79,20 @@ W	75301	5	0	38	1728	961	0
 # where the active member is also the first cannot tell the two apart, and a mutant replacing
 # is_active with is_focused survived against exactly such a fixture before this was rewritten.
 TREE='[{"id": 90, "platform_window_id": 116852,
-        "tabs": [{"is_active": true, "is_focused": false,
+        "tabs": [{"id": 1, "is_active": true, "is_focused": false,
                   "windows": [{"id": 442, "is_active": false, "is_focused": false,
                                "title": "second pane", "cwd": "/tmp/x"},
                               {"id": 441, "is_active": true, "is_focused": false,
                                "title": "CC-backlog drain", "cwd": "/tmp/x"}]}]},
        {"id": 14, "platform_window_id": 79048,
-        "tabs": [{"is_active": false, "is_focused": false,
+        "tabs": [{"id": 2, "is_active": false, "is_focused": false,
                   "windows": [{"id": 999, "is_active": true, "is_focused": false,
                                "title": "a tab nobody is on", "cwd": "/tmp/x"}]},
-                 {"is_active": true, "is_focused": false,
+                 {"id": 3, "is_active": true, "is_focused": false,
                   "windows": [{"id": 440, "is_active": true, "is_focused": false,
                                "title": "claude-infrastructure", "cwd": "/tmp/x"}]}]},
        {"id": 91, "platform_window_id": 119473,
-        "tabs": [{"is_active": true, "is_focused": false,
+        "tabs": [{"id": 4, "is_active": true, "is_focused": false,
                   "windows": [{"id": 910, "is_active": true, "is_focused": false,
                                "title": "mac-bootstrap wave 3", "cwd": "/tmp/x"}]}]}]'
 

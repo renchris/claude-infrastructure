@@ -45,10 +45,13 @@ WHAT THE MENU OFFERS (and where it routes)
                                  this replaces, so nothing is lost by adding the rest.
     Move to New Window           kitty @ detach-window (no --target-tab -> new OS window; this is
                                  kitty's own documented behaviour for an unspecified target).
-    <what it is> — N panes,     kitty @ detach-window --target-tab id:<repr-window-of-that-tab>
-      <where it is>              for every OTHER os-window's active tab. --match on `id:` falls
-                                 back from tab to the window's OWNING tab (kitty docs), so a
-                                 representative window id is enough to name the tab.
+    <what it is> — N panes,     kitty @ detach-window --target-tab id:<that window's active TAB id>
+      <where it is>              for every OTHER os-window. The id is the TAB's own, never a window
+                                 id: kitty's match_tabs tries `id:N` against TAB ids first and only
+                                 falls back to "the tab owning window N" when no tab has id N. Tab
+                                 and window ids are separate counters, so a window id that equals a
+                                 live tab id routes the pane to THAT tab's window (fixed 2026-10-01,
+                                 operator report: "one window right" landed in another window).
                                  The ROW WORDING is the subject of describe_os_window() below and
                                  was rebuilt 2026-09-05 on an operator report that the old
                                  `Move to Window 36 — sevenrooms-bridge (claude) +4` was
@@ -276,8 +279,13 @@ def equalize_tab_of(wid: int) -> None:
                    env={**os.environ, "KITTY_WINDOW_ID": str(wid)})
 
 
+# Why the last `ls` came back empty, for the on-screen alert — kitty's own last stderr line.
+LAST_LS_ERROR = [""]
+
+
 def load(*match: str) -> list:
     r = kitty("ls", *match)
+    LAST_LS_ERROR[0] = ((r.stderr or "").strip().splitlines() or [f"rc {r.returncode}, empty reply"])[-1]
     if r.returncode != 0 or not r.stdout.strip():
         return []
     try:
@@ -802,7 +810,7 @@ def vector(target: tuple[int, int] | None, own: tuple[int, int] | None, exact: b
 
 def other_targets(tree: list, self_osw_id: int, places: dict, mc_names: dict, exact: bool,
                   displays: dict[int, dict] | None = None) -> list[tuple[int, str, str]]:
-    """One row per OTHER os-window: (representative window id, label, ident source).
+    """One row per OTHER os-window: (destination TAB id, label, ident source).
 
     The label is `<what it is> — <N panes>[, <direction>]`. There is no `Move to ` verb and no
     `Window N` head: both were 100% identical ink on every target row, and deleting them moves the
@@ -811,8 +819,15 @@ def other_targets(tree: list, self_osw_id: int, places: dict, mc_names: dict, ex
 
     ROUTE AND LABEL ARE SEPARATE and stay that way — the label describes the destination window,
     the route names the tab the pane actually lands in.
+
+    THE ROUTE IS THE TAB'S OWN ID. It used to be a representative WINDOW id, on the belief that
+    `--target-tab id:<window>` resolves to the window's owning tab. It does so only when no TAB
+    has that id (kitty boss.match_tabs: tab fields first, window fallback `if not found`). Tab ids
+    and window ids are separate counters, so the two collide routinely: in every saved tree from
+    2026-09-30/10-01 (9-10 os-windows, tab ids 1..33, window ids 1..88) exactly one row sent the
+    pane to a different os-window than the one it named.
     """
-    raw: list[tuple[int, dict, dict]] = []  # (osw_id, representative window, os-window)
+    raw: list[tuple[int, int, dict]] = []  # (osw_id, destination tab id, os-window)
     for osw in tree:
         if osw["id"] == self_osw_id:
             continue
@@ -827,15 +842,13 @@ def other_targets(tree: list, self_osw_id: int, places: dict, mc_names: dict, ex
         )
         if not tab or not tab.get("windows"):
             continue
-        wins = tab["windows"]
-        repr_w = next((w for w in wins if w.get("is_focused") or w.get("is_active")), wins[0])
-        raw.append((osw["id"], repr_w, osw))
+        raw.append((osw["id"], tab["id"], osw))
 
     own_place = places.get(next((o.get("platform_window_id") for o in tree
                                  if o["id"] == self_osw_id), None))
 
-    rows: list[list] = []  # [osw_id, repr_wid, ident, panes clause, vector, source, panes]
-    for osw_id, repr_w, osw in raw:
+    rows: list[list] = []  # [osw_id, tab_id, ident, panes clause, vector, source, panes]
+    for osw_id, tab_id, osw in raw:
         panes = [w for t in osw.get("tabs", []) for w in t.get("windows", [])]
         ntabs = len(osw.get("tabs", []))
         ident, source = describe_os_window(osw, mc_names.get(osw.get("platform_window_id"), ""))
@@ -844,7 +857,7 @@ def other_targets(tree: list, self_osw_id: int, places: dict, mc_names: dict, ex
         # changes shape on arrival and the row has to say so. Latent while every window holds one.
         if ntabs > 1:
             clause += f" in {ntabs} tabs"
-        rows.append([osw_id, repr_w["id"], ident, clause,
+        rows.append([osw_id, tab_id, ident, clause,
                      vector(places.get(osw.get("platform_window_id")), own_place, exact, displays),
                      source, panes])
 
@@ -910,6 +923,32 @@ def choose(items: list[str]) -> str | None:
     return out or None
 
 
+def alert_unreachable(why: str) -> None:
+    """Say, on screen, why the right-click did nothing.
+
+    Every row in this menu needs kitty's remote-control socket, and that socket can die while
+    kitty keeps running: kitty's talk thread exits for good on any accept() error other than EINTR
+    (child-monitor.c accept_peer -> `goto end`), the socket stays bound, and every later `kitty @`
+    queues until the 128-deep backlog fills and is then refused. Measured 2026-10-01: 128 requests
+    queued, no KittyPeerMon thread in `sample`. Until this alert the only trace was a stderr line
+    from a `--type=background` child, so the operator saw a right-click that did nothing at all."""
+    msg = ("The move menu needs kitty's remote control, and kitty is not answering it.\n\n"
+           f"{why}\n\nIf this persists, kitty's remote-control thread has stopped and only a kitty "
+           "restart brings it back.")
+    script = (
+        f'display alert "Pane menu unavailable" message "{_as_str(msg)}" '
+        'as warning buttons {"OK"} default button "OK"'
+    )
+    try:
+        subprocess.run(["osascript", "-e", script], capture_output=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def _as_str(s: str) -> str:
+    return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
 def refocus() -> None:
     subprocess.run(["osascript", "-e", 'tell application "kitty" to activate'], capture_output=True)
 
@@ -948,7 +987,10 @@ def main() -> int:
 
     tree = load()
     if not tree:
-        print(f"kitty-pane-menu: no reply from kitty (address={ADDRESS})", file=sys.stderr)
+        why = LAST_LS_ERROR[0]
+        print(f"kitty-pane-menu: no reply from kitty (address={ADDRESS}): {why}", file=sys.stderr)
+        if not check:
+            alert_unreachable(why)
         return 3
 
     places, mc_names, displays, place_src, probe_raw = reap_probe(probe)
@@ -1033,13 +1075,13 @@ def main() -> int:
         # dialog, making that disagreement silent. One close path, one target.
         subprocess.run([os.path.join(HERE, "kitty-confirm-close"), "window", "--window", str(wid)])
     else:
-        for target_wid, label, _src in targets:
+        for target_tab, label, _src in targets:
             if label == choice:
                 # The return code was discarded here. A destination that died between the pop and
                 # the pick is real — the window population churns — and kitty reports it as
                 # `No matching tabs for expression: id:N`, rc 1, which rendered as a pane that
                 # simply did not move and no reason anywhere.
-                r = kitty("detach-window", "--match", f"id:{wid}", "--target-tab", f"id:{target_wid}")
+                r = kitty("detach-window", "--match", f"id:{wid}", "--target-tab", f"id:{target_tab}")
                 if r.returncode != 0:
                     print(
                         f"kitty-pane-menu: move failed (rc {r.returncode}): "

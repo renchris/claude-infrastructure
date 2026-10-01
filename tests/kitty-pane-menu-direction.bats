@@ -202,7 +202,7 @@ print(m.vector(None, own, True, d))'
 p, n, d = m.parse_probe(os.environ["PROBE"])
 def osw(i, pwid, title):
     return {"id": i, "platform_window_id": pwid,
-            "tabs": [{"is_active": True, "windows": [
+            "tabs": [{"id": i, "is_active": True, "windows": [
                 {"id": i * 10, "is_focused": True, "title": title, "cwd": "/tmp/x"}]}]}
 tree = [osw(1, 119473, "aria wireless"), osw(2, 79048, "pane-title operator"),
         osw(3, 110426, "mac-bootstrap wave 3"), osw(4, 75301, "pipeline productivity")]
@@ -224,7 +224,7 @@ assert all("," in lbl for _w, lbl, _s in rows), "a row lost its clause"'
 p, n, d = m.parse_probe(os.environ["P2"])
 def osw(i, pwid, title):
     return {"id": i, "platform_window_id": pwid,
-            "tabs": [{"is_active": True, "windows": [
+            "tabs": [{"id": i, "is_active": True, "windows": [
                 {"id": i * 10, "is_focused": True, "title": title, "cwd": "/tmp/x"}]}]}
 tree = [osw(1, 119473, "aria wireless"), osw(2, 79048, "pane-title operator"),
         osw(4, 75301, "pipeline productivity")]
