@@ -124,7 +124,7 @@ EOF
   seal_set
   CC_RESEARCH_CLASSIFIER="cat >/dev/null; echo work-order" CC_RESEARCH_ROUTER="python3 '$ROUTER' classify" run "$H" evaluate
   [ "$status" -eq 1 ]
-  [[ "$output" == *"stratum regex-matched: recall 0/12"* ]]
+  [[ "$output" == *"stratum regex-matched: recall 0/12"* ]] || false
   [[ "$output" == *"stratum pushback: recall 0/12"* ]]
 }
 
@@ -165,14 +165,14 @@ STUB
   export CC_RESEARCH_CODEX_SESSIONS="$BATS_TEST_TMPDIR/codex"
   run python3 "$RATE" --vendor anthropic --dry-run
   [ "$status" -eq 0 ]
-  [[ "$output" == *"would send 48 prompt(s)"* ]]
+  [[ "$output" == *"would send 48 prompt(s)"* ]] || false
   CC_RESEARCH_BIN_ANTHROPIC="$BATS_TEST_TMPDIR/claude-stub" run python3 "$RATE" --vendor anthropic
   [ "$status" -eq 0 ]
-  [[ "$output" == *"anthropic:claude-rater-1: 48 label(s) recorded"* ]]
+  [[ "$output" == *"anthropic:claude-rater-1: 48 label(s) recorded"* ]] || false
   # frontier is the Anthropic family too
   CC_RESEARCH_BIN_ANTHROPIC="$BATS_TEST_TMPDIR/claude-stub" run python3 "$RATE" --vendor frontier
   [ "$status" -eq 2 ]
-  [[ "$output" == *"another vendor family"* ]]
+  [[ "$output" == *"another vendor family"* ]] || false
   CC_RESEARCH_BIN_OPENAI="$BATS_TEST_TMPDIR/codex-stub" run python3 "$RATE" --vendor openai
   [ "$status" -eq 0 ]
   # The set now measures: router.py classify passes row 15 against these gold labels.
@@ -188,6 +188,6 @@ STUB
   chmod +x "$BATS_TEST_TMPDIR/bad"
   CC_RESEARCH_BIN_ANTHROPIC="$BATS_TEST_TMPDIR/bad" run python3 "$REPO/scripts/research-kit/heldout-rate.py" --vendor anthropic
   [ "$status" -eq 2 ]
-  [[ "$output" == *"labeled 0 of 48"* ]]
+  [[ "$output" == *"labeled 0 of 48"* ]] || false
   [ "$("$H" status | jq '[.[].raters | length] | add')" -eq 0 ]
 }
