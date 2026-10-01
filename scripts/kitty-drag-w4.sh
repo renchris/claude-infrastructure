@@ -73,6 +73,10 @@
 #    scripts/kitty-drag-w4.sh --no-screenshot # skip Q10 capture entirely
 #    scripts/kitty-drag-w4.sh --wait-build N  # poll N s for the 0.48.2 tree
 #    scripts/kitty-drag-w4.sh --teardown      # close the sandbox's windows
+#    scripts/kitty-drag-w4.sh --arm --no-raise  # arm without bringing the window to the front
+#    KDW4_KITTY=<binary> KDW4_EXTRA_CONF=<file>  # another build, plus config lines appended to
+#                                               # the sandbox config (the sitting uses both to put
+#                                               # the patched title band under the operator's hand)
 # =============================================================================
 
 set -euo pipefail
@@ -131,6 +135,8 @@ DRY_RUN=0
 TEARDOWN_ONLY=0
 ARM_ONLY=0
 VERDICT_ONLY=0
+NO_RAISE=0
+EXTRA_CONF="${KDW4_EXTRA_CONF:-}"
 
 # ---------------------------------------------------------------------------
 #  Output helpers
@@ -150,6 +156,7 @@ while [ $# -gt 0 ]; do
         --teardown)      TEARDOWN_ONLY=1 ;;
         --arm)           ARM_ONLY=1 ;;
         --verdict)       VERDICT_ONLY=1 ;;
+        --no-raise)      NO_RAISE=1 ;;
         --watch-secs)    shift; WATCH_SECS="${1:-120}" ;;
         --wait-build)    shift; WAIT_BUILD="${1:-0}" ;;
         -h|--help)       sed -n '1,80p' "${BASH_SOURCE[0]}"; exit 0 ;;
@@ -359,6 +366,12 @@ mouse_map opt+cmd+shift+left press       ungrabbed kitten ${KITTEN_PY} --spellin
 mouse_map opt+cmd+left       press       ungrabbed kitten ${KITTEN_PY} --spelling=free
 mouse_map opt+cmd+left       doublepress ungrabbed kitten ${KITTEN_PY} --spelling=free
 CONF
+    if [ -n "$EXTRA_CONF" ]; then
+        [ -r "$EXTRA_CONF" ] || die "KDW4_EXTRA_CONF='$EXTRA_CONF' is not readable"
+        { printf '\n# ============ APPENDED from KDW4_EXTRA_CONF=%s ============\n' "$EXTRA_CONF"
+          cat "$EXTRA_CONF"; } >> "${CFG_DIR}/kitty.conf"
+        say "  config : + ${EXTRA_CONF}"
+    fi
     say "  config : ${CFG_DIR}/kitty.conf  (6 bindings, all live at once)"
 }
 
@@ -736,10 +749,18 @@ if [ "$ARM_ONLY" = 1 ]; then
     # this sandbox pane you talk of" while it sat unfocused with its instructions on
     # screen. A gate whose subject the operator cannot find has not been armed, it has
     # been hidden. Focus is stolen only here, where the operator just asked for it.
-    kit focus-window --match "cwd:${RUN_ROOT}" >/dev/null 2>&1 || \
-        warn "could not raise the sandbox window; find it by its title: ${RUN_ROOT}"
+    # --no-raise is for arming AHEAD of the sitting, while the operator is working: the window
+    # waits behind theirs, and the sitting's own command raises it when they are ready.
+    if [ "$NO_RAISE" = 0 ]; then
+        kit focus-window --match "cwd:${RUN_ROOT}" >/dev/null 2>&1 || \
+            warn "could not raise the sandbox window; find it by its title: ${RUN_ROOT}"
+    fi
     say ""
-    say "  ARMED and detached, and the sandbox window has been brought to the front."
+    if [ "$NO_RAISE" = 0 ]; then
+        say "  ARMED and detached, and the sandbox window has been brought to the front."
+    else
+        say "  ARMED and detached, NOT raised (--no-raise): it waits behind your windows."
+    fi
     say "  LOOK FOR: a SEPARATE kitty window -- not one of your panes -- with two stacked"
     say "  panes, both titled '${RUN_ROOT}', showing a 'W4 OPERATOR GATE' banner that"
     say "  lists the six chords. Drag the BOTTOM pane onto the TOP one."

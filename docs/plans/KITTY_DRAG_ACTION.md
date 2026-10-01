@@ -36,6 +36,10 @@ since 2026-09-16 22:47 — see § 5's *W4 — STATE AS OF 2026-09-17*, which als
 the sandbox structurally could not test (the grabbed-mode promotion path, answered from source,
 negative) and why the § 7.1 retirements need re-arguing before anyone executes them.
 
+**2026-09-30:** the retirements are re-argued (four of five VOID) and the gesture is one command,
+`bash ~/.claude/scripts/kitty-sitting.sh`, on the staged patched build — § 5's *W4 + W7 — STATE AS
+OF 2026-09-30*.
+
 ---
 
 ## § 0. PHASE 0 — AGENT TEAM ORCHESTRATION
@@ -1473,6 +1477,46 @@ left press (so `tracked_drag_in_window` is set) followed by the chord, in a pane
 `MOTION_MODE` *and* `SGR_PIXEL_PROTOCOL`. Both conditions are required by `:1311`; SGR_PIXEL (1016)
 is rarer than SGR (1006). Not measured, and not worth a hand — recorded as an open unknown beside
 § 7's V13.
+
+### W4 + W7 — STATE AS OF 2026-09-30 (backlog master plan, kitty tickets kitty.1-kitty.6)
+
+**The sitting is one command, and it now carries the patched build too.**
+`bash ~/.claude/scripts/kitty-sitting.sh` arms (or re-raises) the W4 sandbox on the STAGED patched
+kitty (`/Applications/kitty.app.staged`, title band on) and says what to do; `… --verdict` reads the
+PRESSES block and the pane-graph verdict back and appends them to
+`~/.claude/autonomy/kitty-sitting-S9.txt`. One minute of the operator's hand answers DoD #4/#5 for
+both the band (plain click and drag) and the chord, and the same window is what the build and
+band-width decisions are judged on. The armed sandbox of 2026-09-16 (pid 11756) died with a reboot;
+a pre-armed one will too, so the sitting command re-arms whenever the old one is gone. Re-armed
+2026-09-30 with `--arm --no-raise` (new flag; the operator was working) on the staged build, pid 94453.
+
+**Stock e5116d0fb's draggable bar is proven without a hand.** `scripts/checks/kitty-title-reorder-sandbox.sh`
+runs a second stock kitty on the live kitty.conf with its own socket and HOME, fires the ⌘⇧B action
+read out of kitty.conf, and drops pane 1 on pane 3's title bar through `TabManager.on_window_drop`:
+visual order `[1 2 3] -> [3 2 1]`, live kitty pid 610 unchanged (commit `test: drive the ⌘⇧B title-bar reorder in a separate stock kitty`). What only a hand can
+add is that a PRESS starts the drag.
+
+**W7 RE-ARGUED against the one-draggable-title ruling — four of the five § 7.1 retirements are
+VOID, and executing them would delete the ruling's title:**
+
+| § 7.1 retirement | Verdict | Why |
+|---|---|---|
+| `map cmd+opt+b` | already done | disarmed by the 09-16 ruling (`config/kitty.conf` `# DISARMED-map cmd+opt+b`) |
+| the `combine :` prefix on ⌘⇧B | VOID | kitty.conf's 09-16 note keeps `overlay off --all` first so a stray overlay label can never stack under the bar again |
+| `kitty-pane-title-toggle.sh` + `kitty-title-on.conf` | VOID | they ARE ⌘⇧B's one draggable title on stock; on the patched build the same toggle loads `config/kitty-title-band-on.conf` (`scripts/kitty-build-swap.sh swap` repoints the link) |
+| `kitty-conf-bindings.bats` `real_bar_key()` | VOID | it now pins that ⌘⇧B is the real, draggable bar — the ruling itself |
+| `<CHORD>` in `config/drag-arm.d/drag.conf.example` | STANDS | replaced with the chord the operator picks in the sitting (ticket kitty.6) |
+
+**The patched build is the band's last step.** `~/ktb` now carries the band at text width by default
+(`window_title_bar_overlay_width text|full`, a one-line veto, no rebuild) plus the two upstream NULL
+guards (`docs/patches/kitty-upstream-defects.patch`); `scripts/checks/kitty-title-band-verify.sh`
+on the staged bundle: 14 passed, 0 failed, with no synthetic input (commit `feat: stage the patched kitty with a one-command swap and rollback`). Adoption is
+`scripts/kitty-build-swap.sh`: `arm` after the operator's yes, `swap` as the last step before the
+next capacity-alarm reboot, `verify` after login, `rollback` one command.
+
+**What remains (operator):** the sitting, then three answers filed as decision packets — which chord,
+patched build yes or no, text or full width. **What remains (agent, kitty.6, after the sitting):**
+replace `<CHORD>`, record DoD #4/#5 from `kitty-sitting-S9.txt`, set this plan `status: complete`.
 
 ### W5 — Deliverable B, the patch against master
 
