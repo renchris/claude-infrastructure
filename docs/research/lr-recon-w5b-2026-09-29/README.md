@@ -253,6 +253,61 @@ both ways it must stay a miss.
 `stale NOT_NEEDED dead-before-claim` event for 9c4a2015 every 6-10 s (32 rows by 20:22Z), which
 grows `recon/events.jsonl` (5 MB) with no new information.
 
+### First counted cohort: FAIL, and the defect it found (2026-10-01 21:20-22:35Z)
+
+**Verdict: `next4-7d-1791104400` FAILS** (lead ruling, claude-infrastructure-20). It is the cohort
+that found the defect below. Compared at 22:35Z on the cutoff above (pid 92597; the reconciler
+ran the shared checkout, whose `scripts/limit-recover/` matched origin/main), with the comparer as
+of the commit that adds this section:
+
+```
+SHADOW next4-7d-1791104400: members 13 · legacy found 15 · census misses 0 · not owed 1 (9c4a2015) · placements feasible 0/0 · phase agree 4/8 (false-RECOVERED resolved 0, plan differed 0) · legacy-corrected 2: 89bdedfa,8e18da3f → FAIL
+  3a06361f legacy RECOVERED→next4 watcher=nudge:ENGAGED · recon PRE-MOVE/LAUNCHER-ROOTED via=None · DISAGREE
+  46bc0436 legacy RECOVERED→next4 watcher=nudge:ENGAGED · recon PRE-MOVE/LAUNCHER-ROOTED via=None · DISAGREE
+```
+
+**The defect (`lr_recon`, a cutover blocker; the lead's W7f fixes it).** Legacy nudged 3a06361f
+and 46bc0436 in place on next4 at 21:28:40Z and 21:28:35Z (`nudge-in-place/RECOVERED`, "a fresh
+assistant turn followed within 20s"). Their transcripts under `~/.claude-quaternary` hold real turns
+at 21:29:43Z and 21:30:04Z, and `recon/facts/next4.7d.json` reads `contradicted: true`. The recon
+still held both as `PRE-MOVE/LAUNCHER-ROOTED` and logged `RECON-DEFECT PRE-MOVE/LAUNCHER-ROOTED` for
+them on every pass (1,238 such events since 07:36Z across 19 sids; the cohort's status reads
+`unowned-non-terminal 4`). In act mode a launcher-rooted pane maps to R (`census.py:163`), so the
+daemon would relaunch sessions that are answering on an account whose limit no longer holds. Lead
+ruling: a session observed answering after a contradicted limit must never be held for R. The fix
+restarts the reconciler, so **the cutoff moves to that restart** and the count starts again from 0.
+`next-7d-1791086400` (opened 20:52:23Z) therefore never counts either. At 22:35Z it compared clean
+(`census misses 0 · not owed 0 · placements feasible 0/0 · phase agree 1/1 · legacy-corrected 0 →
+PASS`; f8b54aee agreed, 492a787a legacy-parked with no routable target), but it had not settled.
+
+**Three comparer rules this cohort forced** (lead rulings, each 90-92%; pinned in
+`tests/lr-recon-shadow.bats`, each positive pin red on the comparer before it). All three are in
+`tests/rig/shadow_lib.py`, which judges and never changes what the daemon does.
+
+- **`parked` moved nothing** (`db67ec01a`). 9c4a2015's later legacy runs at 20:35Z and 20:57Z wrote
+  `parked` ("no routable target", no pane, no target) and flipped it back to a census miss. A park
+  now counts with the HELD/NOTMOVED verdicts, but only with PANE `-` and ACCT_AFTER `-`. A park that
+  saw a pane or named a target stays a miss.
+- **Legacy-corrected engagement** (`db67ec01a`). The legacy watcher logged `recycle-dead` for
+  89bdedfa and 8e18da3f at 20:36:46Z and 20:37:15Z ("no assistant turn within 180s"), yet their
+  transcripts on next3 hold turns at 20:33:07Z and 20:33:49Z, and both processes were alive. The
+  recon's `engaged-elsewhere` was right; the comparer had charged the watcher's false negative to
+  it. The legacy truth is now corrected to ENGAGED only when the sid's transcript under the
+  account the recon says it moved to holds a turn after the legacy relaunch, *and* a `claude
+  --resume <sid>` process is live at compare time or was at an archive pass after the relaunch
+  (the watcher now writes `live.json` per cohort). The comparer prints it as `legacy-corrected N`,
+  outside the agree count. The watcher's false negative is legacy-side and the lead's to route.
+- **Nudge truth** (the commit that adds this section). A nudge-in-place writes no watcher row, so
+  the comparer read 3a06361f and 46bc0436 as false-RECOVERED. That "agreed" with the recon's
+  PRE-MOVE and printed `phase agree 6/8 … → PASS` over a real defect. A nudge row is now legacy
+  ENGAGED only when the sid's transcript under ACCT_AFTER's config dir holds an assistant turn
+  after the row's timestamp. This makes the gate stricter.
+
+**Watcher.** Since 22:36Z it is pid 92452, on the comparer code above (it writes `live.json`), the
+only one, notifying the shadow session by id (`4079f342-…`), log `shadow-archive/watch-w5b2.log`.
+Its predecessor pid 3437 (21:22Z, the old code) wrote no `live.json`, so the archive-time arm has
+evidence only from 22:36Z on.
+
 ## Census step
 
 Operator step `f0df9145b73a` (the live observe census) was closed with the launchd daemon's own pass:
