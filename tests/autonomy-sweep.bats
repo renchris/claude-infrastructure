@@ -2049,6 +2049,25 @@ dead_desk() {
   grep -q '"source":"propose-goal-arm".*"delivered":false' "$CC_IDL"
 }
 
+@test "desk-reach ts7-peer arm: an admitting peer range pages once and writes no store" {
+  dead_desk
+  export CC_SWEEP_TS7_BIN="$BATS_TEST_TMPDIR/ts7-admitted"
+  printf '#!/bin/bash\nexit 0\n' > "$CC_SWEEP_TS7_BIN"; chmod +x "$CC_SWEEP_TS7_BIN"
+  run "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ "$(arm_pages typescript-peer-arm)" -eq 1 ]
+  grep -q '"ts7_peer_verdict":"ADMITTED-paged"' "$CC_IDL"
+  run "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$(arm_pages typescript-peer-arm)" -eq 1 ]        # damped to one delivered page per day
+  ! grep -q 'TS 7' "$CC_BACKLOG_FILE" 2>/dev/null
+}
+
+@test "ts7-peer arm: a checkout copy of the sweep never reaches the registry" {
+  run "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  grep -q '"ts7_peer_verdict":"skipped-not-deployed"' "$CC_IDL"
+}
+
 @test "desk-reach dated-park arm: an armed park pages once, and the park stays blocked" {
   dead_desk
   printf '%s\n' '{"id":"aaaaaaaaaaaa","event":"add","title":"dated park","project":"p"}' \

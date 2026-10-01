@@ -1718,6 +1718,46 @@ case "${_dpa_rc:-absent}" in
 esac
 log_idl dated-park-arm "$(jq -nc --arg rc "${_dpa_rc:-absent}" --arg v "$_dpa_verdict" --arg ids "$_dpa_ids" '{dated_park_rc:$rc, dated_park_verdict:$v, dated_park_ids:$ids}')"
 
+sweep_yield 2b-iii-e-ts7-peer-arm
+
+# ── 2b-iii-e. THE TS 7 PEER ARM — an UPSTREAM gate, owned here so nobody has to remember it ─────────
+# reso's TS 7 coexistence (was backlog 9d64a995322a, closed on this arm) waits on ONE upstream fact:
+# typescript-eslint's peer range admitting typescript 7. A blocked row waiting on an upstream release
+# is re-read by nobody, so the row closed and this arm owns the trigger. Same disposition as 2b-iii-b
+# and 2b-iii-c: it PAGES and touches no store, because exit 0 means "the work just became
+# actionable" (docs/lessons/arming-and-mootness-cannot-share-one-falsifier.md). Damped to ONE
+# delivered page per UTC day; the stamp is written only on delivery. rc 2 (registry unreadable) is a
+# non-verdict and never pages. One HTTPS GET per sweep, bounded by the script's own 10 s timeout —
+# and ONLY from the deployed copy (`_cloudret_deployed`, §2a): a checkout or suite copy of this
+# sweep must not reach the network, so every suite that runs the sweep stays hermetic without a stub.
+# The CC_SWEEP_TS7_BIN seam is how a test forces the arm.
+_tpw="${CC_SWEEP_TS7_BIN:-$_SWEEP_DIR/ts7-peer-watch.sh}"
+_tpw_rc=""
+if [ "$_cloudret_deployed" != 1 ] && [ -z "${CC_SWEEP_TS7_BIN:-}" ]; then
+  _tpw_rc="skipped-not-deployed"
+elif [ -x "$_tpw" ]; then
+  _bounded bash "$_tpw" --arm >/dev/null 2>&1; _tpw_rc=$?
+  if [ "$_tpw_rc" -eq 0 ]; then
+    _tpw_stamp="$_cc_cfg/autonomy/typescript-peer-arm.paged"
+    _tpw_today="$(date -u +%Y-%m-%d)"
+    if [ "$(cat "$_tpw_stamp" 2>/dev/null)" != "$_tpw_today" ] \
+       && sweep_desk_page typescript-peer-arm "🟦 typescript-eslint now ADMITS TypeScript 7 — reso can add TS 7 beside TS 6 (was backlog 9d64a995322a, closed on this arm). The gate compiler is already pinned to node_modules/typescript/bin/tsc at every call site, so this is one commit. Read: bash scripts/ts7-peer-watch.sh --report (prints the recipe and the re-file command). The release is the start of the work, not the end."; then
+      printf '%s' "$_tpw_today" >"$_tpw_stamp" 2>/dev/null || true
+    fi
+  fi
+fi
+case "${_tpw_rc:-absent}" in
+  0)   _tpw_verdict="ADMITTED-paged" ;;
+  1)   _tpw_verdict="still-capped" ;;
+  2)   _tpw_verdict="non-verdict-registry-unreadable" ;;
+  124) _tpw_verdict="bound-exceeded" ;;
+  skipped-not-deployed) _tpw_verdict="skipped-not-deployed" ;;
+  *)   _tpw_verdict="watcher-absent" ;;
+esac
+# The disposition is spelled without a digit: tests/idl-record-size.bats enumerates dispositions
+# with `log_idl [a-z-]*`, which would read `ts7-…` as `ts`.
+log_idl typescript-peer-arm "$(jq -nc --arg rc "${_tpw_rc:-absent}" --arg v "$_tpw_verdict" '{ts7_peer_rc:$rc, ts7_peer_verdict:$v}')"
+
 sweep_yield 2b-iii-d-freeze-arm
 
 # ── 2b-iii-d. THE FREEZE ARM — the second no-panic freeze is the signal to build its detector ──────
