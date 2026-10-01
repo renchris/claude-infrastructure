@@ -1,0 +1,129 @@
+{
+ "n_plans": 16,
+ "reads": 79,
+ "fpp": 1.1266,
+ "fpp_hi": 1.1266,
+ "false_alarms": 89,
+ "undetermined": 0,
+ "raw_refuted_per_read": 0.392,
+ "q": 0.223,
+ "q_counts": [
+  21,
+  94
+ ],
+ "q_seeds": [
+  7,
+  42
+ ],
+ "u": 0.079,
+ "u_lo": 0.013,
+ "u_hi": 0.234,
+ "omit": 0.554,
+ "b_pooled_ex_tm2": 0.182,
+ "b_tm2": 0.399,
+ "N0_median": 25,
+ "N0_list": [
+  11,
+  16,
+  18,
+  18,
+  19,
+  20,
+  20,
+  21,
+  25,
+  30,
+  32,
+  33,
+  37,
+  37,
+  38,
+  185
+ ],
+ "seed_recall": 0.547,
+ "known_recall": 0.318,
+ "point_exceeded": [
+  6,
+  16
+ ],
+ "bound_exceeded": [
+  1,
+  16
+ ],
+ "phi": {
+  "same-model": [
+   0.367,
+   32
+  ],
+  "cross-strategy": [
+   -0.013,
+   101
+  ],
+  "cross-vendor": [
+   0.229,
+   30
+  ]
+ },
+ "recall_by_slot": {
+  "A_full": 0.172,
+  "A_plan": 0.085,
+  "B_full": 0.104,
+  "B_plan": 0.053,
+  "D_full": 0.143,
+  "D_plan": 0.093
+ },
+ "audit": {
+  "n": 64,
+  "real": 59,
+  "material": 52,
+  "present": 59,
+  "all3": 50,
+  "found_by_ok": 57,
+  "evidence_ok": 52
+ },
+ "pp_per_anthropic_read": 0.05,
+ "openai_tokens_per_read": 70238,
+ "u_plan_mean": 0.121,
+ "u_lo_plan_mean": 0.017,
+ "u_hi_plan_mean": 0.343,
+ "omit_plan_mean": 0.577,
+ "audit_keep_rate": 0.781,
+ "N0_audited": [
+  8.8,
+  13.2,
+  14.3,
+  14.5,
+  15.1,
+  16.1,
+  16.1,
+  16.8,
+  20.6,
+  23.9,
+  25.7,
+  26.4,
+  29.1,
+  29.6,
+  31.2,
+  145.0
+ ],
+ "N0_audited_median": 20.6,
+ "fixborn_rate_by_plan": {
+  "agent-context-sync": 0.158,
+  "device-enrollment-build": 0.091,
+  "hook-surface-100p": 0.056,
+  "land-pipeline-v2": 0.214,
+  "land-ship-v2": 0.25,
+  "limit-detect-100p": 0.4,
+  "limit-recover-100p": 0.211,
+  "limit-recover-fleet-v2": 0.061,
+  "machine-capacity-v2": 0.292,
+  "research-report-v1": 0.368,
+  "reso-latency-100p": 0.143,
+  "reso-security-100p": 0.316,
+  "sevenrooms-laptop-independence": 0.182,
+  "tenant-provisioning-100p": 0.069,
+  "tm2": 0.399,
+  "voiceink-latency": 0.194
+ },
+ "fixborn_plan_median": 0.211
+}

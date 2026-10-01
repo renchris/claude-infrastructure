@@ -1,0 +1,463 @@
+{
+ "id": "limit-recover-fleet-v2",
+ "held_out_ledger_ids": [],
+ "escape_ids": [
+  1,
+  2,
+  3,
+  6,
+  7,
+  8,
+  9,
+  10,
+  13,
+  17,
+  18,
+  19,
+  21,
+  22,
+  23,
+  25,
+  27,
+  29,
+  30,
+  31,
+  32,
+  33,
+  35,
+  38,
+  39,
+  40,
+  42,
+  44,
+  47,
+  51,
+  52,
+  54,
+  55,
+  56,
+  57,
+  58,
+  59,
+  60,
+  61,
+  63,
+  66,
+  67,
+  68,
+  69,
+  70,
+  72,
+  73,
+  74,
+  75,
+  76,
+  77,
+  78,
+  79,
+  83,
+  85,
+  86,
+  87,
+  88,
+  90,
+  97,
+  99,
+  100,
+  101,
+  104,
+  105,
+  106,
+  108,
+  109,
+  110,
+  111,
+  113,
+  114,
+  115,
+  118,
+  119,
+  120,
+  123,
+  126,
+  127,
+  128,
+  130,
+  132,
+  135,
+  136,
+  137,
+  138,
+  139,
+  140,
+  141,
+  143,
+  145,
+  147,
+  148,
+  149,
+  150,
+  151,
+  153,
+  155,
+  158,
+  160,
+  161,
+  162,
+  163,
+  164,
+  165,
+  166,
+  167,
+  169,
+  171,
+  172,
+  174,
+  175,
+  176,
+  178,
+  179,
+  180,
+  181,
+  182,
+  183,
+  184,
+  187,
+  189,
+  190,
+  192,
+  193,
+  196,
+  197,
+  198,
+  200
+ ],
+ "fac_kept": [
+  {
+   "fac": "FAC-01",
+   "axis": "Options include do-nothing and use-what-exists",
+   "ledger_ids": [
+    110,
+    120,
+    68
+   ],
+   "external": false,
+   "cites": "110, 120, 68"
+  },
+  {
+   "fac": "FAC-02",
+   "axis": "Candidates enumerated from the artifact itself (repo, fork, installed), never from memory",
+   "ledger_ids": [
+    173,
+    69
+   ],
+   "external": false,
+   "cites": "173, 69"
+  },
+  {
+   "fac": "FAC-03",
+   "axis": "Upstream or base version as an explicit DR; upstream tracker as a source",
+   "ledger_ids": [
+    181,
+    182
+   ],
+   "external": false,
+   "cites": "181, 182"
+  },
+  {
+   "fac": "FAC-04",
+   "axis": "Instance census: every checkout, copy and deployed instance",
+   "ledger_ids": [
+    88,
+    102
+   ],
+   "external": false,
+   "cites": "88, 102"
+  },
+  {
+   "fac": "FAC-05",
+   "axis": "Caller and consumer census keyed by *name*, not path",
+   "ledger_ids": [
+    90,
+    44
+   ],
+   "external": false,
+   "cites": "90, 44"
+  },
+  {
+   "fac": "FAC-06",
+   "axis": "Execution contexts: deployment interpreter, scheduler, CI/build OS, real device vs simulator",
+   "ledger_ids": [
+    92,
+    91,
+    95,
+    153,
+    41
+   ],
+   "external": false,
+   "cites": "92, 91, 95, 153, 41"
+  },
+  {
+   "fac": "FAC-07",
+   "axis": "Liveness and expiry: where it runs, what keeps it alive, what expires, who re-authenticates",
+   "ledger_ids": [
+    168,
+    96,
+    16,
+    170
+   ],
+   "external": false,
+   "cites": "168, 96, 16, 170"
+  },
+  {
+   "fac": "FAC-08",
+   "axis": "Concurrency and the fleet case: concurrent actors, N > 1, generator vs UI races",
+   "ledger_ids": [
+    193,
+    126,
+    142
+   ],
+   "external": false,
+   "cites": "193, 126, 142"
+  },
+  {
+   "fac": "FAC-09",
+   "axis": "Publication surfaces: mirrors, forks, jobs that push",
+   "ledger_ids": [
+    175,
+    187,
+    190
+   ],
+   "external": false,
+   "cites": "175, 187, 190"
+  },
+  {
+   "fac": "FAC-10",
+   "axis": "Operator-owned accounts, tenants and devices",
+   "ledger_ids": [
+    147,
+    134
+   ],
+   "external": false,
+   "cites": "147, 134"
+  },
+  {
+   "fac": "FAC-11",
+   "axis": "Evidence beyond our own stores: access logs, trackers, the public web",
+   "ledger_ids": [
+    57,
+    111,
+    182
+   ],
+   "external": false,
+   "cites": "57, 111, 182"
+  },
+  {
+   "fac": "FAC-12",
+   "axis": "Prior invariants, each with a guard test",
+   "ledger_ids": [
+    159,
+    141
+   ],
+   "external": false,
+   "cites": "159, 141"
+  },
+  {
+   "fac": "FAC-13",
+   "axis": "Handed commands run by the agent under the real invocation (`!`, no TTY, launchd)",
+   "ledger_ids": [
+    155,
+    91,
+    156
+   ],
+   "external": false,
+   "cites": "155, 91, 156"
+  },
+  {
+   "fac": "FAC-14",
+   "axis": "Platform and feature-support matrix",
+   "ledger_ids": [
+    33
+   ],
+   "external": false,
+   "cites": "33"
+  },
+  {
+   "fac": "FAC-15",
+   "axis": "Deliverable consumer and install path",
+   "ledger_ids": [
+    198
+   ],
+   "external": false,
+   "cites": "198"
+  },
+  {
+   "fac": "FAC-16",
+   "axis": "Operator-private relationships and agreements",
+   "ledger_ids": [
+    194,
+    107
+   ],
+   "external": false,
+   "cites": "194, 107"
+  },
+  {
+   "fac": "FAC-17",
+   "axis": "Hazard census: write paths to live data, destructive instruments, irreversibility",
+   "ledger_ids": [
+    10,
+    90,
+    126
+   ],
+   "external": false,
+   "cites": "10, 90, 126"
+  },
+  {
+   "fac": "FAC-18",
+   "axis": "Seams with sibling plans: an owner for every producer and consumer",
+   "ledger_ids": [],
+   "external": true,
+   "cites": "`LIMIT_RECOVER_100P.md:772-777`"
+  },
+  {
+   "fac": "FAC-19",
+   "axis": "A measured ceiling for every performance or superlative target",
+   "ledger_ids": [
+    11,
+    15
+   ],
+   "external": false,
+   "cites": "11, 15"
+  },
+  {
+   "fac": "FAC-20",
+   "axis": "Positive reference set for taste",
+   "ledger_ids": [
+    62,
+    65,
+    66
+   ],
+   "external": false,
+   "cites": "62, 65, 66"
+  },
+  {
+   "fac": "FAC-21",
+   "axis": "Pre-registered thresholds and a negative-result branch",
+   "ledger_ids": [
+    179
+   ],
+   "external": false,
+   "cites": "179"
+  },
+  {
+   "fac": "FAC-22",
+   "axis": "Every hold carries an expiry",
+   "ledger_ids": [
+    56
+   ],
+   "external": false,
+   "cites": "56"
+  },
+  {
+   "fac": "FAC-23",
+   "axis": "Freshness: sibling trunk activity, registry releases, credential validity",
+   "ledger_ids": [
+    119,
+    165,
+    103,
+    164,
+    96
+   ],
+   "external": false,
+   "cites": "119, 165, 103, 164, 96"
+  },
+  {
+   "fac": "FAC-24",
+   "axis": "Research probes never mutate the live subject",
+   "ledger_ids": [
+    49
+   ],
+   "external": false,
+   "cites": "49"
+  },
+  {
+   "fac": "FAC-25",
+   "axis": "Compliance and data residency for external deliverables",
+   "ledger_ids": [
+    87
+   ],
+   "external": false,
+   "cites": "87"
+  },
+  {
+   "fac": "FAC-26",
+   "axis": "Real artifacts, n > 1, a load control",
+   "ledger_ids": [
+    191,
+    53
+   ],
+   "external": false,
+   "cites": "191, 53"
+  },
+  {
+   "fac": "FAC-27",
+   "axis": "Property list includes liveness and recovery; every fix re-checked by the instrument that found the bug",
+   "ledger_ids": [],
+   "external": true,
+   "cites": "AWS (Newcombe 2014 pp.3); C7"
+  },
+  {
+   "fac": "FAC-28",
+   "axis": "Emergent load and feedback behavior exercised on a running thin slice",
+   "ledger_ids": [
+    191
+   ],
+   "external": true,
+   "cites": "AWS p.5; 191"
+  },
+  {
+   "fac": "FAC-29",
+   "axis": "Deploy rehearsal, rollback and kill switch designed before build",
+   "ledger_ids": [
+    95,
+    121
+   ],
+   "external": true,
+   "cites": "Knight Capital (SEC 2013-222); 95, 121"
+  },
+  {
+   "fac": "FAC-30",
+   "axis": "Source register reconciled: every source consulted or N/A with a reason",
+   "ledger_ids": [
+    57,
+    111,
+    182
+   ],
+   "external": false,
+   "cites": "57, 111, 182"
+  },
+  {
+   "fac": "FAC-31",
+   "axis": "Decisions settled by default (freeze clauses, shipped-OFF defaults) registered and ruled",
+   "ledger_ids": [
+    181,
+    192
+   ],
+   "external": false,
+   "cites": "181, 192"
+  },
+  {
+   "fac": "FAC-32",
+   "axis": "Cost and quota of building and running the deliverable measured, not estimated",
+   "ledger_ids": [
+    109,
+    162
+   ],
+   "external": false,
+   "cites": "109, 162"
+  }
+ ],
+ "fac_dropped": [],
+ "n_escapes": 129,
+ "n_fac": 32
+}

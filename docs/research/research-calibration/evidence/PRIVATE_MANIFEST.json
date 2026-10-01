@@ -1,0 +1,756 @@
+{
+ "store": "$CC_PRIVATE_DIR/docs/research/research-calibration-2026-10-01 (default ~/Development/claude-private)",
+ "why": "raw per-plan evidence quotes private repositories; this public repo keeps only aggregates (REPORT gate row 8: private receipts carry a content hash)",
+ "files": [
+  {
+   "path": "adjudicate/_control_verdicts.json",
+   "sha256": "622e5a66db8c5b4bbd5737618a18e81c4d6af181e6ad2e33e2201d4510cc644b",
+   "bytes": 1236
+  },
+  {
+   "path": "adjudicate/_controls.json",
+   "sha256": "3704d2bff491f1c883b63b02dbe78e9245fa995d2d89c6db976e8c4487892c5f",
+   "bytes": 577
+  },
+  {
+   "path": "adjudicate/_verdicts.json",
+   "sha256": "5c131588386b5226afecaef9f9fab4790632d868d02e2dc50c177286178fa4dd",
+   "bytes": 3903
+  },
+  {
+   "path": "adjudicate/agent-context-sync.json",
+   "sha256": "b855754108a9bb0b7f7a1022950220711e7b139f7142fcab6038582bbaccc162",
+   "bytes": 9381
+  },
+  {
+   "path": "adjudicate/device-enrollment-build.json",
+   "sha256": "3ca2204b0fcff5bce7499bfafd6cd10a50deff96e658d815cfa7201eed812fa8",
+   "bytes": 8912
+  },
+  {
+   "path": "adjudicate/hook-surface-100p.json",
+   "sha256": "fa4bfc8b451d643b1b1fa70f61903e13370c4094aac69b1e090ab1a4c0f90aef",
+   "bytes": 8530
+  },
+  {
+   "path": "adjudicate/land-pipeline-v2.json",
+   "sha256": "e60df774141ee634f55c61a4b33ebde125a51a71db4afb254b370ca9d6c2675f",
+   "bytes": 10869
+  },
+  {
+   "path": "adjudicate/land-ship-v2.json",
+   "sha256": "c9d8f33fce5fb65762bf85282f835dd7dc2a24d78ef5c82780050b4283df8493",
+   "bytes": 11860
+  },
+  {
+   "path": "adjudicate/limit-detect-100p.json",
+   "sha256": "b0d0d5a8a77009461643511dc45a32b2925387fb3b13d9e6cc6c93d1dab827da",
+   "bytes": 14557
+  },
+  {
+   "path": "adjudicate/limit-recover-100p.json",
+   "sha256": "893e7f2ffce0e5149e658382c95092ae73fb72589c4d844cb1f13771a2e83eae",
+   "bytes": 4243
+  },
+  {
+   "path": "adjudicate/limit-recover-fleet-v2.json",
+   "sha256": "ebb9995b2e659212757fc26d46ed95a499c051275dffeb7fc2f82e9df4305271",
+   "bytes": 10270
+  },
+  {
+   "path": "adjudicate/machine-capacity-v2.json",
+   "sha256": "501642c50643fd0f7fa4ec37625d66242a06ab82c1c13b32fce584d0587551cf",
+   "bytes": 7247
+  },
+  {
+   "path": "adjudicate/research-report-v1.json",
+   "sha256": "ecbc736039dd8459670935d0585bfe196eac162020536dc9478e7994f6a1f6f5",
+   "bytes": 6489
+  },
+  {
+   "path": "adjudicate/reso-latency-100p.json",
+   "sha256": "0630758902b00f6d16637fcead7c5b1a7c134a3809dfcd11ce06d86740f9a367",
+   "bytes": 5290
+  },
+  {
+   "path": "adjudicate/reso-security-100p.json",
+   "sha256": "81d54c8930bc49a9865d3ec233aeeb55a071489146d482c25d0a49b20c3f2a82",
+   "bytes": 7697
+  },
+  {
+   "path": "adjudicate/sevenrooms-laptop-independence.json",
+   "sha256": "fb6202ff8760a8e9f5a3e990df9273bcbbbdf2aa32ec574678997be17be66dee",
+   "bytes": 6129
+  },
+  {
+   "path": "adjudicate/tenant-provisioning-100p.json",
+   "sha256": "d6de4e037cea294744cba3162dcc958c76e195cc59be1513f79aeee9d0d35036",
+   "bytes": 9805
+  },
+  {
+   "path": "adjudicate/tm2.json",
+   "sha256": "d03cfe8a23b9118b87ddde3fc7b84ccf9c6043de67ee71fd11f851d755fca81c",
+   "bytes": 9726
+  },
+  {
+   "path": "adjudicate/voiceink-latency.json",
+   "sha256": "6183088904b0ebafd1d063a0696e1a22aa9bff400f222cdb72e09fbc075b3701",
+   "bytes": 6414
+  },
+  {
+   "path": "findings/agent-context-sync.json",
+   "sha256": "1e94ef4e286e289b8a68ed88d857800049d6c114c3c350bd2aa3172ab2a38150",
+   "bytes": 80632
+  },
+  {
+   "path": "findings/device-enrollment-build.json",
+   "sha256": "3e5fcea3562ca051692b5e97bceb52b941671fc3611e80df46820f49392c395c",
+   "bytes": 57348
+  },
+  {
+   "path": "findings/hook-surface-100p.json",
+   "sha256": "3b3d60a8c84866e232310e388ad1cd406b64f599e80132ce3e18b27898740593",
+   "bytes": 66733
+  },
+  {
+   "path": "findings/land-pipeline-v2.json",
+   "sha256": "179e9f5649bb131285a970604b318ccc961b19f1afc84a21d2d73ab0a498c51d",
+   "bytes": 56743
+  },
+  {
+   "path": "findings/land-ship-v2.json",
+   "sha256": "53ae8e04ef70984493eaf879a172d9cb905b727cc81b0d2d91afb69d1395aaa2",
+   "bytes": 71829
+  },
+  {
+   "path": "findings/limit-detect-100p.json",
+   "sha256": "043cb2f9703d027533a20f7cea46181f7ac5763f5bdb54c8133aced3b939608c",
+   "bytes": 60594
+  },
+  {
+   "path": "findings/limit-recover-100p.json",
+   "sha256": "6a77d1de1ae2746c93118e48374eec9bee0fa9e45f3a78a222afa255ab74b3af",
+   "bytes": 45809
+  },
+  {
+   "path": "findings/limit-recover-fleet-v2.json",
+   "sha256": "a4fbd28e010fecc1803b128622dc144d873151f57a9968b466919235da35a953",
+   "bytes": 44299
+  },
+  {
+   "path": "findings/machine-capacity-v2.json",
+   "sha256": "3cc56e0903f89a47bbdd850bd44d5093702732a9cd8185ce3f17d72635444086",
+   "bytes": 44731
+  },
+  {
+   "path": "findings/research-report-v1.json",
+   "sha256": "cca42b6fabfdf8fbc2c104440d6b2791ed9c2a3481a6ece2e9de50a51e5f0719",
+   "bytes": 36405
+  },
+  {
+   "path": "findings/reso-latency-100p.json",
+   "sha256": "168d4a6d43d78cfaf1576e30747247ff2bb5723b800f642b084361876c43fc26",
+   "bytes": 42219
+  },
+  {
+   "path": "findings/reso-security-100p.json",
+   "sha256": "6690c84ab1894b66aba4491f266948a4123cbae353d6998d80ff83ca3ac89966",
+   "bytes": 37778
+  },
+  {
+   "path": "findings/sevenrooms-laptop-independence.json",
+   "sha256": "f13a75716e26b73586b119a051e704a35963d1517a02a376d430216fe2715344",
+   "bytes": 27775
+  },
+  {
+   "path": "findings/tenant-provisioning-100p.json",
+   "sha256": "dca618aa2b3ed69b991267aad5fedc004dbd335b208aa5ce60ffe6979d8dcf73",
+   "bytes": 45149
+  },
+  {
+   "path": "findings/tm2.json",
+   "sha256": "88915406ae1102254bc2aa4df77ae691c688c19adf9ee85539e326f0200793b7",
+   "bytes": 41436
+  },
+  {
+   "path": "findings/voiceink-latency.json",
+   "sha256": "5ede4613e2b9bc445d1a68b463a05072af609be0fa052c356e5ca1b1ce7900f6",
+   "bytes": 44075
+  },
+  {
+   "path": "history/agent-context-sync.json",
+   "sha256": "d0bd5738ff6bff90929ad52944fbbc589803aa719232bec83e0465379275097a",
+   "bytes": 30430
+  },
+  {
+   "path": "history/device-enrollment-build.json",
+   "sha256": "5b8a3f371d6d9bd5814a1abbfd0f4e43ad07846d7a7e512ba33279150de1c5b2",
+   "bytes": 16121
+  },
+  {
+   "path": "history/hook-surface-100p.json",
+   "sha256": "29ac94cc1a4d119e2fccac69876d311c81cbedd2ee016968c9d7666f20bf0619",
+   "bytes": 19507
+  },
+  {
+   "path": "history/land-pipeline-v2.json",
+   "sha256": "db673c00f906a6c6b9564c74fd2c09f7cd3e09116da287fe157ecc19331fc373",
+   "bytes": 34019
+  },
+  {
+   "path": "history/land-ship-v2.json",
+   "sha256": "381cb4a42f01f2d4731c3b180f2c1b71f7d5a60cd3eef58692891acd245a0180",
+   "bytes": 21674
+  },
+  {
+   "path": "history/limit-detect-100p.json",
+   "sha256": "8ff2d48dea9df596201ff026f40760fe280924b93507433755396d3e2b6d27d0",
+   "bytes": 24500
+  },
+  {
+   "path": "history/limit-recover-100p.json",
+   "sha256": "e27ee17cb113aa02c74ced7bf9abd62d1cb3652abd321ceb5e786d7fe5b65f01",
+   "bytes": 26233
+  },
+  {
+   "path": "history/limit-recover-fleet-v2.json",
+   "sha256": "038bd35e428dd7fe2ea7b78d64744ff8c518898eab998fb980479128c2b8f653",
+   "bytes": 33457
+  },
+  {
+   "path": "history/machine-capacity-v2.json",
+   "sha256": "3385a6c704a053bc6ccd071da15531e7656602268fbfe129ec5c0abeb5a8e214",
+   "bytes": 23616
+  },
+  {
+   "path": "history/research-report-v1.json",
+   "sha256": "b5600a8ce134271beb0b1fbcd32ce129bd585e00c83c72e1128a5f94f50fe551",
+   "bytes": 26264
+  },
+  {
+   "path": "history/reso-latency-100p.json",
+   "sha256": "b69b65594b9a8c56fcb05313d98644c82480d765d97f75987be839d343cff4c7",
+   "bytes": 21714
+  },
+  {
+   "path": "history/reso-security-100p.json",
+   "sha256": "11b6815007888da17d11943e6b4fb340fc3777379d4431e56f7e53747bd5982d",
+   "bytes": 18981
+  },
+  {
+   "path": "history/sevenrooms-laptop-independence.json",
+   "sha256": "908f2938bd3af481a5e06d272f189c6781368df1881f2a8cefeea39f8e132cae",
+   "bytes": 13239
+  },
+  {
+   "path": "history/tenant-provisioning-100p.json",
+   "sha256": "e527b5a3c925cfe60d407f472d3d7592c2a61d646135bdbb1d49fc834398d552",
+   "bytes": 29884
+  },
+  {
+   "path": "history/tm2.json",
+   "sha256": "a7e05120a08f3a62eb059456d57b56c86946acfcc299340cc7752c5b5ea33eb6",
+   "bytes": 38990
+  },
+  {
+   "path": "history/voiceink-latency.json",
+   "sha256": "4994b6605a6cc4a64f2b8cf35a6b318708e2befbeed816cb88832e927012fc97",
+   "bytes": 30315
+  },
+  {
+   "path": "raters.log",
+   "sha256": "b8fcae3f086c8bebafb5963b95f3361dd88537d34fdc44e3fd59484d9ccd1b3d",
+   "bytes": 4501
+  },
+  {
+   "path": "raters/rater1/agent-context-sync.last",
+   "sha256": "1da2f04fa194d1abfa7c333021447d57a0f4ea8a7c3354ba31775a3934ed11d5",
+   "bytes": 7200
+  },
+  {
+   "path": "raters/rater1/agent-context-sync.meta.json",
+   "sha256": "cc1956b363fa3accd2b803973a800ca07a91dc74a6fd47af0e40abe277be92d6",
+   "bytes": 138
+  },
+  {
+   "path": "raters/rater1/device-enrollment-build.last",
+   "sha256": "984e0fab5ab4751c6c0c126eca74b80215a7b0c2e3393dafa7376d2914e768b7",
+   "bytes": 4694
+  },
+  {
+   "path": "raters/rater1/device-enrollment-build.meta.json",
+   "sha256": "3aa71b61ec305c3dcfc5d86653e3b87536d65e6cd2f0e9225f3e78021f8f021b",
+   "bytes": 143
+  },
+  {
+   "path": "raters/rater1/hook-surface-100p.last",
+   "sha256": "e82621b329c8a38534b4c92d567cad80df0f544089078e321ddd790ec0e9d723",
+   "bytes": 4560
+  },
+  {
+   "path": "raters/rater1/hook-surface-100p.meta.json",
+   "sha256": "d1be3938267bbaadab064a26f8fc9ded2cfd664bcdbf47db53b30857f1b02718",
+   "bytes": 137
+  },
+  {
+   "path": "raters/rater1/land-pipeline-v2.last",
+   "sha256": "597c009e0d7f5bd482f5c5024422dd7e4f78b25477991fa3f4118b378cb2ef60",
+   "bytes": 5160
+  },
+  {
+   "path": "raters/rater1/land-pipeline-v2.meta.json",
+   "sha256": "278cb4c4d7593c75291b58eae94828cd41798dc8f31c1743d4efcf973ac1dfe4",
+   "bytes": 136
+  },
+  {
+   "path": "raters/rater1/land-ship-v2.last",
+   "sha256": "f2d31b9a224701f5260f88f33c8528f5805f8be34aaafc7d61ea5afe8122bb2b",
+   "bytes": 5090
+  },
+  {
+   "path": "raters/rater1/land-ship-v2.meta.json",
+   "sha256": "335a96f7bc1a62487d10fb17942937567b4906dc46fc71da17bd058b8e895c28",
+   "bytes": 132
+  },
+  {
+   "path": "raters/rater1/limit-detect-100p.last",
+   "sha256": "f7574869e56f5bfbca8f9cf1dde51ac7bf650c1f2b4c545820cd194402a2f1b1",
+   "bytes": 4926
+  },
+  {
+   "path": "raters/rater1/limit-detect-100p.meta.json",
+   "sha256": "dc32883e0767f84680cdd454584bc67170d056902fd14832139291ae354f4c22",
+   "bytes": 137
+  },
+  {
+   "path": "raters/rater1/limit-recover-100p.last",
+   "sha256": "675005e7bcdda7ee12d20fa934a6ca385537ef016bf1d7afb042672e815444c4",
+   "bytes": 2940
+  },
+  {
+   "path": "raters/rater1/limit-recover-100p.meta.json",
+   "sha256": "8515b5d326e1aa13515a3f5e1abb6d840216d78f42cdca8b32071163efb31c01",
+   "bytes": 137
+  },
+  {
+   "path": "raters/rater1/limit-recover-fleet-v2.last",
+   "sha256": "afbf70ea2c37e88dd26757203e2481c16af6d7b909ed1133502dd432dec99377",
+   "bytes": 4706
+  },
+  {
+   "path": "raters/rater1/limit-recover-fleet-v2.meta.json",
+   "sha256": "6a0e307b00831035164ce5700d028cdb6a40dfd7706676cd77c77e9422affd94",
+   "bytes": 142
+  },
+  {
+   "path": "raters/rater1/machine-capacity-v2.last",
+   "sha256": "c640f148c7aa7536ca19d0f7f4e9ae76f44debd9c373489fbe55f2c8b5bfa791",
+   "bytes": 4160
+  },
+  {
+   "path": "raters/rater1/machine-capacity-v2.meta.json",
+   "sha256": "9635db37d5836ffdfb1147615b09ef89e309ca5293649ec06eadb10532944629",
+   "bytes": 139
+  },
+  {
+   "path": "raters/rater1/research-report-v1.last",
+   "sha256": "17dd18d4e39770302185e695dfa185ffc48d1c67046d30dde2aa2e1a15b40c65",
+   "bytes": 2973
+  },
+  {
+   "path": "raters/rater1/research-report-v1.meta.json",
+   "sha256": "af0830e6104e955a94ed8ddb8be9f3efd83bfb5e96c8aff6308917c5d781ee6c",
+   "bytes": 138
+  },
+  {
+   "path": "raters/rater1/reso-latency-100p.last",
+   "sha256": "d17919ae3aff5d806931af60de9b89fef2470c0198a8f93a6890d23c6d0178c4",
+   "bytes": 3614
+  },
+  {
+   "path": "raters/rater1/reso-latency-100p.meta.json",
+   "sha256": "45d7007c6a3f6dce715b87f7ffc5e74eb4a7421217e9abc71fc9519a3a34077b",
+   "bytes": 137
+  },
+  {
+   "path": "raters/rater1/reso-security-100p.last",
+   "sha256": "0e99791164110cda070417193ba34fa7626c04c948db75d49d29292709add520",
+   "bytes": 3270
+  },
+  {
+   "path": "raters/rater1/reso-security-100p.meta.json",
+   "sha256": "db3ad11568a6a04c01fdef4834eb306a40a55d7c25638ac67aa5ebe2d02f6bdd",
+   "bytes": 138
+  },
+  {
+   "path": "raters/rater1/sevenrooms-laptop-independence.last",
+   "sha256": "bbf27d630b70004bb430627be4508d7cca75c7847f20df29c8c0bac7b52a69b1",
+   "bytes": 2355
+  },
+  {
+   "path": "raters/rater1/sevenrooms-laptop-independence.meta.json",
+   "sha256": "c7e7f4baf32b1372422751c8a703620e974ac9bcd3e064c033c8b0013f8ec22d",
+   "bytes": 149
+  },
+  {
+   "path": "raters/rater1/tenant-provisioning-100p.last",
+   "sha256": "c9b3fa6576de7ef9a17c2907f1bb50bcffdfb1b9c977afc745b3b0f033e1b31b",
+   "bytes": 4081
+  },
+  {
+   "path": "raters/rater1/tenant-provisioning-100p.meta.json",
+   "sha256": "78ed6399f40510aeb066ef76e3d2be6a01096869a9d877545f757fa5a755a5d2",
+   "bytes": 144
+  },
+  {
+   "path": "raters/rater1/tm2.last",
+   "sha256": "09358507ef9b1d52aded816fec67f5c39050126f88aa4bcea3f4dd51b7077056",
+   "bytes": 4839
+  },
+  {
+   "path": "raters/rater1/tm2.meta.json",
+   "sha256": "0ed32e80e60004e150722d9d27787462c5b5b10da885ef933d87d1722f72ecdb",
+   "bytes": 123
+  },
+  {
+   "path": "raters/rater1/voiceink-latency.last",
+   "sha256": "4eb62e06697fcdd4f96cf3d6cf41fc90edca90da173e86e300950c47718409cf",
+   "bytes": 5208
+  },
+  {
+   "path": "raters/rater1/voiceink-latency.meta.json",
+   "sha256": "e18420875d2d4c84383175da4c7d92922ab8b3f2e049447a54ffe88364f2e0e3",
+   "bytes": 136
+  },
+  {
+   "path": "raters/rater3/agent-context-sync.last",
+   "sha256": "30afe85dec41f66cbf6be0977de0933cb4bb97156cc1c6ec15fe0dd3809f549e",
+   "bytes": 2249
+  },
+  {
+   "path": "raters/rater3/agent-context-sync.meta.json",
+   "sha256": "60ec02b77bcbbec8fb67412ccfa9be22036af62d98441bbdbebfea76d1fb1d0f",
+   "bytes": 138
+  },
+  {
+   "path": "raters/rater3/device-enrollment-build.last",
+   "sha256": "52e4fb34c8d7f9717daea44e7fa4ca36f58c5466ab1c2d4642c3b2d2ee894537",
+   "bytes": 2034
+  },
+  {
+   "path": "raters/rater3/device-enrollment-build.meta.json",
+   "sha256": "4dba32f9b66e53c6cc073f728c7c9892768c5b6e02e9d0b758da3d326c9b1f39",
+   "bytes": 143
+  },
+  {
+   "path": "raters/rater3/hook-surface-100p.last",
+   "sha256": "430468429381daa4bb395207578b6c11e2f855303af5da2349846838f5bd9885",
+   "bytes": 622
+  },
+  {
+   "path": "raters/rater3/hook-surface-100p.meta.json",
+   "sha256": "aa98f045ffdcf56d949785bbce84472ce9fef327bda85ed0a72402d6c3b8ef63",
+   "bytes": 136
+  },
+  {
+   "path": "raters/rater3/land-pipeline-v2.last",
+   "sha256": "2544916dd1a46eab6db2eeeb1c63da3a349da4ae1f859fa35321ff7926edf54b",
+   "bytes": 1988
+  },
+  {
+   "path": "raters/rater3/land-pipeline-v2.meta.json",
+   "sha256": "19f7cbe92499cf2be53262e2afbe1f82a4f97742ce1e99de3957d2aec4060418",
+   "bytes": 136
+  },
+  {
+   "path": "raters/rater3/land-ship-v2.last",
+   "sha256": "e5d95c0e992aa962c71e3cc208665d84471ebefd6aa801ea5496ca6e4164086c",
+   "bytes": 2419
+  },
+  {
+   "path": "raters/rater3/land-ship-v2.meta.json",
+   "sha256": "2fc3292212cfc3ac4d71dfe6ea5afe02b6a4236200123e9d1c2374b12b5af006",
+   "bytes": 132
+  },
+  {
+   "path": "raters/rater3/limit-detect-100p.last",
+   "sha256": "85961672b1648ae3d8c8a16a365f6ea3d3cdaece2fb27e00629bcc80942ea90c",
+   "bytes": 1957
+  },
+  {
+   "path": "raters/rater3/limit-detect-100p.meta.json",
+   "sha256": "445b0a2a52ff47f822f0d3562b3313f51aed295dc28266adec40b0633e9b14c1",
+   "bytes": 137
+  },
+  {
+   "path": "raters/rater3/limit-recover-100p.last",
+   "sha256": "7aeb09d499425bf53a32d01f9c0bf566f294ab6d3d6e75a50d01273cdfe65ba5",
+   "bytes": 1545
+  },
+  {
+   "path": "raters/rater3/limit-recover-100p.meta.json",
+   "sha256": "218d7e288cc6181094c7388979150e038b0cacc4f69353513ce7010c1e024489",
+   "bytes": 138
+  },
+  {
+   "path": "raters/rater3/limit-recover-fleet-v2.last",
+   "sha256": "34b4d187d5a486ce8a289126911648c9f9da07ac1b2859ba4a21877140cb6e1a",
+   "bytes": 518
+  },
+  {
+   "path": "raters/rater3/limit-recover-fleet-v2.meta.json",
+   "sha256": "1e2ba7a50bb5d7585d5a1f8a61bd0ffb1f7847f3ba110a4a03c3568b24cf92f8",
+   "bytes": 141
+  },
+  {
+   "path": "raters/rater3/machine-capacity-v2.last",
+   "sha256": "52fee8c06c389f86d7d5d0126dcb67c53bcce2f7c09503145896c036821f5afb",
+   "bytes": 802
+  },
+  {
+   "path": "raters/rater3/machine-capacity-v2.meta.json",
+   "sha256": "da4a5d1d9b46696960474ea7d06b48427bce371f37e3e8878e081d2ebf0eb166",
+   "bytes": 138
+  },
+  {
+   "path": "raters/rater3/research-report-v1.last",
+   "sha256": "e45d2891a654a5cef82110d66e1ad04b67ce9feeb8542d5ac6dc1f2af55754cf",
+   "bytes": 538
+  },
+  {
+   "path": "raters/rater3/research-report-v1.meta.json",
+   "sha256": "256850f1b4a3196dd5658e9215a94142565c5cc32a999e1974e076662be72bde",
+   "bytes": 137
+  },
+  {
+   "path": "raters/rater3/reso-latency-100p.last",
+   "sha256": "51dd6cdedfd13ce7f4a998e9d93eb6daa958a4957b840ab08f147c50e426f673",
+   "bytes": 2931
+  },
+  {
+   "path": "raters/rater3/reso-latency-100p.meta.json",
+   "sha256": "1868e941fb63ff39bc175e1415cd3791f3156a431cb30bb2066ebe958b070754",
+   "bytes": 137
+  },
+  {
+   "path": "raters/rater3/reso-security-100p.last",
+   "sha256": "d212113c05f7b84057c8e3a03948cb197674bba1c7eb88ec249b09227f451f7b",
+   "bytes": 857
+  },
+  {
+   "path": "raters/rater3/reso-security-100p.meta.json",
+   "sha256": "d603a4aba04765b7686a2d657716a922d5962a4bdabc99ff4740e68aaf7e0eb4",
+   "bytes": 137
+  },
+  {
+   "path": "raters/rater3/sevenrooms-laptop-independence.last",
+   "sha256": "c84ce77c3b6dd0328dbaaeeeef02de022c74d7b6951e7183c27f0747a1fdfdc9",
+   "bytes": 1185
+  },
+  {
+   "path": "raters/rater3/sevenrooms-laptop-independence.meta.json",
+   "sha256": "b64e2efe679031c719f4f0a98463a7afe3cfc0d1c0c892d5301329e60564a82f",
+   "bytes": 149
+  },
+  {
+   "path": "raters/rater3/tenant-provisioning-100p.last",
+   "sha256": "d84a849586884265ea333f3d81631d351146ef8936c27beee1e6b7a3ccad2f51",
+   "bytes": 607
+  },
+  {
+   "path": "raters/rater3/tenant-provisioning-100p.meta.json",
+   "sha256": "7c176bf0b3b1e4b9de1cc1235873cd365596953160a17616aedbe20b2fe321eb",
+   "bytes": 143
+  },
+  {
+   "path": "raters/rater3/tm2.last",
+   "sha256": "99a2ce9721949007d043f981a6f7ab9146112f386845e4dda75efdc1e77d6144",
+   "bytes": 921
+  },
+  {
+   "path": "raters/rater3/tm2.meta.json",
+   "sha256": "29870b0864ad3c5dbec637675be0fecf8d18b071ae0dbe986eb2c6e6ab8c3741",
+   "bytes": 123
+  },
+  {
+   "path": "raters/rater3/voiceink-latency.last",
+   "sha256": "2f3aa147afe95b0f1c3f9b569434df8ad55ed48d050ded4b2f184b6f6b63a8f0",
+   "bytes": 341
+  },
+  {
+   "path": "raters/rater3/voiceink-latency.meta.json",
+   "sha256": "4130f35db128acff11fa38c832c3c8e3f33495f5b2e8e27a5acc9aecc5ce8895",
+   "bytes": 135
+  },
+  {
+   "path": "run-notes.md",
+   "sha256": "398413fbf3dae68ac6c2f3dffb32a9df7bb845fa495c96aedb0da4facda53f23",
+   "bytes": 1805
+  },
+  {
+   "path": "seeds/agent-context-sync.json",
+   "sha256": "c39552a9891d0ea822a9bfbd5993c1fc62fd5f402bd2be8b43ed8cae1cfb0b3b",
+   "bytes": 3965
+  },
+  {
+   "path": "seeds/device-enrollment-build.json",
+   "sha256": "1bd1a0c355c9ad3cd0043c905667dc55e48890e2d9c54db687e3c53926738707",
+   "bytes": 2843
+  },
+  {
+   "path": "seeds/hook-surface-100p.json",
+   "sha256": "b316d0db29e6102acd265df64d5e7309530ef322d82b77baac92f9e912f360f3",
+   "bytes": 2543
+  },
+  {
+   "path": "seeds/land-pipeline-v2.json",
+   "sha256": "b10a3002261b9de8a8447d0e4d3fe6f3132cdb820f724bd96e15315e6d4a7491",
+   "bytes": 2421
+  },
+  {
+   "path": "seeds/land-ship-v2.json",
+   "sha256": "199d0d85e2fe46584f56f43ae36648bc78840c9922fc408ea3a042e935427985",
+   "bytes": 3172
+  },
+  {
+   "path": "seeds/limit-detect-100p.json",
+   "sha256": "e7c79209ae59824449a68adfd1b9bb2fb0ebb51e9d3ae598ac912f9e8d2fc097",
+   "bytes": 2600
+  },
+  {
+   "path": "seeds/limit-recover-100p.json",
+   "sha256": "5ad55d48d2dbd65af0df8abcb368150bd1b58efcb70d3ae0b2b739cf796a9509",
+   "bytes": 2513
+  },
+  {
+   "path": "seeds/limit-recover-fleet-v2.json",
+   "sha256": "c9099cfd726cfdf590793abdd67bc486e717c417e155cfff2f6b4a04d4f048af",
+   "bytes": 3434
+  },
+  {
+   "path": "seeds/machine-capacity-v2.json",
+   "sha256": "5d8c771995185181aa5a7f375082e4dce9f4f343990fb93d6a3cd1fe8067717c",
+   "bytes": 2960
+  },
+  {
+   "path": "seeds/research-report-v1.json",
+   "sha256": "e86e1310012b5aa0f35e5b0eb91827263bd5984a05227dd743b26f8e1798aac4",
+   "bytes": 3620
+  },
+  {
+   "path": "seeds/reso-latency-100p.json",
+   "sha256": "43d481b76ca8c2e32741cf6b2b18771a1edf00353989aaf59fcf1abe6f670dcf",
+   "bytes": 2624
+  },
+  {
+   "path": "seeds/reso-security-100p.json",
+   "sha256": "4b5bab3520cd6f3a98de3b6e1b4ebb8c07bc445697f707c7f19024f2cda62953",
+   "bytes": 4220
+  },
+  {
+   "path": "seeds/sevenrooms-laptop-independence.json",
+   "sha256": "0178e8291b11862d8568e409338ba1ec54a18fb88a2fde7e305370d5a1fcc47d",
+   "bytes": 3319
+  },
+  {
+   "path": "seeds/tenant-provisioning-100p.json",
+   "sha256": "4ae8b7b218d915b2de821ed4ce5132ceb6ee0bc73896091b01b641b8b62d46e7",
+   "bytes": 2798
+  },
+  {
+   "path": "seeds/tm2.json",
+   "sha256": "75e12049ae8921b679222516ed7f6a794f3b0395a2a11b3fd62777097e145fa0",
+   "bytes": 2850
+  },
+  {
+   "path": "seeds/voiceink-latency.json",
+   "sha256": "c072241a083be3c7a505c38f87135b3e29226b817fbb30749653bd00097563b4",
+   "bytes": 3930
+  },
+  {
+   "path": "timing.json",
+   "sha256": "58dcc68b122187e87a6a67c7555c1cc8837286e623626545c943d066f57e02fa",
+   "bytes": 37147
+  },
+  {
+   "path": "triage/agent-context-sync.json",
+   "sha256": "612de33ec5f0a8680489b0ff50b389076c60f0380719fa250516047a5ca14eab",
+   "bytes": 74441
+  },
+  {
+   "path": "triage/device-enrollment-build.json",
+   "sha256": "8227d07de4f4f81223f3a69c996ca3f8590a4200919e46295042310b51010341",
+   "bytes": 50422
+  },
+  {
+   "path": "triage/hook-surface-100p.json",
+   "sha256": "84d9847ee15d0da1b81536cab391676b61c541922b33fa8ee4ea29f43ee3522e",
+   "bytes": 55036
+  },
+  {
+   "path": "triage/land-pipeline-v2.json",
+   "sha256": "14b286644b3101eeec7b99cb3e5d85af7e8f606c075ab12f422b0e0f340b7e6f",
+   "bytes": 55824
+  },
+  {
+   "path": "triage/land-ship-v2.json",
+   "sha256": "b13623f7291d8f2736fbabbc0d5d291e43dd5201165000c9e03c6d872a1c8dd4",
+   "bytes": 56812
+  },
+  {
+   "path": "triage/limit-detect-100p.json",
+   "sha256": "02fbfaa541f60f7e88ce735e9c81b202b29a2890e07d977b483db8bef771fbb6",
+   "bytes": 59311
+  },
+  {
+   "path": "triage/limit-recover-100p.json",
+   "sha256": "267611dd39774fcf88b4bf500f8d5ba53c486d6592e2ba050ebaa19128416e26",
+   "bytes": 35038
+  },
+  {
+   "path": "triage/limit-recover-fleet-v2.json",
+   "sha256": "ec0657c11aff1d9846fc7eda2559c1a94731434e49a52fd6eddbeb4004d52aeb",
+   "bytes": 56889
+  },
+  {
+   "path": "triage/machine-capacity-v2.json",
+   "sha256": "fbc922421f8af2b28d72dd54a5e8a95a4a7fdea25ca5117523738c6cdba940fd",
+   "bytes": 46012
+  },
+  {
+   "path": "triage/research-report-v1.json",
+   "sha256": "3b5690df96fb410772b5b75188f9f05a0494b6ebd332b1fda49fb64458439ad3",
+   "bytes": 43584
+  },
+  {
+   "path": "triage/reso-latency-100p.json",
+   "sha256": "3aa05c2b55a0e1e9d79021c4f2e3cba54e53bb273f6fb143d6d3f4a5a5b998cb",
+   "bytes": 43092
+  },
+  {
+   "path": "triage/reso-security-100p.json",
+   "sha256": "97c94e0f846bd2079cdaa9320073bf725ee4fba96ed2f949fbddf9530bd9eeb9",
+   "bytes": 39622
+  },
+  {
+   "path": "triage/sevenrooms-laptop-independence.json",
+   "sha256": "8c1f596af751ca23ab8e3052e00f1bbeebceb399d30deb14c6b7f85bc5c8dd6e",
+   "bytes": 30427
+  },
+  {
+   "path": "triage/tenant-provisioning-100p.json",
+   "sha256": "96cd4a0694f91658fff8e199692ff2a16941417d8f39955e4da9fb230e7a288a",
+   "bytes": 44880
+  },
+  {
+   "path": "triage/tm2.json",
+   "sha256": "2eba3868cc342ad37345ee58efd5ade39c757e3126016f00f934f75dfc4644b1",
+   "bytes": 49981
+  },
+  {
+   "path": "triage/voiceink-latency.json",
+   "sha256": "4a0510fa1bb3b376108c5a33dbb5c4c00b644240574742d322108d28bb284847",
+   "bytes": 52172
+  }
+ ]
+}

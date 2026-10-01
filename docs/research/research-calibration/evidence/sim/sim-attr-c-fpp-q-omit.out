@@ -1,0 +1,3 @@
+lite N0=20 b=0.20 four_vendor                rounds  6/6  cap 54.0% | desk-left 2.52 npred95 8 point 3 | invisible 2.74 | P(any) 0.99 | 95%-bound exceeded  1.8% | point exceeded desk 35.6% total 19.4% | fix-born 3.7
+standard N0=20 b=0.20 four_vendor            rounds  8/10 cap 25.0% | desk-left 1.68 npred95 5 point 2 | invisible 2.93 | P(any) 0.96 | 95%-bound exceeded  2.0% | point exceeded desk 34.8% total 16.4% | fix-born 4.3
+full N0=20 b=0.20 four_vendor                rounds  8/14 cap  8.6% | desk-left 1.31 npred95 5 point 1 | invisible 2.86 | P(any) 0.95 | 95%-bound exceeded  1.8% | point exceeded desk 26.8% total 11.8% | fix-born 4.5

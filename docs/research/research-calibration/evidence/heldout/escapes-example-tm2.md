@@ -1,0 +1,121 @@
+# Escape library (past holes from other projects; this project held out)
+
+- E1 [C1, verdict-scoped-to-diff-not-goal]: 1 of 4 divergence mechanisms closed after 'Good to close: yes'
+- E2 [C5, unexecuted-acceptance-criteria]: AC1 cannot do its job; AC7/AC9 fail on trunk
+- E3 [C1, known-item-excluded-from-done]: known items 3-6 (stale zoom; empty-HMAC deploy broadcast) held as follow-on
+- E6 [C7, appended-findings-leave-stale-rows]: five §19.2 rows asserted states measured false (R-38 credential instruction)
+- E7 [C5, tally-measures-classification-not-dod]: DoD Arrow B violated, Arrow C open, while 0-🔧 tally read 'nothing open'
+- E8 [C1, open-items-buried-in-plan-prose]: OP-2/3/5 and a money decision fell out of every list
+- E9 [C3, unverified-blocker-premise]: 'only you can say The Key's tiers' wrong: clone script existed
+- E10 [C4, hazard-found-only-by-adversarial-read]: both write instruments unsafe (seed reassigns Heist live rows)
+- E13 [C1, known-item-excluded-from-done]: stale-suppression detection lost, framed as closed decision
+- E17 [C3, operator-frame-vs-architecture]: 'confirmation email -> SevenRooms' step does not exist
+- E18 [C3, unverified-premise]: login-credentials secret does not exist
+- E19 [C3, untraced-question-hides-live-defect]: 'Key Q1' was a live Heist defect (7 seats unbookable)
+- E21 [C1, verdict-scoped-to-diff-not-goal]: 'Good to close: yes' but pipeline never wrote to SevenRooms
+- E22 [C5, green-gate-blind-to-property]: preflight PASS 46/0/0 false green (secret missing)
+- E23 [C1, known-item-excluded-from-done]: 3 named loose ends behind '✅ Nothing … no command for you'
+- E25 [C1, attribution-dismissal-without-content-check]: email-safety hook fix only uncommitted in shared checkout, dismissed 'not mine'
+- E27 [C3, stale-secondary-source]: 3 false published facts (raw count, stale comment, blind getAnimations)
+- E29 [C3, unverified-codebase-assumption]: bespoke rAF loops WAAPI can't see; plan path wrong
+- E30 [C3, stale-secondary-source]: 'Amplify doesn't support streaming' from a rescoped doc list
+- E31 [C3, unprobed-premise]: 'App Router forces s-maxage' false; override already in prod
+- E32 [C5, instrument-misread]: TBT quoted 50-90 ms was simulated; real 456 ms
+- E33 [C4, unchecked-platform-matrix]: Speculation Rules off by default in Safari
+- E35 [C8, publish-before-verify]: 'prefetch storm' was a curl artifact; red team after synthesis
+- E38 [C3, assertion-without-measurement]: 'probe may create a reservation' never measured
+- E39 [C1, scope-narrowing]: H15 not standing: nothing runs the instrument
+- E40 [C1, frame-silently-narrowed]: 'wire' verb 0/9 under repeated 'safe to close'
+- E42 [C4, partial-enumeration]: ConfigChange source enum partial
+- E44 [C4, partial-enumeration]: SEND_TOOLS shrink made crash handler fail open
+- E47 [C8, publish-before-verify]: K3/K4 refuted after KB v1 landed
+- E51 [C4, in-frame-symptom-fixing]: 4 prior in-frame 'fix' commits before deep research
+- E52 [C3, inherited-unmeasured-premise]: battery refusal reason never measured
+- E54 [C4, decomposition-gap]: pnpm build arm fires on 39% of commits, unnamed
+- E55 [C6, prior-research-lost]: Studio 60 method already recovered 08-27
+- E56 [C11, perfection-gate-blocks-delivery]: warm lead unanswered 21 d under 'reply once 100th percentile'
+- E57 [C4, search-bounded-by-own-stores]: 'no way to ask' searched only our own stores
+- E58 [C1, house-rule-not-applied-as-acceptance]: 884 opaque ids in a 'validated' installer
+- E59 [C5, one-shot-probe-called-proof]: no tests/ under an installer called 'proven'
+- E60 [C1, done-claim-not-diffed-against-ask]: 'everything done' while headline doc did not exist
+- E61 [C6, synthesis-drops-research-on-disk]: 744-line design axis dropped from synthesis
+- E63 [C1, named-input-silently-dropped]: operator-named uidotsh dropped after OAuth wall
+- E66 [C11, missing-positive-reference]: no positive reference set curated
+- E67 [C5, harness-invocation-mismatch]: bake-off config != production request (think)
+- E68 [C4, incomplete-enumeration]: free ladder capacity not enumerated
+- E69 [C4, candidate-space-truncated-question-substituted]: only <=4B models tested; ranking never produced
+- E70 [C4, unquestioned-architecture-premise]: two-pass pipeline shape never questioned
+- E72 [C5, dod-as-format-check-misses-system-property]: headline fallback can never fire (DoD was a grep)
+- E73 [C5, dod-omits-verification]: no tests planned, nothing compiled, 8/10 single-sourced
+- E74 [C8, single-pass-not-saturated]: pass 2 found 7 new defects, corrected 2 fixes
+- E75 [C8, single-pass-not-saturated]: pass 3 found 2 more (curve 10->7->2)
+- E76 [C6, evidence-not-persisted]: 5 of 9 cited artifacts only in /tmp
+- E77 [C6, synthesis-truncation]: lead integrated 2 of 5 findings (truncated read)
+- E78 [C5, false-negative-instrument]: 'all ten processes dead' false (broken grep)
+- E79 [C1, success-proxy-substituted-for-goal]: repo is a subset, installs no agent; success = 'profile exits 0'
+- E83 [C5, provenance-not-contradiction-check]: 4 statements its own source refutes (provenance-only check)
+- E85 [C7, rewrite-reintroduces-defects]: rev 4.1 do-not-send: 3 fatal errors in fresh prose
+- E86 [C7, rewrite-reintroduces-defects]: rev 5.0 argued against an excluded option
+- E87 [C4, omission-blind-review]: data residency (the deciding gate) omitted
+- E88 [C4, wrong-subject-instance]: fix applied to wiped checkout; loaded ~/kdev still armed
+- E90 [C4, diagnosis-frame-excludes-remediation-surface]: invisible caller gen/config.py:76; plan /goal ordered the fatal command
+- E97 [C5, handed-command-unexecuted]: handed rotation command failed 3x (xargs 255 B, macaroon shape)
+- E99 [C1, stale-measurement-and-undriven-known-item]: 'follow-on: none' beside 5 named reds; 4 of 5 not red
+- E100 [C4, incomplete-enumeration-search-frame]: ⌘D/⌘⇧D fourth arrival route uncovered
+- E101 [C1, ledger-scope-vs-job-scope]: 8 known items behind '✅ follow-on: none'
+- E104 [C6, duplicate-parallel-research-stale-liveness]: sibling declared dead while alive; parallel plan written
+- E105 [C3, stale-claim-not-rechecked]: CI Linux baseline backlog row stale
+- E106 [C3, option-space-frozen-early]: blocker is wildcard *.example.com, not www (apex exposed)
+- E108 [C6, prior-research-not-reread]: 08-26 ranking scored keep-warm 5.6x; never re-read
+- E109 [C3, unverified-estimate]: keep-warm $0.50 was $2.50 + 1.3M requests
+- E110 [C4, option-space-frozen-early]: existing Amplify CDN honors s-maxage; A/B decision moot
+- E111 [C4, available-data-not-consulted]: apex-301 recommendation inverted by access logs (89% scanners)
+- E113 [C1, ledger-scope-vs-job-scope]: '✅ safe to close' on plan-only land; 0 of 7 waves built
+- E114 [C5, weak-verification-and-dropped-known-item]: re-land verified by presence not content; abandoned rebase; known defect dropped
+- E115 [C7, plan-amendment-not-integrated]: §3 table CAP 5000 vs §11 #7 'CAP stays 500'; implementer followed stale row
+- E118 [C3, inherited-claim-unverified]: 'stale, don't send' warning false (grep -c 153 = 0)
+- E119 [C10, concurrent-reality-change]: Option A recommended; sibling had landed Option B 4 h earlier
+- E120 [C4, wrong-question-frame]: CloudFront work unnecessary; the lever was Vary: Accept
+- E123 [C6, prior-research-lost-across-sessions]: Houndstooth sitting never written down; tether lever missed
+- E126 [C4, concurrency-never-in-frame]: generator last-writer-wins clobbered operator's rankings
+- E127 [C5, broken-instrument-false-negative]: 'XMP layer broken' was exiftool absent + stderr suppressed
+- E128 [C1, completeness-frame-narrowed]: 'built, landed, live' omitted 8 DoD gaps
+- E130 [C3, unrederived-inherited-figures]: 3 decision figures never derived (fleet size as blast radius)
+- E132 [C7, integration-generated-contradictions]: review integration created 28 defects (1 critical)
+- E135 [C6, adjacent-research-not-consulted]: diff method wrong x4; fleet's own diff research not consulted
+- E136 [C3, vendor-claim-trusted]: vendor README trusted over rule R5
+- E137 [C8, implementation-before-research-closed]: W1 fired while r4/r7 open; 5 spec refinements after build
+- E138 [C3, premise-from-docblock-not-measured]: brief premises from docblocks (detect-gpu never ran, 50 not 51)
+- E139 [C6, no-prior-art-sweep-plus-false-resident-rule]: capability ~80% shipped; false resident rule; no prior-art sweep
+- E140 [C3, consumer-uses-wrong-lane]: consumers ask --rank general, inverse of intent
+- E141 [C4, frame-shift-invalidates-invariants]: healthy-source frame breaks transplant invariants
+- E143 [C1, scope-relative-completeness]: 19 surfaces, 20 leads, 6 findings behind 'complete for the scope'
+- E145 [C3, reachability-misclassification]: 3 'corporate-only' probes runnable on this Mac
+- E147 [C4, environment-inventory-gap]: operator's example.com M365 tenant existed all along
+- E148 [C11, missing-dod-prerequisites]: no falsifiable DoD; 5 week-0 decisions never asked
+- E149 [C7, stale-summary]: doc summary status lines stale
+- E150 [C8, partial-wave-accepted]: best-in-class survey r6 died on quota, written off
+- E151 [C3, lost-rationale-unmeasured-premise]: ~10 months of SMIL on false 'compositor thread' premise
+- E153 [C9, environment-mismatch]: all iOS figures from iOS 26.3 Simulator; phone is 18.7.8
+- E155 [C4, execution-context-gap]: typed-yes gate reads EOF under !
+- E158 [C1, dod-vs-optimum-frame]: 7 residual gaps behind ✅ (macOS Safari unmeasured, criterion redefined)
+- E160 [C1, inventory-by-memory]: 'two small decisions' became 8 decisions + 6 work items
+- E161 [C7, self-invalidated-artifact]: migration 0036 invalidated by session's own settings symlink
+- E162 [C3, memory-not-ledger]: test cost $330 vs ledger $545
+- E163 [C1, close-scoped-to-narrow-dod]: close 'follow-on: none' outside plan's own residual list
+- E164 [C10, stale-external-snapshot]: @simplewebauthn 13.3.3 patch missing from audit snapshot
+- E165 [C10, stale-baseline-sibling-change]: Stage A (82%) ~0 ms: sibling 84a9e0e1a changed code 5.7 h earlier
+- E166 [C3, shallow-evidence-tier]: <Activity> gains nothing (blog tier vs react-dom source)
+- E167 [C3, shallow-evidence-tier]: runner needs 40-char sha; tenant list cached at boot
+- E169 [C1, rubric-switch-rerender]: 'exhaustively done' re-scored 93/100; every gap already dated
+- E171 [C3, ungrounded-research-claims]: 32-agent research ungrounded: 3 errors vs code
+- E172 [C6, research-to-plan-transcription-loss]: plan dropped research's warm-connection fix; no rollback
+- E174 [C8, design-unreviewed-until-pushed]: 5 design flaws found only when 'no take-backs' demanded
+- E175 [C4, environment-outside-frame]: daily job pushes working branch to public fork
+- E180 [C7, unverified-integrated-artifact]: script-assembled plan v2 never re-read: 20 defects
+- E181 [C4, unexamined-baseline-premise]: rebase onto v2.20 first; base settled silently by freeze clause
+- E182 [C4, source-outside-search-frame]: silent recordings = upstream bug #956; tracker never a source
+- E192 [C1, open-decision-parked-under-complete]: 'zero human' impossible: auto-recover shipped OFF, unruled
+- E193 [C4, single-instance-frame-misses-fleet-case]: fleet-parallel case unmodeled; superseded by FLEET_V2
+- E198 [C2u, deliverable-consumer-not-established]: deploy was a 4-step human doc; operator needed one-prompt
+- E200 [C2n, operator-added-feedback-requirement]: no friction/failure report from the real corporate run

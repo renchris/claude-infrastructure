@@ -10,8 +10,10 @@ Definitions (REPORT §3.11, §6.6), each computed, never set by hand:
   reads            non-void reviewer slots (reviewer-reads) for the plan
   material item    verifier CONFIRMED with consequence reproduced, AND >= 2 raters MATERIAL (raters 1 and 2
                    agree; on a disagreement rater 3 decides). Seeds go through the same rule.
-  false alarm      a material item that the independent cross-vendor reproduction (rater 1's own verdict)
-                   REFUTES. fpp = false alarms / reads. Raw rate: verifier-REFUTED items / reads.
+  false alarm      a material item that matches no known hole or seed and that the history-informed
+                   adjudicator (adjudicate/_verdicts.json) calls FALSE or REAL_NOT_MATERIAL. fpp = false alarms /
+                   reads. Rater 1's own reproduce verdict is kept only as a diagnostic: it refuted 43% of items that
+                   match known holes, so it measures "provable from the bundle text", not truth.
   downgrade q      share of items matching a known at-freeze hole (or a seed), verifier-CONFIRMED, that the
                    rating rule leaves below material
   holes at freeze  N0 = known at-freeze holes (non-fix-born) + material real items matching no known hole
@@ -239,7 +241,13 @@ def pp(comp, price):
     return sum(comp[k] / 1e6 * price[k] for k in ("input", "cache_creation", "output"))
 
 
+ADJ = {}
+
+
 def rows(C, review_wf, out_path, params_path):
+    vp = os.path.join(C, "replay", "adjudicate", "_verdicts.json")
+    if os.path.exists(vp):
+        ADJ.update(json.load(open(vp)))
     price = json.load(open(os.path.join(C, "replay", "price.json")))
     slots = {
         s["slot"]: s for s in json.load(open(os.path.join(C, "replay", "slots.json")))
@@ -248,6 +256,7 @@ def rows(C, review_wf, out_path, params_path):
     pooled = dict(
         reads=0,
         fa=0,
+        und=0,
         refuted=0,
         items=0,
         q_num=0,
@@ -307,13 +316,26 @@ def rows(C, review_wf, out_path, params_path):
         refuted = sum(
             1 for it in items if ver.get(it["iid"], {}).get("verdict") == "REFUTED"
         )
-        fa = [
+        kind = {i: (match.get(i, {}).get("match") or "none") for i in mat}
+        # A false alarm is judged by GROUND TRUTH, not by a second reviewer: rater 1's own re-check refuted 43%
+        # of the items that match known (history-proven) holes, so its "refuted" means "not provable from the
+        # bundle text", not "false". Every material item that matches no known hole or seed went to a
+        # history-informed adjudicator (adjudicate/_verdicts.json); FALSE and REAL_NOT_MATERIAL are false
+        # MATERIAL calls (they would reset the quiet count), UNDETERMINED is reported apart.
+        adj = ADJ.get(plan, {})
+        unmatched_mat = [i for i, v in mat.items() if v and kind[i] == "none"]
+        fa = [i for i in unmatched_mat if adj.get(i) in ("FALSE", "REAL_NOT_MATERIAL")]
+        und = [
+            i
+            for i in unmatched_mat
+            if adj.get(i) not in ("FALSE", "REAL_NOT_MATERIAL", "REAL_MATERIAL")
+        ]
+        r1_refuted_mat = [
             i
             for i, v in mat.items()
             if v and r1.get(i, {}).get("reproduce") == "REFUTED"
         ]
-        real_mat = [i for i, v in mat.items() if v and i not in fa]
-        kind = {i: (match.get(i, {}).get("match") or "none") for i in mat}
+        real_mat = [i for i, v in mat.items() if v and i not in fa and i not in und]
         new_real = [i for i in real_mat if kind[i] == "none"]
         # downgrade: confirmed items that match ground truth (known hole / seed) but end below material
         gt = [
@@ -363,6 +385,8 @@ def rows(C, review_wf, out_path, params_path):
         k_left = len(seeds) - len(caught)
         pt, up = ratio(F, k_left, len(seeds))
         realized = len(missed) * scale
+        # the ratio estimator forecasts DESK-detectable holes left, so compare it with the desk misses only
+        realized_desk = len(desk_missed) * scale
         # per-slot detection over the target set (known holes detected by anyone + seeds + new real items)
         member = {
             it["iid"]: {f.split("#")[0].split("__")[1] for f in it["members"]}
@@ -421,6 +445,8 @@ def rows(C, review_wf, out_path, params_path):
             material=len(real_mat) + len(fa),
             undecided=undecided,
             false_alarms=len(fa),
+            undetermined=len(und),
+            r1_refuted_material=len(r1_refuted_mat),
             fpp=round(len(fa) / reads, 4) if reads else None,
             raw_refuted_per_read=round(refuted / reads, 3) if reads else None,
             new_real_material=len(new_real),
@@ -444,8 +470,10 @@ def rows(C, review_wf, out_path, params_path):
             forecast_point=round(pt, 2),
             forecast_95=(round(up, 2) if up != float("inf") else None),
             realized_missed=round(realized, 1),
-            point_exceeded=realized > pt,
-            bound_exceeded=(realized > up) if up != float("inf") else False,
+            realized_desk_missed=round(realized_desk, 1),
+            point_exceeded=realized_desk > pt,
+            bound_exceeded=(realized_desk > up) if up != float("inf") else False,
+            point_exceeded_total=realized > pt,
             audit_sample=len(aud),
             audit_real_material_present=sum(
                 1 for a in aud if a["real"] and a["material"] and a["present_at_freeze"]
@@ -457,6 +485,7 @@ def rows(C, review_wf, out_path, params_path):
         for k, v in (
             ("reads", reads),
             ("fa", len(fa)),
+            ("und", len(und)),
             ("refuted", refuted),
             ("items", len(items)),
             ("q_num", q_num),
@@ -470,7 +499,7 @@ def rows(C, review_wf, out_path, params_path):
             ("omit", omit_n),
             ("fb", hist["counts"].get("fix_born") or 0),
             ("fixes", hist["counts"].get("applied_fixes") or 0),
-            ("pt_ex", int(realized > pt)),
+            ("pt_ex", int(realized_desk > pt)),
             ("b95_ex", int(row["bound_exceeded"])),
             ("n", 1),
             ("seeds", len(seeds)),
@@ -485,6 +514,7 @@ def rows(C, review_wf, out_path, params_path):
             fh.write(json.dumps(r) + "\n")
     P = pooled
     fpp = P["fa"] / P["reads"]
+    fpp_hi = (P["fa"] + P["und"]) / P["reads"]  # every undetermined item counted false
     q = P["q_num"] / P["q_den"] if P["q_den"] else None
     u = P["inv"] / P["N0"]
     omit = P["omit"] / P["N0"]
@@ -497,6 +527,9 @@ def rows(C, review_wf, out_path, params_path):
         n_plans=P["n"],
         reads=P["reads"],
         fpp=round(fpp, 4),
+        fpp_hi=round(fpp_hi, 4),
+        false_alarms=P["fa"],
+        undetermined=P["und"],
         raw_refuted_per_read=round(P["refuted"] / P["reads"], 3),
         q=round(q, 3) if q is not None else None,
         q_counts=[P["q_num"], P["q_den"]],

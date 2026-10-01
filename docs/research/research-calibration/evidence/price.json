@@ -1,0 +1,1 @@
+{"input": 586.7768211453233, "cache_creation": 0.25435630094801226, "output": 1.2880501239142461, "cache_read_bound": 0.049, "source": "cc-quota-price --json --since 7d, 2026-10-01"}
