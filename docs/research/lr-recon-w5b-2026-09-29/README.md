@@ -204,6 +204,23 @@ not count.
 **Watcher.** Since 22:49Z the watcher is pid 36821, restarted onto `e2ae5d6c5`'s code (the pid 73698
 named above was the pre-fix run). It is the only one and notifies `lr-fv2-w5b2-38`.
 
+### Cutoff moved again: watchdog restarts under host load (2026-10-01 06:50:36Z)
+
+No cohort opened between 01:02:56Z and this restart, so the count was still 0 when it started over.
+The reconciler's watchdog (`recon/watchdog.log`) killed pid 79972 at 06:46:04Z (`progress=8312
+unchanged 185s`), then its successor 38808 at 06:50:35Z (`progress=0 unchanged 194s`). It paged
+`crash loop — holder pid changed 2 times within 10 min`. `reconciler.err` stayed empty. The host's
+load average read `174 427 354` at 06:55Z, which explains a stall without any code defect. The
+holder is now pid 92597, started 06:50:36Z: the last row of `recon/restarts.jsonl`
+(t=1790837436.80), confirmed by `launchctl print` (running, pid 92597, runs 5), with its progress
+counter advancing (42 at 06:55Z). **This start time is the cutoff now.** Only cohorts whose limit
+began after 06:50:36Z count toward the 2.
+
+The planner code it runs: the shared checkout at `cb7e1e4f6`, whose `scripts/limit-recover/` is
+byte-identical to origin/main `85c2d837e`. The one `lr_recon` change since the previous cutoff is
+`476712b2f` (`settle.py`: a recycle held as `unreachable` maps to `HOLD-COMPOSER`). It affects
+recycle actuation only, and the previous holder never loaded it (`lr_recon` has no hot reload).
+
 ## Census step
 
 Operator step `f0df9145b73a` (the live observe census) was closed with the launchd daemon's own pass:
