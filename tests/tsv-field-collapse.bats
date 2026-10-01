@@ -343,13 +343,25 @@ JSON
   export CC_BOOT_RESUME_MODE=resume
   mkdir -p "$CC_REGISTRY_DIR" "$CC_ROLES_DIR" "$C/wt"
   echo "desk-pane-uuid" > "$CC_ROLES_DIR/desk"
+  # Every other resolution boot-resume makes is redirected too. Unset, it reads the operator's real
+  # reboot roster, tombstones and teardown markers, and resolves the repo's REAL cc-resume-layout.sh,
+  # which drives the live kitty, plus /usr/bin/open. Absent layout ⇒ the launcher-per-window path.
+  export CC_BOOT_RESUME_ROSTER_DIR="$C/autonomy" CC_SHUTDOWN_TOMB_DIR="$C/tombs" CC_TEARDOWN_DIR="$C/teardown"
+  export CC_RESUME_LAYOUT_BIN="$C/no-layout" CC_RESUME_CLASSIFY_BIN="$C/no-classify"
+  export CC_OPEN_BIN="$C/stub-open" CC_KITTY_SOCKET_BIN="$C/stub-ksock" CC_BACKLOG_BIN="$C/stub-backlog"
+  export CC_BOOT_RESUME_KITTY_POLL=0
 
   for s in notify launch select keepalive launchctl mtime; do :; done
   export CC_NOTIFY_BIN="$C/stub-notify" CC_RESUME_LAUNCH_BIN="$C/stub-launch"
   export CC_RESUME_SELECT_BIN="$C/stub-select" CC_KEEPALIVE_BIN="$C/stub-keepalive"
   export CC_LAUNCHCTL_BIN="$C/stub-launchctl" CC_TRANSCRIPT_MTIME_BIN="$C/stub-mtime"
   printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$0.log"\n' > "$CC_NOTIFY_BIN"
-  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$0.log"\n' > "$CC_RESUME_LAUNCH_BIN"
+  printf '#!/bin/bash\nexit 0\n' > "$CC_OPEN_BIN"
+  printf '#!/bin/bash\necho unix:/nonexistent\n' > "$CC_KITTY_SOCKET_BIN"
+  printf '#!/bin/bash\necho beef1234cafe\n' > "$CC_BACKLOG_BIN"
+  chmod +x "$CC_OPEN_BIN" "$CC_KITTY_SOCKET_BIN" "$CC_BACKLOG_BIN"
+  # The ownership probe (--check-only, 2026-09-30) is not a launch; only launches are logged.
+  printf '#!/bin/bash\n[ "$1" = --check-only ] && exit 0\nprintf "%%s\\n" "$*" >> "$0.log"\n' > "$CC_RESUME_LAUNCH_BIN"
   printf '#!/bin/bash\nprintf "started\\n" >> "$0.log"\n' > "$CC_KEEPALIVE_BIN"
   printf '#!/bin/bash\nexit 0\n' > "$CC_LAUNCHCTL_BIN"
   # transcript_mtime answers "recent" ONLY for the correct (acct, sid, cwd) triple — which is the
