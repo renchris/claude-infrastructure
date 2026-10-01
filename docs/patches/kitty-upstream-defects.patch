@@ -1,0 +1,49 @@
+diff --git a/glfw/cocoa_init.m b/glfw/cocoa_init.m
+index e7d86ee..179fc15 100644
+--- a/glfw/cocoa_init.m
++++ b/glfw/cocoa_init.m
+@@ -1205,10 +1205,11 @@ void _glfwPlatformRunMainLoop(GLFWtickcallback callback, void* data) {
+     main_thread = pthread_self();
+     tick_callback = callback;
+     tick_callback_data = data;
+-    tick_lock = [NSLock new];
++    // Created once and never released: _glfwPlatformPostEmptyEvent() reads tick_lock from the
++    // child-monitor thread with no synchronisation, so releasing and NULLing it here could leave
++    // that thread messaging a freed object. One NSLock for the life of the process costs nothing.
++    if (!tick_lock) tick_lock = [NSLock new];
+     [NSApp run];
+-    [tick_lock release];
+-    tick_lock = NULL;
+     tick_callback = NULL;
+     tick_callback_data = NULL;
+ }
+diff --git a/kitty/state.c b/kitty/state.c
+index 8bca9f3..7e8af6b 100644
+--- a/kitty/state.c
++++ b/kitty/state.c
+@@ -65,7 +65,8 @@ GlobalState global_state = {{0}};
+ 
+ static double
+ dpi_for_os_window(const OSWindow *os_window) {
+-    double dpi = (os_window->fonts_data->logical_dpi_x + os_window->fonts_data->logical_dpi_y) / 2.;
++    // fonts_data is NULL after restore_window_font_groups() misses (fonts.c), so never assume it.
++    double dpi = os_window->fonts_data ? (os_window->fonts_data->logical_dpi_x + os_window->fonts_data->logical_dpi_y) / 2. : 0;
+     if (dpi == 0) dpi = (global_state.default_dpi.x + global_state.default_dpi.y) / 2.;
+     return dpi;
+ }
+@@ -1045,6 +1046,7 @@ PYWRAP1(viewport_for_window) {
+     WITH_OS_WINDOW(os_window_id)
+         os_window_regions(os_window, &central, &tab_bar);
+         vw = os_window->viewport_width; vh = os_window->viewport_height;
++        if (!os_window->fonts_data) goto end;
+         cell_width = os_window->fonts_data->fcm.cell_width; cell_height = os_window->fonts_data->fcm.cell_height;
+         goto end;
+     END_WITH_OS_WINDOW
+@@ -1057,6 +1059,7 @@ PYWRAP1(cell_size_for_window) {
+     unsigned int cell_width = 0, cell_height = 0;
+     PA("K", &os_window_id);
+     WITH_OS_WINDOW(os_window_id)
++        if (!os_window->fonts_data) goto end;
+         cell_width = os_window->fonts_data->fcm.cell_width; cell_height = os_window->fonts_data->fcm.cell_height;
+         goto end;
+     END_WITH_OS_WINDOW

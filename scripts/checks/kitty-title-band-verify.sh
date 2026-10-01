@@ -20,9 +20,29 @@
 # --window-id makes window-rect fall back to "some kitty window", which on this machine is one of
 # the operator's live agent sessions.
 #
-# Usage:  bash scripts/checks/kitty-title-band-verify.sh
+#   (e) text width by default                     -> the band's changed-pixel columns, with
+#                                                    `window_title_bar_overlay_width full` as the
+#                                                    control that must cover more of the row
+#
+# 🚨 NO SYNTHETIC INPUT BY DEFAULT (2026-09-30). A CGEvent has no sandbox: the screen is global, so
+# the drag arms of (c) warp the operator's real cursor and post real clicks wherever the pointer
+# lands (docs/lessons/a-synthetic-input-event-has-no-sandbox-the-screen-is-global.md). By default
+# (c) is driven over remote control instead: scripts/checks/kitty-title-reorder-drop.py calls the
+# sandbox kitty's own drop callback on the other pane's band, which proves the band is a drop target
+# and that a drop reorders without moving content. What only a hand can prove — that a PRESS on the
+# band starts a drag — is left to the operator's sitting. --synthetic-input restores the CGEvent arms
+# for an unattended box where nobody is at the screen.
+#
+# Usage:  bash scripts/checks/kitty-title-band-verify.sh [--synthetic-input]
 #         KITTY_BIN=/path/to/patched/kitty bash scripts/checks/kitty-title-band-verify.sh
 set -uo pipefail
+
+SYNTH=0
+case "${1:-}" in
+  --synthetic-input) SYNTH=1 ;;
+  '') ;;
+  *) echo "usage: ${0##*/} [--synthetic-input]" >&2; exit 2 ;;
+esac
 
 # Resolve $0 through its symlinks BEFORE deriving anything from it. ~/.claude/{scripts,hooks,bin}
 # are per-file symlink farms into this checkout, so `dirname "$0"/..` through the live layer is
@@ -62,9 +82,9 @@ bad() { FAIL=$((FAIL+1)); printf '  \033[31mFAIL\033[0m %s\n' "$1"; }
 k()   { env -u KITTY_LISTEN_ON -u KITTY_PID -u KITTY_WINDOW_ID "$KITTY_BIN" @ --to "unix:$SB/sock" "$@"; }
 
 mkdir -p "$SB"
-[ -x "$DRAGHOLD" ] || bash "$REPO/tools/draghold/build.sh" "$DRAGHOLD" >/dev/null 2>&1
+[ "$SYNTH" = 0 ] || [ -x "$DRAGHOLD" ] || bash "$REPO/tools/draghold/build.sh" "$DRAGHOLD" >/dev/null 2>&1
 [ -x "$WRECT" ]    || swiftc -O -o "$WRECT" "$REPO/tools/terminal-bench/window-rect.swift" 2>/dev/null
-if [ ! -x "$HOVER" ]; then
+if [ "$SYNTH" = 1 ] && [ ! -x "$HOVER" ]; then
   cat > "$SB/hover.c" <<'EOF'
 #include <ApplicationServices/ApplicationServices.h>
 #include <stdlib.h>
@@ -115,6 +135,7 @@ EOF
 printf 'include base.conf\nwindow_title_bar_overlay no\n'    > "$SB/off.conf"
 printf 'include base.conf\nwindow_title_bar_overlay yes\n'   > "$SB/on.conf"
 printf 'include base.conf\nwindow_title_bar_min_windows 1\n' > "$SB/cells.conf"
+printf 'include base.conf\nwindow_title_bar_overlay yes\nwindow_title_bar_overlay_width full\n' > "$SB/full.conf"
 cat > "$SB/session" <<'EOF'
 new_tab sandbox
 layout splits
@@ -142,7 +163,7 @@ winch() { printf '%s,%s' "$(cat "$SB/winch.1" 2>/dev/null)" "$(cat "$SB/winch.2"
 nbrs()  { k ls 2>/dev/null | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
-print(' '.join('%s:top=%s'%(w['id'],(w.get('neighbors') or {}).get('top')) for o in d for t in o['tabs'] for w in t['windows']),end='')"; }
+print(' '.join('%s:%s'%(w['id'],','.join('%s=%s'%(k,v) for k,v in sorted((w.get('neighbors') or {}).items()))) for o in d for t in o['tabs'] for w in t['windows']),end='')"; }
 load()  { k load-config --ignore-overrides "$1" >/dev/null 2>&1; sleep 2; }
 shoot() { /usr/sbin/screencapture -x -o -l "$PWID" "$SB/$1.png"; }
 bands() { python3 "$BANDS_PY" "$SB/$1.png" "$SB/$2.png" "$CELL_H" "$SB/bands.txt" 2>/dev/null; }
@@ -209,6 +230,52 @@ awk "BEGIN{exit !(${SBODY:-0} > 50)}" && ok "control: the scroll really happened
 [ "${SEDGE:-0}" = 1 ] && ok "(b) the band did not move: all four edge rows byte-identical" || bad "(b) the band MOVED: an edge row changed"
 k scroll-window --match id:1 end >/dev/null 2>&1
 
+echo
+echo "== (e) the band is only as wide as its title, unless asked for full width =="
+# Count the columns that change between OFF and each ON variant along the middle row of the first
+# band. `full` is the control: it must cover clearly more of the row, or the measurement is dead.
+cover() { python3 - "$SB" "$1" <<'PYW'
+import sys
+from PIL import Image
+SB, on = sys.argv[1], sys.argv[2]
+b = eval(open(f'{SB}/bands.txt').read())
+y = (b[0][0] + b[0][1]) // 2
+a = Image.open(f'{SB}/w-off.png').convert('RGB'); c = Image.open(f'{SB}/{on}.png').convert('RGB')
+pa, pc = a.load(), c.load()
+print(round(100 * sum(1 for x in range(a.size[0]) if pa[x, y] != pc[x, y]) / a.size[0]))
+PYW
+}
+load "$SB/off.conf";  shoot w-off
+load "$SB/on.conf";   shoot w-text
+load "$SB/full.conf"; shoot w-full
+load "$SB/off.conf"
+if bands w-off w-text >/dev/null; then
+  CT="$(cover w-text)"; CF="$(cover w-full)"
+  printf '  share of the band row covered: text=%s%%  full=%s%%\n' "${CT:-?}" "${CF:-?}"
+  awk "BEGIN{exit !(${CF:-0} >= 80)}" && ok "control: a full-width band covers ${CF}% of the row" || bad "control dead: full width covered only ${CF:-0}%"
+  awk "BEGIN{exit !(${CT:-100} > 0 && ${CT:-100} * 2 <= ${CF:-0})}" \
+    && ok "(e) the default band covers ${CT}% of the row, at most half of full width" \
+    || bad "(e) the default band is not text width: ${CT:-?}% vs full ${CF:-?}%"
+else
+  bad "(e) no band drew in the text-width capture"
+fi
+
+if [ "$SYNTH" = 0 ]; then
+  echo
+  echo "== (c) drop onto the band, over remote control (no synthetic input) =="
+  load "$SB/on.conf"
+  BEFORE="$(nbrs)"; r0="$(rows)"; w0="$(winch)"
+  # Pane 1 onto pane 2's band, aimed at the CENTRE of the row: with a text-width band that point is
+  # outside the drawn title, which is the claim that the whole row stays a drop target.
+  RES="$(k kitten "$SELF_DIR/kitty-title-reorder-drop.py" 1 2 2>&1)"; sleep 2
+  AFTER="$(nbrs)"; r1="$(rows)"; w1="$(winch)"
+  printf '  drop: %s\n  before[%s] after[%s] rows %s->%s winch %s->%s\n' "$RES" "$BEFORE" "$AFTER" "$r0" "$r1" "$w0" "$w1"
+  { [ -n "$BEFORE" ] && [ "$BEFORE" != "$AFTER" ]; } && ok "(c) a drop on the band row re-positions the pane" || bad "(c) the drop did not re-position the pane"
+  [ "$r0" = "$r1" ] && ok "(c)+(a) rows UNCHANGED across the drop ($r0)" || bad "(c)+(a) the drop shifted content: $r0 -> $r1"
+  [ "$w0" = "$w1" ] && ok "(c)+(a) no child signalled across the drop" || bad "(c)+(a) the drop signalled children: $w0 -> $w1"
+  echo "  (a PRESS on the band starting a drag needs a real hand: the operator's sitting covers it)"
+fi
+
 # A drag can move an OS window or detach a pane into a new one, so every coordinate derived before
 # a drag is stale after it. Re-derive, and refuse to keep aiming if the topology is no longer two
 # panes in one OS window.
@@ -247,6 +314,7 @@ arm() { # arm <conf> <label> <y_from> <y_to>
   printf '%s|%s|%s|%s|%s|%s' "$before" "$after" "$r0" "$(rows)" "$w0" "$(winch)" > "$SB/arm.txt"
 }
 
+if [ "$SYNTH" = 1 ]; then
 echo
 echo "== (c) drag: three arms, one variable =="
 if calibrate; then
@@ -332,6 +400,8 @@ PY
     bad "(c) the title vanished after the no-op drag ($N0 -> $N1, off=$NOFF)"
   fi
 fi
+
+fi  # SYNTH = 1
 
 printf '\n== RESULT: %d passed, %d failed ==\n' "$PASS" "$FAIL"
 k action quit >/dev/null 2>&1

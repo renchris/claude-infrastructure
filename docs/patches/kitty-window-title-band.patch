@@ -90,10 +90,10 @@ index f865343..095b9af 100644
              id_type window_id = 0;
              double dpi = (w->fonts_data->logical_dpi_x + w->fonts_data->logical_dpi_y) / 2.;
 diff --git a/kitty/options/definition.py b/kitty/options/definition.py
-index 3ef8396..4fefab2 100644
+index 3ef8396..3deffa7 100644
 --- a/kitty/options/definition.py
 +++ b/kitty/options/definition.py
-@@ -1941,10 +1941,29 @@
+@@ -1941,10 +1941,43 @@
      'window_title_bar',
      'top',
      choices=('top', 'bottom'),
@@ -121,28 +121,50 @@ index 3ef8396..4fefab2 100644
 +font, so it is not restricted to the cell grid. Note that the row it is drawn
 +over is covered while the title bar is visible. When enabled, title bars are
 +shown for every window, and :opt:`window_title_bar_min_windows` is not used.
++""",
++)
++
++opt(
++    'window_title_bar_overlay_width',
++    'text',
++    choices=('text', 'full'),
++    ctype='window_title_bar_overlay_width',
++    long_text="""
++How wide an overlay title bar (see :opt:`window_title_bar_overlay`) is drawn.
++:code:`text` draws it only as wide as the title, at the left edge of the window,
++so it covers only the part of the row the title needs. :code:`full` draws it
++across the whole width of the window. Either way the whole row remains a drop
++target while a window is being dragged.
  """,
  )
  
 diff --git a/kitty/options/parse.py b/kitty/options/parse.py
-index 6f99de6..e14a49b 100644
+index 6f99de6..a688507 100644
 --- a/kitty/options/parse.py
 +++ b/kitty/options/parse.py
-@@ -1575,6 +1575,9 @@ def window_title_bar_inactive_foreground(self, val: str, ans: dict[str, typing.A
+@@ -1575,6 +1575,17 @@ def window_title_bar_inactive_foreground(self, val: str, ans: dict[str, typing.A
      def window_title_bar_min_windows(self, val: str, ans: dict[str, typing.Any]) -> None:
          ans['window_title_bar_min_windows'] = positive_int(val)
  
 +    def window_title_bar_overlay(self, val: str, ans: dict[str, typing.Any]) -> None:
 +        ans['window_title_bar_overlay'] = to_bool(val)
 +
++    def window_title_bar_overlay_width(self, val: str, ans: dict[str, typing.Any]) -> None:
++        val = val.lower()
++        if val not in self.choices_for_window_title_bar_overlay_width:
++            raise ValueError(f"The value {val} is not a valid choice for window_title_bar_overlay_width")
++        ans["window_title_bar_overlay_width"] = val
++
++    choices_for_window_title_bar_overlay_width = frozenset(('text', 'full'))
++
      def window_title_template(self, val: str, ans: dict[str, typing.Any]) -> None:
          ans['window_title_template'] = tab_title_template(val)
  
 diff --git a/kitty/options/to-c-generated.h b/kitty/options/to-c-generated.h
-index d209fb7..7c55434 100644
+index d209fb7..e1c538b 100644
 --- a/kitty/options/to-c-generated.h
 +++ b/kitty/options/to-c-generated.h
-@@ -1071,6 +1071,32 @@ convert_from_opts_window_title_bar_inactive_background(PyObject *py_opts, Option
+@@ -1071,6 +1071,45 @@ convert_from_opts_window_title_bar_inactive_background(PyObject *py_opts, Option
      Py_DECREF(ret);
  }
  
@@ -172,10 +194,23 @@ index d209fb7..7c55434 100644
 +    Py_DECREF(ret);
 +}
 +
++static void
++convert_from_python_window_title_bar_overlay_width(PyObject *val, Options *opts) {
++    opts->window_title_bar_overlay_width = window_title_bar_overlay_width(val);
++}
++
++static void
++convert_from_opts_window_title_bar_overlay_width(PyObject *py_opts, Options *opts) {
++    PyObject *ret = PyObject_GetAttrString(py_opts, "window_title_bar_overlay_width");
++    if (ret == NULL) return;
++    convert_from_python_window_title_bar_overlay_width(ret, opts);
++    Py_DECREF(ret);
++}
++
  static void
  convert_from_python_tab_bar_edge(PyObject *val, Options *opts) {
      opts->tab_bar_edge = PyLong_AsLong(val);
-@@ -1692,6 +1718,10 @@ convert_opts_from_python_opts(PyObject *py_opts, Options *opts) {
+@@ -1692,6 +1731,12 @@ convert_opts_from_python_opts(PyObject *py_opts, Options *opts) {
      if (PyErr_Occurred()) return false;
      convert_from_opts_window_title_bar_inactive_background(py_opts, opts);
      if (PyErr_Occurred()) return false;
@@ -183,17 +218,25 @@ index d209fb7..7c55434 100644
 +    if (PyErr_Occurred()) return false;
 +    convert_from_opts_window_title_bar_overlay(py_opts, opts);
 +    if (PyErr_Occurred()) return false;
++    convert_from_opts_window_title_bar_overlay_width(py_opts, opts);
++    if (PyErr_Occurred()) return false;
      convert_from_opts_tab_bar_edge(py_opts, opts);
      if (PyErr_Occurred()) return false;
      convert_from_opts_tab_bar_margin_height(py_opts, opts);
 diff --git a/kitty/options/to-c.h b/kitty/options/to-c.h
-index 4a43e8d..ef29830 100644
+index 4a43e8d..3aa1e07 100644
 --- a/kitty/options/to-c.h
 +++ b/kitty/options/to-c.h
-@@ -28,6 +28,12 @@ color_or_none_as_int(PyObject *color) {
+@@ -28,6 +28,18 @@ color_or_none_as_int(PyObject *color) {
      return color_as_int(color);
  }
  
++static WindowTitleBandWidth
++window_title_bar_overlay_width(PyObject *src) {
++    const char *q = PyUnicode_AsUTF8(src);
++    return (q && q[0] == 'f') ? TITLE_BAND_FULL : TITLE_BAND_TEXT;
++}
++
 +static WindowTitleBarPosition
 +window_title_bar(PyObject *src) {
 +    const char *q = PyUnicode_AsUTF8(src);
@@ -204,27 +247,37 @@ index 4a43e8d..ef29830 100644
  active_border_color(PyObject *color) {
      if (color == Py_None) return 0x00ff00;
 diff --git a/kitty/options/types.py b/kitty/options/types.py
-index cf7009f..5f6d589 100644
+index cf7009f..bd4a907 100644
 --- a/kitty/options/types.py
 +++ b/kitty/options/types.py
-@@ -517,6 +517,7 @@
+@@ -42,6 +42,7 @@
+ choices_for_window_logo_position = choices_for_placement_strategy
+ choices_for_window_title_bar = typing.Literal['top', 'bottom']
+ choices_for_window_title_bar_align = typing.Literal['left', 'center', 'right']
++choices_for_window_title_bar_overlay_width = typing.Literal['text', 'full']
+ 
+ option_names = (
+     'action_alias',
+@@ -517,6 +518,8 @@
      'window_title_bar_inactive_background',
      'window_title_bar_inactive_foreground',
      'window_title_bar_min_windows',
 +    'window_title_bar_overlay',
++    'window_title_bar_overlay_width',
      'window_title_template',
  )
  
-@@ -725,6 +726,7 @@ class Options:
+@@ -725,6 +728,8 @@ class Options:
      window_title_bar_inactive_background: kitty.fast_data_types.Color | None = None
      window_title_bar_inactive_foreground: kitty.fast_data_types.Color | None = None
      window_title_bar_min_windows: int = 0
 +    window_title_bar_overlay: bool = False
++    window_title_bar_overlay_width: choices_for_window_title_bar_overlay_width = 'text'
      window_title_template: str = '{fmt.fg.red}{bell_symbol}{activity_symbol}{fmt.fg.window}{progress_percent}{title}'
      action_alias: dict[str, str] = {}
      env: dict[str, str] = {}
 diff --git a/kitty/shaders.c b/kitty/shaders.c
-index 8d99136..7aa21e6 100644
+index 8d99136..3709bf0 100644
 --- a/kitty/shaders.c
 +++ b/kitty/shaders.c
 @@ -37,7 +37,7 @@ typedef struct UIRenderData {
@@ -236,7 +289,7 @@ index 8d99136..7aa21e6 100644
      color_type background_color; // RGB only
  } UIRenderData;
  
-@@ -1407,6 +1407,105 @@ send_cell_data_to_gpu(ssize_t vao_idx, Screen *screen, OSWindow *os_window) {
+@@ -1407,6 +1407,130 @@ send_cell_data_to_gpu(ssize_t vao_idx, Screen *screen, OSWindow *os_window) {
      return changed;
  }
  
@@ -247,8 +300,9 @@ index 8d99136..7aa21e6 100644
 +// resized, no child is signalled and no content moves. It is redrawn at a fixed
 +// rect every frame, so it does not scroll with the content beneath it.
 +
-+bool
-+window_title_band_rect(const OSWindow *os_window, const Window *w, unsigned *left, unsigned *top, unsigned *width, unsigned *height) {
++// The whole one-cell strip across the window. Drawing sizes its render buffer from this.
++static bool
++window_title_band_full_rect(const OSWindow *os_window, const Window *w, unsigned *left, unsigned *top, unsigned *width, unsigned *height) {
 +    if (!OPT(window_title_bar_overlay) || !w || !w->visible || !os_window || !os_window->fonts_data) return false;
 +    const Screen *screen = w->render_data.screen;
 +    if (!screen || screen->lines < 2) return false;
@@ -261,11 +315,26 @@ index 8d99136..7aa21e6 100644
 +    return true;
 +}
 +
++// The band as drawn, and as hit-tested to start a drag: drawing and mouse_region() both read this
++// one rect, so the draggable area is exactly the visible band. With window_title_bar_overlay_width
++// text it is only as wide as the title last rendered into it, at the window's left edge, so it
++// covers only the part of the row the title needs. Before the first render the full strip stands
++// in for one frame.
++bool
++window_title_band_rect(const OSWindow *os_window, const Window *w, unsigned *left, unsigned *top, unsigned *width, unsigned *height) {
++    if (!window_title_band_full_rect(os_window, w, left, top, width, height)) return false;
++    const WindowTitleBandData *band = &w->title_band;
++    if (OPT(window_title_bar_overlay_width) == TITLE_BAND_TEXT && band->last_text_mode && band->text_width && band->text_width < *width)
++        *width = band->text_width;
++    return true;
++}
++
 +void
 +free_window_title_band(Window *w) {
 +    WindowTitleBandData *band = &w->title_band;
 +    if (band->texture_id) { GLuint t = band->texture_id; free_texture(&t); band->texture_id = 0; }
 +    free(band->buf); band->buf = NULL; band->width = 0; band->height = 0;
++    band->text_width = 0; band->texture_width = 0; band->last_text_mode = false;
 +    Py_CLEAR(band->last_title);
 +    band->texture_is_current = false;
 +}
@@ -291,7 +360,8 @@ index 8d99136..7aa21e6 100644
 +draw_window_title_band(const UIRenderData *ui, bool for_final_output) {
 +    unsigned left, top, width, height;
 +    Window *w = ui->window;
-+    if (!w || !w->title || !window_title_band_rect(ui->os_window, w, &left, &top, &width, &height)) return;
++    if (!w || !w->title || !window_title_band_full_rect(ui->os_window, w, &left, &top, &width, &height)) return;
++    const bool text_mode = OPT(window_title_bar_overlay_width) == TITLE_BAND_TEXT;
 +    WindowTitleBandData *band = &w->title_band;
 +    color_type fg, bg;
 +    window_title_band_colors(ui, &fg, &bg);
@@ -302,13 +372,21 @@ index 8d99136..7aa21e6 100644
 +        band->buf = nbuf; band->width = width; band->height = height;
 +        Py_CLEAR(band->last_title);  // force a re-render into the new buffer
 +    }
-+    if (!band->last_title || band->last_title != w->title || band->last_fg != fg || band->last_bg != bg) {
++    if (!band->last_title || band->last_title != w->title || band->last_fg != fg || band->last_bg != bg || band->last_text_mode != text_mode) {
 +        const char *title = PyUnicode_Check(w->title) ? PyUnicode_AsUTF8(w->title) : NULL;
 +        if (!title) { PyErr_Clear(); return; }
 +        static char titlebuf[2048];
-+        snprintf(titlebuf, arraysz(titlebuf), " %s", title);
++        // A space each side, so a text-width band has the same inset at both ends.
++        snprintf(titlebuf, arraysz(titlebuf), " %s ", title);
++        // With actual_width set, draw_window_title renders a tightly packed actual x height image
++        // into the front of buf, so the texture below is uploaded at that width.
++        size_t actual = width;
 +        if (!draw_window_title(ui->os_window->fonts_data->font_sz_in_pts, ui->os_window->fonts_data->logical_dpi_y,
-+                               titlebuf, fg, bg, band->buf, width, height, NULL)) { PyErr_Clear(); return; }
++                               titlebuf, fg, bg, band->buf, width, height, text_mode ? &actual : NULL)) { PyErr_Clear(); return; }
++        if (!actual || actual > width) actual = width;
++        band->text_width = text_mode ? (unsigned)actual : 0;
++        band->texture_width = text_mode ? (unsigned)actual : width;
++        band->last_text_mode = text_mode;
 +        Py_CLEAR(band->last_title); band->last_title = Py_NewRef(w->title);
 +        band->last_fg = fg; band->last_bg = bg;
 +        band->texture_is_current = false;
@@ -322,7 +400,7 @@ index 8d99136..7aa21e6 100644
 +        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 +        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 +        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-+        glTexImage2D(GL_TEXTURE_2D, 0, GL_SRGB_ALPHA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, band->buf);
++        glTexImage2D(GL_TEXTURE_2D, 0, GL_SRGB_ALPHA, band->texture_width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, band->buf);
 +        band->texture_is_current = true;
 +    }
 +    // draw_window_title() fills the whole buffer with bg, so the quad is opaque and
@@ -332,7 +410,7 @@ index 8d99136..7aa21e6 100644
 +    data.texture_id = band->texture_id;
 +    bind_program(GRAPHICS_PROGRAM);
 +    if (for_final_output) glEnable(GL_FRAMEBUFFER_SRGB);
-+    save_viewport_using_top_left_origin(left, top, width, height, ui->full_framebuffer_height);
++    save_viewport_using_top_left_origin(left, top, band->texture_width, height, ui->full_framebuffer_height);
 +    draw_graphics(GRAPHICS_PROGRAM, &data, 0, 1, 1.f);
 +    restore_viewport();
 +    if (for_final_output) glDisable(GL_FRAMEBUFFER_SRGB);
@@ -342,7 +420,7 @@ index 8d99136..7aa21e6 100644
  void
  draw_cells(const WindowRenderData *srd, OSWindow *os_window, bool is_active_window, bool is_tab_bar, bool is_single_window, Window *window) {
      Screen *screen = srd->screen;
-@@ -1440,6 +1539,7 @@ draw_cells(const WindowRenderData *srd, OSWindow *os_window, bool is_active_wind
+@@ -1440,6 +1564,7 @@ draw_cells(const WindowRenderData *srd, OSWindow *os_window, bool is_active_wind
          .full_framebuffer_width = os_window->viewport_width, .full_framebuffer_height = os_window->viewport_height,
          .window = window, .screen = screen, .os_window = os_window, .grd = grman_render_data(grman), .window_logo = wl,
          .inactive_text_alpha = current_inactive_text_alpha, .has_background_image = has_bgimage(os_window),
@@ -350,7 +428,7 @@ index 8d99136..7aa21e6 100644
          .background_color = default_bg, .bg_alpha=effective_os_window_alpha(os_window),
      };
      screen->reload_all_gpu_data = false;
-@@ -1447,6 +1547,7 @@ draw_cells(const WindowRenderData *srd, OSWindow *os_window, bool is_active_wind
+@@ -1447,6 +1572,7 @@ draw_cells(const WindowRenderData *srd, OSWindow *os_window, bool is_active_wind
          ui.screen_left, ui.screen_top, ui.screen_width, ui.screen_height, ui.full_framebuffer_height);
      if (ui.os_window->needs_layers) draw_cells_with_layers(&ui, srd->vao_idx);
      else draw_cells_without_layers(&ui, srd->vao_idx);
@@ -371,27 +449,29 @@ index 92b3ffd..8bca9f3 100644
      free(w->title_bar_data.buf); w->title_bar_data.buf = NULL;
      Py_CLEAR(w->url_target_bar_data.last_drawn_title_object_id);
 diff --git a/kitty/state.h b/kitty/state.h
-index 4ea91bf..4c19eb3 100644
+index 4ea91bf..2c44b36 100644
 --- a/kitty/state.h
 +++ b/kitty/state.h
-@@ -32,6 +32,7 @@ typedef struct UrlPrefix {
+@@ -32,6 +32,8 @@ typedef struct UrlPrefix {
  
  typedef enum AdjustmentUnit { POINT = 0, PERCENT = 1, PIXEL = 2 } AdjustmentUnit;
  typedef enum UnderlineHyperlinks { UNDERLINE_ON_HOVER = 0, UNDERLINE_ALWAYS = 1, UNDERLINE_NEVER = 2 } UnderlineHyperlinks;
 +typedef enum WindowTitleBarPosition { TITLE_BAR_TOP = 0, TITLE_BAR_BOTTOM = 1 } WindowTitleBarPosition;
++typedef enum WindowTitleBandWidth { TITLE_BAND_TEXT = 0, TITLE_BAND_FULL = 1 } WindowTitleBandWidth;
  typedef enum ShowHyperlinkTargets {
      SHOW_HYPERLINK_TARGETS_NEVER = 0,
      SHOW_HYPERLINK_TARGETS_ALWAYS = 1,
-@@ -78,6 +79,8 @@ typedef struct Options {
+@@ -78,6 +80,9 @@ typedef struct Options {
      struct {
          bool on_cross, on_drop;
      } focus_follows_mouse;
 +    WindowTitleBarPosition window_title_bar;
 +    bool window_title_bar_overlay;
++    WindowTitleBandWidth window_title_bar_overlay_width;
      unsigned int hide_window_decorations;
      bool macos_hide_from_tasks, macos_quit_when_last_window_closed, macos_window_resizable, macos_traditional_fullscreen, macos_fullscreen_ignore_safe_area_insets, macos_use_physical_screen_frame;
      unsigned int macos_option_as_alt;
-@@ -225,6 +228,21 @@ typedef struct WindowBarData {
+@@ -225,6 +230,24 @@ typedef struct WindowBarData {
      bool needs_render;
  } WindowBarData;
  
@@ -403,9 +483,12 @@ index 4ea91bf..4c19eb3 100644
 +// per window per frame and nothing else.
 +typedef struct WindowTitleBandData {
 +    unsigned width, height;      // size of buf, in device pixels
++    unsigned text_width;         // measured width of the rendered title, 0 until the first render
++    unsigned texture_width;      // width of the uploaded texture: text_width, or width when full
 +    uint8_t *buf;                // RGBA pixels, fully opaque, rendered by draw_window_title()
 +    PyObject *last_title;        // the title object buf was rendered from
 +    color_type last_fg, last_bg; // the colours buf was rendered with
++    bool last_text_mode;         // whether buf was rendered at text width
 +    uint32_t texture_id;         // GL texture holding buf, 0 when none
 +    bool texture_is_current;     // false when buf has changed since the last upload
 +} WindowTitleBandData;
@@ -413,7 +496,7 @@ index 4ea91bf..4c19eb3 100644
  typedef struct PendingEntry {
      char *buf; size_t header_sz;
      size_t data_sz;
-@@ -274,6 +292,7 @@ typedef struct Window {
+@@ -274,6 +297,7 @@ typedef struct Window {
      monotonic_t last_drag_scroll_at;
      uint32_t last_special_key_pressed;
      WindowBarData title_bar_data, url_target_bar_data;
@@ -421,7 +504,7 @@ index 4ea91bf..4c19eb3 100644
      id_type redirect_keys_to_overlay;
      struct {
          bool enabled;
-@@ -627,6 +646,8 @@ void dispatch_pending_clicks(id_type, void*);
+@@ -627,6 +651,8 @@ void dispatch_pending_clicks(id_type, void*);
  void send_pending_click_to_window(Window*, int);
  void get_platform_dependent_config_values(void *glfw_window);
  bool draw_window_title(double, double, const char *text, color_type fg, color_type bg, uint8_t *output_buf, size_t width, size_t height, size_t *actual_width);
