@@ -40,7 +40,13 @@ items are live (converged), not when the code is written.
 ### A1 — prompts and standing-rule exemption
 - REPORT.md §8 item 2 (cites the exact lines) and item 3; §3.1 ruling 2.
 - Key the exemption on the program registry resolution (§10 item 10), not on a DoD marker no step writes.
-- Status: not started.
+- Status: **landed and live 2026-10-01** (`7310c4ac8` prompts, `7cca316c0` registry lib, `a08892a16` rules,
+  `b1fd89b6a` hook; converged, both live copies byte-equal to trunk). §10 item 10 closed by option 1: everything
+  keys on `scripts/lib/research-program.sh` (`rp_resolve_cwd`, `rp_is_active`; registry contract in its header,
+  which A2's `gate.sh` writes). Also fixed the same quota in two uncited siblings (`deep-research-sonnet.md`,
+  `frontier-derivation.md`). Learnings: the land gate requires `$HOME` fixtured in every new suite and refuses
+  `! ( … )` assertions errexit cannot reach; the slim variant's `derived-from` stamp was already stale and was left
+  alone.
 
 ### A2 — signing library, hand-run kit, registry
 - REPORT.md §8 items 4 and 7; layout per `evidence/design/SYNTHESIS.md:932-1097`.
