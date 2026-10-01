@@ -74,6 +74,17 @@
 #   --base REF          Base ref for --worktree (default origin/main; fetched first).
 #   --in-place          Prefix CLAUDE_ISOLATION_SKIP=1 (launch in cwd even at the reso primary
 #                       root, where claude otherwise auto-creates a fresh worktree).
+#   --requires-gate P   RESEARCH BUILD WAVE (REPORT.md §3.10 "Carried rows at build time", §8 item 13).
+#                       Refuse the fire unless research program P's gate admits it: registry
+#                       `certified`, the newest certificate has no FAIL row, no operator reopen after
+#                       it, and no unresolved class-C row, carried set or open frame-omission known
+#                       row inside the wave's closure (`scripts/research-kit/gate.sh requires`).
+#                       Pair with --gate-wave W to scope to that wave's closure; without it, a block
+#                       on ANY wave refuses (fail closed). Checked before any side effect, dry runs
+#                       included; refusal exits 2 (`research-gate`). An admitted fire carries the
+#                       work-order marker in its payload, so the fired session's re-ask router labels
+#                       its brief work-order without calling the classifier (§10 item 3).
+#   --gate-wave W       The build wave id the --requires-gate check is scoped to.
 #   --cloud             OFF-BOX VENUE (G5). Marks this fire as one that does NOT run on this
 #                       machine, which changes WHICH GATE ADMITS IT: the box-local capacity terms
 #                       (load per core, reclaimable RAM) are the wrong two questions for a fire
@@ -507,6 +518,7 @@ WTROOT="$HOME/Development/.worktrees" BASE="origin/main"
 SURFACE="split-right" SURFACE_EXPLICIT=0 SURFACE_REASON="" PROBE=0 DRY=0 IN_PLACE=0 EXTRA="" RECYCLE=0 SESSION_ID=""
 NOTIFY_BACK="" NOTIFY_BACK_EXPLICIT=0 NOTIFY_BACK_OPT_OUT=0 SELF_RETIRE=1 AS_ROLE="" FOLLOW=0
 WITH_MCP=0                                       # --with-mcp: opt back INTO project .mcp.json stdio servers
+REQUIRES_GATE="" GATE_WAVE=""                    # --requires-gate P / --gate-wave W: research build-wave gate
 RECYCLE_RELOC=0                                  # --recycle + --worktree/--cwd: same pane, NEW dir
 ALLOW_LIVE_SA=0                                  # L1-b: 1 = recycle over IN-FLIGHT Agent-tool subagents
 RCY_SUBAGENT_SID=""                              # L1-b: the PREDECESSOR's sid, for the brief trailer
@@ -792,6 +804,9 @@ _fire_gate_of() { # $1=refusal reason → gate name
     # measured the PREDECESSOR'S OWN LIVE WORK. Its own gate name, for the same reason cloud-* has
     # one — an admit ratio is only meaningful over a population one instrument measured.
     live-subagents)    printf subagents ;;
+    # §8 item 13 — the research build-wave gate measured a research program's certificate and live
+    # records: not the box, the payload, the argv or the predecessor. Its own denominator.
+    research-gate)     printf research  ;;
     *)                 printf '%s' "${1:-unknown}" ;;
   esac
 }
@@ -11204,6 +11219,8 @@ while [ $# -gt 0 ]; do case "$1" in
   --notify-back) NOTIFY_BACK="${2:-}"; NOTIFY_BACK_EXPLICIT=1; case "$NOTIFY_BACK" in ""|--*) NOTIFY_BACK="__self__"; shift ;; *) shift 2 ;; esac ;;
   --no-notify-back) NOTIFY_BACK_OPT_OUT=1; NOTIFY_BACK=""; shift ;;
   --goal)           FIRE_GOAL="${2:?--goal needs a condition}"; shift 2 ;;
+  --requires-gate)  REQUIRES_GATE="${2:?--requires-gate needs a program slug}"; shift 2 ;;
+  --gate-wave)      GATE_WAVE="${2:?--gate-wave needs a wave id}"; shift 2 ;;
   --self-retire)    SELF_RETIRE=1; shift ;;
   --no-self-retire) SELF_RETIRE=0; shift ;;
   --as-role)     AS_ROLE="${2:?--as-role needs a value}"; shift 2 ;;
@@ -11235,6 +11252,41 @@ if [ "$CLOUD" = 1 ] && [ "$CLOUD_OPTIN" != on ]; then
   echo "   fleet-wide resource — so the venue is opted into per box rather than enabled by landing a diff." >&2
   emit_fire_refusal cloud-optin "--cloud passed with CC_FIRE_CLOUD='${CLOUD_OPTIN}' (needs 'on') — off-box venue not enabled on this box"
   exit 2
+fi
+# ---- RESEARCH BUILD-WAVE GATE (--requires-gate, REPORT.md §3.10 + §8 item 13) ---------------------
+# A certified research program's build waves fire only when nothing in their dependency closure is
+# open or carried-unresolved. The verdict is the kit's (`gate.sh requires`), read here before any side
+# effect so a refused wave costs a message, never a pane. Dry runs are checked too: a dry run that
+# reads "would fire" over a refused wave is a false green. rc 1 = the gate refused the wave, rc 2 =
+# the program could not be read; both refuse, and the message says which. CC_RESEARCH_GATE overrides
+# the kit path for tests.
+if [ -z "$REQUIRES_GATE" ] && [ -n "$GATE_WAVE" ]; then
+  echo "!! --gate-wave scopes --requires-gate; it means nothing alone" >&2; exit 2
+fi
+if [ -n "$REQUIRES_GATE" ]; then
+  _rg_kit="${CC_RESEARCH_GATE:-$HF_DIR/research-kit/gate.sh}"
+  if [ ! -f "$_rg_kit" ]; then
+    echo "!! --requires-gate $REQUIRES_GATE: the research kit is not installed ($_rg_kit) — refusing, because an unreadable gate is not a passed one" >&2
+    emit_fire_refusal research-gate "kit absent: $_rg_kit"
+    exit 2
+  fi
+  _rg_rc=0
+  if [ -n "$GATE_WAVE" ]; then
+    _rg_out="$(bash "$_rg_kit" requires --program "$REQUIRES_GATE" --wave "$GATE_WAVE" 2>&1)" || _rg_rc=$?
+  else
+    _rg_out="$(bash "$_rg_kit" requires --program "$REQUIRES_GATE" 2>&1)" || _rg_rc=$?
+  fi
+  if [ "$_rg_rc" -ne 0 ]; then
+    if [ "$_rg_rc" -eq 1 ]; then
+      echo "!! --requires-gate $REQUIRES_GATE: the research gate REFUSES this build wave" >&2
+    else
+      echo "!! --requires-gate $REQUIRES_GATE: the research gate could not be read (rc $_rg_rc) — refusing" >&2
+    fi
+    printf '%s\n' "$_rg_out" | sed 's/^/   /' >&2
+    emit_fire_refusal research-gate "program=$REQUIRES_GATE wave=${GATE_WAVE:-<all>} rc=$_rg_rc"
+    exit 2
+  fi
+  printf '%s\n' "$_rg_out"
 fi
 # RESUME MODE (LIMIT_RECOVER_100P): the payload is the launcher lr-handoff minted, not a brief — the
 # relaunch is `bash <launcher>`, and the ingest prompt travels inside it. Every recycle-only flag is
@@ -13202,6 +13254,11 @@ if [ -n "$NOTIFY_BACK" ] || [ "$SELF_RETIRE_TRAILER" = 1 ] || [ "$ENGAGE_VERIFY"
     # appearance under the target account's projects dir proves the brief was ingested (P0-11).
     FIRE_MARKER="${FIRE_ENGAGE_MARKER:-HANDOFF-ENGAGE-$$-$(date +%s)-${RANDOM:-0}}"
     printf '\n<!-- handoff-fire engagement marker: %s (ignore) -->\n' "$FIRE_MARKER" >> "$PF_NB"
+  fi
+  # The research work-order marker (--requires-gate admitted above): the fired session's re-ask router
+  # labels a prompt carrying it work-order without calling the classifier (router.py WORK_ORDER_MARKER).
+  if [ -n "$REQUIRES_GATE" ]; then
+    printf '\n<!-- research work order: --requires-gate %s wave %s (handoff-fire) -->\n' "$REQUIRES_GATE" "${GATE_WAVE:--}" >> "$PF_NB"
   fi
   if [ "$RECYCLE_VERIFY" = 1 ]; then
     # Same construction, distinct token namespace so a recycle marker can never be confused with a

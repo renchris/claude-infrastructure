@@ -65,4 +65,8 @@ failed, 2 usage or refusal, 3 a dead vendor lane, 4 a voided slot. Python is 3.9
 - `seed.py plant|match|status` → vault `<sealed>/vault/seeds.enc`, key from the keychain item
   `cc-research-seed-vault/<slug>` (tests: `CC_RESEARCH_VAULT_KEY`).
 - `probe-run.sh run --id P-.. --kind K --closes PR-.. -- <cmd…>` and `probe-run.sh doctor`.
-- `gate.sh register|freeze|run|render|sweep|file-packet|close` (see `lib/gate.py`).
+- `gate.sh register|freeze|run|render|sweep|file-packet|requires|close` (see `lib/gate.py`).
+- `gate.sh requires --program P [--wave W] [--json]` (`lib/gate_requires.py`) → exit 0 the build wave may fire, 1
+  refused with each reason, 2 the program cannot be read. Reads the newest certificate and the LIVE decision and
+  known-row records (the sweep and the frame-delta cycle clear blocks after the certificate). The reader behind
+  `handoff-fire.sh --requires-gate P --gate-wave W`.

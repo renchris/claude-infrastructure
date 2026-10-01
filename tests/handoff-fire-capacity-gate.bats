@@ -740,6 +740,9 @@ _fires() {
       # session's own Agent-tool subagents). Its own gate name for the same reason cloud-* has one:
       # it measured the predecessor's live work, not the box, the payload or the argv.
       live-subagents)    printf '%s' "$mapped" | grep -q 'live-subagents'    || false ;;
+      # §8 item 13 — the research build-wave gate (--requires-gate) read a research program's
+      # certificate and records, so its refusals get their own denominator.
+      research-gate)     printf '%s' "$mapped" | grep -q 'research-gate'     || false ;;
       *) echo "UNMAPPED refusal reason '$reason' — it will fall into the fail-visible *) arm and be"
          echo "missing from every gate denominator. Add it to _fire_gate_of and to this case."; false ;;
     esac

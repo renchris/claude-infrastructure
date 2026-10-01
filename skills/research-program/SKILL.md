@@ -134,6 +134,13 @@ or is FILED, the certificate is written and the registry goes to `certified`. Ha
 `cc-signoff research:<slug>/cert`. From then on a completeness or pushback question is answered by
 relaying `gate.sh --render --program <slug>` unchanged, and nothing else.
 
+Build waves fire only through `scripts/handoff-fire.sh --requires-gate <slug> --gate-wave <W>` (§3.10
+"Carried rows at build time"). It refuses before any side effect while the registry is not `certified`,
+the newest certificate has a FAIL row, a reopen is signed after it, or the wave's closure holds an
+unresolved class-C row, a carried set it does not own the narrowing probe of, an open frame-omission
+known row, or a wave the sweep descoped. `gate.sh requires --program <slug> --wave <W>` prints the same
+verdict without firing. An admitted fire carries the `--requires-gate` work-order marker in its brief.
+
 ## Files beside this one
 
 - `RUBRIC.md` — §3.11 materiality, the only text raters apply.

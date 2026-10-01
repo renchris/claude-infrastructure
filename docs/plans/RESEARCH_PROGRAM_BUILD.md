@@ -37,7 +37,7 @@ items are live (converged), not when the code is written.
 
 ## Waves
 
-### A1 — prompts and standing-rule exemption
+### A1 — prompts and standing-rule exemption — DONE
 - REPORT.md §8 item 2 (cites the exact lines) and item 3; §3.1 ruling 2.
 - Key the exemption on the program registry resolution (§10 item 10), not on a DoD marker no step writes.
 - Status: **landed and live 2026-10-01** (`7310c4ac8` prompts, `7cca316c0` registry lib, `a08892a16` rules,
@@ -48,7 +48,7 @@ items are live (converged), not when the code is written.
   `! ( … )` assertions errexit cannot reach; the slim variant's `derived-from` stamp was already stale and was left
   alone.
 
-### A2 — signing library, hand-run kit, registry
+### A2 — signing library, hand-run kit, registry — DONE
 - REPORT.md §8 items 4 and 7; layout per `evidence/design/SYNTHESIS.md:932-1097`.
 - Registry state `certifying` set at freeze so the relay test runs with the block on (§10 item 1).
 - Scope (frozen): the operator-only signing library with a research namespace (frame, cert, extra round set, reopen,
@@ -80,13 +80,15 @@ items are live (converged), not when the code is written.
   - Interactive `zsh -lic` writes terminal escape sequences onto the answer line; the doctor fences answers with
     sentinels.
 
-### A3 — calibration study
+### A3 — calibration study — DONE
 - REPORT.md §8 item 14; §6.6 lists what it measures. Output: `docs/research/research-calibration.jsonl` and a report;
   changes to the report only as priced edits to named sections (profile table, caps, seed counts).
-- Status: not started.
-
-### B1, B2, C
-- Expanded with file:line detail when A2 lands.
+- Status: **DONE — landed 2026-10-01** (`72bcaf42` report draft and per-plan pooling, `21a58590` calibration over 16
+  held-out plans, `72ee29cb` REPORT.md priced edits to §3.9, §3.12, §6.1 and decision 4). Output:
+  `docs/research/research-calibration.jsonl` (16 rows) and `docs/research/research-calibration/REPORT.md`.
+  Headline: false material calls ~1.1 per reviewer-read (assumed 0.01) and rater downgrades ~0.2 (assumed 0.05), so
+  the quiet-round stop never fires at measured inputs; the 95% bound holds; Lite is the default for every size and
+  Full stays off. Still uncalibrated: the router (B1), Google, multi-round behaviour (its §6).
 
 ### B1 — re-ask router, research block, Stop check, settings migration (REPORT.md §8 items 5 + 6)
 Owns §10 items 1 (deny half), 2, 3, 8, 11, 12, 13 (populating the set). Reads, never writes, the registry.
@@ -118,8 +120,8 @@ Owns §10 items 1 (deny half), 2, 3, 8, 11, 12, 13 (populating the set). Reads, 
   lines do not carry.
 - **Settings migration** as a `c10` migration (next free number after `migrations/0049-*`), operator-run: one
   PreToolUse entry matching every tool, Workflow included; the router hook's timeout raised to 10 s.
-- Status: **built off-box 2026-10-01** (cloud session, branch `claude/fire-20261001T094944Z-86287-1`; the desk
-  lands it). What exists:
+- Status: **landed 2026-10-01** (`19ddcc36`, plus `18fe93ba` reviving mid-test assertions; parked on-box steps
+  recorded in `c047a316`). Built off-box (branch `claude/fire-20261001T094944Z-86287-1`). What exists:
   - `scripts/research-kit/router.py` — `classify` (gate row 15's contract), `prompt` (UserPromptSubmit), `tool`
     (PreToolUse), `relay-check` (Stop), `status`. Labels are `heldout.ROUTES` plus `unavailable` (§10 item 3).
     Per-session route records in `$CC_RESEARCH_HOME/route-state/` (7-day reaper, `growth-coverage.conf` row).
@@ -169,8 +171,8 @@ Owns §10 items 1 (deny half), 2, 3, 8, 11, 12, 13 (populating the set). Reads, 
 - Operator verbs to document, all `cc-signoff research:<slug>/{frame|cert|extra-round|reopen|veto/<D>}`
   (`bin/cc-signoff` usage; namespace at `scripts/lib/operator_sign.py:143-160`).
 - Restore the Google lane first: `gemini` needs one interactive login (filed as an operator step at A2's close).
-- Status: **built off-box 2026-10-01** (cloud session, branch `claude/fire-20261001T113129Z-26618-1`; the desk
-  lands it). What exists:
+- Status: **landed 2026-10-01** (`0fb32f50`, plus `b5085b18` reviving mid-test assertions). Built off-box
+  (branch `claude/fire-20261001T113129Z-26618-1`). What exists:
   - `scripts/research-kit/intake.py` — `init` (refuses a numberless superlative, checks the research index,
     registers through `gate.sh register`, writes the frame skeleton with FAC-01..FAC-33 and the three historical
     frames unmapped, starts the stage-1 clock), `ruling` (`--show`; `--adopt` records `{at, quote}`; `--decline`
@@ -196,3 +198,42 @@ Owns §10 items 1 (deny half), 2, 3, 8, 11, 12, 13 (populating the set). Reads, 
   printed rather than recomputed, because the report's own ceiling arithmetic is not reproducible from its formula;
   a stale `docs/research/INDEX.jsonl` is reported with its command, never rewritten by the intake (it may run from
   the shared checkout). Trunk's index was 5 entries stale at this build.
+
+### C — wave 2: REPORT.md §8 items 9–13, 15 (in parallel with the pilot)
+Depends on B1 and B2, both landed. Each item replaces a wave-1 tool or hand step named in REPORT.md §8's pilot
+coverage table, keeping the kit's record formats (`scripts/research-kit/RECORDS.md`).
+- **Item 9 — `bin/cc-research` core.** Does not exist on trunk. Absorbs the kit verbs over the same records: index
+  (`research-index.py`), frame (`intake.py`), census, premise, source, decision, trace, reconcile, lint, freeze
+  (`lib/gate_cert.py`), estimate and forecast (`estimate.py`), gate (`lib/gate.py`), verdict (B1's block already
+  whitelists `cc-research verdict <slug>` beside `gate.sh --render`), concern, park, reopen, budget and ceiling.
+  Caps stay in `lib/kit.py` (`CAPS`, `r_max`); records stay append-only.
+- **Item 10 — probe runner, doctor, harness self-test as `cc-research` verbs**, replacing
+  `scripts/research-kit/probe-run.sh` (`lib/probe_run.py`).
+- **Item 11 — certification machinery as Workflows** (round, frame-critique, rehearsal), replacing `round.sh` /
+  `courier.sh` (`lib/round.py`, `lib/courier.py`); raters and the responding-model check enforced in code.
+- **Item 12 — scheduled launchd jobs**: the sweep (`gate.sh sweep`; `lib/gate_sweep.py:2` names launchd as its
+  wave-2 runner), freshness re-checks (gate row 10), daily concern triage (also the writer of B1's
+  `$CC_RESEARCH_HOME/activities.json`), rule drift, market refresh — each tested under `/bin/bash` 3.2.57.
+  Loading a plist is the operator's (C10).
+- **Item 13 — close integration.**
+  - DONE (built off-box 2026-10-01, branch `claude/fire-20261001T141134Z-30157-1`; the desk lands it):
+    `handoff-fire.sh --requires-gate <program> [--gate-wave W]` over a new kit verb
+    `gate.sh requires --program P [--wave W] [--json]` (`scripts/research-kit/lib/gate_requires.py`). It refuses
+    (exit 2, refusal reason `research-gate`, its own `_fire_gate_of` denominator) before any side effect, dry runs
+    included, unless the registry reads `certified`, the newest certificate has no FAIL row, no valid reopen is
+    signed after it, and the wave's closure holds no unresolved class-C row, carried set (exempt for the wave that
+    owns its narrowing probe), open frame-omission known row, or descoped wave. It reads the LIVE decision and
+    known-row records, so a sweep conversion or a closed frame-delta cycle clears the block without a reopen (§10
+    item 9). Without `--gate-wave` any block refuses (fail closed). An admitted fire appends the
+    `--requires-gate <slug>` marker to the fired brief, which `router.py` labels work-order without the classifier
+    (§10 item 3). Suite `tests/research-kit-requires.bats` (17): red 17/17 on trunk `72ee29cb`, green 17/17 here;
+    two mutants (narrowing-probe exemption dropped, descoped check dropped) each killed by its case.
+    `tests/handoff-fire-capacity-gate.bats` case 31's ENUM guard maps the new reason.
+  - Remaining: a program-verdict field in `scripts/wrap-ledger.sh` (its existing `GOAL_*` fields at `:154-185` are
+    `/goal` liveness, a different thing; name the new one so the two cannot be confused), and an absent DoD reading
+    "unknown" rather than ✅ (REPORT cites `:2286-2288`, which is now the no-trunk arm: re-locate before editing);
+    a Goal line in `commands/are-we-done.md`; pending concerns and the priced menu in `hooks/operator-readout.sh`.
+- **Item 15 — calibration log.** `docs/research/research-calibration.jsonl` exists (A3, 16 replayed plans).
+  Remaining: reference-class timing per project type, appended as programs run.
+- Status: **in progress** — item 13's `--requires-gate` done; items 9, 10, 11, 12, the rest of 13, and 15's
+  reference-class timing not started.

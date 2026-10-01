@@ -15,9 +15,11 @@ Invoked through scripts/research-kit/gate.sh. Verbs:
   file-packet --program P --decision D ...                  cc-decide open with the program's
                                                             --project and --default-effect no-change
   close     --program P                                     state -> closed
+  requires  --program P [--wave W] [--json]                 may build wave W fire? exit 0 clear,
+                                                            1 refused (handoff-fire --requires-gate)
 
 Rows 1-8 live in gate_rows_a.py; rows 9-16 and the plan lint in gate_rows_b.py; the sweep and
-file-packet verbs in gate_sweep.py; freeze, render and the certificate in gate_cert.py. Each row function takes a Ctx and returns a Row. A row that cannot
+file-packet verbs in gate_sweep.py; requires in gate_requires.py; freeze, render and the certificate in gate_cert.py. Each row function takes a Ctx and returns a Row. A row that cannot
 be evaluated is FAIL ("Unknown fails", §3.10); a row function that raises is FAIL with the error.
 Exit codes: 0 all rows PASS/FILED (or verb succeeded) · 1 a row FAILed · 2 usage or refusal.
 """
@@ -169,10 +171,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.set_defaults(fn=cmd_run)
 
     import gate_cert
+    import gate_requires
     import gate_sweep
 
     gate_cert.add_verbs(sub)  # freeze, render
     gate_sweep.add_verbs(sub)  # sweep, file-packet
+    gate_requires.add_verbs(sub)  # requires
 
     a = ap.parse_args(argv)
     try:
