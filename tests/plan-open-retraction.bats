@@ -31,8 +31,8 @@ setup() {
 @test "plan-phase-scan: a complete prose plan reports its sections DONE (frontmatter), an open one PENDING" {
   run bash "$REPO/scripts/plan-phase-scan.sh" "$P/DONE_PLAN.md" json
   [ "$status" -eq 0 ]
-  [[ "$output" != *'"PENDING"'* ]]
-  [[ "$output" == *'"frontmatter"'* ]]
+  [[ "$output" != *'"PENDING"'* ]] || false
+  [[ "$output" == *'"frontmatter"'* ]] || false
   run bash "$REPO/scripts/plan-phase-scan.sh" "$P/OPEN_PLAN.md" json
   [[ "$output" == *'"PENDING"'* ]]
 }
@@ -43,7 +43,7 @@ setup() {
   printf '# wave notes\n' > "$P/sub/w1.md"
   run bash "$REPO/scripts/plan-frontmatter-lint.sh" --file "$P/BARE.md"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"BARE.md has no frontmatter"* ]]
+  [[ "$output" == *"BARE.md has no frontmatter"* ]] || false
   run bash "$REPO/scripts/plan-frontmatter-lint.sh" --file "$P/NOTES.md" --file "$P/sub/w1.md" --file "$P/OPEN_PLAN.md"
   [ "$status" -eq 0 ]
   run bash "$REPO/scripts/plan-frontmatter-lint.sh" --selftest

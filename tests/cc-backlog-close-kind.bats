@@ -95,7 +95,7 @@ kind_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$
   printf '%s\tduplicate\t\tno pointer\n%s\tduplicate\t%s\tok\n' "$a" "$b" "$a" > rows.tsv
   run bash "$CB" done --from-file rows.tsv
   [ "$status" -eq 4 ]
-  [[ "$output" == *"needs a --pointer"* ]]
+  [[ "$output" == *"needs a --pointer"* ]] || false
   [ "$(kind_of "$a")" = "open  " ]
   [ "$(kind_of "$b")" = "done duplicate $a" ]
 }

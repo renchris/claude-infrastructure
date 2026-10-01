@@ -38,7 +38,7 @@ mkrepo() { mkdir -p "$1" && git -C "$1" init -q && git -C "$1" -c user.email=t@t
   cd "$FX/x/fx"
   run bash "$CB" add --title "fixture work" --project fx
   [ "$status" -eq 2 ]
-  [[ "$output" == *"fixture root"* ]]
+  [[ "$output" == *"fixture root"* ]] || false
   run bash "$CB" needs "fixture step" --project fx --class needs-human
   [ "$status" -eq 2 ]
   [ "$(shasum "$LEDGER")" = "$before" ]
@@ -49,7 +49,7 @@ mkrepo() { mkdir -p "$1" && git -C "$1" init -q && git -C "$1" -c user.email=t@t
   cd "$FX"
   run bash "$CB" add --title "loose fixture" --project fx
   [ "$status" -eq 2 ]
-  [[ "$output" == *"fixture root"* ]]
+  [[ "$output" == *"fixture root"* ]] || false
   [ ! -s "$LEDGER" ]
 }
 
@@ -91,7 +91,7 @@ nevents() { jq -c --arg e "$1" 'select(.event==$e)' "$GLOG" 2>/dev/null | grep -
   id="$(addrow "unclassed one")"
   CC_BACKLOG_CALLER=scripts/fake-producer.sh run bash "$CB" block "$id" --needs "somebody should look"
   [ "$status" -eq 0 ]
-  [[ "$output" != *WARN* ]]
+  [[ "$output" != *WARN* ]] || false
   [ "$(nevents unclassed-transition)" -eq 1 ]
   jq -e 'select(.event=="unclassed-transition") | select(.caller=="scripts/fake-producer.sh" and .reasons=="unclassed")' "$GLOG" >/dev/null
   [ "$(bash "$CB" list --blocked --json | jq -r --arg i "$id" '.[]|select(.id==$i)|.status')" = blocked ]
@@ -123,12 +123,12 @@ nevents() { jq -c --arg e "$1" 'select(.event==$e)' "$GLOG" 2>/dev/null | grep -
   id="$(addrow "enforced")"
   run bash "$CB" block "$id" --needs "somebody should look"
   [ "$status" -ne 0 ]
-  [[ "$output" == *REFUSED* ]]
+  [[ "$output" == *REFUSED* ]] || false
   run bash "$CB" block "$id" --needs "no-capacity: measured wall" 
   [ "$status" -eq 0 ]
   run bash "$CB" block "$id" --needs "not-yet-true: a rewritten premise"
   [ "$status" -ne 0 ]
-  [[ "$output" == *reblock-without-receipt* ]]
+  [[ "$output" == *reblock-without-receipt* ]] || false
   run bash "$CB" block "$id" --needs "not-yet-true: a rewritten premise" --receipt "date => 2026-09-30"
   [ "$status" -eq 0 ]
   id2="$(addrow "forced")"
@@ -157,8 +157,8 @@ nevents() { jq -c --arg e "$1" 'select(.event==$e)' "$GLOG" 2>/dev/null | grep -
   run bash "$CB" class-gate --enforcing
   [ "$status" -ne 0 ]
   run bash "$CB" class-gate
-  [[ "$output" == *"mode=warn"* ]]
-  [[ "$output" == *"scripts/late.sh"* ]]
+  [[ "$output" == *"mode=warn"* ]] || false
+  [[ "$output" == *"scripts/late.sh"* ]] || false
   : > "$GLOG"; printf '{"ts":"%s","event":"gate-armed","caller":"x","days":"7"}\n' "$recent" > "$GLOG"
   run bash "$CB" class-gate --enforcing
   [ "$status" -ne 0 ]
@@ -170,7 +170,7 @@ nevents() { jq -c --arg e "$1" 'select(.event==$e)' "$GLOG" 2>/dev/null | grep -
   a="$(addrow "Activate com.claude.desk-invariant: flip it to run in launchd/fleet.manifest and load it")"
   run bash -c "cd '$HOME' && bash '$CB' add --title 'Flip com.claude.desk-invariant from staged to run' --project gatesuite"
   [ "$status" -eq 2 ]
-  [[ "$output" == *"$a"* ]]
+  [[ "$output" == *"$a"* ]] || false
   run bash -c "cd '$HOME' && bash '$CB' add --title 'com.claude.desk-invariant crashed twice today' --project gatesuite"
   [ "$status" -eq 0 ]
   bash "$CB" done "$a" --evidence "loaded"
@@ -243,7 +243,7 @@ needs_in() { (cd "$HOME" && bash "$CB" needs "$@"); }
   dl_fixture
   run needs_in "Call Rogers about the renewal" --project personal --dl-lost "$LOST" --dl-class money --dl-usd 90 --dl-text "Rogers bills 90 on renewal"
   [ "$status" -eq 3 ]
-  [[ "$output" == *"dl add --kind hard --lost $LOST"* ]]
+  [[ "$output" == *"dl add --kind hard --lost $LOST"* ]] || false
   [ ! -s "$LEDGER" ]
 }
 
@@ -267,7 +267,7 @@ needs_in() { (cd "$HOME" && bash "$CB" needs "$@"); }
   dl_fixture
   run needs_in "Call Rogers back" --project personal --dl-kind decay --dl-since 2026-09-20 --dl-class relationship --dl-text "Rogers waits"
   [ "$status" -eq 0 ]
-  [[ "$(bash "$CB" list --blocked --json | jq -r '.[0].needs')" == *"decay is at its cap (15/15)"* ]]
+  [[ "$(bash "$CB" list --blocked --json | jq -r '.[0].needs')" == *"decay is at its cap (15/15)"* ]] || false
   [ "$(bash "$CB" list --blocked --json | jq -r '.[0].blockClass')" = needs-human ]
   run needs_in "Call Bell back" --project personal --dl-kind decay --dl-since 2026-09-20 --dl-class relationship --dl-text "Bell waits" --replaces admin.decay-3
   [ "$status" -eq 3 ]

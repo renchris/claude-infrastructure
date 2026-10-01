@@ -255,7 +255,7 @@ EOF
   [ "$status" -eq 0 ]
   [[ "$output" == *"CLOSED      $a"* ]] || false
   [ "$(open_ids | grep -c .)" -eq 2 ]
-  ! open_ids | grep -qx "$a"
+  ! open_ids | grep -qx "$a" || false
   b="$(cat "$C/state/session_01LBBB.answer-row")"
   : > "$C/state/session_01LBBB.retired"
   run python3 "$ANS" --project p

@@ -37,7 +37,7 @@ mkarms() { mkdir -p "$1/arms/full/rules"; : > "$1/arms/full/CLAUDE.md"; : > "$1/
   export GATE_ROOT="$HOME/.claude/autonomy/gate"; mkarms "$GATE_ROOT"
   run bash "$RUNSH" full T99 1 "$CCD"
   [ "$status" -eq 2 ]
-  [[ "$output" == *"refusing to start"* ]]
+  [[ "$output" == *"refusing to start"* ]] || false
   [ ! -e "$GATE_ROOT/runs" ]
 }
 
