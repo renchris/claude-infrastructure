@@ -79,7 +79,7 @@ PY
 @test "a numberless superlative in the deliverable is refused and nothing is registered" {
   run "$I" init --program demo --root "$ROOT" --profile lite --deliverable "the best sync daemon" --intent x
   [ "$status" -eq 2 ]
-  [[ "$output" == *"numberless superlative"* ]]
+  [[ "$output" == *"numberless superlative"* ]] || false
   [ ! -e "$CC_RESEARCH_REGISTRY" ]
   [ ! -e "$REC/frame.json" ]
 }
@@ -98,7 +98,7 @@ PY
   preflight "2026-10-01T11:00:00Z"
   run "$I" contract-page --program demo
   [ "$status" -eq 2 ]
-  [[ "$output" == *"definition_of_complete"* ]]
+  [[ "$output" == *"definition_of_complete"* ]] || false
   [ "$(frame_field contract_page_at)" = "null" ]
 }
 
@@ -119,11 +119,11 @@ PY
   "$I" set --program demo --escape-cost-days 3
   run "$I" contract-page --program demo
   [ "$status" -eq 2 ]
-  [[ "$output" == *"preflight has not run"* ]]
+  [[ "$output" == *"preflight has not run"* ]] || false
   preflight "$CC_NOW"
   run "$I" contract-page --program demo
   [ "$status" -eq 2 ]
-  [[ "$output" == *"strictly before"* ]]
+  [[ "$output" == *"strictly before"* ]] || false
   [ ! -e "$REC/CONTRACT.md" ]
 }
 
@@ -133,7 +133,7 @@ PY
   preflight "2026-10-01T11:00:00Z" False
   run "$I" contract-page --program demo
   [ "$status" -eq 3 ]
-  [[ "$output" == *"DEAD LANE google"* ]]
+  [[ "$output" == *"DEAD LANE google"* ]] || false
   [ ! -e "$REC/CONTRACT.md" ]
 }
 
@@ -200,7 +200,7 @@ PY
   init_ok; rulings_ok
   run "$I" lint --program demo
   [ "$status" -eq 1 ]
-  [[ "$output" == *"checklist rows unmapped: FAC-01"* ]]
+  [[ "$output" == *"checklist rows unmapped: FAC-01"* ]] || false
   for n in $(seq -w 1 33); do "$I" map --program demo --fac "FAC-$n" --na "fixture" > /dev/null; done
   "$I" map --program demo --frame "deployed and live" --axis V7
   "$I" map --program demo --frame "nothing can beat it" --excluded "not this one"
@@ -215,7 +215,7 @@ PY
   init_ok
   run "$I" status --program demo
   [ "$status" -eq 1 ]
-  [[ "$output" == *"done  registered"* ]]
-  [[ "$output" == *"TODO  contract page"* ]]
+  [[ "$output" == *"done  registered"* ]] || false
+  [[ "$output" == *"TODO  contract page"* ]] || false
   [[ "$output" == *"cc-signoff research:demo/frame"* ]]
 }
