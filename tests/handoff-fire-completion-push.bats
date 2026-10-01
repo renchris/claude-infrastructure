@@ -78,6 +78,13 @@ setup() {
   export CC_MAILBOX_DIR="$BATS_TEST_TMPDIR/mailbox"
   export CC_COMMS_ALARM_DIR="$BATS_TEST_TMPDIR/comms-alarms"
   export CC_HANDOFF_ALARM_DIR="$BATS_TEST_TMPDIR/handoff-alarms"
+  # The same leak, a second store (pane-lifecycle fixes item 0, 2026-10-01). A fake pane never
+  # answers the pane probe, so self-close writes a durable no-answer row (sc_noanswer_record) into
+  # the pane-close queue — and without these two seams that was the LIVE queue. Measured: rows
+  # self-close-fake_{BBBB,CCCC,EEEE}-*.json sat in ~/.claude/state/pane-close-queue, and the live
+  # drainer (scripts/pane-close-retry.sh) paged the operator about them ("paged": "1").
+  export CC_PANE_CLOSE_QUEUE_DIR="$BATS_TEST_TMPDIR/pane-close-queue"
+  export CC_PCQ_LOG="$BATS_TEST_TMPDIR/pane-close-retry.log"
   for _p in fake:AAAA-1111 fake:BBBB-2222 fake:CCCC-3333 fake:DDDD-4444 fake:EEEE-5555 fake:FFFF-5150; do
     # cwd is THIS PANE's cwd, not a hardcoded "/tmp": the origin gate tenancy-binds the stamp on cwd
     # (item aba6bcbff6de), and a placeholder path would make every pane here a stale tenant.
@@ -258,4 +265,20 @@ mk_ignterm_stub() { printf '#!/bin/bash\ntrap "" TERM\nwhile :; do sleep 1; done
   [ "$status" -eq 0 ]
   [[ "$output" == *"unbounded"* ]] || false
   [[ "$output" != *"≤ 0s"* ]] || false
+}
+
+@test "HERMETIC: a fake pane's no-answer row lands in THIS test's pane-close queue, never the live one" {
+  # Item 0 of docs/plans/pane-lifecycle-fixes-2026-10-01.md. The leaked rows were written only while
+  # kitty was deaf: with kitty answering, a fake pane reads as ABSENT (proof rc 1) and no row is
+  # written, so the leak depended on the box's terminal. The watcher probes $HOME/.claude/bin/it2, so
+  # a fake HOME whose it2 fails makes the no-answer verdict (proof rc 3) deterministic. The queue seam
+  # stays explicit, which is what keeps this a test of the SEAM: unset it and the row lands under the
+  # fake HOME instead of here. One arm, so it gives up at once instead of waiting out the re-arm.
+  local home="$BATS_TEST_TMPDIR/home"; mkdir -p "$home/.claude/bin"
+  printf '#!/bin/bash\necho "deaf terminal (test stub)" >&2\nexit 1\n' > "$home/.claude/bin/it2"
+  chmod +x "$home/.claude/bin/it2"
+  ( cd "$WORK" && HOME="$home" CC_COMPLETION_PUSH_BIN="$STUB" CC_SELFCLOSE_NOANSWER_ARMS=1 \
+      timeout 60 bash "$HF" self-close --terminal --session-id "fake:BBBB-2222" ) >/dev/null 2>&1 || true
+  ls "$BATS_TEST_TMPDIR"/pane-close-queue/self-close-fake_BBBB-2222.json
+  [ "$(jq -r .pane "$BATS_TEST_TMPDIR"/pane-close-queue/self-close-fake_BBBB-2222.json)" = "fake:BBBB-2222" ]
 }
