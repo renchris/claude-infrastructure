@@ -21,7 +21,9 @@ setup() {
   unset KITTY_WINDOW_ID KITTY_LISTEN_ON CC_TERM_KITTY_TO
   eval "$(sed -n '/^kt_launch() {/,/^}/p;/^spawn_frontmost() {/,/^}/p;/^spawn() {/,/^}/p;/^fire_cleanup() {/,/^}/p' "$HF")"
   in_kitty() { return 0; }
-  SURFACE=window FOLLOW=0 HF_ARGV=() FIRE_SPAWN_UNKNOWN=0
+  # Globals the extracted functions read — exported so their use is visible to shellcheck.
+  export SURFACE=window FOLLOW=0 FIRE_SPAWN_UNKNOWN=0
+  HF_ARGV=(); export HF_ARGV
 }
 
 @test "kt_launch: no window id AND an unreadable window list ⇒ rc 13 (UNKNOWN), not an empty success" {
@@ -62,7 +64,7 @@ mk_worktree() {
   git -C "$REPO" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
   FIRE_CLEAN_WT="$BATS_TEST_TMPDIR/wt"; FIRE_CLEAN_BRANCH="fire/test"
   git -C "$REPO" worktree add -q -b "$FIRE_CLEAN_BRANCH" "$FIRE_CLEAN_WT"
-  FIRE_CLEAN_POOL="" FIRE_CLEAN_DONE=0 SPAWNED_PANE="" FIRE_LIVE_PANE=""
+  export FIRE_CLEAN_POOL="" FIRE_CLEAN_DONE=0 SPAWNED_PANE="" FIRE_LIVE_PANE=""
 }
 
 @test "fire_cleanup: on an UNKNOWN spawn (rc 13) the worktree and branch are KEPT" {
