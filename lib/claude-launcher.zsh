@@ -274,17 +274,27 @@ _cc_install_router
 # checkout copy meant every interactive launch ran a five-week-old claim path, and any
 # claim-path fix landed on trunk could not reach the operator until local main happened to
 # advance. Order now: installed trunk copy → checkout copy (a fresh machine before its first
-# ensure) → cold new-worktree.sh. Everything else is byte-equal to the rc body.
+# ensure) → cold new-worktree.sh.
+#
+# SECOND change from the rc body (worktree-isolation rollout step 4, backlog 3c51c384f885): the
+# repo gate reads the `.worktree-isolate` marker, so a repo opts in from its own tree (this repo
+# has carried one since d78ba97f4, read by nothing until now). reso keeps its basename test as its
+# marker, since it ships no file. The installed pool rung `~/.reso/bin/worktree-pool.sh` is reso's
+# pool and is scoped to reso: consulted first and unconditionally, it would claim a reso slot for
+# any other opted-in repo. This step needs no ~/.zshrc edit (and so no c10 migration): the rc's
+# own copy is shadowed by this definition in every shell, so this is the gate that runs.
 _cc_route_check() {
     emulate -L zsh
     [[ "${CLAUDE_ISOLATION_SKIP:-0}" == "1" ]] && return 0
-    local _top _wt _wtpath
+    local _top _wt _wtpath _reso=0
     _top="$(git rev-parse --show-toplevel 2>/dev/null || echo '')"
     [[ -n "$_top" ]] || return 0                        # not a git repo → launch in place
     [[ -f "$_top/.git" ]] && return 0                   # linked worktree → already isolated
-    [[ -d "$_top/.git" && "$(basename "$_top")" == "reso-management-app" ]] || return 0
+    [[ -d "$_top/.git" ]] || return 0
+    [[ "$(basename "$_top")" == "reso-management-app" ]] && _reso=1
+    (( _reso )) || [[ -f "$_top/.worktree-isolate" ]] || return 0   # repo has not opted in
     _wt="cc-$(date +%H%M%S)-$$"   # +shell PID → unique per pane (no same-second collision)
-    if [[ -f "$HOME/.reso/bin/worktree-pool.sh" ]]; then
+    if (( _reso )) && [[ -f "$HOME/.reso/bin/worktree-pool.sh" ]]; then
         _wtpath="$( cd "$_top" && bash "$HOME/.reso/bin/worktree-pool.sh" claim "$_wt" )" || return 1
     elif [[ -f "$_top/scripts/worktree-pool.sh" ]]; then
         _wtpath="$( cd "$_top" && bash scripts/worktree-pool.sh claim "$_wt" )" || return 1

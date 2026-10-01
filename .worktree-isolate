@@ -1,7 +1,7 @@
 # .worktree-isolate — this repo OPTS IN to always-isolate session launching.
 #
-# Presence of this file is the whole contract. `~/.zshrc:_cc_route_check()` — the gate shared by
-# every launcher (`claude`, `claude-default`, `claude-previous`) — reads it and, when a session
+# Presence of this file is the whole contract. `_cc_route_check()` in lib/claude-launcher.zsh
+# (it shadows the stale copy inline in ~/.zshrc) — the gate shared by every launcher (`claude`, `claude-default`, `claude-previous`) — reads it and, when a session
 # starts in this repo's PRIMARY checkout, creates a per-session git worktree via
 # `scripts/new-worktree.sh` and launches there instead of in the shared root.
 #
