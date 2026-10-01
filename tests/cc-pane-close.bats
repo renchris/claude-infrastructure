@@ -20,7 +20,7 @@ setup() {
   export CC_PANE_CLOSE_PS_BIN="$S/ps" CC_PANE_CLOSE_KILL_BIN="$S/kill"
   # ps: `-o lstart= -p <pid>` → $FIX/lstart.<pid>; `-o pid=,ppid=,comm= -t <tty>` → $FIX/tty.<tty>
   # shellcheck disable=SC2016  # stub bodies expand when the STUB runs
-  printf '#!/bin/bash\nfor a; do prev2="$prev"; prev="$a"; done\ncase "$2" in lstart=) cat "$FIX/lstart.$prev" 2>/dev/null ;; *) cat "$FIX/tty.$prev" 2>/dev/null ;; esac\nexit 0\n' > "$S/ps"
+  printf '#!/bin/bash\nfor a; do prev2="$prev"; prev="$a"; done\ncase "$2" in lstart=) cat "$FIX/lstart.$prev" 2>/dev/null ;; stat=) if [ -f "$FIX/stat.$prev" ]; then cat "$FIX/stat.$prev"; elif [ -f "$FIX/lstart.$prev" ]; then echo Ss; fi ;; *) cat "$FIX/tty.$prev" 2>/dev/null ;; esac\nexit 0\n' > "$S/ps"
   # kill: records its argv, and the window then goes away (its root process loses its lstart)
   # shellcheck disable=SC2016
   printf '#!/bin/bash\necho "$*" >> "$FIX/kill.log"\nrm -f "$FIX/lstart.$ROOT"\n' > "$S/kill"
@@ -140,4 +140,29 @@ plain_no()  { transcript '{"type":"user","cwd":"CWD","message":{"role":"user","c
   run "$CLOSE" --pane 69
   [ "$status" -eq 1 ]
   [[ "$output" == *"pane 69: FAILED"* ]]
+}
+
+@test "a window root left a ZOMBIE by a wedged kitty is CLOSED (with the kitty note), not FAILED" {
+  teammate
+  printf '#!/bin/bash\necho "$*" >> "$FIX/kill.log"\necho Z > "$FIX/stat.$ROOT"\n' > "$S/kill"
+  run "$CLOSE" --pane 69
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pane 69: CLOSED"*"kitty has not reaped it"* ]] || false
+  grep -q '"verdict":"closed-kitty-unreaped"' "$FIX/close.jsonl"
+}
+
+@test "a pane whose window root is ALREADY a zombie reports already closed and signals nothing" {
+  teammate; echo Z > "$FIX/stat.5000"
+  run "$CLOSE" --pane 69
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pane 69: ALREADY CLOSED"* ]] || false
+  [ ! -e "$FIX/kill.log" ]
+}
+
+@test "a window with no live process left on its tty is NOTHING TO CLOSE (rc 0), and nothing is signalled" {
+  teammate; printf '9999 1 gitstatusd\n' > "$FIX/tty.ttys057"
+  run "$CLOSE" --pane 69
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pane 69: NOTHING TO CLOSE"* ]] || false
+  [ ! -e "$FIX/kill.log" ]
 }

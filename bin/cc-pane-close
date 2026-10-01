@@ -63,6 +63,15 @@ kitty_pid() {
   s="${s##*kitty-}"; case "$s" in ''|*[!0-9]*) return 1 ;; esac
   printf '%s' "$s"
 }
+# The window root's state after a close. A ZOMBIE is closed: its shell is dead and the process has
+# exited, but kitty has not reaped it — which happens only when kitty's own event loop is wedged
+# (field result 2026-10-01: panes 55/69/76 each left a <defunct> root under kitty 610, whose control
+# socket had refused connections for hours). That is a fact about KITTY, not a failed close, and it
+# says what to do next (restart kitty when convenient), so it gets its own verdict.
+win_state() { # $1=pid → gone | zombie | alive
+  local st; st="$("$PS" -o stat= -p "$1" 2>/dev/null | tr -d ' ')"
+  case "$st" in '') printf gone ;; Z*) printf zombie ;; *) printf alive ;; esac
+}
 lstart_epoch() { # $1=pid → start epoch (UTC parse of ps lstart), empty if gone
   local l; l="$(TZ=UTC LC_ALL=C "$PS" -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ *//; s/ *$//')"
   [ -n "$l" ] || return 0
@@ -156,7 +165,17 @@ for pane in "${PANES[@]}"; do
   fi
   rows="$("$PS" -o pid=,ppid=,comm= -t "$tty" 2>/dev/null)"
   root="$(printf '%s\n' "$rows" | awk -v k="$KPID" '$2 == k {print $1; exit}')"
-  [ -n "$root" ] || { refuse "$pane" "no window process under kitty on $tty (already closed?)" "$sid"; continue; }
+  # Nothing of this window runs on its tty any more: its process exited. A zombie keeps no tty, so a
+  # window kitty has not reaped (a wedged kitty) lands here too, and so does one that closed cleanly.
+  # Neither is a refusal: there is nothing left to signal.
+  if [ -z "$root" ]; then
+    printf 'pane %s: NOTHING TO CLOSE — no live process of this window on %s; it has exited (if the pane is still drawn, kitty has not reaped it — kitty is wedged)\n' "$pane" "$tty"
+    log_row "$pane" nothing-to-close "no window process under kitty on $tty" "$sid"; continue
+  fi
+  if [ "$(win_state "$root")" = zombie ]; then
+    printf 'pane %s: ALREADY CLOSED — its window process %s has exited but kitty has not reaped it (kitty is wedged; the pane clears when kitty recovers or restarts)\n' "$pane" "$root"
+    log_row "$pane" closed-kitty-unreaped "window root $root already a zombie of kitty" "$sid"; continue
+  fi
   rst="$(lstart_epoch "$root")"
   if [ -z "$rst" ] || [ "$rst" -gt "$reg_ep" ]; then refuse "$pane" "the window on $tty started after the session registered — a different window" "$sid"; continue; fi
   tree="$(printf '%s\n' "$rows" | awk -v r="$root" '
@@ -204,12 +223,16 @@ for pane in "${PANES[@]}"; do
   else
     refuse "$pane" "neither remote control nor a signal could reach the window shell (pid $shell)" "$sid"; continue
   fi
-  # VERIFY by effect: the window's root process is gone.
-  i=0; while [ "$i" -lt "$SETTLE" ] && [ -n "$(lstart_epoch "$root")" ]; do sleep 1; i=$((i + 1)); done
-  if [ -n "$(lstart_epoch "$root")" ]; then
-    printf 'pane %s: FAILED — %s sent, but the window process %s is still there\n' "$pane" "$how" "$root"
-    log_row "$pane" failed "$how sent; window process still present" "$sid"; RC=1; continue
-  fi
+  # VERIFY by effect: the window's root process has exited (gone, or a zombie kitty has not reaped).
+  i=0; while [ "$i" -lt "$SETTLE" ] && [ "$(win_state "$root")" = alive ]; do sleep 1; i=$((i + 1)); done
+  case "$(win_state "$root")" in
+    alive)
+      printf 'pane %s: FAILED — %s sent, but the window process %s is still there\n' "$pane" "$how" "$root"
+      log_row "$pane" failed "$how sent; window process still present" "$sid"; RC=1; continue ;;
+    zombie)
+      printf 'pane %s: CLOSED — session %s, %s; via %s. Its window process %s exited but kitty has not reaped it: kitty is wedged, and the pane stays drawn until kitty recovers or restarts\n' "$pane" "${sid:0:8}" "$why" "$how" "$root"
+      log_row "$pane" closed-kitty-unreaped "$why; via $how; window root $root is a zombie of kitty" "$sid"; continue ;;
+  esac
   printf 'pane %s: CLOSED — session %s, %s; via %s\n' "$pane" "${sid:0:8}" "$why" "$how"
   log_row "$pane" closed "$why; via $how" "$sid"
 done
