@@ -203,3 +203,42 @@ linked() { [ -L "$HOME/.claude-$1/settings.json" ] && [ "$(readlink "$HOME/.clau
   c="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
   [[ "$c" == *"settings.json DIVERGES from the shared ~/.claude/settings.json — .claude-next:"* ]]
 }
+
+# ── SHARED_DROP: a slash-command echo in the SHARED file is removed, never spread (2026-09-30) ───
+
+shared_model() { jq -c '.model // "ABSENT"' "$HOME/.claude/settings.json"; }
+
+@test "converge: a /model echo in the shared file is DROPPED, not copied to every account" {
+  jq '.model = "claude-fable-5-1[1m]"' "$HOME/.claude/settings.json" > "$BATS_TEST_TMPDIR/s" \
+    && rm "$HOME/.claude/settings.json" && cp "$BATS_TEST_TMPDIR/s" "$HOME/.claude/settings.json"
+  fork_realistic
+  run "$TOOL" converge --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'- model (was "claude-fable-5-1[1m]")'* ]] || false
+  [[ "$output" != *'+ model'* ]] || false
+  [ "$(shared_model)" = '"claude-fable-5-1[1m]"' ]    # dry-run wrote nothing
+  run "$TOOL" converge
+  [ "$status" -eq 0 ]
+  [ "$(shared_model)" = '"ABSENT"' ]
+  linked next
+  run "$TOOL" check
+  [ "$status" -eq 0 ]
+}
+
+@test "converge: on an ALREADY-linked fleet a later echo is still removed (not 'already converged')" {
+  jq '.model = "claude-fable-5-1[1m]"' "$HOME/.claude/settings.json" > "$BATS_TEST_TMPDIR/s" \
+    && cp "$BATS_TEST_TMPDIR/s" "$HOME/.claude/settings.json"
+  run "$TOOL" converge
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"already converged"* ]] || false
+  [ "$(shared_model)" = '"ABSENT"' ]
+  linked tertiary
+}
+
+@test "check: a shared-file echo WARNS by name but the rc still speaks only about the links" {
+  jq '.model = "claude-fable-5-1[1m]"' "$HOME/.claude/settings.json" > "$BATS_TEST_TMPDIR/s" \
+    && cp "$BATS_TEST_TMPDIR/s" "$HOME/.claude/settings.json"
+  run "$TOOL" check
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"WARN shared ~/.claude/settings.json carries model"* ]] || false
+}

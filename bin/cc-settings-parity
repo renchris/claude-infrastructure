@@ -96,6 +96,15 @@ DISPOSITIONS = {
     # drop until ruled; a ruling of "keep" flips this row to ("promote", True).
     "enabledPlugins.frontend-design@claude-plugins-official": ("drop", None),
 }
+# SHARED_DROP: keys DELETED from the shared file when converging — echoes that a slash command
+# writes into whichever file its account loads, and that the merge would otherwise copy to every
+# account. "model": `/model` in any ~/.claude session writes it; on 2026-09-30 19:25 one wrote
+# "claude-fable-5-1[1m]", absent from every backup through 0041 (09-25), and the 0037 dry-run then
+# showed "+ model = claude-fable-5-1[1m]" for all four accounts — every session started without
+# --model (headless probes, crons, `claude -p` helpers) would have run the frontier tier, whose quota
+# is a 50% sub-cap of the weekly bucket. The SSOT for the default model is model-config.yaml and the
+# launcher's --model, never this file. Conviction 90%.
+SHARED_DROP = ("model",)
 # Arrays merged as a UNION (shared order first, then account-only entries in first-seen order):
 # permission and classifier rule lists, where an entry one account learned is not an error.
 UNION_ARRAYS = (
@@ -162,6 +171,15 @@ def set_path(obj, path, value):
     obj[parts[-1]] = value
 
 
+def del_path(obj, path):
+    parts = path.split(".")
+    for part in parts[:-1]:
+        if not isinstance(obj.get(part), dict):
+            return
+        obj = obj[part]
+    obj.pop(parts[-1], None)
+
+
 def disposition(path):
     for key, rule in DISPOSITIONS.items():
         if path == key or path.startswith(key + "."):
@@ -216,6 +234,13 @@ def cmd_check(args):
         die("canonical %s unreadable: %s" % (CANONICAL, e))
     canon_real = os.path.realpath(CANONICAL)
     dirs = [only] if only is not None else account_dirs()
+    # A SHARED_DROP key in the shared file reaches every linked account at once. Named, never
+    # counted as divergence: the rc stays a statement about the links alone.
+    for key in SHARED_DROP:
+        val, ok = get_path(canon, key)
+        if ok:
+            print("WARN shared %s carries %s = %s — a slash-command echo that every account linked to it "
+                  "loads; the next 0037 converge removes it" % (tilde(CANONICAL), key, short(val)), file=sys.stderr)
     bad = []
     for d in dirs:
         if not os.path.isdir(d):
@@ -347,7 +372,8 @@ def cmd_converge(args):
         except (OSError, ValueError) as e:
             refusals.append("%s: unreadable (%s)" % (tilde(p), e))
 
-    if not todo and not refusals:
+    echoes = [k for k in SHARED_DROP if get_path(canon, k)[1]]
+    if not todo and not refusals and not echoes:
         print("0037: already converged — every account's settings.json is a symlink to %s" % tilde(canon_path))
         return 0
 
@@ -355,6 +381,8 @@ def cmd_converge(args):
     new = copy.deepcopy(canon)
     for path, value in OVERLAY.items():
         set_path(new, path, value)
+    for path in SHARED_DROP:
+        del_path(new, path)
     fcanon = flatten(canon)
     canon_hooks = hook_cmds(canon)
     promoted = {}
@@ -405,7 +433,7 @@ def cmd_converge(args):
     mode = "DRY-RUN (nothing written)" if dry else "APPLY"
     print("0037 %s — canonical: %s" % (mode, tilde(canon_path)))
     shared_lines = render_diff(canon, new)
-    print("  shared %s: %s" % (tilde(canon_path), "unchanged" if not shared_lines else "gains"))
+    print("  shared %s: %s" % (tilde(canon_path), "unchanged" if not shared_lines else "changes"))
     for line in shared_lines:
         print(line)
     for d, p, state, data, _ in todo:
@@ -447,7 +475,7 @@ def cmd_converge(args):
         fh.write("\n")
         fh.flush()
         os.fsync(fh.fileno())
-    if load(tmp) != new or not set(canon).issubset(set(load(tmp))):
+    if load(tmp) != new or not (set(canon) - set(SHARED_DROP)).issubset(set(load(tmp))):
         os.unlink(tmp)
         die("shared-file rewrite did not verify — nothing written", 1)
     if canon != new:
