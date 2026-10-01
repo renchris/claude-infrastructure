@@ -1,0 +1,55 @@
+ARM=latebg
+[bg-started] t=31.4s DIALOG=no EXITED=no
+[m1] t=35.9s DIALOG=no EXITED=no
+[pre-exit] t=39.9s DIALOG=no EXITED=no
+[exit-typed] t=42.3s DIALOG=yes EXITED=no
+      shell · sleep 600
+      shell · sh -c 'touch /tmp/w7c-probe/latebg.m1; sleep 12; …
+      ❯ 1. Exit and stop tasks
+        2. Stay
+      Enter to confirm · Esc to cancel
+[m2-call-returned] t=48.3s DIALOG=yes EXITED=no
+      shell · sleep 600
+      shell · sh -c 'touch /tmp/w7c-probe/latebg.m1; sleep 12; …
+      ❯ 1. Exit and stop tasks
+        2. Stay
+      Enter to confirm · Esc to cancel
+[m2+4s] t=52.3s DIALOG=yes EXITED=no
+      shell · sleep 600
+      shell · sh -c 'touch /tmp/w7c-probe/latebg.m1; sleep 12; …
+      ❯ 1. Exit and stop tasks
+        2. Stay
+      Enter to confirm · Esc to cancel
+[after-esc] t=54.4s DIALOG=no EXITED=no
+    composer after Esc: ''
+[re-exit-typed] t=55.8s DIALOG=yes EXITED=no
+      shell · sleep 600
+      ❯ 1. Exit and stop tasks
+        2. Stay
+      Enter to confirm · Esc to cancel
+[watch] t=57.8s DIALOG=yes EXITED=no
+      shell · sleep 600
+      ❯ 1. Exit and stop tasks
+        2. Stay
+      Enter to confirm · Esc to cancel
+[watch] t=59.9s DIALOG=yes EXITED=no
+      shell · sleep 600
+      ❯ 1. Exit and stop tasks
+        2. Stay
+      Enter to confirm · Esc to cancel
+[watch] t=62.0s DIALOG=yes EXITED=no
+      shell · sleep 600
+      ❯ 1. Exit and stop tasks
+        2. Stay
+      Enter to confirm · Esc to cancel
+[watch] t=64.1s DIALOG=yes EXITED=no
+      shell · sleep 600
+      ❯ 1. Exit and stop tasks
+        2. Stay
+      Enter to confirm · Esc to cancel
+[watch] t=66.2s DIALOG=yes EXITED=no
+      shell · sleep 600
+      ❯ 1. Exit and stop tasks
+        2. Stay
+      Enter to confirm · Esc to cancel
+[final-esc] t=68.2s DIALOG=no EXITED=no

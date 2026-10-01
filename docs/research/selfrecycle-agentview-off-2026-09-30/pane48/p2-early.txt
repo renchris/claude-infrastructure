@@ -1,0 +1,6 @@
+ARM=early
+[m1] t=24.0s DIALOG=no EXITED=no
+[exit-typed] t=24.7s DIALOG=no EXITED=no
+[watch] t=26.7s DIALOG=no EXITED=no
+[watch] t=28.7s DIALOG=no EXITED=no
+[watch] t=30.4s DIALOG=no EXITED=yes

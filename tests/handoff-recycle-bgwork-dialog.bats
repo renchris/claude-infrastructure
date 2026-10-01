@@ -410,3 +410,205 @@ send_line() { grep -n "session send" "$H/it2-calls.log" | grep -F -- "$1" | head
   run alarms
   [[ "$output" == *'re-arm it in that pane: /goal ship it'* ]] || { echo "$output"; false; }
 }
+
+# ── a SELF-recycle under agent-view-off: the dialog is raised by the recycle's OWN tool call (W7c) ──
+# Measured on 2.1.284 under a PTY (docs/research/selfrecycle-agentview-off-2026-09-30/): an /exit typed
+# while the session's own foreground Bash call is in flight raises "Background work is running", and
+# with CLAUDE_CODE_DISABLE_AGENT_VIEW=1 the menu is only "Exit and stop tasks · Stay". Stay was the
+# right answer and the whole answer, so the recycle held forever (pane 38, twice, 2026-09-30). The
+# cure waits — dialog up, nothing sent — for that call to return, then Esc and /exit again; a dialog
+# that comes back is somebody else's work and gets the old hold.
+#
+# The stub is stateful like _goal_stub, and it records whether the CALLER was alive at every send,
+# because the property is an order across processes: no key may reach the pane while the call runs.
+_selfcall_stub() {
+  # The view-off menu over an in-flight call, verbatim from the probe's fgbash capture (pyte's stray
+  # border cell before the footer dropped, as in the fixture above).
+  printf '%s\n' \
+    "✢ Seasoning… (20s · ↓ 215 tokens)" \
+    "▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔" \
+    "   Background work is running" \
+    "   The following will stop when you exit:" \
+    "" \
+    "   shell · bash wait45.sh" \
+    "" \
+    "   ❯ 1. Exit and stop tasks" \
+    "     2. Stay" \
+    "" \
+    "   Enter to confirm · Esc to cancel" > "$SCREEN"
+  cat > "$H/.claude/bin/it2" <<'SH'
+#!/usr/bin/env bash
+st="$(cat "$HOME/stub.state" 2>/dev/null || echo dialog)"
+cm="$(cat "$HOME/stub.composer" 2>/dev/null || true)"
+case "$1 $2" in
+  "session list")
+    if [ "${3:-}" = --json ]; then printf '[{"id": "%s", "tty": "/dev/ttys999"}]\n' "${STUB_PANE:-BGWORK-PANE}"
+    else printf '%s\n' "${STUB_PANE:-BGWORK-PANE}"; fi
+    exit 0 ;;
+  "session read")
+    case "$st" in
+      dialog)   cat "$SCREEN"; : > "$HOME/dialog-read" ;;
+      composer) printf '%s\n' "────────────────────" "❯ $cm" "────────────────────" ;;
+      *)        printf '%s\n' "(session ended)" ;;
+    esac
+    exit 0 ;;
+  "session send")
+    p="${5-}"
+    if kill -0 "${CALLER_PID:-0}" 2>/dev/null; then cs=alive; else cs=gone; fi
+    printf 'send caller=%s %q\n' "$cs" "$p" >> "$HOME/sends.log"
+    case "$p" in
+      $'\e')   [ "$st" = dialog ] && { echo composer > "$HOME/stub.state"; printf '%s' "${STUB_AFTER_ESC-/exit}" > "$HOME/stub.composer"; } ;;
+      $'\x15') : > "$HOME/stub.composer" ;;
+      $'\x7f') printf '%s' "${cm%?}" > "$HOME/stub.composer" ;;
+      $'\r')
+        if [ "$cm" = /exit ]; then
+          if [ "${STUB_REDIALOG:-0}" = 1 ]; then echo dialog > "$HOME/stub.state"; else echo gone > "$HOME/stub.state"; fi
+        fi
+        : > "$HOME/stub.composer" ;;
+      $'\e[200~'*) t="${p#$'\e[200~'}"; printf '%s%s' "$cm" "${t%$'\e[201~'}" > "$HOME/stub.composer" ;;
+      [0-9]) echo gone > "$HOME/stub.state" ;;
+    esac
+    exit 0 ;;
+esac
+exit 0
+SH
+  chmod +x "$H/.claude/bin/it2"
+  # Not a lead: a team library that finds no members, so the subject's team read is hermetic.
+  printf '%s\n' 'lr_team_snapshot() { echo snap; }' "lr_team_members() { echo \"\${STUB_MEMBERS:-0}\"; }" \
+    > "$BATS_TEST_TMPDIR/lr-team.sh"
+  export HF_LR_TEAM="$BATS_TEST_TMPDIR/lr-team.sh"
+  export CC_FIRE_COMPOSER_GATE=off FIRE_TYPE_SETTLE=0.05 FIRE_PASTE_PREIVL=1 CC_RECYCLE_GOAL_CLEAR_PREWAIT_S=2
+  export HF_RECYCLE_SHELL_WAIT_S=12
+  # The recycle's own tool call: a real process the watcher can ask about. It lives until 3 s after
+  # the watcher first READS the dialog — keyed on that read, not on a clock, because the watcher's
+  # own start-up takes 5-20 s on this box under load — so the watcher has to WAIT for it.
+  # CALLER_LIFE=<s> instead gives it a plain fixed life (the never-returns case).
+  if [ -n "${CALLER_LIFE:-}" ]; then
+    sleep "$CALLER_LIFE" >/dev/null 2>&1 3>&- &
+  else
+    # Bounded (60 s) and off bats' fd 3, so a case that never reads the dialog cannot hang the suite.
+    ( n=0; until [ -f "$HOME/dialog-read" ] || [ "$n" -ge 300 ]; do /bin/sleep 0.2; n=$((n + 1)); done
+      /bin/sleep 3 ) >/dev/null 2>&1 3>&- &
+  fi
+  CALLER_PID=$!; export CALLER_PID
+}
+# $6 = the predecessor sid; $16 = the invoking tool call the foreground resolved (hf_invoking_call_pid).
+drive_sc() { bash "$HF" __recycle "$STUB_PANE" "$BATS_TEST_TMPDIR/no-such-tty" "$CMDFILE" "$BATS_TEST_TMPDIR" sid-before "" "" "" "" "" "" "" "" "" "${1-$CALLER_PID}"; }
+# `grep -c` prints 0 AND exits 1 on no match, so a `|| printf 0` fallback would print "00".
+sc_sends() { local n; n="$(grep -c -- "${1:-.}" "$H/sends.log" 2>/dev/null || true)"; printf '%s' "${n:-0}"; }
+
+@test "[RED] SELF-RECYCLE, agent view off: waits for its own call, then Esc and /exit again — never 'stop tasks'" {
+  _selfcall_stub
+  run drive_sc
+  cat "$H/sends.log" "$H/.claude/logs/handoffs.jsonl" 2>/dev/null   # shown only on failure
+  [ "$(sc_sends 'caller=alive')" = 0 ]                              # nothing reached the pane mid-call
+  [ "$(sc_sends "caller=gone \$'\\\\E'$")" = 1 ]                    # exactly one Esc (Stay)
+  [ "$(sc_sends 'caller=gone.*/exit')" = 1 ]                        # /exit went back in once
+  [ "$(sc_sends "caller=gone 1$")" = 0 ]                            # "1. Exit and stop tasks": never
+  run row recycle-bgwork-selfcall
+  [[ "$output" == *"own tool call pid $CALLER_PID returned:"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"returned:0s"* ]] || { echo "the watcher never had to wait: $output"; false; }
+  run row recycle-held-bgwork
+  [ -z "$output" ]
+}
+
+@test "[RED] the dialog COMES BACK after the retry ⇒ that is someone else's work: Stay, HELD, nothing typed" {
+  _selfcall_stub
+  STUB_REDIALOG=1 run drive_sc
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"recycle HELD"*"sent Esc (Stay)"* ]] || { echo "$output"; false; }
+  [ "$(sc_sends '/exit')" = 1 ] || { cat "$H/sends.log"; false; }  # one retry, never a second
+  [ "$(sc_sends "\$'\\\\E'$")" = 2 ] || { cat "$H/sends.log"; false; }
+  [ "$(sc_sends ' 1$')" = 0 ]
+  run bash -c "grep -c 'session run' '$H/it2-calls.log' 2>/dev/null || true"
+  [ "$output" = 0 ] || [ -z "$output" ]
+}
+
+@test "the call does NOT return inside the bound ⇒ one Esc (the old hold) and no /exit re-typed" {
+  CALLER_LIFE=30 _selfcall_stub
+  CC_RECYCLE_SELFCALL_WAIT_S=2 run drive_sc
+  kill "$CALLER_PID" 2>/dev/null || true
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"did not return (still-running:2s)"*"recycle HELD"* ]] || { echo "$output"; false; }
+  [ "$(sc_sends '/exit')" = 0 ] || { cat "$H/sends.log"; false; }
+  [ "$(sc_sends "\$'\\\\E'$")" = 1 ] || { cat "$H/sends.log"; false; }
+}
+
+@test "NOT a self-recycle (no caller handed over) ⇒ unchanged: Stay at first sight, no retry" {
+  _selfcall_stub
+  run drive_sc ""
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"the menu offers no keep-work option"* ]] || { echo "$output"; false; }
+  [ "$(sc_sends '/exit')" = 0 ] || { cat "$H/sends.log"; false; }
+  [ "$(sc_sends 'caller=gone')" = 0 ] || { cat "$H/sends.log"; false; }  # held at once, not after a wait
+}
+
+@test "a LEAD with live members keeps Stay even on its own self-recycle" {
+  _selfcall_stub
+  STUB_MEMBERS=2 run drive_sc
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [ "$(sc_sends '/exit')" = 0 ] || { cat "$H/sends.log"; false; }
+  [ "$(sc_sends "\$'\\\\E'$")" = 1 ] || { cat "$H/sends.log"; false; }
+}
+
+@test "the KEEP-WORK menu (agent view on) is answered as before — the retry is for the view-off menu only" {
+  _selfcall_stub
+  cp "$BATS_TEST_TMPDIR/screen.keep" "$SCREEN" 2>/dev/null || printf '%s\n' \
+    "   Background work is running" "   The following will stop when you exit:" "" "   shell · sleep 600" "" \
+    "   ❯ 1. Exit and stop tasks" "     2. Move to background and exit" "     3. Stay" "" \
+    "   Enter to confirm · Esc to cancel" > "$SCREEN"
+  CC_RECYCLE_BGWORK_GOAL_CLEAR=off run drive_sc
+  [ "$(sc_sends '/exit')" = 0 ] || { cat "$H/sends.log"; false; }
+  [ "$(sc_sends ' 2$')" = 1 ] || { cat "$H/sends.log"; false; }
+}
+
+@test "KILL SWITCH: CC_RECYCLE_SELFCALL_RETRY=off restores the hold" {
+  _selfcall_stub
+  CC_RECYCLE_SELFCALL_RETRY=off run drive_sc
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [ "$(sc_sends '/exit')" = 0 ] || { cat "$H/sends.log"; false; }
+}
+
+@test "[RED] Esc spent but /exit cannot go back in ⇒ HELD with NO second Esc (it would interrupt a live turn)" {
+  _selfcall_stub
+  STUB_AFTER_ESC="operator draft" run drive_sc
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"/exit could not be re-submitted"* ]] || { echo "$output"; false; }
+  [ "$(sc_sends "\$'\\\\E'$")" = 1 ] || { cat "$H/sends.log"; false; }
+  [ "$(sc_sends '/exit')" = 0 ] || { cat "$H/sends.log"; false; }
+}
+
+# ── the foreground half: which tool call are we running inside? ──────────────────────────────────
+# Executed, not grepped: a fake `claude` on a real pty (script(1)) runs a shell that asks
+# hf_invoking_call_pid about a pane tty. On its own tty it must name that shell; on any other tty
+# (a peer recycling some other pane) it must name nothing.
+_icp() { # $1 = "own" | "other" → prints "CALL=<tool-call shell pid> ANS=<answer|none> TTY=<tty>"
+  local fn="$BATS_TEST_TMPDIR/icp-funcs.sh"
+  { sed -n '/^pin_still_live() {/,/^}/p' "$HF"; sed -n '/^pid_is_cc() {/,/^}/p' "$HF"
+    sed -n '/^hf_invoking_call_pid() {/,/^}/p' "$HF"; } > "$fn"
+  mkdir -p "$BATS_TEST_TMPDIR/fakebin"
+  # argv[0] = "claude", which is what pid_is_cc reads — the session process on the pane's pty.
+  printf '#!/bin/bash\nexec -a claude bash "$@"\n' > "$BATS_TEST_TMPDIR/fakebin/claude"
+  chmod +x "$BATS_TEST_TMPDIR/fakebin/claude"
+  # The "tool call" is the `bash -c` the fake claude forks; the script it runs is two levels down.
+  # shellcheck disable=SC2016  # expanded by the inner shells
+  script -q /dev/null "$BATS_TEST_TMPDIR/fakebin/claude" -c '
+    t="$(ps -o tty= -p $$ | tr -d " ")"; [ "$2" = other ] && t=ttys999
+    bash -c "bash -c \". \\\"\$1\\\"; a=\\\$(hf_invoking_call_pid \$2); echo CALL=\$\$ ANS=\\\${a:-none} TTY=\$2\"" _ "$1" "$t"
+  ' _ "$fn" "$1" | tr -d '\r'
+}
+
+@test "hf_invoking_call_pid names the tool-call shell whose parent is the claude on the pane's own tty" {
+  command -v script >/dev/null || skip "script(1) absent — a NON-VERDICT, not a pass"
+  run _icp own
+  echo "$output"
+  [[ "$output" =~ CALL=([0-9]+)\ ANS=([0-9]+) ]] || false
+  [ "${BASH_REMATCH[2]}" = "${BASH_REMATCH[1]}" ]
+}
+
+@test "hf_invoking_call_pid names NOTHING when the claude above us owns another pane" {
+  command -v script >/dev/null || skip "script(1) absent — a NON-VERDICT, not a pass"
+  run _icp other
+  echo "$output"
+  [[ "$output" == *"ANS=none"* ]] || false
+}

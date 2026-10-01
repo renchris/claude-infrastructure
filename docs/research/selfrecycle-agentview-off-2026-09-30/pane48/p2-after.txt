@@ -1,0 +1,4 @@
+ARM=after
+[m1] t=25.2s DIALOG=no EXITED=no
+[m2+5s] t=42.6s DIALOG=no EXITED=no
+[watch] t=44.5s DIALOG=no EXITED=yes

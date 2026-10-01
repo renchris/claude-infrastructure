@@ -1,0 +1,24 @@
+ARM=late
+[m1] t=23.7s DIALOG=no EXITED=no
+[pre-exit] t=27.8s DIALOG=no EXITED=no
+[exit-typed] t=30.1s DIALOG=yes EXITED=no
+      shell · sh -c 'touch /tmp/w7c-probe/late.m1; sleep 12; to…
+      ❯ 1. Exit and stop tasks
+        2. Stay
+      Enter to confirm · Esc to cancel
+[m2-call-returned] t=36.1s DIALOG=yes EXITED=no
+      shell · sh -c 'touch /tmp/w7c-probe/late.m1; sleep 12; to…
+      ❯ 1. Exit and stop tasks
+        2. Stay
+      Enter to confirm · Esc to cancel
+      ⏸ manual mode on · esc to interrupt                                                                    /rc
+[m2+4s] t=40.2s DIALOG=yes EXITED=no
+      shell · sh -c 'touch /tmp/w7c-probe/late.m1; sleep 12; to…
+      ❯ 1. Exit and stop tasks
+        2. Stay
+      Enter to confirm · Esc to cancel
+      ⏸ manual mode on · ? for shortcuts                                                                     /rc
+[after-esc] t=42.3s DIALOG=no EXITED=no
+    composer after Esc: ''
+[re-exit-typed] t=43.7s DIALOG=no EXITED=no
+[watch] t=44.6s DIALOG=no EXITED=yes

@@ -4791,6 +4791,35 @@ pid_is_cc() { # $1=pid → 0 live CC process / 1 not
   printf '%s' "$a0" | grep -E 'node|claude' >/dev/null
 }
 
+# ---- THE TOOL CALL A SELF-RECYCLE RUNS INSIDE (FLEET_V2 W7c, 2026-09-30) -------------------------
+# A session that recycles ITSELF runs this script from one of its own Bash tool calls, so when the
+# /exit is typed that call is still in flight — and Claude Code counts an in-flight Bash call as
+# background work. /exit then raises "Background work is running" instead of exiting. Under
+# CLAUDE_CODE_DISABLE_AGENT_VIEW=1 that menu is only "Exit and stop tasks · Stay"; the watcher answers
+# Stay, and the recycle was held forever (pane 38, twice, 2026-09-30).
+# This names that call: the ancestor of this process whose PARENT is the claude that owns the target
+# pane (pin_still_live's ancestry rule, so an expect-wrapped claude on a nested pty still counts). The
+# watcher waits for it to return and only then types /exit again. Empty when the recycle is driven
+# from anywhere else (a desk, a reconciler, an operator's shell): no tool call of the target is then
+# ours, and any dialog it raises is someone else's work.
+hf_invoking_call_pid() { # $1=pane tty → echoes the tool-call pid, 0 / 1 not a self-recycle
+  local ptty="${1:-}" p="$$" pp n=0
+  ptty="${ptty##*/}"
+  case "$ptty" in ''|'??'|-) return 1 ;; esac
+  while [ -n "$p" ] && [ "$p" != 0 ] && [ "$p" != 1 ] && [ "$n" -lt 12 ]; do
+    pp="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d '[:space:]' || true)"
+    case "$pp" in ''|*[!0-9]*|0|1) return 1 ;; esac
+    if pid_is_cc "$pp"; then
+      # The FIRST claude above us decides: it is the session that ran this call. Not on the target
+      # pane ⇒ a peer recycling some other pane, which is not a self-recycle.
+      pin_still_live "caller $pp" "$ptty" || return 1
+      printf '%s' "$p"; return 0
+    fi
+    p="$pp"; n=$((n + 1))
+  done
+  return 1
+}
+
 # ---- A BACKGROUNDED SESSION CANNOT BE RECYCLED (2026-09-25) ---------------------------------------
 # Claude Code 2.1.280 can background a session into its daemon (`/background`, or ← on an empty
 # composer): the conversation continues in a fork under `claude --bg-pty-host`, and the pane's TUI
@@ -8328,8 +8357,12 @@ if [ "${1:-}" = "__recycle" ]; then
   # that argv rather than grepping for the constant, because the grep that used to guard it pinned
   # the wrong constant and went RED on the fix.
   RCY_SUBMIT_TOKEN="${15:-}"
+  # $16: THE TOOL CALL THIS RECYCLE RUNS INSIDE (W7c) — hf_invoking_call_pid, resolved in the
+  # foreground; empty unless the session is recycling itself. Positional-last + optional like the rest.
+  RCY_CALLER_PID="${16:-}"
+  case "$RCY_CALLER_PID" in *[!0-9]*|0|1) RCY_CALLER_PID="" ;; esac
   IT2="$HOME/.claude/bin/it2"
-  echo "→ armed: __recycle pid=$$ pgid=$(ps -o pgid= -p $$ | tr -d ' ') sid=$RSID tty=$TTY_PATH"
+  echo "→ armed: __recycle pid=$$ pgid=$(ps -o pgid= -p $$ | tr -d ' ') sid=$RSID tty=$TTY_PATH caller=${RCY_CALLER_PID:-none}"
   pane_proof "$IT2" "$RSID" __recycle || exit 1
   # THE SECOND SITE OF THE SAME DEFECT, and the reason fixing the foreground alone is not a fix.
   # This watcher's whole job is to type a command into the pane once CC is gone, and it decided that
@@ -8392,6 +8425,33 @@ if [ "${1:-}" = "__recycle" ]; then
     fi
     it2_paste_submit_verified "$IT2" "$RSID" "/exit" "$pre" >/dev/null
   }
+  # THE DIALOG WAS RAISED BY OUR OWN TOOL CALL (W7c). A self-recycle types /exit from inside a Bash
+  # call of the session it closes, and Claude Code counts that in-flight call as background work (the
+  # measurement is docs/research/selfrecycle-agentview-off-2026-09-30/). Under agent-view-off the menu
+  # has no keep-work option, so the answer is Stay and the recycle used to end there. This waits, with
+  # the dialog still up and NOTHING sent, for that call to return; only then Esc (Stay), scrub our
+  # /exit if Esc left it, and submit /exit again, which now exits — unless the session has other
+  # background work, in which case the dialog comes back and the loop's hold answers it as before.
+  # rc 1 = the call did not return inside the bound; no key was sent, so the caller's hold still owns
+  # the one Esc. rc 2 = Esc was sent but /exit could not go back in: the session is at its composer.
+  rcy_bgwork_selfcall_retry() {
+    local t=0 wmax="${CC_RECYCLE_SELFCALL_WAIT_S:-60}" pre="${CC_RECYCLE_GOAL_CLEAR_PREWAIT_S:-10}"
+    case "$wmax" in ''|*[!0-9]*) wmax=60 ;; esac
+    case "$pre" in ''|*[!0-9]*) pre=10 ;; esac
+    while kill -0 "$RCY_CALLER_PID" 2>/dev/null && [ "$t" -lt "$wmax" ]; do
+      /bin/sleep 1; t=$((t + 1))
+    done
+    waited=$((waited + t))
+    if kill -0 "$RCY_CALLER_PID" 2>/dev/null; then RCY_SELFCALL="still-running:${t}s"; return 1; fi
+    RCY_SELFCALL="returned:${t}s"
+    hf_bounded "$IT2" session send -s "$RSID" $'\e' >/dev/null 2>&1 || true
+    /bin/sleep "${FIRE_TYPE_SETTLE:-0.5}"
+    if [ "$(composer_content "$IT2" "$RSID" 2>/dev/null)" = "/exit" ]; then
+      composer_scrub_verified "$IT2" "$RSID" >/dev/null 2>&1 || true
+    fi
+    it2_paste_submit_verified "$IT2" "$RSID" "/exit" "$pre" >/dev/null || return 2
+  }
+  rcy_selfcall_tried=0; RCY_SELFCALL=none
   case "$rcy_bgwork_max" in ''|*[!0-9]*) rcy_bgwork_max=2 ;; esac
   # SELFTEST SEAM, same shape and same safety argument as HF_RECYCLE_SHELL_WAIT_S above: it moves
   # only how OFTEN the screen is read. It cannot make the watcher send a key it would not otherwise
@@ -8479,6 +8539,29 @@ if [ "${1:-}" = "__recycle" ]; then
         rcy_team_rc=1
         if [ "${HF_TEAM_HOLD:-on}" != off ] && [ -n "${RCY_OLD_SID:-}" ]; then
           rcy_team_rc=0; hf_team_live "$RCY_OLD_SID" || rcy_team_rc=$?
+        fi
+        # A SELF-RECYCLE'S OWN CALL (W7c): the no-keep-work menu, a subject with no live members, and
+        # a tool call of this very session that the foreground named. Once per watcher: a dialog that
+        # comes back after the retry is work the recycle did not start, and the hold below takes it.
+        if [ -z "$bgk" ] && [ "$rcy_team_rc" = 1 ] && [ "$rcy_selfcall_tried" = 0 ] && [ -n "$RCY_CALLER_PID" ] \
+           && [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" != cancel ] && [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" != off ] \
+           && [ "${CC_RECYCLE_SELFCALL_RETRY:-on}" != off ]; then
+          rcy_selfcall_tried=1
+          rcy_sc_rc=0; rcy_bgwork_selfcall_retry || rcy_sc_rc=$?
+          if [ "$rcy_sc_rc" = 0 ]; then
+            echo "→ bgwork@${waited}s: the dialog was raised by this recycle's own tool call (pid $RCY_CALLER_PID, ${RCY_SELFCALL}) — Esc (Stay), /exit re-submitted; nothing was stopped"
+            emit_recycle_event recycle-bgwork-selfcall "" "$RSID" "no-keep-work dialog at ${waited}s; own tool call pid $RCY_CALLER_PID ${RCY_SELFCALL}; Esc then /exit re-submitted" || true
+            rcy_bgwork_next=$((waited + 3))
+            continue
+          fi
+          if [ "$rcy_sc_rc" = 2 ]; then
+            # Esc is spent and the session is back at its composer, alive: a second Esc from the hold
+            # below would land on a live turn as an interrupt, so hold HERE with nothing more sent.
+            echo "!! recycle HELD at ${waited}s: this recycle's own tool call returned (${RCY_SELFCALL}) and the dialog was dismissed, but /exit could not be re-submitted — the session in $RSID is alive at its composer and NO relaunch was typed. Re-run the recycle." >&2
+            emit_recycle_event recycle-held-bgwork "" "$RSID" "own tool call ${RCY_SELFCALL}; Esc sent; /exit re-submit failed; nothing typed; unconfirm=needed" || true
+            exit 1
+          fi
+          echo "→ bgwork@${waited}s: this recycle's own tool call (pid $RCY_CALLER_PID) did not return (${RCY_SELFCALL}) — holding as for any background work"
         fi
         if [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" = cancel ] || [ "$rcy_team_rc" != 1 ] \
            || { [ -z "$bgk" ] && [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" != off ]; }; then
@@ -14998,7 +15081,10 @@ recycle_fire() {
   # THE PER-PANE LOCK (W2b) — taken right BEFORE the watcher exists, so no second recycle can arm a
   # second watcher on this pane; exported so the watcher's EXIT trap releases it.
   hf_recycle_lock_acquire "$SID" || exit 1
-  WATCHER_PID="$(detach "$log" "$0" __recycle "$SID" "$tty" "$cmdfile" "$LAUNCH_DIR" "$rcy_old_sid" "$RECYCLE_MARKER" "$FIRE_GOAL" "${PROMPT_FILE_ORIG:-$PROMPT_FILE}" "$RESUME_CFG" "${RESUME_LAUNCHER:+${RCY_SOURCE_SESSION:-$rcy_old_sid}}" "$RCY_T0" "$RCY_SRC_TX" "$RCY_RUN_DIR_ARG" "$RCY_SUBMIT_TOKEN_ARG")"
+  # $16 (W7c): the tool call of THIS pane's session that we are running inside, if any — the watcher
+  # waits for it to return before re-submitting an /exit that it alone held up.
+  RCY_CALLER_PID_ARG="$(hf_invoking_call_pid "$tty")" || RCY_CALLER_PID_ARG=""
+  WATCHER_PID="$(detach "$log" "$0" __recycle "$SID" "$tty" "$cmdfile" "$LAUNCH_DIR" "$rcy_old_sid" "$RECYCLE_MARKER" "$FIRE_GOAL" "${PROMPT_FILE_ORIG:-$PROMPT_FILE}" "$RESUME_CFG" "${RESUME_LAUNCHER:+${RCY_SOURCE_SESSION:-$rcy_old_sid}}" "$RCY_T0" "$RCY_SRC_TX" "$RCY_RUN_DIR_ARG" "$RCY_SUBMIT_TOKEN_ARG" "$RCY_CALLER_PID_ARG")"
   if ! await_armed "$log"; then
     hf_recycle_disarm
     echo "!! recycle ABORTED: watcher heartbeat never appeared ($log) — /exit NOT typed, session stays alive. Run manually: $CMD" >&2
