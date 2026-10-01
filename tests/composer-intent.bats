@@ -8,6 +8,7 @@ setup() {
   REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   export CC_COMPOSER_DISCARD_LOG="$BATS_TEST_TMPDIR/discarded.log"
+  export CC_FIRE_CAPACITY_GATE=off      # hermeticity ratchet: never read live machine load
   unset CC_COMPOSER_UNINTENDED CC_COMPOSER_STRAY_MAX
   # shellcheck disable=SC1091
   . "$REPO/scripts/lib/composer-intent.sh"
