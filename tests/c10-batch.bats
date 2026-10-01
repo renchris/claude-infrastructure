@@ -113,6 +113,19 @@ sums() { for f in "$HOME"/.claude/settings.json "$HOME"/.claude-*/settings.json;
   [[ "$output" == *"0053-decided"* ]] && [[ "$output" != *"held    0053-decided"* ]] || false
 }
 
+@test "reached through a SYMLINK (the live layer's shape), it still finds the repo's migrations" {
+  mkdir -p "$BATS_TEST_TMPDIR/live/scripts"
+  ln -s "$FX/scripts/c10-batch.sh" "$BATS_TEST_TMPDIR/live/scripts/c10-batch.sh"
+  run env -u CC_C10_REPO bash "$BATS_TEST_TMPDIR/live/scripts/c10-batch.sh" --verify
+  [ "$status" -eq 1 ] || { echo "vacuous verdict through the link: $output"; false; }
+  [[ "$output" == *"NOT LIVE  0037-settings-parity"* ]] || false
+}
+
+@test "no migrations dir ⇒ rc 2, never a vacuous VERIFIED" {
+  run env CC_C10_REPO="$BATS_TEST_TMPDIR/nowhere" bash "$FX/scripts/c10-batch.sh" --verify
+  [ "$status" -eq 2 ]
+}
+
 @test "usage: --confirm must name its target; an unknown verb is rc 2" {
   run batch --confirm; [ "$status" -eq 2 ]
   run batch --bogus; [ "$status" -eq 2 ]

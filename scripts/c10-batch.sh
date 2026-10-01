@@ -34,9 +34,18 @@
 # bash 3.2-safe.
 set -uo pipefail
 
-SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+# Resolve every symlink hop: the live layer reaches this file as ~/.claude/scripts/c10-batch.sh, a
+# link into the checkout, and ~/.claude has no migrations/ — an unresolved path saw zero candidates
+# and --verify reported VERIFIED over nothing (caught by cc-backlog's falsify gate, 2026-09-30).
+_src="${BASH_SOURCE[0]}"
+while [ -L "$_src" ]; do
+  _d="$(cd "$(dirname "$_src")" && pwd)"; _src="$(readlink "$_src")"
+  case "$_src" in /*) ;; *) _src="$_d/$_src" ;; esac
+done
+SELF="$(cd "$(dirname "$_src")" && pwd)/$(basename "$_src")"
 REPO="${CC_C10_REPO:-$(cd "$(dirname "$SELF")/.." && pwd)}"
 MIG_DIR="$REPO/migrations"
+[ -d "$MIG_DIR" ] || { printf 'c10-batch: no migrations dir at %s — no verdict\n' "$MIG_DIR" >&2; exit 2; }
 STATE="${CC_MIGRATIONS_STATE:-$HOME/.claude/autonomy/migrations}"
 DECIDE="${CC_DECIDE_BIN:-$HOME/.claude/bin/cc-decide}"
 FIRST="0037-settings-parity"
