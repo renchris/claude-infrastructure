@@ -984,10 +984,11 @@ RCY_T0="$A_T0"
 RCY_SRC_TX=""
 RCY_RUN_DIR_ARG="$A_RUNDIR"
 RCY_SUBMIT_TOKEN_ARG="$A_TOK"
+RCY_CALLER_PID_ARG="$A_CALLER"
 eval "$A_DETACH_LINE"
 SH
   run env ARGV_FILE="$ARGV" A_CMDF="$CMDF" A_PANE="$PANE" A_CFG="$CFG" A_SID="$SID" \
-      A_T0="$T0" A_RUNDIR="$RUNDIR" A_TOK="$TOK" A_DETACH_LINE="$dl" \
+      A_T0="$T0" A_RUNDIR="$RUNDIR" A_TOK="$TOK" A_CALLER=48151 A_DETACH_LINE="$dl" \
       bash "$BATS_TEST_TMPDIR/arm.sh"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [ -s "$ARGV" ] || { echo "the detach recorder captured no argv"; false; }
@@ -1006,6 +1007,9 @@ SH
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *"SUBMITTED in $PANE"* ]] \
     || { echo "the argv the arming side actually builds does not carry the token to the watcher: $output"; false; }
+  # W7c: the self-recycle's own tool-call pid rides LAST ($16, argv[15] here), and the watcher reads it.
+  [ "${argv[15]:-}" = 48151 ] || { echo "the caller pid is not the watcher's \$16:"; cat "$ARGV"; false; }
+  [[ "$output" == *"caller=48151"* ]] || { echo "the watcher did not read \$16 as the caller: $output"; false; }
 }
 # THE LAUNCHER lr-handoff.sh ACTUALLY GENERATES, built by ITS OWN generator rather than by a
 # fixture this file writes. The arming gate's whole job is a claim ABOUT THAT ARTIFACT, and the
