@@ -333,6 +333,27 @@ _surviving_member_pid() {  # <member-name> → echoes the pid of a still-running
     }' 2>/dev/null | head -1
 }
 
+# ── F-b: A CLOSE THAT LEFT THE PANE STANDING IS A DURABLE ROW, NOT ONLY A DAMPED PAGE (2026-09-30) ──
+# Root cause 4 of docs/research/husk-panes-2026-09-30.md: this closer made one attempt and gave up.
+# Panes 57-59 each logged `close FAILED rc=124` while kitty remote control was deaf, the page was
+# damped, and no TeammateIdle ever fired again — so nothing on disk still knew the pane was standing.
+# The row is that record; scripts/pane-close-retry.sh retries it once `kitty @ ls` answers, after
+# re-reading the world (rc 124 on a mutating verb may still execute late, root cause 10). The page
+# stays: the row is the durable half, the page the prompt one. The kitty socket and generation are
+# recorded so the drainer can tell "the id names a different window now" after a kitty restart.
+# Absent lib ⇒ no row, exactly today's behaviour; never fatal, never delays the close path.
+_queue_close_retry() { # <pane> <who> <reason> <rc>
+  type -t pcq_add >/dev/null 2>&1 || return 0
+  local _sid="${SESSION_ID:-}"; [[ "$_sid" == unknown ]] && _sid=""
+  if pcq_add teammate "$1" agent_id="$2@$TEAM_NAME" team="$TEAM_NAME" sid="$_sid" reason="$3" \
+       rc="$4" kitty_sock="${CC_TERM_KITTY_TO:-${KITTY_LISTEN_ON:-}}" \
+       kitty_pid="$(_kitty_generation || true)" cwd="${WORKTREE:-}" 2>/dev/null; then
+    log "  ↻ queued for retry: $(_pcq_row_path teammate "$1")"
+  else
+    log "  ✗ could not queue pane $1 ($2) for retry — the page below is the only record"
+  fi
+}
+
 # Close + log one pane (shared by the config-resolved AND implicit-team paths).
 close_and_log() {
   local pane="$1" who="$2"
@@ -371,6 +392,7 @@ close_and_log() {
     if pane_present "$pane"; then
       log "  ✗ close reported rc=0 but pane $pane ($who) is STILL PRESENT — actuator lied"
       retract_teardown_marker "$pane" "${SESSION_ID:-}"
+      _queue_close_retry "$pane" "$who" close-failed "$rc"
       _page_desk_damped "CLOSE-LIED:$pane:$who" \
         "teammate-auto-shutdown: pane $pane ($who) SURVIVED a close that reported success — the actuator lied. Pane is still standing; close it manually and treat the backend as suspect."
     else
@@ -409,6 +431,7 @@ close_and_log() {
     # a NEW pane failing is genuinely new news. Backlog ee69a1b8dcd0.
     log "  ✗ pane close FAILED (rc=$rc) for $pane ($who): ${err:-<no stderr>}"
     retract_teardown_marker "$pane" "${SESSION_ID:-}"
+    _queue_close_retry "$pane" "$who" close-failed "$rc"
     _page_desk_damped "CLOSE-FAILED:$pane:$who:rc$rc" \
       "teammate-auto-shutdown: pane $pane ($who) could NOT be closed (rc=$rc): ${err:-<no stderr>}. The pane is still standing — close it manually."
   fi
@@ -554,6 +577,15 @@ _spawn_epoch() {
 # Same resolve order + fail-open posture as bin/cc-reaper's.
 for _c in "$HOOK_DIR/lib/page-damp.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/page-damp.sh" \
           "$HOME/.claude/hooks/lib/page-damp.sh"; do
+  # shellcheck disable=SC1090,SC1091
+  [[ -f "$_c" ]] && { . "$_c" 2>/dev/null || true; break; }
+done
+
+# F-b pane-close queue (see _queue_close_retry). Same resolve order + fail-open posture: absent lib ⇒
+# a failed close pages exactly as before and writes no row.
+for _c in "$HOOK_DIR/../scripts/lib/pane-close-queue.sh" \
+          "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/pane-close-queue.sh" \
+          "$HOME/.claude/scripts/lib/pane-close-queue.sh"; do
   # shellcheck disable=SC1090,SC1091
   [[ -f "$_c" ]] && { . "$_c" 2>/dev/null || true; break; }
 done

@@ -416,4 +416,30 @@ elif [ "$QUIET" != 1 ]; then
   fi
 fi
 
+# ── F-b: drain the pane-close queue (docs/research/husk-panes-2026-09-30.md, root cause 4) ──────────
+# A failed teammate close is now a durable row (scripts/lib/pane-close-queue.sh), and something has
+# to retry it once kitty answers again. This job is already loaded and runs every 10 minutes, so the
+# drainer rides it rather than needing a new plist. The ALARM above still never closes a pane; the
+# drainer is a separate script with its own re-read gates. BEST-EFFORT and outside this script's
+# contract: bounded, output to its own log, exit code discarded, because RC is the alarm's verdict
+# and a drainer failure must never change it. With no rows queued the drainer exits before asking
+# kitty anything. Kill switch CC_PCQ_DRAIN=off; CC_PCQ_DRAIN_BIN is the test seam.
+if [ "${CC_PCQ_DRAIN:-on}" != off ]; then
+  _pcq_bin="${CC_PCQ_DRAIN_BIN:-$(cd "$(dirname "$0")" 2>/dev/null && pwd)/pane-close-retry.sh}"
+  _pcq_out="$(dirname "$LOG")/pane-close-retry.out"
+  _pcq_to=""
+  for _pcq_c in "$(command -v timeout 2>/dev/null || true)" /opt/homebrew/bin/timeout /usr/local/bin/timeout \
+                /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    [ -n "$_pcq_c" ] && [ -x "$_pcq_c" ] && { _pcq_to="$_pcq_c"; break; }
+  done
+  if [ -x "$_pcq_bin" ]; then
+    mkdir -p "$(dirname "$_pcq_out")" 2>/dev/null || true
+    if [ -n "$_pcq_to" ]; then
+      "$_pcq_to" -k 5 "${CC_PCQ_DRAIN_TIMEOUT_S:-240}" "$_pcq_bin" >>"$_pcq_out" 2>&1 </dev/null || true
+    else
+      "$_pcq_bin" >>"$_pcq_out" 2>&1 </dev/null || true
+    fi
+  fi
+fi
+
 exit "${RC:-0}"
