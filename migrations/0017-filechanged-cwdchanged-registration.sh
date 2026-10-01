@@ -2,6 +2,7 @@
 # migration-class: c10
 # migration-step: wire FileChanged + CwdChanged as the ONE three-part unit § 3e prescribes — an absolute-path matcher to ARM, a '*' sibling to DISPATCH, and a CwdChanged re-arm — so the dynamic watch list survives a `cd` instead of emptying on the first one; it edits settings.json, which is C10
 # migration-run: bash ~/Development/claude-infrastructure/migrations/0017-filechanged-cwdchanged-registration.sh
+# migration-superseded-by: 0021-cwdchanged-slot-replace — parts 1 and 2 (the absolute-path FileChanged arm and its "*" dispatch) are live in the shared settings.json, and part 3's CwdChanged slot now holds cwd-changed.sh by 0021's design, so this verifier (which demands file-changed.sh in that slot) can never pass and a re-run would undo 0021 (measured 2026-09-30, docs/research/c10-staged-residuals-2026-10.md)
 # migration-subject: ~/.claude/hooks/file-changed.sh
 # migration-verify: jq -e --arg w "$HOME/.claude/file-watch-paths" '[.hooks.FileChanged[]? | select(.matcher == $w) | .hooks[]?.command] as $arm | [.hooks.FileChanged[]? | select(.matcher == "*") | .hooks[]?.command] as $disp | [.hooks.CwdChanged[]?.hooks[]?.command] as $rearm | ($arm | any(. == "~/.claude/hooks/file-changed.sh")) and ($disp | any(. == "~/.claude/hooks/file-changed.sh")) and ($rearm | any(. == "~/.claude/hooks/file-changed.sh"))' "${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json" >/dev/null
 #

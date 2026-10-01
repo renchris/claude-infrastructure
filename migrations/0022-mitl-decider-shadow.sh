@@ -2,6 +2,7 @@
 # migration-class: c10
 # migration-step: register hooks/model-permission-decider.py on PreToolUse/Bash in SHADOW mode (timeout 60) so it logs the verdicts it WOULD emit — it edits settings.json, the live permission surface, which is C10
 # migration-run: bash ~/Development/claude-infrastructure/migrations/0022-mitl-decider-shadow.sh
+# migration-superseded-by: retired on measurement (2026-09-30) — a SYNCHRONOUS shadow blocks ~8.7 s p50 per consult, hits the fleet-wide 400/day cap every day (~58 min of blocked agent time and ~12M tokens a day), and only ~2 of its 400 daily verdicts fall on a Bash call that actually prompted (65/day prompts against 6,609/day Bash calls); nothing reads its output. Re-stage only as an async shadow keyed on the prompting calls (docs/research/c10-staged-residuals-2026-10.md § 0022)
 # migration-subject: ~/.claude/hooks/model-permission-decider.py
 # migration-verify: jq -e '[.hooks.PreToolUse[]?|select(.matcher=="Bash")|.hooks[]?|select(.command|test("model-permission-decider"))|select(.command|test("MITL_MODE=shadow"))|.timeout] | any(. == 60)' "${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json" >/dev/null
 # migration-conflict: jq -e '[.hooks.PreToolUse[]?|select(.matcher=="Bash")|.hooks[]?|select(.command|test("model-permission-decider"))|.command] | (length > 0) and (any(test("MITL_MODE=shadow")) | not)' "${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json" >/dev/null

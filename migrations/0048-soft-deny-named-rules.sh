@@ -2,7 +2,7 @@
 # migration-class: c10
 # migration-step: add 17 named shipped safety rules (Secret-Store Writes, Credential Materialization, Instruction Poisoning, Auto-Mode Bypass, Session Transcript Tampering, Tmux Self Drive, Unverifiable Deletion Target, Public Data-Sharing Upload, External Ingress Tunnel, Traffic Redirection, Sensitive-Source Provenance, Code That Leaks When Run, and the 5 Browser exfil rules) to autoMode.soft_deny in ~/.claude/settings.json, replacing our Memory Poisoning with Instruction Poisoning — ALL accounts at once. Measured cost about 1 to 2 extra classifier blocks a day. HELD until the operator rules yes on its decision packet. It writes the auto-mode classifier's rules, which is C10.
 # migration-run: bash ~/Development/claude-infrastructure/migrations/0048-soft-deny-named-rules.sh --confirm settings.json
-# migration-batch-hold: decision 0048-soft-deny-named-rules
+# migration-batch-hold: decision 6b0e8ec5c970
 # migration-verify: "$HOME/.claude/bin/cc-settings-parity" check >/dev/null 2>&1 && bash "${CC_MIGRATION_REPO:-$HOME/Development/claude-infrastructure}/migrations/0048-soft-deny-named-rules.sh" --verify
 #
 # ══ 0048 — the shipped soft_deny rules worth having, by name (backlog b19974f7ba82, follow-on) ═════

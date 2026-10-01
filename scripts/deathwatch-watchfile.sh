@@ -1,6 +1,13 @@
 #!/bin/bash
 # deathwatch-watchfile — derive lead-deathwatch's watch-file from the P8 session registry.
 #
+# RETIRED (2026-09-30) with migration 0004, which now declares `migration-superseded-by`. Nothing
+# schedules this file and nothing will: lead-supervisor (launchd KeepAlive) already watches every
+# live lead pid and catches a death in 28 s p50 / 227 s p95, and L1's only addition was sub-second
+# detection paging a recipient that does not exist. It also wrote `watch-list` while 0004's oracle
+# read `watch.tsv`. Kept on disk because reaper-horizon-lint and its suite still name it; do not
+# wire it. Evidence: docs/research/c10-staged-residuals-2026-10.md § deathwatch.
+#
 # WHY THIS FILE EXISTS (backlog ed6d0716caa7 / 0328e7cc5742, verified 2026-08-12). L1 death-watch
 # was BUILT and could not be ACTIVATED, because nothing in this repo ever wrote the file it watches.
 # Every reference to `lead-deathwatch.sh --watch <watch-file>` in the tree was a SPECIFICATION:

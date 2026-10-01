@@ -2,6 +2,7 @@
 # migration-class: c10
 # migration-step: re-link any Claude account whose CLI→GitHub link is missing, so cloud sessions can be created from it (drives a TUI in a real pane — C10, yours)
 # migration-run: bash ~/Development/claude-infrastructure/scripts/cloud-websetup-drive.sh --all
+# migration-batch-hold: manual — it drives the /web-setup TUI in a real pane and may stop on a browser sign-in, so it cannot run inside an unattended batch; run its migration-run line in a pane you can watch
 # migration-verify: bash "${CC_MIGRATION_REPO:-$HOME/Development/claude-infrastructure}/scripts/cloud-websetup-drive.sh" --status | awk 'NR>1{n++; if ($2 != "linked") bad=1} END{exit (n>0 && !bad) ? 0 : 1}'
 #
 # 0003 — the cloud fleet's ONE operator-owned step, filed where a renderer will surface it.

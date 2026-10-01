@@ -2,6 +2,7 @@
 # migration-class: c10
 # migration-step: L1 death-watch is built + GREEN but cannot be activated yet — its watch-file has no producer; the launchd persistence below is written and waiting on that one missing piece
 # migration-run: bash ~/Development/claude-infrastructure/migrations/0004-lead-deathwatch-l1-activation.sh
+# migration-superseded-by: lead-supervisor (launchd KeepAlive) — it watches the same live lead pids (30 of 30 on 2026-09-30) and catches a death in 28 s p50 / 227 s p95, then checkpoints and pages; L1 would add only sub-second detection, paging a `desk` recipient that does not exist. The watch-file producer scripts/deathwatch-watchfile.sh is retired with it (docs/research/c10-staged-residuals-2026-10.md § deathwatch)
 # migration-verify: launchctl list 2>/dev/null | grep -qi deathwatch && [ -s "${CC_DEATHWATCH_WATCHFILE:-$HOME/.claude/deathwatch/watch.tsv}" ]
 # migration-conflict: launchctl list 2>/dev/null | grep -qi deathwatch && [ ! -s "${CC_DEATHWATCH_WATCHFILE:-$HOME/.claude/deathwatch/watch.tsv}" ]
 #
