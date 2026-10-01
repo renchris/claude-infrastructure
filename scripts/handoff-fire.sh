@@ -1398,6 +1398,9 @@ kt_launch() {
         # the only voice — a window MAY be running this brief, and a blind re-fire would duplicate it.
         [ "$arc" != 2 ] || echo "!! kitty launch returned no window id and kitty's window list could not be read — outcome UNKNOWN, a window MAY be running this fire's command; look before re-firing." >&2
         id=""
+        # rc 13 carries UNKNOWN across the $( ) every caller wraps this in (a global cannot), with the
+        # same meaning as spawn()'s split arm: a session MAY have launched (pane-lifecycle item 5, M11).
+        [ "$arc" != 2 ] || return 13
       fi ;;
   esac
   printf '%s' "$id"
@@ -13496,6 +13499,15 @@ fire_cleanup() {
   # it here can only ever move a case from "destroy the resources" to "register and stamp the pane",
   # never the reverse (item c163f42390a3).
   _pane="${SPAWNED_PANE:-${FIRE_LIVE_PANE:-}}"
+  # SPAWN OUTCOME UNKNOWN (rc 13, FIRE_SPAWN_UNKNOWN=1): a session MAY be running in the worktree
+  # below, so neither "nothing was created" (remove it) nor "a pane is live" (register it) is known.
+  # Keep every resource and say how to finish by hand. Deleting a live session's worktree is the
+  # irreversible half; a kept one costs a `git worktree remove` (pane-lifecycle fixes item 5, M11).
+  if [ -z "$_pane" ] && { [ "${FIRE_SPAWN_UNKNOWN:-0}" = 1 ] || [ "$_rc" = 13 ]; }; then
+    [ -n "${FIRE_CLEAN_WT:-}${FIRE_CLEAN_POOL:-}" ] && \
+      echo "⚠ fire-cleanup: spawn outcome UNKNOWN — worktree ${FIRE_CLEAN_WT:-$FIRE_CLEAN_POOL} and branch ${FIRE_CLEAN_BRANCH:-<none>} KEPT, since a session may be running there. Once you have looked and nothing runs this brief: git -C ${REPO:-.} worktree remove --force ${FIRE_CLEAN_WT:-$FIRE_CLEAN_POOL} && git -C ${REPO:-.} branch -D ${FIRE_CLEAN_BRANCH:-<branch>}" >&2
+    return 0
+  fi
   if [ -z "$_pane" ]; then
     if [ -n "$FIRE_CLEAN_POOL" ] && [ -d "$FIRE_CLEAN_POOL" ]; then
       case "$(basename "$FIRE_CLEAN_POOL")" in
@@ -14764,7 +14776,10 @@ spawn_frontmost() { # → echoes the new session id on stdout | empty on failure
     [ "${FOLLOW:-0}" = 1 ] || kfocus="--keep-focus"
     # shellcheck disable=SC2086
     # Same pre-delivery as the other three surfaces; unset/empty ⇒ nothing, and the caller types.
-    wnew="$(kt_launch --type=os-window --cwd=current $kfocus ${HF_ARGV[@]+"${HF_ARGV[@]}"})" || wnew=""
+    local wrc=0
+    wnew="$(kt_launch --type=os-window --cwd=current $kfocus ${HF_ARGV[@]+"${HF_ARGV[@]}"})" || wrc=$?
+    [ "$wrc" != 13 ] || return 13             # outcome UNKNOWN — the caller must not read it as "nothing launched"
+    [ "$wrc" = 0 ] || wnew=""
     # Empty output IS this function's documented failure and the caller (:3821 area) already fails
     # loud on it — never print a non-id, which would be landed into as a pane.
     case "$wnew" in ''|*[!0-9]*) return 0 ;; *) command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn os-window kitty "$wnew" "${LAUNCH_DIR:-$PWD}" "spawn_frontmost --type=os-window follow:${FOLLOW:-0}"; printf '%s\n' "$wnew" ;; esac
@@ -14801,8 +14816,22 @@ spawn() {
   # it2_type_verified (bracketed-paste + echo-verify) and raises it on --follow. An empty id = the
   # window could not be created → FAIL LOUD (nothing launched), never a phantom success.
   if [ "$SURFACE" = "window" ]; then
-    local winid
-    winid="$(spawn_frontmost | tr -d '[:space:]')" || winid=""   # || guards set -e on an osascript failure
+    local winid wsrc=0
+    # No pipe into tr: the rc must survive whether or not pipefail is on (13 means UNKNOWN, below).
+    winid="$(spawn_frontmost)" || wsrc=$?   # || guards set -e on an osascript failure
+    winid="$(printf '%s' "$winid" | tr -d '[:space:]')"
+    # OUTCOME UNKNOWN IS NOT "NOTHING LAUNCHED" (pane-lifecycle fixes item 5; selfclose-failures M11).
+    # FLEET_V2 W7c, 2026-09-30: kitty created window 47 running this brief, the launch answered no id
+    # and the list was unreadable, this line said "nothing launched", fire-cleanup REMOVED the worktree
+    # and branch under the live session, and the lead's re-fire started twin pane 48. Same verdict as
+    # the split arm's rc 13 now, and fire_cleanup keeps every resource on it.
+    if [ "$wsrc" = 13 ]; then
+      FIRE_SPAWN_UNKNOWN=1
+      echo "!! --window outcome UNKNOWN — kitty answered no window id and its window list could not be read, so a session MAY be running this brief. NOT retrying; the worktree is KEPT." >&2
+      echo "   Look for a window running this brief before re-firing." >&2
+      return 13
+    fi
+    [ "$wsrc" = 0 ] || winid=""
     [ -n "$winid" ] || { echo "!! could not create a fresh iTerm2 window (--window) — nothing launched." >&2; return 1; }
     it2_land "$winid" || return 1
     SPAWNED_PANE="$winid"                          # the fired pane — engagement verify + registry
@@ -14961,6 +14990,7 @@ spawn() {
             echo "   kitty's window list could not be read after $polls re-poll(s), so whether a pane already runs this fire's command is undetermined." >&2
           fi
           echo "   Look for a pane running this brief before re-firing." >&2
+          FIRE_SPAWN_UNKNOWN=1
           return 13
         fi
         hf_anchor_live "$FIRING_SID" || alive=$?
