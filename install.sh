@@ -770,6 +770,28 @@ if [[ -d "$REPO_DIR/scripts/jev" ]]; then
   done
 fi
 
+# scripts/research-kit/ and its lib/ — the hand-run research kit (REPORT.md §8 item 7 in
+# docs/research/upfront-research-exhaustion-2026-09-30/). Declared with its deploy-parity-assert.sh
+# class in the same commit, globbed `*` like scripts/jev for the same extension reason (the kit is
+# .sh wrappers, .py scripts and a .md contract). Load-bearing: wave B1's research block whitelists
+# `gate.sh --render` by its live path, and every kit script resolves its lib/ through its own
+# resolved location, so a kit present in the checkout but absent here is a whitelist naming nothing.
+if [[ -d "$REPO_DIR/scripts/research-kit" ]]; then
+  echo ""
+  echo "Research kit → $CONFIG_DIR/scripts/research-kit/"
+  for sub in "" "/lib"; do
+    ensure_real_dir "$CONFIG_DIR/scripts/research-kit$sub"
+    for f in "$REPO_DIR/scripts/research-kit$sub"/*; do
+      [[ -f "$f" ]] || continue
+      if $IS_GLOBAL; then
+        link_file "$f" "$CONFIG_DIR/scripts/research-kit$sub/$(basename "$f")"
+      else
+        copy_file "$f" "$CONFIG_DIR/scripts/research-kit$sub/$(basename "$f")"
+      fi
+    done
+  done
+fi
+
 # scripts/backlog-consolidation/ — the SAME subdirectory gap as scripts/lib above and
 # scripts/limit-recover below, hit a third time, and this instance is the one that proves the
 # pattern is a defect rather than a quirk: the classes here are ENUMERATED BY HAND, so a wave that

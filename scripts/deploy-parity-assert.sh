@@ -622,6 +622,12 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
       # want=1 is also what keeps link_refresh() able to repair the class without an advance.
       scripts/jev/*/*)           want=0 ;;
       scripts/jev/*)             want=1; cls='scripts/jev/*' ;;
+      # scripts/research-kit/* and lib/* — declared in the same commit as install.sh's loop, `*` on
+      # both sides. Case `*` crosses `/`, so the deeper patterns come first.
+      scripts/research-kit/lib/*/*) want=0 ;;
+      scripts/research-kit/lib/*)   want=1; cls='scripts/research-kit/lib/*' ;;
+      scripts/research-kit/*/*)     want=0 ;;
+      scripts/research-kit/*)       want=1; cls='scripts/research-kit/*' ;;
       scripts/*/*)               want=0 ;;   # scripts/ is globbed top-level only
       # scripts/*.py — a class the MAP does not deploy, DECLARED here rather than left to the
       # catch-all. install.sh's scripts/ leg globs scripts/*.sh ONLY, so the 25 top-level .py files

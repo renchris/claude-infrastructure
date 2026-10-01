@@ -62,8 +62,9 @@ items are live (converged), not when the code is written.
 - Locus inside the wave: L (lead-inline). Why: the six teammate spawns were refused at the tool ("it2 CLI is not
   reachable") because kitty pid 610's remote-control socket `/tmp/kitty-610` accepted connections and never answered
   (`kitty @ ls` → i/o timeout, 2026-10-01 02:12), so no pane backend existed; code-writing subagents are not allowed.
-- Status: built and gate-green on branch `rp-a2-kit-signing`, held for wave A1's land (the registry test sources A1's
-  resolver). 11 suites, 136 planted-input tests: `tests/operator-sign.bats` (13), `research-kit-probe` (10), `-seed` (9),
+- Status: DONE — landed `68261da7c` (rebased onto A1's land; the registry test runs against A1's resolver) and
+  converged; the kit's `~/.claude/scripts/research-kit/` links follow in the install.sh class landed after it.
+  11 suites, 136 planted-input tests: `tests/operator-sign.bats` (13), `research-kit-probe` (10), `-seed` (9),
   `-courier` (12), `-round` (15), `-estimate` (6), `-gate` (44), `-sweep` (13), `-heldout` (6), `-index` (3),
   `-registry` (5).
 - Learnings:
