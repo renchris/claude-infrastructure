@@ -1,5 +1,5 @@
 ---
-status: open
+status: complete
 ---
 
 # Pane-lifecycle fixes, 2026-10-01: brief for one dispatched session
@@ -49,4 +49,4 @@ Every item was confirmed open on trunk dc99a63fe first; none had landed. Each ha
   - Wake-coverage measurement (required before the nudge; /tmp/wake-coverage-2026-10-01.md): 287/309 idle periods woke on mail in 7 days, 92.9% (95% CI 89.5–95.3). It falls with idle time: 97% under 10 min, 31% at 1–4 h (4/13), 0% past ~4 h (0/3); fired peers after their DONE ping 70% (14/20). 263 of the 287 wakes came from model-armed `cc-await-ping` watchers, only 13 from the Stop-hook wake-arm. The point estimate clears the 90% gate, so the nudge was built. Known limit: a note sent during a multi-hour outage may wait for the next human turn.
 - **5 — done.** UNKNOWN is rc 13 through `kt_launch` → `spawn_frontmost` → `spawn --window`, and `fire_cleanup` keeps worktree, branch and pool slot on rc 13 / `FIRE_SPAWN_UNKNOWN=1`. The split arm's own rc 13 had the same cleanup hole.
 - **6 — done.** The expect program exits with claude's own status (it always exited 0 at `interact`), and `rr_close_on_clean_exit` closes the pane on rc 0 with no recycle pending, through F-a's `lib/pane-recycle-pending.sh`.
-- **7 — teammate `pl-custody`, branch fix/pl-custody-husk.** Shared reader `lib/pane-custody.sh`; watchdog CRASH banner and `cc-husk-sweep` (`COLLECTED`, never resumed) consult it.
+- **7 — done (teammate `pl-custody`).** One reader, `lib/pane-custody.sh`, keyed on targetPane (a custody row's cwd is the originator's) and dated by the session's first transcript record so a reused pane id cannot speak for today's session. The watchdog's CRASH banner shows "WORK COLLECTED, do not resume" on a discharge and names the owner instead of a resume line while custody is open (it paints once, at death, so the live read lives in the sweep). `cc-husk-sweep` adds `COLLECTED`, never resumed, `--all` included.
