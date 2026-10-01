@@ -1,0 +1,41 @@
+live pairs: 33369
+
+1/3. upward drift (pp) by activity class × gap × meter
+   class gap     meter         n  p50  p90  p99  max  any>0
+   k0   5-15m   session    4265    0    0    1    3  0.027
+   k0   5-15m   weekly     4313    0    0    0    1  0.004
+   k0   15-60m  session      68    0    0    1    1  0.044
+   k0   15-60m  weekly       70    0    0    0    0  0.000
+   k0   1-6h    session      22    0    0    1    1  0.091
+   k0   1-6h    weekly       25    0    0    1    1  0.040
+   k0   >6h     session       3    0    0    0    0  0.000
+   k0   >6h     weekly        3    0    0    0    0  0.000
+   k≥1  5-15m   session   26774    0    1    5   38  0.217
+   k≥1  5-15m   weekly    27367    0    0    1    8  0.073
+   k≥1  15-60m  session    1229    0    5   28   66  0.497
+   k≥1  15-60m  weekly     1329    0    1    5   14  0.268
+   k≥1  1-6h    session     144    1    4   34   42  0.500
+   k≥1  1-6h    weekly      205    0    2    7    9  0.298
+   k≥1  >6h     session       7    0    2    2    2  0.429
+   k≥1  >6h     weekly       17    0    4    4    4  0.471
+
+2. k=0 pairs with weekly/session drift ≥1pp: 141
+   by (acct, meter): {('next', 'session'): 17, ('next', 'weekly'): 3, ('next4', 'session'): 13, ('next4', 'weekly'): 1, ('next3', 'session'): 39, ('next3', 'weekly'): 6, ('next2', 'session'): 53, ('next2', 'weekly'): 9}
+   of which ≥3pp: 1
+   next   2026-09-28T18:51:59 → 18:59:15  session +3pp over 7 min
+
+3. weekly drift rate (pp/h) for active accounts, gap ≤15 min, by max(k)
+   k 1-3  n=12169 p50 0.00 p90 0.00 p99 9.86
+   k 4-8  n=12907 p50 0.00 p90 0.00 p99 11.07
+   k 9+   n= 2234 p50 0.00 p90 8.85 p99 14.31
+
+4. DECREASES with no reset stamp passing (events, not drift): 13
+   of which ≤ -5pp: 8
+   next   2026-09-04T19:57:35 → 20:07:34 weekly  -31pp  k 4→4
+   next4  2026-09-01T07:17:47 → 18:24:43 weekly  -10pp  k 4→4
+   next4  2026-09-04T19:57:35 → 20:07:34 session -9pp  k 5→5
+   next4  2026-09-04T19:57:35 → 20:07:34 weekly  -16pp  k 5→5
+   next4  2026-10-01T20:12:16 → 20:24:48 weekly  -100pp  k 13→13
+   next3  2026-09-04T19:57:35 → 20:07:34 session -7pp  k 0→0
+   next3  2026-09-04T19:57:35 → 20:07:34 weekly  -13pp  k 0→0
+   next2  2026-09-04T19:57:35 → 20:07:34 weekly  -49pp  k 9→10

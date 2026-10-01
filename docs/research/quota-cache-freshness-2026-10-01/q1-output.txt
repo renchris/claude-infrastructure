@@ -1,0 +1,71 @@
+probe lines: 4259  429s: 1665  span 2026-08-21 → 2026-10-01 20:38Z
+
+1. SCOPE (other accounts' logged probes within ±3 s of a 429)
+   another account SUCCEEDED in the same sweep : 7
+   every co-swept logged account also 429'd    : 464
+   no other account logged within ±3 s        : 1194
+   429s per account: {'next2': 324, 'next': 393, 'next3': 500, 'next4': 448}
+
+2. WINDOW (per account; 429 runs = consecutive logged 429s of one account)
+   runs: 18  run length p50 18 p90 393 max 456
+   run span s     p50 2859 p90 2506911 max 2517097
+   gap prev-probe→first-429 s p10 48 p50 108505 p90 208224  (n=14)
+   first-429→next-logged-success s p50 335236 p90 2538674 max 2538676  (n=16; an UPPER bound — unlogged successes)
+
+3. 429 share of LOGGED probes by live sessions k (nearest util row ≤900 s before)
+   NB: successes are logged only for near-wall accounts, so this is a ratio over a biased
+   denominator; compare buckets with each other, not with 0.
+   k      0    n=  1193  429=   26  share=0.022
+   k      1-3  n=  1937  429= 1074  share=0.554
+   k      4-8  n=   718  429=  410  share=0.571
+   k      9+   n=   119  429=   27  share=0.227
+   k      unk  n=   292  429=  128  share=0.438
+   k_work 0    n=  2192  429=  705  share=0.322
+   k_work 1-3  n=   581  429=  302  share=0.520
+   k_work 4-8  n=    96  429=   25  share=0.260
+   k_work 9+   n=    27  429=   10  share=0.370
+   k_work unk  n=  1363  429=  623  share=0.457
+
+4. LOGGED probes per account-hour, last 7 d (only hours with ≥1 logged probe)
+   next   hours=  14  p50 20  p90 23  max 26
+   next2  hours=  82  p50 20  p90 25  max 29
+   next3  hours=  15  p50 19  p90 23  max 26
+   next4  hours=  19  p50 20  p90 22  max 23
+
+5. redemption-shaped events (weekly fell >5pp, weekly reset not passed): 6
+   next   2026-09-04 19:57Z→20:07Z  429s in [prev read, next read + 15 min]: 0
+   next4  2026-09-01 07:17Z→18:24Z  429s in [prev read, next read + 15 min]: 0
+   next4  2026-09-04 19:57Z→20:07Z  429s in [prev read, next read + 15 min]: 0
+   next4  2026-10-01 20:12Z→20:24Z  429s in [prev read, next read + 15 min]: 8
+   next3  2026-09-04 19:57Z→20:07Z  429s in [prev read, next read + 15 min]: 0
+   next2  2026-09-04 19:57Z→20:07Z  429s in [prev read, next read + 15 min]: 0
+   baseline next: 0.395 429/h over 994 h
+   baseline next2: 0.326 429/h over 994 h
+   baseline next3: 0.503 429/h over 994 h
+   baseline next4: 0.451 429/h over 994 h
+
+2b. after a 429, is the SAME account's next event another 429? (by gap)
+   gap    0-30  s n=   41  next-is-429=0.976
+   gap   30-60  s n=   16  next-is-429=0.812
+   gap   60-120 s n=  116  next-is-429=0.879
+   gap  120-180 s n=  246  next-is-429=0.813
+   gap  180-300 s n= 1080  next-is-429=0.937
+   gap  300-600 s n=  146  next-is-429=0.623
+   gap  600-1800s n=   13  next-is-429=0.538
+
+6. 429s whose account was at a wall at its last good read: 136/1665 = 0.082
+   baseline: good reads at a wall 3098/36615 = 0.085
+
+7. stale (throttled) share of utilization rows by live sessions k, auth ok
+   all       k 0    n=  4698 stale=  151 share=0.0321
+   all       k 1-3  n= 13365 stale=  501 share=0.0375
+   all       k 4-8  n= 13946 stale=  343 share=0.0246
+   all       k 9+   n=  2327 stale=   26 share=0.0112
+   last 14 d k 0    n=  1837 stale=  108 share=0.0588
+   last 14 d k 1-3  n=  3762 stale=   57 share=0.0152
+   last 14 d k 4-8  n=  3405 stale=   25 share=0.0073
+   last 14 d k 9+   n=   705 stale=    5 share=0.0071
+
+8. throttle episodes: 198  length min p50 7.1 p75 36.7 p90 90.8 p99 444.1
+   logged 429s per episode p50 2 p90 25 max 75
+   episodes cleared within 6 min (≈ one series sample): 88/198
