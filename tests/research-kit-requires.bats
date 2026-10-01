@@ -24,6 +24,13 @@ setup() {
   export CC_DECISIONS_DIR="$W/decisions" CC_IDL="$W/idl.jsonl"
   mkdir -p "$W"
   REC="$("$BATS_TEST_DIRNAME/fixtures/research-kit/build_good.py" "$W")"
+  # handoff-fire seams (test-hermeticity-lint rules 2 and 5): the box capacity gate off, and every
+  # non-$HOME default pinned to an ABSENT per-test path, so no case reads live load, the operator's
+  # /tmp state, or a claude-accounts off their PATH.
+  export CC_FIRE_CAPACITY_GATE=off HANDOFF_ACCOUNT_SWEEP=off
+  export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/account-sweep.json"
+  export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/heal-"
+  export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/claude-accounts"
 }
 
 # certify [row-status-override-json]: write CERT-v1 with all 16 rows PASS (merged with the override)
@@ -148,9 +155,6 @@ kr()  { printf '%s\n' "$1" >> "$REC/known_rows.jsonl"; }
 # ── handoff-fire.sh --requires-gate ──────────────────────────────────────────────────────────────
 
 hf_env() {
-  export HANDOFF_ACCOUNT_SWEEP=off CC_FIRE_CAPACITY_GATE=off
-  export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/account-sweep.json"
-  export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/heal-"
   PAYLOAD="$BATS_TEST_TMPDIR/p.txt"
   echo "TASK — research build wave fixture payload." > "$PAYLOAD"
 }
