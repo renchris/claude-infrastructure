@@ -165,7 +165,17 @@ import json,sys
 d=json.load(sys.stdin)
 print(' '.join('%s:%s'%(w['id'],','.join('%s=%s'%(k,v) for k,v in sorted((w.get('neighbors') or {}).items()))) for o in d for t in o['tabs'] for w in t['windows']),end='')"; }
 load()  { k load-config --ignore-overrides "$1" >/dev/null 2>&1; sleep 2; }
-shoot() { /usr/sbin/screencapture -x -o -l "$PWID" "$SB/$1.png"; }
+# A covered window is not redrawn by kitty, so its capture is a STALE frame: every pixel diff then
+# reads "nothing changed", which fails real properties and passes false ones. Measured 2026-09-30:
+# with the operator working over the sandbox, one build read 14/14 and the identical build read
+# 9/13. So every capture also asks whether the window was covered, and a section that captured a
+# covered window reports NO VERDICT rather than a result.
+COVERED=0; SKIP=0
+shoot() {
+  /usr/sbin/screencapture -x -o -l "$PWID" "$SB/$1.png"
+  [ "$("$WRECT" --owner kitty --window-id "$PWID" --assert-unoccluded 2>&1 | tail -1)" = "verdict=OK" ] || COVERED=1
+}
+nov() { SKIP=$((SKIP+1)); printf '  NO VERDICT %s: the sandbox window was covered during a capture, and kitty does not redraw a covered window\n' "$1"; }
 bands() { python3 "$BANDS_PY" "$SB/$1.png" "$SB/$2.png" "$CELL_H" "$SB/bands.txt" 2>/dev/null; }
 guard() {
   # Refuse to post a synthetic event unless OUR window is verifiably on top: a drag aimed at an
@@ -201,9 +211,13 @@ load "$SB/off.conf";   R4="$(rows)"; W4="$(winch)"; printf '  off           rows
 
 echo
 echo "== the band is DRAWN, and is exactly one cell tall =="
+COVERED=0; DRAWN=0
 load "$SB/off.conf"; shoot off
 load "$SB/on.conf";  shoot on
 load "$SB/off.conf"; shoot off2
+if [ "$COVERED" = 1 ]; then
+  nov "(band drawn)"
+else
 if bands off off2 >/dev/null; then
   bad "negative control: two OFF captures differ by a cell-tall band, so the diff proves nothing"
 else
@@ -213,21 +227,25 @@ if FOUND="$(bands off on)"; then
   N="$(python3 -c "print(len(eval(open('$SB/bands.txt').read())))")"
   printf '  cell-tall bands found: %s\n' "$FOUND"
   [ "$N" = 2 ] && ok "the band draws as one one-cell strip per pane" || bad "expected 2 bands, found $N: $FOUND"
+  DRAWN=1
 else
   bad "the band did not draw at all"
+fi
 fi
 
 echo
 echo "== (b) the band does not move when the content scrolls =="
-load "$SB/on.conf"
+load "$SB/on.conf"; COVERED=0
 k scroll-window --match id:1 end >/dev/null 2>&1; sleep 1; shoot s0
 k scroll-window --match id:1 3-  >/dev/null 2>&1; sleep 1; shoot s1
+if [ "$COVERED" = 1 ] || [ "$DRAWN" = 0 ]; then nov "(b)"; else
 SCROLL_PY="$SELF_DIR/kitty-title-band-scroll.py"
 read -r SBODY SBAND SEDGE < <(python3 "$SCROLL_PY" "$SB/s0.png" "$SB/s1.png" "$SB/bands.txt" 2>/dev/null || echo "0 0 0")
 printf '  positive control: body ROWS changed by the scroll = %s%%\n' "${SBODY:-?}"
 printf '  claim           : band edges byte-identical = %s   (band pixels changed %s%%)\n' "${SEDGE:-?}" "${SBAND:-?}"
 awk "BEGIN{exit !(${SBODY:-0} > 50)}" && ok "control: the scroll really happened (${SBODY}% of body rows moved)" || bad "control dead: only ${SBODY:-0}% of body rows changed"
 [ "${SEDGE:-0}" = 1 ] && ok "(b) the band did not move: all four edge rows byte-identical" || bad "(b) the band MOVED: an edge row changed"
+fi
 k scroll-window --match id:1 end >/dev/null 2>&1
 
 echo
@@ -245,11 +263,14 @@ pa, pc = a.load(), c.load()
 print(round(100 * sum(1 for x in range(a.size[0]) if pa[x, y] != pc[x, y]) / a.size[0]))
 PYW
 }
+COVERED=0
 load "$SB/off.conf";  shoot w-off
 load "$SB/on.conf";   shoot w-text
 load "$SB/full.conf"; shoot w-full
 load "$SB/off.conf"
-if bands w-off w-text >/dev/null; then
+if [ "$COVERED" = 1 ]; then
+  nov "(e)"
+elif bands w-off w-text >/dev/null; then
   CT="$(cover w-text)"; CF="$(cover w-full)"
   printf '  share of the band row covered: text=%s%%  full=%s%%\n' "${CT:-?}" "${CF:-?}"
   awk "BEGIN{exit !(${CF:-0} >= 80)}" && ok "control: a full-width band covers ${CF}% of the row" || bad "control dead: full width covered only ${CF:-0}%"
@@ -403,6 +424,7 @@ fi
 
 fi  # SYNTH = 1
 
-printf '\n== RESULT: %d passed, %d failed ==\n' "$PASS" "$FAIL"
+printf '\n== RESULT: %d passed, %d failed, %d no verdict ==\n' "$PASS" "$FAIL" "$SKIP"
 k action quit >/dev/null 2>&1
-[ "$FAIL" -eq 0 ]
+[ "$FAIL" -eq 0 ] || exit 1
+[ "$SKIP" -eq 0 ] || { echo "verdict=NO-VERDICT (re-run while nothing covers the sandbox window)"; exit 3; }
