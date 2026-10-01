@@ -461,6 +461,11 @@ CC_ENGAGE_SCAN_WINDOW_MIN="${CC_ENGAGE_SCAN_WINDOW_MIN:-240}"
 # beside the actual file (NOT via $REPO, which is the TARGET-of-fire repo). Env-overridable for tests.
 HF_SELF="$0"; while [ -L "$HF_SELF" ]; do _hf_t="$(readlink "$HF_SELF")"; case "$_hf_t" in /*) HF_SELF="$_hf_t" ;; *) HF_SELF="$(dirname "$HF_SELF")/$_hf_t" ;; esac; done
 HF_DIR="$(cd "$(dirname "$HF_SELF")" && pwd)"
+# quota_kind_for_model — the one model→meter rule, shared with bin/cc-route (ranked_accounts uses it).
+for _hf_qk in "$HF_DIR/lib/quota-kind.sh" "${HOME:-}/.claude/scripts/lib/quota-kind.sh"; do
+  # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+  [ -f "$_hf_qk" ] && { . "$_hf_qk"; break; }
+done
 PAYLOAD_LINT_BIN="${CC_PAYLOAD_LINT_BIN:-$HF_DIR/payload-lint.sh}"
 COMPLETION_PUSH_BIN="${CC_COMPLETION_PUSH_BIN:-$HF_DIR/completion-push.sh}"
 # How long the terminal completion push may take before the close proceeds without its verdict.
@@ -12069,7 +12074,14 @@ activity() { find "$(proj_dir "$1")" -name '*.jsonl' -mmin -300 2>/dev/null | wc
 # Output: line 1 = "# <source label>", then "account score" lines best-first.
 ranked_accounts() {
   local kind=general out rc
-  case "$MODEL" in claude-fable-5*) kind=fable ;; esac   # prefix — see the note at the recycle guard
+  # The meter follows the model, via the helper cc-route shares (scripts/lib/quota-kind.sh). If the
+  # lib is unreachable, degrade LOUDLY to the same prefix rule it encodes rather than mis-meter.
+  if command -v quota_kind_for_model >/dev/null 2>&1; then
+    kind="$(quota_kind_for_model "$MODEL")"
+  else
+    echo "⚠ handoff-fire: scripts/lib/quota-kind.sh unreachable — metering on the inline Fable-prefix rule" >&2
+    case "$MODEL" in claude-fable-5*) kind=fable ;; esac   # prefix — see the note at the recycle guard
+  fi
   if command -v claude-accounts >/dev/null 2>&1; then
     out="$(claude-accounts --rank "$kind" 2>/tmp/handoff-rank-err.$$)"; rc=$?
     if [ "$rc" = 0 ] && [ -n "$out" ]; then

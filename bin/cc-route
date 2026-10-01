@@ -40,6 +40,17 @@ set -uo pipefail
 MODEL_CONFIG="${CC_MODEL_CONFIG:-$HOME/.claude/model-config.yaml}"
 RECORDS_DIR="${CC_ROUTE_RECORDS_DIR:-$HOME/.claude/route}"
 
+# quota_kind_for_model — the meter a spawn draws on follows its MODEL, and this helper is the one
+# copy of that rule handoff-fire.sh also sources. Resolved beside this file's REAL path first (it is
+# reached through the ~/.claude/bin symlink farm), then the deployed lib.
+for _qk in "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/../scripts/lib/quota-kind.sh" \
+           "${CLAUDE_CONFIG_DIR:-${HOME:-}/.claude}/scripts/lib/quota-kind.sh" \
+           "${HOME:-}/.claude/scripts/lib/quota-kind.sh"; do
+  # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+  [ -f "$_qk" ] && { . "$_qk"; break; }
+done
+unset _qk
+
 usage() { sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'; }
 die()   { echo "cc-route: $*" >&2; exit 2; }
 
@@ -180,6 +191,11 @@ cmd_route() {
     echo "cc-route: REFUSING TO ROUTE — cannot parse roles.lead_default from $MODEL_CONFIG (RT-e). An unreadable SSOT is route-UNKNOWN; fix the SSOT, never guess a model." >&2
     exit 3
   fi
+  if ! command -v quota_kind_for_model >/dev/null 2>&1; then
+    record "$slot" refused "scripts/lib/quota-kind.sh unreachable"
+    echo "cc-route: REFUSING TO ROUTE — scripts/lib/quota-kind.sh is unreachable, so the quota meter for a model cannot be named. Routing on the wrong meter is firing blind." >&2
+    exit 3
+  fi
 
   case "$slot" in
     lead|transcription)
@@ -187,8 +203,10 @@ cmd_route() {
       # mechanical/routine `high` of the slot table. Fallback == the SSOT's own value.
       local eff
       if [ "$slot" = lead ]; then eff="$(ssot_effort default)" || eff=high; else eff=high; fi
-      if route_account general; then
-        emit_plan "$slot" "$lead_model" "$ROUTE_ACCT" "$eff" "general route"
+      # The meter follows the model this plan emits, never the slot: a Fable lead_default meters fable.
+      local lead_kind; lead_kind="$(quota_kind_for_model "$lead_model")"
+      if route_account "$lead_kind"; then
+        emit_plan "$slot" "$lead_model" "$ROUTE_ACCT" "$eff" "$lead_kind route"
       else
         general_stop "$slot" "$?"
       fi
@@ -199,20 +217,29 @@ cmd_route() {
         echo "cc-route: REFUSING TO ROUTE — cannot parse frontier_access.model from $MODEL_CONFIG (RT-e)." >&2
         exit 3
       fi
-      local rc=0; route_account fable || rc=$?
+      local rc=0; route_account "$(quota_kind_for_model "$frontier_model")" || rc=$?
       if [ "$rc" -eq 0 ]; then
         # xhigh on Fable: the Fable ladder's capability-sensitive tier (judgment-dense waves) and the
         # certified verify_judge tier (adversarial) coincide.
         emit_plan "$slot" "$frontier_model" "$ROUTE_ACCT" "xhigh" "frontier window open"
       elif [ "$rc" -eq 2 ]; then
         # RT-b FRONTIER-WINDOW EDGE: the SSOT-designed degrade — EXPLICIT, reason-carrying, never silent.
-        local fb_reason="frontier unavailable (${ROUTE_REASON:-window closed / exhausted}) → designed Opus fallback"
-        # Opus-fallback effort also reads the SSOT: adversarial keeps verify_judge (xhigh, certified
+        # The reason names the model the plan actually carries — it said "Opus" whatever lead_default
+        # was. And a fallback onto a model that draws the SAME exhausted meter is no fallback at all:
+        # with a Fable lead_default it would be frontier→frontier, so refuse instead of routing it.
+        local fb_kind; fb_kind="$(quota_kind_for_model "$lead_model")"
+        if [ "$lead_model" = "$frontier_model" ] || [ "$fb_kind" = "$(quota_kind_for_model "$frontier_model")" ]; then
+          record "$slot" refused "frontier unavailable (${ROUTE_REASON:-}) and fallback $lead_model draws the same $fb_kind meter"
+          echo "cc-route: REFUSING TO ROUTE — frontier unavailable (${ROUTE_REASON:-window closed / exhausted}), and the designed fallback roles.lead_default=$lead_model would be frontier→frontier on the exhausted $fb_kind meter. Point roles.lead_default at a non-frontier model, or wait for the frontier meter." >&2
+          exit 3
+        fi
+        local fb_reason="frontier unavailable (${ROUTE_REASON:-window closed / exhausted}) → designed fallback to $lead_model"
+        # Fallback effort also reads the SSOT: adversarial keeps verify_judge (xhigh, certified
         # to hold on BOTH tiers), everything else takes effort_defaults.default.
         local fb_eff
         if [ "$slot" = adversarial ]; then fb_eff="$(ssot_effort verify_judge)" || fb_eff=xhigh
         else fb_eff="$(ssot_effort default)" || fb_eff=high; fi
-        if route_account general; then
+        if route_account "$fb_kind"; then
           record "$slot" fallback "$fb_reason"
           emit_plan "$slot" "$lead_model" "$ROUTE_ACCT" "$fb_eff" "$fb_reason"
         else

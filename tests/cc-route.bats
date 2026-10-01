@@ -8,6 +8,12 @@ setup() {
   T="$REPO/bin/cc-route"
   export CC_ROUTE_RECORDS_DIR="$BATS_TEST_TMPDIR/records"
   export CC_MODEL_CONFIG="$BATS_TEST_TMPDIR/model-config.yaml"
+  # Hermeticity: the handoff-fire ranked_accounts case sources handoff-fire, which reads live machine
+  # load and these /tmp + PATH seams. Absent fixture paths, so every sensor fails open.
+  export CC_FIRE_CAPACITY_GATE=off
+  export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/handoff-account-sweep.json"
+  export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/no-claude-accounts"
+  export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/claude-accounts-heal-"
   cat > "$CC_MODEL_CONFIG" <<'YAML'
 frontier_access:
   model: claude-fable-5
@@ -146,4 +152,64 @@ STUB
   # must carry no date literal that could shadow the SSOT — in CODE; comments are stripped first
   # (the reaper-horizon comment-as-code lesson, applied in reverse).
   ! sed 's/[[:space:]]*#.*$//' "$T" | grep -nE '2026-[0-9]{2}-[0-9]{2}|JUL[0-9]'
+}
+
+# ── ONE model-keyed quota meter (row ca75400c44a6) ─────────────────────────────────────────────────
+# cc-route used to pick the meter by SLOT while handoff-fire keyed it on the MODEL, so a Fable
+# roles.lead_default was metered `general` by one and `fable` by the other.
+fable_lead_fixture() {
+  sed -i '' 's/^  lead_default: claude-opus-4-8$/  lead_default: claude-fable-5-1/' "$CC_MODEL_CONFIG"
+  grep -q '^  lead_default: claude-fable-5-1$' "$CC_MODEL_CONFIG"
+}
+
+@test "Fable lead_default: cc-route (lead slot) and handoff-fire's ranked_accounts both meter fable" {
+  fable_lead_fixture
+  export STUB_ARGV_LOG="$BATS_TEST_TMPDIR/argv"
+  run bash -c "'$T' lead 2>/dev/null"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e 'select(.model=="claude-fable-5-1" and .account=="next4")'
+  [ "$(cat "$STUB_ARGV_LOG")" = "--route fable" ]
+
+  # handoff-fire: run its REAL ranked_accounts body (extracted, not re-typed) against a PATH stub.
+  mkdir -p "$BATS_TEST_TMPDIR/pathbin"
+  cat > "$BATS_TEST_TMPDIR/pathbin/claude-accounts" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "$HF_ARGV_LOG"
+echo "next4 1.00"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/pathbin/claude-accounts"
+  sed -n '/^ranked_accounts() {/,/^}/p' "$REPO/scripts/handoff-fire.sh" > "$BATS_TEST_TMPDIR/ranked.sh"
+  grep -q 'quota_kind_for_model "\$MODEL"' "$BATS_TEST_TMPDIR/ranked.sh"
+  run env HF_ARGV_LOG="$BATS_TEST_TMPDIR/hf-argv" PATH="$BATS_TEST_TMPDIR/pathbin:$PATH" bash -c "
+    . '$REPO/scripts/lib/quota-kind.sh'; . '$BATS_TEST_TMPDIR/ranked.sh'
+    MODEL=claude-fable-5-1 ranked_accounts"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$BATS_TEST_TMPDIR/hf-argv")" = "--rank fable" ]
+  # …and the opus control, so the extracted body is proven to discriminate at all
+  : > "$BATS_TEST_TMPDIR/hf-argv"
+  run env HF_ARGV_LOG="$BATS_TEST_TMPDIR/hf-argv" PATH="$BATS_TEST_TMPDIR/pathbin:$PATH" bash -c "
+    . '$REPO/scripts/lib/quota-kind.sh'; . '$BATS_TEST_TMPDIR/ranked.sh'
+    MODEL=claude-opus-5-5 ranked_accounts"
+  [ "$(cat "$BATS_TEST_TMPDIR/hf-argv")" = "--rank general" ]
+}
+
+@test "frontier exhausted + Opus lead_default → fallback reason names the real model, routed on general" {
+  export STUB_ARGV_LOG="$BATS_TEST_TMPDIR/argv"
+  sed -i '' 's/^  lead_default: claude-opus-4-8$/  lead_default: claude-opus-5-5/' "$CC_MODEL_CONFIG"
+  run bash -c "STUB_FABLE_RC=2 '$T' judgment-dense 2>/dev/null"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e 'select(.model=="claude-opus-5-5" and (.reason|test("designed fallback to claude-opus-5-5")))'
+  ! echo "$output" | grep -q 'Opus fallback' || false
+  [ "$(cat "$STUB_ARGV_LOG")" = "$(printf -- '--route fable\n--route general')" ]
+}
+
+@test "frontier exhausted + Fable lead_default → REFUSED exit 3 (frontier→frontier on the exhausted meter)" {
+  fable_lead_fixture
+  run bash -c "STUB_FABLE_RC=2 '$T' judgment-dense 2>/dev/null"
+  [ "$status" -eq 3 ]
+  [ -z "$output" ]
+  run bash -c "STUB_FABLE_RC=2 '$T' adversarial 2>&1 1>/dev/null"
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"frontier→frontier"* ]] || false
+  grep -q '"outcome":"refused"' "$CC_ROUTE_RECORDS_DIR/route.jsonl"
 }
