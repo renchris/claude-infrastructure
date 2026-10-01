@@ -60,12 +60,14 @@ def run(job, out_dir):
     model = (re.search(r"^model: (\S+)", txt, re.M) or [None, None])[1]
     tok = re.search(r"tokens used\s*\n\s*([\d,]+)", txt)
     tokens = int(tok.group(1).replace(",", "")) if tok else None
-    out = open(last, errors="replace").read() if os.path.exists(last) else ""
     bundle = os.path.realpath(job["cwd"])
+    # integrity: only what codex EXECUTED counts (a plan may quote absolute paths in its own text, and a
+    # reviewer quoting them is not a leak); a command run elsewhere or naming an outside path voids the job
+    execs = "\n".join(re.findall(r"^/bin/(?:zsh|bash|sh) -lc .*$", txt, re.M))
     leaks = sorted(
         {
             m
-            for m in re.findall(r"/Users/[\w.-]+/[\w./-]+", out + txt)
+            for m in re.findall(r"/Users/[\w.-]+/[\w./-]+", execs)
             if not os.path.realpath(m).startswith(bundle)
         }
     )
