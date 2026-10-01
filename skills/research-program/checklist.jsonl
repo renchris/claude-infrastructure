@@ -1,0 +1,33 @@
+{"id": "FAC-01", "carries": "Options include \"do nothing\" and \"use what exists\""}
+{"id": "FAC-02", "carries": "Candidates enumerated from the artifact itself (repo, fork, installed), never from memory"}
+{"id": "FAC-03", "carries": "Upstream or base version as an explicit decision; the upstream tracker as a source"}
+{"id": "FAC-04", "carries": "Every checkout, copy and deployed instance"}
+{"id": "FAC-05", "carries": "Every caller and consumer, found by name, not by path"}
+{"id": "FAC-06", "carries": "Execution contexts: deployment interpreter, scheduler, CI or build OS, real device versus simulator"}
+{"id": "FAC-07", "carries": "Where it runs, what keeps it alive, what expires, who re-authenticates"}
+{"id": "FAC-08", "carries": "Concurrency and the fleet case: concurrent actors, more than one instance, generator-versus-UI races"}
+{"id": "FAC-09", "carries": "Publication surfaces: mirrors, forks, jobs that push"}
+{"id": "FAC-10", "carries": "Operator-owned accounts, tenants and devices"}
+{"id": "FAC-11", "carries": "Evidence beyond our own stores: access logs, trackers, the public web"}
+{"id": "FAC-12", "carries": "Prior invariants, each with a guard test"}
+{"id": "FAC-13", "carries": "Handed commands, run by the agent under the real invocation (no terminal, launchd)"}
+{"id": "FAC-14", "carries": "Platform and feature-support matrix"}
+{"id": "FAC-15", "carries": "Deliverable consumer and install path; house rules that act as acceptance"}
+{"id": "FAC-16", "carries": "Operator-private relationships and agreements"}
+{"id": "FAC-17", "carries": "Hazards: write paths to live data, destructive tools, irreversibility"}
+{"id": "FAC-18", "carries": "Seams with sibling plans: an owner for every producer and consumer"}
+{"id": "FAC-19", "carries": "A measured ceiling for every performance or superlative target"}
+{"id": "FAC-20", "carries": "A positive reference set for taste"}
+{"id": "FAC-21", "carries": "Pre-registered thresholds and a branch for a negative result"}
+{"id": "FAC-22", "carries": "Every hold carries an expiry"}
+{"id": "FAC-23", "carries": "Freshness: sibling trunk activity, registry releases, credential validity"}
+{"id": "FAC-24", "carries": "Research probes never change the live subject"}
+{"id": "FAC-25", "carries": "Compliance and data residency for external deliverables"}
+{"id": "FAC-26", "carries": "Real artifacts, more than one sample, a load control"}
+{"id": "FAC-27", "carries": "Properties include liveness and recovery; every fix is re-checked by the tool that found the bug"}
+{"id": "FAC-28", "carries": "Emergent load and feedback behavior exercised on a running thin slice"}
+{"id": "FAC-29", "carries": "Deploy rehearsal, rollback and kill switch designed before build"}
+{"id": "FAC-30", "carries": "Source list reconciled: every source consulted, or not-applicable with a reason"}
+{"id": "FAC-31", "carries": "Decisions settled silently by default (freeze clauses, features shipped off) registered and ruled"}
+{"id": "FAC-32", "carries": "Cost and quota of building and running the deliverable measured, not estimated"}
+{"id": "FAC-33", "carries": "Every census of an outside population (models, libraries, vendors) carries an as-of date and an admission rule"}

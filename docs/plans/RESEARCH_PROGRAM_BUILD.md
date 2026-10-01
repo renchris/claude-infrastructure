@@ -169,3 +169,30 @@ Owns §10 items 1 (deny half), 2, 3, 8, 11, 12, 13 (populating the set). Reads, 
 - Operator verbs to document, all `cc-signoff research:<slug>/{frame|cert|extra-round|reopen|veto/<D>}`
   (`bin/cc-signoff` usage; namespace at `scripts/lib/operator_sign.py:143-160`).
 - Restore the Google lane first: `gemini` needs one interactive login (filed as an operator step at A2's close).
+- Status: **built off-box 2026-10-01** (cloud session, branch `claude/fire-20261001T113129Z-26618-1`; the desk
+  lands it). What exists:
+  - `scripts/research-kit/intake.py` — `init` (refuses a numberless superlative, checks the research index,
+    registers through `gate.sh register`, writes the frame skeleton with FAC-01..FAC-33 and the three historical
+    frames unmapped, starts the stage-1 clock), `ruling` (`--show`; `--adopt` records `{at, quote}`; `--decline`
+    records no `at`, so row 1 keeps failing, and closes the program), `map` (checklist rows and historical frames),
+    `set` (escape cost must be a finite number; release gap; reference days), `contract-page`, `lint` (gate row 1
+    minus the signature), `status`.
+  - `contract-page` refuses before both rulings, before the escape cost, and before a STRICTLY earlier vendor
+    preflight (row 13's predicate); a dead lane exits 3. It writes `CONTRACT.md` (definition, signed activity list,
+    profile with `estimate.py simulate` forecast and the §6.1 ceiling, escape cost, responding model ids, release
+    chance, §6.3 override), pins the responding ids into `reviewer_pins`, and stores the page's sha256 in
+    `frame.json`, so the operator's frame signature covers the page.
+  - `skills/research-program/` — `SKILL.md` (the protocol by stage, the rails, every `cc-signoff research:` verb),
+    `RUBRIC.md` (§3.11), `checklist.jsonl` (the 33 rows, generated from §3.2 step 5), `briefs/{reviewer,rater,
+    verifier,seed-author}.md`. `commands/research-program.md` loads the skill.
+  - Suites: `research-program-intake` (15), `research-program-briefs` (9: the reviewer brief's JSON is what
+    `courier.extract_panel` reads with exactly `kit.LENSES`, with a dropped-lens mutation control; seed records
+    carry what `seed.validate` checks; the checklist equals row 1's `FAC_IDS` and the report's wording; every
+    signoff verb parses in `operator_sign`), and `research-zero-allowed-prompts` now scans the new briefs. Four
+    intake guards mutated one at a time (strict ordering, dead lane, declined ruling, infinite cost): each mutant
+    killed by its case.
+- Decisions made in the build: the contract page is a file beside the frame and is pinned through its hash in
+  `frame.json` (the signing library pins only `frame.json`); the §6.1 typical totals and ceilings are copied as
+  printed rather than recomputed, because the report's own ceiling arithmetic is not reproducible from its formula;
+  a stale `docs/research/INDEX.jsonl` is reported with its command, never rewritten by the intake (it may run from
+  the shared checkout). Trunk's index was 5 entries stale at this build.

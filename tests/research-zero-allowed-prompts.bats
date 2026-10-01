@@ -18,6 +18,7 @@ setup() {
 prompts() {
   ls "$REPO"/agents/*.md
   printf '%s\n' "$REPO/skills/research-subagents/SKILL.md"
+  ls "$REPO"/skills/research-program/SKILL.md "$REPO"/skills/research-program/briefs/*.md   # wave B2
 }
 
 @test "positive control: the detector catches every quota spelling the report cited" {
