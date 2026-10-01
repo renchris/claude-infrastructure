@@ -36,6 +36,8 @@ setup() {
   # binary still refused it and ten cases went red for a reason no diff in this tree could reach
   # (memory: unfixtured-sensor-executes-the-deployed-subject).
   export CC_BACKLOG_BIN="$REPO/bin/cc-backlog"
+  # a real `cc-backlog add` here must never spawn the deployed dispatcher (test-hermeticity-lint)
+  export CC_BACKLOG_KICK=off CC_BACKLOG_KICK_MARKER="$BATS_TEST_TMPDIR/.dispatch-kick" CC_BACKLOG_KICK_BIN="$BATS_TEST_TMPDIR/no-such-dispatch"
   export POSTLAND_DIR="$BATS_TEST_TMPDIR/postland"            # flakes.jsonl + queue, sandboxed
   export POSTLAND_VERIFY=off                                  # never spawn a real post-land child
   # ...and never a real LIVE-LAYER CONVERGE either (2026-09-17, backlog b2135387fd55). A green

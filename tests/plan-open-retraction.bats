@@ -9,6 +9,7 @@ setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   export CC_PLAN_INDEX="$BATS_TEST_TMPDIR/no-index.json"
+  export CC_BACKLOG_KICK=off CC_BACKLOG_KICK_MARKER="$BATS_TEST_TMPDIR/.dispatch-kick" CC_BACKLOG_KICK_BIN="$BATS_TEST_TMPDIR/no-such-dispatch"
   P="$BATS_TEST_TMPDIR/proj/docs/plans"; mkdir -p "$P/sub"
   printf -- '---\nstatus: done\n---\n\n# Finished prose plan\n\nAll of it shipped.\n\n## Wave one\n\nprose\n' > "$P/DONE_PLAN.md"
   printf -- '---\nstatus: open\n---\n\n# Open plan\n\n## Wave one\n\nprose\n' > "$P/OPEN_PLAN.md"

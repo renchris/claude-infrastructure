@@ -8,6 +8,7 @@ setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   export CC_AUTH_TIMESERIES="$BATS_TEST_TMPDIR/auth.jsonl" CC_RELOGIN_LOG="$BATS_TEST_TMPDIR/relogin.log"
   export CC_PROBE_NOW=1790000000     # 2026-09-21T12:53:20Z
+  export CC_BACKLOG_KICK=off CC_BACKLOG_KICK_MARKER="$BATS_TEST_TMPDIR/.dispatch-kick" CC_BACKLOG_KICK_BIN="$BATS_TEST_TMPDIR/no-such-dispatch"
 }
 
 ts_line() { printf '{"ts":"%s","acct":"%s","state":"%s","n_live":%s}\n' "$1" "$2" "$3" "$4"; }

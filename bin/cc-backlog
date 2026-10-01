@@ -1937,7 +1937,8 @@ close_pointer_check() {
       git -C "$repo" merge-base --is-ancestor "$ptr" origin/main 2>/dev/null \
         || { printf '%s is not an ancestor of origin/main in %s' "$ptr" "$repo"; return 1; } ;;
     moved)
-      dlb="${CC_BACKLOG_DL_BIN:-dl}"
+      # the co-versioned sibling, never a bare PATH lookup (same reason as premise_bin)
+      dlb="${CC_BACKLOG_DL_BIN:-$(dirname "$(self_path)")/dl}"
       "$dlb" show "$ptr" >/dev/null 2>&1 || { printf 'dl show %s does not resolve' "$ptr"; return 1; } ;;
     ruled)
       dd="${CC_DECISIONS_DIR:-$HOME/.claude/autonomy/decisions}"
