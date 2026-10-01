@@ -220,3 +220,32 @@ row 7 is still open"
   run "$CR" rehearse record --program demo --frames-typed x --trials "$T/trials.jsonl" --retest
   [ "$status" -eq 2 ]
 }
+
+# ── workflows ───────────────────────────────────────────────────────────────────────────────────
+
+@test "every workflow parses as the async body the Workflow runtime compiles" {
+  # A bare `node --check` refuses every Workflow script (top-level return/await, as in
+  # docs/research/research-calibration/workflows/review.workflow.js); --check compiles the body.
+  local f
+  for f in round frame-critique rehearsal; do
+    run node "$REPO/tests/fixtures/research-kit/run-workflow.mjs" --check "$REPO/scripts/research-kit/workflows/$f.workflow.js"
+    [ "$status" -eq 0 ]
+    [ "$output" = "parse ok" ]
+  done
+}
+
+@test "round.workflow.js calls check-round after the slots, and names only cc-research commands" {
+  run node "$REPO/tests/fixtures/research-kit/run-workflow.mjs" "$REPO/scripts/research-kit/workflows/round.workflow.js"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"order ok"* ]]
+  [[ "$output" == *"commands ok"* ]]
+}
+
+@test "frame-critique and rehearsal workflows name only cc-research commands" {
+  local f
+  for f in frame-critique rehearsal; do
+    run node "$REPO/tests/fixtures/research-kit/run-workflow.mjs" "$REPO/scripts/research-kit/workflows/$f.workflow.js"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"commands ok"* ]]
+  done
+}
