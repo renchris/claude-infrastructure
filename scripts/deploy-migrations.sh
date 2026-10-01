@@ -433,6 +433,15 @@ migrate() { # → 0 all applied/staged · 1 a migration FAILED
     # braces, because a ledger lost to an `rm -rf ~/.claude/autonomy` must not become a re-run storm.
     [ -f "$STATE/applied/$name.json" ] && continue
     [ -f "$STATE/staged/$name.json" ] && { staged=$(( staged + 1 )); continue; }
+    # SUPERSEDED IS TERMINAL TOO (2026-09-30). settle_staged moves a retired marker to superseded/ and
+    # closes its row, but this loop checked only applied/ and staged/, so the NEXT converge re-staged
+    # it, re-filed its row and settled it again — every tick. A file declaring the header is never
+    # staged in the first place: it is ledgered superseded with no row to file.
+    [ -f "$STATE/superseded/$name.json" ] && continue
+    if [ -n "$(mig_field "$f" 'migration-superseded-by')" ]; then
+      [ "$DRY" -eq 1 ] || record superseded "$name" "class=$(mig_field "$f" 'migration-class')" "by=unstaged" "backlog=unfiled"
+      continue
+    fi
     # Inside its retry window this failure is a KNOWN, already-paged event, not a new one. Skipping
     # it also means skipping everything ordered after it — the same stop-at-first-failure rule, just
     # reached without paying for the run. `--migrate` from a human is not special-cased: the operator
@@ -489,6 +498,7 @@ status() {
     if   [ -f "$STATE/applied/$name.json" ]; then printf '  applied  %s\n' "$name"
     elif [ -f "$STATE/failed/$name.json"  ]; then printf '  FAILED   %s (attempt %s) — %s\n' "$name" "$(attempts_of "$name")" "$(sed -n 's/.*"reason":"\([^"]*\)".*/\1/p;s/.*"rc":"\([^"]*\)".*/rc=\1/p' "$STATE/failed/$name.json" 2>/dev/null | head -1)"
     elif [ -f "$STATE/staged/$name.json"  ]; then printf '  staged   %s (operator-owned) — %s\n' "$name" "$(sed -n 's/.*"step":"\([^"]*\)".*/\1/p' "$STATE/staged/$name.json" 2>/dev/null | head -1)"
+    elif [ -f "$STATE/superseded/$name.json" ]; then printf '  superseded %s — will never run\n' "$name"
     else printf '  pending  %s (class: %s)\n' "$name" "$(mig_field "$f" 'migration-class')"; fi
   done
   n=0; for f in "$STATE/failed"/*.json; do [ -f "$f" ] && n=$(( n + 1 )); done

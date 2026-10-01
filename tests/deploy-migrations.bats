@@ -288,6 +288,31 @@ row_status() { bash "$REPO/bin/cc-backlog" list --all --json | jq -r --arg i "$1
   [ -f "$D/state/superseded/0002-retired.json" ]
 }
 
+@test "12b: a superseded marker is TERMINAL — the next converge neither re-stages it nor re-files its row" {
+  settle_fixture
+  run bash "$RUNNER" --migrate
+  [ -f "$D/state/superseded/0002-retired.json" ]
+  local before; before="$(wc -l < "$D/backlog.jsonl")"
+  run bash "$RUNNER" --migrate
+  [ "$status" -eq 0 ]
+  # The end state alone cannot see the churn (re-stage then re-settle leaves the same files), so the
+  # assertion is on what the second converge DID.
+  [[ "$output" != *"0002-retired"* ]] || { echo "the second converge acted on a superseded marker: $output"; false; }
+  [ ! -f "$D/state/staged/0002-retired.json" ] || { echo "re-staged on the second converge"; false; }
+  [ "$(wc -l < "$D/backlog.jsonl")" -eq "$before" ] || { echo "the second converge wrote backlog records"; tail -3 "$D/backlog.jsonl"; false; }
+  run bash "$RUNNER" --status
+  [[ "$output" == *"superseded 0002-retired"* ]] || false
+}
+
+@test "12c: a file that already declares migration-superseded-by is never staged and files no row" {
+  settle_fixture
+  rm "$D/repo/migrations/0001-live-later.sh"
+  run bash "$RUNNER" --migrate
+  [ "$status" -eq 0 ]
+  [ -f "$D/state/superseded/0002-retired.json" ]
+  [ ! -s "$D/backlog.jsonl" ] || { echo "a row was filed for a step that will never run"; cat "$D/backlog.jsonl"; false; }
+}
+
 @test "13: a staged c10 whose header step changed is re-titled; the old row closes as superseded" {
   settle_fixture
   run bash "$RUNNER" --migrate
