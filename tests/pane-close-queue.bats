@@ -21,6 +21,10 @@ setup() {
   export CC_PCQ_LOG="$D/pcq.log"
   export CC_PCQ_KITTY_BIN="$D/bin/kitty" CC_PCQ_IT2_BIN="$D/bin/it2" CC_PCQ_PAGE_BIN="$D/bin/page"
   export CC_PCQ_PS_FILE="$D/ps.txt" CC_PCQ_KITTY_SOCKET_BIN="$D/bin/nosock"
+  # The kitty-independent closer is a stub that REFUSES unless a test says otherwise: the real one
+  # would read this machine's watchdog log and signal real shells.
+  export CC_PCQ_PANE_CLOSE_BIN="$D/bin/cc-pane-close"
+  printf '#!/bin/bash\necho "pane ${2:-?}: REFUSED — stub"\nexit 1\n' > "$CC_PCQ_PANE_CLOSE_BIN"; chmod +x "$CC_PCQ_PANE_CLOSE_BIN"
   export KITTY_LISTEN_ON="unix:$D/kitty-610"
   # The session running this suite may itself sit in a kitty or iTerm2 pane; none of that may leak.
   unset KITTY_PID KITTY_WINDOW_ID CC_PANE_ID ITERM_SESSION_ID CC_TERM CC_TERM_KITTY_TO
@@ -93,6 +97,25 @@ husk_row() { q teammate 33 agent_id=m1@session-t team=session-t kitty_pid="${1:-
   [ ! -e "$D/it2-calls.log" ]
   [ -e "$(ROW33)" ]
   grep -q "kitty unresponsive — 1 row(s) held" "$D/pcq.log"
+}
+
+@test "kitty unresponsive: a teammate row is handed to cc-pane-close, and its close removes the row" {
+  husk_row; echo 124 > "$D/kitty.rc"
+  printf '#!/bin/bash\necho "$*" >> %q\necho "pane 33: CLOSED — stub"\nexit 0\n' "$D/pc-calls.log" > "$CC_PCQ_PANE_CLOSE_BIN"
+  run "$DRAIN"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$D/pc-calls.log")" = "--pane 33" ]
+  [ ! -e "$(ROW33)" ]
+  grep -q "teammate pane=33 ✓ closed without remote control" "$D/pcq.log"
+  [ ! -e "$D/it2-calls.log" ]
+}
+
+@test "kitty unresponsive and cc-pane-close refuses: the row is kept and the refusal is logged" {
+  husk_row; echo 124 > "$D/kitty.rc"
+  run "$DRAIN"
+  [ "$status" -eq 0 ]
+  [ -e "$(ROW33)" ]
+  grep -q "held — kitty unresponsive and cc-pane-close did not close it: pane 33: REFUSED" "$D/pcq.log"
 }
 
 @test "pane absent from kitty ls: the row is removed and close is never called" {

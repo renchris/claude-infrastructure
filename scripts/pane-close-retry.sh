@@ -123,7 +123,26 @@ _ls_fresh() {
   LS="$out"
 }
 if ! _ls_fresh; then
-  log "kitty unresponsive — $N_TEAM row(s) held (sock=${SOCK:-none})"
+  # ── A DEAF KITTY IS NOT A REASON TO HOLD A HUSK (2026-10-01) ─────────────────────────────────
+  # Holding every row until remote control answers left panes 69 and 76 open for hours while
+  # kitty refused connections. bin/cc-pane-close closes a pane by signalling its window shell — no
+  # socket — behind its own fail-closed gates (identity by watchdog registration + window start
+  # time, nothing live, a teammate/ruled-done session, no uncommitted work), so a teammate row is
+  # handed to it here. Its refusal keeps the row exactly as before, with the refusal logged.
+  PC_BIN="${CC_PCQ_PANE_CLOSE_BIN:-$HERE/../bin/cc-pane-close}"
+  _held=0
+  while IFS= read -r _row <&3; do
+    [[ "$(pcq_get "$_row" kind)" == teammate ]] || continue
+    _p="$(pcq_get "$_row" pane)"
+    if [[ -x "$PC_BIN" && "$_p" =~ ^[0-9]+$ ]] \
+       && _out="$(CC_PANE_CLOSE_REMOTE=off bounded "$PC_BIN" --pane "$_p" 2>&1 </dev/null)"; then
+      pcq_remove "$_row"; log "teammate pane=$_p ✓ closed without remote control — ${_out//$'\n'/ }"
+    else
+      _held=$((_held + 1)); log "teammate pane=$_p held — kitty unresponsive and cc-pane-close did not close it: ${_out:-<not run>}"
+    fi
+    _out=""
+  done 3<<<"$ROWS"
+  log "kitty unresponsive — $_held row(s) held (sock=${SOCK:-none})"
   exit 0
 fi
 
