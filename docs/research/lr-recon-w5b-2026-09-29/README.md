@@ -169,6 +169,41 @@ did not place, which is what happened to the only member limited since the cutof
 record that straddles a reboot. A fix to either means a reconciler restart, and that resets the
 cutoff.
 
+### Cutoff moved: the reconciler restarted onto W7b (2026-10-01 01:02:56Z)
+
+The lead's W7b wave fixed all three on trunk: `49f77447d` (A: a rebuilt cohort keeps its reset and
+opening time), `95264bd12` and `7996dcb9a` (B: the census owns the reboot park, so a parked record
+is never re-derived or actuated, and only an open resume debt reads as open), and `cb4bc0207` (C: a
+session engaged on a holder the reconciler did not place settles). The reconciler restarted onto them
+as pid 79972 at 01:02:56Z: the last row of `recon/restarts.jsonl` (t=1790816578.19), confirmed by
+`launchctl print` (running, pid 79972). Every live `lr_recon` module is byte-identical to origin/main,
+and no `lr_recon` commit has landed since. **This start time is the cutoff now.** Only cohorts whose
+limit began after 01:02:56Z count toward the 2; none had at 01:05Z. Nothing that opened before it
+ever counts, including `next2-7d-1791025200`, which keeps gaining members until its reset at
+2026-10-03 11:00Z (ceaa8922 joined at 21:58:48Z).
+
+**The fixes, read off live data two minutes after the restart.**
+- A: `recon/cohorts/next2-7d-1791025200.json` now carries `resets_at: 1791025200` and
+  `opened_at: 1790752192.1` (07:09:52Z, the first member's detection).
+- B: cd3bd860 drew one reboot-park `stale` event, then `engaged-elsewhere`, and closed
+  `ENGAGED/CLOSED`. No `PANE-GONE/R` and no `RECON-DEFECT` event since the restart.
+- C: this session's record, 4d7c9bce, read `engaged-elsewhere` and closed `ENGAGED/CLOSED`, as did
+  ceaa8922.
+
+The same evidence cohort, compared again at 01:05Z, needs no fallback (no `window:` line):
+
+```
+SHADOW next2-7d-1791025200: members 10 · legacy found 7 · census misses 0 · placements feasible 3/3 · phase agree 3/7 (false-RECOVERED resolved 0, plan differed 2) → FAIL
+```
+
+The FAIL now rests only on c28362b6 and c8c2adc0. The old code drove them to `IMPOSSIBLE` before the
+fix, and a terminal record is not re-judged, so they stay that way although both sessions are alive
+(46d14e14 and 68691067 likewise, counted as plan differed). This is history from a cohort that does
+not count.
+
+**Watcher.** Since 22:49Z the watcher is pid 36821, restarted onto `e2ae5d6c5`'s code (the pid 73698
+named above was the pre-fix run). It is the only one and notifies `lr-fv2-w5b2-38`.
+
 ## Census step
 
 Operator step `f0df9145b73a` (the live observe census) was closed with the launchd daemon's own pass:
