@@ -210,6 +210,9 @@ decide_pid() {
   if has_live_owner "$wt"; then
     VERDICT_CODE=10; VERDICT_TEXT='DEFER live-owner-session'; return
   fi
+  if has_claude_ancestor "$pid"; then
+    VERDICT_CODE=10; VERDICT_TEXT='DEFER live-owner-ancestor'; return
+  fi
 
   age="$(proc_age_s "$pid")"; age="${age:-0}"
   if [ "$age" -lt "$GRACE_S" ]; then
@@ -241,6 +244,55 @@ record() { # pid verdict cause rss_kb cwd
     >> "$RECORDS_DIR/decisions.jsonl"
 }
 
+# ── the ancestry judge ────────────────────────────────────────────────────────────────────────────
+# A parent is judged on its EXECUTABLE and its first two arguments, never on its whole command line.
+# The first cut globbed the full `ps -o command=` against `*"pnpm"*" dev"*`, and a fired Claude
+# session carries its entire ~26 KB brief in argv: on 2026-10-01 02:26Z a brief that mentioned "pnpm"
+# and, later, " dev" made the walk climb from a lead's own `pnpm dev` into cc-close-attrib and claude,
+# and the reap SIGTERMed a live wave lead (session c82dd5b9, docs/research/husk-panes-2026-09-30.md).
+# Same class as memory pgrep-f-matches-agent-briefs.
+cmd_head() { # the first three whitespace-separated words of a command line
+  local a0 a1 a2 rest
+  rest="$1"; a0="${rest%% *}"; rest="${rest#"$a0"}"; rest="${rest# }"
+  a1="${rest%% *}"; rest="${rest#"$a1"}"; rest="${rest# }"
+  a2="${rest%% *}"
+  printf '%s %s %s' "$a0" "$a1" "$a2"
+}
+
+is_claude_cmd() { # a Claude Code process or its launch wrapper, judged on argv[0..1] only
+  local h a0
+  h="$(cmd_head "$1")"; a0="${h%% *}"
+  case "${a0##*/}" in claude*|cc-close-attrib) return 0 ;; esac
+  case "${h#"$a0"}" in *"/claude "*|*"/claude.exe "*|*"/cc-close-attrib "*|*"/cli.js "*) return 0 ;; esac
+  return 1
+}
+
+is_devserver_link() {
+  local h a0
+  [ -z "$1" ] && return 1
+  is_claude_cmd "$1" && return 1
+  h="$(cmd_head "$1")"; a0="${h%% *}"
+  case "${a0##*/}" in node|pnpm|npm|npx|next) ;; *) return 1 ;; esac
+  case "$h" in
+    *"next dev"*|*"next/dist/bin/next"*|*"pnpm dev"*|*"pnpm"*" dev"*) return 0 ;;
+  esac
+  return 1
+}
+
+# A server whose own ancestry holds a live Claude is OWNED, whatever its cwd: has_live_owner keys on
+# cwd and missed exactly this case (the lead ran in bm-w2-reso-review, its server in reso-bm-w2-review).
+has_claude_ancestor() {
+  local p="$1" n=0
+  while [ -n "$p" ] && [ "$p" -gt 1 ] 2>/dev/null && [ "$n" -lt 64 ]; do
+    p="$("$PS_CMD" -o ppid= -p "$p" 2>/dev/null | tr -d ' ')"
+    [ -z "$p" ] && return 1
+    [ "$p" -le 1 ] 2>/dev/null && return 1
+    is_claude_cmd "$("$PS_CMD" -o command= -p "$p" 2>/dev/null)" && return 0
+    n=$(( n + 1 ))
+  done
+  return 1
+}
+
 # ── the reap ──────────────────────────────────────────────────────────────────────────────────────
 # TERM the whole `pnpm dev → next dev → next-server` chain root-first; killing the leaf alone lets the
 # supervisor respawn it. Never SIGKILL: next dev flushes its build cache on TERM.
@@ -254,10 +306,8 @@ reap_pid() {
     chain=("$p" ${chain[@]+"${chain[@]}"})
     ppid="$("$PS_CMD" -o ppid= -p "$p" 2>/dev/null | tr -d ' ')"
     [ -z "$ppid" ] && break
-    case "$("$PS_CMD" -o command= -p "$ppid" 2>/dev/null)" in
-      *"next dev"*|*"next/dist/bin/next"*|*"pnpm dev"*|*"pnpm"*" dev"*) p="$ppid" ;;
-      *) break ;;
-    esac
+    is_devserver_link "$("$PS_CMD" -o command= -p "$ppid" 2>/dev/null)" || break
+    p="$ppid"
   done
   if [ "$dry" = "yes" ]; then
     printf '    would TERM: %s\n' "${chain[*]}"

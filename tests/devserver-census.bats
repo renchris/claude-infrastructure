@@ -150,3 +150,69 @@ KEOF
   run bash "$C" decide
   [ "$status" -eq 2 ]
 }
+
+# ── the ancestry judge (2026-10-01 incident: a live wave lead SIGTERMed by the reap) ──────────────
+# A pid-aware ps: 100 next-server ← 200 next dev ← 300 pnpm dev ← 400 claude ← 500 cc-close-attrib.
+# The claude and wrapper argv carry a brief that says "pnpm" and, later, " dev" — exactly the shape
+# that made the old full-command glob climb into them.
+tree_ps() {
+  local root="${1:-400}"
+  cat > "$T/bin/ps" <<PSEOF
+#!/usr/bin/env bash
+pid="\${@: -1}"
+case "\$*" in
+  *"-eo pid=,command="*) echo "  100 next-server (v16.2.12)" ;;
+  *"-o rss="*)   echo " 500000" ;;
+  *"-o time="*)  cat $T/cpu ;;
+  *"-o etime="*) cat $T/etime ;;
+  *"-o ppid="*)
+    case "\$pid" in 100) echo " 200" ;; 200) echo " 300" ;; 300) echo " $root" ;; 400) echo " 500" ;; 600) echo " 1" ;; *) echo " 1" ;; esac ;;
+  *"-o command="*)
+    case "\$pid" in
+      100) echo "next-server (v16.2.12)" ;;
+      200) echo "node /w/node_modules/.bin/next dev --port 3117" ;;
+      300) echo "node /opt/pnpm/bin/pnpm.cjs dev" ;;
+      400) echo "/Users/u/.claude-284/node_modules/.bin/claude --model opus You are a wave lead. Start the app with pnpm and keep the dev server up." ;;
+      500) echo "bash /Users/u/.claude/bin/cc-close-attrib /Users/u/.claude-284/node_modules/.bin/claude You are a wave lead. Use pnpm; run the dev server." ;;
+      600) echo "bash /opt/agent-runner You are an agent. Use pnpm to keep the dev server up." ;;
+      *) echo "launchd" ;;
+    esac ;;
+esac
+PSEOF
+  chmod +x "$T/bin/ps"
+}
+
+@test "with a live claude above the server, --reap never plans a TERM at all" {
+  tree_ps 400
+  echo "$T/unowned" > "$T/owners"
+  PATH="$T/bin:$PATH" run bash "$C" --reap --dry-run
+  [[ "$output" == *"live-owner-ancestor"* ]] || false
+  [[ "$output" != *"would TERM"* ]] || false
+  [ ! -s "$T/kills" ]
+}
+
+@test "the walk judges a parent on its executable: a brief that says pnpm and dev is not a dev server" {
+  tree_ps 600
+  echo "$T/unowned" > "$T/owners"
+  PATH="$T/bin:$PATH" run bash "$C" --reap --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"would TERM: 300 200 100"* ]] || false
+  [[ "$output" != *"600"* ]] || false
+}
+
+@test "a server with a live claude in its ancestry DEFERs as owned (exit 10), whatever its cwd" {
+  tree_ps 400
+  echo "$T/unowned" > "$T/owners"
+  run bash "$C" decide --pid 100
+  [ "$status" -eq 10 ]
+  [[ "$output" == *"live-owner-ancestor"* ]] || false
+}
+
+@test "POSITIVE CONTROL: with no claude above it, the walk still climbs the whole dev-server chain" {
+  tree_ps 1
+  echo "$T/unowned" > "$T/owners"
+  PATH="$T/bin:$PATH" run bash "$C" --reap --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"would TERM: 300 200 100"* ]] || false
+  [ ! -s "$T/kills" ]
+}
