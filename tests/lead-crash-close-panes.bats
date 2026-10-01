@@ -34,6 +34,8 @@ setup() {
   # foreground and background band alike. Exactly the $HOME / CC_FIRE_CAPACITY_GATE class the
   # hermeticity ratchet already covers, on a lever it did not yet know about.
   unset LCW_ORPHAN_CLOSE                # DEFAULT-OFF must mean the DEFAULT, never this box's arming
+  unset LCW_WATCHDOG_ENV                # the subject now sources $HOME/.claude/autonomy/watchdog.env itself;
+                                        # $HOME is the fixture above, so the default path holds no arm
   unset LEAD_CRASH_WATCHDOG_DISABLED    # ambient =1 exits(0) before any leg runs — green by no-op
   # The subject's OWN bounds (hooks/lead-crash-watchdog.sh lcw_bounded). Pinned for the same reason:
   # an ambient budget would silently outlast this suite's outer bound below and put the two back in
@@ -407,4 +409,42 @@ EOF
   [[ "$output" == *"1 refuse"* ]] || false
   [[ "$output" == *"0 UNRESOLVED"* ]] || false
   ! [[ "$output" == *"close BLIND"* ]] || false
+}
+
+# ── THE ARM FILE (backlog 159c2211b0f2): the watchdog sources ~/.claude/autonomy/watchdog.env
+# itself, so the operator's recorded arming reaches every launch path, not just interactive zsh.
+arm_file() { mkdir -p "$HOME/.claude/autonomy"; printf 'export LCW_ORPHAN_CLOSE=%s\n' "$1" > "$HOME/.claude/autonomy/watchdog.env"; }
+
+@test "(xviii) ARM FILE: watchdog.env alone arms the close — no env var from the caller's shell" {
+  row "w-ok" "PANE-OK" "HARVESTED" 4242 "/tmp/t.jsonl"
+  arm_file 1
+  run_wd --close-panes "$TEAM" sid-1
+  [ "$status" -eq 0 ] || false
+  [ "$(calls)" -eq 1 ] || false
+}
+
+@test "(xix) ARM FILE: an explicit env value WINS over the file (LCW_ORPHAN_CLOSE=0 stays unarmed)" {
+  row "w-ok" "PANE-OK" "HARVESTED" 4242 "/tmp/t.jsonl"
+  arm_file 1
+  LCW_ORPHAN_CLOSE=0 run_wd --close-panes "$TEAM" sid-1
+  [ "$(calls)" -eq 0 ] || false
+  grep -q "WOULD-CLOSE(unarmed)" "$PLAN" || false
+}
+
+@test "(xx) ARM FILE: a launchd-shaped caller (empty env, bare PATH) still gets the arm" {
+  row "w-ok" "PANE-OK" "HARVESTED" 4242 "/tmp/t.jsonl"
+  arm_file 1
+  local of="$BATS_TEST_TMPDIR/launchd.out"
+  "$TB" -k 3 "$BOUND_S" env -i HOME="$HOME" PATH=/usr/bin:/bin LCW_TEARDOWN_BIN="$TD" \
+      CC_ACCOUNT_BASES="$CC_ACCOUNT_BASES" /bin/bash "$WD" --close-panes "$TEAM" sid-1 \
+      >"$of" 2>&1 </dev/null 3>&- || true
+  [ "$(calls)" -eq 1 ] || { cat "$of"; false; }
+}
+
+@test "(xxi) ARM FILE: absent file ⇒ default OFF (fail-soft, nothing sourced)" {
+  row "w-ok" "PANE-OK" "HARVESTED" 4242 "/tmp/t.jsonl"
+  rm -f "$HOME/.claude/autonomy/watchdog.env"
+  run_wd --close-panes "$TEAM" sid-1
+  [ "$status" -eq 0 ] || false
+  [ "$(calls)" -eq 0 ] || false
 }

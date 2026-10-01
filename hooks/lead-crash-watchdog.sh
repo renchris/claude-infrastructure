@@ -15,6 +15,26 @@
 
 set -euo pipefail
 
+# ── THE ARM FILE IS READ HERE, NOT BY THE CALLER'S SHELL (backlog 159c2211b0f2) ──────────────────
+# The operator's recorded arming lives in ~/.claude/autonomy/watchdog.env (LCW_ORPHAN_CLOSE=1). Until
+# this block, only ~/.zshrc sourced it, so the arm reached a session launched from an interactive zsh
+# and nothing else — a launchd job, a `claude -p` cron, any non-zsh provenance ran DISARMED while the
+# file on disk said armed. Sourcing it here makes the file the single source of truth for every
+# launch path. An explicit LCW_* value already in the environment WINS (a test pin, a one-off
+# override): those are snapshotted before the source and restored after it. Fail-soft: a missing,
+# unreadable or broken file leaves the environment as it was — this hook must never block startup.
+# Seam: LCW_WATCHDOG_ENV (default $HOME/.claude/autonomy/watchdog.env; set-but-EMPTY disables).
+if [ -n "${LCW_WATCHDOG_ENV+set}" ]; then _lcw_envf="$LCW_WATCHDOG_ENV"
+else _lcw_envf="$HOME/.claude/autonomy/watchdog.env"; fi
+if [ -n "$_lcw_envf" ] && [ -f "$_lcw_envf" ] && [ -r "$_lcw_envf" ]; then
+  _lcw_pre="$(declare -px 2>/dev/null | grep -E '^declare -x LCW_[A-Za-z0-9_]*=' || true)"
+  # shellcheck source=/dev/null
+  . "$_lcw_envf" >/dev/null 2>&1 || true
+  [ -n "$_lcw_pre" ] && eval "$_lcw_pre"
+  unset _lcw_pre
+fi
+unset _lcw_envf
+
 # Bound the OS-notification fork (machine-wide iTerm2/AppleEvent wedge, 2026-07-26). This one
 # targets NotificationCenter rather than iTerm2, so it is not the root cause — but it is an
 # AppleEvent fork inside an automated path, and an unbounded one turns a best-effort page into a
