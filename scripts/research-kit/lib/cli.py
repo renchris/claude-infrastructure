@@ -10,7 +10,7 @@ One argparse parser; each module below adds its own verbs through `add_verbs(sub
                                                                             (item 9 records)
   cli_probe    probe doctor self-test                                       (item 10)
   cli_cert     round frame-critique rehearse slots raters check-round relay (item 11)
-  cli_jobs     job                                                          (item 12)
+  cli_jobs     job sweep|freshness|triage|drift|market, run by jobs/research-job.sh (item 12)
   cli_refclass reference-class                                              (item 15)
 
 Exit codes are the kit's (RECORDS.md): 0 ok · 1 a check failed · 2 usage or refusal · 3 a dead
