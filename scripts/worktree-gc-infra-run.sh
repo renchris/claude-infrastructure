@@ -220,10 +220,11 @@ ts="$(date '+%Y-%m-%d %H:%M:%S')"
 #   verdict=blind     worktree-gc.sh REFUSED to act (rc 3) — no liveness oracle, so it cannot prove
 #                     a worktree is idle. A safe refusal, but a broken sensor: under this PATH lsof
 #                     always resolves, so rc 3 here means something is genuinely wrong.  exit 3
-#   verdict=nofetch   `git fetch` failed or timed out, so origin/main is stale. Landedness is
-#                     measured against origin/main; a stale ref makes landed branches look unlanded
-#                     (fails SAFE — a KEEP — but makes the whole sweep useless). Nothing swept.
-#                                                                                     exit 3
+#   verdict=nofetch   `git fetch` failed or timed out on every attempt, so origin/main is stale.
+#                     Since 2026-09-30 the sweep still RUNS against the last-known origin/main (a
+#                     stale trunk can only turn a deletion into a KEEP) with landed-dirt disposal
+#                     forced off, and the row carries its numbers plus `trunk=stale`. With no
+#                     origin/main ref at all (`trunk=absent`) nothing is swept.       exit 3
 #   verdict=error     anything else, INCLUDING an unrecognised rc. rc is carried verbatim.
 #                     A new worktree-gc.sh exit code lands here rather than in a success arm
 #                     (new-enum-member-falls-into-fail-closed-default).                exit = rc
@@ -379,18 +380,60 @@ POP_BEFORE="$(population)"
 #    fetch of this repo, sized for the launchd Background band's 4-84x tax, not for a foreground
 #    run (bound-must-fit-the-band-not-the-bench). rc 124 is timeout(1)'s own code and is handled
 #    as its OWN state, never folded into a generic failure.
+#
+# A FAILED FETCH NO LONGER COSTS THE NIGHT (2026-09-30, backlog eed2530a4165). 2026-09-29 04:31 read
+# `verdict=nofetch reason=timeout bound=300s pop=282` and swept nothing; the same fetch measures
+# 0.6 s in the foreground, so one wedged attempt (the host was under the kalloc ratchet that night)
+# threw away a whole day of reaping and the population climbed to its high-water mark. Two changes:
+#
+#   1. RETRY, bounded. FETCH_ATTEMPTS tries, FETCH_BACKOFF seconds apart. Each try is the lightest
+#      fetch that answers the question: `--no-tags` (landedness reads origin/main, never a tag) and
+#      gc.auto=0 / maintenance.auto=false, so a fetch can never start an auto-gc of a 1.1 GB pack
+#      store inside a 300 s bound and convict itself (bound-must-fit-the-band-not-the-bench).
+#   2. A STILL-FAILED FETCH SWEEPS AGAINST THE LAST-KNOWN origin/main INSTEAD OF NOTHING. The old
+#      reason for refusing — "a stale origin/main makes every branch read unlanded" — is false for a
+#      ref that is a day old: trunk only moves FORWARD (force-pushing main is forbidden), so every
+#      branch landed on the stale ref is landed on the true one, and a stale ref can only turn a
+#      deletion into a KEEP, never the reverse. The janitor's removal and `branch -d` gates are
+#      therefore exactly as safe on it. Landed-dirt disposal is the one class held back on a stale
+#      ref (FETCH_STALE forces it off): it compares bytes against a tree, and the tree it should
+#      compare against is the one this run could not fetch. The run still verdicts `nofetch` rc 3 —
+#      the sensor stays loud — but the row now carries the sweep's own numbers.
+#   An ABSENT origin/main (never fetched at all) is not "stale", it is no oracle: that keeps the old
+#   refuse-and-sweep-nothing arm, because then there is no trunk to measure landedness against.
+FETCH_ATTEMPTS="${CC_WTGC_INFRA_FETCH_ATTEMPTS:-3}"
+FETCH_BACKOFF="${CC_WTGC_INFRA_FETCH_BACKOFF:-60}"
+FETCH_STALE=0
 fetch_rc=0
-if command -v timeout >/dev/null 2>&1; then
-  timeout "$FETCH_BOUND" "$GIT_BIN" -C "$REPO" fetch --quiet origin main >/dev/null 2>&1
-  fetch_rc=$?
-else
-  "$GIT_BIN" -C "$REPO" fetch --quiet origin main >/dev/null 2>&1
-  fetch_rc=$?
-fi
-if [ "$fetch_rc" -eq 124 ]; then
-  verdict nofetch 3 "stage=fetch reason=timeout bound=${FETCH_BOUND}s"
-elif [ "$fetch_rc" -ne 0 ]; then
-  verdict nofetch 3 "stage=fetch reason=git-failed git_rc=$fetch_rc"
+_fa=0
+while : ; do
+  _fa=$((_fa + 1))
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$FETCH_BOUND" "$GIT_BIN" -C "$REPO" -c gc.auto=0 -c maintenance.auto=false \
+      fetch --quiet --no-tags origin main >/dev/null 2>&1
+    fetch_rc=$?
+  else
+    "$GIT_BIN" -C "$REPO" -c gc.auto=0 -c maintenance.auto=false \
+      fetch --quiet --no-tags origin main >/dev/null 2>&1
+    fetch_rc=$?
+  fi
+  [ "$fetch_rc" -eq 0 ] && break
+  [ "$_fa" -ge "$FETCH_ATTEMPTS" ] && break
+  sleep "$FETCH_BACKOFF"
+done
+if [ "$fetch_rc" -ne 0 ]; then
+  if [ "$fetch_rc" -eq 124 ]; then
+    _fwhy="reason=timeout bound=${FETCH_BOUND}s"
+  else
+    _fwhy="reason=git-failed git_rc=$fetch_rc"
+  fi
+  if ! "$GIT_BIN" -C "$REPO" rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
+    verdict nofetch 3 "stage=fetch $_fwhy fetch_attempts=$_fa trunk=absent"
+  fi
+  FETCH_STALE=1
+  PREV_NOTE="${PREV_NOTE:+$PREV_NOTE }stage=fetch $_fwhy fetch_attempts=$_fa trunk=stale"
+elif [ "$_fa" -gt 1 ]; then
+  PREV_NOTE="${PREV_NOTE:+$PREV_NOTE }fetch_attempts=$_fa"
 fi
 
 # ── The sweep. Every gate lives in worktree-gc.sh; this only chooses the flags. ───────────────────
@@ -415,7 +458,16 @@ fi
 # reports per candidate. So the nightly log accrues the evidence first and the switch is flipped
 # against it, deliberately. Flip with WTGC_DISPOSE_LANDED_DIRT=1 (or in the plist); the class is
 # CLASSIFIED, counted and blast-radius-reported every night regardless, so this cannot go inert.
-DISPOSE_LANDED_DIRT="${WTGC_DISPOSE_LANDED_DIRT:-0}"
+#
+# FLIPPED ON 2026-09-30 (backlog eed2530a4165), against the evidence the hold was waiting for: the
+# nightly log printed the class on every run 2026-09-04..09-30 and it read landed_dirt=0 each time,
+# with zero `DIRT?` candidates in the log. The timing hold existed to stop a BLIND first night
+# reaping 32 at once; that night can no longer happen, and waiting longer cannot show a class that
+# has no members. The predicate is unchanged and unforced: per-path blob identity against trunk,
+# any doubt KEEPs, no --force, and the tree must come out clean. WTGC_DISPOSE_LANDED_DIRT=0 turns it
+# back off, and a run whose fetch failed forces it off (FETCH_STALE, above).
+DISPOSE_LANDED_DIRT="${WTGC_DISPOSE_LANDED_DIRT:-1}"
+[ "$FETCH_STALE" = 1 ] && DISPOSE_LANDED_DIRT=0
 case "$DISPOSE_LANDED_DIRT" in 1) GC_DIRT_FLAG="--dispose-landed-dirt" ;; *) GC_DIRT_FLAG="" ;; esac
 export CC_WTGC_REPO="$REPO"
 export CC_WTGC_TRUNK="origin/main"
@@ -539,6 +591,10 @@ case "$rc" in
              "removed=${1:-0} disposed=${2:-0} kept=${3:-0} branches=${4:-0} refusals=${5:-0} $_eff"
          fi ;;
     esac
+    # A sweep against a stale trunk RAN, and it is still not `ok`: the fetch failure is the sensor
+    # reading, and PREV_NOTE carries its reason. Ranked below both breaches, which outrank it.
+    [ "$FETCH_STALE" = 1 ] && verdict nofetch 3 \
+      "removed=${1:-0} disposed=${2:-0} kept=${3:-0} branches=${4:-0} refusals=${5:-0} $_eff"
     verdict ok 0 "removed=${1:-0} disposed=${2:-0} kept=${3:-0} branches=${4:-0} refusals=${5:-0} $_eff"
     ;;
   3) verdict blind 3 "reason=no-liveness-oracle" ;;

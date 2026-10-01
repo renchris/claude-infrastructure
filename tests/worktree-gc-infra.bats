@@ -33,6 +33,7 @@ setup() {
 
   export CC_WTGC_INFRA_GC="$BIN/gc-stub.sh"
   export CC_WTGC_GIT="$BIN/git"
+  export CC_WTGC_INFRA_FETCH_BACKOFF=0    # the retry's sleep, never wall clock in a test
   stub_git 0
   # ⚠️ THIS PAYLOAD IS THE JANITOR'S REAL CONTRACT AND MUST TRACK IT. It used to hold the pre-§9
   # five-number summary (no `landed-dirt`), and because L1 stubs the janitor, that stale fixture is
@@ -53,6 +54,26 @@ stub_git() { # <exit-code>
 #!/bin/bash
 printf '%s\n' "\$*" >> "$GITARGV"
 exit $1
+EOF
+  chmod +x "$BIN/git"
+}
+
+# stub_git_fetch <fetch-failures> <fetch-rc> <rev-parse-rc>: the first N `fetch` calls exit
+# <fetch-rc>, later ones exit 0; `rev-parse` (is there ANY origin/main?) exits <rev-parse-rc>;
+# every other git call exits 0. Counted in a file, because each call is a fresh process.
+stub_git_fetch() {
+  cat > "$BIN/git" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$GITARGV"
+case " \$* " in
+  *" fetch "*)
+    n=\$(( \$(cat "$BATS_TEST_TMPDIR/fetch.n" 2>/dev/null || echo 0) + 1 ))
+    echo "\$n" > "$BATS_TEST_TMPDIR/fetch.n"
+    [ "\$n" -le $1 ] && exit $2
+    exit 0 ;;
+  *" rev-parse "*) exit $3 ;;
+esac
+exit 0
 EOF
   chmod +x "$BIN/git"
 }
@@ -109,7 +130,18 @@ field() { # <key> → the value from the verdict line
 # expanded to an empty STRING would reach worktree-gc.sh's flag loop as `unknown flag ''` and turn
 # the entire nightly sweep into an exit-2 no-op. A default that silently disables the whole janitor
 # is a far worse bug than the feature it was guarding.
-@test "landed-dirt disposal is OFF by default and passes NO empty argument" {
+# FLIPPED 2026-09-30 (eed2530a4165): ON by default, after the nightly log printed the class on every
+# run for four weeks and it never had a member. The OFF state keeps its own case, because the
+# empty-argument hazard above is a property of OFF, whichever state is the default.
+@test "landed-dirt disposal is ON by default" {
+  run bash "$SUT"
+  [ "$status" -eq 0 ]
+  grep -q -- '--dispose-landed-dirt' "$ARGV"
+  grep -q -- '--prune-branches' "$ARGV"
+}
+
+@test "WTGC_DISPOSE_LANDED_DIRT=0 turns it off and passes NO empty argument" {
+  export WTGC_DISPOSE_LANDED_DIRT=0
   run bash "$SUT"
   [ "$status" -eq 0 ]
   [ -f "$ARGV" ]
@@ -118,7 +150,7 @@ field() { # <key> → the value from the verdict line
   [ "$(tr -s ' ' '\n' < "$ARGV" | grep -c .)" -eq 1 ]
 }
 
-@test "WTGC_DISPOSE_LANDED_DIRT=1 passes the flag through (the RED-PROOF of the default)" {
+@test "WTGC_DISPOSE_LANDED_DIRT=1 passes the flag through" {
   export WTGC_DISPOSE_LANDED_DIRT=1
   run bash "$SUT"
   [ "$status" -eq 0 ]
@@ -181,12 +213,47 @@ field() { # <key> → the value from the verdict line
   grep -q 'fetch .*origin main' "$GITARGV"
 }
 
-@test "a failed fetch is verdict=nofetch and the sweep does NOT run" {
-  stub_git 1
+# 2026-09-29 04:31: one fetch timed out at its 300 s bound and the whole night swept nothing
+# (pop 282). The fetch is retried, and a fetch that never succeeds sweeps the last-known trunk.
+@test "a fetch that fails once and then succeeds is retried — verdict=ok, the attempts recorded" {
+  stub_git_fetch 1 124 0
+  run bash "$SUT"
+  [ "$status" -eq 0 ]
+  [ "$(field verdict)" = "ok" ]
+  [ "$(field fetch_attempts)" = "2" ]
+  [ "$(grep -c ' fetch ' "$GITARGV")" -eq 2 ]
+  grep -q -- '--dispose-landed-dirt' "$ARGV"
+}
+
+@test "the fetch never tags and never auto-gcs inside its bound" {
+  run bash "$SUT"
+  grep ' fetch ' "$GITARGV" | grep -q -- '--no-tags'
+  grep ' fetch ' "$GITARGV" | grep -q 'gc.auto=0'
+}
+
+@test "a fetch that fails every attempt still SWEEPS the stale trunk — nofetch rc 3, dirt disposal OFF" {
+  stub_git_fetch 99 124 0
   run bash "$SUT"
   [ "$status" -eq 3 ]
   [ "$(field verdict)" = "nofetch" ]
-  [ ! -f "$ARGV" ]        # a stale origin/main makes every branch read unlanded ⇒ sweeping is useless
+  [ "$(field trunk)" = "stale" ]
+  [ "$(field reason)" = "timeout" ]
+  [ "$(field fetch_attempts)" = "3" ]
+  [ "$(field removed)" = "3" ]            # the janitor's own numbers ride the row
+  [ -f "$ARGV" ]                          # a stale trunk can only turn a delete into a KEEP
+  grep -q -- '--prune-branches' "$ARGV"
+  # the one class that compares bytes against the tree this run could NOT fetch is held back,
+  # even with the switch explicitly on
+  ! grep -q -- '--dispose-landed-dirt' "$ARGV" || false
+}
+
+@test "no origin/main at all is no oracle — verdict=nofetch and the sweep does NOT run" {
+  stub_git_fetch 99 1 1
+  run bash "$SUT"
+  [ "$status" -eq 3 ]
+  [ "$(field verdict)" = "nofetch" ]
+  [ "$(field trunk)" = "absent" ]
+  [ ! -f "$ARGV" ]
 }
 
 # ── the verdict token ────────────────────────────────────────────────────────────────────────────
