@@ -7,6 +7,10 @@
 #         the daemon; actuators survive because they run in their own sessions.
 #   PAGE  a crash loop (holder pid changed twice within 10 min) or a dead daemon (heartbeat stale
 #         >60 s with no live holder), latched once per 15 min, with the last line of its stderr.
+#         A pid change this watchdog caused is not a crash: each kill is recorded as `kills=` in the
+#         state, a change away from a killed (pid, lstart) is left out of the crash-loop count, and
+#         two kills inside 10 min page as "watchdog killed N stalled holders" (FLEET_V2 W7d — the
+#         2026-10-01 "crash loop" page was the watchdog's own two kills).
 #
 # WHY IT IS SEPARATE AND BASH 3.2: a watchdog that imports the package it watches shares its bugs and
 # its interpreter. This imports nothing from lr_recon, reads the heartbeat with sed, and runs under
@@ -125,11 +129,12 @@ lstart_epoch() {  # $1=lstart as ps prints it under TZ=UTC LC_ALL=C → epoch se
 secs() { printf '%d.%02d' "$(($1 / 100))" "$(($1 % 100))"; }  # centiseconds → "s.cc"
 
 # ── previous run's state ─────────────────────────────────────────────────────────────────────────
-S_PID=""; S_LSTART=""; S_PROG=""; S_PROG_SEEN=""; S_CHANGES=""; S_LAST_PAGE=""; S_CPU=""
+S_PID=""; S_LSTART=""; S_PROG=""; S_PROG_SEEN=""; S_CHANGES=""; S_LAST_PAGE=""; S_CPU=""; S_KILLS=""
 if [ -f "$STATE" ]; then
   while IFS='=' read -r k v; do
     case "$k" in
       cpu_samples) S_CPU="$v" ;;
+      kills) S_KILLS="$v" ;;
       pid) S_PID="$v" ;;
       lstart) S_LSTART="$v" ;;
       progress) S_PROG="$v" ;;
@@ -140,19 +145,33 @@ if [ -f "$STATE" ]; then
   done < "$STATE"
 fi
 
-# Holder identity change ⇒ record it (crash-loop evidence) and restart progress tracking.
+# Holder identity change ⇒ record it (crash-loop evidence) and restart progress tracking — unless
+# this watchdog killed the old holder, in which case the restart is ours, not a crash.
+kill_key() { printf '%s@%s' "$1" "$2" | tr ' ' '_'; }  # $1=pid $2=lstart → "pid@Thu_Oct_1_06:50:36_2026"
 CHANGES=""
 for t in $S_CHANGES; do
   is_int "$t" && [ $((NOW - t)) -le "$LOOP_WINDOW_S" ] && CHANGES="$CHANGES $t"
 done
+KILLS=""  # "t@pid@lstart" per kill this watchdog made, kept LOOP_WINDOW_S
+for r in $S_KILLS; do
+  t="${r%%@*}"
+  is_int "$t" && [ $((NOW - t)) -le "$LOOP_WINDOW_S" ] && KILLS="$KILLS $r"
+done
 if [ "$S_PID" != "$HB_PID" ] || [ "$S_LSTART" != "$HB_LSTART" ]; then
   if [ -n "$S_PID" ]; then
-    CHANGES="$CHANGES $NOW"
-    log "holder changed: $S_PID -> $HB_PID"
+    ours=0
+    for r in $KILLS; do [ "${r#*@}" = "$(kill_key "$S_PID" "$S_LSTART")" ] && ours=1; done
+    if [ "$ours" -eq 1 ]; then
+      log "holder changed: $S_PID -> $HB_PID (restart after this watchdog's kill — not a crash)"
+    else
+      CHANGES="$CHANGES $NOW"
+      log "holder changed: $S_PID -> $HB_PID"
+    fi
   fi
   S_PROG=""; S_PROG_SEEN=""
 fi
 CHANGES="${CHANGES# }"
+KILLS="${KILLS# }"
 
 PROG_SEEN="$NOW"
 CPU_SAMPLES=""
@@ -172,6 +191,7 @@ save_state() {
     printf 'pid_changes=%s\n' "$CHANGES"
     printf 'last_page=%s\n' "$LAST_PAGE"
     printf 'cpu_samples=%s\n' "$CPU_SAMPLES"
+    printf 'kills=%s\n' "$KILLS"
   } > "$tmp" && mv -f "$tmp" "$STATE"
 }
 
@@ -226,8 +246,12 @@ fi
 # ── crash loop / dead daemon ─────────────────────────────────────────────────────────────────────
 n_changes=0
 for t in $CHANGES; do n_changes=$((n_changes + 1)); done
+n_kills=0
+for r in $KILLS; do n_kills=$((n_kills + 1)); done
 if [ "$n_changes" -ge 2 ]; then
   page "crash loop — holder pid changed $n_changes times within $((LOOP_WINDOW_S / 60)) min (now pid $HB_PID)"
+elif [ "$n_kills" -ge 2 ]; then
+  page "watchdog killed $n_kills stalled holders within $((LOOP_WINDOW_S / 60)) min (now pid $HB_PID)"
 elif [ "$ALIVE" -eq 0 ] && is_int "$HB_WALL" && [ $((NOW - HB_WALL)) -gt "$STALE_HB_S" ]; then
   page "heartbeat stale $((NOW - HB_WALL))s and no live holder (last pid $HB_PID)"
 fi
@@ -261,6 +285,7 @@ if [ "$ALIVE" -eq 1 ] && is_int "$HB_PROGRESS" && [ $((NOW - PROG_SEEN)) -ge "$S
     fi
     if [ -n "$why" ]; then
       log "KILL -TERM pid=$HB_PID: progress=$HB_PROGRESS unchanged ${stalled}s; $why"
+      KILLS="${KILLS:+$KILLS }$NOW@$(kill_key "$HB_PID" "$HB_LSTART")"
       "$KILL" -TERM "$HB_PID" >/dev/null 2>&1
       "$SLEEP" 10
       if holder_alive "$HB_PID" "$HB_LSTART"; then

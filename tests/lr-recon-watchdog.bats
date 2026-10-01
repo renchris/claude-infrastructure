@@ -33,6 +33,7 @@ setup() {
 
 teardown() {
   [ -n "${HOLDER:-}" ] && kill "$HOLDER" 2>/dev/null || true
+  [ -n "${HOLDER2:-}" ] && kill "$HOLDER2" 2>/dev/null || true
 }
 
 hb() {  # $1=pid $2=lstart $3=progress $4=wall $5=progress_wall
@@ -201,6 +202,54 @@ ticks_cpu() {  # $1=from $2=to $3=start cs $4=cs added per 30 s tick — progres
   tick $((T + 300))
   [ "$(wc -l < "$PLOG" | tr -d ' ')" -eq 1 ]
   [ ! -e "$KLOG" ]
+}
+
+wedge_and_kill() {  # $1=pid $2=lstart $3=first tick — progress frozen, CPU 0 (a real sleep): killed at +180
+  hb "$1" "$2" 7 "$3" "$3"
+  tick "$3"
+  tick $(($3 + 180))
+  grep -q "KILL -TERM pid=$1:" "$LR_RECON_ROOT/watchdog.log"
+}
+
+@test "W7d: two watchdog kills in 10 min page as kills, never as a crash loop" {
+  sleep 900 >/dev/null 2>&1 3>&- &
+  HOLDER2=$!
+  L2="$(TZ=UTC LC_ALL=C /bin/ps -o lstart= -p "$HOLDER2" | tr -s ' ' | sed 's/^ //; s/ $//')"
+  wedge_and_kill "$HOLDER" "$HOLDER_LSTART" "$T"
+  grep -q "^kills=$((T + 180))@${HOLDER}@" "$LR_RECON_ROOT/watchdog.state"
+  wedge_and_kill "$HOLDER2" "$L2" $((T + 210))  # KeepAlive's restart, which we then kill too
+  hb 999993 "$DEAD_LSTART" 1 $((T + 420)) $((T + 420))
+  tick $((T + 420))
+  kill "$HOLDER2" 2>/dev/null || true
+  [ "$(grep -c "restart after this watchdog's kill — not a crash" "$LR_RECON_ROOT/watchdog.log")" -eq 2 ]
+  grep -q '^pid_changes=$' "$LR_RECON_ROOT/watchdog.state"
+  ! grep -q 'crash loop' "$PLOG"
+  [ "$(wc -l < "$PLOG" | tr -d ' ')" -eq 1 ]
+  grep -q "watchdog killed 2 stalled holders within 10 min (now pid 999993)" "$PLOG"
+}
+
+@test "W7d: two watchdog kills more than 10 min apart page nothing" {
+  sleep 900 >/dev/null 2>&1 3>&- &
+  HOLDER2=$!
+  L2="$(TZ=UTC LC_ALL=C /bin/ps -o lstart= -p "$HOLDER2" | tr -s ' ' | sed 's/^ //; s/ $//')"
+  wedge_and_kill "$HOLDER" "$HOLDER_LSTART" "$T"
+  wedge_and_kill "$HOLDER2" "$L2" $((T + 630))  # killed at T+810, 630 s after the first
+  hb 999993 "$DEAD_LSTART" 1 $((T + 840)) $((T + 840))
+  tick $((T + 840))
+  kill "$HOLDER2" 2>/dev/null || true
+  [ ! -e "$PLOG" ]
+}
+
+@test "W7d: an external restart after a watchdog kill still counts, so the next one is a crash loop" {
+  wedge_and_kill "$HOLDER" "$HOLDER_LSTART" "$T"
+  hb 999991 "$DEAD_LSTART" 1 $((T + 210)) $((T + 210))
+  tick $((T + 210))  # ours: the restart after the kill
+  hb 999992 "$DEAD_LSTART" 1 $((T + 240)) $((T + 240))
+  tick $((T + 240))  # external #1
+  [ ! -e "$PLOG" ]
+  hb 999993 "$DEAD_LSTART" 1 $((T + 270)) $((T + 270))
+  tick $((T + 270))  # external #2
+  grep -q "crash loop — holder pid changed 2 times" "$PLOG"
 }
 
 @test "two restarts more than 10 min apart are not a crash loop" {
