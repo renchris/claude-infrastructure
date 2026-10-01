@@ -65,6 +65,7 @@ RCY_HELD_SUB = {
     "focused": "HOLD-FOCUS",
     "team": "HELD:team",
     "busy": "HOLD-COMPOSER",  # mid-turn: re-probed through the precheck
+    "unreachable": "HOLD-COMPOSER",  # composer unreadable (not a draft): re-probed the same way
 }
 # handoff-fire's hf_recycle_hold line: held after the confirm, and whether the unconfirm undid it
 _RCY_HELD = re.compile(

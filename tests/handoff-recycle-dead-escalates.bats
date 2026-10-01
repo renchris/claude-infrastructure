@@ -88,11 +88,14 @@ alarms() { cat "$CC_HANDOFF_ALARM_DIR"/* 2>/dev/null; }
   echo "$output" | grep -q 'HANDOFF-RECYCLE-DEAD'
 }
 
-@test "the alarm states the CONSEQUENCE: the pane now holds no claude and work is stranded" {
+@test "the alarm states the CONSEQUENCE it can support: work may be stranded — and for an unread pane, NOT 'holds NO claude'" {
+  # Amended 2026-10-01 (husk panes, root cause 9): this used to require 'holds NO claude' for the
+  # `unknown` verdict this suite drives — the very overclaim the abstention test below forbids.
+  # The definite claim now belongs to the `shell` verdict only (tests/handoff-recycle-messages.bats).
   drive_dead || true
   run alarms
-  echo "$output" | grep -qi 'holds NO claude'
   echo "$output" | grep -qi 'stranded'
+  [[ "$output" != *"holds NO claude"* ]] || false
 }
 
 @test "an 'unknown' verdict is reported as an ABSTENTION, never as 'no shell appeared'" {

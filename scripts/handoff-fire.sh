@@ -2993,8 +2993,9 @@ hf_recycle_last_read() { # → 0 every read clean · 1 refused (HF_LR_REASON, HF
     return 1
   fi
   rc=0; c="$(recycle_composer_gate "$RCY_IT2" "$SID" 0 1)" || rc=$?
+  # rc 2 is an UNREADABLE composer, not a draft — see rcy_composer_unreadable. It still refuses.
+  if [ "$rc" = 2 ]; then HF_LR_REASON=unreachable; HF_LR_WHAT="composer UNREADABLE (no box could be read)"; return 1; fi
   if [ "$rc" != 0 ]; then
-    [ "$rc" = 2 ] && c="<unreadable>"
     HF_LR_REASON=draft; HF_LR_WHAT="composer: $c"; return 1
   fi
   [ "${RCY_REMOTE:-0}" = 1 ] || return 0
@@ -3655,6 +3656,26 @@ recycle_composer_gate() { # $1=it2-bin $2=sid $3=max-wait-s $4=interval-s
     fi
     /bin/sleep "$ivl"; t=$((t + ivl))
   done
+}
+
+# UNREADABLE IS NOT A DRAFT (husk panes 2026-09-30, root cause 9). Both composer reads before a
+# recycle's /exit (the bounded gate, and the freshness re-read right before the keystroke) used to
+# fold recycle_composer_gate's rc 2 — no box could be read for the whole wait — into rc 1, emit
+# `recycle-held-draft` with the literal `<unreadable>` as the "draft", and tell the operator to send
+# or clear it. Pane 3 at 02:36:07Z was logged that way while kitty's socket was stalled: the reader
+# goes looking for operator text that does not exist. The refusal itself is right (typing /exit needs
+# a composer PROVEN empty); only its name and its advice were wrong. It is a pane read that did not
+# answer, so it gets its own class, `recycle-held-unreachable`, and a message that says so.
+rcy_composer_unreadable() { # $1=gate|fresh — emits the row and the refusal (stderr); the caller exits
+  case "${1:-gate}" in
+    fresh)
+      emit_recycle_event recycle-held-unreachable "" "$SID" "freshness re-read pre-/exit: composer UNREADABLE (no box could be read, so empty could not be proven)" || true
+      echo "!! recycle ABORTED at the last read: pane $SID's composer could not be READ between arming and /exit — that is not a draft, it is a pane read that did not answer. Nothing typed, watcher disarmed, session stays alive. Re-run: $CMD" >&2 ;;
+    *)
+      emit_recycle_event recycle-held-unreachable "" "$SID" "composer UNREADABLE for ${CC_RECYCLE_DRAFT_WAIT:-180}s — no box could be read, so empty could not be proven" || true
+      echo "!! recycle REFUSED after ${CC_RECYCLE_DRAFT_WAIT:-180}s: pane $SID's composer could not be READ (no box rendered, or the terminal did not answer) — typing /exit needs a composer proven empty. This is NOT a draft. Nothing was typed; the session stays alive. Re-run once the pane reads: $CMD" >&2 ;;
+  esac
+  return 0
 }
 
 # recycle_nudge_decision — what may the watcher's 60/150/300s checkpoint DO, decided from the
@@ -4952,6 +4973,23 @@ $group
 EOF
   [ "$shells" -gt 0 ] || { printf 'unknown'; return 0; }
   printf 'shell'
+}
+
+# THE RECYCLE-DEAD SENTENCE FOLLOWS ITS OWN VERDICT (husk panes 2026-09-30, root cause 9). The
+# terminal recycle-dead alarm used to assert "the /exit landed … this pane now holds NO claude"
+# whatever pane_cc_state had just read — including `cc`, where the probe had found claude STILL
+# RUNNING. An operator handed that line goes hunting for stranded work while the old session sits
+# alive in the pane, and may type a relaunch over it. Three verdicts, three different claims:
+#   cc       the /exit did NOT land: a live session still holds the pane, nothing is stranded yet
+#   shell    the /exit landed and a shell is there; only the relaunch is missing
+#   unknown  an ABSTENTION — the probe could not read the pane (pane_cc_state's seven branches)
+rcy_dead_claim() { # $1=verdict (cc|shell|unknown|…) $2=seconds waited $3=relaunch line → the claim on stdout
+  local v="${1:-unknown}" w="${2:-?}" cmd="${3:-<relaunch line unavailable>}"
+  case "$v" in
+    cc)    printf '%s' "the /exit did NOT land: claude is STILL RUNNING in this pane (probe verdict after ${w}s: cc), so no relaunch was typed and nothing is stranded yet — the old session is alive and holding the pane. Look at it before re-running the recycle; do NOT type the relaunch over a live session." ;;
+    shell) printf '%s' "the /exit landed and the pane is back at a shell prompt (probe verdict after ${w}s: shell), but the watcher never confirmed that shell inside its window, so no relaunch was typed: this pane now holds NO claude and its work is stranded. Relaunch manually in that pane: $cmd" ;;
+    *)     printf '%s' "no relaunch was typed and this pane's work may be stranded. Probe verdict after ${w}s: $v (this is an ABSTENTION, not a finding: the probe could not read the pane, which does NOT establish that no shell appeared, nor that claude exited). Look at the pane first. Relaunch manually only if it is at a shell prompt: $cmd" ;;
+  esac
 }
 
 # ---- WILL THIS PANE SURVIVE ITS OWN /exit? (2026-08-26 — pane-32 recycle strand) ----------------
@@ -8715,7 +8753,9 @@ if [ "${1:-}" = "__recycle" ]; then
     # lookup-miss-is-not-absence). The refusal itself stays correct and stays fail-safe: typing a
     # relaunch onto a pane that might still hold a live session is the one outcome worse than a
     # stranded pane.
-    hf_alarm recycle-dead "$RSID" "${RCY_OLD_SID:-}" "" "HANDOFF-RECYCLE-DEAD:${rcy_bgwork_note}${rcy_bgwork_note:+ Otherwise:} pane $RSID — the /exit landed but no relaunch was typed, so this pane now holds NO claude and its work is stranded. Probe verdict after ${waited}s: $rcy_dead_verdict$([ "$rcy_dead_verdict" = unknown ] && printf '%s' ' (this is an ABSTENTION, not a finding: the probe could not read the pane, which does NOT establish that no shell appeared)'). Relaunch manually in that pane: $(cat "$CMDFILE")" || true
+    # The claim is chosen by the probe's own verdict — see rcy_dead_claim.
+    rcy_dead_claim="$(rcy_dead_claim "$rcy_dead_verdict" "$waited" "$(cat "$CMDFILE")")"
+    hf_alarm recycle-dead "$RSID" "${RCY_OLD_SID:-}" "" "HANDOFF-RECYCLE-DEAD:${rcy_bgwork_note}${rcy_bgwork_note:+ Otherwise:} pane $RSID — $rcy_dead_claim" || true
     # An `if`, not `[ … ] && echo …`. NOT for the errexit reason that suggests itself and that this
     # comment first claimed: measured on this file's own `set -euo pipefail`, a failing FIRST
     # command of an AND-OR list is exempt, so the compound form is equally safe today. It is an
@@ -8723,7 +8763,7 @@ if [ "${1:-}" = "__recycle" ]; then
     # careless `&& something_else` away from swallowing them — and because a reader should not
     # have to know that exemption to see that this line is conditional.
     if [ -n "$rcy_bgwork_note" ]; then echo "!!${rcy_bgwork_note}" >&2; fi
-    echo "!! pane $RSID never reached a CONFIRMED shell prompt in ${waited}s (probe verdict: $rcy_dead_verdict) — NOT typing onto an unconfirmed pane. Relaunch manually: $(cat "$CMDFILE")" >&2
+    echo "!! pane $RSID never reached a CONFIRMED shell prompt in ${waited}s (probe verdict: $rcy_dead_verdict) — NOT typing onto an unconfirmed pane. $rcy_dead_claim" >&2
     rcy_debt_settle
     exit 1
   fi
@@ -14806,7 +14846,7 @@ recycle_fire_commit() {
   if [ "$wrote" != 1 ] && [ -n "$rcy_debt_sid" ]; then
     _hf_resume_debt abandon --sid "$rcy_debt_sid" --why "exit never typed; session untouched"
   fi
-  [ "$wrote" = 1 ] || { hf_recycle_unconfirm; hf_recycle_disarm; echo "!! recycle: could not type /exit into $SID — every transport tried failed 3x ($(as_write_transports)); watcher disarmed, session stays alive, unconfirm rc $RCY_UNCONFIRM_RC" >&2; exit 1; }
+  [ "$wrote" = 1 ] || { hf_recycle_unconfirm; hf_recycle_disarm; emit_recycle_event recycle-aborted "" "$SID" "could not type /exit — every transport failed 3x; watcher disarmed, unconfirm rc $RCY_UNCONFIRM_RC" || true; echo "!! recycle: could not type /exit into $SID — every transport tried failed 3x ($(as_write_transports)); watcher disarmed, session stays alive, unconfirm rc $RCY_UNCONFIRM_RC" >&2; exit 1; }
   return 0
 }
 
@@ -14860,10 +14900,12 @@ recycle_fire() {
   # that sweep's -name globs match. mktemp takes a TRAILING XXXXXX only — a `-XXXXXX.sh` template
   # is a literal constant name on BSD mktemp — so mint first and add the suffix after.
   cmdfile="$(mktemp "${TMPDIR:-/tmp}/handoff-recycle-cmd-$SID-$ts-XXXXXX")" \
-    || { echo "!! recycle: could not mint a command file in a secure temp dir" >&2; exit 1; }
+    || { emit_recycle_event recycle-aborted "" "$SID" "could not mint a command file in a secure temp dir" || true
+         echo "!! recycle: could not mint a command file in a secure temp dir" >&2; exit 1; }
   mv "$cmdfile" "$cmdfile.sh" && cmdfile="$cmdfile.sh"
   log="$(mktemp "${TMPDIR:-/tmp}/handoff-recycle-$SID-$ts-XXXXXX")" \
-    || { echo "!! recycle: could not mint a watcher log in a secure temp dir" >&2; exit 1; }
+    || { emit_recycle_event recycle-aborted "" "$SID" "could not mint a watcher log in a secure temp dir" || true
+         echo "!! recycle: could not mint a watcher log in a secure temp dir" >&2; exit 1; }
   mv "$log" "$log.log" && log="$log.log"
   printf '%s\n' "$CMD" > "$cmdfile"
   # Same reason as the self-close arm: pin the ANCESTRY verdict before the pane→tty query, or a
@@ -14880,10 +14922,12 @@ recycle_fire() {
   tty="$(as_tty_classified "$SID")" || tty_rc=$?
   case "$tty_rc" in
     0) : ;;
-    3) { echo "!! recycle ABORTED (resolver CANNOT TELL): the pane→tty resolver never answered for session $SID — ${HANDOFF_TTY_RETRIES:-5} attempt(s), every one a FAILED query. This says nothing about the pane; it is almost certainly still here (you are running inside it)."
+    3) emit_recycle_event recycle-held-unreachable "" "$SID" "pane→tty resolver never answered (${HANDOFF_TTY_RETRIES:-5} failed queries) — the terminal API is unresponsive, the pane is not known to be gone" || true
+       { echo "!! recycle ABORTED (resolver CANNOT TELL): the pane→tty resolver never answered for session $SID — ${HANDOFF_TTY_RETRIES:-5} attempt(s), every one a FAILED query. This says nothing about the pane; it is almost certainly still here (you are running inside it)."
          echo "!!   recover: retry once the terminal API answers again. Nothing was typed and nothing was closed."
        } >&2; exit 1 ;;
-    *) echo "!! recycle: session $SID not found in iTerm2" >&2; exit 1 ;;
+    *) emit_recycle_event recycle-refused-no-pane "" "$SID" "pane→tty resolver answered: no such session" || true
+       echo "!! recycle: session $SID not found in iTerm2" >&2; exit 1 ;;
   esac
   # THE 2026-08-06 INCIDENT'S OWN LINE. This was `! ps -o comm= -t <tty> | grep -qE 'node|claude'`,
   # and it TYPED on that negative — so a CC launched under `expect` (the standard resume path, whose
@@ -14915,7 +14959,9 @@ recycle_fire() {
     shell)
       # POSITIVELY confirmed at a shell prompt: nothing to /exit — type the relaunch right now.
       it2_type_verified "$HOME/.claude/bin/it2" "$SID" "$CMD" \
-        || { echo "!! recycle: it2 verified-type into $SID failed — run manually: $CMD" >&2; exit 1; }
+        || { emit_recycle_event recycle-relaunch-failed "" "$SID" "pane CONFIRMED shell-only, but the verified type of the relaunch failed" || true
+             echo "!! recycle: it2 verified-type into $SID failed — run manually: $CMD" >&2; exit 1; }
+      emit_recycle_event recycle-relaunched-shell "" "$SID" "pane CONFIRMED shell-only (no CC to exit): relaunch typed and read back" || true
       echo "→ recycled (pane CONFIRMED shell-only — no CC to exit): typed relaunch into $SID"
       return 0 ;;
     *)
@@ -14923,6 +14969,7 @@ recycle_fire() {
       # The two outcomes MUST stay distinguishable in the output: on 2026-08-06 this path printed
       # "→ recycled (no CC was running)" while the operator was demonstrably working in that pane,
       # so the mis-fire was reported as a SUCCESS and nothing in the log contradicted it.
+      emit_recycle_event recycle-refused-unconfirmed "" "$SID" "could not positively confirm what runs in the pane (tty $tty, probe verdict: $rcy_state)" || true
       echo "!! recycle REFUSED: could not positively confirm what is running in pane $SID (tty $tty) — probe verdict: $rcy_state." >&2
       echo "!!   Nothing was typed. Typing on an unconfirmed pane is exactly what put a shell command into a live Claude composer on 2026-08-06." >&2
       echo "!!   If a session is running there, /exit it yourself and re-run --recycle. If the pane is at a shell prompt, run: $CMD" >&2
@@ -14969,8 +15016,11 @@ recycle_fire() {
         emit_recycle_event recycle-held-draft "" "$SID" "own-residue scrub FAILED (rc $rcy_scrub_rc) over '${rcy_cg_c}'" || true
       fi
     fi
+    if [ "$rcy_cg_rc" = 2 ]; then
+      rcy_composer_unreadable gate
+      exit 1
+    fi
     if [ "$rcy_cg_rc" != 0 ]; then
-      [ "$rcy_cg_rc" = 2 ] && rcy_cg_c="<unreadable>"
       emit_recycle_event recycle-held-draft "" "$SID" "composer non-empty for ${CC_RECYCLE_DRAFT_WAIT:-180}s: ${rcy_cg_c}" || true
       # AND THE DESK HEARS IT (item 1ea55b6ad9f3). The line below pages the BLOCKED pane — i.e. the
       # victim — and the stderr above reaches only the process that refused, which on a self-recycle
@@ -15142,6 +15192,7 @@ recycle_fire() {
   WATCHER_PID="$(detach "$log" "$0" __recycle "$SID" "$tty" "$cmdfile" "$LAUNCH_DIR" "$rcy_old_sid" "$RECYCLE_MARKER" "$FIRE_GOAL" "${PROMPT_FILE_ORIG:-$PROMPT_FILE}" "$RESUME_CFG" "${RESUME_LAUNCHER:+${RCY_SOURCE_SESSION:-$rcy_old_sid}}" "$RCY_T0" "$RCY_SRC_TX" "$RCY_RUN_DIR_ARG" "$RCY_SUBMIT_TOKEN_ARG" "$RCY_CALLER_PID_ARG")"
   if ! await_armed "$log"; then
     hf_recycle_disarm
+    emit_recycle_event recycle-aborted "" "$SID" "watcher heartbeat never appeared ($log)" || true
     echo "!! recycle ABORTED: watcher heartbeat never appeared ($log) — /exit NOT typed, session stays alive. Run manually: $CMD" >&2
     exit 1
   fi
@@ -15173,6 +15224,10 @@ recycle_fire() {
   RCY_PP=0; await_pane_proof "$log" || RCY_PP=$?
   if [ "$RCY_PP" != 0 ]; then
     hf_recycle_disarm
+    case "$RCY_PP" in
+      1) emit_recycle_event recycle-refused-unreachable "" "$SID" "the watcher's pane probe answered: pane not enumerated (see $log)" || true ;;
+      *) emit_recycle_event recycle-held-unreachable "" "$SID" "the watcher returned no pane verdict inside the window (stalled probe; see $log)" || true ;;
+    esac
     if [ "$RCY_PP" = 2 ]; then
       echo "!! recycle ABORTED: the watcher returned NO pane verdict for $SID inside the window — it neither reached the pane nor said it could not. That is a STALLED probe, not a refused one; $log names the transport it selected. /exit NOT typed, session stays alive. Run manually: $CMD" >&2
     else
@@ -15191,8 +15246,12 @@ recycle_fire() {
   if [ "${CC_RECYCLE_COMPOSER_GATE:-on}" != off ]; then
     rcy_cg_c=""; rcy_cg_rc=0
     rcy_cg_c="$(recycle_composer_gate "$RCY_IT2" "$SID" 0 1)" || rcy_cg_rc=$?
+    if [ "$rcy_cg_rc" = 2 ]; then
+      hf_recycle_disarm
+      rcy_composer_unreadable fresh
+      exit 1
+    fi
     if [ "$rcy_cg_rc" != 0 ]; then
-      [ "$rcy_cg_rc" = 2 ] && rcy_cg_c="<unreadable>"
       hf_recycle_disarm
       emit_recycle_event recycle-held-draft "" "$SID" "freshness re-read pre-/exit: ${rcy_cg_c}" || true
       echo "!! recycle ABORTED at the last read: composer became non-empty ('${rcy_cg_c}') between arming and /exit — nothing typed, watcher disarmed, session stays alive. Re-run: $CMD" >&2
