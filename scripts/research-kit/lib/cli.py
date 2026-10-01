@@ -7,7 +7,7 @@ One argparse parser; each module below adds its own verbs through `add_verbs(sub
   cli_core     index frame estimate forecast gate freeze trace reconcile lint verdict pending
                menu budget ceiling reopen                                   (item 9, state)
   cli_records  census premise source decision concern park triage
-                                                                            (item 9 records)
+               (triage writes activities.json through lib/activities.py)    (item 9 records)
   cli_probe    probe doctor self-test                                       (item 10)
   cli_cert     round frame-critique rehearse slots open-round slot raters check-round (item 11)
   cli_jobs     job sweep|freshness|triage|drift|market, run by jobs/research-job.sh (item 12)
