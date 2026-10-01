@@ -70,6 +70,38 @@ marker() { printf '{"ts":"%s","session_id":"%s","error":"rate_limit"}\n' "$2" "$
   [[ "$output" == *"census misses 1 (cccccccc)"* ]] || { echo "$output"; false; }
 }
 
+# Lead ruling 2026-10-01 (W5b2, live case 9c4a2015): a found sid is "not owed" only on the LEGACY
+# side's own evidence (every run found no pane and moved nothing), confirmed by the daemon's
+# dead-before-claim; it is counted visibly, never dropped.
+legacy_nopane() { printf '%s\t-\t?\tnext2\tnext4\trecycle-in-place/%s\t-\t%s\n' "$1" "$2" "$3" >> "$LR/fleet/one-x/results.tsv"; }
+dead_ev() { printf '{"t":1790654500,"ev":"stale","sid":"%s","record_id":"","detail":"NOT_NEEDED dead-before-claim"}\n' "$1" >> "$LR/recon/events.jsonl"; }
+
+@test "a dead, paneless session legacy merely tried ⇒ not owed (counted, shown), no miss, PASS" {
+  req "$SIDC"; legacy_nopane "$SIDC" HELD:unknown 2026-09-29T04:20:00Z; dead_ev "$SIDC"
+  archive
+  run /usr/bin/python3 "$L" compare "$LR" "$CID" --home "$HOME"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"census misses 0 · not owed 1 (cccccccc)"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"not owed (not a miss): cccccccc"* ]] || { echo "$output"; false; }
+}
+
+@test "legacy saw a pane for it ⇒ still a census miss although the daemon says dead-before-claim" {
+  req "$SIDC"; legacy_nopane "$SIDC" HELD:unknown 2026-09-29T04:20:00Z; dead_ev "$SIDC"
+  legacy "$SIDC" next4 HELD:unknown 2026-09-29T04:21:00Z
+  archive
+  run /usr/bin/python3 "$L" compare "$LR" "$CID" --home "$HOME"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"census misses 1 (cccccccc) · not owed 0"* ]] || { echo "$output"; false; }
+}
+
+@test "paneless in legacy but the daemon never judged it dead ⇒ still a census miss" {
+  req "$SIDC"; legacy_nopane "$SIDC" HELD:unknown 2026-09-29T04:20:00Z
+  archive
+  run /usr/bin/python3 "$L" compare "$LR" "$CID" --home "$HOME"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"census misses 1 (cccccccc) · not owed 0"* ]] || { echo "$output"; false; }
+}
+
 @test "a placement onto an account a fact blocked at plan time ⇒ INFEASIBLE, FAIL" {
   printf '{"acct":"next4","scope":"5h","status":"rejected","window":"five_hour","resets_at":1790670000,"observed_at":1790654000,"src":"hook"}' \
     > "$LR/recon/facts/next4.5h.json"

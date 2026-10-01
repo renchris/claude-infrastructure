@@ -323,6 +323,60 @@ def _legacy_outcome(lr: str, sid: str, since: float) -> Optional[Dict[str, Any]]
     return best
 
 
+# Legacy verdicts that moved nothing (lr-fleet's MECHANISM/VERDICT column, after the "/").
+_NOT_MOVED = ("HELD", "NOTMOVED", "NOT_NEEDED")
+
+
+def _legacy_paneless(lr: str, sid: str, since: float) -> Optional[Dict[str, Any]]:
+    """The legacy side's own evidence that a found sid was owed nothing: it ran for the sid, and
+    EVERY run it made in the window found no pane (PANE→ "-") and moved nothing. One run that saw a
+    pane, or one that moved the session, keeps the sid a miss. Lead ruling 2026-10-01 (W5b2): the
+    daemon's verdict may confirm this but never decide it."""
+    rows = []
+    for p in glob.glob(os.path.join(lr, "fleet", "*", "results.tsv")):
+        try:
+            with open(p, encoding="utf-8", errors="replace") as fh:
+                ts_rows = [ln.rstrip("\n").split("\t") for ln in fh]
+        except OSError:
+            continue
+        for t in ts_rows:
+            if len(t) < 8 or t[0] != sid:
+                continue
+            ts = _epoch(t[7])
+            if ts is None or ts < since:
+                continue
+            rows.append(
+                {
+                    "pane": t[1],
+                    "verdict": t[5].split("/")[-1],
+                    "run": os.path.basename(os.path.dirname(p)),
+                }
+            )
+    if not rows or any(
+        r["pane"] != "-" or not r["verdict"].startswith(_NOT_MOVED) for r in rows
+    ):
+        return None
+    return rows[-1]
+
+
+def _daemon_dead(lr: str, sids: Set[str], lo: float, hi: float) -> Set[str]:
+    """The sids the daemon itself judged dead before any claim, inside the cohort window."""
+    out: Set[str] = set()
+    if not sids:
+        return out
+    for r in _jsonl(os.path.join(lr, "recon", "events.jsonl")):
+        if r.get("sid") not in sids or r.get("ev") != "stale":
+            continue
+        t = _epoch(r.get("t"))
+        if (
+            t is not None
+            and lo <= t <= hi
+            and str(r.get("detail", "")).startswith("NOT_NEEDED dead-before-claim")
+        ):
+            out.add(r["sid"])
+    return out
+
+
 def _watcher_truth(home: str, sid: str, since: float) -> str:
     rows = [
         r
@@ -399,8 +453,22 @@ def compare(lr: str, cid: str, home: str) -> int:
         except (OSError, ValueError):
             continue
         other[r.get("sid")] = r.get("cohort_id")
-    misses = sorted(s for s in found if s not in members and not other.get(s))
+    unfiled = sorted(s for s in found if s not in members and not other.get(s))
     elsewhere = sorted(s for s in found if s not in members and other.get(s))
+    # a dead, paneless session legacy merely tried is owed nothing: shown as its own count, never
+    # dropped, so a regression that marks a LIVE session dead still surfaces (lead ruling W5b2)
+    dead = _daemon_dead(
+        lr,
+        set(unfiled),
+        since,
+        float(coh.get("closed_at") or time.time()) + 600,
+    )
+    not_owed: Dict[str, Dict[str, Any]] = {}
+    for s in unfiled:
+        ev = _legacy_paneless(lr, s, since)
+        if ev is not None and s in dead:
+            not_owed[s] = ev
+    misses = [s for s in unfiled if s not in not_owed]
     # 3. phase agreement on legacy-recovered sids
     agree = judged = false_rec = differed = 0
     for sid in sorted(found | set(members)):
@@ -445,7 +513,8 @@ def compare(lr: str, cid: str, home: str) -> int:
         )
     passed = feasible == placed and not misses and agree + differed == judged
     print(
-        "SHADOW %s: members %d · legacy found %d · census misses %d%s · placements feasible %d/%d · "
+        "SHADOW %s: members %d · legacy found %d · census misses %d%s · not owed %d%s · "
+        "placements feasible %d/%d · "
         "phase agree %d/%d (false-RECOVERED resolved %d, plan differed %d) → %s"
         % (
             cid,
@@ -453,6 +522,8 @@ def compare(lr: str, cid: str, home: str) -> int:
             len(found),
             len(misses),
             " (%s)" % ",".join(s[:8] for s in misses) if misses else "",
+            len(not_owed),
+            " (%s)" % ",".join(s[:8] for s in sorted(not_owed)) if not_owed else "",
             feasible,
             placed,
             agree,
@@ -480,6 +551,12 @@ def compare(lr: str, cid: str, home: str) -> int:
             "  filed in another cohort (not a miss): %s"
             % ", ".join("%s→%s" % (s[:8], other[s]) for s in elsewhere)
         )
+    for s in sorted(not_owed):
+        print(
+            "  not owed (not a miss): %s — legacy run %s found no pane and moved nothing (%s); "
+            "the daemon judged it NOT_NEEDED dead-before-claim"
+            % (s[:8], not_owed[s]["run"], not_owed[s]["verdict"])
+        )
     print("\n".join(lines))
     out = os.path.join(lr, "shadow-archive", cid)
     if os.path.isdir(out):
@@ -490,6 +567,7 @@ def compare(lr: str, cid: str, home: str) -> int:
                     "members": members,
                     "legacy_found": sorted(found),
                     "misses": misses,
+                    "not_owed": sorted(not_owed),
                     "placed": placed,
                     "feasible": feasible,
                     "judged": judged,
