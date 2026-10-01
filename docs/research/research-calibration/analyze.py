@@ -91,6 +91,9 @@ def extract(C, wfdir):
             d["audit"] = v["audits"]
     os.makedirs(os.path.join(C, "replay", "triage"), exist_ok=True)
     for plan, d in per.items():
+        # the journal can hold a stopped run and its resume; keep one verdict and one rating per item
+        d["verdicts"] = list({v["iid"]: v for v in d["verdicts"]}.values())
+        d["ratings2"] = list({r["iid"]: r for r in d["ratings2"]}.values())
         json.dump(
             d, open(os.path.join(C, "replay", "triage", plan + ".json"), "w"), indent=1
         )
