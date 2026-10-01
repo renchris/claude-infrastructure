@@ -11045,7 +11045,9 @@ MSG
       exit 2
     fi
   fi
-  [ -n "$_sc_cmk" ] && _hf_custody return "$_sc_cmk" --why "$SC_LEDGER_STAMP"
+  # The discharge itself is NOT here any more: it runs in sc_commit_close_records, after the pane is
+  # proven (pane-lifecycle fixes item 3, below). Reading the marker here keeps the join key from the
+  # stamp exactly as the gates above left it.
   SC_LOG="/tmp/handoff-selfclose-$SC_SID-$(date +%s).log"
   if [ "$SC_DRY" = 1 ]; then
     echo "── dry run (self-close) ─────────────────────────"
@@ -11058,10 +11060,12 @@ MSG
         echo "successor: $SC_SUCCESSOR (tty $SUC_TTY — claude VERIFIED alive, UNPINNED: tty-only proof)"
       fi
       echo "roles:     repoint any cc-roles/* naming $SC_SID → $SC_SUCCESSOR (P0-15)"
+      echo "records:   closedAt + custody return${_sc_cmk:+ ($_sc_cmk)} written only after the pane proof (nothing written by a dry run)"
       echo "chain:     announce succession into successor (cc-notify) → arm watcher → FOREGROUND /exit (interrupts any in-flight turn, exits in seconds) → detached ps-poll ≤180s (CR nudge @60s) → T-0 re-verify the pinned successor session → it2 force-close pane → FOCUS successor"
     else
       echo "successor: none (--terminal: end-of-line, nothing continues this session's work)"
       echo "completion: push a program-terminal completion to the '${CC_COMPLETION_ROLE:-desk}' role via completion-push (F5 / T-P2-1) — VERIFIED-or-LOUD, never silent"
+      echo "records:   closedAt + custody return${_sc_cmk:+ ($_sc_cmk)} written only after the pane proof (nothing written by a dry run)"
       # The bound is named in the PLAN, not just in the failure message: "can this close hang?" is the
       # question a --dry-run is read to answer, and before this it could only be answered by grepping
       # the source. Every disable path renders as the word `unbounded`, EXPLICITLY — `${x:-unbounded}`
@@ -11102,10 +11106,24 @@ MSG
   if [ -n "$SC_SUCCESSOR" ]; then SC_KIND="successor"
   elif [ "$SC_ORIGIN_CLASS" = "assignee" ]; then SC_KIND="orphan-assignee"
   else SC_KIND="terminal"; fi
-  record_close_succession "$FIRED_DIR" "$SC_SID" "$SC_KIND" "$SC_SUCCESSOR" "$MAIL_DISPOSITION"
-  { printf '%s close sid=%s kind=%s successor=%s mail=%s\n' \
-      "$(_iso_now)" "$SC_SID" "$SC_KIND" "${SC_SUCCESSOR:-none}" "$MAIL_DISPOSITION"
-  } >> "$SC_LOG" 2>/dev/null || true
+  # ── CLOSE RECORDS AFTER THE PROOF (pane-lifecycle fixes item 3, M10) ───────────────────────────
+  # closedAt (record_close_succession) and the originator's custody return used to be written HERE and
+  # above, before the arm loop below — which can still abort with /exit never typed. Pane 32
+  # (2026-10-01): its stamp carried closedAt 02:25:07Z and custody `w1-land-truth` read `return` at
+  # 02:23:24Z while the pane stayed open, so the originator was told its peer had retired, and
+  # hf_pane_agent_owned read the live pane as no longer agent-owned. They now run in one place, only
+  # once the pane is PROVEN: on the confirmed-shell branch, and after the arm loop breaks on a proof.
+  # Still before /exit is typed, so the record is durable before the pane can evaporate (R10). An
+  # aborted close leaves the stamp `valid`, so a retry passes the gate without the spent-stamp arm.
+  # It also means `--dry-run` no longer discharges custody: the old return ran above the dry-run exit.
+  sc_commit_close_records() {
+    [ -n "$_sc_cmk" ] && _hf_custody return "$_sc_cmk" --why "$SC_LEDGER_STAMP"
+    record_close_succession "$FIRED_DIR" "$SC_SID" "$SC_KIND" "$SC_SUCCESSOR" "$MAIL_DISPOSITION"
+    { printf '%s close sid=%s kind=%s successor=%s mail=%s\n' \
+        "$(_iso_now)" "$SC_SID" "$SC_KIND" "${SC_SUCCESSOR:-none}" "$MAIL_DISPOSITION"
+    } >> "$SC_LOG" 2>/dev/null || true
+    return 0
+  }
   # T-P2-1 (F5 / G-P2-1): a --terminal close is a PROGRAM-TERMINAL completion — nothing continues this
   # session's work — so push it to the desk via completion-push (F5 → cc-announce F1). Until this caller
   # NOTHING fired completion-push (it was DEAD in the loop, p02 §2c): a terminal event reached the desk
@@ -11207,6 +11225,7 @@ MSG
     # exit gracefully — the watcher closes the pane directly.
     echo "→ pane $SC_TTY CONFIRMED at a shell prompt (no CC) — skipping /exit, closing pane directly" >&2
     pin_term_verdict_for_watcher
+    sc_commit_close_records
     detach "$SC_LOG" "$0" __selfclose "$SC_SID" "$SC_TTY" "$SC_SUCCESSOR" "$SUC_TTY" "$SUC_PIN" >/dev/null
   else
     pin_term_verdict_for_watcher
@@ -11253,6 +11272,7 @@ MSG
       exit 1
     fi
     done
+    sc_commit_close_records
     sc_noanswer_clear "$SC_PCQ_ROW"
     echo "→ self-close armed for $SC_SID: watcher pid $SC_WATCHER session-detached, heartbeat verified (log: $SC_LOG)"
     [ -n "$SC_SUCCESSOR" ] && echo "→ post-close: operator focus hands to successor $SC_SUCCESSOR" || echo "→ post-close: terminal (nothing continues this session's work)"
