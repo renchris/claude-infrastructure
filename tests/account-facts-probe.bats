@@ -50,5 +50,5 @@ ts_line() { printf '{"ts":"%s","acct":"%s","state":"%s","n_live":%s}\n' "$1" "$2
   printf '2026-09-21T09:00:00Z RESULT next attempt=1 exit=0 PROVEN — deadline moved\n' >> "$CC_RELOGIN_LOG"
   run python3 "$REPO/bin/cc-premise" sweep --record --close-falsified 5 --json
   [ "$(printf '%s' "$output" | jq -r '.closed_falsified')" = 1 ]
-  [ "$(bash "$REPO/bin/cc-backlog" list --all --json | jq -r --arg i "$id" '.[]|select(.id==$i)|.status')" = done ]
+  [ "$(bash "$REPO/bin/cc-backlog" list --all --json | jq -r --arg i "$id" '.[]|select(.id==$i)|.status')" = "done" ]
 }

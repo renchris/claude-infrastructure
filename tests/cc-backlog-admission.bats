@@ -173,7 +173,7 @@ nevents() { jq -c --arg e "$1" 'select(.event==$e)' "$GLOG" 2>/dev/null | grep -
   [[ "$output" == *"$a"* ]] || false
   run bash -c "cd '$HOME' && bash '$CB' add --title 'com.claude.desk-invariant crashed twice today' --project gatesuite"
   [ "$status" -eq 0 ]
-  bash "$CB" done "$a" --evidence "loaded"
+  bash "$CB" "done" "$a" --evidence "loaded"
   run bash -c "cd '$HOME' && bash '$CB' add --title 'Flip com.claude.desk-invariant from staged to run' --project gatesuite"
   [ "$status" -eq 0 ]
 }
@@ -199,9 +199,9 @@ nevents() { jq -c --arg e "$1" 'select(.event==$e)' "$GLOG" 2>/dev/null | grep -
   [ "$status" -eq 0 ]
   run bash "$CB" claim "$r" --by someone
   [ "$status" -eq 4 ]
-  bash "$CB" done "$m1" --evidence one
+  bash "$CB" "done" "$m1" --evidence one
   [ "$(bash "$CB" list --all --json | jq -r --arg i "$r" '.[]|select(.id==$i)|.status')" = open ]
-  bash "$CB" done "$m2" --evidence two
+  bash "$CB" "done" "$m2" --evidence two
   run bash -c "bash '$CB' list --all --json | jq -r --arg i '$r' '.[]|select(.id==\$i)|[.status,.closeKind,.closePointer]|join(\" \")'"
   [ "$output" = "done superseded $m2" ]
 }

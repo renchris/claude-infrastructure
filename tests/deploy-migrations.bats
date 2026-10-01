@@ -276,7 +276,7 @@ row_status() { bash "$REPO/bin/cc-backlog" list --all --json | jq -r --arg i "$1
   [ "$status" -eq 0 ]
   [ ! -f "$D/state/staged/0001-live-later.json" ]
   [ -f "$D/state/applied/0001-live-later.json" ]
-  [ "$(row_status "$bl")" = done ]
+  [ "$(row_status "$bl")" = "done" ]
   [[ "$(bash "$REPO/bin/cc-backlog" list --all --json | jq -r --arg i "$bl" '.[]|select(.id==$i)|.evidence')" == *"verdict=registered"* ]]
 }
 
@@ -297,7 +297,7 @@ row_status() { bash "$REPO/bin/cc-backlog" list --all --json | jq -r --arg i "$1
   run bash "$RUNNER" --migrate
   new="$(sed -n 's/.*"backlog":"\([0-9a-f]\{12\}\)".*/\1/p' "$D/state/staged/0001-live-later.json")"
   [ -n "$new" ] && [ "$new" != "$old" ] || false
-  [ "$(row_status "$old")" = done ]
+  [ "$(row_status "$old")" = "done" ]
   [ "$(row_status "$new")" = blocked ]
   [[ "$(bash "$REPO/bin/cc-backlog" list --all --json | jq -r --arg i "$new" '.[]|select(.id==$i)|.title')" == "run the fixture switch script"* ]]
 }

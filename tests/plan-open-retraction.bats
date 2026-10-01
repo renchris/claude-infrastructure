@@ -66,9 +66,9 @@ setup() {
   [ "$status" -eq 0 ]
   run bash "$CB" claim "$adv" --by w
   [ "$status" -eq 4 ]
-  bash "$CB" done "$w1" --evidence one
+  bash "$CB" "done" "$w1" --evidence one
   st() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)|.status'; }
   [ "$(st "$adv")" = open ]
-  bash "$CB" done "$w2" --evidence two
-  [ "$(st "$adv")" = done ]
+  bash "$CB" "done" "$w2" --evidence two
+  [ "$(st "$adv")" = "done" ]
 }
