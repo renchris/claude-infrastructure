@@ -44,9 +44,14 @@
 # otherwise (and UNKNOWN is resumed with --resume, because a session that cannot be shown done is
 # not done — memory: lookup-miss-is-not-absence). Only the session's ASSISTANT text counts as its
 # close: the CLAUDE.md attachment quotes "Good to close: no" too (root cause 7).
-# Three verdicts are NEVER resumed, --all included:
+# Four verdicts are NEVER resumed, --all included:
 #   TEAMMATE     the transcript carries "teamName" — a retired Agent Teams member; its lead owns it,
 #                and resuming it re-spawns a member nobody will shut down. Close the pane instead.
+#   COLLECTED    custody for this pane, opened since the session started, was discharged (return or
+#                abandon) by its originator (lib/pane-custody.sh): the work was finished elsewhere,
+#                and a resume would re-arm the session's /goal over it. Pane 55 (c82dd5b9) read
+#                UNKNOWN and would have been resumed (docs/research/husk-triage-2026-10-01.md § Gaps,
+#                item 3). Custody still OPEN changes nothing: the verdict stands.
 #   DUPLICATE    two husks resolved to ONE sid; at most one of them can be right, and typing the line
 #                into both puts two writers on one transcript
 #   TRANSPLANTED (below)
@@ -106,6 +111,19 @@ done <<<"$_hs_libs"
 # spelling for "a hard dependency is absent" (the jq check above); 3 is already the typed-yes abort.
 command -v lr_transplant_target >/dev/null 2>&1 || {
   echo "cc-husk-sweep: FATAL — lr-lib.sh (lr_transplant_target) not found beside $_HS_BIN" >&2
+  exit 2; }
+# lib/pane-custody.sh — the COLLECTED guard's reader, shared with the watchdog's CRASH banner. FATAL
+# for the same reason as lr-lib above: its only job is to PREVENT a resume. CC_HUSK_CUSTODY_LIB is a
+# seal like CC_HUSK_LR_LIB.
+if [ -n "${CC_HUSK_CUSTODY_LIB:-}" ]; then _hs_libs="$CC_HUSK_CUSTODY_LIB"
+else _hs_libs="$_HS_BIN/../lib/pane-custody.sh
+$HOME/.claude/lib/pane-custody.sh"; fi
+while IFS= read -r _hs_lib; do
+  # shellcheck disable=SC1090  # runtime-resolved library ladder, same shape as the lr-lib one above
+  [ -f "$_hs_lib" ] && { . "$_hs_lib"; break; }
+done <<<"$_hs_libs"
+command -v cc_pane_custody >/dev/null 2>&1 || {
+  echo "cc-husk-sweep: FATAL — lib/pane-custody.sh (cc_pane_custody) not found beside $_HS_BIN" >&2
   exit 2; }
 
 launcher_for_dir() {  # <config dir or account label> → launcher name
@@ -431,17 +449,21 @@ while IFS=$'\t' read -r pane pid cwd; do
   [ -z "$tcwd" ] || R_CWD="$tcwd"     # the session's own cwd, never the shell's
   work="$(work_of "$R_CWD")"
   v="$(verdict_of "$close" "$work")"
+  # COLLECTED (header): custody read live, keyed on this pane and dated by the session's first record
+  # so an earlier tenant of a reused pane id cannot speak for it. Only a discharge changes the verdict.
+  cust="$(cc_pane_custody "$pane" "$(cc_transcript_start_epoch "$R_TP")" 2>/dev/null || true)"
+  [ "${cust%%$'\t'*}" != collected ] || v=COLLECTED
   [ -z "$XPLANT" ] || v="TRANSPLANTED→$(acct_for_dir "$XPLANT")"
   ! is_teammate "$R_TP" || v=TEAMMATE
   rows="$rows$pane"$'\t'"$R_SID"$'\t'"$R_LAUNCHER"$'\t'"$death"$'\t'"$close"$'\t'"$work"$'\t'"$v"$'\t'"$R_CWD"$'\t'"$R_SRC"$'\n'
 done < <(printf '%s' "$PANES" | jq -r '.[] | [(.id // .uuid // ""), (.pid // 0), (.cwd // "")] | @tsv')
 
 # DUPLICATE: a sid two husks both claim. Applied before --pane narrows the output, and only over the
-# resumable verdicts — TEAMMATE and TRANSPLANTED already say "never" and say more.
+# resumable verdicts — TEAMMATE, TRANSPLANTED and COLLECTED already say "never" and say more.
 dups="$(printf '%s' "$rows" | awk -F'\t' '$2 != "-" { n[$2]++ } END { for (s in n) if (n[s] > 1) printf "%s ", s }')"
 rows="$(printf '%s' "$rows" | awk -F'\t' -v OFS='\t' -v dups="$dups" -v only="$ONLY" '
   BEGIN { k = split(dups, a, " "); for (i = 1; i <= k; i++) d[a[i]] = 1 }
-  { if (($2 in d) && $7 !~ /^(TRANSPLANTED|TEAMMATE)/) $7 = "DUPLICATE"
+  { if (($2 in d) && $7 !~ /^(TRANSPLANTED|TEAMMATE|COLLECTED)/) $7 = "DUPLICATE"
     if (only == "" || $1 == only) print }')"
 [ -z "$rows" ] || rows="$rows"$'\n'
 
@@ -454,8 +476,10 @@ else
   printf '%s' "$rows" | awk -F'\t' '
     $7 == "TEAMMATE"  { t = t " " $1 }
     $7 == "DUPLICATE" { d = d " " $1 }
+    $7 == "COLLECTED" { c = c " " $1 }
     END { if (t != "") print "TEAMMATE (panes" t "): a retired team member — never resumed; close the pane."
-          if (d != "") print "DUPLICATE (panes" d "): one sid, several panes — never resumed; at most one is right." }'
+          if (d != "") print "DUPLICATE (panes" d "): one sid, several panes — never resumed; at most one is right."
+          if (c != "") print "COLLECTED (panes" c "): its originator collected the work (custody returned or abandoned) — never resumed; close the pane." }'
 fi
 [ "$MODE" = resume ] || exit 0
 
@@ -465,8 +489,9 @@ while IFS=$'\t' read -r pane sid launcher death close work v cwd _; do
   # --all means "the DONE ones too", never "the ones that MOVED". A TRANSPLANTED session is live
   # work in another account's store; typing its resume line into this dead source pane is the
   # two-writers-one-transcript failure the gate above exists to prevent. DUPLICATE is the same
-  # failure from the other side, and a TEAMMATE belongs to its lead.
-  case "$v" in TRANSPLANTED*|DUPLICATE|TEAMMATE) continue ;; esac
+  # failure from the other side, a TEAMMATE belongs to its lead, and a COLLECTED session's work was
+  # finished by its originator — a resume would re-arm its /goal over it.
+  case "$v" in TRANSPLANTED*|DUPLICATE|TEAMMATE|COLLECTED) continue ;; esac
   if [ "$ALL" = 1 ] || [ "$v" != DONE ]; then plan="$plan$pane"$'\t'"$sid"$'\t'"$launcher"$'\t'"$cwd"$'\n'; fi
 done <<<"$rows"
 [ -n "$plan" ] || { echo "cc-husk-sweep: nothing to resume (every resolved husk is DONE or never-resumable; --all resumes the DONE ones)"; exit 0; }

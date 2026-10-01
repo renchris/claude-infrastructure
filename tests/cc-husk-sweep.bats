@@ -334,3 +334,49 @@ stub_lr_lib() { # <body of lr_transplant_target>
   [ "$status" -eq 0 ]
   [[ "$output" == *'"verdict":"TRANSPLANTED→next2"'* ]] || { echo "$output"; false; }
 }
+
+# ── custody (docs/research/husk-triage-2026-10-01.md § Gaps, item 3) ───────────────────────────────
+# Pane 55 (c82dd5b9) read UNKNOWN, and UNKNOWN is resumed — yet its orchestrator had collected the
+# work and abandoned its custody, so --resume would have re-armed a live /goal over finished work.
+custody_row() { # <kind> <ts> <targetPane>
+  mkdir -p "$CC_CUSTODY_DIR"
+  printf '{"ts":"%s","kind":"%s","cwd":"/orig","originatorPane":"38","targetPane":"%s","marker":"M55","slug":"w2-reso-review"}\n' "$2" "$1" "$3" >> "$CC_CUSTODY_DIR/k.jsonl"
+}
+
+@test "COLLECTED: a husk whose pane's custody was abandoned is never resumed, --all included" {
+  export CC_CUSTODY_DIR="$T/custody"
+  reg 10 "c82dd5b9-0000-0000-0000-000000000055" claude-tertiary "$CWD_A"
+  transcript "$T/.claude-tertiary" "$CWD_A" "c82dd5b9-0000-0000-0000-000000000055" none
+  run "$SWEEP" --json --pane 10
+  [[ "$output" == *'"verdict":"UNKNOWN"'* ]] || { echo "precondition: $output"; false; }
+  custody_row open 2026-10-01T00:35:50Z 10
+  run "$SWEEP" --json --pane 10
+  [[ "$output" == *'"verdict":"UNKNOWN"'* ]] || { echo "open custody changed the verdict: $output"; false; }
+  custody_row abandon 2026-10-01T03:59:28Z 10
+  run "$SWEEP" --json --pane 10
+  [[ "$output" == *'"verdict":"COLLECTED"'* ]] || { echo "$output"; false; }
+  run "$SWEEP" --pane 10
+  [[ "$output" == *"COLLECTED (panes 10): its originator collected the work"* ]] || { echo "$output"; false; }
+  run "$SWEEP" --resume --yes --pane 10
+  [[ "$output" == *"nothing to resume"* ]] || { echo "$output"; false; }
+  run "$SWEEP" --resume --yes --all --pane 10
+  [[ "$output" == *"nothing to resume"* ]] || { echo "$output"; false; }
+  [ ! -s "$CC_HUSK_IT2_LOG" ]
+}
+
+@test "COLLECTED keys on the pane: another pane's collected custody leaves this husk resumable" {
+  export CC_CUSTODY_DIR="$T/custody"
+  reg 10 "abababab-0000-0000-0000-000000000056" claude-tertiary "$CWD_A"
+  transcript "$T/.claude-tertiary" "$CWD_A" "abababab-0000-0000-0000-000000000056" no
+  custody_row open 2026-10-01T00:35:50Z 41
+  custody_row abandon 2026-10-01T03:59:28Z 41
+  run "$SWEEP" --json --pane 10
+  [[ "$output" == *'"verdict":"RESUME"'* ]] || { echo "$output"; false; }
+}
+
+@test "pane-custody lib unreachable is FATAL — a guard that PREVENTS a resume may not vanish quietly" {
+  export CC_HUSK_CUSTODY_LIB="$T/no-such-pane-custody.sh"
+  run "$SWEEP" --json --pane 10
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"pane-custody.sh"* ]] || { echo "$output"; false; }
+}
