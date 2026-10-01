@@ -21,7 +21,7 @@ import os
 import re
 from typing import Dict, List, Optional, Tuple
 
-from lr_recon import classify
+from lr_recon import classify, report
 from lr_recon import types as T
 from lr_recon.evidence import _same_cfg, transcript_path
 
@@ -299,8 +299,14 @@ def rebucket(
         rec.substate, rec.wait = new, None
     else:
         _hold(rec, new, now)
-        if new in ("HELD:team", "WAIT_RESET") and eta is not None and rec.wait is not None:
-            rec.wait.eta = eta  # the reset: the in-place wake and the page deadline key on it
+        if (
+            new in ("HELD:team", "WAIT_RESET")
+            and eta is not None
+            and rec.wait is not None
+        ):
+            rec.wait.eta = (
+                eta  # the reset: the in-place wake and the page deadline key on it
+            )
     return True
 
 
@@ -639,7 +645,10 @@ def engaged_elsewhere(rec: T.Record, snap: T.Snapshot, now: float) -> str:
     death was detected. Two holders stay with row 1 (split brain). The target counts as elsewhere
     until this attempt spawns a move of its own, because only that move's token proves anything
     there. An escalation is dropped, or the closed record would still page ESCALATED. Returns the
-    proof ('' = not settled)."""
+    proof ('' = not settled).
+
+    The same evidence with the holder under the SOURCE is the session answering where it died
+    (``_in_place``): one decision, so the two branches partition on where the holder runs."""
     s = snap.sessions.get(rec.sid)
     if rec.terminal is not None or s is None or len(s.holders) != 1:
         return ""
@@ -650,9 +659,10 @@ def engaged_elsewhere(rec: T.Record, snap: T.Snapshot, now: float) -> str:
         or ok <= (rec.timeline.detected or now)
         or h.bg
         or not h.cfg
-        or _same_cfg(h.cfg, rec.source_cfg)
     ):
         return ""
+    if _same_cfg(h.cfg, rec.source_cfg):
+        return _in_place(rec, h, ok, now)
     if rec.close.get("move_attempt") == rec.attempt and _same_cfg(
         h.cfg, rec.target_cfg
     ):
@@ -669,6 +679,41 @@ def engaged_elsewhere(rec: T.Record, snap: T.Snapshot, now: float) -> str:
         same_uuid=True,
     )
     proof = "engaged on %s, moved there by another recovery path" % acct
+    rec.terminal = T.Terminal(outcome="CLOSED", proof=proof, at=now)
+    return proof
+
+
+def _in_place(rec: T.Record, h: T.HolderObs, ok: float, now: float) -> str:
+    """W7f: a limited session answering again on its SOURCE, before any move of ours confirmed, has
+    nothing to recover: a nudge in place (legacy, a hand ``continue``), its own reset wake (D1.11,
+    D4.9), or a limit the account contradicted. The census never re-buckets it (its last record is a
+    healthy turn, so it reads WORKING and the census skips the record), so without this it sat
+    PRE-MOVE in its last hold forever: LAUNCHER-ROOTED paged RECON-DEFECT every pass, and DETECTED
+    was planned and moved by A, an /exit and relaunch of a working session (W5b2, 2026-10-01).
+    Past PRE-MOVE (a confirmed transplant, a typed /exit) the phase table owns it."""
+    if (
+        rec.kind != "limited"
+        or rec.phase != "PRE-MOVE"
+        or rec.substate == "IN-FLIGHT"
+        or rec.timeline.confirmed is not None
+        or rec.timeline.exit_typed_by_me is not None
+    ):
+        return ""
+    w = rec.wait
+    if w is not None and w.eta is not None and ok > w.eta:
+        proof = "continued in place after the reset at %s" % report._hm(w.eta)
+    else:
+        proof = "answered in place on %s after its limit: nothing to move" % (
+            rec.source_acct or "its source"
+        )
+    rec.substate, rec.wait, rec.escalated = None, None, False
+    rec.close.update(
+        via="IN-PLACE",
+        at=now,
+        pane=list(h.pane) if h.pane else None,
+        same_window=bool(rec.pane and h.pane and tuple(h.pane) == tuple(rec.pane)),
+        same_uuid=True,
+    )
     rec.terminal = T.Terminal(outcome="CLOSED", proof=proof, at=now)
     return proof
 

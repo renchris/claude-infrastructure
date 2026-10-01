@@ -345,7 +345,12 @@ class MainTests(unittest.TestCase):
 
     def test_a_fresh_turn_after_the_reset_closes_it_as_continued_in_place(self):
         ctx, snap, r = self._held()
-        snap.sessions[self.LEAD].transcript.last_assistant_ok_at = 1001.0
+        r.source_cfg, r.timeline.detected = "/nonexistent-cfg", 900.0
+        s = snap.sessions[self.LEAD]
+        s.transcript.last_assistant_ok_at, s.transcript.last = 1001.0, {"kind": "ok"}
+        M._derive(
+            ctx, snap, self._due()
+        )  # W7f: settle._in_place is the one owner of this close
         self.assertEqual(M._wakes(ctx, snap, {}, self._due()), 0)
         self.assertEqual(r.terminal.outcome, "CLOSED")
         self.assertIn("continued in place", r.terminal.proof)

@@ -302,17 +302,11 @@ WAKE_AFTER_S = (
 WAKE_SUBSTATES = ("WAIT_RESET", "HELD:team")
 
 
-def engaged_after(s: Optional[T.SessionObs], t: float) -> bool:
-    """lr_engaged_after's reading: a non-error assistant turn after ``t``."""
-    ok = s.transcript.last_assistant_ok_at if s is not None else None
-    return ok is not None and ok > t
-
-
 def _wakes(ctx: Ctx, snap: T.Snapshot, facts: Dict[str, T.Fact], now: float) -> int:
     """The in-place reset wake (D1.11 WAIT_RESET and --place's stay, D4.9 HELD:team). At the reset
     + 120 s + the sid's jitter (the stay: at once), a limited session is continued in its OWN pane:
     no /exit, no relaunch, no other account. A fresh turn after the reset closes it as continued in
-    place. The wake is paced per account (Admission.pace_wake); the focus gate, the composer read
+    place, in _derive (settle._in_place, the one owner of that close). The wake is paced per account (Admission.pace_wake); the focus gate, the composer read
     and the member re-check happen just before the keystroke (act.cmd_wake, may_actuate)."""
     n = 0
     for rec in ctx.records.values():
@@ -326,16 +320,7 @@ def _wakes(ctx: Ctx, snap: T.Snapshot, facts: Dict[str, T.Fact], now: float) -> 
             or w.eta is None
         ):
             continue
-        s = snap.sessions.get(rec.sid)
-        if engaged_after(s, w.eta):
-            rec.terminal = T.Terminal(
-                outcome="CLOSED",
-                proof="continued in place after the reset at %s" % report._hm(w.eta),
-                at=now,
-            )
-            rec.close["via"] = "IN-PLACE"
-            _event(ctx.paths, "wake-engaged", rec.sid, rec.record_id)
-            continue
+        # A fresh turn after the wake closed it IN-PLACE in _derive (settle._in_place), before here.
         stay = w.detail == "stay"
         if now < w.eta + (0.0 if stay else WAKE_AFTER_S + jitter_s(rec.sid)):
             continue
@@ -507,13 +492,18 @@ def _derive(
         if not rec.open:
             continue
         act.adopt(rec, snap)
+        was, assign_id = rec.substate, rec.assign_id or rec.record_id
         proof = (
             ""
             if act.live_procs(rec, snap)
             else settle.engaged_elsewhere(rec, snap, now)
         )
         if proof:
-            _event(ctx.paths, "engaged-elsewhere", rec.sid, rec.record_id, proof)
+            in_place = rec.close.get("via") == "IN-PLACE"
+            if in_place and was == "PLANNED":
+                plan.unassign(assign_id)  # answered before A ran: void its phantom seat
+            ev = "engaged-in-place" if in_place else "engaged-elsewhere"
+            _event(ctx.paths, ev, rec.sid, rec.record_id, proof)
             continue
         if rec.substate == "PARKED-REBOOT":
             continue  # the census owns the reboot park (census.park); the phase table defers
