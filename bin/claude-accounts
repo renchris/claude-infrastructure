@@ -1640,9 +1640,12 @@ def save_lastgood(ledger):
 
 
 def inherit_lastgood(row, ledger, prev):
-    """Merge an account's last-good quota into a quota-absent row for VISIBILITY ONLY.
-    NEVER touches row['error'] → _excluded() still bails on it, so the router excludes the row
-    exactly as before (no policy change). Absolute reset stamps are re-derived to *_reset_h at
+    """Merge an account's last-good quota into a quota-absent row — for VISIBILITY, with ONE
+    routing exception. NEVER touches row['error'] → _excluded() still bails on it, EXCEPT for a
+    429 poll-throttle whose inherited read is younger than THROTTLE_ADMIT_S (_throttle_admitted):
+    that one row routes on these percents. `lastgood_age_s` records the read's age at sweep time
+    for display; the admission recomputes it from `quota_as_of`, since a served cache ages.
+    Absolute reset stamps are re-derived to *_reset_h at
     read time, so a day-old ledger shows a correct (possibly already-elapsed) countdown, not a
     frozen one. Prefers the durable ledger; falls back to the ≤TTL in-memory `prev` snapshot
     (percent-only) for the window before the first good sweep populates the ledger. Returns True
@@ -1673,6 +1676,11 @@ def inherit_lastgood(row, ledger, prev):
         set_credits(row, e.get("credits_on"), e.get("credits_used"))
         row["stale_quota"] = True
         row["quota_as_of"] = e.get("quota_as_of")
+        row["lastgood_age_s"] = lastgood_age_s(row)
+        # A REJECTED wire verdict from the last good read rides along (never an `allowed` one —
+        # see the ledger write): it can only veto a throttle admission, never enable one.
+        if e.get("wire_rejects"):
+            row["lastgood_wire_rejects"] = list(e["wire_rejects"])
         return True
     pr = (prev or {}).get("rows", {}).get(row["acct"])
     if pr and pr.get("weekly_pct") is not None:
@@ -1690,8 +1698,18 @@ def inherit_lastgood(row, ledger, prev):
         row["quota_as_of"] = (
             pr.get("quota_as_of") if pr.get("stale_quota")
             else (datetime.fromtimestamp(ts, timezone.utc).isoformat() if ts else None))
+        row["lastgood_age_s"] = lastgood_age_s(row)
         return True
     return False
+
+
+def lastgood_age_s(row):
+    """Seconds since the row's inherited read (`quota_as_of`), NOW. None when undatable or dated
+    in the future — an age we cannot state is never young enough to route on."""
+    h = hrs_until(row.get("quota_as_of"))
+    if h is None or h * 3600.0 > K_SKEW_TOL_S:   # same 1 s rounding slack inherit_k allows
+        return None
+    return round(max(0.0, -h * 3600.0), 1)
 
 
 K_GRACE_S = 600           # same band as cache_grace_s — see inherit_k's docstring
@@ -1971,6 +1989,12 @@ def probe_account(cfg, acct, kc, k_live, ledger, prev, no_heal):
             "credits_used_usd": (eu.get("used_credits") or 0.0) / 100.0,
             "quota_as_of": datetime.now(timezone.utc).isoformat(),
         }
+        # …but a REJECTED verdict is stored, because replaying it fails in the safe direction: it
+        # can only stop a 429-throttled row from being admitted on these percents, never admit one.
+        rej = [win for win in ("5h", "7d")
+               if ((row.get("wire") or {}).get(f"{win}_status")) == "rejected"]
+        if rej:
+            entry["wire_rejects"] = rej
     return row, entry
 
 
@@ -3907,6 +3931,52 @@ def pace_line(rows):
     return "\n".join([head] + parts)
 
 
+# THROTTLE ADMISSION (backlog 1c20dc1e92db). A 429 from the usage endpoint is a poll throttle, never a
+# cap, yet `_excluded` returned the row's error first and dropped an account holding a minutes-old
+# good read. Measured over 1,643 throttle events (docs/research/quota-429-drift-2026-09-30/): the
+# quota moved p90 2pp between the last good read and the next one when that read was ≤ the 90 s
+# cache TTL old — under the 5pp rule — so such a row routes on its inherited percents. Every other
+# exclusion still applies on them, and a REJECTED wire verdict from that read still vetoes.
+# Default = the measured bound; 0 disables admission (the pre-change behaviour).
+THROTTLE_ADMIT_S_DEFAULT = 90.0
+_THROTTLE_ADMIT_LOGGED = set()
+
+
+def throttle_admit_s():
+    try:
+        v = float(os.environ.get("CLAUDE_ACCOUNTS_THROTTLE_ADMIT_S", THROTTLE_ADMIT_S_DEFAULT))
+    except ValueError:
+        return THROTTLE_ADMIT_S_DEFAULT
+    return v if v >= 0 and math.isfinite(v) else THROTTLE_ADMIT_S_DEFAULT
+
+
+def throttle_admissible(r):
+    """Pure predicate: may this poll-throttled row route on its inherited last-good percents?
+    Renderers call this one (no side effect); the router calls _throttle_admitted, which logs."""
+    if not r.get("poll_throttled") or not r.get("stale_quota"):
+        return False
+    if r.get("session_pct") is None or r.get("weekly_pct") is None:
+        return False
+    if r.get("lastgood_wire_rejects"):
+        return False
+    bound = throttle_admit_s()
+    age = lastgood_age_s(r)
+    return age is not None and 0 < bound and age <= bound
+
+
+def _throttle_admitted(r):
+    """throttle_admissible, plus one countable log line per account per invocation."""
+    if not throttle_admissible(r):
+        return False
+    bound, age = throttle_admit_s(), lastgood_age_s(r)
+    acct = r.get("acct")
+    if acct not in _THROTTLE_ADMIT_LOGGED:     # one line per account per invocation, countable
+        _THROTTLE_ADMIT_LOGGED.add(acct)
+        log_event(f"route {acct}: throttle-admitted — 429 poll-throttled, routing on last-good "
+                  f"read {age:.0f}s old (≤ {bound:.0f}s)")
+    return True
+
+
 def _excluded(r, R, cliff=True, k_of=None, recovery=False):
     """`k_of` selects the concurrency charge (default k_eff). The desk lane passes k_eff_desk so its
     own launcher phantom cannot lock it out of the account the operator is already in (W1.5); every
@@ -3916,7 +3986,7 @@ def _excluded(r, R, cliff=True, k_of=None, recovery=False):
 
     `recovery` adds the SURVIVAL floors (recovery_floors / U13). It defaults False, so every
     existing caller is byte-identical; it is a MODIFIER on the lanes, not a lane."""
-    if "error" in r:
+    if "error" in r and not _throttle_admitted(r):
         return r["error"]
     if r.get("session_pct") is None:
         return "no-session-data"
@@ -6209,13 +6279,16 @@ def render_table(rows, cfg, win, cached, prev=None):
                           + c(f" · {r['launcher']} → /login", GRAY, dim=True)
                           + c(f" · {r.get('email') or '-'} · Dia “{r.get('dia_profile') or '-'}”", GRAY, dim=True))
         if r.get("stale_quota"):
-            # The numbers on this row are historical AND the row is router-excluded (every
-            # inheritance path leaves row["error"] set, which _excluded() bails on). Say both
-            # — a number with no provenance reads as current.
+            # The numbers on this row are historical, and the row is router-excluded (every
+            # inheritance path leaves row["error"] set, which _excluded() bails on) UNLESS it is a
+            # 429 throttle with a young enough read (throttle_admissible). Say which — a number
+            # with no provenance reads as current, and a wrong "excluded" hides a candidate.
             asof = _fmt_asof(r.get("quota_as_of"))
+            routing = ("routed on it (429 throttle, read within the admit bound)"
+                       if throttle_admissible(r) else "excluded from routing")
             alerts.append(c("↻ ", AMBER)
                           + c(f"{r['acct']} showing LAST-KNOWN quota, not polled this sweep", AMBER)
-                          + c(f" · as of {asof or 'unknown'} · excluded from routing"
+                          + c(f" · as of {asof or 'unknown'} · {routing}"
                               " · --fresh to retry", GRAY, dim=True))
             if r.get("rolled_since"):
                 # The most actionable derived fact available for a stranded account: those
