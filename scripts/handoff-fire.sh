@@ -6033,6 +6033,61 @@ fired_marker_is_mine() { # $1=marker $2=self-pane → 0 proven mine / 1 not prov
   return 1
 }
 
+# fired_marker_owner — whose fire does a stamp's marker belong to? THREE answers, not two
+# (docs/research/selfclose-failures-2026-10-01.md M9). fired_marker_is_mine answers only "proven mine";
+# its rc 1 folds "proven a stranger's" together with "cannot tell", and only the first may demote a
+# stamp. Pane 10 is the case: its 10.json was a 09-16 stamp whose worktree is gone, so tenancy reads
+# `unknown`, the gate trusted it like `valid`, and a self-close would have written closedAt, the
+# announce and the custody discharge onto that stranger's record while pane 10's own 1369.json stayed
+# open forever.
+#   mine    — the marker is in this session's transcript, or a recycle predecessor's (a recycled peer's
+#             stamp keeps the ROOT fire's marker; its own brief carries a HANDOFF-RECYCLE-… instead)
+#   foreign — every transcript in the chain was read, the chain ends at a session that did NOT start
+#             from a recycle brief, and none of them carries the marker
+#   unknown — anything unresolvable: no sid, a missing transcript, a recycle brief whose predecessor
+#             cannot be joined (handoffs.jsonl rotates). Callers treat unknown exactly as before.
+fired_marker_owner() { # $1=marker $2=self-pane → echoes mine|foreign|unknown
+  local marker="${1:-}" pane="${2:-}" sid tj bts prev depth=0 brief
+  [ -n "$marker" ] && [ -n "$pane" ] || { printf 'unknown'; return 0; }
+  command -v jq >/dev/null 2>&1 || { printf 'unknown'; return 0; }
+  sid="$(cc_sid_for_pane "$pane")"
+  while :; do
+    [ -n "$sid" ] || { printf 'unknown'; return 0; }
+    tj="$(transcript_for_sid "$sid")"
+    [ -n "$tj" ] || { printf 'unknown'; return 0; }
+    grep -qF -- "$marker" "$tj" 2>/dev/null && { printf 'mine'; return 0; }
+    brief="$(jq -rc -s 'map(select(.type=="user" and (.isMeta != true))) | .[0] // empty
+              | (.message.content | if type=="string" then . else ([.[]? | select(.type=="text") | .text] | join("\n")) end)' \
+            "$tj" 2>/dev/null || true)"
+    case "$brief" in *HANDOFF-RECYCLE-*) ;; *) printf 'foreign'; return 0 ;; esac
+    depth=$((depth + 1)); [ "$depth" -le "${HF_RECYCLE_CHAIN_MAX:-8}" ] || { printf 'unknown'; return 0; }
+    bts="$(jq -r -s 'map(select(.type=="user" and (.isMeta != true))) | .[0].timestamp // empty' "$tj" 2>/dev/null || true)"
+    prev="$(hf_recycle_predecessor "$pane" "$sid" "$bts")"
+    [ -n "$prev" ] && [ "$prev" != "$sid" ] || { printf 'unknown'; return 0; }
+    sid="$prev"
+  done
+}
+
+# sc_supersede_stamp / sc_unsupersede_stamp — set a stale stamp ASIDE before a recovery path writes
+# this pane's record, never overwrite it (selfclose-failures-2026-10-01.md recommendation 2). Both
+# adopt_orphan_stamp and mark_fired_peer `mv -f` onto <pane>.json, so without this the earlier
+# tenant's record — the evidence of who held this id — would be destroyed by the very path that
+# proved it was not ours. The aside name does not end in .json, so no *.json scan (orphan lookup,
+# cc-reaper, cc-classify) ever reads it as a live stamp. When neither recovery writes a record, the
+# stamp goes back exactly as it was and the refusal that follows sees an untouched store.
+sc_supersede_stamp() { # $1=stamp path → echoes the aside path (empty when nothing was moved)
+  local s="${1:-}" aside
+  [ -n "$s" ] && [ -f "$s" ] || return 0
+  aside="$s.superseded-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  mv "$s" "$aside" 2>/dev/null && printf '%s' "$aside"
+  return 0
+}
+sc_unsupersede_stamp() { # $1=stamp path $2=aside path → restores the aside iff nothing replaced it
+  [ -n "${2:-}" ] && [ -f "$2" ] || return 0
+  [ -e "$1" ] || mv "$2" "$1" 2>/dev/null || true
+  return 0
+}
+
 # fired_contract_in_my_brief — the LAST-RESORT proof that this pane is a fired peer, read from the one
 # artifact a fire can neither forge nor lose: THE BRIEF IT WAS FIRED WITH.
 # $1=self-pane → 0 proven / 1 not proven. Never exits non-zero fatally.
@@ -10494,15 +10549,48 @@ USAGE
   # inherited a REUSED kitty id would have been told it is "an ORIGIN session", which is a
   # misdiagnosis pointing at the wrong remedy. `unknown` is byte-for-byte the old behaviour.
   SC_STAMP_STATE="$(fired_stamp_tenancy "$SC_FIRED_STAMP" "${SC_SUBJ_CWD:-$PWD}")"
+  # ---- WHOSE stamp is it? (M9, docs/research/selfclose-failures-2026-10-01.md) --------------------
+  # Tenancy compares cwds, and that cannot see two cases: a stranger's stamp whose worktree is gone
+  # (`unknown`) and a stranger's stamp in this same worktree (`valid`). The marker can: a stamp whose
+  # marker is PROVABLY not in this session's chain of transcripts is not this pane's contract, so it
+  # reads `stale` and takes the stale path below (adoption, then brief-contract repair, else refuse).
+  # Only `foreign` demotes — `unknown` leaves the old behaviour, so this can refuse nothing it could
+  # not already prove. Scoped like adoption: a named class does not consult the stamp, and the remote
+  # forms (SC_SUBJ_CWD set) ask about somebody else's pane from this one's transcript.
+  SC_STAMP_FOREIGN=0
+  if [ "$SC_CLASS_EXEMPT" = 0 ] && [ -z "$SC_SUBJ_CWD" ] && [ "${CC_SELFCLOSE_MARKER_OWNER:-1}" != 0 ]; then
+    case "$SC_STAMP_STATE" in
+      valid|unknown)
+        SC_STAMP_MARKER="$(jq -r '.marker // ""' "$SC_FIRED_STAMP" 2>/dev/null || true)"
+        if [ -n "$SC_STAMP_MARKER" ] && [ "$(fired_marker_owner "$SC_STAMP_MARKER" "$SC_SID")" = foreign ]; then
+          echo "→ fired-peer stamp for pane $SC_SID carries marker $SC_STAMP_MARKER, which is in NO transcript of this session — another session's record under a reused pane id. Treating it as stale." >&2
+          SC_STAMP_STATE=stale SC_STAMP_FOREIGN=1
+        fi ;;
+    esac
+  fi
   # ---- ADOPTION (item 1467ea1dad4f): a stamp MISS is not evidence of "never fired" ---------------
   # The pane id is volatile — a resume, a crash-recreate or a kitty restart renumbers the pane and
   # orphans its stamp under the old id (measured 2026-08-07: pane 353 holding pane 351's stamp). The
   # lookup above then MISSES, `absent` is returned, and the refusal below tells a genuine fired peer
   # it is an origin session. Recover the record through the DURABLE key before believing that.
   #
-  # Only on `absent`, deliberately. `stale` means a stamp for THIS id exists and names a different
-  # cwd — a live id-reuse tenant, the false positive the tenancy check was built for — and reaching
-  # past it to adopt a second record would hand one pane two contradictory contracts.
+  # On `absent`, and on `stale` (pane-lifecycle fixes item 1, 2026-10-01). This used to run on `absent`
+  # only, on the reasoning that a stale stamp is a live id-reuse tenant's and reaching past it "would
+  # hand one pane two contradictory contracts". It would not: a stale stamp's cwd (or, since M9, its
+  # marker) PROVABLY differs from this session's, so it is not this pane's contract at all — it is an
+  # earlier tenant's. And refusing there stranded genuine peers: 3 of the 5 stale-stamp refusals in the
+  # week to 2026-10-01 were fired peers (pane 47 among them) whose own brief carried the contract. The
+  # proofs are unchanged — the marker in this session's own transcript for adoption, the trailer plus
+  # an inbound marker in its first user message for repair — and an operator session can produce
+  # neither. What changes is that the stale record is SET ASIDE first (sc_supersede_stamp), never
+  # overwritten, and put back if neither proof holds, so the refusal below still sees it.
+  # The remote forms are excluded (SC_SUBJ_CWD set): both proofs read $PWD and this pane's transcript.
+  SC_STALE_ASIDE=""
+  if [ "$SC_STAMP_STATE" = stale ] && [ "$SC_CLASS_EXEMPT" = 0 ] && [ -z "$SC_SUBJ_CWD" ] \
+     && [ "${SC_ALLOW_ORIGIN_CLOSE:-0}" != 1 ]; then
+    SC_STALE_ASIDE="$(sc_supersede_stamp "$SC_FIRED_STAMP")"
+    [ -n "$SC_STALE_ASIDE" ] && SC_STAMP_STATE=absent
+  fi
   if [ "$SC_STAMP_STATE" = absent ] && [ "$SC_CLASS_EXEMPT" = 0 ]; then
     SC_ADOPTED_FROM="$(adopt_orphan_stamp "${CC_FIRED_DIR:-$HOME/.claude/cc-fired}" "$PWD" "$SC_SID")" || SC_ADOPTED_FROM=""
     if [ -n "$SC_ADOPTED_FROM" ]; then
@@ -10512,24 +10600,6 @@ USAGE
       echo "   The pane id changed underneath a live peer (resume / crash-recreate / kitty renumber). Identity PROVEN by the fire marker in this session's own transcript — a cwd match alone was never enough, and still is not." >&2
       SC_STAMP_STATE="$(fired_stamp_tenancy "$SC_FIRED_STAMP" "${SC_SUBJ_CWD:-$PWD}")"
     fi
-  fi
-  if [ "$SC_CLASS_EXEMPT" = 0 ] && [ "${SC_ALLOW_ORIGIN_CLOSE:-0}" != 1 ] && [ "$SC_STAMP_STATE" = stale ]; then
-    SC_STAMP_CWD="$(jq -r '.cwd // "?"' "$SC_FIRED_STAMP" 2>/dev/null || echo '?')"
-    SC_STAMP_AT="$(jq -r '.firedAt // "?"' "$SC_FIRED_STAMP" 2>/dev/null || echo '?')"
-    cat >&2 <<USAGE
-!! self-close REFUSED: the fired-peer stamp for pane $SC_SID belongs to a DIFFERENT session.
-!!   stamp $SC_FIRED_STAMP
-!!     fired at $SC_STAMP_AT into  $SC_STAMP_CWD
-!!   but this pane is running in   $PWD
-!!   A pane id is not a tenancy. Kitty numbers its windows with small integers and REUSES them
-!!   across restarts, so an id can outlive the session that was stamped under it and a later,
-!!   unrelated tenant inherits a self-retiring contract it was never granted. Closing on that
-!!   stamp is a watched pane vanishing (memory: handoff-succession-legibility).
-!!   If this session really was fired as a peer, its own stamp is missing, not this one —
-!!   re-fire it through handoff-fire.sh (which stamps), or close this pane by hand.
-!! Override (deliberate, loud, almost never right):  --allow-origin-close
-USAGE
-    exit 2
   fi
   # ---- SPENT stamp (CLOSE_INTEGRITY W1): the contract under this id was already used up ---------
   # Two ways to hold one, and the fire MARKER separates them: (a) the SAME peer retrying after
@@ -10580,9 +10650,10 @@ USAGE
   # the wrong party: the whole defect is that a dispatched peer does not know its stamp is missing, so
   # requiring it to pass a flag it has no way to know it needs reproduces the trap one level up.
   #
-  # IT DOES NOT WIDEN THE GATE, and this is the load-bearing claim. It runs ONLY on `absent` (never
-  # `stale`, never `spent` — both mean a stamp for this id EXISTS and says something, and reaching past
-  # it would hand one pane two contradictory contracts), ONLY after adoption has already failed, and
+  # IT DOES NOT WIDEN THE GATE, and this is the load-bearing claim. It runs ONLY on `absent` — which
+  # since 2026-10-01 includes a `stale` stamp already SET ASIDE above (item 1: a stale stamp is an
+  # earlier tenant's, provably not this pane's contract) — never on `spent` (the contract under this id
+  # was used up, and the retry arm proves itself by marker), ONLY after adoption has already failed, and
   # ONLY on proof that handoff-fire itself composed this brief AND armed the self-retire contract in it
   # (fired_contract_in_my_brief's header states why one token alone is never enough). An operator's own
   # session cannot satisfy it: a paste-only bridge carries no fire marker, and a `--no-self-retire` fire
@@ -10631,6 +10702,40 @@ USAGE
       # here (item 890cd862b965). The refusal below then stands, with the cause named.
       echo "⚠ fired-peer stamp repair FAILED for pane $SC_SID — ${MFP_SKIP_REASON:-cause unknown (the writer reported no reason)}" >&2
     fi
+  fi
+  # The stale record's fate, now that both recoveries have run (item 1). A recovery that wrote this
+  # pane's record leaves the aside as the trail and says where it is; one that wrote nothing puts the
+  # stamp back untouched, and the stale refusal below then reads exactly what it read before.
+  if [ -n "$SC_STALE_ASIDE" ]; then
+    if [ "$SC_STAMP_STATE" = absent ]; then
+      sc_unsupersede_stamp "$SC_FIRED_STAMP" "$SC_STALE_ASIDE"
+      SC_STAMP_STATE=stale
+    else
+      echo "   The earlier tenant's stamp under this id was set aside, not overwritten: $SC_STALE_ASIDE" >&2
+    fi
+  fi
+  if [ "$SC_CLASS_EXEMPT" = 0 ] && [ "${SC_ALLOW_ORIGIN_CLOSE:-0}" != 1 ] && [ "$SC_STAMP_STATE" = stale ]; then
+    SC_STAMP_CWD="$(jq -r '.cwd // "?"' "$SC_FIRED_STAMP" 2>/dev/null || echo '?')"
+    SC_STAMP_AT="$(jq -r '.firedAt // "?"' "$SC_FIRED_STAMP" 2>/dev/null || echo '?')"
+    SC_STALE_WHY=""
+    [ "${SC_STAMP_FOREIGN:-0}" = 1 ] && SC_STALE_WHY="!!   and its fire marker ${SC_STAMP_MARKER:-?} is in no transcript of this session
+"
+    cat >&2 <<USAGE
+!! self-close REFUSED: the fired-peer stamp for pane $SC_SID belongs to a DIFFERENT session.
+!!   stamp $SC_FIRED_STAMP
+!!     fired at $SC_STAMP_AT into  $SC_STAMP_CWD
+!!   but this pane is running in   $PWD
+${SC_STALE_WHY}!!   A pane id is not a tenancy. Kitty numbers its windows with small integers and REUSES them
+!!   across restarts, so an id can outlive the session that was stamped under it and a later,
+!!   unrelated tenant inherits a self-retiring contract it was never granted. Closing on that
+!!   stamp is a watched pane vanishing (memory: handoff-succession-legibility).
+!!   Neither recovery proved this session a fired peer either: no open stamp for this cwd carries a
+!!   marker from its transcript (adoption), and its first user message does not carry the
+!!   self-retire contract with a fire marker (repair). So it is an ORIGIN session under a reused id —
+!!   close this pane by hand, or re-fire the work through handoff-fire.sh (which stamps).
+!! Override (deliberate, loud, almost never right):  --allow-origin-close
+USAGE
+    exit 2
   fi
   if [ "$SC_CLASS_EXEMPT" = 0 ] && [ "${SC_ALLOW_ORIGIN_CLOSE:-0}" != 1 ] && [ "$SC_STAMP_STATE" = absent ]; then
     # An id CHANGE orphans a real peer's stamp under its old id (resume / crash-recreate / kitty

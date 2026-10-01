@@ -404,7 +404,9 @@ spent_stamp() {
   # which is the whole assertion. Was 4, then 5; bumped to 6 deliberately and against the diff —
   # measured on pristine origin/main, where this test was already RED and the repair branch at :5011
   # is the sixth usage. Never bumped to make a red go away.
-  [ "$output" = "6" ] || { echo "allow-origin-close usages moved: $output (expected 6)"; false; }
+  # 6 → 7 (pane-lifecycle fixes item 1, 2026-10-01): the stale-stamp SET-ASIDE guard reads it, so an
+  # explicit override keeps the old stale behaviour instead of rewriting the store. Not a refusal branch.
+  [ "$output" = "7" ] || { echo "allow-origin-close usages moved: $output (expected 6)"; false; }
   # and the new path never mentions it
   run bash -c "sed -n '/TRANSPLANTED-SOURCE PATH/,/^  fi\$/p' '$HF' | grep -c 'ALLOW_ORIGIN_CLOSE'"
   [ "$output" = "0" ] || { echo "the transplanted-source block reaches for the override"; false; }
@@ -426,8 +428,10 @@ spent_stamp() {
   # 3 → 4 (`spent`, CLOSE_INTEGRITY) → 5 (the stamp-REPAIR refusal at :5011, item c163f42390a3, which
   # landed WITHOUT bumping this literal and left the suite red on trunk — measured on pristine
   # origin/main before this change). Bumped against that diff, having read the site.
+  # 5 → 7 (pane-lifecycle fixes items 1-2, 2026-10-01): the M9 marker-owner check and the stale-stamp
+  # set-aside both read the predicate — a named class consults no stamp, so neither may touch its.
   run grep -c '"\$SC_CLASS_EXEMPT" = 0' "$HF"
-  [ "$output" = "5" ] || { echo "expected 5 class-gated sites reading the predicate, got $output"; false; }
+  [ "$output" = "7" ] || { echo "expected 7 class-gated sites reading the predicate, got $output"; false; }
   # and no site still spells the old single-class test
   run grep -c 'SC_ORIGIN_CLASS" != "assignee"' "$HF"
   [ "$output" = "0" ] || { echo "a class-gated site still tests only for 'assignee'"; false; }
