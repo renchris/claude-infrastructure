@@ -36,7 +36,7 @@ Registry entry (wave A1's contract, never extended): `{"slug","aliases","cwd_roo
 - `premises.jsonl`, `sources.jsonl`, `census/<pop>.json`, `contact_matrix.json`, `residual.jsonl`, `trace.jsonl`,
   `holes.jsonl`, `changes.jsonl`: SYNTHESIS shapes. `residual.jsonl` `why_unreachable` adds the method-created classes
   `depth-cap`, `stage-budget-exhausted`, `stub-validated` (§10 item 7), each needing `owner_wave`, `due`, `closing_probe`.
-- `probes.jsonl` (written only by `probe-run.sh`): SYNTHESIS shape; `evidence/<probe-id>/{cmd,stdout,stderr,env.json}`.
+- `probes.jsonl` (written only by `lib/probe_run.py`, through `cc-research probe|self-test|doctor` or the `probe-run.sh` shim): SYNTHESIS shape; `evidence/<probe-id>/{cmd,stdout,stderr,env.json}`.
 - `budget.json`: `{"stages":{"1":{"started":ISO,"ended":ISO|null}, …}, "overrun_packets":{"<stage>":"<packet id>"}}`.
 - `rounds/<k>/matrix.json` (written by `round.sh`): `{round, kind:"frame-critique|certification|delta",
   snapshot_sha, verification_only, slots:[{pid, vendor, strategy, status:"complete|partial|dead|void", reruns}],
@@ -64,7 +64,9 @@ failed, 2 usage or refusal, 3 a dead vendor lane, 4 a voided slot. Python is 3.9
   stop:"running|dry|cap"}` from `rounds/*/matrix.json`.
 - `seed.py plant|match|status` → vault `<sealed>/vault/seeds.enc`, key from the keychain item
   `cc-research-seed-vault/<slug>` (tests: `CC_RESEARCH_VAULT_KEY`).
-- `probe-run.sh run --id P-.. --kind K --closes PR-.. -- <cmd…>` and `probe-run.sh doctor`.
+- `cc-research probe --id P-.. --kind K --closes PR-.. -- <cmd…>`, `cc-research doctor` and `cc-research self-test`
+  (each acceptance row over `control.known_bad`/`known_good`, fixture in env `FIXTURE`, as gate row 6 runs it);
+  `probe-run.sh run|doctor` is a bash 3.2 shim onto the first two.
 - `gate.sh register|freeze|run|render|sweep|file-packet|requires|close` (see `lib/gate.py`).
 - `gate.sh requires --program P [--wave W] [--json]` (`lib/gate_requires.py`) → exit 0 the build wave may fire, 1
   refused with each reason, 2 the program cannot be read. Reads the newest certificate and the LIVE decision and
@@ -83,7 +85,7 @@ Cross-module contracts (a consumer depends on exactly these shapes):
 
 - `cc-research verdict [--program] P [--json]` → the `gate.sh render` state lines, then an operator block (pending
   concerns, "waiting on you since <date>", the priced menu). `--json`: `{program, state, lines:[…],
-  pending_concerns:N, waiting_since:ISO|null, menu:[{id, label, price, effect}]}`.
+  pending_concerns:N, waiting_since:ISO|null|"unknown" (null: nothing open; "unknown": cc-decide unreadable), menu:[{id, label, price, effect}]}`.
 - `cc-research pending --json` → `{programs:[{program, state, pending_concerns, waiting_since, menu:[…]}]}` over every
   registry program not `closed`. Read by `hooks/operator-readout.sh` and `scripts/wrap-ledger.sh`.
 - `cc-research concern add --program P --text T [--raised-by operator|agent|sweep|build|rehearsal]` appends a
