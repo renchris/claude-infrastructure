@@ -109,7 +109,6 @@ mutant() { # $1=fixed string to delete, $2=out
 
 @test "R1 DENY: guard off + file exists + session never touched it ⇒ refuse (rc 0)" {
   # THE load-bearing assertion. This is the native refusal the flag took away, restored.
-  cfg tengu_velvet_mallet_opus_5=true
   local t; t="$(tx "$W/tx.jsonl" claude-opus-5 "Read:$W/unrelated.txt")"
   [ "$(deny_rc "$t" "$TARGET" "$W")" -eq 0 ] || false
 }
@@ -117,104 +116,113 @@ mutant() { # $1=fixed string to delete, $2=out
 @test "R2 POSITIVE CONTROL: the SAME write, after a Read of that exact file ⇒ allow (rc 1)" {
   # Differs from R1 by exactly one transcript record. Without this, a shim hardcoded to `return 0`
   # would pass R1 and every other deny test in this file while blocking all legitimate work.
-  cfg tengu_velvet_mallet_opus_5=true
   local t; t="$(tx "$W/tx.jsonl" claude-opus-5 "Read:$W/unrelated.txt" "Read:$TARGET")"
   [ "$(deny_rc "$t" "$TARGET" "$W")" -eq 1 ] || false
 }
 
 @test "R2: a prior Write of the file also counts as touched ⇒ allow" {
-  cfg tengu_velvet_mallet_opus_5=true
   local t; t="$(tx "$W/tx.jsonl" claude-opus-5 "Write:$TARGET")"
   [ "$(deny_rc "$t" "$TARGET" "$W")" -eq 1 ] || false
 }
 
 @test "R2: a prior Edit of the file also counts as touched ⇒ allow" {
-  cfg tengu_velvet_mallet_opus_5=true
   local t; t="$(tx "$W/tx.jsonl" claude-opus-5 "Edit:$TARGET")"
   [ "$(deny_rc "$t" "$TARGET" "$W")" -eq 1 ] || false
 }
 
 @test "R1 is per-FILE, not per-session: reading one file does not license writing another" {
   # The bug that would make R2 pass vacuously — treating "this session read something" as consent.
-  cfg tengu_velvet_mallet_opus_5=true
   printf 'other\n' > "$W/other.txt"
   local t; t="$(tx "$W/tx.jsonl" claude-opus-5 "Read:$W/other.txt")"
   [ "$(deny_rc "$t" "$TARGET" "$W")" -eq 0 ] || false
 }
 
-# ── THE FLAG GATE: this hook may only act where the binary has stopped acting ─────────────────────
+# ── THE MODEL GATE: this hook may only act where the binary has stopped acting ────────────────────
+# 2.1.284's kNt(): the native guard holds only for an exact-id set of 10 legacy models. The flag
+# cache these cases used to fixture is no longer read by the binary or by the shim (2026-09-30).
 
-@test "flag FALSE ⇒ allow — the native guard is still refusing; stay out" {
-  cfg tengu_velvet_mallet_opus_5=false
-  local t; t="$(tx "$W/tx.jsonl" claude-opus-5 "Read:$W/unrelated.txt")"
+@test "a model IN the binary's enforced set ⇒ allow — the native guard is still refusing; stay out" {
+  local t; t="$(tx "$W/tx.jsonl" claude-opus-4-6 "Read:$W/unrelated.txt")"
+  [ "$(deny_rc "$t" "$TARGET" "$W")" -eq 1 ] || false
+  t="$(tx "$W/tx2.jsonl" claude-haiku-4-5 "Read:$W/unrelated.txt")"
   [ "$(deny_rc "$t" "$TARGET" "$W")" -eq 1 ] || false
 }
 
-@test "flag ABSENT for THIS bucket ⇒ allow, even when a SIBLING bucket is true" {
-  # Pins that the lookup is bucket-specific. A shim that tested "any velvet_mallet key is true"
-  # would deny on an account where only some other model's guard had been lifted.
-  cfg tengu_velvet_mallet_opus_4_8=true tengu_velvet_mallet_sonnet_4_6=true
-  local t; t="$(tx "$W/tx.jsonl" claude-opus-5 "Read:$W/unrelated.txt")"
-  [ "$(deny_rc "$t" "$TARGET" "$W")" -eq 1 ] || false
-}
-
-@test "a MISSING flag cache ⇒ allow (a miss is not an absence of the guard)" {
+@test "REGRESSION 2026-09-30: the 5.5 models DENY, with no flag cache at all" {
+  # The blindness this file's subject shipped with: it looked up tengu_velvet_mallet_opus_5_5, a key
+  # no cache holds, and allowed. Measured on 2.1.284: the native guard is off for both 5.5 ids.
   rm -f "$CLAUDE_CONFIG_DIR/.claude.json"
-  local t; t="$(tx "$W/tx.jsonl" claude-opus-5 "Read:$W/unrelated.txt")"
+  local t; t="$(tx "$W/tx.jsonl" claude-opus-5-5 "Read:$W/unrelated.txt")"
+  [ "$(deny_rc "$t" "$TARGET" "$W")" -eq 0 ] || false
+  t="$(tx "$W/tx2.jsonl" claude-sonnet-5-5 "Read:$W/unrelated.txt")"
+  [ "$(deny_rc "$t" "$TARGET" "$W")" -eq 0 ] || false
+}
+
+@test "the flag cache is IGNORED: a false velvet_mallet key does not re-arm the native guard" {
+  cfg tengu_velvet_mallet_opus_5_5=false tengu_velvet_mallet_opus_5=false
+  local t; t="$(tx "$W/tx.jsonl" claude-opus-5-5 "Read:$W/unrelated.txt")"
+  [ "$(deny_rc "$t" "$TARGET" "$W")" -eq 0 ] || false
+}
+
+@test "a <synthetic> last assistant record does not stand in for the session's model" {
+  # The harness writes model "<synthetic>" on error turns; the binary tests its real main-loop model.
+  local t; t="$(tx "$W/tx.jsonl" claude-opus-4-6 "Read:$W/unrelated.txt")"
+  printf '%s\n' '{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"x"}]}}' >> "$t"
   [ "$(deny_rc "$t" "$TARGET" "$W")" -eq 1 ] || false
 }
 
-@test "an UNPARSEABLE flag cache ⇒ allow, never a deny on a failed read" {
-  printf 'this is not json\n' > "$CLAUDE_CONFIG_DIR/.claude.json"
-  local t; t="$(tx "$W/tx.jsonl" claude-opus-5 "Read:$W/unrelated.txt")"
-  [ "$(deny_rc "$t" "$TARGET" "$W")" -eq 1 ] || false
-}
-
-@test "rbw_guard_disabled: TRUE ⇒ rc 0, and that is the only rc 0" {
+@test "rbw_guard_disabled: exact-id set membership, with the [1m] strip" {
   # The unit positive control. Every allow-direction test above would also pass against a predicate
-  # wired to `return 1` unconditionally; this is what excludes that.
-  cfg tengu_velvet_mallet_opus_5=true
+  # wired to `return 1` unconditionally; the rc-0 rows exclude that.
+  [ "$(gd_rc claude-opus-5-5)" -eq 0 ] || false
+  [ "$(gd_rc claude-sonnet-5-5)" -eq 0 ] || false
   [ "$(gd_rc claude-opus-5)" -eq 0 ] || false
-  [ "$(gd_rc claude-opus-4-8)" -eq 1 ] || false
+  [ "$(gd_rc "claude-opus-5-5[1m]")" -eq 0 ] || false
+  [ "$(gd_rc claude-opus-4-6)" -eq 1 ] || false
+  [ "$(gd_rc "claude-opus-4-6[1m]")" -eq 1 ] || false
+  [ "$(gd_rc "claude-opus-4-6[1M]")" -eq 1 ] || false
+  [ "$(gd_rc claude-3-5-haiku)" -eq 1 ] || false
   [ "$(gd_rc "")" -eq 1 ] || false
 }
 
-@test "rbw_guard_disabled: no jq on PATH ⇒ rc 1 (cannot tell ⇒ the binary is still guarding)" {
-  cfg tengu_velvet_mallet_opus_5=true
+@test "rbw_guard_disabled: needs no jq — the set test is pure shell" {
   # `/bin/bash` by absolute path: with PATH emptied, `env` cannot look up the interpreter itself and
   # the run exits 127 — which would pass a `-ne 0` assertion while testing nothing at all.
-  run env "PATH=$EMPTYPATH" /bin/bash -c '. "$0"; rbw_guard_disabled claude-opus-5' "$LIB"
+  run env "PATH=$EMPTYPATH" /bin/bash -c '. "$0"; rbw_guard_disabled claude-opus-5-5' "$LIB"
+  [ "$status" -eq 0 ]
+}
+
+@test "no jq on PATH ⇒ the whole contract still ALLOWS (the transcript cannot be read)" {
+  local t; t="$(tx "$W/tx.jsonl" claude-opus-5-5 "Read:$W/unrelated.txt")"
+  run env "PATH=$EMPTYPATH" /bin/bash -c '. "$0"; rbw_should_deny "$1" "$2" "$3"' "$LIB" "$t" "$TARGET" "$W"
   [ "$status" -eq 1 ]
 }
 
 # ── EVERY OTHER UNCERTAINTY ALSO LANDS ON ALLOW ──────────────────────────────────────────────────
 
 @test "a CREATE (target does not exist) ⇒ allow — never guarded, natively or here" {
-  cfg tengu_velvet_mallet_opus_5=true
   local t; t="$(tx "$W/tx.jsonl" claude-opus-5 "Read:$W/unrelated.txt")"
   [ "$(deny_rc "$t" "$W/brand-new.txt" "$W")" -eq 1 ] || false
 }
 
 @test "an empty target path ⇒ allow" {
-  cfg tengu_velvet_mallet_opus_5=true
   local t; t="$(tx "$W/tx.jsonl" claude-opus-5 "Read:$W/unrelated.txt")"
   [ "$(deny_rc "$t" "" "$W")" -eq 1 ] || false
 }
 
 @test "no model on any assistant record ⇒ allow (the first-tool-call gap, named in the header)" {
-  cfg tengu_velvet_mallet_opus_5=true
   local t; t="$(tx "$W/tx.jsonl" NONE "Read:$W/unrelated.txt")"
   [ "$(deny_rc "$t" "$TARGET" "$W")" -eq 1 ] || false
 }
 
-@test "an unknown model whose bucket is in no cache ⇒ allow" {
-  cfg tengu_velvet_mallet_opus_5=true
+@test "an unknown model ⇒ DENY: outside kNt()'s exact-id set, so the binary does not guard it" {
+  # Inverted 2026-09-30. Under the flag era an unknown bucket missed the cache and the binary kept
+  # guarding; under kNt() an unknown id is simply not in the legacy set, so the native guard is off.
   local t; t="$(tx "$W/tx.jsonl" claude-nextgen-9 "Read:$W/unrelated.txt")"
-  [ "$(deny_rc "$t" "$TARGET" "$W")" -eq 1 ] || false
+  [ "$(deny_rc "$t" "$TARGET" "$W")" -eq 0 ] || false
 }
 
 @test "a MISSING transcript ⇒ allow" {
-  cfg tengu_velvet_mallet_opus_5=true
   [ "$(deny_rc "$W/nope.jsonl" "$TARGET" "$W")" -eq 1 ] || false
 }
 
@@ -222,7 +230,6 @@ mutant() { # $1=fixed string to delete, $2=out
   # readFileState survives a compaction that rewrites the transcript, so a Read can exist in the
   # binary's memory and nowhere on disk. Treating "no records" as "never read" would deny a
   # legitimate write after every compaction — the one residue that fails toward refusal if missed.
-  cfg tengu_velvet_mallet_opus_5=true
   local t; t="$(tx "$W/tx.jsonl" claude-opus-5)"
   [ "$(deny_rc "$t" "$TARGET" "$W")" -eq 1 ] || false
 }
@@ -230,7 +237,6 @@ mutant() { # $1=fixed string to delete, $2=out
 @test "an UNPARSEABLE transcript line ⇒ allow, never a partial answer read as 'never touched'" {
   # jq skips the bad record but still exits non-zero, so the read is discarded as cannot-tell. A
   # partial parse could omit the very Read that licenses the write — the false-deny direction.
-  cfg tengu_velvet_mallet_opus_5=true
   local t; t="$(tx "$W/tx.jsonl" claude-opus-5 "Read:$TARGET")"
   printf 'this is not json\n' >> "$t"
   [ "$(deny_rc "$t" "$TARGET" "$W")" -eq 1 ] || false
@@ -242,20 +248,17 @@ mutant() { # $1=fixed string to delete, $2=out
   # The false-deny direction, and the normal case here rather than an edge one: /tmp is a symlink to
   # /private/tmp on macOS and this repo's live layer is symlinks into the checkout. Uncanonicalised,
   # the oracle would report "never touched" for a file the session had just read.
-  cfg tengu_velvet_mallet_opus_5=true
   ln -s "$W" "$BATS_TEST_TMPDIR/link"
   local t; t="$(tx "$W/tx.jsonl" claude-opus-5 "Read:$BATS_TEST_TMPDIR/link/target.txt")"
   [ "$(deny_rc "$t" "$TARGET" "$W")" -eq 1 ] || false
 }
 
 @test "a RELATIVE target resolves against cwd and matches the absolute read ⇒ allow" {
-  cfg tengu_velvet_mallet_opus_5=true
   local t; t="$(tx "$W/tx.jsonl" claude-opus-5 "Read:$TARGET")"
   [ "$(deny_rc "$t" "target.txt" "$W")" -eq 1 ] || false
 }
 
 @test "a path containing a space is matched, not split" {
-  cfg tengu_velvet_mallet_opus_5=true
   printf 'x\n' > "$W/my file.txt"
   local t; t="$(tx "$W/tx.jsonl" claude-opus-5 "Read:$W/my file.txt")"
   [ "$(deny_rc "$t" "$W/my file.txt" "$W")" -eq 1 ] || false
@@ -289,22 +292,21 @@ mutant() { # $1=fixed string to delete, $2=out
   [ "$(bucket_of "")" = "nonconforming" ] || false
 }
 
-@test "END-TO-END: a session on the 1M-context variant is guarded like its parent (rc 0)" {
-  # The contract-level consequence of the strip. Pre-fix this returned 1 (allow) — see the mutation
-  # control below, which replays that exact behaviour.
-  cfg tengu_velvet_mallet_opus_5=true
-  local t; t="$(tx "$W/tx.jsonl" "claude-opus-5[1m]" "Read:$W/unrelated.txt")"
-  [ "$(deny_rc "$t" "$TARGET" "$W")" -eq 0 ] || false
+@test "END-TO-END: the 1M-context variant of an ENFORCED model stays out like its parent (rc 1)" {
+  # kNt() strips `[1m]` before the set test, so claude-opus-4-6[1m] keeps the native refusal. Without
+  # the strip the shim would add a refusal the binary already makes — see the mutation control below.
+  local t; t="$(tx "$W/tx.jsonl" "claude-opus-4-6[1m]" "Read:$W/unrelated.txt")"
+  [ "$(deny_rc "$t" "$TARGET" "$W")" -eq 1 ] || false
 }
 
 # ── MUTATION CONTROLS — prove each assertion above can actually FAIL ──────────────────────────────
 
-@test "mutation: dropping the flag check denies where the native guard is still ON" {
-  # Without the flag gate this hook would add refusals the binary never had, on every account.
-  local bad="$BATS_TEST_TMPDIR/m-flag.sh"
-  mutant '[ "$val" = "true" ] || return 1' "$bad"
-  cfg tengu_velvet_mallet_opus_5=false
-  local t; t="$(tx "$W/tx.jsonl" claude-opus-5 "Read:$W/unrelated.txt")"
+@test "mutation: dropping the enforced-set arm denies where the native guard is still ON" {
+  # Without the model gate this hook would refuse on the legacy models too — parity there, but it
+  # proves the set test is what separates the two populations.
+  local bad="$BATS_TEST_TMPDIR/m-set.sh"
+  mutant '*" $model "*) return 1 ;;' "$bad"
+  local t; t="$(tx "$W/tx.jsonl" claude-opus-4-6 "Read:$W/unrelated.txt")"
   [ "$(deny_rc "$t" "$TARGET" "$W")" -eq 1 ] || false
   [ "$(deny_rc_lib "$bad" "$t" "$TARGET" "$W")" -eq 0 ] || false
 }
@@ -313,7 +315,6 @@ mutant() { # $1=fixed string to delete, $2=out
   # The sabotage that makes R2 vacuous — a shim that denies everything.
   local bad="$BATS_TEST_TMPDIR/m-match.sh"
   mutant '= "$tc" ] && return 1' "$bad"
-  cfg tengu_velvet_mallet_opus_5=true
   local t; t="$(tx "$W/tx.jsonl" claude-opus-5 "Read:$TARGET")"
   [ "$(deny_rc "$t" "$TARGET" "$W")" -eq 1 ] || false
   [ "$(deny_rc_lib "$bad" "$t" "$TARGET" "$W")" -eq 0 ] || false
@@ -322,7 +323,6 @@ mutant() { # $1=fixed string to delete, $2=out
 @test "mutation: dropping the existence check refuses a CREATE" {
   local bad="$BATS_TEST_TMPDIR/m-exist.sh"
   mutant '[ -f "$target" ] || return 1' "$bad"
-  cfg tengu_velvet_mallet_opus_5=true
   local t; t="$(tx "$W/tx.jsonl" claude-opus-5 "Read:$W/unrelated.txt")"
   [ "$(deny_rc "$t" "$W/brand-new.txt" "$W")" -eq 1 ] || false
   [ "$(deny_rc_lib "$bad" "$t" "$W/brand-new.txt" "$W")" -eq 0 ] || false
@@ -333,7 +333,6 @@ mutant() { # $1=fixed string to delete, $2=out
   # session ends. This is why the rc-2 arm is separate from the rc-1 arm.
   local bad="$BATS_TEST_TMPDIR/m-rc.sh"
   mutant '[ "$rc" -eq 0 ] || return 1' "$bad"
-  cfg tengu_velvet_mallet_opus_5=true
   local t; t="$(tx "$W/tx.jsonl" claude-opus-5 "Read:$TARGET")"
   printf 'this is not json\n' >> "$t"
   [ "$(deny_rc "$t" "$TARGET" "$W")" -eq 1 ] || false
@@ -361,10 +360,42 @@ mutant() { # $1=fixed string to delete, $2=out
 @test "mutation: removing the 1M strip replays the pre-fix blindness on that variant" {
   # Byte-for-byte the behaviour this file's subject shipped with until 2026-08-12, so the end-to-end
   # test above is proved to discriminate rather than to pass on the fixture's shape.
+  # Re-aimed 2026-09-30 at the strip inside rbw_guard_disabled (kNt()), the one the gate now uses.
   local bad="$BATS_TEST_TMPDIR/m-1m.sh"
-  mutant 'm="${m%\[1m\]}"' "$bad"
-  cfg tengu_velvet_mallet_opus_5=true
-  local t; t="$(tx "$W/tx.jsonl" "claude-opus-5[1m]" "Read:$W/unrelated.txt")"
-  [ "$(deny_rc "$t" "$TARGET" "$W")" -eq 0 ] || false
-  [ "$(deny_rc_lib "$bad" "$t" "$TARGET" "$W")" -eq 1 ] || false
+  mutant 'model="${model%\[1m\]}"' "$bad"
+  local t; t="$(tx "$W/tx.jsonl" "claude-opus-4-6[1m]" "Read:$W/unrelated.txt")"
+  [ "$(deny_rc "$t" "$TARGET" "$W")" -eq 1 ] || false
+  [ "$(deny_rc_lib "$bad" "$t" "$TARGET" "$W")" -eq 0 ] || false
+}
+
+# ── THE HOOK ENTRY POINT (hooks/read-before-write-parity.sh) ──────────────────────────────────────
+
+hook_out() { # $1=tool $2=transcript $3=target [env...]
+  local tool="$1" t="$2" target="$3"; shift 3
+  jq -n --arg tool "$tool" --arg t "$t" --arg f "$target" --arg c "$W" \
+    '{tool_name:$tool, transcript_path:$t, cwd:$c, tool_input:{file_path:$f}}' \
+    | env "$@" bash "$REPO/hooks/read-before-write-parity.sh"
+}
+
+@test "hook: a never-read existing file on a 5.5 model ⇒ PreToolUse deny JSON" {
+  local t; t="$(tx "$W/tx.jsonl" claude-opus-5-5 "Read:$W/unrelated.txt")"
+  run hook_out Write "$t" "$TARGET"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r .hookSpecificOutput.permissionDecision)" = deny ]
+}
+
+@test "hook: the same write after a Read of the file ⇒ silent allow" {
+  local t; t="$(tx "$W/tx.jsonl" claude-opus-5-5 "Read:$TARGET")"
+  run hook_out Edit "$t" "$TARGET"
+  [ "$status" -eq 0 ] && [ -z "$output" ]
+}
+
+@test "hook: CC_RBW=off and non-write tools pass through silently" {
+  local t; t="$(tx "$W/tx.jsonl" claude-opus-5-5 "Read:$W/unrelated.txt")"
+  run hook_out Write "$t" "$TARGET" CC_RBW=off
+  [ "$status" -eq 0 ] && [ -z "$output" ] || false
+  run hook_out Bash "$t" "$TARGET"
+  [ "$status" -eq 0 ] && [ -z "$output" ] || false
+  run hook_out Write "$t" "$W/nb.ipynb"
+  [ "$status" -eq 0 ] && [ -z "$output" ]
 }

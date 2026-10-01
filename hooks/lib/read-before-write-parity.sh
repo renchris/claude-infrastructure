@@ -2,6 +2,26 @@
 # read-before-write-parity.sh — restore Claude Code's native read-before-write guard on the
 # accounts where a server-side GrowthBook flag has switched it OFF.
 #
+# CORRECTED (2026-09-30): the flag is gone, and so is the premise the section below was written
+# against. Claude Code 2.1.260+ no longer reads any `tengu_velvet_mallet_*` key (the string occurs 0
+# times in 2.1.260, 2.1.280 and 2.1.284; 4 times in 2.1.220). 2.1.284's Write/Edit validateInput is:
+#
+#     guardSkipped = !readFileState(path) && !isIpynb(path) && !kNt(model) && readAutoAllowed(path)
+#     kNt(m)       = zr.has(m.replace(/\[1m\]$/i,""))       // an exact-id set of 10 LEGACY models
+#
+# So the guard is enforced only for that legacy set and skipped for every other model (opus-5,
+# opus-5-5, sonnet-5-5, fable-5-1 …) wherever a Read of the path would be auto-allowed — which, with
+# the bare "Read" allow rule every account carries, is nearly everywhere. Measured, not inferred: on
+# 2.1.284 a Write to an existing never-read file succeeded on claude-opus-5-5 and claude-sonnet-5-5
+# across three accounts (5 of 5 runs, plus 8 more by a parallel session with hooks disabled), while
+# claude-opus-4-6 and claude-haiku-4-5 refused; and an opus-5-5 Write OUTSIDE the session's read
+# allow-list refused natively. The flag lookup below therefore no-op'd on the 5.5 models — the shim
+# was blind on exactly the models the fleet runs. `rbw_guard_disabled` now mirrors kNt() instead.
+# The readAutoAllowed term is deliberately NOT mirrored: where a read is not auto-allowed the native
+# guard is still refusing, and validateInput runs before PreToolUse hooks, so the shim never sees
+# that call. Evidence: docs/research/c10-staged-residuals-2026-10.md § read-before-write.
+# The history below is kept as written; read every "flag" in it as "the pre-2.1.260 mechanism".
+#
 # ── WHAT BROKE ───────────────────────────────────────────────────────────────────────────────────
 # 2.1.220's Write/Edit validation refuses a write to a file this session has never read:
 #
@@ -142,22 +162,26 @@ rbw_config_dir() {
   else printf '%s' "$HOME/.claude"; fi
 }
 
+# RBW_ENFORCED_MODELS — 2.1.284's `zr`, the exact-id set kNt() tests. A model in it keeps the native
+# refusal, so the shim stays out; every other model has lost it. Re-read it from the binary on an
+# upgrade (grep the strings for "File has not been read yet" and follow the model test beside it).
+RBW_ENFORCED_MODELS=" claude-opus-4-6 claude-haiku-4-5 claude-opus-4-5 claude-opus-4-1 claude-opus-4-0 claude-sonnet-4-5 claude-sonnet-4-0 claude-3-7-sonnet claude-3-5-sonnet claude-3-5-haiku "
+
 # rbw_guard_disabled <model-id>
-#   rc 0 — native guard PROVABLY off for this account+model (this hook must enforce)
-#   rc 1 — on, absent, unknown or unreadable (the binary is still refusing; stay out)
+#   rc 0 — native guard PROVABLY off for this model (outside the binary's enforced set; this hook
+#          must enforce)
+#   rc 1 — empty model, or a model the binary still guards (stay out)
+#   Mirrors kNt(): the `[1m]` suffix is stripped case-insensitively, the rest compared EXACTLY — an
+#   unknown id is outside the set and so unguarded natively, which is why it enforces here. The
+#   account's flag cache is no longer consulted (see CORRECTED in the header); `rbw_config_dir` and
+#   `rbw_bucket` stay for the pre-2.1.260 record and their own tests.
 rbw_guard_disabled() {
-  local model="${1:-}" cfg key val
+  local model="${1:-}"
   [ -n "$model" ] || return 1
-  command -v jq >/dev/null 2>&1 || return 1
-  cfg="$(rbw_config_dir)/.claude.json"
-  [ -f "$cfg" ] || return 1
-  key="tengu_velvet_mallet_$(rbw_bucket "$model")"
-  # `// "absent"` keeps a missing key distinguishable from a false one in the trace, but both
-  # land on the same rc — matching Ke(name,!1).
-  # shellcheck disable=SC2016  # `$k` is a jq variable bound by --arg, not a shell expansion
-  val="$(_rbw_bounded 5 jq -r --arg k "$key" \
-          '(.cachedGrowthBookFeatures[$k] // "absent") | tostring' "$cfg" 2>/dev/null)" || return 1
-  [ "$val" = "true" ] || return 1
+  model="${model%\[1m\]}"; model="${model%\[1M\]}"
+  case "$RBW_ENFORCED_MODELS" in
+    *" $model "*) return 1 ;;
+  esac
   return 0
 }
 
@@ -188,7 +212,8 @@ _rbw_model() {
   [ -n "$tp" ] && [ -f "$tp" ] || return 1
   out="$(_rbw_bounded "${RBW_TIMEOUT_S:-5}" \
           tail -n "${RBW_MODEL_TAIL_LINES:-400}" "$tp" 2>/dev/null \
-        | jq -r 'select(.type=="assistant") | .message.model // empty' 2>/dev/null | tail -1)"
+        | jq -r 'select(.type=="assistant") | .message.model // empty | select(. != "<synthetic>")' \
+            2>/dev/null | tail -1)"
   [ -n "$out" ] || return 1
   printf '%s' "$out"
 }
