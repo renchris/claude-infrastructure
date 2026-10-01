@@ -597,6 +597,38 @@ JSON
   [ "$(grep -c 'unsent draft' "$PAGE_ARGV")" = 1 ] || { cat "$PAGE_ARGV"; false; }
 }
 
+# ── A PARK IS NOT AN ATTEMPT (2026-10-01) ────────────────────────────────────────────────────────
+# Three next4 sessions spent all three dispatches on "no routable target" parks and paged the
+# operator while their own account had its headroom back. A dispatch whose run PARKED is refunded.
+parked_run() { # $1=sid $2=verdict line → the results log names a run whose verdict.txt says $2
+  local run="$BATS_TEST_TMPDIR/fleet-run-$1"; mkdir -p "$run" "$STATE/results"
+  printf '%s\n' "$2" > "$run/verdict.txt"
+  printf 'lr-fleet: DETACHED — driver pid 1 is recovering %s\nrun=%s log=%s/detached.log\n' "${1:0:8}" "$run" "$run" > "$STATE/results/$1.log"
+}
+@test "a request whose last dispatch PARKED is refunded, re-dispatched, and never exhausted or paged" {
+  : > "$STATE/autorecover.on"
+  local tp; tp="$(lim_tx "$SID")"
+  rq "$SID" <<JSON
+{"sid":"$SID","requested_by":"stop-failure-marker","account":"next3","source_pane":"616","transcript_path":"$tp","attempts":3,"last_attempt_epoch":1}
+JSON
+  parked_run "$SID" "lr-fleet --one ${SID:0:8}: verdict=PARKED rc=1 pane=616 acct=next3 mech=parked — no routable target"
+  tick
+  grep -q "REQUEST-REFUND $SID" "$STATE/poller.log" || { plog; false; }
+  ! grep -q "REQUEST-EXHAUSTED $SID" "$STATE/poller.log" || { plog; false; }
+  grep -q -- "--one $SID" "$FLEET_LOG" || { plog; false; }
+}
+@test "CONTROL: a request whose last dispatch FAILED (not parked) still exhausts at its budget" {
+  : > "$STATE/autorecover.on"
+  local tp; tp="$(lim_tx "$SID")"
+  rq "$SID" <<JSON
+{"sid":"$SID","requested_by":"stop-failure-marker","account":"next3","source_pane":"616","transcript_path":"$tp","attempts":3,"last_attempt_epoch":1}
+JSON
+  parked_run "$SID" "lr-fleet --one ${SID:0:8}: verdict=FAILED rc=4 pane=616 acct=next3 mech=recycle-in-place/FAILED"
+  tick
+  grep -q "REQUEST-EXHAUSTED $SID" "$STATE/poller.log" || { plog; false; }
+  ! grep -q "REQUEST-REFUND $SID" "$STATE/poller.log" || { plog; false; }
+}
+
 @test "[R4] the queue is PAGED with its depth and ETA — once per depth, not once per tick" {
   : > "$STATE/autorecover.on"
   export LR_PAGE_OS_CHANNEL=on LR_PAGE_OSASCRIPT_BIN="$BATS_TEST_TMPDIR/stubs/page-osa" LR_PAGE_LOG="$BATS_TEST_TMPDIR/pages.log"

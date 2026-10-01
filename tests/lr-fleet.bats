@@ -1206,7 +1206,7 @@ _pick() { # <source acct> <tier> <sid> → lf_pick_target's answer, with only wh
   # W6b: lf_pick_target now calls lf_charge_assign and lf_rank_why, and writes the rank's stderr
   # under $FLEET_DIR/$RUN. An extraction that omits either helper does not test a smaller program,
   # it tests a DIFFERENT one — `command not found` is rc 127, which `|| true` would launder.
-  sed -n '/^lf_acct_of_cfg() {/,/^}/p;/^_lf_target_holds_sid() {/,/^}/p;/^lf_rank_why() {/,/^}/p;/^lf_charge_assign() {/,/^}/p;/^lf_rank_timed() {/,/^}/p;/^lf_pick_target() {/,/^}/p' \
+  sed -n '/^lf_acct_of_cfg() {/,/^}/p;/^_lf_target_holds_sid() {/,/^}/p;/^lf_rank_why() {/,/^}/p;/^lf_charge_assign() {/,/^}/p;/^lf_rank_timed() {/,/^}/p;/^lf_pick_target() {/,/^}/p;/^lf_soft_candidates() {/,/^}/p' \
     "$FLEET" > "$BATS_TEST_TMPDIR/pick.sh"
   bash -c '
     . "$1" 2>/dev/null
@@ -1293,6 +1293,66 @@ SH
   [ "$status" -eq 1 ]
   [ "$(grep -c -- '--rank' "$ACC_LOG")" = 1 ] || { cat "$ACC_LOG"; false; }
   [[ "$output" == *"WHY=next3=5h-cutoff"* ]] || { echo "$output"; false; }
+}
+
+# ── A PARK IS FOR WHEN NOTHING CAN HOST THE SESSION (operator ruling 2026-10-01) ─────────────────
+soft_router() { # $1=the router's reason text · $2=the --json rows
+  printf '#!/bin/bash\ncase "$*" in *--rank*) echo "claude-accounts: no routable account for general: %s" >&2; exit 1 ;; *--json*) echo %s ;; esac\n' \
+    "$1" "'{\"rows\":$2}'" > "$HOME/bin/claude-accounts"
+}
+@test "soft fallback: every account excluded only for a soft reason → the one with the most weekly headroom is taken" {
+  soft_router "next3=recovery-weekly-thin; next4=kmax-concurrency" \
+    '[{"acct":"next3","session_pct":0,"weekly_pct":91},{"acct":"next4","session_pct":10,"weekly_pct":3}]'
+  run _pick next2 claude-opus-5 "$SID"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  printf '%s\n' "$output" | grep -qx next4 || { echo "$output"; false; }
+}
+@test "soft fallback CONTROL: hard reasons still park, even with readings under the caps" {
+  soft_router "next3=weekly-exhausted; next4=5h-cutoff" \
+    '[{"acct":"next3","session_pct":0,"weekly_pct":91},{"acct":"next4","session_pct":10,"weekly_pct":3}]'
+  run _pick next2 claude-opus-5 "$SID"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  ! printf '%s\n' "$output" | grep -qx 'next[0-9]*' || { echo "$output"; false; }
+}
+@test "soft fallback CONTROL: a soft reason over a capped reading still parks" {
+  soft_router "next3=recovery-weekly-thin" '[{"acct":"next3","session_pct":0,"weekly_pct":100}]'
+  run _pick next2 claude-opus-5 "$SID"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+}
+
+# ── THE SESSION'S OWN ACCOUNT CAME BACK (2026-10-01) ─────────────────────────────────────────────
+own_acct() { # $1=the next2 row's extra JSON fields · rank answers next3 if anything asks
+  printf '#!/bin/bash\ncase "$*" in *--json*) echo %s ;; *--rank*) printf "next3 0.8\\n" ;; esac\n' \
+    "'{\"rows\":[{\"acct\":\"next2\"$1}]}'" > "$HOME/bin/claude-accounts"
+  export LF_CC_TUI="$BATS_TEST_TMPDIR/cc-tui-own.sh" LF_NUDGE_ENGAGE_S=10
+  cat > "$LF_CC_TUI" <<STUB
+cc_tui_submit() {
+  printf 'SUBMIT pane=%s\n' "\$1" >> "$BATS_TEST_TMPDIR/tui.log"
+  printf '{"type":"assistant","timestamp":"%s","message":{"role":"assistant","content":[{"type":"text","text":"continuing"}]}}\n' "\$(date -u +%FT%T.000Z)" >> "$SEC/projects/$SLUG/$SID.jsonl"
+  return 0
+}
+STUB
+}
+@test "own account back: a reading after the death below every cap wakes the session in its own pane, never moves it" {
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  own_acct ',"session_pct":10,"weekly_pct":3'
+  run bash "$FLEET" --one "$SID"
+  [[ "$output" == *"nudge-in-place/RECOVERED"* ]] || { echo "$output"; false; }
+  grep -q 'SUBMIT pane=616' "$BATS_TEST_TMPDIR/tui.log" || false
+  [ ! -s "$LRH_LOG" ] || { echo "a session whose own account came back must not be moved"; cat "$LRH_LOG"; false; }
+}
+@test "own account CONTROL: the account still at its weekly cap → the session moves as before" {
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  own_acct ',"session_pct":10,"weekly_pct":100'
+  run bash "$FLEET" --one "$SID"
+  grep -q -- "--target next3" "$LRH_LOG" || { echo "$output"; cat "$LRH_LOG"; false; }
+  [ ! -s "$BATS_TEST_TMPDIR/tui.log" ] || false
+}
+@test "own account CONTROL: a reading taken BEFORE the death proves nothing → the session moves" {
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  own_acct ',"session_pct":10,"weekly_pct":3,"quota_as_of":"2026-09-08T23:00:00+00:00"'
+  run bash "$FLEET" --one "$SID"
+  grep -q -- "--target next3" "$LRH_LOG" || { echo "$output"; cat "$LRH_LOG"; false; }
 }
 
 # ══════════════════════════════════════════════════════════════════════════════

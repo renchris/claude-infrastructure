@@ -808,7 +808,58 @@ EOF
   # bound you guess can only convict a healthy call, and this one already bounds itself. Its expiry
   # is retried once with a longer bound (lf_rank_timed above).
   LF_RANK_WHY="$(lf_rank_why "$rankerr")"
+  # A PARK IS FOR WHEN NOTHING CAN HOST THE SESSION, NOT WHEN NOTHING IS IDEAL (operator ruling
+  # 2026-10-01: "Why are we parking sessions? We need to put on next3 and/or next4 so we can
+  # unblock"). Measured that day: five sessions parked while next4 sat at 3% weekly
+  # (`kmax-concurrency`, a cap the router charged against a stale pane census) and next3 at 91%
+  # (`recovery-weekly-thin`); one earlier pass parked on `poll throttled`, a read failure. Each is a
+  # PREFERENCE or a measurement gap, not a cap. So when the ranked walk found nothing, an account
+  # the router excluded only for such a reason is taken, the most weekly headroom first. A hard
+  # reason (weekly-exhausted, 5h-cutoff, an auth state, the login-cliff drain) or any reason this
+  # list does not name still parks. Kill switch LF_SOFT_FALLBACK=off.
+  if [ "${LF_SOFT_FALLBACK:-on}" != off ] && [ -n "$LF_RANK_WHY" ]; then
+    while IFS= read -r cand; do
+      [ -n "$cand" ] && [ "$cand" != "$1" ] || continue
+      if command -v cc_acct_dir_for_name >/dev/null 2>&1 && ! cc_acct_dir_for_name "$cand" >/dev/null 2>&1; then continue; fi
+      if [ -n "${3:-}" ] && _lf_target_holds_sid "$cand" "$3"; then continue; fi
+      echo "lr-fleet: the recovery lane ranked nothing, but $cand was excluded only for a soft reason ($LF_RANK_WHY) — recovering onto it rather than parking" >&2
+      lf_charge_assign "$cand"
+      LF_PICK_TARGET="$cand"; return 0
+    done <<EOF
+$(lf_soft_candidates "$LF_RANK_WHY" "$kind")
+EOF
+  fi
   return 1
+}
+# The accounts the router excluded ONLY for a soft reason, best first (most weekly headroom), one
+# per line. Fails closed: an account with no numeric reading, or one at a cap or wire-rejected, is
+# never printed, whatever its reason said.
+lf_soft_candidates() { # $1=the router's reason text ("a=why; b=why") $2=kind → account names on stdout
+  local bin
+  if [ -n "${CC_ACCOUNTS_BIN:-}" ]; then bin="$CC_ACCOUNTS_BIN"; else bin="$ACCOUNTS"; fi
+  [ -x "$bin" ] || return 0
+  "$bin" --json 2>/dev/null | LF_WHY="$1" LF_KIND="$2" /usr/bin/python3 -c '
+import json, os, re, sys
+SOFT = ("recovery-weekly-thin", "recovery-5h-thin", "kmax-concurrency", "concurrency-unmeasured", "poll throttled")
+why = {}
+for part in re.split(r";\s*", os.environ.get("LF_WHY", "")):
+    if "=" in part:
+        a, r = part.split("=", 1)
+        why[a.strip()] = r.strip()
+soft = {a for a, r in why.items() if any(r.startswith(s) for s in SOFT)}
+try: rows = json.loads(sys.stdin.read()).get("rows", [])
+except Exception: sys.exit(0)
+ok = []
+for r in rows:
+    a = r.get("acct")
+    if a not in soft: continue
+    s, w = r.get("session_pct"), r.get("weekly_pct")
+    if not isinstance(s, (int, float)) or not isinstance(w, (int, float)) or s >= 100 or w >= 100: continue
+    if os.environ.get("LF_KIND") == "fable" and (r.get("fable_pct") or 0) >= 100: continue
+    wire = r.get("wire") or {}
+    if any(v == "rejected" for k, v in wire.items() if k.endswith("_status")): continue
+    ok.append((w, s, a))
+for w, s, a in sorted(ok): print(a)'
 }
 # ── THE ADMIT SECTION — everything under the lock, and NOTHING ELSE ─────────────────────────────
 # Returns 0 = admitted and LF_ADMIT_TARGET / LF_ADMIT_T0 are set · 1 = parked, the row is already
@@ -901,6 +952,16 @@ lf_one() { # $1=sid $2=cfg $3=acct $4=pane $5=cwd $6=tier → rc of the recovery
 _lf_one_act() {
   local sid="$1" cfg="$2" acct="$3" pane="$4" cwd="$5" tier="$6" target rc=0 out rdir="$FLEET_DIR/$RUN" model="" effort="" arc=0
   mkdir -p "$rdir"
+  # WAKE IN PLACE BEFORE MOVING: the source account may already have its headroom back (see
+  # lf_own_acct_live). Needs a live pane to type into; a session without one still moves.
+  if [ -n "$pane" ] && [ "$pane" != - ] && lf_own_acct_live "$acct" "$cfg" "$sid" "${tier%%/*}"; then
+    if [ "$DRY" = 1 ]; then
+      lf_row "$sid" "$pane" "$pane" "$acct" "$acct" "dry-run" "would wake in place: $acct has headroom again"
+      return 0
+    fi
+    lf_nudge "$sid" "$cfg" "$acct" "$pane"
+    return $?
+  fi
   # ONE TAKE, ONE RELEASE. The actuator below is DELIBERATELY outside the lock: it is the 115-658 s
   # half, and serializing it would turn the pool back into the queue this wave replaced.
   lf_admit_lock_take || {
@@ -1050,6 +1111,58 @@ for r in rows:
     if r.get("acct") == sys.argv[1]:
         sys.exit(1 if ((r.get("session_pct") or 0) >= 100 or (r.get("weekly_pct") or 0) >= 100) else 0)
 sys.exit(0)' "$1"
+}
+# ── THE SESSION'S OWN ACCOUNT CAME BACK (2026-10-01) ──────────────────────────────────────────────
+# A limit can lift before the reset its error printed: a banked limit reset clears the weekly window
+# at once, and a 5-hour window rolls while the session sits. Measured 2026-10-01: three next4
+# sessions died "resets Oct 4" at 20:16Z, next4 read 3% weekly by 21:04Z, and every recovery tried
+# to MOVE them (lf_pick_target walks past the source by design) and parked for want of a target,
+# while the poller's wake-in-place waited on the PRINTED reset, two days out. So when the source
+# account reads below every cap that applies, in a reading taken AFTER the death, the session is
+# woken where it stands. Unlike lf_acct_has_headroom this FAILS CLOSED: no row, no numbers, a wire
+# rejection, or a reading older than the death all return 1 and the session moves exactly as before.
+# Kill switch LF_SAME_ACCT_WAKE=off.
+lf_own_acct_live() { # $1=acct $2=cfg $3=sid $4=tier → 0 a post-death reading shows headroom · 1 otherwise
+  local bin tx f
+  [ "${LF_SAME_ACCT_WAKE:-on}" = off ] && return 1
+  if [ -n "${CC_ACCOUNTS_BIN:-}" ]; then bin="$CC_ACCOUNTS_BIN"
+  else for bin in "$LR/../../bin/claude-accounts" "$HOME/bin/claude-accounts"; do [ -x "$bin" ] && break; done; fi
+  [ -x "$bin" ] || return 1
+  tx=""; for f in "$2"/projects/*/"$3".jsonl; do [ -f "$f" ] && { tx="$f"; break; }; done
+  [ -n "$tx" ] || return 1
+  "$bin" --json 2>/dev/null | LF_TX="$tx" /usr/bin/python3 -c '
+import json, os, sys, time
+from datetime import datetime
+def ts(s):
+    try: return datetime.fromisoformat(str(s).replace("Z", "+00:00")).timestamp()
+    except Exception: return None
+death = None
+try:
+    with open(os.environ["LF_TX"], errors="replace") as f:
+        for ln in f:
+            try: d = json.loads(ln)
+            except Exception: continue
+            if d.get("type") == "assistant" and d.get("isApiErrorMessage"):
+                death = ts(d.get("timestamp")) or death
+except Exception: sys.exit(1)
+if death is None: sys.exit(1)
+try: rows = json.loads(sys.stdin.read()).get("rows", [])
+except Exception: sys.exit(1)
+acct, tier = sys.argv[1], sys.argv[2]
+for r in rows:
+    if r.get("acct") != acct: continue
+    s, w = r.get("session_pct"), r.get("weekly_pct")
+    if not isinstance(s, (int, float)) or not isinstance(w, (int, float)): sys.exit(1)
+    if s >= 100 or w >= 100: sys.exit(1)
+    if tier.startswith("claude-fable") and (r.get("fable_pct") or 0) >= 100: sys.exit(1)
+    wire = r.get("wire") or {}
+    if any(v == "rejected" for k, v in wire.items() if k.endswith("_status")): sys.exit(1)
+    if r.get("lastgood_wire_rejects"): sys.exit(1)
+    # A row with no quota_as_of is a live read from a cache at most 90 s old; date it at the far
+    # edge of that window so a death inside it never counts as "after".
+    seen = ts(r.get("quota_as_of")) if r.get("quota_as_of") else time.time() - 90
+    sys.exit(0 if seen is not None and seen > death else 1)
+sys.exit(1)' "$1" "${4:-}"
 }
 # The nudge types ONE continue prompt through cc-tui (read-back verified, transcript-proved; a
 # composer that is not a draft is cleared first, a draft still holds) and proves engagement by a

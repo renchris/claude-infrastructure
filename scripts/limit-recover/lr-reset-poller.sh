@@ -980,6 +980,27 @@ rq_record_attempt() { # $1=file $2=verdict — bumps .attempts and stamps the at
      '.attempts = ((.attempts // 0) + 1) | .last_attempt_epoch = $now | .last_verdict = $v' "$1" > "$t" 2>/dev/null \
     && mv -f "$t" "$1" 2>/dev/null || { rm -f "$t" 2>/dev/null; log "REQUEST-WARN could not record the attempt on $1"; }
 }
+# A PARK IS NOT AN ATTEMPT (2026-10-01). The attempt is charged at dispatch, before the detached
+# driver decides anything, and a driver that PARKS has moved nothing and typed nothing. Measured
+# that day: three next4 sessions spent all three dispatches on "no routable target" parks, were
+# filed exhausted and paged the operator, while their own account had its headroom back. So when
+# the run the last dispatch started ended PARKED, that dispatch is handed back, once per run, and
+# the request keeps waiting (still paced by LR_REQUEST_RETRY_MIN) instead of exhausting.
+# Kill switch LR_REQUEST_REFUND_PARKS=off.
+rq_refund_park() { # $1=request file $2=sid → 0 refunded (attempts -1) · 1 nothing to refund
+  [[ "${LR_REQUEST_REFUND_PARKS:-on}" == off ]] && return 1
+  local run v done_run t="$1.tmp.$$"
+  run="$(sed -n 's/^run=\([^ ]*\) .*/\1/p' "$RESULTS/$2.log" 2>/dev/null | tail -1)"
+  [[ -n "$run" && -f "$run/verdict.txt" ]] || return 1
+  v="$(cat "$run/verdict.txt" 2>/dev/null)"
+  [[ "$v" == *"verdict=PARKED"* ]] || return 1
+  done_run="$(jq -r '.refunded_run // ""' "$1" 2>/dev/null)"
+  [[ "$done_run" == "$run" ]] && return 1
+  jq --arg r "$run" '.attempts = ([((.attempts // 0) - 1), 0] | max) | .refunded_run = $r | .last_verdict = "parked-refunded"' \
+     "$1" > "$t" 2>/dev/null && mv -f "$t" "$1" 2>/dev/null || { rm -f "$t" 2>/dev/null; return 1; }
+  log "REQUEST-REFUND $2 — the last dispatch's run parked (nothing moved, nothing typed); its attempt is handed back ($run)"
+  return 0
+}
 # THE PER-ACCOUNT TICK COUNTERS. /bin/bash 3.2 (launchd's interpreter) has no associative arrays,
 # so each counter is one "acct=n " string; rq_acct_n reads one account's count, rq_acct_bump adds one.
 RQ_STAY_S="${LR_REQUEST_STAY_S:-900}"; [[ "$RQ_STAY_S" =~ ^[0-9]+$ ]] || RQ_STAY_S=900
@@ -1204,6 +1225,7 @@ sys.stdout.write("".join(str(d.get(k) or "")+"\0"
 
   # ── THE PER-SID RUN CLAIM (defect 2) ──────────────────────────────────────────────────────────
   if (( _rq_hook == 1 )); then
+    if (( _rq_att > 0 )) && rq_refund_park "$_rq" "$_rq_sid"; then _rq_att=$(( _rq_att - 1 )); fi
     if (( _rq_att >= RQ_MAX_ATTEMPTS )); then
       log "REQUEST-EXHAUSTED $_rq_sid — $_rq_att dispatch(es) and the session is still LIMITED; filed as exhausted (cc-lr recover ${_rq_sid:0:8} retries it by hand)"
       mv "$_rq" "$RESULTS/${_rq_name%.json}.exhausted.json" 2>/dev/null || true; lrp_act_done
