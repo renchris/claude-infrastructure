@@ -1104,6 +1104,9 @@ rewrite of the method.
 
 ## 9. Open decisions for you
 
+**Ruled 2026-10-01:** all nine adopted as recommended (decision packet `83adb541ea19`, actioned). The build that
+puts them into effect is tracked in `docs/plans/RESEARCH_PROGRAM_BUILD.md`.
+
 Each is a value call that more research cannot settle. The evidence is on disk, and the conviction is in the course
 recommended.
 
