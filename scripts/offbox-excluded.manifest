@@ -125,8 +125,6 @@ tests/cc-dispatch-v2.bats
 tests/session-index-sweep.bats
 # run 31362043861: notok=11 (0 ok — the whole suite)
 tests/session-index-end-first-prompt.bats
-# run 31362043861: notok=1
-tests/handoff-fire-completion-push.bats
 
 # ── host toolchain assumptions ───────────────────────────────────────────────────────────────────
 # HINT (not verified): these assert a specific interpreter/tool layout on this box.
