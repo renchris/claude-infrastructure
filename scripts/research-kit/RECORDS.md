@@ -70,3 +70,28 @@ failed, 2 usage or refusal, 3 a dead vendor lane, 4 a voided slot. Python is 3.9
   refused with each reason, 2 the program cannot be read. Reads the newest certificate and the LIVE decision and
   known-row records (the sweep and the frame-delta cycle clear blocks after the certificate). The reader behind
   `handoff-fire.sh --requires-gate P --gate-wave W`.
+
+## `bin/cc-research` (wave 2, REPORT.md §8 items 9–12 and 15)
+
+`bin/cc-research <verb>` → `lib/cli.py`, which lists the module owning each verb. It reads and writes the records
+above and nothing else; the kit scripts stay as thin compatibility entry points over the same modules. Verbs that
+read one program take `--program P` (`verdict` also takes the slug positionally: `cc-research verdict <slug>` is the
+certificate read the research block whitelists, `router.py` `cert_read`). Names the block treats as buying verbs
+(`router.py` `CC_RESEARCH_BUYING`): `reopen`, `extra-round`, `round`, `frame-critique`, `rehearse`.
+
+Cross-module contracts (a consumer depends on exactly these shapes):
+
+- `cc-research verdict [--program] P [--json]` → the `gate.sh render` state lines, then an operator block (pending
+  concerns, "waiting on you since <date>", the priced menu). `--json`: `{program, state, lines:[…],
+  pending_concerns:N, waiting_since:ISO|null, menu:[{id, label, price, effect}]}`.
+- `cc-research pending --json` → `{programs:[{program, state, pending_concerns, waiting_since, menu:[…]}]}` over every
+  registry program not `closed`. Read by `hooks/operator-readout.sh` and `scripts/wrap-ledger.sh`.
+- `cc-research concern add --program P --text T [--raised-by operator|agent|sweep|build|rehearsal]` appends a
+  `challenges.jsonl` row with `triage: "pending"`; `cc-research concern list --program P [--pending] [--json]`.
+- `cc-research triage --program P` buckets pending challenges by the §5.2 table through a blind rater, appending
+  triage events to `challenges.jsonl` (and `changes.jsonl` for counted buckets), and is the writer of
+  `$CC_RESEARCH_HOME/activities.json` (`lib/activities.py`; shape in `router.py`'s header).
+- `cc-research job sweep|freshness|triage|drift|market [--program P]` → one scheduled pass (no `--program`: every
+  registry program in `certifying|certified`). The launchd runners in `scripts/research-kit/jobs/` call only this.
+- `cc-research reference-class record|show|check` → `docs/research/research-reference-class.jsonl` in
+  claude-infrastructure (append-only).

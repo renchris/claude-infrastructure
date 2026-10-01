@@ -1,0 +1,15 @@
+#!/usr/bin/env python3
+"""cc-research — the research program's command-line tool (REPORT.md §8 items 9 and 10).
+
+docs/research/upfront-research-exhaustion-2026-09-30/REPORT.md. It absorbs the hand-run kit's verbs
+over the SAME records (scripts/research-kit/RECORDS.md); the verbs live in
+scripts/research-kit/lib/cli.py and the modules it names. `cc-research --help` lists them.
+"""
+import sys
+from pathlib import Path
+
+LIB = Path(__file__).resolve().parents[1] / "scripts" / "research-kit" / "lib"
+sys.path.insert(0, str(LIB))
+import cli  # noqa: E402
+
+sys.exit(cli.main(sys.argv[1:]))
