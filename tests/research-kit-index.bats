@@ -5,6 +5,8 @@
 
 setup() {
   unset CC_BATS_ACTIVE
+  export HOME="$BATS_TEST_TMPDIR/home"
+  mkdir -p "$HOME"
   REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   X="$REPO/scripts/research-kit/research-index.py"
   R="$BATS_TEST_TMPDIR/repo"

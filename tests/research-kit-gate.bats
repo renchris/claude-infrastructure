@@ -8,6 +8,8 @@
 # turns FAIL: "every gate row has a planted-input test that must fail" (REPORT.md §3.10).
 
 setup_file() {
+  export HOME="$BATS_FILE_TMPDIR/home"
+  mkdir -p "$HOME"
   export W="$BATS_FILE_TMPDIR/w"
   export CC_RESEARCH_HOME="$W/home" CC_RESEARCH_REGISTRY="$W/home/programs.json"
   export CC_NOW="2026-10-01T12:00:00Z" CC_RESEARCH_VAULT_KEY="test-key"
@@ -18,6 +20,8 @@ setup_file() {
 }
 
 setup() {
+  export HOME="$BATS_FILE_TMPDIR/home"
+  mkdir -p "$HOME"
   unset CC_BATS_ACTIVE CC_RESEARCH_RECORDS
   REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   G="$REPO/scripts/research-kit/gate.sh"
