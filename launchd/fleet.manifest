@@ -521,3 +521,13 @@ com.claude.public-publish         | run    | 10800 | auto | 12 | 46-public-repo-
 com.reso.lr-reconciler            | staged | 10   | ~/.reso/limit-recover/recon/heartbeat | — | lr-recon-launchd.sh
 com.reso.lr-reconciler-watchdog   | staged | 30   | ~/.reso/limit-recover/recon/watchdog.state | — | lr-recon-launchd.sh
 com.reso.lr-reconciler-rig        | staged | 0    | - | — | lr-recon-launchd.sh
+# ── com.claude.research-* (2026-10-01, RESEARCH_PROGRAM_BUILD wave C, REPORT.md §8 item 12) ──────────
+# The research program's scheduled passes, one runner (scripts/research-kit/jobs/research-job.sh).
+# `staged`: SSOT in launchd/staged/, loaded only by the operator's migrations/0051-research-jobs.sh.
+# `auto` is a real sensor: `cc-research job` prints a line on every run, even with no program to
+# visit. interval 0 = daily for the calendar jobs; sweep is hourly; market is weekly, so 604800.
+com.claude.research-sweep         | staged | 3600   | auto | - | 0051-research-jobs.sh
+com.claude.research-freshness     | staged | 0      | auto | - | 0051-research-jobs.sh
+com.claude.research-triage        | staged | 0      | auto | - | 0051-research-jobs.sh
+com.claude.research-drift         | staged | 0      | auto | - | 0051-research-jobs.sh
+com.claude.research-market        | staged | 604800 | auto | - | 0051-research-jobs.sh

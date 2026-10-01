@@ -658,8 +658,11 @@ STUB
   # 43 since 2026-09-30: the deadline system's two jobs, both `run` — com.chrisren.dl-sweep (W3,
   # ccaaa09fa, which landed its row without moving this count) and com.chrisren.dl-sync (W2, the
   # phone reconciler; DL_SYNC_ONLY=test.canary until go-live).
-  if [ "$n" != 43 ]; then
-    echo "manifest declares $n labels, expected 43 — if a plist was legitimately added or retired,"
+  # 48 since 2026-10-01: the research program's five jobs, com.claude.research-{sweep,freshness,
+  # triage,drift,market} (RESEARCH_PROGRAM_BUILD wave C), all `staged` in launchd/staged/ and loaded
+  # only by the operator's migrations/0051-research-jobs.sh. Rows, plists and this count in one land.
+  if [ "$n" != 48 ]; then
+    echo "manifest declares $n labels, expected 48 — if a plist was legitimately added or retired,"
     echo "move this count and say why (see the block above); if not, a row is missing. Declared:"
     grep -vE '^[[:space:]]*(#|$)' "$M" | cut -d'|' -f1 | sed 's/[[:space:]]//g; s/^/  /'
     return 1

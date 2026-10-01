@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- SSOT for com.claude.research-drift. STAGED, NOT LOADED — loading it is the operator's
+     (migrations/0051-research-jobs.sh, class c10). Daily at 05:30: `cc-research job drift` diffs rule
+     and lesson text against the last run and files "reality moved" for the acceptance rows it touches
+     (REPORT.md §5.5). -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>            <string>com.claude.research-drift</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/chrisren/.claude/scripts/research-kit/jobs/research-job.sh</string>
+    <string>drift</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>           <integer>5</integer>
+    <key>Minute</key>         <integer>30</integer>
+  </dict>
+  <key>RunAtLoad</key>        <false/>
+  <key>StandardOutPath</key>  <string>/Users/chrisren/.claude/logs/research-drift.out.log</string>
+  <key>StandardErrorPath</key><string>/Users/chrisren/.claude/logs/research-drift.err.log</string>
+</dict>
+</plist>

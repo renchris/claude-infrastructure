@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- SSOT for com.claude.research-freshness. STAGED, NOT LOADED — loading it is the operator's
+     (migrations/0051-research-jobs.sh, class c10). Daily at 06:00: `cc-research job freshness`
+     re-checks each expired premise once per program and files a drift challenge when the verdict
+     flips (REPORT.md §5.5). -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>            <string>com.claude.research-freshness</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/chrisren/.claude/scripts/research-kit/jobs/research-job.sh</string>
+    <string>freshness</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>           <integer>6</integer>
+    <key>Minute</key>         <integer>0</integer>
+  </dict>
+  <key>RunAtLoad</key>        <false/>
+  <key>StandardOutPath</key>  <string>/Users/chrisren/.claude/logs/research-freshness.out.log</string>
+  <key>StandardErrorPath</key><string>/Users/chrisren/.claude/logs/research-freshness.err.log</string>
+</dict>
+</plist>
