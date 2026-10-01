@@ -51,7 +51,15 @@ items are live (converged), not when the code is written.
 ### A2 — signing library, hand-run kit, registry
 - REPORT.md §8 items 4 and 7; layout per `evidence/design/SYNTHESIS.md:932-1097`.
 - Registry state `certifying` set at freeze so the relay test runs with the block on (§10 item 1).
-- Status: not started.
+- Scope (frozen): the operator-only signing library with a research namespace (frame, cert, extra round set, reopen,
+  veto) factored out of `bin/cc-signoff`; the seven kit scripts under `scripts/research-kit/` over plain records;
+  registry writes (registered → certifying at freeze → certified at the gate); caps enforced in `round.sh` and
+  `gate.sh`; the class-B/class-C due-date sweep; a planted-input test that fails on bad input for §10 items 1, 4, 7,
+  9, 13, 17 and every implemented gate row; landed and converged.
+- Layout: shared contract `scripts/research-kit/lib/kit.py` (paths, profiles and caps, registry writer, record I/O);
+  `gate.sh` → `lib/gate.py` dispatching rows 1–8 to `lib/gate_rows_a.py` and rows 9–16 to `lib/gate_rows_b.py`;
+  signing library `scripts/lib/operator_sign.py`. Registry env `CC_RESEARCH_REGISTRY` matches wave A1's resolver.
+- Status: in progress (lead session fire-A2; team of six).
 
 ### A3 — calibration study
 - REPORT.md §8 item 14; §6.6 lists what it measures. Output: `docs/research/research-calibration.jsonl` and a report;
