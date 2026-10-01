@@ -69,7 +69,7 @@ EOF
   export CC_RESEARCH_RECORDS="$BATS_TEST_TMPDIR/new"
   run "$CR" probe --program demo --id P-1 --kind read --closes PR-1 --negative-control false -- printf 'a b\n'
   [ "$status" -eq 0 ]
-  [[ "$output" == *"P-1 kind=read exit=0 n=1 level=E2"* ]]
+  [[ "$output" == *"P-1 kind=read exit=0 n=1 level=E2"* ]] || false
   /usr/bin/python3 -c "
 import json
 o = json.loads(open('$BATS_TEST_TMPDIR/old/probes.jsonl').read())
@@ -84,14 +84,14 @@ assert o == n, (o, n)"
   export CC_RESEARCH_RECORDS="$BATS_TEST_TMPDIR/r"
   run "$CR" probe --program demo --id P-2 --kind spike --mutates-live --negative-control false -- true
   [ "$status" -eq 2 ]
-  [[ "$output" == *"probes never change the live subject"* ]]
+  [[ "$output" == *"probes never change the live subject"* ]] || false
   [ ! -e "$CC_RESEARCH_RECORDS/probes.jsonl" ]
 }
 
 @test "self-test passes the known-good program and records the row as one probe through the runner" {
   run "$CR" self-test --program demo
   [ "$status" -eq 0 ]
-  [[ "$output" == *"PASS AM-1 bad=1 good=0"* ]]
+  [[ "$output" == *"PASS AM-1 bad=1 good=0"* ]] || false
   [ "$(lastrec "$REC" 'r["id"], r["exit"], r["negative_control"]["exit"], r["negative_control"]["reported_refutation"]')" = "P-selftest-AM-1-1 0 1 True" ]
   run "$CR" self-test --program demo
   [ "$(lastrec "$REC" 'r["id"]')" = "P-selftest-AM-1-2" ]
@@ -116,7 +116,7 @@ assert o == n, (o, n)"
   before="$(wc -l < "$REC/probes.jsonl")"
   run "$CR" self-test --program demo
   [ "$status" -eq 1 ]
-  [[ "$output" == *"FAIL AM-1 bad=- good=-"* ]]
+  [[ "$output" == *"FAIL AM-1 bad=- good=-"* ]] || false
   [ "$(wc -l < "$REC/probes.jsonl")" -eq "$before" ]
 }
 
@@ -141,8 +141,8 @@ assert d['rows'][0]['verdict'] == 'PASS' and d['passed'] is True, d" "$output"
   chmod +x "$BATS_TEST_TMPDIR/agentonly/shellcheck"
   PATH="$BATS_TEST_TMPDIR/agentonly:/usr/bin:/bin" run "$CR" doctor --program demo
   [ "$status" -eq 0 ]
-  [[ "$output" == *"codex"*"$BATS_TEST_TMPDIR/ipath/codex"*"hidden from the agent PATH"* ]]
-  [[ "$output" == *"shellcheck"*"$BATS_TEST_TMPDIR/agentonly/shellcheck"* ]]
+  [[ "$output" == *"codex"*"$BATS_TEST_TMPDIR/ipath/codex"*"hidden from the agent PATH"* ]] || false
+  [[ "$output" == *"shellcheck"*"$BATS_TEST_TMPDIR/agentonly/shellcheck"* ]] || false
   /usr/bin/python3 -c "
 import json; d = json.load(open('$CC_RESEARCH_RECORDS/evidence/doctor/env.json'))
 assert d['tools']['codex']['state'] == 'hidden', d['tools']['codex']
@@ -154,11 +154,13 @@ assert d['tools']['bats']['state'] == 'absent', d['tools']['bats']"
   fake_zsh
   export CC_RESEARCH_RECORDS="$BATS_TEST_TMPDIR/r"
   mkdir -p "$CC_RESEARCH_RECORDS"
-  printf '%s\n' '{"credentials":[{"name":"old-token","expires":"2020-01-01T00:00:00Z"},{"name":"good-token","expires":"2099-01-01T00:00:00Z"},{"name":"no-date"}]}' \
+  local good
+  good="$(date -u -v+8760H +%Y-%m-%dT%H:%M:%SZ)"
+  printf '{"credentials":[{"name":"old-token","expires":"2020-01-01T00:00:00Z"},{"name":"good-token","expires":"%s"},{"name":"no-date"}]}\n' "$good" \
     > "$CC_RESEARCH_RECORDS/frame.json"
   run "$CR" doctor --program demo
   [ "$status" -eq 0 ]
-  [[ "$output" == *"old-token"*"expired"* ]]
+  [[ "$output" == *"old-token"*"expired"* ]] || false
   /usr/bin/python3 -c "
 import json; d = json.load(open('$CC_RESEARCH_RECORDS/evidence/doctor/env.json'))
 c = {x['name']: x['state'] for x in d['credential_expiry']}
@@ -180,7 +182,7 @@ assert c == {'old-token': 'expired', 'good-token': 'ok', 'no-date': 'unknown'}, 
   printf '%s\n' '{"credentials":[{"name":"old-token","expires":"2020-01-01T00:00:00Z"}]}' > "$CC_RESEARCH_RECORDS/frame.json"
   run "$PR" doctor --program demo
   [ "$status" -eq 0 ]
-  [[ "$output" == *"old-token"*"expired"* ]]
+  [[ "$output" == *"old-token"*"expired"* ]] || false
   run "$PR" bogus
   [ "$status" -eq 2 ]
   if command -v shellcheck >/dev/null; then
