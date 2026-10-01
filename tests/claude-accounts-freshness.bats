@@ -207,7 +207,11 @@ assert "lastgood_wire_rejects" not in r, "the reset voided the verdict"
 assert "weekly window reset at" in r["reset_evidence"][0], r["reset_evidence"]
 assert CALLS["wire"] == 2, "a reset since the reading is worth a substitute read"
 assert ca._excluded(r, R) is not None, "unknown is refused, not admitted"
-assert ca.reset_evidence_pending(cfg) == ["next3"]
+assert ca.reset_evidence_pending(cfg) == ["next3"], "no cache: the evidence is pending"
+json.dump({"ts": time.time() - 120}, open(cfg["cache_file"], "w"))
+assert ca.reset_evidence_pending(cfg) == ["next3"], "a cache written BEFORE the reset is stale"
+json.dump({"ts": time.time()}, open(cfg["cache_file"], "w"))
+assert ca.reset_evidence_pending(cfg) == [], "a cache written after it already carries it"
 print("OK")'
   [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }

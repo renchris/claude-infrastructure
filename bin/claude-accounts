@@ -1859,35 +1859,56 @@ def last_reset_event(acct):
     return best
 
 
-def reset_evidence(entry, acct):
-    """Which buckets of a last-good `entry` are KNOWN to be pre-reset, and why.
-
-    -> ({bucket: evidence}) for bucket in session/weekly/fable. Only POSITIVE evidence counts: a
-    reset stamp that has passed, or a recorded event newer than the reading. Absence of evidence
-    is not evidence of a reset, so an unknown stays exactly what it was."""
+def _reset_evidence_items(entry, acct):
+    """-> {bucket: (epoch the evidence arose, text)} for bucket in session/weekly/fable."""
     out = {}
     for pfx in ("session", "weekly", "fable"):
         stamp = entry.get(f"{pfx}_reset_at")
         h = hrs_until(stamp)
         if stamp and h is not None and h <= 0:
-            out[pfx] = f"{pfx} window reset at {_fmt_asof(stamp) or stamp}"
+            out[pfx] = (time.time() + h * 3600.0,
+                        f"{pfx} window reset at {_fmt_asof(stamp) or stamp}")
     ev = last_reset_event(acct)
     asof = entry.get("quota_as_of")
     if ev and asof and ev["ts"] > asof:
         # `clears` for the banked reset names five_hour and seven_day; whether it includes the
         # Fable weekly is unverified, so Fable is left alone (its stale figure over-states use,
         # the safe direction).
+        h = hrs_until(ev["ts"])
+        at = time.time() + h * 3600.0 if h is not None else time.time()
         for pfx in ("session", "weekly"):
-            out.setdefault(pfx, f"{ev.get('kind', 'reset')} recorded at {_fmt_asof(ev['ts'])}")
+            out.setdefault(pfx, (at, f"{ev.get('kind', 'reset')} recorded at "
+                                     f"{_fmt_asof(ev['ts'])}"))
     return out
 
 
+def reset_evidence(entry, acct):
+    """Which buckets of a last-good `entry` are KNOWN to be pre-reset, and why.
+
+    -> ({bucket: evidence}) for bucket in session/weekly/fable. Only POSITIVE evidence counts: a
+    reset stamp that has passed, or a recorded event newer than the reading. Absence of evidence
+    is not evidence of a reset, so an unknown stays exactly what it was."""
+    return {b: text for b, (_at, text) in _reset_evidence_items(entry, acct).items()}
+
+
 def reset_evidence_pending(cfg):
-    """Does any account have reset evidence newer than its last good read? Keepwarm sweeps at
-    once when it does, instead of serving a cache that still holds the pre-reset reading."""
+    """Accounts whose reset evidence arose AFTER the shared cache was written — i.e. the cache now
+    serves a reading it does not know is pre-reset. Keepwarm sweeps at once for those instead of
+    serving it. Evidence older than the cache is already folded into it (the sweep that wrote it
+    applied the same rule), so an account whose stamp passed days ago — a logged-out one that
+    cannot be re-read — does not force a sweep on every tick."""
     led = load_lastgood()
-    return sorted(a["name"] for a in cfg.get("accounts", [])
-                  if led.get(a["name"]) and reset_evidence(led[a["name"]], a["name"]))
+    age = _quota_age_s(cfg)
+    cache_at = None if age is None else time.time() - age
+    out = []
+    for a in cfg.get("accounts", []):
+        e = led.get(a["name"])
+        if not e:
+            continue
+        items = _reset_evidence_items(e, a["name"])
+        if items and (cache_at is None or any(at > cache_at for at, _t in items.values())):
+            out.append(a["name"])
+    return sorted(out)
 
 
 def wire_substitute_wanted(row):
