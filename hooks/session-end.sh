@@ -112,6 +112,39 @@ if [ "${CC_TEAMMATE_ORPHAN_CLOSE:-on}" != off ] && command -v jq >/dev/null 2>&1
   fi
 fi
 
+# ── the pane-close retry queue gets a SECOND clock (2026-10-01, husk panes fix F-b) ───────────
+# scripts/pane-close-retry.sh drains ~/.claude/state/pane-close-queue, and its only scheduled
+# trigger is the end of teammate-reap-alarm.sh, run by a 600 s launchd job. launchd never starts a
+# job while its previous instance lives, and that job's plist chains assignee-pane-residency.sh
+# after it, unbounded: measured 2026-10-01 at load 90-325, one instance (pid 5152) held the job for
+# 4h52m, so a queue whose whole promise is "retried once kitty answers" had no clock at all. Session
+# exits are frequent and independent of launchd, so every SessionEnd that finds a row also kicks
+# the drainer — detached (this process group dies with the session), bounded, and at most once per
+# CC_PCQ_SESSIONEND_MIN_S (300) machine-wide via a stamp. The drainer re-reads every pane before it
+# acts, so an extra run can only cost a bounded kitty probe. Kill switch: CC_PCQ_SESSIONEND_DRAIN=off.
+if [ "${CC_PCQ_SESSIONEND_DRAIN:-on}" != off ]; then
+  _se_pcq_dir="${CC_PANE_CLOSE_QUEUE_DIR:-$HOME/.claude/state/pane-close-queue}"
+  _se_pcq_bin="${SE_PCQ_BIN:-$HOME/.claude/scripts/pane-close-retry.sh}"
+  _se_pcq_lib="${SE_DETACH_LIB:-$HOME/.claude/scripts/lib/detach.sh}"
+  _se_pcq_row=""
+  for _se_pcq_f in "$_se_pcq_dir"/*.json; do [ -f "$_se_pcq_f" ] && { _se_pcq_row=1; break; }; done
+  if [ -n "$_se_pcq_row" ] && [ -x "$_se_pcq_bin" ] && [ -f "$_se_pcq_lib" ]; then
+    _se_pcq_stamp="$_se_pcq_dir/.sessionend-drain"
+    _se_pcq_age=$(( $(date +%s) - $(stat -f %m "$_se_pcq_stamp" 2>/dev/null || echo 0) ))
+    if [ "$_se_pcq_age" -ge "${CC_PCQ_SESSIONEND_MIN_S:-300}" ]; then
+      touch "$_se_pcq_stamp" 2>/dev/null || true
+      _se_pcq_to=""
+      # Absolute paths only: a hook may inherit a stock PATH with no coreutils (unattended-path-lint).
+      for _se_pcq_c in /opt/homebrew/bin/timeout /usr/local/bin/timeout /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+        [ -n "$_se_pcq_c" ] && [ -x "$_se_pcq_c" ] && { _se_pcq_to="$_se_pcq_c"; break; }
+      done
+      # shellcheck disable=SC1090  # runtime-resolved library
+      ( . "$_se_pcq_lib" && detach "${SE_PCQ_LOG:-$HOME/.claude/logs/pane-close-retry.out}" \
+          ${_se_pcq_to:+"$_se_pcq_to" -k 5 "${CC_PCQ_DRAIN_TIMEOUT_S:-240}"} "$_se_pcq_bin" ) >/dev/null 2>&1 || true
+    fi
+  fi
+fi
+
 # ── clean-exit watchdog + checkpoint cleanup ───────────────────────────────────
 # Remove THIS session's watchdog pid/id + teammate-checkpoint counter on a clean
 # SessionEnd so that:
