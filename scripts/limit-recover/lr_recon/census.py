@@ -159,8 +159,9 @@ def bucket(
     focused = bool(pane and pane.is_focused)
     work = [b for b in s.bg_work if not b.watcher_only]
     if kind == "limited":
-        if pane is not None and pane.root_shape == "launcher":
-            return _mk(s, "LAUNCHER-ROOTED", "launcher-rooted pane ⇒ R", kind, fact)
+        # The holds and the stay rule come before LAUNCHER-ROOTED: R retires the pane, so a refusable
+        # read goes first (invariant 3), and a source resetting inside 15 min is continued in place
+        # on any pane (§5 stay rule). Checked first, a launcher-rooted session was never held (W7g).
         if focused and env.get("LR_MOVE_FOCUSED", "on") == "off":
             return _mk(
                 s, "HOLD-FOCUS", "focused pane (LR_MOVE_FOCUSED=off)", kind, fact
@@ -178,6 +179,8 @@ def bucket(
         resets = fact.resets_at if fact else _own_scope(s)[1]
         if resets is not None and resets - now < STAY_S:
             return _mk(s, "STAY", "source resets within 15 min", kind, fact)
+        if pane is not None and pane.root_shape == "launcher":
+            return _mk(s, "LAUNCHER-ROOTED", "launcher-rooted pane ⇒ R", kind, fact)
         return _mk(s, "LIMITED", "last assistant record is the limit", kind, fact)
     return _idle(s, fact, focused, bool(s.bg_work), now, env)
 
@@ -262,7 +265,14 @@ def merge_origin(rec: T.Record, new_origin: str, autorecover_on: bool) -> None:
     rec.plan_only = not autorecover_on and rec.origin != "cc-lr"
 
 
-_SUBSTATE = {"LIMITED": "DETECTED", "STAY": "WAIT_RESET", "IDLE-ELIGIBLE": "DETECTED"}
+# LAUNCHER-ROOTED is a mover like LIMITED: placed by --place, then act.choose turns its move into R
+# (§C8 R row). As its own substate it was never placed, and a record born with it had no wait (W7g).
+_SUBSTATE = {
+    "LIMITED": "DETECTED",
+    "LAUNCHER-ROOTED": "DETECTED",
+    "STAY": "WAIT_RESET",
+    "IDLE-ELIGIBLE": "DETECTED",
+}
 
 
 def new_record(
@@ -344,6 +354,9 @@ def upsert(
             and (not s.acct or s.acct == rec.source_acct)
         ):
             rec.source_cfg = s.cfg
+        if rec.phase == "PRE-MOVE" and pane is not None:
+            # act.replaces keys on the pane the session is in NOW; a hop can change it
+            rec.root_shape = pane.root_shape
         return rec, False
     rec = new_record(b, s, pane, cid, origin, autorecover_on, now)
     records[s.sid] = rec

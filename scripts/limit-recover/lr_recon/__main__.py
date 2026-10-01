@@ -924,7 +924,11 @@ def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
 
 
 def _command(ctx: Ctx, rec: T.Record, which: str) -> List[str]:
-    if which == "A":
+    if which == "A" or which == "R" and act.replaces(rec):
+        # R over a live launcher-rooted source is the existing REPLACE inside lr-handoff (§C8 R row):
+        # the same argv as A, whose recycle handoff-fire refuses ("NO shell under its session"), so
+        # lr-handoff fires the successor beside the pane and retires the source once it is verified.
+        # boot-resume-launch would refuse it: the source is a live holder (exit 5).
         rec.submit_token = act.new_token()  # a fresh token per spawn of the move
         if (
             rec.close.get("hop") == "auth"

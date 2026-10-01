@@ -46,6 +46,8 @@ CENSUS_OWNED = (
 )
 BUCKET_SUBSTATE = {
     "LIMITED": "DETECTED",
+    # a mover whose move is R (W7g); still in CENSUS_OWNED so an old held record is rewritten
+    "LAUNCHER-ROOTED": "DETECTED",
     "STAY": "WAIT_RESET",
     "IDLE-ELIGIBLE": "DETECTED",
 }
@@ -56,6 +58,8 @@ TEAM_EXIT_PASSES = 2
 # Holds the census cannot observe: re-probed through the actuator's own precheck.
 REPROBED = ("HOLD-DRAFT", "HOLD-MENU", "HOLD-COMPOSER")
 _REASON = re.compile(r"(?:PRECHECK |verdict: )(?:HELD|REFUSED):([A-Za-z:-]+)")
+# classify's IMPOSSIBLE text, which is also R's own subject line (outcome)
+_LAUNCHER_ROOTED = re.compile(r"launcher[- ]rooted", re.IGNORECASE)
 # handoff-fire's held-after-confirm reasons (recycle-held-<reason>) → the PRE-MOVE hold they mean
 RCY_HELD_SUB = {
     "draft": "HOLD-DRAFT",
@@ -103,7 +107,9 @@ def _hold_substate(text: str) -> str:
     return "HOLD-COMPOSER"
 
 
-def outcome(rec: T.Record, rc: Optional[int], text: str) -> Tuple[str, str, str]:
+def outcome(
+    rec: T.Record, rc: Optional[int], text: str, actuator: str = ""
+) -> Tuple[str, str, str]:
     """(disposition, substate, reason). A precheck's named refusal wins over the free-text classes,
     because it is the actuator's own verdict on why nothing was done."""
     held = _held_after_confirm(text)
@@ -127,8 +133,13 @@ def outcome(rec: T.Record, rc: Optional[int], text: str) -> Tuple[str, str, str]
         if disp == "DETERMINISTIC" and "unreadable" in reason:
             disp = "TRANSIENT"  # a screen we could not read is a retry, never a verdict
         return disp, sub, reason
-    last = "\n".join(text.splitlines()[-40:])
-    return classify.classify(last, -1 if rc is None else rc), "", ""
+    lines = text.splitlines()[-40:]
+    if actuator == "R":
+        # R's own subject: lr-handoff's REPLACE announces "pane P is launcher-rooted … REPLACING in
+        # place", and classify reads launcher-rooted as IMPOSSIBLE, the class that sends a record TO
+        # R. Left in, any failed R (a kitty timeout) ended the record IMPOSSIBLE (W7g).
+        lines = [ln for ln in lines if not _LAUNCHER_ROOTED.search(ln)]
+    return classify.classify("\n".join(lines), -1 if rc is None else rc), "", ""
 
 
 # The reset wake's non-zero exits that page instead of retyping (D4.9 step 6): cc_tui_submit rc 1-4,
@@ -190,7 +201,7 @@ def settle_exit(
         # that (a watcher's own engagement wait timing out) is a stale verdict. Scored, it bumped
         # the attempt and re-opened a MOVED record to RELAUNCHED (W5b real canary 3).
         return "%s rc=%s after %s — the phase decides" % (pr.argv_hash, rc, rec.phase)
-    disp, sub, reason = outcome(rec, rc, text)
+    disp, sub, reason = outcome(rec, rc, text, pr.argv_hash)
     if pr.argv_hash in MOVE_ACTUATORS:
         # Whatever it was refused for, the NEXT move spawn is a new attempt: the double-typer audit
         # allows exactly one move spawn per (sid, attempt), so a retry must not share one. Nor may it

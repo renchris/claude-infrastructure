@@ -217,13 +217,14 @@ class InPlaceTests(unittest.TestCase):
 
     # ── controls: what must NOT close ───────────────────────────────────────────────────────────
 
-    def test_control_a_real_limit_on_a_launcher_rooted_pane_stays_held(self):
-        """No fresh turn: the census still buckets it LAUNCHER-ROOTED (=> R), the record stays open."""
+    def test_control_a_real_limit_on_a_launcher_rooted_pane_stays_open(self):
+        """No fresh turn: the census still buckets it LAUNCHER-ROOTED (=> R), the record stays open.
+        W7g: it is a mover now (DETECTED; PLAN-ONLY here, so not placed), never a held substate."""
         ctx, snap, rec, facts = self.world(answered=False)
         out = self.run_pass(ctx, snap, facts)
         self.assertEqual(out["buckets"], ["LAUNCHER-ROOTED"])
         self.assertTrue(rec.open)
-        self.assertEqual((rec.phase, rec.substate), ("PRE-MOVE", "LAUNCHER-ROOTED"))
+        self.assertEqual((rec.phase, rec.substate), ("PRE-MOVE", "DETECTED"))
         self.assertNotIn("engaged-in-place", [e["ev"] for e in self.events()])
 
     def test_control_a_turn_before_detection_does_not_close(self):

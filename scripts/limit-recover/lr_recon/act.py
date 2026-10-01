@@ -462,8 +462,11 @@ def may_actuate(
         return False, "heal-disabled"
     if live_procs(rec, snap):
         return False, "process-live"
-    if actuator == "A" and census.live_members(rec.sid, snap) > 0:
+    moves_lead = actuator == "A" or actuator == "R" and replaces(rec)
+    if moves_lead and census.live_members(rec.sid, snap) > 0:
         return False, "team-live"  # D4.4: never move a lead out from under its members
+    if actuator == "R" and duplicate_risk(rec, snap):
+        return False, "duplicate-risk"  # invariant 27
     if rec.next_eligible_at and now < rec.next_eligible_at:
         return False, "backoff"
     if rec.escalated:
@@ -482,13 +485,40 @@ def workers_cap() -> int:
         return 16
 
 
+def replaces(rec: T.Record) -> bool:
+    """A limited session in a launcher-rooted pane: its /exit closes the window, so its move is R,
+    the existing REPLACE (lr-handoff's successor-beside-then-retire), never A (§C8 R row, §7.2
+    IMPOSSIBLE-IN-PLACE). PANE-GONE's R is the other kind: a new-window resume of a dead source."""
+    return (
+        rec.kind == "limited"
+        and rec.root_shape == "launcher"
+        and rec.phase != "PANE-GONE"
+    )
+
+
+def duplicate_risk(rec: T.Record, snap: T.Snapshot) -> str:
+    """Invariant 27: R starts a session, so any holder of the sid outside the record's own pane (or
+    one whose pane is unknown, or a background row) is a live copy R would duplicate. A replace over a
+    live source passes only with the source alone in its pane; a PANE-GONE resume only with none."""
+    s = snap.sessions.get(rec.sid)
+    for h in s.holders if s else []:
+        if h.bg or h.pane is None or not rec.pane or tuple(h.pane) != tuple(rec.pane):
+            return "pid %d holds %s outside pane %s" % (h.pid, rec.sid[:8], rec.pane)
+    return ""
+
+
 def choose(res: T.PhaseResult, rec: T.Record) -> Optional[str]:
     """PhaseResult.action → the actuator to run, or None for wait/sentinel/page/plan-only."""
     a = res.action
     if res.phase == "PRE-MOVE":
         if a == "wake" and rec.substate in ("WAIT_RESET", "HELD:team"):
             return "C"  # the in-place reset wake (D1.11, D4.9)
-        return "A" if rec.substate == "PLANNED" and rec.target_acct else None
+        if rec.substate != "PLANNED" or not rec.target_acct:
+            return None
+        return "R" if replaces(rec) else "A"
+    if a == "A" and replaces(rec):
+        # row 12 re-drives the move: on a launcher-rooted pane that is R again
+        return "R"
     if a in ("A", "A-husk", "B", "R", "UNCONFIRM", "SPLIT", "C-retry"):
         return a
     if a == "C" and res.substate in ("UNPROMPTED", "DRAFTED"):
