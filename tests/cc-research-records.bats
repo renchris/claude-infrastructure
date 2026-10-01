@@ -114,8 +114,10 @@ EOF
 }
 
 @test "premise and source add append once; a duplicate id is refused and nothing is written" {
+  local exp
+  exp="$(date -u -v+1440H +%Y-%m-%dT%H:%M:%SZ)"
   run "$CR" premise add --program demo --id PR-2 --claim "the daemon is launchd-run" \
-    --truth-lives-in live-state --load-bearing-for DR-2 --recheck-cmd "true" --expires 2026-12-01T00:00:00Z
+    --truth-lives-in live-state --load-bearing-for DR-2 --recheck-cmd "true" --expires "$exp"
   [ "$status" -eq 0 ]
   [ "$(fold premises.jsonl PR-2 verdict)" = '"unknown"' ]
   [ "$(fold premises.jsonl PR-2 recheck_cmd)" = '"true"' ]

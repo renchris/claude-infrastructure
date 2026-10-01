@@ -54,8 +54,10 @@ stub_decide() {
 }
 # name_packets <id...>: decision events naming each packet id (the program's packets).
 name_packets() {
+  local due
+  due="$(date -u -v+1440H +%Y-%m-%dT%H:%M:%SZ)"
   for p in "$@"; do
-    printf '{"id":"DR-1","packet":{"id":"%s","class":"C","due":"2026-12-01T00:00:00Z"}}\n' "$p" >> "$REC/decisions.jsonl"
+    printf '{"id":"DR-1","packet":{"id":"%s","class":"C","due":"%s"}}\n' "$p" "$due" >> "$REC/decisions.jsonl"
   done
 }
 # sign <action>: a VALID operator signature (chain without claude) in the sealed log.
