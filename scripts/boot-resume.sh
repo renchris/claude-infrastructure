@@ -62,7 +62,9 @@
 #   CC_BACKLOG_BIN (the no-role durable fallback; a test MUST stub it or it writes the live ledger) ·
 #   CC_BOOT_RESUME_ROSTER_DIR · CC_SHUTDOWN_TOMB_DIR · CC_BOOT_RESUME_TOMB_BURST (s, default 120) ·
 #   CC_RESUME_LAYOUT_BIN · CC_RESUME_CLASSIFY_BIN · CC_KITTY_SOCKET_BIN · CC_OPEN_BIN ·
-#   CC_BOOT_RESUME_KITTY_TRIES / _KITTY_POLL (wait for a kitty to come up; tests set POLL=0).
+#   CC_BOOT_RESUME_KITTY_TRIES / _KITTY_POLL (wait for a kitty to come up; tests set POLL=0) ·
+#   CC_TEARDOWN_DIR (self-close markers) · CC_BOOT_RESUME_SKIP_RETIRED (off = resume a session that
+#   closed itself on purpose too) · CC_BOOT_RESUME_ACTIVITY_TAIL (transcript lines read, default 4000).
 # BSD+GNU portable, no eval, fail-loud. bash 3.2-safe.
 set -uo pipefail
 
@@ -223,8 +225,8 @@ case "${1:-}" in --print-boottime) printf '%s\n' "$BOOT"; exit 0 ;; esac
 
 log_idl() { # <disposition> <extra-json>
   mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
-  printf '{"ts":"%s","tool":"boot-resume","disposition":"%s","boot":"%s","mode":"%s","source":"%s"%s}\n' \
-    "$(now_iso)" "$1" "$BOOT" "$MODE" "$SOURCE" "${2:-}" >> "$IDL" 2>/dev/null || true
+  printf '{"ts":"%s","tool":"boot-resume","disposition":"%s","boot":"%s","mode":"%s","source":"%s","retired_skipped":%s%s}\n' \
+    "$(now_iso)" "$1" "$BOOT" "$MODE" "$SOURCE" "${n_retired:-0}" "${2:-}" >> "$IDL" 2>/dev/null || true
 }
 
 # ── guard: unreadable boottime is a blind check → abstain LOUD, never mark, never act. ──
@@ -365,12 +367,87 @@ GHOST_ROW
   fi
 fi
 
+# ── SKIP the sessions that RETIRED ON PURPOSE (2026-10-01). Every source above is a snapshot of
+#    who was live at some moment, and nothing asked whether a session closed itself SINCE. Measured:
+#    d86e6bd4 ran `handoff-fire.sh self-close --terminal` at 18:43:34Z; about five minutes later a
+#    kitty restart resumed it from a roster taken before that, through this script, into a window
+#    nobody asked for. The evidence is the teardown marker self-close writes immediately BEFORE it
+#    types /exit (handoff-fire.sh write_teardown_marker, <sid>.json, mode terminal|successor) — and
+#    it counts only when it is newer than the session's last conversational record. That ordering
+#    is the discriminator: a self-close that aborted leaves the session working, so its next tool
+#    result post-dates the marker and the session comes back as before. `recycle` relaunches the
+#    pane and is not a retirement. File mtime is NOT the activity clock: Claude Code appends
+#    untimestamped records (last-prompt, mode, ai-title …) at exit, so the file is always newer
+#    than the marker. Missing evidence on either side ⇒ resumed, the pre-2026-10-01 behaviour.
+#    Kill switch: CC_BOOT_RESUME_SKIP_RETIRED=off. ──
+TEARDOWN_DIR="${CC_TEARDOWN_DIR:-$HOME/.claude/watchdog/teardown}"
+transcript_file() { # <config-acct> <sid> → the session's transcript path, or ""
+  local d p
+  for d in ${1:+"$HOME/.$1"} "$HOME"/.claude*; do
+    for p in "$d"/projects/*/"$2".jsonl; do [ -f "$p" ] && { printf '%s' "$p"; return 0; }; done
+  done
+  return 0
+}
+last_activity() { # <transcript> → newest user/assistant record time, YYYY-MM-DDTHH:MM:SS (UTC), or ""
+  tail -n "${CC_BOOT_RESUME_ACTIVITY_TAIL:-4000}" "$1" 2>/dev/null | jq -Rrn '
+    [ inputs | fromjson? | select(type == "object" and (.type == "user" or .type == "assistant")
+        and (.timestamp | type) == "string" and (.isMeta | not))
+      | select((.message.content // "" | tostring)
+               | test("<command-name>/exit</command-name>|<local-command-stdout>") | not)
+      | .timestamp[0:19] ] | max // empty' 2>/dev/null
+}
+retired_marker() { # <sid> → "<mode>\t<ts to the second>" for a self-close marker, else ""
+  [ -f "$TEARDOWN_DIR/$1.json" ] || return 0
+  jq -r --arg sid "$1" 'select(type == "object" and .sid == $sid
+           and (.mode == "terminal" or .mode == "successor") and (.ts | type) == "string")
+         | [.mode, .ts[0:19]] | @tsv' "$TEARDOWN_DIR/$1.json" 2>/dev/null
+}
+iso_sec() { case "$1" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]) return 0 ;; esac; return 1; }
+RETIRED=""; n_retired=0
+if [ "${CC_BOOT_RESUME_SKIP_RETIRED:-on}" != off ] && [ "$n_open" -gt 0 ]; then
+  KEPT=""; n_kept=0
+  while IFS=$'\t' read -r k_acct k_cwd k_sid k_name k_br; do
+    [ -n "$k_sid" ] && [ "$k_sid" != "$TSV_PAD" ] || continue
+    r_sid="$(unpad "$k_sid")"; r_acct="$(unpad "$k_acct")"
+    mk="$(retired_marker "$r_sid" | head -1)"
+    if [ -n "$mk" ]; then
+      mk_mode="${mk%%	*}"; mk_ts="${mk#*	}"
+      tf="$(transcript_file "$r_acct" "$r_sid")"; act=""
+      [ -n "$tf" ] && act="$(last_activity "$tf")"
+      if iso_sec "$mk_ts" && iso_sec "$act" && [[ "$mk_ts" > "$act" ]]; then
+        r_alias="$(map_account "$r_acct")"; r_launcher=""
+        command -v cc_acct_launcher_for_name >/dev/null 2>&1 && r_launcher="$(cc_acct_launcher_for_name "$r_alias")"
+        r_name="$(unpad "$k_name")"; r_cwd="$(unpad "$k_cwd")"
+        RETIRED="${RETIRED}  - ${r_name:-${r_sid:0:8}} (${r_sid}): ${mk_mode} self-close marker ${TEARDOWN_DIR}/${r_sid}.json at ${mk_ts}Z, after its last activity ${act}Z — to bring it back: cd '${r_cwd:-.}' && ${r_launcher:-claude} --resume ${r_sid}
+"
+        n_retired=$((n_retired + 1))
+        continue
+      fi
+    fi
+    KEPT="${KEPT}${k_acct}	${k_cwd}	${k_sid}	${k_name}	${k_br}
+"
+    n_kept=$((n_kept + 1))
+  done <<EOF
+$GHOSTS
+EOF
+  GHOSTS="$KEPT"; n_open="$n_kept"
+fi
+if [ "$n_retired" -gt 0 ]; then
+  mkdir -p "$STATE_DIR" 2>/dev/null || true
+  printf '%s' "$RETIRED" > "$STATE_DIR/last-retired.txt" 2>/dev/null || true
+  printf '%s' "$RETIRED" | sed 's/^  - /boot-resume: skipped retired session /' >&2
+fi
+
 mark_processed() { mkdir -p "$STATE_DIR" 2>/dev/null || true; printf '%s\n' "$BOOT" > "$MARKER" 2>/dev/null || true; }
 
 # ── reboot happened but nothing was open → nothing lost, no page. Advance the marker. ──
 if [ "$n_open" -eq 0 ]; then
   mark_processed
-  log_idl abstained ',"reason":"no-open-sessions","n_open":0,"resumed":0'
+  if [ "$n_retired" -gt 0 ]; then
+    log_idl abstained ',"reason":"all-retired","n_open":0,"resumed":0'
+  else
+    log_idl abstained ',"reason":"no-open-sessions","n_open":0,"resumed":0'
+  fi
   exit 0
 fi
 
@@ -583,6 +660,10 @@ $GHOSTS
 EOF
 [ "$n_open" -gt "$shown" ] && listing="${listing}  … +$((n_open - shown)) more
 "
+# The skipped sessions are NAMED, each with the command that brings it back: a skip is a judgment
+# about intent, and the operator is the one who can overrule it.
+[ "$n_retired" -gt 0 ] && listing="${listing}⏭ ${n_retired} not resumed — they closed themselves on purpose after their last activity:
+${RETIRED}"
 
 if [ "$MODE" = "resume" ]; then
   where="one window each"
