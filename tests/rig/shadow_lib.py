@@ -21,7 +21,11 @@ THE GATE (plan § Shadow), per cohort:
   3. derive_phase agrees with the legacy engagement truth on every sid legacy recovered — the
      legacy verdict is resolved to the watcher's own truth (a RECOVERED fleet row with no later
      recycle-engaged row is a false-RECOVERED), and a disagreement where the daemon planned a
-     different target than legacy used is named "plan differed", not a phase defect.
+     different target than legacy used is named "plan differed", not a phase defect. A watcher
+     that is not ENGAGED is corrected to ENGAGED ("legacy-corrected", its own count) only when the
+     sid's transcript under the moved-to account's config dir holds an assistant turn after the
+     legacy relaunch AND a claude process for the sid is live now or was at an archive pass after
+     the relaunch (lead ruling W5b2).
 """
 
 import calendar
@@ -29,6 +33,7 @@ import glob
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -104,6 +109,7 @@ def watch_once(lr: str, now: Optional[float] = None) -> List[str]:
     root = os.path.join(lr, "recon")
     arch = os.path.join(lr, "shadow-archive")
     new = []
+    live = _live_sids()
     facts = sorted(glob.glob(os.path.join(root, "facts", "*.json")))
     for cpath in sorted(glob.glob(os.path.join(root, "cohorts", "*.json"))):
         if cpath.endswith(".pages.json"):
@@ -140,7 +146,40 @@ def watch_once(lr: str, now: Optional[float] = None) -> List[str]:
                     _append_distinct(os.path.join(d, "plans.jsonl"), fh.read(), now)
             except (OSError, ValueError):
                 pass
+        # when each member last had a live claude process: the legacy-corrected rule's
+        # archive-time arm, for a session that exits before its cohort is compared
+        lp = os.path.join(d, "live.json")
+        try:
+            seen = _load(lp)
+        except (OSError, ValueError):
+            seen = {}
+        for sid in coh.get("members") or []:
+            if sid in live:
+                seen[sid] = now
+        with open(lp, "w", encoding="utf-8") as fh:
+            json.dump(seen, fh)
     return new
+
+
+_RESUME = re.compile(r"--(?:resume|session-id)[ =]([0-9a-f]{8}-[0-9a-f-]{27})")
+
+
+def _live_sids() -> Set[str]:
+    """Sids with a live claude process now: argv[0] is a ``claude`` binary and its argv names the
+    session (``--resume <sid>``, ``--session-id <sid>``)."""
+    try:
+        out = subprocess.run(
+            ["ps", "-axo", "command"], capture_output=True, text=True, timeout=20
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    sids: Set[str] = set()
+    for ln in out.splitlines():
+        argv0 = ln.split(" ", 1)[0]
+        if os.path.basename(argv0) != "claude":
+            continue
+        sids.update(_RESUME.findall(ln))
+    return sids
 
 
 def watch(lr: str, interval: float, once: bool, notify: str = "") -> int:
@@ -323,8 +362,10 @@ def _legacy_outcome(lr: str, sid: str, since: float) -> Optional[Dict[str, Any]]
     return best
 
 
-# Legacy verdicts that moved nothing (lr-fleet's MECHANISM/VERDICT column, after the "/").
-_NOT_MOVED = ("HELD", "NOTMOVED", "NOT_NEEDED")
+# Legacy verdicts that moved nothing (lr-fleet's MECHANISM/VERDICT column, after the "/"). "parked"
+# is written only on lr-fleet's early returns, before any rank, charge or move (lr-fleet.sh
+# lf_row … "parked"; live case 9c4a2015, "no routable target", W5b2).
+_NOT_MOVED = ("HELD", "NOTMOVED", "NOT_NEEDED", "parked")
 
 
 def _legacy_paneless(lr: str, sid: str, since: float) -> Optional[Dict[str, Any]]:
@@ -348,13 +389,19 @@ def _legacy_paneless(lr: str, sid: str, since: float) -> Optional[Dict[str, Any]
             rows.append(
                 {
                     "pane": t[1],
+                    "acct_after": t[4],
                     "verdict": t[5].split("/")[-1],
                     "run": os.path.basename(os.path.dirname(p)),
                 }
             )
-    if not rows or any(
-        r["pane"] != "-" or not r["verdict"].startswith(_NOT_MOVED) for r in rows
-    ):
+
+    def moved_nothing(r: Dict[str, Any]) -> bool:
+        if r["pane"] != "-" or not r["verdict"].startswith(_NOT_MOVED):
+            return False
+        # a park only counts when it also named no target (lead ruling W5b2)
+        return not r["verdict"].startswith("parked") or r["acct_after"] == "-"
+
+    if not rows or not all(moved_nothing(r) for r in rows):
         return None
     return rows[-1]
 
@@ -393,6 +440,51 @@ def _watcher_truth(home: str, sid: str, since: float) -> str:
     ):
         return "DEAD"
     return "NONE"
+
+
+def _acct_cfg(home: str, acct: str) -> str:
+    """Account name → its config dir, from ``<home>/.claude/accounts.json`` ("" if unknown)."""
+    try:
+        data = _load(os.path.join(home, ".claude", "accounts.json"))
+    except (OSError, ValueError):
+        return ""
+    accts = data.get("accounts", data) if isinstance(data, dict) else data
+    rows = (
+        [dict(v, name=k) for k, v in accts.items()]
+        if isinstance(accts, dict)
+        else list(accts or [])
+    )
+    for a in rows:
+        if isinstance(a, dict) and a.get("name") == acct and a.get("config_dir"):
+            c = str(a["config_dir"])
+            return os.path.join(home, c[2:]) if c.startswith("~/") else c
+    return ""
+
+
+def _transcript_engaged(cfg: str, sid: str, since: float) -> bool:
+    """The sid's own transcript under ONE account's config dir holds a real assistant turn at or
+    after ``since``. Lead ruling W5b2 (live 89bdedfa, 8e18da3f: the legacy watcher's 180 s check
+    logged recycle-dead while these transcripts carried turns 50 s after the relaunch)."""
+    if not cfg:
+        return False
+    for p in glob.glob(os.path.join(cfg, "projects", "*", sid + ".jsonl")):
+        try:
+            with open(p, encoding="utf-8", errors="replace") as fh:
+                for ln in fh:
+                    if '"type":"assistant"' not in ln:
+                        continue
+                    try:
+                        r = json.loads(ln)
+                    except ValueError:
+                        continue
+                    if (r.get("message") or {}).get("model") in (None, "<synthetic>"):
+                        continue
+                    ts = _epoch(r.get("timestamp"))
+                    if ts is not None and ts >= since:
+                        return True
+        except OSError:
+            continue
+    return False
 
 
 def _recon_engaged(rec: Dict[str, Any]) -> bool:
@@ -470,16 +562,33 @@ def compare(lr: str, cid: str, home: str) -> int:
             not_owed[s] = ev
     misses = [s for s in unfiled if s not in not_owed]
     # 3. phase agreement on legacy-recovered sids
-    agree = judged = false_rec = differed = 0
+    agree = judged = false_rec = differed = cagree = 0
+    corrected: List[str] = []
+    live_now: Optional[Set[str]] = None
+    try:
+        live_seen = _load(os.path.join(lr, "shadow-archive", cid, "live.json"))
+    except (OSError, ValueError):
+        live_seen = {}
     for sid in sorted(found | set(members)):
         lo = _legacy_outcome(lr, sid, since)
         if not lo or lo["verdict"] != "RECOVERED":
             continue
         truth = _watcher_truth(home, sid, lo["ts"])
-        legacy_engaged = truth == "ENGAGED"
+        r = recs.get(sid)
+        fix = False
+        if truth != "ENGAGED" and r is not None:
+            moved_to = r.get("target_acct") or (r.get("close") or {}).get("acct") or ""
+            if _transcript_engaged(_acct_cfg(home, moved_to), sid, lo["ts"]):
+                if live_now is None:
+                    live_now = _live_sids()
+                fix = sid in live_now or float(live_seen.get(sid) or 0) >= lo["ts"]
+        if fix:
+            # its own count, never folded into agree: the legacy truth moved off the watcher
+            corrected.append(sid)
+            truth = "%s→ENGAGED (legacy-corrected)" % truth
+        legacy_engaged = truth == "ENGAGED" or fix
         if not legacy_engaged:
             false_rec += 1
-        r = recs.get(sid)
         if r is None:
             lines.append(
                 "  %s legacy RECOVERED→%s (watcher %s) · no recon record"
@@ -488,7 +597,10 @@ def compare(lr: str, cid: str, home: str) -> int:
             continue
         judged += 1
         mine = _recon_engaged(r)
-        if mine == legacy_engaged:
+        if mine == legacy_engaged and fix:
+            cagree += 1
+            tag = "agree after legacy correction"
+        elif mine == legacy_engaged:
             agree += 1
             tag = "agree"
         elif (r.get("target_acct") or "") not in ("", lo["acct_after"]):
@@ -511,11 +623,12 @@ def compare(lr: str, cid: str, home: str) -> int:
                 tag,
             )
         )
-    passed = feasible == placed and not misses and agree + differed == judged
+    passed = feasible == placed and not misses and agree + cagree + differed == judged
     print(
         "SHADOW %s: members %d · legacy found %d · census misses %d%s · not owed %d%s · "
         "placements feasible %d/%d · "
-        "phase agree %d/%d (false-RECOVERED resolved %d, plan differed %d) → %s"
+        "phase agree %d/%d (false-RECOVERED resolved %d, plan differed %d) · "
+        "legacy-corrected %d%s → %s"
         % (
             cid,
             len(members),
@@ -530,6 +643,8 @@ def compare(lr: str, cid: str, home: str) -> int:
             judged,
             false_rec,
             differed,
+            len(corrected),
+            ": %s" % ",".join(s[:8] for s in corrected) if corrected else "",
             "PASS" if passed else "FAIL",
         )
     )
@@ -573,6 +688,7 @@ def compare(lr: str, cid: str, home: str) -> int:
                     "judged": judged,
                     "agree": agree,
                     "false_recovered": false_rec,
+                    "legacy_corrected": corrected,
                     "plan_differed": differed,
                     "window_from": coh.get("window_from") or "",
                     "pass": passed,

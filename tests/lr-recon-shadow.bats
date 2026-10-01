@@ -102,6 +102,32 @@ dead_ev() { printf '{"t":1790654500,"ev":"stale","sid":"%s","record_id":"","deta
   [[ "$output" == *"census misses 1 (cccccccc) · not owed 0"* ]] || { echo "$output"; false; }
 }
 
+# Lead ruling W5b2 (live 9c4a2015): "parked" moved nothing only with no pane AND no target.
+parked() { printf '%s\t%s\t-\tnext2\t%s\tparked\tno routable target\t2026-09-29T04:25:00Z\n' "$1" "$2" "$3" >> "$LR/fleet/one-x/results.tsv"; }
+
+@test "a later legacy run that PARKED it (no pane, no target) still moved nothing ⇒ not owed" {
+  req "$SIDC"; legacy_nopane "$SIDC" HELD:unknown 2026-09-29T04:20:00Z; dead_ev "$SIDC"
+  parked "$SIDC" - -
+  archive
+  run /usr/bin/python3 "$L" compare "$LR" "$CID" --home "$HOME"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"census misses 0 · not owed 1 (cccccccc)"* ]] || { echo "$output"; false; }
+}
+
+@test "a park that named a target, or saw a pane, stays a census miss" {
+  req "$SIDC"; legacy_nopane "$SIDC" HELD:unknown 2026-09-29T04:20:00Z; dead_ev "$SIDC"
+  parked "$SIDC" - next4
+  archive
+  run /usr/bin/python3 "$L" compare "$LR" "$CID" --home "$HOME"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"census misses 1 (cccccccc) · not owed 0"* ]] || { echo "$output"; false; }
+  : > "$LR/fleet/one-x/results.tsv"; legacy_nopane "$SIDC" HELD:unknown 2026-09-29T04:20:00Z
+  parked "$SIDC" 841 -
+  run /usr/bin/python3 "$L" compare "$LR" "$CID" --home "$HOME"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"census misses 1 (cccccccc) · not owed 0"* ]] || { echo "$output"; false; }
+}
+
 @test "a placement onto an account a fact blocked at plan time ⇒ INFEASIBLE, FAIL" {
   printf '{"acct":"next4","scope":"5h","status":"rejected","window":"five_hour","resets_at":1790670000,"observed_at":1790654000,"src":"hook"}' \
     > "$LR/recon/facts/next4.5h.json"
@@ -124,6 +150,63 @@ dead_ev() { printf '{"t":1790654500,"ev":"stale","sid":"%s","record_id":"","deta
   run /usr/bin/python3 "$L" compare "$LR" "$CID" --home "$HOME"
   [ "$status" -eq 1 ] || { echo "$output"; false; }
   [[ "$output" == *"DISAGREE"* ]] || { echo "$output"; false; }
+}
+
+# Lead ruling W5b2 (live 89bdedfa, 8e18da3f: the watcher logged recycle-dead while each sid's own
+# transcript held a real turn after the relaunch). Legacy truth is corrected to ENGAGED only with a
+# turn after the relaunch under the MOVED-TO account's config dir AND a live claude process for the
+# sid (now, or at an archive pass); counted as legacy-corrected, never folded into agree.
+turn() { mkdir -p "$HOME/$1/projects/-wt"
+  printf '{"type":"assistant","timestamp":"%s","message":{"model":"claude-opus-5-5","content":[]}}\n' "$3" \
+    > "$HOME/$1/projects/-wt/$2.jsonl"; }
+fake_claude() { mkdir -p "$BATS_TEST_TMPDIR/bin"
+  (exec -a "$BATS_TEST_TMPDIR/bin/claude" perl -e 'sleep 60' -- --resume "$1") >/dev/null 2>&1 3>&- &
+  FAKE=$!; sleep 0.3; }
+teardown() { [ -z "${FAKE:-}" ] || kill "$FAKE" 2>/dev/null || true; }
+dead_watch() {
+  : > "$HOME/.claude/logs/handoffs.jsonl"
+  engaged "$SIDA" 2026-09-29T04:18:33Z
+  printf '{"ts":"2026-09-29T04:21:00Z","class":"recycle-dead","engaged":false,"prev_sid":"%s"}\n' "$SIDB" >> "$HOME/.claude/logs/handoffs.jsonl"
+  printf '{"accounts":[{"name":"next3","config_dir":"~/.claude-tertiary"},{"name":"next4","config_dir":"~/.claude-quaternary"}]}' \
+    > "$HOME/.claude/accounts.json"
+}
+
+@test "a watcher that missed the engagement is legacy-corrected by a turn on the moved-to account plus a live process" {
+  dead_watch; fake_claude "$SIDB"
+  turn .claude-quaternary "$SIDB" 2026-09-29T04:18:50.100Z
+  archive
+  run /usr/bin/python3 "$L" compare "$LR" "$CID" --home "$HOME"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"phase agree 1/2 (false-RECOVERED resolved 0, plan differed 0) · legacy-corrected 1: bbbbbbbb → PASS"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"agree after legacy correction"* ]] || { echo "$output"; false; }
+}
+
+@test "legacy-corrected arms: wrong account, a turn before the relaunch, no live process ⇒ still DISAGREE" {
+  dead_watch
+  turn .claude-tertiary "$SIDB" 2026-09-29T04:18:50.100Z    # the turn, but on an account it was not moved to
+  fake_claude "$SIDB"
+  run /usr/bin/python3 "$L" compare "$LR" "$CID" --home "$HOME"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"legacy-corrected 0"* && "$output" == *"DISAGREE"* ]] || { echo "$output"; false; }
+  turn .claude-quaternary "$SIDB" 2026-09-29T04:10:00.000Z  # right account, but before the relaunch
+  run /usr/bin/python3 "$L" compare "$LR" "$CID" --home "$HOME"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"legacy-corrected 0"* && "$output" == *"DISAGREE"* ]] || { echo "$output"; false; }
+  turn .claude-quaternary "$SIDB" 2026-09-29T04:18:50.100Z  # right turn, but no process ever seen live
+  kill "$FAKE"; wait "$FAKE" 2>/dev/null || true; FAKE=
+  run /usr/bin/python3 "$L" compare "$LR" "$CID" --home "$HOME"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"legacy-corrected 0"* && "$output" == *"DISAGREE"* ]] || { echo "$output"; false; }
+}
+
+@test "legacy-corrected archive-time arm: a process the watcher saw live, since exited, still corrects" {
+  dead_watch; fake_claude "$SIDB"
+  turn .claude-quaternary "$SIDB" 2026-09-29T04:18:50.100Z
+  archive
+  kill "$FAKE"; wait "$FAKE" 2>/dev/null || true; FAKE=
+  run /usr/bin/python3 "$L" compare "$LR" "$CID" --home "$HOME"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"legacy-corrected 1: bbbbbbbb"* ]] || { echo "$output"; false; }
 }
 
 @test "the daemon's real cohort record: an earlier limit's stop marker is no miss, one inside the window is" {
