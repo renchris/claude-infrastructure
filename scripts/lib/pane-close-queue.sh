@@ -51,15 +51,22 @@ pcq_add() {
   if command -v jq >/dev/null 2>&1; then
     local prev=/dev/null
     jq -e 'type == "object"' "$row" >/dev/null 2>&1 && prev="$row"   # a corrupt row restarts, not wedges
+    # Pairs travel as NAMED --arg values, never as --args positionals: jq keeps parsing options among
+    # positionals, so a value like self-close's argv (`--sid … --pane …`) was read as a jq flag.
     # attempts stays a NUMBER (the drainer compares it); every other given value stays a string.
-    jq -n --arg kind "$kind" --arg pane "$pane" --arg now "$now" --slurpfile prev "$prev" '
+    local -a named=(); local i
+    for (( i = 0; i < ${#pairs[@]}; i += 2 )); do
+      named+=(--arg "k$((i / 2))" "${pairs[i]}" --arg "v$((i / 2))" "${pairs[i+1]}")
+    done
+    jq -n --arg kind "$kind" --arg pane "$pane" --arg now "$now" --argjson n "$(( ${#pairs[@]} / 2 ))" \
+      ${named[@]+"${named[@]}"} --slurpfile prev "$prev" '
       ($prev[0] // {}) as $p
       | $p + {kind: $kind, pane: $pane, first_ts: ($p.first_ts // $now), last_ts: $now,
               attempts: ($p.attempts // 0)}
-      | reduce range(0; $ARGS.positional | length; 2) as $i (.;
-          ($ARGS.positional[$i]) as $k | ($ARGS.positional[$i + 1]) as $v
+      | reduce range(0; $n) as $i (.;
+          $ARGS.named["k\($i)"] as $k | $ARGS.named["v\($i)"] as $v
           | .[$k] = (if $k == "attempts" then ($v | tonumber? // 0) else $v end))
-    ' --args ${pairs[@]+"${pairs[@]}"} > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
+    ' > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
   else
     # Degraded leg: keeps first_ts and attempts, drops any other earlier key. Never silent about
     # WHETHER a row exists, which is the property the queue is for.

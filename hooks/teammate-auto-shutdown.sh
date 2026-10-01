@@ -342,10 +342,10 @@ _surviving_member_pid() {  # <member-name> → echoes the pid of a still-running
 # stays: the row is the durable half, the page the prompt one. The kitty socket and generation are
 # recorded so the drainer can tell "the id names a different window now" after a kitty restart.
 # Absent lib ⇒ no row, exactly today's behaviour; never fatal, never delays the close path.
-_queue_close_retry() { # <pane> <who> <reason> <rc>
+_queue_close_retry() { # <pane> <who> <reason> <rc> [agent-id, default <who>@<team>]
   type -t pcq_add >/dev/null 2>&1 || return 0
   local _sid="${SESSION_ID:-}"; [[ "$_sid" == unknown ]] && _sid=""
-  if pcq_add teammate "$1" agent_id="$2@$TEAM_NAME" team="$TEAM_NAME" sid="$_sid" reason="$3" \
+  if pcq_add teammate "$1" agent_id="${5:-$2@$TEAM_NAME}" team="$TEAM_NAME" sid="$_sid" reason="$3" \
        rc="$4" kitty_sock="${CC_TERM_KITTY_TO:-${KITTY_LISTEN_ON:-}}" \
        kitty_pid="$(_kitty_generation || true)" cwd="${WORKTREE:-}" 2>/dev/null; then
     log "  ↻ queued for retry: $(_pcq_row_path teammate "$1")"
@@ -504,6 +504,17 @@ _pane_from_env() {
   sid="${line##*:}"
   [[ "$sid" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]] \
     && printf '%s\n' "$sid"
+}
+
+# Kitty window id from a pid's env — the kitty sibling of _pane_from_env, which accepts only iTerm2
+# UUIDs and so answers "no pane" for every member on a kitty box. KITTY_WINDOW_ID is set by kitty
+# per window at spawn, so the teammate's own claude.exe carries ITS window's id. Digits only.
+_kitty_pane_from_env() {
+  local pid="$1" line
+  [[ -n "$pid" ]] || return 1
+  line=$(ps eww -p "$pid" 2>/dev/null | tr ' ' '\n' | grep -m1 '^KITTY_WINDOW_ID=') || return 1
+  line="${line#*=}"
+  [[ "$line" =~ ^[0-9]+$ ]] && printf '%s\n' "$line"
 }
 
 # iTerm2 session UUID from a pid via its controlling tty (API enumeration).
@@ -1088,6 +1099,28 @@ fi
 # stall, and it clears itself the moment the tool_result lands.
 if _tool_in_flight "$SESSION_ID"; then
   log "defer $TEAMMATE_NAME (team=$TEAM_NAME): tool in flight — teammate is live, not idle"
+  # F-b: TeammateIdle often never fires again after this defer — panes 33 and 60 of
+  # docs/research/husk-panes-2026-09-30.md were deferred here and outlived their members as husks.
+  # So the defer also leaves a retry row. PANEID is not resolved yet and the gate stays where it
+  # is, so the pane comes from the member's OWN claude.exe (this hook is its descendant): kitty
+  # window id first, then CC_PANE_ID / ITERM_SESSION_ID. The agent id is read from that process's
+  # argv rather than composed, so the drainer's liveness check asks about the exact process. Safe
+  # to queue a LIVE member: the drainer closes only once that process is gone and the pane holds
+  # nothing but a shell.
+  if type -t pcq_add >/dev/null 2>&1; then
+    _dq_pid="$(_find_teammate_pid || true)"; _dq_pane=""; _dq_aid=""
+    if [[ -n "$_dq_pid" ]]; then
+      _dq_pane="$(_kitty_pane_from_env "$_dq_pid" || true)"
+      [[ -n "$_dq_pane" ]] || _dq_pane="$(_pane_from_env "$_dq_pid" || true)"
+      _dq_aid="$(ps -p "$_dq_pid" -o command= 2>/dev/null \
+                 | awk '{ for (i = 1; i < NF; i++) if ($i == "--agent-id") { print $(i + 1); exit } }')"
+    fi
+    if [[ -n "$_dq_pane" ]]; then
+      _queue_close_retry "$_dq_pane" "$TEAMMATE_NAME" deferred-tool-in-flight "" "$_dq_aid"
+    else
+      log "  defer NOT queued for retry: no pane resolvable from the member's process (pid ${_dq_pid:-none})"
+    fi
+  fi
   # Do NOT emit {"continue": false}; the teammate is mid-call.
   exit 0
 fi

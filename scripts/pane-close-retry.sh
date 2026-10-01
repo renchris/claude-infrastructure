@@ -19,13 +19,13 @@
 # Unverifiable ⇒ do not close, count an attempt, and page once at CC_PCQ_MAX_ATTEMPTS so a row that
 # can never resolve is still heard. A wrong-window close kills a live session; a held row costs a pane.
 #
-# self-close rows belong to handoff-fire's own retrier: this never acts on them, it only pages once if
-# that retrier is gone. They are handled BEFORE the kitty gate, because they never touch kitty and a
-# dead retrier is news precisely while kitty is deaf.
+# self-close rows belong to handoff-fire's own retrier: this never acts on them. If that retrier is
+# gone it pages the desk once, BEFORE the kitty gate (a dead retrier is news precisely while kitty is
+# deaf), and once kitty answers it tells the session once, via cc-notify, to re-run its self-close.
 #
 # Never fatal, `set -u`, every external call bounded. One log line per row per run.
 # Seams: CC_PCQ_KITTY_BIN · CC_PCQ_IT2_BIN · CC_PCQ_PS_FILE (a `ps -axo pid=,command=` capture) ·
-#        CC_PCQ_PAGE_BIN · CC_PCQ_KITTY_SOCKET_BIN · CC_PCQ_TIMEOUT_S · CC_PCQ_MAX_ATTEMPTS · CC_PCQ_LOG
+#        CC_PCQ_PAGE_BIN · CC_PCQ_NOTIFY_BIN · CC_PCQ_KITTY_SOCKET_BIN · CC_PCQ_TIMEOUT_S · CC_PCQ_MAX_ATTEMPTS · CC_PCQ_LOG
 #        · CC_PANE_CLOSE_QUEUE_DIR (the lib's).
 
 set -u
@@ -60,23 +60,32 @@ bounded() {
 
 page() { "$PAGE_BIN" --source pane-close-retry "$1" >/dev/null 2>&1 || true; }
 
-# ── self-close rows: observe, page once, never act ──────────────────────────────────────────────
+# ── self-close rows: observe, page once, tell the session once — never act ─────────────────────
+# Two one-shot signals with different preconditions. The desk page needs only a dead retrier, so it
+# runs before the kitty gate. The note to the session itself ("re-run your self-close") is useful
+# only once the terminal answers again, so it is queued here and sent after the gate passes.
 _norm() { printf '%s' "$1" | tr -s ' ' | sed 's/^ //;s/ $//'; }
+_retrier_alive() { # <row> → rc 0 iff the recorded retrier pid is running with the SAME start time
+  local rpid rlst cur
+  rpid="$(pcq_get "$1" retrier_pid)"; rlst="$(pcq_get "$1" retrier_lstart)"
+  [[ "$rpid" =~ ^[0-9]+$ && -n "$rlst" ]] || return 1
+  # pid AND start time: a recycled pid with a different lstart is somebody else, i.e. the retrier is gone.
+  cur="$(ps -p "$rpid" -o lstart= 2>/dev/null)"
+  [[ -n "$cur" && "$(_norm "$cur")" == "$(_norm "$rlst")" ]]
+}
+NOTIFY_ROWS=""
 drain_self_close() {
-  local row="$1" pane rpid rlst cur
+  local row="$1" pane
   pane="$(pcq_get "$row" pane)"
-  if [[ "$(pcq_get "$row" paged)" == 1 ]]; then log "self-close pane=$pane already paged — held for handoff-fire"; return; fi
-  rpid="$(pcq_get "$row" retrier_pid)"; rlst="$(pcq_get "$row" retrier_lstart)"
-  if [[ "$rpid" =~ ^[0-9]+$ && -n "$rlst" ]]; then
-    # pid AND start time: a recycled pid with a different lstart is somebody else, i.e. the retrier is gone.
-    cur="$(ps -p "$rpid" -o lstart= 2>/dev/null)"
-    if [[ -n "$cur" && "$(_norm "$cur")" == "$(_norm "$rlst")" ]]; then
-      log "self-close pane=$pane retrier $rpid alive — skipped"; return
-    fi
+  if _retrier_alive "$row"; then log "self-close pane=$pane retrier $(pcq_get "$row" retrier_pid) alive — skipped"; return; fi
+  if [[ "$(pcq_get "$row" paged)" == 1 ]]; then
+    log "self-close pane=$pane already paged — held for handoff-fire"
+  else
+    page "pane-close-retry: self-close of pane $pane (sid $(pcq_get "$row" sid)) never completed and its retrier is gone — reason $(pcq_get "$row" reason), since $(pcq_get "$row" first_ts). Row: $row"
+    pcq_add self-close "$pane" paged=1 >/dev/null 2>&1 || true
+    log "self-close pane=$pane retrier gone — paged once"
   fi
-  page "pane-close-retry: self-close of pane $pane (sid $(pcq_get "$row" sid)) never completed and its retrier is gone — reason $(pcq_get "$row" reason), since $(pcq_get "$row" first_ts). Row: $row"
-  pcq_add self-close "$pane" paged=1 >/dev/null 2>&1 || true
-  log "self-close pane=$pane retrier gone — paged once"
+  [[ "$(pcq_get "$row" notified)" == 1 ]] || NOTIFY_ROWS="$NOTIFY_ROWS$row"$'\n'
 }
 
 N_TEAM=0
@@ -86,7 +95,7 @@ while IFS= read -r _row <&3; do
     teammate)   N_TEAM=$((N_TEAM + 1)) ;;
   esac
 done 3<<<"$ROWS"
-(( N_TEAM > 0 )) || exit 0
+(( N_TEAM > 0 )) || [[ -n "$NOTIFY_ROWS" ]] || exit 0
 
 # ── the gate: does kitty remote control answer? ────────────────────────────────────────────────
 # The LIVE socket first, then a row's recorded one. A row's socket can name a kitty that has since
@@ -117,6 +126,21 @@ if ! _ls_fresh; then
   log "kitty unresponsive — $N_TEAM row(s) held (sock=${SOCK:-none})"
   exit 0
 fi
+
+# The terminal answers now, so a self-close that aborted because it did not can simply be re-run.
+# Sent to the pane the session lives in, once per row (notified=1 whatever the rc: a note that
+# cannot land is not worth repeating every 10 minutes; the desk page above is the durable signal).
+NOTIFY_BIN="${CC_PCQ_NOTIFY_BIN:-$HERE/../bin/cc-notify}"
+[[ -x "$NOTIFY_BIN" ]] || NOTIFY_BIN="$HOME/.claude/bin/cc-notify"
+while IFS= read -r _row <&3; do
+  [[ -n "$_row" ]] || continue
+  _p="$(pcq_get "$_row" pane)"
+  bounded "$NOTIFY_BIN" "$_p" "SELF-CLOSE RETRY: your self-close of pane $_p aborted at $(pcq_get "$_row" first_ts) because the terminal did not answer; it answers now — re-run: handoff-fire.sh self-close $(pcq_get "$_row" argv)" \
+    >/dev/null 2>&1 </dev/null; _rc=$?
+  pcq_add self-close "$_p" notified=1 >/dev/null 2>&1 || true
+  log "self-close pane=$_p terminal answers — told the session to re-run its self-close (cc-notify rc=$_rc)"
+done 3<<<"$NOTIFY_ROWS"
+(( N_TEAM > 0 )) || exit 0
 
 pane_window() { # <pane> → that window's JSON from $LS, or nothing
   jq -c --arg p "$1" '[.[]?.tabs[]?.windows[]? | select((.id | tostring) == $p)][0] // empty' <<<"$LS" 2>/dev/null
