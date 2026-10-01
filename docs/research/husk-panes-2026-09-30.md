@@ -59,3 +59,24 @@ The banners on 58 and 59 read `unlanded:7`. That was true when they were painted
 - Who or what ended 58 and 59 together at 01:26:02Z, 4m20s after their shutdown, without SessionEnd running.
 - What stalls kitty's accept loop. The next episode needs a live `ps -M -p 610` and `sample` capture.
 - The session-index SessionEnd hook fails with "database is locked (5)" on several exits. This was seen, not investigated.
+
+## Second round, 2026-10-01: panes 55, 69 and 76 after F-a to F-e landed
+
+Three husks were still open after the fix wave landed (F-e `476712b2f`, F-b `7eb551b39` `f57055245` `3156c4dcd` `aa1e2deb5` `107755b5b`, F-a `74baff1ee`, F-c `b6bf10c0c`, F-d `bbc40d207`). All three ended before those fixes were live, so they show the pre-fix failure, plus two defects the wave had not covered. Evidence: `~/.claude/logs/teammate-lifecycle.log` lines 32205-32295, `lead-crash-watchdog.log` registrations, and each session's transcript.
+
+| pane | session | what it was | why it stayed open |
+|---|---|---|---|
+| 76 | b531a87b | teammate husk-fa of this wave | Its first idle close (00:16 local) fired while it was **still working**, waiting on an auto-backgrounded bats run through a Monitor watch. That close timed out (rc 124, kitty stalled), but the hook still removed the teammate's worktree. The real close after its shutdown approval (00:18) timed out again; the page was damped and nothing retried. |
+| 69 | 5ea2497e | teammate trunk-reds of lead 918b909f | Retired normally; the idle close timed out (rc 124, 00:26:45 local), page damped, no retry. |
+| 55 | c82dd5b9 | wave-2 lead killed by devserver-gc | Never meant to close. Its orchestrator later abandoned its custody as collected (03:59Z), but nothing could close a pane on that ground. The operator could only press Ctrl-D. |
+
+### Defects found, and fixed in this round
+
+1. **The idle closer reaped working teammates.** `_tool_in_flight`'s background arm in `hooks/teammate-auto-shutdown.sh` recognised only `run_in_background: true` launches. The live transcript corpus also holds 2,818 foreground Bash calls that the harness **moved to the background** at their timeout, and 646 Monitor watches. Both outlive their tool call and finish with the same `<tool-use-id>` notification. husk-fa was on exactly that pair (worktree removed under a running suite), and husk-fc's pane was closed at 23:54 while its process lived on. Fixed: the launch set is read off the result text for all three shapes.
+2. **The retry queue had no working clock.** The drainer ran only at the end of the 600 s `teammate-reap-alarm` launchd job. launchd never starts a job while its previous instance lives, and the chained `assignee-pane-residency.sh` held one instance (pid 5152) for 4h52m. Fixed in `107755b5b`: every SessionEnd that finds a row also kicks the drainer, rate-limited to once per 5 minutes.
+3. **Every pane close needed kitty remote control,** which refused connections (`connection refused` on `/tmp/kitty-610`, a full accept backlog) for over an hour on 2026-10-01. So neither agents nor the drainer could close anything, and this lane's own `self-close --terminal` aborted (safely, with a durable row). Fixed: `bin/cc-pane-close` closes a pane by SIGHUP to its window shell (kitty closes a window when its process exits). It has four fail-closed gates: identity by watchdog registration plus window start time; nothing live; a teammate, an assistant `Good to close: yes`, or a custody abandon/return after registration; no uncommitted work. Handing the drainer's teammate rows to it whenever kitty is deaf is written and tested but NOT landed: the auto-mode classifier refused its commit, so it waits for the operator.
+
+### Still open
+
+- Why kitty's accept loop stalls (unchanged from the first round's Open list). The SIGHUP path removes the dependency for closing, but not for typing, so recycles and the `/exit` of a self-close still need the socket.
+- A killed lead whose work is later ruled done still carries a "Resume it here" banner until it is closed. `cc-pane-close` closes it, but nothing repaints it. The pane-72 successor owns this.
