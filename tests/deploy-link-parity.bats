@@ -1231,3 +1231,47 @@ derive_stray_sets() {  # $1 = the deploy-link-parity.sh to read (a seeded COPY i
   [ "$(printf '%s\n' "$output" | grep -c '^  STRAY .*scripts/jev/handplaced.mjs')" -eq 1 ]
   [ "$(printf '%s\n' "$output" | grep -c 'commands/handplaced.md')" -eq 0 ]
 }
+
+# ── --stray-only (2026-09-30, backlog a4eec664b579) ──────────────────────────────────────────────
+# The one leg no executed auditor owns, run alone so wrap-ledger can surface it as an advisory. The
+# other three legs are deploy-parity-assert's; skipping them must not change what STRAY reports.
+
+@test "--stray-only reports a STRAY and skips the forward walk's findings" {
+  export CC_LINKPARITY_MANIFEST="$BATS_TEST_TMPDIR/manifest"; : >"$CC_LINKPARITY_MANIFEST"
+  hand_place "bin/cc-mail"
+  land_new "hooks/brand-new.sh"          # UNLINKED in a full run
+  run "$LP" --stray-only
+  [ "$status" -eq 1 ]
+  has "STRAY"
+  has "bin/cc-mail"
+  lacks "UNLINKED"
+  has "stray-only:"
+  has "1 actionable"
+  lacks "linked ·"                       # a skipped leg prints no count that would read as a 0
+}
+
+@test "--stray-only: a live REAL file shadowing a tracked one is still the forward walk's, never a STRAY" {
+  # The forward walk CLAIMS its paths even when it classifies nothing; without the claim this real
+  # file (repo edits not live — a SHADOW) would fall through to STRAY with the wrong remedy.
+  export CC_LINKPARITY_MANIFEST="$BATS_TEST_TMPDIR/manifest"; : >"$CC_LINKPARITY_MANIFEST"
+  printf 'repo\n' > "$CC_LINKPARITY_REPO/hooks/shadowed.sh"
+  printf 'live-edited\n' > "$CC_LINKPARITY_CONFIG/hooks/shadowed.sh"
+  run "$LP" --stray-only
+  [ "$status" -eq 0 ]
+  lacks "STRAY"
+  run "$LP"
+  [ "$status" -eq 1 ]
+  has "SHADOW"
+}
+
+@test "--stray-only: an unversioned file and a clean layer give the same STRAY verdict as a full run" {
+  export CC_LINKPARITY_MANIFEST="$BATS_TEST_TMPDIR/manifest"; : >"$CC_LINKPARITY_MANIFEST"
+  run "$LP" --stray-only
+  [ "$status" -eq 0 ]
+  has "0 actionable"
+  hand_place "scripts/handplaced.sh"
+  run "$LP" --stray-only
+  full_stray="$(bash "$LP" 2>/dev/null | grep -c '^  STRAY ')" || true
+  [ "$status" -eq 1 ]
+  [ "$(printf '%s\n' "$output" | grep -c '^  STRAY ')" -eq "$full_stray" ]
+}

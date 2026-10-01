@@ -2411,6 +2411,60 @@ if [ "${WRAP_BUSY:-on}" != "off" ] && [ -f "$_wl_sbl" ]; then
   fi
 fi
 
+# ── LINK_STRAY: an ADVISORY field, never a rung (2026-09-30, backlog a4eec664b579) ────────────────
+# deploy-link-parity.sh's STRAY leg — a live REAL file, executable or a skill, in NO checkout — is the
+# one leg of that detector no executed auditor owns (its header says why the other three are
+# deploy-parity-assert's). It is surfaced here as a count and nothing more: it never moves RUNG,
+# because its findings are inherited state no session's diff created, and a rung any session could
+# be held on by a sibling's hand-placed file is the alarm-polarity defect in its purest form.
+#   · Applicable only where THIS repo is the live layer's source (byte-equal origin, the same compare
+#     compute_live_layer makes); elsewhere LINK_STRAY=n-a.
+#   · The leg takes ~10 s, and this script runs inside 5-10 s Stop-hook bounds, so it is NEVER run
+#     inline: the field reads a cache ("<epoch> <count>") and, when that is older than
+#     WRAP_LINK_STRAY_TTL_S (6 h) or absent, starts ONE detached refresh (mkdir single-flight, the
+#     backlog cache's pattern) and reports what it has. No cache yet ⇒ `?`, never a 0 that reads clean.
+#   · The refresh runs the LIVE checkout's copy of the script, i.e. the detector the box is running.
+LINK_STRAY="n-a"; LINK_STRAY_AGE="n-a"
+# shellcheck disable=SC2016  # expanded by the detached bash, not here
+_WL_LS_FILLER='out="$1"; lock="$2"; bound="$3"; script="$4"
+tmp="$(mktemp "$out.XXXXXX" 2>/dev/null)" || { rmdir "$lock" 2>/dev/null; exit 0; }
+if [ -n "$bound" ]; then rep="$("$bound" 300 /bin/bash "$script" --stray-only 2>/dev/null)"; rc=$?
+else rep="$(/bin/bash "$script" --stray-only 2>/dev/null)"; rc=$?; fi
+n="$(printf "%s\n" "$rep" | sed -n "s/.*stray-only: .* \([0-9][0-9]*\) actionable.*/\1/p" | head -1)"
+if { [ "$rc" = 0 ] || [ "$rc" = 1 ]; } && [ -n "$n" ]; then
+  printf "%s %s\n" "$(date +%s)" "$n" > "$tmp" && mv -f "$tmp" "$out"
+fi
+rm -f "$tmp"; rmdir "$lock" 2>/dev/null; exit 0'
+compute_link_stray() {
+  local my lo cache lock ttl script ts n now
+  my="$(git config --get remote.origin.url 2>/dev/null || true)"
+  lo="$(_bounded "${WRAP_LIVE_TIMEOUT_S:-5}" git -C "$LIVE_REPO" config --get remote.origin.url 2>/dev/null || true)"
+  { [ -n "$my" ] && [ "$my" = "$lo" ]; } || return 0
+  LINK_STRAY="?"; LINK_STRAY_AGE="?"
+  cache="${WRAP_LINK_STRAY_CACHE:-$HOME/.claude/state/link-stray.last}"
+  ttl="${WRAP_LINK_STRAY_TTL_S:-21600}"; case "$ttl" in ''|*[!0-9]*) ttl=21600 ;; esac
+  ts=""; n=""
+  [ -f "$cache" ] && read -r ts n < "$cache" 2>/dev/null
+  now="$(date +%s)"
+  case "$ts$n" in
+    ''|*[!0-9]*) ;;
+    *) LINK_STRAY="$n"; LINK_STRAY_AGE=$(( now - ts ))
+       [ "$LINK_STRAY_AGE" -le "$ttl" ] && return 0 ;;
+  esac
+  script="${WRAP_LINK_STRAY_SCRIPT:-$LIVE_REPO/scripts/deploy-link-parity.sh}"
+  [ -f "$script" ] || return 0
+  mkdir -p "$(dirname "$cache")" 2>/dev/null || return 0
+  lock="$cache.fill"
+  if ! mkdir "$lock" 2>/dev/null; then
+    [ -n "$(find "$lock" -maxdepth 0 -mmin +30 2>/dev/null)" ] || return 0   # a live refresh holds it
+    rmdir "$lock" 2>/dev/null; mkdir "$lock" 2>/dev/null || return 0
+  fi
+  _wl_detach_ready || { rmdir "$lock" 2>/dev/null; return 0; }
+  detach /dev/null /bin/bash -c "$_WL_LS_FILLER" _ "$cache" "$lock" "$_WRAP_BOUND_BIN" "$script" >/dev/null 2>&1 \
+    || rmdir "$lock" 2>/dev/null
+  return 0
+}
+case "${WRAP_LINK_STRAY:-on}" in off|0|no) ;; *) compute_link_stray ;; esac
 
 emit_machine() {
   printf 'RUNG=%s\n' "$RUNG"
@@ -2442,6 +2496,9 @@ emit_machine() {
   printf 'LIVE_AGE=%s\n' "$LIVE_AGE"
   printf 'LIVE_BREACH_WHY=%s\n' "$LIVE_BREACH_WHY"
   printf 'MIG_FAILED=%s\n' "$MIG_FAILED"
+  # ADVISORY (never moves RUNG): unversioned live files, from deploy-link-parity's STRAY leg.
+  printf 'LINK_STRAY=%s\n' "$LINK_STRAY"
+  printf 'LINK_STRAY_AGE=%s\n' "$LINK_STRAY_AGE"
   printf 'GATE=%s\n' "$GATE"
   printf 'DOD=%s\n' "$DOD"
   printf 'DOD_FILE=%s\n' "$DOD_FILE"
@@ -2560,6 +2617,13 @@ emit_full() {
   esac
   [ "$MIG_FAILED" -gt 0 ] && live_disp="${live_disp} · ${MIG_FAILED} FAILED migration(s) — conclusion never reached its enforcing store"
   printf 'Live layer:     %s\n' "$live_disp"
+  case "$LINK_STRAY" in
+    n-a) : ;;
+    '?') printf 'Live strays:    not yet measured (advisory; refresh started — bash scripts/deploy-link-parity.sh --stray-only)\n' ;;
+    0)   : ;;
+    *)   printf 'Live strays:    %s unversioned live file(s), %ss old (advisory, not a rung) — bash scripts/deploy-link-parity.sh --stray-only\n' \
+           "$LINK_STRAY" "$LINK_STRAY_AGE" ;;
+  esac
   local custody_disp; case "$CUSTODY_SRC" in
     # ATTRIBUTED: say which half is which. "YOU fired" supports the originator claim; "cannot say
     # whose" does not, and stating that difference is what keeps the line informative for the

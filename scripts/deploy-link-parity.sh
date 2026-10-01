@@ -79,9 +79,26 @@
 #   · DIRECTORIES are skipped (hooks/lib and scripts/lib are structural; __pycache__ is bytecode
 #     residue of the *.py hooks). Neither is a hand-placed tool.
 #
-# Usage:  deploy-link-parity.sh [--all] [--quiet]
-#   --all     also list files that ARE correctly linked (default: only findings)
-#   --quiet   print nothing when there is nothing actionable (for hooks/cron callers)
+# HAND-RUN AND REPORT-ONLY — NO GATE EXECUTES THIS FILE, AND THAT IS THE DECISION (2026-09-30,
+# backlog a4eec664b579). For a month it was "a detector with zero execution sites", and the three
+# ways out were: wire it as a blocking gate, retire the legs another auditor covers, or say it is a
+# hand tool. Measured that day it takes over 120 s on the real layer and exits 1 on findings nobody
+# introduced, so as a gate it would red every land on inherited state. And three of its four legs
+# already have an EXECUTED owner: scripts/deploy-parity-assert.sh (run by tests/deploy-parity-live.bats
+# at every postland-verify) asserts the per-file SYMLINK classes are present and resolve (this file's
+# forward walk: UNLINKED/MISLINKED/DANGLING/SHADOW), ports sweep_orphans' derived-scope equivalent
+# (ORPHAN), and owns the live-tree dangling sweep (UNMAPPED/DANGLING). Those legs stay here for a
+# human who wants the per-file detail, and nothing automated runs them.
+# The STRAY leg has no other owner, so it alone is surfaced, never as a gate: `--stray-only` runs just
+# that leg (the forward walk still CLAIMS its paths, so a shadowing real file is never mislabelled a
+# stray, but resolves and classifies nothing), and scripts/wrap-ledger.sh reads it as the advisory,
+# non-blocking LINK_STRAY field. The other legs are not deleted: they are tested, cheap to keep, and
+# deleting working legs of a detector to make it smaller buys nothing a skipped leg does not.
+#
+# Usage:  deploy-link-parity.sh [--all] [--quiet] [--stray-only]
+#   --all         also list files that ARE correctly linked (default: only findings)
+#   --quiet       print nothing when there is nothing actionable (for hooks/cron callers)
+#   --stray-only  run only the STRAY leg (seconds, not minutes); the summary line says so
 # Exit 0 = nothing actionable (PENDING-only still counts as clean) · 1 = actionable gap
 #        · 3 = missing prerequisite.
 #
@@ -92,10 +109,12 @@ set -uo pipefail
 
 ALL=false
 QUIET=false
+STRAY_ONLY=false
 while [ $# -gt 0 ]; do
   case "$1" in
     --all)   ALL=true; shift ;;
     --quiet) QUIET=true; shift ;;
+    --stray-only) STRAY_ONLY=true; shift ;;
     -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
@@ -232,6 +251,8 @@ check_one() {  # $1 = repo-relative path · $2 = absolute live destination
   # Recorded rather than re-derived: the forward walk's globs are the map of record, and a second
   # hand-written copy of them is precisely how two auditors over one population come to disagree.
   SEEN="${SEEN}${rel}"$'\n'
+  # --stray-only: the claim above is the only part of this walk the STRAY leg needs.
+  $STRAY_ONLY && return 0
   if [ -L "$dest" ]; then
     tgt="$(_resolve "$dest")"
     if [ "$tgt" = "$src" ]; then
@@ -269,6 +290,7 @@ check_one() {  # $1 = repo-relative path · $2 = absolute live destination
 # iterating repo files (the file is gone), and just as inert — a rename lands BOTH halves.
 sweep_orphans() {
   local d="$1" l tgt
+  $STRAY_ONLY && return 0
   [ -d "$d" ] || return 0
   for l in "$d"/*; do
     [ -L "$l" ] || continue
@@ -736,6 +758,7 @@ sweep_strays "agents"
 # population.
 sweep_unmapped() {
   local l tgt rel
+  $STRAY_ONLY && return 0
   # The prune set is the non-deployed stores; everything remaining under $CFG is a candidate. A
   # resolving directory symlink is rejected by the -f test below (the vendor/ leg, declared
   # NOT-PER-FILE above) — but only AFTER the dangling arm has run, because a broken link is broken
@@ -832,8 +855,14 @@ esac
 #     exactly what happened to scripts/backlog-consolidation. `linked`, `live-extra` and `unmapped`
 #     are counts over three DIFFERENT populations (the walk's globs, this sweep's list, and the
 #     territory), printed on one line, and only the third derives from the territory.
-printf '  %d linked · %d staged-pending · %d live-extra · %s unmapped · %d actionable\n' \
-  "$linked_n" "$pending_n" "$extra_n" "$UNMAPPED_SHOWN" "$findings"
+if $STRAY_ONLY; then
+  # A skipped leg reports NOTHING rather than a 0: `0 linked` would read as "nothing is linked".
+  printf '  stray-only: %d live-extra · %d actionable (forward, orphan and unmapped legs not run — deploy-parity-assert owns them)\n' \
+    "$extra_n" "$findings"
+else
+  printf '  %d linked · %d staged-pending · %d live-extra · %s unmapped · %d actionable\n' \
+    "$linked_n" "$pending_n" "$extra_n" "$UNMAPPED_SHOWN" "$findings"
+fi
 
 if [ "$findings" -gt 0 ]; then
   printf '\n  ✗ deploy parity broken — landed code that does not run, or live code that is in no repo.\n'
