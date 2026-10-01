@@ -252,6 +252,16 @@ coverage table, keeping the kit's record formats (`scripts/research-kit/RECORDS.
     enforced (stated in the header). Rounds still close through `round.sh close`. `tests/cc-research-cert.bats`
     1..17, red 17/17. A bare `node --check` rejects every Workflow script (top-level return/await), so the suite
     compiles each body the way the runtime wraps it.
+  - Item 9 — `70378a573` (skeleton `023d63d61`): `bin/cc-research` over `lib/cli.py`. State verbs (`lib/cli_core.py`):
+    pass-throughs `index frame estimate gate`, `forecast`, `freeze`, single-row `trace reconcile lint`, `verdict`
+    (pure read; render lines plus pending concerns, "waiting on you since", priced menu), `pending`, `menu`
+    (extra round quoted as a change to the bound, never a yield), `budget start|end` (refuses the next stage while
+    the last is over budget with no overrun packet — §10 item 17 in code), `ceiling`, `reopen` (refused under a
+    claude ancestor). Record verbs (`lib/cli_records.py`, `lib/activities.py`): `census add|critic`, `premise`,
+    `source`, `decision add|tally|rule|show` (no conviction flag; rule refused below 90), `concern add|list`, `park`,
+    `triage` (blind rater, §5.2 buckets, counted buckets append `changes.jsonl`; the writer of `activities.json`,
+    §10 item 8). Suites `cc-research-core` 1..22 (red 22/22), `cc-research-records` 1..10 (red 10/10).
+    `waiting_since` is "unknown", not null, when cc-decide is unreadable (null would read as nothing waiting).
 - Locus inside the wave: T (six teammates, one worktree each: `rp-c-{core,records,probe,cert,jobs,close}`), lead
   inline only for the shared skeleton (`023d63d61`: `bin/cc-research`, `lib/cli.py` verb table, one module per
   teammate, cross-module contracts in `RECORDS.md`), B1's on-box step 2, merges and lands. Fired session
