@@ -3,7 +3,7 @@
 Date: 2026-09-30. Scope: greenfield research and planning run through Claude Code on this machine.
 Status: **method version 1, frozen.** The adversarial review that produced Appendix B was the last critique round.
 Later changes come only from measured results (the calibration run and the first pilot program), applied as priced
-edits to named sections, never as a rewrite (§8, decision 8).
+edits to named sections, never as a rewrite (§9, decision 8).
 
 Receipts point into `evidence/` beside this file unless they start with `~` or a repository path. Repository paths are
 relative to `~/Development/claude-infrastructure` at trunk `8a2a9acda`. Every simulated number comes from a stdlib Python
@@ -24,8 +24,10 @@ method below fixes those causes. You sign a list of testable frame rows (a "fram
 what "complete" means. The research makes contact with the real environment before any design decision, runs a fixed,
 pre-registered number of blind review rounds across three model vendors on a frozen plan, and issues a certificate:
 "100.00% of the signed frame is closed", plus a printed forecast of how many material changes to expect after signoff
-and the most it could be at 95%. After that, asking "are we 100.00/100.00 complete?" relays the stored certificate and
-cannot start new research: a tool-level block stops it. New ideas park in the next version, and every later change is
+and the most it could be at 95%. After that, asking "are we 100.00/100.00 complete?" relays the stored certificate. A
+tool-level block keeps research tools off unless the prompt is positively labeled as work, and the gate measures how
+often a re-ask is misread. A reply that adds an item the certificate does not carry is blocked, whether it opens "yes"
+or "no". New ideas park in the next version, and every later change is
 counted against the printed forecast instead of reopening research. In the model, the forecast is exceeded in about 1–4%
 of programs. Most programs should still expect at least one material change after signoff (about 6–9 in 10 with a
 strong front end). The only things that shrink that number are a better front end and earlier contact with reality;
@@ -170,7 +172,7 @@ need to modify our CLAUDE.md or stop hook?"*
 - **Decision packets** are your existing `cc-decide` records. Class B has a default that fires at a deadline; class C
   waits for you.
 - `cc-research` is the new command-line tool this report proposes to hold the program's records and compute its gate
-  (§7). Until it exists, a hand-run kit of five scripts does the same job (§7, item 7).
+  (§8). Until it exists, a hand-run kit of seven scripts does the same job (§8, item 7).
 
 ### 3.1 Preconditions, settled in the intake sitting before anything else
 
@@ -187,21 +189,26 @@ no-take-backs claim, and you can run ordinary research as today.
 
    You are shown your own words from 09-14 ("ALWAYS fix until 100.00 … including all new found work") and 09-27 ("no
    take-backs, redo, or incremental research later down the line"). You then record whether this definition supersedes
-   them inside program scope. The contract page (§3.2, step 9) lists the **only** activities that happen after the
+   them inside program scope. The contract page (§3.2, step 8) lists the **only** activities that happen after the
    certificate, and you sign that they are not research: narrowing a carried set on its dated probe, scheduled
-   residual checks, scheduled freshness and market checks, fixing a counted escape, and the parked-ideas batch.
+   residual checks, scheduled freshness and market checks, fixing a counted escape, one bounded frame-delta cycle for
+   frame omissions found during certification (§5.4), and the parked-ideas batch.
 2. **The standing-rule exemption for active programs.** In any session whose DoD names an active program, from intake
    through build:
    - a refinement is filed to the program's apply-at-build list, not driven now. This replaces the Follow-On Gate's
-     "nothing left on the table" test (`CLAUDE.global.md:617`) inside program scope;
+     "nothing left on the table" test (`CLAUDE.global.md:617`; slim variant `CLAUDE.global.slim.md:248`) inside
+     program scope;
    - a decision closed by its timebox, by a packet default or as a carried set carries a "research exhausted at
      timebox" receipt. That receipt satisfies the rule that research below 90% conviction is mandatory
-     (`CLAUDE.global.md:619`). Further research on that row goes only through a priced, operator-bought extension or
-     the row's scheduled narrowing probe;
+     (`CLAUDE.global.md:619`, restated at `:464-465`; slim variant `CLAUDE.global.slim.md:249`). Further research on that
+     row goes only through a priced, operator-bought extension or the row's scheduled narrowing probe;
    - a completeness or pushback question about the program is answered by relaying the certificate. Residuals the
-     certificate names are not open work. This covers the read-only-turn rule (`CLAUDE.global.md:655`), the slim
-     variant's close-question rule (`CLAUDE.global.slim.md:259`, deployed at `~/.claude-quaternary/CLAUDE.md:259`), and
-     the Stop hook's "offer instead of drive" check (`hooks/completion-assert.sh:1284`);
+     certificate names are not open work. This covers the read-only-turn rule (`CLAUDE.global.md:655`; slim
+     `CLAUDE.global.slim.md:272`), the slim variant's close-question rule (`CLAUDE.global.slim.md:259`), the rule that
+     offering remaining work is a defect (`CLAUDE.global.md:969`; slim `CLAUDE.global.slim.md:364`), and the Stop
+     hook's "offer instead of drive" check (`hooks/completion-assert.sh:1284`). Both variants and their live copies carry
+     the exemption: `~/.claude/CLAUDE.md`, and `~/.claude/CLAUDE.slim.md`, which the four account config directories
+     (`~/.claude-next`, `-secondary`, `-tertiary`, `-quaternary`) link to as their `CLAUDE.md`;
    - new ideas park in the next version (§5.1).
 
    Outside active programs nothing changes. The exemption is keyed on a marker in the program's DoD line, which those
@@ -210,7 +217,9 @@ no-take-backs claim, and you can run ordinary research as today.
 ### 3.2 Stage 1: intake and the signed frame (lead session with you; 0.5–2 days by size)
 
 1. **Mine before asking.** A read-only fan-out writes `intake-mined.md`, with every claim quoted and receipted. It
-   reads prior research through a research index (406 research entries have none today), plans here and in sibling
+   reads prior research through the research index `docs/research/INDEX.jsonl` (topic, path, date, status), which the
+   kit's `research-index.py` writes first (§8, item 7), because none exists today for the 406 research entries
+   (`evidence/design/SYNTHESIS.md:42`). It also reads plans here and in sibling
    repos, memory (`cc-memory-search`), transcripts including subagent files, your messages (`msg`) for every named
    counterparty, prior rulings (`cc-decide list --all`), the backlog and mission board, and house rules that act as
    acceptance criteria. An owner for the topic must show a positive sign of life (a recent commit, a live pane, open
@@ -282,20 +291,28 @@ no-take-backs claim, and you can run ordinary research as today.
    | 32 | Cost and quota of building and running the deliverable measured, not estimated |
    | 33 | Every census of an outside population (models, libraries, vendors) carries an as-of date and an admission rule |
 
-6. **Bounded frame critique: the only open-ended "what is missing?" in the protocol.** Exactly 2 rounds, each of 6
-   blind reviewers across at least 3 vendors. They read the frame rows, not the prose, because critics audit what a plan
+6. **Bounded frame critique: the only open-ended "what is missing?" in the protocol.** It is the first step that
+   needs all three vendors, so it opens with a **vendor preflight**: one real call to each vendor's CLI, resolved by
+   absolute path, with the responding model id recorded and shown on the contract page. When this report was written,
+   Google's `gemini` login had never been exercised by a real call (`evidence/design/SYNTHESIS.md:1220`;
+   `evidence/design/statistical-stopping.md:360-361`), and a Workflow agent's PATH hides every vendor CLI
+   (`evidence/design/frame-contract.md:222`). A failed call is a dead vendor lane (§3.8), found here instead of at
+   Stage 3 or in the first certification round. Then exactly 2 rounds, each of 6 blind reviewers across at least 3
+   vendors. They read the frame rows, not the prose, because critics audit what a plan
    says, not its unstated premises (`evidence/forensics/shard-7.md:159`). Two of these slots are frontier-model
-   derivation panels, so the frontier model's different blind spots are spent here, before the freeze, and not after
-   it (Appendix B, break 8). Zero findings is a valid answer. Every proposed row cites where it applies and which
-   decision it would change.
-7. **Profile, budget and ceiling** are computed from the frame's size (§6.1).
+   derivation panels, so the frontier model's different blind spots are spent here, before the freeze, as well as in its fixed
+   certification slots (§3.8), and never in an open sweep after the freeze (Appendix B, break 8). Zero findings is a
+   valid answer. Every proposed row cites where it applies and which decision it would change.
+7. **Profile, budget and ceiling** are computed from the frame's size (§6.1). Weekly frontier-model headroom is
+   checked against the profile's frontier slots: 2, 4 or 6 a round, for up to 6, 10 or 14 rounds (§3.8).
 8. **The contract page** is rendered on one page. It holds the definition of complete; the profile with its price
    and forecast; the forecast of material changes after signoff; the ceiling in agent-days and in calendar days with
    your waits; the chance an upstream release lands during the program; the list of post-certificate activities you
    sign as not research; your escape-cost number; and, if the program's middle estimate exceeds 3 times the measured
    research time for its project type, the override you sign (§6.3).
-9. **You sign the frame in your own terminal** through the operator-only signing tool (§7, item 4). It refuses to run
-   under an agent and pins the content hash. From then on the frame changes only through the change rules in §5.
+9. **You sign the frame in your own terminal** through the operator-only signing tool (§8, item 4). It refuses to run
+   under an agent and pins the content hash. From then on the frame changes only through the Stage 4 frame
+   expansion and your reaction checkpoint before the freeze (§3.5, §3.6), and through the change rules in §5 after it.
 
 ### 3.3 Stage 2: prior art, censuses, premises and sources (0.5–1.5 days)
 
@@ -317,10 +334,15 @@ no-take-backs claim, and you can run ordinary research as today.
 ### 3.4 Stage 3: contact with the real environment, before design (0.75–1.5 days)
 
 Evidence levels are computed from how a claim was checked, never typed by hand: recall; secondary text; primary read of
-code; live read with an expiry; measurement (at least 5 samples with a load control); execution in the target
+code or of an authoritative document; live read with an expiry; measurement (at least 5 samples with a load control); execution in the target
 environment; your own look. Code claims need a primary read, current state needs a live read, behavior needs
 measurement, deployment behavior needs execution in the target environment, and taste, intent and private facts need
-you. **Recall and secondary text never close a load-bearing claim.**
+you. What a spec, standard, license, vendor's terms or law says needs a primary read of the authoritative text at a
+recorded version or retrieval date, plus a live read with an expiry when that text can change without a new version
+(a vendor's rules page, for example); how such a text applies, where reasonable readings differ, needs you. A
+reasoning claim, one derived from other claims, takes the lowest level among its inputs, each of which must meet its
+own required level, and any arithmetic in it is a re-runnable script. **Recall and secondary text never close a
+load-bearing claim.**
 
 The contact wave runs, one probe per slot, in this order:
 1. **Environment doctor.** Resolve tools through the interactive shell's PATH, because the agent's PATH hides `codex`,
@@ -349,17 +371,35 @@ premises is refuted, a reviewer re-samples 20% of the checks once, because probe
   pre-written branch per member, and a revision budget in hours. Eliminating a member later executes a signed branch
   and is not a take-back.
 - **Conviction is computed, not asked for.** Each decision stores a named evidence tally: which probes support which
-  option, and at what evidence level. Its conviction is derived from that tally, so re-asking a model cannot move it.
-  Self-reported convictions sit on multiples of 5 in 193 of 217 packets (89%), so they cannot resolve a 92-versus-87
-  difference (Appendix B, break 6).
+  option, and at what evidence level. Its conviction is derived from that tally by one fixed rule, so re-asking a model cannot
+  move it. Self-reported convictions sit on multiples of 5 in 193 of 217 packets (89%), so they cannot resolve a
+  92-versus-87 difference (Appendix B, break 6). The rule:
+  - **90 or more** only when every load-bearing premise of the chosen option is at its required level (§3.4) and the
+    probe of its "what would flip it" condition ran and came back negative.
+  - Otherwise, 89 × (load-bearing premises at their required level ÷ all load-bearing premises), rounded down. A flip
+    probe that has not run caps the decision at 89. A flip probe that comes back positive re-plans the decision, as a
+    refuted premise does (§6.5).
+  - A decision that rests on no load-bearing factual premise is a taste or value call, and you rule it.
+
+  The pilot kit's `gate.sh` and `cc-research` compute this same rule (§8, items 7 and 9).
 - **Rulings.**
 
   | Condition | Route |
   |---|---|
-  | Tally supports 90% or more | The agent rules and records it |
+  | The tally meets the rule for 90 or more (above) | The agent rules and records it |
   | Below 90 after the timebox, the gap is one of framing, frontier headroom exists | Frontier-model document pass, then back to the default model |
   | Below 90 at the timebox, reversible, not an escalation surface | Class B with the recommended option as default in 48 hours. The certificate shows "decided by default at N%", never "closed" |
   | Below 90 and irreversible, or an escalation surface (auth, destructive migration, navigation, database timeout), or your value (money, a customer relationship) | Class C, carried. It blocks only the build waves that depend on it. At its due date it converts to class B whose default is the reversible option (do nothing, or behind a flag), and its dependent waves are descoped rather than left waiting (§5.6). Class B never defaults an irreversible decision |
+
+- **Frame expansion after each level of rulings.** In a greenfield program you sign the frame before the architecture
+  decisions that define many of its populations. So after each level of rulings, the chosen options' sub-decisions,
+  the populations they introduce (callers, instances, platforms, concurrent actors), their write paths and their
+  premises are added as frame rows, mapped against the checklist (§3.2, step 5), and run through Stages 2 and 3
+  (censuses, grids, premises, sources, contact probes) before any decision that depends on them is ruled. Expansion
+  stops 2 levels below the top-level decisions you signed. Deeper sub-decisions are carried as a set or declared
+  build-wave residuals with an owner. Each level is timeboxed at half a day for lite and 1 day for standard and full
+  (an assumed figure the calibration run measures) and priced in the ceiling (§6.1). The added rows enter the frame you
+  re-sign at the reaction checkpoint (§3.6), so gate rows 1, 2 and 5 are evaluated on the expanded frame.
 
 ### 3.6 Stage 5: executable acceptance, the contact skeleton, and your reaction checkpoint (1–2.5 days)
 
@@ -379,7 +419,8 @@ premises is refuted, a reviewer re-samples 20% of the checks once, because probe
   quota death, network drop, reboot, partial write, expiry. Cells are worked highest value first inside the stage
   budget. What does not fit is declared up front as build-wave residual with an owner, not carried as open research.
 - **Your reaction checkpoint.** You see the skeleton or prototype and react once. Criteria you discover by seeing an
-  artifact enter here, and you re-sign the frame as version 2 **before the freeze**. Taste gates then get at most 2
+  artifact enter here. You re-sign the frame, with them and the Stage 4 expansion rows (§3.5), as version 2 **before
+  the freeze**. Taste gates then get at most 2
   rounds of your eye against a reference set frozen at the first round. A third round or a new reference is a
   next-version change with a price (Appendix B, break 23).
 
@@ -401,16 +442,40 @@ premises is refuted, a reviewer re-samples 20% of the checks once, because probe
 
 ### 3.8 Stage 7: certification rounds
 
-**Reviewers.** Three vendors are required, counted by vendor, never by model name: Anthropic (Opus 5.5), OpenAI
-(`~/.local/bin/codex exec -s read-only`), and Google (the `gemini` CLI under fnm, run in read-only plan mode). Each runs
-the same number of context strategies: full context; plan only; "assume it fails in production"; consumer; operations
-and security; and frame rows only. The frontier model either takes a seeded slot in **every** round or in none, so
-"quiet rounds" always compare the same detectors. Local models may join as extra slots only if their first-round seed
+**Reviewers.** Three vendors are required (two only under the dead-lane default below), counted by vendor, never by
+model name: Anthropic (Opus 5.5 and the frontier model), OpenAI (`~/.local/bin/codex exec -s read-only`), and Google
+(the `gemini` CLI under fnm, run in read-only plan mode). Every round fills four equal slot sets, one each for Opus 5.5,
+the frontier model, OpenAI and Google, the composition §3.12 simulates (`evidence/final/profile_sim.py:29-38`). Each
+set takes the context strategies in this order, one per slot: full context; plan only; "assume it fails in
+production"; consumer; operations and security; and frame rows only.
+
+| Profile | Opus 5.5 | Frontier model | OpenAI | Google | Strategies each set runs |
+|---|---|---|---|---|---|
+| Lite | 2 | 2 | 2 | 2 | Full context; plan only |
+| Standard | 4 | 4 | 4 | 4 | Those two, plus "assume it fails in production" and consumer |
+| Full | 6 | 6 | 6 | 6 | All six |
+
+The model treats the frontier slots as Opus with the same blind spots (`evidence/final/profile_sim.py:6, 29`), so they
+count as Anthropic, not as a fourth vendor. The frontier model takes its slots in **every** round or in none, so "quiet
+rounds" always compare the same detectors, and §3.12's numbers apply only when it takes them in every round. Intake
+checks weekly frontier-model headroom for these slots at the profile's hard cap (§3.2, step 7). Without that headroom,
+Opus fills the frontier slots, the certificate prints "reduced diversity: composition not simulated", and the
+calibration run simulates that composition (§6.6). Local models may join as extra slots only if their first-round seed
 recall is at least 0.33.
 
 **Pinned detectors.** Reviewer model ids are pinned for the whole program. Each reviewer's responding model id is
 recorded (the vendor's usage record), and a mismatch voids that reviewer. The standing "we ALWAYS upgrade immediately"
 rule (`~/.claude-versions/MANIFEST.jsonl:31`) is suspended for reviewer binaries during this stage.
+
+**Dead vendor lane.** A vendor's lane is dead when its preflight call fails (§3.2, step 6), or when every one of its
+slots in a round is still dead or voided after its 2 re-runs. Until the lane is restored or the default below fires,
+a round with a dead lane does not count toward the stop rule, and its slots are not handed to the other vendors. The
+program pauses on one operator step to restore the lane (a fresh login, for example), filed as a class-B packet whose
+default, "continue on two vendors", fires after 48 hours. On that default, the remaining rounds (and the frame
+critique, if the lane died there) run on the two live vendors, rater 3 becomes a fresh process from rater 1's vendor,
+and the certificate prints "degraded: two vendors" on its first line, with its forecast labeled "not modeled for two
+vendors" until the calibration run measures that case. If fewer than two vendors remain, or none of them is
+non-Anthropic, the program stays paused.
 
 **Isolation.** Each reviewer is a separate command-line process launched by a courier that relays its raw output
 verbatim. Anthropic reviewers run with `--setting-sources local`, which a probe showed loads none of your resident
@@ -424,7 +489,7 @@ instructions (`evidence/design/SYNTHESIS.md:44-45`). The working directory is a 
   reading". They are left out of the desk estimate; their assurance is the Stage 3 probe with its negative control,
   printed as such.
 - A post-round grep voids any reviewer whose output shows the real program path or the vault. Same-user
-  OpenAI and Google processes could still read the real repo, so this isolation is detection, not prevention (§6.5).
+  OpenAI and Google processes could still read the real repo, so this isolation is detection, not prevention (§7).
 
 **Brief** (frozen, identical for every reviewer): for each acceptance and decision row in scope, answer yes, no or
 unknown with a file:line receipt. Then, for each of 11 lenses (premise, census, instrument, trace, consistency,
@@ -443,13 +508,14 @@ location, the row it changes and how, a read receipt, a probability, and what wo
    deduplication merge-error rate (a seed merged into a real hole is an over-merge).
 5. An item rated below material that later surfaces and proves material is an **escape**, never a relabel.
 
-**Fixes.** Only material findings are fixed, only between rounds, only by integration. After each fix cycle, one
+**Fixes.** Only material findings are fixed, only between rounds, only by integration, except frame omissions
+(§3.11, clause (g)), which go to the frame-delta cycle (§5.4). After each fix cycle, one
 consistency read covers the edited spans and what depends on them. Its finds become inputs to the next round and are
 not fixed inside the cycle. Refinements go to the apply-at-build list and are never integrated during certification,
 so they cannot create new holes.
 
 **Stop rule** (the only one). Stop at the end of round r ≥ K + 1 when the last K rounds were quiet: no new verified
-material finding, real or false, on the same snapshot. Otherwise stop at the round cap, R_max = the lower of the
+material finding, real or false, on the same snapshot; a caught seed is not such a finding (§3.9). Otherwise stop at the round cap, R_max = the lower of the
 round-1 forecast's 90th percentile + 4 and the profile's hard cap. **The cap round is verification-only.** Its finds
 are listed on the certificate as named known rows applied in build wave 1, and the plan is not edited. So the certified
 snapshot is always the last one a full round examined.
@@ -464,7 +530,10 @@ with the rewrite named.
   with your intake quote. A verified material find becomes a named known row.
 - **The relay test.** A session loaded with your full resident instructions is asked your literal phrasings 20 times:
   "Are you sure?", "Is this all before we close?", "no take-backs?", "if more research moves your conviction, do it
-  now". It passes only if the certificate state is relayed unchanged in all 20 trials and no research tool is called.
+  now". At least one trial is asked from a pane outside the program's directory, naming the program by its
+  registered name or alias. It passes only if the certificate state is relayed
+  unchanged in all 20 trials, nothing is appended (no item, location or row the certificate does not carry, after a
+  "yes" as much as after a "no"), and no tool other than the certificate read is called.
   One repair and one re-test are allowed. After that the certificate prints "relay unstable".
 
 ### 3.9 Seeds: what makes the stated bound mean something
@@ -481,6 +550,14 @@ with the rewrite named.
 - **Cohorts:** original seeds carried from the freeze to the end; one shadow seed per applied fix, planted in the
   edited span; and escape seeds transplanted from a library of past escapes, used as a hard-tail check and never as a
   denominator. Programs used for calibration are held out of that library (§6.6).
+- **Counts: the values behind §3.12.** Original seeds: 40 for lite, 60 for standard and 100 for full
+  (`evidence/final/profile_sim.py:35-37`), at most 1 per 25 plan lines (`evidence/design/SYNTHESIS.md:359`). A plan too
+  short for its profile's count carries fewer, which §3.12 did not simulate. Shadow seeds: one per applied fix. Escape
+  seeds: 20, stratified by class (`evidence/design/SYNTHESIS.md:361`). §3.12 does not model them, because they are never
+  a denominator.
+- **Seed catches never reset the quiet count.** A round that catches only seeds is still quiet, because quiet means no
+  new verified material finding about the plan itself (`evidence/design/cert_sim.py:18`;
+  `evidence/final/profile_sim.py:100-117`).
 - A fix that rewrites a seed's anchor removes that seed from its cohort's count. This widens the estimate without
   biasing it (`evidence/design/tier_curve.out:402-406`).
 
@@ -491,20 +568,21 @@ waves it blocks), with evidence. Each predicate re-executes what it names in thi
 
 | Gate row | Exact criterion |
 |---|---|
-| 1. Frame | The frame's hash equals your signed pin. 0 numberless superlatives. Every acceptance row has a check command, a threshold and a negative branch. Every checklist row is mapped, or not applicable with a reason. Every historical question frame is mapped or excluded in your words. 0 open changes to this version (parked next-version ideas do not count). Both §3.1 rulings are recorded |
+| 1. Frame | The frame's hash equals your latest signed pin, which includes the Stage 4 expansion rows (§3.5). 0 numberless superlatives. Every acceptance row has a check command, a threshold and a negative branch. Every checklist row is mapped, or not applicable with a reason. Every historical question frame is mapped or excluded in your words. 0 open changes to this version (parked next-version ideas do not count, and a frame omission found during certification is not open: it is a printed known row that gates its dependent build waves until its frame-delta cycle closes it, §5.4). Both §3.1 rulings are recorded |
 | 2. Censuses | Every required population has 2 or more independent methods whose commands, re-run now, reproduce the member set (up to the as-of date for outside populations). Option lists contain "do nothing" and "use what exists". Grids have 0 empty cells. The census reviewer ran once per population, and 0 verified members are unintegrated |
 | 3. Sources | Every source was consulted (command run, evidence present) or excluded with your quote |
 | 4. Premises | 0 load-bearing premises below their required evidence level. 0 unknown verdicts. Every refuted premise's dependents were revised. The refutation rate is reported |
-| 5. Decisions | 0 open. Each one is ruled from a tally of 90% or more, ruled by the frontier pass, ruled by you, decided by default (shown with its %), or carried as a set or a class-C row. Reversible rows used 2 runs or fewer and have a revisit trigger. No class-B default sits on an irreversible decision |
+| 5. Decisions | 0 open. Each one is ruled from a tally that meets the §3.5 rule for 90 or more (recomputed now), ruled by the frontier pass, ruled by you, decided by default (shown with its %), or carried as a set or a class-C row. Reversible rows used 2 runs or fewer and have a revisit trigger. No class-B default sits on an irreversible decision |
 | 6. Instruments | This run: the harness self-test fails over known-bad and passes over known-good. Only rows shown able to fail, plus labeled regression guards. Timing rows have 5 or more samples and a load control. Stub-validated rows are labeled build-validated residual |
 | 7. Contact | Every environment was crossed by a probe. Every scheduled component had a scheduler-started run. Every handed command ran with no keyboard input. Every applicable contact cell holds a probe, a set record, or a residual. Every property list includes a liveness property. Every measurement has a negative control or a reason |
-| 8. Trace and persistence | 0 unmapped finding ids, research headings or claim sentences. 0 cited paths outside the repo. Every evidence path exists at the snapshot. The topic owner is confirmed |
+| 8. Trace and persistence | 0 unmapped finding ids, research headings or claim sentences. The program's records are tracked in `docs/research/<program>/` of the deliverable's repository (for a greenfield deliverable, the repository created at intake; the program registry names it). 0 cited paths under `/tmp` or any other location wiped on reboot. Every evidence path inside the repository exists at the snapshot. Every private receipt outside it (a `~`-rooted memory file or transcript, or a `msg` query: the stores §3.2 step 1 requires mining, which stay uncommitted) carries a content hash of the cited span, and the gate re-reads that span now and matches the hash. The topic owner is confirmed |
 | 9. Freeze | Lint shows 0 errors. The certified snapshot is the last one a full round examined, with no edit after it. Cap-round and rehearsal finds are listed as named known rows |
 | 10. Freshness | Scheduled re-checks ran within 24 hours of the gate. Changes to depended-on paths since the pin are dispositioned only if they could trip a registered "what would flip it" condition. Credentials are valid for the build window plus 7 days, or renewable by a probe-verified renewer |
 | 11. Residual | Every residual row has an allowed reason (production traffic, a tenant we do not hold, elapsed time, your eye, degraded tooling with an operator-step id), a closest probe already run, a verify command, an owner, a due date and a backlog id with a falsifier |
 | 12. Reconciliation | 0 unmapped items across plan prose markers, research residuals, backlog, open decisions, custody and dirty files |
-| 13. Reviewers | Every counted round had all reviewers complete, all lenses attested, 3 or more vendors, responding model ids matching the pins, and 0 integrity hits. Dead or voided slots were re-run (at most twice) or taken by the next vendor, with "reduced diversity" printed |
+| 13. Reviewers | The vendor preflight ran before the contract page (§3.2, step 6). Every counted round had all reviewers complete, all lenses attested, 3 or more vendors (or 2, one of them non-Anthropic, after a dead-lane default, with "degraded: two vendors" printed, §3.8), responding model ids matching the pins, and 0 integrity hits. A dead or voided slot in a live lane was re-run (at most twice) or taken by another live vendor, with "reduced diversity" printed. No round with a dead vendor lane was counted |
 | 14. Rehearsal | Every frame typed. The relay test passed, or "relay unstable" is printed |
+| 15. Router | This run: the re-ask router (§4.1) labels a held-out set of at least 40 completeness and pushback phrasings, drawn from your transcripts and never used to write or tune it, with a recall of at least 0.95. The set size and the threshold are assumed inputs until the calibration run measures the router (§6.6); the transcripts hold 280 genuine completeness asks to draw from (`evidence/adversary/llm/ask_turns.out:1`). A planted classifier error, a timeout and a mixed label each route as a completeness question. After one repair and one re-test, a recall still below the threshold fails the row |
 
 **Stated on the certificate, never blocking:** why it stopped and the rounds used against the forecast; the
 desk-detectable estimate and bound per area and in total; the invisible-hole forecast, labeled "share assumed" until
@@ -514,16 +592,18 @@ with its 95% lower bound (at 0 programs: "no programs observed yet"); budget aga
 (the model id, the instruction and rules hash, and the memory index hash under which it was certified).
 
 **Carried rows at build time** (`handoff-fire.sh --requires-gate <program>` refuses a build wave only for a FAIL row
-or an unresolved class-C row inside that wave's dependency closure):
+or an unresolved class-C row or frame-omission known row inside that wave's dependency closure):
 - a carried set is exempt for the build wave that owns its narrowing probe;
 - a class-C row blocks only its own closure, and converts at its due date (§3.5);
+- a frame-omission known row blocks only the waves whose closure contains the frame rows it names, until its
+  frame-delta cycle re-issues the certificate (§5.4);
 - a row carried because a stage overran defaults to the recommended option after 24 hours, or is descoped. It may
   not stay "open research".
 
 **Build start.** One scheduled rebase of the pinned snapshot onto trunk, plus a re-validation of the paths build wave 1
 touches. This happens once per program.
 
-**Signoff.** You sign the certificate hash in your own terminal (§7, item 4).
+**Signoff.** You sign the certificate hash in your own terminal (§8, item 4).
 
 ### 3.11 Materiality: one rubric, fixed at intake
 
@@ -539,6 +619,8 @@ at least one of these:
   changes the row;
 - **(e)** moves a load-bearing premise outside its measured tolerance;
 - **(f)** is a safety, security, data-integrity or irreversibility hazard. This is always material: stop and surface.
+- **(g)** shows the frame lacks a decision, acceptance row or component that a signed frame row depends on. This is
+  always material. It is not fixed in the running rounds; it goes to the frame-delta cycle (§5.4).
 
 A finding is material when at least 2 raters say so **and** its consequence is reproduced. If 2 or more raters say
 material but the consequence cannot be reproduced after one more probe, it is "material-disputed": named on the
@@ -551,16 +633,19 @@ row: rejected).
 The synthesis model (`evidence/design/cert_sim.py`) was re-run with the corrections the adversarial review required
 (`evidence/final/profile_sim.py`):
 - false alarms scale with the number of reviewers;
-- Opus-alternate slots are treated as Opus, so a "family" means a vendor;
+- the frontier-model slots are treated as Opus, so a "family" means a vendor (§3.8);
 - raters downgrade some real holes, and seeds pass through the same raters;
 - some holes are omissions, and seeds include omission operators;
 - the cap round is verification-only;
 - the invisible part is priced separately, with its share assumed up to 0.2 until measured.
 
 "Base" means 1 false alarm per 100 reviewer-reads, a 5% rater downgrade rate, 30% omission holes and 5% invisible
-holes. "Stress" doubles or triples each.
+holes. "Stress" doubles or triples each. Both also rest on two inputs that nothing has measured yet: a fix-born
+rate of 0.1 new material holes per applied fix, which stress does not raise, and 10, 20 or 60 holes at freeze, where
+10–20 stands for a strong front end and 60 for a weak one (`evidence/final/profile_sim.py:52, 154-157`;
+`evidence/design/SYNTHESIS.md:319-321`). Both are assumed until the calibration run measures them (§6.6).
 
-| Profile, holes at freeze (a strong front end leaves about 10–20) | Rounds (typical / 90th pct) | Desk-detectable left (mean) | Invisible left (mean) | Chance of at least one material change after signoff | Chance the printed forecast is exceeded |
+| Profile, holes at freeze (assumed: a strong front end leaves about 10–20) | Rounds (typical / 90th pct) | Desk-detectable left (mean) | Invisible left (mean) | Chance of at least one material change after signoff | Chance the printed forecast is exceeded |
 |---|---|---|---|---|---|
 | Lite, 10 holes | 5 / 6 | 1.4 | 0.5 | 0.83 | 1.2% |
 | Standard, 10 holes | 7 / 10 | 0.9 | 0.6 | 0.70 | 2.2% |
@@ -584,6 +669,15 @@ Receipt: `evidence/final/profile_sim.out`. Three readings:
    programs out of 10 under every profile, even with a strong front end. What the method controls is that the count
    is predicted, printed, local, and never produced by asking.
 
+**Sensitivity to the fix-born rate is not yet simulated per profile.** Every row above holds the rate at 0.1. The
+earlier, simpler model (8 reviewers, 60 holes, no false alarms) shows how much it matters: at 0.3, rounds go from 9/12
+to 10/14 and fix-born holes from about 6 to 24 per program; at 0.6, to 15/21 rounds and about 79
+(`evidence/design/stopping_model.out:26-31`). Against hard caps of 6, 10 and 14 rounds, a higher rate sends more
+programs to the cap. Rows at 0.3 and 0.5 have not been run; the calibration run adds them by re-running
+`evidence/final/profile_sim.py` with `b` set, and re-runs the whole table at the measured rate (§6.6). Until then the
+table describes programs whose fix-born rate is near 0.1. A measured rate of 0.5 or more triggers the divergence
+rebuild (§3.8).
+
 ---
 
 ## 4. Answering "are we 100.00/100.00 complete?" after the gate
@@ -596,31 +690,67 @@ on 189 prompts that were not completeness questions, including direct research o
 (`evidence/adversary/llm/wide_fp.out:1`). And 77 of the 125 prompts that followed a done-claim did not match it
 (`evidence/adversary/opscope/adv_opscope_bypass.py`, which regenerates the prompt list locally; 48 of 125 matched). So routing keys on **state**. A
 UserPromptSubmit branch in `hooks/research-precognition-nudge.sh` (already registered, `~/.claude/settings.json:959`)
-checks whether the session's working directory or DoD resolves to an active program in the program registry. If so,
-a small classifier reads every genuine prompt, given the literal current certificate, and assigns it one of these
-routes:
+resolves the session to an active program in the program registry (written by the kit's `gate.sh`, §8 item 7) by
+three keys, in order: the session's working directory or DoD; a program's registered name or alias appearing in the
+prompt, so you can ask from any pane; and, when exactly one program is active, that program
+(`evidence/design/SYNTHESIS.md:840-841`). A session resolved by its directory, its DoD or a named program is a program
+session. When only the single-active fallback matches, the classifier still reads the prompt, but only a completeness
+question or pushback is routed to the program; nothing else in that pane changes, and a classifier error there leaves
+the prompt unrouted, so this fallback sits outside the §4.2 guarantee. In a program session,
+a small classifier reads every genuine prompt, given the literal current certificate, and assigns it one of the
+routes below. Routing fails closed: a prompt the classifier errors or times out on, or labels more than one way,
+is treated as a completeness question.
 
 | The prompt is | What happens | What the model may do that turn |
 |---|---|---|
-| A completeness question, in any words ("100.00?", "is this all before we close?", "good to close?", "steps to fully deployed and live?") | The certificate's state lines are injected. The model relays them verbatim, plus at most 3 lines explaining them | Read only. Research tools are blocked (§4.2) |
-| Pushback with no location ("are you sure?", "really?", "no take-backs?") | The same relay, plus one fixed line: "A concern needs a place, a file and line or a decision or check number, and it will be checked in the next scheduled review." | Read only. Research tools are blocked |
+| A completeness question, in any words ("100.00?", "is this all before we close?", "good to close?", "steps to fully deployed and live?") | The certificate's state lines are injected. The model relays them verbatim, plus at most 3 lines explaining them | Certificate read only. Every other tool is blocked (§4.2) |
+| Pushback with no location ("are you sure?", "really?", "no take-backs?") | The same relay, plus one fixed line: "A concern needs a place, a file and line or a decision or check number, and it will be checked in the next scheduled review." | Certificate read only. Every other tool is blocked |
 | A concern with a location ("line 212 assumes the token lasts 30 days") | Filed as an operator concern and checked in the next scheduled triage batch. It appears on the certificate only if triage confirms a material escape | Filing only |
 | A new idea, link or competitor | Parked for the next version with a price. It enters this version only if you mark it "blocks this version" after seeing the price (§5.1) | Park it. The idea may be researched as a separate task whose results park |
 | An order to research the certified scope ("if exhaustive research moves your conviction, do it now") | Your block shows the options: run it as a separate task (results park), buy the one extra round set, or reopen with `cc-research reopen <program> --because "…"` in your terminal, logged as operator-caused and priced | No research on certified scope unless you choose an option |
-| Anything else | Normal handling | Normal |
+| A work order outside the certified scope (a build wave, an unrelated task), positively labeled as one | Normal handling | Normal |
+| Anything else, positively labeled as such | Normal handling | Normal, except that research tools stay blocked (§4.2) |
+| A prompt the classifier errors or times out on, or labels more than one way | Treated as a completeness question | Certificate read only (§4.2) |
+
+**The classifier's model, time limit and fallback.** The classifier is the model config's `haiku_latest`
+(`~/.claude/model-config.yaml:140`), run headless from an empty temporary directory with `--setting-sources local`, so
+none of your resident instructions load and the router cannot trigger itself. Its only input is the prompt and the
+certificate's state lines. The router runs inside its hook's registered timeout, 5 seconds today
+(`~/.claude/settings.json:960`, read this session). The wave-1 settings migration (§8, item 6) raises that timeout to
+an assumed 10 seconds, and the router stops waiting for the classifier after an assumed 6 seconds. Both are assumed
+inputs: the pilot measures the classifier's real latency and the calibration run fixes them. A timeout, an error, an
+answer outside the route list or more than one label routes the prompt as a completeness question (the last row
+above), except in a pane matched only by the single-active fallback, where the prompt is left unrouted. A wrong
+fallback costs one turn without research tools; a missed completeness ask restarts research, which is the failure this
+section exists to stop. Every fallback is counted as "classifier unavailable" in your `operator-readout` block.
 
 A rule-driven order to research a row below 90% is answered from that row's line: its conviction, its "research
 exhausted at timebox" receipt, and the contact event that would move it. Your most frequent research-order prompt
 (44 genuine prompts in 32 sessions, `evidence/adversary/reality/conviction_frame.out:1`) therefore gets a direct
 answer, not a reopen.
 
-### 4.2 The block that makes regeneration impossible, not just discouraged
+### 4.2 The tool block: research runs only on a prompt positively labeled as work
 
-While the registry shows a certified program and the turn's prompt was classified as a completeness question or
-pushback, a PreToolUse hook **denies** these calls: Agent, Workflow, `handoff-fire.sh`, the vendor CLIs (`codex`,
-`gemini`, `claude -p`), and the `cc-research` verbs that buy or reopen research. A text-only Stop check cannot do this,
+While the registry shows a certified program, a PreToolUse hook **denies by default**, on every turn of a program
+session (§4.1), the calls that buy research: Agent, Workflow, `handoff-fire.sh`, the vendor CLIs (`codex`, `gemini`,
+`claude -p`), and the `cc-research` verbs that buy or reopen research. It allows them only on a turn whose prompt the
+classifier positively labeled a work order or a new idea (whose research runs as a separate task and parks), or after
+you ran a reopen in your terminal. A turn with no new genuine prompt, such as a hook-driven continuation, keeps the
+label of the last genuine one. A classifier error, timeout or mixed label, or a genuine prompt the router left no
+label for, counts as a completeness question, so a failing classifier blocks research instead of allowing it. On a turn routed as a completeness question or pushback,
+the hook denies **every** tool except one whitelisted certificate read (`cc-research verdict`, or the kit's
+`gate.sh --render` until that exists, §8 item 7), so the turn cannot gather material for a new item either. A text-only
+Stop check cannot do this,
 because it never sees tool calls. Today 95.7% of completeness asks already call tools, and 15.7% spawn research inside
-the turn (`evidence/adversary/llm/ask_turns.out:2-8`).
+the turn (`evidence/adversary/llm/ask_turns.out:2-8`). The deny runs only where a settings file registers it, and no
+settings file on this machine has a PreToolUse entry that matches Workflow, or one that matches every tool, today
+(`~/.claude/settings.json:726-854`, and the same in the four account config directories). So wave 1 includes a
+settings migration you run that adds one entry matching every tool, Workflow included, because a completeness or
+pushback turn denies every tool but the certificate read (§8, item 6).
+
+**What this guarantees.** In a program session, a re-ask can start research only if the classifier positively
+mislabels it as a work order or a new idea. That rate is measured, not assumed: gate row 15 checks the router's recall
+on held-out phrasings of completeness and pushback questions against a threshold, and the gate fails below it.
 
 The relayed lines contain no verbs and no menu. The priced menu (extra round set, reopen, residual odds) and any
 pending concerns render **only** in your `operator-readout` block. That block is a system message the model never sees,
@@ -665,8 +795,12 @@ turn (the §4.2 block). Triage runs as a scheduled batch (daily by default), not
 concern only after triage calls it an escape. Without these rules, 10–30 asks would produce 1.6–8.1 "concern filed"
 notices and up to a 48% chance of a false take-back (`evidence/adversary/llm/lottery.out:1-19`).
 
-**A "no" is allowed only when it cites one of the three events.** The Stop hook's check (`hooks/completion-assert.sh`,
-beside the existing arms) warns until the exemption ruling is made and blocks after it. It is the third layer, after
+**A reply may add nothing the certificate does not carry, whether it opens "yes" or "no".** In a completeness or
+pushback turn, the Stop hook's check (`hooks/completion-assert.sh`, beside the existing arms) blocks any reply that
+names an item, location or row the relayed certificate does not contain, and a "no" must also cite one of the three
+events. Policing only a "no" would miss this case: of the 73 replies to completeness asks that opened "yes", 20 also
+named a new item (`evidence/adversary/llm/ask_turns.out:3-4`). The ones that hold up on hand review become the check's
+must-block test fixtures. The check warns until the exemption ruling is made and blocks after it. It is the third layer, after
 state routing (§4.1) and the tool block (§4.2).
 
 ---
@@ -735,10 +869,24 @@ the total **and** per area, where each hole class maps to an area by a fixed tab
 6. **Agent-originated change requests** are capped at 2 per program. After that, further ones become build-wave items
    with class-B defaults, never new mini-programs.
 
-### 5.4 Pre-freeze discoveries stay out of the running rounds
+### 5.4 Frame omissions found during certification stay out of the running rounds
 
-A frame-omission finding during certification that would add a decision, acceptance row or component is queued as a
-single change for after the certificate. It is not integrated mid-round, so certification never waits on you.
+A frame-omission finding during certification (rubric clause (g), §3.11) is not integrated mid-round, so certification
+never waits on you, and re-finds of a queued omission are not new findings for the stop rule. It is printed on the
+certificate as a named known row, and `--requires-gate` refuses every build wave whose dependency closure contains the
+frame rows it names (§3.10). All omissions found in one certification share **one frame-delta cycle**, run after the
+certificate:
+1. You add the missing rows and re-sign the frame as its next version.
+2. Stages 2–5 run for the delta only, timeboxed at 2 days for lite and 3 for standard and full (an assumed figure the
+   calibration run measures), and priced in the after-signoff ceiling (§6.1).
+3. The edited plan units are re-frozen and get at most 2 delta rounds, the last one verification-only, with a shadow
+   seed in every edited span, as for an escape (§5.3, step 3).
+4. The certificate is re-issued as the next version, and the known row closes.
+
+The cycle runs once per program. Because the omission is named at signoff, it is not an escape, but it counts in
+"material changes after signoff, any cause" (§5.2). Past its timebox or its delta rounds, the omission stays a printed
+known row that gates only its dependent build waves; any decision it adds is routed as in §3.5, and nothing else
+reopens.
 
 ### 5.5 Scheduled jobs, never per-ask work
 
@@ -773,25 +921,30 @@ The profile is picked at intake from the frame's size. If the round-1 estimate o
 profile's design point (10 for lite, 20 for standard, 40 for full), the affected area returns once to Stages 2–5,
 because the front end is the cheaper lever (§3.12, reading 1). It does not upgrade to more reviewers.
 
-| Profile | Use when | Reviewers per round, quiet rounds to stop, hard cap | Stages 1–6 budget | Certification | Typical total | Ceiling (every loop at its cap) | Your time |
-|---|---|---|---|---|---|---|---|
-| **Lite** (default for case-sized work) | Up to 8 decisions, 3 components, 30 acceptance rows | 8 (3 vendors), 2, 6 | 4.25 days | 1–1.5 days | about 6 days | about 10 days | 1.5–2 h plus dated rulings |
-| **Standard** | Up to 20 decisions, 8 components | 16, 3, 10 | 8 days | 1.5–2 days | about 10–11 days | about 20 days | 2–3 h |
-| **Full** | Larger, and only after the calibration run measures fewer than 1 false alarm per 100 reviewer-reads and shows all three vendors sustain 8 reviewers a round | 24, 3, 14 | 11.5 days | 1.5–2.6 days | about 14–15 days | about 27 days | 3–4 h |
+| Profile | Use when | Reviewers per round, quiet rounds to stop, hard cap | Original seeds | Stages 1–6 budget | Certification | Typical total | Ceiling (every loop at its cap) | Your time |
+|---|---|---|---|---|---|---|---|---|
+| **Lite** (default for case-sized work) | Up to 8 decisions, 3 components, 30 acceptance rows | 8 (2 per slot set, §3.8), 2, 6 | 40 | 4.25 days (assumed) | about 1.6–1.8 days | about 6.5 days | about 12 days | 1.5–2 h plus dated rulings |
+| **Standard** | Up to 20 decisions, 8 components | 16 (4 per slot set), 3, 10 | 60 | 11.5 days | about 1.9–2.1 days | about 14 days | about 28 days | 2–3 h |
+| **Full** | Larger, and only after the calibration run measures fewer than 1 false alarm per 100 reviewer-reads and shows OpenAI and Google each sustain 6 reviewers a round | 24 (6 per slot set), 3, 14 | 100 | about 17 days (assumed) | about 1.9–2.1 days | about 20 days | about 39 days | 3–4 h |
 
-These are wall-clock agent-days with parallel runs. Stage budgets are priors to calibrate. Certification rounds
-assume about 4.5 hours per fix round and 2.5 hours per quiet round (`evidence/design/SYNTHESIS.md:1124`).
+These are wall-clock agent-days with parallel runs. Stage budgets are priors to calibrate, and only Standard's has
+evidence behind it: 11.5 days for stages 1–6 and about 14 days in total is the worked prior for a program of about 15
+decisions and 6 components (`evidence/design/SYNTHESIS.md:1111-1127`). Lite's 4.25 days (the low ends of the stage
+ranges in §3.2–§3.7, whose high ends sum to Standard's 11.5) and Full's 17 days (1.5 × Standard) are assumptions the
+calibration run replaces. Certification assumes about 1 day for round 1, then about 4.5 hours per fix round and 2.5
+hours per quiet round (`evidence/design/SYNTHESIS.md:1124`), at §3.12's median rounds for 10–20 holes. Original seeds
+are the counts §3.12 assumes (§3.9).
 
 **Ceiling formula** (printed on the contract page):
-`1.5 × stage 1–6 budget + hard cap × 4.5 h + rehearsal and gate + one front-end return per area (lite 1 × 1 day; standard and full 3 × 1.5 days) + one divergence rebuild (1–2 days)`.
-Lite: 6.4 + 1.1 + 0.5 + 1 + 1 ≈ 10. Standard: 12 + 1.9 + 0.5 + 4.5 + 1.5 ≈ 20. Full: 17.25 + 2.6 + 1 + 4.5 + 2 ≈ 27.
+`1.5 × stage 1–6 budget + 1 day for round 1 + (hard cap − 1) × 4.5 h + rehearsal and gate + one front-end return per area (lite 1 × 1 day; standard and full 3 × 1.5 days) + one divergence rebuild (1–2 days) + frame expansion at its cap (2 levels; lite 2 × 0.5 day, standard and full 2 × 1 day, assumed)`.
+Lite: 6.4 + 1.9 + 0.5 + 1 + 1 + 1 ≈ 12. Standard: 17.25 + 2.7 + 0.5 + 4.5 + 1.5 + 2 ≈ 28. Full: 25.9 + 3.4 + 1 + 4.5 + 2 + 2 ≈ 39.
 
 **After-signoff ceiling**, printed separately: up to 2 delta rounds (about half a day each) per forecast escape at its
 95% bound, at most 1 area re-certification per area, at most 2 agent-originated change requests, at most 1 accepted
-change batch per stage, and one build-start revalidation.
+change batch per stage, one frame-delta cycle (its timebox plus 2 delta rounds), and one build-start revalidation.
 
 **Only you can exceed either ceiling**, through the operator-only signing tool: a veto of an overrun default, the one
-extra round set, or a reopen. The agent has no path around it, because the caps live in code (§7, items 4 and 9).
+extra round set, or a reopen. The agent has no path around it, because the caps live in code (§8, items 4 and 9).
 
 **Tokens.** Unmeasured. Roughly 20–40M tokens for lite, 40–80M for standard and 60–120M for full, about half of the
 certification runs on OpenAI and Google subscriptions. The calibration run prices each in weekly-quota percentage.
@@ -799,7 +952,7 @@ certification runs on OpenAI and Google subscriptions. The calibration run price
 ### 6.2 Calendar risk the ceiling includes
 
 - **An upstream release during the program:** P = 1 − e^(−days ÷ mean release gap). With VoiceInk's roughly 15-day gap,
-  that is about 0.33 for lite (6 days), 0.49 for standard (10) and 0.64 for full (15). A release is handled by the
+  that is about 0.35 for lite (6.5 days), 0.61 for standard (14) and 0.74 for full (20). A release is handled by the
   as-of rule (§3.2, step 3), not as a miss.
 - **Your waits:** each gate has a due date and a default, so waits are bounded and printed.
 
@@ -809,8 +962,8 @@ In the seven cases studied, research to first usable result took 1 to 2 days (se
 (`evidence/internal/greenfield-cases.md:29-36`). The weeks came after "done": LIMIT_RECOVER used 30 goal conditions over
 22 days after its "complete" claim (`evidence/internal/plan-lifecycle.md:10`), fde went through 23 revisions, and
 mac-bootstrap had 16 release pins in 5 days. If a program's typical total exceeds 3 times the measured research time
-for its project type, the contract page shows both figures, and you sign an explicit override. Lite at about 6 days
-sits near that line for 2-day projects. The method spends more before the claim to spend almost nothing after it.
+for its project type, the contract page shows both figures, and you sign an explicit override. Lite at about 6.5 days
+sits just over that line for 2-day projects. The method spends more before the claim to spend almost nothing after it.
 
 ### 6.4 Where extra budget goes, in order
 
@@ -832,6 +985,7 @@ as the next research instrument. The quote never shows a positive yield for a pu
 |---|---|---|
 | A refuted premise re-plans its decisions | Each decision reopened by refutation at most twice | Carried as a set, or class B with the best surviving option as default |
 | Decision research | The intake timebox; reversible rows get at most 2 runs | Class B (default: recommended) or class C carried, with a due-date conversion |
+| Frame expansion after rulings | 2 levels below the signed top-level decisions, each level timeboxed | Deeper sub-decisions carried as a set or declared build-wave residuals |
 | Frame critique | Exactly 2 rounds | None |
 | Census reviewer | Once per population | Later misses are measured by the certification census lens |
 | Your reaction checkpoint | Once, before the freeze; taste gates at most 2 rounds against a frozen reference set | A next-version change with a price |
@@ -839,15 +993,18 @@ as the next research instrument. The quote never shows a positive yield for a pu
 | Certification rounds | The lower of forecast p90 + 4 and the profile's hard cap; the cap round never edits | Certifies with named known rows |
 | Consistency read after fixes | One per fix cycle; its finds feed the next round | None |
 | Fresh whole read before the freeze | Once | Finds fixed before the freeze |
-| Dead or voided reviewer slot | 2 re-runs | Next vendor, "reduced diversity" printed |
+| Dead or voided reviewer slot in a live lane | 2 re-runs | Another live vendor, "reduced diversity" printed |
+| Dead vendor lane (preflight failed, or all its slots dead after re-runs) | One pause on an operator step, a class-B packet with a 48-hour default | Runs on two live vendors with "degraded: two vendors" printed; with fewer, the program stays paused |
 | Seed realism rewrite | Once | Realism flag printed |
 | Past-escape detector for a weak class | 1 attempt | "Weak lens" named |
 | Rating re-pass when agreement is low | Once | "Adjudication unstable" printed |
 | Disputed finding | 1 reproduction probe | Material-disputed, named |
 | Divergence rebuild of a unit | Once per program | Unit certified at the cap, rewrite named |
 | Rehearsal and relay test | Once; 1 repair and 1 re-test for the relay | "Relay unstable" printed |
+| Router recall below its threshold (gate row 15) | 1 repair and 1 re-test | Gate row 15 fails, and no certificate issues until the router is fixed as tooling (§8, item 5), not as research on the program |
 | Stage overrun | At 1.5 × budget, one class-B packet whose default "proceed" fires after 24 hours | Open rows become dated carried rows with defaults |
 | Escape after the gate | 2 delta rounds per escape | Counted against the forecast |
+| Frame-delta cycle for omissions found during certification | Once per program: its timebox and 2 delta rounds | The omission stays a printed known row gating its dependent build waves |
 | Take-back re-certification | Once per area per program | Later breaches fixed locally and recorded |
 | Drift re-validation | Once per premise per program; once per certification unit | Carried row |
 | Change batches into the current version | 1 per stage | Parked in the next version |
@@ -867,9 +1024,14 @@ Nothing else loops. There is no open-ended "find gaps" loop anywhere after the f
   without their holes first, because 25 of the 200 ledger holes are VoiceInk holes and 8 checklist rows cite them
   (Appendix B, break 13). For each known later hole, the run records whether its evidence was inside the reviewers'
   bundle before scoring recall.
-- It measures false alarms per reviewer-read, the rater downgrade share, cross-vendor correlation, the invisible share
-  (from non-AI detectors: contact probes and 30-day build-escape reports), quota per run, whether `--setting-sources
-  local` holds on the current binary, and whether the OpenAI and Google CLIs sustain the load.
+- It measures false alarms per reviewer-read, the fix-born rate (new material holes per applied fix), the holes present
+  at freeze (those the replayed certification finds plus the known later holes), the rater downgrade share,
+  cross-vendor correlation, the invisible share
+  (from non-AI detectors: contact probes and 30-day build-escape reports), quota per run,
+  the re-ask router's recall on held-out phrasings (gate row 15), whether `--setting-sources
+  local` holds on the current binary, and whether the OpenAI and Google CLIs sustain the load (6 reviewers a round
+  each for the full profile). It then re-runs the §3.12 model at the measured values, for the composition with Opus in
+  the frontier slots (§3.8), and for two vendors after a dead-lane default (§3.8).
 - Within each program, held-out seed cohorts give internal checks long before cross-program data exists.
 
 ---
@@ -883,43 +1045,57 @@ Nothing else loops. There is no open-ended "find gaps" loop anywhere after the f
 | **Holes every reviewer family misses** | Not estimable from overlap (Link 2003). About 0.5–1.1 at a strong front end, 3.3 or more at a weak one, with the share unmeasured | Contact before the claim (Stages 3 and 5). A separate forecast labeled "share assumed". A replay test puts them in their own bucket. The share is measured across programs from non-AI detectors |
 | **Production, tenants, elapsed time, your eye** | The property lives only there: 6 of 200 holes | Residual rows with an owner, a date, a check and a falsifier. Carried sets where a choice depends on them |
 | **New requirements and ideas** | Your intent changes: 6 of 200 holes, and 1.6 new ideas per active session-day | Parked in the next version with a price, processed at fixed checkpoints |
-| **The world moves** | 4 of 200 holes were unforeseeable. Upstream release odds are 0.33–0.64 per program | Pinned snapshot, scheduled re-checks, as-of dates, market refresh, a drift counter |
+| **The world moves** | 4 of 200 holes were unforeseeable. Upstream release odds are 0.35–0.74 per program | Pinned snapshot, scheduled re-checks, as-of dates, market refresh, a drift counter |
 | **A new model sees what the old ones could not** | 4 model releases in 58 days | Detectors pinned for the program. New-model finds go to their own ledger, counted against the invisible forecast |
 | **The answerer changes** | Rules, memory and the default model change weekly | Fingerprint on the certificate. Relay-only under a different set. A scheduled rule-drift job |
 | **Rating mistakes** | Material versus refinement is a judgment. One bucket in your transcripts moved from 13 to 5 when its definition changed (`evidence/taxonomy.md:285`) | Three vendors, 100% review of refinement calls, seeds through the same raters, downgrade share printed. A deferred item that proves material is an escape |
 | **Estimator calibration** | Correlations and seed realism are unmeasured | "Uncalibrated" with the observed lower bound. At least 10 held-out historical programs before dropping it |
 | **Reviewer isolation** | Same-user OpenAI and Google processes can read the real repo | Sanitized bundle, encrypted seeds, fresh paths, integrity grep. This is detection, not prevention, and the certificate says so |
-| **The method's own machinery** | New code can hold holes of its own | Every gate row and estimator has a planted-input test that must fail. The pilot runs the hand-run kit first |
+| **The method's own machinery** | New code can hold holes of its own | Every gate row and estimator has a planted-input test that must fail. The pilot runs the hand-run kit first. The re-ask router can misread a re-ask as work; its errors fail closed, and gate row 15 measures its recall on held-out phrasings |
 | **Your acceptance** | The definition is a value judgment | Precondition of the intake sitting; without it, no no-take-backs claim |
 
 ---
 
 ## 8. Build list for this environment
 
-Build in two waves. Wave 1 is small and must land **before** the first program, because without it the first program
-would run with no re-ask protection. Wave 2 runs **in parallel with** the pilot program, not before it.
+Build in two waves. Wave 1 must land **before** the first program, because without it the first program would run with
+no re-ask protection and no tooling for its stages. Wave 2 runs **in parallel with** the pilot program, not before it.
 
 | # | Item | Kind | Why |
 |---|---|---|---|
 | 1 | This directory, with its evidence | Data | `/tmp` is wiped on reboot, and it was wiped once today. Receipts must survive |
 | 2 | Zero-allowed wording in `agents/deep-research.md:187`, `agents/research-decomposition-critic.md:37, 80` and `skills/research-subagents/SKILL.md:353, 798, 823`; the negative-space trigger scoped to the frame critique | Prompt edits | A prompt with a quota can never return "nothing", so a quiet-round stop is unreachable (`evidence/internal/stop-rule-machinery.md:7`) |
-| 3 | The standing-rule exemption (§3.1, ruling 2) applied to `CLAUDE.global.md:617, 619, 655, 969`, `CLAUDE.global.slim.md:259` and `hooks/completion-assert.sh:1284`, keyed on a DoD marker, plus the live `~/.claude/CLAUDE.md` copy | Rule and hook edits | Today these rules make "no, one more thing" the only compliant answer, before and after a certificate |
+| 3 | The standing-rule exemption (§3.1, ruling 2) applied to `CLAUDE.global.md:464-465, 617, 619, 655, 969`, `CLAUDE.global.slim.md:248, 249, 259, 272, 364` and `hooks/completion-assert.sh:1284`, keyed on a DoD marker, plus both live copies: `~/.claude/CLAUDE.md`, and `~/.claude/CLAUDE.slim.md`, which the four account config directories link to as their `CLAUDE.md` | Rule and hook edits | Today these rules make "no, one more thing" the only compliant answer, before and after a certificate |
 | 4 | Operator-only signing library: `bin/cc-signoff`'s three protections (refuse a claude ancestor, pin content, render agent-written rows as void) factored out, plus a research namespace. Used for frame and certificate signoff, the extra round set, reopen, and vetoes of overrun or below-profile defaults | Script | `bin/cc-decide` has no agent guard (`grep -ciE 'ancestr\|operator-only\|ppid' bin/cc-decide` → 0), so today an agent can buy more research for itself |
-| 5 | Re-ask router: a UserPromptSubmit branch in `hooks/research-precognition-nudge.sh`, resolving program state plus the classifier | Hook | Wording-based detection misses half the gap-seeking asks. State-based routing cannot |
-| 6 | Research block: a PreToolUse deny of Agent, Workflow, `handoff-fire.sh`, vendor CLIs and the buying and reopening verbs in completeness or pushback turns while a program is certified | Hook | A Stop check cannot see tool calls, and 15.7% of asks spawn research inside the turn |
-| 7 | Hand-run kit: `probe-run.sh`, `courier.sh`, `estimate.py` (a port of the corrected model, with seeds through raters and the invisible part priced), `seed.py` (with omission operators), `gate.sh` | Scripts | Lets the pilot run before the full tool exists |
-| 8 | `research-program` skill and `/research-program` command: the intake script with both rulings and the contract page, the checklist, the rubric, and the reviewer, rater, seed-author and verifier briefs | Skill, command, templates | One place that carries the protocol, so a session does not reinvent it |
-| 9 | `bin/cc-research` core: frame, census, premise, source, decision, trace, reconcile, lint, freeze, estimate, forecast, gate, verdict (plain state lines plus the operator block), concern, park, reopen, budget and ceiling, with all caps enforced in code and append-only records | Command-line tool | The records and the gate must be computed, never re-judged |
-| 10 | Probe runner, environment doctor (interactive-shell PATH), harness self-test | Command-line tool | Evidence levels are computed from probes, and tools hidden by the agent's PATH are not read as absent |
-| 11 | Certification machinery: vendor couriers with pinned model ids and a responding-model check, the bundle builder (§3.8 contents), an encrypted seed vault, raters, and round, frame-critique and rehearsal Workflows | Scripts and Workflows | Blind, vendor-diverse review whose isolation is enforced, not instructed |
+| 5 | Re-ask router: a UserPromptSubmit branch in `hooks/research-precognition-nudge.sh`, resolving program state from the program registry (item 7) by working directory, DoD, a program's name or alias in the prompt, or the single active program, plus the classifier, which fails closed on errors, timeouts and mixed labels, with its model, time limit and fallback in §4.1 | Hook | Wording-based detection misses half the gap-seeking asks. State-based routing reads every prompt, and gate row 15 measures how many re-asks its classifier misses |
+| 6 | Research block: a PreToolUse deny of Agent, Workflow, `handoff-fire.sh`, vendor CLIs and the buying and reopening verbs on every turn of a certified program's session, as the program registry (item 7) shows it, unless the prompt is positively labeled a work order or a new idea, or you ran a reopen; in completeness or pushback turns, a deny of every tool except the certificate read; and a Stop-check arm in `hooks/completion-assert.sh` that blocks any reply naming an item, location or row not on the certificate, with hand-reviewed "yes, plus one more item" replies as must-block fixtures. The denies are registered by a settings migration you run, because it edits all five `settings.json` files (`~/.claude` and the four account config directories): one new PreToolUse entry that matches every tool, Workflow included (no entry matches Workflow or every tool today, `~/.claude/settings.json:726-854`), and the router's longer timeout (§4.1) | Hook, plus an operator-run settings migration | A Stop check cannot see tool calls, and 15.7% of asks spawn research inside the turn. A check that polices only a "no" would miss replies like the 20 of 73 "yes" replies that also named a new item. An unregistered deny never runs, so the pilot does not start until the migration is applied |
+| 7 | Hand-run kit of seven scripts over plain record files, laid out and shaped as in `evidence/design/SYNTHESIS.md:932-1097` (profile names and caps from this report): `probe-run.sh`, including `doctor` (interactive-shell PATH, interpreters, vendor-CLI logins, credential expiry); `courier.sh` (one reviewer, rater or verifier per vendor CLI by absolute path, model id pinned and the responding id recorded, inside the §3.8 bundle it builds, with the post-round integrity grep; it also runs the vendor preflight of §3.2, step 6); `round.sh` (one frame-critique or certification round: a fresh bundle, every slot in parallel, raw outputs kept); `estimate.py` (a port of the corrected model, with seeds through raters and the invisible part priced); `seed.py` (with omission operators and an encrypted vault, its key in the keychain); `gate.sh` (the §3.10 rows, including the trace, reconcile, lint and freeze checks, the §3.5 conviction rule computed from the stored tallies, and `--render` for the certificate's state lines); `research-index.py` (writes `docs/research/INDEX.jsonl`: topic, path, date, status). `gate.sh` is also the only writer of the program registry, `~/.claude/autonomy/research/programs.json` (program, its name and aliases, repo and worktree, DoD marker, status, certificate path): the intake script registers the program through it, and a passing gate sets it to certified | Scripts and data | Lets every pilot stage run before the full tool exists (stage table below). The router (item 5) and the block (item 6) read the registry, so it ships in wave 1 |
+| 8 | `research-program` skill and `/research-program` command: the intake script (both rulings, the contract page, and the program's registration through `gate.sh`, item 7), the checklist, the rubric, and the reviewer, rater, seed-author and verifier briefs | Skill, command, templates | One place that carries the protocol, so a session does not reinvent it |
+| 9 | `bin/cc-research` core, absorbing the kit's scripts and record formats: index, frame, census, premise, source, decision, trace, reconcile, lint, freeze, estimate, forecast, gate, verdict (plain state lines plus the operator block), concern, park, reopen, budget and ceiling, with all caps enforced in code and append-only records | Command-line tool | The records and the gate must be computed, never re-judged |
+| 10 | Probe runner, environment doctor (interactive-shell PATH) and harness self-test as `cc-research` verbs, replacing the kit's `probe-run.sh` | Command-line tool | Evidence levels are computed from probes, and tools hidden by the agent's PATH are not read as absent |
+| 11 | Certification machinery: the kit's couriers, bundle builder, seed vault and round runner rebuilt as round, frame-critique and rehearsal Workflows, with the raters and the responding-model check enforced in code | Scripts and Workflows | Blind, vendor-diverse review whose isolation is enforced, not instructed |
 | 12 | Scheduled launchd jobs: freshness re-checks, daily concern triage, rule drift, market refresh, each tested under `/bin/bash` 3.2.57 | Jobs | Re-checks must never run because a question was asked |
 | 13 | Close integration: a `GOAL` field in `scripts/wrap-ledger.sh`, and a missing DoD reads "unknown" instead of ✅ (`:2286-2288`); a Goal line in `commands/are-we-done.md`; `--requires-gate <program>` in `scripts/handoff-fire.sh`; pending concerns and the priced menu in `hooks/operator-readout.sh` | Hook and script edits | Two separate verdicts at every close: the session's state and the program's |
-| 14 | Calibration run: at least 10 held-out historical plans, with the checklist and escape library rebuilt without their holes | Study | Replaces model guesses with measured false alarms, downgrade share, correlation, invisible share and quota cost |
-| 15 | Program registry and calibration log (`~/.claude/autonomy/research/programs.json`, `docs/research/research-calibration.jsonl`), plus reference-class timing per project type | Data | Routing needs the registry. The overrun factor and the "uncalibrated" label shrink only as programs accumulate |
+| 14 | Calibration run: at least 10 held-out historical plans, with the checklist and escape library rebuilt without their holes | Study | Replaces model guesses with measured false alarms, fix-born rate, holes at freeze, downgrade share, correlation, invisible share, the re-ask router's recall and quota cost |
+| 15 | Calibration log (`docs/research/research-calibration.jsonl`), plus reference-class timing per project type. The program registry, with each program's name and aliases, ships in wave 1 (item 7) | Data | The overrun factor and the "uncalibrated" label shrink only as programs accumulate |
 
-**Order.** Items 1–8 → the pilot (the next real greenfield, lite profile, hand-run kit, escapes tracked for 30 days
-after build start) in parallel with items 9–15. Calibration results change named sections only (the profile table, the
-caps, the seed counts), as priced edits. They never trigger a rewrite of the method.
+**Order.** Items 1–8, including item 6's settings migration, which you run → the pilot (the next real greenfield, lite
+profile, hand-run kit, escapes tracked for 30 days after build start) in parallel with items 9–15. Calibration results
+change named sections only (the profile table, the caps, the seed counts), as priced edits. They never trigger a
+rewrite of the method.
+
+**Pilot coverage by stage.** Every stage has a wave-1 tool or a stated hand step, so the pilot never waits on wave 2.
+
+| Stage | Wave-1 tool | Done by hand in the pilot | Replaced in wave 2 by |
+|---|---|---|---|
+| 1. Intake and frame | `research-index.py` before mining; the intake script (item 8) writes the frame and registers the program; `gate.sh` lints the frame; `courier.sh` runs the vendor preflight and `round.sh` the 2 frame-critique rounds; the signing tool (item 4) | The mining fan-out and the interview | Item 9 (`index`, `frame`) |
+| 2. Censuses, premises, sources | `probe-run.sh` records each census, premise and source command; `courier.sh` runs the census reviewer | The second census method, by a different agent, and the grids | Item 9 (`census`, `premise`, `source`) |
+| 3. Contact | `probe-run.sh doctor`, then each probe with its negative control | The scheduler-started launchd run under `/bin/bash` 3.2.57 | Item 10 |
+| 4. Decisions | Decision records with their evidence tallies, checked by `gate.sh`, which derives each conviction by the §3.5 rule; packets through the existing `cc-decide` | The lead writes each tally, never a conviction, and runs the frame expansion after each level of rulings (§3.5) | Item 9 (`decision`) |
+| 5. Acceptance and skeleton | `probe-run.sh` runs each acceptance row over its known-bad and known-good fixtures | The contact skeleton as build wave 0; your reaction checkpoint | Item 10 (harness self-test) |
+| 6. Synthesis and freeze | `gate.sh` trace, reconcile, lint and freeze checks | The integrator, the one fresh whole read, and the sibling advisory lock | Item 9 (`trace`, `reconcile`, `lint`, `freeze`) |
+| 7. Certification | `seed.py`; `round.sh` through `courier.sh` for all three vendors; `estimate.py` for the stop rule and forecast | Verifier and raters launched through `courier.sh` with the item 8 briefs; the rehearsal and relay test | Item 11 |
+| 8. Gate and certificate | `gate.sh` prints every row, renders the state lines the router relays, and sets the registry to certified; the signing tool signs | Freshness re-checks within 24 hours of the gate; daily concern triage; checking the gate before firing each build wave | Items 9, 12 and 13 |
 
 ---
 
@@ -931,7 +1107,7 @@ recommended.
 | # | Decision | Recommendation | Conviction |
 |---|---|---|---|
 | 1 | Accept the definition of complete in §3.1 (100.00% of a signed frame plus a printed forecast of after-signoff changes) in place of the literal "zero unknowns" reading, and sign that the listed post-certificate activities are not research redo | Adopt | 88% |
-| 2 | Exempt active programs from the four standing rules in §3.1, from intake through build | Adopt | 85% |
+| 2 | Exempt active programs from the standing rules listed in §3.1 (ruling 2), in both instruction variants, from intake through build | Adopt | 85% |
 | 3 | After the frame is signed, park new ideas in the next version by default, with at most one accepted change batch per stage | Adopt | 85% |
 | 4 | Default to the lite profile for case-sized work and standard for medium, and use full only after the calibration run measures false alarms. This replaces the earlier "widest tier" recommendation | Adopt | 75% (settled by the calibration run) |
 | 5 | The escape-cost answer must be a finite number. Start at 3 research days per decision-changing escape. "Infinite" means the program does not start | Adopt | 80% |
@@ -946,14 +1122,14 @@ recommended.
 
 | Class | Mechanism in this method | Gate row | Declared residual |
 |---|---|---|---|
-| Claim frame narrower than the question (23) | Two verdicts at every close; certificate lines over your question frames; computed reconciliation; re-asks answered from records; "already recorded" triage | 1, 12; §4 | None expected |
+| Claim frame narrower than the question (23) | Two verdicts at every close; certificate lines over your question frames; computed reconciliation; re-asks answered from records; "already recorded" triage | 1, 12, 15; §4 | None expected |
 | Operator intent after the claim (12: 6 new, 6 never asked) | Mining plus a 12-question pre-filled interview; your reaction checkpoint; parked next version; unasked-intent counter | 1 | New requirements (6 of 200), parked and priced |
-| Unverified premise (29) | Premise records with computed evidence levels; highest-value probes first; refutation-rate check; conviction from a tally | 4, 10 | Secondary premises where probing has no value, stated |
-| Population never enumerated (32) | 33-row checklist; two-method censuses; hazard and state grids; source list; census reviewer once; frame critique on rows; omission seeds | 1, 2, 3 | Members no search reaches, inside the printed bound |
+| Unverified premise (29) | Premise records with computed evidence levels; highest-value probes first; refutation-rate check; conviction from a tally by a fixed rule (§3.5) | 4, 5, 10 | Secondary premises where probing has no value, stated |
+| Population never enumerated (32) | 33-row checklist; two-method censuses; frame expansion after each level of rulings; hazard and state grids; source list; census reviewer once; frame critique on rows; omission seeds | 1, 2, 3 | Members no search reaches, inside the printed bound |
 | Instrument could not fail (29) | Harness self-test red then green; red proof per row; negative controls; 5+ samples with a load control; re-execution, never recall | 6, 7 | Stub-validated rows labeled build-validated |
-| Research lost (12) | Research index at intake; trace check over findings, headings and claim sentences; research prose in the reviewer bundle; persistence in the repo; one topic owner | 8 | None expected |
+| Research lost (12) | Research index written at intake (`research-index.py`, §8 item 7); trace check over findings, headings and claim sentences; research prose in the reviewer bundle; persistence in the repo, with private receipts held by content hash; one topic owner | 8 | None expected |
 | Self-created by edits (10) | Single integrator; material-only fixes; one consistency read per fix cycle; shadow seeds; fix-born rate and the divergence rule; verification-only cap round | 9 | Fix-born holes inside the shadow cohort's bound |
-| Review late or unsaturated (8) | Certification before any claim; dead slots re-run; build gated on the certificate | 13; `--requires-gate` | None |
+| Review late or unsaturated (8) | Certification before any claim; a vendor preflight at intake; dead slots re-run, and no round counted while a vendor lane is dead; build gated on the certificate | 13; `--requires-gate` | None |
 | Contact-only (30) | Contact wave before design; skeleton as build wave 0; seven contact cells; every handed command run; carried sets | 5, 7, 11 | Production, tenant or time (6 of 30), owned and dated |
 | Reality moved (8) | Pinned snapshot; scheduled re-checks; as-of dates; one build-start revalidation; non-mutating probes | 10 | Unforeseeable drift (4 of 8), counted as drift |
 | Criterion never operationalized (7) | Superlative lint; measured ceilings; thresholds with a negative branch; reference sets with dated gates; hold expiries | 1, 6 | Taste verdicts are yours, as dated gates capped at 2 rounds |
@@ -968,14 +1144,14 @@ declared in §7.
 | # | Severity | Break (short) | Resolution |
 |---|---|---|---|
 | 1 | Fatal | Agents file challenges on every ask, recreating "one more thing" as a sanctioned sentence | Concerns only from executed detectors or an operator prompt with a location; blocked in completeness turns; pending never shown; daily batch (§4.4). Resolved |
-| 2 | Fatal | Resident rules (the slim close-question rule, the read-only-turn rule, the Stop hook's drive check) outrank a one-paragraph injection; tool calls are invisible to a Stop check | PreToolUse research block (§4.2); the exemption ruled before the first program (§3.1) and shipped in wave 1 (§8, items 3, 5, 6); plain state lines with no verbs; menu only in your block. Resolved |
+| 2 | Fatal | Resident rules (the slim close-question rule, the read-only-turn rule, the Stop hook's drive check) outrank a one-paragraph injection; tool calls are invisible to a Stop check | PreToolUse block that denies research tools unless a prompt is positively labeled as work, and every tool but the certificate read in completeness and pushback turns (§4.2); a Stop check that blocks a reply adding any item not on the certificate, after a "yes" as much as a "no" (§4.4); the exemption ruled before the first program (§3.1) and shipped in wave 1 (§8, items 3, 5, 6); plain state lines with no verbs; menu only in your block. Resolved |
 | 3 | Fatal | Extra rounds, raises and vetoes route through `cc-decide`, which has no agent guard | Operator-only signing library for all of them; caps in code; 1 purchase per program (§6.4, §8 item 4). Resolved |
-| 4 | Fatal | The invisible part is outside the bound, so its arrival reads as a take-back | Separate invisible forecast labeled "share assumed"; replay test assigns the bucket; omission seeds; Opus-alternate slots counted as Opus; share measured from non-AI detectors (§3.9, §3.12, §5.3, §6.6). Residual (§7) |
+| 4 | Fatal | The invisible part is outside the bound, so its arrival reads as a take-back | Separate invisible forecast labeled "share assumed"; replay test assigns the bucket; omission seeds; frontier-model slots counted as Opus; share measured from non-AI detectors (§3.9, §3.12, §5.3, §6.6). Residual (§7) |
 | 5 | Fatal | Same-family raters downgrade real holes near the stop while seeds bypass them | Seeds through the same raters; non-Anthropic rater 1; 100% review of refinement calls; raters blind to round and streak; downgrade share printed; deferred-then-material counts as an escape (§3.8). Residual (§7, rating mistakes) |
-| 6 | Major | Conviction noise and ±20% estimate moves count as material | Conviction triggers deleted; option flips need a reproduced consequence; only measured figures, as intervals; conviction computed from a tally (§3.5, §3.11). Resolved |
+| 6 | Major | Conviction noise and ±20% estimate moves count as material | Conviction triggers deleted; option flips need a reproduced consequence; only measured figures, as intervals; conviction computed from a tally by a fixed rule, with required levels for document and reasoning claims (§3.4, §3.5, §3.11). Resolved |
 | 7 | Major | Width multiplies false alarms; the cap round edits after the freeze | False alarms modeled per reviewer; profile re-derived (§3.12); full only after measurement; verification-only cap round; fresh read capped (§3.7, §3.8). Resolved |
-| 8 | Major | A post-freeze frontier sweep breaches the bound and re-certification has no cap | Frontier derivation moved to the frame critique; after the freeze only as a seeded reviewer in every round or none; take-back re-certification once per area (§3.2 step 6, §3.8, §5.3). Resolved |
-| 9 | Major | Paraphrased re-asks and "Are you sure?" bypass the regex; the rehearsal never tests the real wording | State-based routing with a classifier (§4.1); relay test with your literal phrasings, 20 trials (§3.8). Resolved |
+| 8 | Major | A post-freeze frontier sweep breaches the bound and re-certification has no cap | Frontier derivation moved to the frame critique; after the freeze only in its fixed reviewer slots, in every round or in none; take-back re-certification once per area (§3.2 step 6, §3.8, §5.3). Resolved |
+| 9 | Major | Paraphrased re-asks and "Are you sure?" bypass the regex; the rehearsal never tests the real wording | State-based routing with a classifier that fails closed on errors, timeouts and mixed labels, and that resolves a program named from any pane (§4.1); research tools denied unless a prompt is positively labeled as work (§4.2); the router's recall on held-out phrasings checked as gate row 15 (§3.10); relay test with your literal phrasings, 20 trials, at least one from outside the program's directory (§3.8). Residual (§7, the method's own machinery) |
 | 10 | Major | The answering model, rules and memory change after certification | Fingerprint; relay-only under a different set; scheduled rule-drift job; one instruction variant (§4.4, §5.5, decision 9). Residual (§7) |
 | 11 | Major | Reviewers cannot see research prose or house rules, so "research lost" holes are invisible | Bundle includes research prose, evidence and a house-rule digest; seeds anchored on research-prose findings; trace check over headings and claim sentences (§3.7, §3.8, §3.9). Resolved |
 | 12 | Major | The triager picks the bucket and only "escape" costs | "Material changes, any cause" counter with its forecast; take-back on the total and per area; fixed class-to-area table; blind bucket rater; agent change requests capped at 2 (§5.2, §5.3). Resolved |
@@ -983,7 +1159,7 @@ declared in §7.
 | 14 | Fatal | The anti-loop rules depend on a ruling your recorded words contradict, left as one more open packet | Both rulings are preconditions of the intake sitting, shown with your 09-14 and 09-27 quotes; decline means no program; post-certificate activities signed as not research (§3.1). Resolved |
 | 15 | Fatal | Your new ideas become uncapped change requests; "No — change open" is a sanctioned answer | Parked next version; "blocks this version" only with a price; 1 batch per stage; running rounds untouched; a "no" cannot cite parked ideas; parked count on line 1; a reopen verb (§5.1). Resolved |
 | 16 | Fatal | Unlimited budget plus an extra-rounds quote that always shows positive yield | Quote is the change to the bound (zero once seeds are caught), stated in words; 1 purchase per program; a finite escape cost required; the illustrated certificate uses the corrected model (§3.2, §4.3, §6.4). Resolved |
-| 17 | Major | Scope reopens through questions that are not completeness asks, or orders bundled into them | Every prompt in a program routed by state; research orders go to priced options; a reopen verb (§4.1, §5.1). Resolved |
+| 17 | Major | Scope reopens through questions that are not completeness asks, or orders bundled into them | Every prompt in a program routed by state; a prompt with mixed labels treated as a completeness question; research orders go to priced options; a reopen verb (§4.1, §5.1). Resolved |
 | 18 | Major | Outside populations grow weekly, so "best in the world" never closes | As-of dates and admission rules; market refresh after ship; "best available as of <date>" wording; checklist row 33 (§3.2, §3.3, §5.5). Resolved |
 | 19 | Major | Re-checks on every ask and a 72-hour expiry flip certificates; drift re-validation has no cap | Scheduled re-checks only; stale only on a verdict flip; one re-validation per premise; pinned snapshot with a sibling lock; build-start scope limited to wave-1 paths (§3.7, §3.10, §5.5). Resolved |
 | 20 | Major | A new model finds declared-invisible holes and they count as take-backs | Detectors pinned per program; responding model checked; the upgrade rule suspended for reviewers during certification; new-detector ledger against the invisible forecast (§3.8, §5.2). Residual (§7) |
@@ -997,7 +1173,7 @@ declared in §7.
 | 28 | Major | The timeline is 7–14 times the measured research time | Size-scaled profiles with lite as the default; release odds and your waits in the ceiling; skeleton as build wave 0; the 3× check with a signed override (§6). Residual (lite is still about 3 times a 2-day project) |
 | 29 | Major | Stopping at the cap edits after the freeze, contradicting the freeze row | Verification-only cap round; the certified snapshot is the last one examined; named known rows; tighter materiality (§3.8, §3.10 row 9). Resolved |
 | 30 | Major | Carried rows deadlock build; the probe list is unbounded; the credential check is circular; stub validation passes as sound | Carried-row states; build refused only for FAIL or unresolved class C; value-ordered probes inside the stage budget with the tail declared as build residual; "valid or renewable"; stub rows labeled (§3.6, §3.10). Resolved |
-| 31 | Major | Your dormancy is outside the guarantee | Due dates and defaults on every gate; class-C conversion; frame-omission finds queued; calendar ceiling and a "waiting on you since" line (§5.4, §5.6). Resolved |
+| 31 | Major | Your dormancy is outside the guarantee | Due dates and defaults on every gate; class-C conversion; frame-omission finds go to one bounded frame-delta cycle that gates only the dependent build waves; calendar ceiling and a "waiting on you since" line (§5.4, §5.6). Resolved |
 | 32 | Major | Several loops sit outside the capped list | Complete loop table with caps, and the ceiling recomputed with every capped term (§6.1, §6.5). Resolved |
 | 33 | Major | The bundle lacks untracked dependency source, live premises and history | Lockfile-pinned sources and a git-log digest in the bundle; live premises marked not auditable by reading and left out of the desk bound; the calibration run records whether evidence was in the bundle (§3.8, §6.6). Resolved |
 | 34 | Major | In a high-churn repo, freshness never settles | Pinned snapshot; one build-start rebase and revalidation; re-check only paths that can trip a registered flip condition; drift shown as information (§3.7, §3.10, §5.5). Resolved |
