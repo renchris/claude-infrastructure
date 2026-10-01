@@ -393,13 +393,30 @@ _claim_live() {   # <key> → print the pid of a LIVE OTHER watcher beating this
   done
   return 1
 }
+# THE MODE IS STAMPED BY THE WRITER (backlog 532fbee4d4a8). hooks/lib/mailbox-pending.sh
+# mailbox_wake_idle_scoped has always READ `mode=idle-scoped` from the marker or this pid's claim, and
+# hooks/mailbox-drain.sh exempts such a watcher from its goal-inert kill order — but nothing ever
+# WROTE the line (`git grep mode=idle-scoped` found only the reader and hand-stamped test fixtures),
+# so the drain ordered the kill of the very watcher the WAKE FLOOR had just prescribed, and the floor
+# re-tripped on the next stop: a livelock. The claim also carries `end=<epoch>` — the watch's own
+# term end — which the default-mode single-instance gate below reads to tell an incumbent in its
+# hand-over window from one with most of its term ahead.
+_WATCH_END=$(( T0 + TIMEOUT ))
+_claim_body() {
+  [ "$IDLE_SCOPED" = 1 ] && printf 'mode=idle-scoped\n'
+  printf 'end=%s\n' "$_WATCH_END"
+}
 _beat() {
   local k
   BEAT_KEYS="$(_keys)"
   mkdir -p "$WATCH_CLAIM_DIR" 2>/dev/null || true
   for k in $BEAT_KEYS; do
-    printf 'pid=%s\n' "$$" > "$MAILBOX_DIR/$k.watching" 2>/dev/null || true
-    : > "$WATCH_CLAIM_DIR/$k.$$" 2>/dev/null || true
+    if [ "$IDLE_SCOPED" = 1 ]; then
+      printf 'pid=%s\nmode=idle-scoped\n' "$$" > "$MAILBOX_DIR/$k.watching" 2>/dev/null || true
+    else
+      printf 'pid=%s\n' "$$" > "$MAILBOX_DIR/$k.watching" 2>/dev/null || true
+    fi
+    _claim_body > "$WATCH_CLAIM_DIR/$k.$$" 2>/dev/null || true
   done
 }
 # Clears exactly the markers this process still OWNS — never a key it merely resolved once, and never
@@ -411,8 +428,14 @@ _unbeat() {
     rm -f "$WATCH_CLAIM_DIR/$k.$$" 2>/dev/null || true
     if sib="$(_claim_live "$k")"; then
       # HAND OVER, do not delete: the survivor keeps the wake path, and the slot names a LIVE pid
-      # immediately rather than after up to one of its poll intervals.
-      printf 'pid=%s\n' "$sib" > "$MAILBOX_DIR/$k.watching" 2>/dev/null || true
+      # immediately rather than after up to one of its poll intervals. The SURVIVOR's mode rides
+      # along, read from its own claim — never this exiting watcher's mode, which would mislabel a
+      # plain park as goal-safe (or the reverse) until the survivor's next beat.
+      if grep -q '^mode=idle-scoped$' "$WATCH_CLAIM_DIR/$k.$sib" 2>/dev/null; then
+        printf 'pid=%s\nmode=idle-scoped\n' "$sib" > "$MAILBOX_DIR/$k.watching" 2>/dev/null || true
+      else
+        printf 'pid=%s\n' "$sib" > "$MAILBOX_DIR/$k.watching" 2>/dev/null || true
+      fi
       continue
     fi
     owner="$(sed -n 's/^pid=\([0-9][0-9]*\).*/\1/p' "$MAILBOX_DIR/$k.watching" 2>/dev/null | head -n1)"
@@ -422,6 +445,18 @@ _unbeat() {
     if [ -n "$owner" ] && [ "$owner" != "$$" ] && kill -0 "$owner" 2>/dev/null; then continue; fi
     rm -f "$MAILBOX_DIR/$k.watching" 2>/dev/null || true
   done
+}
+# _rearm_advice <default advice> — the end-of-term re-arm advice, unless a live sibling already holds
+# a key of this inbox (backlog 9a522a8fa6fb): then the session is not deaf and a re-arm only stacks.
+_rearm_advice() {
+  local k sv
+  for k in $(_keys); do
+    if sv="$(_claim_live "$k")"; then
+      printf 'do NOT re-arm: a live watcher (pid %s) already holds this inbox'"'"'s wake path on key [%s] — it took over as this one ended, so the session is not deaf, and a re-arm would only add a second watcher.' "$sv" "$k"
+      return 0
+    fi
+  done
+  printf '%s' "$1"
 }
 # ── THE IDLE-SCOPED ARM GATE — refuse rather than park, whenever the safe shape cannot be proven ──
 # Placed BEFORE `trap '_unbeat' EXIT` deliberately: a refusal must park nothing and disturb no
@@ -560,6 +595,30 @@ if [ "$IDLE_SCOPED" = 1 ]; then
   done
   echo "$_banner" >&2
   echo "cc-await-ping: idle-scoped — will also stand down on any new turn of [$SID] (beat seq > $(( BEAT_BASE_SEQ + BEAT_STOP_ALLOWANCE )))" >&2
+fi
+
+# ── DEFAULT MODE: ONE WATCHER PER KEY, EXCEPT IN THE INCUMBENT'S HAND-OVER WINDOW (backlog 9a522a8fa6fb)
+# C3 above refused a sibling only under --idle-scoped, so the ordinary form stacked: measured, two
+# live default watchers on key 1336 (23 min and 3 h 45 min old), each holding a background task
+# open and each later waking the session with its own timeout. The second arm buys no wake path the
+# first does not already provide. So when a FRESH, LIVE claimant holds the key, this watcher exits 0
+# with `already-armed pid=N` and writes no claim. The exception is the incumbent's final
+# CC_AWAIT_HANDOVER_S seconds (default 300): the ordinary re-arm near term end must still overlap,
+# or the session is deaf between the old watch ending and the new one beginning. An incumbent whose
+# claim records no `end=` (a pre-stamp version) is treated as in-window — the fail direction that
+# keeps a wake path, i.e. today's behaviour.
+if [ "$IDLE_SCOPED" = 0 ] && [ "${CC_AWAIT_ALLOW_STACK:-0}" != 1 ]; then
+  _ho_s="${CC_AWAIT_HANDOVER_S:-300}"; case "$_ho_s" in ''|*[!0-9]*) _ho_s=300 ;; esac
+  _now_s="$(date +%s 2>/dev/null || echo 0)"
+  for _k in $(_keys); do
+    _inc="$(_claim_live "$_k")" || continue
+    _inc_end="$(sed -n 's/^end=\([0-9][0-9]*\)$/\1/p' "$WATCH_CLAIM_DIR/$_k.$_inc" 2>/dev/null | head -n1)"
+    [ -n "$_inc_end" ] || continue
+    if [ "$(( _inc_end - _now_s ))" -gt "$_ho_s" ]; then
+      echo "cc-await-ping: verdict=already-armed already-armed pid=$_inc uuid=${CUR_UUID} key=[$_k] — a live watcher already holds this inbox's wake path for another $(( _inc_end - _now_s ))s (hand-over window ${_ho_s}s). Nothing was parked and no claim was written; do NOT re-arm until it ends — a second watcher adds no wake path, only a second background task and a second timeout wake." >&2
+      exit 0
+    fi
+  done
 fi
 
 # ── C2: THE EXIT THAT MAKES THE DEFERRAL IDLE-SCOPED ──────────────────────────────────────────────
@@ -1051,7 +1110,7 @@ _sig_verdict() {   # <signame> <signum>
     # actually reached, and a reader keying on the exit code must not have to know which of two racing
     # clocks won.
     _sigrecord_disarm
-    echo "cc-await-ping: verdict=timeout term=full $(_elapsed_f) budget=${TIMEOUT}s uuid=${CUR_UUID} — SIG$1 arrived AFTER the budget was already spent, so this is the designed end of the watch, not a kill: the wait loop re-tests only once per interval and had not yet returned. No ping was consumed and nothing is still claiming the wake path. If you are going idle, RE-ARM — unless a /goal is live in this session (a parked background Bash makes CC skip goal evaluation at every Stop)." >&2
+    echo "cc-await-ping: verdict=timeout term=full $(_elapsed_f) budget=${TIMEOUT}s uuid=${CUR_UUID} — SIG$1 arrived AFTER the budget was already spent, so this is the designed end of the watch, not a kill: the wait loop re-tests only once per interval and had not yet returned. No ping was consumed. $(_rearm_advice "Nothing is still claiming the wake path: if you are going idle, RE-ARM — unless a /goal is live in this session (a parked background Bash makes CC skip goal evaluation at every Stop).")" >&2
     exit 2
   fi
   # _unbeat first: clearing the stale claim is the safety-critical half and is fast. The bounded
@@ -1549,5 +1608,9 @@ if [ "$_TERM" = short ]; then
 elif [ "$_TERM" = unknown ]; then
   _SHORT_NOTE=" ⚠ elapsed=unknown — no usable clock, so whether this watch held its term is NOT established by this line; treat it as unverified rather than as a full term."
 fi
-echo "cc-await-ping: verdict=timeout term=$_TERM $(_elapsed_f) budget=${TIMEOUT}s uuid=${CUR_UUID} — no ping arrived.${_SHORT_NOTE} A term=full outcome is the DESIGNED end of a watch that ran its term, not a failure: exit 2 here means 'nothing came', and the harness labels every non-zero exit 'failed'. Nothing is wrong and nothing needs debugging — if you are still going idle, RE-ARM (the watcher clears its own heartbeat on exit, so you are deaf until you do), UNLESS a /goal is live in this session: a parked background Bash makes CC skip goal evaluation at every Stop, so re-arming under a live goal disables the goal instead of protecting a wake path you do not need (the goal blocks your stops, and mailbox-drain delivers at every boundary it forces)." >&2
+# THE RE-ARM ADVICE NAMES A SURVIVOR WHEN THERE IS ONE (backlog 9a522a8fa6fb). A watch that ends
+# while a hand-over sibling is already beating has NOT left the session deaf, and telling the reader
+# to RE-ARM is what stacked watchers in the first place.
+_REARM_ADVICE="$(_rearm_advice "if you are still going idle, RE-ARM (the watcher clears its own heartbeat on exit, so you are deaf until you do), UNLESS a /goal is live in this session: a parked background Bash makes CC skip goal evaluation at every Stop, so re-arming under a live goal disables the goal instead of protecting a wake path you do not need (the goal blocks your stops, and mailbox-drain delivers at every boundary it forces).")"
+echo "cc-await-ping: verdict=timeout term=$_TERM $(_elapsed_f) budget=${TIMEOUT}s uuid=${CUR_UUID} — no ping arrived.${_SHORT_NOTE} A term=full outcome is the DESIGNED end of a watch that ran its term, not a failure: exit 2 here means 'nothing came', and the harness labels every non-zero exit 'failed'. Nothing is wrong and nothing needs debugging — $_REARM_ADVICE" >&2
 exit 2

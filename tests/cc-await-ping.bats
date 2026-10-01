@@ -354,6 +354,64 @@ alias_pane_to_session() {
   kill "$B" 2>/dev/null || true; wait "$B" 2>/dev/null || true
 }
 
+# ── DEFAULT-MODE SINGLE INSTANCE (backlog 9a522a8fa6fb) ────────────────────────────────────────────
+# Measured: two live default watchers on one key (23 min and 3 h 45 min old). A second arm while a
+# live incumbent has most of its term ahead adds no wake path, so it exits 0 `already-armed` and
+# writes no claim. Inside the incumbent's final CC_AWAIT_HANDOVER_S it still arms — the overlap test
+# above is exactly that hand-over (B has 90 s left, inside the 300 s default window).
+@test "single-instance 9a522a8fa6fb: a second default watcher on a LIVE key exits 0 already-armed, writes no claim" {
+  "$AWAIT" "$UUID" --interval 30 --timeout 900 >/dev/null 2>&1 & B=$!
+  local i=0
+  while [ "$i" -lt 50 ] && [ ! -e "$CC_MAILBOX_DIR/.watchers/$UUID.$B" ]; do sleep 0.1; i=$((i+1)); done
+  run "$AWAIT" "$UUID" --interval 1 --timeout 5
+  local claims=0 c
+  for c in "$CC_MAILBOX_DIR/.watchers/$UUID".*; do [ -e "$c" ] && claims=$((claims + 1)); done
+  kill "$B" 2>/dev/null || true; wait "$B" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"already-armed pid=$B"* ]] || false
+  [ "$claims" -eq 1 ]                                  # only the incumbent's claim exists
+}
+
+@test "single-instance CONTROL: inside the incumbent's hand-over window the new watcher still arms" {
+  "$AWAIT" "$UUID" --interval 30 --timeout 900 >/dev/null 2>&1 & B=$!
+  local i=0
+  while [ "$i" -lt 50 ] && [ ! -e "$CC_MAILBOX_DIR/.watchers/$UUID.$B" ]; do sleep 0.1; i=$((i+1)); done
+  CC_AWAIT_HANDOVER_S=1000 run "$AWAIT" "$UUID" --interval 1 --timeout 2
+  kill "$B" 2>/dev/null || true; wait "$B" 2>/dev/null || true
+  [ "$status" -eq 2 ]                                  # armed and ran its (short) term
+  [[ "$output" != *"already-armed"* ]] || false
+  # and its end-of-term advice names the live survivor instead of telling the reader to stack
+  [[ "$output" == *"do NOT re-arm: a live watcher (pid $B)"* ]] || false
+}
+
+@test "single-instance CONTROL: a DEAD incumbent's claim is no claim — the arm proceeds" {
+  mkdir -p "$CC_MAILBOX_DIR/.watchers"
+  sleep 0.1 & local gone=$!; wait "$gone" 2>/dev/null || true
+  printf 'end=%s\n' "$(( $(date +%s) + 3600 ))" > "$CC_MAILBOX_DIR/.watchers/$UUID.$gone"
+  run "$AWAIT" "$UUID" --interval 1 --timeout 2
+  [ "$status" -eq 2 ]
+  [[ "$output" != *"already-armed"* ]] || false
+}
+
+@test "mode stamp 532fbee4d4a8: --idle-scoped writes mode=idle-scoped into its claim AND the marker; default does not" {
+  beat 5 prompt
+  "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 20 >/dev/null 2>&1 & W=$!
+  local i=0
+  while [ "$i" -lt 50 ] && [ ! -e "$CC_MAILBOX_DIR/.watchers/$UUID.$W" ]; do sleep 0.1; i=$((i+1)); done
+  local claim marker
+  claim="$(cat "$CC_MAILBOX_DIR/.watchers/$UUID.$W" 2>/dev/null)"; marker="$(cat "$CC_MAILBOX_DIR/$UUID.watching" 2>/dev/null)"
+  kill "$W" 2>/dev/null || true; wait "$W" 2>/dev/null || true
+  [[ "$claim" == *"mode=idle-scoped"* ]] || false
+  [[ "$marker" == *"mode=idle-scoped"* ]] || false
+  "$AWAIT" "$UUID" --interval 1 --timeout 20 >/dev/null 2>&1 & W=$!
+  i=0
+  while [ "$i" -lt 50 ] && [ ! -e "$CC_MAILBOX_DIR/.watchers/$UUID.$W" ]; do sleep 0.1; i=$((i+1)); done
+  claim="$(cat "$CC_MAILBOX_DIR/.watchers/$UUID.$W" 2>/dev/null)"
+  kill "$W" 2>/dev/null || true; wait "$W" 2>/dev/null || true
+  [[ "$claim" != *"mode=idle-scoped"* ]] || false
+  [[ "$claim" == *"end="* ]] || false
+}
+
 # Pinned, never a moving ref — the same rule as the keyset RED-PROOF below: once this lands, a
 # floating control IS the fixed tree and the proof inverts. Replays the REAL pre-fix artifact.
 CC_AWAIT_OVERLAP_PREFIX_SHA="${CC_AWAIT_OVERLAP_PREFIX_SHA:-399ed0da}"

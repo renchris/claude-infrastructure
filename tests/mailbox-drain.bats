@@ -708,6 +708,28 @@ goal_t() { # → a transcript path whose LAST goal_status attachment is a live a
   [ -z "$output" ] || false
 }
 
+@test "E2 EXEMPTION, REAL WRITER (backlog 532fbee4d4a8): the real --idle-scoped watcher stamps its mode ⇒ no kill order" {
+  # The two cases above hand-stamp `mode=idle-scoped`. Until 532fbee4d4a8 nothing in the tree WROTE
+  # it, so against the real watcher the exemption never fired and the drain ordered the kill of the
+  # very watcher the WAKE FLOOR had prescribed. This arms the REAL bin/cc-await-ping.
+  export CC_BEAT_DIR="$BATS_TEST_TMPDIR/beats"; mkdir -p "$CC_BEAT_DIR"
+  jq -nc --argjson t "$(date +%s)" '{sid:"sidE2",pane:"p0",t:$t,kind:"prompt",seq:5}' > "$CC_BEAT_DIR/sidE2.json"
+  CC_AWAIT_IT2_BIN='' CC_AWAIT_PING_SIGRECORD=0 "$REPO/bin/cc-await-ping" "$UUID" --idle-scoped --sid sidE2 \
+      --interval 1 --timeout 30 >/dev/null 2>&1 &
+  local w=$! i=0
+  while [ "$i" -lt 50 ] && ! grep -q '^mode=idle-scoped$' "$CC_MAILBOX_DIR/$UUID.watching" 2>/dev/null; do
+    sleep 0.1; i=$((i+1))
+  done
+  # the reader the drain consults, against the real writer's files
+  run bash -c '. "$1/hooks/lib/mailbox-pending.sh"; mailbox_wake_idle_scoped "$2"' _ "$REPO" "$UUID"
+  local lib_rc="$status"
+  run bash -c 'printf "{\"transcript_path\":\"%s\"}" "$1" | "$0" prompt' "$DRAIN" "$(goal_t)"
+  kill "$w" 2>/dev/null || true; wait "$w" 2>/dev/null || true
+  [ "$lib_rc" -eq 0 ] || { echo "mailbox_wake_idle_scoped rc=$lib_rc"; false; }
+  [ "$status" -eq 0 ]
+  ! printf '%s' "$output" | grep -q 'holding your LIVE /goal inert' || false
+}
+
 @test "E2: a DEAD watcher pid under a live goal routes to the do-NOT-arm nag, never to a kill" {
   # A stale marker is not a deferrer (the task is gone), so there is nothing to kill — and telling a
   # session to kill a dead pid would spend a turn proving nothing. It is simply unwatched again.
