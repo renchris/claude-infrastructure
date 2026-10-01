@@ -1374,9 +1374,14 @@ kt_launch() {
   case "$id" in
     ''|*[!0-9]*)
       id=""
-      if command -v hf_adopt_split_pane >/dev/null 2>&1 && id="$(hf_adopt_split_pane)" && [ -n "$id" ]; then
+      local arc=1
+      if command -v hf_adopt_split_pane >/dev/null 2>&1; then arc=0; id="$(hf_adopt_split_pane)" || arc=$?; fi
+      if [ "$arc" = 0 ] && [ -n "$id" ]; then
         echo "→ kitty launch returned no window id, but window $id already runs this fire's command — ADOPTED it (a re-fire would have launched a duplicate session)." >&2
       else
+        # rc 2 = kitty's list was unreadable (2026-09-30): the caller still fails loud, but must not be
+        # the only voice — a window MAY be running this brief, and a blind re-fire would duplicate it.
+        [ "$arc" != 2 ] || echo "!! kitty launch returned no window id and kitty's window list could not be read — outcome UNKNOWN, a window MAY be running this fire's command; look before re-firing." >&2
         id=""
       fi ;;
   esac
@@ -14242,6 +14247,14 @@ it2_split() { # $1=firing-uuid  $2=vertically|horizontally  → echoes new sessi
   new="$(printf '%s\n' "$out" | sed -n 's/^Created new pane: *//p' | tail -1)"
   if [ -n "$new" ]; then printf '%s' "$new"; return 0; fi
   [ "$rc" != 0 ] || rc=1
+  # AN INNER TIMEOUT IS AN EXPIRY, WHATEVER RC CARRIES IT (2026-09-30). bin/it2-kitty bounds its own
+  # `kitty @ launch` and reports that bound firing as rc 1 with "kitty launch failed (rc=124)"; kitty
+  # itself says "Timed out waiting for a response from kitty". Either way kitty may have CREATED the pane
+  # before the answer was lost, so the caller must see 124 (never retry) — measured: an rc-1 expiry was
+  # read as a refusal, retried, and one fire launched two sessions while reporting "Nothing was launched".
+  case "$out" in
+    *'(rc=124)'*|*'(rc=137)'*|*'Timed out waiting for a response from kitty'*) rc=124 ;;
+  esac
   # The splitter's own reason, on stderr, one bounded line. It used to be discarded here, which is why
   # 69 refusals in four days all read "anchor gone" and none of them said what actually happened.
   printf '   split of pane %s failed (rc=%s): %s\n' "$1" "$rc" \
@@ -14256,44 +14269,53 @@ it2_split() { # $1=firing-uuid  $2=vertically|horizontally  → echoes new sessi
 # every --env of a launch in `kitty @ ls` (verified: `.env.CC_PANE_CMD` on a live split, 2026-09-11),
 # and $CMD carries this fire's unique prompt-file path, so an exact match can only be this fire's own.
 # kitty + argv delivery only: elsewhere no store holds $CMD, and the function honestly finds nothing.
+# TRI-STATE (2026-09-30): 0 adopted · 1 DETERMINED that no pane runs $CMD (the list read cleanly, or no
+# argv delivery, so no split pane could be running the brief) · 2 CANNOT TELL (`kitty @ ls` failed, timed
+# out, or did not parse). It returned 1 for both, and a wedged kitty socket therefore read as "no pane"
+# and licensed the retry that launched a second session. Callers must never treat 2 as 1.
 # NO APOSTROPHES in the python: it is a single-quoted bash string.
 hf_adopt_split_pane() {
   [ "${HF_ARGV_ACTIVE:-0}" = 1 ] && [ -n "${CMD:-}" ] && in_kitty || return 1
-  local id
-  id="$(kt ls 2>/dev/null | HF_ADOPT_CMD="$CMD" /usr/bin/python3 -c '
+  local ls id rc=0
+  ls="$(kt ls 2>/dev/null)" || return 2
+  id="$(printf '%s' "$ls" | HF_ADOPT_CMD="$CMD" /usr/bin/python3 -c '
 import json, os, sys
 try:
     d = json.load(sys.stdin)
+    want = os.environ.get("HF_ADOPT_CMD") or ""
+    hits = sorted({str(w.get("id")) for o in d for t in o.get("tabs", []) for w in t.get("windows", [])
+                   if want and (w.get("env") or {}).get("CC_PANE_CMD") == want}, key=lambda s: int(s) if s.isdigit() else 0)
 except Exception:
-    sys.exit(1)
-want = os.environ.get("HF_ADOPT_CMD") or ""
-hits = sorted({str(w.get("id")) for o in d for t in o.get("tabs", []) for w in t.get("windows", [])
-               if want and (w.get("env") or {}).get("CC_PANE_CMD") == want}, key=lambda s: int(s) if s.isdigit() else 0)
+    sys.exit(2)
 if not hits:
     sys.exit(1)
 if len(hits) > 1:
     sys.stderr.write("!! " + str(len(hits)) + " panes already carry this fire command (" + " ".join(hits)
                      + ") - adopting " + hits[0] + "; the others are DUPLICATE sessions of one brief.\n")
-print(hits[0])')" || return 1
-  [ -n "$id" ] || return 1
+print(hits[0])')" || rc=$?
+  [ "$rc" = 0 ] || return "$rc"
+  [ -n "$id" ] || return 2
   printf '%s' "$id"
 }
 
-# hf_anchor_live ID → 0 ONLY when kitty positively lists the window. 1 means gone OR unreadable OR not
-# kitty — the refusal then keeps its historical "anchor gone" wording, so this can only ever make the
-# message more accurate, never claim liveness it did not observe.
+# hf_anchor_live ID → 0 kitty positively lists the window · 1 kitty's list READ CLEANLY and lacks it ·
+# 2 CANNOT TELL (not kitty, a non-kitty id, or `kitty @ ls` failed / timed out / did not parse). Only 1
+# may be worded "anchor gone": an unreadable list is no evidence of loss (2026-09-30, the same wedged
+# socket that hid the adoptable pane also turned a live anchor into a reported "anchor gone").
 hf_anchor_live() {
-  in_kitty || return 1
-  local id="${1##*:}"
-  case "$id" in ''|*[!0-9]*) return 1 ;; esac
-  kt ls 2>/dev/null | HF_ANCHOR="$id" /usr/bin/python3 -c '
+  in_kitty || return 2
+  local id="${1##*:}" ls
+  case "$id" in ''|*[!0-9]*) return 2 ;; esac
+  ls="$(kt ls 2>/dev/null)" || return 2
+  printf '%s' "$ls" | HF_ANCHOR="$id" /usr/bin/python3 -c '
 import json, os, sys
 try:
     d = json.load(sys.stdin)
+    a = os.environ.get("HF_ANCHOR")
+    hit = any(str(w.get("id")) == a for o in d for t in o.get("tabs", []) for w in t.get("windows", []))
 except Exception:
-    sys.exit(1)
-a = os.environ.get("HF_ANCHOR")
-sys.exit(0 if any(str(w.get("id")) == a for o in d for t in o.get("tabs", []) for w in t.get("windows", [])) else 1)'
+    sys.exit(2)
+sys.exit(0 if hit else 1)'
 }
 
 # Land the launch command into a freshly created pane. $CMD arrives RAW via `session run`
@@ -14575,34 +14597,55 @@ spawn() {
       # Now: look for a pane already carrying this fire's command BEFORE retrying (adopt it); never
       # retry a bound expiry (the terminal may still be creating the pane); and name the anchor gone
       # only when the terminal cannot show it.
-      local newid="" src=0 expired=0
+      # AT MOST ONE SESSION PER CALL (2026-09-30). A retry is licensed ONLY by a refusal (no expiry)
+      # PLUS a READABLE kitty list showing no pane carries $CMD (adoption rc 1). An expiry, or a list
+      # that cannot be read (rc 2), is re-polled a bounded HF_ADOPT_POLLS x HF_ADOPT_POLL_S so a pane
+      # kitty did create gets ADOPTED; still undetermined, the verdict is UNKNOWN (rc 13), never a retry
+      # and never "anchor gone". Measured: with the kitty socket timing out, an rc-1 inner timeout plus
+      # an unreadable list was read as "no pane", retried, and launched a second session of one brief.
+      local newid="" src=0 expired=0 arc=1 polls=0 splits=1 alive=0
       newid="$(it2_split "$FIRING_SID" "$dir")" || src=$?
-      if [ -z "$newid" ]; then
-        # The settle doubles as time for a terminal that was slow to ANSWER to finish the pane it WAS
-        # creating, so the adoption check below can see it.
-        /bin/sleep 0.8
-        if newid="$(hf_adopt_split_pane)"; then
+      # The settle doubles as time for a terminal that was slow to ANSWER to finish the pane it WAS
+      # creating, so the adoption check below can see it.
+      [ -n "$newid" ] || /bin/sleep 0.8
+      while [ -z "$newid" ]; do
+        case "$src" in 124|137) expired=1 ;; esac
+        arc=0; newid="$(hf_adopt_split_pane)" || arc=$?
+        if [ "$arc" = 0 ] && [ -n "$newid" ]; then
           echo "→ split of $FIRING_SID reported rc=$src, but pane $newid already runs this fire's command — ADOPTED it (a retry would have launched a duplicate session)." >&2
-        elif [ "$src" = 124 ] || [ "$src" = 137 ]; then
-          expired=1; newid=""
-        else
-          src=0; newid="$(it2_split "$FIRING_SID" "$dir")" || src=$?
-          if [ -z "$newid" ]; then
-            /bin/sleep 0.8
-            newid="$(hf_adopt_split_pane)" || newid=""
-          fi
+          break
         fi
-      fi
+        newid=""
+        if [ "$arc" = 2 ] || { [ "$expired" = 1 ] && [ "${HF_ARGV_ACTIVE:-0}" = 1 ]; }; then
+          [ "$polls" -lt "${HF_ADOPT_POLLS:-3}" ] || break
+          polls=$((polls + 1)); /bin/sleep "${HF_ADOPT_POLL_S:-2}"; continue
+        fi
+        if [ "$expired" = 1 ] || [ "$splits" -ge 2 ]; then break; fi
+        splits=2; polls=0; src=0; newid="$(it2_split "$FIRING_SID" "$dir")" || src=$?
+        [ -n "$newid" ] || /bin/sleep 0.8
+      done
       if [ -z "$newid" ]; then
-        if [ "$expired" = 1 ]; then
-          echo "!! split of pane $FIRING_SID did not answer within ${HF_SPLIT_TIMEOUT_S}s (rc=$src) — NOT retrying, and NOT firing into a random window." >&2
-          echo "   A bound expiry is not a refusal: the terminal may still create that pane, and a retry would then be a SECOND session of this brief." >&2
-        elif hf_anchor_live "$FIRING_SID"; then
+        if [ "$expired" = 1 ] || [ "$arc" = 2 ]; then
+          echo "!! split outcome UNKNOWN for pane $FIRING_SID (last rc=$src) — a session MAY have launched; NOT retrying, and NOT firing into a random window." >&2
+          if [ "$expired" = 1 ]; then
+            echo "   The split did not answer within its bound (${HF_SPLIT_TIMEOUT_S}s, or kitty's own inner one): a bound expiry is not a refusal, the terminal may still create that pane, and a retry would then be a SECOND session of this brief." >&2
+          fi
+          if [ "$arc" = 2 ]; then
+            echo "   kitty's window list could not be read after $polls re-poll(s), so whether a pane already runs this fire's command is undetermined." >&2
+          fi
+          echo "   Look for a pane running this brief before re-firing." >&2
+          return 13
+        fi
+        hf_anchor_live "$FIRING_SID" || alive=$?
+        if [ "$alive" = 0 ]; then
           echo "!! split of LIVE pane $FIRING_SID failed (settled + retried, last rc=$src) — the anchor is present, so this is NOT an anchor loss; the splitter's own reason is printed above. NOT firing into a random window." >&2
           echo "   No pane carrying this fire's command was found. Re-fire, or pass --window for a deliberate fresh window." >&2
-        else
+        elif [ "$alive" = 1 ]; then
           echo "!! firing pane $FIRING_SID not found in iTerm2 (settled + retried) — anchor gone; NOT firing into a random window." >&2
           echo "   Nothing was launched. Re-fire from a live pane, or pass --window for a deliberate fresh window." >&2
+        else
+          echo "!! split of pane $FIRING_SID failed (settled + retried, last rc=$src) and its liveness could not be read — NOT asserted as an anchor loss; the splitter's own reason is printed above. NOT firing into a random window." >&2
+          echo "   No pane carrying this fire's command was found. Re-fire from a live pane, or pass --window for a deliberate fresh window." >&2
         fi
         return 1
       fi

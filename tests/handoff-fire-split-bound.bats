@@ -67,12 +67,19 @@ SH
   REAL_IT2="$FAKE_IT2"
 
   # `kitty @ ls`: the anchor window, every pane the fake it2 created (with its launch env, as kitty
-  # reports it), and optionally a FOREIGN pane running some other fire's command.
+  # reports it), and optionally a FOREIGN pane running some other fire's command. LS_FAIL_N makes the
+  # first N reads time out the way a wedged kitty answers (2026-09-30: the remote-control socket timed
+  # out on the split AND on every read after it), so "cannot tell" is a reachable state here.
+  export LS_COUNT="$BATS_TEST_TMPDIR/ls-count"; : > "$LS_COUNT"
   FAKE_KITTY="$BATS_TEST_TMPDIR/kitty"
   cat > "$FAKE_KITTY" <<'SH'
 #!/usr/bin/env bash
 for a in "$@"; do
   [ "$a" = ls ] || continue
+  echo x >> "$LS_COUNT"
+  if [ "$(wc -l < "$LS_COUNT")" -le "${LS_FAIL_N:-0}" ]; then
+    echo "Error: Timed out waiting for a response from kitty" >&2; exit 1
+  fi
   exec /usr/bin/python3 - "$CREATED" "${ANCHOR_WIN:-7}" "${FOREIGN_CMD:-}" <<'PY'
 import json, os, sys
 created, anchor, foreign = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -98,6 +105,8 @@ SH
   CMD="claude --fire-marker $BATS_TEST_NUMBER-$$"          # unique per fire, as the real prompt path is
   # shellcheck disable=SC2034
   SURFACE=split-right
+  # The adoption re-poll's spacing, scaled down so the bounded wait costs this suite well under a second.
+  export HF_ADOPT_POLL_S=0.1
 }
 
 kitty_on() { export KITTY_WINDOW_ID=7 CC_KITTY_BIN="$FAKE_KITTY" LIVE_ID=7; FIRING_SID=7; }
@@ -191,6 +200,61 @@ created() { wc -l < "$CREATED" | tr -d ' '; }
   [ "$status" -ne 0 ]
   [[ "$output" == *"anchor gone"* ]] || false
   [ ! -f "$FRONTMOST_MARK" ]
+}
+
+# THE 2026-09-30 INCIDENT: kitty remote control timing out on EVERYTHING. it2-kitty's inner launch
+# timed out after kitty made the pane and exited rc 1 ("kitty launch failed (rc=124)"), the adoption
+# read timed out too and was read as "no pane carries this command", the split was RETRIED (a second
+# session), and the refusal said "anchor gone … Nothing was launched" for a fire that launched twice.
+@test "THE INCIDENT: inner timeout + unreadable kitty ls — ONE pane, verdict UNKNOWN, never 'anchor gone'" {
+  kitty_on; HF_ARGV_ACTIVE=1; export FAKE_MODE=garble LS_FAIL_N=999
+  run spawn
+  echo "$output"
+  [ "$(created)" = 1 ]
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"UNKNOWN"* ]] || false
+  [[ "$output" == *"MAY have launched"* ]] || false
+  [[ "$output" != *"anchor gone"* ]] || false
+  [[ "$output" != *"Nothing was launched"* ]] || false
+  [ ! -f "$FRONTMOST_MARK" ]
+}
+
+@test "inner timeout + kitty ls that RECOVERS on re-poll: the pane is ADOPTED, one session, rc 0" {
+  kitty_on; HF_ARGV_ACTIVE=1; export FAKE_MODE=garble LS_FAIL_N=1
+  run spawn
+  echo "$output"
+  [ "$(created)" = 1 ]
+  [ "$status" -eq 0 ]
+  [ "$(cat "$LAND_MARK")" = 101 ]
+  [[ "$output" == *"ADOPTED"* ]] || false
+}
+
+@test "a refusal whose adoption read is UNREADABLE is not retried — a pane may exist that nobody saw" {
+  # The refusal itself creates nothing here; what is pinned is that an unreadable list never licenses
+  # the retry (only a READABLE list showing no pane does), so the split runs exactly once.
+  kitty_on; HF_ARGV_ACTIVE=1; export FAKE_MODE=refuse LS_FAIL_N=999
+  local calls="$BATS_TEST_TMPDIR/split-calls"
+  # shellcheck disable=SC2034
+  REAL_IT2="$BATS_TEST_TMPDIR/it2-count"
+  printf '#!/usr/bin/env bash\necho x >> %q\nexec %q "$@"\n' "$calls" "$FAKE_IT2" > "$REAL_IT2"
+  chmod +x "$REAL_IT2"
+  run spawn
+  echo "$output"
+  [ "$(wc -l < "$calls" | tr -d ' ')" = 1 ]
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"UNKNOWN"* ]] || false
+  [[ "$output" != *"anchor gone"* ]] || false
+}
+
+@test "a gone anchor whose liveness is UNREADABLE is not asserted gone" {
+  # 'anchor gone' needs a READABLE kitty list that lacks the anchor; an unreadable one is no evidence.
+  kitty_on; export ANCHOR_WIN=none LIVE_ID=none LS_FAIL_N=999
+  run spawn
+  echo "$output"
+  [ "$(created)" = 0 ]
+  [ "$status" -ne 0 ]
+  [[ "$output" != *"anchor gone"* ]] || false
+  [[ "$output" == *"could not be read"* ]] || false
 }
 
 @test "EQUIVALENCE GUARD: adoption never takes a pane running ANOTHER fire's command" {
