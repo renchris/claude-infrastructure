@@ -46,7 +46,14 @@ VALID, VOID, STALE = "valid", "void", "stale"
 
 
 class Refused(Exception):
-    """The signing call must not proceed. The message is printed to the operator verbatim."""
+    """The signing call must not proceed. The message is printed to the operator verbatim.
+
+    `code` is the exit status a CLI should use: 3 for an agent ancestor, 2 for any other refusal.
+    """
+
+    def __init__(self, message: str, code: int = 2) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 # ── arm 1: ancestry ─────────────────────────────────────────────────────────────────────────────
@@ -92,7 +99,8 @@ def refuse_if_agent(chain: List[Any], operator_cmd: str) -> None:
             f"({hit['comm']} at depth {hit.get('depth', '?')}).\n"
             "A signature is the operator's, made in his own terminal after looking at the\n"
             "artifact. An agent may prepare it and stop there.\n\n"
-            f"  Operator, to sign this:  {operator_cmd}"
+            f"  Operator, to sign this:  {operator_cmd}",
+            code=3,
         )
 
 

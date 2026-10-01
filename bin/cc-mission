@@ -44,6 +44,19 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts" / "lib"))
+try:
+    import operator_sign  # shared signing library: the VOID verdict lives there
+
+    def signature_void(so: dict) -> bool:
+        return operator_sign.verdict(so) == operator_sign.VOID
+except ImportError:  # the board renders at every session start; never let a lib path break it
+    def signature_void(so: dict) -> bool:
+        prov = so.get("provenance") or {}
+        chain = prov.get("chain") or []
+        return bool(prov.get("claude_ancestor")) or not chain or \
+            any("claude" in str(c).lower() for c in chain)
+
 HOME = Path.home()
 STORE = HOME / ".claude" / "autonomy" / "customer"
 ROWS = STORE / "rows"
@@ -161,8 +174,9 @@ def evaluate(row: dict, now: float) -> dict:
     # re-enters the queue instead of staying green over changed geometry.
     so = r.get("signoff")
     if so and r.get("state") in OPERATOR_STATES:
-        prov = so.get("provenance") or {}
-        if prov.get("claude_ancestor"):
+        # The library's verdict also voids a record whose chain names claude without the flag,
+        # or that carries no chain at all: a record that cannot show its provenance proves none.
+        if signature_void(so):
             # ARM 3 — THE RENDER IS THE AUDITOR. Prevention against a same-uid process
             # is impossible; self-advertisement is not. A forged signature does not
             # merely fail to help, it broadcasts itself into resident context on all

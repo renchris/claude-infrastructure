@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""cc-signoff — the ONLY path from `awaiting-signoff` to `signed`. Operator only.
+"""cc-signoff — the ONLY path from `awaiting-signoff` to `signed`, and the only way to sign a
+research program's frame or certificate, buy its extra round set, reopen it, or veto a default.
+Operator only.
 
 The operator's ruling, verbatim: "deeming completion for these items ie. bottle service,
 floor plan HAS TO BE HUMAN SIGNED OFF. you do not have the awareness YET to have that call."
@@ -7,25 +9,25 @@ floor plan HAS TO BE HUMAN SIGNED OFF. you do not have the awareness YET to have
 So this command exists to be UNRUNNABLE BY AN AGENT, and to make a signature a claim about
 BYTES rather than about a name.
 
-THREE ARMS, and the third is the honest one:
+THREE ARMS, and the third is the honest one. They live in scripts/lib/operator_sign.py, which
+this file, bin/cc-mission and the research kit (scripts/research-kit/) all share:
 
-  ARM 1 — ANCESTRY.  Walk our own parent chain; refuse if any ancestor is a claude
-  process.  Verified live from inside a Bash tool call: pid -> /bin/zsh -> ppid ->
+  ARM 1 — ANCESTRY.  Walk our own parent chain (absolute /bin/ps); refuse if any ancestor is a
+  claude process.  Verified live from inside a Bash tool call: pid -> /bin/zsh -> ppid ->
   .../node_modules/.bin/claude at depth 1 -> REFUSE.  The operator's own shell walks
   zsh -> kitty with no claude in it -> ALLOW.
 
-  ARM 2 — CONTENT PIN.  The signature records `git rev-parse origin/main:<path>` for every
-  artifact path.  `cc-mission render` recomputes them; one changed byte re-opens the row and
-  says so on the board.  Without this, signing a name means an agent can edit the geometry
-  afterwards and the board stays green over a floor plan the operator never saw.
+  ARM 2 — CONTENT PIN.  A mission signature records `git rev-parse origin/main:<path>` for every
+  artifact path; `cc-mission render` recomputes them and one changed byte re-opens the row.  A
+  research signature records the git blob id of the frame or certificate it covers; one changed
+  byte makes it STALE, and the gate stops honouring it.
 
-  ARM 3 — THE RENDER IS THE AUDITOR.  We run as the operator's uid, so a determined process
+  ARM 3 — THE READER IS THE AUDITOR.  We run as the operator's uid, so a determined process
   can bypass arms 1 and 2; claiming otherwise would be false, and a false claim here is
-  worse than the gap.  What is achievable is that a forgery ADVERTISES ITSELF: every signoff
-  row stores the ancestry chain that wrote it, and any row showing a claude ancestor is
-  rendered as VOID (agent-written), by name, into the board that every session on every
-  account loads.  A forged signature does not merely fail to help — it broadcasts itself
-  machine-wide.
+  worse than the gap.  What is achievable is that a forgery ADVERTISES ITSELF: every record
+  stores the ancestry chain that wrote it, and any record showing a claude ancestor, or no
+  chain at all, is read as VOID by every consumer — the mission board renders it by name, and
+  the research gate refuses to count it.
 
 DELIBERATELY NOT USED: a `[ -t 0 ]` TTY gate.  It was measured and REFUTED as a
 human/agent discriminator in both directions — git hands pre-commit hooks /dev/null on
@@ -36,11 +38,13 @@ hands an agent a tty.
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts" / "lib"))
+import operator_sign  # noqa: E402
 
 HOME = Path.home()
 STORE = HOME / ".claude" / "autonomy" / "customer"
@@ -48,48 +52,33 @@ ROWS = STORE / "rows"
 JOURNAL = STORE / "signoff.jsonl"
 CC_MISSION = HOME / ".claude" / "bin" / "cc-mission"
 
-
-def ancestry() -> list[dict]:
-    """Walk pid -> ppid to init, recording each command."""
-    chain, pid, depth = [], os.getpid(), 0
-    while pid and pid > 1 and depth < 24:
-        try:
-            out = subprocess.run(("ps", "-o", "ppid=,comm=", "-p", str(pid)),
-                                 capture_output=True, text=True, timeout=5)
-        except (OSError, subprocess.SubprocessError):
-            break
-        line = out.stdout.strip()
-        if not line:
-            break
-        parts = line.split(None, 1)
-        if len(parts) < 2:
-            break
-        chain.append({"pid": pid, "comm": parts[1], "depth": depth})
-        pid, depth = int(parts[0]), depth + 1
-    return chain
+USAGE = """usage: cc-signoff <row-id> --evidence <live-url|sha> [--note <text>]
+       cc-signoff research:<slug>/frame --evidence <what you read>
+       cc-signoff research:<slug>/cert  --evidence <what you read>
+       cc-signoff research:<slug>/extra-round --because "<why>"
+       cc-signoff research:<slug>/reopen      --because "<why>"
+       cc-signoff research:<slug>/veto/<decision-id> --because "<why>"
+       run this in YOUR OWN terminal; an agent cannot."""
 
 
-def main() -> int:
-    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
-        print("usage: cc-signoff <row-id> --evidence <live-url|sha> [--note <text>]\n"
-              "       run this in YOUR OWN terminal; an agent cannot.")
-        return 0
+def sign_research(rid: str, evidence: str | None, because: str | None) -> int:
+    try:
+        rec = operator_sign.sign_research(rid, evidence=evidence, because=because)
+    except operator_sign.Refused as e:
+        print(str(e), file=sys.stderr)
+        return e.code
+    except Exception as e:  # a registry or records problem: refuse, never half-sign
+        print(f"REFUSED — {e}", file=sys.stderr)
+        return 2
+    print(f"SIGNED {rid}")
+    for path, pin in sorted(rec["pins"].items()):
+        print(f"  pinned {path} = {pin} — one changed byte voids this signature")
+    return 0
 
-    rid = sys.argv[1]
-    args = sys.argv[2:]
-    evidence = note = None
-    i = 0
-    while i < len(args):
-        if args[i] == "--evidence" and i + 1 < len(args):
-            evidence, i = args[i + 1], i + 2
-        elif args[i] == "--note" and i + 1 < len(args):
-            note, i = args[i + 1], i + 2
-        else:
-            print(f"unknown option: {args[i]}", file=sys.stderr)
-            return 2
 
-    chain = ancestry()
-    claude_anc = next((c for c in chain if "claude" in c["comm"].lower()), None)
+def sign_mission(rid: str, evidence: str | None, note: str | None) -> int:
+    chain = operator_sign.ancestry()
+    claude_anc = operator_sign.claude_ancestor(chain)
 
     f = ROWS / f"{rid}.json"
     if not f.exists():
@@ -157,6 +146,31 @@ def main() -> int:
     print(f"SIGNED {rid}\n  pinned {len(pins)} artifact blob(s) — if any of them changes,\n"
           "  the row re-opens on the board and says so.")
     return 0
+
+
+def main() -> int:
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
+        print(USAGE)
+        return 0
+
+    rid = sys.argv[1]
+    args = sys.argv[2:]
+    evidence = note = because = None
+    i = 0
+    while i < len(args):
+        if args[i] == "--evidence" and i + 1 < len(args):
+            evidence, i = args[i + 1], i + 2
+        elif args[i] == "--note" and i + 1 < len(args):
+            note, i = args[i + 1], i + 2
+        elif args[i] == "--because" and i + 1 < len(args):
+            because, i = args[i + 1], i + 2
+        else:
+            print(f"unknown option: {args[i]}", file=sys.stderr)
+            return 2
+
+    if rid.startswith("research:"):
+        return sign_research(rid, evidence, because)
+    return sign_mission(rid, evidence, note)
 
 
 if __name__ == "__main__":
