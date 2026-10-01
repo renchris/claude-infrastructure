@@ -552,7 +552,8 @@ JUDGE
 @test "repair accepts a sid8 and resolves it to that session's NEWEST bundle" {
   bundle "$SID" 20260919T170000Z probed >/dev/null
   local newest; newest="$(bundle "$SID" 20260919T180000Z probed)"
-  run env CC_PANE_ID=w0t0p9 bash "$LR" repair aaaaaaaa --mode prompt
+  # --source-pane: a prompt request without one is refused (the poller would discard it).
+  run env CC_PANE_ID=w0t0p9 bash "$LR" repair aaaaaaaa --mode prompt --source-pane 7
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [ "$(jq -r .bundle "$REQ/cc-lr-repair-$SID.json")" = "$newest" ]
   [ "$(jq -r .mode  "$REQ/cc-lr-repair-$SID.json")" = prompt ]
