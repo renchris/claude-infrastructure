@@ -1365,7 +1365,9 @@ r = acctrow(out, "stale")
 assert len(re.findall(r"\d+%\*", r)) >= 3, r
 assert re.search(r"\d+%(?!\*)", r) is None, r
 assert "throttle" in out and "NOT a usage cap" in out, out   # transient, never a limit
-assert "--fresh" in out, out
+# a throttled row says WHEN it is re-polled; `--fresh` is no longer the advice, because the
+# throttle is per token and sticky (docs/research/quota-cache-freshness-2026-10-01 §2b)
+assert "re-polled at the next sweep" in out or "429 backoff" in out, out
 # a non-throttled inherited row says the OTHER thing: excluded from routing
 out2 = rd([row(acct="old", stale_quota=True, error="no data",
                quota_as_of="2026-07-19T09:40:00+00:00")])

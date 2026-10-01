@@ -431,7 +431,7 @@ sys.exit(1 if bad else 0)'
   run python3 - "$CA_BIN" <<'PY'
 import subprocess, sys, time, os
 src = open(sys.argv[1]).read()
-anchor = "        rows, wj, was_cached, _prev = get_data(cfg, fresh=False, no_heal=no_heal,"
+anchor = "        pending = reset_evidence_pending(cfg)\n"
 new = src.replace(anchor, "        time.sleep(30)\n" + anchor, 1)
 assert new != src, "anchor moved"
 env = dict(os.environ, CC_KEEPWARM_DEADLINE_S="2")

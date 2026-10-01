@@ -164,6 +164,10 @@ Usage:
       pairs (median score-ratio 1.000), and across 931 recorded routing decisions the grace band
       has never once been entered (max observed quota_age_s = 89).
       Malformed value on either flag ⇒ exit 64. Absent ⇒ unchanged behaviour.
+  claude-accounts --note-reset ACCT [--source WHO]
+                                      record that ACCT's usage was reset (a banked /limit-reset
+      redemption leaves no local trace). Readings older than the record show as pre-reset, their
+      stored rejection is dropped, and keepwarm re-reads at its next tick. No network.
   claude-accounts --no-color          plain output (also: NO_COLOR env, pipes, TERM=dumb;
                                       FORCE_COLOR=1 forces color for screenshots)
 
@@ -1094,6 +1098,13 @@ def _ssl_warm():
         urllib.request.install_opener(urllib.request.build_opener())
 
 
+def usage_429_retries():
+    try:
+        return max(0, int(os.environ.get("CC_ACCOUNTS_USAGE_429_RETRIES", "0")))
+    except ValueError:
+        return 0
+
+
 def fetch_usage(cfg, token, retries=2):
     global SSL_CTX
     if SSL_CTX is None:
@@ -1113,7 +1124,11 @@ def fetch_usage(cfg, token, retries=2):
                 body = json.loads(e.read().decode())
             except Exception:
                 pass
-            if e.code == 429 and attempt < retries:
+            # NO 429 retry by default: the throttle is per token and sticky — a re-poll inside
+            # 30 s is another 429 97.6% of the time (docs/research/quota-cache-freshness-
+            # 2026-10-01 §2b) — so each retry spent the throttled token's budget for ~nothing
+            # and made every 429 cost three requests. CC_ACCOUNTS_USAGE_429_RETRIES restores it.
+            if e.code == 429 and attempt < min(retries, usage_429_retries()):
                 # JITTER, and it is created by the fan-out, not inherited. Serially the four
                 # calls self-stagger by ~340ms each, so a deterministic `1.5 * (attempt + 1)`
                 # ladder never collided. Concurrently, four simultaneous 429s would back off by
@@ -1658,14 +1673,20 @@ def inherit_lastgood(row, ledger, prev):
         # account whose weekly has since reset is likely FRESH, which is exactly what decides
         # whether to bother relogging in. So record it; never blank the row (that would clear
         # stale_quota and leave the table with nothing to render at all).
+        # A RECORDED redemption newer than the reading counts the same way (reset_evidence): the
+        # banked reset keeps the weekly reset DAY, so no stamp ever passes for it, and before
+        # 2026-10-01 a redeemed account replayed its pre-reset 100% until the next good read.
+        evidence = reset_evidence(e, row["acct"])
         rolled = []
         for pfx in ("session", "weekly", "fable"):
             stamp = e.get(f"{pfx}_reset_at")
             h = hrs_until(stamp)
-            if stamp and h is not None and h <= 0:
+            if pfx in evidence:
                 row[f"{pfx}_pct"] = None
-                row[f"{pfx}_reset_at"] = None
-                row[f"{pfx}_reset_h"] = None
+                # a passed stamp is void; a redeemed weekly keeps its (still future) day
+                keep = h is not None and h > 0
+                row[f"{pfx}_reset_at"] = stamp if keep else None
+                row[f"{pfx}_reset_h"] = h if keep else None
                 rolled.append(pfx)
             else:
                 row[f"{pfx}_pct"] = e.get(f"{pfx}_pct")
@@ -1673,14 +1694,20 @@ def inherit_lastgood(row, ledger, prev):
                 row[f"{pfx}_reset_h"] = h
         if rolled:
             row["rolled_since"] = rolled
+            row["reset_evidence"] = [evidence[p] for p in rolled]
         set_credits(row, e.get("credits_on"), e.get("credits_used"))
         row["stale_quota"] = True
         row["quota_as_of"] = e.get("quota_as_of")
         row["lastgood_age_s"] = lastgood_age_s(row)
         # A REJECTED wire verdict from the last good read rides along (never an `allowed` one —
-        # see the ledger write): it can only veto a throttle admission, never enable one.
-        if e.get("wire_rejects"):
-            row["lastgood_wire_rejects"] = list(e["wire_rejects"])
+        # see the ledger write): it can only veto a throttle admission, never enable one. It
+        # does NOT outlive a reset of its own window: the verdict was about usage the reset
+        # voided, and replaying it is what kept a freshly redeemed account "capped" on
+        # 2026-10-01. Only positive evidence (reset_evidence) drops it; nothing else does.
+        void = {"7d": "weekly", "5h": "session"}
+        rej = [w for w in (e.get("wire_rejects") or []) if void.get(w) not in rolled]
+        if rej:
+            row["lastgood_wire_rejects"] = rej
         return True
     pr = (prev or {}).get("rows", {}).get(row["acct"])
     if pr and pr.get("weekly_pct") is not None:
@@ -1710,6 +1737,209 @@ def lastgood_age_s(row):
     if h is None or h * 3600.0 > K_SKEW_TOL_S:   # same 1 s rounding slack inherit_k allows
         return None
     return round(max(0.0, -h * 3600.0), 1)
+
+
+# ---- FRESHNESS: the 429 backoff, reset evidence, and the wire as the substitute read ----------
+# docs/research/quota-cache-freshness-2026-10-01/ (receipts q1-output.txt, q2-output.txt). The
+# 2026-10-01 incident: next4's banked reset was redeemed, every poll for five minutes was a 429,
+# and every reader replayed "weekly 100%, server rejected" off the ledger. Measured:
+#   · the 429 budget is PER TOKEN (1,186 of 1,373 throttle clusters hit exactly one account), so
+#     there is no cross-account budget to re-spend — only a throttled token's own to stop wasting;
+#   · it is STICKY: a re-poll of the same account within 30 s is another 429 97.6% of the time,
+#     and an episode lasts p50 7.3 min, p90 91 min. In-call retries and `--fresh` both spend the
+#     budget for ~nothing, so every caller now shares one per-account backoff instead;
+#   · `/v1/messages` is a different endpoint, and its rate-limit headers (the WIRE) carry the
+#     server's own live verdict — the one read a usage-endpoint throttle does not cover.
+# Sidecars of the lastgood ledger, so every override of that path (tests, scratch SSOTs) moves
+# them too and nothing here can touch the real files from a hermetic run.
+USAGE_BACKOFF_BASE_S = 180.0      # one keepwarm interval
+USAGE_BACKOFF_CAP_S = 600.0       # past 5 min the next poll's odds stop improving with the gap
+WIRE_SUBSTITUTE_PCT = 90.0        # a throttled reading this close to a wall is worth a wire read
+_POLLSTATE_LOCK = threading.Lock()
+
+
+def _sidecar(suffix):
+    return os.path.splitext(LASTGOOD_PATH)[0] + suffix
+
+
+def _load_pollstate():
+    try:
+        with open(_sidecar(".pollstate.json")) as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_pollstate(d):
+    path = _sidecar(".pollstate.json")
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+        with open(tmp, "w") as f:
+            json.dump(d, f, indent=2, sort_keys=True)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def usage_backoff_s(streak):
+    """Seconds every caller holds off an account's usage poll after its `streak`-th 429 in a row.
+    CC_ACCOUNTS_USAGE_BACKOFF_S overrides the base; 0 turns the backoff off."""
+    try:
+        base = float(os.environ.get("CC_ACCOUNTS_USAGE_BACKOFF_S", USAGE_BACKOFF_BASE_S))
+    except ValueError:
+        base = USAGE_BACKOFF_BASE_S
+    if not (base > 0 and math.isfinite(base)):
+        return 0.0
+    return min(base * 2 ** max(0, streak - 1), max(base, USAGE_BACKOFF_CAP_S))
+
+
+def usage_backoff_left(acct):
+    """Seconds left on this account's shared 429 backoff (0 = poll it)."""
+    rec = _load_pollstate().get(acct) or {}
+    try:
+        until = float(rec.get("until") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if usage_backoff_s(1) <= 0:
+        return 0.0
+    return max(0.0, until - time.time())
+
+
+def note_usage_429(acct):
+    with _POLLSTATE_LOCK:
+        d = _load_pollstate()
+        rec = d.get(acct) or {}
+        streak = int(rec.get("streak") or 0) + 1
+        d[acct] = {"streak": streak, "at": datetime.now(timezone.utc).isoformat(),
+                   "until": time.time() + usage_backoff_s(streak)}
+        _save_pollstate(d)
+    return d[acct]
+
+
+def note_usage_ok(acct):
+    with _POLLSTATE_LOCK:
+        d = _load_pollstate()
+        if acct in d:
+            del d[acct]
+            _save_pollstate(d)
+
+
+def note_reset_event(acct, kind="redeemed", source=None):
+    """Record POSITIVE evidence that an account's usage was reset outside a natural window roll.
+    Measured: a /limit-reset redemption leaves no local record (61 transcripts, 4 history files,
+    no debug log), so this record is the only local form it can take — written by whoever learns
+    of it. Append-only, one JSON line."""
+    path = _sidecar(".events.jsonl")
+    rec = {"ts": datetime.now(timezone.utc).isoformat(), "acct": acct, "kind": kind,
+           "source": source or "manual"}
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a") as f:
+        f.write(json.dumps(rec, sort_keys=True) + "\n")
+    log_event(f"event {acct}: {kind} recorded ({rec['source']}) — readings before "
+              f"{rec['ts']} are pre-reset")
+    return rec
+
+
+def last_reset_event(acct):
+    """-> the newest recorded reset event for `acct` (dict with `ts`), or None. Never raises."""
+    best = None
+    try:
+        with open(_sidecar(".events.jsonl")) as f:
+            for ln in f:
+                try:
+                    e = json.loads(ln)
+                except ValueError:
+                    continue
+                if e.get("acct") == acct and e.get("ts") and (best is None or e["ts"] > best["ts"]):
+                    best = e
+    except OSError:
+        return None
+    return best
+
+
+def reset_evidence(entry, acct):
+    """Which buckets of a last-good `entry` are KNOWN to be pre-reset, and why.
+
+    -> ({bucket: evidence}) for bucket in session/weekly/fable. Only POSITIVE evidence counts: a
+    reset stamp that has passed, or a recorded event newer than the reading. Absence of evidence
+    is not evidence of a reset, so an unknown stays exactly what it was."""
+    out = {}
+    for pfx in ("session", "weekly", "fable"):
+        stamp = entry.get(f"{pfx}_reset_at")
+        h = hrs_until(stamp)
+        if stamp and h is not None and h <= 0:
+            out[pfx] = f"{pfx} window reset at {_fmt_asof(stamp) or stamp}"
+    ev = last_reset_event(acct)
+    asof = entry.get("quota_as_of")
+    if ev and asof and ev["ts"] > asof:
+        # `clears` for the banked reset names five_hour and seven_day; whether it includes the
+        # Fable weekly is unverified, so Fable is left alone (its stale figure over-states use,
+        # the safe direction).
+        for pfx in ("session", "weekly"):
+            out.setdefault(pfx, f"{ev.get('kind', 'reset')} recorded at {_fmt_asof(ev['ts'])}")
+    return out
+
+
+def reset_evidence_pending(cfg):
+    """Does any account have reset evidence newer than its last good read? Keepwarm sweeps at
+    once when it does, instead of serving a cache that still holds the pre-reset reading."""
+    led = load_lastgood()
+    return sorted(a["name"] for a in cfg.get("accounts", [])
+                  if led.get(a["name"]) and reset_evidence(led[a["name"]], a["name"]))
+
+
+def wire_substitute_wanted(row):
+    """Is a throttled row's verdict worth one /v1/messages read? Only where it decides something:
+    a stored rejection, evidence of a reset since the reading, or a reading near a wall."""
+    if row.get("lastgood_wire_rejects") or row.get("rolled_since"):
+        return True
+    return any((row.get(k) or 0) >= WIRE_SUBSTITUTE_PCT for k in ("session_pct", "weekly_pct"))
+
+
+def apply_wire_substitute(row, w):
+    """Fold a FRESH wire read into a throttled row. The server's live verdict outranks the stored
+    one in both directions: a window it still rejects stays rejected, a window it no longer
+    rejects drops the stored rejection — positive evidence, read this second. A meter blanked by
+    a reset takes the wire's figure, so the row can be routed on a reading instead of a guess."""
+    row["wire"] = w
+    row["wire_substitute"] = True
+    row["wire_at"] = datetime.now(timezone.utc).isoformat()
+    rej = list(row.get("lastgood_wire_rejects") or [])
+    keep = [win for win in rej if w.get(f"{win}_status") in (None, "rejected")]
+    for win in rej:
+        if win not in keep:
+            row.setdefault("reset_evidence", []).append(
+                f"server now allows {win} (wire {w.get(f'{win}_util')})")
+    if keep:
+        row["lastgood_wire_rejects"] = keep
+    else:
+        row.pop("lastgood_wire_rejects", None)
+    # Usage only falls when a window resets, so the server reading a window materially LOWER than
+    # the stored figure is itself positive evidence of a reset — the redemption case, whose weekly
+    # stamp never passes. The endpoint integer rounds up by <1 pp, hence the 5 pp margin.
+    for key, wkey in WIRE_FIELD.items():
+        wv = w.get(wkey)
+        if wv is None:
+            continue
+        old = row.get(key)
+        if old is not None and wv * 100 <= old - 5:
+            bucket = key.split("_")[0]
+            row.setdefault("rolled_since", [])
+            if bucket not in row["rolled_since"]:
+                row["rolled_since"].append(bucket)
+            row.setdefault("reset_evidence", []).append(
+                f"server reads {bucket} at {wv * 100:.0f}% (stored {old:.0f}%)")
+            old = None
+        if old is None:
+            row[key] = min(100, round(wv * 100))
+    # A Fable figure older than the admission bound cannot ride along on a wire admission (the
+    # wire carries no Fable window), so it is withheld: unknown is refused on the Fable lane.
+    age = lastgood_age_s(row)
+    if row.get("fable_pct") is not None and (age is None or age > throttle_admit_s()):
+        row["fable_pct"] = None
+        row["fable_unread"] = True
 
 
 K_GRACE_S = 600           # same band as cache_grace_s — see inherit_k's docstring
@@ -1902,7 +2132,15 @@ def probe_account(cfg, acct, kc, k_live, ledger, prev, no_heal):
             return row, None
         else:
             row["heal_note"] = detail
-    status, u = fetch_usage(cfg, token) if token else (None, None)
+    # THE SHARED BACKOFF. A token that answered 429 is left alone by EVERY caller — keepwarm,
+    # `--fresh`, `--rank` — until its backoff runs out; the row is a throttled row exactly as if
+    # it had been polled, so nothing downstream can tell the difference except the request count.
+    held = usage_backoff_left(name) if token else 0.0
+    if held > 0:
+        status, u = 429, None
+        row["usage_held_s"] = round(held)
+    else:
+        status, u = fetch_usage(cfg, token) if token else (None, None)
     if status == 401:
         # CC may have rotated the token between our read and the call — one fresh re-read.
         creds, kstate = read_creds(acct["config_dir"], kc)
@@ -1929,6 +2167,23 @@ def probe_account(cfg, acct, kc, k_live, ledger, prev, no_heal):
         row["poll_throttled"] = True
         row["error"] = ("poll throttled ↻ (cached usage)"
                         if inherit_lastgood(row, ledger, prev) else "poll throttled ↻")
+        if not held:
+            row["usage_held_s"] = round(note_usage_429(name)["until"] - time.time())
+        # THE SUBSTITUTE READ. /v1/messages is outside the usage endpoint's throttle and its
+        # headers are the server's live verdict, so where the verdict decides something (a stored
+        # rejection, a reset since the reading, a reading near a wall) one wire read replaces the
+        # poll that cannot happen. A miss changes nothing: the row stays exactly as inherited.
+        if token and wire_enabled() and row.get("stale_quota") and wire_substitute_wanted(row):
+            w = fetch_wire_limits(cfg, token)
+            if w:
+                apply_wire_substitute(row, w)
+                log_event(f"probe {name}: wire substitute for a throttled usage poll — 5h "
+                          f"{w.get('5h_util')} {w.get('5h_status')} · 7d {w.get('7d_util')} "
+                          f"{w.get('7d_status')}"
+                          + (f" · {'; '.join(row['reset_evidence'])}"
+                             if row.get("reset_evidence") else ""))
+            else:
+                row["wire_miss"] = True
         # THE INSTRUMENT. Until this line the 429 branch emitted nothing at all, so
         # ~/.claude/logs/claude-accounts.log held zero throttle entries across 5,413 lines —
         # which reads as "429 never fires" and is actually a null from a blind instrument. The
@@ -1937,14 +2192,20 @@ def probe_account(cfg, acct, kc, k_live, ledger, prev, no_heal):
         # requests from ~1.35s of self-staggering into ~0ms, so if the endpoint's throttle is
         # IP- or org-scoped rather than token-scoped, this change is what discovers it. Shipping
         # the fan-out without this line ships its one new failure mode unmeasurable.
-        log_event(f"probe {name}: 429 poll-throttled ↻ — transient endpoint throttle, NOT a "
-                  f"usage cap (a real cap is HTTP 200 with percent≈100). "
-                  f"lastgood={'served' if row.get('stale_quota') else 'absent'}")
+        if held:
+            log_event(f"probe {name}: usage poll held — 429 backoff, {held:.0f}s left "
+                      f"(lastgood={'served' if row.get('stale_quota') else 'absent'})")
+        else:
+            log_event(f"probe {name}: 429 poll-throttled ↻ — transient endpoint throttle, NOT a "
+                      f"usage cap (a real cap is HTTP 200 with percent≈100). "
+                      f"lastgood={'served' if row.get('stale_quota') else 'absent'} "
+                      f"backoff={row.get('usage_held_s')}s")
         return row, None
     if not u or "limits" not in u:
         row["error"] = f"no data (http {status})"
         inherit_lastgood(row, ledger, prev)
         return row, None
+    note_usage_ok(name)
     sp, sr = pick(u, "session")
     wp, wr = pick(u, "weekly_all")
     fp, fr = pick(u, "weekly_scoped", cfg["frontier"]["scoped_display_name"])
@@ -3955,13 +4216,35 @@ def throttle_admissible(r):
     Renderers call this one (no side effect); the router calls _throttle_admitted, which logs."""
     if not r.get("poll_throttled") or not r.get("stale_quota"):
         return False
+    bound = throttle_admit_s()
+    if wire_admissible(r, bound):
+        return True
     if r.get("session_pct") is None or r.get("weekly_pct") is None:
         return False
     if r.get("lastgood_wire_rejects"):
         return False
-    bound = throttle_admit_s()
     age = lastgood_age_s(r)
     return age is not None and 0 < bound and age <= bound
+
+
+def wire_admissible(r, bound=None):
+    """The second door: a FRESH wire substitute (apply_wire_substitute) read inside the same bound,
+    rejecting neither window, carrying both utilizations. It routes on the server's own figures
+    (weekly_used_frac and the 5h check read the wire first), so the age of the inherited reading
+    no longer matters — which is the whole point when that reading predates a reset. Every
+    missing piece refuses: no wire, an undated or old one, a missing figure, a rejection."""
+    bound = throttle_admit_s() if bound is None else bound
+    w = r.get("wire") or {}
+    if not r.get("wire_substitute") or not 0 < bound:
+        return False
+    if w.get("5h_util") is None or w.get("7d_util") is None:
+        return False
+    if w.get("5h_status") in (None, "rejected") or w.get("7d_status") in (None, "rejected"):
+        return False
+    if r.get("lastgood_wire_rejects") or r.get("session_pct") is None or r.get("weekly_pct") is None:
+        return False
+    h = hrs_until(r.get("wire_at"))
+    return h is not None and -bound <= h * 3600.0 <= K_SKEW_TOL_S
 
 
 def _throttle_admitted(r):
@@ -3972,8 +4255,14 @@ def _throttle_admitted(r):
     acct = r.get("acct")
     if acct not in _THROTTLE_ADMIT_LOGGED:     # one line per account per invocation, countable
         _THROTTLE_ADMIT_LOGGED.add(acct)
-        log_event(f"route {acct}: throttle-admitted — 429 poll-throttled, routing on last-good "
-                  f"read {age:.0f}s old (≤ {bound:.0f}s)")
+        if wire_admissible(r, bound):
+            w = r["wire"]
+            log_event(f"route {acct}: wire-admitted — 429 poll-throttled, routing on a fresh wire "
+                      f"read (5h {w.get('5h_util')} {w.get('5h_status')} · 7d {w.get('7d_util')} "
+                      f"{w.get('7d_status')})")
+        else:
+            log_event(f"route {acct}: throttle-admitted — 429 poll-throttled, routing on last-good "
+                      f"read {age:.0f}s old (≤ {bound:.0f}s)")
     return True
 
 
@@ -5445,6 +5734,30 @@ def fmt_h(h, narrow=False):
     return f"{d}d {rem}h"
 
 
+def _wire_note(r):
+    """A throttled row's substitute wire read, stated as figures — the narrow board carries no `ʷ`
+    marks, so pointing at them would point at nothing."""
+    w = r.get("wire") or {}
+    if not r.get("wire_substitute"):
+        return ""
+    f = [f"{lbl} {w[k] * 100:.0f}% {w.get(st) or '?'}"
+         for lbl, k, st in (("5h", "5h_util", "5h_status"), ("7d", "7d_util", "7d_status"))
+         if w.get(k) is not None]
+    return f"; live wire read: {', '.join(f)}" if f else ""
+
+
+def _retry_hint(r):
+    """What to tell a reader about re-polling a throttled row. `--fresh` used to be the advice, and
+    it is the one thing that cannot help: the throttle is per token and sticky (a re-poll inside
+    30 s is another 429 97.6% of the time), and every caller now holds off a 429'd account for a
+    shared backoff — so the honest hint is when the next poll will happen."""
+    if not r.get("poll_throttled"):
+        return " · --fresh to retry"
+    held = usage_backoff_left(r.get("acct")) if r.get("acct") else 0
+    return f" · next poll in ~{held / 60:.0f} min (429 backoff)" if held >= 30 else \
+        " · re-polled at the next sweep"
+
+
 def _fmt_asof(iso):
     """A last-good quota_as_of stamp → 'HH:MM' when captured today, else 'Mon DD', in LOCAL time
     (matches the table's header clock). None / unparseable ⇒ '' (caller omits the '@ …')."""
@@ -5906,16 +6219,18 @@ def readout_lines(rows, cfg, win, cached, narrow=False):
         if r.get("stale_quota") or r.get("error"):
             asof = _fmt_asof(r.get("quota_as_of"))
             if r.get("poll_throttled"):
-                notes.append(f"↻ `{acct}` — poll throttled (a 90s endpoint throttle, NOT a usage "
-                             f"cap); numbers are last-known"
-                             + (f" as of {asof}" if asof else "") + "; `--fresh` retries")
+                notes.append(f"↻ `{acct}` — poll throttled (NOT a usage cap); numbers are "
+                             f"last-known" + (f" as of {asof}" if asof else "")
+                             + _wire_note(r) + _retry_hint(r))
             else:
                 notes.append(f"↻ `{acct}` — last-known"
                              + (f", as of {asof}" if asof else "")
                              + "; not polled this sweep, excluded from routing")
         if r.get("rolled_since"):
-            notes.append(f"↻ `{acct}` — {'/'.join(r['rolled_since'])} window(s) have RESET since "
-                         f"that reading; those buckets read `—` and are likely fresh again")
+            notes.append(f"↻ `{acct}` — {'/'.join(r['rolled_since'])} RESET since that reading"
+                         + (f" ({'; '.join(r['reset_evidence'])})" if r.get("reset_evidence")
+                            else "")
+                         + "; pre-reset figures are withheld (`—`) until a read replaces them")
         # The SAME number the table's 5h cell prints — wire first. Two renderings of one meter
         # disagreeing by a point in one message is exactly the second renderer this file exists
         # to delete, and here it would land beside a cell the operator is reading for precision.
@@ -6284,18 +6599,22 @@ def render_table(rows, cfg, win, cached, prev=None):
             # 429 throttle with a young enough read (throttle_admissible). Say which — a number
             # with no provenance reads as current, and a wrong "excluded" hides a candidate.
             asof = _fmt_asof(r.get("quota_as_of"))
-            routing = ("routed on it (429 throttle, read within the admit bound)"
+            routing = ("routed on a fresh wire read" if wire_admissible(r)
+                       else "routed on it (429 throttle, read within the admit bound)"
                        if throttle_admissible(r) else "excluded from routing")
             alerts.append(c("↻ ", AMBER)
                           + c(f"{r['acct']} showing LAST-KNOWN quota, not polled this sweep", AMBER)
                           + c(f" · as of {asof or 'unknown'} · {routing}"
-                              " · --fresh to retry", GRAY, dim=True))
+                              + _retry_hint(r), GRAY, dim=True))
             if r.get("rolled_since"):
                 # The most actionable derived fact available for a stranded account: those
-                # windows have reset since the reading, so it is probably fresh again.
+                # windows have reset since the reading, so it is probably fresh again — and the
+                # evidence is named, because "likely fresh" with no reason reads as a guess.
                 alerts.append(c("  ⤷ ", GREEN)
-                              + c(f"{'/'.join(r['rolled_since'])} window(s) have RESET since"
-                                  " that reading — this account is likely fresh", GREEN))
+                              + c(f"{'/'.join(r['rolled_since'])} RESET since that reading"
+                                  + (f" ({'; '.join(r['reset_evidence'])})"
+                                     if r.get("reset_evidence") else "")
+                                  + " — pre-reset figures withheld", GREEN))
         sp = r.get("session_pct")
         # these two alerts imply a LIVE, routable account — never fire them on a stale/last-known
         # row (its number is historical; the account is currently unreachable/excluded).
@@ -6989,7 +7308,13 @@ def main():
             signal.signal(signal.SIGALRM, signal.SIG_DFL)
             signal.alarm(_kw_deadline)
         t0 = time.time()
-        rows, wj, was_cached, _prev = get_data(cfg, fresh=False, no_heal=no_heal,
+        # RESET EVIDENCE OUTRANKS THE AGE SKIP. A cache younger than --max-age is served — unless
+        # some account's last good read is now KNOWN to be pre-reset (a stamp passed, or a
+        # redemption was recorded): then that cache is wrong in a way its age cannot show, and
+        # this tick sweeps so the board and the router stop carrying it. A throttled account is
+        # still not polled (its backoff holds); its wire substitute is what this buys.
+        pending = reset_evidence_pending(cfg)
+        rows, wj, was_cached, _prev = get_data(cfg, fresh=bool(pending), no_heal=no_heal,
                                                max_age=max_age)
         # ---- ALSO the board producer (W3.6), and a FLAG on this job rather than a new script for
         # the deployment reason the block above already gives: ~/.claude/bin/claude-accounts is a
@@ -7013,6 +7338,7 @@ def main():
                                                narrow=True))
         age = _quota_age_s(cfg)
         print(f"keepwarm: {'served-cache' if was_cached else 'swept'} rows={len(rows)} "
+              f"reset_pending={','.join(pending) or '-'} "
               f"age_s={age if age is not None else '-'} "
               f"board={board or 'FAILED'} "
               f"took_ms={int((time.time() - t0) * 1000)}")
@@ -7046,6 +7372,23 @@ def main():
                               creds and creds.get("refreshTokenExpiresAt")),
                           "refresh_token_expired": _expired_ms(
                               creds and creds.get("refreshTokenExpiresAt"))}, indent=2))
+        return
+
+    # A RECORDED RESET — a write, no network, dispatched before the get_data anchor. A banked
+    # /limit-reset redemption leaves no local trace (measured 2026-10-01), so whoever learns of
+    # one (the operator, a /limit-recover run told "I just used the banked reset") records it
+    # here; every reader then shows that account's earlier reading as pre-reset and drops its
+    # stored rejection, and the next keepwarm tick sweeps instead of serving that reading.
+    if "--note-reset" in args:
+        i = args.index("--note-reset")
+        name = args[i + 1] if i + 1 < len(args) else ""
+        names = [a["name"] for a in cfg["accounts"]]
+        if name not in names:
+            sys.exit(f"claude-accounts: --note-reset needs an account ({'|'.join(names)})")
+        src = args[args.index("--source") + 1] if "--source" in args[:-1] else None
+        rec = note_reset_event(name, "redeemed", src)
+        print(f"recorded: {name} reset at {rec['ts']} — readings before it now show as pre-reset; "
+              f"the next keepwarm tick re-reads it")
         return
 
     # FLEET_V2 C5: batch recovery placement. Cache-only by construction (cmd_place reads with

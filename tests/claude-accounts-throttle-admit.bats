@@ -30,6 +30,9 @@ setup() {
   export CC_ASSIGN_LOG="$BATS_TEST_TMPDIR/assign-ledger.jsonl"
   export CC_ROUTE_RECORDS_DIR="$BATS_TEST_TMPDIR/route-records"
   unset CLAUDE_ACCOUNTS_THROTTLE_ADMIT_S
+  # Admission is under test here, not the shared 429 backoff (claude-accounts-freshness.bats owns
+  # that): with it on, a probe right after a 429 is held and never reaches the stub.
+  export CC_ACCOUNTS_USAGE_BACKOFF_S=0
   rm -f "$CA_LEDGER" "$CACHE"
   python3 - "$CA_CFG" "$CACHE" "$CA_SSOT" "$YAML" <<'PY'
 import json, sys
