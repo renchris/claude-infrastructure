@@ -3856,7 +3856,7 @@ run_gate() {  # $1=range → 0 green / 1 red
         echo "✗ gate: plan-frontmatter-lint --selftest FAILED — fix the lint before landing." >&2
         echo "  Escape if it is the detector that is broken: SHIP_LAND_PLANFM_LINT=/nonexistent" >&2
         gate_red plan-frontmatter-selftest
-        return 1
+        return 1  # gate_bounded: SHIP_LAND_PLANFM_LINT=/nonexistent — escape for a broken detector; fires only on lands touching docs/plans/*.md
       fi
       local -a _pfa=()
       while IFS= read -r _pf; do [[ -n "$_pf" ]] && _pfa+=(--file "$_pf"); done <<< "$planfm_own"
@@ -3864,7 +3864,7 @@ run_gate() {  # $1=range → 0 green / 1 red
         echo "✗ gate: plan frontmatter RED — open each named plan with ---/status: …/--- (or mark a" >&2
         echo "  design companion with a first line <!-- plan-companion: <PLAN> -->)." >&2
         gate_red plan-frontmatter
-        return 1
+        return 1  # gate_bounded: the author's own diff — clears the moment the named plans carry frontmatter
       fi
     fi
   fi

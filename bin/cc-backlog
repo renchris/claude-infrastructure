@@ -2057,9 +2057,9 @@ activation_dup() {
       local l
       while IFS= read -r l; do
         [ -n "$l" ] || continue
-        if activation_labels "$otext" | grep -qxF "$l"; then printf '%s %s\n' "$l" "$oid"; exit 0; fi
+        if activation_labels "$otext" | grep -xF "$l" >/dev/null; then printf '%s %s\n' "$l" "$oid"; exit 0; fi
       done <<< "$lab"
-    done | head -1 | grep .
+    done | awk 'NR<=1' | grep .
 }
 
 # dead_activation_run <run> → echoes the marker and rc 0 when the run names a pending-activation

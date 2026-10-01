@@ -23,7 +23,7 @@ check() { # <file> → rc 0 ok / 1 finding (printed)
     printf 'plan-frontmatter: %s has no frontmatter — open it with ---/status: <open|in-progress|complete|superseded>/---\n' "$f"
     return 1
   fi
-  if ! sed -n '2,/^---$/p' "$f" | grep -qiE '^status:[[:space:]]*[^[:space:]]'; then
+  if ! sed -n '2,/^---$/p' "$f" | grep -iE '^status:[[:space:]]*[^[:space:]]' >/dev/null; then
     printf 'plan-frontmatter: %s has frontmatter but no status: line\n' "$f"
     return 1
   fi
@@ -56,7 +56,10 @@ while [ $# -gt 0 ]; do
   esac
 done
 if [ "${#files[@]}" -eq 0 ]; then
-  cd "$(dirname "$0")/.." || exit 2
+  # resolve $0 through its symlinks FIRST (~/.claude/scripts/* are per-file links into the checkout)
+  p="$0"
+  while [ -L "$p" ]; do d="$(cd "$(dirname "$p")" && pwd)"; p="$(readlink "$p")"; case "$p" in /*) ;; *) p="$d/$p" ;; esac; done
+  cd "$(dirname "$p")/.." || exit 2
   for f in docs/plans/*.md; do [ -e "$f" ] && files+=("$f"); done
 fi
 bad=0

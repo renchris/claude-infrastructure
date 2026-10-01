@@ -21,7 +21,10 @@ case "${1:-}" in
   "") ;;
   *) echo "usage: $0 [--ref <commit-ish>]" >&2; exit 2 ;;
 esac
-cd "$(dirname "$0")/.." || exit 2
+# resolve $0 through its symlinks FIRST (~/.claude/scripts/* are per-file links into the checkout)
+p="$0"
+while [ -L "$p" ]; do d="$(cd "$(dirname "$p")" && pwd)"; p="$(readlink "$p")"; case "$p" in /*) ;; *) p="$d/$p" ;; esac; done
+cd "$(dirname "$p")/.." || exit 2
 
 PATHSPEC=(-- . ':!tests' ':!bin/cc-backlog' ':!docs' ':!*.md' ':!bus' ':!scripts/lint-backlog-callers.sh')   # bus/: a message log, not code
 TEMPLATES=(-- 'scripts/*.template.md')   # briefs hand agents runnable commands, so they are linted too
@@ -44,13 +47,13 @@ while IFS= read -r h; do
   rest="${line#*:}"; text="${rest#*:}"
   # a comment line in code is prose unless it is a runnable template the code prints (not linted)
   case "$text" in *[![:space:]]*) ;; *) continue ;; esac
-  printf '%s' "$text" | grep -qE '^[[:space:]]*(#|//)' && continue
+  printf '%s' "$text" | grep -E '^[[:space:]]*(#|//)' >/dev/null && continue
   # CALL LINE: the verb is followed by an argument token
   # (`unblock` is not `block`; the argument must look like one: a variable, a quote, a <placeholder>,
   # or a 12-hex row id — "cc-backlog needs timed out" is a message ABOUT the verb, not a call.)
-  printf '%s' "$text" | grep -qE '(^|[^[:alnum:]_])(block|needs)["'"'"']?[[:space:],]+(["'"'"'$<]|\\"|[0-9a-f]{12}([^[:alnum:]]|$)|(step|id)([^[:alnum:]_]|$))' || continue
+  printf '%s' "$text" | grep -E '(^|[^[:alnum:]_])(block|needs)["'"'"']?[[:space:],]+(["'"'"'$<]|\\"|[0-9a-f]{12}([^[:alnum:]]|$)|(step|id)([^[:alnum:]_]|$))' >/dev/null || continue
   calls=$((calls + 1))
-  if printf '%s' "$text" | grep -qE -- '--class([[:space:]=]|["'"'"'])|class-gate: exempt\(|(needs-credential|needs-human|not-yet-true|no-capacity):|On or after [0-9]{4}-[0-9]{2}-[0-9]{2}'; then
+  if printf '%s' "$text" | grep -E -- '--class([[:space:]=]|["'"'"'])|class-gate: exempt\(|(needs-credential|needs-human|not-yet-true|no-capacity):|On or after [0-9]{4}-[0-9]{2}-[0-9]{2}' >/dev/null; then
     continue
   fi
   bad=$((bad + 1))
