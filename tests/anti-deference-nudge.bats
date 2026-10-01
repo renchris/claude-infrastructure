@@ -503,11 +503,42 @@ fired()  { echo "$1" | grep -q '"decision":"block"'; }   # hook stdout ⇒ did i
   fired "$output"
 }
 
-@test "opaque-identifier: SILENT on commit shas and on a single id" {
+@test "opaque-identifier: SILENT on commit shas and on a single GLOSSED id" {
   # Naming a sha is what the EVIDENCE slot asks for; it must never be punished.
   local msgs=(
     "Landed 90e1c70c2 through c34475d1, all ancestors of origin/main; 828264453 verified."
+    "Filed as 2130e8a40cc2 (the TrueMemory intake question) so it survives the pane."
+    "Need your call: 1b6654bab64d — should we switch the plan to the adopted research method?"
+  )
+  for m in "${msgs[@]}"; do
+    local tx; tx="$(mkfix "$m")"
+    run runhook "$tx"
+    [ "$status" -eq 0 ]
+    if fired "$output"; then echo "FIRED (should be silent): $m" >&2; false; fi
+  done
+}
+
+@test "opaque-identifier: FIRES on a single unexpanded 12-hex id (operator ruling 2026-10-01)" {
+  # The incident: one bare id per close, never two, so the old two-id threshold never fired, and
+  # the operator replied "I have ZERO idea what 1b6654bab64d means".
+  local msgs=(
+    "Blocked — need your call. Decision 1b6654bab64d: reply \"go\" to start the intake."
     "Filed as 2130e8a40cc2 so it survives the pane."
+  )
+  for m in "${msgs[@]}"; do
+    local tx; tx="$(mkfix "$m")"
+    run runhook "$tx"
+    [ "$status" -eq 0 ]
+    if ! fired "$output"; then echo "DID NOT FIRE (should have): $m" >&2; false; fi
+  done
+}
+
+@test "opaque-identifier: a genuine blocker that NAMES its decision in words stays silent" {
+  # The other half: the genuine-blocker exemption still holds once the id is explained, so a real
+  # STOP-ASK is never nagged for anything but the bare id.
+  local msgs=(
+    "Blocked — need your call: should we switch the TrueMemory plan to the adopted research method? (1b6654bab64d)"
+    "Blocked — need your call on whether to switch methods. Nothing else is open."
   )
   for m in "${msgs[@]}"; do
     local tx; tx="$(mkfix "$m")"

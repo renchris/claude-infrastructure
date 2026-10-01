@@ -199,9 +199,13 @@ has_cat=0;  printf '%s' "$MSG" | grep -iqE "$CATEGORY_TELLS" && has_cat=1
 # NARROW BY CONSTRUCTION, bias to false-negative:
 #   * ONLY the 12-hex cc-decide/cc-backlog id shape. Commit shas (7-9 hex) are legitimate evidence
 #     and must never fire this — naming a sha is what the EVIDENCE slot asks for.
-#   * Needs TWO OR MORE distinct ids (CLAUDE.md's own measured threshold), and
+#   * Needs ONE OR MORE distinct ids, and
 #   * fires ONLY if NOT ONE of them is glossed. A single "abc123abc123 (the store-version timing)"
 #     anywhere in the message → silent. Name one and this never fires.
+#   CORRECTED (2026-10-01): the threshold was TWO, CLAUDE.md's measured failure threshold. That let
+#   a lead ship close after close whose ONE blocking line read "decision 1b6654bab64d: reply go",
+#   and the operator answered "I have ZERO idea what 1b6654bab64d means" — the same defect, one id
+#   at a time. The measurement says two ids hurt more; it never said one is understood.
 OPAQUE_ID_RE='(^|[^0-9a-f])[0-9a-f]{12}([^0-9a-f]|$)'
 # glossed = id followed by '(' or an em/en dash or ':' introducing words — i.e. it is explained here
 # Two glossed shapes, BOTH silent — the second is the one this hook's own nudge text recommends,
@@ -223,10 +227,13 @@ _bt="$(printf '\140')"   # backtick, built not literal: a literal one trips SC20
 # property of their quantifier, not of their spelling. Do not copy the bracket form back here.
 OPAQUE_GLOSS_RE="([0-9a-f]{12}${_bt}?[[:space:]]*([(:-]|—|–)[[:space:]]*[${_bt}\"'(a-z]|[([]${_bt}?[0-9a-f]{12})"
 n_ids=$(printf '%s' "$MSG" | grep -oE "$OPAQUE_ID_RE" 2>/dev/null | tr -cd '0-9a-f\n' | sort -u | grep -c . || true)
-n_gloss=$(printf '%s' "$MSG" | grep -coE "$OPAQUE_GLOSS_RE" 2>/dev/null || true)
+# An id followed by a colon and an INSTRUCTION is not a gloss: "Decision 1b6654bab64d: reply go"
+# tells the operator what to type, never what the id is (the 2026-10-01 incident's exact shape).
+OPAQUE_ACTION_COLON_RE="[0-9a-f]{12}${_bt}?[[:space:]]*:[[:space:]]*[${_bt}\"']?(reply|run|answer|say|type|paste)([^a-z]|$)"
+n_gloss=$(printf '%s' "$MSG" | grep -E "$OPAQUE_GLOSS_RE" 2>/dev/null | grep -cvE "$OPAQUE_ACTION_COLON_RE" 2>/dev/null || true)
 case "$n_ids"   in ''|*[!0-9]*) n_ids=0 ;;   esac
 case "$n_gloss" in ''|*[!0-9]*) n_gloss=0 ;; esac
-has_id=0; { [ "$n_ids" -ge 2 ] && [ "$n_gloss" -eq 0 ]; } && has_id=1
+has_id=0; { [ "$n_ids" -ge 1 ] && [ "$n_gloss" -eq 0 ]; } && has_id=1
 # ── SEMANTIC SECOND OPINION (Jev) — runs ONLY where the four lexical arms found nothing ──────
 # THE HOLE IT COVERS — and the honest denominator, because the tempting number is rhetoric.
 # This hook abstains `no-tell` on 5,127 of 5,419 evaluations (94.6%), but that is an abstention
@@ -379,7 +386,10 @@ has_pushhold=0; printf '%s' "$MSG" | grep -iqE "$PUSHHOLD" && has_pushhold=1
 hard=0
 printf '%s' "$MSG" | grep -iqE "$HARD_CORE" && hard=1
 { [ "$has_soft" -eq 1 ] && [ "$has_shipv" -eq 0 ]; } && hard=1     # "your call" fork with NO ship verb → genuine
-if [ "$hard" -eq 1 ]; then
+# A genuine blocker is exempt from every nag EXCEPT the opaque-identifier one (2026-10-01): a STOP-ASK
+# is precisely where the operator must act, so it is where a bare id costs most. Before this, every
+# "⛔ Blocked — need your call … decision 1b6654bab64d" close abstained here as genuine-blocker.
+if [ "$hard" -eq 1 ] && [ "$has_id" -eq 0 ]; then
   # (P15 T-P15-5) Genuine-3 → durable packet. A fork/external-info genuine stop leaves a durable,
   # push-notified class-B packet — never a bare idle. Credential/sudo/destructive/permission
   # reasons are class C (they need a staged one-action artifact the hook cannot produce) → NO
@@ -427,7 +437,11 @@ fi
 
 # ── Decide fire (deference vs false-done), else abstain with a distinct, logged reason. ──
 FIRE_KIND=""
-if [ "$has_tell" -eq 1 ]; then
+if [ "$hard" -eq 1 ]; then
+  # Reachable only with has_id=1 (the carve-out above exits otherwise): a genuine blocker that hands
+  # the operator a bare id. Only the expansion is demanded; the stop itself stays legitimate.
+  FIRE_KIND="opaque-identifier"
+elif [ "$has_tell" -eq 1 ]; then
   { [ "$ship_hold" -eq 1 ] && [ "$drivable" -eq 0 ]; } && abstain "genuine-ship-hold"
   FIRE_KIND="deference"
 elif [ "$has_done" -eq 1 ] && [ "$contradiction" -eq 1 ]; then
