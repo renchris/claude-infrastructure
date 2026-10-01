@@ -1,4 +1,7 @@
 #!/usr/bin/env bats
+# shellcheck disable=SC2030,SC2031
+#   Structurally false under bats: every @test body is its own subshell, so an `export` in one test
+#   is SUPPOSED to stay there.
 # cc-husk-sweep — a pane at a bare shell over a DEAD session is resolved to (sid, account
 # launcher, cwd), classified by how it died and what it left open, and resumed with the PINNED
 # launcher (never the pane's own printed `claude --resume`, which uses the default account and
@@ -38,6 +41,11 @@ transcript() { # <store> <cwd> <sid> <last-close: yes|no|none>
   local d; d="$1/projects/$(slug "$2")"; mkdir -p "$d"
   { echo '{"type":"user"}'; [ "$4" = none ] || printf '{"type":"assistant","message":{"content":[{"type":"text","text":"... Good to close: %s — x"}]}}\n' "$4"; } > "$d/$3.jsonl"
 }
+# A transcript in the pane's cwd no longer NAMES the session (husk-panes-2026-09-30 root cause 8),
+# so the verdict and resume cases below name it through a surviving registry row instead.
+reg() { # <pane> <sid> <account label> <cwd>
+  printf '{"paneUUID":"%s","session_id":"%s","account":"%s","cwd":"%s"}\n' "$1" "$2" "$3" "$4" > "$CC_REGISTRY_DIR/$1.json"
+}
 
 @test "a pane with a claude anywhere beneath its shell is not a husk; a bare one is" {
   transcript "$T/.claude-secondary" "$CWD_A" "aaaaaaaa-0000-0000-0000-000000000001" yes
@@ -57,23 +65,26 @@ transcript() { # <store> <cwd> <sid> <last-close: yes|no|none>
   [[ "$output" == *'"source":"registry"'* ]] || false
 }
 
-@test "no registry row: the newest transcript for the pane's cwd names the session AND its store's account" {
+# Changed on purpose 2026-09-30 (C4): this case pinned the "newest transcript in the cwd" arm, which
+# named the wrong session for three of seven husks that night. The same fixture is now UNKNOWN.
+@test "no registry row: the newest transcript for the pane's cwd names NO session — UNKNOWN, no sid" {
   transcript "$T/.claude-secondary" "$CWD_A" "cccccccc-0000-0000-0000-000000000003" yes
-  sleep 1
   transcript "$T/.claude-tertiary" "$CWD_A" "dddddddd-0000-0000-0000-000000000004" no
   run "$SWEEP" --json --pane 10
   [ "$status" -eq 0 ]
-  [[ "$output" == *'"sid":"dddddddd-0000-0000-0000-000000000004"'* ]] || false
-  [[ "$output" == *'"launcher":"claude3"'* ]] || false
-  [[ "$output" == *'"source":"transcript"'* ]] || false
+  [[ "$output" == *'"sid":"-"'* ]] || { echo "$output"; false; }
+  [[ "$output" == *'"verdict":"UNKNOWN"'* ]] || { echo "$output"; false; }
+  [[ "$output" != *dddddddd* ]] || { echo "$output"; false; }
 }
 
 @test "verdict: 'Good to close: no' ⇒ RESUME; 'yes' on a non-git cwd ⇒ UNKNOWN (not shown done); the crash cause is carried" {
+  reg 10 "eeeeeeee-0000-0000-0000-000000000005" claude-secondary "$CWD_A"
   transcript "$T/.claude-secondary" "$CWD_A" "eeeeeeee-0000-0000-0000-000000000005" no
   printf '{"sid":"eeeeeeee-0000-0000-0000-000000000005","cause":"external-sigterm"}\n' > "$CC_HUSK_CRASH_LOG"
   run "$SWEEP" --json --pane 10
   [[ "$output" == *'"verdict":"RESUME"'* ]] || false
   [[ "$output" == *'"death":"external-sigterm"'* ]] || false
+  reg 30 "ffffffff-0000-0000-0000-000000000006" claude-secondary "$CWD_B"
   transcript "$T/.claude-secondary" "$CWD_B" "ffffffff-0000-0000-0000-000000000006" yes
   run "$SWEEP" --json --pane 30
   [[ "$output" == *'"verdict":"UNKNOWN"'* ]] || false
@@ -82,6 +93,7 @@ transcript() { # <store> <cwd> <sid> <last-close: yes|no|none>
 @test "verdict: uncommitted or unlanded work in the cwd forces RESUME whatever the session said" {
   git -C "$CWD_A" init -q && git -C "$CWD_A" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
   echo x > "$CWD_A/dirty"
+  reg 10 "aaaaaaaa-0000-0000-0000-000000000007" claude-secondary "$CWD_A"
   transcript "$T/.claude-secondary" "$CWD_A" "aaaaaaaa-0000-0000-0000-000000000007" yes
   run "$SWEEP" --json --pane 10
   [[ "$output" == *'"work":"dirty"'* ]] || false
@@ -89,6 +101,7 @@ transcript() { # <store> <cwd> <sid> <last-close: yes|no|none>
 }
 
 @test "--resume --yes types the PINNED launcher line, echo-verified, and records the attempt" {
+  reg 10 "abababab-0000-0000-0000-000000000008" claude-tertiary "$CWD_A"
   transcript "$T/.claude-tertiary" "$CWD_A" "abababab-0000-0000-0000-000000000008" no
   run "$SWEEP" --resume --yes --pane 10
   [ "$status" -ne 2 ]
@@ -101,6 +114,7 @@ transcript() { # <store> <cwd> <sid> <last-close: yes|no|none>
 @test "--resume skips DONE husks unless --all, and without --yes it types NOTHING" {
   git -C "$CWD_A" init -q && git -C "$CWD_A" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
   git -C "$CWD_A" remote add origin "$CWD_A" && git -C "$CWD_A" fetch -q origin && git -C "$CWD_A" update-ref refs/remotes/origin/main HEAD
+  reg 10 "acacacac-0000-0000-0000-000000000009" claude-secondary "$CWD_A"
   transcript "$T/.claude-secondary" "$CWD_A" "acacacac-0000-0000-0000-000000000009" yes
   run "$SWEEP" --json --pane 10
   [[ "$output" == *'"verdict":"DONE"'* ]] || false
@@ -121,7 +135,9 @@ transcript() { # <store> <cwd> <sid> <last-close: yes|no|none>
   run "$SWEEP" --json --pane 10
   [ "$status" -eq 0 ]
   [[ "$output" != *'eeeeeeee-0000-0000-0000-000000000011'* ]] || { echo "resolved to a LIVE sid: $output"; false; }
-  [[ "$output" == *'"sid":"dddddddd-0000-0000-0000-000000000010"'* ]] || false
+  # Changed on purpose 2026-09-30 (C4): the older non-live transcript is no longer resumed either —
+  # a transcript in the cwd names no session at all.
+  [[ "$output" == *'"verdict":"UNKNOWN"'* ]] || { echo "$output"; false; }
   run "$SWEEP" --resume --yes --pane 10
   if grep -q 'eeeeeeee-0000-0000-0000-000000000011' "$CC_HUSK_IT2_LOG"; then echo "typed a live session's resume line"; false; fi
 }
@@ -200,15 +216,18 @@ IT2
   [[ "$output" == *'"verdict":"TRANSPLANTED→next2"'* ]] || { echo "$output"; false; }
 }
 
-@test "TRANSPLANTED: the transcript arm uses the store the jsonl was FOUND in" {
+# Changed on purpose 2026-09-30 (C4/C5): the transcript arm is gone, and its store rule now applies
+# to EVERY arm — a registry row with no account names no store, so the jsonl's own store decides.
+@test "TRANSPLANTED: an arm that names no store uses the store the jsonl was FOUND in" {
   xplant_seals
   SID=44444444-0000-0000-0000-000000000004
+  printf '{"paneUUID":"10","session_id":"%s","cwd":"%s"}\n' "$SID" "$CWD_A" > "$CC_REGISTRY_DIR/10.json"
   transcript "$T/.claude-tertiary"  "$CWD_A" "$SID" no     # found here, under the pane's own cwd
   tombstone  "$T/.claude-tertiary"  "$CWD_A" "$SID" "$T/.claude-secondary"
   transcript "$T/.claude-secondary" "$CWD_B" "$SID" none   # successor under a DIFFERENT cwd slug
   run "$SWEEP" --json --pane 10
   [ "$status" -eq 0 ]
-  [[ "$output" == *'"source":"transcript"'* ]] || { echo "$output"; false; }
+  [[ "$output" == *'"source":"registry"'* ]] || { echo "$output"; false; }
   [[ "$output" == *'"verdict":"TRANSPLANTED→next2"'* ]] || { echo "$output"; false; }
 }
 

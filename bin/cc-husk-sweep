@@ -15,20 +15,41 @@
 #   cc-husk-sweep --resume --all  …and the DONE ones too (they will just close cleanly)
 #   cc-husk-sweep --json          the same rows as JSON lines
 #   --yes                         skip the typed-yes gate (each resume spends that account's quota)
-#   --pane <id>                   restrict to one pane
+#   --pane <id>                   restrict the OUTPUT and the resume to one pane (every husk is still
+#                                 resolved, so a sid another pane also claims still reads DUPLICATE)
 #
 # HOW A HUSK IS RESOLVED, in order (the first that answers wins, and the source is printed):
+#   watchdog    the LAST `registered session=<sid> … pane=<N>` line lead-crash-watchdog.sh wrote
+#               at a SessionStart in this pane — the one source that is the session's own word about
+#               where it ran. A kitty window id restarts at 1 per kitty process, so lines older than
+#               the RUNNING kitty's start are ignored; when that start cannot be read the arm abstains
+#               rather than let an old kitty's pane 57 name today's
 #   registry    ~/.claude/cc-registry/<pane>.json — survives exactly when SessionEnd did NOT run
 #               (a SIGKILL, a cut-off SIGTERM), which is the common husk; carries sid + account + cwd
-#   scrollback  the pane's last "claude --resume <sid>" line + the launcher of the last typed
-#               launch line (claude / claude2 / claude3 / claude4) — the id line can be CUT OFF
-#               when the session was killed mid-print (pane 144, 2026-09-04)
-#   transcript  the newest *.jsonl for the pane's cwd across the four account stores — the
-#               store names the account
+#   scrollback  the pane's last "claude[N] --resume <sid>" line over the WHOLE scrollback (the
+#               printed bare form and the watchdog's `nocorrect CC_ACCOUNT_PINNED=1 claudeN` form) —
+#               only if no launch line was typed after it, since the id line can be CUT OFF when the
+#               session was killed mid-print (pane 144, 2026-09-04). A FAILED read is UNKNOWN
+#               (source read-failed), never a fall-through to a weaker guess
+# Nothing else names a session. "The newest transcript in the pane's cwd" did, until 2026-09-30: on
+# a shared checkout it named the wrong session for three of seven husks (two teammates resolved to
+# their dead lead, an operator shell to a 5 s headless permission-gate run), and plain --resume would
+# have typed one lead's resume line into three panes (docs/research/husk-panes-2026-09-30.md, root
+# cause 8). An unresolved pane is UNKNOWN with no sid, and is never resumed.
+# Once a sid is named, its TRANSCRIPT decides the rest: the store holding projects/*/<sid>.jsonl
+# names the account and so the launcher (a registry label or a scrollback launcher only stands in
+# when no store holds it), and the session's own recorded "cwd" is the cwd — not the shell's.
 # VERDICT: RESUME when the session's last close said "Good to close: no", or its cwd holds
 # uncommitted / unlanded work; DONE when it said "yes" and the cwd is clean and landed; UNKNOWN
 # otherwise (and UNKNOWN is resumed with --resume, because a session that cannot be shown done is
-# not done — memory: lookup-miss-is-not-absence).
+# not done — memory: lookup-miss-is-not-absence). Only the session's ASSISTANT text counts as its
+# close: the CLAUDE.md attachment quotes "Good to close: no" too (root cause 7).
+# Three verdicts are NEVER resumed, --all included:
+#   TEAMMATE     the transcript carries "teamName" — a retired Agent Teams member; its lead owns it,
+#                and resuming it re-spawns a member nobody will shut down. Close the pane instead.
+#   DUPLICATE    two husks resolved to ONE sid; at most one of them can be right, and typing the line
+#                into both puts two writers on one transcript
+#   TRANSPLANTED (below)
 #
 # TRANSPLANTED is the verdict none of that reaches: a limit transplant keeps the SAME sid and moves
 # the session to ANOTHER account's store, leaving the source pane at a bare shell — a husk by every
@@ -39,9 +60,12 @@
 # Seams (tests): CC_HUSK_PANES_JSON (file, the `it2 session list --json` shape) · CC_HUSK_PS_FILE
 # (`ps -axo pid=,ppid=,command=` capture) · CC_REGISTRY_DIR · CC_HUSK_STORES (colon-separated
 # account config dirs) · CC_HUSK_CRASH_LOG · CC_HUSK_IT2 (the it2 binary) · CC_HUSK_LOG ·
-# CC_HUSK_LR_LIB (a SEAL — see the ladder below) · LR_STATE_DIR (read by lr-lib's lock arm).
+# CC_HUSK_LR_LIB (a SEAL — see the ladder below) · LR_STATE_DIR (read by lr-lib's lock arm) ·
+# CC_HUSK_WATCHDOG_LOG · CC_HUSK_KITTY_START_EPOCH (set-but-empty = unknown) ·
+# CC_HUSK_READ_TIMEOUT_S (the transcript pass's own bound).
 set -u
 IT2="${CC_HUSK_IT2:-$HOME/.claude/bin/it2}"
+WDLOG="${CC_HUSK_WATCHDOG_LOG:-$HOME/.claude/logs/lead-crash-watchdog.log}"
 REG="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
 CRASH="${CC_HUSK_CRASH_LOG:-$HOME/.claude/logs/claude-crashes.jsonl}"
 LOG="${CC_HUSK_LOG:-$HOME/.claude/logs/husk-sweep.jsonl}"
@@ -166,14 +190,12 @@ has_claude_under() {  # <pid> → 0 iff a claude runs somewhere under this pid (
   done
   return 1
 }
-slug() { printf '%s' "$1" | LC_ALL=C sed 's/[^a-zA-Z0-9]/-/g'; }
-# A LIVE session's id is never a husk's identity (2026-09-09). The transcript fallback picks the
-# NEWEST *.jsonl for the pane's cwd, and on a shared checkout the newest transcript belongs to
-# whichever LIVE session last wrote there — measured: pane 658 (a kitty window holding a bare shell)
-# resolved to the sid of the session running in pane 646, verdict RESUME, so `--resume --all` would
-# have typed that live session's resume line into an unrelated shell. The same holds for the
-# scrollback path: a session resumed in ANOTHER pane leaves its old pane's "claude --resume <sid>"
-# line behind. Every fallback therefore excludes any sid with a live claude behind it. Seam:
+# A LIVE session's id is never a husk's identity (2026-09-09). The transcript fallback (removed
+# 2026-09-30) picked the NEWEST *.jsonl for the pane's cwd, and on a shared checkout that belonged
+# to whichever LIVE session last wrote there — measured: pane 658 (a kitty window holding a bare
+# shell) resolved to the sid of the session running in pane 646. The same holds for the scrollback
+# and watchdog arms: a session resumed in ANOTHER pane leaves its old pane's resume line and its old
+# registration behind. Both therefore exclude any sid with a live claude behind it. Seam:
 # CC_HUSK_LIVE_SIDS (a file, one sid per line) stands in for cc-sessions.
 live_sids() {
   if [ -n "${CC_HUSK_LIVE_SIDS:-}" ]; then cat "$CC_HUSK_LIVE_SIDS" 2>/dev/null; return 0; fi
@@ -182,11 +204,44 @@ live_sids() {
 LIVE_SIDS="$(live_sids)"
 is_live_sid() { [ -n "${1:-}" ] && printf '%s\n' "$LIVE_SIDS" | LC_ALL=C /usr/bin/grep -qxF -- "$1"; }
 
+# The running kitty's start, as the watchdog log's own timestamp spelling (local time,
+# `%Y-%m-%d %H:%M:%S`), so the arm compares strings and forks no `date` per line. Live: kitty names
+# its control socket after its own pid (unix:/tmp/kitty-<pid>), so `ps -o lstart=` of that pid is the
+# start. Empty = unknown, and the watchdog arm then ABSTAINS: an unfiltered log would let an old
+# kitty's pane 57 name today's pane 57.
+kitty_start_ts() {
+  local e="" sock kpid ls
+  if [ -n "${CC_HUSK_KITTY_START_EPOCH+x}" ]; then e="$CC_HUSK_KITTY_START_EPOCH"
+  else
+    sock="${CC_TERM_KITTY_TO:-${KITTY_LISTEN_ON:-}}"; kpid="${sock##*/kitty-}"; kpid="${kpid%%[!0-9]*}"
+    [ -n "$kpid" ] || return 0
+    ls="$(LC_ALL=C ps -o lstart= -p "$kpid" 2>/dev/null | sed 's/[[:space:]]*$//')"; [ -n "$ls" ] || return 0
+    e="$(LC_ALL=C date -j -f '%a %b %d %T %Y' "$ls" +%s 2>/dev/null || date -d "$ls" +%s 2>/dev/null || true)"
+  fi
+  case "$e" in ''|*[!0-9]*) return 0 ;; esac
+  date -r "$e" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -d "@$e" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || true
+}
+KSTART_TS="$(kitty_start_ts)"
+watchdog_sid() {  # <pane> → the sid of the LAST registration naming exactly pane=<pane> since KSTART_TS
+  [ -n "$KSTART_TS" ] && [ -f "$WDLOG" ] || return 1
+  LC_ALL=C awk -v p="pane=$1" -v since="$KSTART_TS" '
+    index($0, " registered session=") && $NF == p && substr($0, 2, 19) >= since {
+      s = $0; sub(/.* registered session=/, "", s); sub(/[[:space:]].*/, "", s); last = s }
+    END { if (last ~ /^[0-9a-f-]+$/ && length(last) == 36) print last; else exit 1 }' "$WDLOG"
+}
+
 resolve() {  # <pane> <cwd> → sets R_SID R_LAUNCHER R_CWD R_SRC R_STORE (empty sid = unresolved)
   # R_STORE is the config dir THIS arm committed to — the answer to "whose copy is this?", which the
-  # transplant gate needs and which none of the other four fields carries.
-  local pane="$1" cwd="$2" row sb store d f
+  # transplant gate needs and which none of the other four fields carries. settle() below may move
+  # it to the store that actually HOLDS the transcript. On rc 1, R_SRC says why (empty = nothing
+  # named a session; live-elsewhere; read-failed).
+  local pane="$1" cwd="$2" row sb d
   R_SID=""; R_LAUNCHER=""; R_CWD="$cwd"; R_SRC=""; R_STORE=""
+  if R_SID="$(watchdog_sid "$pane")"; then
+    is_live_sid "$R_SID" && { R_SID=""; R_SRC=live-elsewhere; return 1; }
+    R_LAUNCHER=claude; R_SRC=watchdog; return 0   # no account on the line: settle() reads the store
+  fi
+  R_SID=""
   row="$REG/$pane.json"
   if [ -f "$row" ]; then
     R_SID="$(jq -r '.session_id // .sessionId // empty' "$row" 2>/dev/null)"
@@ -198,60 +253,131 @@ resolve() {  # <pane> <cwd> → sets R_SID R_LAUNCHER R_CWD R_SRC R_STORE (empty
     fi
   fi
   if [ -z "${CC_HUSK_PANES_JSON:-}" ]; then
-    sb="$("$IT2" session read -s "$pane" -n 600 2>/dev/null || true)"
+    # -n reaches the WHOLE scrollback now (it2-kitty `read` honours it); it used to return only the
+    # visible screen, so a resume line that had scrolled off was never seen.
+    sb="$("$IT2" session read -s "$pane" -n 600 2>/dev/null)" || { R_SRC=read-failed; return 1; }
     # The LAST resume line is only the dead session's if no launch was typed AFTER it: a session
     # killed mid-print leaves "Resume this session with:" with the id CUT OFF (pane 144,
     # 2026-09-04), and the previous tenant's intact line would otherwise be resumed instead.
-    local ri li
-    ri="$(printf '%s\n' "$sb" | LC_ALL=C /usr/bin/grep -n 'claude --resume [0-9a-f-]\{36\}' | tail -1 | cut -d: -f1)"
+    # `claude[0-9]?` because the watchdog and this tool type `nocorrect CC_ACCOUNT_PINNED=1 claudeN
+    # --resume <sid>`, and that line was invisible to a bare-`claude` pattern.
+    local ri li rl
+    ri="$(printf '%s\n' "$sb" | LC_ALL=C /usr/bin/grep -n 'claude[0-9]\{0,1\} --resume [0-9a-f-]\{36\}' | tail -1 | cut -d: -f1)"
     li="$(printf '%s\n' "$sb" | LC_ALL=C /usr/bin/grep -n '[[:space:]]claude[0-9]\{0,1\} --strict-mcp-config' | tail -1 | cut -d: -f1)"
     R_SID=""
     if [ -n "$ri" ] && [ "${ri:-0}" -gt "${li:-0}" ]; then
-      R_SID="$(printf '%s\n' "$sb" | LC_ALL=C sed -n 's/.*claude --resume \([0-9a-f-]\{36\}\).*/\1/p' | tail -1)"
+      rl="$(printf '%s\n' "$sb" | sed -n "${ri}p")"
+      R_SID="$(printf '%s\n' "$rl" | LC_ALL=C sed -n 's/.*claude[0-9]\{0,1\} --resume \([0-9a-f-]\{36\}\).*/\1/p')"
     fi
     if [ -n "$R_SID" ] && is_live_sid "$R_SID"; then
       R_SID=""; R_SRC=live-elsewhere; return 1     # resumed in another pane: this one is just an empty shell
     fi
     if [ -n "$R_SID" ]; then
-      R_LAUNCHER="$(printf '%s\n' "$sb" | LC_ALL=C sed -n 's/.*[[:space:]]\(claude[0-9]\{0,1\}\) --strict-mcp-config.*/\1/p' | tail -1)"
+      # A pinned resume line names its own launcher; the bare printed one defers to the last launch.
+      R_LAUNCHER="$(printf '%s\n' "$rl" | LC_ALL=C sed -n 's/.*\(claude[0-9]\) --resume .*/\1/p')"
+      [ -n "$R_LAUNCHER" ] || R_LAUNCHER="$(printf '%s\n' "$sb" | LC_ALL=C sed -n 's/.*[[:space:]]\(claude[0-9]\{0,1\}\) --strict-mcp-config.*/\1/p' | tail -1)"
       [ -n "$R_LAUNCHER" ] || R_LAUNCHER=claude
       R_STORE="$(store_for_launcher "$R_LAUNCHER" || true)"
       R_SRC=scrollback; return 0
     fi
   fi
-  [ -n "$cwd" ] || return 1
-  local best="" bestm=0 m
-  for store in $(printf '%s' "$STORES" | tr ':' ' '); do
-    d="$store/projects/$(slug "$cwd")"; [ -d "$d" ] || continue
-    for f in "$d"/*.jsonl; do
-      [ -f "$f" ] || continue
-      is_live_sid "$(basename "$f" .jsonl)" && continue
-      m="$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0)"
-      if [ "$m" -gt "$bestm" ]; then bestm="$m"; best="$f"; fi
-    done
-  done
-  [ -n "$best" ] || return 1
-  R_SID="$(basename "$best" .jsonl)"
-  store="${best%/projects/*}"; R_LAUNCHER="$(launcher_for_dir "$store")"; R_SRC=transcript
-  R_STORE="$store"   # this arm READ its store off disk — there is no derivation to get wrong
-  return 0
-}
-transcript_for() {  # <sid> → path or empty
-  local store d f
-  for store in $(printf '%s' "$STORES" | tr ':' ' '); do
-    for d in "$store"/projects/*/; do f="$d$1.jsonl"; [ -f "$f" ] && { echo "$f"; return 0; }; done
-  done
   return 1
+}
+transcript_in() {  # <store> <sid> → the path of projects/*/<sid>.jsonl in that store / rc 1
+  local d f
+  for d in "$1"/projects/*/; do f="$d$2.jsonl"; [ -f "$f" ] && { printf '%s' "$f"; return 0; }; done
+  return 1
+}
+settle() {  # after resolve() named R_SID → sets XPLANT R_TP; may move R_STORE + R_LAUNCHER
+  # The transplant gate runs against the store the ARM named first, exactly as before: a source
+  # store whose jsonl is gone but whose tombstone remains must still convict. Then the launcher is
+  # taken from the store that HOLDS the transcript, because a registry label, a launch line, and a
+  # watchdog line (which carries no account at all) can each name the wrong account — the default
+  # `claude` for a tertiary session cannot even find its transcript. When several stores hold the
+  # sid, every one is asked about a transplant before the first is taken: the successor's copy is
+  # what a STORES-order walk meets first, and its store holds no tombstone.
+  local s f x first="" firstf=""
+  XPLANT=""; R_TP=""
+  if [ -n "$R_STORE" ]; then
+    XPLANT="$(transplant_target_of "$R_SID" "$R_STORE" || true)"
+    [ -z "$XPLANT" ] || return 0
+    f="$(transcript_in "$R_STORE" "$R_SID")" && { R_TP="$f"; return 0; }
+  fi
+  for s in $(printf '%s' "$STORES" | tr ':' ' '); do
+    f="$(transcript_in "$s" "$R_SID")" || continue
+    x="$(transplant_target_of "$R_SID" "$s" || true)"
+    if [ -n "$x" ]; then XPLANT="$x"; R_STORE="$s"; R_TP="$f"; R_LAUNCHER="$(launcher_for_dir "$s")"; return 0; fi
+    [ -n "$first" ] || { first="$s"; firstf="$f"; }
+  done
+  [ -n "$first" ] || return 0
+  R_STORE="$first"; R_TP="$firstf"; R_LAUNCHER="$(launcher_for_dir "$first")"
 }
 death_of() {  # <sid> → "<cause>" from the crash log, or "-"
   [ -f "$CRASH" ] || { echo "-"; return; }
   local c; c="$(jq -r --arg s "$1" 'select(.sid==$s) | .cause' "$CRASH" 2>/dev/null | tail -1)"
   echo "${c:--}"
 }
-close_of() {  # <transcript> → yes | no | -   (the last "Good to close:" the session wrote)
-  [ -f "$1" ] || { echo "-"; return; }
-  local c; c="$(LC_ALL=C /usr/bin/grep -o 'Good to close: [a-z]*' "$1" 2>/dev/null | tail -1 | awk '{print $4}')"
-  echo "${c:--}"
+is_teammate() {  # <transcript> → 0 iff its records carry a non-empty "teamName" (an Agent Teams member)
+  # A bare-key match is unforgeable by content: any "teamName" quoted inside a message string is
+  # JSON-escaped (\"teamName\"), so only a real record key matches. Leads carry none (measured on
+  # c82dd5b9 and 6a000e4a; their member 210a2d21 carries it on every record).
+  [ -f "$1" ] && LC_ALL=C /usr/bin/grep -q '"teamName":"[^"]' "$1" 2>/dev/null
+}
+facts_of() {  # <transcript> → "<close>\t<cwd>"   close = yes|no|- from ASSISTANT text only; cwd = the last recorded
+  # One streaming pass, the house shape of lead-crash-watchdog.sh last_assistant_text. The grep it
+  # replaces matched the whole JSONL, so in a session that never wrote a close the last
+  # "Good to close:" was the CLAUDE.md attachment's own example — `no`, hence RESUME (root cause 7).
+  # BOUNDED by its own alarm: a transcript runs to hundreds of MB, and a cut read cannot vouch for
+  # the LAST close, so it reports "-" rather than an earlier one.
+  [ -f "$1" ] || { printf -- '-\t'; return; }
+  python3 - "$1" <<'PY' 2>/dev/null || printf -- '-\t'
+import json, os, re, signal, sys
+CLOSE = re.compile(r"Good to close: ([a-z]+)")
+CWD = re.compile(r'"cwd":"((?:[^"\\]|\\.)*)"')
+class Cut(Exception):
+    pass
+def on_alarm(*_):
+    raise Cut()
+close, cwd = "-", ""
+signal.signal(signal.SIGALRM, on_alarm)
+signal.alarm(int(os.environ.get("CC_HUSK_READ_TIMEOUT_S") or 30))
+try:
+    with open(sys.argv[1], "r", errors="replace") as fh:
+        for line in fh:
+            m = CWD.search(line)
+            if m:
+                try:
+                    cwd = json.loads('"' + m.group(1) + '"')
+                except Exception:
+                    pass
+            if '"assistant"' not in line or "Good to close:" not in line:
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            msg = rec.get("message") or {}
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("role") != "assistant" and rec.get("type") != "assistant":
+                continue
+            content = msg.get("content")
+            if isinstance(content, str):
+                texts = [content]
+            elif isinstance(content, list):
+                texts = [b.get("text") or "" for b in content if isinstance(b, dict) and b.get("type") == "text"]
+            else:
+                continue
+            for t in texts:
+                for v in CLOSE.findall(t):
+                    close = v
+except Cut:
+    close = "-"
+except Exception:
+    pass
+signal.alarm(0)
+sys.stdout.write("%s\t%s" % (close, cwd.replace("\t", " ").replace("\n", " ")))
+PY
 }
 work_of() {  # <cwd> → clean | dirty | unlanded:N | -   (git facts, never the session's word)
   local cwd="$1" dirty ahead
@@ -281,25 +407,43 @@ type_line() {  # <pane> <line> — echo-verified type + submit (handoff-fire's s
   "$IT2" session send -s "$pane" $'\r' >/dev/null 2>&1
 }
 
+# A pane list that failed is not an empty one. Reading it as "no husk panes", exit 0, told the
+# operator the fleet was clean exactly when the sweep could see nothing (root cause 8).
+PANES="$(panes_json)" || { echo "cc-husk-sweep: the pane list failed — cannot tell husks from no panes" >&2; exit 2; }
+printf '%s' "$PANES" | jq -e 'type == "array"' >/dev/null 2>&1 \
+  || { echo "cc-husk-sweep: the pane list is not a JSON array — cannot tell husks from no panes" >&2; exit 2; }
+
+# EVERY husk is resolved, --pane or not: DUPLICATE is a property of the whole set, and a --pane run
+# that looked at one pane would resume a sid a second pane also claims.
 rows=""
 while IFS=$'\t' read -r pane pid cwd; do
   [ -n "$pane" ] || continue
-  [ -z "$ONLY" ] || [ "$pane" = "$ONLY" ] || continue
   has_claude_under "$pid" && continue
-  resolve "$pane" "$cwd" || { rows="$rows$pane"$'\t'"-"$'\t'"-"$'\t'"-"$'\t'"-"$'\t'"-"$'\t'"UNKNOWN"$'\t'"$cwd"$'\t'"unresolved"$'\n'; continue; }
-  # THE TRANSPLANT GATE, on its OWN channel. Never a resolve() rc: the `|| { rows=…unresolved… }`
-  # arm on the line above collapses EVERY resolve failure into one literal row, which already
-  # throws R_SRC=live-elsewhere away and would erase both the sid and the target here too
-  # (memory: lookup-miss-is-not-absence). Line numbers are deliberately not cited: this very patch
-  # moved them (memory: insertions break line citations).
-  xplant=""
-  [ -z "$R_STORE" ] || xplant="$(transplant_target_of "$R_SID" "$R_STORE" || true)"
-  tp="$(transcript_for "$R_SID" || true)"
-  death="$(death_of "$R_SID")"; close="$(close_of "$tp")"; work="$(work_of "$R_CWD")"
+  # R_SRC rides into the row: live-elsewhere and read-failed are different facts from "nothing
+  # named a session", and collapsing them into one literal threw the reason away.
+  resolve "$pane" "$cwd" || { rows="$rows$pane"$'\t'"-"$'\t'"-"$'\t'"-"$'\t'"-"$'\t'"-"$'\t'"UNKNOWN"$'\t'"$cwd"$'\t'"${R_SRC:-unresolved}"$'\n'; continue; }
+  # THE TRANSPLANT GATE, on its OWN channel (settle sets XPLANT). Never a resolve() rc: the
+  # `|| { rows=… }` arm above turns every failure into an unresolved row and would erase both the
+  # sid and the target (memory: lookup-miss-is-not-absence).
+  settle
+  death="$(death_of "$R_SID")"
+  facts="$(facts_of "$R_TP")"; close="${facts%%$'\t'*}"; tcwd="${facts#*$'\t'}"
+  [ -z "$tcwd" ] || R_CWD="$tcwd"     # the session's own cwd, never the shell's
+  work="$(work_of "$R_CWD")"
   v="$(verdict_of "$close" "$work")"
-  [ -z "$xplant" ] || v="TRANSPLANTED→$(acct_for_dir "$xplant")"
+  [ -z "$XPLANT" ] || v="TRANSPLANTED→$(acct_for_dir "$XPLANT")"
+  ! is_teammate "$R_TP" || v=TEAMMATE
   rows="$rows$pane"$'\t'"$R_SID"$'\t'"$R_LAUNCHER"$'\t'"$death"$'\t'"$close"$'\t'"$work"$'\t'"$v"$'\t'"$R_CWD"$'\t'"$R_SRC"$'\n'
-done < <(panes_json | jq -r '.[] | [(.id // .uuid // ""), (.pid // 0), (.cwd // "")] | @tsv')
+done < <(printf '%s' "$PANES" | jq -r '.[] | [(.id // .uuid // ""), (.pid // 0), (.cwd // "")] | @tsv')
+
+# DUPLICATE: a sid two husks both claim. Applied before --pane narrows the output, and only over the
+# resumable verdicts — TEAMMATE and TRANSPLANTED already say "never" and say more.
+dups="$(printf '%s' "$rows" | awk -F'\t' '$2 != "-" { n[$2]++ } END { for (s in n) if (n[s] > 1) printf "%s ", s }')"
+rows="$(printf '%s' "$rows" | awk -F'\t' -v OFS='\t' -v dups="$dups" -v only="$ONLY" '
+  BEGIN { k = split(dups, a, " "); for (i = 1; i <= k; i++) d[a[i]] = 1 }
+  { if (($2 in d) && $7 !~ /^(TRANSPLANTED|TEAMMATE)/) $7 = "DUPLICATE"
+    if (only == "" || $1 == only) print }')"
+[ -z "$rows" ] || rows="$rows"$'\n'
 
 if [ -z "$rows" ]; then echo "cc-husk-sweep: no husk panes — every pane holds a claude, or none is enumerable"; exit 0; fi
 if [ "$JSON" = 1 ]; then
@@ -307,6 +451,11 @@ if [ "$JSON" = 1 ]; then
 else
   printf 'PANE\tSID\tLAUNCHER\tDEATH\tCLOSE\tWORK\tVERDICT\tSOURCE\tCWD\n'
   printf '%s' "$rows" | awk -F'\t' '{printf "%s\t%.8s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",$1,$2,$3,$4,$5,$6,$7,$9,$8}'
+  printf '%s' "$rows" | awk -F'\t' '
+    $7 == "TEAMMATE"  { t = t " " $1 }
+    $7 == "DUPLICATE" { d = d " " $1 }
+    END { if (t != "") print "TEAMMATE (panes" t "): a retired team member — never resumed; close the pane."
+          if (d != "") print "DUPLICATE (panes" d "): one sid, several panes — never resumed; at most one is right." }'
 fi
 [ "$MODE" = resume ] || exit 0
 
@@ -315,11 +464,12 @@ while IFS=$'\t' read -r pane sid launcher death close work v cwd _; do
   [ -n "$pane" ] && [ "$sid" != "-" ] || continue
   # --all means "the DONE ones too", never "the ones that MOVED". A TRANSPLANTED session is live
   # work in another account's store; typing its resume line into this dead source pane is the
-  # two-writers-one-transcript failure the gate above exists to prevent.
-  case "$v" in TRANSPLANTED*) continue ;; esac
+  # two-writers-one-transcript failure the gate above exists to prevent. DUPLICATE is the same
+  # failure from the other side, and a TEAMMATE belongs to its lead.
+  case "$v" in TRANSPLANTED*|DUPLICATE|TEAMMATE) continue ;; esac
   if [ "$ALL" = 1 ] || [ "$v" != DONE ]; then plan="$plan$pane"$'\t'"$sid"$'\t'"$launcher"$'\t'"$cwd"$'\n'; fi
 done <<<"$rows"
-[ -n "$plan" ] || { echo "cc-husk-sweep: nothing to resume (every resolved husk is DONE; --all resumes those too)"; exit 0; }
+[ -n "$plan" ] || { echo "cc-husk-sweep: nothing to resume (every resolved husk is DONE or never-resumable; --all resumes the DONE ones)"; exit 0; }
 echo; echo "Will type into each pane:  nocorrect CC_ACCOUNT_PINNED=1 <launcher> --resume <sid>"
 printf '%s' "$plan" | awk -F'\t' '{printf "  pane %s → %s --resume %s   (cwd %s)\n",$1,$3,$2,$4}'
 if [ "$YES" != 1 ]; then

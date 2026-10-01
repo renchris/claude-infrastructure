@@ -1451,7 +1451,21 @@ else:
     fi
     case "$verb" in
       focus) kt focus-window --match "id:$SESSION" || exit 1 ;;
-      read)  if [ "$ANSI" = 1 ]; then kt get-text --match "id:$SESSION" --ansi || exit 1
+      # `-n <N>` = the LAST N lines of the whole scrollback (husk-panes-2026-09-30 root cause 8).
+      # It used to fall into ARGS unread, so `get-text` returned only the visible screen and
+      # cc-husk-sweep's `-n 600` never reached a resume line that had scrolled off. Parsed HERE, not
+      # in the shared loop, so no other verb's ARGS (send/run text) can change meaning. Captured, not
+      # piped, so kitty's own rc still decides the exit. Without -n: unchanged.
+      read)  _rn=""; _ri=0
+             while [ "$_ri" -lt "${#ARGS[@]}" ]; do
+               [ "${ARGS[$_ri]}" = -n ] && _rn="${ARGS[$((_ri + 1))]:-}"; _ri=$((_ri + 1))
+             done
+             case "$_rn" in ''|*[!0-9]*) _rn="" ;; esac
+             if [ -n "$_rn" ]; then
+               if [ "$ANSI" = 1 ]; then _rt="$(kt get-text --match "id:$SESSION" --extent all --ansi)" || exit 1
+               else _rt="$(kt get-text --match "id:$SESSION" --extent all)" || exit 1; fi
+               printf '%s\n' "$_rt" | tail -n "$_rn"
+             elif [ "$ANSI" = 1 ]; then kt get-text --match "id:$SESSION" --ansi || exit 1
              else kt get-text --match "id:$SESSION" || exit 1; fi ;;
     esac
     ;;
