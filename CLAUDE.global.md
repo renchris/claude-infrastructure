@@ -336,7 +336,7 @@ task on failure).
 🚨 **The tools are gated behind `CLAUDE_CODE_ENABLE_TODO_TOOLS=1`** (measured A/B on 2026-09-08: with
 the env var set, `TaskCreate`/`TaskGet`/`TaskList`/`TaskUpdate` appear; unset in all five config dirs
 today, and the remote flag is absent from every GrowthBook cache, so the env var is the only lever).
-The flip is staged as migration `0022` (wave W1f) and is the operator's to run. **Until it lands, the
+The flip is staged as migration `0023` (wave W1f; it rides the c10 batch, `scripts/c10-batch.sh`) and is the operator's to run. **Until it lands, the
 plan document's own task table IS the list** — and their absence is never licence to hold the set in
 your head. Do not touch `CLAUDE_CODE_ENABLE_TASKS`: that one is a kill switch, not an enable.
 

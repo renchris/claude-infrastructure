@@ -37,6 +37,8 @@ set -uo pipefail
 | `# migration-verify:` | **always** | One command. Exit 0 ⇒ the effect **is live in the enforcing store**. Read by `scripts/registration-state.sh`; a migration without one is reported `unverifiable` and can never be reported live. |
 | `# migration-conflict:` | optional | One command. Exit 0 ⇒ a **different** value is set at the same key ⇒ `overridden`. Declare it only where a wrong value is genuinely possible. |
 | `# migration-subject:` | optional | Path to the arm itself. Absent from disk ⇒ `not-staged` (distinguishes "never written" from "written but nothing registered it"). |
+| `# migration-superseded-by:` | optional | Why this step will never run. The converge's settle sweep moves its staged marker to `superseded/` and closes its row; the c10 batch drops it. |
+| `# migration-batch-hold:` | `c10`, optional | `decision <cc-decide id>` — the c10 batch runs it only once that packet is `actioned`. `manual <reason>` — never batched (a TUI, a browser sign-in); its run line is printed instead. |
 
 ### The verifier is not optional, and it is not the runner's business
 
@@ -123,6 +125,21 @@ scripts/deploy-migrations.sh --selftest   # 22 cases, throwaway tree, no side ef
 
 The converger calls it with no arguments (materialise, then migrate) from
 `scripts/deploy-live.sh` after `install.sh`.
+
+### Running the staged c10 steps: one batch, not one paste each
+
+```
+bash scripts/c10-batch.sh --list                    # the step list, and why each candidate is in or out
+bash scripts/c10-batch.sh --check                   # full rehearsal in a scratch HOME; PASS/FAIL per step
+bash scripts/c10-batch.sh --confirm settings.json   # the operator's run: backs up, runs, verifies each step
+bash scripts/c10-batch.sh --verify                  # rc 0 iff every runnable step's effect is live
+bash scripts/c10-batch.sh --rollback <backup-dir>   # undo a --confirm run's settings changes
+```
+
+The step list is the staged ledger plus any un-ledgered c10 file, minus superseded, already-live and
+held steps. `0037` runs first and `0024` last; each step's own `migration-verify` must pass, and once
+0037 has run every account must still link to the shared file, or the batch stops and prints its
+rollback. It lives in `scripts/`, not here, because the converger runs every `migrations/*.sh`.
 
 ## What `docs/activation/pending-activation/` is still for
 
