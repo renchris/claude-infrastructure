@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: complete
 ---
 
 # Public repo hygiene — keep github.com/renchris/claude-infrastructure public, safely
@@ -157,6 +157,21 @@ than fall back to the PUBLIC slug when `_origin_slug()` returns None.
 
 Still open, operator-only: the `zeroxvee/claude-infrastructure` fork (public, with identifier hits at
 `44ed408`) and a GitHub Support purge of cached views of the old shas.
+
+### The pre-cutover copy — drafted, watched, the send is the operator's (2026-09-30)
+
+The copy is an independent push, not a GitHub fork, so nothing on this side can detach or redact
+it; it is the one exposure § Known constraints already calls unrecallable. Done: the owner e-mail,
+the DMCA form text and the Support cache-purge text are drafted in the private store
+(`docs/plans/public-presence/README.md` there), deliberately NOT here, because they list the old
+SHAs and paths and this file ships in the public projection. The send is operator step
+`a11a0b08ef8a`. The outcome is watched by `scripts/fork-takedown-watch.sh` (autonomy-sweep
+§2b-iii-f, weekly): 30 days after the recorded submission, if the copy still serves the old
+history, it pages with the DMCA as the next step.
+
+**Status: complete.** This plan's frozen scope, the public repo and its public history, is met. The
+copy's remainder is tracked where open work is read, in the backlog row and the arm, not in this
+file.
 
 ## Known constraints
 
