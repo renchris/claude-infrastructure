@@ -223,7 +223,7 @@ wedge_and_kill() {  # $1=pid $2=lstart $3=first tick — progress frozen, CPU 0 
   kill "$HOLDER2" 2>/dev/null || true
   [ "$(grep -c "restart after this watchdog's kill — not a crash" "$LR_RECON_ROOT/watchdog.log")" -eq 2 ]
   grep -q '^pid_changes=$' "$LR_RECON_ROOT/watchdog.state"
-  ! grep -q 'crash loop' "$PLOG"
+  ! grep -q 'crash loop' "$PLOG" || false
   [ "$(wc -l < "$PLOG" | tr -d ' ')" -eq 1 ]
   grep -q "watchdog killed 2 stalled holders within 10 min (now pid 999993)" "$PLOG"
 }
