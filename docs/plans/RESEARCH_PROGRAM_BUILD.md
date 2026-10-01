@@ -268,6 +268,11 @@ coverage table, keeping the kit's record formats (`scripts/research-kit/RECORDS.
     known_good as the probe and known_bad as its negative control, env `FIXTURE` as gate row 6 runs it).
     `probe-run.sh` is now a bash 3.2 shim. `cc-research-probe` 1..11 (red 11/11); `research-kit-probe` 1..10
     unchanged through the shim.
+  - Item 15 — `71a9643fd`: `docs/research/research-reference-class.jsonl` seeded with the 8 measured greenfield cases
+    (`evidence/internal/greenfield-cases.md:29-36`, median 1.5 research days); `cc-research reference-class
+    record|show|check` (`lib/cli_refclass.py`): `record` appends a certified program's stage 1–6 days per
+    `frame.json project_type`, once per certificate; `check` exits 1 and prints both figures when a typical total
+    exceeds 3× the type's median (§6.3), "uncalibrated" with no rows. `cc-research-refclass` 1..8 (red 8/8).
 - Locus inside the wave: T (six teammates, one worktree each: `rp-c-{core,records,probe,cert,jobs,close}`), lead
   inline only for the shared skeleton (`023d63d61`: `bin/cc-research`, `lib/cli.py` verb table, one module per
   teammate, cross-module contracts in `RECORDS.md`), B1's on-box step 2, merges and lands. Fired session
