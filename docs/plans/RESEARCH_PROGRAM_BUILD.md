@@ -242,6 +242,16 @@ coverage table, keeping the kit's record formats (`scripts/research-kit/RECORDS.
     runner `scripts/research-kit/jobs/research-job.sh`, five plists in `launchd/staged/` (install.sh would load
     anything in `launchd/`), c10 `migrations/0051-research-jobs.sh`; `tests/research-jobs.bats` 1..11, red 10/11
     on the skeleton (the 11th asserts `/bin/bash` is 3.2.57). Freshness re-validates a premise once, then carries it.
+  - Item 11 — `dd4fe7050`: `lib/cli_cert.py` verbs `slots`, `open-round`, `slot` (vendor, strategy and role looked
+    up in code; reruns capped by `CAPS`), `raters` (rater 1 non-Anthropic, three families; two-vendor default makes
+    rater 3 a fresh rater-1-vendor process), `check-round` (voids a responding-model mismatch, a wrong-vendor rater
+    or an integrity hit, exit 4; writes `matrix.json` in round.py's shape), `round`, `frame-critique`,
+    `rehearse frames|record` (≥ 20 trials, zero relay violations, cert read only, one trial outside every root; a
+    failed retest records "relay unstable", a third record is refused). `scripts/research-kit/workflows/
+    {round,frame-critique,rehearsal}.workflow.js` call only `cc-research` verbs; a trial's cwd is orchestrated, not
+    enforced (stated in the header). Rounds still close through `round.sh close`. `tests/cc-research-cert.bats`
+    1..17, red 17/17. A bare `node --check` rejects every Workflow script (top-level return/await), so the suite
+    compiles each body the way the runtime wraps it.
 - Locus inside the wave: T (six teammates, one worktree each: `rp-c-{core,records,probe,cert,jobs,close}`), lead
   inline only for the shared skeleton (`023d63d61`: `bin/cc-research`, `lib/cli.py` verb table, one module per
   teammate, cross-module contracts in `RECORDS.md`), B1's on-box step 2, merges and lands. Fired session
