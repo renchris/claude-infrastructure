@@ -18,6 +18,11 @@ setup() {
   export CC_RESUME_DEBT_DIR="$BATS_TEST_TMPDIR/debt"
   export CC_RESUME_DEBT_HOLD_S=0 CC_RESUME_DEBT_POLL_S=0 CC_RESUME_DEBT_GRACE_S=240
   export CC_RESUME_DEBT_WAIT_S=0 CC_RESUME_DEBT_NOW=1000
+  # settle's --wait is its one WALL-CLOCK deadline (CC_RESUME_DEBT_NOW pins only the state machine),
+  # and settle returns the moment the state decides — so a case that expects a DECIDED outcome gets a
+  # ceiling it can never meet on a healthy box. `--wait 5` read rc 3 (undecided) at load ~150, where
+  # one open→retrying→escalated walk took 12-28 s. The rc-3 control keeps its own short wait.
+  SETTLE_WAIT=300
   S="$BATS_TEST_TMPDIR/bin"; mkdir -p "$S"
   WT="$BATS_TEST_TMPDIR/wt"; mkdir -p "$WT"
   SID=11111111-2222-4333-8444-555555555555
@@ -73,7 +78,7 @@ lines() { [ -f "$1" ] && grep -c -- "$2" "$1" || echo 0; }
 @test "stranded debt relaunches in a new window with the SAME session id" {
   open_debt
   [ "$(custody_open)" = 1 ]
-  run "$BIN" settle --sid "$SID" --wait 5
+  run "$BIN" settle --sid "$SID" --wait "$SETTLE_WAIT"
   [ "$status" -eq 1 ] || { echo "$output"; false; }
   grep -qx "next3 $WT $SID SETTLING=1" "$T/relaunch.log"
   [ "$(jq -r .attempts "$CC_RESUME_DEBT_DIR/meta/$SID.json")" = 1 ]
@@ -81,7 +86,7 @@ lines() { [ -f "$1" ] && grep -c -- "$2" "$1" || echo 0; }
 
 @test "second failure files ONE backlog needs row with a runnable resume command" {
   open_debt
-  run "$BIN" settle --sid "$SID" --wait 5
+  run "$BIN" settle --sid "$SID" --wait "$SETTLE_WAIT"
   [ "$status" -eq 1 ]
   [ "$(state)" = escalated ]
   grep -q "^needs Resume stranded session $SID (wt, account next3) — lr-upgrade closed it and the relaunch failed (debt opened 1970-01-01T00:16:40Z)" "$T/backlog.log"
@@ -98,7 +103,7 @@ lines() { [ -f "$1" ] && grep -c -- "$2" "$1" || echo 0; }
 
 @test "a failed backlog call still pages, with the raw command, and records no id" {
   open_debt
-  BACKLOG_RC=1 run "$BIN" settle --sid "$SID" --wait 5
+  BACKLOG_RC=1 run "$BIN" settle --sid "$SID" --wait "$SETTLE_WAIT"
   [ "$status" -eq 1 ]
   [ "$(jq -r .backlog_id "$CC_RESUME_DEBT_DIR/meta/$SID.json")" = "" ]
   grep -q -- "run: bash $HOME/.claude/scripts/boot-resume-launch.sh" "$T/notify.log"
@@ -108,7 +113,7 @@ lines() { [ -f "$1" ] && grep -c -- "$2" "$1" || echo 0; }
 @test "relaunch rc≠0 escalates without waiting WAIT" {
   export CC_RESUME_DEBT_WAIT_S=100000
   open_debt
-  RELAUNCH_RC=9 run "$BIN" settle --sid "$SID" --wait 5
+  RELAUNCH_RC=9 run "$BIN" settle --sid "$SID" --wait "$SETTLE_WAIT"
   [ "$status" -eq 1 ]
   [ "$(state)" = escalated ]
   [ "$(jq -r .relaunch_rc "$CC_RESUME_DEBT_DIR/meta/$SID.json")" = 9 ]
@@ -125,7 +130,7 @@ lines() { [ -f "$1" ] && grep -c -- "$2" "$1" || echo 0; }
 
 @test "proof discharges: LIVE twice ⇒ proven, custody closed, escalated backlog row gets done" {
   open_debt
-  "$BIN" settle --sid "$SID" --wait 5 || true
+  "$BIN" settle --sid "$SID" --wait "$SETTLE_WAIT" || true
   [ "$(state)" = escalated ]
   [ "$(custody_open)" = 1 ]
   printf 'LIVE\n' > "$T/find.seq"
@@ -238,7 +243,7 @@ lines() { [ -f "$1" ] && grep -c -- "$2" "$1" || echo 0; }
   open_debt
   [ "$("$BIN" list --open --json | jq length)" = 1 ]
   [ "$("$BIN" list --escalated --json | jq length)" = 0 ]
-  "$BIN" settle --sid "$SID" --wait 5 || true
+  "$BIN" settle --sid "$SID" --wait "$SETTLE_WAIT" || true
   [ "$("$BIN" list --escalated --json | jq -r '.[0].sid')" = "$SID" ]
   "$BIN" list | grep -q "^$SID	escalated	1	abcdef012345	resume:$SID:1000\$"
 }
