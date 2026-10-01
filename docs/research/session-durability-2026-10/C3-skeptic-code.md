@@ -181,3 +181,144 @@ question it must be paired with a session-layer or resume candidate.
 | P1 | Cheap and now shown to raise the limit. Prevents the trigger only if it was EMFILE, which I put at about 50%. |
 | S1 | Needs `sample` gating to avoid false positives under the PRI 4 clamp. Its benefit is bounded by operator availability. |
 | S2 | Plausible, but the peer pile-up it targets is not demonstrated for this event. |
+
+---
+
+## Second pass (workflow rerun, 2026-10-01 15:10-15:25 CDT, same lens)
+
+This file already held the first pass above, committed in 55753e737. Worker rules forbid overwriting, so this section
+is appended. I made zero `kitten @` calls, sent no signals, and ran no experiments. Scratch files are in
+`/tmp/sd-c3skc2/`.
+
+### Answer
+
+**I agree with the first pass on every verdict. Two new live measurements change the picture.**
+1. **The signal clobber has already fired on today's kitty 48854, and its talk thread is still alive.** It has
+   unreaped zombie children, and the count is growing. That kills P1's planned live-adoption path
+   (`auto_reload_config` notifies kitty with SIGUSR1). It also means the SIGTERM step in the restart path is
+   already dead weight.
+2. **The broken-pipe trend just before the death argues against the EMFILE pile-up.** The main thread was
+   draining held peers up to 02:06:47 CDT.
+
+Recommended conviction: **45**.
+
+### New evidence, per claim (claim numbers as in the first pass)
+
+**Claim 1 (mechanism): STANDS.** Re-read:
+- `/tmp/kittysrc/kitty_child-monitor.c:1821-1826` (accept error returns false), `:2058` (`goto end`),
+  `:2082-2086` (`end:`).
+- `free_peer` closes each peer fd (`:1850`), which fits 56 fds at 12:02 CDT.
+- v0.49.2 and master: `/tmp/sd-c3-cm-0492.c` and `-master.c` both give `accept_peer` at 1995, `perror` at 1999,
+  `goto end` at 2260 (grep).
+- I found one more listener the thread accepts on: `talk_fd`, the single-instance socket (`:2020`). It is -1
+  unless kitty runs with `--single-instance`. `ps` shows that 48854 runs with no arguments.
+
+**Claim 2 (death window): WEAKENED; the first pass's 07:18Z upper bound holds.**
+- `log show ... --start '2026-10-01 01:50' --end '02:40' --predicate 'processID == 610'` (rc 0, 629 lines):
+  62 talk-thread lines; the last is `02:06:47.037 E kitty[610:2297] ... Broken pipe`.
+- The main thread then handled input at 02:17:19, 02:18:25 (notification request) and 02:29:42 (window ordered
+  front). No broken-pipe line followed any of them.
+
+**Claim 3 (held fds): STANDS, and it is wider than stated.** `read_from_peer` (`:1927-1931`) queues a message
+on EOF even when zero bytes were read. So the connect-then-close liveness probe (`handoff-fire.sh:1347-1365`) also
+holds a peer until the main thread answers.
+
+**Claim 4 (EMFILE): WEAKENED; about 45%.**
+- **The XNU reading is right** (fresh `curl` of `xnu/main`):
+  - `uipc_syscalls.c:519-541`: ECONNABORTED only for an empty queue on a listener with `SS_CANTRCVMORE` or
+    `SS_DRAINING`.
+  - `:543-549`: a pending `head->so_error`.
+  - `uipc_usrreq.c:262`: `uipc_abort` sets `so_error` on the aborted child, not on the listener. The only other
+    `unp_drop` caller is `:1115`, which serves datagram `unp_refs`.
+  - `:619-633`: a `falloc` failure drops the connection.
+  - So EMFILE remains the only errno the source permits.
+- **Today's fd budget** (measured): `lsof -n -P -p 48854` gives 67 numeric fds: 37 CHR, 18 PIPE, 10 REG, 2 unix,
+  highest fd 72. About 189 held peers would be needed to reach 256.
+- **The precondition is not supported.** Broken-pipe lines per minute (CDT), each one an abandoned peer the main
+  thread answered:
+  - 01:54-01:57: 10, 5, 11, 26.
+  - 02:02-02:06: 2, 3, 4, 1.
+  - So the main thread was answering, and few abandoned peers were waiting, right up to 02:06:47.
+  - EMFILE then needs about 190 new held connections after 02:06:47 and before death (at most 11.5 min).
+  - Nothing logged supplies them: there are no `handoffs.jsonl` rows from 07:00:32Z to 07:14:47Z (first pass), and
+    the 07:07-07:09Z probes number 15.
+  - `log show` of the kernel for 02:00-02:20 CDT with `kitty|file table|maxfiles|too many` shows only AMFI and
+    Safari lines.
+
+**Claim 5 (signal clobber): mechanism STANDS; the attribution and the "0 zombies now" datum are REFUTED by a
+live measurement.**
+- `ps -A -o ppid=,stat= | awk '$1==48854 && $2 ~ /^Z/' | wc -l` gave 1 at 15:13:39, 4 at 15:19:32 and 5 at
+  15:22:32 CDT, out of 40 children.
+- pid 71018 (start 13:50:57; the 18:50:57Z split for pane 40, which has no registry entry) stayed Z across
+  6 minutes of re-checks.
+- `reap_children` reaps every child with `waitpid(-1, WNOHANG)` (`:1579-1590`). A zombie that persists means
+  SIGCHLD went unprocessed.
+- The talk thread is alive: `netstat` shows the listener row only, and RC splits worked at 19:11:34Z.
+- So the clobber (`loop-utils.c:84`) fired on 48854 between the dossier's 0-zombie reading (about 14:05) and
+  15:13, with no talk-thread death. Cause UNMEASURED; the first pass's DiskCacheWrite path fits.
+
+**Claim 6 (staged build has no fix): STANDS.**
+- The `diff` headers in `docs/patches/*.patch` cover 20 files; none is `child-monitor.c` or `loop-utils.c`.
+- The staged `fast_data_types.so` is dated Sep 30 22:27.
+
+**Claim 7 (P1 feasible): WEAKENED on adoption.**
+- `auto_reload_config` (default 0.1, `kitty_options_definition.py:2928`) runs `kitten __watch_conf__ 48854 100`
+  (pid 50324, `ps`).
+- That kitten reloads by `unix.Kill(kitty_pid, unix.SIGUSR1)` (`tools/watch/api.go:223-224`, v0.48.2, `curl`).
+- SIGUSR1 is a handled signal (`child-monitor.c:121`, `:1537`). `handle_signal` writes only while
+  `signal_write_fd != -1` (`loop-utils.c:19`).
+- Given claim 5, **editing kitty.conf will not reach today's kitty.** P1 needs one of:
+  - a socket `kitten @ load-config` (`kitty.conf:23`), which the 2026-09-16 crash note (`kitty.conf:585-603`)
+    makes the operator wary of;
+  - the GUI reload;
+  - the next start.
+- Also, the watcher loads only when a window is created after the reload (`kitty_options_definition.py:2882-2883`,
+  `window.py:690-701`, `:749/:751`).
+
+**Claim 8 (cheap detection): WEAKENED (as in the first pass); one refinement.**
+- Re-measured: 0.010 s, 1 row.
+- `netstat -anv` has 23 columns. `options` = `00000002` (SO_ACCEPTCONN) marks the listener exactly, so S1 need not
+  rely on position.
+- Once 128 connections are queued, connects are refused at once (husk-panes-2026-09-30.md:88). A full backlog is a stronger
+  signature of a dead thread than "Recv-Q > 0 twice".
+
+**Claim 9 (low traffic): STANDS; two dossier facts corrected.**
+- The dossier's own `/tmp/sd-c3-pgrep.txt` shows pid 37698 in 6 polls and pid 50966 in 12. Both are
+  `kitten @ ... ls`.
+  - At the dossier's 817 polls in 120 s (about 0.147 s each), those calls lived about 0.9-1.8 s, not "about 0.1 s".
+  - The third pid, 52028, is the sampler's own `zsh -c`.
+- `reso-keepalive` "running, pid 217" is stale: `ps -p 217` is empty, and `~/.reso/keepalive.log` ends at
+  14:16:58 CDT.
+- No hook or statusline calls RC per turn. I parsed the hook commands from settings.json: 4 hook files mention
+  kitty, and the mention is a pattern or comment only. `statusline.sh:523` is a comment.
+
+**Claim 10 (inject_peer freeze): STANDS from source.**
+- `self_pipe(fds, false)` is a blocking pipe (`loop-utils.h:52-66`), read at `child-monitor.c:270-271`.
+- The pane menu is not a trigger: `kitty.conf:217-218` launches it without `--allow-remote-control`.
+
+### Fatal flaw
+
+None in the claims. Scope is unchanged: C3 gives no session survival for (a), (b) or (c).
+
+### Missed risks (new in this pass)
+
+1. **Today's kitty already ignores SIGTERM, SIGHUP and SIGUSR1** (claim 5).
+   - `kitty-restart-resume.py:253-261` SIGTERMs and then SIGKILLs after 10 s. Every restart is therefore a SIGKILL
+     with no atexit, which leaves a stale `/tmp/kitty-<pid>` socket.
+   - Zombies accumulate: 59 on 610 in 22 h, 5 on 48854 in under 2 h.
+   - Only P2's loop-utils backport, or 0.49.x, cures this. That makes P2, not P1, the load-bearing item.
+2. **P1's day-one claim depends on an RC call or a restart.** Neither the config edit nor "usable on day one"
+   holds by itself.
+3. **Someone was at the GUI 11 minutes after the death.** Kernel AMFI lines show `kitty-pane-menu-native` exec'd
+   at 02:02:13 and 02:18:20 CDT. That binary is the right-click probe, which version `96d1f5219` pops before its
+   `kitty @ ls`.
+   - The menu then failed silently (`return 3`, stderr to nowhere).
+   - So an S1 page at about 02:09 might have been seen. Who clicked is UNMEASURED.
+   - This softens first-pass missed risk 3 but does not remove it.
+4. **Normal `ls` latency is already 1-2 s at load 26** (claim 9). An S2 breaker that keys on latency, not
+   timeouts, would trip in normal operation.
+
+### Recommended conviction: 45
+
+P2 with the backport is now shown necessary, by the live zombies. P1's live adoption path is measured broken. The
+EMFILE precondition is contradicted by the pre-death broken-pipe trend. The detection items stay bounded by a human.

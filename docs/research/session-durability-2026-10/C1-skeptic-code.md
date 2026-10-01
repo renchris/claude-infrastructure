@@ -132,3 +132,96 @@ cheaply. It needs:
 - `focus-events on`;
 - `SetUserVar cc_host`;
 - a `pane-died` hook in place of `remain-on-exit`.
+
+---
+
+# Second pass (independent re-run, 2026-10-01 ~15:10-15:25 local)
+
+This file already existed (committed in 55753e737), so this pass is appended instead of overwriting it.
+Scope: read-only, apart from this append. Probes ran on private servers `-L sd-probe-skc1b` to `-skc1g`,
+using `sleep`/`sh`/`python3` as dummy processes. All were killed, and their socket files and the
+`/tmp/sd-skc1b/` scratch files (fetched sources, a binary `strings` dump) were deleted. I made no
+`kitten @` call and did not launch `claude`.
+
+## Answer (second pass)
+
+**No fatal flaw, but conviction should go down to 45.** I replicated the survival property again.
+Every source cite still checks out. Three things that both passes before this one missed carry more
+weight than the config defects already listed:
+
+1. **C1 removes the repo's chosen identity oracle.** Many gates use "kitty is my ancestor" as the
+   evidence of which pane a session owns. Under C1 that evidence is gone. Every hosted session pins
+   itself to the iTerm2 path, and the limit-recover reconciler can no longer bind a holder to a pane.
+   None of this is in the build list.
+2. **C1 compares tmux against dtach and kitty sessions, but never against the first-party session
+   layer that is already running on this box.** That layer is Claude Code 2.1.284's `claude daemon`
+   with `bg-pty-host` and `claude attach`.
+3. **A finished host leaks forever.** The only garbage collector on the box is structurally blind to
+   it.
+
+## Verdicts (second pass, own measurements)
+
+| # | Verdict | Evidence (command => output) |
+|---|---|---|
+| 1 survival | **stands** | `survive.py` on `-L sd-probe-skc1d`: after the pty master closed => `client waitpid (73782, 256)`, `clients after: (none)`, `pane pid 71095 alive: True pane_dead: 0`, `server ps: 71072 1 31 Ss`. Reattach => `has marker: True`. |
+| 2 no viewer stall | **stands, and the kitty side is now sourced** | A bare pty writer whose master is never read => `bytes written before block: 1024 writer state: Ss` (ptyblock.py). tmux `tty.c:220-240` discards output to a slow client. kitty v0.48.2 `child-monitor.c:1667` polls POLLIN on a pane only when `vt_parser_has_space_for_input`, and parsing runs on the **main** thread (`parse_input` `:488`, called from the main loop at `:1406`). So a starved kitty main thread does stop the reads and blocks claude's writes. The dossier left this as an open question. A live stall is still UNMEASURED. |
+| 3 PRI band | **weakened** | `ps` now => `94453 4` (the staged kdw4 kitty, not the main one), `48854 47`, `34` claude at `31`, tmux servers `31` with ppid 1. claude is already at 31, so only the RPC endpoint moves. tmux's PRI while the screen is locked is UNMEASURED. |
+| 4 accept errors | **stands** (as source) | tmux 3.6a `server.c:138` `listen(fd, 128)` and `:381-389`, exact. kitty `child-monitor.c:1821-1826` and `:2058` `goto end`, exact. kitty's `perror` goes to stderr, which is /dev/null. I found no `RLIMIT_NOFILE`/`setrlimit` in boss.py, main.py, child-monitor.c, data-types.c, child.c, launcher/main.c or cocoa_init.m (grep => 0 hits), and `launchctl limit maxfiles` => soft `256`. So EMFILE is a plausible kitty killer, and tmux survives exactly that error. UNMEASURED. The first pass's ENOMEM and correlated-failure caveats still apply. |
+| 5 teammate throw | **stands** | Binary (second definition of `FYt`): `if(jut()==="iterm2"){if(!CV(e))throw … 'not running inside iTerm2'…;if(!await yct(e))throw`. Exporting `ITERM_SESSION_ID` gets past `CV` only. `yct` then probes `it2`. In a private pane, `cc-in-kitty` => `plain-rc=1` and `INHERITED, not ours` (cik.sh), so the probe goes down the iTerm2 path. |
+| 6 auto picks tmux | **stands (moot)** | Binary: `d=a.TMUX` beside `function Eln(){return!!d}`. `HCt`: `if(n==="tmux"\|\|n==="iterm2")a=!1;else{…a=!s&&!i}`. |
+| 7 Shift+Enter | **stands** | `key_encoding.c:122` puts an ESC prefix only for ALT, `:125-126` Enter => `\x0d`, `:192` `SIMPLE("\r")`. `screen.c:1845-1854` only logs. `options/utils.py:1352` `when_focus_on`. The binary's `MQe` = `BVr`(`<u`) + `DWo`/`OWo`(`>1u`/`>5u`) + `MWo`(`>4;…`). A real claude newline is UNMEASURED. |
+| 8 passthrough | **stands; the scroll consequence is contested** | Not re-measured. The binary probes `tmux show -Av mouse` and `show -gv focus-events` with a bare `tmux`, which reaches the per-session server through `$TMUX`. When mouse is off, it prints `tmux detected · scroll with PgUp/PgDn · or add 'set -g mouse on' … for wheel scroll`. But `kitty.conf:113-115` and `:207-209` record that Claude "grabs the mouse", and E4 shows tmux mirroring `?1000h/?1006h`. The first pass's "wheel becomes arrow keys" risk is therefore unproven in both directions. |
+| 9 env trap | **stands** | Replicated: server born with `FOO_SKC=111`; `s2 ['FOO=111']`; with `-e` => `s3 ['FOO=333']`. |
+| 10 kitty sessions | **stands** | `session.py:652-692` (options), `window.py:2342` `as_launch_command`, `:2406-2434` `cmd_at_shell_startup`, `main.py:294-301`. All exact. |
+| 11 cost | **weakened** | Measured with history-limit 10000 and 12,000 lines of 150-column truecolor text => `history_size: 9059`, server RSS **38,064 KB**. An idle server was 3,664 KB. ESTIMATED as 38 MB x 32 ≈ 1.2 GB, not 310 MB. That is about 6% of claude's 20.7 GB, so it does not decide anything. |
+
+Count drift (`grep -rl` over bin scripts hooks lib): 43 files read `KITTY_WINDOW_ID` (the dossier says
+45). handoff-fire.sh has 30 `KITTY_WINDOW_ID` lines (matches the dossier) and 26 `kitty @` lines (the
+dossier says 33). The launch line the dossier cites at `cc-resume-layout.sh:257-264` is at `:266`.
+
+## Missed risks (new in this pass)
+
+1. **The identity oracle is inverted.** handoff-fire.sh's own header reads "THE ENV VAR IS A CLAIM, THE
+   PROCESS TREE IS THE EVIDENCE" (`:1995`). The gates:
+   - `pane_ownership` (`:2072-2088`) tests whether the kitty window's launched pid is in the caller's
+     ancestry. Under C1 it never is: claude's ancestors are the tmux server and then launchd.
+   - `pin_term_verdict_for_watcher` (`:1939-1951`) maps `cc-in-kitty` rc 1 to `CC_TERM=iterm2`. The
+     measured rc inside tmux is 1. So every hosted session's self-close and recycle take the iTerm2
+     transport, or get REFUSED as `not-mine`.
+   - lr_recon binds holders by walking the ppid chain to a kitty window root
+     (`observe_rows.py:288-298`). `_identity_match` (`evidence.py:132-141`) then requires
+     `kitty_pid`, `window_id` and `root_pid` to match. Limit recovery can no longer act in place.
+
+   52 non-test files both walk ancestry (`ppid|ancestr`) and mention kitty. The dossier names none of
+   `pane_ownership`, `lr_recon` or `it2-wrapper`. Consequence: phase 1 alone (host, viewer and
+   reattach) breaks recycle and self-close for every hosted session. Phasing therefore delivers no
+   partial value, and the estimate of 2-3 days / 1,500-2,500 LOC is low (ESTIMATED from the file
+   count).
+2. **The first-party alternative was never compared.** `ps` => `9780 ppid 1 … claude.exe daemon run
+   --origin transient`, with children `10027`/`10130` `claude bg-pty-host`. The binary has:
+   - `claude attach <id>`, `claude logs`, `claude stop`, and `detach (session keeps running)`;
+   - `--bg` with `--resume <id>`;
+   - `claude daemon install`, which installs the LaunchAgent `com.anthropic.claude-daemon`;
+   - an auto-respawn nudge: "Continue from where you left off. Note: this session was automatically
+     restarted after its process exited unexpectedly…";
+   - `ringSnapshot`/`decModeSnapshot`, i.e. replay on reattach.
+
+   The box already uses it: 16 `jobs/*/state.json` with `backend: daemon` across 4 config dirs (`ls -d ~/.claude*/jobs/*/state.json`). A
+   caution comes with it: `~/.claude-next/daemon.log` => `bg retire 03a7cd27: idle-prompt, idle 8h`.
+   C4 lists this as watch item H3. C1's claim that "variant (a) wins" was never tested against it.
+3. **Finished hosts leak, invisibly.** `remain-on-exit on` keeps the server after the pane command
+   exits (measured: `dead: 1 0`, and the session is still listed). Path (ii) also ends in
+   `exec zsh -i`. `cc-reaper` never touches tmux (`:551`, `GARBAGE_WL` `:713`). Its `orphan-zsh` arm
+   needs `parent==1` (`:918`, `:932`), but a pane's zsh is parented to the tmux server. Every ended
+   session therefore leaves a server and a shell that nothing ever collects.
+4. **Nothing in the design kills or detects a deaf kitty.** On 2026-10-01 kitty ignored SIGTERM and
+   needed SIGKILL. C1's "relaunch kitty plus `cc-reattach`" has no detector and no kill step. Whether
+   an agent may SIGKILL a kitty whose sessions would survive is a classifier question, UNMEASURED.
+5. **A causal inference, UNMEASURED.** kitty reaps children in the I/O thread (`reap_children`, in
+   `io_loop` on SIGCHLD). The 59 zombies therefore suggest that the I/O thread itself stalled. If so,
+   every pane's reads stopped, and every claude was blocked writing. That would favor C1 more than the
+   dossier argues.
+
+**Recommended conviction (second pass): 45.** The mechanism is sound and replicated for (a) and (b). The
+build is wider than counted, because it has to replace an identity oracle as well as an env variable.
+The vendor's own detachable layer is unexamined, and it could make most of this build unnecessary.

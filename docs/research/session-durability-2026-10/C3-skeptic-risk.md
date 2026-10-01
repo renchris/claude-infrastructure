@@ -143,3 +143,142 @@ The drop from 62 comes from four things:
 - P3 is not day-one.
 - S1's false-positive path and harmful action.
 - Restart-gated adoption.
+
+---
+
+# Second operator-risk pass (independent re-run, 2026-10-01 15:10-15:25 CDT)
+
+The workflow re-ran this skeptic step, and this path already held the first pass above (committed in 55753e737).
+I appended this pass instead of overwriting it. Read-only: zero `kitten @` calls, nothing signaled, nothing launched,
+and no tmux server started. The only scratch file is `/tmp/sd-c3r-log.txt`.
+
+## Answer
+
+**I agree with the first pass and go lower: recommended conviction 40 (the dossier says 62).** C3 is worth having as
+a narrow complement: P1 after a sandbox test, and P2 at a restart that is happening anyway. But three of its headline
+values fail the operator lens:
+
+1. **"S1 cuts 11 h 23 min to 1-2 min" mislabels the gap.** Detection already took about 1 minute. The 11 h went to
+   telling "dead" from "deaf", plus nobody being able to act. In addition, a netstat dead-socket detector that files
+   a "restart kitty" need went live in handoff-fire at 15:15:34 CDT today, so S1 would be a second detector that can
+   disagree with the first.
+2. **S2's breaker, as specified, sits under a measured rc contract and breaks it.** Its rc 124 means "may have acted"
+   for a call that certainly did not act. It will also be half-migrated for weeks: the code under it changes several
+   times an hour.
+3. **P1's prevention value depends on the errno being EMFILE, and the kitty log makes EMFILE less likely.** The new
+   bound is below.
+
+**No fatal flaw**, because C3 never claims survival. As an answer to the question (survive a crash, a restart or a
+reboot), it delivers nothing for any of the three events (dossier §4).
+
+## The scenario where C3 makes the next incident worse (adds to the first pass)
+
+S1 fires under the same condition that shuts the resume gate.
+
+1. The trigger condition is real and measured: screen locked, load 120-133 on 10 cores at 07:08-07:09Z
+   (recycle-unreachable-2026-10-01.md:11-12), which is 12-13 per core.
+2. S1 pages "restart kitty". Where does the page land?
+   - Rung 1 of `bin/cc-desk-page` is `cc-notify --role desk`, which types into a pane over the dead socket.
+   - Rung 2 is Notification Center only. `~/.config/lr-page/` does not exist (`ls` => No such file), so there is no
+     Pushover. In `idl.jsonl`, 13 of 14 `cc-desk-page` rows went to `notification-center` and 1 to `none`.
+   - kitty's own notifications are refused: `log show … processID == 610` at 02:18:26 CDT says "Notifications are not
+     allowed for this application".
+3. Suppose the operator acts. The restart lands at 12-13 load per core. `capacity-admit.sh:92` defaults to a ceiling
+   of 2.0 per core, and the recovery plan (`kitty-deadlock-recovery-2026-10-01.md:38`) records the result: "round 1
+   launched 10 and shed 22, and round 2 launched 0".
+   - So a restart run at the moment S1 fires restores no more than today's 8 of 32 until load falls.
+   - The admitted resumes then push load back up.
+4. Without C3, RC stays dead but the sessions keep working (the first pass counted 405 commits in the dead window).
+   With S1 and its "one restart command", a degraded fleet becomes a mostly dead one, at the worst hour.
+
+**The "one restart command" is unsafe to reuse as-is.**
+- `kitty-restart-supervisor.py:26-28` hardcodes `LEAD_SID` and `OLD_KITTY = 610`, and `:20` imports
+  `/tmp/kitty-restart-resume.py`, which a reboot wipes.
+- `:84` `if krr.alive(OLD_KITTY)`: after a reboot pid 610 is likely reissued to another process (pid 610 is free
+  right now: `ps -p 610` returns nothing). The supervisor would then report "kitty was not restarted; fleet untouched"
+  and open no recovery lead. This is the repo's own lesson "a stale pid is re-aimed, not defused"
+  (`.claude/rules/agent-operating-lessons-situational.md:121`).
+
+## Verdict per key claim (second pass)
+
+| # | Claim | Verdict | Evidence (this pass) |
+|---|---|---|---|
+| 1 | Only non-shutdown exit is `accept_peer()` false; v0.49.2 and master unchanged | **stands** | `/tmp/kitty-src-0482/child-monitor.c:1821-1826`. The listener is a default blocking Python socket (`boss.py:230-237`, no `setblocking`), so EAGAIN is not a path. |
+| 2 | Died 07:06:47Z-07:08Z; RC dead 11 h 23 min | **stands** (timing). I found a looser upper bound that is actually proven. | Main-thread tid is `15e6`: all 45 AppKit "order window front" lines in 01:50-02:20 CDT are on it (`/usr/bin/log show … processID == 610` => 617 lines). It ran Python at 02:18:25 CDT. `parse_input` runs every tick (`child-monitor.c:1406`) and answers every queued message (`:522-552`). So a live thread would have logged Broken pipe for the 9 probes that timed out at 07:08-07:09Z. There are none after 02:06:47 CDT. Therefore the thread was dead by about 07:08Z, and certainly by 07:18:25Z. |
+| 3 | Abandoned peers hold fds until the main thread answers | **stands** | Same `:522-552`; the first pass found no async RC users. |
+| 4 | Errno is EMFILE (about 75%) | **weakened** (more strongly than in the first pass) | Combine row 2 with the 07:06:47Z answer pass, which drains the message queue. EMFILE then needs about 190 new held peers inside roughly 1-11 min, which is at least 16/min and over 100/min if death was near 07:08Z. Measured rate at rest is 2-6/min; there was 1 handoff row and 0 pane-spawn rows in 07:01-07:13Z (first pass). No other "open files" error appears in those 617 lines (grep => 0), though stderr is /dev/null. If it is not EMFILE, P1 is a placebo that the operator would count as "deadlock prevented". |
+| 5 | Dying thread disables signals; fixed in v0.49.0 | **stands** | First pass. |
+| 6 | Staged build has no `accept_peer` fix | **stands, and adds a coupling** | `kitty-build-swap.sh:4-6, 11-23`: one bundle carries the title band, the upstream-defects patch and (under C3) P2. There is one yes/no, one swap "at a reboot the operator is already doing", and a rollback that is "the exact inverse". If the band disturbs the drag (the operator's top property), rolling it back removes P2 too. |
+| 7 | P1 is feasible without a patched build | **stands, with a one-shot cost** | `kitty_launch.py:524-534` caches the module per path, or `False` if loading fails, before `on_load` runs. A buggy first version cannot be retried without a kitty restart or a new file name. `kitty_window.py:697` keeps the old watchers. Inheritance is low-risk: Claude raises its own limit (`ulimit -n` in this session => 1048576), so only plain zsh panes see the 8192. |
+| 8 | A dead thread can be detected without touching the socket | **weakened** | Re-measured with `ps -M`: the non-frontmost staged kitty 94453 has all 7 threads at `4T`. The frontmost kitty 48854 has its main thread at 47T and the others at 31T. So a starved thread at PRI 4 is real. The netstat format still parses (12 ms). The same detector already shipped (see M1). |
+| 9 | Steady traffic is low; retries are the danger | **stands** | `it2-kitty:609-611`: a failed send-text sleeps, then `continue`s. |
+| 10 | ⌘⇧B freezes the main thread after the thread dies | **stands (source only)** | `kitty.conf:631` uses `--allow-remote-control`. |
+| E1 | S1 cuts detection to 1-2 min | **refuted as stated** | An agent measured the deaf socket at 07:08-07:09Z, about 1 min after death (recycle-unreachable:11). `kitty-pane-menu:926-945` already alerts when kitty is unreachable (a3555936b). `pane-close-retry.log` has 47 "unresponsive/timeout" lines between 08:51Z and 18:29Z. What was missing: the dead-vs-deaf diagnosis (the `sample` at 12:02 CDT, `/tmp/kitty-sample-2026-10-01.txt`), restart tooling (the `/tmp` scripts have mtimes 13:01-13:18 CDT), and a resume chain that restores everything. |
+| E2 | A "one restart command" exists for S1 to page | **refuted** | Hardcoded pid, SID and `/tmp` paths (see the scenario above). `kitty-restart-resume.py:227-240` also waits up to 4 h for in-flight landings before it signals. |
+
+## Missed risks (new in this pass)
+
+1. **M1. Two detectors, two thresholds, two restart prompts.**
+   - Commit e66bf5760 went live at 15:15:34 CDT (`git reflog`: fast-forward). `handoff-fire.sh:1404-1430` reads
+     `netstat` and calls a full queue (128, `CC_KITTY_WEDGED_QUEUE_N`) "STUCK".
+   - `:12437` then files the cc-backlog need "restart kitty (control socket stuck: queue full)".
+   - S1's trigger is any Recv-Q > 0 for 30 s. That is looser, and it is the one that can fire on a starved thread.
+   - The operator would get disagreeing verdicts. C3 should reuse `hf_kitty_queue_depth` and its threshold rather than
+     add a second detector.
+2. **M2. S2's rc 124 is the wrong outcome code.**
+   - In handoff-fire, 124 means "kitty may have CREATED the pane; never retry" (`handoff-fire.sh:14740-14746`).
+   - The adopt-probe that resolves that ambiguity is tri-state, and "CANNOT TELL" needs `kitty @ ls` (`:14762`), which
+     the open breaker also refuses.
+   - So a fire that certainly sent nothing is handled as "maybe launched" and aborted, not retried.
+   - With any other rc, `it2-kitty:609-611` retries a refusal that returns instantly, which makes a fast loop.
+   - The repo has measured precedent for this contract going wrong: "one fire launched two sessions while reporting
+     'Nothing was launched'" (`:14744`), and fire 4b0095d1ee73 (`:1034`).
+   - Fix: S2 needs its own rc and marker ("breaker-open: not sent"), with callers updated before the breaker can trip.
+3. **M3. A global 30 s breaker turns one slow but healthy call into a fleet-wide outage.**
+   - Launches legitimately outlast 10-15 s under load. That is why `HF_SPLIT_TIMEOUT_S` is the inner bound plus 30 s
+     (`:1038`).
+   - A bound that was too tight already refused "69 of 297 fires" (`:1034`).
+   - Fix: key the breaker per socket, and only on probe-class (`ls`) timeouts.
+4. **M4. The shim is a second thing that can jam, and nothing watches it.**
+   - A stale `deaf-until`, a slot left locked, or a parse bug would hold every recycle and self-close while kitty is
+     healthy. That is the same symptom as 2026-10-01.
+   - S1 watches kitty, not the shim, so the next diagnosis would start by suspecting kitty.
+5. **M5. Half-migration under heavy churn.**
+   - Measured: 46 production files make raw `kitty @`/`kitten @` calls (grep), and 36 reference a binary seam.
+   - 54 commits touched `handoff-fire.sh` or `it2-kitty` in 7 days (`git log --since=2026-09-24`).
+   - `handoff-fire.sh` grew by about 290 lines during this review (the 15:15 fast-forward). Every converge is live for
+     about 32 sessions.
+   - While migration is partial, the careful callers obey the breaker and the raw callers keep connecting. That is
+     the opposite of what S2 is for.
+6. **M6. The operator's own right-click menu.**
+   - `kitty.conf:217-218` runs `bin/kitty-pane-menu`, which uses socket RC.
+   - Outside S2, the menu bypasses the breaker. Inside S2, any agent's timeout disables it for 30 s, and an S1 dead flag
+     (including a false positive) disables it indefinitely.
+   - This is C3's only muscle-memory exposure, and the dossier does not scope it. C3 is otherwise clean on title bars,
+     drag, fullscreen, scrollback and copy/paste, and that is to its credit.
+7. **M7. P1/P2 widen a check-then-type race (derived from source; UNMEASURED live).**
+   - `it2-kitty:788-789` and `:836-837` read the pane and refuse to type into a permission modal, then send the text.
+   - A live talk thread with a deaf main thread can hold that send for minutes, so the check is stale when the
+     keystrokes land.
+   - `reso-keepalive:54`'s NUDGE ends in Enter.
+   - Today, thread death caps how long a send can be held. With P1 or P2, only PEER_LIMIT (256) caps it.
+8. **M8. P1's adoption path has a known hazard, and so does testing it.**
+   - The adoption path is the shared `config/kitty.conf`. Edits reach the live terminal within about 100 ms of a
+     converge (`config/kitty.conf:758-760`), and a reload once reverted the operator's zoom "every one to three
+     minutes, all day" (`:1170-1177`).
+   - The kdw4 sandbox reads its own `/tmp/kdw4/config/kitty.conf` (measured from the `__watch_conf__` args). But the
+     watcher only loads when a window is created, so a test needs either a mutating RC call on the operator's sandbox
+     or a GUI kitty launch, and the screen is shared with the operator.
+9. **M9. Quota.** S1 asks for a restart, and a restart means a mass resume. That is about 32 cold-cache resumes plus a
+   nudge turn each, roughly 3-6 M cache-write tokens (ESTIMATED: 32 sessions × 100-200 k context; UNMEASURED). C3
+   has no pacing of its own.
+
+## Recommended conviction: 40
+
+| Part | Recommendation |
+|---|---|
+| Order | C2 (a restore that brings back 32 of 32 under a realistic ceiling) before any C3 piece that can prompt a restart. |
+| P1 | Ship it as a drop-in with a new file name per attempt, after one sandbox test. Label it "only if EMFILE". |
+| S1 | Diagnosis only. Reuse `hf_kitty_queue_depth`, gate on `sample` showing no `KittyPeerMon`, use an expiring flag, and never prescribe a restart while load per core is above the restore ceiling. |
+| S2 | Defer until its rc contract is pinned in the handoff-fire and it2-kitty bats. It must be per socket, keyed on probe timeouts, and exclude the operator's menu. |
+| P2, P3 | Only at a restart that is already happening. Offer P2 in a build without the title band, so the two decisions are separate. |

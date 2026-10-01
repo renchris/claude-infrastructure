@@ -134,3 +134,120 @@ Low risk (measured): non-Claude panes. The process tree under kitty 48854 has 36
 - **Experiments:** no tmux experiment.
 - **Writes:** none outside this file and the scratch files `/tmp/sd-c2skep-{ends.txt,ps.txt,kls.json,kls.err}`.
 - **Deviation:** I checked 5 pids once with `kill -0`, a null signal that delivers nothing, before switching to `ps -o … -p`. No process was signaled, killed or typed into.
+
+---
+
+# Second pass, operator-risk lens (re-run 2026-10-01, about 15:10 to 15:25)
+
+This section is appended because the file already existed and was committed in 55753e737. The first pass above is left unchanged. Every number below was re-measured in this pass. Labels: **measured** (command or file named), **estimated** (method named), UNMEASURED.
+
+## Answer first
+
+**I uphold the first pass's scoped fatal flaw and lower conviction to 50.** Since 14:25 the live fleet has supplied new evidence, and it adds four ways C2 as written would make the next incident worse:
+
+1. **It brings sessions back onto accounts that cannot run a turn, then nudges them anyway.** At 20:16Z, all 12 next4 sessions that received the recovery prompt answered only "You've hit your weekly limit · resets Oct 4". The next3 account hit the same limit at 19:59Z and 20:14Z. Those two accounts hold 27 of the 32 roster sessions. C2's §2.5 changes nothing about the account, and its nudge has no headroom gate.
+2. **The nudge mostly costs and rarely recovers anything.** When the stale prompts were finally submitted into 28 sessions, the next 10 minutes cost 6.8M cache-write tokens. 14 of the 18 sessions that could run a turn replied "nothing was pending". Even the sessions in the dossier's own 10-session oracle mostly had nothing to do.
+3. **Whatever the restore leaves behind becomes manual work for the operator.** The classifier denied the agent's repair. The operator had to run a script 1 h 47 min after the kill, and 3 resurrected duplicates are still alive.
+4. **C2's tests can kill the live kitty.** The build adds tests for a script whose core action is SIGKILL of the main kitty. postland-verify runs every test file unattended with the real `$HOME`. A boot-resume test reached the live kitty until 14:20 today.
+
+Separately, main already ships a retire filter that rules the opposite way on recycles, so C2's resurrection fix collides with a landed, mutant-pinned decision.
+
+## Verdicts on the key claims (re-measured this pass)
+
+| # | Claim | Verdict | Evidence |
+|---|---|---|---|
+| 1 | Refused at 2.05/core; the tail of 22 was shed | stands | idl.jsonl: first `ceiling 2.0/core` refusal at 18:33:53Z, "= 2.05/core" (python over `grep '2026-10-01T18:3'`). |
+| 2 | "8 of 32" = 10 launched − 2 self-retired | stands, but the evidence is perishable | 40ebc527's marker is still on disk: `mode terminal`, ts 18:33:39Z (jq). **16798199's marker is gone** (`ls ~/.claude/watchdog/teardown/16798199*` finds no match), so a later reboot restore could not see that this session retired. |
+| 3 | 5 resurrections; 4 still alive | stands, and the harm continued | At about 15:17, registry rows 13, 14 and 15 had live pids (`ps -o etime=` → 01:39:55, 01:39:42 and 01:39:29). The pid in row 12 is dead. The 20:16Z cleanup woke all 3: 3a06361f hit the weekly limit, and 40ebc527 spent a turn to say "Nothing was pending". |
+| 4 | 1 of 31 prompts landed; text and CR in one write do not submit | stands; the mechanism is now proven | 33 transcripts now hold the prompt. 28 of them were submitted between 20:16:04Z and 20:17:28Z, about 3 s apart (python scan of `~/.claude*/projects`). The cause was the operator's `/tmp/submit-recovery-prompts.sh`, which sends a bare CR (backlog 13327f1e9be7 evidence: "28 submitted, verified by re-read"). The prompts had sat in the composers for 2 h 26 min. |
+| 5 | Fullscreen: 12 `nomatch`, 8 `rc=0` | stands | `grep -c 'read back: nomatch' state/last-layout.txt` → 12; `grep -c 'fullscreen os-window.*rc=0' finish.log` → 8. |
+| 6 | Tombstones: 19 of 32 | weakened | Count with `endedAt` in [1790879360, 1790879400]: **18** of 32, plus 1 written later (python over `shutdown-tombstones/`). The conclusion, that a heartbeat roster is needed, stands. |
+| 7 | WAKE-LOST must be calibrated to the 10-session native oracle | weakened | The oracle is a poor proxy for "needs recovery". 5 of its 10 could run a turn at 20:16Z, and 3 of those (aee9bc26, f4c84c9d, 16798199) replied that nothing was pending. 3 more were on next4 and hit the limit. Caveat: the prompt landed 2.75 h late. |
+| 8 | 3 keepalives and 5 pages | stands | keepalive.log: 3 "started" lines (13:34:05, 13:37:20, 13:44:51). `ls state/undelivered-*.page \| wc -l` → 5. |
+| 9 | At 6/core, 25 of 25 admitted, peak 3.28 | stands | Peak `= 3.28/core` in the 18:4x rows (`grep 'ceiling 6/core'`). As the code skeptic noted, the ceiling never bound. |
+| 10 | The `.start` bug is live | stands | `cat ~/.claude/autonomy/reboot-2026-10-01.start` → `1790878061` / `1790878061 kalloc1024_gb=1.12`. |
+
+## Fatal flaw (scoped, upheld)
+
+The zero-command crash trigger cannot tell a crash from a deliberate quit. I confirmed the preconditions:
+- `cat ~/.claude/autonomy/boot-resume/mode` → `resume`.
+- The plist has RunAtLoad and StartInterval 300 (`plutil -p`).
+- `confirm_os_window_close -1` (kitty.conf:964).
+- §2.1 steps 3 and 4 require no crash evidence.
+
+One addition: **the dossier names no off switch for the trigger.**
+- The only documented posture switch is `mode` (boot-resume.sh:211-215; activation snippet). §2.1 adds step 0 "ahead of the per-boot early exit" without saying whether it reads `mode`.
+- There is no `cc-restore --abort`.
+- Killing a running restore leaves no `events/K.done`, so the next 300 s tick starts the restore again.
+
+This is fatal to the trigger as specified, not to C2.
+
+## New scenarios where adopting C2 makes the next incident worse (all missed by the dossier)
+
+1. **Restore onto exhausted accounts, then nudge into the wall.**
+   - Measured: next4 (`.claude-quaternary`, `account-map.generated.sh:47`) answered 12 of 12 prompts at 20:16Z with "You've hit your weekly limit · resets Oct 4 at 4am". Its first weekly-limit reply today was 20:14:01Z. next3 (`:48`) hit the same limit at 19:59:04Z and 20:14:26Z. The roster splits 14 next4, 13 next3 and 5 next.
+   - A session that cannot take a turn cannot run `/limit-recover` either, so the nudge's own escape (`handoff auto`, limit-recover.md:285-305, :442-458) never fires from inside it.
+   - What did follow was outside churn. Pane 11 (5fb8968b, next3) hit the limit at 20:14:26Z after a single CR. A recycle of pane 11 began at 20:15:26Z and was "recycled in place" by 20:16:12Z (handoffs.jsonl). Who started it is UNMEASURED.
+   - Fix: check `claude-accounts` headroom before each launch and before each nudge. Resume an exhausted account's sessions without a nudge, and page them as a group naming the transplant command.
+2. **The nudge's measured return is low and its cost is high.**
+   - For the 28 sessions submitted at 20:16Z, I deduplicated usage by `message.id` over the next 10 min: 92 API calls, **6.8M cache-creation tokens** and 30.8M cache-read tokens. The first call's cold write had a median of 371k tokens (max 838k, n=16).
+   - Of the 18 sessions that could run, 14 replied "nothing pending", "complete" or "nothing in flight". One of them, 4fff2538, replied "PARKED", so a parked session was woken, which is what the 08-24 ruling forbids.
+   - Estimated for C2: about 10 targeted nudges × 371k ≈ 3.7M cold-write tokens per event (the measured median times C2's ~10 targets). Today, under half of that would have bought any recovery.
+   - Fix: never nudge AT-REST sessions on the transcript alone. Nudge only on direct evidence that work is open (a live workflow journal, an unclosed Monitor), and default to a page listing what each session lost.
+3. **Leftovers from the restore land on the operator, because agents are refused.**
+   - Measured classifier outcomes in transcripts:
+     - The lead's compile plus `--dry-run` of the supervisor was **denied** at 18:19:36Z ("judged this action dangerous").
+     - Its loop to submit the stuck prompts was **denied** at 19:13:40Z ([Remote Shell Writes]).
+     - `cc-pane-close` was **denied** at 16:40:09Z.
+     - A single `kitten @ send-text --match id:11 '\r'` by 7aaa93ea was **allowed** at 20:14:21Z.
+   - The classifier is therefore both restrictive and inconsistent. In the end the operator ran the cleanup script by hand at about 15:16, and the 3 duplicates are still alive.
+   - Every C2 fallback ends in a page that only the operator can act on: `nudge-unconfirmed`, rows held as rc 5, shed at the deadline, a fullscreen read-back mismatch. That is the "list of manual steps" the operator refuses.
+4. **The C2 test suite can kill the fleet unattended.**
+   - `cc-restore`'s core action is SIGTERM then SIGKILL of the main kitty, which it finds through `ps` (kitty-restart-resume.py:94-100, 253-261). The dossier adds `cc-restore.bats` but specifies no seam for `ps` or the kill, and no guard against running under bats.
+   - postland-verify runs every test file after lands with the real home (`env -i HOME=$HOME …`, postland-verify.sh:235). `tests/boot-resume.bats` sets no `HOME` (`grep -c 'HOME='` → 0).
+   - The precedent is from today. Commit 1deb094d2 (14:20) says a boot-resume test with unset seams "resolved the repo's real cc-resume-layout.sh (which drives the live kitty) and /usr/bin/open, and read the operator's real roster".
+   - One missed seam in `cc-restore.bats` would kill 32 sessions from a launchd job, with no operator present.
+   - Fix: `cc-restore` refuses to signal unless it gets a `--confirm` token and a pid that matches `ps`, and it refuses outright when `BATS_TEST_FILENAME` is set.
+5. **The retire filter collides with what main already ships.**
+   - Main landed ba04df7b3 at 13:57, which this branch lacks (`git merge-base --is-ancestor` → not in branch). It skips `terminal|successor` markers and states "`recycle` is not a retirement", pinned by the mutant test "recycle counts as retirement: not ok 8".
+   - C2's §2.2 rules the opposite way, and change-list item 5 targets lines that main has already rewritten.
+   - Under main's rule, 3a06361f (marker `mode: recycle`, 18:36:16Z) is still resurrected beside its successor. Under C2's rule, a recycle cut off mid-flight is dropped (first pass, item 4).
+   - The dossier's "fixes all six" therefore does not hold against the live code. Whichever rule is chosen, the operator keeps one of those two failures.
+6. **It ships without a rehearsal.**
+   - The build plan's "live dry-run on a private kitty" is the kind of action the classifier refused at 18:19:36Z, even for a dry run.
+   - Main is also moving under the same files: 4 commits ahead, 2 of them on boot-resume (`git log HEAD..main`).
+   - Estimated outcome: C2's first full end-to-end run is the next real incident, as today's was.
+7. **Old watchdogs write onto the new kitty's panes.**
+   - Measured: the watchdog for dead session bf6674d6 painted "✅ CLOSED CLEANLY … safe to close this pane (Ctrl-D)", plus an OSC-2 title, onto ttys000 at 13:30:35 (lead-crash-watchdog.log line 54963).
+   - ttys000 is new kitty 48854's first window: `ps -t ttys000` → `-zsh`, started 13:29:45, parent 48854. The paint rule writes to any tty that has fallen back to a shell (lead-crash-watchdog.sh:1276-1281, 1482-1499).
+   - C2 relaunches sooner (a start gate of 0 s for a restart), and its panes fall back to `exec zsh -i` when a session exits (cc-resume-layout.sh:266). The window in which a stale "safe to close" lands on a live pane therefore grows. Low severity, since it writes output only.
+8. **The restore takes over the screen and resets the operator's spatial map.**
+   - Every launch omits `--keep-focus` (cc-resume-layout.sh:259-266). kitty's default is to switch to the new window (`/tmp/kittysrc/kitty_launch.py:129-132`).
+   - §2.4 moves the Space-switching `toggle_fullscreen` into the launch loop, so focus jumps are spread across the whole 7 to 10 minutes instead of arriving in one burst. Whether keystrokes the operator types meanwhile land in a resumed composer is UNMEASURED.
+   - The roster carries no OS-window or position fields. Measured keys: `account, cwd, kitty_listen_on, kitty_pid, lstart, name, paneUUID, pid, session_id, startedAt, surface`. Every restore therefore re-packs Desktops by project with first-fit decreasing (cc-resume-layout.sh:192-227), and the operator's old map of which session sits on which Desktop is lost.
+   - The lead's addendum (C2-addendum-lead-findings.md:12-15) says the layout preference is now one row per window, which C2's 2x2 code does not follow.
+
+**Non-finding (for balance, measured):** today's SIGKILL left no git damage. `find ~/Development/*/.git -maxdepth 3` for `index.lock`, `rebase-*` or `MERGE_HEAD` modified between 13:20 and 13:40 returned nothing.
+
+## Recommended conviction
+
+**50**, down from the dossier's 70 and the first pass's 55.
+- C2 is still the only candidate that covers reboot. Its forensics hold: 8 of 10 claims stand, and 2 are weakened.
+- But four of its six "fixes" now carry measured counter-evidence:
+  - the retire filter conflicts with main;
+  - the nudge has low precision and lands on exhausted accounts;
+  - the keepalive and nudge leftovers need the operator by hand;
+  - the trigger has no off switch.
+- The build also adds a new way to kill the fleet: unseamed tests run under postland-verify.
+- Fixes that would earn back 60 to 65:
+  - a headroom gate on launches and nudges;
+  - a page by default instead of a nudge;
+  - a hard bats guard on `cc-restore`;
+  - reconciling with ba04df7b3 first;
+  - opt-in triggers with a documented off switch and an abort command.
+
+## Probes and deviations (second pass)
+
+- 0 of the 3 allowed `kitten @` calls; no tmux server; no process signaled.
+- Reads only: `ps`, transcripts, logs, git and the local kitty source copy. No scratch files.
+- **Deviation:** the brief asked me to write this path with the Write tool. The file already existed and was committed, so I appended this section with Edit instead of overwriting the first pass.

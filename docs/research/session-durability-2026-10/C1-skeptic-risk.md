@@ -1,162 +1,169 @@
-# C1 skeptic review: operator risk
+# C1 skeptic review: operator risk (second pass)
 
-Skeptic pass on `C1-session-layer.md` (tmux host per session, kitty as a restartable viewer). Lens: what
-adopting C1 costs or breaks for the operator, and the scenario where it makes the next incident worse.
-Read-only. Experiments ran only on private tmux servers `-L sd-probe-skeptic{,2,3}` with dummy
-processes; all three were killed and their socket files removed. **0 of 3** allowed `kitten @ ls`
-calls were used. `claude` was never launched. Upstream sources were fetched to `/tmp/sd-skeptic-risk/`.
+This is a skeptic pass on `C1-session-layer.md`: a tmux host per session, with kitty as a viewer that
+can be restarted. The lens is what C1 costs or breaks for the operator, and the scenario where it
+makes the next incident worse.
+
+This pass rewrites the first one in place. The first pass is recoverable with `git show
+55753e737:docs/research/session-durability-2026-10/C1-skeptic-risk.md`. I re-checked every
+load-bearing line it cited and kept, weakened or dropped each claim on that basis.
+
+Conditions of this pass:
+- Read-only apart from this file.
+- Probes ran only on private servers `tmux -L sd-probe-c1risk` and `-L sd-probe-c1risk2`, with
+  `sh`/`bash`/`sleep` as dummy processes. Both servers are dead and their sockets removed.
+- The `sd-probe-c5` socket belongs to another agent and was left untouched.
+- **0 of 3** allowed `kitten @ ls` calls were used. `claude` was never launched.
 
 ## Answer
 
-**The survival mechanism is real, but C1 as designed and phased makes the next kitty incident worse
-before it makes it better.** Three things drive that:
+**The survival property is real, but C1 as designed and phased makes the next kitty incident worse
+before it makes anything better.** Phase 1 alone has negative value.
 
-1. **It has no safe halfway state.** C1 breaks three facts the repo's protective tools rely on:
-   - claude runs under its kitty pane;
-   - a registry id appears in kitty's pane list;
-   - `KITTY_*` env names the live kitty.
+The first pass said hosted sessions lose their control plane *after a kitty restart*. It is worse:
+they lose it **on day one**. Measured inside a private tmux pane, with kitty 48854 alive and
+healthy, `it2-kitty session list` exits **3** ("refusing to drive kitty from a pane that is not
+kitty's"), because `cc-in-kitty` fails by ancestry (`bin/it2-kitty:230-238`). About 63 lines of
+handoff-fire go through `it2`/`it2-kitty`, against 8 direct `kitty @` calls (grep counts).
 
-   The first phase that puts a live session in a host breaks all three. The dossier ships the
-   identity migration last (phase 3). Until then, the first "free" kitty restart leaves every
-   surviving session with a dead control plane. It also leaves sessions that cc-sessions hides at
-   once and deletes from the registry after 24 h.
-2. **It adds failure modes that kill sessions instead of deafening a socket.** tmux turns an
-   unhandled `accept()` errno into `exit(1)`, which takes the session down. Dead servers also leave
-   socket files behind (measured), and the start-or-attach host turns a stale socket into a new
-   launch.
-3. **Some ergonomics are lost on day one with no designed replacement.** Kitty's scrollback, search
-   and pager go blank: tmux puts kitty on the alternate screen (measured). ⌘W silently becomes
-   "detach" and stops ending the session.
+The same session is also:
+- hidden by cc-sessions;
+- unbindable by the limit-recover reconciler;
+- warned about wrongly by the ⌘W dialog.
 
-**Fatal flaw:** none that cannot be engineered away. **Recommended conviction: 35** (dossier: 55).
-The drop comes from the zero-value-until-complete migration, an irreversible rollback, and the
-measured contradictions below. Survival under (a) and (b) is not in dispute.
+**Fatal flaw: none.** A single cutover could engineer each defect away. The dossier's own plan,
+though, phases the cutover (C1:239-246), and phasing is where the operator gets hurt.
 
-## Verdicts on the dossier's claims
+**Recommended conviction: 38** (dossier 55, code skeptic 48, first risk pass 35). I raised the
+first pass's 35 because I checked four of its claims and they do not hold as stated: husk-sweep
+resume runs only by hand, the shutdown concern partly fails a measurement, rollback is a drain
+rather than impossible, and the `%N` kill is moot. I lowered the dossier's 55 because day-one
+control-plane loss and limit-recovery blindness are measured or read directly from code.
+
+## Verdicts on the dossier's key claims
 
 | # | Claim | Verdict | Evidence |
 |---|---|---|---|
-| 1 | Pane survives client SIGKILL and pty close; reattach redraws | **stands** | Dossier E1 (measured). Nothing here contradicts it. Caveat: survival now depends on the tmux server's own health (see #4). |
-| 2 | A viewer that stops reading cannot stall claude | **stands** | Dossier E1. Its benefit is conditional: the dossier itself marks "does kitty stop reading ptys at PRI 4" UNMEASURED (C1:53-54). |
-| 3 | The control plane leaves kitty's PRI-4 band | **stands** | Dossier E2 ps readings. Showing a pane (launch viewer, fullscreen, move) still needs kitty's socket (C1:199-201). |
-| 4 | tmux recovers from EMFILE and ECONNABORTED; one server per session bounds a fatal accept to one session | **weakened** | Fetched tmux 3.6a `server.c:380-389`: only EAGAIN, EINTR and ECONNABORTED are skipped, and ENFILE/EMFILE back off; anything else calls `fatal()`. `log.c:140-152`: `fatal()` calls `exit(1)`. `man 2 accept` (this box) lists **ENOMEM**, which is unhandled. Under kitty the same class of error deafened the socket and the sessions lived (husk-panes-2026-09-30.md:91). Under C1 it kills the session. The one-per-session isolation holds only for independent faults: a systemic cause (memory pressure) hits every server that accepts during the episode, and censuses, readbacks and `list-clients` identity lookups (C1:193-194) connect to all 32. ENOMEM on this box is UNMEASURED. Kitty's errno is unknown. |
-| 5 | As configured, tmux breaks teammate spawning with a thrown error | **stands** | Dossier E3. |
-| 6 | Auto mode plus `$TMUX` selects TmuxBackend and disables in-process teammates | **stands** | Dossier E3. |
-| 7 | One kitty `map` line makes Shift+Enter work | **stands (mechanism); risk understated** | The map is keyed on `--when-focus-on var:cc_host`, so every viewer launch path must pass `--var cc_host` (cc-reattach, it2 split, hand-opened windows, ⌘D). A viewer opened any other way silently **submits** a half-written prompt. Behavior with a real Claude is UNMEASURED (C1:123-124). |
-| 8 | OSC title, OSC 52, paste, mouse and sync pass through | **stands** | Dossier E4 (measured). OSC 52 emitted while detached is dropped. |
-| 9 | Pane env is frozen at server start, so kitty identity goes stale after a restart | **stands; understated** | It is not only `KITTY_WINDOW_ID`. Frozen `KITTY_LISTEN_ON` names the dead kitty's socket. Three code paths turn that into a dead control plane (see the next three rows). Net: every surviving session's recycle, self-close and viewer launch fails until phase 3 lands. |
-| 9a | it2-kitty uses the inherited socket | **(sub-finding)** | `bin/it2-kitty:375`: `sock="${CC_TERM_KITTY_TO:-${KITTY_LISTEN_ON:-}}"`. |
-| 9b | handoff-fire never probes for a live socket | **(sub-finding)** | handoff-fire's live-socket probe runs only when `KITTY_WINDOW_ID` is empty (`handoff-fire.sh:1234`). |
-| 9c | cc-kitty-socket returns the dead socket | **(sub-finding)** | `bin/cc-kitty-socket:57-60` takes its fast path whenever the inherited socket file exists, and "a socket file outlives a SIGKILLed kitty" (`handoff-fire.sh:1216-1219`). |
-| 10 | Kitty 0.48.2 sessions only replay launch commands | **stands** | Dossier E5. |
-| 11 | Memory and CPU cost is small | **stands** | Dossier E7 (measured). The fleet CPU figure is ESTIMATED. |
-| 12 | Hand-opened path: "On exit, `exit-empty` ends the server and the pane returns to its prompt" (C1:215) | **refuted** | Measured with `remain-on-exit on` + `exit-empty on` (the dossier's own config, C1:184), pane cmd `echo; sleep 1; exit 0`. After 3 s: `list-panes` ⇒ `pane_dead=1 status=0`; `list-sessions` ⇒ `s1: 1 windows`; screen ⇒ `Pane is dead (status 0, …)`. Every clean `/exit` leaves a server holding a dead pane, and its kitty viewer shows that instead of a prompt. That is a new kind of husk no sweep knows. It also defeats cc-pane-runner's close-on-exit fix and handoff-fire's "pane already gone" branch (`handoff-fire.sh:8359`). |
-| 13 | `cc-reattach` enumerates `/tmp/tmux-501/ccp-*`, and the host attaches if the server exists, otherwise creates (C1:177-179, :203) | **weakened** | Measured: after a natural exit-empty exit, `tmux ls` ⇒ `no server running`, yet `os.path.exists(socket)` ⇒ `True`; same after `kill-server`. Every ended session leaves a socket. A naive enumerate-then-host pass then **creates** a fresh session in a dead slot. If the host re-reads its `cc-hosts/*.json` command, it relaunches a deliberately ended session and bypasses capacity admission and the live-holder dedup. That is the dossier's own objection to kitty sessions (C1:140-142). The same holds for any replay of the viewer command (kitty `startup_session`, a saved session). |
-| 14 | "Today's dedup … already sees a live tmux-hosted claude" (C1:219-220) | **weakened** | Mechanism: see Scenario 1, step 2. |
-| 14a | The registry leg | **(sub-finding)** | `lr_holder_count` (`scripts/limit-recover/lr-lib.sh:509-540`) is registry rows checked with `kill -0`, unioned with `ps` leaves whose argv holds `--resume <sid>`. The ps leg sees only `--resume` launches. Fresh fires rely on the registry row, which cc-sessions deletes after 24 h under C1. Once it is gone, H(sid)=0 and a second writer becomes possible. |
-| 15 | Agent operations stay classifier-bound and "unchanged" (C1:258-259) | **stands** | The classifier judges the outer command (`handoff-fire.sh …`), not the shim's inner `kill-server`. Unchanged as claimed. |
+| 1 | The pane survives client SIGKILL and pty close, and reattach redraws | **stands** | Dossier E1, replicated by the code skeptic. Mine adds that when the server dies, the pane is hung up: SIGTERM to my server ⇒ server gone in <0.3 s, pane's `HUP` trap ran (`HUP-start`, `HUP-done`). Survival is exactly as good as the server's health. |
+| 2 | A viewer that stops reading cannot stall Claude | **stands** | Dossier E1, and tmux `tty.c` drops output to slow clients (code skeptic). The benefit is conditional: kitty stalling today's ptys is UNMEASURED (C1:53-54). |
+| 3 | The control plane leaves kitty's PRI-4 band | **weakened** | The PRI readings are real, but in phases 1-2 the control plane is not *moved*, it is *cut*. Inside a host, `it2-kitty` refuses (rc 3, measured above), and launching viewers still needs kitty's socket (C1:199-201). |
+| 4 | tmux recovers from EMFILE/ECONNABORTED; any other errno is fatal; one server per session bounds that | **weakened** | Fetched 3.6a `server.c:380-389`, and `log.c:140-152` `fatal()` ⇒ `exit(1)`. My probe shows a server death hangs up its claude. Kitty's equivalent fault (husk-panes-2026-09-30.md:85-96) killed only the RC thread and every session lived. Under C1 the same class of fault kills sessions. "One session" holds only for independent faults: a box-wide ENOMEM hits every server that accepts during the episode (`man 2 accept` lists ENOMEM, per the code skeptic). |
+| 5 | As configured, tmux breaks teammate spawning | **stands; understated** | Beyond the thrown error, the frozen `KITTY_WINDOW_ID` sends it2-wrapper into its kitty branch. `cc-in-kitty` then fails, and the call falls through to the real iTerm2 CLI (`bin/it2-wrapper:111-129`, `REAL_IT2=~/Library/Python/3.11/bin/it2`, which exists; iTerm2 not running per `pgrep`). Whether that fails cleanly or wakes iTerm2 (the 2026-08-07 class, `bin/cc-kitty-socket:6-8`) is UNMEASURED. I did not run it. |
+| 6 | Auto mode plus `$TMUX` selects TmuxBackend | **stands (moot)** | `teammateMode` is pinned to `iterm2`. |
+| 7 | One kitty `map` makes Shift+Enter work | **stands (mechanism); risk understated** | `var:cc_host` exists only on viewers made with `launch --var`, so hand-opened panes submit on Shift+Enter (code skeptic). For the operator this means a half-written multi-line instruction gets submitted to an autonomous agent. Behavior with a real Claude is UNMEASURED. |
+| 8 | OSC title, OSC 52, paste, mouse and sync pass through | **stands; consequence missed** | Two independent captures show the attach stream opens with `ESC[?1049h`. Kitty sits on the alternate screen, so kitty's scrollback, search and `it2 read --extent all` (`bin/it2-kitty:1465-1466`) lose all history above one screen. |
+| 9 | The pane env freezes at server start | **stands; understated** | Two consequences beyond `KITTY_WINDOW_ID`. The registry's `kitty_pid` is read from the frozen `KITTY_LISTEN_ON` (`hooks/session-register.sh:354-360`). And `cc-kitty-socket`'s fast path returns a dead socket whenever its file exists (`:57-60`), which it does after SIGKILL (`handoff-fire.sh:1216-1219`). handoff-fire probes for a live socket only when `KITTY_WINDOW_ID` is empty (`:1234`). |
+| 10 | Kitty sessions replay layout and commands only | **stands** | Dossier E5. |
+| 11 | Memory and CPU cost is small | **weakened** | The code skeptic measured 12,272 KB per server, and the design sets `history-limit 10000`. ESTIMATED total is about 1.9 GB, still minor next to 20.7 GB of claude. |
+| 12 | "On exit, exit-empty ends the server and the pane returns to its prompt" (C1:213-215) | **refuted** | Replicated with the dossier's own `remain-on-exit on` + `exit-empty on`, after `exit 0`: `a: 1 windows`, `pane_dead=1 status=0`, screen `Pane is dead (status 0 …)`. |
+| 13 | `cc-reattach` enumerates `/tmp/tmux-501/ccp-*` (C1:202-207) | **weakened** | Sockets outlive their servers. After `kill-server`: `no server running` but `socket exists: yes`. After the SIGTERM death: `socket left: yes`. Within a boot, enumeration lists dead hosts unless each is probed. Across a reboot this is harmless: 1 of ~1,344 `/private/tmp` entries predates the 15:26 boot, and its ctime is after boot, so /tmp is wiped at boot (ESTIMATED from `stat`). |
+| 14 | "Today's dedup … already sees a live tmux-hosted claude" (C1:219-220) | **weakened** | `lr_holder_count` = registry live rows ∪ `--resume` leaves (`lr-lib.sh:509-540`, used at `boot-resume-launch.sh:288-292`). **9 of 38** live claude processes have no `--resume` in their argv (ps count), so only their registry row protects them. cc-sessions deletes that row for hosted sessions (missed risk 2). |
 
 ## The scenario where adopting C1 makes the next incident worse
 
-Setup: phase 1 (host, viewer, reattach) is live, as the dossier phases it. Kitty 0.48.2's remote-control
-thread dies again (the same unfixed `accept_peer` path). The operator restarts kitty because C1 made
-that "free", then runs `cc-reattach`. All 32 claude processes survive. Then:
+**Setup.** Phase 1 is live as the dossier orders it (host + viewer + reattach). Some sessions are
+hosted. Kitty's RC thread dies again through the unfixed `accept_peer` path.
 
-1. **Every survivor loses its own control plane.** Frozen `KITTY_LISTEN_ON` points at the dead
-   socket (rows 9a-9c). Recycles, handoffs, self-closes and fires from inside sessions all fail, so
-   the 2026-10-01 deadlock returns with live sessions that cannot retire. Today a kitty restart at
-   least clears that state; under C1 it persists for the life of each process.
-2. **cc-sessions stops seeing the sessions.** The design exports both `CC_PANE_ID=ccp-<id>` and
-   `ITERM_SESSION_ID=w0t0p0:ccp-<id>` (C1:179-180).
-   - `hooks/session-register.sh:173` keys the registry row on `CC_PANE_ID` first.
-   - `:203-207` records `surface=pane` whenever `ITERM_SESSION_ID` is set.
-   - `bin/cc-sessions:326-327` marks a pane row stale when its id is missing from `it2 session
-     list`, and kitty never lists `ccp-*`.
-   - `:328-333` with `RETAIN_S` = 24 h (`:276`) then **deletes** the row.
+1. **Before the incident, the hosted sessions were already broken, and invisible.**
+   - Their recycles, self-closes and teammate spawns were refused (it2-kitty rc 3, measured).
+   - `cc-sessions` lists no hosted session. The row is keyed `CC_PANE_ID` first
+     (`session-register.sh:173`). `surface=pane` is recorded whenever `ITERM_SESSION_ID` is set
+     (`:203-207`), and the host exports it.
+   - Kitty never lists `ccp-*`, so the row is marked stale on the first look (`cc-sessions:326-327`).
+   - The row is deleted once the session is more than 24 h old (`:328-333`).
+   - Measured today: 0 of 42 registry rows are older than 24 h, because the 2026-09-30 reboot and
+     today's restart reset the fleet. C1 exists to remove that reset.
+2. **The operator restarts kitty ("free" under C1) and runs `cc-reattach`.** Every survivor's
+   frozen `KITTY_LISTEN_ON` names the dead socket (row 9), so even the 8 direct `kitty @` calls fail.
+   Today a kitty restart clears a deadlock. Under C1 it does not clear for the survivors: they stay
+   live and unable to retire for the rest of their lives.
+3. **The restart tooling from 2026-10-01 counts every survivor as missing.**
+   `inboot-finish.py:41,96` and `kitty-restart-resume.py:340` count a session as "back" only if its
+   `kitty_pid == NEW`, and survivors carry the old pid (row 9).
+   - inboot-finish reruns boot-resume for up to 12 rounds (`:39`).
+   - What stands between those rounds and a second writer is `lr_holder_count`. For non-`--resume`
+     sessions older than 24 h it reads 0 (rows 14 and 1 above).
+   - This chain is read from code; the end-to-end run is UNMEASURED.
+4. **Usage-limit recovery goes blind for hosted sessions.** `lr_recon` binds a claude pid to a
+   pane by walking ppids to a kitty window root (`observe_rows.py:288-297`). A hosted claude's
+   chain is tmux server → launchd, so it never reaches one. `_identity_match` then returns False
+   ("no relaunch typed on a guess", `evidence.py:132-142`). Measured: 47 of 191 per-session
+   limit-recover dirs were touched in the last 7 days, so these are routine, not edge, events.
+5. **Fires during the deaf window run headless** (C1:201), and cc-sessions hides them (step 1).
 
-   Result: cc-notify cannot address any hosted session, and after a day the second-writer guard
-   (row 14a) goes blind for fresh fires. Sessions that survive kitty restarts are exactly the ones
-   that live past 24 h.
-3. **cc-husk-sweep sees 32 husks.** `has_claude_under` walks 4 generations below the kitty pane pid
-   (`bin/cc-husk-sweep:177-191`, used at `:421`). Under C1 that pid is a tmux client, and claude
-   runs under a ppid-1 server, so every pane is a husk candidate.
-   - Its only guard against live sessions is `is_live_sid`, which reads cc-sessions (`:200-205`),
-     and step 2 empties that.
-   - The scrollback arm then mines the viewer's screen for `claude --resume <sid>` text.
-   - `--resume` types `nocorrect … claude --resume <sid>` plus CR through the viewer into a **live
-     composer** (`type_line`, `:394-409`). The echo-verify passes, because the text really is in
-     the composer.
-   - The DESK-down page tells the operator to run exactly that command
-     (`hooks/lead-crash-watchdog.sh:1256`).
+**Net.** Today this incident costs a restart and a resume. Under phase-1 C1 it costs a fleet that is
+alive but unmanageable, invisible sessions spending quota, a restart tool that may launch second
+writers, and no limit recovery.
 
-   End to end this is UNMEASURED: a chain read from code, with its preconditions stated.
-4. **Fires during the deaf window run headless and unseen.** The design says a fired session "still
-   starts and runs headless, and a viewer is attached later" (C1:201). Step 2 hides those sessions
-   from cc-sessions too, so they burn quota with nobody watching.
+## Missed risks (not in the dossier's risk list)
 
-Today the same incident costs a restart and a resume. Under phase-1 C1 it costs a fleet that is
-alive but cannot be managed, plus invisible sessions and a sweep aimed at live composers.
+1. **Day-one control-plane loss, not post-restart loss** (measured, above). Phase 1 cannot ship
+   without phase 2, so time to value is all three phases, and the dossier says to keep kitty-only
+   as the default until then (C1:245-246). Until cutover, C1 delivers nothing for events (a)/(b).
+2. **cc-sessions hides hosted sessions and then deletes their rows.** cc-notify, the husk sweep's
+   liveness guard (`cc-husk-sweep:200-205`) and the second-writer check all read that view.
+3. **Limit recovery is blind** (scenario step 4). Neither `lr_recon` nor `cc-sessions` is in the
+   build list (C1:231-240).
+4. **⌘W loses its warning and stops ending sessions.**
+   - `kitty-confirm-close` names a pane's jobs from kitty's `foreground_processes`
+     (`:262-286`). Under C1 that is the `tmux attach` client. `tmux` is not in `_PASSTHROUGH`
+     (`:255`), so the dialog says "This pane is running: tmux".
+   - The "A Claude Code session is running here. Closing … ends it" warning (`:314-320`) therefore
+     never appears.
+   - Clicking Close then *detaches* (`:341`). A session with an armed /goal keeps spending,
+     unseen and absent from cc-sessions.
+5. **A tmux fatal turns a deaf-socket event into a session death** (row 4). Nothing in the design
+   watches for a host whose server vanished. That session then needs a disk resume, and its
+   SessionEnd writes a `reason=other` tombstone (`session-deregister.sh:78`).
+6. **"Restart is free" still needs the operator.** On 2026-10-01 the restart was a
+   `--confirm`-gated script handed to the operator (plan:25). Whether the auto-mode classifier lets
+   an agent SIGKILL a kitty that no longer holds sessions is UNMEASURED. Until it is, "zero steps"
+   means one operator step.
+7. **Rollback is a drain, not a switch.** Recycles `respawn-pane` in place (C1:184), so hosts never
+   empty on their own. Backing out needs a kill switch that routes recycles back to kitty, plus the
+   tmux arm kept alive until the last host ends. Ending hosts early is operator-only under the
+   classifier.
+8. **Scrollback is lost on day one** (row 8). Claude 2.1.284 itself prints "tmux detected · scroll
+   with PgUp/PgDn" in this state (code skeptic, binary `Ivo()`). This is the one cost that needs an
+   operator ruling before any build.
+9. **The DESK-DOWN page may not post.** It is an `osascript display notification` sent from a hook
+   inside the session (`lead-crash-watchdog.sh:1256`), described as the liveness-free channel.
+   Under C1 that hook runs in launchd's `Background` session (code skeptic measured
+   `launchctl managername` ⇒ `Background`). Whether it still posts is UNMEASURED; I did not
+   probe it, because a test notification would land on the operator's screen.
+10. **The build surface is larger than budgeted** (measured with grep and wc):
+    - 143 test files reference kitty identity or control;
+    - 61 non-test files read a kitty identity signal;
+    - `bin/it2-kitty` is 1,523 lines.
 
-## Missed risks (not in the dossier's list)
+    Not in the build list: `it2-wrapper`, `cc-in-kitty`, `cc-sessions`, `cc-husk-sweep`,
+    `kitty-confirm-close`, `lr_recon/*`, and session-register's `surface` rule. "2-3 days" is
+    optimistic; weeks is more likely (ESTIMATED from these counts).
 
-- **Scrollback is lost on day one.**
-  - Measured: a tmux client attached with `TERM=xterm-kitty` sent `ESC[?1049h`
-    (`smcup ?1049h present: True`), so kitty sits on the alternate screen. Kitty's own scrollback,
-    search and pager hold nothing, and `it2 read -n N` readers that expect history get one screen.
-  - The config `unbind -a` + `prefix None` (C1:184-185) removes tmux's default mouse and copy-mode
-    bindings.
-  - `~/.config/kitty/kitty.conf:208` records that Claude "grabs the mouse", so the wheel goes to claude, not to
-    tmux. Nothing in the design reaches history above one 2x2 quadrant.
-  - Muscle-memory cost: certain. Replacement: not designed.
-- **A bare `tmux` inside a session targets the session itself.** Measured in a private pane:
-  `SOCK=/private/tmp/tmux-501/sd-probe-skeptic3_PANE=%0` and
-  `TMUX=/private/tmp/tmux-501/sd-probe-skeptic3,57797,0`. Two consequences:
-  - `hooks/teammate-auto-shutdown.sh:211` runs `tmux kill-pane -t "$pane"` for any `%N` id. Under
-    C1, `%0` is the lead's own claude.
-  - Any agent experiment that forgets `-L` and runs `tmux kill-server` ends its own session.
-    Today the same command hits an idle default server.
-- **There is no rollback path.** Recycles `respawn-pane` in place (C1:184), so hosts never drain.
-  Backing C1 out means ending every live session, which is operator-only under the classifier: the
-  manual mass rebuild the operator is trying to avoid.
-- **Build cost is understated** (measured with grep and wc):
-  - `bin/it2-kitty` is **1,523** lines, against a ~400 LOC tmux arm estimate.
-  - **143** test files reference `KITTY_WINDOW_ID`, `kitty @`, `kitten @` or `it2-kitty`. All of
-    them encode kitty-shaped identifiers, and a second id space must be fixtured in its real shape.
-  - The dossier budgets ~400 LOC of new bats and none of this. Time to value, ESTIMATED from these
-    counts: weeks, not 2-3 days.
-  - Under the dossier's own rule (C1:245-246, "keep kitty-only behavior as the default path until
-    the shim passes"), value is zero until then.
-- **C1 changes how sessions die at shutdown, which C2 depends on (UNMEASURED).** Tombstones rely
-  on each session's SessionEnd running during kitty's quit SIGHUP burst ("all 19 roster sessions
-  … inside 4 seconds", `hooks/session-deregister.sh:66-71`). Under C1, quitting kitty only detaches.
-  Sessions die later, when launchd tears down tmux at logout. Nobody has measured whether
-  SessionEnd still completes there. If it does not, boot-resume's last-burst detection misses the
-  fleet.
-- **Closing a kitty window becomes detach, everywhere.** It changes the operator's ⌘W, and it
-  changes every automated closer (`teammate-orphan-pane-close.sh:134`, `pane-close-retry.sh:224`,
-  `kitty-confirm-close`). Each of those now leaves a running, invisible session instead of a closed
-  one, unless every closer is re-pointed at `kill-server`.
-- **Keychain auth (UNMEASURED).** There are published reports of Claude Code inside tmux on macOS
-  re-prompting for login when the tmux server's security session is not the current Aqua session
-  ([junyi.dev](https://www.junyi.dev/en/posts/tmux-keychain/)). Servers started from a kitty pane
-  are probably fine. Servers created by launchd agents (C2's boot-resume into hosts,
-  desk-invariant respawns) need a real-claude test across all 4 accounts before adoption.
-- **Checked and dropped (one-armed check avoided):**
-  - macOS `tmp_cleaner` deletes only `-type f` (`/usr/libexec/tmp_cleaner`), so tmux sockets are
-    not reaped by it.
-  - cc-reaper's garbage arm whitelists `tmux` and any subtree holding a live claude
-    (`bin/cc-reaper:551`, `:713`).
-  - The kitty wheel-to-arrow conversion on the alternate screen (`mouse.c:1560-1565`,
-    `keys.c:315-329`) does not hit claude panes, because claude enables mouse tracking. It still
-    hits bare-shell panes, as Up-arrow history recall.
+### First-pass claims weakened or dropped on re-check
 
-## What would have to be true to restore conviction
+- **Husk sweep typing into live composers:** weakened. No automated caller runs
+  `cc-husk-sweep --resume`. Only pages advise it (`lead-crash-watchdog.sh:1196,1256,1478`). It is
+  still a hazard when someone follows the page.
+- **`teammate-auto-shutdown.sh:211` `tmux kill-pane %N` hitting the lead:** dropped as low
+  probability. `%N` ids arise only under TmuxBackend, and `teammateMode` is pinned to `iterm2`.
+- **Shutdown tombstones lost:** weakened. Measured: tmux turns its own SIGTERM into a SIGHUP for
+  the pane within 0.3 s, and a 2 s handler completed, which is the same shape as kitty's quit. What
+  remains UNMEASURED is that tombstones are written at launchd's teardown rather than at the
+  app-quit phase, under an unknown SIGKILL deadline. boot-resume takes the last burst within 120 s
+  (`boot-resume.sh:111,315-335`).
+- **Stale sockets relaunching ended sessions after a reboot:** dropped, because /tmp is wiped at
+  boot (row 13). Within a boot it still applies.
 
-1. Ship host, shim tmux arm (including `session list` emitting `ccp-*`) and the identity strip
-   (`env -u KITTY_*` in the pane command) **as one cutover**, behind a kill switch, never phased.
-2. Use `remain-on-exit failed`, or a per-respawn setting, and re-measure #12.
-3. Make reattach probe liveness (`tmux -L <id> ls` rc) and never create a session.
-4. Teach cc-husk-sweep, cc-sessions and every closer that a host is live.
-5. Test one real Claude in a host for Shift+Enter, scrollback UX and keychain on all 4 accounts.
-6. Get an operator ruling on scrollback before any build, since it is the one cost that cannot be
-   engineered away.
+## What would restore conviction
+
+1. One cutover, behind a kill switch: the host, the shim's tmux arm (`session list` emitting
+   `ccp-*`), `env -u KITTY_*` in the pane, and fixes to `it2-wrapper`/`cc-in-kitty`, `cc-sessions`,
+   `lr_recon` and `kitty-confirm-close`.
+2. Fix the restart tools: count survivors by live pid, not `kitty_pid == NEW`.
+3. `cc-reattach` probes with `has-session` and never creates a session. Replace `remain-on-exit
+   on` with a `pane-died` hook.
+4. Add a supervisor that notices a vanished host server.
+5. Run one real Claude in a host on all 4 accounts. Check Shift+Enter, wheel and scrollback, and
+   whether the Background-session notification posts.
+6. Get an operator ruling on scrollback before any build.
