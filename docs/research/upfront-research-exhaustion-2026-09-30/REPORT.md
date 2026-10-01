@@ -555,7 +555,11 @@ with the rewrite named.
   denominator. Programs used for calibration are held out of that library (§6.6).
 - **Counts: the values behind §3.12.** Original seeds: 40 for lite, 60 for standard and 100 for full
   (`evidence/final/profile_sim.py:35-37`), at most 1 per 25 plan lines (`evidence/design/SYNTHESIS.md:359`). A plan too
-  short for its profile's count carries fewer, which §3.12 did not simulate. Shadow seeds: one per applied fix. Escape
+  short for its profile's count carries fewer, which §3.12 did not simulate. Calibration priced it (2026-10-01,
+  `docs/research/research-calibration/REPORT.md` §4.11): the median held-out plan ran about 420 lines, so it carries
+  16 seeds at this limit, and 13 of 16 plans could not carry lite's 40. At 16 seeds the residuals are unchanged and
+  the printed 95% bound widens (20 holes: lite 7 to 10, standard 5 to 8, full 5 to 7), while it is still exceeded in
+  at most 3.2% of programs (`docs/research/research-calibration/evidence/sim/sim-base-scap16.out`). Shadow seeds: one per applied fix. Escape
   seeds: 20, stratified by class (`evidence/design/SYNTHESIS.md:361`). §3.12 does not model them, because they are never
   a denominator.
 - **Seed catches never reset the quiet count.** A round that catches only seeds is still quiet, because quiet means no
@@ -646,7 +650,8 @@ The synthesis model (`evidence/design/cert_sim.py`) was re-run with the correcti
 holes. "Stress" doubles or triples each. Both also rest on two inputs that nothing has measured yet: a fix-born
 rate of 0.1 new material holes per applied fix, which stress does not raise, and 10, 20 or 60 holes at freeze, where
 10–20 stands for a strong front end and 60 for a weak one (`evidence/final/profile_sim.py:52, 154-157`;
-`evidence/design/SYNTHESIS.md:319-321`). Both are assumed until the calibration run measures them (§6.6).
+`evidence/design/SYNTHESIS.md:319-321`). Both were assumed when this table was built; the calibration run has since
+measured them, with the rest of the inputs, and the re-run is at the end of this section.
 
 | Profile, holes at freeze (assumed: a strong front end leaves about 10–20) | Rounds (typical / 90th pct) | Desk-detectable left (mean) | Invisible left (mean) | Chance of at least one material change after signoff | Chance the printed forecast is exceeded |
 |---|---|---|---|---|---|
@@ -680,6 +685,44 @@ programs to the cap. Rows at 0.3 and 0.5 have not been run; the calibration run 
 `evidence/final/profile_sim.py` with `b` set, and re-runs the whole table at the measured rate (§6.6). Until then the
 table describes programs whose fix-born rate is near 0.1. A measured rate of 0.5 or more triggers the divergence
 rebuild (§3.8).
+
+**Calibration, 2026-10-01: the rows above re-run at measured inputs.** Sixteen held-out historical plans were
+replayed for one Lite round on two vendors (`docs/research/research-calibration/REPORT.md`; one row per plan in
+`docs/research/research-calibration.jsonl`; pooled values in `research-calibration/evidence/params-measured.json`).
+
+| Input | Assumed above (base / stress) | Measured (n = 16 plans) |
+|---|---|---|
+| False material findings per reviewer-read, after triage | 0.01 / 0.02 | 1.13; 0.22 counting only claims later history shows false (`fpp`) |
+| Rater downgrade of real holes | 0.05 / 0.10 | 0.22 on known holes, 0.17 on seeds (`q_counts`, `q_seeds`) |
+| Omission share | 0.3 / 0.5 | 0.58 (`omit_plan_mean`) |
+| Invisible share | 0.05 / 0.10 | 0.12, bracket 0.02–0.34 (`u_plan_mean`) |
+| Fix-born rate | 0.1 | 0.21 plan median, 0.40 under an open loop (`fixborn_rate`) |
+| Holes at freeze | 10, 20, 60 | median 20.6 after an audit of the history (`holes_at_freeze_audited`) |
+
+| Profile, 20 holes, measured inputs, false 0.22 | Rounds (typical / 90th pct) | Hit the cap | Desk-detectable left | Invisible left | 95% bound exceeded | Typical forecast exceeded |
+|---|---|---|---|---|---|---|
+| Lite | 6 / 6 | 98% | 6.7 | 3.0 | 0.2% | 14% |
+| Standard | 10 / 10 | 100% | 6.5 | 3.7 | 0.0% | 3% |
+| Full | 14 / 14 | 100% | 7.6 | 4.7 | 0.0% | 0% |
+
+Receipt: `research-calibration/evidence/sim/sim-main-fa022.out` (false 1.13: `sim-main-fa113.out`, every profile at
+its cap, 9.4–21.4 desk holes left). Three readings:
+1. **The stop rule does not fire at the measured triage.** Quiet rounds need false material findings near 0.02 per
+   read or fewer (at 0.02 the cap is hit in 38–55% of programs, at 0.05 in 76–90%, `sim-fpp*.out`). Restoring the
+   false-material rate alone to 0.01 brings standard back to 27% at the cap; restoring the downgrade rate as well
+   brings the desk residual from 6.45 to 1.82 (`sim-attr-*.out`). Both are triage quality.
+2. **Width buys nothing at measured inputs.** Standard leaves 6.5 desk holes and full 7.6 against lite's 6.7, because
+   each false finding that is fixed breeds holes at the fix-born rate.
+3. **The printed 95% bound still holds**, exceeded in at most 2.2% of programs at any measured row, because it widens
+   with false findings. The typical-case forecast is exceeded in 22–38% of programs at the base inputs of the first
+   table (`sim-base-bsweep.out`, b = 0.1 rows), the rate §1 says the simulation did not yet report; in the replay
+   itself, the one-round forecast was exceeded on 6 of 16 plans and its 95% bound on 1.
+
+**The fix-born rows, now run** (base inputs, 20 holes, `sim-base-bsweep.out`): rounds, share at the cap, desk left
+and 95%-bound exceedance go from lite 6/6, 48%, 2.69, 4.2% at b = 0.1 to 6/6, 68%, 3.24, 2.6% at 0.3 and 6/6, 89%,
+4.24, 6.0% at 0.5; standard from 8/10, 23%, 1.57, 3.2% to 9/10, 34%, 2.07, 3.0% and 10/10, 55%, 2.58, 3.6%; full from
+8/14, 10%, 1.35, 1.4% to 10/14, 17%, 1.63, 1.8% and 11/14, 27%, 2.26, 3.2%. The measured 0.2 sits between the first
+two.
 
 ---
 
@@ -928,7 +971,7 @@ because the front end is the cheaper lever (§3.12, reading 1). It does not upgr
 |---|---|---|---|---|---|---|---|---|
 | **Lite** (default for case-sized work) | Up to 8 decisions, 3 components, 30 acceptance rows | 8 (2 per slot set, §3.8), 2, 6 | 40 | 4.25 days (assumed) | about 1.6–1.8 days | about 6.5 days | about 12 days | 1.5–2 h plus dated rulings |
 | **Standard** | Up to 20 decisions, 8 components | 16 (4 per slot set), 3, 10 | 60 | 11.5 days | about 1.9–2.1 days | about 14 days | about 28 days | 2–3 h |
-| **Full** | Larger, and only after the calibration run measures fewer than 1 false alarm per 100 reviewer-reads and shows OpenAI and Google each sustain 6 reviewers a round | 24 (6 per slot set), 3, 14 | 100 | about 17 days (assumed) | about 1.9–2.1 days | about 20 days | about 39 days | 3–4 h |
+| **Full** | Larger, and only after the calibration run measures fewer than 1 false alarm per 100 reviewer-reads and shows OpenAI and Google each sustain 6 reviewers a round. Calibration 2026-10-01: not met; 113 per 100 after triage (22 per 100 counting only false claims), OpenAI on ChatGPT Plus walled after 15 reads, Google untested (`research-calibration/REPORT.md` §4.1, §4.8) | 24 (6 per slot set), 3, 14 | 100 | about 17 days (assumed) | about 1.9–2.1 days | about 20 days | about 39 days | 3–4 h |
 
 These are wall-clock agent-days with parallel runs. Stage budgets are priors to calibrate, and only Standard's has
 evidence behind it: 11.5 days for stages 1–6 and about 14 days in total is the worked prior for a program of about 15
@@ -937,6 +980,15 @@ ranges in §3.2–§3.7, whose high ends sum to Standard's 11.5) and Full's 17 d
 calibration run replaces. Certification assumes about 1 day for round 1, then about 4.5 hours per fix round and 2.5
 hours per quiet round (`evidence/design/SYNTHESIS.md:1124`), at §3.12's median rounds for 10–20 holes. Original seeds
 are the counts §3.12 assumes (§3.9).
+
+**Calibration, 2026-10-01** (`docs/research/research-calibration/REPORT.md` §4.10, §5). Stage budgets could not be
+measured, because the stages have never run; Lite's and Full's stay labeled assumptions. The reference class was
+measured instead: the 16 held-out plans had a median 0.2 calendar days and 6 active hours of research before their
+freeze, 13 of 16 under a day (`research-calibration/REPORT.md` §4.10; the raw timing is in the private store, hashed in
+`research-calibration/evidence/PRIVATE_MANIFEST.json`). The caps are unchanged: at the measured
+false-material rate every profile reaches its hard cap in 93–100% of programs, and a higher cap would not help,
+because each extra round fixes more false findings and breeds holes at the fix-born rate (§3.12, the calibration
+re-run). Until triage brings false material findings near 0.02 per read, lite is the profile for every size.
 
 **Ceiling formula** (printed on the contract page):
 `1.5 × stage 1–6 budget + 1 day for round 1 + (hard cap − 1) × 4.5 h + rehearsal and gate + one front-end return per area (lite 1 × 1 day; standard and full 3 × 1.5 days) + one divergence rebuild (1–2 days) + frame expansion at its cap (2 levels; lite 2 × 0.5 day, standard and full 2 × 1 day, assumed)`.
@@ -951,6 +1003,11 @@ extra round set, or a reopen. The agent has no path around it, because the caps 
 
 **Tokens.** Unmeasured. Roughly 20–40M tokens for lite, 40–80M for standard and 60–120M for full, about half of the
 certification runs on OpenAI and Google subscriptions. The calibration run prices each in weekly-quota percentage.
+Priced 2026-10-01 (`docs/research/research-calibration/REPORT.md` §4.8; `research-calibration/evidence/price.json`):
+on Anthropic, 0.05 weekly-quota points per reviewer-read and 0.16 per round for verification, rating and scoring, so
+about 0.36 points per lite round on two vendors, 0.6 for standard and 0.8 for full. On OpenAI, about 70k tokens per
+reviewer-read; a ChatGPT Plus window refused further work after 1.6M tokens (15 reviewer-reads and 16 seed authors)
+for about 4.5 hours.
 
 ### 6.2 Calendar risk the ceiling includes
 
@@ -1115,7 +1172,7 @@ recommended.
 | 1 | Accept the definition of complete in §3.1 (100.00% of a signed frame plus a printed forecast of after-signoff changes) in place of the literal "zero unknowns" reading, and sign that the listed post-certificate activities are not research redo | Adopt | 88% |
 | 2 | Exempt active programs from the standing rules listed in §3.1 (ruling 2), in both instruction variants, from intake through build | Adopt | 85% |
 | 3 | After the frame is signed, park new ideas in the next version by default, with at most one accepted change batch per stage | Adopt | 85% |
-| 4 | Default to the lite profile for case-sized work and standard for medium, and use full only after the calibration run measures false alarms. This replaces the earlier "widest tier" recommendation | Adopt | 75% (settled by the calibration run) |
+| 4 | Default to the lite profile for case-sized work and standard for medium, and use full only after the calibration run measures false alarms. This replaces the earlier "widest tier" recommendation | Adopt | 75% (settled by the calibration run). Calibration 2026-10-01: 92% for lite as the default and full kept off, whose precondition failed 22–113 times over; standard for medium is not supported at measured inputs (6.5 desk holes left against lite's 6.7 at twice the reads), so lite for every size until triage brings false material findings near 0.02 per read (`docs/research/research-calibration/REPORT.md` §1, §5) |
 | 5 | The escape-cost answer must be a finite number. Start at 3 research days per decision-changing escape. "Infinite" means the program does not start | Adopt | 80% |
 | 6 | Suspend "upgrade immediately" for reviewer model binaries while a program is in certification | Adopt | 85% |
 | 7 | Convert a class-C gate to a class-B default of its reversible option at its due date, descoping its dependent waves instead of waiting | Adopt | 78% |
