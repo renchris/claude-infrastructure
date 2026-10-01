@@ -53,7 +53,7 @@ seedtype() { # <type> <research_days>…: append one planted reference row per f
   plant ""
   run "$CR" reference-class record --program demo
   [ "$status" -eq 2 ]
-  [[ "$output" == *"project_type"* ]]
+  [[ "$output" == *"project_type"* ]] || false
   [ "$(rows)" -eq 0 ]
 }
 
@@ -81,7 +81,7 @@ assert r['source'].endswith('budget.json'), r"
   rm "$CC_RESEARCH_RECORDS/cert/CERT-v1.json"
   run "$CR" reference-class record --program demo
   [ "$status" -eq 2 ]
-  [[ "$output" == *"no certificate"* ]]
+  [[ "$output" == *"no certificate"* ]] || false
   [ "$(rows)" -eq 0 ]
 }
 
@@ -90,8 +90,8 @@ assert r['source'].endswith('budget.json'), r"
   seedtype site 4 6
   run "$CR" reference-class show --type tool
   [ "$status" -eq 0 ]
-  [[ "$output" == *"tool"*"n=3"*"median=2"*"max=9"* ]]
-  [[ "$output" != *"site"* ]]
+  [[ "$output" == *"tool"*"n=3"*"median=2"*"max=9"* ]] || false
+  [[ "$output" != *"site"* ]] || false
   run "$CR" reference-class show --json
   /usr/bin/python3 -c "
 import json, sys
@@ -103,7 +103,7 @@ assert d['site']['n'] == 2 and d['site']['median_days'] == 5 and d['site']['max_
   seedtype tool 1 2 9
   run "$CR" reference-class check --type tool --typical-days 6.5
   [ "$status" -eq 1 ]
-  [[ "$output" == *"6.5"* ]]
+  [[ "$output" == *"6.5"* ]] || false
   [[ "$output" == *"median 2"* ]]
 }
 
