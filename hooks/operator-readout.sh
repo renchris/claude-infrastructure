@@ -410,6 +410,20 @@ idl_init "$IDL" "operator-readout"
 
 # ── tiny helpers ─────────────────────────────────────────────────────────────────────────────────
 tildify() { printf '%s' "${1/#$HOME/~}"; }   # display+paste-safe: the shell re-expands ~
+# scope_of <wrap-ledger --machine text> → met | open | unknown. Reads the ledger's own SCOPE field;
+# a ledger too old to carry it is derived from DOD/REMAINDER the way the ledger itself derives it,
+# so a live layer one fast-forward behind this hook can never read an absent DoD as `met`.
+scope_of() {
+  local s d r
+  s="$(printf '%s\n' "$1" | sed -n 's/^SCOPE=//p' | head -1)"
+  case "$s" in met|open|unknown) printf '%s' "$s"; return 0 ;; esac
+  d="$(printf '%s\n' "$1" | sed -n 's/^DOD=//p' | head -1)"
+  r="$(printf '%s\n' "$1" | sed -n 's/^REMAINDER=//p' | head -1)"
+  case "$r" in ''|*[!0-9]*) r=0 ;; esac
+  if [ "$d" != "present" ]; then printf 'unknown'
+  elif [ "$r" -gt 0 ]; then printf 'open'
+  else printf 'met'; fi
+}
 epoch_to_iso() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
                  || date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo ''; }
 
@@ -549,6 +563,58 @@ lr_recon_line() {
   # The daemon writes no trailing newline, so `read` returns 1 on a good file: judge the value.
   { IFS= read -r line < "$root/readout.line"; } 2>/dev/null
   [ -n "$line" ] && printf ' ⟳ %s\n' "$line"
+  return 0
+}
+
+# ── RESEARCH PROGRAMS (REPORT.md §8 item 13) — one counted `◆` line per program the operator owes
+# a ruling: pending concerns, or an open priced menu. Read from `cc-research pending --json`
+# (scripts/research-kit/RECORDS.md § bin/cc-research). `◆`, never `▶`: a menu item is the operator's
+# PURCHASE decision, so the line names the options and their prices and carries the read command
+# inline only — nothing under a run mark. No registry ⇒ no program can exist ⇒ no fork at all.
+# Bounded and fail-silent (this is a Stop hook): a timeout, a missing binary or a garbled reply
+# prints nothing and leaves one IDL line, so "no line" stays distinguishable from "could not read".
+# Seams: CC_RESEARCH_REGISTRY · CC_RESEARCH_BIN · CC_OPREADOUT_RESEARCH_TIMEOUT_S (default 3).
+research_lines() {
+  local reg bin c to="" s raw out
+  reg="${CC_RESEARCH_REGISTRY:-$HOME/.claude/autonomy/research/programs.json}"
+  [ -f "$reg" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  bin="${CC_RESEARCH_BIN:-}"
+  if [ -z "$bin" ]; then
+    bin="$HOME/.claude/bin/cc-research"
+    [ -x "$bin" ] || bin="$SCRIPT_DIR/../bin/cc-research"
+  fi
+  if [ ! -x "$bin" ]; then
+    log_idl degraded "research-pending-unread" '{"why":"no cc-research binary"}'
+    return 0
+  fi
+  s="${CC_OPREADOUT_RESEARCH_TIMEOUT_S:-3}"; case "$s" in ''|*[!0-9]*) s=3 ;; esac
+  # Absolute paths only, as in stranded_sessions: a Stop hook may inherit the stock PATH.
+  for c in /opt/homebrew/bin/timeout /usr/local/bin/timeout /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    [ -x "$c" ] && { to="$c"; break; }
+  done
+  if [ -n "$to" ]; then raw="$("$to" -k 1 "$s" "$bin" pending --json 2>/dev/null)"
+  else raw="$("$bin" pending --json 2>/dev/null)"; fi
+  # shellcheck disable=SC2181  # the substitution's status is the read's verdict
+  if [ $? -ne 0 ]; then
+    log_idl degraded "research-pending-unread" '{"why":"cc-research pending failed or timed out"}'
+    return 0
+  fi
+  out="$(printf '%s' "$raw" | jq -r '
+      .programs[]? | select(type == "object" and (.program | type) == "string")
+      | (.pending_concerns // 0 | if type == "number" then floor else 0 end) as $n
+      | ([ .menu[]? | select(type == "object") ]) as $m
+      | select($n > 0 or ($m | length) > 0)
+      | " ◆ research \(.program): \($n) pending concern(s)"
+        + (if ($m | length) > 0 then
+             " — menu: " + ([ $m[0:3][] | "\(.label // .id // "?") (\(.price // "?" | tostring))" ] | join(" · "))
+             + (if ($m | length) > 3 then " · +\(($m | length) - 3) more" else "" end)
+           else "" end)
+        + "   cc-research verdict \(.program)"' 2>/dev/null)" || {
+    log_idl degraded "research-pending-unread" '{"why":"cc-research pending reply unparseable"}'
+    return 0
+  }
+  [ -n "$out" ] && printf '%s\n' "$out"
   return 0
 }
 
@@ -1041,7 +1107,14 @@ render_block() {
         # CERT_WROTE is the three-state write-turn oracle (0 wrote · 1 read-only · 2 cannot tell);
         # only an affirmative 0 earns the stronger claim, so a `--render` pull (no transcript) and
         # an unreadable one both keep the original wording rather than over-claiming.
-        if [ "${CERT_WROTE:-2}" = "0" ]; then state="✅ SAFE TO CLOSE — nothing of mine is open"
+        # SCOPE unknown (no durable DoD) withholds the claim here exactly as it does on the
+        # standalone certificate below (operator ruling 2026-10-01): the git facts are clean, but
+        # nothing on disk says what "complete" meant, so nothing can say it was reached.
+        local scope; scope="$(scope_of "$led")"
+        if [ "${CERT_WROTE:-2}" = "0" ] && [ "$scope" = "met" ]; then
+          state="✅ SAFE TO CLOSE — nothing of mine is open"
+        elif [ "${CERT_WROTE:-2}" = "0" ] && [ "$scope" = "unknown" ]; then
+          state="✅ clean & landed — completeness UNKNOWN (no durable DoD to confirm scope)"
         else state="✅ live on trunk"; fi ;;
     esac
   fi
@@ -1125,7 +1198,12 @@ render_block() {
   # the moment the live layer carries them, and CLAUDE.md has the AGENT run the converger and
   # re-read — so on a healthy box it self-clears within one close. It stands only while a converger
   # outage does, which is precisely the news this block exists to carry.
-  if [ "$total" -eq 0 ] && [ "$RUNG" != "📦" ] && [ "$RUNG" != "🚀" ] && [ "$Q_N" -eq 0 ]; then rm -f "$steps_file"; return 0; fi
+  # Research programs owing the operator a ruling join the predicate: a pending concern or an open
+  # priced menu is a purchase decision nobody else can make, and a line that rendered only when
+  # some unrelated step happened to fire the block would be the decision delivered by luck.
+  local rp_lines; rp_lines="$(research_lines)"
+  if [ "$total" -eq 0 ] && [ "$RUNG" != "📦" ] && [ "$RUNG" != "🚀" ] && [ "$Q_N" -eq 0 ] \
+     && [ -z "$rp_lines" ]; then rm -f "$steps_file"; return 0; fi
 
   # ALLOCATION. Written out per class rather than looped: four classes is a fixed set, and the
   # alternatives (eval, or a `$(fn)` lookup) cost either clarity or a fork per step.
@@ -1195,6 +1273,9 @@ render_block() {
     fi
   elif [ "$total" -gt 0 ]; then hdr="OPERATOR ▸ ${_y:+$_y · }${total} manual step(s)${state:+ · $state}"
   elif [ "$RUNG" = "📦" ] || [ "$RUNG" = "🚀" ]; then hdr="OPERATOR ▸ ${state}"
+  # research-only render: the SESSION's state governs line 1 and the program line sits below it —
+  # two verdicts, never merged into one sentence.
+  elif [ -n "$rp_lines" ]; then hdr="OPERATOR ▸ ${state:-research program awaiting you}${q_line:+ · $q_line}"
   else hdr="OPERATOR ▸ ${q_line}"; fi   # queue-only render: the queue IS the governing line
   printf '%s\n' "$hdr"
 
@@ -1414,6 +1495,10 @@ render_block() {
   # an undelivered escalation is a judgment, not a chore — but `ack --all` DOES clear the pile in one
   # command (bin/cc-escalations:205-219, selftest case 4), so the row names it.
   [ "${esc_n:-0}" -gt 0 ] && printf ' ◆ %s escalation record(s) unseen — cc-escalations ack --all\n' "$esc_n"
+
+  # ── research programs — one counted `◆` line per program owing a ruling, unnumbered for the same
+  # reason as the escalation line: a purchase decision, not a step NSTEPS should count.
+  [ -n "$rp_lines" ] && printf '%s\n' "$rp_lines"
 
   # The `+N more` footer is the LEGACY path only. Under the class budget it is not merely redundant,
   # it is the defect: one aggregate number that hides which CLASSES are missing (§4 F5).
@@ -1742,13 +1827,15 @@ if [ -z "$BLOCK" ]; then
   _ctrunk="$(_clf TRUNK)"; _cdod="$(_clf DOD)"; _crem="$(_clf REMAINDER)"
   case "$_crem" in ''|*[!0-9]*) _crem=0 ;; esac
 
-  # The DoD-absent case is reported, never smoothed over: wrap-ledger already refuses to call an
-  # unverifiable scope complete, and the certificate must inherit that honesty rather than launder it.
-  if [ "$_cdod" = "present" ] && [ "$_crem" -eq 0 ]; then
-    _cscope="frozen-DoD remainder 0"
-  else
-    _cscope="scope UNVERIFIED (no durable DoD)"
-  fi
+  # WITHHELD ON AN UNKNOWN SCOPE (operator ruling 2026-10-01). This used to print the certificate
+  # anyway with "scope UNVERIFIED" in its second line — a safe-to-close assertion whose own body
+  # said it could not be checked. "Safe to close" is a claim about completeness, and with no durable
+  # DoD nothing on disk says what complete meant, so the certificate abstains instead, with its own
+  # reason so the IDL can count how often a clean close had no scope to confirm.
+  _cscope_v="$(scope_of "$_cled")"
+  [ "$_cscope_v" = "unknown" ] && abstain "cert-scope-unknown"
+  [ "$_cscope_v" = "met" ] || abstain "cert-scope-open"
+  _cscope="frozen-DoD remainder ${_crem}"
   _cert="✅ SAFE TO CLOSE — nothing is left on this side.
    tree clean · landed on ${_ctrunk:-?} (nothing parked) · ${_cscope} · no manual step is yours.
    Verified from live git reads at this close, not from memory."

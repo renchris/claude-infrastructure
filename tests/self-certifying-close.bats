@@ -230,6 +230,10 @@ PY
 
 @test "A: WRITE turn + ✅ ledger renders SAFE TO CLOSE, and the verdict comes FIRST" {
   w="$(mkrepo a1)"; tr="$(mktr "$BATS_TEST_TMPDIR/a1.jsonl" "$w/f.txt")"
+  # A durable DoD with nothing open: since the 2026-10-01 ruling the certificate is WITHHELD on an
+  # unknown scope (tests/operator-readout-research.bats owns that arm), so ✅ alone no longer earns it.
+  printf -- '- [x] done\n' > "$BATS_TEST_TMPDIR/a1-dod.md"
+  export WRAP_DOD_FILE="$BATS_TEST_TMPDIR/a1-dod.md"
   run bash -c "python3 -c 'import json,sys;print(json.dumps({\"session_id\":\"S1\",\"cwd\":sys.argv[1],\"transcript_path\":sys.argv[2]}))' '$w' '$tr' | bash '$READOUT'"
   [ "$status" -eq 0 ]
   msg="$(printf '%s' "$output" | jq -r '.systemMessage // ""')"

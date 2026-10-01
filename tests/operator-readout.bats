@@ -68,6 +68,9 @@ setup() {
   # a live cutover would inject its line here. An empty tree = absent; operator-readout-recon.bats
   # owns that line.
   export LR_STATE_DIR="$BATS_TEST_TMPDIR/lr" LR_RECON_ROOT="$BATS_TEST_TMPDIR/lr/recon"
+  # The research line reads the live program registry by default — same hazard. Absent registry =
+  # no program = no cc-research fork; operator-readout-research.bats owns that line.
+  export CC_RESEARCH_REGISTRY="$BATS_TEST_TMPDIR/no-research-registry.json"
   mkdir -p "$CC_ACTIVATION_DIR" "$CC_DECISIONS_DIR" "$CC_HANDOFF_ALARM_DIR" \
            "$CC_ANNOUNCE_ALARM_DIR" "$CC_COMPLETION_RECORDS_DIR" "$CC_PAGES_DIR" \
            "$CC_MAILBOX_DIR/dead-letter" "$CC_SWEEP_SEEN_DIR"
