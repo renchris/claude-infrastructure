@@ -237,6 +237,11 @@ coverage table, keeping the kit's record formats (`scripts/research-kit/RECORDS.
   Remaining: reference-class timing per project type, appended as programs run.
 - Status: **in progress** — item 13's `--requires-gate` done; items 9, 10, 11, 12, the rest of 13, and 15's
   reference-class timing not started.
+- Landed per item:
+  - Item 12 — `1f37dffbd`: `cc-research job sweep|freshness|triage|drift|market` (`lib/cli_jobs.py`), one bash 3.2
+    runner `scripts/research-kit/jobs/research-job.sh`, five plists in `launchd/staged/` (install.sh would load
+    anything in `launchd/`), c10 `migrations/0051-research-jobs.sh`; `tests/research-jobs.bats` 1..11, red 10/11
+    on the skeleton (the 11th asserts `/bin/bash` is 3.2.57). Freshness re-validates a premise once, then carries it.
 - Locus inside the wave: T (six teammates, one worktree each: `rp-c-{core,records,probe,cert,jobs,close}`), lead
   inline only for the shared skeleton (`023d63d61`: `bin/cc-research`, `lib/cli.py` verb table, one module per
   teammate, cross-module contracts in `RECORDS.md`), B1's on-box step 2, merges and lands. Fired session
