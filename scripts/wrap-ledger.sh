@@ -172,6 +172,22 @@
 #   no goal records ⇒ `absent`. `absent` is a POSITIVE finding and is never manufactured from a
 #   read that did not happen — the same law as YOURS_SRC=none and LIVE_SRC=unknown.
 #
+# ── § SCOPE — completeness, a separate verdict from the git state (operator ruling 2026-10-01) ──
+#   SCOPE = met (a durable DoD, remainder 0) · open (remainder > 0) · unknown (DOD=absent). RUNG is
+#   NOT changed by it: an absent DoD stays ✅ on the git facts and its READOUT says "completeness
+#   UNKNOWN". hooks/operator-readout.sh withholds the "✅ SAFE TO CLOSE" certificate on unknown.
+#
+# ── § RESEARCH — the research PROGRAM's verdict (REPORT.md §8 item 13). NOT `/goal`, see § GOAL ──
+#   REPORTED, NEVER A RUNG: a program's state is the operator's to rule on, not this session's to
+#   finish, so it is relayed beside the session's state and never merged into it.
+#   RESEARCH_PROGRAM = the slug $PWD resolves to (scripts/lib/research-program.sh rp_resolve_cwd),
+#   or `none` — and with none, cc-research is never called. RESEARCH_VERDICT = the program's state
+#   from `cc-research verdict --json <slug>` (bounded by WRAP_RESEARCH_TIMEOUT_S, default 5), or
+#   `unknown` on any error/timeout/garbled reply, or `none` with no program. RESEARCH_PENDING = its
+#   pending-concern count, or `-` when there is no program or no readable count.
+#   Seams: CC_RESEARCH_BIN (default $HOME/.claude/bin/cc-research, then the repo's bin/cc-research) ·
+#   CC_RESEARCH_REGISTRY · WRAP_RESEARCH=off (kill switch ⇒ RESEARCH_PROGRAM=none, no call).
+#
 # ── LAW ── fail-LOUD, never fail-silent-open: outside a git repo (or on a read error) this exits
 #   non-zero with a stderr note and NEVER prints RUNG=✅. A consumer that can't get a ledger must
 #   treat that as "cannot confirm", not as "complete". Pure-read of the REPO: the only bytes this
@@ -183,6 +199,7 @@
 #                    WRAP_LIVE_BUDGET_COMMITS · WRAP_LIVE_BUDGET_MIN · CC_MIGRATIONS_STATE ·
 #                    WRAP_BACKLOG_TIMEOUT_S · WRAP_DECIDE_TIMEOUT_S · WRAP_TRANSCRIPT ·
 #                    WRAP_GOAL_TIMEOUT_S · WRAP_PROJECT_ROOTS ·
+#                    WRAP_RESEARCH · WRAP_RESEARCH_TIMEOUT_S · CC_RESEARCH_BIN · CC_RESEARCH_REGISTRY ·
 #                    WRAP_RESIDENT · WRAP_RESIDENT_TIMEOUT_S · CC_WF_TEAM_ROOTS ·
 #                    CC_WF_PSTABLE_FILE · CC_SESSIONS_BIN · CC_FIRED_DIR ·
 #                    WRAP_CACHE · WRAP_CACHE_DIR · WRAP_CACHE_WAIT_MS · WRAP_CACHE_WAIT_TRIES ·
@@ -409,6 +426,7 @@ if [ "$MODE" = "machine" ] && [ -n "$WL_TRANSCRIPT" ]; then
     _wl_k="$_wl_k|${CC_PANE_ID:-${ITERM_SESSION_ID:-}}|${CC_FIRED_DIR:-}"
     _wl_k="$_wl_k|${WRAP_LIVE_REPO:-}|${WRAP_LIVE_BUDGET_COMMITS:-}|${WRAP_LIVE_BUDGET_MIN:-}"
     _wl_k="$_wl_k|${CC_MIGRATIONS_STATE:-}|${WRAP_LAND_INFLIGHT_LIB:-}"
+    _wl_k="$_wl_k|${WRAP_RESEARCH:-}|${CC_RESEARCH_BIN:-}|${CC_RESEARCH_REGISTRY:-}"
     if _wl_d="$(_wl_digest "$_wl_k")"; then
       WL_DIR="${WRAP_CACHE_DIR:-${TMPDIR:-/tmp}/cc-wrap-ledger.${UID:-0}}"
       # The dir must exist BEFORE the single-flight `mkdir` lock, or the lock cannot be taken and
@@ -674,6 +692,11 @@ done <<WLDOD
 $_WL_DOD_SOURCES
 WLDOD
 case "$DOD_SCOPE" in *[Bb][Aa][Cc][Kk][Ll][Oo][Gg]*|*[Dd][Rr][Aa][Ii][Nn]*) DRAIN_SCOPE=1 ;; esac
+# § SCOPE — the completeness verdict, kept apart from RUNG (header § SCOPE). No DoD is `unknown`,
+# never `met`: nothing on disk says what "complete" meant, so nothing can confirm it was reached.
+if [ "$DOD" = "absent" ]; then SCOPE="unknown"
+elif [ "$REMAINDER" -gt 0 ]; then SCOPE="open"
+else SCOPE="met"; fi
 
 # ── Operator-only steps THIS SESSION filed (the 👤 rung) ──
 # Session id, in order: --session > $WRAP_SESSION_ID > $CLAUDE_SESSION_ID > $CLAUDE_CODE_SESSION_ID
@@ -779,6 +802,45 @@ compute_goal_liveness() {
   else
     GOAL_LINE="◎ goal: ${GOAL_EVALS} eval(s) · last ${GOAL_LAST}${when} (${GOAL_AGE_MIN}m ago)"
   fi
+}
+
+# ── § RESEARCH — the program verdict. REPORTED, NEVER A RUNG (header § RESEARCH) ─────────────────
+# Shaped like compute_goal_liveness: an optional sensor behind one bounded fork, whose every failure
+# reads `unknown` rather than borrowing a healthy-looking value. No program ⇒ no fork at all, so a
+# session outside every research program pays one registry read and nothing else.
+RESEARCH_PROGRAM="none"; RESEARCH_VERDICT="none"; RESEARCH_PENDING="-"
+compute_research() {
+  local lib slug bin out st pc
+  case "${WRAP_RESEARCH:-on}" in off|0|no|OFF|NO) return 0 ;; esac
+  lib="$(dirname "$0")/lib/research-program.sh"
+  [ -f "$lib" ] || { lib="$0"; [ -L "$lib" ] && lib="$(readlink "$lib")"
+    lib="$(cd "$(dirname "$lib")" 2>/dev/null && pwd)/lib/research-program.sh"; }
+  [ -f "$lib" ] || lib="$HOME/.claude/scripts/lib/research-program.sh"
+  [ -f "$lib" ] || return 0
+  # In a subshell: the lib defines rp_* functions and a warn-once global, neither of which belongs
+  # in this script's namespace. Its stderr note ("treating this as no research program") is for
+  # rules and hand checks; here RESEARCH_PROGRAM=none already says it.
+  # shellcheck disable=SC1090
+  slug="$( . "$lib" 2>/dev/null && rp_resolve_cwd "$PWD" 2>/dev/null )" || slug=""
+  slug="${slug%% *}"
+  [ -n "$slug" ] || return 0
+  RESEARCH_PROGRAM="$slug"; RESEARCH_VERDICT="unknown"
+  bin="${CC_RESEARCH_BIN:-}"
+  if [ -z "$bin" ]; then
+    bin="$HOME/.claude/bin/cc-research"
+    [ -x "$bin" ] || bin="$(dirname "$0")/../bin/cc-research"
+  fi
+  [ -x "$bin" ] || return 0
+  out="$(_bounded "${WRAP_RESEARCH_TIMEOUT_S:-5}" "$bin" verdict --json "$slug" 2>/dev/null)" || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  st="$(printf '%s' "$out" | jq -r 'if (.state | type) == "string" and (.state | length) > 0
+                                     then .state else empty end' 2>/dev/null)" || st=""
+  # A state with a space or `=` in it would break the KEY=value line it rides on; read as garbled.
+  case "$st" in ''|*[!A-Za-z0-9_-]*) return 0 ;; esac
+  RESEARCH_VERDICT="$st"
+  pc="$(printf '%s' "$out" | jq -r '.pending_concerns // empty' 2>/dev/null)" || pc=""
+  case "$pc" in ''|*[!0-9]*) pc="-" ;; esac
+  RESEARCH_PENDING="$pc"
 }
 
 # cc-backlog resolution: env seam first (test stub), then the sibling search order.
@@ -2205,6 +2267,9 @@ RUNG="✅"; READOUT="✅ Complete & live on trunk — nothing to do."
 # rung (§ GOAL). Unconditional like ⛔'s read, and for the opposite reason: ⛔ cannot ride the
 # ✅-eligible path because it outranks everything, this one cannot because it ranks nowhere at all.
 compute_goal_liveness
+# § RESEARCH — like the goal term, a report the ladder never reads. Only the two surfaces that print
+# it pay for it: the one-line readout and --goal/--busy have nowhere to put a program verdict.
+case "$MODE" in machine|full) compute_research ;; esac
 # ⛔ IS CHECKED FIRST AND UNCONDITIONALLY — it outranks every rung below, so unlike 👤 and 🚀 it
 # cannot ride the ✅-eligible path where a worse rung has already decided the answer. That costs ONE
 # bounded fork on every turn close (this is a Stop-hook path) and it is the price of a rung that
@@ -2334,7 +2399,9 @@ else
     fi
   elif [ "$DOD" = "absent" ]; then
     # ✅-eligible git state, but no durable DoD to confirm the scope was met → say so, never silent ✅.
-    RUNG="✅"; READOUT="✅ Clean & landed — but NO durable DoD to confirm scope (completeness unverified; frozen a DoD via ~/.claude/autonomy/dod)."
+    # The rung stays ✅ (operator ruling 2026-10-01: no new glyph for this); SCOPE=unknown carries
+    # the second verdict, and operator-readout withholds its certificate on it.
+    RUNG="✅"; READOUT="✅ Clean & landed — completeness UNKNOWN: no durable DoD to confirm scope (freeze a DoD via ~/.claude/autonomy/dod)."
   elif [ "$LIVE_SRC" = "behind" ]; then
     # Behind but INSIDE the converge budget — the normal, expected state for the first minutes after
     # a land. Not a rung (it would fire at every close), but not silent either: the one line says
@@ -2503,6 +2570,8 @@ emit_machine() {
   printf 'DOD=%s\n' "$DOD"
   printf 'DOD_FILE=%s\n' "$DOD_FILE"
   printf 'REMAINDER=%s\n' "$REMAINDER"
+  # § SCOPE — met · open · unknown (no DoD). A second verdict beside RUNG, never folded into it.
+  printf 'SCOPE=%s\n' "$SCOPE"
   printf 'CUSTODY_OPEN=%s\n' "$CUSTODY_OPEN"
   printf 'CUSTODY_SRC=%s\n' "$CUSTODY_SRC"
   # The two halves CUSTODY_OPEN is the sum of. Emitted separately so a consumer can say "yours" vs
@@ -2542,6 +2611,10 @@ emit_machine() {
   printf 'GOAL_LAST_T=%s\n' "$GOAL_LAST_T"
   printf 'GOAL_AGE_MIN=%s\n' "$GOAL_AGE_MIN"
   printf 'GOAL_LINE=%s\n' "$GOAL_LINE"
+  # § RESEARCH — the program's verdict, not `/goal`'s; never moves RUNG.
+  printf 'RESEARCH_PROGRAM=%s\n' "$RESEARCH_PROGRAM"
+  printf 'RESEARCH_VERDICT=%s\n' "$RESEARCH_VERDICT"
+  printf 'RESEARCH_PENDING=%s\n' "$RESEARCH_PENDING"
   # WHICH bounder every _bounded fork above actually used — `none` means the reads in this run were
   # UNBOUNDED. Emitted so the degradation has a surface at all (§ _bounded).
   printf 'BOUND_SRC=%s\n' "$_WRAP_BOUND_SRC"
@@ -2705,6 +2778,11 @@ emit_full() {
     *)       goal_disp="unknown — no transcript on this path (not counted)" ;;
   esac
   printf 'Goal (◎):       %s\n' "$goal_disp"
+  # § RESEARCH — only inside a program; outside one the row would be chrome with nothing to say.
+  if [ "$RESEARCH_PROGRAM" != "none" ]; then
+    printf 'Program: %s — %s%s\n' "$RESEARCH_PROGRAM" "$RESEARCH_VERDICT" \
+      "$( [ "$RESEARCH_PENDING" != "-" ] && printf ' · %s pending concern(s)' "$RESEARCH_PENDING" )"
+  fi
   printf 'Rung:           %s\n' "$RUNG"
   printf 'Next:           %s\n' "$(rung_next)"
 }
