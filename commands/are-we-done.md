@@ -18,6 +18,7 @@ exactly the false close the custody ledger exists to catch.
 
 - State rung: !`scripts/wrap-ledger.sh 2>&1 || true`
 - Goal liveness (prints NOTHING unless a `/goal` is live): !`scripts/wrap-ledger.sh --goal 2>&1 || true`
+- Research program verdict (prints NOTHING outside a research program): !`scripts/wrap-ledger.sh --full 2>/dev/null | grep '^Program:' || true`
 - Steps + decisions the operator owns: !`hooks/operator-readout.sh --render 2>&1 || true`
 - Work dispatched from here and not returned: !`cc-custody list --open --fresh 2>&1 | head -10 || true`
 - …and the stale tail (open >24h — supersede or return, never ignore): !`cc-custody count --open --stale 2>&1 || true`
@@ -55,6 +56,9 @@ count — a sibling's rebase reads 0 and proves nothing) · your diff's gates ra
 frozen-DoD remainder 0 · custody carries no row with YOUR marker. Any one unknown ⇒
 `Good to close: no — <which check, and who owns it>`. Never hedge a `yes` with a trailing caveat:
 if something is parked or theirs, that IS the rung, and it belongs on line 1.
+
+Inside a research program, the program's verdict (the `Program:` line above) is relayed separately
+from the session's state — as its own line beside the certificate's, never merged into the rung.
 
 ### On `yes`, RETIRE THE PANE — do not offer to
 
