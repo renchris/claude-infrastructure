@@ -174,11 +174,11 @@ d['populations_outside']=[{'name':'releases','refresh_cmd':'cat $F','owner':'lea
     P="$REPO/launchd/staged/com.claude.research-$j.plist"
     /usr/bin/plutil -lint "$P" >/dev/null
     [ "$(/usr/bin/plutil -extract ProgramArguments.0 raw "$P")" = /bin/bash ]
-    [[ "$(/usr/bin/plutil -extract ProgramArguments.1 raw "$P")" == */.claude/scripts/research-kit/jobs/research-job.sh ]]
+    [[ "$(/usr/bin/plutil -extract ProgramArguments.1 raw "$P")" == */.claude/scripts/research-kit/jobs/research-job.sh ]] || false
     [ "$(/usr/bin/plutil -extract ProgramArguments.2 raw "$P")" = "$j" ]
     [ "$(/usr/bin/plutil -extract Label raw "$P")" = "com.claude.research-$j" ]
     [ "$(/usr/bin/plutil -extract "StartCalendarInterval.$key" raw "$P")" = "$want" ]
-    [[ "$(/usr/bin/plutil -extract StandardOutPath raw "$P")" == */.claude/logs/research-$j.out.log ]]
+    [[ "$(/usr/bin/plutil -extract StandardOutPath raw "$P")" == */.claude/logs/research-$j.out.log ]] || false
   done
 }
 
@@ -191,7 +191,7 @@ d['populations_outside']=[{'name':'releases','refresh_cmd':'cat $F','owner':'lea
   PATH="$BATS_TEST_TMPDIR/bin:$PATH" CC_MIGRATION_REPO="$REPO" run /bin/bash "$MIG" --dry-run
   [ "$status" -eq 0 ]
   for j in sweep freshness triage drift market; do
-    [[ "$output" == *"com.claude.research-$j"* ]]
+    [[ "$output" == *"com.claude.research-$j"* ]] || false
   done
   [ -z "$(find "$HOME" -mindepth 1)" ]
   [ ! -e "$BATS_TEST_TMPDIR/launchctl-calls" ]
