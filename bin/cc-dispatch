@@ -1765,8 +1765,17 @@ warm_worktree() {
   # Deps by DETECTED package manager, never pnpm-hardcoded (a hardcoded install broke every
   # non-Node project). Install failure does NOT fail provisioning — a launched session can self-heal
   # its deps; an unlaunched one can do nothing.
+  # pnpm left Homebrew on 2026-09-30 (brew uninstall, 00:49Z) and is now the corepack shim inside an
+  # fnm node, a directory com.claude.dispatcher.plist's PATH does not hold. Resolved the way
+  # reso-qa-runner's qa-nightly-run.sh does it, by absolute path only: a Homebrew pnpm if one returns,
+  # else the newest fnm node carrying it, whose bin goes in FRONT of PATH because the shim runs on
+  # that node, not Homebrew's. None found ⇒ no install, which provisioning already tolerates.
   ( cd "$wt" 2>/dev/null || exit 0
-    if   [ -f pnpm-lock.yaml ];   then CI=true pnpm install --frozen-lockfile
+    if   [ -f pnpm-lock.yaml ];   then
+      pn=""
+      for c in /opt/homebrew/bin/pnpm /usr/local/bin/pnpm; do [ -x "$c" ] && { pn="$c"; break; }; done
+      [ -n "$pn" ] || pn="$(printf '%s\n' "$HOME/Library/Application Support/fnm/node-versions"/*/installation/bin/pnpm | sort -V | tail -1)"
+      [ -x "$pn" ] && PATH="$(dirname "$pn"):$PATH" CI=true "$pn" install --frozen-lockfile
     elif [ -f bun.lockb ] || [ -f bun.lock ]; then bun install
     elif [ -f package-lock.json ]; then npm ci
     elif [ -f yarn.lock ];        then yarn install --frozen-lockfile
