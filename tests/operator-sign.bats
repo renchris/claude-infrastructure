@@ -37,7 +37,7 @@ fixture_sig() { # <action> <target|null> <pins-json> [chain-json]
 @test "research signoff under a claude ancestor is refused with exit 3 and writes nothing" {
   run "$FAKE_CLAUDE" -c "'$REPO/bin/cc-signoff' research:demo/frame --evidence frame.json"
   [ "$status" -eq 3 ]
-  [[ "$output" == *"descended from a claude process"* ]]
+  [[ "$output" == *"descended from a claude process"* ]] || false
   [ ! -e "$CC_RESEARCH_HOME/demo/signoff.jsonl" ]
 }
 

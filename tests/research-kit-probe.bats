@@ -19,7 +19,7 @@ last_field() { # <jq-ish python expr over the last probe record>
 @test "a negative control that exits 0 records no refutation and earns level 0" {
   run "$PR" run --program demo --id P-1 --kind read --closes PR-1 --negative-control 'true' -- true
   [ "$status" -eq 0 ]
-  [[ "$output" == *"level=E0"* ]]
+  [[ "$output" == *"level=E0"* ]] || false
   [ "$(last_field 'r["negative_control"]["reported_refutation"]')" = "False" ]
 }
 
@@ -31,9 +31,9 @@ last_field() { # <jq-ish python expr over the last probe record>
 
 @test "a measurement with 3 samples is anecdote (E1); 5 with a load control is E4" {
   run "$PR" run --program demo --id P-3 --kind measure --n 3 --load-control --negative-control false -- true
-  [[ "$output" == *"level=E1"* ]]
+  [[ "$output" == *"level=E1"* ]] || false
   run "$PR" run --program demo --id P-4 --kind measure --n 5 --negative-control false -- true
-  [[ "$output" == *"level=E1"* ]]
+  [[ "$output" == *"level=E1"* ]] || false
   run "$PR" run --program demo --id P-5 --kind measure --n 5 --load-control --negative-control false -- true
   [[ "$output" == *"level=E4"* ]]
 }
@@ -58,8 +58,8 @@ last_field() { # <jq-ish python expr over the last probe record>
 
 @test "a failing command records its exit and earns no level" {
   run "$PR" run --program demo --id P-9 --kind read --negative-control false -- false
-  [[ "$output" == *"exit=1"* ]]
-  [[ "$output" == *"level=E0"* ]]
+  [[ "$output" == *"exit=1"* ]] || false
+  [[ "$output" == *"level=E0"* ]] || false
   [ -f "$CC_RESEARCH_RECORDS/evidence/P-9/stdout" ]
 }
 
@@ -92,7 +92,7 @@ EOF
   fake_zsh
   PATH=/usr/bin:/bin run "$PR" doctor --program demo
   [ "$status" -eq 0 ]
-  [[ "$output" == *"codex"*"$BATS_TEST_TMPDIR/ipath/codex"*"hidden from the agent PATH"* ]]
+  [[ "$output" == *"codex"*"$BATS_TEST_TMPDIR/ipath/codex"*"hidden from the agent PATH"* ]] || false
   /usr/bin/python3 -c "
 import json; d = json.load(open('$CC_RESEARCH_RECORDS/evidence/doctor/env.json'))
 assert d['tools']['codex']['interactive'] == '$BATS_TEST_TMPDIR/ipath/codex', d['tools']['codex']

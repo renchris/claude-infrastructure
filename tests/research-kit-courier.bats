@@ -96,8 +96,8 @@ panel() { /usr/bin/python3 -c "import json; d=json.load(open('$CC_RESEARCH_RECOR
   run "$C" bundle --program demo --round 1 --plan "$BATS_TEST_TMPDIR/PLAN.md"
   [ "$status" -eq 0 ]
   b="$CC_RESEARCH_HOME/demo/rounds/1/bundle"
-  [ -f "$b/PLAN.md" ] && [ -f "$b/frame.json" ] && [ -f "$b/evidence/P-1/stdout" ]
-  [ ! -e "$b/holes.jsonl" ] && [ ! -e "$b/rounds" ] && [ ! -e "$b/.claude" ] && [ ! -e "$b/CLAUDE.md" ]
+  [ -f "$b/PLAN.md" ] && [ -f "$b/frame.json" ] && [ -f "$b/evidence/P-1/stdout" ] || false
+  [ ! -e "$b/holes.jsonl" ] && [ ! -e "$b/rounds" ] && [ ! -e "$b/.claude" ] && [ ! -e "$b/CLAUDE.md" ] || false
   run "$C" bundle --program demo --round 1 --plan "$BATS_TEST_TMPDIR/PLAN.md"
   [ "$status" -eq 2 ]
 }

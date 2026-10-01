@@ -64,9 +64,9 @@ state() { /usr/bin/python3 -c "import json; print(json.load(open('$CC_RESEARCH_R
   before="$(find "$W" -type f -newer "$REC/cert/CERT-v1.json" | wc -l)"
   run "$G" --render --program demo
   [ "$status" -eq 0 ]
-  [[ "${lines[0]}" == "Research: demo version 1. CERTIFIED"* ]]
-  [[ "$output" == *"Signed frame: 100.00% closed."* ]]
-  [[ "$output" == *"uncalibrated"* ]]
+  [[ "${lines[0]}" == "Research: demo version 1. CERTIFIED"* ]] || false
+  [[ "$output" == *"Signed frame: 100.00% closed."* ]] || false
+  [[ "$output" == *"uncalibrated"* ]] || false
   [ "$(find "$W" -type f -newer "$REC/cert/CERT-v1.json" | wc -l)" -eq "$before" ]
 }
 

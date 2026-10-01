@@ -40,7 +40,7 @@ cands() { # <per-stratum count> [strata...]
   [ "$status" -eq 1 ]
   run "$H" seal --candidates "$BATS_TEST_TMPDIR/c.jsonl" --tuning-out "$BATS_TEST_TMPDIR/t.jsonl" --fraction 1.0
   [ "$status" -eq 2 ]
-  [[ "$output" == *"sealed once"* ]]
+  [[ "$output" == *"sealed once"* ]] || false
   run "$H" status
   [ "$status" -eq 0 ]
   [[ "$output" != *"secret prompt"* ]]

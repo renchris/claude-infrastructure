@@ -91,7 +91,7 @@ sig() { # <action> <target|null>
   /bin/bash "$D" expire-sweep >/dev/null
   sig veto '"DR-1"'
   run "$G" sweep --program demo
-  [[ "$output" == *"vetoed-by-operator DR-1"* ]]
+  [[ "$output" == *"vetoed-by-operator DR-1"* ]] || false
   [ "$(dec 'd["status"]')" = "carried" ]
 }
 
