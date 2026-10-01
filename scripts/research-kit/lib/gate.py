@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import kit  # noqa: E402
 
 PASS, FAIL, FILED = "PASS", "FAIL", "FILED"

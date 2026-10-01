@@ -346,3 +346,77 @@ def fold(
             continue
         state.setdefault(k, {}).update(r)
     return state
+
+
+# ── 5. evidence levels (§3.4) and the conviction rule (§3.5) ────────────────────────────────────
+# Levels are COMPUTED from how a claim was checked, never typed by hand.
+#   E0 recall · E1 secondary text · E2 primary read · E3 live read (with expiry)
+#   E4 measurement (>= 5 samples with a load control) · E5 execution in the target env · E6 operator's own look
+
+REQUIRED_LEVEL = {"code": 2, "document": 2, "live-state": 3, "behavior": 4, "target-env": 5,
+                  "operator": 6}
+_PROBE_LEVEL = {"read": 2, "read-through": 2, "live-read": 3, "measure": 4, "spike": 5,
+                "skeleton": 5, "model-check": 5, "fault-inject": 5, "dry-run-deploy": 5,
+                "handed-cmd": 5, "reproduce": 5, "operator-view": 6}
+
+
+def probe_level(probe: Dict[str, Any]) -> int:
+    """The evidence level one probe earns. 0 when it failed, or a fallible probe never showed it
+    could fail (no negative control ran and no reason is recorded; §3.4)."""
+    if probe.get("exit") != 0:
+        return 0
+    nc = probe.get("negative_control") or {}
+    if not nc.get("ran") and not nc.get("reason_if_not_run"):
+        return 0
+    lvl = _PROBE_LEVEL.get(probe.get("kind", ""), 0)
+    if lvl == 4 and (int(probe.get("n") or 0) < 5 or not probe.get("load_control")):
+        return 1                      # a measurement without 5 samples and a load control is anecdote
+    return lvl
+
+
+def premise_level(premise: Dict[str, Any], probes: Dict[str, Dict[str, Any]],
+                  now: Optional[float] = None) -> int:
+    """Achieved level: the best of its own origin tier and its probes; live reads past ttl_h lapse."""
+    now = time.time() if now is None else now
+    origin = str((premise.get("origin") or {}).get("tier", "E0"))
+    best = int(origin[1:]) if origin[:1] == "E" and origin[1:].isdigit() else 0
+    best = min(best, 1)               # recall and secondary text never close a load-bearing claim
+    ttl = premise.get("ttl_h")
+    for pid in premise.get("probes") or []:
+        pr = probes.get(pid)
+        if not pr:
+            continue
+        lvl = probe_level(pr)
+        if lvl == 3 and ttl is not None and pr.get("at"):
+            if now - parse_iso(pr["at"]) > float(ttl) * 3600:
+                lvl = 0
+        best = max(best, lvl)
+    return best
+
+
+def premise_at_level(premise: Dict[str, Any], probes: Dict[str, Dict[str, Any]],
+                     now: Optional[float] = None) -> bool:
+    need = REQUIRED_LEVEL.get(premise.get("truth_lives_in", ""), 99)
+    return premise.get("verdict") == "holds" and premise_level(premise, probes, now) >= need
+
+
+def conviction(decision: Dict[str, Any], premises: Dict[str, Dict[str, Any]],
+               probes: Dict[str, Dict[str, Any]], now: Optional[float] = None) -> Optional[int]:
+    """The §3.5 rule, from the decision's stored tally. None = no load-bearing factual premise, so a
+    taste or value call the operator rules.
+
+      90 only when every load-bearing premise of the chosen option is at its required level AND the
+      'what would flip it' probe ran and came back negative; otherwise
+      floor(89 x at-level / all). A flip probe not run caps at 89 (the formula already does).
+    """
+    tally = decision.get("tally") or {}
+    ids = list(tally.get("premises") or decision.get("premises") or [])
+    if not ids:
+        return None
+    ok = sum(1 for i in ids if i in premises and premise_at_level(premises[i], probes, now))
+    flip = tally.get("flip_probe")
+    flip_negative = bool(flip) and tally.get("flip_result") == "negative" and \
+        probe_level(probes.get(flip, {})) > 0
+    if ok == len(ids) and flip_negative:
+        return 90
+    return (89 * ok) // len(ids)
