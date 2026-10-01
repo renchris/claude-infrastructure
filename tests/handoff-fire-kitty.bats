@@ -167,13 +167,16 @@ FAKE
   # one-liner, so extract it by its single line. Unpinned (CC_TERM unset, as here) it IS in_kitty.
   x_kid="$(sed -n '/^kitty_identity() {/p' "$HF")";                [ -n "$x_kid" ]
   x_kt="$(sed -n '/^kt() {/p' "$HF")";                             [ -n "$x_kt" ]
+  # The os-window / tab / bg-tab launches go through kt_launch (W7c): kt under the split's bound, plus
+  # adoption. hf_adopt_split_pane is not extracted, so here a failed launch stays a failure.
+  x_ktl="$(sed -n '/^kt_launch() {/,/^}/p' "$HF")";                [ -n "$x_ktl" ]
   x_field="$(sed -n '/^kt_window_field() {/,/^}/p' "$HF")";        [ -n "$x_field" ]
   x_write="$(sed -n '/^as_write() {/,/^}/p' "$HF")";               [ -n "$x_write" ]
   x_ttyq="$(sed -n '/^_as_tty_query() {/,/^}/p' "$HF")";           [ -n "$x_ttyq" ]
   x_tab="$(sed -n '/^as_tab() {/,/^}/p' "$HF")";                   [ -n "$x_tab" ]
   x_sfm="$(sed -n '/^spawn_frontmost() {/,/^}/p' "$HF")";          [ -n "$x_sfm" ]
   x_py="$(sed -n '/^it2py() {/,/^}/p' "$HF")";                     [ -n "$x_py" ]
-  eval "$x_kitty"; eval "$x_kid"; eval "$x_kt"; eval "$x_field"
+  eval "$x_kitty"; eval "$x_kid"; eval "$x_kt"; eval "$x_ktl"; eval "$x_field"
   eval "$x_write"; eval "$x_ttyq"; eval "$x_tab"; eval "$x_sfm"; eval "$x_py"
 
   pin_iterm2
@@ -638,6 +641,6 @@ pin_kitty()  { export KITTY_WINDOW_ID=25; unset IT2_WRAPPER_NO_KITTY; }
   # stripped first — this file's own prose names `kitty @` repeatedly, and a check that a comment
   # can fail is a check that will be silenced by rewording rather than by fixing.
   local code
-  code="$(printf '%s\n' "$x_write" "$x_ttyq" "$x_tab" "$x_sfm" "$x_py" | sed 's/#.*//')"
+  code="$(printf '%s\n' "$x_write" "$x_ttyq" "$x_tab" "$x_sfm" "$x_py" "$x_ktl" | sed 's/#.*//')"
   ! grep -qE '(^|[^_a-zA-Z])kitty @' <<<"$code" || false
 }

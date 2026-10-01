@@ -27,6 +27,10 @@ setup() {
   # That is the subject behaving correctly over the wrong store: the same class as
   # unfixtured-sensor-executes-the-deployed-subject, and the reason it presented as a new-code defect.
   export CC_FIRED_DIR="$BATS_TEST_TMPDIR/cc-fired"; mkdir -p "$CC_FIRED_DIR"
+  # Every case here speaks iTerm2's id space through $ITERM_SESSION_ID. Since FLEET_V2 W7c the fire
+  # resolves its own pane through self_pane_id, where an ancestry-confirmed $KITTY_WINDOW_ID wins —
+  # correctly — so a run from a kitty pane would address the RUNNER's window instead of the fixture's.
+  unset KITTY_WINDOW_ID KITTY_PID KITTY_LISTEN_ON CC_TERM
 }
 
 # extract the "copy: <path>)" the dry-run prints on its notify-back line

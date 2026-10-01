@@ -1353,6 +1353,31 @@ finally:
 # shellcheck disable=SC2086
 kt() { hf_bounded "${CC_KITTY_BIN:-${CC_TERM_KITTY:-kitty}}" @ ${CC_TERM_KITTY_TO:+--to "$CC_TERM_KITTY_TO"} "$@"; }
 
+# `kitty @ launch` for the os-window, tab and bg-tab surfaces → the new window id on stdout, or
+# nothing. THE SAME CLASS the split fixed on 2026-09-11 (HF_SPLIT_TIMEOUT_S), left on these three.
+# kt bounds one control-socket round-trip at HF_TIMEOUT_S (10s); a launch is not one round-trip, and
+# with the command pre-delivered on its argv (HF_ARGV) kitty has STARTED the session before it answers.
+# FLEET_V2 W7c, 2026-09-30, load 195 on 10 cores: the lead's `--window` fire printed "could not create
+# a fresh iTerm2 window (--window) — nothing launched" at 23:01:47Z, kitty had created window 47
+# running that brief, the lead re-fired, and two sessions worked one wave in one worktree. So: the
+# split's bound (inner kitty bound + 30s), and when no id comes back, adopt the window already running
+# this fire's own $CMD (hf_adopt_split_pane — kitty + argv delivery only, else it finds nothing), so a
+# launch that happened is never reported as one that did not. HF_TIMEOUT_S is rebound for this call only.
+kt_launch() {
+  local id
+  id="$(HF_TIMEOUT_S="${HF_SPLIT_TIMEOUT_S:-${HF_TIMEOUT_S:-}}" kt launch "$@" 2>/dev/null | tr -d '[:space:]')" || id=""
+  case "$id" in
+    ''|*[!0-9]*)
+      id=""
+      if command -v hf_adopt_split_pane >/dev/null 2>&1 && id="$(hf_adopt_split_pane)" && [ -n "$id" ]; then
+        echo "→ kitty launch returned no window id, but window $id already runs this fire's command — ADOPTED it (a re-fire would have launched a duplicate session)." >&2
+      else
+        id=""
+      fi ;;
+  esac
+  printf '%s' "$id"
+}
+
 # Resolve one kitty window id out of `kitty @ ls` and print ONE field of it. `kitty @ ls` is the only
 # read this file needs, so the JSON walk is shared: os-windows → tabs → windows, each with id / pid /
 # is_focused. Exit 1 ⇒ the QUERY failed (no socket, wedged kitty, unparseable JSON) — a state the
@@ -12756,6 +12781,18 @@ if [ "$RECYCLE" = 1 ] && [ -z "$RESUME_LAUNCHER" ] \
 fi
 SELF_RETIRE_TRAILER="$WANT_SELF_RETIRE"
 [ "$SELF_RETIRE" = 1 ] && [ "$RCY_INHERIT_PEER" = 1 ] && SELF_RETIRE_TRAILER=1
+# ---- THIS FIRE'S OWN PANE (FLEET_V2 W7c, 2026-09-30) -------------------------------------------
+# Read by the back-channel's __self__ below and by FIRING_SID / ANCHOR_INTENT further down. Both read
+# $ITERM_SESSION_ID alone, which on kitty is right only while the pane's interactive rc block has
+# exported the synthetic w0t0p0:$KITTY_WINDOW_ID. A session started WITHOUT that rc block (the lead
+# in kitty window 3, resumed as claude ← expect ← bash ← kitty) has no $ITERM_SESSION_ID at all, so
+# its own fires read as HEADLESS: 3 refusals at 22:58Z-23:02Z (an inconclusive anchor probe), and with
+# CC_TERM=kitty exported by hand the fire split pane 10, not its own pane 3. self-close and --recycle
+# already answer this through self_pane_id (item 4e074b938da7); the fire never did. Same helper, same
+# ancestry pin, same precedence — but the pin runs inside $( ), so CC_TERM is NOT exported into the
+# rest of the fire: a headless daemon has no kitty ancestor, would pin iterm2, and kitty_identity
+# would then refuse the kitty_headless path it depends on. No cc-in-kitty ⇒ the old read, verbatim.
+HF_SELF_PANE="$(pin_term_verdict_for_watcher; self_pane_id)"
 # ---- BACK-CHANNEL BY DEFAULT (2026-08-08) ------------------------------------------------------
 # Measured over 7 days of real fires: 8 of 301 carried a back-channel. One-way was the NORM, not the
 # exception — so a firing session that survives its fire routinely had NO completion signal, and
@@ -12791,8 +12828,7 @@ if [ -n "$NOTIFY_BACK" ] || [ "$SELF_RETIRE_TRAILER" = 1 ] || [ "$ENGAGE_VERIFY"
   if [ -n "$NOTIFY_BACK" ]; then
     BACK_SID="$NOTIFY_BACK"
     if [ "$BACK_SID" = "__self__" ]; then
-      _nb_it="${ITERM_SESSION_ID:-}"
-      BACK_SID="${SESSION_ID:-${_nb_it##*:}}"
+      BACK_SID="${SESSION_ID:-$HF_SELF_PANE}"
     fi
     # NORMALIZE OFF ANY `wNtNpN:` PREFIX FIRST. $ITERM_SESSION_ID is `w0t0p0:<id>` and the __self__
     # branch above already strips it with `##*:`; an explicit --session-id may carry the same shape,
@@ -13418,7 +13454,11 @@ fi
 # "Created new pane: <id>" on success, rc≠0 ("Session '<id>' not found") when the anchor is truly
 # gone — so there is no partial-success-that-reads-as-failure class, and the fallback can FAIL LOUD
 # instead of drifting to another window.
-_itsid="${ITERM_SESSION_ID:-}"
+#
+# …and on kitty the firing pane is $KITTY_WINDOW_ID behind the ancestry verdict: HF_SELF_PANE (see
+# THIS FIRE'S OWN PANE above). _itsid keeps its name for its three readers; a bare id passes through
+# their ${_itsid##*:} unchanged.
+_itsid="$HF_SELF_PANE"
 FIRING_SID="${SESSION_ID:-${_itsid##*:}}"
 # FIRING_SESSION_SID — the SESSION running this fire, recorded on the peer's stamp as firedBySid so
 # the firer's close ledger can count the operator steps its peer files (scripts/lib/fired-peers.sh).
@@ -13728,7 +13768,7 @@ print("%s %d" % hit)
         # ${HF_ARGV[@]+…} pre-delivers $CMD as this tab's ARGV (see hf_argv_launch). Unset/empty ⇒
         # expands to NOTHING and the caller types, exactly as before — which is also what an
         # extracted-function test sees, so this line's old behaviour is preserved there verbatim.
-        bnew="$(kt launch --type=tab --keep-focus --cwd=current --match "id:$bsid" ${HF_ARGV[@]+"${HF_ARGV[@]}"} 2>/dev/null | tr -d '[:space:]')" || return 1
+        bnew="$(kt_launch --type=tab --keep-focus --cwd=current --match "id:$bsid" ${HF_ARGV[@]+"${HF_ARGV[@]}"})" || return 1
         case "$bnew" in ''|*[!0-9]*) return 1 ;; esac
         command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn bg-tab kitty "$bnew" "${LAUNCH_DIR:-$PWD}" "it2py bgtab --match id:$bsid"
         # EXACT format it2_bgtab parses (:3712 area): /^Created new pane: /.
@@ -14214,7 +14254,7 @@ as_tab() { # $1=session-uuid  → echoes "OK <new-session-id>" | "NOTFOUND"
     # which is what NOTFOUND means.
     local tnew
     # Same pre-delivery as the bg-tab and split surfaces; unset/empty ⇒ nothing, and the caller types.
-    tnew="$(kt launch --type=tab --cwd=current --match "id:${1##*:}" ${HF_ARGV[@]+"${HF_ARGV[@]}"} 2>/dev/null | tr -d '[:space:]')" || tnew=""
+    tnew="$(kt_launch --type=tab --cwd=current --match "id:${1##*:}" ${HF_ARGV[@]+"${HF_ARGV[@]}"})" || tnew=""
     case "$tnew" in ''|*[!0-9]*) printf 'NOTFOUND\n' ;; *) command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn tab kitty "$tnew" "${LAUNCH_DIR:-$PWD}" "as_tab --match id:${1##*:}"; printf 'OK %s\n' "$tnew" ;; esac
     return 0
   fi
@@ -14280,7 +14320,7 @@ spawn_frontmost() { # → echoes the new session id on stdout | empty on failure
     [ "${FOLLOW:-0}" = 1 ] || kfocus="--keep-focus"
     # shellcheck disable=SC2086
     # Same pre-delivery as the other three surfaces; unset/empty ⇒ nothing, and the caller types.
-    wnew="$(kt launch --type=os-window --cwd=current $kfocus ${HF_ARGV[@]+"${HF_ARGV[@]}"} 2>/dev/null | tr -d '[:space:]')" || wnew=""
+    wnew="$(kt_launch --type=os-window --cwd=current $kfocus ${HF_ARGV[@]+"${HF_ARGV[@]}"})" || wnew=""
     # Empty output IS this function's documented failure and the caller (:3821 area) already fails
     # loud on it — never print a non-id, which would be landed into as a pane.
     case "$wnew" in ''|*[!0-9]*) return 0 ;; *) command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn os-window kitty "$wnew" "${LAUNCH_DIR:-$PWD}" "spawn_frontmost --type=os-window follow:${FOLLOW:-0}"; printf '%s\n' "$wnew" ;; esac
