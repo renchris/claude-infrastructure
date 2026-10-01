@@ -37,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import kit  # noqa: E402
 
 PASS, FAIL, FILED = "PASS", "FAIL", "FILED"
+ROW_COUNT = 16   # §3.10 rows 1-15, plus row 16: rounds and stage time against their caps (§10 item 17)
 
 
 @dataclass
@@ -86,7 +87,13 @@ def run_rows(ctx: Ctx) -> List[Row]:
         ) as e:  # a row that crashes is a FAIL with its error, never a pass
             num, name = getattr(fn, "row", (0, fn.__name__))
             out.append(Row(num, name, FAIL, [f"row raised {type(e).__name__}: {e}"]))
-    return out
+    # Every row 1..ROW_COUNT must be present: a gate that silently lost a row would certify more
+    # easily, which is the one direction a gate may never fail in.
+    have = {r.num for r in out}
+    for n in range(1, ROW_COUNT + 1):
+        if n not in have:
+            out.append(Row(n, "missing", FAIL, ["row not implemented — unknown fails (§3.10)"]))
+    return sorted(out, key=lambda r: r.num)
 
 
 def print_rows(rows: List[Row], as_json: bool) -> None:
