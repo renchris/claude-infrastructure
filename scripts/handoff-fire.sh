@@ -375,6 +375,12 @@
 # _cc_route_check auto-creates a fresh cc-<ts> worktree; inside an existing worktree or any
 # non-reso dir it launches in place).
 set -euo pipefail
+# The recycle rows' clock and the re-run line (pane-lifecycle fixes item 4b/4d, 2026-10-01). A detached
+# __recycle watcher keeps the parent's clock (exported at its detach), so its outcome rows time the
+# whole recycle; every other invocation starts a fresh one. HF_INVOKED_ARGS is the argv, shell-quoted,
+# for the "re-run" line a held recycle leaves behind.
+case "${1:-}" in __recycle|__selfclose) : ;; *) HF_T0_EPOCH="$(date +%s)"; HF_RCY_PHASES="" ;; esac
+HF_INVOKED_ARGS="$(printf '%q ' "$@")"
 
 # Probe binary — MUST be the binary the launchers exec. Hardcoding it here made that a
 # promise nobody kept: the 2.1.215 -> 2.1.219 repoint moved ~/.zshrc but not this line, so
@@ -927,7 +933,13 @@ emit_recycle_event() { # $1=class $2=engaged (1|0|"") $3=pane $4=detail → alwa
   # lstart is read inline (not via a helper) so suites that extract this function stay self-contained.
   local wp="${WATCHER_PID:-}" wl=""
   case "$wp" in ''|*[!0-9]*) wp="" ;; *) wl="$(TZ=UTC LC_ALL=C ps -o lstart= -p "$wp" 2>/dev/null | sed 's/^ *//; s/ *$//' || true)" ;; esac
+  # PER-PHASE TIMING (pane-lifecycle fixes item 4b). Pane 19's attempt spent 11.7 min before its
+  # intent row and nothing recorded where; `phases` is the trail hf_phase leaves (name@seconds since
+  # this recycle started), `elapsed_s` the clock at this row. Both null outside a timed recycle.
+  local el=""
+  case "${HF_T0_EPOCH:-}" in ''|*[!0-9]*) ;; *) el="$(( $(date +%s) - HF_T0_EPOCH ))" ;; esac
   line=$(jq -cn --arg ts "$(_iso_now)" --arg cl "${1:-recycle}" --arg tp "${3:-}" --arg d "${4:-}" \
+                --arg ph "${HF_RCY_PHASES:-}" --arg el "$el" \
                 --arg fs "${FIRING_SID:-}" --arg ac "${CHOSEN:-}" --arg ps "${RCY_OLD_SID:-}" \
                 --argjson en "$en" --argjson ut "$(_under_test 2>/dev/null || echo false)" \
                 --argjson gr "$([ -n "${FIRE_GOAL:-}" ] && echo true || echo false)" \
@@ -944,8 +956,17 @@ emit_recycle_event() { # $1=class $2=engaged (1|0|"") $3=pane $4=detail → alwa
      + {prompt_file:(if $pf == "" then null else $pf end)}
      + {attempt:       (if $at == "" then null else ($at | tonumber? // $at) end),
         watcher_pid:   (if $wp == "" then null else ($wp | tonumber) end),
-        watcher_lstart:(if $wl == "" then null else $wl end)}' 2>/dev/null) || line=""
+        watcher_lstart:(if $wl == "" then null else $wl end)}
+     + {phases:(if $ph == "" then null else $ph end),
+        elapsed_s:(if $el == "" then null else ($el | tonumber) end)}' 2>/dev/null) || line=""
   [ -n "$line" ] && { printf '%s\n' "$line" >> "$log" 2>/dev/null || true; }
+  return 0
+}
+
+hf_phase() { # $1=phase name → appends "<name>@<s since this recycle started>" to HF_RCY_PHASES (item 4b)
+  local now; now="$(date +%s)"
+  case "${HF_T0_EPOCH:-}" in ''|*[!0-9]*) return 0 ;; esac
+  HF_RCY_PHASES="${HF_RCY_PHASES:+$HF_RCY_PHASES }$1@$((now - HF_T0_EPOCH))s"
   return 0
 }
 
@@ -1362,6 +1383,51 @@ except Exception:
 finally:
     s.close()
 ' "${1#unix:}" >/dev/null 2>&1
+}
+
+# ── IS KITTY'S CONTROL SOCKET ANSWERING, SLOW, OR STUCK? (pane-lifecycle fixes item 4c, 2026-10-01) ──
+# A recycle needs kitty remote control for its resolver, its watcher's pane proof, the composer read
+# and the typed /exit. On 2026-10-01 eight recycles aborted on it, each after spending minutes: the
+# resolver alone retries five 10 s queries, and pane 19's attempt ran 12.5 min before aborting. Asked
+# ONCE, up front, it costs at most a 3 s connect plus one bounded `kitty @ ls`, and the answer decides
+# the whole recycle. Waiting inside the call was rejected (plan "Decisions"): past 120 s the Bash tool
+# moves the call to the background, where a late /exit can interrupt an unrelated later turn, and the
+# long outage (~10 h) outlasts any bound.
+#
+# STUCK, not slow, is a different fact with a different owner. kitty 0.48.2's remote-control thread
+# exits for good on an accept() error, leaving the socket bound and listening: connections then pile
+# up in the accept queue with their requests unread until the listen backlog (128) is full, and only a
+# kitty restart — which ends every pane, so it is the operator's — clears it (docs/research/
+# husk-panes-2026-09-30.md, live capture 2026-10-01). netstat shows it: rows on the socket's path whose
+# Recv-Q holds unread bytes. Seams: CC_HF_NETSTAT_FILE (a `netstat -anv -f unix` capture),
+# CC_KITTY_WEDGED_QUEUE_N (128), CC_RECYCLE_KITTY_PRECHECK=0 (off).
+hf_kitty_queue_depth() { # $1=socket (unix:/path or /path) → connections queued on it holding unread data
+  local path="${1#unix:}" out=""
+  if [ -n "${CC_HF_NETSTAT_FILE:-}" ]; then out="$(cat "$CC_HF_NETSTAT_FILE" 2>/dev/null || true)"
+  else out="$(hf_bounded_s 3 netstat -anv -f unix 2>/dev/null || true)"; fi
+  printf '%s\n' "$out" | awk -v p="$path" '$NF == p && $3 ~ /^[0-9]+$/ && $3 > 0 { n++ } END { print n + 0 }'
+}
+hf_recycle_kitty_precheck() { # → 0 answers (or not a kitty pane) · 1 not answering · 2 STUCK; sets HF_KPROBE_WHY/HF_KPROBE_SOCK
+  local sock q
+  HF_KPROBE_WHY="" HF_KPROBE_SOCK=""
+  [ "${CC_RECYCLE_KITTY_PRECHECK:-1}" != 0 ] || return 0
+  kitty_identity || return 0
+  sock="${CC_TERM_KITTY_TO:-${KITTY_LISTEN_ON:-}}"
+  case "$sock" in unix:/*) ;; /*) sock="unix:$sock" ;; *) return 0 ;; esac
+  HF_KPROBE_SOCK="${sock#unix:}"
+  if kitty_socket_accepting "$sock"; then
+    kt ls >/dev/null 2>&1 && return 0
+    HF_KPROBE_WHY="the socket $HF_KPROBE_SOCK accepted a connection, but 'kitty @ ls' did not answer within ${HF_TIMEOUT_S:-10}s"
+  else
+    HF_KPROBE_WHY="the control socket $HF_KPROBE_SOCK did not accept a connection"
+  fi
+  q="$(hf_kitty_queue_depth "$sock")"
+  if [ "${q:-0}" -ge "${CC_KITTY_WEDGED_QUEUE_N:-128}" ]; then
+    HF_KPROBE_WHY="$HF_KPROBE_WHY, and $q connections sit queued on it with their requests unread — the accept queue is full, so kitty's remote-control thread is gone"
+    return 2
+  fi
+  HF_KPROBE_WHY="$HF_KPROBE_WHY ($q queued)"
+  return 1
 }
 
 # kitty control-socket call. BOUNDED through hf_bounded exactly like every osascript here — kitty's
@@ -1916,6 +1982,25 @@ sc_noanswer_giveup() { # $1=pane $2=proof rc $3=watcher log $4=queue row → alw
   hf_alarm selfclose-no-answer "$1" "$(cc_sid_for_pane "$1" 2>/dev/null || true)" "${SC_SUCCESSOR:-}" "HANDOFF-SELFCLOSE-NO-ANSWER: self-close of pane $1 aborted before /exit because the terminal's remote control never answered (proof rc $2, ${SC_ARM:-1} pass(es)). The session is ALIVE and still holds its pane; it meant to close. Re-run its self-close once the terminal answers. ${4:+Queue row: $4.}" || true
   return 0
 }
+# ── A RECYCLE THAT COULD NOT RUN IS OWED, DURABLY (pane-lifecycle fixes item 4d) ──────────────────────
+# The held recycle leaves a `recycle` row in the pane-close queue naming the pane, its session and the
+# exact command to re-run. Nothing here waits or types: the row is the record, and whoever acts on it
+# (scripts/pane-close-retry.sh, once kitty answers) only tells the session to re-run its own recycle as
+# its own call. A later recycle of the same pane that arms its watcher spends the row.
+hf_recycle_owed_record() { # $1=pane $2=why → always 0
+  sc_pcq_load || { echo "⚠ recycle: pane-close queue lib unreachable — this held recycle is NOT durably recorded" >&2; return 0; }
+  pcq_add recycle "$1" sid="$(cc_sid_for_pane "$1" 2>/dev/null || true)" cwd="$PWD" reason="$2" \
+    argv="${HF_INVOKED_ARGS:-}" kitty_sock="${HF_KPROBE_SOCK:-}" >/dev/null 2>&1 \
+    && echo "→ recycle owed: a durable row now records it (pane-close queue, kind recycle); you will be told to re-run once the terminal answers" >&2
+  return 0
+}
+hf_recycle_owed_clear() { # $1=pane → removes this pane's owed-recycle row, if any; always 0
+  local row
+  sc_pcq_load || return 0
+  row="$(pcq_list 2>/dev/null | grep -F "/recycle-$(printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_').json" | head -1 || true)"
+  [ -n "$row" ] && pcq_remove "$row" >/dev/null 2>&1
+  return 0
+}
 sc_noanswer_clear() { # $1=queue row → the wait ended in a proven arm; the row is spent
   [ -n "${1:-}" ] || return 0
   if sc_pcq_load && command -v pcq_remove >/dev/null 2>&1; then pcq_remove "$1" >/dev/null 2>&1 || true
@@ -2042,6 +2127,27 @@ own_ancestry_pids() { # → this pid, then each ancestor, one per line · bounde
   done
 }
 
+# hf_self_kitty_tty — this kitty window's tty from process truth alone (pane-lifecycle fixes item 4a).
+# Walks up from $$ to the ancestor whose parent is $KITTY_PID — the process kitty launched in this
+# window — and prints /dev/<its tty>. Empty when $KITTY_PID is unset or not an ancestor, or the tty is
+# unreadable; the caller then asks the terminal as before. The window root's tty, not the caller's:
+# under reso-resume-one's expect, claude sits on a nested pty (ttys030) while the window is ttys016.
+hf_self_kitty_tty() { # → /dev/<tty> | empty
+  local kp="${KITTY_PID:-}" p="$$" pp t n=0
+  case "$kp" in ''|*[!0-9]*) return 0 ;; esac
+  while [ -n "$p" ] && [ "$p" != 0 ] && [ "$p" != 1 ] && [ "$n" -lt 32 ]; do
+    pp="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d '[:space:]')" || pp=""
+    if [ "$pp" = "$kp" ]; then
+      t="$(ps -o tty= -p "$p" 2>/dev/null | tr -d '[:space:]')" || t=""
+      case "$t" in ''|'??') return 0 ;; esac
+      printf '/dev/%s' "${t#/dev/}"
+      return 0
+    fi
+    p="$pp"; n=$((n + 1))
+  done
+  return 0
+}
+
 own_ancestry_ttys() { # → the DISTINCT ttys owned anywhere in this ancestry, as basenames
   local pids csv
   pids="$(own_ancestry_pids)" || pids=""
@@ -2140,6 +2246,7 @@ verify_self_pane() { # $1=claimed pane id  $2=1 if the caller stated it explicit
   local claimed="$1" explicit="$2" mode="$3" verdict true_pane why consequence
   HF_VERIFIED_PANE="$claimed"
   verdict="$(pane_ownership "$claimed")"
+  HF_SELF_VERDICT="$verdict"   # read by recycle_fire's ancestry tty (item 4a): only a PROVEN mine may skip the resolver
   case "$verdict" in
     mine) return 0 ;;
     unknown)
@@ -5445,6 +5552,23 @@ fi
 # never gate a fire or a close. Absent binary ⇒ silent no-op (the ADD-not-live window); failures
 # swallowed. The DEBT side is recorded at fire time, the DISCHARGE at self-close; consumers count
 # the open set (bin/cc-custody header has the model).
+# hf_backlog_needs — file an operator-only step, best-effort (pane-lifecycle fixes item 4c). The same
+# resolution ladder as _hf_custody; CC_BACKLOG_BIN set is authoritative (an absent path disables it,
+# which keeps a test hermetic). Re-filing the same step is idempotent: its id hashes project+title.
+hf_backlog_needs() { # $1=step [cc-backlog needs flags...] → always 0
+  local bin=""
+  if [ -n "${CC_BACKLOG_BIN+x}" ]; then bin="$CC_BACKLOG_BIN"
+  else
+    for bin in "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/../bin/cc-backlog" \
+               "$HOME/.claude/bin/cc-backlog"; do
+      [ -x "$bin" ] && break; bin=""
+    done
+  fi
+  [ -n "$bin" ] && [ -x "$bin" ] || return 0
+  hf_bounded_s 20 "$bin" needs "$@" >/dev/null 2>&1 || true
+  return 0
+}
+
 _hf_custody() {
   local bin=""
   for bin in "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/../bin/cc-custody" \
@@ -12299,10 +12423,37 @@ if [ "$RECYCLE" = 1 ]; then
   # worktree and brief — strictly worse than the wrong-pane close the item was filed for, through
   # the identical self_pane_id read. `unknown` proceeds exactly as before; only a positive disproof
   # refuses. (Scope grown under Follow-On Gate F1-F4: same defect, same helper, same envelope.)
+  hf_phase gates
+  # FAIL FAST ON A TERMINAL THAT IS NOT ANSWERING (pane-lifecycle fixes item 4c) — see
+  # hf_recycle_kitty_precheck. Before the self-identity probe and before the intent row, so a deaf
+  # kitty costs ~15 s and leaves one honest row, not 12 minutes and an abort. A dry run only reports.
+  HF_KPROBE_RC=0; hf_recycle_kitty_precheck || HF_KPROBE_RC=$?
+  hf_phase kitty-probe
+  if [ "$HF_KPROBE_RC" != 0 ] && [ "${DRY:-0}" = 1 ]; then
+    echo "⚠ recycle (dry run): $HF_KPROBE_WHY — a real run would be HELD here, nothing typed" >&2
+  elif [ "$HF_KPROBE_RC" = 2 ]; then
+    emit_recycle_event recycle-held-wedged "" "$SID" "kitty control socket STUCK: $HF_KPROBE_WHY" || true
+    hf_recycle_owed_record "$SID" "kitty control socket stuck (accept queue full)"
+    hf_backlog_needs "restart kitty (control socket stuck: queue full)" \
+      --falsifier "test ! -S $HF_KPROBE_SOCK"
+    { echo "!! recycle HELD (kitty's control socket is STUCK, not slow): $HF_KPROBE_WHY."
+      echo "!!   Only a kitty restart clears it, and a restart ends every pane, so that step is the operator's (filed: cc-backlog needs \"restart kitty (control socket stuck: queue full)\")."
+      echo "!!   Nothing was typed and nothing was closed; this session stays alive and keeps working."
+    } >&2
+    exit 1
+  elif [ "$HF_KPROBE_RC" = 1 ]; then
+    emit_recycle_event recycle-held-unreachable "" "$SID" "kitty did not answer the up-front probe: $HF_KPROBE_WHY" || true
+    hf_recycle_owed_record "$SID" "kitty remote control not answering"
+    { echo "!! recycle HELD (kitty is not answering): $HF_KPROBE_WHY."
+      echo "!!   Nothing was typed and nothing was closed; this session stays alive. Re-run the same command once 'kitten @ ls' answers in under 2 s — run it bare: an outer 'timeout' or a grep filter hides the verdict."
+    } >&2
+    exit 1
+  fi
   if [ "$RCY_REMOTE" = 0 ]; then
     verify_self_pane "$SID" "$([ -n "$SESSION_ID" ] && echo 1 || echo 0)" --recycle || exit 2
     SID="$HF_VERIFIED_PANE"
   fi
+  hf_phase self-id
   # ── THE SELF FORM OF --transplanted-source READS ITS OWN EVIDENCE (lead ruling, 2026-09-22) ─────
   # The remote pre-pass above was hf_transplant_evidence's ONLY caller on this path, so the SELF arm
   # — --transplanted-source with no --source-pane, which is the PRIMARY form of the voluntary switch
@@ -15206,6 +15357,7 @@ recycle_fire() {
       exit 1
     fi
   fi
+  hf_phase intent
   emit_recycle_event recycle-intent "" "$SID" "recycle ATTEMPTED for pane $SID; no watcher detached yet" || true
   ts="$(date +%s)"
   # Per-uid 0700 temp dir, not the mode-1777 /tmp (CWE-377/CWE-59). $cmdfile is never executed as a
@@ -15235,11 +15387,25 @@ recycle_fire() {
   # the successor gate splits its rc because `self-close --successor` is a primary close form whose
   # caller does branch on it. The asymmetry is chosen, not missed. What both share is the message:
   # a wedged resolver must not be reported as a missing pane.
-  tty_rc=0
-  tty="$(as_tty_classified "$SID")" || tty_rc=$?
+  tty_rc=0 tty=""
+  # THE SELF PANE'S TTY FROM ITS OWN PROCESS TREE (pane-lifecycle fixes item 4a). In kitty this query
+  # is `kitty @ ls` → pid → tty, and under a stalled socket it costs five 10 s failures before it says
+  # CANNOT TELL. For THIS pane the answer needs no terminal at all: the ancestor whose parent is
+  # $KITTY_PID is the process kitty launched in this window, and its tty is the window's tty (under
+  # reso-resume-one's expect it differs from the caller's own: ttys030 vs ttys016). Taken only when the
+  # self-identity gate PROVED the pane ours (`mine`): with an `unknown` verdict the environment's id
+  # could be stale, and an ancestry tty would then describe this pane while /exit went to that one.
+  if [ "${RCY_REMOTE:-0}" = 0 ] && [ "${HF_SELF_VERDICT:-}" = mine ] && [ "${CC_RECYCLE_ANCESTRY_TTY:-1}" != 0 ] \
+     && kitty_identity; then
+    tty="$(hf_self_kitty_tty)"
+    [ -n "$tty" ] && echo "→ recycle: pane $SID's tty is $tty, read from this process's own ancestry (no terminal round-trip)" >&2
+  fi
+  [ -n "$tty" ] || tty="$(as_tty_classified "$SID")" || tty_rc=$?
+  hf_phase tty
   case "$tty_rc" in
     0) : ;;
     3) emit_recycle_event recycle-held-unreachable "" "$SID" "pane→tty resolver never answered (${HANDOFF_TTY_RETRIES:-5} failed queries) — the terminal API is unresponsive, the pane is not known to be gone" || true
+       hf_recycle_owed_record "$SID" "pane→tty resolver never answered"
        { echo "!! recycle ABORTED (resolver CANNOT TELL): the pane→tty resolver never answered for session $SID — ${HANDOFF_TTY_RETRIES:-5} attempt(s), every one a FAILED query. This says nothing about the pane; it is almost certainly still here (you are running inside it)."
          echo "!!   recover: retry once the terminal API answers again. Nothing was typed and nothing was closed."
        } >&2; exit 1 ;;
@@ -15506,6 +15672,9 @@ recycle_fire() {
   # $16 (W7c): the tool call of THIS pane's session that we are running inside, if any — the watcher
   # waits for it to return before re-submitting an /exit that it alone held up.
   RCY_CALLER_PID_ARG="$(hf_invoking_call_pid "$tty")" || RCY_CALLER_PID_ARG=""
+  hf_phase detach
+  # The watcher's outcome rows keep this recycle's clock (item 4b): exported here, at its detach only.
+  export HF_T0_EPOCH HF_RCY_PHASES
   WATCHER_PID="$(detach "$log" "$0" __recycle "$SID" "$tty" "$cmdfile" "$LAUNCH_DIR" "$rcy_old_sid" "$RECYCLE_MARKER" "$FIRE_GOAL" "${PROMPT_FILE_ORIG:-$PROMPT_FILE}" "$RESUME_CFG" "${RESUME_LAUNCHER:+${RCY_SOURCE_SESSION:-$rcy_old_sid}}" "$RCY_T0" "$RCY_SRC_TX" "$RCY_RUN_DIR_ARG" "$RCY_SUBMIT_TOKEN_ARG" "$RCY_CALLER_PID_ARG")"
   if ! await_armed "$log"; then
     hf_recycle_disarm
@@ -15547,6 +15716,7 @@ recycle_fire() {
       *) emit_recycle_event recycle-held-unreachable "" "$SID" "the watcher returned no pane verdict inside the window (stalled probe; see $log)" || true ;;
     esac
     if [ "$RCY_PP" = 3 ]; then
+      hf_recycle_owed_record "$SID" "the watcher's pane probe got no answer"
       echo "!! recycle ABORTED: the terminal did not answer the watcher's pane probe for $SID (a failed listing, typically the 10 s bound firing while kitty's socket is stalled) — that is NOT a missing pane. /exit NOT typed, session stays alive. Re-run once the terminal answers: $CMD" >&2
     elif [ "$RCY_PP" = 2 ]; then
       echo "!! recycle ABORTED: the watcher returned NO pane verdict for $SID inside the window — it neither reached the pane nor said it could not. That is a STALLED probe, not a refused one; $log names the transport it selected. /exit NOT typed, session stays alive. Run manually: $CMD" >&2
@@ -15555,6 +15725,8 @@ recycle_fire() {
     fi
     exit 1
   fi
+  hf_phase armed
+  hf_recycle_owed_clear "$SID"
   echo "→ recycle armed for $SID: watcher pid $WATCHER_PID (session-detached, heartbeat verified) relaunches $LAUNCHER once claude exits (log: $log)"
   echo "  manual fallback if no relaunch appears: $CMD"
   # Teardown marker BEFORE the first /exit — the crash watchdog must read a planned recycle, not a

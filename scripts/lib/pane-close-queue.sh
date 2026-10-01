@@ -13,7 +13,9 @@
 # shell options. Safe under `set -u` and /bin/bash 3.2 (launchd runs the drainer's caller there).
 #
 # THE INTERFACE IS FIXED (handoff-fire's self-close arm and the drainer code against it):
-#   pcq_add <kind> <pane> [key=value ...]   rc 0 written · 1 not. kind ∈ teammate | self-close
+#   pcq_add <kind> <pane> [key=value ...]   rc 0 written · 1 not. kind ∈ teammate | self-close | recycle
+#   (recycle — a recycle handoff-fire HELD because kitty did not answer; pane-lifecycle fixes item 4d.
+#    It is a record, never a close: the drainer only tells the session to re-run its own recycle.)
 #   pcq_list                                one row path per line
 #   pcq_remove <row path>                   only a row inside PCQ_DIR
 #   pcq_get <row path> <key>                the value, or nothing
@@ -34,7 +36,7 @@ _pcq_strict() { printf '%s' "$1" | LC_ALL=C tr -cd 'A-Za-z0-9 ._:/@+=,%~^-'; }
 
 pcq_add() {
   local kind="${1:-}" pane="${2:-}" row tmp now kv key
-  case "$kind" in teammate|self-close) ;; *) return 1 ;; esac
+  case "$kind" in teammate|self-close|recycle) ;; *) return 1 ;; esac
   [[ -n "$pane" ]] || return 1
   shift 2
   local -a pairs=()
