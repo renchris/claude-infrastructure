@@ -58,3 +58,37 @@ Decompose and fan out a Dynamic Workflow. Give each candidate its own researcher
 4. **Hybrids, and what each costs.** Weigh migration of the 3 launchers (cc-pane-runner, reso-resume-one, hand-opened zsh), the classifier's limits on agents ending or steering sessions, and operator ergonomics such as dragging panes and title bars.
 
 Deliver docs/research/session-durability-2026-10.md: answer-first, a ranked recommendation with conviction, and a phased build plan for W3.
+
+## W2 result (landed 316a3e087, 2026-10-01)
+
+**Build restore-first now (62%), and the kitty patch second, in parallel (60%).** Read
+docs/research/session-durability-2026-10.md for the answer, the
+[judge verdict](../research/session-durability-2026-10/judge-verdict.md) for the per-candidate
+reasoning, and the [W3 build plan](../research/session-durability-2026-10/W3-build-plan.md) for the
+phases (W3.1 = P1, P2 and P6 in parallel). W3 is filed as backlog `b7ce699affec` (T7).
+
+| Rank | Option | Conviction | Decision |
+|---|---|---|---|
+| 1 | H1 restore-first: C2's restore command hardened by the skeptics, page-first, with an evidence-gated launch nudge | 62% | Build first (P1-P5) |
+| 2 | C3 P2 kitty patch: the remote-control thread survives an `accept()` error, and signal handling is restored | 60% | Build second (P6) |
+| 3 | H2: H1 plus a tmux host per session | 35% | Not now; gated on one real H1 restore, a real-Claude pilot, and the operator's scrollback ruling |
+| 4 | C2 restore command as specified | 40% | Superseded by H1 |
+| 5 | C3 socket fixes beyond P2 | 35% | Keep P2 only |
+| 6 | C1 tmux session layer, phased | 30% | Do not build as designed |
+| 7 | C5 Claude Code's own background sessions as the layer | 15% | Do not build |
+| 8 | Null: today's /tmp scripts as a runbook | 10% | Baseline only |
+
+How it ran. One Dynamic Workflow (run wf_9c6df558-257): researchers for C1-C3 and C5, each with a
+code-and-evidence skeptic and an operator-risk skeptic, then a C4 hybrids researcher. C5 (Claude
+Code's own `--bg`/`attach` daemon) was added mid-run after the lead's report of a hidden duplicate
+session. The account ran out of weekly quota before the judge and planner ran, so a finisher session
+(d53dd212) wrote the verdict and build plan from the dossiers on disk and landed them.
+
+Findings that change other work:
+- **Our own recycle forks hidden sessions.** When `/exit` raises the background-work prompt, the
+  recycle watcher answers "Move to background and exit", and Claude Code then forks the session into
+  a background worker outside any pane. That is how 9aa483e9 appeared, and the daemon logs show 18
+  such forks since July (C5 dossier). W3's P1 fixes it.
+- **Signals go dead when the remote-control thread dies.** On kitty 0.48.2, the same exit that
+  deafens the control socket also drops SIGCHLD and SIGTERM. That is why SIGTERM was ignored and 59
+  zombies piled up. Upstream fixed the signal half in v0.49.0 (C3 dossier and skeptics).
