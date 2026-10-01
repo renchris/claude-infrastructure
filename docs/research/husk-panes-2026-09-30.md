@@ -80,3 +80,17 @@ Three husks were still open after the fix wave landed (F-e `476712b2f`, F-b `7eb
 
 - Why kitty's accept loop stalls (unchanged from the first round's Open list). The SIGHUP path removes the dependency for closing, but not for typing, so recycles and the `/exit` of a self-close still need the socket.
 - A killed lead whose work is later ruled done still carries a "Resume it here" banner until it is closed. `cc-pane-close` closes it, but nothing repaints it. The pane-72 successor owns this.
+
+## Third round, 2026-10-01 12:02 CDT: kitty's remote-control thread is gone, not stalled
+
+Found while investigating why the right-click move menu stopped appearing (the menu's first step is `kitty @ ls`). The live capture the Open list asked for:
+
+- `netstat -anv -f unix`: **128** connections queued on `/tmp/kitty-610`, every one holding its unread 80- or 101-byte `kitty @` request. 128 is the listen backlog, so further connects fail at once with `connection refused`. Load average 108.
+- `sample 610 3` (raw file was in /tmp and is not kept; the thread list is copied here): threads Main (idle in `mach_msg`), `KittyChildMon` (in `poll`), NSEventThread, CVDisplayLink, DiskCacheWrite. **No `KittyPeerMon`.** That is the thread that accepts and serves remote-control peers.
+- kitty 0.48.2 `child-monitor.c` `accept_peer()`: any `accept()` error other than `EINTR` returns false, and `talk_loop` then does `goto end`. The thread exits for good. The socket stays bound and listening, `talk_thread_started` stays true so nothing restarts it, and the `perror` line goes to kitty's stderr, which is `/dev/null`.
+
+So this episode is not a stall. Remote control is dead until kitty restarts. The errno is unknown because the only record went to `/dev/null`. The listen socket is blocking, which rules out `EAGAIN`. kitty held 56 fds against launchd's soft limit of 256, and kitty never raises that limit. `EMFILE` would need about 200 peers held at once, which `PEER_LIMIT` (256, checked only after `accept`) permits under a fleet-wide burst. `ECONNABORTED` and `ENOBUFS` under memory pressure remain possible. A throwaway-kitty reproduction (ulimit 64, flood of idle connections) was written but refused by the permission layer, so the mechanism is read from source, not reproduced.
+
+The earlier "stalls of 10–60 s" were a different, recoverable state: the thread was alive and slow. Each stall builds the queue, and every queued client that times out and gives up is another chance for an `accept()` error that ends the thread.
+
+What follows: anything that needs `kitty @` (the move menu, recycles, typed `/exit`, `kitty-confirm-close`) stays broken until kitty restarts. The move menu now says so on screen instead of doing nothing (`bin/kitty-pane-menu` `alert_unreachable`). The upstream fix is a single line in `accept_peer`: treat a failed `accept()` as "skip this peer", not "stop serving".
