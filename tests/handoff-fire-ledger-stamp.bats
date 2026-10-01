@@ -101,8 +101,19 @@ custody_why() {
 
 @test "1 a self-close over an UNLANDED commit stamps 📦 onto the custody row the originator reads" {
   command -v jq >/dev/null 2>&1 || skip "the custody store is jsonl"
-  run bash "$HF" self-close --terminal --session-id "$PANE" --allow-unlanded --dry-run
-  [ "$status" -eq 0 ]
+  # A REAL close, not a --dry-run (pane-lifecycle fixes item 3, 2026-10-01). This test used to read the
+  # custody row a DRY RUN wrote — which was the defect: a dry run discharged the originator's custody.
+  # The return is now written only once the pane is proven, so the close must reach the proof. The
+  # watcher's probe is $HOME/.claude/bin/it2, stubbed to list this pane; completion-push and the
+  # pane-close queue are pinned to the test dir so the real close path touches no live store. Typing
+  # /exit into a fake pane then fails, which is AFTER the return row is written and is not asserted.
+  mkdir -p "$HOME/.claude/bin"
+  printf '#!/bin/bash\ncase "$*" in *"session list"*) printf "[{\\"id\\":\\"%s\\"}]\\n" ;; esac\nexit 0\n' "$PANE" > "$HOME/.claude/bin/it2"
+  chmod +x "$HOME/.claude/bin/it2"
+  printf '#!/bin/bash\nexit 0\n' > "$BATS_TEST_TMPDIR/cp-stub"; chmod +x "$BATS_TEST_TMPDIR/cp-stub"
+  run env -u KITTY_WINDOW_ID -u KITTY_LISTEN_ON CC_TERM=iterm2 CC_COMPLETION_PUSH_BIN="$BATS_TEST_TMPDIR/cp-stub" \
+      CC_PANE_CLOSE_QUEUE_DIR="$BATS_TEST_TMPDIR/pcq" CC_PCQ_LOG="$BATS_TEST_TMPDIR/pcq.log" \
+      timeout 90 bash "$HF" self-close --terminal --session-id "$PANE" --allow-unlanded
   why="$(custody_why)"
   [ -n "$why" ] || { echo "the custody return row carries NO why — the stamp never reached the originator's store"; false; }
   [[ "$why" == *"LEDGER AT RETIREMENT"* ]] || { echo "the custody row's why is not a ledger stamp: $why"; false; }
