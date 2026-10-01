@@ -12,13 +12,24 @@
 # its interpreter. This imports nothing from lr_recon, reads the heartbeat with sed, and runs under
 # launchd's /bin/bash 3.2 (no associative arrays, no mapfile, no ${x,,}).
 #
-# WHY FOUR CONDITIONS FOR A KILL, all required (§C9):
+# WHY FOUR CONDITIONS FOR A KILL, all required (§C9; condition 4 rewritten by FLEET_V2 W7d):
 #   1. the holder (pid, lstart) is alive and not a zombie — lstart makes pid reuse unkillable;
 #   2. `progress` unchanged across two reads >=30 s apart — one read cannot tell stalled from slow;
 #   3. >=180 s since the last advance, measured from max(progress_wall, first time we saw this value)
 #      — the later of the two, so a watchdog that just started cannot convict on the daemon's word;
-#   4. now - kern.waketime > 120 s — after a wake every clock-derived age is inflated by the sleep.
-#   An unreadable waketime counts as "just woke": no verdict, no kill.
+#      and now - kern.waketime > 120 s — after a wake every clock-derived age is inflated by the sleep
+#      (an unreadable waketime counts as "just woke": no verdict, no kill);
+#   4. positive evidence the holder is NOT working: its CPU time (self + reaped children, `ps -S`)
+#      advanced < 0.5 s over the trailing >=180 s window. Conditions 1-3 alone cannot tell a wedged
+#      holder from a starved one: at load 174-427 (2026-10-01) they killed a working daemon mid-pass
+#      and then its replacement at progress 0, and each kill made the next first pass slower. A
+#      holder that accrues CPU is slow, and is logged "slow, not stalled", not killed. The floor sits
+#      above the heartbeat thread's own writes (one per 10 s, a few centiseconds per window) and far
+#      below a starved pass's share. Two exceptions bound it: a holder still at progress 0 within
+#      600 s of its own lstart is on its first pass and is spared whatever its CPU (startup grace);
+#      and frozen progress past 900 s is killed whatever its CPU, so a loop spinning without
+#      progress still dies. No CPU reading yet (no sample 180 s old, or an unparsable `time`) means
+#      no verdict and no kill until that 900 s ceiling.
 #
 # Never `launchctl kickstart -k` (the kill is ours to attribute; KeepAlive does the restart), never
 # flock(1) (absent on macOS; one launchd job cannot overlap itself anyway).
@@ -46,7 +57,10 @@ SLEEP="${LR_RECON_SLEEP:-sleep}"
 
 STALL_READ_S=30      # condition 2: two reads at least this far apart
 STALL_AGE_S=180      # condition 3
-WAKE_GUARD_S=120     # condition 4
+WAKE_GUARD_S=120     # condition 3, wake half
+CPU_MIN_CS=50        # condition 4: CPU centiseconds over the trailing STALL_AGE_S window = working
+STARTUP_GRACE_S=600  # progress 0 this soon after the holder's own lstart = still on its first pass
+STALL_MAX_S=900      # frozen progress this long is killed whatever the CPU says (a spinning loop)
 STALE_HB_S=60        # dead-daemon page
 LOOP_WINDOW_S=600    # two pid changes inside this window = crash loop
 PAGE_LATCH_S=900     # at most one page per this window
@@ -94,11 +108,28 @@ holder_alive() {  # $1=pid $2=lstart
   return 0
 }
 
+# ── holder CPU (condition 4): self + reaped children, so work done in subprocesses counts ────────
+cpu_cs() {  # $1=pid → accumulated CPU in centiseconds from `ps -S -o time=` ([h:]m:ss.cc), or nothing
+  local t whole part acc=0 IFS=:
+  t="$(LC_ALL=C "$PS" -S -o time= -p "$1" 2>/dev/null | tr -d '[:space:]')"
+  case "$t" in *[!0-9:.]*|:*|*::*|*:.*) return 0 ;; *[0-9].[0-9][0-9]) ;; *) return 0 ;; esac
+  whole="${t%.*}"
+  for part in $whole; do acc=$((acc * 60 + 10#$part)); done
+  printf '%s' "$((acc * 100 + 10#${t##*.}))"
+}
+
+lstart_epoch() {  # $1=lstart as ps prints it under TZ=UTC LC_ALL=C → epoch seconds, or nothing
+  TZ=UTC LC_ALL=C date -j -f '%a %b %d %T %Y' "$1" +%s 2>/dev/null
+}
+
+secs() { printf '%d.%02d' "$(($1 / 100))" "$(($1 % 100))"; }  # centiseconds → "s.cc"
+
 # ── previous run's state ─────────────────────────────────────────────────────────────────────────
-S_PID=""; S_LSTART=""; S_PROG=""; S_PROG_SEEN=""; S_CHANGES=""; S_LAST_PAGE=""
+S_PID=""; S_LSTART=""; S_PROG=""; S_PROG_SEEN=""; S_CHANGES=""; S_LAST_PAGE=""; S_CPU=""
 if [ -f "$STATE" ]; then
   while IFS='=' read -r k v; do
     case "$k" in
+      cpu_samples) S_CPU="$v" ;;
       pid) S_PID="$v" ;;
       lstart) S_LSTART="$v" ;;
       progress) S_PROG="$v" ;;
@@ -124,8 +155,10 @@ fi
 CHANGES="${CHANGES# }"
 
 PROG_SEEN="$NOW"
+CPU_SAMPLES=""
 if is_int "$HB_PROGRESS" && [ "$S_PROG" = "$HB_PROGRESS" ] && is_int "$S_PROG_SEEN"; then
   PROG_SEEN="$S_PROG_SEEN"
+  CPU_SAMPLES="$S_CPU"  # the same stall continues: so does its CPU history
 fi
 
 LAST_PAGE="$S_LAST_PAGE"
@@ -138,6 +171,7 @@ save_state() {
     printf 'progress_seen=%s\n' "$PROG_SEEN"
     printf 'pid_changes=%s\n' "$CHANGES"
     printf 'last_page=%s\n' "$LAST_PAGE"
+    printf 'cpu_samples=%s\n' "$CPU_SAMPLES"
   } > "$tmp" && mv -f "$tmp" "$STATE"
 }
 
@@ -167,6 +201,28 @@ page() {  # $1=reason — latched once per PAGE_LATCH_S across every reason
 ALIVE=0
 holder_alive "$HB_PID" "$HB_LSTART" && ALIVE=1
 
+# CPU samples "t:cs", oldest first: one anchor at least STALL_AGE_S old (the newest such) plus every
+# younger sample. CPU_WIN is the CPU spent between that anchor and now; empty = no evidence yet.
+CPU_WIN=""; CPU_SPAN=""
+if [ "$ALIVE" -eq 1 ]; then
+  cpu_now="$(cpu_cs "$HB_PID")"
+  is_int "$cpu_now" && CPU_SAMPLES="$CPU_SAMPLES $NOW:$cpu_now"
+  anchor=""; younger=""
+  for s in $CPU_SAMPLES; do
+    st="${s%%:*}"; sc="${s#*:}"
+    is_int "$st" && is_int "$sc" || continue
+    if [ $((NOW - st)) -ge "$STALL_AGE_S" ]; then anchor="$s"; else younger="$younger $s"; fi
+  done
+  CPU_SAMPLES="${anchor}${younger}"
+  CPU_SAMPLES="${CPU_SAMPLES# }"
+  if [ -n "$anchor" ] && is_int "$cpu_now"; then
+    CPU_WIN=$((cpu_now - ${anchor#*:}))
+    CPU_SPAN=$((NOW - ${anchor%%:*}))
+  fi
+else
+  CPU_SAMPLES=""
+fi
+
 # ── crash loop / dead daemon ─────────────────────────────────────────────────────────────────────
 n_changes=0
 for t in $CHANGES; do n_changes=$((n_changes + 1)); done
@@ -184,12 +240,27 @@ if [ "$ALIVE" -eq 1 ] && is_int "$HB_PROGRESS" && [ $((NOW - PROG_SEEN)) -ge "$S
   if [ "$stalled" -ge "$STALL_AGE_S" ]; then
     wake="${LR_RECON_WAKETIME:-$(/usr/sbin/sysctl -n kern.waketime 2>/dev/null | sed -n 's/^{ *sec = \([0-9][0-9]*\).*/\1/p')}"
     wake="${wake%%.*}"
+    age=""; ls_epoch="$(lstart_epoch "$HB_LSTART")"
+    is_int "$ls_epoch" && age=$((NOW - ls_epoch))
+    load="$(/usr/sbin/sysctl -n vm.loadavg 2>/dev/null | tr -d '{}' | sed 's/^ *//; s/ *$//')"
+    why=""
     if ! is_int "$wake"; then
       log "stalled ${stalled}s at progress=$HB_PROGRESS but kern.waketime unreadable — no kill"
     elif [ $((NOW - wake)) -le "$WAKE_GUARD_S" ]; then
       log "stalled ${stalled}s at progress=$HB_PROGRESS but woke $((NOW - wake))s ago — no kill"
+    elif [ "$stalled" -ge "$STALL_MAX_S" ]; then
+      why="past the ${STALL_MAX_S}s ceiling, whatever its CPU"
+    elif [ "$HB_PROGRESS" = 0 ] && is_int "$age" && [ "$age" -lt "$STARTUP_GRACE_S" ]; then
+      log "first pass: progress=0 for ${stalled}s, holder started ${age}s ago (startup grace ${STARTUP_GRACE_S}s) — no kill"
+    elif ! is_int "$CPU_WIN"; then
+      log "stalled ${stalled}s at progress=$HB_PROGRESS but no CPU reading across ${STALL_AGE_S}s yet — no kill"
+    elif [ "$CPU_WIN" -ge "$CPU_MIN_CS" ]; then
+      log "slow, not stalled: pid=$HB_PID progress=$HB_PROGRESS unchanged ${stalled}s, CPU +$(secs "$CPU_WIN")s over the last ${CPU_SPAN}s (load ${load:-?}) — no kill"
     else
-      log "KILL -TERM pid=$HB_PID: progress=$HB_PROGRESS unchanged ${stalled}s"
+      why="CPU +$(secs "$CPU_WIN")s over the last ${CPU_SPAN}s, under the $(secs "$CPU_MIN_CS")s floor (load ${load:-?})"
+    fi
+    if [ -n "$why" ]; then
+      log "KILL -TERM pid=$HB_PID: progress=$HB_PROGRESS unchanged ${stalled}s; $why"
       "$KILL" -TERM "$HB_PID" >/dev/null 2>&1
       "$SLEEP" 10
       if holder_alive "$HB_PID" "$HB_LSTART"; then

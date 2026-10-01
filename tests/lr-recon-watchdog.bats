@@ -2,7 +2,7 @@
 # lr-recon-watchdog.bats — the §C9 watchdog for the lr_recon daemon.
 #
 # Hermetic: HOME, LR_STATE_DIR and LR_RECON_ROOT live under $BATS_TEST_TMPDIR; kill and page are fakes
-# that record their argv; sleep is `true`. The "daemon" holder is a real `sleep 60` this test starts,
+# that record their argv; sleep is `true`. The "daemon" holder is a real `sleep 900` this test starts,
 # read with its REAL lstart, so condition 1 (the holder is alive) runs through the real /bin/ps.
 # Clock and wake time are pinned through LR_RECON_NOW / LR_RECON_WAKETIME.
 
@@ -25,7 +25,7 @@ setup() {
   export LR_RECON_PAGE="$BATS_TEST_TMPDIR/bin/fake-page"
   export LR_RECON_SLEEP=true
   export LR_RECON_WAKETIME=$((T - 100000))
-  sleep 60 >/dev/null 2>&1 3>&- &
+  sleep 900 >/dev/null 2>&1 3>&- &  # outlives a 30-tick test under load; teardown kills it
   HOLDER=$!
   HOLDER_LSTART="$(TZ=UTC LC_ALL=C /bin/ps -o lstart= -p "$HOLDER" | tr -s ' ' | sed 's/^ //; s/ $//')"
   [ -n "$HOLDER_LSTART" ]
@@ -43,6 +43,23 @@ hb() {  # $1=pid $2=lstart $3=progress $4=wall $5=progress_wall
 tick() {  # $1=now — one launchd tick
   LR_RECON_NOW="$1" run /bin/bash "$SUT"
   [ "$status" -eq 0 ]
+}
+
+fake_cpu() {  # route `ps -S -o time=` to $CPUF; every other ps call stays the real /bin/ps
+  CPUF="$BATS_TEST_TMPDIR/cpu"
+  printf '#!/bin/sh\ncase "$*" in *time=*) cat "%s"; exit 0 ;; esac\nexec /bin/ps "$@"\n' "$CPUF" \
+    > "$BATS_TEST_TMPDIR/bin/fake-ps"
+  chmod +x "$BATS_TEST_TMPDIR/bin/fake-ps"
+  export LR_RECON_PS="$BATS_TEST_TMPDIR/bin/fake-ps"
+}
+
+ticks_cpu() {  # $1=from $2=to $3=start cs $4=cs added per 30 s tick — progress stays frozen throughout
+  local now="$1" cs="$3"
+  while [ "$now" -le "$2" ]; do
+    printf '  %d:%02d.%02d\n' $((cs / 6000)) $((cs / 100 % 60)) $((cs % 100)) > "$CPUF"
+    tick "$now"
+    now=$((now + 30)); cs=$((cs + $4))
+  done
 }
 
 @test "no heartbeat: exits 0 silently and writes nothing" {
@@ -87,6 +104,68 @@ tick() {  # $1=now — one launchd tick
   [ "$(sed -n 1p "$KLOG")" = "-TERM $HOLDER" ]
   [ "$(sed -n 2p "$KLOG")" = "-KILL $HOLDER" ]
   grep -q "KILL -TERM pid=$HOLDER" "$LR_RECON_ROOT/watchdog.log"
+}
+
+@test "W7d: a slow holder (CPU advancing, progress frozen 300 s) is not killed" {
+  fake_cpu
+  hb "$HOLDER" "$HOLDER_LSTART" 7 $((T - 300)) $((T - 300))
+  ticks_cpu $((T - 300)) "$T" 6100 20  # 0.20 s a tick: a starved pass, 1.2 s per 180 s window
+  [ ! -e "$KLOG" ]
+  grep -q "slow, not stalled: pid=$HOLDER progress=7 unchanged 300s, CPU +1.20s over the last 180s" \
+    "$LR_RECON_ROOT/watchdog.log"
+}
+
+@test "W7d: a wedged holder (CPU frozen but for heartbeat noise) is killed at 180 s" {
+  fake_cpu
+  hb "$HOLDER" "$HOLDER_LSTART" 7 $((T - 300)) $((T - 300))
+  ticks_cpu $((T - 300)) $((T - 150)) 6100 1  # 0.01 s a tick: the heartbeat thread alone
+  [ ! -e "$KLOG" ]
+  ticks_cpu $((T - 120)) $((T - 120)) 6106 0
+  [ "$(sed -n 1p "$KLOG")" = "-TERM $HOLDER" ]
+  grep -q "KILL -TERM pid=$HOLDER: progress=7 unchanged 180s; CPU +0.06s over the last 180s, under the 0.50s floor" \
+    "$LR_RECON_ROOT/watchdog.log"
+}
+
+@test "W7d: a holder that was working and then wedged dies once the trailing window is quiet" {
+  fake_cpu
+  hb "$HOLDER" "$HOLDER_LSTART" 7 $((T - 600)) $((T - 600))
+  ticks_cpu $((T - 600)) $((T - 360)) 100 50  # working hard for 240 s
+  ticks_cpu $((T - 330)) $((T - 210)) 500 0   # then frozen: the last 0.5 s is still in the window
+  [ ! -e "$KLOG" ]
+  ticks_cpu $((T - 180)) $((T - 180)) 500 0   # the last advance has aged out of the window
+  [ "$(sed -n 1p "$KLOG")" = "-TERM $HOLDER" ]
+}
+
+@test "W7d: frozen progress past 900 s is killed even while it burns CPU (a spinning loop)" {
+  fake_cpu
+  hb "$HOLDER" "$HOLDER_LSTART" 7 $((T - 900)) $((T - 900))
+  ticks_cpu $((T - 900)) $((T - 30)) 100 100
+  [ ! -e "$KLOG" ]
+  ticks_cpu "$T" "$T" 3100 100
+  [ "$(sed -n 1p "$KLOG")" = "-TERM $HOLDER" ]
+  grep -q "unchanged 900s; past the 900s ceiling" "$LR_RECON_ROOT/watchdog.log"
+}
+
+@test "W7d: an unparsable CPU reading is no verdict, never a kill" {
+  fake_cpu
+  printf 'garbage\n' > "$CPUF"
+  hb "$HOLDER" "$HOLDER_LSTART" 7 $((T - 300)) $((T - 300))
+  tick $((T - 300))
+  tick "$T"
+  [ ! -e "$KLOG" ]
+  grep -q "no CPU reading across 180s yet — no kill" "$LR_RECON_ROOT/watchdog.log"
+}
+
+@test "W7d: a fresh holder at progress 0 is spared by the startup grace, then judged after it" {
+  fake_cpu
+  E="$(TZ=UTC LC_ALL=C date -j -f '%a %b %d %T %Y' "$HOLDER_LSTART" +%s)"
+  hb "$HOLDER" "$HOLDER_LSTART" 0 "$E" "$E"
+  ticks_cpu $((E + 10)) $((E + 580)) 100 0  # CPU frozen too: only the grace spares it
+  [ ! -e "$KLOG" ]
+  grep -q "first pass: progress=0 for 570s, holder started 580s ago (startup grace 600s) — no kill" \
+    "$LR_RECON_ROOT/watchdog.log"
+  ticks_cpu $((E + 610)) $((E + 610)) 100 0
+  [ "$(sed -n 1p "$KLOG")" = "-TERM $HOLDER" ]
 }
 
 @test "progress that advances between reads is never killed" {
