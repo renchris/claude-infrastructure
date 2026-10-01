@@ -60,7 +60,7 @@ kr()  { printf '%s\n' "$1" >> "$REC/known_rows.jsonl"; }
   certify
   run "$G" requires --program demo --wave B1
   [ "$status" -eq 0 ]
-  [[ "$output" == "CLEAR demo wave B1: CERT-v1"* ]]
+  [[ "$output" == "CLEAR demo wave B1: CERT-v1"* ]] || false
   run "$G" requires --program demo
   [ "$status" -eq 0 ]
 }
