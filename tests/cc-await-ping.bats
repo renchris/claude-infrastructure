@@ -33,6 +33,30 @@ beat() { # <seq> <kind> [age-seconds]
     > "$CC_BEAT_DIR/$SID.json"
 }
 
+# ── condition waits ──────────────────────────────────────────────────────────────────────────────
+# A fixed `sleep N` before an assertion is a bet that the subject got there in N seconds, and this
+# box runs at load 40-150, where a signal handler or a first poll routinely takes longer. Poll for
+# the condition itself under a generous ceiling instead: a healthy run returns at once.
+await_file() { # <path> [ceiling-s] → 0 once it exists; 1 after the ceiling (default 60)
+  local i
+  for i in $(seq 1 "${2:-60}"); do
+    [ -e "$1" ] && return 0
+    sleep 1
+  done
+  return 1
+}
+# ARMED = the first poll's .watching heartbeat. Its signal traps are installed before that loop, so a
+# kill sent after this lands on the handler; one sent after a bare `sleep 2` could beat both.
+await_armed() { await_file "$CC_MAILBOX_DIR/$UUID.watching"; }
+await_line() { # <file> <fixed string> [ceiling-s] → 0 once the file holds it; 1 after the ceiling
+  local i
+  for i in $(seq 1 "${3:-60}"); do
+    grep -qF -- "$2" "$1" 2>/dev/null && return 0
+    sleep 1
+  done
+  return 1
+}
+
 @test "exits 0 and prints the new line when a ping lands mid-wait" {
   ( sleep 1; printf '2026-07-10T10:00:00+0000 [peer] HANDOFF-PING slug: done\n' >> "$MB" ) &
   writer=$!
@@ -134,9 +158,11 @@ beat() { # <seq> <kind> [age-seconds]
 
 # ── PROVEN WAKE: the .watching claim must be falsifiable, not merely fresh ────────────────────────
 @test "the .watching heartbeat records the watcher's OWN pid (a claim its readers can check)" {
-  ( sleep 3; printf '2026-07-10T10:00:00+0000 [peer] ping\n' >> "$MB" ) & writer=$!
+  # The ping waits for the ARM, never for a clock: one that lands before the first poll fires that
+  # poll at once, and the marker is gone again before the check below can read it.
+  ( await_armed; sleep 1; printf '2026-07-10T10:00:00+0000 [peer] ping\n' >> "$MB" ) & writer=$!
   "$AWAIT" "$UUID" --interval 1 --timeout 10 >/dev/null 2>&1 & watcher=$!
-  sleep 2
+  await_armed || false
   wf="$CC_MAILBOX_DIR/$UUID.watching"
   [ -f "$wf" ]
   wpid="$(sed -n 's/^pid=\([0-9][0-9]*\).*/\1/p' "$wf" | head -n1)"
@@ -315,9 +341,9 @@ alias_pane_to_session() {
 
 @test "keyset: the .watching marker is written under EVERY key (either hook's check answers true)" {
   alias_pane_to_session
-  ( sleep 3; printf '2026-07-31T10:00:00+0000 [peer] ping\n' >> "$MB" ) & local writer=$!
+  ( await_armed; sleep 1; printf '2026-07-31T10:00:00+0000 [peer] ping\n' >> "$MB" ) & local writer=$!   # after the arm, as above
   ITERM_SESSION_ID="w0t0p0:$UUID" "$AWAIT" --interval 1 --timeout 10 >/dev/null 2>&1 & local watcher=$!
-  sleep 2
+  await_armed || false
   # mailbox-drain.sh asks about its SESSION key; session-continue.sh asks about the canonicalised key.
   # A single-key marker answers one and not the other, and the hook that misses re-nudges an armed
   # session forever — the mirror of the deafness this whole change closes.
@@ -547,7 +573,7 @@ dead_pid() { local d; sleep 0.1 & d=$!; wait "$d" 2>/dev/null || true; printf '%
 @test "G10: a TERMed watcher prints a verdict on stderr instead of dying silent" {
   local log="$BATS_TEST_TMPDIR/term.log"
   "$AWAIT" "$UUID" --interval 1 --timeout 30 >"$log" 2>&1 & local watcher=$!
-  sleep 2
+  await_armed || false
   [ -f "$CC_MAILBOX_DIR/$UUID.watching" ]          # positive control: it WAS armed before the kill
   kill -TERM "$watcher" 2>/dev/null || true
   local rc=0; wait "$watcher" 2>/dev/null || rc=$?
@@ -557,7 +583,7 @@ dead_pid() { local d; sleep 0.1 & d=$!; wait "$d" 2>/dev/null || true; printf '%
 
 @test "G10: a TERMed watcher clears .watching, so it stops advertising a wake it cannot deliver" {
   "$AWAIT" "$UUID" --interval 1 --timeout 30 >/dev/null 2>&1 & local watcher=$!
-  sleep 2
+  await_armed || false
   [ -f "$CC_MAILBOX_DIR/$UUID.watching" ]          # positive control for the absence asserted below
   kill -TERM "$watcher" 2>/dev/null || true
   wait "$watcher" 2>/dev/null || true
@@ -567,7 +593,7 @@ dead_pid() { local d; sleep 0.1 & d=$!; wait "$d" 2>/dev/null || true; printf '%
 @test "G10: HUP is handled the same way (a closed pane is not a different kind of death)" {
   local log="$BATS_TEST_TMPDIR/hup.log"
   "$AWAIT" "$UUID" --interval 1 --timeout 30 >"$log" 2>&1 & local watcher=$!
-  sleep 2
+  await_armed || false
   kill -HUP "$watcher" 2>/dev/null || true
   local rc=0; wait "$watcher" 2>/dev/null || rc=$?
   grep -q 'verdict=killed' "$log"
@@ -594,13 +620,18 @@ dead_pid() { local d; sleep 0.1 & d=$!; wait "$d" 2>/dev/null || true; printf '%
   # The interval is deliberately LONGER than the writer's delay so both of the writer's actions (the
   # append AND the drain's cursor advance) are in place before the next poll — otherwise the watcher
   # could catch the line pre-drain and the test would pass for the wrong reason.
-  ( sleep 1
+  # The writer starts its delay at the watcher's FIRST POLL (its .watching heartbeat), never at the
+  # launch: the private cursor is seeded from .seen on that poll, and a writer that advanced .seen
+  # before it would hand the watcher a seed that already covers the line — a timeout that reads as
+  # the forever-hang. Measured: `sleep 1` from launch lost that race at load ~40.
+  ( await_file "$CC_MAILBOX_DIR/$UUID.watching" || exit 1
+    sleep 2
     printf '2026-08-09T00:56:08+0000 [peer] HANDOFF-PING: landed 9da394a9c, self-closing\n' >> "$MB"
     printf '1\n' > "$CC_MAILBOX_DIR/$UUID.seen"     # the drain surfaced it and advanced .seen
     printf '1\n' > "$CC_MAILBOX_DIR/$UUID.acked"    # ...and the Stop-fold promoted .acked to match
   ) &
   writer=$!
-  run "$AWAIT" "$UUID" --interval 3 --timeout 15
+  run "$AWAIT" "$UUID" --interval 6 --timeout 60
   wait "$writer" 2>/dev/null || true
   [ "$status" -eq 0 ]                                # NOT 2 — a timeout here is the forever-hang
   [[ "$output" == *"landed 9da394a9c"* ]] || false   # and the body is still printed, not an empty fire
@@ -626,14 +657,15 @@ dead_pid() { local d; sleep 0.1 & d=$!; wait "$d" 2>/dev/null || true; printf '%
   printf 'line one\n' > "$MB"                       # history, already surfaced before we arm
   printf '1\n' > "$CC_MAILBOX_DIR/$UUID.seen"
   printf '0\n' > "$CC_MAILBOX_DIR/$UUID.acked"      # ...but not yet provably consumed
-  ( sleep 1
+  ( await_file "$CC_MAILBOX_DIR/$UUID.watching" || exit 1   # after the seed — see the F-3 case above
+    sleep 2
     printf '2026-08-09T01:00:00+0000 [peer] second line\n' >> "$MB"
     printf '2\n' > "$CC_MAILBOX_DIR/$UUID.seen"     # the drain runs first and gets AHEAD of us
   ) &
   writer=$!
-  run "$AWAIT" "$UUID" --interval 3 --timeout 15
+  run "$AWAIT" "$UUID" --interval 6 --timeout 60
   wait "$writer" 2>/dev/null || true
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 0 ] || { echo "status=$status"; echo "$output"; false; }
   [[ "$output" == *"second line"* ]] || false
   # NOT REGRESSED is still the real property and still asserted: a sibling drain got to 2 ahead of
   # us and we must never write a smaller value back over it. What changed (backlog 0366d5cc7b87) is
@@ -653,7 +685,7 @@ dead_pid() { local d; sleep 0.1 & d=$!; wait "$d" 2>/dev/null || true; printf '%
 
 @test "F-2: a TERMed watcher writes WAKE-PATH-DOWN into the inbox it was watching" {
   "$AWAIT" "$UUID" --interval 1 --timeout 30 >/dev/null 2>&1 & local watcher=$!
-  sleep 2
+  await_armed || false
   [ -f "$CC_MAILBOX_DIR/$UUID.watching" ]            # positive control: it WAS armed before the kill
   kill -TERM "$watcher" 2>/dev/null || true
   wait "$watcher" 2>/dev/null || true
@@ -666,7 +698,7 @@ dead_pid() { local d; sleep 0.1 & d=$!; wait "$d" 2>/dev/null || true; printf '%
   # line as PENDING off the cursor. A line that did not match would still be delivered, but it would
   # be attributed to nobody — so the shape is asserted, not assumed.
   "$AWAIT" "$UUID" --interval 1 --timeout 30 >/dev/null 2>&1 & local watcher=$!
-  sleep 2
+  await_armed || false
   kill -TERM "$watcher" 2>/dev/null || true
   wait "$watcher" 2>/dev/null || true
   grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[+-][0-9]{4} \[cc-await-ping\] WAKE-PATH-DOWN' "$MB"
@@ -749,7 +781,7 @@ _verdict_elapsed() {   # <stream-file|-> → the integer seconds in the FIRST `e
   # line — now carry it, because a reader of either one is deciding whether to re-arm.
   local log="$BATS_TEST_TMPDIR/killed.log"
   "$AWAIT" "$UUID" --interval 1 --timeout 300 >"$log" 2>&1 & local watcher=$!
-  sleep 3
+  await_armed || false
   kill -TERM "$watcher" 2>/dev/null || true
   wait "$watcher" 2>/dev/null || true
   grep -q 'verdict=killed' "$log"
@@ -1102,7 +1134,7 @@ stop_attempts() { # <pid|0> <count> → the number of those stops at which the g
 
 @test "E1: the WAKE-PATH-DOWN line names the LIVE-/goal branch and tells it NOT to re-arm" {
   "$AWAIT" "$UUID" --interval 1 --timeout 30 >/dev/null 2>&1 & local watcher=$!
-  sleep 2
+  await_armed || false
   [ -f "$CC_MAILBOX_DIR/$UUID.watching" ]            # positive control: it WAS armed before the kill
   kill -TERM "$watcher" 2>/dev/null || true
   wait "$watcher" 2>/dev/null || true
@@ -1116,7 +1148,7 @@ stop_attempts() { # <pid|0> <count> → the number of those stops at which the g
   # The failure mode of a goal-aware rewrite is over-correction: a session with NO goal that is told
   # nothing is deaf until someone types at it, which is the defect the notice existed to prevent.
   "$AWAIT" "$UUID" --interval 1 --timeout 30 >/dev/null 2>&1 & local watcher=$!
-  sleep 2
+  await_armed || false
   kill -TERM "$watcher" 2>/dev/null || true
   wait "$watcher" 2>/dev/null || true
   grep -q 'NO live /goal' "$MB"
@@ -1128,7 +1160,7 @@ stop_attempts() { # <pid|0> <count> → the number of those stops at which the g
   # delivered as a second peer message — counted separately, cursor-advanced separately, and
   # attributable to nobody if it lost the `<ISO> [from]` prefix the drain parses.
   "$AWAIT" "$UUID" --interval 1 --timeout 30 >/dev/null 2>&1 & local watcher=$!
-  sleep 2
+  await_armed || false
   kill -TERM "$watcher" 2>/dev/null || true
   wait "$watcher" 2>/dev/null || true
   [ "$(grep -c '' "$MB")" -eq 1 ]
@@ -1148,7 +1180,7 @@ CC_AWAIT_PING_E1_PREFIX_SHA="${CC_AWAIT_PING_E1_PREFIX_SHA:-f704bf8aa}"
   [ -f "$old/bin/cc-await-ping" ] || false
   ! grep -q 'A /goal IS LIVE' "$old/bin/cc-await-ping" || false
   "$old/bin/cc-await-ping" "$UUID" --interval 1 --timeout 30 >/dev/null 2>&1 & local watcher=$!
-  sleep 2
+  await_armed || false
   kill -TERM "$watcher" 2>/dev/null || true
   wait "$watcher" 2>/dev/null || true
   grep -q 'WAKE-PATH-DOWN' "$MB"                     # positive control: the control DID write a notice
@@ -1167,7 +1199,7 @@ CC_AWAIT_PING_E1_PREFIX_SHA="${CC_AWAIT_PING_E1_PREFIX_SHA:-f704bf8aa}"
 
 @test "F5: the WAKE-PATH-DOWN line names a RUNNABLE check, not only the decision" {
   "$AWAIT" "$UUID" --interval 1 --timeout 30 >/dev/null 2>&1 & local watcher=$!
-  sleep 2
+  await_armed || false
   [ -f "$CC_MAILBOX_DIR/$UUID.watching" ]            # positive control: it WAS armed before the kill
   kill -TERM "$watcher" 2>/dev/null || true
   wait "$watcher" 2>/dev/null || true
@@ -1182,7 +1214,7 @@ CC_AWAIT_PING_E1_PREFIX_SHA="${CC_AWAIT_PING_E1_PREFIX_SHA:-f704bf8aa}"
   # re-arms under a live goal re-creates the E1 defect from the other side, so the notice that hands
   # over the predicate must hand over its polarity in the same breath.
   "$AWAIT" "$UUID" --interval 1 --timeout 30 >/dev/null 2>&1 & local watcher=$!
-  sleep 2
+  await_armed || false
   kill -TERM "$watcher" 2>/dev/null || true
   wait "$watcher" 2>/dev/null || true
   grep -qF 'FAILS CLOSED' "$MB"
@@ -1194,7 +1226,7 @@ CC_AWAIT_PING_E1_PREFIX_SHA="${CC_AWAIT_PING_E1_PREFIX_SHA:-f704bf8aa}"
   # evaluates goal-liveness at that same boundary, so the header the reader is already looking at is
   # the answer. A fix that shipped only the shell one-liner would leave the common case paying for it.
   "$AWAIT" "$UUID" --interval 1 --timeout 30 >/dev/null 2>&1 & local watcher=$!
-  sleep 2
+  await_armed || false
   kill -TERM "$watcher" 2>/dev/null || true
   wait "$watcher" 2>/dev/null || true
   grep -qF 'the header above it IS the verdict' "$MB"
@@ -1219,7 +1251,7 @@ CC_AWAIT_PING_F5_PREFIX_SHA="${CC_AWAIT_PING_F5_PREFIX_SHA:-950328c8c}"
   # emitted LINE, so the guard must be keyed on the line, not on the file that prints it.
   ! grep -qF 'the header above it IS the verdict' "$old/bin/cc-await-ping" || false
   "$old/bin/cc-await-ping" "$UUID" --interval 1 --timeout 30 >/dev/null 2>&1 & local watcher=$!
-  sleep 2
+  await_armed || false
   kill -TERM "$watcher" 2>/dev/null || true
   wait "$watcher" 2>/dev/null || true
   grep -qF 'WAKE-PATH-DOWN' "$MB"                            # positive control: it DID write a notice
@@ -1463,7 +1495,7 @@ recorder_pid() { # <watcher pid> -> pid of its python side-car, empty if none
   r="$(recorder_pid "$v")"
   [ -z "$r" ] || false                 # nothing armed
   group_term "$v" || false
-  sleep 2
+  await_line "$cap" 'verdict=killed' || true   # a wait, not the assertion (was `sleep 2`, red at load ~40)
   run grep -cF 'verdict=killed' "$cap" # but the watcher itself was untouched
   [ "$output" = "1" ] || false
 }
@@ -1717,9 +1749,9 @@ class_lines() { # <box> → how many real WAKE-PATH-CLASS messages the box holds
 class_body() { # <box> → the class message(s) only, never the corpse notice that names them
   grep -E '^[^ ]+ \[cc-await-ping\] WAKE-PATH-CLASS:' "$1" 2>/dev/null || true
 }
-await_class() { # <box> → 0 once a real class message exists; 1 after ~25s
+await_class() { # <box> [ceiling-s] → 0 once a real class message exists; 1 after the ceiling (~25s)
   local i
-  for i in $(seq 1 25); do
+  for i in $(seq 1 "${2:-25}"); do
     [ "$(class_lines "$1")" -gt 0 ] 2>/dev/null && return 0
     sleep 1
   done
@@ -1739,17 +1771,23 @@ await_gone() { # <pid> → 0 once the pid is gone; 1 after ~15s
 
 @test "W1: a sender that TOOK A TURN after the kill is (C) DEAF, on the beat advance" {
   local u="CLASS-W1-$$" cap="$BATS_TEST_TMPDIR/w1.out" v s box="$CC_MAILBOX_DIR/CLASS-W1-$$.md"
-  export CC_AWAIT_CLASS_DELAY_S=5
+  export CC_AWAIT_CLASS_DELAY_S=30
   v="$(spawn_isolated "$u" "$cap")" || false
   assert_victim "$v"
   # ALIVE across the whole window on purpose: both (C) arms are then true, and asserting the REASON
   # is what attributes the verdict to the beat advance rather than to mere process survival.
-  s="$(sender_spawn "$v" 12)" || false
+  s="$(sender_spawn "$v" 90)" || false
   beat_for_pid "sidW1" "$s" 7
   sender_fire
-  sleep 2
+  # The advance must land BETWEEN the sampler's two reads. Sample 1 follows the corpse notice (the
+  # sampler is spawned after it) and sample 2 follows sample 1 by CLASS_DELAY_S, so anchor on the
+  # notice and write mid-window. Measured: `sleep 2` after the fire, with a 5 s window, landed BEFORE
+  # sample 1 at load ~40 — both reads saw seq 8, the 12 s sender had exited, and the verdict was B.
+  await_line "$box" 'WHETHER THIS IS BENIGN IS BEING SAMPLED RIGHT NOW' \
+    || { echo "no corpse notice landed"; cat "$cap"; false; }
+  sleep 12
   beat_for_pid "sidW1" "$s" 8            # …a turn taken AFTER it killed the watcher
-  await_class "$box" || { echo "no class line landed"; cat "$cap"; false; }
+  await_class "$box" 90 || { echo "no class line landed"; cat "$cap"; false; }
   class_body "$box" | grep -qF 'verdict=C-DEAF reason=sender-beat-advanced-after-the-kill' \
     || { echo "wrong verdict:"; class_body "$box"; false; }
   class_body "$box" | grep -qF 'seq 7→8' || false     # the evidence, not just the label
@@ -1838,8 +1876,9 @@ await_gone() { # <pid> → 0 once the pid is gone; 1 after ~15s
   s="$(sender_spawn "$v" 0)" || false
   beat_for_pid "sidW5" "$s" 3
   sender_fire
-  sleep 3
-  grep -qF 'WHETHER THIS IS BENIGN IS BEING SAMPLED RIGHT NOW' "$box" || false
+  # Poll for the notice, never `sleep 3`: the handler wrote it later than that at load ~40. The
+  # class line cannot follow it inside CLASS_DELAY_S, so the no-verdict check below stays sharp.
+  await_line "$box" 'WHETHER THIS IS BENIGN IS BEING SAMPLED RIGHT NOW' || false
   grep -qF 'UNTIL THAT LINE ARRIVES, ASSUME (C)' "$box" || false
   [ "$(class_lines "$box")" = "0" ] || false   # …and it says it WITHOUT the verdict it is promising
   kill "$s" 2>/dev/null || true
@@ -1853,8 +1892,8 @@ await_gone() { # <pid> → 0 once the pid is gone; 1 after ~15s
   v="$(spawn_isolated "$u" "$cap")" || false
   assert_victim "$v"
   kill -TERM "$v" 2>/dev/null || true       # THIS PROCESS ALONE — deliberately not the group
-  sleep 3
-  grep -qF 'NO (B)-vs-(C) CLASSIFICATION IS POSSIBLE FOR THIS KILL' "$box" || false
+  # Polled, not `sleep 3`: red twice in three runs at load ~40 with the box not yet written.
+  await_line "$box" 'NO (B)-vs-(C) CLASSIFICATION IS POSSIBLE FOR THIS KILL' || false
   grep -qF 'no si_pid was captured' "$box" || false
   [ "$(class_lines "$box")" = "0" ] || false   # nothing to sample ⇒ no follow-up promised or written
 }
