@@ -1,9 +1,11 @@
 # Upfront research that ends: a no-take-backs method for "100.00/100.00 complete"
 
 Date: 2026-09-30. Scope: greenfield research and planning run through Claude Code on this machine.
-Status: **method version 1, frozen.** The adversarial review that produced Appendix B was the last critique round.
-Later changes come only from measured results (the calibration run and the first pilot program), applied as priced
-edits to named sections, never as a rewrite (§9, decision 8).
+Status: **method version 1.1, frozen; not certified.** After landing, the report was put through its own stopping
+rule twice, and neither pass reached the "3 quiet rounds" exit. Desk review of this document stops here, at the cap of
+2 change rounds the method itself sets. Section 10 records both passes and the 17 open items, which are acceptance
+requirements for the build. Later changes come only from building, testing and the pilot, applied as priced edits to
+named sections, never as a rewrite (§9, decision 8).
 
 Receipts point into `evidence/` beside this file unless they start with `~` or a repository path. Repository paths are
 relative to `~/Development/claude-infrastructure` at trunk `8a2a9acda`. Every simulated number comes from a stdlib Python
@@ -28,8 +30,9 @@ and the most it could be at 95%. After that, asking "are we 100.00/100.00 comple
 tool-level block keeps research tools off unless the prompt is positively labeled as work, and the gate measures how
 often a re-ask is misread. A reply that adds an item the certificate does not carry is blocked, whether it opens "yes"
 or "no". New ideas park in the next version, and every later change is
-counted against the printed forecast instead of reopening research. In the model, the forecast is exceeded in about 1–4%
-of programs. Most programs should still expect at least one material change after signoff (about 6–9 in 10 with a
+counted against the printed forecast instead of reopening research. In the model, the 95% upper bound of that forecast is exceeded (a
+take-back) in about 1–4% of programs (`evidence/final/profile_sim.out:6-27`). The typical-case forecast itself is
+exceeded more often; the simulation does not yet report that rate. Most programs should still expect at least one material change after signoff (about 6–9 in 10 with a
 strong front end). The only things that shrink that number are a better front end and earlier contact with reality;
 more reviewers barely move it. The method needs two rulings from you, made in the intake sitting before any program
 starts: accept this definition of complete, and exempt active programs from the parts of your standing rules that
@@ -1204,3 +1207,57 @@ seconds), and likewise for the files under `evidence/design/` and `evidence/adve
 counts. The two bulk raw-prompt dumps the forensics started from (`prompts.jsonl`, `prompts_dedup.json`, 3.3 MB of
 verbatim operator prompts) are deliberately not copied here. `evidence/internal/ca_scan.py` regenerates them from
 `~/.claude*/projects/*/*.jsonl`.
+
+---
+
+## 10. Certification record: this report under its own stopping rule
+
+You asked whether this report is itself 100.00/100.00 complete. It was tested the way the method tests a frozen plan:
+a fixed question, a fixed materiality rule, blind reviewers using three lenses (launch readiness, correctness, coverage
+of your bar), models rotated across Opus, Sonnet and Fable, zero findings explicitly allowed, and every finding put to
+two independent refuters. Only findings both refuters failed to break were kept.
+
+| Pass | Text reviewed | Raw findings | Survived both refuters | Unique | New per round (3 rounds) | Estimated still unfound |
+|---|---|---|---|---|---|---|
+| 1 | version 1 as landed | 50 | 30 | 18 (15 major, 3 minor) | 11, 4, 3 | about 10 |
+| 2 | version 1.1, after fixing all 18 | 39 | 23 | 17 (12 major, 5 minor) | 9, 4, 4 | about 42 |
+
+"Estimated still unfound" is the Chao1 estimate from how many reviewers found each item (most were found once).
+Records: `evidence/certification/pass1-findings.json`, `pass2-findings.json`.
+
+**What this shows.**
+
+- **Not certified.** Neither pass reached 3 quiet rounds, so the method's own gate would not issue a certificate for
+  this document.
+- **The fixes made new holes.** 12 of pass 2's 17 findings sit in text that the first fix round added. That is the
+  fix-born class from §2.2 (the session's own edits create the next hole), measured here on this report. More
+  fix-and-review rounds on this document would repeat the loop the report diagnoses, so desk review stops at the cap.
+- **What held.** No finding in either pass changed the diagnosis in §2 or the eight-stage structure in §3. All 35
+  findings are specification details: the tooling (the re-ask router and classifier, registry states, build order),
+  gate-row conditions, budgets and defaults, rules inside a stage (pass 1 added a vendor preflight, a frame-expansion
+  step and a conviction rule), or how precisely a number is stated.
+- **Where the rest closes.** These are details of software that does not exist yet. They close by building wave 1
+  with a failing planted-input test for each item below, and by running the pilot, not by more reading.
+
+**Open items, carried into wave 1 as acceptance requirements** (pass 2; pass 1's 18 are fixed in this version, with
+findings 7 and 13 partly fixed and labeled as assumptions for the calibration run):
+
+| # | Severity | Open item | Required resolution |
+|---|---|---|---|
+| 1 | major | The relay test (gate row 14) runs before the registry says 'certified', so the tool block it relies on is never switched on | In §3.8, §4.2 and §8 item 7, add a registry state 'certifying' that gate.sh sets at the freeze (§3.7 step 7). Key the §4.2 deny and the §4.4 Stop check on 'certifying or certified', so the 20 relay trials run with the block on. Add a wave-1 planted-input test that checks a completeness prompt denies Agent, Workflow, handoff-fire.sh and the vendor CLIs. |
+| 2 | major | With one program active, close questions in every other pane get routed to its certificate and all-tool deny | In §4.1 and §8 item 5, delete the single-active fallback (key 3), so routing uses only working directory, DoD marker or the program's name or alias in the prompt. Otherwise, have the classifier label whether a question is about this program, and in fallback panes show a status line only, with no deny and no relay order. |
+| 3 | major | A classifier error or timeout denies every tool (not just research tools), the label carries over to the rest of the session, and there is no breaker or kill switch | Change line 724 to say the cost is 'every tool except the certificate read, for the rest of the session'. In §4.2, treat 'classifier unavailable' as separate from a positive completeness label: deny only the research verbs, retry classification on the next genuine prompt, and never let a continuation inherit a fallback label. Label prompts that carry the --requires-gate work-order marker without calling the classifier. After N consecutive fallbacks, print 'classifier unavailable' and keep only the research-verb deny. Add an operator kill switch. |
+| 4 | major | Nothing in the pilot applies fired class-B defaults or converts class-C rows at their due date, and live autonomy-sweep can dispatch fired defaults as backlog work | In §3.5, §5.6, the stage-4 pilot row and item 7, require every program packet to be filed with --project <deliverable repo> and --default-effect no-change. Add a 'gate.sh sweep' step, run by hand in the pilot and by launchd in wave 2. The sweep reads cc-decide list --all --json for expired-actioned packets and applies them to the decision records. When a class-C due date passes, it opens a class-B replacement packet and acts on the old one. |
+| 5 | major | 'Forecast exceeded in 1–4%' is the rate the 95% bound is exceeded, not the rate the printed point forecast is exceeded (about 17–28%) | Resolved in §1 of this version: the 1–4% is now stated as the rate the 95% bound is exceeded. The rate the typical-case forecast is exceeded is left to the calibration run, because no saved simulation output reports it. |
+| 6 | major | The 1–4% take-back rate comes from a total-only simulation, but the method also runs a take-back test per area | Option 1: make per-area bounds informational only, so §5.2 and §5.3 step 5 match profile_sim.py's two-stratum test. Option 2: add the class-to-area table and per-area seed allocation to profile_sim.py, re-run it, and reprint the exceedance rate and the after-signoff ceiling. Either way, reconcile 'once per program' (line 868) with 'once per area per program' (line 1008). |
+| 7 | major | Gate row 11 has no allowed reason for residuals the method itself creates (below the depth cap, over the stage budget, stub-validated, probe tail) | Add to gate row 11 the reason classes 'depth cap (§3.5)', 'stage budget exhausted (§3.6)' and 'stub-validated (§3.6)'. Each needs an owner build wave, a due date and a dated closing probe, and is exempt from 'closest probe already run'. State that these rows render as FILED, not FAIL. Add them to §3.1's signed list and to §7. Print the count of capped rows on the certificate and the contract page, and count any that are realized in the any-cause counter. |
+| 8 | major | The §4.2 research block denies the post-certificate activities the method requires (escape fixes, the frame-delta cycle, triage raters), and reopen is the only way through | Add a route to the §4.1 table and an allow condition to §4.2 for contract-listed activities. When the registry holds an open priced activity id (escape, frame-delta cycle, triage batch) opened by triage or the kit, allow round.sh --delta, courier.sh and Agent calls tagged with that id. State that these activities never go through cc-research reopen and are booked against their escape counter. |
+| 9 | major | A frame-omission known row cannot close once its single frame-delta cycle is used up or the operator does not re-sign, so dependent build waves stay blocked | In §5.4 step 1, give the frame re-sign a due date and a default, like the other §5.6 gates. In §5.4 and the §6.5 loop table, define what happens after the cap: omitted rows become class-B/C rows with defaults, or their dependent waves are descoped as for class C. The known row then closes and --requires-gate stops refusing without a reopen. |
+| 10 | major | The standing-rule exemption is keyed on a DoD marker that no step writes, and that key differs from the router's | Option 1: key the exemption (§3.1 ruling 2, item 3) on the same program-registry resolution that §4.1 uses (working directory or worktree from programs.json). Option 2: state in §3.2 step 9, items 8 and 13, and the Stage 1 pilot row that the intake script writes program:<slug> into the lead's DoD line and that handoff-fire.sh --requires-gate writes it into each fired session's DoD. |
+| 11 | major | Gate row 15 measures only completeness recall, with no floor for correct labels on other prompts and no ceiling on fallbacks, so an always-failing or over-labeling router passes | Add two conditions to gate row 15 and fail it on either: a held-out set of work-order and other non-completeness prompts with a minimum correct-label rate, and a maximum fallback (timeout plus error) rate measured at the configured time limits. |
+| 12 | major | Gate row 15's held-out pool is the 280 asks the old regex selected, so it has no regex-missed paraphrases or pushback | In gate row 15, define the held-out sampling frame in strata: regex-matched asks, regex-missed paraphrases (the regex_recall gap-seeking set and the 77 post-done prompts that did not match), and pushback phrasings. Report recall per stratum and require at least 0.95 in each. Note that the 280 asks were selected by the regex. |
+| 13 | minor | No build item creates the sealed, labeled held-out set that gate row 15 requires | Add to §8 item 5 or 7: before the router is written, split the candidate prompts into a tuning set and a sealed set of at least 40, stored where the router's builder cannot read it. Have two raters label the sealed set, and have gate.sh read it at run time. |
+| 14 | minor | §7's strong-front-end residual range (0.7–1.6) and §1's '6–9 in 10' leave out the default Lite profile at 20 holes | In §7, change the range to 0.7–2.7, noting that 2.7 is the default Lite profile at 20 holes. In §1, change 'about 6–9 in 10' to 'about 6–10 in 10' to match §3.12. |
+| 15 | minor | '20 of 73 yes-replies named a new item (27%)' is a regex count with false positives and duplicate sessions, and the lottery numbers inherit it | Dedupe the ask census by (session uuid, timestamp): 236 asks, 61 yes-replies, 16 hits. Hand-label the 16 hits and report the true count (about 2–3). If they are not labeled yet, mark 27% as a regex upper bound. Recompute the 280, 268 and 44 counts and lottery.py's r, and the §4.4 '1.6–8.1 notices / up to 48%' figures. |
+| 16 | minor | The front-end return trigger 'well above the design point' has no number | Replace 'well above' in §6.1 and the §6.5 loop table with a numeric threshold, for example round-1 forecast p50 above 1.5x the profile's design point. List it with the assumed inputs the calibration run measures. |
+| 17 | minor | The ceiling is not enforced in code during the pilot, because cap enforcement (item 9) ships in wave 2 | Option 1: move cap enforcement into the wave-1 kit. round.sh refuses a round past R_max or the hard cap, and gate.sh gets a row checking rounds and stage time against their caps. Option 2: change line 947 to say the pilot's ceiling is procedural until item 9 lands. |

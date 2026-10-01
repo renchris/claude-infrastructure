@@ -1,0 +1,145 @@
+{
+ "unique": [
+  {
+   "title": "The relay test (gate row 14) runs before the registry says 'certified', so the tool block it relies on is never switched on",
+   "first_round": 1,
+   "times_found": 3,
+   "severity": "major",
+   "line": 528,
+   "fix": "In \u00a73.8, \u00a74.2 and \u00a78 item 7, add a registry state 'certifying' that gate.sh sets at the freeze (\u00a73.7 step 7). Key the \u00a74.2 deny and the \u00a74.4 Stop check on 'certifying or certified', so the 20 relay trials run with the block on. Add a wave-1 planted-input test that checks a completeness prompt denies Agent, Workflow, handoff-fire.sh and the vendor CLIs."
+  },
+  {
+   "title": "With one program active, close questions in every other pane get routed to its certificate and all-tool deny",
+   "first_round": 1,
+   "times_found": 1,
+   "severity": "major",
+   "line": 697,
+   "fix": "In \u00a74.1 and \u00a78 item 5, delete the single-active fallback (key 3), so routing uses only working directory, DoD marker or the program's name or alias in the prompt. Otherwise, have the classifier label whether a question is about this program, and in fallback panes show a status line only, with no deny and no relay order."
+  },
+  {
+   "title": "A classifier error or timeout denies every tool (not just research tools), the label carries over to the rest of the session, and there is no breaker or kill switch",
+   "first_round": 1,
+   "times_found": 2,
+   "severity": "major",
+   "line": 724,
+   "fix": "Change line 724 to say the cost is 'every tool except the certificate read, for the rest of the session'. In \u00a74.2, treat 'classifier unavailable' as separate from a positive completeness label: deny only the research verbs, retry classification on the next genuine prompt, and never let a continuation inherit a fallback label. Label prompts that carry the --requires-gate work-order marker without calling the classifier. After N consecutive fallbacks, print 'classifier unavailable' and keep only the research-verb deny. Add an operator kill switch."
+  },
+  {
+   "title": "Nothing in the pilot applies fired class-B defaults or converts class-C rows at their due date, and live autonomy-sweep can dispatch fired defaults as backlog work",
+   "first_round": 1,
+   "times_found": 2,
+   "severity": "major",
+   "line": 1094,
+   "fix": "In \u00a73.5, \u00a75.6, the stage-4 pilot row and item 7, require every program packet to be filed with --project <deliverable repo> and --default-effect no-change. Add a 'gate.sh sweep' step, run by hand in the pilot and by launchd in wave 2. The sweep reads cc-decide list --all --json for expired-actioned packets and applies them to the decision records. When a class-C due date passes, it opens a class-B replacement packet and acts on the old one."
+  },
+  {
+   "title": "'Forecast exceeded in 1\u20134%' is the rate the 95% bound is exceeded, not the rate the printed point forecast is exceeded (about 17\u201328%)",
+   "first_round": 1,
+   "times_found": 1,
+   "severity": "major",
+   "line": 31,
+   "fix": "In \u00a71, the \u00a73.12 table header and \u00a77, state two figures. The 95% bound is exceeded (a take-back) in about 1\u20134% of programs. The point forecast ('about N') is exceeded in about 17\u201328%: add that column, re-derived from profile_sim.py. Wherever 1\u20134% appears, define take-back as exceeding the bound."
+  },
+  {
+   "title": "The 1\u20134% take-back rate comes from a total-only simulation, but the method also runs a take-back test per area",
+   "first_round": 2,
+   "times_found": 1,
+   "severity": "major",
+   "line": 853,
+   "fix": "Option 1: make per-area bounds informational only, so \u00a75.2 and \u00a75.3 step 5 match profile_sim.py's two-stratum test. Option 2: add the class-to-area table and per-area seed allocation to profile_sim.py, re-run it, and reprint the exceedance rate and the after-signoff ceiling. Either way, reconcile 'once per program' (line 868) with 'once per area per program' (line 1008)."
+  },
+  {
+   "title": "Gate row 11 has no allowed reason for residuals the method itself creates (below the depth cap, over the stage budget, stub-validated, probe tail)",
+   "first_round": 1,
+   "times_found": 3,
+   "severity": "major",
+   "line": 581,
+   "fix": "Add to gate row 11 the reason classes 'depth cap (\u00a73.5)', 'stage budget exhausted (\u00a73.6)' and 'stub-validated (\u00a73.6)'. Each needs an owner build wave, a due date and a dated closing probe, and is exempt from 'closest probe already run'. State that these rows render as FILED, not FAIL. Add them to \u00a73.1's signed list and to \u00a77. Print the count of capped rows on the certificate and the contract page, and count any that are realized in the any-cause counter."
+  },
+  {
+   "title": "The \u00a74.2 research block denies the post-certificate activities the method requires (escape fixes, the frame-delta cycle, triage raters), and reopen is the only way through",
+   "first_round": 2,
+   "times_found": 1,
+   "severity": "major",
+   "line": 1098,
+   "fix": "Add a route to the \u00a74.1 table and an allow condition to \u00a74.2 for contract-listed activities. When the registry holds an open priced activity id (escape, frame-delta cycle, triage batch) opened by triage or the kit, allow round.sh --delta, courier.sh and Agent calls tagged with that id. State that these activities never go through cc-research reopen and are booked against their escape counter."
+  },
+  {
+   "title": "A frame-omission known row cannot close once its single frame-delta cycle is used up or the operator does not re-sign, so dependent build waves stay blocked",
+   "first_round": 2,
+   "times_found": 1,
+   "severity": "major",
+   "line": 1007,
+   "fix": "In \u00a75.4 step 1, give the frame re-sign a due date and a default, like the other \u00a75.6 gates. In \u00a75.4 and the \u00a76.5 loop table, define what happens after the cap: omitted rows become class-B/C rows with defaults, or their dependent waves are descoped as for class C. The known row then closes and --requires-gate stops refusing without a reopen."
+  },
+  {
+   "title": "The standing-rule exemption is keyed on a DoD marker that no step writes, and that key differs from the router's",
+   "first_round": 3,
+   "times_found": 1,
+   "severity": "major",
+   "line": 214,
+   "fix": "Option 1: key the exemption (\u00a73.1 ruling 2, item 3) on the same program-registry resolution that \u00a74.1 uses (working directory or worktree from programs.json). Option 2: state in \u00a73.2 step 9, items 8 and 13, and the Stage 1 pilot row that the intake script writes program:<slug> into the lead's DoD line and that handoff-fire.sh --requires-gate writes it into each fired session's DoD."
+  },
+  {
+   "title": "Gate row 15 measures only completeness recall, with no floor for correct labels on other prompts and no ceiling on fallbacks, so an always-failing or over-labeling router passes",
+   "first_round": 3,
+   "times_found": 1,
+   "severity": "major",
+   "line": 585,
+   "fix": "Add two conditions to gate row 15 and fail it on either: a held-out set of work-order and other non-completeness prompts with a minimum correct-label rate, and a maximum fallback (timeout plus error) rate measured at the configured time limits."
+  },
+  {
+   "title": "Gate row 15's held-out pool is the 280 asks the old regex selected, so it has no regex-missed paraphrases or pushback",
+   "first_round": 3,
+   "times_found": 1,
+   "severity": "major",
+   "line": 585,
+   "fix": "In gate row 15, define the held-out sampling frame in strata: regex-matched asks, regex-missed paraphrases (the regex_recall gap-seeking set and the 77 post-done prompts that did not match), and pushback phrasings. Report recall per stratum and require at least 0.95 in each. Note that the 280 asks were selected by the regex."
+  },
+  {
+   "title": "No build item creates the sealed, labeled held-out set that gate row 15 requires",
+   "first_round": 2,
+   "times_found": 1,
+   "severity": "minor",
+   "line": 585,
+   "fix": "Add to \u00a78 item 5 or 7: before the router is written, split the candidate prompts into a tuning set and a sealed set of at least 40, stored where the router's builder cannot read it. Have two raters label the sealed set, and have gate.sh read it at run time."
+  },
+  {
+   "title": "\u00a77's strong-front-end residual range (0.7\u20131.6) and \u00a71's '6\u20139 in 10' leave out the default Lite profile at 20 holes",
+   "first_round": 1,
+   "times_found": 1,
+   "severity": "minor",
+   "line": 1044,
+   "fix": "In \u00a77, change the range to 0.7\u20132.7, noting that 2.7 is the default Lite profile at 20 holes. In \u00a71, change 'about 6\u20139 in 10' to 'about 6\u201310 in 10' to match \u00a73.12."
+  },
+  {
+   "title": "'20 of 73 yes-replies named a new item (27%)' is a regex count with false positives and duplicate sessions, and the lottery numbers inherit it",
+   "first_round": 1,
+   "times_found": 1,
+   "severity": "minor",
+   "line": 88,
+   "fix": "Dedupe the ask census by (session uuid, timestamp): 236 asks, 61 yes-replies, 16 hits. Hand-label the 16 hits and report the true count (about 2\u20133). If they are not labeled yet, mark 27% as a regex upper bound. Recompute the 280, 268 and 44 counts and lottery.py's r, and the \u00a74.4 '1.6\u20138.1 notices / up to 48%' figures."
+  },
+  {
+   "title": "The front-end return trigger 'well above the design point' has no number",
+   "first_round": 1,
+   "times_found": 1,
+   "severity": "minor",
+   "line": 920,
+   "fix": "Replace 'well above' in \u00a76.1 and the \u00a76.5 loop table with a numeric threshold, for example round-1 forecast p50 above 1.5x the profile's design point. List it with the assumed inputs the calibration run measures."
+  },
+  {
+   "title": "The ceiling is not enforced in code during the pilot, because cap enforcement (item 9) ships in wave 2",
+   "first_round": 3,
+   "times_found": 1,
+   "severity": "minor",
+   "line": 947,
+   "fix": "Option 1: move cap enforcement into the wave-1 kit. round.sh refuses a round past R_max or the hard cap, and gate.sh gets a row checking rounds and stage time against their caps. Option 2: change line 947 to say the pilot's ceiling is procedural until item 9 lands."
+  }
+ ],
+ "new_per_round": [
+  9,
+  4,
+  4
+ ]
+}

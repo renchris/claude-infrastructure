@@ -1,0 +1,153 @@
+{
+ "unique": [
+  {
+   "title": "Wave-1 re-ask protection (router, item 5; block, item 6) depends on the program registry, which is item 15 in wave 2",
+   "first_round": 1,
+   "times_found": 3,
+   "severity": "major",
+   "line": 918,
+   "fix": "Move a minimal program registry (the programs.json schema plus a register/certify state write) from item 15 into wave 1 as a prerequisite of items 5, 6 and 8. Name the wave-1 script that writes it (gate.sh or the intake script). Keep the calibration log in wave 2."
+  },
+  {
+   "title": "The exemption edit list leaves out the slim variant's copies of F1, F2, E0 and 'offering is a defect', and the full variant's restatement of the research mandate",
+   "first_round": 1,
+   "times_found": 2,
+   "severity": "major",
+   "line": 906,
+   "fix": "Add CLAUDE.global.slim.md:248, 249, 272 and 364, plus CLAUDE.global.md:464-465, to item 3 and to the \u00a73.1 ruling 2 citations. Include the four deployed slim CLAUDE.md copies. Otherwise, have decision 9 pin program sessions to the full variant."
+  },
+  {
+   "title": "The seed count per profile is never stated, although the printed 95% bound and the \u00a73.12 exceedance rates depend on it",
+   "first_round": 1,
+   "times_found": 3,
+   "severity": "major",
+   "line": 400,
+   "fix": "Add a carried-seeds column to the \u00a76.1 profile table and to \u00a73.9: 40/60/100 original seeds, at most 1 per 25 lines, one shadow seed per fix, plus the size of the escape-library cohort. Label these as the values behind \u00a73.12. State that seed catches never reset the quiet count."
+  },
+  {
+   "title": "The reviewer composition per profile cannot be executed as written and does not match the composition profile_sim.py models",
+   "first_round": 1,
+   "times_found": 4,
+   "severity": "major",
+   "line": 406,
+   "fix": "Add a per-profile slot table to \u00a73.8 and \u00a76.1 that matches LITE8/STD16/FULL24: Opus, Fable, OpenAI and Google at 2, 4 and 6 slots each, naming the strategies each pair runs. Change the Full precondition to 'OpenAI and Google each sustain 6 reviewers a round'. Require the frontier slot in every round for the table to apply, or add a no-Fable simulation row."
+  },
+  {
+   "title": "A 'yes, and one more thing' reply passes every re-ask layer: the Stop check polices only a 'no', Read stays open, and the relay test passes when the relay is unchanged",
+   "first_round": 1,
+   "times_found": 2,
+   "severity": "major",
+   "line": 668,
+   "fix": "Make the Stop check independent of polarity. In a completeness or pushback turn, block any reply that names an item, location or row that is not on the certificate. Deny every tool except a whitelisted certificate read. Make the relay test fail on any appended item, and add hand-reviewed yes-plus-item replies as must-block fixtures."
+  },
+  {
+   "title": "Conviction 'derived from a tally' has no defined function, and the evidence ladder gives no required level for document-sourced or reasoning claims, so gate row 5 and the \u00a73.5 routing cannot be evaluated",
+   "first_round": 1,
+   "times_found": 2,
+   "severity": "major",
+   "line": 352,
+   "fix": "In \u00a73.5, define a deterministic tally-to-conviction rule. For example, a decision is ruled at 90 or above only when every load-bearing premise of the chosen option is at its required tier and its what-would-flip probe ran negative. Add required levels for spec, standard and law claims and for reasoning claims. Add the rule to the pilot kit's gate.sh."
+  },
+  {
+   "title": "The \u00a73.12 table silently assumes a fix-born rate of b=0.1 and N0=10-20, and calibration measures neither, although cap-hit and residuals change 1.5-3x when b is between 0.1 and 0.5",
+   "first_round": 1,
+   "times_found": 1,
+   "severity": "major",
+   "line": 560,
+   "fix": "State b=0.1 and the N0 values as assumed inputs in the Base definition. Add sensitivity rows at b=0.3 and b=0.5. Add the fix-born rate and holes-at-freeze to the \u00a76.6 calibration list."
+  },
+  {
+   "title": "Gate row 8 ('0 cited paths outside the repo') fails every program that does the required private-store mining (memory, transcripts, msg)",
+   "first_round": 1,
+   "times_found": 1,
+   "severity": "major",
+   "line": 501,
+   "fix": "Allow uncommitted ~-rooted private receipts that carry a content hash checked at gate time. Ban only /tmp and other volatile paths. Name the repo that holds a greenfield program's records."
+  },
+  {
+   "title": "The hand-run kit does not cover what the pilot stages need (bundle builder, seed vault, doctor, frame critique, round runner, trace/lint/freeze, register formats), and the \u00a77 cross-references should point to \u00a78",
+   "first_round": 2,
+   "times_found": 1,
+   "severity": "major",
+   "line": 173,
+   "fix": "Add a per-stage pilot table giving the kit's coverage, the hand-run fallback and any wave-2 dependency. Move the bundle builder, vault, doctor, frame critique, round runner and the trace/lint/freeze checks into the kit or wave 1. Specify the register and frame file formats. Change 'see \u00a77' to 'see \u00a78'."
+  },
+  {
+   "title": "The research block needs an unlisted operator-run settings.json migration (there is no Workflow matcher), and the router's classifier has no latency bound or fail mode inside a 5 s advisory hook",
+   "first_round": 2,
+   "times_found": 1,
+   "severity": "major",
+   "line": 909,
+   "fix": "List the settings.json registration as an operator-run migration in wave 1. Specify the classifier's model, latency bound and fail mode, and set a hook timeout that fits, or run the classification asynchronously."
+  },
+  {
+   "title": "Three-vendor readiness is first needed in Stage 1 but checked only in Stage 3, gemini auth has never been exercised by a real call, and gate row 13 has no rule for a dead vendor lane",
+   "first_round": 2,
+   "times_found": 1,
+   "severity": "major",
+   "line": 506,
+   "fix": "Add an intake precondition: one real call per vendor, with the model id recorded, before the contract page. Define the dead-lane rule (the round does not count and the program pauses, or a specified degraded certificate applies), and make row 13 consistent with it."
+  },
+  {
+   "title": "In a greenfield project the frame is signed before the architecture decisions that define its populations, and nothing expands it before the freeze",
+   "first_round": 2,
+   "times_found": 1,
+   "severity": "major",
+   "line": 298,
+   "fix": "After each Stage 4 ruling level, add a bounded frame-expansion step. It adds the chosen option's sub-decisions, populations, write paths and premises as frame rows and runs them through Stages 2-3 before the freeze. Cap its depth, price it into the ceiling, and evaluate gate rows 1, 2 and 5 on the expanded frame."
+  },
+  {
+   "title": "The Standard profile's 8-day stage budget contradicts the only evidence prior for a program of that size (11.5 agent-days), which brings forward the overrun trigger that force-defaults open rows",
+   "first_round": 3,
+   "times_found": 1,
+   "severity": "major",
+   "line": 779,
+   "fix": "Price Standard from the SYNTHESIS \u00a710.2 prior (about 11.5 days for stages 1-6, about 14 days typical), recompute its ceiling, and move Full up. Otherwise, cite the evidence for the 8-day and 4.25-day figures or mark them as unsupported priors."
+  },
+  {
+   "title": "A frame omission found during certification is queued until after the certificate, outside the signed post-certificate activity list and gate row 1, with no rubric clause and no build-wave gate",
+   "first_round": 3,
+   "times_found": 1,
+   "severity": "major",
+   "line": 740,
+   "fix": "Add rubric clause (g): a missing decision, acceptance row or component that a frame row depends on is always material. Define one bounded frame-delta cycle (Stages 2-5 for the delta only, timeboxed and priced, then re-freeze as vN+1). Past its cap, print the omission as a known row that gates the dependent build waves. Add the cycle to the \u00a73.1 list and reconcile it with gate row 1."
+  },
+  {
+   "title": "The re-ask block depends on a classifier whose recall is never measured, and any unclassified or errored prompt fails open",
+   "first_round": 3,
+   "times_found": 1,
+   "severity": "major",
+   "line": 619,
+   "fix": "In a certified-program session, deny research-buying tools by default unless the prompt is positively labeled a work order or a reopen. Treat errors, timeouts and mixed labels as completeness. Add a held-out paraphrase recall threshold as a gate row, and retitle \u00a74.2 to say what it actually guarantees."
+  },
+  {
+   "title": "Re-ask routing keys only on cwd or DoD and drops the design's lookup by program name from any pane",
+   "first_round": 1,
+   "times_found": 1,
+   "severity": "minor",
+   "line": 599,
+   "fix": "Also resolve the program from its registered name or alias in the prompt, and fall back to it when only one program is active. Add an off-cwd phrasing to the 20-trial relay test."
+  },
+  {
+   "title": "The ceiling formula prices certification round 1 at 4.5 h, but the cited source says it takes about 1 day",
+   "first_round": 1,
+   "times_found": 2,
+   "severity": "minor",
+   "line": 786,
+   "fix": "Change the term to '1 day + (hard cap \u2212 1) \u00d7 4.5 h', then recompute the ceilings (about 11, 21 and 28 days) and the Certification column."
+  },
+  {
+   "title": "Stage 1 mining and Appendix A's 'research lost' mechanism depend on a research index that no build item creates",
+   "first_round": 1,
+   "times_found": 2,
+   "severity": "minor",
+   "line": 213,
+   "fix": "Add 'cc-research index' (writing docs/research/INDEX.jsonl) to \u00a78 wave 1. Otherwise, state the interim mining procedure: a read-only fan-out over the 406 entries that writes the index first."
+  }
+ ],
+ "new_per_round": [
+  11,
+  4,
+  3
+ ]
+}
