@@ -303,6 +303,16 @@ PASS`; f8b54aee agreed, 492a787a legacy-parked with no routable target), but it 
   ENGAGED only when the sid's transcript under ACCT_AFTER's config dir holds an assistant turn
   after the row's timestamp. This makes the gate stricter.
 
+**What the shadow cannot test: act-mode actuation of launcher-rooted panes.** W7f landed
+(`4365d93e9`, `2f6993024`, `3a241ed58`, `8cd2daca8`). The lead then found a second defect the
+shadow could not see: in act mode the reconciler never planned R for a launcher-rooted limited
+session. In observe mode legacy does all the moving, so a compare can only check that the recon
+*judges* such a session the way legacy's outcome says. It never sees whether the recon would
+*actuate* it. That is why `placements feasible 0/0` held for every launcher-rooted member above.
+W7g fixes it, and the reconciler restart is held so one restart loads W7f and W7g together. That
+restart is the next cutoff. A PASS on this gate therefore says nothing about act-mode actuation for
+launcher-rooted panes; act mode has to be tested separately.
+
 **Watcher.** Since 22:36Z it is pid 92452, on the comparer code above (it writes `live.json`), the
 only one, notifying the shadow session by id (`4079f342-…`), log `shadow-archive/watch-w5b2.log`.
 Its predecessor pid 3437 (21:22Z, the old code) wrote no `live.json`, so the archive-time arm has
