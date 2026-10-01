@@ -2087,6 +2087,29 @@ dead_desk() {
   ! grep -q 'TS 7' "$CC_BACKLOG_FILE" 2>/dev/null
 }
 
+@test "desk-reach fork-takedown arm: a copy still served 30 days on pages once, weekly, and writes no ledger" {
+  dead_desk
+  printf '{"repo":"example/copy","probe_shas":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"submitted":"2020-01-01"}' \
+    > "$BATS_TEST_TMPDIR/fork-watch.json"
+  export CC_SWEEP_FORKWATCH_BIN="$BATS_TEST_DIRNAME/../scripts/fork-takedown-watch.sh"
+  export CC_FORK_WATCH_STATE="$BATS_TEST_TMPDIR/fork-watch.json" CC_FORK_WATCH_CODE=200
+  local before; before="$(cat "$CC_BACKLOG_FILE" 2>/dev/null | wc -l)"
+  run "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ "$(arm_pages fork-takedown-arm)" -eq 1 ]
+  grep -q '"fork_takedown_verdict":"STILL-SERVED-paged"' "$CC_IDL"
+  run "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$(arm_pages fork-takedown-arm)" -eq 1 ]           # weekly: the second sweep does not re-probe
+  grep -q '"fork_takedown_verdict":"skipped-weekly"' "$CC_IDL"
+  [ "$(cat "$CC_BACKLOG_FILE" 2>/dev/null | wc -l)" -eq "$before" ]
+}
+
+@test "fork-takedown arm: a checkout copy of the sweep never reaches the network" {
+  run "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  grep -q '"fork_takedown_verdict":"skipped-not-deployed"' "$CC_IDL"
+}
+
 @test "ts7-peer arm: a checkout copy of the sweep never reaches the registry" {
   run "${SWEEP_TO[@]}" bash "$SWEEP"
   [ "$status" -eq 0 ]

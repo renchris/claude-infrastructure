@@ -1758,6 +1758,51 @@ esac
 # with `log_idl [a-z-]*`, which would read `ts7-…` as `ts`.
 log_idl typescript-peer-arm "$(jq -nc --arg rc "${_tpw_rc:-absent}" --arg v "$_tpw_verdict" '{ts7_peer_rc:$rc, ts7_peer_verdict:$v}')"
 
+sweep_yield 2b-iii-f-fork-takedown-arm
+
+# ── 2b-iii-f. THE FORK-TAKEDOWN ARM — an ask to a third party can be ignored, so something checks ──
+# A public copy of the pre-cutover history (backlog a11a0b08ef8a) can only be removed by its owner
+# or by GitHub, on the operator's request. The operator's proof is the SUBMISSION; this arm owns the
+# outcome: 30 days after the recorded submission, if the copy still serves the old SHAs, it pages.
+# Same disposition as 2b-iii-b/c/e: it PAGES and touches no store
+# (docs/lessons/arming-and-mootness-cannot-share-one-falsifier.md).
+#
+# WEEKLY, not every sweep: the stamp holds the UTC day of the last VERDICT (rc 0 delivered, or rc 1),
+# and the arm does not run again for 7 days. An undelivered page and a non-verdict (rc 2) write no
+# stamp, so they retry next sweep. Inside the window the watcher makes no fetch at all, and only the
+# deployed copy may reach the network (`_cloudret_deployed`, §2a); CC_SWEEP_FORKWATCH_BIN forces it.
+_ftw="${CC_SWEEP_FORKWATCH_BIN:-$_SWEEP_DIR/fork-takedown-watch.sh}"
+_ftw_rc=""
+_ftw_stamp="$_cc_cfg/autonomy/fork-takedown-arm.probed"
+_ftw_last="$(cat "$_ftw_stamp" 2>/dev/null)"
+_ftw_week_ago="$(date -u -v-7d +%Y-%m-%d 2>/dev/null || date -u -d '7 days ago' +%Y-%m-%d 2>/dev/null)"
+if [ "$_cloudret_deployed" != 1 ] && [ -z "${CC_SWEEP_FORKWATCH_BIN:-}" ]; then
+  _ftw_rc="skipped-not-deployed"
+elif [ -n "$_ftw_last" ] && [ -n "$_ftw_week_ago" ] && ! [[ "$_ftw_last" < "$_ftw_week_ago" ]]; then
+  _ftw_rc="skipped-weekly"
+elif [ -x "$_ftw" ]; then
+  _bounded bash "$_ftw" --arm >/dev/null 2>&1; _ftw_rc=$?
+  _ftw_today="$(date -u +%Y-%m-%d)"
+  if [ "$_ftw_rc" -eq 0 ]; then
+    if sweep_desk_page fork-takedown-arm "🍴 The pre-cutover public copy of claude-infrastructure is STILL SERVED 30+ days after the takedown ask (backlog a11a0b08ef8a). The ask was ignored: file the DMCA draft. Read: bash scripts/fork-takedown-watch.sh --report (prints the verdict and the next command; the drafts are in the private store)."; then
+      printf '%s' "$_ftw_today" >"$_ftw_stamp" 2>/dev/null || true
+    else
+      _ftw_rc="undelivered"
+    fi
+  elif [ "$_ftw_rc" -eq 1 ]; then
+    printf '%s' "$_ftw_today" >"$_ftw_stamp" 2>/dev/null || true
+  fi
+fi
+case "${_ftw_rc:-absent}" in
+  0)   _ftw_verdict="STILL-SERVED-paged" ;;
+  1)   _ftw_verdict="no-signal" ;;
+  2)   _ftw_verdict="non-verdict" ;;
+  124) _ftw_verdict="bound-exceeded" ;;
+  undelivered|skipped-not-deployed|skipped-weekly) _ftw_verdict="$_ftw_rc" ;;
+  *)   _ftw_verdict="watcher-absent" ;;
+esac
+log_idl fork-takedown-arm "$(jq -nc --arg rc "${_ftw_rc:-absent}" --arg v "$_ftw_verdict" '{fork_takedown_rc:$rc, fork_takedown_verdict:$v}')"
+
 sweep_yield 2b-iii-d-freeze-arm
 
 # ── 2b-iii-d. THE FREEZE ARM — the second no-panic freeze is the signal to build its detector ──────
