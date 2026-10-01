@@ -12,7 +12,9 @@ setup_file() {
   mkdir -p "$HOME"
   export W="$BATS_FILE_TMPDIR/w"
   export CC_RESEARCH_HOME="$W/home" CC_RESEARCH_REGISTRY="$W/home/programs.json"
-  export CC_NOW="2026-10-01T12:00:00Z" CC_RESEARCH_VAULT_KEY="test-key"
+  CC_NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "$CC_NOW" > "$BATS_FILE_TMPDIR/now"
+  export CC_NOW CC_RESEARCH_VAULT_KEY="test-key"
   export CC_DECISIONS_DIR="$W/decisions" CC_IDL="$W/idl.jsonl"
   mkdir -p "$W"
   "$BATS_TEST_DIRNAME/fixtures/research-kit/build_good.py" "$W" > "$BATS_FILE_TMPDIR/records-path"
@@ -27,7 +29,8 @@ setup() {
   G="$REPO/scripts/research-kit/gate.sh"
   export W="$BATS_FILE_TMPDIR/w"
   export CC_RESEARCH_HOME="$W/home" CC_RESEARCH_REGISTRY="$W/home/programs.json"
-  export CC_NOW="2026-10-01T12:00:00Z" CC_RESEARCH_VAULT_KEY="test-key"
+  CC_NOW="$(cat "$BATS_FILE_TMPDIR/now")"
+  export CC_NOW CC_RESEARCH_VAULT_KEY="test-key"
   export CC_DECISIONS_DIR="$W/decisions" CC_IDL="$W/idl.jsonl"
   export CC_RESEARCH_ROUTER="$W/router.sh"
   rsync -a --delete "$BATS_FILE_TMPDIR/golden/" "$W/"
@@ -193,7 +196,7 @@ state() { /usr/bin/python3 -c "import json; print(json.load(open('$CC_RESEARCH_R
 }
 
 @test "row 10: a premise re-check older than 24 hours fails" {
-  CC_NOW="2026-10-03T12:00:00Z" run rowstat 10
+  CC_NOW="$(date -u -v+48H +%Y-%m-%dT%H:%M:%SZ)" run rowstat 10
   [ "$output" = "FAIL" ]
 }
 
@@ -204,7 +207,7 @@ state() { /usr/bin/python3 -c "import json; print(json.load(open('$CC_RESEARCH_R
 }
 
 @test "§10 item 7: a method-created residual renders FILED, not FAIL, and the gate still certifies" {
-  printf '{"id":"RS-2","why_unreachable":"depth-cap","owner_wave":"B1","due":"2026-11-01","closing_probe":"P-9"}\n' >> "$REC/residual.jsonl"
+  printf '{"id":"RS-2","why_unreachable":"depth-cap","owner_wave":"B1","due":"%s","closing_probe":"P-9"}\n' "$(date -u -v+720H +%Y-%m-%d)" >> "$REC/residual.jsonl"
   printf '{"id":"residual:RS-2","disposition":"filed","ref":"RS-2"}\n' >> "$REC/reconcile.jsonl"
   [ "$(rowstat 11)" = "FILED" ]
   git -C "$W/repo" add -A
@@ -214,7 +217,7 @@ state() { /usr/bin/python3 -c "import json; print(json.load(open('$CC_RESEARCH_R
 }
 
 @test "§10 item 7: a method-created residual with no closing probe fails" {
-  printf '{"id":"RS-2","why_unreachable":"stub-validated","owner_wave":"B1","due":"2026-11-01"}\n' >> "$REC/residual.jsonl"
+  printf '{"id":"RS-2","why_unreachable":"stub-validated","owner_wave":"B1","due":"%s"}\n' "$(date -u -v+720H +%Y-%m-%d)" >> "$REC/residual.jsonl"
   printf '{"id":"residual:RS-2","disposition":"filed","ref":"RS-2"}\n' >> "$REC/reconcile.jsonl"
   [ "$(rowstat 11)" = "FAIL" ]
 }
@@ -226,7 +229,7 @@ state() { /usr/bin/python3 -c "import json; print(json.load(open('$CC_RESEARCH_R
 
 @test "row 12 / §10 item 4: a program packet filed without --project fails" {
   id="$(/bin/bash "$REPO/bin/cc-decide" open --class C --what "pick a store" --option "a::x" --option "b::y" --conviction 70 --receipt "$REC/frame.json")"
-  printf '{"id":"DR-1","packet":{"id":"%s","class":"C","due":"2026-12-01T00:00:00Z"}}\n' "$id" >> "$REC/decisions.jsonl"
+  printf '{"id":"DR-1","packet":{"id":"%s","class":"C","due":"%s"}}\n' "$id" "$(date -u -v+1500H +%Y-%m-%dT%H:%M:%SZ)" >> "$REC/decisions.jsonl"
   [[ "$(rowtext 12)" == *"MALFORMED PACKET"* ]]
 }
 

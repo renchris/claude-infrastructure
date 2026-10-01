@@ -10,7 +10,9 @@ setup_file() {
   mkdir -p "$HOME"
   export W="$BATS_FILE_TMPDIR/w"
   export CC_RESEARCH_HOME="$W/home" CC_RESEARCH_REGISTRY="$W/home/programs.json"
-  export CC_NOW="2026-10-01T12:00:00Z" CC_RESEARCH_VAULT_KEY="test-key"
+  CC_NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "$CC_NOW" > "$BATS_FILE_TMPDIR/now"
+  export CC_NOW CC_RESEARCH_VAULT_KEY="test-key"
   mkdir -p "$W"
   "$BATS_TEST_DIRNAME/fixtures/research-kit/build_good.py" "$W" > "$BATS_FILE_TMPDIR/records-path"
   cp -Rp "$W" "$BATS_FILE_TMPDIR/golden"
@@ -25,7 +27,8 @@ setup() {
   D="$REPO/bin/cc-decide"
   export W="$BATS_FILE_TMPDIR/w"
   export CC_RESEARCH_HOME="$W/home" CC_RESEARCH_REGISTRY="$W/home/programs.json"
-  export CC_NOW="2026-10-01T12:00:00Z" CC_RESEARCH_VAULT_KEY="test-key"
+  CC_NOW="$(cat "$BATS_FILE_TMPDIR/now")"
+  export CC_NOW CC_RESEARCH_VAULT_KEY="test-key"
   rsync -a --delete "$BATS_FILE_TMPDIR/golden/" "$W/"
   export CC_DECISIONS_DIR="$BATS_TEST_TMPDIR/decisions" CC_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
   REC="$(cat "$BATS_FILE_TMPDIR/records-path")"
@@ -77,7 +80,7 @@ sig() { # <action> <target|null>
 }
 
 @test "a class-B default not yet expired is left alone" {
-  file_b 2026-10-05T00:00:00Z >/dev/null
+  file_b "$(date -u -v+96H +%Y-%m-%dT%H:%M:%SZ)" >/dev/null
   /bin/bash "$D" expire-sweep >/dev/null
   "$G" sweep --program demo
   [ "$(dec 'd["status"]')" = "carried" ]
@@ -102,7 +105,7 @@ sig() { # <action> <target|null>
 }
 
 @test "a cc-decide veto with no operator signature fails the sweep as UNSIGNED" {
-  id="$(file_b 2026-10-05T00:00:00Z)"
+  id="$(file_b "$(date -u -v+96H +%Y-%m-%dT%H:%M:%SZ)")"
   /bin/bash "$D" veto "$id" >/dev/null
   run "$G" sweep --program demo
   [ "$status" -eq 1 ]
@@ -123,7 +126,7 @@ sig() { # <action> <target|null>
 }
 
 @test "a class-C row not yet due is left waiting" {
-  old="$(file_c 2026-12-01T00:00:00Z)"
+  old="$(file_c "$(date -u -v+1500H +%Y-%m-%dT%H:%M:%SZ)")"
   "$G" sweep --program demo
   [ "$(dec 'd["packet"]["id"]')" = "$old" ]
   [ "$(pkt "$old" '["status"]')" = "open" ]
