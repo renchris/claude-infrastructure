@@ -717,3 +717,54 @@ mk_live_worktree() { # <repo-name> <branch> <wtpath>   — a REAL worktree, left
   run env CC_RR_STUB_COLS=80 timeout 60 "$RRO" next "$wt" SID-OVR-CTL cc-ovr-then
   [ "$status" -eq 3 ]
 }
+
+# ── CLOSE FROM INSIDE on a clean exit (pane-lifecycle fixes item 6, 2026-10-01) ─────────────────────
+# The interactive tail cannot run under bats (it needs a tty), so the decision is a function and these
+# tests call the REAL one, extracted from the script, with $0 set to the script so its lib lookup
+# resolves exactly as in a pane. The recycle marker is the one handoff-fire takes (see
+# lib/pane-recycle-pending.sh), keyed "iterm2:<KITTY_WINDOW_ID>".
+rr_decide() { # $1=claude rc → runs rr_close_on_clean_exit; status 0 = close, 1 = keep
+  local fn; fn="$(sed -n '/^rr_close_on_clean_exit() {/,/^}/p' "$RRO")"
+  [ -n "$fn" ] || { echo "rr_close_on_clean_exit not found in $RRO"; return 2; }
+  run bash -c "$fn"$'\n''rr_close_on_clean_exit "$1"' "$RRO" "$1"
+}
+rr_env() { export LR_LOCKS_DIR="$BATS_TEST_TMPDIR/locks" KITTY_WINDOW_ID=42; }
+rr_hold_recycle() { # a recycle lock for window 42 held by a LIVE pid (this test's shell)
+  local d; d="$LR_LOCKS_DIR/pane-$(printf '%s' "iterm2:42" | shasum -a 1 | cut -c1-40).recycle"
+  mkdir -p "$d"
+  printf '{"pid":%s,"lstart":"%s","role":"recycle"}\n' "$$" \
+    "$(TZ=UTC LC_ALL=C ps -o lstart= -p "$$" | tr -s ' ' | sed 's/^ *//; s/ *$//')" > "$d/holder"
+}
+
+@test "close-on-exit: claude exited 0 and no recycle is pending ⇒ the pane closes" {
+  rr_env
+  rr_decide 0
+  [ "$status" -eq 0 ] || { echo "a clean exit kept the shell: $output"; false; }
+}
+
+@test "close-on-exit: a non-zero exit (crash, limit, signal) keeps the shell" {
+  rr_env
+  rr_decide 1; [ "$status" -eq 1 ] || false
+  rr_decide 143; [ "$status" -eq 1 ] || false
+}
+
+@test "close-on-exit: a recycle pending for this pane keeps the shell, so the relaunch has a prompt" {
+  rr_env
+  rr_hold_recycle
+  rr_decide 0
+  [ "$status" -eq 1 ] || { echo "closed a pane mid-recycle"; false; }
+}
+
+@test "close-on-exit: CC_PANE_CLOSE_ON_EXIT=0 keeps the shell" {
+  rr_env; export CC_PANE_CLOSE_ON_EXIT=0
+  rr_decide 0
+  [ "$status" -eq 1 ] || false
+}
+
+@test "close-on-exit: the expect program hands claude's own status back, not expect's" {
+  # A script that ends at `interact` exits 0 however the session ended, which would make every crash
+  # look clean. The tail of the expect program must reap the child and exit with ITS status.
+  # shellcheck disable=SC2016  # a literal Tcl `$rr_w`, matched as text
+  grep -q 'exit \[lindex \$rr_w 3\]' "$RRO"
+  grep -q 'if {\[catch {wait} rr_w\]} { exit 1 }' "$RRO"
+}

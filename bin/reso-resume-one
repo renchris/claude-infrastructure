@@ -693,6 +693,14 @@ expect -c '
   set lr_keep [lr_drain_user]
   if {$lr_keep ne ""} { send -- [lr_b_utf8 $lr_keep] }
   interact
+  # THE EXIT STATUS OF CLAUDE, not of expect (pane-lifecycle fixes item 6, 2026-10-01). A script that
+  # ends at `interact` exits 0 however the session ended, so the shell below could not tell a clean
+  # /exit from a crash. wait reaps the child: element 3 is its status, and a signal death carries
+  # extra elements (CHILDKILLED <sig>) — read as non-zero, which keeps the shell. A failed wait is
+  # also non-zero: the fail-safe direction is always "keep the pane".
+  if {[catch {wait} rr_w]} { exit 1 }
+  if {[llength $rr_w] > 4} { exit 1 }
+  exit [lindex $rr_w 3]
 '
 rr_rc=$?
 
@@ -707,6 +715,39 @@ rr_rc=$?
 # non-shell paths so a caller that reads it still reads expect's verdict.
 if [ -n "${CC_RR_NO_INTERACT:-}" ] || [ ! -t 0 ]; then
   exit "$rr_rc"
+fi
+# ── …UNLESS THE SESSION ENDED ON PURPOSE (pane-lifecycle fixes item 6, 2026-10-01) ──────────────────
+# The shell above exists for a crash, a usage limit and a recycle's typed /exit. A session that the
+# operator or a self-close ENDED cleanly leaves a husk instead: pane 10 (dl W3, 2026-10-01) finished,
+# its custody was returned, and /exit left a bare zsh that nothing closes. bin/cc-pane-runner already
+# closes from inside on exactly this condition (F-a, 74baff1ee); this is the same rule on the other
+# launcher every post-reboot resume goes through, reading the SAME recycle marker through the SAME
+# lib so the two closers cannot disagree about "pending". Close only when ALL hold: claude exited 0,
+# CC_PANE_CLOSE_ON_EXIT is not 0, the lib loads, and no recycle is pending for this pane. Anything
+# unreadable keeps the shell.
+rr_close_on_clean_exit() { # $1=claude's exit status → 0 close the pane / 1 keep the shell
+  local _s="$0" _t _sd _c _lib=""
+  [ "${1:-1}" = 0 ] || return 1
+  [ "${CC_PANE_CLOSE_ON_EXIT:-1}" != 0 ] || return 1
+  # Resolve the checkout through ~/.reso/bin's symlink, so the sibling lib is this checkout's.
+  while [ -L "$_s" ]; do
+    _t="$(readlink "$_s" 2>/dev/null)" || break
+    case "$_t" in /*) _s="$_t" ;; *) _s="$(dirname "$_s")/$_t" ;; esac
+  done
+  _sd="$(cd "$(dirname "$_s")" 2>/dev/null && pwd)" || _sd=""
+  for _c in "${_sd:+$_sd/../lib/pane-recycle-pending.sh}" "${HOME:-}/.claude/lib/pane-recycle-pending.sh"; do
+    [ -n "$_c" ] && [ -r "$_c" ] && { _lib="$_c"; break; }
+  done
+  [ -n "$_lib" ] || return 1
+  # shellcheck source=/dev/null  # runtime-resolved: checkout sibling, else the live layer
+  . "$_lib" 2>/dev/null || return 1
+  command -v cc_pane_recycle_pending >/dev/null 2>&1 || return 1
+  cc_pane_recycle_pending "${KITTY_WINDOW_ID:-}" && return 1
+  return 0
+}
+if rr_close_on_clean_exit "$rr_rc"; then
+  printf '\n[reso-resume-one] session ended cleanly (rc 0), no recycle pending — closing this pane (CC_PANE_CLOSE_ON_EXIT=0 keeps it).\n' >&2
+  exit 0
 fi
 printf '\n[reso-resume-one] session ended (rc %s) — this pane is now an ordinary shell.\n' "$rr_rc" >&2
 exec "${SHELL:-/bin/zsh}" -l -i
