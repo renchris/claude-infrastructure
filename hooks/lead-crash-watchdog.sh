@@ -1414,6 +1414,25 @@ pane_end_reason() { # $1=sid → the SessionEnd reason session-end.sh logged, or
   r=$(LC_ALL=C grep -a "Session ended sid=$1 " "$f" 2>/dev/null | tail -1 | sed -n 's/.*reason=\([A-Za-z0-9._-]*\).*/\1/p' || true)
   printf '%s' "${r:--}"
 }
+pane_custody_fact() { # $1=tpath → lib/pane-custody.sh's TSV line for LEAD_PANE, or nothing
+  # A killed lead whose originator collected its work must not be offered --resume: that re-arms its
+  # /goal over finished work (docs/research/husk-triage-2026-10-01.md § Gaps, item 2 — pane 55). The
+  # lib is found the way bin/cc-pane-runner finds pane-recycle-pending.sh: checkout sibling, else the
+  # live layer. No lib, no pane or no row ⇒ nothing, and the banner stays as it was.
+  local self lib="" c
+  [[ -n "${LEAD_PANE:-}" ]] || return 0
+  self="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")"
+  for c in "$(dirname "$self")/../lib/pane-custody.sh" "$HOME/.claude/lib/pane-custody.sh"; do
+    [[ -r "$c" ]] && { lib="$c"; break; }
+  done
+  [[ -n "$lib" ]] || return 0
+  # shellcheck source=/dev/null  # resolved at run time (checkout, else the live layer)
+  . "$lib" 2>/dev/null || return 0
+  declare -F cc_pane_custody >/dev/null 2>&1 || return 0
+  # The session's first record dates it, so a row from an earlier tenant of this reused pane id is
+  # ignored; an undatable transcript passes 0 and gets the weaker, pane-only match.
+  cc_pane_custody "$LEAD_PANE" "$(cc_transcript_start_epoch "$1")" 2>/dev/null || true
+}
 pane_verdict_text() { # $1=sid $2=class $3=cause $4=exit $5=sig $6=tpath → line 1: headline<TAB>title; then a blank line and the block
   local sid="$1" class="$2" cause="$3" ec="${4:-}" sig="${5:-}" tpath="${6:-}"
   local launcher work close reason when role="" rule headline title body resume
@@ -1469,13 +1488,36 @@ $reopen_dirty" ;;
    This pane holds nothing: safe to close (Ctrl-D). $reopen_clean" ;;
       esac ;;
     *)
-      headline="⛔ NOT A CLEAN EXIT — Claude session ${sid:0:8}${role} was KILLED here"
-      title="⛔ KILLED ${sid:0:8}"
-      body="$headline (verdict painted $when).
+      # CUSTODY, for a lead only (a teammate's banner above already names its lead). This paint happens
+      # ONCE, at death, and a discharge usually arrives later — so an OPEN row names the owner instead of
+      # offering a resume, and the sweep (which reads custody live) is the place to decide.
+      local cust="" c_state="" c_slug="" c_kind="" c_ts="" c_op=""
+      [[ "$tm_is" == 1 ]] || cust=$(pane_custody_fact "$tpath")
+      IFS=$'\t' read -r c_state c_slug c_kind c_ts c_op <<< "$cust" || true
+      case "$c_state" in
+        collected)
+          headline="✅ WORK COLLECTED — Claude session ${sid:0:8}${role} was killed here, and its originator (pane $c_op) collected its work"
+          title="✅ collected ${sid:0:8}"
+          body="$headline (verdict painted $when).
+   cause: ${cause}${ec:+ (exit $ec}${sig:+, signal $sig}${ec:+)}. custody $c_slug: $c_kind at $c_ts.
+   The \"Resume this session with:\" line above is Claude Code's ordinary exit text; ignore it.
+   work in ${LEAD_CWD:-?}: $work · its last close verdict: $close
+   Do NOT resume it — close this pane (Ctrl-D). A resume would re-arm its /goal over finished work.
+▶ Or triage first:  cc-husk-sweep --pane ${LEAD_PANE:-<pane>}" ;;
+        open)
+          crash_note="The
+   exit text above offers a resume line; do not use it while another session holds this work."
+          resume_crash="▶ Not yours to resume: its originator (pane $c_op) holds custody of this work ($c_slug, opened $c_ts) — tell it" ;;
+      esac
+      if [[ "$c_state" != collected ]]; then
+        headline="⛔ NOT A CLEAN EXIT — Claude session ${sid:0:8}${role} was KILLED here"
+        title="⛔ KILLED ${sid:0:8}"
+        body="$headline (verdict painted $when).
    cause: ${cause}${ec:+ (exit $ec}${sig:+, signal $sig}${ec:+)}. It did not exit and nothing closed it. $crash_note
    work in ${LEAD_CWD:-?}: $work · its last close verdict: $close
 $resume_crash
-▶ Or triage first:  cc-husk-sweep --pane ${LEAD_PANE:-<pane>}" ;;
+▶ Or triage first:  cc-husk-sweep --pane ${LEAD_PANE:-<pane>}"
+      fi ;;
   esac
   printf '%s\t%s\n\n%s\n%s\n%s\n' "$headline" "$title" "$rule" "$body" "$rule"
 }
