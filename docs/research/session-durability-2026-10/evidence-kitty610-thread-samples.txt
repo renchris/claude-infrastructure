@@ -1,0 +1,188 @@
+# kitty 610 thread lists from macOS sample(1), preserved from /tmp on 2026-10-01 (a reboot wipes /tmp).
+# The talk thread is named KittyPeerMon (kitty child-monitor.c:2012). Present at 2026-09-30 22:17; absent at 2026-10-01 11:57 and 12:02.
+# Full sample files were not copied (200-335 KB each); their sha256 is below so a surviving copy can be matched.
+
+== kitty_2026-09-30_221745_IUeg.sample.txt  sha256=3a1898c1bdd0d5d51d00a5a6e7af9acbddb3f30d77751c4b8d8504b179b73b1b  bytes=207849
+Process:         kitty [610]
+Identifier:      net.kovidgoyal.kitty
+Parent Process:  launchd [1]
+Date/Time:       2026-09-30 22:17:45.094 -0500
+KittyPeerMon lines: 1
+  856 Thread_5606
+  856 Thread_8695: com.apple.NSEventThread
+  856 Thread_8855: KittyPeerMon
+  856 Thread_8856: KittyChildMon
+  856 Thread_220333: DiskCacheWrite
+  856 Thread_1459516: DiskCacheWrite
+  856 Thread_2904003: DiskCacheWrite
+  856 Thread_3252524: DiskCacheWrite
+  856 Thread_5964796: DiskCacheWrite
+  856 Thread_9795975: DiskCacheWrite
+  856 Thread_22197641: DiskCacheWrite
+  856 Thread_22197805: DiskCacheWrite
+  856 Thread_26846633: DiskCacheWrite
+  856 Thread_31364308: DiskCacheWrite
+  856 Thread_31462547: DiskCacheWrite
+  856 Thread_31742249: DiskCacheWrite
+  856 Thread_31820086: DiskCacheWrite
+  856 Thread_31839187: DiskCacheWrite
+  856 Thread_38053020: DiskCacheWrite
+  856 Thread_55859671: DiskCacheWrite
+  856 Thread_56397880: DiskCacheWrite
+  856 Thread_56578406: DiskCacheWrite
+  856 Thread_58269856: DiskCacheWrite
+  856 Thread_58623003: DiskCacheWrite
+  856 Thread_59932696
+  856 Thread_60166652
+  856 Thread_60581848
+  856 Thread_60582254
+  856 Thread_60582255
+  856 Thread_60582256
+  856 Thread_60591734
+  856 Thread_60591735
+  856 Thread_60611740: DiskCacheWrite
+
+== kitty610-sample.txt  sha256=3edff009ff5e9bc26d7d08dd03af373b3469302c3ceef758bd44bd4c4194d438  bytes=229546
+Process:         kitty [610]
+Identifier:      net.kovidgoyal.kitty
+Parent Process:  launchd [1]
+Date/Time:       2026-10-01 11:57:57.753 -0500
+KittyPeerMon lines: 0
+  2571 Thread_5606
+  2571 Thread_8695: com.apple.NSEventThread
+  2571 Thread_8856: KittyChildMon
+  2571 Thread_1459516: DiskCacheWrite
+  2571 Thread_2904003: DiskCacheWrite
+  2571 Thread_5964796: DiskCacheWrite
+  2571 Thread_22197805: DiskCacheWrite
+  2571 Thread_26846633: DiskCacheWrite
+  2571 Thread_58623003: DiskCacheWrite
+  2571 Thread_60611740: DiskCacheWrite
+  2571 Thread_66501725: DiskCacheWrite
+  2571 Thread_74284707: DiskCacheWrite
+  2571 Thread_86294312: DiskCacheWrite
+  2571 Thread_88873718: DiskCacheWrite
+  2571 Thread_88968555: DiskCacheWrite
+  2571 Thread_88986963: DiskCacheWrite
+  2571 Thread_89227579: DiskCacheWrite
+  2571 Thread_175541804
+  2571 Thread_177304564
+  2571 Thread_177304566
+
+== kitty-sample-2026-10-01.txt  sha256=4f3d2fea77d16f71dfbf396525aff37b6d8bdac9901e7cde39eef2ca3c8ed8ed  bytes=335684
+Process:         kitty [610]
+Identifier:      net.kovidgoyal.kitty
+Parent Process:  launchd [1]
+Date/Time:       2026-10-01 12:02:30.017 -0500
+KittyPeerMon lines: 0
+  2535 Thread_5606: Main
+  2535 Thread_8695: com.apple.NSEventThread
+  2535 Thread_8856: KittyChildMon
+  2535 Thread_1459516: DiskCacheWrite
+  2535 Thread_2904003: DiskCacheWrite
+  2535 Thread_5964796: DiskCacheWrite
+  2535 Thread_22197805: DiskCacheWrite
+  2535 Thread_26846633: DiskCacheWrite
+  2535 Thread_58623003: DiskCacheWrite
+  2535 Thread_60611740: DiskCacheWrite
+  2535 Thread_66501725: DiskCacheWrite
+  2535 Thread_74284707: DiskCacheWrite
+  2535 Thread_86294312: DiskCacheWrite
+  2535 Thread_88873718: DiskCacheWrite
+  2535 Thread_88968555: DiskCacheWrite
+  2535 Thread_88986963: DiskCacheWrite
+  2535 Thread_89227579: DiskCacheWrite
+  2535 Thread_175541804
+  2535 Thread_177304564
+  2535 Thread_177330604
+  2535 Thread_177659658
+  2535 Thread_177659659
+  2535 Thread_177690331: DiskCacheWrite
+  2535 Thread_177834266
+  2534 Thread_177659656
+  2534 Thread_177834264
+  2534 Thread_177834265
+  1872 Thread_177849312
+  28 Thread_177849835
+  23 Thread_177849455
+  22 Thread_177849898: CVDisplayLink
+  22 Thread_177850366: CVDisplayLink
+  21 Thread_177849355: CVDisplayLink
+  21 Thread_177849373: CVDisplayLink
+  21 Thread_177849956: CVDisplayLink
+  21 Thread_177850371: CVDisplayLink
+  20 Thread_177849360
+  20 Thread_177850013: CVDisplayLink
+  20 Thread_177850020: CVDisplayLink
+  20 Thread_177850065: CVDisplayLink
+  19 Thread_177850364: CVDisplayLink
+  19 Thread_177850410: CVDisplayLink
+  18 Thread_177849821: CVDisplayLink
+  18 Thread_177849850: CVDisplayLink
+  18 Thread_177850380
+  18 Thread_177850422: CVDisplayLink
+  17 Thread_177849333: CVDisplayLink
+  17 Thread_177849712: CVDisplayLink
+  17 Thread_177850086: CVDisplayLink
+  17 Thread_177850292: CVDisplayLink
+  17 Thread_177850342
+  17 Thread_177850421: CVDisplayLink
+  16 Thread_177849377: CVDisplayLink
+  16 Thread_177849432: CVDisplayLink
+  16 Thread_177849747
+  16 Thread_177850029: CVDisplayLink
+  16 Thread_177850067: CVDisplayLink
+  16 Thread_177850441: CVDisplayLink
+  15 Thread_177849545: CVDisplayLink
+  15 Thread_177849790
+  15 Thread_177849934: CVDisplayLink
+  15 Thread_177850205: CVDisplayLink
+  14 Thread_177849757
+  14 Thread_177850375: CVDisplayLink
+  14 Thread_177850414: CVDisplayLink
+  13 Thread_177849417: CVDisplayLink
+  13 Thread_177849505: CVDisplayLink
+  13 Thread_177849980: CVDisplayLink
+  12 Thread_177849347: CVDisplayLink
+  12 Thread_177849396: CVDisplayLink
+  12 Thread_177849402: CVDisplayLink
+  12 Thread_177849987: CVDisplayLink
+  12 Thread_177850374: CVDisplayLink
+  12 Thread_177850398: CVDisplayLink
+  11 Thread_177849473: CVDisplayLink
+  11 Thread_177849572: CVDisplayLink
+  11 Thread_177849657
+  11 Thread_177849916
+  11 Thread_177850090: CVDisplayLink
+  11 Thread_177850416
+  10 Thread_177849319: CVDisplayLink
+  10 Thread_177849389: CVDisplayLink
+  10 Thread_177849734: CVDisplayLink
+  10 Thread_177849759
+  10 Thread_177849855: CVDisplayLink
+  9 Thread_177849408: CVDisplayLink
+  9 Thread_177849623: CVDisplayLink
+  9 Thread_177849842: CVDisplayLink
+  9 Thread_177850021: CVDisplayLink
+  9 Thread_177850280: CVDisplayLink
+  9 Thread_177850363
+  9 Thread_177850440: CVDisplayLink
+  8 Thread_177849328: CVDisplayLink
+  8 Thread_177849342: CVDisplayLink
+  8 Thread_177849397: CVDisplayLink
+  8 Thread_177849778: CVDisplayLink
+  8 Thread_177849810: CVDisplayLink
+  8 Thread_177849824: CVDisplayLink
+  8 Thread_177849981: CVDisplayLink
+  8 Thread_177849995: CVDisplayLink
+  8 Thread_177850042: CVDisplayLink
+  8 Thread_177850066: CVDisplayLink
+  7 Thread_177849311: CVDisplayLink
+  7 Thread_177850024: CVDisplayLink
+  7 Thread_177850058: CVDisplayLink
+  6 Thread_177849354: CVDisplayLink
+  5 Thread_177849365: CVDisplayLink
+  1 Thread_177659656
+  1 Thread_177834264
+  1 Thread_177849312
+
