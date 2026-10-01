@@ -23,6 +23,7 @@ setup() {
   export SESSION_WRITES_LIB="$REPO/hooks/lib/session-writes.sh"
   export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg"
   mkdir -p "$CC_REGISTRY_DIR"
+  export PEER_OWNED_HOMES="$BATS_TEST_TMPDIR/acct"   # the peer-transcript homes (dirt_edited_by_live_peer)
   NOW="$(date +%s)"
   T_COMMIT=$(( NOW - 36000 ))     # the unlanded commit — 10h ago, as in the incident
   T_PEER=$(( NOW - 61200 ))       # the peer — 17h ago, so it was running when the commit was made
@@ -829,4 +830,57 @@ _du_mixed_tree() { # <tag> <fresh-mtime> → echoes the worktree
   tr="$(_po_tx_exec "$BATS_TEST_TMPDIR/du14.jsonl" "$(( NOW - 3600 ))" "$(( NOW - 10 ))")"
   du "$w" du-14 "$tr"
   [ "$status" -eq 2 ]
+}
+
+# ── dirt_edited_by_live_peer: the PEER's own record (backlog a9dc3cf6cc2b) ─────────────────────────
+# A shared-checkout close was blocked 3 of 3 over a live peer's in-flight dirt that neither ordering
+# nor the execution proof could speak for. This term clears only on positive evidence from BOTH
+# transcripts: the peer edit-recorded the path, and this session did not.
+pe() { # <repo> <session_id> <transcript>
+  run bash -c ". '$LIB'; dirt_edited_by_live_peer '$1' '$2' '$3'"
+}
+# _pe_peer <repo> <pid> <sid> <path-it-edited>… — registry row + the peer's OWN transcript, placed
+# where Claude Code would put it: <home>/projects/<slug of launch cwd>/<sid>.jsonl.
+_pe_peer() {
+  local w="$1" pid="$2" sid="$3"; shift 3
+  export PEER_OWNED_HOMES="$BATS_TEST_TMPDIR/acct"
+  local slug d args=() p
+  slug="$(printf '%s' "$w" | LC_ALL=C sed 's/[^a-zA-Z0-9]/-/g')"
+  d="$PEER_OWNED_HOMES/projects/$slug"; mkdir -p "$d"
+  for p in "$@"; do args+=(--write "$p"); done
+  _po_tx "$d/$sid.jsonl" "$(( NOW - 3600 ))" "${args[@]}" >/dev/null
+  _po_reg "$sid" "$pid" "$(( NOW - 3600 ))" "$w" "$sid"
+}
+
+@test "PE1 the incident: dirt edited ONLY by a live peer ⇒ cleared, naming the peer" {
+  local w; w="$(_po_clean_repo pe1)"
+  echo wip >> "$w/base.txt"; echo new > "$w/peer-new.txt"
+  _pe_peer "$w" "$(_po_live_pid)" peer-sid-1 "$w/base.txt" "$w/peer-new.txt"
+  pe "$w" mine-pe1 "$(_po_tx "$BATS_TEST_TMPDIR/pe1.jsonl" "$(( NOW - 1800 ))")"
+  [ "$status" -eq 0 ]
+  [[ "$output" == paths=2,peers=claude-peer-peer-sid-1#* ]] || false
+}
+
+@test "PE2 RED-PROOF: dirt THIS session edit-recorded still convicts, even if a live peer edited it too" {
+  local w; w="$(_po_clean_repo pe2)"
+  echo wip >> "$w/base.txt"
+  _pe_peer "$w" "$(_po_live_pid)" peer-sid-2 "$w/base.txt"
+  pe "$w" mine-pe2 "$(_po_tx "$BATS_TEST_TMPDIR/pe2.jsonl" "$(( NOW - 1800 ))" --write "$w/base.txt")"
+  [ "$status" -eq 1 ]
+}
+
+@test "PE3 CONTROL: the same dirt with the peer DEAD ⇒ not cleared" {
+  local w; w="$(_po_clean_repo pe3)"
+  echo wip >> "$w/base.txt"
+  _pe_peer "$w" "$(_po_dead_pid)" peer-sid-3 "$w/base.txt"
+  pe "$w" mine-pe3 "$(_po_tx "$BATS_TEST_TMPDIR/pe3.jsonl" "$(( NOW - 1800 ))")"
+  [ "$status" -eq 1 ]
+}
+
+@test "PE4 CONTROL: a dirty path NO live peer recorded ⇒ not cleared (all-or-nothing)" {
+  local w; w="$(_po_clean_repo pe4)"
+  echo wip >> "$w/base.txt"; echo orphan > "$w/orphan.txt"
+  _pe_peer "$w" "$(_po_live_pid)" peer-sid-4 "$w/base.txt"
+  pe "$w" mine-pe4 "$(_po_tx "$BATS_TEST_TMPDIR/pe4.jsonl" "$(( NOW - 1800 ))")"
+  [ "$status" -eq 1 ]
 }

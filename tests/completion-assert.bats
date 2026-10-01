@@ -60,6 +60,9 @@ setup() {
   # (~50 live rows on this box). Empty fixture dir = no peer = the strict disposition these tests
   # were written against.
   export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg"; mkdir -p "$CC_REGISTRY_DIR"
+  # …and the peer-transcript homes the DIRTY term's peer arm reads (a9dc3cf6cc2b): never the
+  # operator's real account homes.
+  export PEER_OWNED_HOMES="$BATS_TEST_TMPDIR/acct-none"
   # HERMETIC #5 — THE OTHER HOOK'S STORES. The double-block arm at the bottom drives the REAL
   # hooks/session-continue.sh (deliberately: a stubbed writer is how two hooks drift apart about a
   # file format). That hook does NOT read COMPLETION_IDL — its seams are CONTINUE_IDL /
@@ -1372,6 +1375,49 @@ _ca_touch_at() { # <epoch> <file>
   run run_ca "$tr" "$w"
   [ "$status" -eq 0 ]; fired "$output"
   printf '%s' "$output" | grep -q 'dirty tree'
+}
+
+# ── THE PEER'S OWN RECORD (backlog a9dc3cf6cc2b) ─────────────────────────────────────────────────
+# The CONTROL above is the shape a live peer's in-flight work also has: dirt newer than this session.
+# Measured 3 of 3 blocked in a shared checkout. It clears only when a LIVE peer's own transcript
+# edit-records every dirty path and this session's records none of them.
+_ca_peer_tx() { # <worktree> <pid> <sid> <path>… — registry row + the peer's transcript at its slug
+  local w="$1" pid="$2" sid="$3" slug d; shift 3
+  export PEER_OWNED_HOMES="$BATS_TEST_TMPDIR/acct-pe"
+  slug="$(printf '%s' "$w" | LC_ALL=C sed 's/[^a-zA-Z0-9]/-/g')"
+  d="$PEER_OWNED_HOMES/projects/$slug"; mkdir -p "$d"
+  _ca_tr_ts "$d/$sid.jsonl" "$(( $(date +%s) - 3600 ))" "$@" >/dev/null
+  _ca_reg "$sid" "$pid" "$(( $(date +%s) - 3600 ))" "$w" "$sid"
+}
+
+@test "dirty attribution: dirt edited ONLY by a LIVE peer ⇒ ABSTAIN (dirty-live-peer-edited)" {
+  local w tr now; w="$(_ca_dirty_repo dpe1)"; now="$(date +%s)"
+  _ca_touch_at "$now" "$w/base.txt"
+  _ca_peer_tx "$w" "$(_ca_live_pid)" peer-dpe1 "$w/base.txt"
+  tr="$(_ca_tr_ts "$BATS_TEST_TMPDIR/dpe1.jsonl" "$(( now - 3600 ))")"
+  run run_ca "$tr" "$w"
+  [ "$status" -eq 0 ]
+  ! fired "$output" || false
+  grep -q 'dirty-live-peer-edited:paths=1,peers=claude-peer-peer-dpe1#' "$COMPLETION_IDL"
+}
+
+@test "dirty attribution RED-PROOF: dirt this session ALSO edit-recorded still FIRES beside a live peer" {
+  local w tr now; w="$(_ca_dirty_repo dpe2)"; now="$(date +%s)"
+  _ca_touch_at "$now" "$w/base.txt"
+  _ca_peer_tx "$w" "$(_ca_live_pid)" peer-dpe2 "$w/base.txt"
+  tr="$(_ca_tr_ts "$BATS_TEST_TMPDIR/dpe2.jsonl" "$(( now - 3600 ))" "$w/base.txt")"
+  run run_ca "$tr" "$w"
+  [ "$status" -eq 0 ]; fired "$output"
+  printf '%s' "$output" | grep -q 'dirty tree'
+}
+
+@test "dirty attribution CONTROL: the same peer-edited dirt with the peer DEAD ⇒ still FIRES" {
+  local w tr now; w="$(_ca_dirty_repo dpe3)"; now="$(date +%s)"
+  _ca_touch_at "$now" "$w/base.txt"
+  _ca_peer_tx "$w" "$(_ca_dead_pid)" peer-dpe3 "$w/base.txt"
+  tr="$(_ca_tr_ts "$BATS_TEST_TMPDIR/dpe3.jsonl" "$(( now - 3600 ))")"
+  run run_ca "$tr" "$w"
+  [ "$status" -eq 0 ]; fired "$output"
 }
 
 # GATED ON rc 2 ALONE. A session that provably wrote the dirty path is rc 0 — positive self-evidence

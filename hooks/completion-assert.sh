@@ -617,6 +617,19 @@ _ca_dirt_unreachable() {   # stdout: `paths=N,predates=…,gap=…,…` on rc 0
   dirt_unreachable_by_session "$CWD" "$SID" "$TP"
 }
 
+# ── THE THIRD AXIS: THE PEER'S OWN RECORD (2026-09-30, backlog a9dc3cf6cc2b) ──────────────────────
+# The UNLANDED term has had a peer-ownership oracle since 2026-08-03; the DIRTY term had none, so a
+# shared-checkout session whose only dirt was a LIVE peer's in-flight work — written while this
+# session was also executing, so neither ordering nor the execution proof can speak — was blocked
+# 3 of 3 with no permitted action. This clears the tree only when EVERY dirty path is edit-recorded
+# in a live peer's own transcript and in none of this session's. GATED ON rc 2 ALONE and ordered
+# LAST, like its siblings: rc 0 (positive self-evidence) is never overridden.
+_ca_dirt_peer_edited() {   # stdout: `paths=N,peers=…` on rc 0
+  _ca_po_source || return 2
+  command -v dirt_edited_by_live_peer >/dev/null 2>&1 || return 2
+  dirt_edited_by_live_peer "$CWD" "$SID" "$TP"
+}
+
 # hooks/lib/close-shape.sh now has TWO consumers here (D6's origin contract, D7's act line), so the
 # four-step resolution chain is factored rather than copied — the same reason _ca_po_source was
 # factored when its second consumer arrived. CLOSE_SHAPE_LIB stays the head of the chain, exactly
@@ -653,7 +666,7 @@ _ca_sc=""; _ca_sc_rc=1
 if _ca_sc="$(_ca_assignee_shared_cwd)" && [ -n "$_ca_sc" ]; then _ca_sc_rc=0; else _ca_sc=""; fi
 if [ "$DIRTY" -eq 1 ]; then
   _ca_mine dirty; _ca_d=$?
-  _ca_dp=""; _ca_dx=""; _ca_du=""
+  _ca_dp=""; _ca_dx=""; _ca_du=""; _ca_dpe=""
   # FIRST, and ahead of `_ca_mine`'s rc 0: the measured population is a member that PROVABLY wrote
   # the dirty file. Positive self-evidence is exactly what it has, and it is still not its commit
   # to make. Placing this arm after rc 0 would leave the 94 blocks in place.
@@ -665,6 +678,8 @@ if [ "$DIRTY" -eq 1 ]; then
     _ca_exon="${_ca_exon}dirty-outside-session-exec:${_ca_dx} "
   elif [ "$_ca_d" -eq 2 ] && _ca_du="$(_ca_dirt_unreachable)" && [ -n "$_ca_du" ]; then
     _ca_exon="${_ca_exon}dirty-unreachable-per-path:${_ca_du} "
+  elif [ "$_ca_d" -eq 2 ] && _ca_dpe="$(_ca_dirt_peer_edited)" && [ -n "$_ca_dpe" ]; then
+    _ca_exon="${_ca_exon}dirty-live-peer-edited:${_ca_dpe} "
   else
     contra=1
     if [ "$_ca_d" -eq 0 ]; then

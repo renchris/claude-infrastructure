@@ -836,3 +836,141 @@ EOF
     "$n" "$pre" "$gap" "$nw" "$start" "$first" "$last"
   return 0
 }
+
+# ── THE THIRD AXIS: AUTHORSHIP READ OFF THE PEER'S OWN TRANSCRIPT (2026-09-30, backlog a9dc3cf6cc2b) ──
+# Both proofs above answer "could THIS session have written the path?" from this session's own
+# clocks, and both go silent on the shape the measurement keeps finding: a LIVE peer in the same
+# checkout editing files WHILE this session was also executing. Ordering refutes (the dirt is newer
+# than us) and the execution proof refutes (the mtime falls inside one of our tool windows), so a
+# shared-checkout close was blocked 3 of 3 over a peer's in-flight work — and the only compliant
+# answer, committing it, is the sweep CLAUDE.md G4 forbids by name.
+#
+# The UNLANDED term already answers this with an oracle (peer_owned_unlanded); the dirty term had
+# none. This one asks the question directly, on POSITIVE evidence from both sides:
+#   · a LIVE peer (the same registry + `kill -0` oracle as _po_live_peer, cwd under this tree, not
+#     this session) whose OWN transcript records a file-edit tool_use on the path, and
+#   · THIS session's transcript records NO file-edit on that path.
+# EVERY dirty path must clear that way, or the answer is not 0. It reuses session-writes.sh as the
+# single definition of "a recorded edit", on both transcripts.
+#
+# ── WHY LIVENESS HERE, THOUGH THE ORDERING PROOF ABOVE REFUSED ONE ───────────────────────────────
+# That proof needed none because ordering alone excluded this session. Here the exclusion comes from
+# the PEER's record, and a dead peer's record proves nothing about the path's present bytes that a
+# successor did not later overwrite; a live one is still the owner the dirt is waiting on. So the
+# peer must be running, exactly as for unlanded commits.
+#
+# ── KNOWN COVERAGE RESIDUE (named, not silently absorbed) ────────────────────────────────────────
+#   · A Bash write by THIS session to a path the peer also Edit-recorded is invisible here (the
+#     session-writes.sh blind spot). Same class as LAST WRITER WINS above; the peer's record is
+#     still positive evidence the path is in its scope, and our own Edit records still refute.
+#   · A peer whose transcript cannot be found under any account home contributes no paths, so its
+#     dirt stays convicted — the strict direction.
+#   · Mixed trees (old dirt + a peer's WIP) are not cleared by this term alone; it is all-or-nothing
+#     like its siblings.
+
+# _po_peer_transcript <sid> <cwd> → transcript path on stdout, rc 0; rc 1 not found
+#   The projects dir is the LAUNCH cwd slugged by Claude Code's encoder (every non-alnum → '-'; see
+#   hooks/lib/transcript-age.sh), under one of the account homes. A direct `-f` per home, never a
+#   `find` over the corpus: this runs at a Stop. PEER_OWNED_HOMES (colon-separated) overrides.
+_po_peer_transcript() {
+  local sid="${1:-}" cwd="${2:-}" slug h homes
+  [ -n "$sid" ] && [ -n "$cwd" ] || return 1
+  slug="$(printf '%s' "$cwd" | LC_ALL=C sed 's/[^a-zA-Z0-9]/-/g')"
+  homes="${PEER_OWNED_HOMES:-$HOME/.claude:$HOME/.claude-next:$HOME/.claude-secondary:$HOME/.claude-tertiary:$HOME/.claude-quaternary}"
+  local IFS=:
+  for h in $homes; do
+    [ -f "$h/projects/$slug/$sid.jsonl" ] && { printf '%s\n' "$h/projects/$slug/$sid.jsonl"; return 0; }
+  done
+  return 1
+}
+
+# dirt_edited_by_live_peer <repo_dir> <my_session_id> <transcript_path>
+#   "Is every dirty path in this tree one a LIVE peer edit-recorded and this session did not?"
+#   stdout on rc 0 = a whitespace-free evidence string for the caller's IDL.
+#   rc: 0 every path cleared · 1 refuted (a path is ours, or no live peer recorded it)
+#       · 2 cannot-tell
+dirt_edited_by_live_peer() {
+  local dir="${1:-}" sid="${2:-}" tp="${3:-}"
+  local top reg_dir rows mine rc pid label pcwd psid ptp ppaths p peer_set="" peers="" n=0 rec rel abs
+  command -v git >/dev/null 2>&1 || return 2
+  command -v jq  >/dev/null 2>&1 || return 2
+  [ -n "$dir" ] || return 2
+  _po_sw_source || return 2
+
+  top="$(cd "$dir" 2>/dev/null && _po_bounded 5 git rev-parse --show-toplevel 2>/dev/null)" || return 2
+  top="$(cd "$top" 2>/dev/null && pwd -P 2>/dev/null)" || return 2
+  [ -n "$top" ] || return 2
+
+  # THIS session's recorded edits, canonicalised to git's physical spelling. rc 2 = cannot tell.
+  mine="$(session_writes_paths "$tp")"; rc=$?
+  [ "$rc" -eq 2 ] && return 2
+  local mine_c=""
+  if [ "$rc" -eq 0 ]; then
+    while IFS= read -r p; do [ -n "$p" ] && mine_c="${mine_c}$(_sw_canon "$p")"$'\n'; done <<EOF
+$mine
+EOF
+  fi
+
+  # Every LIVE peer in this tree (not just the first, unlike _po_live_peer: dirt can be several
+  # peers' at once), and the paths its own transcript edit-recorded.
+  reg_dir="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
+  [ -d "$reg_dir" ] || return 2
+  # shellcheck disable=SC2016  # $sid is a jq binding
+  rows="$(_po_bounded "${PEER_OWNED_TIMEOUT_S:-5}" jq -rn --arg sid "$sid" '
+      inputs
+      | select((.paneUUID // "") != "")
+      | select((.session_id // "") != "" and (.session_id // "") != $sid)
+      | select((.pid // 0) > 0)
+      | select((.cwd // "") != "")
+      | [(.pid | tostring), (.name // .paneUUID), .cwd, .session_id]
+      | @tsv
+    ' "$reg_dir"/*.json 2>/dev/null)" || return 2
+  [ -n "$rows" ] || return 1
+  while IFS="$(printf '\t')" read -r pid label pcwd psid; do
+    [ -n "$pid" ] || continue
+    kill -0 "$pid" 2>/dev/null || continue
+    local pc="$pcwd"
+    case "$pc" in
+      "$top"|"$top"/*) ;;
+      *) pc="$(cd "$pc" 2>/dev/null && pwd -P 2>/dev/null)" || continue
+         case "$pc" in "$top"|"$top"/*) ;; *) continue ;; esac ;;
+    esac
+    ptp="$(_po_peer_transcript "$psid" "$pcwd")" || continue
+    ppaths="$(session_writes_paths "$ptp")" || continue
+    while IFS= read -r p; do
+      [ -n "$p" ] && peer_set="${peer_set}$(_sw_canon "$p")"$'\n'
+    done <<EOF
+$ppaths
+EOF
+    peers="${peers:+$peers+}${label:-peer}#$pid"
+  done <<EOF
+$rows
+EOF
+  [ -n "$peer_set" ] || return 1
+
+  # The dirty paths, NUL-safe through a FILE (command substitution strips NULs; see
+  # session-writes.sh session_dirty_mine), -uall so a new directory lists its files.
+  local tmpf skip_next=0
+  tmpf="$(mktemp "${TMPDIR:-/tmp}/po-peerdirt.XXXXXX" 2>/dev/null)" || return 2
+  if ! ( cd "$top" 2>/dev/null && _po_bounded 5 git -c core.quotePath=false status --porcelain -z -uall ) >"$tmpf" 2>/dev/null; then
+    rm -f "$tmpf" 2>/dev/null; return 2
+  fi
+  local verdict=0
+  while IFS= read -r -d '' rec; do
+    [ -n "$rec" ] || continue
+    if [ "$skip_next" -eq 1 ]; then skip_next=0; continue; fi
+    case "$rec" in [RC]*) skip_next=1 ;; esac
+    rel="${rec:3}"; abs="$top/$rel"
+    n=$((n + 1))
+    # DRAINED (`>/dev/null`), never `grep -q`: completion-assert sources this under pipefail, where
+    # an early-exiting grep SIGPIPEs printf and a MATCH reads false — on the first line that would
+    # skip our own refutation, i.e. exonerate the wrong way.
+    if [ -n "$mine_c" ] && printf '%s' "$mine_c" | grep -xF -- "$abs" >/dev/null; then verdict=1; break; fi
+    printf '%s' "$peer_set" | grep -xF -- "$abs" >/dev/null || { verdict=1; break; }
+  done <"$tmpf"
+  rm -f "$tmpf" 2>/dev/null
+  [ "$verdict" -eq 0 ] || return 1
+  [ "$n" -gt 0 ] || return 2
+  printf 'paths=%s,peers=%s\n' "$n" "$peers"
+  return 0
+}
