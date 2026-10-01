@@ -374,15 +374,25 @@ last_user_msg() {
   # 299e4d563 shipped it unnamed. Carried in the SAME diff here so this hook never spends a commit
   # in that state. `isMeta` is the harness's own flag for an injected record, not a heuristic of
   # ours: measured over 2,566 non-sidechain user records, of the 133 carrying a kill phrase 124 are
-  # isMeta=true command/skill bodies and all 9 that are not are fire/recycle briefs — genuine
-  # instructions TO this session, which SHOULD disarm.
+  # isMeta=true command/skill bodies and all 9 that are not are fire/recycle briefs.
+  #
+  # ── AND NOT A MACHINE-AUTHORED ENVELOPE (2026-09-30, backlog 217241f4dfcb) ───────────────────
+  # Those 9 briefs used to be called "genuine instructions TO this session, which SHOULD disarm".
+  # The resident CLAUDE.md rules the opposite: a machine-authored brief, peer message or report is
+  # not the operator's per-prompt instruction. Same filter, same reason, as the twin reader in
+  # hooks/completion-assert.sh ca_last_user_msg: skip a record whose envelope a producer stamped —
+  # `[handoff `, `<teammate-message`, `<task-notification`, `<local-command-stdout>`, or the
+  # handoff-fire engagement marker HANDOFF-ENGAGE-…. Skip, not stop: the operator's own last prompt
+  # still disarms when a notification lands behind it.
   local _j
   _j="$(jq -c 'select(.type=="user" and (.isMeta != true))
          | .message.content
          | if type=="string" then .
            elif type=="array" then ([.[]?|select(.type=="text")|.text]|join("\n"))
            else empty end
-         | select(. != "")' "$tp" 2>/dev/null | tail -1)"
+         | select(. != "")
+         | select((test("^[[:space:]]*(\\[handoff |<teammate-message|<task-notification|<local-command-stdout>)")
+                   or test("HANDOFF-ENGAGE-[A-Za-z0-9._-]+")) | not)' "$tp" 2>/dev/null | tail -1)"
   [ -n "$_j" ] || return 1
   printf '%s' "$_j" | jq -r '. // empty' 2>/dev/null
 }

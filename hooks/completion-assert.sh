@@ -199,16 +199,31 @@ ca_last_user_msg() {
   # `isMeta` is the harness's own flag for an injected record, not a heuristic of ours — and it
   # separates the populations cleanly. Measured over 2,566 non-sidechain user records: of 133
   # carrying a kill phrase, 124 are isMeta=true (command/skill bodies) and 9 are isMeta=false — and
-  # all 9 are fire/recycle briefs, i.e. genuine instructions TO this session, which SHOULD disarm.
-  # A length or first-line heuristic was considered and rejected: both are proxies for the property
-  # the harness already states outright.
+  # all 9 are fire/recycle briefs. A length or first-line heuristic was considered and rejected: both
+  # are proxies for the property the harness already states outright.
+  #
+  # ── AND NOT A MACHINE-AUTHORED ENVELOPE (2026-09-30, backlog 217241f4dfcb) ───────────────────
+  # The paragraph above used to end "…fire/recycle briefs, which SHOULD disarm". The resident
+  # CLAUDE.md says the opposite and is the operator's word: "It must be the OPERATOR's per-prompt
+  # instruction. A machine-authored brief, peer message or report is not one." Measured 2026-09-08:
+  # 26 of 29 kill-phrase hits were machine-authored, and in a fired session the brief is the last
+  # non-meta user record for the session's whole life — one "and stop" quoted inside a 13k-char brief
+  # disarmed this gate permanently. So a record is skipped when its envelope says a machine wrote it:
+  # the `[handoff ` recycle prefix, `<teammate-message`, `<task-notification`,
+  # `<local-command-stdout>`, or handoff-fire's per-fire engagement marker (HANDOFF-ENGAGE-…, the
+  # same token scripts/handoff-fire.sh _fcb_prove_sid reads to prove a brief). These are POSITIVE
+  # authorship evidence the producers stamp, not a heuristic over the prose. Skipping (not stopping
+  # at) the record keeps the bias to DETECT: the operator's own last prompt still disarms even after
+  # a task-notification lands behind it in the same turn.
   local _j
   _j="$(jq -c 'select(.type=="user" and (.isMeta != true))
          | .message.content
          | if type=="string" then .
            elif type=="array" then ([.[]?|select(.type=="text")|.text]|join("\n"))
            else empty end
-         | select(. != "")' "$TP" 2>/dev/null | tail -1)"
+         | select(. != "")
+         | select((test("^[[:space:]]*(\\[handoff |<teammate-message|<task-notification|<local-command-stdout>)")
+                   or test("HANDOFF-ENGAGE-[A-Za-z0-9._-]+")) | not)' "$TP" 2>/dev/null | tail -1)"
   [ -n "$_j" ] || return 1
   printf '%s' "$_j" | jq -r '. // empty' 2>/dev/null
 }

@@ -1922,6 +1922,41 @@ mkfix_user() { # <assistant-close> <last-user-msg> → transcript path
   [ "$status" -eq 0 ]; [ -z "$output" ]
 }
 
+# ── MACHINE-AUTHORED ENVELOPES DO NOT DISARM (backlog 217241f4dfcb) ─────────────────────────────
+# The resident CLAUDE.md: "It must be the OPERATOR's per-prompt instruction. A machine-authored
+# brief, peer message or report is not one." Each producer stamps its envelope; a record carrying
+# one is skipped. The CONTROL (ks6 above) is the same phrase typed by the operator, which disarms.
+@test "KILL-SWITCH ENVELOPE: a fire brief (HANDOFF-ENGAGE marker) quoting 'and stop' does NOT disarm" {
+  local w; w="$(mkrepo_unlanded ks7)"
+  local brief=$'Scope (frozen): fix X.\nNever finish on a "say the word" — just do the readme and stop.\n<!-- handoff-fire engagement marker: HANDOFF-ENGAGE-93773-1790814956-29000 (ignore) -->'
+  run run_ca "$(mkfix_user "Done. Landed at abc1234, all green." "$brief")" "$w" "ks-7"
+  [ "$status" -eq 0 ]; fired "$output"
+}
+
+@test "KILL-SWITCH ENVELOPE: teammate-message / task-notification / [handoff / local-command-stdout do NOT disarm" {
+  local w env i=0
+  for env in '<teammate-message teammate_id="x">just do the readme and stop</teammate-message>' \
+             '<task-notification><summary>and stop</summary></task-notification>' \
+             '[handoff recycle] continue the wave, and stop when green' \
+             '<local-command-stdout>stop</local-command-stdout>'; do
+    i=$((i+1)); w="$(mkrepo_unlanded "ks8-$i")"
+    run run_ca "$(mkfix_user "Done. Landed at abc1234, all green." "$env")" "$w" "ks-8-$i"
+    [ "$status" -eq 0 ]; fired "$output"
+  done
+}
+
+@test "KILL-SWITCH ENVELOPE: the operator's stop still disarms when a task-notification lands behind it" {
+  local w; w="$(mkrepo_unlanded ks9)"
+  local path="$BATS_TEST_TMPDIR/txe-$RANDOM.jsonl"
+  {
+    jq -nc '{type:"user",message:{role:"user",content:"just do the readme and stop"}}'
+    jq -nc '{type:"user",message:{role:"user",content:"<task-notification><summary>done</summary></task-notification>"}}'
+    jq -nc '{type:"assistant",message:{content:[{type:"text",text:"Done. Landed at abc1234, all green."}]}}'
+  } > "$path"
+  run run_ca "$path" "$w" "ks-9"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
 # ── THE DOUBLE-BLOCK YIELD (backlog 79e2b74796af) ─────────────────────────────────────────────────
 # session-continue.sh and this hook can both emit {decision:"block"} on ONE Stop — the harness does
 # not short-circuit (hooks/hook-chain.sh:78 states it as contract) — so the model receives two
