@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: complete
 ---
 # Quota-cache freshness — plan
 
@@ -36,4 +36,10 @@ measured gain. The 180 s keepwarm cadence stays.
 
 ## Status
 
-- [ ] W1 implemented, bats green, landed, converged.
+- [x] W1 DONE (2026-10-01). Learnings: (1) the first k-vs-429 table was a denominator artifact,
+  because the log records successes only near the wall; on the uniformly sampled series k does not predict
+  429 (§7), so the at-wall hypothesis was refuted (§6) before anything was built on it. (2) The keepwarm
+  "sweep on reset evidence" rule first keyed on any passed stamp, which would have forced a sweep every
+  tick for a logged-out account; it now keys on evidence newer than the cache. Tests:
+  `tests/claude-accounts-freshness.bats` (7). Shas: `git log --oneline -- bin/claude-accounts`
+  on main (the land rebases them).
