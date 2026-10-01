@@ -368,6 +368,8 @@ def probe_level(probe: Dict[str, Any]) -> int:
     nc = probe.get("negative_control") or {}
     if not nc.get("ran") and not nc.get("reason_if_not_run"):
         return 0
+    if nc.get("ran") and not nc.get("reported_refutation"):
+        return 0                      # it ran against known-bad input and still passed: cannot fail
     lvl = _PROBE_LEVEL.get(probe.get("kind", ""), 0)
     if lvl == 4 and (int(probe.get("n") or 0) < 5 or not probe.get("load_control")):
         return 1                      # a measurement without 5 samples and a load control is anecdote
