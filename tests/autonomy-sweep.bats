@@ -1466,6 +1466,31 @@ STUB
   grep -q "invoked=cloud-refusal-route from=$deployed --sweep" "$marker" || false
 }
 
+@test "custody-deathwatch: a SYMLINK-deployed sweep invokes it by the deployed path, so its own guard admits it" {
+  # 2026-09-30: 1,710 of 1,710 deathwatch ledger rows read skipped-not-deployed. Production deploys
+  # the sweep as a SYMLINK into the checkout; the call used $_SWEEP_DIR (resolved through that link),
+  # so the callee's exact-$0 guard always saw the checkout path. The case above uses COPIES and could
+  # never see it. Here the deployed dir holds links, as the live layer does.
+  local cfg="$BATS_TEST_TMPDIR/cfgdw" ck="$BATS_TEST_TMPDIR/checkout/scripts" marker="$BATS_TEST_TMPDIR/dw-invocations"
+  mkdir -p "$cfg/scripts" "$ck/lib"; : >"$marker"
+  export CLAUDE_CONFIG_DIR="$cfg"
+  cp "$SWEEP" "$ck/autonomy-sweep.sh"; chmod +x "$ck/autonomy-sweep.sh"
+  cp "$REPO"/scripts/lib/*.sh "$ck/lib/" 2>/dev/null
+  printf '#!/bin/bash\necho "dw0=$0" >>"%s"\n' "$marker" >"$ck/custody-deathwatch.sh"; chmod +x "$ck/custody-deathwatch.sh"
+  ln -s "$ck/autonomy-sweep.sh" "$cfg/scripts/autonomy-sweep.sh"
+  ln -s "$ck/custody-deathwatch.sh" "$cfg/scripts/custody-deathwatch.sh"
+  ln -s "$ck/lib" "$cfg/scripts/lib"     # the live layer links lib/ too; the sweep sources it beside its unresolved path
+  "${SWEEP_TO[@]}" bash "$cfg/scripts/autonomy-sweep.sh" >/dev/null 2>&1 || true
+  grep -qx "dw0=$cfg/scripts/custody-deathwatch.sh" "$marker" || { cat "$marker"; false; }
+  # PRE-FIX CONTROL: without the deployed-path line the same layout invokes the checkout path.
+  grep -v '_custdw="$_cc_cfg/scripts/custody-deathwatch.sh"' "$ck/autonomy-sweep.sh" >"$ck/sweep-prefix.sh"
+  ! cmp -s "$ck/autonomy-sweep.sh" "$ck/sweep-prefix.sh" || { echo "mutation did not apply"; false; }
+  rm "$cfg/scripts/autonomy-sweep.sh"; ln -s "$ck/sweep-prefix.sh" "$cfg/scripts/autonomy-sweep.sh"
+  : >"$marker"
+  "${SWEEP_TO[@]}" bash "$cfg/scripts/autonomy-sweep.sh" >/dev/null 2>&1 || true
+  grep -qx "dw0=$ck/custody-deathwatch.sh" "$marker" || { cat "$marker"; false; }
+}
+
 @test "ONE bound: the value that arms the timeout is the value the child is TOLD" {
   # §3d. `--limit` is a COUNT and this caller's `timeout` is a DEADLINE; W3 shipped the count and the
   # pass was still SIGKILLed on every tick (cloud_return_rc 137 × 5 on 2026-09-02, no rc 0 ever). The

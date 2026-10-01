@@ -2072,7 +2072,15 @@ sweep_yield 2e-custody-deathwatch
 # It carries its OWN deployed-copy guard keyed the same way this file's is, so the call here is
 # unconditional and a suite copy is inert on the far side rather than by omission here — one guard,
 # in the file that does the writing.
+#
+# CORRECTED (2026-09-30): "keyed the same way" was only half true, and the false half kept this pass
+# inert for its whole life — 1,710 of 1,710 ledger rows read `skipped-not-deployed`. Its guard tests
+# its UNRESOLVED $0 against `$CLAUDE_CONFIG_DIR/scripts/custody-deathwatch.sh`, but this call handed it
+# `$_SWEEP_DIR`, which is resolved THROUGH the deployed symlink back into the checkout, so the deployed
+# sweep always invoked the checkout path. The fix keeps the discriminator in the callee: the deployed
+# sweep calls the deployed (unresolved) path; any other copy still calls its sibling and is refused there.
 _custdw="$_SWEEP_DIR/custody-deathwatch.sh"
+[ "$_cloudret_deployed" = 1 ] && [ -x "$_cc_cfg/scripts/custody-deathwatch.sh" ] && _custdw="$_cc_cfg/scripts/custody-deathwatch.sh"
 _custdw_rc="skipped"
 if [ -x "$_custdw" ]; then
   if [ -n "$_tmo" ] && [ -x "$_tmo" ]; then "$_tmo" -k 10 120 bash "$_custdw" --sweep >/dev/null 2>&1
