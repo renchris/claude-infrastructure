@@ -159,6 +159,14 @@ row() { printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"claude-se
   grep -q -- "--launch --spawn" "$LRH_LOG" || { echo "$output"; cat "$LRH_LOG"; false; }
   ! grep -q -- "--in-place" "$LRH_LOG" || { cat "$LRH_LOG"; false; }
 }
+@test "--one: a pane-less session whose cwd was reaped is PARKED as CWD-GONE, never spawned" {
+  blocked_tx "$SEC" "$SID"
+  gone="$BATS_TEST_TMPDIR/reaped-worktree"
+  sed -i '' "s#\"cwd\":\"$CWD\"#\"cwd\":\"$gone\"#" "$SEC/projects/$SLUG/$SID.jsonl"
+  run bash "$FLEET" --one "$SID" --target next3
+  [[ "$output" == *"CWD-GONE"* ]] || { echo "$output"; false; }
+  [ ! -s "$LRH_LOG" ] || { cat "$LRH_LOG"; false; }
+}
 @test "recover CONTROL: a session a live pane holds still goes --in-place with that pane" {
   blocked_tx "$SEC" "$SID"; row 616 "$SID"
   run bash "$FLEET" --one "$SID" --target next3

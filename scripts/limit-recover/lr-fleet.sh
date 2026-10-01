@@ -1628,7 +1628,16 @@ EOF
         case "$_tl" in 0) exit 0 ;; 2) LF_NUDGE_TO="${_to:-$cfg}" ;; *) LF_STRANDED_TO="${_to:-$cfg}" ;; esac ;;
       esac
     fi
-    if [ -n "${LF_NUDGE_TO:-}" ]; then
+    if [ -z "${LF_NUDGE_TO:-}" ] && { [ -z "$pane" ] || [ "$pane" = - ]; } \
+       && [ -n "$cwd" ] && [ "$cwd" != - ] && [ ! -d "$cwd" ]; then
+      # CWD-GONE ON THE --one PATH TOO (2026-10-01). The census has refused a reaped worktree since
+      # D8, but --one reaches here through the transcript glob without it, so reopening the closed
+      # pane 41's session spawned a pane whose launcher died at once (lr-fire-resume rc 2) and the
+      # run still reported RECOVERED. A pane-less session needs its cwd to exist; recreate the
+      # worktree (git worktree add <cwd's tree> <branch>) and re-run.
+      lf_row "$SID" "$pane" "$pane" "$acct" "-" "parked" "CWD-GONE — $cwd no longer exists; a resume cannot be spawned there (recreate its worktree, then re-run)"
+      rc=1
+    elif [ -n "${LF_NUDGE_TO:-}" ]; then
       lf_nudge "$SID" "$LF_NUDGE_TO" "$acct" "$pane"; rc=$?
     elif [ -n "${LF_STRANDED_TO:-}" ]; then
       lf_stranded "$SID" "$LF_STRANDED_TO" "$acct" "$pane" "$cwd" "$tier"; rc=$?
