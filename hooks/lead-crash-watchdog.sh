@@ -116,10 +116,17 @@ readonly LOG_FILE="$HOME/.claude/logs/lead-crash-watchdog.log"
 # FAIL-OPEN, BOUNDED, AND NEVER THE CAUSE OF A SECOND FAILURE: the pager is bounded by timeout(1),
 # every step is `|| true`, and a missing/failing pager degrades to a log line — the pre-fix
 # behaviour — rather than delaying or breaking the death handler it hangs off.
+#
+# THE DESTINATION IS cc-desk-page, NOT `cc-notify --role desk` (2026-09-30, husk-panes root cause 6).
+# The bare role page failed rc=3 on EVERY death: no ~/.claude/cc-roles/desk file exists, so cc-notify
+# had no address and the page reached nobody. cc-desk-page tries the desk rung and, when no live desk
+# takes it, the operator's Notification Center / phone — a ladder whose last rung needs no role file.
+# Exit 0 = delivered on some channel. An explicit CC_DEATH_PAGER override whose basename is cc-notify
+# keeps the old `--role` call shape (see surface_death); any other pager gets cc-desk-page's.
 # Seams: CC_DEATH_PAGE=0 (kill switch) · CC_DEATH_PAGER (stub the transport) · CC_DEATH_PAGE_ROLE.
 CC_DEATH_PAGE="${CC_DEATH_PAGE:-1}"
 CC_DEATH_PAGE_ROLE="${CC_DEATH_PAGE_ROLE:-desk}"
-CC_DEATH_PAGER="${CC_DEATH_PAGER:-$HOME/.claude/bin/cc-notify}"
+CC_DEATH_PAGER="${CC_DEATH_PAGER:-$HOME/.claude/bin/cc-desk-page}"
 CC_DEATH_PAGE_TIMEOUT_S="${CC_DEATH_PAGE_TIMEOUT_S:-10}"
 
 mkdir -p "$WATCHDOG_DIR" "$(dirname "$LOG_FILE")" 2>/dev/null || true
@@ -153,11 +160,42 @@ find_transcript() {
 # The launcher's exec-wrapper writes ~/.claude/logs/close-records/<pid>-<epoch>.json on exit
 # with the binary's REAL exit_code/signal. Keyed by the SAME pid the watchdog sees as the dead
 # lead (PPID of SessionStart), it turns an "abrupt-unknown" GUESS into an attributed FACT.
+#
+# KEYED ON PID + START TIME, not pid alone (2026-09-30, husk-panes root cause 6). The newest
+# `<pid>-*.json` for a pid is whoever last held that pid — and macOS reuses pids — so a lead that
+# launched WITHOUT the wrapper (every Agent-Teams member does) joined a STRANGER's record and read its
+# exit code as its own. So when the lead's start is known (LEAD_START_EPOCH, captured at registration)
+# a record counts only if its `started_at` lies within LCW_CLOSE_JOIN_TOL_S of it; none does ⇒ rc 1,
+# the ladder's no-record path. The wrapper stamps START_EPOCH before it execs the binary, so a genuine
+# record trails the lead's own start by well under a second. `started_at` unreadable ⇒ the filename's
+# epoch, which is the same START_EPOCH (bin/cc-close-attrib names the file `${rpid}-${START_EPOCH}`).
+# Unknown start (an old daemon, the --classify/--close-fields entrypoints) ⇒ the pid-only join, as
+# before; handle_crash logs when the death it records was joined that way.
+# Seams: CC_LEAD_START_EPOCH · LCW_CLOSE_JOIN_TOL_S (5).
+LEAD_START_EPOCH="${CC_LEAD_START_EPOCH:-}"
 find_close_record() {
   local pid="$1" dir="${CC_CLOSE_RECORDS_DIR:-$HOME/.claude/logs/close-records}"
+  local want="${LEAD_START_EPOCH:-}" tol="${LCW_CLOSE_JOIN_TOL_S:-5}" f st ep d
   [[ -n "$pid" ]] || return 1
-  # shellcheck disable=SC2012  # ls -1t is deliberate (newest-first mtime on a fixed pid pattern)
-  ls -1t "$dir/${pid}-"*.json 2>/dev/null | head -1
+  case "$want" in
+    ''|*[!0-9]*)
+      # shellcheck disable=SC2012  # ls -1t is deliberate (newest-first mtime on a fixed pid pattern)
+      ls -1t "$dir/${pid}-"*.json 2>/dev/null | head -1
+      return ;;
+  esac
+  for f in "$dir/${pid}-"*.json; do
+    [[ -f "$f" ]] || continue
+    st=$(close_record_field "$f" started_at) || st=""
+    ep=""
+    # BSD date first (this fleet is Darwin), GNU as the fallback; TZ pinned — the stamp is UTC.
+    [[ -n "$st" ]] && ep=$(TZ=UTC date -j -f '%Y-%m-%dT%H:%M:%SZ' "$st" +%s 2>/dev/null \
+                           || date -u -d "$st" +%s 2>/dev/null || true)
+    case "$ep" in ''|*[!0-9]*) ep="${f##*-}"; ep="${ep%.json}" ;; esac
+    case "$ep" in ''|*[!0-9]*) continue ;; esac
+    d=$(( ep > want ? ep - want : want - ep ))
+    if (( d <= tol )); then printf '%s\n' "$f"; return 0; fi
+  done
+  return 1
 }
 
 # Read one scalar field from a close-record without requiring jq (matches "key":123 or "key":"v").
@@ -280,6 +318,71 @@ retired_by_desk() {
     return 0
   done
   return 1
+}
+
+# teammate_facts <transcript> → TEAMMATE<TAB>NAME<TAB>TEAM<TAB>SHUTDOWN   (1/0, strings, 1/0)
+#
+# THE DEFECT THIS CLOSES (2026-09-30, husk-panes root cause 6). An Agent-Teams member that exits
+# after its lead's shutdown_request is a RETIREMENT — its work already went to the lead — but this file
+# had no teammate arm: five such panes (33, 57-60) were painted "Resume it here", inviting the operator
+# to restart a finished member outside its team. Members launch without cc-close-attrib, so there is
+# no close record to say otherwise.
+#
+# TEAMMATE comes from registration when it could be read (LEAD_AGENT_ID: the lead's own argv carries
+# `--agent-id <n>@<team> --agent-name <n> --team-name <team>`, read by hooks/lib/agent-identity.sh),
+# else from the transcript, whose member records carry `"teamName"` AND `"agentName"` — a lead's
+# records carry neither, so requiring both keeps a lead from reading as its own member.
+# SHUTDOWN is a USER record holding a `<teammate-message>` whose JSON says
+# `"type":"shutdown_request"`, addressed to this member (`"requestId":"shutdown-…@<name>"`). Matching
+# the bare word is not enough: every member's instructions attachment and brief mention
+# shutdown_request in prose, which is exactly the contamination root cause 7 found in the close reader.
+# One streaming pass, bounded like last_assistant_text. Unreadable ⇒ `0 - - 0` (not a teammate).
+teammate_facts() {
+  local t="${1:-}" out=""
+  if [[ -n "$t" && -f "$t" ]]; then
+    out=$(lcw_bounded "${LCW_REPORT_READ_TIMEOUT_S:-30}" "${LCW_PYTHON_BIN:-python3}" - "$t" "${LEAD_AGENT_ID:-}" <<'PY' 2>/dev/null || true
+import json, re, sys
+argv_id = sys.argv[2] if len(sys.argv) > 2 else ""
+name = argv_id.split("@", 1)[0] if "@" in argv_id else ""
+team = argv_id.split("@", 1)[1] if "@" in argv_id else ""
+is_team = bool(name)
+rids = []
+try:
+    with open(sys.argv[1], "r", errors="replace") as fh:
+        for line in fh:
+            if '"teamName"' not in line and "shutdown_request" not in line:
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            if rec.get("teamName") and rec.get("agentName"):
+                is_team = True
+                name = name or rec["agentName"]
+                team = team or rec["teamName"]
+            msg = rec.get("message") or {}
+            if rec.get("type") != "user" or msg.get("role") != "user":
+                continue
+            c = msg.get("content")
+            if isinstance(c, list):
+                c = "\n".join(b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text")
+            if not isinstance(c, str) or "<teammate-message" not in c or '"type":"shutdown_request"' not in c:
+                continue
+            m = re.search(r'"requestId":"([^"]*)"', c)
+            rids.append(m.group(1) if m else "")
+except Exception:
+    pass
+shut = any((not r) or (not name) or r.endswith("@" + name) for r in rids)
+sys.stdout.write("%d\t%s\t%s\t%d" % (1 if is_team else 0, name or "-", team or "-", 1 if (is_team and shut) else 0))
+PY
+)
+  fi
+  [[ -n "$out" ]] || out=$'0\t-\t-\t0'
+  printf '%s' "$out"
+}
+retired_teammate() { # $1=transcript → 0 iff a teammate that exited after its lead's shutdown_request
+  local f; f=$(teammate_facts "${1:-}")
+  [[ "${f%%$'\t'*}" == 1 && "${f##*$'\t'}" == 1 ]]
 }
 
 # EXIT<TAB>SIGNAL<TAB>RECORD_PATH<TAB>VERSION for a pid's newest close-record (empty if none).
@@ -447,6 +550,12 @@ classify_death() {
           cls=$'RECYCLE\tretired-by-desk'
         fi
         t=$(find_transcript "$sid" 2>/dev/null || true)
+        # A teammate its lead shut down is retired whatever its exit code says (see teammate_facts):
+        # a clean exit is relabelled so the pane verdict says "close it", a signal is not a crash.
+        # Jetsam still outranks, as above.
+        if [[ "$cls" != *retired-by-desk ]] && ! jetsam_near_death "$death" && retired_teammate "$t"; then
+          cls=$'RECYCLE\tretired-teammate'
+        fi
         if [[ -n "$t" ]]; then
           kb=$(( $(stat -f%z "$t" 2>/dev/null || echo 0) / 1024 ))
           recs=$(wc -l < "$t" 2>/dev/null | tr -d ' ')
@@ -468,6 +577,12 @@ classify_death() {
   #    everything, a mis-anchored window is not a mild inaccuracy: it silently overwrites good evidence.
   if jetsam_near_death "$death"; then
     printf 'CRASH\tjetsam-oom\t%s\t%s' "${kb:-0}" "${recs:-0}"; return 0
+  fi
+  # 1.4) RETIRED TEAMMATE — a team member that exited after its lead's shutdown_request (see
+  #      teammate_facts). The structured request in its own transcript is the evidence; it outranks
+  #      the markers and prose below because a member never writes either.
+  if retired_teammate "$t"; then
+    printf 'RECYCLE\tretired-teammate\t%s\t%s' "${kb:-0}" "${recs:-0}"; return 0
   fi
   # 1.5) DELIBERATE TEARDOWN — a fresh marker handoff-fire.sh writes the moment a session
   #      CHOOSES to recycle/self-close: the durable structured signal that supersedes the
@@ -1061,6 +1176,7 @@ death_page_line() {
     # NOT a crash: cc-teardown collected this session and then killed it. The page exists only so a
     # reader who reaches this line by another route is told that, and told not to resume it.
     retired-by-desk)  what="was RETIRED deliberately by cc-teardown after its work was collected — this is NOT a crash" ;;
+    retired-teammate) what="was a teammate SHUT DOWN by its lead, its work already handed to the lead — this is NOT a crash" ;;
     # The one thing this cause DOES say is that the launcher wrapper was alive and was destroyed
     # with it, so the exit status was never written — which is why no exit code appears here.
     killed-before-report) what="was DESTROYED before its launcher could record an exit status (its close-record is still open) — it did NOT exit" ;;
@@ -1080,6 +1196,7 @@ death_page_line() {
   local recover="Its pane is still open at a live shell and looks EXACTLY like a clean /exit, so nothing on screen says this happened. Recover with cc-husk-sweep --resume (it resolves the session AND its account; the pane's own printed claude --resume line uses the default account and cannot see another store's transcript)."
   case "$cause" in
     retired-by-desk) recover="Its pane was closed by that retirement and its work was landed before the kill — there is NOTHING to recover here and it must NOT be resumed." ;;
+    retired-teammate) recover="A teammate is not resumable — its lead re-spawns members. Close its pane; there is nothing to recover here." ;;
   esac
   # THE EVIDENCE CLAUSE IS CONDITIONAL, because the close-record it names is frequently ABSENT and
   # naming it unconditionally sends the reader to an empty path. Measured 2026-09-08 09:24 (backlog
@@ -1109,7 +1226,7 @@ death_page_line() {
 # fail-loud-into-a-log-nobody-reads is about where that log goes, and this one goes to the same file
 # the verdict does, so a delivery failure is at least joinable to the death it belongs to).
 surface_death() {
-  local sid="$1" pid="$2" class="$3" cause="$4" tpath="${5:-}" line rc=0
+  local sid="$1" pid="$2" class="$3" cause="$4" tpath="${5:-}" line rc=0 dest
   [[ "${CC_DEATH_PAGE:-1}" == "1" ]] || { log "[watchdog $sid] death page SUPPRESSED (CC_DEATH_PAGE=0)"; return 1; }
   # POLARITY: a deliberate recycle is not news. See the block comment at the top of this file.
   [[ "$class" == "CRASH" ]] || return 1
@@ -1118,7 +1235,18 @@ surface_death() {
     log "[watchdog $sid] death page UNDELIVERED — no pager at $CC_DEATH_PAGER: $line"
     return 2
   fi
-  lcw_bounded "${CC_DEATH_PAGE_TIMEOUT_S:-10}" "$CC_DEATH_PAGER" --role "$CC_DEATH_PAGE_ROLE" "$line" >/dev/null 2>&1 || rc=$?
+  # Two call shapes, chosen by the pager's NAME: cc-desk-page takes `--source` and no role (it owns
+  # its own ladder); an explicit cc-notify override keeps the role address it always had.
+  if [[ "${CC_DEATH_PAGER##*/}" == cc-notify ]]; then
+    dest="role=$CC_DEATH_PAGE_ROLE"
+    lcw_bounded "${CC_DEATH_PAGE_TIMEOUT_S:-10}" "$CC_DEATH_PAGER" --role "$CC_DEATH_PAGE_ROLE" "$line" >/dev/null 2>&1 || rc=$?
+  else
+    # Its desk rung is bounded at HALF of ours: its own default (25 s) outlives this 10 s bound, which
+    # would cut a hung desk rung before the operator rung — the one that needs no role file — ran.
+    dest="${CC_DEATH_PAGER##*/}"
+    CC_DESK_PAGE_TIMEOUT_S="${CC_DESK_PAGE_TIMEOUT_S:-$(( ${CC_DEATH_PAGE_TIMEOUT_S:-10} / 2 ))}" \
+      lcw_bounded "${CC_DEATH_PAGE_TIMEOUT_S:-10}" "$CC_DEATH_PAGER" --source lead-crash-watchdog "$line" >/dev/null 2>&1 || rc=$?
+  fi
   # THE VICTIM MAY BE THE PAGE'S ONLY RECIPIENT (2026-09-08, desk 88e2c2b1). role=desk resolves to a
   # PANE, and when the dead session is that pane, cc-notify appends the page to a dead inbox and
   # returns 0 — "DELIVERED", to nobody. The supervisor then records it as "no live desk" and folds it
@@ -1126,13 +1254,13 @@ surface_death() {
   # command that puts a desk back. Seam: CC_DEATH_OSA_BIN stands in for osascript.
   if pane_is_desk "$LEAD_PANE"; then
     lcw_osa "${CC_DEATH_OSA_BIN:-osascript}" -e "display notification \"The DESK itself died — session ${sid:0:8} in pane ${LEAD_PANE} (${cause}). Nothing pages a dead desk. Restore it: cc-husk-sweep --resume --pane ${LEAD_PANE}\" with title \"Claude DESK DOWN\" sound name \"Basso\"" >/dev/null 2>&1 || true
-    log "[watchdog $sid] death page was addressed to role=$CC_DEATH_PAGE_ROLE, but the VICTIM IS THE DESK (pane $LEAD_PANE) — it sits in a dead inbox; escalated to Notification Center with the restore command"
+    log "[watchdog $sid] death page was addressed to $dest, but the VICTIM IS THE DESK (pane $LEAD_PANE) — it sits in a dead inbox; escalated to Notification Center with the restore command"
   fi
   if [[ "$rc" -eq 0 ]]; then
-    log "[watchdog $sid] death page DELIVERED to role=$CC_DEATH_PAGE_ROLE: $line"
+    log "[watchdog $sid] death page DELIVERED to $dest: $line"
     return 0
   fi
-  log "[watchdog $sid] death page FAILED (rc=$rc) to role=$CC_DEATH_PAGE_ROLE: $line"
+  log "[watchdog $sid] death page FAILED (rc=$rc) to $dest: $line"
   return 2
 }
 
@@ -1179,6 +1307,7 @@ LEAD_TTY="${CC_PANE_VERDICT_TTY:-}"      # overwritten at registration from `ps 
 LEAD_PANE="${CC_PANE_VERDICT_PANE:-}"    # …from CC_PANE_ID / KITTY_WINDOW_ID / ITERM_SESSION_ID
 LEAD_CFG="${CC_PANE_VERDICT_CFG:-}"      # …from CLAUDE_CONFIG_DIR (names the pinned launcher)
 LEAD_CWD="${CC_PANE_VERDICT_CWD:-}"      # …from the hook's $PWD (the session's working dir)
+LEAD_AGENT_ID="${CC_PANE_VERDICT_AGENT_ID:-}"  # …from the lead's argv: `<name>@<team>` iff an Agent-Teams member
 
 pane_launcher_for_cfg() { # $1=config dir → the launcher pinned to that account's store
   case "${1##*/}" in
@@ -1239,10 +1368,44 @@ pane_work_state() { # $1=cwd → clean | dirty:N | unlanded:N | -   (git facts, 
   ahead=$(git -C "$cwd" rev-list --count origin/main..HEAD 2>/dev/null || echo "")
   case "$ahead" in ''|*[!0-9]*|0) printf 'clean' ;; *) printf 'unlanded:%s' "$ahead" ;; esac
 }
+# ASSISTANT TEXT ONLY (2026-09-30, husk-panes root cause 7). This used to grep the whole JSONL, and
+# in a session that never wrote a close the last match came from the CLAUDE.md instructions
+# attachment ("An honest `Good to close: no …`"), so every such pane read `no`. A streaming pass in
+# the style of last_assistant_text: records whose type or message.role is assistant, content[].text
+# joined, the last `Good to close: yes|no`. No assistant close ⇒ "-", not a fault.
 pane_last_close() { # $1=transcript → yes | no | -   (the last "Good to close:" the session wrote)
-  local c
+  local c=""
   [[ -n "${1:-}" && -f "$1" ]] || { printf -- '-'; return 0; }
-  c=$(LC_ALL=C grep -ao 'Good to close: [a-z]*' "$1" 2>/dev/null | tail -1 | awk '{print $4}' || true)   # a transcript with no close phrase is "-", not a fault
+  c=$(lcw_bounded "${LCW_REPORT_READ_TIMEOUT_S:-30}" "${LCW_PYTHON_BIN:-python3}" - "$1" <<'PY' 2>/dev/null || true
+import json, re, sys
+last = ""
+pat = re.compile(r"Good to close: (yes|no)\b")
+try:
+    with open(sys.argv[1], "r", errors="replace") as fh:
+        for line in fh:
+            if "Good to close: " not in line or '"assistant"' not in line:
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            msg = rec.get("message") or {}
+            if rec.get("type") != "assistant" and msg.get("role") != "assistant":
+                continue
+            content = msg.get("content")
+            if isinstance(content, list):
+                content = "\n".join(b.get("text", "") for b in content
+                                    if isinstance(b, dict) and b.get("type") == "text")
+            if not isinstance(content, str):
+                continue
+            hits = pat.findall(content)
+            if hits:
+                last = hits[-1]
+except Exception:
+    pass
+sys.stdout.write(last)
+PY
+)
   printf '%s' "${c:--}"
 }
 pane_end_reason() { # $1=sid → the SessionEnd reason session-end.sh logged, or -
@@ -1254,13 +1417,39 @@ pane_end_reason() { # $1=sid → the SessionEnd reason session-end.sh logged, or
 pane_verdict_text() { # $1=sid $2=class $3=cause $4=exit $5=sig $6=tpath → line 1: headline<TAB>title; then a blank line and the block
   local sid="$1" class="$2" cause="$3" ec="${4:-}" sig="${5:-}" tpath="${6:-}"
   local launcher work close reason when role="" rule headline title body resume
+  local tm tm_is tm_name tm_team reopen
   launcher=$(pane_launcher_for_cfg "$LEAD_CFG")
   work=$(pane_work_state "$LEAD_CWD"); close=$(pane_last_close "$tpath"); reason=$(pane_end_reason "$sid")
   when=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   pane_is_desk "$LEAD_PANE" && role=" — the DESK"
   resume="nocorrect CC_ACCOUNT_PINNED=1 $launcher --resume $sid"
   rule='────────────────────────────────────────────────────────────────────────────────'
+  # A TEAMMATE IS NOT RESUMABLE (root cause 6): resumed outside its team it is a stray session with no
+  # lead to report to, and its lead re-spawns members itself. So no teammate banner offers --resume —
+  # the reopen line names the lead instead. Its team is `session-<lead sid8>`.
+  tm=$(teammate_facts "$tpath")
+  IFS=$'\t' read -r tm_is tm_name tm_team _ <<< "$tm" || true
+  local reopen_dirty reopen_clean resume_crash crash_note
+  reopen_dirty="▶ Reopen it here:   $resume"
+  reopen_clean="To reopen the session instead:
+▶ $resume"
+  resume_crash="▶ Resume it here:   $resume"
+  crash_note="The
+   \"Resume this session with: claude --resume …\" line above is Claude Code's ordinary exit text, and
+   its bare \`claude\` is the WRONG launcher for this account's transcript store."
+  if [[ "$tm_is" == 1 ]]; then
+    reopen="▶ Teammate $tm_name is not resumable: tell its lead (session ${tm_team#session-}) — the lead re-spawns members"
+    reopen_dirty="$reopen"; reopen_clean="
+$reopen"; resume_crash="$reopen"
+    crash_note="The
+   exit text above offers a resume line; ignore it — a teammate is not resumable outside its team."
+  fi
   case "$class:$cause" in
+    RECYCLE:retired-teammate)
+      headline="✅ RETIRED — teammate $tm_name (session ${sid:0:8}) was shut down by its lead; its work went to the lead"
+      title="✅ retired ${sid:0:8}"
+      body="$headline (verdict painted $when).
+   This pane holds nothing: close this pane (Ctrl-D). It is not resumable — its lead re-spawns members." ;;
     RECYCLE:retired-by-desk)
       headline="✅ RETIRED — Claude session ${sid:0:8}${role} was retired by the desk after its work was collected"
       title="✅ retired ${sid:0:8}"
@@ -1275,20 +1464,17 @@ pane_verdict_text() { # $1=sid $2=class $3=cause $4=exit $5=sig $6=tpath → lin
       case "$work" in
         dirty:*|unlanded:*) body="$body
    ⚠ Its working dir still holds uncommitted or unlanded work — look at that before closing this pane.
-▶ Reopen it here:   $resume" ;;
+$reopen_dirty" ;;
         *) body="$body
-   This pane holds nothing: safe to close (Ctrl-D). To reopen the session instead:
-▶ $resume" ;;
+   This pane holds nothing: safe to close (Ctrl-D). $reopen_clean" ;;
       esac ;;
     *)
       headline="⛔ NOT A CLEAN EXIT — Claude session ${sid:0:8}${role} was KILLED here"
       title="⛔ KILLED ${sid:0:8}"
       body="$headline (verdict painted $when).
-   cause: ${cause}${ec:+ (exit $ec}${sig:+, signal $sig}${ec:+)}. It did not exit and nothing closed it. The
-   \"Resume this session with: claude --resume …\" line above is Claude Code's ordinary exit text, and
-   its bare \`claude\` is the WRONG launcher for this account's transcript store.
+   cause: ${cause}${ec:+ (exit $ec}${sig:+, signal $sig}${ec:+)}. It did not exit and nothing closed it. $crash_note
    work in ${LEAD_CWD:-?}: $work · its last close verdict: $close
-▶ Resume it here:   $resume
+$resume_crash
 ▶ Or triage first:  cc-husk-sweep --pane ${LEAD_PANE:-<pane>}" ;;
   esac
   printf '%s\t%s\n\n%s\n%s\n%s\n' "$headline" "$title" "$rule" "$body" "$rule"
@@ -1423,13 +1609,37 @@ _lcw_isid=""; [ -n "${CC_PANE_ID:-}" ] || _lcw_isid="${ITERM_SESSION_ID:-}"
 LEAD_PANE="${CC_PANE_VERDICT_PANE:-${CC_PANE_ID:-${KITTY_WINDOW_ID:-${_lcw_isid##*:}}}}"
 LEAD_CFG="${CC_PANE_VERDICT_CFG:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}"
 LEAD_CWD="${CC_PANE_VERDICT_CWD:-$PWD}"
-log "registered session=$SESSION_ID pid=$LEAD_PID tty=${LEAD_TTY:-none} pane=${LEAD_PANE:-none}"
+# Is the lead an Agent-Teams MEMBER? Its own argv says so (the three-flag, self-consistent conjunction
+# hooks/lib/agent-identity.sh reads), and argv is unreadable once it is dead — so it is captured here,
+# by value, like the facts above. One hop: LEAD_PID itself, never an ancestor. Unreadable ⇒ empty, and
+# teammate_facts falls back to the transcript's own teamName/agentName at death time.
+if [[ -z "$LEAD_AGENT_ID" ]]; then
+  _lcw_ail="$(dirname "${BASH_SOURCE[0]}")/lib/agent-identity.sh"
+  [[ -f "$_lcw_ail" ]] || _lcw_ail="$HOME/.claude/hooks/lib/agent-identity.sh"
+  if [[ -f "$_lcw_ail" ]]; then
+    # shellcheck source=/dev/null  # resolved at run time (checkout, else the live layer)
+    . "$_lcw_ail" 2>/dev/null || true
+    if declare -F agent_assignee_argv >/dev/null 2>&1; then
+      LEAD_AGENT_ID=$(CC_WF_START_PID="$LEAD_PID" CC_WF_MAX_HOPS=1 agent_assignee_argv 2>/dev/null || true)
+    fi
+  fi
+  unset _lcw_ail
+fi
+log "registered session=$SESSION_ID pid=$LEAD_PID tty=${LEAD_TTY:-none} pane=${LEAD_PANE:-none}${LEAD_AGENT_ID:+ teammate=$LEAD_AGENT_ID}"
 
 # The lead's start-time, read BEFORE the daemon is spawned and handed to it BY VALUE. It must not be
 # re-derived from disk later: $SESSION_ID.pid records only the pid, and a later SessionStart
 # overwrites it — so a daemon reading it back could pin itself to a successor it never watched.
 # Unreadable ⇒ empty ⇒ lead_alive degrades to bare pid liveness (see its header).
 LEAD_START=$(ps -o lstart= -p "$LEAD_PID" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')
+# …and the same instant as an EPOCH, for the close-record join (find_close_record). Read and parsed in
+# ONE locale (C) and one TZ, because `ps -o lstart=` renders through LC_TIME and TZ. Unparseable ⇒
+# empty ⇒ the pid-only join, which handle_crash logs.
+if [[ -z "$LEAD_START_EPOCH" ]]; then
+  LEAD_START_EPOCH=$(LC_ALL=C ps -o lstart= -p "$LEAD_PID" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//' \
+                     | { IFS= read -r _l || true; [[ -n "${_l:-}" ]] && LC_ALL=C date -j -f '%a %b %d %T %Y' "$_l" +%s 2>/dev/null; } || true)
+  case "$LEAD_START_EPOCH" in *[!0-9]*) LEAD_START_EPOCH="" ;; esac
+fi
 
 # ── The parent must survive its own bookkeeping window (2026-07-29) ────────────────────────────────
 # From the `&` below until the .daemon file and the spawn log line are written, this PARENT holds the
@@ -1658,6 +1868,8 @@ trap '' HUP
       cr_path=$(printf '%s' "$cr_summary" | cut -f3)
       cr_ver=$(printf '%s' "$cr_summary" | cut -f4)
       [[ "$cver" == "?" && -n "$cr_ver" ]] && cver="$cr_ver"
+      # A pid-only join can name a STRANGER's record (pid reuse) — say so beside the death it joined.
+      [[ -n "$LEAD_START_EPOCH" ]] || log "[watchdog $sid] close-record join was PID-ONLY (lead start time unknown): $cr_path"
     fi
     printf '{"ts":"%s","sid":"%s","pid":%s,"class":"%s","cause":"%s","claude_version":"%s","transcript_kb":%s,"records":%s,"mem_free_pct":"%s","concurrent_claude":%s,"stderr_log":"%s","exit_code":"%s","signal":"%s","stderr_tail_path":"%s","version":"%s"}\n' \
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$sid" "${pid:-0}" "$class" "$cause" "${cver:-?}" "${kb:-0}" "${recs:-0}" "${mem_free:-?}" "${concurrent:-0}" "${sterr:-}" "${cr_exit:-}" "${cr_sig:-}" "${cr_path:-}" "${cr_ver:-}" \
