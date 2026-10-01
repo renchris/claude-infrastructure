@@ -280,9 +280,14 @@ spawns()     { local n; n="$(grep -c . "$C/spawn.log" 2>/dev/null || true)"; ech
 # ── S6 — singleton, skip-not-queue ────────────────────────────────────────────────────────────────
 @test "S6/A9: two concurrent passes → BOTH decide, exactly ONE admits; the loser records pass-in-flight and exits 0" {
   fresh
-  STUB_LIST_SLEEP=3 CC_DISPATCH_CEILING=6 "$DISP" --once >/dev/null 2>&1 &
+  # LOAD-FRAGILITY, measured 2026-09-30 at load 100-240: `sleep 1` BET that the first pass had taken
+  # the lock by then, and a 3 s pull bet it would still hold it when the second pass looked. Neither
+  # is a fact under load. Wait for the lock's own owner record instead (under a ceiling), and give the
+  # pull a hold long enough that the second pass's start-up cannot outlast it.
+  STUB_LIST_SLEEP=8 CC_DISPATCH_CEILING=6 "$DISP" --once >/dev/null 2>&1 &
   local first=$!
-  sleep 1                                    # the first pass now holds the lock and is mid-pull
+  for _ in $(seq 1 300); do [ -s "$C/dispatch.lock/owner" ] && break; sleep 0.1; done
+  [ -s "$C/dispatch.lock/owner" ] || false   # the first pass now holds the lock and is mid-pull
   run env CC_DISPATCH_CEILING=6 "$DISP" --once
   [ "$status" -eq 0 ] || false               # a skip is a normal outcome, never an error
   grep -q '"reason":"pass-in-flight"' "$C/idl.jsonl" || false
@@ -318,7 +323,9 @@ spawns()     { local n; n="$(grep -c . "$C/spawn.log" 2>/dev/null || true)"; ech
 @test "A2: a pass that loses the singleton STILL decides every item — and the PRE-FIX tree decides none" {
   fresh
   local holder
-  sleep 30 & holder=$!
+  # 120, not 30: the holder must outlive the whole case, and at load 233 the sibling S6 case below
+  # measured 29.35 s against its 30 s holder. Both are killed explicitly when done.
+  sleep 120 & holder=$!
   mkdir -p "$C/dispatch.lock"
   printf '%s|%s\n' "$holder" "$(ps -o lstart= -p "$holder" 2>/dev/null)" > "$C/dispatch.lock/owner"
 
@@ -398,7 +405,9 @@ spawns()     { local n; n="$(grep -c . "$C/spawn.log" 2>/dev/null || true)"; ech
 
 @test "S6: a holder whose pid matches but whose lstart does not (a RECYCLED pid) is STALE — the lock is broken, not honoured forever" {
   fresh
-  sleep 30 & local holder=$!
+  # 120, not 30: measured 29.35 s for this case at load 233, so a 30 s holder nearly died before the
+  # positive control below read it. Killed explicitly at the end.
+  sleep 120 & local holder=$!
   mkdir -p "$C/dispatch.lock"
   # kill -0 on this pid SUCCEEDS; only the lstart mismatch reveals it is not the recorded process.
   printf '%s|%s\n' "$holder" 'Mon Jan  1 00:00:00 2001' > "$C/dispatch.lock/owner"
