@@ -262,6 +262,12 @@ coverage table, keeping the kit's record formats (`scripts/research-kit/RECORDS.
     `triage` (blind rater, §5.2 buckets, counted buckets append `changes.jsonl`; the writer of `activities.json`,
     §10 item 8). Suites `cc-research-core` 1..22 (red 22/22), `cc-research-records` 1..10 (red 10/10).
     `waiting_since` is "unknown", not null, when cc-decide is unreadable (null would read as nothing waiting).
+  - Item 10 — `34704af00`: `lib/cli_probe.py` `probe` (probe_run's own parser, so `probes.jsonl` keeps one writer),
+    `doctor` (adds per-tool visible|hidden|agent-only|absent — a tool only the interactive shell sees is hidden,
+    never absent — and credential expiry from `frame.json`), `self-test` (each acceptance row's check over
+    known_good as the probe and known_bad as its negative control, env `FIXTURE` as gate row 6 runs it).
+    `probe-run.sh` is now a bash 3.2 shim. `cc-research-probe` 1..11 (red 11/11); `research-kit-probe` 1..10
+    unchanged through the shim.
 - Locus inside the wave: T (six teammates, one worktree each: `rp-c-{core,records,probe,cert,jobs,close}`), lead
   inline only for the shared skeleton (`023d63d61`: `bin/cc-research`, `lib/cli.py` verb table, one module per
   teammate, cross-module contracts in `RECORDS.md`), B1's on-box step 2, merges and lands. Fired session
