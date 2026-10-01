@@ -237,7 +237,7 @@ row 7 is still open"
 @test "round.workflow.js calls check-round after the slots, and names only cc-research commands" {
   run node "$REPO/tests/fixtures/research-kit/run-workflow.mjs" "$REPO/scripts/research-kit/workflows/round.workflow.js"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"order ok"* ]]
+  [[ "$output" == *"order ok"* ]] || false
   [[ "$output" == *"commands ok"* ]]
 }
 
@@ -246,6 +246,6 @@ row 7 is still open"
   for f in frame-critique rehearsal; do
     run node "$REPO/tests/fixtures/research-kit/run-workflow.mjs" "$REPO/scripts/research-kit/workflows/$f.workflow.js"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"commands ok"* ]]
+    [[ "$output" == *"commands ok"* ]] || false
   done
 }
