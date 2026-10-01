@@ -1,0 +1,216 @@
+#!/bin/bash
+# cc-pane-close — close a HUSK pane (a Claude session's pane left at a bare shell) that should
+# close, from an agent, and also while kitty's remote control is not answering.
+#
+#   cc-pane-close --pane <id> [--pane <id> …] [--dry-run]
+#
+# ── WHY THIS EXISTS (husk panes 2026-09-30/10-01, docs/research/husk-panes-2026-09-30.md) ────────
+# Every pane close in this fleet went through kitty remote control (`kitty @ close-window` via the it2
+# shim), and kitty's control socket goes deaf for minutes to hours under load: on 2026-10-01 it
+# answered `connection refused` for over an hour. Panes 55, 69 and 76 were then husks that the
+# operator had to close by hand, with an agent able to say only "press Ctrl-D". A pane is a login
+# shell under kitty, and kitty closes a window when that process exits — so a pane can be closed by
+# signalling its shell, which needs no socket at all. That is the actuator here; remote control is
+# used first when it answers, because it is the gentler and pinned path.
+#
+# ── WHAT MAKES A PANE CLOSEABLE — every gate fails CLOSED, and each refusal says which ───────────
+# 1. IDENTITY. The pane's last `registered session=<sid> pid=<pid> tty=<tty> pane=<id>` line in the
+#    lead-crash-watchdog log (written at every SessionStart), from the running kitty's lifetime only
+#    (window ids restart at 1 per kitty process). The tty's window shell must have STARTED BEFORE
+#    that registration — a newer shell on the same tty is a different window that inherited the
+#    device number, and it is never touched.
+# 2. NOTHING LIVE. The registered claude pid is gone (or is a different process: its start time is
+#    after the registration), and the window's process tree — the tty process whose parent is kitty,
+#    plus its descendants — holds only login/shell processes. Anything else is a live job.
+# 3. THE SESSION MEANT TO END, or its work is ruled done. One of: its transcript carries `teamName`
+#    (an Agent-Teams member: not resumable, its lead re-spawns members); its LAST assistant text says
+#    `Good to close: yes`; or cc-custody holds an abandon/return for this pane after the registration
+#    (its orchestrator collected the work). Instructions text never counts — assistant text only.
+# 4. NO WORK AT RISK. The session's cwd (from its transcript) has no uncommitted changes.
+#
+# Exit: 0 every named pane closed (or would be, under --dry-run) · 1 at least one refused or failed ·
+# 2 usage. One line per pane on stdout; a JSON row per pane to $CC_PANE_CLOSE_LOG.
+# Seams (tests): CC_PANE_CLOSE_WATCHDOG_LOG · CC_PANE_CLOSE_KITTY_PID · CC_PANE_CLOSE_PS_BIN ·
+# CC_PANE_CLOSE_KILL_BIN · CC_PANE_CLOSE_IT2 · CC_PANE_CLOSE_STORES · CC_PANE_CLOSE_CUSTODY_BIN ·
+# CC_PANE_CLOSE_LOG · CC_PANE_CLOSE_REMOTE (off = skip remote control) · CC_PANE_CLOSE_SETTLE_S.
+set -u
+
+WLOG="${CC_PANE_CLOSE_WATCHDOG_LOG:-$HOME/.claude/logs/lead-crash-watchdog.log}"
+PS="${CC_PANE_CLOSE_PS_BIN:-/bin/ps}"
+KILL="${CC_PANE_CLOSE_KILL_BIN:-/bin/kill}"
+IT2="${CC_PANE_CLOSE_IT2:-$HOME/.claude/bin/it2}"
+CUSTODY="${CC_PANE_CLOSE_CUSTODY_BIN:-$HOME/.claude/bin/cc-custody}"
+LOG="${CC_PANE_CLOSE_LOG:-$HOME/.claude/logs/pane-close.jsonl}"
+STORES="${CC_PANE_CLOSE_STORES:-$HOME/.claude-next:$HOME/.claude-secondary:$HOME/.claude-tertiary:$HOME/.claude-quaternary:$HOME/.claude}"
+SETTLE="${CC_PANE_CLOSE_SETTLE_S:-3}"
+DRY=0; PANES=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --pane) [ $# -ge 2 ] || { echo "cc-pane-close: --pane needs an id" >&2; exit 2; }; PANES+=("$2"); shift 2 ;;
+    --dry-run) DRY=1; shift ;;
+    -h|--help) sed -n '2,/^set -u/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "cc-pane-close: unknown argument '$1'" >&2; exit 2 ;;
+  esac
+done
+[ ${#PANES[@]} -gt 0 ] || { echo "cc-pane-close: name at least one --pane" >&2; exit 2; }
+command -v jq >/dev/null 2>&1 || { echo "cc-pane-close: jq is required" >&2; exit 2; }
+
+# The running kitty: its pid (the parent of every window's root process) and its start epoch.
+kitty_pid() {
+  [ -n "${CC_PANE_CLOSE_KITTY_PID:-}" ] && { printf '%s' "$CC_PANE_CLOSE_KITTY_PID"; return 0; }
+  local s="${KITTY_LISTEN_ON:-}"
+  [ -n "$s" ] || s="$("$(dirname "$0")/cc-kitty-socket" 2>/dev/null || true)"
+  s="${s##*kitty-}"; case "$s" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "$s"
+}
+lstart_epoch() { # $1=pid → start epoch (UTC parse of ps lstart), empty if gone
+  local l; l="$(TZ=UTC LC_ALL=C "$PS" -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ *//; s/ *$//')"
+  [ -n "$l" ] || return 0
+  TZ=UTC LC_ALL=C date -j -f '%a %b %d %T %Y' "$l" +%s 2>/dev/null || true
+}
+log_row() { # pane verdict reason [sid]
+  mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
+  jq -cn --arg ts "$(date -u +%FT%TZ)" --arg p "$1" --arg v "$2" --arg r "$3" --arg s "${4:-}" \
+    '{ts:$ts,pane:$p,verdict:$v,reason:$r,sid:$s}' >> "$LOG" 2>/dev/null || true
+}
+refuse() { printf 'pane %s: REFUSED — %s\n' "$1" "$2"; log_row "$1" refused "$2" "${3:-}"; RC=1; }
+
+transcript_for() { # sid → path
+  local IFS=: s f
+  for s in $STORES; do for f in "$s"/projects/*/"$1".jsonl; do [ -f "$f" ] && { printf '%s' "$f"; return 0; }; done; done
+  return 0
+}
+# Facts from the transcript in ONE streaming pass: teammate(0|1) <US> last assistant close (yes|no|-) <US> cwd.
+# The separator is \x1f, not a tab: tab is IFS whitespace, so an empty cell would shift the next
+# column left instead of reading back empty (scripts/tsv-pad-lint.sh).
+transcript_facts() {
+  python3 - "$1" <<'PY' 2>/dev/null || printf '0\x1f-\x1f\n'
+import json, re, sys
+team, close, cwd = 0, "-", ""
+pat = re.compile(r"Good to close: (yes|no)")
+with open(sys.argv[1], "rb") as fh:
+    for raw in fh:
+        try:
+            rec = json.loads(raw)
+        except Exception:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("teamName"):
+            team = 1
+        if rec.get("cwd"):
+            cwd = rec["cwd"]
+        msg = rec.get("message")
+        if isinstance(msg, dict) and msg.get("role") == "assistant":
+            content = msg.get("content")
+            texts = [c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text"] if isinstance(content, list) else []
+            for m in pat.findall("\n".join(texts)):
+                close = m
+print(f"{team}\x1f{close}\x1f{cwd}")
+PY
+}
+custody_ruled_done() { # pane since-epoch → 0 iff an abandon/return row for this pane is newer than since
+  [ -x "$CUSTODY" ] || return 1
+  local ts state pane ep
+  # cc-custody prints tab-separated rows; awk -F'\t' keeps an empty cell empty, and the fields are
+  # re-joined on \x1f (not IFS whitespace) so the read below cannot shift them.
+  while IFS=$'\x1f' read -r ts state pane; do
+    [ "$pane" = "$1" ] || continue
+    case "$state" in abandon|return) ;; *) continue ;; esac
+    ep="$(TZ=UTC date -j -f '%Y-%m-%dT%H:%M:%SZ' "$ts" +%s 2>/dev/null || echo 0)"
+    [ "$ep" -ge "$2" ] && return 0
+  done < <("$CUSTODY" list 2>/dev/null | awk -F'\t' '{ printf "%s\x1f%s\x1f%s\n", $1, $2, $4 }')
+  return 1
+}
+remote_answers() { # → 0 iff kitty remote control answers a listing now
+  [ "${CC_PANE_CLOSE_REMOTE:-on}" != off ] && [ -x "$IT2" ] || return 1
+  local to=""; for to in /opt/homebrew/bin/timeout /usr/local/bin/timeout /opt/homebrew/bin/gtimeout; do [ -x "$to" ] && break; to=""; done
+  if [ -n "$to" ]; then "$to" -k 2 10 "$IT2" session list --json >/dev/null 2>&1; else "$IT2" session list --json >/dev/null 2>&1; fi
+}
+
+KPID="$(kitty_pid)" || KPID=""
+[ -n "$KPID" ] || { echo "cc-pane-close: cannot find the running kitty (no socket) — nothing touched" >&2; exit 1; }
+KSTART="$(lstart_epoch "$KPID")"
+[ -n "$KSTART" ] || { echo "cc-pane-close: kitty pid $KPID is not running — nothing touched" >&2; exit 1; }
+
+RC=0
+for pane in "${PANES[@]}"; do
+  case "$pane" in ''|*[!0-9]*) refuse "$pane" "not a kitty window id"; continue ;; esac
+  # 1. IDENTITY — the pane's last registration inside this kitty's lifetime.
+  reg=""; reg_ep=0
+  while IFS= read -r line; do
+    case "$line" in *"registered session="*" pane=$pane") ;; *) continue ;; esac
+    ts="${line#[}"; ts="${ts%%]*}"
+    ep="$(date -j -f '%Y-%m-%d %H:%M:%S' "$ts" +%s 2>/dev/null || echo 0)"
+    [ "$ep" -ge "$KSTART" ] && { reg="$line"; reg_ep="$ep"; }
+  done < <(grep -F "pane=$pane" "$WLOG" 2>/dev/null)
+  [ -n "$reg" ] || { refuse "$pane" "no session registration for this pane in the running kitty's lifetime"; continue; }
+  sid="$(printf '%s' "$reg" | sed -n 's/.*session=\([^ ]*\).*/\1/p')"
+  cpid="$(printf '%s' "$reg" | sed -n 's/.* pid=\([0-9]*\).*/\1/p')"
+  tty="$(printf '%s' "$reg" | sed -n 's/.* tty=\([^ ]*\).*/\1/p')"
+  case "$tty" in ttys[0-9]*) ;; *) refuse "$pane" "registration names no tty ($tty)" "$sid"; continue ;; esac
+  # 2. NOTHING LIVE — the registered claude, then the window's process tree.
+  if [ -n "$cpid" ]; then
+    cst="$(lstart_epoch "$cpid")"
+    if [ -n "$cst" ] && [ "$cst" -le "$reg_ep" ]; then refuse "$pane" "its claude (pid $cpid) is still running" "$sid"; continue; fi
+  fi
+  rows="$("$PS" -o pid=,ppid=,comm= -t "$tty" 2>/dev/null)"
+  root="$(printf '%s\n' "$rows" | awk -v k="$KPID" '$2 == k {print $1; exit}')"
+  [ -n "$root" ] || { refuse "$pane" "no window process under kitty on $tty (already closed?)" "$sid"; continue; }
+  rst="$(lstart_epoch "$root")"
+  if [ -z "$rst" ] || [ "$rst" -gt "$reg_ep" ]; then refuse "$pane" "the window on $tty started after the session registered — a different window" "$sid"; continue; fi
+  tree="$(printf '%s\n' "$rows" | awk -v r="$root" '
+    { p[NR] = $1; pp[NR] = $2; c[NR] = $3; n = NR }
+    END { sel[r] = 1; ch = 1
+          while (ch) { ch = 0; for (i = 1; i <= n; i++) if (!(p[i] in sel) && (pp[i] in sel)) { sel[p[i]] = 1; ch = 1 } }
+          for (i = 1; i <= n; i++) if (p[i] in sel) print p[i], c[i] }')"
+  shell=""; live=""
+  while read -r pid comm; do
+    [ -n "$pid" ] || continue
+    b="${comm##*/}"; b="${b#-}"
+    case "$b" in
+      login) ;;
+      zsh|bash|sh) [ -n "$shell" ] || shell="$pid" ;;
+      *) live="$live $b" ;;
+    esac
+  done <<<"$tree"
+  [ -z "$live" ] || { refuse "$pane" "a live job runs in the window:$live" "$sid"; continue; }
+  [ -n "$shell" ] || { refuse "$pane" "no shell in the window on $tty" "$sid"; continue; }
+  # 3. THE SESSION MEANT TO END, or its work is ruled done.
+  tp="$(transcript_for "$sid")"
+  [ -n "$tp" ] || { refuse "$pane" "no transcript for session $sid" "$sid"; continue; }
+  IFS=$'\x1f' read -r team close cwd < <(transcript_facts "$tp")
+  why=""
+  if [ "$team" = 1 ]; then why="a retired Agent-Teams member (not resumable)"
+  elif [ "$close" = yes ]; then why="its last close said Good to close: yes"
+  elif custody_ruled_done "$pane" "$reg_ep"; then why="its orchestrator abandoned/returned its custody after it registered"
+  fi
+  [ -n "$why" ] || { refuse "$pane" "nothing says session ${sid:0:8} meant to end (last close: $close; not a teammate; no custody ruling) — resume or triage it instead: cc-husk-sweep --pane $pane" "$sid"; continue; }
+  # 4. NO WORK AT RISK.
+  if [ -n "$cwd" ] && [ -d "$cwd" ]; then
+    d="$(git -C "$cwd" status --porcelain 2>/dev/null | grep -c . || true)"
+    [ "${d:-0}" = 0 ] || { refuse "$pane" "$cwd holds $d uncommitted change(s)" "$sid"; continue; }
+  fi
+  if [ "$DRY" = 1 ]; then
+    printf 'pane %s: WOULD CLOSE — session %s, %s; window shell pid %s on %s\n' "$pane" "${sid:0:8}" "$why" "$shell" "$tty"
+    log_row "$pane" would-close "$why" "$sid"; continue
+  fi
+  # ACT — remote control first (pinned to this kitty), else signal the window's shell.
+  how=""
+  if remote_answers && CC_TERM=kitty CC_TERM_KITTY_TO="unix:/tmp/kitty-$KPID" "$IT2" session close -f -s "$pane" --expect-generation "$KPID" >/dev/null 2>&1; then
+    how="kitty remote control"
+  elif "$KILL" -HUP "$shell" 2>/dev/null; then
+    how="SIGHUP to the window shell (pid $shell)"
+  else
+    refuse "$pane" "neither remote control nor a signal could reach the window shell (pid $shell)" "$sid"; continue
+  fi
+  # VERIFY by effect: the window's root process is gone.
+  i=0; while [ "$i" -lt "$SETTLE" ] && [ -n "$(lstart_epoch "$root")" ]; do sleep 1; i=$((i + 1)); done
+  if [ -n "$(lstart_epoch "$root")" ]; then
+    printf 'pane %s: FAILED — %s sent, but the window process %s is still there\n' "$pane" "$how" "$root"
+    log_row "$pane" failed "$how sent; window process still present" "$sid"; RC=1; continue
+  fi
+  printf 'pane %s: CLOSED — session %s, %s; via %s\n' "$pane" "${sid:0:8}" "$why" "$how"
+  log_row "$pane" closed "$why; via $how" "$sid"
+done
+exit "$RC"
