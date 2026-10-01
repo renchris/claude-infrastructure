@@ -123,6 +123,28 @@ rg_find_transcript() { # <sid> → path or empty
   return 1
 }
 
+# R-a' — FINISHED-TURN EVIDENCE (2026-09-30): rc 0 iff the transcript shows the member's MOST RECENT
+# turn after its spawn brief has ENDED — the last user|assistant record, preceded somewhere by a user
+# record (the brief), is an assistant record with stop_reason end_turn, or an assistant TEXT message
+# with no tool_use (the shape a turn ends on when the final flush carries no stop_reason). Anything
+# else — no assistant turn yet, a turn still mid-tool, a user message delivered after the last turn
+# (new work pending), no jq, an unparseable file — is rc 1, and the caller keeps the clock
+# (fail-closed). Sidechain rows are excluded: they are not this member's turn.
+rg_finished_turn() { # <transcript>
+  local tp="${1:-}"
+  { [ -n "$tp" ] && [ -f "$tp" ] && [ -r "$tp" ]; } || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  jq -Rr 'fromjson? | objects | select(.isSidechain != true)
+          | if .type == "user" then "U"
+            elif .type == "assistant" then
+              ( [.message.content[]?.type?] ) as $t
+              | if .message.stop_reason? == "end_turn" then "E"
+                elif ($t | index("tool_use")) == null and ($t | index("text")) != null then "T"
+                else "A" end
+            else empty end' "$tp" 2>/dev/null \
+    | awk 'BEGIN{u=0;last=""} $1=="U"{u=1} {last=$1} END{exit !(u && (last=="E" || last=="T"))}'
+}
+
 cmd_decide() {
   local wt="" spawn="" member="" grace="$DEFAULT_GRACE" sid="" scope="owned" verdict="unknown"
   while [ $# -gt 0 ]; do
@@ -148,9 +170,21 @@ cmd_decide() {
   case "$spawn$grace" in *[!0-9]*) die "--spawn-time and --grace-s must be epoch seconds" ;; esac
 
   local now age; now="$(date +%s)"; age=$((now - spawn))
+  local tj="" grace_skipped=0   # tj: the member's transcript, resolved at most once (R-a' and R-d share it)
+
+  # R-a' — on a SHARED cwd with no footprint of its own (verdict clean), the clock is the only thing
+  # R-a has — tree state cannot tell just-born from finished there, and a read-only member writes no
+  # ref. Measured 2026-09-30: grace-held was 378 of the shared-cwd DEFERs in the last 3000 records,
+  # each one a finished read-only member re-deferred until MAX_DEFERS surfaced it unclosed. So replace
+  # the clock with positive evidence of a FINISHED turn. Evidence absent/unreadable ⇒ R-a unchanged.
+  # Owned scope and every other verdict keep the clock: there the tree still has something to say.
+  if [ "$age" -lt "$grace" ] && [ "$scope" = shared ] && [ "$verdict" = clean ] && [ -n "$sid" ]; then
+    tj="$(rg_find_transcript "$sid" 2>/dev/null || true)"
+    rg_finished_turn "$tj" && grace_skipped=1
+  fi
 
   # R-a — BIRTH GRACE: a just-born worker is not a finished one. Defer within the window.
-  if [ "$age" -lt "$grace" ]; then
+  if [ "$age" -lt "$grace" ] && [ "$grace_skipped" -eq 0 ]; then
     emit_record "$member" "$wt" DEFER grace-held "age ${age}s < birth grace ${grace}s — just-born, not finished" "$age" "$spawn" "$grace"
     echo DEFER; return 10
   fi
@@ -207,9 +241,13 @@ cmd_decide() {
   # FAIL-CLOSED: an unresolvable transcript or absent lib ⇒ DEFER (we cannot prove the operator is
   # absent). The spawn brief itself (a user prompt at ~spawn-time, injected by the spawner) is excluded
   # via spawn+BRIEF_SLACK, so worker GC is never held by the brief.
+  if [ "$grace_skipped" -eq 1 ]; then
+    reap_kind=shared-finished-turn
+    reap_reason="SHARED cwd, clean own footprint, age ${age}s < birth grace ${grace}s but the transcript shows a FINISHED turn after the spawn brief — positive evidence replaces the clock; busy marker and operator adoption still checked"
+  fi
   if [ -n "$sid" ]; then
-    local tj iage
-    tj="$(rg_find_transcript "$sid" 2>/dev/null || true)"
+    local iage
+    [ -n "$tj" ] || tj="$(rg_find_transcript "$sid" 2>/dev/null || true)"
     if [ -z "$tj" ] || ! command -v ce_last_interactive_age >/dev/null 2>&1; then
       emit_record "$member" "$wt" DEFER adoption-unresolvable "cannot prove no operator adoption (transcript/lib unresolvable) — fail-closed" "$age" "$spawn" "$grace"
       echo DEFER; return 10
@@ -346,6 +384,43 @@ selftest() {
   if [ "$rc" = 0 ] && [ -n "$norec" ] && [ "$(jq -r '.reason_kind' "$norec")" = "shared-no-refs" ]; then
     okp "scope=shared + NO per-member ref: read-only member → REAP, recorded as shared-no-refs"
   else badp "scope=shared no-refs did not REAP as shared-no-refs (rc $rc, kind $(jq -r '.reason_kind' "${norec:-/dev/null}" 2>/dev/null))"; fi
+
+  # R-a' — FINISHED-TURN EVIDENCE replaces the clock on a shared cwd with a clean own footprint.
+  # Every arm is YOUNG (age 1000s < grace 3600s), so the clock alone would hold all of them; only
+  # the transcript separates the outcomes. brief_self = the spawn brief as a lead's teammate-message.
+  brief_self() { local ts; ts="$(date -u -v-"$2"S +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$(( now - $2 ))" +%Y-%m-%dT%H:%M:%SZ)"
+    printf '{"type":"user","message":{"role":"user","content":"<teammate-message teammate_id=\\"team-lead\\">do X</teammate-message>"},"timestamp":"%s"}\n' "$ts" >> "$d/proj/slug/$1.jsonl"; }
+  done_self()  { printf '{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"done"}]}}\n' >> "$d/proj/slug/$1.jsonl"; }
+  rgkind() { jq -r '.reason_kind' "$(find "$d/records" -name "reap-$1-*.json" 2>/dev/null | head -1)" 2>/dev/null; }
+
+  mkgit "$d/ft_fin" "$((now - 5000))"; brief_self sid-ftfin 1000; done_self sid-ftfin
+  rc="$(run_decide --worktree "$d/ft_fin" --member ft_fin --spawn-time "$((now - 1000))" --grace-s 3600 \
+        --tree-scope shared --tree-verdict clean --session-id sid-ftfin)"
+  [ "$rc" = 0 ] && [ "$(rgkind ft_fin)" = shared-finished-turn ] \
+    && okp "R-a' shared+clean, young, FINISHED turn → REAP (shared-finished-turn)" \
+    || badp "R-a' a finished read-only member was held by the clock (rc $rc, kind $(rgkind ft_fin))"
+
+  mkgit "$d/ft_brief" "$((now - 5000))"; brief_self sid-ftbrief 1000
+  rc="$(run_decide --worktree "$d/ft_brief" --member ft_brief --spawn-time "$((now - 1000))" --grace-s 3600 \
+        --tree-scope shared --tree-verdict clean --session-id sid-ftbrief)"
+  [ "$rc" = 10 ] && [ "$(rgkind ft_brief)" = grace-held ] \
+    && okp "R-a' control: only the spawn brief (no turn yet) → DEFER grace-held" \
+    || badp "R-a' a just-born member with NO finished turn was not grace-held (rc $rc, kind $(rgkind ft_brief))"
+
+  mkgit "$d/ft_own" "$((now - 5000))"; brief_self sid-ftown 1000; done_self sid-ftown
+  rc="$(run_decide --worktree "$d/ft_own" --member ft_own --spawn-time "$((now - 1000))" --grace-s 3600 \
+        --tree-scope owned --tree-verdict clean --session-id sid-ftown)"
+  [ "$rc" = 10 ] && [ "$(rgkind ft_own)" = grace-held ] \
+    && okp "R-a' owned scope: a finished turn does NOT skip the clock → grace-held" \
+    || badp "R-a' leaked to owned scope (rc $rc, kind $(rgkind ft_own))"
+
+  mkgit "$d/ft_adopt" "$((now - 5000))"; brief_self sid-ftadopt 1000; done_self sid-ftadopt
+  utx_self sid-ftadopt 120; done_self sid-ftadopt                  # operator typed AFTER spawn, member answered
+  rc="$(run_decide --worktree "$d/ft_adopt" --member ft_adopt --spawn-time "$((now - 1000))" --grace-s 3600 \
+        --tree-scope shared --tree-verdict clean --session-id sid-ftadopt)"
+  [ "$rc" = 10 ] && [ "$(rgkind ft_adopt)" = operator-adopted ] \
+    && okp "R-a' finished turn + operator prompt after spawn → DEFER operator-adopted" \
+    || badp "R-a' skipping the clock also skipped R-d (rc $rc, kind $(rgkind ft_adopt))"
 
   echo "reap-guard --selftest: $PASS passed, $FAIL failed"
   [ "$FAIL" -eq 0 ] || exit 1

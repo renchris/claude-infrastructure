@@ -18,11 +18,11 @@ mkgit() { # <dir> [<committer-epoch>]
   else git -C "$1" commit -qm seed; fi
 }
 
-@test "selftest passes and runs all 12 checks (a zero-check suite must not 'pass')" {
+@test "selftest passes and runs all 16 checks (a zero-check suite must not 'pass')" {
   run "$G" --selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 12 ]
+  [ "$n_ok" -eq 16 ]
 }
 
 @test "R-a: a just-born teammate (clean tree, within grace) → DEFER (exit 10), not reaped" {
@@ -194,4 +194,75 @@ utx() { # <transcript> <ago-seconds> — append a real operator user prompt <ago
   # R-d engages only when a --session-id is supplied. If the live hook stops passing it, every adopted
   # teammate silently reverts to who-blind reaping — so pin the wiring here.
   grep -qE 'decide .*--session-id "\$SESSION_ID"' "$REPO/hooks/teammate-auto-shutdown.sh"
+}
+
+# ── R-a' FINISHED-TURN EVIDENCE (2026-09-30): on a SHARED cwd with a clean own footprint, a finished
+#    turn after the spawn brief replaces the birth-grace clock. Every case below is YOUNG (age 1000s <
+#    grace 3600s) unless it says otherwise, so the clock alone would hold all of them. ──
+tbrief() { # <transcript> <ago> — the spawn brief, as the lead's teammate-message
+  local ts; ts="$(date -u -v-"$2"S +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$(( $(date +%s) - $2 ))" +%Y-%m-%dT%H:%M:%SZ)"
+  printf '{"type":"user","message":{"role":"user","content":"<teammate-message teammate_id=\\"team-lead\\">do X</teammate-message>"},"timestamp":"%s"}\n' "$ts" >> "$1"
+}
+tdone() { printf '{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"done"}]}}\n' >> "$1"; }
+ft_setup() { # <name> — shared-scope fixture: lead's checkout, old seed commit, transcript root
+  mkgit "$BATS_TEST_TMPDIR/$1" "$((NOW-5000))"
+  export CC_REAP_PROJECT_ROOTS="$BATS_TEST_TMPDIR/proj"; mkdir -p "$BATS_TEST_TMPDIR/proj/slug"
+  TX="$BATS_TEST_TMPDIR/proj/slug/sid-$1.jsonl"
+}
+kind_of() { jq -r '.reason_kind' "$(find "$CC_REAP_RECORDS_DIR" -name "reap-$1-*.json" | head -1)"; }
+
+@test "R-a': shared + clean + young + FINISHED turn → REAP (exit 0), recorded shared-finished-turn" {
+  ft_setup ftfin; tbrief "$TX" 1000; tdone "$TX"
+  run "$G" decide --worktree "$BATS_TEST_TMPDIR/ftfin" --member ftfin --spawn-time "$((NOW-1000))" --grace-s 3600 \
+      --tree-scope shared --tree-verdict clean --session-id sid-ftfin
+  [ "$status" -eq 0 ]
+  [ "$output" = "REAP" ]
+  [ "$(kind_of ftfin)" = "shared-finished-turn" ]
+}
+
+@test "R-a' CONTROL: same, but the transcript holds ONLY the spawn brief → DEFER 10 grace-held" {
+  ft_setup ftbrief; tbrief "$TX" 1000
+  run "$G" decide --worktree "$BATS_TEST_TMPDIR/ftbrief" --member ftbrief --spawn-time "$((NOW-1000))" --grace-s 3600 \
+      --tree-scope shared --tree-verdict clean --session-id sid-ftbrief
+  [ "$status" -eq 10 ]
+  [ "$(kind_of ftbrief)" = "grace-held" ]
+}
+
+@test "R-a': a turn still MID-TOOL (last record a tool_use) is not a finished turn → grace-held" {
+  ft_setup ftmid; tbrief "$TX" 1000
+  printf '{"type":"assistant","message":{"role":"assistant","stop_reason":"tool_use","content":[{"type":"tool_use","name":"Bash"}]}}\n' >> "$TX"
+  run "$G" decide --worktree "$BATS_TEST_TMPDIR/ftmid" --member ftmid --spawn-time "$((NOW-1000))" --grace-s 3600 \
+      --tree-scope shared --tree-verdict clean --session-id sid-ftmid
+  [ "$status" -eq 10 ]
+  [ "$(kind_of ftmid)" = "grace-held" ]
+}
+
+@test "R-a': shared + dirty-mine + finished turn → DEFER 11 (own dirt still holds; evidence never licenses it)" {
+  ft_setup ftmine; tbrief "$TX" 1000; tdone "$TX"; echo mine > "$BATS_TEST_TMPDIR/ftmine/mine.txt"
+  # past grace: the dirty-mine leg is what must answer, with its distinct code
+  run "$G" decide --worktree "$BATS_TEST_TMPDIR/ftmine" --member ftmine --spawn-time "$((NOW-1000))" --grace-s 60 \
+      --tree-scope shared --tree-verdict dirty-mine --session-id sid-ftmine
+  [ "$status" -eq 11 ]
+  [ "$(kind_of ftmine)" = "dirty-tree-mine" ]
+  # young: the evidence applies only to verdict=clean, so the clock still holds a member with its own dirt
+  run "$G" decide --worktree "$BATS_TEST_TMPDIR/ftmine" --member ftmine2 --spawn-time "$((NOW-1000))" --grace-s 3600 \
+      --tree-scope shared --tree-verdict dirty-mine --session-id sid-ftmine
+  [ "$status" -eq 10 ]
+  [ "$(kind_of ftmine2)" = "grace-held" ]
+}
+
+@test "R-a': OWNED scope + young + finished turn → still DEFER 10 grace-held (unchanged)" {
+  ft_setup ftown; tbrief "$TX" 1000; tdone "$TX"
+  run "$G" decide --worktree "$BATS_TEST_TMPDIR/ftown" --member ftown --spawn-time "$((NOW-1000))" --grace-s 3600 \
+      --tree-scope owned --tree-verdict clean --session-id sid-ftown
+  [ "$status" -eq 10 ]
+  [ "$(kind_of ftown)" = "grace-held" ]
+}
+
+@test "R-a': shared + finished turn + operator prompt after spawn → DEFER 10 operator-adopted (R-d still runs)" {
+  ft_setup ftadopt; tbrief "$TX" 1000; tdone "$TX"; utx "$TX" 120; tdone "$TX"
+  run "$G" decide --worktree "$BATS_TEST_TMPDIR/ftadopt" --member ftadopt --spawn-time "$((NOW-1000))" --grace-s 3600 \
+      --tree-scope shared --tree-verdict clean --session-id sid-ftadopt
+  [ "$status" -eq 10 ]
+  [ "$(kind_of ftadopt)" = "operator-adopted" ]
 }
