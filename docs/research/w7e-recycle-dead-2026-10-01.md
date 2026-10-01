@@ -51,3 +51,22 @@ Before the dead verdict, resume mode reads the target once more:
 
 The token stays the first proof: the new read runs only after the full window, so a session that
 does take our prompt still reports through the token arm.
+
+## 3. Replay over the existing alarms (read-only; no record edited)
+
+The live store `~/.claude/handoff-alarms` holds 20 HANDOFF-RECYCLE-DEAD records (the SessionStart
+count of 41 is every handoff-alarm class). Sixteen come from the timeout ("never engaged") arm this
+change touches, and four from the other arms (pane gone, surface gone, never reached a shell, no-prompt),
+which it leaves alone. For each of the 16, the replay took the target cfg and the sid from the bundle
+`MANIFEST.json`, the token from the launcher, and T0 from the ledger row's `watcher_lstart`. Eleven
+older rows have no `watcher_lstart`, so for those it used the bundle mint time; that is weaker but
+still before the relaunch, and the session was limit-blocked in the gap. A real turn had to sit
+between T0 and the alarm's own timestamp.
+
+| verdict under the new check | count | records |
+|---|---|---|
+| ENGAGED | **12 / 16** | panes 683, 405, 513, 782 (09-26), 810, 812, 814, 819, 782 (09-27), 18, 33, 28 — 9 of the 12 on the bundle-time baseline |
+| still dead | 4 / 16 | panes 751, 815, 1317, 1311 (no target turn before the alarm) |
+| unknown | 0 | every target transcript was readable |
+
+The 12 pages were false. The four left dead had no target turn when they fired.
