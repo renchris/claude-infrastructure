@@ -74,6 +74,7 @@ import collections
 import difflib
 import glob as _glob
 import hashlib
+import html
 import importlib.util
 import json
 import os
@@ -2050,7 +2051,12 @@ def _rewrite_text(text, allow_new):
         raise ValueError("permissions is not an object")
     obj["permissions"]["allow"] = allow_new
     indent = _detect_indent(text)
-    new = json.dumps(obj, indent=indent if "\t" not in indent else 1, ensure_ascii=False)
+    # Keep the file's own escaping. A file written with `—` escapes and no raw non-ASCII
+    # (json.dumps's default output) re-serialised with ensure_ascii=False turned every escape into
+    # a literal character: measured 2026-10-01, the --check diff for two added rules rewrote ~20
+    # unrelated autoMode lines in each of the 5 fleet files.
+    ascii_file = bool(re.search(r"\\u[0-9a-fA-F]{4}", text)) and all(ord(c) < 128 for c in text)
+    new = json.dumps(obj, indent=indent if "\t" not in indent else 1, ensure_ascii=ascii_file)
     if "\t" in indent:
         new = new.replace("\n ", "\n\t")
     if text.endswith("\n"):
@@ -2095,8 +2101,11 @@ def check_apply(args, seams, apply_mode):
     if psha and psha != _tool_sha():
         print("  ⚠ tool.sha mismatch: proposal %s, running %s — the gates below are today's, which is "
               "the point" % (psha, _tool_sha()))
+    # A bang proposal is re-checked against a fresh BANG run: the archive pipeline never
+    # generates its candidates, so it would read every one as DECAYED.
+    run = bang_pipeline if prop.get("source") == "bang" else pipeline
     try:
-        doc, ex = pipeline(args, seams, days)
+        doc, ex = run(args, seams, days)
     except Blind as b:
         print_blind(b.reasons, days)
         return 3
@@ -2147,7 +2156,10 @@ def check_apply(args, seams, apply_mode):
         # PATH_BOUND was waved through. MEASURED: head `/tmp/evil.sh` with evidence 1/1/1 returns
         # `first=MIN_EVIDENCE` while PATH_BOUND=refuse. Latent today (the 99s make MIN_EVIDENCE
         # unreachable) and live the moment anyone reorders GATE_ORDER or adds a gate after it.
-        hard = [c for c in GATE_ORDER if c != "MIN_EVIDENCE" and gates.get(c, "pass") != "pass"]
+        # An EXACT rule is exempt from the two prefix-widening gates and nothing else (EXACT_EXEMPT).
+        exempt = _exact_exempt(rule)
+        hard = [c for c in GATE_ORDER if c != "MIN_EVIDENCE" and c not in exempt
+                and gates.get(c, "pass") != "pass"]
         if hard:
             hard_fail.append((rule, hard[0], reasons[hard[0]]))
             continue
@@ -2334,6 +2346,561 @@ def check_apply(args, seams, apply_mode):
     return 0
 
 
+# ── the BANG source (`--bang`, 2026-10-01) ─────────────────────────────────────────────────────
+# A second population beside the beacon archive: the commands the OPERATOR ran with `!`, most of
+# them pasted from a `▶ Run this:` block an agent handed over. Each one is a hand-off that cost a
+# human round-trip, and the question this source answers is which of them the agent could safely
+# have run itself. The value of the answer is mostly in what it REFUSES: a `--confirm` script, a
+# deploy, a login or a pane close was handed over on purpose, and an allow rule for it would delete
+# the gate rather than a prompt. So every instance is bucketed first, and only the `read_only`
+# bucket ever reaches the §3.2 gates.
+#
+# THE CLASSIFIER BUCKET IS NOT A CANDIDATE, AND THIS IS A MEASURED POSITION, NOT CAUTION. Allow
+# rules resolve BEFORE the auto-mode classifier (docs `/permission-modes` decision order, and the
+# decompiled precedence in docs/research/permission-matcher-truth-2026-08-20.md:392), so a rule
+# that matches a classifier-denied shape does not "clear a prompt" — it switches the classifier off
+# for that shape in every context, including the one it was right about. A headless A/B meant to
+# probe-verify that order on 2.1.284 was itself refused by the classifier as [Auto-Mode Bypass]
+# (docs/research/bang-command-harvest-2026-10-01.md §3), which is the answer in practice.
+#
+# Records: a USER record whose content STARTS with `<bash-input>` in a top-level session
+# transcript. Quotes of the marker inside tool results, briefs and subagent files are not bangs
+# (measured 2026-10-01: 405 real records against 608 raw marker hits). The four config dirs mirror
+# one another, so files dedupe by realpath and records by uuid.
+BANG_MARK = "<bash-input>"
+_BANG_RE = re.compile(r"<bash-input>(.*?)</bash-input>", re.S)
+_BANG_DENIAL_RE = re.compile(
+    r"denied by the Claude Code auto mode classifier\. Reason: (\[[^\]]+\]|[^.]{1,80})"
+    r"|(doesn't want to proceed with this tool use)"
+    r"|(auto mode classifier gave no verdict)")
+BANG_LOOKBACK = 8                   # assistant text blocks searched for the hand-off
+BANG_JOIN_S = 6 * 3600              # an agent attempt older than this is not why it was handed
+BANG_MARKER_TEXT = "▶ Run this:"
+BANG_BUCKETS = collections.OrderedDict((
+    ("consent_gate", "a deliberate --confirm / CONFIRM=1 / CC_DO_ASSUME_YES / --yes / --force "
+                     "gate: the hand-off IS the design"),
+    ("privilege", "sudo: needs the operator's password or Touch ID"),
+    ("credential", "a login, auth, key or secret step: needs the operator's credential"),
+    ("production", "deploys, releases, pushes, lands and cloud mutations: production or money"),
+    ("live_session", "acts on a live process, pane or daemon (kill, teardown, kitty/it2/tmux, "
+                     "launchctl, osascript, handoff-fire)"),
+    ("operator_queue", "runs or rules an operator queue item (cc-do <id>, cc-decide "
+                       "veto/action, cc-backlog unblock/done)"),
+    ("gui_view", "opens a file or app for the operator to look at (open, cursor): a viewing "
+                 "step, not a permission gap"),
+    ("classifier", "the auto-mode classifier denied the agent's own attempt; an allow rule would "
+                   "override that check in EVERY context, so it stays the operator's"),
+    ("one_shot", "a script named by path (often /tmp): one-shot by construction, no reusable "
+                 "prefix"),
+    ("compound", "a compound or structural command: rules apply per leaf and structural forms "
+                 "never match"),
+    ("read_only", "read-only: the agent could have run it itself. The ONLY candidate bucket"),
+    ("unclassified", "fits no gate class and is not on the read-only table: never proposed until "
+                     "a reader adds its verb to BANG_READ_ONLY"),
+))
+_B_ENV = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=\S*$")
+_B_CONSENT = re.compile(r"(--confirm\b|(^|\s)CONFIRM=1\b|CC_DO_ASSUME_YES=|--yes\b|--yes-|"
+                        r"--force\b|\s(yes|y)\s*$)")
+_B_PRIV = re.compile(r"(^|[;&|(]\s*)sudo\b")
+_B_CRED = re.compile(r"(\b(login|relogin|logout|auth|secret|secrets|credential|credentials|"
+                     r"keychain|put-parameter|iam|key|keys)\b|--login\b)", re.I)
+_B_PROD = re.compile(r"(deploy|release|golive|go-live|publish|cutover|\bgit\s+(-C\s+\S+\s+)?push\b|\bland\b|"
+                     r"-land\.sh\b|\brotate\b|\bflyctl\b|\bwrangler\b|\bvercel\b|"
+                     r"\baws\s+\S+\s+(start|create|put|update|delete|set|subscribe|attach|"
+                     r"tag|invoke|send)[-\w]*)", re.I)
+_B_LIVE = re.compile(r"((^|[;&|]\s*)(kill|killall|pkill)\b|\bcc-teardown\b|\bit2\s+session\b|"
+                     r"\bkitty\s+@\s+(?!ls\b)\S|\bkitten\s+@\s+(?!ls\b)\S|\btmux\s+send-keys\b|"
+                     r"\blaunchctl\s+(kickstart|bootout|bootstrap|setenv|unsetenv|load|unload|"
+                     r"enable|disable|kill)\b|\bosascript\b|\bhandoff-fire(\.sh)?\b|"
+                     r"\bcc-lr\s+switch\b|\bpmset\b)")
+_B_QUEUE = re.compile(r"(^cc-do(\s+(?!--list\b)\S|\s*$)|^cc-decide\s+(veto|action|open|answer)\b|"
+                      r"^cc-backlog\s+(unblock|done|needs|add|claim|close|block)\b|"
+                      r"^cc-escalations\s+ack\b|^cc-signoff\b|^cc-custody\s+(return|abandon|open)\b)")
+_B_GUI = re.compile(r"^(open|cursor|code)\b")
+_B_CLASSIFIER_TO_BUCKET = {"[Production Deploy]": "production",
+                           "[Credential Exploration]": "credential"}
+# The read-only table. A head is listed only after its verb was read (`--help`, 2026-10-01) and
+# found to write nothing; `exact_only` heads carry flags with side effects beside the observed
+# read-only ones, so only the exact observed strings may be proposed for them, never a prefix.
+BANG_READ_ONLY = collections.OrderedDict((
+    ("cc-decide list", {"exact_only": False, "why": "prints decision packets; no verb argument"}),
+    ("cc-backlog list", {"exact_only": False, "why": "prints the folded ledger"}),
+    ("cc-custody list", {"exact_only": False, "why": "prints custody rows"}),
+    ("cc-custody count", {"exact_only": False, "why": "prints a count"}),
+    ("cc-do --list", {"exact_only": True, "why": "prints the board; every other cc-do form RUNS "
+                                                 "a step"}),
+    ("cc-blockers", {"exact_only": False, "why": "self-declared READ-ONLY board renderer"}),
+    ("claude-accounts", {"exact_only": True, "why": "read-only for the observed flags; others "
+                                                    "route or probe auth"}),
+    ("kitty @ ls", {"exact_only": False, "why": "lists windows"}),
+    ("kitten @ ls", {"exact_only": False, "why": "lists windows"}),
+    ("gh repo view", {"exact_only": False, "why": "prints repo metadata"}),
+    ("gh pr view", {"exact_only": False, "why": "prints a PR"}),
+))
+# Gates an EXACT rule is exempt from, and why each cannot fire on one. FLAG_HEAD and TOKEN_CAP
+# guard a PREFIX against reaching siblings; an exact rule (`f.command === m`, matcher-truth §1)
+# reaches nothing but its own string. Every other gate still binds an exact rule.
+EXACT_EXEMPT = ("FLAG_HEAD", "TOKEN_CAP")
+
+
+def _exact_exempt(rule):
+    r = pm.parse_rule(rule)
+    return EXACT_EXEMPT if (r is not None and r.kind == "exact") else ()
+
+
+def _bang_strip(cmd):
+    """Tokens past leading env assignments and `nohup`, with an absolute verb reduced to its name."""
+    toks = cmd.split()
+    while toks and (_B_ENV.match(toks[0]) or toks[0] == "nohup"):
+        toks = toks[1:]
+    if toks and "/" in toks[0] and not toks[0].startswith(("/tmp", "/private/tmp")):
+        base = os.path.basename(toks[0])
+        if not base.endswith(".sh") and "." not in base:
+            toks = [base] + toks[1:]
+    return toks
+
+
+def bang_shape(cmd):
+    """The first three tokens with locations, ids and counts abstracted: a REPORT key only."""
+    out = []
+    for t in cmd.split():
+        if len(out) == 3:
+            break
+        if _B_ENV.match(t):
+            out.append(t.split("=", 1)[0] + "=…")
+        elif t.startswith(("/tmp/", "/private/tmp/")):
+            out.append("<tmp>")
+        elif "/" in t or t.startswith("~"):
+            out.append("<path:%s>" % os.path.basename(t.rstrip("/")))
+        elif _DIGITS_RE.match(t):
+            out.append("<n>")
+        elif _HEX_RE.match(t):
+            out.append("<id>")
+        else:
+            out.append(t)
+    return " ".join(out)
+
+
+def bang_read_only_head(cmd):
+    """(head, entry) when the command is read-only by the table or the harness's own set."""
+    toks = _bang_strip(cmd)
+    for head, entry in BANG_READ_ONLY.items():
+        ht = head.split()
+        if toks[:len(ht)] == ht:
+            return head, entry
+    leaf = " ".join(toks)
+    if leaf and pm.is_builtin_readonly(leaf):
+        head = " ".join(toks[:2]) if toks[0] == "git" else toks[0]
+        return head, {"exact_only": False, "why": "in the harness's built-in read-only set"}
+    return None, None
+
+
+def bang_bucket(cmd, denial):
+    """(bucket, why) for one bang, first match in BANG_BUCKETS order. `denial` is the category of
+    the agent's own denied attempt at the same command, when one was found."""
+    one = " ".join(cmd.split())
+    toks = _bang_strip(one)
+    body = " ".join(toks)
+    if _B_CONSENT.search(one):
+        return "consent_gate", BANG_BUCKETS["consent_gate"]
+    if _B_PRIV.search(one):
+        return "privilege", BANG_BUCKETS["privilege"]
+    if denial in _B_CLASSIFIER_TO_BUCKET:
+        b = _B_CLASSIFIER_TO_BUCKET[denial]
+        return b, "classifier %s on the agent's own attempt" % denial
+    if _B_CRED.search(one):
+        return "credential", BANG_BUCKETS["credential"]
+    if _B_PROD.search(one):
+        return "production", BANG_BUCKETS["production"]
+    if _B_LIVE.search(body) or _B_LIVE.search(one):
+        return "live_session", BANG_BUCKETS["live_session"]
+    if _B_QUEUE.search(body):
+        return "operator_queue", BANG_BUCKETS["operator_queue"]
+    if _B_GUI.search(body):
+        return "gui_view", BANG_BUCKETS["gui_view"]
+    if denial and denial not in ("refused", "classifier-error"):
+        return "classifier", "classifier %s on the agent's own attempt" % denial
+    dec = pm.split_leaves(one)
+    if dec.kind != "simple":
+        return "compound", "%s (%s)" % (BANG_BUCKETS["compound"],
+                                        ", ".join(dec.structural) or "%d leaves" % len(dec.leaves))
+    verb_toks = toks
+    while verb_toks and verb_toks[0] in ("bash", "sh", "zsh") :
+        verb_toks = [t for t in verb_toks[1:] if not t.startswith("-")][:1] + verb_toks[2:]
+    if verb_toks and ("/" in verb_toks[0] or verb_toks[0].startswith("~")):
+        return "one_shot", BANG_BUCKETS["one_shot"]
+    head, _e = bang_read_only_head(one)
+    if head:
+        return "read_only", BANG_BUCKETS["read_only"]
+    return "unclassified", BANG_BUCKETS["unclassified"]
+
+
+def _bang_text(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(x.get("text", "") for x in content
+                       if isinstance(x, dict) and x.get("type") == "text")
+    return ""
+
+
+def bang_files(roots):
+    """(top-level transcripts, deduped by realpath, that carry the marker; files scanned; timeouts)."""
+    files = set()
+    for root in roots:
+        for f in _glob.glob(os.path.join(root, "*", "*.jsonl")):
+            files.add(os.path.realpath(f))
+    files = sorted(files)
+    if not os.access(_GREP, os.X_OK):
+        return files, len(files), 0
+    hits, timeouts = [], 0
+    for i in range(0, len(files), 200):
+        chunk = files[i:i + 200]
+        try:
+            p = subprocess.run([_GREP, "-l", "-a", "-F", "-e", BANG_MARK, "--"] + chunk,
+                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                               timeout=_MARKER_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            timeouts += 1
+            hits += chunk                     # UNKNOWN ⇒ read them all, never "no bang here"
+            continue
+        if p.returncode not in (0, 1):
+            hits += chunk
+            continue
+        hits += [ln for ln in p.stdout.decode("utf-8", "replace").split("\n") if ln]
+    return hits, len(files), timeouts
+
+
+def bang_records(path, seen):
+    """Yield one dict per bang in `path` (uuids in `seen` skipped and then added), plus the
+    operator-refused agent commands of the file as ("refused", cmd) tuples."""
+    asst, tools, attempts = [], {}, []
+    try:
+        fh = open(path, encoding="utf-8", errors="replace")
+    except OSError:
+        return
+    with fh:
+        for ln in fh:
+            if '"assistant"' not in ln and '"user"' not in ln:
+                continue
+            try:
+                r = json.loads(ln)
+            except ValueError:
+                continue
+            kind = r.get("type")
+            content = (r.get("message") or {}).get("content")
+            ts = _parse_ts(r.get("timestamp"))
+            if kind == "assistant":
+                tx = _bang_text(content)
+                if tx:
+                    asst.append(tx)
+                    del asst[:-BANG_LOOKBACK]
+                if isinstance(content, list):
+                    for x in content:
+                        if isinstance(x, dict) and x.get("type") == "tool_use" and x.get("name") == "Bash":
+                            tools[x.get("id")] = (ts, ((x.get("input") or {}).get("command") or ""))
+                continue
+            if kind != "user":
+                continue
+            if isinstance(content, list):
+                for x in content:
+                    if not (isinstance(x, dict) and x.get("type") == "tool_result"
+                            and x.get("tool_use_id") in tools):
+                        continue
+                    rt = x.get("content")
+                    rt = rt if isinstance(rt, str) else json.dumps(rt)
+                    m = _BANG_DENIAL_RE.search(rt or "")
+                    if not m:
+                        continue
+                    cat = m.group(1) or ("refused" if m.group(2) else "classifier-error")
+                    t_ts, t_cmd = tools[x["tool_use_id"]]
+                    attempts.append((t_ts, " ".join(t_cmd.split()), cat))
+                    if cat == "refused":
+                        yield ("refused", t_cmd)
+            text = _bang_text(content)
+            if not text.lstrip().startswith(BANG_MARK):
+                continue
+            uid = r.get("uuid")
+            if uid in seen:
+                continue
+            m = _BANG_RE.search(text)
+            if not m:
+                continue
+            seen.add(uid)
+            cmd = html.unescape(m.group(1)).strip()
+            one = " ".join(cmd.split())
+            handed = "none"
+            for tx in reversed(asst):
+                if one and one in " ".join(tx.split()):
+                    handed = "marker" if BANG_MARKER_TEXT in tx else "inline"
+                    break
+            head3 = one.split()[:3]
+            denial = None
+            for a_ts, a_cmd, cat in reversed(attempts):
+                if ts is not None and a_ts is not None and ts - a_ts > BANG_JOIN_S:
+                    continue
+                if a_cmd == one or (len(head3) == 3 and a_cmd.split()[:3] == head3):
+                    denial = cat
+                    break
+            yield {"uuid": uid, "ts": ts, "sid": r.get("sessionId") or "", "cwd": r.get("cwd") or "",
+                   "cmd": cmd, "handed": handed, "denial": denial, "file": path}
+
+
+def bang_pipeline(args, seams, days):
+    """(doc, extras) for the bang source. Shape-compatible with `pipeline` where check_apply reads it."""
+    warn = []
+    if args.settings:
+        fleet_paths = [p for p, sc in discover(seams, args.settings) if sc == "fleet"]
+    else:
+        fleet_paths = [os.path.abspath(p)
+                       for p in sorted(_glob.glob(os.path.expanduser(seams.settings_glob)))
+                       if os.path.isfile(p) and not _is_backup_name(p)]
+    if args.mode:
+        mode, mode_src = args.mode, "--mode"
+    else:
+        mode, mode_src = _fleet_mode(fleet_paths)
+    fleet_rs = pm.load_rulesets(fleet_paths, mode=mode)
+    collision = [("deny", r) for r in fleet_rs.deny] + [("ask", r) for r in fleet_rs.ask]
+    if not seams.transcripts:
+        raise Blind(["no transcript root exists (%s) — the bang population cannot be read"
+                     % ", ".join(args.transcripts or ["~/.claude*/projects"])])
+    files, n_scanned, timeouts = bang_files(seams.transcripts)
+    if timeouts:
+        warn.append("%d grep batch(es) timed out and were read in full" % timeouts)
+    seen, recs, refused_leaves = set(), [], []
+    for f in files:
+        for item in bang_records(f, seen):
+            if isinstance(item, tuple):
+                refused_leaves.extend(pm.split_leaves(item[1]).leaves)
+            else:
+                recs.append(item)
+    cutoff = time.time() - days * 86400 if days else 0
+    window = [r for r in recs if not cutoff or (r["ts"] is not None and r["ts"] >= cutoff)]
+    if recs and not window:
+        warn.append("0 bang records in the %d-day window while %d exist" % (days, len(recs)))
+    provenance = collections.Counter(r["handed"] for r in window)
+    attempt = collections.Counter(("classifier" if r["denial"] and r["denial"].startswith("[")
+                                   else r["denial"] or "none") for r in window)
+    categories = collections.Counter(r["denial"] for r in window
+                                     if r["denial"] and r["denial"].startswith("["))
+    buckets = collections.OrderedDict((b, {"count": 0, "why": w, "shapes": collections.Counter(),
+                                           "example": {}}) for b, w in BANG_BUCKETS.items())
+    groups = collections.OrderedDict()
+    already = collections.OrderedDict()
+    for r in window:
+        b, why = bang_bucket(r["cmd"], r["denial"])
+        r["bucket"], r["why"] = b, why
+        e = buckets[b]
+        e["count"] += 1
+        s = bang_shape(r["cmd"])
+        e["shapes"][s] += 1
+        e["example"].setdefault(s, (" ".join(r["cmd"].split())[:160], why))
+        if b != "read_only":
+            continue
+        v = pm.command_verdict(" ".join(r["cmd"].split()), fleet_rs)
+        if v.outcome == "allow":
+            already.setdefault(s, []).append(r)
+            continue
+        head, entry = bang_read_only_head(r["cmd"])
+        g = groups.setdefault(head, {"entry": entry, "rows": []})
+        g["rows"].append(r)
+    gctx_kw = {"max_tokens": args.max_tokens, "min_prompts": args.min_prompts,
+               "min_sessions": args.min_sessions, "min_weeks": args.min_weeks,
+               "min_cluster": args.min_cluster}
+    proposed, refused = [], []
+    for head, g in groups.items():
+        rows = g["rows"]
+        ev = {"rows": len(rows), "sessions": len({x["sid"] for x in rows if x["sid"]}),
+              "weeks": len({_week(x["ts"]) for x in rows if x["ts"] is not None})}
+        cands = []
+        if not g["entry"]["exact_only"]:
+            cands.append(("prefix", head, _rule_of(head)))
+        exacts = sorted({" ".join(_bang_strip(x["cmd"])) for x in rows})
+        done = False
+        for kind, h, rule in cands:
+            gctx = GateCtx(collision, refused_leaves, scope="fleet", evidence=ev, **gctx_kw)
+            gates, reasons, first = run_gates(h, gctx)
+            if first is None:
+                proposed.append(_bang_entry(rule, h, kind, rows, ev, gates, reasons, gctx, g, ()))
+                done = True
+            elif not (set(reasons) <= set(EXACT_EXEMPT)):
+                refused.append(collections.OrderedDict((
+                    ("rule", rule), ("head", h), ("code", first), ("reason", reasons[first]),
+                    ("instances", len(rows)), ("gates", gates), ("reasons", reasons))))
+                done = True                       # a hard refusal on the prefix binds its exacts too
+        if done:
+            continue
+        for x in exacts:
+            rule = "Bash(%s)" % x
+            # An exact rule carries ITS OWN evidence, never its head's: three different one-off
+            # `claude-accounts` forms must not pool into "2 sessions" for each of them.
+            mine = [r for r in rows if " ".join(_bang_strip(r["cmd"])) == x]
+            xev = {"rows": len(mine), "sessions": len({r["sid"] for r in mine if r["sid"]}),
+                   "weeks": len({_week(r["ts"]) for r in mine if r["ts"] is not None})}
+            gctx = GateCtx(collision, refused_leaves, scope="fleet", evidence=xev, **gctx_kw)
+            gates, reasons, first = run_gates(x, gctx)
+            exempt = collections.OrderedDict((c, reasons.pop(c)) for c in EXACT_EXEMPT if c in reasons)
+            for c in exempt:
+                gates[c] = "pass"
+            hard = [c for c in GATE_ORDER if c in reasons]
+            if hard:
+                refused.append(collections.OrderedDict((
+                    ("rule", rule), ("head", x), ("code", hard[0]), ("reason", reasons[hard[0]]),
+                    ("instances", len(mine)), ("gates", gates), ("reasons", reasons))))
+                continue
+            proposed.append(_bang_entry(rule, x, "exact", mine, xev, gates, reasons, gctx, g, exempt))
+    for p in proposed:
+        p["shadows"] = []
+    n_records, n_corpus_files, receipts = widening(
+        seams, sorted({p["rule"] for p in proposed if p["kind"] == "prefix"}), args.corpus_days)
+    for p in proposed:
+        if p["rule"] in receipts:
+            p["widening"] = receipts[p["rule"]]
+    bucket_doc = collections.OrderedDict()
+    for b, e in buckets.items():
+        bucket_doc[b] = collections.OrderedDict((
+            ("count", e["count"]), ("why", e["why"]),
+            ("shapes", [collections.OrderedDict((("shape", s), ("n", n), ("example", e["example"][s][0]),
+                                                 ("reason", e["example"][s][1])))
+                        for s, n in e["shapes"].most_common()]),
+        ))
+    ts_all = sorted(r["ts"] for r in window if r["ts"] is not None)
+    doc = collections.OrderedDict((
+        ("schema", 1),
+        ("source", "bang"),
+        ("generated_utc", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())),
+        ("tool", collections.OrderedDict((("sha", _tool_sha()), ("name", TOOL)))),
+        ("inputs", collections.OrderedDict((
+            ("transcript_roots", list(seams.transcripts)),
+            ("files_scanned", n_scanned),
+            ("files_with_marker", len(files)),
+            ("records_total", len(recs)),
+            ("records_in_window", len(window)),
+            ("sessions_in_window", len({r["sid"] for r in window if r["sid"]})),
+            ("first_utc", _iso(ts_all[0]) if ts_all else None),
+            ("last_utc", _iso(ts_all[-1]) if ts_all else None),
+            ("window_days", days),
+            ("settings_files", list(fleet_paths)),
+            ("collision_set", collections.OrderedDict((("deny", len(fleet_rs.deny)),
+                                                       ("ask", len(fleet_rs.ask))))),
+            ("refused_leaves", len(refused_leaves)),
+            ("corpus_records", n_records),
+            ("corpus_files", n_corpus_files),
+            ("warnings", warn),
+        ))),
+        ("mode", mode),
+        ("mode_source", mode_src),
+        ("provenance", collections.OrderedDict((k, provenance.get(k, 0))
+                                               for k in ("marker", "inline", "none"))),
+        ("agent_attempt", collections.OrderedDict((k, attempt.get(k, 0)) for k in
+                                                  ("none", "classifier", "refused", "classifier-error"))),
+        ("classifier_categories", collections.OrderedDict(categories.most_common())),
+        ("buckets", bucket_doc),
+        ("already_allowed", [collections.OrderedDict((("shape", s), ("n", len(rs)),
+                                                      ("example", " ".join(rs[0]["cmd"].split())[:160])))
+                             for s, rs in already.items()]),
+        ("proposed", proposed),
+        ("refused", refused),
+        ("consolidation", []),
+        ("apply_hint", "CONFIRM=1 %s --bang --apply" % TOOL),
+    ))
+    extras = {"analysis": {"refused_leaves": refused_leaves}, "collision": collision,
+              "gctx_kw": gctx_kw, "fleet_paths": fleet_paths, "mode": mode, "records": window}
+    return doc, extras
+
+
+def _bang_entry(rule, head, kind, rows, ev, gates, reasons, gctx, g, exempt):
+    evidence = []
+    for x in sorted(rows, key=lambda x: -(x["ts"] or 0))[:EVIDENCE_CAP]:
+        evidence.append(collections.OrderedDict((
+            ("ts", x["ts"]), ("cwd", x["cwd"]), ("command", " ".join(x["cmd"].split())[:300]),
+            ("handed", x["handed"]), ("agent_attempt", x["denial"] or "none"))))
+    pc = collections.OrderedDict((k, 0) for k in RESOLUTIONS)
+    pc["total"] = len(rows)
+    return collections.OrderedDict((
+        ("rule", rule), ("head", head), ("kind", kind), ("target", "fleet"),
+        ("why_read_only", g["entry"]["why"]),
+        ("distinct_projects", 0), ("projects", []),
+        ("prompts_cleared", pc), ("sessions", ev["sessions"]), ("weeks_present", ev["weeks"]),
+        ("evidence", evidence), ("evidence_truncated", len(rows) > EVIDENCE_CAP),
+        ("widening", collections.OrderedDict((("count", 0), ("next_tokens", []), ("samples", []),
+                                              ("corpus_scope", CORPUS_SCOPE)))),
+        ("carve_outs", list(gctx.carve_outs)),
+        ("exempt_gates", collections.OrderedDict(exempt) if exempt else collections.OrderedDict()),
+        ("gates", gates), ("reasons", reasons),
+    ))
+
+
+def render_bang_report(doc, days):
+    i = doc["inputs"]
+    L = []
+    L.append("── %s --bang · %s · %s ──" % (TOOL, ("%d-day window" % days) if days else "all history",
+                                            doc["generated_utc"]))
+    L.append("  population: %d `!` command(s), unique by record uuid, in %d of %d transcript(s) · "
+             "%d session(s) · %s .. %s" % (i["records_in_window"], i["files_with_marker"],
+                                          i["files_scanned"], i["sessions_in_window"],
+                                          i["first_utc"], i["last_utc"]))
+    pv = doc["provenance"]
+    L.append("  handed in a ▶ Run this: block %d · handed inline %d · typed unprompted %d"
+             % (pv["marker"], pv["inline"], pv["none"]))
+    at = doc["agent_attempt"]
+    L.append("  the agent's own attempt before the hand-off: none %d · classifier-denied %d · "
+             "refused at a prompt %d · classifier error %d"
+             % (at["none"], at["classifier"], at["refused"], at["classifier-error"]))
+    if doc["classifier_categories"]:
+        L.append("    classifier categories: " + ", ".join("%s %d" % (k, n) for k, n in
+                                                         doc["classifier_categories"].items()))
+    L.append("  mode %s (%s) · collision set deny %d ask %d · refused leaves %d"
+             % (doc["mode"], doc["mode_source"], i["collision_set"]["deny"], i["collision_set"]["ask"],
+                i["refused_leaves"]))
+    for w in i["warnings"]:
+        L.append("  ⚠ " + w)
+    L.append("")
+    L.append("  BUCKETS (instances · distinct shapes · why)")
+    for b, e in doc["buckets"].items():
+        L.append("    %-15s %4d · %3d  %s" % (b, e["count"], len(e["shapes"]), e["why"]))
+    L.append("")
+    L.append("  PROPOSED (%d): the agent could have run these itself" % len(doc["proposed"]))
+    for p in doc["proposed"]:
+        L.append("    ✓ %-38s %-6s %d instance(s) · %d session(s) · %d week(s) · widening %s"
+                 % (p["rule"], p["kind"], p["prompts_cleared"]["total"], p["sessions"],
+                    p["weeks_present"], p["widening"].get("count", 0)))
+        L.append("        why read-only: %s%s" % (p["why_read_only"],
+                 (" · exempt as an exact rule: " + ", ".join(p["exempt_gates"])) if p["exempt_gates"] else ""))
+    L.append("")
+    L.append("  REFUSED read-only heads (%d)" % len(doc["refused"]))
+    for r in doc["refused"]:
+        L.append("    ✗ %-38s %s: %s" % (r["rule"], r["code"], r["reason"][:110]))
+    if doc["already_allowed"]:
+        L.append("")
+        L.append("  ALREADY ALLOWED but handed anyway (a behavior fix, not a rule)")
+        for a in doc["already_allowed"]:
+            L.append("    = %-30s %d · %s" % (a["shape"], a["n"], a["example"][:80]))
+    L.append("")
+    L.append("  STAYS GATED: top shapes per gated bucket")
+    for b, e in doc["buckets"].items():
+        if b == "read_only" or not e["shapes"]:
+            continue
+        top = e["shapes"][:4]
+        L.append("    %s: %s" % (b, " · ".join("%s (%d)" % (s["shape"], s["n"]) for s in top)))
+    L.append("")
+    L.append("  apply (operator only): %s <proposal>" % doc["apply_hint"])
+    return "\n".join(L) + "\n"
+
+
+def bang_main(args, seams, days):
+    try:
+        doc, _ex = bang_pipeline(args, seams, days)
+    except Blind as b:
+        print_blind(b.reasons, days)
+        return 3
+    sys.stdout.write(render_bang_report(doc, days))
+    if args.json:
+        path = emit_json(doc, seams.out_dir)
+        print("proposal: %s  (latest.json is a byte-identical copy)" % path)
+    return 0
+
+
 # ── main ───────────────────────────────────────────────────────────────────────────────────────
 def build_parser():
     p = argparse.ArgumentParser(prog=TOOL, allow_abbrev=False, add_help=True,
@@ -2353,6 +2920,9 @@ def build_parser():
     p.add_argument("--hook-logs", nargs="+", metavar="PATH[:name]")
     p.add_argument("--transcripts", nargs="+", metavar="ROOT")
     p.add_argument("--explain", metavar="RULE")
+    p.add_argument("--bang", action="store_true",
+                   help="harvest the operator's `!` commands instead of the beacon archive "
+                        "(proposals under <out>/bang/; --check/--apply/--falsify default there)")
     p.add_argument("--check", nargs="?", const=True, default=None, metavar="PROPOSAL")
     p.add_argument("--falsify", nargs="?", const=True, default=None, metavar="PROPOSAL")
     p.add_argument("--apply", nargs="?", const=True, default=None, metavar="PROPOSAL")
@@ -2385,6 +2955,10 @@ def main(argv):
         sys.stderr.write("%s: --max-tokens must be ≥ 1\n" % TOOL)
         return 2
     seams = Seams(args)
+    if args.bang and not args.out:
+        # A bang proposal never overwrites the weekly archive run's latest.json, and its
+        # --check/--apply/--falsify default to the bang latest.json, not the archive's.
+        seams.out_dir = os.path.join(seams.out_dir, "bang")
     if args.falsify is not None:
         return falsify(args, seams)
     if args.apply is not None:
@@ -2394,6 +2968,8 @@ def main(argv):
     days = _days_arg(args.days) if args.days is not None else 0
     if args.explain:
         return explain(args, seams, days)
+    if args.bang:
+        return bang_main(args, seams, days)
     try:
         doc, _ex = pipeline(args, seams, days)
     except Blind as b:

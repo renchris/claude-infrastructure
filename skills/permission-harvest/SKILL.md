@@ -199,6 +199,27 @@ an added file has no symlink, is absent from the live tree, and every consumer g
 SILENT skip. That is the `LIVE_ADDS` rung: a land that adds files is not live until the converger
 has run.
 
+### 7b. THE BANG SOURCE (`--bang`, 2026-10-01)
+
+A second population: the commands the operator ran with `!`, most pasted from a `▶ Run this:`
+block. `cc-permission-harvest --bang [DAYS] --json` mines every top-level transcript in
+`~/.claude*/projects` (a bang is a user record that STARTS with `<bash-input>`; mirrors dedupe by
+realpath and uuid), joins each to the assistant turn that handed it and to any denial of the
+agent's own attempt, and buckets it. Only the `read_only` bucket reaches the §3.2 gates; every
+other bucket is a gate kept on purpose (consent `--confirm`/`CONFIRM=1`/`CC_DO_ASSUME_YES`, sudo,
+credentials, production, live sessions, the cc-do queue, GUI views, one-shot scripts, compound
+commands) and is reported, never proposed. The `classifier` bucket is not a candidate either: allow
+rules resolve before the auto-mode classifier, so a rule would switch that check off in every
+context. A verb joins the read-only table (`BANG_READ_ONLY`) only after its `--help` was read and
+found to write nothing; flag-headed forms (`cc-do --list`) are proposed as EXACT rules, which are
+exempt from FLAG_HEAD/TOKEN_CAP and from nothing else, with their own per-string evidence.
+
+Proposals go to `<out>/bang/latest.json`, never over the weekly archive's `latest.json`, and
+`--check`/`--apply`/`--falsify` with `--bang` default there. Apply re-runs the BANG pipeline, so a
+rule edited into the file drops as DECAYED. The operator's step is
+`CONFIRM=1 cc-permission-harvest --bang --apply`. First report and the live numbers:
+`docs/research/bang-command-harvest-2026-10-01.md`. Suite: `tests/cc-permission-harvest-bang.bats`.
+
 ### 8. TROUBLESHOOTING
 
 - **Exit codes.** `0` = ran (including `proposed=0`, and including a rule dropped at apply time for
