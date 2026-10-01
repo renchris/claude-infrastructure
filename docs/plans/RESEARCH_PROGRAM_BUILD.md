@@ -237,3 +237,12 @@ coverage table, keeping the kit's record formats (`scripts/research-kit/RECORDS.
   Remaining: reference-class timing per project type, appended as programs run.
 - Status: **in progress** — item 13's `--requires-gate` done; items 9, 10, 11, 12, the rest of 13, and 15's
   reference-class timing not started.
+- Locus inside the wave: T (six teammates, one worktree each: `rp-c-{core,records,probe,cert,jobs,close}`), lead
+  inline only for the shared skeleton (`023d63d61`: `bin/cc-research`, `lib/cli.py` verb table, one module per
+  teammate, cross-module contracts in `RECORDS.md`), B1's on-box step 2, merges and lands. Fired session
+  `rp-c-wave2`, 2026-10-01. Why T and not six dispatched sessions: the brief asked this session to lead its own team,
+  and each teammate returns one short report while the lead lands every item through one serialized queue.
+- Ruled 2026-10-01 by the wave's originator (asked at the decision gate): an absent DoD keeps RUNG=✅ for the git
+  state (a new rung glyph would edit the operator's global rung list, outside this wave's authority); a separate
+  `SCOPE=met|open|unknown` field reads unknown, the readout says "completeness UNKNOWN", and `operator-readout.sh`
+  withholds the `✅ SAFE TO CLOSE` certificate whenever scope is unknown.
