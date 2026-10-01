@@ -221,6 +221,38 @@ byte-identical to origin/main `85c2d837e`. The one `lr_recon` change since the p
 `476712b2f` (`settle.py`: a recycle held as `unreachable` maps to `HOLD-COMPOSER`). It affects
 recycle actuation only, and the previous holder never loaded it (`lr_recon` has no hot reload).
 
+**The watchdog fix did not move the cutoff.** W7d's `b6a352f08` went live at 07:51Z: the watchdog
+now kills only a reconciler whose CPU is frozen (under 0.5 s in 180 s) and gives a first pass 600 s of
+grace. It changed the watchdog, not the reconciler, so pid 92597 kept running and the cutoff stays
+06:50:36Z (re-read at 20:16Z, after the kitty restart below).
+
+### The kitty restart (2026-10-01 18:29Z), and a new comparer rule
+
+**What the restart changed.** It renumbered every pane. This pane went from 38 to 28, so the watcher's
+`--notify lr-fv2-w5b2-38` named an address that no longer existed, and it drops send errors, so four
+cohort mails went nowhere. The watcher process itself survived and archived all four. It now runs as
+pid 68472 with `--notify` set to this session's id (`f8b54aee-…`), which renumbering cannot change.
+The reconciler did not restart. Three of the four cohorts, `next-none-0`, `next3-none-0` and
+`next4-none-0`, opened at 18:29:38Z, the restart itself: their members are `idle` panes with no limit
+scope, being re-recovered. They are not limit cohorts and do not count. The fourth,
+`next4-7d-1791104400` (opened 19:59:05Z, a weekly limit on next4), is the first cohort to count.
+
+**The rule (lead ruling, claude-infrastructure-20, 2026-10-01, conviction 91%; `4f8e99aac`).** A
+provisional compare of that cohort failed on one census miss, 9c4a2015. It was a dead session in
+`/private/tmp/sd-c5-pT3ezY` on next4: legacy found it only through a stop-failure marker, both of its
+legacy runs found no pane (`PANE→ -`) and moved nothing (`HELD:unknown`), no process ran in its
+directory, and the daemon logged `NOT_NEEDED dead-before-claim`. A found sid is now **not owed**
+only when every legacy run for it in the window found no pane and moved nothing, *and* the daemon
+judged it dead before any claim. The legacy evidence decides and the daemon only confirms, so the
+comparer never clears the reconciler on the reconciler's own word. It is printed as its own count
+(`census misses 0 · not owed 1 (9c4a2015)`) and never dropped, so a regression that marks a live
+session dead still shows. Three bats pins in `tests/lr-recon-shadow.bats` cover the not-owed case and
+both ways it must stay a miss.
+
+**Known minor, for the `lr_recon` owner (no fix needed for cutover).** The daemon re-emits the same
+`stale NOT_NEEDED dead-before-claim` event for 9c4a2015 every 6-10 s (32 rows by 20:22Z), which
+grows `recon/events.jsonl` (5 MB) with no new information.
+
 ## Census step
 
 Operator step `f0df9145b73a` (the live observe census) was closed with the launchd daemon's own pass:
