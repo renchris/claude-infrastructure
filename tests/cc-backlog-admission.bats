@@ -15,6 +15,9 @@ setup() {
   unset CC_BACKLOG_FILE CC_BACKLOG_ALLOW_TMP CC_BACKLOG_CLASS_GATE CC_BACKLOG_GATE_LOG CC_BACKLOG_CALLER
   unset CLAUDE_SESSION_ID CLAUDE_CODE_SESSION_ID CC_SESSION_ID
   LEDGER="$HOME/.claude/autonomy/backlog.jsonl"
+  # dates seeded RELATIVE to now (test-walltime-lint): an absolute future stamp changes meaning
+  # as the clock passes it
+  SOON="$(date -u -v+14d +%Y-%m-%d)"; LOST="$(date -u -v+20d +%Y-%m-%d)"
   GLOG="$HOME/.claude/autonomy/backlog-gate.jsonl"
   : > "$LEDGER"
   FX=""
@@ -98,7 +101,7 @@ nevents() { jq -c --arg e "$1" 'select(.event==$e)' "$GLOG" 2>/dev/null | grep -
   a="$(addrow "classed a")"; b="$(addrow "classed b")"
   run bash "$CB" block "$a" --needs "the vendor has not shipped 2.2" --class not-yet-true
   [ "$status" -eq 0 ]
-  run bash "$CB" block "$b" --needs "On or after 2026-10-14, read the 7-day saving"
+  run bash "$CB" block "$b" --needs "On or after $SOON, read the 7-day saving"
   [ "$status" -eq 0 ]
   [ "$(nevents unclassed-transition)" -eq 0 ]
   [ "$(bash "$CB" list --blocked --json | jq -r --arg i "$a" '.[]|select(.id==$i)|.blockClass')" = not-yet-true ]
@@ -216,7 +219,7 @@ nevents() { jq -c --arg e "$1" 'select(.event==$e)' "$GLOG" 2>/dev/null | grep -
 @test "operator gate: only needs-human / needs-credential blocks join master-operator-gated" {
   a="$(addrow "cred")"; b="$(addrow "dated")"; c="$(addrow "value")"
   bash "$CB" block "$a" --needs "paste the key" --class needs-credential >/dev/null
-  bash "$CB" block "$b" --needs "On or after 2026-10-14, read it" >/dev/null
+  bash "$CB" block "$b" --needs "On or after $SOON, read it" >/dev/null
   bash "$CB" block "$c" --needs "pick one" --class needs-human --conviction 60 --receipt "ls => x" >/dev/null
   cond() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)|.condition // ""'; }
   [ "$(cond "$a")" = master-operator-gated ]
@@ -238,15 +241,15 @@ needs_in() { (cd "$HOME" && bash "$CB" needs "$@"); }
 
 @test "dl route: an admissible real-world act prints the dl add line and is refused here" {
   dl_fixture
-  run needs_in "Call Rogers about the renewal" --project personal --dl-lost 2026-10-20 --dl-class money --dl-usd 90 --dl-text "Rogers bills 90 on renewal"
+  run needs_in "Call Rogers about the renewal" --project personal --dl-lost "$LOST" --dl-class money --dl-usd 90 --dl-text "Rogers bills 90 on renewal"
   [ "$status" -eq 3 ]
-  [[ "$output" == *"dl add --kind hard --lost 2026-10-20"* ]]
+  [[ "$output" == *"dl add --kind hard --lost $LOST"* ]]
   [ ! -s "$LEDGER" ]
 }
 
 @test "dl route: --force keeps an admissible act in the backlog" {
   dl_fixture
-  run needs_in "Call Rogers about the renewal" --project personal --dl-lost 2026-10-20 --dl-class money --dl-usd 90 --dl-text "Rogers bills 90" --force
+  run needs_in "Call Rogers about the renewal" --project personal --dl-lost "$LOST" --dl-class money --dl-usd 90 --dl-text "Rogers bills 90" --force
   [ "$status" -eq 0 ]
   [ "$(bash "$CB" list --blocked --json | jq length)" -eq 1 ]
 }
