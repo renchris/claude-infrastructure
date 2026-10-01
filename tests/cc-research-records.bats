@@ -103,11 +103,11 @@ EOF
   before="$(shasum "$REC/census/hooks.json")"
   run "$CR" census add --program demo --pop hooks --method x --count 1 --cmd 'echo h1'
   [ "$status" -eq 2 ]
-  [[ "$output" == *"already"* ]]
+  [[ "$output" == *"already"* ]] || false
   [ "$(shasum "$REC/census/hooks.json")" = "$before" ]
   run "$CR" census add --program demo --pop nope --method x --count 1 --cmd 'echo h1'
   [ "$status" -eq 2 ]
-  [[ "$output" == *"not in frame"* ]]
+  [[ "$output" == *"not in frame"* ]] || false
   [ ! -e "$REC/census/nope.json" ]
   run "$CR" census add --program demo --pop hooks --method y --count 5 --cmd 'echo h1'
   [ "$status" -eq 2 ]
@@ -140,10 +140,10 @@ EOF
   [ "$status" -eq 0 ]
   run "$CR" decision rule --program demo --id DR-2 --chosen x --conviction 95
   [ "$status" -eq 2 ]
-  [[ "$output" == *"unrecognized"* ]]
+  [[ "$output" == *"unrecognized"* ]] || false
   run "$CR" decision rule --program demo --id DR-2 --chosen x
   [ "$status" -eq 2 ]
-  [[ "$output" == *"cc-research gate file-packet"* ]]
+  [[ "$output" == *"cc-research gate file-packet"* ]] || false
   [ "$(fold decisions.jsonl DR-2 status)" = '"open"' ]
   run "$CR" decision show --program demo --id DR-2 --json
   [ "$status" -eq 0 ]
@@ -208,7 +208,7 @@ print(' '.join(r['cause'] + ('/' + r['status'] if r.get('status') else '') for r
   [ "$(grep -ciE 'counted|forecast' "$W/prompts.txt")" -eq 0 ]
   [ "$(sort -u "$W/acts.txt")" = "ACT-demo-1" ]
   acts="$(open_acts)"
-  [[ " $acts " != *" ACT-demo-1 "* ]]
+  [[ " $acts " != *" ACT-demo-1 "* ]] || false
   kinds="$(/usr/bin/python3 -c "
 import json
 d = json.load(open('$CC_RESEARCH_HOME/activities.json'))
