@@ -37,7 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import kit  # noqa: E402
 
 PASS, FAIL, FILED = "PASS", "FAIL", "FILED"
-ROW_COUNT = 16   # §3.10 rows 1-15, plus row 16: rounds and stage time against their caps (§10 item 17)
+ROW_COUNT = 16  # §3.10 rows 1-15, plus row 16: rounds and stage time against their caps (§10 item 17)
 
 
 @dataclass
@@ -92,7 +92,9 @@ def run_rows(ctx: Ctx) -> List[Row]:
     have = {r.num for r in out}
     for n in range(1, ROW_COUNT + 1):
         if n not in have:
-            out.append(Row(n, "missing", FAIL, ["row not implemented — unknown fails (§3.10)"]))
+            out.append(
+                Row(n, "missing", FAIL, ["row not implemented — unknown fails (§3.10)"])
+            )
     return sorted(out, key=lambda r: r.num)
 
 
@@ -120,10 +122,24 @@ def cmd_close(a: argparse.Namespace) -> int:
     return 0
 
 
+def reopened(ctx: Ctx) -> bool:
+    """A VALID operator reopen signed after the newest certificate (§5.1)."""
+    import operator_sign
+
+    rec = operator_sign.latest_valid(ctx.slug, "reopen")
+    certs = sorted(
+        ctx.records.glob("cert/CERT-v*.json"), key=lambda p: p.stat().st_mtime
+    )
+    return bool(rec) and (not certs or rec["at"] > certs[-1].stat().st_mtime)
+
+
 def cmd_run(a: argparse.Namespace) -> int:
-    import gate_rows_a
+    import gate_cert
 
     ctx = make_ctx(a.program)
+    if reopened(ctx):
+        kit.registry_set(a.program, "registered")
+        print(f"REOPENED {a.program} by operator signature; registry -> registered")
     rows = run_rows(ctx)
     print_rows(rows, a.json)
     if any(r.status not in (PASS, FILED) for r in rows):
@@ -151,11 +167,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_run)
 
-    import gate_rows_a
-    import gate_rows_b
+    import gate_cert
+    import gate_sweep
 
-    gate_rows_a.add_verbs(sub)  # freeze, render
-    gate_rows_b.add_verbs(sub)  # sweep, file-packet
+    gate_cert.add_verbs(sub)  # freeze, render
+    gate_sweep.add_verbs(sub)  # sweep, file-packet
 
     a = ap.parse_args(argv)
     try:
