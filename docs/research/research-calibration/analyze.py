@@ -256,6 +256,8 @@ def rows(C, review_wf, out_path, params_path):
         qs_den=0,
         N0=0,
         inv=0,
+        inv_lo=0,
+        inv_hi=0,
         omit=0,
         fb=0,
         fixes=0,
@@ -330,7 +332,19 @@ def rows(C, review_wf, out_path, params_path):
         hdet = {h["hole_id"]: h for h in sc["holes"]}
         detected = [hid for hid in listed if hdet.get(hid, {}).get("detected_by_iids")]
         missed = [hid for hid in listed if hid not in detected]
-        inv = [hid for hid in missed if listed[hid].get("found_by") in NON_DESK]
+        inv = [
+            hid for hid in missed if listed[hid].get("found_by") in NON_DESK
+        ]  # u_hi: any non-desk find missed
+        inv_lo = [
+            hid
+            for hid in missed
+            if listed[hid].get("evidence_at_freeze") == "not_existing"
+        ]
+        inv_mid = [
+            hid
+            for hid in inv
+            if listed[hid].get("evidence_at_freeze") in ("not_existing", "outside_repo")
+        ]
         desk_missed = [
             hid for hid in missed if listed[hid].get("found_by") not in NON_DESK
         ]
@@ -364,16 +378,22 @@ def rows(C, review_wf, out_path, params_path):
             fa_, sa = a.split("_")
             fb_, sb = b.split("_")
             same_vendor = (fa_ in "AD") == (fb_ in "AD")
+            # compare like with like: a pair across strategies is its own class, so cross-vendor means
+            # the same strategy on two vendors
             key = (
-                "same-model"
-                if same_vendor and sa == sb
-                else "cross-strategy"
+                "cross-strategy"
+                if sa != sb
+                else "same-model"
                 if same_vendor
                 else "cross-vendor"
             )
             pooled["phis"][key].append(f)
         for c in cols:
-            refs = {match[i]["ref"] for i in targets if kind[i] == "hole" and c in member.get(i, ())}
+            refs = {
+                match[i]["ref"]
+                for i in targets
+                if kind[i] == "hole" and c in member.get(i, ())
+            }
             rec = pooled["recall"].setdefault(c, [0, 0])
             rec[0] += len(refs & set(listed))
             rec[1] += len(listed)
@@ -410,7 +430,9 @@ def rows(C, review_wf, out_path, params_path):
             known_missed_desk=len(desk_missed),
             known_missed_nondesk=len(inv),
             holes_at_freeze=round(N0, 1),
-            invisible_share=round(len(inv) * scale / N0, 3) if N0 else None,
+            invisible_share=round(len(inv_mid) * scale / N0, 3) if N0 else None,
+            invisible_lo=round(len(inv_lo) * scale / N0, 3) if N0 else None,
+            invisible_hi=round(len(inv) * scale / N0, 3) if N0 else None,
             omission_share=round(omit_n / N0, 3) if N0 else None,
             downgrade_known=[q_num, q_den],
             downgrade_seeds=[qs_num, qs_den],
@@ -442,7 +464,9 @@ def rows(C, review_wf, out_path, params_path):
             ("qs_num", qs_num),
             ("qs_den", qs_den),
             ("N0", N0),
-            ("inv", len(inv) * scale),
+            ("inv", len(inv_mid) * scale),
+            ("inv_lo", len(inv_lo) * scale),
+            ("inv_hi", len(inv) * scale),
             ("omit", omit_n),
             ("fb", hist["counts"].get("fix_born") or 0),
             ("fixes", hist["counts"].get("applied_fixes") or 0),
@@ -478,6 +502,8 @@ def rows(C, review_wf, out_path, params_path):
         q_counts=[P["q_num"], P["q_den"]],
         q_seeds=[P["qs_num"], P["qs_den"]],
         u=round(u, 3),
+        u_lo=round(P["inv_lo"] / P["N0"], 3),
+        u_hi=round(P["inv_hi"] / P["N0"], 3),
         omit=round(omit, 3),
         b_pooled_ex_tm2=round(b_pool, 3),
         b_tm2=next((r["fixborn_rate"] for r in out_rows if r["plan"] == "tm2"), None),
@@ -513,6 +539,38 @@ def rows(C, review_wf, out_path, params_path):
             / max(1, len(P["pp_slot"]["openai_tokens"]))
         ),
     )
+
+    # Per-plan means, because TM2's 183 critique-verified gaps (never screened against §3.11) would otherwise
+    # carry half the pooled N0. The audit-adjusted N0 deflates each plan's known count by the share of audited
+    # history holes that survived as real, material and present at the freeze.
+    def mean(k, rs=out_rows):
+        xs = [r[k] for r in rs if r.get(k) is not None]
+        return round(sum(xs) / len(xs), 3) if xs else None
+
+    a = summary["audit"]
+    keep = a["all3"] / a["n"] if a["n"] else 1.0
+    for r in out_rows:
+        r["holes_at_freeze_audited"] = round(
+            r["known_at_freeze"] * keep + r["new_real_material"], 1
+        )
+    summary.update(
+        u_plan_mean=mean("invisible_share"),
+        u_lo_plan_mean=mean("invisible_lo"),
+        u_hi_plan_mean=mean("invisible_hi"),
+        omit_plan_mean=mean("omission_share"),
+        audit_keep_rate=round(keep, 3),
+        N0_audited=sorted(r["holes_at_freeze_audited"] for r in out_rows),
+        N0_audited_median=sorted(r["holes_at_freeze_audited"] for r in out_rows)[
+            len(out_rows) // 2
+        ],
+        fixborn_rate_by_plan={r["plan"]: r["fixborn_rate"] for r in out_rows},
+        fixborn_plan_median=sorted(r["fixborn_rate"] for r in out_rows)[
+            len(out_rows) // 2
+        ],
+    )
+    with open(out_path, "w") as fh:
+        for r in out_rows:
+            fh.write(json.dumps(r) + "\n")
     json.dump(summary, open(params_path, "w"), indent=1)
     print(json.dumps(summary, indent=1))
 

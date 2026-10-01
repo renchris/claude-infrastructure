@@ -300,6 +300,8 @@ def table(params_path):
                         prof = two_vendor(prof)
                     if "rho" in P:
                         prof = with_rho(prof, P["rho"])
+                    if P.get("s_cap"):  # §3.9: at most 1 seed per 25 plan lines
+                        prof = dict(prof, s=min(prof["s"], P["s_cap"]))
                     rows.append((N0, pname, b, comp_name, prof))
     for N0, pname, b, comp_name, prof in rows:
         s = run(
