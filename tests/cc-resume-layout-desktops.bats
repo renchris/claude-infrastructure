@@ -96,7 +96,7 @@ launches() { grep -c ' launch ' "$KLOG"; }
   row repo-a 1
   run --separate-stderr bash "$LAYOUT" --desktops --to unix:/tmp/fake --file "$ROWS"
   [ "$status" -eq 0 ]
-  grep -q -- "-- zsh -ic 'env' 'CC_ADMIT_DONE=1' '$CC_RESUME_ONE_BIN' 'next' '.*/repo-a/w1' 'sid-repo-a-1' 'br'; exec zsh -i" "$KLOG"
+  grep -q -- "-- zsh -ic 'env' 'CC_ADMIT_DONE=1' '$CC_RESUME_ONE_BIN' 'next' '.*/repo-a/w1' 'sid-repo-a-1' 'br' || exec zsh -i" "$KLOG"
 }
 
 @test "6 rows over two projects (4+2) → two windows, and no window mixes the projects" {

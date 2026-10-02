@@ -204,9 +204,13 @@ if [ "$IN_KITTY" = 1 ]; then
   # NOT end in one — the invariant no longer rests on the other file's tail alone, and an in-pane
   # relaunch (handoff-fire --relaunch-at-shell) has a prompt to type into. The command string is
   # the shq-quoted CMD: every word single-quoted, so no correction prompt can fire on it.
+  # `||`, not `;` (2026-10-02): reso-resume-one exits 0 ONLY when the session ended on purpose with
+  # no recycle pending (6347b1731), and that exit means "close this pane". `; exec zsh -i` re-opened
+  # a shell under every such close, so a stale replay left 7 husks the launcher had announced as
+  # closing. Every failure still exits non-zero and still gets the shell.
   KARGS=(launch --type=os-window)
   { [ -n "$cwd" ] && [ -d "$cwd" ]; } && KARGS+=(--cwd "$cwd")
-  KARGS+=(-- zsh -ic "$CMD; exec zsh -i")
+  KARGS+=(-- zsh -ic "$CMD || exec zsh -i")
 else
   # CREATE ONLY — the command is typed separately, through osa_type_verified. Splitting create from
   # type is what makes the echo-verify possible at all: `write text` always appends the newline, so

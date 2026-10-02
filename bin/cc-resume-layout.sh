@@ -263,7 +263,9 @@ for n, (idx, gs) in enumerate(bins, 1):
       *) anc="${B:-$A}"; LA+=(--location=vsplit --match "window_id:$anc" --next-to "id:$anc") ;;
     esac
     { [ -n "$wt" ] && [ -d "$wt" ]; } && LA+=(--cwd "$wt")
-    LA+=(--env CC_ADMIT_DONE=1 -- zsh -ic "$cmd; exec zsh -i")
+    # `||`: rc 0 is reso-resume-one's "ended on purpose, close the pane" (scripts/boot-resume-launch.sh
+    # carries the why); every failure keeps the shell.
+    LA+=(--env CC_ADMIT_DONE=1 -- zsh -ic "$cmd || exec zsh -i")
     wid="$(k "${LA[@]}" 2>&1)"
     case "$wid" in
       ''|*[!0-9]*) note "cc-resume-layout: launch failed for $sid: $wid"; failed=$((failed + 1)); continue ;;
