@@ -152,9 +152,18 @@ reconcile_spacing() {
   done
 }
 
-ok=0 bad=0 failed=''
+# THE SOCKET FIRST, SIGUSR1 ONLY WHERE THERE IS NONE (2026-10-01). A successful `kill -USR1` proves
+# the signal was SENT, never that kitty acted on it. Measured on the operator's live kitty: its
+# signal path had stalled — 59 unreaped zombie children, i.e. SIGCHLD unhandled too — so every
+# SIGUSR1 (ours, and the __watch_conf__ watcher's) was silently dropped and a landed keymap stayed
+# inert for hours while this tool reported `reloaded`. `kitty @ load-config` over the instance's own
+# socket runs on the main loop, not the signal path, and it applied at once.
+ok=0 bad=0 failed='' via_sock=0
 for p in $pids; do
-  if "$KILL_BIN" -USR1 "$p" 2>/dev/null; then ok=$((ok+1)); else bad=$((bad+1)); failed="$failed $p"; fi
+  sock="${CC_KITTY_SOCKET_DIR:-/tmp}/kitty-$p"
+  if [ -S "$sock" ] && "${CC_KITTY_BIN:-kitty}" @ --to "unix:$sock" load-config >/dev/null 2>&1; then
+    ok=$((ok+1)); via_sock=$((via_sock+1))
+  elif "$KILL_BIN" -USR1 "$p" 2>/dev/null; then ok=$((ok+1)); else bad=$((bad+1)); failed="$failed $p"; fi
 done
 
 if [ "$bad" -gt 0 ]; then
@@ -165,5 +174,5 @@ fi
 reconcile_spacing
 mkdir -p "$(dirname "$STAMP")" 2>/dev/null
 printf '%s' "$hash_now" > "$STAMP"
-say reloaded "key=${hash_now:0:12} instances=$ok spacing=reconciled"
+say reloaded "key=${hash_now:0:12} instances=$ok via-socket=$via_sock spacing=reconciled"
 exit 0

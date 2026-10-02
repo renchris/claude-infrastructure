@@ -195,3 +195,36 @@ STUB
   [[ "$output" == *"verdict=unchanged"* ]] || false
   [ ! -s "$KITTYLOG" ]
 }
+
+# ── the socket first: a SENT SIGUSR1 is not an APPLIED reload (2026-10-01) ──────────────────────
+# The operator's kitty had a stalled signal path (59 unreaped zombies), so every SIGUSR1 was dropped
+# while this tool reported `reloaded`. Where the instance has its own socket the reload goes through
+# `kitty @ load-config`, which runs on kitty's main loop; SIGUSR1 is the fallback.
+
+mk_sock() {  # a real AF_UNIX socket at $TMP/socks/kitty-<pid>, bound by a RELATIVE name (short path)
+  mkdir -p "$TMP/socks"
+  (cd "$TMP/socks" && python3 -c 'import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "kitty-$1")
+  [ -S "$TMP/socks/kitty-$1" ]
+}
+mk_kitty() {  # $1 = exit status of the stubbed `kitty @ … load-config`
+  printf '#!/bin/bash\necho "$@" >> "%s"\nexit %s\n' "$TMP/kittylog" "$1" > "$TMP/bin/kitty"
+  chmod +x "$TMP/bin/kitty"; : > "$TMP/kittylog"
+  export CC_KITTY_BIN="$TMP/bin/kitty" CC_KITTY_SOCKET_DIR="$TMP/socks"
+}
+
+@test "an instance with a socket is reloaded through load-config, and is NOT signalled" {
+  mk_sock 501; mk_kitty 0
+  run bash "$TOOL"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=reloaded"*"via-socket=1"* ]] || { echo "$output"; false; }
+  grep -q -- "--to unix:$TMP/socks/kitty-501 load-config" "$TMP/kittylog" || { cat "$TMP/kittylog"; false; }
+  [ ! -s "$KILLLOG" ] || { echo "signalled although the socket reload worked: $(cat "$KILLLOG")"; false; }
+}
+
+@test "a socket whose load-config fails falls back to SIGUSR1" {
+  mk_sock 501; mk_kitty 1
+  run bash "$TOOL"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"via-socket=0"* ]] || { echo "$output"; false; }
+  [[ "$(cat "$KILLLOG")" == *"-USR1 501"* ]] || { cat "$KILLLOG"; false; }
+}
