@@ -467,11 +467,21 @@ fi
 
 # ── 4. teammateMode ──────────────────────────────────────────────────────────────────────────────
 hdr "4. teammateMode (decides whether you SEE your assignees)"
+# Back up and rewrite each REAL file once, and only when it needs the change. Four of the five
+# config dirs reach settings.json through a symlink to ~/.claude's, and `cp` follows it, so every
+# apply used to leave a fresh real backup in each account dir even when nothing changed — 2,000+ of
+# them by 2026-10-01, each one a FORKED line the config mirror printed before every `claude` launch.
+seen_real=" "
 while IFS= read -r S; do
   [ -n "$S" ] || continue
-  if [ "$MODE" = apply ]; then
-    cp "$S" "$S.bak-kitty-$(date +%Y%m%d%H%M%S)"
-    python3 - "$S" <<'PY'
+  real=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$S")
+  pre=$(python3 -c 'import json,sys
+try: print(json.load(open(sys.argv[1])).get("teammateMode"))
+except Exception: print("unreadable")' "$S")
+  if [ "$MODE" = apply ] && [ "$pre" != iterm2 ] && [ "${seen_real#* "$real" }" = "$seen_real" ]; then
+    seen_real="$seen_real$real "
+    cp "$real" "$real.bak-kitty-$(date +%Y%m%d%H%M%S)"
+    python3 - "$real" <<'PY'
 import json,sys
 p=sys.argv[1]
 try: d=json.load(open(p))

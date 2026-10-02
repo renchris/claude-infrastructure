@@ -218,3 +218,48 @@ sys.exit(0 if hit == 1 else 1)
     echo "MUTANT STILL REPORTS — the assertion above is not keyed on the fix" >&2; return 1; }
   return 0
 }
+
+# ── a terminal gets ONE line, a pipe keeps one per name (2026-10-01) ─────────────────────────────
+# The `claude` launcher prints the mirror's stderr straight to the operator's terminal, where 500+
+# per-name FORKED lines (≈95% stale settings.json.bak-* copies) walled the screen before the TUI
+# opened. The SessionStart hook and `| grep FORKED` still parse per-name lines, so the fold keys on
+# a tty (forced here with CC_MIRROR_FORKS, since bats has none).
+
+fork_fixture() {
+  export HOME="$D/fh-summary"
+  mkdir -p "$HOME/.claude/commands" "$HOME/.claude-next/commands"
+  printf '{}\n' > "$HOME/.claude/.claude.json"
+  printf 'shared\n' > "$HOME/.claude/commands/real.md"
+  local n
+  for n in settings.json.bak-kitty-1 settings.json.bak-kitty-2 tasks-index.json; do
+    printf 'src\n' > "$HOME/.claude/$n"; printf 'fork\n' > "$HOME/.claude-next/$n"
+  done
+  printf 'forked\n' > "$HOME/.claude-next/commands/stale.md"
+}
+
+@test "summary mode folds every fork into ONE line naming only the non-backups" {
+  command -v zsh >/dev/null 2>&1 || skip "zsh unavailable"
+  fork_fixture
+  run env CC_MIRROR_FORKS=summary zsh -fc "source '$MIRROR'; _cc_sync_config_mirror \"\$HOME/.claude-next\" 2>&1 >/dev/null"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | grep -c 'config-mirror:')" = 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"2 file(s) in .claude-next shadow ~/.claude (commands, tasks-index.json)"* ]] || { echo "$output"; false; }
+  [[ "$output" != *bak-kitty* ]] || { echo "backups named in the summary: $output"; false; }
+}
+
+@test "summary mode is SILENT when every fork is a backup" {
+  command -v zsh >/dev/null 2>&1 || skip "zsh unavailable"
+  fork_fixture
+  rm -rf "$HOME/.claude-next/commands" "$HOME/.claude-next/tasks-index.json"
+  run env CC_MIRROR_FORKS=summary zsh -fc "source '$MIRROR'; _cc_sync_config_mirror \"\$HOME/.claude-next\" 2>&1 >/dev/null"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | grep -c 'config-mirror:' || true)" = 0 ] || { echo "$output"; false; }
+}
+
+@test "piped (the hook's view) still prints one FORKED line per name" {
+  command -v zsh >/dev/null 2>&1 || skip "zsh unavailable"
+  fork_fixture
+  run zsh -fc "source '$MIRROR'; _cc_sync_config_mirror \"\$HOME/.claude-next\" 2>&1 >/dev/null"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | grep -c 'FORKED real' || true)" = 4 ] || { echo "$output"; false; }
+}

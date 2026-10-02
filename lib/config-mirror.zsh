@@ -113,6 +113,18 @@ _cc_sync_config_mirror() {
   local -A keep; local k
   for k in ${(s: :)${_CC_ISOLATE[$dst]:-.claude.json .claude.json.backup backups-identity daemon jobs}}; do keep[$k]=1; done
   local e name
+  # ONE LINE FOR A HUMAN, ONE PER NAME FOR A MACHINE (2026-10-01). On a terminal — the `claude`
+  # launcher, typed by the operator — a per-name FORKED line printed a wall of 500+ lines before
+  # the TUI opened, ~95% of them stale settings.json.bak-* copies that change nothing. So on a tty
+  # the forks fold into one line, and a fold of backups alone prints nothing. Piped (the
+  # config-mirror-assert SessionStart hook, the tests, `| grep FORKED`) keeps one line per name,
+  # which is what those readers parse. CC_MIRROR_FORKS=lines|summary overrides the detection.
+  local fork_summary=0; local -a forks
+  case "${CC_MIRROR_FORKS:-}" in
+    summary) fork_summary=1 ;;
+    lines) ;;
+    *) [[ -t 2 ]] && fork_summary=1 ;;
+  esac
   for e in "$src"/*(ND); do
     name="${e:t}"
     # A DERIVATIVE OF AN ISOLATED NAME IS ISOLATED (backlog fa475126f710). The isolate lists are
@@ -181,11 +193,19 @@ _cc_sync_config_mirror() {
       # The ACTUATOR reports, deliberately: a separate detector would have to re-implement the
       # isolate list, the transient-name skip and the already-correct-symlink test, and would drift
       # from them silently. This line cannot disagree with the decision it is reporting.
-      (( convert )) || { print -u2 "config-mirror: FORKED real '$name' in ${dst:t} — shadows ~/.claude/$name; safe mode cannot fix it, run with --convert (all that account's panes closed)"; continue; }
+      (( convert )) || { (( fork_summary )) && forks+=("$name") || print -u2 "config-mirror: FORKED real '$name' in ${dst:t} — shadows ~/.claude/$name; safe mode cannot fix it, run with --convert (all that account's panes closed)"; continue; }
       mv -f "$dst/$name" "$dst/$name.premirror-bak" 2>/dev/null
     fi
     ln -sfn "$e" "$dst/$name"
   done
+  if (( ${#forks} )); then
+    local -a live=(${forks:#*bak*})
+    if (( ${#live} )); then
+      local more="" on="" off=""; (( ${#live} > 3 )) && more=", +$(( ${#live} - 3 )) more"
+      [[ -t 2 && -z "$NO_COLOR" ]] && { on=$'\e[38;2;125;133;144m'; off=$'\e[0m'; }  # gray, never SGR-2
+      print -u2 -- "${on}config-mirror: ${#live} file(s) in ${dst:t} shadow ~/.claude (${(j:, :)live[1,3]}$more) — with its panes closed: _cc_sync_account --convert $dst${off}"
+    fi
+  fi
   # Heal: an isolated entry that got wrongly symlinked to ~/.claude (the account-state leak).
   for k in ${(k)keep}; do
     [[ -L "$dst/$k" ]] && { rm -f "$dst/$k"; print -u2 "config-mirror: un-shared isolated '$k' in ${dst:t}"; }
