@@ -1,0 +1,86 @@
+kitty talk-thread survives a transient accept() error — applies to v0.48.2 (2cb1d95c3a) with `git apply`.
+(git apply ignores every line above the first diff header, so this block is commentary only.)
+
+Why (2026-10-01): kitty's remote-control "talk" thread died because accept_peer() returned false on a
+transient accept() error and talk_loop did `goto end` (child-monitor.c:1821-1826, :2058 in v0.48.2).
+Nothing restarts that thread, so remote control deadlocked. Evidence and analysis:
+docs/research/session-durability-2026-10/C3-socket-robustness.md; build plan W3-build-plan.md § P6.
+
+Part 1, kitty/child-monitor.c (local): accept_peer() returns false only for EBADF, ENOTSOCK, EINVAL
+(the listener is gone). Any other errno is logged with log_error ("... still serving ..."), which
+reaches the unified log where perror() went to /dev/null, and the thread keeps serving. A repeating
+error backs off 2 ms doubling to 256 ms and logs sparsely, so an error that never dequeues the
+pending connection cannot busy-spin the poll loop. The counter resets on the next good accept.
+
+Part 2, kitty/loop-utils.c: the loop-utils.c hunk of upstream f3fdc21850d7 ("Fix #10436", kovidgoyal,
+2026-09-04). The +/- lines are upstream's verbatim; the context is rebased to v0.48.2, where the two
+CLOSE() calls share one line. A loop that handles no signals no longer clears the global signal
+write fd, and handlers are reset per signal, so SIGTERM and SIGCHLD reaping work again.
+
+Built without the title band by: scripts/kitty-build-swap.sh build --no-band (applies
+kitty-upstream-defects.patch, then this file). Adoption is the operator's.
+
+diff --git a/kitty/child-monitor.c b/kitty/child-monitor.c
+index f969f98db..8804824ad 100644
+--- a/kitty/child-monitor.c
++++ b/kitty/child-monitor.c
+@@ -1817,14 +1817,31 @@ getpeerid(int fd, uid_t *euid, gid_t *egid) {
+ }
+ 
+ 
++static unsigned accept_errors = 0;  // consecutive accept() failures; only the talk thread touches it
++
+ static bool
+ accept_peer(int listen_fd, bool shutting_down, bool is_remote_control_peer) {
+     int peer = accept(listen_fd, NULL, NULL);
+     if (UNLIKELY(peer == -1)) {
+-        if (errno == EINTR) return true;
+-        if (!shutting_down) perror("accept() on talk socket failed!");
+-        return false;
+-    }
++        const int err = errno;
++        if (err == EINTR) return true;
++        if (shutting_down) return false;
++        // Only a listener that is gone ends the talk thread. Any other error (ECONNABORTED, EMFILE,
++        // ENFILE, ENOBUFS, ...) is transient: returning false here killed remote control for good.
++        if (err == EBADF || err == ENOTSOCK || err == EINVAL) {
++            log_error("accept() on talk socket failed, listener gone, talk thread exiting: %s (errno %d)", strerror(err), err);
++            return false;
++        }
++        accept_errors++;
++        if (accept_errors <= 8 || accept_errors % 64 == 0)
++            log_error("accept() on talk socket failed, still serving: %s (errno %d, %u in a row)", strerror(err), err, accept_errors);
++        // Back off 2ms doubling to 256ms so an error that repeats (the pending connection is never
++        // dequeued) cannot busy-spin the poll loop.
++        struct timespec delay = {.tv_sec = 0, .tv_nsec = (1L << (accept_errors < 8 ? accept_errors : 8)) * 1000000L};
++        nanosleep(&delay, NULL);
++        return true;
++    }
++    accept_errors = 0;
+     if (verify_peer_uid) {
+         uid_t peer_uid; gid_t peer_gid;
+         if (!getpeerid(peer, &peer_uid, &peer_gid)) {
+diff --git a/kitty/loop-utils.c b/kitty/loop-utils.c
+index 9e4935446..9275a8c34 100644
+--- a/kitty/loop-utils.c
++++ b/kitty/loop-utils.c
+@@ -81,7 +81,9 @@ init_loop_data(LoopData *ld, ...) {
+ static void
+ remove_signal_handlers(LoopData *ld) {
+ #ifndef HAS_SIGNAL_FD
+-    signal_write_fd = -1;
++    // Only clear the global write fd if it is owned by this loop. Loops that
++    // handle no signals must not disable signal delivery for the loop that does.
++    if (ld->signal_fds[1] > -1 && signal_write_fd == ld->signal_fds[1]) signal_write_fd = -1;
+     CLOSE(signal_fds, 0); CLOSE(signal_fds, 1);
+ #endif
+     if (ld->signal_read_fd > -1) {
+@@ -89,7 +91,7 @@ remove_signal_handlers(LoopData *ld) {
+         safe_close(ld->signal_read_fd, __FILE__, __LINE__);
+         sigprocmask(SIG_UNBLOCK, &ld->signals, NULL);
+ #endif
+-        for (size_t i = 0; i < ld->num_handled_signals; i++) signal(ld->num_handled_signals, SIG_DFL);
++        for (size_t i = 0; i < ld->num_handled_signals; i++) signal(ld->handled_signals[i], SIG_DFL);
+     }
+     ld->signal_read_fd = -1;
+     ld->num_handled_signals = 0;
