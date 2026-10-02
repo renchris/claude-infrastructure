@@ -78,3 +78,32 @@ for each).
    before `:7888`). If a self recovery's pane→session binding refuses, the run still records nothing
    and A6 still refuses. That is the fail-closed direction, so it is not a defect in the verifier.
    Whether that binding refuses in practice for a self pane before transplant has not been measured.
+
+## Follow-up on the desk, 2026-10-02
+
+Measured on the desk over the 50 `INGEST-VERIFIED.txt` receipts under `~/.reso/limit-recover`
+(2026-09-22 to 2026-10-02), prompted by session `9c4a2015`, whose ingest failed A6, C3 and C5.
+
+- **Residual 1 is met.** From 2026-09-23 on, 40 of the 41 in-place receipts pass A6, every one
+  from a `probed` record. The 41st (`bb231dfd`, 2026-10-01) read `killed_inflight=7` with gaps 5
+  and waiting 10: the gate refusing real in-flight work, as designed.
+- **Residual 2 is answered: A6 was not the only blocker.** FAIL counts per clause: A2 15, A1 10,
+  A6 10, C3 6, C5 4, A4 2, D1 1, D2 1. 27 receipts are rc 0.
+- **A move that is not in place never passes, by construction.** All 6 such receipts (each the
+  NO-PANE fallback) fail both A6 and C3, and none of the 27 clean receipts is one.
+  - A6: the only `killed_inflight` writer is `lrh_precheck`, which runs only under `IN_PLACE=1`
+    (`lr-handoff.sh:1381`). Such a bundle's `events.jsonl` is first written by lr-fire-resume,
+    after the launcher's verifier has already run.
+  - C3: such a move runs `lr-transplant.sh --phase confirm` with no admit (`lr-handoff.sh:1441`),
+    and confirm only asserts a lock that already exists (`lr-transplant.sh:380`). In-place locks
+    persist (27 of 27 clean receipts still have theirs); none of the 5 sessions moved this way has
+    one today, so they are the only moved sessions without the split-brain lock.
+  - C5 also failed on 2 of them, because `"worktree": ""` shadowed the recorded cwd. Fixed in
+    `9d01288fa`.
+- **Not driven; conviction 80% on the fix.** The likely fix gives that path an admit before its
+  confirm (the order the `cc-lr switch` drainer already uses for background sessions) and writes
+  `killed_inflight` from a liveness census taken before the move. The census must also read
+  `<cfg>/sessions/*.json`: lr-audit's DEAD reads only the pane registry and `--resume` argv, and
+  the background-daemon process seen in that session ran as `claude bg-spare --bg-spare <socket>`,
+  with no session id in its argv. The alternative is the status quo, which is safe and costs one
+  full ingest per such move (6 in 10 days).
