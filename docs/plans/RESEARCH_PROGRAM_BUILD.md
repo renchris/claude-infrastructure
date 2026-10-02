@@ -158,6 +158,15 @@ Owns §10 items 1 (deny half), 2, 3, 8, 11, 12, 13 (populating the set). Reads, 
      then `scripts/research-kit/heldout-rate.py --vendor anthropic` and `--vendor openai` (Google is down until
      its login is restored), then `CC_RESEARCH_ROUTER="python3 $PWD/scripts/research-kit/router.py classify"
      scripts/research-kit/heldout.py evaluate` — row 15's first real reading of the classifier.
+  - Step 2 DONE 2026-10-01 (wave C session): mined 183 candidates over 6,784 transcripts (pushback is rare: 3 mined,
+    plus the 4 literal relay-test phrasings of REPORT.md:535-537, source recorded); sealed 91 (all four strata) in
+    `~/.claude/autonomy/research/router-heldout/sealed.enc`, 96 in the tuning set beside it (0600, outside the
+    repo); labeled by `anthropic:claude-opus-5-5` and `openai:gpt-5.6-sol` (69 agreed). **Row 15 FAILS today**:
+    fallback 0.96 at load ~295 and 0.51 at load ~45-80 against the 6 s limit; correct labels on `other` 0.12 then
+    0.62; completeness recall 14/14 · 3/3 · 1/1 only because a fallback routes as completeness. Cause measured: a
+    cold `/opt/homebrew/bin/claude -p` on haiku takes ~2 s at load 45 and ~5 s at load 295 before the classifier
+    brief; `--bare` cannot use the OAuth login; `--strict-mcp-config --disable-slash-commands` saves ~0.4 s. The
+    fix changes §4.1's time limit or classifier path — a method parameter, raised to the plan's lead.
 
 ### B2 — `research-program` skill, `/research-program` command, intake (REPORT.md §8 item 8)
 - Intake script: the two §3.1 rulings into `frame.json` `rulings` (`scripts/research-kit/RECORDS.md`), the contract
@@ -235,8 +244,12 @@ coverage table, keeping the kit's record formats (`scripts/research-kit/RECORDS.
     a Goal line in `commands/are-we-done.md`; pending concerns and the priced menu in `hooks/operator-readout.sh`.
 - **Item 15 — calibration log.** `docs/research/research-calibration.jsonl` exists (A3, 16 replayed plans).
   Remaining: reference-class timing per project type, appended as programs run.
-- Status: **in progress** — item 13's `--requires-gate` done; items 9, 10, 11, 12, the rest of 13, and 15's
-  reference-class timing not started.
+- Status: **DONE 2026-10-01** — items 9, 10, 11, 12, 13 and 15 landed (shas per item below), B1's on-box step 2
+  done (row 15 reads FAIL; see B1). Operator step left: `migrations/0051-research-jobs.sh` (loads the five jobs).
+  Learnings: the land gate refuses assertions errexit cannot reach (`scripts/bats-assert-liveness-fix.py`),
+  absolute future dates in fixtures (seed with `date -u -v+NH`) and a path derived from an unresolved `$0` —
+  brief teammates on all three; the ruff post-edit hook reflows whole files, so shared files (`cli.py`) collide
+  unless each teammate reverts the reflow.
 - Landed per item:
   - Item 12 — `1f37dffbd`: `cc-research job sweep|freshness|triage|drift|market` (`lib/cli_jobs.py`), one bash 3.2
     runner `scripts/research-kit/jobs/research-job.sh`, five plists in `launchd/staged/` (install.sh would load
@@ -273,6 +286,14 @@ coverage table, keeping the kit's record formats (`scripts/research-kit/RECORDS.
     record|show|check` (`lib/cli_refclass.py`): `record` appends a certified program's stage 1–6 days per
     `frame.json project_type`, once per certificate; `check` exits 1 and prints both figures when a typical total
     exceeds 3× the type's median (§6.3), "uncalibrated" with no rows. `cc-research-refclass` 1..8 (red 8/8).
+  - Item 13 remainder — `454f88340`: `scripts/wrap-ledger.sh` `SCOPE=met|open|unknown` (absent DoD keeps RUNG=✅
+    and reads "completeness UNKNOWN") and `RESEARCH_PROGRAM / RESEARCH_VERDICT / RESEARCH_PENDING` beside, never
+    inside, the rung (bounded `cc-research verdict --json`; kill switch `WRAP_RESEARCH=off`);
+    `hooks/operator-readout.sh` withholds `✅ SAFE TO CLOSE` (and the in-block ✅ header) on unknown scope
+    (`cert-scope-unknown`) and renders one counted `◆ research <slug>` line per program with pending concerns or an
+    open menu; `commands/are-we-done.md` reads the program verdict separately. Suites `wrap-ledger-research`
+    1..11 (red 11/11), `operator-readout-research` 1..9 (red 9/9); `self-certifying-close.bats` case A now plants a
+    DoD (its old fixture was exactly the case the ruling withholds).
 - Locus inside the wave: T (six teammates, one worktree each: `rp-c-{core,records,probe,cert,jobs,close}`), lead
   inline only for the shared skeleton (`023d63d61`: `bin/cc-research`, `lib/cli.py` verb table, one module per
   teammate, cross-module contracts in `RECORDS.md`), B1's on-box step 2, merges and lands. Fired session
