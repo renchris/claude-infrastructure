@@ -63,14 +63,15 @@ main()'
   run probe_opt "$CONF"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   # The option rides ON the splits entry, so a careless edit can drop `stack` (⌘⇧Z zoom) or turn
-  # `splits` into an unknown layout name. Both entries are asserted, not just the first.
-  echo "$output" | grep -q '^layouts=splits:equalize_on_window_close=yes,stack$' || { echo "$output"; false; }
+  # `splits` into an unknown layout name. Every entry is asserted, not just the first — including
+  # `horizontal`, without which a config reload drops the one-row resume tabs back to splits.
+  echo "$output" | grep -q '^layouts=splits:equalize_on_window_close=yes,horizontal,stack$' || { echo "$output"; false; }
 }
 
 @test "CONTROL: without the option kitty resolves it False — the guard can actually fail" {
   [ -x "$KITTY" ] || skip "kitty is not installed"
   MUT="$BATS_TEST_TMPDIR/mutant.conf"
-  sed 's/^enabled_layouts splits:equalize_on_window_close=yes,stack$/enabled_layouts splits,stack/' "$CONF" > "$MUT"
+  sed 's/^enabled_layouts splits:equalize_on_window_close=yes,horizontal,stack$/enabled_layouts splits,stack/' "$CONF" > "$MUT"
   grep -qx 'enabled_layouts splits,stack' "$MUT" || { echo "mutation did not apply"; false; }
   run probe_opt "$MUT"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
