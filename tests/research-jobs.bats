@@ -204,3 +204,17 @@ d['populations_outside']=[{'name':'releases','refresh_cmd':'cat $F','owner':'lea
   run shellcheck "$RUNNER" "$MIG"
   [ "$status" -eq 0 ]
 }
+
+@test "every staged plist's runner is a file install.sh links and deploy-parity-assert declares" {
+  # The plists name the runner by its LIVE path; ~/.claude/scripts/ is a per-file symlink farm built
+  # by install.sh's research-kit loop, so a subdirectory that loop skips is a job that runs nothing.
+  for j in sweep freshness triage drift market; do
+    P="$REPO/launchd/staged/com.claude.research-$j.plist"
+    rel="$(/usr/bin/plutil -extract ProgramArguments.1 raw "$P")"
+    rel="${rel#*/.claude/}"
+    [ -f "$REPO/$rel" ]
+    sub="$(dirname "${rel#scripts/research-kit}")"
+    grep -Eq "for sub in .*\"$sub\"" "$REPO/install.sh"
+    grep -Fq "cls='$(dirname "$rel")/*'" "$REPO/scripts/deploy-parity-assert.sh"
+  done
+}

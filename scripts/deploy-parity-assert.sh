@@ -626,6 +626,9 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
       # both sides. Case `*` crosses `/`, so the deeper patterns come first.
       scripts/research-kit/lib/*/*) want=0 ;;
       scripts/research-kit/lib/*)   want=1; cls='scripts/research-kit/lib/*' ;;
+      # jobs/ — the launchd runner the staged plists name by its live path (migration 0051).
+      scripts/research-kit/jobs/*/*) want=0 ;;
+      scripts/research-kit/jobs/*)  want=1; cls='scripts/research-kit/jobs/*' ;;
       scripts/research-kit/*/*)     want=0 ;;
       scripts/research-kit/*)       want=1; cls='scripts/research-kit/*' ;;
       scripts/*/*)               want=0 ;;   # scripts/ is globbed top-level only

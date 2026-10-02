@@ -779,7 +779,8 @@ fi
 if [[ -d "$REPO_DIR/scripts/research-kit" ]]; then
   echo ""
   echo "Research kit → $CONFIG_DIR/scripts/research-kit/"
-  for sub in "" "/lib"; do
+  # /jobs: the launchd runner, which the staged plists name by its live path (migration 0051).
+  for sub in "" "/lib" "/jobs"; do
     ensure_real_dir "$CONFIG_DIR/scripts/research-kit$sub"
     for f in "$REPO_DIR/scripts/research-kit$sub"/*; do
       [[ -f "$f" ]] || continue
