@@ -52,7 +52,8 @@ setup() {
 blocked_json() { bash "$CB" list --blocked --json | jq -c --arg i "$1" 'map(select(.id==$i)) | first // empty'; }
 
 @test "needs files a BLOCKED item in one command; list --blocked shows it with its needs prose" {
-  run bash "$CB" needs "authenticate motion-plus in /mcp" --project "$P"
+  # Classed, as callers are taught: an unclassed `needs` WARNs on stderr (49d153596), which `run` folds into $output.
+  run bash "$CB" needs "authenticate motion-plus in /mcp" --class needs-human --project "$P"
   [ "$status" -eq 0 ]
   id="$output"
   [[ "$id" =~ ^[0-9a-f]{12}$ ]] || false
