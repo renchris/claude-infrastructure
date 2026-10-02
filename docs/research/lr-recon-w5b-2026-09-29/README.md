@@ -318,6 +318,20 @@ only one, notifying the shadow session by id (`4079f342-…`), log `shadow-archi
 Its predecessor pid 3437 (21:22Z, the old code) wrote no `live.json`, so the archive-time arm has
 evidence only from 22:36Z on.
 
+### Cutoff moved: the reconciler restarted onto W7f and W7g (2026-10-02 01:21:36Z)
+
+The lead restarted the reconciler onto W7f and W7g (`2f6993024` .. `7d92d8d1e`): pid 28574, started
+01:21:36Z, the last row of `recon/restarts.jsonl` (t=1790904115.07), confirmed by `launchctl print`
+(running, pid 28574, runs 6). The shared checkout is at `62d1960cd`, and its `scripts/limit-recover/`
+is byte-identical to origin/main. **This start time is the cutoff now, and the count is 0.** Only
+cohorts whose limit began after 01:21:36Z count toward the 2. Every cohort open at the restart
+(`next-7d-1791086400`, `next4-7d-1791104400`, `next2-7d-1791025200` and the three `*-none-0`) began
+before it and is evidence only.
+
+W7e (`75642a817`, live 00:40Z) also changed the legacy side: the watcher no longer logs
+`recycle-dead` for a cross-account relaunch that answers. The legacy-corrected rule above should
+therefore fire rarely from here on; when it does, that is worth a look.
+
 ## Census step
 
 Operator step `f0df9145b73a` (the live observe census) was closed with the launchd daemon's own pass:
