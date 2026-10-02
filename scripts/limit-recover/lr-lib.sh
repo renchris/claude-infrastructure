@@ -1064,3 +1064,51 @@ lr_hid_idle_s() { # → integer seconds, or `unreadable`; always rc 0
   else v="$(/usr/sbin/ioreg -c IOHIDSystem 2>/dev/null | awk '/"HIDIdleTime"/ { print int($NF / 1000000000); exit }')"; fi
   case "$v" in ''|*[!0-9]*) echo unreadable ;; *) echo "$v" ;; esac
 }
+
+# ── A REAPED WORKTREE'S RECREATION PLAN (2026-10-01) ─────────────────────────────────────────────
+# Shared by lr-handoff (which hands the plan to lr-fire-resume's existing recreation) and lr-fleet
+# (which parks a session as CWD-GONE only when there is no plan). Three facts, all fail-closed:
+#   ROOT    the transcript's FIRST cwd that is an ancestor-or-equal of the session's cwd — a session
+#           starts at its worktree root, and its last cwd is often a subfolder
+#   BRANCH  the transcript's LAST gitBranch (never HEAD)
+#   REPO    the ONE repository holding refs/heads/<branch>, among LRH_REPO_CANDIDATES (colon list)
+#           or every ~/Development/*/ — zero or several holders ⇒ no plan, never a guess
+# Measured case: the session-durability session's worktree was removed after its work landed; its
+# launcher got the missing subfolder and no branch, and lr-fire-resume exited 2 into a husk pane.
+lr_reaped_worktree_plan() { # $1=transcript $2=cwd → "root<TAB>branch<TAB>repo", or nothing; rc 0 always
+  local tx="$1" cwd="$2" root="" br="" d common seen="" hits="" plan
+  [ -f "$tx" ] || return 0
+  plan="$(python3 - "$tx" "$cwd" <<'PY' 2>/dev/null
+import json, sys
+tx, cwd = sys.argv[1], sys.argv[2].rstrip("/")
+root, br = "", ""
+with open(tx, errors="replace") as fh:
+    for ln in fh:
+        if '"cwd"' not in ln and '"gitBranch"' not in ln:
+            continue
+        try:
+            d = json.loads(ln)
+        except Exception:
+            continue
+        c = (d.get("cwd") or "").rstrip("/")
+        if not root and c and (cwd == c or cwd.startswith(c + "/")):
+            root = c
+        if d.get("gitBranch"):
+            br = d["gitBranch"]
+print(f"{root}\t{br}")
+PY
+  )" || return 0
+  root="${plan%%$'\t'*}"; br="${plan#*$'\t'}"
+  [ -n "$root" ] && [ -n "$br" ] && [ "$br" != HEAD ] || return 0
+  local IFS=:
+  for d in ${LRH_REPO_CANDIDATES:-$(printf '%s:' "$HOME"/Development/*/)}; do
+    [ -d "$d" ] || continue
+    common="$(git -C "$d" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || continue
+    case ":$seen:" in *":$common:"*) continue ;; esac
+    seen="$seen:$common"
+    git --git-dir="$common" show-ref --verify --quiet "refs/heads/$br" 2>/dev/null && hits="$hits:${common%/.git}"
+  done
+  hits="${hits#:}"
+  if [ -n "$hits" ] && [ "${hits#*:}" = "$hits" ]; then printf '%s\t%s\t%s' "$root" "$br" "$hits"; fi
+  return 0
+}

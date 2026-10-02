@@ -815,6 +815,34 @@ else
   }
 fi
 
+# ── A REAPED WORKTREE IS RECREATED, NEVER LAUNCHED INTO (2026-10-01) ─────────────────────────────
+# A session whose worktree was removed after its work landed (worktree-gc, or a clean close) has a
+# CWD that no longer exists, so every git read above came back empty and the launcher was handed a
+# missing folder and no branch. Measured on the session-durability session: lr-fire-resume printed
+# "worktree … missing and no --branch to recreate it", exited 2, and left a husk pane. Three facts
+# are needed and all three survive in the transcript or on disk:
+#   the ROOT    — the session's FIRST recorded cwd that is an ancestor-or-equal of CWD (a session
+#                 starts at its worktree root; its LAST cwd is often a subfolder, and
+#                 `git worktree add <subfolder>` would build the tree in the wrong place)
+#   the BRANCH  — its LAST recorded gitBranch
+#   the REPO    — the ONE repository holding refs/heads/<branch>; lr-fire-resume otherwise defaults
+#                 LR_REPO to reso-management-app, the wrong repo for every other project
+# lr-fire-resume's own recreation (its per-repo git lock, registered-but-missing handling) then runs
+# unchanged. No root, no branch, or zero or several repos ⇒ nothing is guessed: the launch proceeds
+# exactly as before and lr-fleet's CWD-GONE park is the answer. Kill switch LR_RECREATE_WORKTREE=off.
+LRH_LR_REPO=""
+if [[ ! -d "$CWD" && "${LR_RECREATE_WORKTREE:-on}" != off ]]; then
+  _lrh_rtx=""; for _lrh_f in "$CFG"/projects/*/"$SID".jsonl; do [[ -f "$_lrh_f" ]] && { _lrh_rtx="$_lrh_f"; break; }; done
+  _lrh_plan=""
+  [[ -n "$_lrh_rtx" ]] && _lrh_plan="$(lr_reaped_worktree_plan "$_lrh_rtx" "$CWD")"
+  if [[ -n "$_lrh_plan" ]]; then
+    IFS=$'\t' read -r WT_TOP BRANCH LRH_LR_REPO <<<"$_lrh_plan"
+    echo "lr-handoff: worktree $CWD is gone — the launcher will recreate $WT_TOP from branch $BRANCH in $LRH_LR_REPO" >&2
+  else
+    echo "lr-handoff: worktree $CWD is gone and no single repository holds its recorded branch — not recreating it" >&2
+  fi
+fi
+
 # --- bundle ----------------------------------------------------------------
 # ── READ THE SOURCE'S IDENTITY WHILE IT STILL EXISTS ────────────────────────────────────────────
 SRC_PID="" SRC_ARGV="" SRC_TASK_LIST="" SRC_PERM="" RT_MODEL="" RT_EFFORT=""
@@ -1541,6 +1569,7 @@ export LR_RUN_DIR=$(printf '%q' "$BUNDLE")
 export LR_ADMIT_TOKEN=$(printf '%q' "$LRH_ADMIT_TOKEN")
 export LR_SUBMIT_TOKEN=$(printf '%q' "$LR_SUBMIT_TOKEN")
 export LR_LOAD_TERM=$(printf '%q' "${LR_LOAD_TERM:-off}")
+${LRH_LR_REPO:+export LR_REPO=$(printf '%q' "$LRH_LR_REPO")}
 
 EOF
 # THE LAUNCHER'S TAIL IS ONE OF THREE, CHOSEN AT MINT TIME (W2a). A legacy caller gets the tail it

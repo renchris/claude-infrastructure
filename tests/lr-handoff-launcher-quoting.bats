@@ -1015,3 +1015,37 @@ sys.stdout.write(json.dumps({'type':'assistant','timestamp':'2026-09-19T17:00:01
   # …and the budget the two of them buy.
   [ "$hc" -le 2048 ] || { echo "HANDOFF-CONTEXT.md is $hc B (> 2048)"; cat "$B/HANDOFF-CONTEXT.md"; false; }
 }
+
+# ── A REAPED WORKTREE IS RECREATED, NEVER LAUNCHED INTO (2026-10-01) ─────────────────────────────
+# The session-durability session's worktree was removed after its work landed; its launcher got the
+# missing subfolder and no branch, and lr-fire-resume exited 2 into a husk pane.
+reaped_fixture() { # $1=sid → a transcript whose FIRST cwd is the root and LAST is a subfolder
+  ROOT="$BATS_TEST_TMPDIR/wt/feat-reaped"; SUB="$ROOT/docs/x"
+  mkdir -p "$HOME/.claude/projects/p"
+  printf '{"type":"user","cwd":"%s","gitBranch":"feat/reaped"}\n{"type":"user","cwd":"%s","gitBranch":"feat/reaped"}\n' \
+    "$ROOT" "$SUB" > "$HOME/.claude/projects/p/$1.jsonl"
+}
+@test "5. a reaped worktree: the launcher gets the transcript's ROOT, its branch, and the one repo holding it" {
+  local sid="lrhq0005-0000-0000-0000-000000000005"
+  mkrepo "$BATS_TEST_TMPDIR/home-repo" "feat/reaped"
+  reaped_fixture "$sid"
+  LRH_REPO_CANDIDATES="$BATS_TEST_TMPDIR/home-repo" run gen "$sid" "$SUB"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  LAUNCHER="$(launcher_from_output)"
+  [ -n "$LAUNCHER" ]
+  grep -q "^export LR_REPO=.*/home-repo\$" "$LAUNCHER" || { cat "$LAUNCHER"; false; }   # /private/var on macOS
+  cd "$BATS_TEST_TMPDIR"
+  run /bin/bash "$LAUNCHER"
+  [[ "$output" == *"argv[2]=<$ROOT>"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"<--branch>"*"<feat/reaped>"* ]] || { echo "$output"; false; }
+}
+@test "5b. CONTROL: a branch two repositories hold is not guessed — no --branch, no LR_REPO" {
+  local sid="lrhq0006-0000-0000-0000-000000000006"
+  mkrepo "$BATS_TEST_TMPDIR/repo-a" "feat/reaped"; mkrepo "$BATS_TEST_TMPDIR/repo-b" "feat/reaped"
+  reaped_fixture "$sid"
+  LRH_REPO_CANDIDATES="$BATS_TEST_TMPDIR/repo-a:$BATS_TEST_TMPDIR/repo-b" run gen "$sid" "$SUB"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  LAUNCHER="$(launcher_from_output)"
+  ! grep -q "LR_REPO=" "$LAUNCHER" || { cat "$LAUNCHER"; false; }
+  ! grep -q -- "--branch" "$LAUNCHER" || { cat "$LAUNCHER"; false; }
+}

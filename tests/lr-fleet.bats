@@ -167,6 +167,16 @@ row() { printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"claude-se
   [[ "$output" == *"CWD-GONE"* ]] || { echo "$output"; false; }
   [ ! -s "$LRH_LOG" ] || { cat "$LRH_LOG"; false; }
 }
+@test "--one: a reaped cwd whose branch ONE repo holds is handed to lr-handoff to recreate, not parked" {
+  blocked_tx "$SEC" "$SID"
+  gone="$BATS_TEST_TMPDIR/reaped-worktree"
+  sed -i '' "s#\"cwd\":\"$CWD\"#\"cwd\":\"$gone\",\"gitBranch\":\"feat/reaped\"#" "$SEC/projects/$SLUG/$SID.jsonl"
+  git init -q "$BATS_TEST_TMPDIR/holder"; git -C "$BATS_TEST_TMPDIR/holder" -c user.email=t@t -c user.name=t commit -q --allow-empty -m i
+  git -C "$BATS_TEST_TMPDIR/holder" branch feat/reaped
+  LRH_REPO_CANDIDATES="$BATS_TEST_TMPDIR/holder" run bash "$FLEET" --one "$SID" --target next3
+  [[ "$output" != *"CWD-GONE"* ]] || { echo "$output"; false; }
+  grep -q -- "--launch --spawn" "$LRH_LOG" || { echo "$output"; cat "$LRH_LOG"; false; }
+}
 @test "recover CONTROL: a session a live pane holds still goes --in-place with that pane" {
   blocked_tx "$SEC" "$SID"; row 616 "$SID"
   run bash "$FLEET" --one "$SID" --target next3

@@ -268,7 +268,7 @@ sys.exit(0 if last else 1)' || [ "$_husk" = 1 ] || return 0
       # offered 9 stale NO-PANE sessions, 3 of whose cwds no longer exist — a spawn there dies
       # in a missing directory. This is a NAMED gap, never a by-design skip: work may be
       # stranded and only a human can decide whether the tree is worth recreating.
-      [ "$cwd" = "-" ] || [ -d "$cwd" ] || disp=CWD-GONE
+      [ "$cwd" = "-" ] || [ -d "$cwd" ] || lf_cwd_recreatable "$cfg" "$sid" "$cwd" || disp=CWD-GONE
     fi
     if _to="$(lr_transplanted_to "$sid" "$cfg")"; then disp="TRANSPLANTED→$(lf_acct_of_cfg "$_to")"; fi
   fi
@@ -1102,6 +1102,19 @@ sys.exit(0 if ok else 1)' && return 0
   done
   return 1
 }
+# A gone cwd that lr-handoff can recreate (lr_reaped_worktree_plan: the transcript's root, its branch,
+# and the one repository holding it) is not CWD-GONE: the launcher rebuilds it. Kill switch shared
+# with lr-handoff, LR_RECREATE_WORKTREE=off.
+lf_cwd_recreatable() { # $1=cfg $2=sid $3=cwd → 0 a recreation plan exists · 1 none
+  local f
+  [ "${LR_RECREATE_WORKTREE:-on}" != off ] || return 1
+  command -v lr_reaped_worktree_plan >/dev/null 2>&1 || return 1
+  for f in "$1"/projects/*/"$2".jsonl; do
+    [ -f "$f" ] || continue
+    [ -n "$(lr_reaped_worktree_plan "$f" "$3")" ] && return 0
+  done
+  return 1
+}
 lf_acct_has_headroom() { # $1=acct → 0 headroom or unreadable · 1 at a 5-hour or weekly cap
   local bin
   if [ -n "${CC_ACCOUNTS_BIN:-}" ]; then bin="$CC_ACCOUNTS_BIN"   # an override is exclusive, never a first guess
@@ -1629,7 +1642,7 @@ EOF
       esac
     fi
     if [ -z "${LF_NUDGE_TO:-}" ] && { [ -z "$pane" ] || [ "$pane" = - ]; } \
-       && [ -n "$cwd" ] && [ "$cwd" != - ] && [ ! -d "$cwd" ]; then
+       && [ -n "$cwd" ] && [ "$cwd" != - ] && [ ! -d "$cwd" ] && ! lf_cwd_recreatable "$cfg" "$SID" "$cwd"; then
       # CWD-GONE ON THE --one PATH TOO (2026-10-01). The census has refused a reaped worktree since
       # D8, but --one reaches here through the transcript glob without it, so reopening the closed
       # pane 41's session spawned a pane whose launcher died at once (lr-fire-resume rc 2) and the
