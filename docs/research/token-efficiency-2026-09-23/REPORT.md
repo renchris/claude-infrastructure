@@ -335,3 +335,7 @@ re-run, with raw data in `eval/gate/`. The pass/fail rule was fixed in `harness/
   change; after the 2026-09-23 ruling none is wanted — it would be tested offline and shipped to all accounts or none), `validate-bash.sh` false-positive narrowing (a guard change with false-negative risk for ~0.2%), the Stop-hook
   items (13, 17, 20, 26), and every PROPOSE row. The upstream items (setup breakpoint, double Stop reason) need
   Anthropic.
+
+## 6. Realized savings (post-ship readouts)
+
+- **Realized lean-worker saving, 2026-09-24 to 2026-10-01** (measured by `cc-token-ledger --by-agent-type --since 2026-09-24 --until 2026-10-01 --exclude-slug='-private-tmp-|-tmp-|tokeff'`, which leaves out 805 eval/probe worker contexts): 1441 `workflow-lean` worker contexts (1297 workflow slots, 144 subagents) cost $2428.95 at list weights ($2418.96 at Opus 5.5). At the re-gate's measured per-slot ratio (lean = 15.6% of the default worker), the same work on the default type would have cost $13141.24 more: **saving about $13141.24 list ($13087.22 at Opus 5.5) over 7 days, about $28085 per 14.96-day window, 86.4% of the $32,517 baseline** (estimated from measured spend x the gated ratio). Cross-check, not the estimate: mean per workflow slot $1.63 lean vs $2.40 for `workflow-subagent` (1498 slots); task mix differs between the two.
