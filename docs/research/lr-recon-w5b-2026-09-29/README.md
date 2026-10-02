@@ -356,6 +356,13 @@ SHADOW next3-7d-1791288000: members 3 · legacy found 3 · census misses 0 · no
   recon planned a target, so this cohort says nothing about placement feasibility. That is the
   observe-mode limit recorded above.
 
+**Not countable: `next3-auth-0`** (opened 08:18Z). It is an auth-scope cohort on next3, not a
+usage limit. All 4 members are `kind: idle` panes (06ef69f7, 705115e9, 75277dd9 and the dead
+9c4a2015), held `HOLD:iterm` ("relaunch this session by hand"). `recon/facts/next3.auth.json` reads
+`contradicted: true`, and next3's login read `ok` at 17:20Z. Legacy found none of them, so its
+compare (`legacy found 0 · placements feasible 0/0 · phase agree 0/0 → PASS`) judged nothing. Like
+the three `*-none-0` cohorts above, it does not count. The count stays at 1 of 2.
+
 ## Census step
 
 Operator step `f0df9145b73a` (the live observe census) was closed with the launchd daemon's own pass:
