@@ -332,6 +332,30 @@ W7e (`75642a817`, live 00:40Z) also changed the legacy side: the watcher no long
 `recycle-dead` for a cross-account relaunch that answers. The legacy-corrected rule above should
 therefore fire rarely from here on; when it does, that is worth a look.
 
+**Cohort 1 of 2: `next3-7d-1791288000` PASSES** (opened 01:50:20Z, 29 min after the cutoff; settled
+02:27Z with every member terminal CLOSED). Compared at 02:27Z on pid 28574 (shared checkout
+`62d1960cd`, `scripts/limit-recover/` identical to origin/main), comparer at `a3ba677bc`:
+
+```
+SHADOW next3-7d-1791288000: members 3 · legacy found 3 · census misses 0 · not owed 0 · placements feasible 0/0 · phase agree 3/3 (false-RECOVERED resolved 0, plan differed 0) · legacy-corrected 0 → PASS
+  0962ca47 legacy RECOVERED→next4 watcher=ENGAGED · recon ENGAGED/None via=ENGAGED · agree
+  1aa4e1c1 legacy RECOVERED→next3 watcher=nudge:ENGAGED · recon PRE-MOVE/None via=IN-PLACE · agree
+  4079f342 legacy RECOVERED→next3 watcher=nudge:ENGAGED · recon PRE-MOVE/None via=IN-PLACE · agree
+```
+
+- **W7f, observed live.** Two members (4079f342, the shadow session itself, and 1aa4e1c1) were
+  nudged in place on next3 after its limit was contradicted. Within about two minutes the recon
+  logged `engaged-in-place` ("answered in place on next3 after its limit: nothing to move") and
+  closed both CLOSED via `IN-PLACE`, with no R held. This is the shape that failed
+  `next4-7d-1791104400`.
+- **Comparer vocabulary** (`a3ba677bc`). W7f's in-place close leaves the phase PRE-MOVE and sets
+  `close.via = IN-PLACE`. The comparer only knew ENGAGED and MOVED, so its first provisional compare
+  printed DISAGREE on both. It now reads `IN-PLACE` as engaged, pinned in
+  `tests/lr-recon-shadow.bats`. This reads the recon's own terminal verdict; it changes no judgment.
+- **Check 1 is vacuous here** (`placements feasible 0/0`). Legacy recovered every member before the
+  recon planned a target, so this cohort says nothing about placement feasibility. That is the
+  observe-mode limit recorded above.
+
 ## Census step
 
 Operator step `f0df9145b73a` (the live observe census) was closed with the launchd daemon's own pass:
