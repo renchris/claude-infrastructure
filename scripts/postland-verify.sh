@@ -4029,11 +4029,72 @@ identity_hooks_guard() {
   return 0
 }
 
+# ── LANDED-IDENTITY SWEEP: the server-side check GitHub will not sell us (row 8f4eae55a0c7) ─────
+# The pre-commit and pre-push gates are LOCAL: a push from any machine or VM that does not carry
+# them (a cloud session pushing as noreply@anthropic.com, a hand-run push from another clone) lands
+# whatever identity it likes, and GitHub's push ruleset restricting author emails is an Enterprise
+# Cloud feature, so nothing on the server stands in the way. Between 2026-08-24 and 2026-09-04, 93
+# such commits reached main (docs/research/off-identity-commits-trace-2026-10-02.md). This cannot
+# PREVENT one; it makes the next one LOUD within one 5-minute tick instead of invisible for weeks.
+#
+# Every tick, after the fetch: scan origin/main commits not yet scanned (state file = the last tip
+# scanned) and page when an AUTHOR or COMMITTER email is not the sanctioned address — both fields,
+# for pre-push's reason (a rebase rewrites the committer and keeps the author). First run seeds the
+# state at the current tip WITHOUT paging, so the historical set is reported once, by the trace doc,
+# and not re-paged forever. A non-ancestor last tip (a rewritten trunk) rescans from the merge-base.
+# Verdict-free and silent when clean; it never touches FAILING or a stamp. An unreadable identity
+# overlay abstains (logged) rather than paging every commit as off-identity.
+identity_want_email() { # → the sanctioned address, sealed like identity_snap_ok (empty ⇒ unknown)
+  local idf="$HOME/.claude/identity.local.json" ow
+  [ "${CC_GIT_IDENTITY_TEST:-}" = 1 ] && idf="${CC_IDENTITY_FILE:-$idf}"
+  ow="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["git_identity"]["email"])' "$idf" 2>/dev/null || true)"
+  if [ "${CC_GIT_IDENTITY_TEST:-}" = 1 ]; then printf '%s' "${CC_GIT_IDENTITY_EMAIL:-$ow}"
+  else printf '%s' "$ow"; fi
+}
+identity_landed_sweep() { # <tip-sha> — page off-identity commits that reached it since the last scan
+  local tip="$1" want sf last base off n pf
+  [ -n "$tip" ] || return 0
+  sf="$STATE/identity-scan.sha"
+  want="$(identity_want_email)"
+  [ -n "$want" ] || { log "IDENTITY: landed sweep abstained — no git_identity.email in the identity overlay"; return 0; }
+  last="$(cat "$sf" 2>/dev/null || true)"
+  if [ -z "$last" ] || ! git -C "$REPO" cat-file -e "$last^{commit}" 2>/dev/null; then
+    mkdir -p "$STATE" 2>/dev/null || true
+    printf '%s\n' "$tip" > "$sf" 2>/dev/null || true
+    return 0
+  fi
+  [ "$last" = "$tip" ] && return 0
+  base="$last"
+  git -C "$REPO" merge-base --is-ancestor "$last" "$tip" 2>/dev/null \
+    || base="$(git -C "$REPO" merge-base "$last" "$tip" 2>/dev/null || true)"
+  [ -n "$base" ] || { printf '%s\n' "$tip" > "$sf" 2>/dev/null || true; return 0; }
+  off="$(git -C "$REPO" log --format='%h %ae %ce %s' "$base..$tip" 2>/dev/null \
+         | awk -v w="$want" '$2 != w || $3 != w')"
+  if [ -n "$off" ]; then
+    n="$(printf '%s\n' "$off" | grep -c .)"
+    pf="$PAGES/postland-identity-$(sha12 "$tip").page"
+    mkdir -p "$PAGES" 2>/dev/null || true
+    { now_epoch
+      printf 'post-land IDENTITY: %s commit(s) on origin/main carry an author or committer email that is not the sanctioned one @ %s\n' "$n" "$(now_iso)"
+      printf 'range:   %s..%s\n' "$(sha12 "$base")" "$(sha12 "$tip")"
+      printf '         <sha> <author-email> <committer-email> <subject>\n'
+      printf '%s\n' "$off" | head -50 | sed 's/^/         /'
+      printf 'These reached GitHub under the wrong identity. Find the land path that carried them (it bypassed\n'
+      printf 'githooks/pre-push); rewriting them needs a force-push of main, which is your decision.\n'
+    } > "$pf" 2>/dev/null || true
+    log "IDENTITY: $n off-identity commit(s) landed in $(sha12 "$base")..$(sha12 "$tip") — paged $pf"
+    notify "post-land: wrong commit identity" "$n commit(s) on main are not authored as the sanctioned address"
+  fi
+  printf '%s\n' "$tip" > "$sf" 2>/dev/null || true
+  return 0
+}
+
 do_run_if_needed() {
   local target tree new loops=0
   identity_resident_guard                      # BEFORE every abstain — see the note above
   identity_hooks_guard                         # …and the gates themselves must still be there
   git -C "$REPO" fetch origin main >/dev/null 2>&1 || true
+  identity_landed_sweep "$(git -C "$REPO" rev-parse origin/main 2>/dev/null || true)"   # BEFORE every abstain
   target="$(git -C "$REPO" rev-parse origin/main 2>/dev/null || true)"
   [ -n "$target" ] || { idl abstained no-origin-main; return 0; }
   tree="$(tree_of "$target")"
@@ -4983,7 +5044,7 @@ EOF
 }
 
 usage() {
-  echo "usage: postland-verify.sh [--run-if-needed | --run <sha> | bisect <file> <good> <bad> | is-green <sha> | status | --falsify-red <suite> <sha> | --selftest]"
+  echo "usage: postland-verify.sh [--run-if-needed | --run <sha> | bisect <file> <good> <bad> | is-green <sha> | status | identity-sweep [<sha>] | --falsify-red <suite> <sha> | --selftest]"
   echo "  --falsify-red: the STORED FALSIFIER on this script's own backlog items — 0 = a full-corpus green contains that commit AND covered that suite (premise gone) · 1 = still live · 2 = could not ask"
   echo "  kill switches: POSTLAND_VERIFY=off (inert) · POSTLAND_AUTOREVERT=off (verify+page, never push)"
   echo "                 CC_POSTLAND_FLOOR_EXONERATE=off (C30) · CC_POSTLAND_CULPRIT_CONFIRM=off (C32)"
@@ -5017,6 +5078,8 @@ main() {
     is-green)   shift; verb_is_green "${1:-}" ;;
     # --falsify-red is dispatched ABOVE, before the kill switch; it can never reach this case.
     status)     verb_status ;;
+    # The landed-identity sweep alone (the launchd tick also runs it): scans <sha> (default origin/main).
+    identity-sweep) shift; identity_landed_sweep "$(git -C "$REPO" rev-parse "${1:-origin/main}^{commit}" 2>/dev/null || true)" ;;
     --selftest) selftest ;;
     -h|--help)  usage ;;
     *) echo "postland-verify: unknown verb '$1'" >&2; usage >&2; exit 2 ;;
