@@ -225,6 +225,11 @@ nudge() { printf '%s\t841\t841\tnext2\t%s\tnudge-in-place/RECOVERED\t-\t%s\n' "$
   rec "$SIDB" next4 ENGAGED ENGAGED
   run /usr/bin/python3 "$L" compare "$LR" "$CID" --home "$HOME"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # W7f's in-place close keeps the phase PRE-MOVE and closes via IN-PLACE: engaged, agrees
+  rec "$SIDB" next4 PRE-MOVE IN-PLACE
+  run /usr/bin/python3 "$L" compare "$LR" "$CID" --home "$HOME"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"via=IN-PLACE · agree"* ]] || { echo "$output"; false; }
 }
 
 @test "nudge arms: a turn before the row, or on another account, is not ENGAGED" {

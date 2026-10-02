@@ -493,9 +493,11 @@ def _transcript_engaged(cfg: str, sid: str, since: float) -> bool:
 def _recon_engaged(rec: Dict[str, Any]) -> bool:
     via = (rec.get("close") or {}).get("via")
     seen = (rec.get("close") or {}).get("seen") or []
+    # IN-PLACE: W7f's terminal CLOSED for a limited session answering again on its source
+    # (settle.py, "answered in place … nothing to move"); the phase stays PRE-MOVE
     return (
         rec.get("phase") == "ENGAGED"
-        or via in ("ENGAGED", "MOVED")
+        or via in ("ENGAGED", "MOVED", "IN-PLACE")
         or "ENGAGED" in seen
     )
 
