@@ -381,7 +381,9 @@ def cmd_prompt(a: argparse.Namespace) -> int:
 SEPARATORS = re.compile(r"\$\(|[;&|\n()`{}]")
 WRAPPERS = {"bash", "sh", "zsh", "env", "exec", "nohup", "time", "command", "sudo", "xargs",
             "python", "python3", "nice", "caffeinate"}
-VENDOR = {"codex", "gemini"}
+# agy / antigravity: the Antigravity CLI, the Google reviewer lane since the gemini CLI was retired
+# for individual accounts (scripts/research-kit/lib/courier.py header).
+VENDOR = {"codex", "gemini", "agy", "antigravity"}
 KIT_ROUND = {"round.sh", "courier.sh"}
 CC_RESEARCH_BUYING = {"reopen", "extra-round", "round", "frame-critique", "rehearse"}
 ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")

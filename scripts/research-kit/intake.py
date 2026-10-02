@@ -314,7 +314,7 @@ def cmd_contract_page(a: argparse.Namespace) -> int:
     if dead and fr.get("degraded") != "two vendors":
         print(
             f"DEAD LANE {', '.join(dead)}: the program pauses on one operator step to restore it "
-            "(for gemini, one interactive login); the class-B default 'continue on two vendors' "
+            "(for Google, one interactive sign-in to the Antigravity CLI, `agy`); the class-B default 'continue on two vendors' "
             "fires after 48 h (§3.8)",
             file=sys.stderr,
         )

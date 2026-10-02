@@ -69,6 +69,8 @@ label() { python3 "$ROUTER" status --session "${1:-s1}" | jq -r '.label // "none
   [ "$(tool Bash 'bash scripts/handoff-fire.sh --brief b.md')" = deny ]
   [ "$(tool Bash 'codex exec "review"')" = deny ]
   [ "$(tool Bash 'gemini -p hi')" = deny ]
+  [ "$(tool Bash '/opt/agy/bin/agy --print hi --mode plan')" = deny ]
+  [ "$(tool Bash 'antigravity --print hi')" = deny ]
   [ "$(tool Bash 'claude -p "look again"')" = deny ]
   # …and every other tool too, except the one certificate read.
   [ "$(tool Read 'x')" = deny ]

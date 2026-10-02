@@ -6,7 +6,7 @@
   courier.sh integrity --program P --round K
 
 Every vendor CLI is resolved by ABSOLUTE path through the operator's interactive shell, because an
-agent's PATH hides codex and gemini (§3.4). A lane is DEAD when its CLI is missing, exits non-zero,
+agent's PATH hides codex and agy (§3.4). A lane is DEAD when its CLI is missing, exits non-zero,
 times out or replies with nothing parseable. A dead lane is reported and never filled: no reply is
 ever synthesised, and a dead lane's slots are never handed to another vendor (§3.8).
 
@@ -16,10 +16,12 @@ Measured on this machine, 2026-10-01 (the reasons the resolution below is not a 
     that binary is read out of the launcher.
   - OpenAI: `codex exec --json` never names its model; the responding id is in codex's own session
     record, ~/.codex/sessions/**/rollout-*-<thread_id>.jsonl.
-  - Google: `whence -p gemini` returns an fnm per-shell path that dies with its shell; the stable path is
-    the install's bin dir, which must lead PATH so `#!/usr/bin/env node` resolves. Read-only plan mode
-    needs `experimental.plan`, supplied per call through GEMINI_CLI_SYSTEM_SETTINGS_PATH so the
-    operator's own gemini settings are never edited.
+  - Google: the `gemini` CLI is RETIRED for individual accounts — after a successful sign-in it answers
+    `IneligibleTierError: UNSUPPORTED_CLIENT … migrate to the Antigravity suite` — so the Google lane runs
+    the Antigravity CLI, `agy` (installed to ~/.local/bin by antigravity.google/cli/install.sh), headless:
+    `--print … --output-format json --mode plan --sandbox`. A second `agy` on PATH is the Antigravity
+    EDITOR's launcher (a symlink into Antigravity.app) and is never a reviewer, so any candidate that
+    resolves into an .app bundle is skipped.
 Test overrides: CC_RESEARCH_BIN_ANTHROPIC|OPENAI|GOOGLE, CC_RESEARCH_CODEX_SESSIONS.
 """
 
@@ -75,7 +77,8 @@ def resolve(vendor: str) -> Tuple[Optional[str], str]:
         # The launcher (`claude` -> `_claude_pinned`) names its versioned binary; take the newest
         # one that exists, since a stale Homebrew `claude` on PATH cannot run the pinned models.
         _, body = probe_run.interactive(
-            "functions | grep -o '[$A-Za-z0-9/._-]*claude-[0-9][0-9]*/node_modules/.bin/claude' | sort -u")
+            "functions | grep -o '[$A-Za-z0-9/._-]*claude-[0-9][0-9]*/node_modules/.bin/claude' | sort -u"
+        )
         found = []
         for cand in body.split():
             p = cand.replace("$HOME", str(Path.home()))
@@ -86,12 +89,23 @@ def resolve(vendor: str) -> Tuple[Optional[str], str]:
             return max(found)[1], "claude launcher binary"
         rc, p = probe_run.interactive("whence -p claude")
         return (p if rc == 0 and Path(p).is_file() else None), "interactive whence"
-    name = "codex" if vendor == "openai" else "gemini"
-    rc, p = probe_run.interactive(f"whence -p {name}")
+    if vendor == "google":
+        _, body = probe_run.interactive("whence -a agy")
+        cands = [str(Path.home() / ".local" / "bin" / "agy")] + body.split()
+        for c in cands:
+            if (
+                c.startswith("/")
+                and Path(c).is_file()
+                and ".app/" not in os.path.realpath(c)
+            ):
+                return c, "antigravity cli (not the editor launcher)"
+        return (
+            None,
+            "interactive whence: no Antigravity CLI (agy outside an .app bundle)",
+        )
+    rc, p = probe_run.interactive("whence -p codex")
     if rc != 0 or not p.startswith("/"):
         return None, "interactive whence: not found"
-    if vendor == "google":
-        p = str(Path(os.path.realpath(os.path.dirname(p))) / os.path.basename(p))
     return (p if Path(p).exists() else None), "interactive whence"
 
 
@@ -128,9 +142,18 @@ def argv_for(
             + (["-m", model] if model else [])
             + [prompt]
         )
-    return [binary, "-p", prompt, "-o", "json", "--approval-mode", "plan"] + (
-        ["-m", model] if model else []
-    )
+    return [
+        binary,
+        "--print",
+        prompt,
+        "--output-format",
+        "json",
+        "--mode",
+        "plan",
+        "--sandbox",
+        "--add-dir",
+        str(cwd),
+    ] + (["--model", model] if model else [])
 
 
 def call(
@@ -144,11 +167,6 @@ def call(
 ) -> Dict[str, Any]:
     """Run one vendor process. Returns {exit, raw, stderr, reply, model_ids, wall_s, error}."""
     env = dict(os.environ)
-    if vendor == "google":
-        sysf = kit.sealed_dir(slug, create=True) / "gemini-system-settings.json"
-        kit.write_json_atomic(sysf, {"experimental": {"plan": True}})
-        env["PATH"] = f"{os.path.dirname(binary)}:{LAUNCHD_PATH}"
-        env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"] = str(sysf)
     t0 = time.time()
     try:
         p = subprocess.run(
@@ -179,10 +197,15 @@ def call(
     }
     try:
         res["reply"], res["model_ids"] = parse(vendor, out)
+        if vendor == "google" and not res["model_ids"]:
+            res["model_ids"] = agy_models(binary, json.loads(out).get("conversation_id") or "")
     except (ValueError, KeyError, TypeError) as e:
         res["error"] = f"unparseable reply: {e}"
     if rc != 0:
-        last = (err.strip().splitlines() or [f"exit {rc}"])[-1]
+        # The last stderr line names the failure; a CLI that states it only in its JSON (agy:
+        # status ERROR, empty stderr) keeps that statement rather than a bare exit code.
+        lines = err.strip().splitlines()
+        last = lines[-1] if lines else (res["error"] or f"exit {rc}")
         res["error"] = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", last)[:300]
     elif not res["reply"] and not res["error"]:
         res["error"] = "empty reply"
@@ -213,7 +236,41 @@ def parse(vendor: str, out: str) -> Tuple[Optional[str], List[str]]:
                 reply = item.get("text")
         return reply, codex_models(thread) if thread else []
     d = json.loads(out)
-    return d.get("response"), list(((d.get("stats") or {}).get("models") or {}).keys())
+    if d.get("status") == "ERROR" or d.get("error"):
+        raise ValueError(str(d.get("error") or "status ERROR")[:200])
+    ids = (
+        [str(d["model"])]
+        if d.get("model")
+        else list(((d.get("stats") or {}).get("models") or {}).keys())
+    )
+    return d.get("response"), ids
+
+
+def agy_models(binary: str, conversation: str) -> List[str]:
+    """The model the Antigravity CLI ran, from its own log: `agy --print --output-format json` never
+    names it, but the process log that holds the conversation id records the selected model's label
+    ("Propagating selected model override to backend: label=..."), and `agy models` maps label to id."""
+    if not conversation:
+        return []
+    root = Path(os.environ.get("CC_RESEARCH_AGY_LOGS") or (Path.home() / ".gemini" / "antigravity-cli" / "log"))
+    label = None
+    for f in sorted(root.glob("cli-*.log"), key=lambda p: p.stat().st_mtime, reverse=True)[:20]:
+        text = f.read_text(errors="replace")
+        if conversation in text:
+            labels = re.findall(r'selected model override to backend: label="([^"]+)"', text)
+            label = labels[-1] if labels else None
+            break
+    if not label:
+        return []
+    try:
+        p = subprocess.run([binary, "models"], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    for line in p.stdout.splitlines():
+        mid, _, name = line.partition("\t")
+        if name.strip() == label:
+            return [mid.strip()]
+    return []
 
 
 def codex_models(thread: str) -> List[str]:
@@ -255,7 +312,7 @@ def cmd_preflight(a: argparse.Namespace) -> int:
                 a.program,
                 v,
                 binary,
-                "Reply with the single word OK",
+                "Do not use any tools. Answer with exactly the single word OK.",
                 pinned.get(v),
                 work,
                 a.timeout,

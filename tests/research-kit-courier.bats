@@ -2,7 +2,7 @@
 # research-kit-courier — scripts/research-kit/courier.sh (REPORT.md §3.2 step 6, §3.8). A dead
 # vendor lane is reported and never filled; a reply from the wrong model, or one that shows the real
 # program path, voids its slot; the bundle carries what reviewers may read and nothing else.
-# Fake vendor CLIs stand in for claude, codex and gemini; each fakes only the output shape the
+# Fake vendor CLIs stand in for claude, codex and agy (the Antigravity CLI); each fakes only the output shape the
 # courier parses, and each can be told to fail.
 
 setup() {
@@ -36,16 +36,29 @@ sed -i '' 's/"payload":{"model"/"model"/' "$CC_RESEARCH_CODEX_SESSIONS/rollout-x
 printf '{"type":"thread.started","thread_id":"%s"}\n' "$t"
 /usr/bin/python3 -c 'import json,os; print(json.dumps({"type":"item.completed","item":{"type":"agent_message","text":os.environ["FAKE_REPLY"]}}))'
 EOF
-  # gemini: refuses unless run read-only in plan mode with the per-call system settings file.
-  cat > "$B/gemini" <<'EOF'
+  # agy (the Antigravity CLI, the Google lane): refuses unless run read-only (--mode plan, --sandbox)
+  # in print mode; answers in its JSON shape, and an auth failure is status ERROR with exit 1.
+  cat > "$B/agy" <<'EOF'
 #!/bin/bash
-case " $* " in *" --approval-mode plan "*) ;; *) echo "not plan mode" >&2; exit 1 ;; esac
-[ -f "${GEMINI_CLI_SYSTEM_SETTINGS_PATH:-/nonexistent}" ] || { echo "no system settings" >&2; exit 1; }
-m=""; while [ $# -gt 0 ]; do [ "$1" = "-m" ] && m="$2"; shift; done
-/usr/bin/python3 -c 'import json,os,sys; print(json.dumps({"response":os.environ["FAKE_REPLY"],"stats":{"models":{sys.argv[1]:{}}}}))' "${FAKE_MODEL:-$m}"
+if [ "${1:-}" = "models" ]; then printf 'gemini-x\tGemini X (High)\ngemini-y\tGemini Y\n'; exit 0; fi
+case " $* " in *" --mode plan "*) ;; *) echo "not plan mode" >&2; exit 1 ;; esac
+case " $* " in *" --sandbox "*) ;; *) echo "not sandboxed" >&2; exit 1 ;; esac
+m=""; while [ $# -gt 0 ]; do [ "$1" = "--model" ] && m="$2"; shift; done
+if [ -n "${FAKE_AUTH_FAIL:-}" ]; then
+  echo '{"status":"ERROR","response":"","error":"authentication failed or timed out"}'; exit 1
+fi
+if [ -n "${FAKE_LOG_LABEL:-}" ]; then
+  # the real CLI names no model in its JSON; it logs the selected model's label per process
+  mkdir -p "$CC_RESEARCH_AGY_LOGS"
+  printf 'model_config_manager.go:327] Propagating selected model override to backend: label="%s"\nCreated conversation conv-%s\n' \
+    "$FAKE_LOG_LABEL" "$$" > "$CC_RESEARCH_AGY_LOGS/cli-$$.log"
+  /usr/bin/python3 -c 'import json,os,sys; print(json.dumps({"status":"SUCCESS","response":os.environ["FAKE_REPLY"],"conversation_id":"conv-"+sys.argv[1]}))' "$$"
+  exit 0
+fi
+/usr/bin/python3 -c 'import json,os,sys; print(json.dumps({"status":"SUCCESS","response":os.environ["FAKE_REPLY"],"model":sys.argv[1]}))' "${FAKE_MODEL:-$m}"
 EOF
-  chmod +x "$B/claude" "$B/codex" "$B/gemini"
-  export CC_RESEARCH_BIN_ANTHROPIC="$B/claude" CC_RESEARCH_BIN_OPENAI="$B/codex" CC_RESEARCH_BIN_GOOGLE="$B/gemini"
+  chmod +x "$B/claude" "$B/codex" "$B/agy"
+  export CC_RESEARCH_BIN_ANTHROPIC="$B/claude" CC_RESEARCH_BIN_OPENAI="$B/codex" CC_RESEARCH_BIN_GOOGLE="$B/agy"
   printf '# plan\nline two\n' > "$BATS_TEST_TMPDIR/PLAN.md"
   BRIEF="$BATS_TEST_TMPDIR/brief.txt"
   echo "review the plan" > "$BRIEF"
@@ -73,6 +86,13 @@ panel() { /usr/bin/python3 -c "import json; d=json.load(open('$CC_RESEARCH_RECOR
   FAKE_FAIL=1 run "$C" preflight --program demo
   [ "$status" -eq 3 ]
   [ "$(lane anthropic)" = "False None" ]
+}
+
+@test "preflight: an Antigravity sign-in failure is a dead Google lane, never a reply" {
+  FAKE_AUTH_FAIL=1 run "$C" preflight --program demo
+  [ "$status" -eq 3 ]
+  [ "$(lane google)" = "False None" ]
+  [[ "$output" == *"authentication failed"* ]]
 }
 
 @test "preflight: a CLI that hangs past its timeout is a dead lane" {
@@ -130,7 +150,17 @@ panel() { /usr/bin/python3 -c "import json; d=json.load(open('$CC_RESEARCH_RECOR
   [ "$(panel r1p3 'd["status"]')" = "void" ]
 }
 
-@test "run: google runs read-only in plan mode with its per-call settings file" {
+@test "preflight: the Google lane's responding model is read from Antigravity's own log" {
+  export CC_RESEARCH_AGY_LOGS="$BATS_TEST_TMPDIR/agy-logs"
+  FAKE_LOG_LABEL="Gemini X (High)" run "$C" preflight --program demo
+  [ "$status" -eq 0 ]
+  [ "$(lane google)" = "True gemini-x" ]
+  FAKE_LOG_LABEL="Gemini Y" run "$C" preflight --program demo
+  [ "$status" -eq 3 ]
+  [ "$(lane google)" = "False gemini-y" ]
+}
+
+@test "run: google runs the Antigravity CLI read-only (plan mode, sandboxed)" {
   "$C" bundle --program demo --round 1 --plan "$BATS_TEST_TMPDIR/PLAN.md"
   run "$C" run --program demo --round 1 --pid r1p4 --vendor google --strategy full-context --role reviewer --brief "$BRIEF"
   [ "$status" -eq 0 ]

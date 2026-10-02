@@ -41,9 +41,10 @@ for a case-sized question answerable in a day, or when the operator declines eit
 ## Before intake: restore every vendor lane
 
 Certification needs three vendor families (Anthropic, OpenAI, Google). Run
-`scripts/research-kit/probe-run.sh doctor` first. If `gemini` reports a login that needs interactive
-consent, that is one operator step (an interactive `gemini` login in their own terminal); park it before
-anything else, because the vendor preflight at step 6 fails on a dead lane.
+`scripts/research-kit/probe-run.sh doctor` first, then `scripts/research-kit/courier.sh preflight`.
+Google's lane is the Antigravity CLI, `agy` (the `gemini` CLI is retired for individual accounts). If
+its preflight fails on authentication, that is one operator step: run `agy` once in their own terminal
+and finish the Google sign-in. Park it before anything else, because the preflight fails on a dead lane.
 
 ## Stage 1 — intake and the signed frame (§3.2)
 

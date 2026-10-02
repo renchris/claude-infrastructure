@@ -30,7 +30,7 @@ import kit  # noqa: E402
 LAUNCHD_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
 DOCTOR_TOOLS = (
     "codex",
-    "gemini",
+    "agy",
     "claude-latest",
     "claude",
     "shellcheck",
@@ -174,7 +174,7 @@ def interactive(cmd: str) -> Tuple[int, str]:
     rc files print banners, and terminal integrations write escape sequences onto the SAME line as
     the answer, so the answer is fenced with sentinels and only the text between them is kept.
     """
-    fenced = f"__cc_ans=$({cmd}); __cc_rc=$?; print -r -- \"@@CCKIT@@${{__cc_ans}}@@CCKIT@@\"; exit $__cc_rc"
+    fenced = f'__cc_ans=$({cmd}); __cc_rc=$?; print -r -- "@@CCKIT@@${{__cc_ans}}@@CCKIT@@"; exit $__cc_rc'
     rc, out, _ = sh([zsh_path(), "-lic", fenced], timeout=20)
     m = re.findall(r"@@CCKIT@@(.*?)@@CCKIT@@", out, re.S)
     return rc, (m[-1].strip() if m else "")
@@ -185,8 +185,15 @@ def cmd_doctor(a: argparse.Namespace) -> int:
     tools: Dict[str, Any] = {}
     agent_path = os.environ.get("PATH", "").split(":")
     for t in DOCTOR_TOOLS:
-        trc, where = interactive(f"whence -p {t}")
-        found = where if trc == 0 and where.startswith("/") else None
+        trc, where = interactive(f"whence -a {t}")
+        # A name can be a GUI app's launcher earlier on PATH (`agy` is also the Antigravity
+        # editor's symlink into Antigravity.app); a CLI is the first candidate outside an .app bundle.
+        cands = [
+            w
+            for w in where.split()
+            if w.startswith("/") and ".app/" not in os.path.realpath(w)
+        ]
+        found = cands[0] if trc == 0 and cands else None
         agent_hit = next(
             (str(Path(d) / t) for d in agent_path if d and (Path(d) / t).is_file()),
             None,
@@ -230,11 +237,11 @@ def cmd_doctor(a: argparse.Namespace) -> int:
         logins["openai"] = "unknown: codex not found on the interactive PATH"
     logins["google"] = (
         (
-            "unknown: gemini has no read-only login-status verb; the vendor preflight "
-            "(courier.sh preflight) is the check"
+            "unknown: the Antigravity CLI (agy) has no read-only login-status verb; the vendor "
+            "preflight (courier.sh preflight) is the check"
         )
-        if tools["gemini"]["interactive"]
-        else "unknown: gemini not found on the interactive PATH"
+        if tools["agy"]["interactive"]
+        else "unknown: agy not found on the interactive PATH"
     )
     logins["anthropic"] = (
         "unknown: no read-only auth-status verb; the vendor preflight is the check"

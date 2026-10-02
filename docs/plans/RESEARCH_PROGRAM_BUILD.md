@@ -75,6 +75,13 @@ items are live (converged), not when the code is written.
     read from codex's session rollout, since `codex exec --json` never names it), **Google DEAD**: `gemini`'s cached
     OAuth needs interactive consent. Gemini's read-only plan mode needs `experimental.plan`, passed per call through
     `GEMINI_CLI_SYSTEM_SETTINGS_PATH`, so the operator's gemini settings are never edited.
+    CORRECTED (2026-10-01): a re-login does not restore that lane. After the operator signed in, `gemini` answered
+    `IneligibleTierError: UNSUPPORTED_CLIENT … migrate to the Antigravity suite`: Google retired the CLI for
+    individual accounts. The Google lane is now the Antigravity CLI, `agy` (installed to `~/.local/bin` from
+    antigravity.google/cli/install.sh without its shell-edit step), run `--print --output-format json --mode plan
+    --sandbox`; its model id comes from its own process log (the JSON names none). A second `agy` on PATH is the
+    Antigravity editor's launcher and is skipped. Live preflight after the operator's `agy` sign-in: all four
+    lanes live at their pins (Google `gemini-3.8-flash-high`). The research block's vendor list gained `agy`.
   - `kit.probe_level` first let a probe whose negative control RAN AND PASSED earn its level; the probe suite's first
     planted input caught it.
   - Interactive `zsh -lic` writes terminal escape sequences onto the answer line; the doctor fences answers with
@@ -180,6 +187,7 @@ Owns §10 items 1 (deny half), 2, 3, 8, 11, 12, 13 (populating the set). Reads, 
 - Operator verbs to document, all `cc-signoff research:<slug>/{frame|cert|extra-round|reopen|veto/<D>}`
   (`bin/cc-signoff` usage; namespace at `scripts/lib/operator_sign.py:143-160`).
 - Restore the Google lane first: `gemini` needs one interactive login (filed as an operator step at A2's close).
+  CORRECTED (2026-10-01): done; the lane is the Antigravity CLI, `agy`, signed in and live (see A2's learnings).
 - Status: **landed 2026-10-01** (`0fb32f50`, plus `b5085b18` reviving mid-test assertions). Built off-box
   (branch `claude/fire-20261001T113129Z-26618-1`). What exists:
   - `scripts/research-kit/intake.py` — `init` (refuses a numberless superlative, checks the research index,
