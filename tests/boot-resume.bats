@@ -248,6 +248,50 @@ SH
   grep -q 'already-processed' "$CC_IDL"
 }
 
+# ── the 2026-10-02 incident: a clock step moved kern.boottime by ONE second, the exact-match marker
+#    read it as a new boot, and a two-day-old roster was replayed into 15 panes. ──
+@test "boottime jitters by 1 s with no uuid marker → same boot, abstain, zero notifies" {
+  mkdir -p "$CC_BOOT_RESUME_STATE_DIR"; echo "1784800001" > "$CC_BOOT_RESUME_STATE_DIR/last-boot-epoch"
+  reg_entry aaa 1784700000000 claude-quaternary
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [ "$(notify_count)" -eq 0 ]
+  grep -q 'already-processed' "$CC_IDL"
+}
+
+@test "same boot uuid, boottime jittered → abstain; uuid decides even outside the epoch tolerance" {
+  export CC_BOOTUUID_OVERRIDE=AAAA-1111
+  mkdir -p "$CC_BOOT_RESUME_STATE_DIR"
+  echo "1784790000" > "$CC_BOOT_RESUME_STATE_DIR/last-boot-epoch"   # 10 000 s off: epoch alone says NEW
+  echo "AAAA-1111"  > "$CC_BOOT_RESUME_STATE_DIR/last-boot-uuid"
+  reg_entry aaa 1784700000000 claude-quaternary
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [ "$(notify_count)" -eq 0 ]
+  grep -q 'already-processed' "$CC_IDL"
+}
+
+@test "different boot uuid, epoch within tolerance → a NEW boot, one page, both markers advanced" {
+  export CC_BOOTUUID_OVERRIDE=BBBB-2222 CC_BOOT_RESUME_MODE=page
+  mkdir -p "$CC_BOOT_RESUME_STATE_DIR"
+  echo "1784800001" > "$CC_BOOT_RESUME_STATE_DIR/last-boot-epoch"
+  echo "AAAA-1111"  > "$CC_BOOT_RESUME_STATE_DIR/last-boot-uuid"
+  reg_entry g1 1784700000000 claude-quaternary
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [ "$(notify_count)" -eq 1 ]
+  [ "$(marker)" = "1784800000" ]
+  [ "$(cat "$CC_BOOT_RESUME_STATE_DIR/last-boot-uuid")" = "BBBB-2222" ]
+}
+
+@test "pre-uuid marker for this boot → abstain and backfill the uuid marker" {
+  export CC_BOOTUUID_OVERRIDE=CCCC-3333
+  mkdir -p "$CC_BOOT_RESUME_STATE_DIR"; echo "1784800000" > "$CC_BOOT_RESUME_STATE_DIR/last-boot-epoch"
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$CC_BOOT_RESUME_STATE_DIR/last-boot-uuid")" = "CCCC-3333" ]
+}
+
 # ── T-P16-2: resume-mode → launcher per ghost with MAPPED account alias + keepalive ──
 @test "resume-mode: launcher called per ghost with config→reso alias mapped; keepalive started once; summary paged" {
   reg_entry g1 1784700000000 claude-quaternary /Users/x/wt-a aaa

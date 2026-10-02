@@ -176,6 +176,22 @@ boottime() {
   if [ -n "${CC_BOOTTIME_OVERRIDE:-}" ]; then printf '%s' "$CC_BOOTTIME_OVERRIDE"; return 0; fi
   "$SYSCTL" -n kern.boottime 2>/dev/null | sed -n 's/^{ sec = \([0-9][0-9]*\).*/\1/p'
 }
+# ── boot IDENTITY. kern.boottime is wall-clock minus uptime, so a clock step moves it: on 2026-10-02
+#    a network drop and the NTP re-sync after it moved this boot from 1790799966 to 1790799965, the
+#    exact-match marker read that as a NEW boot, and the job replayed a two-day-old roster into 15
+#    panes on accounts those sessions had long left ("No conversation found" x7). kern.bootsessionuuid
+#    is minted once per boot and no clock touches it, so it is the identity; the epoch stays the
+#    WINDOW anchor below. An override epoch with no override uuid reads as "no uuid", so a test that
+#    simulates a new boot is never vetoed by the real machine's uuid. ──
+bootuuid() {
+  if [ -n "${CC_BOOTUUID_OVERRIDE+x}" ]; then printf '%s' "$CC_BOOTUUID_OVERRIDE"; return 0; fi
+  [ -n "${CC_BOOTTIME_OVERRIDE:-}" ] && return 0
+  "$SYSCTL" -n kern.bootsessionuuid 2>/dev/null | tr -d '[:space:]'
+}
+# Epoch fallback for a marker written before the uuid existed (or a box that cannot read it): the
+# same boot within ±N s, the rule compressor-sentinel.sh's freeze_boot_already learned from the same
+# jitter. Two real boots are a whole uptime apart, never a minute.
+BOOT_EPOCH_TOLERANCE="${CC_BOOT_EPOCH_TOLERANCE:-60}"
 
 RECENCY_WINDOW="${CC_BOOT_RESUME_RECENCY_WINDOW:-86400}"   # 24h
 # ── transcript_mtime <account> <sid> <cwd> → epoch secs of the session's transcript LAST write, or "".
@@ -220,6 +236,8 @@ BOOT="$(boottime)"
 MODE="$(resolve_mode)"
 SOURCE=""; SOURCE_LABEL=""
 MARKER="$STATE_DIR/last-boot-epoch"
+UUID_MARKER="$STATE_DIR/last-boot-uuid"
+BOOT_UUID="$(bootuuid)"
 
 case "${1:-}" in --print-boottime) printf '%s\n' "$BOOT"; exit 0 ;; esac
 
@@ -237,8 +255,23 @@ if [ -z "$BOOT" ]; then
 fi
 
 # ── idempotency: this boot already handled → exactly-one-page invariant. ──
-if [ -f "$MARKER" ] && [ "$(cat "$MARKER" 2>/dev/null)" = "$BOOT" ]; then
+same_boot() { # rc 0 when the markers say this boot was already handled
+  local mu me d
+  mu="$(tr -d '[:space:]' < "$UUID_MARKER" 2>/dev/null)"
+  # Both uuids readable → they alone decide, in BOTH directions: a differing uuid is a new boot even
+  # when the epochs sit close together.
+  if [ -n "$BOOT_UUID" ] && [ -n "$mu" ]; then [ "$mu" = "$BOOT_UUID" ]; return; fi
+  me="$(tr -d '[:space:]' < "$MARKER" 2>/dev/null)"
+  case "$me" in ''|*[!0-9]*) return 1 ;; esac
+  d=$((BOOT - me)); [ "$d" -lt 0 ] && d=$((-d))
+  [ "$d" -le "$BOOT_EPOCH_TOLERANCE" ]
+}
+if same_boot; then
   log_idl abstained ',"reason":"already-processed","n_open":0,"resumed":0'
+  # Backfill the uuid on a pre-uuid marker, so the next clock step is decided by the uuid.
+  if [ -n "$BOOT_UUID" ] && [ ! -s "$UUID_MARKER" ]; then
+    printf '%s\n' "$BOOT_UUID" > "$UUID_MARKER" 2>/dev/null || true
+  fi
   exit 0
 fi
 
@@ -438,7 +471,12 @@ if [ "$n_retired" -gt 0 ]; then
   printf '%s' "$RETIRED" | sed 's/^  - /boot-resume: skipped retired session /' >&2
 fi
 
-mark_processed() { mkdir -p "$STATE_DIR" 2>/dev/null || true; printf '%s\n' "$BOOT" > "$MARKER" 2>/dev/null || true; }
+mark_processed() {
+  mkdir -p "$STATE_DIR" 2>/dev/null || true
+  printf '%s\n' "$BOOT" > "$MARKER" 2>/dev/null || true
+  if [ -n "$BOOT_UUID" ]; then printf '%s\n' "$BOOT_UUID" > "$UUID_MARKER" 2>/dev/null || true
+  else rm -f "$UUID_MARKER" 2>/dev/null || true; fi   # a stale uuid must not outvote the epoch
+}
 
 # ── reboot happened but nothing was open → nothing lost, no page. Advance the marker. ──
 if [ "$n_open" -eq 0 ]; then
