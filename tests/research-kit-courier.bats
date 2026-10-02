@@ -125,6 +125,18 @@ panel() { /usr/bin/python3 -c "import json; d=json.load(open('$CC_RESEARCH_RECOR
   [ "$status" -eq 2 ]
 }
 
+@test "bundle: copies carry no integrity needle, so a reviewer that echoes its reads is not voided" {
+  printf '{"deliverable_repo":"%s","reviewer_pins":{"openai":"gpt-x"}}\n' "$BATS_TEST_TMPDIR/repo" > "$CC_RESEARCH_RECORDS/frame.json"
+  printf 'records live at %s\n' "$CC_RESEARCH_RECORDS" > "$CC_RESEARCH_RECORDS/notes.md"
+  "$C" bundle --program demo --round 1 --plan "$BATS_TEST_TMPDIR/PLAN.md"
+  b="$CC_RESEARCH_HOME/demo/rounds/1/bundle"
+  ! grep -rqF -e "$BATS_TEST_TMPDIR/repo" -e "$CC_RESEARCH_RECORDS" "$b" || false
+  grep -qF '<outside-the-bundle>' "$b/frame.json"
+  FAKE_REPLY="$(cat "$b/frame.json") $(cat "$b/notes.md")" run "$C" run --program demo --round 1 --pid echo --vendor openai --strategy full-context --role reviewer --brief "$BRIEF"
+  run "$C" integrity --program demo --round 1
+  [ "$output" = "voided: none" ]
+}
+
 @test "bundle: identical inputs give the same manifest hash in a fresh round" {
   h1="$("$C" bundle --program demo --round 1 --plan "$BATS_TEST_TMPDIR/PLAN.md" | awk '{print $2}')"
   h2="$("$C" bundle --program demo --round 2 --plan "$BATS_TEST_TMPDIR/PLAN.md" | awk '{print $2}')"

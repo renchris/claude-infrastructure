@@ -396,6 +396,22 @@ def cmd_bundle(a: argparse.Namespace) -> int:
             shutil.copytree(e, b / "deps" / e.name)
         else:
             shutil.copyfile(e, b / "deps" / e.name)
+    # The records carry the integrity needles themselves (frame.json's deliverable_repo), and a CLI
+    # that echoes what it reads into its raw output (codex) was voided for reading its own bundle.
+    # The bundle holds placeholders instead, so a needle in a raw output still means an escape.
+    scrub = sorted(integrity_needles(a.program), key=len, reverse=True)
+    for p in sorted(b.rglob("*")):
+        if not p.is_file():
+            continue
+        try:
+            text = p.read_text()
+        except (UnicodeDecodeError, OSError):
+            continue
+        clean = text
+        for n in scrub:
+            clean = clean.replace(n, "<outside-the-bundle>")
+        if clean != text:
+            p.write_text(clean)
     manifest = {
         str(p.relative_to(b)): hashlib.sha256(p.read_bytes()).hexdigest()
         for p in sorted(b.rglob("*"))
