@@ -183,7 +183,7 @@ band_disarmed()  { grep -q '^# DISARMED-map cmd+' "$CONF"; }
   # pane ARRIVING halves whatever it lands beside and kitty has no on_window_added hook. kitty keeps
   # a combine as ONE action whose definition is the whole string (cmd_d_n stays 1) and resolves it at
   # dispatch, so this still matches a single whole line — and still proves the launch half verbatim.
-  echo "$output" | grep -qxF 'cmd_d_last=combine : launch --location=vsplit --cwd=current ${HOME}/.claude/bin/kitty-split-cwd.sh : layout_action equalize' || { echo "$output"; false; }
+  echo "$output" | grep -qxF 'cmd_d_last=combine : launch --location=vsplit --cwd=current ${HOME}/.claude/bin/kitty-split-cwd.sh : kitten ${HOME}/.claude/scripts/kitty-equalize.py' || { echo "$output"; false; }
 }
 
 @test "cmd+shift+d splits horizontally and NOT close_window — the last-wins inversion guard" {
@@ -198,7 +198,7 @@ band_disarmed()  { grep -q '^# DISARMED-map cmd+' "$CONF"; }
   # Combine form since 2026-09-19 (see ⌘D above). The inversion guard is UNWEAKENED: an exact
   # whole-line match on a string beginning `combine : launch --location=hsplit` excludes
   # close_window exactly as the bare launch form did, and the MUTANT CONTROL below still proves it.
-  echo "$output" | grep -qxF 'cmd_shift_d_last=combine : launch --location=hsplit --cwd=current ${HOME}/.claude/bin/kitty-split-cwd.sh : layout_action equalize' || { echo "$output"; false; }
+  echo "$output" | grep -qxF 'cmd_shift_d_last=combine : launch --location=hsplit --cwd=current ${HOME}/.claude/bin/kitty-split-cwd.sh : kitten ${HOME}/.claude/scripts/kitty-equalize.py' || { echo "$output"; false; }
 }
 
 @test "MUTANT CONTROL: dropping our cmd+shift+d line lets close_window win, and the guard sees it" {

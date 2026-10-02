@@ -203,15 +203,15 @@ main()'
   [ -x "$KITTY" ] || skip "kitty is not installed"
   run chord_defs "$CONF"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  echo "$output" | grep -q '^cmd_d=combine .*--location=vsplit.*layout_action equalize' || { echo "$output"; false; }
-  echo "$output" | grep -q '^cmd_shift_d=combine .*--location=hsplit.*layout_action equalize' || { echo "$output"; false; }
+  echo "$output" | grep -q '^cmd_d=combine .*--location=vsplit.*kitten .*kitty-equalize\.py$' || { echo "$output"; false; }
+  echo "$output" | grep -q '^cmd_shift_d=combine .*--location=hsplit.*kitten .*kitty-equalize\.py$' || { echo "$output"; false; }
 }
 
 @test "CONTROL: without the combine the chord carries only the launch — the guard can fail" {
   [ -x "$KITTY" ] || skip "kitty is not installed"
   MUT="$BATS_TEST_TMPDIR/chord-mutant.conf"
   sed -e 's/^map cmd+d       combine : launch /map cmd+d       launch /' \
-      -e 's/ : layout_action equalize$//' "$CONF" > "$MUT"
+      -e 's/ : kitten [^ ]*kitty-equalize\.py$//' "$CONF" > "$MUT"
   grep -q '^map cmd+d       launch --location=vsplit' "$MUT" || { echo "mutation did not apply"; false; }
   run chord_defs "$MUT"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
