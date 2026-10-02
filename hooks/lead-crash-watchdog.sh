@@ -1542,6 +1542,37 @@ paint_pane_verdict() { # $1=sid $2=pid $3=class $4=cause $5=exit $6=sig $7=tpath
   else
     log "[watchdog $sid] pane verdict WRITE FAILED on $tty (pane ${LEAD_PANE:-?}): $headline"
   fi
+  case "$block" in *"This pane holds nothing"*) pane_verdict_close "$sid" "$tty" ;; esac
+  return 0
+}
+# ── A PANE THAT HOLDS NOTHING IS CLOSED, NOT LABELLED (2026-10-01) ──────────────────────────────────
+# The banner above told the operator "safe to close (Ctrl-D)" and stopped there, and nothing else
+# ever closed such a pane: cc-husk-sweep only resumes, bin/cc-pane-close only runs when called. The
+# operator then had to find and close them by hand (pane 1, "✅ closed bf6674d6", 2026-10-01), against
+# the standing ruling of that day that agents close the operator's local kitty panes with no human in
+# the loop (settings.json autoMode environment, "Local terminal panes"). So the three verdicts whose
+# banner says the pane holds nothing — a clean exit with clean, landed work, a desk retirement, a
+# retired teammate — hand the pane to cc-pane-close after a short grace. The closer re-proves every
+# fact itself and fails closed (identity by this daemon's registration line, nothing live in the
+# window, the session's own `Good to close: yes` or a teammate/custody ruling, no uncommitted work),
+# so this adds a trigger, not a judgment. The banner stays: if the closer refuses, it is still right.
+# Kill switch CC_PANE_VERDICT_CLOSE=off · CC_PANE_VERDICT_CLOSE_GRACE_S (20) · CC_PANE_CLOSE_BIN.
+pane_verdict_close() { # $1=sid $2=tty — ALWAYS returns 0; the close verdict goes to the log
+  local sid="$1" tty="$2" bin rc=0 out procs
+  [[ "${CC_PANE_VERDICT_CLOSE:-on}" != off ]] || { log "[watchdog $sid] pane close SUPPRESSED (CC_PANE_VERDICT_CLOSE=off)"; return 0; }
+  [[ "${LEAD_PANE:-}" =~ ^[0-9]+$ ]] || { log "[watchdog $sid] pane close SKIPPED — pane id '${LEAD_PANE:-}' is not a kitty window id"; return 0; }
+  bin="${CC_PANE_CLOSE_BIN:-$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")")/../bin/cc-pane-close}"
+  [[ -x "$bin" ]] || bin="$HOME/.claude/bin/cc-pane-close"
+  [[ -x "$bin" ]] || { log "[watchdog $sid] pane close SKIPPED — cc-pane-close not found"; return 0; }
+  sleep "${CC_PANE_VERDICT_CLOSE_GRACE_S:-20}"
+  # Re-read after the grace: the operator may have started something in the pane meanwhile.
+  [[ -e "$PANE_VERDICT_DEV/$tty" ]] || { log "[watchdog $sid] pane close NOT NEEDED — $tty closed during the grace"; return 0; }
+  procs=$(pane_tty_procs "$tty")
+  if [[ -z "$procs" ]] || ! printf '%s\n' "$procs" | pane_procs_are_shells; then
+    log "[watchdog $sid] pane close NOT ATTEMPTED — $tty is no longer at a bare shell after the grace"; return 0
+  fi
+  out=$("$bin" --pane "$LEAD_PANE" 2>&1 </dev/null) || rc=$?
+  log "[watchdog $sid] pane close of ${LEAD_PANE} via cc-pane-close rc=$rc: ${out//$'\n'/ }"
   return 0
 }
 

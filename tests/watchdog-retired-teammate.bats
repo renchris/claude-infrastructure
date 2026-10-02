@@ -23,6 +23,9 @@ setup() {
   # the pane: a fixture "tty" file and a procs file standing in for `ps -t <tty> -o stat=,command=`
   export CC_PANE_VERDICT_DEV="$T/dev" CC_PANE_VERDICT_TTY=ttys099 CC_PANE_VERDICT_TTY_PROCS="$T/procs"
   export CC_PANE_VERDICT_SETTLE_S=0 CC_PANE_VERDICT_PANE=33 CC_PANE_VERDICT_CFG="/x/.claude-tertiary" CC_PANE_VERDICT_CWD="$T/nocwd"
+  # a "holds nothing" verdict hands the pane to the closer: a recorder here, never the real one
+  export CC_PANE_CLOSE_BIN="$T/stub-pane-close" CC_PANE_VERDICT_CLOSE_GRACE_S=0
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s"\n' "$T/closed.txt" > "$CC_PANE_CLOSE_BIN"; chmod +x "$CC_PANE_CLOSE_BIN"
   : > "$T/dev/ttys099"; printf 'Ss+ /bin/zsh -l\n' > "$T/procs"
   # the death page and the OS notification, stubbed as argv collectors
   PAGED="$T/paged.txt"; OSA="$T/osa.txt"

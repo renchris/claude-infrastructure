@@ -27,6 +27,9 @@ setup() {
   export CC_PANE_VERDICT_DEV="$T/dev" CC_PANE_VERDICT_TTY=ttys099 CC_PANE_VERDICT_TTY_PROCS="$T/procs"
   export CC_PANE_VERDICT_SETTLE_S=0 CC_PANE_VERDICT_PANE=330 CC_PANE_VERDICT_CFG="/x/.claude-tertiary"
   export CC_PANE_VERDICT_CWD="$T/cwd"
+  # the closer a "holds nothing" verdict hands the pane to: a recorder, never the real cc-pane-close
+  export CC_PANE_CLOSE_BIN="$T/stub-pane-close" CC_PANE_VERDICT_CLOSE_GRACE_S=0
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s"\necho "closed"\n' "$T/closed.txt" > "$CC_PANE_CLOSE_BIN"; chmod +x "$CC_PANE_CLOSE_BIN"
   : > "$T/dev/ttys099"; printf 'Ss+ /bin/zsh -l\n' > "$T/procs"; printf '999\n' > "$T/roles/desk"
   # the session's cwd: a git repo, dirty by default (an untracked file); tests make it clean as needed
   mkdir -p "$T/cwd"; git -C "$T/cwd" init -q; git -C "$T/cwd" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
@@ -116,6 +119,30 @@ painted() { cat "$T/dev/ttys099"; }
   painted | grep -q 'reason: prompt_input_exit'
   painted | grep -q 'safe to close'
   ! painted | grep -q 'KILLED' || false
+}
+
+@test "a clean exit over CLEAN work hands its pane to cc-pane-close after painting" {
+  rm -f "$T/cwd/scratch.txt"
+  run verdict_with "$HOOK" RECYCLE clean-exit 0 ""
+  painted | grep -q 'safe to close'
+  grep -qx -- '--pane 330' "$T/closed.txt" || { cat "$T/closed.txt" 2>/dev/null; false; }
+}
+@test "CONTROL: a clean exit over DIRTY work is never handed to the closer" {
+  run verdict_with "$HOOK" RECYCLE clean-exit 0 ""
+  [ ! -s "$T/closed.txt" ] || { cat "$T/closed.txt"; false; }
+}
+@test "CONTROL: a crash verdict is never handed to the closer" {
+  rm -f "$T/cwd/scratch.txt"
+  run verdict_with "$HOOK" CRASH external-sigterm 143 15
+  [ ! -s "$T/closed.txt" ] || { cat "$T/closed.txt"; false; }
+}
+@test "a desk retirement's pane is handed to the closer; CC_PANE_VERDICT_CLOSE=off paints only" {
+  run verdict_with "$HOOK" RECYCLE retired-by-desk 137 9
+  grep -qx -- '--pane 330' "$T/closed.txt" || false
+  rm -f "$T/closed.txt"; : > "$T/dev/ttys099"
+  CC_PANE_VERDICT_CLOSE=off run verdict_with "$HOOK" RECYCLE retired-by-desk 137 9
+  painted | grep -q 'safe to close'
+  [ ! -s "$T/closed.txt" ] || { cat "$T/closed.txt"; false; }
 }
 
 @test "a clean exit over DIRTY work warns about the work instead of saying safe" {
