@@ -49,6 +49,17 @@ evidence() { hf_transplant_evidence "$SID" "$(roots)" --recycle "" 2>"$T/err"; }
   grep -q "the chain tip is" "$T/err"
 }
 
+@test "2-hop A→B→C where B is a mirror config dir (B/projects is a symlink to M/projects) resolves to the tip" {
+  # 2026-10-02, pane 30: next2→next→next4. ~/.claude-next/projects → ~/.claude/projects, the hop
+  # named .claude-next, and the onward tombstone was enumerated under .claude/projects first.
+  mkdir -p "$T/cfg-m/projects/-p"; rm -rf "$T/cfg-b/projects"; ln -s "$T/cfg-m/projects" "$T/cfg-b/projects"
+  tomb a b
+  printf '{"handed_off_to":"%s","lock":"%s"}\n' "$T/cfg-c" "$LOCK" > "$T/cfg-m/projects/-p/$SID.HANDOFF.json"
+  hf_transplant_evidence "$SID" "$T/cfg-m/projects $(roots)" --recycle "" 2>"$T/err" || { cat "$T/err"; false; }
+  [ "$HF_TS_TOMBSTONE" = "$T/cfg-m/projects/-p/$SID.HANDOFF.json" ] || { cat "$T/err"; false; }
+  [ "$HF_TS_TO" = "$T/cfg-c" ]
+}
+
 @test "3-hop A→B→C→D resolves to the tip (C's tombstone), whatever order the roots list them" {
   tomb a b; tomb b c; tomb c d
   evidence

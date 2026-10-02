@@ -3366,8 +3366,12 @@ hf_ts_chain_tip() { # $1=sid $2..=distinct tombstone paths → rc 0 + the tip's 
     to="$(jq -r '.handed_off_to // empty' "$ts" 2>/dev/null || true)"
     if [ -z "$to" ]; then echo "$ts names no destination"; return 2; fi
     if [ ! -d "$to/projects" ]; then echo "destination store $to/projects is missing"; return 2; fi
-    rs="$(cd "${ts%/projects/*}" 2>/dev/null && pwd -P)" || rs="${ts%/projects/*}"
-    rto="$(cd "$to" 2>/dev/null && pwd -P)" || rto="$to"
+    # Stores are compared by their RESOLVED projects/ dir, not their config dir: ~/.claude-next and
+    # ~/.claude are two config dirs over ONE projects/ (a symlink), so a hop INTO .claude-next whose
+    # onward tombstone is enumerated under .claude/projects read as a broken chain — "reaches 1 of
+    # 2 (a cycle)" — and refused the second hop of a next-account session (2026-10-02, pane 30).
+    rs="$(cd "${ts%/projects/*}/projects" 2>/dev/null && pwd -P)" || rs="${ts%/projects/*}/projects"
+    rto="$(cd "$to/projects" 2>/dev/null && pwd -P)" || rto="$to/projects"
     edges="$edges$ts $rs $rto
 "
     if ! ls "$to"/projects/*/"$sid".HANDOFF.json >/dev/null 2>&1; then
