@@ -203,7 +203,7 @@ STUB
 
 mk_sock() {  # a real AF_UNIX socket at $TMP/socks/kitty-<pid>, bound by a RELATIVE name (short path)
   mkdir -p "$TMP/socks"
-  (cd "$TMP/socks" && python3 -c 'import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "kitty-$1")
+  /usr/bin/python3 -c 'import os,socket,sys; d,b=os.path.split(os.path.abspath(sys.argv[1])); os.chdir(d); socket.socket(socket.AF_UNIX).bind(b)' "$TMP/socks/kitty-$1"
   [ -S "$TMP/socks/kitty-$1" ]
 }
 mk_kitty() {  # $1 = exit status of the stubbed `kitty @ … load-config`
