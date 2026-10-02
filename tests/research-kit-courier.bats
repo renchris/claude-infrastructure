@@ -43,6 +43,9 @@ EOF
 if [ "${1:-}" = "models" ]; then printf 'gemini-x\tGemini X (High)\ngemini-y\tGemini Y\n'; exit 0; fi
 case " $* " in *" --mode plan "*) ;; *) echo "not plan mode" >&2; exit 1 ;; esac
 case " $* " in *" --sandbox "*) ;; *) echo "not sandboxed" >&2; exit 1 ;; esac
+# the real CLI auto-denies the shell command its model reaches for to read files, and answers empty
+case "$*" in *"built-in file viewing"*) ;; *)
+  echo '{"status":"SUCCESS","response":"","denied_actions":[{"action":"command","display_name":"RunCommand"}]}'; exit 0 ;; esac
 m=""; while [ $# -gt 0 ]; do [ "$1" = "--model" ] && m="$2"; shift; done
 if [ -n "${FAKE_AUTH_FAIL:-}" ]; then
   echo '{"status":"ERROR","response":"","error":"authentication failed or timed out"}'; exit 1

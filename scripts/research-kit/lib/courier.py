@@ -118,6 +118,12 @@ def pins(slug: str) -> Dict[str, str]:
     )
 
 
+AGY_READS_NOTE = (
+    "Shell commands are unavailable in this mode. Read and search the files in your working directory "
+    "with your built-in file viewing and search tools only."
+)
+
+
 def argv_for(
     vendor: str, binary: str, prompt: str, model: Optional[str], cwd: Path
 ) -> List[str]:
@@ -142,10 +148,13 @@ def argv_for(
             + (["-m", model] if model else [])
             + [prompt]
         )
+    # Headless agy auto-denies every shell command, and its model reaches for one to read the bundle,
+    # so a reviewer read nothing and returned an empty reply (dead slot). Its built-in file viewer is
+    # allowed; this transport note, ahead of the frozen brief, steers it there.
     return [
         binary,
         "--print",
-        prompt,
+        f"{AGY_READS_NOTE}\n\n{prompt}",
         "--output-format",
         "json",
         "--mode",
@@ -198,7 +207,9 @@ def call(
     try:
         res["reply"], res["model_ids"] = parse(vendor, out)
         if vendor == "google" and not res["model_ids"]:
-            res["model_ids"] = agy_models(binary, json.loads(out).get("conversation_id") or "")
+            res["model_ids"] = agy_models(
+                binary, json.loads(out).get("conversation_id") or ""
+            )
     except (ValueError, KeyError, TypeError) as e:
         res["error"] = f"unparseable reply: {e}"
     if rc != 0:
@@ -252,18 +263,31 @@ def agy_models(binary: str, conversation: str) -> List[str]:
     ("Propagating selected model override to backend: label=..."), and `agy models` maps label to id."""
     if not conversation:
         return []
-    root = Path(os.environ.get("CC_RESEARCH_AGY_LOGS") or (Path.home() / ".gemini" / "antigravity-cli" / "log"))
+    root = Path(
+        os.environ.get("CC_RESEARCH_AGY_LOGS")
+        or (Path.home() / ".gemini" / "antigravity-cli" / "log")
+    )
     label = None
-    for f in sorted(root.glob("cli-*.log"), key=lambda p: p.stat().st_mtime, reverse=True)[:20]:
+    for f in sorted(
+        root.glob("cli-*.log"), key=lambda p: p.stat().st_mtime, reverse=True
+    )[:20]:
         text = f.read_text(errors="replace")
         if conversation in text:
-            labels = re.findall(r'selected model override to backend: label="([^"]+)"', text)
+            labels = re.findall(
+                r'selected model override to backend: label="([^"]+)"', text
+            )
             label = labels[-1] if labels else None
             break
     if not label:
         return []
     try:
-        p = subprocess.run([binary, "models"], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60)
+        p = subprocess.run(
+            [binary, "models"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
     except (OSError, subprocess.SubprocessError):
         return []
     for line in p.stdout.splitlines():
