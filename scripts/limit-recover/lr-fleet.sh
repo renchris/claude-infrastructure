@@ -1087,10 +1087,14 @@ lf_last_is_limit() { # $1=cfg $2=sid → 0 when the newest main-thread record in
   local f
   for f in "$1"/projects/*/"$2".jsonl; do
     [ -f "$f" ] || continue
+    # Bytes in, decoded with "replace": `tail -c` cuts wherever the byte count lands, and a cut inside
+    # a multi-byte character made a strict decode raise, which exited 1 and read as "moved past its
+    # limit" — so a session still on its limit error got "nothing to do" (2026-10-02, pane 30).
     tail -c 400000 "$f" 2>/dev/null | /usr/bin/python3 -c '
 import json, sys
 last = None
-for ln in sys.stdin:
+for raw in sys.stdin.buffer:
+    ln = raw.decode("utf-8", "replace")
     if "\"type\"" not in ln: continue
     try: d = json.loads(ln)
     except Exception: continue
@@ -1640,6 +1644,17 @@ EOF
         _tl=0; lf_transplanted_live "$SID" "${_to:-$cfg}" || _tl=$?
         case "$_tl" in 0) exit 0 ;; 2) LF_NUDGE_TO="${_to:-$cfg}" ;; *) LF_STRANDED_TO="${_to:-$cfg}" ;; esac ;;
       esac
+    fi
+    # A HOLDER CAPPED AGAIN IS A NEW HOP, NOT A PARK (2026-10-02, pane 30). The nudge types into the
+    # holder only when ITS account has headroom; capped, it parked — and a weekly cap parks for days
+    # while other accounts sit idle, even under an explicit --target. The holder store now owns the
+    # lock, so lr-transplant admits it as the next hop: recover it from there like any limited
+    # session (lf_one still wakes in place first if that account has recovered). Kill switch
+    # LF_REHOP_CAPPED=off restores the park.
+    if [ -n "${LF_NUDGE_TO:-}" ] && [ "${LF_REHOP_CAPPED:-on}" != off ] \
+       && ! lf_acct_has_headroom "$(lf_acct_of_cfg "$LF_NUDGE_TO")"; then
+      cfg="$LF_NUDGE_TO"; acct="$(lf_acct_of_cfg "$cfg")"; LF_NUDGE_TO=""
+      echo "lr-fleet: --one $SID — held on $acct, which is capped again; recovering it onward from $acct" >&2
     fi
     if [ -z "${LF_NUDGE_TO:-}" ] && { [ -z "$pane" ] || [ "$pane" = - ]; } \
        && [ -n "$cwd" ] && [ "$cwd" != - ] && [ ! -d "$cwd" ] && ! lf_cwd_recreatable "$cfg" "$SID" "$cwd"; then

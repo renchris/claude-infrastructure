@@ -1017,13 +1017,46 @@ STUB
   [[ "$output" != *"RECOVERED"* ]] || { echo "$output"; false; }
 }
 
-@test "…a holder whose account is still capped is PARKED and nothing is typed" {
-  transplanted_fixture; row 700 "$SID"; nudge_tui 0 1
+capped_holder() {
   export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/accounts-capped"
   printf '#!/bin/sh\necho %s\n' "'{\"rows\":[{\"acct\":\"next3\",\"session_pct\":0,\"weekly_pct\":100}]}'" > "$CC_ACCOUNTS_BIN"; chmod +x "$CC_ACCOUNTS_BIN"
+}
+
+@test "…a holder whose account is capped AGAIN is moved onward FROM the holder's store, and nothing is typed" {
+  # 2026-10-02, pane 30: moved next2→next, then capped weekly on next too; the park would have
+  # held it for days while two accounts sat idle, explicit --target ignored.
+  transplanted_fixture; row 700 "$SID"; nudge_tui 0 1; capped_holder
   run bash "$FLEET" --one "$SID" --target next2
+  [[ "$output" != *"parked/capped"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"capped again; recovering it onward"* ]] || { echo "$output"; false; }
+  grep -q -- "--config-dir $TER .*--target next2" "$LRH_LOG" || { echo "$output"; cat "$LRH_LOG"; false; }
+  [ ! -s "$BATS_TEST_TMPDIR/tui.log" ] || { cat "$BATS_TEST_TMPDIR/tui.log"; false; }
+}
+
+@test "CONTROL: LF_REHOP_CAPPED=off restores the park — nothing typed, nothing moved" {
+  transplanted_fixture; row 700 "$SID"; nudge_tui 0 1; capped_holder
+  LF_REHOP_CAPPED=off run bash "$FLEET" --one "$SID" --target next2
   [[ "$output" == *"parked/capped"* ]] || { echo "$output"; false; }
   [ ! -s "$BATS_TEST_TMPDIR/tui.log" ] || { cat "$BATS_TEST_TMPDIR/tui.log"; false; }
+  [ ! -s "$LRH_LOG" ] || { cat "$LRH_LOG"; false; }
+}
+
+@test "a 400 KB tail that starts inside a multi-byte character still reads the limit error (no 'nothing to do')" {
+  # 2026-10-02, pane 30: `tail -c` cut mid-character, the strict decode raised, and the exit 1
+  # read as "moved past its limit".
+  transplanted_fixture; row 700 "$SID"; nudge_tui 0 1
+  local f="$TER/projects/$SLUG/$SID.jsonl" tmp="$BATS_TEST_TMPDIR/pad.jsonl" sfx
+  # One long line of "é" (0xC3 0xA9) ahead of the error, so the 400 KB cut lands inside the run;
+  # `tail -c` counts from the END, so the one-byte alignment knob sits AFTER the run.
+  for sfx in '"}' '" }'; do
+    { printf '{"type":"x","p":"'; head -c 250000 /dev/zero | LC_ALL=C tr '\0' 'Z' | sed 's/Z/é/g'; printf '%s\n' "$sfx"; cat "$f"; } > "$tmp"
+    tail -c 400000 "$tmp" | head -c 1 | od -An -tx1 | grep -q a9 && break
+  done
+  tail -c 400000 "$tmp" | head -c 1 | od -An -tx1 | grep -q a9 || { echo "fixture did not cut mid-character"; false; }
+  mv "$tmp" "$f"
+  run bash "$FLEET" --one "$SID" --target next2
+  [[ "$output" != *"nothing to do"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"nudge-in-place/RECOVERED"* ]] || { echo "$output"; false; }
 }
 
 @test "…and under --detach the nudge's verdict reaches the requester as mail" {
