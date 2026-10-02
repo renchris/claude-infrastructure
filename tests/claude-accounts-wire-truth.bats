@@ -343,5 +343,6 @@ for out in (refused, allowed):
 assert ca.board_bar(94.0) == "███████▌", ca.board_bar(94.0)
 assert ca.board_bar(100.0) == "████████"
 print("OK")'
-  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
