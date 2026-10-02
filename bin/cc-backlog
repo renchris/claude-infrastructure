@@ -2503,7 +2503,7 @@ cmd_add() {
         printf '  exhaustively; if it then clears %s%%, IMPLEMENT it; only if it is still below, ask — with the\n' "$ask_max"
         printf '  number, the receipt of that research, and the measured options in operator terms.\n'
         printf '  A step that needs the operator'"'"'s HANDS (sudo · physical · GUI-only) is not a decision — file\n'
-        printf '  that with:  cc-backlog needs "<step>" [--run "<cmd>"]\n'
+        printf '  that with:  cc-backlog needs "<step>" --class needs-human [--run "<cmd>"]\n'
         printf '  Cannot state a number or name the research? Then the investigation is still yours: drive it.\n'
       } >&2
       return 2
@@ -4233,7 +4233,7 @@ cmd_needs() {
         if [ -z "$step" ]; then step="$key"
         else
           { printf 'cc-backlog needs: unexpected extra argument %s\n' "$key"
-            printf '  the step is ONE quoted argument:  cc-backlog needs "authenticate motion-plus in /mcp"\n'
+            printf '  the step is ONE quoted argument:  cc-backlog needs "authenticate motion-plus in /mcp" --class needs-credential\n'
           } >&2
           return 2
         fi ;;
@@ -4246,15 +4246,23 @@ cmd_needs() {
       "$klass" >&2
     return 2
   fi
-  if [ -z "$klass" ] && [ -z "$(needs_class "$step")" ] && [ "$nforce" -eq 0 ] \
-     && [ "$(class_gate_mode)" = enforce ]; then
-    gate_log refused-transition id "" verb needs reasons unclassed
-    printf 'cc-backlog needs: REFUSED (unclassed) — add --class needs-human|needs-credential|not-yet-true|no-capacity (or --force, logged)\n' >&2
-    return 2
+  if [ -z "$klass" ] && [ -z "$(needs_class "$step")" ] && [ "$nforce" -eq 0 ]; then
+    case "$(class_gate_mode)" in
+      enforce)
+        gate_log refused-transition id "" verb needs reasons unclassed
+        printf 'cc-backlog needs: REFUSED (unclassed) — add --class needs-human|needs-credential|not-yet-true|no-capacity (or --force, logged)\n' >&2
+        return 2 ;;
+      # VISIBLE in warn mode for `needs` only (row 12b4209cb7fc). class_gate_block stays log-only
+      # because producers' stderr is relayed into transcripts, but 10 of the 14 unclassed events in the
+      # first window came from agents typing `needs` in a tool shell — the one caller that reads
+      # stderr and can learn from it. Every machine caller of `needs` already passes --class.
+      warn)
+        printf 'cc-backlog needs: WARN unclassed — add --class needs-human|needs-credential|not-yet-true|no-capacity; refused once the class gate enforces\n' >&2 ;;
+    esac
   fi
   [ -n "$step" ] || {
     { printf 'cc-backlog needs: "<operator-only step>" is required\n'
-      printf '  usage: cc-backlog needs "<step>" [--run "<cmd>"] [--falsifier "<probe>"] [--project P] [--session SID]\n'
+      printf '  usage: cc-backlog needs "<step>" --class needs-human|needs-credential|not-yet-true|no-capacity [--run "<cmd>"] [--falsifier "<probe>"] [--project P] [--session SID]\n'
     } >&2
     return 2
   }

@@ -63,7 +63,7 @@ row_of() { jq -c --arg c "$1" 'select(.class == $c)' "$LOG" | tail -1; }
   run classes
   [[ "$output" == *"recycle-held-wedged"* ]] || { echo "$output"; false; }
   [[ "$output" != *"recycle-intent"* ]] || { echo "an intent row was written for a recycle that never started"; false; }
-  grep -qF "needs restart kitty (control socket stuck: queue full) --falsifier test ! -S $SOCK" "$BATS_TEST_TMPDIR/backlog-calls.log"
+  grep -qF "needs restart kitty (control socket stuck: queue full) --class needs-human --falsifier test ! -S $SOCK" "$BATS_TEST_TMPDIR/backlog-calls.log"
   [ -s "$CC_PANE_CLOSE_QUEUE_DIR/recycle-77.json" ] || { ls -la "$CC_PANE_CLOSE_QUEUE_DIR"; false; }
   [[ "$(jq -r .argv "$CC_PANE_CLOSE_QUEUE_DIR/recycle-77.json")" == *"--recycle"* ]] || false
   [ "$(jq -r .kitty_sock "$CC_PANE_CLOSE_QUEUE_DIR/recycle-77.json")" = "$SOCK" ] || false

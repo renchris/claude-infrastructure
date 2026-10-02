@@ -1234,7 +1234,7 @@ Converge it now:
 
   bash \$(git rev-parse --show-toplevel)/scripts/deploy-live.sh
 
-Then re-read the ledger with \`/wrap\`. If the converger refuses, file it (\`cc-backlog needs\`) and close on 👤 — never call it ✅. (ship floor $(( pcnt + 1 ))/${maxs})"
+Then re-read the ledger with \`/wrap\`. If the converger refuses, file it (\`cc-backlog needs \"<step>\" --class needs-human\`) and close on 👤 — never call it ✅. (ship floor $(( pcnt + 1 ))/${maxs})"
   fi
   log_idl fired "ship-floor" "$(jq -cn --arg r "$rung" --arg a "${ahead:-?}" --argjson n "$(( pcnt + 1 ))" --argjson m "$maxs" \
     '{rung:$r,ahead:$a,count:$n,max:$m}' 2>/dev/null)"

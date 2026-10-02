@@ -346,6 +346,9 @@ SH
   [ "$(marker)" = "1784800000" ]                          # bounded: a re-run must NOT re-page
   grep -q -- '--project claude-infrastructure' "$CC_BACKLOG_BIN.log"
   grep -q 'needs ' "$CC_BACKLOG_BIN.log"
+  # classed AND receipted (row 12b4209cb7fc): the step text changes per boot, so each re-file rewrites a
+  # live row's needs, and the class gate demands a receipt for that — the page file the row points at.
+  grep -q -- '--class needs-human --receipt .*/undelivered-[0-9]*\.page' "$CC_BACKLOG_BIN.log"
 }
 
 # The page text itself must survive somewhere addressless — the backlog row is one line and POINTS

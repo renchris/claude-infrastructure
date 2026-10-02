@@ -62,11 +62,13 @@ fired() { printf '%s' "$1" | grep -q '"decision":"block"'; }
 TELL="The cc-inbox-guard cost profile deserves its own scoped pass — 52.8s of every sweep."
 
 # ── the live instance: naming-tell + zero records ⇒ FIRE with the enqueue commands ──
-@test "naming-tell with no durable record ⇒ FIRE; reason names cc-backlog add / block / cc-decide" {
+@test "naming-tell with no durable record ⇒ FIRE; reason names cc-backlog add / classed needs / cc-decide" {
   run run_da "$(mktx "$TELL")"
   [ "$status" -eq 0 ]; fired "$output"
   printf '%s' "$output" | grep -q 'cc-backlog add --title'
-  printf '%s' "$output" | grep -q -- '--needs'
+  # the operator-gated route teaches the CLASSED form (row 12b4209cb7fc): an unclassed needs is refused
+  # once the block/needs class gate enforces, so a hook that teaches the bare form manufactures refusals
+  printf '%s' "$output" | grep -q 'cc-backlog needs .*--class needs-human'
   printf '%s' "$output" | grep -q 'cc-decide open'
   grep -q '"disposition":"fired","reason":"narrated-not-dispatched"' "$DISPATCH_ASSERT_IDL"
 }

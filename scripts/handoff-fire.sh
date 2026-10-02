@@ -12472,10 +12472,10 @@ if [ "$RECYCLE" = 1 ]; then
   elif [ "$HF_KPROBE_RC" = 2 ]; then
     emit_recycle_event recycle-held-wedged "" "$SID" "kitty control socket STUCK: $HF_KPROBE_WHY" || true
     hf_recycle_owed_record "$SID" "kitty control socket stuck (accept queue full)"
-    hf_backlog_needs "restart kitty (control socket stuck: queue full)" \
+    hf_backlog_needs "restart kitty (control socket stuck: queue full)" --class needs-human \
       --falsifier "test ! -S $HF_KPROBE_SOCK"
     { echo "!! recycle HELD (kitty's control socket is STUCK, not slow): $HF_KPROBE_WHY."
-      echo "!!   Only a kitty restart clears it, and a restart ends every pane, so that step is the operator's (filed: cc-backlog needs \"restart kitty (control socket stuck: queue full)\")."
+      echo "!!   Only a kitty restart clears it, and a restart ends every pane, so that step is the operator's (filed: cc-backlog needs \"restart kitty (control socket stuck: queue full)\" --class needs-human)."
       echo "!!   Nothing was typed and nothing was closed; this session stays alive and keeps working."
     } >&2
     exit 1

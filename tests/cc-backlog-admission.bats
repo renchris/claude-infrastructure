@@ -138,6 +138,15 @@ nevents() { jq -c --arg e "$1" 'select(.event==$e)' "$GLOG" 2>/dev/null | grep -
   [ "$(nevents unclassed-transition)" -eq 0 ]
 }
 
+@test "class gate (warn): an unclassed needs SUCCEEDS but says WARN on stderr; a classed one is silent" {
+  run bash -c "cd '$HOME' && bash '$CB' needs 'press the button' 2>'$BATS_TEST_TMPDIR/err1'"
+  [ "$status" -eq 0 ]
+  grep -q 'WARN unclassed' "$BATS_TEST_TMPDIR/err1"
+  run bash -c "cd '$HOME' && bash '$CB' needs 'press the other button' --class needs-human 2>'$BATS_TEST_TMPDIR/err2'"
+  [ "$status" -eq 0 ]
+  run ! grep -q 'WARN' "$BATS_TEST_TMPDIR/err2"
+}
+
 @test "class gate (enforce): an unclassed needs is refused BEFORE the add — no orphan open row" {
   export CC_BACKLOG_CLASS_GATE=enforce
   n0="$(grep -c . "$LEDGER" || true)"

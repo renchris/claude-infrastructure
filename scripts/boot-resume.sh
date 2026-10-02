@@ -718,7 +718,7 @@ else
   # cmd_needs' own header says an absent falsifier is honest and a fabricated one lies; same here.
   bid=""
   if [ -n "$BACKLOG" ]; then
-    bid="$("$BACKLOG" needs "$step" --class needs-human --project claude-infrastructure 2>/dev/null | tail -1 | tr -d '[:space:]')"
+    bid="$("$BACKLOG" needs "$step" --class needs-human --receipt "$undeliv" --project claude-infrastructure 2>/dev/null | tail -1 | tr -d '[:space:]')"
     # An id is hex. Anything else — a warning line, an empty write, a usage error — is NOT a filing,
     # and treating it as one is how a fallback reports delivery it never made.
     case "$bid" in ''|*[!0-9a-f]*) bid="" ;; esac
