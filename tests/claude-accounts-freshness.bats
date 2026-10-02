@@ -216,29 +216,56 @@ print("OK")'
   [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
 
-@test "F-6: --note-reset records a redemption with no network; earlier readings become pre-reset until a good read" {
+@test "F-6: no flag — a banked reset under a throttled usage poll is detected by the wire, routes on ~0, and is logged once; --reset-report summarises" {
   run python3 -c "$LOAD"'
-at_wall_good_read()
-edit_ledger(quota_as_of=iso(-120))
 import subprocess
-out = subprocess.run([os.environ["CA_BIN"], "--note-reset", "next3", "--source", "bats"],
-                     capture_output=True, text=True, timeout=60)
-assert out.returncode == 0 and "recorded: next3" in out.stdout, (out.stdout, out.stderr)
-bad = subprocess.run([os.environ["CA_BIN"], "--note-reset", "nope"],
-                     capture_output=True, text=True, timeout=60)
-assert bad.returncode != 0
-assert ca.reset_evidence_pending(cfg) == ["next3"]
-r = probe(429, wire=None)
-assert r["session_pct"] is None and r["weekly_pct"] is None, r
-assert set(r["rolled_since"]) == {"session", "weekly"} and r["fable_pct"] == 10, r
-assert r["weekly_reset_at"] is not None, "a redeemed weekly keeps its reset day"
-assert "lastgood_wire_rejects" not in r and "redeemed recorded" in r["reset_evidence"][0], r
-assert ca._excluded(r, R) is not None, "unknown is refused"
+at_wall_good_read()                                # usage reads weekly 100: the watch arms
+edit_ledger(quota_as_of=iso(-166))
+r = probe(429, wire=RESET)                         # usage 429 + wire HTTP 200, 7d_util 0, allowed
+assert r["weekly_pct"] == 0 and "lastgood_wire_rejects" not in r, r
+assert ca._excluded(r, R) is None, ca._excluded(r, R)
+score, reason = ca.score_general(r, cfg)
+assert reason is None and score > 0, (score, reason)
+def events():
+    try:
+        return [json.loads(l) for l in open(ca.RESET_LOG_PATH)]
+    except OSError:
+        return []
+ev = events()
+assert len(ev) == 1, ev
+e = ev[0]
+assert (e["acct"], e["window"], e["kind"], e["channel"]) == ("next3", "7d", "unscheduled", "wire"), e
+assert e["from_pct"] == 100 and e["to_pct"] == 0 and 0 <= e["lag_s"] < 60, e
+assert e["throttled_polls_between"] == 1 and e["wire_attempts_between"] == 1, e
+for k in ("ts", "stale_since", "detected_at"):
+    assert e.get(k), (k, e)
+probe(429, wire=RESET)                             # the same reset, read again: no second line
+probe(429, wire=None)                              # an inherited figure is not a reading either
+assert len(events()) == 1, events()
+# A scheduled reset read by the usage endpoint: the 5h sits at 100 until its stamp passes.
 d = ca._load_pollstate(); d.pop("next3", None); ca._save_pollstate(d)
-probe(200, limits(session=1, weekly=0, fable=0, w_reset=iso(2.5 * 86400)))
-assert ca.reset_evidence_pending(cfg) == [], "a good read after the event settles it"
+probe(200, limits(session=100, weekly=0, s_reset=iso(3600), w_reset=iso(2.5 * 86400)))
+st = json.load(open(ca._sidecar(".resetwatch.json")))
+st["next3"]["5h"].update(reset_at=iso(-30), stale_since=iso(-90))
+json.dump(st, open(ca._sidecar(".resetwatch.json"), "w"))
+probe(200, limits(session=1, weekly=0, w_reset=iso(2.5 * 86400)))
+ev = events()
+assert len(ev) == 2, ev
+e = ev[1]
+assert (e["window"], e["kind"], e["channel"]) == ("5h", "scheduled", "usage"), e
+assert 25 <= e["lag_s"] <= 45, ("lag counts from the stamp, not the last high reading", e)
+out = subprocess.run([os.environ["CA_BIN"], "--reset-report", "--days", "1"],
+                     capture_output=True, text=True, timeout=60)
+assert out.returncode == 0, (out.stdout, out.stderr)
+assert "summary: 2 event(s)" in out.stdout, out.stdout
+assert "unscheduled/wire n=1" in out.stdout and "scheduled/usage n=1" in out.stdout, out.stdout
+assert "100% → 0%" in out.stdout, out.stdout
+bad = subprocess.run([os.environ["CA_BIN"], "--reset-report", "--days", "0"],
+                     capture_output=True, text=True, timeout=60)
+assert bad.returncode == 64, (bad.returncode, bad.stderr)
 print("OK")'
-  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
 
 @test "F-7: the readouts say RESET since the reading, name the evidence, and give the backoff instead of --fresh" {

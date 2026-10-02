@@ -164,10 +164,11 @@ Usage:
       pairs (median score-ratio 1.000), and across 931 recorded routing decisions the grace band
       has never once been entered (max observed quota_age_s = 89).
       Malformed value on either flag ⇒ exit 64. Absent ⇒ unchanged behaviour.
-  claude-accounts --note-reset ACCT [--source WHO]
-                                      record that ACCT's usage was reset (a banked /limit-reset
-      redemption leaves no local trace). Readings older than the record show as pre-reset, their
-      stored rejection is dropped, and keepwarm re-reads at its next tick. No network.
+  claude-accounts --reset-report [--days N]
+                                      every limit reset the sweep detected in the last N days
+      (default 30) — scheduled or banked, with no flag — one row each (lag, channel usage|wire,
+      throttled polls and wire attempts it took), then median/max lag per kind and channel.
+      Reads ~/.claude/logs/quota-reset-detect.jsonl. No network.
   claude-accounts --no-color          plain output (also: NO_COLOR env, pipes, TERM=dumb;
                                       FORCE_COLOR=1 forces color for screenshots)
 
@@ -1673,9 +1674,10 @@ def inherit_lastgood(row, ledger, prev):
         # account whose weekly has since reset is likely FRESH, which is exactly what decides
         # whether to bother relogging in. So record it; never blank the row (that would clear
         # stale_quota and leave the table with nothing to render at all).
-        # A RECORDED redemption newer than the reading counts the same way (reset_evidence): the
-        # banked reset keeps the weekly reset DAY, so no stamp ever passes for it, and before
-        # 2026-10-01 a redeemed account replayed its pre-reset 100% until the next good read.
+        # A banked /limit-reset keeps the weekly reset DAY, so no stamp ever passes for it. That
+        # case is caught by the READ, not here: a fresh usage poll reads the post-reset figure, and
+        # a throttled one fires the wire (the stale reading is >= WIRE_SUBSTITUTE_PCT), whose lower
+        # figure apply_wire_substitute takes as the reset evidence. No flag, no human, no agent.
         evidence = reset_evidence(e, row["acct"])
         rolled = []
         for pfx in ("session", "weekly", "fable"):
@@ -1683,7 +1685,7 @@ def inherit_lastgood(row, ledger, prev):
             h = hrs_until(stamp)
             if pfx in evidence:
                 row[f"{pfx}_pct"] = None
-                # a passed stamp is void; a redeemed weekly keeps its (still future) day
+                # a passed stamp is void (a future one is kept, should evidence ever not be a stamp)
                 keep = h is not None and h > 0
                 row[f"{pfx}_reset_at"] = stamp if keep else None
                 row[f"{pfx}_reset_h"] = h if keep else None
@@ -1826,41 +1828,14 @@ def note_usage_ok(acct):
             _save_pollstate(d)
 
 
-def note_reset_event(acct, kind="redeemed", source=None):
-    """Record POSITIVE evidence that an account's usage was reset outside a natural window roll.
-    Measured: a /limit-reset redemption leaves no local record (61 transcripts, 4 history files,
-    no debug log), so this record is the only local form it can take — written by whoever learns
-    of it. Append-only, one JSON line."""
-    path = _sidecar(".events.jsonl")
-    rec = {"ts": datetime.now(timezone.utc).isoformat(), "acct": acct, "kind": kind,
-           "source": source or "manual"}
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "a") as f:
-        f.write(json.dumps(rec, sort_keys=True) + "\n")
-    log_event(f"event {acct}: {kind} recorded ({rec['source']}) — readings before "
-              f"{rec['ts']} are pre-reset")
-    return rec
-
-
-def last_reset_event(acct):
-    """-> the newest recorded reset event for `acct` (dict with `ts`), or None. Never raises."""
-    best = None
-    try:
-        with open(_sidecar(".events.jsonl")) as f:
-            for ln in f:
-                try:
-                    e = json.loads(ln)
-                except ValueError:
-                    continue
-                if e.get("acct") == acct and e.get("ts") and (best is None or e["ts"] > best["ts"]):
-                    best = e
-    except OSError:
-        return None
-    return best
-
-
 def _reset_evidence_items(entry, acct):
-    """-> {bucket: (epoch the evidence arose, text)} for bucket in session/weekly/fable."""
+    """-> {bucket: (epoch the evidence arose, text)} for bucket in session/weekly/fable.
+
+    Stamps only. An UNSCHEDULED reset (a banked /limit-reset redemption, which leaves no local
+    record) has no stamp to pass; it is detected by the next read instead — a usage poll, or the
+    wire substitute a throttled near-wall reading always fires (apply_wire_substitute). Until
+    2026-10-01 W2 a manual flag recorded it here; it was removed because the read already does
+    the job with no one having to remember to run anything. `acct` is kept for callers."""
     out = {}
     for pfx in ("session", "weekly", "fable"):
         stamp = entry.get(f"{pfx}_reset_at")
@@ -1868,17 +1843,6 @@ def _reset_evidence_items(entry, acct):
         if stamp and h is not None and h <= 0:
             out[pfx] = (time.time() + h * 3600.0,
                         f"{pfx} window reset at {_fmt_asof(stamp) or stamp}")
-    ev = last_reset_event(acct)
-    asof = entry.get("quota_as_of")
-    if ev and asof and ev["ts"] > asof:
-        # `clears` for the banked reset names five_hour and seven_day; whether it includes the
-        # Fable weekly is unverified, so Fable is left alone (its stale figure over-states use,
-        # the safe direction).
-        h = hrs_until(ev["ts"])
-        at = time.time() + h * 3600.0 if h is not None else time.time()
-        for pfx in ("session", "weekly"):
-            out.setdefault(pfx, (at, f"{ev.get('kind', 'reset')} recorded at "
-                                     f"{_fmt_asof(ev['ts'])}"))
     return out
 
 
@@ -1886,8 +1850,9 @@ def reset_evidence(entry, acct):
     """Which buckets of a last-good `entry` are KNOWN to be pre-reset, and why.
 
     -> ({bucket: evidence}) for bucket in session/weekly/fable. Only POSITIVE evidence counts: a
-    reset stamp that has passed, or a recorded event newer than the reading. Absence of evidence
-    is not evidence of a reset, so an unknown stays exactly what it was."""
+    reset stamp that has passed. Absence of evidence is not evidence of a reset, so an unknown
+    stays exactly what it was; a fresh wire read is the other positive form, applied per sweep
+    by apply_wire_substitute rather than stored."""
     return {b: text for b, (_at, text) in _reset_evidence_items(entry, acct).items()}
 
 
@@ -1963,7 +1928,203 @@ def apply_wire_substitute(row, w):
         row["fable_unread"] = True
 
 
-K_GRACE_S = 600           # same band as cache_grace_s — see inherit_k's docstring
+# ---- RESET DETECTION TELEMETRY (QUOTA_CACHE_FRESHNESS W2) ------------------------------------
+# A reset — scheduled (its reset_at passed) or unscheduled (a banked /limit-reset) — is detected
+# by a READ with no flag and nobody's action. This records each detection so "has it been fast?"
+# is answerable later: one JSON line when a window's reading falls from >= RESET_HIGH_PCT to below
+# RESET_LOW_PCT. Written from collect() only, i.e. from a sweep; it is a file write and never a
+# network call, so nothing here touches session startup. The watch state (the last >= 99 reading
+# per account and window, plus counters) lives in a lastgood sidecar; deleting the entry when an
+# event is written is what makes one reset log once.
+RESET_HIGH_PCT = 99.0
+RESET_LOW_PCT = 90.0
+RESET_WINDOWS = (("5h", "session"), ("7d", "weekly"))
+
+
+def _reset_log_path():
+    explicit = os.environ.get("CLAUDE_ACCOUNTS_RESET_LOG")
+    if explicit:
+        return explicit
+    # A redirected ledger takes its reset log with it (as the watch-state sidecar already does),
+    # so a test can never write a fixture into the operator's record of real resets.
+    if os.environ.get("CLAUDE_ACCOUNTS_LASTGOOD"):
+        return os.path.splitext(LASTGOOD_PATH)[0] + ".reset-detect.jsonl"
+    logs = os.path.join(HOME, ".claude", "logs")
+    # Same shape as _lastgood_path(): a scratch SSOT gets its own sibling.
+    if os.environ.get("CLAUDE_ACCOUNTS_JSON"):
+        h = sha256(os.path.realpath(CFG_PATH).encode()).hexdigest()[:8]
+        return os.path.join(logs, f"quota-reset-detect-{h}.jsonl")
+    return os.path.join(logs, "quota-reset-detect.jsonl")
+
+
+RESET_LOG_PATH = _reset_log_path()
+
+
+def _epoch(iso):
+    try:
+        return datetime.fromisoformat(str(iso).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def _sweep_readings(row, now_iso):
+    """-> ({window: pct}, channel, as_of) for a reading THIS sweep actually took, else ({}, None,
+    None). An inherited (stale) figure is not a reading: replaying it would re-arm the watch on a
+    number nobody measured."""
+    if row.get("wire_substitute"):
+        w = row.get("wire") or {}
+        out = {win: float(w[f"{win}_util"]) * 100 for win, _b in RESET_WINDOWS
+               if isinstance(w.get(f"{win}_util"), (int, float))}
+        return out, "wire", row.get("wire_at") or now_iso
+    if row.get("stale_quota") or row.get("error"):
+        return {}, None, None
+    out = {win: float(row[f"{b}_pct"]) for win, b in RESET_WINDOWS
+           if isinstance(row.get(f"{b}_pct"), (int, float))}
+    return out, "usage", now_iso
+
+
+def watch_resets(rows, now=None):
+    """Fold one sweep's rows into the watch state; append an event per detected reset.
+
+    -> [event]. Never raises (telemetry must not break a sweep). Counters cover every sweep after
+    the last >= 99 reading, the detecting sweep included, so a wire detection on the first
+    throttled sweep reads throttled_polls_between=1, wire_attempts_between=1 — the ideal."""
+    now = time.time() if now is None else now
+    now_iso = datetime.fromtimestamp(now, timezone.utc).isoformat()
+    events = []
+    try:
+        path = _sidecar(".resetwatch.json")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path + ".lock", "a") as lk:
+            fcntl.flock(lk, fcntl.LOCK_EX)       # serialises racing sweeps: one reset logs once
+            try:
+                with open(path) as f:
+                    st = json.load(f)
+                st = st if isinstance(st, dict) else {}
+            except (OSError, ValueError):
+                st = {}
+            for r in rows:
+                acct = r.get("acct")
+                if not acct:
+                    continue
+                reads, channel, as_of = _sweep_readings(r, now_iso)
+                throttled = 1 if r.get("poll_throttled") else 0
+                wired = 1 if (r.get("wire_substitute") or r.get("wire_miss")) else 0
+                a = st.get(acct) or {}
+                for win, bucket in RESET_WINDOWS:
+                    w = a.get(win)
+                    if w:
+                        w["throttled_polls"] = int(w.get("throttled_polls") or 0) + throttled
+                        w["wire_attempts"] = int(w.get("wire_attempts") or 0) + wired
+                    v = reads.get(win)
+                    if v is None:
+                        continue
+                    if v >= RESET_HIGH_PCT:
+                        a[win] = {"stale_since": as_of, "pct": v,
+                                  "reset_at": r.get(f"{bucket}_reset_at"),
+                                  "throttled_polls": 0, "wire_attempts": 0}
+                    elif v < RESET_LOW_PCT and w:
+                        det = _epoch(as_of) or now
+                        since = _epoch(w.get("stale_since")) or det
+                        rst = _epoch(w.get("reset_at"))
+                        scheduled = rst is not None and det >= rst
+                        # Scheduled: lag from the stamp. Unscheduled: the redemption moment is not
+                        # observable locally, so the lag is an UPPER bound — from the last reading
+                        # that still saw the wall.
+                        start = max(rst, since) if scheduled else since
+                        events.append({
+                            "ts": now_iso, "acct": acct, "window": win,
+                            "kind": "scheduled" if scheduled else "unscheduled",
+                            "stale_since": w.get("stale_since"), "detected_at": as_of,
+                            "lag_s": round(max(0.0, det - start), 1), "channel": channel,
+                            "throttled_polls_between": w["throttled_polls"],
+                            "wire_attempts_between": w["wire_attempts"],
+                            "from_pct": w.get("pct"), "to_pct": round(v, 1),
+                            "reset_at": w.get("reset_at")})
+                        del a[win]
+                if a:
+                    st[acct] = a
+                else:
+                    st.pop(acct, None)
+            if events:
+                os.makedirs(os.path.dirname(RESET_LOG_PATH), exist_ok=True)
+                with open(RESET_LOG_PATH, "a") as f:
+                    for e in events:
+                        f.write(json.dumps(e, sort_keys=True) + "\n")
+            tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+            with open(tmp, "w") as f:
+                json.dump(st, f, indent=2, sort_keys=True)
+            os.replace(tmp, path)
+    except Exception as e:                        # never bare: KeyboardInterrupt/SystemExit pass
+        log_event(f"reset-watch: FAILED {type(e).__name__}: {e}")
+        return []
+    for e in events:
+        log_event(f"reset {e['acct']} {e['window']}: {e['kind']} reset detected via "
+                  f"{e['channel']} — {e['from_pct']:.0f}% → {e['to_pct']:.0f}%, lag {e['lag_s']:.0f}s")
+    return events
+
+
+def _fmt_lag(s):
+    if s is None:
+        return "-"
+    s = int(round(s))
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s // 60}m{s % 60:02d}s"
+    return f"{s // 3600}h{(s % 3600) // 60:02d}m"
+
+
+def reset_report(days=30.0, out=None):
+    """`--reset-report`: one row per detected reset in the last `days`, then a summary — count,
+    median and max lag per kind × channel — so "is detection working optimally?" is one command.
+    A file read only. -> exit code (0)."""
+    out = out or sys.stdout
+    cutoff = time.time() - days * 86400.0
+    evs = []
+    try:
+        with open(RESET_LOG_PATH) as f:
+            for ln in f:
+                try:
+                    e = json.loads(ln)
+                except ValueError:
+                    continue
+                t = _epoch(e.get("ts"))
+                if isinstance(e, dict) and t is not None and t >= cutoff:
+                    evs.append(e)
+    except OSError:
+        pass
+    print(f"reset detections, last {days:g} day(s) — {RESET_LOG_PATH}", file=out)
+    if not evs:
+        print("summary: 0 events (no window fell from >=99% to <90% in this span)", file=out)
+        return 0
+    print(f"{'detected (UTC)':<17} {'acct':<7} {'win':<3} {'kind':<11} {'channel':<7} "
+          f"{'lag':>8} {'throttled':>9} {'wire':>4}  change", file=out)
+    for e in sorted(evs, key=lambda x: x.get("ts") or ""):
+        det = (e.get("detected_at") or e.get("ts") or "")[:16].replace("T", " ")
+        fp, tp = e.get("from_pct"), e.get("to_pct")
+        change = (f"{fp:.0f}% → {tp:.0f}%" if isinstance(fp, (int, float))
+                  and isinstance(tp, (int, float)) else "?")
+        print(f"{det:<17} {str(e.get('acct')):<7} {str(e.get('window')):<3} "
+              f"{str(e.get('kind')):<11} {str(e.get('channel')):<7} {_fmt_lag(e.get('lag_s')):>8} "
+              f"{str(e.get('throttled_polls_between', '-')):>9} "
+              f"{str(e.get('wire_attempts_between', '-')):>4}  {change}", file=out)
+    groups = {}
+    for e in evs:
+        if isinstance(e.get("lag_s"), (int, float)):
+            groups.setdefault((e.get("kind"), e.get("channel")), []).append(float(e["lag_s"]))
+    def _median(v):
+        v = sorted(v)
+        m = len(v) // 2
+        return v[m] if len(v) % 2 else (v[m - 1] + v[m]) / 2.0
+
+    parts = [f"{k}/{c} n={len(v)} median {_fmt_lag(_median(v))} max {_fmt_lag(max(v))}"
+             for (k, c), v in sorted(groups.items(), key=lambda kv: (str(kv[0][0]), str(kv[0][1])))]
+    print(f"summary: {len(evs)} event(s) · " + " · ".join(parts), file=out)
+    return 0
+
+
+K_GRACE_S = 600          # same band as cache_grace_s — see inherit_k's docstring
 # Tolerance on the LOWER bound only. `k_stale_as_of` is an ISO string, so it carries microseconds
 # and `datetime.fromtimestamp(...).isoformat()` can round the float stamp UP by up to half a
 # microsecond — which makes the age of a just-written stamp very slightly NEGATIVE. That is
@@ -2376,6 +2537,8 @@ def collect(cfg, no_heal=False, prev=None):
         rows.append(row)
     if lastgood_dirty:
         save_lastgood(ledger)
+    # Reset telemetry (W2): this is the sweep, so this is the one place it is recorded.
+    watch_resets(rows)
     # One CLI-owned verdict per row for "does this need an operator action", so consumers stop
     # re-deriving it from a hand-copied auth-state list. handoff-fire.sh's copy had already
     # drifted — it matched 3 of the 5 actionable states, silently treating no-oauth-blob and
@@ -7330,8 +7493,7 @@ def main():
             signal.alarm(_kw_deadline)
         t0 = time.time()
         # RESET EVIDENCE OUTRANKS THE AGE SKIP. A cache younger than --max-age is served — unless
-        # some account's last good read is now KNOWN to be pre-reset (a stamp passed, or a
-        # redemption was recorded): then that cache is wrong in a way its age cannot show, and
+        # some account's last good read is now KNOWN to be pre-reset (a stamp passed): then that cache is wrong in a way its age cannot show, and
         # this tick sweeps so the board and the router stop carrying it. A throttled account is
         # still not polled (its backoff holds); its wire substitute is what this buys.
         pending = reset_evidence_pending(cfg)
@@ -7395,22 +7557,20 @@ def main():
                               creds and creds.get("refreshTokenExpiresAt"))}, indent=2))
         return
 
-    # A RECORDED RESET — a write, no network, dispatched before the get_data anchor. A banked
-    # /limit-reset redemption leaves no local trace (measured 2026-10-01), so whoever learns of
-    # one (the operator, a /limit-recover run told "I just used the banked reset") records it
-    # here; every reader then shows that account's earlier reading as pre-reset and drops its
-    # stored rejection, and the next keepwarm tick sweeps instead of serving that reading.
-    if "--note-reset" in args:
-        i = args.index("--note-reset")
-        name = args[i + 1] if i + 1 < len(args) else ""
-        names = [a["name"] for a in cfg["accounts"]]
-        if name not in names:
-            sys.exit(f"claude-accounts: --note-reset needs an account ({'|'.join(names)})")
-        src = args[args.index("--source") + 1] if "--source" in args[:-1] else None
-        rec = note_reset_event(name, "redeemed", src)
-        print(f"recorded: {name} reset at {rec['ts']} — readings before it now show as pre-reset; "
-              f"the next keepwarm tick re-reads it")
-        return
+    # RESET TELEMETRY READBACK — a file read, no network, dispatched before the get_data anchor.
+    # Resets are detected by the sweep itself (watch_resets); nobody records one by hand.
+    if "--reset-report" in args:
+        days = 30.0
+        if "--days" in args:
+            i = args.index("--days")
+            try:
+                days = float(args[i + 1])
+                if not (days > 0 and math.isfinite(days)):
+                    raise ValueError
+            except (IndexError, ValueError):
+                print("claude-accounts: --days needs a positive number", file=sys.stderr)
+                sys.exit(64)
+        sys.exit(reset_report(days))
 
     # FLEET_V2 C5: batch recovery placement. Cache-only by construction (cmd_place reads with
     # max_wait 0), so it is dispatched before the get_data anchor below and can never sweep.

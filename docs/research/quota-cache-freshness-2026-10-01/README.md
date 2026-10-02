@@ -31,6 +31,10 @@ allow/reject status. It is a different endpoint. During the incident the 429 bra
 before the wire was ever tried, while `next` and `next2` wire reads succeeded every few seconds.
 *Unverified:* the wire has not been measured while that account's usage endpoint was throttled.
 A wire miss therefore degrades to today's behavior and never to an admit.
+*Update (2026-10-01, W2):* our handling of that case is now pinned by a stubbed test (a 429 usage
+read plus an HTTP 200 wire read with 7d at 0, allowed: the row routes and reads 0 with no flag,
+`tests/claude-accounts-freshness.bats` F-6). The server side is still unmeasured live; the first
+real one will show in `claude-accounts --reset-report` as an `unscheduled/wire` row.
 
 ## Q2 — drift by live-session count (n = 33,366 consecutive live read pairs)
 
@@ -69,9 +73,11 @@ slower.
 safe direction: it over-states usage. Show it as **"reset since this reading"** with the
 evidence, never as a current figure, and drop the stored rejection for the window that reset.
 Positive evidence that may clear a stored rejection: (1) that window's reset stamp has passed;
-(2) a **recorded** redemption (`claude-accounts --note-reset <acct>`, written by whoever learns of
+(2) a **recorded** redemption (a manual flag on `claude-accounts`, written by whoever learns of
 it, e.g. a `/limit-recover` run told "I just used the banked reset"); (3) a fresh wire read in
-which the server itself no longer rejects that window. Routing still needs a figure. A rolled or
+which the server itself no longer rejects that window. *Superseded 2026-10-01 (W2): (2) and its
+flag were removed — the read detects a banked reset with nobody's action, because a throttled
+reading of a capped account is always >= 90% and so always fires the wire (3).* Routing still needs a figure. A rolled or
 redeemed meter with no new read stays *unknown*, and unknown is refused. Only a fresh wire read
 supplies the figure the router may act on.
 
@@ -92,7 +98,8 @@ supplies the figure the router may act on.
    wire's own utilizations (5h and 7d). A row whose Fable figure predates a reset routes without
    a Fable figure, which is refused on the Fable lane.
 5. **Reset evidence makes keepwarm sweep now.** It ignores the cache-age skip when an account has
-   a reset stamp passed, or a recorded redemption, after its last good read.
+   a reset stamp passed, or a recorded redemption, after its last good read. (Recorded
+   redemptions superseded 2026-10-01, W2; a stamp is the only stored evidence now.)
 
 ## Q5 — the readout
 

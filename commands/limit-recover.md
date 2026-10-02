@@ -67,14 +67,14 @@ until a human logged in. So on a cliff:
    interactive `/login`. Surface the exact command and the deadline
    (`claude-accounts --relogin-status`), and salvage a bundle so nothing is lost while you wait.
 
-## A banked reset was redeemed — record it before you recover anything
+## A banked reset was redeemed — nothing to record
 
-If the prompt says a banked limit reset (`/limit-reset`) was just used on an account, run
-`claude-accounts --note-reset <acct> --source limit-recover` **first**. A redemption leaves no local
-record (measured 2026-10-01), so until that line runs every reader keeps replaying the account's
-pre-reset "weekly 100%, server rejected" reading. On 2026-10-01 that made `cc-lr recover --limited`
-queue a freshly reset account's sessions to move away. The command makes no network call; the next
-keepwarm tick re-reads the account (docs/plans/QUOTA_CACHE_FRESHNESS.md).
+If the prompt says a banked limit reset (`/limit-reset`) was just used on an account, do nothing
+special: `claude-accounts` detects it on its own. A fresh usage poll reads the post-reset figure,
+and a throttled one fires the wire read (the stale reading is >= 90%), whose live verdict drops the
+stored rejection and routes the account on the new figure. The keepwarm job does this within a
+tick or two; `claude-accounts --reset-report` shows each detection and how long it took
+(docs/plans/QUOTA_CACHE_FRESHNESS.md W2).
 
 ## The fast path — `cc-lr recover <ref>`, then END THE TURN
 
