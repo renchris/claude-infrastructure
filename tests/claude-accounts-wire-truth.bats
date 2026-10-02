@@ -311,3 +311,37 @@ assert ca._excluded(unk, R) == "5h-cutoff" and ca._excluded(unk, R, recovery=Tru
 print("OK")'
   [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
+
+# ---- W-10: the board draws the three 100%-states IN THE BAR (operator, 2026-10-01) -------------
+# The board showed refused and 99%-still-allowed accounts as the same solid red bar at `100%`, with
+# the difference only in six lines of footnote prose. The bar and percent now carry it: refused =
+# solid bar at 100%, still-allowed = the FLOORED wire percent over a bar whose last cell is never
+# full, and the board drops the bullets (and the ʷ legend, for a glyph its cells never print).
+
+@test "W-10: board bar — refused is solid, 99%-allowed keeps a visible sliver, footnotes leave the board" {
+  run env CC_BOARD_COLOR=off python3 -c "$LOAD"'
+import io, contextlib
+WIN_OPEN = {"active": True, "end": "2099-12-31", "deadline": None, "permanent": True}
+def board(wire):
+    r = probe(limits(weekly=100), wire)
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        ca.render_readout([r], cfg, WIN_OPEN, False, narrow=True)
+    return buf.getvalue()
+refused = board({"7d_util": 1.0, "7d_status": "rejected", "5h_util": 0.05,
+                 "5h_status": "allowed", "status": "rejected", "http": 429})
+allowed = board({"7d_util": 0.996, "7d_status": "allowed_warning", "5h_util": 0.05,
+                 "5h_status": "allowed", "status": "allowed_warning", "http": 200})
+assert "████████ " in refused and "100%" in refused, refused
+assert "███████▊ " in allowed, "a spendable bar must not read full: %r" % allowed
+row = next(l for l in allowed.splitlines() if "next3" in l and "█" in l)
+assert " 99%" in row and "100%" not in row, row
+for out in (refused, allowed):
+    assert "EXHAUSTED" not in out and "still routable" not in out, out
+    assert "rate-limit headers" not in out, "the board never prints ʷ, so no legend: %r" % out
+# Whole cells used to round 94% up to a full bar; eighths keep it short of full.
+assert ca.board_bar(94.0) == "███████▌", ca.board_bar(94.0)
+assert ca.board_bar(100.0) == "████████"
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}

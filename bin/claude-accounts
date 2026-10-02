@@ -6115,13 +6115,15 @@ def board_color_on():
         os.environ.get("CC_BOARD_COLOR", "on").lower() not in ("off", "0", "false", "no")
 
 
-def bc(txt, rgb=None, bold=False):
+def bc(txt, rgb=None, bold=False, bg=None):
     """Colour ONE board cell. Independent of `COLOR` — see the block comment above."""
-    if not board_color_on() or (rgb is None and not bold):
+    if not txt or not board_color_on() or (rgb is None and not bold and bg is None):
         return txt
     seq = ["1"] if bold else []
     if rgb:
         seq.append("38;2;%d;%d;%d" % tuple(rgb))
+    if bg:
+        seq.append("48;2;%d;%d;%d" % tuple(bg))
     return "\x1b[" + ";".join(seq) + "m" + txt + "\x1b[0m"
 
 
@@ -6137,15 +6139,47 @@ def strand_rgb(pp):
     return RED if pp >= 50 else AMBER if pp >= 20 else BOARD_LABEL
 
 
-def board_bar(pct, width=_NW_BAR):
+def board_eff(r, key):
+    """(percent, exhausted) for one board meter — the server's own reading first.
+
+    The endpoint integer rounds UP and clamps at 100, so it draws "99% used, still allowed" and
+    "refused" as the same full red bar (operator, 2026-10-01: leaving ~1% of a weekly on the
+    table is a lot). The wire carries both apart: `exhausted` is True only when the server says
+    `rejected` (or reads >= 100%), False for any other wire reading — whose percent is FLOORED and
+    capped at 99, since 99.6% is still spendable — and None when there is no wire reading, i.e.
+    the endpoint integer alone, where a 100 is a ceiling nobody verified."""
+    if r.get(key) is None:          # withheld (rolled since the reading) or never read
+        return None, None
+    wf = WIRE_FIELD.get(key)
+    wire = r.get("wire") or {}
+    wv = wire.get(wf) if wf else None
+    if wv is not None:
+        if wire.get(wf.replace("_util", "_status")) == "rejected" or wv >= 1.0:
+            return 100.0, True
+        return float(min(math.floor(wv * 100), 99)), False
+    v = r.get(key)
+    return (None, None) if v is None else (float(v), None)
+
+
+def board_bar(pct, exhausted=None, width=_NW_BAR):
     """Magnitude the eye reads without parsing digits — the single largest readability win
     available on a monochrome-by-default surface, and the reason `weekly` gets one and the other
-    two columns do not: weekly is the bucket the strand nowcast is about."""
+    two columns do not: weekly is the bucket the strand nowcast is about.
+
+    Drawn in eighths, and A BAR THAT CAN STILL BE SPENT NEVER READS FULL: below 100% the last
+    cell always shows at least a quarter of track, so a 99%-and-allowed account is visibly not
+    the solid bar of one the server is refusing. (Whole cells rounded 94% up to a full bar.)"""
     if pct is None:
         return bc("·" * width, BOARD_TRACK)
     p = max(0.0, min(100.0, float(pct)))
-    filled = int(round(p / 100.0 * width))
-    return bc("█" * filled, usage_rgb(p)) + bc("░" * (width - filled), BOARD_TRACK)
+    eighths = int(round(p / 100.0 * width * 8))
+    if exhausted is not True and p < 100.0:
+        eighths = min(eighths, width * 8 - 2)
+    full, rem = divmod(eighths, 8)
+    rgb = usage_rgb(p)
+    return (bc("█" * full, rgb)
+            + (bc(EIGHTHS[rem - 1], rgb, bg=BOARD_TRACK) if rem else "")
+            + bc("░" * (width - full - (1 if rem else 0)), BOARD_TRACK))
 
 
 def _bpct(r, key):
@@ -6156,7 +6190,7 @@ def _bpct(r, key):
     because a reader scanning a column must not have to decide whether a floating asterisk
     belongs to the row above. Right-aligning the value-plus-suffix as ONE string is what keeps
     the digits in a column while the suffix comes and goes."""
-    v = r.get(key)
+    v, _ = board_eff(r, key)
     if v is None:
         return _cell("—", _NW_PCT + 1, ">", BOARD_MUTE)
     star = "*" if (r.get("stale_quota") or r.get("error")) else ""
@@ -6387,7 +6421,7 @@ def readout_lines(rows, cfg, win, cached, narrow=False):
                       bold=bool(marks.strip())),
                 _cell(ks, _NW_LIVE, ">", BOARD_TEXT if usable and ks != "?" else BOARD_MUTE),
                 _bpct(r, "session_pct"),
-                board_bar(r.get("weekly_pct")),
+                board_bar(*board_eff(r, "weekly_pct")),
                 _bpct(r, "weekly_pct"),
                 _bpct(r, "fable_pct"),
                 _cell(wk_n, _NW_WKR, ">", BOARD_TEXT if usable else BOARD_MUTE),
@@ -6430,16 +6464,24 @@ def readout_lines(rows, cfg, win, cached, narrow=False):
         # reset (max 56.5 h), excluded from routing the whole time, and ~1pp of a weekly window
         # is ~5.2% of a whole 5-hour one. So the bullet now states which of the three it is, and
         # says so in the language of who decided: the SERVER, or a rounding we did.
+        #
+        # ON THE BOARD the first two states are drawn IN THE BAR instead (board_eff/board_bar):
+        # refused = a solid red bar at 100%, still-allowed = the floored wire percent over a bar
+        # whose last cell is never full. The operator asked for that distinction where the eye
+        # already is (2026-10-01), and the bullets restating it were the board's longest lines.
         wire = r.get("wire") or {}
         w7, s7 = wire.get("7d_util"), wire.get("7d_status")
         if s7 == "rejected":
-            notes.append(f"○ `{acct}` — weekly **EXHAUSTED** — the server is refusing it"
-                         + (f" (wire {w7 * 100:.0f}% used)" if w7 is not None else ""))
+            if not narrow:
+                notes.append(f"○ `{acct}` — weekly **EXHAUSTED** — the server is refusing it"
+                             + (f" (wire {w7 * 100:.0f}% used)" if w7 is not None else ""))
         elif w7 is not None and (r.get("weekly_pct") or 0) >= 100:
-            notes.append(f"◐ `{acct}` — weekly meter reads 100% but the wire reads "
-                         f"**{w7 * 100:.0f}%, `{s7 or 'allowed'}`** — ~{max(0.0, 1 - w7) * 100:.0f}pp "
-                         f"left (~{max(0.0, 1 - w7) * 100 / K_FROZEN:.0f}% of a 5h window); "
-                         f"still routable")
+            if not narrow:
+                notes.append(f"◐ `{acct}` — weekly meter reads 100% but the wire reads "
+                             f"**{board_eff(r, 'weekly_pct')[0]:.0f}%, `{s7 or 'allowed'}`** — "
+                             f"~{max(0.0, 1 - w7) * 100:.0f}pp "
+                             f"left (~{max(0.0, 1 - w7) * 100 / K_FROZEN:.0f}% of a 5h window); "
+                             f"still routable")
         elif (r.get("weekly_pct") or 0) >= 100:
             notes.append(f"○ `{acct}` — weekly meter at **100%** — rounded and clamped, so the "
                          f"true figure is 99–10x% and unverified; `--wire` reads the server's own verdict")
@@ -6506,7 +6548,8 @@ def readout_lines(rows, cfg, win, cached, narrow=False):
     # wall, so most readouts carry no `ʷ` at all; a legend printed under those would explain a
     # glyph that is not on screen, at every invocation, forever. It appears exactly when there is
     # something to decode.
-    if any("ʷ" in pctc(r, k) for r in rows for k in WIRE_FIELD):
+    # The board never prints `ʷ` (its cells are _bpct, not pctc), so it never needs the legend.
+    if not narrow and any("ʷ" in pctc(r, k) for r in rows for k in WIRE_FIELD):
         footnotes.append("`ʷ` = read from the server's own rate-limit headers — unclamped, and "
                          "carrying its `allowed`/`allowed_warning`/`rejected` verdict. A percent "
                          "WITHOUT it is the usage endpoint's integer, which rounds UP and clamps "
