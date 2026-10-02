@@ -247,7 +247,7 @@ shell (verified) — metacharacters and newlines arrive literally; only trailing
   >   proof may be in the omitted prefix. Evidence printed once at turn 3 of a long run is gone —
   >   re-print the check near the end.
   > - **Never put a `$` in the condition.** It is run through the slash-command variable substituter
-  >   first, so `$ARGUMENTS`, `$1`, `$2` are silently rewritten with the hook-input JSON. Write
+  >   first, so a `$` followed by `ARGUMENTS` or a digit is silently rewritten with the hook-input JSON. Write
   >   `npm test exits 0`, never `$(npm test)`.
   > - **A bad condition has two distinct failure modes, and the cap rescues neither.**
   >   Self-contradictory or unachievable ⇒ the judge may return `impossible:true`, which CLEARS the

@@ -471,7 +471,7 @@ C money-path. Then:
   capped — the true quota cliff (a full Anthropic cap / outage) — the metered Kimi hedge (a
   non-Anthropic endpoint) is the one remaining overflow. It is **gated on the operator key**:
   `cc-route`'s cliff branch runs `claude-kimi wired` and, only when WIRED, **OFFERS** it on the
-  same exit-4 STOP (`claude-kimi` — metered, ~$3/$15 per MTok, isolated from the 4 Max accounts)
+  same exit-4 STOP (`claude-kimi` — metered, ~3/15 USD per MTok, isolated from the 4 Max accounts)
   alongside `/limit-recover`. It is an **OFFER, never an auto-route** — a cliff never
   silent-down-tiers to a paid endpoint or fires blind; actuation is one explicit `claude-kimi`
   invocation (a standing-authorization auto-fire, if ever wanted, is the separate autonomy policy,
