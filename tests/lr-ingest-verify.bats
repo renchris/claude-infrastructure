@@ -437,6 +437,20 @@ state_digest() { # $1 = directory → sha of its sorted entry names ("" when abs
   [[ "$output" == *"PASS C5 — $WT is not a git repo and the manifest recorded no branch"* ]] || { echo "$output"; false; }
 }
 
+@test "C5: an EMPTY worktree falls through to cwd, and empty in both still reads as neither" {
+  # lr-handoff writes `"worktree": ""` for a non-git cwd, and jq's `//` skips only null and false,
+  # so the empty string shadowed a recorded cwd (2 live receipts on 2026-10-01, both pane-less moves).
+  rm -rf "$WT/.git"
+  jq --arg w "$WT" '.worktree = "" | .cwd = $w | .branch = ""' "$BUNDLE/MANIFEST.json" > "$BUNDLE/m.tmp" && mv "$BUNDLE/m.tmp" "$BUNDLE/MANIFEST.json"
+  run verify --no-clear
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"PASS C5 — $WT is not a git repo and the manifest recorded no branch"* ]] || { echo "$output"; false; }
+  jq '.cwd = ""' "$BUNDLE/MANIFEST.json" > "$BUNDLE/m.tmp" && mv "$BUNDLE/m.tmp" "$BUNDLE/MANIFEST.json"
+  run verify --no-clear
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"FAIL C5 — the manifest records neither worktree nor cwd"* ]] || { echo "$output"; false; }
+}
+
 # ══ ONE CASE PER SURVIVING MUTANT (W3i M1-M8) ════════════════════════════════════════════════════
 # An adversarial pass built 37 mutants of this gate and 11 SURVIVED a fully green suite. A clause
 # with no case that dies on its mutation is decorative: it can be deleted, inverted or forced true

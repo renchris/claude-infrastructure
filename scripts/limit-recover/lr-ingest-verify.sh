@@ -136,7 +136,8 @@ SID="$(mval '.sid // "ABSENT"')"
 TCFG_M="$(mval '.target_cfg // "ABSENT"')"
 SRC_CFG="$(mval '.source_cfg // "ABSENT"')"
 TARGET="$(mval '.target // "ABSENT"')"
-WT="$(mval '.worktree // .cwd // "ABSENT"')"
+# jq's `//` falls through only on null/false, and lr-handoff writes `"worktree": ""` for a non-git cwd.
+WT="$(mval '[.worktree, .cwd] | map(select(type == "string" and . != "")) | first // "ABSENT"')"
 TS="$(mval '.ts // "ABSENT"')"
 
 # ── A — NOTHING IS OWED ──────────────────────────────────────────────────────────────────────────
