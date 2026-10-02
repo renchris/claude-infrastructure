@@ -184,7 +184,8 @@ n_lines() { grep -c '' "$CC_BACKLOG_FILE"; }
 }
 
 @test "CONTROL — the needs path stays silent: its stdout IS the id, read off a merged stream" {
-  run bash "$CB" needs "authenticate motion-plus in /mcp" --project P
+  # Classed, as callers are taught: an unclassed `needs` WARNs on stderr (49d153596), which `run` folds into $output.
+  run bash "$CB" needs "authenticate motion-plus in /mcp" --class needs-human --project P
   [ "$status" -eq 0 ]
   # bats `run` folds stderr into $output, which is exactly how cc-backlog-needs.bats:58 reads the id
   [[ "$output" =~ ^[0-9a-f]{12}$ ]]
