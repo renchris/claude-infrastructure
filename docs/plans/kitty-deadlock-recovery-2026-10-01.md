@@ -25,14 +25,14 @@ status: in-progress
 | T3 | Write the one-command restart script in /tmp: prep, detach, quit, relaunch, resume. Gate it with `--confirm`, dry-run it, and hand it to the operator | lead | DONE: /tmp/kitty-restart-resume.py and /tmp/kitty-restart-supervisor.py; the restart ran 13:29 |
 | T4 | After the restart, verify every roster session came back, report any that did not, and close the 59 zombie windows' remains | lead (resumed) | DONE: 32 of 32 back in kitty 48854 by 13:48 (three rounds of /tmp/inboot-finish.py), each window fullscreen in one row; 31 recovery prompts typed, but they sat unsent (Restart result, item 4). Pane 39 has since closed |
 | T5 | Fire W2: the durable-fix research session (brief below) | lead | FIRED 13:51 to pane 41 (worktree research/session-durability, custody marker fire-session-durability); lands docs/research/session-durability-2026-10.md. Items 4 to 6 below were sent to it to fold in. DONE 16:36, landed `316a3e087` (content-verified). Pane 41's account hit its weekly limit at 15:52 before the judge and planner ran, so a finishing session (pane 54, next3, custody fire-sd-finish) wrote the verdict, the build plan and the summary from the dossiers on disk. Answer: build H1 restore-first now (62%), the kitty talk-thread patch second (60%); the tmux layer is gated (35%) |
-| T7 | Fire W3: the build waves in docs/research/session-durability-2026-10/W3-build-plan.md (W3.1 = P1, P2, P6 in parallel) | lead | FILED as backlog `b7ce699affec`: no account could take new work at 16:40 (next and next2 out of weekly quota, next3 and next4 at their session limits). The row clears itself once `bin/cc-restore` is on trunk |
+| T7 | Fire W3: the build waves in docs/research/session-durability-2026-10/W3-build-plan.md (W3.1 = P1, P2, P6 in parallel) | lead | FILED as backlog `b7ce699affec`: no account could take new work at 16:40 (next and next2 out of weekly quota, next3 and next4 at their session limits). The row clears itself once `bin/cc-restore` is on trunk. IN PROGRESS 2026-10-02: the dispatcher's worker claimed it at 06:11Z (session 2205cb66, worktree wt-b7ce699affec) and runs W3.1 as three teammates. P1 is committed on branch `w3-p1` (`fdcf221e3`, the recycle no longer forks a hidden copy), P6 on `w3-p6` (`716322ed5`, the talk thread survives `accept()` errors), and P2 is still being edited in worktree w3-p2. None is on trunk yet. This row is the plan's only open work |
 | T6 | Fire the pane-lifecycle fix session (docs/plans/pane-lifecycle-fixes-2026-10-01.md, backlog row 21ba8983cd4a) | dispatcher | TAKEN by the dispatcher's own worker: pane 38, session c197cdd9, worktree wt-21ba8983cd4a. Not this lead's custody |
 
-## Why a restart, and why kitty is stuck
+## Why a restart, and why kitty is stuck — DONE (W1, restart ran 2026-10-01 13:29)
 
 Kitty 610's remote-control socket has 128 queued connections (the macOS limit), so every connect is refused while the listener stays open. It also stopped reaping its children. Recycles, handoffs, self-closes and pane closes all go through that socket, so the fleet is deadlocked: the only fix is a restart, which ends every pane. Evidence: docs/plans/pane-lifecycle-fixes-2026-10-01.md § Decisions. A restart loses no conversation: every transcript is on disk and `claude --resume` restores it. What dies is in-flight state (running commands, background tasks, teammates, Monitor watches), which W1 must re-engage.
 
-## Restart result, 2026-10-01 13:29 (what went wrong, for the durable fix)
+## Restart result, 2026-10-01 13:29 (what went wrong, for the durable fix) — DONE (record; fixes carried into W3)
 
 The quit and the relaunch worked as designed: SIGTERM was ignored, so SIGKILL ended kitty 610 after 10 s, and the new kitty (pid 48854) answered within 3 s. The resume did not finish, for three separate reasons:
 
@@ -45,7 +45,7 @@ The quit and the relaunch worked as designed: SIGTERM was ignored, so SIGKILL en
 
 The boot-resume chain also files its "no desk role" page as a backlog row on every round (row `ade4387f8a09`). That row is a boot-delta notice; it was closed at 18:50Z once the fleet was back.
 
-## W2 brief: durable-fix research (a dispatched session running one Dynamic Workflow)
+## W2 brief: durable-fix research (a dispatched session running one Dynamic Workflow) — DONE (landed 316a3e087)
 
 The question: how should Claude Code sessions on this box survive a terminal crash, a kitty restart or a Mac reboot without a manual rebuild?
 
