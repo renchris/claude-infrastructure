@@ -8543,6 +8543,55 @@ if [ "${1:-}" = "__selfclose" ]; then
   # to the wait loop, which is the graceful path and costs only time.
   cc_alive() { [ "$(pane_cc_state "$TTY_PATH")" = cc ]; }
   at_shell() { [ "$(pane_cc_state "$TTY_PATH")" = shell ]; }
+  # sc_exit_unblock — read this pane once and press AT MOST ONE key that moves the typed /exit
+  # forward without discarding, sending or cancelling anything. Verdict in $SC_XU (no subshell: the
+  # one-retype latch below must survive between checkpoints). The dialog strings live in
+  # hooks/lib/pane-modal.sh, the one enumeration; the composer half is the recycle watcher's own
+  # gated nudge (recycle_nudge_decision), so self-close and recycle cannot disagree about a CR.
+  #   drafts nudge  → Enter: opens the review panel. NEVER Esc — that discards the drafts.
+  #   drafts panel  → Esc: closes it with the drafts still queued, and the exit continues. NEVER
+  #                   Enter — inside an open draft that sends it to Anthropic.
+  #   background    → the "Exit and stop tasks" index, read off the screen. A terminal close ends
+  #                   those tasks anyway; self-close already refuses while live teammates exist.
+  #                   Never Esc: on this dialog Esc is "Stay" and cancels the exit.
+  #   composer      → CR only onto a composer holding exactly /exit; ONE verified retype onto an
+  #                   empty one from 40s on (earlier, the calling turn may still be running with the
+  #                   first /exit queued); anything else HOLDS — a draft is not ours to submit.
+  #   unreadable / unknown dialog → no key. A guessed key is exactly the defect this replaces.
+  sc_exit_unblock() {
+    local it2="$HOME/.claude/bin/it2" scr d k nd
+    SC_XU="hold:unreadable"
+    scr="$(hf_bounded "$it2" session read -s "$SID" -n "${HF_SELFCLOSE_READLINES:-40}" 2>/dev/null || true)"
+    [ -n "$scr" ] || return 0
+    if command -v pane_drafts_dialog >/dev/null 2>&1 && d="$(printf '%s\n' "$scr" | pane_drafts_dialog)"; then
+      case "$d" in
+        nudge) hf_bounded "$it2" session send -s "$SID" $'\r' >/dev/null 2>&1; SC_XU="enter:drafts-nudge rc=$?" ;;
+        panel) hf_bounded "$it2" session send -s "$SID" $'\x1b' >/dev/null 2>&1; SC_XU="esc:drafts-panel rc=$?" ;;
+      esac
+      return 0
+    fi
+    if command -v pane_bgwork_dialog >/dev/null 2>&1 && printf '%s\n' "$scr" | hf_screen_unwrapped | pane_bgwork_dialog; then
+      if command -v pane_bgwork_stop_choice >/dev/null 2>&1 && k="$(printf '%s\n' "$scr" | pane_bgwork_stop_choice)" && [ -n "$k" ]; then
+        hf_bounded "$it2" session send -s "$SID" "$k" >/dev/null 2>&1; SC_XU="key-$k:background-work-stop rc=$?"  # typed-send-lint:allow — one menu-index digit parsed off the dialog being answered, not a command line
+      else
+        SC_XU="hold:background-work-no-stop-index"
+      fi
+      return 0
+    fi
+    nd="$(recycle_nudge_decision "$it2" "$SID")"
+    case "$nd" in
+      cr) hf_bounded "$it2" session send -s "$SID" $'\r' >/dev/null 2>&1; SC_XU="enter:composer-exit rc=$?" ;;
+      retype)
+        if [ "$_retyped" = 1 ] || [ "$waited" -lt 40 ]; then SC_XU="hold:composer-empty"; return 0; fi
+        _retyped=1
+        # The recycle watcher's verified typer: type /exit, read the composer back, CR only on an
+        # exact /exit, and repair only a trailing /exit it typed itself.
+        if RCY_IT2="$it2" hf_exit_readback "$SID"; then SC_XU="retype:composer-empty"
+        else SC_XU="hold:retype-read-back=${HF_EXIT_RB_TEXT:-?}"; fi ;;
+      *) SC_XU="hold:$nd" ;;
+    esac
+    return 0
+  }
   if [ -z "$TTY_PATH" ]; then
     # Truly blind (no tty handed over): NEVER instant-close on a blind read — fixed grace lets
     # the queued /exit land after the calling turn ends, then close teammate-style.
@@ -8557,13 +8606,30 @@ if [ "${1:-}" = "__selfclose" ]; then
     # precisely the branch that spent a year telling operators their live session was gone. Unset,
     # the arithmetic is byte-for-byte what it was: 180 and 5.
     _grace="${HF_SELFCLOSE_GRACE_S:-180}" _step="${HF_SELFCLOSE_GRACE_STEP_S:-5}"
+    _unblock="${HF_SELFCLOSE_UNBLOCK_S:-20}"
+    case "$_unblock" in ''|*[!0-9]*|0) _unblock=20 ;; esac
+    _retyped=0
     waited=0
     while [ "$waited" -lt "$_grace" ]; do
       sleep "$_step"; waited=$((waited+_step))
       cc_alive || break                            # now tree-aware: expect's nested pty no longer hides CC
-      # One CR nudge at 60s (it2 python API — proven detached): submits a stranded /exit whose
-      # Enter a redraw swallowed; a no-op on an empty composer. MUST be \r — Ink ignores \n.
-      [ "$waited" = 60 ] && hf_bounded "$HOME/.claude/bin/it2" session send -s "$SID" $'\r' >/dev/null 2>&1 || true
+      if kitty_identity; then
+        # THE EXIT DIALOGS (2026-10-03, pane 10). On 2.1.284 a `/exit` that TOOK can still leave
+        # claude up behind a dialog, and the right key differs per dialog: Esc DISCARDS drafts at the
+        # unsent-feedback nudge but is "Stay" on the background-work dialog, and Enter SENDS feedback
+        # inside an open draft. The blind 60s CR below opened pane 10's drafts panel, a second CR
+        # opened a draft with "Send feedback" focused, and the composer guard then refused every
+        # force-close, correctly. So under kitty, where the screen is readable, every $_unblock
+        # seconds the watcher reads the screen and presses AT MOST ONE key (sc_exit_unblock).
+        if [ $((waited % _unblock)) -eq 0 ]; then
+          sc_exit_unblock
+          echo "→ exit-unblock: pane $SID at ${waited}s → $SC_XU"
+        fi
+      else
+        # One CR nudge at 60s (it2 python API — proven detached): submits a stranded /exit whose
+        # Enter a redraw swallowed; a no-op on an empty composer. MUST be \r — Ink ignores \n.
+        [ "$waited" = 60 ] && hf_bounded "$HOME/.claude/bin/it2" session send -s "$SID" $'\r' >/dev/null 2>&1 || true
+      fi
     done
     # Deliberately `cc_alive || break` and NOT `at_shell && break`, unlike the recycle watcher. The
     # act at the end of this loop is a CLOSE, which is this path's whole purpose and which the typed
@@ -8628,7 +8694,11 @@ if [ "${1:-}" = "__selfclose" ]; then
     # session retiring itself is always authorized, and an operator's own pane carries no
     # fired-peer marker, so guarding here would retire the common case rather than the hazard.
     # The attribution row is written either way, which is the half that was missing.
-    if hf_close_pane "$SID" self-close self; then _close_ok=1; break; fi
+    # The success line is the log's verdict: without it a log that closed the pane and one that
+    # died mid-loop end on the same last line, and only close-attrib.jsonl could tell them apart.
+    if hf_close_pane "$SID" self-close self; then
+      _close_ok=1; echo "→ closed pane $SID (attempt $_try/4)"; break
+    fi
     echo "⚠ it2 session close attempt $_try/4 failed for $SID — retrying in 2s" >&2
     sleep 2
   done

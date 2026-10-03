@@ -1,0 +1,7 @@
+     Environment info (darwin arm64, v2.1.284, claude-opus-5-5, effort
+     high, thinking adaptive, turn 124/2788, drafted 7h ago) and 3 API
+     request ids are always attached.
+   ❯ Send feedback
+   We may use these reports to debug related issues and improve Claude
+   Code. Turn off Claude-drafted feedback anytime in /config.
+   ↑/↓ to move · Enter to send · d to discard · Esc to later

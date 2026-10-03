@@ -265,12 +265,22 @@ pane_bgwork_dialog() {
 #   rc 1  the header is absent, the label is absent, it is unindexed, or two rows claim it
 # LC_ALL=C on purpose: the chrome it must eat (`❯`, box rules) is multibyte, and a byte-wise
 # character class is what makes `[^[:alnum:]]*` skip it instead of stalling on a partial rune.
-pane_bgwork_choice() {
+pane_bgwork_choice() { _pane_bgwork_index "$CC_MODAL_BGWORK_KEEP"; }
+
+# pane_bgwork_stop_choice — the same reader for "Exit and stop tasks", the row a TERMINAL self-close
+# chooses (handoff-fire.sh __selfclose). A recycle must keep the work because the session goes on;
+# a self-close is retiring the session and its pane, and closing the pane ends those tasks anyway —
+# so stopping them is the answer that matches what the close already does. Same contract: the index
+# is read off the screen being answered, and an absent, unindexed or ambiguous row yields rc 1.
+CC_MODAL_BGWORK_STOP="${CC_MODAL_BGWORK_STOP:-Exit and stop tasks}"
+pane_bgwork_stop_choice() { _pane_bgwork_index "$CC_MODAL_BGWORK_STOP"; }
+
+_pane_bgwork_index() { # $1 = exact label; stdin = screen → stdout: its rendered menu index
   local txt idx
   txt="$(cat)"
   [ -n "$txt" ] || return 1
   printf '%s\n' "$txt" | grep -qE -- "$(_pane_modal_anchor "$CC_MODAL_BGWORK_HEADER")" || return 1
-  idx="$(printf '%s\n' "$txt" | LC_ALL=C awk -v want="$CC_MODAL_BGWORK_KEEP" '
+  idx="$(printf '%s\n' "$txt" | LC_ALL=C awk -v want="$1" '
     {
       p = index($0, want)
       if (p == 0) next
@@ -283,4 +293,64 @@ pane_bgwork_choice() {
   [ -n "$idx" ] || return 1
   [ "$(printf '%s\n' "$idx" | wc -l | tr -d ' ')" = 1 ] || return 1   # ambiguous ⇒ no guess
   printf '%s' "$idx"
+}
+
+# ── THE FEEDBACK-DRAFT EXIT DIALOGS (2.1.284, 2026-10-03) ───────────────────────────────────────
+# `/exit` in a session that queued a Claude-drafted feedback report (the SendFeedback tool) does not
+# exit: it first shows a nudge, and Enter on that nudge opens the drafts panel. Read out of the
+# bundle's /exit `call` and rendered verbatim on a throwaway kitty pane the same day:
+#
+#     You have 1 unsent feedback draft
+#     Enter to review & send · Esc to discard and exit          ← the nudge
+#
+#     Feedback drafts
+#       This session
+#     ❯ THROWAWAY selfclose dialog test - discard     … · idea
+#     Enter to review · d to discard · Esc to close             ← the panel, list view
+#
+#     ❯ Send feedback
+#     ↑/↓ to move · Enter to send · d to discard · Esc to later ← the panel, one draft open
+#
+# THE SAME KEY MEANS OPPOSITE THINGS ACROSS THEM, which is the whole reason this is enumerated: Esc on
+# the nudge DISCARDS the drafts, Enter inside an open draft SENDS it to Anthropic, and Esc on the
+# panel closes it with the drafts still queued, after which the exit continues. The incident (pane
+# 10, 2026-10-03): handoff-fire's self-close typed /exit, the nudge appeared, the watcher's blind
+# 60s CR opened the panel, a second CR opened the draft with "Send feedback" focused, and the pane
+# sat there until its force-close was refused. One more CR would have sent a draft the operator
+# never saw.
+#
+# Same matching rule as every class above — header AND option, each anchored to column 0 modulo
+# chrome — with one constraint the earlier classes did not have: the ANTI-ROT anchor
+# (tests/pane-modal.bats) greps every *_HEADER / *_OPTION alternative out of the shipping binary as a
+# LITERAL, and these dialogs' hint rows are composed at render time from a chord and an action
+# ("Enter" + "review & send"), so no hint row exists in the binary verbatim. The audited values are
+# therefore the binary's own literals, and the screen patterns are built AROUND them:
+#   nudge  header row  `You have <n> unsent <HEADER>[s]`     option row  `Enter to <OPTION>`
+#   panel  header row  `<HEADER>` (the title, or the focused "Send feedback" button of an open draft)
+#          option row  `<OPTION>` (the panel's own body sentence, list view or draft view)
+# A rewording of any audited literal reds the anchor; the glue around it ("You have", "Enter to") is
+# the renderer's chord/pluralize chrome. Both classes also require their KEY-HINT row among the LAST
+# FOUR non-blank rows: it is always the dialog's bottom row, and a read that reaches into scrollback
+# can hold an earlier frame of the other dialog.
+CC_MODAL_DRAFTS_NUDGE_HEADER="${CC_MODAL_DRAFTS_NUDGE_HEADER:-feedback draft}"
+CC_MODAL_DRAFTS_NUDGE_OPTION="${CC_MODAL_DRAFTS_NUDGE_OPTION:-review & send}"
+CC_MODAL_DRAFTS_PANEL_HEADER="${CC_MODAL_DRAFTS_PANEL_HEADER:-Feedback drafts|Send feedback}"
+CC_MODAL_DRAFTS_PANEL_OPTION="${CC_MODAL_DRAFTS_PANEL_OPTION:-Drafts live only on this machine|We may use these reports to debug related issues}"
+
+# pane_drafts_dialog — stdin = a pane's plain screen text → stdout `nudge` or `panel`, rc 0; rc 1
+# when neither is on screen. Reporter only, like everything here: the KEY is the caller's choice.
+pane_drafts_dialog() {
+  local txt foot
+  txt="$(cat)"
+  [ -n "$txt" ] || return 1
+  foot="$(printf '%s\n' "$txt" | awk 'NF' | tail -n 4)"
+  if printf '%s\n' "$foot" | grep -qE -- "$(_pane_modal_anchor "Enter to ($CC_MODAL_DRAFTS_NUDGE_OPTION)")" \
+     && printf '%s\n' "$txt" | grep -qE -- "$(_pane_modal_anchor "You have [0-9]+ unsent ($CC_MODAL_DRAFTS_NUDGE_HEADER)")"; then
+    printf 'nudge'; return 0
+  fi
+  if printf '%s\n' "$foot" | grep -qE -- 'Esc to (close|later)[[:space:]]*$' \
+     && _pane_modal_both "$txt" "$CC_MODAL_DRAFTS_PANEL_HEADER" "$CC_MODAL_DRAFTS_PANEL_OPTION"; then
+    printf 'panel'; return 0
+  fi
+  return 1
 }
