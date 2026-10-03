@@ -1,0 +1,77 @@
+line	chars	bytes	tier	body	shared_body	target	head
+24	328	334	resident	n/a-already-hook	1	reference-verify-a-work-items-premise.md	A work item's premise is a CLAIM — the worst shape is ACCURATE and ALREADY DONE; ask "ha
+25	188	192	resident	n/a-already-hook	1	reference-pipe-masks-gate-exit-code.md	`cmd | tail` exits with TAIL's status, so a red gate reads exit 0; under `set -euo pipef
+26	172	174	resident	n/a-already-hook	1	reference-gate-instruments-manufacture-defects.md	A quality gate can manufacture the defect it then reports; a clause no compliant work ca
+27	198	202	resident	n/a-already-hook	1	reference-exported-but-uncalled-passes-every-gate.md	An exported-but-never-called module passes typecheck, lint, test AND build — per new exp
+28	163	167	resident	n/a-already-hook	1	reference-grep-the-namespace-not-one-import-path.md	A grep for ONE import path under-reports a whole vendor — grep the NAMESPACE, then parti
+29	312	319	resident	n/a-already-hook	1	reference-git-grep-E-does-not-support-word-boundary.md	🚨 `git grep -E '\bfoo\b'` matches NOTHING (POSIX ERE has no `\b`) — 0 files vs 7 for `-w
+30	185	189	resident	n/a-already-hook	1	reference-two-dot-range-renders-trunk-as-deletions.md	`git diff origin/main..HEAD` on a BEHIND branch renders trunk's newer work as YOUR delet
+31	145	149	resident	n/a-already-hook	1	reference-pinged-back-is-not-work-is-safe.md	A completion PING is a claim, not a git fact — check the peer's WORKTREE, never its tran
+32	146	150	resident	n/a-already-hook	1	reference-goal-armed-is-not-goal-live.md	`/goal` can be ARMED, VERIFIED and INERT — `verdict=set` proves it was SET, never that i
+33	378	384	resident	n/a-already-hook	1	reference-a-live-goal-is-not-a-survival-guarantee.md	…and the CONVERSE: a goal can be armed, live, evaluating and CORRECT and the session sti
+34	396	400	resident	n/a-already-hook	1	reference-a-correction-to-a-brief-is-itself-a-claim.md	A brief's CORRECTION to its own roster is itself a claim, and it is trusted harder than 
+35	1013	1024	merge-into-1-hook(situational)	in-body	3	reference-the-land-path-skips-its-own-test-gate.md	~~🚨 `ship-land.sh` SKIPS its own `test:unit` under machine load (observed load ≥24) and 
+36	616	625	merge-into-1-hook(situational)	in-body	3	reference-the-land-path-skips-its-own-test-gate.md	🚨 …and the SAME gate fails the OTHER way from ONE cause: `ship-land.sh` runs `test:unit`
+37	860	873	merge-into-1-hook(situational)	in-body	3	reference-the-land-path-skips-its-own-test-gate.md	🚨 …and a THIRD failure of the same gate: `ship-land.sh` caps each push at `LAND_PUSH_TIM
+38	384	391	situational	n/a-already-hook	1	reference-vitest-default-reporter-prints-no-console-log.md	🚨 vitest's DEFAULT reporter prints NO `console.log`, so a DoD phrased "the test prints N
+39	632	641	situational	in-body	1	reference-a-mocked-boundary-cannot-prove-the-framework.md	🚨 When the claim is "the FRAMEWORK or the SERVER supplies X", the acceptance MUST be a r
+40	745	756	situational	in-body	1	reference-a-decided-against-comment-holds-the-answer.md	🚨 A signed-off `DECIDED AGAINST X` comment at the site is BOTH a prohibition and, usuall
+42	1039	1050	bottle-pathscoped	in-body	9	reference-bottle-photography-per-bottle-pipeline.md	🚨 `referenceImage` IS A FILENAME CAPTURED AT GENERATION TIME, NOT A CONTENT IDENTITY — a
+43	1255	1270	bottle-pathscoped	in-body	9	reference-bottle-photography-per-bottle-pipeline.md	🚨 A DETAIL REFERENCE BUYS GLYPHS AND CHARGES FRAMING — a PURE LABEL MACRO tells the mode
+44	1625	1641	bottle-pathscoped	in-body	9	reference-bottle-photography-per-bottle-pipeline.md	🚨 GLYPHS REACH A GENERATED IMAGE THROUGH **TWO** CHANNELS AND THE MODEL INVENTS WHATEVER
+45	953	962	situational	ORPHAN-write-body-first	2	reference-a-declared-capability-can-be-a-no-op.md	🚨 A FLAG CAN BE PARSED, ECHOED AND SILENTLY DROPPED BY THE CODE PATH YOU ACTUALLY RUN — 
+46	1341	1350	bottle-pathscoped	in-body	9	reference-bottle-photography-per-bottle-pipeline.md	🚨 A FIELD'S BIRTHDATE IS NOT ITS CAPABILITY'S BIRTHDATE, and reading one as the other re
+48	601	608	situational	in-body	1	reference-a-success-verdict-with-a-zero-magnitude.md	🚨 A call that returns SUCCESS while carrying a ZERO MAGNITUDE has already told you it di
+49	798	809	situational	in-body	1	reference-a-flake-that-is-one-coin-flip-per-environment.md	🚨 A gate can be deterministic per ENVIRONMENT and vary only across environment REBUILDS 
+50	843	850	situational	in-body	1	reference-a-gap-list-is-only-as-good-as-its-join-key.md	🚨 A GAP LIST IS ONLY AS GOOD AS ITS JOIN KEY, and a wrong key returns a clean plausible 
+51	611	618	situational	in-body	1	reference-a-catch-can-manufacture-a-destructive-default.md	🚨 A `catch` can MANUFACTURE the destructive default it was meant to guard — `pullActions
+52	965	978	resident	in-body	1	reference-check-whether-you-are-the-thing-loading-the-box.md	🚨 "The box is thrashing" is a claim about a machine — CHECK YOUR OWN PROCESS TABLE FIRST
+53	841	854	situational	in-body	1	reference-a-red-stamp-blocks-its-own-replacement.md	🚨 `postland-verify.sh --run-if-needed` skips on a stamp's PRESENCE, not its VERDICT, and
+54	894	905	situational	in-body	1	reference-a-count-assertion-inherits-the-ambient-env.md	🚨 A test asserting COUNTS over code that reads `process.env` at request time INHERITS th
+56	512	521	situational	in-body	1	reference-two-roots-one-symlink-double-counts.md	🚨 Two roots where one is a SYMLINK to the other double-count every file, so an ambiguity
+57	854	867	situational	in-body	1	reference-a-partial-scope-run-truncates-a-wholesale-artifact.md	🚨 A scope flag narrows what a run PROCESSES, never what it WRITES: `--slug=caymus-cabern
+59	856	871	bottle-pathscoped	in-body	9	reference-bottle-photography-per-bottle-pipeline.md	🚨 Before theorising about WHY a human rejected things, CHECK THE LABEL SET IS STABLE — t
+61	1771	1786	situational	ORPHAN-write-body-first	4	reference-an-environmental-refusal-filed-as-a-verdict-is-permanent.md	🚨 A DYNAMIC WORKFLOW RETURNS A SCHEMA-VALID RESULT THAT READS AS A CLEAN NEGATIVE FINDIN
+62	1462	1475	bottle-pathscoped	in-body	9	reference-bottle-photography-per-bottle-pipeline.md	🚨 WHEN AN OUTPUT MUST SATISFY A DETERMINISTIC AXIS **AND** A STOCHASTIC ONE, CLOSE THE D
+63	1204	1219	situational	in-body	1	reference-a-size-measurement-is-not-an-unfixability-verdict.md	🚨 A SIZE MEASUREMENT IS NOT AN UNFIXABILITY VERDICT — it becomes one only if something o
+64	1666	1687	bottle-pathscoped	in-body	9	reference-bottle-photography-per-bottle-pipeline.md	🚨 A DETAIL REFERENCE IS AUTHORITATIVE FOR EVERY STRING IT DEPICTS, AND THE ONLY STRINGS 
+65	1800	1815	bottle-pathscoped	in-body	9	reference-bottle-photography-per-bottle-pipeline.md	🚨 A CONTROLLED ARM AT n=3 CANNOT SETTLE A DRAW-VARIANCE-DOMINATED PROCESS, AND NINE FIRE
+66	654	663	bottle-pathscoped	in-body	9	reference-bottle-photography-per-bottle-pipeline.md	🚨 A KEEP-RATE WHOSE DENOMINATOR INCLUDES UNEVALUATED ITEMS IS NOT A RATE — I reported ti
+70	174	178	resident	n/a-already-hook	1	feedback-fire-dont-offer.md	STANDING: "proactively always go: yes, fire" — never close on "want me to fire it?". But
+71	195	197	resident	n/a-already-hook	1	feedback-locus-sensor-misses-the-feedback-path.md	A blocked fire PARKS, never overrides; implementation arriving as operator FEEDBACK neve
+72	193	197	resident	n/a-already-hook	1	feedback-clear-and-paste-is-the-gate-free-recycle.md	A manual `/clear` + paste is the same pane and process, so the capacity gate cannot appl
+73	194	198	resident	n/a-already-hook	1	reference-failed-fire-deletes-a-dirty-worktree.md	A FAILED handoff-fire is DESTRUCTIVE — `fire-cleanup` deletes the worktree AND branch; n
+74	199	201	resident	n/a-already-hook	1	reference-recycle-probe-types-into-live-composer.md	`--recycle` cannot see a CC launched via the `expect` wrapper, and its negative branch T
+75	180	184	resident	n/a-already-hook	1	reference-recycle-could-not-change-worktree.md	`--recycle` once refused `--worktree` (fixed `6507f517`) — split FAN-OUT (lead must surv
+76	185	189	resident	n/a-already-hook	1	reference-check-for-sibling-sessions-before-writing.md	A backlog item can be fired N times into ONE shared worktree — pre-flight for siblings; 
+77	627	636	situational	in-body	1	reference-a-slash-token-in-a-goal-string-is-eaten-by-autocomplete.md	🚨 A `/`-prefixed word inside a `--goal` string is EATEN by the composer's slash-command 
+78	186	192	resident	n/a-already-hook	1	reference-pgrep-f-watcher-self-match-deadlock.md	A `pgrep -f <name>` wait-loop matches its OWN command line ⇒ unsatisfiable, and fails si
+79	839	850	situational	in-body	1	reference-the-wake-path-classifier-omits-the-harness-reaper.md	🚨 `cc-await-ping`'s WAKE-PATH-DOWN offers only (B) recycle-exit or (C) a live peer, and 
+80	212	216	resident	n/a-already-hook	1	reference-payload-lint-role-allowlist-blocks-notify-back.md	payload-lint and cc-notify do not share a resolver, so a green gate can pass an UNDELIVE
+81	141	145	resident	n/a-already-hook	1	feedback-recycle-at-67-percent.md	Recycle at **67%** context, not 75% — the cost is DEGRADED WORK in the last third, not a
+82	668	679	situational	in-body	1	reference-a-wedged-subagent-has-no-footprint.md	🚨 A subagent can WEDGE on a Bash tool_use with no process, no error and no result while 
+83	1275	1286	situational	in-body	1	reference-verify-a-fired-peer-by-the-process-table.md	🚨 A FIRED PEER'S LIVENESS IS READ FROM THE PROCESS TABLE AND THE PANE REGISTRY — never f
+84	1145	1169	situational	in-body	1	reference-a-wedged-session-cannot-be-retired.md	🚨 A wedged dispatched SESSION is not a wedged subagent: `TaskStop` does not apply and `c
+88	191	195	resident	n/a-already-hook	1	reference-tui-bang-shell-has-no-tty.md	The `!` shell has NO TTY — interactive auth can never complete there; when an error name
+89	181	185	resident	n/a-already-hook	1	reference-global-skill-shadows-project-command.md	A `/`-command can load the GLOBAL skill even where the project ships `.claude/commands/<
+90	186	190	resident	n/a-already-hook	1	reference-mcp-disable-beats-local-enable.md	A project-level `disabledMcpjsonServers` BEATS a local `enabledMcpjsonServers` — an MCP 
+91	179	181	situational	n/a-already-hook	1	reference-process-group-supervisor-primitives.md	A supervisor that SIGSTOPs its own child must never hold a blocking `wait`; macOS lacks 
+92	156	160	resident	n/a-already-hook	1	reference-session-scratchpad-is-not-storage.md	The session scratchpad is NOT storage — promote durable output AS IT IS PRODUCED, never 
+93	444	451	situational	in-body	1	reference-omitting-an-option-is-not-setting-it-false.md	🚨 Omitting a boolean option is NOT setting it `false` — undici 8's `allowH2` defaults TR
+94	727	738	situational	ORPHAN-write-body-first	1	reference-a-check-one-turn-from-its-write-is-stale.md	🚨 A read-modify-write against a file OTHER SESSIONS also edit needs its check **adjacent
+96	757	766	situational	ORPHAN-write-body-first	2	reference-a-declared-capability-can-be-a-no-op.md	🚨 A bare-name binary in a HOOK is a SILENT no-op, not an error: hooks run on unattended 
+97	878	891	situational	ORPHAN-write-body-first	4	reference-an-environmental-refusal-filed-as-a-verdict-is-permanent.md	🚨 An outer `timeout` you wrap around a GATE script bounds YOUR patience, not the work — 
+99	1127	1138	situational	ORPHAN-write-body-first	4	reference-an-environmental-refusal-filed-as-a-verdict-is-permanent.md	🚨 A gate can blame YOUR diff for a PRE-EXISTING trunk failure, and the refusal says so i
+103	1089	1105	situational	in-body	1	feedback-surface-provenance-you-had-to-check.md	🚨 If establishing a recommended dependency's legitimacy took real WORK, ship the RESULT 
+105	164	168	resident	n/a-already-hook	1	reference-memory-index-lifo-truncation.md	The memory index truncates its TAIL silently, so the NEWEST entries go dark first — rota
+106	206	210	resident	n/a-already-hook	1	reference-compact-memory-assumes-the-wrong-index-shape.md	`/compact-memory`'s structural assumptions are measured on another repo and fail here — 
+107	148	152	resident	n/a-already-hook	1	feedback-filed-assignee-is-a-claim.md	A filed operator-step's ASSIGNEE is a claim — test whether it is out of REACH or merely 
+108	630	639	situational	in-body	1	reference-docs-is-budgeted-claude-plans-is-the-plan-store.md	🚨 `.claude-plans/` is gitignored BY DESIGN (858 plans vs 17 in `docs/plans/`) and `docs/
+109	160	164	resident	n/a-already-hook	1	feedback-cite-the-instruction-dont-invent-a-reason.md	When an instruction already forbids something, CITE it — never invent a technical reason
+110	147	151	resident	n/a-already-hook	1	feedback-open-urls-dont-make-the-operator-copy.md	Never hand the operator a long URL to click (CC hard-wraps it) — run `open "<url>"` inst
+111	1204	1215	situational	in-body	1	reference-an-artifact-nothing-names-is-unfindable.md	🚨 A file can be produced CORRECTLY ON EVERY RUN and still be unfindable: `.floorplan-ite
+112	375	392	resident	n/a-already-hook	1	feedback-run-this-is-for-what-you-cannot-run.md	`▶ Run this:` is ONLY for what you CANNOT execute — before emitting it, NAME the capabil
+113	1642	1657	situational	in-body	1	reference-a-thin-candidate-pool-is-invisible.md	🚨 A THIN CANDIDATE POOL IS INVISIBLE BY CONSTRUCTION — every quality gate you own grades
+114	875	884	situational	in-body	1	reference-tuning-on-a-failure-burns-it-as-a-test-case.md	🚨 THE ITEM YOU TUNED THE PROCESS ON IS TRAINING DATA — re-scoring the fixed process on i
+115	2056	2074	bottle-pathscoped	in-body	1	reference-a-reference-ground-can-break-a-product-attribute.md	🚨 A REFERENCE'S GROUND CAN BREAK A PRODUCT ATTRIBUTE THE REFERENCE ITSELF RENDERS CORREC
+116	1249	1258	resident	ORPHAN-write-body-first	4	reference-an-environmental-refusal-filed-as-a-verdict-is-permanent.md	🚨 READ STDERR SEPARATELY AND FROM THE TOP — `2>&1 | tail` is how a perfect one-line verd
