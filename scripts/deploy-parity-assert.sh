@@ -1255,7 +1255,19 @@ fi
 # So: the direction is measured and SAID, the repair is still nobody's but the operator's, and a
 # live-ahead CLAUDE.md reports under COPYAHEAD — the token both consumers already treat as the loud
 # one — rather than under a word that means the opposite of what is true.
+# WHICH repo file the live CLAUDE.md must equal (2026-10-03, docs/plans/INSTRUCTION_BUDGET.md D2):
+# install.sh copies the SELECTED variant there — the registry's `global <v>` line, default slim, and
+# the full text when the line says full or names a variant this checkout lacks — and the full text to
+# CLAUDE.full.md, which nothing loads. Same resolution as install.sh, so the two cannot disagree.
+_cm_v="$(awk '$1 == "global" { print $2; exit }' "$LIVE/instruction-variants" 2>/dev/null || true)"
+_cm_src="$REPO/CLAUDE.global.${_cm_v:-slim}.md"
+case "${_cm_v:-slim}" in full|*[!a-z0-9-]*) _cm_src="$REPO/CLAUDE.global.md" ;; esac
+[ -f "$_cm_src" ] || _cm_src="$REPO/CLAUDE.global.md"
 if [ -f "$REPO/CLAUDE.global.md" ]; then
+  if [ -e "$LIVE/CLAUDE.md" ] && [ -e "$LIVE/CLAUDE.full.md" ] && [ "$_cm_src" != "$REPO/CLAUDE.global.md" ]; then
+    same_file "$REPO/CLAUDE.global.md" "$LIVE/CLAUDE.full.md"
+    [ $? -eq 1 ] && report "CLAUDEMD" "CLAUDE.full.md" "the deployed full text diverges from the repo (no session loads it; ./install.sh refreshes it)"
+  fi
   if [ ! -e "$LIVE/CLAUDE.md" ]; then
     report "CLAUDEMD" "CLAUDE.md" "the live global instructions are ABSENT → run ./install.sh"
     cls_row 'CLAUDE.md (copy)' miss; drift=1
@@ -1266,14 +1278,14 @@ if [ -f "$REPO/CLAUDE.global.md" ]; then
     file_need "claude-md-absent" \
       "~/.claude/CLAUDE.md is absent — deploy the global instructions (repo claude-infrastructure/CLAUDE.global.md); no session is reading them"
   else
-    same_file "$REPO/CLAUDE.global.md" "$LIVE/CLAUDE.md"
+    same_file "$_cm_src" "$LIVE/CLAUDE.md"
     case $? in
       0) cls_row 'CLAUDE.md (copy)' live ;;
       # Deliberately no sha/count in either title: the trigger is a standing STATE, so the constant
       # title is the condition key (see file_need). A count would mint a new row on every edit.
       # TWO keys, not one, because these are two conditions with two remedies — a single key would
       # let a live-ahead divergence inherit a row already filed for a stale one, and vice versa.
-      1) case "$(copy_direction "$REPO/CLAUDE.global.md" "$LIVE/CLAUDE.md")" in
+      1) case "$(copy_direction "$_cm_src" "$LIVE/CLAUDE.md")" in
            ahead)
              report "COPYAHEAD" "CLAUDE.md" "the LIVE global instructions carry bytes NOT in this checkout's history (unlanded operator edits, or a newer landed revision this checkout has not fetched) — this is UNLANDED WORK, not staleness; do NOT copy repo->live over it"
              # shellcheck disable=SC2088

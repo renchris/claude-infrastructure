@@ -1037,31 +1037,73 @@ fi
 # any of the 5 config dirs and the deploy loop nothing to deploy — all the leg still did was
 # ensure_real_dir an empty ~/.claude/rules on every run, recreating the very directory the migration
 # had emptied. The migration is complete; the live empty dirs were removed with this commit.
+#
+# 🚨 ~/.claude/CLAUDE.md HOLDS THE SELECTED VARIANT, AND THE FULL TEXT DEPLOYS TO CLAUDE.full.md
+# (2026-10-03, docs/plans/INSTRUCTION_BUDGET.md D1-D3). Claude Code's ancestor walk loads
+# ~/.claude/CLAUDE.md and ~/.claude/rules/*.md as PROJECT memory for every cwd under $HOME, and skips
+# them only when the account's own CLAUDE.md/rules resolve to the same realpath. Migration 0042
+# pointed the account links at CLAUDE.slim.md, so every session since 2026-09-25 loaded slim AND
+# full (~181k chars). The fix is one canonical file: the selected variant (registry line
+# `global <variant>` in $CONFIG_DIR/instruction-variants, default slim; `full` = CLAUDE.global.md) is
+# copied here as a REGULAR file — a symlink still double-loads on 2.1.114 (critic.md §2.1) — and the
+# full text goes to a name nothing loads. Migration 0053 then points every account back at this file.
 echo ""
-echo "Global instructions → $CONFIG_DIR/CLAUDE.md"
-if ! diff -q "$REPO_DIR/CLAUDE.global.md" "$CONFIG_DIR/CLAUDE.md" >/dev/null 2>&1; then
-  [[ -L "$CONFIG_DIR/CLAUDE.md" ]] && run rm "$CONFIG_DIR/CLAUDE.md"
-  run cp "$REPO_DIR/CLAUDE.global.md" "$CONFIG_DIR/CLAUDE.md"
-  echo "  ✓ CLAUDE.md ($(wc -l < "$REPO_DIR/CLAUDE.global.md" | tr -d ' ') lines)"
+echo "Global instructions → $CONFIG_DIR/CLAUDE.md (selected variant) + CLAUDE.full.md (full text)"
+if ! diff -q "$REPO_DIR/CLAUDE.global.md" "$CONFIG_DIR/CLAUDE.full.md" >/dev/null 2>&1; then
+  [[ -L "$CONFIG_DIR/CLAUDE.full.md" ]] && run rm "$CONFIG_DIR/CLAUDE.full.md"
+  run cp "$REPO_DIR/CLAUDE.global.md" "$CONFIG_DIR/CLAUDE.full.md"
+  echo "  ✓ CLAUDE.full.md ($(wc -l < "$REPO_DIR/CLAUDE.global.md" | tr -d ' ') lines; not loaded by any session)"
   installed=$((installed + 1))
 else
   skipped=$((skipped + 1))
 fi
-# Instructions A/B variants: CLAUDE.global.<variant>.md → ~/.claude/CLAUDE.<variant>.md, copied for the
-# same branch-switch reason as CLAUDE.md. Inert until `cc-instructions-variant set <account> <variant>`
-# points an account's CLAUDE.md at one (docs/research/token-efficiency-2026-09-23/).
+# Instructions variants: CLAUDE.global.<variant>.md → ~/.claude/CLAUDE.<variant>.md, copied for the
+# same branch-switch reason as CLAUDE.md. Loaded only through ~/.claude/CLAUDE.md below (and, until
+# migration 0053 runs, through accounts 0042 pointed at them directly).
 for _variant in "$REPO_DIR"/CLAUDE.global.*.md; do
   [[ -f "$_variant" ]] || continue
   _vname="${_variant##*/CLAUDE.global.}"; _vname="${_vname%.md}"
   [[ "$_vname" =~ ^[a-z0-9-]+$ ]] || continue
   if ! diff -q "$_variant" "$CONFIG_DIR/CLAUDE.$_vname.md" >/dev/null 2>&1; then
     run cp "$_variant" "$CONFIG_DIR/CLAUDE.$_vname.md"
-    echo "  ✓ CLAUDE.$_vname.md (instructions variant; inert until an account is switched to it)"
+    echo "  ✓ CLAUDE.$_vname.md (instructions variant)"
     installed=$((installed + 1))
   else
     skipped=$((skipped + 1))
   fi
 done
+# The selected variant → CLAUDE.md. A registry naming a variant this checkout does not carry falls
+# back to the full text: a missing variant must never leave sessions without instructions.
+_instr_variant="$(awk '$1 == "global" { print $2; exit }' "$CONFIG_DIR/instruction-variants" 2>/dev/null || true)"
+_instr_variant="${_instr_variant:-slim}"
+_instr_src="$REPO_DIR/CLAUDE.global.$_instr_variant.md"
+if [[ "$_instr_variant" == full || ! "$_instr_variant" =~ ^[a-z0-9-]+$ || ! -f "$_instr_src" ]]; then
+  [[ "$_instr_variant" == full ]] || echo "  ⚠ instructions variant '$_instr_variant' is not in this checkout — deploying the full text to CLAUDE.md"
+  _instr_variant=full
+  _instr_src="$REPO_DIR/CLAUDE.global.md"
+fi
+if ! diff -q "$_instr_src" "$CONFIG_DIR/CLAUDE.md" >/dev/null 2>&1; then
+  [[ -L "$CONFIG_DIR/CLAUDE.md" ]] && run rm "$CONFIG_DIR/CLAUDE.md"
+  run cp "$_instr_src" "$CONFIG_DIR/CLAUDE.md"
+  echo "  ✓ CLAUDE.md ← the $_instr_variant variant ($(wc -l < "$_instr_src" | tr -d ' ') lines)"
+  installed=$((installed + 1))
+else
+  skipped=$((skipped + 1))
+fi
+# $CONFIG_DIR/rules/ holds exactly the selected variant's rule set, which for every variant is the
+# mission board `cc-mission render` writes. Anything else there loads into every session under $HOME
+# (the ancestor walk) and nothing tracked deploys it — on 2026-10-03 that was a 6.3k essay about
+# whether this directory loads. It is moved, never deleted, to a path nothing loads.
+if [[ -d "$CONFIG_DIR/rules" && ! -L "$CONFIG_DIR/rules" ]]; then
+  for _rule in "$CONFIG_DIR/rules"/*; do
+    [[ -e "$_rule" || -L "$_rule" ]] || continue
+    case "${_rule##*/}" in 00-mission-board.md|00-mission-board.md.tmp) continue ;; esac
+    run mkdir -p "$CONFIG_DIR/backups/rules-retired"
+    run mv "$_rule" "$CONFIG_DIR/backups/rules-retired/${_rule##*/}.$(date +%Y%m%d%H%M%S)"
+    echo "  ✓ retired rules/${_rule##*/} → backups/rules-retired/ (not part of the $_instr_variant rule set)"
+    installed=$((installed + 1))
+  done
+fi
 
 # --- Status line ---
 echo ""

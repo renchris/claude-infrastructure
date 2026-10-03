@@ -1881,11 +1881,18 @@ _skillclaim_build() {   # $1=repo root · $2=out claims · $3=out covered
     echo ".claude/CLAUDE.md is now a copy of the global SSOT — that is the double-load again"; false; }
 }
 
-@test "SSOT: install.sh deploys CLAUDE.global.md to the live CLAUDE.md, and reads no root CLAUDE.md" {
+@test "SSOT: install.sh deploys CLAUDE.global.md to CLAUDE.full.md and the selected variant to CLAUDE.md, reading no root CLAUDE.md" {
   # The rename is only real if the installer followed it. A cp from a path that does not exist would
-  # leave ~/.claude/CLAUDE.md frozen at whatever it already held — stale, with no error anywhere.
-  grep -q 'cp "\$REPO_DIR/CLAUDE.global.md" "\$CONFIG_DIR/CLAUDE.md"' "$REPO_ROOT/install.sh" \
-    || { echo "install.sh does not copy CLAUDE.global.md -> \$CONFIG_DIR/CLAUDE.md"; false; }
+  # leave the live copy frozen at whatever it already held — stale, with no error anywhere.
+  # Since 2026-10-03 (docs/plans/INSTRUCTION_BUDGET.md D2) the live CLAUDE.md holds the SELECTED
+  # variant and the full text lives at CLAUDE.full.md; tests/install-instructions-variant.bats owns
+  # the behaviour, this pins the spelling the RAW INSTALL COVERAGE arm below keys on.
+  # shellcheck disable=SC2016  # the single quotes are the point: these are install.sh's literal spellings
+  grep -q 'cp "\$REPO_DIR/CLAUDE.global.md" "\$CONFIG_DIR/CLAUDE.full.md"' "$REPO_ROOT/install.sh" \
+    || { echo "install.sh does not copy CLAUDE.global.md -> \$CONFIG_DIR/CLAUDE.full.md"; false; }
+  # shellcheck disable=SC2016  # the single quotes are the point: these are install.sh's literal spellings
+  grep -q 'run cp "\$_instr_src" "\$CONFIG_DIR/CLAUDE.md"' "$REPO_ROOT/install.sh" \
+    || { echo "install.sh does not copy the selected variant -> \$CONFIG_DIR/CLAUDE.md"; false; }
   # NEG CONTROL: no reader may still name the old repo-side path. `$REPO_DIR/CLAUDE.md` would read a
   # file this repo no longer has; the sibling `$CONFIG_DIR/CLAUDE.md` is the LIVE path and is right.
   ! grep -q '\$REPO_DIR/CLAUDE\.md' "$REPO_ROOT/install.sh" \
@@ -2145,11 +2152,16 @@ _rawdeploy_extract() {  # $1=install.sh  $2=out TSV: line \t kind \t srcclass \t
   # source is $CC_PRIVATE_DIR — outside the checkout BY DESIGN (licensed content this public repo
   # may not carry; docs/plans/PUBLIC_REPO_HYGIENE.md) — so no $REPO_DIR-keyed arm can ever score it,
   # and deploy-link-parity deliberately does not judge links that point outside the checkout.
-  [ "$DVAR" -eq 3 ]
+  # VARIABLE source #4: the SELECTED global variant, `run cp "$_instr_src"` (2026-10-03,
+  # docs/plans/INSTRUCTION_BUDGET.md D2). Its source is CLAUDE.global.md or CLAUDE.global.<v>.md,
+  # both already declared (the assert's CLAUDE.global.md and CLAUDE.global.*.md arms), and its
+  # destination is renamed on the way down, so no per-file leg can score it either.
+  [ "$DVAR" -eq 4 ]
   [ "$(awk -F'\t' '$2=="DEPLOY" && $3=="VARIABLE"{print $1}' "$RAW" \
        | while IFS= read -r n; do sed -n "${n}p" "$MAP"; done | grep -c 'ln -sfn')" -eq 2 ]
   [ "$(awk -F'\t' '$2=="DEPLOY" && $3=="VARIABLE" && $4=="$pvsrc"{n++} END{print n+0}' "$RAW")" -eq 1 ]
   [ "$(awk -F'\t' '$2=="DEPLOY" && $3=="VARIABLE" && $4=="$_variant"{n++} END{print n+0}' "$RAW")" -eq 1 ]
+  [ "$(awk -F'\t' '$2=="DEPLOY" && $3=="VARIABLE" && $4=="$_instr_src"{n++} END{print n+0}' "$RAW")" -eq 1 ]
   # LIVE-PATH source: install.sh:703's ~/bin/restore-file convenience symlink. Its source is
   # $HOME/.claude/..., i.e. the LIVE layer rather than the checkout, so it is unnamable in the units
   # every other arm here uses. Pinned by DESTINATION for that reason.
