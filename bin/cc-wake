@@ -1,0 +1,220 @@
+#!/bin/bash
+# cc-wake — wake an IDLE peer Claude Code session so it takes a turn and reads its inbox.
+#
+#   cc-wake <target> [--wait S | --no-wait] [--from NAME] [--dry-run] [--json]
+#   target = pane id | registry name | session id (resolved through ~/.claude/cc-registry)
+#
+# WHY (docs/plans/AGENT_PEER_WAKE.md). Every wake path this repo had lives on the RECEIVER: the
+# SessionStart/Stop asyncRewake watcher (hooks/mailbox-wake-arm.sh) and a model-armed cc-await-ping.
+# A receiver that is already deaf cannot arm anything, so the wake can only come from outside.
+# Measured 2026-10-03: pane claude-infrastructure-83 went idle at 22:57, its birth watcher lapsed at
+# 3h59m, the Stop re-arm (migration 0012) had never been run, and pane 10's four pings sat UNREAD for
+# hours. Until now the only thing that could wake it was the operator typing into it.
+#
+# THE TRANSPORT IS CLAUDE CODE'S OWN MESSAGING SOCKET, NEVER A KEYSTROKE. v1 typed into panes and was
+# removed because typing races the operator's live input (TWO_WAY_SESSION_COMMS_PLAN.md:8-12). CC
+# ≥2.1.224 binds /tmp/cc-socks/<pid>.sock and publishes ~/.claude*/sessions/<pid>.json. A frame
+#   {"type":"user","session_id":…,"message":{"content":…},"priority":"next"}
+# is QUEUED as an isMeta prompt (read out of the 2.1.284 bundle: `Routed user message to queue`). It
+# never touches the composer, so a half-typed operator draft is untouched by construction, and a
+# session_id that does not match the listener is DROPPED by the listener itself (anti-pid-reuse is
+# then enforced at both ends). Proven external delivery: docs/research/wake-socket-repricing-2026-09-10.md.
+#
+# GATES — every one fails CLOSED (exit 1, nothing sent):
+#   W1 identity    the target resolves to exactly one registry row with a pane, a session id and a pid
+#                  that is alive.
+#   W2 anti-reuse  a sessions/<pid>.json names that session id, its procStart equals the LIVE pid's
+#                  start time, and its messagingSocketPath is a socket we own.
+#   W3 idle        TWO independent producers agree: the vendor says status=="idle", AND our presence
+#                  beat's last kind is `stop` for that same live process; and no permission prompt is
+#                  pending (/tmp/cc-permission-pending/<sid>.json). Unknown is not idle.
+#   W4 mail        the target's inbox keyset holds unacked mail. Waking a session to read nothing is a
+#                  wasted turn — the alarm that always fires carries no information.
+#   W5 rate        at most one wake per session per CC_WAKE_MIN_GAP_S (default 120 s).
+# The payload is FIXED text (a count and one instruction). Mail bodies never ride this channel: they
+# still arrive through mailbox-drain, so the seen/acked cursors stay the single source of truth.
+#
+# VERIFY BY EFFECT, NEVER BY SEND. A socket write proves the bytes left; it does not prove anything was
+# read. --wait S (default 240) polls `mailbox_receipt` for every line that was unacked at send time
+# until each reads `read` (.acked passed it — promoted only at the woken turn's Stop fold).
+#
+# EXIT: 0 READ (or, with --no-wait, frame accepted by the socket) · 1 refused by a gate (nothing sent)
+#       2 usage · 3 SENT but not READ within --wait · 4 transport failed (socket refused/absent)
+#
+# Kill switch: CC_WAKE=off → exit 1 before anything is read or sent.
+# Test seams: CC_REGISTRY_DIR · CC_MAILBOX_DIR · CC_WAKE_SESSIONS_DIRS (space-separated sessions dirs)
+#             CC_BEAT_DIR · CC_PERMPEND_DIR · CC_WAKE_STAMP_DIR · CC_WAKE_LOG · CC_WAKE_POLL_S
+set -uo pipefail
+
+[ "${CC_WAKE:-on}" = off ] && { echo "cc-wake: disabled (CC_WAKE=off)" >&2; exit 1; }
+
+usage() { sed -n '2,5p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+TARGET="" WAIT="${CC_WAKE_WAIT_S:-240}" NOWAIT=0 FROM="${CC_WAKE_FROM:-}" DRY=0 JSON=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --wait)    WAIT="${2:-}"; shift 2 ;;
+    --no-wait) NOWAIT=1; shift ;;
+    --from)    FROM="${2:-}"; shift 2 ;;
+    --dry-run) DRY=1; shift ;;
+    --json)    JSON=1; shift ;;
+    -h|--help) usage ;;
+    -*)        echo "cc-wake: unknown flag $1" >&2; usage ;;
+    *)         [ -z "$TARGET" ] || usage; TARGET="$1"; shift ;;
+  esac
+done
+[ -n "$TARGET" ] || usage
+case "$WAIT" in ''|*[!0-9]*) echo "cc-wake: --wait needs whole seconds" >&2; exit 2 ;; esac
+command -v jq >/dev/null 2>&1 || { echo "cc-wake: jq required" >&2; exit 1; }
+
+_sd="$(cd "$(dirname "$0")" 2>/dev/null && pwd || true)"
+_lib() { # <basename> → first readable copy, repo-relative first (a lib landing in the same commit)
+  local c
+  for c in "$_sd/../hooks/lib/$1" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/$1" "$HOME/.claude/hooks/lib/$1"; do
+    [ -f "$c" ] && { printf '%s' "$c"; return 0; }
+  done
+  return 1
+}
+_mp="$(_lib mailbox-pending.sh)" || { echo "cc-wake: mailbox lib unavailable — cannot read the cursors" >&2; exit 1; }
+# shellcheck source=../hooks/lib/mailbox-pending.sh disable=SC1091  # runtime-resolved; the gate runs shellcheck bare
+. "$_mp"
+_cb="$(_lib cc-beat.sh)" || { echo "cc-wake: presence-beat lib unavailable — idle cannot be proven" >&2; exit 1; }
+# shellcheck source=../hooks/lib/cc-beat.sh disable=SC1091
+. "$_cb"
+
+REG_DIR="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
+MBX="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"
+STAMP_DIR="${CC_WAKE_STAMP_DIR:-$MBX/.wakes}"
+LOG="${CC_WAKE_LOG:-$HOME/.claude/logs/cc-wake.jsonl}"
+SESS_DIRS="${CC_WAKE_SESSIONS_DIRS:-$(for d in "$HOME"/.claude "$HOME"/.claude-*; do [ -d "$d/sessions" ] && printf '%s/sessions ' "$d"; done)}"
+
+PANE="" SID="" PID="" NAME="" SOCK="" KEYF="" REASON=""
+
+finish() { # <exit> <verdict> <reason…>
+  local rc="$1" v="$2"; shift 2
+  REASON="$*"
+  mkdir -p "$(dirname "$LOG")" 2>/dev/null \
+    && jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg t "$TARGET" --arg pane "$PANE" --arg sid "$SID" \
+         --arg v "$v" --arg r "$REASON" --arg from "$FROM" --argjson rc "$rc" \
+         '{ts:$ts,target:$t,pane:$pane,sid:$sid,verdict:$v,reason:$r,from:$from,rc:$rc}' >> "$LOG" 2>/dev/null || true
+  if [ "$JSON" = 1 ]; then
+    jq -nc --arg v "$v" --arg r "$REASON" --arg pane "$PANE" --arg sid "$SID" --argjson rc "$rc" \
+      '{verdict:$v,reason:$r,pane:$pane,sid:$sid,rc:$rc}'
+  fi
+  printf 'cc-wake: verdict=%s target=%s pane=%s (%s) sid=%s — %s\n' "$v" "$TARGET" "${PANE:-?}" "${NAME:-?}" "${SID:0:8}" "$REASON" >&2
+  exit "$rc"
+}
+
+# ── W1 identity ──────────────────────────────────────────────────────────────────────────────────
+_hits=0
+for f in "$REG_DIR"/*.json; do
+  [ -f "$f" ] || continue
+  row="$(jq -c '{p:(.paneUUID//""),n:(.name//""),s:(.session_id//""),pid:((.pid//"")|tostring)}' "$f" 2>/dev/null)" || continue
+  [ -n "$row" ] || continue
+  p="$(printf '%s' "$row" | jq -r .p)"; n="$(printf '%s' "$row" | jq -r .n)"; s="$(printf '%s' "$row" | jq -r .s)"
+  if [ "$TARGET" = "$p" ] || [ "$TARGET" = "$n" ] || { [ -n "$s" ] && [ "$TARGET" = "$s" ]; }; then
+    _hits=$((_hits + 1)); PANE="$p" NAME="$n" SID="$s" PID="$(printf '%s' "$row" | jq -r .pid)"
+  fi
+done
+[ "$_hits" = 1 ] || finish 1 refused-identity "target matched $_hits registry rows (need exactly 1)"
+case "$SID" in ''|*[!0-9A-Za-z-]*) finish 1 refused-identity "registry row carries no usable session_id" ;; esac
+case "$PID" in ''|*[!0-9]*) finish 1 refused-identity "registry row carries no pid" ;; esac
+case "$PANE" in ''|.*|*[!A-Za-z0-9._-]*) finish 1 refused-identity "registry row carries no usable pane id" ;; esac
+kill -0 "$PID" 2>/dev/null || finish 1 refused-identity "pid $PID is not alive"
+
+# ── W2 anti-reuse ────────────────────────────────────────────────────────────────────────────────
+_norm() { printf '%s' "$1" | tr -s ' ' | sed 's/^ *//;s/ *$//'; }
+LIVE_START="$(_norm "$(TZ=UTC LC_ALL=C ps -o lstart= -p "$PID" 2>/dev/null)")"
+[ -n "$LIVE_START" ] || finish 1 refused-identity "cannot read the start time of pid $PID"
+SJ=""
+for d in $SESS_DIRS; do
+  [ -f "$d/$PID.json" ] || continue
+  if [ "$(jq -r '.sessionId // empty' "$d/$PID.json" 2>/dev/null)" = "$SID" ]; then SJ="$d/$PID.json"; break; fi
+done
+[ -n "$SJ" ] || finish 1 refused-no-socket "no sessions/$PID.json names session $SID (CC too old to bind a socket, or the bind failed)"
+[ "$(_norm "$(jq -r '.procStart // empty' "$SJ")")" = "$LIVE_START" ] \
+  || finish 1 refused-identity "sessions file procStart does not match the live pid's start ($LIVE_START) — pid reuse"
+SOCK="$(jq -r '.messagingSocketPath // empty' "$SJ")"
+[ -n "$SOCK" ] && [ -S "$SOCK" ] && [ -O "$SOCK" ] || finish 1 refused-no-socket "messagingSocketPath '${SOCK:-<none>}' is not a socket we own"
+for k in "${SJ%.json}".*.key; do
+  [ -f "$k" ] || continue
+  [ "$(_norm "$(jq -r '.procStart // empty' "$k" 2>/dev/null)")" = "$LIVE_START" ] && { KEYF="$k"; break; }
+done
+
+# ── W3 idle — two independent producers, plus no pending permission prompt ───────────────────────
+VSTATUS="$(jq -r '.status // empty' "$SJ")"
+[ "$VSTATUS" = idle ] || finish 1 refused-busy "vendor status is '${VSTATUS:-<none>}', not idle"
+BEAT="$(cb_last_beat "$SID" 2>/dev/null || true)"
+[ -n "$BEAT" ] || finish 1 refused-busy "no presence beat for $SID — idle cannot be proven"
+[ "$(printf '%s' "$BEAT" | jq -r '.kind // empty')" = stop ] || finish 1 refused-busy "last presence beat is not a Stop — a turn is in flight"
+[ "$(printf '%s' "$BEAT" | jq -r '(.pid // "")|tostring')" = "$PID" ] || finish 1 refused-busy "presence beat names a different pid"
+PP="${CC_PERMPEND_DIR:-/tmp/cc-permission-pending}/$SID.json"
+[ -f "$PP" ] && finish 1 refused-busy "a permission prompt is pending ($PP) — a message would queue behind a human's answer"
+
+# ── W4 something to read ─────────────────────────────────────────────────────────────────────────
+PENDING=""   # "key:line" pairs — the receipt targets
+N=0
+for k in $(mailbox_keyset "$PANE" 2>/dev/null || printf '%s\n' "$PANE"); do
+  u="$(mailbox_unacked_count "$k" 2>/dev/null || echo 0)"
+  case "$u" in ''|*[!0-9]*) u=0 ;; esac
+  [ "$u" -gt 0 ] || continue
+  N=$((N + u)); PENDING="$PENDING $k:$(mailbox_lines "$k")"
+done
+[ "$N" -gt 0 ] || finish 1 refused-no-mail "inbox holds no unacked mail — nothing to wake for"
+
+# ── W5 rate ──────────────────────────────────────────────────────────────────────────────────────
+STAMP="$STAMP_DIR/$SID"
+if [ -f "$STAMP" ]; then
+  last="$(cat "$STAMP" 2>/dev/null)"; case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  gap=$(( $(date +%s) - last ))
+  [ "$gap" -ge "${CC_WAKE_MIN_GAP_S:-120}" ] || finish 1 refused-rate "woke this session ${gap}s ago (min gap ${CC_WAKE_MIN_GAP_S:-120}s)"
+fi
+
+# ── the frame ────────────────────────────────────────────────────────────────────────────────────
+if [ -z "$FROM" ]; then
+  _own="${CC_PANE_ID:-${ITERM_SESSION_ID:-${KITTY_WINDOW_ID:-}}}"; _own="${_own##*:}"
+  [ -n "$_own" ] && [ -f "$REG_DIR/$_own.json" ] && FROM="$(jq -r '.name // empty' "$REG_DIR/$_own.json" 2>/dev/null)"
+fi
+FROM="$(printf '%s' "${FROM:-unknown}" | tr -c 'A-Za-z0-9._-' '_' | cut -c1-64)"
+TEXT="📬 peer-wake: you have $N unread peer message(s) in your inbox (woken by cc-wake for $FROM; nothing was typed into your input line). They arrive as context at your next tool boundary. Run this once to surface them, then act on them: cc-mail --pane $PANE --since 2d --full"
+FRAME="$(jq -nc --arg sid "$SID" --arg from "cc-wake:$FROM" --arg t "$TEXT" \
+  '{type:"user",session_id:$sid,from:$from,message:{role:"user",content:$t},priority:"next"}')"
+
+[ "$DRY" = 1 ] && { printf '%s\n' "$FRAME"; finish 0 dry-run "all gates passed; frame printed, nothing sent (socket $SOCK)"; }
+
+TOKEN=""
+[ -n "$KEYF" ] && TOKEN="$(jq -r '.peerToken // empty' "$KEYF" 2>/dev/null)"
+# Python, not nc: it can hold the connection open until the frame is flushed and report a refused
+# connect as a distinct failure. The token travels on stdin, never argv (argv is world-readable).
+if ! printf '%s\n%s\n' "$TOKEN" "$FRAME" | python3 -c '
+import socket, sys
+tok = sys.stdin.readline().rstrip("\n"); frame = sys.stdin.readline()
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.settimeout(5)
+s.connect(sys.argv[1])
+if tok:
+    import json; s.sendall((json.dumps({"type": "auth", "token": tok}) + "\n").encode())
+s.sendall(frame.encode()); s.shutdown(socket.SHUT_WR)
+try: s.recv(4096)
+except Exception: pass
+s.close()
+' "$SOCK" 2>/dev/null; then
+  finish 4 transport-failed "socket $SOCK refused the connection"
+fi
+mkdir -p "$STAMP_DIR" 2>/dev/null && date +%s > "$STAMP" 2>/dev/null || true
+
+[ "$NOWAIT" = 1 ] && finish 0 sent "frame queued into the idle session's socket ($N unread); verify with cc-notify --receipt"
+
+# ── verify by effect ─────────────────────────────────────────────────────────────────────────────
+t=0
+while :; do
+  all=1
+  for kl in $PENDING; do
+    mailbox_receipt "${kl%%:*}" "${kl##*:}" >/dev/null 2>&1 || { all=0; break; }
+  done
+  [ "$all" = 1 ] && finish 0 read "woken; receipt READ for$PENDING"
+  [ "$t" -ge "$WAIT" ] && break
+  sleep "${CC_WAKE_POLL_S:-5}"; t=$((t + ${CC_WAKE_POLL_S:-5}))
+done
+_now=""
+for kl in $PENDING; do _now="$_now ${kl}=$(mailbox_receipt "${kl%%:*}" "${kl##*:}" 2>/dev/null)"; done
+finish 3 sent-unread "frame sent but not READ within ${WAIT}s:$_now"
