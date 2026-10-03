@@ -1093,9 +1093,13 @@ def classes(cfg, data):
         for t in ("user", "ancestor", "repo"):
             big = [r for r in e["over"] if r["tier"] == t]
             if e["tiers"][t] > int(tb[t]) or big:
-                txt = "%s tier %s > %s%s" % (
+                # A class can breach on a per-file cap alone, with its tier total under budget;
+                # printing "tier 59,515 > 60,000" there stated a false inequality (2026-10-03).
+                rel = ">" if e["tiers"][t] > int(tb[t]) else "within"
+                txt = "%s tier %s %s %s%s" % (
                     t,
                     _k(e["tiers"][t]),
+                    rel,
                     _k(int(tb[t])),
                     "".join(
                         "; %s %s > %s"
