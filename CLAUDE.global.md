@@ -777,7 +777,9 @@ work.** Everything else the agent drives:
   dir"), so the commonest long-horizon succession — *wave N done, wave N+1 starts on a fresh
   worktree off origin/main* — could only be expressed as a Handoff, i.e. a NEW pane. The cost is a
   pane that survives holding nothing: an **ORIGIN** session may not self-close into its successor
-  (that invariant is deliberate and stays), so it idles forever. Measured on
+  unless it can PROVE the successor read its handover (the `verified-successor` class, 2026-10-03:
+  receipt `read`, clean tree, no open custody — `docs/plans/AGENT_PEER_WAKE.md`); without that proof
+  the invariant stays, so it idles forever. Measured on
   `TENANT_PROVISIONING_100P` wave 5 — pane 427 fired the wave lead, ran `self-close --successor
   756`, was correctly refused, and sat idle from 05:39 on while the work finished elsewhere.
   `--recycle --worktree <name>` now provisions the worktree through the ordinary fire machinery and

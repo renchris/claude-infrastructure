@@ -6892,6 +6892,84 @@ subagent_gate() {
   return 0
 }
 
+# ---- VERIFIED-SUCCESSOR — an ORIGIN session retiring into a live successor that READ the handover --
+# docs/plans/AGENT_PEER_WAKE.md, capability 2. The origin invariant below exists to stop a close with
+# NO continuation (the "3M tokens looked lost" carrier). An operator-launched pane that has handed its
+# work to a named, live successor — and can PROVE the successor read the handover — is not that case,
+# yet it had no admissible class, so retiring it was an operator hand-step (2026-10-03, pane 10 →
+# pane 83). Same shape as the assignee and transplanted-source classes: a NAMED category with its own
+# evidence, never a widened --allow-origin-close. Every check fails CLOSED and prints why:
+#   V1 the newest `.sent-lines/<this pane>` row whose box is in the successor's inbox keyset reads
+#      `read` (mailbox_receipt: .acked passed the line — promoted only after a turn of the successor's
+#      provably carried it). Delivered and surfaced are not read.
+#   V2 the tree is clean (tracked files; the same porcelain test the dirty gate uses).
+#   V3 no open custody this pane owns, or that nothing can attribute away from it — the attribution
+#      scripts/wrap-ledger.sh count_open_custody uses, verbatim, except that an unreadable store
+#      REFUSES here: that function feeds a readout, this one feeds a close.
+# The successor's own liveness + engagement (V4) is NOT re-implemented: the successor gate runs for
+# every close, and this class refuses --successor-assume-engaged at the call site.
+sc_verified_successor_evidence() { # $1=this pane $2=successor pane $3=mailbox dir → 0 admitted / 1 refused (reasons on stderr)
+  local me="${1:-}" suc="${2:-}" mdir="${3:-}" f keys k row="" _ts box line _given r rc=0 bin j pair lib
+  if ! command -v mailbox_receipt >/dev/null 2>&1 || ! command -v mailbox_keyset >/dev/null 2>&1; then
+    for lib in "${HF_DIR:-}/../hooks/lib/mailbox-pending.sh" \
+               "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/mailbox-pending.sh" \
+               "$HOME/.claude/hooks/lib/mailbox-pending.sh"; do
+      # shellcheck disable=SC1090,SC1091
+      [ -f "$lib" ] && { . "$lib" 2>/dev/null || true; break; }
+    done
+  fi
+  if ! command -v mailbox_receipt >/dev/null 2>&1 || ! command -v mailbox_keyset >/dev/null 2>&1; then
+    echo "  ✗ V1: the mailbox lib could not be loaded, so the handover receipt cannot be read" >&2; return 1
+  fi
+  # V1
+  f="$mdir/.sent-lines/$me"
+  keys="$(mailbox_keyset "$suc" 2>/dev/null || printf '%s\n' "$suc")"
+  if [ -r "$f" ]; then
+    while read -r _ts box line _given; do
+      for k in $keys; do [ "$k" = "$box" ] && row="$box $line"; done
+    done < "$f"
+  fi
+  if [ -z "$row" ]; then
+    echo "  ✗ V1: this pane ($me) has no recorded message to the successor's inbox ($f) — send the handover with: cc-notify $suc \"<handover>\"" >&2; rc=1
+  else
+    box="${row% *}" line="${row##* }"
+    r="$(mailbox_receipt "$box" "$line" 2>/dev/null)"
+    if [ "$r" != read ]; then
+      echo "  ✗ V1: the handover (line $line of inbox $box) reads '${r:-unknown}', not 'read' — wake it (cc-wake $suc) and re-check with: cc-notify --receipt $box $line" >&2; rc=1
+    else
+      echo "  ✓ V1: the successor READ the handover (line $line of inbox $box)" >&2
+    fi
+  fi
+  # V2
+  if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    if [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null | head -1)" ]; then
+      echo "  ✗ V2: the tree has uncommitted tracked changes — commit them; nothing a successor cannot see may be retired with this pane" >&2; rc=1
+    fi
+  fi
+  # V3
+  bin=""
+  for bin in "${CC_CUSTODY_BIN:-}" "${HF_DIR:-}/../bin/cc-custody" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/bin/cc-custody" "$HOME/.claude/bin/cc-custody"; do
+    [ -n "$bin" ] && [ -x "$bin" ] && break; bin=""
+  done
+  if [ -z "$bin" ] || ! j="$("$bin" list --open --cwd "$PWD" --json 2>/dev/null)" || [ -z "$j" ]; then
+    echo "  ✗ V3: the custody store could not be read — an unknown debt is not a zero one" >&2; rc=1
+  else
+    pair="$(printf '%s' "$j" | jq -r --arg p "$me" '
+            def known: ((.originatorPane // "") != "") or ((.notifyBack // "") != "");
+            def mine:  ((.originatorPane // "") == $p)
+                    or ((.notifyBack // "") == $p)
+                    or ((.notifyBack // "") | endswith("-" + $p));
+            [ (map(select(known and mine)) | length), (map(select(known | not)) | length) ]
+            | map(tostring) | join(" ")' 2>/dev/null || true)"
+    case "$pair" in
+      "0 0") : ;;
+      [0-9]*" "[0-9]*) echo "  ✗ V3: open custody in $PWD (this pane's rows, unattributable rows = $pair) — collect and \`cc-custody return\` (or abandon) each wave first" >&2; rc=1 ;;
+      *) echo "  ✗ V3: the custody store did not render — an unknown debt is not a zero one" >&2; rc=1 ;;
+    esac
+  fi
+  return "$rc"
+}
+
 # ---- V2 §5.1 — THE THIRD SESSION CATEGORY -----------------------------------------------------
 # self-close modelled exactly TWO kinds of session: a FIRED PEER (has a stamp ⇒ may retire) and an
 # ORIGIN session (no stamp ⇒ never retires). An Agent-Team ASSIGNEE whose LEAD IS DEAD is NEITHER:
@@ -10699,6 +10777,36 @@ USAGE
     echo "→ transplanted-source close AUTHORIZED: session ${SC_TS_SID:0:8} was handed off to $SC_TS_TO (lock $SC_TS_LOCK still held)" >&2
     echo "→ its work survives the close: the session continues on the successor pane $SC_SUCCESSOR, which is verified ALIVE and ENGAGED below before anything is typed here" >&2
   fi
+  # ---- VERIFIED-SUCCESSOR PATH — the FIFTH admissible class (docs/plans/AGENT_PEER_WAKE.md) ------
+  # An ORIGIN session (no valid fired-peer stamp) retiring INTO a named successor that provably READ
+  # its handover. Evidence: sc_verified_successor_evidence (V1 receipt read · V2 clean tree · V3 no
+  # custody); V4, the successor alive and engaged, is the successor gate every close runs below.
+  # Considered only where it can matter and only where its evidence is the whole story: a --successor
+  # close (never --terminal — "nothing continues" is exactly what the origin gate refuses), local
+  # (the receipt and the tree are THIS pane's), no other class, and not when a valid stamp already
+  # authorises the close. A failed check never refuses by itself — it falls through to the unchanged
+  # origin gate, which refuses, so this class can only ever ADMIT more than before on its own proof.
+  # It deliberately never reads the --allow-origin-close flag: the override and this class are
+  # independent routes past the gate, and tests/handoff-selfclose-transplanted-source.bats counts the
+  # override's readers to pin that no class becomes a second spelling of it.
+  # Kill switch: CC_ORIGIN_SUCCESSOR_CLOSE=0.
+  if [ -z "$SC_ORIGIN_CLASS" ] && [ -n "$SC_SUCCESSOR" ] && [ "$SC_TERMINAL" = 0 ] \
+     && [ "$SC_REMOTE_SOURCE" = 0 ] && [ "${SC_FIRER_RETIRE:-0}" = 0 ] \
+     && [ "${CC_ORIGIN_SUCCESSOR_CLOSE:-1}" != 0 ] \
+     && [ "$(fired_stamp_tenancy "$SC_FIRED_STAMP" "$PWD")" != valid ]; then
+    if [ "$SC_ALLOW_DIRTY" = 1 ] || [ -n "$SC_DIRTY_OWNER" ] || [ "$SC_ASSUME_ENGAGED" = 1 ]; then
+      echo "→ verified-successor class NOT considered: --allow-dirty, --dirty-owner and --successor-assume-engaged each waive a check this class exists to require" >&2
+    else
+      echo "→ origin session with --successor $SC_SUCCESSOR: checking the verified-successor class" >&2
+      if sc_verified_successor_evidence "$SC_SID" "$SC_SUCCESSOR" "${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"; then
+        SC_ORIGIN_CLASS="verified-successor"
+        # LEGIBILITY (R10), the standard the sibling classes hold: announce the authorisation change.
+        echo "→ verified-successor close AUTHORIZED: successor $SC_SUCCESSOR read this pane's handover; the tree is clean and no custody is open. Its liveness and engagement are verified below before anything is typed here." >&2
+      else
+        echo "→ verified-successor class NOT established (✗ above) — falling through to the origin gate" >&2
+      fi
+    fi
+  fi
   # ONE derivation of "this pane established a named admissible class", read by the adoption step and
   # by BOTH refusal branches below. Deliberately not three copies of `!= "assignee"`: a class added
   # at one site and missed at another is the correctly-placed-wrongly-narrow failure, and it fails
@@ -10710,8 +10818,8 @@ USAGE
   # a valid one and this class is already past the gate either way. It is a consistency fix, so it is
   # pinned STRUCTURALLY instead — the suite asserts all three sites read this one predicate.
   case "$SC_ORIGIN_CLASS" in
-    assignee|transplanted-source) SC_CLASS_EXEMPT=1 ;;
-    *)                            SC_CLASS_EXEMPT=0 ;;
+    assignee|transplanted-source|verified-successor) SC_CLASS_EXEMPT=1 ;;
+    *)                                               SC_CLASS_EXEMPT=0 ;;
   esac
   # THREE states, not two (see fired_stamp_tenancy above). `absent` and `stale` both refuse, but they
   # are different facts and the pre-existing message could only state one of them: a live pane that
@@ -10918,8 +11026,13 @@ USAGE
 !!     $SC_FIRED_STAMP
 !!   Only a session that was FIRED BY an originator may retire itself — it pings that
 !!   originator, then closes. An operator's main session and an Agent-Team LEAD have no
-!!   originator to hand back to, so they NEVER self-close: not in progress, not when done.
-!!   A finished origin session STAYS UP and reports; the operator closes it.
+!!   originator to hand back to, so they never declare an end-of-line (--terminal): not in
+!!   progress, not when done. A finished origin session STAYS UP and reports.
+!!   ONE way out that needs no operator: retire INTO a live successor that has READ your handover
+!!   (class verified-successor — clean tree, no open custody, successor alive and engaged):
+!!     cc-notify <successor> "<handover>"      wakes it if idle; prints the receipt line N
+!!     cc-notify --receipt <successor> <N>     repeat until it reads receipt=read
+!!     self-close --successor <successor-pane>
 USAGE
     if [ -n "$SC_ORPHAN_STAMP" ]; then
       cat >&2 <<USAGE
