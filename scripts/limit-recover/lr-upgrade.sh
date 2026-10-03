@@ -879,10 +879,9 @@ _lru_switch_drive_run() {
   fi
   mutex="$UPG_MUTEX_DIR/$sid.active"
   mkdir -p "$UPG_MUTEX_DIR" 2>/dev/null || true
-  if ! mkdir "$mutex" 2>/dev/null; then
+  if ! lru_mutex_take "$sid" "$pane" "lr-upgrade switch"; then
     lru_switch_result "$sid" "$pane" NOTMOVED - "$target" "busy: another run holds $mutex (nothing typed)" "$req" "$by"; return 3
   fi
-  printf '{"sid":"%s","pane":"%s","pid":%d,"by":"lr-upgrade switch"}\n' "$sid" "$pane" "$$" > "$mutex/holder" 2>/dev/null || true
   # RE-JUDGE AT EXECUTION TIME, with the same predicates the requester's census used. A session that
   # went busy since is reported and never typed into.
   row="$(lru_switch_census "" "$target" "pane:$pane" 2>/dev/null | LRU_S="$sid" awk -F'\t' '$2 == ENVIRON["LRU_S"]' | head -1)"
@@ -962,6 +961,18 @@ EOF
   return 1
 }
 lru_mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
+# The one-actuator mutex, through lr-lib.sh's lr_claim_take like cc-lr, lr-fleet and the poller:
+# a holder that is DEAD is stolen, a live one refuses. A bare `mkdir` here refused forever on a claim
+# an lr-fleet driver left behind a day earlier (pane 33, 2026-10-02). Without the lib (hermetic
+# tests), the bare mkdir is kept.
+lru_mutex_take() { # $1=sid $2=pane $3=by → 0 taken · 1 held
+  if command -v lr_claim_take >/dev/null 2>&1; then
+    lr_claim_take "$UPG_MUTEX_DIR" "$1" "$3" "$2" "$$" >/dev/null; return
+  fi
+  mkdir -p "$UPG_MUTEX_DIR" 2>/dev/null || true
+  mkdir "$UPG_MUTEX_DIR/$1.active" 2>/dev/null || return 1
+  printf '{"sid":"%s","pane":"%s","pid":%d,"by":"%s"}\n' "$1" "$2" "$$" "$3" > "$UPG_MUTEX_DIR/$1.active/holder" 2>/dev/null || true
+}
 
 # ── drive ONE background-session move (F4, 2026-09-27) ─────────────────────────────────────────────
 # The manual move that worked on pane 405, made a verb, with every keystroke typed by THIS process
@@ -1280,10 +1291,9 @@ _lru_drive_run() {
   local mutex run L t0 hflog hrc=0 i cmd target_bin sock binlabel st
   mutex="$UPG_MUTEX_DIR/$sid.active"
   mkdir -p "$UPG_MUTEX_DIR" 2>/dev/null || true
-  if ! mkdir "$mutex" 2>/dev/null; then
+  if ! lru_mutex_take "$sid" "$pane" "lr-upgrade"; then
     lru_result "$sid" "$pane" skipped "busy: another run holds $mutex" "" "$req" "$by"; return 3
   fi
-  printf '{"sid":"%s","pane":"%s","pid":%d,"by":"lr-upgrade"}\n' "$sid" "$pane" "$$" > "$mutex/holder" 2>/dev/null || true
   # shellcheck disable=SC2064  # expand now: the mutex path is fixed for this call
   trap "rm -rf '$mutex' 2>/dev/null" RETURN
 

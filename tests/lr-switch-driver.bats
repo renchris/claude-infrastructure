@@ -301,6 +301,29 @@ cc_lr_env() {
   [ "$(jq -r .verdict "$r")" = SWITCHED ] || { cat "$r"; false; }
 }
 
+@test "D4c [RED] a claim left by a DEAD driver is taken over and the move proceeds; a LIVE holder still refuses" {
+  # pane 33, 2026-10-02: an lr-fleet driver from the day before left runs/by-sid/<sid>.active
+  # behind, and the drainer's bare mkdir refused it forever.
+  export LRU_LR_LIB="$REPO/scripts/limit-recover/lr-lib.sh"
+  tui_stub; export SUBMIT_ACT=flip
+  sess 563 60606060-0000-4000-8000-000000000003
+  m="$LRU_STATE/runs/by-sid/60606060-0000-4000-8000-000000000003.active"; mkdir -p "$m"
+  sleep 99999 & live=$!; dead=$live; kill "$live"; wait "$live" 2>/dev/null || true
+  printf '{"sid":"x","pane":"563","pid":%d,"by":"lr-fleet --one --detach"}\n' "$dead" > "$m/holder"
+  run bash "$LRU" --switch-drive 60606060-0000-4000-8000-000000000003 563 next2 --req-id r3c
+  r="$LRU_STATE/results/switch-60606060-0000-4000-8000-000000000003.json"
+  [ "$status" -eq 0 ] || { echo "$output"; cat "$r"; false; }
+  [ "$(jq -r .verdict "$r")" = SWITCHED ] || { cat "$r"; false; }
+  sess 564 60606060-0000-4000-8000-000000000004
+  m="$LRU_STATE/runs/by-sid/60606060-0000-4000-8000-000000000004.active"; mkdir -p "$m"
+  printf '{"sid":"x","pane":"564","pid":%d,"by":"cc-lr"}\n' "$$" > "$m/holder"
+  run bash "$LRU" --switch-drive 60606060-0000-4000-8000-000000000004 564 next2 --req-id r3d
+  r="$LRU_STATE/results/switch-60606060-0000-4000-8000-000000000004.json"
+  [ "$status" -eq 3 ] || { echo "$output"; cat "$r"; false; }
+  [[ "$(jq -r .reason "$r")" == busy:* ]] || { cat "$r"; false; }
+  if grep -q '^564|' "$BATS_TEST_TMPDIR/submit.log" 2>/dev/null; then echo "typed into a held session"; false; fi
+}
+
 @test "D5 a submit the TUI refused (composer occupied) is NOTMOVED; a submit with no outcome in the bound is FAILED" {
   tui_stub
   sess 571 70707070-0000-4000-8000-000000000001
