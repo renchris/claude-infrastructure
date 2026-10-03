@@ -24,6 +24,12 @@
 
 setup() {
   export CC_FIRE_CAPACITY_GATE=off CC_FIRE_HEADROOM_GATE=off
+  # Hermetic: the subject never sees the operator's live ~/, and its account-sweep seams point at
+  # ABSENT paths (those sensors fail open on one) instead of /tmp defaults and a PATH-resolved tool.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/absent-sweep-stamp.json"
+  export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/absent-claude-accounts"
+  export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/heal-lock-"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HF="$REPO/scripts/handoff-fire.sh"
   LIB="$REPO/hooks/lib/pane-modal.sh"
