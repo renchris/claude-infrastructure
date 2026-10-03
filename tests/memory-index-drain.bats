@@ -634,7 +634,14 @@ _mid_units() {                        # the budget arithmetic, lifted with its r
 # is now computed by hooks/lib/rules-loaded.sh; these pin all three answers and the rendered shape.
 
 # settings <loads|excluded|unknown> → points RULES_LOADED_SETTINGS at a fixture giving that answer
+#
+# It also PINS THE ROTOR BUDGET, for the reason case 19 does (18ed810a7). Every case that calls this
+# (30-34) asserts the drain REACHED a verdict and then checks its wording; none tests the cut. Left at
+# MID_DEADLINE_S's 7s default the assertion becomes "was the box quiet enough": measured 2026-10-03 at
+# load ~4/core, case 32 rendered "MEMORY INDEX DRAIN WAS CUT at its share of the 7s rotor budget" and
+# 32 + 34 failed on every tree back to e4ade9394, blocking an unrelated land.
 settings() {
+  export MID_DEADLINE_S=120
   case "$1" in
     loads)    printf '{"claudeMdExcludes":["**/no-such-rules-file.md"]}\n' >"$T/settings-loads.json"
               export RULES_LOADED_SETTINGS="$T/settings-loads.json" ;;
