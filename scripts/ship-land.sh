@@ -3841,6 +3841,43 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
   fi
 
+  # ── always-loaded INSTRUCTION BUDGET ratchet (docs/plans/INSTRUCTION_BUDGET.md D7) ─────────────
+  # The size half of the arm above, and the land-time arm of the one predicate the Write/Edit gate
+  # (hooks/backup-before-write.sh) and the fleet auditor (bin/cc-instruction-budget) share. The
+  # PreToolUse gate cannot see Bash writes, machine writers or a conflict resolved during rebase
+  # (critic.md §2.3: pre-commit does not run there), so this judges the REBASED range.
+  #
+  # OWN-RANGE, like the arm above: it compares each instruction file and the repo tier at the
+  # merge-base against HEAD and refuses only what THIS land grew past budget. A file or tier that a
+  # sibling already left over budget convicts nobody until a land makes it bigger.
+  # `enforce` in config/instruction-budget.json governs this arm and the gate together: while it is
+  # false the tool prints SHADOW and exits 0.
+  # gate_bounded: SHIP_LAND_IB_BIN=/nonexistent disarms a broken detector; the arm only fires for a
+  # land whose diff touches an instruction-shaped path.
+  IB_BIN="${SHIP_LAND_IB_BIN:-bin/cc-instruction-budget}"
+  if [[ -x "$IB_BIN" ]]; then
+    local ib_own=""
+    ib_own="$(git diff --name-only "$range" -- ':(glob)**/CLAUDE*.md' ':(glob)**/.claude/rules/**' 2>/dev/null || true)"
+    if [[ -n "$ib_own" ]]; then
+      echo "→ gate: instruction-budget ratchet (this land edits $(printf '%s\n' "$ib_own" | grep -c .) instruction-shaped file(s))" >&2
+      if ! selftest_ok "$IB_BIN" hooks/lib/instruction_budget.py config/instruction-budget.json; then
+        echo "✗ gate: cc-instruction-budget --selftest FAILED — the predicate no longer discriminates." >&2
+        echo "  Escape if it is the detector that is broken: SHIP_LAND_IB_BIN=/nonexistent" >&2
+        gate_red instruction-budget-selftest
+        return 1  # gate_bounded: SHIP_LAND_IB_BIN=/nonexistent — escape for a broken detector; fires only on lands touching CLAUDE*.md or .claude/rules
+      fi
+      local _ibrc=0
+      "$IB_BIN" range "$range" --repo "$(pwd -P)" >&2 || _ibrc=$?
+      if (( _ibrc == 2 )); then arm_nonverdict "instruction-budget"; return 1; fi
+      if (( _ibrc != 0 )); then
+        echo "✗ gate: instruction-budget RED — this land grows an always-loaded instruction file or" >&2
+        echo "  tier past budget (named above). Move the body to the destination the message names." >&2
+        gate_red instruction-budget
+        return 1  # gate_bounded: refuses only this land's own growth; any shrink of the named file clears it, and enforce=false in config/instruction-budget.json turns it to SHADOW
+      fi
+    fi
+  fi
+
   # ── PLAN FRONTMATTER (BACKLOG_MASTER W0 ledger-retraction.3) ─────────────────────────────────
   # A plan with no `status:` frontmatter reads UNKNOWN in find-plan.sh --list-open forever, so its
   # plan-open row can never retract. Diff-scoped like the rules arm: only plans this land adds or
