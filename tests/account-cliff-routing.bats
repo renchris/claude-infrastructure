@@ -31,7 +31,7 @@ setup() {
   # The cliff term's own knobs must never leak in from the invoking shell either — a session that
   # exported CC_ROUTE_CLIFF_TERM=off would turn every assertion below vacuous.
   unset CC_ROUTE_CLIFF_TERM CC_ROUTE_CLIFF_SOFT_H CC_ROUTE_CLIFF_DRAIN_H CC_ROUTE_CLIFF_SOFT_FACTOR
-  unset CC_ROUTE_DESK_CLIFF_WINDOW CC_ROUTE_DESK_LIFE_H CC_ROUTE_DESK_HYST
+  unset CC_ROUTE_DESK_CLIFF_WINDOW CC_ROUTE_DESK_LIFE_H CC_ROUTE_DESK_CLIFF_STRAND_PP CC_ROUTE_DESK_HYST
 
   # Fixture $HOME before anything else. Overriding CLAUDE_ACCOUNTS_JSON / _LASTGOOD / cache_file is
   # not sufficient: bin/claude-accounts derives several other paths from $HOME (the relogin-poll
@@ -387,12 +387,14 @@ print("OK")'
   [[ "$output" == *OK* ]] || false
 }
 
-# ── the desk lane: drain-overlap gate ───────────────────────────────────────────────────────────
+# ── the desk lane: the soft factor is lifted only for a stranding week, drain past desk life ─────
 
-@test "desk 2026-10-03T02:22Z regression: a soft account whose drain is past any desk lifetime ranks by earliest reset" {
+@test "desk 2026-10-03T02:22Z regression: a stranding soft account whose drain is past any desk lifetime ranks by earliest reset" {
   run python3 -c "$LOAD"'
 import os
-n4 = row(acct="next4", weekly_pct=25, weekly_reset_h=30.6529, login_expires_h=128.36)
+# wk_strand_pp 62 = the readout nowcast for next4 that night ("strand ~62pp of 75")
+n4 = row(acct="next4", weekly_pct=25, weekly_reset_h=30.6529, login_expires_h=128.36,
+         wk_strand_pp=62.0)
 n3 = row(acct="next3", weekly_pct=32, weekly_reset_h=81.6529, login_expires_h=518.29)
 assert ca.cliff_band(n4) == "soft"
 out, _ = ca.ranked([n3, n4], cfg, WIN_OPEN, "interactive")
@@ -407,19 +409,45 @@ print("OK")'
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
 
+@test "desk soft factor stays when the week is NOT stranding: relogin poll ticks are kept" {
+  run python3 -c "$LOAD"'
+import os
+# the same next4-shaped row on pace to use its week (the September next2 case, 0pp stranded)
+n3 = row(acct="next3", weekly_pct=32, weekly_reset_h=81.6529, login_expires_h=518.29)
+def n4(**kw):
+    return row(acct="next4", weekly_pct=25, weekly_reset_h=30.6529, login_expires_h=128.36, **kw)
+for kw in ({}, {"wk_strand_pp": None}, {"wk_strand_pp": 0.0}, {"wk_strand_pp": 3.99}):
+    assert ca._desk_cliff_factor(n4(**kw)) == ca.CLIFF_SOFT_FACTOR, kw    # unknown => keep it
+    out, _ = ca.ranked([n3, n4(**kw)], cfg, WIN_OPEN, "interactive")
+    assert [r["acct"] for _s, r in out][0] == "next3", (kw, out)
+assert ca._desk_cliff_factor(n4(wk_strand_pp=4.0)) == 1.0                  # the floor is inclusive
+os.environ["CC_ROUTE_DESK_CLIFF_STRAND_PP"] = "70"
+assert ca._desk_cliff_factor(n4(wk_strand_pp=62.0)) == ca.CLIFF_SOFT_FACTOR
+for bad in ("abc", "-1"):                                                  # malformed => default 4
+    os.environ["CC_ROUTE_DESK_CLIFF_STRAND_PP"] = bad
+    assert ca._desk_cliff_factor(n4(wk_strand_pp=4.0)) == 1.0, bad
+    assert ca._desk_cliff_factor(n4(wk_strand_pp=3.0)) == ca.CLIFF_SOFT_FACTOR, bad
+del os.environ["CC_ROUTE_DESK_CLIFF_STRAND_PP"]
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
 @test "desk soft band still demotes by exactly CLIFF_SOFT_FACTOR once drain is within DESK_LIFE_H" {
   run python3 -c "$LOAD"'
+# a stranding week throughout, so this case isolates the drain-overlap condition
 clear = row(weekly_reset_h=30.0)
 ck = ca.score_interactive(clear, cfg)[0] - ca.desk_keys(clear, cfg)[2]
 def key(lx):
-    r = row(weekly_reset_h=30.0, login_expires_h=lx)
+    r = row(weekly_reset_h=30.0, login_expires_h=lx, wk_strand_pp=50.0)
     return ca.score_interactive(r, cfg)[0] - ca.desk_keys(r, cfg)[2]
+assert ca.DESK_LIFE_H == 60.0
 assert abs(key(80.0) - ck * ca.CLIFF_SOFT_FACTOR) < 1e-12
-assert abs(key(96.0) - ck * ca.CLIFF_SOFT_FACTOR) < 1e-12      # drain_in == 48: still demoted
-assert key(96.01) == ck                                         # just past: gated
+assert abs(key(108.0) - ck * ca.CLIFF_SOFT_FACTOR) < 1e-12     # drain_in == 60: still demoted
+assert key(108.01) == ck                                        # just past: lifted
 assert key(168.0) == ck
 # a near-drain account loses the desk exactly as before, even with the earliest reset
-near = row(acct="near", weekly_reset_h=20.0, login_expires_h=90.0)
+near = row(acct="near", weekly_reset_h=20.0, login_expires_h=90.0, wk_strand_pp=50.0)
 rival = row(acct="rival", weekly_reset_h=81.0)
 out, _ = ca.ranked([near, rival], cfg, WIN_OPEN, "interactive")
 assert [r["acct"] for _s, r in out][0] == "rival", out
@@ -431,7 +459,8 @@ print("OK")'
 @test "desk kill switch: CC_ROUTE_DESK_CLIFF_WINDOW=off restores the x0.25 across the whole soft band" {
   run python3 -c "$LOAD"'
 import os
-n4 = row(acct="next4", weekly_pct=25, weekly_reset_h=30.6529, login_expires_h=128.36)
+n4 = row(acct="next4", weekly_pct=25, weekly_reset_h=30.6529, login_expires_h=128.36,
+         wk_strand_pp=62.0)
 n3 = row(acct="next3", weekly_pct=32, weekly_reset_h=81.6529, login_expires_h=518.29)
 os.environ["CC_ROUTE_DESK_CLIFF_WINDOW"] = "off"
 out, _ = ca.ranked([n3, n4], cfg, WIN_OPEN, "interactive")
@@ -448,19 +477,20 @@ print("OK")'
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
 
-@test "desk knob CC_ROUTE_DESK_LIFE_H: tunable, and malformed or negative falls back to 48" {
+@test "desk knob CC_ROUTE_DESK_LIFE_H: tunable, and malformed or negative falls back to 60" {
   run python3 -c "$LOAD"'
 import os
-r128 = row(login_expires_h=128.0)
+S = 50.0                                   # a stranding week, so only the life knob is under test
+r128 = row(login_expires_h=128.0, wk_strand_pp=S)
 assert ca._desk_cliff_factor(r128) == 1.0
 for bad in ("abc", "-1"):
     os.environ["CC_ROUTE_DESK_LIFE_H"] = bad
     assert ca._desk_cliff_factor(r128) == 1.0, bad
-    assert ca._desk_cliff_factor(row(login_expires_h=90.0)) == ca.CLIFF_SOFT_FACTOR, bad
+    assert ca._desk_cliff_factor(row(login_expires_h=100.0, wk_strand_pp=S)) == ca.CLIFF_SOFT_FACTOR, bad
 os.environ["CC_ROUTE_DESK_LIFE_H"] = "200"
 assert ca._desk_cliff_factor(r128) == ca.CLIFF_SOFT_FACTOR
 os.environ["CC_ROUTE_DESK_LIFE_H"] = "0"
-assert ca._desk_cliff_factor(row(login_expires_h=60.0)) == 1.0
+assert ca._desk_cliff_factor(row(login_expires_h=60.0, wk_strand_pp=S)) == 1.0
 del os.environ["CC_ROUTE_DESK_LIFE_H"]
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
