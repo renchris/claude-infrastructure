@@ -68,7 +68,8 @@ tui_stub() {
 cc_tui_composer() { tr -d '[:space:]' < "$BATS_TEST_TMPDIR/composer-\$1" 2>/dev/null; return 0; }
 cc_tui_composer_text() { cat "$BATS_TEST_TMPDIR/composer-\$1" 2>/dev/null; return 0; }
 cc_tui_clear() { [ "\${CLEAR_RC:-0}" = 0 ] || return "\$CLEAR_RC"; : > "$BATS_TEST_TMPDIR/composer-\$1"; }
-cc_tui_type() { printf '%s|%s\n' "\$1" "\$(cat "\$2")" >> "$BATS_TEST_TMPDIR/type.log"; cat "\$2" >> "$BATS_TEST_TMPDIR/composer-\$1"; }
+cc_tui_type() { printf 'paste:%s|%s\n' "\$1" "\$(cat "\$2")" >> "$BATS_TEST_TMPDIR/type.log"; cat "\$2" >> "$BATS_TEST_TMPDIR/composer-\$1"; [ -z "\${CLIP_IMAGE:-}" ] || printf '[Image #1]' >> "$BATS_TEST_TMPDIR/composer-\$1"; }
+cc_tui_type_keys() { case "\$(head -c 1 "\$2")" in '!'|'#'|'/'|'?'|'&') return 2 ;; esac; printf 'keys:%s|%s\n' "\$1" "\$(cat "\$2")" >> "$BATS_TEST_TMPDIR/type.log"; cat "\$2" >> "$BATS_TEST_TMPDIR/composer-\$1"; }
 cc_tui_submit() {
   [ ! -s "$BATS_TEST_TMPDIR/composer-\$1" ] || return 3
   printf '%s|%s\n' "\$1" "\$(cat "\$2")" >> "$BATS_TEST_TMPDIR/submit.log"
@@ -337,7 +338,7 @@ cc_lr_env() {
 DRAFT='I mean http://localhost:3334 cant be reached'
 
 @test "D6a [RED] a draft is saved, cleared, the session moves, and the draft is typed back UNSENT after the resume settles" {
-  tui_stub; export SUBMIT_ACT=flip LRU_COMPOSER=on LRU_SWITCH_DRAFT_SETTLE_S=0
+  tui_stub; export SUBMIT_ACT=flip LRU_COMPOSER=on LRU_SWITCH_DRAFT_SETTLE_S=0 CLIP_IMAGE=1
   sess 581 68686868-0000-4000-8000-000000000001
   printf '%s' "$DRAFT" > "$BATS_TEST_TMPDIR/composer-581"
   run bash "$LRU" --switch-drive 68686868-0000-4000-8000-000000000001 581 next2 --req-id r6a
@@ -347,7 +348,8 @@ DRAFT='I mean http://localhost:3334 cant be reached'
   [[ "$(jq -r .reason "$r")" == *"draft was carried"* ]] || { cat "$r"; false; }
   # the switch line went into an EMPTY box, and the draft came back after it, never submitted
   [[ "$(cat "$BATS_TEST_TMPDIR/submit.log")" == "581|[operator-ruling cc-lr-switch req=r6a]"* ]] || { cat "$BATS_TEST_TMPDIR/submit.log"; false; }
-  [ "$(cat "$BATS_TEST_TMPDIR/type.log")" = "581|$DRAFT" ] || { cat "$BATS_TEST_TMPDIR/type.log"; false; }
+  # as KEYSTROKES: a paste would attach the clipboard's image (CLIP_IMAGE models one being there)
+  [ "$(cat "$BATS_TEST_TMPDIR/type.log")" = "keys:581|$DRAFT" ] || { cat "$BATS_TEST_TMPDIR/type.log"; false; }
   [ "$(cat "$BATS_TEST_TMPDIR/composer-581")" = "$DRAFT" ] || false
   [ "$(cat "$LRU_STATE"/switch/68686868-*/draft.txt)" = "$DRAFT" ] || false
 }
@@ -361,6 +363,17 @@ DRAFT='I mean http://localhost:3334 cant be reached'
   [ "$status" -eq 3 ] || { echo "$output"; cat "$r"; false; }
   [[ "$(jq -r .reason "$r")" == *"near its weekly cap"*"draft was carried"* ]] || { cat "$r"; false; }
   [ "$(cat "$BATS_TEST_TMPDIR/composer-582")" = "$DRAFT" ] || false
+}
+
+@test "D6d a draft the keystroke path refuses (leading /) falls back to the paste, and an image that rode along is REPORTED, never claimed carried" {
+  tui_stub; export SUBMIT_ACT=flip LRU_COMPOSER=on LRU_SWITCH_DRAFT_SETTLE_S=0 CLIP_IMAGE=1
+  sess 584 68686868-0000-4000-8000-000000000004
+  printf '%s' "/compact keep the floor-plan notes" > "$BATS_TEST_TMPDIR/composer-584"
+  run bash "$LRU" --switch-drive 68686868-0000-4000-8000-000000000004 584 next2 --req-id r6e
+  r="$LRU_STATE/results/switch-68686868-0000-4000-8000-000000000004.json"
+  [ "$(jq -r .verdict "$r")" = SWITCHED ] || { cat "$r"; false; }
+  [[ "$(cat "$BATS_TEST_TMPDIR/type.log")" == "paste:584|/compact"* ]] || { cat "$BATS_TEST_TMPDIR/type.log"; false; }
+  [[ "$(jq -r .reason "$r")" == *"reads differently"*"saved at"* ]] || { cat "$r"; false; }
 }
 
 @test "D6c a box that cannot be cleared moves nothing and keeps the draft; LRU_SWITCH_CARRY_DRAFT=off holds as before" {

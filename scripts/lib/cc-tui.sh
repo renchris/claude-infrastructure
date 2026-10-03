@@ -433,6 +433,26 @@ cc_tui_type() { # $1=id $2=payload file → 0 delivered / 1 provably absent or t
   return 0
 }
 
+# As cc_tui_type, but as KEYSTROKES, not a paste. Claude Code reads the system clipboard on a paste
+# event and attaches any image on it: measured 2026-10-03 on pane 152, a bracketed paste of
+# "probe draft text" came back "probe draft text[Image #1]" with a screenshot on the clipboard, and
+# the same text sent unbracketed came back clean. Use this to put an OPERATOR's text back. It
+# refuses (rc 2, nothing sent) a payload with control bytes or a newline, which keystrokes would act
+# on, and one whose first character switches the input mode (! # / ? &).
+cc_tui_type_keys() { # $1=id $2=payload file → 0 delivered / 1 provably absent or the RPC failed / 2 refused
+  local id="${1:-}" f="${2:-}" erc=0 first
+  cc_tui_valid_id "$id" || return 1
+  [ -n "$f" ] && [ -s "$f" ] || return 1
+  LC_ALL=C grep -q '[[:cntrl:]]' "$f" && return 2
+  [ "$(LC_ALL=C wc -l < "$f" | tr -d ' ')" = 0 ] || return 2
+  first="$(LC_ALL=C head -c 1 "$f")"
+  case "$first" in '!'|'#'|'/'|'?'|'&') return 2 ;; esac
+  cc_tui_exists "$id" || erc=$?
+  [ "$erc" = 1 ] && return 1
+  cc_tui_rpc send-text --match "id:$id" --bracketed-paste=disable --from-file "$f" >/dev/null 2>&1 || return 1
+  return 0
+}
+
 cc_tui_cr() { # $1=id → 0 sent / 1 the RPC failed
   local id="${1:-}"
   cc_tui_valid_id "$id" || return 1

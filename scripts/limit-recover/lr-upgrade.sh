@@ -878,11 +878,21 @@ lru_draft_restore() { # $1=pane $2=draft file $3=transcript $4=sid or "" (no mov
     fi
     sleep "${LRU_SWITCH_POLL_S:-5}"
   done
+  # As KEYSTROKES, never a paste where it can be helped: a paste attaches whatever image is on the
+  # clipboard (pane 33, 2026-10-03: the draft came back with "[Image #2]" after it). A draft the
+  # keystroke path refuses (a leading mode character, a newline) falls back to the paste, and the
+  # read-back below reports it if an image rode along. The settle covers the image chip, which
+  # renders a moment after the text.
+  local trc=0
   # shellcheck disable=SC1090
-  if ! ( . "$LRU_TUI_LIB" && cc_tui_type "$pane" "$f" ) >/dev/null 2>&1; then
-    printf 'your draft was NOT typed back (the paste failed); it is saved at %s' "$f"; return 1
+  ( . "$LRU_TUI_LIB" && cc_tui_type_keys "$pane" "$f" ) >/dev/null 2>&1 || trc=$?
+  # shellcheck disable=SC1090
+  if [ "$trc" = 2 ] && ! ( . "$LRU_TUI_LIB" && cc_tui_type "$pane" "$f" ) >/dev/null 2>&1; then trc=1
+  elif [ "$trc" = 2 ]; then trc=0; fi
+  if [ "$trc" != 0 ]; then
+    printf 'your draft was NOT typed back (the send failed); it is saved at %s' "$f"; return 1
   fi
-  sleep "${LRU_SWITCH_DRAFT_SETTLE_S:-1}"
+  sleep "${LRU_SWITCH_DRAFT_SETTLE_S:-3}"
   # shellcheck disable=SC1090
   got="$( . "$LRU_TUI_LIB" && cc_tui_composer "$pane")" || got=""
   if [ "$got" = "$want" ]; then
