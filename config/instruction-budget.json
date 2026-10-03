@@ -2,7 +2,7 @@
   "_what": "Budgets for always-loaded instruction files, read by hooks/lib/instruction_budget.py (the one predicate) for the Write/Edit gate, the land ratchet and the fleet auditor. Plan: docs/plans/INSTRUCTION_BUDGET.md D7. Units are loader chars: UTF-16 code units after YAML frontmatter and column-0 HTML comment blocks are stripped.",
   "_why_numbers": "40,000 is Claude Code's per-file warning floor on a 200k-context window (max(40000, window*0.05*3)); 120,000 is its total floor, split user 60k + ancestor 0 + repo 60k. Budgeting to the smallest window means the same files never warn on any model the fleet runs.",
   "_enforce": "false = shadow mode: the gate logs would-deny rows to the IDL and the land ratchet prints SHADOW, neither refuses. Flip to true only once reso origin/main no longer carries .claude/rules/bottle-generation-ledger.md (plan W2), or the live bottle workflow's next ledger append is refused.",
-  "enforce": false,
+  "enforce": true,
   "per_file": 40000,
   "conditional_per_file": 40000,
   "tiers": {
