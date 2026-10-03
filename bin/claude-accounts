@@ -52,7 +52,8 @@ Usage:
       so `weekly 100%` is one rendering of three different states — 99% used and `allowed`,
       exactly full, and 102% used and `rejected`. The `anthropic-ratelimit-unified-*` response
       headers carry the unclamped fraction AND the server's own allowed/allowed_warning/rejected
-      verdict, so they are what the router and the `ʷ`-suffixed cells use whenever present.
+      verdict, so they are what the router and the table use whenever present; each account at
+      100% gets a sentence saying whether the server confirmed it is out.
       Cost: ONE `max_tokens: 1` call per account (~25 tokens; 1 weekly pp is ~500k). Un-forced it
       fires only at/above WIRE_NEAR_WALL, where the integer is ambiguous. Kill: CC_ACCOUNTS_WIRE=off.
   claude-accounts --readout           the /accounts chat readout, as finished markdown.
@@ -4417,15 +4418,20 @@ def soonest_reset_line(rows, cfg):
         return None
     r = min(cands, key=lambda x: x["weekly_reset_h"])
     left = max(0.0, 100.0 - r["weekly_pct"])
-    parts = [f"next reset: {r['acct']} in {fmt_h(r['weekly_reset_h'])}, {left:.0f}pp left"]
+    parts = [f"next reset: {r['acct']} in {fmt_h(r['weekly_reset_h'])}, "
+             f"{left:.0f}% of the week left"]
     if left > 0:
         parts.append(f"needs {left / r['weekly_reset_h']:.1f}pp/h to use it")
     s = wk_strand_pp(r)
-    if s is not None:
+    if s is not None and left > 0:     # at 0% left there is no pace to report
         parts.append("on pace to use it all" if s < 0.5 else f"~{s:.0f}pp dies at 48h pace")
     _, why = score_general(r, cfg)
     if why == "kmax-concurrency":
         parts.append(f"not routed: {k_eff(r)} working ≥ cap {k_cap(r, cfg['router'])}")
+    elif why == "weekly-exhausted":
+        # Plain words. Whether the server CONFIRMED it is the per-account sentence's job, which
+        # sits just above this line on the board; repeating it here only lengthened the board.
+        parts.append("not used for new work: out of weekly quota")
     elif why:
         parts.append(f"not routed: {why}")
     return " · ".join(parts)
@@ -6069,15 +6075,20 @@ def fmt_h(h, narrow=False):
 
 
 def _wire_note(r):
-    """A throttled row's substitute wire read, stated as figures — the narrow board carries no `ʷ`
-    marks, so pointing at them would point at nothing."""
+    """A throttled row's substitute server read, stated as figures in plain words."""
     w = r.get("wire") or {}
     if not r.get("wire_substitute"):
         return ""
-    f = [f"{lbl} {w[k] * 100:.0f}% {w.get(st) or '?'}"
-         for lbl, k, st in (("5h", "5h_util", "5h_status"), ("7d", "7d_util", "7d_status"))
+    f = [f"{lbl} {w[k] * 100:.0f}% ({_plain_status(w.get(st))})"
+         for lbl, k, st in (("5-hour", "5h_util", "5h_status"), ("weekly", "7d_util", "7d_status"))
          if w.get(k) is not None]
-    return f"; live wire read: {', '.join(f)}" if f else ""
+    return f"; Anthropic's server reads {', '.join(f)}" if f else ""
+
+
+def _plain_status(s):
+    """The server's allowed/allowed_warning/rejected verdict, as words a reader needs no key for."""
+    return {"allowed": "accepting work", "allowed_warning": "accepting work, near the limit",
+            "rejected": "refusing work"}.get(s, "status unknown")
 
 
 def _retry_hint(r):
@@ -6461,13 +6472,15 @@ def readout_lines(rows, cfg, win, cached, narrow=False):
         Withheld (null) on a bucket whose window has ROLLED since that reading: reporting
         the last-known number there would state a figure the reset has already voided.
         """
-        # `ʷ` = read off the WIRE, and it is the number that decides. The endpoint's integer
-        # rounds UP and clamps at 100, so it renders "99% used, allowed" and "102% used,
-        # rejected" as the same `100%`; the wire carries both, unclamped. The suffix is what
-        # tells a reader that a `100%` WITHOUT it is a rounded ceiling, not a measured wall.
+        # The server's own reading decides when present: the endpoint's integer rounds UP and
+        # clamps at 100, so "99% used, allowed" and "102% used, rejected" both read `100%`. A
+        # still-allowed window is floored and capped at 99 (board_eff), so the cell never shows
+        # 100% for an account the server is still serving; the per-account sentence says which.
         wv = (r.get("wire") or {}).get(WIRE_FIELD.get(key))
         if wv is not None:
-            return f"{wv * 100:.0f}%ʷ"
+            bv, refused = board_eff(r, key)
+            if bv is not None:
+                return f"{(wv * 100 if refused else bv):.0f}%"
         v = r.get(key)
         if v is None:
             return "—"
@@ -6615,30 +6628,33 @@ def readout_lines(rows, cfg, win, cached, narrow=False):
         # is ~5.2% of a whole 5-hour one. So the bullet now states which of the three it is, and
         # says so in the language of who decided: the SERVER, or a rounding we did.
         #
-        # ON THE BOARD the first two states are drawn IN THE BAR instead (board_eff/board_bar):
-        # refused = a solid red bar at 100%, still-allowed = the floored wire percent over a bar
-        # whose last cell is never full. The operator asked for that distinction where the eye
-        # already is (2026-10-01), and the bullets restating it were the board's longest lines.
+        # BOTH SURFACES PRINT THE SENTENCE, and it leads with the answer in plain words (operator,
+        # 2026-10-03). The 2026-10-01 board carried this distinction only in the bar — a solid
+        # bar for refused, a one-eighth sliver for still-allowed — and in the ABSENCE of a line:
+        # the refused account got no sentence at all, while the unverified one got one. Nobody
+        # can read "confirmed out" off a missing line, and the operator could not. Each state now
+        # names itself, with who decided it: Anthropic's server, or our rounding.
         wire = r.get("wire") or {}
         w7, s7 = wire.get("7d_util"), wire.get("7d_status")
+        resets = (f"; resets in {fmt_h(r['weekly_reset_h'])}"
+                  if isinstance(r.get("weekly_reset_h"), (int, float)) else "")
         if s7 == "rejected":
-            if not narrow:
-                notes.append(f"○ `{acct}` — weekly **EXHAUSTED** — the server is refusing it"
-                             + (f" (wire {w7 * 100:.0f}% used)" if w7 is not None else ""))
+            notes.append(f"`{acct}` is **out of weekly quota**, confirmed by Anthropic's server"
+                         + (f" ({w7 * 100:.0f}% used)" if w7 is not None else "") + resets)
         elif w7 is not None and (r.get("weekly_pct") or 0) >= 100:
-            if not narrow:
-                notes.append(f"◐ `{acct}` — weekly meter reads 100% but the wire reads "
-                             f"**{board_eff(r, 'weekly_pct')[0]:.0f}%, `{s7 or 'allowed'}`** — "
-                             f"~{max(0.0, 1 - w7) * 100:.0f}pp "
-                             f"left (~{max(0.0, 1 - w7) * 100 / K_FROZEN:.0f}% of a 5h window); "
-                             f"still routable")
+            notes.append(f"`{acct}` is **not out of weekly quota**: the meter shows 100%, but "
+                         f"Anthropic's server says {board_eff(r, 'weekly_pct')[0]:.0f}% used and "
+                         f"still accepts work (about {max(0.0, 1 - w7) * 100:.0f}% of the week "
+                         f"left, roughly {max(0.0, 1 - w7) * 100 / K_FROZEN:.0f}% of one "
+                         f"5-hour window)")
         elif (r.get("weekly_pct") or 0) >= 100:
-            notes.append(f"○ `{acct}` — weekly meter at **100%** — rounded and clamped, so the "
-                         f"true figure is 99–10x% and unverified; `--wire` reads the server's own verdict")
+            notes.append(f"`{acct}` shows 100% weekly, **not confirmed**: the usage meter rounds "
+                         f"up, so a little may be left; `claude-accounts --wire` asks the server")
         if wire.get("5h_status") == "rejected":
-            notes.append(f"○ `{acct}` — 5h **REFUSED** by the server"
-                         + (f" (wire {wire['5h_util'] * 100:.0f}% used"
-                            + (", lower-priority lane available" if wire.get("fallback") == "available" else "")
+            notes.append(f"`{acct}` is **out of 5-hour quota**, confirmed by Anthropic's server"
+                         + (f" ({wire['5h_util'] * 100:.0f}% used"
+                            + ("; a lower-priority lane is still open"
+                               if wire.get("fallback") == "available" else "")
                             + ")" if wire.get("5h_util") is not None else ""))
         if (r.get("route_reasons") or {}).get("fable") == "fable-exhausted":
             notes.append(f"○ `{acct}` — Fable exhausted")
@@ -6689,22 +6705,10 @@ def readout_lines(rows, cfg, win, cached, narrow=False):
                          + f"`{r.get('launcher') or '?'}` → `/login`"
                          + (f" · {r['email']} · Dia “{r['dia_profile']}”" if r.get("email") else ""))
 
-    # THE ʷ LEGEND — a marker nobody can decode is a marker that carries nothing. `*` at least
-    # travels with its own "last-known" bullet; `ʷ` shipped as a bare glyph and the operator had
-    # to ask what it meant, which is the whole defect (2026-09-20). It is a footnote about the
-    # TABLE, not about an account, so it goes here rather than in a per-row bullet.
-    #
-    # PRESENCE-GATED, and that is not thrift — it is alarm polarity. The probe fires only at the
-    # wall, so most readouts carry no `ʷ` at all; a legend printed under those would explain a
-    # glyph that is not on screen, at every invocation, forever. It appears exactly when there is
-    # something to decode.
-    # The board never prints `ʷ` (its cells are _bpct, not pctc), so it never needs the legend.
-    if not narrow and any("ʷ" in pctc(r, k) for r in rows for k in WIRE_FIELD):
-        footnotes.append("`ʷ` = read from the server's own rate-limit headers — unclamped, and "
-                         "carrying its `allowed`/`allowed_warning`/`rejected` verdict. A percent "
-                         "WITHOUT it is the usage endpoint's integer, which rounds UP and clamps "
-                         "at 100, so a bare `100%` is a ceiling we did not verify.")
-
+    # NO MARKER, SO NO LEGEND (2026-10-03). The table used to suffix a server-read cell with `ʷ`
+    # and explain it in a footnote; even with the legend the operator could not read it at a
+    # glance ("not intuitively clear"). Each account at the wall now carries its own sentence
+    # above, so the cell is a plain percent and nothing on screen needs decoding.
     for n in notes + footnotes:
         # Same note text, both surfaces. Markdown is a list item in chat and plain wrapped prose
         # on the board; the SENTENCE is identical, which is the property that matters — an

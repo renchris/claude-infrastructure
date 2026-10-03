@@ -187,10 +187,11 @@ print("OK")'
 }
 
 # ---- W-6: the renderer says WHICH of the three states it is ------------------------------------
-# The bullet used to read `weekly **LIMITED** (100%)` for all three. Each now names its own state,
-# and the `ʷ` suffix is what tells a reader that a bare `100%` is a rounded ceiling.
+# The bullet used to read `weekly **LIMITED** (100%)` for all three. Each now names its own state
+# in plain words, answer first, and says who decided it — the server or our rounding (2026-10-03:
+# the `ʷ` cell suffix that used to carry this was a code the operator could not read at a glance).
 
-@test "W-6: the three 100%-states render as three different bullets, and ʷ marks a wire cell" {
+@test "W-6: the three 100%-states render as three different plain sentences, no coded marks" {
   run python3 -c "$LOAD"'
 import io, contextlib
 WIN_OPEN = {"active": True, "end": "2099-12-31", "deadline": None, "permanent": True}
@@ -202,26 +203,29 @@ def readout(wire):
     return buf.getvalue(), r
 allowed, r1 = readout({"7d_util": 0.99, "7d_status": "allowed_warning", "5h_util": 0.05,
                        "5h_status": "allowed", "status": "allowed_warning", "http": 200})
-assert "◐" in allowed and "99%" in allowed and "still routable" in allowed, allowed
-assert "99%ʷ" in allowed, "the table cell must carry the wire value and its marker"
+assert "is **not out of weekly quota**" in allowed and "says 99% used" in allowed, allowed
+assert "still accepts work" in allowed, allowed
+row = next(l for l in allowed.splitlines() if l.startswith("|") and "next3" in l)
+assert "| 99% |" in row, "a still-allowed weekly cell must never read 100%%: %r" % row
 rejected, _ = readout({"7d_util": 1.0, "7d_status": "rejected", "5h_util": 0.05,
                        "5h_status": "allowed", "status": "rejected", "http": 429})
-assert "EXHAUSTED" in rejected and "the server is refusing it" in rejected, rejected
+assert "is **out of weekly quota**, confirmed by Anthropic" in rejected, rejected
 blind, r3 = readout(None)
-assert "rounded and clamped" in blind and "unverified" in blind, blind
-assert "ʷ" not in blind, "a cell with no wire reading must never carry the wire marker"
+assert "shows 100% weekly, **not confirmed**" in blind and "rounds up" in blind, blind
+for out in (allowed, rejected, blind):
+    assert "ʷ" not in out and "wire" not in out.replace("--wire", ""), "no coded marks or jargon: %r" % out
 assert allowed != rejected != blind, "three states, three renderings"
 print("OK")'
-  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
 
-# ---- W-9: the marker is decodable, and only when it is on screen -------------------------------
-# `ʷ` shipped as a bare glyph. The operator read a rendered table and had to ask what it meant —
-# a marker nobody can decode carries nothing, which is the same defect as no marker at all. The
-# legend is PRESENCE-GATED: the probe fires only at the wall, so printing it under the many
-# readouts that carry no `ʷ` would explain an absent glyph forever (alarm polarity).
+# ---- W-9: nothing on screen needs a legend ------------------------------------------------------
+# `ʷ` shipped as a bare glyph, then gained a footnote legend (2026-09-20); the operator still could
+# not read it at a glance (2026-10-03). The marker and its legend are gone — the per-account
+# sentence carries the verdict — and an account away from the wall prints no verdict at all.
 
-@test "W-9: the ʷ legend appears when a wire cell does, and never when none does" {
+@test "W-9: no ʷ marker and no legend at the wall; no verdict sentence away from it" {
   run python3 -c "$LOAD"'
 import io, contextlib
 WIN_OPEN = {"active": True, "end": "2099-12-31", "deadline": None, "permanent": True}
@@ -234,12 +238,10 @@ def readout(lim, wire):
 marked = readout(limits(weekly=100),
                  {"7d_util": 0.99, "7d_status": "allowed_warning", "5h_util": 0.05,
                   "5h_status": "allowed", "status": "allowed_warning", "http": 200})
-assert "ʷ" in marked, marked
-assert "rate-limit headers" in marked, "a ʷ on screen with no legend is the defect itself"
-assert "rounds UP and clamps" in marked, marked
+assert "ʷ" not in marked and "rate-limit headers" not in marked, marked
+assert "not out of weekly quota" in marked, marked
 plain = readout(limits(session=5, weekly=11), None)
-assert "ʷ" not in plain, plain
-assert "rate-limit headers" not in plain, "a legend for a glyph that is not on screen is noise"
+assert "ʷ" not in plain and "weekly quota" not in plain and "not confirmed" not in plain, plain
 print("OK")'
   [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
@@ -316,9 +318,10 @@ print("OK")'
 # The board showed refused and 99%-still-allowed accounts as the same solid red bar at `100%`, with
 # the difference only in six lines of footnote prose. The bar and percent now carry it: refused =
 # solid bar at 100%, still-allowed = the FLOORED wire percent over a bar whose last cell is never
-# full, and the board drops the bullets (and the ʷ legend, for a glyph its cells never print).
+# full. The board ALSO prints the plain sentence (2026-10-03): the bar alone left "confirmed out"
+# readable only from a missing line, which the operator could not read.
 
-@test "W-10: board bar — refused is solid, 99%-allowed keeps a visible sliver, footnotes leave the board" {
+@test "W-10: board — refused is solid and says confirmed, 99%-allowed keeps a sliver and says not out" {
   run env CC_BOARD_COLOR=off python3 -c "$LOAD"'
 import io, contextlib
 WIN_OPEN = {"active": True, "end": "2099-12-31", "deadline": None, "permanent": True}
@@ -336,9 +339,11 @@ assert "████████ " in refused and "100%" in refused, refused
 assert "███████▊ " in allowed, "a spendable bar must not read full: %r" % allowed
 row = next(l for l in allowed.splitlines() if "next3" in l and "█" in l)
 assert " 99%" in row and "100%" not in row, row
+flat = lambda t: " ".join(t.split())
+assert "next3 is out of weekly quota, confirmed by Anthropic" in flat(refused), refused
+assert "next3 is not out of weekly quota" in flat(allowed), allowed
 for out in (refused, allowed):
-    assert "EXHAUSTED" not in out and "still routable" not in out, out
-    assert "rate-limit headers" not in out, "the board never prints ʷ, so no legend: %r" % out
+    assert "ʷ" not in out and "rate-limit headers" not in out, out
 # Whole cells used to round 94% up to a full bar; eighths keep it short of full.
 assert ca.board_bar(94.0) == "███████▌", ca.board_bar(94.0)
 assert ca.board_bar(100.0) == "████████"

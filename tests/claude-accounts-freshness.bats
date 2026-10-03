@@ -282,7 +282,7 @@ assert "RESET since that reading" in t and "server now allows 7d" in t, t
 assert "routed on a fresh wire read" in t and "--fresh to retry" not in t, t
 assert "429 backoff" in t, t
 board = "\n".join(ca.readout_lines([r], cfg, win, False, narrow=True))
-assert "RESET since that reading" in board and "live wire read: 5h 1% allowed, 7d 0% allowed" \
+assert "RESET since that reading" in board and "server reads 5-hour 1% (accepting work), weekly 0% (accepting work)" \
     in " ".join(board.split()), board
 assert "--fresh" not in board, board
 row = [l for l in board.splitlines() if "next3" in l][0]
