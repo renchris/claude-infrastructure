@@ -2604,6 +2604,9 @@ def _soft(r, R):
 #                    finally gets the k==0 window it has never once found (all 4 accounts sit at
 #                    k=5-6, so the autonomous path was 0-BY-CONSTRUCTION). Draining an account IS
 #                    a routing decision — that is why this belongs here and not in a new daemon.
+#   The DESK lane gates SOFT by drain overlap (_desk_cliff_factor): it demotes only while the drain
+#   point is within a desk's lifetime, because that is the only case where a desk opened now can
+#   still hold k > 0 when cc-relogin needs it at 0.
 #
 # FAIL-OPEN on absence is not a nicety: login_expires_h is not on every build (see the
 # --relogin-status detection note), and reading a missing field as "cliff imminent" would exclude
@@ -2669,6 +2672,37 @@ def _cliff_factor(r):
     if cliff_band(r) != "soft":
         return 1.0
     return _cliff_env("CC_ROUTE_CLIFF_SOFT_FACTOR", CLIFF_SOFT_FACTOR)
+
+
+# Upper bound on how long a desk session lives: R2 §3 desk transcripts max out at 22.3h wall-clock
+# (n=30), and the oldest live process in a 2026-10-03 ps snapshot was ~47h.
+DESK_LIFE_H = 48.0
+
+
+def _desk_cliff_factor(r):
+    """The SOFT-band factor as the DESK lane applies it: only while drain is within DESK_LIFE_H.
+
+    ── Why the desk cannot use _cliff_factor as-is (measured 2026-10-03) ─────────────────────────
+    The soft band exists so new-session inflow falls and k reaches 0 by the drain point, where
+    cc-relogin can act. A desk opened NOW obstructs that only if it is still alive at drain, so the
+    test compares hours with hours: drain_in = login_expires_h - CLIFF_DRAIN_H against DESK_LIFE_H.
+
+    Applied unconditionally, x0.25 on the desk's 1/(1+T) key is exactly T' = 4T + 3 — it quadruples
+    the time-to-reset, so it overrides the earliest-reset objective whenever the reset gap is under
+    4x, not merely "loses ties". 2026-10-03T02:22Z: next4 (weekly 25% used, reset 30.2h, login
+    128h) scored 2.008025 against next3 (reset 81.2h) at 2.012172, and the desk went to next3 while
+    ~62pp of next4's week was forecast to expire unused. next4's drain point was 80h out — long
+    after any desk opened then would have exited. Across 1,974 soft-band sweeps since 2026-08-24
+    the factor flipped 683 desk picks; this gate undoes all 683 and changes no other pick.
+
+    Kill: CC_ROUTE_DESK_CLIFF_WINDOW=off restores x0.25 across the whole soft band.
+    Knob:  CC_ROUTE_DESK_LIFE_H (hours; malformed or negative => DESK_LIFE_H)."""
+    f = _cliff_factor(r)                    # 1.0 outside soft, with the term off, or cliff unknown
+    if f == 1.0 or not _term_on("CC_ROUTE_DESK_CLIFF_WINDOW"):
+        return f
+    # float() is safe: cliff_band already parsed this field to answer "soft"
+    drain_in = float(r["login_expires_h"]) - _cliff_env("CC_ROUTE_CLIFF_DRAIN_H", CLIFF_DRAIN_H)
+    return 1.0 if drain_in > _cliff_env("CC_ROUTE_DESK_LIFE_H", DESK_LIFE_H) else f
 
 
 # ---- utilization-pressure terms (ACCOUNT_ROUTING_V2 M7 — spread the 5h load, exhaust by deadline)
@@ -3306,6 +3340,11 @@ def log_route_decision(kind, cand, reasons, cfg, cached, path=None):
            "desk_tier": desk_keys(w, cfg)[2] if w else None,
            "desk_incumbent": bool(w.get("desk_incumbent")) if w else False,
            "quota_cached": bool(cached),
+           # The factor's role was only INFERABLE before these fields: route.jsonl carried no cliff
+           # fact at all, so 683 soft-band flips had to be reconstructed by replay.
+           "cliff_band": cliff_band(w) if w else None,
+           "desk_cliff_factor": _desk_cliff_factor(w) if w else None,
+           "runner_up_desk_cliff_factor": _desk_cliff_factor(run) if run else None,
            "excluded": dict(reasons or {})}
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -4747,7 +4786,8 @@ def score_interactive(r, cfg, cliff=True):
 
     KEPT from the shipped lane, unchanged: every exclusion is shared with general (_excluded, C6 —
     a different objective over the same eligibility, never a second opinion about who is eligible),
-    the login-cliff factor applies, and the interactive lane NEVER YIELDS the cliff term (C7, see
+    the login-cliff SOFT factor applies only while drain is within DESK_LIFE_H (_desk_cliff_factor),
+    and the interactive lane NEVER YIELDS the cliff term (C7, see
     ranked() — past the cliff `invalid_grant` has no reset to wait for). That rule, not the score,
     is why this lane deserves to exist."""
     R = cfg["router"]
@@ -4764,11 +4804,10 @@ def score_interactive(r, cfg, cliff=True):
     # and 1/(1+T) is in (0,1) for every T >= EPS_H, so a within-tier key can never reach the next
     # tier however the operator tunes EPS_H.
     key = 1.0 / (1.0 + horizon(r.get("weekly_reset_h"), R))
-    # The cliff SOFT band demotes INSIDE the tier rather than across tiers: the band's documented
-    # job is "loses ties" (a multiplier, not an exclusion — hard-excluding for a week would discard
-    # ~25% of fleet capacity), and a soft-band account is still a safer desk than an account that
-    # failed the 5h key outright.
-    key *= (_cliff_factor(r) if cliff else 1.0)
+    # The cliff SOFT band demotes INSIDE the tier rather than across tiers (a soft-band account is
+    # still a safer desk than one that failed the 5h key outright), and only while its drain point
+    # is within a desk's lifetime — see _desk_cliff_factor for why x0.25 everywhere misrouted.
+    key *= (_desk_cliff_factor(r) if cliff else 1.0)
     # HYSTERESIS (W1.4 / D-B, specified at START_LATENCY_ROUTER.md:82-83 and never built until
     # now): the incumbent desk account keeps the desk unless a rival beats it by DESK_HYST_MARGIN.
     # Inside the tier only, deliberately — stickiness must never hold the operator on an account

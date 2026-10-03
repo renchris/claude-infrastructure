@@ -31,6 +31,7 @@ setup() {
   # The cliff term's own knobs must never leak in from the invoking shell either — a session that
   # exported CC_ROUTE_CLIFF_TERM=off would turn every assertion below vacuous.
   unset CC_ROUTE_CLIFF_TERM CC_ROUTE_CLIFF_SOFT_H CC_ROUTE_CLIFF_DRAIN_H CC_ROUTE_CLIFF_SOFT_FACTOR
+  unset CC_ROUTE_DESK_CLIFF_WINDOW CC_ROUTE_DESK_LIFE_H CC_ROUTE_DESK_HYST
 
   # Fixture $HOME before anything else. Overriding CLAUDE_ACCOUNTS_JSON / _LASTGOOD / cache_file is
   # not sufficient: bin/claude-accounts derives several other paths from $HOME (the relogin-poll
@@ -384,4 +385,96 @@ del os.environ["CC_ROUTE_CLIFF_SOFT_FACTOR"]
 print("OK")'
   [ "$status" -eq 0 ] || false
   [[ "$output" == *OK* ]] || false
+}
+
+# ── the desk lane: drain-overlap gate ───────────────────────────────────────────────────────────
+
+@test "desk 2026-10-03T02:22Z regression: a soft account whose drain is past any desk lifetime ranks by earliest reset" {
+  run python3 -c "$LOAD"'
+import os
+n4 = row(acct="next4", weekly_pct=25, weekly_reset_h=30.6529, login_expires_h=128.36)
+n3 = row(acct="next3", weekly_pct=32, weekly_reset_h=81.6529, login_expires_h=518.29)
+assert ca.cliff_band(n4) == "soft"
+out, _ = ca.ranked([n3, n4], cfg, WIN_OPEN, "interactive")
+assert [r["acct"] for _s, r in out][0] == "next4", out
+key4 = ca.score_interactive(n4, cfg)[0] - ca.desk_keys(n4, cfg)[2]
+assert abs(key4 - 1.0 / (1.0 + ca.horizon(30.6529, R))) < 1e-12, key4
+n3["desk_incumbent"] = True
+out, _ = ca.ranked([n3, n4], cfg, WIN_OPEN, "interactive")
+assert [r["acct"] for _s, r in out][0] == "next4", out
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "desk soft band still demotes by exactly CLIFF_SOFT_FACTOR once drain is within DESK_LIFE_H" {
+  run python3 -c "$LOAD"'
+clear = row(weekly_reset_h=30.0)
+ck = ca.score_interactive(clear, cfg)[0] - ca.desk_keys(clear, cfg)[2]
+def key(lx):
+    r = row(weekly_reset_h=30.0, login_expires_h=lx)
+    return ca.score_interactive(r, cfg)[0] - ca.desk_keys(r, cfg)[2]
+assert abs(key(80.0) - ck * ca.CLIFF_SOFT_FACTOR) < 1e-12
+assert abs(key(96.0) - ck * ca.CLIFF_SOFT_FACTOR) < 1e-12      # drain_in == 48: still demoted
+assert key(96.01) == ck                                         # just past: gated
+assert key(168.0) == ck
+# a near-drain account loses the desk exactly as before, even with the earliest reset
+near = row(acct="near", weekly_reset_h=20.0, login_expires_h=90.0)
+rival = row(acct="rival", weekly_reset_h=81.0)
+out, _ = ca.ranked([near, rival], cfg, WIN_OPEN, "interactive")
+assert [r["acct"] for _s, r in out][0] == "rival", out
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "desk kill switch: CC_ROUTE_DESK_CLIFF_WINDOW=off restores the x0.25 across the whole soft band" {
+  run python3 -c "$LOAD"'
+import os
+n4 = row(acct="next4", weekly_pct=25, weekly_reset_h=30.6529, login_expires_h=128.36)
+n3 = row(acct="next3", weekly_pct=32, weekly_reset_h=81.6529, login_expires_h=518.29)
+os.environ["CC_ROUTE_DESK_CLIFF_WINDOW"] = "off"
+out, _ = ca.ranked([n3, n4], cfg, WIN_OPEN, "interactive")
+assert [r["acct"] for _s, r in out][0] == "next3", out          # the old pick: the bug reproduces
+assert ca._desk_cliff_factor(n4) == ca.CLIFF_SOFT_FACTOR
+del os.environ["CC_ROUTE_DESK_CLIFF_WINDOW"]
+out, _ = ca.ranked([n3, n4], cfg, WIN_OPEN, "interactive")
+assert [r["acct"] for _s, r in out][0] == "next4", out          # control: off was doing the work
+os.environ["CC_ROUTE_CLIFF_TERM"] = "off"
+assert ca._desk_cliff_factor(row(login_expires_h=80.0)) == 1.0
+del os.environ["CC_ROUTE_CLIFF_TERM"]
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "desk knob CC_ROUTE_DESK_LIFE_H: tunable, and malformed or negative falls back to 48" {
+  run python3 -c "$LOAD"'
+import os
+r128 = row(login_expires_h=128.0)
+assert ca._desk_cliff_factor(r128) == 1.0
+for bad in ("abc", "-1"):
+    os.environ["CC_ROUTE_DESK_LIFE_H"] = bad
+    assert ca._desk_cliff_factor(r128) == 1.0, bad
+    assert ca._desk_cliff_factor(row(login_expires_h=90.0)) == ca.CLIFF_SOFT_FACTOR, bad
+os.environ["CC_ROUTE_DESK_LIFE_H"] = "200"
+assert ca._desk_cliff_factor(r128) == ca.CLIFF_SOFT_FACTOR
+os.environ["CC_ROUTE_DESK_LIFE_H"] = "0"
+assert ca._desk_cliff_factor(row(login_expires_h=60.0)) == 1.0
+del os.environ["CC_ROUTE_DESK_LIFE_H"]
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "desk gate leaves dispatch, fable and the drain band exactly as they were" {
+  run python3 -c "$LOAD"'
+soft = row(weekly_reset_h=30.0, login_expires_h=128.0)
+base = row(weekly_reset_h=30.0, login_expires_h=500.0)
+assert abs(ca.score_general(soft, cfg)[0] - ca.score_general(base, cfg)[0] * ca.CLIFF_SOFT_FACTOR) < 1e-12
+assert abs(ca.score_fable(soft, cfg, WIN_OPEN)[0] - ca.score_fable(base, cfg, WIN_OPEN)[0] * ca.CLIFF_SOFT_FACTOR) < 1e-12
+assert ca.score_interactive(row(weekly_reset_h=5.0, login_expires_h=40.0), cfg) == (None, ca.CLIFF_DRAIN_REASON)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }

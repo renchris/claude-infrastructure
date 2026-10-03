@@ -2383,7 +2383,7 @@ print("OK")'
 @test "router desk: the cliff no-yield rule survives the objective change" {
   run python3 -c "$LOAD"'
 import os
-for v in ("CC_ROUTE_CLIFF_TERM", "CC_ROUTE_DESK_HYST", "CC_ROUTE_PROJ"):
+for v in ("CC_ROUTE_CLIFF_TERM", "CC_ROUTE_DESK_HYST", "CC_ROUTE_PROJ", "CC_ROUTE_DESK_CLIFF_WINDOW", "CC_ROUTE_DESK_LIFE_H"):
     os.environ.pop(v, None)
 # every account inside the DRAIN band ⇒ the cliff term is what emptied the candidate set
 rows = [row(acct="a", login_expires_h=10.0), row(acct="b", login_expires_h=20.0)]
@@ -2396,10 +2396,15 @@ out_i, reasons_i = ca.ranked(rows, cfg, WIN_OPEN, "interactive")
 assert out_i == [], out_i
 assert set(reasons_i.values()) == {ca.CLIFF_DRAIN_REASON}, reasons_i
 # the SOFT band still demotes inside the lane, and only inside its own tier
-soft = row(acct="soft", weekly_pct=40, weekly_reset_h=30.0, login_expires_h=100.0)
+# login 80h puts drain 32h out, inside DESK_LIFE_H, where a desk opened now can still be alive
+soft = row(acct="soft", weekly_pct=40, weekly_reset_h=30.0, login_expires_h=80.0)
 clear = row(acct="clear", weekly_pct=40, weekly_reset_h=30.0)
 assert ca.cliff_band(soft) == "soft"
 assert ca.score_interactive(soft, cfg)[0] < ca.score_interactive(clear, cfg)[0]
+# control: drain 52h out is past any desk lifetime, so the desk pays no soft factor there
+far = row(acct="far", weekly_pct=40, weekly_reset_h=30.0, login_expires_h=100.0)
+assert ca.cliff_band(far) == "soft"
+assert ca.score_interactive(far, cfg)[0] == ca.score_interactive(clear, cfg)[0]
 assert ca.desk_keys(soft, cfg)[2] == ca.DESK_TIER_SAFE
 assert ca.score_interactive(soft, cfg)[0] > ca.score_interactive(
     row(acct="hot", session_pct=70, weekly_pct=40, weekly_reset_h=1.0), cfg)[0]
