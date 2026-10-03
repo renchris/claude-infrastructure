@@ -21,6 +21,8 @@
 #                     QUEUED, and off-box there is no `acked` cursor that could make it READ.
 #   --from <name>     attribution written to the inbox line (default: own registered name / account)
 #   --mailbox-only    force inbox-only (skip the liveness classification / never a "not-live" note)
+#   --no-wake         never wake a deaf idle target through its messaging socket (bin/cc-wake); also
+#                     CC_NOTIFY_WAKE=0. Default: a live pane with NO watcher armed is woken.
 #   --receipt         READ side of the cursor a send prints. DELIVERED IS NOT READ — a claim that a
 #                     session was told must cite acked≥line, never the send. rc 0 = read.
 #   -h, --help        this help
@@ -456,7 +458,7 @@ it2_list_bounded() {   # raw --json on stdout; rc != 0 on timeout/error
 # CURSOR_LINE / UNACKED are the READ-RECEIPT fields (delivered ≠ read). They are empty until the
 # message is actually persisted, so their presence in the token is itself the proof that a line
 # exists to cite; every post-enqueue verdict carries them. See the enqueue site for why.
-ENQUEUED=0; CURSOR_LINE=""; UNACKED=""
+ENQUEUED=0; CURSOR_LINE=""; UNACKED=""; NO_WAKE=0
 verdict() { # <verdict> [k=v ...]
   local v="$1"; shift
   printf 'cc-notify: verdict=%s enqueued=%s uuid=%s' "$v" "$ENQUEUED" "${uuid:-}" >&2
@@ -559,6 +561,7 @@ while [ $# -gt 0 ]; do
     --cloud)        CLOUD_ID="${2:-}"; HAVE_TARGET=1; CLOUD_GIVEN=1; shift; [ $# -gt 0 ] && shift ;;
     --cloud=*)      CLOUD_ID="${1#--cloud=}"; HAVE_TARGET=1; CLOUD_GIVEN=1; shift ;;
     --mailbox-only) MAILBOX_ONLY=1; shift ;;
+    --no-wake)      NO_WAKE=1; shift ;;
     --receipt)      RECEIPT=1; shift ;;
     --from)         FROM="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
     --from=*)       FROM="${1#--from=}"; shift ;;
@@ -1194,6 +1197,25 @@ if command -v mailbox_lines >/dev/null 2>&1; then
   case "$CURSOR_LINE" in ''|*[!0-9]*) CURSOR_LINE="" ;; esac
   case "$UNACKED"     in ''|*[!0-9]*) UNACKED="" ;; esac
 fi
+# ── THE LINE, UNDER THE SENDER'S KEY (docs/plans/AGENT_PEER_WAKE.md, capability 2) ────────────────
+# `.sent/<own>` answers "did this pane ever message X?" but not "WHICH LINE did it land on", and the
+# second is the only handle by which a closing pane can prove its successor READ the handover
+# (handoff-fire.sh self-close, class verified-successor). It is a NEW store rather than a field on
+# `.sent`: two readers (cc-reaper, handoff-fire's announce check) classify `.sent` rows by field COUNT
+# (`NF <= 2` = one-spelling record), so a fourth field would silently flip their verdicts. Record:
+#   <ts> <box-key> <line> <target-as-given>
+# Best-effort and always 0, like _record_send. A concurrent writer can only make <line> LARGER than
+# ours, which makes the receipt check stricter, never looser.
+_record_sent_line() { # <box> <line>
+  local d="$MAILBOX_DIR/.sent-lines" given
+  [ -n "${own_uuid:-}" ] && [ -n "${2:-}" ] || return 0
+  case "$own_uuid" in ''|*[!A-Za-z0-9._-]*|.*) return 0 ;; esac
+  mkdir -p "$d" 2>/dev/null || return 0
+  given="$(printf '%s' "${TARGET:-}" | tr -s ' \t' '__')"
+  printf '%s %s %s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "$1" "$2" "${given:--}" >> "$d/$own_uuid" 2>/dev/null || true
+  return 0
+}
+_record_sent_line "$uuid" "$CURSOR_LINE"
 # The one-clause reminder appended to every delivery sentence. Deliberately states the PROOF
 # ("acked≥N"), not an adjective — a caller that repeats this line downstream then repeats a checkable
 # fact instead of a reassurance.
@@ -1396,6 +1418,27 @@ _wake_headless() {   # rc 0 = a turn was genuinely queued; any other rc = not wo
   "$wbin" "$u" >&2
 }
 
+# ── SOCKET WAKE FOR A DEAF IDLE PANE (docs/plans/AGENT_PEER_WAKE.md, capability 1) ─────────────────
+# The mirror of _wake_headless for a session WITH a pane. "NO watcher armed — drains on its NEXT turn"
+# was true and useless for an idle session: its next turn is whenever a human types (2026-10-03,
+# pane 83: four pings UNREAD for hours). bin/cc-wake queues one fixed line into the session's own
+# messaging socket — never a keystroke, never the composer — and only after its own gates prove the
+# session idle, the process the same one, and mail actually waiting. --no-wait: the send path must not
+# block on the target's turn; the read proof stays `cc-notify --receipt`. Opt out: --no-wake or
+# CC_NOTIFY_WAKE=0. Seam: CC_PANE_WAKE_BIN (empty ⇒ no waker).
+_wake_pane() {   # rc 0 = a turn was queued; any other rc = not woken (cc-wake's verdict line is on stderr)
+  local u="$1" wbin
+  [ "$NO_WAKE" = 1 ] || [ "${CC_NOTIFY_WAKE:-1}" = 0 ] && return 1
+  wbin="${CC_PANE_WAKE_BIN-}"
+  if [ -z "${CC_PANE_WAKE_BIN+set}" ]; then
+    for wbin in "$_sd/cc-wake" "$HOME/.claude/bin/cc-wake" ""; do [ -n "$wbin" ] && [ -x "$wbin" ] && break; done
+  fi
+  [ -n "$wbin" ] && [ -x "$wbin" ] || return 1
+  "$wbin" "$u" --no-wait --from "${FROM:-unknown}" >/dev/null 2>"$MAILBOX_DIR/.cc-wake-last.$$" ; local rc=$?
+  sed 's/^/  /' "$MAILBOX_DIR/.cc-wake-last.$$" >&2 2>/dev/null; rm -f "$MAILBOX_DIR/.cc-wake-last.$$"
+  return "$rc"
+}
+
 target_live "$uuid"; _lv=$?
 case "$_lv" in
   0)
@@ -1417,6 +1460,12 @@ case "$_lv" in
         verdict delivered reason=no-watcher-headless
         echo "cc-notify 📤 peer mail ▶ delivered to inbox [$uuid] (pane-less session, NO watcher armed AND the stdin wake did not happen — see the cc-wake-headless line above for why. A headless session has no next turn to drain on: its boundary IS a write to its stdin, so this mail is recorded and will sit unread until something wakes it)${READ_NOTE}" >&2
       fi
+      _echo_sent
+    elif _wake_pane "$uuid"; then
+      # Same honesty rule as the headless arm: only cc-wake's own rc 0 earns "woken", and it means a
+      # turn was QUEUED, not that the mail was read — READ_NOTE still names the receipt that proves it.
+      verdict delivered reason=woken-socket
+      echo "cc-notify 📤 peer mail ▶ delivered to inbox [$uuid] (idle live session — WOKEN: one fixed line was queued into its messaging socket, so a turn is starting; wake-path armed by that socket write, not by a watcher)${READ_NOTE}" >&2
       _echo_sent
     else
       verdict delivered reason=no-watcher
