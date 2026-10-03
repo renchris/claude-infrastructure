@@ -77,16 +77,16 @@ EOF
   [ "$(inode_of "$BOARD")" != "$ino" ]
 }
 
-@test "slim arm: with ~/.claude/rules.slim present, it gets a compact board and the shared board stays full" {
+@test "legacy rules.slim: it gets the shared board's exact bytes, never a second render" {
+  # Until migration 0053 retires rules.slim, accounts 0042 switched load it AND (ancestor walk)
+  # ~/.claude/rules/, so two different texts would put two different boards in one context.
   mkdir -p "$HOME/.claude/rules.slim"
   run env -u CC_MISSION_COMPACT "$CC_MISSION" render
   [ "$status" -eq 0 ]
   local slim="$HOME/.claude/rules.slim/00-mission-board.md"
   [ -f "$slim" ]
-  grep -q '`t1`' "$slim"                      # compact rows carry the row id
   grep -q 'do the thing' "$BOARD"
-  run grep -q '`t1`' "$BOARD"                   # the shared board is still the full render
-  [ "$status" -ne 0 ]
+  cmp "$BOARD" "$slim"
   local ino; ino="$(inode_of "$slim")"
   run env -u CC_MISSION_COMPACT "$CC_MISSION" render
   [ "$(inode_of "$slim")" = "$ino" ]           # and the slim board obeys the same byte-compare skip

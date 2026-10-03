@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
-# cc-instructions-variant — put an account on an instructions A/B arm, or take it off.
+# cc-instructions-variant — choose the machine's global instructions variant (slim, full, …).
 #
 # WHY. The always-loaded instructions (~/.claude/CLAUDE.md, 40.4k tokens on 2026-09-23) ride in every
 # context on every account — main sessions, subagents, workflow agents, headless runs — so a slimmer
 # variant is the largest single token lever on this box, and also the change most able to alter
-# behaviour. It therefore ships behind this switch. An account listed in ~/.claude/instruction-variants
-# reads ~/.claude/CLAUDE.<variant>.md as its CLAUDE.md and ~/.claude/rules.<variant>/ as its rules/
-# (for slim: the compact mission board, and not the rules essay); every other account keeps the shared
-# entries. The config mirror honours the registry (lib/config-mirror.zsh,
-# _cc_instructions_variant_target), so the arm survives the re-point the mirror performs at every
-# session start. A switch reaches NEW sessions
+# behaviour. It therefore ships behind this switch. HISTORY (2026-09-23 to 2026-10-03): an account
+# listed in ~/.claude/instruction-variants read ~/.claude/CLAUDE.<variant>.md as its CLAUDE.md and
+# ~/.claude/rules.<variant>/ as its rules/; the config mirror still honours such a legacy line
+# (lib/config-mirror.zsh, _cc_instructions_variant_target) until migration 0053 removes it, and
+# `reset <account>` is how it goes. A switch reaches NEW sessions
 # only; running sessions keep what they loaded. Every switch is appended to the log, so a census can
 # split sessions by the arm they started under. Design and test plan:
 # docs/research/token-efficiency-2026-09-23/.
@@ -19,13 +18,22 @@
 # tool only on a throwaway/offline config dir, or for a fleet-wide switch (all accounts or none).
 # Experiments assign the arm per session at launch or run headless offline; see TEST_PLAN.md.
 #
+# VARIANTS ARE GLOBAL SINCE 2026-10-03 (docs/plans/INSTRUCTION_BUDGET.md D2/D4). Claude Code's ancestor
+# walk loads ~/.claude/CLAUDE.md and ~/.claude/rules/ for every cwd under $HOME, and dedupes them
+# against the account's own CLAUDE.md/rules only by realpath. So an account whose CLAUDE.md resolves
+# anywhere but ~/.claude/CLAUDE.md loads BOTH files — that is what 0042's per-account arm did to every
+# session from 2026-09-25. The variant is therefore chosen once, for the machine: `set <variant>`
+# records `global <variant>` in the registry and copies that variant into ~/.claude/CLAUDE.md (install.sh
+# does the same from the repo on every deploy), and every account links to ~/.claude/CLAUDE.md.
+# `set <account> <variant>` is refused; per-session A/B arms run only in /tmp fixtures.
+#
 # Usage:
-#   cc-instructions-variant [status]                each account: arm, CLAUDE.md target, bytes
-#   cc-instructions-variant set <account> <variant> e.g. `set next3 slim` (needs ~/.claude/CLAUDE.slim.md)
-#   cc-instructions-variant reset <account>         back to the shared ~/.claude/CLAUDE.md
-#   cc-instructions-variant log                     the switch log
+#   cc-instructions-variant [status]          each account: arm, CLAUDE.md target, bytes; DUPLICATE rows
+#   cc-instructions-variant set <variant>     the global variant: slim, full, or any deployed CLAUDE.<v>.md
+#   cc-instructions-variant reset <account>   point one account back at the shared ~/.claude/CLAUDE.md
+#   cc-instructions-variant log               the switch log
 # <account> is an accounts.json name (next, next2, next3, next4) or a ~/.claude-* dir basename.
-# Exit: 0 ok · 1 the re-point did not take (read back after the mirror ran) · 2 usage error.
+# Exit: 0 ok · 1 the change did not take (read back) · 2 usage error or refused.
 set -euo pipefail
 
 SRC="$HOME/.claude"
@@ -61,6 +69,14 @@ sha256_16() {  # <file> → first 16 hex of its sha256
   { shasum -a 256 "$1" 2>/dev/null || sha256sum "$1"; } | cut -c1-16
 }
 
+global_variant() {  # the machine's variant: the registry's `global` line, default slim (install.sh agrees)
+  local v; v="$(registered global)"; printf '%s\n' "${v:-slim}"
+}
+
+realpath_of() {  # <path> → its fully resolved path, or nothing
+  python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$1" 2>/dev/null || true
+}
+
 registered() {  # <dir-basename> → its variant, or nothing
   [ -r "$REG" ] && awk -v a="$1" '$1 == a { print $2; exit }' "$REG" || true
 }
@@ -93,55 +109,73 @@ resync() {  # <dir> <want CLAUDE.md> <want rules>: re-run the mirror (race-safe 
 }
 
 cmd_status() {
-  local d base arm tgt
+  local d base arm tgt want_md want_rules got_md got_rules
+  printf 'global variant: %s (~/.claude/CLAUDE.md, %s bytes)\n' "$(global_variant)" \
+    "$(wc -c < "$SRC/CLAUDE.md" 2>/dev/null | tr -d ' ' || printf 0)"
+  want_md="$(realpath_of "$SRC/CLAUDE.md")"; want_rules="$(realpath_of "$SRC/rules")"
   printf '%-20s %-8s %-28s %s\n' ACCOUNT ARM 'CLAUDE.md ->' BYTES
   while IFS= read -r d; do
     [ -e "$d/CLAUDE.md" ] || continue
     base="${d##*/}"; arm="$(registered "$base")"
     tgt="$(readlink "$d/CLAUDE.md" 2>/dev/null || printf '(real file)')"
     printf '%-20s %-8s %-28s %s\n' "$base" "${arm:-shared}" "${tgt/#$HOME/~}" "$(wc -c < "$d/CLAUDE.md" | tr -d ' ')"
+    # The ancestor walk loads ~/.claude/CLAUDE.md and ~/.claude/rules/ on top of the account's own
+    # files unless both resolve to the same realpath, so any other target is a double load.
+    got_md="$(realpath_of "$d/CLAUDE.md")"
+    got_rules=""; [ -e "$d/rules" ] && got_rules="$(realpath_of "$d/rules")"
+    if [ "$got_md" != "$want_md" ]; then
+      printf 'DUPLICATE: %s/CLAUDE.md resolves to %s, so its sessions also load ~/.claude/CLAUDE.md; migration 0053 re-points it\n' "$base" "${got_md/#$HOME/~}"
+    fi
+    if [ -n "$got_rules" ] && [ "$got_rules" != "$want_rules" ]; then
+      printf 'DUPLICATE: %s/rules resolves to %s, so its sessions also load ~/.claude/rules/; migration 0053 re-points it\n' "$base" "${got_rules/#$HOME/~}"
+    fi
   done < <(account_dirs)
-  printf 'variants available:'
-  local f found=0
+  printf 'variants available: full'
+  local f
   for f in "$SRC"/CLAUDE.*.md; do
     [ -f "$f" ] || continue
-    found=1; f="${f##*/CLAUDE.}"; printf ' %s' "${f%.md}"
+    f="${f##*/CLAUDE.}"; f="${f%.md}"
+    [ "$f" = full ] || printf ' %s' "$f"
   done
-  [ "$found" = 1 ] || printf ' (none deployed)'
   printf '\n'
-  # A variant records which CLAUDE.md it was derived from (an HTML comment, which the loader strips,
+  # A variant records which full text it was derived from (an HTML comment, which the loader strips,
   # so it costs no tokens). An operator edit to the full file after that makes the variant STALE: its
-  # arm silently lacks the new rule until the variant is re-derived.
-  local full_h var_h
-  full_h="$(sha256_16 "$SRC/CLAUDE.md")"
+  # arm silently lacks the new rule until the variant is re-derived. The full text deploys to
+  # CLAUDE.full.md; a box install.sh has not reached since 2026-10-03 still holds it in CLAUDE.md.
+  local full_h var_h full="$SRC/CLAUDE.full.md"
+  [ -f "$full" ] || full="$SRC/CLAUDE.md"
+  full_h="$(sha256_16 "$full")"
   for f in "$SRC"/CLAUDE.*.md; do
-    [ -f "$f" ] || continue
+    [ -f "$f" ] && [ "$f" != "$SRC/CLAUDE.full.md" ] || continue
     var_h="$(sed -n 's/.*derived-from CLAUDE\.global\.md sha256:\([0-9a-f]\{16\}\).*/\1/p' "$f" | awk 'NR<=1')"
     if [ -z "$var_h" ]; then
       printf '  %s: no derived-from record\n' "${f##*/}"
     elif [ "$var_h" = "$full_h" ]; then
-      printf '  %s: in sync with CLAUDE.md (%s)\n' "${f##*/}" "$full_h"
+      printf '  %s: in sync with the full text (%s)\n' "${f##*/}" "$full_h"
     else
-      printf '  %s: STALE, derived from %s but CLAUDE.md is now %s; re-derive the changed sections\n' "${f##*/}" "$var_h" "$full_h"
+      printf '  %s: STALE, derived from %s but the full text is now %s; re-derive the changed sections\n' "${f##*/}" "$var_h" "$full_h"
     fi
   done
 }
 
 cmd_set() {
-  [ $# -eq 2 ] || die "usage: set <account> <variant>"
-  local d v="$2"
-  d="$(account_dir "$1")"
+  [ $# -eq 2 ] && die "refused: variants are global. An account CLAUDE.md that resolves anywhere but ~/.claude/CLAUDE.md loads both files (Claude Code's ancestor walk), so 'set $1 $2' would re-create the double load. Choose the machine's variant with 'set <variant>'; run per-session A/B arms in /tmp fixtures."
+  [ $# -eq 1 ] || die "usage: set <variant>"
+  local v="$1" src tmp
   [[ "$v" =~ ^[a-z0-9-]+$ ]] || die "variant names are [a-z0-9-]+"
-  [ -f "$SRC/CLAUDE.$v.md" ] || die "no $SRC/CLAUDE.$v.md — deploy it first (install.sh copies CLAUDE.global.$v.md)"
-  # The arm's rules/ holds only what `cc-mission render` writes there: the compact mission board.
-  # Render now so a session started before the next SessionStart render still gets a board.
-  mkdir -p "$SRC/rules.$v"
-  [ -x "$SRC/bin/cc-mission" ] && "$SRC/bin/cc-mission" render >/dev/null 2>&1 || true
-  [ -f "$SRC/rules.$v/00-mission-board.md" ] \
-    || printf 'cc-instructions-variant: warning: %s has no mission board yet; the next session start renders it\n' "$SRC/rules.$v" >&2
-  write_reg "${d##*/}" "$v"
-  log_event "${d##*/}" "$v" set
-  resync "$d" "$SRC/CLAUDE.$v.md" "$SRC/rules.$v"
+  src="$SRC/CLAUDE.$v.md"
+  [ -f "$src" ] || die "no $src — deploy it first (install.sh copies CLAUDE.global.md to CLAUDE.full.md and CLAUDE.global.<v>.md to CLAUDE.<v>.md)"
+  write_reg global "$v"
+  log_event global "$v" set
+  # A regular file, never a symlink: a symlinked ~/.claude/CLAUDE.md still double-loads on 2.1.114.
+  tmp="$SRC/CLAUDE.md.tmp.$$"
+  cp "$src" "$tmp" && mv -f "$tmp" "$SRC/CLAUDE.md"
+  if [ -L "$SRC/CLAUDE.md" ] || ! cmp -s "$src" "$SRC/CLAUDE.md"; then
+    printf 'cc-instructions-variant: ~/.claude/CLAUDE.md does not read back as %s\n' "$src" >&2
+    exit 1
+  fi
+  printf '%s/CLAUDE.md <- the %s variant (%s bytes). New sessions load it; install.sh keeps it.\n' \
+    "$SRC" "$v" "$(wc -c < "$SRC/CLAUDE.md" | tr -d ' ')"
 }
 
 cmd_reset() {

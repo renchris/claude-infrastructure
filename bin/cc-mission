@@ -276,12 +276,15 @@ def cmd_render(_args: list[str]) -> int:
     # machine: 546 injections / 3.79M chars into live contexts over 14 days (2026-09-23,
     # docs/research/token-efficiency-2026-09-23/), each re-read on every later request.
     stamp = time.strftime("%Y-%m-%d", time.localtime(now))
-    write_board(BOARD, board_text(rows, stale, live, stamp, compact_mode()))
-    # The slim instructions arm (bin/cc-instructions-variant) points an account's rules/ at
-    # ~/.claude/rules.slim, so that arm always gets the compact board and none of the other
-    # rules files; the shared board above keeps following the render-compact flag.
-    if SLIM_RULES.is_dir():
-        write_board(SLIM_RULES / BOARD.name, board_text(rows, stale, live, stamp, True))
+    text = board_text(rows, stale, live, stamp, compact_mode())
+    write_board(BOARD, text)
+    # ONE board, ONE text (2026-10-03, docs/plans/INSTRUCTION_BUDGET.md). Migration 0042 pointed
+    # every account's rules/ at ~/.claude/rules.slim, and the ancestor walk loads ~/.claude/rules/
+    # on top, so until migration 0053 re-points the accounts (and retires rules.slim) both copies
+    # load. Writing the same bytes to both keeps the shared board authoritative and the legacy copy
+    # from ever saying something different; it used to be rendered compact on its own.
+    if SLIM_RULES.is_dir() and not SLIM_RULES.is_symlink():
+        write_board(SLIM_RULES / BOARD.name, text)
     return 0
 
 

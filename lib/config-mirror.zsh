@@ -78,6 +78,12 @@ _cc_linktarget() {   # <path> → sets $_CC_LINK to the raw symlink target ('' i
 #   $src/rules.<variant>, sets $_CC_VARIANT_TARGET and returns 0. Anything else — unlisted, malformed,
 #   or a variant target that is missing — returns 1, so the entry falls back to the shared one and a
 #   stale registry line can never leave an account without instructions.
+#   LEGACY SINCE 2026-10-03 (docs/plans/INSTRUCTION_BUDGET.md D2-D4): variants are now global — the
+#   `global <variant>` line selects what install.sh copies INTO ~/.claude/CLAUDE.md and never matches
+#   an account basename here, so it re-points nothing. A per-account line re-creates the ancestor-walk
+#   double load, and `cc-instructions-variant set <account> …` refuses to write one; the lines 0042
+#   wrote are still honoured, deliberately, because dropping them here would re-point every account at
+#   the next session start — the c10 act migration 0053 reserves for the operator. 0053 removes them.
 typeset -g _CC_VARIANT_TARGET=''
 _cc_instructions_variant_target() {
   emulate -L zsh

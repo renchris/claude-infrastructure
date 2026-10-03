@@ -81,6 +81,18 @@ rules_of() { readlink "$HOME/$1/rules"; }
   [ "$(target_of .claude-tertiary)" = "$HOME/.claude/CLAUDE.md" ]
 }
 
+@test "a global line re-points no account, and a legacy 0042 line beside it is still honoured" {
+  # Variants became global on 2026-10-03; re-pointing the 0042 accounts is migration 0053's c10 act,
+  # so the mirror must neither act on `global <v>` nor drop a legacy line before 0053 removes it.
+  printf 'global slim\n.claude-tertiary slim\n' > "$REG"
+  sync_acct .claude-tertiary
+  sync_acct .claude-quaternary
+  [ "$(target_of .claude-tertiary)" = "$HOME/.claude/CLAUDE.slim.md" ]
+  [ "$(rules_of .claude-tertiary)" = "$HOME/.claude/rules.slim" ]
+  [ "$(target_of .claude-quaternary)" = "$HOME/.claude/CLAUDE.md" ]
+  [ "$(rules_of .claude-quaternary)" = "$HOME/.claude/rules" ]
+}
+
 @test "control: without the variant hook the mirror reverts a hand-pointed CLAUDE.md" {
   # Proves the second test has power: the unmodified loop re-points the link at the shared file.
   local mut="$BATS_TEST_TMPDIR/config-mirror-mutant.zsh"
