@@ -6074,6 +6074,27 @@ def fmt_h(h, narrow=False):
     return f"{d}d {rem}h"
 
 
+def fmt_board_t(h):
+    """Countdown for the narrow board's `resets` and `login` cells: always TWO units.
+
+    fmt_h mixes forms ("7.4h" beside "2d 15h"), which a column scan has to decode twice; the
+    board wants one shape per column. This is board-only on purpose — fmt_h's output is parsed
+    by cc-relogin-poll and must not move. Width is <=7 for every input ("12h 24m"), matching
+    _NW_WKR."""
+    if h is None:
+        return "—"
+    if h < 0:
+        return "now"                              # elapsed: the bucket already rolled (as fmt_h)
+    m = int(h * 60)
+    if m < 60:
+        return f"{m}m"
+    if m < 24 * 60:
+        return f"{m // 60}h {m % 60}m"
+    if h >= 2400:                                 # ≥100d: a corrupt/far-future stamp stays narrow
+        return "99d+"
+    return f"{int(h // 24)}d {int(h % 24)}h"
+
+
 def _wire_note(r):
     """A throttled row's substitute server read, stated as figures in plain words."""
     w = r.get("wire") or {}
@@ -6221,7 +6242,9 @@ def desk_why(r, cfg):
 NARROW_W = 76
 # Column widths, as constants rather than literals in three places: the header, the rows and the
 # test all have to agree, and a header that disagrees with its rows is the classic silent drift.
-_NW_MARK, _NW_NAME, _NW_PCT, _NW_WKR = 3, 13, 5, 6
+# _NW_WKR is 7, not 6: the board's two-unit countdown (`fmt_board_t`) is up to 7 cells
+# ("12h 24m"), and an overflowing reset cell would skew the login column off its gap.
+_NW_MARK, _NW_NAME, _NW_PCT, _NW_WKR = 3, 13, 5, 7
 
 # Column widths, as constants rather than literals in three places: the header, the rows and the
 # test all have to agree, and a header that disagrees with its rows is the classic silent drift.
@@ -6352,31 +6375,52 @@ def pct_rgb(v, exhausted):
     return usage_rgb(v)
 
 
+def num_rgb(v, text, wall_rgb):
+    """The colour for a percent CELL's digits (never the bar): quiet until a value matters.
+
+    Nine green numbers say nothing, so a shown 0% is muted and anything under 50% is plain
+    text; amber/red and the wall colours (wall_rgb, from pct_rgb) only appear once they mean
+    something. Keyed on the TEXT so a 0.4% that prints "0%" is muted like a true zero."""
+    if text == "0%":
+        return BOARD_MUTE
+    if v < 50:
+        return BOARD_TEXT
+    return wall_rgb
+
+
 def board_bar(pct, exhausted=None, width=_NW_BAR):
     """Magnitude the eye reads without parsing digits — the single largest readability win
     available on a monochrome-by-default surface, and the reason `weekly` gets one and the other
     two columns do not: weekly is the bucket the strand nowcast is about.
 
-    Drawn in eighths, and A BAR THAT CAN STILL BE SPENT NEVER READS FULL: below 100% the last
-    cell always shows at least a quarter of track, so a 99%-and-allowed account is visibly not
-    the solid bar of one the server is refusing. (Whole cells rounded 94% up to a full bar.)"""
+    Drawn LOW, not full height: filled cells are "▆" and the track is a "▁" baseline, so the top
+    quarter of every cell stays empty and each row's bar stands apart from the rows above and
+    below (full-height █/░ cells on adjacent rows fused into one slab). No glyph is both lower-
+    three-quarters and left-n-eighths, so the bar fills in WHOLE cells (12.5% each).
+
+    A BAR THAT CAN STILL BE SPENT NEVER READS FULL: below 100% the last cell stays empty, so a
+    99%-and-allowed account is visibly not the solid bar of one the server is refusing. (Whole cells rounded 94% up to a full bar.)"""
     if pct is None:
         return bc("·" * width, BOARD_TRACK)
     p = max(0.0, min(100.0, float(pct)))
-    eighths = int(round(p / 100.0 * width * 8))
-    if exhausted is not True and p < 100.0:
-        eighths = min(eighths, width * 8 - 2)
-    full, rem = divmod(eighths, 8)
     rgb = pct_rgb(p, exhausted)
-    # Not confirmed by the server: a SHADED bar, so it differs from a confirmed refusal's solid
-    # bar even with colour off. Only "100% confirmed" is ever drawn solid and full.
-    fill = "▓" if (exhausted is None and p >= 100.0) else "█"
-    return (bc(fill * full, rgb)
-            + (bc(EIGHTHS[rem - 1], rgb, bg=BOARD_TRACK) if rem else "")
-            + bc("░" * (width - full - (1 if rem else 0)), BOARD_TRACK))
+    # Not confirmed by the server: the whole bar drawn at HALF height ("▄"), so it differs from a
+    # confirmed refusal's solid "▆" bar even with colour off. Only "100% confirmed" is ever drawn
+    # solid and full. (A full-height "▓" would re-fuse with the neighbouring rows.)
+    if exhausted is None and p >= 100.0:
+        return bc("▄" * width, rgb)
+    # WHOLE cells, one height: a partial cell can only step in height here, and a stepped last
+    # cell read as a glitch (operator review 2026-10-03). The digits beside the bar carry the
+    # precision; the bar carries the gestalt. Any nonzero use shows at least one cell.
+    full = int(round(p / 100.0 * width))
+    if p > 0:
+        full = max(full, 1)
+    if exhausted is not True and p < 100.0:
+        full = min(full, width - 1)
+    return bc("▆" * full, rgb) + bc("▁" * (width - full), BOARD_TRACK)
 
 
-def _bpct(r, key):
+def _bpct(r, key, mute=False):
     """One percentage cell: right-aligned, coloured by usage, `*` INSIDE the coloured run.
 
     The `*` stays welded to the digits (`11%*`, never `11% *`) because it is the
@@ -6389,8 +6433,15 @@ def _bpct(r, key):
         return _cell("—", _NW_PCT + 1, ">", BOARD_MUTE)
     star = "*" if (r.get("stale_quota") or r.get("error")) else ""
     if key not in WIRE_FIELD:       # no server reading exists for it: plain percent, as before
-        return bc((f"{v:.0f}%" + star).rjust(_NW_PCT + 1), usage_rgb(v))
-    return bc((pct_text(v, ex) + star).rjust(_NW_PCT + 1), pct_rgb(v, ex))
+        # Digits use num_rgb (quiet below 50%); the bar keeps usage_rgb/pct_rgb untouched.
+        t = f"{v:.0f}%"
+        rgb = num_rgb(v, t, usage_rgb(v))
+    else:
+        t = pct_text(v, ex)
+        rgb = num_rgb(v, t, pct_rgb(v, ex))
+    # `mute`: the row is out of weekly quota, so this cell is context, not a reason to route.
+    # Same text and padding — only the colour steps down — so the colour-off board is unchanged.
+    return bc((t + star).rjust(_NW_PCT + 1), BOARD_MUTE if mute else rgb)
 
 
 def _nrow(mark, name, live, p5, bar, pwk, pfb, resets, login):
@@ -6402,7 +6453,12 @@ def _nrow(mark, name, live, p5, bar, pwk, pfb, resets, login):
     # `login` arrives UNPADDED on purpose: padding inside a coloured run leaves the spaces
     # before the reset sequence, where .rstrip() cannot see them, and they ride into every
     # copy-paste as invisible trailing ink.
-    return " ".join([mark + name, live, p5, bar, pwk, pfb, resets, login]).rstrip()
+    # The bar sits RIGHT of the weekly percent it draws ("35% ███░░░░░"): between 5h and weekly
+    # it read as 5h's bar, since nothing but adjacency says which number a bar belongs to.
+    # Three spaces before `login`, not one: both trailing cells are countdowns of the same
+    # shape, and a single space let "2d 15h 20d 19h" read as one string.
+    return (" ".join([mark + name, live, p5, pwk, bar, pfb, resets])
+            + "   " + login).rstrip()
 
 
 def _disp_w(s):
@@ -6542,7 +6598,9 @@ def readout_lines(rows, cfg, win, cached, narrow=False):
                      _cell("account", _NW_NAME, "<", BOARD_LABEL),
                      _cell("live", _NW_LIVE, ">", BOARD_LABEL),
                      _cell("5h", _NW_PCT + 1, ">", BOARD_LABEL),
-                     _cell("", _NW_BAR, "<", BOARD_LABEL),
+                     # A rule over the bar carries the `weekly` label across the pair (_nrow
+                     # puts the bar right of the percent), so the bar is no longer unlabelled.
+                     _cell("─" * _NW_BAR, _NW_BAR, "<", BOARD_TRACK),
                      _cell("weekly", _NW_PCT + 1, ">", BOARD_LABEL),
                      _cell("fable", _NW_PCT + 1, ">", BOARD_LABEL),
                      _cell("resets", _NW_WKR, ">", BOARD_LABEL),
@@ -6603,26 +6661,33 @@ def readout_lines(rows, cfg, win, cached, narrow=False):
             # wide cell is ~20 cells and a board has ~14 to give it. The countdown is the half a
             # reader acts on; the absolute stamp stays one `claude-accounts` away.
             login_n = "⊘ REQ" if a == "login-required" else (
-                fmt_h(lxh) if lxh is not None and lxh >= 0 else "—")
+                fmt_board_t(lxh) if lxh is not None and lxh >= 0 else "—")   # same shape as `resets`
             if a != "login-required" and lxh is not None and 0 <= lxh <= warn_h:
                 login_n = "⚠ " + login_n
             nm = _clip(acct + (" ←" if r.get("is_self") else ""), _NW_NAME)
-            wk_n = fmt_h(r.get("weekly_reset_h")) if r.get("weekly_reset_h") is not None else "—"
+            # Board-only two-unit form ("7h 24m", "2d 15h"): one shape for the whole column.
+            wk_n = fmt_board_t(r.get("weekly_reset_h"))
             # An account that cannot be routed to is MUTED rather than dropped: its row is still
             # a fact the reader needs (its quota is real, and stranding on it is the loudest
             # number on the board), but it must not read as a candidate.
             usable = a not in ("login-required", "logged-out", "keychain-error") \
                 and not r.get("auth_broken")
             ks = k_shown(r)
+            # A weekly refusal the SERVER confirmed (exhausted is True — never 99.x% or ≥99%,
+            # which can still be spent) dims the row too: it looked as routable as its
+            # neighbours with only one red cell. The red weekly cell and bar stay loud (they
+            # are why), and `resets` stays bright (it is when the account comes back).
+            wk_out = board_eff(r, "weekly_pct")[1] is True
+            live_row = usable and not wk_out
             out.append(_nrow(
                 _cell(marks.strip(), _NW_MARK, "<", BOARD_ACCENT, bold=True),
-                _cell(nm, _NW_NAME, "<", BOARD_TEXT if usable else BOARD_MUTE,
+                _cell(nm, _NW_NAME, "<", BOARD_TEXT if live_row else BOARD_MUTE,
                       bold=bool(marks.strip())),
-                _cell(ks, _NW_LIVE, ">", BOARD_TEXT if usable and ks != "?" else BOARD_MUTE),
-                _bpct(r, "session_pct"),
-                board_bar(*board_eff(r, "weekly_pct")),
+                _cell(ks, _NW_LIVE, ">", BOARD_TEXT if live_row and ks != "?" else BOARD_MUTE),
+                _bpct(r, "session_pct", mute=wk_out),
+                board_bar(*board_eff(r, "weekly_pct")),   # drawn after its percent: see _nrow
                 _bpct(r, "weekly_pct"),
-                _bpct(r, "fable_pct"),
+                _bpct(r, "fable_pct", mute=wk_out),
                 _cell(wk_n, _NW_WKR, ">", BOARD_TEXT if usable else BOARD_MUTE),
                 bc(login_n, RED if login_n.startswith(("⊘", "⚠")) else BOARD_LABEL)))
         else:
