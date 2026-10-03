@@ -74,6 +74,13 @@ cc_tui_submit() {
     flip)  mkdir -p "$HOME/.claude-secondary/projects/-x"
            cp "$HOME/.\$acct/projects/-x/\$sid.jsonl" "$HOME/.claude-secondary/projects/-x/"
            jq '.account = "claude-secondary"' "\$reg" > "\$reg.t" && mv "\$reg.t" "\$reg" ;;
+    late)  mkdir -p "$HOME/.claude-secondary/projects/-x"
+           cp -p "$HOME/.\$acct/projects/-x/\$sid.jsonl" "$HOME/.claude-secondary/projects/-x/"
+           sleep 1
+           printf '%s\n' '{"type":"user","message":{"content":"x"}}' \
+             '{"type":"assistant","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"moving to next2 now"}]}}' \
+             >> "$HOME/.\$acct/projects/-x/\$sid.jsonl"
+           ( sleep 4; jq '.account = "claude-secondary"' "\$reg" > "\$reg.t" && mv "\$reg.t" "\$reg" ) >/dev/null 2>&1 & ;;
     reply) sleep 1
            printf '%s\n' '{"type":"user","message":{"content":"x"}}' \
              '{"type":"assistant","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"not moving: next2 is near its weekly cap"}]}}' \
@@ -281,6 +288,17 @@ cc_lr_env() {
   [ "$status" -eq 3 ] || { echo "$output"; false; }
   r="$LRU_STATE/results/switch-60606060-0000-4000-8000-000000000001.json"
   [ "$(jq -r .verdict "$r")" = NOTMOVED ] && [[ "$(jq -r .reason "$r")" == *"near its weekly cap"* ]] || { cat "$r"; false; }
+}
+
+@test "D4b [RED] the subject ran the move and ended its turn before the relaunch: SWITCHED, never NOTMOVED" {
+  # pane 20, 2026-10-02: the transcript was copied to the target, the old process ended its turn,
+  # and the drainer convicted a decline one second before the relaunch flipped the registry.
+  tui_stub; export SUBMIT_ACT=late LRU_SWITCH_VERIFY_S=20
+  SESS_PID=$$ sess 562 60606060-0000-4000-8000-000000000002
+  run bash "$LRU" --switch-drive 60606060-0000-4000-8000-000000000002 562 next2 --requested-by 999 --req-id r3b
+  r="$LRU_STATE/results/switch-60606060-0000-4000-8000-000000000002.json"
+  [ "$status" -eq 0 ] || { echo "$output"; cat "$r"; false; }
+  [ "$(jq -r .verdict "$r")" = SWITCHED ] || { cat "$r"; false; }
 }
 
 @test "D5 a submit the TUI refused (composer occupied) is NOTMOVED; a submit with no outcome in the bound is FAILED" {

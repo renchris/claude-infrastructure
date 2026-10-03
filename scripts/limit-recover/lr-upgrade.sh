@@ -873,7 +873,7 @@ lru_switch_drive() { # $1=sid $2=pane $3=target $4=requested_by $5=req id [$6=un
 }
 _lru_switch_drive_run() {
   local sid="$1" pane="$2" target="$3" by="${4:-?}" req="${5:-}" until_ts="${6:-0}" mutex row from cfg pid run pf src=0 word
-  local tcfg deadline t0 racct rsid tx calm=0
+  local tcfg deadline t0 racct rsid tx tpre calm=0
   if ! tcfg="$(lru_acct_cfg "$target")"; then
     lru_switch_result "$sid" "$pane" NOTMOVED - "$target" "target '$target' is not an account this map knows (nothing typed)" "$req" "$by"; return 3
   fi
@@ -917,6 +917,10 @@ EOF
   rm -rf "$mutex"
   t0="$(date +%s)"
   tx="$(lru_transcript "$cfg" "$sid" || true)"
+  # Was there already a copy under the target? A copy that APPEARS after the submit means the
+  # subject ran the move (lr-transplant copies first, relaunches later), so its at-rest turn is the
+  # gap before the relaunch, not a decline. `cp -p` keeps the source mtime, so key on existence.
+  tpre=0; lru_transcript "$tcfg" "$sid" >/dev/null && tpre=1
   if [ ! -f "$LRU_TUI_LIB" ]; then
     lru_switch_result "$sid" "$pane" NOTMOVED "$from" "$target" "cc-tui.sh unreachable at $LRU_TUI_LIB (nothing typed)" "$req" "$by"; return 3
   fi
@@ -939,8 +943,11 @@ EOF
     fi
     # DECLINED / REFUSED INSIDE THE SUBJECT: the old process is still alive, its transcript was
     # written after the submit and is at rest again — the subject took its turn and stayed. Two
-    # consecutive reads, so a transient at-rest between two tool calls cannot convict.
-    if [ -n "$tx" ] && kill -0 "$pid" 2>/dev/null && [ "$(lru_mtime "$tx")" -gt "$t0" ] && lru_at_rest "$tx"; then
+    # consecutive reads, so a transient at-rest between two tool calls cannot convict. Never once a
+    # target copy has appeared since the submit: the move is under way and the flip decides
+    # (pane 20, 2026-10-02: NOTMOVED at 02:28:46, relaunched on the target at 02:28:47).
+    if [ -n "$tx" ] && kill -0 "$pid" 2>/dev/null && [ "$(lru_mtime "$tx")" -gt "$t0" ] && lru_at_rest "$tx" \
+       && { [ "$tpre" = 1 ] || ! lru_transcript "$tcfg" "$sid" >/dev/null; }; then
       calm=$((calm + 1))
       if [ "$calm" -ge 2 ]; then
         lru_switch_result "$sid" "$pane" NOTMOVED "$from" "$target" "the subject took its turn and did not move; its last reply: $(lru_last_text "$tx")" "$req" "$by"; return 3
