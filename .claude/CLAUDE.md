@@ -25,9 +25,12 @@ commits leave the LIVE `~/.claude` layer stale (this repo is its symlink/source)
 committed-not-landed is itself "work left on the table". The authorization is exclusively for the
 fail-closed project-local `/ship` (landing lock + last-moment re-fetch + full gate + content-verify
 + stranded sweep) — never a bare `git push`. Global Git Safety is unchanged for every other repo.
-After landing, sync the non-symlinked live copies (`~/.claude/CLAUDE.md` is a separate real file —
-apply the same edits there; most of `skills/ hooks/ bin/ scripts/ commands/` are per-file symlinks
-into the checkout and go live on the trunk fast-forward).
+After landing, converge (§ Standing-converge below) rather than hand-copying: `~/.claude/CLAUDE.md` is
+a real file install.sh writes from the SELECTED global variant (`CLAUDE.global.slim.md` by default;
+`cc-instructions-variant status`), `~/.claude/CLAUDE.full.md` is its copy of `CLAUDE.global.md`, and a
+hand edit to either is overwritten on the next deploy (docs/plans/INSTRUCTION_BUDGET.md D2). Most of
+`skills/ hooks/ bin/ scripts/ commands/` are per-file symlinks into the checkout and go live on the
+trunk fast-forward.
 
 ## Standing-converge authorization (this repo only)
 
@@ -77,8 +80,9 @@ was given explicitly on 2026-09-15 after the agent refused to write it unasked.
 
 ## The global instructions live at `CLAUDE.global.md`, never at a root `CLAUDE.md`
 
-The SSOT for `~/.claude/CLAUDE.md` is **`CLAUDE.global.md`** at this repo's root; `install.sh`
-copies it out under the deployed name. Do **not** create or restore a root `CLAUDE.md` here: Claude
+The SSOT for the global instructions is **`CLAUDE.global.md`** at this repo's root (variants:
+`CLAUDE.global.<v>.md`); `install.sh` copies it to `~/.claude/CLAUDE.full.md` and the selected variant
+to `~/.claude/CLAUDE.md`. Do **not** create or restore a root `CLAUDE.md` here: Claude
 Code would load it as PROJECT memory on top of the byte-identical user-memory copy every session
 already has, which is what made a session in this checkout load the same ~94 KB twice — ~83% of the
 always-loaded budget, ~20.7K tokens per session of pure duplicate (backlog `c3647a090021`). Nothing

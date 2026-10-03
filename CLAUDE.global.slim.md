@@ -1,6 +1,6 @@
 <!-- instructions-variant: slim · derived-from CLAUDE.global.md sha256:cecd5a0c2fa35792 · audit: docs/research/token-efficiency-2026-09-23/audit/ -->
-This is the slim variant of CLAUDE.global.md, loaded under an A/B test.
-The full text, with the rationale and history for every section, stays at ~/Development/claude-infrastructure/CLAUDE.global.md; read the matching section there when a rule here seems to lack context.
+This is the slim variant of CLAUDE.global.md, the machine's selected global instructions (`cc-instructions-variant status`).
+The full text, with the rationale and history for every section, is deployed to ~/.claude/CLAUDE.full.md (source: ~/Development/claude-infrastructure/CLAUDE.global.md); read the matching section there when a rule here seems to lack context.
 
 # Global Development Standards
 
