@@ -105,5 +105,11 @@ refusal, and the kill switch.
 
 ## Status
 
-- [ ] plan committed · [ ] cc-wake + bats · [ ] cc-notify wiring · [ ] self-close class + bats ·
-  [ ] migration · [ ] landed · [ ] converged · [ ] acceptance (a) · [ ] acceptance (b)
+- [x] plan committed (`4a1857af7`) · [x] cc-wake + 18 bats, every gate mutation-checked red
+  (`88e01f983`) · [x] cc-notify wiring + `.sent-lines` + 6 bats, cc-notify.bats still green 117/117
+  (`e3286a961`) · [x] migration 0052 (`e7c577f70`) · [ ] self-close class + bats · [ ] landed ·
+  [ ] converged · [ ] acceptance (a) · [ ] acceptance (b)
+- Built differently from the brief's sketch: there is no keystroke path at all. Every "type into a
+  peer" guard the brief lists exists to make a keystroke safe. The socket never reaches the composer,
+  so those guards had nothing left to guard.
+- Pre-existing, not caused by this work: `scripts/typed-send-lint.sh` exits 1 on trunk with or without these files.
