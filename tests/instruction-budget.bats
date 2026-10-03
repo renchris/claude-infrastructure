@@ -16,6 +16,7 @@
 #
 # Every hook run goes through a SYMLINK to the host: live, ~/.claude/hooks/backup-before-write.sh is
 # a symlink into the checkout, and a lib resolved from the undereferenced path fails open silently.
+# shellcheck disable=SC2016  # bash -c bodies are literal; their $1/$2 are the child's positionals
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"

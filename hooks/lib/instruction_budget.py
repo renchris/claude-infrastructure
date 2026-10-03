@@ -979,7 +979,8 @@ def collect_cwds(days):
 def bucket(cwd):
     """-> repo label root (main checkout for worktrees), or None to skip."""
     h = home()
-    if cwd.startswith(("/tmp", "/private/", "/var/folders")) or not os.path.isdir(cwd):
+    # $HOME only: the fleet's sessions live there, and /tmp eval harnesses are fixtures, not fleet.
+    if not (cwd == h or cwd.startswith(h + "/")) or not os.path.isdir(cwd):
         return None
     root = git_root(cwd)
     if root:
