@@ -155,3 +155,10 @@ body file. Land a reso size check in pre-commit + `scripts/ship-land.sh` run_sta
 ## Progress
 
 - 2026-10-03 — research complete, plan written (this commit).
+- 2026-10-03 — W1 step 1 landed and converged: bea3da8d5 (install.sh: selected variant → `~/.claude/CLAUDE.md`,
+  full → `CLAUDE.full.md`, stray rules retired; deploy-parity follows), db0084cda (`cc-instructions-variant`
+  global `set`, per-account `set` refused, DUPLICATE in `status`; one mission-board text), 80ef1543c
+  (migration 0053, c10, staged), 110c9d393 (docs). Live: `cmp ~/.claude/CLAUDE.md ~/.claude/CLAUDE.slim.md`
+  identical, `~/.claude/rules` = board only, 0053 `--dry-run` clean. Step 2 is the operator's: backlog
+  `b154e11d31b9` (run 0053). Learned: the config mirror must keep honouring 0042's per-account lines until
+  0053 removes them, or every account is re-pointed at the next session start without the operator.
