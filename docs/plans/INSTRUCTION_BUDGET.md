@@ -172,3 +172,14 @@ body file. Land a reso size check in pre-commit + `scripts/ship-land.sh` run_sta
   research-census bug: `paths\s*:` crossed the newline, so a `paths:` YAML list read as a scalar. Not done (not
   in W2's file set): guard-design's Bash-route detector (memory-index-drain.sh), cc-memory-rotate and cc-mission
   render pre-checks. Pre-existing reds, not W2's: autonomy-sweep.bats 50 and 52 fail at e4ade9394 too.
+- 2026-10-03 — W3 landed on reso origin/main 5a883b897..d8d193f17: always-loaded repo tier 250,574 → 57,464
+  (CLAUDE.md 32.3k · lessons 20.2k, 76/76 hooks kept · `bottle-generation-rules.md` head 4.3k · agent-teams
+  0.7k). Ledger `git mv` to `.claude/bottles/generation-ledger.md`, 0 rows lost; the live bottle session's
+  next appends went to the body (b863f5883), the old path stays absent. reso size check in pre-commit,
+  ship-land run_statics and a vitest, with a tombstone on the old path.
+- 2026-10-03 — W4 (follow-on, auditor row 1f0c1b48405b): personal lessons file 54,522 → 11,127 on master
+  9cd9239, 34 hooks kept, bodies verbatim in docs/lessons/; `assert --class repo-personal` GREEN.
+- 2026-10-03 — follow-on (auditor row 473335c307b2, user tier 60,114 > 60,000): `cc-mission` compact board
+  capped at 2,400 chars, rows past it collapse to one "+N more" line (3e870cbc7). Dropped as covered by the
+  land ratchets + hourly auditor: W2's Bash-route detector and the cc-memory-rotate pre-check.
+- Remaining: the operator runs migration 0053 (backlog b154e11d31b9) → global layer ≈ 60k, DUP rows clear.
