@@ -162,3 +162,13 @@ body file. Land a reso size check in pre-commit + `scripts/ship-land.sh` run_sta
   identical, `~/.claude/rules` = board only, 0053 `--dry-run` clean. Step 2 is the operator's: backlog
   `b154e11d31b9` (run 0053). Learned: the config mirror must keep honouring 0042's per-account lines until
   0053 removes them, or every account is re-pointed at the next session start without the operator.
+- 2026-10-03 — W2 landed: 2b6e0faaf (predicate `hooks/lib/instruction_budget.py`, `config/instruction-budget.json`,
+  `bin/cc-instruction-budget`, Write/Edit gate in backup-before-write.sh above its fast exit), 94ccad0eb (bats:
+  gate 12 + auditor/ratchet 10), 6830823be (ship-land ratchet, own-range), 860117bf9 (autonomy-sweep hourly
+  `file` + `publish`), 273d08f44 (`enforce: true`, after reso origin/main dropped the old ledger path). Census
+  reproduces the 428.1k warning (reso, account cfg: 9 files, 430,996 = 428.1k + ledger growth since). Decided:
+  `CLAUDE.global.slim.md` is budgeted as user tier, `CLAUDE.global.md` not at all (D2 deploys it non-loaded);
+  a file in the user tier is not also counted as ancestor; `enforce` governs gate and ratchet together. Fixed a
+  research-census bug: `paths\s*:` crossed the newline, so a `paths:` YAML list read as a scalar. Not done (not
+  in W2's file set): guard-design's Bash-route detector (memory-index-drain.sh), cc-memory-rotate and cc-mission
+  render pre-checks. Pre-existing reds, not W2's: autonomy-sweep.bats 50 and 52 fail at e4ade9394 too.
