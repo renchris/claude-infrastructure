@@ -203,10 +203,10 @@ def readout(wire):
     return buf.getvalue(), r
 allowed, r1 = readout({"7d_util": 0.99, "7d_status": "allowed_warning", "5h_util": 0.05,
                        "5h_status": "allowed", "status": "allowed_warning", "http": 200})
-assert "is **not out of weekly quota**" in allowed and "says 99% used" in allowed, allowed
+assert "is **not out of weekly quota**" in allowed and "says 99.0% used" in allowed, allowed
 assert "still accepts work" in allowed, allowed
 row = next(l for l in allowed.splitlines() if l.startswith("|") and "next3" in l)
-assert "| 99% |" in row, "a still-allowed weekly cell must never read 100%%: %r" % row
+assert "| 99.0% |" in row, "a still-allowed weekly cell must never read 100%%: %r" % row
 rejected, _ = readout({"7d_util": 1.0, "7d_status": "rejected", "5h_util": 0.05,
                        "5h_status": "allowed", "status": "rejected", "http": 429})
 assert "is **out of weekly quota**, confirmed by Anthropic" in rejected, rejected
@@ -338,7 +338,13 @@ allowed = board({"7d_util": 0.996, "7d_status": "allowed_warning", "5h_util": 0.
 assert "████████ " in refused and "100%" in refused, refused
 assert "███████▊ " in allowed, "a spendable bar must not read full: %r" % allowed
 row = next(l for l in allowed.splitlines() if "next3" in l and "█" in l)
-assert " 99%" in row and "100%" not in row, row
+assert " 99.6%" in row and "100%" not in row, row
+blind = board(None)
+brow = next(l for l in blind.splitlines() if "next3" in l and "▓" in l)
+assert "▓▓▓▓▓▓▓▓" in brow and "≥99%" in brow and "100%" not in brow, \
+    "an unconfirmed 100%% must be shaded and read >=99%%, never 100%%: %r" % brow
+rrow = next(l for l in refused.splitlines() if "next3" in l and "█" in l)
+assert "▓" not in rrow and " 100%" in rrow, rrow
 flat = lambda t: " ".join(t.split())
 assert "next3 is out of weekly quota, confirmed by Anthropic" in flat(refused), refused
 assert "next3 is not out of weekly quota" in flat(allowed), allowed
@@ -346,7 +352,12 @@ for out in (refused, allowed):
     assert "ʷ" not in out and "rate-limit headers" not in out, out
 # Whole cells used to round 94% up to a full bar; eighths keep it short of full.
 assert ca.board_bar(94.0) == "███████▌", ca.board_bar(94.0)
-assert ca.board_bar(100.0) == "████████"
+assert ca.board_bar(100.0, True) == "████████"
+assert ca.board_bar(100.0) == "▓▓▓▓▓▓▓▓", "no server verdict: shaded, not solid"
+assert (ca.pct_text(100.0, True), ca.pct_text(99.6, False), ca.pct_text(100.0, None)) \
+    == ("100%", "99.6%", "≥99%")
+assert ca.pct_rgb(100.0, True) == ca.RED and ca.pct_rgb(99.6, False) == ca.NEAR_WALL_RGB \
+    and ca.pct_rgb(100.0, None) == ca.GRAY
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }

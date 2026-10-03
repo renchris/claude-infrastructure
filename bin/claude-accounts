@@ -6306,9 +6306,9 @@ def board_eff(r, key):
     The endpoint integer rounds UP and clamps at 100, so it draws "99% used, still allowed" and
     "refused" as the same full red bar (operator, 2026-10-01: leaving ~1% of a weekly on the
     table is a lot). The wire carries both apart: `exhausted` is True only when the server says
-    `rejected` (or reads >= 100%), False for any other wire reading — whose percent is FLOORED and
-    capped at 99, since 99.6% is still spendable — and None when there is no wire reading, i.e.
-    the endpoint integer alone, where a 100 is a ceiling nobody verified."""
+    `rejected` (or reads >= 100%), False for any other wire reading — whose percent is FLOORED to
+    a tenth and capped at 99.9, since 99.6% is still spendable — and None when there is no wire
+    reading, i.e. the endpoint integer alone, where a 100 is a ceiling nobody verified."""
     if r.get(key) is None:          # withheld (rolled since the reading) or never read
         return None, None
     wf = WIRE_FIELD.get(key)
@@ -6317,9 +6317,39 @@ def board_eff(r, key):
     if wv is not None:
         if wire.get(wf.replace("_util", "_status")) == "rejected" or wv >= 1.0:
             return 100.0, True
-        return float(min(math.floor(wv * 100), 99)), False
+        return float(min(math.floor(wv * 1000) / 10, 99.9)), False
     v = r.get(key)
     return (None, None) if v is None else (float(v), None)
+
+
+# THE THREE STATES AT THE WALL, INLINE (operator, 2026-10-03: "inline in the graph, not some
+# subtext below it", in BOTH the percent column and the bar). One function decides the text and
+# one the colour, and every percent renderer goes through them, so the column, the bar and the
+# /accounts table can never disagree about which state an account is in.
+#   confirmed out   (server refused)            "100%"   red bar, full
+#   nearly out      (server: still accepting)    "99.6%"  orange bar, last sliver left open
+#   not confirmed   (meter's rounded 100 only)   "≥99%"   gray bar
+# The text carries it without colour too (CC_BOARD_COLOR=off, a colour-blind reader): only a
+# confirmed refusal ever prints "100%".
+NEAR_WALL_RGB = (255, 140, 40)
+
+
+def pct_text(v, exhausted):
+    """A percent as the reader should see it, given board_eff's (percent, exhausted)."""
+    if exhausted is None and v >= 100:
+        return "≥99%"               # the meter rounds UP: true value is somewhere from 99% up
+    if exhausted is False:
+        return f"{v:.1f}%" if v >= 99 else f"{math.floor(v):.0f}%"
+    return f"{v:.0f}%"
+
+
+def pct_rgb(v, exhausted):
+    """The colour for that percent: red is reserved for a refusal the server confirmed."""
+    if exhausted is None and v >= 100:
+        return GRAY
+    if exhausted is False and v >= 99:
+        return NEAR_WALL_RGB
+    return usage_rgb(v)
 
 
 def board_bar(pct, exhausted=None, width=_NW_BAR):
@@ -6337,8 +6367,11 @@ def board_bar(pct, exhausted=None, width=_NW_BAR):
     if exhausted is not True and p < 100.0:
         eighths = min(eighths, width * 8 - 2)
     full, rem = divmod(eighths, 8)
-    rgb = usage_rgb(p)
-    return (bc("█" * full, rgb)
+    rgb = pct_rgb(p, exhausted)
+    # Not confirmed by the server: a SHADED bar, so it differs from a confirmed refusal's solid
+    # bar even with colour off. Only "100% confirmed" is ever drawn solid and full.
+    fill = "▓" if (exhausted is None and p >= 100.0) else "█"
+    return (bc(fill * full, rgb)
             + (bc(EIGHTHS[rem - 1], rgb, bg=BOARD_TRACK) if rem else "")
             + bc("░" * (width - full - (1 if rem else 0)), BOARD_TRACK))
 
@@ -6351,11 +6384,13 @@ def _bpct(r, key):
     because a reader scanning a column must not have to decide whether a floating asterisk
     belongs to the row above. Right-aligning the value-plus-suffix as ONE string is what keeps
     the digits in a column while the suffix comes and goes."""
-    v, _ = board_eff(r, key)
+    v, ex = board_eff(r, key)
     if v is None:
         return _cell("—", _NW_PCT + 1, ">", BOARD_MUTE)
     star = "*" if (r.get("stale_quota") or r.get("error")) else ""
-    return bc((f"{v:.0f}%" + star).rjust(_NW_PCT + 1), usage_rgb(v))
+    if key not in WIRE_FIELD:       # no server reading exists for it: plain percent, as before
+        return bc((f"{v:.0f}%" + star).rjust(_NW_PCT + 1), usage_rgb(v))
+    return bc((pct_text(v, ex) + star).rjust(_NW_PCT + 1), pct_rgb(v, ex))
 
 
 def _nrow(mark, name, live, p5, bar, pwk, pfb, resets, login):
@@ -6480,11 +6515,12 @@ def readout_lines(rows, cfg, win, cached, narrow=False):
         if wv is not None:
             bv, refused = board_eff(r, key)
             if bv is not None:
-                return f"{(wv * 100 if refused else bv):.0f}%"
+                return f"{wv * 100:.0f}%" if refused else pct_text(bv, refused)
         v = r.get(key)
         if v is None:
             return "—"
-        return f"{v:.0f}%" + ("*" if r.get("stale_quota") or r.get("error") else "")
+        return (pct_text(float(v), None) if key in WIRE_FIELD else f"{v:.0f}%") \
+            + ("*" if r.get("stale_quota") or r.get("error") else "")
 
     if narrow:
         # THE BOARD STATES ITS OWN AGE, on line 1, before any number it is about to print.
@@ -6643,7 +6679,7 @@ def readout_lines(rows, cfg, win, cached, narrow=False):
                          + (f" ({w7 * 100:.0f}% used)" if w7 is not None else "") + resets)
         elif w7 is not None and (r.get("weekly_pct") or 0) >= 100:
             notes.append(f"`{acct}` is **not out of weekly quota**: the meter shows 100%, but "
-                         f"Anthropic's server says {board_eff(r, 'weekly_pct')[0]:.0f}% used and "
+                         f"Anthropic's server says {pct_text(*board_eff(r, 'weekly_pct'))} used and "
                          f"still accepts work (about {max(0.0, 1 - w7) * 100:.0f}% of the week "
                          f"left, roughly {max(0.0, 1 - w7) * 100 / K_FROZEN:.0f}% of one "
                          f"5-hour window)")
