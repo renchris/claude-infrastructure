@@ -520,6 +520,36 @@ log_idl config-parity "$(jq -cn --arg d "$_drift_rc" \
   '{settings_drift_rc:$d,
     note:"rc 0 = the 5 config dirs agree; 1 = drift, ONE condition-keyed item filed; 3 = could not compare (NOT clean); skipped = tool absent"}')"
 
+# ── INSTRUCTION BUDGET auditor (2026-10-03, docs/plans/INSTRUCTION_BUDGET.md D7) ──────────────────
+# The fleet half of the instruction-budget stack. The Write/Edit gate and the land ratchet judge one
+# write or one land; only this sees the per-session TOTAL — every config dir x every recently used
+# cwd, emulated the way Claude Code loads it — and the invariant migration 0042 broke without a
+# sound: no instruction file loaded twice. `file` keeps ONE condition-keyed, self-falsifying backlog
+# row per breach class (dedupe / user / ancestor / repo-<name>), never a row per sweep. `publish`
+# refreshes the @import reachability set the gate's forkless pre-screen reads.
+#
+# Same placement and reasons as the parity block above: budget growth raises no alarm while it
+# accumulates, so it is measured on quiet ticks too. HOURLY, not every 300 s: a breach moves at
+# session timescale and the census reads transcripts (~4 s). The stamp is written only after a
+# verdict, so a non-verdict retries on the next tick. rc captured, never `|| true`.
+_ib="$(dirname "$_SWEEP_DIR")/bin/cc-instruction-budget"
+_ib_rc="skipped"
+_ib_stamp="${CC_IB_SWEEP_STAMP:-$HOME/.claude/autonomy/instruction-budget.stamp}"
+if [ -x "$_ib" ]; then
+  _ib_last=0; [ -f "$_ib_stamp" ] && _ib_last="$(file_mtime "$_ib_stamp")"
+  case "$_ib_last" in ''|*[!0-9]*) _ib_last=0 ;; esac
+  if [ $(( $(date +%s) - _ib_last )) -ge "${CC_IB_SWEEP_EVERY_S:-3600}" ]; then
+    _bounded "$_ib" file >/dev/null 2>&1; _ib_rc=$?
+    _bounded "$_ib" publish >/dev/null 2>&1 || true   # advisory cache; a stale set only narrows the pre-screen
+    case "$_ib_rc" in 0|1) mkdir -p "$(dirname "$_ib_stamp")" 2>/dev/null; : > "$_ib_stamp" ;; esac
+  else
+    _ib_rc="cooldown"
+  fi
+fi
+log_idl instruction-budget "$(jq -cn --arg r "$_ib_rc" \
+  '{instruction_budget_rc:$r,
+    note:"rc 0 = every session within budget, no duplicate load; 1 = breach, one condition-keyed row per class filed; 3 = could not measure (NOT clean); cooldown = ran within the hour; skipped = tool absent"}')"
+
 # ── DETECTORS FIRST — the two arms that report on THIS JOB'S OWN FAILURE (2026-09-16) ────────────
 # The block above hoisted the parity checker past §0a on the argument that an arm which cannot be
 # REACHED is indistinguishable from an arm that does not exist. These two are the same case, one
