@@ -72,6 +72,13 @@ DAY = 86400.0
 COMPACT_FLAG = STORE / "render-compact"
 SLIM_RULES = HOME / ".claude" / "rules.slim"
 HEADLINE_MAX = 200
+# The compact board's ceiling, in chars. It sits in the user instruction tier with the slim global
+# file, and that tier's budget is 60,000 (config/instruction-budget.json, docs/plans/
+# INSTRUCTION_BUDGET.md D7) against a 57.2k slim file, so the board gets what is left. Uncapped, it
+# grew one line per stale row and pushed the tier over budget on every account. Rows render in rank
+# order until the next would cross the cap; the rest collapse to one "+N more" line, and the top
+# row always renders.
+BOARD_MAX_CHARS = 2400
 
 # States an agent may set. `signed` and `live` are reachable only through cc-signoff.
 AGENT_STATES = {"lead", "provisioned", "needs-source", "drafted", "awaiting-signoff",
@@ -322,14 +329,24 @@ def board_text(rows: list[dict], stale: list[dict], live: list[dict], stamp: str
             f"operator's `cc-signoff` marks a row done. On a NEEDS-SOURCE row the only action "
             f"is to draft the ask, never to build from a guess. "
             f"<sub>rendered {stamp}, one session behind</sub>\n\n")
-        for r in stale:
+        used = len("".join(out))
+        for i, r in enumerate(stale):
             d = r["_stale_days"]
             age = "" if d >= 999 else f" {d:.0f}d"
             fl = [f for f in r["_flags"] if f.lower() != r["_clock"].lower()]
             flags = (" · " + " · ".join(fl)) if fl else ""
-            out.append(f"- {r.get('lead','?')} · {r.get('venue','?')} · "
-                       f"{r.get('artifact','?')} — {r['_clock']}{age}{flags} — "
-                       f"{headline(r)} `{r['id']}`\n")
+            line = (f"- {r.get('lead','?')} · {r.get('venue','?')} · "
+                    f"{r.get('artifact','?')} — {r['_clock']}{age}{flags} — "
+                    f"{headline(r)} `{r['id']}`\n")
+            rest = len(stale) - i - 1
+            more = f"- +{rest + 1} more stale row(s): `cc-mission list`\n"
+            # Reserve room for the "+N more" line whenever rows would remain after this one.
+            reserve = len(more) if rest else 0
+            if i and used + len(line) + reserve > BOARD_MAX_CHARS:
+                out.append(more)
+                break
+            out.append(line)
+            used += len(line)
     else:
         out.append(
             f"\n🚨 **{len(stale)} customer deliverable(s) are stale. These outrank "

@@ -56,3 +56,31 @@ PY
   run python3 "$CCM" show t.nope
   [ "$status" -eq 2 ]
 }
+
+@test "compact board stays under BOARD_MAX_CHARS: rows past the cap collapse to one +N more line" {
+  python3 - "$ROWS" <<'PY'
+import json, sys, time
+for i in range(3, 15):
+    json.dump({"id": f"t.row{i}", "lead": "L", "venue": f"V{i}", "artifact": "a",
+               "repo": "", "state": "blocked-operator", "budget_days": 1,
+               "blocked_since": time.time() - 5 * 86400, "next": "word " * 400},
+              open(f"{sys.argv[1]}/t.row{i}.json", "w"))
+PY
+  touch "$HOME/.claude/autonomy/customer/render-compact"
+  run env -u CC_MISSION_COMPACT python3 "$CCM" render
+  [ "$status" -eq 0 ]
+  chars=$(python3 -c 'import sys; print(len(open(sys.argv[1], encoding="utf-8").read()))' "$BOARD")
+  [ "$chars" -le 2400 ]
+  shown=$(grep -c '^- L · ' "$BOARD")
+  [ "$shown" -ge 1 ]
+  grep -q "^- +$((14 - shown)) more stale row(s): \`cc-mission list\`$" "$BOARD"
+}
+
+@test "compact board under the cap renders every row and no +N more line" {
+  touch "$HOME/.claude/autonomy/customer/render-compact"
+  run env -u CC_MISSION_COMPACT python3 "$CCM" render
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^- L · ' "$BOARD")" -eq 2 ]
+  run grep -c 'more stale row' "$BOARD"
+  [ "$output" = "0" ]
+}
