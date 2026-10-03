@@ -65,15 +65,21 @@ disp_of() { printf '%s\n' "$output" | awk -F'\t' -v p="$1" '$1 == p { print $7 }
 tui_stub() {
   export LRU_TUI_LIB="$BATS_TEST_TMPDIR/tui.sh"
   cat > "$LRU_TUI_LIB" <<EOF
-cc_tui_composer() { cat "$BATS_TEST_TMPDIR/composer-\$1" 2>/dev/null; return 0; }
+cc_tui_composer() { tr -d '[:space:]' < "$BATS_TEST_TMPDIR/composer-\$1" 2>/dev/null; return 0; }
+cc_tui_composer_text() { cat "$BATS_TEST_TMPDIR/composer-\$1" 2>/dev/null; return 0; }
+cc_tui_clear() { [ "\${CLEAR_RC:-0}" = 0 ] || return "\$CLEAR_RC"; : > "$BATS_TEST_TMPDIR/composer-\$1"; }
+cc_tui_type() { printf '%s|%s\n' "\$1" "\$(cat "\$2")" >> "$BATS_TEST_TMPDIR/type.log"; cat "\$2" >> "$BATS_TEST_TMPDIR/composer-\$1"; }
 cc_tui_submit() {
+  [ ! -s "$BATS_TEST_TMPDIR/composer-\$1" ] || return 3
   printf '%s|%s\n' "\$1" "\$(cat "\$2")" >> "$BATS_TEST_TMPDIR/submit.log"
   local reg="$LRU_REG_DIR/\$1.json" sid acct
   sid="\$(jq -r .session_id "\$reg")"; acct="\$(jq -r .account "\$reg")"
   case "\${SUBMIT_ACT:-none}" in
     flip)  mkdir -p "$HOME/.claude-secondary/projects/-x"
            cp "$HOME/.\$acct/projects/-x/\$sid.jsonl" "$HOME/.claude-secondary/projects/-x/"
-           jq '.account = "claude-secondary"' "\$reg" > "\$reg.t" && mv "\$reg.t" "\$reg" ;;
+           jq '.account = "claude-secondary"' "\$reg" > "\$reg.t" && mv "\$reg.t" "\$reg"
+           mkdir -p "$LRU_STATE/\$sid/bundle-x"
+           echo '{"state":"submitted","stage":"engage"}' > "$LRU_STATE/\$sid/bundle-x/events.jsonl" ;;
     late)  mkdir -p "$HOME/.claude-secondary/projects/-x"
            cp -p "$HOME/.\$acct/projects/-x/\$sid.jsonl" "$HOME/.claude-secondary/projects/-x/"
            sleep 1
@@ -261,7 +267,7 @@ cc_lr_env() {
   run bash "$LRU" --switch-drive 50505050-0000-4000-8000-000000000001 551 next2 --requested-by 999 --req-id r2
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [ "$(grep -c . "$BATS_TEST_TMPDIR/submit.log")" -eq 1 ] || { cat "$BATS_TEST_TMPDIR/submit.log"; false; }
-  [ "$(cat "$BATS_TEST_TMPDIR/submit.log")" = "551|[operator-ruling cc-lr-switch req=r2] Run in Bash now: cc-lr switch --target next2" ] \
+  [ "$(cat "$BATS_TEST_TMPDIR/submit.log")" = "551|[operator-ruling cc-lr-switch req=r2] Run this exact command in Bash, alone, with no pipe or PATH prefix: ~/.claude/bin/cc-lr switch --target next2" ] \
     || { cat "$BATS_TEST_TMPDIR/submit.log"; false; }
   r="$LRU_STATE/results/switch-50505050-0000-4000-8000-000000000001.json"
   [ "$(jq -r .verdict "$r")" = SWITCHED ] || { cat "$r"; false; }
@@ -322,6 +328,56 @@ cc_lr_env() {
   [ "$status" -eq 3 ] || { echo "$output"; cat "$r"; false; }
   [[ "$(jq -r .reason "$r")" == busy:* ]] || { cat "$r"; false; }
   if grep -q '^564|' "$BATS_TEST_TMPDIR/submit.log" 2>/dev/null; then echo "typed into a held session"; false; fi
+}
+
+# ── D6. A DRAFT IS CARRIED, NOT A REASON TO STAY (operator ruling 2026-10-03) ─────────────────────
+# Pane 33, 2026-10-02: the operator's unsent "I mean http://localhost:3334 cant be reached" held the
+# move twice and handed it to a human. RED-proof: on the unfixed tree D6a reads NOTMOVED
+# composer-occupied and nothing is typed.
+DRAFT='I mean http://localhost:3334 cant be reached'
+
+@test "D6a [RED] a draft is saved, cleared, the session moves, and the draft is typed back UNSENT after the resume settles" {
+  tui_stub; export SUBMIT_ACT=flip LRU_COMPOSER=on LRU_SWITCH_DRAFT_SETTLE_S=0
+  sess 581 68686868-0000-4000-8000-000000000001
+  printf '%s' "$DRAFT" > "$BATS_TEST_TMPDIR/composer-581"
+  run bash "$LRU" --switch-drive 68686868-0000-4000-8000-000000000001 581 next2 --req-id r6a
+  r="$LRU_STATE/results/switch-68686868-0000-4000-8000-000000000001.json"
+  [ "$status" -eq 0 ] || { echo "$output"; cat "$r"; false; }
+  [ "$(jq -r .verdict "$r")" = SWITCHED ] || { cat "$r"; false; }
+  [[ "$(jq -r .reason "$r")" == *"draft was carried"* ]] || { cat "$r"; false; }
+  # the switch line went into an EMPTY box, and the draft came back after it, never submitted
+  [[ "$(cat "$BATS_TEST_TMPDIR/submit.log")" == "581|[operator-ruling cc-lr-switch req=r6a]"* ]] || { cat "$BATS_TEST_TMPDIR/submit.log"; false; }
+  [ "$(cat "$BATS_TEST_TMPDIR/type.log")" = "581|$DRAFT" ] || { cat "$BATS_TEST_TMPDIR/type.log"; false; }
+  [ "$(cat "$BATS_TEST_TMPDIR/composer-581")" = "$DRAFT" ] || false
+  [ "$(cat "$LRU_STATE"/switch/68686868-*/draft.txt)" = "$DRAFT" ] || false
+}
+
+@test "D6b the session does not move: the draft goes back into the SAME pane, and the verdict says so" {
+  tui_stub; export SUBMIT_ACT=reply LRU_COMPOSER=on LRU_SWITCH_VERIFY_S=20 LRU_SWITCH_DRAFT_SETTLE_S=0
+  SESS_PID=$$ sess 582 68686868-0000-4000-8000-000000000002
+  printf '%s' "$DRAFT" > "$BATS_TEST_TMPDIR/composer-582"
+  run bash "$LRU" --switch-drive 68686868-0000-4000-8000-000000000002 582 next2 --req-id r6b
+  r="$LRU_STATE/results/switch-68686868-0000-4000-8000-000000000002.json"
+  [ "$status" -eq 3 ] || { echo "$output"; cat "$r"; false; }
+  [[ "$(jq -r .reason "$r")" == *"near its weekly cap"*"draft was carried"* ]] || { cat "$r"; false; }
+  [ "$(cat "$BATS_TEST_TMPDIR/composer-582")" = "$DRAFT" ] || false
+}
+
+@test "D6c a box that cannot be cleared moves nothing and keeps the draft; LRU_SWITCH_CARRY_DRAFT=off holds as before" {
+  tui_stub; export SUBMIT_ACT=flip LRU_COMPOSER=on LRU_SWITCH_DRAFT_WAIT_S=0
+  sess 583 68686868-0000-4000-8000-000000000003
+  printf '%s' "$DRAFT" > "$BATS_TEST_TMPDIR/composer-583"
+  CLEAR_RC=1 run bash "$LRU" --switch-drive 68686868-0000-4000-8000-000000000003 583 next2 --req-id r6c
+  r="$LRU_STATE/results/switch-68686868-0000-4000-8000-000000000003.json"
+  [ "$status" -eq 3 ] || { echo "$output"; cat "$r"; false; }
+  [[ "$(jq -r .reason "$r")" == composer-occupied:*"saved at"* ]] || { cat "$r"; false; }
+  [ ! -s "$BATS_TEST_TMPDIR/submit.log" ] || { cat "$BATS_TEST_TMPDIR/submit.log"; false; }
+  [ "$(cat "$BATS_TEST_TMPDIR/composer-583")" = "$DRAFT" ] || false
+  LRU_SWITCH_CARRY_DRAFT=off run bash "$LRU" --switch-drive 68686868-0000-4000-8000-000000000003 583 next2 --req-id r6d
+  [ "$status" -eq 3 ] || { echo "$output"; false; }
+  [[ "$(jq -r .reason "$r")" == composer-occupied* ]] || { cat "$r"; false; }
+  [ ! -s "$BATS_TEST_TMPDIR/submit.log" ] || false
+  [ ! -s "$BATS_TEST_TMPDIR/type.log" ] || false
 }
 
 @test "D5 a submit the TUI refused (composer occupied) is NOTMOVED; a submit with no outcome in the bound is FAILED" {

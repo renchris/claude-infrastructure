@@ -156,6 +156,34 @@ cc_tui_screen() { # $1=window id → the pane's screen on stdout; rc 0 read / 1 
 # tui-literal-phrase-match-is-width-dependent). A torn or boxless screen is rc 1 = UNKNOWN, and
 # every caller fails toward NOT typing.
 cc_tui_composer() { # $1=window id → stdout: printable content, space-stripped; rc 0 parsed / 1 UNKNOWN
+  local raw
+  raw="$(cc_tui_composer_rows "$1")" || return 1
+  raw="$(printf '%s' "$raw" | LC_ALL=C tr -d '\n')"
+  # The never-typed-in placeholder, matched as a WHOLE row only: a real draft that merely STARTS
+  # with `Try "` must still read as a draft — a loose match types over operator text.
+  if printf '%s' "$raw" | LC_ALL=C grep -qE '^[[:space:]]*Try "[^"]*("|\.\.\.)[[:space:]]*$'; then
+    raw=""
+  fi
+  printf '%s' "$raw" | LC_ALL=C tr -d '[:space:]'
+  return 0
+}
+
+# The draft as TEXT, for carrying it somewhere (lr-upgrade's switch): each box row with its gutter
+# and padding trimmed, rows joined by ONE space. A soft wrap and a hard newline render alike, so a
+# hard newline comes back as a space; everything else, spaces included, is the operator's.
+cc_tui_composer_text() { # $1=window id → stdout: the draft (empty when none); rc 0 parsed / 1 UNKNOWN
+  local rows flat
+  rows="$(cc_tui_composer_rows "$1")" || return 1
+  flat="$(printf '%s' "$rows" | LC_ALL=C tr -d '\n')"
+  if printf '%s' "$flat" | LC_ALL=C grep -qE '^[[:space:]]*Try "[^"]*("|\.\.\.)[[:space:]]*$'; then
+    return 0
+  fi
+  printf '%s\n' "$rows" | LC_ALL=C sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | LC_ALL=C awk 'NF { printf "%s%s", (n++ ? " " : ""), $0 }'
+  return 0
+}
+
+# One line per box row: faint runs dropped, box glyphs and control bytes removed, whitespace kept.
+cc_tui_composer_rows() { # $1=window id → stdout: rows; rc 0 parsed / 1 UNKNOWN
   local id="${1:-}" scr plain span raw rc b12='────────────'
   # DIM IS NOT CONTENT — CC's prompt suggestion renders faint (SGR 2) inside the box; real input
   # never does. Read the rendering and drop faint runs; the parse is the one in composer_content.
@@ -188,14 +216,10 @@ cc_tui_composer() { # $1=window id → stdout: printable content, space-stripped
     }
     print $o;')"
   # Non-ASCII is content; only the ❯ glyph, U+00A0 and control bytes are box ink (D6.8, the same
-  # line as handoff-fire.sh composer_content).
-  raw="$(printf '%s' "$raw" | LC_ALL=C perl -0777 -pe 's/\xE2\x9D\xAF|\xC2\xA0//g; tr/\x00-\x1F\x7F//d')"
-  # The never-typed-in placeholder, matched as a WHOLE row only: a real draft that merely STARTS
-  # with `Try "` must still read as a draft — a loose match types over operator text.
-  if printf '%s' "$raw" | LC_ALL=C grep -qE '^[[:space:]]*Try "[^"]*("|\.\.\.)[[:space:]]*$'; then
-    raw=""
-  fi
-  printf '%s' "$raw" | LC_ALL=C tr -d '[:space:]'
+  # line as handoff-fire.sh composer_content). The row breaks (\n) are kept; callers that compare
+  # remove them with the rest of the whitespace.
+  raw="$(printf '%s' "$raw" | LC_ALL=C perl -0777 -pe 's/\xE2\x9D\xAF|\xC2\xA0//g; tr/\x00-\x09\x0B-\x1F\x7F//d')"
+  printf '%s' "$raw"
   return 0
 }
 

@@ -793,7 +793,7 @@ time — a session that went busy is reported `NOTMOVED (<disposition>)` and nev
 then types ONE line into the idle subject via `cc_tui_submit`:
 
 ```text
-[operator-ruling cc-lr-switch req=<id>] Run in Bash now: cc-lr switch --target <acct>
+[operator-ruling cc-lr-switch req=<id>] Run this exact command in Bash, alone, with no pipe or PATH prefix: ~/.claude/bin/cc-lr switch --target <acct>
 ```
 
 The subject then runs the SELF verb, whose own gates (in-flight subagents, composer, routability,
@@ -804,6 +804,22 @@ the target with the transcript present under the target config: **SWITCHED** (pr
 `~/.reso/limit-recover/results/switch-<sid>.json` and is mailed to the requesting pane. The target
 must be an explicit account — `auto` is refused, because each subject would resolve it from its own
 view and the driver could not confirm the move.
+
+**Zero human in the loop (operator ruling 2026-10-03).** Two things used to hand a switch back to
+the operator:
+
+- **The subject's own auto mode refused it** (pane 137, 2026-10-02: `[Self-Modification]`, while
+  other sessions ran the same line and were allowed). The line above now spells the command exactly
+  as `~/.claude/bin/cc-lr switch --target <acct>` and asks for it alone, so a single allow rule,
+  `Bash(~/.claude/bin/cc-lr switch:*)`, makes the outcome deterministic once the operator adds it.
+  A PATH prefix or a pipe would send it back to the classifier. An agent cannot add that rule for
+  itself: auto mode refuses the settings write and the commit of a migration that makes it.
+- **A draft in the prompt box is carried, not a hold.** The drainer saves the draft as text
+  (`cc_tui_composer_text`), clears the box, moves the session, and types the draft back UNSENT once
+  the relaunch's resume prompt has been submitted and that turn is at rest. If the session does not
+  move, the draft goes back into the same pane. The saved copy is `switch/<sid8>-<ts>/draft.txt`,
+  and every verdict that could not prove the restore by read-back names it. A hard newline comes
+  back as a space. Kill switch `LRU_SWITCH_CARRY_DRAFT=off`.
 
 **Three additions (2026-09-27, from the "move next2 + next4 to next3" session, which took ~6 prompts):**
 

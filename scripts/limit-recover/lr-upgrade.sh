@@ -832,7 +832,63 @@ lru_switch_waitable() { # $1=disposition → 0 a hold that ends by itself
 }
 
 lru_switch_prompt() { # $1=target $2=req id → the ONE canonical line (ASCII, no kill phrase)
-  printf '%s req=%s] Run in Bash now: cc-lr switch --target %s\n' "$LRU_SWITCH_MARK" "$2" "$1"
+  # The command is spelled EXACTLY as the allow rule `Bash(~/.claude/bin/cc-lr switch:*)`
+  # and asked for alone: an allow rule is matched before auto mode's classifier, and a PATH prefix
+  # or a pipe the subject adds sends it back to the classifier, which refused pane 137 (2026-10-02).
+  # shellcheck disable=SC2088  # the tilde is for the subject's shell, never expanded here
+  printf '%s req=%s] Run this exact command in Bash, alone, with no pipe or PATH prefix: ~/.claude/bin/cc-lr switch --target %s\n' "$LRU_SWITCH_MARK" "$2" "$1"
+}
+
+# ── A DRAFT IN THE PROMPT BOX IS CARRIED, NOT A REASON TO STAY (operator ruling 2026-10-03) ──────────
+# Pane 33 (2026-10-02) held the operator's unsent "I mean http://localhost:3334 cant be reached" and
+# was reported NOTMOVED twice, leaving the move to a human. Now the drainer saves the draft as text,
+# clears the box, moves the session, and types the draft back UNSENT once the pane is ready for it:
+# on a move, after the relaunch's own resume prompt has been submitted (its run's events.jsonl reads
+# `submitted` or `FAILED:*`) and that turn is at rest; on no move, as soon as the old turn is at rest.
+# The draft is never lost: it is saved first, and any restore that cannot be proven by read-back says
+# where the saved copy is. Kill switch LRU_SWITCH_CARRY_DRAFT=off restores "composer-occupied holds".
+lru_resume_settled() { # $1=sid $2=since epoch → 0 when a resume run started after $2 has finished its submit
+  local d st newest=""
+  for d in "$LRU_STATE/$1"/bundle-*; do
+    [ -f "$d/events.jsonl" ] || continue
+    [ "$(lru_mtime "$d")" -ge "$2" ] || continue
+    newest="$d"
+  done
+  [ -n "$newest" ] || return 1
+  st="$(jq -r 'select(.stage == "submit" or .stage == "engage") | .state' "$newest/events.jsonl" 2>/dev/null | tail -1)"
+  case "$st" in submitted|FAILED:*) return 0 ;; esac
+  return 1
+}
+lru_draft_restore() { # $1=pane $2=draft file $3=transcript $4=sid or "" (no move: no resume to wait for) $5=since → note on stdout; rc 0 proven
+  local pane="$1" f="$2" tx="$3" sid="$4" since="$5" calm=0 c want got deadline
+  deadline=$(( $(date +%s) + ${LRU_SWITCH_DRAFT_WAIT_S:-300} ))
+  want="$(LC_ALL=C tr -d '[:space:]' < "$f")"
+  while :; do
+    if { [ -z "$sid" ] || lru_resume_settled "$sid" "$since"; } && [ -n "$tx" ] && lru_at_rest "$tx"; then
+      calm=$((calm + 1))
+    else
+      calm=0
+    fi
+    if [ "$calm" -ge 2 ]; then
+      # shellcheck disable=SC1090
+      c="$( . "$LRU_TUI_LIB" && cc_tui_composer "$pane")" && [ -z "$c" ] && break
+    fi
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      printf 'your draft was NOT typed back (pane %s never settled with an empty prompt box); it is saved at %s' "$pane" "$f"; return 1
+    fi
+    sleep "${LRU_SWITCH_POLL_S:-5}"
+  done
+  # shellcheck disable=SC1090
+  if ! ( . "$LRU_TUI_LIB" && cc_tui_type "$pane" "$f" ) >/dev/null 2>&1; then
+    printf 'your draft was NOT typed back (the paste failed); it is saved at %s' "$f"; return 1
+  fi
+  sleep "${LRU_SWITCH_DRAFT_SETTLE_S:-1}"
+  # shellcheck disable=SC1090
+  got="$( . "$LRU_TUI_LIB" && cc_tui_composer "$pane")" || got=""
+  if [ "$got" = "$want" ]; then
+    printf 'your draft was carried and is back in the prompt box, unsent (copy at %s)' "$f"; return 0
+  fi
+  printf 'your draft was typed back but the prompt box reads differently; the original is saved at %s' "$f"; return 1
 }
 
 # §6 vocabulary, the driver's half: SWITCHED (the flip was observed: proven=yes) · NOTMOVED (nothing
@@ -873,7 +929,7 @@ lru_switch_drive() { # $1=sid $2=pane $3=target $4=requested_by $5=req id [$6=un
 }
 _lru_switch_drive_run() {
   local sid="$1" pane="$2" target="$3" by="${4:-?}" req="${5:-}" until_ts="${6:-0}" mutex row from cfg pid run pf src=0 word
-  local tcfg deadline t0 racct rsid tx tpre calm=0
+  local tcfg deadline t0 racct rsid tx tpre calm=0 draft="" df="" dnote=""; run=""
   if ! tcfg="$(lru_acct_cfg "$target")"; then
     lru_switch_result "$sid" "$pane" NOTMOVED - "$target" "target '$target' is not an account this map knows (nothing typed)" "$req" "$by"; return 3
   fi
@@ -895,6 +951,24 @@ EOF
     lru_switch_bg_drive "$sid" "$pane" "$target" "$tcfg" "$from" "$cfg" "$pid" "$by" "$req"; local brc=$?
     rm -rf "$mutex"; return "$brc"
   fi
+  if [ "$word" = composer-occupied ] && [ "${LRU_SWITCH_CARRY_DRAFT:-on}" != off ] && [ -f "$LRU_TUI_LIB" ]; then
+    run="$LRU_STATE/switch/${sid:0:8}-$(date -u +%Y%m%dT%H%M%SZ)"
+    mkdir -p "$run" 2>/dev/null || true
+    # shellcheck disable=SC1090
+    draft="$( . "$LRU_TUI_LIB" && cc_tui_composer_text "$pane")" || draft=""
+    if [ -n "$draft" ]; then
+      df="$run/draft.txt"
+      printf '%s' "$draft" > "$df"
+      # shellcheck disable=SC1090
+      if [ -s "$df" ] && ( . "$LRU_TUI_LIB" && cc_tui_clear "$pane" ) >/dev/null 2>&1; then
+        word=move
+      else
+        dnote="$(lru_draft_restore "$pane" "$df" "$(lru_transcript "$cfg" "$sid" || true)" "" "$(date +%s)")"
+        rm -rf "$mutex"
+        lru_switch_result "$sid" "$pane" NOTMOVED "$from" "$target" "composer-occupied: the draft could not be cleared to carry it (nothing submitted); $dnote" "$req" "$by"; return 3
+      fi
+    fi
+  fi
   if [ "$word" != move ]; then
     rm -rf "$mutex"
     case "$until_ts" in ''|*[!0-9]*) until_ts=0 ;; esac
@@ -907,7 +981,7 @@ EOF
     fi
     lru_switch_result "$sid" "$pane" NOTMOVED "$from" "$target" "$word (re-judged at drain time; nothing typed - re-run when it is idle)" "$req" "$by"; return 3
   fi
-  run="$LRU_STATE/switch/${sid:0:8}-$(date -u +%Y%m%dT%H%M%SZ)"
+  [ -n "$run" ] || run="$LRU_STATE/switch/${sid:0:8}-$(date -u +%Y%m%dT%H%M%SZ)"
   mkdir -p "$run" 2>/dev/null || true
   pf="$run/prompt.txt"
   lru_switch_prompt "$target" "$req" > "$pf" 2>/dev/null
@@ -928,7 +1002,8 @@ EOF
   case "$src" in
     0|5) ;;
     *) case "$src" in 1) word=no-such-pane ;; 2) word=unreadable-or-modal ;; 3) word=composer-occupied ;; 4) word=paste-not-echoed ;; *) word="rc-$src" ;; esac
-       lru_switch_result "$sid" "$pane" NOTMOVED "$from" "$target" "submit refused ($word, cc_tui_submit rc $src): nothing was submitted" "$req" "$by"; return 3 ;;
+       [ -z "$df" ] || dnote="; $(lru_draft_restore "$pane" "$df" "$tx" "" "$t0")"
+       lru_switch_result "$sid" "$pane" NOTMOVED "$from" "$target" "submit refused ($word, cc_tui_submit rc $src): nothing was submitted$dnote" "$req" "$by"; return 3 ;;
   esac
   # THE VERDICT IS THE REGISTRY FLIP, AND THE TRANSCRIPT UNDER THE TARGET. The subject's SELF verb
   # /exits and relaunches in place (same pane, same uuid), and the relaunched process's registry row
@@ -938,7 +1013,8 @@ EOF
     racct="$(lru_acct_name "$(jq -r '.account // empty' "$LRU_REG_DIR/$pane.json" 2>/dev/null)")"
     rsid="$(jq -r '.session_id // empty' "$LRU_REG_DIR/$pane.json" 2>/dev/null)"
     if [ "$rsid" = "$sid" ] && [ "$racct" = "$target" ] && lru_transcript "$tcfg" "$sid" >/dev/null; then
-      lru_switch_result "$sid" "$pane" SWITCHED "$from" "$target" "registry row for pane $pane names $target and the transcript is under $tcfg" "$req" "$by"; return 0
+      [ -z "$df" ] || dnote="; $(lru_draft_restore "$pane" "$df" "$(lru_transcript "$tcfg" "$sid" || true)" "$sid" "$t0")"
+      lru_switch_result "$sid" "$pane" SWITCHED "$from" "$target" "registry row for pane $pane names $target and the transcript is under $tcfg$dnote" "$req" "$by"; return 0
     fi
     # DECLINED / REFUSED INSIDE THE SUBJECT: the old process is still alive, its transcript was
     # written after the submit and is at rest again — the subject took its turn and stayed. Two
@@ -949,7 +1025,8 @@ EOF
        && { [ "$tpre" = 1 ] || ! lru_transcript "$tcfg" "$sid" >/dev/null; }; then
       calm=$((calm + 1))
       if [ "$calm" -ge 2 ]; then
-        lru_switch_result "$sid" "$pane" NOTMOVED "$from" "$target" "the subject took its turn and did not move; its last reply: $(lru_last_text "$tx")" "$req" "$by"; return 3
+        [ -z "$df" ] || dnote="; $(lru_draft_restore "$pane" "$df" "$tx" "" "$t0")"
+        lru_switch_result "$sid" "$pane" NOTMOVED "$from" "$target" "the subject took its turn and did not move; its last reply: $(lru_last_text "$tx")$dnote" "$req" "$by"; return 3
       fi
     else
       calm=0
@@ -957,7 +1034,8 @@ EOF
     [ "$(date +%s)" -lt "$deadline" ] || break
     sleep "${LRU_SWITCH_POLL_S:-5}"
   done
-  lru_switch_result "$sid" "$pane" FAILED "$from" "$target" "submitted (cc_tui_submit rc $src) but no flip to $target within ${LRU_SWITCH_VERIFY_S:-600}s and no settled reply - read pane $pane (run $run)" "$req" "$by"
+  [ -z "$df" ] || dnote="; your draft is saved at $df and was not typed back, because the pane's state is unknown"
+  lru_switch_result "$sid" "$pane" FAILED "$from" "$target" "submitted (cc_tui_submit rc $src) but no flip to $target within ${LRU_SWITCH_VERIFY_S:-600}s and no settled reply - read pane $pane (run $run)$dnote" "$req" "$by"
   return 1
 }
 lru_mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
