@@ -209,3 +209,118 @@ assert ca._turn_state([C(said(800)), C(user(900))], NOW - 850)[2] is False
 print("ok")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
+
+# ---- THE SESSION-ID JOIN (2026-10-03T18:42:57Z) ------------------------------------------------
+# next4 held 13 resident, mostly idle panes when a hook probe ran 106 short `claude -p` calls on it.
+# The walk read 59, the process-count bound cut it to min(59, 13) = 13 > KMAX 8, and a /handoff
+# fire went to next3 (weekly reset 65 h out) instead of next4 (reset in 14.3 h). The idle panes lent
+# their process count to transcripts that were not theirs. These cases replay that shape through the
+# real instruments: live panes are real (sleeping) pids registered in sessions/<pid>.json, the way
+# Claude Code registers them, and `ps` is stubbed with the pid column the census now reads.
+
+_inc() {
+  cat <<'PY'
+
+import subprocess, types, uuid
+PROCS = []
+def pane(sid, status="idle"):
+    p = subprocess.Popen(["sleep", "120"]); PROCS.append(p)
+    os.makedirs(os.path.join(BASE, "sessions"), exist_ok=True)
+    with open(os.path.join(BASE, "sessions", f"{p.pid}.json"), "w") as f:
+        json.dump({"pid": p.pid, "sessionId": sid, "kind": "interactive", "status": status}, f)
+    return p.pid
+def stub_ps(lines):
+    # Answers in the format the caller asked for, so the pre-fix tree (`command=` only) sees the
+    # same 13 panes the fixed tree does and the control fails on the verdict, not on parsing.
+    def run(argv, **k):
+        pid_col = any("pid=" in a for a in argv)
+        return types.SimpleNamespace(stdout="".join(
+            (f"{pid:>6} " if pid_col else "") + f"{cmd} CLAUDE_CONFIG_DIR={BASE}\n"
+            for pid, cmd in lines))
+    ca.subprocess.run = run
+def proj(slug, sid, recs, **kw):
+    write(os.path.join(BASE, "projects", slug, f"{sid}.jsonl"), recs, **kw)
+def route(wc):
+    counts = ca.concurrency(CFG)
+    row = {"k_work": wc["a"], "k": counts["a"]}
+    ca.bound_kwork(row, "a", counts, wc)
+    return counts, row
+R = {"KMAX": 8, "KMAX_RESIDENT": 40}
+PY
+}
+
+@test "sid join: the 2026-10-03 incident — 59 finished claude -p runs beside 13 idle panes leave next4 routable" {
+  run python3 -c "$(_pre)$(_kw)$(_inc)"'
+try:
+    lines = []
+    for i in range(12):                                   # 12 resident panes, idle for hours
+        sid = str(uuid.uuid4())
+        proj(f"-Users-x-pane{i}", sid, [user(7300), said(7200)], mtime_ago=7200)
+        lines.append((pane(sid), "/opt/bin/claude --model opus"))
+    busy = str(uuid.uuid4())                              # one resident pane working right now
+    proj("-Users-x-busy", busy, [user(60), tool(30)])
+    write(os.path.join(BASE, "projects", "-Users-x-busy", busy, "subagents", "agent-a1.jsonl"),
+          [user(50), tool(20)])                           # its subagent, mid-tool
+    lines.append((pane(busy, "busy"), "/opt/bin/claude.exe --model opus"))
+    for i in range(59):                                   # the probe: answered and exited
+        sid = str(uuid.uuid4())
+        proj(f"-private-tmp-tm2-k4-{i}", sid, [user(300 - i), said(296 - i)])
+    orphan = sid                                          # a probe subagent killed with its parent
+    write(os.path.join(BASE, "projects", f"-private-tmp-tm2-k4-58", orphan, "subagents",
+                       "agent-o1.jsonl"), [user(250), tool(240)])
+    stub_ps(lines)
+    wc = ca.working_concurrency(CFG, window_min=10, budget_s=30.0)
+    assert (wc["a"], wc.top["a"]) == (62, 60), (wc["a"], wc.top["a"])
+    counts, row = route(wc)
+    assert counts["a"] == 13, dict(counts)
+    assert ca.k_eff(row) < ca.k_cap(row, R), ("still refused kmax-concurrency", row)
+    assert row["k_work"] == 2 and row["k_work_raw"] == 62, row    # the busy pane + its subagent
+    assert counts.unknown["a"] == 0, counts.unknown
+    os.environ["CC_ROUTE_KWORK_SID_BOUND"] = "off"        # the kill switch: process bound alone
+    counts, row = route(wc)
+    assert row["k_work"] == 13 + 2, row                   # min(60, 13) + both subagents: refused
+    assert ca.k_eff(row) >= ca.k_cap(row, R), row
+finally:
+    for p in PROCS: p.kill()
+print("ok")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "sid join: a live claude -p and a --resume pane are matched; a dead registration is not" {
+  run python3 -c "$(_pre)$(_kw)$(_inc)"'
+try:
+    running, resumed, dead = (str(uuid.uuid4()) for _ in range(3))
+    for sid in (running, resumed, dead):
+        proj("-Users-x", sid, [user(40), said(35)])
+    p = subprocess.Popen(["sleep", "120"]); PROCS.append(p)
+    stub_ps([(pane(running), "/opt/bin/claude -p hello"),
+             (p.pid, f"/opt/bin/claude --resume {resumed} --model opus")])   # argv-only join
+    os.makedirs(os.path.join(BASE, "sessions"), exist_ok=True)
+    with open(os.path.join(BASE, "sessions", "999999.json"), "w") as f:     # crashed, file left
+        json.dump({"pid": 999999, "sessionId": dead}, f)
+    wc = ca.working_concurrency(CFG, window_min=10, budget_s=30.0)
+    counts, row = route(wc)
+    assert counts.live_sids["a"] == {running, resumed}, counts.live_sids
+    assert counts.headless["a"] == 1 and counts.unknown["a"] == 0, (counts.headless, counts.unknown)
+    assert row["k_work"] == 2 and row["k_work_raw"] == 3, row
+finally:
+    for p in PROCS: p.kill()
+print("ok")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "sid join: an unidentified live process lends one transcript and keeps subagents counted" {
+  run python3 -c "$(_pre)"'
+sids = {f"s{i}" for i in range(21)}
+wc = ca._Census({"a": 25}, top={"a": 21}, sids={"a": sids}, subs={"a": {"s0": 1, "gone": 3}})
+counts = ca._Census({"a": 2}, headless={"a": 1}, live_sids={"a": {"s0"}}, unknown={"a": 2})
+row = {"k_work": 25}
+ca.bound_kwork(row, "a", counts, wc)
+assert row["k_work"] == 3 + 4, row          # s0 + 2 unknown (= the process bound), subagents kept
+counts.unknown["a"] = 0
+row = {"k_work": 25}
+ca.bound_kwork(row, "a", counts, wc)
+assert row["k_work"] == 1 + 1, row          # every process identified: s0 and its own subagent
+print("ok")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}

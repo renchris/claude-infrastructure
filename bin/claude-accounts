@@ -614,7 +614,12 @@ class _Census(dict):
 
     `sids` ({acct: set of top-level transcript stems}) and `at` (the walk's wall-clock start) name
     WHICH sessions the census counted, so apply_assignments can refuse to charge a phantom for a
-    session the sweep already counts in k_work. Default empty/None: a stub skips nothing."""
+    session the sweep already counts in k_work. Default empty/None: a stub skips nothing.
+
+    The session-id join (bound_kwork's second bound) reads three more: `live_sids` and `unknown`
+    on the process census ({acct: session ids of live processes}, {acct: live processes with no
+    readable session id}) and `subs` on the walk ({acct: {parent session id: working subagents}}).
+    Absent on a stub, and bound_kwork then applies the process-count bound alone."""
 
     def __init__(self, counts, **extra):
         super().__init__(counts)
@@ -679,7 +684,7 @@ def concurrency(cfg):
     if mirror_next is not None:
         by_dir.setdefault(os.path.join(HOME, ".claude"), mirror_next)
     try:
-        out = subprocess.run(["ps", "-wwEo", "command="], capture_output=True, text=True,
+        out = subprocess.run(["ps", "-wwEo", "pid=,command="], capture_output=True, text=True,
                              timeout=10).stdout
     except (subprocess.TimeoutExpired, OSError) as e:
         # Logged, never silent — same contract as _kwork_unmeasured below. An instrument that
@@ -689,8 +694,13 @@ def concurrency(cfg):
                   "exclusion -> exit 3) and heal() REFUSES to redeem any refresh token this "
                   "sweep. Previously this returned all-zero, which disarmed both gates at once.")
         return None
+    pids = {a["name"]: [] for a in cfg["accounts"]}
+    argv_sid = {}
     for line in out.splitlines():
         toks = line.split()
+        # The pid column leads; a line without one (a test stub's bare `command=` output) still
+        # counts, it just cannot be joined to a session id, so bound_kwork treats it as unknown.
+        pid = int(toks.pop(0)) if toks and toks[0].isdigit() else None
         if not toks:
             continue
         t0 = toks[0]
@@ -726,7 +736,59 @@ def concurrency(cfg):
                 headless[name] += 1
             else:
                 counts[name] += 1
-    return _Census(counts, headless=headless)
+            pids[name].append(pid)
+            m = _RE_ARGV_SID.search(" ".join(toks[1:12]))
+            if pid is not None and m:
+                argv_sid[pid] = m.group(1)
+    reg = _registered_sessions(by_dir)
+    live_sids = {n: set() for n in pids}
+    unknown = {n: 0 for n in pids}
+    for n, plist in pids.items():
+        for pid in plist:
+            got = {s for s in (reg.get(pid), argv_sid.get(pid)) if s} if pid is not None else ()
+            if got:
+                live_sids[n].update(got)
+            else:
+                unknown[n] += 1
+    return _Census(counts, headless=headless, live_sids=live_sids, unknown=unknown)
+
+
+_RE_ARGV_SID = re.compile(r"(?:--resume|-r|--session-id)[= ]([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+                          r"[0-9a-f]{4}-[0-9a-f]{12})\b")
+
+
+def _registered_sessions(by_dir):
+    """{pid: sessionId} from Claude Code's own process registry, `<config_dir>/sessions/<pid>.json`,
+    for every pid still alive. The harness writes the file at start (interactive AND `claude -p`),
+    updates its sessionId on /clear or resume, and removes it on exit — so a finished headless run
+    is absent by construction, and a crashed one is filtered by the pid check. realpath-deduped:
+    ~/.claude-next/sessions is a symlink to ~/.claude/sessions. Any unreadable file is skipped —
+    its process then lands in `unknown`, which bound_kwork charges conservatively."""
+    out, seen = {}, set()
+    for d in by_dir:
+        sdir = os.path.realpath(os.path.join(os.path.expanduser(d), "sessions"))
+        if sdir in seen:
+            continue
+        seen.add(sdir)
+        try:
+            ents = [e for e in os.scandir(sdir) if e.name.endswith(".json")]
+        except OSError:
+            continue
+        for e in ents:
+            try:
+                with open(e.path, "rb") as f:
+                    j = json.loads(f.read(65536))
+                pid, sid = int(j["pid"]), str(j["sessionId"])
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                continue
+            except (PermissionError, OSError):
+                pass
+            out[pid] = sid
+    return out
 
 
 KWORK_BUDGET_S = 15.0      # was 5.0, was 2.0 — see the budget note in working_concurrency's
@@ -980,6 +1042,7 @@ def working_concurrency(cfg, window_min=None, budget_s=None, now=None):
     counts = {a["name"]: 0 for a in cfg["accounts"]}
     top = {a["name"]: 0 for a in cfg["accounts"]}
     sids = {a["name"]: set() for a in cfg["accounts"]}
+    subs = {a["name"]: {} for a in cfg["accounts"]}    # {acct: {parent session id: n working}}
     by_dir = {a["config_dir"].rstrip("/"): a["name"] for a in cfg["accounts"]}
     mirror_next = next((a["name"] for a in cfg["accounts"]
                         if a["config_dir"].rstrip("/").endswith(".claude-next")), None)
@@ -1049,6 +1112,9 @@ def working_concurrency(cfg, window_min=None, budget_s=None, now=None):
                                     if not sub:
                                         top[name] += 1
                                         sids[name].add(fname[:-len(".jsonl")])
+                                    else:
+                                        par = os.path.basename(sdir)
+                                        subs[name][par] = subs[name].get(par, 0) + 1
                             except OSError:
                                 continue
                 except OSError:
@@ -1060,7 +1126,7 @@ def working_concurrency(cfg, window_min=None, budget_s=None, now=None):
         log_event(f"working_concurrency: walk aborted by {type(e).__name__}: {e} — k_work "
                   "UNMEASURED for this sweep, router charges the pane census")
         return None
-    return _Census(counts, top=top, sids=sids, at=now)
+    return _Census(counts, top=top, sids=sids, subs=subs, at=now)
 
 
 # ---- usage endpoint (urllib in-process: no tokens in argv/ps) ---------------------------------
@@ -2913,7 +2979,24 @@ def bound_kwork(row, name, counts, wcounts):
     run inside their parent's process, so a process count cannot bound them, and counting them is
     the deliberate 2026-09-04 change. The raw walk count stays on the row as `k_work_raw`. Applied
     only when BOTH instruments carry their split (a stub or an older caller returns a plain dict,
-    so no bound). Kill: CC_ROUTE_KWORK_LIVE_BOUND=off."""
+    so no bound). Kill: CC_ROUTE_KWORK_LIVE_BOUND=off.
+
+    THE SIBLING DEFECT (measured 2026-10-03T18:42:57Z). A process count is the right ceiling only
+    while the account holds few processes. next4 held 13 resident, mostly idle panes when a hook
+    probe ran 106 short `claude -p` calls on it: the walk read 59, this bound cut it to
+    min(59, 13) = 13, still over KMAX 8, and a /handoff fire went to next3 (weekly reset 65 h out)
+    instead of next4 (30% used, reset in 14.3 h — the quota the router's objective most wanted
+    burned). The idle panes lent their PROCESS count to transcripts that were not theirs.
+
+    So the bound now joins by SESSION ID rather than by count: a top-level transcript counts only
+    when its session is a live process — concurrency() reads Claude Code's own `sessions/<pid>.json`
+    registry (pid alive) plus any `--resume`/`--session-id` uuid in argv — which keeps a live pane
+    that wrote recently and drops a finished `claude -p` the moment it exits. A live process whose
+    session id cannot be read lends at most one transcript (`unknown`), so the join can only ever
+    tighten the process-count bound above, never loosen it. A subagent counts only while its
+    parent session is live; when any live process on the account is unidentified its parent
+    cannot be ruled out, so subagents stay counted. Kill: CC_ROUTE_KWORK_SID_BOUND=off restores
+    the process-count bound alone."""
     if not _term_on("CC_ROUTE_KWORK_LIVE_BOUND") or row.get("k_work") is None or counts is None:
         return
     top = getattr(wcounts, "top", None)
@@ -2922,7 +3005,19 @@ def bound_kwork(row, name, counts, wcounts):
         return
     total = row["k_work"]
     live = counts[name] + headless.get(name, 0)
-    bounded = min(top[name], live) + (total - top[name])
+    top_term = min(top[name], live)
+    sub_term = total - top[name]
+    live_sids = (getattr(counts, "live_sids", None) or {}).get(name)
+    unknown = (getattr(counts, "unknown", None) or {}).get(name)
+    sids = (getattr(wcounts, "sids", None) or {}).get(name)
+    if (_term_on("CC_ROUTE_KWORK_SID_BOUND") and live_sids is not None and unknown is not None
+            and sids is not None and len(sids) == top[name]):
+        matched = len(sids & live_sids)
+        top_term = min(top_term, matched + min(top[name] - matched, unknown))
+        subs = (getattr(wcounts, "subs", None) or {}).get(name)
+        if unknown == 0 and subs is not None:
+            sub_term -= sum(n for par, n in subs.items() if par not in live_sids)
+    bounded = top_term + max(sub_term, 0)
     if bounded < total:
         row["k_work_raw"] = total
         row["k_work"] = bounded
