@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: complete
 ---
 # Agent peer wake + origin retirement into a live successor
 
@@ -105,10 +105,19 @@ refusal, and the kill switch.
 
 ## Status
 
-- [x] plan committed (`4a1857af7`) · [x] cc-wake + 18 bats, every gate mutation-checked red
-  (`88e01f983`) · [x] cc-notify wiring + `.sent-lines` + 6 bats, cc-notify.bats still green 117/117
-  (`e3286a961`) · [x] migration 0052 (`e7c577f70`) · [ ] self-close class + bats · [ ] landed ·
-  [ ] converged · [ ] acceptance (a) · [ ] acceptance (b)
+**DONE 2026-10-03, landed `e725334ae`, live.** The pre-land shas were rewritten by the land's rebase
+and are not on trunk. On trunk: `cd280ff44` plan · `b19927824` cc-wake · `26937f3bc` cc-notify ·
+`01df7b135` migration 0052 · `1394567ae` self-close class.
+- Tests: cc-wake 18/18, each gate mutation-checked red · cc-notify + wiring 117/117 ·
+  verified-successor 19/19 + transplanted-source 39/39. The existing self-close suites ran 263/264.
+  The one red was this class reading the `--allow-origin-close` flag, which a source-shape test
+  forbids; the read was removed rather than the count bumped.
+- The land gate caught two fixture hazards: an AF_UNIX bind by absolute path, and teardown kills
+  that could abort under load. Both were fixed in place before landing.
+- Acceptance (a): `cc-wake 83 --wait 300` → `verdict=read`; `cc-notify --receipt 83 16` and `… 17`
+  (pane 10's pings) both read READ.
+- Operator step filed by the converge: 0052 → `cc-backlog 90a1cc257284`. 0012, the Stop re-arm, is
+  still staged from August (`ecf9c60083ff`); the sender-side socket wake now covers the gap it was for.
 - Built differently from the brief's sketch: there is no keystroke path at all. Every "type into a
   peer" guard the brief lists exists to make a keystroke safe. The socket never reaches the composer,
   so those guards had nothing left to guard.
