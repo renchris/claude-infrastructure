@@ -1,0 +1,23 @@
+#!/bin/bash
+# cc-instruction-budget — CLI over hooks/lib/instruction_budget.py, the one predicate for
+# always-loaded instruction files (docs/plans/INSTRUCTION_BUDGET.md D7).
+#
+#   census [--days N] [--json]       per-repo table, every config dir x recent cwd
+#   assert [--class C] [--repo R]    rc 0 clean · 1 breach · 3 non-verdict (also the dedupe invariant)
+#   file                             one condition-keyed, self-closing backlog row per breach class
+#   publish                          the @import reachability set for the Write/Edit gate's pre-screen
+#   range <base>..<head> [--repo R]  the land ratchet: rc 0 clean · 1 refuse · 2 non-verdict
+#   verdict                          stdin = PreToolUse payload (the hook's call)
+#   measure <file>… · enforce · selftest
+#
+# The lib resolves through the DEREFERENCED self-path: ~/.claude/bin/ holds a symlink into the
+# checkout, and the lib and config/ live beside it there.
+set -uo pipefail
+_s="${BASH_SOURCE[0]}"
+while [ -L "$_s" ]; do
+  _d="$(cd "$(dirname "$_s")" && pwd)"; _s="$(readlink "$_s")"
+  case "$_s" in /*) ;; *) _s="$_d/$_s" ;; esac
+done
+_repo="$(cd "$(dirname "$_s")/.." && pwd)"
+command -v python3 >/dev/null 2>&1 || { echo "cc-instruction-budget: no python3 — NON-VERDICT" >&2; exit 3; }
+exec python3 "$_repo/hooks/lib/instruction_budget.py" "$@"

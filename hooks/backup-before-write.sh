@@ -139,6 +139,46 @@ case "$TOOL:$FILE" in Write:*/archive/*|Write:*/MEMORY.md) ;; Write:*/memory/*.m
   fi ;;
 esac
 
+# === INSTRUCTION BUDGET (2026-10-03, docs/plans/INSTRUCTION_BUDGET.md D7) ===
+# Always-loaded instruction files (CLAUDE.md, .claude/CLAUDE.md, CLAUDE.local.md, unconditional
+# .claude/rules/**, the user tier, and what they @import) load in full into every session: measured
+# 180k-430k chars per session on 2026-10-03, against a loader limit of 150k (40k per file / 120k total
+# on a 200k window). This refuses a write only when it GROWS a file, a conditional rule, or a tier
+# past its budget; shrinking and same-size writes always pass, so the cure is never refused. The
+# predicate, budgets and deny text live in ONE place, hooks/lib/instruction_budget.py +
+# config/instruction-budget.json, which the land ratchet and the fleet auditor share.
+#
+# ABOVE the fast exit on purpose: creating a new rules file is a primary growth route, and the exit
+# below lets every non-existent path through unjudged (the MEMORY INDEX BUDGET block sits after it
+# and so never sees a create).
+#
+# The pre-screen is forkless: a `case` on the path name, then the published @import reachability
+# set (cc-instruction-budget publish, from autonomy-sweep) read with a builtin. Only a hit pays for
+# python. Fails open: no python3, no lib, any error or timeout inside the lib ⇒ the write proceeds and
+# the lib logs an `abstained` IDL row. Enforcement is the config's `enforce` key (shadow while false).
+IB_HIT=0
+case "$FILE" in
+  */CLAUDE.md|*/CLAUDE.*.md|*/.claude*/rules/*.md|*/rules.slim/*.md) IB_HIT=1 ;;
+esac
+if [ "$IB_HIT" = 0 ] && [ -n "$FILE" ] && [ -r "$HOME/.claude/state/instruction-budget/loaded-set.txt" ]; then
+  IB_SET=""
+  IFS= read -r -d '' IB_SET < "$HOME/.claude/state/instruction-budget/loaded-set.txt" || true
+  case $'\n'"$IB_SET" in *$'\n'"$FILE"$'\n'*) IB_HIT=1 ;; esac
+fi
+if [ "$IB_HIT" = 1 ] && command -v python3 >/dev/null 2>&1; then
+  IB_PY="$(dirname "$(_mib_deref "${BASH_SOURCE[0]}")")/lib/instruction_budget.py"
+  [ -r "$IB_PY" ] || IB_PY="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/instruction_budget.py"
+  if [ -r "$IB_PY" ]; then
+    IB_OUT="$(printf '%s' "$INPUT" | python3 "$IB_PY" verdict 2>/dev/null)" || IB_OUT=""
+    case "$IB_OUT" in
+      *'"permissionDecision": "deny"'*)
+        EMITTED=1  # a deny needs no rewrite: the write never happens
+        printf '%s\n' "$IB_OUT"
+        exit 0 ;;
+    esac
+  fi
+fi
+
 # Fast exit: no file path or file doesn't exist
 [ -z "$FILE" ] && exit 0
 [ ! -f "$FILE" ] && exit 0

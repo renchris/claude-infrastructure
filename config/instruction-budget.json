@@ -1,0 +1,27 @@
+{
+  "_what": "Budgets for always-loaded instruction files, read by hooks/lib/instruction_budget.py (the one predicate) for the Write/Edit gate, the land ratchet and the fleet auditor. Plan: docs/plans/INSTRUCTION_BUDGET.md D7. Units are loader chars: UTF-16 code units after YAML frontmatter and column-0 HTML comment blocks are stripped.",
+  "_why_numbers": "40,000 is Claude Code's per-file warning floor on a 200k-context window (max(40000, window*0.05*3)); 120,000 is its total floor, split user 60k + ancestor 0 + repo 60k. Budgeting to the smallest window means the same files never warn on any model the fleet runs.",
+  "_enforce": "false = shadow mode: the gate logs would-deny rows to the IDL and the land ratchet prints SHADOW, neither refuses. Flip to true only once reso origin/main no longer carries .claude/rules/bottle-generation-ledger.md (plan W2), or the live bottle workflow's next ledger append is refused.",
+  "enforce": false,
+  "per_file": 40000,
+  "conditional_per_file": 40000,
+  "tiers": {
+    "user": 60000,
+    "ancestor": 0,
+    "repo": 60000
+  },
+  "session": 120000,
+  "_deploy_sources": "Repo files deployed into the user tier by install.sh, matched by basename beside an install.sh. CLAUDE.global.md is deliberately absent: under D2 it deploys to the non-loaded ~/.claude/CLAUDE.full.md. If the global variant registry ever selects full, add it here.",
+  "deploy_sources": {
+    "CLAUDE.global.slim.md": "~/.claude/CLAUDE.md"
+  },
+  "destinations": {
+    "user": "the full global text CLAUDE.global.md (deployed non-loaded as ~/.claude/CLAUDE.full.md) or a skill that loads on demand; the slim global and its rules are one-in-one-out.",
+    "ancestor": "the repo that needs it. A file above a repo root loads into every session below it, so the ancestor budget is 0.",
+    "conditional": "a non-loaded doc (docs/lessons/<slug>.md or a record file), keeping the rule itself under the cap; a conditional rule still loads whole on the first matching Read.",
+    "repo": "a non-loaded record file in this repo (docs/lessons/<slug>.md for a lesson body, keeping a one-line hook here that states the rule), or the situational file .claude/rules/agent-operating-lessons-situational.md, which claudeMdExcludes keeps out of every session.",
+    "repos": {
+      "reso-management-app": "a non-loaded record file: bottle run history goes to .claude/bottles/generation-ledger.md, lesson bodies to docs/lessons/<slug>.md behind a one-line hook that states the rule, situational lessons to .claude/rules/agent-operating-lessons-situational.md (excluded by claudeMdExcludes)."
+    }
+  }
+}
