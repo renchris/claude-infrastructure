@@ -185,9 +185,9 @@ keys() { cat "$H/keys.log" 2>/dev/null; }
   [ "$status" -eq 0 ]
   [ "$(keys | head -3 | tr '\n' ' ')" = "CR@nudge ESC@panel-list TEXT:1@bgwork " ]
   keys | grep -qx close
-  [[ "$output" == *"enter:drafts-nudge"* ]]
-  [[ "$output" == *"esc:drafts-panel"* ]]
-  [[ "$output" == *"key-1:background-work-stop"* ]]
+  [[ "$output" == *"enter:drafts-nudge"* ]] || false
+  [[ "$output" == *"esc:drafts-panel"* ]] || false
+  [[ "$output" == *"key-1:background-work-stop"* ]] || false
   [ "$(printf '%s\n' "$output" | tail -1)" = "→ closed pane PREDSID (attempt 1/4)" ]   # the log ENDS in its verdict
   ! grep -q CLOSE-FAILED "$H/ccnotify-calls.log" 2>/dev/null
 }
@@ -195,21 +195,21 @@ keys() { cat "$H/keys.log" 2>/dev/null; }
 @test "pane 10's final screen — an OPEN draft with 'Send feedback' focused — gets Esc, never CR" {
   watch panel-draft
   [ "$(keys | head -1)" = "ESC@panel-draft" ]
-  ! keys | grep -q 'CR@panel-draft'
+  ! keys | grep -q 'CR@panel-draft' || false
   keys | grep -qx close
 }
 
 @test "an unrecognised dialog gets NO key, and the close-failed-live guard still refuses" {
   watch unknown
-  ! keys | grep -qv '^close$'                       # not one keystroke reached the pane
-  [[ "$output" == *"hold:"* ]]
-  [[ "$output" == *"claude is STILL RUNNING"* ]]
+  ! keys | grep -qv '^close$' || false              # not one keystroke reached the pane
+  [[ "$output" == *"hold:"* ]] || false
+  [[ "$output" == *"claude is STILL RUNNING"* ]] || false
   grep -q HANDOFF-CLOSE-FAILED-LIVE "$H/ccnotify-calls.log"
 }
 
 @test "an operator draft in the composer is never submitted — the old blind 60s CR would have" {
   watch draft
-  ! keys | grep -q '^CR@draft'
+  ! keys | grep -q '^CR@draft' || false
   [[ "$output" == *"hold:hold"* ]]
 }
 
@@ -222,8 +222,8 @@ keys() { cat "$H/keys.log" 2>/dev/null; }
 @test "an EMPTY composer with claude alive gets ONE verified /exit retype, and not before 40s" {
   watch empty
   [ "$(keys | grep -c 'TEXT:/exit')" -eq 1 ]
-  [[ "$output" == *"at 20s → hold:composer-empty"* ]]
-  [[ "$output" == *"at 40s → retype:composer-empty"* ]]
+  [[ "$output" == *"at 20s → hold:composer-empty"* ]] || false
+  [[ "$output" == *"at 40s → retype:composer-empty"* ]] || false
   keys | grep -qx close
 }
 
