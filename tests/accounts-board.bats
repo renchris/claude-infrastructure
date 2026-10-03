@@ -619,7 +619,7 @@ assert hdr, \"no header row carrying account+live+resets\"
 # The resets column sits RIGHT of every coloured cell (bar + three percents), so it is the column a
 # colour-padding defect would shift. The strand column held this role until it left the board 2026-09-27.
 end = hdr.index(\"resets\") + len(\"resets\")
-rows = [l for l in lines if l is not hdr and (\"░\" in l or \"█\" in l)]
+rows = [l for l in lines if l is not hdr and any(g in l for g in \"▁▄▆\")]
 assert rows, \"no data rows found\"
 for l in rows:
     cell = l[end-6:end]
