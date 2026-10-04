@@ -143,7 +143,7 @@ situational file), not "add paths:".
 4. Update every consumer that assumes `~/.claude/CLAUDE.md` is the full text (deploy-parity tests, this
    repo's `.claude/CLAUDE.md` sync note, the slim header pointer). Bats for install + variant + mirror.
 
-### W2 — guard + auditor (S)
+### W2 — guard + auditor (S) — DONE 273d08f44
 
 Per D7 and `guard-design.md` (file:line plan there) with `critic.md`'s corrections. Enforce flag ships OFF
 and flips ON only once reso origin/main no longer has `.claude/rules/bottle-generation-ledger.md`
@@ -151,7 +151,7 @@ and flips ON only once reso origin/main no longer has `.claude/rules/bottle-gene
 `cc-instruction-budget census|assert|file`; the census must reproduce the 428.1k warning on the pre-change
 reso tree (it is the method of `tools/census.py`).
 
-### W3 — reso (S)
+### W3 — reso (S) — DONE (reso d8d193f17)
 
 Per D5/D6, `reso-ledger.md`, `reso-ledger-head.proposed.md`, `reso-lessons.md`, `reso-lessons-plan.tsv`.
 Coordinate with the live bottle session first (it may append rows): re-apply any rows it appended to the
@@ -203,4 +203,8 @@ body file. Land a reso size check in pre-commit + `scripts/ship-land.sh` run_sta
   was (about 59.5k of 60k); cutting 17k of rules to fit one file would be an ungated behavior change, and
   re-gating is the operator's call (Known issues). deploy-parity gained a leg for the rule copy. Any real
   token saving in the user tier still needs a gated slim round.
+- 2026-10-04 — cloud dispatch (backlog 8f6752ec3f65): re-verified every Progress sha on trunk
+  (`merge-base --is-ancestor`, 10/10); W2 and W3 headings marked DONE so `plan-phase-scan.sh` stops
+  re-minting them as open work. W1 stays open on its step 2 only; the row is parked on it
+  (`docs/parks/8f6752ec3f65.md`).
 - Remaining: the operator runs migration 0053 (backlog b154e11d31b9) → global layer ≈ 60k, DUP rows clear.
