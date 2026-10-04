@@ -193,6 +193,47 @@ label() { python3 "$ROUTER" status --session "${1:-s1}" | jq -r '.label // "none
   [ "$(tool Agent 'x')" = allow ]
 }
 
+@test "a machine-envelope FIRST prompt (a fired or recycled successor) gets a deterministic non-completeness label" {
+  state certifying
+  : > "$STUB_LOG"
+  prompt "Continue the program. HANDOFF-ENGAGE-1-2-3" "$PROG/src" succ-1 >/dev/null
+  [ "$(label succ-1)" = other ]
+  [ "$(python3 "$ROUTER" status --session succ-1 | jq -r .by)" = envelope ]
+  [ "$(tool Read 'x' "$PROG/src" succ-1)" = allow ]
+  [ "$(tool Edit 'x' "$PROG/src" succ-1)" = allow ]
+  [ "$(tool Agent 'x' "$PROG/src" succ-1)" = deny ]
+  [ ! -s "$STUB_LOG" ]
+}
+
+@test "a machine-envelope first prompt carrying --requires-gate is a work order, without the classifier" {
+  state certifying
+  : > "$STUB_LOG"
+  prompt "Build wave 2. --requires-gate demo HANDOFF-ENGAGE-1-2-3" "$PROG/src" succ-2 >/dev/null
+  [ "$(label succ-2)" = work-order ]
+  [ "$(python3 "$ROUTER" status --session succ-2 | jq -r .by)" = envelope ]
+  [ "$(tool Agent 'x' "$PROG/src" succ-2)" = allow ]
+  [ ! -s "$STUB_LOG" ]
+}
+
+@test "a machine-envelope first prompt that names a routed predecessor session inherits its label" {
+  state certifying
+  prompt "build it" "$PROG/src" pred-1 >/dev/null
+  [ "$(label pred-1)" = work-order ]
+  : > "$STUB_LOG"
+  prompt "[handoff recycle] predecessor session pred-1. HANDOFF-ENGAGE-4-5-6" "$PROG/src" succ-3 >/dev/null
+  [ "$(label succ-3)" = work-order ]
+  [ ! -s "$STUB_LOG" ]
+}
+
+@test "a machine-envelope prompt AFTER a genuine labeled prompt keeps the genuine label" {
+  state certifying
+  prompt "are you sure?" "$PROG/src" s5 >/dev/null
+  [ "$(label s5)" = pushback ]
+  prompt "Continue. --requires-gate demo HANDOFF-ENGAGE-7-8-9" "$PROG/src" s5 >/dev/null
+  [ "$(label s5)" = pushback ]
+  [ "$(python3 "$ROUTER" status --session s5 | jq -r .by)" = cwd ]
+}
+
 @test "§10 item 3: the operator kill switches turn the block and the routing off" {
   state certified
   prompt "are we done?" >/dev/null

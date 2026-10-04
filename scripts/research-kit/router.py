@@ -25,6 +25,9 @@ LABELS are exactly heldout.ROUTES, plus `unavailable` for a classifier that erro
 answered outside the list (§10 item 3: that is NOT a completeness label — it denies only the
 research verbs, and the next genuine prompt is classified afresh). A prompt carrying the
 `--requires-gate <program>` work-order marker is labeled work-order without calling the classifier.
+A machine-envelope prompt (a fired or recycled successor's brief) is never classified: it keeps the
+session's last label, or, as the session's FIRST prompt, gets a deterministic `by: envelope` label
+(envelope_label) so a successor is not left unlabeled, which would deny it every tool.
 
 THE ROUTE RECORD, one per session: $CC_RESEARCH_HOME/route-state/<sid>.json
   {program, state, by, label, cert, reason, at, prompt_sha, fallbacks}
@@ -77,8 +80,17 @@ PUSHBACK_LINE = (
     "checked in the next scheduled review."
 )
 WORK_ORDER_MARKER = re.compile(r"--requires-gate[ =]+([a-z0-9][a-z0-9-]*)")
+# How an envelope names the session it continues: `predecessor session <sid>` (or `predecessor:`,
+# `predecessor_sid=`), or a bare Claude Code session uuid. A candidate counts only if route-state
+# holds a record for it in the same program.
+PREDECESSOR = re.compile(
+    r"\bpredecessor(?:[ _-]?(?:session|sid))?(?:[ _-]?id)?\s*[:=]?\s*`?([A-Za-z0-9][A-Za-z0-9_.-]{2,127})",
+    re.I,
+)
+SESSION_UUID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b")
 # A record a machine wrote is not a genuine prompt (the completion-assert.sh kill-switch reader's
-# envelope rule): it keeps the last genuine prompt's label (§4.2).
+# envelope rule): it keeps the last genuine prompt's label (§4.2), and only a session's first prompt
+# gets a label from it (envelope_label).
 MACHINE_ENVELOPE = re.compile(
     r"^\s*(\[handoff |<teammate-message|<task-notification|<local-command-stdout>|<command-name>)"
     r"|HANDOFF-ENGAGE-[A-Za-z0-9._-]+"
@@ -281,6 +293,22 @@ def genuine(prompt: str) -> bool:
     return bool(prompt.strip()) and not MACHINE_ENVELOPE.search(prompt)
 
 
+def envelope_label(prompt: str, slug: str, sid: str) -> Tuple[str, str]:
+    """(label, reason) for a machine-envelope FIRST prompt, without the classifier: the work-order
+    marker, else the label of a predecessor session the envelope names, else `other`. A relayed
+    label is not inherited: it governs one re-ask turn, and the successor's brief is not one."""
+    m = WORK_ORDER_MARKER.search(prompt)
+    if m:
+        return "work-order", f"machine envelope with the --requires-gate {m.group(1)} marker"
+    cands = [c.group(1).rstrip("._-") for c in PREDECESSOR.finditer(prompt)]
+    for cand in cands + SESSION_UUID.findall(prompt):
+        prev = route_load(cand) if cand != sid else None
+        lab = (prev or {}).get("label")
+        if prev and prev.get("program") == slug and lab in ROUTES and lab not in RELAYED:
+            return str(lab), f"machine envelope inheriting predecessor session {cand}"
+    return "other", "machine envelope naming no routed predecessor session"
+
+
 def context_for(slug: str, state: str, label: str, cert: str, reason: str) -> str:
     head = f"RESEARCH PROGRAM {slug} ({state}) — this prompt is routed as"
     lines = cert or "(the certificate read failed; say so in one line and add nothing)"
@@ -338,8 +366,10 @@ def cmd_prompt(a: argparse.Namespace) -> int:
         return 0
     sid = str(data.get("session_id") or "unknown")
     prompt = data.get("prompt") or data.get("user_prompt") or ""
-    if not isinstance(prompt, str) or not genuine(prompt):
-        return 0  # not a genuine prompt: the last genuine label stands
+    if not isinstance(prompt, str) or not prompt.strip():
+        return 0
+    if not genuine(prompt):
+        return envelope_prompt(a, sid, prompt)
     if a.clear or not a.program or a.state not in BLOCKING_STATES:
         route_clear(sid)
         return 0
@@ -371,6 +401,31 @@ def cmd_prompt(a: argparse.Namespace) -> int:
         )
     if out:
         print(json.dumps(out))
+    return 0
+
+
+def envelope_prompt(a: argparse.Namespace, sid: str, prompt: str) -> int:
+    """A machine-envelope prompt. With a route record the last genuine label stands (§4.2); as the
+    session's first prompt in a blocking program it gets envelope_label's label, recorded `by:
+    envelope`, so cmd_tool does not read the session as unlabeled (completeness)."""
+    if a.clear or not a.program or a.state not in BLOCKING_STATES or route_load(sid):
+        return 0
+    label, reason = envelope_label(prompt, a.program, sid)
+    route_save(sid, {
+        "program": a.program,
+        "state": a.state,
+        "by": "envelope",
+        "at": kit.now_iso(),
+        "prompt_sha": hashlib.sha256(prompt.encode()).hexdigest()[:12],
+        "label": label,
+        "cert": "",
+        "reason": reason,
+        "fallbacks": 0,
+    })
+    ctx = context_for(a.program, a.state, label, "", reason)
+    if ctx:
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit",
+                                                 "additionalContext": ctx}}))
     return 0
 
 
