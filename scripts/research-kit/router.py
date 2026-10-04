@@ -76,7 +76,7 @@ from heldout import RELAYED, ROUTES  # noqa: E402
 UNAVAILABLE = "unavailable"
 ALLOW_ALL = ("work-order", "new-idea")  # §4.2: research runs only on a positive work label
 BLOCKING_STATES = ("certifying", "certified")  # §10 item 1: the block is on from the freeze
-CLASSIFIER_TIMEOUT_S = 6.0  # §4.1, an assumed input until the pilot measures latency
+CLASSIFIER_TIMEOUT_S = 9.0  # §4.1 said 6 s; raised to 9 s by ruling 4bf73c4e55d5 (REPORT.md §9, 2026-10-04)
 FALLBACK_NOTICE_AFTER = 3  # §10 item 3: consecutive fallbacks before the operator is told
 PUSHBACK_LINE = (
     "A concern needs a place, a file and line or a decision or check number, and it will be "

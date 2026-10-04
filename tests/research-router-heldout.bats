@@ -83,6 +83,18 @@ rec() {
   [ "$output" = work-order ]
 }
 
+@test "ruling 4bf73c4e55d5: a classifier answering in 6.5 s is labeled by classify and by row 15's route, not dropped" {
+  # The limit is 9 s on both sides (REPORT.md §9, ruled 2026-10-04); it was 6 s, which a cold
+  # `claude -p` on haiku overran at load (wave B1 notes). The setup's 2 s test override is lifted so
+  # the shipped default is what runs.
+  unset CC_RESEARCH_CLASSIFIER_TIMEOUT
+  run bash -c "printf 'x' | CC_RESEARCH_CLASSIFIER='cat >/dev/null; sleep 6.5; echo completeness' python3 '$ROUTER' classify"
+  [ "$status" -eq 0 ]
+  [ "$output" = completeness ]
+  run python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import heldout; print(heldout.route("cat >/dev/null; sleep 6.5; echo pushback", "x"))' "$REPO/scripts/research-kit"
+  [ "$output" = pushback ]
+}
+
 # A sealed, two-rater-labeled set of 12 per stratum, labeled the way the stub answers.
 seal_set() {
   local i

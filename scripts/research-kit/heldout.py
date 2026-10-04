@@ -46,13 +46,14 @@ ROUTES = (
     "other",
 )
 RELAYED = ("completeness", "pushback")  # both routes relay the certificate (§4.1)
-# Assumed inputs until the calibration run measures the router (§6.6):
+# Assumed inputs until the calibration run measures the router (§6.6); the router time limit was 6 s
+# until ruling 4bf73c4e55d5 raised it to 9 s (REPORT.md §9, 2026-10-04):
 MIN_SET, MIN_RECALL, MIN_OTHER_CORRECT, MAX_FALLBACK, ROUTER_TIMEOUT_S = (
     40,
     0.95,
     0.90,
     0.10,
-    6,
+    9,
 )
 
 

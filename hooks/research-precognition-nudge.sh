@@ -16,7 +16,7 @@
 # alias named in the prompt. There is NO single-active fallback (§10 open item 2): a pane that
 # resolves by neither key is not a program session and is left exactly as before. A routed prompt
 # replaces the fan-out nudge below, which would contradict the block. Kill switch (operator, at
-# launch): CC_RESEARCH_ROUTER=off. The classifier waits at most 6 s (§4.1), inside the 10 s timeout
+# launch): CC_RESEARCH_ROUTER=off. The classifier waits at most 9 s (§4.1, ruling 4bf73c4e55d5), inside the 10 s timeout
 # migrations/0050 registers.
 set -uo pipefail
 command -v jq &>/dev/null || exit 0
