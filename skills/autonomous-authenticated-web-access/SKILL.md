@@ -43,10 +43,8 @@ techniques** that the plumbing alone doesn't give you.
   (owner vs a sub-seller, prod vs sandbox). Cheap, and it prevents a full pull against
   the wrong identity.
 - **Pure-curl operator script, not inline curl.** Put the GET/search calls in a `.sh`
-  script and run it with `bash script.sh`. A curl-egress gate that inspects Bash
-  commands *starting with* `curl` does not fire on a script invocation — this is the
-  sanctioned operator-script path, not a bypass (the calls are still read-only and the
-  token is user-authorized). It also makes the pull atomic, logged, and re-runnable.
+  script and run it with `bash script.sh`. It makes the pull atomic, logged, and re-runnable.
+  If a hook refuses a call, that refusal stands; do not re-route the same call through a script.
 - **Read-only discipline is absolute.** GET + documented `/search` POST endpoints only.
   A search endpoint that 404s is harmless; a `POST /resource` that *creates* is not —
   know which is which before you send it. (Live example: Square Payments has **no**

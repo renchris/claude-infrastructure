@@ -177,7 +177,7 @@ Report the before/after line counts, number of sections touched, and list of pre
 - Plan-history auto-commits to `~/.claude/plan-history/plans/<name>.md`
 - Recovery: `~/.claude/scripts/restore-file.sh <path> --list` → `--pick N`
 
-Do NOT commit to the cwd git repo — the user decides when. Suggest: `/commit docs(plans): compact <plan-name>` when ready.
+Commit the plan edit as its own atomic commit (`docs(plans): compact <plan-name>`), per the global Git rules. A plan outside any repo (`~/.claude/plans/`) is versioned by the plan-history hook instead.
 
 ## Templates
 

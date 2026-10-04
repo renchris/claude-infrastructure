@@ -209,10 +209,10 @@ which is the highest-signal tell of all because no mail client renders it.
 
 **Default: produce the text and stop.** The operator sends it.
 
-> 🔒 **For EMAIL this is now MECHANICAL, not a matter of discipline (2026-08-25).** The ms365 send
-> tools — `send-mail`, `reply-mail-message`, `reply-all-mail-message`, `forward-mail-message`,
-> `send-draft-message` — are **denied by a PreToolUse hook**, absolutely, with **no override**.
-> Compose with `create-draft-email` / `create-reply-draft` / `create-reply-all-draft` /
+> 🔒 **For EMAIL this is MECHANICAL, not a matter of discipline (2026-08-25; narrowed 2026-09-08).**
+> `send-mail`, `reply-mail-message`, `reply-all-mail-message` and `forward-mail-message` are
+> **denied by a PreToolUse hook** with **no override**; `send-draft-message` is refused in any turn
+> that composed or revised the draft (R1b, operator ruling 2026-09-08). Compose with `create-draft-email` / `create-reply-draft` / `create-reply-all-draft` /
 > `create-forward-draft`, then tell him the draft is in Drafts and ready.
 > **Do not ask for permission to send an email, and do not look for a way around the deny** — the
 > answer is always "it goes in Drafts." Asking wastes a round-trip on a decision already made.
