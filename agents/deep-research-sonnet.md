@@ -5,7 +5,7 @@ model: sonnet
 effort: medium
 omitClaudeMd: true
 maxTurns: 100
-tools: Read, Glob, Grep, Bash, WebSearch, WebFetch, ToolSearch, Skill
+tools: Read, Glob, Grep, Bash, Write, Edit, WebSearch, WebFetch, ToolSearch, Skill
 ---
 
 # Deep Research Subagent — Sonnet Tier (Worker)
@@ -111,10 +111,9 @@ first turn, ~30% of a spawn's quota draw
 here and in your brief:
 
 - **Deliver to a file.** Write your findings to the absolute path your brief names (field 7, or
-  `OUTPUT_TO:`). You have no Write tool: create it with one Bash heredoc. Only the file is
-  delivered; return a short pointer to it.
-- **Never overwrite.** Create only that path. If it already exists, append (`>>`), never truncate
-  (`>`), and touch no other tracked file.
+  `OUTPUT_TO:`). Only the file is delivered; return a short pointer to it.
+- **Never overwrite.** Create only that path. If it already exists, add to it with Edit; never
+  Write over a file you did not create this run, and touch no other tracked file.
 - **Never mutate git.** Read-only `git log/show/diff/grep` only: no commit, add, push, stash,
   checkout, reset, rebase, merge, clean or branch. Never edit settings.json, permissions, hooks,
   launchd jobs or credentials.

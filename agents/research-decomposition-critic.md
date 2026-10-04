@@ -26,7 +26,7 @@ You will receive:
 6. The proposed N and per-subagent type assignments
 
 If items 2-4 are absent, **first response must be REVISE with reason
-"missing Question-Type Discipline artifacts — see `research-subagents.md`
+"missing Question-Type Discipline artifacts — see `~/.claude/skills/research-subagents/SKILL.md`
 § Question-Type Discipline."** Do not proceed to axis grading until they
 are present.
 

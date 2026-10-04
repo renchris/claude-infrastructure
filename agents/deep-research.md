@@ -104,9 +104,8 @@ question is genuinely trivial, in which case return the ≤500-token answer
 quickly). Returning a long summary after 30 calls with mostly redundant
 findings = over-explored — distill harder, don't pad.
 
-The previous "500-800K" prescription targeted a context range the model
-itself reports as degraded. Internal depth has no DOLLAR cost to lead, but
-it does have a QUALITY cost when synthesis happens past the cliff. Optimize
+Internal depth has no DOLLAR cost to lead, but it does have a QUALITY cost
+when synthesis happens past the cliff. Optimize
 for signal density, not raw token spend.
 
 ## Permission to Recurse (INACTIVE — and WE are the ones holding it off)
@@ -174,7 +173,7 @@ inside a subagent)**:
 
 - Sub-question answerable with ≤5 of your own tool calls
 - Sub-question is a refinement of evidence already gathered
-- You're already past 800K context spent and lead is waiting
+- You're already near the 500K hard ceiling and lead is waiting
 - The "sub-question" is just a different framing of your main question
 
 ## Adversarial Self-Pass (mandatory before return)
