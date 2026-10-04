@@ -248,3 +248,25 @@ feed_from() { "$@"             > "$BATS_TEST_TMPDIR/payload.json"; run bash "$HO
   [ -x "$HOOK" ]
   head -1 "$HOOK" | grep -q '^#!/bin/bash'
 }
+
+# ── payload size (docs/research/concurrency-scale-2026-10-04 fix row 12) ────────────────────────
+# RED-proof: on the pre-fix hook (git show 13b27133f:hooks/post-tool-batch.sh) the row has no
+# `bytes` key, so there was no record of how large a batch payload is.
+@test "the census row records the payload's size, and a 300 KB batch still yields its one row" {
+  big="$(head -c 300000 /dev/zero | tr '\0' 'x')"
+  jq -nc --arg r "$big" '{hook_event_name:"PostToolBatch",session_id:"s-big",
+    tool_calls:[{tool_name:"Read",tool_input:{file_path:"/f"},tool_response:$r}]}' > "$BATS_TEST_TMPDIR/big.json"
+  want=$(( $(wc -c < "$BATS_TEST_TMPDIR/big.json") - 1 ))   # the file less its one trailing newline
+  run bash "$HOOK" < "$BATS_TEST_TMPDIR/big.json"
+  [ "$status" -eq 0 ]
+  [ "$(census_rows)" -eq 1 ]
+  [ "$(jq -r '"\(.sid) \(.n) \(.tools.Read)"' "$LOG")" = "s-big 1 1" ]
+  [ "$(jq -r .bytes "$LOG")" -eq "$want" ]
+  [ "$want" -gt 300000 ]
+}
+
+@test "a CLOSED stdin exits 0 at once and writes nothing (the block read must not wait on its own pipe)" {
+  run bash -c 'timeout 10 bash "$1" <&-' _ "$HOOK"
+  [ "$status" -eq 0 ]          # 124 = it hung until the timeout
+  [ ! -e "$LOG" ]
+}

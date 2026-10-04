@@ -58,7 +58,11 @@ log() {
 # class of HOOK_CHAIN_COST.md §2.5 (R-2). The incumbent spent 6 external execs parsing ONE payload
 # before it could discover it had nothing to do: `cat`, then 5 `jq` over the same bytes. Both go:
 #
-#   · stdin is slurped by the `read` builtin (`-d ''` = read to EOF), not by `cat`.
+#   · stdin is slurped by `$(</dev/stdin)`: one fork, NO exec. It was the `read -d ''` builtin until
+#     2026-10-04: that forks nothing but reads a pipe one byte per syscall, and this hook's matcher
+#     is every tool, so it gets every Read result (sampled p50 24 KB, p90 234 KB) — ~150 ms per
+#     256 KB against ~7 ms for the block read (docs/research/concurrency-scale-2026-10-04 fix row
+#     12). Not `$(cat)`: that is an exec, and the abstain path's exec ceiling is pinned at 3.
 #   · the three fields the abstain path needs come from ONE `jq`, newline-separated.
 #   · `.team_name` / `.teammate_name` are LAZY — read only on the snapshot path that uses them
 #     (M2's lazy-`CMD` pattern), so an abstaining call never pays for them at all.
@@ -73,8 +77,11 @@ log() {
 # (malformed payload) lands on the same fallback, which then yields the same defaults as before.
 # Both arms are pinned by tests/teammate-checkpoint-parse.bats against a real newline-in-path repo.
 readonly FIELD_SENTINEL='__cc_fields_ok__'
-INPUT=''
-IFS= read -r -d '' INPUT 2>/dev/null || true
+# Guarded on fd 0 being open: with stdin CLOSED the substitution's own pipe lands on fd 0, so
+# /dev/stdin would name that pipe and the read would wait on itself forever. `[ -e /dev/fd/0 ]`
+# is the probe that works (`: <&0` reports success on a closed fd in bash 3.2).
+INPUT=""
+if [ -e /dev/fd/0 ]; then INPUT="$(</dev/stdin)" || INPUT=""; fi
 [[ -z "$INPUT" ]] && INPUT='{}'
 
 _FIELDS=$(jq -r '(.session_id // "unknown"), (.hook_event_name // "?"), (.cwd // ""), "__cc_fields_ok__"' <<< "$INPUT" 2>/dev/null || true)

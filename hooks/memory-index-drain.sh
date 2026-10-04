@@ -47,10 +47,17 @@
 # drain is one oversized line the next write catches.
 set -uo pipefail
 
-# Builtin read, NOT `$(cat)` — same reason hooks/log-bash.sh gives: command substitution forks AND
-# execs on a path that fires on every tool call. `read -d ''` returns non-zero at EOF, the normal
-# case, hence `|| true`.
-IFS= read -r -d '' INPUT || true
+# `$(</dev/stdin)`, NOT the `read -d ''` builtin (2026-10-04, docs/research/concurrency-scale-2026-10-04
+# fix row 12). The builtin forks nothing, but on a pipe it reads ONE BYTE PER SYSCALL, so its cost
+# grows with the payload: measured at load ~98, a 64 KB payload took ~30 ms and 256 KB ~150 ms.
+# `$(<file)` is the shell's own block read: one fork, no exec (so not `$(cat)` either), ~7 ms at any
+# size, and the same under /bin/bash 3.2. Break-even is near 10 KB. This hook's matcher includes Write
+# and Edit, whose payloads carry whole file contents.
+# Guarded on fd 0 being open: with stdin CLOSED the substitution's own pipe lands on fd 0, so
+# /dev/stdin would name that pipe and the read would wait on itself forever. `[ -e /dev/fd/0 ]`
+# is the probe that works (`: <&0` reports success on a closed fd in bash 3.2).
+INPUT=""
+if [ -e /dev/fd/0 ]; then INPUT="$(</dev/stdin)" || INPUT=""; fi
 
 command -v jq >/dev/null 2>&1 || exit 0
 

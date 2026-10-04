@@ -29,7 +29,17 @@
 # DEREFERENCED self-path: live, this file is a symlink and the .tsv/.jq are never linked (X1).
 [ "${CC_BASH_OFFLOAD:-1}" = 0 ] && [ "${CC_LESSON_RECALL:-}" = off ] && exit 0
 command -v python3 >/dev/null 2>&1 || exit 0
-IFS= read -r -d '' INPUT || true
+# `$(</dev/stdin)`, NOT the `read -d ''` builtin (2026-10-04, docs/research/concurrency-scale-2026-10-04
+# fix row 12). The builtin forks nothing, but on a pipe it reads ONE BYTE PER SYSCALL, so its cost
+# grows with the payload: measured at load ~98, a 64 KB payload took ~30 ms and 256 KB ~150 ms.
+# `$(<file)` is the shell's own block read: one fork, no exec (so not `$(cat)` either), ~7 ms at any
+# size, and the same under /bin/bash 3.2. Break-even is near 10 KB. This hook exists for LARGE Bash
+# results and sees each one before it is offloaded.
+# Guarded on fd 0 being open: with stdin CLOSED the substitution's own pipe lands on fd 0, so
+# /dev/stdin would name that pipe and the read would wait on itself forever. `[ -e /dev/fd/0 ]`
+# is the probe that works (`: <&0` reports success on a closed fd in bash 3.2).
+INPUT=""
+if [ -e /dev/fd/0 ]; then INPUT="$(</dev/stdin)" || INPUT=""; fi
 [ -n "$INPUT" ] || exit 0
 _bo_deref() { # <path> → the real file behind any symlink chain (readlink -f, BSD-safe fallback)
   local p="$1" t n=0

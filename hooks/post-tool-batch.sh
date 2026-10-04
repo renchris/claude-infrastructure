@@ -27,10 +27,10 @@
 # missing jq — every one of them exits 0 and writes no census row. A hook on this path must never
 # be able to fail a tool batch.
 #
-# COST: two forks in the steady state (jq, and `stat` for the rotation check). The timestamp is
-# produced INSIDE the jq program (`now|todate`) rather than by a `date` fork, and stdin is read with
-# the `read` builtin rather than `$(cat)` — both for the reason HOOK_CHAIN_COST § 2.1 measures:
-# process creation, not interpretation, is what the chain costs.
+# COST: two execs in the steady state (jq, and `stat` for the rotation check), plus the one fork that
+# slurps stdin. The timestamp is produced INSIDE the jq program (`now|todate`) rather than by a
+# `date` fork, for the reason HOOK_CHAIN_COST § 2.1 measures: process creation, not interpretation,
+# is what the chain costs. stdin is the one place a fork beats the builtin — see the read below.
 #
 # Env seams (tests): POST_TOOL_BATCH_LOG · POST_TOOL_BATCH_MAX_BYTES
 set -uo pipefail
@@ -38,9 +38,19 @@ set -uo pipefail
 LOG="${POST_TOOL_BATCH_LOG:-$HOME/.claude/logs/tool-batch-census.jsonl}"
 MAX_BYTES="${POST_TOOL_BATCH_MAX_BYTES:-4194304}"   # 4 MiB, one generation kept
 
-# Builtin read, NOT `$(cat)`: a command substitution forks AND execs /bin/cat. `read -d ''` returns
-# non-zero at EOF — the normal case — hence `|| true`.
-IFS= read -r -d '' INPUT || true
+# `$(</dev/stdin)`, NOT the `read -d ''` builtin (2026-10-04, docs/research/concurrency-scale-2026-10-04
+# fix row 12). The builtin forks nothing, but on a pipe it reads ONE BYTE PER SYSCALL, so its cost
+# grows with the payload: measured at load ~98, a 64 KB payload took ~30 ms and 256 KB ~150 ms.
+# `$(<file)` is the shell's own block read: one fork, no exec (so not `$(cat)` either), ~7 ms at any
+# size, and the same under /bin/bash 3.2. Break-even is near 10 KB. This hook receives the WHOLE batch,
+# every call's input and result: over one sampled hour a single Read result ran p50 24 KB, p90
+# 234 KB, max 341 KB, and this hook was being cancelled at its 10 s budget. `bytes` in the census
+# row below records what actually arrives, so the next reading is a measurement.
+# Guarded on fd 0 being open: with stdin CLOSED the substitution's own pipe lands on fd 0, so
+# /dev/stdin would name that pipe and the read would wait on itself forever. `[ -e /dev/fd/0 ]`
+# is the probe that works (`: <&0` reports success on a closed fd in bash 3.2).
+INPUT=""
+if [ -e /dev/fd/0 ]; then INPUT="$(</dev/stdin)" || INPUT=""; fi
 [ -n "$INPUT" ] || exit 0                            # missing args / empty stdin ⇒ inert, exit 0
 
 # `${LOG%/*}` not `$(dirname)`, and the mkdir only when the directory is genuinely missing: both
@@ -68,7 +78,7 @@ command -v jq >/dev/null 2>&1 || abstain "no-jq"
 # wearing a guard's clothes (memory: one mutant per SITE — a green suite credits NO site).
 # jq-encoded end to end, so a command carrying a quote, a backslash or a newline can never shred
 # the line — one malformed line aborts a `jq -s` slurp downstream, which reads as "no records".
-ROW="$(printf '%s' "$INPUT" | jq -c '
+ROW="$(printf '%s' "$INPUT" | jq -c --argjson bytes "${#INPUT}" '
     select(.hook_event_name == "PostToolBatch")
   | select((.tool_calls | length) > 0)
   | { ts:        (now | todate),
@@ -79,7 +89,8 @@ ROW="$(printf '%s' "$INPUT" | jq -c '
       tools:     (.tool_calls | map(.tool_name // "?") | group_by(.)
                               | map({key: .[0], value: length}) | from_entries),
       mode:      (.permission_mode // "-"),
-      effort:    (.effort.level    // "-") }
+      effort:    (.effort.level    // "-"),
+      bytes:     $bytes }
 ' 2>/dev/null)" || ROW=""
 
 # Nothing to say is a legitimate outcome for EVERY gate above — a wrong event name, a payload with
