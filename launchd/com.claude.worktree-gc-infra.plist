@@ -35,7 +35,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>exec "$HOME/.claude/scripts/worktree-gc-infra-run.sh"</string>
+        <string>if [ -x /usr/sbin/taskpolicy ]; then exec /usr/sbin/taskpolicy -c utility "$HOME/.claude/scripts/worktree-gc-infra-run.sh"; fi; exec "$HOME/.claude/scripts/worktree-gc-infra-run.sh"</string>
     </array>
 
     <key>StartCalendarInterval</key>
@@ -55,9 +55,16 @@
     <key>Nice</key>
     <integer>10</integer>
 
-    <key>ProcessType</key>
-    <string>Background</string>
-
+    <!--
+      NO ProcessType KEY (2026-10-04, docs/research/concurrency-scale-2026-10-04 fix row 5; applied to
+      the LOADED job by migrations/0055, an operator step). This job declared `ProcessType Background`,
+      which is Darwin's darwinbg task role: every descendant is pinned at PRI 4 and nothing inside
+      the job can lift it (com.claude.postland-verify.plist carries the measurement). Measured:
+      sweeps took 43-202 minutes.
+      ProgramArguments now execs through `taskpolicy -c utility`, the band postland-verify moved to:
+      still below interactive sessions, but schedulable. Fail-open: no taskpolicy(8) means exec the
+      script directly. LowPriorityIO and Nice stay.
+    -->
     <key>StandardOutPath</key>
     <string>/Users/chrisren/.claude/logs/worktree-gc-infra.out.log</string>
 

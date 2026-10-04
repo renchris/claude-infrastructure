@@ -56,6 +56,13 @@
   `nice` alone does NOT demote a process (PRI stays 31) — the demotion came from ProcessType, so
   this key is the correct and only lever here.
 
+  RE-BANDED 2026-10-04 (docs/research/concurrency-scale-2026-10-04 fix row 5; applied to the LOADED
+  job by migrations/0055, an operator step). "Adaptive" did not hold: measured at load 100-270 the job
+  still ran at PRI 4, and the 60 s sensor wrote 5-13 rows an hour at peak instead of ~55 (median gap
+  154 s). An Adaptive job is only lifted while it holds work on behalf of a foreground app, which a
+  StartInterval sampler never does, so it sat in the background band it was moved out of. The key is
+  now "Standard": the default band, not deferred under load. LowPriorityIO and Nice stay.
+
   RunAtLoad stays false and is NOT implicated in the gap above — a StartInterval job fires on its
   interval regardless; the 6h24m silence was deferral, not the absence of a load-time run.
 
@@ -104,7 +111,7 @@
     <key>RunAtLoad</key>
     <false/>
 
-    <key>ProcessType</key>      <string>Adaptive</string>
+    <key>ProcessType</key>      <string>Standard</string>
     <key>LowPriorityIO</key>    <true/>
     <key>Nice</key>             <integer>10</integer>
 

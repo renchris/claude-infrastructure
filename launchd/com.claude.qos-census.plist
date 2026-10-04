@@ -39,7 +39,12 @@
     <key>RunAtLoad</key>
     <false/>
 
-    <key>ProcessType</key>      <string>Background</string>
+    <!-- "Standard", not "Background" (2026-10-04, docs/research/concurrency-scale-2026-10-04 fix
+         row 5; applied to the LOADED job by migrations/0055, an operator step). In the Background
+         band this census is deferred under exactly the load it exists to measure: 51% of its
+         busy-band rows were SIGNAL-DEAD and it gave 0 valid verdicts at peak. LowPriorityIO and
+         Nice stay. -->
+    <key>ProcessType</key>      <string>Standard</string>
     <key>LowPriorityIO</key>    <true/>
     <key>Nice</key>             <integer>10</integer>
 
