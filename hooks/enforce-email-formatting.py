@@ -500,20 +500,14 @@ RECIPE = """ms365 email recipe (auto-injected — settled, do not re-derive):
    "RE:"/"FW:" subject — that makes a detached message with no In-Reply-To/References and
    silently breaks the chain.
 
-1b. WHICH FIELD — this is the one that bites, and the old answer here was WRONG.
-   Graph auto-quotes the original ONLY when you pass **Comment**. Passing **Message.body
-   REPLACES that auto-quote**, so the reply threads correctly but arrives with NO VISIBLE
-   HISTORY — it reads to the recipient as a brand-new email (caught in Outlook, not here,
-   2026-08-24). Hook-enforced: a reply tool passing Message.body with no quote block is DENIED.
-   ⚠️ THE CORRECTION (measured 2026-09-14, this mailbox): Graph strips NEWLINES from a Comment.
-   It does NOT strip MARKUP. A Comment of
-       <div style="color:#C00000"><p>para one</p><p>para two here</p></div>
-   came back in the draft's own MIME byte-identical, sitting above Graph's own
-   <hr><div id="divRplyFwdMsg"> quote. So the cure for a long, formatted reply was never
-   "shorten it" and never "move to Message.body" — it is **put the HTML in the Comment**.
-   That is ONE API call, keeps Graph's native quote at full depth, and nothing of the
-   original ever passes through you. The old ~300-char cap is gone; it was our own number,
-   not Graph's (no such limit is documented anywhere on Microsoft Learn).
+1b. WHICH FIELD. Graph auto-quotes the original ONLY when you pass **Comment**. Passing
+   **Message.body REPLACES that auto-quote**, so the reply threads correctly but arrives with
+   NO VISIBLE HISTORY — it reads to the recipient as a brand-new email. Hook-enforced: a reply
+   tool passing Message.body with no quote block is DENIED. Graph strips NEWLINES from a
+   Comment but keeps its MARKUP (measured 2026-09-14: a <div><p>…</p><p>…</p></div> Comment came
+   back byte-identical above Graph's own quote), so for a long or formatted reply **put the HTML
+   in the Comment**: one API call, Graph's native quote at full depth, and nothing of the
+   original passes through you. Graph documents no length limit on Comment.
 
 2. FORMATTING — build the fragment, do not hand-write it.
        $HOME/.claude/bin/ms365-compose-body.py --text-file reply.txt --signature <id> --out body.html
@@ -540,9 +534,8 @@ RECIPE = """ms365 email recipe (auto-injected — settled, do not re-derive):
    existing draft's text while keeping its quote. Never hand-author a quote block: a typed quote
    is an assertion, Graph's is the record, and a rebuilt one was rejected outright in a live
    dispute (2026-08-25).
-     a. create-reply-all-draft with a UNIQUE placeholder Comment — e.g. CCPLACEHOLDER7X2Q.
-        ⚠️ NOT "." as this recipe used to say: a lone "." occurs in every quoted chain, so the
-        splicer's own placeholder check can never pass with it.
+     a. create-reply-all-draft with a UNIQUE placeholder Comment — e.g. CCPLACEHOLDER7X2Q, never
+        "." (a lone "." occurs in every quoted chain, so the splicer's placeholder check fails).
      b. download-bytes-to-file on /me/messages/<THAT DRAFT'S id>/$value, to disk. MIME works on
         drafts, and going to disk keeps a 38KB body out of your context.
      c. $HOME/.claude/bin/ms365-reply-splice.py --draft-mime d.eml --body body.html
@@ -562,10 +555,8 @@ RECIPE = """ms365 email recipe (auto-injected — settled, do not re-derive):
    evidence the HTML was lost. The valid check is get-mail-message-mime — and it WORKS
    ON A DRAFT. Verified 2026-08-25: a draft messageId returned full RFC-822 source with
    both MIME parts plus From:, In-Reply-To: and References:. So build the draft, then run
-   get-mail-message-mime on THAT DRAFT'S OWN id and inspect what you get.
-   ⚠️ The old rule here said "Drafts have no MIME" and told you to DRY RUN by swapping
-   recipients to yourself and SENDING. Both halves are dead: the premise was false, and
-   sending is denied outright (rule 0). Verifying a draft costs one read now.
+   get-mail-message-mime on THAT DRAFT'S OWN id and inspect what you get. Never verify by
+   sending to yourself: sending is denied (rule 0), and the draft read is enough.
 
 5. NAME THE MAILBOX, THEN MATCH THE THREAD'S ALIAS. Two mailboxes, chosen by `account`:
      account "«P»" — personal; aliases «P_DEF» and
@@ -582,21 +573,16 @@ RECIPE = """ms365 email recipe (auto-injected — settled, do not re-derive):
    addressed to «P_OTHER_SHORT», whose reply draft came back from «P_DEF_SHORT». So: thread on
    «P_DEF_SHORT» -> the default is already correct, leave from unset. Thread on «P_OTHER_SHORT» ->
    you MUST set the alias explicitly.
-   ⚠️ This used to add "Comment mode CANNOT set from, so a «P_OTHER_SHORT» thread needs
-   Message.body". That inference is DEAD (measured 2026-08-25): the create call cannot set
-   `from`, but update-mail-message CAN — a PATCH carrying {"from": …, "ccRecipients": […]}
-   on a Comment-created draft was read back with both applied. So a «P_OTHER_SHORT» thread is no
-   longer a reason to abandon the auto-quote: use the rule-3 splice and set the alias on the
-   PATCH. Nothing about the alias forces you to hand-build a chain any more.
+   The create call cannot set `from`, but update-mail-message CAN (measured 2026-08-25: a PATCH
+   carrying {"from": …, "ccRecipients": […]} on a Comment-created draft was read back with both
+   applied). So a «P_OTHER_SHORT» thread keeps the auto-quote: set the alias on that PATCH.
    Confirm on the finished draft with rule 4 and read its From: header.
    Hook-enforced: a from/sender the named mailbox does not own is DENIED. The hook CANNOT
    check thread-match — a PreToolUse hook sees only the request, never Graph's response —
    so that half is yours. Your backstop is that the operator sees From in Outlook.
-   WHY THIS RULE EXISTS: it used to read "set from = «P_OTHER»" flatly. Every
-   vendor email on one order was addressed to «P_DEF_SHORT»; the dispatch-hold request
-   went out from «P_OTHER_SHORT», an address they had never seen on that order. They
-   dispatched and charged the next morning. The old rule did not merely fail to help — it
-   overrode a default that was already correct.
+   Why: every vendor email on one order was addressed to «P_DEF_SHORT»; the dispatch-hold request
+   went out from «P_OTHER_SHORT», an address they had never seen on that order, and they
+   dispatched and charged the next morning.
    Display name is not settable per-message on this account.
 
 6. FRESHNESS — RE-READ RECEIVED MAIL BEFORE YOU SAY "READY". Hook-enforced (R4): a draft

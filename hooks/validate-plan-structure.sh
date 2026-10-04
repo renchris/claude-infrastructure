@@ -122,7 +122,7 @@ if [ "$IS_IMPL" = true ] && [ "$HAS_PHASE0" = false ]; then
 {
   "hookSpecificOutput": {
     "hookEventName": "PostToolUse",
-    "additionalContext": "⚠️ AGENT TEAMS REQUIRED [${BASENAME}]: This implementation plan has NO Phase 0 / Agent Team Orchestration. Per CLAUDE.md: Agent Teams are the DEFAULT for all implementation work (9/10 sessions). Add Phase 0 as the FIRST section with: EXECUTION LOCUS PER WAVE (S = dispatched handoff session — the DEFAULT; T = in-session teammates; L = lead-inline — T and L each need one line of justification), team roster, task dependency graph, worktree assignments, spawn wave order, and the LEAD's context budget + succession point. Only omit for purely research/exploration plans with no code changes. Use the plan-update skill 'Phase 0' template."
+    "additionalContext": "⚠️ AGENT TEAMS REQUIRED [${BASENAME}]: This implementation plan has NO Phase 0 / Agent Team Orchestration. Per CLAUDE.md: an implementation plan with 2+ code tasks needs Phase 0. Add Phase 0 as the FIRST section with: EXECUTION LOCUS PER WAVE (S = dispatched handoff session — the DEFAULT; T = in-session teammates; L = lead-inline — T and L each need one line of justification), team roster, task dependency graph, worktree assignments, spawn wave order, and the LEAD's context budget + succession point. Only omit for purely research/exploration plans with no code changes. Use the plan-update skill 'Phase 0' template."
   }
 }
 EOF

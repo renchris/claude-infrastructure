@@ -180,11 +180,11 @@ elif [ "$SWEEP_MODE" != "off" ]; then
 fi
 
 # Report to session
-TOTAL=$(find "$TASKS_DIR" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
+TOTAL=$(find "$TASKS_DIR/" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
 FILTERED=$(find "$FILTERED_DIR" -maxdepth 1 -mindepth 1 \( -type l -o -type d \) \
   ! -name '_all' ! -name '_current' ! -name '.' 2>/dev/null | wc -l | tr -d ' ')
 PROJECT_NAME=$(basename "$PROJECT_DIR")
-ACTIVE_TASKS=$(jq -r '.totalOnDisk // 0' "$ACTIVE_SUMMARY" 2>/dev/null || echo "0")
+ACTIVE_TASKS=$(jq -r '((.pending // 0) + (.in_progress // 0))' "$ACTIVE_SUMMARY" 2>/dev/null || echo "0")
 
 CONTEXT="Tasks: ${ACTIVE_TASKS} active"
 [ -n "$ACTIVE_ID" ] && [ "$ACTIVE_ID" != "$TASK_LIST_ID" ] && CONTEXT="$CONTEXT (auto-detected ${ACTIVE_ID:0:8}…)"

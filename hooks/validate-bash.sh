@@ -1151,7 +1151,7 @@ fi
 # argv-aware: recognises that `--no-verify` inside a quoted -m / -F message
 # body is not a real flag to git.
 if check_real_flag "--no-verify"; then
-  deny "--no-verify blocked — bypasses pre-commit hooks. Fix the underlying hook failure instead. See CLAUDE.md critical rule #2."
+  deny "--no-verify blocked — bypasses pre-commit hooks. Fix the underlying hook failure instead (global CLAUDE.md, Git > Safety)."
 fi
 
 # --no-gpg-sign also bypasses signing policy
@@ -1165,7 +1165,7 @@ fi
 # VB_RULE_TEXT, so a `git commit -n` quoted as test data or written into a heredoc is not the act.
 [[ "$CMD" == *commit* ]] && vb_rule_text_init
 if echo "$VB_RULE_TEXT" | grep -qE 'git([[:space:]]+-[a-zA-Z]+[[:space:]]+[^[:space:]]+)*[[:space:]]+commit\b[^|&;]*[[:space:]]-n\b'; then
-  deny "git commit -n blocked — short form of --no-verify, bypasses pre-commit hooks. See CLAUDE.md critical rule #2."
+  deny "git commit -n blocked — short form of --no-verify, bypasses pre-commit hooks. Fix the underlying hook failure instead (global CLAUDE.md, Git > Safety)."
 fi
 
 # ── the identity GATE's own escape hatches (2026-08-08) ───────────────

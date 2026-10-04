@@ -419,11 +419,11 @@ fi
 _DEG=""
 [ "$DEGRADED_COUNT" -gt 0 ] && _DEG=" ($DEGRADED_COUNT degraded)"
 if [ "$MCP_STATE" = ok ] && [ "$CONNECTED_COUNT" -gt 0 ]; then
-  MCP_CLAIM="MCP: $CONNECTED_COUNT server(s) connected${_DEG}${_CACHE_NOTE}. agent-browser: $AGENT_BROWSER_STATUS. If BrowserMCP tools fail with 'No such tool available', use agent-browser skill instead."
+  MCP_CLAIM="MCP: $CONNECTED_COUNT server(s) connected${_DEG}${_CACHE_NOTE}. agent-browser: $AGENT_BROWSER_STATUS."
 elif [ "$MCP_STATE" = ok ]; then
   MCP_CLAIM="MCP: 0 servers connected — the probe RAN and answered zero${_DEG}${_CACHE_NOTE}. agent-browser: $AGENT_BROWSER_STATUS. Use agent-browser skill for browser automation."
 else
-  MCP_CLAIM="MCP: UNKNOWN — the probe could not ask ($MCP_REASON). This is NOT a report of zero connected servers; MCP tools may be present. agent-browser: $AGENT_BROWSER_STATUS. If a BrowserMCP tool fails with 'No such tool available', use agent-browser skill instead."
+  MCP_CLAIM="MCP: UNKNOWN — the probe could not ask ($MCP_REASON). This is NOT a report of zero connected servers; MCP tools may be present. agent-browser: $AGENT_BROWSER_STATUS."
 fi
 
 # === MISSION BOARD (2026-09-09) ===
