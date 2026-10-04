@@ -18,7 +18,7 @@ Invoked through scripts/research-kit/gate.sh. Verbs:
   requires  --program P [--wave W] [--json]                 may build wave W fire? exit 0 clear,
                                                             1 refused (handoff-fire --requires-gate)
 
-Rows 1-8 live in gate_rows_a.py; rows 9-16 and the plan lint in gate_rows_b.py; the sweep and
+Rows 1-8 live in gate_rows_a.py; rows 9-17 and the plan lint in gate_rows_b.py; the sweep and
 file-packet verbs in gate_sweep.py; requires in gate_requires.py; freeze, render and the certificate in gate_cert.py. Each row function takes a Ctx and returns a Row. A row that cannot
 be evaluated is FAIL ("Unknown fails", §3.10); a row function that raises is FAIL with the error.
 Exit codes: 0 all rows PASS/FILED (or verb succeeded) · 1 a row FAILed · 2 usage or refusal.
@@ -40,7 +40,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # heldout.py, esti
 import kit  # noqa: E402
 
 PASS, FAIL, FILED = "PASS", "FAIL", "FILED"
-ROW_COUNT = 16  # §3.10 rows 1-15, plus row 16: rounds and stage time against their caps (§10 item 17)
+ROW_COUNT = 17  # §3.10 rows 1-15, plus row 16: rounds and stage time against their caps (§10 item 17),
+# and row 17: an honest stop, dry or the cap reached by counted rounds (audit 2026-10-04, item 5d)
 
 
 @dataclass

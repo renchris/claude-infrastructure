@@ -149,6 +149,7 @@ def write_certificate(ctx: Ctx, rows: List[Row]) -> str:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     import estimate
     from gate_rows_a import known_rows
+    from gate_rows_b import lost_rounds
 
     certs = sorted((ctx.records / "cert").glob("CERT-v*.json"))
     n = len(certs) + 1
@@ -166,6 +167,9 @@ def write_certificate(ctx: Ctx, rows: List[Row]) -> str:
         "rounds": f["rounds_counted"],
         "r_max": f["r_max"],
         "quiet_streak": f["quiet_streak"],
+        "lost_rounds": lost_rounds(
+            ctx
+        ),  # stated apart from the counted rounds (gate row 17)
         "rows": {str(r.num): r.status for r in rows},
         "forecast": {
             k: f[k]
@@ -278,6 +282,12 @@ def lines_for(
         if cert["stop"] == "dry"
         else f"stopped at the round cap ({cert['rounds']} rounds)"
     )
+    lost = cert.get("lost_rounds") or []
+    if lost:
+        why += (
+            f"; {plural(len(lost), 'round')} lost to a dead lane and not counted "
+            f"({'round' if len(lost) == 1 else 'rounds'} {', '.join(lost)})"
+        )
     head = f"Research: {slug} version {cert['version']}. {state.upper()} {when} ({cert['profile']} profile; {why})"
     if cert.get("degraded") == "two vendors":
         head = "degraded: two vendors · " + head

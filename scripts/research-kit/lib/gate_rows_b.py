@@ -1,8 +1,9 @@
-"""gate_rows_b.py — gate rows 9-16 of REPORT.md §3.10, plus the plan lint (§3.7 step 4).
+"""gate_rows_b.py — gate rows 9-17 of REPORT.md §3.10, plus the plan lint (§3.7 step 4).
 
   9 Freeze · 10 Freshness · 11 Residual (with §10 item 7's method-created classes, rendered FILED)
   12 Reconciliation (and program-packet hygiene, §10 item 4) · 13 Reviewers · 14 Rehearsal
   15 Router (the sealed held-out set, §10 items 11-13) · 16 Caps (rounds and stage time, §10 item 17)
+  17 Stop (dry, or the cap reached by counted rounds; a lost round fills no cap)
 Unknown fails: a missing record is a FAIL with its reason.
 """
 
@@ -15,7 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import kit
-from gate import FAIL, FILED, PASS, Ctx, Row
+from gate import FAIL, PASS, Ctx, Row
 from gate_rows_a import folded, known_rows, numberless_superlative, probes, row, verdict
 
 ALLOWED_RESIDUAL = (
@@ -419,4 +420,41 @@ def row16(ctx: Ctx) -> Row:
     return verdict(16, "Caps", fails, filed, [f"rounds {len(certs)} of R_max {rmax}"])
 
 
-ROWS = [row9, row10, row11, row12, row13, row14, row15, row16]
+# ── row 17 ──────────────────────────────────────────────────────────────────────────────────────
+
+
+def lost_rounds(ctx: Ctx) -> List[str]:
+    """Certification rounds that ran and did not count (a dead lane: round.sh's `counted`)."""
+    return [str(m.get("round")) for m in cert_rounds(ctx) if not m.get("counted")]
+
+
+@row(17, "Stop")
+def row17(ctx: Ctx) -> Row:
+    """An honest stop (§3.8): K quiet counted rounds ("dry"), or the cap reached by counted rounds.
+    A round lost to infrastructure still takes a round number, so it must never fill the cap."""
+    import estimate
+
+    try:
+        f = estimate.forecast(ctx.slug)
+    except kit.KitError as e:
+        return Row(17, "Stop", FAIL, [str(e)])
+    lost = lost_rounds(ctx)
+    fails: List[str] = []
+    if f["stop"] == "cap" and lost:
+        fails.append(
+            f"the round cap (R_max {f['r_max']}) was reached with {len(lost)} lost round(s) "
+            f"({', '.join(lost)}): only {f['rounds_counted']} rounds counted"
+        )
+    elif f["stop"] not in ("dry", "cap"):
+        fails.append(
+            f"rounds have not stopped ({f['stop']}): {f['quiet_streak']} trailing quiet round(s) "
+            "and the cap not reached"
+        )
+    note = (
+        f"stop {f['stop']} after {f['rounds_counted']} counted round(s); "
+        f"lost {', '.join(lost) or 'none'}"
+    )
+    return verdict(17, "Stop", fails, [], [note])
+
+
+ROWS = [row9, row10, row11, row12, row13, row14, row15, row16, row17]

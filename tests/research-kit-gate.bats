@@ -1,9 +1,9 @@
 #!/usr/bin/env bats
 # research-kit-gate — scripts/research-kit/gate.sh, the REPORT.md §3.10 gate (rows 1-15, plus row 16:
-# rounds and stage time against their caps, §10 item 17), the freeze that sets the registry to
-# certifying (§10 item 1), and the render a completeness turn relays.
+# rounds and stage time against their caps, §10 item 17, and row 17: an honest stop), the freeze that
+# sets the registry to certifying (§10 item 1), and the render a completeness turn relays.
 #
-# One known-good program (tests/fixtures/research-kit/build_good.py) passes all 16 rows and
+# One known-good program (tests/fixtures/research-kit/build_good.py) passes all 17 rows and
 # certifies. Every other test restores it and plants ONE defect, then asserts that the named row
 # turns FAIL: "every gate row has a planted-input test that must fail" (REPORT.md §3.10).
 
@@ -52,10 +52,10 @@ jedit() {
 }
 state() { /usr/bin/python3 -c "import json; print(json.load(open('$CC_RESEARCH_REGISTRY'))['programs'][0]['state'])"; }
 
-@test "the known-good program passes all 16 rows, certifies, and the registry reads certified" {
+@test "the known-good program passes all 17 rows, certifies, and the registry reads certified" {
   run "$G" run --program demo
   [ "$status" -eq 0 ]
-  [ "$(printf '%s\n' "$output" | grep -cE '^ ?[0-9]+\. .* PASS$')" -eq 16 ]
+  [ "$(printf '%s\n' "$output" | grep -cE '^ ?[0-9]+\. .* PASS$')" -eq 17 ]
   [ "$(state)" = "certified" ]
   [ -f "$REC/cert/CERT-v1.json" ]
 }
@@ -350,9 +350,34 @@ state() { /usr/bin/python3 -c "import json; print(json.load(open('$CC_RESEARCH_R
   run /usr/bin/python3 -c "
 import sys; sys.path.insert(0, '$REPO/scripts/research-kit/lib'); sys.path.insert(0, '$REPO/scripts/lib')
 import gate, gate_rows_b
-gate_rows_b.ROWS = gate_rows_b.ROWS[:-1]
+gate_rows_b.ROWS = [f for f in gate_rows_b.ROWS if f.row[0] != 16]
 print([r.status for r in gate.run_rows(gate.make_ctx('demo')) if r.num == 16][0])"
   [ "$output" = "FAIL" ]
+}
+
+@test "row 17: the round cap reached with one uncounted round fails, and no certificate is issued" {
+  jedit rounds/1/matrix.json 'd["forecast"]["p90"] = -1'
+  jedit rounds/2/matrix.json 'd["counted"] = False; d["quiet"] = False; d["lanes"]["google"] = "dead"'
+  git -C "$REC" commit -qam "plant: round 2 lost"  # row 12 would otherwise see the plant as dirty
+  [[ "$(rowtext 17)" == *"1 lost round(s) (2)"* ]] || false
+  run "$G" run --program demo
+  [ "$status" -ne 0 ]
+  [ "$(printf '%s\n' "$output" | grep -cE ' FAIL$')" -eq 1 ]
+  [[ "$output" == *"17. "*" FAIL"* ]] || false
+  [ ! -f "$REC/cert/CERT-v1.json" ]
+  [ "$(state)" != "certified" ]
+}
+
+@test "row 17: rounds that ended dry pass despite a lost round, and the certificate states it separately" {
+  cp -Rp "$REC/rounds/3" "$REC/rounds/4"
+  jedit rounds/4/matrix.json 'd["round"] = "4"; d["seq"] = 4'
+  jedit rounds/2/matrix.json 'd["counted"] = False; d["quiet"] = False; d["lanes"]["google"] = "dead"'
+  git -C "$REC" add rounds
+  git -C "$REC" commit -qm "plant: round 2 lost, round 4 quiet"
+  run "$G" run --program demo
+  [ "$status" -eq 0 ]
+  run "$G" --render --program demo
+  [[ "${lines[0]}" == *"stopped after 2 quiet rounds; 1 round lost to a dead lane and not counted (round 2)"* ]] || false
 }
 
 @test "a valid operator reopen after the certificate sets the registry back to registered" {
