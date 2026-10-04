@@ -5438,6 +5438,34 @@ PY
   return 1
 }
 
+# A PROMPT THAT OPENS WITH `-` IS PARSED AS AN OPTION. Every launch line passes the brief as
+# `launcher [flags] "$(cat F)"`, and claude's option parser reads a positional starting with `-` as a
+# flag: a bridge with YAML frontmatter (`---\nstatus: open\n---`) exits at once with
+# `error: unknown option '---…'` (2026-10-03, pane 168: relaunch typed, STALE:boot at 181 s, the
+# successor never booted). A leading newline is invisible to the reader and makes the argument a
+# positional — measured against claude 2.1.284, control and fix both run. Not `--`: the resume
+# launcher is `bash <file>`, where `--` would end bash's options and run the brief as a script.
+hf_prompt_dash_guard() { # $1=prompt COPY (never the caller's file) → 0 ok / 1 could not rewrite
+  [ "$(head -c 1 "$1" 2>/dev/null)" = "-" ] || return 0
+  { printf '\n'; cat "$1"; } > "$1.dash" && mv -f "$1.dash" "$1"
+}
+
+# THE LAUNCHER'S OWN ERROR, for a relaunch that never booted. bin/claude-latest tees every launch's
+# stderr to ~/.claude/logs/stderr/<ts>-<pid>.log, but the pid died before the watcher could learn it,
+# so the join is by CONTENT: an argv error echoes the brief, and the brief carries the recycle
+# marker. 2026-10-03: `error: unknown option '---…'` sat in that log while the verdict read
+# "cause UNKNOWN, read the launcher log".
+rcy_stderr_cause() { # $1=marker [$2=stderr dir] → "launcher error (<log>): <line>", else nothing
+  local d f line
+  d="${2:-${CC_STDERR_LOG_DIR:-$HOME/.claude/logs/stderr}}"
+  [ -n "${1:-}" ] && [ -d "$d" ] || return 0
+  f="$(grep -lF -- "$1" "$d"/*.log 2>/dev/null | tail -1 || true)"
+  [ -n "$f" ] || return 0
+  line="$(grep -m1 -iE '^(error|fatal)' "$f" 2>/dev/null || head -1 "$f" 2>/dev/null || true)"
+  [ -n "$line" ] || return 0
+  printf 'launcher error (%s): %s' "$f" "$(printf '%s' "$line" | cut -c1-200)"
+}
+
 recycle_engaged() { # $1=pane $2=pre-recycle-sid $3=marker → 0 engaged / 1 not
   local pane="${1:-}" oldsid="${2:-}" marker="${3:-}" pdir newsid hit scan_win=""
   # Same mtime scoping as engagement_seen, and this path needed it MORE: it sweeps every entry of
@@ -9668,6 +9696,8 @@ if [ "${1:-}" = "__recycle" ]; then
   }
   rcy_elapsed=$(( $(date +%s 2>/dev/null || echo 0) - rcy_proc_t0 ))
   rcy_cause="$(rcy_idl_cause || true)"
+  # No capacity refusal: ask the launcher's own stderr (rcy_stderr_cause, by marker).
+  [ -n "$rcy_cause" ] || rcy_cause="$(rcy_stderr_cause "${RCY_MARKER:-}" || true)"
   # THE STATE LEADS THE SENTENCE (W2). `FAILED:relaunch:rc=9` is a measured fact — the launcher
   # exited before the TUI existed and said so — while `STALE:boot` is the honest name for a bound
   # that expired with no evidence either way. They are the same terminal arm and the same row, and
@@ -13824,6 +13854,9 @@ if [ -n "$NOTIFY_BACK" ] || [ "$SELF_RETIRE_TRAILER" = 1 ] || [ "$ENGAGE_VERIFY"
   # DIFFERENT recipient. The author's broken instruction survives into the successor either way.
   PROMPT_FILE_ORIG="$PROMPT_FILE"
   PROMPT_FILE="$PF_NB"
+  # A brief opening with `-` (YAML frontmatter) is read by claude as an option — hf_prompt_dash_guard.
+  hf_prompt_dash_guard "$PF_NB" \
+    || { echo "!! prompt opens with '-' and the leading-newline guard could not be written" >&2; exit 1; }
 fi
 
 # ---- FIRE-FAILED resource cleanup (audit rows 2+3 — there was no trap at all) -------------------
