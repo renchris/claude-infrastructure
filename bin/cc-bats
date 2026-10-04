@@ -394,6 +394,13 @@ unset CLAUDE_CODE_SESSION_KIND
 # succession hooks branch on it, so a suite run from inside a job would take the job path in every
 # pane case. tests/handoff-bgjob-recycle.bats sets it explicitly.
 unset CLAUDE_JOB_DIR
+# …and KITTY_PID (2026-10-04). The mailbox layer now reads this kitty's START TIME from it: the drain
+# seals pane-box lines older than the kitty, and cc-await-ping / cc-wake treat a line older than the
+# session as delivered-not-a-wake. A suite run from a kitty pane inherited the operator's kitty (days
+# old), so every fixture stamped with a fixed past date silently became "older than birth" there and
+# nowhere else (postland-verify runs under launchd, which has no KITTY_PID). Suites that exercise the
+# gate set KITTY_PID explicitly; no suite reads the inherited value.
+unset KITTY_PID
 
 # ── kill switch ───────────────────────────────────────────────────────────────────────────────
 if [ "${CC_BATS_QOS:-on}" = "off" ]; then
