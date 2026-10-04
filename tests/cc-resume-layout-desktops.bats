@@ -45,6 +45,7 @@ printf 'KW=%s %s\n' "${KITTY_WINDOW_ID:-}" "$*" >> "$KLOG"
 case " $* " in
   *" launch "*)
     [ -f "$KLOG.fail" ] && { echo "Error: no such window"; exit 1; }
+    [ -f "$KLOG.hang" ] && { sleep 30 & echo $! > "$KLOG.sleeppid"; wait; echo 999; exit 0; }
     n=$(cat "$KLOG.n" 2>/dev/null || echo 100); n=$((n + 1)); echo "$n" > "$KLOG.n"; echo "$n" ;;
 esac
 SH
@@ -188,4 +189,46 @@ launches() { grep -c ' launch ' "$KLOG"; }
   [ "$(launches)" -eq 2 ]
   ! grep -q 'rotate' "$KLOG" || false
   [ -z "$output" ]
+}
+
+# BOUNDED k() (2026-10-02, W3 P2): a wedged `kitty @` used to hang the launchd restore for good.
+# The stub's launch sleeps 30 s in a grandchild, which would also hold `$(k …)`'s pipe open, so the
+# bound must kill the whole process group. Pinned on both paths: timeout(1) and the perl fallback.
+hung_launch() { # <timeout-bin override, or "default">
+  row repo-a 1; touch "$KLOG.hang"
+  export CC_RESUME_K_TIMEOUT=1
+  [ "$1" = default ] || export CC_RESUME_K_TIMEOUT_BIN="$1"
+  local t0=$SECONDS
+  run --separate-stderr bash "$LAYOUT" --desktops --to unix:/tmp/fake --file "$ROWS"
+  [ $((SECONDS - t0)) -lt 10 ]
+  [ "$status" -eq 4 ]
+  [ "$(kv failed)" = 1 ]; [ "$(kv launched)" = 0 ]; [ "$(kv verdict)" = failed ]
+  ! kill -0 "$(cat "$KLOG.sleeppid")" 2>/dev/null || false
+}
+
+@test "a hung kitty launch is bounded by CC_RESUME_K_TIMEOUT and counted failed (timeout(1) path)" {
+  hung_launch default
+}
+
+@test "a hung kitty launch is bounded by CC_RESUME_K_TIMEOUT and counted failed (perl fallback path)" {
+  hung_launch ""
+}
+
+# The bound itself (W3 amendment §C 3): 120 s on today's default path, where a loaded kitty can take
+# tens of seconds to answer; 15 s only under --restore. A recording timeout(1) stub logs the bound
+# it was handed, then runs the call.
+bound_for() { # <extra layout args…> → the distinct bounds k() handed timeout(1)
+  row repo-a 1
+  local tb="$BATS_TEST_TMPDIR/rec-timeout"
+  printf '#!/bin/bash\necho "$1" >> "$0.log"; shift; exec "$@"\n' > "$tb"; chmod +x "$tb"
+  unset CC_RESUME_K_TIMEOUT; export CC_RESUME_K_TIMEOUT_BIN="$tb"
+  run --separate-stderr bash "$LAYOUT" --desktops --to unix:/tmp/fake --file "$ROWS" "$@"
+  [ "$status" -eq 0 ]
+  sort -u "$tb.log" | tr '\n' ' '
+}
+
+@test "k() is bounded at 120 s on the default path and 15 s under --restore" {
+  [ "$(bound_for)" = "120 " ]
+  rm -f "$BATS_TEST_TMPDIR/rec-timeout.log" "$KLOG"*; : > "$ROWS"
+  [ "$(bound_for --restore)" = "15 " ]
 }

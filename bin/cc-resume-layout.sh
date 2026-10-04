@@ -3,7 +3,7 @@
 # inside each, instead of piling every session into tabs of the operator's own window.
 #
 #   Usage: cc-resume-layout.sh [--per-window N] [--stagger SECS] [--use-all-screens] [--dry-run]
-#          cc-resume-layout.sh --desktops [--to unix:/path] [--per-window N<=4] [--stagger SECS] [--dry-run]
+#          cc-resume-layout.sh --desktops [--to unix:/path] [--per-window N<=4] [--stagger SECS] [--restore] [--dry-run]
 #          ... reading a TSV on stdin (or --file PATH):
 #              account <TAB> session-id <TAB> worktree <TAB> branch [<TAB> label]
 #          i.e. lr-select.py's own output, with an optional 5th label column.
@@ -117,6 +117,7 @@ TO_ARG=""
 STAGGER="${CC_RESUME_STAGGER:-12}"
 USE_ALL_SCREENS=0
 DRY_RUN=0
+RESTORE=0             # --restore: the unattended restore path (W3); today it only tightens the k() bound
 FILE=""
 
 die() { printf 'cc-resume-layout: %s\n' "$*" >&2; exit 2; }
@@ -131,6 +132,7 @@ while [ $# -gt 0 ]; do
     --desktops)        DESKTOPS=1; shift ;;
     --to)              TO_ARG="${2:?--to needs unix:/path}"; shift 2 ;;
     --dry-run)         DRY_RUN=1; shift ;;
+    --restore)         RESTORE=1; shift ;;
     -h|--help)         sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; exit 0 ;;
     *)                 die "unknown argument: $1" ;;
   esac
@@ -172,7 +174,25 @@ if [ "$DESKTOPS" = 1 ]; then
     done
     [ -n "$SOCK" ] || { note "cc-resume-layout: no live kitty control socket — nothing to lay out into"; exit 3; }
   fi
-  k() { if [ -n "$SOCK" ]; then "$KITTY_BIN" @ --to "$SOCK" "$@"; else "$KITTY_BIN" @ "$@"; fi; }
+  # BOUNDED (2026-10-02, W3 P2): `kitty @` against a wedged socket never returns, and this runs
+  # unattended from launchd, so one stuck call hung the whole restore. Every call now ends within
+  # CC_RESUME_K_TIMEOUT seconds with rc 124: 120 s by default, 15 s only under --restore. The default
+  # path is today's live reboot path, and a loaded kitty can take tens of seconds to answer a launch
+  # (W3 amendment §C 3), so the tight bound waits for the restore path that is built around it.
+  # Stock macOS has no timeout(1); without one, a perl alarm kills the call's whole process group
+  # (a pipe held by a grandchild would hang `$(k …)`). CC_RESUME_K_TIMEOUT_BIN set to "" forces the
+  # perl path (tests pin both).
+  if [ "$RESTORE" = 1 ]; then K_TO="${CC_RESUME_K_TIMEOUT:-15}"; else K_TO="${CC_RESUME_K_TIMEOUT:-120}"; fi
+  K_TOBIN="${CC_RESUME_K_TIMEOUT_BIN-$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null \
+    || { [ -x /opt/homebrew/bin/timeout ] && printf '%s' /opt/homebrew/bin/timeout; })}"
+  kb() {
+    if [ -n "$K_TOBIN" ]; then "$K_TOBIN" "$K_TO" "$@"; return $?; fi
+    /usr/bin/perl -e 'my $t = shift; my $pid = fork; exit 125 unless defined $pid;
+      if ($pid == 0) { setpgrp(0, 0); exec { $ARGV[0] } @ARGV; exit 127 }
+      $SIG{ALRM} = sub { kill "TERM", -$pid; select(undef, undef, undef, 0.5); kill "KILL", -$pid; exit 124 };
+      alarm $t; waitpid($pid, 0); exit(($? & 127) ? 128 + ($? & 127) : $? >> 8)' "$K_TO" "$@"
+  }
+  k() { if [ -n "$SOCK" ]; then kb "$KITTY_BIN" @ --to "$SOCK" "$@"; else kb "$KITTY_BIN" @ "$@"; fi; }
   shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
   fs_osa() { # <marker> → "true" | "false" | "nomatch" | "" — the AXFullScreen READ-BACK
     "$OSASCRIPT" <<EOF 2>/dev/null

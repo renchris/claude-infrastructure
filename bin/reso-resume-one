@@ -433,6 +433,81 @@ else
 fi
 [[ -n "${CC_RESUME_DRYRUN:-}" ]] && exit 0
 
+# ── ONE LAUNCH PER SESSION (W3 P2, 2026-10-04; amendment §C 6) ──────────────────────────────────
+# Nothing stopped a second copy. A layout run late, a re-run of the runbook, or cc-resume-debt racing
+# the reboot path could each start `--resume <sid>` while a live claude already held that sid, and
+# two writers on one transcript is the one failure a resume must never cause. So the engine now asks
+# the same two questions scripts/boot-resume-launch.sh asks, through the SAME fence rather than a
+# third lock of its own (a new resume-locks/ directory keyed on bare pids would be invisible to the
+# reconciler, and pids are reused):
+#   1. lr_recon_may_act <sid> reso-resume-one always — the reconciler may own the sid; otherwise this
+#      process takes locks/<sid>.launch, whose holder is keyed on pid AND lstart, so a dead or reused
+#      pid reads stale and is reclaimed. A live parent that exported the lock is inherited.
+#   2. lr_holder_count <sid> — any live holder (registry pane or `--resume <sid>` leaf) means a
+#      second resume would be a second writer.
+# Either NO exits 5, the code boot-resume-launch uses for "not ours to launch". Placed after the dry
+# run (an inspection takes no lock) and before the first byte reaches the pane.
+#
+# THE LOCK IS HELD FOR THE SESSION'S LIFE and released when expect returns, before the exit and
+# `exec $SHELL` lines below: exec keeps this pid and lstart, so a lock not released first would be
+# held by the pane's shell forever. A trap releases it on any other way out. lr-fire-resume holds the
+# same lock the same way (it hands it to the claude pid and never releases it).
+#
+# A HELD LOCK IS WAITED ON, BRIEFLY. boot-resume-launch and cc-resume-debt take this lock, open the
+# window this script runs in, and release it on their own exit; a kitty window does not inherit their
+# environment, so the lock cannot be inherited and is still theirs for the second or so it takes them
+# to exit. Up to CC_RESUME_FENCE_WAIT_S (20) seconds, a held lock is retried; a sid whose lock is
+# held by a live session stays held and exits 5 at the end of the wait.
+#
+# FAIL-OPEN when the libraries are unreachable, loudly, by the rule this file already follows for the
+# capacity gate: a missing library must cost the check, never the recovery. Kill switch
+# CC_RESUME_FENCE=off.
+rr_fence_release() { command -v lr_recon_act_done >/dev/null 2>&1 && lr_recon_act_done; return 0; }
+if [ "${CC_RESUME_FENCE:-on}" != off ]; then
+  _rro_s="$0"
+  while [ -L "$_rro_s" ]; do
+    _rro_t="$(readlink "$_rro_s" 2>/dev/null)" || break
+    case "$_rro_t" in /*) _rro_s="$_rro_t" ;; *) _rro_s="$(dirname "$_rro_s")/$_rro_t" ;; esac
+  done
+  _RRO_LR=""
+  for _rro_d in "$(cd "$(dirname "$_rro_s")" 2>/dev/null && pwd)/../scripts/limit-recover" \
+                "${HOME:-}/.claude/scripts/limit-recover"; do
+    [ -f "$_rro_d/lr-recon-fence.sh" ] && [ -f "$_rro_d/lr-lib.sh" ] && { _RRO_LR="$_rro_d"; break; }
+  done
+  # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+  if [ -n "$_RRO_LR" ] && . "$_RRO_LR/lr-recon-fence.sh" 2>/dev/null && . "$_RRO_LR/lr-lib.sh" 2>/dev/null \
+     && command -v lr_recon_may_act >/dev/null 2>&1 && command -v lr_holder_count >/dev/null 2>&1; then
+    trap 'rr_fence_release' EXIT
+    trap 'rr_fence_release; exit 129' HUP
+    trap 'rr_fence_release; exit 130' INT
+    trap 'rr_fence_release; exit 143' TERM
+    _rro_wait="${CC_RESUME_FENCE_WAIT_S:-20}"
+    case "$_rro_wait" in ''|*[!0-9]*) _rro_wait=20 ;; esac
+    _rro_fv="$(mktemp "${TMPDIR:-/tmp}/rro-fence.XXXXXX" 2>/dev/null)" || _rro_fv=/dev/null
+    _rro_waited=0
+    while ! lr_recon_may_act "$sid" reso-resume-one always 2>"$_rro_fv"; do
+      if grep -q 'lock=held' "$_rro_fv" 2>/dev/null && [ "$_rro_waited" -lt "$_rro_wait" ]; then
+        sleep 1; _rro_waited=$((_rro_waited + 1)); continue
+      fi
+      cat "$_rro_fv" >&2 2>/dev/null
+      [ "$_rro_fv" = /dev/null ] || rm -f "$_rro_fv"
+      printf '%s\n' "reso-resume-one: NOT LAUNCHING $sid — the reconciler owns it or its launch lock is held$([ "$_rro_waited" -gt 0 ] && printf " (waited %ss)" "$_rro_waited")" >&2
+      exit 5
+    done
+    cat "$_rro_fv" >&2 2>/dev/null
+    [ "$_rro_fv" = /dev/null ] || rm -f "$_rro_fv"
+    _rro_h="$(lr_holder_count "$sid" 2>/dev/null)"
+    case "$_rro_h" in
+      0) ;;
+      ''|*[!0-9]*) printf '%s\n' "reso-resume-one: holders of $sid unknown — launching (fail-open)" >&2 ;;
+      *) printf '%s\n' "reso-resume-one: NOT LAUNCHING $sid — $_rro_h live holder(s) already; a second resume would be a second writer" >&2
+         exit 5 ;;
+    esac
+  else
+    printf '%s\n' "reso-resume-one: recon fence / lr-lib.sh unreachable — launching UNFENCED (no second-writer check)" >&2
+  fi
+fi
+
 # reset mouse reporting so leftover escape sequences from a crashed session don't leak as input
 printf '\033[?1000l\033[?1002l\033[?1003l\033[?1006l\033[?1015l'
 
@@ -505,6 +580,21 @@ export CC_RR_CFG="$cfg" CC_RR_BIN="$bin" CC_RR_MODEL="$model" CC_RR_EFFORT="$eff
 export CC_RR_NO_INTERACT="${CC_RESUME_NO_INTERACT:-}"
 export CC_RR_THRESHOLD="$RESUME_THRESHOLD"
 export CC_RR_MCP_ARGS
+# ── THE SPAWN GOES THROUGH bin/cc-close-attrib (W3 P2, amendment §C 8) ────────────────────────────
+# Every other launch path interposes the close-attribution wrapper, so a session resumed here could
+# die with no close-record and the crash watchdog had nothing to join (the same gap lr-fire-resume.sh
+# closed on 2026-09-08). FAIL-OPEN, exactly as that file does: an absent wrapper costs the RECORD,
+# never the RESUME, so an empty CC_RR_WRAP leaves the spawn line unchanged. The wrapper runs the
+# binary as its child and exits with the binary's own status, so the close-on-exit rule below still
+# reads claude's status.
+# CLAUDE_CODE_CERT_STORE=bundled is passed explicitly as well: Claude Code reads the system keychain
+# trust store synchronously at start, and a stalled secd freezes the launch at ~100 MB / 0% CPU with
+# nothing on screen (docs/research/concurrency-scale-2026-10-04/j-startup-hang.md). The wrapper
+# exports the same default, but the unwrapped path must not depend on it. A caller value is kept,
+# because a Mac behind a TLS-inspecting root needs `bundled,system`.
+CC_RR_WRAP="$HOME/.claude/bin/cc-close-attrib"
+[ -x "$CC_RR_WRAP" ] || CC_RR_WRAP=""
+export CC_RR_WRAP CC_RR_CERT_STORE="${CLAUDE_CODE_CERT_STORE:-bundled}"
 # ── THE PANE MUST OUTLIVE THE SESSION IN IT (2026-08-26) ─────────────────────────────────────────
 # This used to be `exec expect`, which made expect(1) the pane's TERMINAL process: nothing under it,
 # nothing after it. Every way a resumed CC can end — a crash, a usage limit, and above all the
@@ -550,14 +640,17 @@ expect -c '
   # paths cannot drift apart the way two spawn lines would.
   # NO APOSTROPHES ANYWHERE BELOW THIS LINE: the whole program is a single-quoted bash string, so
   # one apostrophe in a Tcl comment closes it and the rest of the file stops being expect at all.
-  set envpfx [list DISABLE_AUTOUPDATER=1 CLAUDE_CONFIG_DIR=$cfg]
+  set envpfx [list DISABLE_AUTOUPDATER=1 CLAUDE_CONFIG_DIR=$cfg CLAUDE_CODE_CERT_STORE=$env(CC_RR_CERT_STORE)]
   if {$thr ne ""} { lappend envpfx CLAUDE_CODE_RESUME_THRESHOLD_MINUTES=$thr }
   # A LIST again, and for the second reason this file already gives: an absent decision must pass
   # NO argument, not an empty one, and appending the value as a single element keeps a path with a
   # space in it one argument rather than two.
   set mcplist [list]
   if {$mcpdec ne ""} { lappend mcplist $mcpdec }
-  spawn -noecho env {*}$envpfx $bin --permission-mode auto --model $model --effort $effort {*}$mcplist --resume $sid
+  # The wrapper is a LIST too: empty when absent, so the fail-open spawn passes no extra argument.
+  set wrap [list]
+  if {$env(CC_RR_WRAP) ne ""} { lappend wrap $env(CC_RR_WRAP) }
+  spawn -noecho env {*}$envpfx {*}$wrap $bin --permission-mode auto --model $model --effort $effort {*}$mcplist --resume $sid
   # THE RELAY IS BYTE-TRANSPARENT (2026-09-28), as in scripts/limit-recover/lr-fire-resume.sh, which
   # carries the measurement. Tcl 8.5 cannot hold a 4-byte UTF-8 character, so a utf-8 channel turned
   # every emoji the session painted into Latin-1 debris for the life of the pane. Both channels carry
@@ -703,6 +796,10 @@ expect -c '
   exit [lindex $rr_w 3]
 '
 rr_rc=$?
+# The session has ended, so the launch lock goes now: before every exit below and, above all, before
+# `exec $SHELL`, which would keep this pid and lstart and so hold the lock for the pane's whole life.
+rr_fence_release
+trap - EXIT HUP INT TERM
 
 # ── FALL THROUGH TO A SHELL, so the pane outlives the session (see the block above the expect) ────
 # Two callers must NOT get a shell, and both are identified by an AFFIRMATIVE fact rather than by

@@ -768,3 +768,88 @@ rr_hold_recycle() { # a recycle lock for window 42 held by a LIVE pid (this test
   grep -q 'exit \[lindex \$rr_w 3\]' "$RRO"
   grep -q 'if {\[catch {wait} rr_w\]} { exit 1 }' "$RRO"
 }
+
+# ── ONE LAUNCH PER SESSION (W3 P2, 2026-10-04; amendment §C 6 and §C 8) ─────────────────────────
+# The engine takes the reconciler's own fence (locks/<sid>.launch under $HOME/.reso/limit-recover,
+# the tmp HOME here) and refuses with exit 5 when the sid already has a live holder or its launch lock
+# is held by a live process. "Spawns nothing" is read off the stub, which writes its argv file only
+# when it runs. The fence and lr-lib resolve from this checkout (bin/../scripts/limit-recover).
+fence_dir() { printf '%s/.reso/limit-recover/locks/%s.launch' "$HOME" "$1"; }
+fence_hold() { # <sid> <pid> — a launch lock held by <pid>, stamped as lr_recon_lock_take stamps it
+  local d; d="$(fence_dir "$1")"; mkdir -p "$d"
+  printf '{"record_id":"legacy:other","attempt":0,"role":"other","pid":%s,"lstart":"%s","at":1.0}\n' "$2" \
+    "$(TZ=UTC LC_ALL=C ps -o lstart= -p "$2" | tr -s ' ' | sed 's/^ *//; s/ *$//')" > "$d/holder"
+}
+
+@test "FENCE: a sid that already has a live holder exits 5 and spawns nothing" {
+  sleep 300 & live=$!
+  mkdir -p "$HOME/.claude/cc-registry"
+  printf '{"session_id":"SID-HELD","pid":%s,"paneUUID":"p1","account":"next","cwd":"%s"}\n' "$live" "$WT" \
+    > "$HOME/.claude/cc-registry/p1.json"
+  run env CC_RR_STUB_NO_MENU=1 timeout 60 "$RRO" next "$WT" SID-HELD
+  kill "$live" 2>/dev/null || true
+  [ "$status" -eq 5 ] || { echo "status $status: $output"; false; }
+  [[ "$output" == *"1 live holder(s) already"* ]]
+  [ -z "$(spawn_argv)" ]
+  [ ! -e "$(fence_dir SID-HELD)" ]   # the lock it took for the check is given back
+}
+
+@test "FENCE: a launch lock held by a live process exits 5 after the bounded wait and spawns nothing" {
+  sleep 300 & live=$!
+  fence_hold SID-LOCKED "$live"
+  run env CC_RR_STUB_NO_MENU=1 CC_RESUME_FENCE_WAIT_S=1 timeout 60 "$RRO" next "$WT" SID-LOCKED
+  kill "$live" 2>/dev/null || true
+  [ "$status" -eq 5 ] || { echo "status $status: $output"; false; }
+  [[ "$output" == *"lock=held"* ]]
+  [ -z "$(spawn_argv)" ]
+  grep -q "\"pid\":$live," "$(fence_dir SID-LOCKED)/holder"   # someone else's lock is left alone
+}
+
+@test "FENCE: a stale lock (dead holder) is reclaimed, the session launches, and the lock is released after" {
+  sleep 0 & dead=$!; wait "$dead"
+  d="$(fence_dir SID-STALE)"; mkdir -p "$d"
+  printf '{"record_id":"x","attempt":0,"role":"x","pid":%s,"lstart":"Mon Jan 1 00:00:00 2001","at":1.0}\n' "$dead" > "$d/holder"
+  run env CC_RR_STUB_NO_MENU=1 timeout 60 "$RRO" next "$WT" SID-STALE
+  [ "$status" -eq 0 ] || { echo "status $status: $output"; false; }
+  [[ "$(spawn_argv)" == *"--resume SID-STALE"* ]]
+  [[ "$output" == *"lock=taken"* ]]
+  [ ! -e "$d" ]
+}
+
+@test "FENCE: a launcher's lock released within the wait is not a refusal (the kitty-window handover)" {
+  # boot-resume-launch holds the lock while it opens the window this engine runs in, then exits.
+  sleep 2 & brief=$!
+  fence_hold SID-HANDOVER "$brief"
+  run env CC_RR_STUB_NO_MENU=1 CC_RESUME_FENCE_WAIT_S=15 timeout 60 "$RRO" next "$WT" SID-HANDOVER
+  [ "$status" -eq 0 ] || { echo "status $status: $output"; false; }
+  [[ "$(spawn_argv)" == *"--resume SID-HANDOVER"* ]]
+}
+
+@test "SPAWN: through cc-close-attrib when it is installed, with CLAUDE_CODE_CERT_STORE=bundled" {
+  mkdir -p "$HOME/.claude/bin"
+  cat > "$HOME/.claude/bin/cc-close-attrib" <<'W'
+#!/bin/bash
+printf '%s\n' "$*" > "$CC_RR_STUB_ARGV.wrap"
+printf '%s\n' "${CLAUDE_CODE_CERT_STORE-<unset>}" > "$CC_RR_STUB_ARGV.cert"
+exec "$@"
+W
+  chmod +x "$HOME/.claude/bin/cc-close-attrib"
+  unset CLAUDE_CODE_CERT_STORE
+  run env CC_RR_STUB_NO_MENU=1 timeout 60 "$RRO" next "$WT" SID-WRAP
+  [ "$status" -eq 0 ] || { echo "status $status: $output"; false; }
+  [[ "$(cat "$CC_RR_STUB_ARGV.wrap")" == "$CC_RESUME_CLAUDE_BIN "*"--resume SID-WRAP"* ]]
+  [ "$(cat "$CC_RR_STUB_ARGV.cert")" = bundled ]
+  [[ "$(spawn_argv)" == *"--resume SID-WRAP"* ]]
+}
+
+@test "SPAWN: no wrapper installed fails open — the session still launches, cert store still bundled" {
+  unset CLAUDE_CODE_CERT_STORE
+  printf '#!/bin/bash\nprintf "%%s\\n" "${CLAUDE_CODE_CERT_STORE-<unset>}" > "$CC_RR_STUB_ARGV.cert"\nexec "%s.real" "$@"\n' \
+    "$CC_RESUME_CLAUDE_BIN" > "$CC_RESUME_CLAUDE_BIN.shim"
+  mv "$CC_RESUME_CLAUDE_BIN" "$CC_RESUME_CLAUDE_BIN.real"; mv "$CC_RESUME_CLAUDE_BIN.shim" "$CC_RESUME_CLAUDE_BIN"
+  chmod +x "$CC_RESUME_CLAUDE_BIN"
+  run env CC_RR_STUB_NO_MENU=1 timeout 60 "$RRO" next "$WT" SID-NOWRAP
+  [ "$status" -eq 0 ] || { echo "status $status: $output"; false; }
+  [[ "$(spawn_argv)" == *"--resume SID-NOWRAP"* ]]
+  [ "$(cat "$CC_RR_STUB_ARGV.cert")" = bundled ]
+}

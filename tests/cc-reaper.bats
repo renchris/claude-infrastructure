@@ -1955,6 +1955,28 @@ EOF
   [ "$got" = "90602 " ]
 }
 
+# ── THE SESSION RESTORE (2026-10-02, W3 P2). launchd runs boot-resume.sh (and, later, bin/cc-restore)
+# to relaunch every pane after a reboot; it can pass the 600 s orphan-bash floor mid-restore. Pair
+# form: both restore spellings survive at age 2700 s, the unrelated orphan at the same age dies.
+@test "garbage: the boot-resume / cc-restore session restore is never collected, an unrelated orphan is" {
+  mk_garbage_fixtures
+  cat > "$GA" <<'EOF'
+90611 1 45:00 bash
+90612 1 45:00 bash
+90613 1 45:00 bash
+EOF
+  cat > "$GB" <<'EOF'
+90611 bash /Users/x/.claude/scripts/boot-resume.sh --launchd
+90612 /bin/bash /Users/x/.claude/bin/cc-restore --event e1
+90613 /bin/bash /Users/x/.claude/scripts/some-other.sh
+EOF
+  run "$R" garbage --reap
+  [ "$status" -eq 0 ]
+  got="$(awk '$1=="TERM"{print $2}' "$KLOG" | sort -n | tr '\n' ' ')"
+  # RED before the fix: 90611 and 90612 appear in this list too.
+  [ "$got" = "90613 " ]
+}
+
 # ── THE PID THAT CHANGED HANDS (2026-08-16). The kill-time re-verification checked `ucomm` only, and
 # orphan-bash / stuck-wrapper / dead-lead-watchdog all carry the ERE `^bash$` — so for the three
 # classes that dominate the candidate set it asked "is this a bash?" of a pid it had already decided
