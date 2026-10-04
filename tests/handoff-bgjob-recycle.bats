@@ -80,17 +80,17 @@ bg_argv() { tr '\0' '\n' < "$STUB/bg.argv"; }
   # flags: the job's own, minus --reply-on-resume and its old --name; the name passed once
   run bg_argv
   [[ "$output" == *$'--settings\n{"autoMemoryDirectory":"/m"}'* ]] || { echo "$output"; false; }
-  [[ "$output" == *$'--effort\nhigh'* ]] && [[ "$output" == *$'--permission-mode\nauto'* ]] && [[ "$output" == *$'--model\nclaude-opus-5-5'* ]]
-  [[ "$output" != *"--reply-on-resume"* ]] && [[ "$output" != *"old name"* ]]
+  [[ "$output" == *$'--effort\nhigh'* ]] && [[ "$output" == *$'--permission-mode\nauto'* ]] && [[ "$output" == *$'--model\nclaude-opus-5-5'* ]] || false
+  [[ "$output" != *"--reply-on-resume"* ]] && [[ "$output" != *"old name"* ]] || false
   [[ "$output" == *$'--name\nbottle review'* ]] || { echo "$output"; false; }
   # the prompt is the brief, byte for byte (last argv element)
   [ "$(tr '\0' '\n' < "$STUB/bg.argv" | tail -n 2)" = "$(cat "$PF")" ]
   # same cwd and account, outside this job's identity, agent view re-enabled for the CLI call
   [ "$(cat "$STUB/bg.cwd")" = "$(cd "$WORK" && pwd -P)" ] || [ "$(cat "$STUB/bg.cwd")" = "$WORK" ]
   grep -qx "CLAUDE_CONFIG_DIR=$CFG" "$STUB/bg.env"
-  ! grep -q '^CLAUDE_JOB_DIR=' "$STUB/bg.env"
-  ! grep -q '^CLAUDE_CODE_DISABLE_AGENT_VIEW=' "$STUB/bg.env"
-  ! grep -q '^CLAUDE_CODE_SESSION_ID=' "$STUB/bg.env"
+  ! grep -q '^CLAUDE_JOB_DIR=' "$STUB/bg.env" || false
+  ! grep -q '^CLAUDE_CODE_DISABLE_AGENT_VIEW=' "$STUB/bg.env" || false
+  ! grep -q '^CLAUDE_CODE_SESSION_ID=' "$STUB/bg.env" || false
   # and THIS job is stopped by the detached stopper, proven by the roster's null worker pid
   await_stop
   grep -qx abcd1234 "$STUB/stopped"
@@ -103,7 +103,7 @@ bg_argv() { tr '\0' '\n' < "$STUB/bg.argv"; }
   injob --recycle --prompt-file "$PF" --model claude-sonnet-5-5 --effort medium
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   run bg_argv
-  [[ "$output" == *$'--model\nclaude-sonnet-5-5'* ]] && [[ "$output" == *$'--effort\nmedium'* ]]
+  [[ "$output" == *$'--model\nclaude-sonnet-5-5'* ]] && [[ "$output" == *$'--effort\nmedium'* ]] || false
   [[ "$output" != *"claude-opus-5-5"* ]] && [[ "$output" != *$'--effort\nhigh'* ]]
 }
 
@@ -133,9 +133,11 @@ bg_argv() { tr '\0' '\n' < "$STUB/bg.argv"; }
 
 @test "--worktree and a foreign --account are refused before anything starts" {
   injob --recycle --prompt-file "$PF" --worktree feat/x
-  [ "$status" -eq 2 ] && [[ "$output" == *"pass --cwd"* ]] || { echo "$output"; false; }
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  [[ "$output" == *"pass --cwd"* ]] || { echo "$output"; false; }
   injob --recycle --prompt-file "$PF" --account next2
-  [ "$status" -eq 2 ] && [[ "$output" == *"recycles on the account it lives on"* ]] || { echo "$output"; false; }
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  [[ "$output" == *"recycles on the account it lives on"* ]] || { echo "$output"; false; }
   [ ! -e "$STUB/calls.log" ]
 }
 
@@ -156,7 +158,8 @@ bg_argv() { tr '\0' '\n' < "$STUB/bg.argv"; }
 # ── self-close ──────────────────────────────────────────────────────────────────────────────────
 @test "self-close in a background job: bare is refused, --terminal stops the job" {
   injob self-close
-  [ "$status" -eq 2 ] && [[ "$output" == *"name what continues"* ]] || { echo "$output"; false; }
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  [[ "$output" == *"name what continues"* ]] || { echo "$output"; false; }
   [ ! -e "$STUB/calls.log" ]
   injob self-close --terminal
   [ "$status" -eq 0 ] || { echo "$output"; false; }
@@ -168,10 +171,12 @@ bg_argv() { tr '\0' '\n' < "$STUB/bg.argv"; }
 @test "self-close in a background job refuses a dirty tree and a successor that is not a live job" {
   : > "$WORK/untracked.txt"
   injob self-close --terminal
-  [ "$status" -eq 2 ] && [[ "$output" == *"the tree is dirty"* ]] || { echo "$output"; false; }
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  [[ "$output" == *"the tree is dirty"* ]] || { echo "$output"; false; }
   rm -f "$WORK/untracked.txt"
   injob self-close --successor deadbeef
-  [ "$status" -eq 2 ] && [[ "$output" == *"is not a live background job"* ]] || { echo "$output"; false; }
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  [[ "$output" == *"is not a live background job"* ]] || { echo "$output"; false; }
   /bin/sleep 0.3
   [ ! -e "$STUB/stopped" ]
 }
@@ -179,7 +184,7 @@ bg_argv() { tr '\0' '\n' < "$STUB/bg.argv"; }
 # ── the hooks name the step that works for the session's kind ───────────────────────────────────
 @test "hooks/lib/session-kind.sh: a job dir with state.json is a job; anything else is not" {
   run bash -c '. "$1/hooks/lib/session-kind.sh"; CLAUDE_JOB_DIR="$2" cc_bgjob_short' _ "$REPO" "$JOB"
-  [ "$status" -eq 0 ] && [ "$output" = abcd1234 ]
+  [ "$status" -eq 0 ] && [ "$output" = abcd1234 ] || false
   run bash -c '. "$1/hooks/lib/session-kind.sh"; CLAUDE_JOB_DIR="$2/nope" cc_bgjob_short' _ "$REPO" "$CFG/jobs"
   [ "$status" -eq 1 ]
   run bash -c '. "$1/hooks/lib/session-kind.sh"; unset CLAUDE_JOB_DIR; cc_bgjob_short' _ "$REPO"
@@ -190,8 +195,9 @@ bg_argv() { tr '\0' '\n' < "$STUB/bg.argv"; }
   run bash -c 'printf "%s" "{\"prompt\":\"please hand off now\"}" | CLAUDE_JOB_DIR="$2" bash "$1/hooks/handoff-intent-nudge.sh"' _ "$REPO" "$JOB"
   [ "$status" -eq 0 ]
   ctx="$(printf '%s' "$output" | jq -r .hookSpecificOutput.additionalContext)"
-  [[ "$ctx" == *"background job abcd1234"* ]] && [[ "$ctx" == *"handoff-fire.sh --recycle --prompt-file"* ]] || { echo "$ctx"; false; }
-  [[ "$ctx" != *"--successor <pane-uuid>"* ]]
+  [[ "$ctx" == *"background job abcd1234"* ]] || { echo "$ctx"; false; }
+  [[ "$ctx" == *"handoff-fire.sh --recycle --prompt-file"* ]] || { echo "$ctx"; false; }
+  [[ "$ctx" != *"--successor <pane-uuid>"* ]] || false
   run bash -c 'printf "%s" "{\"prompt\":\"please hand off now\"}" | env -u CLAUDE_JOB_DIR bash "$1/hooks/handoff-intent-nudge.sh"' _ "$REPO"
   [[ "$output" == *"--successor <pane-uuid>"* ]] || { echo "$output"; false; }
 }

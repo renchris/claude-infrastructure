@@ -824,7 +824,7 @@ mk_job() { local j="$BATS_TEST_TMPDIR/cfg/jobs/abcd1234"; mkdir -p "$j"; printf 
   [ "$status" -eq 0 ]; fired "$output"
   echo "$output" | grep -q "exchange is in flight" || { echo "$output"; false; }
   [ "$(echo "$output" | jq -r .reason | grep -c 'background job abcd1234')" -ge 1 ] || { echo "$output"; false; }
-  ! echo "$output" | grep -q "/handoff rails"
+  ! echo "$output" | grep -q "/handoff rails" || false
   ! echo "$output" | grep -q "run /handoff at its natural end"
 }
 
