@@ -94,7 +94,7 @@ Highly-canonical retrieval exception: route to `deep-research` (`roles.research_
 
 **Per-brief synthesis contract**: inline verbatim from `§ Cost Asymmetry` into every brief's Boundaries field. Banned content: narration, step-by-step reasoning chains, raw tool output, full file contents, brief restatement, filler, hedging.
 
-**Per-brief budget**: 150–400 tokens (≈80–250 words). Stop-line MUST be the brief's FINAL line (serial-position adherence per arxiv 2406.15981, 2-4× over middle).
+**Per-brief budget**: keep the brief's own content to ≈80–250 words; the verbatim synthesis contract and the rules the worker needs ride on top (the research agents run with `omitClaudeMd: true`), so a complete brief runs past 400 tokens by design. End with field 7's delivery path, then the stop-line as the brief's FINAL line (serial-position adherence per arxiv 2406.15981, 2-4× over middle).
 
 **Productive diversity** (mandatory at N ≥ 6): vary source subset / framing polarity / tool-access pattern across productive workers. Target ≤30% entangled pairs.
 

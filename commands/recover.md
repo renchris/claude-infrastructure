@@ -144,21 +144,12 @@ trigger is a non-event. That is the whole reason it needs a front door at all.
 cc-lr switch            # moves THIS pane's session; same uuid, full transcript
 ```
 
-**SELF-only in v1, and that is a design decision rather than a missing feature.** It is the exact
-mirror of `recover`: recover's subject *cannot act* — it is quota-blocked or dead — so a detached
-driver is the only form that works. Switch's subject **is** the actor, so the driver is unnecessary,
-and it is also unbuildable today: there is no idle/busy predicate anywhere in this subsystem
-(`pane_cc_state` returns `cc` for mid-turn, idle, modal and wedged alike), so a driver cannot
-establish that a *peer* is safe to move, while a session establishes it about itself trivially — it
-is the one taking the turn. The driver form is filed as its own decision, gated on an idle oracle
-existing. Do not reach for `--source-pane` or `--detach` here; they are not the verb's shape.
-
-**Superseded 2026-09-23 — the driver form now exists.** The idle oracle the paragraph above waits
-for landed in `scripts/limit-recover/lr-upgrade.sh` (2026-09-22), so `cc-lr switch --pane <P>
---target <acct>` (or `--from <acct> --all-idle`) moves ANOTHER idle session: it judges idleness with
-that oracle, and the poller types one `[operator-ruling cc-lr-switch …]` line asking the subject to
-run the SELF verb itself — so the reasoning above (the subject is the actor) still holds. Full
-mode: `commands/limit-recover.md` § Mode: switch.
+**`cc-lr switch [--target <acct>|auto]` moves THIS session** — the subject is the actor, so no
+detached driver is needed and `--source-pane` / `--detach` are not the verb's shape. To move ANOTHER
+idle session, `cc-lr switch --pane <P> --target <acct>` (or `--sid <S>`, or `--from <acct> --all-idle`)
+judges idleness with the oracle in `scripts/limit-recover/lr-upgrade.sh`, and the poller then types one
+`[operator-ruling cc-lr-switch …]` line asking the subject to run the self verb itself, so the subject
+is still the actor. Full mode: `commands/limit-recover.md` § Mode: switch.
 
 **Which verb, and the test is whether the CONTEXT is worth keeping:**
 
@@ -190,6 +181,5 @@ identity, and any refusal you do hit names something real.
 
 Deliberate, not neglect. `scripts/limit-recover/` and the `lr-*` names keep their spelling because
 the live layer is a farm of **per-file symlinks**: a rename is an ADD that does not exist until the
-converger runs, and 40+ memory and doc citations name the path. The same reasoning applies to THIS
-file — it is an ADD, so until it is live `/limit-recover` remains the working front door, and its
-own `description:` has been widened to catch the non-quota trigger phrases in the meantime.
+converger runs, and 40+ memory and doc citations name the path. `/recover` is the front door;
+`/limit-recover` remains the deep runbook its modes link to.

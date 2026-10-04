@@ -4,7 +4,7 @@ description: "Pre-deployment check: build, typecheck, tests, dependency audit, e
 Run comprehensive pre-deployment check:
 
 1. **Build Verification**
-   - Run production build (`bun run build` / `npm run build`)
+   - Run the production build through the package manager the lockfile names (pnpm / bun / npm)
    - Check for build warnings and errors
 
 2. **Type Safety**

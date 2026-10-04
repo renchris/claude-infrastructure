@@ -314,7 +314,8 @@ key five times into a live outage — 85 minutes, six attempts, nothing produced
    with no human to answer it; route the decision to a class-B packet + default instead (see
    [Unattended mode](#unattended-mode-cc_unattended1) below).**
    If ONLY `fable_pct` ≥ 100 (model-scoped): re-run fable-tagged slots on the house fallback
-   `claude-opus-4-8` and mark each `(tier-fallback)` in the report.
+   (`frontier_access.fallback` in `~/.claude/model-config.yaml`, read live) and mark each
+   `(tier-fallback)` in the report.
    **`monthly_spend` limit events have NO reset** (extra-usage credits cap, not plan quota —
    incident 2026-07-18: teammates 429'd on the cap while the lead kept working). Decision rule:
    read `credits_on`/`credits_used_usd` (dollars; raw `credits_used` is CENTS) +
@@ -521,7 +522,7 @@ conversational context; new turns land in the target account's store).
    **`--effort` is not optional in practice: a handoff continues ONE session, so the successor
    must be the same reasoning tier, not merely the same model.** Omitted, `--model fable` falls
    back to `--effort high` and the opus path to lr-fire-resume's account default — so a session
-   running Fable 5 at `max` transplants DOWN to `high` while its statusline still reads "Fable 5",
+   running Fable at `max` transplants DOWN to `high` while its statusline still shows the same model,
    which is why nobody catches it. Read your own tier off the statusline (or `/effort`) and pass it.
    This audits + salvages into a bundle, copies the transcript + session dir (workflow journals
    included) + task list into the target account under the SAME uuid, sha-verifies, writes the

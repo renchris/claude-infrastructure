@@ -23,27 +23,27 @@ git/gate/DoD reads itself, so the rung reports ground truth.
 
 (If the repo root differs, the launcher resolves the script under the repo — `scripts/wrap-ledger.sh`.)
 
-⚠️ **The `👤` rung and the `yours` step class are NOT computed on this pull path.** Both count
-operator-only steps filed by THIS session (`cc-backlog needs`), which requires the session id — and
-`CLAUDE_SESSION_ID` is **unset** in a shell (verified 2026-08-01). Only the Stop-hook path resolves
-it, from the hook's own stdin JSON. So `/wrap` reports `YOURS_SRC=none` and a rung of at most `✅`,
-where the Stop hook would correctly say `👤`. Deliberately NOT guessed from
-`<config-dir>/projects/<hash>/.last-session-id`: that file holds whichever pane wrote LAST, so in
-this repo's normal multi-session state it would attribute a SIBLING session's steps to you — a false
-`👤` is worse than a missing one, because the whole point of the rung is that the operator can trust
-it. Read the Stop-hook block as authoritative for what is yours; `/wrap` is the git/gate view.
+**The `👤` rung and the `yours` step class need this session's id.** The ledger resolves it from
+`$CLAUDE_CODE_SESSION_ID`, which a tool-call shell carries (`$CLAUDE_SESSION_ID` is unset there), so
+`/wrap` computes `👤` the same way the Stop hook does. If the id cannot be resolved it reports
+`YOURS_SRC=none` and the rung stays at most `✅` — it never guesses from
+`<config-dir>/projects/<hash>/.last-session-id`, which holds whichever pane wrote LAST and would
+attribute a SIBLING session's steps to you. A false `👤` is worse than a missing one, because the
+operator has to be able to trust the rung.
 
 The operator-steps block is the SAME renderer the `operator-readout.sh` Stop hook pushes at turn
 close (one code path — the push and pull surfaces cannot drift): one state line, then the collapsed
 step lines from disk truth — `▶ cc-do` for everything runnable (deploy-lag · pending activations),
 one `◆ <n> …` counted line per judgment class (open decisions · blocked backlog), each naming up to
-3 ids and carrying its exact listing command. Relay it VERBATIM at the top of your close — never
-paraphrase the commands into prose (the silver-platter rule).
+3 ids and carrying its exact listing command. Relay it VERBATIM below the rung line, the
+`Good to close:` line (when the close carries one) and the act line — never paraphrase the commands
+into prose (the silver-platter rule).
 
-**Hand over ONE command, not a list.** Whatever the block shows, the operator gets a single fenced
-thing to paste — `cc-do` runs the runnable set after one confirm (`cc-do --list` to look first,
-`cc-do <stem>` for exactly one). Per CLAUDE.md §Session Close, the close itself is capped at the
-governing line + ≤3 supporting facts + that one command block.
+**Hand over ONE command, not a list.** Whatever the block shows, the operator gets one `▶ Run this:`
+line with a single inline-code command under it — `cc-do` runs the runnable set after one confirm
+(`cc-do --list` to look first, `cc-do <stem>` for exactly one). Per CLAUDE.md §Session Close, the
+close is the rung line, the verdict line, at most one act line, the relayed block, and at most three
+supporting lines.
 
 ## The three axes, from one code path
 
@@ -77,10 +77,10 @@ The ledger emits the worst-open FACT rung (priority ⛔ > 📤 > 🔧 > 📦 > �
 | 🔧 | dirty tree ∨ gate stale on HEAD ∨ frozen-DoD remainder > 0 | **continue** — finish · run-gate · commit (explicit paths) |
 | 📦 | clean ∧ committed-but-unlanded (`ahead>0` ∨ `git cherry '+'`) | **`/ship`** — auto-fired by default in every repo per §Session Close's ship policy; held back to an OFFER only where the TARGET repo's own `CLAUDE.md` says landing spends money (a perishable fact this file deliberately does not restate — read that repo's `CLAUDE.md` + its status tool; the old reso hardcode here went stale in three days) |
 | 🚀 | landed on trunk, but the ENFORCING STORE does not carry it — `LIVE_ADDS` > 0 (the lag contains files the live layer does not have AT ALL: **no budget**, breaches at lag 1), or the live layer is past its converge budget (`LIVE_SRC=behind` ∧ `LIVE_LAG` > `WRAP_LIVE_BUDGET_COMMITS`, or the commit **the live layer is on** older than `WRAP_LIVE_BUDGET_MIN` — that arm read this session's own HEAD until 2026-08-26, which made it strictly weaker: an active session resets it at every commit), or `MIG_FAILED` > 0 | **converge** — `bash <repo>/scripts/deploy-live.sh`, then re-read the ledger. A land moved a git ref; it did not move the bytes the machine runs |
-| 👤 | landed ∧ operator-only step(s) THIS session filed are unrun | surface the `OPERATOR ▸` block — **not computed on this pull path**, see above |
+| 👤 | landed ∧ operator-only step(s) THIS session filed are unrun | surface the `OPERATOR ▸` block |
 | ✅ | clean ∧ not-stale ∧ landed ∧ remainder = 0 | complete — nothing to do |
 
-`🚀` **is** fully computed on this pull path, unlike `👤`: it reads the live checkout's git state plus
+`🚀` is computed on this pull path as well: it reads the live checkout's git state plus
 the migrations ledger, needing no session id. It is BUDGETED **for an EDIT** — lag *inside* the
 converge budget is a normal `✅` carrying a converging note, so the rung does not fire at every close
 after a land. **An ADD is not budgeted at all.** `~/.claude` is per-file symlinks into the live
@@ -130,18 +130,20 @@ this session` and `unknown` — because a row that vanished on the quiet cases w
 being judged?" with a silence indistinguishable from a broken reader. `--machine` emits
 `GOAL_SRC` / `GOAL_EVALS` / `GOAL_LAST` / `GOAL_LAST_T` / `GOAL_AGE_MIN` / `GOAL_LINE`.
 
-Unlike `👤`, this **is** computed on the pull path: with no `--transcript`, the ledger resolves one
+This is computed on the pull path as well: with no `--transcript`, the ledger resolves one
 from `$CLAUDE_CODE_SESSION_ID` (set in a tool-call shell, where `$CLAUDE_SESSION_ID` is not). That
 is not the `.last-session-id` guess rejected above — the harness names the calling session itself,
 and a miss can only fail to find a file, never attribute a sibling's goal to you. The Stop path
 never does that search: it uses the `$WRAP_TRANSCRIPT` it already exports for the memo key.
 
-Two rungs the ledger CANNOT derive from git — they are model-state you overlay when true, and
-they dominate the fact rung:
+Two rungs outrank the rest:
 
-- **⛔ Blocked** — you need a decision (destructive migration / auth / nav / timeout) or external
-  info only the operator has. Surface it: `⛔ Blocked — need your call: <decision>.`
-- **📤 Handoff** — out of context with work remaining: `📤 Out of context — /handoff.`
+- **⛔ Blocked** — you need a decision (destructive migration / auth / nav / timeout) or information
+  only the operator has. The ledger computes it from open class-C decision packets THIS session filed
+  (`cc-decide open --class C …`); a decision you hold but have not filed is invisible to it, so file
+  it and the rung follows. Shape: `⛔ Blocked — need your call: <decision>.`
+- **📤 Handoff** — out of context with work remaining. The ledger cannot see this one, so you overlay
+  it: `📤 Out of context — recycling / handing off.`
 
 **Never emit ✅ from memory.** If the ledger says 🔧, 📦 or 🚀, the work is not done — drive it (📦 ⇒
 `/ship`; 🚀 ⇒ run the converger, then re-read; ship/land of verified work is the desk's job, not a

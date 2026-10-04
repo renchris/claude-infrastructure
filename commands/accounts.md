@@ -85,9 +85,7 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
 3. **Interpret** — report to the user, answer-first:
    - **Routing**: the footer's `➤ desk → D` / `➤ general → X` / `➤ fable → Y` is the
      adversarially-verified router (use-it-or-lose-it × Fable-sub-cap coupling ×
-     5h-safety × concurrency-spread). Report its answer; never re-rank the accounts
-     yourself from the `score_*` fields. For wave spread across several sessions use
-     `claude-accounts --rank general|fable` (best-first list) and assign round-robin.
+     5h-safety × concurrency-spread). Report its answer (step 2's rules apply).
      The **desk** line reads in its own lane's terms — the two-key rule: among accounts whose
      projected 5h utilisation is under the floor and whose weekly headroom clears it
      (`safe set`), take the **earliest weekly reset**; `5h-safe only` / `no floor met` name the

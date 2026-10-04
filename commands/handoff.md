@@ -353,8 +353,9 @@ the oauth usage endpoint, shared-cached
 rank says NO account is routable (policy: exhausted/cutoff/window), the fire HALTS — never fire
 blind. Only when live limits are UNREADABLE (tool/endpoint down) does it degrade to the trailing-5h
 transcript-activity proxy. Static hint orders are retired — two of them contradicted each other
-within 48h. If a fired session rate-limits, relaunch the SAME worktree on another `claude-nextN`
-(no rework). Account = launcher suffix only; the worktree is account-agnostic.
+within 48h. If a fired session rate-limits, move it to another account with `cc-lr recover <pane|sid8>`
+(the `/recover` front door): same session, SAME worktree, no rework. Account = config dir only; the
+worktree is account-agnostic.
 
 🚨 **When the operator overrides a HALT, keep the router's objective — never pick by headroom.**
 An operator "fire now" over a no-routable refusal authorizes firing, not a new ranking. Choose
@@ -525,7 +526,7 @@ plan"`, `--launcher` for an explicit tier (e.g. `claude-fable-x`; note it skips 
 > the agent's judgment call, not the user's) never inherits a prior fire's `--tab`.
 
 ```bash
-# typical: fresh track, auto account, Opus@max, split pane in the current view (⌘D-style default).
+# typical: fresh track, auto account, Opus@high (the SSOT default — no --effort), split pane in the current view (⌘D-style default).
 # --follow = you're watching this /handoff → raise + land your view on it (drop it for a background fire).
 # --goal is the DEFAULT (§ item 1): end state + the CHECK that proves it + what must not change.
 ~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-<slug>.txt --worktree <slug> --follow \

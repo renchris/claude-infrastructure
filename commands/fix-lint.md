@@ -5,7 +5,7 @@ Run linting and type checking, fix all auto-fixable issues:
 
 1. Detect project type (Next.js/Python/both)
 2. Run appropriate linters:
-   - TypeScript: `bun run lint --fix` or `npm run lint -- --fix`
+   - TypeScript: the lint script with `--fix`, through the package manager the lockfile names: `pnpm lint --fix` (`pnpm-lock.yaml`), `bun run lint --fix` (`bun.lock`/`bun.lockb`), `npm run lint -- --fix` (`package-lock.json`)
    - Python: `ruff check --fix && ruff format`
 3. Run type checking:
    - TypeScript: `tsc --noEmit`

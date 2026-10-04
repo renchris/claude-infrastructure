@@ -38,4 +38,4 @@ Task context: $ARGUMENTS
 5. **Restore**: If patch saved in step 1,
    `git apply /tmp/stash.patch`. Final `git status`.
 
-DO NOT read files, explore code, or add narrative beyond the commit.
+Stay scoped to committing: decide what belongs from `git status` / `git diff`, read a file only for the project-rail check above, and add no narrative beyond the commit.
