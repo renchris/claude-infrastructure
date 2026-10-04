@@ -408,9 +408,16 @@ EOF
 # A LIBRARY THAT CANNOT BE REACHED IS LOUD, NEVER SILENT: a recovery must not be blocked because a
 # telemetry library is missing, and it must never proceed without saying that it is ungated.
 lr_capacity_probe_corrected() { # $1=caller $2=what → 0 would-admit / 9 would-refuse
-  local caller="${1:-lr-recover}" what="${2:-recovery}" raw ph corrected rc=0
+  local caller="${1:-lr-recover}" what="${2:-recovery}" raw ph self=0 corrected rc=0
   command -v cc_capacity_probe >/dev/null 2>&1 || {
     echo "${caller}: capacity probe unavailable (scripts/lib/capacity-admit.sh not sourced) — proceeding UNGATED" >&2; return 0; }
+  # THE SUBJECT DOES NOT COUNT AGAINST ITS OWN SWAP (2026-10-04). A probe run from inside a session's
+  # tool call (the SELF switch verb) is by construction running in a session that is MID-TURN, so the
+  # census counts the subject itself; after the swap that same session is the one active turn, so the
+  # move is net-zero on this term too. Measured: pane 35 refused at "7 mid-turn, ceiling 7" with
+  # itself among the 7. Daemon callers carry no CLAUDE_CODE_SESSION_ID and are unaffected.
+  # Under-refuse direction only. Kill switch LR_SELF_ACTIVE_CORRECTION=off.
+  [ -n "${CLAUDE_CODE_SESSION_ID:-}" ] && [ "${LR_SELF_ACTIVE_CORRECTION:-on}" != off ] && self=1
   # Left UNSET on any unreadable leg, so the probe then sees exactly what it saw before this existed.
   unset CC_SP_ACTIVE_OVERRIDE
   if [ "${LR_FLEET_PHANTOM_CORRECTION:-on}" != off ] && command -v cc_sp_active >/dev/null 2>&1; then
@@ -418,10 +425,10 @@ lr_capacity_probe_corrected() { # $1=caller $2=what → 0 would-admit / 9 would-
     ph="$(lr_phantom_actives 2>/dev/null || true)"
     case "${raw:-x}${ph:-x}" in
       *[!0-9]*) : ;;
-      *) if [ "$ph" -gt 0 ]; then
-           corrected=$(( raw - ph )); [ "$corrected" -lt 0 ] && corrected=0
+      *) if [ $(( ph + self )) -gt 0 ] && [ "$raw" -gt 0 ]; then
+           corrected=$(( raw - ph - self )); [ "$corrected" -lt 0 ] && corrected=0
            export CC_SP_ACTIVE_OVERRIDE="$corrected"
-           echo "${caller}: active census ${raw} includes ${ph} limit-corpse beat(s) — probing at ${corrected}" >&2
+           echo "${caller}: active census ${raw} includes ${ph} limit-corpse beat(s) and ${self} for the subject itself — probing at ${corrected}" >&2
          fi ;;
     esac
   fi

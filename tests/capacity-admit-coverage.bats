@@ -568,6 +568,26 @@ calls_gate() { grep -qE '^[^#]*[^_a-zA-Z]cc_capacity_admit[[:space:]]' "$1"; }
   [ "$status" -eq 9 ] || { echo "CC_ADMIT_MAX_SEGMENT_PCT=50 did not restore the spawn ceiling (rc $status)"; false; }
 }
 
+@test "30d a SELF swap does not count its own mid-turn session against the active ceiling (2026-10-04)" {
+  # Pane 35 refused at "7 mid-turn + 1 > 7" with itself among the 7. The census is stubbed AFTER the
+  # presence library loads (it is loaded once and cached), and honours the override the probe sets.
+  LRLIB="$REPO/scripts/limit-recover/lr-lib.sh"
+  probe() { env -u CLAUDE_CODE_SESSION_ID CC_ADMIT_IDL="$BATS_TEST_TMPDIR/30d.jsonl" \
+      CC_ADMIT_STATE_DIR="$BATS_TEST_TMPDIR/30d-state" CC_ADMIT_RESERVE_TERM=off CC_ADMIT_SEGMENT_TERM=off \
+      CC_ADMIT_HEADROOM_OVERRIDE=64 CC_ADMIT_ACTIVE_CEILING=7 CC_BEAT_DIR="$BATS_TEST_TMPDIR/30d-beats" "$@" \
+      bash -c '. "$1"; . "$2"; _cc_admit_load_presence || true
+        cc_sp_active() { printf "%s" "${CC_SP_ACTIVE_OVERRIDE:-7}"; }
+        cc_capacity_tokens_inflight() { printf 0; }
+        lr_phantom_actives() { printf 0; }
+        lr_capacity_probe_corrected lr-handoff 30d' _ "$LIB" "$LRLIB"; }
+  run probe CLAUDE_CODE_SESSION_ID=30d-subject
+  [ "$status" -eq 0 ] || { echo "a SELF swap at 7 mid-turn (itself included) was refused: $output"; false; }
+  run probe
+  [ "$status" -eq 9 ] || { echo "a DAEMON swap at 7 mid-turn was admitted (rc $status): $output"; false; }
+  run probe CLAUDE_CODE_SESSION_ID=30d-subject LR_SELF_ACTIVE_CORRECTION=off
+  [ "$status" -eq 9 ] || { echo "the kill switch did not restore the old count (rc $status)"; false; }
+}
+
 @test "31 EQUIVALENCE GUARD, MUTANT-SCORED — STAGE PARITY: the TTL's literals are handoff-fire's own" {
   # capacity-admit.sh sizes the admission token's TTL from the stages a recycle crosses, and reads
   # them as `${CC_RECYCLE_DRAFT_WAIT:-180}`-style overrides. MEASURED 2026-09-20: none of those
