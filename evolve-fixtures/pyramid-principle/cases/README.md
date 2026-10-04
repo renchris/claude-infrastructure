@@ -6,10 +6,15 @@ Fixture set for the `/evolve-skill pyramid-principle` spike. Each `*.md` here is
 
 ## How the spike uses these
 `/evolve-skill pyramid-principle` will:
-1. Run the current SKILL.md body against each `## input` via `claude-latest -p --bare`.
-2. Score each output against its `## expected_behavior` (judge returns `{score, feedback}` via `--json-schema`).
-3. Generate <=2 reflective variants of the skill body, seeded with the lowest-scoring cases.
-4. Keep a variant ONLY if aggregate score STRICTLY beats baseline across >=2 reruns.
+1. Run the current SKILL.md body against each `## input` with the isolated headless recipe in
+   `commands/evolve-skill.md` (not `claude-latest -p --bare`: that binary refuses Opus 5.5 and
+   `--bare` needs an API key).
+2. Score each output in a separate judge call against its `## expected_behavior` (judge returns
+   `{score, feedback}` via `--json-schema`).
+3. Generate one reflective variant of the skill body per round, seeded with the lowest-scoring cases.
+4. Keep a variant ONLY if its mean score beats the current best by more than the baseline's
+   rep-to-rep noise floor. With these 4 cases there is no held-out set, so every result is
+   directional.
 5. Emit the winning diff for human apply — it NEVER auto-writes the skill.
 
 ## The quality axes these fixtures reward
@@ -31,7 +36,7 @@ Fixture set for the `/evolve-skill pyramid-principle` spike. Each `*.md` here is
 | 04 | thin-data decision | honesty: position + uncertainty, no false confidence |
 
 ## Run notes
-SPIKE — one skill, 2-3 generations, hard `--max-budget-usd` cap. Cost ~$2-10/run. This is a STARTER
+SPIKE — one skill, at most 4 rounds, a hard `--max-budget-usd` cap on every call; runs on plan quota (~$2-10 list a run). This is a STARTER
 set: add cases over time and keep each rubric specific enough to score objectively. A run where NO
 variant beats baseline is a valid, common, and useful outcome (it means the skill is already good on
 these axes — do not force a mutation).
