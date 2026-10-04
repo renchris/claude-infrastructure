@@ -245,8 +245,70 @@ _dod_dedup_stream() {  # $1=cwd  $2=file  $3=own sid
     dod_filter_for "$1" "$2"
   fi
 }
+# ── injection budget: the newest captures that fit, newest FIRST ──
+# Past Claude Code's 10,000-char cap a hook's additionalContext is swapped for a 2,000-char preview
+# of its HEAD. Rendered oldest-first, that head held the frame and then the OLDEST captures, so the
+# newest ones never reached the model: 26 of 26 lineage injections 2026-10-02..04 were over the cap,
+# up to 58 KB (docs/research/claude-api-audit-2026-10-04/shard-hooks-a.md, hooks-a-11). The store
+# keeps every capture; only the injection is cut, and its header says how many it shows.
+# Order is by the '## <ISO ts>' header, not stream position: dod_read_content puts the repo-key store
+# BEFORE this toplevel's legacy file, so reversing the stream would rank the legacy (older) captures
+# newest. Lines outside any block (a legacy checklist or pre-provenance scope) form one unit that
+# ranks oldest; file headers ('# …') are dropped. ALWAYS kept, whatever the budget: every capture
+# newer than the newest one holding a 'Scope (frozen):' line (its 'Scope (grown):' growth extends
+# the contract) and, at minimum, the newest capture. Older ones are added newest-first while they
+# fit, stopping at the first that does not. Lengths are BYTES (LC_ALL=C), never fewer than chars.
+_dod_newest_within() {  # $1=char budget for the history body; stdin → units, newest first, blank-separated
+  DOD_NW_MAX="${1:-0}" LC_ALL=C awk '
+    BEGIN { max = ENVIRON["DOD_NW_MAX"] + 0; n = 0; cur = 0; leg = ""; legfz = 0 }
+    index($0, "## ") == 1 {
+      n++; cur = n; key[n] = ($2 ~ /^[0-9]/) ? $2 : ""; txt[n] = $0; fz[n] = 0; next
+    }
+    index($0, "# ") == 1 { cur = 0; next }
+    cur == 0 {
+      if (NF) { leg = (leg == "") ? $0 : leg "\n" $0; if (index($0, "Scope (frozen):")) legfz = 1 }
+      next
+    }
+    { txt[cur] = txt[cur] "\n" $0; if (index($0, "Scope (frozen):")) fz[cur] = 1 }
+    END {
+      if (leg != "") { n++; key[n] = ""; txt[n] = leg; fz[n] = legfz }
+      if (n == 0) exit
+      # stable insertion sort by timestamp; the legacy unit (empty key) ranks oldest
+      for (i = 1; i <= n; i++) { sub(/(\n[ \t]*)+$/, "", txt[i]); ord[i] = i }
+      for (i = 2; i <= n; i++) {
+        v = ord[i]; j = i - 1
+        while (j >= 1 && (key[ord[j]] "") > (key[v] "")) { ord[j + 1] = ord[j]; j-- }
+        ord[j + 1] = v
+      }
+      fl = n
+      for (i = n; i >= 1; i--) if (fz[ord[i]]) { fl = i + 1; break }
+      if (fl > n) fl = n
+      used = 0
+      for (i = n; i >= fl; i--) used += length(txt[ord[i]]) + 2
+      lo = fl
+      for (i = fl - 1; i >= 1; i--) {
+        if (used + length(txt[ord[i]]) + 2 > max) break
+        used += length(txt[ord[i]]) + 2; lo = i
+      }
+      for (i = n; i >= lo; i--) { printf "%s", txt[ord[i]]; if (i > lo) printf "\n\n" }
+      printf "\n"
+    }
+  '
+  return 0
+}
+# The frame is split around its shown-count so the history budget is what CC_DOD_INJECT_MAX_CHARS
+# (default 6000, well under the 10,000 cap) leaves once the frame itself is paid for.
+_dod_frame_budgeted() {  # $1=frame up to the shown count  $2=frame after it  $3=total captures; stdin → history
+  local max bud shown nshow
+  max="${CC_DOD_INJECT_MAX_CHARS:-6000}"; case "$max" in ''|*[!0-9]*) max=6000 ;; esac
+  bud=$(( max - ${#1} - ${#2} - ${#3} )); [ "$bud" -gt 0 ] || bud=0
+  shown="$(_dod_newest_within "$bud")"
+  nshow="$(printf '%s\n' "$shown" | grep -c '^## ' 2>/dev/null || true)"
+  case "$nshow" in ''|*[!0-9]*) nshow=0 ;; esac
+  printf '%s%s%s%s' "$1" "$nshow" "$2" "$shown"
+}
 _dod_inject_lineage_only() {  # $1=cwd  $2=own sid  $3=content (already toplevel-filtered)
-  local pred sids kept cur f files nall ncap nun unote framed _lead
+  local pred sids kept cur f files nall ncap nun unote framed _lead _pre _post
   pred="${_dod_nl}$(_dod_lineage_pred "$1")${_dod_nl}"
   sids="${_dod_nl}$(_dod_lineage_sids "$2")${_dod_nl}"
   kept="$(printf '%s\n' "$3" | _dod_lineage_blocks "$sids" "$pred")"
@@ -280,13 +342,15 @@ LOCUREOF
   else
     _lead="THE CURRENT CONTRACT is not recorded — this session's lineage has no 'Scope (frozen):' line yet. Treat the history below as context only, and freeze a scope before claiming completeness."
   fi
-  framed="Durable frozen DoD for this session — re-injected across recycle/compaction as the completeness baseline (a19 HOP A).
+  _pre="Durable frozen DoD for this session — re-injected across recycle and compaction as the completeness baseline.
 
 $_lead
 
-Below: ${ncap} capture(s) written by this session, a session that held this pane before it, or a recorded predecessor worktree, newest last. The other $(( nall - ncap )) capture(s) this worktree would see, from its other sessions or with no provenance, are left out (CC_DOD_LINEAGE_ONLY=1).${unote} Store: ${files}
+Below: the newest "
+  _post=" of ${ncap} capture(s) written by this session, a session that held this pane before it, or a recorded predecessor worktree, newest first; the older ones are in the store. The other $(( nall - ncap )) capture(s) this worktree would see, from its other sessions or with no provenance, are left out (CC_DOD_LINEAGE_ONLY=1).${unote} Store: ${files}
 
-$kept"
+"
+  framed="$(printf '%s\n' "$kept" | _dod_frame_budgeted "$_pre" "$_post" "$ncap")"
   jq -nc --arg c "$framed" '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$c}}' 2>/dev/null || true
   return 0
 }
@@ -363,8 +427,9 @@ case "$event" in
     # finished waves' contracts as its own, every SessionStart, and could not tell them apart.
     # It also contradicted THIS SCRIPT: `get` and last_recorded_scope both already return the
     # NEWEST frozen line only. The frame now says what the rest of the store has always meant.
-    # LOSSLESS — the full history is still injected verbatim, reframed as context rather than
-    # dropped, so nothing a successor legitimately inherits can go missing.
+    # The history is reframed as context rather than dropped, and the store keeps all of it; the
+    # injection carries the newest captures that fit CC_DOD_INJECT_MAX_CHARS, newest first, and
+    # always every capture after the newest frozen one (_dod_newest_within, same rule as above).
     cur=""
     while IFS= read -r _cf; do
       [ -n "$_cf" ] && [ -f "$_cf" ] || continue
@@ -383,13 +448,16 @@ CUREOF
       # no frozen line anywhere (a grown-only store): name no contract rather than invent one
       _lead="THE CURRENT CONTRACT is not recorded — no 'Scope (frozen):' line exists in this store yet. Treat the history below as context only, and freeze a scope before claiming completeness."
     fi
-    framed="Durable frozen DoD for this worktree — re-injected across recycle/compaction as the completeness baseline (a19 HOP A).
+    _files="$(dod_read_files "$cwd" | paste -sd' ' - 2>/dev/null)"
+    _pre="Durable frozen DoD for this worktree — re-injected across recycle and compaction as the completeness baseline.
 
 $_lead
 
-Everything below is this wave's INTEGRATE-only history — ${ncap} capture(s) from its own worktree and its RECORDED PREDECESSORS, newest last. A concurrent wave's captures are filtered out mechanically, so nothing below belongs to a sibling; captures written before this store recorded provenance carry no toplevel and are kept rather than guessed at. It is prior CONTEXT, NOT additional binding scope — a predecessor's finished contract is not yours to complete. Each '## ' block names the toplevel that wrote it.
+Everything below is this wave's INTEGRATE-only history — the newest "
+    _post=" of ${ncap} capture(s) from its own worktree and its RECORDED PREDECESSORS, newest first; the older ones are in the store (${_files}). A concurrent wave's captures are filtered out mechanically, so nothing below belongs to a sibling; captures written before this store recorded provenance carry no toplevel and are kept rather than guessed at. It is prior CONTEXT, NOT additional binding scope — a predecessor's finished contract is not yours to complete. Each '## ' block names the toplevel that wrote it.
 
-$content"
+"
+    framed="$(printf '%s\n' "$content" | _dod_frame_budgeted "$_pre" "$_post" "$ncap")"
     jq -nc --arg c "$framed" '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$c}}' 2>/dev/null || true
     exit 0 ;;
   PreCompact)

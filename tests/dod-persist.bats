@@ -279,8 +279,9 @@ mktx_grown() {  # $1 frozen  $2 grown1  [$3 grown2]
 # narrow scope or declare done until ALL of it is met" — so a session in any of 101 worktrees was
 # handed 15 waves' contracts as ITS OWN. That framing also contradicted this very script: `get` and
 # last_recorded_scope both return the NEWEST line only. These cases pin the injection to the same
-# newest-wins semantics the rest of the store already has. LOSSLESS — nothing is dropped, the older
-# captures are reframed as history rather than as additional binding scope.
+# newest-wins semantics the rest of the store already has. LOSSLESS within the injection budget
+# (cases under "INJECTION BUDGET" below) — the older captures are reframed as history rather than as
+# additional binding scope.
 # FAILS LOUD on an empty context. Without this an absent additionalContext makes every `! grep`
 # below pass vacuously — the empty-compares-equal trap — and a negative assertion that can only
 # ever pass is worse than no assertion at all.
@@ -335,7 +336,7 @@ _hist_mark_live() {  # $1 = the injected context
   printf '%s' "$ctx" | grep -qF 'NOT additional binding scope'
 }
 
-@test "injection LOSSLESS: every prior capture still reaches the session as history" {
+@test "injection LOSSLESS under the budget: every prior capture still reaches the session as history" {
   ( cd "$CWD" && bash "$HOOK" set "wave ONE scope" >/dev/null )
   ( cd "$CWD" && bash "$HOOK" set "wave TWO scope" >/dev/null )
   run run_hook "$(sjson SessionStart)"
@@ -547,4 +548,116 @@ lo_lacks() { ! printf '%s' "$1" | grep -qF -- "$2"; }
   printf '%s' "$c" | grep -qF '0 capture(s) from other sessions'
   printf '%s' "$c" | grep -qF '2 line(s) outside any capture block'
   lo_lacks "$c" 'legacy box one'
+}
+
+# ── INJECTION BUDGET: the newest captures that fit, newest first ─────────────────────────────────
+# Past Claude Code's 10,000-char cap the injection is swapped for a 2,000-char preview of its head;
+# rendered oldest-first, that head never reached the newest captures (26 of 26 lineage injections
+# 2026-10-02..04 were over the cap). The injection now carries the newest captures that fit
+# CC_DOD_INJECT_MAX_CHARS (default 6000), newest first, always every capture after the newest frozen
+# one and at least the newest. Order assertions key on the '## <ts>' headers, because the newest
+# frozen line is also quoted in the contract lead above the history.
+bud_pad() { printf "%${1}s" '' | tr ' ' p; }
+bud_store() {  # $1=store  $2=session  $3...="frozen:<label>"|"grown:<label>", OLDEST first, ~1.5 KB each
+  local store="$1" sid="$2" top i=0 c; shift 2
+  top="$(git -C "$CWD" rev-parse --show-toplevel)"
+  mkdir -p "$(dirname "$store")"
+  printf '# Durable frozen DoD — %s\n\n' "$top" > "$store"
+  for c in "$@"; do
+    i=$((i + 1))
+    printf '## 2026-09-%02dT00:00:00Z (manual-set) · toplevel=%s · session=%s\nScope (%s): %s %s\n\n' \
+      "$i" "$top" "$sid" "${c%%:*}" "${c#*:}" "$(bud_pad 1500)" >> "$store"
+  done
+}
+bud_line() { printf '%s\n' "$1" | grep -nF -- "$2" | head -1 | cut -d: -f1; }   # first line holding $2
+
+@test "budget: six large captures ⇒ the newest that fit, newest first, under the 10,000-char cap" {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  lo_pane_env
+  bud_store "$(dod_path)" MESID frozen:CAP1 frozen:CAP2 frozen:CAP3 frozen:CAP4 frozen:CAP5 frozen:CAP6
+  run bash -c 'printf "%s" "$1" | CC_DOD_LINEAGE_ONLY=1 bash "$0" 2>/dev/null' "$HOOK" "$(lo_json MESID)"
+  [ "$status" -eq 0 ]
+  local c; c="$(lo_ctx "$output")"
+  [ "${#c}" -lt 10000 ]
+  printf '%s' "$c" | grep -qF '## 2026-09-06T'
+  lo_lacks "$c" 'CAP1 p'
+  [ "$(bud_line "$c" '## 2026-09-06T')" -lt "$(bud_line "$c" '## 2026-09-05T')" ]
+  local n; n="$(printf '%s\n' "$c" | grep -c '^## ')"
+  [ "$n" -ge 2 ] && [ "$n" -lt 6 ] || false
+  printf '%s' "$c" | grep -qF "the newest $n of 6 capture(s) written by this session"
+}
+
+@test "budget: every capture after the newest frozen one is kept, even past the budget" {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  lo_pane_env
+  bud_store "$(dod_path)" MESID frozen:OLDBASE grown:+G1 frozen:BASE grown:+G2 grown:+G3 grown:+G4 grown:+G5
+  local cap c g
+  for cap in 6000 0; do
+    run bash -c 'printf "%s" "$1" | CC_DOD_INJECT_MAX_CHARS="$2" CC_DOD_LINEAGE_ONLY=1 bash "$0" 2>/dev/null' \
+      "$HOOK" "$(lo_json MESID)" "$cap"
+    [ "$status" -eq 0 ]
+    c="$(lo_ctx "$output")"
+    for g in G2 G3 G4 G5; do printf '%s' "$c" | grep -qF "Scope (grown): +$g p"; done
+    printf '%s' "$c" | grep -qF '    Scope (frozen): BASE p'          # the contract lead still names it
+    lo_lacks "$c" 'OLDBASE'
+    lo_lacks "$c" '+G1 p'
+  done
+  # power: four ~1.5 KB grown captures cannot fit 6000 with the frame, so the budget alone would cut one
+  [ "${#c}" -gt 6000 ]
+}
+
+@test "budget: a store that fits keeps every capture, newest first, one blank line between blocks" {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  lo_pane_env
+  local f; f="$(dod_path)"; mkdir -p "$(dirname "$f")"
+  local top; top="$(git -C "$CWD" rev-parse --show-toplevel)"
+  {
+    printf '## 2026-09-01T00:00:00Z (manual-set) · toplevel=%s · session=MESID\nScope (frozen): first small\n\n' "$top"
+    printf '## 2026-09-02T00:00:00Z (manual-set) · toplevel=%s · session=MESID\nScope (grown): +second small\n\n' "$top"
+    printf '## 2026-09-03T00:00:00Z (manual-set) · toplevel=%s · session=MESID\nScope (frozen): third small\n\n' "$top"
+  } > "$f"
+  run bash -c 'printf "%s" "$1" | CC_DOD_LINEAGE_ONLY=1 bash "$0" 2>/dev/null' "$HOOK" "$(lo_json MESID)"
+  [ "$status" -eq 0 ]
+  local c; c="$(lo_ctx "$output")"
+  printf '%s' "$c" | grep -qF 'the newest 3 of 3 capture(s)'
+  local l1 l2 l3; l1="$(bud_line "$c" '## 2026-09-01T')"; l2="$(bud_line "$c" '## 2026-09-02T')"; l3="$(bud_line "$c" '## 2026-09-03T')"
+  [ -n "$l1" ] && [ -n "$l2" ] && [ -n "$l3" ] || false
+  [ "$l3" -lt "$l2" ] && [ "$l2" -lt "$l1" ] || false
+  [ -z "$(printf '%s\n' "$c" | sed -n "$((l2 - 1))p")" ]
+  [ -z "$(printf '%s\n' "$c" | sed -n "$((l1 - 1))p")" ]
+}
+
+@test "budget =0 frame: six large captures ⇒ the newest that fit, newest first, under the cap" {
+  bud_store "$(dod_path)" MESID frozen:CAP1 frozen:CAP2 frozen:CAP3 frozen:CAP4 frozen:CAP5 frozen:CAP6
+  run run_hook "$(sjson SessionStart)"
+  [ "$status" -eq 0 ]
+  local c; c="$(ctx_of "$output")"
+  [ "${#c}" -lt 10000 ]
+  _hist_mark_live "$c"
+  printf '%s' "$c" | grep -qF '## 2026-09-06T'
+  lo_lacks "$c" 'CAP1 p'
+  [ "$(bud_line "$c" '## 2026-09-06T')" -lt "$(bud_line "$c" '## 2026-09-05T')" ]
+  local n; n="$(printf '%s\n' "$c" | grep -c '^## ')"
+  [ "$n" -ge 2 ] && [ "$n" -lt 6 ] || false
+  printf '%s' "$c" | grep -qF "the newest $n of 6 capture(s) from its own worktree"
+}
+
+@test "budget =0 frame: newest is by timestamp across both stores, not by stream position" {
+  # dod_read_content emits the repo-key store BEFORE this toplevel's legacy file, so reversing the
+  # stream would rank the legacy store's older capture newest.
+  local legacy repo top; legacy="$(dod_path)"
+  git -C "$CWD" remote add origin https://example.invalid/budget-order.git
+  repo="$(dod_path)"; [ "$repo" != "$legacy" ]
+  top="$(git -C "$CWD" rev-parse --show-toplevel)"; mkdir -p "$(dirname "$repo")"
+  printf '## 2026-09-01T00:00:00Z (manual-set) · toplevel=%s\nScope (grown): +legacy older\n\n' "$top" > "$legacy"
+  {
+    printf '## 2026-09-03T00:00:00Z (manual-set) · toplevel=%s\nScope (grown): +repo middle\n\n' "$top"
+    printf '## 2026-09-05T00:00:00Z (manual-set) · toplevel=%s\nScope (grown): +repo newest\n\n' "$top"
+  } > "$repo"
+  run run_hook "$(sjson SessionStart)"
+  [ "$status" -eq 0 ]
+  local c; c="$(ctx_of "$output")"
+  local l1 l3 l5; l1="$(bud_line "$c" '## 2026-09-01T')"; l3="$(bud_line "$c" '## 2026-09-03T')"; l5="$(bud_line "$c" '## 2026-09-05T')"
+  [ -n "$l1" ] && [ -n "$l3" ] && [ -n "$l5" ] || false
+  [ "$l5" -lt "$l3" ] && [ "$l3" -lt "$l1" ] || false
 }
