@@ -1,0 +1,1190 @@
+[
+ {
+  "id": "slim-09",
+  "file": "CLAUDE.global.slim.md",
+  "old_text": "(per-slot `effort`, skeptic/critic stages, schema'd returns; available in headless `-p` sessions, not in subagents). An implementation wave or phase stays a dispatched session.",
+  "new_text": "(per-slot `effort`, skeptic/critic stages, schema'd returns; available in headless `-p` sessions, not in subagents). Give each read-only slot a self-contained brief and `agentType: 'workflow-lean'`, which loads no CLAUDE.md, rules, memory or skills (84% cheaper per slot at equal correctness, offline re-gate 2026-09-24); a slot that writes code, commits, lands, closes or needs a skill or MCP keeps the default agent. An implementation wave or phase stays a dispatched session.",
+  "mirror_needed": "optional: CLAUDE.global.md:306-312 venue rule (full variant, not loaded). Run `bin/cc-instruction-budget assert` before landing: the user tier lands near 59.8k of its 60k budget with this set.",
+  "pinned_by": "config/instruction-budget.json user tier 60,000 (hooks/lib/instruction_budget.py); no test greps the sentence",
+  "summary": "cost-optimization 2.2/2.3: the always-loaded Workflow venue rule names workflow-lean for read-only slots (re-gate PASS -84%/slot); 258 default slots in 3.25 d started at 97k tokens vs 9k lean. Merges session-cost-01."
+ },
+ {
+  "id": "slim-01",
+  "file": "CLAUDE.global.slim.md",
+  "old_text": "fired with `scripts/handoff-fire.sh` and awaited",
+  "new_text": "fired with `~/.claude/scripts/handoff-fire.sh` and awaited",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "Group 2 path that only resolves in this repo; the global file loads everywhere. Lockstep with slim-02."
+ },
+ {
+  "id": "slim-02",
+  "file": "CLAUDE.global.slim.md",
+  "old_text": "\nscripts/handoff-fire.sh --prompt-file /tmp/fire-<phase>.txt",
+  "new_text": "\n~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-<phase>.txt",
+  "mirror_needed": "optional: CLAUDE.global.md:202 and hooks/plan-agent-teams-default.sh:210 carry the same repo-relative form",
+  "pinned_by": "none",
+  "summary": "Group 2 repo-relative path in the dispatch recipe: fails rc=127 outside claude-infrastructure (live transcript 2026-09-26); round 3 measured the same mechanism as 26 of 43 slim non-zero exits."
+ },
+ {
+  "id": "slim-03",
+  "file": "CLAUDE.global.slim.md",
+  "old_text": "(2) `handoff-fire.sh --recycle --model claude-fable-5-1",
+  "new_text": "(2) `~/.claude/scripts/handoff-fire.sh --recycle --model claude-fable-5-1",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "Group 2 command not on PATH: the ladder's stage-2 command now runs as written; frontier-spawn-gate.sh still matches it."
+ },
+ {
+  "id": "slim-04",
+  "file": "CLAUDE.global.slim.md",
+  "old_text": "run `bin/cc-permission-audit` (reports",
+  "new_text": "run `cc-permission-audit` (reports",
+  "mirror_needed": "optional: CLAUDE.global.md:1129",
+  "pinned_by": "none",
+  "summary": "Group 2 repo-relative path; the bare name is on PATH via ~/.claude/bin. -4 chars."
+ },
+ {
+  "id": "slim-10",
+  "file": "CLAUDE.global.slim.md",
+  "old_text": " While any 2.1.260 session is running, pin the alias `opus`; that binary refuses the full id.",
+  "new_text": "",
+  "mirror_needed": "optional: CLAUDE.global.md:347 carries the same clause",
+  "pinned_by": "none",
+  "summary": "1d expired version conditional: no 2.1.260 process is running and the launcher pins 2.1.284; model-config.yaml keeps the rule where it can expire. -95 chars every context."
+ },
+ {
+  "id": "slim-05",
+  "file": "CLAUDE.rules.slim.10-session-close.md",
+  "old_text": "| `handoff-fire.sh --recycle`: same pane, fresh context.",
+  "new_text": "| `~/.claude/scripts/handoff-fire.sh --recycle`: same pane, fresh context.",
+  "mirror_needed": "optional: CLAUDE.global.md:763",
+  "pinned_by": "none",
+  "summary": "Group 2 command not on PATH in the Recycle row of the close protocol's context table."
+ },
+ {
+  "id": "slim-06",
+  "file": "CLAUDE.rules.slim.10-session-close.md",
+  "old_text": "`hooks/operator-readout.sh --render` for the operator's pile",
+  "new_text": "`~/.claude/hooks/operator-readout.sh --render` for the operator's pile",
+  "mirror_needed": "optional: CLAUDE.global.md:827",
+  "pinned_by": "none",
+  "summary": "Group 2 repo-relative path on close turns outside this repo; same sentence already uses the ~/.claude form for wrap-ledger."
+ },
+ {
+  "id": "slim-07",
+  "file": "CLAUDE.rules.slim.10-session-close.md",
+  "old_text": "by firing a session with `scripts/handoff-fire.sh`) or drop it",
+  "new_text": "by firing a session with `~/.claude/scripts/handoff-fire.sh`) or drop it",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "Group 2 repo-relative path in the FILED test's drive-it action."
+ },
+ {
+  "id": "slim-08",
+  "file": "CLAUDE.rules.slim.10-session-close.md",
+  "old_text": "the strand nowcast (`scripts/desk-strand-replay.py`)",
+  "new_text": "the strand nowcast (`~/.claude/scripts/desk-strand-replay.py`)",
+  "mirror_needed": "optional: CLAUDE.global.md:999",
+  "pinned_by": "none",
+  "summary": "Group 2 repo-relative path: the no-capacity class's required check must run from any repo."
+ },
+ {
+  "id": "project-rules-01",
+  "file": ".claude/rules/agent-operating-lessons.md",
+  "old_text": "was evidence nobody needed resident. It now sits at ~43K chars for the same 121 rules.",
+  "new_text": "was evidence nobody needed resident. Moving the bodies out took it to ~43K chars for the same 121 rules; it has been split again since (2026-09-23), so read its size now with `wc -c`, never from a figure restated here.",
+  "mirror_needed": "none",
+  "pinned_by": "none (header prose; rules-hook-budget-lint replay rc=0)",
+  "summary": "Group 2 stale fact in always-loaded text: file is 9,871 B, not ~43K; keeps the cleanup measurement as history."
+ },
+ {
+  "id": "project-rules-02",
+  "file": ".claude/rules/agent-operating-lessons.md",
+  "old_text": "the land gate runs `shellcheck` BARE (ship-land.sh:3258);",
+  "new_text": "the land gate runs `shellcheck \"${sc_todo[@]}\"` BARE (ship-land.sh, `run_gate`);",
+  "mirror_needed": "optional: tests/lr-drill.sh:579 and scripts/jev/predict-land.sh:330 cite the same stale line in comments",
+  "pinned_by": "scripts/rules-hook-budget-lint.sh (420-byte bullet budget; 385 bytes after, replay clean)",
+  "summary": "Group 2 drifted file:line citation (call is now at :3472 in run_gate); anchors on the literal command instead."
+ },
+ {
+  "id": "project-rules-03",
+  "file": ".claude/CLAUDE.md",
+  "old_text": "(denied by `hooks/validate-bash.sh:1352`, and rightly",
+  "new_text": "(denied by the FF-GATE block in `hooks/validate-bash.sh`, and rightly",
+  "mirror_needed": "optional: scripts/deploy-live.sh:14 comment cites the same stale line",
+  "pinned_by": "none for the sentence; the FF-GATE markers it names are pinned by tests/validate-bash-ff-gate.bats:170-171",
+  "summary": "Group 2 drifted citation in always-loaded project memory; points at test-pinned span markers."
+ },
+ {
+  "id": "project-rules-05",
+  "file": "bin/cc-memory-rotate",
+  "old_text": "to hold its loader cap (index %s B, target %s). Both surfaces load unprompted, so nothing was demoted and nothing was shortened; restore = paste the line back.",
+  "new_text": "to hold its loader cap (index %s B, target %s). Nothing was shortened. Whether this file loads is decided by claudeMdExcludes (see hooks/lib/rules-loaded.sh) and, for a scoped file, its paths: frontmatter, not by this comment; restore = paste the line back.",
+  "mirror_needed": "project-rules-06 (same claim in the D_PROV template); keep wording identical",
+  "pinned_by": "none (tests/memory-nudge-budget.bats:480 pins 'restore = paste the line back', kept)",
+  "summary": "Group 2 tool-written false claim: the route destination is excluded by claudeMdExcludes, yet the rotor stamps 'load unprompted' (rewritten 2026-10-02)."
+ },
+ {
+  "id": "project-rules-06",
+  "file": "bin/cc-memory-rotate",
+  "old_text": "moved VERBATIM off %s. Both surfaces load unprompted, so nothing was demoted and nothing was shortened; restore = paste the line back.",
+  "new_text": "moved VERBATIM off %s. Nothing was shortened. Whether this file loads is decided by claudeMdExcludes (see hooks/lib/rules-loaded.sh) and, for a scoped file, its paths: frontmatter, not by this comment; restore = paste the line back.",
+  "mirror_needed": "project-rules-05",
+  "pinned_by": "none",
+  "summary": "Same false loading claim in the --drain-oversized provenance template; printf argument count unchanged."
+ },
+ {
+  "id": "agents-01",
+  "file": "agents/deep-research-sonnet.md",
+  "old_text": "tools: Read, Glob, Grep, Bash, WebSearch, WebFetch, ToolSearch, Skill",
+  "new_text": "tools: Read, Glob, Grep, Bash, Write, Edit, WebSearch, WebFetch, ToolSearch, Skill",
+  "mirror_needed": "must land with agents-02 (same file)",
+  "pinned_by": "tests/agents-omit-claudemd.bats case 2 (Write/Edit agent must carry 4 contract markers; all present)",
+  "summary": "Sibling fix edec03003 never carried over: heredoc delivery killed 2/15 deep-research agents; grants Write/Edit, keeps Skill (4.6% of spawns use it)."
+ },
+ {
+  "id": "agents-02",
+  "file": "agents/deep-research-sonnet.md",
+  "old_text": "- **Deliver to a file.** Write your findings to the absolute path your brief names (field 7, or\n  `OUTPUT_TO:`). You have no Write tool: create it with one Bash heredoc. Only the file is\n  delivered; return a short pointer to it.\n- **Never overwrite.** Create only that path. If it already exists, append (`>>`), never truncate\n  (`>`), and touch no other tracked file.",
+  "new_text": "- **Deliver to a file.** Write your findings to the absolute path your brief names (field 7, or\n  `OUTPUT_TO:`). Only the file is delivered; return a short pointer to it.\n- **Never overwrite.** Create only that path. If it already exists, add to it with Edit; never\n  Write over a file you did not create this run, and touch no other tracked file.",
+  "mirror_needed": "agents-01 (same file); text already matches agents/deep-research.md:210-213",
+  "pinned_by": "tests/agents-omit-claudemd.bats case 2 (markers kept)",
+  "summary": "Removes the heredoc delivery idiom the resident lesson bans for unattended agents; matches the deep-research contract."
+ },
+ {
+  "id": "agents-06",
+  "file": "agents/deep-research.md",
+  "old_text": "- You're already past 800K context spent and lead is waiting",
+  "new_text": "- You're already near the 500K hard ceiling and lead is waiting",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "Group 2 in-file contradiction: 800K licence vs the file's own 500K hard ceiling."
+ },
+ {
+  "id": "agents-07",
+  "file": "agents/deep-research.md",
+  "old_text": "The previous \"500-800K\" prescription targeted a context range the model\nitself reports as degraded. Internal depth has no DOLLAR cost to lead, but\nit does have a QUALITY cost when synthesis happens past the cliff.",
+  "new_text": "Internal depth has no DOLLAR cost to lead, but it does have a QUALITY cost\nwhen synthesis happens past the cliff.",
+  "mirror_needed": "none (history stays in skills/research-subagents/SKILL.md:590 and CLAUDE.global.md:315)",
+  "pinned_by": "none",
+  "summary": "1d migration-relative phrasing: a diff against a prompt the subagent never saw."
+ },
+ {
+  "id": "agents-13",
+  "file": "agents/research-decomposition-critic.md",
+  "old_text": "`research-subagents.md`",
+  "new_text": "`~/.claude/skills/research-subagents/SKILL.md`",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "Group 2 dead path shipped inside every REVISE verdict; 351d910e8 missed this one."
+ },
+ {
+  "id": "agents-14",
+  "file": "agents/frontier-derivation.md",
+  "old_text": "The lead is paying ~2\u00d7 the default\ntier for exactly one thing",
+  "new_text": "When you run on the frontier model, the lead is paying a multiple of\nthe default tier's quota for exactly one thing",
+  "mirror_needed": "none (out of shard: scripts/handoff-fire.sh:13123 prints a stale $5/$25 Opus price)",
+  "pinned_by": "none",
+  "summary": "Group 2 perishable cost figure the repo contradicts (quota draw 2-5x; false when run on frontmatter opus)."
+ },
+ {
+  "id": "hillclimb-07",
+  "file": "commands/evolve-skill.md",
+  "old_text": "API-only (~$2-10 a run); emits",
+  "new_text": "Runs on plan quota, not an API key; emits",
+  "mirror_needed": "land with hillclimb-01",
+  "pinned_by": "tests/skill-listing-budget.bats (217 chars after, under 250)",
+  "summary": "Listing no longer advertises an API-key path accounts.json does not authorize."
+ },
+ {
+  "id": "hillclimb-05",
+  "file": "commands/evolve-skill.md",
+  "old_text": "- A fixture set of 3-5 cases at `~/.reso/evolve/<slug>/cases/*.md`, each with `## input` +\n  `## expected_behavior`. If absent, STOP and help author them first (cold-start may mine\n  `~/.claude/session-index.db` for representative prompts).",
+  "new_text": "- A fixture set at `~/.reso/evolve/<slug>/cases/*.md` (pyramid-principle's is a symlink to this\n  repo's `evolve-fixtures/`). A case is a file with both `## input` and `## expected_behavior`; skip\n  any other `.md` there, such as the set's `README.md`. If absent, STOP and help author them first\n  (cold-start may mine `~/.claude/session-index.db` for representative prompts).\n- Size the set before spending. With 15 or more cases, draw a random third as **test**: it is\n  scored every round, never shown to the variant generator, and its delta is the result. Below 15\n  there is no held-out set, so run every case at 3+ reps and label each result **directional**: a\n  gain on cases the generator read is not evidence it generalizes.",
+  "mirror_needed": "lockstep with hillclimb-01..06",
+  "pinned_by": "none",
+  "summary": "eval-hillclimb split rule: README.md no longer scored as a case; small sets labelled directional."
+ },
+ {
+  "id": "hillclimb-01",
+  "file": "commands/evolve-skill.md",
+  "old_text": "- Use the binary `claude-latest` directly (the `claude` shell function does worktree routing).\n  Flags verified on 2.1.114: `--bare --print --output-format json --append-system-prompt <body>`\n  `--json-schema <s> --max-budget-usd <n> --model <m>`. `--bare` skips hooks/auto-memory/CLAUDE.md\n  \u2192 clean A/B isolation.",
+  "new_text": "- Run every call on `\"$(~/.claude/bin/cc-claude-bin)\"`, the binary interactive sessions run (the\n  `claude` shell function does worktree routing). Not `claude-latest`: it is pinned at 2.1.114, and\n  the API refuses `claude-opus-5-5` below 2.1.280. Not `--bare` either: it authenticates only with an\n  API key (`ANTHROPIC_API_KEY` or an `apiKeyHelper`), never the plan login, so it either fails or\n  bills dollars, and `accounts.json` has `spend.usage_credits_authorized: false`. Isolate the way the\n  codex-probe sweeps do (`docs/research/opus55-effort-sweep-2026-09-22/run-arms.sh`):\n  `CLAUDE_CONFIG_DIR=<account>`, a neutral `mktemp -d` cwd, and `-p --tools \"\" --setting-sources \"\"\n  --strict-mcp-config --disable-slash-commands --no-session-persistence --output-format json`. That\n  loads no CLAUDE.md, memory, hooks or skills, and it runs on plan quota.\n- Record per (case, rep) from each result JSON: `.result` (and the parsed score object for a judge\n  call), the `.modelUsage` keys (the served model; stop if it is not the one you asked for), `.usage`,\n  `.total_cost_usd` and `.stop_reason`. A call that errors goes to `errors.jsonl` with its reason,\n  never into the scores.",
+  "mirror_needed": "evolve-fixtures README (hillclimb-08/08b); supersedes commands-01",
+  "pinned_by": "none",
+  "summary": "eval-hillclimb Step 0/0.5: the command cannot run (2.1.114 refuses Opus 5.5; --bare is API-key only); moves to the repo's plan-quota isolation recipe and records the served model."
+ },
+ {
+  "id": "hillclimb-03",
+  "file": "commands/evolve-skill.md",
+  "old_text": "## Loop (cap 2-3 generations; pass a hard `--max-budget-usd` to every call)\n1. **Baseline**: read `~/.claude/skills/<slug>/SKILL.md`; split frontmatter (frozen) from body (mutable).\n2. **Generate <=2 variants** of the body via one reflective `claude-latest -p` call seeded with the\n   baseline body + the failing/low-scoring cases (GEPA reads WHY it failed, not just that it did).",
+  "new_text": "## Loop (one hypothesis per round; pass a hard `--max-budget-usd` to every call)\nState lives on disk so a resumed session can pick up where this one stopped. `~/.reso/evolve/<slug>/<run>/`\nholds `_state.json` (train and test ids, reps, models, efforts, `best`), then `baseline/` and `v1/`,\n`v2/`, ... Each holds `results.jsonl` (one row per (case, rep): `prompt_id`, `rep`, `grade`, the\njudge's `explanation`, the served `model`, `usage`) and `traces/`; each `vN/` adds `change.md` (the\nhypothesis) and `change.patch` (the diff against the live SKILL.md). After each round, rebuild\n`report.html` with `shared/evals/report/build-report-lite.mjs` from the claude-api skill (load the\nskill to get its directory).\n1. **Baseline**: read `~/.claude/skills/<slug>/SKILL.md`; split frontmatter (frozen) from body (mutable).\n   Score it at R >= 3 reps. Its rep-to-rep spread on the mean score is the noise floor: a variant\n   has to beat the current best by more than that to count.\n2. **Generate one variant** per round via one reflective call on the step-3 binary and isolation\n   flags, with the generator's pinned `--model` and `--effort`, seeded with the current best body +\n   the low-scoring **train** cases' outputs and judge feedback (GEPA reads WHY it failed, not just\n   that it did). Never show it a test case. Ask for one change aimed at one failure behavior, stated\n   as behavior rather than copied case content, and cut any line that only restates default\n   behavior before you score it.",
+  "mirror_needed": "lockstep with hillclimb-01/02/04/05; supersedes commands-02",
+  "pinned_by": "none",
+  "summary": "eval-hillclimb Step 3/4: on-disk round state, baseline reps as the noise floor, train-only generator input, one hypothesis per round."
+ },
+ {
+  "id": "hillclimb-02",
+  "file": "commands/evolve-skill.md",
+  "old_text": "3. **Score** baseline + each variant on every case:\n   ```\n   claude-latest -p --bare --output-format json --model claude-opus-5-5 --effort high \\\n     --append-system-prompt \"<variant body>\" \\\n     --json-schema '{\"type\":\"object\",\"properties\":{\"score\":{\"type\":\"number\"},\"feedback\":{\"type\":\"string\"}},\"required\":[\"score\",\"feedback\"]}' \\\n     --max-budget-usd 2 \"<case input>\"\n   ```\n   - Pin `--model` and `--effort` for the whole run (the id is `versions.opus_latest` in\n     `~/.claude/model-config.yaml` when the run starts): with neither, the scorer ran on the binary's\n     default model, and a 5.5-family launch with no `--effort` runs at MEDIUM whatever `effortLevel`\n     says, so scores stopped being comparable across a bump.",
+  "new_text": "3. **Score** baseline + each variant on every case at R reps, in two calls per (case, rep). The\n   generator never sees the rubric, and the judge never sees which variant wrote the output:\n   ```\n   B=\"$(~/.claude/bin/cc-claude-bin)\"\n   ISO=(--tools \"\" --setting-sources \"\" --strict-mcp-config --disable-slash-commands\n        --no-session-persistence --output-format json --max-budget-usd 2)\n   # generate: the variant body rides the system prompt; the case's `## input` is the whole prompt\n   (cd \"$(mktemp -d)\" && CLAUDE_CONFIG_DIR=<account> \"$B\" -p \"${ISO[@]}\" \\\n     --model claude-opus-5-5 --effort high --append-system-prompt \"<variant body>\" \"<case input>\")\n   # judge: the case's `## input` and `## expected_behavior`, then the generator's `.result` marked\n   # as untrusted data (the rubric checks dropped and invented facts against the input)\n   (cd \"$(mktemp -d)\" && CLAUDE_CONFIG_DIR=<account> \"$B\" -p \"${ISO[@]}\" \\\n     --model claude-opus-5 --effort xhigh \\\n     --json-schema '{\"type\":\"object\",\"properties\":{\"score\":{\"type\":\"number\"},\"feedback\":{\"type\":\"string\"}},\"required\":[\"score\",\"feedback\"]}' \\\n     \"<input + rubric + output>\")\n   ```\n   - Pin `--model` and `--effort` for the whole run (the generator's id is `versions.opus_latest` in\n     `~/.claude/model-config.yaml` when the run starts): with neither, the scorer ran on the binary's\n     default model, and a 5.5-family launch with no `--effort` runs at MEDIUM whatever `effortLevel`\n     says, so scores stopped being comparable across a bump.\n   - The judge is `versions.opus_prior` at `effort_defaults.verify_judge`, as in the house sweep\n     judges, so no output is graded by the model that wrote it. Tell it not to reward length.\n   - Before the first scored pass, run one judge call and confirm the score object comes back\n     parsed; then feed the judge an empty output, \"I don't know\", and a confident answer to a\n     different case. All three must score 1-2, or fix the judge prompt first.",
+  "mirror_needed": "lockstep with hillclimb-01; supersedes commands-02 and headless-04",
+  "pinned_by": "none",
+  "summary": "eval-audit judge rules: generate and judge split into two calls; the rubric reaches the judge; judge is not the model under test; known-negative check before spend."
+ },
+ {
+  "id": "hillclimb-04",
+  "file": "commands/evolve-skill.md",
+  "old_text": "4. **Keep** a variant only if its aggregate score STRICTLY beats baseline across >=2 reruns\n   (kills noise-driven mutation; LLM scoring is non-deterministic).",
+  "new_text": "4. **Keep** a variant only if its mean score on **test** (the whole set when there is no split)\n   beats the current best by more than the noise floor from step 1, and train did not drop. Train\n   up with test flat means it overfit the cases the generator read: revert it. Stop after two\n   rounds in a row that do not clear the floor, or after 4 rounds.",
+  "mirror_needed": "lockstep with hillclimb-03/05",
+  "pinned_by": "none",
+  "summary": "eval-hillclimb/cost-hillclimb keep and stop rule: beat the incumbent beyond the noise floor; overfit reverts; plateau stop."
+ },
+ {
+  "id": "hillclimb-06",
+  "file": "commands/evolve-skill.md",
+  "old_text": "Per-case scores (baseline vs variants), the winning diff, total $ spent, and a keep/discard\nrecommendation. If no variant strictly beats baseline, say so \u2014 that is a valid (and common) outcome.",
+  "new_text": "Lead with the test-score delta, baseline vs winner, each with its interval; train scores are\nsupporting detail, and with no split the delta is labeled directional. Then per-case scores\n(baseline vs variants), the winning diff, and spend: the summed `usage` of every generator and judge\ncall, failed calls included, with its list-price `total_cost_usd` (this fleet pays it in plan quota,\nnot dollars). If no variant clears the noise floor, say so and recommend discarding \u2014 that is a\nvalid (and common) outcome.",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "eval-hillclimb Step 5: headline is the test delta with its interval; spend reported in usage, not dollars."
+ },
+ {
+  "id": "hillclimb-08",
+  "file": "evolve-fixtures/pyramid-principle/cases/README.md",
+  "old_text": "1. Run the current SKILL.md body against each `## input` via `claude-latest -p --bare`.\n2. Score each output against its `## expected_behavior` (judge returns `{score, feedback}` via `--json-schema`).\n3. Generate <=2 reflective variants of the skill body, seeded with the lowest-scoring cases.\n4. Keep a variant ONLY if aggregate score STRICTLY beats baseline across >=2 reruns.",
+  "new_text": "1. Run the current SKILL.md body against each `## input` with the isolated headless recipe in\n   `commands/evolve-skill.md` (not `claude-latest -p --bare`: that binary refuses Opus 5.5 and\n   `--bare` needs an API key).\n2. Score each output in a separate judge call against its `## expected_behavior` (judge returns\n   `{score, feedback}` via `--json-schema`).\n3. Generate one reflective variant of the skill body per round, seeded with the lowest-scoring cases.\n4. Keep a variant ONLY if its mean score beats the current best by more than the baseline's\n   rep-to-rep noise floor. With these 4 cases there is no held-out set, so every result is\n   directional.",
+  "mirror_needed": "hillclimb-08b (same file, run notes)",
+  "pinned_by": "none",
+  "summary": "Fixture README's run steps match the repaired command."
+ },
+ {
+  "id": "hillclimb-08b",
+  "file": "evolve-fixtures/pyramid-principle/cases/README.md",
+  "old_text": "SPIKE \u2014 one skill, 2-3 generations, hard `--max-budget-usd` cap. Cost ~$2-10/run.",
+  "new_text": "SPIKE \u2014 one skill, at most 4 rounds, a hard `--max-budget-usd` cap on every call; runs on plan quota (~$2-10 list a run).",
+  "mirror_needed": "hillclimb-08",
+  "pinned_by": "none",
+  "summary": "Synthesizer companion (flagged by both hillclimb-08 verifiers): run notes match the 4-round cap and plan-quota billing."
+ },
+ {
+  "id": "commands-03",
+  "file": "commands/limit-recover.md",
+  "old_text": "   If ONLY `fable_pct` \u2265 100 (model-scoped): re-run fable-tagged slots on the house fallback\n   `claude-opus-4-8` and mark each `(tier-fallback)` in the report.",
+  "new_text": "   If ONLY `fable_pct` \u2265 100 (model-scoped): re-run fable-tagged slots on the house fallback\n   (`frontier_access.fallback` in `~/.claude/model-config.yaml`, read live) and mark each\n   `(tier-fallback)` in the report.",
+  "mirror_needed": "none (out of shard: bin/cc-wave-plan:860-864 hardcodes claude-opus-4-8 in code)",
+  "pinned_by": "none (tests/lr-doc-banned-transport.bats reads only the Banned table)",
+  "summary": "1d retired model id: the SSOT fallback is claude-opus-5-5 since 2026-09-22; lr-fire-resume.sh already removed the same hardcode."
+ },
+ {
+  "id": "commands-18",
+  "file": "commands/limit-recover.md",
+  "old_text": "   running Fable 5 at `max` transplants DOWN to `high` while its statusline still reads \"Fable 5\",",
+  "new_text": "   running Fable at `max` transplants DOWN to `high` while its statusline still shows the same model,",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "Group 2 pinned model name in an example whose point is model-agnostic."
+ },
+ {
+  "id": "commands-04",
+  "file": "commands/handoff.md",
+  "old_text": "# typical: fresh track, auto account, Opus@max, split pane in the current view (\u2318D-style default).",
+  "new_text": "# typical: fresh track, auto account, Opus@high (the SSOT default \u2014 no --effort), split pane in the current view (\u2318D-style default).",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "Group 2 stale effort anchor in the most-copied example; the routing table (L406) says the no-flag default is opus_latest@high."
+ },
+ {
+  "id": "commands-05",
+  "file": "commands/handoff.md",
+  "old_text": "within 48h. If a fired session rate-limits, relaunch the SAME worktree on another `claude-nextN`\n(no rework). Account = launcher suffix only; the worktree is account-agnostic.",
+  "new_text": "within 48h. If a fired session rate-limits, move it to another account with `cc-lr recover <pane|sid8>`\n(the `/recover` front door): same session, SAME worktree, no rework. Account = config dir only; the\nworktree is account-agnostic.",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "Group 2 deleted launcher name (claude-nextN); points at the house verb for moving a limited session."
+ },
+ {
+  "id": "commands-06",
+  "file": "commands/wrap.md",
+  "old_text": "\u26a0\ufe0f **The `\ud83d\udc64` rung and the `yours` step class are NOT computed on this pull path.** Both count\noperator-only steps filed by THIS session (`cc-backlog needs`), which requires the session id \u2014 and\n`CLAUDE_SESSION_ID` is **unset** in a shell (verified 2026-08-01). Only the Stop-hook path resolves\nit, from the hook's own stdin JSON. So `/wrap` reports `YOURS_SRC=none` and a rung of at most `\u2705`,\nwhere the Stop hook would correctly say `\ud83d\udc64`. Deliberately NOT guessed from\n`<config-dir>/projects/<hash>/.last-session-id`: that file holds whichever pane wrote LAST, so in\nthis repo's normal multi-session state it would attribute a SIBLING session's steps to you \u2014 a false\n`\ud83d\udc64` is worse than a missing one, because the whole point of the rung is that the operator can trust\nit. Read the Stop-hook block as authoritative for what is yours; `/wrap` is the git/gate view.",
+  "new_text": "**The `\ud83d\udc64` rung and the `yours` step class need this session's id.** The ledger resolves it from\n`$CLAUDE_CODE_SESSION_ID`, which a tool-call shell carries (`$CLAUDE_SESSION_ID` is unset there), so\n`/wrap` computes `\ud83d\udc64` the same way the Stop hook does. If the id cannot be resolved it reports\n`YOURS_SRC=none` and the rung stays at most `\u2705` \u2014 it never guesses from\n`<config-dir>/projects/<hash>/.last-session-id`, which holds whichever pane wrote LAST and would\nattribute a SIBLING session's steps to you. A false `\ud83d\udc64` is worse than a missing one, because the\noperator has to be able to trust the rung.",
+  "mirror_needed": "commands-07, -21, -22 (same file). Optional comments: bin/cc-backlog:4275, bin/cc-decide:254, scripts/wrap-ledger.sh:69",
+  "pinned_by": "none (tests/wrap-ledger.bats ladder parity reads only wrap.md:73)",
+  "summary": "Group 2 stale fact: wrap-ledger.sh:700-712 resolves the id from CLAUDE_CODE_SESSION_ID since 2026-09-05; keeps the never-guess rule and its reason."
+ },
+ {
+  "id": "commands-07",
+  "file": "commands/wrap.md",
+  "old_text": "| \ud83d\udc64 | landed \u2227 operator-only step(s) THIS session filed are unrun | surface the `OPERATOR \u25b8` block \u2014 **not computed on this pull path**, see above |",
+  "new_text": "| \ud83d\udc64 | landed \u2227 operator-only step(s) THIS session filed are unrun | surface the `OPERATOR \u25b8` block |",
+  "mirror_needed": "commands-06",
+  "pinned_by": "none",
+  "summary": "Companion of commands-06 in the rung table."
+ },
+ {
+  "id": "commands-21",
+  "file": "commands/wrap.md",
+  "old_text": "`\ud83d\ude80` **is** fully computed on this pull path, unlike `\ud83d\udc64`: it reads the live checkout's git state plus",
+  "new_text": "`\ud83d\ude80` is computed on this pull path as well: it reads the live checkout's git state plus",
+  "mirror_needed": "commands-06",
+  "pinned_by": "none",
+  "summary": "Companion of commands-06."
+ },
+ {
+  "id": "commands-22",
+  "file": "commands/wrap.md",
+  "old_text": "Unlike `\ud83d\udc64`, this **is** computed on the pull path: with no `--transcript`, the ledger resolves one",
+  "new_text": "This is computed on the pull path as well: with no `--transcript`, the ledger resolves one",
+  "mirror_needed": "commands-06",
+  "pinned_by": "none",
+  "summary": "Companion of commands-06."
+ },
+ {
+  "id": "commands-08",
+  "file": "commands/wrap.md",
+  "old_text": "Two rungs the ledger CANNOT derive from git \u2014 they are model-state you overlay when true, and\nthey dominate the fact rung:\n\n- **\u26d4 Blocked** \u2014 you need a decision (destructive migration / auth / nav / timeout) or external\n  info only the operator has. Surface it: `\u26d4 Blocked \u2014 need your call: <decision>.`\n- **\ud83d\udce4 Handoff** \u2014 out of context with work remaining: `\ud83d\udce4 Out of context \u2014 /handoff.`",
+  "new_text": "Two rungs outrank the rest:\n\n- **\u26d4 Blocked** \u2014 you need a decision (destructive migration / auth / nav / timeout) or information\n  only the operator has. The ledger computes it from open class-C decision packets THIS session filed\n  (`cc-decide open --class C \u2026`); a decision you hold but have not filed is invisible to it, so file\n  it and the rung follows. Shape: `\u26d4 Blocked \u2014 need your call: <decision>.`\n- **\ud83d\udce4 Handoff** \u2014 out of context with work remaining. The ledger cannot see this one, so you overlay\n  it: `\ud83d\udce4 Out of context \u2014 recycling / handing off.`",
+  "mirror_needed": "optional: tests/wrap-ledger.bats:2068-2072 comment still calls \u26d4 an overlay",
+  "pinned_by": "tests/wrap-ledger.bats ladder-anchor uniqueness ('priority'+\u26d4 on one line); unaffected",
+  "summary": "Group 2 stale fact: the ledger computes \u26d4 from session-scoped class-C packets (wrap-ledger.sh:20-24, 1264-1295); an unfiled \u26d4 is invisible to the close certificate."
+ },
+ {
+  "id": "commands-09",
+  "file": "commands/wrap.md",
+  "old_text": "3 ids and carrying its exact listing command. Relay it VERBATIM at the top of your close \u2014 never\nparaphrase the commands into prose (the silver-platter rule).\n\n**Hand over ONE command, not a list.** Whatever the block shows, the operator gets a single fenced\nthing to paste \u2014 `cc-do` runs the runnable set after one confirm (`cc-do --list` to look first,\n`cc-do <stem>` for exactly one). Per CLAUDE.md \u00a7Session Close, the close itself is capped at the\ngoverning line + \u22643 supporting facts + that one command block.",
+  "new_text": "3 ids and carrying its exact listing command. Relay it VERBATIM below the rung line, the\n`Good to close:` line (when the close carries one) and the act line \u2014 never paraphrase the commands\ninto prose (the silver-platter rule).\n\n**Hand over ONE command, not a list.** Whatever the block shows, the operator gets one `\u25b6 Run this:`\nline with a single inline-code command under it \u2014 `cc-do` runs the runnable set after one confirm\n(`cc-do --list` to look first, `cc-do <stem>` for exactly one). Per CLAUDE.md \u00a7Session Close, the\nclose is the rung line, the verdict line, at most one act line, the relayed block, and at most three\nsupporting lines.",
+  "mirror_needed": "none",
+  "pinned_by": "behavior enforced by hooks/completion-assert.sh D6 (line-1-rung) and D7 (act window); no test greps this text",
+  "summary": "Group 2 conflict with the enforced close shape: 'relay at the top' fails D6 line-1-rung; merged both verifiers' corrections (relay after the act line; verdict line conditional)."
+ },
+ {
+  "id": "commands-10",
+  "file": "commands/recover.md",
+  "old_text": "**SELF-only in v1, and that is a design decision rather than a missing feature.** It is the exact\nmirror of `recover`: recover's subject *cannot act* \u2014 it is quota-blocked or dead \u2014 so a detached\ndriver is the only form that works. Switch's subject **is** the actor, so the driver is unnecessary,\nand it is also unbuildable today: there is no idle/busy predicate anywhere in this subsystem\n(`pane_cc_state` returns `cc` for mid-turn, idle, modal and wedged alike), so a driver cannot\nestablish that a *peer* is safe to move, while a session establishes it about itself trivially \u2014 it\nis the one taking the turn. The driver form is filed as its own decision, gated on an idle oracle\nexisting. Do not reach for `--source-pane` or `--detach` here; they are not the verb's shape.\n\n**Superseded 2026-09-23 \u2014 the driver form now exists.** The idle oracle the paragraph above waits\nfor landed in `scripts/limit-recover/lr-upgrade.sh` (2026-09-22), so `cc-lr switch --pane <P>\n--target <acct>` (or `--from <acct> --all-idle`) moves ANOTHER idle session: it judges idleness with\nthat oracle, and the poller types one `[operator-ruling cc-lr-switch \u2026]` line asking the subject to\nrun the SELF verb itself \u2014 so the reasoning above (the subject is the actor) still holds. Full\nmode: `commands/limit-recover.md` \u00a7 Mode: switch.",
+  "new_text": "**`cc-lr switch [--target <acct>|auto]` moves THIS session** \u2014 the subject is the actor, so no\ndetached driver is needed and `--source-pane` / `--detach` are not the verb's shape. To move ANOTHER\nidle session, `cc-lr switch --pane <P> --target <acct>` (or `--sid <S>`, or `--from <acct> --all-idle`)\njudges idleness with the oracle in `scripts/limit-recover/lr-upgrade.sh`, and the poller then types one\n`[operator-ruling cc-lr-switch \u2026]` line asking the subject to run the self verb itself, so the subject\nis still the actor. Full mode: `commands/limit-recover.md` \u00a7 Mode: switch.",
+  "mirror_needed": "none (history stays in limit-recover.md \u00a7 Mode: switch and bin/cc-lr:562-580)",
+  "pinned_by": "none",
+  "summary": "1d patch accretion: a rule plus its own 'Superseded' retraction merged into one current statement (verified against bin/cc-lr usage)."
+ },
+ {
+  "id": "commands-11",
+  "file": "commands/recover.md",
+  "old_text": "The same reasoning applies to THIS\nfile \u2014 it is an ADD, so until it is live `/limit-recover` remains the working front door, and its\nown `description:` has been widened to catch the non-quota trigger phrases in the meantime.",
+  "new_text": "`/recover` is the front door;\n`/limit-recover` remains the deep runbook its modes link to.",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "Group 2 stale routing: /recover has been live since 2026-09-11; the transitional note pointed at the wrong front door."
+ },
+ {
+  "id": "commands-13",
+  "file": "commands/commit.md",
+  "old_text": "DO NOT read files, explore code, or add narrative beyond the commit.",
+  "new_text": "Stay scoped to committing: decide what belongs from `git status` / `git diff`, read a file only for the project-rail check above, and add no narrative beyond the commit.",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "1a caps prohibition that contradicts the file's own Read step and allowed-tools; scope intent kept."
+ },
+ {
+  "id": "commands-14",
+  "file": "commands/fix-lint.md",
+  "old_text": "   - TypeScript: `bun run lint --fix` or `npm run lint -- --fix`",
+  "new_text": "   - TypeScript: the lint script with `--fix`, through the package manager the lockfile names: `pnpm lint --fix` (`pnpm-lock.yaml`), `bun run lint --fix` (`bun.lock`/`bun.lockb`), `npm run lint -- --fix` (`package-lock.json`)",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "Group 2 conflict with the global lockfile rule; pnpm (house default) was missing; keeps npm's -- pass-through."
+ },
+ {
+  "id": "commands-15",
+  "file": "commands/deploy-check.md",
+  "old_text": "   - Run production build (`bun run build` / `npm run build`)",
+  "new_text": "   - Run the production build through the package manager the lockfile names (pnpm / bun / npm)",
+  "mirror_needed": "optional: same file L15 (bun test) and L19 (npm audit)",
+  "pinned_by": "none",
+  "summary": "Same lockfile-rule conflict as commands-14."
+ },
+ {
+  "id": "commands-16",
+  "file": "commands/accounts.md",
+  "old_text": "     5h-safety \u00d7 concurrency-spread). Report its answer; never re-rank the accounts\n     yourself from the `score_*` fields. For wave spread across several sessions use\n     `claude-accounts --rank general|fable` (best-first list) and assign round-robin.",
+  "new_text": "     5h-safety \u00d7 concurrency-spread). Report its answer (step 2's rules apply).",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "1c third copy of a rule stated in step 2 (with its \ud83d\udea8) and step 5."
+ },
+ {
+  "id": "skills-c-08b",
+  "file": "commands/research.md",
+  "old_text": "**Per-brief budget**: 150\u2013400 tokens (\u224880\u2013250 words). Stop-line MUST be the brief's FINAL line (serial-position adherence per arxiv 2406.15981, 2-4\u00d7 over middle).",
+  "new_text": "**Per-brief budget**: keep the brief's own content to \u224880\u2013250 words; the verbatim synthesis contract and the rules the worker needs ride on top (the research agents run with `omitClaudeMd: true`), so a complete brief runs past 400 tokens by design. End with field 7's delivery path, then the stop-line as the brief's FINAL line (serial-position adherence per arxiv 2406.15981, 2-4\u00d7 over middle).",
+  "mirror_needed": "skills-c-08 (lockstep)",
+  "pinned_by": "none",
+  "summary": "Synthesizer companion flagged by the skills-c-08 verifier: /research would otherwise contradict the skill's corrected brief-length rule."
+ },
+ {
+  "id": "skills-a-04",
+  "file": "skills/agent-teams/SKILL.md",
+  "old_text": "**Two tracks, and BOTH are teams runtimes \u2014 they differ only in the team API surface:**\n- **Stable** (`claude-previous` / `cc-previous` \u2192 CC **2.1.114**, deliberately pinned; these were\n  named `claude` / `cc` before the 2026-07-31 entrypoint consolidation): exposes the classic\n  **`TeamCreate` / `TeamDelete`** tools that this file's examples use.\n- **Eval** (`claude` / `cc` \u2192 CC **2.1.219**, the `~/.claude-219` binary; `claude-next` and\n  `claude-opus5` are back-compat shims onto the same body): on **2.1.178+**, which\n  **removed `TeamCreate` / `TeamDelete`** for an **implicit-team model** \u2014 you spawn teammates by\n  calling the **`Agent` tool with `name:`** (the runtime forms the team implicitly at STARTUP; the\n  `TeamCreate`/`TeamDelete` *tools* simply don't exist). Agent Teams are ENABLED here\n  (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`) and **validated working on 2.1.183** (verified\n  2026-06-20). The earlier \"183 is deliberately not a teams runtime / needs doc-migration first\"\n  framing is **superseded**. Stable 2.1.114 stays pinned \u2014 by *choice*, not by a teams gap.",
+  "new_text": "**Two tracks, and BOTH are teams runtimes \u2014 they differ only in the team API surface.** Read the\nfleet pin live (`\"$(cc-claude-bin)\" --version`), not from this file.\n- **Fleet** (`claude` / `cc` and every account variant): 2.1.178+, which **removed `TeamCreate` /\n  `TeamDelete`** for an **implicit-team model** \u2014 you spawn teammates by calling the **`Agent` tool\n  with `name:`** (the runtime forms the team implicitly at STARTUP; the `TeamCreate`/`TeamDelete`\n  *tools* simply don't exist). Agent Teams are ENABLED here (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`;\n  first validated on 2.1.183, 2026-06-20).\n- **Legacy** (`claude-prev` / `cc-prev` \u2192 CC **2.1.114**, deliberately pinned \u2014 by *choice*, not by\n  a teams gap): exposes the classic **`TeamCreate` / `TeamDelete`** tools.",
+  "mirror_needed": "skills-a-06 uses the 'fleet track' term; optional: CLAUDE.global.md:175-178",
+  "pinned_by": "none (the '\u00a7 Runtime assumption' heading cited elsewhere is unchanged)",
+  "summary": "Group 2 version pins and deleted launcher names (claude-previous/next/opus5, ~/.claude-219) in a skill loaded before every teammate spawn; merged keep's provenance with mech's version-reading command."
+ },
+ {
+  "id": "skills-a-05",
+  "file": "skills/agent-teams/SKILL.md",
+  "old_text": "The wrong number is not even stable: before the 2026-07-31 entrypoint consolidation `claude`\nresolved the stable pin (`~/.claude-versions/current` \u2192 2.1.114) and under-reported inside an\neval-track session; it now resolves the consolidated eval launcher (`~/.claude-219` \u2192 2.1.219)\nand **over**-reports inside a stable session. `claude-previous` / `cc-previous` are the stable\n2.1.114 names. Identify the actual session by: the `AI_AGENT` env\n(`claude-code_2-1-XXX_agent`), `CLAUDE_CODE_EXECPATH` (`.../.claude-183/...` \u27f9 eval/2.1.183), the\nparent process command, or **tool availability**",
+  "new_text": "`claude --version` reports the CURRENT `~/.zshrc` pin, so a pane started before a repoint, or a legacy `claude-prev`\nsession, gets the wrong number. Identify the actual session by: the parent process command\n(`ps -o command= -p $PPID` \u2014 the most authoritative), `CLAUDE_CODE_EXECPATH`\n(`.../.claude-<NNN>/...`), the `AI_AGENT` env (`claude-code_2-1-XXX_agent`), or **tool availability**",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "Group 2 history narrative with four dead identifiers; keeps the trap and the detection order from cc-upgrade/audit.md Step 0."
+ },
+ {
+  "id": "skills-a-06",
+  "file": "skills/agent-teams/SKILL.md",
+  "old_text": "**When on the eval track:** read every `TeamCreate` / `TeamDelete` example below as the *2.1.114*\nsurface \u2014 do the equivalent via `Agent({ name, model, \u2026 })` to spawn + `shutdown_request`\nto each teammate to tear down (there is no `TeamDelete` call). The teammate `model` MUST be on the\nMax auto-mode allowlist (`claude-opus-4-8` / `claude-fable-5`); a bare background subagent is\nhard-blocked from writing code, and `sonnet` silent-demotes to acceptEdits + breaks parallelism\n(see `feedback-agent-team-models.md`).",
+  "new_text": "**On the fleet track:** read any `TeamCreate` / `TeamDelete` mention below as the *2.1.114*\nsurface \u2014 do the equivalent via `Agent({ name, model, \u2026 })` to spawn + `shutdown_request`\nto each teammate to tear down (there is no `TeamDelete` call). The teammate `model` must be on the\nSSOT's `auto_mode_allowlist.non_firstParty_max` (`~/.claude/model-config.yaml`); spawn with the\nalias `model: opus` (`roles.default_teammate`). A bare background subagent is\nhard-blocked from writing code, and `sonnet` silent-demotes to acceptEdits + breaks parallelism\n(see `feedback-agent-team-models.md`).",
+  "mirror_needed": "skills-a-04 (defines 'fleet track'), skills-a-07",
+  "pinned_by": "none",
+  "summary": "Group 2 stale allowlist (opus-4-8/fable-5) under MUST; names the SSOT key and the alias the SSOT prescribes."
+ },
+ {
+  "id": "skills-a-08",
+  "file": "skills/agent-teams/SKILL.md",
+  "old_text": "| Writes/modifies code (2+ tasks) | Agent Teams (TeamCreate + worktrees) |",
+  "new_text": "| Writes/modifies code (2+ tasks) | Agent Teams: `Agent({ name })` teammates, each in its own worktree \u2014 inside the wave's dispatched session by default (CLAUDE.md \u00a7 Agent Teams and parallel work) |",
+  "mirror_needed": "none",
+  "pinned_by": "none (quoted historically in docs/research/workflows-vs-teams-2026-08-20/W6)",
+  "summary": "Group 2: first routing table names an uncallable tool; aligned with the global dispatched-session default."
+ },
+ {
+  "id": "skills-a-16",
+  "file": "skills/agent-teams/SKILL.md",
+  "old_text": "Each brief line is processed at uncached rate. 250-line brief = ~5K tokens before any\nwork. 100-line brief = ~2K. Cap brief at 150 lines.",
+  "new_text": "A 250-line brief is ~5K tokens of the teammate's context before any work, held (and re-read from\ncache) for its whole run; 100 lines is ~2K. Cap brief at 150 lines.",
+  "mirror_needed": "none",
+  "pinned_by": "none (hooks/agent-teams-enforce.sh enforces the cap, not this sentence)",
+  "summary": "prompt-caching: rationale misstated the billing (the brief is cache-read after turn 1); the real cost is context occupancy. Hook-enforced cap unchanged."
+ },
+ {
+  "id": "skills-a-17",
+  "file": "skills/agent-teams/SKILL.md",
+  "old_text": "| Brief length (NEW) | \u2264150 lines |",
+  "new_text": "| Brief length | \u2264150 lines |",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "1d migration-relative marker."
+ },
+ {
+  "id": "skills-a-10",
+  "file": "skills/agent-teams/SKILL.md",
+  "old_text": "## Per-Teammate Effort (2026-06-11 \u2014 binary-verified mechanism)\n\nTeammate panes launch fresh `claude` processes that re-resolve their worktree's\n`.claude/settings.local.json` \u2014 the lead's live effort is NOT forwarded. So per-member\neffort IS settable, at worktree setup time:\n\n```bash\n~/.claude/scripts/set-teammate-effort.sh <worktree> low|medium|high|xhigh\n```\n\n> \u26a0\ufe0f **SUPERSEDED on 2.1.220+, re-read on the 2.1.280 binary 2026-09-22.** The teammate pane\n> builder now pushes `--effort <lead's live level>` onto every member's command line (this skill\n> already records it for 2.1.220 below), and a CLI flag outranks the worktree settings file this\n> script writes. So a member runs at its LEAD's effort, and the script no longer sets it. For a\n> different rung, fire that wave's session at the rung (`handoff-fire.sh --effort medium`).\n> Opus 5.5 rungs are in `effort_defaults.opus55_*`: anchored-brief coding medium, ambiguous\n> multi-file high. The paragraph below is the 2.1.170-era record.\n\nRun it during Setup (after worktree creation, BEFORE spawn). Defaults per SSOT\n`effort_defaults`: mechanical/routine \u2192 `high`; judgment-dense or `teammate_frontier`\n(Fable) members \u2192 `xhigh`. Without an override, panes resolve the user-settings floor\n(xhigh). `max` is settings-inexpressible (schema cap) \u2014 the script rejects it.",
+  "new_text": "## Per-Teammate Effort\n\nA teammate runs at its LEAD's effort, and there is no per-member override. To run a wave at another\nrung, fire that wave's own session at it (`handoff-fire.sh --effort medium`); Opus 5.5 rungs are in\n`effort_defaults.opus55_*` (anchored-brief coding medium, ambiguous multi-file high).\n`scripts/set-teammate-effort.sh` still writes a worktree settings file, but it does not bind on any\nbinary this fleet runs (its header keeps the 2.1.170-era mechanism): on 2.1.220+ (re-read on the\n2.1.280 binary 2026-09-22) the teammate pane builder puts `--effort <lead's live level>` on every\nmember's command line, and that flag outranks the file.",
+  "mirror_needed": "none (heading kept for docs/research citations)",
+  "pinned_by": "none",
+  "summary": "1d patch accretion: an imperative for a dead mechanism plus its SUPERSEDED callout, read on every teammate spawn; keeps the dated re-read."
+ },
+ {
+  "id": "skills-a-07",
+  "file": "skills/agent-teams/SKILL.md",
+  "old_text": "above). Assignees honor `model` (allowlist: `claude-opus-4-8` / `claude-fable-5`).",
+  "new_text": "above). Assignees honor `model` (allowlist: `auto_mode_allowlist.non_firstParty_max` in the SSOT).",
+  "mirror_needed": "skills-a-06",
+  "pinned_by": "none",
+  "summary": "Second copy of the stale two-id allowlist."
+ },
+ {
+  "id": "skills-a-09",
+  "file": "skills/agent-teams/SKILL.md",
+  "old_text": "2. **Pre-spawn checklist** \u2014 verify all 6 boxes (above)\n3. **Setup** \u2014 Create worktrees manually, TeamCreate, spawn teammates\n4. **Execute** \u2014 Teammates work, lead monitors via TaskList + completion notifications\n5. **Merge** \u2014 Sequential cherry-pick for schema-touching work; git merge for independent work\n6. **Cleanup** \u2014 `shutdown_request` to each teammate, remove worktrees, TeamDelete",
+  "new_text": "2. **Pre-spawn checklist** \u2014 verify every box (above)\n3. **Setup** \u2014 Create worktrees manually, then spawn each teammate with `Agent({ name, \u2026 })`, its worktree path in the brief\n4. **Execute** \u2014 Teammates work and report via `SendMessage`; lead monitors via TaskList (an idle notification is not completion)\n5. **Merge** \u2014 Sequential cherry-pick for schema-touching work; git merge for independent work\n6. **Cleanup** \u2014 harvest reports, run the Shutdown Protocol below (`shutdown_request` \u2192 `TaskStop` \u2192 ps-verify), then remove worktrees",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "Group 2 stale facts in the lifecycle list: 7 boxes not 6, dead TeamCreate/TeamDelete, idle notification misread as completion."
+ },
+ {
+  "id": "skills-a-02",
+  "file": "skills/agent-teams/SKILL.md",
+  "old_text": "**TeammateIdle hook auto-shuts down idle teammates** (`~/.claude/hooks/teammate-auto-shutdown.sh`).\nNo orphaned panes \u2014 teammates terminate immediately when they finish work.",
+  "new_text": "**The TeammateIdle hook is a backstop, not the teardown** (`~/.claude/hooks/teammate-auto-shutdown.sh`).\nIt checkpoints an idle teammate's work and closes its pane only when the gates in the rules below pass.\nIdle is not done (vendor contract \u00a7 1 below), and this path once closed zero panes for nine days\nunnoticed (`tests/teammate-reap-alarm.bats`), so the lead still ends every teammate through the\nShutdown Protocol.",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "Group 2 contradiction: a false 'no orphaned panes' guarantee that licensed skipping the Shutdown Protocol; newer vendor contract and global rule say only the lead ends a teammate."
+ },
+ {
+  "id": "skills-a-03",
+  "file": "skills/agent-teams/SKILL.md",
+  "old_text": "   a TeammateIdle hook runs LEAD-side as `lead-claude \u2192 /bin/sh -c \u2192 bash`, so\n   `$PPID` is the already-dead `/bin/sh` shim \u2014 the backgrounded kill hit a\n   PID-RECYCLED process (the lead or an unrelated shell). Targeting the recorded\n   pane id is deterministic.",
+  "new_text": "   a TeammateIdle hook runs inside the TEAMMATE's own Stop pass, not lead-side (RC-7,\n   2026-09-19; the hook's \u00a7 THE LOCUS), and the backgrounded kill on `$PPID` hit a\n   PID-RECYCLED process. Targeting the recorded pane id is deterministic.",
+  "mirror_needed": "none (hook header lines 31-35 vs 1459 disagree on the $PPID mechanism; separate item)",
+  "pinned_by": "none",
+  "summary": "Group 2 claim the hook's own RC-7 correction contradicts; fixes the locus without asserting the disputed $PPID mechanism."
+ },
+ {
+  "id": "skills-a-12",
+  "file": "skills/agent-teams/SKILL.md",
+  "old_text": "dies), but it is a request; **`TaskStop` is the authoritative actuator**. A sent request is never a\nteardown.",
+  "new_text": "dies), but it is a request; escalate to `TaskStop`, then ps-verify (vendor contract \u00a7 3 below: `TaskStop`\nremoves the pane and member row but may leave the process). A sent request is never a teardown.",
+  "mirror_needed": "skills-a-13 and skills-a-14 must land together",
+  "pinned_by": "none",
+  "summary": "1d patch accretion: a claim the same file retracts twice further down; fixed in place."
+ },
+ {
+  "id": "skills-a-14",
+  "file": "skills/agent-teams/SKILL.md",
+  "old_text": "built, because three of the beliefs the fleet operates on are not in the product, and one sentence\njust above this one is wrong.",
+  "new_text": "built, because three of the beliefs the fleet operates on are not in the product.",
+  "mirror_needed": "skills-a-12",
+  "pinned_by": "none",
+  "summary": "Removes the dangling retraction once skills-a-12 lands."
+ },
+ {
+  "id": "skills-a-13",
+  "file": "skills/agent-teams/SKILL.md",
+  "old_text": "**3. CORRECTION \u2014 `TaskStop` is not \"the authoritative actuator\", and the sentence above overstates\nit.**",
+  "new_text": "**3. `TaskStop` removes the pane, not necessarily the process.**",
+  "mirror_needed": "skills-a-12",
+  "pinned_by": "none",
+  "summary": "Restates the vendor-contract heading as the fact it carries once skills-a-12 lands."
+ },
+ {
+  "id": "skills-a-01",
+  "file": "skills/agent-teams/SKILL.md",
+  "old_text": "5. Kill iTerm2 pane manually if needed: `killall -9 tmux` (pane dies; agent stays until timeout)",
+  "new_text": "5. Close a pane that outlived its agent by its recorded id: the member's `tmuxPaneId` in the team `config.json`, closed with `it2 session close -f -s <id>` (iTerm2; under kitty add `--expect-cmdline-match \"--agent-name <name>\"`, because a kitty window id restarts with every kitty and a stale one can name an unrelated live window) or `tmux kill-pane -t <id>` (tmux). Never `killall tmux`: it kills every tmux session on the machine, and no idle timeout ever ends the agent (vendor contract \u00a7 1).",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "Group 2 + keep-list 3: a machine-wide destructive command in a teardown recipe replaced by the per-pane close the hook uses, with the kitty stale-id pin."
+ },
+ {
+  "id": "skills-a-15",
+  "file": "skills/agent-teams/SKILL.md",
+  "old_text": "**If teammate hangs**: (stable 2.1.114) GitHub #31788 \u2014 `TeamDelete` can block permanently. Kill pane, manually remove `~/.claude/teams/<team-name>`. Checkpoint refs survive in the worktree's `.git/` \u2014 run `git for-each-ref refs/wip/<member>/LAST` to recover. On the 2.1.183 implicit-team model there is no `TeamDelete` \u2014 send `shutdown_request`; if it hangs, kill the pane + `git worktree remove`.",
+  "new_text": "**If teammate hangs**: on the fleet's implicit-team runtime there is no `TeamDelete` \u2014 run the Shutdown Protocol above (`shutdown_request` \u2192 `TaskStop` \u2192 ps-verify), then `git worktree remove`. Checkpoint refs survive in the worktree's `.git/` \u2014 run `git for-each-ref refs/wip/<member>/LAST` to recover. Legacy 2.1.114 only: GitHub #31788 \u2014 `TeamDelete` can block permanently; kill the pane and remove `~/.claude/teams/<team-name>` by hand.",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "Group 2 version-keyed branches: fleet case first, routed through the Shutdown Protocol (no raw pgrep -f kill chain, which matches briefs)."
+ },
+ {
+  "id": "skills-a-18",
+  "file": "skills/browsermcp/SKILL.md",
+  "old_text": "Use BrowserMCP (not Playwright) for browser automation:",
+  "new_text": "How the retired server was shaped \u2014 none of it is callable or installable now; do not re-add it:",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "1d fossil imperative for a retired tool, in the skill loaded exactly when browser tools are missing."
+ },
+ {
+  "id": "skills-a-19",
+  "file": "skills/browsermcp/SKILL.md",
+  "old_text": "### agent-browser (CLI Fallback)\n\nWhen BrowserMCP unavailable, use `agent-browser`:",
+  "new_text": "## agent-browser (the live path)\n\nUse the `agent-browser` CLI:",
+  "mirror_needed": "skills-a-20 (same file)",
+  "pinned_by": "none",
+  "summary": "1d: the only live path was framed as a fallback nested under the historical section."
+ },
+ {
+  "id": "skills-a-20",
+  "file": "skills/browsermcp/SKILL.md",
+  "old_text": "### Vercel Agent Skills (Knowledge-Based)",
+  "new_text": "## Vercel Agent Skills (Knowledge-Based)",
+  "mirror_needed": "skills-a-19",
+  "pinned_by": "none",
+  "summary": "Heading hierarchy companion to skills-a-19."
+ },
+ {
+  "id": "skills-a-21",
+  "file": "skills/agent-browser/SKILL.md",
+  "old_text": "The live browser tool; use it when BrowserMCP or other browser MCP tools are unavailable.",
+  "new_text": "The live, default browser tool.",
+  "mirror_needed": "none",
+  "pinned_by": "tests/skill-listing-budget.bats (shorter; passes)",
+  "summary": "Listing trigger conditioned on a retired tool framed the global default as a fallback; no new routing surface added."
+ },
+ {
+  "id": "skills-a-22",
+  "file": "skills/agent-browser/SKILL.md",
+  "old_text": "- BrowserMCP unavailable but need existing browser control",
+  "new_text": "- Need control of a browser that is already running",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "1d fossil condition, permanently true since 2026-08-11."
+ },
+ {
+  "id": "skills-a-25",
+  "file": "skills/coding-standards/SKILL.md",
+  "old_text": "## Code Style & Stack Conventions (relocated from global CLAUDE.md)",
+  "new_text": "# Code Style & Stack Conventions",
+  "mirror_needed": "none",
+  "pinned_by": "none (snapshot in docs/research/token-efficiency-2026-09-23 listings_raw; not a test)",
+  "summary": "1d provenance aside in a skill teammates are told to embed; fixes heading level."
+ },
+ {
+  "id": "skills-b-08",
+  "file": "skills/frontier-run/SKILL.md",
+  "old_text": "problems Opus 5 @ high is **blind to**",
+  "new_text": "problems the default tier is **blind to**",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "Group 2 pinned model name (default is Opus 5.5)."
+ },
+ {
+  "id": "skills-b-04",
+  "file": "skills/frontier-run/SKILL.md",
+  "old_text": "   `claude-previous` / `cc-previous` (2.1.114), which does not know the model;\n   the live launcher is `claude` (2.1.260). On the legacy path: report and stop.",
+  "new_text": "   `claude-prev` / `cc-prev` (2.1.114), which does not know the model;\n   the live launcher is `claude`. On the legacy path: report and stop.",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "Group 2 dead launcher names and a stale version pin in the frontier gate; the \ud83d\udea8 incident narrative is kept (keep-list)."
+ },
+ {
+  "id": "skills-b-03",
+  "file": "skills/frontier-run/SKILL.md",
+  "old_text": "Fable 5 = $10/$50\n   per MTok \u2248 2\u00d7 Opus, drawn from the 5-hour plan windows. Estimate the band",
+  "new_text": "Fable draws on a\n   50% sub-cap of the same weekly quota bucket (`frontier.coupling: 0.5`) at\n   roughly 2-5\u00d7 the default tier's rate: the cost is quota, not dollars. Estimate the band",
+  "mirror_needed": "optional: same file's '## After returns \u2026 worth 2\u00d7' heading, frontier-campaign:11",
+  "pinned_by": "none",
+  "summary": "Group 2 wrong cost currency and ratio in the audit line printed before every Fable panel."
+ },
+ {
+  "id": "skills-b-09",
+  "file": "skills/frontier-run/SKILL.md",
+  "old_text": "The lead (typically Opus\n  4.8) stays put",
+  "new_text": "The lead stays put",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "Group 2 pinned model name two generations stale."
+ },
+ {
+  "id": "skills-b-01",
+  "file": "skills/frontier-run/SKILL.md",
+  "old_text": "- **Panelist effort = the lead's live effort, by construction.** In-process\n  spawns have NO per-spawn effort surface (binary-verified 2.1.170: AgentInput\n  has no effort field, frontmatter `effort` unparsed \u2014 GH #25591/#25669/#31536/\n  #65598 open). From an Opus@max lead, panels run Fable@max: an accepted,",
+  "new_text": "- **Panelist effort = the lead's live effort, unless the agent definition pins one.**\n  The Agent call itself carries no effort; frontmatter `effort:` in the agent\n  definition IS honoured on the `subagent_type` path (measured on CC 2.1.284,\n  `claude-infrastructure/docs/research/sonnet55-utilization-2026-09-28/notes/probe-effort-binding.md`).\n  `frontier-derivation` pins none, so from an Opus@max lead, panels run Fable@max: an accepted,",
+  "mirror_needed": "optional: same stale claim in model-config.yaml:1175, skills/agent-teams/SKILL.md:223, scripts/set-teammate-effort.sh:26-28",
+  "pinned_by": "none",
+  "summary": "Group 2 fact the repo's own 2.1.284 probe refutes (frontmatter effort is honoured); conclusion unchanged, lever made visible."
+ },
+ {
+  "id": "skills-b-06",
+  "file": "skills/frontier-run/SKILL.md",
+  "old_text": "`~/.claude/rules/research-subagents.md` frontier routing.",
+  "new_text": "the research-subagents skill's frontier routing.",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "Group 2 dead path (rules/ dir removed)."
+ },
+ {
+  "id": "skills-b-02",
+  "file": "skills/frontier-campaign/SKILL.md",
+  "old_text": "- **Per-teammate effort is set at worktree setup, not at spawn**: run\n  `~/.claude/scripts/set-teammate-effort.sh <worktree> high` (xhigh for the\n  capability-sensitive architect/judge members) BEFORE spawning \u2014 teammate\n  panes re-resolve their worktree's `.claude/settings.local.json`\n  (binary-verified 2.1.170; the lead's effort is not forwarded). Without the\n  override, panes resolve the user-settings floor (xhigh).",
+  "new_text": "- **Per-teammate effort = the lead's live effort**: from CC 2.1.220 the pane\n  builder passes `--effort <lead's level>` to every member, which outranks the\n  worktree file `set-teammate-effort.sh` writes. To run the architect/judge\n  members at xhigh and implementers at a lower rung, fire each wave's own\n  session at that rung (`handoff-fire.sh --effort <rung>`; rungs in\n  `effort_defaults.opus55_*`).",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "Group 2 instruction prescribing a no-op (the script's own header marks it superseded from 2.1.220); campaign effort tiers now take effect."
+ },
+ {
+  "id": "skills-b-10",
+  "file": "skills/frontier-campaign/SKILL.md",
+  "old_text": "**Implementers = default tier** (Opus 5 teammates):",
+  "new_text": "**Implementers = default tier**:",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "Group 2 stale model name."
+ },
+ {
+  "id": "skills-b-07",
+  "file": "skills/frontier-hole/SKILL.md",
+  "old_text": "(Opus 5 @ high \u2014 `lead_default` in",
+  "new_text": "(`roles.lead_default` @ `effort_defaults.default` in",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "Group 2 recurring stale model name (already fixed once by 6202beaac); names the SSOT keys."
+ },
+ {
+  "id": "skills-b-19",
+  "file": "skills/frontier-hole/SKILL.md",
+  "old_text": "where the 2\u00d7 cost buys",
+  "new_text": "where the frontier tier's higher quota draw (roughly 2-5\u00d7 the default's) buys",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "Cost currency consistent with the global Frontier Tier Routing text."
+ },
+ {
+  "id": "skills-b-11",
+  "file": "skills/launch-film/SKILL.md",
+  "old_text": "description: \"Make, re-work or audit a repo's launch film (a 15-60 s product film with sound, or a README hero loop) to the operator's accepted bar: startup-modern, studio-grade restraint, no purple-gradient 'AI slop', every string and sound real, rendered frame-by-frame from a web page and gated by a verify script. Use when asked for a launch video, brag film or hero film, when re-styling one that reads as 'classroom', 'template' or 'AI slop', or when carrying the Natural TTS film's quality to another repo (e.g. claude-infrastructure). Owns the taste, truth rules and gates; hyperframes, demo-recording and visual-direction own their own mechanics.\"",
+  "new_text": "description: \"Make, re-work or audit a launch video, brag film or README hero loop, including one that reads as template or AI slop, to the operator's bar: studio-grade restraint, every string and sound real, verify-gated. Owns taste; hyperframes owns mechanics.\"",
+  "mirror_needed": "none",
+  "pinned_by": "tests/skill-listing-budget.bats cases 1 and 5 (red today at 641 chars; green after, verified on a scratch copy)",
+  "summary": "cost-optimization 2.2 listing budget: 641-char description (cap 250) turns the listing test green and frees ~390 chars of the capped skill listing; keeps 'launch video' and the hyperframes boundary. Merges session-cost-03."
+ },
+ {
+  "id": "skills-b-12",
+  "file": "skills/frontend-design-vue/SKILL.md",
+  "old_text": "`Explore` subagent with Playwright / BrowserMCP access.",
+  "new_text": "`Explore` subagent driving the `agent-browser` CLI.",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "Group 2 conflict with the global browser rule (Playwright disallowed, BrowserMCP retired)."
+ },
+ {
+  "id": "skills-b-18",
+  "file": "skills/demo-recording/SKILL.md",
+  "old_text": "capture, iTerm2 sizing,",
+  "new_text": "capture, terminal window sizing,",
+  "mirror_needed": "none",
+  "pinned_by": "tests/skill-listing-budget.bats (236 chars, passes)",
+  "summary": "Listing text named a terminal the body says is not running (host is kitty)."
+ },
+ {
+  "id": "skills-b-13",
+  "file": "skills/demo-recording/SKILL.md",
+  "old_text": "63,960 ms. Trust `webpinfo`.\n\n**ffmpeg cannot decode animated WebP** (`image data not found`). Use\n`magick in.webp -coalesce out/%04d.png` to get frames, and `webpinfo` for the\nauthoritative per-frame durations. **Pillow mis-reports durations** on\nduration-merged frames \u2014 its timeline summed to 63,680 ms where `webpinfo` said\n63,960 ms. Trust `webpinfo`.\n\n**Animated AVIF",
+  "new_text": "63,960 ms. Trust `webpinfo`.\n\n**Animated AVIF",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "1c byte-identical duplicated paragraph."
+ },
+ {
+  "id": "skills-b-20",
+  "file": "skills/demo-recording/SKILL.md",
+  "old_text": "This line\npreviously read *\"a specific window id (no chrome)\"*, carried over from the **still**-image\nbehaviour where `-l` genuinely does crop to the window. In `-v` mode",
+  "new_text": "It crops to\nthe window only for a **still** image. In `-v` mode",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "1d: stops quoting the wrong instruction it warns against; measured incident evidence kept."
+ },
+ {
+  "id": "skills-b-22",
+  "file": "skills/demo-recording/SKILL.md",
+  "old_text": "path only for a static burn-in. PIL is the path; render one PNG per frame so captions can fade,\n  rise, or carry a progress line rather than hard-cutting:",
+  "new_text": "path only for a static burn-in. Per-frame captions with PIL:",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "1c back-to-back restatement."
+ },
+ {
+  "id": "skills-b-16",
+  "file": "skills/dia-agent/SKILL.md",
+  "old_text": "Two paths to Dia, plus a last-resort fallback:\n\n1. **PRIMARY \u2014 your REAL warm Dia** via `dia://inspect#remote-debugging`. No separate\n   launch; your real logged-in sessions across all Spaces. **Start here.**\n2. **SECONDARY \u2014 an isolated clean dedicated Dia profile** via `~/bin/dia-cdp-launch.sh`.\n   Use when you want isolation and do NOT want to expose the real Dia.",
+  "new_text": "Start with the AppleScript rail (\u00a7 ZERO-PROMPT RAIL below): tabs, windows, Spaces and in-page JS\non the real Dia with no port and no dialog. Drop to CDP only for what it cannot do (trusted input,\nscreenshots, network, cookies), on one of two paths, plus a last-resort fallback:\n\n1. **PRIMARY \u2014 your REAL warm Dia** via `dia://inspect#remote-debugging`. No separate\n   launch; your real logged-in sessions across all Spaces. Connections are approved through a\n   consent modal, so this path needs the operator at the screen.\n2. **SECONDARY \u2014 an isolated clean dedicated Dia profile** via `~/bin/dia-cdp-launch.sh`.\n   Consent-free: use it for unattended CDP work and whenever you do not want to expose the real Dia.",
+  "mirror_needed": "none",
+  "pinned_by": "none (bin/cc-url-open cites the unchanged \u00a7 ZERO-PROMPT RAIL heading)",
+  "summary": "Group 2 option menu: three passages named three different starting points; one default plus fallbacks, avoids stray consent modals on the operator's browser."
+ },
+ {
+  "id": "skills-b-14",
+  "file": "skills/dia-agent/SKILL.md",
+  "old_text": "2. Dia starts a CDP server on an **ephemeral** `127.0.0.1:<port>` shown on that page.\n   It is **WS-only** \u2014 there is NO `/json` HTTP discovery (`/json/version` 404s), so\n   `--browserUrl` / `/json`-based clients do NOT work here. Re-read the port from the\n   page each time (it changes when you cycle the toggle).",
+  "new_text": "2. Dia starts a CDP server on `127.0.0.1:9222`, fixed and stable across toggle cycles\n   on 1.48.0 (it was ephemeral on 1.37.1; confirm it on the page or in `DevToolsActivePort`).\n   It is **WS-only** \u2014 there is NO `/json` HTTP discovery (`/json/version` 404s), so\n   `--browserUrl` / `/json`-based clients do NOT work here.",
+  "mirror_needed": "optional: same file still says 'ephemeral' at ~162, 197, 208, 327",
+  "pinned_by": "none",
+  "summary": "Group 2 the file disagrees with its own 2026-09-14 Corrections (port fixed at 9222 on 1.48.0)."
+ },
+ {
+  "id": "skills-b-15",
+  "file": "skills/dia-agent/SKILL.md",
+  "old_text": "- **[PRIMARY only]** Ephemeral, WS-only port \u2014 `/json/version` 404s; use the `ws://` URL from\n  the page; the port changes when you cycle the toggle.",
+  "new_text": "- **[PRIMARY only]** WS-only port, fixed `9222` on 1.48.0 (ephemeral on 1.37.1) \u2014 `/json/version`\n  404s; use the `ws://` URL from the page or `DevToolsActivePort`.",
+  "mirror_needed": "skills-b-14",
+  "pinned_by": "none",
+  "summary": "Same correction in the Hard facts list."
+ },
+ {
+  "id": "skills-c-01",
+  "file": "skills/video-understanding/SKILL.md",
+  "old_text": "## The binding constraint: ~1568px\n\nAny image you read is resampled to roughly **1568px on its long edge**. For an\nN-column contact sheet each tile arrives at about `1568 / N` px wide:\n\n| Columns | Tile width | Legible |\n| --- | --- | --- |\n| 1 | 1568px | Everything \u2014 12px UI text, source code |\n| 2 | 784px | Headings, most body text |\n| 4 | 392px | Composition and large text only |\n| 6+ | \u2264261px | Shot type and colour. Text is gone. |\n\nTotal visual information = `(image reads) \u00d7 1568\u00b2`. **You cannot have both full",
+  "new_text": "## The binding constraint: ~2000px\n\nClaude Code downscales any image you Read to at most **2000px on its long edge**\nbefore the model sees it. The model's own limit (2576px, at most 4784 visual tokens)\nsits above that and trims only near-square sheets, to about 1930px\n(`~/Development/claude-infrastructure/docs/research/cv-design-review-2026-08-26/agents/A9-capture-fidelity.md` \u00a70a).\nFor an N-column contact sheet each tile arrives at about `2000 / N` px wide:\n\n| Columns | Tile width | Legible |\n| --- | --- | --- |\n| 1 | 2000px | Everything \u2014 12px UI text, source code |\n| 2 | 1000px | Headings, most body text |\n| 4 | 500px | Composition and large text only |\n| 6+ | \u2264333px | Shot type and colour. Text is gone. |\n\nTotal visual information = `(image reads) \u00d7 2000\u00b2`. **You cannot have both full",
+  "mirror_needed": "skills-c-02; bin/cc-read-twitter:31-32 comment repeats the stale 1568px reason",
+  "pinned_by": "none",
+  "summary": "1d visual-input fossil: 1568px is the Opus 4.6 tier; Claude Code clamps at 2000px (re-read in the 2.1.284 binary), so tile widths were 22% understated. Merged both verifiers' corrections."
+ },
+ {
+  "id": "skills-c-02",
+  "file": "skills/read-twitter/SKILL.md",
+  "old_text": "- **Size is already right \u2014 do not \"optimise\" it.** The tool fetches\n  `?name=medium` (1200 px). `orig` is ~41 % more tokens for zero readable gain,\n  because the vision pipeline downscales to ~1568 px regardless.",
+  "new_text": "- **Size is already right \u2014 do not \"optimise\" it.** The tool fetches\n  `?name=medium` (1200 px). `orig` cost ~41 % more tokens and showed no readable\n  gain on the test chart; Claude Code clamps any image to 2000 px on its long\n  edge, so `orig` buys at most 1200 \u2192 2000 px, which matters only for dense text.",
+  "mirror_needed": "bin/cc-read-twitter:31-32 comment (same stale reason)",
+  "pinned_by": "none (tests pin only the medium default, unaffected)",
+  "summary": "Group 2 stated reason contradicted by the repo; keeps the measured 41% and the medium default, and makes the skill's own orig escape hatch coherent."
+ },
+ {
+  "id": "skills-c-14",
+  "file": "skills/research-subagents/SKILL.md",
+  "old_text": "*Last revised: 2026-05-24 \u2014 V2 validation (Category C gate; depth caps split by task class; NF-1 diversity finding; R2/R3/E1 routing refinements). Forensic",
+  "new_text": "*Forensic",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "Group 2 false date stamp (file revised through 2026-10-01)."
+ },
+ {
+  "id": "skills-c-08",
+  "file": "skills/research-subagents/SKILL.md",
+  "old_text": "**Length**: 150-400 tokens (\u2248 80-250 words). Briefs above 400 tokens suffer\nlost-in-middle exposure (TACL 2024 Liu et al. \u2014 middle-position instructions\nhave 40-60% adherence vs 95% at primacy). Briefs below 150 tokens\nunder-specify; subagent satisfices on the first axis it finds.\n\n**Serial-position discipline** (arxiv 2406.15981): last-position instructions\nhave 2-4\u00d7 adherence vs middle. The stop-line (\"if you reach saturation\nbefore 30 tool calls, return early; if you can predict the next call's\nresult, stop\") MUST be the brief's final line.",
+  "new_text": "**Length**: keep the brief's own content (fields 1-5 and the non-contract part of\nfield 6) tight, roughly 80-250 words; below ~80 words a brief under-specifies and\nthe subagent satisfices on the first axis it finds. The brief also carries the\nverbatim synthesis contract (\u00a7 Cost Asymmetry) and every rule the worker needs,\nbecause the research agents run with `omitClaudeMd: true` (\u00a7 Quota-Aware Wave\nSizing), so a complete brief runs past 400 tokens by design. Spend extra length\non context, never on restating the contract.\n\n**Serial-position discipline** (arxiv 2406.15981): last-position instructions\nhave 2-4\u00d7 adherence vs middle. End the brief with field 7's delivery path,\nthen the stop-line (\"if you reach saturation before 30 tool calls, return\nearly; if you can predict the next call's result, stop\") as the final line.",
+  "mirror_needed": "skills-c-08b (commands/research.md:97)",
+  "pinned_by": "tests/research-zero-allowed-prompts.bats (whole-file quota regex; new text checked)",
+  "summary": "Group 2 unsatisfiable cap: the mandatory verbatim contract alone is ~300 tokens; resolves the field-7 vs stop-line last-line clash."
+ },
+ {
+  "id": "skills-c-11",
+  "file": "skills/research-subagents/SKILL.md",
+  "old_text": "- *(Retired 2026-09-22.)* **Workflow bulk synthesis-worker free win (T2 effort grid, CERTIFIED 2026-07-01).** In a\n  Workflow, spawn breadth-first synthesis/inferential workers as\n  `agent(brief, {model: 'claude-sonnet-5', effort: 'max'})` \u2014 **NOT** Opus-4.8@max. Sonnet-5@max\n  ties Opus-4.8@max on quality across easy AND hard synthesis briefs (0 reliable Opus wins, blind\n  4-judge default-to-refute) at **~2-3\u00d7 lighter quota-draw** \u2014 so it frees the scarce Opus headroom\n  for the decisive slots. HARD requirements: effort MUST be `max` (Sonnet@xhigh drops below the\n  floor \u2014 wrong-file citations on hard grounding), AND the brief MUST carry a saturation bound\n  (~15-25 tool calls; unbounded max-effort Sonnet overflowed context once). In-process `/research`\n  can't pin effort \u2192 those workers stay on `roles.research_worker` (the Workflow slot is\n  `roles.workflow_synthesis_worker`, both in `~/.claude/model-config.yaml`). The free win was\n  certified vs Opus 4.8 only; re-probed against Opus 5.5 on 2026-09-22, it lost on quality.",
+  "new_text": "- *(Retired 2026-09-22.)* The 2026-07-01 Sonnet-5@max synthesis free win tied Opus 4.8@max at\n  ~2-3\u00d7 lighter quota draw, but only at effort `max` (at `xhigh` Sonnet fell below the floor with\n  wrong-file citations on hard grounding) and with a ~15-25 tool-call saturation bound (unbounded\n  max-effort Sonnet overflowed context once). Re-probed against Opus 5.5 on 2026-09-22, it lost on\n  quality. Record: `~/.claude/model-routing-freewin-probe.md` (T2, T9).",
+  "mirror_needed": "none",
+  "pinned_by": "tests/research-zero-allowed-prompts.bats (quota regex; checked)",
+  "summary": "Group 2 retired spawn recipe kept in imperative form, plus a claim the 2026-09-22 measurement refutes; keeps why max effort was load-bearing."
+ },
+ {
+  "id": "skills-c-04",
+  "file": "skills/research-subagents/SKILL.md",
+  "old_text": "> \"You have ~1M tokens of nominal context. Effective working ceiling is\n> ~400K before reasoning quality degrades (LongSWE-Bench, MRCR v2, Opus 4.6\n> self-degradation curve). Target 150-250K on exploration; hard cap 500K.",
+  "new_text": "> \"Target 150-250K tokens of exploration; hard cap 500K, or ~150K on a\n> 200K-window model such as Haiku. Reasoning quality degrades long before\n> the context window fills.",
+  "mirror_needed": "none (agents/deep-research*.md keep '~1M', true for their models)",
+  "pinned_by": "tests/research-zero-allowed-prompts.bats (checked)",
+  "summary": "Text inlined into every brief told Haiku 4.5 retrieval workers (200K window) they had ~1M."
+ },
+ {
+  "id": "skills-c-03",
+  "file": "skills/research-subagents/SKILL.md",
+  "old_text": "- **Retrieval workers** (pure lookup + extraction, no inferential synthesis \u2014\n  Explore Haiku, or rare retrieval-only Sonnet slot): **350-500K modal, up\n  to 1M for genuinely retrieval-only briefs**, with explicit caveat on\n  lost-in-middle (TACL 2024: 40-60% middle adherence even on retrieval).\n  Above 500K expect ~15-25% degradation on multi-needle retrieval per MRCR v2.",
+  "new_text": "- **Retrieval workers** (pure lookup + extraction, no inferential synthesis):\n  on the pinned retrieval model (`roles.research_retrieval`, `claude-haiku-4-5`)\n  the whole context window is **200K**, so budget **\u2264150K** and split a larger\n  source set across more workers. A retrieval-only brief that genuinely needs\n  more goes to a 1M-window model (`roles.research_worker`) at **350-500K modal**,\n  with the lost-in-middle caveat (TACL 2024: 40-60% middle adherence even on\n  retrieval); above 500K expect ~15-25% degradation on multi-needle retrieval per MRCR v2.",
+  "mirror_needed": "skills-c-04",
+  "pinned_by": "tests/research-zero-allowed-prompts.bats (checked)",
+  "summary": "Group 2 budget impossible on the pinned model (350-500K modal for a 200K-window Haiku)."
+ },
+ {
+  "id": "skills-c-06",
+  "file": "skills/research-subagents/SKILL.md",
+  "old_text": "  multi-axis depth research. \u26a0\ufe0f See \u00a7 Recursion Regression \u2014 the `Agent`\n  tool declaration is currently NOT honored by stock Claude Code; the\n  subagent runs as flat (non-recursive) deep research.",
+  "new_text": "  multi-axis depth research. It runs flat: subagent spawning is capped at\n  depth 1 on purpose (\u00a7 Recursion Regression), so it never fans out on its own.",
+  "mirror_needed": "skills-c-05 (lockstep)",
+  "pinned_by": "none",
+  "summary": "Wrong cause for flat fan-out (the cap is ours); both lenses accepted (the harness flag read false from a duplicated verdict row)."
+ },
+ {
+  "id": "skills-c-12",
+  "file": "skills/research-subagents/SKILL.md",
+  "old_text": "\ud83d\udea8 **This paragraph carried THREE dead conjuncts until 2026-09-04** \u2014 the same\ntriple `436f3435` cut out of `commands/research.md`, and the reason this text\nnow names KEYS instead of facts. It asserted (a) a usage window\n\"2026-06-09 \u2192 2026-06-23\" that died two windows before it was read\n(`frontier_access.permanent: true` since 2026-07-20 \u2014 there is no window and no\n\"after the window\"), (b) \"ONLY on the claude-next eval track\", a track launcher\nconsolidation v2 DELETED, so the routing condition was unsatisfiable by any\nsession, and (c) a fallback and model id that had both since moved. A doc that\nrestates a perishable fact has no path to learn the fact changed. The shipped\nenforcer `hooks/frontier-spawn-gate.sh` checks `active` + `end` and reads no\ntrack at all; `frontier_access.tracks` is a stale label with no code consumer.\nAgent-definition frontmatter stays `model: opus` so the definitions remain\nvalid on both tracks \u2014 the override is always call-time. Agent TEAMS run on\nboth tracks too; teammate models are gated by the auto-mode allowlist in\nthe SSOT, not by the track \u2014 default `versions.opus_latest`; `claude-fable-5` verified\nin auto mode 2026-06-09 and allowlisted, so eval-track teams may pin\n`roles.teammate_frontier` per-member where judgment density warrants\nthe 2\u00d7 cost. **Lead/default sessions do NOT ride the frontier tier**\n(`lead_default` reverted to Opus 4.8 on 2026-06-09 \u2014 Fable-by-default burned\n5-hour plan windows).",
+  "new_text": "This text names SSOT keys rather than values because restated values went stale\nhere three times (`436f3435`: a dead usage window, a deleted `claude-next` track,\na moved fallback and model id). The shipped enforcer `hooks/frontier-spawn-gate.sh`\nchecks `frontier_access.active` + `end` and reads no track. Agent-definition\nfrontmatter stays `model: opus`; the frontier override is always call-time.\nTeammate models are gated by `auto_mode_allowlist` in the SSOT (default\n`versions.opus_latest`); teams may pin `roles.teammate_frontier` per member where\njudgment density warrants Fable's higher quota draw. **Lead/default sessions do NOT\nride the frontier tier** (`roles.lead_default` moves with `versions.opus_latest`;\nFable-by-default burned 5-hour plan windows on 2026-06-09).",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "Group 2: four facts gone stale again (both tracks, eval-track teams, claude-fable-5, lead_default=Opus 4.8); keeps the allowlist gate and the 436f3435 rationale."
+ },
+ {
+  "id": "skills-c-09",
+  "file": "skills/research-subagents/SKILL.md",
+  "old_text": "1. **Sonnet worker return <3K on non-trivial question** \u2192 lead inspects at\n   synthesis time; if not a satisficing-failure (worker did try) \u2192 re-spawn\n   on Opus OR re-decompose into smaller independent axes.\n2. **Sonnet worker's predict-next-call falsifiability check fails on an\n   inferential gap** (worker explicitly flags: *\"I couldn't determine X\n   without multi-hop inference Y\"*) \u2192 **automatic re-spawn on Opus**, no\n   re-decomposition first. The inferential gap is itself the signal that the\n   sub-question required multi-hop reasoning Sonnet couldn't complete;\n   further decomposition doesn't help.\n\nPure Opus for a typical wave overpays ~47%;",
+  "new_text": "1. **Worker return <3K on a non-trivial question** \u2192 lead inspects at\n   synthesis time; if not a satisficing-failure (worker did try) \u2192 re-spawn\n   on the frontier (`versions.frontier_latest`) OR re-decompose into smaller\n   independent axes.\n2. **Worker's predict-next-call falsifiability check fails on an\n   inferential gap** (worker explicitly flags: *\"I couldn't determine X\n   without multi-hop inference Y\"*) \u2192 **automatic re-spawn on the frontier**,\n   no re-decomposition first. The gap itself shows the sub-question needs\n   multi-hop reasoning; further decomposition doesn't help.\n\n*(Historical cost-first rationale, superseded for worker selection by the override above:)* Pure Opus for a typical wave overpays ~47%;",
+  "mirror_needed": "none (the override's pointers to the historical math stay valid)",
+  "pinned_by": "tests/research-zero-allowed-prompts.bats (checked)",
+  "summary": "1d patch accretion: states the current routing directly instead of asking the reader to reinterpret a superseded Sonnet-worker rule; historical math kept verbatim and labelled."
+ },
+ {
+  "id": "skills-c-05",
+  "file": "skills/research-subagents/SKILL.md",
+  "old_text": "> Recursion status (May 2026 \u2014 SUPERSEDED on CC 2.1.183; see Update below): depth-2 fan-out NOT operational in stock Claude Code. The `Agent` tool is not exposed to subagents regardless of frontmatter declaration (GH #46424 primary blocker; also #4182, #19077, #31977, #30703). Default to depth-1 flat fan-out and re-spawn from lead context when sub-axes emerge. Workarounds + re-evaluation trigger: `~/.claude/memory/research-subagents-recursion-regression.md`.\n>\n> **Update 2026-06-19 \u2014 RESOLVED on CC 2.1.183 (claude-next), empirically verified.** A controlled headless probe against the 2.1.183 binary (`--safe-mode --permission-mode auto`, Opus parent) returned `{\"fanout4_completed\": true, \"depth2_DEPTH2OK\": true}`: a worker subagent spawned its own leaf sub-subagent via the `Agent` tool and relayed the result up (depth-2 works \u2192 #46424 cleared), and four parallel workers under an Opus parent all completed with no session termination (\u2192 GH #61258 does not reproduce on 2.1.183). So on the **2.1.183 runtime** hierarchical fan-out (lead \u2192 mid-tier synthesizers \u2192 leaf workers \u2014 the \u00a7 Synthesis Bottleneck N>50 pattern) is available; prefer it over re-spawn-from-lead when sub-axes emerge. **Scope:** verified depth-2 (the operationally relevant tier; the 2.1.172 changelog claims up to 5, untested past 2). The **stable track (2.1.114, reached as `claude-previous` since the 2026-07-31 entrypoint consolidation renamed it off `claude`) keeps the old non-recursive behavior** \u2014 hold depth-1 discipline there. Probe provenance: claude-next 2.1.170\u21922.1.183 upgrade session, 2026-06-19.",
+  "new_text": "> **Depth is 1 on purpose.** `~/.zshrc` exports `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1`, so a subagent cannot spawn its own (global CLAUDE.md \u00a7 Research subagents). Since 2.1.224 removed the per-session spawn cap, depth is the only runaway bound (GH #68619), so keep it. Fan out flat from the lead and re-spawn emerging sub-axes from the lead; the \u00a7 Synthesis Bottleneck mid-tier synthesizers are `workflow-lean` workers spawned by the lead or the Workflow that read leaf artifacts from disk, never parents of leaves. The product itself can nest (a 2026-06-19 headless probe on 2.1.183 returned `depth2_DEPTH2OK: true`), so the cap is ours, not an upstream gap. Full record: `~/.claude/agents/deep-research.md` \u00a7 Permission to Recurse; May-2026 history: `~/.claude/memory/research-subagents-recursion-regression.md`.",
+  "mirror_needed": "skills-c-06 (lockstep); agents/deep-research.md and CLAUDE.global*.md already state the rule",
+  "pinned_by": "none",
+  "summary": "Group 2 contradiction with the enforced depth-1 cap: the skill told leads to prefer depth-2 fan-out; keeps the 2026-06-19 probe result as evidence."
+ },
+ {
+  "id": "skills-c-15",
+  "file": "skills/plan-conventions/SKILL.md",
+  "old_text": "**Phase 0 Rule (MANDATORY \u2014 Agent Teams Default)**\n\n**Agent Teams are the DEFAULT for all implementation work.** Any plan with 2+ tasks that\nwrite or modify code MUST use Agent Teams and include Phase 0 as the FIRST section.\nOnly use background subagents for research/exploration (no code changes) or 50+ parallel\nread-only tasks. The user expects 9/10 implementation sessions to use Agent Teams.",
+  "new_text": "**Phase 0 Rule (MANDATORY)**\n\nAny plan with 2+ tasks that write or modify code includes Phase 0 as the FIRST section. Each\nwave's default locus is a dispatched session (S, below), which leads its own Agent Team for code\nacross 2+ files; in-session teammates on the lead (T) and lead-inline work (L) each need a one-line\nreason. Background subagents do read-only research and exploration only; they never write code.",
+  "mirror_needed": "skills-c-30 (hook injection, lockstep); optional comments: hooks/validate-plan-structure.sh:13-14, lib/cc-upgrade-gate/check07_teams.sh:4",
+  "pinned_by": "none",
+  "summary": "Group 2 two defaults in one file (lines 36 vs 82) on every plan edit; keeps the within-session Agent Teams expectation inside S."
+ },
+ {
+  "id": "skills-c-16",
+  "file": "skills/plan-conventions/SKILL.md",
+  "old_text": "lead arms `cc-await-ping` in background |",
+  "new_text": "lead arms `cc-await-ping` in background only when no `/goal` is live in its pane (`hooks/validate-bash.sh` denies the park otherwise) |",
+  "mirror_needed": "skills-c-17",
+  "pinned_by": "none (behavior enforced by hooks/validate-bash.sh:195-215)",
+  "summary": "Recipe step the LIVE-/goal guard denies in the usual case."
+ },
+ {
+  "id": "skills-c-30",
+  "file": "hooks/validate-plan-structure.sh",
+  "old_text": "Per CLAUDE.md: Agent Teams are the DEFAULT for all implementation work (9/10 sessions). Add Phase 0",
+  "new_text": "Per CLAUDE.md: an implementation plan with 2+ code tasks needs Phase 0. Add Phase 0",
+  "mirror_needed": "skills-c-15 (lockstep)",
+  "pinned_by": "tests/validate-plan-structure.bats (greps 'Agent Team' -i, 'AGENT TEAMS REQUIRED', 'EXECUTION LOCUS PER WAVE', jq validity; all still hold)",
+  "summary": "Hook-injected message named two different defaults in one sentence."
+ },
+ {
+  "id": "skills-c-17",
+  "file": "skills/plan-update/SKILL.md",
+  "old_text": "lead arms\n`cc-await-ping <lead-uuid>` in the background.",
+  "new_text": "lead arms\n`cc-await-ping <lead-uuid>` in the background only when no `/goal` is live in its pane\n(`hooks/validate-bash.sh` denies the park otherwise).",
+  "mirror_needed": "skills-c-16",
+  "pinned_by": "none",
+  "summary": "Same hook-denied step in the Phase 0 scaffold pasted into plans."
+ },
+ {
+  "id": "skills-c-18",
+  "file": "skills/plan-update/SKILL.md",
+  "old_text": "| Context at 75%+ | Send \"Pause, I'll /compact, then resume\" | During wave |\n| Context at 90%+ | Shutdown + respawn | During wave |",
+  "new_text": "| Context at 75%+ | Have it commit, then shutdown + respawn on its branch (teammates do not survive `/compact`, GH #49593) | During wave |",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "Group 2 scaffold prescribed the teammate /compact crash the global rules warn about."
+ },
+ {
+  "id": "skills-c-19",
+  "file": "skills/plan-update/SKILL.md",
+  "old_text": "**Per-agent**: 1M tokens total\n\n| Phase | Budget | Notes |\n|-------|--------|-------|\n| Base (docs + code context) | ~50K | CLAUDE.md, schema, operationBuilder |\n| Wave 1 (schema edits) | ~100\u2013150K | Grep + read scoped sections |\n| Wave 2 (mutations) | ~100\u2013150K | Full file context, careful typing |\n| Wave 3 (UI + build output) | ~80\u2013120K | Components + typecheck |\n| **Free buffer** | **500K+** | Unlikely to hit context limit |",
+  "new_text": "**Per-agent** (size the work, not the window: plan-conventions \u00a7 Task size, 40\u2013150K output per unit):\n\n| Phase | Budget | Notes |\n|-------|--------|-------|\n| Base (docs + code context) | ~50K | CLAUDE.md, schema, operationBuilder |\n| Wave 1 (schema edits) | ~100\u2013150K | Grep + read scoped sections |\n| Wave 2 (mutations) | ~100\u2013150K | Full file context, careful typing |\n| Wave 3 (UI + build output) | ~80\u2013120K | Components + typecheck |",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "Group 2 scaffold still ships the exact budget plan-conventions names as the defect it fixed (1M window, '500K+ free buffer')."
+ },
+ {
+  "id": "skills-c-21",
+  "file": "skills/plan-update/SKILL.md",
+  "old_text": "Tear down every teammate FIRST, then the worktrees/branches. The teardown call is\n**runtime-conditional** \u2014 see `skills/agent-teams/SKILL.md` \u00a7 \"Runtime assumption\":\n\n- **Stable (CC 2.1.114)** \u2014 the classic `TeamCreate`/`TeamDelete` tools exist: call `TeamDelete`.\n- **Eval track (CC 2.1.178+, implicit-team model)** \u2014 there is **no `TeamDelete` tool**. Send each\n  teammate a structured `shutdown_request` (`SendMessage`); plain-text broadcasts do NOT close panes\n  \u2192 orphaned panes + worktrees. Absence of `TeamDelete` means *use the implicit-team model*, never\n  \"teams are unavailable\".\n\nDetect the running runtime by tool availability (or `CLAUDE_CODE_EXECPATH`), **not** by\n`claude --version` \u2014 `claude` is a shell function, so its version answers *which launcher the\nname currently points at*, never *which binary this session is running*. (Since the 2026-07-31\nentrypoint consolidation it reports 2.1.219; before that it reported 2.1.114 even inside an\neval-track session. Both readings are wrong for the same reason, so the rule is unchanged \u2014\nonly the wrong number moved. `claude-previous --version` is the 2.1.114 stable launcher.)",
+  "new_text": "Tear down every teammate FIRST, then the worktrees/branches: send each teammate a structured\n`shutdown_request` (`SendMessage`); plain-text broadcasts do NOT close panes, which leaves orphaned\npanes and worktrees. Only the held legacy 2.1.114 runtime has a `TeamDelete` tool; call it there.\nIts absence elsewhere means the implicit-team model, never \"teams are unavailable\". Detect which\nruntime you are on per `skills/agent-teams/SKILL.md` \u00a7 \"Runtime assumption\", never by `claude --version`.",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "Group 2 duplicated runtime detection with stale version pins; keeps the 'absence \u2260 teams unavailable' guard."
+ },
+ {
+  "id": "skills-c-22",
+  "file": "skills/resume-sessions/SKILL.md",
+  "old_text": "to keep it on `claude-fable-5` \u2014 and",
+  "new_text": "to keep it on `claude-fable-5-1` \u2014 and",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "Group 2 model id the repo contradicts (reso-resume-one pins claude-fable-5-1)."
+ },
+ {
+  "id": "skills-c-23",
+  "file": "skills/resume-sessions/SKILL.md",
+  "old_text": "The tools live in `~/.reso/bin/` (`reso-resume-one`, `reso-keepalive`, `reso-quota`) \u2014 `reso-resume-one`\nis a symlink to the tracked, gated, tested `bin/reso-resume-one` in claude-infrastructure; its two\nneighbours are still untracked, which is the state that let this one rot. Deep rationale,",
+  "new_text": "The tools live in `~/.reso/bin/` (`reso-resume-one`, `reso-keepalive`, `reso-quota`). The first two\nare symlinks to the tracked, gated, tested `bin/` copies in claude-infrastructure; `reso-quota` is a\ncompat shim onto `claude-accounts`. Deep rationale,",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "Group 2 false provenance at the top of the runbook."
+ },
+ {
+  "id": "skills-c-25",
+  "file": "skills/resume-sessions/REFERENCE.md",
+  "old_text": "- **Fable** (`claude-fable-5`) plan-inclusion end = **SSOT `frontier_access.end` in\n  `~/.claude/model-config.yaml`** (was 2026-07-07, operator-extended to 2026-07-14 on Jul-9 \u2014\n  the reason no date is ever hardcoded again) \u2192 drive Fable usage hard before it\n  (credits-only after = unaffordable). Fable = a ~50% sub-cap of the shared weekly.",
+  "new_text": "- **Fable** (`frontier_access.model`, currently `claude-fable-5-1`) is a permanent plan inclusion\n  (`frontier_access.permanent: true` since 2026-07-20; `end` is a far-future sentinel) at a ~50%\n  sub-cap of the shared weekly. Read the model and any window from the SSOT\n  `~/.claude/model-config.yaml`, never a remembered date.",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "Group 2 burn-before-deadline urgency for a deadline that no longer exists (permanent since 2026-07-20)."
+ },
+ {
+  "id": "skills-c-26",
+  "file": "skills/resume-sessions/REFERENCE.md",
+  "old_text": "> **2026-07-10 promotion deltas** (scoring math unchanged): the Jul-7 constant is GONE \u2014 the\n> Fable deadline reads live from `~/.claude/model-config.yaml frontier_access.{active,end}`\n> (the hardcode silently killed all Fable routing when the operator extended the window);\n> `k` now counts ALL live claude processes per CLAUDE_CONFIG_DIR (argv[0]=claude match), not\n> just `--resume` ones (2 vs 14 observed) \u2014 KMAX raised 4\u21928 in `~/.claude/accounts.json`;\n> missing scoped-Fable limit = no entitlement (never \"100% headroom\"). Historical algorithm\n> below is otherwise accurate.\n\nPercents are 0..100 USED. Per account, from `.limits[]` + `.extra_usage`:\n\n- **General** (Opus, draws weekly_all only): `score = RBR \u00d7 SF \u00d7 KF \u00d7 CF`\n  - `RBR = w_rem / T_week`; `w_rem = max(0, wTgt \u2212 weekly%/100)`, `wTgt = 0.98 if credits else 1.00`;\n    `T_week = max(hours_to_weekly_reset \u2212 0.5, 0.25)`.\n  - `SF = clamp((0.85 \u2212 sess%/100)/(0.85 \u2212 0.50), 0.05, 1)` (5-hour safety).\n  - `KF = clamp(1 \u2212 k/4, 0.10, 1)` (concurrency spread; `k` = live sessions on the account).\n  - `CF = credits ? (weekly<0.90 ? 1 : 0.5) : 1` (deprioritize $ spend).\n- **Fable** (draws BOTH the Fable sub-cap AND weekly_all): `score = (f_eff/H)\u00b7JB \u00d7 SF \u00d7 KF \u00d7 CF`\n  - **coupling fix**: `f_eff = min(0.5\u00b7(1 \u2212 fable%/100), w_rem)` \u2014 0.5 = fable_cap/weekly_cap; the naive\n    `min(fable_rem, weekly_rem)` overstates fresh-account Fable headroom up to 2\u00d7.\n  - `H = max(min(T_fable, H_jul7), 0.25)`; `H_jul7 = max(hours_to(2026-07-07) \u2212 2, 0)`;\n    `JB = 1.25 if T_fable > H_jul7 else 1` (single-tranche accounts whose weekly resets AFTER Jul-7).\n- **Hard-exclude** an account if: `sess% \u2265 85` (5h cutoff; waive if 5h resets <0.25h) \u00b7 `k \u2265 4`\n  (rate-limit spread) \u00b7 general `w_rem \u2264 0.005` \u00b7 fable `f_eff \u2264 0.02` \u00b7 fable & `H_jul7 \u2264 0`\n  (window closed \u2192 no plan-feasible Fable; never auto-spend credits).\n- **concurrency `k`**: count `claude \u2026 --resume <sid>` processes per `CLAUDE_CONFIG_DIR`, **deduped by\n  `<sid>`** (expect wrapper + claude.exe are 2 processes / 1 session on different ptys \u2014 dedup by tty\n  FAILS; dedup by the --resume session-id).",
+  "new_text": "The live scoring, its constants (`ROUTER_KEYS`: `KMAX`, `S_CUT`, \u2026; optional ones such as\n`KMAX_RESIDENT` in `ROUTER_OPTIONAL_RANGES`) and their validation are in `bin/claude-accounts`;\nread the code, not a copy. What holds across versions: percents are 0..100 USED; general work\ndraws weekly_all only; Fable draws BOTH the Fable sub-cap and weekly_all, so Fable headroom is\n`min(0.5\u00b7(1 \u2212 fable%/100), weekly remaining)`, never `min(fable_rem, weekly_rem)`, which\noverstates a fresh account up to 2\u00d7; concurrency `k` counts live interactive claude processes per\naccount by argv[0] (`concurrency()`), so an expect wrapper and its claude.exe are not counted\ntwice; credits are never auto-spent.",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "Group 2 self-contradicting copy of router math (claims 'accurate' over retired H_jul7, KF=1-k/4, k\u22654); points at the code and keeps the durable facts."
+ },
+ {
+  "id": "skills-c-28",
+  "file": "skills/permission-harvest/SKILL.md",
+  "old_text": "\ud83d\udea8 **Every file in this loop is NEW**, so nothing is live until `scripts/deploy-live.sh` converges \u2014\nan added file has no symlink, is absent from the live tree, and every consumer guard on it is a\nSILENT skip. That is the `LIVE_ADDS` rung: a land that adds files is not live until the converger\nhas run.",
+  "new_text": "A file newly added to this loop has no symlink, is absent from the live tree, and every consumer\nguard on it is a silent skip until `scripts/deploy-live.sh` converges (the `LIVE_ADDS` rung).",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "Group 2 recency trap: the 2026-09-09 'every file is NEW' alarm describes a state that ended Sep 10; general LIVE_ADDS rule kept."
+ },
+ {
+  "id": "hooks-a-01",
+  "file": "hooks/enforce-email-formatting.py",
+  "old_text": "1b. WHICH FIELD \u2014 this is the one that bites, and the old answer here was WRONG.\n   Graph auto-quotes the original ONLY when you pass **Comment**. Passing **Message.body\n   REPLACES that auto-quote**, so the reply threads correctly but arrives with NO VISIBLE\n   HISTORY \u2014 it reads to the recipient as a brand-new email (caught in Outlook, not here,\n   2026-08-24). Hook-enforced: a reply tool passing Message.body with no quote block is DENIED.\n   \u26a0\ufe0f THE CORRECTION (measured 2026-09-14, this mailbox): Graph strips NEWLINES from a Comment.\n   It does NOT strip MARKUP. A Comment of\n       <div style=\"color:#C00000\"><p>para one</p><p>para two here</p></div>\n   came back in the draft's own MIME byte-identical, sitting above Graph's own\n   <hr><div id=\"divRplyFwdMsg\"> quote. So the cure for a long, formatted reply was never\n   \"shorten it\" and never \"move to Message.body\" \u2014 it is **put the HTML in the Comment**.\n   That is ONE API call, keeps Graph's native quote at full depth, and nothing of the\n   original ever passes through you. The old ~300-char cap is gone; it was our own number,\n   not Graph's (no such limit is documented anywhere on Microsoft Learn).",
+  "new_text": "1b. WHICH FIELD. Graph auto-quotes the original ONLY when you pass **Comment**. Passing\n   **Message.body REPLACES that auto-quote**, so the reply threads correctly but arrives with\n   NO VISIBLE HISTORY \u2014 it reads to the recipient as a brand-new email. Hook-enforced: a reply\n   tool passing Message.body with no quote block is DENIED. Graph strips NEWLINES from a\n   Comment but keeps its MARKUP (measured 2026-09-14: a <div><p>\u2026</p><p>\u2026</p></div> Comment came\n   back byte-identical above Graph's own quote), so for a long or formatted reply **put the HTML\n   in the Comment**: one API call, Graph's native quote at full depth, and nothing of the\n   original passes through you. Graph documents no length limit on Comment.",
+  "mirror_needed": "land hooks-a-01..05 as one commit; add a bats guard on rendered RECIPE length (plan synth-email-guard)",
+  "pinned_by": "tests/email-drafts-only-and-alias.bats asserts 'create-reply-all-draft' and 'toRecipients' outside this span (kept); tests/ms365-reply-splice.bats counts splice-helper mentions (unchanged)",
+  "summary": "Hook text over Claude Code's 10,000-char cap: all 19 recipe injections in 14 d were truncated to a 2 KB preview (rules 1-6 never reached the model); 1d migration narration cut. Hunks 01-05 take the rendered recipe 10,393 \u2192 ~9,330."
+ },
+ {
+  "id": "hooks-a-02",
+  "file": "hooks/enforce-email-formatting.py",
+  "old_text": "     a. create-reply-all-draft with a UNIQUE placeholder Comment \u2014 e.g. CCPLACEHOLDER7X2Q.\n        \u26a0\ufe0f NOT \".\" as this recipe used to say: a lone \".\" occurs in every quoted chain, so the\n        splicer's own placeholder check can never pass with it.",
+  "new_text": "     a. create-reply-all-draft with a UNIQUE placeholder Comment \u2014 e.g. CCPLACEHOLDER7X2Q, never\n        \".\" (a lone \".\" occurs in every quoted chain, so the splicer's placeholder check fails).",
+  "mirror_needed": "hooks-a-01 (one commit)",
+  "pinned_by": "none (CCPLACEHOLDER7X2Q unchanged; bin/ms365-reply-splice.py:46 still matches)",
+  "summary": "Same over-cap fix; 1d 'as this recipe used to say'."
+ },
+ {
+  "id": "hooks-a-03",
+  "file": "hooks/enforce-email-formatting.py",
+  "old_text": "   get-mail-message-mime on THAT DRAFT'S OWN id and inspect what you get.\n   \u26a0\ufe0f The old rule here said \"Drafts have no MIME\" and told you to DRY RUN by swapping\n   recipients to yourself and SENDING. Both halves are dead: the premise was false, and\n   sending is denied outright (rule 0). Verifying a draft costs one read now.",
+  "new_text": "   get-mail-message-mime on THAT DRAFT'S OWN id and inspect what you get. Never verify by\n   sending to yourself: sending is denied (rule 0), and the draft read is enough.",
+  "mirror_needed": "hooks-a-01 (one commit)",
+  "pinned_by": "none",
+  "summary": "Same over-cap fix; narration of a dead rule removed, constraint kept."
+ },
+ {
+  "id": "hooks-a-04",
+  "file": "hooks/enforce-email-formatting.py",
+  "old_text": "   \u26a0\ufe0f This used to add \"Comment mode CANNOT set from, so a \u00abP_OTHER_SHORT\u00bb thread needs\n   Message.body\". That inference is DEAD (measured 2026-08-25): the create call cannot set\n   `from`, but update-mail-message CAN \u2014 a PATCH carrying {\"from\": \u2026, \"ccRecipients\": [\u2026]}\n   on a Comment-created draft was read back with both applied. So a \u00abP_OTHER_SHORT\u00bb thread is no\n   longer a reason to abandon the auto-quote: use the rule-3 splice and set the alias on the\n   PATCH. Nothing about the alias forces you to hand-build a chain any more.",
+  "new_text": "   The create call cannot set `from`, but update-mail-message CAN (measured 2026-08-25: a PATCH\n   carrying {\"from\": \u2026, \"ccRecipients\": [\u2026]} on a Comment-created draft was read back with both\n   applied). So a \u00abP_OTHER_SHORT\u00bb thread keeps the auto-quote: set the alias on that PATCH.",
+  "mirror_needed": "hooks-a-01 (one commit)",
+  "pinned_by": "none",
+  "summary": "Same over-cap fix; keeps the 2026-08-25 measurement, drops the pre-rule-2 splice detour."
+ },
+ {
+  "id": "hooks-a-05",
+  "file": "hooks/enforce-email-formatting.py",
+  "old_text": "   WHY THIS RULE EXISTS: it used to read \"set from = \u00abP_OTHER\u00bb\" flatly. Every\n   vendor email on one order was addressed to \u00abP_DEF_SHORT\u00bb; the dispatch-hold request\n   went out from \u00abP_OTHER_SHORT\u00bb, an address they had never seen on that order. They\n   dispatched and charged the next morning. The old rule did not merely fail to help \u2014 it\n   overrode a default that was already correct.",
+  "new_text": "   Why: every vendor email on one order was addressed to \u00abP_DEF_SHORT\u00bb; the dispatch-hold request\n   went out from \u00abP_OTHER_SHORT\u00bb, an address they had never seen on that order, and they\n   dispatched and charged the next morning.",
+  "mirror_needed": "hooks-a-01 (one commit)",
+  "pinned_by": "none (tests/email-drafts-only-and-alias.bats:13 retells the incident in a comment)",
+  "summary": "Same over-cap fix; keeps the incident (Why line) as recorded, without the proposal's invented 'was not matched' cause."
+ },
+ {
+  "id": "hooks-a-08",
+  "file": "hooks/agent-teams-enforce.sh",
+  "old_text": "This sentence used to quote 2.5-5, an aggregate/N that is refuted along with 0.172, 0.566 and 1.89 \u2014 none of those four is quotable. ",
+  "new_text": "",
+  "mirror_needed": "none",
+  "pinned_by": "none on this sentence (tests check the 'MACHINE CAPACITY' prefix and 'CC_ADMIT_GATE=off')",
+  "summary": "1d migration-relative sentence in a spawn-refusal reason (126 transcripts / 30 d); the measured coefficient and ceiling rationale stay per \u00a76's documented protocol."
+ },
+ {
+  "id": "hooks-a-06",
+  "file": "hooks/agent-teams-enforce.sh",
+  "old_text": "Background subagents cannot write code. Implementation tasks require Agent Teams for visibility and coordination. To proceed: use TeamCreate first, then spawn agents with team_name parameter set (e.g., team_name='implementation-wave-1'). You ARE authorized to use Agent Teams \u2014 this constraint exists to ensure parallel work is coordinated safely. If this task is purely research/exploration with no code changes, rephrase the prompt to clarify.",
+  "new_text": "Background subagents cannot write code: implementation needs a worker the lead and the operator can see and coordinate. Send code-writing work to a dispatched session (/handoff, or ~/.claude/scripts/handoff-fire.sh; the default for an implementation wave) or to a named teammate, Agent({name: ...}), given its own worktree path in the brief (passing isolation: or cwd: beside name: silently demotes the spawn to a plain subagent; the agent-teams skill has the details). You are authorized to use Agent Teams. If this task is research or exploration with no code changes, say so in the prompt.",
+  "mirror_needed": "hooks/agent-teams-enforce.sh:4-6 header comment ('retry with team_name set')",
+  "pinned_by": "tests/capacity-admit-coverage.bats:180 ('Background subagents cannot write code' prefix kept)",
+  "summary": "Group 2 deny reason pointed at TeamCreate/team_name, which do not exist (0 of 1,251 calls carried team_name)."
+ },
+ {
+  "id": "hooks-a-07",
+  "file": "hooks/agent-teams-enforce.sh",
+  "old_text": "AGENT TEAMS DEFAULT: This agent spawn involves code changes but has no team_name. Per global rules, ALL implementation tasks with 2+ code-writing tasks MUST use Agent Teams (TeamCreate + team_name + worktree isolation). Only research/exploration subagents should run without team_name. You ARE authorized to use Agent Teams.",
+  "new_text": "AGENT TEAMS DEFAULT: this unnamed spawn reads as code-writing. Code-writing work across 2+ files goes to a dispatched session (/handoff, or ~/.claude/scripts/handoff-fire.sh; the default for an implementation wave) or to named teammates, Agent({name: ...}), each given its own worktree path in the brief; passing isolation: or cwd: beside name: silently demotes the spawn to a plain subagent. Unnamed subagents are for research and exploration. You are authorized to use Agent Teams.",
+  "mirror_needed": "same header comment as hooks-a-06",
+  "pinned_by": "none",
+  "summary": "Group 2 + 1a: nudge (182 fires / 30 d) told the model to pass worktree isolation beside a teammate, which silently demotes it."
+ },
+ {
+  "id": "hooks-b-03",
+  "file": "hooks/setup-task-symlinks.sh",
+  "old_text": "TOTAL=$(find \"$TASKS_DIR\" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')",
+  "new_text": "TOTAL=$(find \"$TASKS_DIR/\" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "Injected fact the repo contradicts: BSD find does not follow the symlinked tasks dir, so 4 of 5 accounts are told '(0 total)' (863 actual)."
+ },
+ {
+  "id": "hooks-b-04",
+  "file": "hooks/setup-task-symlinks.sh",
+  "old_text": "ACTIVE_TASKS=$(jq -r '.totalOnDisk // 0' \"$ACTIVE_SUMMARY\" 2>/dev/null || echo \"0\")",
+  "new_text": "ACTIVE_TASKS=$(jq -r '((.pending // 0) + (.in_progress // 0))' \"$ACTIVE_SUMMARY\" 2>/dev/null || echo \"0\")",
+  "mirror_needed": "none",
+  "pinned_by": "none",
+  "summary": "'Tasks: 186 active' counted completed tasks; 64 are open."
+ },
+ {
+  "id": "hooks-b-05",
+  "file": "hooks/session-start.sh",
+  "old_text": " If BrowserMCP tools fail with 'No such tool available', use agent-browser skill instead.",
+  "new_text": "",
+  "mirror_needed": "hooks-b-06",
+  "pinned_by": "none (tests/session-start-mcp-probe.bats checks only surviving prefixes)",
+  "summary": "1d fossil: recovery advice for a tool retired 2026-08-11, on every SessionStart."
+ },
+ {
+  "id": "hooks-b-06",
+  "file": "hooks/session-start.sh",
+  "old_text": " If a BrowserMCP tool fails with 'No such tool available', use agent-browser skill instead.",
+  "new_text": "",
+  "mirror_needed": "hooks-b-05",
+  "pinned_by": "none",
+  "summary": "Same fossil in the probe-UNKNOWN branch."
+ },
+ {
+  "id": "hooks-b-09",
+  "file": "hooks/validate-bash.sh",
+  "old_text": "Fix the underlying hook failure instead. See CLAUDE.md critical rule #2.\"",
+  "new_text": "Fix the underlying hook failure instead (global CLAUDE.md, Git > Safety).\"",
+  "mirror_needed": "optional: comment at :1150",
+  "pinned_by": "none (hooks/tests/validate-bash.test.sh checks only '--no-verify')",
+  "summary": "Group 2 pointer that resolves only in reso repos; the deny runs everywhere."
+ },
+ {
+  "id": "hooks-b-10",
+  "file": "hooks/validate-bash.sh",
+  "old_text": "short form of --no-verify, bypasses pre-commit hooks. See CLAUDE.md critical rule #2.\"",
+  "new_text": "short form of --no-verify, bypasses pre-commit hooks. Fix the underlying hook failure instead (global CLAUDE.md, Git > Safety).\"",
+  "mirror_needed": "hooks-b-09",
+  "pinned_by": "tests/validate-bash-strip-literals.bats ('git commit -n blocked' kept)",
+  "summary": "Same dangling pointer on the git commit -n deny; adds the remedy."
+ },
+ {
+  "id": "headless-01",
+  "file": "scripts/handoff-fire.sh",
+  "old_text": "      --strict-mcp-config \\\n      --model \"$probe_model\" --max-turns 1 --output-format json 2>&1 </dev/null)\" || rc=$?",
+  "new_text": "      --strict-mcp-config --setting-sources \"\" --tools \"\" \\\n      --model \"$probe_model\" --max-turns 1 --output-format json 2>&1 </dev/null)\" || rc=$?",
+  "mirror_needed": "optional: one line about the two flags in the comment block at 12980-12986",
+  "pinned_by": "none",
+  "summary": "cost-optimization 2.2 headless isolation: the reachability probe loaded CLAUDE.md, rules, hooks and tool schemas (~$1 Fable cache-write per probe; a Stop hook forced false rejections)."
+ },
+ {
+  "id": "headless-02",
+  "file": "scripts/dl-sweep.sh",
+  "old_text": "\"$CBIN\" -p --tools \"\" \\",
+  "new_text": "\"$CBIN\" -p --tools \"\" --setting-sources \"\" \\",
+  "mirror_needed": "optional: header comment at :9",
+  "pinned_by": "none (tests/dl-sweep.bats stubs the model call)",
+  "summary": "Nightly Sonnet extractor loaded ~15K tokens of resident instructions and user hooks; flag verified on the 2.1.114 binary it runs."
+ },
+ {
+  "id": "headless-03",
+  "file": "scripts/dl-sweep.sh",
+  "old_text": "raw = open(f\"{work}/out.txt\").read()\ns, e = raw.find(\"[\"), raw.rfind(\"]\")\ntry:\n    got = json.loads(raw[s:e + 1]) if s >= 0 and e > s else []\nexcept ValueError:\n    got = []",
+  "new_text": "raw = open(f\"{work}/out.txt\").read()\n# The LAST top-level JSON array of objects, never the first-[ to last-] span: Sonnet 5.5 can write a\n# draft before its final JSON, and that span joins both into text that does not parse (vendor prompting\n# guide, quoted in docs/research/sonnet55-utilization-2026-09-28/notes/harness-hazards-b.md:22). An\n# array holding anything but objects (a \"[1]\" footnote, a list of refs) is stepped over, not taken.\ndec, got, i = json.JSONDecoder(), [], 0\nwhile i < len(raw):\n    if raw[i] == \"[\":\n        try:\n            val, end = dec.raw_decode(raw, i)\n        except ValueError:\n            i += 1\n            continue\n        if all(isinstance(x, dict) for x in val):\n            got = val\n        i = end\n        continue\n    i += 1",
+  "mirror_needed": "none (bin/cc-memory-extract:290-311 has the same first-to-last pattern; separate site)",
+  "pinned_by": "tests/dl-sweep.bats (single-array canned answers still parse)",
+  "summary": "Sonnet 5.5 'parse the last JSON value': prose '[email]' or a draft-then-final reply silently produced 'candidates=0' on a job that gates phone alarms."
+ },
+ {
+  "id": "headless-05",
+  "file": "scripts/research-kit/router.py",
+  "old_text": "    return [claude, \"-p\", \"--model\", haiku_model(), \"--setting-sources\", \"local\"]",
+  "new_text": "    return [claude, \"-p\", \"--model\", haiku_model(), \"--setting-sources\", \"local\",\n            \"--tools\", \"\", \"--strict-mcp-config\", \"--no-session-persistence\"]",
+  "mirror_needed": "headless-05b in the same commit",
+  "pinned_by": "tests/research-router.bats:318 (updated by headless-05b)",
+  "summary": "Per-prompt Haiku classifier (6 s budget) sent every tool schema, may start user MCP servers, and wrote a transcript per prompt."
+ },
+ {
+  "id": "headless-05b",
+  "file": "tests/research-router.bats",
+  "old_text": "  grep -qx 'argv=-p --model claude-haiku-test-9 --setting-sources local' \"$STUB_ARGS\"",
+  "new_text": "  grep -qx 'argv=-p --model claude-haiku-test-9 --setting-sources local --tools  --strict-mcp-config --no-session-persistence' \"$STUB_ARGS\"",
+  "mirror_needed": "headless-05",
+  "pinned_by": "this is the pin",
+  "summary": "Companion test pin (the empty --tools value renders as a double space under \"$*\")."
+ },
+ {
+  "id": "headless-06",
+  "file": "hooks/model-permission-decider.py",
+  "old_text": "            \"--disallowedTools\",\n            \"Bash,Read,Write,Edit,NotebookEdit,Glob,Grep,Task,Agent,WebFetch,\"\n            \"WebSearch,Skill,Workflow,ToolSearch,SendMessage\",",
+  "new_text": "            # `--tools \"\"` removes every built-in tool; a --disallowedTools list forbids only\n            # the names it spells, so each tool a release adds would land outside it.\n            \"--tools\",\n            \"\",\n            # One consult is a throwaway session: without this each one writes a transcript\n            # into the consulting session's own project dir (the child inherits its cwd).\n            \"--no-session-persistence\",",
+  "mirror_needed": "none",
+  "pinned_by": "none (tests stub MITL_MODEL_CMD); hook not yet wired (migration 0022 pending)",
+  "summary": "Repo lesson 'Denylist = examples': 15-name denylist let newer tools (CronCreate, RemoteTrigger, PushNotification\u2026) through; strengthens the no-tools fence."
+ },
+ {
+  "id": "headless-07",
+  "file": "scripts/research-kit/lib/courier.py",
+  "old_text": "            [binary, \"-p\", \"--setting-sources\", \"local\", \"--output-format\", \"json\"]",
+  "new_text": "            [binary, \"-p\", \"--setting-sources\", \"local\", \"--strict-mcp-config\", \"--output-format\", \"json\"]",
+  "mirror_needed": "none",
+  "pinned_by": "none (courier test stub reads only --model)",
+  "summary": "Zero-risk isolation hardening matching the repo recipe; benefit unproven (MCP start-up under --setting-sources local could not be probed)."
+ }
+]

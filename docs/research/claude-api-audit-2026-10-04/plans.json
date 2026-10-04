@@ -1,0 +1,110 @@
+[
+ {
+  "id": "slim-15",
+  "summary": "CC_LADDER=off is named in both instruction variants but read by no code (git grep: prose only). The plan says the kill switch must be mechanical.",
+  "plan": "Keep the sentence and make it true. (1) In scripts/handoff-fire.sh, when CC_LADDER=off, refuse a fire that combines --recycle with a --model resolving to frontier_access.model: exit 2 with a one-line reason. Do not refuse other frontier fires (/frontier-run, /frontier-campaign); NONLIMIT_RESUME_LADDER.md \u00a76 defines the switch as refusing the stage-1\u21922 recycle. (2) Mirror the refusal in the hooks/frontier-spawn-gate.sh session arm. It stays inert until the operator runs migration 0029. (3) Bats: refused with the flag; allowed without it; a non-recycle frontier fire is allowed with the flag. If the operator prefers not to build this, delete the sentence from both variants instead.",
+  "apply_mode": "needs-new-code"
+ },
+ {
+  "id": "hooks-a-09",
+  "summary": "backup-before-write re-sends the ~870-char PLAN GUARD and rules on every plan Edit: 598 fires and about 190K tokens in 7 days, 57% of them within-context repeats.",
+  "plan": "Replace the Edit/plan branch opening (`if [ \"$TOOL\" = \"Edit\" ]; then` / `if [ \"$IS_PLAN\" = true ]; then` / `_bbw_out <<EOF`) with a once-per-(session, agent, plan file) gate, the same pattern plan-agent-teams-default.sh already uses for PLAN DEFAULTS.\n- On plan Edits only, derive `_pg_id` with jq: `if (.session_id // \"\") == \"\" then \"\" else \"\\(.session_id)|\\(.agent_id // \"\")\" end`. agent_id is included because an in-process subagent shares its lead's session_id but not its context.\n- Key: the first 16 chars of the shasum of `$_pg_id|$FILE`, under `${CC_PLAN_GUARD_STATE_DIR:-$HOME/.claude/state/plan-guard}`. GC entries older than 7 days.\n- If the marker exists, `exit 0`; the _bbw_rewrite_only EXIT trap still runs. Otherwise touch the marker and emit.\n- With no session id, always emit.\n- Write and OVERWRITE GUARD stay per call.\nBats (point CC_PLAN_GUARD_STATE_DIR at $BATS_TEST_TMPDIR): the same session+agent+file twice emits once; a new agent_id, session or file emits; an empty session_id emits. Update the wording at skills/plan-conventions/SKILL.md:9. Shellcheck rc 0 on scratch.",
+  "apply_mode": "needs-new-code"
+ },
+ {
+  "id": "hooks-a-11",
+  "summary": "dod-persist: all 26 lineage injections since 2026-10-02 were over the 10,000-char cap (up to 58 KB). The 2 KB preview therefore showed the OLDEST captures.",
+  "plan": "In _dod_inject_lineage_only (hooks/dod-persist.sh ~:283), replace the oldest-first `$kept` frame with newest-first output.\n- Limit it to a character budget: `CC_DOD_INJECT_MAX_CHARS`, default 6000.\n- Always keep every capture newer than the newest 'Scope (frozen):' capture, because 'Scope (grown):' lines extend the contract. Always keep at least the newest capture.\n- Header text: 'the newest N of M capture(s) written by this session, \u2026 newest first; the older ones are in the store'. This keeps the substring that tests/dod-persist.bats:405 greps.\n- Apply the same budget to the CC_DOD_LINEAGE_ONLY=0 frame (~:386).\nBats: 6 captures give the newest that fit, newest first, under 10,000 chars; grown captures after the newest frozen are always present; a store that fits entirely keeps the same membership. Verified on scratch: the 58 KB case drops to 4,520 chars; bash -n, /bin/bash 3.2 and shellcheck rc 0. Use the mech verifier's awk, which keeps the blank line between blocks.",
+  "apply_mode": "needs-new-code"
+ },
+ {
+  "id": "hooks-a-14",
+  "summary": "activation-watch's parity axis re-sends the identical LIVE-ONLY 44-jev-batch-activate.sh block, with its cp line, at every SessionStart: 877 fires and about 748K chars in 7 days.",
+  "plan": "(1) Parameterize queue_damp_ok on the damp-file path; it reads the global DAMP_FILE at :89. (2) Damp axis 2 inside watch() only, using $DIR/.parity-page.damp keyed on the sorted drift list with the 24 h window. (3) While damped, emit one counted line that still contains 'ACTIVATION SSOT PARITY' (tests/activation-watch.bats:198) and names the command that prints the full list, so absence stays loud. (4) Never damp the --parity gate entry, which returns rc 1 on drift. (5) Add selftest cases mirroring the queue-axis damping tests.",
+  "apply_mode": "needs-new-code"
+ },
+ {
+  "id": "hooks-b-01",
+  "summary": "mailbox-drain re-sends a ~1,330-char goal-safe arm advisory on every prompt while a /goal is live and no watcher is armed. That state never clears itself: 1,357-2,320 copies a week.",
+  "plan": "At hooks/mailbox-drain.sh:469 (`[ \"$_headless\" = 1 ] || nudge=\"`), gate the live-goal + unwatched branch on a marker `$_mdir/.goalnudge-${own_sid}-<first 12 chars of the shasum of $_goal_cond>`.\n- If the marker exists, skip.\n- Otherwise stamp it, but only when MODE != post-tool and not headless. post-tool can exit silently on a lost take race, which would spend the one copy unseen.\n- With no own_sid, keep emitting.\n- Do not gate the parked-watcher E2 branch (:462-466) or the inert-goal crumb (:490-505).\n- GC markers older than 7 days. Amend the header at :352-360.\nBats: two prompts under the same goal give one nudge; a changed goal re-emits; post-tool never stamps. Run tests/mailbox-drain.bats and tests/wake-floor.bats.",
+  "apply_mode": "needs-new-code"
+ },
+ {
+  "id": "hooks-b-07",
+  "summary": "waiting-recycle sends each advisory to the model twice. The PostToolUse decision:block `reason` is rendered as a blocking error, in addition to additionalContext (transcript 8f3653c5).",
+  "plan": "At hooks/waiting-recycle.sh sites 1111-1112, 1320-1321, 1351-1352, 1493, 1498, 1520 and 1551-1552, change `reason:$s` (or `$r`) to `reason:($s|split(\" \u2014 \")[0])`. The reason becomes the headline; systemMessage stays full for the operator, and additionalContext stays the single full model copy. Use the two-line jq form at 1551; the one-line form is not unique. Fix the comments at :123-124 and tests/waiting-recycle.bats:~630 that call `reason` operator-facing. Run tests/waiting-recycle*.bats.",
+  "apply_mode": "needs-new-code"
+ },
+ {
+  "id": "skills-c-24",
+  "summary": "The resume-sessions Phase 4 keepalive is killed by cc-reaper within about 10-15 minutes. Four 'TERM orphan-bash \u2026 reso-keepalive 240' lines appear in ~/.claude/logs/cc-reaper.log, the latest 2026-10-02.",
+  "plan": "(1) Add `reso-keepalive` to GARBAGE_WL in bin/cc-reaper (~:713) as a house daemon (lesson detached-bash-is-reaped-after-ten-minutes, option 3), with a keep/kill fixture pair in tests/cc-reaper.bats like public-publish. (2) In skills/resume-sessions/SKILL.md:244, replace `CC_KEEPALIVE_MARKERS=\"wt-a wt-b\" nohup ~/.reso/bin/reso-keepalive 240 >>~/.reso/keepalive.out 2>&1 & disown` with `. ~/.claude/scripts/lib/detach.sh && detach ~/.reso/keepalive.out env CC_KEEPALIVE_MARKERS=\"wt-a wt-b\" ~/.reso/bin/reso-keepalive 240`. (3) Verify: launch it, wait past 600 s plus one reaper sweep, then confirm the pid is alive and no new TERM line appears. scripts/boot-resume.sh:674 benefits with no change.",
+  "apply_mode": "needs-new-code"
+ },
+ {
+  "id": "synth-email-guard",
+  "summary": "After hooks-a-01..05 the rendered RECIPE is 9,323 chars. With the R2 alias advisory (~640 chars) appended on first touch, the worst case is about 9,963, which is under the 10,000-char cap by a thin margin.",
+  "plan": "Add a bats case to the email suite: import hooks/enforce-email-formatting.py; assert len(RECIPE) \u2264 9,350, and that RECIPE plus the worst-case R2 alias advisory stays under 10,000 (Claude Code's additionalContext cap; past it the model gets a 2 KB preview). Fix the stale '~1.8KB' in the _recipe_once docstring. Operator follow-up outside the repo: ~/.claude/projects/-Users-chrisren-Development-personal/memory/feedback_email_formatting.md and its MEMORY.md index line still teach 'Message.body (not Comment)', '\u2264~300 chars' and 'set from=<one fixed alias>', all contradicted by the recipe.",
+  "apply_mode": "needs-new-code"
+ },
+ {
+  "id": "hillclimb-09",
+  "summary": "The F1 PASS for the slim instructions was read on the same 20 tasks that chose its edits, and the live slim text has drifted +8.6% (53,769 \u2192 58,378 chars, 8 ungated commits) from pin d446c60e.",
+  "plan": "(1) Author 10 new tasks in harness/tasks/ that no round has read. Do not use id T21, which F4 already uses; use T22-T31 or a distinct prefix. Weight them toward the patched classes: close honesty on a dirty or unpushed tree, one-command hand-over, a refused push, open plan work. Freeze them before any run. (2) Build arms from the CURRENT slim plus close rules against the current full text, and record a new arms-MANIFEST. (3) Run 5 reps per arm, ABBA, GATE_SCRUB_PANE_ENV=1, under the unchanged agg.py rule. (4) Re-judge about 20 round-4 dossiers blind in the same batch as a judge-drift anchor. (5) Report the held-out delta as the headline. Cost: about 100 runs \u00d7 $0.63 \u2248 $63 list, roughly 3-10 W-pp across 3 accounts, which is above the no-ask band: needs operator approval. Attach to the existing docs/plans/INSTRUCTION_BUDGET.md Known issue ('Re-gating is the operator's call'); do not file a new row.",
+  "apply_mode": "needs-measurement"
+ },
+ {
+  "id": "slim-16",
+  "summary": "The close rule demands zero keystrokes under `!`, but the `\u25b6 cc-do [N runnable]` row it tells the session to hand over needs one Enter. With stdin closed, cc-do prints NOTHING RAN and exits 3.",
+  "plan": "Operator decision: is bare cc-do's single Enter a consent gate worth keeping? If no, render `cc-do --run` in hooks/operator-readout.sh (collapse row ~:150/:532/:642) and hooks/lib/close-shape.sh:168. Then update CLAUDE.rules.slim.10-session-close.md:211, hooks/lib/why-tier.sh:156-158, CLAUDE.global.md:1043, and the bats pins (tests/operator-readout.bats, operator-readout-stranded.bats, completion-assert.bats ~:1762). If yes, amend the zero-keystroke rule to name cc-do's Enter as a sanctioned exception. The failure today is visible, not silent: cc-do prints the CC_DO_ASSUME_YES=1 line, so the cost is a second paste.",
+  "apply_mode": "operator-decision"
+ },
+ {
+  "id": "skills-c-29",
+  "summary": "permission-harvest hands `\u25b6 Run this: cc-do <id>`, which fails under `!` (no TTY, exit 3). The step writes allow rules, so putting consent in the handed line also touches the 'no permission grants in a handed file' rule.",
+  "plan": "Decide together with slim-16. Either hand `CC_DO_ASSUME_YES=1 cc-do <id>`, or keep `cc-do <id>` and add one line above the marker: 'run in a terminal tab, not through !'. Change the paragraph below the marker ('cc-do prints the command, takes the operator's typed yes \u2026') in lockstep.",
+  "apply_mode": "operator-decision"
+ },
+ {
+  "id": "skills-c-27",
+  "summary": "outbound-drafting says send-draft-message is denied outright with no override. The hook implements R1b instead (refused only in a turn that composed or revised the draft; operator ruling 2026-09-08), as the resident global rule already states.",
+  "plan": "Operator confirms the 2026-09-08 ruling is the steady state, then replace the \ud83d\udd12 block in skills/outbound-drafting/SKILL.md (~:212) with: '> \ud83d\udd12 **For EMAIL this is MECHANICAL, not a matter of discipline (2026-08-25; narrowed 2026-09-08).**\\n> `send-mail`, `reply-mail-message`, `reply-all-mail-message` and `forward-mail-message` are\\n> **denied by a PreToolUse hook** with **no override**; `send-draft-message` is refused in any turn\\n> that composed or revised the draft (R1b, operator ruling 2026-09-08). Compose with\\n> `create-draft-email` / `create-reply-draft` / `create-reply-all-draft` / `create-forward-draft`,\\n> then tell him the draft is in Drafts and ready, and stop.' If the ruling was reverted, change the hook instead.",
+  "apply_mode": "operator-decision"
+ },
+ {
+  "id": "skills-c-20",
+  "summary": "plan-update Step 6 says 'Do NOT commit \u2026 the user decides when'. The global Git rule says commit as you go, and session-continue.sh blocks a stop with uncommitted session writes; the suggested /commit is user-only.",
+  "plan": "If the operator rules commit-as-you-go, replace 'Do NOT commit to the cwd git repo \u2014 the user decides when. Suggest: `/commit docs(plans): compact <plan-name>` when ready.' with 'Commit the plan edit as its own atomic commit (`docs(plans): compact <plan-name>`), per the global Git rules. A plan outside any repo (`~/.claude/plans/`) is versioned by the plan-history hook instead.' This loosens a prohibition, so it needs the ruling first.",
+  "apply_mode": "operator-decision"
+ },
+ {
+  "id": "skills-a-24",
+  "summary": "autonomous-authenticated-web-access calls the script path the 'sanctioned' way around curl-gate. hooks/curl-gate.py:1697 tells the model 'Do not move the request into a script', and the global rule forbids re-issuing a refusal through another path.",
+  "plan": "Operator decides. (a) Not sanctioned: replace 'A curl-egress gate that inspects Bash\\n  commands *starting with* `curl` does not fire on a script invocation \u2014 this is the\\n  sanctioned operator-script path, not a bypass (the calls are still read-only and the\\n  token is user-authorized). It also makes the pull atomic, logged, and re-runnable.' with 'It makes the pull atomic, logged, and re-runnable.\\n  If a hook refuses a call, that refusal stands; do not re-route the same call through a script.' (b) Sanctioned: record the exemption in hooks/curl-gate.py, whose refusal text currently says the opposite, not in the skill.",
+  "apply_mode": "operator-decision"
+ },
+ {
+  "id": "hooks-a-12",
+  "summary": "config-mirror-assert emits a FORKED alarm at nearly every non-default SessionStart: 939 fires and about 804K chars in 7 days. Its only remedy is converging with all of that account's panes closed, which no running session can do.",
+  "plan": "Option A (75% conviction): emit the FORKED line as top-level systemMessage (accounts-board.sh precedent; zero model tokens) and keep the settings.json DIVERGES line as additionalContext. Option B: damp on a fingerprint of the non-backup fork set. Under either option, fix the backup classification at lines 30 and 32 from grep '\\.bak' to grep 'bak' to match lib/config-mirror.zsh:208 (*bak*). This bug fix needs no decision. Update tests/config-mirror-assert.bats:46/63/66/72.",
+  "apply_mode": "operator-decision"
+ },
+ {
+  "id": "hooks-a-13",
+  "summary": "escalation-watch speaks at essentially every SessionStart (937 fires in 7 days, counts like announce-alarm 1,343 and page 507), against its own 'zero unseen \u21d2 zero output' contract.",
+  "plan": "Option C+A (70% conviction): fix the upstream cause first, so that scripts/autonomy-sweep.sh marks announce-alarm records seen and the zero-output contract holds again. Then deliver the operator counts as top-level systemMessage. Keep the mail-deadletter class as model context, because a session may act on it. If A is taken, update tests/escalation-watch.bats:107/141.",
+  "apply_mode": "operator-decision"
+ },
+ {
+  "id": "headless-08",
+  "summary": "Certification reviewers on the ANTHROPIC lane pin no --effort, and `--setting-sources local` drops the operator's modelSettings effort pin. 5.5 models therefore run at medium, and panels do not record effort.",
+  "plan": "Operator picks the reviewer rung: high (opus55_default / fable51_capability_sensitive) or xhigh (opus55_capability_sensitive). Counter-evidence to show alongside: the repo's review-class sweep scored medium 8, high 9, xhigh 10 of 36 (no pair distinguishable, p\u22650.38). Then take the effort from frame.json reviewer_pins rather than an env var, pass it as --effort in argv_for (scripts/research-kit/lib/courier.py:~133), record it beside pinned_model in the cmd_run panel dict, and have lib/cli_cert.py check-round void a panel run at any other effort.",
+  "apply_mode": "operator-decision"
+ },
+ {
+  "id": "session-cost-04",
+  "summary": "The local, untracked cafe-wifi-optimization skill has a 2,107-char description. It is truncated at the 1,536-char listing cap, crowds other entries to name-only, and carries dated venue names (location history) into every listing.",
+  "plan": "Operator's local edit (outside the repo): in ~/.claude/skills/cafe-wifi-optimization/SKILL.md, replace the WHOLE folded line 4, not just its opening, with '  Optimize a sitting on guest Wi-Fi the operator cannot administer (caf\u00e9, hotel, airport): a 7-rung client-side ladder with measured thresholds and refuted levers. Load before any diagnostic on new guest Wi-Fi; not for routers you can log into.' Then confirm in a fresh session's listing that the entry renders whole.",
+  "apply_mode": "operator-decision"
+ }
+]
