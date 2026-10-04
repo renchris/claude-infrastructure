@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: in-progress
 ---
 
 # W3 build plan: H1 restore-first, then the kitty patch
@@ -467,3 +467,203 @@ Decide on H2 only after:
 If H2 goes ahead it ships as one cutover behind a kill switch, never phased (C1-skeptic-risk).
 Re-check C5 (Claude Code's background daemon) on each Claude Code release. It is a candidate again
 only if `claude stop` becomes durable and a deliberate close can be told apart from a terminal death.
+
+## Amendment 2026-10-04: reconciliation and the resume-in-place bar
+
+> **Why this section exists.** The operator's bar is now "resume in place, as if nothing had interrupted", and that includes a hard restart of the Mac. This section does three things. It checks the plan against origin/main `a652077cc` (2026-10-04). It adds the gaps between the plan and that bar. It folds in the critic's review. Where this section conflicts with anything above, this section wins. Line numbers are on `a652077cc`. Every phase still re-greps its anchors before it lands.
+
+### A. Where each phase stands
+
+| Phase | State now | Evidence sha | Residual scope |
+|---|---|---|---|
+| P1 recycle fork | **Superseded.** Its default (hold background work) and its rule against `claude stop` (:89-98) reverse operator decision 75ea14d27d0f, "stop the copy at once, keep its tasks". Do not build it and do not rebase `w3-p1`. | `5cd333f16` on main implements the ruling. `fdcf221e3` is on branch `w3-p1`, is not on main, and is 154 commits behind (measured: `git merge-base --is-ancestor`, `git rev-list --count`). | Becomes **P1b** (§D). In resume mode the stop is skipped (`scripts/handoff-fire.sh:9459`). Live log since the stop landed: 34 `recycle-bgwork-answered` rows and 0 `recycle-bgcopy-stop` rows (measured: `grep -c ~/.claude/logs/handoffs.jsonl`). P1's Verify metric (:107-108) is void. |
+| P2 safety rails | **Partly built, uncommitted.** Nothing is on main. | None on main. The work in progress is in `/Users/chrisren/Development/.worktrees/w3-p2` (branch `w3-p2` at `d8caa076e`): 4 files, +65/-2, last edited 10-02 (measured: `git diff --stat`, `stat`). | Rebase that work. Its whitelist line conflicts with `21f7e515d` at `bin/cc-reaper:716`, and its layout hunk predates `fbbf04784`. Not started: the launch fence in `reso-resume-one`, `scripts/lib/restore-lock.sh`, and their bats. Amended in §C. |
+| P6 kitty patch | **Built, not landed.** | `716322ed5` on `w3-p6`; `git merge-tree` against main is clean (measured). The patch applies to `~/ktb` (measured: `apply --check`). `~/ktb-noband/kitty.app` contains `still serving`; `/Applications/kitty.app.staged` is still the 09-30 band build (measured: `strings \| grep -c`). | Land the branch, run its bats on main, then `stage --no-band`. Upstream v0.49.2 and master still end the talk thread on any `accept()` error (checked 10-04 with `gh api` and the raw `child-monitor.c`), so P6 is still needed. |
+| P3a boot-resume event mode | Not started. | None. `1965c7e6d` added `same_boot()` and the `last-boot-uuid` marker, which the plan does not handle, and moved anchors by +16 to +38 lines. | All 10 items, split into P3a-i and P3a-ii (§D). |
+| P3b layout restore mode | Not started. | None. Related commits: `bf55a8fc6` (the horizontal layout is enabled; prerequisite met), `a1e4490ae` (`layout_action equalize` does nothing in a horizontal tab and rings the bell), `fbbf04784` (+2 lines). | All six items, amended in §D. |
+| P4 recovery delivery | Not started. | None. Reusable on main: `cc-notify --mailbox-only`, `bin/cc-wake` (`a86efec80`), and the kitty-epoch box seal (`9cf121e54`). | All items, plus gaps 7, 9, 10, 12, 13, 15, 18 and 19. |
+| P5 `cc-restore` | Not started. | None. Since `49d153596`, `cc-backlog needs` requires `--class`. | All items. P5 no longer creates `restore-v2` (§C, item 3). |
+
+The phase table near the top of this file is superseded by §D.
+
+### B. Gaps against the bar that no phase covered
+
+**Heartbeat files (P3a-i).** All are written atomically (temp file, then `mv`) into `~/.claude/autonomy/heartbeat/<bootuuid>/<kitty-pid>/`:
+- `hb.roster.json`
+- `hb.start`
+- `hb.session.tsv`: sid → account (newest transcript), model, effort, permission mode, branch
+- `hb.kitty-ls.json`: the whole tree from one bounded `kitten @ ls`
+- `hb.bg.tsv`: for each claude pid, the argv of its non-MCP children, live `.watching` pids, agent-browser sessions and listening ports
+- `hb.roles.tsv`: role → sid
+
+| # | Lost today | Sev | Phase | File-level scope |
+|---|---|---|---|---|
+| 1 | **Which sessions come back after a hard power-off.** The alarm roster cannot be read (`.start` bug, `boot-resume.sh:333`). Tombstones need SessionEnd, which a power-off never runs. The registry fallback caps at 4 sessions (`:137-138`), so at most 4 of 18 live sessions return (measured). | high | P3a-i | `scripts/boot-resume.sh`, `scripts/alarm-reboot-prep.sh:52`, new `scripts/lib/restore-heartbeat.sh`. Heartbeat, `.start` pair, newest-roster choice, and registry rows whose `startedAt` is after `hb.start` all land in **one commit**, live without the flag (§C, item 3). |
+| 2 | **Split tree, tab index, windows with more than 6 panes, non-Claude panes.** Live now: 5 windows holding 6/4/4/3/2 panes, one of them not Claude (measured: `kitten @ ls`). | medium | captured by P3a-i; replayed by **P7** | `bin/cc-resume-layout.sh`: replay each tab's `layout_state` pairs (orientation and bias) and its tab index from `hb.kitty-ls.json`. Reopen non-Claude panes as shells in their cwd. One row per window becomes the fallback, used only when no tree was recorded. |
+| 3 | **The display each window was on, and the order of the Spaces.** This Mac has 3 displays (measured). | medium | P7 | `restore-heartbeat.sh` writes `hb.displays.tsv`, mapping `platform_window_id` to a display with the Swift at `cc-resume-layout.sh:379-394`. On restore, move each window's head to its display (System Events, as at `:516-538`), then `toggle_fullscreen` in the recorded order. |
+| 4 | **Proof that the full conversation came back.** | low | P3b | `cc-resume-layout.sh`: a `maybe` row counts as restored only once its transcript has gained a `SessionStart:resume` record. |
+| 5 | **The account.** A stale roster puts a session back on an account it has left; exhausted accounts leave sessions idle. | medium | P3a-ii, **P8** | `boot-resume.sh`: take the account from the newest transcript (`transcript_mtime`, `:197-202`). `bin/cc-restore-rebind`: after `events/<id>.done`, hand exhausted-account rows that are INTERRUPTED or WAKE-LOST to `scripts/limit-recover/lr-fleet.sh --one <sid> --target auto --detach`. |
+| 6 | **Model and effort changed mid-session.** | medium | P3a-i, P3a-ii | Read them from the last non-synthetic assistant record, using argv only as a fallback, and write them to columns 6-7. |
+| 7 | **Permission mode.** Hard-coded to `auto` at `bin/reso-resume-one:560`. | medium | P3a-i, P3a-ii, P4 | Capture the last `permission-mode` entry and add contract column 11, `permission_mode`. P4 adds `--permission-mode` to `reso-resume-one` (falling back to `auto` only when the mode is unknown) and the pass-through at `cc-resume-layout.sh:257-258`. |
+| 8 | **The branch of a worktree that was reaped.** | low | P3a-i, P3a-ii | Record `git -C <cwd> rev-parse --abbrev-ref HEAD` each tick and fill column 4 from it. |
+| 9 | **A live `/goal` that never runs again.** 1 of 18 live sessions holds one (measured). | high | P4 | `bin/cc-resume-classify.py`: a last `goal_status` with `met:false` at the anchor counts as open work (the rule of `goal_live_for_sid`, near `scripts/handoff-fire.sh:7948`). Such a row gets the note, plus a nudge if its account has quota. |
+| 10 | **Armed `cc-await-ping` watchers.** 13 live (measured: `ps`). | high | captured by P3a-i; P4 | Classifier: a watcher launch with no matching notification, or a `.watching` pid alive at the last tick, is WAKE-LOST evidence. The note says "re-arm cc-await-ping unless a /goal is live". |
+| 11 | **Notify-back links, and the custody debts they discharge.** 2 rows have been open since 10-01 (measured). | high | **P8** | `bin/cc-restore-rebind`: from the map lines, write `<old pane key>.forward` → new address, using the existing writer in `hooks/lib/mailbox-pending.sh:570-617` (sourced, not edited). Bats: an open custody row is discharged after a forwarded DONE. |
+| 12 | **Background Bash still running at the cut.** 2 ship-land and 2 bats live (measured). | high | captured by P3a-i; P4 | Reverses plan :329: background shells now count as WAKE-LOST evidence, because 7 of 10 sessions given the native notice never acted on it (C2-skeptic-code.md:32). A row with a ship-land gets "check `git ls-tree origin/main` before landing again". |
+| 13 | **Monitors, subagents and workflow runs.** | medium | P4 | The note names each lost run id together with its `resumeFromRunId` call. |
+| 14 | **The turn in progress.** | medium | P4 | As planned: a launch-argument prompt, and no keepalive. |
+| 15 | **Agent Teams teammates.** | medium | P4 | The classifier reads the non-lead members of `~/.claude-*/teams/*/config.json` at the anchor. The note lists them and points to limit-recover's Teams respawn. |
+| 16 | **`cc-roles` bindings** (desk, docs-lead, drain-lead, opus55-lead). | medium | captured by P3a-i; P8 | `cc-restore-rebind` runs `cc-roles claim <role> --pane <new> --force` for each role whose session was restored. |
+| 17 | **Scrollback.** | low | not in W3 | H2 gate item 3 (operator ruling). |
+| 18 | **agent-browser sessions.** | low | captured by P3a-i; P4 | The note names each session and its URL. |
+| 19 | **Dev servers.** | low | captured by P3a-i; P4 | The note names the listening ports, found with `lsof -iTCP -sTCP:LISTEN` on the session's descendants. |
+| 20 | **The kalloc and zombie record.** | medium | R0, P3a-i, P5 | R0 (§D). The `.kalloc` sibling file. `cc-restore` writes the kalloc reading and the zombie count into `events/<epoch>/`. |
+| — | **Login tokens.** | — | none | They survive in the login keychain. |
+
+### C. The critic's amendments
+
+| # | Finding | Verdict | Folded into |
+|---|---|---|---|
+| 1 | Event mode exits as "already processed", because `same_boot()` checks `last-boot-uuid` first (`boot-resume.sh:258-276`). | Holds (re-read on main). | P3a-i: event mode bypasses `same_boot()`, uses its own `mark_processed`, and never writes `last-boot-epoch` or `last-boot-uuid`. Add a bats case where the overridden uuid equals the marker. |
+| 2 | A single heartbeat file overwrites the pre-crash roster. | Holds. | P3a-i: heartbeat directories keyed `<bootuuid>/<kitty-pid>/`, never overwritten across either key, pruned after 7 days; the one-tick freeze is dropped. Roster = newest heartbeat plus registry rows started after it. P3a-ii: the retire filter adds the successor it finds. P5: when it detects a crash, it copies the last good heartbeat into `events/<pid>/`. |
+| 3 | Changes that go live at once make today's path worse mid-build, and P5 turns the flag on before G1. | Mostly holds. | Drop `-n`: opening by path alone fixes the bundle-id problem. The `k()` bound is 15 s only under `--restore`; the default path gets 120 s. P5 does not create the flag (§E). The kalloc reboot comes first, as R0. **Not adopted:** keeping the `.start` pair behind the flag. It ships live in the same commit as the heartbeat and newest-roster choice, so a heartbeat at most 300 s old outranks the 24 h alarm roster. Without that, a reboot during the build restores at most 4 sessions (gap 1). |
+| 4 | "Wait for capacity" does not wait: the budget admits on the 3rd refusal in a row (`capacity-admit.sh:1579`). | Holds (re-read on main). | P3b: re-ask with `_CC_ADMIT_PROBE=1`, which is not charged to the budget. Cap busy sessions with `CC_ADMIT_RESTORE_R`. Launch idle rows first, and rows with a prompt (column 10) last, once load per core is back under the gate. |
+| 5 | Restore clients can push kitty past its 256 fd soft limit (C3-socket-robustness.md:19-24). | Partly holds. | P3b and P5: one `k` call in flight at a time, a 30 s backoff after a timeout, and stop the restore if kitty's fd count passes 180. The 8192 fd-limit watcher is not adopted at G1, which stays a single change; it rides the P6 adoption restart. |
+| 6 | P2 adds a third per-session lock, keyed on reusable pids, that the reconciler cannot see. | Holds. | P2: `reso-resume-one` takes the existing reconciler fence instead of a new `resume-locks/` directory: `lr_recon_may_act <sid> reso-resume-one always` in `scripts/limit-recover/lr-recon-fence.sh`, which already keys holders on pid plus lstart. `restore-lock.sh` stamps the pid, lstart and boot uuid. |
+| 7 | Sessions come back on the wrong account, and exhausted ones sit idle. | Holds. | Gap 5 (P3a-ii, P8). |
+| 8 | Keychain stalls, and the launch skips `cc-close-attrib`. | Mostly holds. | P2: spawn through `bin/cc-close-attrib` with `CLAUDE_CODE_CERT_STORE=bundled` set explicitly, failing open as `lr-fire-resume.sh:747-762` does. P3b: re-check `maybe` rows by `lr_holder_count` for at least 240 s. Warming the token is not adopted until it is measured. |
+| 9 | The no-band build breaks the swap script and the draggable titles. | Mostly superseded by `w3-p6`. That branch adds `build --no-band`, the `patched-noband` probe and a clean `~/ktb-noband` tree, and a no-band swap leaves the ⌘⇧B link alone. | P6: `kitty-build-swap.sh status` exits non-zero when the ⌘⇧B ON link points at the band config but the live bundle does not probe `patched` (the cask-upgrade case). P5's preflight runs that check and refuses on failure. |
+| 10 | The bar needs items the plan defers: non-Claude panes, the operator's dragged layout, permission mode, a G1 that only counts sessions, and an untested detach. | Holds. | Gaps 2, 3 and 7. P5 adds `cc-restore --compare <event-dir>` and a bats case showing the restart runs in a new session (`start_new_session`, as `kitty-restart-resume.py:391` does). |
+
+### D. Revised waves, ownership and goals
+
+Every build phase runs as **S**: a dispatched session via `scripts/handoff-fire.sh`, in its own worktree, with `--notify-back` to the W3 lead.
+
+| Wave | Phase | Locus | Owns while it runs | Waits for |
+|---|---|---|---|---|
+| R0 | kalloc reboot, restored by hand with `/resume-sessions` | operator | — | before W3.2 lands. kalloc 4.24 GB (measured by the gap pass, `zprint`); the 6 GB alarm is about 1.7-2.3 days away (critic's estimate) |
+| W3.1 | P1b | S | `scripts/handoff-fire.sh`, `tests/handoff-recycle-bgcopy-stop.bats`, `docs/plans/kitty-deadlock-recovery-2026-10-01.md` (line 28 only) | nothing |
+| W3.1 | P2 | S | `bin/cc-reaper`, `tests/cc-reaper.bats`, `bin/cc-resume-layout.sh`, `tests/cc-resume-layout-desktops.bats`, `bin/reso-resume-one`, `tests/reso-resume-one.bats`, new `scripts/lib/restore-lock.sh`, new `tests/restore-lock.bats` | nothing |
+| W3.1 | P6 | S | `docs/patches/kitty-talk-thread-survives-v0.48.2.patch`, `scripts/kitty-build-swap.sh`, `tests/kitty-build-swap.bats` | nothing |
+| W3.2 | P3a-i | S | `scripts/boot-resume.sh`, `tests/boot-resume.bats`, `scripts/alarm-reboot-prep.sh`, `tests/alarm-reboot-prep.bats`, new `scripts/lib/restore-heartbeat.sh`, new `tests/restore-heartbeat.bats` | P2 |
+| W3.2 | P3b | S | `bin/cc-resume-layout.sh`, `tests/cc-resume-layout-desktops.bats` | P2 |
+| W3.2 | P8 | S | new `bin/cc-restore-rebind`, new `tests/cc-restore-rebind.bats`, its fixtures | nothing (builds on the contract fixed here) |
+| W3.2b | P3a-ii | S | `scripts/boot-resume.sh`, `tests/boot-resume.bats`, `tests/boot-resume-skip-retired.bats` | P3a-i |
+| W3.3 | P4 | S | `bin/cc-resume-classify.py`, its fixtures, new `scripts/lib/restore-note.sh`, new `tests/restore-note.bats`, `bin/reso-resume-one`, `tests/reso-resume-one.bats`, `scripts/boot-resume.sh` (step 4), `tests/boot-resume.bats`, `bin/cc-resume-layout.sh` (`:257-258` only) | P3a-ii, P3b |
+| W3.4 | P5 | S | new `bin/cc-restore`, new `tests/cc-restore.bats`, new `scripts/lib/kitty-queue.sh`, `scripts/handoff-fire.sh` (the source line only), `tests/handoff-recycle-kitty-precheck.bats`, `scripts/boot-resume.sh`, `tests/boot-resume.bats`, `install.sh` (link) | P4, P8 |
+| W3.4 | P7 | S | `bin/cc-resume-layout.sh`, `tests/cc-resume-layout-desktops.bats`, `scripts/lib/restore-heartbeat.sh`, `tests/restore-heartbeat.bats` | P4, P3a-ii |
+| G1 | first planned kitty restart (§E) | operator | — | P5, P7 |
+| G2 | first planned Mac restart with `restore-v2` on | operator | — | G1 passed and flag on |
+| — | adopt the P6 build, plus the fd-limit watcher | operator | — | a planned restart after G2 |
+
+**Order of owners for shared files:**
+- `handoff-fire.sh`: P1b, then P5.
+- `reso-resume-one`: P2, then P4.
+- `cc-resume-layout.sh`: P2, then P3b, then P4, then P7.
+- `boot-resume.sh` and `tests/boot-resume.bats`: P3a-i, then P3a-ii, then P4, then P5.
+- `restore-heartbeat.sh`: P3a-i, then P7.
+
+**Row contract change.** Column 11 is `permission_mode`, padded with `$TSV_PAD` like columns 6-10. The map-line `verdict=` anchor is now `cc-resume-layout.sh:318`, and the pipe is `boot-resume.sh:616`.
+
+**Scope changes per phase** (the original sections still apply wherever these lines are silent):
+- **P1b.**
+  - Let `rcy_bgcopy_stop` run when `RCY_RESUME_SID` is set (`:9459`). Take the pre-answer size on the source transcript before lr-transplant's fold-stub appends to it. Never stop a copy whose uuid equals the resumed sid.
+  - Add `acct=`/`cfg=` to `recycle-bgwork-answered` (`:9467`) and to the not-found and failed lines of `rcy_bgcopy_stop` (`:5770`).
+  - Live check: every `recycle-bgwork-answered` row is followed by a `recycle-bgcopy-stop` row for the same `watcher_pid` reading `stopped`.
+  - Not here: `hf_recycle_standdown`, which needs an operator ruling first, and retiring the `w3-p1` branch, which is an operator git action.
+- **P2.**
+  - The W3 lead first asks session 2205cb66 (backlog b7ce699affec) to commit the `w3-p2` work. Its worktree `wt-b7ce699affec` is gone, so if there is no answer, P2 carries `git -C /Users/chrisren/Development/.worktrees/w3-p2 diff` over by hand.
+  - Reaper: add `boot-resume|cc-restore` next to `reso-keepalive` at `bin/cc-reaper:716`.
+  - `k()`: use the work-in-progress `kb()` wrapper, default 120 s.
+  - `reso-resume-one`: take the fence (§C, item 6). When `lr_holder_count` (`lr-lib.sh:526`) is 1 or more, exit 5. Release the fence before `:749-751` and before `exec $SHELL` at `:753`, and add a trap for abnormal exit. Spawn through `cc-close-attrib` (§C, item 8).
+  - `restore_refuse_under_bats` follows `handoff-fire.sh:686`.
+- **P6.**
+  - Rebase `716322ed5` and run its bats on main; `0e0bdae86` changed `KITTY_PID` inheritance.
+  - Add the band-link check (§C, item 9).
+  - After landing, run `scripts/kitty-build-swap.sh stage --no-band`.
+  - Check with b7ce699affec first, to avoid a double land.
+- **P3a-i.**
+  - P3a items 1-4 and 9, with §C items 1 and 2 and the heartbeat files in §B.
+  - Step 0 runs before `if same_boot` (`:269`). The reader at `:333` takes the first field of the first line. `-lt` becomes `-le` at `:335`. `:620` becomes `open -a /Applications/kitty.app`, with no `-n`. `--roster-dir` defaults to the newest heartbeat directory.
+  - The bats suite runs under `/bin/bash` 3.2.
+- **P3a-ii.** P3a items 5-8 and 10, behind `--event` or `restore-v2`.
+  - `recycle-engaged` rows carry no successor sid, so derive the successor from the pane, the roster, or a transcript newer than the marker.
+  - Take the account from the newest transcript.
+  - Write columns 6-11 into `ADMITTED` (`:569-584`), and copy the map lines into `last-layout.map` and `events/<id>/`.
+- **P3b.** Everything behind `--restore`.
+  - Even out pane sizes with `reset_window_sizes` (`scripts/kitty-equalize.py`), never `layout_action equalize`.
+  - Send `goto-layout` with `--match window_id:<head>`, because launch returns a window id, not a tab id.
+  - Keep `fs_osa` and the marker loop for the default path.
+  - Apply §C items 4, 5 and 8, and gap 4.
+  - Pass columns 6-7 only. Columns 10-11 are P4's.
+- **P8.**
+  - New `bin/cc-restore-rebind <event-dir> [--dry-run]`, idempotent, logging each act to `<event-dir>/rebind.log`.
+  - It covers gaps 5, 11 and 16. P5 wires it in to run after `events/<id>.done`.
+- **P4.** As planned, plus:
+  - the gaps assigned to it in §B;
+  - notes go through `cc-notify --mailbox-only --no-wake`, because `f37f2be9a` now wakes idle panes by default;
+  - the drain test runs under the `9cf121e54` seal;
+  - the fallback tries `bin/cc-wake` before `it2_paste_submit_verified` (`handoff-fire.sh:4184`);
+  - the typing ruling anchor is `~/.claude/settings.json:1328`, and step 4 is now at `boot-resume.sh:654-682`.
+- **P5.** As planned, plus:
+  - the crash page passes `--class needs-human` and shares its title with the stuck-kitty row at `handoff-fire.sh:13087-13091`, so one wedge files one row;
+  - `hf_kitty_queue_depth` moves into `scripts/lib/kitty-queue.sh`, and `tests/handoff-recycle-kitty-precheck.bats:114` keeps working;
+  - `--confirm` checks for the main kitty itself, never with `pgrep -nx`;
+  - add `--compare` and the detach test;
+  - add a `restore-v2.plan` mode: boot-resume runs v2 `--plan-only`, bypassing `same_boot()`, into `events/<id>/plan.txt`;
+  - **P5 never creates `restore-v2`.**
+- **P7.** Gaps 2 and 3, restore mode only, plus a new `--tree FILE` option.
+
+**Goals.** Bats runs serially. A pass needs the `1..N` line, N `ok` lines and no `not ok`, because a plan line alone does not prove a run.
+
+```
+P1b: --goal 'P1b landed on origin/main — proven by the session running and printing bats tests/handoff-recycle-bgcopy-stop.bats tests/handoff-recycle-bgwork-dialog.bats tests/handoff-recycle-bg-session.bats (1..N, N ok, no not ok) and git merge-base --is-ancestor <land sha> origin/main && echo LANDED; do not touch files owned by another open phase; brief at docs/research/session-durability-2026-10/W3-build-plan.md § Amendment 2026-10-04 P1b'
+P2:  --goal 'P2 landed on origin/main — proven by the session running and printing bats tests/cc-reaper.bats tests/cc-resume-layout-desktops.bats tests/reso-resume-one.bats tests/restore-lock.bats (1..N, N ok, no not ok) and git ls-tree origin/main -- scripts/lib/restore-lock.sh tests/restore-lock.bats; do not touch files owned by another open phase; brief at docs/research/session-durability-2026-10/W3-build-plan.md § P2 and § Amendment 2026-10-04 P2'
+P6:  --goal 'P6 landed on origin/main — proven by the session running and printing bats tests/kitty-build-swap.bats (1..N, N ok, no not ok), git -C ~/ktb apply --check <repo>/docs/patches/kitty-talk-thread-survives-v0.48.2.patch && echo APPLIES, scripts/kitty-build-swap.sh status showing staged patched-noband, and git ls-tree origin/main -- docs/patches/kitty-talk-thread-survives-v0.48.2.patch; do not touch files owned by another open phase; brief at docs/research/session-durability-2026-10/W3-build-plan.md § P6 and § Amendment 2026-10-04 P6'
+P3a-i: --goal 'P3a-i landed on origin/main — proven by the session running and printing bats tests/boot-resume.bats tests/alarm-reboot-prep.bats tests/restore-heartbeat.bats (heartbeat suite under /bin/bash 3.2; 1..N, N ok, no not ok), then bash scripts/boot-resume.sh --event "$(date +%s)" --kind restart --plan-only listing the live fleet with 0 launches and shasum of last-boot-epoch and last-boot-uuid unchanged before and after, and git ls-tree origin/main -- scripts/lib/restore-heartbeat.sh; do not touch files owned by another open phase; brief at docs/research/session-durability-2026-10/W3-build-plan.md § P3a and § Amendment 2026-10-04 P3a-i'
+P3b: --goal 'P3b landed on origin/main — proven by the session running and printing bats tests/cc-resume-layout-desktops.bats tests/kitty-recovery-launch.bats (1..N, N ok, no not ok), then five tab-separated rows piped to bin/cc-resume-layout.sh --desktops --restore --dry-run printing one window, one head plus four vsplits, one goto-layout, no rotate and no layout_action equalize, and git merge-base --is-ancestor <land sha> origin/main && echo LANDED; do not touch files owned by another open phase; brief at docs/research/session-durability-2026-10/W3-build-plan.md § P3b and § Amendment 2026-10-04 P3b'
+P8:  --goal 'P8 landed on origin/main — proven by the session running and printing bats tests/cc-restore-rebind.bats (1..N, N ok, no not ok), bin/cc-restore-rebind --dry-run <fixture event dir> listing forwards, role claims and lr-fleet handoffs, and git ls-tree origin/main -- bin/cc-restore-rebind tests/cc-restore-rebind.bats; do not touch files owned by another open phase; brief at docs/research/session-durability-2026-10/W3-build-plan.md § Amendment 2026-10-04 P8'
+P3a-ii: --goal 'P3a-ii landed on origin/main — proven by the session running and printing bats tests/boot-resume.bats tests/boot-resume-skip-retired.bats (1..N, N ok, no not ok), then the --plan-only run printing 11 columns per row with the account taken from the newest transcript, and git merge-base --is-ancestor <land sha> origin/main && echo LANDED; do not touch files owned by another open phase; brief at docs/research/session-durability-2026-10/W3-build-plan.md § P3a and § Amendment 2026-10-04 P3a-ii'
+P4:  --goal 'P4 landed on origin/main — proven by the session running and printing the pilot line (nonce: user 1, assistant >=1), python3 bin/cc-resume-classify.py --selftest N/N passed, bats tests/reso-resume-one.bats tests/restore-note.bats tests/boot-resume.bats tests/cc-resume-layout-desktops.bats (1..N, N ok, no not ok) and git ls-tree origin/main -- scripts/lib/restore-note.sh tests/restore-note.bats; do not touch files owned by another open phase; brief at docs/research/session-durability-2026-10/W3-build-plan.md § P4 and § Amendment 2026-10-04 P4'
+P5:  --goal 'P5 landed on origin/main — proven by the session running and printing bats tests/cc-restore.bats tests/boot-resume.bats tests/handoff-recycle-kitty-precheck.bats (1..N, N ok, no not ok), bin/cc-restore --restart-kitty --dry-run printing the main kitty pid, roster count, ledger path and commands with exit 0, ls ~/.claude/autonomy/boot-resume/restore-v2 reporting no such file, and git ls-tree origin/main -- bin/cc-restore scripts/lib/kitty-queue.sh tests/cc-restore.bats; do not touch files owned by another open phase; brief at docs/research/session-durability-2026-10/W3-build-plan.md § P5 and § Amendment 2026-10-04 P5'
+P7:  --goal 'P7 landed on origin/main — proven by the session running and printing bats tests/cc-resume-layout-desktops.bats tests/restore-heartbeat.bats (1..N, N ok, no not ok), then bin/cc-resume-layout.sh --desktops --restore --dry-run --tree <newest hb.kitty-ls.json> printing the same window count, panes per window, split orientation and display as a live kitten @ ls, and git merge-base --is-ancestor <land sha> origin/main && echo LANDED; do not touch files owned by another open phase; brief at docs/research/session-durability-2026-10/W3-build-plan.md § Amendment 2026-10-04 P7'
+```
+
+### E. G1: first planned restart (operator runbook)
+
+**Before you start (2 min).**
+- Every row from P2 through P8 in §D has a landed sha.
+- `ls ~/.claude/autonomy/boot-resume/restore-v2` reports no such file.
+- Nothing else changes at G1: no P6 swap and no `NSAppSleepDisabled`. Kitty stays on stock 0.48.2. **Do not upgrade to 0.49.2.** The reconciliation found it fixes only the signal half: the talk thread still dies on any `accept()` error (v0.49.2 `child-monitor.c:1995-1999`, `:2260`; checked 2026-10-04). A cask upgrade also drops the local patches and leaves the ⌘⇧B link pointing at a build without the band.
+- Preview, read-only: `~/.claude/bin/cc-restore --restart-kitty --dry-run`. It prints the main kitty pid, the N sessions it will restore, the windows it plans (panes, split and display for each), the sessions it will leave retired, and the ledger path. Check that N matches the panes you expect.
+
+**Start: one command, run from Terminal.app** (not kitty, so you can watch it while kitty is down):
+
+```
+~/.claude/bin/cc-restore --restart-kitty --confirm <pid from the preview>
+```
+
+**What you will see:**
+1. `lock taken event=<epoch>`, then `heartbeat copied`.
+2. `waiting for K in-flight lands` (at most 10 min). Kitty has not been touched yet.
+3. Every kitty window closes, then one new kitty opens. Its socket can take up to 60 s.
+4. `load` lines every 10 s until load per core is under the gate.
+5. Windows fill one at a time in their old splits, each on its old display. Each pane shows `claude --resume` with the full conversation. Idle sessions come first and sessions with open work come last. Focus does not jump.
+6. Each window goes fullscreen, about 3 s apart.
+7. Each session's first context is a `[restore] kitty was restarted at HH:MM …` note. Sessions with open work take one turn by themselves; sessions at rest stay quiet.
+8. The last line is `cc-restore: verdict=RESTORED restored=N/N maybe=0 dup=0 shed=0 events=~/.claude/autonomy/boot-resume/events/<epoch>`. For 18 sessions, expect about 5-15 min (estimated: 12 s pacing per launch plus the 10 min ceiling on the load gate).
+
+**How to abort:**
+- Before kitty closes (steps 1-2): press Ctrl-C, or run `cc-restore --abort`. Nothing has been signalled.
+- After kitty closes: `cc-restore --abort` stops new launches and releases the lock. Sessions already back stay as they are. Run `cc-restore --after-crash` later to bring back the rest; the ledger and the fence prevent duplicates.
+- If `cc-restore` itself has died: run `open -a /Applications/kitty.app`, then `cc-restore --after-crash`. As a last resort, use `/resume-sessions`.
+
+**Pass check.** Run `cc-restore --compare ~/.claude/autonomy/boot-resume/events/<epoch>`. It prints one line per session comparing before and after: account, model, effort, permission mode, window, position and display. It also prints the duplicate count and the rebind lines (forwards and roles). G1 passes when every line matches, `dup=0` and `maybe=0`. A session writes the result into this file. If anything differs, leave the flag off and send the compare output to the W3 lead.
+
+**Then turn on the reboot path** (only after a pass):
+
+```
+touch ~/.claude/autonomy/boot-resume/restore-v2.plan && launchctl kickstart gui/$(id -u)/com.claude.boot-resume
+```
+
+Read `events/<id>/plan.txt`. If it lists the live fleet with the right layout, run `mv ~/.claude/autonomy/boot-resume/restore-v2.plan ~/.claude/autonomy/boot-resume/restore-v2`. Deleting that file turns the reboot path off again. G2, a planned Mac restart with the flag on, is the first test of the operator's literal case, and it uses the same `--compare`.
