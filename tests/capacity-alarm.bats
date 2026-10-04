@@ -276,7 +276,7 @@ TOP
   [ "$got" -ge "$floor" ] || false
 }
 
-@test "(vii-d) the disjoint-family invariant holds on the real box: trees == exe + bin" {
+@test "(vii-d) the disjoint-family invariant holds on the real box: trees == exe + bin + bg" {
   # A miscount that double-counts or drops a family breaks this sum even when each number alone looks
   # plausible. Cheap, and it is the one assertion a plausible-looking wrong census cannot satisfy.
   run /bin/bash "$ALARM" --json --no-append
@@ -285,8 +285,11 @@ TOP
   b="$(printf '%s\n' "$output" | sed -n 's/.*[,{]"sessions_binclaude":\([0-9]*\),.*/\1/p')"
   [ -n "$t" ] || false
   [ -n "$e" ] || false
+  # sessions_bg (the bg-spare family) joined 2026-10-04; it is the row's LAST key, hence the `}`.
+  g="$(printf '%s\n' "$output" | sed -n 's/.*[,{]"sessions_bg":\([0-9]*\)}.*/\1/p')"
   [ -n "$b" ] || false
-  [ "$t" -eq "$((e + b))" ] || false
+  [ -n "$g" ] || false
+  [ "$t" -eq "$((e + b + g))" ] || false
 }
 
 # ── the two new rungs (M9-ext pressure level, M9b per-proc outlier) ───────────────────────────────

@@ -693,7 +693,7 @@ fi
 # function was the divergent copy. Refusing (empty + rc 1) also de-vacuums the selftest control for
 # free: on an empty read `set -- $cs` leaves $1 unset, so `${1:-x}` = x != 0 and the rung goes RED.
 # Backlog c4383f1c9172 (memory: positive-control-the-denominator).
-census() { # → "<trees> <exe_trees> <bin_trees>" | empty + rc 1 when the process table is unreadable
+census() { # → "<trees> <exe_trees> <bin_trees> <bg_trees>" | empty + rc 1 when the process table is unreadable
   # ONE CENSUS, TWO CONSUMERS (backlog c4383f1c9172). This used to be a second copy of the awk that
   # scripts/lib/spawn-presence.sh already carried, and the copies DIVERGED exactly as the comment
   # above describes: the `rows` positive control was added there and not here, so under a `ps` that
@@ -720,15 +720,16 @@ census() { # → "<trees> <exe_trees> <bin_trees>" | empty + rc 1 when the proce
 }
 
 CENSUS="$(census || true)"
-SESSIONS=0; SESSIONS_EXE=0; SESSIONS_BIN=0
+SESSIONS=0; SESSIONS_EXE=0; SESSIONS_BIN=0; SESSIONS_BG=0
 if [ -n "$CENSUS" ]; then
-  # shellcheck disable=SC2086  # deliberate word-split of the 3-field awk output
+  # shellcheck disable=SC2086  # deliberate word-split of the 4-field awk output
   set -- $CENSUS
-  SESSIONS="${1:-0}"; SESSIONS_EXE="${2:-0}"; SESSIONS_BIN="${3:-0}"
+  SESSIONS="${1:-0}"; SESSIONS_EXE="${2:-0}"; SESSIONS_BIN="${3:-0}"; SESSIONS_BG="${4:-0}"
 fi
 case "$SESSIONS"     in ''|*[!0-9]*) SESSIONS=0 ;;     esac
 case "$SESSIONS_EXE" in ''|*[!0-9]*) SESSIONS_EXE=0 ;; esac
 case "$SESSIONS_BIN" in ''|*[!0-9]*) SESSIONS_BIN=0 ;; esac
+case "$SESSIONS_BG"  in ''|*[!0-9]*) SESSIONS_BG=0 ;;  esac
 
 # ── the kernel's own leading indicator (M9-ext rung 3) ────────────────────────────────────────────
 # Empty when the sysctl does not exist on this build; see the header — that is a skipped rung, never
@@ -938,7 +939,9 @@ read_session_tree_mb() { # → "<total_tree_mb> <trees>", or nothing when unread
       p = $1; pp = $2; kb = $3; cmd = $4
       if (p !~ /^[0-9]+$/ || pp !~ /^[0-9]+$/ || kb !~ /^[0-9]+$/) next
       parent[p] = pp; pids[++np] = p; kbytes[p] = kb + 0
-      if (cmd ~ /claude-code\/bin\/claude\.exe$/ || cmd ~ /node_modules\/\.bin\/claude$/) cand[p] = 1
+      # …and the bg-spare family, the same third pattern cc_sp_census carries (its header says why).
+      if (cmd ~ /claude-code\/bin\/claude\.exe$/ || cmd ~ /node_modules\/\.bin\/claude$/ ||
+          (cmd == "claude" && $5 == "bg-spare")) cand[p] = 1
     }
     END {
       nroot = 0
@@ -1554,12 +1557,12 @@ if [ "${CC_CAP_SELFTEST:-0}" = "1" ]; then
   # The census is an instrument too, and its failure mode is a plausible-looking zero. Assert the
   # invariant a miscount breaks: the two families are disjoint, so the trees must be their exact sum.
   cs="$(census || true)"
-  # shellcheck disable=SC2086  # deliberate word-split of the 3-field census output
+  # shellcheck disable=SC2086  # deliberate word-split of the 4-field census output
   set -- $cs
-  if [ "${1:-x}" = "$(( ${2:-0} + ${3:-0} ))" ]; then
-    echo "  control OK   census trees=${1:-?} = exe ${2:-?} + bin ${3:-?} (disjoint-family sum)"
+  if [ "${1:-x}" = "$(( ${2:-0} + ${3:-0} + ${4:-0} ))" ]; then
+    echo "  control OK   census trees=${1:-?} = exe ${2:-?} + bin ${3:-?} + bg ${4:-?} (disjoint-family sum)"
   else
-    echo "  control FAIL census trees=${1:-?} != exe ${2:-?} + bin ${3:-?}"; fails=$((fails+1))
+    echo "  control FAIL census trees=${1:-?} != exe ${2:-?} + bin ${3:-?} + bg ${4:-?}"; fails=$((fails+1))
   fi
   # Rung 6's instrument has the same failure mode the census has: a plausible-looking nothing. An
   # empty read is INDISTINGUISHABLE from "no terminal is running" at the verdict, so without this
@@ -1839,7 +1842,7 @@ case "$PTY_MAX" in ''|*[!0-9]*) PTY_MAX="" ;; esac
 PTY_PCT=""
 if [ -n "$PTY_MAX" ] && [ "$PTY_MAX" -gt 0 ]; then PTY_PCT=$(( PTY_USED * 100 / PTY_MAX )); fi
 
-JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compressor_gb":%s,"active_gb":%s,"wired_gb":%s,"swap_used_mb":%s,"warn_gb":%s,"alarm_gb":%s,"est_room_sessions":%s,"per_session_mb_est":%s,"sessions_exe":%s,"sessions_binclaude":%s,"pressure_level":%s,"proc_warn_gb":%s,"max_proc_gb":%s,"seg_pct":%s,"seg_warn_pct":%s,"seg_alarm_pct":%s,"coal_procs":%s,"coal_app":"%s","coal_warn":%s,"coal_alarm":%s,"coal_true_procs":%s,"coal_id":%s,"coal_fp_mb":%s,"coal_fp_src":"%s","auto_coal_procs":%s,"auto_coal_id":%s,"auto_coal_fp_mb":%s,"auto_coal_fp_src":"%s","top_procs":%s,"seg_source":%s,"swap_delta_mb":%s,"swap_delta_floor_mb":%s,"swap_window_s":%s,"occupancy_pct":%s,"thrash_cd_ratio":%s,"compressions":%s,"decompressions":%s,"load_1m":%s,"load_5m":%s,"load_15m":%s,"ncpu":%s,"load_per_core":%s,"load_warn_per_core":%s,"load_alarm_per_core":%s,"ptys_used":%s,"ptys_max":%s,"ptys_pct":%s,"per_session_mb_src":"%s","swapfiles":%s,"swapfile_prefix":"%s","swapfile_warn":%s,"swapfile_alarm":%s,"kalloc1024_gb":%s,"kalloc1024_src":"%s","kalloc1024_at":%s,"kalloc_warn_gb":%s,"kalloc_alarm_gb":%s,"uptime_days":%s,"chronic_verdict":"%s"}' \
+JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compressor_gb":%s,"active_gb":%s,"wired_gb":%s,"swap_used_mb":%s,"warn_gb":%s,"alarm_gb":%s,"est_room_sessions":%s,"per_session_mb_est":%s,"sessions_exe":%s,"sessions_binclaude":%s,"pressure_level":%s,"proc_warn_gb":%s,"max_proc_gb":%s,"seg_pct":%s,"seg_warn_pct":%s,"seg_alarm_pct":%s,"coal_procs":%s,"coal_app":"%s","coal_warn":%s,"coal_alarm":%s,"coal_true_procs":%s,"coal_id":%s,"coal_fp_mb":%s,"coal_fp_src":"%s","auto_coal_procs":%s,"auto_coal_id":%s,"auto_coal_fp_mb":%s,"auto_coal_fp_src":"%s","top_procs":%s,"seg_source":%s,"swap_delta_mb":%s,"swap_delta_floor_mb":%s,"swap_window_s":%s,"occupancy_pct":%s,"thrash_cd_ratio":%s,"compressions":%s,"decompressions":%s,"load_1m":%s,"load_5m":%s,"load_15m":%s,"ncpu":%s,"load_per_core":%s,"load_warn_per_core":%s,"load_alarm_per_core":%s,"ptys_used":%s,"ptys_max":%s,"ptys_pct":%s,"per_session_mb_src":"%s","swapfiles":%s,"swapfile_prefix":"%s","swapfile_warn":%s,"swapfile_alarm":%s,"kalloc1024_gb":%s,"kalloc1024_src":"%s","kalloc1024_at":%s,"kalloc_warn_gb":%s,"kalloc_alarm_gb":%s,"uptime_days":%s,"chronic_verdict":"%s","sessions_bg":%s}' \
   "$TS" "$VERDICT" "$SESSIONS" "${HEAD:-null}" "${COMP:-null}" "${ACT:-null}" "${WIRED:-null}" \
   "${SWAP_MB:-null}" "$WARN_GB" "$ALARM_GB" "$ROOM_JSON" "$PER_MB" \
   "$SESSIONS_EXE" "$SESSIONS_BIN" "${PRESSURE:-null}" "$PROC_WARN_GB" "${MAX_PROC_GB:-null}" \
@@ -1855,7 +1858,7 @@ JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compre
   "$PTY_USED" "${PTY_MAX:-null}" "${PTY_PCT:-null}" "$PER_MB_SRC" \
   "${SWAPFILES:-null}" "$SWAPFILE_PREFIX_JSON" "$SWAPFILE_WARN" "$SWAPFILE_ALARM" \
   "${KALLOC_GB:-null}" "$KALLOC_SRC" "${KALLOC_AT:-null}" "$KALLOC_WARN_GB" "$KALLOC_ALARM_GB" \
-  "${UPTIME_DAYS:-null}" "$CHRONIC_VERDICT")"
+  "${UPTIME_DAYS:-null}" "$CHRONIC_VERDICT" "$SESSIONS_BG")"
 
 if [ "$APPEND" = 1 ]; then
   mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
@@ -1982,7 +1985,7 @@ fi
 
 if [ "$QUIET" != 1 ] && [ "$WANT_JSON" != 1 ]; then
   echo "capacity-alarm — $TS"
-  echo "  live sessions:          ${SESSIONS} trees   (${SESSIONS_EXE} claude.exe + ${SESSIONS_BIN} .bin/claude)"
+  echo "  live sessions:          ${SESSIONS} trees   (${SESSIONS_EXE} claude.exe + ${SESSIONS_BIN} .bin/claude + ${SESSIONS_BG} bg-spare)"
   echo "  reclaimable headroom:   ${HEAD:-?} GB   (warn <${WARN_GB} · alarm <${ALARM_GB})"
   echo "  compressor / active:    ${COMP:-?} GB / ${ACT:-?} GB"
   # SKIPPED, not "0%" — an unreadable instrument must never render as a healthy reading (2026-07-30).

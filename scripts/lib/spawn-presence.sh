@@ -66,7 +66,7 @@
 # ── Caller contract ──────────────────────────────────────────────────────────────────────────────
 #   . scripts/lib/spawn-presence.sh
 #   cc_sp_ready                        → 0 iff every symbol below is defined (one predicate, like cc_hw_ready)
-#   cc_sp_census                       → "<trees> <exe_trees> <bin_trees>" — THE one census; empty +
+#   cc_sp_census                       → "<trees> <exe_trees> <bin_trees> <bg_trees>" — THE one census; empty +
 #                                        rc 1 when the process table is unreadable
 #   cc_sp_trees                        → live session TREE count on stdout (field 1 of the census,
 #                                        or CC_SP_TREES_OVERRIDE); empty + rc 1 when unreadable
@@ -154,7 +154,7 @@ cc_sp_is_int() { case "${1:-}" in ''|*[!0-9]*) return 1 ;; esac; return 0; }
 # Until then tests/spawn-presence.bats case P1 runs BOTH implementations against ONE stubbed `ps`
 # fixture and asserts identical counts — a behavioural parity control over the shape that actually
 # broke three times, not a diff of two literals.
-cc_sp_census() { # → "<trees> <exe_trees> <bin_trees>" | empty + rc 1 when the process table is unreadable
+cc_sp_census() { # → "<trees> <exe_trees> <bin_trees> <bg_trees>" | empty + rc 1 when the process table is unreadable
   # THE ONE CENSUS. This awk was duplicated in scripts/capacity-alarm.sh census() for months, and the
   # copies DIVERGED in the way divergence always goes: the `rows` guard below was added here and not
   # there, so under a `ps` that produced nothing this function correctly returned rc 1 while the twin
@@ -177,22 +177,34 @@ cc_sp_census() { # → "<trees> <exe_trees> <bin_trees>" | empty + rc 1 when the
   #
   # `comm` was rejected as the matching field: measured, a `.bin/claude` session reports COMMAND
   # `node` to top(1), so the resolved executable name loses the very distinction being counted.
+  #
+  # THE THIRD FAMILY: bg-spare (2026-10-04, docs/research/concurrency-scale-2026-10-04 fix row 8).
+  # Claude Code 2.1.284's background daemon keeps pre-warmed sessions whose argv is the retitled
+  # `claude bg-spare --bg-spare <sock>` — command position `claude`, no path — so neither pattern
+  # above can match them. Measured: 2 live ones, each owning a sessions/<pid>.json (kind "bg") and
+  # one of them a claimed session ten hours into real work, were absent from a census of 25; the
+  # research counted 6 against 25. Each is a ~298 MB session tree. Its parent is `claude
+  # bg-pty-host`, which is in no family, so the child-of-a-tree reduction leaves it counted once.
+  # `.bin/claude --permission-mode …` needs no pattern of its own: its command position is the
+  # .bin/claude path, which the second pattern matches whatever flags follow (case 16b pins it).
+  # The count is APPENDED as field 4, so a consumer that reads fields 1-3 keeps working.
   local out
   out="$(ps -eo pid=,ppid=,args= 2>/dev/null | awk '
     { rows++
       cmd = $3; f = ""
       if      (cmd ~ /claude-code\/bin\/claude\.exe$/) f = "exe"
       else if (cmd ~ /node_modules\/\.bin\/claude$/)   f = "bin"
+      else if (cmd == "claude" && $4 == "bg-spare")     f = "bg"
       if (f != "") { fam[$1] = f; par[$1] = $2 }
     }
     END {
       if (rows + 0 == 0) exit 1
-      exe = 0; bin = 0
+      exe = 0; bin = 0; bg = 0
       for (p in fam) {
         if (par[p] in fam) continue        # child of an already-counted tree
-        if (fam[p] == "exe") exe++; else bin++
+        if (fam[p] == "exe") exe++; else if (fam[p] == "bin") bin++; else bg++
       }
-      printf "%d %d %d", exe + bin, exe, bin
+      printf "%d %d %d %d", exe + bin + bg, exe, bin, bg
     }' 2>/dev/null)" || return 1
   [ -n "$out" ] || return 1
   printf '%s' "$out"
@@ -205,7 +217,7 @@ cc_sp_trees() { # → live session tree count | empty + rc 1
   fi
   local cs
   cs="$(cc_sp_census)" || return 1
-  # shellcheck disable=SC2086  # deliberate word-split of the 3-field census output
+  # shellcheck disable=SC2086  # deliberate word-split of the census output
   set -- $cs
   cc_sp_is_int "${1:-}" || return 1
   printf '%s' "$1"

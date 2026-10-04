@@ -250,6 +250,31 @@ EOF
   [ "$output" -eq 2 ]
 }
 
+@test "16b the census counts the bg-spare family and a flagged .bin/claude launch, and reports bg as field 4" {
+  # RED-proof: on the pre-fix library (git show 13b27133f:scripts/lib/spawn-presence.sh) this reads
+  # "3 1 2" — the two bg-spare sessions are absent, which is the measured 10-04 undercount.
+  # Rows are live argv shapes from that day: the daemon (claude.exe family), its two pty-hosts (in no
+  # family, so each spare below one is its own tree), two spares, and a flagged launch with the
+  # wrapper that merely names it.
+  cat > "$BATS_TEST_TMPDIR/ps" <<'EOF'
+#!/bin/bash
+cat <<'ROWS'
+ 9780     1 /Users/x/.claude-284/node_modules/@anthropic-ai/claude-code/bin/claude.exe daemon run --origin transient
+ 8514  9780 claude bg-pty-host --bg-pty-host /tmp/cc-daemon-501/2be71cf3/spare/39bfa9cf.pty.sock 200 50 -- /Users/x/claude.exe
+ 8751  8514 claude bg-spare --bg-spare /tmp/cc-daemon-501/2be71cf3/spare/39bfa9cf.claim.sock
+10027  9780 claude bg-pty-host --bg-pty-host /tmp/cc-daemon-501/2be71cf3/spare/1e4d8daa.pty.sock 200 50 -- /Users/x/claude.exe
+10156 10027 claude bg-spare --bg-spare /tmp/cc-daemon-501/2be71cf3/spare/1e4d8daa.claim.sock
+ 7545  7333 /Users/x/.claude-284/node_modules/.bin/claude --permission-mode auto --model claude-opus-5-5
+ 7333  3766 bash /Users/x/.claude/bin/cc-close-attrib /Users/x/.claude-284/node_modules/.bin/claude --permission-mode auto
+   77     1 /Users/x/.claude-284/node_modules/.bin/claude --settings={"autoMemoryDirectory":"/Users/x/m"}
+ROWS
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/ps"
+  run env -u CC_SP_TREES_OVERRIDE PATH="$BATS_TEST_TMPDIR:$PATH" bash -c '. "$1"; cc_sp_census' _ "$SP"
+  [ "$status" -eq 0 ]
+  [ "$output" = "5 1 2 2" ]
+}
+
 @test "17 P1 PARITY — this census and capacity-alarm.sh's agree on ONE ps fixture" {
   # Two copies exist on purpose (see the library header: converting the live 60 s alarm daemon to
   # source this belongs to its own item). A literal diff is not enough — the repo already learned
