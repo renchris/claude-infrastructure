@@ -14,6 +14,9 @@ scripts/lib/research-program.sh (wave A1's resolver, the one key every exemption
   router.py prompt --program P --state S --by cwd|prompt     (hooks/research-precognition-nudge.sh)
       UserPromptSubmit. Classifies a genuine prompt, records the turn's label for this session and
       prints the hook's JSON. `router.py prompt --clear` forgets the session's route (no program).
+      A machine-envelope FIRST prompt (no route record yet) is labeled without the classifier and
+      recorded `by: envelope`: work-order on a --requires-gate marker, else a named predecessor's
+      non-relayed label, else other.
   router.py tool [--program P]                               (hooks/research-block.sh)
       PreToolUse. Prints a deny, or nothing (allow).
   router.py relay-check --session SID                        (hooks/completion-assert.sh)
