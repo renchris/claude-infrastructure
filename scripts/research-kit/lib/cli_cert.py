@@ -1,7 +1,7 @@
 """cli_cert.py — the certification verbs of bin/cc-research (REPORT.md §3.8, §8 item 11).
 
   slots       --program P --kind K --round N [--escape H] [--json]   round.plan_slots as [{pid, vendor, strategy, role}]
-  open-round  --program P --kind K --round N --plan F [--escape H]   writes rounds/<rid>/plan.json, builds the bundle
+  open-round  --program P --kind K --round N --plan F [--escape H]   writes rounds/<rid>/plan.json, builds the bundle; exit 3 without a fresh all-live preflight
   slot        --program P --round RID --pid PID --brief F            runs ONE planned slot through the courier
   raters      --program P --round RID [--json]                       the rater assignment (§3.8 step 2)
   check-round --program P --round RID [--json]                       voids breaches, lists every non-complete slot
@@ -9,9 +9,10 @@
   rehearse frames --program P [--json] | rehearse record --program P --frames-typed F.. --trials FILE [--retest]
 
 The Workflows in ../workflows/ only call these. What is enforced HERE, in code: the slot plan and its
-caps (round.py), the vendor/strategy/role of every slot (an agent names a pid, never a vendor), the
-re-run cap per slot (CAPS["slot_reruns"]), the rater assignment, the responding-model check against
-frame.json reviewer_pins, and the relay test of gate row 14. A Workflow round writes rounds/<rid>/
+caps (round.py), a fresh all-live vendor preflight before a round opens, the vendor/strategy/role
+of every slot (an agent names a pid, never a vendor), the re-run cap per slot (CAPS["slot_reruns"]),
+the rater assignment, the responding-model check against frame.json reviewer_pins, and the relay
+test of gate row 14. A Workflow round writes rounds/<rid>/
 matrix.json through check-round (round.py's shape), so `round.sh close` and gate row 13 read it as
 they read a round.py round. Exit codes are the kit's: 0 ok · 1 check failed · 2 refusal · 3 dead lane
 · 4 a planned slot to re-run (void, dead, partial or missing).
@@ -25,13 +26,16 @@ import os
 import re
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import kit
 import courier
 import round as rnd
 
 RELAY_TRIALS = 20  # §3.8 rehearsal: the relay test is 20 trials
+# open-round needs a vendor preflight this young. courier.sh preflight records when each lane was
+# probed (`at`) but the kit had no freshness bound, so this is one: 24 h (audit 2026-10-04 row 5).
+PREFLIGHT_MAX_AGE_S = 24 * 3600
 
 
 def rdir(slug: str, rid: str) -> Path:
@@ -107,6 +111,12 @@ def cmd_open(a: argparse.Namespace) -> int:
     if (rd / "plan.json").exists() or (rd / "matrix.json").exists():
         raise kit.KitError(f"round {rid} is already open")
     rat = raters(a.program, rid)
+    why = lane_refusal(
+        a.program, {v for v, _ in slots} | {r["vendor"] for r in rat or []}
+    )
+    if why:  # before anything is written: a refused open mints no round id
+        print(f"cc-research: open-round refused: {why}")
+        return 3
     if rat is None:
         print(
             "cc-research: no rater assignment: fewer than two live families or none non-Anthropic"
@@ -145,6 +155,42 @@ def cmd_open(a: argparse.Namespace) -> int:
     )
     print(rid)
     return 0
+
+
+def lane_refusal(slug: str, need: Set[str]) -> Optional[str]:
+    """Why a round may not open on the program's vendor preflight, or None.
+
+    A round opened while a lane is walled loses its reads and still spends a round number toward
+    R_max, so every lane the plan needs must read live in a preflight younger than
+    PREFLIGHT_MAX_AGE_S.
+    """
+    pf = kit.read_json(kit.sealed_dir(slug) / "preflight.json") or {}
+    if not pf:
+        return f"no vendor preflight: run courier.sh preflight --program {slug}"
+    now = kit.parse_iso(kit.now_iso())
+    dead: List[str] = []
+    stale: List[str] = []
+    for v in sorted(need):
+        rec = pf.get(v) or {}
+        try:
+            age = now - kit.parse_iso(str(rec.get("at")))
+        except ValueError:
+            age = float("inf")
+        if not rec.get("ok"):
+            dead.append(v)
+        elif age > PREFLIGHT_MAX_AGE_S:
+            stale.append(v)
+    why: List[str] = []
+    if dead:
+        why.append(f"dead lane(s) {', '.join(dead)} in the vendor preflight")
+    if stale:
+        why.append(
+            f"the vendor preflight is stale (older than {PREFLIGHT_MAX_AGE_S // 3600} h) "
+            f"for {', '.join(stale)}"
+        )
+    if not why:
+        return None
+    return "; ".join(why) + f"; re-run courier.sh preflight --program {slug}"
 
 
 def cmd_slot(a: argparse.Namespace) -> int:
@@ -351,7 +397,7 @@ def write_matrix(
     ]
     lanes = {
         v: "live"
-        if any(s["status"] in ("complete", "partial") for s in res if s["vendor"] == v)
+        if all(s["status"] == "complete" for s in res if s["vendor"] == v)
         else "dead"
         for v in sorted({s["vendor"] for s in res})
     }

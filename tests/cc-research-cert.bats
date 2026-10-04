@@ -211,6 +211,18 @@ plan3() { # round 1 planned by hand: <vendor of p1> <vendor of p2> <vendor of p3
 
 slot() { "$CR" slot --program demo --round 1 --pid "$1" --brief "$T/brief.txt" >/dev/null 2>&1 || true; }
 
+preflight() { # <age in hours> [dead vendor]: preflight.json as courier.sh preflight writes it
+  mkdir -p "$CC_RESEARCH_HOME/demo"
+  /usr/bin/python3 -c "
+import json, sys, time
+at = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(time.time() - float(sys.argv[1]) * 3600))
+json.dump({v: {'ok': v != sys.argv[2], 'model_id': None, 'error': None if v != sys.argv[2] else 'walled', 'at': at}
+           for v in ('anthropic', 'frontier', 'openai', 'google')}, open(sys.argv[3], 'w'))" \
+    "$1" "${2:-}" "$CC_RESEARCH_HOME/demo/preflight.json"
+}
+
+open1() { run "$CR" open-round --program demo --kind certification --round 1 --plan "$T/brief.txt"; }
+
 @test "check-round lists dead and missing planned slots for re-run (exit 4), then passes once they complete" {
   stub_courier
   plan3 anthropic openai google
@@ -239,6 +251,62 @@ assert [s['status'] for s in m['slots']] == ['complete'] * 3, m['slots']
 assert m['counted'] is True, m
 print('ok')"
   [ "$output" = ok ]
+}
+
+@test "check-round lists a partial slot and the matrix reads its vendor lane dead" {
+  stub_courier
+  plan3 anthropic anthropic openai
+  FAKE_STATUS="r1p2=partial"
+  export FAKE_STATUS
+  slot r1p1; slot r1p2; slot r1p3
+  run "$CR" check-round --program demo --round 1 --json
+  [ "$status" -eq 4 ]
+  [[ "$output" == *'"r1p2"'* ]] || false
+  run /usr/bin/python3 -c "
+import json; m = json.load(open('$CC_RESEARCH_RECORDS/rounds/1/matrix.json'))
+assert m['lanes'] == {'anthropic': 'dead', 'openai': 'live'}, m['lanes']
+assert m['counted'] is False, m
+print('ok')"
+  [ "$output" = ok ]
+}
+
+@test "open-round refuses (exit 3) with no vendor preflight and writes no round" {
+  fc_done
+  stub_courier
+  open1
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"preflight"* ]] || false
+  [ ! -e "$CC_RESEARCH_RECORDS/rounds/1" ]
+}
+
+@test "open-round refuses (exit 3) on a stale preflight and writes no round" {
+  fc_done
+  stub_courier
+  preflight 30
+  open1
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"stale"* ]] || false
+  [ ! -e "$CC_RESEARCH_RECORDS/rounds/1" ]
+}
+
+@test "open-round refuses (exit 3) naming a dead lane in a fresh preflight and writes no round" {
+  fc_done
+  stub_courier
+  preflight 1 openai
+  open1
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"openai"* ]] || false
+  [ ! -e "$CC_RESEARCH_RECORDS/rounds/1" ]
+}
+
+@test "open-round opens on a fresh preflight with every planned lane live" {
+  fc_done
+  stub_courier
+  preflight 1
+  open1
+  [ "$status" -eq 0 ]
+  [ "$output" = 1 ]
+  [ -s "$CC_RESEARCH_RECORDS/rounds/1/plan.json" ]
 }
 
 # ── rehearse record ─────────────────────────────────────────────────────────────────────────────
