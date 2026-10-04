@@ -430,7 +430,15 @@ change lands as a named, priced edit after E2's measurement, never before it.
   migration 0050's, verified live in `~/.claude/settings.json` (10), not re-done. Test: research-router-heldout
   "ruling 4bf73c4e55d5: a classifier answering in 6.5 s is labeled…" — red at the router site, then red at the
   heldout site with the router fixed (one mutant per site), then research-router-heldout + research-kit-heldout 18/18.
-- Gate row 15 at 9 s: ROW15_READING
+- Gate row 15 at 9 s — **FAILS, narrowly** (2026-10-04 16:22-16:29 CDT, load 24 rising to 40, 427 s;
+  `CC_RESEARCH_ROUTER="python3 <worktree>/scripts/research-kit/router.py classify" heldout.py evaluate`, rc 1):
+  fallback 7 of 69 routed = 0.101 against the ≤ 0.10 cap (printed as "0.10, above 0.1"); correct labels on `other`
+  23/26 = 0.88 against ≥ 0.90; completeness recall 14/14 regex-matched · 3/3 regex-missed · 1/1 pushback, now
+  honest (fallbacks score as misses since D's 4c); 22 of 91 excluded for rater disagreement. Against the 6 s
+  reading (fallback 0.51 and `other` 0.62 at load 45-80) the limit removed most fallbacks, and what remains is
+  load-bound: one fewer fallback, or one more `other` label right, flips each condition. Thresholds stay assumed
+  inputs (§6.6); a re-read at lower load, or the classifier-path options left in decision `4bf73c4e55d5`, are the
+  levers. No program can certify while row 15 fails.
 
 #### E2 — triage precision study (v1.2 (a), measurement half) — RUNNING
 - Locus: a Workflow in session d8964eb2, started 2026-10-04. Results: `docs/research/triage-precision-study-2026-10-04/`.
