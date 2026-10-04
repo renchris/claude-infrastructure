@@ -1505,7 +1505,20 @@ EOF
   [ "$rrc" = 0 ] && role=switch-recover
   run="$LRU_STATE/switch/${sid:0:8}-bg-$(date -u +%Y%m%dT%H%M%SZ)"
   mkdir -p "$run" 2>/dev/null || true
-  L="$(lru_mint_launcher "$run" "$tcfg" "$cwd" "$sid" "$model" "$eff" "$perm" "" "$role" "" "" "$from" "$target")" || {
+  # T. ADMISSION BEFORE THE FIRST ACT (2026-10-04, the prime case's SWITCHED drive). The launcher
+  # carried no admission token, so lr-fire-resume evaluated the gate fresh in the pane, at the 50%
+  # spawn ceiling, and refused d425afab three times at 65% segments before its refusal budget
+  # admitted the fourth. Probe here (lr_capacity_probe_corrected: a swap, 90% ceiling) and hand the
+  # launcher the one-shot token, exactly as the upgrade drive does; a refusal parks the move before
+  # anything is stopped or typed. Kill switch LRU_BG_ADMIT_TOKEN=off (no probe, no token).
+  local btok=""
+  if [ "${LRU_BG_ADMIT_TOKEN:-on}" != off ]; then
+    if ! lru_capacity "$sid"; then
+      lru_switch_result "$sid" "$pane" NOTMOVED "$from" "$target" "capacity refused the relaunch before anything was touched: ${LRU_CAP_WHY:-no reason given}" "$req" "$by"; return 3
+    fi
+    btok="$LRU_TOKEN"
+  fi
+  L="$(lru_mint_launcher "$run" "$tcfg" "$cwd" "$sid" "$model" "$eff" "$perm" "$btok" "$role" "" "" "$from" "$target")" || {
     lru_switch_result "$sid" "$pane" NOTMOVED "$from" "$target" "could not mint an ASCII-only launcher in $run: nothing stopped, nothing typed" "$req" "$by"; return 3; }
   # A. WHERE THE LAUNCHER WILL RUN. A viewer that IS its window's process takes the window with it,
   # so a pane is opened beside it first (anchored, focus kept, armed for one command) — before any

@@ -140,6 +140,12 @@ attach_actors() {
   export LRU_TUI_LIB="$BATS_TEST_TMPDIR/tui.sh" LRU_BG_POLL_S=0 LRU_BG_STOP_S=2 LRU_BG_QUIT_S=1 LRU_BG_CTRLC_GAP_S=0
   export LRU_RETYPE_MAX=1 LRU_BG_PROMPT_WAIT_S=0 LRU_BG_PROMPT_POLL_S=0
   export LRU_BG_ATTACH_QUIT=keys   # the key path these cases model; A11 owns the SIGTERM lead
+  export LRU_CA_LIB="$BATS_TEST_TMPDIR/ca.sh"   # admission is stubbed: admit + mint, unless ca-refuse exists
+  cat > "$LRU_CA_LIB" <<'STUB'
+cc_capacity_probe() { echo "probe $*" >> "$(dirname "$A")/probe.log"; [ ! -e "$(dirname "$A")/ca-refuse" ]; }
+cc_capacity_admit_reason() { echo "segments 95% > 90%"; }
+cc_capacity_token_mint() { echo "tok-$1"; }
+STUB
   export A ASID AJOB LST BIN AWIN
   printf '#!/bin/bash\necho %s\n' "$STUBS/claude" > "$STUBS/cc-claude-bin"
   cat > "$STUBS/claude" <<'STUB'
@@ -505,6 +511,34 @@ STUB
   [ "$(res verdict)" = SWITCHED ] || { res reason; false; }
   ! grep -q '^term' "$A" || { cat "$A"; false; }
   [ "$(grep -c '^ctrl-c id:391$' "$A")" -eq 2 ] || { cat "$A"; false; }
+}
+
+@test "T1 [RED] the relaunch carries a one-shot admission token minted before any act, so the pane's gate admits it first time" {
+  attachfix idle root; halfmoved healthy; attach_actors
+  drive
+  [ "$(res verdict)" = SWITCHED ] || { res reason; false; }
+  grep -q '^probe ' "$(dirname "$A")/probe.log" || { echo "no admission probe ran"; false; }
+  grep -q "^export LR_ADMIT_TOKEN=tok-$ASID$" "$(launcher)" || { cat "$(launcher)"; false; }
+}
+
+@test "T2 a capacity refusal parks the move before anything is touched: NOTMOVED, no split, no key, no stop" {
+  attachfix idle root; halfmoved healthy; attach_actors
+  touch "$(dirname "$A")/ca-refuse"
+  drive
+  [ "$status" -eq 3 ] || { echo "$output"; cat "$A"; false; }
+  [ "$(res verdict)" = NOTMOVED ] || { res reason; false; }
+  [[ "$(res reason)" == *"capacity refused the relaunch before anything was touched: segments 95% > 90%"* ]] || { res reason; false; }
+  grep -q '^probe ' "$(dirname "$A")/probe.log" || false
+  [ ! -s "$A" ] || { echo "a refused probe must touch nothing"; cat "$A"; false; }
+}
+
+@test "T3 CONTROL: LRU_BG_ADMIT_TOKEN=off neither probes nor mints, the pre-fix launcher" {
+  attachfix idle root; halfmoved healthy; attach_actors
+  export LRU_BG_ADMIT_TOKEN=off
+  drive
+  [ "$(res verdict)" = SWITCHED ] || { res reason; false; }
+  [ ! -s "$(dirname "$A")/probe.log" ] || { cat "$(dirname "$A")/probe.log"; false; }
+  grep -q "^export LR_ADMIT_TOKEN=''$" "$(launcher)" || { cat "$(launcher)"; false; }
 }
 
 @test "L1 [RED] a half-moved bg session is stopped under its own config but transplanted FROM the live copy; LRU_BG_LIVE_SOURCE=off reproduces the old failure" {
