@@ -1544,7 +1544,7 @@ esac
 # of this wave (an exported CC_ADMIT_NET_ZERO) was dropped outright: a per-OPERATION admission flag
 # turned into a per-SESSION policy nobody could see.
 #
-# So: exactly five LR_* variables, all %q-rendered, and ZERO CC_ADMIT_* ones. The mapping from LR_*
+# So: exactly six LR_* variables, all %q-rendered, and ZERO CC_ADMIT_* ones. The mapping from LR_*
 # to CC_ADMIT_* happens INSIDE lr-fire-resume, call-scoped on the one gate invocation, and the spawn
 # line then `env -u`s all of them. The names are deliberately in this script's own namespace so a
 # stray copy of one can never be mistaken for a library setting.
@@ -1552,6 +1552,7 @@ esac
 #   LR_ADMIT_TOKEN       this recovery's one-shot admission (absent ⇒ the launcher evaluates fresh)
 #   LR_SUBMIT_TOKEN      the run token W3 will look for in the TARGET transcript to prove SUBMITTED
 #   LR_LOAD_TERM         the term switch the driver's probe used, so both ends evaluate one gate
+#   LR_SEGMENT_PCT       the swap's segment ceiling the probe used (lr-lib.sh), for the same reason
 LR_SUBMIT_TOKEN="run:${SID:0:8}:$TS:$(printf '%04x' $((RANDOM % 65536)))$(printf '%04x' $((RANDOM % 65536)))"
 # A reconciler placement types the RECONCILER's token (W5): lr_recon mints it per attempt and reads
 # it back in the target copy for §4.2 row 5 (ENGAGED), which a token minted here never reaches.
@@ -1569,6 +1570,7 @@ export LR_RUN_DIR=$(printf '%q' "$BUNDLE")
 export LR_ADMIT_TOKEN=$(printf '%q' "$LRH_ADMIT_TOKEN")
 export LR_SUBMIT_TOKEN=$(printf '%q' "$LR_SUBMIT_TOKEN")
 export LR_LOAD_TERM=$(printf '%q' "${LR_LOAD_TERM:-off}")
+export LR_SEGMENT_PCT=$(printf '%q' "${LR_SEGMENT_PCT:-90}")
 ${LRH_LR_REPO:+export LR_REPO=$(printf '%q' "$LRH_LR_REPO")}
 
 EOF
@@ -1653,7 +1655,7 @@ else
 # receipt whose last line is empty or is itself a FAIL all keep TODAY'S prompt verbatim, with the
 # reason appended so the degraded path is NAMED in the line the operator can read on the screen —
 # never taken silently. LRP_* is this launcher's own namespace and nothing here is exported: the
-# five LR_* above remain the whole of what the recovered session inherits.
+# six LR_* above remain the whole of what the recovered session inherits.
 LRP_BUNDLE=$(printf '%q' "$BUNDLE")
 LRP_VERIFY=$(printf '%q' "$LR/lr-ingest-verify.sh")
 LRP_TCFG=$(printf '%q' "$TCFG")

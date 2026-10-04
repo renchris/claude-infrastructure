@@ -753,7 +753,7 @@ verdict: OK' 0)"
   [[ "$output" == *"killed_inflight is UNRECORDED"* ]] || { echo "the missing count was silent: $output"; false; }
 }
 
-@test "W2: the launcher exports exactly the five LR_* variables and ZERO CC_ADMIT_*" {
+@test "W2: the launcher exports exactly the six LR_* variables and ZERO CC_ADMIT_*" {
   # D1-safety R1, FATAL: anything exported here is inherited by the recovered session and every hook
   # it runs for the rest of its life. The mapping to CC_ADMIT_* happens call-scoped inside
   # lr-fire-resume, and the spawn line unsets all of it.
@@ -763,7 +763,7 @@ verdict: OK' 0)"
   LAUNCHER="$(launcher_from_output)"
   [ -n "$LAUNCHER" ] || { echo "no launcher path on stderr: $output"; false; }
   [ -f "$LAUNCHER" ] || { echo "the launcher path names no file: $LAUNCHER"; false; }
-  for v in LR_RUN LR_RUN_DIR LR_ADMIT_TOKEN LR_SUBMIT_TOKEN LR_LOAD_TERM; do
+  for v in LR_RUN LR_RUN_DIR LR_ADMIT_TOKEN LR_SUBMIT_TOKEN LR_LOAD_TERM LR_SEGMENT_PCT; do
     grep -qE "^export $v=" "$LAUNCHER" || { echo "missing export $v:"; cat "$LAUNCHER"; false; }
   done
   # the closed half of the list: no admission variable may reach the session's environment

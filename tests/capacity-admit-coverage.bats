@@ -541,7 +541,7 @@ calls_gate() { grep -qE '^[^#]*[^_a-zA-Z]cc_capacity_admit[[:space:]]' "$1"; }
   FIRE="$REPO/scripts/limit-recover/lr-fire-resume.sh"
   n="$(grep -c 'spawn -noecho env -u' "$FIRE")"
   [ "$n" -ge 1 ] || { echo "lr-fire-resume no longer spawns through \`env -u\`"; false; }
-  for v in LR_RUN LR_RUN_DIR LR_ADMIT_TOKEN LR_SUBMIT_TOKEN LR_LOAD_TERM CC_ADMIT_LOAD_TERM CC_ADMIT_BUDGET_KEY CC_ADMIT_TOKEN; do
+  for v in LR_RUN LR_RUN_DIR LR_ADMIT_TOKEN LR_SUBMIT_TOKEN LR_LOAD_TERM LR_SEGMENT_PCT CC_ADMIT_LOAD_TERM CC_ADMIT_BUDGET_KEY CC_ADMIT_TOKEN; do
     [ "$(grep -c -- "-u $v " "$FIRE")" -ge "$n" ] \
       || { echo "$v is NOT unset on every spawn line — it rides into the recovered session for its whole life"; false; }
   done
@@ -549,6 +549,23 @@ calls_gate() { grep -qE '^[^#]*[^_a-zA-Z]cc_capacity_admit[[:space:]]' "$1"; }
   # defeat the `env -u` above for every process between this script and the spawn.
   ! grep -qE '^[^#]*export +CC_ADMIT_' "$FIRE" \
     || { echo "lr-fire-resume EXPORTS a CC_ADMIT_* variable — it must be a call-scoped prefix"; false; }
+}
+
+@test "30c a SWAP probe admits above the 50% spawn ceiling and still refuses near panic (2026-10-04)" {
+  # Every lr_capacity_probe_corrected caller replaces a session, so the compressor pool does not grow:
+  # 12 net-zero account moves were refused at 60.5% segments. Executed, one reading per side.
+  LRLIB="$REPO/scripts/limit-recover/lr-lib.sh"
+  probe() { env CC_ADMIT_IDL="$BATS_TEST_TMPDIR/30c.jsonl" CC_ADMIT_STATE_DIR="$BATS_TEST_TMPDIR/30c-state" \
+      CC_ADMIT_RESERVE_TERM=off CC_ADMIT_HEADROOM_OVERRIDE=64 CC_BEAT_DIR="$BATS_TEST_TMPDIR/30c-beats" \
+      CC_ADMIT_SEGMENT_OVERRIDE="$1" "${@:2}" \
+      bash -c '. "$1"; . "$2"; lr_capacity_probe_corrected lr-fleet 30c' _ "$LIB" "$LRLIB"; }
+  run probe 60.5
+  [ "$status" -eq 0 ] || { echo "a swap at 60.5% segments was refused: $output"; false; }
+  run probe 95
+  [ "$status" -eq 9 ] || { echo "a swap at 95% segments was admitted (rc $status): $output"; false; }
+  # an explicit library setting still wins over the swap default
+  run probe 60.5 CC_ADMIT_MAX_SEGMENT_PCT=50
+  [ "$status" -eq 9 ] || { echo "CC_ADMIT_MAX_SEGMENT_PCT=50 did not restore the spawn ceiling (rc $status)"; false; }
 }
 
 @test "31 EQUIVALENCE GUARD, MUTANT-SCORED — STAGE PARITY: the TTL's literals are handoff-fire's own" {

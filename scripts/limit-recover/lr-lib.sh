@@ -397,6 +397,14 @@ EOF
 # 3.18% segments and 2 active while this term refused at 4.15/core. An explicit CC_ADMIT_LOAD_TERM=on
 # restores the old behaviour verbatim, ceiling and all.
 #
+# THE SEGMENT CEILING IS RAISED, CALL-SCOPED, FOR THE SAME REASON (operator ruling 2026-10-04: "we
+# are self-recycling each one, taking one down to re-up the same one"). Every caller of this probe
+# is a SWAP: the old process exits — releasing its compressed pages — before its replacement starts,
+# so a swap does not grow the compressor pool the 50% spawn ceiling guards. MEASURED 2026-10-04: 12
+# account moves refused at 60.5% segments, every one of them net-zero. 90% keeps a floor below the
+# 100% observed at panic. LR_SEGMENT_PCT carries the value to the launcher so both ends evaluate one
+# gate; an explicit CC_ADMIT_MAX_SEGMENT_PCT still wins.
+#
 # A LIBRARY THAT CANNOT BE REACHED IS LOUD, NEVER SILENT: a recovery must not be blocked because a
 # telemetry library is missing, and it must never proceed without saying that it is ungated.
 lr_capacity_probe_corrected() { # $1=caller $2=what → 0 would-admit / 9 would-refuse
@@ -417,7 +425,9 @@ lr_capacity_probe_corrected() { # $1=caller $2=what → 0 would-admit / 9 would-
          fi ;;
     esac
   fi
-  CC_ADMIT_LOAD_TERM="${CC_ADMIT_LOAD_TERM:-off}" cc_capacity_probe "$caller" "$what" || rc=$?
+  CC_ADMIT_LOAD_TERM="${CC_ADMIT_LOAD_TERM:-off}" \
+    CC_ADMIT_MAX_SEGMENT_PCT="${CC_ADMIT_MAX_SEGMENT_PCT:-${LR_SEGMENT_PCT:-90}}" \
+    cc_capacity_probe "$caller" "$what" || rc=$?
   unset CC_SP_ACTIVE_OVERRIDE
   return "$rc"
 }
