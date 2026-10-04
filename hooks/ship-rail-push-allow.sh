@@ -30,6 +30,14 @@
 # The design mirrors hooks/rm-safe-allowlist.sh (allow-only; deny always overrides; hooks
 # chain, a hook `allow` overrides the settings `ask`) but is scoped to the ONE land shape.
 #
+# CORRECTED (2026-10-03, measured on 2.1.284): a hook `allow` does NOT override a settings `ask`.
+# With `Bash(git push:*)` in permissions.ask this hook fires and returns `allow` for
+# `git push origin HEAD:main`, and the harness still refuses the call on the ask rule
+# (`permission_denied`, decision_reason_type=rule), in an isolated probe and under the live config
+# alike. So while that ask rule stands, this hook clears nothing and a model-issued land push still
+# prompts; land scripts escape only because their push is a subprocess the harness never sees.
+# Evidence and the probe: docs/research/automode-land-allow-2026-10-03.md § The push hook.
+#
 # Kill switch: SHIP_RAIL_PUSH_ALLOW_DISABLED=1  (defer everything).
 # Contract: read the PreToolUse payload on stdin, emit allow-JSON + exit 0 to allow, else exit 0 silent.
 
