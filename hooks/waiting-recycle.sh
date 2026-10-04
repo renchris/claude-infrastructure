@@ -121,7 +121,11 @@
 #      threshold is never indistinguishable from broken wiring.
 #
 # Delivery: {decision:"block"} + hookSpecificOutput.additionalContext (the MODEL-facing recycle
-# advisory — confirmed delivered on PostToolUse @ 2.1.183) + systemMessage/reason (operator-facing).
+# advisory — confirmed delivered on PostToolUse @ 2.1.183) + systemMessage (operator-facing, full).
+# `reason` is NOT operator-only: on PostToolUse a block reason reaches the MODEL too, as a separate
+# hook_blocking_error attachment beside hook_additional_context (both seen on one toolUseID in a
+# 2026-10 transcript, audit hooks-b-07). So `reason` carries only the HEADLINE, and
+# additionalContext stays the single full model copy — never the whole advisory twice.
 # The tool has ALREADY run at PostToolUse, so a fire can NEVER break the recycle machinery it triggers
 # (unlike a PreToolUse deny). Exit 0 ALWAYS — a PostToolUse hook must never cost a session.
 #
@@ -1109,7 +1113,7 @@ if [ "$rss_over" = 1 ] && [ "$over_threshold" = 0 ] && [ "$rot_valid" = 0 ] && [
     wr_push_page "HIGH-RSS SESSION (${DESK_ROLE}) ${rss_mb}MB RSS at ${used}% ctx / ${tx_mb}MB transcript — /handoff to reset the process"
     rmsg="⚠ HIGH PROCESS FOOTPRINT — this session's process is at ${rss_mb}MB RSS (≥ ${RSS_PAGE_MB}MB) while context is only ${used}% and its transcript ${tx_mb}MB. Context fill will NOT warn you about this: RSS is a near-independent axis (measured pearson +0.26 vs transcript bytes), and only a NEW PROCESS resets it — /compact does not. Nothing is auto-recycled on RSS alone (the dangerous level is unproven, so forcing the fleet on it would be a guess): this is a page. If you are at a clean boundary, run /handoff to recycle into a fresh process. Re-pages every ${ESCALATE_DEDUP_S}s. Kill-switch: \`waiting-recycle.sh clear\`."
     jq -nc --arg a "$rmsg" --arg s "$rmsg" \
-      '{decision:"block",reason:$s,systemMessage:$s,hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:$a}}'
+      '{decision:"block",reason:($s|split(" — ")[0]),systemMessage:$s,hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:$a}}'
     exit 0
   fi
   abstain "rss-page-paced:${rss_mb}MB"
@@ -1318,7 +1322,7 @@ if [ "$SAFE" = 0 ]; then
     wr_push_page "BUSY+HIGH DESK (${DESK_ROLE}) ${used}% ctx / ${tx_mb}MB transcript, ${hold_reason} — resolve + /handoff; auto-recycle held (hard)"
     pmsg="⚠ ${pwhat} held by ${hold_reason} — a HARD hold: an auto-recycle would lose state or bury a decision, so it will NOT fire. ${pwhy} ACT NOW: resolve the ${hold_reason} (commit / finish the merge, answer the decision, or let the teammate finish), then run /handoff to recycle. Re-pages every ${ESCALATE_DEDUP_S}s. Kill-switch: \`waiting-recycle.sh clear\`."
     jq -nc --arg a "$pmsg" --arg s "$pmsg" \
-      '{decision:"block",reason:$s,systemMessage:$s,hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:$a}}'
+      '{decision:"block",reason:($s|split(" — ")[0]),systemMessage:$s,hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:$a}}'
     exit 0
   else
     # ── TIER 2 — BUSY at medium/low context. Don't interrupt the work; QUEUE a refresh (a soft hold marks
@@ -1349,7 +1353,7 @@ if [ "$SAFE" = 0 ]; then
           nmsg="⟳ CONTEXT PAUSE-POINT PLANNING — you are mid-work (${hold_reason}) at ${used}% (≥ ${T_NUDGE}%). Plan your own pause-point NOW while the choice is cheap: finish the in-hand step, commit, persist open decisions, then run /handoff at that natural boundary to recycle. If you ride on, the forced drain engages at ${T_BUSY}% (or sooner at high burn). (paced: re-advises per +${NUDGE_REARM}% fill)"
         fi
         jq -nc --arg a "$nmsg" --arg s "$nmsg" \
-          '{decision:"block",reason:$s,systemMessage:$s,hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:$a}}'
+          '{decision:"block",reason:($s|split(" — ")[0]),systemMessage:$s,hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:$a}}'
         exit 0
       fi
     fi
@@ -1490,12 +1494,15 @@ if [ "$stage2_pending" = 1 ]; then
       wr_os_notify "Claude desk RECYCLE REFUSED" "desk ${UUID:-$SID} at ${used}% — handoff-fire exited ${fire_rc}: ${hf_why}"
       wr_push_page "RECYCLE REFUSED (${DESK_ROLE}) ${used}% ctx: handoff-fire rc=${fire_rc} — ${hf_why}. Desk is NOT recycled and NOT latched to retry."
       rmsg="⛔ RECYCLE REFUSED — waiting-recycle fired handoff-fire.sh --recycle (${trig}) and it EXITED ${fire_rc} WITHOUT recycling: ${hf_why}. Your context was NOT replaced and no successor is launching — you are still the same session, still at ${used}%, and this SID will not auto-fire again. ACT NOW, in this order: (1) CLEAR the refusal — rc 4 = in-flight Agent-tool subagents (wait for them, or re-fire with --allow-live-subagents to abandon them deliberately); rc 2 = this pane's identity could not be verified (do NOT retry blind — a stale pane id types /exit into a stranger's session); rc 1 = a dirty tree, an unresolvable pane, or an underivable account (commit or stash, then retry). Full output: ${errf}. (2) THEN recycle yourself with /handoff. Do NOT assume the recycle is merely late — it did not happen. Kill-switch: \`waiting-recycle.sh clear\`."
-      jq -nc --arg r "$rmsg" '{decision:"block",reason:$r,systemMessage:$r,hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:$r}}'
+      jq -nc --arg r "$rmsg" '{decision:"block",reason:($r|split(" — ")[0]),systemMessage:$r,hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:$r}}'
       exit 0
     fi
     rm -f "$errf" 2>/dev/null || true                         # rc 0: nothing to explain (best-effort — we may be SIGKILLed first)
     fmsg="⟳ DETERMINISTIC RECYCLE FIRED (${trig}) — the desk did not self-recycle within the ${GRACE_S}s grace, so waiting-recycle fired handoff-fire.sh --recycle (exit 0). The successor is launching in this pane with the frozen DoD + a re-derive-from-disk brief. Do NOT run handoff-fire yourself."
-    jq -nc --arg r "$fmsg" '{decision:"block",reason:$r,systemMessage:$r,hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:$r}}'
+    # Headline named outright, not split on " — ": ${trig} sits before the first dash here and can
+    # itself contain one (the size and burn-forecast triggers), which would cut it mid-parenthesis.
+    jq -nc --arg r "$fmsg" --arg h "⟳ DETERMINISTIC RECYCLE FIRED" \
+      '{decision:"block",reason:$h,systemMessage:$r,hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:$r}}'
     exit 0
   fi
   # SHADOW (default): everything a live fire does EXCEPT the exec — ships the mechanism DAMPED so a gate
@@ -1513,11 +1520,15 @@ if [ "$stage2_pending" = 1 ]; then
   if [ "$fire_mode" = busy ]; then
     wr_os_notify "Claude desk BUSY+HIGH would-recycle" "desk ${UUID:-$SID} at ${used}% mid-work (${hold_reason}); drained brief at ${pf}"
     wr_push_page "BUSY+HIGH would-recycle (${DESK_ROLE}) ${used}%: drained brief at ${pf} — /handoff now or arm --busy-force"
-    smsg="⟳ BUSY+HIGH RECYCLE WOULD FIRE — SHADOW (${trig}). The desk is mid-work (${hold_reason}) and did not self-recycle within ${GRACE_S}s. waiting-recycle composed a successor brief WITH the drained ping queue at ${pf} and logged a would-fire, but did NOT exec (a mid-work auto-recycle is opt-in beyond --live). Self-recycle now: run /handoff (it captures the same pings). To enable the exec: waiting-recycle.sh arm --brief <file> --live --busy-force. Kill-switch: waiting-recycle.sh clear."
+    shl="⟳ BUSY+HIGH RECYCLE WOULD FIRE — SHADOW"
+    smsg="${shl} (${trig}). The desk is mid-work (${hold_reason}) and did not self-recycle within ${GRACE_S}s. waiting-recycle composed a successor brief WITH the drained ping queue at ${pf} and logged a would-fire, but did NOT exec (a mid-work auto-recycle is opt-in beyond --live). Self-recycle now: run /handoff (it captures the same pings). To enable the exec: waiting-recycle.sh arm --brief <file> --live --busy-force. Kill-switch: waiting-recycle.sh clear."
   else
-    smsg="⟳ RECYCLE WOULD FIRE — SHADOW (${trig}). The desk did not self-recycle within ${GRACE_S}s. waiting-recycle is armed SHADOW: it composed the successor brief at ${pf} and logged a would-fire, but did NOT exec (no fleet-stranding risk while soaking). You SHOULD still self-recycle now: run /handoff. To enable the exec after review: waiting-recycle.sh arm --brief <file> --live. Kill-switch: waiting-recycle.sh clear."
+    shl="⟳ RECYCLE WOULD FIRE — SHADOW"
+    smsg="${shl} (${trig}). The desk did not self-recycle within ${GRACE_S}s. waiting-recycle is armed SHADOW: it composed the successor brief at ${pf} and logged a would-fire, but did NOT exec (no fleet-stranding risk while soaking). You SHOULD still self-recycle now: run /handoff. To enable the exec after review: waiting-recycle.sh arm --brief <file> --live. Kill-switch: waiting-recycle.sh clear."
   fi
-  jq -nc --arg a "$smsg" --arg s "$smsg" '{decision:"block",reason:$s,systemMessage:$s,hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:$a}}'
+  # Headline named outright: splitting on " — " would drop SHADOW, the one word that says nothing ran.
+  jq -nc --arg a "$smsg" --arg s "$smsg" --arg h "$shl" \
+    '{decision:"block",reason:$h,systemMessage:$s,hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:$a}}'
   exit 0
 fi
 
@@ -1549,7 +1560,7 @@ if [ "$wedged" = 1 ]; then
   wr_push_page "WEDGED DESK (${DESK_ROLE}) ${used}% ctx: ${why} — /handoff now or arm ${livearm}"
   emsg="⚠ WEDGED — quiet monitoring boundary (${trig}), ${state_phrase}, but ${why}: you are RIDING toward the 90% auto-compact wall with NO recycle. ACT NOW: run /handoff to self-recycle, or (operator) arm the deterministic exec — desk-arm-live.sh (or waiting-recycle.sh arm --brief <file> ${livearm}). Re-pages every ${ESCALATE_DEDUP_S}s until resolved. Kill-switch: waiting-recycle.sh clear (this desk) / kill (global)."
   jq -nc --arg a "$emsg" --arg s "$emsg" \
-    '{decision:"block",reason:$s,systemMessage:$s,hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:$a}}'
+    '{decision:"block",reason:($s|split(" — ")[0]),systemMessage:$s,hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:$a}}'
   exit 0
 fi
 

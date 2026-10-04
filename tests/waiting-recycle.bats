@@ -55,6 +55,13 @@ mk_tx() { local p="$BATS_TEST_TMPDIR/tx-${BATS_TEST_NUMBER}-$1.jsonl"; jq -nc --
 # Drive the PostToolUse actuator: $1=sid $2=transcript-path $3=command(optional) $4=cwd(optional).
 drive() { printf '{"session_id":"%s","transcript_path":"%s","cwd":"%s","tool_input":{"command":"%s"}}' "$1" "$2" "${4:-$DESK}" "${3:-echo poll}" | bash "$HOOK"; }
 fired() { echo "$1" | grep -q '"decision":"block"'; }
+# hooks-b-07: a PostToolUse block `reason` reaches the MODEL (hook_blocking_error) beside additionalContext,
+# so the full advisory may ride only once. reason = a non-empty HEADLINE prefix of the advisory;
+# additionalContext = the one full model copy; systemMessage = the full operator copy.
+one_model_copy() {
+  echo "$1" | jq -e '.reason as $r | .hookSpecificOutput.additionalContext as $a
+    | ($r|length) > 0 and ($r|length) < ($a|length) and ($a|startswith($r)) and .systemMessage == $a' >/dev/null
+}
 
 WAIT="next3 is still running; next4 pinged done. Waiting on the rest."   # benign monitoring narration
 ROT="Wait, which sessions did I fire again? Let me reconstruct the state."  # state-rot tell
@@ -197,6 +204,8 @@ setup_stage2() { export CC_WR_GRACE_S=0; export CC_WR_FIRE_DIR="$BATS_TEST_TMPDI
   mk_tel s6 61; run drive s6 "$(mk_tx 6 "$WAIT")"                           # poll 2 = Stage 2 (grace elapsed)
   [ "$status" -eq 0 ]; fired "$output"
   echo "$output" | grep -qi "SHADOW"
+  one_model_copy "$output"
+  [ "$(echo "$output" | jq -r .reason)" = "⟳ RECYCLE WOULD FIRE — SHADOW" ]   # headline keeps SHADOW (nothing ran)
   grep -q 'stage2-shadow' "$CC_WR_IDL"
   [ -s "$CC_WR_FIRE_DIR/wr-fire-s6.txt" ]                                   # brief composed, non-empty (no FM-D)
   grep -q "re-derive live watch state" "$CC_WR_FIRE_DIR/wr-fire-s6.txt"
@@ -234,6 +243,7 @@ setup_stage2() { export CC_WR_GRACE_S=0; export CC_WR_FIRE_DIR="$BATS_TEST_TMPDI
   mk_tel s6w 62; run drive s6w "$(mk_tx 6 "$WAIT")"                         # next poll → WEDGED → escalate
   [ "$status" -eq 0 ]; fired "$output"
   echo "$output" | grep -qi "WEDGED"
+  one_model_copy "$output"
   grep -q '"disposition":"escalated"' "$CC_WR_IDL"
   [ -f "$nlog" ]                                                            # out-of-band operator page fired
   [ -z "$(grep '"reason":"already-fired"' "$CC_WR_IDL" || true)" ]         # NOT the old silent already-fired
@@ -627,7 +637,8 @@ mk_cctx() { # $1=sid $2=age_s → the session transcript where transcript_age() 
   grep -q '"reason":"below-threshold-no-tell' "$CC_WR_IDL"
 }
 
-# ── model-facing advisory: additionalContext points at the reuse path, reason is user-facing ─────
+# ── model-facing advisory: additionalContext points at the reuse path; reason is a short headline
+#    (a PostToolUse block reason reaches the model too, so it must not repeat the advisory) ─────────
 @test "advisory: additionalContext names /handoff, handoff-fire --recycle, and the kill-switch" {
   mk_tel s80 66
   run drive s80 "$(mk_tx 80 "$WAIT")"
@@ -636,6 +647,7 @@ mk_cctx() { # $1=sid $2=age_s → the session transcript where transcript_age() 
   echo "$ctx" | grep -q "handoff-fire.sh --recycle"
   echo "$ctx" | grep -qi "waiting-recycle.sh clear"
   echo "$output" | jq -e '.decision=="block"' >/dev/null
+  echo "$output" | jq -e '.reason != .hookSpecificOutput.additionalContext' >/dev/null
 }
 
 # ── DoD carry (T-P4-4): the advisory carries the frozen mission line for the successor ───────────
@@ -753,6 +765,8 @@ mk_cctx() { # $1=sid $2=age_s → the session transcript where transcript_age() 
   mk_tel t3a 81; run drive t3a "$(mk_tx 210 "$WAIT")"                    # poll2 = busy shadow would-force
   [ "$status" -eq 0 ]; fired "$output"
   echo "$output" | grep -qi "SHADOW"
+  one_model_copy "$output"
+  [ "$(echo "$output" | jq -r .reason)" = "⟳ BUSY+HIGH RECYCLE WOULD FIRE — SHADOW" ]
   grep -q '"reason":"stage2-shadow"' "$CC_WR_IDL"
   grep -q '"mode":"busy"' "$CC_WR_IDL"
   [ -f "$nlog" ]                                           # busy shadow ALSO pages (mid-work AND high = urgent)
@@ -807,6 +821,7 @@ mk_cctx() { # $1=sid $2=age_s → the session transcript where transcript_age() 
   run drive t3e "$(mk_tx 214 "Which account should I use? Your call.")"
   [ "$status" -eq 0 ]; fired "$output"
   echo "$output" | grep -qi "HIGH"
+  one_model_copy "$output"
   grep -q '"disposition":"escalated"' "$CC_WR_IDL"
   grep -q 'busy-hard-hold:open-decision-hold' "$CC_WR_IDL"
   [ -f "$nlog" ]                                            # paged
@@ -940,6 +955,7 @@ mk_hist() { local now; now=$(date +%s)
   run drive n1 "$(mk_tx 9 "$WAIT")"
   [ "$status" -eq 0 ]; fired "$output"
   echo "$output" | grep -q "PAUSE-POINT"
+  one_model_copy "$output"
   mk_tel n1 61                       # +3 < re-arm delta → silent
   run drive n1 "$(mk_tx 9 "$WAIT")"
   [ "$status" -eq 0 ]; [ -z "$output" ]
@@ -1177,6 +1193,7 @@ mk_ps_rss() { # $1=rss_kb → a `ps` stub reporting that RSS for a claude-lookin
   [ "$status" -eq 0 ]; fired "$output"
   echo "$output" | grep -q "HIGH PROCESS FOOTPRINT"
   echo "$output" | grep -q "1562MB"
+  one_model_copy "$output"
   tail -1 "$CC_WR_IDL" | jq -e 'select(.disposition=="escalated") | .rss_page==true and .forceable==false' >/dev/null
   # NOT the recycle ladder: no Stage-2 grace clock and no fire latch may exist for this SID
   [ ! -f "$CC_WR_STATE_DIR/escalate-s_sz7" ] || false

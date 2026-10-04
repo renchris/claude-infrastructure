@@ -209,3 +209,27 @@ to_stage2() { # $1=sid
   echo "$output" | jq -e '.hookSpecificOutput.additionalContext | test("REFUSED")' >/dev/null
   tail -n1 "$CC_WR_IDL" | jq -e '.refusal | length <= 200' >/dev/null # bounded, not an unbounded stderr tail
 }
+
+# ── (9) ONE MODEL COPY (hooks-b-07) — a PostToolUse block `reason` reaches the model too, so it is
+#    only the headline; additionalContext is the single full model copy, systemMessage the operator's ─
+one_model_copy() {
+  echo "$1" | jq -e '.reason as $r | .hookSpecificOutput.additionalContext as $a
+    | ($r|length) > 0 and ($r|length) < ($a|length) and ($a|startswith($r)) and .systemMessage == $a' >/dev/null
+}
+@test "one model copy: a refused fire puts only its headline in reason" {
+  arm_live; mk_actuator 4 '!! recycle REFUSED: in-flight subagent(s)'
+  run to_stage2 r11
+  [ "$status" -eq 0 ]; fired "$output"
+  one_model_copy "$output"
+  [ "$(echo "$output" | jq -r .reason)" = "⛔ RECYCLE REFUSED" ]
+}
+@test "one model copy: an executed fire puts only its headline in reason" {
+  arm_live
+  local stub="$BATS_TEST_TMPDIR/hf-ok3.sh"
+  printf '#!/bin/bash\nexit 0\n' > "$stub"; chmod +x "$stub"
+  export CC_WR_HANDOFF_FIRE="$stub"
+  run to_stage2 r12
+  [ "$status" -eq 0 ]; fired "$output"
+  one_model_copy "$output"
+  [ "$(echo "$output" | jq -r .reason)" = "⟳ DETERMINISTIC RECYCLE FIRED" ]
+}
