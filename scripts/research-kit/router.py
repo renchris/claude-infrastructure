@@ -588,6 +588,12 @@ OPENS_NO = re.compile(
     r"^\W*(no\b|not yet|not quite|actually|almost|close,? but|nearly|🔧|⛔|📦|good to close:\s*no)",
     re.I,
 )
+# Its yes-side twin: together they say a reply opens with a verdict, which is what puts an
+# `unavailable` turn's reply under the check (a fallback is not a licence to add items).
+OPENS_YES = re.compile(
+    r"^\W*(yes\b|yep\b|done\b|complete\b|completed\b|all done|finished\b|✅|good to close:\s*yes)",
+    re.I,
+)
 EVENT = re.compile(r"escape|freshness|accepted", re.I)
 TOKENS = (
     re.compile(r"[\w./~-]+\.\w{1,6}:\d+(?:-\d+)?"),  # file:line
@@ -638,17 +644,28 @@ def relay_violations(reply: str, cert: str, label: str) -> List[str]:
 
 def cmd_relay_check(a: argparse.Namespace) -> int:
     route = route_load(a.session)
-    if not route or route.get("label") not in RELAYED:
+    label = (route or {}).get("label")
+    if not route or (label not in RELAYED and label != UNAVAILABLE):
         return 0
     slug = route.get("program") or ""
     if program_state(slug) not in BLOCKING_STATES:
         return 0
     reply = sys.stdin.read()
-    v = relay_violations(reply, route.get("cert") or "", route["label"])
+    cert = route.get("cert") or ""
+    routed = str(label)
+    if label == UNAVAILABLE:
+        # The classifier fell back, so the prompt may have been a re-ask: a reply that opens with a
+        # verdict is checked as a completeness relay; any other reply is ordinary work.
+        first = next((ln for ln in reply.splitlines() if ln.strip()), "")
+        if not (OPENS_NO.search(first) or OPENS_YES.search(first)):
+            return 0
+        cert = cert or render_cert(slug)[0]
+        routed = "unavailable (the re-ask classifier fell back; the reply opens with a verdict)"
+    v = relay_violations(reply, cert, str(label))
     if not v:
         return 0
     print(
-        f"Research relay check (REPORT.md §4.4): this turn's prompt was routed as {route['label']} "
+        f"Research relay check (REPORT.md §4.4): this turn's prompt was routed as {routed} "
         f"in research program {slug} ({route.get('state')}), and your reply adds to the certificate: "
         + "; ".join(v)
         + ". Re-answer with the certificate state lines verbatim (gate.sh --render --program "

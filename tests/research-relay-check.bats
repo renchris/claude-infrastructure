@@ -108,6 +108,25 @@ check() { printf '%s' "$1" | python3 "$ROUTER" relay-check --session s1; }
   [ "$status" -eq 0 ]
 }
 
+@test "an UNAVAILABLE turn whose reply opens with a verdict and adds an item is blocked" {
+  route "STUB-ERROR are we done?"
+  [ "$(python3 "$ROUTER" status --session s1 | jq -r .label)" = unavailable ]
+  run check "$(printf 'Yes — and one more thing: the retry path in sync.py.\n%s\n%s' "$CERT1" "$CERT2")"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"unavailable"* ]] || false
+  [[ "$output" == *"sync.py"* ]]
+  run check "No - not yet."
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"opens 'no'"* ]]
+}
+
+@test "an UNAVAILABLE turn whose reply does not open with a verdict is ordinary work, not checked" {
+  route "STUB-ERROR fix the importer"
+  run check 'Edited cli.sh to add a --limit flag; one more thing is still open.'
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
 @test "a program no longer certifying or certified is not checked" {
   route "are we done?"
   python3 - "$CC_RESEARCH_REGISTRY" <<'EOF'
