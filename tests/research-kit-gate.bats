@@ -103,7 +103,10 @@ state() { /usr/bin/python3 -c "import json; print(json.load(open('$CC_RESEARCH_R
   "$G" run --program demo
   run "$G" --render --program demo
   [[ "$output" == *"Residuals: 1 declared (elapsed-time 1)"* ]] || false
-  [[ "$output" == *"Scheduled checks: 1 production or elapsed-time check with owner and date (next due 2026-11-01)"* ]] || false
+  [[ "$output" == *"Scheduled checks: 1 production or elapsed-time check with owner and date (next due "* ]] || false
+  # the due date is build_good.py's residual row, read back rather than restated here
+  due="$(jq -r .due "$REC/residual.jsonl")"
+  [[ "$output" == *"(next due $due)"* ]] || false
   : > "$REC/residual.jsonl"
   run "$G" --render --program demo
   [[ "$output" != *"Residuals:"* ]] || false
