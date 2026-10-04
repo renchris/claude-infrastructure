@@ -5466,6 +5466,56 @@ rcy_stderr_cause() { # $1=marker [$2=stderr dir] → "launcher error (<log>): <l
   printf 'launcher error (%s): %s' "$f" "$(printf '%s' "$line" | cut -c1-200)"
 }
 
+# THE BACKGROUNDED COPY IS STOPPED; ITS TASKS ARE NOT (operator ruling 2026-10-04, decision
+# 75ea14d27d0f). On 2.1.284 "Move to background and exit" moves the WHOLE conversation into a
+# background job under a new id, and that copy keeps taking turns: Stop hooks re-drive it, and mail
+# and queued input wake it. On 2026-10-03 one fired 10 unapproved paid draws beside a successor that
+# never booted (3 of 34 copies measured did unapproved work). `claude stop <short>` ends only the
+# conversation: on a throwaway session, a run_in_background task carried into the copy survived the
+# stop (reparented to pid 1) and the copy took no turn. So this keeps operator decision 2 (recovery
+# never stops tasks) and ends the duplicate. The copy's id lands in the predecessor's OWN transcript
+# ~0.1 s after the answer as {"type":"continued-in","continuedInSessionId":<uuid>} (37/37 measured);
+# its job is <config>/jobs/<uuid[0:8]>/, and that config dir can differ from the predecessor's, so
+# the stop runs under the job's own providerEnv.CLAUDE_CONFIG_DIR. The earliest first reply across 22
+# copies came 9.4 s after the fork, so a stop inside the 5 s wait lands before any tool call. The
+# conversation is kept: `claude attach <short>` brings it back.
+rcy_bgcopy_find() { # $1=predecessor transcript $2=byte size before the answer → copy uuid, else nothing
+  local tr="${1:-}" off="${2:-0}"
+  [ -f "$tr" ] || return 0
+  # Only records written AFTER the answer: one sid can collect several continued-in records.
+  tail -c +"$((off + 1))" "$tr" 2>/dev/null | grep -F '"type":"continued-in"' \
+    | sed -n 's/.*"continuedInSessionId"[[:space:]]*:[[:space:]]*"\([0-9a-fA-F-]\{36\}\)".*/\1/p' \
+    | tail -1 || true
+}
+rcy_bgcopy_stop() { # $1=predecessor transcript $2=byte size before the answer → "bgcopy=<short|unknown> …"; always 0
+  local tr="${1:-}" off="${2:-0}" uuid="" short f st="" cfg="" live="" state="" bin rc=0 out
+  local t=0 ticks=$(( ${CC_RECYCLE_BGCOPY_WAIT_S:-5} * 4 ))
+  while :; do
+    uuid="$(rcy_bgcopy_find "$tr" "$off")"
+    [ -n "$uuid" ] || [ "$t" -ge "$ticks" ] && break
+    /bin/sleep 0.25; t=$((t + 1))
+  done
+  [ -n "$uuid" ] || { printf 'bgcopy=unknown — no continued-in record within %ss; a copy, if one exists, is still running' "${CC_RECYCLE_BGCOPY_WAIT_S:-5}"; return 0; }
+  short="${uuid:0:8}"
+  for f in "$HOME"/.claude*/jobs/"$short"/state.json; do
+    [ -f "$f" ] && grep -qF "\"$uuid\"" "$f" 2>/dev/null && { st="$f"; break; }
+  done
+  [ -n "$st" ] || { printf 'bgcopy=%s — job state not found, NOT stopped; stop it with: claude stop %s' "$short" "$short"; return 0; }
+  cfg="$(jq -r '.providerEnv.CLAUDE_CONFIG_DIR // empty' "$st" 2>/dev/null || true)"
+  [ -n "$cfg" ] || cfg="${st%/jobs/*}"
+  live="$(jq -r '[.fan[]? | select(.doneAt == null) | .label] | join("; ")' "$st" 2>/dev/null || true)"
+  bin="${CC_RECYCLE_CLAUDE_BIN:-${BIN:-}}"
+  [ -x "$bin" ] || { printf 'bgcopy=%s — no claude binary resolved, NOT stopped; stop it with: claude stop %s' "$short" "$short"; return 0; }
+  out="$(CLAUDE_CONFIG_DIR="$cfg" hf_bounded "$bin" stop "$short" 2>&1)" || rc=$?
+  state="$(jq -r '.state // empty' "$st" 2>/dev/null || true)"
+  if [ "$rc" = 0 ]; then
+    printf 'bgcopy=%s stopped (config %s, job state %s); its tasks keep running: %s; bring the conversation back with: claude attach %s' \
+      "$short" "$cfg" "${state:-?}" "${live:-none listed}" "$short"
+  else
+    printf 'bgcopy=%s — claude stop FAILED rc=%s (%s); the copy may still be running' "$short" "$rc" "$(printf '%s' "$out" | tr '\n' ' ' | cut -c1-160)"
+  fi
+}
+
 recycle_engaged() { # $1=pane $2=pre-recycle-sid $3=marker → 0 engaged / 1 not
   local pane="${1:-}" oldsid="${2:-}" marker="${3:-}" pdir newsid hit scan_win=""
   # Same mtime scoping as engagement_seen, and this path needed it MORE: it sweeps every entry of
@@ -8891,6 +8941,7 @@ if [ "${1:-}" = "__recycle" ]; then
   case "$rcy_wait_max" in ''|*[!0-9]*) rcy_wait_max=600 ;; esac
   rcy_vanished=0
   rcy_bgwork_seen=0; rcy_bgwork_sent=0; rcy_goal_clear_tried=0; RCY_GOAL_CLEAR=none
+  RCY_BGCOPY_SHORT=""   # set when rcy_bgcopy_stop stopped a backgrounded copy; named in a failure verdict
   rcy_bgwork_max="${CC_RECYCLE_BGWORK_MAX:-2}"
   # NOTHING LEFT TO DRIVE (recycle-bgwork-orphan, 2026-09-29). "Move to background and exit" hands
   # the conversation to a background worker under a NEW session id, and that copy keeps the /goal:
@@ -9113,11 +9164,25 @@ if [ "${1:-}" = "__recycle" ]; then
           if [ "$RCY_GOAL_CLEAR" = none ] && goal_live_for_sid "$RCY_OLD_SID" >/dev/null 2>&1; then
             RCY_GOAL_CLEAR=live
           fi
+          # The predecessor's transcript size BEFORE the answer: rcy_bgcopy_stop reads only the
+          # continued-in record this answer writes. Resume mode is left alone (its successor IS the
+          # same session, and its only caller answers cancel).
+          rcy_bg_tr="" rcy_bg_off=0
+          if [ "${CC_RECYCLE_BGCOPY_STOP:-on}" != off ] && [ -n "${RCY_OLD_SID:-}" ] && [ -z "${RCY_RESUME_SID:-}" ]; then
+            rcy_bg_tr="$(transcript_for_sid "$RCY_OLD_SID")"
+            [ -f "$rcy_bg_tr" ] && rcy_bg_off="$(wc -c < "$rcy_bg_tr" | tr -d ' ')"
+          fi
           # typed-send-lint:allow — a single menu digit read off the dialog on screen, never a command line; no shell ever sees it
           hf_bounded "$IT2" session send -s "$RSID" "$bgk" >/dev/null 2>&1 || true
           rcy_bgwork_sent=$((rcy_bgwork_sent + 1))
           echo "→ bgwork@${waited}s: the /exit raised the background-work dialog; answered '$bgk' (${CC_MODAL_BGWORK_KEEP:-keep-work}) — the session exits and its tasks are NOT stopped"
           emit_recycle_event recycle-bgwork-answered "" "$RSID" "the /exit raised the background-work dialog at ${waited}s; answered with the menu index '$bgk' read off the screen (${CC_MODAL_BGWORK_KEEP:-keep-work}); predecessor goal=${RCY_GOAL_CLEAR}" || true
+          if [ -n "$rcy_bg_tr" ]; then
+            rcy_bgcopy_line="$(rcy_bgcopy_stop "$rcy_bg_tr" "$rcy_bg_off")"
+            RCY_BGCOPY_SHORT="$(printf '%s' "$rcy_bgcopy_line" | sed -n 's/^bgcopy=\([0-9a-fA-F]\{8\}\).*/\1/p')"
+            echo "→ bgwork: $rcy_bgcopy_line"
+            emit_recycle_event recycle-bgcopy-stop "" "$RSID" "$rcy_bgcopy_line" || true
+          fi
           continue
         fi
         echo "→ bgwork@${waited}s: the background-work dialog is up and answerable ('$bgk') but CC_RECYCLE_BGWORK_ANSWER=off — holding"
@@ -9703,6 +9768,9 @@ if [ "${1:-}" = "__recycle" ]; then
   # that expired with no evidence either way. They are the same terminal arm and the same row, and
   # they must not read alike: one is re-drivable with a fresh probe, the other needs someone to look.
   rcy_detail="${rcy_boot_state:-STALE:boot} — relaunch typed into $RSID, no claude process within ${rcy_elapsed}s (NO retype: a second identical command cannot clear a refusal); $(if [ -n "$rcy_cause" ]; then printf '%s' "$rcy_cause"; else printf '%s' 'no capacity refusal recorded for this sid — cause UNKNOWN, read the launcher log'; fi)"
+  # The old conversation is not lost when the successor dies: it was backgrounded and stopped, and
+  # `claude attach` resumes it (rcy_bgcopy_stop).
+  [ -n "${RCY_BGCOPY_SHORT:-}" ] && rcy_detail="$rcy_detail; the old conversation was backgrounded as $RCY_BGCOPY_SHORT and stopped — bring it back with: claude attach $RCY_BGCOPY_SHORT"
   [ -n "${RCY_RUN_DIR:-}" ] && command -v lr_state_append >/dev/null 2>&1 \
     && { lr_state_append "$RCY_RUN_DIR" "${rcy_boot_state%%:*}" boot "$rcy_detail" || true; }
   emit_recycle_event recycle-dead 0 "$RSID" "$rcy_detail" || true
