@@ -183,7 +183,7 @@ def program(
     s_sh = 0
     tri_out: List[Any] = []
     tri_out_sh: List[Any] = []
-    found_total = deferred = named = dry = k = 0
+    found_total = found_fb = deferred = named = dry = k = 0
     stop = "running"
 
     def sweep(pool: List[Dict[str, Any]], out_pool: List[Any]) -> List[Dict[str, Any]]:
@@ -207,6 +207,7 @@ def program(
                     deferred += 1
                 else:
                     found += 1
+                    found_fb += 1 if it.get("fix_born") else 0
             else:
                 keep.append(it)
         live = keep
@@ -223,7 +224,9 @@ def program(
             dry = 0
             for _ in range(found + nfp):
                 for _ in range(poisson(rng, b)):
-                    live.append(item())
+                    fb = item()
+                    fb["fix_born"] = True
+                    live.append(fb)
                 shadow.append(item(blind_ok=False))
                 s_sh += 1
         else:
@@ -234,9 +237,13 @@ def program(
         if last:
             stop = "cap"
             break
-    d_o = predictive_draws(rng, found_total, len(seeds) + len(tri_out), s, 600)
+    # each stratum draws from its own found count; the published model gave the shadow stratum 0
+    found_sh = 0 if published else found_fb
+    d_o = predictive_draws(
+        rng, found_total - found_sh, len(seeds) + len(tri_out), s, 600
+    )
     d_s = (
-        predictive_draws(rng, 0, len(shadow) + len(tri_out_sh), s_sh, 600)
+        predictive_draws(rng, found_sh, len(shadow) + len(tri_out_sh), s_sh, 600)
         if s_sh
         else [0] * 600
     )
@@ -320,6 +327,19 @@ def counted_rounds(slug: str) -> List[Dict[str, Any]]:
     return mats
 
 
+def counted_holes(slug: str, mats: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The counted rounds' MATERIAL, non-seed holes, folded; round.py close selects from the same log."""
+    rounds = {str(m.get(k)) for m in mats for k in ("round", "seq")}
+    holes = kit.fold(kit.read_jsonl(kit.records_dir(slug) / "holes.jsonl")).values()
+    return [
+        h
+        for h in holes
+        if str(h.get("round")) in rounds
+        and (h.get("materiality") or {}).get("level") == "MATERIAL"
+        and not h.get("seed_match")
+    ]
+
+
 def forecast(slug: str, reps: int = 300, seed: int = 11) -> Dict[str, Any]:
     frame = kit.read_json(kit.records_dir(slug) / "frame.json", {}) or {}
     if not frame.get("profile"):
@@ -332,14 +352,29 @@ def forecast(slug: str, reps: int = 300, seed: int = 11) -> Dict[str, Any]:
         )
     rng = random.Random(seed)
     found = sum(int(m.get("new_material") or 0) for m in mats)
+    holes = counted_holes(slug, mats)
+    # the shadow stratum's own found count: confirmed fix-born holes (`born_in_edit`)
+    found_sh = min(
+        found,
+        sum(
+            1
+            for h in holes
+            if h.get("born_in_edit")
+            and (h.get("verification") or {}).get("status") == "CONFIRMED"
+        ),
+    )
     seeds = mats[-1].get("seeds") or {}
     orig = seeds.get("original") or {}
     shadow = seeds.get("shadow") or {}
     draws_o = predictive_draws(
-        rng, found, int(orig.get("k_left", 0)), int(orig.get("s_eff", 0)), 2000
+        rng,
+        found - found_sh,
+        int(orig.get("k_left", 0)),
+        int(orig.get("s_eff", 0)),
+        2000,
     )
     draws_s = predictive_draws(
-        rng, 0, int(shadow.get("k_left", 0)), int(shadow.get("s_eff", 0)), 2000
+        rng, found_sh, int(shadow.get("k_left", 0)), int(shadow.get("s_eff", 0)), 2000
     )
     draws = [a + c for a, c in zip(draws_o, draws_s)]
     n_hat = found + quantile(draws, 0.5)
@@ -377,8 +412,10 @@ def forecast(slug: str, reps: int = 300, seed: int = 11) -> Dict[str, Any]:
         "r_max": rmax,
         "rounds_counted": len(mats),
         "found": found,
+        "found_shadow": found_sh,
         "desk_mean": round(mean([float(d) for d in draws]), 2),
         "desk_n95": int(quantile(draws, 0.95)),
+        "desk_shadow_mean": round(mean([float(d) for d in draws_s]), 2),
         "n_hat": round(n_hat, 2),
         "invisible_mean": round(inv_mean, 2),
         "invisible_bound95": poisson_q95(inv_lam),
