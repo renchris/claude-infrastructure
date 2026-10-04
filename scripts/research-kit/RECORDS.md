@@ -62,8 +62,13 @@ failed, 2 usage or refusal, 3 a dead vendor lane, 4 a voided slot. Python is 3.9
   courier with `CC_RESEARCH_COURIER`.
 - `estimate.py forecast` → JSON `{p50, p90, r_max, desk_mean, desk_n95, invisible_mean, p_any, quiet_streak,
   stop:"running|dry|cap"}` from `rounds/*/matrix.json`.
-- `seed.py plant|match|status` → vault `<sealed>/vault/seeds.enc`, key from the keychain item
-  `cc-research-seed-vault/<slug>` (tests: `CC_RESEARCH_VAULT_KEY`).
+- `seed.py plant|apply|prescreen|match|status` → vault `<sealed>/vault/seeds.enc`, key from the keychain item
+  `cc-research-seed-vault/<slug>` (tests: `CC_RESEARCH_VAULT_KEY`). `match` (run by `round.sh close` before quiet is
+  computed) appends `{id, seed_match: <seed id>}` to `holes.jsonl` for each MATERIAL hole restating a seed's defect
+  (span overlap + class + claim, not overlap alone); `prescreen --caught …` marks seeds a blind pre-screen caught
+  `discarded`, so they are never planted; `status` prints a second line with seed realism beside real detection.
+- `estimate.py forecast` also prints `found_raw`, `found` (deflated by `false_material_share`), `found_shadow`;
+  `estimate.py calibration [--file]` prints coverage, bound sharpness and Spearman rank skill.
 - `cc-research probe --id P-.. --kind K --closes PR-.. -- <cmd…>`, `cc-research doctor` and `cc-research self-test`
   (each acceptance row over `control.known_bad`/`known_good`, fixture in env `FIXTURE`, as gate row 6 runs it);
   `probe-run.sh run|doctor` is a bash 3.2 shim onto the first two.
