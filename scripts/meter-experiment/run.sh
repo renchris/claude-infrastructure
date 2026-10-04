@@ -62,14 +62,14 @@ echo "arm session: $SID" | tee -a "$LOG"
 # never loaded. Claude Code's -p reads the prompt from stdin when no positional prompt is given.
 { printf 'Reference material follows. Do not summarise it. Reply with exactly: LOADED\n\n'
   cat "$D/ctx.txt"; } > "$D/prompt.txt"
-CLAUDE_CONFIG_DIR="$CFG" timeout 1200 "$BIN" -p --session-id "$SID" --model claude-opus-5 \
+CLAUDE_CONFIG_DIR="$CFG" timeout -k 10 1200 "$BIN" -p --session-id "$SID" --model claude-opus-5 \
   < "$D/prompt.txt" >"$D/load.out" 2>&1
 echo "load rc=$? out=$(tail -c 80 "$D/load.out" | tr -d '\n')" | tee -a "$LOG"
 
 echo "=== PHASE 2: $N resumed turns (the cache_read arm) ===" | tee -a "$LOG"
 t0=$(date +%s)
 for i in $(seq 1 "$N"); do
-  CLAUDE_CONFIG_DIR="$CFG" timeout 300 "$BIN" -p --resume "$SID" --model claude-opus-5 \
+  CLAUDE_CONFIG_DIR="$CFG" timeout -k 10 300 "$BIN" -p --resume "$SID" --model claude-opus-5 \
     "Reply with exactly: OK" >/dev/null 2>&1
   rc=$?
   if [ $((i % 10)) -eq 0 ] || [ "$i" -eq 1 ]; then

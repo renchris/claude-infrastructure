@@ -43,7 +43,7 @@ meter | tee -a "$LOG"
 t0=$(date +%s)
 for i in $(seq 1 "$N"); do
   S=$(uuidgen); echo "$S" >> "$D/control-sids.txt"
-  CLAUDE_CONFIG_DIR="$CFG" timeout 900 "$BIN" -p --session-id "$S" --model claude-opus-5 \
+  CLAUDE_CONFIG_DIR="$CFG" timeout -k 10 900 "$BIN" -p --session-id "$S" --model claude-opus-5 \
     "Output the integers from 1 to 12000, one per line, with no other text at all." \
     >/dev/null 2>&1
   printf 'control call %d/%d rc=%d elapsed=%ds\n' "$i" "$N" "$?" "$(( $(date +%s) - t0 ))" | tee -a "$LOG"
