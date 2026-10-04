@@ -30,6 +30,7 @@ if [ "$verb" = bundle ]; then echo "bundle $rid" >> "$CC_RESEARCH_RECORDS/runs.l
 d="$CC_RESEARCH_RECORDS/rounds/$rid/panels"; mkdir -p "$d"
 st=complete; rc=0
 case " ${FAKE_DEAD:-} " in *" $vendor "*) st=dead; rc=3 ;; esac
+case " ${FAKE_PARTIAL:-} " in *" $vendor "*) st=partial ;; esac
 printf '{"pid":"%s","status":"%s"}\n' "$pid" "$st" > "$d/$pid.json"
 echo "$vendor $pid" >> "$CC_RESEARCH_RECORDS/runs.log"
 exit "$rc"
@@ -166,7 +167,7 @@ lost() { # <round>...: closed rounds lost to a dead lane (uncounted)
   fc_done; preflight 30
   run_cert 1
   [ "$status" -eq 3 ]
-  [[ "$output" == *"stale"* ]]
+  [[ "$output" == *"stale"* ]] || false
   [ ! -e "$CC_RESEARCH_RECORDS/rounds/1" ]
 }
 
@@ -174,7 +175,7 @@ lost() { # <round>...: closed rounds lost to a dead lane (uncounted)
   fc_done; preflight 1 openai
   run_cert 1
   [ "$status" -eq 3 ]
-  [[ "$output" == *"dead lane(s) openai"* ]]
+  [[ "$output" == *"dead lane(s) openai"* ]] || false
   [ ! -e "$CC_RESEARCH_RECORDS/rounds/1" ]
 }
 
@@ -194,6 +195,16 @@ lost() { # <round>...: closed rounds lost to a dead lane (uncounted)
   [ "$(field 1 'm["counted"], m["lanes"]["google"], len(m["slots"])')" = "False dead 8" ]
   [ "$(grep -c '^google ' "$CC_RESEARCH_RECORDS/runs.log")" -eq 6 ]
   [ "$(grep -c '^openai ' "$CC_RESEARCH_RECORDS/runs.log")" -eq 2 ]
+}
+
+@test "a partial slot is re-run like a dead one, and a lane still partial after its reruns is dead, so the round is uncounted and closes" {
+  fc_done
+  FAKE_PARTIAL=google run_cert 1
+  [ "$status" -eq 3 ]
+  [ "$(field 1 'm["counted"], m["lanes"]["google"]')" = "False dead" ]
+  [ "$(grep -c '^google ' "$CC_RESEARCH_RECORDS/runs.log")" -eq 6 ]
+  run "$R" close --program demo --round 1
+  [ "$status" -eq 0 ]
 }
 
 @test "close: a round that catches only seeds stays quiet" {
@@ -226,7 +237,7 @@ json.dump(m, open(p,'w'))"
   fc_done; open_with_slots 2 partial True
   run "$R" close --program demo --round 2
   [ "$status" -eq 2 ]
-  [[ "$output" == *"r2p2 (partial)"* ]]
+  [[ "$output" == *"r2p2 (partial)"* ]] || false
   [ "$(field 2 'm["closed"]')" = "False" ]
 }
 
@@ -260,7 +271,7 @@ json.dump({'round': rid, 'seq': 1, 'kind': 'certification', 'escape': None, 'ver
   interrupted_round_1
   run_cert 1
   [ "$status" -eq 0 ]
-  [[ "$output" == *"resumed"*"r1p2"* ]]
+  [[ "$output" == *"resumed"*"r1p2"* ]] || false
   run grep -c '^bundle ' "$CC_RESEARCH_RECORDS/runs.log"
   [ "$output" = "0" ]
   run grep -c ' r1p' "$CC_RESEARCH_RECORDS/runs.log"

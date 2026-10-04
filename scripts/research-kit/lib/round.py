@@ -14,8 +14,8 @@ The caps live HERE, in code (§10 item 17), and every refusal names its cap (exi
     all-live vendor preflight (exit 3); no round after the stop rule has fired (K quiet rounds at
     r >= K + 1);
   - delta: at most 2 per escape, the second verification-only.
-Slots run in parallel through courier.sh. A dead or voided slot is re-run at most twice; a lane whose
-every slot is still dead or void is DEAD, and a round with a dead lane is not counted. A dead lane's
+Slots run in parallel through courier.sh. A dead, voided or partial slot is re-run at most twice; a lane
+with any slot still not complete is DEAD, and a round with a dead lane is not counted. A dead lane's
 slots are never handed to another vendor (§3.8). Only after the operator's class-B default
 "continue on two vendors" has fired (frame.json `degraded: "two vendors"`, `dead_lanes: [..]`) do
 rounds run without that lane, and then only with two families, one of them non-Anthropic.
@@ -282,7 +282,7 @@ def run_slots(
         pending = [
             sl
             for sl in state
-            if sl["status"] in ("dead", "void")
+            if sl["status"] in ("dead", "void", "partial")  # a partial read is a lost read too
             and sl["reruns"] < kit.CAPS["slot_reruns"]
         ]
     for sl in state:
@@ -381,10 +381,8 @@ def cmd_run(a: argparse.Namespace) -> int:
     for v in sorted({sl["vendor"] for sl in res}):
         lanes[v] = (
             "live"
-            if any(
-                sl["status"] in ("complete", "partial")
-                for sl in res
-                if sl["vendor"] == v
+            if all(  # as cli_cert.write_matrix: live only when every planned slot completed
+                sl["status"] == "complete" for sl in res if sl["vendor"] == v
             )
             else "dead"
         )
