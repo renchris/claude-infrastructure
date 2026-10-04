@@ -47,6 +47,20 @@ belongs to whoever owns that protocol, not to a parallel worker).
 **The operator's goal:** grow from ~14 concurrent Claude Code sessions toward **~100**, with queued
 work firing autonomously overnight.
 
+### Phase 0 · S7 (four-stage scaling plan, 2026-10-04) — EXECUTION LOCUS PER WAVE
+
+| wave | locus | scope | owner files | status |
+| --- | --- | --- | --- | --- |
+| S7-1A | **S** (dispatched session `scale-stage1-a`) | env and launchd bands (cert store, browser idle timeout, QoS bands), migrations 0055 and 0057 | `migrations/0055*`, `migrations/0057*`, `bin/cc-qos-exec`, `qos-batch.patterns`, browser-spin-guard, session-continue.sh | in flight |
+| S7-1B | **S** (dispatched session `scale-stage1-b`) | measure (attribution sampler) and cut per-agent hook cost (lean profile, SessionStart regrouping), migration 0056 | `scripts/capacity-alarm.sh`, `scripts/lib/capacity-attrib.py`, `hooks/post-tool-batch.sh`, `hooks/lib/hook-profile.sh` + 7 advisory/lead-only hooks, `hooks/session-start-dispatch.sh`, `migrations/0056*` | landed (S7.2) |
+| S7-2 | **L** (operator-led restart window) | crash-proofing restart: patched kitty, panes across several kitty instances, kalloc reboot | n/a (operator) | planned |
+| S7-3 | **S** per port slice | Linux 9950X box: browser pool first, then headless sessions after porting the 44 macOS-only hooks | `hooks/*` port shims, a Linux install path | planned (purchase is the operator's) |
+| S7-4 | **S** per wave | fleet: batched landing / merge queue, automated unblocking | `scripts/ship-land.sh` lane, unblock dispatcher | planned |
+
+L for S7-2: it is a physical restart the operator performs; there is no code to dispatch. Lead budget:
+each stage-1 wave session keeps ≥50% of its window for synthesis and recycles after its land; the
+succession point is the wave's ping-back to the originating desk.
+
 ---
 
 ## 0 · The bootstrap deadlock — why nothing is finishing
@@ -2165,3 +2179,80 @@ box, never an acceptance gate. **No criterion in this plan requires spawning ses
 **The generalisable lesson, recorded because it cost a whole session:** an acceptance test that must
 approach the failure mode to prove safety is mis-specified. Prove the *margin* instead, and let the
 real workload occupy it.
+
+---
+
+## S7 · The four-stage scaling plan — 15 sessions to a fleet (2026-10-04)
+
+**Evidence:** `docs/research/concurrency-scale-2026-10-04/README.md` (synthesis of 12 reports, each
+corrected by a skeptic pass). **Operator ruling 2026-10-04: quota is NOT a constraint** — 100% weekly
+use is deliberate low-value fill, so concurrency is scaled for high-value work and the README's
+account-count arithmetic (§5) does not bind this plan. What binds, in order: CPU spent on work the
+sessions spawn (hooks, tools, browsers), the terminal's crash radius, then landing throughput and
+oversight.
+
+### S7.1 · The four stages
+
+| stage | where | target | what it takes | exit test |
+| --- | --- | --- | --- | --- |
+| **1 · software on the Mac** | the M1 Max | **15 → ~40 resident sessions / 50-80 working agents** | attribution telemetry first (so every later cut is measured), then cut per-agent CPU: lean hook profile for bulk agents, SessionStart regrouping, QoS bands for batch tools and pollers, browser idle timeout, `CLAUDE_CODE_CERT_STORE=bundled` (README §3 rows 1-2, 5, 11, 14-17) | `attrib.jsonl` shows session-tree CPU per working agent falling, and capacity-alarm rung 7 stays below WARN at 40 resident sessions |
+| **2 · crash-proofing restart** | the Mac, one planned window | survive a terminal wedge without losing more than one instance's panes | patched kitty with `ulimit -n 8192`, panes split across several kitty instances (blast radius = one instance, not 31 sessions in 26 s as on 10-01), the boot-resume `.start` fix, kalloc root capture, then the reboot at the 6 GB kalloc alarm (README row 13) | a forced kill of one kitty instance loses only its own panes; kalloc.1024 back near baseline |
+| **3 · one Linux box** | Ryzen 9 9950X, 128 GB, 2 TB | offload 22-40% of the Mac's CPU, then 10-20 headless sessions | **browser pool first** (CDP Chrome host: the largest single CPU category, ~9.5 GB RSS), then headless sessions in tmux with one `CLAUDE_CONFIG_DIR` per account — but only **after porting the 44 macOS-only hooks**, because hooks run where the session runs (README §5) | browser trees absent from the Mac's `attrib.jsonl`; a headless Linux session passes the safety-hook suite |
+| **4 · fleet** | Mac cockpit + N Linux boxes | beyond one trunk's ~44 lands/day | **batched landing / merge queue** (the optimistic lane's ceiling is set by gate duration, 185-570 lands/day), **automated unblocking** (permission blocks are 0.15-0.18 per session-hour; at fleet scale they exceed a 1 page/h budget) | lands/day above the single-lane ceiling with no rise in post-land reverts; stuck-over-1-h pages ≤ 1/h |
+
+Stage order is by dependency, not size: stage 1's telemetry is what measures every later stage, and
+stage 2 must precede stage 3 because a wedge on the cockpit takes the fleet's operator surface with it.
+
+### S7.2 · Stage 1, wave B — LANDED 2026-10-04 (dispatched session `scale-stage1-b`)
+
+Scope (frozen): README rows 11, 16, 17 plus this section; one atomic commit each, bats per touched file.
+
+- **Row 11, attribution sampler.** `scripts/lib/capacity-attrib.py`, called once per capacity-alarm tick,
+  writes `~/.claude/logs/attrib.jsonl` (rotated by `rotate-autonomy-logs.sh`): per-session CPU from
+  libproc own + reaped-child counters with the reap correction propagated to the nearest ancestor alive at
+  both ticks, orphan work tagged by `CLAUDE_CODE_SESSION_ID`, launchd/other-uid buckets, host busy and the
+  positive control (`attrib ≤ busy × 1.05`). First live window: **92% of busy CPU attributed, 8% unseen**
+  (design predicted 6-9%). Rung 4 reads its footprint top-3 instead of `top -l 1` (`top_src` on every row;
+  top and ps stay as fallbacks). **Tick cost 1.96-2.05 → 1.15-1.22 CPU-s** (interleaved, load ~25-29).
+  `hooks/post-tool-batch.sh` gained `tuids`, `cmd_h` and `agent_id` in its one jq call (0 extra forks);
+  `cmd_h` equals the sampler's hash of each live tool shell's eval body, so a CPU sample joins to a
+  tool_use_id and from there to a subagent transcript.
+  - Learned: **exec(2) resets a process's reaped-child counters** (measured). A shell that execs its last
+    command loses the CPU of children it reaped earlier; that loss lands in `unseen_s`.
+  - Learned: Claude Code writes `procStart` in UTC; matching tolerates either reading.
+  - Open (not this wave): calibrate `exec_hook_dt` on a quiet box (README §4 B1); compare one tree's
+    footprint sum against `footprint(1)` before it replaces `per_session_mb_est`; verify that
+    PostToolBatch's `tool_input.command` is the post-`qos-rewrite` command (the join assumes so).
+- **Row 16, lean hook profile.** `hooks/lib/hook-profile.sh`, `cc_hook_skip <class> [payload]`, pure bash.
+  Classes for the 20 Bash-call hooks:
+
+  | class | hooks | skipped when |
+  | --- | --- | --- |
+  | safety (8) | curl-gate-scope, validate-bash, git-worktree-guard, keychain-guard, qos-rewrite, coldcompile-admit, pr-gate, research-block | never |
+  | allow (3) | smart-bash-allowlist, rm-safe-allowlist, ship-rail-push-allow | never (a skipped allow makes a bulk agent prompt, and nobody answers) |
+  | kept telemetry (2) | cc-permission-beacon clear (a skipped clear leaves a stale PERMISSION-PENDING page), post-tool-batch (carries the row-11 join) | never |
+  | advisory (5) | log-bash, relay-verbatim, teammate-checkpoint (PostToolUse arm only), memory-index-drain, bash-output-offload | `CC_HOOK_PROFILE=lean` or a subagent payload |
+  | lead-only (2) | waiting-recycle (in a subagent it acts on the PARENT's session), mailbox-drain post-tool | a subagent payload only |
+
+  Subagent detection is the top-level `agent_id`, scanned before `tool_input` (unit-gate's rule).
+  `scripts/hook-profile-bench.py`, no-op Bash payload, 20 hooks: **default 0.567-0.597 CPU-s/call →
+  lean 0.494 (−13%) → subagent 0.393 (−31%)**. The remaining floor is one bash startup per still-registered
+  hook; removing it needs a settings.json change that registers a lean chain for bulk agents — operator-only,
+  and the next lever for stage 1.
+- **Row 17, SessionStart.** `hooks/session-start-dispatch.sh` runs the 9 context/banner hooks in parallel,
+  each in its own process group under a 9 s bound, and merges one additionalContext (capped at 9,500 chars)
+  and one systemMessage. **Migration 0056** (c10, operator-run, filed to the backlog) folds those 9 into
+  one registration and marks 5 side-effect hooks `async` (pre-session-validate, lead-crash-watchdog,
+  session-register, live-session-registry, net-context-stamp): 18 registrations → 10. dod-persist,
+  desk-brief-inject and mailbox-drain stay separate (gating, and large enough to share-and-blow the
+  10,000-char per-hook cap); mailbox-wake-arm is already asyncRewake. The banner hooks stay sync on purpose:
+  an async systemMessage goes to the model and is hidden from the terminal.
+
+### S7.3 · Stage 1, what remains after waves A and B
+
+1. Run migration 0056, then measure the startup span (p50/p95) against j-startup-hang.md's 2.9 s / 10.1 s.
+2. A lean per-tool registration for headless fleet leads (row 16's operator-only half): ≤ 2 hooks per Bash
+   call for bulk agents. Measure with `scripts/hook-profile-bench.py` before and after.
+3. Use `attrib.jsonl` to re-test the README's open question: is the post-09-16 2.0-5.6x steeper load slope
+   real or a census undercount? (Needs the session-root union of README row 8.)
+4. Launch watchdog (row 7), research-block fast exit (row 4), fork-churn fixes (row 9): each agent-drivable, S.
