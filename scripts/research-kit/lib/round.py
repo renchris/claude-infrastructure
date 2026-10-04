@@ -341,6 +341,18 @@ def cmd_close(a: argparse.Namespace) -> int:
         raise Refused(f"round {a.round} has not run")
     if m.get("closed"):
         raise Refused(f"round {a.round} is already closed")
+    # A counted round is a full read: a dead, void, partial or missing slot closed as quiet would
+    # feed the stop rule a read that never happened (gate row 13 refuses it, but only at the gate).
+    lost = [
+        f"{s.get('pid')} ({s.get('status') or 'missing'})"
+        for s in m.get("slots") or []
+        if s.get("status") != "complete"
+    ]
+    if m.get("counted") and lost:
+        raise Refused(
+            f"round {a.round} is counted but planned slot(s) {', '.join(lost)} did not complete; "
+            f"re-run them before closing"
+        )
     # Match seeds FIRST: seed.py match writes seed_match onto each hole that restates a seed, and
     # only then can a caught seed be told apart from a real finding.
     fr = frame(a.program)

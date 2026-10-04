@@ -165,6 +165,35 @@ field() { /usr/bin/python3 -c "import json; m=json.load(open('$CC_RESEARCH_RECOR
   [ "$(field 2 'm["quiet"], m["new_material"]')" = "False 1" ]
 }
 
+open_with_slots() { # <round> <status of slot 2> <True|False counted>: an unclosed round whose matrix records its slots
+  mat "$1" certification "$1" ',"quiet":false'
+  /usr/bin/python3 -c "import json; p='$CC_RESEARCH_RECORDS/rounds/$1/matrix.json'; m=json.load(open(p)); m['closed']=False; m['counted']=$3
+m['slots']=[{'pid':'r$1p1','vendor':'openai','status':'complete'},{'pid':'r$1p2','vendor':'google','status':'$2'}]
+json.dump(m, open(p,'w'))"
+}
+
+@test "close: a counted round with a planned slot that is not complete is refused and stays open" {
+  fc_done; open_with_slots 2 partial True
+  run "$R" close --program demo --round 2
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"r2p2 (partial)"* ]]
+  [ "$(field 2 'm["closed"]')" = "False" ]
+}
+
+@test "close: a counted round whose planned slots all completed closes" {
+  fc_done; open_with_slots 2 complete True
+  run "$R" close --program demo --round 2
+  [ "$status" -eq 0 ]
+  [ "$(field 2 'm["closed"], m["quiet"]')" = "True True" ]
+}
+
+@test "close: an uncounted round with a dead slot still closes, as uncounted" {
+  fc_done; open_with_slots 2 dead False
+  run "$R" close --program demo --round 2
+  [ "$status" -eq 0 ]
+  [ "$(field 2 'm["closed"], m["counted"], m["quiet"]')" = "True False False" ]
+}
+
 @test "a third delta round for one escape is refused" {
   mat delta-H-9-1 delta 1 ',"escape":"H-9"'
   mat delta-H-9-2 delta 2 ',"escape":"H-9"'
