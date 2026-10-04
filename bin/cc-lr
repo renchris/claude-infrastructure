@@ -732,15 +732,36 @@ cl_switch_line() { # <pane> <sid> <VERDICT> <from> <to> <reason>
 # non-zero rc, or an empty ranking) — exactly lrh_target_routable's contract, so this can refuse only
 # what the subject itself would refuse (memory: make-the-actuator-the-arbiter). The subject's gate
 # stays the backstop. stdout carries the router's own reason on rc 1 (it runs inside `$( … )`).
-cl_target_unroutable() { # $1=target → rc 0 excluded (reason on stdout) · rc 1 routable or unknown
-  local t="$1" ab out rc errf reason="" fresh
+#
+# --strict IS FOR A BATCH, WHERE "UNKNOWN" IS NOT "ROUTABLE" (2026-10-04). Fail-open is right for one
+# subject, whose own gate is the backstop one turn later; a driver about to queue 15 moves on an
+# instrument that could not answer multiplies that one guess by 15, and at 16:41Z that day the
+# fail-open path admitted a target the router had excluded. So strict separates the third state:
+# rc 3 UNVERIFIED (reason on stdout) when the router cannot answer at all, and when the only reason
+# it gives after the `--fresh` re-read is its own throttled poll — a cached reading, which says how
+# old the evidence is and nothing about the target. CC_LR_STRICT_ROUTE=off makes --strict a no-op.
+cl_target_unroutable() { # $1=target [--strict] → rc 0 excluded (reason on stdout) · rc 1 routable or unknown · strict only: rc 3 UNVERIFIED (reason on stdout)
+  local t="$1" ab out rc errf reason="" fresh strict=0
+  if [ "${2:-}" = --strict ] && [ "${CC_LR_STRICT_ROUTE:-on}" != off ]; then strict=1; fi
   [ "${CC_LR_TARGET_ROUTABLE:-on}" = off ] && return 1
   ab="${CC_ACCOUNTS_BIN:-$HOME/bin/claude-accounts}"
-  [ -x "$ab" ] || return 1
-  errf="$(mktemp "${TMPDIR:-/tmp}/cc-lr-rank.XXXXXX")" || return 1
+  if [ ! -x "$ab" ]; then
+    [ "$strict" -eq 1 ] || return 1
+    printf 'the router is not executable at %s' "$ab"; return 3
+  fi
+  if ! errf="$(mktemp "${TMPDIR:-/tmp}/cc-lr-rank.XXXXXX")"; then
+    [ "$strict" -eq 1 ] || return 1
+    printf '%s' "no scratch file to hold the router's reasons"; return 3
+  fi
   for fresh in "" --fresh; do
     rc=0; out="$("$ab" --rank general ${fresh:+"$fresh"} 2>"$errf")" || rc=$?
-    if [ "$rc" -ne 0 ] || [ -z "$out" ]; then rm -f "$errf"; return 1; fi
+    if [ "$rc" -ne 0 ] || [ -z "$out" ]; then
+      rm -f "$errf"
+      [ "$strict" -eq 1 ] || return 1
+      if [ "$rc" -ne 0 ]; then printf 'the router could not answer (--rank general%s exited %s)' "${fresh:+ $fresh}" "$rc"
+      else printf 'the router returned an empty ranking (--rank general%s)' "${fresh:+ $fresh}"; fi
+      return 3
+    fi
     case $'\n'"$(printf '%s\n' "$out" | awk 'NF{print $1}')"$'\n' in
       *$'\n'"$t"$'\n'*) rm -f "$errf"; return 1 ;;
     esac
@@ -750,6 +771,11 @@ cl_target_unroutable() { # $1=target → rc 0 excluded (reason on stdout) · rc 
             | awk -v t="$t" 'index($0, t "=") == 1 { print substr($0, length(t) + 2); exit }')"
   rm -f "$errf"
   printf '%s' "${reason:-not ranked by the router}"
+  # The router's own wording for a poll it did not make (claude-accounts: "poll throttled ↻",
+  # "… (cached usage)"). Still standing after --fresh, it is the age of the reading, not a verdict.
+  if [ "$strict" -eq 1 ]; then
+    case "$reason" in *"poll throttled"*|*"cached usage"*) return 3 ;; esac
+  fi
   return 0
 }
 # An AUTH exclusion has exactly one cure, and it is an operator step: name it with the mailbox and the
@@ -1781,6 +1807,13 @@ case "$CMD" in
   upgrade) cmd_upgrade "$@"; exit $? ;;
   accounts) cmd_accounts "$@"; exit $? ;;
   cohort)  cmd_cohort  "$@"; exit $? ;;
+  # HIDDEN, and absent from usage on purpose: the seam through which a suite (and, later, `cc-lr
+  # move`) asks cl_target_unroutable its question. Prints the reason; exits with the function's rc.
+  __route-check)
+    [ $# -ge 1 ] || cl_die "__route-check needs a target" 3
+    rc_reason="$(cl_target_unroutable "$@")"; rc_rc=$?
+    [ -z "$rc_reason" ] || printf '%s\n' "$rc_reason"
+    exit "$rc_rc" ;;
   *) echo "cc-lr: unknown subcommand '$CMD' — expected find | recover | switch | status | repair | repair-markers | upgrade | accounts | cohort (status --cohort, accounts --limited, cohort refire)" >&2
      usage; exit 3 ;;
 esac

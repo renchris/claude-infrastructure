@@ -1087,3 +1087,80 @@ SH
   [ "$status" -eq 0 ] || { echo "rc $status: $output"; false; }
   jq -e '.target == "next3"' "$LR_STATE_DIR/requests/cc-lr-switch-cccc0754-0000-4000-8000-000000000754.json" >/dev/null
 }
+
+# ── STRICT ROUTING: for a batch, "the router could not answer" is not "routable" (2026-10-04) ──────
+# cl_target_unroutable fails OPEN on a router that cannot answer, which is right for one subject and
+# wrong for a driver about to queue 15 moves on it. --strict names the third state, rc 3 UNVERIFIED.
+# Reached through the hidden `__route-check` verb, which prints the reason and exits with the rc.
+route_stub() { # <rc> <stderr text> <stdout> [<stdout under --fresh>] — rank on stdout, exclusions on stderr
+  local rc="$1"
+  printf '%s' "$2" > "$BATS_TEST_TMPDIR/rank.err"
+  printf '%s' "$3" > "$BATS_TEST_TMPDIR/rank.plain"
+  printf '%s' "${4-$3}" > "$BATS_TEST_TMPDIR/rank.fresh"
+  cat > "$CC_ACCOUNTS_BIN" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$BATS_TEST_TMPDIR/ranker.argv"
+cat "$BATS_TEST_TMPDIR/rank.err" >&2
+case " \$* " in
+  *" --fresh "*) cat "$BATS_TEST_TMPDIR/rank.fresh" ;;
+  *) cat "$BATS_TEST_TMPDIR/rank.plain" ;;
+esac
+exit $rc
+SH
+  chmod +x "$CC_ACCOUNTS_BIN"
+}
+
+@test "strict route: a router that exits non-zero is UNVERIFIED rc 3, with the reason" {
+  route_stub 97 "" $'next3 1\n'
+  run bash "$LR" __route-check next3 --strict
+  [ "$status" -eq 3 ] || { echo "rc $status: $output"; false; }
+  [[ "$output" == *"could not answer"*"exited 97"* ]] || { echo "$output"; false; }
+}
+
+@test "CONTROL — default mode: the same non-zero router is the old fail-open, rc 1 and silent" {
+  route_stub 97 "" $'next3 1\n'
+  run bash "$LR" __route-check next3
+  [ "$status" -eq 1 ] || { echo "rc $status: $output"; false; }
+  [ -z "$output" ]
+}
+
+@test "CONTROL — CC_LR_STRICT_ROUTE=off: --strict is the default mode again" {
+  route_stub 97 "" $'next3 1\n'
+  CC_LR_STRICT_ROUTE=off run bash "$LR" __route-check next3 --strict
+  [ "$status" -eq 1 ] || { echo "rc $status: $output"; false; }
+  [ -z "$output" ]
+}
+
+@test "strict route: an empty ranking is UNVERIFIED rc 3" {
+  route_stub 0 "" ""
+  run bash "$LR" __route-check next3 --strict
+  [ "$status" -eq 3 ] || { echo "rc $status: $output"; false; }
+  [[ "$output" == *"empty ranking"* ]] || { echo "$output"; false; }
+}
+
+@test "strict route: a ranked target is routable, rc 1 and silent" {
+  route_stub 0 "" $'next2 3\nnext3 1\n'
+  run bash "$LR" __route-check next3 --strict
+  [ "$status" -eq 1 ] || { echo "rc $status: $output"; false; }
+  [ -z "$output" ]
+}
+
+@test "strict route: a target excluded for a real reason is rc 0 with the router's reason, after ONE --fresh re-read" {
+  route_stub 0 "claude-accounts: general excluded — next3=logged-out; next4=weekly 100%" $'next2 3\n'
+  run bash "$LR" __route-check next3 --strict
+  [ "$status" -eq 0 ] || { echo "rc $status: $output"; false; }
+  [ "$output" = "logged-out" ] || { echo "$output"; false; }
+  [ "$(wc -l < "$BATS_TEST_TMPDIR/ranker.argv" | tr -d ' ')" = 2 ]
+  [ "$(grep -c -- '--fresh' "$BATS_TEST_TMPDIR/ranker.argv")" = 1 ]
+}
+
+@test "strict route: still 'poll throttled' after --fresh is UNVERIFIED rc 3 — a cached reading is not a verdict" {
+  route_stub 0 "claude-accounts: general excluded — next3=poll throttled ↻ (cached usage); next4=weekly 100%" $'next2 3\n'
+  run bash "$LR" __route-check next3 --strict
+  [ "$status" -eq 3 ] || { echo "rc $status: $output"; false; }
+  [ "$output" = "poll throttled ↻ (cached usage)" ] || { echo "$output"; false; }
+  # The default mode reads the same router as an exclusion — strict changes only this verdict.
+  run bash "$LR" __route-check next3
+  [ "$status" -eq 0 ] || { echo "rc $status: $output"; false; }
+  [ "$output" = "poll throttled ↻ (cached usage)" ] || { echo "$output"; false; }
+}
