@@ -142,11 +142,31 @@ d['populations_outside']=[{'name':'releases','refresh_cmd':'cat $F','owner':'lea
   [ -n "$id" ]
 }
 
+@test "sweep, no --program, under the launchd runner: a registered program with an open packet is swept" {
+  reg demo registered
+  reg x-reg registered
+  printf '{"id":"DR-1","status":"carried","blocks_waves":["B1"]}\n' >> "$REC/decisions.jsonl"
+  past="$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ)"
+  "$G" file-packet --program demo --decision DR-1 --class B --what "retry policy" --option "retry::writes retried" \
+    --option "do-nothing::no change" --default retry --deadline "$past" --conviction 80 --receipt "$REC/frame.json" >/dev/null
+  /bin/bash "$D" expire-sweep >/dev/null
+  CC_RESEARCH_BIN="$CLI" run /bin/bash "$RUNNER" sweep
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"job sweep demo: ok"* ]] || false
+  [[ "$output" != *"x-reg"* ]] || false
+  [ "$(count "$REC/decisions.jsonl" "r['id'] == 'DR-1' and r.get('ruled_by') == 'packet-default' and r.get('chosen') == 'retry'")" -eq 1 ]
+  reg demo closed
+  CC_RESEARCH_BIN="$CLI" run /bin/bash "$RUNNER" sweep
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no program in certifying|certified, nor registered with an open packet"* ]]
+}
+
 @test "no --program iterates only certifying|certified programs, and one failure does not stop the rest" {
   reg x-reg registered
   reg x-cert certified
   reg x-closed closed
   FAKE="$BATS_TEST_TMPDIR/fake-cc-research"
+  # shellcheck disable=SC2016  # the fake's $* and $3 expand when it runs, not here
   printf '#!/bin/bash\necho "$*" >> "%s"\n[ "$3" = demo ] && exit 1\nexit 0\n' "$BATS_TEST_TMPDIR/calls" > "$FAKE"
   chmod +x "$FAKE"
   CC_RESEARCH_BIN="$FAKE" run job triage

@@ -4,10 +4,13 @@
   cc-research job sweep|freshness|triage|drift|market [--program P] [--json]
 
 Run by launchd through scripts/research-kit/jobs/research-job.sh, never because a question was asked.
-No --program: every registry program in certifying|certified. Each pass appends records only and
-prints one summary line per program; exit 1 if any program's pass failed (the others still run).
+No --program: every registry program in certifying|certified (the sweep also takes a registered one
+with an open packet). Each pass appends records only and prints one summary line per program; exit 1
+if any program's pass failed (the others still run).
 
   sweep      gate_sweep.cmd_sweep: fired class-B defaults, overdue class-C conversions, known rows.
+             Also run on a registered program whose decision records name a packet and are not yet
+             ruled, so a default fires at its deadline before certification begins.
   freshness  a premise with a recheck_cmd whose expiry has passed (`expires`, else validated_at.ts +
              ttl_h), or with no probe within 24 h while the program is certifying (gate row 10), is
              re-run through probe_run as a probe closing it. A holds/refuted verdict the result flips
@@ -70,15 +73,41 @@ def next_id(path: Path, prefix: str) -> str:
     return f"{prefix}-{n + 1}"
 
 
-def programs(only: Optional[str]) -> List[Tuple[str, str]]:
+def open_packet(slug: str) -> bool:
+    """A decision record names a cc-decide packet and is not yet ruled: the sweep has work there.
+
+    The program's packets are the ones its decision events name, as gate_sweep finds them. Records
+    that cannot be read answer True, so the sweep runs there and reports the failure."""
+    try:
+        decisions = kit.fold(kit.read_jsonl(kit.records_dir(slug) / "decisions.jsonl"))
+    except kit.KitError:
+        return True
+    for d in decisions.values():
+        if (d.get("packet") or {}).get("id") and d.get("status") != "ruled":
+            return True
+    return False
+
+
+def scanned(job: str) -> str:
+    return "|".join(ACTIVE) + (
+        ", nor registered with an open packet" if job == "sweep" else ""
+    )
+
+
+def programs(only: Optional[str], job: str = "") -> List[Tuple[str, str]]:
     if only:
         prog = kit.registry_get(kit.check_slug(only)) or {}
         return [(only, str(prog.get("state", "unregistered")))]
-    return [
-        (str(p["slug"]), str(p["state"]))
-        for p in kit.registry_load()["programs"]
-        if p.get("state") in ACTIVE
-    ]
+    out: List[Tuple[str, str]] = []
+    for p in kit.registry_load()["programs"]:
+        slug, state = str(p["slug"]), str(p.get("state"))
+        # the sweep alone also reaches a registered program: its class-B defaults fire on a
+        # deadline, whether or not certification has begun (audit 2026-10-04, item 8)
+        if state in ACTIVE or (
+            job == "sweep" and state == "registered" and open_packet(slug)
+        ):
+            out.append((slug, state))
+    return out
 
 
 # ── sweep ───────────────────────────────────────────────────────────────────────────────────────
@@ -383,7 +412,7 @@ PASSES: Dict[str, Pass] = {
 def cmd_job(a: argparse.Namespace) -> int:
     fn = PASSES[a.job]
     results: List[Dict[str, Any]] = []
-    for slug, state in programs(a.program):
+    for slug, state in programs(a.program, a.job):
         try:
             ok, msg = fn(slug, state)
         except kit.KitError as e:
@@ -396,7 +425,7 @@ def cmd_job(a: argparse.Namespace) -> int:
     if a.json:
         print(json.dumps({"job": a.job, "programs": results}, sort_keys=True))
     elif not results:
-        print(f"job {a.job}: no program in {'|'.join(ACTIVE)}")
+        print(f"job {a.job}: no program in {scanned(a.job)}")
     return 0 if all(r["ok"] for r in results) else 1
 
 
