@@ -95,6 +95,16 @@ active() { /bin/bash -c ". '$RP'; rp_is_active '$1'" 2>/dev/null; }
   [ "$(resolve "$BATS_TEST_TMPDIR/later")" = "demo registered" ]
 }
 
+@test "re-register keeps the aliases already registered and adds new ones" {
+  mkdir -p "$BATS_TEST_TMPDIR/repo"
+  "$G" register --program demo --root "$BATS_TEST_TMPDIR/repo" --alias "Demo One"
+  run "$G" register --program demo --root "$BATS_TEST_TMPDIR/repo"
+  [ "$status" -eq 0 ]
+  [ "$(jq -c '.programs[] | select(.slug=="demo") | .aliases' "$CC_RESEARCH_REGISTRY")" = '["Demo One"]' ]
+  "$G" register --program demo --root "$BATS_TEST_TMPDIR/repo" --alias "demo2"
+  [ "$(jq -c '.programs[] | select(.slug=="demo") | .aliases' "$CC_RESEARCH_REGISTRY")" = '["Demo One","demo2"]' ]
+}
+
 @test "add-root refuses a relative path, a missing directory and an unregistered program" {
   mkdir -p "$BATS_TEST_TMPDIR/repo" "$BATS_TEST_TMPDIR/other"
   "$G" register --program demo --root "$BATS_TEST_TMPDIR/repo"

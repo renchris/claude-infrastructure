@@ -135,9 +135,9 @@ def merged_roots(prior: List[str], new: List[str]) -> List[str]:
 def cmd_register(a: argparse.Namespace) -> int:
     prior = kit.registry_get(a.program)
     roots = merged_roots((prior or {}).get("cwd_roots") or [], a.root)
-    e = kit.registry_set(
-        a.program, "registered", aliases=a.alias or [], cwd_roots=roots
-    )
+    # Like the roots, a re-register adds aliases and never drops the ones already stored.
+    aliases = list(dict.fromkeys(list((prior or {}).get("aliases") or []) + (a.alias or [])))
+    e = kit.registry_set(a.program, "registered", aliases=aliases, cwd_roots=roots)
     print(f"registered {e['slug']} roots={e['cwd_roots']} aliases={e['aliases']}")
     return 0
 
