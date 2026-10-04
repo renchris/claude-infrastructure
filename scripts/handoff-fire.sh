@@ -12697,6 +12697,35 @@ case "$MODEL" in
     fi ;;
 esac
 
+# ---- CC_LADDER=off: the escalation ladder's kill switch, made mechanical ---------------------
+# CLAUDE.md § Frontier Tier Routing says "If CC_LADDER=off is set, do not fire it", and until
+# 2026-10-04 no code read the variable (audit row slim-15) — a kill switch that is prose only is a
+# request, and the plan that defines it says it "must be mechanical, not prose"
+# (docs/plans/NONLIMIT_RESUME_LADDER.md § 6). The ladder's distinguishing act is the stage-1→2
+# step: a SAME-PANE --recycle onto the frontier model. That combination, and only that one, is
+# refused: a fresh frontier fire (/frontier-run, /frontier-campaign) is not the ladder and stays
+# allowed. Placed right after normalization so `fable`, the SSOT id and the still-active prior id
+# all arrive here as one resolved $MODEL, and before anything touches the pane. The predicate is
+# the file's own frontier test (claude-fable-5* prefix, as FABLE_EFFECTIVE below) plus the SSOT's
+# current frontier_access.model, so a tier bump past the 5 family is still caught.
+# hooks/frontier-spawn-gate.sh mirrors this on its session arm, one layer up.
+# The SSOT is read only in the `*)` arm and only for a non-empty $MODEL, and `|| true` keeps a
+# missing model-config.yaml from tripping set -e: _ssot_scalar's awk exits 2 on an absent file,
+# which killed a plain `--recycle --model opus` with exit 2 and zero bytes, the refusal's own code.
+if [ "${CC_LADDER:-}" = off ] && [ "$RECYCLE" = 1 ]; then
+  _ladder_hit=0
+  case "$MODEL" in
+    claude-fable-5*) _ladder_hit=1 ;;
+    '') ;;
+    *) _ladder_fmodel="$(_ssot_scalar frontier_access model 2>/dev/null || true)"
+       [ -n "$_ladder_fmodel" ] && [ "$MODEL" = "$_ladder_fmodel" ] && _ladder_hit=1 ;;
+  esac
+  if [ "$_ladder_hit" = 1 ]; then
+    echo "!! CC_LADDER=off: refusing --recycle onto the frontier model ($MODEL) — that is the escalation ladder's stage-2 step, which the kill switch disables. Write the stage-1 document as the deliverable, or unset CC_LADDER." >&2
+    exit 2
+  fi
+fi
+
 # ---- account maps + activity proxy ---------------------------------------------------------
 # Backed by the accounts.json-generated map (any N accounts) — see lib/account-map.generated.sh.
 # shellcheck source=/dev/null

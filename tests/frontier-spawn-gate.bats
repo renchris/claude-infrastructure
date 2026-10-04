@@ -25,6 +25,7 @@ setup() {
   # path would EXECUTE off the operator's PATH), so fixturing $HOME alone does not reach them;
   # an absent path is the right value, since these sensors fail open on one.
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  unset CC_LADDER   # an operator who exported the kill switch must not turn cases 3-8 red
   export CC_FIRE_CAPACITY_GATE=off
   export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/handoff-account-sweep.json"
   export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/absent-claude-accounts"
@@ -240,4 +241,26 @@ mutate() { # <sed expr> → path to a mutated copy of the hook
   run bash -c "$(declare -f bash_call); bash_call W 'handoff-fire.sh --model fable' | bash '$M'"
   [ "$status" -eq 0 ]
   [ "$(count_of W)" = 0 ]   # this IS the pre-fix behaviour; cases 3-8 are what kill it
+}
+
+# ── CC_LADDER=off: the escalation ladder's kill switch (audit row slim-15) ──────
+# Mirrors scripts/handoff-fire.sh; tests/handoff-fire-ladder-killswitch.bats pins that side. Case
+# 24 is the red proof (pre-fix: allowed and counted); 25-26 pin the switch's narrow scope.
+@test "24 CC_LADDER=off refuses a handoff-fire --recycle onto the frontier tier, uncounted" {
+  run env CC_LADDER=off bash -c "$(declare -f bash_call); bash_call X1 'scripts/handoff-fire.sh --recycle --model fable --prompt-file /tmp/x' | bash '$HOOK' 2>&1"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"CC_LADDER=off"* ]] || false
+  [ "$(count_of X1)" = 0 ]
+}
+
+@test "25 the same recycle without CC_LADDER=off is allowed and counted" {
+  run env -u CC_LADDER bash -c "$(declare -f bash_call); bash_call X2 'scripts/handoff-fire.sh --recycle --model fable --prompt-file /tmp/x' | bash '$HOOK'"
+  [ "$status" -eq 0 ]
+  [ "$(count_of X2)" = 1 ]
+}
+
+@test "26 CC_LADDER=off leaves a NON-recycle frontier fire alone — /frontier-run is not the ladder" {
+  run env CC_LADDER=off bash -c "$(declare -f bash_call); bash_call X3 'scripts/handoff-fire.sh --model fable --prompt-file /tmp/x' | bash '$HOOK'"
+  [ "$status" -eq 0 ]
+  [ "$(count_of X3)" = 1 ]
 }

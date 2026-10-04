@@ -109,6 +109,19 @@ fi
 # Only gate frontier-tier requests (family alias or full id) — see is_frontier_model above.
 is_frontier_model "$req_model" || exit 0
 
+# CC_LADDER=off — the escalation ladder's kill switch. Mirrors scripts/handoff-fire.sh (the
+# `CC_LADDER=off` block after its model normalization), which is the authoritative refusal; this
+# arm only stops the call one layer earlier and without consuming a budget slot. Same scope: a
+# handoff-fire `--recycle` onto the frontier tier (the ladder's stage-2 step), never a fresh
+# frontier fire, and never an Agent spawn. Inert until migration 0029 registers this hook on the
+# Bash matcher, which is why handoff-fire carries the check too.
+if [ "${CC_LADDER:-}" = off ] && [ "$path" = session ] \
+   && printf '%s' "$cmd" | grep -E '(^|[[:space:]]|[;&|(])([A-Za-z0-9_./~$"{}-]*/)?handoff-fire\.sh([[:space:]]|$)' >/dev/null \
+   && printf '%s' "$cmd" | grep -E -- '(^|[[:space:]])--recycle([[:space:]]|$)' >/dev/null; then
+  echo "frontier-spawn-gate: CC_LADDER=off — refusing a --recycle onto the frontier tier ('$req_model'): that is the escalation ladder's stage-2 step, which the kill switch disables. Do NOT retry: the stage-1 document is the deliverable; report the degrade in your close." >&2
+  exit 2
+fi
+
 active="$(printf '%s\n' "$block" | grep -m1 '  active:' | awk '{print $2}')"
 end="$(printf '%s\n' "$block" | grep -m1 '  end:' | awk '{print $2}' | tr -d '"')"
 fallback="$(printf '%s\n' "$block" | grep -m1 '  fallback:' | awk '{print $2}')"
