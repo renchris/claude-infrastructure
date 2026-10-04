@@ -6,7 +6,7 @@ description: "Spend the frontier (Fable) window on unknown-unknown discovery: ba
 # frontier-run — spend the frontier window on what the default tier can't see
 
 The frontier tier's value is exclusively the delta above the default tier:
-problems Opus 5 @ high is **blind to**, not problems it has already found. The
+problems the default tier is **blind to**, not problems it has already found. The
 deliverable is always a *report back* — findings tagged by novelty, ledger
 updated — never silent token burn.
 
@@ -23,13 +23,14 @@ updated — never silent token burn.
    satisfy** — and a hard stop-at-first-failure gate on an unsatisfiable
    conjunct reads as "the frontier tier is unavailable", permanently. The only
    path that still fails this step is the deliberately-pinned legacy
-   `claude-previous` / `cc-previous` (2.1.114), which does not know the model;
-   the live launcher is `claude` (2.1.260). On the legacy path: report and stop.
+   `claude-prev` / `cc-prev` (2.1.114), which does not know the model;
+   the live launcher is `claude`. On the legacy path: report and stop.
    ⚠️ Do not re-derive a track gate from `frontier_access.tracks` — it is a
    documented STALE LABEL with **no code consumer**, and the shipped enforcer
    `hooks/frontier-spawn-gate.sh` reads only `active` + `end`.
-3. **Print cost before spawning — do not await approval**: Fable 5 = $10/$50
-   per MTok ≈ 2× Opus, drawn from the 5-hour plan windows. Estimate the band
+3. **Print cost before spawning — do not await approval**: Fable draws on a
+   50% sub-cap of the same weekly quota bucket (`frontier.coupling: 0.5`) at
+   roughly 2-5× the default tier's rate: the cost is quota, not dollars. Estimate the band
    (N agents × 150-250K context) and print it. Consent is the bounded-autonomy
    policy itself (CLAUDE.md § Frontier Tier Routing) — the printed number is
    the audit line, not a question. Respect `frontier_discovery_budget`:
@@ -43,8 +44,7 @@ updated — never silent token burn.
 
 ## How the frontier model starts (mechanics)
 
-- **The lead session NEVER changes its own model.** The lead (typically Opus
-  4.8) stays put and spawns panelists; each `Agent` call carries the call-time
+- **The lead session NEVER changes its own model.** The lead stays put and spawns panelists; each `Agent` call carries the call-time
   `model: "fable"` override. Fable runs as fresh-context subagents — also the
   cost design: a panelist bills only its brief + its own tool calls at
   frontier rates, never the lead's accumulated session history.
@@ -67,10 +67,11 @@ updated — never silent token burn.
 - **Not Agent Teams.** Discovery is read-only research → subagents. Teams
   enter only downstream, implementing confirmed findings, where
   `teammate_frontier` may pin a Fable teammate per-member (eval-track only).
-- **Panelist effort = the lead's live effort, by construction.** In-process
-  spawns have NO per-spawn effort surface (binary-verified 2.1.170: AgentInput
-  has no effort field, frontmatter `effort` unparsed — GH #25591/#25669/#31536/
-  #65598 open). From an Opus@max lead, panels run Fable@max: an accepted,
+- **Panelist effort = the lead's live effort, unless the agent definition pins one.**
+  The Agent call itself carries no effort; frontmatter `effort:` in the agent
+  definition IS honoured on the `subagent_type` path (measured on CC 2.1.284,
+  `claude-infrastructure/docs/research/sonnet55-utilization-2026-09-28/notes/probe-effort-binding.md`).
+  `frontier-derivation` pins none, so from an Opus@max lead, panels run Fable@max: an accepted,
   BOUNDED premium (CursorBench $18-vs-$15 band/task, capped by the spawn gate).
   Do NOT ask the user to `/effort`-dip around a wave, and do NOT shrink the
   panel to compensate. If a session is already at ≤xhigh, fine — but effort is
@@ -106,7 +107,7 @@ updated — never silent token burn.
 - Route via `Agent` tool, `subagent_type: "frontier-derivation"`
   (`~/.claude/agents/frontier-derivation.md` — baseline-blind method baked
   into the subagent's own system prompt), call-time `model: "fable"` per
-  `~/.claude/rules/research-subagents.md` frontier routing. If the agent type
+  the research-subagents skill's frontier routing. If the agent type
   is unregistered (fresh session before restart), fall back to
   `subagent_type: "deep-research"` with the method spelled out in the brief.
   Adversarial slots keep their ≤500-token verdict cap.

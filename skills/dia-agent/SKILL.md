@@ -9,12 +9,15 @@ allowed-tools: Bash, Read
 Drive **Dia** (The Browser Company, Chromium 149) from an agent over CDP, with
 `navigator.webdriver === false`. **Dia is the requirement** (not Chrome).
 
-Two paths to Dia, plus a last-resort fallback:
+Start with the AppleScript rail (§ ZERO-PROMPT RAIL below): tabs, windows, Spaces and in-page JS
+on the real Dia with no port and no dialog. Drop to CDP only for what it cannot do (trusted input,
+screenshots, network, cookies), on one of two paths, plus a last-resort fallback:
 
 1. **PRIMARY — your REAL warm Dia** via `dia://inspect#remote-debugging`. No separate
-   launch; your real logged-in sessions across all Spaces. **Start here.**
+   launch; your real logged-in sessions across all Spaces. Connections are approved through a
+   consent modal, so this path needs the operator at the screen.
 2. **SECONDARY — an isolated clean dedicated Dia profile** via `~/bin/dia-cdp-launch.sh`.
-   Use when you want isolation and do NOT want to expose the real Dia.
+   Consent-free: use it for unattended CDP work and whenever you do not want to expose the real Dia.
 3. **FALLBACK (NOT the supported path) — plain Chrome.** Only if Dia is unavailable.
 
 For the full CDP capability catalog, detection surface, alternatives (OpenDia extension,
@@ -150,10 +153,10 @@ The supported path: your actual logged-in Dia, every session warm, no launcher.
 
 1. In Dia, open `dia://inspect#remote-debugging`. Check
    **"Allow remote debugging for this browser instance."**
-2. Dia starts a CDP server on an **ephemeral** `127.0.0.1:<port>` shown on that page.
+2. Dia starts a CDP server on `127.0.0.1:9222`, fixed and stable across toggle cycles
+   on 1.48.0 (it was ephemeral on 1.37.1; confirm it on the page or in `DevToolsActivePort`).
    It is **WS-only** — there is NO `/json` HTTP discovery (`/json/version` 404s), so
-   `--browserUrl` / `/json`-based clients do NOT work here. Re-read the port from the
-   page each time (it changes when you cycle the toggle).
+   `--browserUrl` / `/json`-based clients do NOT work here.
 3. Attach with **`chrome-devtools-mcp --autoConnect --userDataDir "$HOME/Library/Application Support/Dia/User Data"`**
    (the manual/`.mcp.json` form of the page's "connecting to Chrome DevTools MCP" link).
    `--userDataDir` is **mandatory**: it makes chrome-devtools-mcp read Dia's `DevToolsActivePort`
@@ -304,8 +307,8 @@ Origin/CSRF check — it does NOT widen the bind. **24/7 LaunchAgent daemonizati
   Residual risk: a page served from `localhost` (e.g. `http://localhost:3000`) opened in the agent
   profile CAN reach `ws://localhost:9222` — avoid untrusted local servers in the agent profile
   while the port is live.
-- **[PRIMARY only]** Ephemeral, WS-only port — `/json/version` 404s; use the `ws://` URL from
-  the page; the port changes when you cycle the toggle.
+- **[PRIMARY only]** WS-only port, fixed `9222` on 1.48.0 (ephemeral on 1.37.1) — `/json/version`
+  404s; use the `ws://` URL from the page or `DevToolsActivePort`.
 - **[PRIMARY only]** Dia writes `DevToolsActivePort` to
   `~/Library/Application Support/Dia/User Data/DevToolsActivePort` while the toggle is ON (line 1 =
   port, line 2 = `/devtools/browser/<uuid>`); absent when OFF. `--autoConnect --userDataDir` reads

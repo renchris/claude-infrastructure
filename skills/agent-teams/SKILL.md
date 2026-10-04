@@ -9,37 +9,32 @@ Loaded by `~/.claude/CLAUDE.md` Agent Teams section. Applies to **every project*
 
 ## Runtime assumption (CC version — corrected 2026-06-20)
 
-**Two tracks, and BOTH are teams runtimes — they differ only in the team API surface:**
-- **Stable** (`claude-previous` / `cc-previous` → CC **2.1.114**, deliberately pinned; these were
-  named `claude` / `cc` before the 2026-07-31 entrypoint consolidation): exposes the classic
-  **`TeamCreate` / `TeamDelete`** tools that this file's examples use.
-- **Eval** (`claude` / `cc` → CC **2.1.219**, the `~/.claude-219` binary; `claude-next` and
-  `claude-opus5` are back-compat shims onto the same body): on **2.1.178+**, which
-  **removed `TeamCreate` / `TeamDelete`** for an **implicit-team model** — you spawn teammates by
-  calling the **`Agent` tool with `name:`** (the runtime forms the team implicitly at STARTUP; the
-  `TeamCreate`/`TeamDelete` *tools* simply don't exist). Agent Teams are ENABLED here
-  (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`) and **validated working on 2.1.183** (verified
-  2026-06-20). The earlier "183 is deliberately not a teams runtime / needs doc-migration first"
-  framing is **superseded**. Stable 2.1.114 stays pinned — by *choice*, not by a teams gap.
+**Two tracks, and BOTH are teams runtimes — they differ only in the team API surface.** Read the
+fleet pin live (`"$(cc-claude-bin)" --version`), not from this file.
+- **Fleet** (`claude` / `cc` and every account variant): 2.1.178+, which **removed `TeamCreate` /
+  `TeamDelete`** for an **implicit-team model** — you spawn teammates by calling the **`Agent` tool
+  with `name:`** (the runtime forms the team implicitly at STARTUP; the `TeamCreate`/`TeamDelete`
+  *tools* simply don't exist). Agent Teams are ENABLED here (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`;
+  first validated on 2.1.183, 2026-06-20).
+- **Legacy** (`claude-prev` / `cc-prev` → CC **2.1.114**, deliberately pinned — by *choice*, not by
+  a teams gap): exposes the classic **`TeamCreate` / `TeamDelete`** tools.
 
 **Detect the RUNNING runtime — do NOT trust `claude --version`.** `claude` / `cc` are shell
 functions, so their version reports **which launcher the name points at right now, never which
 binary this session is running** — the classic "claude is a shell function" trap, except it
 returns a plausible-but-wrong number instead of failing, so the usual alarm doesn't fire.
-The wrong number is not even stable: before the 2026-07-31 entrypoint consolidation `claude`
-resolved the stable pin (`~/.claude-versions/current` → 2.1.114) and under-reported inside an
-eval-track session; it now resolves the consolidated eval launcher (`~/.claude-219` → 2.1.219)
-and **over**-reports inside a stable session. `claude-previous` / `cc-previous` are the stable
-2.1.114 names. Identify the actual session by: the `AI_AGENT` env
-(`claude-code_2-1-XXX_agent`), `CLAUDE_CODE_EXECPATH` (`.../.claude-183/...` ⟹ eval/2.1.183), the
-parent process command, or **tool availability** (`TeamCreate`/`TeamDelete` present ⟹ 2.1.114;
+`claude --version` reports the CURRENT `~/.zshrc` pin, so a pane started before a repoint, or a legacy `claude-prev`
+session, gets the wrong number. Identify the actual session by: the parent process command
+(`ps -o command= -p $PPID` — the most authoritative), `CLAUDE_CODE_EXECPATH`
+(`.../.claude-<NNN>/...`), the `AI_AGENT` env (`claude-code_2-1-XXX_agent`), or **tool availability** (`TeamCreate`/`TeamDelete` present ⟹ 2.1.114;
 absent ⟹ implicit-team model ⟹ 2.1.178+). **Absence of `TeamCreate` means USE the implicit-team
 model — NOT "teams are unavailable, build solo."** (That wrong inference cost a session 2026-06-20.)
 
-**When on the eval track:** read every `TeamCreate` / `TeamDelete` example below as the *2.1.114*
+**On the fleet track:** read any `TeamCreate` / `TeamDelete` mention below as the *2.1.114*
 surface — do the equivalent via `Agent({ name, model, … })` to spawn + `shutdown_request`
-to each teammate to tear down (there is no `TeamDelete` call). The teammate `model` MUST be on the
-Max auto-mode allowlist (`claude-opus-4-8` / `claude-fable-5`); a bare background subagent is
+to each teammate to tear down (there is no `TeamDelete` call). The teammate `model` must be on the
+SSOT's `auto_mode_allowlist.non_firstParty_max` (`~/.claude/model-config.yaml`); spawn with the
+alias `model: opus` (`roles.default_teammate`). A bare background subagent is
 hard-blocked from writing code, and `sonnet` silent-demotes to acceptEdits + breaks parallelism
 (see `feedback-agent-team-models.md`). Validated end-to-end on 2.1.183 by an 8-teammate
 worktree-isolated build (query/round-trip optimization), 2026-06-21. Stable hold recorded in
@@ -95,7 +90,7 @@ close the panes second.
 
 | Task Type | Pattern |
 |---|---|
-| Writes/modifies code (2+ tasks) | Agent Teams (TeamCreate + worktrees) |
+| Writes/modifies code (2+ tasks) | Agent Teams: `Agent({ name })` teammates, each in its own worktree — inside the wave's dispatched session by default (CLAUDE.md § Agent Teams and parallel work) |
 | Writes/modifies code (1 task) | Single agent in lead session OR one assignee |
 | Research/exploration (no code) | `Explore` subagent (read-only, fire-and-forget) |
 | 50+ parallel read-only tasks | Subagents — `subagent_type: "workflow-lean"` when the brief is self-contained |
@@ -135,8 +130,8 @@ errors — not teammate output sizing.
 
 ### Rule 1 — Brief ≤150 lines
 
-Each brief line is processed at uncached rate. 250-line brief = ~5K tokens before any
-work. 100-line brief = ~2K. Cap brief at 150 lines. Reference memory or docs files
+A 250-line brief is ~5K tokens of the teammate's context before any work, held (and re-read from
+cache) for its whole run; 100 lines is ~2K. Cap brief at 150 lines. Reference memory or docs files
 for research context instead of inlining. Strip lead-mode framing ("from convergence:",
 "21-agent research said:") — assignee doesn't need the meta-narrative.
 
@@ -194,30 +189,17 @@ low; the recovery cost (lead context burned salvaging a crashed teammate) is hig
 | Reading radius (total input) | ≤2,000 LOC |
 | Single-file read | No file > 2,000 LOC read in full |
 | Domain cohesion | 1 domain per teammate |
-| Brief length (NEW) | ≤150 lines |
+| Brief length | ≤150 lines |
 
-## Per-Teammate Effort (2026-06-11 — binary-verified mechanism)
+## Per-Teammate Effort
 
-Teammate panes launch fresh `claude` processes that re-resolve their worktree's
-`.claude/settings.local.json` — the lead's live effort is NOT forwarded. So per-member
-effort IS settable, at worktree setup time:
-
-```bash
-~/.claude/scripts/set-teammate-effort.sh <worktree> low|medium|high|xhigh
-```
-
-> ⚠️ **SUPERSEDED on 2.1.220+, re-read on the 2.1.280 binary 2026-09-22.** The teammate pane
-> builder now pushes `--effort <lead's live level>` onto every member's command line (this skill
-> already records it for 2.1.220 below), and a CLI flag outranks the worktree settings file this
-> script writes. So a member runs at its LEAD's effort, and the script no longer sets it. For a
-> different rung, fire that wave's session at the rung (`handoff-fire.sh --effort medium`).
-> Opus 5.5 rungs are in `effort_defaults.opus55_*`: anchored-brief coding medium, ambiguous
-> multi-file high. The paragraph below is the 2.1.170-era record.
-
-Run it during Setup (after worktree creation, BEFORE spawn). Defaults per SSOT
-`effort_defaults`: mechanical/routine → `high`; judgment-dense or `teammate_frontier`
-(Fable) members → `xhigh`. Without an override, panes resolve the user-settings floor
-(xhigh). `max` is settings-inexpressible (schema cap) — the script rejects it.
+A teammate runs at its LEAD's effort, and there is no per-member override. To run a wave at another
+rung, fire that wave's own session at it (`handoff-fire.sh --effort medium`); Opus 5.5 rungs are in
+`effort_defaults.opus55_*` (anchored-brief coding medium, ambiguous multi-file high).
+`scripts/set-teammate-effort.sh` still writes a worktree settings file, but it does not bind on any
+binary this fleet runs (its header keeps the 2.1.170-era mechanism): on 2.1.220+ (re-read on the
+2.1.280 binary 2026-09-22) the teammate pane builder puts `--effort <lead's live level>` on every
+member's command line, and that flag outranks the file.
 
 This does NOT apply to in-process subagents (Agent tool, no `name:`): they inherit
 the lead's live effort with no override surface (GH #25591/#25669/#31536/#65598 open).
@@ -227,7 +209,7 @@ the lead's live effort with no override surface (GH #25591/#25669/#31536/#65598 
 Same mechanism as effort, one axis over: a **non-session model** (Fable while the lead
 is Opus, etc.) requires an Agent-Team **assignee** — `Agent({ name, model })` with
 `name` SET (NOT `team_name`, which does not exist on 2.1.220 — see the spawn-API block
-above). Assignees honor `model` (allowlist: `claude-opus-4-8` / `claude-fable-5`).
+above). Assignees honor `model` (allowlist: `auto_mode_allowlist.non_firstParty_max` in the SSOT).
 Observed 2026-07-16 (CC 2.1.207, `.claude-secondary`): a `deep-research` subagent
 spawned `model: "fable"` ran as **Opus 4.8** and hung ~35 min in "Hatching" with zero
 output; re-spawning the identical brief as a named teammate is the fix.
@@ -264,11 +246,11 @@ internal subagent system). Never trust a bare-subagent `model:` override to take
 ## Lifecycle
 
 1. **Plan** — Phase 0 orchestration in plan document
-2. **Pre-spawn checklist** — verify all 6 boxes (above)
-3. **Setup** — Create worktrees manually, TeamCreate, spawn teammates
-4. **Execute** — Teammates work, lead monitors via TaskList + completion notifications
+2. **Pre-spawn checklist** — verify every box (above)
+3. **Setup** — Create worktrees manually, then spawn each teammate with `Agent({ name, … })`, its worktree path in the brief
+4. **Execute** — Teammates work and report via `SendMessage`; lead monitors via TaskList (an idle notification is not completion)
 5. **Merge** — Sequential cherry-pick for schema-touching work; git merge for independent work
-6. **Cleanup** — `shutdown_request` to each teammate, remove worktrees, TeamDelete
+6. **Cleanup** — harvest reports, run the Shutdown Protocol below (`shutdown_request` → `TaskStop` → ps-verify), then remove worktrees
 
 ## When Things Go Wrong
 
@@ -289,8 +271,11 @@ References per-project:
 
 ### Agent Teammate Lifecycle (CRITICAL — All Sessions)
 
-**TeammateIdle hook auto-shuts down idle teammates** (`~/.claude/hooks/teammate-auto-shutdown.sh`).
-No orphaned panes — teammates terminate immediately when they finish work.
+**The TeammateIdle hook is a backstop, not the teardown** (`~/.claude/hooks/teammate-auto-shutdown.sh`).
+It checkpoints an idle teammate's work and closes its pane only when the gates in the rules below pass.
+Idle is not done (vendor contract § 1 below), and this path once closed zero panes for nine days
+unnoticed (`tests/teammate-reap-alarm.bats`), so the lead still ends every teammate through the
+Shutdown Protocol.
 
 **Graceful shutdown (redesigned Apr 18 2026; pane-close fixed for CC 2.1.161 on 2026-06-05 — 5 rules):**
 1. **Checkpoint FIRST.** The auto-shutdown hook invokes `teammate-checkpoint.sh`
@@ -311,10 +296,9 @@ No orphaned panes — teammates terminate immediately when they finish work.
    session UUID, or tmux `%N`) and is closed with `it2 session close -f -s <id>`
    / `tmux kill-pane -t <id>`.
    **The old `kill -TERM $PPID` was the "closes too early / inconsistent" bug**:
-   a TeammateIdle hook runs LEAD-side as `lead-claude → /bin/sh -c → bash`, so
-   `$PPID` is the already-dead `/bin/sh` shim — the backgrounded kill hit a
-   PID-RECYCLED process (the lead or an unrelated shell). Targeting the recorded
-   pane id is deterministic. **⚠️ 2026-06-09 correction**: the it2 CLI's `-f`
+   a TeammateIdle hook runs inside the TEAMMATE's own Stop pass, not lead-side (RC-7,
+   2026-09-19; the hook's § THE LOCUS), and the backgrounded kill on `$PPID` hit a
+   PID-RECYCLED process. Targeting the recorded pane id is deterministic. **⚠️ 2026-06-09 correction**: the it2 CLI's `-f`
    never propagates force to the API (it only skips its own TTY confirm), and
    iTerm2's non-forced API close prompts on running-job panes REGARDLESS of the
    never-prompt profile — so the `~/.claude/bin/it2` shim now intercepts
@@ -387,16 +371,15 @@ empty afterwards. The five above were presumably mid-work, which is the case tha
 The failure therefore lands on the **common** case: you tear an agent down precisely BECAUSE it has
 finished — i.e. it is idle — which is exactly the state where the cooperative path does not fire. So
 `shutdown_request` stays FIRST (it is the cooperative path, and it lets the agent checkpoint before it
-dies), but it is a request; **`TaskStop` is the authoritative actuator**. A sent request is never a
-teardown.
+dies), but it is a request; escalate to `TaskStop`, then ps-verify (vendor contract § 3 below: `TaskStop`
+removes the pane and member row but may leave the process). A sent request is never a teardown.
 
 ---
 
 ### 🚨 THE VENDOR CONTRACT ON 2.1.260 — read from the binary, 2026-09-19
 
 Everything above is measured fleet behaviour and stands. This section says what the VENDOR actually
-built, because three of the beliefs the fleet operates on are not in the product, and one sentence
-just above this one is wrong.
+built, because three of the beliefs the fleet operates on are not in the product.
 
 **1. IDLE ≠ DONE, and "finished" is not a completion signal.** There is **no idle timeout anywhere in
 the binary** (`idle_timeout` is constructed zero times) and **nothing ends a teammate on its own**. At
@@ -417,8 +400,7 @@ inbox poller then closes the pane, removes the member row and unassigns its task
 lives on: measured, **22 of 25 prose acknowledgements still required a pane close**. Read the reply,
 do not read the sentiment.
 
-**3. CORRECTION — `TaskStop` is not "the authoritative actuator", and the sentence above overstates
-it.** `TaskStop` is an abort plus a `paneTeardown` (a backend `killPane`), a 10 s settle and a team-file
+**3. `TaskStop` removes the pane, not necessarily the process.** `TaskStop` is an abort plus a `paneTeardown` (a backend `killPane`), a 10 s settle and a team-file
 edit. **It is never a message to the teammate's model**, and the binary carries its own warning that
 **the separate `claude --agent-id` process may still be running** after it returns. So `TaskStop`
 reliably removes the *pane and the member row* — which is why it looked authoritative on the idle
@@ -467,7 +449,7 @@ as a known limitation and say a teammate "stays running and addressable while hi
 4. **ps-verify EVERY agent**: `pgrep -f "agent-id <name>@"` (empty ⇒ actually gone). Silence is not
    death — [[shutdown-request-is-not-an-actuator]] measured `TaskStop` de-registering *without*
    reaping, after which the task API is exhausted and only `kill -TERM <pid>` remains.
-5. Kill iTerm2 pane manually if needed: `killall -9 tmux` (pane dies; agent stays until timeout)
+5. Close a pane that outlived its agent by its recorded id: the member's `tmuxPaneId` in the team `config.json`, closed with `it2 session close -f -s <id>` (iTerm2; under kitty add `--expect-cmdline-match "--agent-name <name>"`, because a kitty window id restarts with every kitty and a stale one can name an unrelated live window) or `tmux kill-pane -t <id>` (tmux). Never `killall tmux`: it kills every tmux session on the machine, and no idle timeout ever ends the agent (vendor contract § 1).
 6. Clean worktrees: `git worktree remove /tmp/worktree-<name>` (or `/tmp/wt-<team>-<name>`)
 
 🚨 **Never spawn a replacement wave until the previous one is ps-verified gone — a clean `git status`
@@ -490,6 +472,6 @@ thing that says nobody *will*.
   `true` as "alive now" (pull-based checks stay authoritative; the team-aware lr-audit
   uses it only to demote RUNNING→PARTIAL).
 
-**If teammate hangs**: (stable 2.1.114) GitHub #31788 — `TeamDelete` can block permanently. Kill pane, manually remove `~/.claude/teams/<team-name>`. Checkpoint refs survive in the worktree's `.git/` — run `git for-each-ref refs/wip/<member>/LAST` to recover. On the 2.1.183 implicit-team model there is no `TeamDelete` — send `shutdown_request`; if it hangs, kill the pane + `git worktree remove`.
+**If teammate hangs**: on the fleet's implicit-team runtime there is no `TeamDelete` — run the Shutdown Protocol above (`shutdown_request` → `TaskStop` → ps-verify), then `git worktree remove`. Checkpoint refs survive in the worktree's `.git/` — run `git for-each-ref refs/wip/<member>/LAST` to recover. Legacy 2.1.114 only: GitHub #31788 — `TeamDelete` can block permanently; kill the pane and remove `~/.claude/teams/<team-name>` by hand.
 
 **Known limitations**: No session resumption with in-process teammates, context compaction can break coordination, one team per session.

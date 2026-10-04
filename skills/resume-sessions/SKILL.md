@@ -6,9 +6,9 @@ argument-hint: "[sid or account to resume just one] [--dry-run — show the tria
 
 # Resume Sessions — crash recovery + autonomous restart (100th-percentile runbook)
 
-The tools live in `~/.reso/bin/` (`reso-resume-one`, `reso-keepalive`, `reso-quota`) — `reso-resume-one`
-is a symlink to the tracked, gated, tested `bin/reso-resume-one` in claude-infrastructure; its two
-neighbours are still untracked, which is the state that let this one rot. Deep rationale,
+The tools live in `~/.reso/bin/` (`reso-resume-one`, `reso-keepalive`, `reso-quota`). The first two
+are symlinks to the tracked, gated, tested `bin/` copies in claude-infrastructure; `reso-quota` is a
+compat shim onto `claude-accounts`. Deep rationale,
 every gotcha, and the exact API details are in **`REFERENCE.md`** (read it if a step misbehaves).
 **The load-bearing rule: send keystrokes to a running Claude TUI with `it2 session send`, NEVER
 `osascript … write text` (it drops submits and mangles long text as pastes).**
@@ -105,7 +105,7 @@ The tool lives in the repo at `bin/reso-resume-one`, with `~/.reso/bin/reso-resu
 it (`install.sh`), so the deployed copy cannot drift from the gated one. It was untracked until
 2026-08-10, which is how its binary path, its model id and its effort all went stale unnoticed.
 
-For the Fable session use account `fable4` (etc.) to keep it on `claude-fable-5` — and **pass
+For the Fable session use account `fable4` (etc.) to keep it on `claude-fable-5-1` — and **pass
 `--effort <tier>` to keep the reasoning tier too**. The account alone only fixes the model: until
 2026-08-10 every fable arm re-pinned `effort=high`, so a Fable-5-at-**max** session came back at
 high while its statusline still read "Fable 5". Omit the flag and prior behaviour is unchanged

@@ -1,6 +1,6 @@
 ---
 name: demo-recording
-description: "Record a live screen, terminal or agent demo and embed it in a README as animated WebP (GitHub strips <video>): capture, iTerm2 sizing, near-lossless encode recipe, contact-sheet review. Not for understanding an existing video."
+description: "Record a live screen, terminal or agent demo and embed it in a README as animated WebP (GitHub strips <video>): capture, terminal window sizing, near-lossless encode recipe, contact-sheet review. Not for understanding an existing video."
 ---
 
 <!-- markdownlint-configure-file {
@@ -186,12 +186,6 @@ authoritative per-frame durations. **Pillow mis-reports durations** on
 duration-merged frames — its timeline summed to 63,680 ms where `webpinfo` said
 63,960 ms. Trust `webpinfo`.
 
-**ffmpeg cannot decode animated WebP** (`image data not found`). Use
-`magick in.webp -coalesce out/%04d.png` to get frames, and `webpinfo` for the
-authoritative per-frame durations. **Pillow mis-reports durations** on
-duration-merged frames — its timeline summed to 63,680 ms where `webpinfo` said
-63,960 ms. Trust `webpinfo`.
-
 **Animated AVIF is not worth the risk yet** — smaller in principle, but browser
 support for *animated* AVIF is uneven where animated WebP is universal, and the
 inline slot has no fallback once `<video>` is stripped.
@@ -262,9 +256,8 @@ screencapture -v -V60 /tmp/take.mov           # -v = video; -V<secs> self-stops.
 screencapture -v -V60 -R0,38,1280,720 /tmp/take.mov
 ```
 
-🚨 **`-l<window-id>` does NOT scope a VIDEO capture — measured 2026-07-31.** This line
-previously read *"a specific window id (no chrome)"*, carried over from the **still**-image
-behaviour where `-l` genuinely does crop to the window. In `-v` mode it silently falls back to
+🚨 **`-l<window-id>` does NOT scope a VIDEO capture — measured 2026-07-31.** It crops to
+the window only for a **still** image. In `-v` mode it silently falls back to
 **the entire display**: a take made with `-l<id>` on a 1280×720 window came out **3456×2234**
 — the whole built-in screen, with the Dock, the wallpaper and every other application's window
 in frame. Nothing errored; the only symptom was the frame size. That take was deleted unused,
@@ -371,8 +364,7 @@ Crop it out or confirm it is empty.
 
   PIL still wins for anything that moves — `drawtext` hard-cuts, and captions that
   fade, rise or carry a progress line have to be *rendered* per frame. Use the full
-  path only for a static burn-in. PIL is the path; render one PNG per frame so captions can fade,
-  rise, or carry a progress line rather than hard-cutting:
+  path only for a static burn-in. Per-frame captions with PIL:
 
   ```python
   from PIL import Image, ImageDraw, ImageFont

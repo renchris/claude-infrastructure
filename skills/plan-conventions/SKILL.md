@@ -31,12 +31,12 @@ step-by-step implementation details that are no longer needed. Example:
 Comprehensive implementation detail — file paths with line ranges, decision context,
 trade-offs, constraints. These sections are the working blueprint for the next session.
 
-**Phase 0 Rule (MANDATORY — Agent Teams Default)**
+**Phase 0 Rule (MANDATORY)**
 
-**Agent Teams are the DEFAULT for all implementation work.** Any plan with 2+ tasks that
-write or modify code MUST use Agent Teams and include Phase 0 as the FIRST section.
-Only use background subagents for research/exploration (no code changes) or 50+ parallel
-read-only tasks. The user expects 9/10 implementation sessions to use Agent Teams.
+Any plan with 2+ tasks that write or modify code includes Phase 0 as the FIRST section. Each
+wave's default locus is a dispatched session (S, below), which leads its own Agent Team for code
+across 2+ files; in-session teammates on the lead (T) and lead-inline work (L) each need a one-line
+reason. Background subagents do read-only research and exploration only; they never write code.
 
 Phase 0 MUST include **Agent Team Orchestration**:
 - **Execution locus per wave** — WHERE each wave runs (table below). FIRST field: it decides whose
@@ -87,7 +87,7 @@ absorbs the work**.
 
 | Locus | Mechanism | Whose context pays | Use when |
 |---|---|---|---|
-| **S · dispatched session** (DEFAULT) | `handoff-fire.sh --prompt-file <brief> --worktree <br> --notify-back <lead-uuid> --goal '<measurable end state> — proven by <the command the session runs and prints>; do not <constraint>'`, lead arms `cc-await-ping` in background | the CHILD's — the lead pays only for the brief it wrote and a one-line completion ping | **every implementation wave.** Needs no justification. |
+| **S · dispatched session** (DEFAULT) | `handoff-fire.sh --prompt-file <brief> --worktree <br> --notify-back <lead-uuid> --goal '<measurable end state> — proven by <the command the session runs and prints>; do not <constraint>'`, lead arms `cc-await-ping` in background only when no `/goal` is live in its pane (`hooks/validate-bash.sh` denies the park otherwise) | the CHILD's — the lead pays only for the brief it wrote and a one-line completion ping | **every implementation wave.** Needs no justification. |
 | **T · teammates** | `Agent({name, …})` in-session | the LEAD's — every teammate report, shutdown exchange, and the whole merge loop land in the lead's window | members must be synthesised against each other *immediately* AND their combined output is small |
 | **L · lead-inline** | the lead edits the files itself | the LEAD's, in full | the wave is ONE file's control flow and is genuinely unsplittable (precedent: `docs/plans/SESSION_LIFECYCLE_V2.md` — *"lead-only, no teammates … disjoint file ownership is unconstructible here"*) |
 

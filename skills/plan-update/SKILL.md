@@ -297,7 +297,8 @@ this line pointed at `memory/PHASE_0_TEMPLATE.md`, which has never existed on th
 
 **S** = `handoff-fire.sh --prompt-file <brief> --worktree <br> --notify-back <lead-uuid> --goal '<measurable
 end state> — proven by <the command the session runs and prints>; do not <constraint>'`, lead arms
-`cc-await-ping <lead-uuid>` in the background. **T** = `Agent({name, …})`. **L** = lead edits inline.
+`cc-await-ping <lead-uuid>` in the background only when no `/goal` is live in its pane
+(`hooks/validate-bash.sh` denies the park otherwise). **T** = `Agent({name, …})`. **L** = lead edits inline.
 S is the DEFAULT for every implementation wave — see the `plan-conventions` skill for why, and
 `--goal` is part of the S recipe: the evaluator is tool-less and judges only what the session PRINTS.
 
@@ -365,8 +366,7 @@ ls -lh ~/.claude/agents/            # deep-research, deep-research-sonnet, front
 | Agent idle >15 min (has commits) | Nudge via SendMessage | During wave |
 | Agent idle >25 min (no commits) | Shutdown + respawn on fresh worktree | During wave |
 | TypeScript error blocks commit | Agent self-fixes (monitor iTerm2 pane) | During wave |
-| Context at 75%+ | Send "Pause, I'll /compact, then resume" | During wave |
-| Context at 90%+ | Shutdown + respawn | During wave |
+| Context at 75%+ | Have it commit, then shutdown + respawn on its branch (teammates do not survive `/compact`, GH #49593) | During wave |
 
 ### Context Budget
 
@@ -379,7 +379,7 @@ ls -lh ~/.claude/agents/            # deep-research, deep-research-sonnet, front
 | Per **T** wave | ~100–300K | every teammate report + shutdown exchange + merge loop |
 | Succession point | end of Wave [N] | `handoff-fire.sh --recycle` |
 
-**Per-agent**: 1M tokens total
+**Per-agent** (size the work, not the window: plan-conventions § Task size, 40–150K output per unit):
 
 | Phase | Budget | Notes |
 |-------|--------|-------|
@@ -387,7 +387,6 @@ ls -lh ~/.claude/agents/            # deep-research, deep-research-sonnet, front
 | Wave 1 (schema edits) | ~100–150K | Grep + read scoped sections |
 | Wave 2 (mutations) | ~100–150K | Full file context, careful typing |
 | Wave 3 (UI + build output) | ~80–120K | Components + typecheck |
-| **Free buffer** | **500K+** | Unlikely to hit context limit |
 
 ### Merge Loop Plan (Lead Only)
 
@@ -423,21 +422,11 @@ pnpm dev       # Verify app starts
 
 ### Cleanup After Completion
 
-Tear down every teammate FIRST, then the worktrees/branches. The teardown call is
-**runtime-conditional** — see `skills/agent-teams/SKILL.md` § "Runtime assumption":
-
-- **Stable (CC 2.1.114)** — the classic `TeamCreate`/`TeamDelete` tools exist: call `TeamDelete`.
-- **Eval track (CC 2.1.178+, implicit-team model)** — there is **no `TeamDelete` tool**. Send each
-  teammate a structured `shutdown_request` (`SendMessage`); plain-text broadcasts do NOT close panes
-  → orphaned panes + worktrees. Absence of `TeamDelete` means *use the implicit-team model*, never
-  "teams are unavailable".
-
-Detect the running runtime by tool availability (or `CLAUDE_CODE_EXECPATH`), **not** by
-`claude --version` — `claude` is a shell function, so its version answers *which launcher the
-name currently points at*, never *which binary this session is running*. (Since the 2026-07-31
-entrypoint consolidation it reports 2.1.219; before that it reported 2.1.114 even inside an
-eval-track session. Both readings are wrong for the same reason, so the rule is unchanged —
-only the wrong number moved. `claude-previous --version` is the 2.1.114 stable launcher.)
+Tear down every teammate FIRST, then the worktrees/branches: send each teammate a structured
+`shutdown_request` (`SendMessage`); plain-text broadcasts do NOT close panes, which leaves orphaned
+panes and worktrees. Only the held legacy 2.1.114 runtime has a `TeamDelete` tool; call it there.
+Its absence elsewhere means the implicit-team model, never "teams are unavailable". Detect which
+runtime you are on per `skills/agent-teams/SKILL.md` § "Runtime assumption", never by `claude --version`.
 
 ```bash
 # After every teammate has shut down (per the runtime-conditional call above) and the merge loop completes:

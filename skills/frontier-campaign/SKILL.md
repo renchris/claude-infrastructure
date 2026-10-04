@@ -50,13 +50,13 @@ One Fable architect session/spawn (counts against the spawn cap) produces
 
 - **Fable = architect/judge only** (`teammate_frontier` slots): phase specs,
   interface contracts, phase-gate reviews. Bounded, judgment-dense spawns.
-- **Per-teammate effort is set at worktree setup, not at spawn**: run
-  `~/.claude/scripts/set-teammate-effort.sh <worktree> high` (xhigh for the
-  capability-sensitive architect/judge members) BEFORE spawning — teammate
-  panes re-resolve their worktree's `.claude/settings.local.json`
-  (binary-verified 2.1.170; the lead's effort is not forwarded). Without the
-  override, panes resolve the user-settings floor (xhigh).
-- **Implementers = default tier** (Opus 5 teammates): worktree-isolated,
+- **Per-teammate effort = the lead's live effort**: from CC 2.1.220 the pane
+  builder passes `--effort <lead's level>` to every member, which outranks the
+  worktree file `set-teammate-effort.sh` writes. To run the architect/judge
+  members at xhigh and implementers at a lower rung, fire each wave's own
+  session at that rung (`handoff-fire.sh --effort <rung>`; rungs in
+  `effort_defaults.opus55_*`).
+- **Implementers = default tier**: worktree-isolated,
   ≤150-line briefs pointing at pre-greped SPEC SECTIONS (never "read the whole
   spec"), "stop on issue, message lead" verbatim, checkpoint per phase.
 - **Lead (Opus) orchestrates**: explicit ack between phases; monitors commit

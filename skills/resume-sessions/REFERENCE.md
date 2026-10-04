@@ -175,33 +175,14 @@ before that, which made Phase 4 inert on the terminal this fleet actually runs).
 
 ## 6. Router algorithm (now in `claude-accounts`; design→judge→5 adversarial verifiers, 0 failures)
 
-> **2026-07-10 promotion deltas** (scoring math unchanged): the Jul-7 constant is GONE — the
-> Fable deadline reads live from `~/.claude/model-config.yaml frontier_access.{active,end}`
-> (the hardcode silently killed all Fable routing when the operator extended the window);
-> `k` now counts ALL live claude processes per CLAUDE_CONFIG_DIR (argv[0]=claude match), not
-> just `--resume` ones (2 vs 14 observed) — KMAX raised 4→8 in `~/.claude/accounts.json`;
-> missing scoped-Fable limit = no entitlement (never "100% headroom"). Historical algorithm
-> below is otherwise accurate.
-
-Percents are 0..100 USED. Per account, from `.limits[]` + `.extra_usage`:
-
-- **General** (Opus, draws weekly_all only): `score = RBR × SF × KF × CF`
-  - `RBR = w_rem / T_week`; `w_rem = max(0, wTgt − weekly%/100)`, `wTgt = 0.98 if credits else 1.00`;
-    `T_week = max(hours_to_weekly_reset − 0.5, 0.25)`.
-  - `SF = clamp((0.85 − sess%/100)/(0.85 − 0.50), 0.05, 1)` (5-hour safety).
-  - `KF = clamp(1 − k/4, 0.10, 1)` (concurrency spread; `k` = live sessions on the account).
-  - `CF = credits ? (weekly<0.90 ? 1 : 0.5) : 1` (deprioritize $ spend).
-- **Fable** (draws BOTH the Fable sub-cap AND weekly_all): `score = (f_eff/H)·JB × SF × KF × CF`
-  - **coupling fix**: `f_eff = min(0.5·(1 − fable%/100), w_rem)` — 0.5 = fable_cap/weekly_cap; the naive
-    `min(fable_rem, weekly_rem)` overstates fresh-account Fable headroom up to 2×.
-  - `H = max(min(T_fable, H_jul7), 0.25)`; `H_jul7 = max(hours_to(2026-07-07) − 2, 0)`;
-    `JB = 1.25 if T_fable > H_jul7 else 1` (single-tranche accounts whose weekly resets AFTER Jul-7).
-- **Hard-exclude** an account if: `sess% ≥ 85` (5h cutoff; waive if 5h resets <0.25h) · `k ≥ 4`
-  (rate-limit spread) · general `w_rem ≤ 0.005` · fable `f_eff ≤ 0.02` · fable & `H_jul7 ≤ 0`
-  (window closed → no plan-feasible Fable; never auto-spend credits).
-- **concurrency `k`**: count `claude … --resume <sid>` processes per `CLAUDE_CONFIG_DIR`, **deduped by
-  `<sid>`** (expect wrapper + claude.exe are 2 processes / 1 session on different ptys — dedup by tty
-  FAILS; dedup by the --resume session-id).
+The live scoring, its constants (`ROUTER_KEYS`: `KMAX`, `S_CUT`, …; optional ones such as
+`KMAX_RESIDENT` in `ROUTER_OPTIONAL_RANGES`) and their validation are in `bin/claude-accounts`;
+read the code, not a copy. What holds across versions: percents are 0..100 USED; general work
+draws weekly_all only; Fable draws BOTH the Fable sub-cap and weekly_all, so Fable headroom is
+`min(0.5·(1 − fable%/100), weekly remaining)`, never `min(fable_rem, weekly_rem)`, which
+overstates a fresh account up to 2×; concurrency `k` counts live interactive claude processes per
+account by argv[0] (`concurrency()`), so an expect wrapper and its claude.exe are not counted
+twice; credits are never auto-spent.
 
 ---
 
@@ -213,10 +194,10 @@ Percents are 0..100 USED. Per account, from `.limits[]` + `.extra_usage`:
   score-tie break), not as a routing rule.
 - **Maximize exhaustion** of weekly-general AND weekly-Fable across all 4 before each reset (unused quota
   is DESTROYED at reset, not banked); minimize mid-task interruption (5h cutoff, rate-limit).
-- **Fable** (`claude-fable-5`) plan-inclusion end = **SSOT `frontier_access.end` in
-  `~/.claude/model-config.yaml`** (was 2026-07-07, operator-extended to 2026-07-14 on Jul-9 —
-  the reason no date is ever hardcoded again) → drive Fable usage hard before it
-  (credits-only after = unaffordable). Fable = a ~50% sub-cap of the shared weekly.
+- **Fable** (`frontier_access.model`, currently `claude-fable-5-1`) is a permanent plan inclusion
+  (`frontier_access.permanent: true` since 2026-07-20; `end` is a far-future sentinel) at a ~50%
+  sub-cap of the shared weekly. Read the model and any window from the SSOT
+  `~/.claude/model-config.yaml`, never a remembered date.
 - Sessions are account-locked to where their transcript lives; relocating = copy the jsonl to another
   config dir's `projects/` (image-cache paths are absolute so they still resolve) — fragile; default is
   resume in place.

@@ -1,6 +1,6 @@
 ---
 name: agent-browser
-description: "agent-browser CLI for browser automation: navigate, click, fill forms, take screenshots, test web apps and extract page data. The live browser tool; use it when BrowserMCP or other browser MCP tools are unavailable."
+description: "agent-browser CLI for browser automation: navigate, click, fill forms, take screenshots, test web apps and extract page data. The live, default browser tool."
 allowed-tools: Bash
 ---
 
@@ -119,7 +119,7 @@ agent-browser --cdp 9222 get url          # Get current URL
 **Use CDP mode when:**
 - Need access to logged-in sessions (cookies, auth state)
 - Automating Electron apps
-- BrowserMCP unavailable but need existing browser control
+- Need control of a browser that is already running
 
 ## Example: Login Flow
 

@@ -14,7 +14,7 @@ description: History of the retired BrowserMCP server plus the browser-automatio
 
 ## BrowserMCP (historical — server retired 2026-08-11)
 
-Use BrowserMCP (not Playwright) for browser automation:
+How the retired server was shaped — none of it is callable or installable now; do not re-add it:
 
 ```
 mcp__browsermcp__browser_navigate   - Navigate to URL
@@ -53,9 +53,9 @@ Workflow: `navigate` → `snapshot` → use `ref` from snapshot → `click`/`typ
 
 See [BrowserMCP Docs](https://docs.browsermcp.io/setup-server), [Issue #3426](https://github.com/anthropics/claude-code/issues/3426), [Issue #1611](https://github.com/anthropics/claude-code/issues/1611), [Issue #723](https://github.com/anthropics/claude-code/issues/723) for details.
 
-### agent-browser (CLI Fallback)
+## agent-browser (the live path)
 
-When BrowserMCP unavailable, use `agent-browser`:
+Use the `agent-browser` CLI:
 
 ```bash
 agent-browser open <url>                    # Navigate
@@ -69,7 +69,7 @@ For existing browsers via Chrome DevTools Protocol: `agent-browser --cdp 9222 sn
 
 **Troubleshooting**: `agent-browser install` (missing Chromium), `--headed` flag (debug), `--cdp 9222` (connect to running browser).
 
-### Vercel Agent Skills (Knowledge-Based)
+## Vercel Agent Skills (Knowledge-Based)
 
 Two auto-triggering knowledge skills from `vercel-labs/agent-skills`:
 

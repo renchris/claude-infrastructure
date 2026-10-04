@@ -3,7 +3,7 @@ name: coding-standards
 description: "House style for TypeScript, React/Next.js and Python (FastAPI, Pydantic v2, mypy strict, ruff): strictness, exports, Server Components, naming. Load when writing a new component, module or endpoint, or for a style review."
 ---
 
-## Code Style & Stack Conventions (relocated from global CLAUDE.md)
+# Code Style & Stack Conventions
 
 ## Primary Stack
 

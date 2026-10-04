@@ -194,10 +194,8 @@ a healthy weekly job as STALLED four days of every seven). BLIND exits 3, which 
 FAILING** on the fleet board — deliberately, with no `ok_exits` column to launder it.
 `install.sh` copies and bootstraps a manifest-`run` plist at every converge, so there is **no
 migration and no bespoke activation script**; `18-fleet-activate.sh` is the manifest's recovery arm.
-🚨 **Every file in this loop is NEW**, so nothing is live until `scripts/deploy-live.sh` converges —
-an added file has no symlink, is absent from the live tree, and every consumer guard on it is a
-SILENT skip. That is the `LIVE_ADDS` rung: a land that adds files is not live until the converger
-has run.
+A file newly added to this loop has no symlink, is absent from the live tree, and every consumer
+guard on it is a silent skip until `scripts/deploy-live.sh` converges (the `LIVE_ADDS` rung).
 
 ### 7b. THE BANG SOURCE (`--bang`, 2026-10-01)
 

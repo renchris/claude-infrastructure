@@ -51,8 +51,9 @@ as a rendered image with its title, both panels, axis ticks, legend and bar
 values all legible.
 
 - **Size is already right — do not "optimise" it.** The tool fetches
-  `?name=medium` (1200 px). `orig` is ~41 % more tokens for zero readable gain,
-  because the vision pipeline downscales to ~1568 px regardless.
+  `?name=medium` (1200 px). `orig` cost ~41 % more tokens and showed no readable
+  gain on the test chart; Claude Code clamps any image to 2000 px on its long
+  edge, so `orig` buys at most 1200 → 2000 px, which matters only for dense text.
 - **Never `sips -Z` an image before reading it.** On the test image that *grew*
   the file 3.5× (colormap → truecolour re-encode) for identical token cost.
 - **Read alt text first.** It is free and roughly 7× cheaper than a vision read

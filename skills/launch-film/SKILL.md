@@ -1,6 +1,6 @@
 ---
 name: launch-film
-description: "Make, re-work or audit a repo's launch film (a 15-60 s product film with sound, or a README hero loop) to the operator's accepted bar: startup-modern, studio-grade restraint, no purple-gradient 'AI slop', every string and sound real, rendered frame-by-frame from a web page and gated by a verify script. Use when asked for a launch video, brag film or hero film, when re-styling one that reads as 'classroom', 'template' or 'AI slop', or when carrying the Natural TTS film's quality to another repo (e.g. claude-infrastructure). Owns the taste, truth rules and gates; hyperframes, demo-recording and visual-direction own their own mechanics."
+description: "Make, re-work or audit a launch video, brag film or README hero loop, including one that reads as template or AI slop, to the operator's bar: studio-grade restraint, every string and sound real, verify-gated. Owns taste; hyperframes owns mechanics."
 ---
 
 # Launch film

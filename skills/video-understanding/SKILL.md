@@ -22,19 +22,22 @@ Two channels behave completely differently:
 - **Motion → anything** is where the work is, and where the naive approach fails
   silently.
 
-## The binding constraint: ~1568px
+## The binding constraint: ~2000px
 
-Any image you read is resampled to roughly **1568px on its long edge**. For an
-N-column contact sheet each tile arrives at about `1568 / N` px wide:
+Claude Code downscales any image you Read to at most **2000px on its long edge**
+before the model sees it. The model's own limit (2576px, at most 4784 visual tokens)
+sits above that and trims only near-square sheets, to about 1930px
+(`~/Development/claude-infrastructure/docs/research/cv-design-review-2026-08-26/agents/A9-capture-fidelity.md` §0a).
+For an N-column contact sheet each tile arrives at about `2000 / N` px wide:
 
 | Columns | Tile width | Legible |
 | --- | --- | --- |
-| 1 | 1568px | Everything — 12px UI text, source code |
-| 2 | 784px | Headings, most body text |
-| 4 | 392px | Composition and large text only |
-| 6+ | ≤261px | Shot type and colour. Text is gone. |
+| 1 | 2000px | Everything — 12px UI text, source code |
+| 2 | 1000px | Headings, most body text |
+| 4 | 500px | Composition and large text only |
+| 6+ | ≤333px | Shot type and colour. Text is gone. |
 
-Total visual information = `(image reads) × 1568²`. **You cannot have both full
+Total visual information = `(image reads) × 2000²`. **You cannot have both full
 temporal coverage and full spatial detail.** Every sampling decision is spending
 that budget.
 

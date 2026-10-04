@@ -5,11 +5,11 @@ description: Log an unknown-unknown (a "frontier hole") to FRONTIER_HOLES.md for
 
 # frontier-hole — park an unknown-unknown for the frontier window
 
-Routine work runs on the default tier (Opus 5 @ high — `lead_default` in
+Routine work runs on the default tier (`roles.lead_default` @ `effort_defaults.default` in
 `~/.claude/model-config.yaml`). When something *smells beyond that tier*, do NOT
 switch models, spawn frontier agents, or keep grinding inline — capture a
 structured hole in the project ledger and move on. `/frontier-run` spends the
-frontier window on the queue deliberately, in batch, where the 2× cost buys
+frontier window on the queue deliberately, in batch, where the frontier tier's higher quota draw (roughly 2-5× the default's) buys
 discovery instead of routine effort.
 
 ## Qualifying bar (ALL three — else it's a normal worklist item, not a hole)

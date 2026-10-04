@@ -102,7 +102,7 @@ This skill was renamed from `frontend-design` to `frontend-design-vue` because t
 ## When to delegate
 
 - `.vue` file writes — `vue-expert` Agent if the project's CLAUDE.md names it.
-- Visual verification after the redesign lands — `Explore` subagent with Playwright / BrowserMCP access.
+- Visual verification after the redesign lands — `Explore` subagent driving the `agent-browser` CLI.
 - A11y audit on a complex page — `vercel-design-guidelines` skill or a dedicated `Explore` pass.
 
 ## Default-AI signature avoidance check

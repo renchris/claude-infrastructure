@@ -6,7 +6,7 @@ description: >-
 
 # Research Subagent Fan-Out — Anti-Budgeting Discipline
 
-*Last revised: 2026-05-24 — V2 validation (Category C gate; depth caps split by task class; NF-1 diversity finding; R2/R3/E1 routing refinements). Forensic case studies, recursion-regression tracking, and validation evidence live in `~/.claude/memory/research-subagents-*.md` and are pointed-to where load-bearing.*
+*Forensic case studies, recursion-regression tracking, and validation evidence live in `~/.claude/memory/research-subagents-*.md` and are pointed-to where load-bearing.*
 
 **Scope**: Research subagents — `Agent` calls with no `team_name`, fire-and-forget,
 return-and-die, exploration/decomposition/discovery only. **Not** teammates or
@@ -310,15 +310,18 @@ polling well-defined.
 "Is the wave done?" is then `ls` over that set, and a stalled axis is named by
 set difference — never a judgment call over idle events.
 
-**Length**: 150-400 tokens (≈ 80-250 words). Briefs above 400 tokens suffer
-lost-in-middle exposure (TACL 2024 Liu et al. — middle-position instructions
-have 40-60% adherence vs 95% at primacy). Briefs below 150 tokens
-under-specify; subagent satisfices on the first axis it finds.
+**Length**: keep the brief's own content (fields 1-5 and the non-contract part of
+field 6) tight, roughly 80-250 words; below ~80 words a brief under-specifies and
+the subagent satisfices on the first axis it finds. The brief also carries the
+verbatim synthesis contract (§ Cost Asymmetry) and every rule the worker needs,
+because the research agents run with `omitClaudeMd: true` (§ Quota-Aware Wave
+Sizing), so a complete brief runs past 400 tokens by design. Spend extra length
+on context, never on restating the contract.
 
 **Serial-position discipline** (arxiv 2406.15981): last-position instructions
-have 2-4× adherence vs middle. The stop-line ("if you reach saturation
-before 30 tool calls, return early; if you can predict the next call's
-result, stop") MUST be the brief's final line.
+have 2-4× adherence vs middle. End the brief with field 7's delivery path,
+then the stop-line ("if you reach saturation before 30 tool calls, return
+early; if you can predict the next call's result, stop") as the final line.
 
 **Positive-framing constraint (mandatory)** — Semantic Gravity Wells
 (arxiv 2601.08070, n=40,000): negative instructions on rare actions
@@ -421,17 +424,11 @@ On the **model** axis it is pinned to `roles.research_worker` ONLY in-process/te
   Sonnet 5 @max 5-1 on judged pairs with 98.5% v 89.2% key recall and a third of the wrong
   claims, at roughly 1.5× the quota — quality-first pays that. The Sonnet record below is the
   retired 2026-07-01 free win, kept because it explains why max effort was load-bearing THERE.
-- *(Retired 2026-09-22.)* **Workflow bulk synthesis-worker free win (T2 effort grid, CERTIFIED 2026-07-01).** In a
-  Workflow, spawn breadth-first synthesis/inferential workers as
-  `agent(brief, {model: 'claude-sonnet-5', effort: 'max'})` — **NOT** Opus-4.8@max. Sonnet-5@max
-  ties Opus-4.8@max on quality across easy AND hard synthesis briefs (0 reliable Opus wins, blind
-  4-judge default-to-refute) at **~2-3× lighter quota-draw** — so it frees the scarce Opus headroom
-  for the decisive slots. HARD requirements: effort MUST be `max` (Sonnet@xhigh drops below the
-  floor — wrong-file citations on hard grounding), AND the brief MUST carry a saturation bound
-  (~15-25 tool calls; unbounded max-effort Sonnet overflowed context once). In-process `/research`
-  can't pin effort → those workers stay on `roles.research_worker` (the Workflow slot is
-  `roles.workflow_synthesis_worker`, both in `~/.claude/model-config.yaml`). The free win was
-  certified vs Opus 4.8 only; re-probed against Opus 5.5 on 2026-09-22, it lost on quality.
+- *(Retired 2026-09-22.)* The 2026-07-01 Sonnet-5@max synthesis free win tied Opus 4.8@max at
+  ~2-3× lighter quota draw, but only at effort `max` (at `xhigh` Sonnet fell below the floor with
+  wrong-file citations on hard grounding) and with a ~15-25 tool-call saturation bound (unbounded
+  max-effort Sonnet overflowed context once). Re-probed against Opus 5.5 on 2026-09-22, it lost on
+  quality. Record: `~/.claude/model-routing-freewin-probe.md` (T2, T9).
 - **Tier-mix down.** Route every genuinely-retrieval axis to `roles.research_retrieval`; reserve
   `roles.research_adversarial` for the sharp 10–15%; the inferential axes take
   `roles.workflow_synthesis_worker` in Workflows / `roles.research_worker` in-process.
@@ -525,9 +522,9 @@ investigations ≠ rounding error against $50 wave).
 **Synthesis contract** (mandatory in every research-subagent brief, inlined
 verbatim per brief):
 
-> "You have ~1M tokens of nominal context. Effective working ceiling is
-> ~400K before reasoning quality degrades (LongSWE-Bench, MRCR v2, Opus 4.6
-> self-degradation curve). Target 150-250K on exploration; hard cap 500K.
+> "Target 150-250K tokens of exploration; hard cap 500K, or ~150K on a
+> 200K-window model such as Haiku. Reasoning quality degrades long before
+> the context window fills.
 > Make tool calls until next-call falsifiability check fails — predict the
 > next call's result; if you can predict it AND wouldn't change your answer,
 > stop. Typically 20-40 tool calls for non-trivial questions. Run an
@@ -575,11 +572,13 @@ window is nominal, not effective — empirical measurements:
   synthesis — the typical `deep-research` (`roles.research_worker`) worker): **150K modal,
   256K ceiling, 30K floor.** 180K is the modal sweet spot — well below the
   256K reasoning cliff. Hard ceiling: 500K.
-- **Retrieval workers** (pure lookup + extraction, no inferential synthesis —
-  Explore Haiku, or rare retrieval-only Sonnet slot): **350-500K modal, up
-  to 1M for genuinely retrieval-only briefs**, with explicit caveat on
-  lost-in-middle (TACL 2024: 40-60% middle adherence even on retrieval).
-  Above 500K expect ~15-25% degradation on multi-needle retrieval per MRCR v2.
+- **Retrieval workers** (pure lookup + extraction, no inferential synthesis):
+  on the pinned retrieval model (`roles.research_retrieval`, `claude-haiku-4-5`)
+  the whole context window is **200K**, so budget **≤150K** and split a larger
+  source set across more workers. A retrieval-only brief that genuinely needs
+  more goes to a 1M-window model (`roles.research_worker`) at **350-500K modal**,
+  with the lost-in-middle caveat (TACL 2024: 40-60% middle adherence even on
+  retrieval); above 500K expect ~15-25% degradation on multi-needle retrieval per MRCR v2.
 
 > Depth-cliff evidence: LongSWE-Bench 29%→3% (32K→256K) is reasoning-specific; retrieval is robust (MRCR v2 Opus 4.6 76% at 1M; Gemini 2.5 Pro 91.5%→83.1% across 128K→1M). Full benchmarks: `~/.claude/memory/research-subagents-validation-log.md § V2 R2`.
 
@@ -614,9 +613,8 @@ their convergence"* — treat as synthesis (use lower cap). The previous "500–
   file:line lookup). That pin is what makes `roles.research_retrieval` bind.
 - `deep-research` (custom, frontier-tier — frontmatter `opus`; lead passes
   `model: "fable"` at call time during the access window): use for
-  multi-axis depth research. ⚠️ See § Recursion Regression — the `Agent`
-  tool declaration is currently NOT honored by stock Claude Code; the
-  subagent runs as flat (non-recursive) deep research.
+  multi-axis depth research. It runs flat: subagent spawning is capped at
+  depth 1 on purpose (§ Recursion Regression), so it never fans out on its own.
 - `workflow-lean`: custom, no CLAUDE.md/rules/memory, no Skill/Agent/MCP. Use for
   adversarial briefs (≤500 token verdict) and any other self-contained read-only brief.
 - `general-purpose`: built-in, all-tools. Use as the `deep-research` / `workflow-lean`
@@ -632,26 +630,16 @@ adversarial/judge/depth-coordination slots to it via the call-time Agent
 judge/synthesis slots via `agent(prompt, {agentType: 'workflow-lean', model: "fable"})`. Otherwise those
 slots use `frontier_access.fallback`.
 
-🚨 **This paragraph carried THREE dead conjuncts until 2026-09-04** — the same
-triple `436f3435` cut out of `commands/research.md`, and the reason this text
-now names KEYS instead of facts. It asserted (a) a usage window
-"2026-06-09 → 2026-06-23" that died two windows before it was read
-(`frontier_access.permanent: true` since 2026-07-20 — there is no window and no
-"after the window"), (b) "ONLY on the claude-next eval track", a track launcher
-consolidation v2 DELETED, so the routing condition was unsatisfiable by any
-session, and (c) a fallback and model id that had both since moved. A doc that
-restates a perishable fact has no path to learn the fact changed. The shipped
-enforcer `hooks/frontier-spawn-gate.sh` checks `active` + `end` and reads no
-track at all; `frontier_access.tracks` is a stale label with no code consumer.
-Agent-definition frontmatter stays `model: opus` so the definitions remain
-valid on both tracks — the override is always call-time. Agent TEAMS run on
-both tracks too; teammate models are gated by the auto-mode allowlist in
-the SSOT, not by the track — default `versions.opus_latest`; `claude-fable-5` verified
-in auto mode 2026-06-09 and allowlisted, so eval-track teams may pin
-`roles.teammate_frontier` per-member where judgment density warrants
-the 2× cost. **Lead/default sessions do NOT ride the frontier tier**
-(`lead_default` reverted to Opus 4.8 on 2026-06-09 — Fable-by-default burned
-5-hour plan windows). Panel frontier work runs AGENT-INITIATED
+This text names SSOT keys rather than values because restated values went stale
+here three times (`436f3435`: a dead usage window, a deleted `claude-next` track,
+a moved fallback and model id). The shipped enforcer `hooks/frontier-spawn-gate.sh`
+checks `frontier_access.active` + `end` and reads no track. Agent-definition
+frontmatter stays `model: opus`; the frontier override is always call-time.
+Teammate models are gated by `auto_mode_allowlist` in the SSOT (default
+`versions.opus_latest`); teams may pin `roles.teammate_frontier` per member where
+judgment density warrants Fable's higher quota draw. **Lead/default sessions do NOT
+ride the frontier tier** (`roles.lead_default` moves with `versions.opus_latest`;
+Fable-by-default burned 5-hour plan windows on 2026-06-09). Panel frontier work runs AGENT-INITIATED
 under the bounded-autonomy policy (global CLAUDE.md § Frontier Tier Routing +
 SSOT `frontier_discovery_budget`, hook-enforced cap): `/frontier-run` over the
 per-project `docs/research/FRONTIER_HOLES.md` ledger — blocking walls escalate
@@ -704,17 +692,17 @@ for the worker slot (quality-first — see override). Escalate to the frontier
 **Failure-mode signal (automatic re-spawn triggers)** — two distinct signals
 trigger automatic re-routing:
 
-1. **Sonnet worker return <3K on non-trivial question** → lead inspects at
+1. **Worker return <3K on a non-trivial question** → lead inspects at
    synthesis time; if not a satisficing-failure (worker did try) → re-spawn
-   on Opus OR re-decompose into smaller independent axes.
-2. **Sonnet worker's predict-next-call falsifiability check fails on an
+   on the frontier (`versions.frontier_latest`) OR re-decompose into smaller
+   independent axes.
+2. **Worker's predict-next-call falsifiability check fails on an
    inferential gap** (worker explicitly flags: *"I couldn't determine X
-   without multi-hop inference Y"*) → **automatic re-spawn on Opus**, no
-   re-decomposition first. The inferential gap is itself the signal that the
-   sub-question required multi-hop reasoning Sonnet couldn't complete;
-   further decomposition doesn't help.
+   without multi-hop inference Y"*) → **automatic re-spawn on the frontier**,
+   no re-decomposition first. The gap itself shows the sub-question needs
+   multi-hop reasoning; further decomposition doesn't help.
 
-Pure Opus for a typical wave overpays ~47%; pure Sonnet underperforms on adversarial briefs; pure Explore misses synthesis. The mix wins on $/insight when ≥20% of sub-questions are pure retrieval — almost always true for codebase-adjacent research. Full V2 R3 routing rationale: `~/.claude/memory/research-subagents-validation-log.md § V2 R3`.
+*(Historical cost-first rationale, superseded for worker selection by the override above:)* Pure Opus for a typical wave overpays ~47%; pure Sonnet underperforms on adversarial briefs; pure Explore misses synthesis. The mix wins on $/insight when ≥20% of sub-questions are pure retrieval — almost always true for codebase-adjacent research. Full V2 R3 routing rationale: `~/.claude/memory/research-subagents-validation-log.md § V2 R3`.
 
 **Highly-canonical retrieval exception**: for retrieval briefs targeting specific line ranges of *highly-canonical* sources (Anthropic cookbook, published research papers with file:line citations, vendor docs at named anchors), route to `deep-research` (`roles.research_worker`), NOT `Explore`. Haiku's retrieval lacks the reasoning to disambiguate version-drift / line-shift in canonical sources. The 25% Explore allocation contracts to ~20% when canonical retrieval briefs surface; the freed slot goes to the `roles.research_worker` slot. Full V2 E1 derivation: `~/.claude/memory/research-subagents-validation-log.md § V2 E1`.
 
@@ -957,9 +945,7 @@ less. The framing is the trigger; the actual question space is what counts.
 
 ## Recursion Regression
 
-> Recursion status (May 2026 — SUPERSEDED on CC 2.1.183; see Update below): depth-2 fan-out NOT operational in stock Claude Code. The `Agent` tool is not exposed to subagents regardless of frontmatter declaration (GH #46424 primary blocker; also #4182, #19077, #31977, #30703). Default to depth-1 flat fan-out and re-spawn from lead context when sub-axes emerge. Workarounds + re-evaluation trigger: `~/.claude/memory/research-subagents-recursion-regression.md`.
->
-> **Update 2026-06-19 — RESOLVED on CC 2.1.183 (claude-next), empirically verified.** A controlled headless probe against the 2.1.183 binary (`--safe-mode --permission-mode auto`, Opus parent) returned `{"fanout4_completed": true, "depth2_DEPTH2OK": true}`: a worker subagent spawned its own leaf sub-subagent via the `Agent` tool and relayed the result up (depth-2 works → #46424 cleared), and four parallel workers under an Opus parent all completed with no session termination (→ GH #61258 does not reproduce on 2.1.183). So on the **2.1.183 runtime** hierarchical fan-out (lead → mid-tier synthesizers → leaf workers — the § Synthesis Bottleneck N>50 pattern) is available; prefer it over re-spawn-from-lead when sub-axes emerge. **Scope:** verified depth-2 (the operationally relevant tier; the 2.1.172 changelog claims up to 5, untested past 2). The **stable track (2.1.114, reached as `claude-previous` since the 2026-07-31 entrypoint consolidation renamed it off `claude`) keeps the old non-recursive behavior** — hold depth-1 discipline there. Probe provenance: claude-next 2.1.170→2.1.183 upgrade session, 2026-06-19.
+> **Depth is 1 on purpose.** `~/.zshrc` exports `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1`, so a subagent cannot spawn its own (global CLAUDE.md § Research subagents). Since 2.1.224 removed the per-session spawn cap, depth is the only runaway bound (GH #68619), so keep it. Fan out flat from the lead and re-spawn emerging sub-axes from the lead; the § Synthesis Bottleneck mid-tier synthesizers are `workflow-lean` workers spawned by the lead or the Workflow that read leaf artifacts from disk, never parents of leaves. The product itself can nest (a 2026-06-19 headless probe on 2.1.183 returned `depth2_DEPTH2OK: true`), so the cap is ours, not an upstream gap. Full record: `~/.claude/agents/deep-research.md` § Permission to Recurse; May-2026 history: `~/.claude/memory/research-subagents-recursion-regression.md`.
 
 ## Relationship to Other Rules
 
