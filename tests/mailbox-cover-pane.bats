@@ -22,6 +22,9 @@ setup() {
   mkdir -p "$HOME/.claude/bin"
   export CC_MAILBOX_DIR="$BATS_TEST_TMPDIR/mbox"
   mkdir -p "$CC_MAILBOX_DIR"
+  # The kitty-start seal reads $KITTY_PID, inherited from the operator's kitty on a pane run. Pinned
+  # off: the kitty is UNKNOWN unless a SEAL test sets it.
+  unset KITTY_PID KITTY_LISTEN_ON KITTY_WINDOW_ID
 
   PANE="AAAAAAAA-1111-2222-3333-444444444444"
   SESS="11111111-aaaa-bbbb-cccc-000000000001"
@@ -127,4 +130,58 @@ sess_mail() { printf '2026-08-09T10:00:00-0700 [peer] %s\n' "$1" >> "$SESS_BOX";
   rm -f "$PANE_BOX"
   run drain prompt
   [ "$status" -eq 0 ]
+}
+
+# ── KITTY SEAL (2026-10-04): pane-box mail from before this kitty started is not ours ─────────────
+# The pane key is the kitty window id, renumbered on every kitty restart, so <pane>.md can hold mail
+# addressed to whoever had this window number in an EARLIER kitty (incident aee462b0: two Sep 11
+# lines folded into a session born Oct 4). The fold seals such lines instead of migrating them.
+# "This kitty" is the test process ($$), which started moments ago; the real ps path runs.
+# RED-proof: on the pre-fix drain the first test delivers both Sep 11 lines.
+other_then_me() { # a predecessor held the window in an earlier kitty; I hold it now
+  printf '2026-09-11T09:24:14-0500 %s\n%s %s\n' "99999999-aaaa-bbbb-cccc-000000000009" \
+    "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$SESS" > "$CC_MAILBOX_DIR/.alias/$PANE"
+}
+
+@test "SEAL: pane lines from before this kitty are sealed, and fresh mail behind them still folds" {
+  other_then_me
+  printf '2026-09-11T10:35:38-0500 [cc-await-ping] old notice one\n2026-09-11T10:36:25-0500 [cc-await-ping] old notice two\n' > "$PANE_BOX"
+  pane_now="$(date '+%Y-%m-%dT%H:%M:%S%z')"
+  printf '%s [peer] fresh after birth\n' "$pane_now" >> "$PANE_BOX"
+  KITTY_PID=$$ run drain prompt
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'fresh after birth' || { echo "fresh mail lost: $output"; false; }
+  [ "$(printf '%s' "$output" | grep -c 'old notice')" = 0 ] || { echo "delivered pre-kitty mail: $output"; false; }
+  # exactly-once: all 3 consumed (2 sealed + 1 migrated); nothing deleted; the seal is logged
+  [ "$(cat "$CC_MAILBOX_DIR/$PANE.acked")" = 3 ]
+  [ "$(grep -c '' "$PANE_BOX")" = 3 ]
+  grep -q "sealed 2 line(s) 1..2 of $PANE" "$CC_MAILBOX_DIR/$PANE.sealed" || false
+  [ "$(grep -c 'old notice' "$SESS_BOX")" = 0 ]
+}
+
+@test "SEAL CONTROL: the same box with the kitty UNKNOWN folds everything, as before" {
+  other_then_me
+  printf '2026-09-11T10:35:38-0500 [cc-await-ping] old notice one\n' > "$PANE_BOX"
+  run drain prompt
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'old notice one' || false
+  [ ! -f "$CC_MAILBOX_DIR/$PANE.sealed" ]
+}
+
+@test "SEAL never touches the session's OWN box: old session-keyed mail is still delivered" {
+  other_then_me
+  sess_mail "addressed to me by session id"          # stamped 2026-08-09, long before $$ started
+  KITTY_PID=$$ run drain prompt
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'addressed to me by session id' || false
+}
+
+@test "SEAL keeps pane mail from MY OWN earlier occupancy (resumed into the same number after a kitty restart)" {
+  # setup's trail: this session held the window since 2026-08-09, so a 2026-08-09 pane line was
+  # addressed to it even though it predates this kitty.
+  pane_mail "sent while I held this window before the restart"
+  KITTY_PID=$$ run drain prompt
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'sent while I held this window before the restart' || false
+  [ ! -f "$CC_MAILBOX_DIR/$PANE.sealed" ]
 }

@@ -816,6 +816,150 @@ mailbox_alias_trail() { # <pane>
   awk '{print $2}' "$(_mbx_alias_file "$pane")" 2>/dev/null | awk 'NF' | awk '!seen[$0]++' | sed '1!G;h;$!d'
 }
 
+# ── KITTY EPOCH: a window number names a seat in ONE kitty process, never across restarts ───────────
+# INCIDENT 2026-10-04. scripts/kitty-setup.sh exports ITERM_SESSION_ID="w0t0p0:$KITTY_WINDOW_ID", so
+# the pane key IS the kitty window id, and kitty renumbers windows from 1 on every restart. Key 236
+# had held 7 unrelated sessions since Aug 2; a fresh session in it adopted a Sep 11 predecessor's box
+# and folded the Sep 11 pane box, and its watcher woke on that same old mail. The trail's timestamps
+# already carry what separates the two cases: a session whose NEWEST trail line predates this kitty's
+# start cannot have held this window, because this window did not exist yet. The kitty pid alone
+# cannot say that (pids repeat after a reboot); its START TIME can.
+#
+# Origin of a mailbox line = the stamp of the innermost message. A raw line is
+# "<ISO> [<from>] <msg>"; mailbox_migrate prefixes "<ISO> [forwarded:<8>] ", possibly more than once,
+# and that outer stamp is the MIGRATION time, which is why it is stripped. Parsed in awk (BSD awk has
+# no mktime): days-from-civil plus the %z offset. An unparseable line yields -1, and every caller
+# treats -1 as "new" — the fail direction is today's behaviour, never a drop.
+# shellcheck disable=SC2016  # the $-fields belong to awk
+_MBX_AWK_ORIGIN='
+function _mbx_ep(s,   y, mo, d, H, M, S, sg, oh, om, era, yoe, doy, doe) {
+  if (s !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]/) return -1
+  y = substr(s, 1, 4) + 0; mo = substr(s, 6, 2) + 0; d = substr(s, 9, 2) + 0
+  H = substr(s, 12, 2) + 0; M = substr(s, 15, 2) + 0; S = substr(s, 18, 2) + 0
+  s = substr(s, 20); sg = 0; oh = 0; om = 0
+  if (s ~ /^Z/) sg = 1
+  else if (s ~ /^[+-][0-9][0-9]:?[0-9][0-9]/) {
+    sg = (substr(s, 1, 1) == "-") ? -1 : 1; oh = substr(s, 2, 2) + 0
+    om = (substr(s, 4, 1) == ":") ? substr(s, 5, 2) + 0 : substr(s, 4, 2) + 0
+  }
+  if (sg == 0) return -1
+  if (mo <= 2) y = y - 1
+  era = int(y / 400); yoe = y - era * 400
+  doy = int((153 * (mo + (mo > 2 ? -3 : 9)) + 2) / 5) + d - 1
+  doe = yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy
+  return (era * 146097 + doe - 719468) * 86400 + H * 3600 + M * 60 + S - sg * (oh * 3600 + om * 60)
+}
+function _mbx_origin(l) {
+  while (l ~ /^[^ ]+ \[forwarded:[^]]*\] /) sub(/^[^ ]+ \[forwarded:[^]]*\] /, "", l)
+  return _mbx_ep(l)
+}
+'
+
+# `ps -o lstart` text in the TZ=UTC LC_ALL=C dialect (hooks/session-register.sh) → epoch seconds.
+_mbx_lstart_epoch() { # <lstart> → epoch; rc 1 = unparseable
+  local s v
+  s="$(printf '%s' "${1:-}" | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  [ -n "$s" ] || return 1
+  v="$(TZ=UTC LC_ALL=C date -j -f '%a %b %d %T %Y' "$s" +%s 2>/dev/null \
+       || TZ=UTC LC_ALL=C date -u -d "$s" +%s 2>/dev/null)"
+  case "$v" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "$v"
+}
+
+# Start time of the kitty process this session lives in, in epoch seconds. $KITTY_PID first; when the
+# environment was stripped (a daemon-backgrounded session), the registry row that names <session>
+# and carries the kitty_pid hooks/session-register.sh recorded. Empty + rc 1 = unknown, and unknown
+# means NO gate: iTerm, headless and anything unprovable keep today's behaviour exactly.
+mailbox_kitty_start_s() { # [session] → epoch seconds
+  local sid="${1:-}" kp="${KITTY_PID:-}" f
+  case "$kp" in ''|*[!0-9]*) kp="" ;; esac
+  if [ -z "$kp" ] && [ -n "$sid" ]; then
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      sed -n 's/.*"session_id":[[:space:]]*"\([^"]*\)".*/\1/p' "$f" 2>/dev/null | grep -qxF -- "$sid" || continue
+      kp="$(sed -n 's/.*"kitty_pid":[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$f" 2>/dev/null)"
+      case "$kp" in ''|*[!0-9]*) kp="" ;; *) break ;; esac
+    done < <(grep -lF -- "$sid" "${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"/*.json 2>/dev/null)
+  fi
+  [ -n "$kp" ] || return 1
+  _mbx_lstart_epoch "$(TZ=UTC LC_ALL=C ps -o lstart= -p "$kp" 2>/dev/null)"
+}
+
+# Sessions on <pane> whose NEWEST trail line is at/after <epoch_s>, newest first. NEWEST, not oldest:
+# a session that held the pane, left, and came back has its latest occupancy on the latest line,
+# and mailbox_alias_trail's dedup keeps the OLDEST line, which would wrongly date it to its first
+# stay. An unparseable stamp counts as recent (the fail direction is today's adoption).
+mailbox_alias_trail_since() { # <pane> <epoch_s>
+  local pane="${1:-}" ep="${2:-}"
+  _mbx_valid_uuid "$pane" || return 1
+  case "$ep" in ''|*[!0-9]*) mailbox_alias_trail "$pane"; return $? ;; esac
+  awk -v ep="$ep" "$_MBX_AWK_ORIGIN"'
+    NF >= 2 { n++; s[n] = $2; t[$2] = _mbx_ep($1); last[$2] = n }
+    END { for (i = n; i >= 1; i--) if (last[s[i]] == i && (t[s[i]] < 0 || t[s[i]] >= ep)) print s[i] }
+  ' "$(_mbx_alias_file "$pane")" 2>/dev/null
+}
+
+# Each line of <key>'s (from, EOF] window, tagged "P " when its ORIGIN predates <epoch_s> and "L "
+# otherwise (including unparseable). The pre-birth wake rule's one reader: bin/cc-await-ping decides
+# per line, bin/cc-wake counts. A non-numeric epoch tags everything "L " (no gate).
+mailbox_window_tagged() { # <key> <from> <epoch_s>
+  local f from ep="${3:-}"
+  f="$(mailbox_file "${1:-}")"; from="$(_mbx_int "${2:-0}")"
+  [ -f "$f" ] || return 0
+  case "$ep" in ''|*[!0-9]*) ep=-1 ;; esac
+  tail -n "+$(( from + 1 ))" "$f" 2>/dev/null | awk -v ep="$ep" "$_MBX_AWK_ORIGIN"'
+    { o = (ep >= 0) ? _mbx_origin($0) : -1; print ((o >= 0 && o < ep) ? "P " : "L ") $0 }'
+}
+
+# SEAL the pre-kitty head of a PANE box: advance its cursors over the contiguous run of unconsumed
+# lines whose origin predates <epoch_s>, so mailbox_migrate never carries them into a session that
+# was not alive to be their addressee. Nothing is deleted (the lines stay in <pane>.md, and each seal
+# is logged to <pane>.sealed), nothing is delivered twice (the cursor is the same exactly-once one
+# migrate uses). A line whose origin falls inside <self>'s own occupancy of this pane is NOT sealed:
+# a session resumed into the same window number after a kitty restart still gets its own pane mail.
+# Contiguous only, because a cursor is one integer: the first line that is new, unparseable or ours
+# ends the seal and everything from it on is migrated as today. Echoes the sealed count.
+# Callers: the PANE box only — never a session's own uuid box, never a .forward reroute.
+mailbox_seal_before() { # <pane> <epoch_s> [self-session]
+  local pane="${1:-}" ep="${2:-}" self="${3:-}" f a cur n cursor
+  _mbx_valid_uuid "$pane" || { echo 0; return 1; }
+  case "$ep" in ''|*[!0-9]*) echo 0; return 1 ;; esac
+  f="$(mailbox_file "$pane")"
+  [ -f "$f" ] || { echo 0; return 1; }
+  _mbx_lock "$pane" || true
+  a="$(mailbox_acked "$pane")"; cur="$(mailbox_lines "$pane")"
+  if [ "$cur" -le "$a" ]; then _mbx_unlock "$pane"; echo 0; return 1; fi
+  # Trail first (FNR==NR), then the window. occupant(t) = session of the newest trail line at/before t.
+  n="$( { cat "$(_mbx_alias_file "$pane")" 2>/dev/null; echo '--MBX-WINDOW--'; tail -n "+$(( a + 1 ))" "$f" 2>/dev/null | head -n "$(( cur - a ))"; } \
+      | awk -v ep="$ep" -v self="$self" "$_MBX_AWK_ORIGIN"'
+        !w && $0 == "--MBX-WINDOW--" { w = 1; next }
+        !w { if (NF >= 2) { k++; ts[k] = _mbx_ep($1); ss[k] = $2 } ; next }
+        {
+          o = _mbx_origin($0)
+          if (o < 0 || o >= ep) exit
+          occ = ""; for (i = 1; i <= k; i++) if (ts[i] >= 0 && ts[i] <= o) occ = ss[i]
+          if (self != "" && occ == self) exit
+          c++
+        }
+        END { print c + 0 }')"
+  n="$(_mbx_int "$n")"
+  if [ "$n" -gt 0 ]; then
+    cursor=$(( a + n ))
+    _mbx_write_int "$(_mbx_dir)/$pane.seen" "$cursor" || true
+    _mbx_write_int "$(_mbx_dir)/$pane.acked" "$cursor" || true
+    # The sealed lines go into the log VERBATIM (indented): advancing .acked makes the box fully
+    # consumed, and scripts/cc-gc.sh deletes a fully-consumed dead box after its horizon, so this log
+    # is the copy of undelivered mail that outlives it.
+    { printf '%s sealed %s line(s) %s..%s of %s: origin before kitty start %s, not delivered to %s\n' \
+        "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "$n" "$(( a + 1 ))" "$cursor" "$pane" "$ep" "${self:-?}"
+      tail -n "+$(( a + 1 ))" "$f" 2>/dev/null | head -n "$n" | sed 's/^/  /'
+    } >> "$(_mbx_dir)/$pane.sealed" 2>/dev/null || true
+  fi
+  _mbx_unlock "$pane"
+  echo "$n"
+  [ "$n" -gt 0 ]
+}
+
 # Is <session> the CURRENT occupant of any pane? This is the liveness PROXY that makes M4 safe
 # without a daemon and without row 4's (currently inert) beat oracle: a pane holds one session at a
 # time, so a session that is the tip of some pane's trail is being addressed as live RIGHT NOW.
@@ -829,10 +973,14 @@ mailbox_alias_trail() { # <pane>
 # 0.04 s median (n=5, 1,296 tips / 1,300 files), i.e. ~100×.
 #
 # The set is memoised for the life of the process. That is the CORRECT lifetime, not a shortcut: a
-# hook is short-lived, and the one write that could invalidate the set mid-run is our own session's
-# alias append — which cannot change any answer, because every caller already skips `q = self`.
-# A consistent snapshot is additionally SAFER than re-reading: it cannot half-see a concurrent
-# append and flip a liveness verdict between two candidates in the same scan.
+# hook is short-lived, and a consistent snapshot cannot half-see a concurrent append and flip a
+# liveness verdict between two candidates in the same scan.
+# CORRECTED (2026-10-04): this used to say our own alias append "cannot change any answer, because
+# every caller already skips `q = self`". FALSE. hooks/mailbox-drain.sh appends BEFORE the set loads,
+# and the append DEMOTES the pane's previous tip, so that predecessor turns from "current" into
+# "adoptable" in the same run. On a genuine succession that demotion is the point; on a kitty window
+# number reused across kitty restarts it made a session dead since Sep 11 adoptable by a stranger.
+# The tip set cannot tell those apart; the kitty-start gate in mailbox_adoptable_predecessors does.
 _MBX_TIPSET=
 _MBX_TIPSET_LOADED=
 _mbx_tipset_load() {
@@ -873,8 +1021,11 @@ $sess
 #
 # ORDER MATTERS: the trail is newest-first, so the bound keeps the MOST RECENT predecessors — the
 # ones whose mail is most likely to still matter — rather than an arbitrary N.
-mailbox_adoptable_predecessors() { # <pane> <self-session>
-  local pane="${1:-}" self="${2:-}" max="${CC_MBX_ALIAS_MAX_PRED:-3}" n=0 q
+#
+# KITTY GATE (2026-10-04): given <kitty_start_s>, only sessions whose NEWEST trail line is at/after
+# this kitty's start are candidates (mailbox_alias_trail_since). Empty = unknown = no gate.
+mailbox_adoptable_predecessors() { # <pane> <self-session> [kitty_start_s]
+  local pane="${1:-}" self="${2:-}" ep="${3:-}" max="${CC_MBX_ALIAS_MAX_PRED:-3}" n=0 q
   _mbx_valid_uuid "$pane" || return 1
   case "$max" in ''|*[!0-9]*) max=3 ;; esac
   while IFS= read -r q; do
@@ -886,7 +1037,7 @@ mailbox_adoptable_predecessors() { # <pane> <self-session>
     n=$(( n + 1 ))
     [ "$n" -ge "$max" ] && break
   done <<MBXPRED
-$(mailbox_alias_trail "$pane")
+$(mailbox_alias_trail_since "$pane" "$ep")
 MBXPRED
   return 0
 }

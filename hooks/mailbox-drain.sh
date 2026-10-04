@@ -210,9 +210,32 @@ fi
 # directory scan, no glob, no alias walk — those stay SessionStart-only below. Runs BEFORE the take so
 # the folded lines surface at this same boundary rather than the next one.
 # KILL SWITCH: CC_MBX_COVER_PANE=0 → SessionStart-only, i.e. today's behaviour verbatim.
+#
+# ── KITTY EPOCH (2026-10-04) — a reused window number is not a succession ─────────────────────────
+# kitty renumbers windows on restart and the pane key is the window id, so <pane>.md and the pane's
+# alias trail span every kitty that ever had a window with this number. Read this kitty's start once
+# per run (lazily: only when a pane box exists or at SessionStart) and use it twice: the fold below
+# SEALS pane-box lines whose origin predates it instead of migrating them, and M4 adopts only
+# predecessors seen in this kitty. Unknown (iTerm, headless, no kitty pid) ⇒ no gate, today's
+# behaviour. Kill switch: CC_MBX_KITTY_EPOCH=0. The lib functions are probed, not assumed (LIB SKEW).
+_kepoch="" _kepoch_read=0
+_kitty_epoch() {
+  [ "$_kepoch_read" = 1 ] && return 0
+  _kepoch_read=1
+  [ "${CC_MBX_KITTY_EPOCH:-1}" != 0 ] || return 0
+  command -v mailbox_kitty_start_s >/dev/null 2>&1 || return 0
+  _kepoch="$(mailbox_kitty_start_s "$own_sid" 2>/dev/null || true)"
+  case "$_kepoch" in *[!0-9]*) _kepoch="" ;; esac
+}
+_seal_own_pane() {
+  _kitty_epoch
+  [ -n "$_kepoch" ] && command -v mailbox_seal_before >/dev/null 2>&1 || return 0
+  mailbox_seal_before "$own_pane" "$_kepoch" "$own_sid" >/dev/null 2>&1 || true
+}
 _covered=0
 if [ "${CC_MBX_COVER_PANE:-1}" != 0 ] && [ "$own_pane" != "$own_uuid" ] \
    && [ -f "$_mdir/$own_pane.md" ] && command -v mailbox_migrate >/dev/null 2>&1; then
+  _seal_own_pane
   _covered="$(mailbox_migrate "$own_pane" "$own_uuid" 2>/dev/null || true)"
   case "$_covered" in ''|*[!0-9]*) _covered=0 ;; esac
 fi
@@ -304,6 +327,7 @@ if [ "$MODE" = "session-start" ] && command -v mailbox_migrate >/dev/null 2>&1; 
     # own-pane migrate when CC_MBX_COVER_PANE=0 (the fold's kill switch must degrade to today's
     # behaviour verbatim, not to no coverage at all).
     if [ "$own_pane" != "$own_uuid" ] && [ -f "$_mdir/$own_pane.md" ]; then
+      _seal_own_pane
       _n="$(mailbox_migrate "$own_pane" "$own_uuid" 2>/dev/null || true)"
       case "$_n" in ''|*[!0-9]*) _n=0 ;; esac
       _adopted=$(( _adopted + _n ))
@@ -314,7 +338,7 @@ if [ "$MODE" = "session-start" ] && command -v mailbox_migrate >/dev/null 2>&1; 
       case "$_n" in ''|*[!0-9]*) _n=0 ;; esac
       _adopted=$(( _adopted + _n ))
     done <<MBXADOPT
-$(mailbox_adoptable_predecessors "$own_pane" "$own_sid" 2>/dev/null || true)
+$(_kitty_epoch; mailbox_adoptable_predecessors "$own_pane" "$own_sid" "$_kepoch" 2>/dev/null || true)
 MBXADOPT
   fi
 

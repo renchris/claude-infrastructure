@@ -1422,6 +1422,58 @@ _line_wakes() {   # <line> → 0 iff this line should WAKE the session
   _class_in "$c" "$EXCEPT_CLASS" && return 1
   return 0
 }
+# ── PRE-BIRTH RULE (2026-10-04) — mail older than the session is delivered, never a WAKE ──────────
+# A kitty window number is reused across kitty restarts, and adoption/the pane fold can carry a line
+# written weeks before this session existed into its keys. The SessionStart drain already delivers
+# such a line; waking on it as well told a brand-new session "peer mail arrived while you were idle"
+# about a Sep 11 page (incident aee462b0). So a line whose ORIGIN stamp (the inner stamp of a
+# [forwarded:] line, not the migration stamp) predates the owner's birth is treated like our own
+# WAKE-PATH-DOWN line: it advances only the PRIVATE cursor, `.seen` is untouched, and the boundary
+# drain still delivers it. Birth = the owner's claude process start from its registry row (lstart,
+# else startedAt) once a row whose pid is alive names the owner; until then this kitty's start,
+# which no session in it can predate. Unknown ⇒ no rule. Kill switch: CC_AWAIT_PREBIRTH=0.
+_BIRTH="" _BIRTH_ROW=0 _BIRTH_KITTY=0
+_owner_birth() {   # sets _BIRTH (epoch seconds, or empty = unknown)
+  local rf="$REG_DIR/$CUR_UUID.json" f p s ls sa b want
+  [ "${CC_AWAIT_PREBIRTH:-1}" != 0 ] || { _BIRTH=""; return 0; }
+  [ "$_BIRTH_ROW" = 1 ] && return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  want="${SID:-}"
+  if [ ! -f "$rf" ]; then     # armed on a SESSION key: the row is filed under its pane
+    rf=""
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      [ "$(jq -r '.session_id // empty' "$f" 2>/dev/null)" = "$CUR_UUID" ] && { rf="$f"; want="$CUR_UUID"; break; }
+    done < <(grep -lF -- "$CUR_UUID" "$REG_DIR"/*.json 2>/dev/null)
+  fi
+  if [ -n "$rf" ] && [ -f "$rf" ]; then
+    p="$(jq -r '.pid // empty' "$rf" 2>/dev/null)"; s="$(jq -r '.session_id // empty' "$rf" 2>/dev/null)"
+    case "$p" in ''|*[!0-9]*) p="" ;; esac
+    if [ -n "$p" ] && kill -0 "$p" 2>/dev/null && { [ -z "$want" ] || [ "$s" = "$want" ]; }; then
+      ls="$(jq -r '.lstart // empty' "$rf" 2>/dev/null)"; b=""
+      command -v _mbx_lstart_epoch >/dev/null 2>&1 && b="$(_mbx_lstart_epoch "$ls" 2>/dev/null || true)"
+      if [ -z "$b" ]; then
+        sa="$(jq -r '.startedAt // empty' "$rf" 2>/dev/null)"
+        case "$sa" in ''|*[!0-9]*) ;; *) b=$(( sa / 1000 )) ;; esac
+      fi
+      if [ -n "$b" ]; then _BIRTH="$b"; _BIRTH_ROW=1; return 0; fi
+    fi
+  fi
+  if [ "$_BIRTH_KITTY" = 0 ]; then
+    _BIRTH_KITTY=1
+    command -v mailbox_kitty_start_s >/dev/null 2>&1 && _BIRTH="$(mailbox_kitty_start_s "$want" 2>/dev/null || true)"
+  fi
+  return 0
+}
+_window_lines() {   # <key> <from> → the window, each line tagged "P " (pre-birth) or "L "
+  if command -v mailbox_window_tagged >/dev/null 2>&1; then
+    mailbox_window_tagged "$1" "$2" "$_BIRTH"
+  else
+    local _f; _f="$(mailbox_file "$1" 2>/dev/null)" || return 0
+    [ -n "$_f" ] && [ -f "$_f" ] && tail -n "+$(( $2 + 1 ))" "$_f" 2>/dev/null | sed 's/^/L /'
+  fi
+}
+
 _window_wakes() {   # <key> <from> → 0 iff the window holds >=1 line that WAKES us
   local _f _line
   # No filter ⇒ identical to _real_mail_after, so the unfiltered path keeps exactly one predicate.
@@ -1429,9 +1481,11 @@ _window_wakes() {   # <key> <from> → 0 iff the window holds >=1 line that WAKE
   _f="$(mailbox_file "$1" 2>/dev/null)" || return 0
   [ -n "$_f" ] && [ -f "$_f" ] || return 0
   while IFS= read -r _line || [ -n "$_line" ]; do
+    case "$_line" in "P "*) continue ;; esac          # older than this session: delivered, not a wake
+    _line="${_line#L }"
     _own_wake_down_line "$_line" && continue          # our own corpse notice is never a wake
     _line_wakes "$_line" && return 0
-  done < <(tail -n "+$(( $2 + 1 ))" "$_f" 2>/dev/null)
+  done < <(_window_lines "$1" "$2")
   return 1
 }
 
@@ -1440,9 +1494,10 @@ _real_mail_after() {   # <key> <from> → 0 iff the window holds >=1 line that i
   _f="$(mailbox_file "$1" 2>/dev/null)" || return 0
   [ -n "$_f" ] && [ -f "$_f" ] || return 0
   while IFS= read -r _line || [ -n "$_line" ]; do
-    _own_wake_down_line "$_line" || return 0
+    case "$_line" in "P "*) _n=$(( _n + 1 )); continue ;; esac
+    _own_wake_down_line "${_line#L }" || return 0
     _n=$(( _n + 1 ))
-  done < <(tail -n "+$(( $2 + 1 ))" "$_f" 2>/dev/null)
+  done < <(_window_lines "$1" "$2")
   [ "$_n" -gt 0 ] && return 1
   return 0
 }
@@ -1471,6 +1526,7 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
     # the drain reads the SESSION box (lib → mailbox_keyset), so checking one key is how a watcher
     # ends up deaf to a delivery sitting one filename away.
     _HIT=""; _FROM=0
+    _owner_birth
     for _k in $(_keys); do
       # Seed this key's PRIVATE cursor from .seen the first time we see it — that is the F6a
       # behaviour (already-pending mail fires at once) and it is the ONLY time .seen is consulted.
@@ -1495,7 +1551,7 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
           fi
         else
           _woke_set "$_k" "$(mailbox_lines "$_k")"
-          echo "cc-await-ping: skipped $(( $(mailbox_lines "$_k") - _w )) WAKE-PATH-DOWN control line(s) of our own on [$_k] — not a ping, still watching (they stay unseen for the boundary drain)" >&2
+          echo "cc-await-ping: skipped $(( $(mailbox_lines "$_k") - _w )) WAKE-PATH-DOWN control line(s) of our own, or mail older than this session's birth, on [$_k] — not a ping, still watching (they stay unseen for the boundary drain)" >&2
         fi
       fi
     done

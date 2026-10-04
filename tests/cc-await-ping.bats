@@ -18,6 +18,12 @@ setup() {
   # here rather than per-test so no future test can read the operator's live beats by omission.
   export CC_BEAT_DIR="$BATS_TEST_TMPDIR/beats"
   mkdir -p "$CC_BEAT_DIR"
+  # THE PRE-BIRTH RULE reads the owner's birth from its registry row, else this kitty's start via
+  # $KITTY_PID. Both are pinned: an empty fixtured registry (tests that need a row write one here)
+  # and no inherited kitty, so a fixture line's fixed past stamp is not silently "older than birth".
+  export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg"
+  mkdir -p "$CC_REGISTRY_DIR"
+  unset KITTY_PID KITTY_LISTEN_ON KITTY_WINDOW_ID
   UUID="AAAAAAAA-1111-2222-3333-444444444444"
   MB="$CC_MAILBOX_DIR/$UUID.md"
   SID="sidGOAL"
@@ -2149,4 +2155,58 @@ PINGLINE='2026-09-07T10:00:01-0500 [peer] HANDOFF-PING fire-x: landed'
   run bash -c '. "'"$REPO"'/hooks/lib/mailbox-pending.sh"; mailbox_peek_from "'"$UUID"'" 1'
   [ "$status" -eq 1 ]
   [ -z "$output" ]
+}
+
+# ── PRE-BIRTH RULE (2026-10-04): mail older than the session is delivered, never a wake ──────────
+# Incident: fresh session aee462b0's SessionStart watcher fired "peer mail arrived while you were
+# idle" on Sep 11 mail its own drain had just adopted. The owner here is the test process ($$): its
+# registry row carries its real `ps -o lstart`, so "born" means moments ago and nothing is stubbed.
+# RED-proof: on the pre-fix watcher the REPLAY test exits 0 with verdict=ping at once (F6a fires on
+# the already-pending adopted lines); the CONTROL arm shows the same fixture still does with the
+# rule switched off.
+birth_row() {   # a live owner row for $UUID whose lstart is when $$ started
+  jq -n --arg u "$UUID" --argjson pid "$$" \
+    --arg ls "$(TZ=UTC LC_ALL=C ps -o lstart= -p "$$" | tr -s ' ' | sed 's/^ *//;s/ *$//')" \
+    '{paneUUID:$u,name:"owner",pid:$pid,startedAt:1,session_id:"sidOWNER",lstart:$ls}' \
+    > "$CC_REGISTRY_DIR/$UUID.json"
+}
+replay_box() {  # the first 3 lines aee462b0's box held after the pre-fix drain, verbatim
+  cp "$REPO/tests/fixtures/mailbox-kitty-epoch-2026-10-04/aee462b0-session-box-after-prefix-drain.md" "$MB"
+}
+
+@test "PRE-BIRTH REPLAY 2026-10-04: adopted Sep 11 mail does not wake the new session" {
+  birth_row; replay_box
+  run "$AWAIT" "$UUID" --interval 1 --timeout 3
+  [ "$status" -eq 2 ] || { echo "expected a full quiet term (exit 2), got $status: $output"; false; }
+  [[ "$output" != *"verdict=ping"* ]] || { echo "woke on mail older than the session: $output"; false; }
+  [[ "$output" == *"mail older than this session's birth"* ]] || { echo "the skip must be stated: $output"; false; }
+  # Delivery is the drain's: the shared cursor is untouched, so the lines stay pending for it.
+  [ ! -f "$CC_MAILBOX_DIR/$UUID.seen" ]
+}
+
+@test "PRE-BIRTH CONTROL: the same box with CC_AWAIT_PREBIRTH=0 wakes at once (the fixture can fire)" {
+  birth_row; replay_box
+  CC_AWAIT_PREBIRTH=0 run "$AWAIT" "$UUID" --interval 1 --timeout 3
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=ping"* ]] || false
+}
+
+@test "PRE-BIRTH positive: fresh mail after birth still wakes, and the held old lines print with it" {
+  birth_row; replay_box
+  ( sleep 2; printf '%s [peer] HANDOFF-PING fresh: done\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" >> "$MB" ) &
+  local w=$!
+  run "$AWAIT" "$UUID" --interval 1 --timeout 15
+  wait "$w" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"HANDOFF-PING fresh: done"* ]] || false
+  [[ "$output" == *"post-land RED"* ]] || false        # deferred into the real wake, never dropped
+}
+
+@test "PRE-BIRTH: with no registry row yet, this kitty's start is the floor" {
+  # The SessionStart arm can poll before hooks/session-register.sh writes the owner's row; the
+  # incident's watcher did. No session in this kitty predates the kitty, so its start is a safe floor.
+  printf '2026-09-11T13:47:12-0500 [claude] post-land RED from an earlier kitty\n' > "$MB"
+  KITTY_PID=$$ run "$AWAIT" "$UUID" --interval 1 --timeout 3
+  [ "$status" -eq 2 ]
+  [[ "$output" != *"verdict=ping"* ]] || false
 }

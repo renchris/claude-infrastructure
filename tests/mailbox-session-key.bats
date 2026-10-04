@@ -15,6 +15,9 @@ setup() {
   export HOME="$BATS_TEST_TMPDIR/home"          # ← hermeticity: fixtured $HOME
   export CC_MAILBOX_DIR="$HOME/.claude/mailbox"
   mkdir -p "$CC_MAILBOX_DIR"
+  # The kitty-start gate reads $KITTY_PID, and a run from a kitty pane inherits the operator's. Pinned
+  # off so every test starts with the kitty UNKNOWN (no gate); the KITTY GATE tests set it themselves.
+  unset KITTY_PID KITTY_LISTEN_ON KITTY_WINDOW_ID
   # shellcheck disable=SC1091
   . "$REPO/hooks/lib/mailbox-pending.sh"
   PANE_A="AAAAAAAA-1111-2222-3333-444444444444"
@@ -324,4 +327,120 @@ write_row() { # <pane> <pid>
   kill "$live" 2>/dev/null || true; wait "$live" 2>/dev/null || true
   [ "$status" -eq 0 ]
   [ "$(mailbox_alias_of "$PANE_A")" = "$SESS_2" ]
+}
+
+# ── KITTY GATE (2026-10-04): a kitty window number reused across kitty restarts is not a succession ──
+# Incident: fresh session aee462b0 in kitty window 236 (kitty started Oct 1) adopted b6b0ac64, which
+# held window 236 in an EARLIER kitty and closed on Sep 11. "This kitty" is stood in for by the test
+# process itself ($$): it started moments ago, so a trail line stamped now is inside it and a Sep 11
+# line is not. The real `ps -o lstart` path runs; nothing about the clock is stubbed.
+# RED-proof: on the pre-fix lib the REPLAY test below adopts b6b0ac64 and folds the two Sep 11 pane
+# lines into the session box (3 [forwarded:] lines), exactly the incident; the CONTROL arm shows the
+# fixture still does that whenever the kitty is unknown.
+kitty_epoch() { KITTY_PID=$$ mailbox_kitty_start_s; }
+trail_line() { # <pane> <iso-stamp> <session> — a trail line from a given time
+  mkdir -p "$CC_MAILBOX_DIR/.alias"
+  printf '%s %s\n' "$2" "$3" >> "$CC_MAILBOX_DIR/.alias/$1"
+}
+
+@test "KITTY GATE: a predecessor last seen BEFORE this kitty started is not adopted" {
+  local ep; ep="$(kitty_epoch)"
+  [ -n "$ep" ] || { echo "no kitty start epoch — every assertion below would be vacuous"; false; }
+  trail_line "$PANE_A" 2026-09-11T09:24:14-0500 "$SESS_1"
+  mailbox_alias_write "$PANE_A" "$SESS_2"
+  run mailbox_adoptable_predecessors "$PANE_A" "$SESS_2" "$ep"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ] || { echo "adopted a session from an earlier kitty: $output"; false; }
+  # CONTROL: the same trail with the kitty UNKNOWN adopts, as it did before the gate.
+  run mailbox_adoptable_predecessors "$PANE_A" "$SESS_2" ""
+  [ "$output" = "$SESS_1" ]
+}
+
+@test "KITTY GATE positive: a same-kitty crash relaunch still adopts its predecessor" {
+  local ep; ep="$(kitty_epoch)"
+  [ -n "$ep" ] || false
+  mailbox_alias_write "$PANE_A" "$SESS_1"      # crashed in THIS kitty
+  mailbox_alias_write "$PANE_A" "$SESS_2"      # relaunched into the same window
+  run mailbox_adoptable_predecessors "$PANE_A" "$SESS_2" "$ep"
+  [ "$output" = "$SESS_1" ]
+}
+
+@test "KITTY GATE positive: recycle N→N+1→N+2 in one kitty adopts both, and drops only the earlier kitty's" {
+  local ep; ep="$(kitty_epoch)"
+  [ -n "$ep" ] || false
+  trail_line "$PANE_A" 2026-08-02T18:14:22-0700 "44444444-AAAA-BBBB-CCCC-000000000004"   # earlier kitty
+  mailbox_alias_write "$PANE_A" "$SESS_1"
+  mailbox_alias_write "$PANE_A" "$SESS_2"
+  mailbox_alias_write "$PANE_A" "$SESS_3"
+  run mailbox_adoptable_predecessors "$PANE_A" "$SESS_3" "$ep"
+  [ "$output" = "$SESS_2
+$SESS_1" ]
+}
+
+@test "KITTY GATE: a session's NEWEST trail line dates it, not its first stay" {
+  # mailbox_alias_trail keeps each session's OLDEST line. A session that held the pane in an earlier
+  # kitty and came back in this one would be dated to its first stay and wrongly refused.
+  local ep; ep="$(kitty_epoch)"
+  [ -n "$ep" ] || false
+  trail_line "$PANE_A" 2026-09-11T09:24:14-0500 "$SESS_1"
+  mailbox_alias_write "$PANE_A" "$SESS_2"
+  mailbox_alias_write "$PANE_A" "$SESS_1"      # back, in this kitty
+  mailbox_alias_write "$PANE_A" "$SESS_3"
+  run mailbox_adoptable_predecessors "$PANE_A" "$SESS_3" "$ep"
+  [ "$output" = "$SESS_1
+$SESS_2" ]
+}
+
+@test "KITTY GATE: with KITTY_PID stripped, the registry row naming my session supplies the kitty" {
+  local ep; ep="$(kitty_epoch)"
+  [ -n "$ep" ] || false
+  mkdir -p "$HOME/.claude/cc-registry"
+  printf '{"paneUUID":"%s","pid":1,"session_id":"%s","kitty_pid":%s}' "$PANE_A" "$SESS_2" "$$" \
+    > "$HOME/.claude/cc-registry/$PANE_A.json"
+  run mailbox_kitty_start_s "$SESS_2"
+  [ "$output" = "$ep" ]
+  # A row naming ANOTHER session is not mine to read.
+  run mailbox_kitty_start_s "$SESS_1"
+  [ "$status" -ne 0 ]
+  [ -z "$output" ]
+}
+
+# THE REAL 2026-10-04 STATE, replayed through the real drain hook. Fixture files are verbatim copies
+# of ~/.claude/mailbox/.alias/236 (the 6 lines before aee462b0 arrived), 236.md (the 2 Sep 11 lines
+# it held) and b6b0ac64's box.
+replay_fixture() {
+  RF="$REPO/tests/fixtures/mailbox-kitty-epoch-2026-10-04"
+  ME="aee462b0-ce17-4954-9a42-ac926a55e261"; OLD="b6b0ac64-5189-483f-ad49-f412df637e3e"
+  mkdir -p "$CC_MAILBOX_DIR/.alias"
+  cp "$RF/alias-236" "$CC_MAILBOX_DIR/.alias/236"
+  cp "$RF/pane-236.md" "$CC_MAILBOX_DIR/236.md"
+  cp "$RF/$OLD.md" "$CC_MAILBOX_DIR/$OLD.md"
+}
+replay_drain() { printf '{"session_id":"%s"}' "$ME" | CC_PANE_ID=236 "$REPO/hooks/mailbox-drain.sh" session-start; }
+
+@test "REPLAY 2026-10-04: a fresh session in reused kitty window 236 inherits nothing from Sep 11" {
+  replay_fixture
+  export KITTY_PID=$$
+  run replay_drain
+  [ "$status" -eq 0 ]
+  ! grep -qs 'forwarded:' "$CC_MAILBOX_DIR/$ME.md" \
+    || { echo "Sep 11 mail reached the new session's box:"; cat "$CC_MAILBOX_DIR/$ME.md"; false; }
+  [[ "$output" != *"post-land RED"* ]] || { echo "delivered b6b0ac64's Sep 11 page: $output"; false; }
+  [[ "$output" != *"WAKE-PATH-DOWN"* ]] || { echo "delivered the Sep 11 pane lines: $output"; false; }
+  # b6b0ac64's box is untouched: not adopted, cursor not advanced.
+  [ "$(mailbox_acked "$OLD")" = 0 ]
+  # The pane box's two lines are SEALED: consumed by cursor and logged, still on disk.
+  [ "$(mailbox_acked 236)" = 2 ]
+  [ "$(grep -c '' "$CC_MAILBOX_DIR/236.md")" = 2 ]
+  grep -q 'sealed 2 line(s) 1..2 of 236' "$CC_MAILBOX_DIR/236.sealed" || false
+}
+
+@test "REPLAY CONTROL: the same fixture with the kitty UNKNOWN still reproduces the incident" {
+  # Shows the fixture can fail: without a kitty epoch (iTerm, headless) behaviour is exactly the
+  # pre-fix one, and it is the incident's.
+  replay_fixture
+  run replay_drain
+  [ "$status" -eq 0 ]
+  grep -q "\[forwarded:b6b0ac64\] .*post-land RED" "$CC_MAILBOX_DIR/$ME.md" || false
+  [ "$(grep -c '\[forwarded:236\] 2026-09-11' "$CC_MAILBOX_DIR/$ME.md")" = 2 ]
 }

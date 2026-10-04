@@ -43,7 +43,10 @@ setup() {
     '{paneUUID:$p,name:"peer-77",session_id:$s,pid:$pid}' > "$CC_REGISTRY_DIR/$PANE.json"
   write_session idle
   jq -n --arg s "$SESS" --argjson pid "$TPID" '{sid:$s,pid:$pid,kind:"stop",t:1}' > "$CC_BEAT_DIR/$SESS.json"
-  printf '2026-10-03T11:47:41-0500 [tm2-plan-replan-10] SECRET-BODY-ONE\n2026-10-03T11:50:45-0500 [tm2-plan-replan-10] SECRET-BODY-TWO\n' \
+  # Stamped NOW, i.e. after the target process ($TPID) started: W4 does not count a line older than
+  # the session (the pre-birth rule), so a fixed past stamp would make every test here a no-mail one.
+  NOW="$(date '+%Y-%m-%dT%H:%M:%S%z')"
+  printf '%s [tm2-plan-replan-10] SECRET-BODY-ONE\n%s [tm2-plan-replan-10] SECRET-BODY-TWO\n' "$NOW" "$NOW" \
     > "$CC_MAILBOX_DIR/$PANE.md"
   echo 0 > "$CC_MAILBOX_DIR/$PANE.seen"; echo 0 > "$CC_MAILBOX_DIR/$PANE.acked"
 }
@@ -183,6 +186,20 @@ no_frame() { [ ! -s "$RECV" ]; }
 @test "W4: an inbox with nothing unacked is refused" {
   start_server
   echo 2 > "$CC_MAILBOX_DIR/$PANE.seen"; echo 2 > "$CC_MAILBOX_DIR/$PANE.acked"
+  run "$WAKE" "$PANE" --no-wait
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"refused-no-mail"* ]] || false
+  no_frame
+}
+
+@test "W4: unacked mail older than the session itself is not a reason to wake (2026-10-04)" {
+  # A reused kitty window number or an adoption can put a line written before this session existed
+  # into its keys; its boundary drain delivers that line, and waking for it is the incident's false
+  # "peer mail arrived". The [forwarded:] outer stamp is the migration time, so the INNER one counts.
+  # RED-proof: pre-fix W4 counts both lines and sends a frame.
+  start_server
+  printf '%s [forwarded:b6b0ac64] 2026-09-11T13:47:12-0500 [claude] post-land RED\n2026-09-11T10:35:38-0500 [peer] raw old line\n' \
+    "$NOW" > "$CC_MAILBOX_DIR/$PANE.md"
   run "$WAKE" "$PANE" --no-wait
   [ "$status" -eq 1 ]
   [[ "$output" == *"refused-no-mail"* ]] || false

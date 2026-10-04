@@ -152,11 +152,22 @@ PP="${CC_PERMPEND_DIR:-/tmp/cc-permission-pending}/$SID.json"
 [ -f "$PP" ] && finish 1 refused-busy "a permission prompt is pending ($PP) — a message would queue behind a human's answer"
 
 # ── W4 something to read ─────────────────────────────────────────────────────────────────────────
+# PRE-BIRTH RULE (2026-10-04, as in bin/cc-await-ping): a line whose origin stamp predates the target
+# process's start (LIVE_START, W2) was written before this session existed — a reused kitty window
+# number or an adoption carried it in. Its boundary drain delivers it; it is not a reason to wake.
 PENDING=""   # "key:line" pairs — the receipt targets
 N=0
+BIRTH=""
+if [ "${CC_AWAIT_PREBIRTH:-1}" != 0 ] && command -v _mbx_lstart_epoch >/dev/null 2>&1; then
+  BIRTH="$(_mbx_lstart_epoch "$LIVE_START" 2>/dev/null || true)"
+fi
 for k in $(mailbox_keyset "$PANE" 2>/dev/null || printf '%s\n' "$PANE"); do
   u="$(mailbox_unacked_count "$k" 2>/dev/null || echo 0)"
   case "$u" in ''|*[!0-9]*) u=0 ;; esac
+  if [ "$u" -gt 0 ] && [ -n "$BIRTH" ] && command -v mailbox_window_tagged >/dev/null 2>&1; then
+    u="$(mailbox_window_tagged "$k" "$(mailbox_acked "$k")" "$BIRTH" | grep -c '^L ')"
+    case "$u" in ''|*[!0-9]*) u=0 ;; esac
+  fi
   [ "$u" -gt 0 ] || continue
   N=$((N + u)); PENDING="$PENDING $k:$(mailbox_lines "$k")"
 done
