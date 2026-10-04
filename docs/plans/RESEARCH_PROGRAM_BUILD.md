@@ -24,6 +24,7 @@ packet `83adb541ea19` actioned. Method version 1.1 is frozen; it changes only fr
 | B2 | S | Item 8: `research-program` skill, `/research-program` command, intake script, briefs, rubric | A2 |
 | C | S | Wave 2: items 9–13, 15, in parallel with the pilot | B1, B2 |
 | D | S (fired `fire-rp-audit-bugfix`), T inside | Audit fixes: `docs/research/upfront-method-audit-2026-10-04/REPORT.md` §3 rows 4–6 | C |
+| E | E1 S (fired `fire-rp-v12-step1`); E2 Workflow in session d8964eb2; E3 S; E4 operator | Method v1.2 (ruling `1bf69e5c1775`): audit REPORT §3 rows 1, 2, 3, 7, plus the 9 s classifier limit (ruling `4bf73c4e55d5`) | D |
 
 A1, A2 and A3 touch disjoint files and fire concurrently. B1 and B2 fire when A2 lands. Each dispatched session leads
 its own Agent Team where it has 2+ code-writing tasks.
@@ -404,3 +405,44 @@ all landed via the project-local /ship and converged.
     (`estimate.py program()`); 4b's lexical relay matcher still passes "No - escape." (audit §1(b), the content
     problem is a method question); the workflow re-run loop has no harness test
     (`tests/fixtures/research-kit/run-workflow.mjs` always returns exit 0 for check-round).
+
+### E — method v1.2 (ruling `1bf69e5c1775`, 2026-10-04)
+Scope (frozen): adopt method v1.2, which overrides ruling 8's freeze for four named changes from
+`docs/research/upfront-method-audit-2026-10-04/REPORT.md` §3, and implement ruling `4bf73c4e55d5` (the 9 s
+classifier limit). Both rulings are recorded in the method's own text, REPORT.md §9 "Ruled 2026-10-04". Each v1.2
+change lands as a named, priced edit after E2's measurement, never before it.
+- The four v1.2 changes (audit §3 rows):
+  - (a) row 1 — measure triage precision first, then fix it: blind, vendor-diverse re-adjudication of the 129 + 31
+    ground-truth items; A/B the candidate filters; the winner goes in code ahead of the raters; re-run `calib_sim`.
+  - (b) row 2 — certify the built and tested result before "done": a stage after the last build wave, before
+    implementation signoff, with code-native instruments (failing-test repro, harness mutation testing, as-built
+    contact re-run, soak); the forecast split before and after implementation signoff.
+  - (c) row 7 — stop contact and build-to-learn on yield (K quiet probes) instead of a calendar box;
+    `escape_cost_days` drives a value-of-information rule.
+  - (d) row 3 — re-sign the pilot contract on the measured forecast: `estimate.py` loads measured parameters, the
+    stale REPORT/SKILL numbers are fixed, TM2's contract is re-rendered and rulings 1 and 4 re-presented.
+- Constraints: the live pilot `truememory-2-0` and its records (`~/.claude/autonomy/research/truememory-2-0`,
+  `~/Development/.worktrees/tm2-plan`) stay read-only until E4; no change to triage, the rubric or any v1.2 mechanism
+  before E2 reports.
+
+#### E1 — 9 s classifier limit and row 15 re-measured — DONE 2026-10-04
+- `router.py` `CLASSIFIER_TIMEOUT_S` 6.0 → 9.0 and `heldout.py` `ROUTER_TIMEOUT_S` 6 → 9; the hook's 10 s timeout is
+  migration 0050's, verified live in `~/.claude/settings.json` (10), not re-done. Test: research-router-heldout
+  "ruling 4bf73c4e55d5: a classifier answering in 6.5 s is labeled…" — red at the router site, then red at the
+  heldout site with the router fixed (one mutant per site), then research-router-heldout + research-kit-heldout 18/18.
+- Gate row 15 at 9 s: ROW15_READING
+
+#### E2 — triage precision study (v1.2 (a), measurement half) — RUNNING
+- Locus: a Workflow in session d8964eb2, started 2026-10-04. Results: `docs/research/triage-precision-study-2026-10-04/`.
+- Delivers the re-adjudicated ground truth and the filter A/B that E3's triage fix and its pricing rest on.
+
+#### E3 — build the v1.2 changes — after E2
+- Locus: S (one dispatched session per change group, fired after E2 lands its report).
+- Builds (a) the triage fix E2 selects, (b) the built-artifact certification stage, (c) the yield stop and the
+  value-of-information rule, and the code and text half of (d) (`estimate.py:36-38` measured parameters by default,
+  the stale REPORT §1/§7/§3.12 and SKILL.md:65 numbers). Each is a named, priced edit to the sections it changes,
+  recorded in REPORT.md §9 per ruling 8's rule; each code change gets a planted-input test red before, green after.
+
+#### E4 — re-sign the pilot contract (v1.2 (d), operator half) — after E3
+- Operator: re-render TM2's contract on the measured forecast and re-sign it, with rulings 1 and 4 re-presented at
+  measured numbers. Agent-side work stops at presenting the packet.

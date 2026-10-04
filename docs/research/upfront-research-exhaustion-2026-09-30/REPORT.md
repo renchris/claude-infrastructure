@@ -1179,6 +1179,21 @@ recommended.
 | 8 | Freeze this method as version 1 with no further critique rounds. Run the pilot in parallel with the tooling. Change only named sections, from measured results | Adopt | 85% |
 | 9 | Run program sessions on one instruction variant (both variants carry the exemption), and record its hash on the certificate | Adopt | 80% |
 
+**Ruled 2026-10-04** (two decision packets, actioned in session d8964eb2; the 2026-10-01 rulings above stand except
+where named here):
+
+- **`1bf69e5c1775`: method v1.2 is adopted.** It overrides ruling 8's freeze for these four changes only, each from
+  `docs/research/upfront-method-audit-2026-10-04/REPORT.md` §3: (a) measure triage precision, then fix it (audit row
+  1); (b) certify the built and tested result before "done" (row 2); (c) stop contact and build-to-learn on yield
+  instead of a calendar box (row 7); (d) re-sign the pilot contract on the measured forecast (row 3). No v1.2 change
+  edits this report or the kit yet: each lands as a named, priced edit after the triage precision measurement
+  (`docs/research/triage-precision-study-2026-10-04/`), and ruling 8's rule (change only named sections, from measured
+  results) governs how. The build is wave E of `docs/plans/RESEARCH_PROGRAM_BUILD.md`.
+- **`4bf73c4e55d5`: the re-ask classifier's time limit is 9 s**, replacing §4.1's assumed 6 seconds, in both the
+  router (`scripts/research-kit/router.py` `CLASSIFIER_TIMEOUT_S`) and gate row 15's measurement
+  (`scripts/research-kit/heldout.py` `ROUTER_TIMEOUT_S`). The hook's registered timeout stays at the 10 seconds
+  `migrations/0050` set. Gate row 15 is re-measured at the new limit; its reading is in wave E1 of the build plan.
+
 ---
 
 ## Appendix A. Every hole class: mechanism, gate row, declared residual
