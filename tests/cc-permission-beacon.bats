@@ -450,6 +450,22 @@ arch_rows() { cat "$CC_PERMARCHIVE_DIR"/*.jsonl 2>/dev/null; }
   [ "$(printf '%s' "$row" | jq -r '.tool_sig')" = "$(printf '%s' "$row" | jq -r '.cleared_tool_sig')" ]
 }
 
+@test "LIVE GATE: a MISMATCHED PostToolUseFailure does NOT clear — a failing sibling cannot blind the board" {
+  # RED pre-fix: the gate compared only the literal "PostToolUse", so a failure event bypassed it.
+  # Measured 2026-10-03: 167 mismatched PostToolUseFailure clears in the live archive.
+  jq -nc '{session_id:"s-live1f",tool_name:"Bash",tool_input:{command:"rm -r $CH"},cwd:"/w",tool_use_id:""}' | "$H" write
+  jq -nc '{session_id:"s-live1f",hook_event_name:"PostToolUseFailure",tool_name:"Bash",tool_input:{command:"false"},tool_use_id:"toolu_F"}' | "$H" clear
+  [ -f "$(beacon s-live1f)" ]
+  [ -z "$(arch_rows | jq -r 'select(.session_id=="s-live1f")')" ]
+}
+
+@test "LIVE GATE (green both ways BY DESIGN): the MATCHING PostToolUseFailure still clears" {
+  jq -nc '{session_id:"s-live2f",tool_name:"Bash",tool_input:{command:"rm -r $CH"},cwd:"/w",tool_use_id:""}' | "$H" write
+  jq -nc '{session_id:"s-live2f",hook_event_name:"PostToolUseFailure",tool_name:"Bash",tool_input:{command:"rm -r $CH"},tool_use_id:"toolu_F"}' | "$H" clear
+  [ ! -f "$(beacon s-live2f)" ]
+  [ "$(arch_rows | jq -r 'select(.session_id=="s-live2f") | .resolved_by')" = PostToolUseFailure ]
+}
+
 @test "LIVE GATE: Stop clears a MISMATCHED invocation unconditionally — the DENY path still drains" {
   # The property the gate must not break. A DENIED prompt fires no matching PostToolUse EVER, so if
   # Stop were gated too the beacon would leak forever and the board would page a phantom. The turn

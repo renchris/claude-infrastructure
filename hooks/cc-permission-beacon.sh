@@ -15,7 +15,8 @@
 #
 # CONTRACT (mode = $1, from the hook wiring):
 #   write  — PermissionRequest event: the harness is showing a permission prompt ⇒ persist the beacon.
-#   clear  — PostToolUse | Stop | SessionEnd: the prompt is RESOLVED ⇒ remove the beacon.
+#   clear  — PostToolUse | PostToolUseFailure | Stop | SessionEnd: the prompt is RESOLVED ⇒ remove
+#            the beacon (the two PostToolUse events only for their own invocation; see below).
 #
 # WHY THE CLEARS ARE COMPLETE (no missed-clear leak, and no dependence on a PermissionDenied event —
 # this harness has none):
@@ -401,8 +402,16 @@ case "$MODE" in
     # genuinely on screen (~3.8k resolutions in five weeks), so the jq/shasum work is paid on that
     # rare path and never on ordinary tool traffic. It is NOT a replacement for the atomic claim:
     # the `mv` below is still the arbiter between two racing clears.
+    #
+    # PostToolUseFailure IS GATED THE SAME WAY (2026-10-03). It is wired as a clearer too, and the
+    # first version of this gate compared only the literal "PostToolUse", so a FAILING sibling
+    # invocation still deleted a pending beacon unchecked. The live archive measured it: 167
+    # PostToolUseFailure clears with mismatched signatures (158 of them Bash > Bash, p50 waited 18 s)
+    # against 29 matching ones, which proves the failure payload canonicalises the same way and that
+    # the 167 were some other command's failure while the gated prompt was still on screen.
     [[ -f "$BEACON" ]] || exit 0
-    if [[ "$(printf '%s' "$INPUT" | jq -r '.hook_event_name // ""' 2>/dev/null || true)" == "PostToolUse" ]]; then
+    _ev="$(printf '%s' "$INPUT" | jq -r '.hook_event_name // ""' 2>/dev/null || true)"
+    if [[ "$_ev" == "PostToolUse" || "$_ev" == "PostToolUseFailure" ]]; then
       # Same canonicaliser and same helper the archive uses — one signature rule, no second copy
       # to drift. Deliberately computed from "$BEACON" BEFORE the claim: a mismatched clear must
       # leave the beacon exactly where the supervisor can still read it, so the `mv` may not run
