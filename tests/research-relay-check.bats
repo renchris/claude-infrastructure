@@ -114,7 +114,7 @@ check() { printf '%s' "$1" | python3 "$ROUTER" relay-check --session s1; }
   run check "$(printf 'Yes — and one more thing: the retry path in sync.py.\n%s\n%s' "$CERT1" "$CERT2")"
   [ "$status" -eq 1 ]
   [[ "$output" == *"unavailable"* ]] || false
-  [[ "$output" == *"sync.py"* ]]
+  [[ "$output" == *"sync.py"* ]] || false
   run check "No - not yet."
   [ "$status" -eq 1 ]
   [[ "$output" == *"opens 'no'"* ]]
