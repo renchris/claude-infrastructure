@@ -1798,7 +1798,8 @@ base = ca.score_general(row(k_work=0), cfg)[0]
 burst = ca.score_general(row(k_work=0, k_phantom=3), cfg)[0]
 assert burst < base, (burst, base)
 # phantoms count toward the concurrency cap: a burst can fill an account to KMAX
-assert ca._excluded(row(k_work=6, k_phantom=2), R) == "kmax-concurrency"
+assert ca._excluded(row(k_work=R["KMAX"] - 2, k_phantom=2), R) == "kmax-concurrency"
+assert ca._excluded(row(k_work=R["KMAX"] - 3, k_phantom=2), R) != "kmax-concurrency"
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }

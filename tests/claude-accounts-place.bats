@@ -32,7 +32,8 @@ json.dump({
   "cache_file": cache,
   "cache_ttl_s": r["cache_ttl_s"], "lock_wait_s": r["lock_wait_s"],
   "cache_grace_s": r["cache_grace_s"], "login_warn_h": r["login_warn_h"],
-  "frontier": r["frontier"], "router": r["router"], "accounts": [],
+  # KMAX pinned: these cases test the cap's mechanics (overflow at 8), not the operator's tuning of it.
+  "frontier": r["frontier"], "router": dict(r["router"], KMAX=8), "accounts": [],
 }, open(cfg_path, "w"))
 PY
 }
