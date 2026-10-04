@@ -9,7 +9,9 @@
 //   - the re-run cap per slot (kit.CAPS slot_reruns): `slot` refuses the attempt past it;
 //   - the rater assignment (§3.8 step 2) and the void: `check-round` voids a panel whose responding
 //     model differs from frame.json reviewer_pins, a rater on the wrong vendor, or an integrity hit,
-//     appends rounds/<rid>/check.jsonl and writes the matrix.json the gate reads (exit 4 on a void).
+//     appends rounds/<rid>/check.jsonl and writes the matrix.json the gate reads;
+//   - the lost read: `check-round` lists as `rerun` every planned slot that is not complete (void,
+//     dead, partial, or missing because its agent never ran) and exits 4 while that list is non-empty.
 // MERELY ORCHESTRATED HERE: the order open → reviewers → raters → check-round → re-runs, the fan-out,
 // and relaying each exit code into the return. A step skipped here shows in the records as missing.
 export const meta = {
@@ -19,7 +21,7 @@ export const meta = {
     { title: 'Open', detail: 'cc-research slots, then open-round (plan + bundle)' },
     { title: 'Review', detail: 'one agent per reviewer slot, each running cc-research slot' },
     { title: 'Rate', detail: 'the rater assignment computed in code, one agent per rater' },
-    { title: 'Check', detail: 'cc-research check-round; re-runs only what reruns_left allows' },
+    { title: 'Check', detail: 'cc-research check-round; re-runs every non-complete slot reruns_left allows' },
   ],
 }
 const KIND = args.kind || 'certification'
@@ -32,10 +34,11 @@ const SLOT = { type: 'object', properties: { pid: { type: 'string' }, vendor: { 
   strategy: { type: 'string' }, role: { type: 'string' }, round: { type: 'string' } }, required: ['pid'] }
 const LIST = (key) => ({ type: 'object', properties: { exit: { type: 'integer' },
   [key]: { type: 'array', items: SLOT } }, required: ['exit', key] })
-const CHECK = { type: 'object', properties: { exit: { type: 'integer' }, voided: { type: 'array', items: {
-  type: 'object', properties: { pid: { type: 'string' }, reason: { type: 'string' },
-    reruns_left: { type: 'integer' } }, required: ['pid', 'reason', 'reruns_left'] } } },
-  required: ['exit', 'voided'] }
+const REASONS = { type: 'array', items: { type: 'object', properties: { pid: { type: 'string' },
+  reason: { type: 'string' }, reruns_left: { type: 'integer' } }, required: ['pid', 'reason', 'reruns_left'] } }
+const CHECK = { type: 'object', properties: { exit: { type: 'integer' }, rerun: REASONS, voided: REASONS },
+  required: ['exit', 'rerun', 'voided'] }
+const CHECKED = 'the rerun and voided arrays of its JSON stdout as rerun and voided'
 
 const run = (cmd, label, phase, schema = RUN, parsed = '') => agent(
   `Run exactly this one command with the Bash tool and nothing else:\n\n\`${cmd}\`\n\n` +
@@ -64,15 +67,15 @@ const rates = rat && rat.exit === 0 ? await parallel(rat.raters.map(r => () =>
 
 phase('Check')
 const checkCmd = `${CR} check-round ${P} --round ${rid} --json`
-let check = await run(checkCmd, 'check', 'Check', CHECK, 'the voided array of its JSON stdout as voided')
+let check = await run(checkCmd, 'check', 'Check', CHECK, CHECKED)
 const reruns = []
 for (let guard = 0; check && check.exit === 4 && guard < 10; guard++) { // runaway backstop; the cap is slot's refusal
-  const again = check.voided.filter(v => v.reruns_left > 0)
+  const again = check.rerun.filter(v => v.reruns_left > 0)
   if (!again.length) break
-  log(`re-running ${again.map(v => v.pid).join(', ')} (voided: ${again.map(v => v.reason).join('; ')})`)
+  log(`re-running ${again.map(v => `${v.pid} (${v.reason})`).join(', ')}`)
   await parallel(again.map(v => () => run(slotCmd(rid, v.pid, briefFor(v.pid)), `rerun:${v.pid}`, 'Check')))
   reruns.push(...again.map(v => v.pid))
-  check = await run(checkCmd, 'check', 'Check', CHECK, 'the voided array of its JSON stdout as voided')
+  check = await run(checkCmd, 'check', 'Check', CHECK, CHECKED)
 }
 return { kind: KIND, round: rid, opened: true, reviews, raters: rates, reruns,
-  check_exit: check ? check.exit : null, voided: check ? check.voided : null }
+  check_exit: check ? check.exit : null, rerun: check ? check.rerun : null, voided: check ? check.voided : null }

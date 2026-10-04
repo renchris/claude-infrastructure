@@ -172,6 +172,75 @@ print('ok')"
   [ "$(grep -c '"pid": "r1p4"' "$CC_RESEARCH_RECORDS/rounds/1/check.jsonl")" -eq 1 ]
 }
 
+# ── lost reads and dead lanes (audit 2026-10-04 REPORT §3 row 5) ────────────────────────────────
+
+stub_courier() { # a courier whose `run` writes a pinned panel; FAKE_STATUS="pid=dead|partial|none ..."
+  export CC_RESEARCH_COURIER="$T/courier"
+  cat > "$CC_RESEARCH_COURIER" <<'EOF'
+#!/bin/bash
+verb="$1"; shift
+rid=""; pid=""; vendor=""
+while [ $# -gt 0 ]; do
+  case "$1" in --round) rid="$2" ;; --pid) pid="$2" ;; --vendor) vendor="$2" ;; esac
+  shift
+done
+[ "$verb" = run ] || exit 0
+st=complete
+for kv in ${FAKE_STATUS:-}; do [ "${kv%%=*}" = "$pid" ] && st="${kv#*=}"; done
+[ "$st" = none ] && exit 3
+case "$vendor" in anthropic) m=claude-opus-5-5 ;; frontier) m=claude-fable-5-1 ;; openai) m=gpt-6 ;; *) m=gemini-4 ;; esac
+d="$CC_RESEARCH_RECORDS/rounds/$rid/panels"; mkdir -p "$d"
+printf '{"pid":"%s","vendor":"%s","role":"reviewer","responding_model":"%s","status":"%s","integrity":{"hits":[]}}\n' \
+  "$pid" "$vendor" "$m" "$st" > "$d/$pid.json"
+echo "a clean review" > "$d/$pid.raw"
+[ "$st" = dead ] && exit 3
+exit 0
+EOF
+  chmod +x "$CC_RESEARCH_COURIER"
+  echo "review" > "$T/brief.txt"
+}
+
+plan3() { # round 1 planned by hand: <vendor of p1> <vendor of p2> <vendor of p3>
+  mkdir -p "$CC_RESEARCH_RECORDS/rounds/1"
+  printf '{"round":"1","seq":1,"kind":"certification","escape":null,"verification_only":false,"r_max":6,"raters":[],"slots":[%s,%s,%s]}\n' \
+    "{\"pid\":\"r1p1\",\"vendor\":\"$1\",\"strategy\":\"full-context\",\"role\":\"reviewer\",\"round\":\"1\"}" \
+    "{\"pid\":\"r1p2\",\"vendor\":\"$2\",\"strategy\":\"plan-only\",\"role\":\"reviewer\",\"round\":\"1\"}" \
+    "{\"pid\":\"r1p3\",\"vendor\":\"$3\",\"strategy\":\"full-context\",\"role\":\"reviewer\",\"round\":\"1\"}" \
+    > "$CC_RESEARCH_RECORDS/rounds/1/plan.json"
+}
+
+slot() { "$CR" slot --program demo --round 1 --pid "$1" --brief "$T/brief.txt" >/dev/null 2>&1 || true; }
+
+@test "check-round lists dead and missing planned slots for re-run (exit 4), then passes once they complete" {
+  stub_courier
+  plan3 anthropic openai google
+  FAKE_STATUS="r1p1=dead r1p2=none"
+  export FAKE_STATUS
+  slot r1p1; slot r1p2; slot r1p3
+  run "$CR" check-round --program demo --round 1 --json
+  [ "$status" -eq 4 ]
+  echo "$output" > "$T/c.json"
+  run /usr/bin/python3 -c "
+import json; c = json.load(open('$T/c.json'))
+r = {x['pid']: x for x in c['rerun']}
+assert sorted(r) == ['r1p1', 'r1p2'], r
+assert 'dead' in r['r1p1']['reason'] and 'missing' in r['r1p2']['reason'], r
+assert r['r1p1']['reruns_left'] == 2 and r['r1p2']['reruns_left'] == 2, r
+assert c['voided'] == [], c
+print('ok')"
+  [ "$output" = ok ]
+  FAKE_STATUS=""
+  slot r1p1; slot r1p2
+  run "$CR" check-round --program demo --round 1 --json
+  [ "$status" -eq 0 ]
+  run /usr/bin/python3 -c "
+import json; m = json.load(open('$CC_RESEARCH_RECORDS/rounds/1/matrix.json'))
+assert [s['status'] for s in m['slots']] == ['complete'] * 3, m['slots']
+assert m['counted'] is True, m
+print('ok')"
+  [ "$output" = ok ]
+}
+
 # ── rehearse record ─────────────────────────────────────────────────────────────────────────────
 
 @test "rehearse record passes 20 clean trials with one asked from outside the root" {

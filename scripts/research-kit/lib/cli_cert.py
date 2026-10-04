@@ -4,7 +4,7 @@
   open-round  --program P --kind K --round N --plan F [--escape H]   writes rounds/<rid>/plan.json, builds the bundle
   slot        --program P --round RID --pid PID --brief F            runs ONE planned slot through the courier
   raters      --program P --round RID [--json]                       the rater assignment (§3.8 step 2)
-  check-round --program P --round RID [--json]                       voids pin, rater and integrity breaches
+  check-round --program P --round RID [--json]                       voids breaches, lists every non-complete slot
   round | frame-critique --program P --round N --plan F --brief F    round.py run with the kind fixed
   rehearse frames --program P [--json] | rehearse record --program P --frames-typed F.. --trials FILE [--retest]
 
@@ -14,7 +14,7 @@ re-run cap per slot (CAPS["slot_reruns"]), the rater assignment, the responding-
 frame.json reviewer_pins, and the relay test of gate row 14. A Workflow round writes rounds/<rid>/
 matrix.json through check-round (round.py's shape), so `round.sh close` and gate row 13 read it as
 they read a round.py round. Exit codes are the kit's: 0 ok · 1 check failed · 2 refusal · 3 dead lane
-· 4 void slot.
+· 4 a planned slot to re-run (void, dead, partial or missing).
 """
 
 from __future__ import annotations
@@ -265,7 +265,8 @@ def cmd_check(a: argparse.Namespace) -> int:
     seen = {
         (e.get("pid"), e.get("attempt")) for e in kit.read_jsonl(rd / "check.jsonl")
     }
-    voided, status = [], {}
+    voided: List[Dict[str, Any]] = []
+    status: Dict[str, Any] = {}
     for pj in sorted((rd / "panels").glob("*.json")):
         p = kit.read_json(pj) or {}
         pid = str(p.get("pid") or pj.stem)
@@ -296,17 +297,38 @@ def cmd_check(a: argparse.Namespace) -> int:
             {
                 "pid": pid,
                 "reason": "; ".join(why),
-                "reruns_left": max(0, 1 + kit.CAPS["slot_reruns"] - n),
+                "reruns_left": runs_left(tries, pid),
+            }
+        )
+    # Every planned slot that is not complete is a lost read, not only a voided one: dead, partial
+    # (no panel shape) and missing (never ran, so no panel file) re-run under the same cap.
+    plan = kit.read_json(rd / "plan.json") or {}
+    rerun = list(voided)
+    listed = {v["pid"] for v in voided}
+    for s in (plan.get("slots") or []) + (plan.get("raters") or []):
+        st = status.get(s["pid"])
+        if st == "complete" or s["pid"] in listed:
+            continue
+        rerun.append(
+            {
+                "pid": s["pid"],
+                "reason": str(st) if st else "missing: no panel file",
+                "reruns_left": runs_left(tries, s["pid"]),
             }
         )
     write_matrix(a.program, rd, status, tries)
     emit(
         a,
-        {"round": a.round, "voided": voided, "exit": 4 if voided else 0},
-        [f"void {v['pid']}: {v['reason']}" for v in voided]
-        or [f"round {a.round}: no slot voided"],
+        {"round": a.round, "rerun": rerun, "voided": voided, "exit": 4 if rerun else 0},
+        [f"rerun {v['pid']}: {v['reason']} ({v['reruns_left']} left)" for v in rerun]
+        or [f"round {a.round}: every planned slot complete, none voided"],
     )
-    return 4 if voided else 0
+    return 4 if rerun else 0
+
+
+def runs_left(tries: Dict[str, int], pid: str) -> int:
+    """The runs cmd_slot still allows this pid: 1 + CAPS["slot_reruns"] attempts in all."""
+    return max(0, 1 + kit.CAPS["slot_reruns"] - tries.get(pid, 0))
 
 
 def write_matrix(
