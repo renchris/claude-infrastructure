@@ -175,3 +175,16 @@ good_set() {
   [[ "${lines[1]}" == *"real detection 1/3 = 0.33"* ]] || false
   [[ "${lines[1]}" == *"seeds easier"* ]]
 }
+
+@test "two concurrent plants both land in the vault (the vault write is locked)" {
+  good_set
+  A3="Option census for DR-04: do nothing, use what exists, and the new daemon."
+  /usr/bin/python3 -c 'import json,sys; print(json.dumps({"sid":"S-3","cohort":"shadow-r1","class":"C4","op":"drop-option","anchor_quote":sys.argv[1],"defect_statement":"planted","detect_span":"PLAN.md:63-63"}))' "$A3" > "$BATS_TEST_TMPDIR/shadow.jsonl"
+  # CC_RESEARCH_TEST_VAULT_DELAY (test-only) holds each writer between loading and saving the vault.
+  CC_RESEARCH_TEST_VAULT_DELAY=0.5 "$SEED" plant --program demo --plan "$PLAN" --seeds "$BATS_TEST_TMPDIR/seeds.jsonl" --profile lite > "$BATS_TEST_TMPDIR/p1" 2>&1 &
+  CC_RESEARCH_TEST_VAULT_DELAY=0.5 "$SEED" plant --program demo --plan "$PLAN" --seeds "$BATS_TEST_TMPDIR/shadow.jsonl" --profile lite > "$BATS_TEST_TMPDIR/p2" 2>&1 &
+  wait
+  run /usr/bin/python3 -c "import sys; sys.path.insert(0, '$REPO/scripts/research-kit'); import seed; v, _ = seed.load_vault('demo'); print(','.join(sorted(s['sid'] for s in v['seeds'])))"
+  [ "$status" -eq 0 ]
+  [ "$output" = "S-1,S-2,S-3" ]
+}

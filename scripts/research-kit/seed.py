@@ -36,18 +36,25 @@ import kit  # noqa: E402
 KEY_ITEM = "cc-research-seed-vault"
 OPS = ("replace", "delete-member", "drop-option", "drop-plan-item")
 MIN_ANCHOR = 40
+VAULT_WRITERS = ("plant", "match", "prescreen")  # the verbs that save the vault
 
 
 def vault_path(slug: str) -> Path:
     return kit.sealed_dir(slug) / "vault" / "seeds.enc"
 
 
+def vault_lock(slug: str) -> Any:
+    """Held by main() around a verb that loads, modifies and saves the vault (no lost update)."""
+    lock = kit.sealed_dir(slug, create=True) / "vault.lock"
+    return kit.mkdir_lock(lock, "seed vault", "seed.py")
+
+
 def load_vault(slug: str, create_key: bool = False) -> Tuple[Dict[str, Any], str]:
     key = kit.vault_key(KEY_ITEM, slug, create=create_key)
     p = vault_path(slug)
-    if not p.exists():
-        return {"seeds": []}, key
-    return json.loads(kit.decrypt(p.read_bytes(), key)), key
+    vault = json.loads(kit.decrypt(p.read_bytes(), key)) if p.exists() else {"seeds": []}
+    kit.test_delay("CC_RESEARCH_TEST_VAULT_DELAY")
+    return vault, key
 
 
 def save_vault(slug: str, vault: Dict[str, Any], key: str) -> None:
@@ -369,7 +376,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     a = ap.parse_args(argv)
     try:
         kit.check_slug(a.program)
-        return int(a.fn(a))
+        if a.verb not in VAULT_WRITERS:
+            return int(a.fn(a))
+        with vault_lock(a.program):
+            return int(a.fn(a))
     except kit.KitError as e:
         print(f"seed.py: {e}", file=sys.stderr)
         return 2

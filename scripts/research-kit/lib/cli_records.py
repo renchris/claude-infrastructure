@@ -16,7 +16,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import shutil
 import subprocess
 import tempfile
@@ -99,13 +98,8 @@ def folded(r: Path, name: str) -> Dict[str, Dict[str, Any]]:
 
 
 def next_id(r: Path, name: str, prefix: str) -> str:
-    nums = [
-        int(m.group(1))
-        for k in folded(r, name)
-        for m in [re.match(rf"{prefix}-(\d+)$", str(k))]
-        if m
-    ]
-    return f"{prefix}-{max(nums, default=0) + 1}"
+    """Reserved under the kit's mint lock, so two concurrent writers never get the same id."""
+    return kit.mint_id(r / name, prefix)
 
 
 def add_new(r: Path, name: str, row: Dict[str, Any]) -> int:

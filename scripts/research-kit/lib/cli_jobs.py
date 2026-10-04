@@ -65,12 +65,7 @@ def quiet(fn: Callable[..., Any], *args: Any) -> Tuple[Any, str]:
 
 
 def next_id(path: Path, prefix: str) -> str:
-    n = 0
-    for r in kit.read_jsonl(path):
-        m = re.match(rf"^{prefix}-(\d+)$", str(r.get("id", "")))
-        if m:
-            n = max(n, int(m.group(1)))
-    return f"{prefix}-{n + 1}"
+    return kit.mint_id(path, prefix)  # shares the record verbs' mint lock and reservation
 
 
 def open_packet(slug: str) -> bool:

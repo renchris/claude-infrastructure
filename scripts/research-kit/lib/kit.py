@@ -21,6 +21,8 @@ Paths may be overridden by environment for tests; the defaults are the live stor
 
 from __future__ import annotations
 
+import contextlib
+import hashlib
 import json
 import math
 import os
@@ -28,7 +30,7 @@ import re
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, Iterator, List, Optional
 
 # ── 1. paths ────────────────────────────────────────────────────────────────────────────────────
 
@@ -206,6 +208,31 @@ STATES = ("registered", "certifying", "certified", "closed")
 _ENTRY_KEYS = ("slug", "aliases", "cwd_roots", "state")
 
 
+LOCK_WAIT_S = 5.0  # a writer waits this long for a mkdir lock, then refuses
+
+
+@contextlib.contextmanager
+def mkdir_lock(lock: Path, what: str, writer: str) -> Iterator[None]:
+    """Hold <lock> for the block. mkdir is atomic, so exactly one process holds it at a time."""
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + LOCK_WAIT_S
+    while True:
+        try:
+            os.mkdir(lock)
+            break
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                raise KitError(
+                    f"{what} lock {lock} held for {LOCK_WAIT_S:g} s; remove it if no "
+                    f"{writer} is running"
+                ) from None
+            time.sleep(0.05)
+    try:
+        yield
+    finally:
+        os.rmdir(lock)
+
+
 def registry_load() -> Dict[str, Any]:
     p = registry_path()
     if not p.exists():
@@ -241,19 +268,7 @@ def registry_set(
         if not os.path.isabs(r):
             raise KitError(f"cwd_root {r!r} is not absolute")
     path = registry_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lock = path.with_name(path.name + ".lock")
-    for _ in range(100):
-        try:
-            os.mkdir(lock)
-            break
-        except FileExistsError:
-            time.sleep(0.05)
-    else:
-        raise KitError(
-            f"registry lock {lock} held for 5 s; remove it if no gate.sh is running"
-        )
-    try:
+    with mkdir_lock(path.with_name(path.name + ".lock"), "registry", "gate.sh"):
         data = registry_load()
         entry = next((p for p in data["programs"] if p.get("slug") == slug), None)
         if entry is None:
@@ -273,8 +288,6 @@ def registry_set(
                 del entry[k]
         write_json_atomic(path, data)
         return dict(entry)
-    finally:
-        os.rmdir(lock)
 
 
 # ── 4. record I/O ───────────────────────────────────────────────────────────────────────────────
@@ -346,6 +359,41 @@ def fold(
             continue
         state.setdefault(k, {}).update(r)
     return state
+
+
+# ── 4b. concurrent writers: locked id minting (audit 2026-10-04, continuity lens item 6) ────────
+
+
+def test_delay(var: str) -> None:
+    """TEST-ONLY: sleep $<var> seconds, so a suite can hold a race window open deterministically."""
+    s = os.environ.get(var)
+    if s:
+        time.sleep(float(s))
+
+
+def mint_id(path: Path, prefix: str) -> str:
+    """The next <prefix>-<n> for the JSONL store at <path>, unique across concurrent writers.
+
+    The id is reserved under a mkdir lock in $CC_RESEARCH_HOME/.mint/ (outside every repo), so it
+    stays unique although the caller appends its record after the lock is released. A reserved id
+    whose append then fails leaves a gap, never a duplicate.
+    """
+    path = Path(path)
+    key = hashlib.sha256(str(path.resolve()).encode()).hexdigest()[:16]
+    state = research_home() / ".mint" / f"{key}.json"
+    with mkdir_lock(state.with_suffix(".lock"), "id mint", "cc-research writer"):
+        n = 0
+        for r in read_jsonl(path):
+            m = re.match(rf"^{prefix}-(\d+)$", str(r.get("id", "")))
+            if m:
+                n = max(n, int(m.group(1)))
+        last = read_json(state, {}) or {}
+        n = max(n, int((last.get("last") or {}).get(prefix, 0))) + 1
+        test_delay("CC_RESEARCH_TEST_MINT_DELAY")
+        last.setdefault("last", {})[prefix] = n
+        last["path"] = str(path.resolve())
+        write_json_atomic(state, last)
+    return f"{prefix}-{n}"
 
 
 # ── 5. evidence levels (§3.4) and the conviction rule (§3.5) ────────────────────────────────────

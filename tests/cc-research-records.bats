@@ -179,6 +179,17 @@ EOF
   [[ "$output" == *"second worry"* ]]
 }
 
+@test "concurrent concern adds mint distinct ids (the mint is locked)" {
+  # CC_RESEARCH_TEST_MINT_DELAY (test-only) holds each writer between reading the max and reserving.
+  for i in 1 2 3 4; do
+    CC_RESEARCH_TEST_MINT_DELAY=0.3 "$CR" concern add --program demo --text "race $i" > "$BATS_TEST_TMPDIR/add.$i" 2>&1 &
+  done
+  wait
+  run /usr/bin/python3 -c "import json; ids=[json.loads(l)['id'] for l in open('$REC/challenges.jsonl') if 'race ' in l]; print(len(ids), len(set(ids)))"
+  [ "$status" -eq 0 ]
+  [ "$output" = "4 4" ]
+}
+
 @test "park writes a parked operator_new change and the certificate's parked count goes up" {
   run "$CR" park --program demo --idea "a dashboard"
   [ "$status" -eq 0 ]
