@@ -360,7 +360,16 @@ fi
 # on-open handler — it silently stops receiving after the first reconnect. SessionStart is our
 # "on open"; UserPromptSubmit is the per-turn re-assert. Self-limiting: it stops the moment a watcher
 # is armed.
+#
+# EXCEPT UNDER A LIVE /goal, where "unwatched" is the state the advice itself RECOMMENDS, so it never
+# self-limits (2026-10-04, docs/research/claude-api-audit-2026-10-04/shard-hooks-b.md hooks-b-01):
+# measured 2,320 copies in 7 days across 218 sessions, up to 84 in ONE session, ~330 tokens each, all
+# restating what validate-bash.sh's chokepoint and the Stop wake floor already enforce. That branch
+# alone is therefore told ONCE per (session id, goal-condition hash) — a marker under
+# $_mdir/.goalnudge/, see the branch below. The parked-watcher (E2) and inert-goal alarms stay
+# per-prompt: they report a STATE that ends when the session acts, so they do self-limit.
 nudge=""
+_gn_mark=""   # the once-per-goal marker path; set only by the live-goal unwatched branch below
 _watched=0
 mailbox_wake_armed "$own_uuid" && _watched=1
 # ── HEADLESS: there is no watcher for this session to arm (F7 of
@@ -466,8 +475,22 @@ Use THAT, not 'kill $_wpid'. Auto mode's classifier DENIES a kill aimed at a liv
 You lose nothing by standing it down: the goal blocks your stops, so you keep taking turns and this drain delivers peer mail at every boundary the goal forces. It writes a WAKE-PATH-DOWN line into this inbox — that is the designed receipt, not a fault. Detail: docs/research/goal-safe-2way-comms-2026-08-13.md §8 E2.)"
     fi
   else
-    [ "$_headless" = 1 ] || nudge="
+    # ONCE PER (sid, goal) — see the header above. The marker is STAMPED by _goalnudge_stamp only after
+    # an emit actually printed, and never from post-tool: that mode can lose the take race and exit
+    # silent, which would spend the one copy on nobody. No sid ⇒ no key to dedupe on ⇒ keep emitting
+    # (that degrade's nudge says the sid is missing, which is itself worth repeating). A changed goal
+    # hashes to a new marker, so a NEW goal is told once too. A hash failure also keeps emitting.
+    if [ "$_headless" != 1 ] && [ -n "$own_sid" ]; then
+      _gn_h="$(printf '%s' "$_goal_cond" | shasum 2>/dev/null | cut -c1-12)"
+      case "$_gn_h" in ''|*[!0-9a-f]*) _gn_h="" ;; esac
+      [ -n "$_gn_h" ] && _gn_mark="$_mdir/.goalnudge/$own_sid-$_gn_h"
+    fi
+    if [ -n "$_gn_mark" ] && [ -f "$_gn_mark" ]; then
+      _gn_mark=""   # already told under THIS goal — nothing to stamp, nothing to say
+    else
+      [ "$_headless" = 1 ] || nudge="
 (a /goal is LIVE, so do NOT park the ordinary 4-hour watcher — Claude Code SKIPS /goal evaluation at any Stop where a non-terminal background Bash exists, and that arm would silently disable the goal driving this session. Peer mail still lands at every turn boundary the goal forces, so while you have work you need no watcher at all. If you have NOTHING actionable and are waiting on an external event, arm the idle-scoped awaiter instead — it stands itself down on your next turn, so it defers the goal for exactly as long as you are actually idle: $_idlecmd)"
+    fi
   fi
 else
   [ "$_watched" = 1 ] || [ "$_headless" = 1 ] || nudge="
@@ -504,6 +527,16 @@ if [ -n "${own_sid:-}" ]; then
   fi
 fi
 
+# The once-per-goal stamp, called only AFTER an emit that carried the live-goal nudge has printed.
+# post-tool never stamps (see the branch). GC rides the stamp — at most once per (session, goal) — and
+# drops markers older than 7 days: past that the session is long dead, and a resumed one is merely
+# told once more.
+_goalnudge_stamp() {
+  [ -n "${_gn_mark:-}" ] && [ "$MODE" != "post-tool" ] || return 0
+  mkdir -p "${_gn_mark%/*}" 2>/dev/null && : > "$_gn_mark" 2>/dev/null || return 0
+  find "${_gn_mark%/*}" -type f -mtime +7 -delete 2>/dev/null || true
+}
+
 # EMPTY INBOX — nothing to deliver, but this is still a boundary at which we can see the session has
 # no wake path. Arming here is the whole point (see the hoist note above), so emit the nudge alone.
 # additionalContext only: this fires on every prompt, and a systemMessage per turn would bury the
@@ -525,7 +558,7 @@ if [ -z "$body" ]; then
   [ -z "$nudge" ] && exit 0
   [ "$MODE" = "post-tool" ] && exit 0
   jq -nc --arg e "$EVENT" --arg c "${_hdr}${nudge}" \
-    '{hookSpecificOutput:{hookEventName:$e, additionalContext:$c}}'
+    '{hookSpecificOutput:{hookEventName:$e, additionalContext:$c}}' && _goalnudge_stamp
   exit 0
 fi
 
@@ -801,6 +834,7 @@ fi
 _out="$(jq -nc --arg e "$EVENT" --arg c "$ctx" --arg m "$msg" \
   '{hookSpecificOutput:{hookEventName:$e, additionalContext:$c}, systemMessage:$m}')" || exit 0
 printf '%s\n' "$_out" || exit 0   # a write that failed delivered nothing — leave the window pending
+_goalnudge_stamp                    # the nudge rode this payload ($nudge is in $ctx), so it was told
 # COMMIT (6a178497df5f) — only now that the emit is written. A reap before this line re-delivers the
 # window at the next boundary; a failed write here costs a duplicate, never a loss.
 if [ "$_claimed" = 1 ]; then

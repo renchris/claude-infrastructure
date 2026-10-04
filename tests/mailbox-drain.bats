@@ -397,6 +397,100 @@ an embedded newline that must not leak into the operator line"
   printf '%s' "$ctx" | grep -q 'run_in_background=true' || false
 }
 
+# ── ONCE PER (sid, goal) (2026-10-04, claude-api-audit hooks-b-01) ───────────────────────────────
+# Under a live goal "unwatched" is the state the nudge itself recommends, so the per-prompt re-assert
+# never self-limited: 2,320 copies in 7 days, up to 84 in one session. It is now told once per
+# (session id, goal-condition hash). Each case below has a silent-second-prompt step, which is the
+# step the pre-change drain fails (it re-emits on every prompt).
+goal_once_t() { # $1 = condition → a transcript whose last goal_status is a LIVE arm of it
+  local t="$BATS_TEST_TMPDIR/goal-once-$BATS_TEST_NUMBER.jsonl"
+  printf '{"type":"attachment","attachment":{"type":"goal_status","met":false,"sentinel":true,"condition":"%s"}}\n' "$1" > "$t"
+  printf '%s' "$t"
+}
+goal_once_drain() { # $1 = mode  $2 = transcript → the drain's stdout, session id fixed
+  printf '{"transcript_path":"%s","session_id":"abc-123-def"}' "$2" | "$DRAIN" "$1"
+}
+
+@test "goal once: the same goal on two prompts ⇒ ONE nudge (the second prompt is silent)" {
+  T="$(goal_once_t 'finish the rollout')"
+  run goal_once_drain prompt "$T"
+  printf '%s' "$output" | grep -qF 'do NOT park the ordinary 4-hour watcher' || false
+  run goal_once_drain prompt "$T"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ] || false          # RED pre-change: the same ~1.3K chars, every prompt
+}
+
+@test "goal once: a CHANGED goal re-emits (the marker is keyed on the condition, not the session)" {
+  T="$(goal_once_t 'finish the rollout')"
+  run goal_once_drain prompt "$T"; printf '%s' "$output" | grep -qF 'do NOT park' || false
+  run goal_once_drain prompt "$T"; [ -z "$output" ] || false
+  T="$(goal_once_t 'land P4 and content-verify')"
+  run goal_once_drain prompt "$T"
+  printf '%s' "$output" | grep -qF 'do NOT park the ordinary 4-hour watcher' || false
+}
+
+@test "goal once: post-tool NEVER stamps — the next prompt still gets the one copy" {
+  T="$(goal_once_t 'finish the rollout')"
+  seed "2026-10-04T10:00:00+0000 [peer] status: halfway"
+  run goal_once_drain post-tool "$T"
+  [ "$status" -eq 0 ]
+  [ -z "$(ls -A "$CC_MAILBOX_DIR/.goalnudge" 2>/dev/null)" ] || false
+  run goal_once_drain prompt "$T"
+  printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext' | grep -qF 'do NOT park' || false
+  run goal_once_drain prompt "$T"
+  [ -z "$output" ] || false          # the PROMPT emit did stamp
+}
+
+@test "goal once DISCRIMINATOR: no session_id ⇒ no key to dedupe on ⇒ every prompt keeps the nudge" {
+  T="$(goal_once_t 'finish the rollout')"
+  for _ in 1 2; do
+    run bash -c 'printf "{\"transcript_path\":\"%s\"}" "$1" | "$0" prompt' "$DRAIN" "$T"
+    printf '%s' "$output" | grep -qF -- "--sid <this session's id>" || false
+  done
+}
+
+@test "goal once: the inert-goal crumb is NOT gated — it still rides the prompt the nudge went quiet on" {
+  T="$(goal_once_t 'finish the rollout')"
+  run goal_once_drain prompt "$T"; printf '%s' "$output" | grep -qF 'do NOT park' || false
+  _gi_crumb_setup abc-123-def                # a skipped-goal report arrives AFTER the one copy was told
+  run goal_once_drain prompt "$T"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -qF 'YOUR /goal WAS SKIPPED' || false
+  ! printf '%s' "$output" | grep -qF 'do NOT park' || false   # RED pre-change: the nudge rides along again
+}
+
+@test "goal once: the E2 parked-watcher report is NOT gated — every prompt names the pid" {
+  printf 'pid=%s\n' "$$" > "$CC_MAILBOX_DIR/abc-123-def.watching"   # with a sid the wake key IS the sid
+  T="$(goal_once_t 'finish the rollout')"
+  for _ in 1 2; do
+    run goal_once_drain prompt "$T"
+    printf '%s' "$output" | grep -qF "pid $$" || false
+  done
+  [ -z "$(ls -A "$CC_MAILBOX_DIR/.goalnudge" 2>/dev/null)" ] || false   # E2 spends no once-marker
+}
+
+@test "goal once: headless never stamps — the advice is suppressed there, so nothing was told" {
+  T="$(goal_once_t 'finish the rollout')"
+  run env -u ITERM_SESSION_ID CC_PANE_ID="hdl-0123456789abcdef" bash -c \
+    'printf "{\"transcript_path\":\"%s\",\"session_id\":\"abc-123-def\"}" "$1" | "$0" prompt' "$DRAIN" "$T"
+  [ "$status" -eq 0 ]
+  [ -z "$(ls -A "$CC_MAILBOX_DIR/.goalnudge" 2>/dev/null)" ] || false
+}
+
+@test "goal once: a stamp GCs markers older than 7 days and keeps fresh ones" {
+  mkdir -p "$CC_MAILBOX_DIR/.goalnudge"
+  : > "$CC_MAILBOX_DIR/.goalnudge/dead-0000-aaaaaaaaaaaa"
+  touch -t 202001010000 "$CC_MAILBOX_DIR/.goalnudge/dead-0000-aaaaaaaaaaaa"
+  : > "$CC_MAILBOX_DIR/.goalnudge/live-0000-bbbbbbbbbbbb"
+  T="$(goal_once_t 'finish the rollout')"
+  run goal_once_drain prompt "$T"
+  printf '%s' "$output" | grep -qF 'do NOT park' || false
+  [ ! -e "$CC_MAILBOX_DIR/.goalnudge/dead-0000-aaaaaaaaaaaa" ] || false   # RED pre-change: no GC
+  [ -e "$CC_MAILBOX_DIR/.goalnudge/live-0000-bbbbbbbbbbbb" ] || false
+  local own=( "$CC_MAILBOX_DIR"/.goalnudge/abc-123-def-* )
+  [ "${#own[@]}" -eq 1 ] && [ -e "${own[0]}" ] || false
+}
+
 # PINNED TO A SHA, NEVER A MOVING REF. `origin/main` was the pre-fix tree only until the hoist landed
 # on it (7f2b85d55); from that moment the staleness guard matched and this case reported
 # `ok … # skip control is not pre-fix` on every run — green, and proving nothing.  a94c8a5ea =
