@@ -615,7 +615,7 @@ _rp_reg() { # <state> <root>
   fired "$output"
   [ "$(grep -c '"arm":"offer"' "$COMPLETION_IDL")" -eq 3 ]
 }
-# ── The exemption's SECOND key (audit 2026-10-04, REPORT.md §3 row 4f): the re-ask router resolves a
+# ── The exemption's SECOND key, from the 2026-10-04 method audit (REPORT.md §3 row 4f): the router resolves a
 #    pane by cwd OR by a program named in the prompt (rp_resolve_prompt), so a pane outside every
 #    root that asked about the program is relayed by the router — D4 must read the same key or the
 #    Stop hook pushes the offer loop the ruling stops. Planted input: the cwd is outside the root,
