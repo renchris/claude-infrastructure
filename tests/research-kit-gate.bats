@@ -33,6 +33,7 @@ setup() {
   export CC_NOW CC_RESEARCH_VAULT_KEY="test-key"
   export CC_DECISIONS_DIR="$W/decisions" CC_IDL="$W/idl.jsonl"
   export CC_RESEARCH_ROUTER="$W/router.sh"
+  export CC_RESEARCH_CALIBRATION="$W/calibration.jsonl"
   rsync -a --delete "$BATS_FILE_TMPDIR/golden/" "$W/"
   REC="$(cat "$BATS_FILE_TMPDIR/records-path")"
 }
@@ -68,6 +69,58 @@ state() { /usr/bin/python3 -c "import json; print(json.load(open('$CC_RESEARCH_R
   [[ "$output" == *"Signed frame: 100.00% closed."* ]] || false
   [[ "$output" == *"uncalibrated"* ]] || false
   [ "$(find "$W" -type f -newer "$REC/cert/CERT-v1.json" | wc -l)" -eq "$before" ]
+}
+
+@test "render reads the records live: a counted escape after the issue moves the After-signoff line" {
+  "$G" run --program demo
+  run "$G" --render --program demo
+  [ "$status" -eq 0 ]
+  before="$output"
+  [[ "$output" == *"After signoff: 0 material changes"* ]] || false
+  ts="$(date -u -v+1H +%Y-%m-%dT%H:%M:%SZ)"
+  printf '{"id":"CR-80","cause":"operator_new","status":"parked","justification":"idea","ts":"%s"}\n' "$ts" \
+    >> "$REC/changes.jsonl"
+  run "$G" --render --program demo
+  [ "$output" = "$before" ]
+  printf '{"id":"CR-90","cause":"escape","challenge":"CH-90","justification":"planted","ts":"%s"}\n' "$ts" \
+    >> "$REC/changes.jsonl"
+  run "$G" --render --program demo
+  [ "$status" -eq 0 ]
+  [ "$output" != "$before" ]
+  [[ "$output" == *"After signoff: 1 material change (1 escape; forecast about"* ]] || false
+  [[ "$output" != *"unchanged since"* ]] || false
+}
+
+@test "render never prints a literal take-backs 0" {
+  "$G" run --program demo
+  run "$G" --render --program demo
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"take-backs 0"* ]] || false
+  [[ "$(cat "$REC/cert/CERT-v1.md")" != *"take-backs 0"* ]] || false
+}
+
+@test "render: a residual row renders the Residuals and Scheduled checks lines; none renders neither" {
+  "$G" run --program demo
+  run "$G" --render --program demo
+  [[ "$output" == *"Residuals: 1 declared (elapsed-time 1)"* ]] || false
+  [[ "$output" == *"Scheduled checks: 1 production or elapsed-time check with owner and date (next due 2026-11-01)"* ]] || false
+  : > "$REC/residual.jsonl"
+  run "$G" --render --program demo
+  [[ "$output" != *"Residuals:"* ]] || false
+  [[ "$output" != *"Scheduled checks:"* ]] || false
+  printf '{"id":"P-fresh-PR-1","at":"%s","exit":0}\n' "$CC_NOW" >> "$REC/probes.jsonl"
+  run "$G" --render --program demo
+  [[ "$output" == *"Scheduled checks: last freshness run "*", no verdict changed"* ]] || false
+}
+
+@test "render: Built and Live read unknown, and Calibration counts the calibration rows" {
+  "$G" run --program demo
+  run "$G" --render --program demo
+  [[ "$output" == *"Built – · Live – · Calibration: none measured (uncalibrated)"* ]] || false
+  printf '{"plan":"a"}\n{"plan":"b"}\n' > "$CC_RESEARCH_CALIBRATION"
+  run "$G" --render --program demo
+  [[ "$output" == *"Calibration: 2 plans measured"* ]] || false
+  [[ "$output" != *"uncalibrated"* ]] || false
 }
 
 @test "an uncertified program renders as not certified" {

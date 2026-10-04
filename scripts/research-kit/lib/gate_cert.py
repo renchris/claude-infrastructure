@@ -22,7 +22,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import kit
-from gate import FILED, PASS, Ctx, Row, make_ctx
+from gate import FILED, Ctx, Row, make_ctx
+
+REPO = Path(__file__).resolve().parents[3]
+# The causes triage writes for §5.2's counted buckets (cli_records.CAUSE). A parked row is a
+# next-version idea, not a change to the certified answer, so it is not a material change.
+COUNTED_CAUSES = ("escape", "frame_defect", "operator_unelicited", "reality_moved")
+SCHEDULED_RESIDUAL = ("production-traffic", "elapsed-time")
 
 
 def git(repo: str, *args: str) -> Optional[str]:
@@ -179,16 +185,90 @@ def write_certificate(ctx: Ctx, rows: List[Row]) -> str:
         "fingerprint": dict(
             fingerprint(), memory=memory_hash(ctx.frame.get("deliverable_repo"))
         ),
+        # the change ids already on record, so a change after signoff is known even if undated
+        "changes_at_issue": sorted(folded_changes(ctx.records)),
     }
     path = ctx.records / "cert" / f"CERT-v{n}.json"
     kit.write_json_atomic(path, cert)
+    # the .md keeps the issue-time snapshot; `gate.sh render` re-reads the records every time
     (ctx.records / "cert" / f"CERT-v{n}.md").write_text(
-        "\n".join(lines_for(ctx.slug, cert, "certified")) + "\n"
+        "\n".join(lines_for(ctx.slug, cert, "certified", live_state(ctx.records, cert)))
+        + "\n"
     )
     return str(path)
 
 
-def lines_for(slug: str, cert: Optional[Dict[str, Any]], state: str) -> List[str]:
+def folded_changes(rec: Path) -> Dict[str, Dict[str, Any]]:
+    return kit.fold(kit.read_jsonl(rec / "changes.jsonl"))
+
+
+def calibration_store() -> Path:
+    env = os.environ.get("CC_RESEARCH_CALIBRATION")
+    return (
+        Path(env) if env else REPO / "docs" / "research" / "research-calibration.jsonl"
+    )
+
+
+def live_state(rec: Path, cert: Dict[str, Any]) -> Dict[str, Any]:
+    """What the records say now (§4.3, §4.4): changes after signoff, residuals, scheduled checks,
+    calibration. Read at every render, so an escape triaged after the issue moves the answer."""
+    issued = kit.parse_iso(cert["issued"])
+    at_issue = cert.get("changes_at_issue")
+
+    def after(c: Dict[str, Any]) -> bool:
+        if at_issue is not None:
+            return c.get("id") not in at_issue
+        return bool(c.get("ts")) and kit.parse_iso(c["ts"]) > issued
+
+    changes = [
+        c
+        for c in folded_changes(rec).values()
+        if c.get("cause") in COUNTED_CAUSES and c.get("status") != "parked" and after(c)
+    ]
+    res = list(kit.fold(kit.read_jsonl(rec / "residual.jsonl")).values())
+    classes: Dict[str, int] = {}
+    for r in res:
+        why = str(r.get("why_unreachable"))
+        classes[why] = classes.get(why, 0) + 1
+    sched = [
+        r
+        for r in res
+        if r.get("why_unreachable") in SCHEDULED_RESIDUAL
+        and (r.get("owner") or r.get("owner_wave"))
+        and r.get("due")
+    ]
+    fresh = [
+        str(p["at"])
+        for p in kit.fold(kit.read_jsonl(rec / "probes.jsonl")).values()
+        if str(p.get("id", "")).startswith("P-fresh-") and p.get("at")
+    ]
+    cal = calibration_store()
+    return {
+        "after": len(changes),
+        "escapes": sum(1 for c in changes if c.get("cause") == "escape"),
+        "last_change": max(
+            (str(c["ts"]) for c in changes if c.get("ts")), default=None
+        ),
+        "residual": classes,
+        "scheduled": len(sched),
+        "next_due": min((str(r["due"]) for r in sched), default=None),
+        "fresh_at": max(fresh, default=None),
+        "flipped": sum(
+            1
+            for c in kit.fold(kit.read_jsonl(rec / "challenges.jsonl")).values()
+            if c.get("kind") == "drift" and c.get("raised_by") == "sweep"
+        ),
+        "calibration": len(kit.read_jsonl(cal)) if cal.is_file() else 0,
+    }
+
+
+def plural(n: int, word: str) -> str:
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
+def lines_for(
+    slug: str, cert: Optional[Dict[str, Any]], state: str, live: Dict[str, Any]
+) -> List[str]:
     if not cert:
         return [f"Research: {slug} — {state}; not certified."]
     s, fc = cert["state"], cert["forecast"]
@@ -202,15 +282,24 @@ def lines_for(slug: str, cert: Optional[Dict[str, Any]], state: str) -> List[str
     if cert.get("degraded") == "two vendors":
         head = "degraded: two vendors · " + head
     total = fc["desk_mean"] + fc["invisible_mean"]
+    bound = fc["desk_n95"] + fc["invisible_bound95"]
+    n = live["after"]
+    # §5.3 step 5: past the summed 95% bounds at least one stratum is past its own, a take-back for
+    # certain; below it the desk/invisible split needs the blind replay, so no take-back count prints.
+    over = (
+        f" · {n} exceed the 95% bound of {bound}: a take-back (§5.3)"
+        if n > bound
+        else ""
+    )
     out = [
         head,
         f"Signed frame: 100.00% closed. {s['decisions']}/{s['decisions']} decisions · {s['populations']}/"
         f"{s['populations']} populations enumerated two ways · {s['checks']}/{s['checks']} checks shown to fail "
         f"first · {s['premises_at_level']}/{s['premises']} premises at required level · {s['sources']}/"
         f"{s['sources']} sources",
-        f"After signoff: forecast about {total:.1f} material change(s); at most "
-        f"{fc['desk_n95'] + fc['invisible_bound95']} at 95%, of which about {fc['invisible_mean']:.1f} is invisible "
-        f"to any reviewer (share assumed) · take-backs 0",
+        f"After signoff: {plural(n, 'material change')} ({plural(live['escapes'], 'escape')}; forecast about "
+        f"{total:.1f}; at most {bound} at 95%, of which about {fc['invisible_mean']:.1f} is invisible to any "
+        f"reviewer, share assumed){over}",
         f"Decisions: {s['ruled_90']} ruled at 90%+ · {s['operator_ruled']} ruled by you · "
         f"{len(s['by_default'])} decided by default{' (' + '; '.join(s['by_default']) + ')' if s['by_default'] else ''}"
         f" · {len(s['carried'])} carried",
@@ -225,11 +314,44 @@ def lines_for(slug: str, cert: Optional[Dict[str, Any]], state: str) -> List[str
                 for r in cert["known_rows"]
             )
         )
+    if live["residual"]:
+        out.append(
+            f"Residuals: {sum(live['residual'].values())} declared ("
+            + ", ".join(f"{k} {v}" for k, v in sorted(live["residual"].items()))
+            + ")"
+        )
+    sched: List[str] = []
+    if live["scheduled"]:
+        k = live["scheduled"]
+        sched.append(
+            f"{k} production or elapsed-time {'check' if k == 1 else 'checks'} with "
+            f"{'owner and date' if k == 1 else 'owners and dates'} (next due {live['next_due']})"
+        )
+    if live["fresh_at"]:
+        when = time.strftime(
+            "%b %d %H:%M", time.gmtime(kit.parse_iso(live["fresh_at"]))
+        )
+        f = live["flipped"]
+        sched.append(
+            f"last freshness run {when}, "
+            + ("no verdict changed" if not f else f"{plural(f, 'verdict')} changed")
+        )
+    if sched:
+        out.append("Scheduled checks: " + " · ".join(sched))
+    cal = live["calibration"]
     fp = cert["fingerprint"]
     out += [
-        "Calibration: no programs observed yet (uncalibrated)",
+        # no record of build or live state exists in the kit: unknown, never 0
+        "Built – · Live – · Calibration: "
+        + (
+            f"{plural(cal, 'plan')} measured" if cal else "none measured (uncalibrated)"
+        ),
         f"Fingerprint: certified under {fp['model']}, rules {fp['rules']}, memory {fp['memory']} · "
-        f"this answer unchanged since {cert['issued']}",
+        + (
+            f"this answer unchanged since {cert['issued']}"
+            if not n
+            else f"changed after signoff, last {live['last_change'] or 'undated'}"
+        ),
     ]
     return out
 
@@ -272,7 +394,8 @@ def cmd_render(a: Any) -> int:
             f"trailing quiet rounds: {quiet}."
         )
         return 0
-    print("\n".join(lines_for(a.program, kit.read_json(certs[-1]), state)))
+    cert = kit.read_json(certs[-1])
+    print("\n".join(lines_for(a.program, cert, state, live_state(rec, cert))))
     return 0
 
 
