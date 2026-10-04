@@ -286,9 +286,80 @@ lrt_retired() { # → the first <FROM>/projects/*/<sid>.jsonl.handed-off, empty 
   for _c in "$FROM"/projects/*/"$SID".jsonl.handed-off; do [[ -f "$_c" ]] && { printf '%s' "$_c"; return 0; }; done
   return 0
 }
+# ── STALE ROUND-TRIP LEFTOVERS, SET ASIDE (2026-10-04) ──────────────────────────────────────────
+# A session that leaves S for T and later COMES BACK to S finds, beside its fresh live copy in S, the
+# marker and the `.jsonl.handed-off` of its first departure. Nothing swept them, because a move writes
+# the SOURCE's tombstone and never looks at the TARGET: the old marker then makes
+# handed-off-session-guard.sh refuse every prompt in the live pane (762a6daa, 8e18da3f — measured
+# live), and the old retired copy reads as a stub, so every later confirm off S refuses
+# stub-beside-retired. Both newer counterparts carried confirm_len, so a confirm-time sweep of the
+# TARGET would have prevented all four live cases. Set aside = link-then-unlink to
+# `<name>.stale-<UTCts>` (never over an existing name, never rm). A retired copy is set aside only
+# when it is a strict byte PREFIX of the live transcript: any other holds bytes the live one lacks.
+# Only at confirm (and in the legacy/admit path, for the SOURCE's own old retired copy), never at
+# admit for the target: an aborted admit must leave the target's marker, which is still true then.
+# Kill switch LRT_STALE_SETASIDE=off (every arm). Receipts carry `set_aside` only when non-empty.
+LRT_SET_ASIDE=""
+lrt_setaside_on() { [[ "${LRT_STALE_SETASIDE:-on}" != off ]]; }
+lrt_stale_retired() { # $1=a live <sid>.jsonl → rc 0 iff <it>.handed-off is a strict byte prefix of it
+  local _r="$1.handed-off" _n
+  lrt_setaside_on || return 1
+  [[ -f "$1" && -f "$_r" ]] || return 1
+  _n="$(lrt_size "$_r")"
+  [[ "$(lrt_size "$1")" -gt "$_n" ]] || return 1
+  # `head -c N | cmp -s -`, never BSD `cmp -n N`: that reports EOF (rc 1) when N equals the shorter
+  # file's size, which is exactly the prefix case (measured on both live shapes).
+  head -c "$_n" "$1" | cmp -s - "$_r"
+}
+lrt_setaside() { # $1=path → renamed to <path>.stale-<UTCts> (.<pid> on collision), recorded in LRT_SET_ASIDE; rc 1 nothing changed
+  local _n
+  lrt_setaside_on || return 1
+  _n="$1.stale-$(date -u +%Y%m%dT%H%M%SZ)"
+  [[ ! -e "$_n" && ! -L "$_n" ]] || _n="$_n.$$"
+  lrt_link_rename "$1" "$_n" || return 1
+  LRT_SET_ASIDE="${LRT_SET_ASIDE:+$LRT_SET_ASIDE,}\"$_n\""
+}
+lrt_set_aside_json() { # → `,"set_aside":[…]` when anything was set aside this run, else nothing
+  [[ -z "$LRT_SET_ASIDE" ]] || printf ',"set_aside":[%s]' "$LRT_SET_ASIDE"
+}
+# THE SWEEP NEVER UNDOES A LATER MOVE (review 2026-10-04). A marker in TO can also be the tombstone
+# of a move made AFTER this one: Q→T confirmed, then T→S --keep-source (T stays live, and its
+# tombstone is the only thing refusing prompts there), then a stale re-run of the first confirm. An
+# unconditional sweep renamed that tombstone and left two live, writable copies. So a marker stays
+# when the store it names holds a live <sid>.jsonl, and when its ts is not strictly older than this
+# move's reference ts ($2: the custody lock's ts, else the confirm's own time). A missing or
+# malformed ts on either side keeps it: the act is a rename, so every unknown keeps.
+lrt_iso() { [[ "$1" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; }
+lrt_sweep_target() { # $1=the TARGET slug dir now holding the live copy $2=this move's reference ts → set aside its stale marker and retired copy
+  local _d="$1" _ref="${2:-}" _m _to _mts _c _live=""
+  lrt_setaside_on || return 0
+  _m="$_d/$SID.HANDOFF.json"
+  if [[ -f "$_m" ]]; then
+    _to="$(sed -n '/"handed_off_to":"/{s/.*"handed_off_to":"\([^"]*\)".*/\1/p;q;}' "$_m")"
+    _mts="$(sed -n '/"ts":"/{s/.*"ts":"\([^"]*\)".*/\1/p;q;}' "$_m")"
+    if [[ -n "$_to" ]]; then for _c in "$_to"/projects/*/"$SID".jsonl; do [[ -f "$_c" ]] && _live="$_c"; done; fi
+    # A marker naming ANOTHER store, in the store just confirmed as the live one, records a departure
+    # this move undid. One naming TO itself is a same-account superseded mark: left untouched.
+    if [[ -n "$_to" && "$(python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "$_to/projects")" != "$TO_PROJ_REAL" ]]; then
+      if [[ -n "$_live" ]]; then
+        echo "lr-transplant: kept the target marker $_m: the store it names holds a live copy ($_live), so it records a later move" >&2
+      elif ! lrt_iso "$_mts" || ! lrt_iso "$_ref" || [[ ! "$_mts" < "$_ref" ]]; then
+        echo "lr-transplant: kept the target marker $_m: its ts (${_mts:-none}) is not provably older than this move (${_ref:-none})" >&2
+      else
+        lrt_setaside "$_m" || echo "lr-transplant: could not set aside the stale target marker $_m (left in place)" >&2
+      fi
+    fi
+  fi
+  if lrt_stale_retired "$_d/$SID.jsonl"; then
+    lrt_setaside "$_d/$SID.jsonl.handed-off" || echo "lr-transplant: could not set aside $_d/$SID.jsonl.handed-off (left in place)" >&2
+  fi
+  return 0
+}
 lrt_stub() { # → the <sid>.jsonl that sits beside a .handed-off in the same slug dir, empty when none
   local _c
   for _c in "$FROM"/projects/*/"$SID".jsonl.handed-off; do
+    # a retired copy that is a strict prefix of the live one is a round trip's leftover, not a stub
+    lrt_stale_retired "${_c%.handed-off}" && continue
     [[ -f "$_c" && -e "${_c%.handed-off}" ]] && { printf '%s' "${_c%.handed-off}"; return 0; }
   done
   return 0
@@ -365,9 +436,15 @@ if [[ "$PHASE" == confirm ]]; then
     if [[ -n "$CONFIRM_RETIRED" ]]; then
       CONFIRM_DST=""
       for _c in "$TO"/projects/*/"$SID".jsonl; do [[ -f "$_c" ]] && { CONFIRM_DST="$_c"; break; }; done
-      printf '{"ok":true,"already_confirmed":true,"sid":"%s","target_transcript":"%s","retired_source":"%s","source_retired":1,"source_retired_reason":"confirm","lock":"%s"%s%s,"confirm_len":%s}\n' \
+      # A re-run heals what an earlier confirm (or one before the sweep existed) left on the target —
+      # but only while this move still holds custody: a lock that is gone, or that a later move now
+      # owns, means TO's marker may be that later move's tombstone (see THE SWEEP NEVER UNDOES).
+      if [[ -n "$CONFIRM_DST" && -e "$LOCK" ]] && _o="$(lrt_lock_owner)" && [[ -n "$_o" && "$(lrt_rp "$_o")" == "$(lrt_rp "$TO")" ]]; then
+        lrt_sweep_target "$(dirname "$CONFIRM_DST")" "$(lrt_lock_str ts)"
+      fi
+      printf '{"ok":true,"already_confirmed":true,"sid":"%s","target_transcript":"%s","retired_source":"%s","source_retired":1,"source_retired_reason":"confirm","lock":"%s"%s%s,"confirm_len":%s%s}\n' \
         "$SID" "$CONFIRM_DST" "$CONFIRM_RETIRED" "$LOCK" "$LRT_PHASE_JSON" "$LRT_CAUSE_JSON" \
-        "$(lrt_size "$CONFIRM_RETIRED")"
+        "$(lrt_size "$CONFIRM_RETIRED")" "$(lrt_set_aside_json)"
       exit 0
     fi
     echo "lr-transplant: FATAL — --phase confirm found no transcript $SID under $FROM/projects and no retired copy beside it; the source vanished between admit and confirm" >&2
@@ -413,12 +490,18 @@ if [[ "$PHASE" == confirm ]]; then
   SOURCE_RETIRED=0
   SOURCE_RETIRED_REASON="keep-source"
   if [[ $KEEP_SOURCE -ne 1 ]]; then
+    # The source's OWN old retired copy (a round trip's leftover, prefix-proven) is set aside first,
+    # after every refusal above, so a refused run still leaves the source byte-identical.
+    if lrt_stale_retired "$SRC"; then lrt_setaside "$SRC.handed-off" || true; fi
     # Link-then-unlink: a `.handed-off` that appeared since the check above is never overwritten.
     lrt_link_rename "$SRC" "$SRC.handed-off" || lrt_refuse stub-beside-retired stub-beside-retired \
       "$SRC.handed-off already exists; the source was left in place"
     SOURCE_RETIRED=1
     SOURCE_RETIRED_REASON="confirm"
   fi
+  # THE TARGET SWEEP: the store now holding the live copy keeps no marker pointing away from it.
+  _ref="$(lrt_lock_str ts)"
+  lrt_sweep_target "$DST_DIR" "${_ref:-$NOW}"
   # The receipt keeps the SAME SHAPE as the legacy one — lr-handoff.sh redirects this stdout verbatim
   # into the bundle's transplant.json, and lr-ingest-verify reads it there. Custody is read back off
   # the admit's lock rather than recomputed: confirm is the same move, not a new one.
@@ -432,10 +515,10 @@ if [[ "$PHASE" == confirm ]]; then
   [[ $CONFIRM_HOPS -eq 0 ]] || CONFIRM_HOPS=$((CONFIRM_HOPS-1))
   CONFIRM_TS_FIRST="$(lrt_lock_str ts_first)"
   [[ -n "$CONFIRM_TS_FIRST" ]] || CONFIRM_TS_FIRST="$NOW"
-  printf '{"ok":true,"sid":"%s","slug":"%s","target_transcript":"%s","sha256":"%s","session_dir_copied":%s,"tasks_copied":%s,"source_retired":%s,"source_retired_reason":"%s","lock":"%s","tombstone":"%s","hop":%d,"ts_first":"%s","chain":[%s]%s%s,"confirm_len":%s}\n' \
+  printf '{"ok":true,"sid":"%s","slug":"%s","target_transcript":"%s","sha256":"%s","session_dir_copied":%s,"tasks_copied":%s,"source_retired":%s,"source_retired_reason":"%s","lock":"%s","tombstone":"%s","hop":%d,"ts_first":"%s","chain":[%s]%s%s,"confirm_len":%s%s}\n' \
     "$SID" "$SLUG" "$DST" "$SHA_DST" "$SESSION_DIR_COPIED" "$TASKS_COPIED" "$SOURCE_RETIRED" \
     "$SOURCE_RETIRED_REASON" "$LOCK" "$TOMBSTONE" "$CONFIRM_HOPS" "$CONFIRM_TS_FIRST" \
-    "$CONFIRM_CHAIN_JSON" "$LRT_PHASE_JSON" "$LRT_CAUSE_JSON" "$CONFIRM_LEN"
+    "$CONFIRM_CHAIN_JSON" "$LRT_PHASE_JSON" "$LRT_CAUSE_JSON" "$CONFIRM_LEN" "$(lrt_set_aside_json)"
   exit 0
 fi
 
@@ -851,6 +934,9 @@ fi
 # THE ASYMMETRY IS THE WHOLE ARGUMENT: a kept source costs one husk row, which lr-fleet already
 # enumerates and the tombstone below already blocks from resuming; a renamed live transcript costs
 # the tail of a working session, silently, with the sha check passing.
+# The source's OWN old retired copy (a round trip's leftover, prefix-proven: see STALE ROUND-TRIP
+# LEFTOVERS) goes aside here, so the guard's admit allowance and the later confirm see a clean source.
+if lrt_stale_retired "$SRC"; then lrt_setaside "$SRC.handed-off" || true; fi
 TOMBSTONE="$SRC_DIR/$SID.HANDOFF.json"
 # The phase rides on the tombstone so handed-off-session-guard.sh can tell a half-done move (admit:
 # the source is still the live writer, so a typed prompt belongs there) from a finished one (D7.2a,
@@ -872,7 +958,7 @@ else
   echo "lr-transplant: the source transcript was NOT retired — nothing has asserted that $SID has stopped writing, and this driver is not that session. The copy, the lock and the tombstone are in place; re-run with --phase confirm once the source is quiesced (that call retires it and is safe to repeat)." >&2
 fi
 
-printf '{"ok":true,"sid":"%s","slug":"%s","target_transcript":"%s","sha256":"%s","session_dir_copied":%s,"tasks_copied":%s,"source_retired":%s,"source_retired_reason":"%s","lock":"%s","tombstone":"%s","hop":%d,"ts_first":"%s","chain":[%s]%s%s%s}\n' \
+printf '{"ok":true,"sid":"%s","slug":"%s","target_transcript":"%s","sha256":"%s","session_dir_copied":%s,"tasks_copied":%s,"source_retired":%s,"source_retired_reason":"%s","lock":"%s","tombstone":"%s","hop":%d,"ts_first":"%s","chain":[%s]%s%s%s%s}\n' \
   "$SID" "$SLUG" "$DST" "$SHA_DST" "$SESSION_DIR_COPIED" "$TASKS_COPIED" "$SOURCE_RETIRED" \
   "$SOURCE_RETIRED_REASON" "$LOCK" "$TOMBSTONE" \
-  "$LRT_HOPS" "$LRT_TS_FIRST" "$LRT_CHAIN_JSON" "$LRT_CUSTODY_JSON" "$LRT_PHASE_JSON" "$LRT_CAUSE_JSON"
+  "$LRT_HOPS" "$LRT_TS_FIRST" "$LRT_CHAIN_JSON" "$LRT_CUSTODY_JSON" "$LRT_PHASE_JSON" "$LRT_CAUSE_JSON" "$(lrt_set_aside_json)"

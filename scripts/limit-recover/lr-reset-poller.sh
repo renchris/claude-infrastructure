@@ -742,6 +742,54 @@ lrp_page() {
 # lrp_held_lead <sid> → 0 when the session LEADS live members (decision 4: held on every lane, woken
 # in place at its reset, never moved and never re-spawned). Unknown (no lr-team.sh) is NOT a lead.
 lrp_held_lead() { command -v lr_has_live_teammate >/dev/null 2>&1 && lr_has_live_teammate "${1:?}"; }
+# ── the two predicate calls the tick loop makes, each ONE fork, both through the SSOT ───────────
+# WHY A FUNCTION AND NOT AN INLINE `grep`. Both of these replace a raw `grep` whose exit 1 meant two
+# different things at once, and the poller read both as "no". The old `head -c 8000 | grep` for the
+# agentName key exits 1 for a session that is NOT a teammate and for a transcript that has been
+# rotated away — and the second reading pushed a live teammate into the lead's own respawn. The shim
+# REFUSES instead (rc 4, "the predicate could not run"), which is why the call sites branch on
+# UNREADABLE before they branch on the verdict. A refusal is never silently a "no".
+# WHY IT LIVES HERE, not beside lrp_cap_of: the request lane (`for _rq in "$REQUESTS"/*.json`) is
+# top-level code that calls rq_stale_reason before the tick loop's helpers further down are defined,
+# so a call from there would be `command not found` (127) — read as "not a teammate", which drops the
+# guard for every real teammate. Defined above rq_stale_reason, every caller sees it.
+lrp_is_teammate() { # <transcript> → 0 teammate, 1 not a teammate, 2 UNREADABLE (caller must skip)
+  local out rc
+  out="$(bash "$LRPRED" is-teammate-head "$1" 2>/dev/null)"; rc=$?
+  [ "$rc" -eq 0 ] || return 2
+  [ "$(printf '%s' "$out" | jq -r '.teammate')" = true ]
+}
+# lrp_live_bg_holder <sid> → rc 0 + "<pid> <store>" when a LIVE Claude Code background job holds the
+# sid: a <store>/sessions/*.json with kind=bg naming it, its pid alive and its procStart matching
+# that pid's start (both rendered in the C locale, UTC, which is how Claude Code writes procStart).
+# WHY (review 2026-10-04). Once the teammate grep stopped catching bg sessions (above), a bg job that
+# died on a limit went down the hook lane to `lr-fleet --one`, which transplants and spawns a NEW
+# copy on another account but has no notion of a bg job: the bg-spare argv carries no sid, so no
+# holder is seen and the job is never stopped. That leaves a live husk on the old account, the
+# d425afab state, produced automatically. Only `cc-lr switch` stops a bg job before it moves one.
+# A sessions file with no procStart is judged by the pid alone (a bg file always carries one; the
+# miss costs a manual switch, never a second writer). Kill switch LR_RQ_BG_HOLDER=off.
+lrp_live_bg_holder() {
+  local sid="${1:?}" c f row pid pst now
+  [[ "${LR_RQ_BG_HOLDER:-on}" != off ]] || return 1
+  while IFS= read -r c; do
+    [[ -n "$c" ]] || continue
+    for f in "$c"/sessions/*.json; do
+      [[ -f "$f" ]] || continue
+      row="$(jq -r --arg s "$sid" 'select(.kind == "bg" and .sessionId == $s) | "\(.pid // "")\t\(.procStart // "")"' "$f" 2>/dev/null)" || continue
+      [[ -n "$row" ]] || continue
+      IFS=$'\t' read -r pid pst <<< "$row"
+      [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null || continue
+      if [[ -n "$pst" ]]; then
+        now="$(LC_ALL=C TZ=UTC ps -o lstart= -p "$pid" 2>/dev/null | tr -s ' ' | sed 's/^ //; s/ $//')"
+        [[ "$now" == "$(printf '%s' "$pst" | tr -s ' ' | sed 's/^ //; s/ $//')" ]] || continue
+      fi
+      printf '%s %s' "$pid" "$c"; return 0
+    done
+  done < <(if command -v lr_config_dirs >/dev/null 2>&1; then lr_config_dirs 2>/dev/null
+           else for c in "$HOME"/.claude*; do [[ -d "$c/sessions" ]] && printf '%s\n' "$c"; done; fi)
+  return 1
+}
 # lrp_tx_of <cfg> <sid> → that store's transcript path; rc 1 when none
 lrp_tx_of() { local f; for f in "$1"/projects/*/"$2".jsonl; do [[ -f "$f" ]] && { printf '%s' "$f"; return 0; }; done; return 1; }
 # lrp_still_limited <transcript> → 0 when its LAST assistant record is a usage-limit api error
@@ -934,7 +982,7 @@ run_claim_handoff() { # $1=sid $2=the dispatch's output file
 # rq_stale_reason <sid> <transcript_path> → rc 0 + a reason on stdout when the request is STALE;
 # rc 1 (nothing printed) when the session is still a limited, movable, non-teammate session.
 rq_stale_reason() {
-  local sid="$1" tp="$2" cfg to="" kind="" c f
+  local sid="$1" tp="$2" cfg to="" kind="" c f tm bgh
   # The hook always writes .transcript_path; an older or hand-written request may not, so look the
   # sid up across the account stores before calling it unconfirmable.
   if [[ -z "$tp" ]] && command -v lr_config_dirs >/dev/null 2>&1; then
@@ -951,7 +999,24 @@ rq_stale_reason() {
     echo "transplanted to ${to:-another store}"; return 0
   fi
   [[ -f "$tp" ]] || { echo "the transcript is gone from $cfg"; return 0; }
-  if head -c 8192 "$tp" 2>/dev/null | grep '"agentName"' >/dev/null; then echo "a teammate — lead-owned, never a recovery target"; return 0; fi
+  # A LIVE BACKGROUND JOB is never the hook lane's: lr-fleet would spawn a second copy beside a job
+  # it cannot stop (see lrp_live_bg_holder). Asked before the teammate test, which a bg job now passes.
+  if bgh="$(lrp_live_bg_holder "$sid")"; then
+    echo "a live background job (pid ${bgh%% *} under ${bgh#* }) - only cc-lr switch moves it (stop + transplant)"; return 0
+  fi
+  # The SSOT, never a substring. A raw `grep '"agentName"'` here was a regression copy (49c16be7e,
+  # after the 2026-09-20 consolidation): Claude Code auto-names every bg job and writes that name at
+  # the head as {"type":"agent-name","agentName":…}, a LEAD's name record, so every bg session's hook
+  # request was retired as a teammate (d425afab, 2026-10-04). UNREADABLE retires with its own reason,
+  # like the lr-lib arm below: a teammate let through is a double resume. Kill switch
+  # LR_RQ_TEAMMATE_PREDICATE=off restores the old grep.
+  if [[ "${LR_RQ_TEAMMATE_PREDICATE:-on}" == off ]]; then
+    if head -c 8192 "$tp" 2>/dev/null | grep '"agentName"' >/dev/null; then echo "a teammate — lead-owned, never a recovery target"; return 0; fi
+  else
+    lrp_is_teammate "$tp"; tm=$?
+    (( tm == 2 )) && { echo "the teammate test could not run (predicate refused), so this request cannot be confirmed movable"; return 0; }
+    (( tm == 0 )) && { echo "a teammate — lead-owned, never a recovery target"; return 0; }
+  fi
   # DECISION 4: a lead with live members is held on every lane. Retired HERE rather than dispatched,
   # or it spends RQ_MAX_ATTEMPTS on moves the precheck refuses as HELD:team; §2's wake owns it.
   if lrp_held_lead "$sid"; then echo "held:team, resumes in place at reset — a lead with live members is never moved"; return 0; fi
@@ -1429,20 +1494,9 @@ if [[ "${LR_LOCK_REAP:-on}" != off && -f "$LR/lr-lock.py" && -d "$STATE/locks" ]
   [[ -z "${_lk_out:-}" ]] || while IFS= read -r _lk_line; do log "LOCK-REAP $_lk_line"; done <<< "$_lk_out"
 fi
 
-# ── the two predicate calls this loop makes, each ONE fork, both through the SSOT ───────────────
-# WHY A FUNCTION AND NOT AN INLINE `grep`. Both of these replace a raw `grep` whose exit 1 meant two
-# different things at once, and the poller read both as "no". The old `head -c 8000 | grep` for the
-# agentName key exits 1 for a session that is NOT a teammate and for a transcript that has been
-# rotated away — and the second reading pushed a live teammate into the lead's own respawn. The shim
-# REFUSES instead (rc 4, "the predicate could not run"), which is why the call sites branch on
-# UNREADABLE before they branch on the verdict. A refusal is never silently a "no".
-lrp_is_teammate() { # <transcript> → 0 teammate, 1 not a teammate, 2 UNREADABLE (caller must skip)
-  local out rc
-  out="$(bash "$LRPRED" is-teammate-head "$1" 2>/dev/null)"; rc=$?
-  [ "$rc" -eq 0 ] || return 2
-  [ "$(printf '%s' "$out" | jq -r '.teammate')" = true ]
-}
-
+# ── the second of the two predicate calls this loop makes, ONE fork, through the SSOT ───────────
+# Its sibling lrp_is_teammate sits beside lrp_held_lead, above rq_stale_reason; the WHY-A-FUNCTION
+# note there covers both.
 lrp_cap_of() { # <transcript> → the cap of the tail's LAST api-error record, empty when not a limit
   local out
   out="$(bash "$LRPRED" classify-tail "$1" 2>/dev/null)" || return 1

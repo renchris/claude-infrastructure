@@ -38,6 +38,8 @@
 #   cc-lr status [ref | --all]
 #   cc-lr status --cohort [cid]       the reconciler's cohorts, one line per member
 #   cc-lr repair <bundle|ref> [--mode relaunch|prompt] [--target A] [--source-pane P]
+#   cc-lr repair-markers [--sid S] [--dry-run]
+#                                     set aside STALE handoff markers (via the drainer; never renames itself)
 #   cc-lr upgrade (--all | <pane|sid8>) [--dry-run] [--wait S | --no-wait] · cc-lr upgrade --report
 #   cc-lr accounts --limited          the reconciler's unexpired limit facts, grouped by account
 #   cc-lr cohort refire <sid|sid8|pane>
@@ -179,6 +181,13 @@ cc-lr — find · recover · status · repair, for a limit-blocked session.
   While the reconciler is live, recover and switch QUEUE a request for it instead of acting.
   cc-lr repair <bundle|ref> [--mode relaunch|prompt] [--target A] [--source-pane P]
                              write a poller request and kick the daemon — NEVER types
+  cc-lr repair-markers [--sid S] [--dry-run]
+                             a store holding a session's LIVE transcript beside an OLDER handoff
+                             marker pointing away, while the other store's NEWER marker points
+                             back, blocks every prompt there (handed-off-session-guard). Prints
+                             STALE/KEEP per marker; without --dry-run queues one drainer request per
+                             STALE sid (the drainer re-judges, then renames to .stale-<ts>, never
+                             deletes) and waits for each verdict (CC_LR_MARKERS_WAIT_S, default 120)
   cc-lr upgrade (--all | <pane|sid8>) [--dry-run] [--wait S | --no-wait] [--scrub-composer TEXT]
   cc-lr upgrade --report     move IDLE live sessions onto the current binary + model, in place
                              (same pane, uuid, account, effort). --dry-run prints one row per
@@ -855,7 +864,7 @@ cmd_switch_driver() { # <target> <dry> <pane> <sid> <from> <all> <wait_s> [exclu
       # F4: a Claude Code background session, NAMED by --sid/--pane. It cannot run the SELF verb (it
       # has no composer), so the drainer moves it: stop the job, transplant, quit the hosting pane's
       # agent view, relaunch there. Never by --all-idle — a fleet sweep does not stop jobs.
-      note="bg session: the drainer stops the job, transplants it and relaunches it in pane $p; request"
+      note="bg session: the drainer stops the job, transplants it and relaunches it in (or beside) pane $p; request"
     elif [ "$d" != move ]; then
       if [ "$d" = bg-session ]; then
         cl_switch_line "$p" "$s" skipped "$ac" "$target" "bg-session — a background job is moved only when named: cc-lr switch --sid $s --target $target"
@@ -1379,6 +1388,117 @@ cmd_repair() {
   return 0
 }
 
+# ── repair-markers ─────────────────────────────────────────────────────────────────────────────
+# STALE HANDOFF MARKERS (2026-10-04). A store holding a session's LIVE transcript beside an OLDER
+# `<sid>.HANDOFF.json` that points away, while the other store's NEWER marker points back: a round
+# trip nothing swept. hooks/handed-off-session-guard.sh then refuses every prompt in that live pane
+# (762a6daa, 8e18da3f, measured). THE RENAME IS NEVER THIS VERB'S: auto mode refuses an agent renaming
+# files under ~/.claude*, so the launchd drainer does it (lr-upgrade.sh --drain, kind marker-setaside),
+# re-judging each sid at execution time. This verb asks the ONE classifier (lr-upgrade.sh
+# --stale-markers), prints it, and writes one request per STALE sid straight into the drainer's queue
+# — the shape lr-upgrade --auto-enqueue already writes there; the poller kicks the drainer every tick
+# the queue holds work — then waits for each verdict (results/markers-<sid>.json, matched by req_id).
+# rc 0 every verdict SETASIDE/NOTHING (or nothing stale) · 1 any FAILED/KEPT/pending · 2 refused · 3 usage
+cmd_repair_markers() {
+  local sid="" dry=0 rows rc s st v why ret rv sids="" nst=0 nbad=0 by req tmp dest q pending="" note
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --sid) [ $# -ge 2 ] || { usage; exit 3; }; sid="$2"; shift 2 ;;
+      --dry-run) dry=1; shift ;;
+      -h|--help) usage; exit 0 ;;
+      *) echo "cc-lr repair-markers: unknown argument $1" >&2; usage; exit 3 ;;
+    esac
+  done
+  if [ -n "$sid" ]; then
+    case "$sid" in ''|*[!0-9a-f-]*) cl_die "REFUSED — --sid '$sid' is neither a session uuid nor a sid8; nothing was written" 2 ;; esac
+  fi
+  command -v jq >/dev/null 2>&1 || cl_die "jq is not on PATH; nothing was read or written" 2
+  [ -n "$UPGRADE_BIN" ] && [ -f "$UPGRADE_BIN" ] || cl_die "cannot reach lr-upgrade.sh (set CC_LR_UPGRADE_BIN); nothing was read or written" 2
+  rows="$(bash "$UPGRADE_BIN" --stale-markers)"; rc=$?
+  [ "$rc" -eq 0 ] || cl_die "the marker classifier failed (rc $rc); nothing was written" 2
+  if [ -n "$sid" ]; then
+    rows="$(printf '%s\n' "$rows" | awk -F'\t' -v p="$sid" 'NF && index($1, p) == 1')"
+    if [ "$(printf '%s\n' "$rows" | awk -F'\t' 'NF { print $1 }' | sort -u | grep -c .)" -gt 1 ]; then
+      echo "cc-lr repair-markers: REFUSED — '$sid' matches more than one session; pass the full uuid. Nothing was written. Candidates:" >&2
+      printf '%s\n' "$rows" | awk -F'\t' 'NF { print "  " $1 }' | sort -u >&2
+      return 2
+    fi
+  fi
+  if [ -z "$(printf '%s' "$rows" | tr -d '[:space:]')" ]; then
+    echo "cc-lr repair-markers: no handoff marker sits beside a live transcript${sid:+ for $sid}; nothing to repair"
+    return 0
+  fi
+  while IFS=$'\t' read -r s st _ v why ret rv; do
+    [ -n "$s" ] || continue
+    case "$rv" in
+      STALE-RETIRED) note=" · old retired copy is a prefix of the live one: set aside too" ;;
+      KEPT) note=" · retired copy $ret kept (it holds bytes the live transcript lacks)" ;;
+      *) note="" ;;
+    esac
+    printf '%-5s %s  %s · %s%s\n' "$v" "${s:0:8}" "$st" "$why" "$note"
+    if [ "$v" = STALE ]; then
+      case " $sids " in *" $s "*) ;; *) sids="$sids $s"; nst=$((nst + 1)) ;; esac
+    fi
+  done <<EOF
+$rows
+EOF
+  if [ "$nst" -eq 0 ]; then echo "0 stale marker(s): nothing to set aside"; return 0; fi
+  if [ "$dry" -eq 1 ]; then echo "$nst stale marker(s) · DRY RUN: nothing was written"; return 0; fi
+  by="$(cl_this_pane)"
+  q="$STATE/upgrade-queue"
+  mkdir -p "$q" 2>/dev/null || cl_die "cannot create $q; nothing was queued" 2
+  for s in $sids; do
+    req="${s:0:8}-$(date +%s)-$$-markers"
+    tmp="$q/.cc-lr-markers-$s.$$.tmp"; dest="$q/cc-lr-markers-$s.json"
+    if jq -n --arg sid "$s" --arg by "${by:-?}" --arg req "$req" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+         '{kind:"marker-setaside", sid:$sid, source_pane:"-", requested_by:$by, req_id:$req, ts:$ts, origin_class:"cc-lr-repair-markers"}' \
+         > "$tmp" 2>/dev/null && mv -f "$tmp" "$dest" 2>/dev/null; then
+      pending="$pending$s"$'\t'"$req"$'\n'
+      echo "cc-lr: queued $dest (the drainer re-judges ${s:0:8} before it renames anything)"
+    else
+      rm -f "$tmp" 2>/dev/null || true
+      echo "cc-lr: could not write $dest; ${s:0:8} was not queued" >&2; nbad=$((nbad + 1))
+    fi
+  done
+  # `kickstart` with NO `-k` — the rule every request writer here follows (see cmd_repair).
+  if [ -n "$pending" ] && command -v launchctl >/dev/null 2>&1; then
+    launchctl kickstart "gui/$(id -u)/$POLLER_LABEL" >/dev/null 2>&1 \
+      || echo "cc-lr: the kick failed — the poller's own interval will start the drainer" >&2
+  fi
+  local deadline left still f rreq fv fr
+  deadline=$(( $(date +%s) + ${CC_LR_MARKERS_WAIT_S:-120} ))
+  left="$pending"
+  while [ -n "$left" ]; do
+    still=""
+    while IFS=$'\t' read -r s req; do
+      [ -n "$s" ] || continue
+      f="$STATE/results/markers-$s.json"
+      rreq="$(jq -r '.req_id // empty' "$f" 2>/dev/null || true)"
+      if [ -n "$rreq" ] && [ "$rreq" = "$req" ]; then
+        fv="$(jq -r '.verdict // "FAILED"' "$f" 2>/dev/null)"; fr="$(jq -r '.reason // "-"' "$f" 2>/dev/null)"
+        printf '%-8s %s  %s\n' "$fv" "${s:0:8}" "$fr"
+        case "$fv" in SETASIDE|NOTHING) ;; *) nbad=$((nbad + 1)) ;; esac
+      else
+        still="$still$s"$'\t'"$req"$'\n'
+      fi
+    done <<EOF2
+$left
+EOF2
+    left="$still"
+    [ -n "$left" ] || break
+    [ "$(date +%s)" -lt "$deadline" ] || break
+    sleep "${CC_LR_MARKERS_POLL_S:-3}"
+  done
+  if [ -n "$left" ]; then
+    printf '%s' "$left" | while IFS=$'\t' read -r s req; do
+      [ -n "$s" ] && printf 'pending  %s  queued; the drainer has not answered yet (its verdict lands in %s and as mail)\n' "${s:0:8}" "$STATE/results/markers-$s.json"
+    done
+    nbad=$((nbad + 1))
+  fi
+  [ "$nbad" -eq 0 ] || return 1
+  return 0
+}
+
 # ── upgrade ────────────────────────────────────────────────────────────────────────────────────
 # MOVE IDLE LIVE SESSIONS ONTO THE CURRENT BINARY + MODEL, IN PLACE (2026-09-22). The mirror of
 # `repair`'s shape, for the same reason: acting on ANOTHER live session from inside a session is
@@ -1650,9 +1770,10 @@ case "$CMD" in
   switch)  cmd_switch  "$@"; exit $? ;;
   status)  cmd_status  "$@"; exit $? ;;
   repair)  cmd_repair  "$@"; exit $? ;;
+  repair-markers) cmd_repair_markers "$@"; exit $? ;;
   upgrade) cmd_upgrade "$@"; exit $? ;;
   accounts) cmd_accounts "$@"; exit $? ;;
   cohort)  cmd_cohort  "$@"; exit $? ;;
-  *) echo "cc-lr: unknown subcommand '$CMD' — expected find | recover | switch | status | repair | upgrade | accounts | cohort (status --cohort, accounts --limited, cohort refire)" >&2
+  *) echo "cc-lr: unknown subcommand '$CMD' — expected find | recover | switch | status | repair | repair-markers | upgrade | accounts | cohort (status --cohort, accounts --limited, cohort refire)" >&2
      usage; exit 3 ;;
 esac

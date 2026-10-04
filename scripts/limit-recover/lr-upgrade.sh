@@ -27,6 +27,9 @@
 #                                                   (kind upgrade AND kind switch — one drainer)
 #   lr-upgrade.sh --switch-census [--from A] [--target A] [--pane P|--sid S]   the switch selection
 #   lr-upgrade.sh --switch-drive <sid> <pane> <target> [--requested-by P] [--req-id ID]
+#   lr-upgrade.sh --stale-markers [sid]             TSV: stale cross-account handoff markers (read-only)
+#   lr-upgrade.sh --marker-drive <sid> [--requested-by P] [--req-id ID]   set one sid's aside, synchronous
+#                                                   (the drain runs it for kind marker-setaside)
 #   lr-upgrade.sh --auto-enqueue                    the poller's tick: queue every `upgrade` row
 #   lr-upgrade.sh --pin-target <sid> <opus|fable|id|clear>  per-session target override (24h TTL)
 #
@@ -63,6 +66,13 @@ LRU_TEAM_LIB="${LRU_TEAM_LIB:-$LRU_DIR/lr-team.sh}"
 LRU_IT2_BIN="${LRU_IT2_BIN:-$HOME/.claude/bin/it2}"
 LRU_TRANSPLANT="${LRU_TRANSPLANT:-$LRU_DIR/lr-transplant.sh}"
 LRU_NOTIFY_BIN="${LRU_NOTIFY_BIN:-$HOME/.claude/bin/cc-notify}"
+# The limit predicate (lr_predicate.py's bash face), asked whether a moved bg session died on a limit.
+LRU_PREDICATE="${LRU_PREDICATE:-$LRU_DIR/lr-predicate.sh}"
+# The UserPromptSubmit guard a stale handoff marker trips; the marker drive runs it before and after.
+LRU_HOG_BIN="${LRU_HOG_BIN:-$LRU_DIR/../../hooks/handed-off-session-guard.sh}"
+# kitty's window list as JSON (`kitty @ ls`). A FILE seam: tests point it at a fixture so no census
+# can reach the live kitty socket; unset, the list comes from cc_tui_rpc ls through LRU_TUI_LIB.
+LRU_KITTY_LS="${LRU_KITTY_LS:-}"
 # The resume-debt ledger (docs/plans/CLOSE_RESUME_CUSTODY.md §2 D2): surface check before /exit,
 # pane-bound proof, settle a stranded relaunch. Every call is best-effort — an absent tool must never
 # halt an upgrade, so each caller falls back to the pre-ledger behaviour when it is missing.
@@ -566,7 +576,7 @@ lru_census() { # [$1=ref: pane id or sid prefix; empty = all] → TSV rows on st
   local dupsids="" pass k hostpids=""
   snap="$(lru_snapshot)"
   # F4: a pane showing a live bg session is judged by it, not by its frozen parent (see lru_bg_sessions).
-  hostpids=" $(lru_bg_sessions "$snap" | awk -F'\t' '$8 != "" { printf "%s ", $8 }')"
+  hostpids=" $(lru_bg_sessions "$snap" | awk -F'\t' '$8 != "" && $8 != "-" { printf "%s ", $8 }')"
   target_bin="$("$LRU_CLAUDE_BIN_CMD" 2>/dev/null || true)"
   [ -n "$target_bin" ] || { lru_say "cannot resolve the current binary ($LRU_CLAUDE_BIN_CMD) — refusing to judge 'current'"; return 2; }
   # pass 1: live rows (pid in the snapshot, lstart agreeing when the row records one)
@@ -667,6 +677,12 @@ EOF
 # Dispositions: move · self · on-target · duplicate · stale-row · teammate · lead-with-teammate
 #               · no-transcript · mid-turn · subagents-in-flight · background-job
 #               · composer-occupied · composer-unknown
+#               bg rows: bg-session · bg-busy · bg-no-pane · bg-split · bg-host (the host pane's row)
+#               · bg-attach-nowin (a `claude attach <job>` viewer is live, but no window of the
+#                 kitty this drainer talks to owns it, or kitty could not be asked)
+#               · bg-attach-ambiguous (two or more attach viewers for one job: no window to pick)
+#               · bg-attach-occupied (the viewer's window belongs to an interactive claude, or the
+#                 viewer is not its foreground job: never typed into, never waited out)
 # A TEAMMATE never moves (its pane, its account and its close belong to its lead), and a LEAD with a
 # live teammate never moves either: the SELF verb /exits the lead, and every graceful lead exit runs
 # cleanupSessionTeams, which kills the members (see the team procedure above). Neither is "busy" —
@@ -685,18 +701,47 @@ LRU_SWITCH_MARK='[operator-ruling cc-lr-switch'
 lru_snap_ppid() { # $1=snapshot $2=pid → its parent pid
   printf '%s\n' "$1" | LRU_P="$2" awk "$LRU_PROC_LINE"' && $1 == ENVIRON["LRU_P"] { print $2; exit }'
 }
+# THE SPAWNER PIN (2026-10-04). `--spawned-by {"pid":N}` is a fact about the instant the daemon
+# started; the pid itself is recycled by the OS afterwards. d425afab's spawner (7524) was dead, which
+# reads harmlessly as "no pane". Recycled into a LIVE registry claude, the same number would bind the
+# bg row to an unrelated pane: that pane would read bg-host, the attach fallback below would never
+# run, and the drive would send its Ctrl-C there. So the spawner counts only when it is live in the
+# snapshot AND started no later than its daemon. An lstart that does not parse keeps the old answer
+# (a non-reading convicts nobody). Kill switch LRU_BG_SPAWNER_PIN=off: the bare --spawned-by number.
+lru_lstart_epoch() { # $1=lstart as the snapshot renders it ("Tue Sep 22 06:47:13 2026") → epoch, or nothing
+  TZ=UTC LC_ALL=C date -j -u -f '%a %b %d %T %Y' "$1" +%s 2>/dev/null \
+    || TZ=UTC LC_ALL=C date -u -d "$1" +%s 2>/dev/null || true
+}
 lru_bg_host_pid() { # $1=snapshot $2=bg session pid → the pid of the claude that spawned its daemon, or nothing
-  local p="$2" a i=0
+  local p="$2" a i=0 sp de se
   while [ -n "$p" ] && [ "$p" != 1 ] && [ "$i" -lt 4 ]; do
     p="$(lru_snap_ppid "$1" "$p")"; i=$((i + 1))
     a="$(lru_snap_args "$1" "$p")"
     case "$a" in *" daemon run "*--spawned-by*)
-      printf '%s' "$a" | sed -n 's/.*--spawned-by .*"pid":\([0-9][0-9]*\).*/\1/p'; return 0 ;; esac
+      sp="$(printf '%s' "$a" | sed -n 's/.*--spawned-by .*"pid":\([0-9][0-9]*\).*/\1/p')"
+      if [ -n "$sp" ] && [ "${LRU_BG_SPAWNER_PIN:-on}" != off ]; then
+        [ -n "$(lru_snap_args "$1" "$sp")" ] || return 0            # dead: nobody spawned it any more
+        de="$(lru_lstart_epoch "$(lru_snap_lstart "$1" "$p")")"; se="$(lru_lstart_epoch "$(lru_snap_lstart "$1" "$sp")")"
+        if [ -n "$de" ] && [ -n "$se" ] && [ "$se" -gt "$de" ]; then return 0; fi   # recycled pid
+      fi
+      printf '%s' "$sp"; return 0 ;; esac
   done
   return 0
 }
-lru_bg_sessions() { # $1=snapshot → TSV: sid pid cfg account cwd status jobId host_pid — LIVE bg sessions only
-  local f sid pid cfg job st cwd
+# THE ATTACH VIEWER (2026-10-04). A bg job can be on screen with no spawner pane at all: the operator
+# runs `claude attach <jobId>` in some window. d425afab was shown that way in kitty window 191 while
+# the census said bg-no-pane. Snapshot only, whole tokens: argv[0] is a claude binary (any path),
+# argv[1] is `attach`, argv[2] is the job — so `attach 032aa97fX`, `grep attach 032aa97f` and a
+# brief that quotes the command never qualify.
+lru_bg_attach_pids() { # $1=snapshot $2=jobId → space-joined pids of live `claude attach <jobId>` clients
+  [ -n "${2:-}" ] && [ "$2" != - ] || return 0
+  printf '%s\n' "$1" | LRU_J="$2" awk "$LRU_PROC_LINE"' && $8 ~ /(^|\/)claude(\.exe)?$/ && $9 == "attach" && $10 == ENVIRON["LRU_J"] {
+      printf "%s%s", (n++ ? " " : ""), $1 }'
+}
+# Columns 8 and 9 are "-" when empty, never blank: tab is IFS whitespace, so `read` collapses an empty
+# middle field and column 9 would land in column 8 (the spawner's slot).
+lru_bg_sessions() { # $1=snapshot → TSV: sid pid cfg account cwd status jobId host_pid attach_pids — LIVE bg sessions only
+  local f sid pid cfg job st cwd host att
   for f in "${LRU_CFG_ROOT%/}"/.claude*/sessions/*.json; do
     [ -f "$f" ] || continue
     [ "$(jq -r '.kind // empty' "$f" 2>/dev/null)" = bg ] || continue
@@ -705,8 +750,105 @@ lru_bg_sessions() { # $1=snapshot → TSV: sid pid cfg account cwd status jobId 
     [ -n "$(lru_snap_args "$1" "$pid")" ] || continue
     cfg="${f%/sessions/*}"; job="$(jq -r '.jobId // empty' "$f" 2>/dev/null)"
     st="$(jq -r '.status // empty' "$f" 2>/dev/null)"; cwd="$(jq -r '.cwd // empty' "$f" 2>/dev/null)"
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$sid" "$pid" "$cfg" "$(lru_acct_name "${cfg##*/.}")" \
-      "${cwd:--}" "${st:--}" "${job:--}" "$(lru_bg_host_pid "$1" "$pid")"
+    host="$(lru_bg_host_pid "$1" "$pid")"; att=""
+    [ "${LRU_BG_ATTACH:-on}" = off ] || att="$(lru_bg_attach_pids "$1" "${job:--}")"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$sid" "$pid" "$cfg" "$(lru_acct_name "${cfg##*/.}")" \
+      "${cwd:--}" "${st:--}" "${job:--}" "${host:--}" "${att:--}"
+  done
+}
+# WHICH KITTY WINDOW SHOWS A PID. ONE `kitty @ ls` per judgment (memoised in LRU_KLS_CACHE; every
+# caller that starts a new judgment clears it, because the drive itself splits windows). Two shapes:
+#   root  — the window's own process IS the pid. d425afab's 191 was this (window.pid = the attach,
+#           ppid = kitty itself): when the viewer exits, kitty closes the window, so nothing can be
+#           typed there afterwards;
+#   shell — the window's process is an ANCESTOR of the pid (≤4 hops in the snapshot): a shell that
+#           comes back when the viewer exits, like a spawner pane's.
+# THE SHELL ARM IS STRICT (review 2026-10-04). Ancestry alone bound a viewer to ANY window above it:
+# window → zsh → an interactive claude X → `!` zsh → `claude attach` read as X's window, and the drive
+# then sent ^Z^C^C into X and typed the launcher into X's composer; a SUSPENDED attach under a shell
+# now running a claude did the same. So the shell arm also requires the pid to be in that window's
+# foreground_processes, and no claude between the window and the pid. Either failing is rc 3: the
+# window is known (LRU_KWIN) but is OCCUPIED, never "none" and never a host. Kill switch
+# LRU_BG_ATTACH_STRICT=off: ancestry alone, as before.
+# Sets LRU_KWIN (window id) and LRU_KWHOW (root|shell). rc 0 found · 1 provably none · 2 unknown ·
+# 3 found but occupied (LRU_KWHY says why).
+LRU_KLS_CACHE="" LRU_KWIN="" LRU_KWHOW="" LRU_KWHY=""
+lru_is_claude_argv() { # $1=an argv string → 0 when argv[0] is a claude binary (any path)
+  local a0="${1%% *}"
+  case "${a0##*/}" in claude|claude.exe) return 0 ;; esac
+  return 1
+}
+lru_kls() { # → kitty's window list, memoised in LRU_KLS_CACHE; rc 2 when it cannot be read
+  if [ -z "$LRU_KLS_CACHE" ]; then
+    if [ -n "$LRU_KITTY_LS" ]; then
+      LRU_KLS_CACHE="$(cat "$LRU_KITTY_LS" 2>/dev/null)" || LRU_KLS_CACHE=""
+    elif [ -f "$LRU_TUI_LIB" ]; then
+      # shellcheck disable=SC1090  # sourced in a subshell: a sibling library must not replace our names
+      LRU_KLS_CACHE="$( . "$LRU_TUI_LIB" && cc_tui_rpc ls 2>/dev/null )" || LRU_KLS_CACHE=""
+    fi
+  fi
+  [ -n "$LRU_KLS_CACHE" ] || return 2
+}
+lru_kitty_win_of_pid() { # $1=snapshot $2=pid
+  local snap="$1" pid="$2" anc="" p="$2" i=0 out k fg q
+  LRU_KWIN=""; LRU_KWHOW=""; LRU_KWHY=""
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  lru_kls || return 2
+  while [ "$i" -lt 4 ]; do
+    p="$(lru_snap_ppid "$snap" "$p")"; i=$((i + 1))
+    case "$p" in ''|0|1|*[!0-9]*) break ;; esac
+    anc="$anc${anc:+,}$p"
+  done
+  # shell rows carry the matching ancestor's index (k) and whether the pid is in that window's
+  # foreground (yes|no|unknown: a kitty that lists no foreground_processes cannot say)
+  out="$(printf '%s' "$LRU_KLS_CACHE" | jq -r --argjson p "$pid" --argjson a "[$anc]" '
+      [.[]? | .tabs[]? | .windows[]?] as $w
+      | ([$w[] | select(.pid == $p) | .id] | first) as $root
+      | if $root != null then "\($root) root"
+        else ([$a | to_entries[] | .value as $q | .key as $k | $w[] | select(.pid == $q)
+               | {k: $k, id: .id,
+                  fg: (if (.foreground_processes | type) != "array" then "unknown"
+                       elif ([.foreground_processes[]?.pid] | index($p)) != null then "yes" else "no" end)}]
+              | sort_by(.k) | first) as $sh
+             | if $sh != null then "\($sh.id) shell \($sh.k) \($sh.fg)" else "none" end
+        end' 2>/dev/null)" || return 2
+  case "$out" in
+    none) return 1 ;;
+    *" root") LRU_KWIN="${out%% *}"; LRU_KWHOW=root ;;
+    *" shell "*) LRU_KWIN="${out%% *}"; LRU_KWHOW=shell ;;
+    *) return 2 ;;
+  esac
+  case "$LRU_KWIN" in ''|*[!0-9]*) LRU_KWIN=""; LRU_KWHOW=""; return 2 ;; esac
+  if [ "$LRU_KWHOW" = shell ] && [ "${LRU_BG_ATTACH_STRICT:-on}" != off ]; then
+    k="$(printf '%s' "$out" | awk '{ print $3 }')"; fg="$(printf '%s' "$out" | awk '{ print $4 }')"
+    case "$fg" in
+      unknown) LRU_KWIN=""; LRU_KWHOW=""; return 2 ;;
+      no) LRU_KWHY="pid $pid is not in window $LRU_KWIN's foreground (a suspended or background job)"; return 3 ;;
+    esac
+    # the ancestors strictly between the pid and the window's own process: anc[0 .. k-1]
+    i=0
+    for q in ${anc//,/ }; do
+      [ "$i" -lt "${k:-0}" ] || break
+      if lru_is_claude_argv "$(lru_snap_args "$snap" "$q")"; then
+        LRU_KWHY="a claude (pid $q) sits between window $LRU_KWIN and pid $pid"; return 3
+      fi
+      i=$((i + 1))
+    done
+  fi
+  return 0
+}
+# A window is OCCUPIED when a LIVE registry row names it: an interactive claude owns that composer,
+# whatever else runs under its shell. Kill switch: LRU_BG_ATTACH_STRICT=off.
+lru_pane_occupied() { # $1=live pass $2=pane → 0 when a LIVE registry row's paneUUID is that pane
+  [ "${LRU_BG_ATTACH_STRICT:-on}" != off ] || return 1
+  [ -n "$(printf '%s\n' "$1" | while IFS=$'\t' read -r k f _; do
+            [ "$k" = LIVE ] && [ "$(jq -r '.paneUUID // empty' "$f" 2>/dev/null)" = "$2" ] && { echo y; break; }
+          done)" ]
+}
+lru_live_pane_of_pid() { # $1=live pass $2=pid → the paneUUID of the LIVE registry row whose pid it is, or nothing
+  [ -n "$2" ] && [ "$2" != - ] || return 0
+  printf '%s\n' "$1" | while IFS=$'\t' read -r k f _; do
+    [ "$k" = LIVE ] && [ "$(jq -r '.pid // empty' "$f" 2>/dev/null)" = "$2" ] && { jq -r '.paneUUID // empty' "$f"; break; }
   done
 }
 lru_load_acct_map() {
@@ -740,7 +882,7 @@ lru_switch_census() {
   pass="$(lru_live_pass "$snap")"
   dups="$(lru_dup_sids "$pass")"
   bgs="$(lru_bg_sessions "$snap")"
-  [ -z "$bgs" ] || hostpids=" $(printf '%s\n' "$bgs" | awk -F'\t' '$8 != "" { printf "%s ", $8 }')"
+  [ -z "$bgs" ] || hostpids=" $(printf '%s\n' "$bgs" | awk -F'\t' '$8 != "" && $8 != "-" { printf "%s ", $8 }')"
   while IFS=$'\t' read -r k f sid; do
     [ -n "$k" ] || continue
     pane="$(jq -r '.paneUUID // empty' "$f" 2>/dev/null)"; pid="$(jq -r '.pid // empty' "$f" 2>/dev/null)"
@@ -787,16 +929,32 @@ EOF
   # "-". Dispositions: bg-session (idle; movable when named by --sid/--pane) · bg-busy (working) ·
   # bg-no-pane (nothing to relaunch it in) · bg-split (the SAME conversation is also live as an
   # interactive session — two writers already; never move either copy) · on-target.
-  local bsid bpid bcfg bacct bcwd bst bhost hp
-  while IFS=$'\t' read -r bsid bpid bcfg bacct bcwd bst _ bhost; do
+  # NO SPAWNER PANE, BUT A VIEWER (2026-10-04): when the registry names no pane and ONE live
+  # `claude attach <job>` client exists, the pane is the kitty window showing it, and the row is
+  # judged by the same ladder; two viewers are bg-attach-ambiguous, a viewer no window owns (or a
+  # kitty that cannot be asked) is bg-attach-nowin. Kill switch LRU_BG_ATTACH=off: bg-no-pane, as before.
+  # A viewer's window that an interactive claude owns (a LIVE registry row names it, or that claude
+  # sits between the window and the viewer, or the viewer is not the window's foreground job) is
+  # bg-attach-occupied: the row carries the window so --pane finds it, and it never moves, because
+  # every key and every launcher the drive sends would land in that claude (see lru_kitty_win_of_pid).
+  local bsid bpid bcfg bacct bcwd bst bhost battach hp adisp krc
+  LRU_KLS_CACHE=""
+  while IFS=$'\t' read -r bsid bpid bcfg bacct bcwd bst _ bhost battach; do
     [ -n "$bsid" ] || continue
     [ -z "$from" ] || [ "$bacct" = "$from" ] || continue
-    hp="-"
-    if [ -n "$bhost" ]; then
-      hp="$(printf '%s\n' "$pass" | while IFS=$'\t' read -r k f _; do
-              [ "$k" = LIVE ] && [ "$(jq -r '.pid // empty' "$f" 2>/dev/null)" = "$bhost" ] && { jq -r '.paneUUID // empty' "$f"; break; }
-            done)"
-      [ -n "$hp" ] || hp="-"
+    hp="$(lru_live_pane_of_pid "$pass" "$bhost")"
+    [ -n "$hp" ] || hp="-"
+    adisp=""
+    if [ "$hp" = - ] && [ -n "$battach" ] && [ "$battach" != - ] && [ "${LRU_BG_ATTACH:-on}" != off ]; then
+      case "$battach" in
+        *" "*) adisp=bg-attach-ambiguous ;;
+        *) krc=0; lru_kitty_win_of_pid "$snap" "$battach" || krc=$?
+           case "$krc" in
+             0) hp="$LRU_KWIN"; lru_pane_occupied "$pass" "$hp" && adisp=bg-attach-occupied ;;
+             3) hp="$LRU_KWIN"; adisp=bg-attach-occupied ;;
+             *) adisp=bg-attach-nowin ;;
+           esac ;;
+      esac
     fi
     case "$sel" in
       pane:*) [ "$hp" = "${sel#pane:}" ] || continue ;;
@@ -804,6 +962,7 @@ EOF
     esac
     if [ -n "$(printf '%s\n' "$pass" | awk -F'\t' -v s="$bsid" '$1 == "LIVE" && $3 == s')" ]; then disp=bg-split
     elif [ -n "$target" ] && [ "$bacct" = "$target" ]; then disp=on-target
+    elif [ -n "$adisp" ]; then disp="$adisp"
     elif [ "$hp" = - ]; then disp=bg-no-pane
     elif [ "$bst" != idle ]; then disp=bg-busy
     else disp=bg-session
@@ -1077,6 +1236,24 @@ lru_mutex_take() { # $1=sid $2=pane $3=by → 0 taken · 1 held
 #      daemon log reads `bg settled bb4e00d0 (killed)` and, 4 minutes later, `bg claimed-spare
 #      bb4e00d0 (fleet)` — the job came BACK, so the conversation ran on two accounts at once. A
 #      move that does not re-check the source leaves that split-brain behind and calls it SWITCHED.
+# THREE AMENDMENTS (2026-10-04, d425afab: next4 bg job 032aa97f, viewed in kitty window 191 through
+# `claude attach 032aa97f`, its transcript already half-moved to next2 and never relaunched):
+#   0. THE LIVE COPY. The job's own config dir (next4) held only `<sid>.jsonl.handed-off` plus a
+#      tombstone naming next2; the live, cmp-identical copy was under next2. Transplanting from the
+#      job's dir dies at "no transcript" — after the stop. So the stop stays on the job's dir, and
+#      the transplant reads the store lru_live_store proves holds the live transcript (lock, then
+#      tombstone chain), resolved BEFORE anything is touched. Kill switch LRU_BG_LIVE_SOURCE=off.
+#   A. THE VIEWER HOST. With no spawner pane, the host is the attach client (census above). Its
+#      window's root process was the attach itself, so quitting it CLOSES the window: a sibling
+#      pane is split beside it first and the launcher runs there. The viewer is quit BEFORE the stop
+#      (Ctrl+Z is attach's documented detach; ^C^C is the fallback), so no viewer is attached to
+#      reopen the stopped job. Kill switches LRU_BG_ATTACH=off, LRU_BG_ATTACH_SPLIT=off.
+#   P. THE RELAUNCH PROMPT. A session that died on a usage limit (its main transcript, or a
+#      workflow/subagent transcript newer than the lead's last healthy turn) relaunches with
+#      `/limit-recover recover …`, so it audits and re-runs its failed work; every other move is
+#      prompt-free (the old upgrade prompt misstated the account). The evidence is lr_predicate's
+#      structured envelope, never the task-notification's failure text (a cap-text copy the
+#      predicate lint refuses). Kill switch LRU_BG_RELAUNCH_PROMPT=off.
 # Snapshot-aware liveness, so the suite's `ps` file and the live `ps` answer the same question.
 lru_pid_live() { [ -n "$(lru_snap_args "$(lru_snapshot)" "$1")" ]; }
 lru_bg_row() { # $1=sid → that sid's live bg row (lru_bg_sessions columns), or nothing
@@ -1090,74 +1267,380 @@ lru_wait_gone() { # $1=pid $2=seconds → 0 gone · 1 still live at the bound
   done
   return 0
 }
+# A VIEWER THAT DETACHES DOES NOT EXIT (review 2026-10-04, read off the 2.1.284 binary). A clean
+# detach from `claude attach` (the double ^C, delivered as an APC from the job's side) re-execs the
+# client in place as `claude agents` with the job selected (process.execve: same pid, new argv), and
+# its spawnSync fallback leaves the attach parent waiting on a `claude agents` child. Either way the
+# pid survives, so "the pid is gone" never arrives. A viewer is DETACHED once no live process is
+# `claude attach <job>`, or the only one left is the host waiting on a `claude agents` child.
+lru_agents_child() { # $1=snapshot $2=pid → 0 when a live child of it is `claude agents`
+  [ -n "$(printf '%s\n' "$1" | LRU_P="$2" awk "$LRU_PROC_LINE"' && $2 == ENVIRON["LRU_P"] && $8 ~ /(^|\/)claude(\.exe)?$/ && $9 == "agents" { print $1; exit }')" ]
+}
+lru_viewer_detached() { # $1=jobId $2=viewer pid → 0 detached (or gone) · 1 still attached
+  local snap p
+  snap="$(lru_snapshot)"
+  for p in $(lru_bg_attach_pids "$snap" "$1"); do
+    [ "$p" = "$2" ] && lru_agents_child "$snap" "$p" && continue
+    return 1
+  done
+  return 0
+}
+lru_wait_detached() { # $1=jobId $2=viewer pid $3=seconds → 0 detached · 1 still attached at the bound
+  local w=0
+  while ! lru_viewer_detached "$1" "$2"; do
+    [ "$w" -lt "$3" ] || return 1
+    sleep "${LRU_BG_POLL_S:-1}"; w=$((w + 1))
+  done
+  return 0
+}
+lru_ctrlc2() { # $1=window id $2=run dir → two Ctrl-C, LRU_BG_CTRLC_GAP_S apart, logged to keys.log
+  # shellcheck disable=SC1090  # sourced in a subshell: a sibling library must not replace our names
+  ( . "$LRU_TUI_LIB" && cc_tui_rpc send-text --match "id:$1" -- $'\x03' >/dev/null 2>&1 \
+      && sleep "${LRU_BG_CTRLC_GAP_S:-1}" && cc_tui_rpc send-text --match "id:$1" -- $'\x03' >/dev/null 2>&1 ) >> "$2/keys.log" 2>&1 || true
+}
+# THE LAST LOOK BEFORE TYPING into a window this drive did not open (review 2026-10-04): up to 30 s
+# pass between the viewer quitting and the launcher (stop, transplant), and a claude can take the
+# window in that gap. Refuse when a LIVE registry row names it, when any foreground process of the
+# window is a claude, or when kitty cannot say. Kill switch LRU_BG_ATTACH_STRICT=off.
+lru_window_free() { # $1=window id → 0 free to type into · 1 occupied (LRU_KWHY) · 2 unknown
+  local snap fgp q
+  LRU_KWHY=""
+  [ "${LRU_BG_ATTACH_STRICT:-on}" != off ] || return 0
+  snap="$(lru_snapshot)"
+  if lru_pane_occupied "$(lru_live_pass "$snap")" "$1"; then LRU_KWHY="a live registry row names window $1"; return 1; fi
+  LRU_KLS_CACHE=""
+  lru_kls || { LRU_KWHY="kitty could not be asked about window $1"; return 2; }
+  fgp="$(printf '%s' "$LRU_KLS_CACHE" | jq -r --argjson w "$1" '
+      [.[]? | .tabs[]? | .windows[]? | select(.id == $w)] | first
+      | if . == null then "none"
+        elif (.foreground_processes | type) != "array" then "nofg"
+        else ([.foreground_processes[]?.pid] | map(tostring) | join(" ")) end' 2>/dev/null)" \
+    || { LRU_KWHY="kitty's window list did not parse"; return 2; }
+  [ "$fgp" != none ] || { LRU_KWHY="window $1 is not in kitty's window list"; return 2; }
+  [ "$fgp" != nofg ] || { LRU_KWHY="kitty lists no foreground processes for window $1"; return 2; }
+  for q in $fgp; do
+    if lru_is_claude_argv "$(lru_snap_args "$snap" "$q")"; then LRU_KWHY="a claude (pid $q) is window $1's foreground"; return 1; fi
+  done
+  return 0
+}
 lru_bg_stop() { # $1=src cfg $2=jobId $3=bg pid $4=run dir → 0 stopped and gone · 1 not
   local bin; bin="$("$LRU_CLAUDE_BIN_CMD" 2>/dev/null || true)"
   [ -n "$bin" ] || return 1
   CLAUDE_CONFIG_DIR="$1" "$bin" stop "$2" >> "$4/stop.log" 2>&1 || true
   lru_wait_gone "$3" "${LRU_BG_STOP_S:-30}"
 }
+lru_size() { wc -c < "$1" 2>/dev/null | tr -d ' ' || echo 0; }
+lru_proj_rp() { # $1=config dir → the physical path of its projects/ (the string itself when absent)
+  (cd "$1/projects" 2>/dev/null && pwd -P) || printf '%s/projects' "$1"
+}
+lru_lock_owner() { # $1=sid → the custody lock's owner (falling back to `to`, a pre-W5-B lock), or nothing
+  local lk="$LRU_STATE/locks/$1.lock"
+  [ -f "$lk" ] || return 0
+  jq -r '(.owner // .to // empty)' "$lk" 2>/dev/null || true
+}
+# 0. WHICH STORE HOLDS THE LIVE TRANSCRIPT. Self-contained on purpose: lr-lib's lr_transplant_target
+# covers one hop only (it needs the successor's live jsonl), and the suites run with lr-lib absent.
+# Order: the job's own store; the custody lock's owner; then the tombstone chain, one DIFFERENT store
+# per hop (a same-store tombstone is a same-account --mark, never a move), a realpath visited set,
+# at most LRU_BG_LIVE_HOPS hops. Two successors named from one store is never guessed between.
+lru_live_store() { # $1=sid $2=the job's config dir → stdout the config dir holding the live <sid>.jsonl; rc 1 unprovable
+  local sid="$1" cur="$2" seen="" n=0 max="${LRU_BG_LIVE_HOPS:-4}" own c t nxt nrp rp trp
+  [ "${LRU_BG_LIVE_SOURCE:-on}" = off ] && { printf '%s' "$2"; return 0; }
+  case "$max" in ''|*[!0-9]*) max=4 ;; esac
+  lru_transcript "$cur" "$sid" >/dev/null && { printf '%s' "$cur"; return 0; }
+  own="$(lru_lock_owner "$sid")"
+  if [ -n "$own" ] && lru_transcript "$own" "$sid" >/dev/null; then printf '%s' "$own"; return 0; fi
+  while [ "$n" -lt "$max" ]; do
+    rp="$(lru_proj_rp "$cur")"
+    case "$seen" in *"|$rp|"*) return 1 ;; esac
+    seen="$seen|$rp|"
+    nxt=""; nrp=""
+    for c in "$cur"/projects/*/"$sid".HANDOFF.json; do
+      [ -f "$c" ] || continue
+      t="$(jq -r '.handed_off_to // empty' "$c" 2>/dev/null)"
+      [ -n "$t" ] && [ -d "$t" ] || continue
+      trp="$(lru_proj_rp "$t")"
+      [ "$trp" != "$rp" ] || continue
+      if [ -z "$nxt" ]; then nxt="$t"; nrp="$trp"
+      elif [ "$trp" != "$nrp" ]; then return 1; fi
+    done
+    [ -n "$nxt" ] || return 1
+    cur="$nxt"; n=$((n + 1))
+    lru_transcript "$cur" "$sid" >/dev/null && { printf '%s' "$cur"; return 0; }
+  done
+  return 1
+}
+# P. DID THIS SESSION DIE ON A LIMIT? Asked of lr_predicate, never re-derived. `limit-pending` is the
+# one-fork verb (main tail + every subagent tail); a predicate that predates it (rc 2, or no
+# `.pending` field) is asked the same question through `classify-tail`, one fork per transcript.
+lru_relaunch_tails() { # $1=main transcript → "pending<TAB>main_limit<TAB>cap<TAB>agents_limited"; rc 1 when it cannot run
+  local tx="$1" m ml mcap ok sid d f k=0 n=0 a al ats max="${LR_PENDING_AGENTS_MAX:-64}" files
+  case "$max" in ''|*[!0-9]*) max=64 ;; esac
+  m="$(bash "$LRU_PREDICATE" classify-tail "$tx" 2>/dev/null)" || return 1
+  ml="$(printf '%s' "$m" | jq -r '(.limit // false) | tostring' 2>/dev/null)"
+  case "$ml" in true|false) ;; *) return 1 ;; esac
+  mcap="$(printf '%s' "$m" | jq -r '.cap // "usage"' 2>/dev/null)"
+  # the lead's last HEALTHY turn: the newest main-thread assistant record that is not an API error
+  ok="$(tail -c "${LR_TAIL_BYTES:-131072}" "$tx" 2>/dev/null | jq -rc 'select(.type=="assistant" and ((.isSidechain // false)|not)
+          and ((.isApiErrorMessage // false)|not)) | .timestamp // empty' 2>/dev/null | tail -n 1)"
+  sid="$(basename "$tx" .jsonl)"; d="$(dirname "$tx")/$sid/subagents"
+  if [ -d "$d" ]; then
+    files="$(find "$d" -type f -name 'agent-*.jsonl' -exec ls -t {} + 2>/dev/null)"
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      k=$((k + 1)); [ "$k" -le "$max" ] || break
+      a="$(bash "$LRU_PREDICATE" classify-tail "$f" 2>/dev/null)" || continue
+      al="$(printf '%s' "$a" | jq -r '(.limit // false) | tostring' 2>/dev/null)"
+      [ "$al" = true ] || continue
+      ats="$(printf '%s' "$a" | jq -r '.ts // empty' 2>/dev/null)"
+      # since the lead's last healthy turn (an unknown on either side counts: a missed prompt costs a
+      # stranded workflow, a needless one costs one audit turn)
+      if [ -z "$ok" ] || [ -z "$ats" ] || [ "$ats" = "$ok" ] || [[ "$ats" > "$ok" ]]; then n=$((n + 1)); fi
+    done <<EOF
+$files
+EOF
+  fi
+  a=false; { [ "$ml" = true ] || [ "$n" -gt 0 ]; } && a=true
+  printf '%s\t%s\t%s\t%s\n' "$a" "$ml" "$mcap" "$n"
+}
+lru_relaunch_why() { # $1=transcript → one ASCII clause on stdout; rc 0 limit evidence · 1 none · 2 could not ask
+  local tx="${1:-}" out rc=0 v pend ml mcap na clause=""
+  if [ "${LRU_BG_RELAUNCH_PROMPT:-on}" = off ]; then printf 'the relaunch prompt is off (LRU_BG_RELAUNCH_PROMPT=off)'; return 1; fi
+  [ -n "$tx" ] && [ -f "$tx" ] || { printf 'no live transcript to read'; return 2; }
+  out="$(bash "$LRU_PREDICATE" limit-pending "$tx" 2>/dev/null)" || rc=$?
+  v=""
+  [ "$rc" = 0 ] && v="$(printf '%s' "$out" | jq -r 'select(type == "object" and has("pending"))
+        | [(.pending | tostring), ((.main.limit // false) | tostring), (.main.cap // "usage"), ((.agents_limited // 0) | tostring)]
+        | @tsv' 2>/dev/null)"
+  if [ -z "$v" ]; then
+    v="$(lru_relaunch_tails "$tx")" || { printf 'lr-predicate could not classify the transcript (rc %s)' "$rc"; return 2; }
+  fi
+  IFS=$'\t' read -r pend ml mcap na <<EOF
+$v
+EOF
+  case "$na" in ''|*[!0-9]*) na=0 ;; esac
+  [ "$pend" = true ] || { printf 'no limit evidence'; return 1; }
+  [ "$ml" = true ] && clause="main transcript ends on a ${mcap:-usage} limit"
+  [ "$na" -gt 0 ] && clause="${clause:+$clause; }$na subagent(s) died on a limit"
+  printf '%s' "${clause:-a limit is pending}" | LC_ALL=C tr -cd ' -~'
+  return 0
+}
+# THE DRAINER'S it2 (2026-10-04). The drain runs under launchd: no KITTY_WINDOW_ID, no CC_TERM. The
+# ~/.claude/bin/it2 wrapper hands off to it2-kitty only when one of those two is set, and
+# CC_TERM_KITTY_TO alone does not open that gate, so every split, run and close went to the iTerm2
+# CLI and failed. The poller's nudge died 85 of 85 times on the same gate (lr-reset-poller.sh,
+# nudge_in_place). With a kitty socket in hand the call carries CC_TERM=kitty, which cc-in-kitty
+# honors ahead of its own walk (CC_TERM=kitty is an override, not a guess: the socket is a live kitty).
+# Kill switch LRU_IT2_KITTY_PIN=off: the socket alone, as before.
+lru_it2() { # $1=kitty socket (may be empty) $2..=it2 arguments
+  local s="${1:-${CC_TERM_KITTY_TO:-}}"; shift
+  if [ -n "$s" ] && [ "${LRU_IT2_KITTY_PIN:-on}" != off ]; then
+    CC_TERM=kitty CC_TERM_KITTY_TO="$s" "$LRU_IT2_BIN" "$@"
+  else
+    CC_TERM_KITTY_TO="$s" "$LRU_IT2_BIN" "$@"
+  fi
+}
 lru_switch_bg_drive() { # $1=sid $2=pane $3=target $4=tcfg $5=from $6=src cfg $7=bg pid $8=by $9=req → rc 0 SWITCHED · 1 FAILED · 3 NOTMOVED
   local sid="$1" pane="$2" target="$3" tcfg="$4" from="$5" scfg="$6" bpid="$7" by="$8" req="$9"
-  local row job cwd host hargs model eff perm run L t0 i=0 racct="" rsid="" deadline again sock
+  local row job cwd host attach hargs model eff perm run L t0 i=0 racct="" rsid="" deadline again sock snap c
+  local hkind="" vkind="" rpane lcfg ltx skip_tp=0 tnote="" vnote="" stub="" role=switch rwhy="" rrc=0 pnote=""
   row="$(lru_bg_row "$sid")"
-  IFS=$'\t' read -r _ _ _ _ cwd _ job host <<EOF
+  IFS=$'\t' read -r _ _ _ _ cwd _ job host attach <<EOF
 $row
 EOF
-  if [ -z "$row" ] || [ -z "$job" ] || [ "$job" = - ] || [ -z "$host" ]; then
+  if [ -z "$row" ] || [ -z "$job" ] || [ "$job" = - ]; then
     lru_switch_result "$sid" "$pane" NOTMOVED "$from" "$target" "bg session unreadable at drive time (job '${job:-}', host pid '${host:-}'): nothing stopped, nothing typed" "$req" "$by"; return 3
   fi
   if [ ! -f "$LRU_TUI_LIB" ] || [ ! -f "$LRU_TRANSPLANT" ]; then
     lru_switch_result "$sid" "$pane" NOTMOVED "$from" "$target" "cc-tui.sh or lr-transplant.sh unreachable: nothing stopped, nothing typed" "$req" "$by"; return 3
   fi
-  # The relaunch keeps the pane's own model/effort/mode (its claude is the one that ran the
-  # conversation before it went to the background), else the SSOT model at high/auto.
-  hargs="$(lru_snap_args "$(lru_snapshot)" "$host")"
+  # WHO HOSTS IT IN THIS PANE NOW: the spawner's registry pane (the original path, unchanged), else
+  # ONE attach viewer whose kitty window is this pane. Anything else moved since the census.
+  snap="$(lru_snapshot)"
+  if [ -n "$host" ] && [ "$host" != - ] && [ "$(lru_live_pane_of_pid "$(lru_live_pass "$snap")" "$host")" = "$pane" ]; then
+    hkind=pane
+  elif [ "${LRU_BG_ATTACH:-on}" != off ] && [ -n "$attach" ] && [ "$attach" != - ] && [ "${attach#* }" = "$attach" ]; then
+    LRU_KLS_CACHE=""
+    c=0; lru_kitty_win_of_pid "$snap" "$attach" || c=$?
+    if [ "$LRU_KWIN" = "$pane" ] && { [ "$c" = 3 ] || { [ "$c" = 0 ] && lru_pane_occupied "$(lru_live_pass "$snap")" "$pane"; }; }; then
+      [ -n "$LRU_KWHY" ] || LRU_KWHY="a live registry row names window $pane"
+      lru_switch_result "$sid" "$pane" NOTMOVED "$from" "$target" "window $pane is occupied ($LRU_KWHY): no key and no launcher may go there - nothing stopped, nothing typed" "$req" "$by"; return 3
+    fi
+    if [ "$c" = 0 ] && [ "$LRU_KWIN" = "$pane" ]; then hkind=attach; host="$attach"; vkind="$LRU_KWHOW"; fi
+  fi
+  if [ -z "$hkind" ]; then
+    lru_switch_result "$sid" "$pane" NOTMOVED "$from" "$target" "nothing hosts it in pane $pane now (spawner pid '${host:--}', attach viewer pid(s) '${attach:--}'): nothing stopped, nothing typed" "$req" "$by"; return 3
+  fi
+  # 0. THE LIVE COPY, proven before anything is touched (see the note above lru_pid_live).
+  if ! lcfg="$(lru_live_store "$sid" "$scfg")"; then
+    c="nothing"; for ltx in "$scfg"/projects/*/"$sid".jsonl.handed-off; do [ -f "$ltx" ] && c="only a retired copy"; done
+    lru_switch_result "$sid" "$pane" NOTMOVED "$from" "$target" "no store provably holds a live transcript of ${sid:0:8} ($scfg has $c; no lock owner or tombstone chain leads to a live copy): nothing stopped, nothing typed" "$req" "$by"; return 3
+  fi
+  if [ "$(lru_proj_rp "$lcfg")" != "$(lru_proj_rp "$scfg")" ]; then
+    ltx="$(lru_transcript "$lcfg" "$sid")"
+    for c in "$scfg"/projects/*/"$sid".jsonl.handed-off; do
+      [ -f "$c" ] || continue
+      if [ "$(lru_size "$ltx")" -lt "$(lru_size "$c")" ]; then
+        lru_switch_result "$sid" "$pane" NOTMOVED "$from" "$target" "the live copy under $lcfg ($(lru_size "$ltx") B) is SHORTER than the retired copy under $scfg ($(lru_size "$c") B): nothing stopped, nothing typed" "$req" "$by"; return 3
+      fi
+    done
+    while IFS=$'\t' read -r c _ ltx _; do
+      [ "$c" = "$sid" ] && [ "$(lru_proj_rp "$ltx")" = "$(lru_proj_rp "$lcfg")" ] || continue
+      lru_switch_result "$sid" "$pane" NOTMOVED "$from" "$target" "a bg job is also live on this conversation under $lcfg, the store holding its live copy: nothing stopped, nothing typed" "$req" "$by"; return 3
+    done <<EOF
+$(lru_bg_sessions "$snap")
+EOF
+  fi
+  [ "$(lru_proj_rp "$lcfg")" = "$(lru_proj_rp "$tcfg")" ] && skip_tp=1
+  # The relaunch keeps the host's own model/effort/mode (its claude is the one that ran the
+  # conversation before it went to the background), else the SSOT model at high/auto. An attach
+  # viewer's argv carries none of the three, so it always takes the SSOT.
+  hargs="$(lru_snap_args "$snap" "$host")"
   model="$(lru_flag "$hargs" --model "$LRU_RE_MODEL")"; eff="$(lru_flag "$hargs" --effort "$LRU_RE_EFFORT")"
   perm="$(lru_flag "$hargs" --permission-mode "$LRU_RE_PERM")"
   [ -n "$model" ] || model="$(lru_ssot versions opus_latest || true)"
   [ -n "$eff" ] || eff=high; [ -n "$perm" ] || perm=auto
+  # P. the relaunch prompt, decided from the LIVE copy (the job's own store may hold only a retired one)
+  rwhy="$(lru_relaunch_why "$(lru_transcript "$lcfg" "$sid" || true)")" || rrc=$?
+  [ "$rrc" = 0 ] && role=switch-recover
   run="$LRU_STATE/switch/${sid:0:8}-bg-$(date -u +%Y%m%dT%H%M%SZ)"
   mkdir -p "$run" 2>/dev/null || true
-  L="$(lru_mint_launcher "$run" "$tcfg" "$cwd" "$sid" "$model" "$eff" "$perm" "")" || {
+  L="$(lru_mint_launcher "$run" "$tcfg" "$cwd" "$sid" "$model" "$eff" "$perm" "" "$role" "" "" "$from" "$target")" || {
     lru_switch_result "$sid" "$pane" NOTMOVED "$from" "$target" "could not mint an ASCII-only launcher in $run: nothing stopped, nothing typed" "$req" "$by"; return 3; }
-  # 1. STOP. Everything before this line refused without touching anything. The stop is a CLOSE, so
-  # it opens a resume debt first (handoff-fire does this for the foreground path; this one exits
-  # via `claude stop` + ^C and never reaches it). Best-effort: an absent ledger changes nothing.
+  # A. WHERE THE LAUNCHER WILL RUN. A viewer that IS its window's process takes the window with it,
+  # so a pane is opened beside it first (anchored, focus kept, armed for one command) — before any
+  # key or stop, so a refused split still touches nothing.
+  rpane="$pane"
+  sock="$(command -v lr_kitty_socket >/dev/null 2>&1 && lr_kitty_socket 2>/dev/null || true)"
+  if [ "$hkind" = attach ] && [ "$vkind" = root ]; then
+    if [ "${LRU_BG_ATTACH_SPLIT:-on}" = off ]; then
+      lru_switch_result "$sid" "$pane" NOTMOVED "$from" "$target" "the viewer (claude attach $job, pid $host) is window $pane's own process, so quitting it closes the window, and LRU_BG_ATTACH_SPLIT=off forbids opening a pane beside it: nothing stopped, nothing typed" "$req" "$by"; return 3
+    fi
+    local sout
+    sout="$(lru_it2 "$sock" session split -v -s "$pane" 2>>"$run/keys.log")" || true
+    rpane="$(printf '%s\n' "$sout" | sed -n 's/^Created new pane:[[:space:]]*\([0-9][0-9]*\)[[:space:]]*$/\1/p' | head -1)"
+    if [ -z "$rpane" ]; then
+      lru_switch_result "$sid" "$pane" NOTMOVED "$from" "$target" "could not open a pane beside viewer window $pane (it2 split printed: $(printf '%s' "$sout" | tr '\n\t' '  ' | cut -c1-120)): nothing stopped, nothing typed" "$req" "$by"; return 3
+    fi
+    printf 'split -v -s %s: pane %s\n' "$pane" "$rpane" >> "$run/keys.log"
+  fi
+  # 1. STOP. Everything before this line refused without touching anything (bar the empty pane a
+  # split opened). The stop is a CLOSE, so it opens a resume debt first (handoff-fire does this for
+  # the foreground path; this one exits via `claude stop` and never reaches it). Best-effort: an
+  # absent ledger changes nothing. The debt is keyed where the conversation IS (lcfg).
   LRU_RD_LOG="$run/resume-debt.log"
-  lru_rd open --sid "$sid" --cfg "$scfg" --cwd "$cwd" --pane "$pane" --account "$from" --by "lr-upgrade switch-bg" \
-    --why "switch $from -> $target: claude stop $job, then relaunch in pane $pane" || true
+  lru_rd open --sid "$sid" --cfg "$lcfg" --cwd "$cwd" --pane "$rpane" --account "$from" --by "lr-upgrade switch-bg" \
+    --why "switch $from -> $target: claude stop $job, then relaunch in pane $rpane" || true
+  # A. THE VIEWER QUITS FIRST. Reversible (the job keeps running when its viewer detaches), and it
+  # leaves no viewer attached at the stop to reopen the stopped job. The key is ^C^C, the double
+  # Ctrl-C the job's TUI answers with a detach (see lru_viewer_detached); a second round is the
+  # fallback. Ctrl+Z inside attach is UNMEASURED: if attach forwards it, the job's own TUI suspends
+  # itself (handleSuspend, then SIGTSTP); if it does not, a shell window is left holding a stopped
+  # attach job no later ^C can reach. So it leads only on request: LRU_BG_ATTACH_QUIT_KEY=ctrl-z.
+  # Detached is judged by the argv (lru_wait_detached), never by the pid leaving ps.
+  if [ "$hkind" = attach ]; then
+    local qname=ctrl-c qby="" qwhy="" krc
+    if [ "${LRU_BG_ATTACH_QUIT_KEY:-ctrl-c}" = ctrl-z ]; then
+      qname=ctrl-z
+      # shellcheck disable=SC1090  # sourced in a subshell: a sibling library must not replace our names
+      ( . "$LRU_TUI_LIB" && cc_tui_rpc send-text --match "id:$pane" -- $'\x1a' >/dev/null 2>&1 ) >> "$run/keys.log" 2>&1 || true
+    else
+      lru_ctrlc2 "$pane" "$run"
+    fi
+    if lru_wait_detached "$job" "$host" "${LRU_BG_QUIT_S:-30}"; then qby="$qname"
+    else
+      lru_ctrlc2 "$pane" "$run"
+      lru_wait_detached "$job" "$host" "${LRU_BG_QUIT_S:-30}" && qby="$qname, then ctrl-c ctrl-c"
+    fi
+    [ -n "$qby" ] || qwhy="it did not detach on $qname or ^C^C within ${LRU_BG_QUIT_S:-30}s each"
+    printf 'viewer pid %s in window %s: %s\n' "$host" "$pane" "${qby:-$qwhy}" >> "$run/keys.log"
+    # A SHELL WINDOW gets its prompt back only when the client EXITS: a detached viewer is now the
+    # agents view on the same pid, and a launcher typed there would land in it. One more ^C^C round
+    # quits it, and the pid must leave ps. Only while it is still the window's foreground: anything
+    # else there is not ours to send keys to. A root window's agents view stays put (the launcher runs
+    # in the pane split beside it).
+    if [ -n "$qby" ] && [ "$vkind" = shell ] && lru_pid_live "$host"; then
+      LRU_KLS_CACHE=""; krc=0
+      lru_kitty_win_of_pid "$(lru_snapshot)" "$host" || krc=$?
+      if [ "$krc" = 0 ] && [ "$LRU_KWIN" = "$pane" ]; then
+        lru_ctrlc2 "$pane" "$run"
+        if lru_wait_gone "$host" "${LRU_BG_QUIT_S:-30}"; then qby="$qby, agents view quit on ctrl-c ctrl-c"
+        else qby=""; qwhy="it detached, but the agents view it left (pid $host) did not quit on ^C^C"; fi
+      else
+        qby=""; qwhy="it detached, but the agents view it left (pid $host) is no longer window $pane's foreground"
+      fi
+      printf 'agents view pid %s in window %s: %s\n' "$host" "$pane" "${qby:-$qwhy}" >> "$run/keys.log"
+    fi
+    if [ -z "$qby" ]; then
+      lru_rd abandon --sid "$sid" --why "the attach viewer in window $pane did not quit: nothing was stopped" || true
+      if [ "$rpane" != "$pane" ]; then
+        lru_it2 "$sock" session close -f -s "$rpane" >/dev/null 2>&1 || true
+        qwhy="$qwhy; the pane opened beside it ($rpane) was closed"
+      fi
+      lru_switch_result "$sid" "$pane" NOTMOVED "$from" "$target" "the attach viewer (pid $host) in window $pane did not quit: $qwhy - nothing stopped, nothing transplanted, nothing typed" "$req" "$by"; return 3
+    fi
+    vnote="viewer window $pane (claude attach $job) quit on $qby; "
+  fi
   if ! lru_bg_stop "$scfg" "$job" "$bpid" "$run"; then
     lru_rd abandon --sid "$sid" --why "claude stop $job did not end bg pid $bpid: the close never happened" || true
-    lru_switch_result "$sid" "$pane" FAILED "$from" "$target" "claude stop $job did not end bg pid $bpid within ${LRU_BG_STOP_S:-30}s (log $run/stop.log); nothing transplanted, nothing typed" "$req" "$by"; return 1
+    c=""; [ "$hkind" = attach ] && c="; the viewer was quit - reopen it in pane $rpane: CLAUDE_CONFIG_DIR=$scfg claude attach $job"
+    lru_switch_result "$sid" "$pane" FAILED "$from" "$target" "claude stop $job did not end bg pid $bpid within ${LRU_BG_STOP_S:-30}s (log $run/stop.log); nothing transplanted, nothing typed$c" "$req" "$by"; return 1
   fi
-  # 2. TRANSPLANT, in its two phases.
-  if ! bash "$LRU_TRANSPLANT" --sid "$sid" --from "$scfg" --to "$tcfg" --phase admit --cause voluntary >> "$run/transplant.log" 2>&1 \
-     || ! bash "$LRU_TRANSPLANT" --sid "$sid" --from "$scfg" --to "$tcfg" --phase confirm --cause voluntary >> "$run/transplant.log" 2>&1; then
-    lru_switch_result "$sid" "$pane" FAILED "$from" "$target" "stopped, but lr-transplant refused (log $run/transplant.log); the conversation is intact under $scfg - reopen it with: CLAUDE_CONFIG_DIR=$scfg claude attach $job" "$req" "$by"; return 1
+  # A stop can make the husk write a FRESH <sid>.jsonl under the job's store beside its retired copy.
+  # The source was resolved before the stop, so the stub can never be picked; it is reported, never
+  # merged or deleted.
+  if [ "$(lru_proj_rp "$lcfg")" != "$(lru_proj_rp "$scfg")" ]; then
+    for c in "$scfg"/projects/*/"$sid".jsonl; do
+      [ -f "$c" ] && stub="; stub $c ($(lru_size "$c") B) appeared at the stop - left beside the retired copy, not merged"
+    done
+  fi
+  # 2. TRANSPLANT, in its two phases, FROM THE LIVE COPY.
+  if [ "$skip_tp" = 1 ]; then
+    tnote="the transcript was already under $tcfg"
+  elif ! bash "$LRU_TRANSPLANT" --sid "$sid" --from "$lcfg" --to "$tcfg" --phase admit --cause voluntary >> "$run/transplant.log" 2>&1 \
+     || ! bash "$LRU_TRANSPLANT" --sid "$sid" --from "$lcfg" --to "$tcfg" --phase confirm --cause voluntary >> "$run/transplant.log" 2>&1; then
+    c="CLAUDE_CONFIG_DIR=$scfg claude attach $job"
+    # the job was stopped: attaching it again would reopen the HUSK, not the conversation
+    [ "$(lru_proj_rp "$lcfg")" = "$(lru_proj_rp "$scfg")" ] || c="CLAUDE_CONFIG_DIR=$lcfg claude --resume $sid"
+    lru_switch_result "$sid" "$pane" FAILED "$from" "$target" "${vnote}stopped, but lr-transplant refused (log $run/transplant.log); the conversation is intact under $lcfg - reopen it with: $c$stub" "$req" "$by"; return 1
+  else
+    tnote="transcript moved $lcfg -> $tcfg"
   fi
   # The conversation now lives under the target: re-key the debt so any relaunch reads it there.
   lru_rd abandon --sid "$sid" --why "transplanted $from -> $target; re-opened under $tcfg" || true
-  lru_rd open --sid "$sid" --cfg "$tcfg" --cwd "$cwd" --pane "$pane" --account "$target" --by "lr-upgrade switch-bg" \
-    --why "switch $from -> $target: relaunch in pane $pane" || true
-  # 3. QUIT THE AGENT VIEW, then type the launcher at the shell it leaves behind.
+  lru_rd open --sid "$sid" --cfg "$tcfg" --cwd "$cwd" --pane "$rpane" --account "$target" --by "lr-upgrade switch-bg" \
+    --why "switch $from -> $target: relaunch in pane $rpane" || true
+  # 3. A SPAWNER PANE: quit the agent view, then type the launcher at the shell it leaves behind.
   t0="$(date +%s)"
-  # shellcheck disable=SC1090  # sourced in a subshell: a sibling library must not replace our names
-  ( . "$LRU_TUI_LIB" && cc_tui_rpc send-text --match "id:$pane" -- $'\x03' >/dev/null 2>&1 \
-      && sleep "${LRU_BG_CTRLC_GAP_S:-1}" && cc_tui_rpc send-text --match "id:$pane" -- $'\x03' >/dev/null 2>&1 ) >> "$run/keys.log" 2>&1 || true
-  if ! lru_wait_gone "$host" "${LRU_BG_QUIT_S:-30}"; then
-    lru_switch_result "$sid" "$pane" FAILED "$from" "$target" "stopped and transplanted to $target, but the agent view in pane $pane did not quit (pid $host still live) - run in that pane once it is at a shell: cd $cwd && bash $L" "$req" "$by"; return 1
+  if [ "$hkind" = pane ]; then
+    # shellcheck disable=SC1090  # sourced in a subshell: a sibling library must not replace our names
+    ( . "$LRU_TUI_LIB" && cc_tui_rpc send-text --match "id:$pane" -- $'\x03' >/dev/null 2>&1 \
+        && sleep "${LRU_BG_CTRLC_GAP_S:-1}" && cc_tui_rpc send-text --match "id:$pane" -- $'\x03' >/dev/null 2>&1 ) >> "$run/keys.log" 2>&1 || true
+    if ! lru_wait_gone "$host" "${LRU_BG_QUIT_S:-30}"; then
+      lru_switch_result "$sid" "$pane" FAILED "$from" "$target" "stopped and transplanted to $target, but the agent view in pane $pane did not quit (pid $host still live) - run in that pane once it is at a shell: cd $cwd && bash $L" "$req" "$by"; return 1
+    fi
   fi
   # Never type into a starting claude: retype only while no live process is resuming this sid.
   while :; do
     if [ -z "$(lru_snapshot | awk -v s="$sid" 'index($0, s) && /lr-fire-resume|--resume/')" ]; then
       [ "$i" -lt "${LRU_RETYPE_MAX:-5}" ] || break
-      i=$((i + 1))
-      sock="$(command -v lr_kitty_socket >/dev/null 2>&1 && lr_kitty_socket 2>/dev/null || true)"
-      CC_TERM_KITTY_TO="${sock:-${CC_TERM_KITTY_TO:-}}" "$LRU_IT2_BIN" session run -s "$pane" "cd $(printf %q "$cwd") && nocorrect bash $(printf %q "$L")" >/dev/null 2>&1 || true
+      # A viewer's OWN window (no split) gets the last look first (lru_window_free). Before the first
+      # type an occupied or unknowable window ends the drive: the conversation is safe under $tcfg
+      # and the operator gets the line to run. On a retype it only skips the round, since the claude
+      # now in the window is most likely the launcher this drive typed a moment ago.
+      local wfree=0
+      if [ "$hkind" = attach ] && [ "$rpane" = "$pane" ]; then lru_window_free "$rpane" || wfree=$?; fi
+      if [ "$wfree" != 0 ] && [ "$i" -eq 0 ]; then
+        lru_switch_result "$sid" "$pane" FAILED "$from" "$target" "${vnote}stopped and transplanted to $target, but window $rpane is not free to type into ($LRU_KWHY), so no launcher was typed - run in a free shell: cd $cwd && bash $L" "$req" "$by"; return 1
+      fi
+      if [ "$wfree" = 0 ]; then
+        i=$((i + 1))
+        lru_it2 "$sock" session run -s "$rpane" "cd $(printf %q "$cwd") && nocorrect bash $(printf %q "$L")" >/dev/null 2>&1 || true
+      fi
     fi
-    # 4. THE VERDICT: the registry flip…
-    racct="$(lru_acct_name "$(jq -r '.account // empty' "$LRU_REG_DIR/$pane.json" 2>/dev/null)")"
-    rsid="$(jq -r '.session_id // empty' "$LRU_REG_DIR/$pane.json" 2>/dev/null)"
+    # 4. THE VERDICT: the registry flip of the pane the launcher ran in…
+    racct="$(lru_acct_name "$(jq -r '.account // empty' "$LRU_REG_DIR/$rpane.json" 2>/dev/null)")"
+    rsid="$(jq -r '.session_id // empty' "$LRU_REG_DIR/$rpane.json" 2>/dev/null)"
     [ "$rsid" = "$sid" ] && [ "$racct" = "$target" ] && lru_transcript "$tcfg" "$sid" >/dev/null && break
     deadline=$(( t0 + ${LRU_SWITCH_VERIFY_S:-600} ))
     [ "$(date +%s)" -lt "$deadline" ] || break
@@ -1166,15 +1649,15 @@ EOF
   # No flip: the ledger settles it (a NEW window, same sid, else one backlog row + page).
   local settled=""
   if [ "$rsid" != "$sid" ] || [ "$racct" != "$target" ]; then
-    local src=0 why="stopped and transplanted, launcher typed $i time(s), but pane $pane's registry row does not name ${sid:0:8} on $target - run in that pane: cd $cwd && bash $L"
-    lru_settle "$sid" "$pane" "pane $pane never showed ${sid:0:8} on $target after $i retype(s)" || src=$?
+    local src=0 why="${vnote}stopped and transplanted, launcher typed $i time(s), but pane $rpane's registry row does not name ${sid:0:8} on $target - run in that pane: cd $cwd && bash $L"
+    lru_settle "$sid" "$rpane" "pane $rpane never showed ${sid:0:8} on $target after $i retype(s)" || src=$?
     case "$src" in
       0) settled="$LRU_SETTLE_WHY" ;;
       127) lru_switch_result "$sid" "$pane" FAILED "$from" "$target" "$why" "$req" "$by"; return 1 ;;
       *) lru_switch_result "$sid" "$pane" FAILED "$from" "$target" "$LRU_SETTLE_WHY; log $LRU_RD_LOG" "$req" "$by"; return 1 ;;
     esac
   else
-    lru_rd discharge --sid "$sid" --why "registry flip: pane $pane names ${sid:0:8} on $target" || true
+    lru_rd discharge --sid "$sid" --why "registry flip: pane $rpane names ${sid:0:8} on $target" || true
   fi
   # …AND THE SOURCE STAYING DEAD. One re-stop if the daemon re-claimed the job, then the truth.
   again="$(lru_bg_row "$sid" | awk -F'\t' -v c="$scfg" '$3 == c { print $2 }')"
@@ -1182,14 +1665,29 @@ EOF
     lru_bg_stop "$scfg" "$job" "$again" "$run" || true
     again="$(lru_bg_row "$sid" | awk -F'\t' -v c="$scfg" '$3 == c { print $2 }')"
     if [ -n "$again" ]; then
-      lru_switch_result "$sid" "$pane" FAILED "$from" "$target" "SPLIT-BRAIN: live on $target in pane $pane, but the $from daemon re-claimed job $job (pid $again) and a re-stop did not end it - stop it: CLAUDE_CONFIG_DIR=$scfg claude stop $job" "$req" "$by"; return 1
+      lru_switch_result "$sid" "$pane" FAILED "$from" "$target" "SPLIT-BRAIN: live on $target in pane $rpane, but the $from daemon re-claimed job $job (pid $again) and a re-stop did not end it - stop it: CLAUDE_CONFIG_DIR=$scfg claude stop $job" "$req" "$by"; return 1
     fi
   fi
+  # P. The move is the flip; the prompt is reported beside it and never decides the verdict (a
+  # missed prompt is the same class as the upgrade's unconfirmed confirmation turn).
+  case "$rrc" in
+    0) local pst="" pend
+       pend=$(( $(date +%s) + ${LRU_BG_PROMPT_WAIT_S:-120} ))
+       while :; do
+         pst="$(lru_submit_state "$run")"
+         case "$pst" in submitted|queued|FAILED*|INDETERMINATE*) break ;; esac
+         [ "$(date +%s)" -lt "$pend" ] || break
+         sleep "${LRU_BG_PROMPT_POLL_S:-2}"
+       done
+       pnote="; relaunch prompt /limit-recover ($rwhy): ${pst:-no state}" ;;
+    1) pnote="; relaunched prompt-free (${rwhy:-no limit evidence})" ;;
+    *) pnote="; limit check could not run (${rwhy:-lr-predicate}) - relaunched prompt-free" ;;
+  esac
   if [ -n "$settled" ]; then
-    lru_switch_result "$sid" "$pane" SWITCHED "$from" "$target" "bg session: job $job stopped under $scfg and stayed stopped; $settled" "$req" "$by"
+    lru_switch_result "$sid" "$pane" SWITCHED "$from" "$target" "bg session: ${vnote}job $job stopped under $scfg and stayed stopped; $tnote; $settled$stub$pnote" "$req" "$by"
     return 0
   fi
-  lru_switch_result "$sid" "$pane" SWITCHED "$from" "$target" "bg session: job $job stopped under $scfg and stayed stopped; pane $pane relaunched it on $target (registry flip, transcript under $tcfg)" "$req" "$by"
+  lru_switch_result "$sid" "$pane" SWITCHED "$from" "$target" "bg session: ${vnote}job $job stopped under $scfg and stayed stopped; $tnote; pane $rpane relaunched it on $target (registry flip, transcript under $tcfg)$stub$pnote" "$req" "$by"
   return 0
 }
 
@@ -1201,12 +1699,13 @@ EOF
 lru_ascii_only() { # $1=file → 0 pure ASCII / 1 not
   ! LC_ALL=C grep -q '[^[:print:][:space:]]' "$1" 2>/dev/null
 }
-lru_mint_launcher() { # $1=run dir $2=cfg $3=cwd $4=sid $5=model $6=effort $7=perm $8=admit token [$9=role ${10}=team args ${11}=team] → path
+lru_mint_launcher() { # $1=run dir $2=cfg $3=cwd $4=sid $5=model $6=effort $7=perm $8=admit token [$9=role ${10}=team args ${11}=team ${12}=from acct ${13}=target acct] → path
   local d="$1" cfg="$2" cwd="$3" sid="$4" model="$5" eff="$6" perm="$7" tok="${8:-}" role="${9:-}" targs="${10:-}" team="${11:-}" L sub prompt xargs="" xenv=""
+  local mfrom="${12:-}" mto="${13:-}"
   # THE VALUES FIRST, THEN THE FILE. Checking only the file's bytes is locale-dependent: under
   # LC_ALL=C (launchd, CI) printf %q renders a non-ASCII value as $'\342\200\224' — pure ASCII on
   # disk, non-ASCII again the moment the launcher runs. Found by the off-box gate, 2026-09-23.
-  if printf '%s' "$d$cfg$cwd$sid$model$eff$perm$tok$LRU_FIRE_RESUME$targs$team" | LC_ALL=C grep -q '[^ -~]'; then
+  if printf '%s' "$d$cfg$cwd$sid$model$eff$perm$tok$LRU_FIRE_RESUME$targs$team$mfrom$mto" | LC_ALL=C grep -q '[^ -~]'; then
     lru_say "REFUSED: a launcher value is not pure ASCII (run dir, config dir, cwd, sid, model, effort, mode, token or team identity); it would break every sed that reads the launcher"
     return 1
   fi
@@ -1228,6 +1727,19 @@ lru_mint_launcher() { # $1=run dir $2=cfg $3=cwd $4=sid $5=model $6=effort $7=pe
       [ -n "$team" ] || { lru_say "REFUSED: a lead launcher needs its team name"; return 1; }
       xenv="CLAUDE_INTERNAL_ASSISTANT_TEAM_NAME=$team"
       prompt="$prompt Your Agent Team $team was preserved across the relaunch: its live members were upgraded in place first and SendMessage to them still works. One vendor limit: a resumed lead does not poll its team inbox, so replies from those members land unread in $cfg/teams/$team/inboxes/team-lead.json - read them with jq when you expect one." ;;
+    switch)
+      # A bg session moved by cc-lr switch with no limit behind it: relaunched PROMPT-FREE. The
+      # upgrade text above says "same account", which a move to another account makes false, and a
+      # healthy session has nothing to be told. No turn, so no submit token (the teammate shape).
+      prompt=""; sub="" ;;
+    switch-recover)
+      # It died on a usage limit (lru_relaunch_why): the relaunch runs /limit-recover IN THIS SESSION,
+      # so it audits from disk and re-runs its failed work. The args name the mode in words: a bare
+      # sid8 (the submit token lr-fire-resume appends) would read as the skill's `<ref>` fast path
+      # and recover the session a second time. Short, so it stays a typed line, never a paste chip
+      # whose placeholder would sit where the `/` must; no kill phrase.
+      sub="run:${sid:0:8}:recover:$(date -u +%Y%m%dT%H%M%SZ)"
+      prompt="/limit-recover recover THIS session in place: it hit a usage limit and cc-lr switch moved it from ${mfrom:-its account} to ${mto:-another}; audit from disk and re-run its failed work" ;;
   esac
   {
     printf '#!/bin/bash\n'
@@ -1492,7 +2004,7 @@ EOF
     fi
     i=$((i + 1))
     sock="$(command -v lr_kitty_socket >/dev/null 2>&1 && lr_kitty_socket 2>/dev/null || true)"
-    trc=0; CC_TERM_KITTY_TO="${sock:-${CC_TERM_KITTY_TO:-}}" "$LRU_IT2_BIN" session run -s "$pane" "cd $(printf %q "$cwd") && nocorrect bash $(printf %q "$L")" >/dev/null 2>&1 || trc=$?
+    trc=0; lru_it2 "$sock" session run -s "$pane" "cd $(printf %q "$cwd") && nocorrect bash $(printf %q "$L")" >/dev/null 2>&1 || trc=$?
     [ "$trc" = 0 ] || lru_say "retype $i into pane $pane: it2 rc $trc"
     local w=0
     while [ "$w" -lt 30 ]; do lru_resumed_on "$sid" "$target_bin" "$tgt" && break; sleep 2; w=$((w + 2)); done
@@ -1535,6 +2047,234 @@ EOF
   return 0
 }
 
+# ══ STALE HANDOFF MARKERS — SET ASIDE, NEVER DELETED (2026-10-04) ═══════════════════════════════════
+# hooks/handed-off-session-guard.sh refuses every prompt in a store whose `<sid>.HANDOFF.json` points
+# away. A ROUND TRIP leaves one behind where it is false: the session left S for T (S's marker), came
+# BACK to S later (T's newer marker points at S), and nothing ever looked at S's old marker again,
+# because lr-transplant writes the source's tombstone and never sweeps the target. Live 2026-10-04:
+# 762a6daa (tertiary marker 2026-10-03T02:28Z vs quaternary's 2026-10-04T17:09Z pointing back) could
+# take no prompt in its own pane; 8e18da3f the mirror image. Auto mode refuses an agent renaming
+# files under ~/.claude*, and rightly, so the rename is this drainer's (kind `marker-setaside`,
+# written by `cc-lr repair-markers`); lr-transplant's confirm now sweeps the target so the state stops
+# being produced.
+#
+# THE RULE (every unknown ⇒ KEEP — the act is a rename). A marker M in store S is STALE iff:
+#   1. S holds the live <sid>.jsonl beside M;   2. M names a store T with a DIFFERENT projects/;
+#   3. T holds a marker naming S with a strictly NEWER ts (lr-transplant's one ISO format; missing,
+#      malformed or equal ⇒ KEEP);             4. T holds no live <sid>.jsonl (two live copies is a
+#      split brain the guard is right about);  5. no live process holds the sid under T (T's sessions
+#      files with a matching procStart, a registry row on T's account, or a `--resume <sid>` claude
+#      no S-side record accounts for);         6. the custody lock is absent or names S.
+# Its companion `<sid>.jsonl.handed-off` beside the live copy (S's earlier departure) is set aside
+# only when it is a strict byte PREFIX of the live transcript; any other retired copy holds bytes the
+# live one lacks and is kept. Renamed to `<name>.stale-<UTCts>` by link-then-unlink (never over an
+# existing name). No reader globs `*.HANDOFF.json*` or `.handed-off*` today; one that ever does would
+# resurrect these files, so keep the suffix out of every glob.
+# Kill switches: LRU_MARKER_SETASIDE=off (or LR_MARKER_SETASIDE=off) · the file $LRU_STATE/marker-setaside.off.
+lru_marker_stores() { # → one config dir per line: LR_CONFIG_DIRS, else lr-lib's list, else every .claude* under the root
+  if [ -n "${LR_CONFIG_DIRS:-}" ]; then printf '%s\n' "$LR_CONFIG_DIRS" | tr ':' '\n'; return 0; fi
+  if command -v lr_config_dirs >/dev/null 2>&1; then lr_config_dirs; return 0; fi
+  local d
+  for d in "${LRU_CFG_ROOT%/}"/.claude*; do [ -d "$d/projects" ] && printf '%s\n' "$d"; done
+  return 0
+}
+lru_stale_markers() { # [$1=sid] → TSV: sid store marker STALE|KEEP reason retired(-) retired_verdict(STALE-RETIRED|KEPT|-); rc 2 when it cannot run
+  local stores
+  stores="$(lru_marker_stores)"
+  # shellcheck disable=SC2086  # one config dir per line; no spaces in the house's store paths
+  lru_snapshot | /usr/bin/python3 -c '
+import glob, json, os, re, sys
+filt, regdir, lockdir = sys.argv[1], sys.argv[2], sys.argv[3]
+TS = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+def proj(s): return os.path.realpath(os.path.join(s, "projects"))
+def norm(s): return " ".join((s or "").split())
+def load(p):
+    try:
+        with open(p) as fh: d = json.load(fh)
+        return d if isinstance(d, dict) else None
+    except Exception:
+        return None
+procs = {}
+for line in sys.stdin.read().splitlines():
+    f = line.split()
+    if len(f) >= 8 and f[0].isdigit() and f[2] in DAYS and re.match(r"^\d{4}$", f[6]):
+        procs[f[0]] = (" ".join(f[2:7]), f[7:])
+stores, seen = [], set()
+for s in sys.argv[4:]:
+    if s and os.path.isdir(os.path.join(s, "projects")) and proj(s) not in seen:
+        seen.add(proj(s)); stores.append(s)
+regs = [d for d in (load(p) for p in glob.glob(os.path.join(regdir, "*.json"))) if d]
+def acct(store): return os.path.basename(store.rstrip("/")).lstrip(".")
+def sess_pids(store, sid):
+    out = []
+    for p in glob.glob(os.path.join(store, "sessions", "*.json")):
+        d = load(p)
+        if d and d.get("sessionId") == sid: out.append((str(d.get("pid", "")), d.get("procStart")))
+    return out
+def holder(sid, T, S):
+    for pid, pst in sess_pids(T, sid):
+        if pid in procs and (not pst or norm(pst) == norm(procs[pid][0])):
+            return "a live process (pid %s) holds it under %s" % (pid, T)
+    for d in regs:
+        if d.get("session_id") == sid and str(d.get("pid", "")) in procs and d.get("account") == acct(T):
+            return "a live registry row on %s holds it" % acct(T)
+    mine = set(p for p, _ in sess_pids(S, sid))
+    mine |= set(str(d.get("pid", "")) for d in regs if d.get("session_id") == sid and d.get("account") == acct(S))
+    for pid, (_, argv) in procs.items():
+        if not argv or not re.search(r"(^|/)claude(\.exe)?$", argv[0]): continue
+        a = " ".join(argv)
+        if ("--resume " + sid) not in a and ("--resume=" + sid) not in a: continue
+        if pid not in mine: return "an unattributed claude --resume process (pid %s) runs it" % pid
+    return None
+def prefix(live, ret):
+    try:
+        ls, rs = os.path.getsize(live), os.path.getsize(ret)
+        if ls <= rs: return False
+        with open(live, "rb") as a, open(ret, "rb") as b:
+            while True:
+                rb = b.read(1 << 20)
+                if not rb: return True
+                if a.read(len(rb)) != rb: return False
+    except Exception:
+        return False
+def judge(sid, S, marker):
+    m = load(marker)
+    if m is None: return "KEEP", "the marker does not parse"
+    T = m.get("handed_off_to") or ""
+    if not T or not os.path.isdir(os.path.join(T, "projects")): return "KEEP", "the marker names no readable store (%s)" % (T or "none")
+    ts = m.get("ts") or ""
+    if not TS.match(ts): return "KEEP", "the marker ts is missing or malformed"
+    if glob.glob(os.path.join(T, "projects", "*", sid + ".jsonl")):
+        return "KEEP", "%s also holds a live copy (a kept source, or a split brain)" % T
+    back = []
+    for b in glob.glob(os.path.join(T, "projects", "*", sid + ".HANDOFF.json")):
+        d = load(b)
+        if d and d.get("handed_off_to") and proj(d["handed_off_to"]) == proj(S): back.append(d.get("ts") or "")
+    if not back: return "KEEP", "no marker in %s points back here" % T
+    bts = max(back)
+    if not TS.match(bts): return "KEEP", "the marker pointing back has a missing or malformed ts"
+    if not bts > ts: return "KEEP", "the marker pointing back (%s) is not newer than this one (%s)" % (bts, ts)
+    lk = os.path.join(lockdir, sid + ".lock")
+    if os.path.lexists(lk):
+        d = load(lk)
+        own = (d or {}).get("owner") or (d or {}).get("to") or ""
+        if not own: return "KEEP", "the custody lock is unreadable"
+        if proj(own) != proj(S): return "KEEP", "the custody lock names %s" % own
+    h = holder(sid, T, S)
+    if h: return "KEEP", h
+    return "STALE", "marker %s -> %s is superseded by %s marker %s pointing back here" % (ts, T, T, bts)
+for S in stores:
+    pat = (filt if filt else "*") + ".HANDOFF.json"
+    for marker in sorted(glob.glob(os.path.join(S, "projects", "*", pat))):
+        sid = os.path.basename(marker)[:-len(".HANDOFF.json")]
+        live = os.path.join(os.path.dirname(marker), sid + ".jsonl")
+        if not os.path.isfile(live): continue
+        m = load(marker) or {}
+        to = m.get("handed_off_to") or ""
+        if to and os.path.isdir(os.path.join(to, "projects")) and proj(to) == proj(S): continue
+        v, why = judge(sid, S, marker)
+        ret, rv = live + ".handed-off", "-"
+        if os.path.isfile(ret):
+            rv = "STALE-RETIRED" if (v == "STALE" and prefix(live, ret)) else "KEPT"
+        else:
+            ret = "-"
+        print("\t".join(x.replace("\t", " ").replace("\n", " ") for x in (sid, S, marker, v, why, ret, rv)))
+' "${1:-}" "$LRU_REG_DIR" "$LRU_STATE/locks" $stores 2>/dev/null || return 2
+}
+lru_marker_off() { # → 0 when a kill switch is set (env or file)
+  [ "${LRU_MARKER_SETASIDE:-${LR_MARKER_SETASIDE:-on}}" = off ] || [ -e "$LRU_STATE/marker-setaside.off" ]
+}
+lru_setaside() { # $1=path → prints the new name; link-then-unlink to <path>.stale-<UTCts> (.<pid> on collision); rc 1 nothing changed
+  local n; n="$1.stale-$(date -u +%Y%m%dT%H%M%SZ)"
+  { [ -e "$n" ] || [ -L "$n" ]; } && n="$n.$$"
+  { [ -e "$n" ] || [ -L "$n" ]; } && return 1
+  ln "$1" "$n" 2>/dev/null || return 1
+  unlink "$1" || return 1
+  printf '%s' "$n"
+}
+lru_marker_setaside() { # $1=sid → one JSON line per judged marker {sid, store, marker, verdict, renamed, kept, reason}; rc 0 · 2 disabled or unjudgeable
+  local sid="$1" rows s st mk v why ret rv nm ren kep
+  if lru_marker_off; then
+    jq -nc --arg sid "$sid" '{sid:$sid, verdict:"KEPT", renamed:[], kept:[], reason:"disabled (LRU_MARKER_SETASIDE=off or marker-setaside.off)"}'; return 2
+  fi
+  # RE-JUDGED HERE, at execution time: a request says what WAS stale when it was written.
+  rows="$(lru_stale_markers "$sid")" || return 2
+  while IFS=$'\t' read -r s st mk v why ret rv; do
+    [ -n "$s" ] || continue
+    ren="[]"; kep="[]"
+    if [ "$v" = STALE ]; then
+      if nm="$(lru_setaside "$mk")"; then ren="$(jq -nc --argjson a "$ren" --arg x "$nm" '$a + [$x]')"
+      else v=FAILED; why="could not rename $mk aside (nothing changed)"; fi
+      if [ "$v" = STALE ] && [ "$rv" = STALE-RETIRED ]; then
+        if nm="$(lru_setaside "$ret")"; then ren="$(jq -nc --argjson a "$ren" --arg x "$nm" '$a + [$x]')"
+        else kep="$(jq -nc --argjson a "$kep" --arg x "$ret" '$a + [$x]')"; fi
+      elif [ "$ret" != - ]; then
+        kep="$(jq -nc --argjson a "$kep" --arg x "$ret" '$a + [$x]')"
+      fi
+      [ "$v" = STALE ] && v=SETASIDE
+    fi
+    jq -nc --arg sid "$s" --arg store "$st" --arg mk "$mk" --arg v "$v" --arg why "$why" --argjson ren "$ren" --argjson kep "$kep" \
+      '{sid:$sid, store:$store, marker:$mk, verdict:$v, renamed:$ren, kept:$kep, reason:$why}'
+  done <<EOF
+$rows
+EOF
+  return 0
+}
+lru_guard_rc() { # $1=sid $2=store $3=live transcript → the guard's exit status for a prompt there (0 admits); 127 unreachable
+  [ -f "$LRU_HOG_BIN" ] || { printf '127'; return 0; }
+  local rc=0
+  printf '{"session_id":"%s","transcript_path":"%s","cwd":"/tmp","prompt":"lr-upgrade marker-setaside probe"}' "$1" "$3" \
+    | env -u CC_HANDED_OFF_GUARD_DISABLED CLAUDE_CONFIG_DIR="$2" bash "$LRU_HOG_BIN" >/dev/null 2>&1 || rc=$?
+  printf '%s' "$rc"
+}
+lru_marker_result() { # $1=sid $2=VERDICT $3=store $4=renamed json $5=kept json $6=guard before $7=guard after $8=reason $9=req ${10}=requested_by
+  local tmp
+  mkdir -p "$UPG_RESULTS" 2>/dev/null || true
+  tmp="$UPG_RESULTS/.markers-$1.$$.tmp"
+  jq -n --arg sid "$1" --arg v "$2" --arg store "$3" --argjson ren "${4:-[]}" --argjson kep "${5:-[]}" --arg gb "$6" --arg ga "$7" \
+        --arg why "$8" --arg req "$9" --arg by "${10}" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{kind:"marker-setaside", sid:$sid, verdict:$v, store:$store, renamed:$ren, kept:$kep, guard_before:$gb, guard_after:$ga, reason:$why, req_id:$req, requested_by:$by, ts:$ts}' \
+    > "$tmp" 2>/dev/null && mv -f "$tmp" "$UPG_RESULTS/markers-$1.json"
+  printf '%s\t%s\t%s\n' "${1:0:8}" "$2" "$8"
+  lru_mail "${10}" "CC-LR-MARKERS ${1:0:8}: verdict=$2 - $8"
+}
+# SETASIDE only when the guard ADMITS a prompt afterwards (it refused one before) · NOTHING when the
+# re-judge finds nothing stale · KEPT when a kill switch holds · FAILED otherwise (both rcs named; no
+# auto-revert, the rename is lossless and the result names every path).
+lru_marker_drive() { # $1=sid $2=requested_by $3=req id → rc 0 SETASIDE|NOTHING · 1 FAILED · 3 KEPT
+  local sid="$1" by="${2:-?}" req="${3:-}" rows rc=0 st mk tp gb="-" ga="-" out ren kep bad
+  case "$sid" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-*) ;; *)
+    lru_marker_result "$sid" FAILED - '[]' '[]' - - "not a session uuid: '$sid' (nothing renamed)" "$req" "$by"; return 1 ;; esac
+  if lru_marker_off; then
+    lru_marker_result "$sid" KEPT - '[]' '[]' - - "disabled (LRU_MARKER_SETASIDE=off or $LRU_STATE/marker-setaside.off): nothing renamed" "$req" "$by"; return 3
+  fi
+  rows="$(lru_stale_markers "$sid")" || rc=$?
+  if [ "$rc" != 0 ]; then
+    lru_marker_result "$sid" FAILED - '[]' '[]' - - "the marker classifier could not run (rc $rc): nothing renamed" "$req" "$by"; return 1
+  fi
+  IFS=$'\t' read -r _ st mk _ _ _ _ <<EOF
+$(printf '%s\n' "$rows" | awk -F'\t' '$4 == "STALE"' | head -1)
+EOF
+  if [ -z "$mk" ]; then
+    lru_marker_result "$sid" NOTHING - '[]' '[]' - - "nothing stale for ${sid:0:8}: $(printf '%s\n' "$rows" | awk -F'\t' 'NF { print $2 ": " $5; exit }' | grep . || echo 'no marker sits beside a live copy')" "$req" "$by"
+    return 0
+  fi
+  tp="${mk%.HANDOFF.json}.jsonl"
+  gb="$(lru_guard_rc "$sid" "$st" "$tp")"
+  out="$(lru_marker_setaside "$sid")" || true
+  ga="$(lru_guard_rc "$sid" "$st" "$tp")"
+  ren="$(printf '%s\n' "$out" | jq -sc '[.[].renamed[]?]' 2>/dev/null)"; [ -n "$ren" ] || ren='[]'
+  kep="$(printf '%s\n' "$out" | jq -sc '[.[].kept[]?]' 2>/dev/null)"; [ -n "$kep" ] || kep='[]'
+  bad="$(printf '%s\n' "$out" | jq -rs '[.[] | select(.verdict == "FAILED") | .reason] | join("; ")' 2>/dev/null)"
+  if [ -z "$bad" ] && [ "$ga" = 0 ] && [ "$ren" != '[]' ]; then
+    lru_marker_result "$sid" SETASIDE "$st" "$ren" "$kep" "$gb" "$ga" "set aside $(printf '%s' "$ren" | jq -r 'length') file(s) under $st; the guard exited $gb before and admits a prompt now" "$req" "$by"
+    return 0
+  fi
+  lru_marker_result "$sid" FAILED "$st" "$ren" "$kep" "$gb" "$ga" "${bad:+$bad; }the guard exited $gb before and $ga after the set-aside" "$req" "$by"
+  return 1
+}
+
 # ── the serial drain ─────────────────────────────────────────────────────────────────────────────
 # ONE AT A TIME, by construction: a lock dir with a holder pid, stolen only from a dead holder.
 lru_drain() {
@@ -1564,11 +2304,13 @@ lru_drain() {
     kind="$(jq -r '.kind // "upgrade"' "$q" 2>/dev/null)"; tgt="$(jq -r '.target // empty' "$q" 2>/dev/null)"
     uts="$(jq -r '.until_ts // 0' "$q" 2>/dev/null)"
     mv -f "$q" "$UPG_CLAIMED/" 2>/dev/null || rm -f "$q"
-    if [ -z "$sid" ] || [ -z "$pane" ]; then lru_say "malformed request $q (no sid/pane) - dropped to claimed/"; continue; fi
-    [ "$n" -gt 0 ] && sleep "$LRU_GAP_S"
+    # A marker set-aside names a SESSION, not a pane (it types nothing), so it needs only .sid.
+    if [ -z "$sid" ] || { [ -z "$pane" ] && [ "$kind" != marker-setaside ]; }; then lru_say "malformed request $q (no sid/pane) - dropped to claimed/"; continue; fi
+    [ "$n" -gt 0 ] && [ "$kind" != marker-setaside ] && sleep "$LRU_GAP_S"
     # ONE serial drainer for every "act on a live pane" request: an upgrade and a switch of the same
     # pane can never interleave, and a --all-idle batch cannot stampede one target account.
     case "$kind" in
+      marker-setaside) lru_marker_drive "$sid" "$by" "$req" || true ;;
       switch)
         if [ -z "$tgt" ]; then lru_switch_result "$sid" "$pane" NOTMOVED - - "malformed switch request: no .target (nothing typed)" "$req" "$by"
         else
@@ -1670,10 +2412,20 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
               lru_switch_drive "$_s" "$_p" "$_t" "$_by" "$_rq"; exit $? ;;
     --switch-waitable) # <disposition> → rc 0 when --until-idle waits it out (the one list; cc-lr asks it)
               [ $# -ge 2 ] || exit 3; lru_switch_waitable "$2"; exit $? ;;
+    --stale-markers) # [sid] → the marker classifier's TSV, read-only (cc-lr repair-markers prints it)
+              lru_stale_markers "${2:-}"; exit $? ;;
+    --marker-drive) # <sid> [--requested-by P] [--req-id ID] — one marker set-aside, synchronous
+              [ $# -ge 2 ] || { lru_say "usage: --marker-drive <sid> [--requested-by P] [--req-id ID]"; exit 3; }
+              _s="$2"; shift 2; _by="?"; _rq=""
+              while [ $# -gt 0 ]; do case "$1" in
+                --requested-by) [ $# -ge 2 ] || exit 3; _by="$2"; shift 2 ;;
+                --req-id) [ $# -ge 2 ] || exit 3; _rq="$2"; shift 2 ;;
+                *) lru_say "unknown arg $1"; exit 3 ;; esac; done
+              lru_marker_drive "$_s" "$_by" "$_rq"; exit $? ;;
     --drain)  lru_drain; exit $? ;;
     --auto-enqueue) lru_auto_enqueue; exit $? ;;
     --team-restore) [ $# -ge 3 ] || { lru_say "usage: --team-restore <cfg> <team>"; exit 3; }
               lru_team_restore "$2" "$3"; exit $? ;;
-    *) lru_say "usage: --census [--all|<ref>] | --drive <sid> <pane> | --switch-census [--from A] [--target A] [--pane P|--sid S] | --switch-drive <sid> <pane> <target> | --pin-target <sid> <model> | --drain | --auto-enqueue | --team-restore <cfg> <team>"; exit 3 ;;
+    *) lru_say "usage: --census [--all|<ref>] | --drive <sid> <pane> | --switch-census [--from A] [--target A] [--pane P|--sid S] | --switch-drive <sid> <pane> <target> | --stale-markers [sid] | --marker-drive <sid> | --pin-target <sid> <model> | --drain | --auto-enqueue | --team-restore <cfg> <team>"; exit 3 ;;
   esac
 fi
