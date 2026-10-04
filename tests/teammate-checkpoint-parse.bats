@@ -235,3 +235,55 @@ porcbytes() { git -C "$1" status --porcelain | wc -c | tr -d ' '; }
   run has_cp team-clean "$BIG"
   [ "$status" -ne 0 ]
 }
+
+# ── seeded temp index + unchanged-tree skip (docs/research/concurrency-scale-2026-10-04 row 9) ───
+# RED-proof: on the pre-fix hook (git show 13b27133f:hooks/teammate-checkpoint.sh) the first case
+# fails — a second Stop over the same dirty tree writes a second checkpoint commit.
+last_sha()  { git -C "$WT" rev-parse --verify --quiet refs/wip/team-alice/LAST; }
+last_tree() { git -C "$WT" rev-parse --verify --quiet 'refs/wip/team-alice/LAST^{tree}'; }
+# The tree a from-scratch snapshot holds, built here without the hook: HEAD, then the whole
+# working tree, in a throwaway index.
+scratch_tree() {
+  local ix="$BATS_TEST_TMPDIR/scratch.index"; rm -f "$ix"
+  GIT_INDEX_FILE="$ix" git -C "$WT" read-tree HEAD
+  GIT_INDEX_FILE="$ix" git -C "$WT" add -A
+  GIT_INDEX_FILE="$ix" git -C "$WT" write-tree
+}
+
+@test "an unchanged dirty tree writes no second checkpoint; a further edit writes one" {
+  dirty 1; fire Stop
+  first="$(last_sha)"; [ -n "$first" ]
+  sleep 1                      # a later second: the pre-fix hook's new commit then differs by its message
+  fire Stop
+  [ "$(last_sha)" = "$first" ]
+  [ "$(git -C "$WT" for-each-ref refs/checkpoints/ | wc -l | tr -d ' ')" -eq 1 ]
+  dirty 2; fire Stop
+  [ "$(last_sha)" != "$first" ]
+}
+
+@test "the seeded snapshot is the working tree: staged-then-edited, staged-then-removed, untracked and deleted files" {
+  printf 'staged\n' > "$WT/a.txt"; git -C "$WT" add a.txt; printf 'edited after staging\n' > "$WT/a.txt"
+  printf 'gone\n' > "$WT/b.txt";   git -C "$WT" add b.txt; rm "$WT/b.txt"
+  printf 'untracked\n' > "$WT/c.txt"
+  rm "$WT/seed.txt"
+  before="$(shasum "$WT/.git/index" | cut -d' ' -f1)"
+  fire Stop
+  [ "$(last_tree)" = "$(scratch_tree)" ]
+  [ "$(git -C "$WT" cat-file blob "$(last_tree):a.txt")" = "edited after staging" ]
+  [ "$(git -C "$WT" ls-tree -r --name-only refs/wip/team-alice/LAST | tr '\n' ' ')" = "a.txt c.txt " ]
+  [ "$(shasum "$WT/.git/index" | cut -d' ' -f1)" = "$before" ]   # the real index is only ever read
+}
+
+@test "a split-index repo checkpoints the working tree and gains no sharedindex file" {
+  git -C "$WT" update-index --split-index
+  n="$(find "$WT/.git" -maxdepth 1 -name 'sharedindex.*' | wc -l | tr -d ' ')"
+  dirty 1; fire Stop
+  [ "$(last_tree)" = "$(scratch_tree)" ]
+  [ "$(find "$WT/.git" -maxdepth 1 -name 'sharedindex.*' | wc -l | tr -d ' ')" -eq "$n" ]
+}
+
+@test "a repo whose index file is missing still checkpoints the working tree" {
+  dirty 1; rm "$WT/.git/index"
+  fire Stop
+  [ "$(git -C "$WT" ls-tree -r --name-only refs/wip/team-alice/LAST | tr '\n' ' ')" = "new.txt seed.txt " ]
+}

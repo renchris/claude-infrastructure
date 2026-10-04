@@ -1091,6 +1091,18 @@ idl_has '"sid":"ad","state":"STALL?"' && ok "check 7: classifier unrunnable ⇒ 
 rm -f "$CC_TELEMETRY_DIR"/*.json "$CC_SUPERVISOR_PAGEDIR"/ad.* "$CC_SUPERVISOR_PAGEDIR"/ow.* 2>/dev/null
 rm -rf "$CC_SUPERVISOR_PAGEDIR/adopt"
 
+echo "T42 ONE-READ FIELD SPLIT — an EMPTY cwd and config_dir must not shift the pid out of its field"
+# assess() reads its six fields in one jq call. With a whitespace separator an empty field collapses
+# and the pid lands in the wrong variable, so a dead session with no recorded cwd reads as OK and is
+# never paged. The row below has both middle fields empty and a pid that is gone.
+reset; rm -f "$CC_TELEMETRY_DIR"/*.json
+jq -nc --argjson ts "$(( $(date +%s) - 2 ))" '{ts:$ts,session_id:"shift",used_pct:40,cwd:"",config_dir:"",pid:999998}' \
+  > "$CC_TELEMETRY_DIR/shift.json"
+once
+idl_has '"sid":"shift","state":"DEAD","detail":"owning pid 999998 gone' && ok "empty cwd/config_dir: DEAD paged with the right pid" \
+                                                                       || no "an empty field shifted the pid: the dead session was not paged"
+rm -f "$CC_TELEMETRY_DIR"/*.json "$CC_SUPERVISOR_PAGEDIR"/shift.* 2>/dev/null
+
 echo ""
 echo "supervisor-e2e: $P passed, $F failed"
 [ "$F" -eq 0 ] || exit 1

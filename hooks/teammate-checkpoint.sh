@@ -341,33 +341,71 @@ MSG="checkpoint: ${EVENT} count=${COUNT} ts=${TIMESTAMP}"
 # via a temp index — zero impact on the teammate's working tree or real index.
 # (git stash create alone misses untracked files; new files a teammate writes
 # would be lost on a crash, defeating the point.)
-HEAD_SHA=$(git -C "$CWD" rev-parse HEAD 2>/dev/null || echo "")
+# One rev-parse answers both questions the snapshot needs: HEAD, and where the real index lives
+# (a linked worktree keeps its index under the common dir's worktrees/<name>/, so it is asked, not
+# assumed). The path prints relative to $CWD unless it is already absolute.
+HEAD_SHA=""; REAL_INDEX=""
+{ IFS= read -r HEAD_SHA; IFS= read -r REAL_INDEX; } <<EOF
+$(git -C "$CWD" rev-parse HEAD --git-path index 2>/dev/null)
+EOF
+[[ "$HEAD_SHA" =~ ^[0-9a-f]{40,64}$ ]] || HEAD_SHA=""   # an unborn HEAD echoes the literal "HEAD"
 if [[ -z "$HEAD_SHA" ]]; then
   log "no HEAD for $CWD — skipping checkpoint"
   exit 0
 fi
+case "$REAL_INDEX" in ''|/*) ;; *) REAL_INDEX="$CWD/$REAL_INDEX" ;; esac
 
 TMP_INDEX=$(mktemp)
 # If anything fails, drop the temp index — we never touch the real one
 cleanup_index() { rm -f "$TMP_INDEX"; }
 trap cleanup_index EXIT
 
-CHECKPOINT_SHA=$(
-  GIT_INDEX_FILE="$TMP_INDEX" git -C "$CWD" read-tree HEAD 2>/dev/null &&
-  GIT_INDEX_FILE="$TMP_INDEX" git -C "$CWD" add -A 2>/dev/null &&
-  TREE=$(GIT_INDEX_FILE="$TMP_INDEX" git -C "$CWD" write-tree 2>/dev/null) &&
-  [[ -n "$TREE" && "$TREE" != "$(git -C "$CWD" rev-parse HEAD^{tree} 2>/dev/null)" ]] &&
-  git -C "$CWD" commit-tree "$TREE" -p "$HEAD_SHA" -m "$MSG" 2>/dev/null
-) || CHECKPOINT_SHA=""
+# SEED THE TEMP INDEX FROM THE REAL ONE (docs/research/concurrency-scale-2026-10-04 fix row 9).
+# This used to start from `read-tree HEAD`, which builds an index with no stat data, so the
+# `add -A` after it had to re-read and re-hash EVERY tracked file to learn that almost none had
+# changed. Measured on one large repo: a 4-6 s stall on every 5th tool call and at every Stop.
+# A copy of the real index carries the stat cache, so `add -A` hashes only what actually changed;
+# the resulting tree is the same one — the working tree, tracked and untracked, minus ignores.
+# The copy is a plain read of a file git only ever replaces by rename, and nothing is written
+# back: core.splitIndex is forced off for the temp index so a split-index repo does not gain a new
+# sharedindex file in its git dir. A missing or unusable index falls back to the old read-tree
+# path, which is always right.
+_cp_tree() { # $1 = seed | readtree → prints the snapshot tree id, or nothing
+  if [[ "$1" == seed ]]; then
+    [[ -n "$REAL_INDEX" && -s "$REAL_INDEX" ]] && cp "$REAL_INDEX" "$TMP_INDEX" 2>/dev/null || return 1
+  else
+    : > "$TMP_INDEX"
+    GIT_INDEX_FILE="$TMP_INDEX" git -C "$CWD" read-tree HEAD 2>/dev/null || return 1
+  fi
+  GIT_INDEX_FILE="$TMP_INDEX" git -C "$CWD" -c core.splitIndex=false add -A 2>/dev/null || return 1
+  GIT_INDEX_FILE="$TMP_INDEX" git -C "$CWD" write-tree 2>/dev/null
+}
+TREE="$(_cp_tree seed)" || TREE=""
+[[ -n "$TREE" ]] || { TREE="$(_cp_tree readtree)" || TREE=""; }
 
-if [[ -z "$CHECKPOINT_SHA" ]]; then
+if [[ -z "$TREE" || "$TREE" == "$(git -C "$CWD" rev-parse 'HEAD^{tree}' 2>/dev/null)" ]]; then
   log "no checkpoint needed for $CWD — tree matches HEAD"
+  exit 0
+fi
+
+LAST_REF="refs/wip/$MEMBER/LAST"
+# SKIP AN UNCHANGED TREE. A dirty worktree that nobody is editing produced a new commit and a new
+# ref at every Stop and every 5th tool call — about 100 duplicate refs an hour for one idle-dirty
+# session, each pinning the same blobs. If the newest checkpoint already holds exactly this tree
+# there is nothing new to recover, so nothing is written.
+if [[ "$TREE" == "$(git -C "$CWD" rev-parse --verify --quiet "$LAST_REF^{tree}" 2>/dev/null)" ]]; then
+  log "no checkpoint needed for $CWD — tree unchanged since the last checkpoint"
+  exit 0
+fi
+
+CHECKPOINT_SHA="$(git -C "$CWD" commit-tree "$TREE" -p "$HEAD_SHA" -m "$MSG" 2>/dev/null)" || CHECKPOINT_SHA=""
+if [[ -z "$CHECKPOINT_SHA" ]]; then
+  log "WARN: commit-tree failed for $CWD — no checkpoint written"
   exit 0
 fi
 
 # Record under refs/checkpoints/<member>/<timestamp> so `git reflog` can list them
 TS_REF="refs/checkpoints/$MEMBER/$TIMESTAMP"
-LAST_REF="refs/wip/$MEMBER/LAST"
 
 if git -C "$CWD" update-ref "$TS_REF" "$CHECKPOINT_SHA" 2>/dev/null; then
   log "checkpoint $CWD $MEMBER $EVENT count=$COUNT sha=$CHECKPOINT_SHA ref=$TS_REF"

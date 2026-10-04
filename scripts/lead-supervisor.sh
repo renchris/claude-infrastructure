@@ -1002,13 +1002,20 @@ operator_adopted_hold(){ # $1=sid → 0 iff cc-classify says this session is ope
 
 # ── classify one telemetry row and route to a PAGE (never an action) ──
 assess(){ # $1=telemetry-json-file → prints 1 if it produced a finding, else 0
-  local f="$1" sid used ts cwd cfg pid age
-  sid="$(jq -r '.session_id // empty' "$f" 2>/dev/null)"; [ -n "$sid" ] || { echo 0; return; }
-  used="$(jq -r '.used_pct // 0' "$f" 2>/dev/null)"; used="${used%.*}"; case "$used" in ''|*[!0-9]*) used=0;; esac
-  ts="$(jq -r '.ts // 0' "$f" 2>/dev/null)"; ts="${ts%.*}"; case "$ts" in ''|*[!0-9]*) ts=0;; esac
-  cwd="$(jq -r '.cwd // empty' "$f" 2>/dev/null)"
-  cfg="$(jq -r '.config_dir // empty' "$f" 2>/dev/null)"
-  pid="$(jq -r '.pid // empty' "$f" 2>/dev/null)"
+  local f="$1" sid used ts cwd cfg pid age row
+  # ONE jq read, not six (docs/research/concurrency-scale-2026-10-04 fix row 9). A sweep assesses
+  # every telemetry file, and six forks per file is what stretched a 30 s sweep to 10-19 minutes at
+  # load, so stall and crash detection lagged by that much. The separator is \x1f and NOT a tab:
+  # tab is IFS whitespace, so `read` collapses an EMPTY field and shifts every later one left — an
+  # empty cwd would hand config_dir's value to cwd and lose the pid (e2e T42 pins this).
+  row="$(jq -r '[.session_id // "", .used_pct // 0, .ts // 0, .cwd // "", .config_dir // "", .pid // ""]
+                | map(tostring) | join("\u001f")' "$f" 2>/dev/null)" || row=""
+  IFS=$'\x1f' read -r sid used ts cwd cfg pid <<EOF
+$row
+EOF
+  [ -n "$sid" ] || { echo 0; return; }
+  used="${used%.*}"; case "$used" in ''|*[!0-9]*) used=0;; esac
+  ts="${ts%.*}"; case "$ts" in ''|*[!0-9]*) ts=0;; esac
   age=$(( $(now) - ts ))
 
   # DEAD — the owning pid is GONE, or was RECYCLED to a non-claude process (kill -0 lies: it proves only
