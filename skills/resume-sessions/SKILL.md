@@ -241,8 +241,12 @@ INTERRUPTED worktrees from Phase 3 only** — the watcher cannot tell a parked s
 one, so an unscoped marker list re-pokes every deliberately-parked session on a 240 s timer:
 
 ```
-CC_KEEPALIVE_MARKERS="wt-a wt-b" nohup ~/.reso/bin/reso-keepalive 240 >>~/.reso/keepalive.out 2>&1 & disown
+. ~/.claude/scripts/lib/detach.sh && detach ~/.reso/keepalive.out env CC_KEEPALIVE_MARKERS="wt-a wt-b" ~/.reso/bin/reso-keepalive 240
 ```
+
+`detach` gives the watcher its own session and pgid (`nohup … & disown` dies with the Bash tool
+call's process group) and prints its pid. cc-reaper whitelists `reso-keepalive` by name, so the
+detached loop is no longer collected as an orphan bash after 600 s.
 
 Interval 240s. Log: `~/.reso/keepalive.log`. **Stop: `pkill -f reso-keepalive`.**
 

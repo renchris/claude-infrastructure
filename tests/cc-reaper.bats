@@ -1934,6 +1934,27 @@ EOF
   [ "$got" = "90502 " ]
 }
 
+# ── THE RESUME KEEPALIVE WAS THE SIXTH (2026-10-04). resume-sessions Phase 4 detaches
+# ~/.reso/bin/reso-keepalive as a long-lived bash loop; cc-reaper.log shows it TERMed as orphan-bash
+# 4 times (latest 2026-10-02, age 1042 s), argv `bash /Users/…/.reso/bin/reso-keepalive 240`.
+# Pair form, the logged argv verbatim: it survives, the orphan beside it dies.
+@test "garbage: the resume keepalive watcher is never collected, and an unrelated orphan beside it still is" {
+  mk_garbage_fixtures
+  cat > "$GA" <<'EOF'
+90601 1 17:22 bash
+90602 1 17:22 bash
+EOF
+  cat > "$GB" <<'EOF'
+90601 bash /Users/x/.reso/bin/reso-keepalive 240
+90602 /bin/bash /Users/x/some/unrelated/orphan.sh
+EOF
+  run "$R" garbage --reap
+  [ "$status" -eq 0 ]
+  got="$(awk '$1=="TERM"{print $2}' "$KLOG" | sort -n | tr '\n' ' ')"
+  # RED before the fix: 90601 appears in this list too.
+  [ "$got" = "90602 " ]
+}
+
 # ── THE PID THAT CHANGED HANDS (2026-08-16). The kill-time re-verification checked `ucomm` only, and
 # orphan-bash / stuck-wrapper / dead-lead-watchdog all carry the ERE `^bash$` — so for the three
 # classes that dominate the candidate set it asked "is this a bash?" of a pid it had already decided
