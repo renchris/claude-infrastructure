@@ -212,6 +212,13 @@ cl_die() { echo "cc-lr: $1" >&2; exit "${2:-2}"; }
 # not end in .cc-lr.json, so neither drainer can read it half-written.
 cl_recon_queue() { # <sid> <mode> <pane> <config_dir> [target] → rc 0 queued (dies rc 2 otherwise)
   local sid="$1" mode="$2" pane="$3" cfg="$4" target="${5:-}" dest tmp
+  # The reconciler has NO switch lane: it ingests a mode=switch request and acts on nothing, so the
+  # caller reads QUEUED and the session never moves. Refused before the first write, so a refusal
+  # leaves no request behind for a later reconciler to misread. CC_LR_RECON_SWITCH_REFUSE=off
+  # restores the queue write.
+  if [ "$mode" = switch ] && [ "${CC_LR_RECON_SWITCH_REFUSE:-on}" != off ]; then
+    cl_die "REFUSED — the reconciler is live and it has no switch lane, so a queued switch would never run. Use: cc-lr move --from A --to B. Nothing was queued and nothing was started" 2
+  fi
   case "$pane" in -) pane="" ;; esac
   command -v jq >/dev/null 2>&1 || cl_die "the reconciler is live but jq is not on PATH, so nothing was queued and nothing was started" 2
   mkdir -p "$REQ_DIR" 2>/dev/null || cl_die "cannot create $REQ_DIR; nothing was queued and nothing was started" 2

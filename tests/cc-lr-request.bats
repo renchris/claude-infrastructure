@@ -99,8 +99,22 @@ req_field() { python3 -c 'import json,sys; v=json.load(open(sys.argv[1]))[sys.ar
   python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert "target" not in d, d' "$REQ"
 }
 
-@test "switch, reconciler LIVE: the SELF verb queues mode=switch and never runs lr-handoff" {
+@test "switch, reconciler LIVE: mode=switch is REFUSED rc 2 and nothing is written" {
+  # The reconciler has no switch lane, so the request this used to write was a silent no-op.
   recon_on; heartbeat "$NOW"
+  self_switch --target next3
+  [ "$status" -eq 2 ] || { echo "rc $status: $output"; false; }
+  [[ "$output" == *"cc-lr move --from A --to B"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"QUEUED"* ]] || { echo "$output"; false; }
+  [ ! -e "$REQ" ]
+  [ ! -d "$LR_STATE_DIR/requests" ]
+  not_called lr-handoff.sh
+  [ ! -e "$MUTEX" ]
+}
+
+@test "CONTROL — CC_LR_RECON_SWITCH_REFUSE=off: the SELF verb queues mode=switch and never runs lr-handoff" {
+  recon_on; heartbeat "$NOW"
+  export CC_LR_RECON_SWITCH_REFUSE=off
   self_switch --target next3
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *"QUEUED for the reconciler aaaaaaaa → $REQ"* ]] || { echo "$output"; false; }
