@@ -1,0 +1,53 @@
+# Live probe, 2026-10-04 (Claude Code 2.1.284, account next4): a throwaway background job recycles itself
+# through scripts/handoff-fire.sh --recycle (this branch). Predecessor launched with:
+#   claude --bg --model claude-haiku-4-5-20251001 --allowedTools Bash --name bgprobe-final "Run … bash handoff-fire.sh --recycle --prompt-file brief.txt --goal '…' > recycle.out"
+
+## launch
+backgrounded · ebb2905f · bgprobe-final
+
+## predecessor's recycle output (recycle.out, written by the job's own tool call)
+→ recycle — this session is BACKGROUND JOB ebb2905f (no pane): successor JOB in /private/tmp/bgprobe-VZtsGB on .claude-quaternary, flags: --allowedTools Bash --model claude-haiku-4-5-20251001 --permission-mode default
+→ goal for the successor: the file /tmp/bgprobe-VZtsGB/successor.txt contains SUCCESSOR-ENGAGED
+→ successor job 35074ec0 is up (session 35074ec0, /Users/chrisren/.claude-quaternary/jobs/35074ec0)
+→ goal on 35074ec0: verdict=set state=live proof=goal_status-in-35074ec0-8baf-463d-b469-8b04cc4beb3d
+→ this job (ebb2905f) STOPS in 15s (detached stopper pid 48777, log /var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T//handoff-bgjob-stop-ebb2905f-40312.log); its conversation is kept: claude attach ebb2905f · claude --resume ebb2905f-42d5-4a2b-bc15-375935fc0ed7
+→ the operator continues in job 35074ec0 — 'claude attach 35074ec0', the agents view (←), or the Remote Control session list ('bgprobe-final')
+→ END YOUR TURN NOW: say in one line that you continue in job 35074ec0, then stop.
+rc=0
+
+## detached stopper log
+→ armed: __bgjob_stop pid=48777 job=ebb2905f successor=35074ec0 grace=15s why=recycled into 35074ec0
+→ claude stop ebb2905f: rc 0: stopped ebb2905f
+→ job ebb2905f is STOPPED (roster: no worker pid, state stopped); its conversation is kept
+
+## roster (claude agents --json --all), read independently afterwards
+{"id":"ebb2905f","name":"bgprobe-final","cwd":"/private/tmp/bgprobe-VZtsGB","status":null,"state":"stopped","pid":null}
+{"id":"35074ec0","name":"bgprobe-final","cwd":"/private/tmp/bgprobe-VZtsGB","status":"idle","state":"done","pid":31383}
+
+## successor engaged: its brief made it write successor.txt
+SUCCESSOR-ENGAGED
+
+## successor transcript: first user record + goal_status records
+{"t":"2026-10-04T04:41:20.324Z","prompt":"You are the successor of a recycled background job. Run exactly this bash command, then reply DONE: echo SUCCESSOR-ENGAG"}
+{"type":"goal_status","met":false,"sentinel":true,"condition":"the file /tmp/bgprobe-VZtsGB/successor.txt contains SUCCESSOR-ENGAGED"}
+{"type":"goal_status","met":true,"sentinel":null,"condition":"the file /tmp/bgprobe-VZtsGB/successor.txt contains SUCCESSOR-ENGAGED"}
+
+## handoffs.jsonl rows
+{"ts":"2026-10-04T04:41:11Z","class":"recycle-intent","detail":"background-job recycle ATTEMPTED (sid ebb2905f); successor job not launched yet"}
+{"ts":"2026-10-04T04:41:25Z","class":"recycle-bgjob-launched","detail":"successor job 35074ec0 (sid 35074ec0-8baf-463d-b469-8b04cc4beb3d) in /private/tmp/bgprobe-VZtsGB; goal verdict=set state=live proof=goal_status-in-35074ec0-8baf-463d-b469-8b04cc4beb3d; stopper pid 487"}
+{"ts":"2026-10-04T04:41:42Z","class":"recycle-bgjob-stopped","detail":"recycled into 35074ec0; successor=35074ec0; roster pid null, state=stopped; conversation kept (claude attach ebb2905f)"}
+
+# Live probe 2: self-close --terminal inside a background job, with a 'claude attach' viewer on it (tmux)
+## sc.out (the job's own tool call)
+→ self-close: background job 86c46f6a STOPS in 15s (detached stopper pid 5691, log /var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T//handoff-bgjob-stop-86c46f6a-4662.log); its conversation is kept (claude attach 86c46f6a). END YOUR TURN NOW.
+rc=0
+## stopper log
+→ armed: __bgjob_stop pid=5691 job=86c46f6a successor=- grace=15s why=self-close --terminal
+→ claude stop 86c46f6a: rc 0: stopped 86c46f6a
+→ job 86c46f6a is STOPPED (roster: no worker pid, state done); its conversation is kept
+## what the attached viewer showed after the stop: it EXITS — it does not follow anything
+Session 86c46f6a has exited. … Resume with: claude --resume "bgprobe-selfclose"   (attach exit rc 0)
+
+# Remote Control: each job has its OWN bridge session (state.json bridgeSessionId), so a phone view of the predecessor does not move to the successor either
+ebb2905f {"name":"bgprobe-final","bridgeSessionId":"cse_01Qz8evzQnYPaS5m7sieN6GT"}
+35074ec0 {"name":"bgprobe-final","bridgeSessionId":"cse_0188xhUadU432fxgA6JqDno2"}

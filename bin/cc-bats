@@ -389,6 +389,11 @@ fi
 # and every recycle case would refuse. Cleared here, before any exec path, like the other ambient
 # identity a suite must not inherit; tests/handoff-recycle-bg-session.bats sets it explicitly.
 unset CLAUDE_CODE_SESSION_KIND
+# …and CLAUDE_JOB_DIR, the mark a background job's TOOL env actually carries (2.1.284 strips
+# SESSION_KIND from tool calls; docs/research/bgjob-recycle-2026-10-03/). --recycle, self-close and the
+# succession hooks branch on it, so a suite run from inside a job would take the job path in every
+# pane case. tests/handoff-bgjob-recycle.bats sets it explicitly.
+unset CLAUDE_JOB_DIR
 
 # ── kill switch ───────────────────────────────────────────────────────────────────────────────
 if [ "${CC_BATS_QOS:-on}" = "off" ]; then

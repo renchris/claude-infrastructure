@@ -5085,6 +5085,286 @@ hf_bg_recycle_refusal() { # $1=pane $2=subject phrase
   echo "!! --recycle REFUSED: $2 is BACKGROUNDED — Claude Code's session daemon hosts it, not pane $1. /exit there only DETACHES the viewer: the session keeps running, the pane falls back to the agents view instead of a shell, and a relaunch would be a second live copy. Continue with a handoff (Skill handoff → handoff-fire.sh --split-right), or end it with /stop first. Nothing was typed." >&2
 }
 
+# ---- A BACKGROUND JOB RECYCLES INTO A SUCCESSOR JOB (2026-10-03) ----------------------------------
+# A Claude Code background job (`claude --bg`, `/background`, or a recycle's "Move to background and
+# exit") has no pane. Its daemon strips KITTY_WINDOW_ID and ITERM_SESSION_ID, so --recycle refused
+# with "needs $ITERM_SESSION_ID…", self-close refused the same way, and the agent could only ask the
+# operator to /clear and paste (job 032aa97f, 2026-10-03: "Why can't you do the self-recycle?").
+# Measured on 2.1.284 (docs/research/bgjob-recycle-2026-10-03/README.md):
+#   - a job's TOOL env carries CLAUDE_JOB_DIR (<config>/jobs/<short>, state.json inside),
+#     CLAUDE_CODE_SESSION_ID and CLAUDE_CODE_EXECPATH, and NOT CLAUDE_CODE_SESSION_KIND. The
+#     SESSION_KIND=bg test in the recycle path therefore never fires from a tool call; CLAUDE_JOB_DIR
+#     plus its state.json is the mark.
+#   - state.json holds the job's cwd, name and respawnFlags (model, effort, permission mode, settings).
+#   - `claude --bg <prompt>`, run from inside a job, starts a new job and prints `backgrounded · <short>`;
+#     `claude stop <short>` ends a job and KEEPS its conversation (`claude attach <short>` reopens it).
+#   - `/goal` typed through a `claude attach` client in a private tmux server arms the goal (a
+#     goal_status record lands in that job's transcript), and killing the server only detaches.
+# So a job's exit+relaunch is: start a successor job in the same cwd, on the same account, with the
+# job's own flags and the brief as its prompt; re-arm the goal through attach; then stop THIS job from
+# a detached process once the tool call that ran us has returned. Nothing is typed into this job.
+# HF_BGJOB=off is the kill switch (the old refusal comes back); HF_BGJOB_CLAUDE_BIN is the test seam.
+hf_bgjob_self() { # → 0 iff THIS process runs inside a Claude Code background job (sets HF_BGJOB_*)
+  local d="${CLAUDE_JOB_DIR:-}" s
+  [ "${HF_BGJOB:-on}" != off ] || return 1
+  [ -n "$d" ] && [ -f "$d/state.json" ] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  d="${d%/}"; s="${d##*/}"
+  case "$s" in ''|*[!0-9a-f]*) return 1 ;; esac
+  HF_BGJOB_DIR="$d"; HF_BGJOB_SHORT="$s"
+  # The account is the one the job LIVES on (<config>/jobs/<short>), not whatever this env says.
+  HF_BGJOB_CFG="$(cd "$d/../.." 2>/dev/null && pwd)" || return 1
+  HF_BGJOB_BIN="${HF_BGJOB_CLAUDE_BIN:-${CLAUDE_CODE_EXECPATH:-}}"
+  if [ -z "$HF_BGJOB_BIN" ] || [ ! -x "$HF_BGJOB_BIN" ]; then HF_BGJOB_BIN="$(command -v claude 2>/dev/null || true)"; fi
+  HF_BGJOB_STOP_LOG="${TMPDIR:-/tmp}/handoff-bgjob-stop-$s-$$.log"
+  return 0
+}
+
+# The CLI on the job's account, OUTSIDE this job's identity: the session/bridge/messaging vars are
+# this job's, and CLAUDE_CODE_DISABLE_AGENT_VIEW (set in some pane envs) makes `--bg` refuse outright
+# ("'--bg' is disabled by CLAUDE_CODE_DISABLE_AGENT_VIEW", measured).
+# An ARGV, not a function: hf_bounded_s hands it to timeout(1), which cannot run a shell function.
+hf_bgjob_argv() { # → sets HF_BGJOB_ARGV (append the claude args)
+  HF_BGJOB_ARGV=(env -u CLAUDE_CODE_DISABLE_AGENT_VIEW -u CLAUDE_JOB_DIR -u CLAUDE_CODE_SESSION_ID
+    -u CLAUDE_CODE_BRIDGE_SESSION_ID -u CLAUDE_CODE_MESSAGING_SOCKET -u CLAUDE_CODE_MESSAGING_TOKEN
+    -u CLAUDE_PID -u CLAUDE_CODE_CHILD_SESSION -u CLAUDECODE -u KITTY_WINDOW_ID -u ITERM_SESSION_ID
+    -u FORCE_COLOR NO_COLOR=1 "CLAUDE_CONFIG_DIR=$HF_BGJOB_CFG" "$HF_BGJOB_BIN")
+}
+
+# The successor's flags: the job's own respawnFlags minus the ones that name THIS conversation
+# (--resume/--session-id/--fork-session/--continue), its name (we pass our own) and
+# --reply-on-resume (a respawn concern). --model/--effort passed to this fire override the job's.
+hf_bgjob_flags() { # $1=state.json → NUL-separated flags on stdout
+  jq -j --arg m "${MODEL:-}" --arg e "${EFFORT:-}" '
+    def one: IN("--name","-n","--resume","-r","--session-id","--from-pr","--teleport");
+    def none: IN("--reply-on-resume","--fork-session","--continue","-c","--bg","--background");
+    (.respawnFlags // []) as $f
+    | (reduce range(0; $f|length) as $i ({skip:false, out:[]};
+        if .skip then .skip = false
+        elif ($f[$i] | one) then .skip = true
+        elif ($f[$i] | none) or ($f[$i] | test("^--(name|resume|session-id)=")) then .
+        elif ($m != "" and $f[$i] == "--model") or ($e != "" and $f[$i] == "--effort") then .skip = true
+        else .out += [$f[$i]] end)).out
+    + (if $m != "" then ["--model", $m] else [] end)
+    + (if $e != "" then ["--effort", $e] else [] end)
+    | .[] | (. + "\u0000")' "$1"
+}
+
+# The composer is the LAST `❯` line (the transcript echoes user prompts with the same glyph), and CC
+# renders it as `❯` + NO-BREAK SPACE (c2 a0, measured on the live probe — an exact compare against an
+# ASCII space missed a correct read-back). Normalized, trailing blanks trimmed: an empty box is `❯`.
+hf_bgjob_composer() { # $1=tmux socket → echoes the composer line
+  tmux -L "$1" capture-pane -p 2>/dev/null | sed $'s/\xc2\xa0/ /g' | grep '^❯' | tail -1 | sed 's/[[:space:]]*$//' || true
+}
+
+# THE GOAL, re-armed the only way a job takes input without a pane: a `claude attach` client in a
+# private tmux server. The proof is the successor's own transcript (goal_live_for_sid), never the
+# screen. Always 0; prints `verdict=<set|unverified|unreachable> …` (never a bare claim).
+hf_bgjob_arm_goal() { # $1=successor short $2=successor sid $3=condition
+  local short="$1" sid="$2" cond="$3" sock="hfbg-$1-$$" cmd="" a t=0 last="" got=""
+  local tx="" scr="${TMPDIR:-/tmp}/handoff-bgjob-goal-$1-$$.screen"
+  if [ "${HF_BGJOB_GOAL_ARM:-on}" = off ]; then echo "verdict=unreachable why=HF_BGJOB_GOAL_ARM=off"; return 0; fi
+  command -v tmux >/dev/null 2>&1 || { echo "verdict=unreachable why=no-tmux"; return 0; }
+  # ENGAGED FIRST. Attaching while the job is still taking its initial prompt shows an empty composer
+  # that the prompt then lands in (measured on the first live probe: read-back mismatch). The proof
+  # of engagement is the successor's own transcript holding a user record.
+  while [ "$t" -lt "${HF_BGJOB_ENGAGE_WAIT_S:-90}" ]; do
+    tx="$(find "$HF_BGJOB_CFG/projects" -maxdepth 2 -name "$sid.jsonl" -type f 2>/dev/null | head -1 || true)"
+    [ -n "$tx" ] && grep -q '"type":"user"' "$tx" 2>/dev/null && break
+    tx=""; /bin/sleep 1; t=$((t + 1))
+  done
+  [ -n "$tx" ] || { echo "verdict=unreachable why=successor-not-engaged-in-${t}s"; return 0; }
+  t=0
+  hf_bgjob_argv
+  for a in "${HF_BGJOB_ARGV[@]}" attach "$short"; do cmd="$cmd $(printf '%q' "$a")"; done
+  # Wide, so a long condition stays on ONE composer line and the read-back sees all of it.
+  tmux -L "$sock" -f /dev/null new-session -d -x 400 -y 50 "$cmd" 2>/dev/null \
+    || { echo "verdict=unreachable why=tmux-new-session-failed"; return 0; }
+  while [ "$t" -lt "${HF_BGJOB_ATTACH_WAIT_S:-30}" ]; do
+    last="$(hf_bgjob_composer "$sock")"
+    [ -n "$last" ] && break
+    /bin/sleep 1; t=$((t + 1))
+  done
+  if [ -z "$last" ]; then
+    tmux -L "$sock" kill-server 2>/dev/null || true
+    echo "verdict=unreachable why=attach-showed-no-composer-in-${t}s"; return 0
+  fi
+  if [ "$last" != "❯" ]; then
+    tmux -L "$sock" kill-server 2>/dev/null || true
+    echo "verdict=unreachable why=composer-not-empty"; return 0
+  fi
+  tmux -L "$sock" send-keys -l "/goal $cond" 2>/dev/null || true
+  t=0
+  while [ "$t" -lt 10 ]; do
+    /bin/sleep "${FIRE_TYPE_SETTLE:-0.5}"
+    last="$(hf_bgjob_composer "$sock")"
+    [ "$last" = "❯ /goal $cond" ] && break
+    t=$((t + 1))
+  done
+  if [ "$last" = "❯ /goal $cond" ]; then
+    tmux -L "$sock" send-keys Enter 2>/dev/null || true
+  else
+    tmux -L "$sock" capture-pane -p > "$scr" 2>/dev/null || true
+    tmux -L "$sock" send-keys C-u 2>/dev/null || true; tmux -L "$sock" kill-server 2>/dev/null || true
+    echo "verdict=unreachable why=read-back-mismatch screen=$scr"; return 0
+  fi
+  # ARMED = a goal_status record carrying THIS condition in the successor's transcript. Not "live":
+  # a goal the successor has already met is armed too (measured 2026-10-04, e5d3c76f: met:false
+  # sentinel:true, then met:true seconds later), and goal_live_for_sid reads that as no goal.
+  t=0
+  while [ "$t" -lt "${HF_BGJOB_GOAL_PROOF_S:-30}" ]; do
+    got="$(grep -a 'goal_status' "$tx" 2>/dev/null | jq -rc --arg c "$cond" '
+      select(.type == "attachment") | .attachment | select(.type == "goal_status" and .condition == $c)
+      | if (.met // false) then "met" elif (.failed // false) then "failed" else "live" end' 2>/dev/null | tail -1 || true)"
+    [ -n "$got" ] && break
+    /bin/sleep 1; t=$((t + 1))
+  done
+  tmux -L "$sock" kill-server 2>/dev/null || true
+  if [ -n "$got" ]; then echo "verdict=set state=$got proof=goal_status-in-$sid"
+  else echo "verdict=unverified why=typed-but-no-goal_status-in-${t}s"; fi
+  return 0
+}
+
+# STOPPING THIS JOB happens in a DETACHED process (its own session — `claude stop` ends the worker
+# and everything in its process group), after a grace that lets the tool call running us return.
+hf_bgjob_stop_detached() { # $1=successor short (or "-") $2=why → prints the stopper pid
+  detach "$HF_BGJOB_STOP_LOG" env HF_BGJOB_CFG="$HF_BGJOB_CFG" HF_BGJOB_BIN="$HF_BGJOB_BIN" \
+    "$0" __bgjob_stop "$HF_BGJOB_SHORT" "${HF_BGJOB_STOP_GRACE_S:-15}" "$1" "$2"
+}
+
+hf_bgjob_stop_run() { # $1=short $2=grace-s $3=successor short $4=why — the __bgjob_stop body
+  local short="$1" grace="$2" succ="$3" why="$4" st="" rc=0 out
+  case "$grace" in ''|*[!0-9]*) grace=15 ;; esac
+  echo "→ armed: __bgjob_stop pid=$$ job=$short successor=$succ grace=${grace}s why=$why"
+  /bin/sleep "$grace"
+  hf_bgjob_argv
+  out="$(hf_bounded_s 60 "${HF_BGJOB_ARGV[@]}" stop "$short" 2>&1)" || rc=$?
+  echo "→ claude stop $short: rc $rc: $(printf '%.200s' "$out")"
+  # THE PROOF IS THE ROSTER'S WORKER PID, read by a different call than the one that stopped it.
+  # state.json is not it: a job that had already finished its turn reads `done` after a stop
+  # (measured 2026-10-04, 36ca08fe: `stopped 36ca08fe`, state done, roster pid null).
+  local t=0 row="" wpid="?"
+  while [ "$t" -lt "${HF_BGJOB_STOP_PROOF_S:-20}" ]; do
+    row="$(hf_bounded_s 30 "${HF_BGJOB_ARGV[@]}" agents --json --all 2>/dev/null \
+             | jq -c --arg s "$short" '[.[] | select(.id == $s)][0] // empty' 2>/dev/null || true)"
+    if [ -n "$row" ]; then wpid="$(printf '%s' "$row" | jq -r '.pid // empty' 2>/dev/null || echo '?')"; [ -z "$wpid" ] && break; fi
+    /bin/sleep 1; t=$((t + 1))
+  done
+  st="$(printf '%s' "$row" | jq -r '.state // empty' 2>/dev/null || true)"
+  if [ -n "$row" ] && [ -z "$wpid" ]; then
+    emit_recycle_event recycle-bgjob-stopped "" "bgjob:$short" "$why; successor=$succ; roster pid null, state=$st; conversation kept (claude attach $short)" || true
+    echo "→ job $short is STOPPED (roster: no worker pid, state $st); its conversation is kept"
+  else
+    emit_recycle_event recycle-bgjob-stop-failed "" "bgjob:$short" "$why; successor=$succ; claude stop rc $rc; roster pid ${wpid:-?}, state=${st:-unreadable}" || true
+    hf_alarm recycle-bgjob-stop-failed "bgjob:$short" "" "$succ" "HANDOFF-BGJOB-STOP-FAILED: background job $short handed off to ${succ} but did NOT stop (claude stop rc $rc, state ${st:-unreadable}) — two live copies. Stop it: claude stop $short" || true
+    echo "!! job $short did NOT stop (state ${st:-unreadable}, rc $rc)"
+    return 1
+  fi
+}
+hf_bgjob_shell_quote() { local a o=""; for a in "$@"; do o="$o $(printf '%q' "$a")"; done; printf '%s' "${o# }"; }
+hf_bgjob_bin_check() {
+  [ -n "${HF_BGJOB_BIN:-}" ] && [ -x "$HF_BGJOB_BIN" ] && return 0
+  echo "!! background job $HF_BGJOB_SHORT: no claude binary to run (CLAUDE_CODE_EXECPATH unset and no 'claude' on PATH). Nothing was launched or stopped." >&2
+  return 1
+}
+
+hf_bgjob_recycle() { # → the --recycle exit code, for a session that is a background job
+  local st="$HF_BGJOB_DIR/state.json" cwd name sid out rc=0 new="" nsid="" t=0 gv="none" spid a
+  local -a fl=()
+  cwd="$(jq -r '.cwd // empty' "$st" 2>/dev/null || true)"
+  name="$(jq -r '.name // empty' "$st" 2>/dev/null || true)"
+  sid="${CLAUDE_CODE_SESSION_ID:-$(jq -r '.resumeSessionId // .sessionId // empty' "$st" 2>/dev/null || true)}"
+  if [ -n "${WORKTREE:-}" ]; then
+    echo "!! --recycle REFUSED: background job $HF_BGJOB_SHORT recycles into a successor JOB, and --worktree provisions a pane worktree; pass --cwd <existing dir> instead. Nothing was launched or stopped." >&2
+    return 2
+  fi
+  [ -n "${CWD:-}" ] && cwd="$CWD"
+  [ -n "$cwd" ] && [ -d "$cwd" ] || { echo "!! --recycle REFUSED: background job $HF_BGJOB_SHORT has no readable cwd ('$cwd'). Nothing was launched or stopped." >&2; return 2; }
+  if [ -n "${ACCOUNT:-}" ] && [ "$ACCOUNT" != auto ]; then
+    echo "!! --recycle REFUSED: a background job recycles on the account it lives on ($(basename "$HF_BGJOB_CFG")); --account $ACCOUNT is not supported here. Nothing was launched or stopped." >&2
+    return 2
+  fi
+  hf_bgjob_bin_check || return 1
+  inherit_recycle_goal "$sid"
+  while IFS= read -r -d '' a; do fl+=("$a"); done < <(hf_bgjob_flags "$st" 2>/dev/null || true)
+  echo "→ recycle — this session is BACKGROUND JOB $HF_BGJOB_SHORT (no pane): successor JOB in $cwd on $(basename "$HF_BGJOB_CFG"), flags: $(hf_bgjob_shell_quote ${fl[@]+"${fl[@]}"})"
+  echo "→ goal for the successor: ${FIRE_GOAL:-none}"
+  if [ "${DRY:-0}" = 1 ]; then
+    echo "── dry run (background-job recycle) ──"
+    echo "  launch: cd $(printf %q "$cwd") && CLAUDE_CONFIG_DIR=$(printf %q "$HF_BGJOB_CFG") $(printf %q "$HF_BGJOB_BIN") --bg $(hf_bgjob_shell_quote ${fl[@]+"${fl[@]}"}) --name $(printf %q "${name:-$HF_BGJOB_SHORT}") \"\$(cat $(printf %q "$PROMPT_FILE"))\""
+    echo "  then:   ${FIRE_GOAL:+/goal re-armed through claude attach and proven in the successor transcript, then }claude stop $HF_BGJOB_SHORT from a detached process after ${HF_BGJOB_STOP_GRACE_S:-15}s"
+    return 0
+  fi
+  emit_recycle_event recycle-intent "" "bgjob:$HF_BGJOB_SHORT" "background-job recycle ATTEMPTED (sid ${sid:0:8}); successor job not launched yet" || true
+  hf_bgjob_argv
+  out="$(cd "$cwd" && hf_bounded_s "${HF_BGJOB_LAUNCH_S:-90}" "${HF_BGJOB_ARGV[@]}" --bg ${fl[@]+"${fl[@]}"} --name "${name:-$HF_BGJOB_SHORT}" "$(cat "$PROMPT_FILE")" 2>&1)" || rc=$?
+  # A job's env has FORCE_COLOR=3, so the id arrives wrapped in SGR codes (measured: the first live
+  # probe read `backgrounded · \e[36ma33642a0\e[39m`, missed it, and called a running successor
+  # "did not start"). NO_COLOR is asked for above; the strip is what makes the read not depend on it.
+  new="$(printf '%s\n' "$out" | sed $'s/\x1b\\[[0-9;]*m//g' | sed -n 's/.*backgrounded · \([0-9a-f]\{8\}\).*/\1/p' | head -1)"
+  if [ -z "$new" ]; then
+    emit_recycle_event recycle-bgjob-launch-failed "" "bgjob:$HF_BGJOB_SHORT" "claude --bg rc $rc: $(printf '%.200s' "$out")" || true
+    echo "!! --recycle FAILED: no successor job could be CONFIRMED (claude --bg rc $rc printed no 'backgrounded · <id>' line): $(printf '%.300s' "$out") — this job is untouched and keeps running; if a job did start, 'claude agents --json' lists it, so stop one copy." >&2
+    return 1
+  fi
+  while [ "$t" -lt "${HF_BGJOB_VERIFY_S:-30}" ]; do
+    nsid="$(jq -r '.sessionId // empty' "$HF_BGJOB_CFG/jobs/$new/state.json" 2>/dev/null || true)"
+    [ -n "$nsid" ] && break
+    /bin/sleep 1; t=$((t + 1))
+  done
+  if [ -z "$nsid" ]; then
+    emit_recycle_event recycle-bgjob-launch-failed "" "bgjob:$HF_BGJOB_SHORT" "printed successor $new but $HF_BGJOB_CFG/jobs/$new/state.json never named a session in ${t}s" || true
+    echo "!! --recycle FAILED: claude --bg printed job $new but its state.json never appeared in ${t}s — this job is NOT stopped. Check: claude agents; then stop one copy." >&2
+    return 1
+  fi
+  echo "→ successor job $new is up (session ${nsid:0:8}, $HF_BGJOB_CFG/jobs/$new)"
+  if [ -n "${FIRE_GOAL:-}" ]; then
+    gv="$(hf_bgjob_arm_goal "$new" "$nsid" "$FIRE_GOAL")"
+    echo "→ goal on $new: $gv"
+    emit_goal_event "$(printf '%s' "$gv" | sed -n 's/^verdict=\([a-z]*\).*/\1/p')" "bgjob successor $new: $gv" || true
+  fi
+  spid="$(hf_bgjob_stop_detached "$new" "recycled into $new")"
+  emit_recycle_event recycle-bgjob-launched "" "bgjob:$HF_BGJOB_SHORT" "successor job $new (sid $nsid) in $cwd; goal ${gv}; stopper pid $spid in ${HF_BGJOB_STOP_GRACE_S:-15}s" || true
+  echo "→ this job ($HF_BGJOB_SHORT) STOPS in ${HF_BGJOB_STOP_GRACE_S:-15}s (detached stopper pid $spid, log $HF_BGJOB_STOP_LOG); its conversation is kept: claude attach $HF_BGJOB_SHORT · claude --resume $sid"
+  echo "→ the operator continues in job $new — 'claude attach $new', the agents view (←), or the Remote Control session list ('${name:-$new}')"
+  echo "→ END YOUR TURN NOW: say in one line that you continue in job $new, then stop."
+  return 0
+}
+
+hf_bgjob_self_close() { # → the self-close exit code, for a session that is a background job
+  local dirty="" ahead="" sst spid
+  if [ "${SC_TERMINAL:-0}" != 1 ] && [ -z "${SC_SUCCESSOR:-}" ]; then
+    echo "!! self-close REFUSED: name what continues — --successor <job short> (a background job you started) or --terminal (nothing continues). Background job $HF_BGJOB_SHORT is untouched." >&2
+    return 2
+  fi
+  if [ -n "${SC_SUCCESSOR:-}" ]; then
+    sst="$(jq -r '.state // empty' "$HF_BGJOB_CFG/jobs/$SC_SUCCESSOR/state.json" 2>/dev/null || true)"
+    case "$sst" in
+      ''|stopped|done|failed|killed)
+        echo "!! self-close REFUSED: successor '$SC_SUCCESSOR' is not a live background job on $(basename "$HF_BGJOB_CFG") (state: ${sst:-no state.json}). Background job $HF_BGJOB_SHORT is untouched." >&2
+        return 2 ;;
+    esac
+  fi
+  if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    dirty="$(git status --porcelain 2>/dev/null | head -5 || true)"
+    ahead="$(git rev-list --count '@{u}..HEAD' 2>/dev/null || git rev-list --count origin/main..HEAD 2>/dev/null || true)"
+  fi
+  if [ -n "$dirty" ] && [ "${SC_ALLOW_DIRTY:-0}" != 1 ]; then
+    echo "!! self-close REFUSED: the tree is dirty — commit or hand off first (--allow-dirty overrides):" >&2
+    printf '%s\n' "$dirty" | sed 's/^/     /' >&2
+    return 2
+  fi
+  case "$ahead" in ''|0) ;; *) echo "⚠ self-close: $ahead commit(s) not on the trunk — they retire with this job unless landed or named to your originator." >&2 ;; esac
+  if [ "${SC_DRY:-0}" = 1 ]; then
+    echo "── dry run (background-job self-close) ── would stop job $HF_BGJOB_SHORT with 'claude stop' after ${HF_BGJOB_STOP_GRACE_S:-15}s (${SC_SUCCESSOR:+successor $SC_SUCCESSOR}${SC_SUCCESSOR:-terminal})"
+    return 0
+  fi
+  spid="$(hf_bgjob_stop_detached "${SC_SUCCESSOR:--}" "self-close ${SC_SUCCESSOR:+--successor $SC_SUCCESSOR}${SC_SUCCESSOR:---terminal}")"
+  emit_recycle_event selfclose-bgjob "" "bgjob:$HF_BGJOB_SHORT" "self-close ${SC_SUCCESSOR:+successor $SC_SUCCESSOR}${SC_SUCCESSOR:-terminal}; stopper pid $spid" || true
+  echo "→ self-close: background job $HF_BGJOB_SHORT STOPS in ${HF_BGJOB_STOP_GRACE_S:-15}s (detached stopper pid $spid, log $HF_BGJOB_STOP_LOG); its conversation is kept (claude attach $HF_BGJOB_SHORT). END YOUR TURN NOW."
+  return 0
+}
+
 # ---- PANE PROCESS STATE — THREE-VALUED, and the shell verdict is POSITIVE (2026-08-06) ----------
 # THE INCIDENT THIS EXISTS TO PREVENT: `--recycle` typed a shell command into a LIVE Claude Code
 # composer (2026-08-06, memory reference-recycle-probe-types-into-live-composer). The probe it
@@ -8848,6 +9128,14 @@ hf_canary_hook() { # <point> <pane> <sid>
   "$HF_CANARY_HOOK" "$1" "${2:-}" "${3:-}" "$$" >/dev/null 2>&1 </dev/null || true
 }
 
+# Internal: the background-job stopper (spawned detached by hf_bgjob_stop_detached). It inherits
+# HF_BGJOB_CFG/HF_BGJOB_BIN through its env; $2=job short $3=grace $4=successor $5=why.
+if [ "${1:-}" = "__bgjob_stop" ]; then
+  : "${HF_BGJOB_CFG:?}" "${HF_BGJOB_BIN:?}"
+  hf_bgjob_stop_run "${2:?job short}" "${3:-15}" "${4:--}" "${5:-}"
+  exit $?
+fi
+
 # Internal: recycle watcher (spawned detached by --recycle). ONLY AppleEvent-free work, same
 # constraint as __selfclose: ps-based tty polling + it2 python-API writes (both proven detached).
 # Waits for the typed /exit to land (claude process gone from the tty), then types the relaunch
@@ -10619,6 +10907,11 @@ if [ "${1:-}" = "self-close" ]; then
   # pane's own terminal here makes the pin a no-op (it returns at its first line once CC_TERM is
   # set) without touching the self- forms, which still get the ancestry answer they want.
   # --fired-peer names somebody else's pane too (the peer), so it takes the same resolution.
+  # A BACKGROUND JOB closing ITSELF has no pane at all: it stops its job (hf_bgjob_self_close).
+  if [ -z "$SC_SOURCE_PANE$SC_SOURCE_SESSION$SC_FIRED_PEER" ] && [ "$SC_SID_EXPLICIT" = 0 ] && hf_bgjob_self; then
+    hf_bgjob_rc=0; hf_bgjob_self_close || hf_bgjob_rc=$?
+    exit "$hf_bgjob_rc"
+  fi
   SC_REMOTE_TERM_PANE="${SC_SOURCE_PANE:-$SC_FIRED_PEER}"
   if [ -n "$SC_REMOTE_TERM_PANE" ]; then
     SC_TERM_RC=0; hf_remote_pane_term "$SC_REMOTE_TERM_PANE" || SC_TERM_RC=$?
@@ -12729,6 +13022,12 @@ if [ "$RECYCLE" = 1 ]; then
     echo "→ remote in-place resume: pane $SID is PROVEN to hold session ${RCY_SOURCE_SESSION:0:8} by its registry row (pid $HF_REMOTE_ROW_PID on its tty), and that session was transplanted to $HF_TS_TO (lock $HF_TS_LOCK held) — the self-identity gate is REPLACED by that binding, not skipped" >&2
     fi
   else
+    # A BACKGROUND JOB FIRST, ahead of any pane address: a job has none of its own, and one restored
+    # by lineage names the pane that used to VIEW it (hf_bgjob_self, above hf_bgjob_recycle).
+    if [ -z "$SESSION_ID" ] && hf_bgjob_self; then
+      hf_bgjob_rc=0; hf_bgjob_recycle || hf_bgjob_rc=$?
+      exit "$hf_bgjob_rc"
+    fi
     SID="${SESSION_ID:-$(self_pane_id)}"
     [ -n "$SID" ] || { echo "!! --recycle needs \$ITERM_SESSION_ID, \$KITTY_WINDOW_ID (in a genuine kitty pane) or --session-id" >&2; exit 1; }
     # The env mark, not hf_bg_hosted "$$": the mark is the daemon's own statement about this session
