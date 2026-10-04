@@ -189,8 +189,9 @@ def route(router: str, prompt: str) -> Optional[str]:
 
 
 def evaluate(router: Optional[str]) -> Dict[str, List[str]]:
-    """Gate row 15. Fallbacks (error, timeout, unknown or mixed label) route as completeness (§4.1),
-    and are also counted against MAX_FALLBACK, so an always-failing router cannot pass on recall."""
+    """Gate row 15. A fallback (error, timeout, unknown or mixed label) is a miss in every stratum:
+    the as-built router records it as `unavailable`, which relays nothing (router.py, §10 item 3), so
+    it never counts as a correct relay. Fallbacks are also counted against MAX_FALLBACK."""
     if not router:
         raise kit.KitError("router not built (wave B1): CC_RESEARCH_ROUTER is unset")
     data = load()
@@ -215,8 +216,7 @@ def evaluate(router: Optional[str]) -> Dict[str, List[str]]:
     for i in valid:
         got = route(router, i["prompt"])
         if got is None:
-            fallbacks += 1
-            got = "completeness"
+            fallbacks += 1  # None is neither RELAYED nor any gold label: a miss below
         gold = next(iter(i["labels"].values()))
         h = hits[i["stratum"]]
         h[1] += 1
@@ -241,6 +241,10 @@ def evaluate(router: Optional[str]) -> Dict[str, List[str]]:
         else:
             notes.append(f"stratum {s}: {ok}/{n}")
     rate = fallbacks / len(valid)
+    notes.append(
+        f"{fallbacks} of {len(valid)} routed item(s) fell back (share {rate:.2f}); "
+        "each is scored a miss in its stratum"
+    )
     if rate > MAX_FALLBACK:
         fails.append(
             f"fallback rate {rate:.2f} (error or timeout at {ROUTER_TIMEOUT_S} s), above {MAX_FALLBACK}"

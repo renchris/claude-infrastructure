@@ -113,11 +113,29 @@ EOF
   [[ "$output" == *"stratum regex-missed: 12/12"* ]]
 }
 
-@test "§10 item 11: an always-failing classifier fails row 15 on its fallback rate, though fallbacks route as completeness" {
+@test "§10 item 11: an always-failing classifier fails row 15 on its fallback rate" {
   seal_set
   CC_RESEARCH_CLASSIFIER=false CC_RESEARCH_ROUTER="python3 '$ROUTER' classify" run "$H" evaluate
   [ "$status" -eq 1 ]
   [[ "$output" == *"fallback rate 1.00"* ]]
+}
+
+@test "a router that always falls back scores 0 recall in every completeness stratum and names its fallback share" {
+  seal_set
+  CC_RESEARCH_ROUTER="cat >/dev/null; exit 1" run "$H" evaluate
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"stratum regex-matched: recall 0/12"* ]] || false
+  [[ "$output" == *"stratum pushback: recall 0/12"* ]] || false
+  [[ "$output" == *"48 of 48 routed item(s) fell back (share 1.00)"* ]]
+}
+
+@test "one fallback inside the fallback-rate bound is still a recall miss, never a relay" {
+  seal_set
+  # One regex-matched prompt falls back (1/48 = 0.02, under the 0.10 rate); the stratum drops to 11/12.
+  CC_RESEARCH_ROUTER="p=\$(cat); case \"\$p\" in 'are we done with part 1?') exit 1 ;; esac; printf '%s' \"\$p\" | python3 '$ROUTER' classify" run "$H" evaluate
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"stratum regex-matched: recall 11/12"* ]] || false
+  [[ "$output" == *"1 of 48 routed item(s) fell back (share 0.02)"* ]]
 }
 
 @test "§10 items 11-12: a classifier that labels everything a work order fails recall in every completeness stratum" {
