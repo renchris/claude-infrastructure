@@ -33,13 +33,13 @@ setup() {
   export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/claude-accounts"
 }
 
-# certify [row-status-override-json]: write CERT-v1 with all 16 rows PASS (merged with the override)
+# certify [row-status-override-json]: write CERT-v1 with all 17 rows PASS (merged with the override)
 # and set the registry to certified, as a passing `gate.sh run` leaves them.
 certify() {
   /usr/bin/env python3 - "$REC" "$CC_RESEARCH_REGISTRY" "${1:-{\}}" <<'PY'
 import json, sys, os
 rec, reg, over = sys.argv[1], sys.argv[2], json.loads(sys.argv[3])
-rows = {str(n): "PASS" for n in range(1, 17)}
+rows = {str(n): "PASS" for n in range(1, 18)}
 rows.update(over)
 os.makedirs(os.path.join(rec, "cert"), exist_ok=True)
 json.dump({"cert": "CERT-v1", "program": "demo", "version": 1, "rows": rows},
