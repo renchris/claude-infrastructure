@@ -5,7 +5,7 @@
 **This file is injected into EVERY session in this repo, in full.** That is what makes it
 valuable and what makes it expensive: on 2026-09-17 it reached **190,960 chars (~48K tokens a
 session)** because 70 lessons had been pasted in whole rather than split, and 89.5% of the file
-was evidence nobody needed resident. It now sits at ~43K chars for the same 121 rules.
+was evidence nobody needed resident. Moving the bodies out took it to ~43K chars for the same 121 rules; it has been split again since (2026-09-23), so read its size now with `wc -c`, never from a figure restated here.
 
 **The convention, and it is the whole budget discipline:**
 
@@ -51,4 +51,4 @@ Situational lessons live in `agent-operating-lessons-situational.md` beside this
 - [Turn adjacency ≠ elapsed time](../../docs/lessons/turn-adjacency-is-not-wall-clock-adjacency.md) — a model has no clock, so "just now" and "within a minute" are inferences from TURN POSITION and are free to be hours wrong on an idle session; measure with date/stat/etime before any duration sets a verdict, and read the subject's own printed verdict before inventing a mechanism to contradict it.
 - [Census misses the owner](../../docs/lessons/a-cwd-census-cannot-see-a-worktrees-owner.md) — a wave lead owns its worktrees from the repo ROOT and is never cwd'd in them, so a cwd census reads every one as ownerless and cannot tell that from abandoned; demand a positive owner signal (a commit minutes old, the branch namespace) before touching another session's branch.
 - [Unreachable goal never clears](../../docs/lessons/a-goal-condition-containing-an-operator-only-act-never-clears.md) — a /goal conjunct needing an operator-only act (a credential, a consent, loading a daemon) blocks forever, and blocks AFTER all reachable work is done; the signature is a negative permission clause inside the success condition. End the condition at the agent's reach.
-- [Gate invocation is contract](../../docs/lessons/a-gates-invocation-is-part-of-its-contract.md) — the land gate runs `shellcheck` BARE (ship-land.sh:3258); `-S warning` hides info findings and `-x` SUPPRESSES SC1091, so more-thorough is not a superset — grep the gate for its literal command before any local check, and annotate every code a line can emit.
+- [Gate invocation is contract](../../docs/lessons/a-gates-invocation-is-part-of-its-contract.md) — the land gate runs `shellcheck "${sc_todo[@]}"` BARE (ship-land.sh, `run_gate`); `-S warning` hides info findings and `-x` SUPPRESSES SC1091, so more-thorough is not a superset — grep the gate for its literal command before any local check, and annotate every code a line can emit.

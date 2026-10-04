@@ -55,7 +55,7 @@ The degraded tier at least earns that state through the ladder. `--force` stays 
 escape hatch, for when the ladder itself is what is in the way.
 
 **Not covered, because none of it is a clock:** a bare `git merge --ff-only` / `git pull --ff-only`
-in the shared checkout (denied by `hooks/validate-bash.sh:1352`, and rightly — it advances FILES
+in the shared checkout (denied by the FF-GATE block in `hooks/validate-bash.sh`, and rightly — it advances FILES
 while creating no symlinks, so every newly tracked file lands UNLINKED and silently does nothing),
 `--bootstrap`, and any advance while the ladder reports T3/BLOCKED. A refusal about EVIDENCE is a
 `⛔` to surface, never a knob to turn.

@@ -883,7 +883,7 @@ EOF
   # Same ordering and the same reason as the cold write below: a crash between the two leaves at
   # worst a duplicate line in the destination, never a lost one.
   D_SNAP=$(fstat "$INDEX")
-  D_PROV=$(printf '<!-- routed %s by cc-memory-rotate --drain-oversized: %s index line(s) over the %s-unit buffer cap, moved VERBATIM off %s. Both surfaces load unprompted, so nothing was demoted and nothing was shortened; restore = paste the line back. -->' \
+  D_PROV=$(printf '<!-- routed %s by cc-memory-rotate --drain-oversized: %s index line(s) over the %s-unit buffer cap, moved VERBATIM off %s. Nothing was shortened. Whether this file loads is decided by claudeMdExcludes (see hooks/lib/rules-loaded.sh) and, for a scoped file, its paths: frontmatter, not by this comment; restore = paste the line back. -->' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$D_N" "$ENTRY_LIMIT" "$INDEX")
   if ! route_flush "$D_PAY" "$D_PROV"; then
     printf 'verdict=error reason=%s dest=%s hard_cap=%s\n' "$ROUTE_ERR" "$D_DESTS" "$RULES_HARD_CAP"; exit 2
@@ -1722,7 +1722,7 @@ EOF
         R_PAY="$R_PAY$(route_dest_for "$_rf")$TAB${LINES[$li]}
 "
       done
-      R_PROV=$(printf '<!-- routed %s by cc-memory-rotate: %s index line(s) moved VERBATIM off %s to hold its loader cap (index %s B, target %s). Both surfaces load unprompted, so nothing was demoted and nothing was shortened; restore = paste the line back. -->' \
+      R_PROV=$(printf '<!-- routed %s by cc-memory-rotate: %s index line(s) moved VERBATIM off %s to hold its loader cap (index %s B, target %s). Nothing was shortened. Whether this file loads is decided by claudeMdExcludes (see hooks/lib/rules-loaded.sh) and, for a scoped file, its paths: frontmatter, not by this comment; restore = paste the line back. -->' \
         "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$ROUTED" "$INDEX" "$SIZE" "$TARGET")
       if route_flush "$R_PAY" "$R_PROV"; then
         R_DESTS="$ROUTE_DESTS"
