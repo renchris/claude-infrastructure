@@ -56,3 +56,9 @@ utility	(^|[[:space:]])du -s
 utility	(^|[[:space:]])(ffmpeg|ffprobe)([[:space:]]|$)
 utility	(^|[[:space:]])(magick|convert)([[:space:]]|$)
 utility	(^|[[:space:]])tesseract([[:space:]]|$)
+#
+# ROW 8 (2026-10-04, concurrency-scale row 15): agent-browser. Its daemon launches a real Chrome whose
+# root ran at PRI 55 and helpers at 47, above every session at 31; one hot tree held 1.5-1.7 cores.
+# A clamp on the CLI is inherited by the daemon it spawns and by that daemon's Chrome; a daemon
+# started BEFORE this row keeps its old band until it exits (AGENT_BROWSER_IDLE_TIMEOUT_MS bounds that).
+utility	(^|[[:space:]])agent-browser([[:space:]]|$)

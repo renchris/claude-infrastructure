@@ -10,3 +10,4 @@ convert
 tesseract
 shellcheck
 pytest
+agent-browser
