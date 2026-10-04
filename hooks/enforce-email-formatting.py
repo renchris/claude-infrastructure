@@ -493,7 +493,7 @@ RECIPE = """ms365 email recipe (auto-injected — settled, do not re-derive):
    you to send it, that message starts a new turn and the gate opens by itself. Send
    only the draft they actually named, and never as the second half of your own
    compose. Do not ask for permission to send in the same turn: the answer is "it is
-   in Drafts and ready", and the gate will refuse you anyway.
+   in Drafts and ready", and the gate refuses it anyway.
 
 1. THREADING. To continue a chain, reply on the ORIGINAL message: create-reply-all-draft /
    reply-all-mail-message with its messageId. NEVER send-mail or create-draft-email with a
@@ -512,8 +512,8 @@ RECIPE = """ms365 email recipe (auto-injected — settled, do not re-derive):
 2. FORMATTING — build the fragment, do not hand-write it.
        $HOME/.claude/bin/ms365-compose-body.py --text-file reply.txt --signature <id> --out body.html
    You write PROSE (blank line between paragraphs, "- " for bullets); it emits the house HTML.
-   Pass the contents of body.html as the **Comment**. Three things it gets right that hand-written
-   markup kept getting wrong:
+   Pass the contents of body.html as the **Comment**. Three things hand-written markup kept
+   getting wrong:
      • EVERY block element carries its own inline font-family/font-size/colour. Your fragment is
        pasted into a document somebody else wrote, and Graph copies the original's <style> blocks
        into the draft's <head> — a vendor `p{margin:0}` silently collapses your paragraph spacing
@@ -529,7 +529,7 @@ RECIPE = """ms365 email recipe (auto-injected — settled, do not re-derive):
    Hook-enforced: no single paragraph may exceed MAX_BLOCK_CHARS visible chars, on Comment and
    Message.body alike — the density rule is a whole-body average and is blind to one huge <p>.
 
-3. WHEN YOU STILL NEED THE SPLICE. Rule 2 covers essentially every reply. The splice remains for
+3. WHEN YOU STILL NEED THE SPLICE. Rule 2 covers almost every reply. The splice remains for
    the case where you must build the body from the draft Graph already made — e.g. editing an
    existing draft's text while keeping its quote. Never hand-author a quote block: a typed quote
    is an assertion, Graph's is the record, and a rebuilt one was rejected outright in a live
@@ -556,7 +556,7 @@ RECIPE = """ms365 email recipe (auto-injected — settled, do not re-derive):
    ON A DRAFT. Verified 2026-08-25: a draft messageId returned full RFC-822 source with
    both MIME parts plus From:, In-Reply-To: and References:. So build the draft, then run
    get-mail-message-mime on THAT DRAFT'S OWN id and inspect what you get. Never verify by
-   sending to yourself: sending is denied (rule 0), and the draft read is enough.
+   sending to yourself: sending is denied (rule 0).
 
 5. NAME THE MAILBOX, THEN MATCH THE THREAD'S ALIAS. Two mailboxes, chosen by `account`:
      account "«P»" — personal; aliases «P_DEF» and
@@ -655,9 +655,14 @@ _RAW_PAYLOAD = ""
 def _recipe_once() -> str:
     """Return RECIPE the first time this session touches mail, "" afterwards.
 
-    The recipe is ~1.8KB; a mail-heavy session makes dozens of ms365 calls, so
+    The recipe is ~9.3K chars; a mail-heavy session makes dozens of ms365 calls, so
     re-injecting on every one would be pure waste. Once, early, is enough — it lands
     while the model is still reading the thread, before it composes anything.
+
+    Size is a hard limit, not a cost: Claude Code caps additionalContext at 10,000 chars
+    and past it the model gets a ~2KB preview instead, so rules 1-6 never arrive. The
+    first touch can carry the R2 alias advisory too (allow() joins them), and
+    tests/email-recipe-cap.bats pins the pair under the cap.
     """
     if not _SESSION_ID:
         return ""
@@ -1127,14 +1132,12 @@ def main():
         global _ADVISORY
         _ADVISORY = (
             f"ALIAS CHECK (advisory — this hook cannot verify it). You set from='{alias}'. "
-            f"That must be the alias the counterparty already has for THIS thread, taken "
-            f"from the original's toRecipients/ccRecipients — not a default. A reply from "
-            f"an address they have never seen on the thread can be filed against no order: "
-            f"a vendor's order thread was addressed to {_R['P_DEF_SHORT']} throughout, the hold "
-            f"request went from {_R['P_OTHER_SHORT']}, and they dispatched and charged anyway. If the thread "
-            f"is on {default_alias} you can simply omit `from` — that is already "
-            f"Graph's default. Confirm on the finished draft with get-mail-message-mime "
-            f"(it works on drafts) and read its From: header."
+            f"It must be the alias the counterparty already has for THIS thread, read from "
+            f"the original's toRecipients/ccRecipients — not a default. An address they have "
+            f"never seen matches no order: a vendor's order thread was on {_R['P_DEF_SHORT']}, "
+            f"the hold request went from {_R['P_OTHER_SHORT']}, and they dispatched and charged "
+            f"anyway. On a {default_alias} thread just omit `from` (Graph's default). "
+            f"Confirm with get-mail-message-mime on the finished draft and read its From: header."
         )
 
     # Quote guard: a reply tool passing Message.body silently REPLACES Graph's auto-quote,
