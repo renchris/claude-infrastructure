@@ -108,6 +108,13 @@ situational file), not "add paths:".
 
 - The deployed `CLAUDE.slim.md` (sha d28f…, 57.5k) has drifted from the file the F1 gate certified
   (pin d446…, 53.4k); `cc-instructions-variant status` reports STALE. Re-gating is the operator's call.
+  2026-10-04 (claude-api audit, item hillclimb-09): the F1 PASS was also read on the same 20 tasks that
+  chose its edits, so it is a train score. The re-gate that settles both is a held-out confirm: 10 new
+  frozen tasks (T22-T31, weighted to close honesty, one-command hand-over, refused push, open plan work),
+  arms built from the CURRENT slim + close rules vs the full text, 5 reps per arm ABBA under the
+  unchanged agg.py rule, plus ~20 round-4 dossiers re-judged blind as a judge-drift anchor; headline =
+  held-out delta. Cost ≈ 100 runs ≈ 3-10 weekly pp across 3 accounts, above the no-ask band.
+  Detail: `docs/research/claude-api-audit-2026-10-04/REPORT.md` § 3.
 - Whether any main session runs on a 200k-window model is unmeasured (haiku appears in 174 transcripts in
   3 days); the 40k per-file budget is chosen so the answer does not matter.
 
