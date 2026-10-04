@@ -5767,8 +5767,19 @@ rcy_bgcopy_find() { # $1=predecessor transcript $2=byte size before the answer �
     | sed -n 's/.*"continuedInSessionId"[[:space:]]*:[[:space:]]*"\([0-9a-fA-F-]\{36\}\)".*/\1/p' \
     | tail -1 || true
 }
-rcy_bgcopy_stop() { # $1=predecessor transcript $2=byte size before the answer → "bgcopy=<short|unknown> …"; always 0
-  local tr="${1:-}" off="${2:-0}" uuid="" short f st="" cfg="" live="" state="" bin rc=0 out
+# acct=/cfg= on the bgwork rows (W3 P1b): a `claude stop` or `claude attach` runs under ONE config
+# dir, and the live log could not say which. The watcher runs above the account map's source line,
+# so the map is read in a subshell here; an undeclared dir prints its basename, none prints "?".
+rcy_acct_for_cfg() { # $1=config dir → account name, else the dir's basename, else "?"
+  local b="${1##*/}" n="" m
+  for m in "${CC_ACCOUNT_MAP:-}" "$(dirname "$0")/../lib/account-map.generated.sh" "$HOME/.claude/lib/account-map.generated.sh"; do
+    # shellcheck source=/dev/null
+    [ -n "$b" ] && [ -n "$m" ] && [ -f "$m" ] && { n="$(. "$m" && cc_acct_name_for_dir_basename "$b" 2>/dev/null)" || n=""; break; }
+  done
+  printf '%s' "${n:-${b:-?}}"
+}
+rcy_bgcopy_stop() { # $1=predecessor transcript $2=byte size before the answer $3=resumed sid ("" outside resume mode) → "bgcopy=<short|unknown> …"; always 0
+  local tr="${1:-}" off="${2:-0}" rsid="${3:-}" uuid="" short f st="" cfg="" live="" state="" bin rc=0 out
   local t=0 ticks=$(( ${CC_RECYCLE_BGCOPY_WAIT_S:-5} * 4 ))
   while :; do
     uuid="$(rcy_bgcopy_find "$tr" "$off")"
@@ -5777,22 +5788,28 @@ rcy_bgcopy_stop() { # $1=predecessor transcript $2=byte size before the answer �
   done
   [ -n "$uuid" ] || { printf 'bgcopy=unknown — no continued-in record within %ss; a copy, if one exists, is still running' "${CC_RECYCLE_BGCOPY_WAIT_S:-5}"; return 0; }
   short="${uuid:0:8}"
+  # The resumed session is the SUCCESSOR, never the copy: stopping it would end the very
+  # conversation this recycle is relaunching, so a record naming it is refused, not acted on.
+  [ -n "$rsid" ] && [ "$uuid" = "$rsid" ] && { printf 'bgcopy=%s — is the resumed session itself, NOT stopped' "$short"; return 0; }
   for f in "$HOME"/.claude*/jobs/"$short"/state.json; do
     [ -f "$f" ] && grep -qF "\"$uuid\"" "$f" 2>/dev/null && { st="$f"; break; }
   done
-  [ -n "$st" ] || { printf 'bgcopy=%s — job state not found, NOT stopped; stop it with: claude stop %s' "$short" "$short"; return 0; }
+  # Not found: the job's own config is unknown, so name the predecessor's, where a stop is likeliest.
+  [ -n "$st" ] || { cfg="${tr%/projects/*}"; [ "$cfg" != "$tr" ] || cfg="";
+    printf 'bgcopy=%s — job state not found, NOT stopped (acct=%s cfg=%s, the predecessor'"'"'s); stop it with: %sclaude stop %s' \
+      "$short" "$(rcy_acct_for_cfg "$cfg")" "${cfg:-?}" "${cfg:+CLAUDE_CONFIG_DIR=$cfg }" "$short"; return 0; }
   cfg="$(jq -r '.providerEnv.CLAUDE_CONFIG_DIR // empty' "$st" 2>/dev/null || true)"
   [ -n "$cfg" ] || cfg="${st%/jobs/*}"
   live="$(jq -r '[.fan[]? | select(.doneAt == null) | .label] | join("; ")' "$st" 2>/dev/null || true)"
   bin="${CC_RECYCLE_CLAUDE_BIN:-${BIN:-}}"
-  [ -x "$bin" ] || { printf 'bgcopy=%s — no claude binary resolved, NOT stopped; stop it with: claude stop %s' "$short" "$short"; return 0; }
+  [ -x "$bin" ] || { printf 'bgcopy=%s — no claude binary resolved, NOT stopped (acct=%s cfg=%s); stop it with: CLAUDE_CONFIG_DIR=%s claude stop %s' "$short" "$(rcy_acct_for_cfg "$cfg")" "$cfg" "$cfg" "$short"; return 0; }
   out="$(CLAUDE_CONFIG_DIR="$cfg" hf_bounded "$bin" stop "$short" 2>&1)" || rc=$?
   state="$(jq -r '.state // empty' "$st" 2>/dev/null || true)"
   if [ "$rc" = 0 ]; then
-    printf 'bgcopy=%s stopped (config %s, job state %s); its tasks keep running: %s; bring the conversation back with: claude attach %s' \
-      "$short" "$cfg" "${state:-?}" "${live:-none listed}" "$short"
+    printf 'bgcopy=%s stopped (acct=%s config %s, job state %s); its tasks keep running: %s; bring the conversation back with: claude attach %s' \
+      "$short" "$(rcy_acct_for_cfg "$cfg")" "$cfg" "${state:-?}" "${live:-none listed}" "$short"
   else
-    printf 'bgcopy=%s — claude stop FAILED rc=%s (%s); the copy may still be running' "$short" "$rc" "$(printf '%s' "$out" | tr '\n' ' ' | cut -c1-160)"
+    printf 'bgcopy=%s — claude stop FAILED rc=%s (acct=%s cfg=%s; %s); the copy may still be running' "$short" "$rc" "$(rcy_acct_for_cfg "$cfg")" "$cfg" "$(printf '%s' "$out" | tr '\n' ' ' | cut -c1-160)"
   fi
 }
 
@@ -9164,6 +9181,10 @@ if [ "${1:-}" = "__recycle" ]; then
   # Resume mode (LIMIT_RECOVER_100P): $10-$12 are the TARGET config dir, the sid being resumed and
   # the engagement baseline. Positional-last + optional, like every argument above them.
   RCY_RESUME_CFG="${10:-}"; RCY_RESUME_SID="${11:-}"; RCY_T0="${12:-}"
+  # $13 = the source transcript path the caller resolved from the tombstone (resume mode; empty ⇒
+  # nothing to fold). Parsed HERE, above the wait loop, because the bgwork arm reads it too: in resume
+  # mode it is where the predecessor writes the continued-in record its keep-work answer produces.
+  RCY_SRC_TX="${13:-}"
   # The RESUME DEBT's subject (CLOSE_RESUME_CUSTODY D4): the sid the foreground opened the debt for
   # just before /exit — the resumed sid in resume mode, else the closed session ($6).
   RCY_DEBT_SID="${RCY_RESUME_SID:-${6:-}}"
@@ -9452,22 +9473,32 @@ if [ "${1:-}" = "__recycle" ]; then
           if [ "$RCY_GOAL_CLEAR" = none ] && goal_live_for_sid "$RCY_OLD_SID" >/dev/null 2>&1; then
             RCY_GOAL_CLEAR=live
           fi
-          # The predecessor's transcript size BEFORE the answer: rcy_bgcopy_stop reads only the
-          # continued-in record this answer writes. Resume mode is left alone (its successor IS the
-          # same session, and its only caller answers cancel).
-          rcy_bg_tr="" rcy_bg_off=0
-          if [ "${CC_RECYCLE_BGCOPY_STOP:-on}" != off ] && [ -n "${RCY_OLD_SID:-}" ] && [ -z "${RCY_RESUME_SID:-}" ]; then
-            rcy_bg_tr="$(transcript_for_sid "$RCY_OLD_SID")"
-            [ -f "$rcy_bg_tr" ] && rcy_bg_off="$(wc -c < "$rcy_bg_tr" | tr -d ' ')"
-          fi
+          # The predecessor's transcript and its size BEFORE the answer: rcy_bgcopy_stop reads only
+          # the continued-in record this answer writes. RESUME MODE STOPS THE COPY TOO (W3 P1b; it
+          # used to be skipped, so its copies ran on): the predecessor writes that record by PATH
+          # into the SOURCE store's transcript ($13 — lr-transplant renamed the original to
+          # .handed-off, so a live CC re-creates it), never into the target's copy of the same sid,
+          # which transcript_for_sid could resolve and which fold-stub appends to after this. So the
+          # size is taken on $13, here, before any fold runs. A missing $13 file reads as size 0:
+          # everything in a re-created stub was written after the rename.
+          rcy_bg_tr="" rcy_bg_off=0 rcy_bg_cfg=""
+          [ -n "${RCY_RESUME_SID:-}" ] && rcy_bg_tr="${RCY_SRC_TX:-}"
+          [ -n "$rcy_bg_tr" ] || rcy_bg_tr="$(transcript_for_sid "${RCY_OLD_SID:-}")"
+          [ -f "$rcy_bg_tr" ] && rcy_bg_off="$(wc -c < "$rcy_bg_tr" | tr -d ' ')"
+          [ -n "$rcy_bg_tr" ] && rcy_bg_cfg="${rcy_bg_tr%/projects/*}"
           # typed-send-lint:allow — a single menu digit read off the dialog on screen, never a command line; no shell ever sees it
           hf_bounded "$IT2" session send -s "$RSID" "$bgk" >/dev/null 2>&1 || true
           rcy_bgwork_sent=$((rcy_bgwork_sent + 1))
           echo "→ bgwork@${waited}s: the /exit raised the background-work dialog; answered '$bgk' (${CC_MODAL_BGWORK_KEEP:-keep-work}) — the session exits and its tasks are NOT stopped"
-          emit_recycle_event recycle-bgwork-answered "" "$RSID" "the /exit raised the background-work dialog at ${waited}s; answered with the menu index '$bgk' read off the screen (${CC_MODAL_BGWORK_KEEP:-keep-work}); predecessor goal=${RCY_GOAL_CLEAR}" || true
-          if [ -n "$rcy_bg_tr" ]; then
-            rcy_bgcopy_line="$(rcy_bgcopy_stop "$rcy_bg_tr" "$rcy_bg_off")"
-            RCY_BGCOPY_SHORT="$(printf '%s' "$rcy_bgcopy_line" | sed -n 's/^bgcopy=\([0-9a-fA-F]\{8\}\).*/\1/p')"
+          emit_recycle_event recycle-bgwork-answered "" "$RSID" "the /exit raised the background-work dialog at ${waited}s; answered with the menu index '$bgk' read off the screen (${CC_MODAL_BGWORK_KEEP:-keep-work}); predecessor goal=${RCY_GOAL_CLEAR}; acct=$(rcy_acct_for_cfg "$rcy_bg_cfg") cfg=${rcy_bg_cfg:-?}" || true
+          if [ "${CC_RECYCLE_BGCOPY_STOP:-on}" != off ]; then
+            if [ -n "$rcy_bg_tr" ]; then
+              rcy_bgcopy_line="$(rcy_bgcopy_stop "$rcy_bg_tr" "$rcy_bg_off" "${RCY_RESUME_SID:-}")"
+            else
+              rcy_bgcopy_line="bgcopy=unknown — no predecessor transcript resolved for ${RCY_OLD_SID:-<no sid>}; a copy, if one exists, is still running"
+            fi
+            # Only a STOPPED copy: the failure verdict says "stopped", so a not-found or failed line must not set it.
+            RCY_BGCOPY_SHORT="$(printf '%s' "$rcy_bgcopy_line" | sed -n 's/^bgcopy=\([0-9a-fA-F]\{8\}\) stopped .*/\1/p')"
             echo "→ bgwork: $rcy_bgcopy_line"
             emit_recycle_event recycle-bgcopy-stop "" "$RSID" "$rcy_bgcopy_line" || true
           fi
@@ -9585,7 +9616,8 @@ if [ "${1:-}" = "__recycle" ]; then
   # rename and its exit re-created a small `<sid>.jsonl` in the retired store (the 2026-08-16
   # mechanism, seconds wide here). Now that the process is provably gone (the shell is back), fold
   # that stub INTO the .handed-off record and remove it, so no census ever reads it as a live session.
-  # $13 = the source transcript path the caller resolved from the tombstone; empty ⇒ nothing to fold.
+  # RCY_SRC_TX ($13, parsed at the top of this watcher) = the source transcript path the caller
+  # resolved from the tombstone; empty ⇒ nothing to fold.
   #
   # THE FOLD IS lr-transplant's (W2b): `--phase fold-stub` appends the stub to BOTH copies — the
   # .handed-off record AND the target's transcript the relaunch is about to resume — and REFUSES when
@@ -9594,7 +9626,6 @@ if [ "${1:-}" = "__recycle" ]; then
   # typed, nothing settled (settling would relaunch the same sid somewhere else). An lr-transplant
   # without the phase (rc 3) or none at all falls back to the append-only fold, loudly.
   # Kill switch HF_FOLD_STUB=off = the append-only fold, exactly as before.
-  RCY_SRC_TX="${13:-}"
   if [ -n "$RCY_SRC_TX" ] && [ -f "$RCY_SRC_TX" ] && [ -f "$RCY_SRC_TX.handed-off" ]; then
     rcy_fold_rc=3; rcy_fold_out=""
     if [ "${HF_FOLD_STUB:-on}" != off ] && rcy_fold_tp="$(hf_lr_script lr-transplant.sh HF_LR_TRANSPLANT)"; then
