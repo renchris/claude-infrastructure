@@ -62,6 +62,10 @@ Pre-audit of the 2.1.285–2.1.289 band (2026-10-03, no MANIFEST row yet; eviden
   unchanged in the 2.1.289 strings. If mods are ever adopted, a mod's `$.agent.spawn` appears to
   bypass the PreToolUse(Agent) spawn budgets (inferred from the types, unprobed): ban it in fleet
   mods until probed.
+- **Open against 2.1.289 at its first day (2026-10-04 scan):** #99353, a skill's `allowed-tools`
+  rule is dropped when the Skill tool finishes before the response stream ends; check whether a
+  fleet skill relies on `allowed-tools`. #99130, mods served off remotely, matches our own
+  `tengu_plugin_hooks_modules:false` reading. Nothing else filed that day touches this fleet.
 
 🚨 **The ceiling that was REMOVED is the load-bearing one** (historical: 2.1.224 deleted the
 200-subagent-per-session cap). It reads as a feature in the changelog ("long-running sessions no
