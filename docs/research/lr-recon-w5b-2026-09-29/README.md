@@ -363,6 +363,55 @@ usage limit. All 4 members are `kind: idle` panes (06ef69f7, 705115e9, 75277dd9 
 compare (`legacy found 0 · placements feasible 0/0 · phase agree 0/0 → PASS`) judged nothing. Like
 the three `*-none-0` cohorts above, it does not count. The count stays at 1 of 2.
 
+### Second real limit: next4's 5h cap FAILS, and three things it showed (2026-10-04 07:56-09:40Z)
+
+next4 hit its 5-hour limit on 2026-10-04 (`recon/facts/next4.5h.json`: observed 07:56:48Z,
+`resets_at` 1791106800 = 09:40Z, first sid b8778ec0). It began after the cutoff and it is a real
+usage limit, so it is the second candidate cohort. **It does not pass, and the count stays at 1 of
+2.** Reconciler pid 28574 (no restart row since 01:21:36Z Oct 2; shared checkout `1bcbd636e`,
+`scripts/limit-recover/` identical to origin/main, and `lr_recon/` unchanged since `62d1960cd`),
+comparer at `a3ba677bc`. Compared at 09:08Z, 10:04Z and hourly to 14:46Z with the same line:
+
+```
+SHADOW next4-5h-1791106800: members 1 · legacy found 13 · census misses 1 (d425afab) · not owed 0 · placements feasible 1/1 · phase agree 0/0 (false-RECOVERED resolved 1, plan differed 0) · legacy-corrected 0 → FAIL
+  filed in another cohort (not a miss): 34ee838d, 42097363, 7b1dea4d, 840ca76c, 884aa5bc, b671b47e, b8778ec0, bc218f5d, c5cd1b06, ca3b517d, d8964eb2 → next4-7d-1791104400
+  762a6daa planned next4→next2 feasible
+  d425afab legacy RECOVERED→next2 (watcher NONE) · no recon record
+```
+
+The lead has not ruled on any of this: its own session is the cohort's one member and has been
+stopped at the limit since 09:07:56Z (item 3). Evidence, for the lead to judge:
+
+1. **A new 5h limit was filed under the old 7d cohort.** The 14 sessions the reconciler detected on
+   next4 between 06:11Z and 08:48Z (among them 7b1dea4d, this shadow session, and 34ee838d) all got
+   `scope: 7d` and `cohort_id: next4-7d-1791104400`, the cohort opened on Oct 1 before the cutoff
+   (`opened_at` 1790884745, 37 members, still not closed). Its reset, 1791104400 = 09:00Z, had not
+   passed, so the Oct 1 7d fact still covered next4 and the 5h limit was read as that one. The 5h
+   cohort `next4-5h-1791106800` opened only at 09:08:00Z, after the 7d fact expired, with one member.
+   In act mode a waiting member would have been scheduled to wake at 09:00Z, 40 minutes before the
+   real reset. The comparer cannot separate the two events inside the 7d cohort: on it, it prints
+   `members 37 · legacy found 27 · census misses 1 (d425afab) · placements feasible 7/7 · phase agree
+   16/19 · legacy-corrected 1: 7b1dea4d → FAIL`, and the two DISAGREE rows traced (40ebc527,
+   c28362b6) are Oct 1 members. Of the 14 detected today, 12 closed ENGAGED via ENGAGED and 2 are
+   PRE-MOVE/HOLD:iterm.
+2. **Census miss: d425afab.** `recon/events.jsonl` has five `stale` rows for it at 07:57-07:59Z
+   ("NOT_NEEDED no longer LIMITED — its last assistant record is not the limit") with an empty
+   `record_id`, and `recon/sessions/` has no record. Legacy bundled it at 08:55:35Z and moved it to
+   next2 (its transcript is now under `.claude-secondary`, worktree `wt-cc-142226-72029`). Whether
+   it was limited again after 07:59Z, or legacy moved a session that was not limited, is not settled
+   here.
+3. **Draft hold: 762a6daa, the lead (pane 20).** Its last assistant record is the limit message at
+   09:07:56.312Z. Legacy's handoff precheck held it both times (bundles 090810Z and 092157Z:
+   `focused=no hid_idle_s=5567 verdict=HELD:draft`), because its input box holds unsent text. The
+   recon record reads `PRE-MOVE/PLANNED`, target next2, with `seen` = PRE-MOVE, DETECTED, WAIT_SLOT,
+   PLANNED and the cohort's `dod` line counting `HOLD named 0/1 (draft 0, bgwork 0)`: it planned a
+   move where legacy saw a draft. The pane was still stopped at 14:46Z, five hours after the reset;
+   it is filed for the operator as backlog `b9fdad06b82b`.
+
+Events the reconciler logged against the 7d cohort that day: `RECON-DEFECT TRANSPLANTED/None` 11
+times and `RECON-DEFECT RELAUNCHED/UNPROMPTED` 3 times (two of them 34ee838d and 7b1dea4d at
+09:06Z, each followed by `engaged-elsewhere … moved there by another recovery path`).
+
 ## Census step
 
 Operator step `f0df9145b73a` (the live observe census) was closed with the launchd daemon's own pass:
