@@ -412,6 +412,16 @@ Events the reconciler logged against the 7d cohort that day: `RECON-DEFECT TRANS
 times and `RECON-DEFECT RELAUNCHED/UNPROMPTED` 3 times (two of them 34ee838d and 7b1dea4d at
 09:06Z, each followed by `engaged-elsewhere … moved there by another recovery path`).
 
+**Lead ruling (2026-10-04 15:55Z, 90%).** The FAIL stands and the count stays at 1 of 2 for now.
+Items 1 and 3 are `lr_recon` defects that block the cutover: in item 1 the census takes the scope
+of the covering fact over the session's own death record; in item 3 the death path never reads the
+composer, so a draft is held only on the idle path, where the design holds a draft on every move.
+Both go to wave W7h (`briefs/fire-w7h-scope-draft-stale.txt`), which also settles item 2 (whether
+d425afab was a real miss or legacy moving a healthy session). **When W7h lands, the reconciler is
+restarted, the cutoff moves to that restart, and the count resets to 0 of 2**, because cohort 1
+ran on pre-fix code. Until then every cohort is evidence only. Pane 20 is live again and
+`b9fdad06b82b` is closed.
+
 ## Census step
 
 Operator step `f0df9145b73a` (the live observe census) was closed with the launchd daemon's own pass:
