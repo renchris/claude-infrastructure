@@ -39,7 +39,7 @@ good_set() {
   run grep -q "sync daemon" "$CC_RESEARCH_HOME/demo/vault/seeds.enc"
   [ "$status" -eq 1 ]
   run "$SEED" status --program demo
-  [ "$output" = '{"original": {"caught": 0, "k_left": 2, "orphaned": 0, "s_eff": 2}}' ]
+  [ "${lines[0]}" = '{"original": {"caught": 0, "k_left": 2, "orphaned": 0, "s_eff": 2}}' ]
 }
 
 @test "an anchor shorter than 40 characters is refused" {
@@ -127,4 +127,51 @@ good_set() {
   [ "$output" = '{"original": {"caught": 0, "k_left": 2, "orphaned": 0, "s_eff": 2}}' ]
   run grep -c seed_match "$CC_RESEARCH_RECORDS/holes.jsonl"
   [ "$output" = "0" ]
+}
+
+@test "prescreen: a seed the pre-screen caught is discarded; plant and apply skip it" {
+  A3="Option census for DR-04: do nothing, use what exists, and the new daemon."
+  A4="The store keeps ninety days of history before the nightly compaction runs."
+  for i in $(seq 1 30); do echo "more filler $i that the reviewers will read past quickly"; done >> "$PLAN"
+  echo "$A4" >> "$PLAN"
+  { seedline S-1 replace "$A1" "The sync daemon retries a failed write forever with no backoff at all." "PLAN.md:61-61"
+    seedline S-2 delete-member "$A2" "" "PLAN.md:62-62"
+    seedline S-3 drop-option "$A3" "" "PLAN.md:63-63"; } > "$BATS_TEST_TMPDIR/seeds.jsonl"
+  "$SEED" plant --program demo --plan "$PLAN" --seeds "$BATS_TEST_TMPDIR/seeds.jsonl" --profile lite
+  run "$SEED" prescreen --program demo --caught S-9
+  [ "$status" -eq 2 ]
+  echo S-3 > "$BATS_TEST_TMPDIR/caught.txt"
+  run "$SEED" prescreen --program demo --caught "$BATS_TEST_TMPDIR/caught.txt"
+  [ "$status" -eq 0 ]
+  run "$SEED" status --program demo
+  [ "${lines[0]}" = '{"original": {"caught": 0, "k_left": 2, "orphaned": 0, "s_eff": 2}}' ]
+  run "$SEED" apply --program demo --plan "$PLAN" --out "$BATS_TEST_TMPDIR/seeded.md"
+  [ "$output" = "applied 2 seed(s); skipped 1" ]
+  run grep -c "Option census for DR-04" "$BATS_TEST_TMPDIR/seeded.md"
+  [ "$output" = "1" ]
+  # 94 lines carry 3 originals at lite; the discarded seed no longer holds one of them.
+  seedline S-4 drop-plan-item "$A4" "" "PLAN.md:94-94" \
+    > "$BATS_TEST_TMPDIR/more.jsonl"
+  run "$SEED" plant --program demo --plan "$PLAN" --seeds "$BATS_TEST_TMPDIR/more.jsonl" --profile lite
+  [ "$status" -eq 0 ]
+}
+
+@test "status prints seed realism beside the real-hole detection rate and flags easier seeds" {
+  { seedline S-1 replace "$A1" "The sync daemon retries a failed write forever with no backoff at all." "PLAN.md:61-61" \
+      "the retry count is unbounded, so a failed write loops forever"
+    seedline S-2 delete-member "$A2" "" "PLAN.md:62-62"; } > "$BATS_TEST_TMPDIR/seeds.jsonl"
+  "$SEED" plant --program demo --plan "$PLAN" --seeds "$BATS_TEST_TMPDIR/seeds.jsonl" --profile lite
+  ok='"verification":{"status":"CONFIRMED"},"materiality":{"level":"MATERIAL"}'
+  printf '%s\n' \
+    '{"id":"H-1","round":1,"source":"panel","locus":{"path":"PLAN.md","lines":"61"},"taxonomy_class":"C4","claim":"a failed write loops forever: the retry count is unbounded",'"$ok"'}' \
+    '{"id":"H-2","round":1,"source":"panel","locus":{"path":"PLAN.md","lines":"5"},"claim":"no owner for the cutover",'"$ok"'}' \
+    '{"id":"H-3","round":1,"source":"build","locus":{"path":"PLAN.md","lines":"9"},"claim":"the quota figure is stale",'"$ok"'}' \
+    '{"id":"H-4","round":1,"source":"operator","locus":{"path":"PLAN.md","lines":"12"},"claim":"the wrong tenant",'"$ok"'}' \
+    > "$CC_RESEARCH_RECORDS/holes.jsonl"
+  "$SEED" match --program demo --round 1 --plan "$PLAN"
+  run "$SEED" status --program demo
+  [ "$status" -eq 0 ]
+  [[ "${lines[1]}" == *"realism 1/2 = 0.50"* ]]
+  [[ "${lines[1]}" == *"real detection 1/3 = 0.33"* ]]
+  [[ "${lines[1]}" == *"seeds easier"* ]]
 }

@@ -11,7 +11,8 @@ isolation, not prevention (§3.8, §7).
   seed.py plant  --program P --plan F --seeds S.jsonl [--profile lite|standard|full]
   seed.py apply  --program P --plan F --out SEEDED
   seed.py match  --program P --round K --plan CURRENT
-  seed.py status --program P
+  seed.py prescreen --program P --caught ID… | FILE   (discard what the blind pre-screen caught)
+  seed.py status --program P                       (counts, then the seed-realism line)
 
 Seed record (S.jsonl, written by a seed author from a vendor other than the lead's):
   {sid, cohort: original|shadow-r<k>|escape, class, op: replace|delete-member|drop-option|drop-plan-item,
@@ -110,8 +111,10 @@ def cmd_plant(a: argparse.Namespace) -> int:
         else:
             cap = kit.max_original_seeds(profile, len(plan.splitlines()))
             total = len(originals) + sum(
-                1 for s in vault["seeds"] if s.get("cohort") == "original"
-            )
+                1
+                for s in vault["seeds"]
+                if s.get("cohort") == "original" and s.get("state") != "discarded"
+            )  # a seed the pre-screen discarded was never planted
             if total > cap:
                 errs.append(
                     f"{total} original seeds exceed the cap {cap} for {profile} at "
@@ -202,12 +205,14 @@ def counts(vault: Dict[str, Any]) -> Dict[str, Dict[str, int]]:
             str(s.get("cohort")), {"s_eff": 0, "caught": 0, "k_left": 0, "orphaned": 0}
         )
         st = s.get("state")
+        if st == "discarded":  # caught by the pre-screen: never planted, in no count
+            continue
         if st == "orphaned":
             c["orphaned"] += 1
             continue
         c["s_eff"] += 1
         c["caught" if st == "caught" else "k_left"] += 1
-    return out
+    return {k: v for k, v in out.items() if any(v.values())}
 
 
 def cmd_match(a: argparse.Namespace) -> int:
@@ -244,9 +249,92 @@ def cmd_match(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_prescreen(a: argparse.Namespace) -> int:
+    """Discard the seeds a blind pre-screen reviewer caught, so the planted ones resemble the
+    harder holes that survive research (§3.9). Takes the reviewer's result; never runs it."""
+    ids: List[str] = []
+    for c in a.caught:
+        p = Path(c)
+        ids += p.read_text().split() if p.is_file() else [c]
+    vault, key = load_vault(a.program)
+    by_sid = {s["sid"]: s for s in vault["seeds"]}
+    errs = [f"{i}: not in the vault" for i in ids if i not in by_sid]
+    errs += [
+        f"{i}: state {by_sid[i].get('state')}; only a live seed can be discarded"
+        for i in ids
+        if i in by_sid and by_sid[i].get("state") not in ("live", "discarded")
+    ]
+    if not ids:
+        errs.append("no seed ids given")
+    if errs:
+        for e in errs:
+            print(f"refused: {e}", file=sys.stderr)
+        return 2
+    for i in ids:
+        by_sid[i].update({"state": "discarded", "state_round": None})
+    save_vault(a.program, vault, key)
+    live = sum(1 for s in vault["seeds"] if s.get("state") == "live")
+    print(f"discarded {len(set(ids))} seed(s); {live} live")
+    return 0
+
+
+# Holes the blind rounds found, and holes that surfaced only after them (desk misses).
+REVIEW_SOURCES = ("panel", "delta")
+MISSED_SOURCES = ("build", "operator")
+# Seeds caught more readily than real holes by this factor are flagged as too easy: the
+# calibration pool measured 0.547 seed catch against 0.488 real desk detection, about 1.12x.
+SEED_EASIER_RATIO = 1.1
+
+
+def realism(vault: Dict[str, Any], holes: List[Dict[str, Any]]) -> str:
+    """Seed realism: seeds caught and rated material over seeds planted, beside the real-hole
+    detection rate. Escape seeds are never a denominator (§3.9), and neither is a seed the
+    pre-screen discarded or a fix orphaned."""
+    planted = [
+        s
+        for s in vault["seeds"]
+        if s.get("cohort") != "escape"
+        and s.get("state") not in ("discarded", "orphaned")
+    ]
+    discarded = sum(1 for s in vault["seeds"] if s.get("state") == "discarded")
+    if not planted:
+        return f"realism: no seeds planted; {discarded} discarded by the pre-screen"
+    caught = sum(1 for s in planted if s.get("state") == "caught")
+    seed_rate = caught / len(planted)
+    out = (
+        f"realism {caught}/{len(planted)} = {seed_rate:.2f} (seeds caught and rated material / "
+        f"seeds planted; {discarded} discarded by the pre-screen)"
+    )
+    real = [
+        h
+        for h in holes
+        if (h.get("verification") or {}).get("status") == "CONFIRMED"
+        and (h.get("materiality") or {}).get("level") == "MATERIAL"
+        and not h.get("seed_match")
+    ]
+    found = sum(1 for h in real if h.get("source") in REVIEW_SOURCES)
+    missed = sum(1 for h in real if h.get("source") in MISSED_SOURCES)
+    if not missed:  # a detection rate needs the holes the rounds missed
+        return out + "; real detection: no post-review holes recorded yet"
+    real_rate = found / (found + missed)
+    out += f"; real detection {found}/{found + missed} = {real_rate:.2f}"
+    if seed_rate > real_rate * SEED_EASIER_RATIO:
+        out += f"; FLAG: seeds easier than real holes (> {SEED_EASIER_RATIO}x)"
+    return out
+
+
 def cmd_status(a: argparse.Namespace) -> int:
     vault, _ = load_vault(a.program)
     print(json.dumps(counts(vault), sort_keys=True))
+    try:
+        holes = list(
+            kit.fold(
+                kit.read_jsonl(kit.records_dir(a.program) / "holes.jsonl")
+            ).values()
+        )
+    except kit.KitError:  # an unregistered program has no records to hold a hole
+        holes = []
+    print(realism(vault, holes))
     return 0
 
 
@@ -269,6 +357,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--round", type=int, required=True)
     p.add_argument("--plan", required=True)
     p.set_defaults(fn=cmd_match)
+    p = sub.add_parser("prescreen")
+    p.add_argument("--program", required=True)
+    p.add_argument(
+        "--caught", nargs="+", required=True, help="seed ids, or a file of them"
+    )
+    p.set_defaults(fn=cmd_prescreen)
     p = sub.add_parser("status")
     p.add_argument("--program", required=True)
     p.set_defaults(fn=cmd_status)
