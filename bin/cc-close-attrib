@@ -186,6 +186,17 @@ if [[ ! -e "$GC_STAMP" ]] || [[ -n "$(find "$GC_STAMP" -mtime +1 2>/dev/null)" ]
   : > "$GC_STAMP" 2>/dev/null || true
 fi
 
+# ── CA store: bundled unless the caller chose one. Claude Code 2.1.284 loads the macOS system CA
+# store synchronously on its main thread with no timeout (SecItemCopyMatching /
+# SecTrustSettingsCopyTrustSettings inside one call_once), so a stalled secd/trustd freezes every
+# launch at ~100 MB / 0% CPU, and that process ignores SIGTERM. `bundled` skips the system store.
+# Exported HERE, above the version probe, so it covers all four spawns of $REAL_BIN below. An
+# explicit caller value is kept: a Mac behind a TLS-inspecting root needs `bundled,system` or
+# NODE_EXTRA_CA_CERTS=<root.pem>. settings.json `env` (migration 0055) is the primary channel and
+# overrides this; the export covers launches that load no user settings.
+# Evidence: docs/research/concurrency-scale-2026-10-04/j-startup-hang.md
+export CLAUDE_CODE_CERT_STORE="${CLAUDE_CODE_CERT_STORE:-bundled}"
+
 # version — best-effort, CACHED, and NEVER blocking start. Fire `--version` fully detached
 # and only when the cache is missing or stale (>1 day); the record reader picks up whatever
 # landed. CLAUDE_SKIP_UPDATE guards against a launcher's --version triggering a self-update.

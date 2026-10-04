@@ -104,6 +104,34 @@ await_record() { # → newest close-record path, once one exists
   grep -q ',"alpha","beta"\]' "$(rec)"                 # argv[first 3] recorded
 }
 
+# ── (i-b) CA store default ────────────────────────────────────────────────────────────────
+# The stub records the CLAUDE_CODE_CERT_STORE it was exec'd with. Both exec shapes are covered:
+# the backgrounded capture exec (default) and the plain fail-open exec (kill switch).
+@test "the binary receives CLAUDE_CODE_CERT_STORE=bundled when the caller set none" {
+  local stub="$BATS_TEST_TMPDIR/stub" seen="$BATS_TEST_TMPDIR/cert"
+  mk_stub "$stub" 'printf "%s\n" "${CLAUDE_CODE_CERT_STORE-UNSET}" > "'"$seen"'"'
+  unset CLAUDE_CODE_CERT_STORE
+  run bash "$WRAP" "$stub"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$seen")" = bundled ]
+  rm -f "$seen"
+  CC_CLOSE_ATTRIB_DISABLED=1 run bash "$WRAP" "$stub"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$seen")" = bundled ]
+}
+
+@test "an explicit caller CLAUDE_CODE_CERT_STORE is kept, not overwritten" {
+  local stub="$BATS_TEST_TMPDIR/stub" seen="$BATS_TEST_TMPDIR/cert"
+  mk_stub "$stub" 'printf "%s\n" "${CLAUDE_CODE_CERT_STORE-UNSET}" > "'"$seen"'"'
+  CLAUDE_CODE_CERT_STORE=bundled,system run bash "$WRAP" "$stub"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$seen")" = "bundled,system" ]
+  rm -f "$seen"
+  CC_CLOSE_ATTRIB_DISABLED=1 CLAUDE_CODE_CERT_STORE=system run bash "$WRAP" "$stub"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$seen")" = system ]
+}
+
 # ── (ii) exit_code / signal record fields ───────────────────────────────────────────────────
 # The 139 case is a plain `exit 139`, NOT the `kill -SEGV $$` it used to be. write_record derives
 # the entire signal field arithmetically — `rsig=$(( rcode - 128 ))`, bin/cc-close-attrib:118 —
