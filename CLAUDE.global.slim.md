@@ -75,7 +75,7 @@ Parallelize without waiting to be asked (operator standing directive). A clean o
 
 Where implementation runs:
 
-- An implementation wave or phase runs by default as a dispatched session, one `/handoff` session per phase, fired with `scripts/handoff-fire.sh` and awaited, so its work stays out of the lead's context. The lead keeps at least 50% of its window for deciding.
+- An implementation wave or phase runs by default as a dispatched session, one `/handoff` session per phase, fired with `~/.claude/scripts/handoff-fire.sh` and awaited, so its work stays out of the lead's context. The lead keeps at least 50% of its window for deciding.
 - Within a session, code-writing work across 2+ files uses Agent Teams: named teammates (`Agent({ name, … })`), each in its own worktree; never pass `isolation:` or `cwd:` beside `name:`, which silently demotes the spawn to a plain subagent. The spawn API differs by runtime (agent-teams skill § Runtime assumption).
 - Unnamed (background) subagents do read-only research and exploration and never write code. `hooks/agent-teams-enforce.sh` denies a background subagent whose brief reads as implementation.
 - Teammates are normal inside a dispatched session (it leads its own team). On the lead itself they fit only when a wave's members must be synthesised against each other immediately and their combined output is small. Locus rules and the plan field recording them: plan-conventions skill § Execution locus. Firing mechanics: `~/.claude/commands/handoff.md` § Autonomous fire, item 6 (Waves).
@@ -83,7 +83,7 @@ Where implementation runs:
 Dispatch recipe:
 
 ```
-scripts/handoff-fire.sh --prompt-file /tmp/fire-<phase>.txt --worktree <branch> \
+~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-<phase>.txt --worktree <branch> \
     --notify-back "${ITERM_SESSION_ID##*:}" --account auto --split-right \
     --goal '<measurable end state> — proven by <the command the session runs and prints>; do not <constraint>; full brief in the prompt above, DoD at <plan path>'
 # Only if no /goal is live in this pane:
@@ -107,7 +107,7 @@ Teammates:
 
 - Research subagents are unnamed and fire-and-forget. There is no parallelism cap; the decomposition sets the count, default N=10 (band 8–12) for typical complex research.
 - Use the custom `deep-research` subagent (`~/.claude/agents/deep-research.md`) when depth is warranted. Nesting is off on purpose: `~/.zshrc:484` exports `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1`, so a subagent cannot spawn subagents. Keep it: since 2.1.224 removed the per-session spawn cap, depth is the only runaway bound.
-- A read-only fan-out of about 8 or more same-shaped, self-verifying units runs as a Dynamic Workflow (per-slot `effort`, skeptic/critic stages, schema'd returns; available in headless `-p` sessions, not in subagents). An implementation wave or phase stays a dispatched session.
+- A read-only fan-out of about 8 or more same-shaped, self-verifying units runs as a Dynamic Workflow (per-slot `effort`, skeptic/critic stages, schema'd returns; available in headless `-p` sessions, not in subagents). Give each read-only slot a self-contained brief and `agentType: 'workflow-lean'`, which loads no CLAUDE.md, rules, memory or skills (84% cheaper per slot at equal correctness, offline re-gate 2026-09-24); a slot that writes code, commits, lands, closes or needs a skill or MCP keeps the default agent. An implementation wave or phase stays a dispatched session.
 - Load the research-subagents skill before a research wave: decomposition artifact, task-category gate, 7-field briefs with the Delivery field, per-subagent depth (150-250K tokens, ceiling 500K), adversarial sampling (15-20%), OASIS stop, partial-failure and synthesis rules.
 
 ---
@@ -122,14 +122,14 @@ Teammates:
 
 ## Frontier Tier Routing
 
-Default model: Opus 5.5 at effort high (SSOT `~/.claude/model-config.yaml` `opus_latest`; the `claude()` launcher passes `--model claude-opus-5-5 --effort high`). Effort by use case, from `effort_defaults.opus55_*`: scoped coding medium; leads, agentic work and research high; hard reasoning, code review and long-horizon knowledge work xhigh; never low for research or reasoning. Those keys are advisory, so set the rung yourself: `--effort` on a fire (a teammate inherits its lead's), `effort:` on a Workflow slot. While any 2.1.260 session is running, pin the alias `opus`; that binary refuses the full id.
+Default model: Opus 5.5 at effort high (SSOT `~/.claude/model-config.yaml` `opus_latest`; the `claude()` launcher passes `--model claude-opus-5-5 --effort high`). Effort by use case, from `effort_defaults.opus55_*`: scoped coding medium; leads, agentic work and research high; hard reasoning, code review and long-horizon knowledge work xhigh; never low for research or reasoning. Those keys are advisory, so set the rung yourself: `--effort` on a fire (a teammate inherits its lead's), `effort:` on a Workflow slot.
 
 The frontier tier (currently Fable 5.1, `frontier_access` in the SSOT) is for what the default model is blind to, never for routine or already-identified work. It is the third outcome of Follow-On Gate F2: before asking the operator about a decision still below 90% conviction, escalate the model. Fire the escalation ladder without asking when all three hold:
 - T-a: conviction is still below 90% after this session's exhaustive research, and what remains is a framing question, not a missing fact.
 - T-b: there is an implementation for the answer to feed; otherwise it is a research pass, not a ladder.
 - T-c: `claude-accounts` shows weekly-Fable headroom on a routable account. Without headroom the stage-1 document is the deliverable; report the degrade, do not block.
 
-The ladder: (1) write the research and the open question to a document; then two same-pane recycles, each a new process: (2) `handoff-fire.sh --recycle --model claude-fable-5-1 --effort xhigh --prompt-file <stage-1 doc>`; (3) recycle back with `--model opus` and implement there with Agent Teams. Fable writes documents and never edits files (5.1 rewrites whole files for small edits). The lead runs on Fable only at stage 2. A session chooses the ladder; it is not automatic (whether it should be is an open operator decision, `docs/plans/NONLIMIT_RESUME_LADDER.md` § W3.6). If `CC_LADDER=off` is set, do not fire it.
+The ladder: (1) write the research and the open question to a document; then two same-pane recycles, each a new process: (2) `~/.claude/scripts/handoff-fire.sh --recycle --model claude-fable-5-1 --effort xhigh --prompt-file <stage-1 doc>`; (3) recycle back with `--model opus` and implement there with Agent Teams. Fable writes documents and never edits files (5.1 rewrites whole files for small edits). The lead runs on Fable only at stage 2. A session chooses the ladder; it is not automatic (whether it should be is an open operator decision, `docs/plans/NONLIMIT_RESUME_LADDER.md` § W3.6). If `CC_LADDER=off` is set, do not fire it.
 
 Fable's cost is quota, not dollars (the fleet has no dollar exposure while `accounts.json` has `spend.usage_credits_authorized=false` and `frontier.credits_authorized=false`): it draws on a 50% sub-cap of the same weekly bucket (`frontier.coupling: 0.5`) at roughly 2-5x the default's rate (`docs/research/opus55-effort-sweep-2026-09-22/`; re-measure before quoting). So an escalation names the specific blind spot it targets: escalate for a different model's blind spots, not for a stronger model.
 
@@ -191,7 +191,7 @@ When work remains that involves the user (an interactive login, `sudo`, a classi
 - Carry that consent in the handed command: `--confirm <target>`, refused unless it names the target being changed. Never make the run stop for a typed `yes`; a prompt may remain only for a bare run. The operator runs handed commands through Claude Code's `!`, which has no keyboard, so a prompt-only gate reads EOF and reports a refusal nobody typed.
 - A permission prompt already shows the operator one exact command; leave it to fire rather than bundling it into a batch.
 - A file you hand over contains no permission grants, no `settings*.json` or allowlist edits and no credential writes. Ask for a permission in chat, as its own request.
-- Reading permission state is yours: run `bin/cc-permission-audit` (reports redundant or shadowed allow rules; writes nothing without `CONFIRM=1`; `--prune` is a dry run by default) and hand over its findings. Applying them is the operator's.
+- Reading permission state is yours: run `cc-permission-audit` (reports redundant or shadowed allow rules; writes nothing without `CONFIRM=1`; `--prune` is a dry run by default) and hand over its findings. Applying them is the operator's.
 - Verdicts fail closed: success is an exit code, or a value read back by a different call than the one that made the change, never a grep for a phrase.
 - If what remains is a decision, there is no script; ask it as the `⛔` rung.
 
