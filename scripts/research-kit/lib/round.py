@@ -29,7 +29,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
@@ -193,9 +193,16 @@ def plan_slots(
 
 
 def run_slots(
-    slug: str, rid: str, slots: List[Tuple[str, str]], brief: Path
+    slug: str,
+    rid: str,
+    slots: List[Tuple[str, str]],
+    brief: Path,
+    done: Optional[Set[str]] = None,
 ) -> List[Dict[str, Any]]:
-    """Every slot in parallel; dead/void slots re-run up to CAPS['slot_reruns'] times."""
+    """Every slot in parallel; dead/void slots re-run up to CAPS['slot_reruns'] times.
+
+    A pid in `done` already has a complete panel (a resumed round) and is not run again.
+    """
     bdir = rounds_dir(slug) / rid / "briefs"
     bdir.mkdir(parents=True, exist_ok=True)
     text = brief.read_text()
@@ -204,17 +211,18 @@ def run_slots(
         bf = bdir / f"{s}.txt"
         if not bf.exists():
             bf.write_text(f"{text}\n\nContext strategy for this slot: {s}.\n")
+        pid = f"r{rid}p{i}"
         state.append(
             {
-                "pid": f"r{rid}p{i}",
+                "pid": pid,
                 "vendor": v,
                 "strategy": s,
-                "status": None,
-                "reruns": -1,
+                "status": "complete" if pid in (done or set()) else None,
+                "reruns": 0 if pid in (done or set()) else -1,
                 "brief": str(bf),
             }
         )
-    pending = list(state)
+    pending = [sl for sl in state if sl["status"] is None]
     while pending:
         procs = []
         for sl in pending:
@@ -272,15 +280,70 @@ def cmd_run(a: argparse.Namespace) -> int:
     rd = rounds_dir(a.program) / rid
     if (rd / "matrix.json").exists():
         raise Refused(f"round {rid} already ran")
-    p = subprocess.run(
-        [courier(), "bundle", "--program", a.program, "--round", rid, "--plan", a.plan],
-        stdin=subprocess.DEVNULL,
-        capture_output=True,
-        text=True,
-    )
-    if p.returncode != 0:
-        raise Refused(f"courier bundle failed: {p.stderr.strip()}")
-    res = run_slots(a.program, rid, slots, Path(a.brief))
+    # A bundle with no matrix.json is a round whose process died mid-run. courier.sh refuses a second
+    # bundle, so re-running it from scratch is impossible: resume it on the bundle and plan it already
+    # has, re-running only the planned slots with no complete panel.
+    resumed = (kit.sealed_dir(a.program) / "rounds" / rid / "bundle").exists()
+    if not resumed:
+        p = subprocess.run(
+            [
+                courier(),
+                "bundle",
+                "--program",
+                a.program,
+                "--round",
+                rid,
+                "--plan",
+                a.plan,
+            ],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+        )
+        if p.returncode != 0:
+            raise Refused(f"courier bundle failed: {p.stderr.strip()}")
+    plan = kit.read_json(rd / "plan.json")
+    if plan:
+        slots = [(s["vendor"], s["strategy"]) for s in plan["slots"]]
+        vonly, rmax = plan["verification_only"], plan["r_max"]
+    else:
+        kit.write_json_atomic(
+            rd / "plan.json",
+            {
+                "round": rid,
+                "seq": a.round,
+                "kind": a.kind,
+                "escape": a.escape,
+                "verification_only": vonly,
+                "r_max": rmax,
+                "slots": [
+                    {
+                        "pid": f"r{rid}p{i}",
+                        "vendor": v,
+                        "strategy": s,
+                        "role": "reviewer",
+                        "round": rid,
+                    }
+                    for i, (v, s) in enumerate(slots, 1)
+                ],
+                "at": kit.now_iso(),
+            },
+        )
+    done: Set[str] = set()
+    if resumed:
+        done = {
+            f"r{rid}p{i}"
+            for i in range(1, len(slots) + 1)
+            if (kit.read_json(rd / "panels" / f"r{rid}p{i}.json") or {}).get("status")
+            == "complete"
+        }
+        rerun = [
+            f"r{rid}p{i}" for i in range(1, len(slots) + 1) if f"r{rid}p{i}" not in done
+        ]
+        print(
+            f"round {rid}: resumed an interrupted run; re-running {', '.join(rerun) or 'no slot'}"
+        )
+    res = run_slots(a.program, rid, slots, Path(a.brief), done)
     subprocess.run(
         [courier(), "integrity", "--program", a.program, "--round", rid],
         stdin=subprocess.DEVNULL,

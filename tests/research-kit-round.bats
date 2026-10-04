@@ -25,6 +25,7 @@ while [ $# -gt 0 ]; do
   case "$1" in --round) rid="$2" ;; --pid) pid="$2" ;; --vendor) vendor="$2" ;; esac
   shift
 done
+if [ "$verb" = bundle ]; then echo "bundle $rid" >> "$CC_RESEARCH_RECORDS/runs.log"; exit 0; fi
 [ "$verb" = run ] || exit 0
 d="$CC_RESEARCH_RECORDS/rounds/$rid/panels"; mkdir -p "$d"
 st=complete; rc=0
@@ -192,6 +193,41 @@ json.dump(m, open(p,'w'))"
   run "$R" close --program demo --round 2
   [ "$status" -eq 0 ]
   [ "$(field 2 'm["closed"], m["counted"], m["quiet"]')" = "True False False" ]
+}
+
+interrupted_round_1() { # the process died after the bundle and plan: r1p1 complete, r1p2 partial, no matrix
+  fc_done
+  mkdir -p "$CC_RESEARCH_HOME/demo/rounds/1/bundle" "$CC_RESEARCH_RECORDS/rounds/1/panels"
+  /usr/bin/python3 -c "import json, sys; sys.path.insert(0, '$REPO/scripts/research-kit/lib'); import round as r
+rid, slots, vonly, rmax = r.plan_slots('demo', 'certification', 1, None)
+rows = [{'pid': 'r%sp%d' % (rid, i), 'vendor': v, 'strategy': s, 'role': 'reviewer', 'round': rid} for i, (v, s) in enumerate(slots, 1)]
+json.dump({'round': rid, 'seq': 1, 'kind': 'certification', 'escape': None, 'verification_only': vonly, 'r_max': rmax, 'slots': rows},
+          open('$CC_RESEARCH_RECORDS/rounds/1/plan.json', 'w'))"
+  printf '{"pid":"r1p1","status":"complete"}\n' > "$CC_RESEARCH_RECORDS/rounds/1/panels/r1p1.json"
+  printf '{"pid":"r1p2","status":"partial"}\n' > "$CC_RESEARCH_RECORDS/rounds/1/panels/r1p2.json"
+}
+
+@test "re-entering a round that died before its matrix resumes it: only the slots with no complete panel re-run" {
+  interrupted_round_1
+  run_cert 1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"resumed"*"r1p2"* ]]
+  run grep -c '^bundle ' "$CC_RESEARCH_RECORDS/runs.log"
+  [ "$output" = "0" ]
+  run grep -c ' r1p' "$CC_RESEARCH_RECORDS/runs.log"
+  [ "$output" = "7" ]
+  run grep -c ' r1p1$' "$CC_RESEARCH_RECORDS/runs.log"
+  [ "$output" = "0" ]
+  [ "$(field 1 'len(m["slots"]), sorted({s["status"] for s in m["slots"]}), m["counted"]')" = "8 ['complete'] True" ]
+}
+
+@test "a fresh round builds its bundle and records its plan before any slot runs" {
+  fc_done
+  run_cert 1
+  [ "$status" -eq 0 ]
+  run grep -c '^bundle 1$' "$CC_RESEARCH_RECORDS/runs.log"
+  [ "$output" = "1" ]
+  [ -f "$CC_RESEARCH_RECORDS/rounds/1/plan.json" ]
 }
 
 @test "a third delta round for one escape is refused" {
