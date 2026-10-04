@@ -1032,6 +1032,28 @@ _mdfix() {
   [[ "$output" == *"ABSENT"* ]]
 }
 
+@test "slim rule set: rules/<name>.md identical ⇒ quiet; absent or diverged ⇒ CLAUDEMD + drift" {
+  _copyfix
+  printf 'global rules v1\n' > "$CC_PARITY_REPO/CLAUDE.global.md"
+  printf 'slim rules v1\n' > "$CC_PARITY_REPO/CLAUDE.global.slim.md"
+  printf 'close rules v1\n' > "$CC_PARITY_REPO/CLAUDE.rules.slim.10-session-close.md"
+  cp "$CC_PARITY_REPO/CLAUDE.global.slim.md" "$CC_PARITY_LIVE/CLAUDE.md"
+  mkdir -p "$CC_PARITY_LIVE/rules"
+  cp "$CC_PARITY_REPO/CLAUDE.rules.slim.10-session-close.md" "$CC_PARITY_LIVE/rules/10-session-close.md"
+  _track
+  run "$ASSERT"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"CLAUDEMD"* ]] || false
+  printf 'close rules v0\n' > "$CC_PARITY_LIVE/rules/10-session-close.md"
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"rules/10-session-close.md"*"DIVERGES"* ]] || false
+  rm "$CC_PARITY_LIVE/rules/10-session-close.md"
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"rules/10-session-close.md"*"ABSENT"* ]] || false
+}
+
 # ══ FILING — a verdict that only PRINTS reaches nobody ════════════════════════════════════════════
 # The UNGATED finding printed on every 600s tick for weeks and filed nothing; five sessions read
 # "drift at its historical minimum" and closed over it. These cases pin the three properties the
@@ -2156,12 +2178,16 @@ _rawdeploy_extract() {  # $1=install.sh  $2=out TSV: line \t kind \t srcclass \t
   # docs/plans/INSTRUCTION_BUDGET.md D2). Its source is CLAUDE.global.md or CLAUDE.global.<v>.md,
   # both already declared (the assert's CLAUDE.global.md and CLAUDE.global.*.md arms), and its
   # destination is renamed on the way down, so no per-file leg can score it either.
-  [ "$DVAR" -eq 4 ]
+  # VARIABLE source #5: the selected variant's rule set, `run cp "$_rsrc"` (INSTRUCTION_BUDGET.md,
+  # the 473335c307b2 follow-on). Loop-driven like $_variant; its for-header is scored by CLASS
+  # COVERAGE via the assert's `CLAUDE.rules.*.md)` arm.
+  [ "$DVAR" -eq 5 ]
   [ "$(awk -F'\t' '$2=="DEPLOY" && $3=="VARIABLE"{print $1}' "$RAW" \
        | while IFS= read -r n; do sed -n "${n}p" "$MAP"; done | grep -c 'ln -sfn')" -eq 2 ]
   [ "$(awk -F'\t' '$2=="DEPLOY" && $3=="VARIABLE" && $4=="$pvsrc"{n++} END{print n+0}' "$RAW")" -eq 1 ]
   [ "$(awk -F'\t' '$2=="DEPLOY" && $3=="VARIABLE" && $4=="$_variant"{n++} END{print n+0}' "$RAW")" -eq 1 ]
   [ "$(awk -F'\t' '$2=="DEPLOY" && $3=="VARIABLE" && $4=="$_instr_src"{n++} END{print n+0}' "$RAW")" -eq 1 ]
+  [ "$(awk -F'\t' '$2=="DEPLOY" && $3=="VARIABLE" && $4=="$_rsrc"{n++} END{print n+0}' "$RAW")" -eq 1 ]
   # LIVE-PATH source: install.sh:703's ~/bin/restore-file convenience symlink. Its source is
   # $HOME/.claude/..., i.e. the LIVE layer rather than the checkout, so it is unnamable in the units
   # every other arm here uses. Pinned by DESTINATION for that reason.

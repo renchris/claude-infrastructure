@@ -63,6 +63,31 @@ install_fixture() { run bash "$FIX/install.sh" --config-dir "$CFG"; }
   [ "$(cat "$CFG/elsewhere.md")" = "operator scratch" ]
 }
 
+@test "slim rule set: CLAUDE.rules.slim.<name>.md deploys to rules/<name>.md as a copy and survives the stray sweep" {
+  printf 'close rules\n' > "$FIX/CLAUDE.rules.slim.10-session-close.md"
+  mkdir -p "$CFG/rules"; printf 'board\n' > "$CFG/rules/00-mission-board.md"
+  install_fixture
+  [ "$status" -eq 0 ]
+  [ ! -L "$CFG/rules/10-session-close.md" ]
+  cmp "$CFG/rules/10-session-close.md" "$FIX/CLAUDE.rules.slim.10-session-close.md"
+  install_fixture
+  [ -f "$CFG/rules/00-mission-board.md" ]
+  [ -f "$CFG/rules/10-session-close.md" ]
+  [ "$(find "$CFG/rules" -type f | wc -l | tr -d ' ')" -eq 2 ]
+  [[ "$output" != *"retired rules/"* ]] || false
+}
+
+@test "registry 'global full': the slim rule set is not deployed, and a deployed one is retired (full already holds it)" {
+  printf 'close rules\n' > "$FIX/CLAUDE.rules.slim.10-session-close.md"
+  install_fixture
+  [ -f "$CFG/rules/10-session-close.md" ]
+  printf 'global full\n' > "$CFG/instruction-variants"
+  install_fixture
+  [ "$status" -eq 0 ]
+  cmp "$CFG/CLAUDE.md" "$FIX/CLAUDE.global.md"
+  [ ! -e "$CFG/rules/10-session-close.md" ]
+}
+
 @test "a registry variant this checkout lacks falls back to the full text, and says so" {
   printf 'global nosuch\n' > "$CFG/instruction-variants"
   install_fixture

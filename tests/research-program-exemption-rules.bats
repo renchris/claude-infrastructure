@@ -11,7 +11,9 @@
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"   # hermetic: never the operator's live ~/
-  G="$REPO/CLAUDE.global.md"; S="$REPO/CLAUDE.global.slim.md"
+  # the slim variant is two always-loaded files: CLAUDE.md and its rule set (the close protocol)
+  G="$REPO/CLAUDE.global.md"; S="$BATS_TEST_TMPDIR/slim.md"
+  cat "$REPO/CLAUDE.global.slim.md" "$REPO"/CLAUDE.rules.slim.*.md > "$S"
   export CC_RESEARCH_REGISTRY="$BATS_TEST_TMPDIR/programs.json"
   PROG="$BATS_TEST_TMPDIR/prog"; mkdir -p "$PROG/wt" "$BATS_TEST_TMPDIR/elsewhere"
 }

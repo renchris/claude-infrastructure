@@ -916,6 +916,11 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
       # a per-file leg would score a permanent false MISSING. Undeclared, this class reached the
       # reasonless default below and reddened tests/deploy-parity.bats CLASS COVERAGE on trunk.
       CLAUDE.global.*.md)        want=0 ;;
+      # A variant's rule set (install.sh's `for _rsrc in "$REPO_DIR"/CLAUDE.rules.*.md` loop): COPIED
+      # and RENAMED like the variants above — CLAUDE.rules.<v>.<name>.md → $CFG/rules/<name>.md, and
+      # only for the selected variant — so a per-file leg would score a false MISSING. Its content
+      # is checked by the CLAUDE.md leg below.
+      CLAUDE.rules.*.md)         want=0 ;;
       *)                         want=0 ;;
     esac
     [ "$want" = 1 ] || continue
@@ -1308,6 +1313,31 @@ if [ -f "$REPO/CLAUDE.global.md" ]; then
     esac
   fi
 fi
+# The selected variant's rule set (install.sh copies CLAUDE.rules.<variant>.<name>.md to
+# rules/<name>.md): the slim variant keeps its Session Close Protocol there, so a missing or stale
+# copy means every session runs without, or on a past revision of, the close rules. Detection only,
+# for the reason given above; ./install.sh is the repair.
+case "${_cm_src##*/}" in
+  CLAUDE.global.md) : ;;
+  *) _cm_rv="${_cm_src##*/CLAUDE.global.}"; _cm_rv="${_cm_rv%.md}"
+     for _cm_r in "$REPO"/CLAUDE.rules."$_cm_rv".*.md; do
+       [ -f "$_cm_r" ] || continue
+       _cm_rn="${_cm_r##*/CLAUDE.rules."$_cm_rv".}"
+       if [ ! -e "$LIVE/rules/$_cm_rn" ]; then
+         report "CLAUDEMD" "rules/$_cm_rn" "this part of the live global instructions is ABSENT → run ./install.sh"
+         drift=1
+       else
+         same_file "$_cm_r" "$LIVE/rules/$_cm_rn"
+         case $? in
+           0) : ;;
+           1) report "CLAUDEMD" "rules/$_cm_rn" "this part of the live global instructions DIVERGES from the repo, and every session reads the live copy → run ./install.sh"
+              drift=1 ;;
+           *) report "NOVERDICT" "rules/$_cm_rn" "diff could not run (3 tries) — no claim either way"
+              noverdict=1 ;;
+         esac
+       fi
+     done ;;
+esac
 
 # ── THIRD LEG: DEPLOY PROVENANCE — HOW the live checkout reached the commit it is on ────────────
 # Both legs above ask "does the LIVE layer match the CHECKOUT?". Neither can answer the question

@@ -27,7 +27,8 @@ fail-closed project-local `/ship` (landing lock + last-moment re-fetch + full ga
 + stranded sweep) — never a bare `git push`. Global Git Safety is unchanged for every other repo.
 After landing, converge (§ Standing-converge below) rather than hand-copying: `~/.claude/CLAUDE.md` is
 a real file install.sh writes from the SELECTED global variant (`CLAUDE.global.slim.md` by default;
-`cc-instructions-variant status`), `~/.claude/CLAUDE.full.md` is its copy of `CLAUDE.global.md`, and a
+`cc-instructions-variant status`), `~/.claude/rules/10-session-close.md` is its copy of the slim
+variant's close protocol (`CLAUDE.rules.slim.10-session-close.md`), `~/.claude/CLAUDE.full.md` is its copy of `CLAUDE.global.md`, and a
 hand edit to either is overwritten on the next deploy (docs/plans/INSTRUCTION_BUDGET.md D2). Most of
 `skills/ hooks/ bin/ scripts/ commands/` are per-file symlinks into the checkout and go live on the
 trunk fast-forward.

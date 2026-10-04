@@ -46,6 +46,7 @@ DAY = 86400.0
 RULE_GLOBS = (
     "CLAUDE.global.md",
     "CLAUDE.global.slim.md",
+    "CLAUDE.rules.slim.*.md",
     ".claude/rules/*.md",
     "docs/lessons/*.md",
 )

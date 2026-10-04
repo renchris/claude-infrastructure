@@ -182,4 +182,12 @@ body file. Land a reso size check in pre-commit + `scripts/ship-land.sh` run_sta
 - 2026-10-03 — follow-on (auditor row 473335c307b2, user tier 60,114 > 60,000): `cc-mission` compact board
   capped at 2,400 chars, rows past it collapse to one "+N more" line (3e870cbc7). Dropped as covered by the
   land ratchets + hourly auditor: W2's Bash-route detector and the cc-memory-rotate pre-check.
+- 2026-10-03 — follow-on (auditor row 473335c307b2, `~/.claude/CLAUDE.md` 57,231 > 40,000 per file): the slim
+  variant is now two always-loaded files. Its Session Close Protocol moved verbatim to
+  `CLAUDE.rules.slim.10-session-close.md` (30,293), which install.sh copies to `~/.claude/rules/10-session-close.md`
+  whenever slim is selected (and retires when full is); `CLAUDE.global.slim.md` is 26,939. Decided: split, not
+  cut. The loaded text is byte-identical, so the F1-gated wording is untouched and the user tier stays where it
+  was (about 59.5k of 60k); cutting 17k of rules to fit one file would be an ungated behavior change, and
+  re-gating is the operator's call (Known issues). deploy-parity gained a leg for the rule copy. Any real
+  token saving in the user tier still needs a gated slim round.
 - Remaining: the operator runs migration 0053 (backlog b154e11d31b9) → global layer ≈ 60k, DUP rows clear.

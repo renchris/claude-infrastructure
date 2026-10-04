@@ -1082,6 +1082,27 @@ if [[ "$_instr_variant" == full || ! "$_instr_variant" =~ ^[a-z0-9-]+$ || ! -f "
   _instr_variant=full
   _instr_src="$REPO_DIR/CLAUDE.global.md"
 fi
+# The selected variant's own rules: CLAUDE.rules.<variant>.<name>.md → rules/<name>.md, a copy for the
+# same branch-switch reason. A variant too large for one file under the 40k per-file budget keeps its
+# tail here (slim: the Session Close Protocol), and every session loads both. Copied BEFORE CLAUDE.md
+# so a session starting mid-install sees the section twice rather than not at all.
+_instr_rules=" "
+if [[ "$_instr_variant" != full ]]; then
+  for _rsrc in "$REPO_DIR"/CLAUDE.rules.*.md; do
+    [[ -f "$_rsrc" && "${_rsrc##*/}" == CLAUDE.rules."$_instr_variant".* ]] || continue
+    _rname="${_rsrc##*/CLAUDE.rules."$_instr_variant".}"
+    _instr_rules+="$_rname "
+    [[ -d "$CONFIG_DIR/rules" ]] || run mkdir -p "$CONFIG_DIR/rules"
+    if ! diff -q "$_rsrc" "$CONFIG_DIR/rules/$_rname" >/dev/null 2>&1; then
+      [[ -L "$CONFIG_DIR/rules/$_rname" ]] && run rm "$CONFIG_DIR/rules/$_rname"
+      run cp "$_rsrc" "$CONFIG_DIR/rules/$_rname"
+      echo "  ✓ rules/$_rname ← the $_instr_variant variant's rule set"
+      installed=$((installed + 1))
+    else
+      skipped=$((skipped + 1))
+    fi
+  done
+fi
 if ! diff -q "$_instr_src" "$CONFIG_DIR/CLAUDE.md" >/dev/null 2>&1; then
   [[ -L "$CONFIG_DIR/CLAUDE.md" ]] && run rm "$CONFIG_DIR/CLAUDE.md"
   run cp "$_instr_src" "$CONFIG_DIR/CLAUDE.md"
@@ -1090,14 +1111,15 @@ if ! diff -q "$_instr_src" "$CONFIG_DIR/CLAUDE.md" >/dev/null 2>&1; then
 else
   skipped=$((skipped + 1))
 fi
-# $CONFIG_DIR/rules/ holds exactly the selected variant's rule set, which for every variant is the
-# mission board `cc-mission render` writes. Anything else there loads into every session under $HOME
+# $CONFIG_DIR/rules/ holds exactly the selected variant's rule set: the mission board `cc-mission
+# render` writes, plus the variant's own rules copied above. Anything else there loads into every session under $HOME
 # (the ancestor walk) and nothing tracked deploys it — on 2026-10-03 that was a 6.3k essay about
 # whether this directory loads. It is moved, never deleted, to a path nothing loads.
 if [[ -d "$CONFIG_DIR/rules" && ! -L "$CONFIG_DIR/rules" ]]; then
   for _rule in "$CONFIG_DIR/rules"/*; do
     [[ -e "$_rule" || -L "$_rule" ]] || continue
     case "${_rule##*/}" in 00-mission-board.md|00-mission-board.md.tmp) continue ;; esac
+    [[ "$_instr_rules" == *" ${_rule##*/} "* ]] && continue
     run mkdir -p "$CONFIG_DIR/backups/rules-retired"
     run mv "$_rule" "$CONFIG_DIR/backups/rules-retired/${_rule##*/}.$(date +%Y%m%d%H%M%S)"
     echo "  ✓ retired rules/${_rule##*/} → backups/rules-retired/ (not part of the $_instr_variant rule set)"

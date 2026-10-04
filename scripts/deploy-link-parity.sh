@@ -633,6 +633,7 @@ done
 #   NOT-PER-FILE /launchd/*.plist  copies into ~/Library/LaunchAgents (install.sh's LaunchAgents leg)
 #   NOT-PER-FILE /vendor/*/        ONE directory symlink per plugin, deliberately not per file (install.sh's vendor leg)
 #   NOT-PER-FILE /CLAUDE.global.*.md  COPIES to ~/.claude/CLAUDE.<variant>.md, a different name (install.sh's instructions-variant leg, ade130dc7)
+#   NOT-PER-FILE /CLAUDE.rules.*.md  COPIES the selected variant's rule set to ~/.claude/rules/<name>.md, a different name (install.sh's variant-rules leg)
 
 # Single-file links install.sh makes by name rather than by glob.
 check_one "accounts.json"       "$CFG/accounts.json"

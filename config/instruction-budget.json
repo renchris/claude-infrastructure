@@ -13,7 +13,8 @@
   "session": 120000,
   "_deploy_sources": "Repo files deployed into the user tier by install.sh, matched by basename beside an install.sh. CLAUDE.global.md is deliberately absent: under D2 it deploys to the non-loaded ~/.claude/CLAUDE.full.md. If the global variant registry ever selects full, add it here.",
   "deploy_sources": {
-    "CLAUDE.global.slim.md": "~/.claude/CLAUDE.md"
+    "CLAUDE.global.slim.md": "~/.claude/CLAUDE.md",
+    "CLAUDE.rules.slim.10-session-close.md": "~/.claude/rules/10-session-close.md"
   },
   "destinations": {
     "user": "the full global text CLAUDE.global.md (deployed non-loaded as ~/.claude/CLAUDE.full.md) or a skill that loads on demand; the slim global and its rules are one-in-one-out.",
