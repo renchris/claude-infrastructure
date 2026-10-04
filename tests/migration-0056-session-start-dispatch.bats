@@ -10,6 +10,7 @@ setup() {
   export HOME="$BATS_TEST_TMPDIR/home"
   export CC_SETTINGS_PARITY_BIN="$REPO/bin/cc-settings-parity"
   unset CC_MIGRATION_STATE
+  export CC_ACCOUNTS_BOARD="$BATS_TEST_TMPDIR/claude-accounts-board.txt"   # pinned: an absolute /tmp default
   mkdir -p "$HOME/.claude/hooks"
   printf '{"accounts":[{"name":"next","config_dir":"~/.claude-next"},{"name":"next2","config_dir":"~/.claude-secondary"},{"name":"next3","config_dir":"~/.claude-tertiary"},{"name":"next4","config_dir":"~/.claude-quaternary"}]}\n' \
     > "$HOME/.claude/accounts.json"

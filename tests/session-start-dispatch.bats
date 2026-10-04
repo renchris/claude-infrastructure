@@ -13,6 +13,7 @@ setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd -P)"
   SSD="$REPO/hooks/session-start-dispatch.sh"
   D="$BATS_TEST_TMPDIR"; H="$D/hooks"; mkdir -p "$H"
+  export HOME="$D/home"; mkdir -p "$HOME"                         # hermetic: no child reads the live ~/
   export CC_SSD_HOOK_DIR="$H" CC_SSD_BOUND_S=2
   HELPER_PID=""
 }
