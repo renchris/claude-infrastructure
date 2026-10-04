@@ -6,7 +6,9 @@ description: "Rules for writing or updating a plan or design doc: integrate, nev
 ### Plan Document Conventions (CRITICAL — All Agents)
 
 Plans accumulate decisions across sessions. Always INTEGRATE updates using these patterns.
-The `backup-before-write.sh` hook auto-injects these rules on every Write or Edit to plan files.
+The `backup-before-write.sh` hook auto-injects these rules on every Write to a plan file, and on
+the first Edit of each plan file per session and agent (later Edits of that file in the same
+context carry nothing new, so they are not re-sent).
 
 **This skill is the SSOT for the plan RULES.** The `plan-update` skill (also `/plan-update`) is the
 mechanical applier — workflow steps, compaction/expansion templates, the Phase 0 scaffold — and it

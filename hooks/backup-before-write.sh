@@ -247,6 +247,24 @@ fi
 # === EDIT TOOL: plan context only, no backup needed ===
 if [ "$TOOL" = "Edit" ]; then
   if [ "$IS_PLAN" = true ]; then
+    # ONCE PER (session, agent, plan file) (2026-10-04, claude-api audit hooks-a-09), the pattern
+    # plan-agent-teams-default.sh already uses for PLAN DEFAULTS. The rules never change between
+    # edits, and re-sending ~870 chars on every Edit was the bulk of this hook's context: 598 fires
+    # and ~190K tokens in 7 days, 57% of them repeats inside one context. agent_id is part of the key
+    # because an in-process subagent shares its lead's session_id but not its context. No session id
+    # ⇒ no key ⇒ emit (fail toward the rule). The early exit still runs the _bbw_rewrite_only trap.
+    # Write and OVERWRITE GUARD below stay per call: each one reports a fresh backup.
+    _pg_id="$(printf '%s' "$INPUT" | jq -r 'if (.session_id // "") == "" then "" else "\(.session_id)|\(.agent_id // "")" end' 2>/dev/null || true)"
+    if [ -n "$_pg_id" ]; then
+      _pg_dir="${CC_PLAN_GUARD_STATE_DIR:-$HOME/.claude/state/plan-guard}"
+      _pg_key="$(printf '%s|%s' "$_pg_id" "$FILE" | shasum 2>/dev/null | cut -c1-16)"
+      if [ -n "$_pg_key" ]; then
+        mkdir -p "$_pg_dir" 2>/dev/null || true
+        find "$_pg_dir" -type f -mtime +7 -delete 2>/dev/null || true
+        [ -f "$_pg_dir/$_pg_key" ] && exit 0
+        : > "$_pg_dir/$_pg_key" 2>/dev/null || true
+      fi
+    fi
     _bbw_out <<EOF
 {
   "hookSpecificOutput": {
