@@ -145,9 +145,12 @@ queue_marker() {
   guard && { echo "the fixture does not reproduce the block"; false; } || [ $? -eq 2 ]
   queue_marker d1
   run bash "$LRU" --drain
-  [ "$(mres verdict)" = SETASIDE ] && [ "$(mres req_id)" = d1 ] || { echo "$output"; cat "$LRU_STATE/results/markers-$MSID.json"; false; }
-  [ "$(mres guard_before)" = 2 ] && [ "$(mres guard_after)" = 0 ] || { cat "$LRU_STATE/results/markers-$MSID.json"; false; }
-  [ ! -e "$(SA)/$MSID.HANDOFF.json" ] && [ ! -e "$(SA)/$MSID.jsonl.handed-off" ] || { ls -a "$(SA)"; false; }
+  [ "$(mres verdict)" = SETASIDE ] || { echo "$output"; cat "$LRU_STATE/results/markers-$MSID.json"; false; }
+  [ "$(mres req_id)" = d1 ] || { echo "$output"; cat "$LRU_STATE/results/markers-$MSID.json"; false; }
+  [ "$(mres guard_before)" = 2 ] || { cat "$LRU_STATE/results/markers-$MSID.json"; false; }
+  [ "$(mres guard_after)" = 0 ] || { cat "$LRU_STATE/results/markers-$MSID.json"; false; }
+  [ ! -e "$(SA)/$MSID.HANDOFF.json" ] || { ls -a "$(SA)"; false; }
+  [ ! -e "$(SA)/$MSID.jsonl.handed-off" ] || { ls -a "$(SA)"; false; }
   set -- "$(SA)/$MSID.HANDOFF.json.stale-"*;        cmp -s "$1" "$BATS_TEST_TMPDIR/a-tomb.orig" || { ls -a "$(SA)"; false; }
   set -- "$(SA)/$MSID.jsonl.handed-off.stale-"*;    cmp -s "$1" "$BATS_TEST_TMPDIR/a-ret.orig" || { ls -a "$(SA)"; false; }
   cmp -s "$(SA)/$MSID.jsonl" "$BATS_TEST_TMPDIR/a-live.orig" && cmp -s "$(SB)/$MSID.HANDOFF.json" "$BATS_TEST_TMPDIR/b-tomb.orig" || false
@@ -174,7 +177,8 @@ queue_marker() {
 @test "D3 a retired copy that is NOT a prefix of the live one holds bytes the live one lacks: the marker goes, the copy is kept and named" {
   stalefix stale foreign
   run bash "$LRU" --marker-drive "$MSID" --requested-by 999 --req-id d3
-  [ "$status" -eq 0 ] && [ "$(mres verdict)" = SETASIDE ] || { echo "$output"; false; }
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(mres verdict)" = SETASIDE ] || { echo "$output"; false; }
   cmp -s "$(SA)/$MSID.jsonl.handed-off" "$BATS_TEST_TMPDIR/a-ret.orig" || { echo "a non-prefix retired copy was moved"; false; }
   [ "$(mres 'kept[0]')" = "$(SA)/$MSID.jsonl.handed-off" ] || { cat "$LRU_STATE/results/markers-$MSID.json"; false; }
 }
@@ -182,13 +186,16 @@ queue_marker() {
 @test "D4 kill switches (env and file) rename nothing; without them it renames; a second run finds NOTHING" {
   stalefix stale
   LRU_MARKER_SETASIDE=off run bash "$LRU" --marker-drive "$MSID"
-  [ "$status" -eq 3 ] && [ "$(mres verdict)" = KEPT ] || { echo "$output"; false; }
+  [ "$status" -eq 3 ] || { echo "$output"; false; }
+  [ "$(mres verdict)" = KEPT ] || { echo "$output"; false; }
   touch "$LRU_STATE/marker-setaside.off"
   run bash "$LRU" --marker-drive "$MSID"
-  [ "$status" -eq 3 ] && [ -z "$(find "$HOME" -name '*.stale-*')" ] || { echo "$output"; false; }
+  [ "$status" -eq 3 ] || { echo "$output"; false; }
+  [ -z "$(find "$HOME" -name '*.stale-*')" ] || { echo "$output"; false; }
   rm -f "$LRU_STATE/marker-setaside.off"
   run bash "$LRU" --marker-drive "$MSID"
-  [ "$status" -eq 0 ] && [ "$(mres verdict)" = SETASIDE ] || { echo "$output"; false; }
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(mres verdict)" = SETASIDE ] || { echo "$output"; false; }
   run bash "$LRU" --marker-drive "$MSID"
   [ "$status" -eq 0 ] && [ "$(mres verdict)" = NOTHING ] || { echo "$output"; false; }
 }
@@ -205,13 +212,17 @@ queue_marker() {
   printf '{"handed_off_to":"%s","ts":"2026-10-01T00:00:00Z"}\n' "$HOME/.claude-quaternary" > "$(SA)/$K.HANDOFF.json"
   run bash "$REPO/bin/cc-lr" repair-markers --dry-run
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  printf '%s\n' "$output" | grep -q '^STALE 762a6daa ' && printf '%s\n' "$output" | grep -q '^KEEP  7193ec2b ' || { echo "$output"; false; }
-  [[ "$output" == *"1 stale marker(s) · DRY RUN"* ]] && [ -z "$(ls -A "$LRU_STATE/upgrade-queue" 2>/dev/null)" ] || { echo "$output"; false; }
+  printf '%s\n' "$output" | grep -q '^STALE 762a6daa ' || { echo "$output"; false; }
+  printf '%s\n' "$output" | grep -q '^KEEP  7193ec2b ' || { echo "$output"; false; }
+  [[ "$output" == *"1 stale marker(s) · DRY RUN"* ]] || { echo "$output"; false; }
+  [ -z "$(ls -A "$LRU_STATE/upgrade-queue" 2>/dev/null)" ] || { echo "$output"; false; }
   CC_LR_MARKERS_WAIT_S=0 run bash "$REPO/bin/cc-lr" repair-markers
-  [ "$status" -eq 1 ] && [[ "$output" == *"pending  762a6daa"* ]] || { echo "$output"; false; }
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"pending  762a6daa"* ]] || { echo "$output"; false; }
   [ "$(ls "$LRU_STATE/upgrade-queue")" = "cc-lr-markers-$MSID.json" ] || { ls "$LRU_STATE/upgrade-queue"; false; }
   [ "$(jq -r '.kind + " " + .sid + " " + .requested_by' "$LRU_STATE/upgrade-queue/cc-lr-markers-$MSID.json")" = "marker-setaside $MSID 999" ] || false
-  grep -q '^kickstart gui/' "$BATS_TEST_TMPDIR/launchctl.log" && ! grep -q -- '-k' "$BATS_TEST_TMPDIR/launchctl.log" || { cat "$BATS_TEST_TMPDIR/launchctl.log"; false; }
+  grep -q '^kickstart gui/' "$BATS_TEST_TMPDIR/launchctl.log" || { cat "$BATS_TEST_TMPDIR/launchctl.log"; false; }
+  ! grep -q -- '-k' "$BATS_TEST_TMPDIR/launchctl.log" || { cat "$BATS_TEST_TMPDIR/launchctl.log"; false; }
   [ -f "$(SA)/$MSID.HANDOFF.json" ] || { echo "cc-lr renamed something itself"; false; }
   run bash "$LRU" --drain
   [ "$(mres verdict)" = SETASIDE ] || { echo "$output"; false; }
@@ -226,7 +237,8 @@ queue_marker() {
   M2=762a6dab-0000-4000-8000-000000000001
   printf '{}\n' > "$(SA)/$M2.jsonl"; printf '{"handed_off_to":"%s","ts":"2026-10-01T00:00:00Z"}\n' "$HOME/.claude-quaternary" > "$(SA)/$M2.HANDOFF.json"
   run bash "$REPO/bin/cc-lr" repair-markers --sid 762a6da --dry-run
-  [ "$status" -eq 2 ] && [[ "$output" == *"more than one session"* ]] || { echo "$output"; false; }
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  [[ "$output" == *"more than one session"* ]] || { echo "$output"; false; }
   run bash "$REPO/bin/cc-lr" repair-markers --sid abcdef12 --dry-run
   [ "$status" -eq 0 ] && [[ "$output" == *"nothing to repair"* ]] || { echo "$output"; false; }
 }
@@ -246,14 +258,16 @@ lrt() { run --separate-stderr bash "$LRT" --sid "$MSID" --from "$HOME/.claude-qu
   lrt --phase admit; [ "$status" -eq 0 ] || { echo "$output $stderr"; false; }
   [ -f "$(SA)/$MSID.HANDOFF.json" ] || { echo "admit must not sweep the target"; false; }
   lrt --phase confirm; [ "$status" -eq 0 ] || { echo "$output $stderr"; false; }
-  [ ! -e "$(SA)/$MSID.HANDOFF.json" ] && [ ! -e "$(SA)/$MSID.jsonl.handed-off" ] || { ls -a "$(SA)"; false; }
+  [ ! -e "$(SA)/$MSID.HANDOFF.json" ] || { ls -a "$(SA)"; false; }
+  [ ! -e "$(SA)/$MSID.jsonl.handed-off" ] || { ls -a "$(SA)"; false; }
   [ "$(printf '%s' "$output" | jq '.set_aside | length')" -eq 2 ] || { echo "$output"; false; }
   guard || { echo "the successor's prompt is still refused"; false; }
   # CONTROL, a second session id on the same shape
   MSID=762a6daa-0000-4000-8000-000000000002; lrtfix
   LRT_STALE_SETASIDE=off lrt --phase admit; LRT_STALE_SETASIDE=off lrt --phase confirm
   [ "$status" -eq 0 ] || { echo "$output $stderr"; false; }
-  [ -f "$(SA)/$MSID.HANDOFF.json" ] && [ "$(printf '%s' "$output" | jq 'has("set_aside")')" = false ] || { echo "$output"; false; }
+  [ -f "$(SA)/$MSID.HANDOFF.json" ] || { echo "$output"; false; }
+  [ "$(printf '%s' "$output" | jq 'has("set_aside")')" = false ] || { echo "$output"; false; }
   guard && false || [ $? -eq 2 ]
 }
 
@@ -262,7 +276,8 @@ lrt() { run --separate-stderr bash "$LRT" --sid "$MSID" --from "$HOME/.claude-qu
   printf '{"handed_off_to":"%s","ts":"2026-10-01T00:00:00Z","superseded_by_pid":1}\n' "$HOME/.claude-tertiary" > "$(SA)/$MSID.HANDOFF.json"
   cp -p "$(SA)/$MSID.HANDOFF.json" "$BATS_TEST_TMPDIR/self.orig"
   lrt --phase admit; lrt --phase confirm
-  [ "$status" -eq 0 ] && cmp -s "$(SA)/$MSID.HANDOFF.json" "$BATS_TEST_TMPDIR/self.orig" || { echo "$output $stderr"; false; }
+  [ "$status" -eq 0 ] || { echo "$output $stderr"; false; }
+  cmp -s "$(SA)/$MSID.HANDOFF.json" "$BATS_TEST_TMPDIR/self.orig" || { echo "$output $stderr"; false; }
   [ "$(printf '%s' "$output" | jq 'has("set_aside")')" = false ] || { echo "$output"; false; }
   MSID=762a6daa-0000-4000-8000-000000000003; lrtfix
   lrt --phase admit; lrt --phase abort
@@ -278,25 +293,30 @@ lrt() { run --separate-stderr bash "$LRT" --sid "$MSID" --from "$HOME/.claude-qu
   [ -f "$(SB)/$MSID.jsonl.handed-off" ] || false
   # RED: without the arm, confirm refuses this source outright
   LRT_STALE_SETASIDE=off lrt --phase confirm
-  [ "$status" -eq 2 ] && [[ "$stderr" == *"REFUSED (stub-beside-retired)"* ]] || { echo "$output $stderr"; false; }
+  [ "$status" -eq 2 ] || { echo "$output $stderr"; false; }
+  [[ "$stderr" == *"REFUSED (stub-beside-retired)"* ]] || { echo "$output $stderr"; false; }
   lrt --phase confirm
   [ "$status" -eq 0 ] || { echo "$output $stderr"; false; }
   # FROM is resolved physically by lr-transplant (/private/var…), so match the store-relative tail
   [[ "$(printf '%s' "$output" | jq -r '.set_aside[]')" == *"/.claude-quaternary/projects/-ci/$MSID.jsonl.handed-off.stale-"* ]] || { echo "$output"; false; }
-  [ -f "$(SB)/$MSID.jsonl.handed-off" ] && [ ! -e "$(SB)/$MSID.jsonl" ] || { ls -a "$(SB)"; false; }
+  [ -f "$(SB)/$MSID.jsonl.handed-off" ] || { ls -a "$(SB)"; false; }
+  [ ! -e "$(SB)/$MSID.jsonl" ] || { ls -a "$(SB)"; false; }
   # the admit arm, on a fresh sid: the source's prefix copy is set aside before the tombstone
   MSID=762a6daa-0000-4000-8000-000000000005
   printf '%s\n' '{"type":"user","message":{"content":"first"}}' > "$(SB)/$MSID.jsonl.handed-off"
   printf '%s\n%s\n' '{"type":"user","message":{"content":"first"}}' '{"type":"assistant","message":{"content":"more"}}' > "$(SB)/$MSID.jsonl"
   lrt --phase admit
-  [ "$status" -eq 0 ] && [ "$(printf '%s' "$output" | jq '.set_aside | length')" -eq 1 ] && [ ! -e "$(SB)/$MSID.jsonl.handed-off" ] || { echo "$output $stderr"; false; }
+  [ "$status" -eq 0 ] || { echo "$output $stderr"; false; }
+  [ "$(printf '%s' "$output" | jq '.set_aside | length')" -eq 1 ] || { echo "$output $stderr"; false; }
+  [ ! -e "$(SB)/$MSID.jsonl.handed-off" ] || { echo "$output $stderr"; false; }
   # CONTROL: a stub (bytes written after the retire, not a superset of it) still refuses
   MSID=762a6daa-0000-4000-8000-000000000004
   printf '%s\n%s\n' '{"type":"user","uuid":"a1"}' '{"type":"assistant","uuid":"a2"}' > "$(SB)/$MSID.jsonl.handed-off"
   printf '%s\n' '{"type":"assistant","uuid":"tail1"}' > "$(SB)/$MSID.jsonl"
   local before; before="$(shasum "$(SB)/$MSID.jsonl" "$(SB)/$MSID.jsonl.handed-off")"
   lrt --phase confirm
-  [ "$status" -eq 2 ] && [[ "$stderr" == *"REFUSED (stub-beside-retired)"* ]] || { echo "$output $stderr"; false; }
+  [ "$status" -eq 2 ] || { echo "$output $stderr"; false; }
+  [[ "$stderr" == *"REFUSED (stub-beside-retired)"* ]] || { echo "$output $stderr"; false; }
   [ "$(shasum "$(SB)/$MSID.jsonl" "$(SB)/$MSID.jsonl.handed-off")" = "$before" ] || false
 }
 
@@ -305,7 +325,8 @@ lrt() { run --separate-stderr bash "$LRT" --sid "$MSID" --from "$HOME/.claude-qu
   LRT_STALE_SETASIDE=off lrt --phase admit; LRT_STALE_SETASIDE=off lrt --phase confirm
   [ -f "$(SA)/$MSID.HANDOFF.json" ] || false
   lrt --phase confirm
-  [ "$status" -eq 0 ] && [ "$(printf '%s' "$output" | jq -r .already_confirmed)" = true ] || { echo "$output $stderr"; false; }
+  [ "$status" -eq 0 ] || { echo "$output $stderr"; false; }
+  [ "$(printf '%s' "$output" | jq -r .already_confirmed)" = true ] || { echo "$output $stderr"; false; }
   [ ! -e "$(SA)/$MSID.HANDOFF.json" ] && [ "$(printf '%s' "$output" | jq '.set_aside | length')" -eq 2 ] || { echo "$output"; ls -a "$(SA)"; false; }
 }
 
@@ -316,11 +337,13 @@ lrt() { run --separate-stderr bash "$LRT" --sid "$MSID" --from "$HOME/.claude-qu
   lrt --phase confirm; [ "$status" -eq 0 ] || { echo "$output $stderr"; false; }
   run --separate-stderr bash "$LRT" --sid "$MSID" --from "$HOME/.claude-tertiary" --to "$HOME/.claude-secondary" --keep-source
   [ "$status" -eq 0 ] || { echo "$output $stderr"; false; }
-  [ -f "$(SA)/$MSID.jsonl" ] && [ -f "$(SA)/$MSID.HANDOFF.json" ] || { ls -a "$(SA)"; false; }
+  [ -f "$(SA)/$MSID.jsonl" ] || { ls -a "$(SA)"; false; }
+  [ -f "$(SA)/$MSID.HANDOFF.json" ] || { ls -a "$(SA)"; false; }
   cp -p "$(SA)/$MSID.HANDOFF.json" "$BATS_TEST_TMPDIR/t-tomb.orig"
   rc=0; guard || rc=$?; [ "$rc" -eq 2 ] || { echo "the guard in T should refuse before the re-run (rc $rc)"; false; }
   lrt --phase confirm
-  [ "$status" -eq 0 ] && [ "$(printf '%s' "$output" | jq -r .already_confirmed)" = true ] || { echo "$output $stderr"; false; }
+  [ "$status" -eq 0 ] || { echo "$output $stderr"; false; }
+  [ "$(printf '%s' "$output" | jq -r .already_confirmed)" = true ] || { echo "$output $stderr"; false; }
   cmp -s "$(SA)/$MSID.HANDOFF.json" "$BATS_TEST_TMPDIR/t-tomb.orig" || { ls -a "$(SA)"; echo "$output $stderr"; false; }
   [ "$(printf '%s' "$output" | jq 'has("set_aside")')" = false ] || { echo "$output"; false; }
   rc=0; guard || rc=$?; [ "$rc" -eq 2 ] || { echo "two live writable copies: the guard in T now admits (rc $rc)"; false; }

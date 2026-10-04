@@ -289,7 +289,8 @@ drive() { run bash "$LRU" --switch-drive "$ASID" "${1:-$AWIN}" next3 --requested
   [ "$(res pane)" = "$AWIN" ] || { echo "the result must stay keyed on the requested pane"; false; }
   [[ "$(res reason)" == *"viewer window 391 (claude attach $AJOB) quit on ctrl-c"*"pane 300 relaunched it on next3"* ]] || { res reason; false; }
   L="$(launcher)"
-  grep -q "$HOME/.claude-tertiary" "$L" && grep -q "$ASID" "$L" || { cat "$L"; false; }
+  grep -q "$HOME/.claude-tertiary" "$L" || { cat "$L"; false; }
+  grep -q "$ASID" "$L" || { cat "$L"; false; }
   grep -q -- '--model claude-opus-5-5 --effort high --permission-mode auto' "$L" || { cat "$L"; false; }
 }
 
@@ -334,14 +335,16 @@ drive() { run bash "$LRU" --switch-drive "$ASID" "${1:-$AWIN}" next3 --requested
   attachfix idle root; halfmoved healthy; attach_actors
   touch "$BATS_TEST_TMPDIR/viewer-spawns"
   drive
-  [ "$status" -eq 0 ] && [ "$(res verdict)" = SWITCHED ] || { echo "$output"; cat "$A"; res reason; false; }
+  [ "$status" -eq 0 ] || { echo "$output"; cat "$A"; res reason; false; }
+  [ "$(res verdict)" = SWITCHED ] || { echo "$output"; cat "$A"; res reason; false; }
   grep -q '^72282 68854 .*claude attach '"$AJOB"'$' "$LRU_PS_SNAPSHOT" || { echo "the parent should still be waiting"; cat "$LRU_PS_SNAPSHOT"; false; }
   # the shell half: detached, then the agents view holds — the launcher must never be typed into it
   fresh 2
   attachfix idle shell; halfmoved healthy; attach_actors
   rm -f "$BATS_TEST_TMPDIR/viewer-spawns"; touch "$BATS_TEST_TMPDIR/agents-holds"
   drive
-  [ "$status" -eq 3 ] && [ "$(res verdict)" = NOTMOVED ] || { echo "$output"; cat "$A"; res reason; false; }
+  [ "$status" -eq 3 ] || { echo "$output"; cat "$A"; res reason; false; }
+  [ "$(res verdict)" = NOTMOVED ] || { echo "$output"; cat "$A"; res reason; false; }
   [ "$(order)" = "ctrl-c ctrl-c ctrl-c ctrl-c " ] || { cat "$A"; false; }
   [[ "$(res reason)" == *"agents view it left (pid 72282) did not quit"* ]] || { res reason; false; }
   grep -q '^71268 ' "$LRU_PS_SNAPSHOT" || { echo "the job was stopped"; false; }
@@ -351,7 +354,8 @@ drive() { run bash "$LRU" --switch-drive "$ASID" "${1:-$AWIN}" next3 --requested
   attachfix idle shell; halfmoved healthy; attach_actors
   touch "$BATS_TEST_TMPDIR/claude-takes-window"
   drive
-  [ "$status" -eq 1 ] && [ "$(res verdict)" = FAILED ] || { echo "$output"; cat "$A"; res reason; false; }
+  [ "$status" -eq 1 ] || { echo "$output"; cat "$A"; res reason; false; }
+  [ "$(res verdict)" = FAILED ] || { echo "$output"; cat "$A"; res reason; false; }
   ! grep -q '^it2-run' "$A" || { cat "$A"; false; }
   [[ "$(res reason)" == *"window 391 is not free to type into (a live registry row names window 391)"*"run in a free shell: cd "* ]] || { res reason; false; }
   # CONTROL: the kill switch types into it, which is the defect the last look prevents
@@ -368,8 +372,10 @@ drive() { run bash "$LRU" --switch-drive "$ASID" "${1:-$AWIN}" next3 --requested
   [ "$(row_of "$ASID" | cut -f1,7)" = "200"$'\t'"bg-attach-occupied" ] || { echo "$output"; false; }
   attach_actors; halfmoved healthy
   drive 200
-  [ "$status" -eq 3 ] && [ ! -s "$A" ] || { echo "$output"; cat "$A"; false; }
-  [ "$(res verdict)" = NOTMOVED ] && [[ "$(res reason)" == *bg-attach-occupied* ]] || { res reason; false; }
+  [ "$status" -eq 3 ] || { echo "$output"; cat "$A"; false; }
+  [ ! -s "$A" ] || { echo "$output"; cat "$A"; false; }
+  [ "$(res verdict)" = NOTMOVED ] || { res reason; false; }
+  [[ "$(res reason)" == *bg-attach-occupied* ]] || { res reason; false; }
   run bash "$LRU" --switch-waitable bg-attach-occupied; [ "$status" -eq 1 ]
   LRU_BG_ATTACH_STRICT=off run bash "$LRU" --switch-census --target next3
   [ "$(row_of "$ASID" | cut -f1,7)" = "200"$'\t'"bg-session" ] || { echo "$output"; false; }
@@ -383,7 +389,8 @@ drive() { run bash "$LRU" --switch-drive "$ASID" "${1:-$AWIN}" next3 --requested
   [ "$(row_of "$ASID" | cut -f1,7)" = "200"$'\t'"bg-attach-occupied" ] || { echo "$output"; false; }
   attach_actors; halfmoved healthy
   drive 200
-  [ "$status" -eq 3 ] && [ ! -s "$A" ] || { echo "$output"; cat "$A"; false; }
+  [ "$status" -eq 3 ] || { echo "$output"; cat "$A"; false; }
+  [ ! -s "$A" ] || { echo "$output"; cat "$A"; false; }
   # sibling: only the LIVE registry row on window 200 says it is a claude's; without the row it binds
   fresh 4; nestfix sibling reg
   run bash "$LRU" --switch-census --target next3
@@ -397,7 +404,8 @@ drive() { run bash "$LRU" --switch-drive "$ASID" "${1:-$AWIN}" next3 --requested
   attachfix idle root; halfmoved healthy; attach_actors
   touch "$BATS_TEST_TMPDIR/split-fails"
   drive
-  [ "$status" -eq 3 ] && [ "$(res verdict)" = NOTMOVED ] || { echo "$output"; cat "$A"; false; }
+  [ "$status" -eq 3 ] || { echo "$output"; cat "$A"; false; }
+  [ "$(res verdict)" = NOTMOVED ] || { echo "$output"; cat "$A"; false; }
   [ "$(order)" = "it2-split " ] || { cat "$A"; false; }
   rm -f "$BATS_TEST_TMPDIR/split-fails"; : > "$A"
   LRU_BG_ATTACH_SPLIT=off drive
@@ -447,10 +455,12 @@ drive() { run bash "$LRU" --switch-drive "$ASID" "${1:-$AWIN}" next3 --requested
   mkdir -p "$LRU_STATE/upgrade-queue"
   printf '{"kind":"switch","sid":"%s","source_pane":"391","target":"next3","req_id":"e2e","requested_by":"999"}\n' "$ASID" > "$LRU_STATE/upgrade-queue/e2e.json"
   run bash "$LRU" --drain
-  [ "$(res verdict)" = SWITCHED ] && [ "$(res req_id)" = e2e ] || { echo "$output"; cat "$A"; res reason; false; }
+  [ "$(res verdict)" = SWITCHED ] || { echo "$output"; cat "$A"; res reason; false; }
+  [ "$(res req_id)" = e2e ] || { echo "$output"; cat "$A"; res reason; false; }
   grep -qx "stop $AJOB cfg=$HOME/.claude-quaternary" "$A" || { cat "$A"; false; }
   grep -q -- "--sid $ASID --from $HOME/.claude-secondary --to $HOME/.claude-tertiary --phase admit" "$A" || { cat "$A"; false; }
-  [ -f "$(T)/$ASID.jsonl" ] && [ -f "$(S)/$ASID.jsonl.handed-off" ] || { ls -R "$HOME"; false; }
+  [ -f "$(T)/$ASID.jsonl" ] || { ls -R "$HOME"; false; }
+  [ -f "$(S)/$ASID.jsonl.handed-off" ] || { ls -R "$HOME"; false; }
   grep -q -- '--prompt /limit-recover' "$(launcher)" || { cat "$(launcher)"; false; }
   grep -q '^999 CC-LR-SWITCH pane 391 .*verdict=SWITCHED' "$BATS_TEST_TMPDIR/notify.log" || { cat "$BATS_TEST_TMPDIR/notify.log"; false; }
   ! grep -q '^71268 ' "$LRU_PS_SNAPSHOT" || { echo "the bg job came back"; false; }
@@ -469,7 +479,8 @@ drive() { run bash "$LRU" --switch-drive "$ASID" "${1:-$AWIN}" next3 --requested
   fresh 2
   attachfix idle shell; halfmoved healthy; attach_actors
   LRU_BG_LIVE_SOURCE=off drive
-  [ "$status" -eq 1 ] && [ "$(res verdict)" = FAILED ] || { echo "$output"; cat "$A"; false; }
+  [ "$status" -eq 1 ] || { echo "$output"; cat "$A"; false; }
+  [ "$(res verdict)" = FAILED ] || { echo "$output"; cat "$A"; false; }
   grep -q -- "--from $HOME/.claude-quaternary " "$A" || { cat "$A"; false; }
 }
 
@@ -477,7 +488,8 @@ drive() { run bash "$LRU" --switch-drive "$ASID" "${1:-$AWIN}" next3 --requested
   attachfix idle shell; halfmoved healthy; attach_actors
   rm -f "$(S)/$ASID.jsonl"
   drive
-  [ "$status" -eq 3 ] && [ "$(res verdict)" = NOTMOVED ] || { echo "$output"; cat "$A"; false; }
+  [ "$status" -eq 3 ] || { echo "$output"; cat "$A"; false; }
+  [ "$(res verdict)" = NOTMOVED ] || { echo "$output"; cat "$A"; false; }
   [ ! -s "$A" ] || { cat "$A"; false; }
   [[ "$(res reason)" == *"no store provably holds a live transcript"*"only a retired copy"* ]] || { res reason; false; }
   rm -f "$(Q)/$ASID.HANDOFF.json"
@@ -489,7 +501,8 @@ drive() { run bash "$LRU" --switch-drive "$ASID" "${1:-$AWIN}" next3 --requested
   attachfix idle shell; halfmoved healthy; attach_actors
   echo '{"type":"user","message":{"content":"extra"}}' >> "$(Q)/$ASID.jsonl.handed-off"
   drive
-  [ "$status" -eq 3 ] && [ ! -s "$A" ] || { echo "$output"; cat "$A"; false; }
+  [ "$status" -eq 3 ] || { echo "$output"; cat "$A"; false; }
+  [ ! -s "$A" ] || { echo "$output"; cat "$A"; false; }
   [[ "$(res reason)" == *"SHORTER than the retired copy"* ]] || { res reason; false; }
 }
 
@@ -513,7 +526,8 @@ drive() { run bash "$LRU" --switch-drive "$ASID" "${1:-$AWIN}" next3 --requested
   drive
   [ "$status" -eq 0 ] || { echo "$output"; cat "$A"; cat "$LRU_STATE"/switch/*/transplant.log; false; }
   cmp -s "$(T)/$ASID.jsonl" "$BATS_TEST_TMPDIR/orig.jsonl" || { echo "the target is not the live copy"; false; }
-  [ -f "$(S)/$ASID.jsonl.handed-off" ] && [ ! -e "$(S)/$ASID.jsonl" ] || { ls "$(S)"; false; }
+  [ -f "$(S)/$ASID.jsonl.handed-off" ] || { ls "$(S)"; false; }
+  [ ! -e "$(S)/$ASID.jsonl" ] || { ls "$(S)"; false; }
   [ "$(jq -r .handed_off_to "$(S)/$ASID.HANDOFF.json")" = "$HOME/.claude-tertiary" ] || { cat "$(S)/$ASID.HANDOFF.json"; false; }
   # the chain's spellings mix /var and /private/var (lr-transplant resolves only --from); the STORES are what count
   [ "$(jq -c '[.chain[] | sub("/$"; "") | split("/") | last]' "$LRU_STATE/locks/$ASID.lock")" = '[".claude-quaternary",".claude-secondary",".claude-tertiary"]' ] \
@@ -525,7 +539,8 @@ drive() { run bash "$LRU" --switch-drive "$ASID" "${1:-$AWIN}" next3 --requested
   export LRU_TRANSPLANT="$REPO/scripts/limit-recover/lr-transplant.sh"
   cp -p "$(S)/$ASID.jsonl" "$BATS_TEST_TMPDIR/orig.jsonl"
   LRU_BG_LIVE_SOURCE=off drive
-  [ "$(res verdict)" = FAILED ] && [[ "$(res reason)" == *"lr-transplant refused"* ]] || { res reason; false; }
+  [ "$(res verdict)" = FAILED ] || { res reason; false; }
+  [[ "$(res reason)" == *"lr-transplant refused"* ]] || { res reason; false; }
   # refused for the reason the control claims (no live transcript in the husk), not for the first
   # half's custody lock, which fresh() no longer lets it read
   grep -q "no transcript $ASID under " "$LRU_STATE"/switch/*/transplant.log || { cat "$LRU_STATE"/switch/*/transplant.log; false; }
@@ -539,7 +554,8 @@ drive() { run bash "$LRU" --switch-drive "$ASID" "${1:-$AWIN}" next3 --requested
   printf '{"pid":71300,"sessionId":"%s","cwd":"%s","kind":"bg","jobId":"0bbbbbbb","status":"idle","procStart":"%s"}\n' \
     "$ASID" "$BATS_TEST_TMPDIR" "$LST" > "$HOME/.claude-secondary/sessions/71300.json"
   drive
-  [ "$status" -eq 3 ] && [ "$(res verdict)" = NOTMOVED ] || { echo "$output"; cat "$A"; res reason; false; }
+  [ "$status" -eq 3 ] || { echo "$output"; cat "$A"; res reason; false; }
+  [ "$(res verdict)" = NOTMOVED ] || { echo "$output"; cat "$A"; res reason; false; }
   [ ! -s "$A" ] || { cat "$A"; false; }
   [[ "$(res reason)" == *"a bg job is also live on this conversation under $HOME/.claude-secondary"* ]] || { res reason; false; }
   # CONTROL (as L1): the second job gone, the same drive moves it
@@ -624,7 +640,8 @@ drive() { run bash "$LRU" --switch-drive "$ASID" "${1:-$AWIN}" next3 --requested
 @test "P6 the launcher stays pure ASCII: a non-ASCII account value refuses the mint; the switch role carries no prompt, switch-recover the mode in words" {
   run bash -c '. "$1"; d="$2"
     lru_mint_launcher "$d/a" /c /w "$3" m high auto "" switch-recover "" "" "next4" "nëxt3" && echo MINTED' _ "$LRU" "$BATS_TEST_TMPDIR" "$ASID"
-  [[ "$output" == *"REFUSED: a launcher value is not pure ASCII"* ]] && [[ "$output" != *MINTED* ]] || { echo "$output"; false; }
+  [[ "$output" == *"REFUSED: a launcher value is not pure ASCII"* ]] || { echo "$output"; false; }
+  [[ "$output" != *MINTED* ]] || { echo "$output"; false; }
   run bash -c '. "$1"; lru_mint_launcher "$2/b" /c /w "$3" m high auto "" switch' _ "$LRU" "$BATS_TEST_TMPDIR" "$ASID"
   [ "$status" -eq 0 ] && grep -q -- "--prompt ''" "$output" && grep -q "LR_SUBMIT_TOKEN=''" "$output" || { echo "$output"; cat "$output"; false; }
 }
