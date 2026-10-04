@@ -230,7 +230,8 @@ def classifier_argv() -> Optional[List[str]]:
         return None
     # Headless from an empty directory with local settings only, so no resident instruction or hook
     # loads and the router cannot trigger itself (§4.1). The env guard is the belt to that brace.
-    return [claude, "-p", "--model", haiku_model(), "--setting-sources", "local"]
+    return [claude, "-p", "--model", haiku_model(), "--setting-sources", "local",
+            "--tools", "", "--strict-mcp-config", "--no-session-persistence"]
 
 
 def classify(prompt: str, cert: str) -> Tuple[Optional[str], str]:

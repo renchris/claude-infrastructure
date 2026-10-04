@@ -13390,7 +13390,7 @@ probe_account() { # $1=account → 0 pass; prints rejection class on fail
   fi
   out="$(cd /tmp && CLAUDE_CONFIG_DIR="$dir" DISABLE_AUTOUPDATER=1 \
       perl -e "alarm $alarm_s; exec @ARGV" "$BIN" -p 'Reply with exactly: ok' \
-      --strict-mcp-config \
+      --strict-mcp-config --setting-sources "" --tools "" \
       --model "$probe_model" --max-turns 1 --output-format json 2>&1 </dev/null)" || rc=$?
   # A shell pattern match, not `printf | grep -q`: under pipefail an early-exiting consumer can
   # read FALSE on a MATCH (the repo's pipefail-SIGPIPE gate), and $out is already captured.

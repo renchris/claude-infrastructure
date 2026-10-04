@@ -152,7 +152,7 @@ else
     status "fail route: account='${ACCT:-none}' config='${CFGD:-none}' bin='${CBIN:-none}' — claude-accounts --rank general routed nowhere"
     finish 1
   fi
-  ( cd "$WORK" && CLAUDE_CONFIG_DIR="$CFGD" perl -e 'alarm 900; exec @ARGV' "$CBIN" -p --tools "" \
+  ( cd "$WORK" && CLAUDE_CONFIG_DIR="$CFGD" perl -e 'alarm 900; exec @ARGV' "$CBIN" -p --tools "" --setting-sources "" \
       --strict-mcp-config --no-session-persistence --model "${DL_SWEEP_MODEL:-claude-sonnet-5-5}" ) \
     < "$WORK/prompt.txt" > "$WORK/out.txt" 2> "$WORK/claude.err"; rc=$?
 fi
@@ -167,11 +167,23 @@ import json, re, sys
 work = sys.argv[1]
 orig = {m["ref"]: m for m in json.load(open(f"{work}/orig.json"))}
 raw = open(f"{work}/out.txt").read()
-s, e = raw.find("["), raw.rfind("]")
-try:
-    got = json.loads(raw[s:e + 1]) if s >= 0 and e > s else []
-except ValueError:
-    got = []
+# The LAST top-level JSON array of objects, never the first-[ to last-] span: Sonnet 5.5 can write a
+# draft before its final JSON, and that span joins both into text that does not parse (vendor prompting
+# guide, quoted in docs/research/sonnet55-utilization-2026-09-28/notes/harness-hazards-b.md:22). An
+# array holding anything but objects (a "[1]" footnote, a list of refs) is stepped over, not taken.
+dec, got, i = json.JSONDecoder(), [], 0
+while i < len(raw):
+    if raw[i] == "[":
+        try:
+            val, end = dec.raw_decode(raw, i)
+        except ValueError:
+            i += 1
+            continue
+        if all(isinstance(x, dict) for x in val):
+            got = val
+        i = end
+        continue
+    i += 1
 out = []
 for c in got if isinstance(got, list) else []:
     m = orig.get(str((c or {}).get("ref")))

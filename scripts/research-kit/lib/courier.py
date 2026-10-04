@@ -129,7 +129,7 @@ def argv_for(
 ) -> List[str]:
     if LANE_BIN[vendor] == "ANTHROPIC":
         return (
-            [binary, "-p", "--setting-sources", "local", "--output-format", "json"]
+            [binary, "-p", "--setting-sources", "local", "--strict-mcp-config", "--output-format", "json"]
             + (["--model", model] if model else [])
             + [prompt]
         )

@@ -315,7 +315,7 @@ STUB
   export STUB_ARGS="$BATS_TEST_TMPDIR/args"
   PATH="$BATS_TEST_TMPDIR/bin:$PATH" prompt "are we done?" >/dev/null
   [ "$(label)" = completeness ]
-  grep -qx 'argv=-p --model claude-haiku-test-9 --setting-sources local' "$STUB_ARGS"
+  grep -qx 'argv=-p --model claude-haiku-test-9 --setting-sources local --tools  --strict-mcp-config --no-session-persistence' "$STUB_ARGS"
   grep -qx 'inner=1' "$STUB_ARGS"
   grep -qx 'files=0' "$STUB_ARGS"
 }

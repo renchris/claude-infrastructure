@@ -422,9 +422,13 @@ def consult_model(
             "--setting-sources",
             "",
             "--strict-mcp-config",
-            "--disallowedTools",
-            "Bash,Read,Write,Edit,NotebookEdit,Glob,Grep,Task,Agent,WebFetch,"
-            "WebSearch,Skill,Workflow,ToolSearch,SendMessage",
+            # `--tools ""` removes every built-in tool; a --disallowedTools list forbids only
+            # the names it spells, so each tool a release adds would land outside it.
+            "--tools",
+            "",
+            # One consult is a throwaway session: without this each one writes a transcript
+            # into the consulting session's own project dir (the child inherits its cwd).
+            "--no-session-persistence",
         ]
     )
     if stub:
