@@ -1538,19 +1538,33 @@ EOF
   # itself (handleSuspend, then SIGTSTP); if it does not, a shell window is left holding a stopped
   # attach job no later ^C can reach. So it leads only on request: LRU_BG_ATTACH_QUIT_KEY=ctrl-z.
   # Detached is judged by the argv (lru_wait_detached), never by the pid leaving ps.
+  # A0. SIGTERM FIRST (2026-10-04, the prime case's first live drive). Window 191's viewer ignored
+  # ^C^C twice over 60 s, so keys are not a reliable detach. The viewer is only a client: ending its
+  # process detaches it and leaves the job running, exactly what a detach key would do, and a root
+  # window then closes as it would anyway. Signalled only while the pid's argv still names
+  # `attach <job>` in this snapshot. Kill switch LRU_BG_ATTACH_QUIT=keys (the key path below).
   if [ "$hkind" = attach ]; then
     local qname=ctrl-c qby="" qwhy="" krc
-    if [ "${LRU_BG_ATTACH_QUIT_KEY:-ctrl-c}" = ctrl-z ]; then
-      qname=ctrl-z
-      # shellcheck disable=SC1090  # sourced in a subshell: a sibling library must not replace our names
-      ( . "$LRU_TUI_LIB" && cc_tui_rpc send-text --match "id:$pane" -- $'\x1a' >/dev/null 2>&1 ) >> "$run/keys.log" 2>&1 || true
-    else
-      lru_ctrlc2 "$pane" "$run"
+    if [ "${LRU_BG_ATTACH_QUIT:-term}" = term ]; then
+      case " $(lru_snap_args "$(lru_snapshot)" "$host") " in
+        *" attach $job "*)
+          ${LRU_KILL_CMD:-kill} -TERM "$host" 2>/dev/null || true
+          lru_wait_gone "$host" "${LRU_BG_QUIT_S:-30}" && qby="SIGTERM to the viewer" ;;
+      esac
     fi
-    if lru_wait_detached "$job" "$host" "${LRU_BG_QUIT_S:-30}"; then qby="$qname"
-    else
-      lru_ctrlc2 "$pane" "$run"
-      lru_wait_detached "$job" "$host" "${LRU_BG_QUIT_S:-30}" && qby="$qname, then ctrl-c ctrl-c"
+    if [ -z "$qby" ]; then
+      if [ "${LRU_BG_ATTACH_QUIT_KEY:-ctrl-c}" = ctrl-z ]; then
+        qname=ctrl-z
+        # shellcheck disable=SC1090  # sourced in a subshell: a sibling library must not replace our names
+        ( . "$LRU_TUI_LIB" && cc_tui_rpc send-text --match "id:$pane" -- $'\x1a' >/dev/null 2>&1 ) >> "$run/keys.log" 2>&1 || true
+      else
+        lru_ctrlc2 "$pane" "$run"
+      fi
+      if lru_wait_detached "$job" "$host" "${LRU_BG_QUIT_S:-30}"; then qby="$qname"
+      else
+        lru_ctrlc2 "$pane" "$run"
+        lru_wait_detached "$job" "$host" "${LRU_BG_QUIT_S:-30}" && qby="$qname, then ctrl-c ctrl-c"
+      fi
     fi
     [ -n "$qby" ] || qwhy="it did not detach on $qname or ^C^C within ${LRU_BG_QUIT_S:-30}s each"
     printf 'viewer pid %s in window %s: %s\n' "$host" "$pane" "${qby:-$qwhy}" >> "$run/keys.log"

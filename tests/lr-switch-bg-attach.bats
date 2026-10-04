@@ -139,6 +139,7 @@ attach_actors() {
   export LRU_CLAUDE_BIN_CMD="$STUBS/cc-claude-bin" LRU_TRANSPLANT="$STUBS/lr-transplant" LRU_IT2_BIN="$STUBS/it2"
   export LRU_TUI_LIB="$BATS_TEST_TMPDIR/tui.sh" LRU_BG_POLL_S=0 LRU_BG_STOP_S=2 LRU_BG_QUIT_S=1 LRU_BG_CTRLC_GAP_S=0
   export LRU_RETYPE_MAX=1 LRU_BG_PROMPT_WAIT_S=0 LRU_BG_PROMPT_POLL_S=0
+  export LRU_BG_ATTACH_QUIT=keys   # the key path these cases model; A11 owns the SIGTERM lead
   export A ASID AJOB LST BIN AWIN
   printf '#!/bin/bash\necho %s\n' "$STUBS/claude" > "$STUBS/cc-claude-bin"
   cat > "$STUBS/claude" <<'STUB'
@@ -467,6 +468,44 @@ drive() { run bash "$LRU" --switch-drive "$ASID" "${1:-$AWIN}" next3 --requested
 }
 
 # ── L. THE TRANSPLANT READS THE LIVE COPY ─────────────────────────────────────────────────────────
+
+@test "A11 [RED] the viewer is ended by SIGTERM first (no keys): SWITCHED, and the reason names the signal" {
+  attachfix idle root; halfmoved healthy; attach_actors
+  export LRU_BG_ATTACH_QUIT=term LRU_KILL_CMD="$STUBS/kill"
+  cat > "$STUBS/kill" <<'STUB'
+#!/bin/bash
+echo "term $2" >> "$A"
+[ -e "$(dirname "$A")/term-ignored" ] && exit 0
+grep -v "^$2 " "$LRU_PS_SNAPSHOT" > "$LRU_PS_SNAPSHOT.t"; mv "$LRU_PS_SNAPSHOT.t" "$LRU_PS_SNAPSHOT"
+STUB
+  chmod +x "$STUBS/kill"
+  drive
+  [ "$status" -eq 0 ] || { echo "$output"; cat "$A"; false; }
+  [ "$(res verdict)" = SWITCHED ] || { res reason; false; }
+  grep -qx 'term 72282' "$A" || { cat "$A"; false; }
+  ! grep -q '^ctrl-c' "$A" || { echo "keys were sent although the signal ended the viewer"; cat "$A"; false; }
+  [[ "$(res reason)" == *"quit on SIGTERM to the viewer"* ]] || { res reason; false; }
+}
+
+@test "A11b CONTROL: a viewer that survives SIGTERM still detaches on ^C^C" {
+  attachfix idle root; halfmoved healthy; attach_actors
+  export LRU_BG_ATTACH_QUIT=term LRU_KILL_CMD="$STUBS/kill"
+  printf '#!/bin/bash\necho "term $2" >> "$A"\n' > "$STUBS/kill"; chmod +x "$STUBS/kill"
+  drive
+  [ "$(res verdict)" = SWITCHED ] || { res reason; false; }
+  grep -qx 'term 72282' "$A" || { cat "$A"; false; }
+  [ "$(grep -c '^ctrl-c id:391$' "$A")" -eq 2 ] || { cat "$A"; false; }
+}
+
+@test "A11c CONTROL: LRU_BG_ATTACH_QUIT=keys sends no signal and quits the viewer on ^C^C" {
+  attachfix idle root; halfmoved healthy; attach_actors
+  export LRU_BG_ATTACH_QUIT=keys LRU_KILL_CMD="$STUBS/kill"
+  printf '#!/bin/bash\necho "term $2" >> "$A"\n' > "$STUBS/kill"; chmod +x "$STUBS/kill"
+  drive
+  [ "$(res verdict)" = SWITCHED ] || { res reason; false; }
+  ! grep -q '^term' "$A" || { cat "$A"; false; }
+  [ "$(grep -c '^ctrl-c id:391$' "$A")" -eq 2 ] || { cat "$A"; false; }
+}
 
 @test "L1 [RED] a half-moved bg session is stopped under its own config but transplanted FROM the live copy; LRU_BG_LIVE_SOURCE=off reproduces the old failure" {
   attachfix idle shell; halfmoved healthy; attach_actors
