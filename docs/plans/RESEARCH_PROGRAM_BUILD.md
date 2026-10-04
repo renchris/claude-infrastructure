@@ -368,4 +368,39 @@ all landed via the project-local /ship and converged.
 - Evidence: `docs/research/upfront-method-audit-2026-10-04/evidence/{lens-as-built,lens-internal-soundness,
   lens-operator-interface,lens-critic-end-to-end-live-behavior,lens-critic-long-horizon-continuity-and-capacity}.md`
   (the last one's §5 lists the round and lease fixes).
-- Status: IN PROGRESS.
+- Status: **DONE 2026-10-04** — every row-4/5/6 item fixed with a planted-input test red before and green after,
+  except 4a (not built, reason above: decision `4bf73c4e55d5`; gate row 15 still FAILS until it is ruled, so no
+  program can certify yet). Landed per item (red → green, from the item's suite):
+  - 4b `3cb00ec08` relay-check 1 of 17 red → 17/17 · 4c `8b531dd34` router-heldout 2 of 11 → 11/11 · 4d `da9da7a18`
+    router 3 of 30 → 30/30 (docs `a2f39ff84`, revive `f050bc99f`).
+  - 4e + 4f (rp-d-registry) and the alias follow-on land in the same land as this plan edit ("a program covers more
+    than one root", "completion-assert D4 research exemption reads the prompt key too", "re-register keeps the program's
+    stored aliases"): registry 3 of 9 → 9/9, completion-assert 1 of 148 → 148/148, alias case red → registry 10/10.
+  - 4g `fa06657b8` and 5d `65b3713cf` (row 17, ROW_COUNT 17; fixture `ff67f47e8`, `533c539d9`): gate 7 of 50 → 50/50.
+  - 5a `bc17af96d`, 5b `fb345896a`: cc-research-cert 5 of 23 → 23/23.
+  - 5c `2fae4d7b5` (close refuses) · `20b8d9cbc` (resume) · `3bbefd668` (R_max counts counted rounds, uncounted cap
+    2, round.sh preflight): round 4 of 26 → 26/26; lead follow-on `7e67e96a2` (round.sh re-runs partial slots and
+    counts a lane live only when every slot completed — without it 5c-1 turned a partial read into a counted round
+    no verb could close): red → round 27/27.
+  - 5e `e0f390797` jobs 1 of 13 → 13/13 · 5f lease `4a511e3fb` lease 5 of 6 → 6/6 · 5f locks `eb7653f57` records 1 of
+    11 → 11/11, seed 1 of 13 → 13/13.
+  - 6a `da5eea40e`, 6b `0d8dfbd12`: round 2 of 17 and seed 3 of 12 red → green · 6c-6f `d1048d356`, `dc51b2368`,
+    `c18ccd4bd`, `d69121e0a`: estimate 5 of 10 → 10/10. Records contract `9d011c6f0`, `3b4a9f0d7`.
+  - Final integration (this land): all 30 research suites + completion-assert green, plan lines printed in the
+    session that landed it.
+- Learnings:
+  - Briefing "no assertion errexit cannot reach" was not enough: 4 of 8 teammates still wrote dead `[[ … ]]` lines
+    and the land gate refused twice. Tell teammates to run `scripts/bats-assert-liveness-fix.py` on every changed
+    suite before reporting, and assert a fixture's date by reading it back, never as a literal (time-bomb lint).
+  - Shipping mid-wave rewrites the shas later teammate branches were cut from; the next rebase then replays the
+    old copies as duplicates. Either land once at the end or drop the duplicate picks (`git range-diff` proves them
+    identical) — never resolve them by hand.
+  - Two teammates editing one file's imports produced a semantic merge break (ops removed `import os` from gate.py,
+    registry's add-root needs it) that no textual conflict showed; only the suite run caught it.
+  - Load sat at 30+ on 10 cores the whole wave, so cc-bats shed every run; focused suites ran under its logged
+    waiver (`CC_BATS_WAIVER_REASON=… CC_BATS_MAX_ROOTS=0`), serially, never `--jobs`.
+  - Not done, outside this scope (each named by its teammate): the simulator still pools its own false alarms
+    into `found_total`, and the round-1 R_max simulation seeds n0 from undeflated `new_material`
+    (`estimate.py program()`); 4b's lexical relay matcher still passes "No - escape." (audit §1(b), the content
+    problem is a method question); the workflow re-run loop has no harness test
+    (`tests/fixtures/research-kit/run-workflow.mjs` always returns exit 0 for check-round).
