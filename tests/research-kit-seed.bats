@@ -171,7 +171,7 @@ good_set() {
   "$SEED" match --program demo --round 1 --plan "$PLAN"
   run "$SEED" status --program demo
   [ "$status" -eq 0 ]
-  [[ "${lines[1]}" == *"realism 1/2 = 0.50"* ]]
-  [[ "${lines[1]}" == *"real detection 1/3 = 0.33"* ]]
+  [[ "${lines[1]}" == *"realism 1/2 = 0.50"* ]] || false
+  [[ "${lines[1]}" == *"real detection 1/3 = 0.33"* ]] || false
   [[ "${lines[1]}" == *"seeds easier"* ]]
 }

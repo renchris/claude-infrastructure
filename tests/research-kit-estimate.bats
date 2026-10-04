@@ -120,7 +120,7 @@ lt() { /usr/bin/python3 -c "import sys; sys.exit(0 if float(sys.argv[1]) < float
   # control: the pre-fix U_HI, pinned here so the comparison never follows the constant
   ctrl="$(/usr/bin/python3 -c "import sys; sys.path[:0]=[sys.argv[1], sys.argv[1]+'/lib']; import estimate; u=0.2; print(estimate.poisson_q95(float(sys.argv[2])*u/(1-u)))" "$REPO/scripts/research-kit" "$(fld "$out" n_hat)")"
   lt "$ctrl" "$(fld "$out" invisible_bound95)"
-  [[ "$(fld "$out" measured)" == *"u_hi"* ]]
+  [[ "$(fld "$out" measured)" == *"u_hi"* ]] || false
   [[ "$(fld "$out" assumed)" != *"0.2 (share assumed)"* ]]
 }
 
