@@ -792,3 +792,43 @@ mk_wave() { # $1=transcript path  $2=runId  $3=started  $4=result  [$5=agent fil
   [ "$status" -eq 0 ]; fired "$output"
   echo "$output" | grep -q "FREE WIN" || { echo "$output"; false; }
 }
+
+# ── a BACKGROUND JOB is told the rail it can run (2026-10-03, job 032aa97f) ─────────────────────
+# The incident: this hook's size arm told job 032aa97f "TRANSCRIPT is 38MB … Run the /handoff rails
+# now"; every rail that names reaches for a pane (--split-right, a pane --recycle), refused, and the
+# agent could only ask the operator to /clear and paste. A job is marked by CLAUDE_JOB_DIR (with its
+# state.json), and the advisory now names the background-job recycle instead.
+mk_job() { local j="$BATS_TEST_TMPDIR/cfg/jobs/abcd1234"; mkdir -p "$j"; printf '{}\n' > "$j/state.json"; printf '%s' "$j"; }
+
+@test "BACKGROUND JOB, size arm (the incident's message): names the job rail, never the /handoff rails" {
+  export CC_BOUNDARY_SIZE_MB=1
+  mk_btel bj1 41
+  CLAUDE_JOB_DIR="$(mk_job)"; export CLAUDE_JOB_DIR
+  run drive bj1 "$(mk_tx_size 1)"
+  unset CLAUDE_JOB_DIR
+  [ "$status" -eq 0 ]; fired "$output"
+  echo "$output" | grep -q "TRANSCRIPT is 1MB" || { echo "$output"; false; }
+  echo "$output" | grep -q "background job abcd1234" || { echo "$output"; false; }
+  echo "$output" | grep -q "handoff-fire.sh --recycle --prompt-file" || { echo "$output"; false; }
+  ! echo "$output" | grep -q "/handoff rails"
+}
+
+@test "BACKGROUND JOB, fill arm and an in-flight exchange: both name the job rail" {
+  mk_btel bj2 75
+  CLAUDE_JOB_DIR="$(mk_job)"; export CLAUDE_JOB_DIR
+  run drive bj2 "$(mk_btx 30)"
+  unset CLAUDE_JOB_DIR
+  [ "$status" -eq 0 ]; fired "$output"
+  echo "$output" | grep -q "exchange is in flight" || { echo "$output"; false; }
+  [ "$(echo "$output" | jq -r .reason | grep -c 'background job abcd1234')" -ge 1 ] || { echo "$output"; false; }
+  ! echo "$output" | grep -q "/handoff rails"
+  ! echo "$output" | grep -q "run /handoff at its natural end"
+}
+
+@test "CONTROL: a pane session (no job dir) keeps the /handoff rails wording byte-for-byte" {
+  mk_btel bj3 75
+  run env -u CLAUDE_JOB_DIR bash -c 'printf "{\"session_id\":\"bj3\",\"transcript_path\":\"\"}" | bash "$1"' _ "$HOOK"
+  [ "$status" -eq 0 ]; fired "$output"
+  echo "$output" | grep -q "Run the /handoff rails now to preserve state into a successor before auto-compaction." || { echo "$output"; false; }
+  ! echo "$output" | grep -q "background job"
+}

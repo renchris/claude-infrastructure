@@ -701,16 +701,37 @@ fi
 # clean: a note that renders at every fire carries as few bits as one that never renders.
 dirty_note=""
 [ "$dirty_state" = "not-mine" ] && dirty_note=", dirty tree — but nothing in it was written by this session"
+# THE RAIL NAMED MUST BE ONE THIS SESSION CAN RUN (2026-10-03). A background job has no pane, so
+# "run the /handoff rails" sent job 032aa97f into a refusal (--split-right and a pane --recycle both
+# need one) and left it asking the operator to /clear and paste. For a job the step is the
+# background-job recycle, named outright. The lib resolves through the hook's own symlink first, so a
+# fresh lib works on the trunk fast-forward, before install.sh links it.
+_bsk="$(cd "$(dirname "$(readlink "$0" 2>/dev/null || echo "$0")")" 2>/dev/null && pwd)/lib/session-kind.sh"
+[ -f "$_bsk" ] || _bsk="$_bscd/lib/session-kind.sh"
+[ -f "$_bsk" ] || _bsk="$HOME/.claude/hooks/lib/session-kind.sh"
+# shellcheck source=lib/session-kind.sh
+# shellcheck disable=SC1091  # runtime-resolved, as above
+[ -f "$_bsk" ] && . "$_bsk" 2>/dev/null || true
+bgjob=""; command -v cc_bgjob_short >/dev/null 2>&1 && bgjob="$(cc_bgjob_short)" || bgjob=""
+rail_now="Run the /handoff rails now."
+rail_fw="recycle now with \`handoff-fire.sh --recycle\`."
+rail_later="THEN run /handoff at its natural end."
+rail_fill="Run the /handoff rails now to preserve state into a successor before auto-compaction."
+if [ -n "$bgjob" ]; then
+  rail_now="$(cc_bgjob_succession_step "$bgjob")"; rail_fw="$rail_now"
+  rail_fill="Preserve state into a successor before auto-compaction. $rail_now"
+  rail_later="THEN recycle at its natural end. $rail_now"
+fi
 if [ "$size_fired" = 1 ]; then
-  reason="⚑ Boundary reached — ${why} at a committed boundary (HEAD ${head:0:8}, gate-green: ${gate_state}${dirty_note}). Neither compaction nor waiting fixes this: only a NEW SESSION resets a transcript or a process. Run the /handoff rails now. (Advisory: if you have a genuine reason to keep working, do so — this re-arms at +${REARM_DELTA}% fill or +${SIZE_REARM_MB}MB transcript growth.)"
+  reason="⚑ Boundary reached — ${why} at a committed boundary (HEAD ${head:0:8}, gate-green: ${gate_state}${dirty_note}). Neither compaction nor waiting fixes this: only a NEW SESSION resets a transcript or a process. ${rail_now} (Advisory: if you have a genuine reason to keep working, do so — this re-arms at +${REARM_DELTA}% fill or +${SIZE_REARM_MB}MB transcript growth.)"
 elif [ "$freewin" = 1 ]; then
   # The FREE-WIN wording, deliberately not the forced-drain wording. Nothing here is urgent and nothing
   # is at risk — that is the whole point, and a drain framing ("before auto-compaction") would both
   # misstate the cause and read as alarming at 40% fill. It names the ONE command, per CLAUDE.md's
   # ♻️ Recycle row: same pane, fresh context, because everything of value is already on disk.
-  reason="⟳ FREE WIN — ${why} (HEAD ${head:0:8}, gate-green: ${gate_state}${dirty_note}). Nothing is in hand, so a successor loses nothing and you stop carrying a rotting context: recycle now with \`handoff-fire.sh --recycle\`. (Advisory, not urgent: if you have a genuine reason to keep working, do so — this re-arms at +${REARM_DELTA}% fill.)"
+  reason="⟳ FREE WIN — ${why} (HEAD ${head:0:8}, gate-green: ${gate_state}${dirty_note}). Nothing is in hand, so a successor loses nothing and you stop carrying a rotting context: ${rail_fw} (Advisory, not urgent: if you have a genuine reason to keep working, do so — this re-arms at +${REARM_DELTA}% fill.)"
 else
-  reason="⚑ Boundary reached — ${why} at a committed boundary (HEAD ${head:0:8}, gate-green: ${gate_state}${dirty_note}). Run the /handoff rails now to preserve state into a successor before auto-compaction. (Advisory: if you have a genuine reason to keep working, do so — this re-arms at +${REARM_DELTA}% fill.)"
+  reason="⚑ Boundary reached — ${why} at a committed boundary (HEAD ${head:0:8}, gate-green: ${gate_state}${dirty_note}). ${rail_fill} (Advisory: if you have a genuine reason to keep working, do so — this re-arms at +${REARM_DELTA}% fill.)"
 fi
 if [ "${live_waves:-0}" -gt 0 ] 2>/dev/null; then
   reason="${reason}
@@ -718,7 +739,7 @@ if [ "${live_waves:-0}" -gt 0 ] 2>/dev/null; then
 fi
 if [ -n "$conv_age" ] && [ "$conv_age" -lt "$CONV_S" ] 2>/dev/null; then
   reason="${reason}
-⚑ An operator/peer exchange is in flight (last interactive turn ${conv_age}s ago): do NOT cut it — finish the exchange, persist the decisions it produced (dod-persist / plan / memory), THEN run /handoff at its natural end."
+⚑ An operator/peer exchange is in flight (last interactive turn ${conv_age}s ago): do NOT cut it — finish the exchange, persist the decisions it produced (dod-persist / plan / memory), ${rail_later}"
 fi
 jq -nc --arg r "$reason" '{decision:"block",reason:$r,systemMessage:$r}'
 exit 0

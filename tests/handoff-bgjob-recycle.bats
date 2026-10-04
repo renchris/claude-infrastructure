@@ -175,3 +175,23 @@ bg_argv() { tr '\0' '\n' < "$STUB/bg.argv"; }
   /bin/sleep 0.3
   [ ! -e "$STUB/stopped" ]
 }
+
+# ── the hooks name the step that works for the session's kind ───────────────────────────────────
+@test "hooks/lib/session-kind.sh: a job dir with state.json is a job; anything else is not" {
+  run bash -c '. "$1/hooks/lib/session-kind.sh"; CLAUDE_JOB_DIR="$2" cc_bgjob_short' _ "$REPO" "$JOB"
+  [ "$status" -eq 0 ] && [ "$output" = abcd1234 ]
+  run bash -c '. "$1/hooks/lib/session-kind.sh"; CLAUDE_JOB_DIR="$2/nope" cc_bgjob_short' _ "$REPO" "$CFG/jobs"
+  [ "$status" -eq 1 ]
+  run bash -c '. "$1/hooks/lib/session-kind.sh"; unset CLAUDE_JOB_DIR; cc_bgjob_short' _ "$REPO"
+  [ "$status" -eq 1 ]
+}
+
+@test "handoff-intent-nudge: a background job is told the job rail, never --split-right or a pane uuid" {
+  run bash -c 'printf "%s" "{\"prompt\":\"please hand off now\"}" | CLAUDE_JOB_DIR="$2" bash "$1/hooks/handoff-intent-nudge.sh"' _ "$REPO" "$JOB"
+  [ "$status" -eq 0 ]
+  ctx="$(printf '%s' "$output" | jq -r .hookSpecificOutput.additionalContext)"
+  [[ "$ctx" == *"background job abcd1234"* ]] && [[ "$ctx" == *"handoff-fire.sh --recycle --prompt-file"* ]] || { echo "$ctx"; false; }
+  [[ "$ctx" != *"--successor <pane-uuid>"* ]]
+  run bash -c 'printf "%s" "{\"prompt\":\"please hand off now\"}" | env -u CLAUDE_JOB_DIR bash "$1/hooks/handoff-intent-nudge.sh"' _ "$REPO"
+  [[ "$output" == *"--successor <pane-uuid>"* ]] || { echo "$output"; false; }
+}

@@ -38,6 +38,19 @@ if [ -f "$_hi_lib" ]; then
 fi
 
 if printf '%s' "$PROMPT" | grep -qiE 'hand[- ]?off|self[- ]?close|\brelieve|\brelieved\b|recycle (this|the|your|our) (session|pane)|succession'; then
+  # A BACKGROUND JOB gets the rails that work for it (hooks/lib/session-kind.sh): the pane block below
+  # names --split-right and a pane uuid, neither of which a job has (job 032aa97f, 2026-10-03).
+  _hi_sk="$(cd "$(dirname "$(readlink "$0" 2>/dev/null || echo "$0")")" 2>/dev/null && pwd)/lib/session-kind.sh"
+  [ -f "$_hi_sk" ] || _hi_sk="$HOME/.claude/hooks/lib/session-kind.sh"
+  _hi_job=""
+  # shellcheck source=lib/session-kind.sh
+  # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+  if [ -f "$_hi_sk" ] && . "$_hi_sk" 2>/dev/null; then _hi_job="$(cc_bgjob_short 2>/dev/null || true)"; fi
+  if [ -n "$_hi_job" ] && command -v jq >/dev/null 2>&1; then
+    jq -cn --arg c "HANDOFF-INTENT PARITY (deterministic hook — verbal intent must land on the same rails as a typed /handoff): $(cc_bgjob_succession_step "$_hi_job") To retire this job with nothing continuing, run handoff-fire.sh self-close --terminal (or --successor <job short>); it stops the job the same way. Never improvise teardown by hand." \
+      '{hookSpecificOutput:{hookEventName:"UserPromptSubmit",additionalContext:$c}}'
+    exit 0
+  fi
   cat <<'JSON'
 {"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"HANDOFF-INTENT PARITY (deterministic hook — verbal intent must land on the same rails as a typed /handoff): execute handoff/succession mechanics ONLY through the sanctioned paths. (1) Continuation bridge + fire: invoke Skill(handoff) and follow the CURRENT spec — never improvise the chain from memory. (2) In-place continuation of THIS pane: handoff-fire.sh --recycle. (3) Retiring a pane: handoff-fire.sh self-close --successor <pane-uuid> (verified alive, announced into the survivor via cc-notify, focused after close) or --terminal when truly nothing continues — bare self-close is refused (exit 2). (4) NEVER hand-type /exit, use raw osascript, or raw it2 session close for teardown. A pane the operator watches must never vanish without its continuation being visible (memory: handoff-succession-legibility)."}}
 JSON
