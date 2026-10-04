@@ -45,3 +45,14 @@ utility	(^|[[:space:]])(uv run +)?pytest([[:space:]]|$)
 utility	(^|[[:space:]])shellcheck([[:space:]]|$)
 utility	(^|[[:space:]])npm (install|ci)([[:space:]]|$)
 utility	(^|[[:space:]])du -s
+#
+# ROWS 5-7 (2026-10-04, docs/research/concurrency-scale-2026-10-04 row 14). This table is now read by
+# TWO actuators: the hook above (simple commands, matched on the whole line) and bin/cc-qos-exec, the
+# PATH shim install.sh links as ~/.claude/bin/<name> for every name in config/qos-shim.names (matched
+# on "<name> " alone, so it reaches compound lines, xargs and loops the hook cannot). A shim name
+# needs a row here or the shim runs its tool undemoted. MEASURED on the 2026-10-04 snapshot: ffmpeg,
+# magick and tesseract were 2-3 cores at PRI 26-31 beside the sessions; 99.8% of batch command lines
+# were compound, so the hook alone demoted 3.5-4.3% of CPU.
+utility	(^|[[:space:]])(ffmpeg|ffprobe)([[:space:]]|$)
+utility	(^|[[:space:]])(magick|convert)([[:space:]]|$)
+utility	(^|[[:space:]])tesseract([[:space:]]|$)

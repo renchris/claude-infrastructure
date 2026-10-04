@@ -1,0 +1,12 @@
+# qos-shim.names — the tool names install.sh links to bin/cc-qos-exec in ~/.claude/bin (first on
+# every agent PATH). One name per line. Each needs a row in config/qos-batch.patterns or its shim is
+# inert (tests/cc-qos-exec.bats pins that). Deleting a name here un-links it at the next install.
+# Not here, on purpose: node, python3, git, claude and tsc (reached through node_modules/.bin),
+# per docs/research/concurrency-scale-2026-10-04/w1-audit-report.md §3 item 9.
+ffmpeg
+ffprobe
+magick
+convert
+tesseract
+shellcheck
+pytest

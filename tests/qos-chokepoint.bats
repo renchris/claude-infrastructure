@@ -538,6 +538,36 @@ _marker_script() {
   [ "$((p4 + p20))" -eq "$d" ] || false         # the two tiers partition the demoted set
 }
 
+@test "(xxxviii) batch leg: a named tool and a root's whole tree are counted, demotion read off the clamp, verdict untouched" {
+  # 2026-10-04, concurrency-scale rows 14-15. The tool is a SYMLINK to sleep(1) under a marker name,
+  # so its argv's first token is the name (a script's would be /bin/bash); a COPY of a platform
+  # binary is SIGKILLed on its code signature, measured here. The root is a script, matched
+  # anywhere in argv as the agent-browser daemon is (its install path holds a space); its sleep child
+  # is enrolled only by ancestry, which is how agent-browser's Chrome is seen. The root runs under
+  # `-c background` (PRI 4 from any band, as (xix) explains), so root and child must read demoted.
+  if [ ! -x /usr/sbin/taskpolicy ]; then skip "taskpolicy(8) absent on this host"; fi
+  ln -s /bin/sleep "$TMP/zzbatchtool"
+  printf '#!/bin/bash\n/bin/sleep 6\n' > "$TMP/zzbatchroot"; chmod +x "$TMP/zzbatchroot"
+  /usr/sbin/taskpolicy -c background "$TMP/zzbatchroot" >/dev/null 2>&1 &
+  local rpid=$!
+  "$TMP/zzbatchtool" 6 &
+  local tpid=$!
+  /bin/sleep 1
+  run env QOS_CENSUS_BATCH_RE=zzbatchtool QOS_CENSUS_BATCH_ROOT_RE=zzbatchroot QOS_CENSUS_PATTERN=zz-no-such-process \
+      QOS_CENSUS_NO_CONTROL=1 /bin/bash "$CENSUS" --json --no-append
+  local on="$output"
+  run env QOS_CENSUS_BATCH_RE= QOS_CENSUS_BATCH_ROOT_RE= QOS_CENSUS_PATTERN=zz-no-such-process \
+      QOS_CENSUS_NO_CONTROL=1 /bin/bash "$CENSUS" --json --no-append
+  local off="$output"
+  pkill -P "$rpid" 2>/dev/null || true
+  kill "$rpid" "$tpid" 2>/dev/null || true
+  wait "$rpid" "$tpid" 2>/dev/null || true
+  [ "$(printf '%s' "$on" | jq -r '.batch_procs_total')" -ge 3 ] || false     # tool + root + root's child
+  [ "$(printf '%s' "$on" | jq -r '.batch_procs_demoted')" -ge 2 ] || false   # root and child at PRI 4
+  [ "$(printf '%s' "$on" | jq -r '.verdict')" = "NO-BURST" ] || false        # the leg never gates
+  [ "$(printf '%s' "$off" | jq -r '.batch_procs_total')" -eq 0 ] || false    # empty selectors enrol nothing
+}
+
 # ── helper ────────────────────────────────────────────────────────────────────────────────────
 
 # _descendant_pris <root-pid> — PRI of every live descendant, one per line.

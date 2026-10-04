@@ -1,0 +1,102 @@
+#!/bin/bash
+# cc-qos-exec — the batch-QoS PATH shim (docs/research/concurrency-scale-2026-10-04/README.md §3
+# rows 14 and 15; w1-audit-report.md §3 items 9 and 10).
+#
+# WHY A PATH SHIM, AGAIN. hooks/qos-rewrite.sh demotes a batch command at the Bash-tool boundary,
+# but only a SIMPLE one: it exits on any `;` `&` `|` `<` `>` `(` `)` backtick or newline, because
+# wrapping a compound line in `taskpolicy … zsh -c` breaks the shell snapshot and cd tracking. On
+# 2026-10-04 99.8% of batch commands were compound, so only 3.5-4.3% of CPU ran demoted, and
+# ffmpeg, magick, OCR and shellcheck (2-3 cores at the snapshot peak) competed head to head with
+# every session at PRI 26-31. A live `xargs shellcheck` ran at PRI 31 with 980 MB for 16 minutes.
+# A PATH shim does not care how the line is built: `find … | xargs shellcheck`, `for f in *; do
+# ffmpeg …; done` and `cd x && magick …` all resolve the bare name through PATH, and
+# ~/.claude/bin is first on the PATH every agent Bash call runs with. bin/cc-bats proved the shape
+# (100% of PATH-resolved bats demoted); this is the same inversion for the other batch tools.
+#
+# HOW IT IS DEPLOYED. install.sh links ~/.claude/bin/<name> → this file for every name in
+# config/qos-shim.names. The name it was invoked as is the tool it runs: it walks PATH, skips every
+# entry that resolves to this file, and execs the first real one under `taskpolicy -c <band>`. The
+# BAND comes from config/qos-batch.patterns, the table hooks/qos-rewrite.sh already reads, matched
+# against "<name> " alone (never the arguments, so a filename cannot change the band). One table,
+# one lever: deleting a row there un-demotes the tool for both the hook and this shim.
+#
+# WHO IS DEMOTED. Only commands run inside a Claude Code session (CLAUDECODE=1, which Claude Code
+# exports into every Bash tool call and its children), as qos-rewrite.sh does by construction: the
+# operator's own terminal keeps full priority. CC_QOS_EXEC_ALWAYS=1 demotes outside a session too.
+#
+# THE BAND IS utility (PRI 20), not background (PRI 4): background is a measured ~84-89x tax on a
+# long batch job; utility costs ~2.4x under the same load and still yields to sessions at PRI 31
+# (config/qos-batch.patterns header). No CPU is removed; batch work finishes later.
+#
+# FAIL-OPEN IS THE CONTRACT. Any doubt — no table, no matching row, a band outside the allowlist,
+# no taskpolicy — runs the real tool verbatim. A miss costs one undemoted process; a bad wrapper
+# would cost the agent's command (taskpolicy -c <bogus> exits 64 and never runs the program). The
+# only failure it reports is the one it cannot paper over: no real <name> beyond the shim (127).
+#
+# CEILING, stated: an ABSOLUTE spelling (/opt/homebrew/bin/ffmpeg) never meets a PATH shim, nor
+# does a tool a runner resolves privately (`uv run pytest` puts the venv's bin first;
+# `python -m pytest` has no pytest exec at all). hooks/qos-rewrite.sh still covers those when the
+# line is simple.
+#
+# Usage: <name> [args…]                via a ~/.claude/bin/<name> link (the normal path)
+#        cc-qos-exec <name> [args…]    explicit form, e.g. inside `xargs` when the name is not linked
+# Seams: CC_QOS_EXEC=off (kill switch: exec the real tool verbatim) · CC_QOS_EXEC_ALWAYS=1 ·
+#        CC_QOS_EXEC_PATTERNS=<table> (set-but-EMPTY ⇒ no band ⇒ never demote) ·
+#        CC_QOS_EXEC_TASKPOLICY=<path> (set-but-EMPTY ⇒ never demote)
+# bash 3.2-safe: launchd and /bin/bash may run it.
+
+self="${BASH_SOURCE[0]:-$0}"
+name="${0##*/}"
+if [ "$name" = cc-qos-exec ]; then
+  [ $# -ge 1 ] || { echo "usage: cc-qos-exec <tool> [args…]" >&2; exit 2; }
+  name="${1##*/}"; shift
+fi
+
+# ── the real tool: first PATH entry that is not this shim ─────────────────────────────────────
+real=""
+IFS=: read -r -a _dirs <<< "$PATH"
+for _d in "${_dirs[@]}"; do
+  [ -n "$_d" ] || continue
+  _c="$_d/$name"
+  [ -f "$_c" ] && [ -x "$_c" ] || continue
+  [ "$_c" -ef "$self" ] && continue          # -ef follows symlinks: every link to this file is skipped
+  # A link to ANOTHER checkout's copy of this shim (a worktree's bin on PATH) is skipped too, or two
+  # shims would exec each other forever.
+  if [ -L "$_c" ]; then _l="$(readlink "$_c" 2>/dev/null)"; [ "${_l##*/}" = cc-qos-exec ] && continue; fi
+  real="$_c"; break
+done
+[ -n "$real" ] || { echo "cc-qos-exec: $name: not found on PATH beyond the QoS shim" >&2; exit 127; }
+
+# ── decide the band; every doubt falls through to the verbatim exec at the bottom ─────────────
+band=""
+if [ "${CC_QOS_EXEC:-on}" != off ] && { [ "${CLAUDECODE:-}" = 1 ] || [ "${CC_QOS_EXEC_ALWAYS:-}" = 1 ]; }; then
+  if [ -n "${CC_QOS_EXEC_PATTERNS+set}" ]; then
+    table="$CC_QOS_EXEC_PATTERNS"
+  else
+    _s="$self"; _hops=0                       # resolve this file's own link chain to find the checkout
+    while [ -L "$_s" ] && [ "$_hops" -lt 20 ]; do
+      _l="$(readlink "$_s")" || break
+      case "$_l" in /*) _s="$_l" ;; *) _s="${_s%/*}/$_l" ;; esac
+      _hops=$((_hops + 1))
+    done
+    table="${_s%/*}/../config/qos-batch.patterns"
+  fi
+  if [ -n "$table" ] && [ -r "$table" ]; then
+    while IFS= read -r _line || [ -n "$_line" ]; do
+      _line="${_line%$'\r'}"
+      case "$_line" in ''|'#'*) continue ;; esac
+      _f1="${_line%%$'\t'*}"; _ere="${_line#*$'\t'}"
+      [ "$_f1" != "$_line" ] && [ -n "$_f1" ] && [ -n "$_ere" ] || continue
+      if [[ "$name " =~ $_ere ]]; then band="$_f1"; break; fi
+    done < "$table"
+  fi
+  case "$band" in utility|background|maintenance) ;; *) band="" ;; esac
+fi
+
+if [ -n "$band" ]; then
+  tp="${CC_QOS_EXEC_TASKPOLICY-/usr/sbin/taskpolicy}"
+  if [ -n "$tp" ] && [ -x "$tp" ]; then
+    exec "$tp" -c "$band" "$real" "$@"
+  fi
+fi
+exec "$real" "$@"

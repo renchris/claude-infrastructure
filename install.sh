@@ -1174,6 +1174,19 @@ if $IS_GLOBAL; then
     [[ -f "$tool" ]] || continue
     link_file "$tool" "$CONFIG_DIR/bin/$(basename "$tool")"
   done
+
+  # Batch-QoS PATH shims (2026-10-04, docs/research/concurrency-scale-2026-10-04 rows 14-15): each
+  # name in config/qos-shim.names becomes $CONFIG_DIR/bin/<name> → bin/cc-qos-exec, which runs the
+  # real tool from further down PATH under `taskpolicy -c utility` inside a Claude session. The
+  # SOURCE keeps its cc-* name and the cc-* loop above deploys it; these are extra names for the
+  # same file, the shape ~/.claude/bin/bats → bin/cc-bats already has. A name whose link target
+  # would shadow a real file is left to link_file's backup guard.
+  if [[ -f "$REPO_DIR/config/qos-shim.names" && -f "$REPO_DIR/bin/cc-qos-exec" ]]; then
+    while IFS= read -r _qos_name || [[ -n "$_qos_name" ]]; do
+      case "$_qos_name" in ''|'#'*|*/*|*[[:space:]]*) continue ;; esac
+      link_file "$REPO_DIR/bin/cc-qos-exec" "$CONFIG_DIR/bin/$_qos_name"
+    done < "$REPO_DIR/config/qos-shim.names"
+  fi
 fi
 
 # --- LaunchAgents (global only) ---

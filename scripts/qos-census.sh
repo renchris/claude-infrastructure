@@ -436,6 +436,57 @@ else
   if [ "$_ok" = "1" ]; then VERDICT="PASS"; RC=0; else VERDICT="FAIL"; RC=1; fi
 fi
 
+# ── BATCH LEG (2026-10-04, docs/research/concurrency-scale-2026-10-04 rows 14 and 15) ───────────────
+# The census above is bats-only by design (its verdict gates the bats chokepoint). bin/cc-qos-exec
+# now demotes the other batch tools and agent-browser's Chrome, and nothing measured whether that
+# landed. This leg REPORTS, never gates: it adds batch_* fields and leaves VERDICT and RC alone.
+# Population (a tool is matched on argv's FIRST token, so an argument cannot enrol a process):
+#   · a direct tool:  basename of argv's first token matches QOS_CENSUS_BATCH_RE (the cc-qos-exec names)
+#   · pytest under an interpreter: argv[0] is python*, argv[1]'s basename is pytest
+#   · an agent-browser tree: every DESCENDANT of a process whose argv holds a path segment matching
+#     QOS_CENSUS_BATCH_ROOT_RE (the agent-browser daemon), plus the daemon itself — this is how its
+#     Chrome is seen, whose own argv holds spaces ("Google Chrome Helper (Renderer)") and no stable name.
+# Demoted = the same clamp test as above (pri <= DEMOTED_PRI_MAX and pri in CLAMP_PRIS). Blind spot,
+# stated: Chrome demotes its own hidden-tab renderers to PRI 4, so an unclamped tree still shows
+# some demoted rows; read batch_cpu_*, which those near-idle rows barely move, not the proc count.
+BATCH_RE="${QOS_CENSUS_BATCH_RE-ffmpeg|ffprobe|magick|convert|tesseract|shellcheck|pytest}"
+BATCH_ROOT_RE="${QOS_CENSUS_BATCH_ROOT_RE-agent-browser-darwin-arm64}"
+B_TOTAL=0; B_DEMOTED=0; B_CPU=0; B_CPU_DEMOTED=0
+if [ -n "$BATCH_RE$BATCH_ROOT_RE" ]; then
+  read -r B_TOTAL B_DEMOTED B_CPU B_CPU_DEMOTED <<EOF
+$(ps -axo pid=,ppid=,pri=,%cpu=,args= 2>/dev/null | awk -v re="$BATCH_RE" -v rre="$BATCH_ROOT_RE" \
+    -v m="$DEMOTED_PRI_MAX" -v cl="$CLAMP_PRIS" -v me="$$" '
+  function isclamp(p,   n, a, i) {
+    if (cl == "") return 1
+    n = split(cl, a, " ")
+    for (i = 1; i <= n; i++) if (p == a[i]+0) return 1
+    return 0
+  }
+  function base(t) { sub(/.*\//, "", t); return t }
+  { pid=$1; ppid[pid]=$2; pri[pid]=$3+0; cpu[pid]=$4+0
+    b0 = base($5); b1 = base($6)
+    hit = 0
+    if (re != "" && b0 ~ ("^(" re ")$")) hit = 1
+    if (re != "" && b0 ~ /^python[0-9.]*$/ && b1 == "pytest") hit = 1
+    # the root by its whole argv: its install path holds a space ("Application Support"), so a
+    # first-token test splits it; the name is distinctive enough to match anywhere as a path segment
+    a = $0; sub(/^[ \t]*[^ \t]+[ \t]+[^ \t]+[ \t]+[^ \t]+[ \t]+[^ \t]+[ \t]+/, "", a)
+    if (rre != "" && a ~ ("(^|/)(" rre ")( |$)")) { root[pid] = 1; hit = 1 }
+    if (hit) want[pid] = 1
+    pids[++np] = pid }
+  END {
+    for (i = 1; i <= np; i++) { p = pids[i]; if (p in want) continue
+      x = ppid[p]; hops = 0
+      while (x != "" && x > 1 && hops < 64) { if (x in root) { want[p] = 1; break } x = ppid[x]; hops++ } }
+    nt = 0; nd = 0; ct = 0; cd = 0
+    for (p in want) { if (p == me) continue
+      nt++; ct += cpu[p]
+      if (pri[p] <= m && isclamp(pri[p])) { nd++; cd += cpu[p] } }
+    printf "%d %d %.1f %.1f", nt, nd, ct, cd }' 2>/dev/null || echo "0 0 0.0 0.0")
+EOF
+fi
+B_COV_CPU=$(awk -v d="$B_CPU_DEMOTED" -v t="$B_CPU" 'BEGIN{ if(t<=0){print "0.0"} else {printf "%.1f", 100*d/t} }')
+
 TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 if [ -n "$SYSCTL" ] && [ -x "$SYSCTL" ]; then
   LOAD1=$("$SYSCTL" -n vm.loadavg 2>/dev/null | awk '{print $2}')
@@ -447,11 +498,12 @@ fi
 # absent on pre-M1-rev rows, which is the truthful answer for a row taken before the split existed).
 # The run-weighted fields (2026-08-07) follow the same rule and for the same reason — they append,
 # and a pre-run-metric row reads as absent rather than as zero.
-JSON=$(printf '{"ts":"%s","verdict":"%s","control":"%s","runs_in_flight":%s,"procs_total":%s,"procs_demoted":%s,"procs_full":%s,"cpu_total":%s,"cpu_demoted":%s,"coverage_proc_pct":%s,"coverage_cpu_pct":%s,"threshold":%s,"demoted_pri_max":%s,"loadavg1":"%s","pattern":"%s","gate_on":"%s","procs_pri4":%s,"procs_pri20":%s,"clamp_pris":"%s","runs_demoted":%s,"runs_full":%s,"coverage_run_pct":%s,"procs_unattributed":%s}' \
+JSON=$(printf '{"ts":"%s","verdict":"%s","control":"%s","runs_in_flight":%s,"procs_total":%s,"procs_demoted":%s,"procs_full":%s,"cpu_total":%s,"cpu_demoted":%s,"coverage_proc_pct":%s,"coverage_cpu_pct":%s,"threshold":%s,"demoted_pri_max":%s,"loadavg1":"%s","pattern":"%s","gate_on":"%s","procs_pri4":%s,"procs_pri20":%s,"clamp_pris":"%s","runs_demoted":%s,"runs_full":%s,"coverage_run_pct":%s,"procs_unattributed":%s,"batch_procs_total":%s,"batch_procs_demoted":%s,"batch_cpu_total":%s,"batch_cpu_demoted":%s,"batch_coverage_cpu_pct":%s}' \
   "$TS" "$VERDICT" "$CONTROL" "$N_RUNS" "$N_TOTAL" "$N_DEMOTED" "$N_FULL" \
   "$CPU_TOTAL" "$CPU_DEMOTED" "$COV_PROC" "$COV_CPU" "$THRESHOLD" "$DEMOTED_PRI_MAX" \
   "${LOAD1:-?}" "$PATTERN" "${_gate_metric:-proc}" "$N_PRI4" "$N_PRI20" "$CLAMP_PRIS" \
-  "$RUNS_DEMOTED" "$RUNS_FULL" "$COV_RUN" "$N_UNATTRIB")
+  "$RUNS_DEMOTED" "$RUNS_FULL" "$COV_RUN" "$N_UNATTRIB" \
+  "$B_TOTAL" "$B_DEMOTED" "$B_CPU" "$B_CPU_DEMOTED" "$B_COV_CPU")
 
 if [ "$APPEND" = "1" ]; then
   mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
@@ -476,6 +528,7 @@ if [ "$QUIET" != "1" ] && [ "$WANT_JSON" != "1" ]; then
   else
     echo "  threshold (${_gate_metric:-proc}):             ${THRESHOLD}%   demoted = pri<=${DEMOTED_PRI_MAX}   (clamp filter OFF)"
   fi
+  echo "  batch tools + agent-browser:  ${B_DEMOTED}/${B_TOTAL} procs demoted, CPU ${B_CPU_DEMOTED}/${B_CPU} (${B_COV_CPU}%)   [reported, not gated]"
   echo "  VERDICT:                      $VERDICT"
   if [ "$VERDICT" = "NO-BURST" ]; then
     echo "  NOTE: <2 concurrent gate runs — this is a NON-VERDICT, not a pass."
