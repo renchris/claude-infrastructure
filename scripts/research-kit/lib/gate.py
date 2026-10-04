@@ -2,7 +2,11 @@
 
 Invoked through scripts/research-kit/gate.sh. Verbs:
 
-  register  --program P --root <abs dir> [--alias A ...]   registry state -> registered
+  register  --program P --root <abs dir> [--root ...] [--alias A ...]
+                                                            registry state -> registered; keeps any
+                                                            roots already registered for P
+  add-root  --program P --root <abs dir>                    append an existing dir to P's cwd_roots
+                                                            (idempotent); state and aliases untouched
   freeze    --program P                                     freeze checks; state -> certifying
                                                             (§10 item 1: the relay test then runs
                                                             with the research block on)
@@ -111,11 +115,45 @@ def print_rows(rows: List[Row], as_json: bool) -> None:
             print(f"      {e}")
 
 
+def merged_roots(prior: List[str], new: List[str]) -> List[str]:
+    """prior + new, each absolute and normalized (realpath, no trailing slash), duplicates dropped.
+
+    A program covers its build worktrees and sibling worktrees too (audit 2026-10-04 row 4e), so
+    neither a re-register nor an add-root may drop a root already registered.
+    """
+    out: List[str] = []
+    for r in list(prior) + list(new):
+        if not os.path.isabs(r):
+            raise kit.KitError(f"cwd_root {r!r} is not absolute")
+        n = os.path.realpath(r)
+        if n not in out:
+            out.append(n)
+    return out
+
+
 def cmd_register(a: argparse.Namespace) -> int:
+    prior = kit.registry_get(a.program)
+    roots = merged_roots((prior or {}).get("cwd_roots") or [], a.root)
     e = kit.registry_set(
-        a.program, "registered", aliases=a.alias or [], cwd_roots=[a.root]
+        a.program, "registered", aliases=a.alias or [], cwd_roots=roots
     )
     print(f"registered {e['slug']} roots={e['cwd_roots']} aliases={e['aliases']}")
+    return 0
+
+
+def cmd_add_root(a: argparse.Namespace) -> int:
+    prior = kit.registry_get(a.program)
+    if prior is None:
+        raise kit.KitError(
+            f"program {a.program!r} is not registered; register it first"
+        )
+    if not os.path.isabs(a.root):
+        raise kit.KitError(f"cwd_root {a.root!r} is not absolute")
+    if not os.path.isdir(a.root):
+        raise kit.KitError(f"cwd_root {a.root!r} is not an existing directory")
+    roots = merged_roots(prior.get("cwd_roots") or [], [a.root])
+    e = kit.registry_set(a.program, prior["state"], cwd_roots=roots)
+    print(f"added root to {e['slug']}: roots={e['cwd_roots']} state={e['state']}")
     return 0
 
 
@@ -159,9 +197,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     sub = ap.add_subparsers(dest="verb", required=True)
     p = sub.add_parser("register")
     p.add_argument("--program", required=True)
-    p.add_argument("--root", required=True)
+    p.add_argument("--root", required=True, action="append")
     p.add_argument("--alias", action="append")
     p.set_defaults(fn=cmd_register)
+    p = sub.add_parser("add-root")
+    p.add_argument("--program", required=True)
+    p.add_argument("--root", required=True)
+    p.set_defaults(fn=cmd_add_root)
     p = sub.add_parser("close")
     p.add_argument("--program", required=True)
     p.set_defaults(fn=cmd_close)

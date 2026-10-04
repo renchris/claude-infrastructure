@@ -53,3 +53,57 @@ active() { /bin/bash -c ". '$RP'; rp_is_active '$1'" 2>/dev/null; }
   [ "$status" -eq 2 ]
   [ ! -e "$CC_RESEARCH_REGISTRY" ]
 }
+
+# ── A program covers more than one directory (audit 2026-10-04, REPORT.md §3 row 4e): its build
+#    worktrees and sibling worktrees of the deliverable repo must resolve to it, or they run under
+#    the standing rules. Planted input: a second root by repeated --root, by add-root, and by a
+#    re-register, each checked through the resolver the rules and the Stop hook read. ──
+@test "register takes --root more than once and every root resolves to the program" {
+  mkdir -p "$BATS_TEST_TMPDIR/repo/src" "$BATS_TEST_TMPDIR/build-wt/src"
+  run "$G" register --program demo --root "$BATS_TEST_TMPDIR/repo" --root "$BATS_TEST_TMPDIR/build-wt"
+  [ "$status" -eq 0 ]
+  [ "$(resolve "$BATS_TEST_TMPDIR/repo/src")" = "demo registered" ]
+  [ "$(resolve "$BATS_TEST_TMPDIR/build-wt/src")" = "demo registered" ]
+}
+
+@test "add-root makes a sibling worktree resolve and leaves state and aliases untouched" {
+  mkdir -p "$BATS_TEST_TMPDIR/repo" "$BATS_TEST_TMPDIR/wt-sibling/sub"
+  "$G" register --program demo --root "$BATS_TEST_TMPDIR/repo" --alias "the demo" --alias "demo two"
+  jq '.programs[0].state = "certified"' "$CC_RESEARCH_REGISTRY" > "$BATS_TEST_TMPDIR/reg.json"
+  mv "$BATS_TEST_TMPDIR/reg.json" "$CC_RESEARCH_REGISTRY"
+  [ -z "$(resolve "$BATS_TEST_TMPDIR/wt-sibling/sub")" ]
+  before="$(jq -c '.programs[0] | {aliases, state}' "$CC_RESEARCH_REGISTRY")"
+  run "$G" add-root --program demo --root "$BATS_TEST_TMPDIR/wt-sibling/"
+  [ "$status" -eq 0 ]
+  [ "$(resolve "$BATS_TEST_TMPDIR/wt-sibling/sub")" = "demo certified" ]
+  [ "$(resolve "$BATS_TEST_TMPDIR/repo")" = "demo certified" ]
+  [ "$(jq -c '.programs[0] | {aliases, state}' "$CC_RESEARCH_REGISTRY")" = "$before" ]
+  # idempotent, and stored normalized (no trailing slash), so the duplicate is recognized
+  run "$G" add-root --program demo --root "$BATS_TEST_TMPDIR/wt-sibling"
+  [ "$status" -eq 0 ]
+  [ "$(jq '.programs[0].cwd_roots | length' "$CC_RESEARCH_REGISTRY")" -eq 2 ]
+  run jq -r '.programs[0].cwd_roots[] | select(endswith("/"))' "$CC_RESEARCH_REGISTRY"
+  [ -z "$output" ]
+}
+
+@test "re-register keeps the roots already registered for the slug" {
+  mkdir -p "$BATS_TEST_TMPDIR/repo" "$BATS_TEST_TMPDIR/later"
+  "$G" register --program demo --root "$BATS_TEST_TMPDIR/repo"
+  run "$G" register --program demo --root "$BATS_TEST_TMPDIR/later"
+  [ "$status" -eq 0 ]
+  [ "$(resolve "$BATS_TEST_TMPDIR/repo")" = "demo registered" ]
+  [ "$(resolve "$BATS_TEST_TMPDIR/later")" = "demo registered" ]
+}
+
+@test "add-root refuses a relative path, a missing directory and an unregistered program" {
+  mkdir -p "$BATS_TEST_TMPDIR/repo" "$BATS_TEST_TMPDIR/other"
+  "$G" register --program demo --root "$BATS_TEST_TMPDIR/repo"
+  before="$(cat "$CC_RESEARCH_REGISTRY")"
+  run "$G" add-root --program demo --root relative/dir
+  [ "$status" -eq 2 ]
+  run "$G" add-root --program demo --root "$BATS_TEST_TMPDIR/does-not-exist"
+  [ "$status" -eq 2 ]
+  run "$G" add-root --program nosuch --root "$BATS_TEST_TMPDIR/other"
+  [ "$status" -eq 2 ]
+  [ "$(cat "$CC_RESEARCH_REGISTRY")" = "$before" ]
+}
