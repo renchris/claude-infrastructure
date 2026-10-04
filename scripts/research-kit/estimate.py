@@ -16,6 +16,10 @@ the operator re-signs the measured set (§6.6).
       from the program's counted rounds (rounds/<k>/matrix.json): the stop state, the round-1
       forecast and R_max, the desk-detectable residual and its 95% bound, the invisible part, and
       P(any material change after signoff).
+  estimate.py calibration [--file research-calibration.jsonl]
+      skill of the forecast over replayed plans: coverage (the 95% bound held), median bound
+      sharpness (bound ÷ realized desk misses; realized-0 rows counted apart, the ratio is undefined)
+      and the Spearman rank correlation between the point forecast and the realized misses.
 """
 
 from __future__ import annotations
@@ -454,6 +458,74 @@ def forecast(slug: str, reps: int = 300, seed: int = 11) -> Dict[str, Any]:
     }
 
 
+# ── skill over a replay: coverage alone rewards a wide bound ───────────────────────────────────
+
+CALIBRATION_FILE = (
+    Path(__file__).resolve().parents[2] / "docs/research/research-calibration.jsonl"
+)
+
+
+def ranks(xs: List[float]) -> List[float]:
+    """1-based ranks, ties sharing their average rank."""
+    order = sorted(range(len(xs)), key=lambda i: xs[i])
+    out = [0.0] * len(xs)
+    i = 0
+    while i < len(order):
+        j = i
+        while j + 1 < len(order) and xs[order[j + 1]] == xs[order[i]]:
+            j += 1
+        for t in range(i, j + 1):
+            out[order[t]] = (i + j) / 2 + 1
+        i = j + 1
+    return out
+
+
+def spearman(xs: List[float], ys: List[float]) -> Optional[float]:
+    """Pearson over average ranks; None when either side has no spread."""
+    rx, ry = ranks(xs), ranks(ys)
+    mx, my = mean(rx), mean(ry)
+    sxy = sum((a - mx) * (b - my) for a, b in zip(rx, ry))
+    sxx = sum((a - mx) ** 2 for a in rx)
+    syy = sum((b - my) ** 2 for b in ry)
+    return None if not sxx or not syy else sxy / math.sqrt(sxx * syy)
+
+
+def median(xs: List[float]) -> Optional[float]:
+    ys = sorted(xs)
+    n = len(ys)
+    if not n:
+        return None
+    return ys[n // 2] if n % 2 else (ys[n // 2 - 1] + ys[n // 2]) / 2
+
+
+def calibration(path: Path) -> Dict[str, Any]:
+    rows = kit.read_jsonl(path)
+    need = ("forecast_point", "forecast_95", "realized_desk_missed")
+    for n, r in enumerate(rows, 1):
+        miss = [k for k in need if not isinstance(r.get(k), (int, float))]
+        if miss:
+            raise kit.KitError(f"{path}: row {n} has no numeric {', '.join(miss)}")
+    if not rows:
+        raise kit.KitError(f"{path}: no rows")
+    point = [float(r["forecast_point"]) for r in rows]
+    bound = [float(r["forecast_95"]) for r in rows]
+    real = [float(r["realized_desk_missed"]) for r in rows]
+    held = sum(1 for b, x in zip(bound, real) if x <= b)
+    ratios = [b / x for b, x in zip(bound, real) if x > 0]
+    sharp, rho = median(ratios), spearman(point, real)
+    mb, mr = median(bound), median(real)
+    return {
+        "rows": len(rows),
+        "held": held,
+        "coverage": round(held / len(rows), 3),
+        "sharpness_median": None if sharp is None else round(sharp, 3),
+        "realized_zero": len(rows) - len(ratios),
+        "bound_median": mb,
+        "realized_median": mr,
+        "spearman": None if rho is None else round(rho, 3),
+    }
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
     ap = argparse.ArgumentParser(prog="estimate.py")
@@ -467,10 +539,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--published", action="store_true")
     p = sub.add_parser("forecast")
     p.add_argument("--program", required=True)
+    p = sub.add_parser("calibration")
+    p.add_argument("--file", type=Path, default=CALIBRATION_FILE)
     a = ap.parse_args(argv)
     try:
         if a.verb == "simulate":
             out = simulate(a.profile, a.n0, a.stress, a.reps, a.seed, a.published)
+        elif a.verb == "calibration":
+            out = calibration(a.file)
         else:
             kit.check_slug(a.program)
             out = forecast(a.program)
