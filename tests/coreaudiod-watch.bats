@@ -27,6 +27,10 @@ setup() {
   chmod +x "$F/ps" "$F/pmset" "$F/killall" "$F/notify" "$F/banner"
   export CA_WATCH_PS="$F/ps" CA_WATCH_PMSET="$F/pmset" CA_WATCH_KILLALL="$F/killall" CA_WATCH_NOTIFY="$F/notify"
   export CA_WATCH_BANNER="$F/banner"
+  # shellcheck disable=SC2016  # $*, $3, $4 are the stub's own args, expanded when it runs
+  printf '#!/bin/bash\necho "$*" >> "%s/sample.argv"; [ "$3" = -file ] && echo stack > "$4"\n' "$F" > "$F/sample"
+  chmod +x "$F/sample"
+  export CA_WATCH_SAMPLE="$F/sample" CA_WATCH_SAMPLE_DIR="$F/samples"
   asrt 0
 }
 
@@ -128,6 +132,32 @@ field() { printf '%s\n' "$output" | grep -o "$1=[^ ]*" | head -1 | cut -d= -f2; 
   CA_WATCH_ROOT_OK=1 CA_WATCH_NOW=1790000300 run "$W" --restart
   [[ "$output" == *"action=deferred-gap"* ]] || false
   [ "$(wc -l < "$F/killall.argv" | tr -d ' ')" = 1 ]
+}
+
+@test "--restart samples the daemon's stack BEFORE killing it, keeps the newest 5, and never samples a deferred run" {
+  asrt 1000
+  mkdir -p "$F/samples"
+  for t in 1 2 3 4 5; do echo old > "$F/samples/coreaudiod-sample-178999999$t.txt"; touch -t "20260101000$t" "$F/samples/coreaudiod-sample-178999999$t.txt"; done
+  root_run 1790000000
+  [[ "$output" == *"action=restarted"* ]] || false
+  [ "$(cat "$F/sample.argv")" = "777 3 -file $F/samples/coreaudiod-sample-1790000000.txt" ]
+  [ "$(cat "$F/samples/coreaudiod-sample-1790000000.txt")" = stack ]
+  [ "$(find "$F/samples" -type f | wc -l | tr -d ' ')" = 5 ]
+  [ ! -e "$F/samples/coreaudiod-sample-1789999991.txt" ]
+  root_run 1790000300
+  [[ "$output" == *"action=deferred-gap"* ]] || false
+  [ "$(wc -l < "$F/sample.argv" | tr -d ' ')" = 1 ]
+}
+
+@test "--restart: a failing or disabled sampler never blocks the restart" {
+  asrt 1000
+  printf '#!/bin/bash\nexit 1\n' > "$F/sample"
+  root_run 1790000000
+  [[ "$output" == *"action=restarted"* ]] || false
+  rm -f "$F/state" "$F/killall.argv"
+  CA_WATCH_SAMPLE=0 root_run 1790000000
+  [[ "$output" == *"action=restarted"* ]] || false
+  [ "$(cat "$F/killall.argv")" = coreaudiod ]
 }
 
 @test "--restart never cuts a live call: a young audio-in context defers it, an old one does not" {

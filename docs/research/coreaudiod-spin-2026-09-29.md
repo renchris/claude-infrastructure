@@ -198,6 +198,19 @@ watcher reads ps RSS. They track each other but are not the same counter.
 pid 404 was captured. The next occurrence should be sampled (`sample coreaudiod 10`) before the
 restart clears it.
 
+**Now automatic (2026-10-04, later the same day).** The root watchdog takes a 3 s `sample` of the
+daemon immediately before every restart. It writes it to
+`/var/log/claude-coreaudiod-samples/coreaudiod-sample-<epoch>.txt` and keeps the newest 5. A failed
+sampler never blocks the restart. A deferred run (gap or live call) does not sample.
+
+**Session-close cleanup cannot prevent this, so we sample at restart instead.** The leaked state
+lives inside coreaudiod. The client processes behind it (each `afplay`) had already exited normally,
+and E5's signal probes show no client-side act releases it. Measured 15 minutes after the restart,
+on a fresh daemon at load 80: 8 `afplay` chimes leaked 0 contexts. One long-lived JXA `NSSound`
+player playing 8 times leaked 1. Neither discriminates, because a healthy daemon does not leak at
+all. The trigger is an onset event that is still unidentified. These samples are how the next
+occurrence names it.
+
 ## Re-derive
 
 ```bash

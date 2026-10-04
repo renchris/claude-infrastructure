@@ -49,8 +49,11 @@
 #   CA_WATCH_RESTART_GAP_S=1800    minimum spacing between restarts
 #   CA_WATCH_INPUT_GRACE_S=10800   an audio-in context younger than this defers a restart
 #   CA_WATCH_RENOTIFY_S=21600      re-assert interval while still degraded (desk or banner alike)
+#   CA_WATCH_SAMPLE_DIR=/var/log/claude-coreaudiod-samples   a 3 s stack sample of the daemon is
+#   CA_WATCH_SAMPLE_KEEP=5         written here just before each restart; newest N kept
 # SEAMS: CA_WATCH_PS CA_WATCH_PMSET CA_WATCH_KILLALL CA_WATCH_NOTIFY CA_WATCH_BANNER CA_WATCH_STATE
 #        CA_WATCH_LOG CA_WATCH_HOT_FLAG CA_WATCH_NOW CA_WATCH_ROOT_OK (tests: allow --restart without EUID 0)
+#        CA_WATCH_SAMPLE (sampler binary; 0 = no sample)
 set -uo pipefail
 
 NOTIFY=0; RESTART=0
@@ -58,7 +61,7 @@ for a in "$@"; do
   case "$a" in
     --notify) NOTIFY=1 ;;
     --restart) RESTART=1 ;;
-    -h|--help) sed -n 2,53p "$0"; exit 0 ;;
+    -h|--help) sed -n 2,56p "$0"; exit 0 ;;
     *) echo "coreaudiod-watch: unknown argument: $a" >&2; exit 2 ;;
   esac
 done
@@ -83,6 +86,9 @@ PS_BIN="${CA_WATCH_PS:-/bin/ps}"
 PMSET_BIN="${CA_WATCH_PMSET:-/usr/bin/pmset}"
 KILLALL_BIN="${CA_WATCH_KILLALL:-/usr/bin/killall}"
 BANNER_BIN="${CA_WATCH_BANNER:-/usr/bin/osascript}"
+SAMPLE_BIN="${CA_WATCH_SAMPLE:-/usr/bin/sample}"
+SAMPLE_DIR="${CA_WATCH_SAMPLE_DIR:-/var/log/claude-coreaudiod-samples}"
+SAMPLE_KEEP="${CA_WATCH_SAMPLE_KEEP:-5}"
 NOW="${CA_WATCH_NOW:-$(/bin/date +%s)}"
 
 if [ "$RESTART" = 1 ]; then
@@ -175,8 +181,18 @@ if [ "$RESTART" = 1 ]; then
   if [ "$want" = 1 ]; then
     if [ "$INPUT_YOUNG" -gt 0 ]; then ACTION=deferred-input-live
     elif [ $(( NOW - last_restart )) -lt "$RESTART_GAP_S" ]; then ACTION=deferred-gap
-    elif "$KILLALL_BIN" coreaudiod 2>/dev/null; then ACTION=restarted; last_restart="$NOW"
-    else ACTION=restart-failed; fi
+    else
+      # Evidence before the cure: the restart erases the only record of WHAT the daemon was busy with,
+      # and the onset trigger is still unknown (2026-10-04: a fresh daemon leaked 0 of 8 chimes at
+      # load 80). One 3 s stack sample per restart, newest SAMPLE_KEEP kept. Never blocks the restart.
+      if [ "$SAMPLE_BIN" != 0 ] && (umask 022; /bin/mkdir -p "$SAMPLE_DIR") 2>/dev/null; then
+        "$SAMPLE_BIN" "$PID" 3 -file "$SAMPLE_DIR/coreaudiod-sample-$NOW.txt" >/dev/null 2>&1 || true
+        /bin/ls -1t "$SAMPLE_DIR"/coreaudiod-sample-*.txt 2>/dev/null | /usr/bin/tail -n +$(( SAMPLE_KEEP + 1 )) \
+          | while IFS= read -r _old; do /bin/rm -f "$_old"; done
+      fi
+      if "$KILLALL_BIN" coreaudiod 2>/dev/null; then ACTION=restarted; last_restart="$NOW"
+      else ACTION=restart-failed; fi
+    fi
   fi
 else
   # The hot flag: present while degraded, refreshed every run, removed on recovery. notify.sh treats
