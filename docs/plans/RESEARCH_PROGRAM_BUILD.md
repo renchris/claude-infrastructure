@@ -23,6 +23,7 @@ packet `83adb541ea19` actioned. Method version 1.1 is frozen; it changes only fr
 | B1 | S | Items 5 + 6: re-ask router, research block, polarity-independent Stop check; the settings migration as a `c10` migration the operator runs (§10 items 1–3, 8, 11–13) | A2 (registry) |
 | B2 | S | Item 8: `research-program` skill, `/research-program` command, intake script, briefs, rubric | A2 |
 | C | S | Wave 2: items 9–13, 15, in parallel with the pilot | B1, B2 |
+| D | S (fired `fire-rp-audit-bugfix`), T inside | Audit fixes: `docs/research/upfront-method-audit-2026-10-04/REPORT.md` §3 rows 4–6 | C |
 
 A1, A2 and A3 touch disjoint files and fire concurrently. B1 and B2 fire when A2 lands. Each dispatched session leads
 its own Agent Team where it has 2+ code-writing tasks.
@@ -311,3 +312,60 @@ coverage table, keeping the kit's record formats (`scripts/research-kit/RECORDS.
   state (a new rung glyph would edit the operator's global rung list, outside this wave's authority); a separate
   `SCOPE=met|open|unknown` field reads unknown, the readout says "completeness UNKNOWN", and `operator-readout.sh`
   withholds the `✅ SAFE TO CLOSE` certificate whenever scope is unknown.
+
+### D — audit fixes (REPORT rows 4-6)
+Scope (frozen): implement rows 4, 5 and 6 of `docs/research/upfront-method-audit-2026-10-04/REPORT.md` §3 (landed
+11602aaa8): the code fixes that make the research-program kit match its own specification (re-ask layer, round
+robustness, statistical core). Each fix gets a planted-input bats test that fails before the change and passes after;
+all landed via the project-local /ship and converged.
+- Constraints: the method text (`docs/research/upfront-research-exhaustion-2026-09-30/REPORT.md`,
+  `skills/research-program/SKILL.md`) is frozen by ruling 8; the classifier time limit is open decision
+  `4bf73c4e55d5`; the live pilot `truememory-2-0` and its records are read-only; tests use fixtured
+  `CC_RESEARCH_REGISTRY`/`CC_RESEARCH_HOME` and stubbed vendors; no settings.json migration.
+- Locus: S for the wave (this fired session), T inside it: one teammate per item group, each in its own worktree
+  `~/Development/.worktrees/rp-d-<name>` on branch `rp-d-<name>`; the lead merges into `rp-audit-fixes`, runs every
+  touched suite and lands once. Batch 1 (six, disjoint files): router, registry, cert, slots, seed, estimate.
+  Batch 2 after batch 1 merges (they share `lib/round.py`, `kit.py` and `seed.py` with batch 1): close, ops.
+- Items and targets (paths under `scripts/research-kit/` unless shown):
+  - **4a classifier off a cold `claude -p`** — NOT built: every way of doing it is an option of open decision
+    `4bf73c4e55d5` (raise to 9 s · slimmer start · warm classifier process); building one pre-empts the
+    operator's choice, and the warm process is a new launchd daemon whose load is operator-only. Row 15 keeps
+    failing until it is ruled.
+  - **4b relay check on `unavailable`** (rp-d-router) — `router.py:639-660` `cmd_relay_check` returns early unless
+    the label is relayed; run `relay_violations` on an `unavailable` turn whose reply opens with a verdict
+    (`OPENS_NO` / a yes-verdict opener, `router.py:581-602`).
+  - **4c honest fallback score** (rp-d-router) — `heldout.py:214-219` scores a fallback as `completeness`, so it
+    counts toward completeness recall; score it as a miss and report the fallback share.
+  - **4d machine-envelope first prompt** (rp-d-router) — `router.py:82-85` `MACHINE_ENVELOPE`, `:345` `genuine`
+    skip, `:529-532` unlabeled ⇒ completeness ⇒ deny every tool. A fired/recycled successor whose first prompt is
+    a machine brief gets a deterministic label (`--requires-gate` ⇒ work-order; otherwise inherit the
+    predecessor's label) instead of "deny every tool".
+  - **4e program roots** (rp-d-registry) — `lib/gate.py:114-118` `cmd_register` writes `cwd_roots=[a.root]` and
+    replaces the list; add a repeatable `--root` and an `add-root` verb that appends (build and sibling worktrees).
+  - **4f D4 prompt-alias key** (rp-d-registry) — `hooks/completion-assert.sh:1087-1110` keys the D4 exemption on
+    cwd only; also resolve the last genuine prompt with `rp_resolve_prompt` (`scripts/lib/research-program.sh:149`),
+    the router's second key.
+  - **4g live certificate** (rp-d-cert) — `lib/gate_cert.py:191-232` `lines_for`: the after-signoff count from
+    `changes.jsonl`/`challenges.jsonl`, no literal "take-backs 0" (:213), no frozen "uncalibrated" (:230), lines for
+    residuals, scheduled checks and Built/Live per method REPORT:815-816.
+  - **5a re-run dead, missing and partial slots** (rp-d-slots) — `lib/cli_cert.py:258-310` `cmd_check` skips dead
+    panels (:273); `workflows/round.workflow.js:67-75` re-runs only voided ones.
+  - **5b lane liveness / preflight / R_max** (rp-d-slots) — a lane is live if any one slot completed
+    (`lib/cli_cert.py:330-335`); `cmd_open` (`:104-148`) opens without a fresh preflight and spends a round number on
+    an infrastructure-lost round.
+  - **5c close refuses a non-complete planned slot; resumable re-entry** (rp-d-close, batch 2) — `lib/round.py:337`
+    `cmd_close`, `:270` `cmd_run`.
+  - **5d gate row: stop is "dry" or "cap reached by counted rounds"** (rp-d-cert) — new row in `lib/gate_rows_b.py`.
+  - **5e sweep registered programs with open packets** (rp-d-ops, batch 2) — `lib/cli_jobs.py:44` `ACTIVE`.
+  - **5f program lease; locked id minting; seed-vault lock** (rp-d-ops, batch 2) — `lib/kit.py`, `seed.py:44-60`.
+  - **6a `seed_match` written before quiet, matched by defect identity** (rp-d-seed) — `lib/round.py:345-380`
+    computes quiet before `seed.py match` runs and nothing writes `seed_match`; `seed.py:154` `overlaps` is line
+    overlap.
+  - **6b seed pre-screen and realism statistic** (rp-d-seed) — method REPORT §3.9; none exists (`kit.py:166` only).
+  - **6c deflate `found` by a measured false-material rate; 6d shadow found count; 6e U_HI to the measured
+    bracket; 6f bound sharpness and rank skill** (rp-d-estimate) — `estimate.py:36-38`, `:305-372` `forecast`
+    (`:324` passes 0 for the shadow stratum), `heldout`-free; calibration `docs/research/research-calibration.jsonl`.
+- Evidence: `docs/research/upfront-method-audit-2026-10-04/evidence/{lens-as-built,lens-internal-soundness,
+  lens-operator-interface,lens-critic-end-to-end-live-behavior,lens-critic-long-horizon-continuity-and-capacity}.md`
+  (the last one's §5 lists the round and lease fixes).
+- Status: IN PROGRESS.
