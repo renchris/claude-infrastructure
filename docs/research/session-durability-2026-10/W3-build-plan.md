@@ -674,7 +674,7 @@ This table replaces the phase table near the top of the file. Only the W3 lead e
 
 | Phase | Wave | State | Pane / branch | Landed sha |
 |---|---|---|---|---|
-| P1b | W3.1 | fired 2026-10-04 | 250 / `w3-p1b` | |
+| P1b | W3.1 | landed, content-verified | 250 / `w3-p1b` | `973ea82f4` |
 | P2 | W3.1 | fired 2026-10-04 | 251 / `w3-p2-land` | |
 | P6 | W3.1 | held: capacity gate (compressor segments 55% > 50%) | | |
 | P8 | W3.2 (no dependency, fires early) | held: capacity gate | | |
