@@ -32,7 +32,8 @@ in/out), and Dia/WebKit (registered, not running).
 
 **Remedy.**
 1. *Clears it (operator, root):* `com.claude.coreaudiod-watchdog`, a system LaunchDaemon that
-   restarts coreaudiod when ≥ 1000 contexts are held (or ≥ 300 with ≥ 100% CPU). It never restarts
+   restarts coreaudiod when ≥ 1000 contexts are held (or ≥ 300 with ≥ 100% CPU, or, since
+   2026-10-04, RSS ≥ 768 MB with ≥ 50% CPU on 3 runs in a row; see that section). It never restarts
    while an audio input younger than 3 h is live, and at most once every 30 min. Install:
    `docs/activation/pending-activation/48-coreaudiod-watchdog-install.sh --confirm com.claude.coreaudiod-watchdog`.
 2. *Slows it (landed, agent-side):* a machine-wide sound gate in `hooks/notify.sh`. It keeps one clock
@@ -146,6 +147,56 @@ device exists, and the default output is the speakers.
   longest hold 99 h") and filed it as hygiene. It is the mechanism of this spin.
 - The unified log keeps almost nothing for coreaudiod itself: no persisted lines before the 13:32
   restart in any window probed. `pmset -g log` is the durable record.
+
+## 2026-10-04: a second shape, low contexts with runaway CPU and memory
+
+**What happened.** coreaudiod pid 404 (up 3.8 days, healthy until then) changed shape at 02:06–02:11.
+Held contexts stayed LOW and climbed slowly (4 → 111), while interval CPU went 15% → ~300% and RSS
+sawtoothed from 42 MB up to 21.7 GB (06:22), with troughs that never went back below ~880 MB. A
+fresh daemon is ~26 MB. Swap filled (33.3 / 33.8 GB) and load reached ~45. The operator heard
+YouTube audio in Dia stall, then a looping static or echo that played even with output muted.
+
+**Why nothing acted.** Two separate gaps:
+1. *The restart arms keyed on contexts only.* `--restart` fired at ctx ≥ 1000, or ctx ≥ 300 with
+   ≥ 100% CPU. ctx never passed 111, so the root watchdog never fired in 9 hours.
+2. *The alarm had one channel.* The user detector turned `hot` at 03:11 and tried the desk on every
+   run after that. `cc-notify --role desk` exits 3 when no desk role file exists, so 98 runs in a row
+   logged `action=notify-undelivered-rc3` and nobody was told.
+
+**Fix (landed).**
+- A third restart arm that ignores contexts: RSS ≥ 768 MB with interval CPU ≥ 50% on 3 consecutive
+  runs of one pid (`CA_WATCH_RESTART_RSS_MB`, `_RSS_CPU`, `_RSS_RUNS`; the count is the 7th field of
+  the state file). The input-grace and restart-gap guards apply to it unchanged.
+- A `bloated` verdict at RSS ≥ 512 MB (`CA_WATCH_WARN_RSS_MB`), so the hot flag and the alarm start
+  before CPU crosses the `hot` floor.
+- When the desk send fails for any reason, the detector shows a macOS banner instead
+  (`action=notified-banner`), damped by the same 6 h re-notify interval.
+
+**Thresholds, replayed on `~/.claude/logs/coreaudiod-watch.jsonl`** (1,380 rows, 2026-09-29 15:50
+→ 10-04 11:19, three daemon pids). Healthy rows (every row except pid 404 from 02:06 on): 1,268,
+max RSS 64 MB, max interval CPU 11%.
+
+| arm | first fires | healthy rows it fires on |
+|---|---|---|
+| old context arms | never | 0 |
+| `bloated` verdict (RSS ≥ 512 MB) | 02:31 (540 MB) | 0 |
+| new restart arm (768 MB, 50%, 3 runs) | 03:06 (1,663 MB, 58%) | 0 |
+
+The restart arm would have fired 55 min after onset and about 8 h 13 min before the last logged run
+(11:19). Its alarm would have reached the operator at 02:31 as a banner. The other candidates
+replayed (512 / 768 / 1,024 MB × 30 / 50% × 2 / 3 / 4 runs) all fire between 02:36 and 03:16, with 0
+healthy fires each. 768 MB was chosen over 512 MB for margin against the overload storm below; it
+costs 25 minutes.
+
+**The storm stays a non-restart.** E4's Sep 29 00:25 storm (475 contexts, 71% CPU at load ~75) had a
+footprint of 294.6 → 382.9 MB in its CPU report. That is half the 768 MB floor, and it fails the
+consecutive-run requirement if it is brief. `tests/coreaudiod-watch.bats` pins it: four runs at
+475 contexts, 71% and 383 MB never restart. Caveat: the report measured phys_footprint and the
+watcher reads ps RSS. They track each other but are not the same counter.
+
+**Not known.** Why the daemon grew memory without holding contexts. No CPU report or spindump from
+pid 404 was captured. The next occurrence should be sampled (`sample coreaudiod 10`) before the
+restart clears it.
 
 ## Re-derive
 

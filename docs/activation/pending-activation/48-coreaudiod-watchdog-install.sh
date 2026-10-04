@@ -19,7 +19,8 @@
 # Without --confirm it performs 1-2 and prints what 3 would do.
 #
 # WHAT IT CANNOT UNDO BY ITSELF: once loaded, the daemon will `killall coreaudiod` when >= 1000
-#   contexts are held (or >= 300 with >= 100% CPU), at most every 30 min and never while an audio
+#   contexts are held (or >= 300 with >= 100% CPU, or RSS >= 768 MB with >= 50% CPU on 3 runs in a
+#   row, the 2026-10-04 low-context shape), at most every 30 min and never while an audio
 #   input younger than 3 h is live. Audio drops for about a second at each restart. Uninstall:
 #     sudo launchctl bootout system/com.claude.coreaudiod-watchdog
 #     sudo rm /Library/LaunchDaemons/com.claude.coreaudiod-watchdog.plist /usr/local/libexec/claude-coreaudiod-watch.sh

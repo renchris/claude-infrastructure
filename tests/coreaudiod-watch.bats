@@ -5,6 +5,9 @@
 # 4,641 of them when restarted, reached ~200% CPU, and nothing on the box ever said so
 # (docs/research/coreaudiod-spin-2026-09-29.md). The instrument is the held-context count read from
 # `pmset -g assertions`; every binary is a stub here, so no test reads the live daemon or kills it.
+# 2026-10-04 added a second shape (low ctx, RSS to ~21 GB, CPU to ~300%) and a silenced alarm (the
+# desk send exited 3 with no desk registered, 98 runs in a row). RED-proof: on the pre-fix script the
+# bloat-restart test reads action=none on run 5, and the banner test reads notify-undelivered-rc3.
 
 setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
@@ -20,10 +23,20 @@ setup() {
   printf '#!/bin/bash\ncat "%s/pmset.out"\n' "$F" > "$F/pmset"
   printf '#!/bin/bash\necho "$*" >> "%s/killall.argv"\n' "$F" > "$F/killall"
   printf '#!/bin/bash\necho "$*" >> "%s/notify.argv"\n' "$F" > "$F/notify"
-  chmod +x "$F/ps" "$F/pmset" "$F/killall" "$F/notify"
+  printf '#!/bin/bash\necho "$*" >> "%s/banner.argv"\n' "$F" > "$F/banner"
+  chmod +x "$F/ps" "$F/pmset" "$F/killall" "$F/notify" "$F/banner"
   export CA_WATCH_PS="$F/ps" CA_WATCH_PMSET="$F/pmset" CA_WATCH_KILLALL="$F/killall" CA_WATCH_NOTIFY="$F/notify"
+  export CA_WATCH_BANNER="$F/banner"
   asrt 0
 }
+
+# ps_row <cumulative cpu time> <rss in MB> — rewrite the coreaudiod row (pid 777, 1 h old)
+ps_row() {
+  printf '%s\n' "  501   0:00.10     01:00  1000 /usr/bin/something" \
+                "  777   $1  01:00:00 $(( $2 * 1024 )) /usr/sbin/coreaudiod" > "$F/ps.out"
+}
+# root_run <now> — one --restart run at that clock
+root_run() { CA_WATCH_ROOT_OK=1 CA_WATCH_NOW="$1" run "$W" --restart; }
 
 # asrt <n output contexts> [<age of one extra audio-in context, HH:MM:SS>]
 # Each context is the real pair: an idle-sleep assertion AND its display-sleep twin, with a
@@ -97,7 +110,8 @@ field() { printf '%s\n' "$output" | grep -o "$1=[^ ]*" | head -1 | cut -d= -f2; 
   asrt 400
   run "$W" --notify
   [[ "$output" == *"action=notified"* ]] || false
-  [[ "$(cat "$F/notify.argv")" == *"400 leaked IO contexts"*"killall coreaudiod"* ]] || false
+  [[ "$(cat "$F/notify.argv")" == *"400 held IO contexts"*"killall coreaudiod"* ]] || false
+  [ ! -e "$F/banner.argv" ]                                  # a delivered desk send needs no banner
   CA_WATCH_NOW=1790000300 run "$W" --notify
   [[ "$output" == *"action=notify-damped"* ]] || false
   asrt 0;   CA_WATCH_NOW=1790000600 run "$W" --notify
@@ -141,6 +155,48 @@ field() { printf '%s\n' "$output" | grep -o "$1=[^ ]*" | head -1 | cut -d= -f2; 
   sed -i '' 's/ 0:10.00 / 9:10.00 /' "$F/ps.out"
   CA_WATCH_ROOT_OK=1 run "$W" --restart
   [[ "$output" == *"action=restarted"* ]] || false
+}
+
+@test "--restart: low-ctx bloat (RSS >= 768 MB, >= 50% CPU) restarts on the 3rd CONSECUTIVE run, whatever ctx reads" {
+  asrt 30                                                    # far below every context floor
+  echo "777 10 1789999700 ok 0 0" > "$CA_WATCH_STATE"        # a 6-field state file from before the arm
+  ps_row 3:10.00 2000;  root_run 1790000000                  # 60% interval CPU, 2000 MB: run 1
+  [[ "$output" == *"action=none"* ]] || false
+  ps_row 6:10.00 413;   root_run 1790000300                  # sawtooth trough under the floor: count resets
+  [[ "$output" == *"action=none"* ]] || false
+  ps_row 9:10.00 2000;  root_run 1790000600                  # run 1 again
+  ps_row 12:10.00 2000; root_run 1790000900                  # run 2
+  [[ "$output" == *"action=none"* ]] || false
+  [ ! -e "$F/killall.argv" ]
+  ps_row 15:10.00 2000; root_run 1790001200                  # run 3
+  [[ "$output" == *"action=restarted"* ]] || false
+  [[ "$output" == *"verdict=bloated"* ]] || false
+  [ "$(cat "$F/killall.argv")" = coreaudiod ]
+}
+
+@test "--restart: the 475-context overload storm (71% CPU, 383 MB) never restarts, however long it lasts" {
+  asrt 475
+  echo "777 10 1789999700 ok 0 0" > "$CA_WATCH_STATE"
+  local t=1790000000 c
+  for c in 3:43.00 7:16.00 10:49.00 14:22.00; do             # +213 s of CPU per 300 s run = 71%
+    ps_row "$c" 383; root_run "$t"; t=$(( t + 300 ))
+    [[ "$output" == *"cpu=71% (interval)"*"action=none"* ]] || false
+  done
+  [ ! -e "$F/killall.argv" ]
+}
+
+@test "--notify with no desk registered (rc 3) falls back to a banner, damped like the desk send" {
+  asrt 30; ps_row 0:10.00 540                                # 540 MB, low ctx: the bloated verdict
+  printf '#!/bin/bash\nexit 3\n' > "$F/notify"
+  run "$W" --notify
+  [[ "$output" == *"action=notified-banner"*"verdict=bloated"* ]] || false
+  [[ "$(cat "$F/banner.argv")" == *"coreaudiod bloated: 30 held IO contexts"*"540 MB"* ]] || false
+  CA_WATCH_NOW=1790000300 run "$W" --notify
+  [[ "$output" == *"action=notify-damped"* ]] || false
+  [ "$(wc -l < "$F/banner.argv" | tr -d ' ')" = 1 ]
+  rm -f "$CA_WATCH_STATE"; printf '#!/bin/bash\nexit 1\n' > "$F/banner"
+  run "$W" --notify                                          # banner refused too: never claims delivery
+  [[ "$output" == *"action=notify-undelivered-rc3"* ]] || false
 }
 
 @test "--restart refuses to run without root" {
