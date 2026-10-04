@@ -2191,7 +2191,7 @@ replay_box() {  # the first 3 lines aee462b0's box held after the pre-fix drain,
   [[ "$output" == *"verdict=ping"* ]] || false
 }
 
-@test "PRE-BIRTH positive: fresh mail after birth still wakes, and the held old lines print with it" {
+@test "PRE-BIRTH positive: fresh mail after birth still wakes; the old lines stay pending for the drain" {
   birth_row; replay_box
   ( sleep 2; printf '%s [peer] HANDOFF-PING fresh: done\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" >> "$MB" ) &
   local w=$!
@@ -2199,7 +2199,9 @@ replay_box() {  # the first 3 lines aee462b0's box held after the pre-fix drain,
   wait "$w" 2>/dev/null || true
   [ "$status" -eq 0 ]
   [[ "$output" == *"HANDOFF-PING fresh: done"* ]] || false
-  [[ "$output" == *"post-land RED"* ]] || false        # deferred into the real wake, never dropped
+  # Like the WAKE-PATH-DOWN skip, the pre-birth lines moved only the PRIVATE cursor, so they are not
+  # re-printed with the wake; .seen is untouched, so the boundary drain still delivers all four.
+  [ ! -f "$CC_MAILBOX_DIR/$UUID.seen" ]
 }
 
 @test "PRE-BIRTH: with no registry row yet, this kitty's start is the floor" {
