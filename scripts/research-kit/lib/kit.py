@@ -27,6 +27,7 @@ import json
 import math
 import os
 import re
+import socket
 import tempfile
 import time
 from pathlib import Path
@@ -394,6 +395,104 @@ def mint_id(path: Path, prefix: str) -> str:
         last["path"] = str(path.resolve())
         write_json_atomic(state, last)
     return f"{prefix}-{n}"
+
+
+# ── 4c. the program lease (audit 2026-10-04, continuity lens item 6) ────────────────────────────
+# <sealed>/lease.json names the ONE owner whose writing verbs may run: {owner, pid, host, acquired,
+# heartbeat}. Opt-in: with no lease file nothing is refused. Every writing verb of cc-research,
+# gate.sh, round.sh and seed.py calls lease_check first; the holder's own check is its heartbeat.
+
+LEASE_TTL_S = 1800.0  # a lease whose heartbeat is older than this is stale: anyone may write
+
+
+def lease_owner() -> str:
+    """CC_RESEARCH_OWNER, else the Claude session id, else pid:<parent pid>."""
+    return (
+        os.environ.get("CC_RESEARCH_OWNER")
+        or os.environ.get("CLAUDE_CODE_SESSION_ID")
+        or os.environ.get("CLAUDE_SESSION_ID")
+        or f"pid:{os.getppid()}"
+    )
+
+
+def lease_path(slug: str) -> Path:
+    return sealed_dir(slug) / "lease.json"
+
+
+def lease_age(lease: Dict[str, Any]) -> float:
+    try:
+        return parse_iso(now_iso()) - parse_iso(str(lease["heartbeat"]))
+    except (KeyError, ValueError) as e:
+        raise KitError(f"lease has no readable heartbeat ({e}); remove it by hand") from e
+
+
+def _lease_held(slug: str, owner: str) -> Optional[Dict[str, Any]]:
+    """The lease when a DIFFERENT owner holds it fresh, else None. Call under the lease lock."""
+    lease = read_json(lease_path(slug))
+    if lease and lease.get("owner") != owner and lease_age(lease) < LEASE_TTL_S:
+        return dict(lease)
+    return None
+
+
+def _lease_refusal(slug: str, lease: Dict[str, Any], owner: str) -> KitError:
+    return KitError(
+        f"program {slug} is leased to {lease.get('owner')} (pid {lease.get('pid')} on "
+        f"{lease.get('host')}, heartbeat {lease_age(lease):.0f} s ago; stale after "
+        f"{LEASE_TTL_S:.0f} s); you are {owner}. The holder releases it with "
+        f"`cc-research lease release --program {slug}`"
+    )
+
+
+def _lease_lock(slug: str) -> Any:
+    return mkdir_lock(sealed_dir(slug, create=True) / "lease.lock", "lease", "lease writer")
+
+
+def lease_check(slug: str, owner: Optional[str] = None) -> None:
+    """Refuse a writing verb while another owner holds a fresh lease. No lease file: no-op."""
+    if not lease_path(slug).exists():
+        return
+    owner = owner or lease_owner()
+    with _lease_lock(slug):
+        held = _lease_held(slug, owner)
+        if held:
+            raise _lease_refusal(slug, held, owner)
+        lease = read_json(lease_path(slug))
+        if lease and lease.get("owner") == owner:
+            lease["heartbeat"] = now_iso()
+            write_json_atomic(lease_path(slug), lease)
+
+
+def lease_acquire(slug: str, owner: Optional[str] = None) -> Dict[str, Any]:
+    """Take (or renew) the lease; refused while another owner holds it fresh."""
+    owner = owner or lease_owner()
+    with _lease_lock(slug):
+        held = _lease_held(slug, owner)
+        if held:
+            raise _lease_refusal(slug, held, owner)
+        old = read_json(lease_path(slug)) or {}
+        now = now_iso()
+        lease = {
+            "owner": owner,
+            "pid": os.getppid(),
+            "host": socket.gethostname(),
+            "acquired": old.get("acquired") if old.get("owner") == owner else now,
+            "heartbeat": now,
+        }
+        write_json_atomic(lease_path(slug), lease)
+        return lease
+
+
+def lease_release(slug: str, owner: Optional[str] = None) -> bool:
+    """Drop the lease; refused while another owner holds it fresh. False: there was none."""
+    owner = owner or lease_owner()
+    if not lease_path(slug).exists():
+        return False
+    with _lease_lock(slug):
+        held = _lease_held(slug, owner)
+        if held:
+            raise _lease_refusal(slug, held, owner)
+        lease_path(slug).unlink()
+        return True
 
 
 # ── 5. evidence levels (§3.4) and the conviction rule (§3.5) ────────────────────────────────────

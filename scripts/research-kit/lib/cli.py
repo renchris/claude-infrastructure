@@ -34,7 +34,33 @@ for p in (HERE, HERE.parents[1] / "lib", HERE.parent):  # kit libs · scripts/li
 import kit  # noqa: E402
 
 MODULES = ("cli_core", "cli_records", "cli_probe", "cli_cert", "cli_jobs",
-           "cli_refclass")
+           "cli_refclass", "lease")
+
+# Verbs (or "verb sub-verb") that never check the program lease: they only read, or, for gate,
+# lease and job, the callee checks for itself or must run whoever holds it (the scheduled passes
+# fire deadlines and mint ids under the kit's lock). Every other verb naming a program writes.
+LEASE_EXEMPT = {
+    "verdict", "pending", "doctor", "lint", "trace", "forecast", "menu", "ceiling", "slots",
+    "check-round", "index", "estimate", "decision show", "concern list",
+    "reference-class show", "reference-class check", "gate", "lease", "job",
+}
+
+
+def lease_target(a: argparse.Namespace) -> Optional[str]:
+    """The program a writing verb names, or None (a read verb, or no program named)."""
+    sub = next((str(v) for k, v in sorted(vars(a).items()) if k.endswith("_verb") and v), "")
+    if a.verb in LEASE_EXEMPT or f"{a.verb} {sub}" in LEASE_EXEMPT:
+        return None
+    if a.verb == "budget" and not getattr(a, "action", None):
+        return None  # bare budget prints
+    prog = getattr(a, "program", None)
+    rest = [str(x) for x in getattr(a, "rest", None) or []]  # pass-through verbs
+    for i, x in enumerate(rest):
+        if x == "--program" and i + 1 < len(rest):
+            prog = rest[i + 1]
+        elif x.startswith("--program="):
+            prog = x.split("=", 1)[1]
+    return prog or None
 
 
 def build() -> argparse.ArgumentParser:
@@ -48,6 +74,9 @@ def build() -> argparse.ArgumentParser:
 def main(argv: Optional[List[str]] = None) -> int:
     a = build().parse_args(argv)
     try:
+        slug = lease_target(a)
+        if slug:
+            kit.lease_check(kit.check_slug(slug))
         return int(a.fn(a))
     except kit.KitError as e:
         print(f"cc-research: {e}", file=sys.stderr)

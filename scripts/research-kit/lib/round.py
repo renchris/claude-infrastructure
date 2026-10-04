@@ -524,6 +524,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     a = ap.parse_args(argv)
     try:
         kit.check_slug(a.program)
+        kit.lease_check(a.program)  # run and close both write the program's rounds
         return int(a.fn(a))
     except kit.KitError as e:
         print(

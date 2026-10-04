@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -181,6 +180,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     a = ap.parse_args(argv)
     try:
+        if a.verb not in ("render", "requires"):  # every other gate verb writes
+            kit.lease_check(kit.check_slug(a.program))
         return int(a.fn(a))
     except kit.KitError as e:
         print(f"gate.sh: {e}", file=sys.stderr)

@@ -378,6 +378,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         kit.check_slug(a.program)
         if a.verb not in VAULT_WRITERS:
             return int(a.fn(a))
+        kit.lease_check(a.program)
         with vault_lock(a.program):
             return int(a.fn(a))
     except kit.KitError as e:
