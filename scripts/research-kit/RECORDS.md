@@ -58,8 +58,18 @@ failed, 2 usage or refusal, 3 a dead vendor lane, 4 a voided slot. Python is 3.9
 - Vendor binaries resolve by absolute path through the interactive shell (Anthropic: the newest versioned binary the
   `claude` launcher names); tests override with `CC_RESEARCH_BIN_ANTHROPIC|OPENAI|GOOGLE`.
 - `round.sh --kind frame-critique|certification|delta --round K` → refuses past `kit.r_max` (+1 only with a VALID
-  `extra-round` signature), refuses a third frame-critique round; writes `rounds/K/matrix.json`. Tests override the
-  courier with `CC_RESEARCH_COURIER`.
+  `extra-round` signature), refuses a third frame-critique round; writes `rounds/K/plan.json` then
+  `rounds/K/matrix.json`. Tests override the courier with `CC_RESEARCH_COURIER`. R_max bounds COUNTED certification
+  rounds; at most `UNCOUNTED_ROUNDS_MAX` rounds may be lost to a dead lane; a certification round needs a fresh
+  all-live `<sealed>/preflight.json` (`cli_cert.lane_refusal`, `PREFLIGHT_MAX_AGE_S`, exit 3). Re-running a round
+  that has a bundle and plan but no matrix resumes it (only slots without a complete panel run). `close` refuses a
+  counted round any of whose slots is not `complete`; a lane is live only when every one of its slots completed.
+- `cc-research check-round` JSON `rerun` lists every planned slot that is void, dead, partial or missing (each with
+  `reason`, `reruns_left`); `voided` is the void-only subset. `open-round` refuses (exit 3) on the same preflight rule.
+- Program lease `<sealed>/lease.json` `{owner, pid, host, acquired, heartbeat}` (`kit.lease_*`, `cc-research lease
+  acquire|release|show`, `LEASE_TTL_S`): while a fresh lease is held, other owners' writing verbs exit 2; no lease
+  file means no check. Ids are reserved under `kit.mint_id` (`$CC_RESEARCH_HOME/.mint/`); the seed vault is written
+  under a lock.
 - `estimate.py forecast` → JSON `{p50, p90, r_max, desk_mean, desk_n95, invisible_mean, p_any, quiet_streak,
   stop:"running|dry|cap"}` from `rounds/*/matrix.json`.
 - `seed.py plant|apply|prescreen|match|status` → vault `<sealed>/vault/seeds.enc`, key from the keychain item
