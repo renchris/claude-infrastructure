@@ -66,7 +66,7 @@ EOF
   echo "$output" | grep -q 'network.mojom.NetworkService'
   echo "$output" | grep -q 'video_capture.mojom.VideoCaptureService'
   # and it must hand over the one drivable remedy
-  echo "$output" | grep -q 'agent-browser close --all'
+  echo "$output" | grep -q 'Remedy: re-run this with --reap'
 }
 
 @test "3: NEGATIVE — a warm IDLE automation browser is silent (this is the designed steady state)" {
@@ -190,7 +190,7 @@ EOF
     run bash "$GUARD" --notify
   [ "$status" -eq 0 ]
   [ -s "$SENT" ]
-  grep -q 'agent-browser close --all' "$SENT"
+  grep -q 'Remedy: browser-spin-guard.sh --reap' "$SENT"
 }
 
 @test "12: --notify is DAMPED on a repeat while still spinning" {
@@ -288,4 +288,50 @@ EOF
   [ "$status" -eq 0 ]
   # and --notify must survive alongside it: reaping silently is how the operator stops learning
   echo "$output" | grep -q -- '--notify'
+}
+
+# ── per-session close (docs/research/concurrency-scale-2026-10-04 fix row 6) ───────────────────
+# RED-proof: on the pre-fix guard (git show 13b27133f:scripts/browser-spin-guard.sh) case 17 fails —
+# the closer is handed `close --all`, which closes the idle session too — and case 18 fails because
+# the closer runs at all for a tree no agent-browser daemon owns.
+reap_with_closer() { # runs --reap under /bin/bash (the launchd job's interpreter); closer argv → $CLOSED
+  CLOSED="$BATS_TEST_TMPDIR/closed.txt"; : > "$CLOSED"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s"\n' "$CLOSED" > "$BATS_TEST_TMPDIR/closer.sh"
+  printf '#!/bin/bash\nexit 0\n' > "$BATS_TEST_TMPDIR/killer.sh"
+  chmod +x "$BATS_TEST_TMPDIR/closer.sh" "$BATS_TEST_TMPDIR/killer.sh"
+  CC_SPIN_GUARD_PS="$FIX" CC_SPIN_GUARD_PSENV="$BATS_TEST_TMPDIR/psenv.txt" \
+  CC_SPIN_GUARD_KILL="$BATS_TEST_TMPDIR/killer.sh" CC_SPIN_GUARD_CLOSE="$BATS_TEST_TMPDIR/closer.sh" \
+    run /bin/bash "$GUARD" --reap
+}
+
+@test "17: --reap closes ONLY the session that owns the spinning tree, and logs the close" {
+  write_incident_fixture
+  # a second daemon with a warm idle browser: another live session's, and none of the guard's business
+  cat >> "$FIX" <<'EOF'
+ 4000     1 02-21:09:01   0.0 /Users/x/Library/Application Support/fnm/node-versions/v22.21.1/installation/lib/node_modules/agent-browser/bin/agent-browser-darwin-arm64
+ 4001  4000 01-15:08:10   0.2 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=0 --no-first-run
+EOF
+  cat > "$BATS_TEST_TMPDIR/psenv.txt" <<'EOF'
+3153 /x/agent-browser-darwin-arm64 AGENT_BROWSER_DAEMON=1 AGENT_BROWSER_SESSION=revise HOME=/Users/x
+4000 /x/agent-browser-darwin-arm64 AGENT_BROWSER_DAEMON=1 AGENT_BROWSER_SESSION=other HOME=/Users/x
+EOF
+  reap_with_closer
+  [ "$status" -eq 0 ]
+  [ "$(cat "$CLOSED")" = "--session revise close" ]
+  grep -q 'reap: CLOSE session=revise daemon=3153 root=80986' "$CC_SPIN_GUARD_LOG"
+}
+
+@test "18: --reap runs no close for a spinning tree that no agent-browser daemon owns (a film render)" {
+  cat > "$FIX" <<'EOF'
+70001 70000    02:00:00   0.1 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome --headless=new --remote-debugging-port=9333 --user-data-dir=/tmp/render-x
+70002 70001    02:00:00  97.0 /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Helper (GPU).app/Contents/MacOS/Google Chrome Helper (GPU) --type=gpu-process
+70000   500    02:00:05   3.0 node render.mjs
+ 4000     1 02-21:09:01   0.0 /Users/x/Library/Application Support/fnm/node-versions/v22.21.1/installation/lib/node_modules/agent-browser/bin/agent-browser-darwin-arm64
+EOF
+  printf '4000 /x/agent-browser-darwin-arm64 AGENT_BROWSER_SESSION=other\n' > "$BATS_TEST_TMPDIR/psenv.txt"
+  reap_with_closer
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'verdict=spin'
+  [ ! -s "$CLOSED" ]
+  grep -q 'reap: no graceful close for root 70001' "$CC_SPIN_GUARD_LOG"
 }

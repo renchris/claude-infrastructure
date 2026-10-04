@@ -80,7 +80,8 @@
 # spends most of its life blocked on the network and on the agent's next command, so it cannot reach
 # that floor; a wedge reaches it trivially (the incident read 94-100% against 2d20h lifetimes). The
 # population a reap can touch is, by construction, essentially only wedges. The reap is graceful
-# first (`agent-browser close --all`, which is what the daemon's own CLI does), hard-kills only the
+# first (a per-session `agent-browser --session <name> close` of the spinning tree only — see the
+# reap block for why it is no longer `close --all`), hard-kills only the
 # survivors, and re-reads argv immediately before each kill so a recycled pid is refused rather than
 # killed. Cost of a false positive: a warm browser cold-starts on the next command. Cost of a false
 # negative, measured twice now: the box.
@@ -94,7 +95,7 @@
 # Usage:
 #   browser-spin-guard.sh              # detect + report (never kills)
 #   browser-spin-guard.sh --notify     # + damped cc-notify to the desk role on a state change
-#   browser-spin-guard.sh --reap       # graceful `agent-browser close --all`, then KILL survivors
+#   browser-spin-guard.sh --reap       # close only the spinning tree's session, then KILL survivors
 #   browser-spin-guard.sh --json       # machine-readable
 #
 # Env:
@@ -104,7 +105,8 @@
 #   CC_SPIN_RENOTIFY_S (default 21600) re-assert interval while STILL spinning (6 h)
 #   CC_SPIN_GUARD_PS                   test seam: file replacing the live ps snapshot
 #   CC_SPIN_GUARD_KILL                 test seam: collector invoked instead of kill(1)
-#   CC_SPIN_GUARD_CLOSE                test seam: command replacing `agent-browser close --all`
+#   CC_SPIN_GUARD_CLOSE                test seam: command replacing agent-browser (gets `--session <name> close`)
+#   CC_SPIN_GUARD_PSENV                test seam: file of "<pid> <env…>" rows replacing the live `ps -E` read
 #   CC_SPIN_GUARD_NOTIFY               test seam: command replacing cc-notify
 #   CC_SPIN_GUARD_STATE                test seam: damping state file
 set -uo pipefail
@@ -230,7 +232,7 @@ EOF
     log "notify: damped (still spinning, last sent $((now - last))s ago)"
     write_state spin "$last"; return 0
   fi
-  msg="⚠️ wedged automation browser: $1 processes at $2% aggregate CPU for >$((AGE_S/60))m. This is the 2026-08-17 class (load 244, 0% idle). Remedy: agent-browser close --all"
+  msg="⚠️ wedged automation browser: $1 processes at $2% aggregate CPU for >$((AGE_S/60))m. This is the 2026-08-17 class (load 244, 0% idle). Remedy: browser-spin-guard.sh --reap (closes only the spinning session)"
   # DELIVERY IS CHECKED, NOT CLAIMED (2026-08-20). This used to log "SENT" unconditionally after a
   # `|| true`, so the log asserted an outcome it had never looked at — the repo's own
   # claimed-outcome-vs-checked-outcome class, and the same defect cc-reaper was fixed for. It
@@ -280,18 +282,67 @@ else
   printf 'browser-spin-guard: WEDGED AUTOMATION BROWSER — %s processes, %s%% aggregate CPU\n\n' "$NPEG" "$TOTCPU"
   printf '  %-8s %7s %10s  %s\n' PID %CPU AGE ROLE
   printf '%s\n' "$FOUND" | awk -F'\t' '{ printf "  %-8s %7s %9dm  %s\n", $1, $2, $3/60, $4 }'
-  printf '\nRemedy: agent-browser close --all   (or re-run this with --reap)\nverdict=spin\n'
+  printf '\nRemedy: re-run this with --reap (closes only the spinning session, then kills survivors)\nverdict=spin\n'
 fi
 
 [ "$REAP" = 1 ] || exit 0
 
 # ── reap ──────────────────────────────────────────────────────────────────────────────────────
-# Graceful first: `agent-browser close --all` is the vendor's own teardown and lets the daemon
-# clean up its session state. Then hard-kill whatever is STILL pegged.
+# Graceful first, and ONLY for the spinning tree's own session. This used to run
+# `agent-browser close --all`, unlogged, on every SPIN tick: measured 2026-10-03/04
+# (docs/research/concurrency-scale-2026-10-04, fix row 6) as ~26 fleet-wide browser wipes, 12 of
+# them in 71 minutes, that closed every live session's warm browser and killed 0 spinning
+# processes — the pegged trees were film renders no agent-browser daemon owns. So the close is now
+# per session: walk each pegged process to its automation root, then to the root's parent; only if
+# that parent is an agent-browser daemon, read the session name the daemon was started with
+# (AGENT_BROWSER_SESSION in its environment) and close that one session. Every close, and every
+# tree that gets none, is logged. The hard kill below is unchanged and runs either way.
 printf '\nreaping…\n'
-if [ -n "${CC_SPIN_GUARD_CLOSE:-}" ]; then
-  "$CC_SPIN_GUARD_CLOSE" || true
-else
+
+# spin_daemons — "<daemon-pid>\t<root-pid>" per distinct agent-browser daemon owning a pegged tree,
+# or "-\t<root-pid>" for a pegged tree whose root's parent is anything else.
+spin_daemons() {
+  printf '%s\n' "$SNAP" | awk -v pegged="$(printf '%s\n' "$FOUND" | cut -f1 | tr '\n' ' ')" '
+    {
+      if ($1 !~ /^[0-9]+$/) next
+      a=$5; for (i=6; i<=NF; i++) a=a" "$i
+      P[$1]=$2; A[$1]=a
+      if (a ~ /--remote-debugging-port/ && a !~ /--type=/) ROOT[$1]=1
+    }
+    END {
+      n=0; for (p in P) n++
+      m=split(pegged, PEG, " ")
+      for (k=1; k<=m; k++) {
+        q=PEG[k]; hops=0; r=""
+        while (q != "" && q > 1 && hops <= n) { if (q in ROOT) { r=q; break }; q=P[q]; hops++ }
+        if (r == "" || (r in SEEN)) continue
+        SEEN[r]=1
+        d=P[r]
+        if (d != "" && (d in A) && A[d] ~ /agent-browser-(darwin|linux|win32)-[a-z0-9]+( |$)/ && A[d] !~ /--type=/)
+          printf "%s\t%s\n", d, r
+        else
+          printf "-\t%s\n", r
+      }
+    }' | sort -u
+}
+
+# daemon_session <pid> — the daemon's AGENT_BROWSER_SESSION, or nothing. Under a fixture snapshot
+# the environment comes ONLY from the CC_SPIN_GUARD_PSENV fixture ("<pid> <env…>" rows): a fixture
+# pid must never be looked up in the live process table, where it names a stranger.
+daemon_session() {
+  local row
+  if [ -n "${CC_SPIN_GUARD_PSENV:-}" ]; then
+    row="$(awk -v p="$1" '$1 == p' "$CC_SPIN_GUARD_PSENV" 2>/dev/null)"
+  elif [ -n "${CC_SPIN_GUARD_PS:-}" ]; then
+    row=""
+  else
+    row="$(/bin/ps -E -ww -p "$1" -o command= 2>/dev/null)" || row=""
+  fi
+  printf '%s\n' "$row" | tr ' ' '\n' | sed -n 's/^AGENT_BROWSER_SESSION=//p' | head -1
+}
+
+_ab_close=""
+if [ -z "${CC_SPIN_GUARD_CLOSE:-}" ]; then
   # `type -P`, never a bare `agent-browser` at command position. This job's PATH is
   # com.claude.browser-spin-guard.plist's, and on this box agent-browser exists ONLY inside an fnm
   # multishell dir — a path that changes per shell — so the bare name resolved in the operator's
@@ -299,13 +350,40 @@ else
   # so the unreachable case stays a skip, but a LOGGED one: a silent skip is exactly the fail-open
   # polarity unattended-path-lint exists to catch. The hard kill below runs either way.
   _ab_close="$(type -P agent-browser 2>/dev/null || true)"
-  if [ -n "$_ab_close" ]; then
-    "$_ab_close" close --all >/dev/null 2>&1 || true
-  else
+  if [ -z "$_ab_close" ]; then
+    log "reap: close SKIPPED — agent-browser is not on this job's PATH"
     printf '  agent-browser is not on this job%s PATH — skipping the graceful close, going straight to the hard kill\n' "'s"
   fi
-  sleep 3
 fi
+
+NCLOSE=0
+while IFS="$(printf '\t')" read -r dpid rpid; do
+  [ -n "$rpid" ] || continue
+  if [ "$dpid" = "-" ]; then
+    log "reap: no graceful close for root $rpid — its parent is not an agent-browser daemon"
+    continue
+  fi
+  sess="$(daemon_session "$dpid")"
+  case "$sess" in
+    ''|*[!A-Za-z0-9_.-]*)
+      log "reap: no graceful close for root $rpid — daemon $dpid carries no usable session name"
+      continue ;;
+  esac
+  if [ -n "${CC_SPIN_GUARD_CLOSE:-}" ]; then
+    "$CC_SPIN_GUARD_CLOSE" --session "$sess" close || true
+  elif [ -n "$_ab_close" ]; then
+    "$_ab_close" --session "$sess" close >/dev/null 2>&1 || true
+  else
+    continue
+  fi
+  NCLOSE=$((NCLOSE+1))
+  log "reap: CLOSE session=$sess daemon=$dpid root=$rpid"
+  printf '  closed agent-browser session %s (daemon %s)\n' "$sess" "$dpid"
+done <<EOF
+$(spin_daemons)
+EOF
+# Give a closed session a moment to exit before the survivors are judged — only when one was closed.
+if [ "$NCLOSE" -gt 0 ] && [ -z "${CC_SPIN_GUARD_CLOSE:-}" ]; then sleep 3; fi
 
 NKILL=0
 while IFS="$(printf '\t')" read -r pid cpu age role argsig; do
