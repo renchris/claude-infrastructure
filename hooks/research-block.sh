@@ -28,11 +28,37 @@ _rl="$_here/lib/research-router.sh"
 rr_registry_present || exit 0
 rr_init "$0" || exit 0
 input="$(cat)"
-cwd="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)"
+# One jq parse yields the cwd and the session id, \x1f-separated: a non-whitespace IFS keeps an
+# empty cwd from shifting the fields. A session id that is neither a string nor absent prints
+# sidt=other, which never takes the fast exit below.
+fields="$(printf '%s' "$input" | jq -r '[(.cwd // "" | tostring),
+  (.session_id | if type == "string" then "s" elif . == null then "n" else "o" end),
+  (.session_id | if type == "string" then . else "" end)] | join("\u001f")' 2>/dev/null)" && parsed=1 || parsed=0
+IFS=$'\x1f' read -r cwd sidt sid <<EOF
+$fields
+EOF
 slug=""
 if [ -n "$cwd" ]; then
   res="$(rp_resolve_cwd "$cwd" 2>/dev/null)"
   slug="${res%% *}"
+fi
+# FAST EXIT (docs/research/concurrency-scale-2026-10-04 fix row 4). router.py `tool` allows, with
+# no output, whenever the cwd resolves to no program AND the session has no route record — and
+# that is every tool call of every session outside a program's roots, on a machine whose registry
+# exists. Deciding it here saves the python start. The route record's name is router.py
+# route_path(): sid with [^A-Za-z0-9_.-] → _, cut at 128 chars, "unknown" when empty. Rather than
+# re-implement that sanitizer, the fast exit is taken only for a sid the sanitizer leaves
+# UNCHANGED (or an empty/absent one), so the two cannot drift; any other sid, a payload jq could
+# not parse, or a multi-line field goes to the router as before.
+_rb_no_route() { # $1=sid → rc 0 iff the sid is sanitizer-stable and has no route record
+  local LC_ALL=C s="${1:-unknown}"   # byte ranges: a locale must not widen A-Z past ASCII
+  case "$s" in *[!A-Za-z0-9_.-]*) return 1 ;; esac
+  [ "${#s}" -le 128 ] || return 1
+  [ ! -e "${CC_RESEARCH_HOME:-$HOME/.claude/autonomy/research}/route-state/$s.json" ]
+}
+if [ "$parsed" = 1 ] && [ -z "$slug" ] && [ "$sidt" != o ] && [ "${fields#*$'\n'}" = "$fields" ] \
+  && _rb_no_route "$sid"; then
+  exit 0
 fi
 printf '%s' "$input" | /usr/bin/env python3 "$RR_ROUTER" tool --program "$slug" 2>/dev/null
 exit 0

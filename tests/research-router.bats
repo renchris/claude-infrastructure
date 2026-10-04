@@ -319,3 +319,45 @@ STUB
   grep -qx 'inner=1' "$STUB_ARGS"
   grep -qx 'files=0' "$STUB_ARGS"
 }
+
+# ── the block's fast exit (docs/research/concurrency-scale-2026-10-04 fix row 4) ────────────────
+# RED-proof: on the pre-fix hook (git show 13b27133f:hooks/research-block.sh) the first case below
+# fails — the router's python starts on every tool call, program or not.
+#
+# pyspy <cwd> <sid> — one PreToolUse through the real hook with a python3 on PATH that records its
+# start and then runs the real interpreter, so the decision is the router's own. Prints the
+# decision, then "py=<starts>".
+pyspy() {
+  local real; real="$(command -v python3)"
+  mkdir -p "$BATS_TEST_TMPDIR/spy"
+  printf '#!/bin/bash\necho x >> "%s"\nexec "%s" "$@"\n' "$BATS_TEST_TMPDIR/py.log" "$real" > "$BATS_TEST_TMPDIR/spy/python3"
+  chmod +x "$BATS_TEST_TMPDIR/spy/python3"
+  : > "$BATS_TEST_TMPDIR/py.log"
+  jq -nc --arg c "$1" --arg s "$2" '{session_id:$s,cwd:$c,tool_name:"Agent",tool_input:{prompt:"x",description:"x"}}' \
+    | PATH="$BATS_TEST_TMPDIR/spy:$PATH" bash "$BLOCK" | jq -r '.hookSpecificOutput.permissionDecision // empty' | grep -q deny \
+    && echo deny || echo allow
+  echo "py=$(wc -l < "$BATS_TEST_TMPDIR/py.log" | tr -d ' ')"
+}
+
+@test "fast exit: a tool call outside every program root, in a session with no route record, allows without starting python" {
+  state certified
+  run pyspy "$BATS_TEST_TMPDIR/elsewhere" s-none
+  [ "$output" = "allow"$'\n'"py=0" ]
+}
+
+@test "fast exit is not taken inside a program root, nor for a session that carries a route record" {
+  state certified
+  run pyspy "$PROG/src" s-none
+  [ "$output" = "deny"$'\n'"py=1" ]
+  prompt "are we done?" "$PROG/src" s-routed >/dev/null
+  run pyspy "$BATS_TEST_TMPDIR/elsewhere" s-routed
+  [ "$output" = "deny"$'\n'"py=1" ]
+}
+
+@test "fast exit is not taken for a session id the router would rename, so its sanitized record still decides" {
+  state certified
+  prompt "are we done?" "$PROG/src" "a/b c" >/dev/null
+  [ -f "$CC_RESEARCH_HOME/route-state/a_b_c.json" ]
+  run pyspy "$BATS_TEST_TMPDIR/elsewhere" "a/b c"
+  [ "$output" = "deny"$'\n'"py=1" ]
+}
