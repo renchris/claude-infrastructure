@@ -410,8 +410,11 @@ mk_reaped_worktree() { # <repo-name> <branch> <wtpath>
 @test "GATE admit — a quiet box resumes, and the admission is ANNOUNCED not silent" {
   # An admitted spawn still says which terms it evaluated. A gate that is silent when it admits is
   # indistinguishable from a gate that is not there, which is the state this row closed.
+  # Every term is pinned quiet, not only load and headroom: the compressor and active-session terms
+  # read the live box, and a busy box shed this "quiet" case (2026-10-04, compressor 57% > 50%).
   run env -u CC_ADMIT_DONE CC_ADMIT_GATE=on \
       CC_ADMIT_LOADAVG_OVERRIDE=0.1 CC_ADMIT_HEADROOM_OVERRIDE=64 \
+      CC_ADMIT_SEGMENT_OVERRIDE=1 CC_SP_ACTIVE_OVERRIDE=0 \
       CC_ADMIT_STATE_DIR="$BATS_TEST_TMPDIR/admit-ok" \
       CC_RESUME_DRYRUN=1 timeout 60 "$RRO" next "$BATS_TEST_TMPDIR/wts/gate-ok" SID-OK feat/gate-ok
   [ "$status" -ne 9 ] || { echo "a quiet box was shed: $output"; false; }
