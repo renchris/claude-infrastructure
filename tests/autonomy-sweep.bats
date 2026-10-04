@@ -101,7 +101,7 @@ setup() {
   export CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl"
   export CC_DECIDE_BIN="$REPO/bin/cc-decide"
   export CC_BACKLOG_BIN="$REPO/bin/cc-backlog"
-  # ⚠️ EVERY dir the sweep can delete files from must be redirected here. The sweep age-reaps six event
+  # ⚠️ EVERY dir the sweep can delete files from must be redirected here. The sweep age-reaps seven event
   # dirs; any one left unexported falls back to its $HOME default and the suite becomes a reaper
   # against LIVE state. (It did: an unexported CC_TEARDOWN_RECORDS_DIR let a test run delete 6 real
   # ~/.claude/cc-teardown records, 2026-07-25. A destructive default is the harness's bug.)
@@ -371,7 +371,7 @@ mk_marker() { # <file> <pane> <mode> [young]  — aged 1 h by default (> the 900
   [ "$(notify_count)" -eq 1 ]
 }
 
-# ══ age-reap of the six write-only event dirs (audit 03 §1b/§1c fix 5) ═════════════════════════
+# ══ age-reap of the write-only event dirs (audit 03 §1b/§1c fix 5) ═════════════════════════
 # L2: each case asserts the failure-DISTINCT pair — OLD reaped AND YOUNG kept. Asserting only the
 # reap would stay green if the horizon collapsed to 0 and ate live records; asserting only the keep
 # would stay green if the reaper never ran at all.
@@ -379,12 +379,13 @@ mk_marker() { # <file> <pane> <mode> [young]  — aged 1 h by default (> the 900
 mk_old()   { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; touch -t "$(ago 9d)" "$1"; }
 mk_young() { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; }
 
-@test "all six event dirs: records past the horizon are reaped, young ones kept" {
+@test "every event dir: records past the horizon are reaped, young ones kept" {
   mk_old   "$CC_PAGES_DIR/old.page";                 mk_young "$CC_PAGES_DIR/new.page"
   mk_old   "$CC_COMMS_ALARM_DIR/old.json";           mk_young "$CC_COMMS_ALARM_DIR/new.json"
   mk_old   "$CC_PUSH_RECORDS_DIR/old.json";          mk_young "$CC_PUSH_RECORDS_DIR/new.json"
   mk_old   "$CC_COMPLETION_RECORDS_DIR/old.json";    mk_young "$CC_COMPLETION_RECORDS_DIR/new.json"
   mk_old   "$CC_TEARDOWN_RECORDS_DIR/old.json";      mk_young "$CC_TEARDOWN_RECORDS_DIR/new.json"
+  mk_old   "$CC_ANNOUNCE_ALARM_DIR/old.json";        mk_young "$CC_ANNOUNCE_ALARM_DIR/new.json"
 
   run "${SWEEP_TO[@]}" bash "$SWEEP"
   [ "$status" -eq 0 ]
@@ -394,6 +395,11 @@ mk_young() { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; }
   [ ! -f "$CC_PUSH_RECORDS_DIR/old.json" ];       [ -f "$CC_PUSH_RECORDS_DIR/new.json" ]
   [ ! -f "$CC_COMPLETION_RECORDS_DIR/old.json" ]; [ -f "$CC_COMPLETION_RECORDS_DIR/new.json" ]
   [ ! -f "$CC_TEARDOWN_RECORDS_DIR/old.json" ];   [ -f "$CC_TEARDOWN_RECORDS_DIR/new.json" ]
+  [ ! -f "$CC_ANNOUNCE_ALARM_DIR/old.json" ];     [ -f "$CC_ANNOUNCE_ALARM_DIR/new.json" ]
+  # announce-alarms is surfaced as well as reaped, so an unread one is counted before it goes —
+  # and only the old one: the young record is still inside the horizon.
+  grep -q "\"record\":\"$CC_ANNOUNCE_ALARM_DIR/old.json\".*\"store\":\"announce-alarms\"" "$CC_EXPIRED_LEDGER"
+  ! grep -q "$CC_ANNOUNCE_ALARM_DIR/new.json" "$CC_EXPIRED_LEDGER" || false
 }
 
 # ── the durable ledgers are NEVER age-reaped (they are the exclusion, not an oversight) ────────

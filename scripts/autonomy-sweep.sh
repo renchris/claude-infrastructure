@@ -72,7 +72,7 @@ IDL="${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
 SEEN_DIR="${CC_SWEEP_SEEN_DIR:-$HOME/.claude/autonomy/sweep-seen}"
 SEEN_TTL="${CC_SWEEP_SEEN_TTL_DAYS:-7}"
 LADDER="${CC_SWEEP_LADDER:-v2}"
-# The six write-only event dirs this sweep now age-reaps (defaults match each PRODUCER's own env
+# More write-only event dirs this sweep age-reaps, beside PAGES, ALARM and COMPLETION (defaults match each PRODUCER's own env
 # name, so a test that redirects the producer redirects the reaper with it).
 COMMS_ALARM_DIR="${CC_COMMS_ALARM_DIR:-$HOME/.claude/autonomy/comms-alarms}"
 PUSH_RECORDS_DIR="${CC_PUSH_RECORDS_DIR:-$HOME/.claude/autonomy/push-records}"
@@ -1193,6 +1193,7 @@ expire_scan() { # <dir> <store-label> [verdict-filtered:1]
 }
 expire_scan "$HANDOFF_ALARM_DIR" handoff-alarms
 expire_scan "$PAGES_DIR"         pages
+expire_scan "$ALARM_DIR"         announce-alarms
 expire_scan "$COMPLETION_DIR"    completion-push 1
 # Emitted ONLY when it is non-zero: a row asserting "0 records were lost" on every 300 s tick would
 # be the alarm that always fires, and reading one would tell the operator nothing (alarm-polarity).
@@ -1212,6 +1213,8 @@ reap_event_dir() { # <dir>
   find "$1" -maxdepth 1 -type f -mtime +"$EVENT_TTL" -delete 2>/dev/null || true
 }
 reap_event_dir "$PAGES_DIR"          # supervisor page stamps  (389 files, oldest 07-14)
+reap_event_dir "$ALARM_DIR"          # cc-announce alarms      (1,301 past 7 d, 2026-10-04: never reaped, so
+                                     #   each one re-surfaced as unseen once its .seen marker aged out)
 reap_event_dir "$COMMS_ALARM_DIR"    # comms safety gate       (395 files, ZERO rm sites before this)
 reap_event_dir "$PUSH_RECORDS_DIR"   # push-send verdicts      (318 files)
 reap_event_dir "$COMPLETION_DIR"     # completion-push records (77 files)
