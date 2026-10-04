@@ -7,10 +7,12 @@
 The caps live HERE, in code (§10 item 17), and every refusal names its cap (exit 2):
   - frame critique: exactly 2 rounds of 6 reviewers across at least 3 vendor families;
   - certification: rounds in order, none skipped, each opened only after the last one closed; the
-    frame critique must have run both rounds first; no round past
+    frame critique must have run both rounds first; no counted round past
     R_max = min(round-1 forecast p90 + 4, profile hard cap), +1 only for a VALID operator-signed extra
-    round set (one per program); the round equal to R_max is verification-only; no round after the
-    stop rule has fired (K quiet rounds at r >= K + 1);
+    round set (one per program); the counted round equal to R_max is verification-only; rounds lost
+    to a dead lane spend no R_max but stop at UNCOUNTED_ROUNDS_MAX; none opens without a fresh
+    all-live vendor preflight (exit 3); no round after the stop rule has fired (K quiet rounds at
+    r >= K + 1);
   - delta: at most 2 per escape, the second verification-only.
 Slots run in parallel through courier.sh. A dead or voided slot is re-run at most twice; a lane whose
 every slot is still dead or void is DEAD, and a round with a dead lane is not counted. A dead lane's
@@ -45,6 +47,10 @@ FC_DEFAULT = [
     ("openai", "frame-rows-only"),
     ("google", "frame-rows-only"),
 ]
+# Certification rounds lost to a dead lane (uncounted) that the program tolerates. They do not spend
+# R_max, so without their own cap a vendor walled for good would loop rounds forever. 2 covers the
+# audit's ChatGPT Plus wall case (rounds 5-6 lost, upfront-method-audit-2026-10-04) and no more.
+UNCOUNTED_ROUNDS_MAX = 2
 
 
 class Refused(kit.KitError):
@@ -165,12 +171,21 @@ def plan_slots(
         raise Refused(f"round {done[-1]['round']} is not closed yet (round.sh close)")
     p90 = (done[0].get("forecast") or {}).get("p90") if done else None
     rmax = kit.r_max(fr["profile"], p90, extra_round_granted(slug))
-    if n > rmax:
+    counted = [m for m in done if m.get("counted")]
+    # R_max bounds COUNTED rounds: a round lost to a dead lane read nothing, so it spends no review
+    # budget. UNCOUNTED_ROUNDS_MAX bounds those instead, so a permanently walled vendor cannot loop.
+    lost = len(done) - len(counted)
+    if lost > UNCOUNTED_ROUNDS_MAX:
         raise Refused(
-            f"round {n} is past R_max = {rmax} (min(round-1 p90 + {kit.CAPS['rp90_slack_rounds']}, "
+            f"{lost} certification rounds were lost to a dead lane, past the cap of "
+            f"{UNCOUNTED_ROUNDS_MAX} uncounted rounds; the lane must be restored before review continues"
+        )
+    if len(counted) + 1 > rmax:
+        raise Refused(
+            f"round {n} would be counted round {len(counted) + 1}, past R_max = {rmax} "
+            f"(min(round-1 p90 + {kit.CAPS['rp90_slack_rounds']}, "
             f"hard cap {prof['hard_cap']}){', +1 extra set' if extra_round_granted(slug) else ''})"
         )
-    counted = [m for m in done if m.get("counted")]
     k = prof["quiet_to_stop"]
     if (
         len(done) >= k + 1
@@ -189,7 +204,7 @@ def plan_slots(
             f"a {fr['profile']} round is {prof['reviewers_per_round']} reviewers, not {len(slots)}"
         )
     check_families(slots, fr, 3)
-    return str(n), slots, n == rmax, rmax
+    return str(n), slots, len(counted) + 1 == rmax, rmax
 
 
 def run_slots(
@@ -280,6 +295,13 @@ def cmd_run(a: argparse.Namespace) -> int:
     rd = rounds_dir(a.program) / rid
     if (rd / "matrix.json").exists():
         raise Refused(f"round {rid} already ran")
+    if a.kind == "certification":
+        import cli_cert  # here, not at the top: cli_cert imports this module
+
+        why = cli_cert.lane_refusal(a.program, {v for v, _ in slots})
+        if why:  # before anything is written: a refused round mints no round dir
+            print(f"round.sh: refused: {why}", file=sys.stderr)
+            return 3
     # A bundle with no matrix.json is a round whose process died mid-run. courier.sh refuses a second
     # bundle, so re-running it from scratch is impossible: resume it on the bundle and plan it already
     # has, re-running only the planned slots with no complete panel.

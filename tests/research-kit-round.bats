@@ -35,6 +35,17 @@ echo "$vendor $pid" >> "$CC_RESEARCH_RECORDS/runs.log"
 exit "$rc"
 EOF
   chmod +x "$CC_RESEARCH_COURIER"
+  preflight 1
+}
+
+preflight() { # <age in hours> [dead vendor]: preflight.json as courier.sh preflight writes it
+  mkdir -p "$CC_RESEARCH_HOME/demo"
+  /usr/bin/python3 -c "
+import json, sys, time
+at = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(time.time() - float(sys.argv[1]) * 3600))
+json.dump({v: {'ok': v != sys.argv[2], 'model_id': None, 'error': None if v != sys.argv[2] else 'walled', 'at': at}
+           for v in ('anthropic', 'frontier', 'openai', 'google')}, open(sys.argv[3], 'w'))" \
+    "$1" "${2:-}" "$CC_RESEARCH_HOME/demo/preflight.json"
 }
 
 mat() { # <dir> <kind> <seq> [extra json fields]
@@ -127,6 +138,44 @@ field() { /usr/bin/python3 -c "import json; m=json.load(open('$CC_RESEARCH_RECOR
   run_cert 7
   [ "$status" -eq 2 ]
   [[ "$output" == *"past R_max = 6"* ]]
+}
+
+lost() { # <round>...: closed rounds lost to a dead lane (uncounted)
+  local i; for i in "$@"; do
+    mat "$i" certification "$i" ',"quiet":false,"new_material":0'
+    /usr/bin/python3 -c "import json; p='$CC_RESEARCH_RECORDS/rounds/$i/matrix.json'; m=json.load(open(p)); m['counted']=False; json.dump(m, open(p,'w'))"
+  done
+}
+
+@test "rounds lost to a dead lane do not spend R_max: the counted round at the boundary still runs" {
+  fc_done; certs 1 4; lost 5 6
+  /usr/bin/python3 -c "import json; p='$CC_RESEARCH_RECORDS/rounds/1/matrix.json'; m=json.load(open(p)); m['forecast']={'p50':1,'p90':1}; json.dump(m, open(p,'w'))"
+  run_cert 7
+  [ "$status" -eq 0 ]
+  [ "$(field 7 'm["verification_only"], m["r_max"]')" = "True 5" ]
+}
+
+@test "past the cap on uncounted rounds no round opens until the lane is restored" {
+  fc_done; certs 1 2; lost 3 4 5
+  run_cert 6
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"uncounted"*"restored"* ]]
+}
+
+@test "a stale vendor preflight refuses a certification round before any round dir is written" {
+  fc_done; preflight 30
+  run_cert 1
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"stale"* ]]
+  [ ! -e "$CC_RESEARCH_RECORDS/rounds/1" ]
+}
+
+@test "a dead lane in a fresh preflight refuses a certification round" {
+  fc_done; preflight 1 openai
+  run_cert 1
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"dead lane(s) openai"* ]]
+  [ ! -e "$CC_RESEARCH_RECORDS/rounds/1" ]
 }
 
 @test "after K quiet counted rounds the stop rule refuses another round" {
