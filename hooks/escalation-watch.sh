@@ -1,82 +1,48 @@
 #!/bin/bash
 # shellcheck disable=SC2015  # file-wide: the selftest's `[ test ] && okp || badp` reporter idiom
-# escalation-watch.sh — SessionStart: the GUARANTEED READER for the escalation dead-letter stores (D3).
+# escalation-watch.sh — SessionStart: the HEALTH check on the escalation pipeline (D3).
 #
-# Why: durable escalation records are written into five stores, and until now NOTHING session-facing
-# read them. The push lane (desk role → banner) is liveness-dependent and currently dead — a live
-# sweep row reads `"notified":"no-desk-role","delivered":false` while carrying 12 new pages, 12 new
-# alarms and 12 stuck completion pushes. With no desk pane the operator can go days blind (F6/F8/F9).
-# This hook is the pull lane that cannot be dead: SessionStart fires on every new session regardless
-# of roles, panes, banners or network. Advisory only (additionalContext); never blocks; fail-open;
-# pure read — it mutates NOTHING, not even a damping marker.
+# Durable escalation records land in six stores (handoff alarms, announce alarms and degrades,
+# completion pushes, pages, M3 mail dead letters). The operator's COUNT of unseen records is the
+# Stop readout's `◆ N escalation record(s) unseen` line (hooks/operator-readout.sh,
+# escalation_unseen_count), which reads all six. This hook no longer repeats that count. It reports
+# only the two conditions under which that count is WRONG while looking fine:
 #
-# ZERO unseen records ⇒ ZERO output. That is the contract, not an optimisation: a channel that speaks
-# at every session start trains the operator to skip it (alarm-polarity law — an alarm that always
-# fires carries the same zero bits as one that cannot).
+#   • the sweep is dead — autonomy-sweep has never run, or last ran more than SWEEP_MAX_AGE_S ago,
+#     so records are not being drained or paged;
+#   • the scan cannot run — perl/Digest::SHA is unavailable, in which case the Stop readout's
+#     counter prints 0 for a board it never read.
 #
-# ── UNSEEN, and the two places the frozen design misdescribed its own stores ─────────────────────
-# (1) SEEN MARKER. HANDOFF_FAILURE_DETECTION_V2 §FROZEN INTERFACE calls the marker
-#     `$SEEN_DIR/<record-basename>.seen` "(existing sweep convention)". It is not. The convention
-#     (scripts/autonomy-sweep.sh:89-91) is `sha256(FULL PATH) | cut -c1-32`, with NO suffix — live
-#     proof: all 1191 markers in the seen dir are 32-hex, none ends in `.seen`. Reproducing the
-#     documented form instead of the real one would render every already-drained record forever
-#     (390 live announce-alarms ⇒ a permanent 390-record nag), which is precisely the failure this
-#     hook exists to avoid. So SEEN = EITHER form: the sweep's real sha key, OR `<basename>.seen`
-#     for whatever `cc-escalations ack` ends up writing. Recognising an extra marker form can only
-#     SUPPRESS a line, never manufacture one, so the union is safe in the direction that matters.
-# (2) SWEEP LIVENESS. idl.jsonl is a SHARED ledger (waiting-recycle alone holds 9733 rows), so
-#     "newest ts in idl.jsonl" measures whether ANY hook ran — it can never go stale while a session
-#     is open, and the sweep could be dead for a week reading healthy. Hooks write `"hook":"<name>"`;
-#     autonomy-sweep writes `"tool":"autonomy-sweep"` (autonomy-sweep.sh:214-221). This keys on the
-#     sweep's own rows only: a ledger with rows but none from the sweep reads "never", not "fresh".
-#     A liveness proxy that is not independent of the thing it supplements is not a proxy.
+# Healthy ⇒ ZERO output. That is the contract, not an optimisation: a channel that speaks at every
+# session start trains the operator to skip it (alarm-polarity law).
 #
-# The hash is BATCHED through ONE perl (Digest::SHA, core) — the idiom bin/cc-idl:38 already uses,
-# and for the same reason: per-record `shasum` forks measured 10ms each, i.e. ~24s of SessionStart
-# stall at live volume. perl absent ⇒ the record scan is REPORTED as not-run, never silently passed.
+# ── WHY THE PER-CLASS BLOCK IS GONE (2026-10-04) ─────────────────────────────────────────────────
+# Until then this hook rendered a per-class block (`· announce-alarm: 1345 (newest 24m; …)`) as
+# `additionalContext`. Measured over 7 days: 0 of ~720 sessions acted on it; Claude Code hides that
+# attachment in the TUI, so the operator never saw it either; and records arrive at ~124/day against
+# ~103 session starts/day, so the block changed at nearly every start and no damper could quiet it.
+# The health lines now go out as a top-level `systemMessage` — rendered in the operator's terminal
+# at 0 model tokens (hooks/accounts-board.sh header has the channel proof).
 #
-# ── THE FIFTH STORE — M3 close-path dead letters (SESSION_LIFECYCLE_V2 R-6, 2026-08-13) ──────────
-# handoff-fire's M3 actuator dead-letters undrained mail on a TERMINAL close: one `<sid>.md` per
-# closed session that still owed messages, in `$CC_MAILBOX_DIR/dead-letter/`, plus a `.ran` append-log
-# as the store's existence evidence. Row 3's M3 contract requires that store be surfaced with that
-# evidence and "NEVER a silent file"; it was read by nothing at all — the writer and its own suite
-# were the only references on the whole tree. It is the purest instance of what this hook exists for:
-# the messages were DELIVERED and never READ, and then the pane that owed them evaporated.
-# `*.md` ONLY — the `.ran` evidence is deliberately NOT a record. Counting it would make an
-# empty-but-ran store indistinguishable from one holding a real dead letter, which is the exact
-# collapse that file exists to prevent (R4).
+# ── SWEEP LIVENESS keys on the sweep's OWN rows ──────────────────────────────────────────────────
+# idl.jsonl is a SHARED ledger (waiting-recycle alone holds 9733 rows), so "newest ts in idl.jsonl"
+# measures whether ANY hook ran — it can never go stale while a session is open, and the sweep could
+# be dead for a week reading healthy. Hooks write `"hook":"<name>"`; autonomy-sweep writes
+# `"tool":"autonomy-sweep"` (autonomy-sweep.sh:214-221). This keys on the sweep's own rows only: a
+# ledger with rows but none from the sweep reads "never", not "fresh". A liveness proxy that is not
+# independent of the thing it supplements is not a proxy.
 #
-# ⚠ IT DAMPS DIFFERENTLY FROM THE OTHER FOUR, ON PURPOSE. autonomy-sweep writes a seen marker for
-# every record it collects on its 300s tick, so those four surface once and then go quiet by
-# themselves; the sweep does not read this store, so a dead letter renders at EVERY SessionStart
-# until `cc-escalations ack <sid>.md`. That is not an oversight of the polarity law, it is the one
-# place the law's premise does not hold: an alarm REPORTS AN EVENT THAT HAS PASSED, and re-reporting
-# it carries no new bits — but a dead letter IS UNREAD CONTENT that still exists, and going quiet
-# about it would recreate exactly the silent-file state this store was surfaced to end. The off
-# switch is therefore a HUMAN one and stays a human one, which is only tolerable because it is one
-# command and because the population is small by construction (a terminal close that still owed
-# mail, one record per closed session, never re-accumulating behind its own marker).
-#
-# Env seams: CC_ESCALATION_WATCH=0 (kill switch) · CC_HANDOFF_ALARM_DIR · CC_ANNOUNCE_ALARM_DIR ·
-#   CC_COMPLETION_RECORDS_DIR · CC_PAGES_DIR · CC_MAILBOX_DIR (the WRITER's own seam — handoff-fire
-#   composes the dead-letter path from the same variable, so the two ends cannot drift) ·
-#   CC_SWEEP_SEEN_DIR · CC_IDL · CC_EXPIRED_LEDGER ·
-#   CC_ESCALATION_SWEEP_MAX_AGE_S (default 900) · CC_ESCALATION_NOW (test clock).
+# Advisory only; never blocks; fail-open; pure read — it mutates NOTHING.
+# Env seams: CC_ESCALATION_WATCH=0 (kill switch) · CC_IDL · CC_ESCALATION_SWEEP_MAX_AGE_S (default
+#   900) · CC_ESCALATION_NOW (test clock) · CC_ESCALATION_PERL (the perl the scan check runs).
 # BSD-first (no GNU `date -d`), bash 3.2-safe, no it2, no network. Selftest: `--selftest`.
 set -uo pipefail
 
-ALARM_DIR="${CC_HANDOFF_ALARM_DIR:-$HOME/.claude/handoff-alarms}"
-ANNOUNCE_DIR="${CC_ANNOUNCE_ALARM_DIR:-$HOME/.claude/cc-announce-alarms}"
-COMPLETION_DIR="${CC_COMPLETION_RECORDS_DIR:-$HOME/.claude/completion-push}"
-PAGES_DIR="${CC_PAGES_DIR:-$HOME/.claude/autonomy/pages}"
-DEADLETTER_DIR="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}/dead-letter"
-SEEN_DIR="${CC_SWEEP_SEEN_DIR:-$HOME/.claude/autonomy/sweep-seen}"
 IDL="${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
-EXPIRED_LEDGER="${CC_EXPIRED_LEDGER:-$HOME/.claude/autonomy/expired-unread.jsonl}"
 SWEEP_MAX_AGE_S="${CC_ESCALATION_SWEEP_MAX_AGE_S:-900}"   # 3 missed 300s ticks
 JQ="$(command -v jq || true)"
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
-DETAIL_MAX=80
+PERL="${CC_ESCALATION_PERL:-perl}"
 
 [ "${CC_ESCALATION_WATCH:-1}" = 0 ] && exit 0
 
@@ -96,89 +62,22 @@ fmt_age() { # <seconds> → "3m" / "2h 5m" / "4d" — pure arithmetic, no forks
   else                      printf '%sm' "$m"; fi
 }
 
-emit() { # <context-string> — SessionStart additionalContext, the activation-watch.sh mechanism
+emit() { # <message> — top-level systemMessage: the operator's terminal, never model context
   if [ -n "$JQ" ]; then
     # shellcheck disable=SC2016  # $c is a jq variable bound by --arg, not a shell expansion
-    "$JQ" -cn --arg c "$1" '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$c}}'
+    "$JQ" -cn --arg c "$1" '{systemMessage:$c}'
   else
-    printf '%s\n' "$1"   # SessionStart also injects plain stdout as context (frontier-status precedent)
+    # No plain-stdout fallback: SessionStart injects bare stdout as model context, the channel this
+    # hook left. Without jq, python3 encodes it; without either, stay silent (fail-open).
+    CC_MSG="$1" python3 -c 'import json,os;print(json.dumps({"systemMessage":os.environ["CC_MSG"]}))' 2>/dev/null || true
   fi
 }
 
-# ── candidate list ────────────────────────────────────────────────────────────────────────────────
-# Emits `class<TAB>path` for every RECORD FILE, before the seen/verified filters. Bash globs + a
-# `[ -f ]` guard: zero forks, and an unmatched glob expands literally, so the guard is load-bearing.
-candidates() {
-  local f
-  for f in "$ALARM_DIR"/*.json;                do [ -f "$f" ] && printf 'handoff-alarm\t%s\n' "$f"; done
-  for f in "$ANNOUNCE_DIR"/announce-alarm-*.json;   do [ -f "$f" ] && printf 'announce-alarm\t%s\n' "$f"; done
-  # announce-degrade-* are RECORDS of a degraded-but-delivered announce, not alarms — same store,
-  # different meaning, so they are counted as their own class rather than folded into the alarms.
-  for f in "$ANNOUNCE_DIR"/announce-degrade-*.json; do [ -f "$f" ] && printf 'announce-degrade\t%s\n' "$f"; done
-  for f in "$COMPLETION_DIR"/*.json;           do [ -f "$f" ] && printf 'completion-push\t%s\n' "$f"; done
-  for f in "$PAGES_DIR"/*.page;                do [ -f "$f" ] && printf 'page\t%s\n' "$f"; done
-  # M3 dead letters — `*.md` only, so the store's `.ran` existence evidence is never a record.
-  for f in "$DEADLETTER_DIR"/*.md;             do [ -f "$f" ] && printf 'mail-deadletter\t%s\n' "$f"; done
-  # Load-bearing: the last `[ -f ]` is FALSE on an empty board, and under `pipefail` that rc would
-  # propagate through the perl pipeline and report a healthy empty board as "the scan DID NOT RUN".
-  return 0
-}
-
-# ── the ONE batched pass: hash → seen-filter → verified-filter ───────────────────────────────────
-# In: `class<TAB>path`. Out: `class<TAB>mtime<TAB>path`, unseen only. One fork for the whole corpus.
-unseen_rows() {
-  command -v perl >/dev/null 2>&1 || return 1
-  candidates | SEEN_DIR="$SEEN_DIR" perl -MDigest::SHA=sha256_hex -ne '
-    chomp;
-    my ($cls, $path) = split /\t/, $_, 2;
-    next unless defined $path && length $path;
-    # TSV field-collapse guard (scripts/tsv-pad-lint.sh). Tab is IFS-whitespace, so an empty
-    # NON-LAST cell does not read back empty — it shifts every later column left, silently, at
-    # exit 0. candidates() only ever prints one of five literal class names, so this is
-    # belt-and-braces; it PADS rather than `next`s because dropping a record is the exact silent
-    # loss this hook exists to prevent. $path is last and already length-tested above.
-    $cls = "unknown" unless defined $cls && length $cls;
-    my $seen = $ENV{SEEN_DIR};
-    # BOTH marker forms — see header note (1). Either one means drained.
-    my $key = substr(sha256_hex($path), 0, 32);
-    (my $base = $path) =~ s{.*/}{};
-    next if -e "$seen/$key" || -e "$seen/$base.seen";
-    if ($cls eq "completion-push") {
-      # Only records whose verdict is NOT "verified" are stuck. FRAGILE BY NATURE: these files are
-      # pretty-printed multi-line JSON, so the literal carries a space after the colon. Tolerating
-      # both spacings costs nothing and cannot over-match — it still only matches the verdict field
-      # being exactly "verified", and being STRICT here is the safe direction (a missed "verified"
-      # is one noisy line; a false "verified" is the silent loss this hook exists to prevent).
-      open(my $fh, "<", $path) or next;
-      local $/; my $body = <$fh>; close $fh;
-      next if defined $body && $body =~ /"verdict"\s*:\s*"verified"/;
-    }
-    my $mt = (stat($path))[9];
-    $mt = 0 unless defined $mt;
-    print "$cls\t$mt\t$path\n";
-  ' 2>/dev/null
-}
-
-detail_of() { # <path> [<class>] → first DETAIL_MAX chars of the record's human field, single-line
-  local f="${1:-}" cls="${2:-}" d=""
-  [ -f "$f" ] || return 0
-  # A dead letter is not JSON and its body is somebody else's message, so the useful identifier is
-  # the record's own name: the writer keys the file by the CLOSING session's sid. Naming the session
-  # is what makes the line actionable (R11 — address by session, never by a cached pane id); the
-  # message's own first line rides along behind it.
-  if [ "$cls" = "mail-deadletter" ]; then
-    d="sid=$(basename "$f" .md): $(head -1 "$f" 2>/dev/null || true)"
-    d="$(printf '%s' "$d" | tr '\n\t' '  ')"
-    printf '%s' "${d:0:$DETAIL_MAX}"
-    return 0
-  fi
-  if [ -n "$JQ" ]; then
-    d="$("$JQ" -r 'if type=="object" then (.detail // .event // .alarm // .class // "") else "" end' "$f" 2>/dev/null || true)"
-  fi
-  # No jq, or a non-JSON record (a .page file holds a bare epoch): fall back to the raw first line.
-  [ -n "$d" ] || d="$(head -1 "$f" 2>/dev/null || true)"
-  d="$(printf '%s' "$d" | tr '\n\t' '  ')"
-  printf '%s' "${d:0:$DETAIL_MAX}"
+scan_health() { # → the warn line when the record scan cannot run, or empty
+  # The same capability the Stop readout's counter needs: one perl with Digest::SHA. Checked by
+  # RUNNING it — `command -v perl` passes on a perl whose core module is missing.
+  "$PERL" -MDigest::SHA=sha256_hex -e 1 >/dev/null 2>&1 && return 0
+  printf '⚠ escalation record scan DID NOT RUN (perl/Digest::SHA unavailable) — the unseen-record count in the Stop readout is ABSENT, not zero\n'
 }
 
 sweep_liveness() { # → the warn line, or empty when the sweep is fresh
@@ -208,85 +107,16 @@ sweep_liveness() { # → the warn line, or empty when the sweep is fresh
   printf '⚠ autonomy-sweep last ran %s ago — escalation records are NOT being drained\n' "$(fmt_age "$age")"
 }
 
-expired_line() { # → the warn line for records that aged out UNREAD in the last 24h, or empty
-  [ -f "$EXPIRED_LEDGER" ] || return 0
-  local cut n now
-  now="$(now_s)"
-  # ISO-8601 UTC sorts lexically = chronologically, so the cutoff is a string compare (one awk).
-  cut="$(date -u -r "$(( now - 86400 ))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
-  [ -n "$cut" ] || return 0
-  n="$(awk -v cut="$cut" -F'"ts":"' 'NF>1 { split($2, a, "\""); if (a[1] >= cut) n++ } END { print n+0 }' \
-       "$EXPIRED_LEDGER" 2>/dev/null || echo 0)"
-  case "$n" in ''|*[!0-9]*) n=0 ;; esac
-  [ "$n" -gt 0 ] || return 0
-  printf '⚠ %s record(s) expired UNREAD in the last 24h\n' "$n"
-}
-
 watch() {
-  local rows="" body="" scan_note="" now cls
-  now="$(now_s)"
-
-  if rows="$(unseen_rows)"; then :; else
-    # An unrunnable check is a FINDING, not a pass (the activation-watch `DID NOT RUN` precedent).
-    rows=""
-    scan_note='⚠ escalation record scan DID NOT RUN (perl/Digest::SHA unavailable) — record counts below are ABSENT, not zero'
-  fi
-
-  # Aggregate per class in ONE awk pass → `class<TAB>count<TAB>newest-mtime<TAB>newest-path`, then
-  # walk the <=6 aggregate rows in bash. This used to be one bash `while read` pass per class on the
-  # premise that unseen rows are "~tens of lines"; measured 2026-09-25 there were 1,897, and the six
-  # passes were ~0.5s of the hook that gates every SessionStart render. Still no eval and no dynamic
-  # variable names — the sibling autonomy-sweep.sh declares "no eval" in its own header, and a
-  # parallel c_*/n_*/p_* triple read back through `eval` is exactly the shape that makes a static
-  # check blind. Same semantics as the loop it replaces: a row needs a non-empty path, a non-numeric
-  # mtime counts as 0, and the newest path is the FIRST row with the strictly greatest mtime > 0.
-  local classes="handoff-alarm announce-alarm announce-degrade completion-push page mail-deadletter"
-  local agg total=0 acls acnt mt path cnt newest npath det line
-  agg="$(printf '%s\n' "$rows" | awk -F'\t' '
-    NF >= 3 {
-      p = $3; for (k = 4; k <= NF; k++) p = p "\t" $k
-      if (p == "") next
-      c = $1; m = $2; if (m !~ /^[0-9]+$/) m = 0
-      if (!(c in n)) { n[c] = 0; nw[c] = 0; np[c] = "" }
-      n[c]++
-      if (m + 0 > nw[c] + 0) { nw[c] = m; np[c] = p }
-    }
-    END { for (c in n) printf "%s\t%d\t%s\t%s\n", c, n[c], nw[c], np[c] }')"
-  while IFS=$'\t' read -r acls acnt mt path; do
-    [ -n "${acnt:-}" ] && total=$(( total + acnt ))
-  done <<EOF
-$agg
-EOF
-
-  if [ "$total" -gt 0 ]; then
-    body='ESCALATIONS (unseen dead-letter records):'
-    for cls in $classes; do
-      cnt=0; newest=0; npath=""
-      while IFS=$'\t' read -r acls acnt mt path; do
-        [ "$acls" = "$cls" ] || continue
-        cnt="$acnt"; newest="$mt"; npath="${path:-}"
-      done <<EOF
-$agg
-EOF
-      [ "$cnt" -gt 0 ] || continue
-      line="$(printf '· %s: %s (newest %s' "$cls" "$cnt" "$(fmt_age $(( now - newest )))")"
-      det="$(detail_of "$npath" "$cls")"
-      [ -n "$det" ] && line="$line; $det"
-      body="$body"$'\n'"$line)"
-    done
-  fi
-
-  # These two are INDEPENDENT of the record count: a dead sweep is itself the alarm, and it is
-  # loudest in exactly the state where zero records have been collected.
-  local sweep expired
+  # INDEPENDENT of any record count: a dead sweep is itself the alarm, and it is loudest in exactly
+  # the state where zero records have been collected.
+  local body="" scan sweep
+  scan="$(scan_health)"
   sweep="$(sweep_liveness)"
-  expired="$(expired_line)"
-  [ -n "$scan_note" ] && body="${body:+$body$'\n'}$scan_note"
-  [ -n "$sweep" ]     && body="${body:+$body$'\n'}${sweep%$'\n'}"
-  [ -n "$expired" ]   && body="${body:+$body$'\n'}${expired%$'\n'}"
-
+  [ -n "$scan" ]  && body="${scan%$'\n'}"
+  [ -n "$sweep" ] && body="${body:+$body$'\n'}${sweep%$'\n'}"
   [ -n "$body" ] || exit 0
-  emit "$body"
+  emit "ESCALATION PIPELINE: $body"
   exit 0
 }
 
@@ -303,91 +133,49 @@ selftest() {
   trap "rm -rf '$d'" EXIT
   echo "escalation-watch --selftest:"
 
-  mkdir -p "$d/alarms" "$d/announce" "$d/completion" "$d/pages" "$d/seen" "$d/mailbox/dead-letter"
   local NOW=1786100000
-  # a fresh sweep row, so the liveness line stays out of the record assertions
-  printf '{"ts":"%s","tool":"autonomy-sweep","disposition":"fired"}\n' \
-    "$(date -u -r "$(( NOW - 60 ))" +%Y-%m-%dT%H:%M:%SZ)" > "$d/idl.jsonl"
+  row() { printf '{"ts":"%s","%s":"%s","disposition":"fired"}\n' "$(date -u -r "$(( NOW - $1 ))" +%Y-%m-%dT%H:%M:%SZ)" "$2" "$3"; }
+  ewrun() { CC_IDL="$1" CC_ESCALATION_NOW="$NOW" "$SELF"; }
 
-  printf '{"kind":"handoff-alarm","class":"strand-risk","detail":"pane 1FBFCD05 never closed","ts":"x"}\n' > "$d/alarms/alarm-1.json"
-  printf '{"kind":"alarm","alarm":"announce-not-verified","detail":"announce to D08B NOT verified"}\n'      > "$d/announce/announce-alarm-1.json"
-  printf '{"kind":"alarm","detail":"degraded delivery"}\n'                                                 > "$d/announce/announce-degrade-1.json"
-  printf '{\n  "kind": "completion-push",\n  "detail": "stuck push",\n  "verdict": "push-failed(rc=5)"\n}\n' > "$d/completion/push-1.json"
-  printf '{\n  "kind": "completion-push",\n  "detail": "fine",\n  "verdict": "verified"\n}\n'                > "$d/completion/push-2.json"
-  printf '1785402302\n' > "$d/pages/p-1.page"
-  # M3 dead letter + the store's `.ran` existence evidence, in the writer's own two shapes
-  printf '## from desk\nthe seam ruling you asked for\n' > "$d/mailbox/dead-letter/sid-dead.md"
-  printf '2026-08-13T00:00:00Z terminal-close sid=sid-dead pending=2\n' > "$d/mailbox/dead-letter/.ran"
+  # healthy: a fresh sweep row + a working scan → NOTHING AT ALL (the absence-of-noise contract)
+  row 60 tool autonomy-sweep > "$d/idl.jsonl"
+  out="$(ewrun "$d/idl.jsonl")"; rc=$?
+  { [ -z "$out" ] && [ "$rc" -eq 0 ]; } && okp "fresh sweep + working scan → EMPTY stdout (control)" || badp "spurious output on a healthy pipeline"
 
-  ewrun() { CC_HANDOFF_ALARM_DIR="$d/alarms" CC_ANNOUNCE_ALARM_DIR="$d/announce" \
-            CC_COMPLETION_RECORDS_DIR="$d/completion" CC_PAGES_DIR="$d/pages" \
-            CC_MAILBOX_DIR="$d/mailbox" \
-            CC_SWEEP_SEEN_DIR="$d/seen" CC_IDL="$d/idl.jsonl" \
-            CC_EXPIRED_LEDGER="$d/expired.jsonl" CC_ESCALATION_NOW="$NOW" "$SELF"; }
-
-  out="$(ewrun)"
-  printf '%s' "$out" | grep -q 'handoff-alarm: 1'    && okp "handoff-alarm class rendered"    || badp "handoff-alarm NOT rendered"
-  printf '%s' "$out" | grep -q 'announce-alarm: 1'   && okp "announce-alarm class rendered"   || badp "announce-alarm NOT rendered"
-  printf '%s' "$out" | grep -q 'announce-degrade: 1' && okp "announce-degrade counted apart"  || badp "announce-degrade NOT separate"
-  printf '%s' "$out" | grep -q 'completion-push: 1'  && okp "completion-push: only non-verified counted" || badp "completion-push count wrong"
-  printf '%s' "$out" | grep -q 'page: 1'             && okp "page class rendered"             || badp "page NOT rendered"
-  printf '%s' "$out" | grep -q 'mail-deadletter: 1'  && okp "mail-deadletter class rendered (R-6)" || badp "mail-deadletter NOT rendered"
-  printf '%s' "$out" | grep -q 'sid=sid-dead'        && okp "dead letter names its closing session" || badp "dead-letter detail carries no sid"
-  printf '%s' "$out" | grep -q 'ESCALATIONS'         && okp "header rendered"                 || badp "no header"
-  printf '%s' "$out" | grep -q 'pane 1FBFCD05'       && okp "newest detail carried"           || badp "detail missing"
+  # stale sweep
+  row 3600 tool autonomy-sweep > "$d/stale-idl.jsonl"
+  out="$(ewrun "$d/stale-idl.jsonl")"
+  printf '%s' "$out" | grep -q 'last ran 1h 0m ago' && okp "stale sweep names its age" || badp "stale-sweep line missing"
+  printf '%s' "$out" | grep -q 'NOT being drained' && okp "stale sweep says what it costs" || badp "stale-sweep consequence missing"
   if [ -n "$JQ" ]; then
-    printf '%s' "$out" | "$JQ" -e '.hookSpecificOutput.hookEventName=="SessionStart"' >/dev/null 2>&1 \
-      && okp "output is valid SessionStart additionalContext JSON" || badp "output not valid SessionStart JSON"
-  else okp "jq absent — plain-stdout fallback (skipped JSON check)"; fi
+    printf '%s' "$out" | "$JQ" -e '(.systemMessage | length > 0) and (has("hookSpecificOutput") | not)' >/dev/null 2>&1 \
+      && okp "output is ONE top-level systemMessage, no model context" || badp "output is not a bare systemMessage"
+  else okp "jq absent — python3 encoder path (skipped JSON check)"; fi
 
-  # seen suppression — BOTH marker forms (header note 1)
-  local k
-  k="$(printf '%s' "$d/alarms/alarm-1.json" | shasum -a 256 | cut -c1-32)"; : > "$d/seen/$k"
-  : > "$d/seen/announce-alarm-1.json.seen"
-  out="$(ewrun)"
-  printf '%s' "$out" | grep -q 'handoff-alarm'  && badp "sha-key marker did not suppress"  || okp "sweep sha-key marker suppresses"
-  printf '%s' "$out" | grep -q 'announce-alarm:' && badp ".seen marker did not suppress"   || okp "<basename>.seen marker suppresses"
-  rm -f "$d/seen/$k" "$d/seen/announce-alarm-1.json.seen"
-
-  # kill switch
-  out="$(CC_ESCALATION_WATCH=0 ewrun)"; rc=$?
-  { [ -z "$out" ] && [ "$rc" -eq 0 ]; } && okp "CC_ESCALATION_WATCH=0 → silent, exit 0" || badp "kill switch did not silence"
-
-  # zero records + live sweep → NOTHING AT ALL (the absence-of-noise contract)
-  local e="$d/empty"; mkdir -p "$e/alarms" "$e/announce" "$e/completion" "$e/pages" "$e/seen"
-  out="$(CC_HANDOFF_ALARM_DIR="$e/alarms" CC_ANNOUNCE_ALARM_DIR="$e/announce" \
-         CC_COMPLETION_RECORDS_DIR="$e/completion" CC_PAGES_DIR="$e/pages" CC_MAILBOX_DIR="$e/mailbox" \
-         CC_SWEEP_SEEN_DIR="$e/seen" CC_IDL="$d/idl.jsonl" CC_EXPIRED_LEDGER="$e/none.jsonl" \
-         CC_ESCALATION_NOW="$NOW" "$SELF")"; rc=$?
-  { [ -z "$out" ] && [ "$rc" -eq 0 ]; } && okp "zero records + live sweep → EMPTY stdout (control)" || badp "spurious output on a clean board"
-
-  # sweep-stale line — and it must fire with ZERO records, where it is the only signal
-  printf '{"ts":"%s","tool":"autonomy-sweep","disposition":"fired"}\n' \
-    "$(date -u -r "$(( NOW - 3600 ))" +%Y-%m-%dT%H:%M:%SZ)" > "$d/stale-idl.jsonl"
-  out="$(CC_HANDOFF_ALARM_DIR="$e/alarms" CC_ANNOUNCE_ALARM_DIR="$e/announce" \
-         CC_COMPLETION_RECORDS_DIR="$e/completion" CC_PAGES_DIR="$e/pages" CC_MAILBOX_DIR="$e/mailbox" \
-         CC_SWEEP_SEEN_DIR="$e/seen" CC_IDL="$d/stale-idl.jsonl" CC_EXPIRED_LEDGER="$e/none.jsonl" \
-         CC_ESCALATION_NOW="$NOW" "$SELF")"
-  printf '%s' "$out" | grep -q 'NOT being drained' && okp "stale sweep renders with ZERO records" || badp "stale-sweep line missing"
-
-  # a ledger full of OTHER hooks' rows is NOT sweep liveness (header note 2 — the whole point)
-  printf '{"ts":"%s","hook":"waiting-recycle","disposition":"abstained"}\n' \
-    "$(date -u -r "$(( NOW - 5 ))" +%Y-%m-%dT%H:%M:%SZ)" > "$d/foreign-idl.jsonl"
-  out="$(CC_HANDOFF_ALARM_DIR="$e/alarms" CC_ANNOUNCE_ALARM_DIR="$e/announce" \
-         CC_COMPLETION_RECORDS_DIR="$e/completion" CC_PAGES_DIR="$e/pages" CC_MAILBOX_DIR="$e/mailbox" \
-         CC_SWEEP_SEEN_DIR="$e/seen" CC_IDL="$d/foreign-idl.jsonl" CC_EXPIRED_LEDGER="$e/none.jsonl" \
-         CC_ESCALATION_NOW="$NOW" "$SELF")"
+  # never ran: absent ledger, and a ledger full of OTHER hooks' rows (the header's whole point)
+  out="$(ewrun "$d/absent.jsonl")"
+  printf '%s' "$out" | grep -q 'NEVER run' && okp "absent ledger reads NEVER-RAN, not fresh" || badp "absent ledger read as healthy"
+  row 5 hook waiting-recycle > "$d/foreign-idl.jsonl"
+  out="$(ewrun "$d/foreign-idl.jsonl")"
   printf '%s' "$out" | grep -q 'NEVER run' && okp "foreign IDL rows do NOT fake sweep liveness" || badp "foreign rows read as a live sweep"
 
-  # expired-unread: last 24h only
-  printf '{"ts":"%s","kind":"expired-unread"}\n' "$(date -u -r "$(( NOW - 3600 ))"  +%Y-%m-%dT%H:%M:%SZ)" >  "$d/expired.jsonl"
-  printf '{"ts":"%s","kind":"expired-unread"}\n' "$(date -u -r "$(( NOW - 200000 ))" +%Y-%m-%dT%H:%M:%SZ)" >> "$d/expired.jsonl"
-  out="$(ewrun)"
-  printf '%s' "$out" | grep -q '1 record(s) expired UNREAD' && okp "expired counts the last 24h ONLY" || badp "expired window wrong"
+  # scan cannot run — with a FRESH sweep, so the line is attributable to the scan alone
+  printf '#!/bin/bash\nexit 2\n' > "$d/noperl"; chmod +x "$d/noperl"
+  out="$(CC_ESCALATION_PERL="$d/noperl" ewrun "$d/idl.jsonl")"
+  printf '%s' "$out" | grep -q 'scan DID NOT RUN' && okp "an unrunnable scan is REPORTED, not a pass" || badp "unrunnable scan silently passed"
+  printf '%s' "$out" | grep -q 'NOT being drained' && badp "scan line dragged a sweep line in with it" || okp "scan line stands alone on a live sweep"
+
+  # the record block is gone: no class name, no count, whatever the stores hold
+  out="$(ewrun "$d/stale-idl.jsonl")"
+  printf '%s' "$out" | grep -Eq 'ESCALATIONS \(unseen|announce-alarm|expired UNREAD' && badp "a per-class or expired line is still rendered" || okp "no per-class counts, no expired line"
+
+  # kill switch
+  out="$(CC_ESCALATION_WATCH=0 ewrun "$d/stale-idl.jsonl")"; rc=$?
+  { [ -z "$out" ] && [ "$rc" -eq 0 ]; } && okp "CC_ESCALATION_WATCH=0 → silent, exit 0" || badp "kill switch did not silence"
 
   echo "escalation-watch --selftest: $PASS passed, $FAIL failed"
   [ "$FAIL" -eq 0 ] || exit 1
-  echo "escalation-watch --selftest: GREEN — 6 classes · verified-filter · both seen forms · kill switch · empty-board control · stale sweep · foreign-row control · expired window."
+  echo "escalation-watch --selftest: GREEN — healthy-silent control · stale sweep · never-ran · foreign-row control · unrunnable scan · no record block · kill switch · bare systemMessage."
 }
 
 case "${1:-}" in

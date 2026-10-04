@@ -3,9 +3,11 @@
 # non-primary account and reports what safe mode cannot fix.
 #
 # What is pinned here (docs/research/token-efficiency-2026-09-23/measure/hooks.md §4 "Mirror", §5 rows
-# 5 and 11): a FORKED report is a count, a backup count, at most five names (non-backups first) and the
-# list/converge commands — never the whole list, which ran to a median 216 names and was persisted by
-# Claude Code as an 18 KB file; and a run with nothing to report emits nothing at all.
+# 5 and 11; channel and backup rule changed 2026-10-04): the report is ONE top-level systemMessage
+# for the operator, never additionalContext. A FORKED report counts and names only NON-backup forks
+# (at most five, then a "+N more" with the list command) plus the converge command; backups (the
+# library's own *bak* rule) are neither counted nor named, so a backup-only fork list emits nothing,
+# as does a run with nothing to report. The whole list ran to a median 216 names, ~90% backups.
 #
 # Hermetic: $HOME is a scratch dir, and the mirror library is a stub whose _cc_sync_account prints one
 # FORKED line to stderr per name in $STUB_FORKS, exactly in the real library's format
@@ -29,12 +31,19 @@ ZSH
   export STUB_FORKS=""
 }
 
-ctx() { printf '%s' "$1" | jq -r '.hookSpecificOutput.additionalContext'; }
+ctx() { printf '%s' "$1" | jq -r '.systemMessage'; }
 # A bare `! cmd` mid-test cannot fail a bats test (errexit ignores it); a function returning the
 # negation can.
 lacks() { ! printf '%s' "$1" | grep -qF -- "$2"; }
 
-@test "FORKED: 473 entries ⇒ count, backup count, 5 names, +468 more, list and converge commands" {
+@test "channel: the report is ONE top-level systemMessage, never additionalContext" {
+  STUB_FORKS="settings.json"
+  run bash "$HOOK"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | jq -e '(.systemMessage | test("FORKED")) and (has("hookSpecificOutput") | not)' >/dev/null
+}
+
+@test "FORKED: 473 entries, 9 of them real ⇒ counts the 9, names 5, +4 more, converge command" {
   local i names="settings.json .mcp-probe-cache .last-update-result.json commands keybindings.json"
   names="$names a1 a2 a3 a4"
   for i in $(seq 1 464); do names="$names settings.json.bak-$i"; done
@@ -42,45 +51,45 @@ lacks() { ! printf '%s' "$1" | grep -qF -- "$2"; }
   run bash "$HOOK"
   [ "$status" -eq 0 ]
   local c; c="$(ctx "$output")"
-  printf '%s' "$c" | grep -qF '473 FORKED real entry(ies)'
-  printf '%s' "$c" | grep -qF '(464 of them *.bak* backups)'
-  printf '%s' "$c" | grep -qF ': settings.json .mcp-probe-cache .last-update-result.json commands keybindings.json (+468 more)'
+  printf '%s' "$c" | grep -qF '9 FORKED real entry(ies) shadow ~/.claude in .claude-secondary: settings.json .mcp-probe-cache .last-update-result.json commands keybindings.json (+4 more: '
   printf '%s' "$c" | grep -qF "_cc_sync_account --convert $HOME/.claude-secondary'"
-  printf '%s' "$c" | grep -qF "_cc_sync_account $HOME/.claude-secondary' 2>&1 | grep FORKED"
-  # the backups themselves are never listed while a non-backup name is available
+  printf '%s' "$c" | grep -qF "_cc_sync_account $HOME/.claude-secondary' 2>&1 | grep FORKED | grep -v bak"
+  # the 464 backups are neither counted nor named
+  lacks "$c" '473'
   lacks "$c" 'settings.json.bak-'
-  # the whole message stays well under Claude Code's 10,000-char persistence cap
   [ "${#c}" -lt 1000 ]
 }
 
-@test "FORKED: non-backups are named before backups even when the library lists backups first" {
+@test "FORKED: backups listed first by the library are still skipped, real forks named in order" {
   # The real library reports in glob order, which is alphabetical, so settings.json.bak-* comes
-  # before skills and todos; the fixture above lists non-backups first and cannot see the ordering.
+  # before skills and todos.
   STUB_FORKS="agents settings.json.bak-1 settings.json.bak-2 settings.json.bak-3 settings.json.bak-4 skills todos"
   run bash "$HOOK"
   [ "$status" -eq 0 ]
   local c; c="$(ctx "$output")"
-  printf '%s' "$c" | grep -qF '(4 of them *.bak* backups): agents skills todos settings.json.bak-1 settings.json.bak-2 (+2 more)'
+  printf '%s' "$c" | grep -qF '3 FORKED real entry(ies) shadow ~/.claude in .claude-secondary: agents skills todos —'
+  lacks "$c" 'more'
 }
 
-@test "FORKED: only backups forked ⇒ backups fill the five names" {
+@test "FORKED: only backups forked ⇒ NO output at all" {
   STUB_FORKS="settings.json.bak-1 settings.json.bak-2 settings.json.bak-3 settings.json.bak-4 settings.json.bak-5 settings.json.bak-6"
   run bash "$HOOK"
   [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  # non-vacuity: one real fork among the same backups speaks, and names only itself
+  STUB_FORKS="$STUB_FORKS commands"
+  run bash "$HOOK"
   local c; c="$(ctx "$output")"
-  printf '%s' "$c" | grep -qF '6 FORKED real entry(ies)'
-  printf '%s' "$c" | grep -qF '(6 of them *.bak* backups)'
-  printf '%s' "$c" | grep -qF 'settings.json.bak-5 (+1 more)'
-  lacks "$c" 'settings.json.bak-6'
+  printf '%s' "$c" | grep -qF '1 FORKED real entry(ies) shadow ~/.claude in .claude-secondary: commands —'
 }
 
-@test "FORKED: three entries ⇒ all three named, no '+N more'" {
-  STUB_FORKS="settings.json commands agents"
+@test "FORKED: a backup is whatever the library calls one (*bak*), infix spellings included" {
+  # Live 2026-10-04: settings.json.pane-autonomy-bak-<stamp> was named as a real fork because the
+  # hook matched '.bak' while lib/config-mirror.zsh folds '*bak*'.
+  STUB_FORKS="settings.json.pane-autonomy-bak-20261001T155952 settings.json.permharvest-bak-20261001T162531Z .claude.json.bak-ms365-restore commands.premirror-bak"
   run bash "$HOOK"
   [ "$status" -eq 0 ]
-  local c; c="$(ctx "$output")"
-  printf '%s' "$c" | grep -qF '3 FORKED real entry(ies) shadow ~/.claude in .claude-secondary (0 of them *.bak* backups): settings.json commands agents —'
-  lacks "$c" 'more)'
+  [ -z "$output" ]
 }
 
 @test "silent: nothing forked and no registration drift ⇒ no output at all" {

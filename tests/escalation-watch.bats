@@ -1,28 +1,23 @@
 #!/usr/bin/env bats
-# escalation-watch.sh — SessionStart: the GUARANTEED READER for the escalation dead-letter stores
-# (D3, HANDOFF_FAILURE_DETECTION_V2). Proves:
-#   · each of the 6 record classes renders one bounded counted line
-#   · ZERO unseen records + a live sweep ⇒ EMPTY stdout (the absence-of-noise contract) — with a
-#     positive control beside it, so the assertion cannot pass vacuously
-#   · BOTH seen-marker forms suppress: the sweep's real sha256(FULL PATH)|cut -c1-32 key AND
-#     `<basename>.seen`. The FROZEN INTERFACE documents only the second and calls it "the existing
-#     sweep convention"; autonomy-sweep.sh:89-91 implements only the first. A reader that honoured
-#     the doc would re-render every drained record forever, so both are pinned here.
+# escalation-watch.sh — SessionStart: the HEALTH check on the escalation pipeline (D3,
+# HANDOFF_FAILURE_DETECTION_V2). Since 2026-10-04 the hook reports only the two conditions under
+# which the Stop readout's unseen-record count is wrong while looking fine, as ONE top-level
+# systemMessage (the operator's terminal, 0 model tokens). Proves:
+#   · a healthy pipeline ⇒ EMPTY stdout, and so does a FULL board over a live sweep: the per-class
+#     record block is gone (operator-readout.sh owns the count), with a control beside each absence
 #   · sweep-liveness keys on the sweep's OWN `"tool":"autonomy-sweep"` rows — a ledger full of other
 #     hooks' `"hook":"…"` rows reads NEVER-RAN, not fresh (idl.jsonl is shared; waiting-recycle alone
-#     holds 9733 rows, so "newest ts in the file" could never go stale while a session is open)
-#   · the stale-sweep line renders even at ZERO records (a dead sweep is itself the alarm)
-#   · expired-unread counts the last 24h only
-#   · the kill switch silences everything; --selftest exits 0
-#
-# RED-PROOF. hooks/escalation-watch.sh is a NEW file: `git archive HEAD` recovers a tree in which it
-# does not exist, so every test here reds trivially there (the runner cannot find the subject). That
-# is a real red but a weak one, so the two assertions whose logic could silently invert — the
-# empty-board control and the foreign-IDL-row control — additionally carry MUTATION controls that
-# red them against a mutated copy of the LIVE subject (`ew_mutant`), which is the strong form.
+#     holds 9733 rows, so "newest ts in the file" could never go stale while a session is open),
+#     with a MUTATION control against a mutated copy of the live subject (`ew_mutant`)
+#   · the 1 MB tail window and its full-scan fallback agree on a large ledger
+#   · an unrunnable scan (perl/Digest::SHA) is REPORTED, alone, and composes with a dead sweep
+#   · the channel: top-level systemMessage, never additionalContext
+#   · the kill switch silences everything; the hook mutates nothing; --selftest exits 0
 #
 # Test law: hermetic $HOME in BATS_TEST_TMPDIR · `|| false` on non-final `[[ ]]` · positive control
 # beside every absence assertion · the subject mutates NOTHING, and a test asserts that too.
+# The record-store seams (CC_HANDOFF_ALARM_DIR and friends) are still exported and still seeded:
+# the hook no longer reads them, and the full-board cases are what pin that.
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -83,14 +78,17 @@ mark_seen_basename() { : > "$CC_SWEEP_SEEN_DIR/$(basename "$1").seen"; }
 # and a missing dir contributes 0 instead of aborting the count.
 entry_count() { find "$@" -mindepth 1 2>/dev/null | wc -l | tr -d ' '; }
 
-ctx() { # run the hook, unwrap additionalContext when jq wrapped it
+ctx() { # run the hook, unwrap the systemMessage
   run "$HOOK"
   [ "$status" -eq 0 ] || false
-  if command -v jq >/dev/null 2>&1 && [ -n "$output" ]; then
-    CTX="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null || printf '%s' "$output")"
-  else
-    CTX="$output"
-  fi
+  CTX=""
+  [ -z "$output" ] || CTX="$(printf '%s' "$output" | jq -r '.systemMessage')"
+}
+
+full_board() { mk_handoff_alarm 1; mk_announce_alarm 1; mk_announce_degrade 1; mk_completion 1 "push-failed(rc=5)"; mk_page 1; mk_deadletter dl-1; }
+no_perl() { # a perl that cannot load Digest::SHA, as far as the hook can tell
+  printf '#!/bin/bash\nexit 2\n' > "$BATS_TEST_TMPDIR/noperl"; chmod +x "$BATS_TEST_TMPDIR/noperl"
+  export CC_ESCALATION_PERL="$BATS_TEST_TMPDIR/noperl"
 }
 
 ew_mutant() { # a copy of the LIVE subject with one line mutated → the strong RED-proof
@@ -100,169 +98,45 @@ ew_mutant() { # a copy of the LIVE subject with one line mutated → the strong 
   printf '%s' "$out"
 }
 
-# ── each class renders ───────────────────────────────────────────────────────────────────────────
-@test "handoff-alarm records render as a counted class line with the newest detail" {
-  mk_handoff_alarm 1 "pane 1FBFCD05 never closed"
-  ctx
-  [[ "$CTX" == *"ESCALATIONS (unseen dead-letter records):"* ]] || false
-  [[ "$CTX" == *"handoff-alarm: 1"* ]] || false
-  [[ "$CTX" == *"pane 1FBFCD05 never closed"* ]] || false
-}
-
-@test "announce-alarm and announce-degrade are counted as SEPARATE classes from one store" {
-  mk_announce_alarm 1
-  mk_announce_degrade 1
-  mk_announce_degrade 2
-  ctx
-  [[ "$CTX" == *"announce-alarm: 1"* ]] || false
-  [[ "$CTX" == *"announce-degrade: 2"* ]] || false
-}
-
-@test "completion-push counts ONLY records whose verdict is not verified" {
-  mk_completion 1 "push-failed(cc-announce rc=5)"
-  mk_completion 2 "verified"
-  mk_completion 3 "degraded(delivered, wake unconfirmed)"
-  ctx
-  # 2 stuck of 3 present — the positive control is that the class renders at all, so a filter that
-  # dropped everything would fail here rather than passing as "nothing stuck".
-  [[ "$CTX" == *"completion-push: 2"* ]] || false
-  [[ "$CTX" != *"completion-push: 3"* ]] || false
-}
-
-# ── the FIFTH store: M3 close-path dead letters (SESSION_LIFECYCLE_V2 R-6) ───────────────────────
-# Before this, `grep -rn 'mailbox/dead-letter'` over bin/ hooks/ scripts/ found the WRITER
-# (handoff-fire.sh:selfclose_mail_disposition) and its own suite — no consumer anywhere. Row 3's M3
-# contract requires the store be "SURFACED on the operator board with existence evidence, NEVER a
-# silent file", so an unread store was the contract's own defect, not merely a missing nicety.
-@test "M3 dead letters render as their own class, naming the session that closed owing them" {
-  mk_deadletter "01998f3a-dead-4beef-9c21-000000000001"
-  mk_deadletter_ran "01998f3a-dead-4beef-9c21-000000000001"
-  ctx
-  [[ "$CTX" == *"ESCALATIONS (unseen dead-letter records):"* ]] || false
-  [[ "$CTX" == *"mail-deadletter: 1"* ]] || false
-  # R11 — the line must ADDRESS the work, and for a dead letter the address is the closing session.
-  # A count with no sid tells the operator something is owed and gives them nothing to look up.
-  [[ "$CTX" == *"sid=01998f3a-dead-4beef-9c21-000000000001"* ]] || false
-}
-
-@test "the store's .ran EVIDENCE is never counted as a record (R4: empty-but-ran != never-ran)" {
-  # Evidence ALONE: the store has run and dead-lettered nothing. That is a healthy state and must be
-  # silent — counting `.ran` would make it permanently indistinguishable from a real dead letter.
-  mk_deadletter_ran "01998f3a-dead-4beef-9c21-000000000002" 0
-  ctx
-  [ -z "$output" ]
-  # Positive control, same store, same run: the assertion above is not vacuous.
-  mk_deadletter "01998f3a-dead-4beef-9c21-000000000002"
-  ctx
-  [[ "$CTX" == *"mail-deadletter: 1"* ]] || false
-}
-
-@test "a dead letter is damped by BOTH seen-marker forms, like every other class" {
-  mk_deadletter dl-a
-  mk_deadletter dl-b
-  ctx
-  [[ "$CTX" == *"mail-deadletter: 2"* ]] || false
-  mark_seen_sweep "$CC_MAILBOX_DIR/dead-letter/dl-a.md"
-  ctx
-  [[ "$CTX" == *"mail-deadletter: 1"* ]] || false
-  mark_seen_basename "$CC_MAILBOX_DIR/dead-letter/dl-b.md"
-  ctx
-  # Fully acked ⇒ silent. Without this the new class would be a permanent nag with no off switch —
-  # the alarm-polarity defect this hook's own header forbids.
+# ── healthy is silent, and records alone no longer speak ─────────────────────────────────────────
+@test "an empty board + a live sweep prints NOTHING AT ALL" {
+  run "$HOOK"
+  [ "$status" -eq 0 ] || false
   [ -z "$output" ]
 }
 
-@test "an absent dead-letter store is tolerated, and the other classes still render" {
-  rm -rf "$CC_MAILBOX_DIR"
-  mk_handoff_alarm 1
+@test "a FULL board over a live sweep is silent too — the per-class block is gone" {
+  full_board
+  [ "$(entry_count "$CC_HANDOFF_ALARM_DIR" "$CC_ANNOUNCE_ALARM_DIR" "$CC_COMPLETION_RECORDS_DIR" "$CC_PAGES_DIR" "$CC_MAILBOX_DIR/dead-letter")" -eq 6 ]
+  run "$HOOK"
+  [ "$status" -eq 0 ] || false
+  [ -z "$output" ]
+}
+
+@test "positive control: the SAME full board speaks once the sweep is dead — and names no class" {
+  full_board
+  sweep_ran_at 3600
   ctx
-  [[ "$CTX" == *"handoff-alarm: 1"* ]] || false
+  [[ "$CTX" == *"autonomy-sweep last ran 1h 0m ago"* ]] || false
+  [[ "$CTX" == *"NOT being drained"* ]] || false
+  [[ "$CTX" != *"ESCALATIONS (unseen"* ]] || false
+  [[ "$CTX" != *"handoff-alarm"* ]] || false
   [[ "$CTX" != *"mail-deadletter"* ]] || false
 }
 
-@test "pages render, and every class sums into one bounded block (<= 12 lines)" {
-  mk_handoff_alarm 1; mk_announce_alarm 1; mk_announce_degrade 1
-  mk_completion 1 "push-failed(rc=5)"; mk_page 1; mk_page 2
-  ctx
-  [[ "$CTX" == *"page: 2"* ]] || false
-  [ "$(printf '%s\n' "$CTX" | wc -l | tr -d ' ')" -le 12 ]
-}
-
-# ── the absence-of-noise contract, with its controls ─────────────────────────────────────────────
-@test "zero unseen records + a live sweep prints NOTHING AT ALL" {
+@test "records that expired unread are not reported here either" {
+  printf '{"ts":"%s","kind":"expired-unread"}\n' "$(date -u -r "$(( CC_ESCALATION_NOW - 3600 ))" +%Y-%m-%dT%H:%M:%SZ)" > "$CC_EXPIRED_LEDGER"
   run "$HOOK"
   [ "$status" -eq 0 ] || false
   [ -z "$output" ]
 }
 
-@test "positive control: the SAME empty board speaks the moment one record appears" {
-  run "$HOOK"
-  [ -z "$output" ] || false          # the absence half
-  mk_handoff_alarm 1
-  ctx
-  [[ "$CTX" == *"handoff-alarm: 1"* ]] || false
-}
-
-@test "MUTATION control: the empty-board silence is not vacuous" {
-  # Deleting candidates()'s trailing `return 0` lets the last failing `[ -f ]` propagate through
-  # pipefail, and a healthy empty board misreports as "the scan DID NOT RUN".
-  local m; m="$(ew_mutant '/^  return 0$/d')"
-  run bash "$m"
-  [ "$status" -eq 0 ] || false
-  [ -n "$output" ]                   # the mutant SPEAKS where the subject is silent
-  [[ "$output" == *"DID NOT RUN"* ]] || false
-}
-
-# ── seen suppression: BOTH marker forms ──────────────────────────────────────────────────────────
-@test "the sweep's real sha256-of-full-path marker suppresses a record" {
-  mk_handoff_alarm 1
-  ctx
-  [[ "$CTX" == *"handoff-alarm: 1"* ]] || false      # positive control: it rendered first
-  mark_seen_sweep "$CC_HANDOFF_ALARM_DIR/alarm-1.json"
-  run "$HOOK"
-  [ "$status" -eq 0 ] || false
-  [ -z "$output" ]
-}
-
-@test "a <basename>.seen marker also suppresses (the ack form the frozen interface documents)" {
-  mk_announce_alarm 1
-  ctx
-  [[ "$CTX" == *"announce-alarm: 1"* ]] || false
-  mark_seen_basename "$CC_ANNOUNCE_ALARM_DIR/announce-alarm-1.json"
-  run "$HOOK"
-  [ "$status" -eq 0 ] || false
-  [ -z "$output" ]
-}
-
-@test "suppression is per-record: marking one leaves its siblings counted" {
-  mk_announce_alarm 1; mk_announce_alarm 2; mk_announce_alarm 3
-  mark_seen_sweep "$CC_ANNOUNCE_ALARM_DIR/announce-alarm-2.json"
-  ctx
-  [[ "$CTX" == *"announce-alarm: 2"* ]] || false
-}
-
-# ── sweep liveness — the watcher of the watcher (F7) ─────────────────────────────────────────────
-@test "a sweep older than 15 min renders the not-being-drained line" {
-  sweep_ran_at 3600
-  mk_handoff_alarm 1
-  ctx
-  [[ "$CTX" == *"autonomy-sweep last ran"* ]] || false
-  [[ "$CTX" == *"NOT being drained"* ]] || false
-}
-
+# ── sweep liveness ───────────────────────────────────────────────────────────────────────────────
 @test "the stale-sweep line renders with ZERO records — a dead sweep is itself the alarm" {
   sweep_ran_at 3600
   ctx
+  [[ "$CTX" == "ESCALATION PIPELINE: ⚠ autonomy-sweep last ran 1h 0m ago"* ]] || false
   [[ "$CTX" == *"NOT being drained"* ]] || false
-  [[ "$CTX" != *"ESCALATIONS"* ]] || false     # and it does NOT invent a record block
-}
-
-@test "a fresh sweep row keeps the liveness line silent (positive control for the above)" {
-  sweep_ran_at 60
-  mk_handoff_alarm 1
-  ctx
-  [[ "$CTX" == *"handoff-alarm: 1"* ]] || false
-  [[ "$CTX" != *"NOT being drained"* ]] || false
 }
 
 @test "an absent IDL file reads NEVER-RAN, not fresh" {
@@ -281,8 +155,8 @@ ew_mutant() { # a copy of the LIVE subject with one line mutated → the strong 
 }
 
 @test "MUTATION control: the foreign-row assertion is not vacuous" {
-  # Widen the row filter to ANY row — i.e. exactly the "newest ts in idl.jsonl" reading the brief
-  # specified — and the same fixture must flip to reporting a healthy sweep.
+  # Widen the row filter to ANY row — i.e. exactly the "newest ts in idl.jsonl" reading — and the
+  # same fixture must flip to reporting a healthy sweep.
   printf '{"ts":"%s","hook":"waiting-recycle","disposition":"abstained"}\n' \
     "$(date -u -r "$(( CC_ESCALATION_NOW - 5 ))" +%Y-%m-%dT%H:%M:%SZ)" > "$CC_IDL"
   local m
@@ -319,38 +193,43 @@ foreign_rows_mb() { # <MB> — append ~<MB> MB of other tools' rows, newer than 
   [[ "$CTX" != *"NEVER run"* ]] || false
 }
 
-# ── expired-unread ───────────────────────────────────────────────────────────────────────────────
-@test "expired-unread counts rows from the last 24h only" {
-  printf '{"ts":"%s","kind":"expired-unread"}\n' "$(date -u -r "$(( CC_ESCALATION_NOW - 3600 ))"   +%Y-%m-%dT%H:%M:%SZ)" >  "$CC_EXPIRED_LEDGER"
-  printf '{"ts":"%s","kind":"expired-unread"}\n' "$(date -u -r "$(( CC_ESCALATION_NOW - 7200 ))"   +%Y-%m-%dT%H:%M:%SZ)" >> "$CC_EXPIRED_LEDGER"
-  printf '{"ts":"%s","kind":"expired-unread"}\n' "$(date -u -r "$(( CC_ESCALATION_NOW - 200000 ))" +%Y-%m-%dT%H:%M:%SZ)" >> "$CC_EXPIRED_LEDGER"
+# ── the scan-health line ─────────────────────────────────────────────────────────────────────────
+@test "an unrunnable scan is REPORTED, alone, over a live sweep" {
+  # The Stop readout's counter prints 0 when perl is missing; this line is what says that 0 is a
+  # board nobody read. The healthy-silent case above is its control: same fixture, real perl.
+  no_perl
   ctx
-  [[ "$CTX" == *"2 record(s) expired UNREAD in the last 24h"* ]] || false
+  [[ "$CTX" == "ESCALATION PIPELINE: ⚠ escalation record scan DID NOT RUN"* ]] || false
+  [[ "$CTX" == *"ABSENT, not zero"* ]] || false
+  [[ "$CTX" != *"autonomy-sweep"* ]] || false
 }
 
-@test "an expired ledger holding only OLD rows stays silent (control)" {
-  printf '{"ts":"%s","kind":"expired-unread"}\n' "$(date -u -r "$(( CC_ESCALATION_NOW - 200000 ))" +%Y-%m-%dT%H:%M:%SZ)" > "$CC_EXPIRED_LEDGER"
+@test "an unrunnable scan and a dead sweep compose into ONE message, one line each" {
+  no_perl
+  sweep_ran_at 3600
   run "$HOOK"
   [ "$status" -eq 0 ] || false
-  [ -z "$output" ]
+  [ "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" -eq 1 ]
+  [ "$(printf '%s' "$output" | jq -r '.systemMessage' | wc -l | tr -d ' ')" -eq 2 ]
+  printf '%s' "$output" | jq -e '.systemMessage | test("scan DID NOT RUN") and test("NOT being drained")' >/dev/null
 }
 
-# ── contract ─────────────────────────────────────────────────────────────────────────────────────
+# ── channel, kill switch, purity ─────────────────────────────────────────────────────────────────
+@test "the emit is a top-level systemMessage — never additionalContext" {
+  # additionalContext is model context the TUI hides; hookSpecificOutput.systemMessage is silently
+  # ignored. Only the top-level key renders for the operator.
+  sweep_ran_at 3600
+  run "$HOOK"
+  [ "$status" -eq 0 ] || false
+  printf '%s' "$output" | jq -e '(.systemMessage | length > 0) and (has("hookSpecificOutput") | not)' >/dev/null
+}
+
 @test "CC_ESCALATION_WATCH=0 silences the hook even with a full board and a dead sweep" {
-  mk_handoff_alarm 1; mk_announce_alarm 1; mk_page 1
+  full_board
   sweep_ran_at 99999
   CC_ESCALATION_WATCH=0 run "$HOOK"
   [ "$status" -eq 0 ] || false
   [ -z "$output" ]
-}
-
-@test "output is valid SessionStart additionalContext JSON" {
-  command -v jq >/dev/null 2>&1 || skip "jq absent"
-  mk_handoff_alarm 1
-  run "$HOOK"
-  [ "$status" -eq 0 ] || false
-  printf '%s' "$output" | jq -e '.hookSpecificOutput.hookEventName=="SessionStart"' >/dev/null
-  printf '%s' "$output" | jq -e '.hookSpecificOutput.additionalContext | length > 0' >/dev/null
 }
 
 @test "the hook mutates NOTHING — no seen marker, no record, no ledger row" {
@@ -367,14 +246,6 @@ foreign_rows_mb() { # <MB> — append ~<MB> MB of other tools' rows, newer than 
   [ "$(entry_count "$CC_SWEEP_SEEN_DIR")" -eq "$before_seen" ]
   [ "$(entry_count "$CC_HANDOFF_ALARM_DIR" "$CC_ANNOUNCE_ALARM_DIR" "$CC_COMPLETION_RECORDS_DIR" "$CC_PAGES_DIR" "$CC_MAILBOX_DIR/dead-letter")" -eq "$before_rec" ]
   [ "$(wc -l < "$CC_IDL")" -eq "$before_idl" ]
-}
-
-@test "an absent store dir is tolerated (fail-open), and the rest still render" {
-  rm -rf "$CC_PAGES_DIR"
-  mk_handoff_alarm 1
-  ctx
-  [[ "$CTX" == *"handoff-alarm: 1"* ]] || false
-  [[ "$CTX" != *"page:"* ]] || false
 }
 
 @test "--selftest exits 0 and reports GREEN" {

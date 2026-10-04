@@ -200,7 +200,7 @@ linked() { [ -L "$HOME/.claude-$1/settings.json" ] && [ "$(readlink "$HOME/.clau
   fork_realistic
   run bash "$REPO/hooks/config-mirror-assert.sh"
   [ "$status" -eq 0 ]
-  c="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
+  c="$(printf '%s' "$output" | jq -r '.systemMessage')"
   [[ "$c" == *"settings.json DIVERGES from the shared ~/.claude/settings.json — .claude-next:"* ]]
 }
 

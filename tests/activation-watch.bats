@@ -1,7 +1,12 @@
 #!/usr/bin/env bats
 # activation-watch (SessionStart) — the absence-is-loud re-page for the C10 activation queue (D-v).
 # The tool's --selftest RED-proves the age/done/absent logic; these bats add independent CLI-level
-# coverage via CC_ACTIVATION_DIR fixtures + the SessionStart additionalContext JSON contract.
+# coverage via CC_ACTIVATION_DIR fixtures + the SessionStart JSON contract.
+#
+# CHANGED 2026-10-04 — the SessionStart emit is a top-level systemMessage carrying drift only; the
+# un-run queue (axis 1) left it and is read through `--queue`. So every axis-1 case below runs
+# `"$H" --queue`, and the cases that pinned additionalContext now pin its ABSENCE. The page-once
+# damping went with the SessionStart rendering it throttled.
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -31,7 +36,9 @@ stage() { printf '#!/bin/bash\n' > "$Q/$1"; [ -n "${2:-}" ] && touch -t "$2" "$Q
 # The count is environment-stable: every check emits exactly one okp/badp, and the sole conditional
 # (jq present vs absent, hooks/activation-watch.sh:385-388) emits one either way.
 @test "selftest passes, is non-vacuous (floor), and its tally matches what it rendered" {
-  floor=26                        # raise when checks are added; LOWERING it is a deliberate act
+  # LOWERED 26 → 19 on 2026-10-04, deliberately: the eight PAGE-ONCE damping checks were deleted
+  # with the damping itself (axis 1 no longer renders at SessionStart, so nothing is left to damp).
+  floor=19                        # raise when checks are added; LOWERING it is a deliberate act
   run "$H" --selftest
   [ "$status" -eq 0 ]
   # `|| true` normalizes grep's rc-1-on-zero-matches, which would otherwise abort the test HERE with
@@ -49,19 +56,35 @@ stage() { printf '#!/bin/bash\n' > "$Q/$1"; [ -n "${2:-}" ] && touch -t "$2" "$Q
   ! printf '%s' "$output" | grep -q '^  FAIL'
 }
 
-@test "stale (>24h) un-run activation → named in the additionalContext" {
+@test "stale (>24h) un-run activation → named by --queue" {
   stage "p0-14-activate.sh" "$OLD"
-  CC_ACTIVATION_DIR="$Q" run "$H"
+  CC_ACTIVATION_DIR="$Q" run "$H" --queue
   [ "$status" -eq 0 ]
   printf '%s' "$output" | grep -q 'p0-14-activate.sh'
   printf '%s' "$output" | grep -q 'ACTIVATION QUEUE'
 }
 
-@test "output is valid SessionStart additionalContext JSON" {
-  stage "x-activate.sh" "$OLD"
+@test "the SessionStart emit is ONE top-level systemMessage — never additionalContext" {
+  # additionalContext is model context the TUI hides; systemMessage renders for the operator at 0
+  # tokens. hookSpecificOutput.systemMessage is silently ignored, so the key must be TOP-LEVEL.
+  M="$BATS_TEST_TMPDIR/mirror"; mkdir -p "$M"
+  stage "x-activate.sh" "$OLD"; : > "$Q/x-activate.sh.done"
+  CC_ACTIVATION_DIR="$Q" CC_ACTIVATION_MIRROR_DIR="$M" run "$H"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | jq -e '.systemMessage | test("LIVE-ONLY") and test("x-activate.sh")' >/dev/null
+  printf '%s' "$output" | jq -e 'has("hookSpecificOutput") | not' >/dev/null
+  [ "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" -eq 1 ]
+}
+
+@test "an un-run queue in parity puts NOTHING on the SessionStart emit (the Stop readout owns it)" {
+  stage "p0-14-activate.sh" "$OLD"
+  stage "fresh-activate.sh"
   CC_ACTIVATION_DIR="$Q" run "$H"
-  printf '%s' "$output" | jq -e '.hookSpecificOutput.hookEventName == "SessionStart"' >/dev/null
-  printf '%s' "$output" | jq -e '.hookSpecificOutput.additionalContext | test("x-activate.sh")' >/dev/null
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  # non-vacuity: the SAME fixture is a two-item queue to the on-demand reader
+  CC_ACTIVATION_DIR="$Q" run "$H" --queue
+  printf '%s' "$output" | grep -q '2 pending-activation script(s) NOT run'
 }
 
 @test "fresh (<24h) un-run activation → named under the FRESH partition, not the rotting one" {
@@ -71,7 +94,7 @@ stage() { printf '#!/bin/bash\n' > "$Q/$1"; [ -n "${2:-}" ] && touch -t "$2" "$Q
   # that survives is the one that was actually worth having: a fresh entry must not be reported as
   # ROTTING. Kill switch coverage is the M3 case below.
   stage "fresh-activate.sh"
-  CC_ACTIVATION_DIR="$Q" run "$H"
+  CC_ACTIVATION_DIR="$Q" run "$H" --queue
   [ "$status" -eq 0 ]
   printf '%s' "$output" | grep -q 'fresh-activate.sh'
   printf '%s' "$output" | grep -q 'FRESH'
@@ -81,7 +104,7 @@ stage() { printf '#!/bin/bash\n' > "$Q/$1"; [ -n "${2:-}" ] && touch -t "$2" "$Q
 @test ".done-marked stale activation → NOT named" {
   stage "ran-activate.sh" "$OLD"
   : > "$Q/ran-activate.sh.done"
-  CC_ACTIVATION_DIR="$Q" run "$H"
+  CC_ACTIVATION_DIR="$Q" run "$H" --queue
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
@@ -98,7 +121,7 @@ stage() { printf '#!/bin/bash\n' > "$Q/$1"; [ -n "${2:-}" ] && touch -t "$2" "$Q
   stage "stale-a.sh" "$OLD"
   stage "fresh-b.sh"
   stage "done-c.sh" "$OLD"; : > "$Q/done-c.sh.done"
-  CC_ACTIVATION_DIR="$Q" run "$H"
+  CC_ACTIVATION_DIR="$Q" run "$H" --queue
   printf '%s' "$output" | grep -q '2 pending-activation script(s) NOT run'
   printf '%s' "$output" | grep -q 'ROTTING (>24h, 1): stale-a.sh'
   printf '%s' "$output" | grep -q 'FRESH (<24h, 1)'
@@ -188,14 +211,14 @@ stage() { printf '#!/bin/bash\n' > "$Q/$1"; [ -n "${2:-}" ] && touch -t "$2" "$Q
   printf '%s' "$output" | grep -q 'GREEN'
 }
 
-@test "both axes compose into ONE valid SessionStart emit" {
+@test "a script that is both un-run and LIVE-ONLY emits the drift alone, never the queue" {
   M="$BATS_TEST_TMPDIR/mirror"; mkdir -p "$M"
   stage "stale-and-uncommitted-activate.sh" "$OLD"      # stale (axis 1) AND live-only (axis 2)
   CC_ACTIVATION_DIR="$Q" CC_ACTIVATION_MIRROR_DIR="$M" run "$H"
   [ "$status" -eq 0 ]
-  printf '%s' "$output" | jq -e '.hookSpecificOutput.hookEventName == "SessionStart"' >/dev/null
-  printf '%s' "$output" | jq -e '.hookSpecificOutput.additionalContext | test("ACTIVATION QUEUE")' >/dev/null
-  printf '%s' "$output" | jq -e '.hookSpecificOutput.additionalContext | test("ACTIVATION SSOT PARITY")' >/dev/null
+  printf '%s' "$output" | jq -e '.systemMessage | test("ACTIVATION SSOT PARITY")' >/dev/null
+  printf '%s' "$output" | jq -e '.systemMessage | test("ACTIVATION QUEUE") | not' >/dev/null
+  printf '%s' "$output" | jq -e 'has("hookSpecificOutput") | not' >/dev/null
 }
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
@@ -210,7 +233,7 @@ stage() { printf '#!/bin/bash\n' > "$Q/$1"; [ -n "${2:-}" ] && touch -t "$2" "$Q
 @test "M3: the headline COUNT is the whole queue, and fresh entries get their own partition" {
   stage "a-old-activate.sh" "$OLD"
   stage "b-new-activate.sh"
-  CC_ACTIVATION_DIR="$Q" run "$H"
+  CC_ACTIVATION_DIR="$Q" run "$H" --queue
   [ "$status" -eq 0 ]
   printf '%s' "$output" | grep -q '2 pending-activation script(s) NOT run'
   printf '%s' "$output" | grep -q 'ROTTING'
@@ -222,7 +245,7 @@ stage() { printf '#!/bin/bash\n' > "$Q/$1"; [ -n "${2:-}" ] && touch -t "$2" "$Q
   # Without this, a partition that names everything unconditionally would pass the test above while
   # paging on a queue with nothing pending — turning a starvation defect into alarm fatigue.
   stage "c-done-activate.sh" "$OLD"; : > "$Q/c-done-activate.sh.done"
-  CC_ACTIVATION_DIR="$Q" run "$H"
+  CC_ACTIVATION_DIR="$Q" run "$H" --queue
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
@@ -230,7 +253,7 @@ stage() { printf '#!/bin/bash\n' > "$Q/$1"; [ -n "${2:-}" ] && touch -t "$2" "$Q
 @test "M3 kill switch: CC_ACTIVATION_AGE_FILTER=on restores the >24h filter exactly" {
   stage "a-old-activate.sh" "$OLD"
   stage "b-new-activate.sh"
-  CC_ACTIVATION_DIR="$Q" CC_ACTIVATION_AGE_FILTER=on run "$H"
+  CC_ACTIVATION_DIR="$Q" CC_ACTIVATION_AGE_FILTER=on run "$H" --queue
   printf '%s' "$output" | grep -q 'staged >24h and NOT run'
   ! printf '%s' "$output" | grep -q 'b-new-activate.sh' || false
 }
@@ -486,19 +509,15 @@ arm() {
   ! printf '%s' "$output" | grep -q 'ARMED BUT NOT IN EFFECT' || false
 }
 
-@test "M6: axis 4 composes into the SessionStart emit as ONE valid JSON object" {
+@test "M6: axis 4 reaches the SessionStart emit as ONE systemMessage, without the queue beside it" {
   arm "70-arm-activate.sh" "$BATS_TEST_TMPDIR/w.env" 'export M6_FIXTURE_VAR=1'
-  stage "p0-99-activate.sh" "$OLD"                    # axis 1 fires too ⇒ both must coexist
-  CC_ACTIVATION_DIR="$Q" CC_ACTIVATION_DAMP_S=0 run env -u M6_FIXTURE_VAR "$H"
+  stage "p0-99-activate.sh" "$OLD"                    # an un-run script too ⇒ it must stay out
+  CC_ACTIVATION_DIR="$Q" run env -u M6_FIXTURE_VAR "$H"
   [ "$status" -eq 0 ]
-  if command -v jq >/dev/null 2>&1; then
-    printf '%s' "$output" | jq -e '.hookSpecificOutput.additionalContext' >/dev/null
-    ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
-  else
-    ctx="$output"
-  fi
-  printf '%s' "$ctx" | grep -q 'ACTIVATION QUEUE'
+  printf '%s' "$output" | jq -e 'has("hookSpecificOutput") | not' >/dev/null
+  ctx="$(printf '%s' "$output" | jq -r '.systemMessage')"
   printf '%s' "$ctx" | grep -q 'ARMED BUT NOT IN EFFECT'
+  ! printf '%s' "$ctx" | grep -q 'ACTIVATION QUEUE' || false
 }
 
 # ── the .superseded state (2026-09-04) ────────────────────────────────────────────────────────────
@@ -511,7 +530,7 @@ arm() {
 @test "SUPERSEDED: a .superseded marker settles a script, exactly as .done does" {
   printf '#!/bin/bash\n' > "$Q/sup-activate.sh"; touch -t "$OLD" "$Q/sup-activate.sh"
   touch "$Q/sup-activate.sh.superseded"
-  run env CC_ACTIVATION_DIR="$Q" bash "$H"
+  run env CC_ACTIVATION_DIR="$Q" bash "$H" --queue
   [ "$status" -eq 0 ]
   n_named="$(printf '%s\n' "$output" | grep -c 'sup-activate' || true)"
   [ "${n_named:-0}" -eq 0 ] || {
@@ -520,7 +539,7 @@ arm() {
 
 @test "SUPERSEDED non-vacuity: the SAME fixture without the marker IS reported" {
   printf '#!/bin/bash\n' > "$Q/sup2-activate.sh"; touch -t "$OLD" "$Q/sup2-activate.sh"
-  run env CC_ACTIVATION_DIR="$Q" bash "$H"
+  run env CC_ACTIVATION_DIR="$Q" bash "$H" --queue
   [ "$status" -eq 0 ]
   n_named="$(printf '%s\n' "$output" | grep -c 'sup2-activate' || true)"
   [ "${n_named:-0}" -ge 1 ] || {

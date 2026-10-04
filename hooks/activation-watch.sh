@@ -8,8 +8,15 @@
 # activation is silently-incomplete wiring (P8 sat ~90 min on stated-but-unexecuted verbal intent;
 # a17 §3 "make the activation QUEUE absence-is-loud — re-page an un-run activation"). This hook
 # surfaces, once per session, every pending-activation script older than N hours with NO matching
-# `.done` marker — so an un-run wiring step can't rot unseen. Advisory only (additionalContext);
-# never blocks; fail-open. It reads NO session state and mutates nothing.
+# `.done` marker — so an un-run wiring step can't rot unseen. Advisory only; never blocks; fail-open.
+# It reads NO session state and mutates nothing.
+#
+# CHANNEL (2026-10-04): the SessionStart emit is a top-level `systemMessage` — rendered in the
+# operator's terminal at 0 model tokens (hooks/accounts-board.sh header has the channel proof) —
+# and it carries only the drift axes (2, 3, 4). Measured over 7 days: 0 of ~720 sessions acted on
+# this hook's `additionalContext`, and Claude Code hides that attachment in the TUI, so the block
+# reached neither reader. The un-run QUEUE (axis 1) is no longer emitted at session start at all:
+# the Stop readout already shows it as `▶ cc-do`. It stays available on demand as `--queue`.
 #
 # Convention: an activation `foo-activate.sh` is marked run by an adjacent `foo-activate.sh.done`
 # marker (the operator `touch`es it after running). Selftest: `--selftest`. Full list: `--queue`.
@@ -71,40 +78,6 @@ SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]
 MIRROR_REL="docs/activation/pending-activation"   # the repo-side SSOT, relative to a checkout root
 FALLBACK_REPO="${CC_ACTIVATION_REPO:-$HOME/Development/claude-infrastructure}"
 
-# ── PAGE-ONCE (face 3, inertness-generator-2026-08-07 §3/§4.4) ────────────────────────────────────
-# The itemized banner fired at EVERY SessionStart, naming all 38 items every time. An alarm that
-# always fires carries exactly as many bits as one that cannot (MEMORY.md alarm-polarity), and this
-# one had trained the operator to skip past a 38-line wall for weeks. Face 3's contract is that the
-# hand-queue survives only for genuinely operator-owned steps, "each blocking its own item and paged
-# ONCE". So the itemized page is now an EDGE — it renders when the un-run SET changes (or the window
-# elapses) — and the steady state collapses to one counted line, which is what CLAUDE.md already does
-# for the standing pile via the `◆` line. Absence stays loud (the count always asserts); only the
-# repetition is deleted.
-#
-# Fingerprint = the sorted un-run set, never a timestamp or a count: a fingerprint that moves every
-# sweep silently disables damping while looking wired, and a bare COUNT would hide a swap (one item
-# run, one staged, same total). Window defaults to 24h, matching CC_DEPLOY_DAMP_S — this store moves
-# on the scale of days, so page-damp's 30-minute default would still fire at nearly every session.
-DAMP_WINDOW_S="${CC_ACTIVATION_DAMP_S:-86400}"
-DAMP_FILE="${CC_ACTIVATION_DAMP_FILE:-$DIR/.queue-page.damp}"
-case "$DAMP_WINDOW_S" in ''|*[!0-9]*) DAMP_WINDOW_S=86400 ;; esac
-
-queue_damp_ok() { # <fingerprint> → 0 = render the full page (new set / window elapsed) · 1 = suppress
-  local fp="$1" prev_fp="" prev_ts=0 now
-  [ "$DAMP_WINDOW_S" -eq 0 ] && return 0                  # 0 ⇒ damping off (the documented spelling)
-  now="$(date +%s 2>/dev/null || echo 0)"
-  case "$now" in ''|*[!0-9]*) return 0 ;; esac             # no clock ⇒ fail OPEN, never lose the page
-  if [ -f "$DAMP_FILE" ]; then
-    prev_ts="$(sed -n '1p' "$DAMP_FILE" 2>/dev/null | tr -dc '0-9')"
-    prev_fp="$(sed -n '2p' "$DAMP_FILE" 2>/dev/null)"
-    case "$prev_ts" in ''|*[!0-9]*) prev_ts=0 ;; esac
-    # A CHANGED set re-pages immediately: change is signal, repetition is noise.
-    if [ "$prev_fp" = "$fp" ] && [ "$(( now - prev_ts ))" -lt "$DAMP_WINDOW_S" ]; then return 1; fi
-  fi
-  printf '%s\n%s\n' "$now" "$fp" > "$DAMP_FILE" 2>/dev/null || true   # unwritable ⇒ page every time
-  return 0
-}
-
 deref() { # <path> → the real file behind any symlink chain (readlink -f, BSD-safe fallback)
   local p="$1" t n=0
   readlink -f "$p" 2>/dev/null && return 0
@@ -135,15 +108,17 @@ resolve_mirror() { # → the repo-side pending-activation dir, or rc 1. NEVER a 
 
 join_names() { local s; s="$(printf '%s, ' "$@")"; printf '%s' "${s%, }"; }
 
-emit() { # <context-string> — SessionStart additionalContext (JSON form, matching session-start.sh)
+emit() { # <message> — top-level systemMessage: the operator's terminal, never model context
   if [ -n "$JQ" ]; then
-    "$JQ" -cn --arg c "$1" '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$c}}'
+    "$JQ" -cn --arg c "$1" '{systemMessage:$c}'
   else
-    printf '%s\n' "$1"   # SessionStart also injects plain stdout as context (frontier-status precedent)
+    # No plain-stdout fallback: SessionStart injects bare stdout as model context, the channel this
+    # hook left. Without jq, python3 encodes it; without either, stay silent (fail-open).
+    CC_MSG="$1" python3 -c 'import json,os;print(json.dumps({"systemMessage":os.environ["CC_MSG"]}))' 2>/dev/null || true
   fi
 }
 
-age_axis() { # → the QUEUE finding (axis 1), empty only when the queue is genuinely empty
+age_axis() { # → the QUEUE listing (axis 1, `--queue` only), empty only when the queue is genuinely empty
   # M3 (OPERATOR_SURFACE_V2 §4 F7) — PARTITION, never FILTER. The >MAX_AGE_H gate was built against
   # rot ("do not nag about something staged five minutes ago") and it hid the newest entries, which
   # are exactly the ones a just-finished rebuild staged and the ones the operator still has context
@@ -184,25 +159,9 @@ EOF
     return 0
   fi
   n=$(( ${#stale[@]} + ${#fresh[@]} ))
-  [ "$n" -eq 0 ] && { rm -f "$DAMP_FILE" 2>/dev/null; return 0; }   # drained ⇒ re-arm, so a refill is loud
-  # The un-run SET, order-independent. Sorted so a re-listing in a different order is not a "change",
-  # and hashed so the marker stays one short line whatever the queue size.
-  # `${arr[@]+"${arr[@]}"}`, not `"${arr[@]}"`: under `set -u` bash 3.2 treats an EMPTY array
-  # expansion as an unbound variable and aborts the substitution. That does not fail loudly here —
-  # it yields an EMPTY fingerprint, so every set hashes identically and the damp can never re-page on
-  # a change, i.e. the mute button with no escape. Caught by the change/swap fixtures below, which is
-  # why they exist rather than only the "unchanged is quiet" half.
-  local fp
-  fp="$(printf '%s\n' ${stale[@]+"${stale[@]}"} ${fresh[@]+"${fresh[@]}"} 2>/dev/null | sort | cksum | tr -d ' \n')"
-  [ -n "$fp" ] || fp="unhashable-$n"   # a hash we could not take must not read as "same as last time"
-  if ! queue_damp_ok "$fp"; then
-    # STEADY STATE — one counted line, per class. Absence is still loud; the 38-line wall is not.
-    printf 'ACTIVATION QUEUE: %s un-run (%s rotting >%sh) — unchanged since the last page, so the list is suppressed. Full list: `bash %s --queue`. New wiring should land as a `c10` migration (migrations/README.md), not here.\n' \
-      "$n" "${#stale[@]}" "$MAX_AGE_H" "$SELF"
-    return 0
-  fi
+  [ "$n" -eq 0 ] && return 0
   local out
-  out="$(printf 'ACTIVATION QUEUE (absence-is-loud, D-v): %s pending-activation script(s) NOT run. These are C10 operator hand-steps (agent stages, operator runs): review + run %s/<name>, then `touch %s/<name>.done`. An un-run activation is silently-incomplete wiring. This full listing renders on a CHANGE of the un-run set (or every %sh); in between you get one counted line.' "$n" "$DIR" "$DIR" "$(( DAMP_WINDOW_S / 3600 ))")"
+  out="$(printf 'ACTIVATION QUEUE (absence-is-loud, D-v): %s pending-activation script(s) NOT run. These are C10 operator hand-steps (agent stages, operator runs): review + run %s/<name>, then `touch %s/<name>.done`. An un-run activation is silently-incomplete wiring.' "$n" "$DIR" "$DIR")"
   # ROTTING first — age is the escalation signal, so it leads. But the count above is the QUEUE.
   if [ "${#stale[@]}" -gt 0 ]; then
     out="$out"$'\n'"  ROTTING (>${MAX_AGE_H}h, ${#stale[@]}): $(join_names "${stale[@]}")"
@@ -496,15 +455,12 @@ EOF
 
 watch() {
   [ -d "$DIR" ] || exit 0
-  local msg age par inert envarm
-  age="$(age_axis)"
+  local msg par inert envarm
+  # Axis 1 (the un-run queue) is deliberately NOT here — see the CHANNEL note in the header.
   par="$(parity_axis)"
   inert="$(inert_axis)"
   envarm="$(envarm_axis)"
-  msg="$age"
-  if [ -n "$par" ]; then
-    if [ -n "$msg" ]; then msg="$msg"$'\n\n'"$par"; else msg="$par"; fi
-  fi
+  msg="$par"
   # Axis 3 last but never least: a CLAIMED-DONE-BUT-INERT activation is the quietest of the three
   # (axis 1 is silenced by the very marker that is lying), so it must still reach the operator.
   if [ -n "$inert" ]; then
@@ -541,8 +497,9 @@ selftest() {
   printf '#!/bin/bash\n' > "$d/q/fresh-activate.sh"                                   # mtime = now
   printf '#!/bin/bash\n' > "$d/q/done-activate.sh";   touch -t "$old" "$d/q/done-activate.sh"; : > "$d/q/done-activate.sh.done"
 
-  # mirror := the queue itself ⇒ axis 2 is trivially in parity, so axis 1 is measured alone
-  out="$(CC_ACTIVATION_DIR="$d/q" CC_ACTIVATION_MIRROR_DIR="$d/q" CC_ACTIVATION_MAX_AGE_H=24 CC_ACTIVATION_DAMP_S=0 "$SELF")"
+  # mirror := the queue itself ⇒ axis 2 is trivially in parity, so axis 1 is measured alone.
+  # Axis 1 is read through `--queue`, its only entry since 2026-10-04 (header, CHANNEL).
+  out="$(CC_ACTIVATION_DIR="$d/q" CC_ACTIVATION_MIRROR_DIR="$d/q" CC_ACTIVATION_MAX_AGE_H=24 "$SELF" --queue)"
   printf '%s' "$out" | grep -q 'stale-activate.sh' && okp "stale un-run script is named" || badp "stale un-run NOT named"
   # CHANGED 2026-07-29 (row 10, §4 F7): axis 1 PARTITIONS instead of FILTERING, so a fresh un-run
   # script is now NAMED — under a FRESH heading, not a rotting one. The old assertion pinned the
@@ -551,48 +508,14 @@ selftest() {
   printf '%s' "$out" | grep -q 'ROTTING' && okp "rotting partition labelled" || badp "no ROTTING partition"
   printf '%s' "$out" | grep -q 'FRESH'   && okp "fresh partition labelled"   || badp "no FRESH partition"
   printf '%s' "$out" | grep -q '2 pending-activation script(s) NOT run' && okp "the count is the QUEUE (2), not a filtered subset (1)" || badp "count is not the queue"
-  out2="$(CC_ACTIVATION_DIR="$d/q" CC_ACTIVATION_MIRROR_DIR="$d/q" CC_ACTIVATION_AGE_FILTER=on CC_ACTIVATION_DAMP_S=0 "$SELF")"
+  out2="$(CC_ACTIVATION_DIR="$d/q" CC_ACTIVATION_MIRROR_DIR="$d/q" CC_ACTIVATION_AGE_FILTER=on "$SELF" --queue)"
   printf '%s' "$out2" | grep -q 'fresh-activate.sh' && badp "kill switch did not restore the filter" || okp "CC_ACTIVATION_AGE_FILTER=on restores the >24h filter"
   printf '%s' "$out" | grep -q 'done-activate.sh'  && badp ".done-marked script wrongly named" || okp ".done-marked script NOT named"
-  printf '%s' "$out" | grep -q 'ACTIVATION QUEUE'  && okp "emits the absence-is-loud line" || badp "no activation-queue line"
-  if [ -n "$JQ" ]; then
-    printf '%s' "$out" | "$JQ" -e '.hookSpecificOutput.hookEventName=="SessionStart"' >/dev/null 2>&1 \
-      && okp "output is valid SessionStart additionalContext JSON" || badp "output not valid SessionStart JSON"
-  else okp "jq absent — plain-stdout fallback (skipped JSON check)"; fi
-
-  # ══ PAGE-ONCE (face 3) — the itemized page is an EDGE, the steady state is one counted line ══════
-  # Its OWN dir, so the marker cannot leak into the cases above and silence one of them (every case
-  # above runs with damping off precisely because a second invocation over the same set would
-  # otherwise go quiet and its assertion would pass vacuously — memory:
-  # sibling-guard-makes-the-fixture-vacuous).
-  mkdir -p "$d/dampq"
-  printf '#!/bin/bash\n' > "$d/dampq/one-activate.sh";  touch -t "$old" "$d/dampq/one-activate.sh"
-  dq() { CC_ACTIVATION_DIR="$d/dampq" CC_ACTIVATION_MIRROR_DIR="$d/dampq" "$SELF" "$@"; }
-  out="$(dq)"
-  printf '%s' "$out" | grep -q 'one-activate.sh' && okp "first page of a new set is ITEMIZED" || badp "first page was not itemized"
-  out="$(dq)"
-  printf '%s' "$out" | grep -q 'one-activate.sh' && badp "the SAME un-run set re-listed every session (the always-fires alarm survives)" || okp "an unchanged set is damped — the 38-line wall is gone"
-  printf '%s' "$out" | grep -q '1 un-run' && okp "…but absence stays LOUD: one counted line still asserts" || badp "damping went fully silent — absence-is-loud lost"
-  # A CHANGED set re-pages IMMEDIATELY. Without this the damp is just a mute button.
-  printf '#!/bin/bash\n' > "$d/dampq/two-activate.sh"; touch -t "$old" "$d/dampq/two-activate.sh"
-  out="$(dq)"
-  printf '%s' "$out" | grep -q 'two-activate.sh' && okp "a CHANGED set re-pages immediately (change is signal)" || badp "a newly staged activation was swallowed by the damp window"
-  # A SWAP keeps the count identical — the case a count-keyed fingerprint would miss.
-  : > "$d/dampq/two-activate.sh.done"
-  printf '#!/bin/bash\n' > "$d/dampq/three-activate.sh"; touch -t "$old" "$d/dampq/three-activate.sh"
-  out="$(dq)"
-  printf '%s' "$out" | grep -q 'three-activate.sh' && okp "a SWAP at equal count re-pages (fingerprint is the SET, not the count)" || badp "an equal-count swap was damped — the fingerprint is keying on the count"
-  # `--queue` is the escape hatch the damped line points at, and looking must not re-arm the window.
-  out="$(dq --queue)"
-  printf '%s' "$out" | grep -q 'three-activate.sh' && okp "--queue prints the full list on demand" || badp "--queue did not print the list"
-  out="$(dq)"
-  printf '%s' "$out" | grep -q 'three-activate.sh' && badp "--queue re-armed the damp marker — a look must not consume the next genuine change" || okp "--queue did not disturb the damp state"
-  # DRAINED ⇒ the marker is cleared, so a REFILL is loud again rather than inheriting the old window.
-  for _m in one two three; do : > "$d/dampq/$_m-activate.sh.done"; done
-  dq >/dev/null 2>&1
-  printf '#!/bin/bash\n' > "$d/dampq/four-activate.sh"; touch -t "$old" "$d/dampq/four-activate.sh"
-  out="$(dq)"
-  printf '%s' "$out" | grep -q 'four-activate.sh' && okp "a queue that drained and refilled pages LOUD (marker re-armed on empty)" || badp "a refill after a drain stayed damped"
+  printf '%s' "$out" | grep -q 'ACTIVATION QUEUE'  && okp "--queue emits the absence-is-loud line" || badp "no activation-queue line"
+  # The SAME un-run queue, in parity, must put NOTHING on the SessionStart emit: the two checks
+  # above are what make this silence a statement about the channel rather than an empty fixture.
+  out="$(CC_ACTIVATION_DIR="$d/q" CC_ACTIVATION_MIRROR_DIR="$d/q" "$SELF")"; rc=$?
+  { [ -z "$out" ] && [ "$rc" -eq 0 ]; } && okp "an un-run queue is NOT emitted at SessionStart" || badp "the queue still reaches the SessionStart emit"
 
   # a genuinely EMPTY queue → NO output, exit 0. `.done`-marked, not merely fresh: since axis 1
   # partitions, "nothing pending" is the only silent state, which is the honest definition of clean.
@@ -619,7 +542,11 @@ selftest() {
   printf '#!/bin/bash\n'         > "$d/p/live/intentional-activate.sh"; : > "$d/p/live/intentional-activate.sh.local"
   for _f in "$d/p/live"/*.sh "$d/p/repo"/*.sh; do : > "$_f.done"; done      # axis-1 silence, by marker
 
-  out="$(CC_ACTIVATION_DIR="$d/p/live" CC_ACTIVATION_MIRROR_DIR="$d/p/repo" CC_ACTIVATION_DAMP_S=0 "$SELF")"
+  out="$(CC_ACTIVATION_DIR="$d/p/live" CC_ACTIVATION_MIRROR_DIR="$d/p/repo" "$SELF")"
+  if [ -n "$JQ" ]; then
+    printf '%s' "$out" | "$JQ" -e '(.systemMessage | test("LIVE-ONLY")) and (has("hookSpecificOutput") | not)' >/dev/null 2>&1 \
+      && okp "drift is ONE top-level systemMessage, no model context" || badp "drift not emitted as a bare systemMessage"
+  else okp "jq absent — python3 encoder path (skipped JSON check)"; fi
   printf '%s' "$out" | grep -q 'liveonly-activate.sh'    && okp "LIVE-ONLY named (the unrecoverable class)"   || badp "LIVE-ONLY drift NOT named"
   printf '%s' "$out" | grep -q 'repoonly-activate.sh'    && okp "REPO-ONLY named (committed, never deployed)" || badp "REPO-ONLY drift NOT named"
   printf '%s' "$out" | grep -q 'drifted-activate.sh'     && okp "CONTENT-DRIFT named (live ≠ committed SSOT)" || badp "CONTENT-DRIFT NOT named"
@@ -627,25 +554,21 @@ selftest() {
   printf '%s' "$out" | grep -q 'same-activate.sh'        && badp "in-parity file wrongly named"               || okp "in-parity file NOT named (no false drift)"
 
   # positive control: the SAME code path must go quiet when the two copies agree
-  out="$(CC_ACTIVATION_DIR="$d/p/live" CC_ACTIVATION_MIRROR_DIR="$d/p/live" CC_ACTIVATION_DAMP_S=0 "$SELF")"; rc=$?
+  out="$(CC_ACTIVATION_DIR="$d/p/live" CC_ACTIVATION_MIRROR_DIR="$d/p/live" "$SELF")"; rc=$?
   { [ -z "$out" ] && [ "$rc" -eq 0 ]; } && okp "identical live+repo → silent (positive control)" || badp "false drift on identical dirs"
 
   # an unrunnable check must be LOUD — the vacuous-pass failure mode this axis exists to prevent
-  out="$(CC_ACTIVATION_DIR="$d/p/live" CC_ACTIVATION_MIRROR_DIR="$d/nope" CC_ACTIVATION_DAMP_S=0 "$SELF")"
+  out="$(CC_ACTIVATION_DIR="$d/p/live" CC_ACTIVATION_MIRROR_DIR="$d/nope" "$SELF")"
   printf '%s' "$out" | grep -q 'DID NOT RUN' && okp "unresolvable mirror is REPORTED, not a vacuous pass" || badp "unresolvable mirror silently skipped"
 
   echo "activation-watch --selftest: $PASS passed, $FAIL failed"
   [ "$FAIL" -eq 0 ] || exit 1
-  echo "activation-watch --selftest: GREEN — axis 1 stale/fresh/done/absent; PAGE-ONCE itemizes a new set, damps an unchanged one to a counted line, re-pages on a change AND on an equal-count swap, is inspectable via --queue without re-arming, and re-arms on drain; axis 2 live-only/repo-only/content-drift/.local-exempt/in-parity-quiet/unresolved-loud."
+  echo "activation-watch --selftest: GREEN — axis 1 (--queue) stale/fresh/done/absent and never on the SessionStart emit; axis 2 live-only/repo-only/content-drift/.local-exempt/in-parity-quiet/unresolved-loud, emitted as a bare systemMessage."
 }
 
 case "${1:-}" in
   --selftest) selftest ;;
-  --queue)    # the full itemized listing on demand — the escape hatch the damped line points at.
-              # It must NOT re-arm the damp marker: a human asking to see the list is not the machine
-              # deciding the set changed, and letting a look reset the window would mean the next
-              # genuine change went unpaged.
-              CC_ACTIVATION_DAMP_S=0 DAMP_WINDOW_S=0 DAMP_FILE=/dev/null age_axis ;;
+  --queue)    age_axis ;;   # the full itemized un-run listing, on demand
   --envarm)   # standalone entry: rc 1 when an env-var arm is not in effect for THIS shell, rc 0 when
               # every armed variable is delivered. Deliberately NOT a commit gate: the verdict is a
               # property of the CALLER's provenance, so a CI/launchd runner would read NOT-DELIVERED
