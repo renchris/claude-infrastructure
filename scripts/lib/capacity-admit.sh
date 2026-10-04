@@ -678,9 +678,53 @@ _cc_admit_token_sweep() { # $1=dir → always 0 · prints how many abandoned cla
   return 0
 }
 
+# ── THE EXPIRED, NEVER-REDEEMED TOKEN (2026-10-04) ─────────────────────────────────────────────
+# A token whose spawn never arrived is only ever removed by a redeem, and that spawn is the one
+# thing that did not happen — 47 of them were on disk that day. Same sweeper, same discipline as
+# the claim copies above (mint-side, own uid, regular files, a glob), with TWO clocks instead of
+# one: the file's mtime AND the record's own `issued` must both be past the TTL, so a token inside
+# its TTL by either reading is never removed from under the spawn about to redeem it. Run ONLY on
+# the library's own tokens dir — an explicit-path mint names a directory this library does not own,
+# and "every old file in it" is not ours to delete. CC_ADMIT_TOKEN_SWEEP=off keeps them all.
+_cc_admit_token_sweep_expired() { # $1=dir → always 0 · prints how many expired tokens were removed
+  local d="${1:-}" f now n=0
+  [ "${CC_ADMIT_TOKEN_SWEEP:-on}" != off ] || { printf '0'; return 0; }
+  [ -d "$d" ] || { printf '0'; return 0; }
+  now="$(date +%s 2>/dev/null || printf '')"
+  cc_hw_is_int_operand "$now" || { printf '0'; return 0; }
+  now="$CC_HW_INT_VALUE"
+  _cc_admit_token_ttl
+  for f in "$d"/*; do
+    [ -f "$f" ] || continue
+    [ ! -L "$f" ] || continue
+    [ -O "$f" ] || continue
+    case "${f##*/}" in *.claim.*) continue ;; esac   # a claim copy is the sweep above's, on its own bound
+    cc_hw_is_int_operand "$(_cc_admit_mtime "$f")" || continue
+    [ $(( now - CC_HW_INT_VALUE )) -gt "$CC_ADMIT_TOKEN_TTL_VALUE" ] || continue
+    if _cc_admit_token_parse "$f" && cc_hw_is_int_operand "$_CC_ADMIT_TOK_ISSUED"; then
+      [ $(( now - CC_HW_INT_VALUE )) -gt "$CC_ADMIT_TOKEN_TTL_VALUE" ] || continue
+    fi
+    rm -f "$f" 2>/dev/null || true
+    [ -e "$f" ] || n=$(( n + 1 ))            # counted from a re-read, never from rm's own rc (D3)
+  done
+  printf '%s' "$n"
+  return 0
+}
+
+# ── WHAT A TOKEN IS AN ADMISSION OF (2026-10-04) ───────────────────────────────────────────────
+# `turn` is a spawn that will go mid-turn and so belongs in the in-flight count; `swap` is a
+# relaunch of a session that is ALREADY counted where it sits, and counting its token too charges
+# one session twice. The kind rides on a SECOND line (`kind=<k>`): the record line stays the exact
+# 4-field shape _cc_admit_token_shape demands, so every reader of line 1 — the redeem path, and a
+# token minted before this existed — is untouched. No second line reads as `turn`.
+_cc_admit_token_kind() { # $1=path → prints the kind, or nothing when the token carries none
+  awk 'NR==2 { if (index($0, "kind=") == 1) print substr($0, 6); exit }' "$1" 2>/dev/null || true
+}
+
 cc_capacity_token_mint() { # $1=sid [$2=explicit path] → prints the token path · rc 1 = not minted
-  local sid="${1:-}" path="${2:-}" dir uid
+  local sid="${1:-}" path="${2:-}" dir uid kind="${CC_ADMIT_TOKEN_KIND:-turn}"
   case "$sid" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
+  case "$kind" in turn|swap) ;; *) kind=turn ;; esac
   uid="$(id -u 2>/dev/null || printf '?')"
   if [ -n "$path" ]; then
     dir="$(dirname "$path")"
@@ -698,12 +742,13 @@ cc_capacity_token_mint() { # $1=sid [$2=explicit path] → prints the token path
     path="$(mktemp "$dir/$sid.XXXXXXXX" 2>/dev/null)" || return 1
     chmod 600 "$path" 2>/dev/null || true
     _cc_admit_token_sweep "$dir" >/dev/null
+    _cc_admit_token_sweep_expired "$dir" >/dev/null
   fi
-  # ONE line, tab-separated: issued · sid · uid · the TERM SWITCHES the minting evaluation ran with.
-  # The terms are recorded because the T3 ratchet is about the pair agreeing: a token minted under a
-  # different term set than the launcher would evaluate is still ONE decision, and the row must be
-  # able to say which decision it was.
-  printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$sid" "$uid" "${CC_ADMIT_TERMS:-}" > "$path" 2>/dev/null || return 1
+  # ONE record line, tab-separated: issued · sid · uid · the TERM SWITCHES the minting evaluation ran
+  # with. The terms are recorded because the T3 ratchet is about the pair agreeing: a token minted
+  # under a different term set than the launcher would evaluate is still ONE decision, and the row
+  # must be able to say which decision it was. The kind follows on its own line (see above).
+  printf '%s\t%s\t%s\t%s\nkind=%s\n' "$(date +%s)" "$sid" "$uid" "${CC_ADMIT_TERMS:-}" "$kind" > "$path" 2>/dev/null || return 1
   printf '%s' "$path"
 }
 
@@ -1068,6 +1113,11 @@ cc_capacity_tokens_inflight() { # → always 0 · prints an integer
     # A future-dated record can never redeem, so it is not an admission in flight.
     [ $(( now - issued )) -ge 0 ] || continue
     [ $(( now - issued )) -le "$CC_ADMIT_TOKEN_TTL_VALUE" ] || continue
+    # Only a `turn` admission adds a session to the box; a kindless token predates the field and
+    # is one. CC_ADMIT_TOKEN_KIND_FILTER=off counts every token, as before.
+    if [ "${CC_ADMIT_TOKEN_KIND_FILTER:-on}" != off ]; then
+      case "$(_cc_admit_token_kind "$f")" in ''|turn) ;; *) continue ;; esac
+    fi
     n=$(( n + 1 ))
   done
   printf '%s' "$n"

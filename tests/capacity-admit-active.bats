@@ -431,3 +431,77 @@ EOF
   [ "$output" = "1" ]
   [ "$(jq -rs 'map(select(.terms == null)) | length' "$CC_ADMIT_IDL")" = "0" ]
 }
+
+# ══ TOKEN KIND AND THE EXPIRED-TOKEN SWEEP (2026-10-04) ══════════════════════════════════════════
+# A `swap` token relaunches a session that is already counted where it sits, so it is not a second
+# admission in flight; and a token whose spawn never came is removed by nothing but the mint.
+tlib() { bash -c 'set -euo pipefail; . "$1"; shift; "$@"' _ "$LIB" "$@"; }
+mint() { # $1=sid [$2=kind] → prints the token path
+  CC_ADMIT_TOKEN_KIND="${2:-}" bash -c '. "$1"; cc_capacity_token_mint "$2"' _ "$LIB" "$1"
+}
+old_tok() { # $1=name $2=age in seconds — a record issued AND last written that long ago
+  local now at stamp; now="$(date +%s)"; at="$(( now - $2 ))"
+  mkdir -p "$CC_ADMIT_STATE_DIR/tokens"
+  printf '%s\t%s\t%s\t%s\n' "$at" "${1%%.*}" "$(id -u)" "load,headroom" > "$CC_ADMIT_STATE_DIR/tokens/$1"
+  # BSD date reads -r as an epoch, GNU date reads it as a file; ask each in its own spelling.
+  stamp="$(date -r "$at" +%Y%m%d%H%M.%S 2>/dev/null || date -d "@$at" +%Y%m%d%H%M.%S)"
+  touch -t "$stamp" "$CC_ADMIT_STATE_DIR/tokens/$1"
+}
+
+@test "22 a swap token is NOT an admission in flight; a turn token and a kindless one are" {
+  unset CC_ADMIT_TOKEN_TTL_S
+  run mint sid-swap swap
+  [ "$status" -eq 0 ]
+  [ "$(sed -n 2p "$output")" = "kind=swap" ]
+  run tlib cc_capacity_tokens_inflight
+  [ "$output" = 0 ]
+  run mint sid-turn
+  [ "$(sed -n 2p "$output")" = "kind=turn" ]
+  run tlib cc_capacity_tokens_inflight
+  [ "$output" = 1 ]
+  # A token minted before the field existed: one line, no kind.
+  old_tok sid-legacy.AAAA1111 5
+  run tlib cc_capacity_tokens_inflight
+  [ "$output" = 2 ]
+}
+
+@test "23 CONTROL — CC_ADMIT_TOKEN_KIND_FILTER=off counts the swap token, as before" {
+  unset CC_ADMIT_TOKEN_TTL_S
+  run mint sid-swap swap
+  [ "$status" -eq 0 ]
+  CC_ADMIT_TOKEN_KIND_FILTER=off run tlib cc_capacity_tokens_inflight
+  [ "$output" = 1 ]
+}
+
+@test "24 an unknown kind is minted as turn, and a kinded token still REDEEMS" {
+  unset CC_ADMIT_TOKEN_TTL_S
+  run mint sid-odd bogus
+  [ "$status" -eq 0 ]
+  [ "$(sed -n 2p "$output")" = "kind=turn" ]
+  # The record line is still the 4-field shape the redeem path demands.
+  [ "$(awk -F'\t' 'NR==1{print NF}' "$output")" = 4 ]
+  CC_ADMIT_TOKEN="$output" CC_ADMIT_WANT_SID=sid-odd run admit t24
+  [ "$status" -eq 0 ]
+  [[ "$(jq -r 'select(.caller=="t24") | .token' "$CC_ADMIT_IDL")" != *MALFORMED* ]] || false
+}
+
+@test "25 the mint sweeps an unredeemed token past its TTL and keeps one inside it" {
+  export CC_ADMIT_TOKEN_TTL_S=600
+  old_tok sid-stale.AAAA1111 100000
+  old_tok sid-live.BBBB2222 60
+  run mint sid-new
+  [ "$status" -eq 0 ]
+  [ ! -e "$CC_ADMIT_STATE_DIR/tokens/sid-stale.AAAA1111" ]
+  [ -f "$CC_ADMIT_STATE_DIR/tokens/sid-live.BBBB2222" ]
+  [ -f "$output" ]
+}
+
+@test "26 CONTROL — CC_ADMIT_TOKEN_SWEEP=off keeps both" {
+  export CC_ADMIT_TOKEN_TTL_S=600 CC_ADMIT_TOKEN_SWEEP=off
+  old_tok sid-stale.AAAA1111 100000
+  old_tok sid-live.BBBB2222 60
+  run mint sid-new
+  [ "$status" -eq 0 ]
+  [ -f "$CC_ADMIT_STATE_DIR/tokens/sid-stale.AAAA1111" ]
+  [ -f "$CC_ADMIT_STATE_DIR/tokens/sid-live.BBBB2222" ]
+}
