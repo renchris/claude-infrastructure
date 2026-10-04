@@ -1084,8 +1084,14 @@ fi
 #   DoD marker no step writes. Only D4 is exempted: the ledger, hedge, handoff, fence, placeholder,
 #   shape and act arms are facts about this session's own state and still bind. No registry, an
 #   unparseable one, or a closed program ⇒ not active ⇒ D4 stays exactly as strict as before.
+#   SECOND KEY (audit 2026-10-04, REPORT.md §3 row 4f): the re-ask router resolves a pane by cwd OR
+#   by a program slug/alias named in the prompt (rp_resolve_prompt), so a pane outside every root
+#   that asked "is <program> done?" is relayed by the router — D4 keying on cwd alone pushed the
+#   very offer loop the ruling stops. When the cwd resolves to no active program, the operator's
+#   last genuine prompt (ca_last_user_msg, the kill-switch's reader and its envelope rules) is
+#   resolved the same way; only an ACTIVE program it names exempts.
 _ca_rp_exempt=""
-_ca_rp_active() {   # rc 0 ⇒ $1 resolves to an ACTIVE program; _RP_RESULT = "<slug> <state>"
+_ca_rp_lib() {   # rc 0 ⇒ research-program.sh is sourced
   local lib t
   if [ -n "${CC_RESEARCH_PROGRAM_LIB:-}" ]; then
     lib="$CC_RESEARCH_PROGRAM_LIB"   # hard override, same reason as AGENT_IDENTITY_LIB above
@@ -1101,12 +1107,28 @@ _ca_rp_active() {   # rc 0 ⇒ $1 resolves to an ACTIVE program; _RP_RESULT = "<
   # shellcheck source=../scripts/lib/research-program.sh
   # shellcheck disable=SC1091
   . "$lib" 2>/dev/null || return 1
-  # stderr dropped: a Stop hook's stderr is operator-visible noise, and "no registry" already
-  # resolves to the strict side here.
+}
+# stderr dropped in both keys: a Stop hook's stderr is operator-visible noise, and "no registry"
+# already resolves to the strict side here.
+_ca_rp_active() {   # rc 0 ⇒ $1 resolves to an ACTIVE program; _RP_RESULT = "<slug> <state>"
+  _ca_rp_lib || return 1
   rp_is_active "$1" 2>/dev/null
 }
-if [ "$d4" -eq 1 ] && [ -n "$CWD" ] && _ca_rp_active "$CWD"; then
-  d4=0; _ca_rp_exempt="${_RP_RESULT:-active}"
+_ca_rp_prompt_active() {   # rc 0 ⇒ prompt text $1 names an ACTIVE program; _RP_RESULT as above
+  local r
+  [ -n "${1:-}" ] || return 1
+  _ca_rp_lib || return 1
+  r="$(rp_resolve_prompt "$1" 2>/dev/null)"
+  case "${r##* }" in
+    registered|certifying|certified) _RP_RESULT="$r"; return 0 ;;
+  esac
+  return 1
+}
+if [ "$d4" -eq 1 ]; then
+  if { [ -n "$CWD" ] && _ca_rp_active "$CWD"; } \
+     || _ca_rp_prompt_active "${_ca_km-$(ca_last_user_msg || true)}"; then
+    d4=0; _ca_rp_exempt="${_RP_RESULT:-active}"
+  fi
 fi
 
 # D5 — a command offered for copy-paste that STILL CONTAINS A PLACEHOLDER.

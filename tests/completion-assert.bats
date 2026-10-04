@@ -615,6 +615,31 @@ _rp_reg() { # <state> <root>
   fired "$output"
   [ "$(grep -c '"arm":"offer"' "$COMPLETION_IDL")" -eq 3 ]
 }
+# ── The exemption's SECOND key (audit 2026-10-04, REPORT.md §3 row 4f): the re-ask router resolves a
+#    pane by cwd OR by a program named in the prompt (rp_resolve_prompt), so a pane outside every
+#    root that asked about the program is relayed by the router — D4 must read the same key or the
+#    Stop hook pushes the offer loop the ruling stops. Planted input: the cwd is outside the root,
+#    and the last genuine operator prompt names the program's alias. ──
+@test "D4 abstains outside every root when the last genuine prompt names an ACTIVE program" {
+  local w; w="$(mkrepo_landed rpprompt)"
+  _rp_reg certified "$BATS_TEST_TMPDIR/pilot-root"
+  run run_ca "$(mkfix_user "$_rp_close" "Is the pilot done?")" "$w" "rp-prompt"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q 'research-program-exempt:pilot' "$COMPLETION_IDL"
+}
+@test "D4 still fires outside every root when the prompt names no program, or only a closed one" {
+  local w; w="$(mkrepo_landed rpprompt2)"
+  _rp_reg certified "$BATS_TEST_TMPDIR/pilot-root"
+  run run_ca "$(mkfix_user "$_rp_close" "Is the build done?")" "$w" "rp-prompt-none"
+  fired "$output"
+  # a machine envelope naming the program is not the operator's prompt (the kill-switch reader's rule)
+  run run_ca "$(mkfix_user "$_rp_close" "<teammate-message>is the pilot done?</teammate-message>")" "$w" "rp-prompt-env"
+  fired "$output"
+  _rp_reg closed "$BATS_TEST_TMPDIR/pilot-root"
+  run run_ca "$(mkfix_user "$_rp_close" "Is the pilot done?")" "$w" "rp-prompt-closed"
+  fired "$output"
+  [ "$(grep -c '"arm":"offer"' "$COMPLETION_IDL")" -eq 3 ]
+}
 
 # ── Predicate (b) is what stops D4 firing on ordinary sign-off politeness: an offer phrase with
 #    NO named remaining work ⇒ ABSTAIN. ──
