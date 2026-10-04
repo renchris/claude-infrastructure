@@ -533,6 +533,18 @@ ma_row() { grep -F "\"reason\":\"$1\"" "$CONTINUE_IDL" 2>/dev/null | tail -1; }
   [ "$status" -eq 0 ]; fired "$output"
 }
 
+@test "mechanical arm: the ledger is asked with WRAP_BUSY=off (the BUSY process scan was ~60% of a Stop)" {
+  ma_fixture; ma_ai_stub 1; unset AI_ID
+  local wrap="$BATS_TEST_TMPDIR/ma-wrap-env"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    "printf '%s\\n' \"\${WRAP_BUSY:-unset}\" >> '$BATS_TEST_TMPDIR/busy.seen'" \
+    'printf "RUNG=🔧\nDIRTY=1\nUNLANDED=0\nREMAINDER=0\nTRUNK=origin/main\nAHEAD=0\n"' > "$wrap"
+  chmod +x "$wrap"; export WRAP_LEDGER_BIN="$wrap"
+  run ma_actuate sid-ma-busy ""
+  [ "$status" -eq 0 ]; fired "$output"
+  [ "$(sort -u "$BATS_TEST_TMPDIR/busy.seen")" = "off" ]
+}
+
 @test "mechanical arm: an operator kill-switch release is LOGGED, not silent" {
   ma_fixture; ma_ai_stub 1; unset AI_ID
   local tx; tx="$(mkuser_tx "just fix the typo and stop")"

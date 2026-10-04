@@ -427,6 +427,10 @@ if [ "$MODE" = "machine" ] && [ -n "$WL_TRANSCRIPT" ]; then
     _wl_k="$_wl_k|${WRAP_LIVE_REPO:-}|${WRAP_LIVE_BUDGET_COMMITS:-}|${WRAP_LIVE_BUDGET_MIN:-}"
     _wl_k="$_wl_k|${CC_MIGRATIONS_STATE:-}|${WRAP_LAND_INFLIGHT_LIB:-}"
     _wl_k="$_wl_k|${WRAP_RESEARCH:-}|${CC_RESEARCH_BIN:-}|${CC_RESEARCH_REGISTRY:-}"
+    # WRAP_BUSY joins the key (2026-10-04): session-continue asks with WRAP_BUSY=off to skip the
+    # process-table scan, and a BUSY-less ledger served to a BUSY reader (operator-readout, notify,
+    # cc-classify) would read BUSY_STATE=UNKNOWN for a session that is working.
+    _wl_k="$_wl_k|${WRAP_BUSY:-}"
     if _wl_d="$(_wl_digest "$_wl_k")"; then
       WL_DIR="${WRAP_CACHE_DIR:-${TMPDIR:-/tmp}/cc-wrap-ledger.${UID:-0}}"
       # The dir must exist BEFORE the single-flight `mkdir` lock, or the lock cannot be taken and

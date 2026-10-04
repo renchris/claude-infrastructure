@@ -221,6 +221,19 @@ cached_n() {
   [ "$(field "$output" YOURS)" = "1" ]
 }
 
+@test "the key carries WRAP_BUSY: a BUSY-less ledger (session-continue's) is never served to a BUSY reader" {
+  # A stub probe with a distinctive source, so "computed" cannot be confused with "skipped".
+  printf '%s\n' 'session_busy_live() { echo "BUSY 0 5 stubprobe sample"; }' 'sb_permpend() { return 1; }' \
+    > "$D/busy-stub.sh"
+  export WRAP_SESSION_BUSY_LIB="$D/busy-stub.sh"
+  run env WRAP_BUSY=off bash "$LEDGER" --machine --transcript "$TP"
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" BUSY_SRC)" = "none" ]                  # the probe was skipped
+  run bash "$LEDGER" --machine --transcript "$TP"              # same event, BUSY wanted
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" BUSY_SRC)" = "stubprobe" ]             # computed, not served the skip
+}
+
 @test "the key carries the cwd: two repos in one event never share a ledger" {
   other="$D/other"
   git clone -q "$ORIGIN" "$other"

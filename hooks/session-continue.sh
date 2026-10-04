@@ -1052,7 +1052,13 @@ mechanical_arm() {   # rc 0 = armed (fall through to the armed path) · rc 1 = d
     done
   fi
   [ -n "$wrap" ] && [ -f "$wrap" ] || return 1
-  led="$( cd "$cwd" 2>/dev/null && bash "$wrap" --machine 2>/dev/null || true )"
+  # WRAP_BUSY=off (2026-10-04, concurrency-scale row 10). The ledger's BUSY probe — a whole process
+  # table scan through proc-scope.sh — was ~60% of this hook's Stop time: 1.5-2.0 s of a 3.1-3.7 s
+  # run at load ~38, and the hook hit its 5 s timeout on 45-59% of Stops. BUSY is a reported field
+  # that never moves RUNG (wrap-ledger.sh § WORKING vs IDLING), and this hook reads only RUNG,
+  # TRUNK, AHEAD and SHAS, so it skips the probe. The memo key carries WRAP_BUSY, so a BUSY reader
+  # (operator-readout, notify, cc-classify) is never served this BUSY-less ledger.
+  led="$( cd "$cwd" 2>/dev/null && WRAP_BUSY=off bash "$wrap" --machine 2>/dev/null || true )"
   [ -n "$led" ] || return 1
   SC_LED_CACHE="$led"
   rung="$(printf '%s' "$led" | grep -E '^RUNG=' | head -1 | cut -d= -f2-)"
@@ -1165,7 +1171,7 @@ ship_floor() { # → echoes JSON to BLOCK (rc 1); rc 0 otherwise (never emits on
       done
     fi
     [ -n "$wrap" ] && [ -f "$wrap" ] || return 0
-    led="$( cd "$cwd" 2>/dev/null && bash "$wrap" --machine 2>/dev/null || true )"
+    led="$( cd "$cwd" 2>/dev/null && WRAP_BUSY=off bash "$wrap" --machine 2>/dev/null || true )"   # no BUSY probe: see mechanical_arm
   fi
   [ -n "$led" ] || return 0
   rung="$(printf '%s' "$led" | grep -E '^RUNG=' | head -1 | cut -d= -f2-)"
@@ -1258,6 +1264,16 @@ if [ ! -f "$f" ]; then
     # shellcheck disable=SC2218  # defined by the sourced agent-identity lib (or its stub) above
     _sc_aid_memo="$(agent_assignee_argv)"; _sc_aid_rc=$?
     agent_assignee_argv() { [ -n "$_sc_aid_memo" ] && printf '%s\n' "$_sc_aid_memo"; return "$_sc_aid_rc"; }
+  fi
+  # The kill-switch predicate gets the same treatment (2026-10-04, concurrency-scale row 10). All
+  # three floors ask it, and each ask is a jq over the WHOLE transcript (last_user_msg): 3 x 33 ms
+  # at 3.7 MB, 3 x ~250 ms at 38 MB — and transcripts over 20 MB are the tail where 75% of Stops hit
+  # the 5 s timeout. The last operator message cannot change during one Stop, so it is read once.
+  # CC_SC_KILL_MEMO=0 restores a live read per call.
+  if [ "${CC_SC_KILL_MEMO:-1}" != "0" ]; then
+    # shellcheck disable=SC2218  # defined at the top of this file; the redefinition below is the memo
+    if kill_switch_active; then _sc_ks_rc=0; else _sc_ks_rc=1; fi
+    kill_switch_active() { return "$_sc_ks_rc"; }
   fi
   if ! mechanical_arm; then
     if ! _sf_json="$(ship_floor)"; then
