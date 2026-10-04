@@ -64,15 +64,16 @@ Two gaps let it through:
 - **(a)** The self-recycle path never censused its own background tasks. `hf_bg_work_gate` runs only at rest, and a self-recycle is mid-turn.
 - **(b)** The own-call retry (W7c) ran only for the menu without a keep-work option, so with agent view on, a self-recycle took "Move to background".
 
-Fixes:
-
-- **(a)** A foreground census before anything is typed, excluding the recycle's own tool call (`HF_BG_EXCLUDE_PID`). Real work refuses with each task named, and a land is named as one to wait for. A lone inbox watcher is stood down with `cc-await-ping --stand-down`. Kill switch: `CC_RECYCLE_SELF_BGWORK_CENSUS=off`.
-- **(b)** The retry now runs for both menu shapes, and a self-recycle never sends the keep-work answer; a dialog that comes back is Stay plus HELD. Kill switch: `CC_RECYCLE_SELF_FORK=allow`.
-
-Recycles of another pane (desk, reconciler) are unchanged.
-
 C5 (`docs/research/session-durability-2026-10/C5-cc-native-bg-sessions.md` §E2) had already measured this class:
 18 slash-source forks, judged a hazard.
+
+**The fix that landed is the operator's ruling, not this branch's.** Decision `75ea14d27d0f` (2026-10-04, "stop the
+copy at once, keep its tasks") chose to keep the keep-work answer, because it keeps tasks like the review server
+alive, and to `claude stop` the copy within about 2 s. That fix landed in `5cd333f16`, from a sibling session. This
+branch had built the opposite remedy: a pre-`/exit` census that refused while background work ran, plus never
+answering keep-work on a self-recycle. That commit was dropped before landing because it contradicts the ruling.
+Gaps (a) and (b) remain by design: with the copy stopped at once, the fork no longer takes turns, and the tasks the
+ruling chose to keep outlive the conversation.
 
 ## Residuals
 
