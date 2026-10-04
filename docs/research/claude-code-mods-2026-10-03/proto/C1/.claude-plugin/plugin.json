@@ -1,0 +1,7 @@
+{
+  "name": "session-truth",
+  "version": "0.1.0",
+  "description": "Observe-only: one authoritative record per session, mirrored to $CC_SESSION_TRUTH_DIR/<session_id>.json.",
+  "author": { "name": "fleet-core" },
+  "types": "./types/index.d.ts"
+}

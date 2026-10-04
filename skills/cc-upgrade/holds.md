@@ -44,6 +44,25 @@ moved to Sonnet 5.5 in 2.1.284 (pin by id); `ultracode` no longer forces xhigh (
 #97763 (subagent `output_tokens` undercount), #97687 (opus subagent silently falls back to an
 older opus after a cyber refusal).
 
+Pre-audit of the 2.1.285–2.1.289 band (2026-10-03, no MANIFEST row yet; evidence in
+`docs/research/claude-code-mods-2026-10-03/REPORT-289.md`). Re-check each when this band is audited:
+- **Target 2.1.289; never 2.1.285–2.1.287.** 2.1.285 caps background Bash at 30 min in every
+  session (narrowed to unattended sessions only in 2.1.288), which cuts the 3300 s `cc-await-ping`
+  arm; 2.1.287 drops earlier thinking when it `--resume`s a session started on 2.1.286 or older,
+  which is exactly the `lr-upgrade.sh` relaunch.
+- **2.1.287 changes the revoked-login text** to "OAuth token revoked", so the reopen trigger at
+  `docs/plans/MASTER_ACCOUNT_FACTS.md:141-142` (a grep for "has been revoked") goes blind; key it
+  on the `authentication_failed` error field instead.
+- **Restyled permission prompts (2.1.286–2.1.287):** run `tests/pane-modal.bats` against the
+  candidate and capture one live pane with stacked prompts; a "2 of 5" header may defeat the
+  anchor at `hooks/lib/pane-modal.sh:160`.
+- **check13 passes on any one connected MCP server;** compare each server against the 2.1.284 run.
+- **"Shared agents" is not a feature.** @ClaudeCodeLog's summary misread the 2.1.289 mods-API
+  line (`agent.spawn` now fires *for* a teammate spawn). It loosens no cap; the depth guards are
+  unchanged in the 2.1.289 strings. If mods are ever adopted, a mod's `$.agent.spawn` appears to
+  bypass the PreToolUse(Agent) spawn budgets (inferred from the types, unprobed): ban it in fleet
+  mods until probed.
+
 🚨 **The ceiling that was REMOVED is the load-bearing one** (historical: 2.1.224 deleted the
 200-subagent-per-session cap). It reads as a feature in the changelog ("long-running sessions no
 longer refuse new agents") and is therefore filed under improvements, not risks — so grep the

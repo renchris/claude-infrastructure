@@ -1,0 +1,7 @@
+{
+  "name": "desk-board",
+  "version": "0.0.1",
+  "description": "Desk board: one docked pane over every live session and every account's 5-hour and weekly windows.",
+  "author": { "name": "scratch prototype" },
+  "types": "./types/index.d.ts"
+}

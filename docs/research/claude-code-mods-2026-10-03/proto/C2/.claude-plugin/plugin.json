@@ -1,0 +1,7 @@
+{
+  "name": "fleet-permpend",
+  "version": "0.1.0",
+  "description": "Permission-pending beacon v2: tool_use_id-keyed beacon in CC_PERMPEND_DIR, cleared when the gated call itself resolves; archives what caused each ask.",
+  "author": { "name": "claude-infrastructure (scratch prototype C2)" },
+  "types": "./types/index.d.ts"
+}

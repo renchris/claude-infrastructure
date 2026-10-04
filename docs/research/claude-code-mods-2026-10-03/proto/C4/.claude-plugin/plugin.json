@@ -1,0 +1,7 @@
+{
+  "name": "spawn-governor",
+  "version": "0.1.0",
+  "description": "Refuses subagent/teammate spawns the lead's context cannot absorb, caps oversized Agent returns to a file, and enforces spawn depth from exact parentAgentId.",
+  "author": { "name": "fleet-core" },
+  "types": "./types/index.d.ts"
+}

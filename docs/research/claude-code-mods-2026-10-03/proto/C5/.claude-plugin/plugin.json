@@ -1,0 +1,7 @@
+{
+  "name": "fleet-wake",
+  "version": "0.0.1",
+  "description": "C5 prototype: wake an idle session when its mailbox has mail, and resume a turn that died on a rate limit once the window resets.",
+  "author": { "name": "mods-research scratch" },
+  "types": "./types/index.d.ts"
+}

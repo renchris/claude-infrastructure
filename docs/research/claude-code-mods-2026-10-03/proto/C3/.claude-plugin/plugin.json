@@ -1,0 +1,6 @@
+{
+  "name": "fleet-core",
+  "version": "0.1.0",
+  "description": "Fleet org-tier policy mod: keeps user-tier mods from gating tool calls above the fleet's shell PreToolUse hooks.",
+  "author": { "name": "Chris Ren" }
+}

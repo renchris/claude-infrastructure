@@ -1,0 +1,7 @@
+{
+  "name": "fleet-core-c7",
+  "version": "0.0.1",
+  "description": "Lead-side teammate lifecycle: tracks teammates, blocks one Stop while idle teammates are resident, exports the roster.",
+  "author": { "name": "mods-research" },
+  "types": "./types/index.d.ts"
+}
