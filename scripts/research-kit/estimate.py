@@ -5,12 +5,13 @@ A port of the corrected model, evidence/final/profile_sim.py over evidence/desig
 (docs/research/upfront-research-exhaustion-2026-09-30/): false alarms scale with the reviewer count;
 the frontier slots are Opus at rho = 1.0, so a family means a vendor; raters downgrade real holes and
 SEEDS PASS THROUGH THE SAME RATERS; a share of holes and seeds are omissions; the cap round is
-verification-only; the invisible part is priced separately with its share ASSUMED (u_hi = 0.2).
-Every number is a model output until the calibration run measures the inputs (§6.6).
+verification-only; the invisible part is priced separately, its bound at the MEASURED upper bracket
+(u_hi 0.234, research-calibration REPORT §4.4). The other inputs are still model assumptions until
+the operator re-signs the measured set (§6.6).
 
-  estimate.py simulate --profile lite|standard|full --n0 N [--stress] [--reps 500] [--seed 7]
-      one profile_sim.out row as JSON; the port is random-call-for-random-call faithful, so the
-      same seed reproduces the published table exactly.
+  estimate.py simulate --profile lite|standard|full --n0 N [--stress] [--reps 500] [--seed 7] [--published]
+      one profile_sim.out row as JSON. --published runs the port as published (u_hi 0.2), which is
+      random-call-for-random-call faithful, so the same seed reproduces the published table exactly.
   estimate.py forecast --program P
       from the program's counted rounds (rounds/<k>/matrix.json): the stop state, the round-1
       forecast and R_max, the desk-detectable residual and its 95% bound, the invisible part, and
@@ -35,13 +36,20 @@ import kit  # noqa: E402
 ALPHA, SD_D, SD_F, SD_S, SD_E = -1.2, 1.2, 1.0, 0.5, 0.3
 BASE = dict(u=0.05, fpp=0.01, q=0.05, omit=0.3, surf_blind=0.5)
 STRESS = dict(u=0.10, fpp=0.02, q=0.10, omit=0.5, surf_blind=1.0)
-FIX_BORN, U_HI = 0.1, 0.2
+FIX_BORN = 0.1
+# The invisible share's upper bracket, MEASURED: pooled u_hi 0.234 over 16 held-out plans (per-plan
+# mean 0.343), docs/research/research-calibration/REPORT.md §4.4, evidence/params-measured.json `u_hi`.
+# The published model priced it at an assumed 0.2 (U_HI_PUBLISHED), below that bracket.
+U_HI, U_HI_PUBLISHED = 0.234, 0.2
 ASSUMED = [
     "fix-born rate 0.1 per applied fix",
-    "invisible share up to 0.2 (share assumed)",
+    "invisible share 0.05 at the mean (share assumed)",
     "false alarms 1 per 100 reviewer-reads",
     "rater downgrade 5%",
     "omission share 30%",
+]
+MEASURED = [
+    "invisible share up to 0.234 (pooled u_hi, research-calibration REPORT §4.4)",
 ]
 
 
@@ -159,6 +167,7 @@ def program(
     surf_blind: float,
     b: float = FIX_BORN,
     surf_det: float = 1.0,
+    published: bool = False,
 ) -> Dict[str, Any]:
     comp, T, K, R_abs, s = prof["comp"], prof["T"], prof["K"], prof["R_abs"], prof["s"]
 
@@ -234,7 +243,8 @@ def program(
     draws = [x + y for x, y in zip(d_o, d_s)]
     npred = quantile(draws, 0.95)
     n_hat = found_total + quantile(draws, 0.5)
-    inv_bound = poisson_q95(n_hat * U_HI / (1 - U_HI))
+    u_hi = U_HI_PUBLISHED if published else U_HI
+    inv_bound = poisson_q95(n_hat * u_hi / (1 - u_hi))
     det_left = sum(1 for it in live if not it["blind"])
     blind_left = sum(1 for it in live if it["blind"])
     desk_esc = sum(1 for _ in range(det_left + deferred) if rng.random() < surf_det)
@@ -265,11 +275,19 @@ def sim_profile(name: str) -> Dict[str, Any]:
 
 
 def simulate(
-    name: str, n0: int, stress: bool = False, reps: int = 500, seed: int = 7
+    name: str,
+    n0: int,
+    stress: bool = False,
+    reps: int = 500,
+    seed: int = 7,
+    published: bool = False,
 ) -> Dict[str, Any]:
     rng = random.Random(seed)
     params = STRESS if stress else BASE
-    R = [program(rng, sim_profile(name), n0, **params) for _ in range(reps)]
+    R = [
+        program(rng, sim_profile(name), n0, **params, published=published)
+        for _ in range(reps)
+    ]
     ks = [float(r["k"]) for r in R]
     return {
         "profile": name,
@@ -361,12 +379,14 @@ def forecast(slug: str, reps: int = 300, seed: int = 11) -> Dict[str, Any]:
         "found": found,
         "desk_mean": round(mean([float(d) for d in draws]), 2),
         "desk_n95": int(quantile(draws, 0.95)),
+        "n_hat": round(n_hat, 2),
         "invisible_mean": round(inv_mean, 2),
         "invisible_bound95": poisson_q95(inv_lam),
         "p_any": round(p_any, 2),
         "quiet_streak": streak,
         "stop": stop,
         "assumed": ASSUMED,
+        "measured": MEASURED,
         "calibrated": False,
     }
 
@@ -381,12 +401,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--stress", action="store_true")
     p.add_argument("--reps", type=int, default=500)
     p.add_argument("--seed", type=int, default=7)
+    p.add_argument("--published", action="store_true")
     p = sub.add_parser("forecast")
     p.add_argument("--program", required=True)
     a = ap.parse_args(argv)
     try:
         if a.verb == "simulate":
-            out = simulate(a.profile, a.n0, a.stress, a.reps, a.seed)
+            out = simulate(a.profile, a.n0, a.stress, a.reps, a.seed, a.published)
         else:
             kit.check_slug(a.program)
             out = forecast(a.program)
