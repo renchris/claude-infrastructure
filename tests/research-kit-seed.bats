@@ -23,8 +23,8 @@ setup() {
   A2="Population: callers are hooks/a.sh, hooks/b.sh and the launchd job cc-sync."
 }
 
-seedline() { # <sid> <op> <anchor> <replacement> <span>
-  /usr/bin/python3 -c 'import json,sys; a=sys.argv; print(json.dumps({"sid":a[1],"cohort":"original","class":"C4","op":a[2],"anchor_quote":a[3],"replacement":a[4],"defect_statement":"planted","detect_span":a[5]}))' "$@"
+seedline() { # <sid> <op> <anchor> <replacement> <span> [defect statement]
+  /usr/bin/python3 -c 'import json,sys; a=sys.argv; print(json.dumps({"sid":a[1],"cohort":"original","class":"C4","op":a[2],"anchor_quote":a[3],"replacement":a[4],"defect_statement":a[6],"detect_span":a[5]}))' "$1" "$2" "$3" "$4" "$5" "${6:-planted}"
 }
 
 good_set() {
@@ -91,7 +91,7 @@ good_set() {
   good_set
   "$SEED" plant --program demo --plan "$PLAN" --seeds "$BATS_TEST_TMPDIR/seeds.jsonl" --profile lite
   printf '%s\n' \
-    '{"id":"H-1","round":1,"locus":{"path":"PLAN.md","lines":"60-61"},"materiality":{"level":"MATERIAL"}}' \
+    '{"id":"H-1","round":1,"locus":{"path":"PLAN.md","lines":"60-61"},"taxonomy_class":"C4","materiality":{"level":"MATERIAL"}}' \
     '{"id":"H-2","round":1,"locus":{"path":"PLAN.md","lines":"62"},"materiality":{"level":"REFINEMENT"}}' \
     > "$CC_RESEARCH_RECORDS/holes.jsonl"
   run "$SEED" match --program demo --round 1 --plan "$PLAN"
@@ -113,4 +113,18 @@ good_set() {
   CC_RESEARCH_VAULT_KEY=wrong run "$SEED" status --program demo
   [ "$status" -eq 2 ]
   [[ "$output" == *"decrypt failed"* ]]
+}
+
+@test "match: a hole on the seed's lines about a different defect does not catch it" {
+  { seedline S-1 replace "$A1" "The sync daemon retries a failed write forever with no backoff at all." "PLAN.md:61-61" \
+      "the retry count is unbounded, so a failed write loops forever"
+    seedline S-2 delete-member "$A2" "" "PLAN.md:62-62"; } > "$BATS_TEST_TMPDIR/seeds.jsonl"
+  "$SEED" plant --program demo --plan "$PLAN" --seeds "$BATS_TEST_TMPDIR/seeds.jsonl" --profile lite
+  printf '%s\n' \
+    '{"id":"H-1","round":1,"locus":{"path":"PLAN.md","lines":"61"},"taxonomy_class":"C4","claim":"the 2 s backoff figure has no source and contradicts the measured p95","materiality":{"level":"MATERIAL"}}' \
+    > "$CC_RESEARCH_RECORDS/holes.jsonl"
+  run "$SEED" match --program demo --round 1 --plan "$PLAN"
+  [ "$output" = '{"original": {"caught": 0, "k_left": 2, "orphaned": 0, "s_eff": 2}}' ]
+  run grep -c seed_match "$CC_RESEARCH_RECORDS/holes.jsonl"
+  [ "$output" = "0" ]
 }

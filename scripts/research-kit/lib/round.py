@@ -341,22 +341,8 @@ def cmd_close(a: argparse.Namespace) -> int:
         raise Refused(f"round {a.round} has not run")
     if m.get("closed"):
         raise Refused(f"round {a.round} is already closed")
-    holes = kit.fold(
-        kit.read_jsonl(kit.records_dir(a.program) / "holes.jsonl")
-    ).values()
-    mine = [h for h in holes if str(h.get("round")) in (a.round, str(m.get("seq")))]
-    real = [
-        h
-        for h in mine
-        if (h.get("verification") or {}).get("status") == "CONFIRMED"
-        and (h.get("materiality") or {}).get("level") == "MATERIAL"
-        and not h.get("seed_match")
-    ]
-    m["new_material"] = len(real)
-    m["seeds_caught"] = sum(
-        1 for h in mine if h.get("seed_match")
-    )  # never resets the quiet count (§3.9)
-    m["quiet"] = bool(m.get("counted")) and not real
+    # Match seeds FIRST: seed.py match writes seed_match onto each hole that restates a seed, and
+    # only then can a caught seed be told apart from a real finding.
     fr = frame(a.program)
     vault = kit.sealed_dir(a.program) / "vault" / "seeds.enc"
     if vault.exists() and fr.get("plan"):
@@ -388,6 +374,22 @@ def cmd_close(a: argparse.Namespace) -> int:
                 for k in ("s_eff", "caught", "k_left", "orphaned")
             },
         }
+    holes = kit.fold(
+        kit.read_jsonl(kit.records_dir(a.program) / "holes.jsonl")
+    ).values()
+    mine = [h for h in holes if str(h.get("round")) in (a.round, str(m.get("seq")))]
+    real = [
+        h
+        for h in mine
+        if (h.get("verification") or {}).get("status") == "CONFIRMED"
+        and (h.get("materiality") or {}).get("level") == "MATERIAL"
+        and not h.get("seed_match")
+    ]
+    m["new_material"] = len(real)
+    m["seeds_caught"] = sum(
+        1 for h in mine if h.get("seed_match")
+    )  # never resets the quiet count (§3.9)
+    m["quiet"] = bool(m.get("counted")) and not real
     m["closed"] = True
     kit.write_json_atomic(rd / "matrix.json", m)
     if m["kind"] == "certification" and m.get("seq") == 1 and m.get("counted"):

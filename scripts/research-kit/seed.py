@@ -27,7 +27,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 import kit  # noqa: E402
@@ -161,6 +161,40 @@ def overlaps(hole: Dict[str, Any], seed: Dict[str, Any]) -> bool:
     return lo <= sp[2] and sp[1] <= hi
 
 
+# A hole is a seed's catch only when it names the seed's defect, not merely its lines: the share of
+# the shorter text's content tokens that the hole's claim and the seed's defect statement share.
+DEFECT_MATCH_MIN = 0.5
+_STOP = frozenset(
+    "the and for that this with from are was were has have not but its into than then".split()
+)
+
+
+def _tokens(text: str) -> Set[str]:
+    return {
+        t
+        for t in re.findall(r"[a-z0-9]+", text.lower())
+        if len(t) > 2 and t not in _STOP
+    }
+
+
+def same_defect(hole: Dict[str, Any], seed: Dict[str, Any]) -> bool:
+    """The hole reports this seed's defect: same span, no disagreeing class, and, when the hole
+    carries a claim, one that restates the defect statement. A hole with neither a claim nor a
+    class proves nothing about identity, so it never matches."""
+    if not overlaps(hole, seed):
+        return False
+    hc, sc = hole.get("taxonomy_class"), seed.get("class")
+    if hc and sc and hc != sc:
+        return False
+    claim = _tokens(str(hole.get("claim") or ""))
+    if claim:
+        stmt = _tokens(str(seed.get("defect_statement") or ""))
+        if not stmt:
+            return False
+        return len(claim & stmt) / min(len(claim), len(stmt)) >= DEFECT_MATCH_MIN
+    return bool(hc and sc)
+
+
 def counts(vault: Dict[str, Any]) -> Dict[str, Dict[str, int]]:
     out: Dict[str, Dict[str, int]] = {}
     for s in vault["seeds"]:
@@ -179,9 +213,8 @@ def counts(vault: Dict[str, Any]) -> Dict[str, Dict[str, int]]:
 def cmd_match(a: argparse.Namespace) -> int:
     plan = Path(a.plan).read_text()
     vault, key = load_vault(a.program)
-    holes = kit.fold(
-        kit.read_jsonl(kit.records_dir(a.program) / "holes.jsonl")
-    ).values()
+    holes_path = kit.records_dir(a.program) / "holes.jsonl"
+    holes = kit.fold(kit.read_jsonl(holes_path)).values()
     material = [
         h
         for h in holes
@@ -195,8 +228,17 @@ def cmd_match(a: argparse.Namespace) -> int:
             s.update(
                 {"state": "orphaned", "state_round": a.round}
             )  # a fix rewrote its anchor
-        elif any(overlaps(h, s) for h in material):
+        elif any(same_defect(h, s) for h in material):
             s.update({"state": "caught", "state_round": a.round})
+    # Tag every hole that restates a seed still in the plan (caught now or earlier), so round close
+    # reads it as a seed catch rather than a real finding. Append-only: the fold keeps the newest.
+    in_plan = [s for s in vault["seeds"] if s.get("state") in ("live", "caught")]
+    for h in material:
+        if h.get("seed_match"):
+            continue
+        sid = next((s["sid"] for s in in_plan if same_defect(h, s)), None)
+        if sid:
+            kit.append_jsonl(holes_path, {"id": h["id"], "seed_match": sid})
     save_vault(a.program, vault, key)
     print(json.dumps(counts(vault), sort_keys=True))
     return 0

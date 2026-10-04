@@ -172,3 +172,43 @@ field() { /usr/bin/python3 -c "import json; m=json.load(open('$CC_RESEARCH_RECOR
   [ "$status" -eq 2 ]
   [[ "$output" == *"capped at 2"* ]]
 }
+
+seeded_round_2() { # plants S-1 (replace, class C4) on PLAN.md:61 and an omission seed, opens round 2
+  export CC_RESEARCH_VAULT_KEY="test-key"
+  local p="$CC_RESEARCH_RECORDS/PLAN.md" i
+  : > "$p"
+  for i in $(seq 1 60); do echo "filler line $i of the plan that says nothing at all" >> "$p"; done
+  echo "The sync daemon retries a failed write three times with a 2 s backoff." >> "$p"
+  echo "Population: callers are hooks/a.sh, hooks/b.sh and the launchd job cc-sync." >> "$p"
+  /usr/bin/python3 -c 'import json
+print(json.dumps({"sid":"S-1","cohort":"original","class":"C4","op":"replace","anchor_quote":"The sync daemon retries a failed write three times with a 2 s backoff.","replacement":"The sync daemon retries a failed write forever with no backoff at all.","defect_statement":"the retry count is unbounded, so a failed write loops forever","detect_span":"PLAN.md:61-61"}))
+print(json.dumps({"sid":"S-2","cohort":"original","class":"C2","op":"delete-member","anchor_quote":"Population: callers are hooks/a.sh, hooks/b.sh and the launchd job cc-sync.","replacement":"","defect_statement":"the launchd caller is missing from the population","detect_span":"PLAN.md:62-62"}))' \
+    > "$BATS_TEST_TMPDIR/seeds.jsonl"
+  "$REPO/scripts/research-kit/seed.py" plant --program demo --plan "$p" --seeds "$BATS_TEST_TMPDIR/seeds.jsonl"
+  fc_done; mat 2 certification 2 ',"quiet":false'
+  /usr/bin/python3 -c "import json; p='$CC_RESEARCH_RECORDS/rounds/2/matrix.json'; m=json.load(open(p)); m['closed']=False; json.dump(m, open(p,'w'))"
+}
+# Same lines, same class: H-1 states the seed's defect, H-2 a different one.
+SEED_HOLE='{"id":"H-1","round":2,"locus":{"path":"PLAN.md","lines":"61"},"taxonomy_class":"C4","claim":"the daemon retries a failed write forever: the retry count is unbounded","verification":{"status":"CONFIRMED"},"materiality":{"level":"MATERIAL"}}'
+REAL_HOLE='{"id":"H-2","round":2,"locus":{"path":"PLAN.md","lines":"61"},"taxonomy_class":"C4","claim":"the 2 s backoff figure has no source and contradicts the measured p95 of the store","verification":{"status":"CONFIRMED"},"materiality":{"level":"MATERIAL"}}'
+seed_match_of() { /usr/bin/python3 -c "import json; s={}
+for l in open('$CC_RESEARCH_RECORDS/holes.jsonl'): r=json.loads(l); s.setdefault(r['id'], {}).update(r)
+print(s['$1'].get('seed_match'))"; }
+
+@test "close: a caught seed is tagged and is not a real finding; a different defect on its lines is" {
+  seeded_round_2
+  printf '%s\n' "$SEED_HOLE" "$REAL_HOLE" > "$CC_RESEARCH_RECORDS/holes.jsonl"
+  run "$R" close --program demo --round 2
+  [ "$status" -eq 0 ]
+  [ "$(field 2 'm["new_material"], m["seeds_caught"], m["quiet"]')" = "1 1 False" ]
+  [ "$(seed_match_of H-1)" = "S-1" ]
+  [ "$(seed_match_of H-2)" = "None" ]
+}
+
+@test "close: a round whose only material finding is a caught seed is quiet" {
+  seeded_round_2
+  printf '%s\n' "$SEED_HOLE" > "$CC_RESEARCH_RECORDS/holes.jsonl"
+  run "$R" close --program demo --round 2
+  [ "$status" -eq 0 ]
+  [ "$(field 2 'm["quiet"], m["seeds_caught"], m["new_material"]')" = "True 1 0" ]
+}
