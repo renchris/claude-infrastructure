@@ -41,6 +41,10 @@ FIX_BORN = 0.1
 # mean 0.343), docs/research/research-calibration/REPORT.md §4.4, evidence/params-measured.json `u_hi`.
 # The published model priced it at an assumed 0.2 (U_HI_PUBLISHED), below that bracket.
 U_HI, U_HI_PUBLISHED = 0.234, 0.2
+# The false share among calls that survived verification and rating as MATERIAL, MEASURED: 89 of 237
+# over 16 held-out plans (research-calibration REPORT §4.1; research-calibration.jsonl sums of
+# `false_alarms` over `material`). Used only when the program's own holes carry no verified material call.
+FALSE_MATERIAL_SHARE = 89 / 237
 ASSUMED = [
     "fix-born rate 0.1 per applied fix",
     "invisible share 0.05 at the mean (share assumed)",
@@ -50,6 +54,7 @@ ASSUMED = [
 ]
 MEASURED = [
     "invisible share up to 0.234 (pooled u_hi, research-calibration REPORT §4.4)",
+    "false material share 0.376 when the program has no verified record (research-calibration REPORT §4.1)",
 ]
 
 
@@ -116,7 +121,7 @@ def poisson(rng: random.Random, lam: float) -> int:
 
 
 def predictive_draws(
-    rng: random.Random, found: int, k_left: int, s: int, n: int
+    rng: random.Random, found: float, k_left: int, s: int, n: int
 ) -> List[int]:
     """Posterior-predictive residual: pi ~ Beta(k+.5, s-k+.5); R | pi ~ NegBin(F+1, 1-pi)."""
     if s <= 0:
@@ -351,11 +356,25 @@ def forecast(slug: str, reps: int = 300, seed: int = 11) -> Dict[str, Any]:
             "no counted certification round yet: nothing to forecast from"
         )
     rng = random.Random(seed)
-    found = sum(int(m.get("new_material") or 0) for m in mats)
+    found_raw = sum(int(m.get("new_material") or 0) for m in mats)
     holes = counted_holes(slug, mats)
+    # every false material call would widen the bound, so found is deflated by the false share:
+    # the program's own verifier REFUTED share among its material calls, else the calibration's
+    verdicts = [
+        (h.get("verification") or {}).get("status")
+        for h in holes
+        if (h.get("verification") or {}).get("status") in ("CONFIRMED", "REFUTED")
+    ]
+    if verdicts:
+        false_share = verdicts.count("REFUTED") / len(verdicts)
+        false_source = "program"
+    else:
+        false_share, false_source = FALSE_MATERIAL_SHARE, "calibration"
+    keep = 1.0 - false_share
+    found = found_raw * keep
     # the shadow stratum's own found count: confirmed fix-born holes (`born_in_edit`)
     found_sh = min(
-        found,
+        found_raw,
         sum(
             1
             for h in holes
@@ -368,13 +387,17 @@ def forecast(slug: str, reps: int = 300, seed: int = 11) -> Dict[str, Any]:
     shadow = seeds.get("shadow") or {}
     draws_o = predictive_draws(
         rng,
-        found - found_sh,
+        (found_raw - found_sh) * keep,
         int(orig.get("k_left", 0)),
         int(orig.get("s_eff", 0)),
         2000,
     )
     draws_s = predictive_draws(
-        rng, found_sh, int(shadow.get("k_left", 0)), int(shadow.get("s_eff", 0)), 2000
+        rng,
+        found_sh * keep,
+        int(shadow.get("k_left", 0)),
+        int(shadow.get("s_eff", 0)),
+        2000,
     )
     draws = [a + c for a, c in zip(draws_o, draws_s)]
     n_hat = found + quantile(draws, 0.5)
@@ -411,8 +434,11 @@ def forecast(slug: str, reps: int = 300, seed: int = 11) -> Dict[str, Any]:
         "p90": p90,
         "r_max": rmax,
         "rounds_counted": len(mats),
-        "found": found,
+        "found_raw": found_raw,
+        "found": round(found, 2),
         "found_shadow": found_sh,
+        "false_material_share": round(false_share, 3),
+        "false_material_source": false_source,
         "desk_mean": round(mean([float(d) for d in draws]), 2),
         "desk_n95": int(quantile(draws, 0.95)),
         "desk_shadow_mean": round(mean([float(d) for d in draws_s]), 2),
