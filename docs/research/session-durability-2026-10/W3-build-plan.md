@@ -667,3 +667,20 @@ touch ~/.claude/autonomy/boot-resume/restore-v2.plan && launchctl kickstart gui/
 ```
 
 Read `events/<id>/plan.txt`. If it lists the live fleet with the right layout, run `mv ~/.claude/autonomy/boot-resume/restore-v2.plan ~/.claude/autonomy/boot-resume/restore-v2`. Deleting that file turns the reboot path off again. G2, a planned Mac restart with the flag on, is the first test of the operator's literal case, and it uses the same `--compare`.
+
+### F. Phase ledger (kept by the W3 lead)
+
+This table replaces the phase table near the top of the file. Only the W3 lead edits it. A sha is recorded only after `git merge-base --is-ancestor <sha> origin/main` succeeds and `git ls-tree origin/main` shows the phase's files.
+
+| Phase | Wave | State | Pane / branch | Landed sha |
+|---|---|---|---|---|
+| P1b | W3.1 | fired 2026-10-04 | 250 / `w3-p1b` | |
+| P2 | W3.1 | fired 2026-10-04 | 251 / `w3-p2-land` | |
+| P6 | W3.1 | held: capacity gate (compressor segments 55% > 50%) | | |
+| P8 | W3.2 (no dependency, fires early) | held: capacity gate | | |
+| P3a-i | W3.2 | waits for P2 | | |
+| P3b | W3.2 | waits for P2 | | |
+| P3a-ii | W3.2b | waits for P3a-i | | |
+| P4 | W3.3 | waits for P3a-ii, P3b | | |
+| P5 | W3.4 | waits for P4, P8 | | |
+| P7 | W3.4 | waits for P4, P3a-ii | | |
