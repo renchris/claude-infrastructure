@@ -9,12 +9,13 @@
 # restore_refuse_under_bats refuses under a harness and only there. Every case runs the library under
 # /bin/bash, the 3.2 that launchd gives the restore.
 #
-# Hermetic: RESTORE_STATE_DIR and RESTORE_LOCK_BOOT_UUID point into the case dir; the only real
+# Hermetic: HOME, RESTORE_STATE_DIR and RESTORE_LOCK_BOOT_UUID point into the case dir; the only real
 # processes are the case's own `sleep`s, which teardown kills.
 
 setup() {
   REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   LIB="$REPO/scripts/lib/restore-lock.sh"
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   export RESTORE_STATE_DIR="$BATS_TEST_TMPDIR/state"
   export RESTORE_LOCK_BOOT_UUID="boot-A"
   LOCK="$RESTORE_STATE_DIR/restore.lock"
