@@ -78,6 +78,15 @@ command -v jq >/dev/null 2>&1 || abstain "no-jq"
 # wearing a guard's clothes (memory: one mutant per SITE — a green suite credits NO site).
 # jq-encoded end to end, so a command carrying a quote, a backslash or a newline can never shred
 # the line — one malformed line aborts a `jq -s` slurp downstream, which reads as "no records".
+#
+# THE AGENT JOIN (fix row 11, docs/research/concurrency-scale-2026-10-04/d-telemetry-gaps.md §2.5-2.6),
+# in the same jq call, so it adds 0 forks. `tuids` are the batch's tool_use_ids (each one greps to its
+# subagent transcript offline; no match = the lead's own call). `cmd_h` is a hash of each Bash call's
+# command: scripts/lib/capacity-attrib.py computes the SAME `len:poly31` value from the eval body of
+# every live tool shell it samples, so a CPU sample joins to a tool_use_id and from there to an agent.
+# jq has no sha builtin, hence the polynomial over the first 4096 code points plus the length.
+# `agent_id` is present in payloads from inside in-process subagents (measured on validate-bash's
+# decision log); a lead's own batch reads "-".
 ROW="$(printf '%s' "$INPUT" | jq -c --argjson bytes "${#INPUT}" '
     select(.hook_event_name == "PostToolBatch")
   | select((.tool_calls | length) > 0)
@@ -90,7 +99,12 @@ ROW="$(printf '%s' "$INPUT" | jq -c --argjson bytes "${#INPUT}" '
                               | map({key: .[0], value: length}) | from_entries),
       mode:      (.permission_mode // "-"),
       effort:    (.effort.level    // "-"),
-      bytes:     $bytes }
+      bytes:     $bytes,
+      agent_id:  (.agent_id // "-"),
+      tuids:     (.tool_calls | map(.tool_use_id // "-")),
+      cmd_h:     [ .tool_calls[] | select(.tool_name == "Bash")
+                   | (.tool_input.command // "" | tostring | explode) as $e
+                   | "\($e | length):\($e[:4096] | reduce .[] as $c (0; (. * 31 + $c) % 4294967296))" ] }
 ' 2>/dev/null)" || ROW=""
 
 # Nothing to say is a legitimate outcome for EVERY gate above — a wrong event name, a payload with

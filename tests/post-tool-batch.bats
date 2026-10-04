@@ -270,3 +270,31 @@ feed_from() { "$@"             > "$BATS_TEST_TMPDIR/payload.json"; run bash "$HO
   [ "$status" -eq 0 ]          # 124 = it hung until the timeout
   [ ! -e "$LOG" ]
 }
+
+# ── the agent join (fix row 11, docs/research/concurrency-scale-2026-10-04/d-telemetry-gaps.md §2.5) ──
+@test "the census row carries every tool_use_id, a hash per Bash command and the agent id" {
+  golden_payload | bash "$HOOK"
+  run jq -e '.tuids == ["toolu_01TMEuKZjmi5DNZouPGyEzPu","toolu_01YP6M8E7iBcZbb7Z26zFDwh","toolu_01UKWHLvepcmjbH5ixoyKHGS"]
+             and (.cmd_h | length) == 3 and (.cmd_h | unique | length) == 3 and .agent_id == "-"' "$LOG"
+  [ "$status" -eq 0 ]
+  # a subagent's batch carries its agent_id, and a non-Bash call gets a tuid but no cmd hash
+  feed '{"hook_event_name":"PostToolBatch","session_id":"s","agent_id":"a0b1c2","tool_calls":[{"tool_name":"Read","tool_use_id":"t1","tool_input":{"file_path":"/x"}}]}'
+  [ "$status" -eq 0 ]
+  run jq -se '.[-1] | .agent_id == "a0b1c2" and .tuids == ["t1"] and .cmd_h == []' "$LOG"
+  [ "$status" -eq 0 ]
+}
+
+@test "cmd_h equals the sampler's hash of the same command — the CPU-sample join holds" {
+  # The two halves of the join are computed by different programs (jq here, python in
+  # scripts/lib/capacity-attrib.py), so equality is the contract, checked on a command that carries a
+  # quote, a non-ASCII character and a newline — the cases where code points and bytes diverge.
+  local cmd py
+  cmd=$'echo "it\'s \xc3\xa9 \xe2\x9c\x93"\nls | head'
+  feed "$(jq -nc --arg c "$cmd" '{hook_event_name:"PostToolBatch",session_id:"s",tool_calls:[{tool_name:"Bash",tool_use_id:"t",tool_input:{command:$c}}]}')"
+  [ "$status" -eq 0 ]
+  py="$(python3 -c 'import importlib.util,sys
+s=importlib.util.spec_from_file_location("ca",sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m)
+print(m.cmd_hash(sys.argv[2]))' "$REPO/scripts/lib/capacity-attrib.py" "$cmd")"
+  [ -n "$py" ]
+  [ "$(jq -r '.cmd_h[0]' "$LOG")" = "$py" ]
+}

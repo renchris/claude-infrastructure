@@ -448,8 +448,11 @@ $HOME/.claude/logs/pane-spawns.jsonl
 $HOME/.claude/logs/auth-timeseries.jsonl
 $HOME/.claude/logs/account-utilization.jsonl
 $HOME/.claude/logs/account-assignments.jsonl
-$HOME/.claude/logs/launch-stall.jsonl"
+$HOME/.claude/logs/launch-stall.jsonl
+$HOME/.claude/logs/attrib.jsonl"
 
+# attrib.jsonl joined 2026-10-04 in the SAME commit that created its writer (capacity-alarm's libproc
+# attribution pass, ~4-10 KB per row at 5-60 rows/h ≈ 1-10 MB/day) — same rule as the rows below.
 # capacity-alarm.jsonl joined 2026-07-31, in the SAME commit that took its sampler from 600 s to
 # 60 s. It had never been a target because at 144 rows/day it was not going anywhere; at 1,440
 # rows/day (~640 KB/day) it is. Adding the rate without adding the rotation is how idl.jsonl

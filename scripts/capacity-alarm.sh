@@ -237,6 +237,8 @@
 #        CC_CAP_ALARM_GB (default 3) · CC_CAP_PROC_WARN_GB (default 3) · CC_CAP_LOG ·
 #        CC_CAP_PRESSURE_WARN (default 2) · CC_CAP_PRESSURE_ALARM (default 4) ·
 #        CC_CAP_TOP (top(1) binary, for stubbing) · CC_CAP_SELFTEST=1 (positive control) ·
+#        CC_CAP_ATTRIB=off (skip the libproc attribution pass; rung 4 falls back to top(1)) ·
+#        CC_CAP_ATTRIB_LOG / CC_CAP_ATTRIB_STATE (attrib.jsonl and its delta state, lib/capacity-attrib.py) ·
 #        CC_CAP_COAL_WARN (default 500) · CC_CAP_COAL_ALARM (default 700) ·
 #        CC_CAP_PS (ps(1) binary, for stubbing rung 6's tree walk AND the per-session cost walk) ·
 #        CC_CAP_PER_SESSION_MB (explicit per-session MB; wins over the live tree-RSS derivation) ·
@@ -822,7 +824,31 @@ read_argv0() { # $1 = comma-separated pids → lines "<pid> <argv0-basename>"
              if (v != "") print $1, (unreadable ? "(" v ")" : v) }'
 }
 
-TOP_PROCS="$(read_top_procs || true)"
+# ── the attribution pass feeds rung 4 (fix row 11, docs/research/concurrency-scale-2026-10-04/
+# d-telemetry-gaps.md §2) ─────────────────────────────────────────────────────────────────────────
+# `top -l 1` cost 1.5-2.4 CPU-s per call, most of the whole tick, to produce three numbers. The libproc
+# pass in lib/capacity-attrib.py reads `ri_phys_footprint` (the same accounting as top's MEM column,
+# within 1% measured) for every uid-501 pid in ~10 ms, and covers other uids (WindowServer) with one
+# setuid `ps` RSS read. The same pass writes the per-session CPU row to ~/.claude/logs/attrib.jsonl,
+# so rung 4 and the attribution telemetry cost one python launch (~0.1 CPU-s) between them.
+# top(1) stays as the fallback for a box where the pass yields nothing (no python3, a libproc ABI
+# change), then the ps rss fallback below. `top_src` on the row says which instrument spoke.
+# --no-append runs pass --no-write: a manual run must not advance the live delta state, or the next
+# launchd tick would attribute only the seconds since the manual run. Kill-switch CC_CAP_ATTRIB=off.
+TOP_PROCS=""; TOP_SRC="ps"
+if [ "${CC_CAP_ATTRIB:-on}" != "off" ]; then
+  _attrib_py="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/capacity-attrib.py"
+  if [ -r "$_attrib_py" ]; then
+    if [ "$APPEND" = 1 ]; then _attrib_w=(); else _attrib_w=(--no-write); fi
+    TOP_PROCS="$("${CC_CAP_PYTHON:-python3}" "$_attrib_py" "${_attrib_w[@]+"${_attrib_w[@]}"}" 2>/dev/null \
+                 | awk '$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && NF >= 3' || true)"
+    [ -n "$TOP_PROCS" ] && TOP_SRC="attrib"
+  fi
+fi
+if [ -z "$TOP_PROCS" ]; then
+  TOP_PROCS="$(read_top_procs || true)"
+  [ -n "$TOP_PROCS" ] && TOP_SRC="top"
+fi
 if [ -z "$TOP_PROCS" ]; then
   TOP_PROCS="$(ps -eo pid=,rss=,comm= 2>/dev/null \
                 | sort -k2 -nr | head -3 \
@@ -1842,7 +1868,7 @@ case "$PTY_MAX" in ''|*[!0-9]*) PTY_MAX="" ;; esac
 PTY_PCT=""
 if [ -n "$PTY_MAX" ] && [ "$PTY_MAX" -gt 0 ]; then PTY_PCT=$(( PTY_USED * 100 / PTY_MAX )); fi
 
-JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compressor_gb":%s,"active_gb":%s,"wired_gb":%s,"swap_used_mb":%s,"warn_gb":%s,"alarm_gb":%s,"est_room_sessions":%s,"per_session_mb_est":%s,"sessions_exe":%s,"sessions_binclaude":%s,"pressure_level":%s,"proc_warn_gb":%s,"max_proc_gb":%s,"seg_pct":%s,"seg_warn_pct":%s,"seg_alarm_pct":%s,"coal_procs":%s,"coal_app":"%s","coal_warn":%s,"coal_alarm":%s,"coal_true_procs":%s,"coal_id":%s,"coal_fp_mb":%s,"coal_fp_src":"%s","auto_coal_procs":%s,"auto_coal_id":%s,"auto_coal_fp_mb":%s,"auto_coal_fp_src":"%s","top_procs":%s,"seg_source":%s,"swap_delta_mb":%s,"swap_delta_floor_mb":%s,"swap_window_s":%s,"occupancy_pct":%s,"thrash_cd_ratio":%s,"compressions":%s,"decompressions":%s,"load_1m":%s,"load_5m":%s,"load_15m":%s,"ncpu":%s,"load_per_core":%s,"load_warn_per_core":%s,"load_alarm_per_core":%s,"ptys_used":%s,"ptys_max":%s,"ptys_pct":%s,"per_session_mb_src":"%s","swapfiles":%s,"swapfile_prefix":"%s","swapfile_warn":%s,"swapfile_alarm":%s,"kalloc1024_gb":%s,"kalloc1024_src":"%s","kalloc1024_at":%s,"kalloc_warn_gb":%s,"kalloc_alarm_gb":%s,"uptime_days":%s,"chronic_verdict":"%s","sessions_bg":%s}' \
+JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compressor_gb":%s,"active_gb":%s,"wired_gb":%s,"swap_used_mb":%s,"warn_gb":%s,"alarm_gb":%s,"est_room_sessions":%s,"per_session_mb_est":%s,"sessions_exe":%s,"sessions_binclaude":%s,"pressure_level":%s,"proc_warn_gb":%s,"max_proc_gb":%s,"seg_pct":%s,"seg_warn_pct":%s,"seg_alarm_pct":%s,"coal_procs":%s,"coal_app":"%s","coal_warn":%s,"coal_alarm":%s,"coal_true_procs":%s,"coal_id":%s,"coal_fp_mb":%s,"coal_fp_src":"%s","auto_coal_procs":%s,"auto_coal_id":%s,"auto_coal_fp_mb":%s,"auto_coal_fp_src":"%s","top_procs":%s,"seg_source":%s,"swap_delta_mb":%s,"swap_delta_floor_mb":%s,"swap_window_s":%s,"occupancy_pct":%s,"thrash_cd_ratio":%s,"compressions":%s,"decompressions":%s,"load_1m":%s,"load_5m":%s,"load_15m":%s,"ncpu":%s,"load_per_core":%s,"load_warn_per_core":%s,"load_alarm_per_core":%s,"ptys_used":%s,"ptys_max":%s,"ptys_pct":%s,"per_session_mb_src":"%s","swapfiles":%s,"swapfile_prefix":"%s","swapfile_warn":%s,"swapfile_alarm":%s,"kalloc1024_gb":%s,"kalloc1024_src":"%s","kalloc1024_at":%s,"kalloc_warn_gb":%s,"kalloc_alarm_gb":%s,"uptime_days":%s,"chronic_verdict":"%s","sessions_bg":%s,"top_src":"%s"}' \
   "$TS" "$VERDICT" "$SESSIONS" "${HEAD:-null}" "${COMP:-null}" "${ACT:-null}" "${WIRED:-null}" \
   "${SWAP_MB:-null}" "$WARN_GB" "$ALARM_GB" "$ROOM_JSON" "$PER_MB" \
   "$SESSIONS_EXE" "$SESSIONS_BIN" "${PRESSURE:-null}" "$PROC_WARN_GB" "${MAX_PROC_GB:-null}" \
@@ -1858,7 +1884,7 @@ JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compre
   "$PTY_USED" "${PTY_MAX:-null}" "${PTY_PCT:-null}" "$PER_MB_SRC" \
   "${SWAPFILES:-null}" "$SWAPFILE_PREFIX_JSON" "$SWAPFILE_WARN" "$SWAPFILE_ALARM" \
   "${KALLOC_GB:-null}" "$KALLOC_SRC" "${KALLOC_AT:-null}" "$KALLOC_WARN_GB" "$KALLOC_ALARM_GB" \
-  "${UPTIME_DAYS:-null}" "$CHRONIC_VERDICT" "$SESSIONS_BG")"
+  "${UPTIME_DAYS:-null}" "$CHRONIC_VERDICT" "$SESSIONS_BG" "$TOP_SRC")"
 
 if [ "$APPEND" = 1 ]; then
   mkdir -p "$(dirname "$LOG")" 2>/dev/null || true

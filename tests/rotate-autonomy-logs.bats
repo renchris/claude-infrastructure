@@ -181,7 +181,8 @@ DEFAULT_RELPATHS='.claude/autonomy/idl.jsonl
 .claude/logs/account-assignments.jsonl
 .claude/logs/account-utilization.jsonl
 .claude/logs/auth-timeseries.jsonl
-.claude/logs/launch-stall.jsonl'
+.claude/logs/launch-stall.jsonl
+.claude/logs/attrib.jsonl'
 
 @test "DEFAULT_TARGETS covers every unbounded autonomy/log writer the audit named" {
   export HOME="$BATS_TEST_TMPDIR/home"
@@ -217,6 +218,8 @@ DEFAULT_RELPATHS='.claude/autonomy/idl.jsonl
   #
   # 23rd (launch-stall.jsonl) joined 2026-10-04 WITH its fixture line, in the commit that created
   # its writer (the launch watchdog in bin/cc-close-attrib).
+  # 24th (attrib.jsonl) joined 2026-10-04 WITH its fixture line, in the commit that created its
+  # writer (capacity-alarm's libproc attribution pass, scripts/lib/capacity-attrib.py).
   mkdir -p "$HOME/.claude/autonomy" "$HOME/.claude/logs" "$HOME/.claude/autonomy/postland"
   local rel n=0
   while IFS= read -r rel; do
@@ -224,7 +227,7 @@ DEFAULT_RELPATHS='.claude/autonomy/idl.jsonl
     mkbytes "$HOME/$rel" 250            # 250 >= ROTATE_MAX_BYTES(100) → must rotate
     n=$((n + 1))
   done <<< "$DEFAULT_RELPATHS"
-  [ "$n" -eq 23 ]
+  [ "$n" -eq 24 ]
   run bash "$ROT"                        # no args, no ROTATE_TARGETS → the default list
   [ "$status" -eq 0 ]
   while IFS= read -r rel; do
@@ -232,7 +235,7 @@ DEFAULT_RELPATHS='.claude/autonomy/idl.jsonl
     [ "$(rot_count "$HOME/$rel")" -eq 1 ]
     [ "$(wc -c < "$HOME/$rel" | tr -d ' ')" -eq 0 ]   # recreated empty in place
   done <<< "$DEFAULT_RELPATHS"
-  grep -q '"rotated":23' "$CC_IDL"
+  grep -q '"rotated":24' "$CC_IDL"
   grep -q '"skipped":0' "$CC_IDL"
 }
 

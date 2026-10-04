@@ -55,6 +55,10 @@ setup() {
   export CC_CAP_SWAPFILE_WARN=999999 CC_CAP_SWAPFILE_ALARM=999999        # rung 8 swapfiles
   export CC_CAP_KALLOC_WARN_GB=999999 CC_CAP_KALLOC_ALARM_GB=999999      # rung 8 kernel zone
   export CC_CAP_KALLOC=off
+  # Rung 4's primary source is the libproc attribution pass, which reads the LIVE process table. The
+  # rung-4 tests below drive it through a top(1) stub, so the pass is off here and top is the fallback
+  # they exercise. tests/capacity-attrib.bats owns the pass and its wiring.
+  export CC_CAP_ATTRIB=off
 
   # The same pins as an `env -u` argument list, for the two selftests, which must run at the SHIPPED
   # defaults (see (i)). An ARRAY rather than a string: `env $(f)` needs word-splitting to work, which
@@ -285,8 +289,9 @@ TOP
   b="$(printf '%s\n' "$output" | sed -n 's/.*[,{]"sessions_binclaude":\([0-9]*\),.*/\1/p')"
   [ -n "$t" ] || false
   [ -n "$e" ] || false
-  # sessions_bg (the bg-spare family) joined 2026-10-04; it is the row's LAST key, hence the `}`.
-  g="$(printf '%s\n' "$output" | sed -n 's/.*[,{]"sessions_bg":\([0-9]*\)}.*/\1/p')"
+  # sessions_bg (the bg-spare family) joined 2026-10-04. It was the row's last key until top_src
+  # joined after it the same day, so the value ends at either `,` or `}`.
+  g="$(printf '%s\n' "$output" | sed -n 's/.*[,{]"sessions_bg":\([0-9]*\)[,}].*/\1/p')"
   [ -n "$b" ] || false
   [ -n "$g" ] || false
   [ "$t" -eq "$((e + b + g))" ] || false
