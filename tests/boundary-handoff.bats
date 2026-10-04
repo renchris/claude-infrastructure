@@ -10,6 +10,9 @@
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HOOK="$REPO/hooks/boundary-handoff.sh"
+  # The background-job cases name handoff-fire.sh in their assertions; the hook never runs it, but
+  # the hermeticity lint keys on the name, and the pin costs nothing.
+  export CC_FIRE_CAPACITY_GATE=off
   export CC_TELEMETRY_DIR="$BATS_TEST_TMPDIR/tel"
   export CC_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
   export CC_BOUNDARY_LATCH_DIR="$BATS_TEST_TMPDIR/latch"
