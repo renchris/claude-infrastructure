@@ -212,7 +212,7 @@ _resolve_claude_bin() {
   fi
   # 1. our own parent IS the claude process that fired this hook — the running binary, not a name.
   local _pcmd _first
-  _pcmd="$(ps -o command= -p "${PPID:-0}" 2>/dev/null | head -1 || true)"
+  _pcmd="$(ps -o command= -p "${CC_HOOK_PARENT_PID:-${PPID:-0}}" 2>/dev/null | head -1 || true)"  # CC_HOOK_PARENT_PID: set by session-start-dispatch.sh
   _first="${_pcmd%% *}"
   case "${_first##*/}" in
     claude|claude-*)

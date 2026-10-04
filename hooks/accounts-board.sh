@@ -103,7 +103,7 @@ dl_banner() {
   [ -s "$f" ] || return 0
   ent="${CLAUDE_CODE_ENTRYPOINT:-}"
   if [ -z "$ent" ]; then
-    ps -o args= -p "$PPID" 2>/dev/null | grep -E '(^|[[:space:]])(-p|--print)([[:space:]]|$)' >/dev/null && return 0
+    ps -o args= -p "${CC_HOOK_PARENT_PID:-$PPID}" 2>/dev/null | grep -E '(^|[[:space:]])(-p|--print)([[:space:]]|$)' >/dev/null && return 0
   elif [ "$ent" != cli ]; then return 0; fi
   cwd="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)"; cwd="${cwd:-$PWD}"
   case "$cwd/" in /tmp/*|/private/tmp/*) return 0 ;; esac
