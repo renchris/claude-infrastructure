@@ -447,7 +447,8 @@ $HOME/.claude/logs/compressor-sentinel-snap.log
 $HOME/.claude/logs/pane-spawns.jsonl
 $HOME/.claude/logs/auth-timeseries.jsonl
 $HOME/.claude/logs/account-utilization.jsonl
-$HOME/.claude/logs/account-assignments.jsonl"
+$HOME/.claude/logs/account-assignments.jsonl
+$HOME/.claude/logs/launch-stall.jsonl"
 
 # capacity-alarm.jsonl joined 2026-07-31, in the SAME commit that took its sampler from 600 s to
 # 60 s. It had never been a target because at 144 rows/day it was not going anywhere; at 1,440
@@ -460,6 +461,9 @@ $HOME/.claude/logs/account-assignments.jsonl"
 # (claude-accounts --assign, one row per handoff-fire — M7). It self-prunes at 400 lines on the
 # write path, so this rotation is the backstop for a writer that stops being invoked (a pruner
 # that only runs on write cannot shrink a file nothing writes to).
+# launch-stall.jsonl joined 2026-10-04 in the SAME commit that created its writer (the launch
+# watchdog in bin/cc-close-attrib: two rows per launch that fails to register within 20 s). Rare by
+# design, but a hang that recurs for days writes with no cap of its own.
 
 # cc-relogin*.log joined 2026-07-25: the autonomous relogin loop (cc-relogin-poll on an hourly
 # LaunchAgent + the cc-relogin executor it invokes) appends per run and caps nothing, and the

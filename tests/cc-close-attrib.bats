@@ -659,3 +659,36 @@ await_record() { # → newest close-record path, once one exists
   # grep could not read the tree, and a scan that did not RUN must never read as a clean scan.
   [ "$status" -eq 1 ] || { echo "crash-reporting-signal fixture(s): ${output:-<grep error $status>}"; false; }
 }
+
+# ── launch watchdog (docs/research/concurrency-scale-2026-10-04 fix row 7; j-startup-hang.md F2) ──
+# RED-proof: on the pre-fix wrapper (git show 13b27133f:bin/cc-close-attrib) the first case fails —
+# no stall log is ever written, which is the invisibility the 10-04 hang had.
+wd_env() {
+  export CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/cfg"; mkdir -p "$CLAUDE_CONFIG_DIR/sessions"
+  export CC_LAUNCH_STALL_LOG="$BATS_TEST_TMPDIR/launch-stall.jsonl"
+  export CC_LAUNCH_WATCHDOG_S=1 CC_LAUNCH_WATCHDOG_POLL_S=1 CC_MEMDIR_REALPATH=off
+}
+
+@test "launch watchdog: a launch that never registers is logged with its pid, and is left running" {
+  wd_env
+  # the stub outlives the threshold without ever writing sessions/<pid>.json, then exits 7 itself
+  mk_stub "$BATS_TEST_TMPDIR/stub" 'echo $$ > "$PIDFILE"' 'sleep 4' 'exit 7'
+  PIDFILE="$BATS_TEST_TMPDIR/pid" run "$WRAP" "$BATS_TEST_TMPDIR/stub"
+  [ "$status" -eq 7 ]   # the child ran to its own exit: nothing signalled it
+  pid="$(cat "$BATS_TEST_TMPDIR/pid")"
+  [ "$(jq -r 'select(.event=="launch-stalled") | "\(.pid) \(.action)"' "$CC_LAUNCH_STALL_LOG")" = "$pid none" ]
+  jq -e 'select(.event=="launch-stalled") | .likely | test("keychain/system-CA")' "$CC_LAUNCH_STALL_LOG" >/dev/null
+  [ "$(jq -r 'select(.event=="launch-stall-ended") | .outcome' "$CC_LAUNCH_STALL_LOG")" = exited-unregistered ]
+}
+
+@test "launch watchdog: a launch that registers in time, and a headless -p run, log nothing" {
+  wd_env
+  mk_stub "$BATS_TEST_TMPDIR/stub" ': > "$CLAUDE_CONFIG_DIR/sessions/$$.json"' 'sleep 3'
+  run "$WRAP" "$BATS_TEST_TMPDIR/stub"
+  [ "$status" -eq 0 ]
+  [ ! -e "$CC_LAUNCH_STALL_LOG" ]
+  mk_stub "$BATS_TEST_TMPDIR/stub2" 'sleep 3'
+  run "$WRAP" "$BATS_TEST_TMPDIR/stub2" -p hello
+  [ "$status" -eq 0 ]
+  [ ! -e "$CC_LAUNCH_STALL_LOG" ]
+}

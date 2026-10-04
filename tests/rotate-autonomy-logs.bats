@@ -180,7 +180,8 @@ DEFAULT_RELPATHS='.claude/autonomy/idl.jsonl
 .claude/logs/pane-spawns.jsonl
 .claude/logs/account-assignments.jsonl
 .claude/logs/account-utilization.jsonl
-.claude/logs/auth-timeseries.jsonl'
+.claude/logs/auth-timeseries.jsonl
+.claude/logs/launch-stall.jsonl'
 
 @test "DEFAULT_TARGETS covers every unbounded autonomy/log writer the audit named" {
   export HOME="$BATS_TEST_TMPDIR/home"
@@ -213,6 +214,9 @@ DEFAULT_RELPATHS='.claude/autonomy/idl.jsonl
   # the test unable to notice the subject DROPPING a target — a gate keyed on its own signal, which
   # cannot fail in the direction that matters. Re-reding on correct growth is the price of that
   # independence and is the cheaper error; the fix is one line and takes thirty seconds.
+  #
+  # 23rd (launch-stall.jsonl) joined 2026-10-04 WITH its fixture line, in the commit that created
+  # its writer (the launch watchdog in bin/cc-close-attrib).
   mkdir -p "$HOME/.claude/autonomy" "$HOME/.claude/logs" "$HOME/.claude/autonomy/postland"
   local rel n=0
   while IFS= read -r rel; do
@@ -220,7 +224,7 @@ DEFAULT_RELPATHS='.claude/autonomy/idl.jsonl
     mkbytes "$HOME/$rel" 250            # 250 >= ROTATE_MAX_BYTES(100) → must rotate
     n=$((n + 1))
   done <<< "$DEFAULT_RELPATHS"
-  [ "$n" -eq 22 ]
+  [ "$n" -eq 23 ]
   run bash "$ROT"                        # no args, no ROTATE_TARGETS → the default list
   [ "$status" -eq 0 ]
   while IFS= read -r rel; do
@@ -228,7 +232,7 @@ DEFAULT_RELPATHS='.claude/autonomy/idl.jsonl
     [ "$(rot_count "$HOME/$rel")" -eq 1 ]
     [ "$(wc -c < "$HOME/$rel" | tr -d ' ')" -eq 0 ]   # recreated empty in place
   done <<< "$DEFAULT_RELPATHS"
-  grep -q '"rotated":22' "$CC_IDL"
+  grep -q '"rotated":23' "$CC_IDL"
   grep -q '"skipped":0' "$CC_IDL"
 }
 

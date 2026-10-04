@@ -455,6 +455,65 @@ fi
 #    like every other step here, so its worst case is the pre-existing "no record" behaviour. ────
 write_record "$child" "" open || true
 
+# ── LAUNCH WATCHDOG — name a launch that never registers; never kill it (2026-10-04) ───────────
+#    docs/research/concurrency-scale-2026-10-04/j-startup-hang.md fix F2. On 10-04 four launches sat
+#    15-46 min before registering a session, each on ~0.13 s of CPU with no UI, no error and no
+#    hook: the binary's main thread was blocked in its once-per-process system-CA load, a
+#    synchronous keychain query (SecItemCopyMatching → secd) that carries no timeout. Nothing on the
+#    box recorded it. A session registers by writing $CLAUDE_CONFIG_DIR/sessions/<pid>.json, so a
+#    child that is alive after CC_LAUNCH_WATCHDOG_S (20) seconds with no such file is that state.
+#    This says so — one JSON row in the stall log and one gray line on the pane — and later logs
+#    how the wait ended (registered, or the child exited). It is detection only: it sends no signal
+#    to the child, and its pid is reaped by exact pid at the wrapper's exit like the tee's.
+#    Interactive launches only: `claude -p`, --version and the management verbs print to a caller
+#    that parses stderr. Kill switch CC_LAUNCH_WATCHDOG=off. Fails open like everything here.
+_cca_interactive_argv() { # → rc 0 iff BIN_ARGV starts an interactive session
+  local a first=1
+  for a in ${BIN_ARGV[@]+"${BIN_ARGV[@]}"}; do
+    case "$a" in -p|--print|-v|--version|-h|--help) return 1 ;; esac
+    if [[ "$first" -eq 1 ]]; then
+      first=0
+      case "$a" in mcp|config|update|upgrade|doctor|install|setup-token|plugin|migrate-installer|auth) return 1 ;; esac
+    fi
+  done
+  return 0
+}
+LAUNCH_WD_PID=""
+_cca_launch_watchdog() {
+  local after="${CC_LAUNCH_WATCHDOG_S:-20}" poll="${CC_LAUNCH_WATCHDOG_POLL_S:-10}"
+  local horizon="${CC_LAUNCH_WATCHDOG_MAX_S:-3600}"
+  local reg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/sessions/$child.json"
+  local out="${CC_LAUNCH_STALL_LOG:-$HOME/.claude/logs/launch-stall.jsonl}" t0=$SECONDS
+  [[ "$after" =~ ^[0-9]+$ && "$poll" =~ ^[1-9][0-9]*$ && "$horizon" =~ ^[0-9]+$ ]] || return 0
+  # The sleeps hold none of our fds: one orphaned by the exit-time reap must not keep a caller's
+  # stderr pipe open for the rest of its interval.
+  sleep "$after" >/dev/null 2>&1
+  kill -0 "$child" 2>/dev/null || return 0
+  [[ -e "$reg" ]] && return 0
+  mkdir -p "${out%/*}" 2>/dev/null || true
+  printf '{"ts":"%s","event":"launch-stalled","pid":%s,"wrapper_pid":%s,"waited_s":%s,"started_at":"%s","likely":"blocked in the keychain/system-CA query (SecItemCopyMatching to secd)","action":"none"}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" "$child" "$$" "$((SECONDS - t0))" "$STARTED_AT" >> "$out" 2>/dev/null || true
+  if [[ -t 2 ]]; then
+    printf '\033[38;2;140;140;140m◆ claude pid %s has not registered a session after %ss: likely blocked in the keychain/system-CA query (secd). Not killed; it resumes when the query returns. Log: %s\033[0m\n' \
+      "$child" "$((SECONDS - t0))" "$out" >&2
+  fi
+  # From here the wrapper's exit-time reap is ignored: once a stall is on record its ending must be
+  # too, and the child's exit ends this loop within one poll without help.
+  trap '' TERM
+  local how=""
+  while (( SECONDS - t0 < horizon )); do
+    sleep "$poll" >/dev/null 2>&1
+    if [[ -e "$reg" ]]; then how="registered"; break; fi
+    kill -0 "$child" 2>/dev/null || { how="exited-unregistered"; break; }
+  done
+  printf '{"ts":"%s","event":"launch-stall-ended","pid":%s,"outcome":"%s","waited_s":%s}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" "$child" "${how:-still-unregistered}" "$((SECONDS - t0))" >> "$out" 2>/dev/null || true
+}
+if [[ "${CC_LAUNCH_WATCHDOG:-on}" != off ]] && _cca_interactive_argv; then
+  ( _cca_launch_watchdog ) </dev/null >/dev/null &
+  LAUNCH_WD_PID=$!
+fi
+
 code=0
 # WAIT FIRST, THEN TEST LIVENESS — never the reverse. bash reaps a background child as soon as it
 # handles SIGCHLD, and a reaped pid is gone from the process table, so `kill -0` reads FALSE for a
@@ -498,6 +557,8 @@ fi
 #    to fd2 after this point is noise by definition. Exact-pid, never a pattern; best-effort —
 #    an empty TEE_PID (bash 3.2) costs a lingering tee, exactly the pre-fix behaviour. ─────────
 [[ -n "$TEE_PID" ]] && kill -TERM "$TEE_PID" 2>/dev/null || true
+# …and the launch watchdog, same rule: our own helper, exact pid, never the session.
+[[ -n "$LAUNCH_WD_PID" ]] && kill -TERM "$LAUNCH_WD_PID" 2>/dev/null || true
 
 # ── OPT-IN: A CLEAN /exit CLOSES THE OPERATOR'S OWN WINDOW (2026-09-30; default OFF) ───────────
 #    docs/research/husk-panes-2026-09-30.md root cause 2 / fix F-a. A window the operator opened
@@ -520,17 +581,6 @@ fi
 #    Seams: CC_CLOSE_ATTRIB_PS_BIN (the ancestry read) and CC_CLOSE_ATTRIB_KILL_BIN (the actuator),
 #    so a suite never signals a real process. Runs after the record and the tee reap, and never
 #    touches $code: the exit status and the record are exactly what they were without it.
-_cca_interactive_argv() { # → rc 0 iff BIN_ARGV starts an interactive session
-  local a first=1
-  for a in ${BIN_ARGV[@]+"${BIN_ARGV[@]}"}; do
-    case "$a" in -p|--print|-v|--version|-h|--help) return 1 ;; esac
-    if [[ "$first" -eq 1 ]]; then
-      first=0
-      case "$a" in mcp|config|update|upgrade|doctor|install|setup-token|plugin|migrate-installer|auth) return 1 ;; esac
-    fi
-  done
-  return 0
-}
 _cca_close_pane() {
   [[ "${CC_CLOSE_PANE_ON_EXIT:-0}" == 1 && "$code" -eq 0 ]] || return 0
   [[ -n "${KITTY_WINDOW_ID:-}" && -z "${CC_PANE_RUNNER_OWNS_CLOSE:-}" ]] || return 0
