@@ -1,6 +1,6 @@
 #!/bin/bash
 # migration-class: c10
-# migration-step: regroup the 18 SessionStart hooks in ~/.claude/settings.json (every account links to it since 0037, so ALL accounts at once): fold the nine context and banner hooks into ONE registration of hooks/session-start-dispatch.sh, and mark the five pure side-effect hooks "async": true. 18 registrations become 10. It is fix row 17 of docs/research/concurrency-scale-2026-10-04 (startup span p95 10.1 s, max 35.5 s). It writes settings.json, which is C10.
+# migration-step: migration 0056 — regroup the 18 SessionStart hooks in ~/.claude/settings.json (every account links to it since 0037, so ALL accounts at once): fold the nine context and banner hooks into ONE registration of hooks/session-start-dispatch.sh, and mark the five pure side-effect hooks "async": true. 18 registrations become 10. It is fix row 17 of docs/research/concurrency-scale-2026-10-04 (startup span p95 10.1 s, max 35.5 s). It writes settings.json, which is C10.
 # migration-run: bash ~/Development/claude-infrastructure/migrations/0056-session-start-dispatch.sh --confirm settings.json
 # migration-subject: hooks/session-start-dispatch.sh
 # migration-verify: "$HOME/.claude/bin/cc-settings-parity" check >/dev/null 2>&1 && bash "${CC_MIGRATION_REPO:-$HOME/Development/claude-infrastructure}/migrations/0056-session-start-dispatch.sh" --verify
