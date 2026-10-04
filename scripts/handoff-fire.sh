@@ -5169,7 +5169,7 @@ hf_bgjob_arm_goal() { # $1=successor short $2=successor sid $3=condition
   # that the prompt then lands in (measured on the first live probe: read-back mismatch). The proof
   # of engagement is the successor's own transcript holding a user record.
   while [ "$t" -lt "${HF_BGJOB_ENGAGE_WAIT_S:-90}" ]; do
-    tx="$(find "$HF_BGJOB_CFG/projects" -maxdepth 2 -name "$sid.jsonl" -type f 2>/dev/null | head -1 || true)"
+    tx="$(find "$HF_BGJOB_CFG/projects" -maxdepth 2 -name "$sid.jsonl" -type f 2>/dev/null | awk 'NR<=1' || true)"
     [ -n "$tx" ] && grep -q '"type":"user"' "$tx" 2>/dev/null && break
     tx=""; /bin/sleep 1; t=$((t + 1))
   done
@@ -5301,7 +5301,7 @@ hf_bgjob_recycle() { # → the --recycle exit code, for a session that is a back
   # A job's env has FORCE_COLOR=3, so the id arrives wrapped in SGR codes (measured: the first live
   # probe read `backgrounded · \e[36ma33642a0\e[39m`, missed it, and called a running successor
   # "did not start"). NO_COLOR is asked for above; the strip is what makes the read not depend on it.
-  new="$(printf '%s\n' "$out" | sed $'s/\x1b\\[[0-9;]*m//g' | sed -n 's/.*backgrounded · \([0-9a-f]\{8\}\).*/\1/p' | head -1)"
+  new="$(printf '%s\n' "$out" | sed $'s/\x1b\\[[0-9;]*m//g' | sed -n 's/.*backgrounded · \([0-9a-f]\{8\}\).*/\1/p' | awk 'NR<=1')"
   if [ -z "$new" ]; then
     emit_recycle_event recycle-bgjob-launch-failed "" "bgjob:$HF_BGJOB_SHORT" "claude --bg rc $rc: $(printf '%.200s' "$out")" || true
     echo "!! --recycle FAILED: no successor job could be CONFIRMED (claude --bg rc $rc printed no 'backgrounded · <id>' line): $(printf '%.300s' "$out") — this job is untouched and keeps running; if a job did start, 'claude agents --json' lists it, so stop one copy." >&2
@@ -5346,7 +5346,7 @@ hf_bgjob_self_close() { # → the self-close exit code, for a session that is a 
     esac
   fi
   if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    dirty="$(git status --porcelain 2>/dev/null | head -5 || true)"
+    dirty="$(git status --porcelain 2>/dev/null | awk 'NR<=5' || true)"
     ahead="$(git rev-list --count '@{u}..HEAD' 2>/dev/null || git rev-list --count origin/main..HEAD 2>/dev/null || true)"
   fi
   if [ -n "$dirty" ] && [ "${SC_ALLOW_DIRTY:-0}" != 1 ]; then
