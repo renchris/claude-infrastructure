@@ -58,6 +58,9 @@ set -uo pipefail
 # is the probe that works (`: <&0` reports success on a closed fd in bash 3.2).
 INPUT=""
 if [ -e /dev/fd/0 ]; then INPUT="$(</dev/stdin)" || INPUT=""; fi
+# Lean hook profile (lib/hook-profile.sh): advisory — skipped for bulk agents, in pure bash, before any fork.
+# shellcheck source=/dev/null  # sibling lib; resolved at run time, not by the linter
+. "${BASH_SOURCE[0]%/*}/lib/hook-profile.sh" 2>/dev/null && cc_hook_skip advisory "$INPUT" && exit 0
 
 command -v jq >/dev/null 2>&1 || exit 0
 

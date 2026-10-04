@@ -41,6 +41,9 @@ command -v python3 >/dev/null 2>&1 || exit 0
 INPUT=""
 if [ -e /dev/fd/0 ]; then INPUT="$(</dev/stdin)" || INPUT=""; fi
 [ -n "$INPUT" ] || exit 0
+# Lean hook profile (lib/hook-profile.sh): advisory — skipped for bulk agents, in pure bash, before any fork.
+# shellcheck source=/dev/null  # sibling lib; resolved at run time, not by the linter
+. "${BASH_SOURCE[0]%/*}/lib/hook-profile.sh" 2>/dev/null && cc_hook_skip advisory "$INPUT" && exit 0
 _bo_deref() { # <path> → the real file behind any symlink chain (readlink -f, BSD-safe fallback)
   local p="$1" t n=0
   readlink -f "$p" 2>/dev/null && return 0

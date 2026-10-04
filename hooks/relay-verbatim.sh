@@ -17,6 +17,9 @@
 # Fail-open by construction: any parse failure exits 0 silently. A reminder hook must never fail
 # wider than itself (MEMORY.md addon-failure-exceeds-its-blast-radius).
 IFS= read -r -d '' INPUT || true
+# Lean hook profile (lib/hook-profile.sh): advisory — skipped for bulk agents, in pure bash, before any fork.
+# shellcheck source=/dev/null  # sibling lib; resolved at run time, not by the linter
+. "${BASH_SOURCE[0]%/*}/lib/hook-profile.sh" 2>/dev/null && cc_hook_skip advisory "$INPUT" && exit 0
 CMD=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null) || exit 0
 [ -n "$CMD" ] || exit 0
 

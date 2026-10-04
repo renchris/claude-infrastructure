@@ -636,6 +636,11 @@ esac
 
 # ---- PostToolUse actuation mode (no recognized arg; JSON on stdin) --------------------------------
 input="$(cat 2>/dev/null || printf '{}')"
+# Lean hook profile (lib/hook-profile.sh): lead-only. Inside an in-process subagent this payload carries
+# the PARENT's session_id and transcript_path, so a subagent's Bash call could advise — or fire — a
+# recycle of the lead desk, into a context that cannot run /handoff. Skip in pure bash before any work.
+# shellcheck source=/dev/null  # sibling lib; resolved at run time, not by the linter
+. "${BASH_SOURCE[0]%/*}/lib/hook-profile.sh" 2>/dev/null && cc_hook_skip lead-only "$input" && exit 0
 
 # ── B-3: one IDL line per invocation (fired|abstained). "didn't fire" ≠ "never evaluated". ──
 # SIZE_JSON (header §9) — the measured size pair, merged into every record once 4a-quater has run.

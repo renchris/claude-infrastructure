@@ -82,6 +82,12 @@ command -v jq >/dev/null 2>&1 || exit 0
 # stdin. See docs/plans/CROSS_SESSION_COMMS_V2.md §1.3(a).
 # Still fully consumed, so the writer never SIGPIPEs.
 _stdin_json="$(cat 2>/dev/null || true)"
+# Lean hook profile (lib/hook-profile.sh): lead-only. The subagent gate below decides the same thing
+# after three jq forks; this makes it in pure bash first. The jq gate stays as the backstop.
+if [ "$MODE" = "post-tool" ]; then
+  # shellcheck source=/dev/null  # sibling lib; resolved at run time, not by the linter
+  . "${BASH_SOURCE[0]%/*}/lib/hook-profile.sh" 2>/dev/null && cc_hook_skip lead-only "$_stdin_json" && exit 0
+fi
 
 own_pane="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; own_pane="${own_pane##*:}"
 own_sid="$(printf '%s' "$_stdin_json" | jq -r '.session_id // empty' 2>/dev/null || true)"

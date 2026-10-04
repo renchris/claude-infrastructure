@@ -83,6 +83,13 @@ readonly FIELD_SENTINEL='__cc_fields_ok__'
 INPUT=""
 if [ -e /dev/fd/0 ]; then INPUT="$(</dev/stdin)" || INPUT=""; fi
 [[ -z "$INPUT" ]] && INPUT='{}'
+# Lean hook profile (lib/hook-profile.sh): advisory — the PostToolUse cadence checkpoint is skipped for
+# bulk agents, in pure bash, before any jq. The Stop and TeammateIdle checkpoints always run: they are
+# the ones that save a member's last work, and they fire once per turn rather than once per tool call.
+case "$INPUT" in *'"hook_event_name":"PostToolUse"'*)
+  # shellcheck source=/dev/null  # sibling lib; resolved at run time, not by the linter
+  . "${BASH_SOURCE[0]%/*}/lib/hook-profile.sh" 2>/dev/null && cc_hook_skip advisory "$INPUT" && exit 0 ;;
+esac
 
 _FIELDS=$(jq -r '(.session_id // "unknown"), (.hook_event_name // "?"), (.cwd // ""), "__cc_fields_ok__"' <<< "$INPUT" 2>/dev/null || true)
 _ALIGNED=''

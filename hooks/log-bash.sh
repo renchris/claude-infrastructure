@@ -14,6 +14,9 @@
 # trailing newline that `$(cat)` strips, so strip it back off for byte-parity with the old value.
 IFS= read -r -d '' INPUT || true
 while [ "${INPUT%$'\n'}" != "${INPUT}" ]; do INPUT="${INPUT%$'\n'}"; done
+# Lean hook profile (lib/hook-profile.sh): advisory — skipped for bulk agents, in pure bash, before any fork.
+# shellcheck source=/dev/null  # sibling lib; resolved at run time, not by the linter
+. "${BASH_SOURCE[0]%/*}/lib/hook-profile.sh" 2>/dev/null && cc_hook_skip advisory "$INPUT" && exit 0
 # D-3 RECURRENCE (2026-09-05). D-3 renamed `.tool_result` → `.tool_response` and stopped, but the
 # promise on line 2 still was not true: measured across the whole live log, 37,319 `Exit:` fields
 # over 9 days (2026-08-26 → 09-04), every one of them `0`. Two independent causes:
