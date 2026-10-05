@@ -278,7 +278,7 @@ SH
   export CC_RESTORE_WAIT=0 CC_RESTORE_K_BACKOFF=0 CC_RESTORE_FS_GAP=0 CC_RESTORE_MAYBE_S=0 CC_RESTORE_MAYBE_POLL=0
   unset CC_ADMIT_RESTORE_R CC_ADMIT_ACTIVE_CEILING CC_RESTORE_DEADLINE CC_RESTORE_KITTY_PID KITTY_PID
 }
-restore() { run --separate-stderr bash "$LAYOUT" --desktops --restore --to unix:/tmp/kitty-4242 --file "$ROWS" "$@"; }
+restore() { run --separate-stderr bash "$LAYOUT" --desktops --restore --to unix:/tmp/kitty-4242 --file "$ROWS"; }
 xrow() { # <repo> <n> <model> <effort> <group> <slot> <prompt> — an 11-column contract row, \037 = empty
   local wt="$BATS_TEST_TMPDIR/$1/w$2"; mkdir -p "$wt"
   printf 'next\tsid-%s-%s\t%s\tbr\tlabel\t%s\t%s\t%s\t%s\t%s\t\037\n' "$1" "$2" "$wt" "$3" "$4" "$5" "$6" "$7" >> "$ROWS"
