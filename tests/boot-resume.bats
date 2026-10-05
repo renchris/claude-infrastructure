@@ -903,7 +903,7 @@ v2_fleet() { # a dead kitty's heartbeat of e1 (claude-next) and e2 (claude-terti
   [ "$(printf '%s\n' "$rows" | awk -F'\t' 'NF != 12' | grep -c .)" -eq 0 ]   # "row" + 11 contract columns
   [ "$(printf '%s\n' "$rows" | awk -F'\t' '$3 == "e2" { print $9, $10 }')" = "k${KP}w7 1" ]
   [ "$(printf '%s\n' "$rows" | awk -F'\t' '$3 == "e1" { print $9, $10, $7 }')" = "k${KP}w7 2 -" ]
-  [[ "$output" == *"verdict=planned rows=2 retired=0 exhausted=0 no_model=1 launches=0"* ]] || false
+  [[ "$output" == *"verdict=planned rows=2 retired=0 launches=0 exhausted=0 no_model=1"* ]] || false
   [ -z "$(ls "$CC_BOOT_RESUME_STATE_DIR/events" 2>/dev/null)" ]
 }
 

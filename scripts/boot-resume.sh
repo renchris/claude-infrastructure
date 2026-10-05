@@ -846,20 +846,21 @@ if [ "$PLAN_ONLY" = 1 ]; then
   # The 11 row-contract columns the layout would get, '-' for an empty cell. Column 10 (prompt_file)
   # stays empty here: P4 writes a prompt only for a classified INTERRUPTED row.
   echo "boot-resume: plan columns=alias sid cwd branch label model effort group slot prompt_file permission_mode · account from the newest transcript for ${n_acct_tx}/${n_open}"
+  dash() { if [ -n "$1" ]; then printf '%s' "$1"; else printf -; fi; }
   n_plan=0
   while IFS=$'\t' read -r acct cwd sid name br; do
     sid="$(unpad "$sid")"; [ -n "$sid" ] || continue
     acct="$(unpad "$acct")"; cwd="$(unpad "$cwd")"; name="$(unpad "$name")"; br="$(unpad "$br")"
     printf 'row\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(map_account "$acct")" "$sid" "${cwd:--}" "${br:--}" \
-      "${name:-${sid:0:8}}" "$(meta_col "$sid" 3 | sed 's/^$/-/')" "$(meta_col "$sid" 4 | sed 's/^$/-/')" \
-      "$(meta_col "$sid" 7 | sed 's/^$/-/')" "$(meta_col "$sid" 8 | sed 's/^$/-/')" - "$(meta_col "$sid" 5 | sed 's/^$/-/')"
+      "${name:-${sid:0:8}}" "$(dash "$(meta_col "$sid" 3)")" "$(dash "$(meta_col "$sid" 4)")" \
+      "$(dash "$(meta_col "$sid" 7)")" "$(dash "$(meta_col "$sid" 8)")" - "$(dash "$(meta_col "$sid" 5)")"
     case " $EXH_SIDS " in *" $sid "*) printf 'exhausted\t%s\t%s\tresumed, never nudged: the account is at its weekly limit\n' "$sid" "$(map_account "$acct")" ;; esac
     n_plan=$((n_plan + 1))
   done <<EOF
 $GHOSTS
 EOF
   [ "$n_retired" -gt 0 ] && printf '%s' "$RETIRED" | sed 's/^  - /retired\t/'
-  echo "boot-resume: plan verdict=planned rows=${n_plan} retired=${n_retired} exhausted=${n_exhausted} no_model=${n_meta_none} launches=0"
+  echo "boot-resume: plan verdict=planned rows=${n_plan} retired=${n_retired} launches=0 exhausted=${n_exhausted} no_model=${n_meta_none}"
   log_idl abstained ",\"reason\":\"plan-only\",\"n_open\":$n_open,\"resumed\":0"
   exit 0
 fi
