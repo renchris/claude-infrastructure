@@ -111,7 +111,9 @@ row_of() { jq -c --arg c "$1" 'select(.class == $c)' "$LOG" | tail -1; }
 # ── units ────────────────────────────────────────────────────────────────────────────────────────
 
 load_units() {
-  eval "$(sed -n '/^hf_kitty_queue_depth() {/,/^}/p;/^hf_recycle_kitty_precheck() {/,/^}/p;/^hf_self_kitty_tty() {/,/^}/p;/^hf_phase() {/,/^}/p' "$HF")"
+  # hf_kitty_queue_depth moved to scripts/lib/kitty-queue.sh (W3 P5); the subject sources it from there.
+  . "$REPO_SRC/scripts/lib/kitty-queue.sh"
+  eval "$(sed -n '/^hf_recycle_kitty_precheck() {/,/^}/p;/^hf_self_kitty_tty() {/,/^}/p;/^hf_phase() {/,/^}/p' "$HF")"
 }
 
 @test "queue depth counts only rows ON this socket that hold unread data" {
@@ -162,4 +164,14 @@ SH
   [ -s "$CC_PANE_CLOSE_QUEUE_DIR/recycle-77.json" ] || false
   hf_recycle_owed_clear 77
   [ ! -e "$CC_PANE_CLOSE_QUEUE_DIR/recycle-77.json" ] || false
+}
+
+@test "ONE WEDGE, ONE ROW: boot-resume's deaf page files the stuck-kitty row under the same step, class and falsifier" {
+  # cc-backlog folds a re-file of the same step into the same row. If either title drifts, one wedged
+  # kitty becomes two operator rows (W3 P5).
+  title='restart kitty (control socket stuck: queue full)'
+  grep -qF "hf_backlog_needs \"$title\" --class needs-human" "$HF"
+  grep -qF "needs \"$title\" --class needs-human" "$REPO_SRC/scripts/boot-resume.sh"
+  grep -qF -- '--falsifier "test ! -S $HF_KPROBE_SOCK"' "$HF"
+  grep -qF -- '--falsifier "test ! -S $sock"' "$REPO_SRC/scripts/boot-resume.sh"
 }

@@ -1408,12 +1408,11 @@ finally:
 # husk-panes-2026-09-30.md, live capture 2026-10-01). netstat shows it: rows on the socket's path whose
 # Recv-Q holds unread bytes. Seams: CC_HF_NETSTAT_FILE (a `netstat -anv -f unix` capture),
 # CC_KITTY_WEDGED_QUEUE_N (128), CC_RECYCLE_KITTY_PRECHECK=0 (off).
-hf_kitty_queue_depth() { # $1=socket (unix:/path or /path) → connections queued on it holding unread data
-  local path="${1#unix:}" out=""
-  if [ -n "${CC_HF_NETSTAT_FILE:-}" ]; then out="$(cat "$CC_HF_NETSTAT_FILE" 2>/dev/null || true)"
-  else out="$(hf_bounded_s 3 netstat -anv -f unix 2>/dev/null || true)"; fi
-  printf '%s\n' "$out" | awk -v p="$path" '$NF == p && $3 ~ /^[0-9]+$/ && $3 > 0 { n++ } END { print n + 0 }'
-}
+# hf_kitty_queue_depth lives in lib/kitty-queue.sh (W3 P5): boot-resume's deaf page reads the same
+# queue, and one detector must not become two.
+# shellcheck source=lib/kitty-queue.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+. "$HF_DIR/lib/kitty-queue.sh" 2>/dev/null || . "$HOME/.claude/scripts/lib/kitty-queue.sh" 2>/dev/null || true
 hf_recycle_kitty_precheck() { # → 0 answers (or not a kitty pane) · 1 not answering · 2 STUCK; sets HF_KPROBE_WHY/HF_KPROBE_SOCK
   local sock q
   HF_KPROBE_WHY="" HF_KPROBE_SOCK=""
