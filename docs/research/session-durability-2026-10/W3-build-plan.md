@@ -679,7 +679,7 @@ This table replaces the phase table near the top of the file. Only the W3 lead e
 | P6 | W3.1 | fired 2026-10-05 after the memory storm cleared | 258 / `w3-p6-land` | |
 | P8 | W3.2 (no dependency, fired early) | landed, content-verified | 261 / `w3-p8` | `4b8915441` (feat), tests `fd50f450b` `4bbbb0dc1` |
 | P3a-i | W3.2 | landed, content-verified | 266 / `w3-p3a-i` | `bfdb948ef` |
-| P3b | W3.2 | fired 2026-10-05 | 267 / `w3-p3b` | |
+| P3b | W3.2 | landed, content-verified | 267 / `w3-p3b` | `96a0591dc` (feat), `6b30ad551` (fix), tests `124f51717` `760e13771` |
 | P3a-ii | W3.2b | fired 2026-10-05 | 271 / `w3-p3a-ii` | |
 | P4 | W3.3 | waits for P3a-ii, P3b | | |
 | P5 | W3.4 | waits for P4, P8 | | |
