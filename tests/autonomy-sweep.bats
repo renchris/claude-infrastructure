@@ -1094,6 +1094,11 @@ SH
   export CC_BACKLOG_VALIDATED="$BATS_TEST_TMPDIR/validated.json"
   export CC_PREMISE_PASS_EVERY_S=0                      # due now
   export CC_PREMISE_REPO="$REPO"
+  # ONE reading closes: `true` is a probe the filing-day screen cannot re-ask, so since cb7b8b223
+  # (2026-09-30) it counts as a runtime sample and needs three readings 6 h apart. This case is
+  # about the pass FIRING; the spacing has its own cases in backlog-freshness.bats, which that
+  # commit pinned the same way while missing this suite (red on trunk from then to 2026-10-05).
+  export CC_PREMISE_READINGS_REQUIRED=1
   # One row carrying a probe that PASSES, so the pass has something real to record and retire.
   local id; id="$("$CC_BACKLOG_BIN" add --title "w1 currency fixture" --project probe \
                     --source test --falsifier "true")"
@@ -1181,6 +1186,7 @@ SH
   # like a real red (memory: verification-harness-vacuous-pass-traps).
   : > "$CC_IDL"
   export CC_PREMISE_PASS_EVERY_S=0
+  export CC_PREMISE_READINGS_REQUIRED=1   # the control is the interval gate, not the reading spacing (see the case above)
   run "${SWEEP_TO[@]}" bash "$SWEEP"
   grep -q '"premise_pass_note":"ok"' "$CC_IDL"
   run "$CC_BACKLOG_BIN" list --all --json
