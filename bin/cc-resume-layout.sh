@@ -3,7 +3,7 @@
 # inside each, instead of piling every session into tabs of the operator's own window.
 #
 #   Usage: cc-resume-layout.sh [--per-window N] [--stagger SECS] [--use-all-screens] [--dry-run]
-#          cc-resume-layout.sh --desktops [--to unix:/path] [--per-window N<=4, <=6 with --restore] [--stagger SECS] [--restore] [--dry-run]
+#          cc-resume-layout.sh --desktops [--to unix:/path] [--per-window N<=4, <=6 with --restore] [--stagger SECS] [--restore [--tree FILE]] [--dry-run]
 #          ... reading a TSV on stdin (or --file PATH):
 #              account <TAB> session-id <TAB> worktree <TAB> branch [<TAB> label]
 #          i.e. lr-select.py's own output, with an optional 5th label column. Under --restore the
@@ -83,6 +83,33 @@
 #     record, re-checked for CC_RESTORE_MAYBE_S (at least 240 s).
 #   · FULLSCREEN by kitty's own action, by window id: `action --match id:<head> toggle_fullscreen`
 #     (kitty dispatches it to the matched window's OS window), 3 s apart, never re-toggled.
+#
+# --restore, LAYOUT FIDELITY (2026-10-05, W3 P7; plan § Amendment B gaps 2 and 3): when the heartbeat
+# recorded kitty's tree, each window comes back as it was, and the one-row plan above is only the
+# fallback for rows no tree places. Nothing here runs without --restore.
+#   · THE TREE is hb.kitty-ls.json (scripts/lib/restore-heartbeat.sh): --tree FILE, else the newest one
+#     under the heartbeat root for each kitty pid the rows' group column names (k<pid>w<os window>).
+#     CC_RESTORE_TREE=off turns the replay off. A row is matched to its old pane through the
+#     hb.roster.json beside the tree (paneUUID is the kitty window id).
+#   · SPLITS: every tab's layout_state pairs are rebuilt with their orientation and bias. A pair is
+#     made by splitting the pane already there: the new pane is the first leaf of the pair's second
+#     half, launched --location=vsplit|hsplit --next-to it with kitty's own --bias (the share of the
+#     NEW pane, in percent). So no equalize runs on a replayed splits tab; it would erase the biases.
+#     A tab in another layout comes back as a row in group order, then goto-layout to that layout.
+#   · TABS in their recorded order (launch --type=tab into the window). The first tab stays active:
+#     focus-tab would pull the operator's focus across OS windows.
+#   · PANES: one with a row resumes its session; a non-Claude pane is reopened as a shell in its
+#     recorded cwd; a Claude pane with no row was not restored on purpose and is left out, its
+#     neighbour taking the space as when kitty closes a window. A tree has no 6-pane cap.
+#   · DISPLAY: hb.displays.tsv beside the tree maps each OS window to its display. Right after a
+#     window's head opens it is moved there through System Events (found by a title marker held for
+#     that one call), then fullscreen is toggled in the recorded window order, and only for windows
+#     that were fullscreen. Without the file, or without Accessibility, the panes are still right
+#     and only the placement is skipped, out loud.
+#   · --dry-run --tree FILE reads files only, and with no rows on stdin takes them from the roster
+#     beside the tree. It prints one `cc-resume-layout: tree oswin=… panes=… layout=… display=…`
+#     line per window on stdout.
+#   · A maybe row still gets no map line (plan § G), and a shell pane never does.
 set -uo pipefail
 
 KITTY_BIN="${CC_TERM_KITTY:-}"
@@ -142,7 +169,8 @@ TO_ARG=""
 STAGGER="${CC_RESUME_STAGGER:-12}"
 USE_ALL_SCREENS=0
 DRY_RUN=0
-RESTORE=0             # --restore: the unattended restore path (W3); today it only tightens the k() bound
+RESTORE=0             # --restore: the unattended restore path (W3)
+TREE=""               # --tree FILE: the recorded kitty tree to replay (--restore only)
 FILE=""
 
 die() { printf 'cc-resume-layout: %s\n' "$*" >&2; exit 2; }
@@ -158,11 +186,18 @@ while [ $# -gt 0 ]; do
     --to)              TO_ARG="${2:?--to needs unix:/path}"; shift 2 ;;
     --dry-run)         DRY_RUN=1; shift ;;
     --restore)         RESTORE=1; shift ;;
+    --tree)            TREE="${2:?--tree needs a kitty ls JSON file}"; shift 2 ;;
     -h|--help)         sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; exit 0 ;;
     *)                 die "unknown argument: $1" ;;
   esac
 done
 
+if [ -n "$TREE" ]; then
+  [ "$DESKTOPS" = 1 ] && [ "$RESTORE" = 1 ] || die "--tree needs --desktops --restore"
+  [ -r "$TREE" ] || die "--tree: cannot read $TREE"
+fi
+# The tree dry run reads files only, so it needs no kitty binary.
+[ -n "$TREE" ] && [ "$DRY_RUN" = 1 ] && [ -z "$KITTY_BIN" ] && KITTY_BIN=/usr/bin/true
 [ -n "$KITTY_BIN" ] && [ -x "$KITTY_BIN" ] || die "no kitty binary (set CC_TERM_KITTY) — this layout is kitty-only"
 [ "$DRY_RUN" = 1 ] || [ -x "$RESUME_ONE" ] || die "resume launcher not executable: $RESUME_ONE"
 
@@ -177,9 +212,24 @@ while IFS= read -r line; do
   n=$(printf '%s' "$line" | awk -F'\t' '{print NF}')
   [ "$n" -ge 4 ] || die "row has $n tab-separated fields, need >=4: $line"
   ROWS+=("$line")
-done < <(if [ -n "$FILE" ]; then cat -- "$FILE"; else cat; fi)
+done < <(if [ -n "$FILE" ]; then cat -- "$FILE"
+         elif [ -n "$TREE" ] && [ "$DRY_RUN" = 1 ] && [ -t 0 ]; then :
+         else cat; fi)
 
 N=${#ROWS[@]}
+# The tree dry run with no rows: one row per session in the roster recorded beside the tree.
+if [ "$N" -eq 0 ] && [ -n "$TREE" ] && [ "$DRY_RUN" = 1 ]; then
+  while IFS= read -r line; do
+    [ -n "$line" ] && ROWS+=("$line")
+  done < <(python3 -c '
+import json, sys
+for e in json.load(open(sys.argv[1])):
+    if e.get("session_id"):
+        print("\t".join([str(e.get("account") or "?"), e["session_id"], e.get("cwd") or "\x1f", "\x1f",
+                         str(e.get("name") or e["session_id"][:8]).replace("\t", " ").replace("\n", " ")]))
+' "$(dirname "$TREE")/hb.roster.json" 2>/dev/null)
+  N=${#ROWS[@]}
+fi
 [ "$N" -gt 0 ] || die "no rows on stdin — nothing to lay out"
 
 # ── --desktops ──────────────────────────────────────────────────────────────────────────────────
@@ -301,15 +351,46 @@ EOF
       return "$rc"
     }
 
-    # PLAN: "<window#>\t<row index>\t<group label>", in launch order. Heartbeat groups (column 8) keep
-    # their own windows in slot order (column 9); the rest pack by project as the default path does.
-    # Windows holding a prompt row (column 10) go last, and inside a project window so do those rows.
+    # The display probe lives in the heartbeat library (hb_display_probe). Absent ⇒ no window is moved.
+    if [ "$DRY_RUN" = 0 ]; then
+      for _hb in "$HERE/../scripts/lib/restore-heartbeat.sh" "${HOME:-}/.claude/scripts/lib/restore-heartbeat.sh"; do
+        # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+        [ -f "$_hb" ] && . "$_hb" 2>/dev/null && break
+      done
+      unset _hb
+    fi
+
+    # THE RECORDED TREES: --tree, else the newest heartbeat tree of each kitty the rows' groups name.
+    TREES=()
+    if [ -n "$TREE" ]; then TREES=("$TREE")
+    elif [ "${CC_RESTORE_TREE:-}" != off ]; then
+      hbroot="${CC_HEARTBEAT_DIR:-${HOME:-}/.claude/autonomy/heartbeat}"
+      for kp in $(for r in "${ROWS[@]}"; do cell "$r" 8; echo; done | sed -n 's/^k\([0-9][0-9]*\)w[0-9][0-9]*$/\1/p' | sort -u); do
+        best=""; bs=-1
+        for f in "$hbroot"/*/"$kp"/hb.kitty-ls.json; do
+          [ -f "$f" ] || continue
+          st="$(head -n 1 "${f%/*}/hb.start" 2>/dev/null | awk '{ print $1 }')"
+          case "$st" in ''|*[!0-9]*) st=0 ;; esac
+          if [ "$st" -gt "$bs" ]; then best="$f"; bs="$st"; fi
+        done
+        [ -n "$best" ] && TREES+=("$best")
+      done
+    fi
+
+    # PLAN, three kinds of line, fields separated by \037 (so an empty field keeps its place):
+    #   W  window#  source  platform_window_id  tabs  panes  claude  shells  layout-signature
+    #      then the window's hb.displays.tsv fields (uuid dx dy dw dh fullscreen wx wy ww wh) or 10 empties
+    #   T  how many windows came from a recorded tree (they are numbered first, in recorded order)
+    #   P  window#  tab  pane-key  row|shell  row-index  head|tab|vsplit|hsplit  anchor-key  bias
+    #      shell-cwd  group-label  keep|<layout to go to>      — in launch order
+    # Windows holding a prompt row (column 10) launch last, and inside a project window so do those rows.
     PLAN="$(i=0; for r in "${ROWS[@]}"; do
-        printf '%s\t%s\t%s\t%s\t%s\n' "$i" "$(cell "$r" 3)" "$(cell "$r" 8)" "$(cell "$r" 9)" "$(cell "$r" 10)"
+        printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$i" "$(cell "$r" 3)" "$(cell "$r" 8)" "$(cell "$r" 9)" "$(cell "$r" 10)" "$(cell "$r" 2)"
         i=$((i + 1)); done \
       | python3 -c '
-import os, subprocess, sys
-per = int(sys.argv[1])
+import json, os, subprocess, sys
+per = int(sys.argv[1]); trees = [t for t in sys.argv[2:] if t]
+S = "\x1f"
 def key(wt):
     try:
         out = subprocess.run(["git", "-C", wt, "rev-parse", "--path-format=absolute", "--git-common-dir"],
@@ -324,20 +405,137 @@ def slot(r):
         return (0, int(r[1]), r[0])
     except ValueError:
         return (1, 0, r[0])
-groups, order = {}, []
+rows = []
 for line in sys.stdin:
-    f = line.rstrip("\n").split("\t") + [""] * 5
-    i, wt, grp, sl, prompt = int(f[0]), f[1], f[2], f[3], f[4]
+    f = line.rstrip("\n").split("\t") + [""] * 6
+    rows.append((int(f[0]), f[1], f[2], f[3], 1 if f[4] else 0, f[5]))
+by_sid = {r[5]: r for r in rows if r[5]}
+used = set()
+
+# ── recorded trees: a window is a list of tabs, a tab is (layout, node); a node is a leaf
+#    {"leaf": ("row", index, prompt) | ("shell", cwd)} or a pair {"h", "bias", "one", "two"} ──
+def sig(n):
+    if "leaf" in n:
+        return "p"
+    b = n["bias"]
+    return "%s%s(%s,%s)" % ("H" if n["h"] else "V", "" if abs(b - 0.5) < 0.005 else ":%.2f" % b, sig(n["one"]), sig(n["two"]))
+def leaves(n):
+    return [n["leaf"]] if "leaf" in n else leaves(n["one"]) + leaves(n["two"])
+def first(n):
+    return n if "leaf" in n else first(n["one"])
+def chain(ls):   # a row of panes: what head + vsplit-beside-the-previous builds
+    n = {"leaf": ls[-1]}
+    for l in reversed(ls[:-1]):
+        n = {"h": True, "bias": 0.5, "one": {"leaf": l}, "two": n}
+    return n
+def load(path):
+    try:
+        data = json.load(open(path))
+    except Exception:
+        return None
+    if not isinstance(data, list):
+        return None
+    d = os.path.dirname(os.path.abspath(path))
+    pane_sid, disp = {}, {}
+    try:
+        for e in json.load(open(os.path.join(d, "hb.roster.json"))):
+            if e.get("session_id") and e.get("paneUUID") not in (None, ""):
+                pane_sid[str(e["paneUUID"])] = e["session_id"]
+    except Exception:
+        pass
+    try:
+        for line in open(os.path.join(d, "hb.displays.tsv")):
+            f = line.rstrip("\n").split("\t")
+            if len(f) == 11:
+                disp[f[0]] = f[1:]
+    except Exception:
+        pass
+    kp = os.path.basename(d)
+    return data, pane_sid, disp, (kp if kp.isdigit() else "tree")
+def tab_node(t, pane_sid):
+    wmap = {w.get("id"): w for w in t.get("windows") or [] if isinstance(w, dict)}
+    st = t.get("layout_state") or {}
+    gl = ((st.get("all_windows") or {}).get("window_groups")
+          or [{"id": g.get("id"), "window_ids": g.get("windows")} for g in t.get("groups") or []]
+          or [{"id": w, "window_ids": [w]} for w in wmap])
+    groups = {g.get("id"): [w for w in g.get("window_ids") or [] if w in wmap] for g in gl}
+    def leaf(gid):
+        wids = groups.get(gid) or []
+        if not wids:
+            return None
+        for w in wids:                      # a Claude pane that has a row
+            sid = pane_sid.get(str(w))
+            if sid in by_sid and sid not in used:
+                used.add(sid); r = by_sid[sid]
+                return {"leaf": ("row", r[0], r[4])}
+        if not pane_sid:                    # no roster beside the tree: find the sid in the pane itself
+            blob = json.dumps([[wmap[w].get(k) for k in ("cmdline", "last_reported_cmdline", "foreground_processes", "user_vars")] for w in wids])
+            for sid, r in by_sid.items():
+                if sid not in used and sid in blob:
+                    used.add(sid)
+                    return {"leaf": ("row", r[0], r[4])}
+        if any(str(w) in pane_sid for w in wids):
+            return None                     # a Claude pane with no row: its session is not being restored
+        return {"leaf": ("shell", wmap[wids[-1]].get("cwd") or "")}
+    def build(x):
+        if x is None or isinstance(x, bool):
+            return None
+        if isinstance(x, int):
+            return leaf(x)
+        a, b = build(x.get("one")), build(x.get("two"))
+        if a is None or b is None:
+            return a or b                   # the pane that stays takes the space of the pair, as kitty does
+        try:
+            bias = min(0.99, max(0.01, float(x.get("bias", 0.5))))
+        except (TypeError, ValueError):
+            bias = 0.5
+        return {"h": x.get("horizontal", True) is not False, "bias": bias, "one": a, "two": b}
+    name = t.get("layout") or "splits"
+    if st.get("class") == "Splits" and isinstance(st.get("pairs"), dict):
+        n = build(st["pairs"])
+        return ("splits", n) if n else None
+    ls = [l for l in (leaf(g.get("id")) for g in gl) if l]
+    if not ls:
+        return None
+    # A stack tab shows one pane and keeps no record of the splits under it: bring it back as a row.
+    return ("horizontal" if name in ("stack", "splits") else name, chain([l["leaf"] for l in ls]))
+
+wins = []          # {"src", "pwid", "disp", "tabs": [(layout, node)], "grp", "prompt"}
+for path in trees:
+    got = load(path)
+    if got is None:
+        print("cc-resume-layout: tree unreadable, ignored: %s" % path, file=sys.stderr)
+        continue
+    data, pane_sid, disp, kp = got
+    for o in data:
+        if not isinstance(o, dict):
+            continue
+        tabs = [tn for tn in (tab_node(t, pane_sid) for t in o.get("tabs") or [] if isinstance(t, dict)) if tn]
+        if not tabs:
+            continue
+        pwid = str(o.get("platform_window_id") or "")
+        src = "k%sw%s" % (kp, o.get("id"))
+        ls = [l for _, n in tabs for l in leaves(n)]
+        wins.append({"src": src, "pwid": pwid, "disp": disp.get(pwid), "tabs": tabs, "grp": src,
+                     "prompt": any(l[0] == "row" and l[2] for l in ls)})
+ntree = len(wins)
+
+# ── rows no tree placed: one row of panes per window (P3b). Heartbeat groups (column 8) keep their
+#    own windows in slot order (column 9); the rest pack by project. ──
+groups, order = {}, []
+for i, wt, grp, sl, prompt, sid in rows:
+    if sid in used:
+        continue
     k = ("hb", grp) if grp else ("proj", key(wt) if wt else "?")
     if k not in groups:
         groups[k] = []; order.append(k)
-    groups[k].append((i, sl, 1 if prompt else 0))
-wins, chunks = [], []
+    groups[k].append((i, sl, prompt))
+fb, chunks = [], []
 for k in order:
     rs = groups[k]
     if k[0] == "hb":
         rs = sorted(rs, key=slot)
-        wins += [(rs[j:j + per], [k[1]]) for j in range(0, len(rs), per)]
+        fb += [(rs[j:j + per], [k[1]]) for j in range(0, len(rs), per)]
     else:
         rs = sorted(rs, key=lambda r: (r[2], r[0]))
         chunks += [(k[1], rs[j:j + per]) for j in range(0, len(rs), per)]
@@ -349,12 +547,61 @@ for g, rs in chunks:
             b[0].extend(rs); b[1].append(g); break
     else:
         bins.append([list(rs), [g]])
-wins += [(sorted(rs, key=lambda r: r[2]), gs) for rs, gs in bins]
-wins.sort(key=lambda w: any(r[2] for r in w[0]))
-for n, (rs, gs) in enumerate(wins, 1):
-    for r in rs:
-        print("%d\t%d\t%s" % (n, r[0], "+".join(gs)))
-' "$PER_WINDOW")" || die "the window planner failed"
+fb += [(sorted(rs, key=lambda r: r[2]), gs) for rs, gs in bins]
+fb.sort(key=lambda w: any(r[2] for r in w[0]))
+for rs, gs in fb:
+    wins.append({"src": "plan", "pwid": "", "disp": None, "grp": "+".join(gs),
+                 "tabs": [("horizontal", chain([("row", r[0], r[2]) for r in rs]))],
+                 "prompt": any(r[2] for r in rs)})
+for n, w in enumerate(wins, 1):
+    w["n"] = n
+
+# ── ops. A pair is built by splitting the pane that is already there: the new pane is the first
+#    leaf of the second half of the pair, and the --bias of kitty gives it the share of that half. ──
+nkey = [0]
+def emit(w, ti, layout, node):
+    ops, sim = [], {}
+    def op(leaf, how, anchor, bias=""):
+        nkey[0] += 1; k = nkey[0]
+        kind, a, b = leaf if leaf[0] == "row" else (leaf[0], "", leaf[1])
+        ops.append([str(w["n"]), str(ti), str(k), kind, str(a), how, str(anchor), bias,
+                    b if kind == "shell" else "", w["grp"], "keep" if layout == "splits" else layout])
+        return k
+    def grow(n, anchor):
+        if "leaf" in n:
+            return
+        bias = "" if abs(n["bias"] - 0.5) < 1e-9 else "%.4f" % ((1 - n["bias"]) * 100)
+        k = op(first(n["two"])["leaf"], "vsplit" if n["h"] else "hsplit", anchor, bias)
+        grow(n["one"], anchor); grow(n["two"], k)
+    grow(node, op(first(node)["leaf"], "head" if ti == 0 else "tab", "" if ti == 0 else w["head"]))
+    if ti == 0:
+        w["head"] = int(ops[0][2])
+    # Replay the ops the way Pair.split_and_add in kitty does, and refuse a plan that would not
+    # rebuild the recorded shape.
+    def split(n, o):
+        if "leaf" in n:
+            if n["leaf"] != o[6]:
+                return n
+            return {"h": o[5] == "vsplit", "bias": 1 - float(o[7]) / 100 if o[7] else 0.5, "one": n, "two": {"leaf": o[2]}}
+        return dict(n, one=split(n["one"], o), two=split(n["two"], o))
+    built = {"leaf": ops[0][2]}
+    for o in ops[1:]:
+        built = split(built, o)
+    if sig(built) != sig(node):
+        raise SystemExit("cc-resume-layout: planner bug: %s would rebuild %s, recorded %s" % (w["src"], sig(built), sig(node)))
+    return ops
+out = []
+for w in wins:
+    w["ops"] = [o for ti, (layout, node) in enumerate(w["tabs"]) for o in emit(w, ti, layout, node)]
+    ls = [l for _, n in w["tabs"] for l in leaves(n)]
+    out.append(S.join(["W", str(w["n"]), w["src"], w["pwid"], str(len(w["tabs"])), str(len(ls)),
+                       str(sum(1 for l in ls if l[0] == "row")), str(sum(1 for l in ls if l[0] == "shell")),
+                       ";".join("%s:%s" % (lay, sig(n)) for lay, n in w["tabs"])] + (w["disp"] or [""] * 10)))
+out.append(S.join(["T", str(ntree)]))
+for w in sorted(wins, key=lambda w: w["prompt"]):      # windows holding a prompt row launch last
+    out += [S.join(["P"] + o) for o in w["ops"]]
+print("\n".join(out))
+' "$PER_WINDOW" ${TREES[@]+"${TREES[@]}"})" || die "the window planner failed"
 
     # The non-charging probe; a library too old to carry it falls back to the charging admit, loudly.
     PROBE_FN=cc_capacity_probe
@@ -363,47 +610,135 @@ for n, (rs, gs) in enumerate(wins, 1):
       note "cc-resume-layout: capacity-admit.sh has no cc_capacity_probe — each wait now spends the refusal budget"
     fi
     t0=$SECONDS; stopped=none; fd_blind=0
-    launched=0; failed=0; shed=0; nwin=0
-    WIN_HEAD=(); WIN_NUM=(); MAYBE_SID=(); MAYBE_BASE=()
-    cur=""; head=""; prev=""; pos=0
-    close_restore_window() { # one row, then even widths
-      [ -n "$head" ] || return 0
+    launched=0; failed=0; shed=0; nwin=0; nshell=0; placed=0; place_bad=0
+    WIN_HEAD=(); WIN_NUM=(); MAYBE_SID=(); MAYBE_BASE=(); WIDS=(); WDISP=(); WFS=()
+    NTREE=0
+    while IFS=$'\037' read -r _t wn src pwid ntabs npanes nclaude nsh lsig duuid ddx ddy ddw ddh dfs dwx dwy dww dwh; do
+      case "$_t" in
+        T) NTREE="$wn" ;;
+        W) [ -n "$duuid" ] && { WDISP[wn]="$duuid $ddx $ddy $ddw $ddh $dfs $dwx $dwy $dww $dwh"; WFS[wn]="$dfs"; }
+           # The dry run's answer for the operator's preview: what each window comes back as.
+           if [ "$DRY_RUN" = 1 ] && [ "${#TREES[@]}" -gt 0 ]; then
+             printf 'cc-resume-layout: tree oswin=%s src=%s platform_window_id=%s tabs=%s panes=%s claude=%s shells=%s layout=%s display=%s display_rect=%s fullscreen=%s\n' \
+               "$wn" "$src" "${pwid:-none}" "$ntabs" "$npanes" "$nclaude" "$nsh" "$lsig" "${duuid:-unrecorded}" \
+               "$([ -n "$duuid" ] && printf '%s,%s,%sx%s' "$ddx" "$ddy" "$ddw" "$ddh" || printf none)" "${dfs:-unrecorded}"
+           fi ;;
+      esac
+    done <<EOF
+$PLAN
+EOF
+    [ "${#TREES[@]}" -gt 0 ] && note "cc-resume-layout: replaying $NTREE recorded window(s) from ${TREES[*]}"
+
+    # The displays attached now, read once and only when a window has a display to go back to.
+    CUR_DISPLAYS=""
+    if [ "$DRY_RUN" = 0 ] && [ "${#WDISP[@]}" -gt 0 ]; then
+      if command -v hb_display_probe >/dev/null 2>&1; then
+        CUR_DISPLAYS="$(CC_HB_SWIFT_BIN="$SWIFT_BIN" hb_display_probe 2>/dev/null)" || CUR_DISPLAYS=""
+      fi
+      [ -n "$CUR_DISPLAYS" ] || note "cc-resume-layout: the attached displays are unreadable — windows open where kitty puts them"
+    fi
+    # place_window <window#> <head pane> — put a new OS window on its recorded display, before any
+    # fullscreen. A window that was fullscreen only has to land on the display; one that was not gets
+    # its old frame back. A display is matched by uuid, else by identical bounds, else left alone.
+    place_window() {
+      local n="$1" wid="$2" rec="${WDISP[$1]:-}" uuid dx dy dw dh fs wx wy ww wh cur cx cy cw ch x y w h marker r
+      [ -n "$rec" ] || return 0
+      read -r uuid dx dy dw dh fs wx wy ww wh <<EOF
+$rec
+EOF
       if [ "$DRY_RUN" = 1 ]; then
-        note "DRY [CC-DESK-$cur] goto-layout --match window_id:$head horizontal"
+        note "DRY [CC-DESK-$n] place on display $uuid ($dx,$dy ${dw}x${dh})$([ "$fs" = 1 ] || printf ' at %s,%s %sx%s' "$wx" "$wy" "$ww" "$wh")"
+        return 0
+      fi
+      [ -n "$CUR_DISPLAYS" ] || return 0
+      cur="$(printf '%s\n' "$CUR_DISPLAYS" | awk -F'\t' -v u="$uuid" '$1 == u { print $2, $3, $4, $5; exit }')"
+      [ -n "$cur" ] || cur="$(printf '%s\n' "$CUR_DISPLAYS" | awk -F'\t' -v a="$dx" -v b="$dy" -v c="$dw" -v d="$dh" \
+        '$2 == a && $3 == b && $4 == c && $5 == d { print $2, $3, $4, $5; exit }')"
+      if [ -z "$cur" ]; then
+        place_bad=$((place_bad + 1)); note "  [CC-DESK-$n] display $uuid is not attached — window left where kitty put it"
+        return 0
+      fi
+      read -r cx cy cw ch <<EOF
+$cur
+EOF
+      if [ "$fs" = 1 ]; then x=$((cx + 20)); y=$((cy + 45)); w=$((cw - 40)); h=$((ch - 90))
+      else x=$((cx + wx - dx)); y=$((cy + wy - dy)); w="$ww"; h="$wh"; fi
+      marker="CC-DESK-$n-$$"
+      kr set-window-title --match "id:$wid" "$marker" >/dev/null 2>&1
+      sleep "$SETTLE"
+      r="$(kb "$OSASCRIPT" <<EOF 2>/dev/null
+tell application "System Events" to tell process "kitty"
+  repeat with x in windows
+    if name of x contains "$marker" then
+      set position of x to {$x, $y}
+      set size of x to {$w, $h}
+      return "ok"
+    end if
+  end repeat
+  return "nomatch"
+end tell
+EOF
+)"
+      kr set-window-title --match "id:$wid" "" >/dev/null 2>&1
+      if [ "$r" = ok ]; then placed=$((placed + 1)); note "  [CC-DESK-$n] placed on display $uuid at $x,$y ${w}x${h}"
+      else place_bad=$((place_bad + 1)); note "  [CC-DESK-$n] NOT placed (${r:-no answer}) — Accessibility for kitty? The panes are right, the display is not"; fi
+    }
+
+    cur=""; ctab=""; head=""; thead=""; tlast=""; tfin=""
+    close_restore_tab() { # a replayed splits tab stays as built; any other becomes its layout, then even widths
+      [ -n "$thead" ] || return 0
+      [ "$tfin" = keep ] && return 0
+      if [ "$DRY_RUN" = 1 ]; then
+        note "DRY [CC-DESK-$cur] goto-layout --match window_id:$thead $tfin"
         note "DRY [CC-DESK-$cur] kitten ${EQ_KITTEN:-kitty-equalize.py} (reset_window_sizes)"
       else
-        kr goto-layout --match "window_id:$head" horizontal >/dev/null 2>&1 \
-          || note "  [CC-DESK-$cur] goto-layout horizontal refused — the panes stay as splits"
+        kr goto-layout --match "window_id:$thead" "$tfin" >/dev/null 2>&1 \
+          || note "  [CC-DESK-$cur] goto-layout $tfin refused — the panes stay as splits"
         if [ -z "$EQ_KITTEN" ]; then
           note "  [CC-DESK-$cur] scripts/kitty-equalize.py not found — panes may be uneven"
         else
-          KITTY_WINDOW_ID="$head" kr action --self kitten "$EQ_KITTEN" >/dev/null 2>&1 \
+          KITTY_WINDOW_ID="$thead" kr action --self kitten "$EQ_KITTEN" >/dev/null 2>&1 \
             || note "  [CC-DESK-$cur] equalize kitten refused — panes may be uneven"
         fi
       fi
+    }
+    close_restore_window() {
+      close_restore_tab
+      [ -n "$head" ] || return 0
       WIN_HEAD+=("$head"); WIN_NUM+=("$cur"); nwin=$((nwin + 1))
     }
-    while IFS=$'\t' read -r win idx grp; do
-      [ -n "$win" ] || continue
-      if [ "$win" != "$cur" ]; then close_restore_window; cur="$win"; head=""; prev=""; pos=0; fi
-      row="${ROWS[$idx]}"
-      acct="$(cell "$row" 1)"; sid="$(cell "$row" 2)"; wt="$(cell "$row" 3)"; br="$(cell "$row" 4)"
-      model="$(cell "$row" 6)"; effort="$(cell "$row" 7)"
-      prompt_file="$(cell "$row" 10)"; pmode="$(cell "$row" 11)"   # P4: handed to reso-resume-one as they are
-      # reso-resume-one exits 2 on an effort it does not know, after the pane is already open.
-      case "$effort" in ''|low|medium|high|xhigh|max) ;; *) note "cc-resume-layout: effort '$effort' for $sid is not one reso-resume-one takes — dropped"; effort="" ;; esac
-      case "$model" in *[!A-Za-z0-9._-]*) note "cc-resume-layout: model '$model' for $sid is malformed — dropped"; model="" ;; esac
-      how="vsplit"; [ "$pos" = 0 ] && how="head"
-      if [ "$DRY_RUN" = 1 ]; then
-        [ "$pos" = 0 ] && head="<head of CC-DESK-$win>"
-        note "DRY [CC-DESK-$win $grp] $how $acct $sid $wt${model:+ model=$model}${effort:+ effort=$effort}${pmode:+ permission_mode=$pmode}${prompt_file:+ prompt_file=$prompt_file}"
-        pos=$((pos + 1)); continue
+    while IFS=$'\037' read -r _t win tab key kind idx how anc bias pcwd grp fin; do
+      [ "$_t" = P ] || continue
+      if [ "$win" != "$cur" ]; then close_restore_window; cur="$win"; ctab="$tab"; head=""; thead=""; tlast=""
+      elif [ "$tab" != "$ctab" ]; then close_restore_tab; ctab="$tab"; thead=""; tlast=""; fi
+      tfin="$fin"
+      acct=""; sid=""; wt="$pcwd"; br=""; model=""; effort=""; prompt_file=""; pmode=""
+      if [ "$kind" = row ]; then
+        row="${ROWS[$idx]}"
+        acct="$(cell "$row" 1)"; sid="$(cell "$row" 2)"; wt="$(cell "$row" 3)"; br="$(cell "$row" 4)"
+        model="$(cell "$row" 6)"; effort="$(cell "$row" 7)"
+        prompt_file="$(cell "$row" 10)"; pmode="$(cell "$row" 11)"   # P4: handed to reso-resume-one as they are
+        # reso-resume-one exits 2 on an effort it does not know, after the pane is already open.
+        case "$effort" in ''|low|medium|high|xhigh|max) ;; *) note "cc-resume-layout: effort '$effort' for $sid is not one reso-resume-one takes — dropped"; effort="" ;; esac
+        case "$model" in *[!A-Za-z0-9._-]*) note "cc-resume-layout: model '$model' for $sid is malformed — dropped"; model="" ;; esac
       fi
-      [ "$stopped" = none ] || { shed=$((shed + 1)); continue; }
+      if [ "$DRY_RUN" = 1 ]; then
+        at=""; [ -n "$anc" ] && [ "$how" != tab ] && at=" next-to=#$anc"
+        if [ "$kind" = row ]; then
+          note "DRY [CC-DESK-$win $grp] $how $acct $sid $wt${model:+ model=$model}${effort:+ effort=$effort}${pmode:+ permission_mode=$pmode}${prompt_file:+ prompt_file=$prompt_file} pane=#$key$at${bias:+ bias=$bias}"
+        else
+          note "DRY [CC-DESK-$win $grp] $how shell $wt pane=#$key$at${bias:+ bias=$bias}"
+        fi
+        if [ -z "$head" ]; then head="<head of CC-DESK-$win>"; place_window "$win" "$head"; fi
+        [ -n "$thead" ] || { thead="<head of CC-DESK-$win>"; [ "$tab" = 0 ] || thead="<head of CC-DESK-$win tab $tab>"; }
+        continue
+      fi
+      [ "$stopped" = none ] || { [ "$kind" = row ] && shed=$((shed + 1)); continue; }
       # CAPACITY: re-ask the same row with the probe until it admits, or the deadline passes.
       # Only rc 9 is a refusal worth waiting on; any other rc is the probe failing, and it is admitted
-      # out loud rather than mistaken for a full box until the deadline sheds everything.
-      if [ "$CC_ADMIT_OK" = 1 ]; then
+      # out loud rather than mistaken for a full box until the deadline sheds everything. A shell
+      # pane is not a session and is never asked about.
+      if [ "$kind" = row ] && [ "$CC_ADMIT_OK" = 1 ]; then
         while :; do
           prc=0; CC_ADMIT_RESTORE_R="$RESTORE_R" "$PROBE_FN" cc-resume-layout "restore ${sid} on ${acct}" || prc=$?
           [ "$prc" = 9 ] || {
@@ -423,61 +758,97 @@ for n, (rs, gs) in enumerate(wins, 1):
         ''|*[!0-9]*) [ "$fd_blind" = 1 ] || { note "cc-resume-layout: kitty fd count unreadable — the fd guard is blind"; fd_blind=1; } ;;
         *) if [ "$fds" -gt "$FD_MAX" ]; then
              stopped=fd; note "cc-resume-layout: STOP — kitty holds $fds fds (> $FD_MAX); the rest are shed"
-             shed=$((shed + 1)); continue
+             [ "$kind" = row ] && shed=$((shed + 1))
+             continue
            fi ;;
       esac
-      base="$(resume_marks "$sid")"
-      # The spawn goes through reso-resume-one, which wraps claude in cc-close-attrib (P2); the cert
-      # store is set here as well so no keychain read can stall a restore.
-      cmd="'env' 'CC_ADMIT_DONE=1' 'CLAUDE_CODE_CERT_STORE=bundled'"
-      [ -n "$model" ] && cmd="$cmd $(shq "CC_RESUME_MODEL=$model")"
-      cmd="$cmd $(shq "$RESUME_ONE") $(shq "$acct") $(shq "$wt") $(shq "$sid")"
-      [ -n "$br" ] && cmd="$cmd $(shq "$br")"
-      [ -n "$effort" ] && cmd="$cmd '--effort' $(shq "$effort")"
-      [ -n "$pmode" ] && cmd="$cmd '--permission-mode' $(shq "$pmode")"
-      [ -n "$prompt_file" ] && cmd="$cmd '--prompt-file' $(shq "$prompt_file")"
+      # WHERE: beside the pane the plan names. When that pane never opened (a maybe, or shed), the
+      # last pane of this tab stands in; with none, the pane opens the tab, or the window, itself.
+      a=""
+      case "$how" in
+        head) ;;
+        tab) a="$head" ;;
+        *) [ -n "$anc" ] && a="${WIDS[$anc]:-}"
+           [ -n "$a" ] || a="$tlast"
+           [ -n "$a" ] || { how=tab; a="$head"; } ;;
+      esac
+      [ "$how" = tab ] && [ -z "$a" ] && how="head"
       LA=(launch --keep-focus)
-      if [ "$pos" = 0 ]; then LA+=(--type=os-window)
-      else LA+=(--location=vsplit --match "window_id:$prev" --next-to "id:$prev"); fi
+      case "$how" in
+        head) LA+=(--type=os-window) ;;
+        tab) LA+=(--type=tab --match "window_id:$a") ;;
+        *) LA+=("--location=$how" --match "window_id:$a" --next-to "id:$a")
+           [ -n "$bias" ] && LA+=(--bias "$bias") ;;
+      esac
       { [ -n "$wt" ] && [ -d "$wt" ]; } && LA+=(--cwd "$wt")
-      LA+=(--env CC_ADMIT_DONE=1 --env CLAUDE_CODE_CERT_STORE=bundled -- zsh -ic "$cmd || exec zsh -i")
+      if [ "$kind" = row ]; then
+        base="$(resume_marks "$sid")"
+        # The spawn goes through reso-resume-one, which wraps claude in cc-close-attrib (P2); the cert
+        # store is set here as well so no keychain read can stall a restore.
+        cmd="'env' 'CC_ADMIT_DONE=1' 'CLAUDE_CODE_CERT_STORE=bundled'"
+        [ -n "$model" ] && cmd="$cmd $(shq "CC_RESUME_MODEL=$model")"
+        cmd="$cmd $(shq "$RESUME_ONE") $(shq "$acct") $(shq "$wt") $(shq "$sid")"
+        [ -n "$br" ] && cmd="$cmd $(shq "$br")"
+        [ -n "$effort" ] && cmd="$cmd '--effort' $(shq "$effort")"
+        [ -n "$pmode" ] && cmd="$cmd '--permission-mode' $(shq "$pmode")"
+        [ -n "$prompt_file" ] && cmd="$cmd '--prompt-file' $(shq "$prompt_file")"
+        LA+=(--env CC_ADMIT_DONE=1 --env CLAUDE_CODE_CERT_STORE=bundled -- zsh -ic "$cmd || exec zsh -i")
+      fi
+      # A shell pane takes no command: kitty starts its configured shell in the recorded cwd.
       rc=0; wid="$(k "${LA[@]}" 2>&1)" || rc=$?
       case "$wid" in
         ''|*[!0-9]*)
-          printf 'cc-resume-layout: maybe sid=%s rc=%s\n' "$sid" "$rc"
-          note "cc-resume-layout: launch unconfirmed for $sid (rc $rc): $wid — re-checked after the batch"
-          MAYBE_SID+=("$sid"); MAYBE_BASE+=("$base")
+          if [ "$kind" = row ]; then
+            printf 'cc-resume-layout: maybe sid=%s rc=%s\n' "$sid" "$rc"
+            note "cc-resume-layout: launch unconfirmed for $sid (rc $rc): $wid — re-checked after the batch"
+            MAYBE_SID+=("$sid"); MAYBE_BASE+=("$base")
+          else
+            note "cc-resume-layout: shell pane in ${wt:-?} did not open (rc $rc): $wid"
+          fi
           [ "$rc" = 124 ] && { note "cc-resume-layout: backing off ${R_BACKOFF}s after the timeout"; sleep "$R_BACKOFF"; }
           continue ;;
       esac
-      if [ "$pos" = 0 ]; then
-        cc_log_pane_spawn os-window kitty "$wid" "$wt" "resume-layout CC-DESK-$win restore head sid=$sid acct=$acct"
-        head="$wid"
+      what="sid=$sid acct=$acct"; [ "$kind" = row ] || what="shell"
+      case "$how" in
+        head) cc_log_pane_spawn os-window kitty "$wid" "$wt" "resume-layout CC-DESK-$win restore head $what" ;;
+        tab) cc_log_pane_spawn tab kitty "$wid" "$wt" "resume-layout CC-DESK-$win restore tab $tab $what" ;;
+        *) cc_log_pane_spawn split kitty "$wid" "$wt" "resume-layout CC-DESK-$win restore $how $what" ;;
+      esac
+      WIDS[key]="$wid"; tlast="$wid"
+      [ -n "$thead" ] || thead="$wid"
+      if [ -z "$head" ]; then head="$wid"; place_window "$win" "$wid"; fi
+      if [ "$kind" = row ]; then
+        launched=$((launched + 1))
+        printf 'cc-resume-layout: map sid=%s wid=%s oswin=%s\n' "$sid" "$wid" "$win"
+        note "  [CC-DESK-$win $grp] win $wid  $acct  $(basename "$wt")"
+        sleep "$STAGGER"
       else
-        cc_log_pane_spawn split kitty "$wid" "$wt" "resume-layout CC-DESK-$win restore vsplit sid=$sid acct=$acct"
+        nshell=$((nshell + 1)); note "  [CC-DESK-$win $grp] win $wid  shell  ${wt:-?}"
       fi
-      prev="$wid"; pos=$((pos + 1)); launched=$((launched + 1))
-      printf 'cc-resume-layout: map sid=%s wid=%s oswin=%s\n' "$sid" "$wid" "$win"
-      note "  [CC-DESK-$win $grp] win $wid  $acct  $(basename "$wt")"
-      sleep "$STAGGER"
     done <<EOF
 $PLAN
 EOF
     close_restore_window
 
     # FULLSCREEN by id, paced: back-to-back toggles are dropped, and a second toggle undoes the first.
-    fs_ok=0; fs_bad=0; w=0
-    while [ "$w" -lt "${#WIN_HEAD[@]}" ]; do
+    # In window-number order, which for replayed windows is the recorded order; a window recorded as
+    # not fullscreen is left windowed.
+    fs_ok=0; fs_bad=0
+    for w in $(j=0; while [ "$j" -lt "${#WIN_HEAD[@]}" ]; do printf '%s %s\n' "${WIN_NUM[$j]}" "$j"; j=$((j + 1)); done | sort -n | cut -d' ' -f2); do
       hd="${WIN_HEAD[$w]}"; n="${WIN_NUM[$w]}"
-      if [ "$DRY_RUN" = 1 ]; then
+      if [ "${WFS[$n]:-1}" = 0 ]; then
+        note "$([ "$DRY_RUN" = 1 ] && printf 'DRY' || printf ' ') [CC-DESK-$n] left windowed, as recorded"
+      elif [ "$DRY_RUN" = 1 ]; then
         note "DRY [CC-DESK-$n] action --match id:$hd toggle_fullscreen"
       elif kr action --match "id:$hd" toggle_fullscreen >/dev/null 2>&1; then
         fs_ok=$((fs_ok + 1)); note "  [CC-DESK-$n] fullscreen toggled (window $hd)"; sleep "$FS_GAP"
       else
         fs_bad=$((fs_bad + 1)); note "  [CC-DESK-$n] toggle_fullscreen refused for window $hd — not re-toggled"; sleep "$FS_GAP"
       fi
-      w=$((w + 1))
     done
+    # Only a replay prints this line, so the default restore's stdout is still map lines then verdict.
+    [ "${#TREES[@]}" -gt 0 ] && printf 'cc-resume-layout: layout tree_windows=%s shells=%s placed=%s placed_failed=%s\n' \
+      "$NTREE" "$nshell" "$placed" "$place_bad"
 
     # MAYBE rows: restored only with a live holder AND a new SessionStart:resume record.
     maybe_left=0

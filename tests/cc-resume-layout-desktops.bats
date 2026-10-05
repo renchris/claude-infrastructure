@@ -496,3 +496,204 @@ launched_sids() { grep ' launch ' "$KLOG" | grep -o "'sid-[a-z0-9-]*'" | tr -d "
   [ ! -f "$KLOG" ]
   [ "$(kv windows)" = 1 ]; [ "$(kv verdict)" = ok ]
 }
+
+# ── --restore, layout fidelity (W3 P7, 2026-10-05) ─────────────────────────────────────────────────
+# A recorded kitty tree (hb.kitty-ls.json, with hb.roster.json and hb.displays.tsv beside it) is
+# replayed: split orientation and bias, tab order, non-Claude panes as shells, each window on its
+# display, fullscreen in the recorded order. Every case runs under /bin/bash 3.2, because launchd
+# runs the restore there. The fixture heartbeat lives under the fixture HOME; swift prints the
+# attached displays from $CC_SWIFT_BIN.out; osascript logs the whole script it is handed.
+tree_setup() {
+  restore_setup
+  cp "$REPO/scripts/lib/restore-heartbeat.sh" "$FIX/scripts/lib/"
+  HBD="$HOME/.claude/autonomy/heartbeat/BOOT/4242"; mkdir -p "$HBD"; echo 1784800000 > "$HBD/hb.start"
+  SHELLD="$BATS_TEST_TMPDIR/scratch"; mkdir -p "$SHELLD"
+  export CC_SWIFT_BIN="$BATS_TEST_TMPDIR/swift"
+  printf '#!/bin/sh\nshift\necho "args=$*" >> "$0.log"\ncat "$0.out" 2>/dev/null\n' > "$CC_SWIFT_BIN"; chmod +x "$CC_SWIFT_BIN"
+  cat > "$CC_OSASCRIPT_BIN" <<'SH'
+#!/bin/bash
+cat >> "$0.log"
+cat "$0.reply" 2>/dev/null || echo ok
+SH
+  chmod +x "$CC_OSASCRIPT_BIN"
+}
+roster() { # <pane> <sid> ... — hb.roster.json: which kitty window id held which session
+  local out="" sep=""
+  while [ $# -ge 2 ]; do out="$out$sep{\"session_id\":\"$2\",\"paneUUID\":\"$1\",\"account\":\"claude-next\",\"cwd\":\"$BATS_TEST_TMPDIR/repo-a/w1\",\"name\":\"n-$2\"}"; sep=","; shift 2; done
+  printf '[%s]\n' "$out" > "$HBD/hb.roster.json"
+}
+kwin() { printf '{"id":%s,"cwd":"%s","cmdline":["/bin/zsh","-l"]}' "$1" "${2:-$SHELLD}"; }
+ktab() { # <layout> <pairs-json|-> <group:window>... — one tab; every group holds one window
+  local layout="$1" pairs="$2" wins="" grps="" sep="" g w cls=Splits; shift 2
+  [ "$layout" = splits ] || cls=Horizontal
+  for g in "$@"; do w="${g#*:}"; wins="$wins$sep$(kwin "$w")"; grps="$grps$sep{\"id\":${g%%:*},\"window_ids\":[$w]}"; sep=","; done
+  printf '{"layout":"%s","layout_state":{"class":"%s","all_windows":{"window_groups":[%s]}%s},"windows":[%s]}' \
+    "$layout" "$cls" "$grps" "$([ "$pairs" = - ] || printf ',"pairs":%s' "$pairs")" "$wins"
+}
+koswin() { local id="$1" pw="$2" tabs="" sep="" t; shift 2; for t in "$@"; do tabs="$tabs$sep$t"; sep=","; done
+  printf '{"id":%s,"platform_window_id":%s,"tabs":[%s]}' "$id" "$pw" "$tabs"; }
+tree() { local out="" sep="" o; for o in "$@"; do out="$out$sep$o"; sep=","; done; printf '[%s]\n' "$out" > "$HBD/hb.kitty-ls.json"; }
+trow() { xrow repo-a "$1" "$PADC" "$PADC" "${2:-k4242w6}" 1 "${3:-$PADC}"; }   # <n> [group] [prompt]
+PADC=$'\037'
+trestore() { run --separate-stderr /bin/bash "$LAYOUT" --desktops --restore --to unix:/tmp/kitty-4242 --file "$ROWS"; }
+launch_n() { grep ' launch ' "$KLOG" | sed -n "${1}p"; }
+
+@test "tree: pairs are rebuilt with orientation and bias; a non-Claude pane reopens as a shell in its cwd" {
+  tree_setup
+  # (11 over 12) on the left at 60 %, 13 on the right: 12 is a plain shell, 11 and 13 are sessions.
+  tree "$(koswin 6 700 "$(ktab splits '{"bias":0.6,"one":{"horizontal":false,"bias":0.25,"one":1,"two":2},"two":3}' 1:11 2:12 3:13)")"
+  roster 11 sid-repo-a-1 13 sid-repo-a-2
+  trow 1; trow 2
+  trestore
+  [ "$status" -eq 0 ]
+  [ "$(launches)" -eq 3 ]
+  launch_n 1 | grep -q -- "--type=os-window .*'sid-repo-a-1'"
+  # the right half: beside the head, taking the 40 % the recorded 0.6 leaves it
+  launch_n 2 | grep -q -- "--location=vsplit --match window_id:101 --next-to id:101 --bias 40.0000 .*'sid-repo-a-2'"
+  # the shell: under the head, 75 % of that column, in its recorded cwd, with no command of ours
+  launch_n 3 | grep -q -- "--location=hsplit --match window_id:101 --next-to id:101 --bias 75.0000 --cwd $SHELLD\$"
+  ! grep -q 'goto-layout\|kitten\|layout_action\|rotate' "$KLOG" || false     # equalizing would erase the biases
+  [ "$(grep ' launch ' "$KLOG" | grep -vc -- '--keep-focus')" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c '^cc-resume-layout: map ')" -eq 2 ]   # a shell gets no map line
+  printf '%s\n' "$output" | grep -qx 'cc-resume-layout: layout tree_windows=1 shells=1 placed=0 placed_failed=0'
+  [ "$(kv launched)" = 2 ]; [ "$(kv windows)" = 1 ]; [ "$(kv verdict)" = ok ]
+}
+
+@test "tree: tabs come back in order in their window; a Claude pane with no row is left out; fullscreen follows the recorded order" {
+  tree_setup
+  # window 6: tab 0 holds a prompt row, tab 1 is a horizontal tab of two. Window 7: a session beside
+  # a Claude pane (15) whose session is not being restored.
+  tree "$(koswin 6 700 "$(ktab splits '{"one":1}' 1:11)" "$(ktab horizontal - 2:12 3:13)")" \
+       "$(koswin 7 701 "$(ktab splits '{"one":4,"two":5}' 4:14 5:15)")"
+  roster 11 sid-repo-a-1 12 sid-repo-a-2 13 sid-repo-a-3 14 sid-repo-a-4 15 sid-gone
+  trow 1 k4242w6 /tmp/prompt; trow 2; trow 3; trow 4 k4242w7
+  trestore
+  [ "$status" -eq 0 ]
+  [ "$(launches)" -eq 4 ]                                         # pane 15 is neither a session nor a shell
+  [ "$(launched_sids)" = "sid-repo-a-4 sid-repo-a-1 sid-repo-a-2 sid-repo-a-3 " ]   # the prompt window launches last
+  launch_n 3 | grep -q -- "--type=tab --match window_id:102 .*'sid-repo-a-2'"
+  launch_n 4 | grep -q -- "--location=vsplit --match window_id:103 --next-to id:103 .*'sid-repo-a-3'"
+  [ "$(grep -c 'goto-layout' "$KLOG")" -eq 1 ]
+  grep -q -- 'goto-layout --match window_id:103 horizontal' "$KLOG"
+  printf '%s\n' "$output" | grep -qx 'cc-resume-layout: map sid=sid-repo-a-4 wid=101 oswin=2'
+  printf '%s\n' "$output" | grep -qx 'cc-resume-layout: map sid=sid-repo-a-2 wid=103 oswin=1'
+  # fullscreen: window 6 (head 102) before window 7 (head 101), once each
+  [ "$(grep toggle_fullscreen "$KLOG" | grep -o 'id:[0-9]*' | tr '\n' ' ')" = "id:102 id:101 " ]
+  [ "$(kv windows)" = 2 ]; [ "$(kv fullscreen_ok)" = 2 ]
+}
+
+@test "tree: each window is moved to its recorded display before fullscreen; a windowed one gets its frame back and is not toggled" {
+  tree_setup
+  tree "$(koswin 6 700 "$(ktab splits '{"one":1}' 1:11)")" "$(koswin 7 701 "$(ktab splits '{"one":2}' 2:12)")" \
+       "$(koswin 8 702 "$(ktab splits '{"one":3}' 3:13)")"
+  roster 11 sid-repo-a-1 12 sid-repo-a-2 13 sid-repo-a-3
+  printf '700\tUUID-EXT\t-832\t-1440\t2560\t1440\t1\t-832\t-1440\t2560\t1440\n701\tUUID-BUILTIN\t0\t0\t1728\t1117\t0\t100\t80\t900\t700\n702\tUUID-GONE\t5000\t0\t1920\t1080\t1\t5000\t0\t1920\t1080\n' > "$HBD/hb.displays.tsv"
+  # now: the external display sits somewhere else, the built-in is where it was, the third is unplugged
+  printf 'UUID-EXT\t1728\t0\t2560\t1440\nUUID-BUILTIN\t0\t0\t1728\t1117\n' > "$CC_SWIFT_BIN.out"
+  trow 1; trow 2 k4242w7; trow 3 k4242w8
+  trestore
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^args=$' "$CC_SWIFT_BIN.log")" -eq 1 ]                    # the displays are read once
+  grep -q 'set position of x to {1748, 45}' "$CC_OSASCRIPT_BIN.log"       # fullscreen: anywhere on its display
+  grep -q 'set size of x to {2520, 1350}' "$CC_OSASCRIPT_BIN.log"
+  grep -q 'set position of x to {100, 80}' "$CC_OSASCRIPT_BIN.log"        # windowed: its old frame
+  grep -q 'set size of x to {900, 700}' "$CC_OSASCRIPT_BIN.log"
+  [ "$(grep -c 'set position' "$CC_OSASCRIPT_BIN.log")" -eq 2 ]           # the unplugged display moves nothing
+  # the marker is put on the head for the one call and handed back, and the move precedes the toggle
+  [ "$(grep -c "set-window-title --match id:101 CC-DESK-1-" "$KLOG")" -eq 1 ]
+  [ "$(grep -c 'set-window-title --match id:101 $' "$KLOG")" -eq 1 ]
+  [ "$(grep -n 'set-window-title --match id:101 CC-DESK' "$KLOG" | cut -d: -f1)" -lt "$(grep -n 'toggle_fullscreen' "$KLOG" | head -1 | cut -d: -f1)" ]
+  [ "$(grep toggle_fullscreen "$KLOG" | grep -o 'id:[0-9]*' | tr '\n' ' ')" = "id:101 id:103 " ]   # 102 was windowed
+  printf '%s\n' "$output" | grep -qx 'cc-resume-layout: layout tree_windows=3 shells=0 placed=2 placed_failed=1'
+  [ "$(kv fullscreen_ok)" = 2 ]; [ "$(kv verdict)" = ok ]
+}
+
+@test "tree: Accessibility refusing the move is said and counted, and the window still goes fullscreen" {
+  tree_setup
+  tree "$(koswin 6 700 "$(ktab splits '{"one":1}' 1:11)")"; roster 11 sid-repo-a-1
+  printf '700\tUUID-EXT\t0\t0\t2560\t1440\t1\t0\t0\t2560\t1440\n' > "$HBD/hb.displays.tsv"
+  printf 'UUID-EXT\t0\t0\t2560\t1440\n' > "$CC_SWIFT_BIN.out"; echo nomatch > "$CC_OSASCRIPT_BIN.reply"
+  trow 1
+  trestore
+  printf '%s\n' "$stderr" | grep -q 'NOT placed (nomatch)'
+  printf '%s\n' "$output" | grep -q 'placed=0 placed_failed=1'
+  [ "$(kv fullscreen_ok)" = 1 ]; [ "$(kv verdict)" = ok ]
+}
+
+@test "tree: a row the tree does not hold gets a one-row window after the recorded ones" {
+  tree_setup
+  tree "$(koswin 6 700 "$(ktab splits '{"one":1}' 1:11)")"; roster 11 sid-repo-a-1
+  trow 1; trow 2; trow 3
+  trestore
+  [ "$(launches)" -eq 3 ]
+  printf '%s\n' "$output" | grep -qx 'cc-resume-layout: map sid=sid-repo-a-1 wid=101 oswin=1'
+  printf '%s\n' "$output" | grep -qx 'cc-resume-layout: map sid=sid-repo-a-2 wid=102 oswin=2'
+  printf '%s\n' "$output" | grep -qx 'cc-resume-layout: map sid=sid-repo-a-3 wid=103 oswin=2'
+  grep -q -- 'goto-layout --match window_id:102 horizontal' "$KLOG"
+  [ "$(grep -c 'goto-layout' "$KLOG")" -eq 1 ]
+  [ "$(kv windows)" = 2 ]
+}
+
+@test "tree: none recorded for the rows' kitty, or CC_RESTORE_TREE=off, is the one-row fallback and prints no layout line" {
+  tree_setup
+  tree "$(koswin 6 700 "$(ktab splits '{"horizontal":false,"one":1,"two":2}' 1:11 2:12)")"; roster 11 sid-repo-a-1 12 sid-repo-a-2
+  trow 1 k9999w6; trow 2 k9999w6                                  # another kitty: no heartbeat for it
+  trestore
+  [ "$(grep -c -- '--location=vsplit' "$KLOG")" -eq 1 ]; ! grep -q hsplit "$KLOG" || false
+  [ "$(grep -c 'goto-layout .* horizontal' "$KLOG")" -eq 1 ]
+  ! printf '%s\n' "$output" | grep -q '^cc-resume-layout: layout ' || false
+  rm -f "$KLOG"*; : > "$ROWS"; trow 1; trow 2
+  CC_RESTORE_TREE=off trestore
+  ! grep -q hsplit "$KLOG" || false
+  [ "$(grep -c 'goto-layout .* horizontal' "$KLOG")" -eq 1 ]
+  rm -f "$KLOG"*
+  trestore                                                         # and with the tree on, the recorded split
+  grep -q -- '--location=hsplit' "$KLOG"; ! grep -q 'goto-layout' "$KLOG" || false
+}
+
+@test "tree: a maybe row gets no map line, and the next pane of its tab opens the window instead" {
+  tree_setup
+  tree "$(koswin 6 700 "$(ktab splits '{"one":1,"two":2}' 1:11 2:12)")"; roster 11 sid-repo-a-1 12 sid-repo-a-2
+  trow 1; trow 2
+  # the first launch is refused, the second goes through
+  cat > "$CC_TERM_KITTY" <<'SH'
+#!/bin/bash
+printf 'KW=%s %s\n' "${KITTY_WINDOW_ID:-}" "$*" >> "$KLOG"
+case " $* " in *" launch "*)
+  n=$(cat "$KLOG.n" 2>/dev/null || echo 100); n=$((n + 1)); echo "$n" > "$KLOG.n"
+  [ "$n" -eq 101 ] && { echo "Error: refused"; exit 1; }
+  echo "$n" ;;
+esac
+exit 0
+SH
+  trestore
+  printf '%s\n' "$output" | grep -q '^cc-resume-layout: maybe sid=sid-repo-a-1 '
+  ! printf '%s\n' "$output" | grep -q 'map sid=sid-repo-a-1 ' || false
+  printf '%s\n' "$output" | grep -qx 'cc-resume-layout: map sid=sid-repo-a-2 wid=102 oswin=1'
+  launch_n 2 | grep -q -- '--type=os-window'; ! launch_n 2 | grep -q -- '--location' || false
+  [ "$(grep -c toggle_fullscreen "$KLOG")" -eq 1 ]
+}
+
+@test "tree --dry-run reads files only, takes its rows from the roster when given none, and prints each window" {
+  tree_setup
+  tree "$(koswin 6 700 "$(ktab splits '{"bias":0.6,"one":{"horizontal":false,"one":1,"two":2},"two":3}' 1:11 2:12 3:13)")" \
+       "$(koswin 7 701 "$(ktab splits '{"one":4}' 4:14)" "$(ktab horizontal - 5:15 6:16)")"
+  roster 11 sid-repo-a-1 13 sid-repo-a-2 14 sid-repo-a-3 15 sid-repo-a-4 16 sid-repo-a-5
+  printf '700\tUUID-EXT\t-832\t-1440\t2560\t1440\t1\t-832\t-1440\t2560\t1440\n' > "$HBD/hb.displays.tsv"
+  run --separate-stderr env -u CC_TERM_KITTY PATH=/usr/bin:/bin /bin/bash "$LAYOUT" --desktops --restore --dry-run --tree "$HBD/hb.kitty-ls.json" </dev/null
+  [ "$status" -eq 0 ]
+  [ ! -f "$KLOG" ]; [ ! -f "$CC_SWIFT_BIN.log" ]; [ ! -f "$CC_OSASCRIPT_BIN.log" ]
+  printf '%s\n' "$output" | grep -qx 'cc-resume-layout: tree oswin=1 src=k4242w6 platform_window_id=700 tabs=1 panes=3 claude=2 shells=1 layout=splits:H:0.60(V(p,p),p) display=UUID-EXT display_rect=-832,-1440,2560x1440 fullscreen=1'
+  printf '%s\n' "$output" | grep -qx 'cc-resume-layout: tree oswin=2 src=k4242w7 platform_window_id=701 tabs=2 panes=3 claude=3 shells=0 layout=splits:p;horizontal:H(p,p) display=unrecorded display_rect=none fullscreen=unrecorded'
+  printf '%s\n' "$stderr" | grep -q "^DRY \[CC-DESK-1 k4242w6\] hsplit shell $SHELLD pane=#3 next-to=#1\$"
+  printf '%s\n' "$stderr" | grep -q '^DRY \[CC-DESK-1\] place on display UUID-EXT '
+  [ "$(kv windows)" = 2 ]; [ "$(kv verdict)" = ok ]
+}
+
+@test "--tree without --restore, or naming an unreadable file, is refused (exit 2)" {
+  tree_setup; row repo-a 1
+  run bash "$LAYOUT" --desktops --tree /dev/null --file "$ROWS"
+  [ "$status" -eq 2 ]
+  run bash "$LAYOUT" --desktops --restore --tree "$BATS_TEST_TMPDIR/absent.json" --file "$ROWS"
+  [ "$status" -eq 2 ]
+}
