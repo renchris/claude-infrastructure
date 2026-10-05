@@ -194,3 +194,62 @@ EOF
   [ "$status" -eq 2 ] || false
   [ ! -e "$CC_HEARTBEAT_DIR" ] || false
 }
+
+# ── hb.displays.tsv (W3 P7): which display each kitty OS window is on ─────────────────────────────
+# swift is a stub that logs its argv and prints $0.out; no case runs the real one.
+displays_setup() {
+  export CC_HB_SWIFT_BIN="$D/stub-swift"
+  printf '#!/bin/sh\nshift\necho "$*" >> "$0.log"\n[ -f "$0.fail" ] && exit 1\ncat "$0.out" 2>/dev/null\n' > "$CC_HB_SWIFT_BIN"
+  chmod +x "$CC_HB_SWIFT_BIN"
+  printf '#!/bin/sh\necho "[{\\"id\\": 6, \\"platform_window_id\\": 700, \\"tabs\\": []}, {\\"id\\": 7, \\"platform_window_id\\": 701, \\"tabs\\": []}]"\n' > "$CC_HB_KITTEN_BIN"
+  printf '700\tUUID-EXT\t-832\t-1440\t2560\t1440\t1\t-832\t-1440\t2560\t1440\n701\tUUID-BUILTIN\t0\t0\t1728\t1117\t0\t100\t80\t900\t700\n' > "$CC_HB_SWIFT_BIN.out"
+  echo "[$(sess s1 "$KP")]" > "$D/sessions.json"
+}
+
+@test "displays: a tick maps each platform_window_id of the tree to its display, atomically" {
+  displays_setup
+  hb hb_tick
+  [ "$status" -eq 0 ] || false
+  f="$(dir UUID-A "$KP")/hb.displays.tsv"
+  [ "$(cat "$CC_HB_SWIFT_BIN.log")" = "700 701" ] || false          # one read, the tree's ids in its order
+  [ "$(wc -l < "$f" | tr -d ' ')" -eq 2 ] || false
+  [ "$(awk -F'\t' '$1 == 701 { print $2, $7, $8, $9, $10, $11 }' "$f")" = "UUID-BUILTIN 0 100 80 900 700" ] || false
+  [ -z "$(find "$CC_HEARTBEAT_DIR" -name '.*.tmp*')" ] || false
+}
+
+@test "displays: a failed, empty or malformed read keeps the last good file" {
+  displays_setup
+  hb hb_tick
+  f="$(dir UUID-A "$KP")/hb.displays.tsv"; good="$(cat "$f")"
+  touch "$CC_HB_SWIFT_BIN.fail"; hb hb_tick
+  [ "$(cat "$f")" = "$good" ] || false
+  rm "$CC_HB_SWIFT_BIN.fail"; : > "$CC_HB_SWIFT_BIN.out"; hb hb_tick
+  [ "$(cat "$f")" = "$good" ] || false
+  printf '700\tUUID-EXT\t0\t0\n' > "$CC_HB_SWIFT_BIN.out"; hb hb_tick       # 4 fields, not 11
+  [ "$(cat "$f")" = "$good" ] || false
+  [ -z "$(find "$CC_HEARTBEAT_DIR" -name '.*.tmp*')" ] || false
+  [ "$(cat "$(dir UUID-A "$KP")/hb.start")" = 1784800000 ] || false        # the tick itself still succeeds
+}
+
+@test "displays: a tree with no platform_window_id asks swift nothing; under bats an unset seam runs no real swift" {
+  displays_setup
+  printf '#!/bin/sh\necho "[{\\"id\\": 1, \\"tabs\\": []}]"\n' > "$CC_HB_KITTEN_BIN"
+  hb hb_tick
+  [ ! -f "$CC_HB_SWIFT_BIN.log" ] || false
+  [ ! -f "$(dir UUID-A "$KP")/hb.displays.tsv" ] || false
+  displays_setup; unset CC_HB_SWIFT_BIN
+  hb hb_tick
+  [ "$status" -eq 0 ] || false
+  [ ! -f "$(dir UUID-A "$KP")/hb.displays.tsv" ] || false
+}
+
+@test "hb_display_probe: no argument lists the attached displays; no swift is rc 1" {
+  displays_setup
+  printf 'UUID-EXT\t-832\t-1440\t2560\t1440\n' > "$CC_HB_SWIFT_BIN.out"
+  hb hb_display_probe
+  [ "$status" -eq 0 ] || false
+  [ "$output" = "$(printf 'UUID-EXT\t-832\t-1440\t2560\t1440')" ] || false
+  [ "$(cat "$CC_HB_SWIFT_BIN.log")" = "" ] || false
+  CC_HB_SWIFT_BIN="$D/absent" hb hb_display_probe
+  [ "$status" -eq 1 ] || false
+}

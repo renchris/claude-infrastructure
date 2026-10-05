@@ -13,6 +13,9 @@
 #                                    the newest whose start is in (lower, upper], plus any written in
 #                                    the same tick (two kittys live together). rc 1 when none.
 #   hb_prune                         drop heartbeat dirs older than CC_HB_RETAIN_DAYS (7)
+#   hb_display_probe [pwid...]       no argument: one "uuid dx dy dw dh" row per display now attached;
+#                                    with platform window ids: one hb.displays.tsv row per id found.
+#                                    Tab-separated, read-only. rc 1 when Swift is absent or failed.
 #
 # Layout: <root>/<bootuuid>/<kitty-pid>/, root ~/.claude/autonomy/heartbeat. Each tick overwrites only
 # its OWN boot and its own LIVE kitty pids, so neither a reboot (new uuid) nor a kitty restart (new
@@ -29,6 +32,11 @@
 #                      watching (a live cc-await-ping .watching pid), listen (a TCP port a descendant
 #                      listens on), agent-browser (a live ~/.agent-browser/<name>.pid; sid "-")
 #   hb.roles.tsv       role  pane  sid (sid empty when the role's pane is not live)
+#   hb.displays.tsv    platform_window_id  display_uuid  dx dy dw dh  fullscreen  wx wy ww wh — one row per
+#                      kitty OS window in the tree's order (W3 P7): the display it is on (uuid and
+#                      bounds), whether it fills that display, and its own bounds, all in the top-left
+#                      global coordinates System Events uses. From one bounded Swift read (about 0.5 s);
+#                      on failure the last good one stays
 # Empty TSV cells are written as $'\037' (boot-resume.sh's field-collapse guard).
 #
 # cc-sessions SWEEPS registry rows of dead sessions started over 24 h ago. boot-resume.sh therefore
@@ -40,7 +48,7 @@
 #
 # /bin/bash 3.2 safe: launchd runs it. Sourced: defines functions only.
 # Seams: CC_HEARTBEAT_DIR · CC_HB_SESSIONS_BIN · CC_HB_KITTEN_BIN · CC_HB_PS_BIN · CC_HB_LSOF_BIN ·
-#   CC_HB_NOW · CC_HB_RETAIN_DAYS · CC_HB_TIMEOUT_BIN ("" forces the perl bound) · CC_BOOTUUID_OVERRIDE ·
+#   CC_HB_NOW · CC_HB_RETAIN_DAYS · CC_HB_SWIFT_BIN · CC_HB_TIMEOUT_BIN ("" forces the perl bound) · CC_BOOTUUID_OVERRIDE ·
 #   CC_ROLES_DIR · CC_HB_MAILBOX_DIR · CC_HB_AGENT_BROWSER_DIR
 
 HB_PAD=$'\037'
@@ -95,6 +103,61 @@ _hb_kitten_bin() {
   for c in /Applications/kitty.app/Contents/MacOS/kitten /opt/homebrew/bin/kitten /usr/local/bin/kitten; do
     [ -x "$c" ] && { printf '%s' "$c"; return 0; }
   done
+}
+
+_hb_swift_bin() {
+  if [ -n "${CC_HB_SWIFT_BIN:-}" ]; then printf '%s' "$CC_HB_SWIFT_BIN"; return 0; fi
+  _hb_under_bats && return 0
+  [ -x /usr/bin/swift ] && printf '%s' /usr/bin/swift
+  return 0
+}
+
+# hb_display_probe [platform_window_id...] — see the header. The window list is the one
+# cc-resume-layout.sh's per-monitor mode reads (CGWindowListCopyWindowInfo: a kitty OS window's
+# platform_window_id is its CGWindow number); displays come from NSScreen, because
+# CGGetActiveDisplayList returned none under the swift interpreter (measured 2026-10-05). A window
+# counts as fullscreen when it is as wide as its display and at most a notch strip shorter.
+hb_display_probe() {
+  local sw td rc=0
+  sw="$(_hb_swift_bin)"
+  [ -n "$sw" ] && [ -x "$sw" ] || return 1
+  td="$(mktemp -d "${TMPDIR:-/tmp}/hbdisp.XXXXXX" 2>/dev/null)" || return 1
+  cat > "$td/d.swift" <<'SWIFT'
+import AppKit
+import CoreGraphics
+import Foundation
+var ds: [(String, CGRect)] = []
+for sc in NSScreen.screens {
+    guard let num = sc.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { continue }
+    let id = CGDirectDisplayID(num.uint32Value)
+    let u = CGDisplayCreateUUIDFromDisplayID(id)?.takeRetainedValue()
+    let s = u.map { CFUUIDCreateString(nil, $0) as String } ?? "display-\(id)"
+    ds.append((s, CGDisplayBounds(id)))
+}
+let want = CommandLine.arguments.dropFirst().compactMap { Int($0) }
+if want.isEmpty {
+    for d in ds { print("\(d.0)\t\(Int(d.1.minX))\t\(Int(d.1.minY))\t\(Int(d.1.width))\t\(Int(d.1.height))") }
+    exit(0)
+}
+var found: [Int: CGRect] = [:]
+if let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] {
+    for w in list {
+        guard let num = w[kCGWindowNumber as String] as? Int, want.contains(num),
+              let b = w[kCGWindowBounds as String] as? [String: Any],
+              let r = CGRect(dictionaryRepresentation: b as CFDictionary) else { continue }
+        found[num] = r
+    }
+}
+for p in want {
+    guard let r = found[p] else { continue }
+    guard let d = ds.first(where: { $0.1.contains(CGPoint(x: r.midX, y: r.midY)) }) else { continue }
+    let fs = (abs(r.width - d.1.width) < 2 && r.height >= d.1.height - 80) ? 1 : 0
+    print("\(p)\t\(d.0)\t\(Int(d.1.minX))\t\(Int(d.1.minY))\t\(Int(d.1.width))\t\(Int(d.1.height))\t\(fs)\t\(Int(r.minX))\t\(Int(r.minY))\t\(Int(r.width))\t\(Int(r.height))")
+}
+SWIFT
+  _hb_to "${CC_HB_SWIFT_TIMEOUT:-20}" "$sw" "$td/d.swift" "$@" 2>/dev/null || rc=1
+  rm -rf "$td"
+  return "$rc"
 }
 
 # _hb_transcript <sid> <cwd> — "<config-basename>\t<path>" of the session's NEWEST transcript, or "".
@@ -229,7 +292,7 @@ _hb_roles_tsv() {
 }
 
 hb_tick() {
-  local root now uuid sb kb tmpd kps kp dir sock ok=0 failed=0
+  local root now uuid sb kb tmpd kps kp dir sock pw ok=0 failed=0
   root="$(hb_root)"; now="${CC_HB_NOW:-$(date +%s)}"
   uuid="$(_hb_bootuuid)"; [ -n "$uuid" ] || uuid=nouuid
   sb="$(_hb_sessions_bin)"
@@ -268,6 +331,18 @@ hb_tick() {
         _hb_mv "$dir/.hb.kitty-ls.json.tmp" "$dir/hb.kitty-ls.json"
       else
         rm -f "$dir/.hb.kitty-ls.json.tmp"
+      fi
+    fi
+    # The display of each OS window in the tree. A short or malformed answer keeps the last good file.
+    if [ "$kp" != 0 ] && [ -f "$dir/hb.kitty-ls.json" ]; then
+      pw="$(jq -r '.[]? | .platform_window_id // empty' "$dir/hb.kitty-ls.json" 2>/dev/null | grep -E '^[0-9]+$' | tr '\n' ' ')"
+      # shellcheck disable=SC2086  # $pw is a space-separated list of numeric window ids
+      if [ -n "$pw" ] && hb_display_probe $pw > "$dir/.hb.displays.tsv.tmp" 2>/dev/null \
+         && [ -s "$dir/.hb.displays.tsv.tmp" ] \
+         && awk -F'\t' 'NF != 11 || $1 !~ /^[0-9]+$/ { bad = 1 } END { exit bad }' "$dir/.hb.displays.tsv.tmp"; then
+        _hb_mv "$dir/.hb.displays.tsv.tmp" "$dir/hb.displays.tsv"
+      else
+        rm -f "$dir/.hb.displays.tsv.tmp"
       fi
     fi
     _hb_bg_tsv "$dir/hb.roster.json" "$tmpd/ps.txt" "$tmpd/lsof.txt" > "$dir/.hb.bg.tsv.tmp" 2>/dev/null \
