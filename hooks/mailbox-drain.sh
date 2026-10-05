@@ -297,6 +297,13 @@ fi
 # resolved by the SENDER; here we adopt only what points directly at us — a multi-hop predecessor is
 # adopted by ITS successor, transitively, as each one starts). Every path exits 0.
 if [ "$MODE" = "session-start" ] && command -v mailbox_migrate >/dev/null 2>&1; then
+  # FORWARD EXPIRY (W3 P5): kitty hands a window id out again, so a pointer left on OUR pane key by
+  # whoever held this number before would keep taking mail addressed to this pane. We are starting
+  # here, so we are its occupant: a pointer on our pane key that does not serve us is expired (see
+  # the lib). Probed, not assumed (LIB SKEW).
+  if [ -n "$own_sid" ] && [ "$own_pane" != "$own_sid" ] && command -v mailbox_forward_expire >/dev/null 2>&1; then
+    mailbox_forward_expire "$own_pane" "$own_sid" >/dev/null 2>&1 || true
+  fi
   _adopted=0
   for _f in "$_mdir"/*.forward; do
     [ -f "$_f" ] || continue                                   # unmatched glob

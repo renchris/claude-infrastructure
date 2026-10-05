@@ -57,6 +57,8 @@
 #   mailbox_forward_of   <uuid>       resolve the chain HEAD (echo the terminal uuid; echoes <uuid>
 #                                     itself when there is no forward). Bounded 4 hops, cycle-safe.
 #   mailbox_write_forward <old> <new> atomic tmp+mv pointer write. Refuses a self-forward.
+#   mailbox_forward_live <old> <tgt>  is a pointer on a reusable (kitty window id) key still honoured?
+#   mailbox_forward_expire <pane> <self>   drop <pane>'s pointer once <self> is its new occupant
 #   mailbox_migrate <old> <new>       LOCKED (both boxes): append old's UNCONSUMED (acked, EOF] lines to
 #                                     new's inbox with a provenance prefix, then advance BOTH of old's
 #                                     cursors to EOF. Exactly-once by construction — the cursor advance
@@ -597,6 +599,7 @@ mailbox_forward_of() {
     nxt="$(head -n1 "$(_mbx_fwd_file "$u")" 2>/dev/null | tr -dc '0-9A-Fa-f-')"
     [ -n "$nxt" ] || break                            # no pointer → u IS the head
     _mbx_strict_uuid "$nxt" || break                  # junk/corrupt pointer → stop at the last good hop
+    mailbox_forward_live "$u" "$nxt" || break         # EXPIRED (the key has a new occupant) → u is the head
     case "$visited" in *" $nxt "*) break ;; esac      # CYCLE → stop (never spin)
     visited="$visited$nxt "
     u="$nxt"; hops=$(( hops + 1 ))
@@ -605,17 +608,74 @@ mailbox_forward_of() {
   return 0
 }
 
+# ── FORWARD EXPIRY: a forward on a REUSABLE key dies when the key gets a new occupant (W3 P5) ───────
+# A kitty pane key is the window id, and kitty hands the same number out again: from 1 after every
+# restart, and upward within one kitty until it passes the old number. A forward on such a key had no
+# expiry, so `249.forward → S` would keep capturing mail addressed to pane 249 after an unrelated
+# session X took window 249 (found by W3 P8, 2026-10-04). An iTerm2 pane key is a uuid and is never
+# handed out twice, so none of this applies to it and its pointer file is unchanged (one line).
+#
+# A forward on a reusable key therefore carries, as line 2, `occupant=<sid>`: the session the pane's
+# alias trail named when the pointer was written (empty when it named none). The pointer is LIVE only
+# while the trail's tip is still that session, or is the forward's own target (a restored session is
+# both). Once any other session registers in the pane (mailbox-drain.sh writes the trail at every
+# boundary), the pointer is expired: mailbox_forward_of stops there and the mail goes to the pane's
+# real occupant. The drain also removes an expired pointer on its own pane key at SessionStart
+# (mailbox_forward_expire), so the file does not outlive the fact. Kill switch CC_MBX_FORWARD_EXPIRY=0.
+_mbx_reusable_key() { case "${1:-}" in ''|*[!0-9]*) return 1 ;; esac; return 0; }   # a kitty window id
+mailbox_forward_live() { # <old> <target> → rc 0 honour the pointer · 1 expired
+  local old="${1:-}" tgt="${2:-}" tip occ
+  [ "${CC_MBX_FORWARD_EXPIRY:-1}" != 0 ] || return 0
+  _mbx_reusable_key "$old" || return 0
+  tip="$(mailbox_alias_of "$old" 2>/dev/null || true)"
+  { [ -z "$tip" ] || [ "$tip" = "$old" ]; } && tip=""
+  [ -z "$tip" ] && return 0                           # nobody has registered in the pane: not reused
+  [ "$tip" = "$tgt" ] && return 0
+  occ="$(sed -n '2s/^occupant=//p' "$(_mbx_fwd_file "$old")" 2>/dev/null | tr -dc '0-9A-Fa-f-')"
+  [ -n "$occ" ] && [ "$tip" = "$occ" ]
+}
+# Remove <pane>'s pointer when <self>, a session now live in that pane, is not the one it serves.
+# Called by the drain at SessionStart only: a session STARTING in a pane is its new occupant, while a
+# session that just wrote its own succession pointer is still mid-turn in the old one. The pointer is
+# renamed to <pane>.forward.expired (kept as evidence, never globbed as *.forward). Echoes 1 when it
+# expired one, else 0.
+mailbox_forward_expire() { # <pane> <self-session>
+  local pane="${1:-}" self="${2:-}" f tgt
+  [ "${CC_MBX_FORWARD_EXPIRY:-1}" != 0 ] && _mbx_reusable_key "$pane" && [ -n "$self" ] || { echo 0; return 0; }
+  f="$(_mbx_fwd_file "$pane")"
+  [ -f "$f" ] || { echo 0; return 0; }
+  tgt="$(head -n1 "$f" 2>/dev/null | tr -dc '0-9A-Fa-f-')"
+  if [ "$tgt" = "$self" ]; then echo 0; return 0; fi
+  { printf '%s expired by %s (new occupant of pane %s); was → %s\n' \
+      "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "$self" "$pane" "$tgt"; cat "$f" 2>/dev/null
+  } > "$f.expired.$$.tmp" 2>/dev/null
+  mv -f "$f.expired.$$.tmp" "$f.expired" 2>/dev/null || rm -f "$f.expired.$$.tmp" 2>/dev/null
+  rm -f "$f" 2>/dev/null
+  echo 1
+}
+
 # Point <old>'s box at <new> (atomic tmp+mv, like every other cursor write here). A SELF-forward is
 # refused: it would make mailbox_forward_of a silent no-op and hide a real succession bug behind a
 # pointer that looks wired.
+# <old> is a canonical uuid (an iTerm2 pane, a session) or a kitty window id; the window id is
+# accepted only because its pointer now expires (above). <new> is stored as a canonical uuid: a
+# kitty window id given as <new> is resolved to the session its alias trail names, and refused when
+# it names none, so a pointer never ends on a key that can be handed to somebody else.
 mailbox_write_forward() { # <old> <new>
-  local old="${1:-}" new="${2:-}" dir tmp
+  local old="${1:-}" new="${2:-}" dir tmp occ=""
+  if _mbx_reusable_key "$new"; then new="$(mailbox_alias_of "$new" 2>/dev/null || true)"; fi
   # never persist a non-canonical address (explicit if, not `A && B || C` — same reason as migrate's)
-  if ! _mbx_strict_uuid "$old" || ! _mbx_strict_uuid "$new"; then return 1; fi
+  if ! _mbx_strict_uuid "$new"; then return 1; fi
+  if ! _mbx_strict_uuid "$old" && ! _mbx_reusable_key "$old"; then return 1; fi
   [ "$old" = "$new" ] && return 1
   dir="$(_mbx_dir)"; mkdir -p "$dir" 2>/dev/null || return 1
   tmp="$dir/.$old.forward.$$.tmp"
-  printf '%s\n' "$new" > "$tmp" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 1; }
+  if _mbx_reusable_key "$old"; then
+    occ="$(mailbox_alias_of "$old" 2>/dev/null || true)"; [ "$occ" = "$old" ] && occ=""
+    printf '%s\noccupant=%s\n' "$new" "$occ" > "$tmp" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 1; }
+  else
+    printf '%s\n' "$new" > "$tmp" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 1; }
+  fi
   mv -f "$tmp" "$(_mbx_fwd_file "$old")" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 1; }
   return 0
 }

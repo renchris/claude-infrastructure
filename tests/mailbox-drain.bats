@@ -201,6 +201,34 @@ delivered_nothing() { # <output> → 0 iff no mail body was surfaced
   [ "$(grep -c '' "$CC_MAILBOX_DIR/$PRED.md")" -eq 1 ]   # left untouched for its real successor
 }
 
+@test "HIJACK: a session starting in a reused kitty window expires the old pointer and keeps the pane's mail" {
+  # 249.forward → an earlier session; kitty then hands window 249 to US. Mail for pane 249 is ours.
+  local OLD="BBBBBBBB-1111-2222-3333-444444444444" SID="DDDDDDDD-1111-2222-3333-444444444444"
+  printf '%s\noccupant=%s\n' "$OLD" "$OLD" > "$CC_MAILBOX_DIR/249.forward"
+  run bash -c "echo '{\"session_id\":\"$SID\"}' | ITERM_SESSION_ID='w0t0p0:249' CC_MBX_KITTY_EPOCH=0 '$DRAIN' session-start"
+  [ "$status" -eq 0 ]
+  [ ! -f "$CC_MAILBOX_DIR/249.forward" ]
+  [ -f "$CC_MAILBOX_DIR/249.forward.expired" ]
+  . "$REPO/hooks/lib/mailbox-pending.sh"
+  [ "$(mailbox_forward_of 249)" = "249" ]
+}
+
+@test "a session starting in the window its own pointer names keeps the pointer" {
+  local SID="DDDDDDDD-1111-2222-3333-444444444444"
+  printf '%s\noccupant=%s\n' "$SID" "$SID" > "$CC_MAILBOX_DIR/249.forward"
+  run bash -c "echo '{\"session_id\":\"$SID\"}' | ITERM_SESSION_ID='w0t0p0:249' CC_MBX_KITTY_EPOCH=0 '$DRAIN' session-start"
+  [ "$status" -eq 0 ]
+  [ -f "$CC_MAILBOX_DIR/249.forward" ]
+}
+
+@test "the pointer is NOT expired off SessionStart (a session mid-turn has just written its own succession)" {
+  local NEXT="BBBBBBBB-1111-2222-3333-444444444444" SID="DDDDDDDD-1111-2222-3333-444444444444"
+  printf '%s\noccupant=%s\n' "$NEXT" "$SID" > "$CC_MAILBOX_DIR/249.forward"
+  run bash -c "echo '{\"session_id\":\"$SID\"}' | ITERM_SESSION_ID='w0t0p0:249' CC_MBX_KITTY_EPOCH=0 '$DRAIN' prompt"
+  [ "$status" -eq 0 ]
+  [ -f "$CC_MAILBOX_DIR/249.forward" ]
+}
+
 @test "adoption does NOT run on the prompt boundary (one-shot, at session start)" {
   local PRED="BBBBBBBB-1111-2222-3333-444444444444"
   printf 'inherited\n'   > "$CC_MAILBOX_DIR/$PRED.md"

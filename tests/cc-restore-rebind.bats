@@ -79,14 +79,14 @@ rebind() { "$SUBJ" "$EV" --accounts-json "$ACCTS" "$@"; }
   ! grep -q -e '^cc-roles claim' -e '^lr-fleet ' "$STUBLOG"
 }
 
-@test "real run: forwards written (lib writer for a uuid key, local for a kitty key), roles claimed, exhausted rows handed off" {
+@test "real run: forwards written (the lib writer takes a uuid key and a kitty key alike), roles claimed, exhausted rows handed off" {
   run rebind
   [ "$status" -eq 1 ]
-  [ "$(cat "$CC_MAILBOX_DIR/249.forward")" = "$S1" ]
+  [ "$(head -n1 "$CC_MAILBOX_DIR/249.forward")" = "$S1" ]
   [ "$(cat "$CC_MAILBOX_DIR/$IT.forward")" = "$S2" ]
-  [ "$(cat "$CC_MAILBOX_DIR/252.forward")" = "$S5" ]
+  [ "$(head -n1 "$CC_MAILBOX_DIR/252.forward")" = "$S5" ]
   [ ! -e "$CC_MAILBOX_DIR/4.forward" ]
-  [[ "$output" == *"forward old=249 → sid=$S1 new_pane=3 writer=local migrated=0"* ]] || false
+  [[ "$output" == *"forward old=249 → sid=$S1 new_pane=3 writer=lib migrated=0"* ]] || false
   [[ "$output" == *"forward old=$IT → sid=$S2 new_pane=4 writer=lib migrated=0"* ]] || false
   grep -qxF "cc-roles claim desk --pane 3 --pid $$ --force" "$STUBLOG"
   grep -qxF "cc-roles claim docs-lead --pane 4 --pid $$ --force" "$STUBLOG"
@@ -117,7 +117,7 @@ rebind() { "$SUBJ" "$EV" --accounts-json "$ACCTS" "$@"; }
 @test "mail already stranded in the old box is migrated to the session box, once" {
   printf '%s\n' "2026-10-04T10:00:00+0000 [peer] early ping" > "$CC_MAILBOX_DIR/249.md"
   run rebind
-  [[ "$output" == *"forward old=249 → sid=$S1 new_pane=3 writer=local migrated=1"* ]] || false
+  [[ "$output" == *"forward old=249 → sid=$S1 new_pane=3 writer=lib migrated=1"* ]] || false
   grep -q 'early ping' "$CC_MAILBOX_DIR/$S1.md"
   run rebind
   [[ "$output" == *"forward old=249 → sid=$S1 new_pane=3 writer=held migrated=0"* ]] || false
@@ -162,7 +162,7 @@ rebind() { "$SUBJ" "$EV" --accounts-json "$ACCTS" "$@"; }
   run /bin/bash "$SUBJ" "$EV" --accounts-json "$ACCTS"
   [ "$status" -eq 1 ]
   [[ "$output" == *"verdict=PARTIAL forwards=3 roles=2 handoffs=2 skipped=2 deferred=0 refused=1 failed=0 dry=0"* ]] || false
-  [ "$(cat "$CC_MAILBOX_DIR/249.forward")" = "$S1" ]
+  [ "$(head -n1 "$CC_MAILBOX_DIR/249.forward")" = "$S1" ]
 }
 
 # ── END TO END: a forwarded DONE discharges the originator's open custody row ───────────────────────

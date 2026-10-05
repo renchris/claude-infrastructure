@@ -135,3 +135,59 @@ setup() {
   [ "$output" = "0" ]
   [ ! -f "$CC_MAILBOX_DIR/$B.md" ]
 }
+
+# ── forward expiry on a reusable (kitty window id) key — W3 P5 ─────────────────────────────────────
+# kitty hands a window id out again, so a pointer on one must die when the pane gets a new occupant.
+
+@test "a kitty window id is accepted as the OLD key, and the pointer records the pane's occupant" {
+  mailbox_alias_write 249 "$A"
+  run mailbox_write_forward 249 "$A"
+  [ "$status" -eq 0 ]
+  [ "$(sed -n 1p "$CC_MAILBOX_DIR/249.forward")" = "$A" ]
+  [ "$(sed -n 2p "$CC_MAILBOX_DIR/249.forward")" = "occupant=$A" ]
+  [ "$(mailbox_forward_of 249)" = "$A" ]
+}
+
+@test "a uuid old key still writes the one-line pointer (an iTerm2 pane id is never reused)" {
+  mailbox_write_forward "$A" "$B"
+  [ "$(cat "$CC_MAILBOX_DIR/$A.forward")" = "$B" ]
+}
+
+@test "HIJACK: once another session registers in the reused window, the pointer is not followed" {
+  mailbox_alias_write 249 "$A"
+  mailbox_write_forward 249 "$A"
+  [ "$(mailbox_forward_of 249)" = "$A" ]
+  mailbox_alias_write 249 "$C"                    # kitty reused window 249 for an unrelated session
+  [ "$(mailbox_forward_of 249)" = "249" ]         # mail for pane 249 stays with pane 249
+  CC_MBX_FORWARD_EXPIRY=0 run mailbox_forward_of 249
+  [ "$output" = "$A" ]                            # the control: without the expiry it is hijacked
+}
+
+@test "a self-close pointer (old occupant → successor) is honoured until the window is reused" {
+  mailbox_alias_write 12 "$A"
+  mailbox_alias_write 13 "$B"
+  run mailbox_write_forward 12 13                 # handoff-fire passes two kitty pane keys
+  [ "$status" -eq 0 ]
+  [ "$(sed -n 1p "$CC_MAILBOX_DIR/12.forward")" = "$B" ]   # stored as the successor's SESSION
+  [ "$(mailbox_forward_of 12)" = "$B" ]
+  mailbox_alias_write 12 "$C"
+  [ "$(mailbox_forward_of 12)" = "12" ]
+}
+
+@test "a kitty window id as the NEW key with no known session is refused (never a reusable target)" {
+  run mailbox_write_forward "$A" 77
+  [ "$status" -eq 1 ]
+  [ ! -f "$CC_MAILBOX_DIR/$A.forward" ]
+}
+
+@test "mailbox_forward_expire removes a pointer that does not serve the pane's new session, and keeps one that does" {
+  mailbox_alias_write 249 "$A"; mailbox_write_forward 249 "$A"
+  [ "$(mailbox_forward_expire 249 "$A")" = 0 ]
+  [ -f "$CC_MAILBOX_DIR/249.forward" ]
+  [ "$(mailbox_forward_expire 249 "$C")" = 1 ]
+  [ ! -f "$CC_MAILBOX_DIR/249.forward" ]
+  grep -qF "was → $A" "$CC_MAILBOX_DIR/249.forward.expired"
+  printf '%s\n' "$B" > "$CC_MAILBOX_DIR/$A.forward"
+  [ "$(mailbox_forward_expire "$A" "$C")" = 0 ]   # a uuid key is never expired
+  [ -f "$CC_MAILBOX_DIR/$A.forward" ]
+}
