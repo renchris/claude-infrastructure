@@ -24,7 +24,10 @@ setup() {
   [ "$status" -eq 0 ] || false
   [[ "$output" == *"verdict=READY"* ]] || false
   [ -s "$CC_REBOOT_PREP_DIR/reboot-2020-01-01.start" ] || false
-  grep -q 'kalloc1024_gb=6.00' "$CC_REBOOT_PREP_DIR/reboot-2020-01-01.start" || false
+  grep -q 'kalloc1024_gb=6.00' "$CC_REBOOT_PREP_DIR/reboot-2020-01-01.kalloc" || false
+  # .start is ONE line, ONE field: the epoch boot-resume.sh compares against the boot.
+  [ "$(wc -l < "$CC_REBOOT_PREP_DIR/reboot-2020-01-01.start" | tr -d ' ')" -eq 1 ] || false
+  grep -qx '[0-9][0-9]*' "$CC_REBOOT_PREP_DIR/reboot-2020-01-01.start" || false
   [ "$(grep -c paneUUID "$CC_REBOOT_PREP_DIR/reboot-2020-01-01.roster.json")" -ge 1 ] || false
   [[ "$output" == *"live sessions      2 "* ]] || false
 }
@@ -72,4 +75,30 @@ setup() {
   echo "kitty 0.48.3 patched build from ~/kitty-dev" > "$CC_REBOOT_PREP_DIR/kitty-restart-pending"
   run bash "$S"
   [[ "$output" == *"ALSO the kitty restart: kitty 0.48.3 patched build from ~/kitty-dev"* ]] || false
+}
+
+# ── The .start pair (W3 P3a-i): the two scripts run together. Until 2026-10-04 this script appended
+#    its kalloc reading to .start as a second line, and boot-resume.sh read the whole file as the
+#    epoch, so every roster this script wrote was skipped at the reboot it was written for. ──
+@test "paired: the roster this script writes is the one boot-resume.sh restores after the reboot" {
+  B="$D/br"; mkdir -p "$B/registry" "$B/roles" "$B/tombs" "$HOME"
+  echo desk-pane > "$B/roles/desk"
+  printf '#!/bin/sh\necho "[{\\"session_id\\": \\"s-pair\\", \\"paneUUID\\": \\"1\\", \\"account\\": \\"claude-next\\", \\"cwd\\": \\"/x/pair\\", \\"name\\": \\"PAIRED-ONE\\"}]"\n' > "$D/sessions"
+  run bash "$S"
+  [ "$status" -eq 0 ] || false
+  start="$(cat "$CC_REBOOT_PREP_DIR/reboot-2020-01-01.start")"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$0.log"\n' > "$B/notify"; chmod +x "$B/notify"
+  printf '#!/bin/bash\necho "[]"\n' > "$B/hbsess"; chmod +x "$B/hbsess"
+  run env CC_BOOTTIME_OVERRIDE=$((start + 60)) CC_BOOT_RESUME_MODE=page \
+      CC_BOOT_RESUME_ROSTER_DIR="$CC_REBOOT_PREP_DIR" CC_BOOT_RESUME_STATE_DIR="$B/state" \
+      CC_REGISTRY_DIR="$B/registry" CC_ROLES_DIR="$B/roles" CC_SHUTDOWN_TOMB_DIR="$B/tombs" \
+      CC_IDL="$B/idl.jsonl" CC_NOTIFY_BIN="$B/notify" CC_BACKLOG_BIN=/usr/bin/false \
+      CC_RESUME_LAUNCH_BIN=/usr/bin/false CC_RESUME_LAYOUT_BIN="$B/none" CC_LAUNCHCTL_BIN=/usr/bin/true \
+      CC_HEARTBEAT_DIR="$B/hb" CC_HB_SESSIONS_BIN="$B/hbsess" CC_HB_KITTEN_BIN=/usr/bin/false \
+      CC_HB_PS_BIN=/usr/bin/true CC_HB_LSOF_BIN=/usr/bin/true \
+      /bin/bash "$REPO/scripts/boot-resume.sh"
+  [ "$status" -eq 0 ] || false
+  grep -q 'PAIRED-ONE' "$B/notify.log" || false
+  grep -q 'source: roster reboot-2020-01-01' "$B/notify.log" || false
+  grep -q '"source":"roster"' "$B/idl.jsonl" || false
 }

@@ -12,7 +12,9 @@
 #   2. record the live-session roster ~/.claude/autonomy/reboot-<date>.roster.json  (cc-sessions --json;
 #      the resume path relaunches from it after login)
 #   3. refuse while a land is in flight (a ship-land.sh PROCESS) — a reboot mid-push strands the land
-#   4. record the kalloc reading the reboot is about to erase
+#   4. record the kalloc reading the reboot is about to erase ~/.claude/autonomy/reboot-<date>.kalloc
+#      (its OWN file: appended to .start as a second line, it made boot-resume.sh skip every roster
+#      this script wrote, because the reader took the whole file as the epoch — W3 P3a-i, 2026-10-04)
 #   5. print the operator's steps: long-running leads write a handoff first; if a root zone capture
 #      is staged (~/.claude/autonomy/kalloc-root-capture.cmd, written by the ratchet analysis when
 #      it could not name a driver), run it BEFORE rebooting, because the reboot erases the evidence;
@@ -26,7 +28,7 @@
 #       CC_REBOOT_PREP_ZPRINT (default /usr/bin/zprint)
 set -uo pipefail
 
-case "${1:-}" in -h|--help) sed -n '2,26p' "$0"; exit 0 ;; '') ;; *) echo "usage: $0 [--help]" >&2; exit 2 ;; esac
+case "${1:-}" in -h|--help) sed -n '2,/^set -uo/p' "$0" | sed '$d'; exit 0 ;; '') ;; *) echo "usage: $0 [--help]" >&2; exit 2 ;; esac
 
 DIR="${CC_REBOOT_PREP_DIR:-$HOME/.claude/autonomy}"
 DAY="${CC_REBOOT_PREP_DATE:-$(date +%Y-%m-%d)}"
@@ -49,7 +51,7 @@ fi
 
 kalloc="$("$ZPRINT" data.kalloc.1024 2>/dev/null \
           | awk '$1 == "data.kalloc.1024" && $7 ~ /^[0-9]+$/ { printf "%.2f", $2 * $7 / 1073741824; exit }')"
-printf '%s kalloc1024_gb=%s\n' "$now" "${kalloc:-unreadable}" >> "$DIR/reboot-$DAY.start"
+printf '%s kalloc1024_gb=%s\n' "$now" "${kalloc:-unreadable}" > "$DIR/reboot-$DAY.kalloc"
 
 # A land in flight is a process whose PROGRAM is ship-land.sh (argv[0], or argv[1] under a shell) —
 # never `pgrep -f ship-land.sh`, which also matches every agent session whose brief merely MENTIONS
@@ -62,7 +64,7 @@ lands="$("$PS" -axo pid=,args= 2>/dev/null | awk '
 echo "alarm-reboot-prep — $(date '+%Y-%m-%d %H:%M %z')"
 echo "  start epoch        $now  → $DIR/reboot-$DAY.start"
 echo "  live sessions      $n  → $roster"
-echo "  data.kalloc.1024   ${kalloc:-unreadable} GB (the reading this reboot erases)"
+echo "  data.kalloc.1024   ${kalloc:-unreadable} GB (the reading this reboot erases) → $DIR/reboot-$DAY.kalloc"
 if [ -n "${lands// /}" ]; then
   echo "  lands in flight    pids ${lands% } — NOT READY: re-run when ship-land.sh has exited"
   echo "verdict=NOT-READY reason=land-in-flight"

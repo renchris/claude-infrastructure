@@ -52,6 +52,22 @@
 #      does not land. A `needs` row is born blocked, kicks no dispatch (so it cannot spawn into the
 #      boot storm this script already guards against), and is rendered at every session close.
 #
+#   0. HEARTBEAT (W3 P3a-i, 2026-10-04): every tick first records the live fleet into
+#      ~/.claude/autonomy/heartbeat/<bootuuid>/<kitty-pid>/ (scripts/lib/restore-heartbeat.sh). After a
+#      hard power-off the newest heartbeat, at most one tick old, is the roster: it competes with the
+#      alarm roster by start epoch, so it outranks a roster taken hours before. Registry rows that
+#      started after the heartbeat's tick are added, since they were live at the cut too. Live without
+#      the restore-v2 flag: without it a power-off restores at most 4 sessions (the registry cap).
+#
+# EVENT MODE: --event <epoch> --kind restart|crash [--kitty-pid K] [--roster-dir D] [--plan-only]
+#   A restore inside the running boot (a kitty restart or crash; reached through cc-restore). The
+#   event epoch stands in for the boot, the roster is the heartbeat only (D, default the newest
+#   heartbeat dir; for --kind crash the newest whose kitty is dead, or <this boot>/K with
+#   --kitty-pid), and its done-marker is <state>/events/<K-or-epoch>.done. It never reads the boot
+#   identity check and never writes last-boot-epoch or last-boot-uuid, so the next reboot is still
+#   detected. --kind restart takes a fresh heartbeat first. --plan-only prints the roster, the
+#   retired sessions and the rows the layout would get, then exits 0 having launched nothing.
+#
 # C10: this is machinery the OPERATOR loads via launchd (launchd/com.claude.boot-resume.plist,
 # RunAtLoad, shipped UNLOADED). The agent never loads launchd. Activation + rollback + the posture
 # switch: docs/activation/boot-resume-activate-snippet.md.
@@ -77,6 +93,26 @@ KEEPALIVE_INTERVAL="${CC_KEEPALIVE_INTERVAL:-240}"
 usage() { sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; }
 case "${1:-}" in -h|--help) usage; exit 0 ;; esac
 
+# ── event mode arguments, parsed before BOOT is read (see EVENT MODE in the header). ──
+EVENT=""; EVENT_KIND=""; EVENT_KPID=""; EVENT_ROSTER_DIR=""; PLAN_ONLY=0
+if [ "${1:-}" != --print-boottime ]; then
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --event)      EVENT="${2:-}"; shift 2 || shift ;;
+      --kind)       EVENT_KIND="${2:-}"; shift 2 || shift ;;
+      --kitty-pid)  EVENT_KPID="${2:-}"; shift 2 || shift ;;
+      --roster-dir) EVENT_ROSTER_DIR="${2:-}"; shift 2 || shift ;;
+      --plan-only)  PLAN_ONLY=1; shift ;;
+      *) echo "boot-resume: unknown argument '$1' (see --help)" >&2; exit 2 ;;
+    esac
+  done
+  if [ -n "$EVENT$EVENT_KIND$EVENT_KPID$EVENT_ROSTER_DIR" ] || [ "$PLAN_ONLY" = 1 ]; then
+    case "$EVENT" in ''|*[!0-9]*) echo "boot-resume: --event needs an epoch" >&2; exit 2 ;; esac
+    case "$EVENT_KIND" in restart|crash) ;; *) echo "boot-resume: --kind must be restart or crash" >&2; exit 2 ;; esac
+    case "$EVENT_KPID" in *[!0-9]*) echo "boot-resume: --kitty-pid needs a pid" >&2; exit 2 ;; esac
+  fi
+fi
+
 command -v jq >/dev/null 2>&1 || { echo "boot-resume: jq required" >&2; exit 1; }
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -94,6 +130,13 @@ if ! . "$_ccl" 2>/dev/null; then
   echo "boot-resume: FATAL — cannot source $_ccl (resolve_bin unavailable)" >&2
   exit 1
 fi
+# The heartbeat (step 0). Missing is loud, not fatal: the reboot path still has its other sources.
+_hbl="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/lib/restore-heartbeat.sh"
+[ -f "$_hbl" ] || _hbl="$HOME/.claude/scripts/lib/restore-heartbeat.sh"
+# shellcheck source=lib/restore-heartbeat.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+. "$_hbl" 2>/dev/null || echo "boot-resume: ⚠ cannot source $_hbl — no heartbeat this run" >&2
+heartbeat() { command -v hb_tick >/dev/null 2>&1 || return 0; hb_tick >/dev/null || true; }
 NOTIFY="$(resolve_bin "${CC_NOTIFY_BIN:-}" cc-notify)"
 # The addressless fallback for a delta with no desk role (see step 3 in the header). Resolved
 # here rather than at the use site so an unresolvable cc-backlog is a KNOWN-empty string on the
@@ -235,16 +278,25 @@ resolve_mode() {
 BOOT="$(boottime)"
 MODE="$(resolve_mode)"
 SOURCE=""; SOURCE_LABEL=""
-MARKER="$STATE_DIR/last-boot-epoch"
+BOOT_MARKER="$STATE_DIR/last-boot-epoch"
+MARKER="$BOOT_MARKER"
 UUID_MARKER="$STATE_DIR/last-boot-uuid"
 BOOT_UUID="$(bootuuid)"
+# Event mode: the event epoch is the anchor and its own marker is the idempotency record. The boot
+# markers above are READ (the previous boot bounds the roster window) and never written.
+if [ -n "$EVENT" ]; then
+  BOOT="$EVENT"; MODE=resume
+  MARKER="$STATE_DIR/events/${EVENT_KPID:-$EVENT}.done"
+fi
 
 case "${1:-}" in --print-boottime) printf '%s\n' "$BOOT"; exit 0 ;; esac
 
 log_idl() { # <disposition> <extra-json>
   mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
   printf '{"ts":"%s","tool":"boot-resume","disposition":"%s","boot":"%s","mode":"%s","source":"%s","retired_skipped":%s%s}\n' \
-    "$(now_iso)" "$1" "$BOOT" "$MODE" "$SOURCE" "${n_retired:-0}" "${2:-}" >> "$IDL" 2>/dev/null || true
+    "$(now_iso)" "$1" "$BOOT" "$MODE" "$SOURCE" "${n_retired:-0}" \
+    "${EVENT:+,\"event\":$EVENT,\"kind\":\"$EVENT_KIND\",\"plan_only\":$([ "$PLAN_ONLY" = 1 ] && echo true || echo false)}${2:-}" \
+    >> "$IDL" 2>/dev/null || true
 }
 
 # ── guard: unreadable boottime is a blind check → abstain LOUD, never mark, never act. ──
@@ -261,12 +313,25 @@ same_boot() { # rc 0 when the markers say this boot was already handled
   # Both uuids readable → they alone decide, in BOTH directions: a differing uuid is a new boot even
   # when the epochs sit close together.
   if [ -n "$BOOT_UUID" ] && [ -n "$mu" ]; then [ "$mu" = "$BOOT_UUID" ]; return; fi
-  me="$(tr -d '[:space:]' < "$MARKER" 2>/dev/null)"
+  me="$(tr -d '[:space:]' < "$BOOT_MARKER" 2>/dev/null)"
   case "$me" in ''|*[!0-9]*) return 1 ;; esac
   d=$((BOOT - me)); [ "$d" -lt 0 ] && d=$((-d))
   [ "$d" -le "$BOOT_EPOCH_TOLERANCE" ]
 }
-if same_boot; then
+# ── STEP 0, the heartbeat. Every tick of an already-handled boot takes it here, before the exit. The
+#    first run of a NEW boot takes it after DETECT instead: cc-sessions sweeps registry rows of dead
+#    sessions started over 24 h ago, and on that run those rows are the registry fallback's evidence.
+#    Event mode bypasses same_boot() entirely (an event is not a boot); it has its own marker. ──
+if [ -n "$EVENT" ]; then
+  if [ "$PLAN_ONLY" = 0 ] && [ -f "$MARKER" ]; then
+    log_idl abstained ',"reason":"already-processed","n_open":0,"resumed":0'
+    exit 0
+  fi
+  # A planned restart is restored from the fleet as it is NOW. A crash is not: the fleet is gone,
+  # and a tick would only record the new kitty.
+  [ "$EVENT_KIND" = restart ] && heartbeat
+elif same_boot; then
+  heartbeat
   log_idl abstained ',"reason":"already-processed","n_open":0,"resumed":0'
   # Backfill the uuid on a pre-uuid marker, so the next clock step is decided by the uuid.
   if [ -n "$BOOT_UUID" ] && [ ! -s "$UUID_MARKER" ]; then
@@ -318,24 +383,85 @@ ROWS
 # then) and never more than RECENCY_WINDOW before this one — a roster from three reboots ago is
 # history, not the set that was live.
 LOWER=$((BOOT - RECENCY_WINDOW))
-prev_boot="$(tr -d '[:space:]' < "$MARKER" 2>/dev/null)"
+prev_boot="$(tr -d '[:space:]' < "$BOOT_MARKER" 2>/dev/null)"
 case "$prev_boot" in
   ''|*[!0-9]*) ;;
   *) [ "$prev_boot" -lt "$BOOT" ] && [ "$prev_boot" -gt "$LOWER" ] && LOWER="$prev_boot" ;;
 esac
 
-# 1. roster — the snapshot a scripted reboot takes of `cc-sessions --json`. A roster that parses and
+# 1. roster — the newest of two snapshots of `cc-sessions --json`: the one a scripted reboot takes
+#    (alarm-reboot-prep.sh) and the heartbeat every tick takes (step 0). A roster that parses and
 #    lists nobody is an answer ("nothing was live"), so it ends the search; one that does not parse
-#    is not, so the search goes on.
+#    is not, so the search goes on. `.start` is read as the FIRST FIELD OF THE FIRST LINE: until
+#    2026-10-04 the prep script appended its kalloc reading as a second line, which made every alarm
+#    roster unreadable here. A start EQUAL to the anchor counts (an event anchored on its own tick).
 roster=""; roster_start=0
-for f in "$ROSTER_DIR"/reboot-*.roster.json; do
-  [ -f "$f" ] || continue
-  st="$(tr -d '[:space:]' < "${f%.roster.json}.start" 2>/dev/null)"
-  case "$st" in ''|*[!0-9]*) continue ;; esac
-  { [ "$st" -gt "$LOWER" ] && [ "$st" -lt "$BOOT" ] && [ "$st" -gt "$roster_start" ]; } || continue
-  roster="$f"; roster_start="$st"
-done
-if [ -n "$roster" ]; then
+if [ -z "$EVENT" ]; then
+  for f in "$ROSTER_DIR"/reboot-*.roster.json; do
+    [ -f "$f" ] || continue
+    st="$(head -n 1 "${f%.roster.json}.start" 2>/dev/null | awk '{ print $1 }')"
+    case "$st" in ''|*[!0-9]*) continue ;; esac
+    { [ "$st" -gt "$LOWER" ] && [ "$st" -le "$BOOT" ] && [ "$st" -gt "$roster_start" ]; } || continue
+    roster="$f"; roster_start="$st"
+  done
+fi
+# The heartbeat candidate: "<start>\t<dir>" per directory of the newest tick in the window.
+HB_ROOT="$(command -v hb_root >/dev/null 2>&1 && hb_root)"
+hb_base="${EVENT_ROSTER_DIR:-$HB_ROOT}"
+hb_flag=""
+if [ -n "$EVENT" ] && [ -z "$EVENT_ROSTER_DIR" ]; then
+  if [ -n "$EVENT_KPID" ]; then
+    # The uuid the heartbeat itself keys on, so the path is the one hb_tick wrote.
+    hb_uuid="$(command -v _hb_bootuuid >/dev/null 2>&1 && _hb_bootuuid)"
+    hb_base="$HB_ROOT/${hb_uuid:-nouuid}/$EVENT_KPID"
+  elif [ "$EVENT_KIND" = crash ]; then
+    hb_flag=--dead-kitty
+  fi
+fi
+hb_sel=""; hb_start=0
+if [ -n "$hb_base" ] && command -v hb_pick >/dev/null 2>&1; then
+  hb_sel="$(hb_pick "$hb_base" "$LOWER" "$BOOT" $hb_flag)" || hb_sel=""
+  [ -n "$hb_sel" ] && hb_start="$(printf '%s\n' "$hb_sel" | head -n 1 | cut -f1)"
+fi
+if [ -n "$hb_sel" ] && [ "$hb_start" -ge "$roster_start" ]; then
+  # The sessions that STARTED after the tick were live at the cut too; only the registry knows them.
+  reg_new="$(for t in "$REGISTRY_DIR"/*.json; do
+               [ -f "$t" ] && jq -c 'select(type == "object")' "$t" 2>/dev/null
+             done | jq -cs --argjson lo "$hb_start" --argjson hi "$BOOT" --arg k "$EVENT_KPID" '
+               [ .[] | select((.session_id // "") != "" and ((.startedAt // 0) | type) == "number"
+                              and (.startedAt / 1000) > $lo and (.startedAt / 1000) <= $hi)
+                     | select($k == "" or ((.kitty_pid // ($k | tonumber)) | tostring) == $k) ]' 2>/dev/null)"
+  [ -n "$reg_new" ] || reg_new='[]'
+  hb_files=""; hb_sess=""
+  while IFS=$'\t' read -r _st hd; do
+    [ -n "$hd" ] || continue
+    hb_files="${hb_files}${hd}/hb.roster.json
+"
+    hb_sess="${hb_sess}$(cat "$hd/hb.session.tsv" 2>/dev/null)
+"
+  done <<EOF
+$hb_sel
+EOF
+  # Branch (column 5) from the heartbeat's own git read when the roster row carries none.
+  # shellcheck disable=SC2016  # a jq program
+  if rows="$(printf '%s' "$hb_files" | tr '\n' '\0' | xargs -0 cat 2>/dev/null \
+        | jq -rs --arg pad "$TSV_PAD" --argjson reg "$reg_new" --arg sess "$hb_sess" "$JQ_CELL"'
+          ($sess | split("\n") | map(split("\t")) | map(select(length >= 6 and .[0] != ""))
+             | map({key: .[0], value: (if .[5] == $pad then "" else .[5] end)}) | from_entries) as $br
+          | [ (map(if type == "array" then . else (.sessions // []) end) | add // []), $reg ] | add
+          | [ .[] | select(type == "object" and (.session_id // "") != "") ]
+          | unique_by(.session_id)[]
+          | [(.account|cell), (.cwd|cell), (.session_id|cell), (.name|cell),
+             ((.branch // $br[.session_id])|cell)] | @tsv')"; then
+    n_reg_new="$(printf '%s' "$reg_new" | jq 'length' 2>/dev/null || echo 0)"
+    hb_one="$(printf '%s\n' "$hb_sel" | head -n 1 | cut -f2)"
+    SOURCE=heartbeat; ANCHOR="$hb_start"
+    SOURCE_LABEL="heartbeat ${hb_one#"${HB_ROOT}"/} at $(date -r "$hb_start" +%H:%M:%S 2>/dev/null || echo "$hb_start")"
+    [ "${n_reg_new:-0}" -gt 0 ] && SOURCE_LABEL="${SOURCE_LABEL} + ${n_reg_new} started after it"
+    read_rows "$rows"
+  fi
+fi
+if [ -z "$SOURCE" ] && [ -n "$roster" ]; then
   if rows="$(jq -r --arg pad "$TSV_PAD" "$JQ_CELL"'
         [ (if type == "array" then . else (.sessions // []) end)[]
           | select(type == "object" and (.session_id // "") != "") ]
@@ -352,7 +478,7 @@ fi
 #    A shutdown SIGHUPs every pane together (measured: 19 sessions ended inside 4 s at 15:25:27-31
 #    on 2026-09-30), while a closed pane is a lone earlier stamp. Where the kernel had already set
 #    kern.willshutdown when the hook ran, those tombstones are taken outright instead.
-if [ -z "$SOURCE" ] && [ -d "$TOMB_DIR" ]; then
+if [ -z "$SOURCE" ] && [ -z "$EVENT" ] && [ -d "$TOMB_DIR" ]; then
   tomb_rows="$(for t in "$TOMB_DIR"/*.json; do
                  [ -f "$t" ] && jq -c 'select(type == "object")' "$t" 2>/dev/null
                done | jq -rs --arg pad "$TSV_PAD" --argjson lo "$LOWER" --argjson hi "$BOOT" \
@@ -371,6 +497,14 @@ if [ -z "$SOURCE" ] && [ -d "$TOMB_DIR" ]; then
     ANCHOR="$(printf '%s\n' "$tomb_rows" | awk -F'\t' '$6 > m { m = $6 } END { print m + 0 }')"
     read_rows "$tomb_rows"
   fi
+fi
+
+# An event is restored from a heartbeat or not at all: inside a running boot the registry lists the
+# live sessions as well as the dead, and the alarm roster and tombstones describe a reboot.
+if [ -n "$EVENT" ] && [ -z "$SOURCE" ]; then
+  log_idl failed ',"reason":"no-heartbeat","n_open":0,"resumed":0'
+  echo "boot-resume: event ${EVENT} (${EVENT_KIND}): no heartbeat in ${hb_base:-?} between ${LOWER} and ${BOOT} — nothing to restore from" >&2
+  exit 3
 fi
 
 # 3. registry ghosts — a durable cc-registry row whose process predates this boot (startedAt/1000 <
@@ -471,12 +605,42 @@ if [ "$n_retired" -gt 0 ]; then
   printf '%s' "$RETIRED" | sed 's/^  - /boot-resume: skipped retired session /' >&2
 fi
 
+# Step 0 for the first run of a new boot: DETECT has read the registry, so the sweep cannot eat it.
+[ -z "$EVENT" ] && heartbeat
+
 mark_processed() {
+  # An event marks only its own record. Writing the boot markers here would make the next reboot
+  # read as already handled (the uuid would not change until then, but the epoch fallback would).
+  if [ -n "$EVENT" ]; then
+    [ "$PLAN_ONLY" = 1 ] && return 0
+    mkdir -p "$(dirname "$MARKER")" 2>/dev/null || true
+    printf '%s\n' "$BOOT" > "$MARKER" 2>/dev/null || true
+    return 0
+  fi
   mkdir -p "$STATE_DIR" 2>/dev/null || true
   printf '%s\n' "$BOOT" > "$MARKER" 2>/dev/null || true
   if [ -n "$BOOT_UUID" ]; then printf '%s\n' "$BOOT_UUID" > "$UUID_MARKER" 2>/dev/null || true
   else rm -f "$UUID_MARKER" 2>/dev/null || true; fi   # a stale uuid must not outvote the epoch
 }
+
+# ── --plan-only: what a restore of this event WOULD do, and nothing else — no ownership probe (a
+#    live session reads as held), no classifier, no layout, no page, no marker. ──
+if [ "$PLAN_ONLY" = 1 ]; then
+  echo "boot-resume: plan event=${EVENT} kind=${EVENT_KIND} source=${SOURCE_LABEL:-none} anchor=${ANCHOR} sessions=${n_open} retired=${n_retired}"
+  n_plan=0
+  while IFS=$'\t' read -r acct cwd sid name br; do
+    sid="$(unpad "$sid")"; [ -n "$sid" ] || continue
+    acct="$(unpad "$acct")"; cwd="$(unpad "$cwd")"; name="$(unpad "$name")"; br="$(unpad "$br")"
+    printf 'row\t%s\t%s\t%s\t%s\t%s\n' "$(map_account "$acct")" "$sid" "${cwd:--}" "${br:--}" "${name:-${sid:0:8}}"
+    n_plan=$((n_plan + 1))
+  done <<EOF
+$GHOSTS
+EOF
+  [ "$n_retired" -gt 0 ] && printf '%s' "$RETIRED" | sed 's/^  - /retired\t/'
+  echo "boot-resume: plan verdict=planned rows=${n_plan} retired=${n_retired} launches=0"
+  log_idl abstained ",\"reason\":\"plan-only\",\"n_open\":$n_open,\"resumed\":0"
+  exit 0
+fi
 
 # ── reboot happened but nothing was open → nothing lost, no page. Advance the marker. ──
 if [ "$n_open" -eq 0 ]; then
@@ -617,7 +781,9 @@ EOF
       layout_rc=$?
       layout_sum="$(grep '^cc-resume-layout: verdict=' "$STATE_DIR/last-layout.out" 2>/dev/null | tail -1)"
       [ "$layout_rc" = 3 ] && [ "$tries" -gt 0 ] || break
-      [ "$opened" = 1 ] || { "$OPEN_BIN" -a kitty >/dev/null 2>&1; opened=1; }
+      # By PATH, not by name: the staged sandbox build shares kitty's bundle id, so `-a kitty` could
+      # open the wrong one. No -n: a second kitty beside a live one is the duplicate this avoids.
+      [ "$opened" = 1 ] || { "$OPEN_BIN" -a "${CC_KITTY_APP:-/Applications/kitty.app}" >/dev/null 2>&1; opened=1; }
       tries=$((tries - 1)); sleep "$poll"
     done
   fi
@@ -683,6 +849,8 @@ fi
 
 # ── build the boot-delta page (T-P16-7): what was open, jobs status, and what to do. ──
 boot_h="$(date -u -r "$BOOT" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '%s' "$BOOT")"
+# An event is a kitty restart or crash inside a running boot, and the page must not call it a reboot.
+cut_what=rebooted; [ -n "$EVENT" ] && cut_what="kitty ${EVENT_KIND} at"
 listing=""
 shown=0
 while IFS=$'\t' read -r acct cwd sid name _br; do
@@ -706,7 +874,7 @@ ${RETIRED}"
 if [ "$MODE" = "resume" ]; then
   where="one window each"
   [ "$opener" = desktops ] && where="${desk_windows} fullscreen Desktop(s), ${desk_fs_ok} verified fullscreen"
-  msg="🔄 boot-delta: rebooted ${boot_h} · source: ${SOURCE_LABEL} · resumed ${resumed}/${n_fire} session(s) into ${where}.
+  msg="🔄 boot-delta: ${cut_what} ${boot_h} · source: ${SOURCE_LABEL} · resumed ${resumed}/${n_fire} session(s) into ${where}.
   ${n_int} were cut off mid-turn and are being nudged to continue; ${n_rest} had stopped at a pause point (or could not be read) and were restored WITHOUT a nudge."
   [ "$desk_fs_bad" -gt 0 ] && msg="${msg} ⚠ ${desk_fs_bad} window(s) did not go fullscreen (Accessibility permission for kitty?) — the panes are fine, only the Desktop placement is not."
   [ "$n_open" -gt "$n_fire" ] && msg="${msg}
@@ -720,7 +888,7 @@ if [ "$MODE" = "resume" ]; then
   msg="${msg}
 ${listing}desk-jobs: ${dj_up}/${dj_total} com.claude agent(s) up."
 else
-  msg="🔄 boot-delta: rebooted ${boot_h} · ${n_open} session(s) were live when the box went down (source: ${SOURCE_LABEL}; NOT auto-resumed, posture=page):
+  msg="🔄 boot-delta: ${cut_what} ${boot_h} · ${n_open} session(s) were live when the box went down (source: ${SOURCE_LABEL}; NOT auto-resumed, posture=page):
 ${listing}desk-jobs: ${dj_up}/${dj_total} com.claude agent(s) up.
 → resume: /resume-sessions   ·   enable auto-resume: echo resume > ${STATE_DIR}/mode"
 fi

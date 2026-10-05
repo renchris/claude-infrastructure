@@ -77,6 +77,24 @@ SH
   export CC_OPEN_BIN="$BATS_TEST_TMPDIR/stub-open"
   printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$0.log"\n' > "$CC_OPEN_BIN"; chmod +x "$CC_OPEN_BIN"
   export CC_BOOT_RESUME_KITTY_POLL=0
+  # Step 0, the heartbeat (W3 P3a-i): a fixture HOME and a stub for every reader it has, so no case
+  # reads the live registry or asks the live kitty for its tree. The stub cc-sessions prints
+  # .json (default []), logs each call, and SWEEPS the fixture registry when .sweep exists — the
+  # real one deletes dead rows started over 24 h ago.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  export CC_HEARTBEAT_DIR="$BATS_TEST_TMPDIR/heartbeat"
+  export CC_HB_NOW=1784800000      # the tick's clock, pinned to the fixed boot: prune is age-based
+  export CC_HB_SESSIONS_BIN="$BATS_TEST_TMPDIR/stub-sessions"
+  cat > "$CC_HB_SESSIONS_BIN" <<'SH'
+#!/bin/bash
+echo call >> "$0.calls"
+[ -f "$0.sweep" ] && rm -f "$CC_REGISTRY_DIR"/*.json
+cat "$0.json" 2>/dev/null || echo '[]'
+SH
+  chmod +x "$CC_HB_SESSIONS_BIN"
+  export CC_HB_KITTEN_BIN="$BATS_TEST_TMPDIR/stub-kitten"
+  printf '#!/bin/bash\necho "[]"\n' > "$CC_HB_KITTEN_BIN"; chmod +x "$CC_HB_KITTEN_BIN"
+  export CC_HB_PS_BIN=/usr/bin/true CC_HB_LSOF_BIN=/usr/bin/true
   export CC_KITTY_SOCKET_BIN="$BATS_TEST_TMPDIR/stub-ksock"
   printf '#!/bin/bash\necho unix:/tmp/kitty-test\n' > "$CC_KITTY_SOCKET_BIN"; chmod +x "$CC_KITTY_SOCKET_BIN"
   # classifier stub: append a verdict per row — the sid's line in .verdicts, else INTERRUPTED — and
@@ -634,7 +652,7 @@ SUM_OK2='cc-resume-layout: verdict=ok launched=2 shed=0 failed=0 windows=1 fulls
   export CC_BOOT_RESUME_MODE=resume
   run bash "$SCRIPT"
   [ "$status" -eq 0 ]
-  [ "$(cat "$CC_OPEN_BIN.log")" = "-a kitty" ]
+  [ "$(cat "$CC_OPEN_BIN.log")" = "-a /Applications/kitty.app" ]   # by path, and never -n
   [ "$(cat "$CC_RESUME_LAYOUT_BIN.n")" -eq 3 ]
   grep -q '"opener":"desktops"' "$CC_IDL"
 }
@@ -659,4 +677,152 @@ SUM_OK2='cc-resume-layout: verdict=ok launched=2 shed=0 failed=0 windows=1 fulls
   [ "$status" -eq 0 ]
   grep -q 'did not go fullscreen' "$CC_NOTIFY_BIN.log"
   grep -q '"fullscreen_failed":1' "$CC_IDL"
+}
+
+# ══ STEP 0 HEARTBEAT, ROSTER CHOICE AND EVENT MODE (W3 P3a-i, 2026-10-04) ═════════════════════════
+# A hard power-off leaves no tombstone and the registry fallback caps at 4 sessions, so the newest
+# heartbeat (one 300 s tick old at most) competes with the alarm roster by start epoch. Event mode is
+# a restore inside the running boot: it must never touch the boot markers, or the next reboot reads
+# as already handled. Event cases run under /bin/bash 3.2, the interpreter launchd uses.
+hbeat() { # <uuid> <kitty-pid> <start> <roster-json> [hb.session.tsv line]
+  local d="$CC_HEARTBEAT_DIR/$1/$2"
+  mkdir -p "$d"; printf '%s' "$4" > "$d/hb.roster.json"; echo "$3" > "$d/hb.start"
+  [ -z "${5:-}" ] || printf '%s\n' "$5" > "$d/hb.session.tsv"
+}
+dead_pid() { sleep 0 & local p=$!; wait "$p"; echo "$p"; }
+markers_sum() { shasum "$CC_BOOT_RESUME_STATE_DIR/last-boot-epoch" "$CC_BOOT_RESUME_STATE_DIR/last-boot-uuid" 2>&1; }
+
+@test "reboot: a heartbeat one tick old outranks an alarm roster taken earlier; sessions started after the tick join it" {
+  roster alarm 1784790000 "[$(rrow a1 claude-next /x/a ALARM-ONE)]"
+  hbeat UUID-PREV 4001 1784799900 "[$(rrow h1 claude-next /x/h1 HB-ONE),$(rrow h2 claude-tertiary /x/h2 HB-TWO)]"
+  reg_entry late 1784799950000 claude-next /x/late LATE-REG
+  reg_entry early 1784799000000 claude-next /x/early EARLY-REG
+  export CC_BOOT_RESUME_MODE=page
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  grep -q 'HB-ONE' "$CC_NOTIFY_BIN.log"
+  grep -q 'HB-TWO' "$CC_NOTIFY_BIN.log"
+  grep -q 'LATE-REG' "$CC_NOTIFY_BIN.log"
+  ! grep -q 'ALARM-ONE\|EARLY-REG' "$CC_NOTIFY_BIN.log" || false
+  grep -q 'source: heartbeat UUID-PREV/4001 at .* + 1 started after it' "$CC_NOTIFY_BIN.log"
+  grep -q '"source":"heartbeat"' "$CC_IDL"
+  grep -q '"n_open":3' "$CC_IDL"
+}
+
+@test "reboot: an alarm roster newer than every heartbeat still wins" {
+  hbeat UUID-PREV 4001 1784799000 "[$(rrow h1 claude-next /x/h1 HB-ONE)]"
+  roster alarm 1784799900 "[$(rrow a1 claude-next /x/a ALARM-ONE)]"
+  export CC_BOOT_RESUME_MODE=page
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  grep -q 'ALARM-ONE' "$CC_NOTIFY_BIN.log"
+  ! grep -q 'HB-ONE' "$CC_NOTIFY_BIN.log" || false
+  grep -q '"source":"roster"' "$CC_IDL"
+}
+
+@test "the .start pair: a two-line .start (kalloc appended) is read by its first field, and a start equal to the boot counts" {
+  printf '%s' "[$(rrow r1 claude-next /x/r LEGACY-ONE)]" > "$CC_BOOT_RESUME_ROSTER_DIR/reboot-legacy.roster.json"
+  printf '1784800000\n1784800000 kalloc1024_gb=6.00\n' > "$CC_BOOT_RESUME_ROSTER_DIR/reboot-legacy.start"
+  export CC_BOOT_RESUME_MODE=page
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  grep -q 'LEGACY-ONE' "$CC_NOTIFY_BIN.log"
+  grep -q '"source":"roster"' "$CC_IDL"
+}
+
+@test "reboot: a heartbeat taken after this boot is not the roster of the boot before it" {
+  hbeat UUID-NOW 4002 1784800100 "[$(rrow n1 claude-next /x/n NOW-ONE)]"
+  reg_entry g1 1784795000000 claude-quaternary /x/g GHOST-ONE
+  export CC_BOOT_RESUME_MODE=page
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  ! grep -q 'NOW-ONE' "$CC_NOTIFY_BIN.log" || false
+  grep -q 'GHOST-ONE' "$CC_NOTIFY_BIN.log"
+}
+
+@test "step 0: an already-handled tick still takes the heartbeat; a new boot takes it only after reading the registry" {
+  mkdir -p "$CC_BOOT_RESUME_STATE_DIR"; echo 1784800000 > "$CC_BOOT_RESUME_STATE_DIR/last-boot-epoch"
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$CC_HB_SESSIONS_BIN.calls" | tr -d ' ')" -eq 1 ]
+  rm -f "$CC_BOOT_RESUME_STATE_DIR/last-boot-epoch" "$CC_HB_SESSIONS_BIN.calls" "$CC_IDL"
+  reg_entry g1 1784700000000 claude-quaternary /x/g OLD-GHOST
+  touch "$CC_HB_SESSIONS_BIN.sweep"                                   # the real lister reaps these
+  export CC_BOOT_RESUME_MODE=page
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  grep -q 'OLD-GHOST' "$CC_NOTIFY_BIN.log"                             # read BEFORE the sweep ran
+  [ "$(wc -l < "$CC_HB_SESSIONS_BIN.calls" | tr -d ' ')" -eq 1 ]
+}
+
+@test "event: bypasses same_boot even when the overridden uuid equals the marker, and never writes either boot marker" {
+  mkdir -p "$CC_BOOT_RESUME_STATE_DIR"
+  echo 1784800000 > "$CC_BOOT_RESUME_STATE_DIR/last-boot-epoch"; echo UUID-1 > "$CC_BOOT_RESUME_STATE_DIR/last-boot-uuid"
+  export CC_BOOTUUID_OVERRIDE=UUID-1
+  kp="$(dead_pid)"
+  hbeat UUID-1 "$kp" 1784804900 "[$(rrow e1 claude-next /x/e1 EV-ONE),$(rrow e2 claude-next /x/e2 EV-TWO)]"
+  before="$(markers_sum)"
+  stub_layout "$SUM_OK2"
+  run /bin/bash "$SCRIPT" --event 1784805000 --kind restart
+  [ "$status" -eq 0 ]
+  [ "$(markers_sum)" = "$before" ]
+  [ -f "$CC_BOOT_RESUME_STATE_DIR/events/1784805000.done" ]
+  grep -q "^next	e1	/x/e1	" "$CC_RESUME_LAYOUT_BIN.rows"
+  grep -q '"event":1784805000,"kind":"restart"' "$CC_IDL"
+  grep -q '"resumed":2' "$CC_IDL"
+  grep -q 'kitty restart at' "$CC_NOTIFY_BIN.log"
+  run /bin/bash "$SCRIPT" --event 1784805000 --kind restart          # the same event again
+  [ "$status" -eq 0 ]
+  [ "$(cat "$CC_RESUME_LAYOUT_BIN.n")" -eq 1 ]
+  tail -1 "$CC_IDL" | grep -q 'already-processed'
+  [ "$(markers_sum)" = "$before" ]
+}
+
+@test "event --plan-only prints every row and launches nothing: no probe, classifier, layout, open, page or marker" {
+  export CC_BOOTUUID_OVERRIDE=UUID-1
+  kp="$(dead_pid)"
+  hbeat UUID-1 "$kp" 1784804900 "[$(rrow p1 claude-tertiary /x/p1 PLAN-ONE),$(rrow p2 claude-next /x/p2 PLAN-TWO)]" \
+    "p1	claude-tertiary	m	e	auto	feat-p1	1"
+  stub_layout "$SUM_OK2"
+  run /bin/bash "$SCRIPT" --event 1784805000 --kind restart --plan-only
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"row	next3	p1	/x/p1	feat-p1	PLAN-ONE"* ]] || [[ "$output" == *"	p1	/x/p1	feat-p1	PLAN-ONE"* ]] || false
+  [[ "$output" == *"	p2	/x/p2	-	PLAN-TWO"* ]] || false
+  [[ "$output" == *"verdict=planned rows=2 retired=0 launches=0"* ]] || false
+  [ ! -f "$CC_RESUME_LAUNCH_BIN.checks" ] && [ ! -f "$CC_RESUME_LAUNCH_BIN.log" ] || false
+  [ ! -f "$CC_RESUME_LAYOUT_BIN.log" ] && [ ! -f "$CC_RESUME_CLASSIFY_BIN.log" ] && [ ! -f "$CC_OPEN_BIN.log" ] || false
+  [ "$(notify_count)" -eq 0 ]
+  [ -z "$(ls "$CC_BOOT_RESUME_STATE_DIR/events" 2>/dev/null)" ]
+  [ ! -f "$CC_BOOT_RESUME_STATE_DIR/last-boot-epoch" ]
+  grep -q '"reason":"plan-only"' "$CC_IDL"
+}
+
+@test "event --kind crash restores the dead kitty's fleet over a live kitty's newer heartbeat; --kitty-pid names one" {
+  export CC_BOOTUUID_OVERRIDE=UUID-1
+  kp="$(dead_pid)"
+  hbeat UUID-1 "$kp" 1784804000 "[$(rrow d1 claude-next /x/d1 DEAD-ONE)]"
+  hbeat UUID-1 "$$" 1784804900 "[$(rrow l1 claude-next /x/l1 LIVE-ONE)]"
+  run /bin/bash "$SCRIPT" --event 1784805000 --kind crash --plan-only
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"DEAD-ONE"* ]] && [[ "$output" != *"LIVE-ONE"* ]] || false
+  run /bin/bash "$SCRIPT" --event 1784805000 --kind crash --kitty-pid "$$" --plan-only
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"LIVE-ONE"* ]] && [[ "$output" != *"DEAD-ONE"* ]]
+}
+
+@test "event with no heartbeat fails loud (rc 3) and never falls back to the registry or the alarm roster" {
+  reg_entry g1 1784795000000 claude-quaternary /x/g GHOST-ONE
+  roster alarm 1784799900 "[$(rrow a1 claude-next /x/a ALARM-ONE)]"
+  run /bin/bash "$SCRIPT" --event 1784805000 --kind crash
+  [ "$status" -eq 3 ]
+  grep -q '"reason":"no-heartbeat"' "$CC_IDL"
+  [ "$(notify_count)" -eq 0 ]
+}
+
+@test "bad event arguments exit 2 and touch nothing" {
+  run bash "$SCRIPT" --event abc --kind restart;      [ "$status" -eq 2 ]
+  run bash "$SCRIPT" --event 1784805000 --kind reboot; [ "$status" -eq 2 ]
+  run bash "$SCRIPT" --plan-only;                       [ "$status" -eq 2 ]
+  run bash "$SCRIPT" --bogus;                           [ "$status" -eq 2 ]
+  [ ! -f "$CC_IDL" ]
 }
