@@ -674,7 +674,7 @@ here. Never change row 15's thresholds, the 9 s limit or the sealed sets; never 
   classifier's command line and brief equal `e259b44cd`'s (`on-pre`, thinking on), then the second and last read of
   v2, recorded here with its verdict, per-stratum numbers, load and the disclosure that it is biased by the first.
 
-#### E1e — the two measurements after activation — BLOCKED: the activated daemon answers nothing; v2 NOT read (2026-10-05)
+#### E1e — the two measurements after activation — DONE: row 15 FAILS on the second read of v2, on `other` labeling and on fallbacks (2026-10-05)
 Scope (frozen): the two measurements E1d left for after activation, and nothing else. (1) Warm latency on the
 tuning set only (n ≥ 20; E1d's `/tmp/e1d-warm-latency.py`): median, p90, the count over 9 s, the load, and for each
 call whether the router used the warm path or the cold one. (2) One more read of sealed v2 with `heldout.py
@@ -689,7 +689,7 @@ measurements around one sealed file).
   byte-identical to this branch's, and `git diff e259b44cd HEAD -- scripts/research-kit/router.py` adds only the
   warm call path: `CLASSIFIER_BRIEF` and `classifier_argv()` are untouched, so the labeling configuration is
   E1c's `on-pre` (thinking on).
-- **Measurement 1, warm latency on the tuning set** (2026-10-05 01:36-01:41 CDT, 1-min load 21.7-24.5; all 96
+- **Measurement 1, first attempt: the activated daemon answered nothing** (2026-10-05 01:36-01:41 CDT, 1-min load 21.7-24.5; all 96
   rows of the v1 tuning file, one sequential call each through the live router's `classify`):
 
   | calls | answered by the warm path | answered by the cold path | fell back | wall median · p90 · max | over 9 s |
@@ -713,20 +713,79 @@ measurements around one sealed file).
     error as the limit spent and makes no cold call. So from activation until the daemon is fixed or unloaded,
     **every re-ask classification on this machine falls back** (0 of 96 answered), which is worse than before
     activation, when the cold call answered about 73% of the time.
-- **Measurement 2, the second read of v2: NOT run.** A read now would return 232 fallbacks and tell nothing
-  about labeling or latency, and v2's reads are counted. v2 has still been read exactly once (E1c). Prepared and
-  unused, outside the repo: a `git archive` snapshot of `472ba14c4`'s `scripts/research-kit` and a wrapper that
+- **Measurement 2 was held at that point.** A read then would return 232 fallbacks and tell nothing
+  about labeling or latency, and v2's reads are counted. Prepared for it, outside the repo: a `git archive` snapshot of `472ba14c4`'s `scripts/research-kit` and a wrapper that
   calls the snapshot's `router.classify` exactly as the `classify` verb does and appends the answering path
   (warm, cold or fallback), wall and load per call to a side file, so the read can show which path answered each
   item; `evaluate` itself discards the router's reason.
-- **Row 15 verdict: unchanged, FAILS** (E1c's read stands: `other` 23/26 on answered items, fallback 62/232 =
-  0.27). No program can certify.
-- **To resume this wave:** give the daemon a logged-in account (or have the router make the cold call when a
-  warm process errors before it starts work), make `ping` prove an answer, reload; then rerun measurement 1 and
-  check `warm-answered` is not 0 before spending the read. Stopgap until then: unloading
-  `com.claude.research-classifier-warm` returns the router to the cold path.
-- Status: **BLOCKED 2026-10-05**, reported to the wave lead. Evidence outside the repo:
-  `/tmp/e1e/warm-latency.json` (per call: label, reason, wall, load).
+- **Unblocked by wave E1f** (below: the router makes the cold call after a warm failure, the runner serves under a
+  logged-in account, `ping` proves an answered classification). The operator re-ran migration `0059` at 10:23 CDT
+  (backlog `ac182e40e0bc`, the restart). Checked before measuring: `ping` printed `ready 2` and exited 0; the
+  daemon is a new process (pid 14445, started 10:23:51) with `CLAUDE_CONFIG_DIR` set; the live `router.py` and
+  `classifier-warm.py` are byte-identical to trunk `3f4ac2c03`; and `CLASSIFIER_BRIEF`, `classifier_argv()`,
+  `haiku_model()` and `CLASSIFIER_TIMEOUT_S` in that `router.py` are identical, compared as parsed code, to
+  `e259b44cd`'s. The labeling configuration is E1c's `on-pre`, thinking on; only the call path changed.
+- **Measurement 1, warm latency on the tuning set** (2026-10-05 10:24-10:33 CDT, 1-min load 8.9-16.1; all 96 rows
+  of the v1 tuning file, one sequential call each through the live router's `classify`, which reports the path
+  with every answer):
+
+  | calls | answered by the warm path | answered by the cold path | fell back | wall, answered: median · p90 · max | reached the 9 s limit |
+  |---|---|---|---|---|---|
+  | 96 | **83** | **0** | **13 (0.14)** | 4.62 s · 6.96 s · 8.80 s | 12 |
+
+  Every call went to the warm path and none to the cold fallback. 12 of the 13 fallbacks are warm calls that had
+  not answered at 9 s; the other is a warm answer that was not a route label (the model began to act on the
+  prompt). Over all 96 the wall is 4.81 s median and 9.00 s at p90. Per call: `/tmp/e1e/warm-latency-2.json`.
+  One synthetic call to the daemon from this session overlapped the first seconds of the run.
+  **The warm path did not bring the fallback share under 0.10 on the tuning set** (0.14, against 0.17 cold in
+  E1c's tuning run at load 28-46): it removes the process start, and the answer with thinking on still takes a
+  median 4.6 s and more than 9 s about one time in eight.
+- **Measurement 2, the second and last read of v2** (2026-10-05 10:35:23-10:58:47 CDT, 23 min, 1-min load
+  7.5-26.9; `heldout.py --set v2 evaluate --record …`, rc 1; router snapshot of `3f4ac2c03`, called through the
+  wrapper above). 396 sealed, 164 excluded for rater disagreement, 232 routed:
+
+  | condition | this read (warm) | on the items that got an answer | first read (E1c, cold) |
+  |---|---|---|---|
+  | regex-matched recall (≥ 0.95) | 24/24 = 1.00 | 24/24, none fell back | 24/24 |
+  | regex-missed recall (≥ 0.95) | 34/34 = 1.00 | 34/34, none fell back | 31/34 = 0.91 |
+  | pushback recall (≥ 0.95) | 5/5 = 1.00 | 5/5, none fell back | 5/5 |
+  | `other` correct label (≥ 0.90) | **21/36 = 0.58 FAIL** | **21/29 = 0.72 FAIL**; 7 fell back, 8 answered wrong | 23/36; 23/26 = 0.88 on answered |
+  | fallback share (≤ 0.10) | **45/232 = 0.19 FAIL** | every one stopped at 9 s | 62/232 = 0.27 |
+
+  `evaluate` printed: `stratum other: correct-label rate 21/36 = 0.58, below 0.9` and `fallback rate 0.19 (error
+  or timeout at 9 s), above 0.1`. Uncounted line: 3 prompts carry two different relay labels (1 regex-missed, 2
+  pushback) and the router relayed all 3. Fallbacks by stratum among the 232: regex-matched 9, regex-missed 29,
+  `other` 7; none of the 38 in the completeness strata is a relay-gold prompt, which is why those recalls are
+  whole. By thirds of the run: 15 · 17 · 13.
+- **Which path answered, for the read.** All 190 answers (187 routed-and-counted items plus the 3 uncounted) came
+  from the warm path; none came from the cold call. The 45 fallbacks have no path row: `evaluate` stops a router
+  call at 9 s of its own clock, which includes starting Python, so it ended each of those calls before the
+  router returned a reason. Their recorded walls are 9.00-9.01 s. Answered calls took 5.01 s median, 7.71 s at
+  p90, 8.97 s at most. Per item (router side only, no prompt or rater label):
+  `~/.claude/autonomy/research/router-heldout/reading-v2-2026-10-05.jsonl`; paths: `/tmp/e1e/v2-paths.jsonl`.
+- **The classifier's labels are not stable between reads.** Of the 151 counted items that got an answer in both
+  reads, 129 got the same label and 22 did not, with the same brief, model and thinking setting. On `other`, 4 of
+  the items answered both times changed label, and the answered-wrong count went from 3 to 8 partly because this
+  read answered 3 more of them. So `other` on answered items read 0.88 once and 0.72 once from one unchanged
+  configuration: the first read's "one prompt short" was inside this spread.
+- **Row 15 verdict: FAILS.** By E1c's pre-registered rule this is FAIL (labeling), and the fallback share fails as
+  well: every completeness stratum passes outright (63 of 63 relay-gold prompts relayed), `other` misses 0.90 on
+  answered items, and 0.19 of calls fall back against a cap of 0.10. No program can certify.
+- **Disclosure.** This is the second read of v2 and it is biased by the first. Nothing was tuned between them
+  and the labeling configuration is byte-for-byte E1c's, but the decision to build and activate the warm path
+  was made knowing the first read's numbers (fallback 62/232 = 0.27; `other` 23/26 on answered). v2 has now been
+  read twice and should not carry a third verdict for any configuration chosen with these numbers in hand; the
+  unlabeled `tuning-v2.jsonl` (92 prompts) is the set to work on next.
+- **What remains (decisions for the lead, then the operator).** Not opened here.
+  - Fallbacks: the warm path alone is not enough (0.14 tuning, 0.19 on v2). The remaining time is the model's
+    answer with thinking on, not the start.
+  - `other` labeling: it failed on both reads, and its reading moves by 16 points between runs of one
+    configuration, so a single pass over 36 prompts cannot settle it either way.
+- Status: **DONE 2026-10-05.** Both measurements recorded; row 15 FAILS. The blocked first attempt landed as
+  `58a3a4211`. Learnings: a liveness check that counts processes passed a daemon that could not answer, so a
+  measurement's first row must be read before the rest is trusted; `evaluate` drops the router's reason, so a
+  path claim needs its own record, and a harness timeout equal to the router's own leaves the slow calls
+  unrecorded.
 
 #### E1f — the activated warm classifier answered nothing; three fixes — LANDED and live, awaiting the operator's restart (2026-10-05)
 Scope (frozen): three fixes, each with a red-then-green test that replays the incident's shape (a daemon that is
