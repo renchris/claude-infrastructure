@@ -95,7 +95,9 @@
 #                    CC_BOUNDARY_LATCH_DIR · CC_BOUNDARY_LOGFILE · CC_CONTINUE_SENTINEL ·
 #                    CC_BOUNDARY_T_MIN · CC_BOUNDARY_LEAD_MIN · CC_BOUNDARY_CONV_S ·
 #                    CC_BOUNDARY_SIZE_MB · CC_BOUNDARY_RSS_MB · CC_BOUNDARY_SIZE_REARM_MB ·
-#                    CC_BOUNDARY_TOK_K ·
+#                    CC_BOUNDARY_TOK_K · CC_BOUNDARY_IDLE_REARM_MIN · CC_RECYCLE_RETRY ·
+#                    CC_RECYCLE_RETRY_DIR · CC_RECYCLE_RETRY_MAX · CC_RECYCLE_RETRY_TTL_S ·
+#                    CC_RECYCLE_RETRY_BACKOFF_S ·
 #                    CC_BOUNDARY_T_FREEWIN · CC_CE_*
 #
 # ── CC_BOUNDARY_DIRS_NOTE (G-P6-5b / a19 live table) — REGISTER ON ALL FOUR CONFIG DIRS ──
@@ -162,6 +164,15 @@ SIZE_MB="${CC_BOUNDARY_SIZE_MB:-25}"               # size axis: transcript bytes
 RSS_MB="${CC_BOUNDARY_RSS_MB:-1500}"               # size axis: process RSS ≥ this many MB ⇒ fire (0 disables)
 TOK_K="${CC_BOUNDARY_TOK_K:-700}"                  # absolute-occupancy axis: input_tokens ≥ this many K ⇒ fire (0 disables)
 SIZE_REARM_MB="${CC_BOUNDARY_SIZE_REARM_MB:-10}"   # B-2 third re-arm dimension: transcript GROWTH since the last fire
+# B-2 FOURTH re-arm dimension: TIME. Minutes since the last fire, with no interactive turn inside
+# CONV_S, after which the advisory fires again on an unchanged HEAD at flat fill. 0 disables it.
+IDLE_REARM_MIN="${CC_BOUNDARY_IDLE_REARM_MIN:-30}"
+case "$IDLE_REARM_MIN" in ''|*[!0-9]*) IDLE_REARM_MIN=30 ;; esac
+# The held-self-recycle retry arm (see RECYCLE RETRY below). CC_RECYCLE_RETRY=off disables it.
+RETRY_DIR="${CC_RECYCLE_RETRY_DIR:-$HOME/.claude/autonomy/recycle-retry}"
+RETRY_MAX="${CC_RECYCLE_RETRY_MAX:-3}"             # consecutive held attempts this hook will ask for
+RETRY_TTL_S="${CC_RECYCLE_RETRY_TTL_S:-21600}"     # a ticket older than this is dropped unread
+RETRY_BACKOFF_S="${CC_RECYCLE_RETRY_BACKOFF_S:-300}" # wait when the hold named no job to watch
 IDL="${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
 LATCH_DIR="${CC_BOUNDARY_LATCH_DIR:-$HOME/.claude/autonomy/boundary-latch}"
 TEL_DIR="${CC_TELEMETRY_DIR:-/tmp/cc-telemetry}"
@@ -242,6 +253,92 @@ if [ -f "$_bh_lib" ]; then
     _bh_aid="$(agent_is_assignee 2>/dev/null || true)"
     [ -n "$_bh_aid" ] && abstain "team-assignee:${_bh_aid}"
   fi
+fi
+
+# ── RECYCLE RETRY — a held or refused SELF-recycle is re-attempted, not left to a log line ────────
+# THE GAP (2026-10-05, reso pane 254). A session acted on this hook's own advisory, its recycle was
+# HELD at the background-work dialog, and the only trace was "Re-run once its background work has
+# ended" in a TMPDIR log it never reads. It then sat idle at 46% for nine hours. handoff-fire.sh now
+# leaves a ticket ($RETRY_DIR/<session id>.json) on every such hold, and this arm is its reader.
+#
+# It runs before the fill thresholds on purpose: the session already decided to recycle, so the
+# question here is only whether the thing that stopped it is gone. It asks ONCE per held attempt
+# (`advised` records the attempt asked about), for at most RETRY_MAX consecutive holds, and the
+# recycle it names re-checks every one of its own guards, so asking early costs one safe refusal.
+#   job pids named  → wait until every one has exited (the job that raised the dialog is gone)
+#   none named      → wait RETRY_BACKOFF_S (a live team, an unreadable pane, a composer mid-turn)
+# A ticket is VOID once a human has typed since the hold: the session is on a new instruction, and
+# re-running an hours-old recycle over it is the one outcome this must never produce. Void, expired
+# and exhausted tickets are deleted. It yields to session-continue's armed loop, as the main arm does.
+rt="$RETRY_DIR/$sid.json"
+RETRY_NOTE=""
+if [ "${CC_RECYCLE_RETRY:-on}" != off ] && [ -f "$rt" ]; then
+  rt_now="$(date +%s)"
+  rt_at="$(jq -r '.held_at // 0' "$rt" 2>/dev/null || echo 0)"; case "$rt_at" in ''|*[!0-9]*) rt_at=0 ;; esac
+  rt_n="$(jq -r '.attempts // 0' "$rt" 2>/dev/null || echo 0)";  case "$rt_n" in ''|*[!0-9]*) rt_n=0 ;; esac
+  rt_adv="$(jq -r '.advised // 0' "$rt" 2>/dev/null || echo 0)"; case "$rt_adv" in ''|*[!0-9]*) rt_adv=0 ;; esac
+  rt_pids="$(jq -r '.job_pids // "-"' "$rt" 2>/dev/null || echo -)"
+  rt_why="$(jq -r '.why // ""' "$rt" 2>/dev/null || true)"
+  rt_pf="$(jq -r '.prompt_file // ""' "$rt" 2>/dev/null || true)"
+  rt_age=$(( rt_now - rt_at ))
+  rt_verdict=""
+  if [ "$rt_at" = 0 ] || [ "$rt_n" = 0 ]; then rt_verdict="drop:unreadable-ticket"
+  elif [ "$rt_age" -gt "$RETRY_TTL_S" ] 2>/dev/null; then rt_verdict="drop:expired:${rt_age}s"
+  elif [ "$rt_n" -gt "$RETRY_MAX" ] 2>/dev/null; then rt_verdict="drop:exhausted:${rt_n}>${RETRY_MAX}"
+  elif [ "$rt_adv" -ge "$rt_n" ]; then rt_verdict="keep:already-asked:attempt=${rt_n}"
+  fi
+  if [ -z "$rt_verdict" ]; then
+    # Has a human typed since the hold? An unreadable transcript cannot show that nobody did.
+    rt_tp="$tp"; case "$rt_tp" in "~"*) rt_tp="$HOME${rt_tp#\~}" ;; esac
+    rt_conv=unreadable
+    if command -v ce_last_interactive_age >/dev/null 2>&1 && [ -f "$rt_tp" ]; then
+      rt_conv="$(ce_last_interactive_age "$rt_tp" 2>/dev/null || true)"
+    fi
+    case "$rt_conv" in
+      ''|*[!0-9]*) [ "$rt_conv" = unreadable ] && rt_verdict="keep:transcript-unreadable" ;;
+      *) [ "$rt_conv" -lt "$rt_age" ] && rt_verdict="drop:operator-turn-since-hold:${rt_conv}s<${rt_age}s" ;;
+    esac
+  fi
+  if [ -z "$rt_verdict" ]; then
+    rt_cwd="$(printf '%s' "$stdin_json" | jq -r '.cwd // empty' 2>/dev/null || true)"
+    rt_sent=""
+    if [ -n "${CC_CONTINUE_SENTINEL:-}" ]; then rt_sent="$CC_CONTINUE_SENTINEL"
+    elif [ -n "$rt_cwd" ] && command -v continue_sentinel_for >/dev/null 2>&1; then rt_sent="$(continue_sentinel_for "$rt_cwd")"; fi
+    if [ -n "$rt_sent" ] && [ -f "$rt_sent" ]; then rt_verdict="keep:continue-hook-armed"; fi
+  fi
+  if [ -z "$rt_verdict" ]; then
+    case "$rt_pids" in
+      ''|-|*[!0-9,]*)
+        [ "$rt_age" -lt "$RETRY_BACKOFF_S" ] 2>/dev/null && rt_verdict="keep:backoff:${rt_age}s<${RETRY_BACKOFF_S}s" ;;
+      *)
+        rt_live=""
+        for rt_p in $(printf '%s' "$rt_pids" | tr ',' ' '); do
+          kill -0 "$rt_p" 2>/dev/null && rt_live="${rt_live:+$rt_live,}$rt_p"
+        done
+        [ -n "$rt_live" ] && rt_verdict="keep:job-alive:${rt_live}" ;;
+    esac
+  fi
+  # A ticket this Stop did not ask about is NOT this Stop's disposition: the fill arm below still
+  # runs and writes the one IDL row (B-3), which carries the verdict as `recycle_retry`.
+  case "$rt_verdict" in
+    drop:*) rm -f "$rt" 2>/dev/null || true; RETRY_NOTE="$rt_verdict" ;;
+    keep:*) RETRY_NOTE="$rt_verdict" ;;
+    *)
+      # Record the ask BEFORE making it: a ticket that could not be marked would ask at every Stop.
+      if jq --argjson a "$rt_n" '.advised = $a' "$rt" > "$rt.tmp.$$" 2>/dev/null && mv -f "$rt.tmp.$$" "$rt" 2>/dev/null; then
+        rt_cmd="\$HOME/.claude/scripts/handoff-fire.sh --recycle"
+        [ -n "$rt_pf" ] && [ -f "$rt_pf" ] && rt_cmd="$rt_cmd --prompt-file $rt_pf"
+        rt_reason="⟳ RECYCLE RETRY — the self-recycle this session ran $(( rt_age / 60 )) min ago was HELD (${rt_why:-no reason recorded}) and nothing was relaunched. $(case "$rt_pids" in ''|-|*[!0-9,]*) printf 'Enough time has passed to try again.' ;; *) printf 'The background job that held it has exited.' ;; esac) Re-run it now: \`${rt_cmd}\` (attempt $(( rt_n + 1 )); the recycle re-checks every guard itself, and you are asked at most ${RETRY_MAX} times). If you have taken on new work since, do not re-run it: finish that work first."
+        log_idl fired "recycle-retry" "$(jq -cn --argjson n "$rt_n" --argjson age "$rt_age" --arg pids "$rt_pids" --arg why "$rt_why" '{attempt:$n,held_age_s:$age,job_pids:$pids,why:$why,axis:"recycle-retry"}' 2>/dev/null || printf '{}')"
+        jq -nc --arg r "$rt_reason" '{decision:"block",reason:$r,systemMessage:$r}'
+        exit 0
+      fi
+      rm -f "$rt.tmp.$$" 2>/dev/null || true
+      RETRY_NOTE="keep:ticket-unwritable" ;;
+  esac
+  _brn="$(jq -cn --arg r "$RETRY_NOTE" '{recycle_retry:$r}' 2>/dev/null || true)"
+  # shellcheck disable=SC2034  # consumed by indirection in hooks/lib/idl-log.sh (idl_init merge-var slot)
+  [ -n "$_brn" ] && SIZE_JSON="$_brn"
 fi
 
 tel="$TEL_DIR/$sid.json"
@@ -337,10 +434,10 @@ over_tok=0; { [ "$TOK_K" -gt 0 ] 2>/dev/null && [ "$tok_k" -ge "$TOK_K" ]; } && 
 # Validate before publishing: log_idl feeds this to `jq --argjson`, so a malformed value would fail the
 # whole record and silently drop every IDL line from here on.
 _bsj="$(jq -cn --argjson tx "$tx_mb" --argjson rss "$rss_mb" --argjson st "$SIZE_MB" --argjson rt "$RSS_MB" \
-  --argjson tk "$tok_k" --argjson tkt "$TOK_K" \
-  '{tx_mb:$tx,rss_mb:$rss,size_mb_t:$st,rss_mb_t:$rt,tok_k:$tk,tok_k_t:$tkt}' 2>/dev/null || true)"
+  --argjson tk "$tok_k" --argjson tkt "$TOK_K" --arg rr "$RETRY_NOTE" \
+  '{tx_mb:$tx,rss_mb:$rss,size_mb_t:$st,rss_mb_t:$rt,tok_k:$tk,tok_k_t:$tkt} + (if $rr == "" then {} else {recycle_retry:$rr} end)' 2>/dev/null || true)"
 # shellcheck disable=SC2034  # consumed by indirection in hooks/lib/idl-log.sh (idl_init merge-var slot)
-if [ -n "$_bsj" ] && printf '%s' "$_bsj" | jq -e 'type=="object"' >/dev/null 2>&1; then SIZE_JSON="$_bsj"; else SIZE_JSON='{}'; fi
+if [ -n "$_bsj" ] && printf '%s' "$_bsj" | jq -e 'type=="object"' >/dev/null 2>&1; then SIZE_JSON="$_bsj"; elif [ -z "$RETRY_NOTE" ]; then SIZE_JSON='{}'; fi
 
 # ── FREE-WIN ARM (2026-08-03) — the ✅-ledger recycle, so a quiet session drains ITSELF ───────────
 #
@@ -539,10 +636,20 @@ if [ -n "$logfile" ] && [ -f "$cwd/$logfile" ]; then
   [ "$logtouch" = "$loghead" ] || abstain "log-head-lags:$logfile"
 fi
 
+# ── context-econ: is an exchange in flight? (wording at the URGENT tiers; SUPPRESSION at the free-win
+#    tier — see the S6 block below; read HERE because the latch's time re-arm asks it too) ──
+conv_age=""
+if command -v ce_last_interactive_age >/dev/null 2>&1 && [ -n "$tp" ]; then
+  case "$tp" in "~"*) tp="$HOME${tp#\~}" ;; esac
+  [ -f "$tp" ] && conv_age="$(ce_last_interactive_age "$tp")"
+  case "$conv_age" in *[!0-9]*) conv_age="" ;; esac
+fi
+
 # ── B-2: one-shot latch (hash(configdir|cwd)-HEADsha) + used_pct-delta re-arm ──
 cfg="$(jq -r '.config_dir // empty' "$tel" 2>/dev/null || true)"
 key="$(printf '%s|%s' "$cfg" "$cwd" | shasum 2>/dev/null | cut -c1-16)"
 latch="$LATCH_DIR/${key}-${head}"
+idle_rearm=0
 mkdir -p "$LATCH_DIR" 2>/dev/null || true
 if [ -f "$latch" ]; then
   # Latch payload is "used" (legacy, one field) or "used tx_mb" (with the size axis). Parse positionally
@@ -559,16 +666,24 @@ if [ -f "$latch" ]; then
   # forever — precisely the B-2 failure this header warns about, re-introduced on a monotonic axis where
   # "the condition will clear on its own" is never true.
   { [ "$rearm" = 0 ] && [ "$SIZE_REARM_MB" -gt 0 ] 2>/dev/null && [ "$(( tx_mb - last_tx ))" -ge "$SIZE_REARM_MB" ]; } && rearm=1
-  [ "$rearm" = 1 ] || abstain "latched:used=${used},last=${last_used},need=+${REARM_DELTA};tx=${tx_mb}MB,last_tx=${last_tx}MB,need=+${SIZE_REARM_MB}MB"
-fi
-
-# ── context-econ: is an exchange in flight? (wording at the URGENT tiers; SUPPRESSION at the free-win
-#    tier — see the S6 block just below) ──
-conv_age=""
-if command -v ce_last_interactive_age >/dev/null 2>&1 && [ -n "$tp" ]; then
-  case "$tp" in "~"*) tp="$HOME${tp#\~}" ;; esac
-  [ -f "$tp" ] && conv_age="$(ce_last_interactive_age "$tp")"
-  case "$conv_age" in *[!0-9]*) conv_age="" ;; esac
+  # FOURTH dimension: TIME (2026-10-05, reso pane 254). An IDLE session changes nothing the three
+  # dimensions above read: HEAD stays, fill stays, the transcript grows by a few KB an hour. Session
+  # d425afab was advised once at 46%, its recycle was held, and this latch then stayed shut for nine
+  # hours of hourly wakes — the B-2 failure once more, on the axis the free-win arm exists for. The
+  # latch file's mtime IS the last fire, so no payload field is needed and an old latch reads
+  # correctly. Idle means no interactive turn inside CONV_S: a session in conversation is held by
+  # S6 below and must not have its re-arm spent on a fire that S6 then suppresses.
+  idle_min=-1
+  if [ "$IDLE_REARM_MIN" -gt 0 ] 2>/dev/null; then
+    latch_m="$(stat -f '%m' "$latch" 2>/dev/null || stat -c '%Y' "$latch" 2>/dev/null || echo 0)"
+    case "$latch_m" in ''|*[!0-9]*) latch_m=0 ;; esac
+    [ "$latch_m" -gt 0 ] && idle_min=$(( (now - latch_m) / 60 ))
+    if [ "$rearm" = 0 ] && [ "$idle_min" -ge "$IDLE_REARM_MIN" ] \
+       && { [ -z "$conv_age" ] || [ "$conv_age" -ge "$CONV_S" ]; } 2>/dev/null; then
+      rearm=1; idle_rearm=1
+    fi
+  fi
+  [ "$rearm" = 1 ] || abstain "latched:used=${used},last=${last_used},need=+${REARM_DELTA};tx=${tx_mb}MB,last_tx=${last_tx}MB,need=+${SIZE_REARM_MB}MB;idle=${idle_min}min,need=${IDLE_REARM_MIN}min"
 fi
 
 # ── S6 CONVERSATION-HOLD — the ONE tier where an exchange in flight SUPPRESSES rather than re-words ──
@@ -674,8 +789,8 @@ log_idl fired "past-boundary" \
       --argjson otok "$over_tok" --argjson tf "$tok_fired" --argjson tk "$tok_k" --argjson tkt "$TOK_K" \
       --argjson fw "$freewin" --arg fwr "$FREEWIN_RUNG" \
       --arg gate "$gate_state" --arg dirty "$dirty_state" \
-      --arg sok "${stale_ok:-}" \
-      '{used_pct:$used,threshold:$threshold,head:$head,burn_x100:$burn,forecast_min:$fc,early:($early==1),conv_age_s:$conv,
+      --arg sok "${stale_ok:-}" --argjson ir "$idle_rearm" \
+      '{idle_rearm:($ir==1),used_pct:$used,threshold:$threshold,head:$head,burn_x100:$burn,forecast_min:$fc,early:($early==1),conv_age_s:$conv,
         stale_ok:$sok,
         over_size:($osz==1),over_rss:($orss==1),over_tok:($otok==1),tok_k:$tk,tok_k_t:$tkt,
         gate_green:$gate,dirty:$dirty,freewin:($fw==1),freewin_rung:$fwr,
@@ -723,15 +838,19 @@ if [ -n "$bgjob" ]; then
   rail_later="THEN recycle at its natural end. $rail_now"
 fi
 if [ "$size_fired" = 1 ]; then
-  reason="⚑ Boundary reached — ${why} at a committed boundary (HEAD ${head:0:8}, gate-green: ${gate_state}${dirty_note}). Neither compaction nor waiting fixes this: only a NEW SESSION resets a transcript or a process. ${rail_now} (Advisory: if you have a genuine reason to keep working, do so — this re-arms at +${REARM_DELTA}% fill or +${SIZE_REARM_MB}MB transcript growth.)"
+  reason="⚑ Boundary reached — ${why} at a committed boundary (HEAD ${head:0:8}, gate-green: ${gate_state}${dirty_note}). Neither compaction nor waiting fixes this: only a NEW SESSION resets a transcript or a process. ${rail_now} (Advisory: if you have a genuine reason to keep working, do so — this re-arms at +${REARM_DELTA}% fill or +${SIZE_REARM_MB}MB transcript growth$([ "$IDLE_REARM_MIN" -gt 0 ] 2>/dev/null && printf ', or after %s min idle' "$IDLE_REARM_MIN").)"
 elif [ "$freewin" = 1 ]; then
   # The FREE-WIN wording, deliberately not the forced-drain wording. Nothing here is urgent and nothing
   # is at risk — that is the whole point, and a drain framing ("before auto-compaction") would both
   # misstate the cause and read as alarming at 40% fill. It names the ONE command, per CLAUDE.md's
   # ♻️ Recycle row: same pane, fresh context, because everything of value is already on disk.
-  reason="⟳ FREE WIN — ${why} (HEAD ${head:0:8}, gate-green: ${gate_state}${dirty_note}). Nothing is in hand, so a successor loses nothing and you stop carrying a rotting context: ${rail_fw} (Advisory, not urgent: if you have a genuine reason to keep working, do so — this re-arms at +${REARM_DELTA}% fill.)"
+  reason="⟳ FREE WIN — ${why} (HEAD ${head:0:8}, gate-green: ${gate_state}${dirty_note}). Nothing is in hand, so a successor loses nothing and you stop carrying a rotting context: ${rail_fw} (Advisory, not urgent: if you have a genuine reason to keep working, do so — this re-arms at +${REARM_DELTA}% fill$([ "$IDLE_REARM_MIN" -gt 0 ] 2>/dev/null && printf ', or after %s min idle' "$IDLE_REARM_MIN").)"
 else
-  reason="⚑ Boundary reached — ${why} at a committed boundary (HEAD ${head:0:8}, gate-green: ${gate_state}${dirty_note}). ${rail_fill} (Advisory: if you have a genuine reason to keep working, do so — this re-arms at +${REARM_DELTA}% fill.)"
+  reason="⚑ Boundary reached — ${why} at a committed boundary (HEAD ${head:0:8}, gate-green: ${gate_state}${dirty_note}). ${rail_fill} (Advisory: if you have a genuine reason to keep working, do so — this re-arms at +${REARM_DELTA}% fill$([ "$IDLE_REARM_MIN" -gt 0 ] 2>/dev/null && printf ', or after %s min idle' "$IDLE_REARM_MIN").)"
+fi
+if [ "$idle_rearm" = 1 ]; then
+  reason="${reason}
+⟳ This is a REPEAT: the same advisory fired ${idle_min} min ago and this session has been idle since. If a recycle was tried and did not complete, run it again."
 fi
 if [ "${live_waves:-0}" -gt 0 ] 2>/dev/null; then
   reason="${reason}

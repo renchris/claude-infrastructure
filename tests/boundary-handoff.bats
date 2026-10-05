@@ -17,6 +17,7 @@ setup() {
   export CC_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
   export CC_BOUNDARY_LATCH_DIR="$BATS_TEST_TMPDIR/latch"
   export CC_CONTINUE_SENTINEL="$BATS_TEST_TMPDIR/no-such-sentinel"   # compose-guard bypass (not armed)
+  export CC_RECYCLE_RETRY_DIR="$BATS_TEST_TMPDIR/recycle-retry"       # the retry arm reads only this
   # The ✅-ledger FREE-WIN arm is OFF by default here so each threshold/size case below stays a
   # function of the axis it names. The fixture repo is clean + landed — RUNG=✅ — so leaving the arm
   # live would make every ≥35% case fire on the LEDGER and silently re-label the size-axis reason:
@@ -834,4 +835,133 @@ mk_job() { local j="$BATS_TEST_TMPDIR/cfg/jobs/abcd1234"; mkdir -p "$j"; printf 
   [ "$status" -eq 0 ]; fired "$output"
   echo "$output" | grep -q "Run the /handoff rails now to preserve state into a successor before auto-compaction." || { echo "$output"; false; }
   ! echo "$output" | grep -q "background job"
+}
+
+# ── B-2 FOURTH re-arm dimension: TIME (2026-10-05, reso pane 254) ─────────────────────────────────
+# Session d425afab was advised once at 46%, its recycle was held, and the latch then stayed shut for
+# nine hours of hourly wakes: an idle session moves neither HEAD nor fill nor transcript size. The
+# latch file's mtime is the last fire, so the tests age it instead of sleeping.
+age_latch() { # $1=minutes → every latch in the fixture dir is made that old
+  local t; t="$(date -r $(( $(date +%s) - $1 * 60 )) +%Y%m%d%H%M.%S 2>/dev/null || date -d "@$(( $(date +%s) - $1 * 60 ))" +%Y%m%d%H%M.%S)"
+  find "$CC_BOUNDARY_LATCH_DIR" -type f -exec touch -t "$t" {} +
+}
+
+@test "[RED] IDLE re-arm: an unchanged session is advised AGAIN once IDLE_REARM_MIN has passed, and is told it is a repeat" {
+  mk_btel i1 75
+  run drive i1; fired "$output"
+  run drive i1; [ -z "$output" ]                               # same fill, seconds later → latched
+  tail -1 "$CC_IDL" | jq -e '.reason | test("idle=0min,need=30min$")' >/dev/null
+  age_latch 31
+  run drive i1; fired "$output"
+  echo "$output" | grep -q "This is a REPEAT"
+  tail -1 "$CC_IDL" | jq -e '.idle_rearm == true' >/dev/null
+  run drive i1; [ -z "$output" ]                               # the re-fire re-stamped the latch
+}
+
+@test "NEGATIVE CONTROL: one minute short of IDLE_REARM_MIN stays latched" {
+  mk_btel i2 75
+  run drive i2; fired "$output"
+  age_latch 29
+  run drive i2; [ -z "$output" ]
+  tail -1 "$CC_IDL" | jq -e '.reason | test("^latched:")' >/dev/null
+}
+
+@test "KILL SWITCH: CC_BOUNDARY_IDLE_REARM_MIN=0 never re-arms on time" {
+  mk_btel i3 75
+  run drive i3; fired "$output"
+  age_latch 600
+  CC_BOUNDARY_IDLE_REARM_MIN=0 run drive i3; [ -z "$output" ]
+}
+
+@test "IDLE means idle: a human turn inside CONV_S holds the time re-arm (the fill re-arm is untouched)" {
+  mk_btel i4 75
+  run drive i4; fired "$output"
+  age_latch 120
+  run drive i4 "$(mk_btx 100)"; [ -z "$output" ]               # 100 s < CONV_S 900 → in conversation
+  mk_btel i4 86
+  run drive i4 "$(mk_btx 100)"; fired "$output"                # +11% still re-arms, as before
+}
+
+@test "[RED] THE INCIDENT: a ✅ session idle at 46% is re-advised FREE WIN on its next hourly wake" {
+  export CC_BOUNDARY_T_FREEWIN=35
+  mk_btel i5 46
+  run drive i5; fired "$output"; echo "$output" | grep -q "FREE WIN"
+  run drive i5; [ -z "$output" ]
+  age_latch 55                                                 # the watcher's 3300 s timeout wake
+  run drive i5; fired "$output"
+  echo "$output" | grep -q "FREE WIN"
+  echo "$output" | grep -q "or after 30 min idle"
+}
+
+# ── RECYCLE RETRY: the ticket a held self-recycle leaves (scripts/handoff-fire.sh) ────────────────
+mk_ticket() { # $1=sid $2=held-age-s $3=job pids csv|- [$4=attempts] [$5=advised] [$6=prompt file]
+  mkdir -p "$CC_RECYCLE_RETRY_DIR"
+  jq -nc --arg sid "$1" --argjson at "$(( $(date +%s) - $2 ))" --arg pids "$3" \
+    --argjson n "${4:-1}" --argjson adv "${5:-0}" --arg pf "${6:-}" \
+    '{sid:$sid,pane:"254",held_at:$at,why:"its background jobs are not watcher-only",job_pids:$pids,prompt_file:$pf,attempts:$n,advised:$adv}' \
+    > "$CC_RECYCLE_RETRY_DIR/$1.json"; }
+dead_pid() { ( exit 0 ) & local p=$!; wait "$p" 2>/dev/null || true; printf '%s' "$p"; }
+
+@test "[RED] RETRY: the holding job has exited → the next Stop says to re-run the recycle, once" {
+  local pf="$BATS_TEST_TMPDIR/brief.md"; echo brief > "$pf"
+  mk_ticket r1 600 "$(dead_pid)" 1 0 "$pf"
+  run drive r1 "$(mk_btx 5000)"                                # no telemetry at all: the arm needs none
+  [ "$status" -eq 0 ]; fired "$output"
+  echo "$output" | grep -q "RECYCLE RETRY"
+  echo "$output" | grep -q "handoff-fire.sh --recycle --prompt-file $pf"
+  [ "$(jq -r '.advised' "$CC_RECYCLE_RETRY_DIR/r1.json")" = 1 ]
+  tail -1 "$CC_IDL" | jq -e '.disposition=="fired" and .reason=="recycle-retry"' >/dev/null
+  run drive r1 "$(mk_btx 5000)"; [ -z "$output" ]              # asked once per held attempt
+  [ -f "$CC_RECYCLE_RETRY_DIR/r1.json" ]
+}
+
+@test "NEGATIVE CONTROL: while the holding job is ALIVE the ticket waits — then fires when it exits" {
+  sleep 60 3>&- & local jp=$!
+  mk_ticket r2 600 "$jp"
+  run drive r2 "$(mk_btx 5000)"; [ -z "$output" ]
+  tail -1 "$CC_IDL" | jq -e --arg p "keep:job-alive:$jp" '.recycle_retry == $p' >/dev/null
+  [ "$(grep -c . "$CC_IDL")" = 1 ]                             # one IDL row per Stop (B-3)
+  kill "$jp" 2>/dev/null || true; wait "$jp" 2>/dev/null || true
+  run drive r2 "$(mk_btx 5000)"; fired "$output"
+}
+
+@test "RETRY with no job to watch waits out the backoff, then asks" {
+  mk_ticket r3 100 -
+  run drive r3 "$(mk_btx 5000)"; [ -z "$output" ]
+  [ -f "$CC_RECYCLE_RETRY_DIR/r3.json" ]
+  mk_ticket r3 400 -
+  run drive r3 "$(mk_btx 5000)"; fired "$output"
+  echo "$output" | grep -q "Enough time has passed"
+}
+
+@test "[RED] a human turn SINCE the hold voids the ticket: nothing is asked and the ticket is deleted" {
+  mk_ticket r4 600 "$(dead_pid)"
+  run drive r4 "$(mk_btx 30)"                                  # typed 30 s ago, held 600 s ago
+  [ -z "$output" ]
+  [ ! -f "$CC_RECYCLE_RETRY_DIR/r4.json" ]
+  tail -1 "$CC_IDL" | jq -e '.recycle_retry | test("^drop:operator-turn-since-hold")' >/dev/null
+}
+
+@test "BOUNDED: past CC_RECYCLE_RETRY_MAX holds, and past the TTL, the ticket is dropped unasked" {
+  mk_ticket r5 600 "$(dead_pid)" 4
+  run drive r5 "$(mk_btx 5000)"; [ -z "$output" ]
+  [ ! -f "$CC_RECYCLE_RETRY_DIR/r5.json" ]
+  mk_ticket r6 30000 "$(dead_pid)"
+  run drive r6 "$(mk_btx 50000)"; [ -z "$output" ]
+  [ ! -f "$CC_RECYCLE_RETRY_DIR/r6.json" ]
+}
+
+@test "an UNREADABLE transcript cannot show that nobody typed: the ticket is kept and nothing is asked" {
+  mk_ticket r7 600 "$(dead_pid)"
+  run drive r7; [ -z "$output" ]
+  [ -f "$CC_RECYCLE_RETRY_DIR/r7.json" ]
+}
+
+@test "RETRY yields to an armed session-continue loop, and CC_RECYCLE_RETRY=off never reads the ticket" {
+  mk_ticket r8 600 "$(dead_pid)"
+  : > "$BATS_TEST_TMPDIR/armed"
+  CC_CONTINUE_SENTINEL="$BATS_TEST_TMPDIR/armed" run drive r8 "$(mk_btx 5000)"; [ -z "$output" ]
+  CC_RECYCLE_RETRY=off run drive r8 "$(mk_btx 5000)"; [ -z "$output" ]
+  [ "$(jq -r '.advised' "$CC_RECYCLE_RETRY_DIR/r8.json")" = 0 ]
+  run drive r8 "$(mk_btx 5000)"; fired "$output"               # the same ticket, nothing in the way
 }
