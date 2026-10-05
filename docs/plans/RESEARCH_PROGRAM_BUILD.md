@@ -24,7 +24,7 @@ packet `83adb541ea19` actioned. Method version 1.1 is frozen; it changes only fr
 | B2 | S | Item 8: `research-program` skill, `/research-program` command, intake script, briefs, rubric | A2 |
 | C | S | Wave 2: items 9–13, 15, in parallel with the pilot | B1, B2 |
 | D | S (fired `fire-rp-audit-bugfix`), T inside | Audit fixes: `docs/research/upfront-method-audit-2026-10-04/REPORT.md` §3 rows 4–6 | C |
-| E | E1 S (fired `fire-rp-v12-step1`); E1b S (fired `fire-rp-v12-e1b`); E1c S (fired `fire-rp-v12-e1c`); E2 Workflow in session d8964eb2; E3 S (E3a fired `fire-rp-v12-e3a`, E3b fired `fire-rp-v12-e3b` with T inside: six teammates); E4 operator | Method v1.2 (ruling `1bf69e5c1775`): audit REPORT §3 rows 1, 2, 3, 7, plus the 9 s classifier limit (ruling `4bf73c4e55d5`) | D |
+| E | E1 S (fired `fire-rp-v12-step1`); E1b S (fired `fire-rp-v12-e1b`); E1c S (fired `fire-rp-v12-e1c`); E2 Workflow in session d8964eb2; E3 S (E3a fired `fire-rp-v12-e3a`, E3b fired `fire-rp-v12-e3b` with T inside: six teammates; E3c fired `fire-rp-v12-e3c`, L inside); E4 operator | Method v1.2 (ruling `1bf69e5c1775`): audit REPORT §3 rows 1, 2, 3, 7, plus the 9 s classifier limit (ruling `4bf73c4e55d5`) | D |
 
 A1, A2 and A3 touch disjoint files and fire concurrently. B1 and B2 fire when A2 lands. Each dispatched session leads
 its own Agent Team where it has 2+ code-writing tasks.
@@ -758,6 +758,81 @@ below 90 by what blocks them, and a priced per-decision extension on the operato
   the two build states as registered, so a new program runs rows 18 and 19. Still open, in E3a's files: the
   contract-page ceiling does not yet add §12's yield ceiling (up to 3 extra stage budgets on each of stages 3 and 5)
   or §11's Stage 9 budget, and SKILL.md's stage walk does not yet name Stage 9 or the yield rule.
+  Closed by E3c, with the briefs and the soak scheduler named under "Not built" above.
+
+#### E3c — close E3b's four gaps so a v1.2 program runs end to end — DONE 2026-10-04
+Scope (frozen): wave E3c — close those four gaps so a v1.2 program runs end to end: (1) the contract page's ceiling
+includes the §12 yield ceiling and the §11 Stage 9 budget; (2) SKILL.md's stage walk includes Stage 9 and the
+yield-stop rule, citing §11–§12, append-only with a dated v1.2 note; (3) reviewer, rater and verifier briefs for
+`round --kind built`; (4) a soak scheduler (staged plist, `cc-research job soak`, c10 migration, activation filed);
+then one end-to-end dry walk of a fixtured v1.2 program, intake → Stage 9 → certificate, by the kit's verbs only.
+Scope (grown): +`cc-research ceiling` reads the same v1.2 ceiling as the contract page (it printed the §6.1 figure
+alone, so the two disagreed); +a build-state render drops the research lines' "Built –" placeholder (the walk
+showed the render saying "Built –" and "Built: certified" together).
+- Locus: S (fired `fire-rp-v12-e3c`), L inside. Why L: four items of 25–150 lines each plus a walk that has to join
+  them, and E3b measured the capacity gate refusing 8 of 10 spawns.
+- **1, the ceiling.** `intake.v12_ceiling` (one computation, read by the contract page and `cc-research ceiling`):
+  the §6.1 ceiling + (4 − 1) × the stage 3 and 5 budgets (§12's price: lite 5.25, standard 12, full 18) + Stage 9
+  at the §6.5 overrun line (1.5 × 1, 2, 3 days, the way §6.1 counts stages 1–6). Lite reads "about 18.75 days
+  (12 + 5.25 + 1.5)", standard 43; the 24 h soak is printed as elapsed time outside the ceiling. A 1.1 frame is
+  unchanged. Tests: research-program-intake 2 of 3 new cases red (the third is the 1.1 control) → 1..24;
+  cc-research-core's v1.2 ceiling case red → green.
+- **2, the skill.** SKILL.md gains, nothing deleted (one line's full stop became a semicolon): a dated note on
+  ruling `1bf69e5c1775`; the `extend-decision` signature among the rails; a section "Stages 3 and 5 end on yield;
+  decisions below 90 are tagged" (§12.1–12.3 with the verbs `yield show/find`, `budget end`, `menu`); a Stage 8
+  note (19 rows, the split forecast); and "Stage 9 — certify the built artifact (§11)" (built-freeze, the four
+  instruments, built rounds with the new briefs, built-run, caps). The test reads K, the built-round caps and the
+  ceilings from `kit.PROFILES`/`CAPS`, so a constant change turns it red.
+- **3, the briefs.** `briefs/built-reviewer.md` (8 code-native lenses: acceptance, harness, as-built-env,
+  time-boundary, failure-path, plan-drift, safety, operator-intent; every finding carries a `test_cmd` that fails
+  on the snapshot; the panel shape is the one `courier.extract_panel` reads), `built-verifier.md` (runs the
+  `test_cmd` with an empty `HOME`, `PATH=/usr/bin:/bin`, `/bin/bash` 3.2; CONFIRMED / REFUTED / NO-REPRO, NO-REPRO
+  being the kit's `rejected-no-repro`), `built-rater.md` (RUBRIC.md's seven clauses verbatim, unchanged, plus "no
+  failing test, never material"; a surviving mutant meets clause b). Tests: research-program-briefs 6 of 15 red
+  (the signoff case now expects every `operator_sign.ACTIONS`) → 1..15, with a mutation control on the lens table.
+- **4, the soak scheduler.** `cc-research job soak` (lib/cli_jobs.py): one `built soak sample` per program in
+  build-certifying only; a failing sample fails the pass and names the check. The shared runner
+  `research-job.sh` accepts `soak`; `launchd/staged/com.claude.research-soak.plist`, hourly at :17, declared
+  `staged` in `launchd/fleet.manifest` (cc-fleet's label count 49 → 50, reason beside it). Migration
+  `0058-research-soak-job.sh`, c10, 0051's shape for one label. Not a sixth job in 0051: 0051 is already run and
+  ledgered (its five labels are loaded on this box), and the converger files a c10 step once, so an added job would
+  never reach the operator. Activation filed: backlog **`0881ed9c8371`**
+  (`bash ~/Development/claude-infrastructure/migrations/0058-research-soak-job.sh`). Tests: research-jobs 9 new
+  cases all red → 1..22 under `/bin/bash` 3.2.57 (dry-run, refusal before converge, install and read-back with a
+  stub launchctl, re-run no-op, shellcheck bare).
+- **The dry walk** (`tests/fixtures/research-kit/walk_v12.sh`, re-run by `tests/research-kit-v12-walk.bats` 1..6;
+  full output `docs/research/research-program-v12-walk-2026-10-04/WALK.md`). One fixtured registry, stub courier,
+  no vendor, no live pilot. Part A, a fresh program `walk` by verbs: `intake.py init` stamps 1.2; the contract page
+  and `cc-research ceiling` both print about 18.75 days; stage 3 with a failing probe reads "keep probing · 1 finds
+  in the last 6 probes, 24 per day × escape cost 3 d = 72" and `budget end` refuses (exit 2); six quiet probes later
+  "stop: the stage is quiet … 0 finds" and `budget end` records it. Part B: stages 2–8 cannot be walked by verbs
+  without vendors and the operator's signature, so the known-good fixture `demo` stands in at a signed research
+  certificate, its hand-written Stage 9 records deleted; then by verbs only: `built-freeze` → build-certifying; BF-1
+  `material open` (its test failed), `finding fix` exits 1 before the fix; the fix commit, `--refreeze`, BF-1 `fixed,
+  its repro passes`; BF-2 `rejected-no-repro`; `mutate` 10 killed, 0 survived; two as-built contact runs under
+  `/bin/bash 3.2.57(1)-release`; `cc-research job soak` 25 times an hour apart; built rounds b1 and b2 quiet; and
+  `gate.sh built-run`:
+
+  ```
+  20. Built snapshot   PASS   snapshot …; 2 build wave(s) named, all recorded done
+  21. Repro            PASS   1 material finding(s), all fixed and re-run green; 1 rejected-no-repro
+  22. Harness mutation PASS   kill rate 10/10 = 100%; 0 equivalent, 0 invalid
+  23. As-built contact PASS   1 as-built probe(s) and 1 acceptance row(s) run as built
+  24. Soak             PASS   25 sample(s) over 24.0h after 0 restart(s)
+  25. Built rounds     PASS   stop quiet after 2 counted built round(s) of 3
+  BUILD-CERTIFIED demo
+  Before implementation signoff: 1 material change observed (forecast about 3.8)
+  After implementation signoff: forecast about 0.2; at most 3 at 95% (mutant kill rate 10 of 10, lower bound 0.72; …)
+  ```
+- Learnings:
+  - The Edit tool's format hook reflowed all of `intake.py` (the ruff learning again); edits to unformatted kit
+    files go through a Bash-run Python replace so the diff stays the change.
+  - The walk found what no unit suite could: each render suite fixtured one state, so "Built –" beside "Built:
+    certified" only showed when one program passed through both. Keep the walk in the gate.
+  - `rm -rf` is refused in fired sessions; a walk that needs a clean directory takes a fresh `mktemp -d` per run.
+- Open, outside this scope: §11 says "before you sign the implementation", and the kit has no implementation
+  signature (`operator_sign.ACTIONS` has none); SKILL.md says signing it is the operator's. Rows 1–19 were not
+  re-run in the walk (by §11 they are not re-run at Stage 9; the fixture's research certificate stands in).
 
 #### E4 — re-sign the pilot contract (v1.2 (d), operator half) — after E3
 - Operator: re-render TM2's contract on the measured forecast and re-sign it, with rulings 1 and 4 re-presented at
