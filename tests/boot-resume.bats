@@ -36,10 +36,24 @@ setup() {
   export CC_NOTIFY_BIN="$BATS_TEST_TMPDIR/stub-notify"
   cat > "$CC_NOTIFY_BIN" <<'SH'
 #!/bin/bash
+# A restore note (--mailbox-only, W3 P4) is not a page: it gets its own log, so the page counts and
+# the page greps stay about pages.
+case " $* " in *" --mailbox-only "*) printf '%s\n' "$*" >> "$0.notes"; [ -f "$0.notes-fail" ] && exit 3; exit 0 ;; esac
 echo "NOTIFY_CALL" >> "$0.calls"
 printf '%s\n' "$*" >> "$0.log"
 SH
   chmod +x "$CC_NOTIFY_BIN"
+  # W3 P4: restore v2 reads each prompt back from the transcript for up to 90 s and falls back to
+  # cc-wake. No wait in a test, and a stub in place of the real cc-wake (a file .rc sets its exit).
+  export CC_RESTORE_CONFIRM_S=0 CC_RESTORE_PASTE_SETTLE_S=0
+  export CC_WAKE_BIN="$BATS_TEST_TMPDIR/stub-wake"
+  cat > "$CC_WAKE_BIN" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >> "$0.log"
+exit "$(cat "$0.rc" 2>/dev/null || echo 1)"
+SH
+  chmod +x "$CC_WAKE_BIN"
+  unset CC_RESTORE_NUDGE CC_RESTORE_PASTE_CMD
 
   # stub cc-backlog: echo a hex id + log the argv. MANDATORY, not optional — resolve_bin's ladder
   # reaches the REPO's own bin/cc-backlog from $(dirname $0)/../bin, so an unstubbed run would file
@@ -192,6 +206,8 @@ reg_entry() {
 # The keepalive is DETACHED into its own session (launchd reaps the job's group on exit), so its
 # log lands asynchronously — wait for it rather than racing it.
 keepalive_log() { local i=0; while [ ! -s "$CC_KEEPALIVE_BIN.markers" ] && [ "$i" -lt 30 ]; do sleep 0.1; i=$((i + 1)); done; cat "$CC_KEEPALIVE_BIN.markers" 2>/dev/null; }
+# Tier-1 notes only: the fallback also puts a PROMPT in the inbox, and a prompt carries a restore ref.
+notes_count() { grep -v '(restore ref R-' "$CC_NOTIFY_BIN.notes" 2>/dev/null | grep -c . || true; }
 notify_count() { [ -f "$CC_NOTIFY_BIN.calls" ] && wc -l < "$CC_NOTIFY_BIN.calls" | tr -d ' ' || echo 0; }
 launch_count() { [ -f "$CC_RESUME_LAUNCH_BIN.log" ] && wc -l < "$CC_RESUME_LAUNCH_BIN.log" | tr -d ' ' || echo 0; }
 marker() { cat "$CC_BOOT_RESUME_STATE_DIR/last-boot-epoch" 2>/dev/null || echo ""; }
@@ -886,7 +902,9 @@ v2_fleet() { # a dead kitty's heartbeat of e1 (claude-next) and e2 (claude-terti
   [ "$(printf '%s\n' "$r1" | awk -F'\t' '{ print $1, $4, $6, $7, $11 }')" = "next3 feat-tx claude-opus-5-5 high plan" ]
   # e2 has no transcript: the heartbeat's reading stands, branch included.
   [ "$(printf '%s\n' "$r2" | awk -F'\t' '{ print $1, $4, $6, $7, $11 }')" = "next3 feat-e2 claude-sonnet-5-5 medium default" ]
-  [ "$(printf '%s\n' "$r1" | cut -f10)" = $'\037' ]            # prompt_file is P4's: padded, never empty
+  # Column 10: the stub classifier calls both INTERRUPTED, so each row carries its own prompt file.
+  [ "$(printf '%s\n' "$r1" | cut -f10)" = "$CC_BOOT_RESUME_STATE_DIR/events/1784805000/prompts/e1.txt" ]
+  [ -s "$(printf '%s\n' "$r2" | cut -f10)" ]
   grep -qx -- '--desktops --restore' "$CC_RESUME_LAYOUT_BIN.log"
   grep -qx off "$CC_RESUME_LAYOUT_BIN.loadterm"                # restore capacity mode: no per-launch load term
 }
@@ -960,7 +978,7 @@ v2_fleet() { # a dead kitty's heartbeat of e1 (claude-next) and e2 (claude-terti
   grep -q 'stayed over 6 for the whole wait' "$CC_NOTIFY_BIN.log"
 }
 
-@test "v2 headroom: a row on an account at its weekly limit is restored, listed, and never reaches the keepalive" {
+@test "v2 headroom: a row on an account at its weekly limit is restored, noted, listed, and never gets a prompt" {
   v2_fleet
   export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/stub-accounts"
   cat > "$CC_ACCOUNTS_BIN" <<'SH'
@@ -976,7 +994,12 @@ SH
   [ "$(grep -c . "$CC_ACCOUNTS_BIN.log")" -eq 1 ]
   row_of "$CC_RESUME_LAYOUT_BIN.rows" e1 | grep -q .           # still restored
   [ "$(cat "$CC_BOOT_RESUME_STATE_DIR/events/1784805000/exhausted")" = e1 ]
-  [ "$(keepalive_log)" = /x/e2 ]                               # both INTERRUPTED; only e2 is nudged
+  # Both INTERRUPTED; only e2 gets a prompt (column 10). e1's account cannot run the turn.
+  [ "$(row_of "$CC_RESUME_LAYOUT_BIN.rows" e1 | cut -f10)" = $'\037' ]
+  [ "$(row_of "$CC_RESUME_LAYOUT_BIN.rows" e2 | cut -f10)" = "$CC_BOOT_RESUME_STATE_DIR/events/1784805000/prompts/e2.txt" ]
+  [ ! -e "$CC_BOOT_RESUME_STATE_DIR/events/1784805000/prompts/e1.txt" ]
+  [ "$(notes_count)" -eq 2 ]                                   # the note tier still covers e1
+  [ ! -e "$CC_KEEPALIVE_BIN.log" ]                             # restore v2 starts no keepalive
   grep -q '1 sit on account(s) at their weekly limit (next)' "$CC_NOTIFY_BIN.log"
 }
 
@@ -988,6 +1011,11 @@ SH
   [ "$status" -eq 0 ]
   [ "$(awk -F'\t' '{ print NF }' "$CC_RESUME_LAYOUT_BIN.rows")" -eq 5 ]
   grep -qx -- '--desktops' "$CC_RESUME_LAYOUT_BIN.log"
+  # Outside --event and restore-v2 nothing of P4 runs: the keepalive as today, no note, no WAKE-LOST.
+  [ "$(keepalive_log)" = /x/a ]
+  [ ! -e "$CC_NOTIFY_BIN.notes" ]
+  ! grep -q -- '--wake-lost\|--lost-json' "$CC_RESUME_CLASSIFY_BIN.log" || false
+  grep -q 'are being nudged to continue' "$CC_NOTIFY_BIN.log"
   grep -qx on "$CC_RESUME_LAYOUT_BIN.loadterm"
   [ ! -e "$CC_BOOT_RESUME_STATE_DIR/events" ]
   rm -rf "$CC_BOOT_RESUME_STATE_DIR" "$CC_RESUME_LAYOUT_BIN".*; stub_layout "$SUM_OK2"
@@ -1009,4 +1037,177 @@ SH
   [ "$(cat "$CC_HEARTBEAT_DIR/UUID-1/$$/hb.start")" = 1784805030 ]
   [[ "$output" == *"	t1	/x/t1	"*"TICK-ONE"* ]] || false
   [[ "$output" == *"verdict=planned rows=1 "* ]] || false
+}
+
+# ── W3 P4: recovery delivery ───────────────────────────────────────────────────────────────────────
+# Restore v2 starts no keepalive. Every row gets an inbox note before any window opens; only a row
+# with open work (INTERRUPTED or WAKE-LOST) on an account with quota gets a prompt file in column 10;
+# each prompt is read back from the transcript by sid, and one that never arrived goes to cc-wake.
+EV="1784805000"
+evdir() { printf '%s' "$CC_BOOT_RESUME_STATE_DIR/events/$EV"; }
+col10() { row_of "$CC_RESUME_LAYOUT_BIN.rows" "$1" | cut -f10; }
+# A layout stub that stands in for the launch: for each sid named in .answer it appends, to that
+# session's transcript, the user record a launch-argument prompt produces and (unless .noreply) an
+# assistant record after it. The nonce is read from the prompt file the row carries.
+stub_layout_answering() { # <summary> <sids that answer...>
+  stub_layout "$1"; shift
+  printf '%s\n' "$@" > "$CC_RESUME_LAYOUT_BIN.answer"
+  cat > "$CC_RESUME_LAYOUT_BIN" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >> "$0.log"
+[ -f "$0.notes-seen" ] || cp "$CC_NOTIFY_BIN.notes" "$0.notes-seen" 2>/dev/null
+while IFS= read -r row; do
+  [ -n "$row" ] || continue
+  printf '%s\n' "$row" >> "$0.rows"
+  sid="$(printf '%s' "$row" | cut -f2)"; pf="$(printf '%s' "$row" | cut -f10)"
+  grep -qx "$sid" "$0.answer" 2>/dev/null && [ -s "$pf" ] || continue
+  d="$HOME/.claude-next/projects/-x-$sid"; mkdir -p "$d"
+  jq -cn --arg t "$(cat "$pf")" '{type:"user",message:{content:$t}}' >> "$d/$sid.jsonl"
+  [ -f "$0.noreply" ] || echo '{"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"ok"}]}}' >> "$d/$sid.jsonl"
+done
+cat "$0.sum"
+SH
+  chmod +x "$CC_RESUME_LAYOUT_BIN"
+}
+
+@test "P4 v2: no keepalive; one note per row, written before the layout runs; a prompt only for rows with open work" {
+  v2_fleet
+  printf 'e1 AT-REST\ne2 WAKE-LOST\n' > "$CC_RESUME_CLASSIFY_BIN.verdicts"
+  stub_layout_answering "$SUM_OK2" e2
+  run /bin/bash "$SCRIPT" --event "$EV" --kind crash
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ ! -e "$CC_KEEPALIVE_BIN.log" ]
+  # The classifier was asked for WAKE-LOST and for the lost items.
+  grep -q -- "--wake-lost --lost-json $(evdir)/lost.json" "$CC_RESUME_CLASSIFY_BIN.log"
+  # One note each, through --mailbox-only --no-wake, already written when the layout started.
+  [ "$(grep -c . "$CC_RESUME_LAYOUT_BIN.notes-seen")" -eq 2 ]
+  grep -q -- '^--mailbox-only --no-wake --from boot-resume e1 \[restore\] Kitty was lost in a crash at ' "$CC_NOTIFY_BIN.notes"
+  grep -q -- '^--mailbox-only --no-wake --from boot-resume e2 \[restore\] ' "$CC_NOTIFY_BIN.notes"
+  [ "$(sort "$(evdir)/noted" | tr '\n' ' ')" = "e1 e2 " ]
+  # The at-rest row gets no prompt: the 2026-08-24 ruling. The WAKE-LOST row gets one, with a nonce.
+  [ "$(col10 e1)" = $'\037' ]
+  [ "$(col10 e2)" = "$(evdir)/prompts/e2.txt" ]
+  grep -q '(restore ref R-[0-9a-f]\{8\})' "$(evdir)/prompts/e2.txt"
+  ! grep -q '/limit-recover now' "$(evdir)/prompts/e2.txt" || false     # that order is INTERRUPTED's
+  # Read back from the transcript by sid, with no map line for e2 anywhere (SUM_OK2 carries none).
+  grep -q "sid=e2 nonce=R-[0-9a-f]* user=1 assistant=1 confirmed" "$(evdir)/prompt.log"
+  [ ! -e "$CC_WAKE_BIN.log" ]
+  grep -q '0 were cut off mid-turn and 1 were at rest with work that died' "$CC_NOTIFY_BIN.log"
+  grep -q '2 got an inbox note' "$CC_NOTIFY_BIN.log"
+  grep -q '"wake_lost":1,"noted":2,"note_failed":0,"prompts":1,"prompts_confirmed":1' "$CC_IDL"
+}
+
+@test "P4 v2: an INTERRUPTED row's prompt carries the /limit-recover order; CC_RESTORE_NUDGE=off writes notes and no prompt" {
+  v2_fleet
+  stub_layout "$SUM_OK2"
+  run /bin/bash "$SCRIPT" --event "$EV" --kind restart
+  [ "$status" -eq 0 ]
+  grep -q 'Kitty was restarted at .* Your last turn was cut off mid-way. Run /limit-recover now\.' "$(evdir)/prompts/e1.txt"
+  rm -rf "$CC_BOOT_RESUME_STATE_DIR" "$CC_RESUME_LAYOUT_BIN".* "$CC_NOTIFY_BIN".* "$CC_IDL" "$CC_WAKE_BIN".*
+  stub_layout "$SUM_OK2"
+  CC_RESTORE_NUDGE=off run /bin/bash "$SCRIPT" --event "$EV" --kind restart
+  [ "$status" -eq 0 ]
+  [ "$(notes_count)" -eq 2 ] && [ "$(grep -c . "$CC_NOTIFY_BIN.notes")" -eq 2 ] || false
+  [ "$(col10 e1)" = $'\037' ] && [ "$(col10 e2)" = $'\037' ] || false
+  [ ! -d "$(evdir)/prompts" ]
+  [ ! -e "$CC_WAKE_BIN.log" ] && [ ! -e "$CC_KEEPALIVE_BIN.log" ] || false
+  grep -q 'CC_RESTORE_NUDGE=off: notes only' "$CC_NOTIFY_BIN.log"
+}
+
+@test "P4 v2: a prompt that never reached the transcript goes to cc-wake with the prompt in the inbox; rc 0 only then counts" {
+  v2_fleet
+  printf 'e1 AT-REST\n' > "$CC_RESUME_CLASSIFY_BIN.verdicts"       # e2 stays INTERRUPTED
+  stub_layout "$SUM_OK2"                                           # nothing answers
+  echo 0 > "$CC_WAKE_BIN.rc"
+  run /bin/bash "$SCRIPT" --event "$EV" --kind crash
+  [ "$status" -eq 0 ]
+  grep -qx -- 'e2 --wait 60 --from boot-resume' "$CC_WAKE_BIN.log"
+  # The prompt went into the inbox first (cc-wake wakes only a session with unread mail): 2 notes + 1.
+  [ "$(grep -c . "$CC_NOTIFY_BIN.notes")" -eq 3 ]
+  tail -n 1 "$CC_NOTIFY_BIN.notes" | grep -q -- '--mailbox-only --no-wake --from boot-resume e2 .*(restore ref R-'
+  grep -q 'sid=e2 .* user=0 assistant=0 fallback verdict=woken via=cc-wake' "$(evdir)/prompt.log"
+  grep -q '0 confirmed in the transcript, 1 delivered by the fallback' "$CC_NOTIFY_BIN.log"
+  [ ! -e "$CC_KEEPALIVE_BIN.log" ]
+}
+
+@test "P4 v2: cc-wake refusing and no verified paste ⇒ unconfirmed, logged and paged; nothing is typed" {
+  v2_fleet
+  printf 'e1 AT-REST\n' > "$CC_RESUME_CLASSIFY_BIN.verdicts"
+  stub_layout "$SUM_OK2"
+  run /bin/bash "$SCRIPT" --event "$EV" --kind crash               # the wake stub exits 1: a gate refused
+  [ "$status" -eq 0 ]
+  grep -q 'sid=e2 .* unconfirmed verdict=unconfirmed via=none why=cc-wake-rc-1,no-verified-paste-entry-point' "$(evdir)/prompt.log"
+  grep -q '1 prompt(s) never reached their session' "$CC_NOTIFY_BIN.log"
+  grep -q '"prompts_unconfirmed":1' "$CC_IDL"
+  [ ! -e "$CC_KEEPALIVE_BIN.log" ]
+}
+
+@test "P4 v2: the verified paste runs only after cc-wake failed, on the session's one registry pane, and its rc 0 alone is not submitted" {
+  v2_fleet
+  printf 'e1 AT-REST\n' > "$CC_RESUME_CLASSIFY_BIN.verdicts"
+  stub_layout "$SUM_OK2"
+  mkdir -p "$CC_REGISTRY_DIR"
+  printf '{"paneUUID":"77","session_id":"e2","pid":1}' > "$CC_REGISTRY_DIR/77.json"
+  export CC_RESTORE_PASTE_CMD="$BATS_TEST_TMPDIR/stub-paste"
+  cat > "$CC_RESTORE_PASTE_CMD" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >> "$0.log"
+[ -f "$CC_WAKE_BIN.log" ] && echo wake-ran-first >> "$0.log"
+[ -f "$0.submit" ] || exit 0
+d="$HOME/.claude-next/projects/-x-e2"; mkdir -p "$d"
+jq -cn --arg t "$(cat "$2")" '{type:"user",message:{content:$t}}' >> "$d/e2.jsonl"
+echo '{"type":"assistant","message":{"model":"claude-opus-5-5","content":[]}}' >> "$d/e2.jsonl"
+SH
+  chmod +x "$CC_RESTORE_PASTE_CMD"
+  run /bin/bash "$SCRIPT" --event "$EV" --kind crash
+  [ "$status" -eq 0 ]
+  grep -qx -- "77 $(evdir)/prompts/e2.txt" "$CC_RESTORE_PASTE_CMD.log"
+  grep -qx wake-ran-first "$CC_RESTORE_PASTE_CMD.log"
+  # The paste stub exited 0 and nothing reached the transcript: that is NOT a submit.
+  grep -q 'sid=e2 .* unconfirmed verdict=unconfirmed .*paste-rc-0' "$(evdir)/prompt.log"
+  rm -rf "$CC_BOOT_RESUME_STATE_DIR" "$CC_RESUME_LAYOUT_BIN".* "$CC_NOTIFY_BIN".* "$CC_IDL" "$CC_WAKE_BIN.log" "$CC_RESTORE_PASTE_CMD.log"
+  stub_layout "$SUM_OK2"; touch "$CC_RESTORE_PASTE_CMD.submit"
+  run /bin/bash "$SCRIPT" --event "$EV" --kind crash
+  [ "$status" -eq 0 ]
+  grep -q 'sid=e2 .* fallback verdict=pasted via=paste-verified' "$(evdir)/prompt.log"
+}
+
+@test "P4 v2: a prompt that was submitted but got no reply is reported and never sent twice" {
+  v2_fleet
+  printf 'e1 AT-REST\n' > "$CC_RESUME_CLASSIFY_BIN.verdicts"
+  stub_layout_answering "$SUM_OK2" e2; touch "$CC_RESUME_LAYOUT_BIN.noreply"
+  echo 0 > "$CC_WAKE_BIN.rc"
+  run /bin/bash "$SCRIPT" --event "$EV" --kind crash
+  [ "$status" -eq 0 ]
+  grep -q 'sid=e2 .* user=1 assistant=0 submitted-no-reply' "$(evdir)/prompt.log"
+  [ ! -e "$CC_WAKE_BIN.log" ]
+  grep -q '1 prompt(s) were submitted but no turn ran' "$CC_NOTIFY_BIN.log"
+}
+
+@test "P4 v2: a later round of the same event repeats no note and reuses the prompt's nonce" {
+  v2_fleet
+  export CC_RESTORE_NOW=1784805060                                 # inside the event's deadline
+  stub_layout "$SUM_MAP1"                                          # round 1: e1 opens, e2 is shed
+  run /bin/bash "$SCRIPT" --event "$EV" --kind crash
+  [ "$status" -eq 0 ]
+  [ "$(notes_count)" -eq 2 ]
+  n1="$(grep -o 'R-[0-9a-f]*' "$(evdir)/prompts/e2.txt")"
+  : > "$CC_RESUME_LAYOUT_BIN.rows"; stub_layout "$SUM_OK1"
+  run /bin/bash "$SCRIPT" --event "$EV" --kind crash               # round 2: only e2 goes back
+  [ "$status" -eq 0 ]
+  [ "$(cut -f2 "$CC_RESUME_LAYOUT_BIN.rows")" = e2 ]
+  [ "$(notes_count)" -eq 2 ]                                       # still one each
+  [ "$(grep -o 'R-[0-9a-f]*' "$(evdir)/prompts/e2.txt")" = "$n1" ]
+  [ "$(col10 e2)" = "$(evdir)/prompts/e2.txt" ]
+}
+
+@test "P4 v2: a note cc-notify refuses is counted and paged, and the restore still runs" {
+  v2_fleet
+  touch "$CC_NOTIFY_BIN.notes-fail"
+  stub_layout "$SUM_OK2"
+  run /bin/bash "$SCRIPT" --event "$EV" --kind crash
+  [ "$status" -eq 0 ]
+  [ "$(awk -F'\t' '{ print NF }' "$CC_RESUME_LAYOUT_BIN.rows" | sort -u)" = 11 ]
+  [ ! -s "$(evdir)/noted" ]
+  grep -q '2 inbox note(s) could not be written' "$CC_NOTIFY_BIN.log"
 }

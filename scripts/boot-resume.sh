@@ -27,7 +27,9 @@
 #        resume — check each session's ownership (boot-resume-launch.sh --check-only), classify it
 #                 (bin/cc-resume-classify.py: INTERRUPTED / AT-REST / UNKNOWN), open them all through
 #                 cc-resume-layout.sh --desktops (<=4 panes per native-fullscreen OS window, one
-#                 macOS Desktop each), start the keepalive scoped to the INTERRUPTED rows only, then
+#                 macOS Desktop each), start the keepalive scoped to the INTERRUPTED rows only (under
+#                 restore v2: no keepalive — an inbox note per session and a launch-argument prompt
+#                 for the rows with open work, see step 2b), then
 #                 page a summary. AT-REST and UNKNOWN sessions are restored and never nudged — they
 #                 stopped at a pause point on purpose. Operator opts in.
 #   3. ACT + LOG: always emit ONE {fired|abstained|failed} IDL record (abstention-logged, B-3). A
@@ -149,13 +151,21 @@ _hbl="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/lib/restore-heartbeat.sh"
 # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
 . "$_hbl" 2>/dev/null || echo "boot-resume: ⚠ cannot source $_hbl — no heartbeat this run" >&2
 heartbeat() { command -v hb_tick >/dev/null 2>&1 || return 0; hb_tick >/dev/null || true; }
+# Recovery delivery (restore v2 only). Missing is loud, not fatal: the fleet still comes back, with
+# no note and no prompt, and the page says so.
+_rnl="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/lib/restore-note.sh"
+[ -f "$_rnl" ] || _rnl="$HOME/.claude/scripts/lib/restore-note.sh"
+# shellcheck source=lib/restore-note.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+. "$_rnl" 2>/dev/null || echo "boot-resume: ⚠ cannot source $_rnl — no restore notes this run" >&2
 NOTIFY="$(resolve_bin "${CC_NOTIFY_BIN:-}" cc-notify)"
 # The addressless fallback for a delta with no desk role (see step 3 in the header). Resolved
 # here rather than at the use site so an unresolvable cc-backlog is a KNOWN-empty string on the
 # one path that reads it, never a bare name hitting the launchd PATH (/usr/bin:/bin).
 BACKLOG="$(resolve_bin "${CC_BACKLOG_BIN:-}" cc-backlog)"
 LAUNCH="$(resolve_bin "${CC_RESUME_LAUNCH_BIN:-}" boot-resume-launch.sh boot-resume-launch.sh)"
-# The batch opener (2x2 per native-fullscreen Desktop) and the nudge classifier. Both live in bin/;
+# The batch opener (by default a 2x2 per native-fullscreen Desktop; under --restore, which restore
+# v2 passes, one row of up to 6 panes per window) and the nudge classifier. Both live in bin/;
 # resolve_bin's ../bin rung finds them from scripts/. An absent layout falls back to one window per
 # session through $LAUNCH (the pre-2026-09-30 path); an absent classifier makes every row UNKNOWN,
 # which is the fail-safe direction (restored, never nudged).
@@ -852,7 +862,8 @@ mark_processed() {
 if [ "$PLAN_ONLY" = 1 ]; then
   echo "boot-resume: plan event=${EVENT} kind=${EVENT_KIND} source=${SOURCE_LABEL:-none} anchor=${ANCHOR} sessions=${n_open} retired=${n_retired}"
   # The 11 row-contract columns the layout would get, '-' for an empty cell. Column 10 (prompt_file)
-  # stays empty here: P4 writes a prompt only for a classified INTERRUPTED row.
+  # stays empty here: a prompt is written only for a row classified INTERRUPTED or WAKE-LOST, and a
+  # plan runs no classifier.
   echo "boot-resume: plan columns=alias sid cwd branch label model effort group slot prompt_file permission_mode · account from the newest transcript for ${n_acct_tx}/${n_open}"
   dash() { if [ -n "$1" ]; then printf '%s' "$1"; else printf -; fi; }
   n_plan=0
@@ -905,6 +916,10 @@ n_rest=0
 opener=""       # desktops (cc-resume-layout --desktops) | windows (one launcher window per session)
 desk_windows=0; desk_fs_ok=0; desk_fs_bad=0
 nudged=""       # the keepalive's markers: cwds of INTERRUPTED sessions only
+n_wake=0        # restore v2: at rest, but with work open at the cut that died with the process
+n_noted=0; n_note_fail=0   # restore v2: inbox notes written this round / refused by cc-notify
+n_prompt=0; n_prompt_ok=0; n_prompt_fb=0; n_prompt_noreply=0; n_prompt_bad=0   # launch-argument prompts
+PROMPTED=""     # restore v2: "<sid>\t<prompt file>\t<nonce>" per row that got a prompt
 kv() { printf '%s\n' "$2" | tr ' ' '\n' | sed -n "s/^$1=//p" | head -1; }   # <key> <summary-line>
 num() { case "$1" in ''|*[!0-9]*) printf 0 ;; *) printf '%s' "$1" ;; esac; }
 if [ "$MODE" = "resume" ]; then
@@ -1013,16 +1028,76 @@ EOF
   if [ "$n_adm" -gt 0 ] && [ -n "$CLASSIFY" ] && [ -x "$CLASSIFY" ]; then
     CL_ARGS=()
     [ "$SOURCE" != registry ] && CL_ARGS=(--boot-epoch "$ANCHOR")
+    if [ "$RESTORE_V2" = 1 ]; then
+      # WAKE-LOST and the lost-items file are restore v2's; without the flag the classifier's output
+      # is what it always was. The heartbeat dirs say what was live under each session at the cut.
+      CL_ARGS[${#CL_ARGS[@]}]=--wake-lost
+      CL_ARGS[${#CL_ARGS[@]}]=--lost-json; CL_ARGS[${#CL_ARGS[@]}]="$EVENT_DIR/lost.json"
+      while IFS= read -r hd; do
+        [ -n "$hd" ] && [ -d "$hd" ] || continue
+        CL_ARGS[${#CL_ARGS[@]}]=--hb-dir; CL_ARGS[${#CL_ARGS[@]}]="$hd"
+      done <<EOF
+$HB_DIRS
+EOF
+    fi
     CLASSIFIED="$(printf '%s' "$ADMITTED" | "$CLASSIFY" ${CL_ARGS[@]+"${CL_ARGS[@]}"} 2>"$STATE_DIR/last-classify.txt")" || CLASSIFIED=""
   fi
   if [ "$(printf '%s' "$CLASSIFIED" | grep -c . || true)" != "$n_adm" ]; then
     CLASSIFIED="$(printf '%s' "$ADMITTED" | awk -F'\t' 'NF { print $0 "\tUNKNOWN" }')"
   fi
   n_int="$(printf '%s\n' "$CLASSIFIED" | awk -F'\t' '$NF == "INTERRUPTED"' | grep -c . || true)"
-  n_rest=$((n_adm - n_int))
+  n_wake="$(printf '%s\n' "$CLASSIFIED" | awk -F'\t' '$NF == "WAKE-LOST"' | grep -c . || true)"
+  n_rest=$((n_adm - n_int - n_wake))
 
-  # 3. OPEN. The operator's layout: <=4 panes per OS window as a 2x2, each window native-fullscreen
-  #    on its own Desktop (cc-resume-layout.sh --desktops). At login there may be no kitty yet — exit
+  # 2b. RECOVERY DELIVERY, restore v2 only (W3 P4), BEFORE any window opens.
+  #     Every row gets an inbox note saying what died with the old process: mailbox-drain.sh hands it
+  #     to the session as context at resume, and it costs no turn. Only a row with open work
+  #     (INTERRUPTED or WAKE-LOST) on an account with quota gets a prompt, and it travels as contract
+  #     column 10 to reso-resume-one --prompt-file, a launch argument. Nothing is typed.
+  #     Keyed on the SID, never on a map line: a row the layout only confirms later has none.
+  #     One note per sid per event (<event>/noted), and a prompt file is reused by a later round, so a
+  #     retry tick neither repeats a note nor mints a second nonce. CC_RESTORE_NUDGE=off: notes only.
+  if [ "$RESTORE_V2" = 1 ] && [ "$n_adm" -gt 0 ] && command -v rn_note_text >/dev/null 2>&1; then
+    rn_kind="${EVENT_KIND:-reboot}"
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      sid="$(printf '%s' "$line" | cut -f2)"; verdict="$(printf '%s' "$line" | awk -F'\t' '{ print $NF }')"
+      if ! grep -qxF "$sid" "$EVENT_DIR/noted" 2>/dev/null; then
+        if rn_send_note "$sid" "$(rn_note_text "$rn_kind" "$BOOT" "$EVENT_DIR/lost.json" "$sid")"; then
+          printf '%s\n' "$sid" >> "$EVENT_DIR/noted" 2>/dev/null; n_noted=$((n_noted + 1))
+        else
+          n_note_fail=$((n_note_fail + 1))
+        fi
+      fi
+      rn_nudge_wanted "$verdict" "$sid" "$EXH_SIDS" || continue
+      pf="$EVENT_DIR/prompts/$sid.txt"; nonce=""
+      [ -s "$pf" ] && nonce="$(sed -n 's/.*(restore ref \(R-[0-9a-f]*\)).*/\1/p' "$pf" | tail -n 1)"
+      if [ -z "$nonce" ]; then
+        nonce="$(rn_nonce)"
+        pf="$(rn_write_prompt "$EVENT_DIR/prompts" "$sid" \
+               "$(rn_prompt_text "$rn_kind" "$BOOT" "$EVENT_DIR/lost.json" "$sid" "$verdict" "$nonce")")" || continue
+      fi
+      PROMPTED="${PROMPTED}${sid}	${pf}	${nonce}
+"
+      n_prompt=$((n_prompt + 1))
+    done <<EOF
+$CLASSIFIED
+EOF
+    if [ -n "$PROMPTED" ]; then
+      # Column 10 of the rows the layout is about to read. The prompt list comes first on stdin, the
+      # rows after a blank line; a row with fewer than 10 columns is passed through untouched.
+      ADMITTED="$( { printf '%s\n' "$PROMPTED"; printf '%s' "$ADMITTED"; } | awk -F'\t' -v OFS='\t' '
+        !rows && NF == 0 { rows = 1; next }
+        !rows { pf[$1] = $2; next }
+        NF >= 10 && ($2 in pf) { $10 = pf[$2] }
+        { print }')
+"
+    fi
+  fi
+
+  # 3. OPEN. The operator's layout: each window native-fullscreen on its own Desktop
+  #    (cc-resume-layout.sh --desktops). By default that is <=4 panes per OS window as a 2x2; under
+  #    restore v2 (--restore) it is one row of up to 6 panes per window. At login there may be no kitty yet — exit
   #    3 means no live control socket — so open one and give it a moment before falling back.
   # The start gate (restore v2): wait until load per core is at or under CC_RESTORE_START_LOAD, for
   # at most CC_RESTORE_GATE_MAX_S, logging every reading to <event>/load.log so the login boot-storm
@@ -1099,6 +1174,48 @@ EOF
       END { for (c in intr) { bad = (c ~ / /); for (r in rest) if (index(r, c)) bad = 1
                               if (!bad) print c } }' | sort | tr '\n' ' ')"
   nudged="${nudged% }"
+  # Restore v2 starts NO keepalive. It re-types into any idle pane whose cwd holds a marker, and on
+  # 2026-10-01 typed prompts did not submit in 30 of 31 panes. The prompt already went out as a
+  # launch argument (step 2b); what is left is to read each one back from the transcript.
+  if [ "$RESTORE_V2" = 1 ]; then
+    nudged=""
+    if [ -n "$PROMPTED" ] && command -v rn_confirm >/dev/null 2>&1; then
+      # CONFIRM: within CC_RESTORE_CONFIRM_S of the layout returning, a user record with the nonce
+      # (submitted) and a real assistant record after it (a turn ran). One shared deadline.
+      c_left="${CC_RESTORE_CONFIRM_S:-90}"; c_poll="${CC_RESTORE_CONFIRM_POLL:-5}"
+      while :; do
+        c_open=0
+        while IFS=$'\t' read -r sid pf nonce; do
+          [ -n "$sid" ] || continue
+          rn_confirm "$sid" "$nonce" >/dev/null 2>&1 || c_open=$((c_open + 1))
+        done <<EOF
+$PROMPTED
+EOF
+        [ "$c_open" -gt 0 ] && [ "$c_left" -gt 0 ] || break
+        sleep "$c_poll"; c_left=$((c_left - c_poll))
+      done
+      while IFS=$'\t' read -r sid pf nonce; do
+        [ -n "$sid" ] || continue
+        c_rc=0; c_seen="$(rn_confirm "$sid" "$nonce" 2>/dev/null)" || c_rc=$?
+        case "$c_rc" in
+          0) c_v=confirmed; n_prompt_ok=$((n_prompt_ok + 1)) ;;
+          # Submitted, but no turn ran (an account at its limit looks like this). A second submit
+          # would run the recovery twice, so this is reported, never retried.
+          1) c_v=submitted-no-reply; n_prompt_noreply=$((n_prompt_noreply + 1)) ;;
+          *) # Never submitted: cc-wake, then the verified paste. Never a blind CR.
+             if c_fb="$(rn_fallback "$sid" "$pf" "$nonce" 2>/dev/null)"; then
+               c_v="fallback ${c_fb}"; n_prompt_fb=$((n_prompt_fb + 1))
+             else
+               c_v="unconfirmed ${c_fb}"; n_prompt_bad=$((n_prompt_bad + 1))
+             fi ;;
+        esac
+        printf '%s sid=%s nonce=%s %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$sid" "$nonce" "${c_seen:-user=0 assistant=0}" "$c_v" \
+          >> "$EVENT_DIR/prompt.log" 2>/dev/null
+      done <<EOF
+$PROMPTED
+EOF
+    fi
+  fi
   if [ -n "$nudged" ] && [ "$resumed" -gt 0 ] && [ -n "$KEEPALIVE" ] && [ -x "$KEEPALIVE" ]; then
     # Under launchd there is no KITTY_WINDOW_ID, and the keepalive's kitty arm is inert without a
     # socket, so hand it the live one. Detached into its own session: launchd reaps the job's
@@ -1149,6 +1266,10 @@ if [ "$MODE" = "resume" ]; then
   [ "$opener" = desktops ] && where="${desk_windows} fullscreen Desktop(s), ${desk_fs_ok} verified fullscreen"
   msg="🔄 boot-delta: ${cut_what} ${boot_h} · source: ${SOURCE_LABEL} · resumed ${resumed}/${n_fire} session(s) into ${where}.
   ${n_int} were cut off mid-turn and are being nudged to continue; ${n_rest} had stopped at a pause point (or could not be read) and were restored WITHOUT a nudge."
+  # Restore v2 delivers differently, so it says something different: a note for every session, and a
+  # launch-argument prompt only where work was open. The keepalive sentence above would be false.
+  [ "$RESTORE_V2" = 1 ] && msg="🔄 boot-delta: ${cut_what} ${boot_h} · source: ${SOURCE_LABEL} · resumed ${resumed}/${n_fire} session(s) into ${where}.
+  ${n_int} were cut off mid-turn and ${n_wake} were at rest with work that died with the old process; ${n_rest} had stopped at a pause point (or could not be read). ${n_noted} got an inbox note saying what was lost; ${n_prompt} with open work and quota got a recovery prompt as a launch argument (${n_prompt_ok} confirmed in the transcript, ${n_prompt_fb} delivered by the fallback)."
   [ "$desk_fs_bad" -gt 0 ] && msg="${msg} ⚠ ${desk_fs_bad} window(s) did not go fullscreen (Accessibility permission for kitty?) — the panes are fine, only the Desktop placement is not."
   [ "$n_open" -gt "$n_fire" ] && msg="${msg}
   consolidated: ${n_open} ghost(s) → ${n_fire} fired (max ${MAX_PER_WT}/worktree, ${MAX_TOTAL} total). The rest are LISTED, not lost — ${STATE_DIR}/last-triage.txt"
@@ -1164,6 +1285,11 @@ if [ "$MODE" = "resume" ]; then
   if [ "$RESTORE_V2" = 1 ]; then
     [ "$resume_ledger" -gt 0 ] && msg="${msg} ${resume_ledger} were already opened by an earlier round of this restore."
     [ "$n_exhausted" -gt 0 ] && msg="${msg} ⚠ ${n_exhausted} sit on account(s) at their weekly limit (${EXHAUSTED_ACCTS% }): restored, never nudged."
+    [ "$n_note_fail" -gt 0 ] && msg="${msg} ⚠ ${n_note_fail} inbox note(s) could not be written."
+    command -v rn_note_text >/dev/null 2>&1 || msg="${msg} ⚠ scripts/lib/restore-note.sh did not load: no notes and no prompts this round."
+    [ "$n_prompt_noreply" -gt 0 ] && msg="${msg} ⚠ ${n_prompt_noreply} prompt(s) were submitted but no turn ran (${EVENT_DIR}/prompt.log)."
+    [ "$n_prompt_bad" -gt 0 ] && msg="${msg} ⚠ ${n_prompt_bad} prompt(s) never reached their session, and the fallback could not deliver them either (${EVENT_DIR}/prompt.log) — those sessions are back but idle."
+    [ "${CC_RESTORE_NUDGE:-on}" = off ] && msg="${msg} CC_RESTORE_NUDGE=off: notes only, no prompts."
     [ "$n_meta_none" -gt 0 ] && msg="${msg} ${n_meta_none} had no recorded model or effort, so they came back on the launcher's defaults."
     [ "${gate_verdict:-}" = deadline ] && msg="${msg} Load per core stayed over ${CC_RESTORE_START_LOAD:-6} for the whole wait; restored anyway (${EVENT_DIR}/load.log)."
   fi
@@ -1178,7 +1304,7 @@ fi
 
 V2_IDL=""
 if [ "$RESTORE_V2" = 1 ]; then
-  V2_IDL=",\"restore_v2\":true,\"ledger_skipped\":${resume_ledger},\"exhausted\":${n_exhausted},\"no_model\":${n_meta_none},\"gate\":\"${gate_verdict:-}\",\"done\":$(restore_done && echo true || echo false)"
+  V2_IDL=",\"restore_v2\":true,\"wake_lost\":${n_wake},\"noted\":${n_noted},\"note_failed\":${n_note_fail},\"prompts\":${n_prompt},\"prompts_confirmed\":${n_prompt_ok},\"prompts_fallback\":${n_prompt_fb},\"prompts_no_reply\":${n_prompt_noreply},\"prompts_unconfirmed\":${n_prompt_bad},\"ledger_skipped\":${resume_ledger},\"exhausted\":${n_exhausted},\"no_model\":${n_meta_none},\"gate\":\"${gate_verdict:-}\",\"done\":$(restore_done && echo true || echo false)"
   # One page per event, not per round: a later round marks and logs, and says nothing.
   if [ -f "$EVENT_DIR/paged" ]; then
     mark_processed
