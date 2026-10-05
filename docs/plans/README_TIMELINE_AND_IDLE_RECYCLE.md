@@ -308,3 +308,29 @@ suspects is the binding one, and either the fix or a named blocker. Report to
   Kept from the discarded middle versions because each was earned: the commit ridge and the dusk
   material (v3), ours-above/theirs-below (v2), and the single unbroken axis (v2) — the axis break
   existed only to reach content that has since been cut, so it went with it.
+
+## 2026-10-05 — an idle session's self-recycle is proactive and self-healing
+
+Incident (reso pane 254, session d425afab): the free-win advisory fired at 46%, the session ran
+`handoff-fire.sh --recycle`, and the watcher HELD at 18 s because the session's own `cc-await-ping`
+raised the background-work dialog and the agent-view-off menu has no keep-work option. Nothing
+retried and the latch never re-armed, so the session sat idle for about nine hours.
+
+Three changes, each with a kill switch:
+
+| Behavior | Before | After | Switch |
+|---|---|---|---|
+| Self-recycle over its own mailbox watcher | Esc (Stay), HELD | answers "Exit and stop tasks" when the jobs are watcher-only, no live team, index read off the screen (the move lane's stop-if-watcher rule, now the self form's default) | `CC_RECYCLE_SELF_STOP_WATCHER=off` |
+| A held or refused self-recycle | one line in a TMPDIR log | a ticket in `~/.claude/autonomy/recycle-retry/<sid>.json`; `boundary-handoff.sh` tells the session to re-run once the holding job pids have exited, or after 300 s when none were named; asked once per hold, at most 3 holds, void once a human has typed since | `CC_RECYCLE_RETRY=off` |
+| Boundary advisory on an idle session | re-armed only on HEAD, +10% fill, +10 MB | also after 30 min with no interactive turn (latch mtime) | `CC_BOUNDARY_IDLE_REARM_MIN=0` |
+
+Why the watcher does not re-type `/exit` itself when the job ends: by then the session may be on a
+new instruction, and only the session can know. The ticket also covers the foreground refusal
+"composer could not be READ" that a self-recycle run mid-turn hits (measured on the same pane,
+2026-10-05): the turn's own Stop is when the composer has a box again.
+
+The hold also re-reads the composer up to three times and scrubs an exact `/exit` it left behind;
+the hold line reports what it found (`composer after Esc: …`), so a stray `/exit` is diagnosable.
+
+Not covered: the ticket is not deleted by a successful recycle in a test, because the fixture pane
+never reaches a shell; that line is exercised only live.
