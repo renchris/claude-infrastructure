@@ -663,6 +663,14 @@ here. Never change row 15's thresholds, the 9 s limit or the sealed sets; never 
   `1..44`, and `research-router.bats` + `launchd-parity-lint.bats` `1..48`, no `not ok`; the runner and the
   migration run under `/bin/bash` 3.2.57 inside the suite. Run by hand because the land's smoke reached none of
   them before its 900 s budget ran out.
+- **Landed and live, awaiting activation** (2026-10-05): trunk `6cfb02e03`, content-verified; converged (the live
+  `~/.claude` links `classifier-warm.py` and its runner, and the live `router.py` is byte-identical to trunk's).
+  The activation is one operator step, backlog `320091ec2edd`: `bash
+  ~/Development/claude-infrastructure/migrations/0059-research-classifier-warm.sh` (it reads the daemon's ping
+  back before it reports success). Until it runs, every router call takes the cold path exactly as before.
+- **Still to do after activation (this wave):** warm latency on the tuning set (n ≥ 20), a check that the
+  classifier's command line and brief equal `e259b44cd`'s (`on-pre`, thinking on), then the second and last read of
+  v2, recorded here with its verdict, per-stratum numbers, load and the disclosure that it is biased by the first.
 
 #### E2 — triage precision study (v1.2 (a), measurement half) — RUNNING
 - Locus: a Workflow in session d8964eb2, started 2026-10-04. Results: `docs/research/triage-precision-study-2026-10-04/`.
