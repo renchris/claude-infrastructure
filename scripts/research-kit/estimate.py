@@ -6,13 +6,20 @@ A port of the corrected model, evidence/final/profile_sim.py over evidence/desig
 the frontier slots are Opus at rho = 1.0, so a family means a vendor; raters downgrade real holes and
 SEEDS PASS THROUGH THE SAME RATERS; a share of holes and seeds are omissions; the cap round is
 verification-only; the invisible part is priced separately, its bound at the MEASURED upper bracket
-(u_hi 0.234, research-calibration REPORT §4.4). The other inputs are still model assumptions until
-the operator re-signs the measured set (§6.6).
+(u_hi 0.234, research-calibration REPORT §4.4).
 
-  estimate.py simulate --profile lite|standard|full --n0 N [--stress] [--reps 500] [--seed 7] [--published]
-      one profile_sim.out row as JSON. --published runs the port as published (u_hi 0.2), which is
+Method v1.2 (ruling 1bf69e5c1775, 2026-10-04): the inputs are the MEASURED set by default, read from
+docs/research/research-calibration/evidence/params-measured.json (MEASURED_FIELDS names the field
+behind each input; CC_RESEARCH_PARAMS or --params points at another file). The pre-calibration
+assumptions stay as a labeled contrast, --base; a missing or incomplete file is a refusal, never a
+silent return to them.
+
+  estimate.py simulate --profile lite|standard|full --n0 N [--base|--stress] [--params FILE]
+                       [--reps 500] [--seed 7] [--published]
+      one profile_sim.out row as JSON, at the measured inputs unless --base (assumed, pre-calibration)
+      or --stress (assumed). --published runs the port as published (base inputs, u_hi 0.2), which is
       random-call-for-random-call faithful, so the same seed reproduces the published table exactly.
-  estimate.py forecast --program P
+  estimate.py forecast --program P [--base] [--params FILE]
       from the program's counted rounds (rounds/<k>/matrix.json): the stop state, the round-1
       forecast and R_max, the desk-detectable residual and its 95% bound, the invisible part, and
       P(any material change after signoff).
@@ -27,6 +34,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import random
 import sys
 from pathlib import Path
@@ -60,6 +68,70 @@ MEASURED = [
     "invisible share up to 0.234 (pooled u_hi, research-calibration REPORT §4.4)",
     "false material share 0.376 when the program has no verified record (research-calibration REPORT §4.1)",
 ]
+# The measured input set (research-calibration REPORT §3, its "Field" column): each model input and the
+# field of params-measured.json it is read from. surf_blind has no measurement and stays assumed.
+MEASURED_FILE = (
+    Path(__file__).resolve().parents[2]
+    / "docs/research/research-calibration/evidence/params-measured.json"
+)
+MEASURED_FIELDS = dict(
+    u="u_plan_mean",
+    fpp="fpp",
+    q="q",
+    omit="omit_plan_mean",
+    b="fixborn_plan_median",
+    u_hi="u_hi",
+)
+
+
+def measured_params(path: Optional[Path] = None) -> Dict[str, float]:
+    """The measured inputs as program() keywords. Refuses a file that cannot supply every one of them."""
+    src = Path(path or os.environ.get("CC_RESEARCH_PARAMS") or MEASURED_FILE)
+    try:
+        P = json.loads(src.read_text())
+    except (OSError, ValueError) as e:
+        raise kit.KitError(
+            f"measured inputs unreadable at {src}: {e}; --base runs the assumed set"
+        )
+    miss = [
+        f
+        for f in MEASURED_FIELDS.values()
+        if isinstance(P.get(f), bool) or not isinstance(P.get(f), (int, float))
+    ]
+    if miss:
+        raise kit.KitError(
+            f"{src}: no numeric {', '.join(miss)}; --base runs the assumed set"
+        )
+    out = {k: float(P[f]) for k, f in MEASURED_FIELDS.items()}
+    out["surf_blind"] = BASE["surf_blind"]
+    return out
+
+
+def inputs_for(
+    base: bool = False, path: Optional[Path] = None
+) -> Tuple[str, Dict[str, float]]:
+    """(label, program() keywords): the measured set, or the pre-calibration contrast."""
+    if base:
+        return "base", dict(BASE, b=FIX_BORN, u_hi=U_HI)
+    return "measured", measured_params(path)
+
+
+def provenance(label: str, P: Dict[str, float]) -> Tuple[List[str], List[str]]:
+    """The certificate's (assumed, measured) lines for one input set."""
+    if label != "measured":
+        return ASSUMED, MEASURED
+    return (
+        ["blind holes surface with probability 0.5 (surf_blind, no measurement)"],
+        [
+            f"invisible share {P['u']:g} at the mean, up to {P['u_hi']:g} (u_plan_mean, pooled u_hi; "
+            "research-calibration REPORT §3, §4.4)",
+            f"false material calls {P['fpp']:g} per reviewer-read (fpp)",
+            f"rater downgrade {P['q']:g} (q)",
+            f"omission share {P['omit']:g} (omit_plan_mean)",
+            f"fix-born rate {P['b']:g} per applied fix (fixborn_plan_median)",
+            MEASURED[1],
+        ],
+    )
 
 
 def logistic(x: float) -> float:
@@ -177,6 +249,7 @@ def program(
     b: float = FIX_BORN,
     surf_det: float = 1.0,
     published: bool = False,
+    u_hi: float = U_HI,
 ) -> Dict[str, Any]:
     comp, T, K, R_abs, s = prof["comp"], prof["T"], prof["K"], prof["R_abs"], prof["s"]
 
@@ -259,7 +332,7 @@ def program(
     draws = [x + y for x, y in zip(d_o, d_s)]
     npred = quantile(draws, 0.95)
     n_hat = found_total + quantile(draws, 0.5)
-    u_hi = U_HI_PUBLISHED if published else U_HI
+    u_hi = U_HI_PUBLISHED if published else u_hi
     inv_bound = poisson_q95(n_hat * u_hi / (1 - u_hi))
     det_left = sum(1 for it in live if not it["blind"])
     blind_left = sum(1 for it in live if it["blind"])
@@ -297,18 +370,23 @@ def simulate(
     reps: int = 500,
     seed: int = 7,
     published: bool = False,
+    base: bool = False,
+    params_file: Optional[Path] = None,
 ) -> Dict[str, Any]:
     rng = random.Random(seed)
-    params = STRESS if stress else BASE
+    if stress:
+        regime, params = "stress", dict(STRESS)
+    else:
+        regime, params = inputs_for(base or published, params_file)
     R = [
         program(rng, sim_profile(name), n0, **params, published=published)
         for _ in range(reps)
     ]
     ks = [float(r["k"]) for r in R]
-    return {
+    out = {
         "profile": name,
         "n0": n0,
-        "regime": "stress" if stress else "base",
+        "regime": regime,
         "reps": reps,
         "rounds_p50": int(quantile(ks, 0.5)),
         "rounds_p90": int(quantile(ks, 0.9)),
@@ -318,6 +396,11 @@ def simulate(
         "p_any": round(mean([r["any"] for r in R]), 2),
         "take_back_pct": round(100 * mean([r["tb"] for r in R]), 1),
     }
+    if (
+        not published
+    ):  # the published row is reproduced byte for byte, so it carries no extra key
+        out["inputs"] = params
+    return out
 
 
 # ── forecast from a program's own rounds ───────────────────────────────────────────────────────
@@ -349,7 +432,15 @@ def counted_holes(slug: str, mats: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     ]
 
 
-def forecast(slug: str, reps: int = 300, seed: int = 11) -> Dict[str, Any]:
+def forecast(
+    slug: str,
+    reps: int = 300,
+    seed: int = 11,
+    base: bool = False,
+    params_file: Optional[Path] = None,
+) -> Dict[str, Any]:
+    label, P = inputs_for(base, params_file)
+    assumed, measured = provenance(label, P)
     frame = kit.read_json(kit.records_dir(slug) / "frame.json", {}) or {}
     if not frame.get("profile"):
         raise kit.KitError("frame.json has no profile")
@@ -405,8 +496,8 @@ def forecast(slug: str, reps: int = 300, seed: int = 11) -> Dict[str, Any]:
     )
     draws = [a + c for a, c in zip(draws_o, draws_s)]
     n_hat = found + quantile(draws, 0.5)
-    inv_lam = n_hat * U_HI / (1 - U_HI)
-    inv_mean = n_hat * BASE["u"] / (1 - BASE["u"])
+    inv_lam = n_hat * P["u_hi"] / (1 - P["u_hi"])
+    inv_mean = n_hat * P["u"] / (1 - P["u"])
     p_any = mean([1.0 if d + poisson(rng, inv_mean) > 0 else 0.0 for d in draws])
     # the round-1 forecast fixes R_max: simulate programs that START at the holes round 1 implies
     first = mats[0]
@@ -415,7 +506,7 @@ def forecast(slug: str, reps: int = 300, seed: int = 11) -> Dict[str, Any]:
     else:
         n0 = int(first.get("new_material") or 0) + int(quantile(draws_o, 0.5))
         ks = [
-            float(program(rng, sim_profile(frame["profile"]), n0, **BASE)["k"])
+            float(program(rng, sim_profile(frame["profile"]), n0, **P)["k"])
             for _ in range(reps)
         ]
         p50, p90 = int(quantile(ks, 0.5)), int(quantile(ks, 0.9))
@@ -452,8 +543,9 @@ def forecast(slug: str, reps: int = 300, seed: int = 11) -> Dict[str, Any]:
         "p_any": round(p_any, 2),
         "quiet_streak": streak,
         "stop": stop,
-        "assumed": ASSUMED,
-        "measured": MEASURED,
+        "inputs": label,
+        "assumed": assumed,
+        "measured": measured,
         "calibrated": False,
     }
 
@@ -537,19 +629,41 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--reps", type=int, default=500)
     p.add_argument("--seed", type=int, default=7)
     p.add_argument("--published", action="store_true")
+    p.add_argument(
+        "--base",
+        action="store_true",
+        help="the pre-calibration assumed inputs, as a contrast",
+    )
+    p.add_argument(
+        "--params",
+        type=Path,
+        help="measured inputs file (default params-measured.json)",
+    )
     p = sub.add_parser("forecast")
     p.add_argument("--program", required=True)
+    p.add_argument(
+        "--base",
+        action="store_true",
+        help="the pre-calibration assumed inputs, as a contrast",
+    )
+    p.add_argument(
+        "--params",
+        type=Path,
+        help="measured inputs file (default params-measured.json)",
+    )
     p = sub.add_parser("calibration")
     p.add_argument("--file", type=Path, default=CALIBRATION_FILE)
     a = ap.parse_args(argv)
     try:
         if a.verb == "simulate":
-            out = simulate(a.profile, a.n0, a.stress, a.reps, a.seed, a.published)
+            out = simulate(
+                a.profile, a.n0, a.stress, a.reps, a.seed, a.published, a.base, a.params
+            )
         elif a.verb == "calibration":
             out = calibration(a.file)
         else:
             kit.check_slug(a.program)
-            out = forecast(a.program)
+            out = forecast(a.program, base=a.base, params_file=a.params)
     except kit.KitError as e:
         print(f"estimate.py: {e}", file=sys.stderr)
         return 2

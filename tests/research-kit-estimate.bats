@@ -139,3 +139,66 @@ lt() { /usr/bin/python3 -c "import sys; sys.exit(0 if float(sys.argv[1]) < float
   [ "$(fld "$output" realized_zero)" = "1" ]
   [ "$(fld "$output" spearman)" = "0.4" ]
 }
+
+# ── method v1.2 (ruling 1bf69e5c1775): measured inputs by default, the assumed set a labeled contrast ──
+
+planted_params() { # a measured-inputs file whose values no constant in estimate.py holds
+  printf '{"u_plan_mean":0.31,"fpp":0.0,"q":0.0,"omit_plan_mean":0.0,"fixborn_plan_median":0.0,"u_hi":0.4}\n' \
+    > "$BATS_TEST_TMPDIR/params.json"
+}
+
+@test "v1.2: simulate runs at params-measured.json by default, and says so" {
+  run "$E" simulate --profile lite --n0 20 --reps 40
+  [ "$status" -eq 0 ]
+  [ "$(fld "$output" regime)" = "measured" ]
+  want="$(/usr/bin/python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['fpp'])" \
+    "$REPO/docs/research/research-calibration/evidence/params-measured.json")"
+  [ "$(/usr/bin/python3 -c "import json,sys; print(json.loads(sys.argv[1])['inputs']['fpp'])" "$output")" = "$want" ]
+}
+
+@test "v1.2: a planted measured file moves the simulation, so the file is what is read" {
+  planted_params
+  run env CC_RESEARCH_PARAMS="$BATS_TEST_TMPDIR/params.json" "$E" simulate --profile lite --n0 20 --reps 40
+  [ "$status" -eq 0 ]
+  planted="$output"
+  run "$E" simulate --profile lite --n0 20 --reps 40
+  # no false calls, no downgrades, no fix-born: fewer desk holes left than at the real measured set
+  lt "$(fld "$planted" desk_left)" "$(fld "$output" desk_left)"
+  run "$E" simulate --profile lite --n0 20 --reps 40 --params "$BATS_TEST_TMPDIR/params.json"
+  [ "$(fld "$output" desk_left)" = "$(fld "$planted" desk_left)" ]
+}
+
+@test "v1.2: --base is the pre-calibration contrast, labeled, and leaves fewer holes than measured" {
+  run "$E" simulate --profile lite --n0 20 --reps 40 --base
+  [ "$status" -eq 0 ]
+  [ "$(fld "$output" regime)" = "base" ]
+  base="$output"
+  run "$E" simulate --profile lite --n0 20 --reps 40
+  lt "$(fld "$base" desk_left)" "$(fld "$output" desk_left)"
+}
+
+@test "v1.2: an unreadable or incomplete measured file is a refusal, never a silent return to base" {
+  run env CC_RESEARCH_PARAMS="$BATS_TEST_TMPDIR/absent.json" "$E" simulate --profile lite --n0 20 --reps 5
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"measured inputs unreadable"* ]] || false
+  printf '{"fpp":1.1,"q":true}\n' > "$BATS_TEST_TMPDIR/thin.json"
+  run env CC_RESEARCH_PARAMS="$BATS_TEST_TMPDIR/thin.json" "$E" simulate --profile lite --n0 20 --reps 5
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"no numeric"*"q"* ]] || false
+}
+
+@test "v1.2: the forecast's invisible mean is priced at the measured share, not the assumed 0.05" {
+  planted_params
+  printf '{"profile":"standard"}\n' > "$CC_RESEARCH_RECORDS/frame.json"
+  matx 1 40 '{"original":{"s_eff":10,"k_left":3},"shadow":{"s_eff":0,"k_left":0}}'
+  run env CC_RESEARCH_PARAMS="$BATS_TEST_TMPDIR/params.json" "$E" forecast --program demo
+  [ "$status" -eq 0 ]
+  out="$output"
+  [ "$(fld "$out" inputs)" = "measured" ]
+  want="$(/usr/bin/python3 -c "import sys; n=float(sys.argv[1]); print(round(n*0.31/0.69, 2))" "$(fld "$out" n_hat)")"
+  [ "$(fld "$out" invisible_mean)" = "$want" ]
+  [[ "$(fld "$out" assumed)" != *"invisible share 0.05"* ]]
+  run "$E" forecast --program demo --base
+  [ "$(fld "$output" inputs)" = "base" ]
+  [[ "$(fld "$output" assumed)" == *"invisible share 0.05"* ]] || false
+}
