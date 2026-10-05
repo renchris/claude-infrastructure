@@ -711,19 +711,21 @@ below 90 by what blocks them, and a priced per-decision extension on the operato
   "Method v1.2 records". Constants: `lib/kit.py` (`CAPS` v1.2 block, `YIELD_STAGES`, `AS_BUILT_*`, `BUILD_STATES`).
 - Both mechanisms apply only to a frame carrying `method_version` "1.2" (`kit.is_v12`; absent reads 1.1), so the
   live pilot and every v1.1 fixture are untouched. Rows 1–17 and their thresholds are unchanged.
-- Locus: S for the wave (fired session `fire-rp-v12-e3b`, worktree `rp-v12-e3b`), T inside it: six teammates, one
-  worktree each `~/Development/.worktrees/rp-e3b-<name>`; lead inline only for the spec, the shared skeleton (stub
-  rows and verb modules, so files are disjoint), merges and the land. Why T: the brief asked this session to lead
-  its own team, and six disjoint modules over one contract return short reports to one serialized merge.
+- Locus: S for the wave (fired session `fire-rp-v12-e3b`, worktree `rp-v12-e3b`). Inside it, planned T (six
+  teammates over one contract); ran as T for two and L (lead-inline) for four. Why L: the machine-capacity gate
+  refused 8 of 10 teammate spawns ("8 sessions mid-turn + 1 > active ceiling 8") and says to run the work serially
+  in-session rather than retry, so the lead built the pieces it could not hand off. The lead also wrote the spec
+  and the shared skeleton (`5ac402be7`: stub rows and verb modules, so the pieces touch disjoint files).
 
-| Teammate | Owns | Suite |
-|---|---|---|
-| instr | `lib/built.py`, `lib/cli_built.py`: `cc-research built finding / mutate / contact / soak` | `tests/cc-research-built.bats` |
-| states | `kit.BUILD_STATES` consumers, `gate.sh built-freeze`, `lib/built_cert.py` (built certificate, forecast split), `gate_cert.py` split line | `tests/research-kit-built-states.bats` |
-| brows | `lib/gate_rows_built.py` rows 20–25 | `tests/research-kit-built-gate.bats` |
-| rounds | `round.sh --kind built` (`lib/round.py`, `lib/cli_cert.py`) | `tests/research-kit-built-round.bats` |
-| yield | `lib/yield_stop.py`, `lib/cli_yield.py`, `budget end` refusal, row 18 | `tests/research-kit-yield.bats` |
-| blockers | `lib/blockers.py`, row 19, menu extension, `extend-decision` signature, decision timebox fields | `tests/research-kit-blockers.bats` |
+| Piece | Locus | Owns | Suite |
+|---|---|---|---|
+| instr | L | `lib/built.py`, `lib/cli_built.py`: `cc-research built finding / mutate / contact / soak / show` | `tests/cc-research-built.bats` |
+| states | T (`rp-e3b-states`) | `kit.BUILD_STATES` consumers, `gate.sh built-freeze`, the research certificate's split line (`gate_cert.py`) | `tests/research-kit-built-states.bats` |
+| brows | T (`rp-e3b-brows`) | `lib/gate_rows_built.py` rows 20–25 | `tests/research-kit-built-gate.bats` |
+| rounds | L | `round.sh --kind built` (`lib/round.py`, `lib/cli_cert.py` `built-round`) | `tests/research-kit-built-round.bats` |
+| cert | L | `lib/built_cert.py`: the built certificate and the after-implementation forecast | `tests/research-kit-built-cert.bats` |
+| yield | L | `lib/yield_stop.py`, `lib/cli_yield.py`, the `budget end` refusal, row 18 | `tests/research-kit-yield.bats` |
+| blockers | L | `lib/blockers.py`, row 19, menu extension, `extend-decision` signature, decision timebox fields | `tests/research-kit-blockers.bats` |
 
 - Coordination with E3a (owner of `intake.py`, `estimate.py`, REPORT §1/§7/§3.12, SKILL.md), none of which E3b
   edits: `intake.py` must stamp `"method_version": "1.2"` into a new frame (until it does, a new program runs the

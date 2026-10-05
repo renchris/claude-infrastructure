@@ -1,6 +1,7 @@
-"""round.py — one frame-critique, certification or delta round (REPORT.md §3.2 step 6, §3.8, §5.3, §6.5).
+"""round.py — one frame-critique, certification, delta or built round (REPORT.md §3.2 step 6, §3.8,
+§5.3, §6.5, and §11 for the built kind).
 
-  round.sh run   --program P --kind frame-critique|certification|delta --round N --plan SEEDED --brief F
+  round.sh run   --program P --kind frame-critique|certification|delta|built --round N --plan SEEDED --brief F
                  [--escape H-id]
   round.sh close --program P --round ID
 
@@ -14,6 +15,11 @@ The caps live HERE, in code (§10 item 17), and every refusal names its cap (exi
     all-live vendor preflight (exit 3); no round after the stop rule has fired (K quiet rounds at
     r >= K + 1);
   - delta: at most 2 per escape, the second verification-only.
+  - built (method v1.2, Stage 9): only while the registry reads build-certifying with a
+    built/freeze.json; in order, none skipped; at most the profile's built_hard_cap rounds, the cap
+    round verification-only, and no extra-round signature raises it; none after K quiet counted
+    built rounds; at least 2 vendor families; the same fresh all-live preflight. Its bundle carries
+    the built snapshot's tracked files (courier `--extra`), and its matrix pins that snapshot.
 Slots run in parallel through courier.sh. A dead, voided or partial slot is re-run at most twice; a lane
 with any slot still not complete is DEAD, and a round with a dead lane is not counted. A dead lane's
 slots are never handed to another vendor (§3.8). Only after the operator's class-B default
@@ -21,7 +27,7 @@ slots are never handed to another vendor (§3.8). Only after the operator's clas
 rounds run without that lane, and then only with two families, one of them non-Anthropic.
 
 Round directories: certification `rounds/<n>/`, frame critique `rounds/fc<n>/`, delta
-`rounds/delta-<hole>-<n>/`. Test override for the courier: CC_RESEARCH_COURIER.
+`rounds/delta-<hole>-<n>/`, built `rounds/b<n>/`. Test override for the courier: CC_RESEARCH_COURIER.
 """
 
 from __future__ import annotations
@@ -112,6 +118,72 @@ def check_families(slots: List[Tuple[str, str]], fr: Dict[str, Any], need: int) 
         )
 
 
+def built_freeze(slug: str) -> Dict[str, Any]:
+    """built/freeze.json of a program in Stage 9 (REPORT.md §11), or Refused."""
+    state = (kit.registry_get(slug) or {}).get("state")
+    fz = kit.read_json(kit.records_dir(slug) / "built" / "freeze.json") or {}
+    if state != "build-certifying" or not fz.get("snapshot_sha"):
+        raise Refused(
+            f"a built round reviews a frozen built snapshot: {slug} is {state!r} with "
+            f"{'a' if fz.get('snapshot_sha') else 'no'} built/freeze.json (run gate.sh built-freeze "
+            "after the last build wave)"
+        )
+    return fz
+
+
+def plan_built(
+    slug: str, fr: Dict[str, Any], prof: Dict[str, Any], lanes: List[str], n: int
+) -> Tuple[str, List[Tuple[str, str]], bool, int]:
+    """A Stage 9 round over the built artifact (§11): in order, none skipped, capped by the
+    profile's built_hard_cap (the extra-round signature never raises it), none after K quiet."""
+    built_freeze(slug)
+    done = all_matrices(slug, "built")
+    if n != len(done) + 1:
+        raise Refused(f"built round {n} out of order; next is {len(done) + 1} (no skipping)")
+    if done and not done[-1].get("closed"):
+        raise Refused(f"round {done[-1]['round']} is not closed yet (round.sh close)")
+    cap = int(prof["built_hard_cap"])
+    if n > cap:
+        raise Refused(
+            f"built round {n} is past the {fr['profile']} cap of {cap} built rounds (§11); "
+            "certify with named known rows"
+        )
+    counted = [m for m in done if m.get("counted")]
+    k = prof["quiet_to_stop"]
+    if len(counted) >= k and all(m.get("quiet") for m in counted[-k:]):
+        raise Refused(
+            f"the stop rule has fired: the last {k} counted built rounds were quiet; run the "
+            "built gate, do not review again"
+        )
+    slots = [(v, s) for v in lanes for s in prof["strategies"]]
+    if fr.get("degraded") != "two vendors" and len(slots) != prof["reviewers_per_round"]:
+        raise Refused(
+            f"a {fr['profile']} round is {prof['reviewers_per_round']} reviewers, not {len(slots)}"
+        )
+    check_families(slots, fr, kit.CAPS["built_min_families"])
+    return f"b{n}", slots, n == cap, cap
+
+
+def export_artifact(slug: str, dest: Path) -> Path:
+    """The built snapshot's tracked files, exported at its pinned commit into dest/artifact."""
+    fz = built_freeze(slug)
+    out = dest / "artifact"
+    out.mkdir(parents=True)
+    ar = subprocess.run(
+        ["git", "-C", str(fz["artifact_root"]), "archive", str(fz["snapshot_sha"])],
+        capture_output=True,
+    )
+    if ar.returncode != 0:
+        raise Refused(
+            f"cannot export the built snapshot {fz['snapshot_sha']} from {fz['artifact_root']}: "
+            f"{ar.stderr.decode(errors='replace').strip()}"
+        )
+    tar = subprocess.run(["/usr/bin/tar", "-x", "-C", str(out)], input=ar.stdout, capture_output=True)
+    if tar.returncode != 0:
+        raise Refused(f"cannot unpack the built snapshot: {tar.stderr.decode(errors='replace').strip()}")
+    return out
+
+
 def plan_slots(
     slug: str, kind: str, n: int, escape: Optional[str]
 ) -> Tuple[str, List[Tuple[str, str]], bool, int]:
@@ -153,6 +225,8 @@ def plan_slots(
             )
         slots = [(v, s) for v in lanes for s in prof["strategies"]]
         return f"delta-{escape}-{n}", slots, n == 2, 2
+    if kind == "built":
+        return plan_built(slug, fr, prof, lanes, n)
     if kind != "certification":
         raise Refused(f"unknown round kind {kind!r}")
     fc = all_matrices(slug, "frame-critique")
@@ -295,7 +369,7 @@ def cmd_run(a: argparse.Namespace) -> int:
     rd = rounds_dir(a.program) / rid
     if (rd / "matrix.json").exists():
         raise Refused(f"round {rid} already ran")
-    if a.kind == "certification":
+    if a.kind in ("certification", "built"):
         import cli_cert  # here, not at the top: cli_cert imports this module
 
         why = cli_cert.lane_refusal(a.program, {v for v, _ in slots})
@@ -307,21 +381,31 @@ def cmd_run(a: argparse.Namespace) -> int:
     # has, re-running only the planned slots with no complete panel.
     resumed = (kit.sealed_dir(a.program) / "rounds" / rid / "bundle").exists()
     if not resumed:
-        p = subprocess.run(
-            [
-                courier(),
-                "bundle",
-                "--program",
-                a.program,
-                "--round",
-                rid,
-                "--plan",
-                a.plan,
-            ],
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-        )
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="cc-built-bundle.") as tmp:
+            # A built round's reviewers read the built snapshot itself, beside the plan (§11).
+            extra = (
+                ["--extra", str(export_artifact(a.program, Path(tmp)))]
+                if a.kind == "built"
+                else []
+            )
+            p = subprocess.run(
+                [
+                    courier(),
+                    "bundle",
+                    "--program",
+                    a.program,
+                    "--round",
+                    rid,
+                    "--plan",
+                    a.plan,
+                ]
+                + extra,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+            )
         if p.returncode != 0:
             raise Refused(f"courier bundle failed: {p.stderr.strip()}")
     plan = kit.read_json(rd / "plan.json")
@@ -387,6 +471,8 @@ def cmd_run(a: argparse.Namespace) -> int:
             else "dead"
         )
     freeze = kit.read_json(kit.records_dir(a.program) / "freeze.json", {}) or {}
+    if a.kind == "built":  # a built round is pinned to the built snapshot, not the plan freeze
+        freeze = built_freeze(a.program)
     m = {
         "round": rid,
         "seq": a.round,
@@ -440,7 +526,8 @@ def cmd_close(a: argparse.Namespace) -> int:
     # only then can a caught seed be told apart from a real finding.
     fr = frame(a.program)
     vault = kit.sealed_dir(a.program) / "vault" / "seeds.enc"
-    if vault.exists() and fr.get("plan"):
+    built = m.get("kind") == "built"  # its seeds are the harness mutants (§11), not the plan vault
+    if vault.exists() and fr.get("plan") and not built:
         p = subprocess.run(
             [
                 str(HERE.parent / "seed.py"),
@@ -472,7 +559,9 @@ def cmd_close(a: argparse.Namespace) -> int:
     holes = kit.fold(
         kit.read_jsonl(kit.records_dir(a.program) / "holes.jsonl")
     ).values()
-    mine = [h for h in holes if str(h.get("round")) in (a.round, str(m.get("seq")))]
+    # a built round is "b<n>": matching its seq would claim certification round n's holes
+    ids = (a.round,) if built else (a.round, str(m.get("seq")))
+    mine = [h for h in holes if str(h.get("round")) in ids]
     real = [
         h
         for h in mine
@@ -508,7 +597,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     p = sub.add_parser("run")
     p.add_argument("--program", required=True)
     p.add_argument(
-        "--kind", required=True, choices=("frame-critique", "certification", "delta")
+        "--kind",
+        required=True,
+        choices=("frame-critique", "certification", "delta", "built"),
     )
     p.add_argument("--round", type=int, required=True)
     p.add_argument("--plan", required=True)

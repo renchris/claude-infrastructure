@@ -108,7 +108,7 @@ shape is unchanged.
 
 - `built/freeze.json` (written by `gate.sh built-freeze`): `{snapshot_sha, artifact_root (abs), frozen_at,
   research_cert: "CERT-v<n>", waves_done: [wave]}`. `frame.json` `build_waves` `[wave]` is the list row 20 compares.
-- `built/findings.jsonl` (written only by `cc-research built finding add|fix|reject`): `{id: "BF-<n>", source:
+- `built/findings.jsonl` (written only by `cc-research built finding add|fix`): `{id: "BF-<n>", source:
   "round|mutation|contact|soak", claim, severity: "material|refinement|cosmetic", status:
   "open|fixed|rejected-no-repro", repro: {test_cmd, red: {sha, exit, at}, green: {sha, exit, at}|null}|null,
   mutant: "M-<n>"|null}`. `add` runs `test_cmd` itself in `artifact_root` and stores `red` only when it exits

@@ -569,7 +569,7 @@ def add_verbs(sub: Any) -> None:
         p.add_argument(
             "--kind",
             required=True,
-            choices=("frame-critique", "certification", "delta"),
+            choices=("frame-critique", "certification", "delta", "built"),
         )
         p.add_argument("--round", type=int, required=True)
         p.add_argument("--escape")
@@ -588,6 +588,7 @@ def add_verbs(sub: Any) -> None:
     for name, kind in (
         ("round", "certification"),
         ("frame-critique", "frame-critique"),
+        ("built-round", "built"),  # method v1.2, Stage 9 (REPORT.md §11)
     ):
         p = P(name, cmd_round)
         p.set_defaults(kind=kind)
