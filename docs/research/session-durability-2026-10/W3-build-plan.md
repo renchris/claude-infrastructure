@@ -682,7 +682,7 @@ This table replaces the phase table near the top of the file. Only the W3 lead e
 | P3b | W3.2 | landed, content-verified | 267 / `w3-p3b` | `96a0591dc` (feat), `6b30ad551` (fix), tests `124f51717` `760e13771` |
 | P3a-ii | W3.2b | landed, content-verified | 271 / `w3-p3a-ii` | `c483b8401` (feat), `6aa13bf1f` `3bfb4b9ad` `472ba14c4` (fixes) |
 | P4 | W3.3 | landed, content-verified | 276 / `w3-p4` | `c410b5657` (classifier), `4f912ce85` (reso-resume-one), `f1dc36226` (boot-resume, restore-note) |
-| P5 | W3.4 | fired 2026-10-05; its `/goal` arrived as pasted text and did not arm, so it runs on its brief and the custody hooks | 285 / `w3-p5` | |
+| P5 | W3.4 | landed, content-verified (15 files). Live `cc-restore --restart-kitty --dry-run` exits 0, `DRY-RUN-OK`, 17 sessions; `restore-v2` absent. Its `/goal` arrived as pasted text and never armed. | 285 / `w3-p5` | `3463c3846` (rebind fixture), `872a2351c` (forward expiry), `36da06c5c` (kitty-queue lib), `61bfef3cc` (paste-verified), `eaf199c3c` (crash and deaf pages, plan mode), `08c9f3845` (cc-restore) |
 | P7 | W3.4 | landed, content-verified | 286 / `w3-p7` | `21867169a` (hb.displays.tsv), `7636a9b78` (tree replay) |
 | P4b | W3.4 (added by the lead) | landed, content-verified: a lost self-armed watcher alone no longer makes a row WAKE-LOST (§ G, P4); live fleet WAKE-LOST 12 → 6 of 20 | 287 / `w3-p4b` | `df612f7d8` |
 
