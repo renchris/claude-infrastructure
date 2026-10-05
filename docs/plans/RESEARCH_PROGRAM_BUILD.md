@@ -700,7 +700,7 @@ Scope (grown): +`intake.py` stamps `method_version: "1.2"` in the frame and coun
   `4c83f9ea6` study appendix A, `4556688a3` this record. The land's smoke was cut by its time budget under load
   (`smoke:"partial"`), so the behavioral proof is the test receipts above, not the land.
 
-#### E3b — the two new mechanisms: built-artifact certification and the yield stop — RUNNING
+#### E3b — the two new mechanisms: built-artifact certification and the yield stop — DONE 2026-10-04
 Scope (frozen): wave E3b — the two new method mechanisms, specified as named, priced additions to REPORT (new
 sections appended, nothing deleted) and built in the kit with red-then-green planted-input tests: (1) certify the
 built artifact before "done" (audit row 2); (2) stop contact and the build-to-learn skeleton on yield, tag decisions
@@ -727,6 +727,33 @@ below 90 by what blocks them, and a priced per-decision extension on the operato
 | yield | L | `lib/yield_stop.py`, `lib/cli_yield.py`, the `budget end` refusal, row 18 | `tests/research-kit-yield.bats` |
 | blockers | L | `lib/blockers.py`, row 19, menu extension, `extend-decision` signature, decision timebox fields | `tests/research-kit-blockers.bats` |
 
+- Status: **DONE 2026-10-04** — both mechanisms specified (REPORT.md §11, §12, recorded in §9) and built, every
+  rule with a planted-input test red on the skeleton `5ac402be7` and green after. Branch shas (the land rebases them;
+  find the landed ones with `git log --grep` on the subjects):
+  - Spec and skeleton `5ac402be7`.
+  - Mechanism 2, `8fc8f8ad2`: yield 18 of 20 red → 1..20 (the other two are 1.1 no-change controls); blockers 17 of
+    20 red → 1..20 (two 1.1 controls; one test passed on the stub's own "unknown fails" text and was tightened).
+  - Mechanism 1: instruments, built rounds and certificate `edbeb8803` (cc-research-built 20 of 20 red → 1..20;
+    built-round 12 of 12 → 1..12; built-cert 8 of 8 → 1..8); rows 20–25 `ec86bcf72` (51 of 51 red → 1..51, 47
+    mutants killed, one per rule site); states, `built-freeze` and the split line `bdb0b9c09` (1..25, 26 mutants
+    killed); end to end `b3c08ee71` (1..4: records written by the real verbs pass the real built gate, which
+    certifies and states both forecasts).
+  - Existing suites after the merge: gate 1..50, requires 1..17, registry 1..10, research-program-lib 1..8, jobs 1..13,
+    router 1..30, core 1..22, round 1..27, cert 1..23, records 1..11, operator-sign 1..13, courier 1..15, sweep 1..13.
+- No settings.json change was needed, so there is no migration to run.
+- Learnings:
+  - The machine-capacity gate refused 8 of 10 spawns at an active ceiling of 8; a six-teammate wave is not
+    available on a busy box. Cutting the skeleton first (stub rows and verbs, the record contract in RECORDS.md)
+    is what let the lead build the refused pieces inline without touching the teammates' files.
+  - Separate pieces over one written contract still need one test that runs them together: the end-to-end suite
+    is the only place a verb-written record meets a row that reads it.
+  - A test asserting the stub's refusal text ("unknown fails") passes before the rule exists; assert the rule's
+    own words. A helper that prints `a, b` prints `a b`, not a tuple: 15 assertions were red for that alone.
+  - A fixture word can satisfy the check it was meant to break (`broken` contains `ok`).
+- Not built, by scope: reviewer briefs for a built round (the round runs and bundles the snapshot; what a built-round
+  reviewer is told is prompt work), a scheduler entry for `cc-research built soak sample` (a launchd plist is the
+  operator's to load), and the audit row 7 clause "instrument the pilot so front-end yield can be fitted": the
+  stop record and `yield.jsonl` are the data, the fit needs the pilot (E4).
 - Coordination with E3a (owner of `intake.py`, `estimate.py`, REPORT §1/§7/§3.12, SKILL.md), none of which E3b
   edits: `intake.py` must stamp `"method_version": "1.2"` into a new frame (until it does, a new program runs the
   1.1 rules); its contract-page ceiling must add §12's yield ceiling (up to 3 extra stage budgets on each of stages

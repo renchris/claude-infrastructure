@@ -1203,6 +1203,10 @@ where named here):
   edits this report or the kit yet: each lands as a named, priced edit after the triage precision measurement
   (`docs/research/triage-precision-study-2026-10-04/`), and ruling 8's rule (change only named sections, from measured
   results) governs how. The build is wave E of `docs/plans/RESEARCH_PROGRAM_BUILD.md`.
+  Changes (b) and (c) are specified as appended sections: §11 (Stage 9, certify the built artifact; built gate
+  rows 20–25; the forecast split before and after implementation signoff) and §12 (stages 3 and 5 stop on yield;
+  decisions below 90 tagged by what blocks them; a priced per-decision extension; research-gate rows 18 and 19).
+  Each carries its price and its assumed inputs, and applies only to a frame signed under method 1.2.
 - **`4bf73c4e55d5`: the re-ask classifier's time limit is 9 s**, replacing §4.1's assumed 6 seconds, in both the
   router (`scripts/research-kit/router.py` `CLASSIFIER_TIMEOUT_S`) and gate row 15's measurement
   (`scripts/research-kit/heldout.py` `ROUTER_TIMEOUT_S`). The hook's registered timeout stays at the 10 seconds
