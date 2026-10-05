@@ -197,7 +197,7 @@ planted_params() { # a measured-inputs file whose values no constant in estimate
   [ "$(fld "$out" inputs)" = "measured" ]
   want="$(/usr/bin/python3 -c "import sys; n=float(sys.argv[1]); print(round(n*0.31/0.69, 2))" "$(fld "$out" n_hat)")"
   [ "$(fld "$out" invisible_mean)" = "$want" ]
-  [[ "$(fld "$out" assumed)" != *"invisible share 0.05"* ]]
+  [[ "$(fld "$out" assumed)" != *"invisible share 0.05"* ]] || false
   run "$E" forecast --program demo --base
   [ "$(fld "$output" inputs)" = "base" ]
   [[ "$(fld "$output" assumed)" == *"invisible share 0.05"* ]] || false
