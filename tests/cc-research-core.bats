@@ -306,6 +306,16 @@ print(router.cert_read('cc-research verdict demo', 'demo'), router.cert_read('cc
   [ "$(printf '%s' "$output" | jq_py "(d['waiting_since'], d['wait_days'], d['calendar_ceiling_days'])")" = "('2026-09-29T00:00:00Z', 2.0, 14.0)" ]
 }
 
+@test "E3c: ceiling on a v1.2 frame adds the yield ceiling and the Stage 9 budget, as the contract page does" {
+  export CC_NOW="2026-10-01T00:00:00Z"
+  jedit frame.json "d['method_version']='1.2'"
+  run "$CLI" ceiling --program demo --json
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq_py "(d['ceiling_days'], d['yield_ceiling_days'], d['stage9_days'], d['calendar_ceiling_days'])")" = "(18.75, 5.25, 1.5, 18.75)" ]
+  run "$CLI" ceiling --program demo
+  [[ "$output" == *"about 18.75 days (lite profile, §6.1, plus the v1.2 yield ceiling 5.25 d and Stage 9 1.5 d)"* ]]
+}
+
 # ── reopen ─────────────────────────────────────────────────────────────────────────────────────
 
 @test "reopen under a claude ancestor is refused with exit 2, names the operator command, writes nothing" {

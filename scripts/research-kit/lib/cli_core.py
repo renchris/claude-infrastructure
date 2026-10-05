@@ -468,6 +468,10 @@ def cmd_ceiling(a: argparse.Namespace) -> int:
     ctx = ctx_for(a.program)
     name = kit.profile(ctx.frame.get("profile") or "")["name"]
     typical, ceiling = intake.PROFILE_DAYS[name]
+    # method v1.2: the yield ceiling (§12) and the Stage 9 budget (§11), as the contract page adds them
+    v12 = intake.v12_ceiling(kit.profile(name), ceiling) if kit.is_v12(ctx.frame) else None
+    if v12:
+        ceiling = v12["total"]
     f = intake.forecast(name)
     now = kit.parse_iso(kit.now_iso())
     starts = [
@@ -496,13 +500,18 @@ def cmd_ceiling(a: argparse.Namespace) -> int:
         "wait_days": wait,
         "calendar_ceiling_days": None if wait is None else round(ceiling + wait, 2),
     }
+    if v12:
+        d.update(yield_ceiling_days=v12["yield_days"], stage9_days=v12["stage9_days"])
     if a.json:
         print(json.dumps(d, indent=2))
         return 0
     cal = "unknown" if wait is None else f"about {d['calendar_ceiling_days']:g} days"
     print(
         f"Typical total about {typical:g} days; ceiling (every loop at its cap) about "
-        f"{ceiling:g} days ({name} profile, §6.1) · elapsed {d['elapsed_days']:g} d\n"
+        f"{ceiling:g} days ({name} profile, §6.1"
+        + (f", plus the v1.2 yield ceiling {v12['yield_days']:g} d and Stage 9 {v12['stage9_days']:g} d"
+           if v12 else "")
+        + f") · elapsed {d['elapsed_days']:g} d\n"
         f"Waiting on you since {ws or 'nothing open'} · calendar ceiling with your waits {cal}"
     )
     return 0

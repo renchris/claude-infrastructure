@@ -331,17 +331,24 @@ def wider_profile_note(profile_name: str) -> Optional[str]:
     )
 
 
+def v12_ceiling(prof: Dict[str, Any], ceiling: float) -> Dict[str, float]:
+    """The v1.2 ceiling's parts in agent-days; `cc-research ceiling` and the contract page share it."""
+    extra = kit.CAPS["yield_ceiling_factor"] - 1
+    yield_days = extra * sum(prof["stage_days"][s] for s in kit.YIELD_STAGES)
+    built_cap = kit.CAPS["overrun_factor"] * prof["built_stage_days"]
+    return {"extra": extra, "yield_days": yield_days, "stage9_days": built_cap,
+            "total": ceiling + yield_days + built_cap}
+
+
 def v12_ceiling_lines(prof: Dict[str, Any], ceiling: float) -> List[str]:
     """Method v1.2: the §6.1 ceiling plus §12's yield ceiling and §11's Stage 9 budget.
 
     §12 prices the yield ceiling as (4 - 1) extra stage budgets on each of stages 3 and 5 (lite 5.25,
     standard 12) and says the contract page's ceiling must include it. §11 budgets Stage 9 at 1, 2 or
     3 agent-days; it is counted here at the §6.5 overrun line, as §6.1 counts stages 1-6 at 1.5 x."""
-    extra = kit.CAPS["yield_ceiling_factor"] - 1
-    yield_days = extra * sum(prof["stage_days"][s] for s in kit.YIELD_STAGES)
+    c = v12_ceiling(prof, ceiling)
+    extra, yield_days, built_cap, total = c["extra"], c["yield_days"], c["stage9_days"], c["total"]
     built = prof["built_stage_days"]
-    built_cap = kit.CAPS["overrun_factor"] * built
-    total = ceiling + yield_days + built_cap
     return [
         f"- Method v1.2 yield ceiling: up to {extra:g} extra stage budgets on each of stages "
         f"{' and '.join(str(s) for s in kit.YIELD_STAGES)}, {yield_days:g} agent-days (§12). Contact "
