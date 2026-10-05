@@ -727,7 +727,8 @@ measurements around one sealed file).
   `com.claude.research-classifier-warm` returns the router to the cold path.
 - Status: **BLOCKED 2026-10-05**, reported to the wave lead. Evidence outside the repo:
   `/tmp/e1e/warm-latency.json` (per call: label, reason, wall, load).
-#### E1f — the activated warm classifier answered nothing; three fixes — BUILT, landing (2026-10-05)
+
+#### E1f — the activated warm classifier answered nothing; three fixes — LANDED and live, awaiting the operator's restart (2026-10-05)
 Scope (frozen): three fixes, each with a red-then-green test that replays the incident's shape (a daemon that is
 alive but logged out). (1) `router.py`: a warm-path error or no answer falls through to the cold call inside the
 9 s limit; only a cold-path failure is a fallback. (2) The runner serves under an explicit, logged-in account
@@ -788,6 +789,27 @@ Locus S (fired `fire-rp-v12-e1f`), lead-inline (why: three small fixes in four f
   fixed `ping` pointed at the live, still-hollow daemon exits 2.
 - **Unchanged:** row 15's thresholds, the 9 s limit, the sealed sets, the classifier's command line and brief
   (`router.classifier_argv()` and `CLASSIFIER_BRIEF` are untouched; the readiness round-trip reuses both).
+- **Scope (grown): +two `autonomy-sweep.bats` cases pinned to one reading.** The first land was refused (exit 6)
+  on `W1 · the currency pass FIRES` and `W1 · the interval gate HOLDS`, which fail identically on pristine trunk
+  `7636a9b78`: `cb7b8b223` (2026-09-30) made a runtime probe close its row only after three readings 6 h apart
+  and pinned three sibling suites to one reading but missed this one. The `fleet.manifest` change selects that
+  suite, so the red blocked this land and would block any other that selects it. Fixed test-only, as the
+  siblings were.
+- **Landed and live** (2026-10-05): the three fixes are trunk `10349a46e`, the test repair `21b4bf17e`; all
+  nine paths content-verified on `origin/main`; smoke green (7 suites run, 10 carried) on the third attempt
+  (one rebase conflict with E1e's record in this file, one exit 6 above, two rounds lost to sibling lands).
+  Converged with `CC_DEPLOY_MAX_LAG_COMMITS=0 bash scripts/deploy-live.sh`; the live `router.py`,
+  `classifier-warm.py` and runner are byte-identical to trunk. Read on the live layer with the old daemon
+  still loaded (pid 22202): `ping` exits 2, and the live `router.classify` returned a label in 3.78 s with the
+  reason `cold call; the resident one failed`, so the regression is over before the restart.
+- **The restart is one operator step**, backlog `ac182e40e0bc`: `bash
+  ~/Development/claude-infrastructure/migrations/0059-research-classifier-warm.sh`. The loaded job still runs
+  the pre-fix code in memory; the re-run finds it loaded and not answering, restarts it once and waits up to
+  90 s for an answered classification.
+- **Known gap.** Until that restart, `cc-fleet --table` reads the row HEALTHY: the old daemon writes no stamp,
+  and a `run` row whose evidence file does not exist yet is not claimed STALLED. After the restart the stamp
+  exists and the row is live. E1e's measurements (warm latency on the tuning set, then the second read of v2)
+  wait for the restart.
 
 #### E2 — triage precision study (v1.2 (a), measurement half) — RUNNING
 - Locus: a Workflow in session d8964eb2, started 2026-10-04. Results: `docs/research/triage-precision-study-2026-10-04/`.
