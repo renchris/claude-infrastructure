@@ -675,12 +675,19 @@ This table replaces the phase table near the top of the file. Only the W3 lead e
 | Phase | Wave | State | Pane / branch | Landed sha |
 |---|---|---|---|---|
 | P1b | W3.1 | landed, content-verified | 250 / `w3-p1b` | `973ea82f4` |
-| P2 | W3.1 | fired 2026-10-04 | 251 / `w3-p2-land` | |
-| P6 | W3.1 | held: capacity gate (compressor segments 55% > 50%) | | |
-| P8 | W3.2 (no dependency, fires early) | held: capacity gate | | |
-| P3a-i | W3.2 | waits for P2 | | |
-| P3b | W3.2 | waits for P2 | | |
+| P2 | W3.1 | landed, content-verified | 251 / `w3-p2-land` | `f40fad0d1` (feat), tests `558191bc8` `583170c62` `1f44391ec` |
+| P6 | W3.1 | fired 2026-10-05 after the memory storm cleared | 258 / `w3-p6-land` | |
+| P8 | W3.2 (no dependency, fired early) | landed, content-verified | 261 / `w3-p8` | `4b8915441` (feat), tests `fd50f450b` `4bbbb0dc1` |
+| P3a-i | W3.2 | fired 2026-10-05 | 266 / `w3-p3a-i` | |
+| P3b | W3.2 | held: active-session ceiling (P4 cannot start before P3a-ii, so it has slack) | | |
 | P3a-ii | W3.2b | waits for P3a-i | | |
 | P4 | W3.3 | waits for P3a-ii, P3b | | |
 | P5 | W3.4 | waits for P4, P8 | | |
 | P7 | W3.4 | waits for P4, P3a-ii | | |
+
+### G. Findings from the build (for later phases)
+
+- **2026-10-04, P8. Notify-back forwards are silently not written under kitty.** `mailbox_write_forward` (`hooks/lib/mailbox-pending.sh`) refuses kitty's decimal pane keys, so `handoff-fire.sh`'s `write_forward_for` writes no forward under kitty today. `cc-restore-rebind` works around it by writing the same pointer through the lib's own validators (`writer=local` in `rebind.log`). Gap 11 is therefore only half closed until the lib accepts decimal keys.
+- **2026-10-04, P8. A forward on a reused kitty window id can hijack mail.** kitty reuses window ids after a restart, so a forward on an old decimal key would capture mail meant for whichever new session gets that id. Rebind refuses keys that a restored window or another registry row holds, but a forward written now has no expiry. The fix is a drain-side clear in `mailbox-pending.sh` or `mailbox-drain`, which no W3 phase owns yet. P5 wires rebind into `cc-restore`, so it is the phase to carry it unless the lead assigns it elsewhere.
+- **2026-10-04, P2. `reso-resume-one`'s fence waits up to `CC_RESUME_FENCE_WAIT_S`=20 s on a held lock**, because `boot-resume-launch` and `cc-resume-debt` hold it while opening the kitty window, and kitty does not pass their environment through.
+- **2026-10-04, lead. Under memory pressure, ship-land reports a sentinel SIGKILL as a code RED (exit 6).** The compressor sentinel (`retrip-over-debt`) killed gate children for about an hour while fseventsd held a 61 GB footprint. Every land failed with "test-hermeticity RED" or "selftest FAILED", and none named a file. Check land output for `Killed: 9` before treating an exit 6 as a code failure.
