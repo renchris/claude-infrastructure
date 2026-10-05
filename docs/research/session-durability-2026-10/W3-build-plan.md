@@ -684,7 +684,7 @@ This table replaces the phase table near the top of the file. Only the W3 lead e
 | P4 | W3.3 | landed, content-verified | 276 / `w3-p4` | `c410b5657` (classifier), `4f912ce85` (reso-resume-one), `f1dc36226` (boot-resume, restore-note) |
 | P5 | W3.4 | fired 2026-10-05; its `/goal` arrived as pasted text and did not arm, so it runs on its brief and the custody hooks | 285 / `w3-p5` | |
 | P7 | W3.4 | landed, content-verified | 286 / `w3-p7` | `21867169a` (hb.displays.tsv), `7636a9b78` (tree replay) |
-| P4b | W3.4 (added by the lead) | fired 2026-10-05: a lost self-armed watcher alone no longer makes a row WAKE-LOST (§ G, P4) | 287 / `w3-p4b` | |
+| P4b | W3.4 (added by the lead) | landed, content-verified: a lost self-armed watcher alone no longer makes a row WAKE-LOST (§ G, P4); live fleet WAKE-LOST 12 → 6 of 20 | 287 / `w3-p4b` | `df612f7d8` |
 
 ### G. Findings from the build (for later phases)
 
@@ -706,3 +706,4 @@ This table replaces the phase table near the top of the file. Only the W3 lead e
 - **2026-10-05, P4.** A session cold by the clock but inside a long call is WAKE-LOST only when `hb.session.tsv` shows it alive with work open. `hb.bg.tsv` holds no agent-browser URL or owner sid, so the note takes the URL from the session's own transcript and names only sessions it can attribute.
 - **2026-10-05, P7. The tree replay has never run against a real kitty.** `launch --bias` and `--type=tab` were read from the kitty 0.48.2 source, so G1 is the first real replay. `CC_RESTORE_TREE=off` returns to P3b's one-row plan. The `--tree` dry run matched a live `kitten @ ls` on all 5 windows (panes, splits, display).
 - **2026-10-05, P7.** Under `--restore` the layout finds the tree itself from the rows' group column (`k<pid>w<oswin>`), so `cc-restore` need not pass `--tree`. A `cc-resume-layout: layout tree_windows= shells= placed= placed_failed=` line precedes the verdict when a tree is replayed, and shell panes get no map line. Space order is recorded as kitty's OS-window order, because macOS has no public API for the Mission Control order. The first tab is left active, because focusing a tab would steal focus.
+- **2026-10-05, lead. A heredoc commit message can stall a fired session for an hour.** P4b's `git commit -F - <<'EOF'` body tripped `validate-bash.sh`'s "git restore of the WORKING TREE" confirm prompt, which an unattended session cannot answer; the lead answered it from the pane after reading the command. Briefs should say: write commit messages with `-m`, or to a file with the Write tool and `-F <file>`.
