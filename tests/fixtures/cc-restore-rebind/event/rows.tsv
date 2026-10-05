@@ -1,0 +1,5 @@
+next3	11111111-aaaa-4aaa-8aaa-000000000001	/tmp/w	main	lead	opus	high				auto	INTERRUPTED
+next	11111111-aaaa-4aaa-8aaa-000000000002	/tmp/w	main	iterm	opus	high				auto	WAKE-LOST
+next3	11111111-aaaa-4aaa-8aaa-000000000003	/tmp/w	main	low	opus	high				auto	IDLE
+next3	11111111-aaaa-4aaa-8aaa-000000000004	/tmp/w	main	gone	opus	high				auto	INTERRUPTED
+next3	11111111-aaaa-4aaa-8aaa-000000000005	/tmp/w	main	wake	opus	high				auto	WAKE-LOST

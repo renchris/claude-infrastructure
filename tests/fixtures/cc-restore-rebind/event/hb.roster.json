@@ -1,0 +1,7 @@
+[
+ {"paneUUID":"249","name":"lead-249","session_id":"11111111-aaaa-4aaa-8aaa-000000000001","account":"claude-next3","pid":101},
+ {"paneUUID":"ABCDEF01-2222-3333-4444-555555555555","name":"iterm-pane","session_id":"11111111-aaaa-4aaa-8aaa-000000000002","account":"claude-next","pid":102},
+ {"paneUUID":"4","name":"low-4","session_id":"11111111-aaaa-4aaa-8aaa-000000000003","account":"claude-next3","pid":103},
+ {"paneUUID":"251","name":"gone-251","session_id":"11111111-aaaa-4aaa-8aaa-000000000004","account":"claude-next3","pid":104},
+ {"paneUUID":"252","name":"wake-252","session_id":"11111111-aaaa-4aaa-8aaa-000000000005","account":"claude-next3","pid":105}
+]

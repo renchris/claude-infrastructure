@@ -1,0 +1,338 @@
+#!/usr/bin/env bash
+# cc-restore-rebind — re-bind what a restore breaks: notify-back forwards, cc-roles bindings, and
+# sessions sitting on an exhausted account. W3 phase P8 (docs/research/session-durability-2026-10/
+# W3-build-plan.md § Amendment 2026-10-04, gaps 5, 11 and 16). bin/cc-restore (P5) runs it after
+# events/<id>.done; it is safe to run by hand, and safe to run again.
+#
+#   cc-restore-rebind <event-dir> [--dry-run] [--accounts-json FILE]
+#
+# WHY. A restore brings each session back under its OWN session id (`claude --resume <sid>`), but in
+# a NEW kitty window with a new window id. Three things were bound to the old window id and silently
+# stop working:
+#   1. FORWARDS (gap 11). A peer's notify-back address resolves to the old pane key, so its DONE ping
+#      lands in `<old>.md`, which nothing drains any more, and the originator's custody row stays open
+#      forever. We write `<old pane key>.forward` → the session id. cc-notify follows that pointer
+#      before it enqueues, and the drain reads the session box (mailbox M1), so the ping reaches the
+#      restored session and its drain discharges the custody row. We then migrate whatever already
+#      landed in the old box (mailbox_migrate: exactly-once, so a re-run moves nothing).
+#   2. ROLES (gap 16). A role file names a pane key; after the restore it names a dead pane, which
+#      cc-roles reads as ABSENT. For each role whose session came back (hb.roles.tsv: role → sid) we
+#      run `cc-roles claim <role> --pane <new> --pid <its claude pid> --force`.
+#   3. ACCOUNTS (gap 5). A session restored onto an exhausted account sits idle. Once the event is
+#      done, each restored row on an exhausted account whose verdict is INTERRUPTED or WAKE-LOST is
+#      handed to `lr-fleet.sh --one <sid> --target auto --detach`, once per sid per event.
+#
+# INPUTS, all read from <event-dir>; a missing input turns its step into a logged skip:
+#   *.map           map lines `cc-resume-layout: map sid=<sid> wid=<wid> oswin=<n>` (row contract);
+#                   only sessions named here count as restored. A sid listed twice keeps its last line.
+#   hb.roster.json  the pre-restore roster (cc-sessions --json shape: paneUUID, session_id) — the
+#                   source of each session's OLD pane key.
+#   hb.roles.tsv    role<TAB>sid, one per line.
+#   rows.tsv        the classified rows (contract: col 1 account alias, col 2 sid, verdict = last col;
+#                   $TSV_PAD (\037) cells read as empty).
+#   ../<id>.done    the event-done marker; the accounts step waits for it.
+# Accounts come from `claude-accounts --json` (or --accounts-json FILE): an account is exhausted when
+# its session_pct or weekly_pct is at least CC_REBIND_EXHAUSTED_PCT (default 100).
+#
+# THE FORWARD WRITER. The forward goes through mailbox_write_forward from hooks/lib/mailbox-pending.sh
+# (sourced, not copied). That writer only accepts canonical-uuid OLD keys, which were iTerm2's pane
+# ids; a kitty pane key is a decimal window id, which it refuses. Both READERS accept such a key as
+# the file name (mailbox_forward_of checks the old key with _mbx_valid_uuid and only the NEXT hop with
+# _mbx_strict_uuid; mailbox-drain's adoption loop reads any *.forward), so for a non-uuid old key we
+# write the same one-line pointer with the same tmp+mv, under the lib's own validators and path
+# helper. `writer=lib|local` in each forward line says which one ran.
+#
+# REUSED KEYS. Kitty numbers windows from 1 again after a restart, so an old key can name a window a
+# DIFFERENT session now occupies. A forward on such a key would hijack that session's mail, so it is
+# refused when the old key is a new window id in this map, or when the registry row for the old key
+# names another session (reason=old-key-reused / pane-reoccupied).
+#
+# OUTPUT. One `rebind: <act> …` line per act on stdout (`rebind: DRY …` under --dry-run), each also
+# appended to <event-dir>/rebind.log with a UTC timestamp (not under --dry-run, which writes nothing).
+# Last line: `cc-restore-rebind: verdict=OK|PARTIAL|NOOP forwards=N roles=N handoffs=N skipped=N
+# deferred=N refused=N failed=N`.
+# Exit: 0 = nothing deferred, refused or failed · 1 = PARTIAL (re-run when the cause clears) · 2 = usage.
+#
+# Env seams: CC_MAILBOX_DIR (via the lib) · CC_REGISTRY_DIR · CC_REBIND_ROLES_BIN · CC_REBIND_LRFLEET
+# · CC_REBIND_ACCOUNTS_CMD · CC_REBIND_EXHAUSTED_PCT · CC_REBIND_MAILBOX_LIB. Under bats, every
+# actuator seam must be set, so a suite can never reach live roles, mailboxes or sessions.
+# bash 3.2-safe (boot-resume runs under launchd's /bin/bash).
+set -uo pipefail
+
+TSV_PAD=$'\037'
+DRY=0 EV="" ACCTS_JSON=""
+usage() { sed -n '2,/^set -uo pipefail/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; }
+die() { printf 'cc-restore-rebind: %s\n' "$1" >&2; exit "${2:-2}"; }
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dry-run) DRY=1; shift ;;
+    --accounts-json) ACCTS_JSON="${2:?--accounts-json needs a file}"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    -*) die "unknown arg $1" ;;
+    *) [ -z "$EV" ] || die "one event dir only (got '$EV' and '$1')"; EV="$1"; shift ;;
+  esac
+done
+[ -n "$EV" ] || { usage >&2; exit 2; }
+[ -d "$EV" ] || die "no such event dir: $EV"
+EV="$(cd "$EV" && pwd)"
+LOG="$EV/rebind.log"
+DONE_MARKER="$EV.done"
+
+_self="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
+HERE="$(cd "$(dirname "$_self")" && pwd)"
+REG_DIR="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
+EXH_PCT="${CC_REBIND_EXHAUSTED_PCT:-100}"
+case "$EXH_PCT" in ''|*[!0-9]*) EXH_PCT=100 ;; esac
+
+first_file() { local c; for c in "$@"; do [ -n "$c" ] && [ -f "$c" ] && { printf '%s' "$c"; return 0; }; done; return 1; }
+
+# Under bats, refuse unless every seam that reaches live state is pinned.
+if [ -n "${BATS_TEST_FILENAME:-}" ]; then
+  for _v in CC_MAILBOX_DIR CC_REGISTRY_DIR CC_REBIND_ROLES_BIN CC_REBIND_LRFLEET; do
+    eval "_val=\${$_v:-}"
+    [ -n "$_val" ] || die "under bats $_v must be set (refusing to touch live state)" 3
+  done
+  [ -n "$ACCTS_JSON" ] || [ -n "${CC_REBIND_ACCOUNTS_CMD:-}" ] \
+    || die "under bats --accounts-json or CC_REBIND_ACCOUNTS_CMD must be set (refusing to touch live state)" 3
+fi
+
+ROLES_BIN="${CC_REBIND_ROLES_BIN:-$(first_file "$HERE/cc-roles" "$HOME/.claude/bin/cc-roles")}"
+LRFLEET="${CC_REBIND_LRFLEET:-$(first_file "$HERE/../scripts/limit-recover/lr-fleet.sh" "$HOME/.claude/scripts/limit-recover/lr-fleet.sh")}"
+MBX_LIB="${CC_REBIND_MAILBOX_LIB:-$(first_file "$HERE/../hooks/lib/mailbox-pending.sh" "$HOME/.claude/hooks/lib/mailbox-pending.sh")}"
+# shellcheck disable=SC1090
+[ -n "$MBX_LIB" ] && [ -f "$MBX_LIB" ] && . "$MBX_LIB"
+
+N_FWD=0 N_ROLE=0 N_HAND=0 N_SKIP=0 N_DEFER=0 N_REFUSE=0 N_FAIL=0
+
+emit() { # <act and fields> — stdout always; rebind.log unless --dry-run
+  if [ "$DRY" = 1 ]; then
+    printf 'rebind: DRY %s\n' "$*"
+  else
+    printf 'rebind: %s\n' "$*"
+    printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$LOG" 2>/dev/null || true
+  fi
+}
+
+# One rebind per event at a time (a stale lock older than 10 min is taken over).
+LOCK="$EV/.rebind.lock"
+if [ "$DRY" = 0 ]; then
+  if ! mkdir "$LOCK" 2>/dev/null; then
+    _lm="$(stat -f %m "$LOCK" 2>/dev/null || stat -c %Y "$LOCK" 2>/dev/null || echo 0)"
+    if [ $(( $(date +%s) - _lm )) -gt 600 ]; then
+      rmdir "$LOCK" 2>/dev/null; mkdir "$LOCK" 2>/dev/null || die "event is locked by another rebind: $LOCK" 1
+    else
+      die "event is locked by another rebind: $LOCK" 1
+    fi
+  fi
+  trap 'rmdir "$LOCK" 2>/dev/null' EXIT
+fi
+
+safe_key() { case "${1:-}" in ''|.|..|.*|*[!A-Za-z0-9._-]*) return 1 ;; *) return 0 ;; esac; }
+sid_shape() { case "${1:-}" in ''|*[!0-9A-Fa-f-]*) return 1 ;; *) return 0 ;; esac; }
+
+# ── the map: sid<TAB>wid<TAB>oswin, last line per sid wins ──────────────────────────────────────────
+MAP="$(cat "$EV"/*.map 2>/dev/null | sed -n 's/^cc-resume-layout: map //p' | awk '
+  { sid=""; wid=""; os=""
+    for (i = 1; i <= NF; i++) {
+      if ($i ~ /^sid=/) sid = substr($i, 5)
+      else if ($i ~ /^wid=/) wid = substr($i, 5)
+      else if ($i ~ /^oswin=/) os = substr($i, 7)
+    }
+    if (sid == "" || wid == "") next
+    if (!(sid in w)) order[++n] = sid
+    w[sid] = wid; o[sid] = os }
+  END { for (i = 1; i <= n; i++) printf "%s\t%s\t%s\n", order[i], w[order[i]], o[order[i]] }')"
+new_wid_of() { printf '%s\n' "$MAP" | awk -F'\t' -v s="$1" '$1 == s { print $2; exit }'; }
+is_new_wid() { printf '%s\n' "$MAP" | awk -F'\t' -v w="$1" '$2 == w { f = 1 } END { exit !f }'; }
+N_MAP="$(printf '%s' "$MAP" | grep -c . || true)"
+[ "$N_MAP" -gt 0 ] || emit "map-empty event=$EV (no '*.map' line names a restored session)"
+
+# registry row field for a pane key, only when that row names <sid> (pass "" to accept any sid)
+reg_field() { # <pane> <field> [<sid>]
+  local f="$REG_DIR/$1.json"
+  safe_key "$1" && [ -f "$f" ] || return 1
+  jq -r --arg s "${3:-}" --arg k "$2" 'select($s == "" or .session_id == $s) | .[$k] // empty' "$f" 2>/dev/null
+}
+
+# ── 1. FORWARDS ─────────────────────────────────────────────────────────────────────────────────────
+ROSTER_TSV=""
+if [ -f "$EV/hb.roster.json" ]; then
+  ROSTER_TSV="$(jq -r '(if type == "array" then .[] elif (type == "object" and has("sessions")) then .sessions[] else . end)
+    | select(type == "object") | [(.session_id // ""), ((.paneUUID // "") | tostring)] | @tsv' \
+    "$EV/hb.roster.json" 2>/dev/null)" || ROSTER_TSV=""
+fi
+
+write_forward_local() { # <old> <sid> — the lib's pointer format, for an old key its writer refuses
+  local old="$1" new="$2" dir tmp
+  command -v _mbx_valid_uuid >/dev/null 2>&1 && command -v _mbx_strict_uuid >/dev/null 2>&1 \
+    && command -v _mbx_fwd_file >/dev/null 2>&1 && command -v _mbx_dir >/dev/null 2>&1 || return 1
+  _mbx_valid_uuid "$old" && _mbx_strict_uuid "$new" && [ "$old" != "$new" ] || return 1
+  dir="$(_mbx_dir)"; mkdir -p "$dir" 2>/dev/null || return 1
+  tmp="$dir/.$old.forward.$$.tmp"
+  printf '%s\n' "$new" > "$tmp" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 1; }
+  mv -f "$tmp" "$(_mbx_fwd_file "$old")" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 1; }
+}
+
+if [ "$N_MAP" -gt 0 ]; then
+  if ! command -v mailbox_write_forward >/dev/null 2>&1 || ! command -v mailbox_forward_of >/dev/null 2>&1; then
+    emit "forward-deferred reason=no-mailbox-lib lib=${MBX_LIB:-none}"; N_DEFER=$((N_DEFER + 1))
+  elif [ ! -f "$EV/hb.roster.json" ]; then
+    emit "forward-skip reason=no-roster (no hb.roster.json, so no old pane keys)"; N_SKIP=$((N_SKIP + 1))
+  else
+    while IFS=$'\t' read -r sid wid _os; do
+      [ -n "$sid" ] || continue
+      olds="$(printf '%s\n' "$ROSTER_TSV" | awk -F'\t' -v s="$sid" -v w="$wid" '$1 == s && $2 != "" && $2 != w && !seen[$2]++ { print $2 }')"
+      if [ -z "$olds" ]; then
+        emit "forward-skip sid=$sid new_pane=$wid reason=no-old-pane"; N_SKIP=$((N_SKIP + 1)); continue
+      fi
+      if ! _mbx_strict_uuid "$sid" 2>/dev/null; then
+        emit "forward-refused sid=$sid reason=sid-not-canonical"; N_REFUSE=$((N_REFUSE + 1)); continue
+      fi
+      for old in $olds; do
+        if ! safe_key "$old"; then
+          emit "forward-refused old=$old sid=$sid reason=unsafe-key"; N_REFUSE=$((N_REFUSE + 1)); continue
+        fi
+        if is_new_wid "$old"; then
+          emit "forward-refused old=$old sid=$sid new_pane=$wid reason=old-key-reused (a restored window now holds $old)"
+          N_REFUSE=$((N_REFUSE + 1)); continue
+        fi
+        occ="$(reg_field "$old" session_id || true)"
+        if [ -n "$occ" ] && [ "$occ" != "$sid" ]; then
+          emit "forward-refused old=$old sid=$sid reason=pane-reoccupied (registry row names $occ)"
+          N_REFUSE=$((N_REFUSE + 1)); continue
+        fi
+        cur="$(head -n1 "$(_mbx_fwd_file "$old")" 2>/dev/null | tr -dc '0-9A-Fa-f-')"
+        pend=$(( $(mailbox_lines "$old" 2>/dev/null || echo 0) - $(mailbox_acked "$old" 2>/dev/null || echo 0) ))
+        [ "$pend" -ge 0 ] 2>/dev/null || pend=0
+        if [ "$DRY" = 1 ]; then
+          if [ "$cur" = "$sid" ]; then st="held"; else st="write"; fi
+          emit "forward old=$old → sid=$sid new_pane=$wid state=$st unconsumed=$pend"
+          N_FWD=$((N_FWD + 1)); continue
+        fi
+        if [ "$cur" = "$sid" ]; then
+          writer=held
+        elif mailbox_write_forward "$old" "$sid" 2>/dev/null; then
+          writer=lib
+        elif write_forward_local "$old" "$sid"; then
+          writer=local
+        else
+          emit "forward-failed old=$old sid=$sid reason=write-failed"; N_FAIL=$((N_FAIL + 1)); continue
+        fi
+        n="$(mailbox_migrate "$old" "$sid" 2>/dev/null || true)"
+        case "$n" in ''|*[!0-9]*) n=0 ;; esac
+        # read the pointer back through the reader cc-notify uses, never trust the write's rc alone
+        head_now="$(mailbox_forward_of "$old" 2>/dev/null || true)"
+        if [ "$head_now" != "$sid" ]; then
+          emit "forward-failed old=$old sid=$sid reason=readback head=${head_now:-none}"; N_FAIL=$((N_FAIL + 1)); continue
+        fi
+        emit "forward old=$old → sid=$sid new_pane=$wid writer=$writer migrated=$n"
+        N_FWD=$((N_FWD + 1))
+      done
+    done <<EOF
+$MAP
+EOF
+  fi
+fi
+
+# ── 2. ROLES ────────────────────────────────────────────────────────────────────────────────────────
+if [ -f "$EV/hb.roles.tsv" ]; then
+  while IFS=$'\t' read -r role sid _rest; do
+    case "$role" in ''|\#*) continue ;; esac
+    if ! safe_key "$role" || ! sid_shape "$sid"; then
+      emit "role-refused role=$role sid=$sid reason=bad-row"; N_REFUSE=$((N_REFUSE + 1)); continue
+    fi
+    wid="$(new_wid_of "$sid")"
+    if [ -z "$wid" ]; then
+      emit "role-skip role=$role sid=$sid reason=not-restored"; N_SKIP=$((N_SKIP + 1)); continue
+    fi
+    if [ -z "$ROLES_BIN" ] || [ ! -x "$ROLES_BIN" ]; then
+      emit "role-deferred role=$role sid=$sid reason=no-cc-roles"; N_DEFER=$((N_DEFER + 1)); continue
+    fi
+    # The claim's liveness evidence must be the restored claude process, never this script's pid,
+    # or the claim is dead on arrival and cc-roles reads it as ABSENT.
+    pid="$(reg_field "$wid" pid "$sid" || true)"
+    case "$pid" in ''|0|*[!0-9]*) pid="" ;; esac   # `kill -0 0` succeeds: it signals our own group
+    if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+      emit "role-deferred role=$role sid=$sid new_pane=$wid reason=no-live-pid (registry row $wid not yet written or not alive)"
+      N_DEFER=$((N_DEFER + 1)); continue
+    fi
+    held="$("$ROLES_BIN" read "$role" 2>/dev/null | head -n1 || true)"
+    if [ "$held" = "$wid" ]; then
+      emit "role-held role=$role pane=$wid sid=$sid"; N_SKIP=$((N_SKIP + 1)); continue
+    fi
+    if [ "$DRY" = 1 ]; then
+      emit "role-claim role=$role sid=$sid pane=$wid pid=$pid was=${held:-absent} cmd=cc-roles claim $role --pane $wid --pid $pid --force"
+      N_ROLE=$((N_ROLE + 1)); continue
+    fi
+    "$ROLES_BIN" claim "$role" --pane "$wid" --pid "$pid" --force >/dev/null 2>&1; rc=$?
+    if [ "$rc" = 0 ]; then
+      emit "role-claim role=$role sid=$sid pane=$wid pid=$pid was=${held:-absent} rc=0"; N_ROLE=$((N_ROLE + 1))
+    else
+      emit "role-failed role=$role sid=$sid pane=$wid rc=$rc"; N_FAIL=$((N_FAIL + 1))
+    fi
+  done < "$EV/hb.roles.tsv"
+else
+  emit "role-skip reason=no-roles-file (no hb.roles.tsv)"; N_SKIP=$((N_SKIP + 1))
+fi
+
+# ── 3. ACCOUNTS ─────────────────────────────────────────────────────────────────────────────────────
+unpad() { [ "$1" = "$TSV_PAD" ] || printf '%s' "$1"; }
+if [ ! -f "$EV/rows.tsv" ]; then
+  emit "lrfleet-skip reason=no-rows (no rows.tsv)"; N_SKIP=$((N_SKIP + 1))
+elif [ ! -f "$DONE_MARKER" ]; then
+  emit "lrfleet-deferred reason=event-not-done marker=$DONE_MARKER"; N_DEFER=$((N_DEFER + 1))
+else
+  if [ -n "$ACCTS_JSON" ]; then
+    AJ="$(cat "$ACCTS_JSON" 2>/dev/null || true)"
+  else
+    _to=""; command -v timeout >/dev/null 2>&1 && _to="timeout 90"
+    # shellcheck disable=SC2086  # the command is a word list by design
+    AJ="$($_to ${CC_REBIND_ACCOUNTS_CMD:-claude-accounts --json} 2>/dev/null || true)"
+  fi
+  EXH="$(printf '%s' "$AJ" | jq -r --argjson p "$EXH_PCT" \
+    '.rows[]? | select(((.session_pct // 0) >= $p) or ((.weekly_pct // 0) >= $p)) | .acct' 2>/dev/null)"; jrc=$?
+  if [ "$jrc" != 0 ] || ! printf '%s' "$AJ" | jq -e '.rows | type == "array"' >/dev/null 2>&1; then
+    emit "lrfleet-deferred reason=accounts-unreadable"; N_DEFER=$((N_DEFER + 1))
+  else
+    emit "accounts exhausted=[$(printf '%s' "$EXH" | tr '\n' ' ' | sed 's/ $//')] threshold=${EXH_PCT}%"
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      acct="$(unpad "$(printf '%s' "$line" | cut -f1)")"
+      sid="$(unpad "$(printf '%s' "$line" | cut -f2)")"
+      verdict="$(printf '%s' "$line" | awk -F'\t' '{ print $NF }')"
+      case "$verdict" in INTERRUPTED|WAKE-LOST) : ;; *) continue ;; esac
+      printf '%s\n' "$EXH" | grep -qxF -- "$acct" || continue
+      sid_shape "$sid" || { emit "lrfleet-refused sid=$sid reason=bad-sid"; N_REFUSE=$((N_REFUSE + 1)); continue; }
+      wid="$(new_wid_of "$sid")"
+      if [ -z "$wid" ]; then
+        emit "lrfleet-skip sid=$sid acct=$acct verdict=$verdict reason=not-restored"; N_SKIP=$((N_SKIP + 1)); continue
+      fi
+      if grep -qF " lrfleet-handoff sid=$sid " "$LOG" 2>/dev/null; then
+        emit "lrfleet-held sid=$sid acct=$acct (already handed off in this event)"; N_SKIP=$((N_SKIP + 1)); continue
+      fi
+      if [ -z "$LRFLEET" ] || [ ! -f "$LRFLEET" ]; then
+        emit "lrfleet-deferred sid=$sid reason=no-lr-fleet"; N_DEFER=$((N_DEFER + 1)); continue
+      fi
+      if [ "$DRY" = 1 ]; then
+        emit "lrfleet-handoff sid=$sid acct=$acct verdict=$verdict pane=$wid cmd=lr-fleet.sh --one $sid --target auto --detach"
+        N_HAND=$((N_HAND + 1)); continue
+      fi
+      bash "$LRFLEET" --one "$sid" --target auto --detach >/dev/null 2>&1 </dev/null; rc=$?
+      if [ "$rc" = 0 ]; then
+        emit "lrfleet-handoff sid=$sid acct=$acct verdict=$verdict pane=$wid rc=0"; N_HAND=$((N_HAND + 1))
+      else
+        emit "lrfleet-failed sid=$sid acct=$acct verdict=$verdict rc=$rc"; N_FAIL=$((N_FAIL + 1))
+      fi
+    done < "$EV/rows.tsv"
+  fi
+fi
+
+BAD=$((N_DEFER + N_REFUSE + N_FAIL))
+if [ "$BAD" -gt 0 ]; then verdict=PARTIAL
+elif [ $((N_FWD + N_ROLE + N_HAND)) -gt 0 ]; then verdict=OK
+else verdict=NOOP; fi
+printf 'cc-restore-rebind: verdict=%s forwards=%s roles=%s handoffs=%s skipped=%s deferred=%s refused=%s failed=%s dry=%s log=%s\n' \
+  "$verdict" "$N_FWD" "$N_ROLE" "$N_HAND" "$N_SKIP" "$N_DEFER" "$N_REFUSE" "$N_FAIL" "$DRY" "$LOG"
+[ "$BAD" = 0 ] || exit 1
+exit 0
