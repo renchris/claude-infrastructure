@@ -715,7 +715,7 @@ below 90 by what blocks them, and a priced per-decision extension on the operato
   teammates over one contract); ran as T for two and L (lead-inline) for four. Why L: the machine-capacity gate
   refused 8 of 10 teammate spawns ("8 sessions mid-turn + 1 > active ceiling 8") and says to run the work serially
   in-session rather than retry, so the lead built the pieces it could not hand off. The lead also wrote the spec
-  and the shared skeleton (`5ac402be7`: stub rows and verb modules, so the pieces touch disjoint files).
+  and the shared skeleton (`6a9aa9d2f`: stub rows and verb modules, so the pieces touch disjoint files).
 
 | Piece | Locus | Owns | Suite |
 |---|---|---|---|
@@ -728,15 +728,14 @@ below 90 by what blocks them, and a priced per-decision extension on the operato
 | blockers | L | `lib/blockers.py`, row 19, menu extension, `extend-decision` signature, decision timebox fields | `tests/research-kit-blockers.bats` |
 
 - Status: **DONE 2026-10-04** — both mechanisms specified (REPORT.md §11, §12, recorded in §9) and built, every
-  rule with a planted-input test red on the skeleton `5ac402be7` and green after. Branch shas (the land rebases them;
-  find the landed ones with `git log --grep` on the subjects):
-  - Spec and skeleton `5ac402be7`.
-  - Mechanism 2, `8fc8f8ad2`: yield 18 of 20 red → 1..20 (the other two are 1.1 no-change controls); blockers 17 of
+  rule with a planted-input test red on the skeleton and green after. Shas after the rebase onto E3a and E1c:
+  - Spec and skeleton `6a9aa9d2f`.
+  - Mechanism 2, `5ac98ae35`: yield 18 of 20 red → 1..20 (the other two are 1.1 no-change controls); blockers 17 of
     20 red → 1..20 (two 1.1 controls; one test passed on the stub's own "unknown fails" text and was tightened).
-  - Mechanism 1: instruments, built rounds and certificate `edbeb8803` (cc-research-built 20 of 20 red → 1..20;
-    built-round 12 of 12 → 1..12; built-cert 8 of 8 → 1..8); rows 20–25 `ec86bcf72` (51 of 51 red → 1..51, 47
-    mutants killed, one per rule site); states, `built-freeze` and the split line `bdb0b9c09` (1..25, 26 mutants
-    killed); end to end `b3c08ee71` (1..4: records written by the real verbs pass the real built gate, which
+  - Mechanism 1: instruments, built rounds and certificate `e0c132ba1` (cc-research-built 20 of 20 red → 1..20;
+    built-round 12 of 12 → 1..12; built-cert 8 of 8 → 1..8); rows 20–25 `3242f09d7` (51 of 51 red → 1..51, 47
+    mutants killed, one per rule site); states, `built-freeze` and the split line `7a977f9eb` (1..25, 26 mutants
+    killed); end to end `37be57ee3` (1..4: records written by the real verbs pass the real built gate, which
     certifies and states both forecasts).
   - Existing suites after the merge: gate 1..50, requires 1..17, registry 1..10, research-program-lib 1..8, jobs 1..13,
     router 1..30, core 1..22, round 1..27, cert 1..23, records 1..11, operator-sign 1..13, courier 1..15, sweep 1..13.
@@ -755,10 +754,10 @@ below 90 by what blocks them, and a priced per-decision extension on the operato
   operator's to load), and the audit row 7 clause "instrument the pilot so front-end yield can be fitted": the
   stop record and `yield.jsonl` are the data, the fit needs the pilot (E4).
 - Coordination with E3a (owner of `intake.py`, `estimate.py`, REPORT §1/§7/§3.12, SKILL.md), none of which E3b
-  edits: `intake.py` must stamp `"method_version": "1.2"` into a new frame (until it does, a new program runs the
-  1.1 rules); its contract-page ceiling must add §12's yield ceiling (up to 3 extra stage budgets on each of stages
-  3 and 5) and §11's Stage 9 budget; `intake.py:416` lists registry states and may want the two build states;
-  SKILL.md needs Stage 9 and the yield rule in its stage walk.
+  edits. Done by E3a at this wave's request: `intake.py` stamps `method_version: "1.2"` into a new frame and counts
+  the two build states as registered, so a new program runs rows 18 and 19. Still open, in E3a's files: the
+  contract-page ceiling does not yet add §12's yield ceiling (up to 3 extra stage budgets on each of stages 3 and 5)
+  or §11's Stage 9 budget, and SKILL.md's stage walk does not yet name Stage 9 or the yield rule.
 
 #### E4 — re-sign the pilot contract (v1.2 (d), operator half) — after E3
 - Operator: re-render TM2's contract on the measured forecast and re-sign it, with rulings 1 and 4 re-presented at
