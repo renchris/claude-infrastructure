@@ -3,11 +3,18 @@
 or was already AT-REST when the power died. Only the interrupted ones may be re-engaged.
 
     Usage:  ... | cc-resume-classify.py [--boot-epoch SECS] [--explain]
+                      [--wake-lost] [--lost-json PATH] [--hb-dir DIR]...
             reads lr-select.py's TSV on stdin:  account <TAB> session-id <TAB> worktree <TAB> branch
             (THE SID IS FIELD 2. lr-select.py:434 emits acct/sid/cwd/branch and boot-resume.sh:293
              reads it back in that order. This file and cc-resume-layout.sh both shipped reading
              field 3 as the sid, which is the WORKTREE PATH — see THE FIELD-ORDER TRAP below.)
-            writes the same rows with a 5th column: INTERRUPTED | AT-REST | UNKNOWN
+            writes the same rows with one more LAST column: INTERRUPTED | AT-REST | UNKNOWN
+            (a row may carry more than 4 columns — the W3 row contract has 11 — and the verdict
+             is always appended last, so readers take $NF)
+            --wake-lost adds a fourth verdict, WAKE-LOST: at rest, but with work open at the cut
+            that died with the process (see ASYNC WORK OPEN AT THE CUT). Without the flag the
+            output is byte-identical to before it existed. --lost-json writes what each session
+            lost; --hb-dir names a restore-heartbeat directory whose hb.bg.tsv says what was live.
 
 WHY THIS EXISTS (operator ruling, 2026-08-24)
 ---------------------------------------------
@@ -152,13 +159,23 @@ def find_transcript(sid):
 
 
 def classify(path, boot_dt, alive_window):
-    """-> (verdict, why, last_assistant_text)
+    """-> (verdict, why, last_assistant_text). The pre-W3 contract: never WAKE-LOST."""
+    verdict, why, last, _ = classify_full(path, boot_dt, alive_window)
+    return verdict, why, last
+
+
+def classify_full(path, boot_dt, alive_window, wake_lost=False, hb=None, sid=""):
+    """-> (verdict, why, last_assistant_text, lost_items)
 
     Only records strictly BEFORE boot are considered: a resumed session appends to the same
     transcript, so anything at or after boot is the recovery itself, not the pre-crash state.
     Reading past boot is how a naive pass concludes every session was mid-turn.
+
+    lost_items is what died with the old process (see ASYNC WORK below). With wake_lost, a session
+    at rest that had such work open is WAKE-LOST instead of AT-REST.
     """
     pending = set()  # tool_use ids awaiting a tool_result
+    scan = AsyncScan()
     last_text = ""
     saw_any = False
     last_ts = None  # last pre-crash record -> the alive-at-crash half
@@ -188,6 +205,7 @@ def classify(path, boot_dt, alive_window):
             saw_any = True
             last_ts = when
             role = rec.get("type")
+            scan.record(rec, when)
             # ONLY user/assistant records are anyone's TURN. Everything else a session writes —
             # `attachment` (token reminders), `system` (hook output), bridge/last-prompt markers —
             # is housekeeping that lands AFTER a turn has settled. Measured on this batch: a session
@@ -220,7 +238,8 @@ def classify(path, boot_dt, alive_window):
             after_speech = 0 if spoke else after_speech + 1
 
     if not saw_any or last_ts is None:
-        return "UNKNOWN", "no pre-crash records", ""
+        return "UNKNOWN", "no pre-crash records", "", []
+    lost = scan.lost(path, boot_dt, pending, hb or {}, sid)
 
     # --- signal 1: was a turn in flight? ---
     if pending:
@@ -245,6 +264,22 @@ def classify(path, boot_dt, alive_window):
             "INTERRUPTED",
             f"{tail_why}, {idle / 60:.1f} min before the crash",
             last_text,
+            lost,
+        )
+    open_work = [i for i in lost if i["kind"] in WAKE_KINDS]
+    if mid_turn and wake_lost and open_work and sid in (hb or {}).get("live", ()):
+        # Mid-turn and cold by the clock, but the heartbeat saw the process alive at its last tick
+        # and it had work open: a session parked inside a long call (measured 2026-10-05 on the
+        # live fleet: two sessions 22 and 54 min into one tool call, a Workflow and a /goal open).
+        # The clock alone would restore it and tell it nothing. Without the heartbeat's word that
+        # it was alive, the rule below stands: a session cold for days was not cut by this event.
+        kinds = sorted({i["kind"] for i in open_work})
+        return (
+            "WAKE-LOST",
+            f"mid-turn and {_ago(idle)} idle, but alive at the last heartbeat with "
+            f"{len(open_work)} open at the cut ({', '.join(kinds)}; {tail_why})",
+            last_text,
+            lost,
         )
     if mid_turn:
         # Mid-turn but long cold: it died before this crash, so this crash interrupted nothing.
@@ -253,8 +288,314 @@ def classify(path, boot_dt, alive_window):
             f"mid-turn but stale — {_ago(idle)} idle, beyond the {alive_window / 60:.0f} min "
             f"alive-window ({tail_why})",
             last_text,
+            lost,
         )
-    return "AT-REST", f"{tail_why}, {_ago(idle)} idle", last_text
+    if wake_lost and open_work:
+        kinds = sorted({i["kind"] for i in open_work})
+        return (
+            "WAKE-LOST",
+            f"{tail_why}, but {len(open_work)} open at the cut ({', '.join(kinds)})",
+            last_text,
+            lost,
+        )
+    return "AT-REST", f"{tail_why}, {_ago(idle)} idle", last_text, lost
+
+
+# ── ASYNC WORK OPEN AT THE CUT (W3 P4, 2026-10-05) ────────────────────────────────────────────────
+# A session whose tail is a completed turn can still have been waiting on something that died with
+# its process: a background shell, an inbox watcher it armed itself, a Monitor, a background
+# subagent, a Workflow run, or a /goal that will never be evaluated again. On 2026-10-01 Claude
+# Code's own "didn't finish before the previous session ended" notice reached 10 sessions and 7 of
+# them never acted on it, so that notice is not a recovery. WAKE-LOST names those sessions.
+#
+# DIRECT EVIDENCE ONLY, never transcript age:
+#   - a launch (tool_use) AFTER the session's last process start (its last SessionStart:startup or
+#     :resume hook record) with no <task-notification> carrying a <status> for it and no TaskStop;
+#     a Monitor also closes when its own timeout passed before the cut;
+#   - a subagent or workflow journal under <projects>/<slug>/<sid>/ written in the 15 min before it;
+#   - a last goal_status with met:false and not failed (handoff-fire.sh goal_live_for_sid's rule);
+#   - a ship-land the heartbeat saw running under the session.
+# NOT evidence, and the reason matters: a live `.watching` pid on its own. hooks/mailbox-wake-arm.sh
+# arms one at every SessionStart, so nearly every session has one and the resume re-arms it; taking
+# it as evidence would nudge the whole fleet, which is the 2026-08-24 defect. It only confirms a
+# watcher the session launched itself. Listening ports, agent-browser sessions and Agent Teams
+# members are named in the note and never decide the verdict.
+WAKE_KINDS = ("shell", "watcher", "agent", "workflow", "monitor", "journal", "goal", "ship")
+PAD = "\x1f"  # boot-resume.sh's TSV_PAD / restore-heartbeat.sh's HB_PAD: an empty cell
+JOURNAL_WINDOW_S = 900
+_TASK_ID_RES = (
+    re.compile(r"Task ID: ([A-Za-z0-9_-]+)"),
+    re.compile(r"with ID: ([A-Za-z0-9_-]+)"),
+    re.compile(r"\(task ([A-Za-z0-9_-]+)"),
+    re.compile(r"agentId: ([A-Za-z0-9_-]+)"),
+)
+_RUN_ID_RE = re.compile(r"wf_[0-9a-z][0-9a-z-]{5,}")
+_NOTIF_RE = re.compile(r"<task-notification>(.*?)</task-notification>", re.S)
+_AB_SESSION_RE = re.compile(r"--session[ =]([A-Za-z0-9._-]+)")
+_AB_OPEN_RE = re.compile(r"agent-browser\b[^|;&\n]*?\b(?:open|goto|navigate)\s+['\"]?(\S+?)['\"]?(?:\s|$)")
+
+
+def _tag(body, name):
+    m = re.search(rf"<{name}>(.*?)</{name}>", body, re.S)
+    return m.group(1).strip() if m else ""
+
+
+def _text_of(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(
+            (i.get("text") or "") if isinstance(i, dict) and i.get("type") == "text"
+            else (_text_of(i.get("content")) if isinstance(i, dict) and i.get("type") == "tool_result" else "")
+            for i in content
+        )
+    return ""
+
+
+class AsyncScan:
+    """One pass over the pre-cut records, fed by classify_full's own loop."""
+
+    def __init__(self):
+        self.launches = {}  # tool_use id -> item
+        self.bash = {}  # tool_use id -> command, for a shell the harness backgrounded by itself
+        self.stopped = set()
+        self.goal = None
+        self.browser = {}  # agent-browser session name -> last url
+
+    def _close(self, tool_use_id, task_id, status):
+        for item in self.launches.values():
+            if item["id"] == tool_use_id or (task_id and item.get("task_id") == task_id):
+                # A Monitor posts one notification per event; only a status ends the watch.
+                if item["kind"] != "monitor" or status:
+                    item["closed"] = True
+
+    def _notifications(self, text):
+        if "<task-notification>" not in text:
+            return
+        for body in _NOTIF_RE.findall(text):
+            tid, tuid = _tag(body, "task-id"), _tag(body, "tool-use-id")
+            if tid or tuid:
+                self._close(tuid, tid, _tag(body, "status"))
+
+    def record(self, rec, when):
+        role = rec.get("type")
+        if role == "attachment":
+            att = rec.get("attachment") or {}
+            if att.get("type") == "goal_status":
+                self.goal = att
+            elif att.get("hookName") in ("SessionStart:startup", "SessionStart:resume"):
+                # A new process: whatever the previous one launched died with it, and that resume's
+                # own notices already said so.
+                for item in self.launches.values():
+                    item["closed"] = True
+            return
+        if role == "queue-operation":
+            self._notifications(rec.get("content") or "" if isinstance(rec.get("content"), str) else "")
+            return
+        if role not in ("user", "assistant"):
+            return
+        content = (rec.get("message") or {}).get("content")
+        if isinstance(content, str):
+            if role == "user":
+                self._notifications(content)
+            return
+        if not isinstance(content, list):
+            return
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            kind = item.get("type")
+            if kind == "text" and role == "user":
+                self._notifications(item.get("text") or "")
+            elif kind == "tool_use":
+                self._tool_use(item, when)
+            elif kind == "tool_result":
+                self._tool_result(item, rec)
+
+    def _launch(self, tid, kind, when, detail, **extra):
+        self.launches[tid] = dict(
+            {"kind": kind, "id": tid, "at": when.isoformat(), "detail": " ".join(detail.split())[:160]},
+            **extra,
+        )
+
+    def _tool_use(self, item, when):
+        name, tid = item.get("name"), item.get("id")
+        inp = item.get("input") if isinstance(item.get("input"), dict) else {}
+        bg = str(inp.get("run_in_background", "")).lower() == "true"
+        if name == "Bash":
+            cmd = str(inp.get("command") or "")
+            self.bash[tid] = cmd
+            if "agent-browser" in cmd:
+                sess = _AB_SESSION_RE.search(cmd)
+                url = _AB_OPEN_RE.search(cmd)
+                key = sess.group(1) if sess else "default"
+                if url or key not in self.browser:
+                    self.browser[key] = url.group(1) if url else self.browser.get(key, "")
+            if bg:
+                self._launch(tid, _shell_kind(cmd), when, cmd, ship="ship-land" in cmd)
+        elif name in ("Agent", "Task"):
+            self._launch(tid, "agent", when, str(inp.get("description") or ""), confirmed=bg)
+        elif name == "Workflow":
+            self._launch(tid, "workflow", when, str(inp.get("name") or inp.get("scriptPath") or "inline script"))
+        elif name == "Monitor":
+            self._launch(tid, "monitor", when, str(inp.get("description") or inp.get("command") or ""),
+                         timeout_ms=inp.get("timeout_ms"))
+        elif name == "TaskStop":
+            self.stopped.add(str(inp.get("task_id") or inp.get("shell_id") or ""))
+
+    def _tool_result(self, item, rec):
+        tid = item.get("tool_use_id")
+        text = _text_of(item.get("content"))
+        launch = self.launches.get(tid)
+        if launch is None:
+            # A foreground shell the harness moved to the background (a timeout, or ctrl-b).
+            if tid in self.bash and re.search(r"running in (the )?background", text):
+                cmd = self.bash[tid]
+                when = datetime.datetime.fromisoformat(rec["timestamp"].replace("Z", "+00:00"))
+                self._launch(tid, _shell_kind(cmd), when, cmd, ship="ship-land" in cmd)
+                launch = self.launches[tid]
+            else:
+                return
+        if launch["kind"] == "agent" and not launch.pop("confirmed", False):
+            if "launched" not in text and "background" not in text:
+                del self.launches[tid]  # a foreground subagent: its result IS its end
+                return
+        tur = rec.get("toolUseResult") if isinstance(rec.get("toolUseResult"), dict) else {}
+        task = tur.get("backgroundTaskId") or tur.get("taskId") or tur.get("agentId") or ""
+        for rx in _TASK_ID_RES:
+            if task:
+                break
+            m = rx.search(text)
+            task = m.group(1) if m else ""
+        if task:
+            launch["task_id"] = str(task)
+        run = _RUN_ID_RE.search(text)
+        if run and launch["kind"] == "workflow":
+            launch["run_id"] = run.group(0)
+
+    def lost(self, path, boot_dt, pending, hb, sid):
+        items = []
+        for item in self.launches.values():
+            item.pop("confirmed", None)
+            if item.get("closed") or item.get("task_id") in self.stopped:
+                continue
+            if item["kind"] == "monitor" and isinstance(item.get("timeout_ms"), (int, float)):
+                born = datetime.datetime.fromisoformat(item["at"])
+                if born + datetime.timedelta(milliseconds=item["timeout_ms"]) <= boot_dt:
+                    continue  # it had already expired by itself
+            items.append({k: v for k, v in item.items() if k not in ("closed", "timeout_ms") and v not in ("", None, False)})
+        # A ship-land in flight as a FOREGROUND call: the turn was cut inside it.
+        ship = any(i.get("ship") for i in items) or any("ship-land" in self.bash.get(t, "") for t in pending)
+        runs = {i.get("run_id") for i in items}
+        fresh, new_runs = _fresh_journals(path, boot_dt)
+        new_runs = sorted(r for r in new_runs if r not in runs)
+        if fresh and (new_runs or not any(i["kind"] in ("agent", "workflow") for i in items)):
+            items.append({"kind": "journal", "detail": f"{fresh} subagent or workflow journal file(s) written in the "
+                          f"{JOURNAL_WINDOW_S // 60} min before the cut", "run_ids": new_runs})
+        goal = self.goal or {}
+        if goal and not goal.get("met") and not goal.get("failed"):
+            items.append({"kind": "goal", "detail": " ".join(str(goal.get("condition") or "").split())[:200]})
+        mine = hb.get("by_sid", {}).get(sid, {})
+        if mine.get("watching"):
+            for i in items:
+                if i["kind"] == "watcher":
+                    i["alive_at_tick"] = True
+        ship = ship or any("ship-land" in c for c in mine.get("children", []))
+        if ship:
+            items.append({"kind": "ship", "detail": "a ship-land was running"})
+        if mine.get("ports"):
+            items.append({"kind": "port", "detail": " ".join(sorted(set(mine["ports"])))})
+        for name in hb.get("browsers", []):
+            if name in self.browser:
+                items.append({"kind": "browser", "detail": name, "url": self.browser[name]})
+        items.extend(_teammates(sid))
+        return items
+
+
+def _shell_kind(cmd):
+    return "watcher" if "cc-await-ping" in cmd and "--stand-down" not in cmd else "shell"
+
+
+def _fresh_journals(path, boot_dt):
+    """(count, run ids) of subagent / workflow journals written in the window before the cut."""
+    root = os.path.join(os.path.dirname(path), os.path.basename(path)[: -len(".jsonl")], "subagents")
+    hi = boot_dt.timestamp()
+    lo = hi - JOURNAL_WINDOW_S
+    count, runs = 0, set()
+    for base, _dirs, files in os.walk(root):
+        for name in files:
+            try:
+                mt = os.path.getmtime(os.path.join(base, name))
+            except OSError:
+                continue
+            if lo <= mt <= hi:
+                count += 1
+                m = _RUN_ID_RE.search(base)
+                if m:
+                    runs.add(m.group(0))
+    return count, runs
+
+
+def _teammates(sid):
+    """Non-lead Agent Teams members of a team this session leads (the config on disk, not a process)."""
+    out = []
+    home = os.path.expanduser("~")
+    for store in STORES:
+        for cfg in glob.glob(f"{home}/{store}/teams/*/config.json"):
+            try:
+                with open(cfg, errors="replace") as fh:
+                    team = json.load(fh)
+            except (OSError, ValueError):
+                continue
+            if not isinstance(team, dict) or team.get("leadSessionId") != sid:
+                continue
+            for m in team.get("members") or []:
+                if not isinstance(m, dict) or m.get("agentId") == team.get("leadAgentId"):
+                    continue
+                if m.get("agentType") == "team-lead" or not m.get("name"):
+                    continue
+                out.append({"kind": "teammate", "detail": str(m["name"]), "team": str(team.get("name") or "")})
+    return out
+
+
+def load_heartbeat(dirs):
+    """Each heartbeat dir -> {"by_sid": {sid: {children, watching, ports}}, "browsers": [names], "live": {sids}}.
+
+    hb.bg.tsv rows: sid, claude_pid, kind, pid, detail; hb.session.tsv's first column is every
+    session live at the tick (restore-heartbeat.sh). Read from the files the last tick wrote, never
+    from live state: by the time a restore runs, those processes are gone.
+    """
+    hb = {"by_sid": {}, "browsers": [], "live": set()}
+    for d in dirs:
+        try:
+            with open(os.path.join(d, "hb.session.tsv"), errors="replace") as fh:
+                hb["live"].update(c for c in (line.split("\t", 1)[0].strip() for line in fh) if c and c != PAD)
+        except OSError:
+            pass
+        try:
+            fh = open(os.path.join(d, "hb.bg.tsv"), errors="replace")
+        except OSError:
+            continue
+        with fh:
+            for line in fh:
+                cols = line.rstrip("\n").split("\t")
+                if len(cols) < 5:
+                    continue
+                sid, kind, detail = cols[0], cols[2], cols[4]
+                if kind == "agent-browser":
+                    if detail not in hb["browsers"]:
+                        hb["browsers"].append(detail)
+                    continue
+                if not sid or sid == PAD:
+                    continue
+                row = hb["by_sid"].setdefault(sid, {"children": [], "watching": [], "ports": []})
+                if kind == "child":
+                    row["children"].append(detail)
+                elif kind == "watching":
+                    row["watching"].append(cols[3])
+                elif kind == "listen":
+                    row["ports"].extend(":" + p.rsplit(":", 1)[-1] for p in detail.split() if ":" in p)
+    return hb
 
 
 def _ago(seconds):
@@ -353,6 +694,165 @@ def _selftest_anchor():
     return failures
 
 
+# ── WAKE-LOST selftest. The tool-result and notification strings are the ones measured in the
+# 2026-10-01 transcripts (C2-restore-command.md §2.7): "Workflow launched in background. Task ID:
+# wtcaytsys", "Monitor started (task bv3wgaxut, …)", and the <task-notification> block. Each record
+# is (seconds before the cut, builder). Every positive case has a negative twin that differs in the
+# one record that closes the work, so a rule that ignored that record would fail the twin.
+def _a_text():
+    return {"type": "assistant", "message": {"content": [{"type": "text", "text": "done."}]}}
+
+
+def _a_use(tid, name, **inp):
+    return {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": tid, "name": name, "input": inp}]}}
+
+
+def _u_result(tid, text):
+    return {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": tid, "content": text}]}}
+
+
+def _u_notif(tid, task, status="completed"):
+    st = f"<status>{status}</status>\n" if status else ""
+    return {"type": "user", "message": {"content": "<task-notification>\n<task-id>" + task + "</task-id>\n<tool-use-id>"
+            + tid + "</tool-use-id>\n" + st + "<summary>x</summary>\n</task-notification>"}}
+
+
+def _att(**att):
+    return {"type": "attachment", "attachment": att}
+
+
+_WF = "Workflow launched in background. Task ID: wtcaytsys\nTranscript dir: /p/s/subagents/workflows/wf_d4508a0a-f86"
+_MON = "Monitor started (task bv3wgaxut, expires in 30m unless the source ends first)"
+_SH = "Command running in background with ID: bzrbwj020"
+_AG = "Async agent launched successfully.\nagentId: a81e9ac94a5566598"
+_SID = "5e1f7e57-0000-4000-8000-000000000001"
+
+
+def _has(kind, **kv):
+    return lambda items: any(i["kind"] == kind and all(i.get(k) == v for k, v in kv.items()) for i in items)
+
+
+def _lacks(kind):
+    return lambda items: not any(i["kind"] == kind for i in items)
+
+
+WAKE_CASES = [
+    # (name, records, expected, options, check on the lost items)
+    ("workflow_open", [(600, _a_text()), (500, _a_use("w1", "Workflow", script="x")), (499, _u_result("w1", _WF)),
+                       (400, _a_text())], "WAKE-LOST", {}, _has("workflow", task_id="wtcaytsys", run_id="wf_d4508a0a-f86")),
+    ("workflow_notified", [(600, _a_text()), (500, _a_use("w1", "Workflow", script="x")), (499, _u_result("w1", _WF)),
+                           (300, _u_notif("w1", "wtcaytsys")), (200, _a_text())], "AT-REST", {}, _lacks("workflow")),
+    ("workflow_open_flag_off", [(500, _a_use("w1", "Workflow", script="x")), (499, _u_result("w1", _WF)),
+                                (400, _a_text())], "AT-REST", {"wake": False}, _has("workflow")),
+    ("monitor_open", [(500, _a_use("m1", "Monitor", command="x", timeout_ms=1800000)), (499, _u_result("m1", _MON)),
+                      (400, _a_text())], "WAKE-LOST", {}, _has("monitor", task_id="bv3wgaxut")),
+    ("monitor_event_is_not_an_end", [(500, _a_use("m1", "Monitor", command="x", timeout_ms=1800000)),
+                                     (499, _u_result("m1", _MON)), (300, _u_notif("m1", "bv3wgaxut", "")),
+                                     (200, _a_text())], "WAKE-LOST", {}, _has("monitor")),
+    ("monitor_expired", [(4000, _a_use("m1", "Monitor", command="x", timeout_ms=1800000)), (3999, _u_result("m1", _MON)),
+                         (3900, _a_text())], "AT-REST", {}, _lacks("monitor")),
+    ("shell_open", [(500, _a_use("b1", "Bash", command="bats tests/x.bats", run_in_background=True)),
+                    (499, _u_result("b1", _SH)), (400, _a_text())], "WAKE-LOST", {}, _has("shell", task_id="bzrbwj020")),
+    ("shell_stopped", [(500, _a_use("b1", "Bash", command="bats tests/x.bats", run_in_background=True)),
+                       (499, _u_result("b1", _SH)), (450, _a_use("s1", "TaskStop", task_id="bzrbwj020")),
+                       (449, _u_result("s1", "stopped")), (400, _a_text())], "AT-REST", {}, _lacks("shell")),
+    ("shell_moved_to_background", [(500, _a_use("b1", "Bash", command="sleep 900")),
+                                   (499, _u_result("b1", "Command running in background with ID: bq1")),
+                                   (400, _a_text())], "WAKE-LOST", {}, _has("shell", task_id="bq1")),
+    ("shell_from_an_earlier_process", [(500, _a_use("b1", "Bash", command="bats", run_in_background=True)),
+                                       (499, _u_result("b1", _SH)), (450, _a_text()),
+                                       (300, _att(type="hook_success", hookName="SessionStart:resume")),
+                                       (200, _a_text())], "AT-REST", {}, _lacks("shell")),
+    ("ship_land_in_flight", [(500, _a_use("b1", "Bash", command="bash scripts/ship-land.sh", run_in_background=True)),
+                             (499, _u_result("b1", _SH)), (400, _a_text())], "WAKE-LOST", {}, _has("ship")),
+    ("watcher_armed_by_the_session", [(500, _a_use("b1", "Bash", command="cc-await-ping --timeout 3300",
+                                                   run_in_background=True)), (499, _u_result("b1", _SH)),
+                                      (400, _a_text())], "WAKE-LOST", {"hb": "watching"}, _has("watcher", alive_at_tick=True)),
+    ("watcher_from_the_hook_only", [(400, _a_text())], "AT-REST", {"hb": "watching"}, _lacks("watcher")),
+    ("agent_background_open", [(500, _a_use("g1", "Agent", description="scan", run_in_background="true")),
+                               (499, _u_result("g1", _AG)), (400, _a_text())], "WAKE-LOST", {}, _has("agent")),
+    ("agent_foreground", [(500, _a_use("g1", "Agent", description="scan")), (300, _u_result("g1", "the report")),
+                          (200, _a_text())], "AT-REST", {}, _lacks("agent")),
+    ("goal_live", [(500, _att(type="goal_status", met=False, sentinel=True, condition="P4 landed")),
+                   (400, _a_text())], "WAKE-LOST", {}, _has("goal", detail="P4 landed")),
+    ("goal_met", [(500, _att(type="goal_status", met=False, condition="P4 landed")),
+                  (450, _att(type="goal_status", met=True, condition="P4 landed")), (400, _a_text())],
+     "AT-REST", {}, _lacks("goal")),
+    ("journal_fresh", [(400, _a_text())], "WAKE-LOST", {"journal": 300}, _has("journal", run_ids=["wf_0a1b2c3d-e4f"])),
+    ("journal_stale", [(400, _a_text())], "AT-REST", {"journal": 3600}, _lacks("journal")),
+    ("ports_and_browser_never_decide", [(500, _a_use("b1", "Bash", command="agent-browser --session fb2 open https://example.test/x")),
+                                        (499, _u_result("b1", "ok")), (400, _a_text())], "AT-REST", {"hb": "extras"},
+     lambda items: _has("port", detail=":3000")(items) and _has("browser", detail="fb2", url="https://example.test/x")(items)),
+    ("interrupted_keeps_its_verdict", [(500, _a_use("w1", "Workflow", script="x")), (499, _u_result("w1", _WF)),
+                                       (200, _a_use("t9", "Bash", command="ls"))], "INTERRUPTED", {}, _has("workflow")),
+    ("teammates_named", [(400, _a_text())], "AT-REST", {"team": True}, _has("teammate", detail="builder-a")),
+    ("parked_in_a_long_call_alive", [(4000, _a_use("b1", "Bash", command="bats", run_in_background=True)),
+                                     (3999, _u_result("b1", _SH)), (3000, _a_use("t9", "Bash", command="make"))],
+     "WAKE-LOST", {"hb": "live"}, _has("shell")),
+    ("parked_in_a_long_call_unseen", [(4000, _a_use("b1", "Bash", command="bats", run_in_background=True)),
+                                      (3999, _u_result("b1", _SH)), (3000, _a_use("t9", "Bash", command="make"))],
+     "AT-REST", {}, _has("shell")),
+    ("cold_mid_turn_alive_nothing_open", [(3000, _a_use("t9", "Bash", command="make"))], "AT-REST", {"hb": "live"},
+     lambda items: not items),
+]
+
+
+def _selftest_wake(boot):
+    import shutil
+    import tempfile
+
+    failures = 0
+    home_was = os.environ.get("HOME")
+    for name, recs, expected, opt, check in WAKE_CASES:
+        home = tempfile.mkdtemp()
+        os.environ["HOME"] = home  # _teammates reads ~/.claude*/teams: never the real one here
+        try:
+            pdir = os.path.join(home, ".claude", "projects", "-x")
+            os.makedirs(pdir)
+            path = os.path.join(pdir, _SID + ".jsonl")
+            with open(path, "w") as fh:
+                for off, rec in recs:
+                    rec = dict(rec, timestamp=(boot - datetime.timedelta(seconds=off)).isoformat().replace("+00:00", "Z"))
+                    fh.write(json.dumps(rec) + "\n")
+            if "journal" in opt:
+                jdir = os.path.join(pdir, _SID, "subagents", "workflows", "wf_0a1b2c3d-e4f")
+                os.makedirs(jdir)
+                jf = os.path.join(jdir, "journal.jsonl")
+                open(jf, "w").close()
+                os.utime(jf, (boot.timestamp() - opt["journal"],) * 2)
+            if opt.get("team"):
+                tdir = os.path.join(home, ".claude", "teams", "t1")
+                os.makedirs(tdir)
+                with open(os.path.join(tdir, "config.json"), "w") as fh:
+                    json.dump({"name": "t1", "leadSessionId": _SID, "leadAgentId": "team-lead@t1", "members": [
+                        {"name": "team-lead", "agentId": "team-lead@t1", "agentType": "team-lead"},
+                        {"name": "builder-a", "agentId": "builder-a@t1", "agentType": "general-purpose"}]}, fh)
+            hbdir = os.path.join(home, "hb")
+            os.makedirs(hbdir)
+            rows = []
+            if opt.get("hb") == "watching":
+                rows.append([_SID, "100", "watching", "101", _SID])
+            if opt.get("hb") == "extras":
+                rows += [[_SID, "100", "listen", "102", "*:3000"], [PAD, PAD, "agent-browser", "103", "fb2"],
+                         [PAD, PAD, "agent-browser", "104", "someone-elses"]]
+            with open(os.path.join(hbdir, "hb.bg.tsv"), "w") as fh:
+                fh.writelines("\t".join(r) + "\n" for r in rows)
+            if opt.get("hb") == "live":
+                with open(os.path.join(hbdir, "hb.session.tsv"), "w") as fh:
+                    fh.write(_SID + "\tclaude-next\tm\thigh\tauto\tbr\t100\n")
+            got, why, _, items = classify_full(path, boot, 900.0, opt.get("wake", True), load_heartbeat([hbdir]), _SID)
+            ok = got == expected and check(items)
+        finally:
+            shutil.rmtree(home, ignore_errors=True)
+        failures += 0 if ok else 1
+        print(f"{'ok  ' if ok else 'FAIL'} wake: {name:<32} expected={expected:<12} got={got:<12} ({why})", file=sys.stderr)
+    if home_was is None:
+        os.environ.pop("HOME", None)
+    else:
+        os.environ["HOME"] = home_was
+    return failures
+
+
 def _selftest():
     """Prove BOTH signals are load-bearing, with cases that must fail if either is dropped.
 
@@ -392,8 +892,8 @@ def _selftest():
             f"{'ok  ' if ok else 'FAIL'} {name:<20} expected={expected:<12} got={got:<12} ({why})",
             file=sys.stderr,
         )
-    anchor_failures = _selftest_anchor()
-    total = len(SELFTEST_CASES) + 4
+    anchor_failures = _selftest_anchor() + _selftest_wake(boot)
+    total = len(SELFTEST_CASES) + 4 + len(WAKE_CASES)
     passed = total - failures - anchor_failures
     print(
         f"cc-resume-classify --selftest: {passed}/{total} passed",
@@ -430,6 +930,25 @@ def main():
         "The measured 2026-08-24 batch separates cleanly at any value in 5..27 min.",
     )
     ap.add_argument(
+        "--wake-lost",
+        action="store_true",
+        help="emit WAKE-LOST for a session at rest that had async work open at the cut "
+        "(default: such a session stays AT-REST, the pre-W3 output)",
+    )
+    ap.add_argument(
+        "--lost-json",
+        default=None,
+        metavar="PATH",
+        help="write {sid: {verdict, items}} for every row: what died with the old process",
+    )
+    ap.add_argument(
+        "--hb-dir",
+        action="append",
+        default=[],
+        metavar="DIR",
+        help="a restore-heartbeat directory (hb.bg.tsv); repeatable",
+    )
+    ap.add_argument(
         "--explain",
         action="store_true",
         help="also print the evidence and the session's last words to stderr",
@@ -463,7 +982,9 @@ def main():
             file=sys.stderr,
         )
 
-    counts = {"INTERRUPTED": 0, "AT-REST": 0, "UNKNOWN": 0}
+    counts = {"INTERRUPTED": 0, "AT-REST": 0, "UNKNOWN": 0, "WAKE-LOST": 0}
+    hb = load_heartbeat(args.hb_dir)
+    lost_all = {}
     notfound = 0  # UNKNOWNs caused by a transcript lookup MISS, not by an unreadable transcript
     nopre = 0  # rows with NO records before the anchor -> the anchor predates the session entirely
     for raw in sys.stdin:
@@ -481,13 +1002,18 @@ def main():
         path = find_transcript(sid)
         if path is None:
             notfound += 1
-            verdict, why, last = (
+            verdict, why, last, lost = (
                 "UNKNOWN",
                 "transcript not found in any account store",
                 "",
+                [],
             )
         else:
-            verdict, why, last = classify(path, boot_dt, args.alive_window)
+            verdict, why, last, lost = classify_full(
+                path, boot_dt, args.alive_window, args.wake_lost, hb, sid
+            )
+        lost_all[sid] = {"verdict": verdict, "why": why, "items": lost}
+        if path is not None:
             if why == "no pre-crash records":
                 nopre += 1
         counts[verdict] += 1
@@ -499,8 +1025,19 @@ def main():
                 tail = " ".join(last.strip().split())[-160:]
                 print(f"      came to rest saying: ...{tail}", file=sys.stderr)
 
+    if args.lost_json:
+        tmp = args.lost_json + ".tmp"
+        try:
+            with open(tmp, "w") as fh:
+                json.dump({"anchor": boot, "sessions": lost_all}, fh, indent=1, sort_keys=True)
+                fh.write("\n")
+            os.replace(tmp, args.lost_json)
+        except OSError as exc:
+            print(f"cc-resume-classify: could not write --lost-json {args.lost_json}: {exc}", file=sys.stderr)
+
+    wake = f"{counts['WAKE-LOST']} WAKE-LOST (re-engage: work died with the process), " if args.wake_lost else ""
     print(
-        f"cc-resume-classify: {counts['INTERRUPTED']} INTERRUPTED (re-engage), "
+        f"cc-resume-classify: {counts['INTERRUPTED']} INTERRUPTED (re-engage), {wake}"
         f"{counts['AT-REST']} AT-REST (restore, do NOT nudge), "
         f"{counts['UNKNOWN']} UNKNOWN (treat as AT-REST)",
         file=sys.stderr,
