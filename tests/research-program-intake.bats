@@ -279,3 +279,40 @@ PY
   run "$I" status --program demo
   [[ "$output" == *"done  registered"* ]] || false
 }
+
+# ── wave E3c: the contract page's ceiling carries the v1.2 additions (REPORT.md §11, §12) ─────────
+
+contract_v12() { # <profile>: a contract page for a fresh program on that profile
+  init_wide "$1" 2>/dev/null; rulings_ok
+  "$I" set --program demo --escape-cost-days 3
+  preflight "2026-10-01T11:00:00Z"
+  "$I" contract-page --program demo
+}
+
+@test "E3c: a v1.2 lite page adds the §12 yield ceiling (5.25 d) and the §11 Stage 9 budget to the ceiling" {
+  contract_v12 lite
+  grep -q "yield ceiling: up to 3 extra stage budgets on each of stages 3 and 5, 5.25 agent-days (§12)" "$REC/CONTRACT.md"
+  grep -q "Stage 9 (built-artifact certification): 1 agent-day budget, 1.5 at the §6.5 overrun line (§11)" "$REC/CONTRACT.md"
+  grep -q "ceiling with the v1.2 additions about 18.75 days (12 + 5.25 + 1.5)" "$REC/CONTRACT.md"
+  grep -q "at least 24 hours of soak, elapsed time outside this ceiling" "$REC/CONTRACT.md"
+}
+
+@test "E3c: standard prices 12 days of yield ceiling and a 2-day Stage 9, as §12 and §11 print them" {
+  contract_v12 standard
+  grep -q "stages 3 and 5, 12 agent-days (§12)" "$REC/CONTRACT.md"
+  grep -q "Stage 9 (built-artifact certification): 2 agent-day budget, 3 at the §6.5 overrun line (§11)" "$REC/CONTRACT.md"
+  grep -q "ceiling with the v1.2 additions about 43 days (28 + 12 + 3)" "$REC/CONTRACT.md"
+}
+
+@test "E3c: a frame signed under 1.1 keeps the §6.1 ceiling alone" {
+  init_ok; rulings_ok
+  "$I" set --program demo --escape-cost-days 3
+  python3 - "$REC/frame.json" <<'PY'
+import json, sys
+fr = json.load(open(sys.argv[1])); fr.pop("method_version", None); json.dump(fr, open(sys.argv[1], "w"))
+PY
+  preflight "2026-10-01T11:00:00Z"
+  "$I" contract-page --program demo
+  grep -q "ceiling (every loop at its cap) about 12 days" "$REC/CONTRACT.md"
+  ! grep -q "v1.2 additions" "$REC/CONTRACT.md"
+}

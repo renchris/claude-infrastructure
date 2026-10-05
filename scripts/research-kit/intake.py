@@ -331,6 +331,29 @@ def wider_profile_note(profile_name: str) -> Optional[str]:
     )
 
 
+def v12_ceiling_lines(prof: Dict[str, Any], ceiling: float) -> List[str]:
+    """Method v1.2: the §6.1 ceiling plus §12's yield ceiling and §11's Stage 9 budget.
+
+    §12 prices the yield ceiling as (4 - 1) extra stage budgets on each of stages 3 and 5 (lite 5.25,
+    standard 12) and says the contract page's ceiling must include it. §11 budgets Stage 9 at 1, 2 or
+    3 agent-days; it is counted here at the §6.5 overrun line, as §6.1 counts stages 1-6 at 1.5 x."""
+    extra = kit.CAPS["yield_ceiling_factor"] - 1
+    yield_days = extra * sum(prof["stage_days"][s] for s in kit.YIELD_STAGES)
+    built = prof["built_stage_days"]
+    built_cap = kit.CAPS["overrun_factor"] * built
+    total = ceiling + yield_days + built_cap
+    return [
+        f"- Method v1.2 yield ceiling: up to {extra:g} extra stage budgets on each of stages "
+        f"{' and '.join(str(s) for s in kit.YIELD_STAGES)}, {yield_days:g} agent-days (§12). Contact "
+        "and the skeleton stop on yield, never past it.",
+        f"- Stage 9 (built-artifact certification): {built:g} agent-day budget, {built_cap:g} at the "
+        f"§6.5 overrun line (§11), with up to {prof['built_hard_cap']} built rounds; plus at least "
+        f"{kit.CAPS['soak_min_hours']} hours of soak, elapsed time outside this ceiling.",
+        f"- **ceiling with the v1.2 additions about {total:g} days ({ceiling:g} + {yield_days:g} + "
+        f"{built_cap:g})**. Only you can exceed it, through the signing tool.",
+    ]
+
+
 def cmd_contract_page(a: argparse.Namespace) -> int:
     fr = load_frame(a.program)
     missing = [k for k in RULINGS if not (fr.get("rulings", {}).get(k) or {}).get("at")]
@@ -391,6 +414,7 @@ def cmd_contract_page(a: argparse.Namespace) -> int:
         f"- Stages 1–6 budget {prof['stage_budget_days']:g} agent-days; typical total about "
         f"{typical:g} days; ceiling (every loop at its cap) about {ceiling:g} days (§6.1). Only you "
         "can exceed it, through the signing tool.",
+    ] + (v12_ceiling_lines(prof, ceiling) if kit.is_v12(fr) else []) + [
         f"- Forecast at the design point ({prof['design_holes']} holes at freeze), at the measured "
         f"inputs (method v1.2; research-calibration REPORT §3): rounds {f['rounds_p50']} typical / "
         f"{f['rounds_p90']} at the 90th percentile, the round cap reached in {f['cap_pct']}% of "
