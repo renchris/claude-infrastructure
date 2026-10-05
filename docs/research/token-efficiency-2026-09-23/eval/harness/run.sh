@@ -59,9 +59,9 @@ if [ -d "$FX/.git" ]; then
   grep -qxF '.claude/' "$FX/.git/info/exclude" 2>/dev/null || echo '.claude/' >> "$FX/.git/info/exclude"
 fi
 
-SETTINGS=$(python3 -c 'import json,sys; print(json.dumps({"claudeMdExcludes": sys.argv[1:]}))' \
-  "$CCD/CLAUDE.md" "$HOME/.claude/CLAUDE.md" "$HOME/.claude/rules/00-mission-board.md" \
-  "$HOME/.claude/rules/agent-operating-lessons.md")
+# The account's and ~/.claude's own memory files, built from what is on disk now (gate-excludes.py):
+# a hard-coded list missed ~/.claude/rules/10-session-close.md, which then loaded into both arms.
+SETTINGS=$(python3 -B "$H/gate-excludes.py" "$CCD") || { echo "gate-excludes.py failed for $CCD" >&2; exit 2; }
 # Rank 2's setup-breakpoint workaround (wave 3): an arm dir holding a SYSPROMPT marker keeps the same
 # files in the fixture but excludes them as memory and appends their text, framed as the memory loader
 # frames it, to the SYSTEM prompt (main and subagents), so it sits before the system cache breakpoint.
