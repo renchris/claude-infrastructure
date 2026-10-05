@@ -1379,3 +1379,150 @@ findings 7 and 13 partly fixed and labeled as assumptions for the calibration ru
 | 15 | minor | '20 of 73 yes-replies named a new item (27%)' is a regex count with false positives and duplicate sessions, and the lottery numbers inherit it | Dedupe the ask census by (session uuid, timestamp): 236 asks, 61 yes-replies, 16 hits. Hand-label the 16 hits and report the true count (about 2–3). If they are not labeled yet, mark 27% as a regex upper bound. Recompute the 280, 268 and 44 counts and lottery.py's r, and the §4.4 '1.6–8.1 notices / up to 48%' figures. |
 | 16 | minor | The front-end return trigger 'well above the design point' has no number | Replace 'well above' in §6.1 and the §6.5 loop table with a numeric threshold, for example round-1 forecast p50 above 1.5x the profile's design point. List it with the assumed inputs the calibration run measures. |
 | 17 | minor | The ceiling is not enforced in code during the pilot, because cap enforcement (item 9) ships in wave 2 | Option 1: move cap enforcement into the wave-1 kit. round.sh refuses a round past R_max or the hard cap, and gate.sh gets a row checking rounds and stage time against their caps. Option 2: change line 947 to say the pilot's ceiling is procedural until item 9 lands. |
+
+---
+
+## 11. Method v1.2: Stage 9, certify the built artifact before "done"
+
+Added 2026-10-04 under ruling `1bf69e5c1775` (§9), change (b), from audit row 2
+(`docs/research/upfront-method-audit-2026-10-04/REPORT.md` §3). Nothing in §3 is deleted. Stages 1–8 certify the
+plan; this stage certifies what was built from it. It applies to a program whose signed frame carries
+`method_version` 1.2 or later; a frame signed under 1.1 keeps the eight-stage method.
+
+**Why.** In the replay, 131 of 224 known holes the reviewers missed (58.5%) were later found by building, probing,
+production or the operator (measured, audit §3 row 2). §6.4 already says "only contact or building can" lower the
+residual. Under v1.1 those finds land after the claim. Stage 9 moves the build-findable ones in front of the
+implementation signoff.
+
+**When.** After the last build wave, before you sign the implementation. The registry gains two states:
+`certified → build-certifying → build-certified → closed`. `gate.sh built-freeze` pins the built snapshot and sets
+`build-certifying`; `gate.sh built-run` evaluates rows 20–25 and, when all pass, writes `built/BUILT-CERT-v<n>` and
+sets `build-certified`. Both states are active for the §3.1 exemption and the §4.2 research block.
+
+**What it reuses.** Rounds (a new round kind `built`, same reviewers, vendors, strategies and re-run caps as §3.8),
+raters and the §3.11 rubric, and the seed idea of §3.9. The instruments are code-native:
+
+1. **A failing-test repro for every finding.** A built-stage finding is admitted as material only with a test
+   command that the tool itself runs and sees fail on the built snapshot. A finding with no failing test is recorded
+   as `rejected-no-repro` and counted, never material. The fix is accepted when the same command passes.
+2. **Mutation testing of the acceptance harness, with mutants as seeds.** Sealed mutants (one planted defect each)
+   are applied to a copy of the built artifact, one at a time, and the acceptance harness runs against each copy. A
+   mutant the harness fails on is killed. A survivor is a hole in the harness: it becomes a finding whose repro is
+   the new harness row that kills it. The kill rate is this stage's seed catch rate.
+3. **An as-built contact re-run.** Every Stage 3 and Stage 5 probe of kind skeleton, handed command, dry-run deploy
+   or fault injection, and every acceptance row, runs again against the built snapshot from an empty environment: a
+   fresh empty `HOME`, `PATH=/usr/bin:/bin`, and the scheduler's interpreter `/bin/bash` 3.2. The runner records the
+   environment; it is never typed.
+4. **A soak across time boundaries.** The acceptance checks repeat on a schedule for at least 24 hours and across
+   every boundary the frame names (by default the hour, UTC midnight and local midnight). A boundary that cannot be
+   crossed inside the stage (month end, a daylight-saving change, a credential expiry) is a residual with the
+   allowed reason "elapsed time", an owner and a date.
+
+**The forecast splits in two, and each certificate states both.**
+
+| Certificate | Before implementation signoff | After implementation signoff |
+|---|---|---|
+| Research certificate (Stage 8) | forecast: the build-findable share of the §3.12 total | forecast: the rest. The 95% bound is the §3.12 bound unsplit, because an assumed share may not tighten a bound |
+| Built certificate (Stage 9) | observed: counted changes since the research signoff plus material built-stage findings, against that forecast | forecast: material findings × (1 − c) ÷ c, where c is the 95% lower bound of the mutant kill rate, plus the research certificate's invisible estimate scaled by (1 − share) |
+
+The build-findable share is 0.585, labeled "share assumed": the replay figure pools build, probe, production and
+operator finds, so it overstates what building alone finds. The pilot's own split replaces it.
+
+**Gate rows (built gate, `gate.sh built-run`; rows 1–19 are not re-run).**
+
+| Gate row | Exact criterion |
+|---|---|
+| 20. Built snapshot | The research certificate is signed, has no FAIL row and no reopen after it. Every build wave the frame names is recorded done. The built snapshot's commit equals the artifact's HEAD now, and equals the snapshot the last counted built round examined |
+| 21. Repro | 0 open material findings. Every material finding has a tool-recorded failing run of its test command, and that command, re-run now on the snapshot, passes. Findings without a failing test are listed as `rejected-no-repro` and are not material |
+| 22. Harness mutation | The mutation run is on this snapshot and its unmutated baseline passed. At least 10 mutants, and at least one per acceptance row. 0 survivors: each earlier survivor is a fixed finding and the re-run killed it. An "equivalent" mutant carries a reason and a rater. The kill rate is printed |
+| 23. As-built contact | Every required probe and acceptance row has a run on this snapshot, exit 0, with the recorded environment showing an empty `HOME`, `PATH=/usr/bin:/bin` and `/bin/bash` 3.2, and a negative control or a reason |
+| 24. Soak | At least 24 hours and 24 samples after the last fix, 0 failing samples, and every named boundary crossed or declared as an elapsed-time residual with an owner and a date |
+| 25. Built rounds | At least one counted built round on this snapshot. All slots complete, at least 2 vendor families. Stopped quiet (the profile's quiet-round count) or at the built-round cap, never past it |
+
+**Caps (additions to §6.5; bounded like every other loop).**
+
+| Loop | Cap | After the cap |
+|---|---|---|
+| Built rounds | 3 (lite), 4 (standard), 6 (full); the cap round never edits | Certifies with named known rows |
+| Dead or voided built-round slot | 2 re-runs (the §3.8 cap) | Another live vendor, "reduced diversity" printed |
+| Mutation re-run after a harness fix | Once per survivor | The survivor stays a named known row |
+| Soak restart after a fix | 2 restarts | The failing check is a named known row with an owner |
+| Stage 9 time | 1 day (lite), 2 (standard), 3 (full) of agent time, soak elapsed time excluded; the §6.5 overrun rule at 1.5 × | Open rows become dated carried rows with defaults |
+
+**Price.** Lite: up to 3 built rounds of 8 reviewer reads (24 reads), one mutation run (machine time), 1 agent-day,
+and at least 24 hours of elapsed soak. Standard: up to 4 rounds of 16 reads and 2 agent-days. It buys the move of
+build-findable holes from after the claim to before it; the size is unmodeled until the pilot measures it (audit
+row 2). Every number in this section is an assumed input until then (§6.6).
+
+**Not changed.** Rows 1–17, their thresholds, the rubric and the §5 change control. A Stage 9 finding is a counted
+change against the before-implementation-signoff forecast, not a take-back; the §5.3 take-back test still reads the
+total.
+
+## 12. Method v1.2: contact and build-to-learn stop on yield; decisions below 90 are tagged by what blocks them
+
+Added 2026-10-04 under ruling `1bf69e5c1775` (§9), change (c), from audit row 7. Nothing in §3 is deleted. It
+applies to a program whose signed frame carries `method_version` 1.2 or later. The triage study
+(`docs/research/triage-precision-study-2026-10-04/REPORT.md`) found about 9 changes after signoff per program
+whatever the triage filter, so the lever is the front end, which §6.4 already ranks first.
+
+**12.1 Stages 3 and 5 end on yield, not on the stage clock.**
+
+- A **counted probe** is one recorded inside the stage that could fail (§3.4). A probe that could not fail teaches
+  nothing and is ignored.
+- A **find** is a counted probe tied by the tool to a record it produced: a refuted premise, a hole, a counted
+  change, a residual or a frame row. A counted probe that exited nonzero and has no such record yet also counts as
+  a find, so an unexplained failure never reads as quiet.
+- A **quiet probe** is a counted probe that passed and produced no find.
+- **K** is 3 (lite), 4 (standard), 5 (full).
+- **Yield** is the finds among the last 2K counted probes, divided by the agent-days those probes took.
+- **Value of information** is yield × the escape cost you gave at intake (`escape_cost_days`, §9 decision 5). It
+  reads: research days saved per research day spent.
+
+The stage **continues** while the last K counted probes are not all quiet, or value of information is above 1. It
+**stops** when the last K are quiet and value of information is at most 1. `cc-research budget end` refuses to end
+stage 3 or 5 while the rule says continue, and records the stop reason and its numbers when it ends.
+
+**Hard ceilings stay (§6.5).** The stage ends regardless at 4 × its stage budget in agent-days or 60 counted
+probes, whichever comes first, printed as "stopped at the ceiling", and the unworked cells are declared residuals
+as §3.6 already requires. The §6.5 overrun packet at 1.5 × is unchanged: you are told, and the default "proceed"
+now means "keep probing while yield pays", up to the ceiling.
+
+**12.2 A decision below 90 is tagged by what blocks it, and only two tags may be defaulted or carried.** The tag
+is computed from the decision's tally, never typed:
+
+| Tag | Computed when | May be defaulted (class B) or carried (class C, set) |
+|---|---|---|
+| research | A load-bearing premise is below its required level and a probe could raise it, or the flip probe has not run | No. It gets more research, up to twice its intake timebox. At that ceiling it converts as §3.5 says, printed "defaulted at the research ceiling", and the extension below is offered |
+| production | Every remaining gap is a premise named by a residual whose reason is production traffic, a tenant not held, or elapsed time | Yes |
+| operator | The decision rests on no factual premise, or every remaining gap is your eye, your value or a private fact | Yes |
+
+**12.3 A priced research extension per decision, on your menu.** `cc-research menu` lists one item for each
+decision below 90 whose tag is research: the conviction now, the premises still below level, the highest
+conviction an extension could reach, and the price (one more intake timebox of research on that decision). You buy
+it with `cc-signoff research:<program>/extend-decision/<decision id>`, at most once per decision. It is quoted as a
+change to that decision's conviction, never as a yield.
+
+**Gate rows (research gate; both read PASS as "not applicable" under a 1.1 frame).**
+
+| Gate row | Exact criterion |
+|---|---|
+| 18. Yield stop | Stages 3 and 5 have ended. Recomputed now from the probe records as of each end: the rule said stop, or a ceiling was reached and is named. The escape cost is a finite number |
+| 19. Decision blockers | Every decision below 90 that is defaulted or carried has the tag production or operator, recomputed now, or reached its research ceiling (twice its timebox, plus one timebox if an extension was signed). At most one valid extension signature per decision |
+
+**Caps (additions to §6.5).**
+
+| Loop | Cap | After the cap |
+|---|---|---|
+| Contact (stage 3) and skeleton (stage 5) probing | 4 × the stage budget in agent-days, or 60 counted probes | "Stopped at the ceiling"; unworked cells are residuals |
+| Research on a decision tagged research | Twice its intake timebox | Class B or C as in §3.5, "defaulted at the research ceiling" |
+| Research extension | 1 per decision, operator-only | The decision keeps its route |
+
+**Price.** At most 3 extra stage budgets on each of stages 3 and 5: 5.25 agent-days above the lite budget (0.75 and
+1.0 days), 12 above standard. The contract page's ceiling (§6.1) must include it. Each extension costs one decision
+timebox. What it buys is unmeasured: contact is the only lever on the invisible share (§6.4), and the model cannot
+price front-end effort yet, because 11 of 16 replay plans had 0 front-end days (audit row 7). K, the 2K window, the
+4 × ceiling, the 60-probe ceiling and the 2 × decision ceiling are assumed inputs. The stop record and the per-probe
+find records are the data the pilot needs to fit them.
+
+**Not changed.** Rows 1–17 and their thresholds. Row 16 still requires the overrun packet past 1.5 ×. §3.5's routes
+are unchanged for a decision tagged production or operator.

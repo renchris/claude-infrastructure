@@ -128,6 +128,9 @@ PROFILES: Dict[str, Dict[str, Any]] = {
         "design_holes": 10,
         "frame_expansion_level_days": 0.5,
         "frame_delta_days": 2,
+        "quiet_probes_to_stop": 3,  # §12.1 K
+        "built_hard_cap": 3,  # §11 built rounds
+        "built_stage_days": 1.0,  # §11 Stage 9 agent time, soak excluded
         "stage_days": {1: 0.5, 2: 0.5, 3: 0.75, 4: 1.0, 5: 1.0, 6: 0.5},
     },
     "standard": {
@@ -138,6 +141,9 @@ PROFILES: Dict[str, Dict[str, Any]] = {
         "design_holes": 20,
         "frame_expansion_level_days": 1.0,
         "frame_delta_days": 3,
+        "quiet_probes_to_stop": 4,  # §12.1 K
+        "built_hard_cap": 4,  # §11 built rounds
+        "built_stage_days": 2.0,  # §11 Stage 9 agent time, soak excluded
         "stage_days": dict(_STD_STAGE_DAYS),
     },
     "full": {
@@ -148,6 +154,9 @@ PROFILES: Dict[str, Dict[str, Any]] = {
         "design_holes": 40,
         "frame_expansion_level_days": 1.0,
         "frame_delta_days": 3,
+        "quiet_probes_to_stop": 5,  # §12.1 K
+        "built_hard_cap": 6,  # §11 built rounds
+        "built_stage_days": 3.0,  # §11 Stage 9 agent time, soak excluded
         "stage_days": {k: v * 1.5 for k, v in _STD_STAGE_DAYS.items()},
     },
 }
@@ -168,7 +177,40 @@ CAPS = {
     "seed_lines_per_seed": 25,  # at most 1 original seed per 25 plan lines (§3.9)
     "escape_seeds": 20,
     "rp90_slack_rounds": 4,  # R_max = min(round-1 forecast p90 + 4, hard cap)
+    # ── method v1.2 (REPORT.md §11, §12): every figure below is an assumed input until the pilot ──
+    "yield_window_factor": 2,  # §12.1: yield is measured over the last 2K counted probes
+    "yield_ceiling_factor": 4.0,  # §12.1 hard ceiling: 4 x the stage budget in agent-days
+    "yield_probe_ceiling": 60,  # §12.1 hard ceiling: counted probes per stage
+    "decision_research_ceiling_factor": 2.0,  # §12.2: a research-tagged row gets 2 x its timebox
+    "decision_extensions": 1,  # §12.3: operator-bought, per decision
+    "mutants_min": 10,  # §11 row 22
+    "mutants_per_row_min": 1,
+    "mutation_reruns_per_survivor": 1,
+    "soak_min_hours": 24,  # §11 row 24
+    "soak_min_samples": 24,
+    "soak_restarts": 2,
+    "built_min_families": 2,  # §11 row 25
 }
+
+YIELD_STAGES = (3, 5)  # §12.1: contact, and the build-to-learn skeleton
+BUILD_FINDABLE_SHARE = 0.585  # §11: share of after-signoff changes building finds; "share assumed"
+AS_BUILT_KINDS = ("skeleton", "handed-cmd", "dry-run-deploy", "fault-inject")  # §11 instrument 3
+AS_BUILT_ENV = {"path": "/usr/bin:/bin", "interpreter": "/bin/bash", "interpreter_major": "3.2"}
+SOAK_BOUNDARIES = ("hour", "utc-midnight", "local-midnight")  # default; frame.json soak_boundaries
+
+
+def method_version(frame: Dict[str, Any]) -> tuple:
+    """The method version the frame was signed under, as a tuple; absent reads (1, 1)."""
+    raw = str((frame or {}).get("method_version") or "1.1")
+    try:
+        return tuple(int(x) for x in raw.split("."))
+    except ValueError:
+        raise KitError(f"frame.json method_version {raw!r} is not a version") from None
+
+
+def is_v12(frame: Dict[str, Any]) -> bool:
+    """True when the v1.2 mechanisms (REPORT.md §11, §12) apply to this program."""
+    return method_version(frame) >= (1, 2)
 
 
 def profile(name: str) -> Dict[str, Any]:
@@ -205,7 +247,11 @@ def max_original_seeds(profile_name: str, plan_lines: int) -> int:
 
 # ── 3. the program registry (contract owned by wave A1; gate.sh is its only writer) ────────────
 
-STATES = ("registered", "certifying", "certified", "closed")
+STATES = ("registered", "certifying", "certified", "build-certifying", "build-certified", "closed")
+# Method v1.2 (REPORT.md §11): build-certifying is set by `gate.sh built-freeze` after the last build
+# wave, build-certified by `gate.sh built-run`. ACTIVE_STATES are the ones a program is live in.
+ACTIVE_STATES = STATES[:-1]
+BUILD_STATES = ("build-certifying", "build-certified")
 _ENTRY_KEYS = ("slug", "aliases", "cwd_roots", "state")
 
 

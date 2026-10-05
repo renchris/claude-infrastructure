@@ -21,6 +21,10 @@ Invoked through scripts/research-kit/gate.sh. Verbs:
   close     --program P                                     state -> closed
   requires  --program P [--wave W] [--json]                 may build wave W fire? exit 0 clear,
                                                             1 refused (handoff-fire --requires-gate)
+  built-freeze --program P --artifact <abs dir>             pin the built snapshot; state ->
+                                                            build-certifying (REPORT.md §11)
+  built-run --program P [--json]                            rows 20-25; all pass -> built
+                                                            certificate, state -> build-certified
 
 Rows 1-8 live in gate_rows_a.py; rows 9-17 and the plan lint in gate_rows_b.py; the sweep and
 file-packet verbs in gate_sweep.py; requires in gate_requires.py; freeze, render and the certificate in gate_cert.py. Each row function takes a Ctx and returns a Row. A row that cannot
@@ -44,8 +48,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # heldout.py, esti
 import kit  # noqa: E402
 
 PASS, FAIL, FILED = "PASS", "FAIL", "FILED"
-ROW_COUNT = 17  # §3.10 rows 1-15, plus row 16: rounds and stage time against their caps (§10 item 17),
-# and row 17: an honest stop, dry or the cap reached by counted rounds (audit 2026-10-04, item 5d)
+ROW_COUNT = 19  # §3.10 rows 1-15, plus row 16: rounds and stage time against their caps (§10 item 17),
+# row 17: an honest stop, dry or the cap reached by counted rounds (audit 2026-10-04, item 5d),
+# and method v1.2's row 18 (yield stop) and row 19 (decision blockers), REPORT.md §12.
+# The built gate's rows 20-25 (REPORT.md §11) run only under `built-run` (gate_built.py).
 
 
 @dataclass
@@ -84,8 +90,15 @@ def make_ctx(slug: str) -> Ctx:
 def run_rows(ctx: Ctx) -> List[Row]:
     import gate_rows_a
     import gate_rows_b
+    import gate_rows_blockers
+    import gate_rows_yield
 
-    fns: List[Callable[[Ctx], Row]] = list(gate_rows_a.ROWS) + list(gate_rows_b.ROWS)
+    fns: List[Callable[[Ctx], Row]] = (
+        list(gate_rows_a.ROWS)
+        + list(gate_rows_b.ROWS)
+        + list(gate_rows_yield.ROWS)
+        + list(gate_rows_blockers.ROWS)
+    )
     out = []
     for fn in fns:
         try:
@@ -213,6 +226,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_run)
 
+    import gate_built
     import gate_cert
     import gate_requires
     import gate_sweep
@@ -220,6 +234,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     gate_cert.add_verbs(sub)  # freeze, render
     gate_sweep.add_verbs(sub)  # sweep, file-packet
     gate_requires.add_verbs(sub)  # requires
+    gate_built.add_verbs(sub)  # built-freeze, built-run (REPORT.md §11)
 
     a = ap.parse_args(argv)
     try:

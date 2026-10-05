@@ -12,6 +12,8 @@ One argparse parser; each module below adds its own verbs through `add_verbs(sub
   cli_cert     round frame-critique rehearse slots open-round slot raters check-round (item 11)
   cli_jobs     job sweep|freshness|triage|drift|market, run by jobs/research-job.sh (item 12)
   cli_refclass reference-class                                              (item 15)
+  cli_built    built finding|mutate|contact|soak|show          (method v1.2, REPORT.md §11)
+  cli_yield    yield show|find                                 (method v1.2, REPORT.md §12)
 
 Exit codes are the kit's (RECORDS.md): 0 ok · 1 a check failed · 2 usage or refusal · 3 a dead
 vendor lane · 4 a voided slot. A kit.KitError is a refusal (exit 2), never a traceback.
@@ -34,7 +36,7 @@ for p in (HERE, HERE.parents[1] / "lib", HERE.parent):  # kit libs · scripts/li
 import kit  # noqa: E402
 
 MODULES = ("cli_core", "cli_records", "cli_probe", "cli_cert", "cli_jobs",
-           "cli_refclass", "lease")
+           "cli_refclass", "lease", "cli_built", "cli_yield")
 
 # Verbs (or "verb sub-verb") that never check the program lease: they only read, or, for gate,
 # lease and job, the callee checks for itself or must run whoever holds it (the scheduled passes
@@ -43,6 +45,7 @@ LEASE_EXEMPT = {
     "verdict", "pending", "doctor", "lint", "trace", "forecast", "menu", "ceiling", "slots",
     "check-round", "index", "estimate", "decision show", "concern list",
     "reference-class show", "reference-class check", "gate", "lease", "job",
+    "yield show", "built show",
 }
 
 

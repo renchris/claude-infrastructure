@@ -24,7 +24,7 @@ packet `83adb541ea19` actioned. Method version 1.1 is frozen; it changes only fr
 | B2 | S | Item 8: `research-program` skill, `/research-program` command, intake script, briefs, rubric | A2 |
 | C | S | Wave 2: items 9–13, 15, in parallel with the pilot | B1, B2 |
 | D | S (fired `fire-rp-audit-bugfix`), T inside | Audit fixes: `docs/research/upfront-method-audit-2026-10-04/REPORT.md` §3 rows 4–6 | C |
-| E | E1 S (fired `fire-rp-v12-step1`); E1b S (fired `fire-rp-v12-e1b`); E1c S (fired `fire-rp-v12-e1c`); E2 Workflow in session d8964eb2; E3 S; E4 operator | Method v1.2 (ruling `1bf69e5c1775`): audit REPORT §3 rows 1, 2, 3, 7, plus the 9 s classifier limit (ruling `4bf73c4e55d5`) | D |
+| E | E1 S (fired `fire-rp-v12-step1`); E1b S (fired `fire-rp-v12-e1b`); E1c S (fired `fire-rp-v12-e1c`); E2 Workflow in session d8964eb2; E3 S (E3a fired `fire-rp-v12-e3a`, E3b fired `fire-rp-v12-e3b` with T inside: six teammates); E4 operator | Method v1.2 (ruling `1bf69e5c1775`): audit REPORT §3 rows 1, 2, 3, 7, plus the 9 s classifier limit (ruling `4bf73c4e55d5`) | D |
 
 A1, A2 and A3 touch disjoint files and fire concurrently. B1 and B2 fire when A2 lands. Each dispatched session leads
 its own Agent Team where it has 2+ code-writing tasks.
@@ -699,6 +699,37 @@ Scope (grown): +`intake.py` stamps `method_version: "1.2"` in the frame and coun
   `08eed0851` its test fixup (a dead assertion the land gate named), `e44627831` intake, `dfbfb1784` method text,
   `4c83f9ea6` study appendix A, `4556688a3` this record. The land's smoke was cut by its time budget under load
   (`smoke:"partial"`), so the behavioral proof is the test receipts above, not the land.
+
+#### E3b — the two new mechanisms: built-artifact certification and the yield stop — RUNNING
+Scope (frozen): wave E3b — the two new method mechanisms, specified as named, priced additions to REPORT (new
+sections appended, nothing deleted) and built in the kit with red-then-green planted-input tests: (1) certify the
+built artifact before "done" (audit row 2); (2) stop contact and the build-to-learn skeleton on yield, tag decisions
+below 90 by what blocks them, and a priced per-decision extension on the operator menu (audit row 7).
+- Spec: REPORT.md §11 (Stage 9, built gate rows 20–25, registry states `build-certifying` and `build-certified`,
+  the forecast split before and after implementation signoff) and §12 (yield stop, value-of-information rule,
+  blocker tags, extension; research-gate rows 18 and 19). Record contract: `scripts/research-kit/RECORDS.md`
+  "Method v1.2 records". Constants: `lib/kit.py` (`CAPS` v1.2 block, `YIELD_STAGES`, `AS_BUILT_*`, `BUILD_STATES`).
+- Both mechanisms apply only to a frame carrying `method_version` "1.2" (`kit.is_v12`; absent reads 1.1), so the
+  live pilot and every v1.1 fixture are untouched. Rows 1–17 and their thresholds are unchanged.
+- Locus: S for the wave (fired session `fire-rp-v12-e3b`, worktree `rp-v12-e3b`), T inside it: six teammates, one
+  worktree each `~/Development/.worktrees/rp-e3b-<name>`; lead inline only for the spec, the shared skeleton (stub
+  rows and verb modules, so files are disjoint), merges and the land. Why T: the brief asked this session to lead
+  its own team, and six disjoint modules over one contract return short reports to one serialized merge.
+
+| Teammate | Owns | Suite |
+|---|---|---|
+| instr | `lib/built.py`, `lib/cli_built.py`: `cc-research built finding / mutate / contact / soak` | `tests/cc-research-built.bats` |
+| states | `kit.BUILD_STATES` consumers, `gate.sh built-freeze`, `lib/built_cert.py` (built certificate, forecast split), `gate_cert.py` split line | `tests/research-kit-built-states.bats` |
+| brows | `lib/gate_rows_built.py` rows 20–25 | `tests/research-kit-built-gate.bats` |
+| rounds | `round.sh --kind built` (`lib/round.py`, `lib/cli_cert.py`) | `tests/research-kit-built-round.bats` |
+| yield | `lib/yield_stop.py`, `lib/cli_yield.py`, `budget end` refusal, row 18 | `tests/research-kit-yield.bats` |
+| blockers | `lib/blockers.py`, row 19, menu extension, `extend-decision` signature, decision timebox fields | `tests/research-kit-blockers.bats` |
+
+- Coordination with E3a (owner of `intake.py`, `estimate.py`, REPORT §1/§7/§3.12, SKILL.md), none of which E3b
+  edits: `intake.py` must stamp `"method_version": "1.2"` into a new frame (until it does, a new program runs the
+  1.1 rules); its contract-page ceiling must add §12's yield ceiling (up to 3 extra stage budgets on each of stages
+  3 and 5) and §11's Stage 9 budget; `intake.py:416` lists registry states and may want the two build states;
+  SKILL.md needs Stage 9 and the yield rule in its stage walk.
 
 #### E4 — re-sign the pilot contract (v1.2 (d), operator half) — after E3
 - Operator: re-render TM2's contract on the measured forecast and re-sign it, with rulings 1 and 4 re-presented at

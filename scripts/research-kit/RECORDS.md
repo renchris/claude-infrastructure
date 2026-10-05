@@ -16,7 +16,7 @@ from SYNTHESIS. Profile names and caps come from REPORT.md §6, and live in code
 | Research index | `docs/research/INDEX.jsonl` in claude-infrastructure | `research-index.py` only |
 
 Registry entry (wave A1's contract, never extended): `{"slug","aliases","cwd_roots","state"}`, state one of
-`registered → certifying (gate.sh freeze) → certified (gate.sh run, all rows pass) → closed`. A valid operator
+`registered → certifying (gate.sh freeze) → certified (gate.sh run, all rows pass) → build-certifying (gate.sh built-freeze) → build-certified (gate.sh built-run) → closed`; the two build states are method v1.2 (§11). A valid operator
 `reopen` signature newer than the certificate makes `gate.sh run` set the state back to `registered`.
 
 ## Tracked records (fields the kit uses)
@@ -95,6 +95,61 @@ failed, 2 usage or refusal, 3 a dead vendor lane, 4 a voided slot. Python is 3.9
   refused with each reason, 2 the program cannot be read. Reads the newest certificate and the LIVE decision and
   known-row records (the sweep and the frame-delta cycle clear blocks after the certificate). The reader behind
   `handoff-fire.sh --requires-gate P --gate-wave W`.
+
+## Method v1.2 records (REPORT.md §11 and §12; wave E3b)
+
+Both mechanisms apply only when `frame.json` carries `method_version` `"1.2"` or later (`kit.is_v12`); absent reads
+1.1. Constants: `kit.CAPS` (v1.2 block), `kit.YIELD_STAGES`, `kit.AS_BUILT_KINDS`, `kit.AS_BUILT_ENV`,
+`kit.SOAK_BOUNDARIES`, `kit.BUILD_FINDABLE_SHARE`, profile keys `quiet_probes_to_stop`, `built_hard_cap`,
+`built_stage_days`. Registry states gain `build-certifying` and `build-certified` (`kit.BUILD_STATES`); the entry
+shape is unchanged.
+
+### Stage 9 records (`docs/research/<slug>/built/`, §11)
+
+- `built/freeze.json` (written by `gate.sh built-freeze`): `{snapshot_sha, artifact_root (abs), frozen_at,
+  research_cert: "CERT-v<n>", waves_done: [wave]}`. `frame.json` `build_waves` `[wave]` is the list row 20 compares.
+- `built/findings.jsonl` (written only by `cc-research built finding add|fix|reject`): `{id: "BF-<n>", source:
+  "round|mutation|contact|soak", claim, severity: "material|refinement|cosmetic", status:
+  "open|fixed|rejected-no-repro", repro: {test_cmd, red: {sha, exit, at}, green: {sha, exit, at}|null}|null,
+  mutant: "M-<n>"|null}`. `add` runs `test_cmd` itself in `artifact_root` and stores `red` only when it exits
+  nonzero; a material finding whose command passes, or with no command, is stored `rejected-no-repro`. `fix` re-runs
+  it and stores `green` only on exit 0.
+- `<sealed>/built/mutants.json` (sealed, planted by hand or by a seeding script): `[{id: "M-<n>", file, search,
+  replace}]`, one literal replacement each. `built/mutation.json` (written only by `cc-research built mutate`):
+  `{snapshot_sha, at, baseline_exit, rows: [acceptance row id], mutants: [{id, status:
+  "killed|survived|equivalent|invalid", killed_by: [row id], equivalent: {reason, rater}|null, rerun: n}], killed,
+  survived, kill_rate}`. The harness is every `acceptance.json` row's `check_cmd`, run with env `ARTIFACT=<copy>`
+  and cwd the copy; `invalid` is a mutant whose `search` text is absent.
+- `built/contact.jsonl` (written only by `cc-research built contact`): `{id: "BC-<n>", target: "P-.."|"<acceptance
+  row id>", snapshot_sha, cmd, env: {home, home_clean: true, path, interpreter, interpreter_version}, exit,
+  negative_control: {ran, exit, reported_refutation, reason_if_not_run}, at}`. The runner execs `env -i HOME=<fresh
+  empty dir> PATH=/usr/bin:/bin ARTIFACT=<artifact_root> /bin/bash -c <cmd>` and records what it set.
+- `built/soak.jsonl` (written only by `cc-research built soak sample`): `{at, check: <acceptance row id>, exit,
+  snapshot_sha}`; `built/soak.json` `{started, restarts: [{at, finding}]}`. Boundaries: `frame.json`
+  `soak_boundaries` (default `kit.SOAK_BOUNDARIES`); a boundary is crossed when passing samples exist on both sides
+  of it. An uncrossed boundary needs a `residual.jsonl` row `{why_unreachable: "elapsed-time", boundary, owner, due}`.
+- `rounds/b<n>/matrix.json`: a `round.sh --kind built` round, the certification shape with `kind: "built"` and
+  `snapshot_sha` the built snapshot. Capped by the profile's `built_hard_cap`.
+- `built/BUILT-CERT-v<n>.json` and `.md` (written by `gate.sh built-run` through `built_cert.py`): `{cert, program,
+  version, snapshot_sha, issued, research_cert, rows: {"20".."25": status}, findings: {material, fixed,
+  rejected_no_repro}, kill_rate, forecast: {before_observed, before_forecast, after_mean, after_bound95, share,
+  assumed: [..]}}`. `CERT-v<n>.json` `forecast` gains `before_impl_mean`, `after_impl_mean`, `after_impl_bound95`,
+  `build_findable_share`.
+
+### Yield and blocker records (§12)
+
+- `yield.jsonl` (written only by `cc-research yield find`): `{probe: "P-..", ref: <id>, ref_kind:
+  "premise|hole|change|residual|frame-row", stage, at}`; refused unless the ref exists (a premise ref must read
+  `verdict: "refuted"`).
+- `budget.json` `stages.<3|5>.stop` (written by `cc-research budget end` under a 1.2 frame): `{reason:
+  "quiet|ceiling", ceiling: "days|probes"|null, k, streak, counted, finds, yield_per_day, escape_cost_days, voi, at}`.
+- `cc-research yield show --program P --stage N [--json]` → `{stage, verdict: "continue|stop|ceiling", …the stop
+  fields}` (`yield_stop.evaluate(ctx, stage, as_of=None)`, the one implementation rows and verbs share).
+- `decisions.jsonl` gains `timebox_days` and `research_started` (ISO), set at `decision add`. `blockers.tag(ctx,
+  decision)` → `{tag: "research|production|operator"|null (null at 90+), conviction, gaps: [premise id],
+  reachable_max, at_ceiling: bool, extended: bool}`. Extension signature: `cc-signoff
+  research:<slug>/extend-decision/<decision id>` (`operator_sign.ACTIONS`).
+- `cc-research menu --json` items for a research-tagged decision: `{id: "extend-decision/<D>", label, price, effect}`.
 
 ## `bin/cc-research` (wave 2, REPORT.md §8 items 9–12 and 15)
 

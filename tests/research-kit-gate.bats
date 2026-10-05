@@ -52,10 +52,10 @@ jedit() {
 }
 state() { /usr/bin/python3 -c "import json; print(json.load(open('$CC_RESEARCH_REGISTRY'))['programs'][0]['state'])"; }
 
-@test "the known-good program passes all 17 rows, certifies, and the registry reads certified" {
+@test "the known-good program passes all 19 rows, certifies, and the registry reads certified" {
   run "$G" run --program demo
   [ "$status" -eq 0 ]
-  [ "$(printf '%s\n' "$output" | grep -cE '^ ?[0-9]+\. .* PASS$')" -eq 17 ]
+  [ "$(printf '%s\n' "$output" | grep -cE '^ ?[0-9]+\. .* PASS$')" -eq 19 ]
   [ "$(state)" = "certified" ]
   [ -f "$REC/cert/CERT-v1.json" ]
 }
