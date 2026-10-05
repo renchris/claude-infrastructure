@@ -11,6 +11,12 @@ carries the protocol so a session does not reinvent it. Every number, cap and ga
 in code under `scripts/research-kit/` (records contract: `scripts/research-kit/RECORDS.md`); where this
 file and the code disagree, the code wins and this file is the bug.
 
+Updated 2026-10-04 (v1.2): ruling `1bf69e5c1775` overrides the freeze for four named changes (REPORT §9,
+"Ruled 2026-10-04"). Two of them change this walk: Stages 3 and 5 end on yield, with decisions below 90
+tagged by what blocks them (§12), and Stage 9 certifies the built artifact before "done" (§11). Both
+apply only to a frame stamped `method_version` 1.2, which `intake.py init` writes; a frame without the
+stamp reads as 1.1 and keeps the eight-stage walk.
+
 **Use it** when the operator starts a greenfield effort and wants research that ends: "100.00/100.00",
 "no take-backs", "research everything before we build". **Do not use it** for ordinary research,
 for a case-sized question answerable in a day, or when the operator declines either §3.1 ruling.
@@ -26,7 +32,9 @@ for a case-sized question answerable in a day, or when the operator declines eit
   - `cc-signoff research:<slug>/cert` — after `gate.sh run` passes;
   - `cc-signoff research:<slug>/extra-round` — the one extra round set per program (§6.4);
   - `cc-signoff research:<slug>/reopen` — the only way back from `certified` (§5.1);
-  - `cc-signoff research:<slug>/veto/<DECISION-ID>` — veto an overrun or below-profile default.
+  - `cc-signoff research:<slug>/veto/<DECISION-ID>` — veto an overrun or below-profile default;
+  - `cc-signoff research:<slug>/extend-decision/<DECISION-ID>` — v1.2: the one priced research
+    extension on a decision tagged research, at most once per decision (§12.3).
 - **Program packets only through `gate.sh file-packet`**, never a bare `cc-decide open`: it adds the
   deliverable repo as `--project` and, for class B, `--default-effect no-change`, and gate row 12 fails
   any program packet without them (§10 item 4). Run `gate.sh sweep --program <slug>` daily in the pilot.
@@ -116,6 +124,45 @@ and finish the Google sign-in. Park it before anything else, because the preflig
 | 5. Acceptance and skeleton | `probe-run.sh` over each row's known-bad and known-good fixtures | the contact skeleton as build wave 0; the operator's reaction checkpoint |
 | 6. Synthesis and freeze | `gate.sh freeze --program <slug>` (registry → `certifying`, the research block turns on) | the integrator, one fresh whole read, the sibling advisory lock |
 
+## Stages 3 and 5 end on yield; decisions below 90 are tagged by what blocks them (§12, method v1.2)
+
+Updated 2026-10-04 (v1.2). Under a 1.2 frame, contact (stage 3) and the build-to-learn skeleton (stage 5)
+end on yield, not on the stage clock (§12.1):
+
+- A **counted probe** is one recorded inside the stage that could fail; a probe that could not fail is
+  ignored. A **find** is a counted probe the tool ties to a record it produced (a refuted premise, a hole,
+  a counted change, a residual or a frame row): tie it with
+  `cc-research yield find --program <slug> --probe <P-id> --ref <record id>`. A counted probe that exited
+  nonzero with no such record still counts as a find. A **quiet probe** passed and produced no find.
+- K is 3 (lite), 4 (standard), 5 (full). Yield is the finds among the last 2K counted probes divided by
+  the agent-days those probes took; value of information is yield × `escape_cost_days` (research days
+  saved per research day spent).
+- The stage **continues** while the last K counted probes are not all quiet, or value of information is
+  above 1. It **stops** when the last K are quiet and value of information is at most 1.
+  `cc-research yield show --program <slug> --stage N` prints the verdict (exit 0 on stop or ceiling, 1 on
+  continue); `cc-research budget end --program <slug> --stage N` refuses to end stage 3 or 5 while the
+  rule says continue, and records the stop reason and its numbers when it ends.
+- Hard ceilings stay (§6.5): the stage ends regardless at 4 × its stage budget in agent-days or
+  60 counted probes, whichever comes first, printed "stopped at the ceiling", and the unworked cells are
+  declared residuals (§3.6). The overrun packet at 1.5 × is unchanged; its default "proceed" now means
+  keep probing while yield pays, up to the ceiling.
+
+A decision below 90 carries a tag computed from its tally, never typed (§12.2): **research** (a
+load-bearing premise is below its level and a probe could raise it, or the flip probe has not run),
+**production** (every remaining gap is a residual premise whose reason is production traffic, a tenant
+not held, or elapsed time) or **operator** (no factual premise, or every gap is the operator's eye, value
+or a private fact). Only production and operator may be defaulted (class B) or carried (class C, set). A
+decision tagged research gets more research, up to twice its intake timebox; at that ceiling it converts
+as §3.5 says, printed "defaulted at the research ceiling". `cc-research menu` lists one priced extension
+per research-tagged decision (§12.3): conviction now, premises below level, the highest conviction an
+extension could reach, and its price of one more timebox. The operator buys it with
+`cc-signoff research:<slug>/extend-decision/<DECISION-ID>`; it is quoted as a change to that decision's
+conviction, never as a yield.
+
+Stage 8 checks both: gate row 18 (yield stop) and row 19 (decision blockers), each PASS as "not
+applicable" under a 1.1 frame. The contract page's ceiling already carries the yield ceiling (§12's price:
+lite 5.25, standard 12 agent-days) and the Stage 9 budget.
+
 ## Stage 7 — certification (§3.8, §3.9)
 
 - Seeds: a seed author from a vendor other than the lead's, briefed with `briefs/seed-author.md`, writes
@@ -140,6 +187,10 @@ or is FILED, the certificate is written and the registry goes to `certified`. Ha
 `cc-signoff research:<slug>/cert`. From then on a completeness or pushback question is answered by
 relaying `gate.sh --render --program <slug>` unchanged, and nothing else.
 
+Updated 2026-10-04 (v1.2): under a 1.2 frame the research gate prints 19 rows, rows 18 and 19 from §12,
+and the research certificate splits its forecast before and after implementation signoff, the
+build-findable share (0.585, "share assumed") before it (§11).
+
 Build waves fire only through `scripts/handoff-fire.sh --requires-gate <slug> --gate-wave <W>` (§3.10
 "Carried rows at build time"). It refuses before any side effect while the registry is not `certified`,
 the newest certificate has a FAIL row, a reopen is signed after it, or the wave's closure holds an
@@ -147,10 +198,68 @@ unresolved class-C row, a carried set it does not own the narrowing probe of, an
 known row, or a wave the sweep descoped. `gate.sh requires --program <slug> --wave <W>` prints the same
 verdict without firing. An admitted fire carries the `--requires-gate` work-order marker in its brief.
 
+## Stage 9 — certify the built artifact (§11, method v1.2)
+
+Updated 2026-10-04 (v1.2). Stages 1–8 certify the plan; Stage 9 certifies what was built from it, after
+the last build wave and before the operator signs the implementation. It runs only under a 1.2 frame.
+The registry goes `certified → build-certifying → build-certified → closed`; both build states are active
+for the §3.1 exemption and the §4.2 research block, and the scheduled jobs still visit the program.
+
+1. **Freeze the built snapshot.** `scripts/research-kit/gate.sh built-freeze --program <slug> --artifact
+   <abs dir> [--wave W ...]` pins the artifact's HEAD in `built/freeze.json` and sets `build-certifying`.
+   Row 20 later checks that the research certificate is signed with no FAIL row and no reopen after it,
+   every build wave the frame names is done, and the snapshot equals the artifact's HEAD and the one the
+   last counted built round examined.
+2. **The four code-native instruments** (`cc-research built …`; records in RECORDS.md "Stage 9 records"):
+   - **A failing-test repro for every finding.** `cc-research built finding add --program <slug> --source
+     round|mutation|contact|soak --claim "<claim>" --severity material --test-cmd "<cmd>"`. The tool runs
+     the command on the snapshot; a finding whose command does not fail is `rejected-no-repro`, counted
+     and never material. After the fix, `cc-research built finding fix --program <slug> --id BF-n` re-runs
+     it and exits 1 while it still fails (row 21).
+   - **Mutation testing of the acceptance harness.** `cc-research built mutate --program <slug>` applies
+     each sealed mutant to a copy of the artifact and runs the harness against it. A survivor is a finding
+     whose repro is the harness row that kills it, re-run once per survivor. Row 22 needs at least 10
+     mutants and one per acceptance row, an unmutated baseline that passed, and 0 survivors; an equivalent
+     mutant carries `--equivalent M-n --reason "<why>" --rater <vendor>`. The kill rate is this stage's
+     seed catch rate.
+   - **An as-built contact re-run.** `cc-research built contact --program <slug> --target <probe id|row id>
+     (--negative-control CMD | --no-negative-control REASON)` re-runs every Stage 3 and 5 probe of kind
+     skeleton, handed command, dry-run deploy or fault injection, and every acceptance row, with an empty
+     `HOME`, `PATH=/usr/bin:/bin` and `/bin/bash` 3.2. The tool records the environment (row 23).
+   - **A soak across time boundaries.** `cc-research built soak sample --program <slug>` runs every
+     acceptance check once, the as-built way. The scheduled job `cc-research job soak` samples every
+     `build-certifying` program hourly once the operator has loaded it (migration 0058). After a fix,
+     `cc-research built soak restart --program <slug> --finding BF-n`, at most twice. Row 24 needs at least
+     24 hours and 24 samples after the last fix, 0 failing, and every named boundary (by default the hour,
+     UTC midnight and local midnight; `frame.json` `soak_boundaries`) crossed, or declared an elapsed-time
+     residual with an owner and a date.
+3. **Built rounds.** `scripts/research-kit/round.sh run --program <slug> --kind built --round N --plan
+   <seeded plan> --brief skills/research-program/briefs/built-reviewer.md`: the same reviewers, vendors,
+   strategies and re-run caps as Stage 7, reading the built snapshot beside the plan; this stage's seeds
+   are the harness mutants. Each finding goes to a verifier (`briefs/built-verifier.md`: it runs the
+   finding's `test_cmd` the as-built way), then raters (`briefs/built-rater.md`: RUBRIC.md, plus "no
+   failing test, never material"), through `courier.sh run --role verifier|rater`. Each material finding
+   is recorded with `built finding add`. The cap is 3 (lite), 4 (standard), 6 (full) built rounds, and
+   the cap round never edits; the rounds stop quiet at the profile's quiet-round count (row 25).
+4. **The built gate.** `scripts/research-kit/gate.sh built-run --program <slug>` evaluates rows 20–25
+   (rows 1–19 are not re-run). When all pass it writes `built/BUILT-CERT-v<n>` and sets
+   `build-certified`. `cc-research built show --program <slug>` summarises the instruments. The built
+   certificate states both halves of the forecast: the changes observed before implementation signoff
+   against the research certificate's forecast, and the after-signoff forecast from the mutant kill rate.
+5. **Caps** (§11, additions to §6.5): a dead or voided built slot 2 re-runs; a mutation re-run once per
+   survivor; 2 soak restarts; Stage 9 time 1 (lite), 2 (standard), 3 (full) agent-days, soak elapsed time
+   excluded, with the overrun packet at 1.5 ×. Past a cap, open rows become named known rows or dated
+   carried rows with defaults. A Stage 9 finding is a counted change against the before-signoff forecast,
+   not a take-back.
+
+Then hand the operator the built certificate; signing the implementation is theirs.
+
 ## Files beside this one
 
 - `RUBRIC.md` — §3.11 materiality, the only text raters apply.
 - `checklist.jsonl` — the 33 frame-axis rows (FAC-01..FAC-33) that gate row 1 requires mapped.
 - `briefs/reviewer.md`, `briefs/rater.md`, `briefs/verifier.md`, `briefs/seed-author.md` — frozen; a
   program records their hashes on its certificate.
+- `briefs/built-reviewer.md`, `briefs/built-verifier.md`, `briefs/built-rater.md` — v1.2, Stage 9's built
+  rounds (§11): every finding carries a failing-test command, run the as-built way.
 - Tests: `tests/research-program-intake.bats`, `tests/research-program-briefs.bats`.
