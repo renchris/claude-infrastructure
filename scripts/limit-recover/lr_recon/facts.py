@@ -335,7 +335,13 @@ def blocking(
     facts: Dict[str, T.Fact], acct: str, lane: str, model: str, now: float
 ) -> Optional[T.Fact]:
     """The fact that stops (acct, lane, model) from serving now, or None. An auth fact always
-    blocks; any other covering fact blocks until its reset has passed."""
+    blocks; any other covering fact blocks until its reset has passed.
+
+    With several, the one returned is the one that BINDS: auth first (no reset frees it), then the
+    latest known reset, because the account serves again only once every covering window has
+    reset. A fact with no known reset ranks after those, and scope order only breaks a tie. Ranked
+    on scope first, a 7d fact resetting 09:00Z was returned over the 5h fact resetting 09:40Z, and
+    every reader took the earlier reset for the end of the block (W7h, next4 2026-10-04)."""
     hits = [
         f
         for f in facts.values()
@@ -345,7 +351,11 @@ def blocking(
     if not hits:
         return None
     hits.sort(
-        key=lambda f: (_BLOCK_ORDER.get(f.scope, 4), -(f.resets_at or float("inf")))
+        key=lambda f: (
+            f.scope != "auth",
+            -(f.resets_at or 0.0),  # no known reset sorts after every known one
+            _BLOCK_ORDER.get(f.scope, 4),
+        )
     )
     return hits[0]
 

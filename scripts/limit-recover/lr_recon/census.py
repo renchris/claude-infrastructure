@@ -95,6 +95,36 @@ def _own_scope(s: T.SessionObs) -> Tuple[str, Optional[float]]:
     return scope, (float(ra) if isinstance(ra, (int, float)) else None)
 
 
+Binding = Tuple[
+    str, Optional[float]
+]  # (scope, resets_at): what a bucket, record and cohort key on
+
+
+def _binding(s: T.SessionObs, fact: Optional[T.Fact], now: float) -> Binding:
+    """The scope and reset that END this session's block: the later of the covering fact
+    (``F.blocking``, itself the latest-resetting fact on the account) and the session's own death
+    record. The death record wins only when it names ANOTHER scope, with a reset that is known,
+    has not passed, and is later than the fact's (or the fact has none). In the fact's own scope
+    the fact already holds the latest reset any death named (``F.merge`` only raises it), and an
+    auth fact has no reset to outlast, so it always binds. Taking the covering fact outright
+    filed a session newly limited by a 5h cap (resets 09:40Z) under the 7d fact left from three
+    days before (resets 09:00Z), in that older cohort, with a wake 40 minutes before its real
+    reset (W7h, next4 2026-10-04)."""
+    if fact is None:
+        return _own_scope(s)
+    scope, resets = _own_scope(s) if _death(s) else ("", None)
+    if (
+        fact.scope != "auth"
+        and scope
+        and scope != fact.scope
+        and resets is not None
+        and not resets + F.GRACE_S < now
+        and (fact.resets_at is None or resets > fact.resets_at)
+    ):
+        return scope, resets
+    return fact.scope, fact.resets_at
+
+
 def in_scope(s: T.SessionObs, facts: Dict[str, T.Fact], now: float) -> bool:
     return _death(s) or _cover(s, facts, now) is not None
 
@@ -104,10 +134,10 @@ def _mk(
     name: str,
     reason: str,
     kind: str,
-    fact: Optional[T.Fact],
+    bind: Binding,
     detail: str = "",
 ) -> T.Bucket:
-    scope, resets = (fact.scope, fact.resets_at) if fact else _own_scope(s)
+    scope, resets = bind
     return T.Bucket(
         sid=s.sid,
         name=name,
@@ -130,30 +160,31 @@ def bucket(
     """§3 step 5, checked in the order that makes each bucket exclusive."""
     env = os.environ if env is None else env
     fact = _cover(s, facts, now)
+    bind = _binding(s, fact, now)
     kind = "limited" if _death(s) else "idle"
     if s.transcript.teammate:
-        return _mk(s, "TEAMMATE", "lead-owned (invariant 1)", kind, fact)
+        return _mk(s, "TEAMMATE", "lead-owned (invariant 1)", kind, bind)
     if _distinct_holders(s) > 1:
         return _mk(
-            s, "SPLIT-BRAIN", "%d live holders" % _distinct_holders(s), kind, fact
+            s, "SPLIT-BRAIN", "%d live holders" % _distinct_holders(s), kind, bind
         )
     if s.registry_name.startswith("iterm:"):
         return _mk(
-            s, "HOLD:iterm", "iTerm2 pane: detached osascript fails 3/3", kind, fact
+            s, "HOLD:iterm", "iTerm2 pane: detached osascript fails 3/3", kind, bind
         )
     if not s.transcript.path:
-        return _mk(s, "IMPOSSIBLE", "no-transcript", kind, fact)
+        return _mk(s, "IMPOSSIBLE", "no-transcript", kind, bind)
     if s.cwd and not os.path.isdir(s.cwd):
-        return _mk(s, "IMPOSSIBLE", "cwd-gone", kind, fact)
+        return _mk(s, "IMPOSSIBLE", "cwd-gone", kind, bind)
     if not s.pane and not s.registry_name:
-        return _mk(s, "IMPOSSIBLE", "headless", kind, fact)
+        return _mk(s, "IMPOSSIBLE", "headless", kind, bind)
     if live_members(s.sid, snap) > 0:
         return _mk(
             s,
             "HELD:team",
             "lead with live members: hold; continued in place at reset (decision 4)",
             kind,
-            fact,
+            bind,
         )
     pane = _pane(s, snap)
     focused = bool(pane and pane.is_focused)
@@ -164,7 +195,7 @@ def bucket(
         # on any pane (§5 stay rule). Checked first, a launcher-rooted session was never held (W7g).
         if focused and env.get("LR_MOVE_FOCUSED", "on") == "off":
             return _mk(
-                s, "HOLD-FOCUS", "focused pane (LR_MOVE_FOCUSED=off)", kind, fact
+                s, "HOLD-FOCUS", "focused pane (LR_MOVE_FOCUSED=off)", kind, bind
             )
         if work:
             ship = any(b.ship_land for b in s.bg_work)
@@ -173,15 +204,15 @@ def bucket(
                 "HOLD-BGWORK",
                 "background work (decision 2)",
                 kind,
-                fact,
+                bind,
                 detail="ship-land" if ship else "",
             )
-        resets = fact.resets_at if fact else _own_scope(s)[1]
+        resets = bind[1]
         if resets is not None and resets - now < STAY_S:
-            return _mk(s, "STAY", "source resets within 15 min", kind, fact)
+            return _mk(s, "STAY", "source resets within 15 min", kind, bind)
         if pane is not None and pane.root_shape == "launcher":
-            return _mk(s, "LAUNCHER-ROOTED", "launcher-rooted pane ⇒ R", kind, fact)
-        return _mk(s, "LIMITED", "last assistant record is the limit", kind, fact)
+            return _mk(s, "LAUNCHER-ROOTED", "launcher-rooted pane ⇒ R", kind, bind)
+        return _mk(s, "LIMITED", "last assistant record is the limit", kind, bind)
     return _idle(s, fact, focused, bool(s.bg_work), now, env)
 
 
@@ -194,8 +225,9 @@ def _idle(
     env: Mapping[str, str],
 ) -> T.Bucket:
     """IDLE-ELIGIBLE needs every condition; optional work, so any doubt leaves it WORKING."""
+    bind = _binding(s, fact, now)
     if env.get("LR_IDLE_FANOUT", "off") != "on" or fact is None:
-        return _mk(s, "WORKING", "no idle fan-out", "idle", fact)
+        return _mk(s, "WORKING", "no idle fan-out", "idle", bind)
     if (
         fact.scope not in ("5h", "7d")
         or fact.contradicted
@@ -205,14 +237,14 @@ def _idle(
         or any_bg
         or focused
     ):
-        return _mk(s, "WORKING", "idle move not eligible", "idle", fact)
+        return _mk(s, "WORKING", "idle move not eligible", "idle", bind)
     if s.transcript.live_subagents:
-        return _mk(s, "HOLD-SUBAGENTS", "live subagents on an idle move", "idle", fact)
+        return _mk(s, "HOLD-SUBAGENTS", "live subagents on an idle move", "idle", bind)
     if s.composer == "draft":
-        return _mk(s, "HOLD-DRAFT", "operator draft in the composer", "idle", fact)
+        return _mk(s, "HOLD-DRAFT", "operator draft in the composer", "idle", bind)
     if s.composer != "empty":
-        return _mk(s, "WORKING", "composer not affirmatively empty", "idle", fact)
-    return _mk(s, "IDLE-ELIGIBLE", "uncontradicted account-wide fact", "idle", fact)
+        return _mk(s, "WORKING", "composer not affirmatively empty", "idle", bind)
+    return _mk(s, "IDLE-ELIGIBLE", "uncontradicted account-wide fact", "idle", bind)
 
 
 def summary(buckets: List[T.Bucket]) -> Dict[str, int]:
@@ -381,10 +413,7 @@ def not_needed_record(
         # them from the store that holds its transcript, so the member joins its REAL cohort.
         _tp, _h, s = _in_store(sid, s, list(stores), amap)
     acct = s.acct if s else ""
-    fact = _cover(s, facts, now) if s else None
-    scope, resets = (
-        (fact.scope, fact.resets_at) if fact else (_own_scope(s) if s else ("", None))
-    )
+    scope, resets = _binding(s, _cover(s, facts, now), now) if s else ("", None)
     cid = cohort_id(acct, scope, resets)
     rec = T.Record(
         sid=sid,

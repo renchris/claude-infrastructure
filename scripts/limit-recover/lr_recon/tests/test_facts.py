@@ -90,6 +90,22 @@ class ModelScope(unittest.TestCase):
             F.blocking({f.key: f}, "next2", "fable", "claude-fable-5-1", NOW), f
         )
 
+    def test_blocking_returns_the_fact_that_binds_latest(self):
+        """W7h: ranked on scope first, an older 7d fact was returned over a later-resetting 5h."""
+        d7, h5 = fact("7d", resets_at=NOW + 3600), fact("5h", resets_at=NOW + 6000)
+        both = {d7.key: d7, h5.key: h5}
+        self.assertEqual(F.blocking(both, "next2", "general", "m", NOW), h5)
+        d7 = fact("7d", resets_at=NOW + 9000)
+        both[d7.key] = d7
+        self.assertEqual(F.blocking(both, "next2", "general", "m", NOW), d7)
+        # no known reset ranks after a known one; auth, which no reset frees, before both
+        unk = fact("7d", resets_at=None)
+        both[unk.key] = unk
+        self.assertEqual(F.blocking(both, "next2", "general", "m", NOW), h5)
+        au = fact("auth", resets_at=None)
+        both[au.key] = au
+        self.assertEqual(F.blocking(both, "next2", "general", "m", NOW), au)
+
     def test_other_model_turn_does_not_contradict(self):
         f = fact("model:opus")
         facts = {f.key: f}

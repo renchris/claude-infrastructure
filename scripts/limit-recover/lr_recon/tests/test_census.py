@@ -131,6 +131,55 @@ class CensusBuckets(unittest.TestCase):
         self.pane.root_shape = "launcher"
         self.assertEqual(self.b(self._s()).name, "LAUNCHER-ROOTED")
 
+    # ── W7h defect 1: the block ends at the LATEST reset, of the facts and the death record ──────
+
+    def _five_hour(self, resets):
+        return self._s(last=dict(LIMIT, cap="five_hour", resets_at=resets))
+
+    def test_a_new_5h_limit_is_not_filed_under_an_older_7d_fact(self):
+        """next4, 2026-10-04: the Oct-1 7d fact (resets 09:00Z) was still unexpired when the 5h cap
+        (resets 09:40Z) hit; 14 sessions were filed scope 7d in the older 7d cohort."""
+        s = self._five_hour(NOW + 6000)
+        for facts in (
+            _fact("7d", NOW + 3600),  # the death record alone names the 5h reset
+            dict(_fact("7d", NOW + 3600), **_fact("5h", NOW + 6000)),
+        ):
+            b = self.b(s, facts=facts)
+            self.assertEqual(
+                (b.name, b.scope, b.resets_at), ("LIMITED", "5h", NOW + 6000)
+            )
+            cid = C.cohort_id(b.acct, b.scope, b.resets_at)
+            self.assertEqual(cid, "next3-5h-%d" % (NOW + 6000))
+            rec = C.new_record(b, s, self.pane, cid, "census", True, NOW)
+            self.assertEqual((rec.scope, rec.cohort_id), ("5h", cid))
+
+    def test_the_wake_is_at_the_5h_reset_not_the_older_7d_one(self):
+        # the 7d fact resets inside the 15-min stay rule; the 5h cap does not: no in-place stay
+        s = self._five_hour(NOW + 3000)
+        self.assertEqual(self.b(s, facts=_fact("7d", NOW + 300)).name, "LIMITED")
+        # both inside it: the stay's wake is the 5h reset, the later one
+        s = self._five_hour(NOW + 800)
+        b = self.b(s, facts=_fact("7d", NOW + 300))
+        self.assertEqual((b.name, b.scope, b.resets_at), ("STAY", "5h", NOW + 800))
+        rec = C.new_record(b, s, self.pane, "c", "census", True, NOW)
+        self.assertEqual((rec.substate, rec.wait.eta), ("WAIT_RESET", NOW + 800))
+
+    def test_a_later_7d_fact_binds_over_a_5h_death(self):
+        s = self._five_hour(NOW + 3000)
+        b = self.b(s, facts=_fact("7d", NOW + 7200))
+        self.assertEqual((b.scope, b.resets_at), ("7d", NOW + 7200))
+        self.assertEqual(
+            C.cohort_id(b.acct, b.scope, b.resets_at), "next3-7d-%d" % (NOW + 7200)
+        )
+        # a death whose own reset has passed binds nothing, and auth has no reset to outlast
+        b = self.b(self._five_hour(NOW - 600), facts=_fact("7d", None))
+        self.assertEqual((b.scope, b.resets_at), ("7d", None))
+        # with no reset on the fact, a death reset still ahead is the one known end of the block
+        b = self.b(self._five_hour(NOW + 600), facts=_fact("7d", None))
+        self.assertEqual((b.scope, b.resets_at), ("5h", NOW + 600))
+        b = self.b(self._five_hour(NOW + 3000), facts=_fact("auth", None))
+        self.assertEqual((b.scope, b.resets_at), ("auth", None))
+
     def test_idle(self):
         idle = dict(last={}, composer="empty")
         on = {"LR_IDLE_FANOUT": "on"}
