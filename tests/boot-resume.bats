@@ -999,3 +999,14 @@ SH
   [ -f "$CC_BOOT_RESUME_STATE_DIR/events/boot-1784800000/load.log" ]
   [ "$(marker)" = 1784800000 ]
 }
+
+@test "event --kind restart restores from the tick it just took, even though that tick is stamped after the event" {
+  export CC_BOOTUUID_OVERRIDE=UUID-1 CC_HB_NOW=1784805030          # the tick runs 30 s after the event epoch
+  jq -n --argjson k "$$" '[{session_id:"t1",account:"claude-next",cwd:"/x/t1",name:"TICK-ONE",paneUUID:"7",kitty_pid:$k}]' \
+    > "$CC_HB_SESSIONS_BIN.json"
+  run /bin/bash "$SCRIPT" --event 1784805000 --kind restart --plan-only
+  [ "$status" -eq 0 ]
+  [ "$(cat "$CC_HEARTBEAT_DIR/UUID-1/$$/hb.start")" = 1784805030 ]
+  [[ "$output" == *"	t1	/x/t1	"*"TICK-ONE"* ]] || false
+  [[ "$output" == *"verdict=planned rows=1 "* ]] || false
+}

@@ -307,6 +307,7 @@ fi
 #    here ever creates that file. EVENT_DIR holds the event's ledger, map lines and load log. ──
 RESTORE_V2=0
 { [ -n "$EVENT" ] || [ -f "$STATE_DIR/restore-v2" ]; } && RESTORE_V2=1
+HB_HI="$BOOT"   # the newest heartbeat start a restore may take (a restart's own tick may pass BOOT)
 EVENT_ID="${EVENT_KPID:-$EVENT}"; [ -n "$EVENT" ] || EVENT_ID="boot-$BOOT"
 EVENT_DIR="$STATE_DIR/events/$EVENT_ID"
 
@@ -349,8 +350,15 @@ if [ -n "$EVENT" ]; then
     exit 0
   fi
   # A planned restart is restored from the fleet as it is NOW. A crash is not: the fleet is gone,
-  # and a tick would only record the new kitty.
-  [ "$EVENT_KIND" = restart ] && heartbeat
+  # and a tick would only record the new kitty. The tick is stamped when it runs, which is after the
+  # event epoch the caller took, so the pick's upper bound (HB_HI) moves to the tick's own clock —
+  # without that, a restart could never restore from the snapshot it just took (measured
+  # 2026-10-05: hb.start 1791179255 against an event of a few seconds before, rc 3 no-heartbeat).
+  if [ "$EVENT_KIND" = restart ]; then
+    heartbeat
+    _hb_now="${CC_HB_NOW:-$(date +%s)}"
+    [ "$_hb_now" -gt "$HB_HI" ] 2>/dev/null && HB_HI="$_hb_now"
+  fi
 elif same_boot; then
   heartbeat
   log_idl abstained ',"reason":"already-processed","n_open":0,"resumed":0'
@@ -444,7 +452,7 @@ if [ -n "$EVENT" ] && [ -z "$EVENT_ROSTER_DIR" ]; then
 fi
 hb_sel=""; hb_start=0
 if [ -n "$hb_base" ] && command -v hb_pick >/dev/null 2>&1; then
-  hb_sel="$(hb_pick "$hb_base" "$LOWER" "$BOOT" $hb_flag)" || hb_sel=""
+  hb_sel="$(hb_pick "$hb_base" "$LOWER" "$HB_HI" $hb_flag)" || hb_sel=""
   [ -n "$hb_sel" ] && hb_start="$(printf '%s\n' "$hb_sel" | head -n 1 | cut -f1)"
 fi
 if [ -n "$hb_sel" ] && [ "$hb_start" -ge "$roster_start" ]; then
