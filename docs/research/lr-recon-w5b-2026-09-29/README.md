@@ -477,6 +477,16 @@ Only cohorts whose limit began after 18:07:02Z count. Every cohort open at the r
 it and is evidence only. The comparer (`a3ba677bc`) treats hold substates generically, so the first
 cohort to carry `HOLD-DRAFT` or an IMPOSSIBLE member is a vocabulary check before it is a verdict.
 
+**Lead ruling (2026-10-05 23:16Z, 92%): a restart on the SAME `lr` code does not reset the count.**
+The question arose because an open operator packet (`ee0ad84e8974`, reboot this Mac) would restart
+the reconciler. `git diff 0133a555d..origin/main -- scripts/limit-recover` was empty at 23:14Z, and
+the reconciler's state is on disk (`recon/cohorts`, `facts`, `owned`), so a same-code restart
+invalidates nothing the earlier reset rule guarded against: that rule exists because cohort 1 ran on
+pre-fix code. The rule now: a cohort wholly before or wholly after a same-code restart counts; a
+cohort whose limit spans the restart is evidence only; a restart onto CHANGED `lr` code still moves
+the cutoff and resets the count to 0. So on a new `restarts.jsonl` row, diff `scripts/limit-recover`
+between the two running shas before deciding. Status at 23:14Z: 0 of 2, no cohort since the cutoff.
+
 ## Census step
 
 Operator step `f0df9145b73a` (the live observe census) was closed with the launchd daemon's own pass:
