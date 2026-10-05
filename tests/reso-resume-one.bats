@@ -856,3 +856,66 @@ W
   [[ "$(spawn_argv)" == *"--resume SID-NOWRAP"* ]] || false
   [ "$(cat "$CC_RR_STUB_ARGV.cert")" = bundled ]
 }
+
+# ── W3 P4: --permission-mode and --prompt-file ride on the ONE spawn line ─────────────────────────
+# The stub records "$*", which cannot tell one multi-line argument from several. This shim records
+# the argv one argument per NUL, then runs the stub.
+argv_shim() {
+  printf '#!/bin/bash\nprintf "%%s\\0" "$@" > "$CC_RR_STUB_ARGV.nul"\nexec "%s.real" "$@"\n' \
+    "$CC_RESUME_CLAUDE_BIN" > "$CC_RESUME_CLAUDE_BIN.shim"
+  mv "$CC_RESUME_CLAUDE_BIN" "$CC_RESUME_CLAUDE_BIN.real"; mv "$CC_RESUME_CLAUDE_BIN.shim" "$CC_RESUME_CLAUDE_BIN"
+  chmod +x "$CC_RESUME_CLAUDE_BIN"
+}
+argc() { tr -cd '\0' < "$CC_RR_STUB_ARGV.nul" | wc -c | tr -d ' '; }
+arg() { tr '\0' '\n' < "$CC_RR_STUB_ARGV.nul" | sed -n "${1}p"; }   # single-line arguments only
+# The tail of the argv after the launch flags, as "<a>|<b>|…" (newlines inside an argument kept).
+argv_from_resume() { perl -0 -ne 'chomp; $on = 1 if $_ eq "--resume"; push @a, $_ if $on; END { print join("|", @a) }' "$CC_RR_STUB_ARGV.nul"; }
+
+@test "P4: with neither flag the spawned argv is exactly today's — permission mode auto, nothing after the sid" {
+  argv_shim
+  run env CC_RR_STUB_NO_MENU=1 timeout 60 "$RRO" next "$WT" SID-PLAIN
+  [ "$status" -eq 0 ] || { echo "status $status: $output"; false; }
+  [ "$(arg 1)" = "--permission-mode" ] || { tr '\0' '\n' < "$CC_RR_STUB_ARGV.nul"; false; }
+  [ "$(arg 2)" = auto ] || { tr '\0' '\n' < "$CC_RR_STUB_ARGV.nul"; false; }
+  [ "$(arg 3)" = "--model" ] || { tr '\0' '\n' < "$CC_RR_STUB_ARGV.nul"; false; }
+  [ "$(arg 5)" = "--effort" ] || { tr '\0' '\n' < "$CC_RR_STUB_ARGV.nul"; false; }
+  [ "$(argv_from_resume)" = "--resume|SID-PLAIN" ] || { echo "argv tail: $(argv_from_resume)"; false; }
+  [ "$(argc)" = 8 ] || { echo "argc $(argc)"; tr '\0' '\n' < "$CC_RR_STUB_ARGV.nul"; false; }
+}
+
+@test "P4: --prompt-file puts the prompt after --resume <sid> as ONE argument, newlines and quotes intact" {
+  argv_shim
+  printf '[restore] kitty was restarted at 13:29.\nIt'"'"'s "one" argument; $HOME stays literal.\n(restore ref R-abc123)\n' > "$BATS_TEST_TMPDIR/prompt.txt"
+  run env CC_RR_STUB_NO_MENU=1 timeout 60 "$RRO" next "$WT" SID-PROMPT --prompt-file "$BATS_TEST_TMPDIR/prompt.txt"
+  [ "$status" -eq 0 ] || { echo "status $status: $output"; false; }
+  [ "$(argc)" = 9 ] || { echo "argc $(argc), want 9 (one more than without a prompt)"; false; }
+  want="--resume|SID-PROMPT|$(cat "$BATS_TEST_TMPDIR/prompt.txt")"
+  [ "$(argv_from_resume)" = "$want" ] || { echo "argv tail: $(argv_from_resume)"; false; }
+}
+
+@test "P4: a missing or empty prompt file costs the prompt, never the resume" {
+  argv_shim
+  : > "$BATS_TEST_TMPDIR/empty.txt"
+  for f in "$BATS_TEST_TMPDIR/empty.txt" "$BATS_TEST_TMPDIR/absent.txt"; do
+    rm -f "$CC_RR_STUB_ARGV.nul"
+    run env CC_RR_STUB_NO_MENU=1 timeout 60 "$RRO" next "$WT" SID-NOPROMPT --prompt-file "$f"
+    [ "$status" -eq 0 ] || { echo "status $status: $output"; false; }
+    [[ "$output" == *"resuming without a prompt"* ]] || { echo "no note for $f: $output"; false; }
+    [ "$(argv_from_resume)" = "--resume|SID-NOPROMPT" ] || { echo "argv tail for $f: $(argv_from_resume)"; false; }
+  done
+}
+
+@test "P4: --permission-mode hands the session its own mode; an unknown word falls back to auto, loudly" {
+  argv_shim
+  run env CC_RR_STUB_NO_MENU=1 timeout 60 "$RRO" next "$WT" SID-PLAN --permission-mode plan
+  [ "$status" -eq 0 ] || { echo "status $status: $output"; false; }
+  [ "$(arg 1)" = "--permission-mode" ] || { tr '\0' '\n' < "$CC_RR_STUB_ARGV.nul"; false; }
+  [ "$(arg 2)" = plan ] || { tr '\0' '\n' < "$CC_RR_STUB_ARGV.nul"; false; }
+  [ "$(argc)" = 8 ]
+  rm -f "$CC_RR_STUB_ARGV.nul"
+  run env CC_RR_STUB_NO_MENU=1 timeout 60 "$RRO" next "$WT" SID-ODD --permission-mode 'yolo; rm -rf /'
+  [ "$status" -eq 0 ] || { echo "status $status: $output"; false; }
+  [ "$(arg 2)" = auto ] || { tr '\0' '\n' < "$CC_RR_STUB_ARGV.nul"; false; }
+  [[ "$output" == *"is not one claude takes"* ]] || { echo "$output"; false; }
+  [ "$(argc)" = 8 ]
+}

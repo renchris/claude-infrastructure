@@ -2,6 +2,7 @@
 # reso-resume-one — AUTONOMOUS single-session resume.
 #   Usage: reso-resume-one <account> <worktree-path> <session-id> [branch]
 #                          [--effort low|medium|high|xhigh|max] [--repo PATH] [--branch BR]
+#                          [--permission-mode MODE] [--prompt-file F]
 #   account: next|next2|next3|next4 (Opus) · fable|fable2|fable3|fable4 (Fable 5)
 # - recreates the worktree from <branch> if its dir was reaped, in WHATEVER repo owns it
 # - resets mouse reporting (stops crashed-session escape-seq garbage leaking into the input box)
@@ -65,10 +66,12 @@ if [ $# -gt 3 ]; then
   case "$4" in --*) ;; *) br="$4"; _consumed=4 ;; esac
 fi
 [ "$_consumed" -gt 0 ] && shift "$_consumed"
-EFFORT="" REPO_ARG=""
+EFFORT="" REPO_ARG="" PERM_MODE="" PROMPT_FILE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --effort) EFFORT="${2:-}"; shift 2 ;;
+    --permission-mode) PERM_MODE="${2:-}"; shift 2 ;;
+    --prompt-file) PROMPT_FILE="${2:-}"; shift 2 ;;
     --repo)   REPO_ARG="${2:-}"; shift 2 ;;
     --branch) br="${2:-}"; shift 2 ;;
     *) printf '%s\n' "reso-resume-one: unknown arg $1" >&2; exit 2 ;;
@@ -82,9 +85,37 @@ case "$EFFORT" in
   *) printf '%s\n' "reso-resume-one: --effort must be low|medium|high|xhigh|max (got '$EFFORT')" >&2; exit 2 ;;
 esac
 
+# ── --permission-mode: the mode the session was in, not a constant (W3 P4, gap 7) ────────────────
+# This file passed `--permission-mode auto` to every resume, so a session the operator had put in
+# plan or acceptEdits came back in auto. The restore now hands over the session's own last mode
+# (boot-resume.sh's contract column 11). `auto` remains the answer ONLY when the mode is unknown:
+# absent, or a word this binary does not take. An unknown word is never passed through, for the
+# reason --effort is checked above: the binary refuses it at startup, after the pane is committed.
+case "$PERM_MODE" in
+  default|acceptEdits|plan|auto|dontAsk|bypassPermissions) ;;
+  "") PERM_MODE=auto ;;
+  *) printf '%s\n' "reso-resume-one: NOTE — permission mode '$PERM_MODE' is not one claude takes; resuming in auto." >&2
+     PERM_MODE=auto ;;
+esac
+# ── --prompt-file: the recovery prompt as a LAUNCH ARGUMENT (W3 P4) ──────────────────────────────
+# `claude --resume <sid> "<prompt>"` submits the prompt itself, with no typing into the pane. On
+# 2026-10-01, 30 of 31 typed recovery prompts did not submit. Piloted 2026-10-05 in a private tmux
+# server: the transcript gained exactly one user record carrying the nonce and an assistant reply
+# within 6 s. The text rides on the one spawn line below, so the two paths cannot drift. A file that
+# is missing or empty costs the prompt and never the resume: the session still comes back, and the
+# caller's transcript check reports the prompt as unconfirmed.
+CC_RR_PROMPT=""
+if [ -n "$PROMPT_FILE" ]; then
+  if [ -s "$PROMPT_FILE" ] && [ -r "$PROMPT_FILE" ]; then
+    CC_RR_PROMPT="$(cat "$PROMPT_FILE")"
+  else
+    printf '%s\n' "reso-resume-one: NOTE — prompt file $PROMPT_FILE is missing or empty; resuming without a prompt." >&2
+  fi
+fi
+
 MODEL_CONFIG=${CC_MODEL_CONFIG:-$HOME/.claude/model-config.yaml}
 if [ -z "$acct" ] || [ -z "$wt" ] || [ -z "$sid" ]; then
-  printf '%s\n' "usage: reso-resume-one <acct> <wt> <sid> [branch] [--effort E] [--repo PATH]"; exit 2
+  printf '%s\n' "usage: reso-resume-one <acct> <wt> <sid> [branch] [--effort E] [--repo PATH] [--permission-mode M] [--prompt-file F]"; exit 2
 fi
 wt=${wt%/}
 
@@ -580,6 +611,7 @@ export CC_RR_CFG="$cfg" CC_RR_BIN="$bin" CC_RR_MODEL="$model" CC_RR_EFFORT="$eff
 export CC_RR_NO_INTERACT="${CC_RESUME_NO_INTERACT:-}"
 export CC_RR_THRESHOLD="$RESUME_THRESHOLD"
 export CC_RR_MCP_ARGS
+export CC_RR_PERM_MODE="$PERM_MODE" CC_RR_PROMPT
 # ── THE SPAWN GOES THROUGH bin/cc-close-attrib (W3 P2, amendment §C 8) ────────────────────────────
 # Every other launch path interposes the close-attribution wrapper, so a session resumed here could
 # die with no close-record and the crash watchdog had nothing to join (the same gap lr-fire-resume.sh
@@ -632,6 +664,7 @@ expect -c '
   set sid    $env(CC_RR_SID)
   set thr    $env(CC_RR_THRESHOLD)
   set mcpdec $env(CC_RR_MCP_ARGS)
+  set pmode  $env(CC_RR_PERM_MODE)
   set answered 0
   # The env prefix is a LIST so the suppression variable can be absent rather than empty. Passing
   # NAME= with no value is not the same thing: Rue() reads "" as NaN and falls back to the default
@@ -650,7 +683,11 @@ expect -c '
   # The wrapper is a LIST too: empty when absent, so the fail-open spawn passes no extra argument.
   set wrap [list]
   if {$env(CC_RR_WRAP) ne ""} { lappend wrap $env(CC_RR_WRAP) }
-  spawn -noecho env {*}$envpfx {*}$wrap $bin --permission-mode auto --model $model --effort $effort {*}$mcplist --resume $sid
+  # The recovery prompt is a LIST as well: absent means NO argument (an empty positional would be
+  # submitted as an empty prompt), and one element keeps a multi-line text a single argument.
+  set prompt [list]
+  if {$env(CC_RR_PROMPT) ne ""} { lappend prompt $env(CC_RR_PROMPT) }
+  spawn -noecho env {*}$envpfx {*}$wrap $bin --permission-mode $pmode --model $model --effort $effort {*}$mcplist --resume $sid {*}$prompt
   # THE RELAY IS BYTE-TRANSPARENT (2026-09-28), as in scripts/limit-recover/lr-fire-resume.sh, which
   # carries the measurement. Tcl 8.5 cannot hold a 4-byte UTF-8 character, so a utf-8 channel turned
   # every emoji the session painted into Latin-1 debris for the life of the pane. Both channels carry

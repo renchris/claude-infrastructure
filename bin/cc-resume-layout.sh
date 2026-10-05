@@ -7,7 +7,7 @@
 #          ... reading a TSV on stdin (or --file PATH):
 #              account <TAB> session-id <TAB> worktree <TAB> branch [<TAB> label]
 #          i.e. lr-select.py's own output, with an optional 5th label column. Under --restore the
-#          W3 row contract adds 6 model, 7 effort, 8 group, 9 slot, 10 prompt_file (a cell holding
+#          W3 row contract adds 6 model, 7 effort, 8 group, 9 slot, 10 prompt_file, 11 permission_mode (a cell holding
 #          only \037 is empty); a 5-column row behaves exactly as before.
 #
 # ── WHY THIS EXISTS (2026-08-24, operator ruling during a post-crash recovery) ────────────────────
@@ -389,13 +389,14 @@ for n, (rs, gs) in enumerate(wins, 1):
       row="${ROWS[$idx]}"
       acct="$(cell "$row" 1)"; sid="$(cell "$row" 2)"; wt="$(cell "$row" 3)"; br="$(cell "$row" 4)"
       model="$(cell "$row" 6)"; effort="$(cell "$row" 7)"
+      prompt_file="$(cell "$row" 10)"; pmode="$(cell "$row" 11)"   # P4: handed to reso-resume-one as they are
       # reso-resume-one exits 2 on an effort it does not know, after the pane is already open.
       case "$effort" in ''|low|medium|high|xhigh|max) ;; *) note "cc-resume-layout: effort '$effort' for $sid is not one reso-resume-one takes — dropped"; effort="" ;; esac
       case "$model" in *[!A-Za-z0-9._-]*) note "cc-resume-layout: model '$model' for $sid is malformed — dropped"; model="" ;; esac
       how="vsplit"; [ "$pos" = 0 ] && how="head"
       if [ "$DRY_RUN" = 1 ]; then
         [ "$pos" = 0 ] && head="<head of CC-DESK-$win>"
-        note "DRY [CC-DESK-$win $grp] $how $acct $sid $wt${model:+ model=$model}${effort:+ effort=$effort}"
+        note "DRY [CC-DESK-$win $grp] $how $acct $sid $wt${model:+ model=$model}${effort:+ effort=$effort}${pmode:+ permission_mode=$pmode}${prompt_file:+ prompt_file=$prompt_file}"
         pos=$((pos + 1)); continue
       fi
       [ "$stopped" = none ] || { shed=$((shed + 1)); continue; }
@@ -433,6 +434,8 @@ for n, (rs, gs) in enumerate(wins, 1):
       cmd="$cmd $(shq "$RESUME_ONE") $(shq "$acct") $(shq "$wt") $(shq "$sid")"
       [ -n "$br" ] && cmd="$cmd $(shq "$br")"
       [ -n "$effort" ] && cmd="$cmd '--effort' $(shq "$effort")"
+      [ -n "$pmode" ] && cmd="$cmd '--permission-mode' $(shq "$pmode")"
+      [ -n "$prompt_file" ] && cmd="$cmd '--prompt-file' $(shq "$prompt_file")"
       LA=(launch --keep-focus)
       if [ "$pos" = 0 ]; then LA+=(--type=os-window)
       else LA+=(--location=vsplit --match "window_id:$prev" --next-to "id:$prev"); fi

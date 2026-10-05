@@ -279,9 +279,9 @@ SH
   unset CC_ADMIT_RESTORE_R CC_ADMIT_ACTIVE_CEILING CC_RESTORE_DEADLINE CC_RESTORE_KITTY_PID KITTY_PID
 }
 restore() { run --separate-stderr bash "$LAYOUT" --desktops --restore --to unix:/tmp/kitty-4242 --file "$ROWS"; }
-xrow() { # <repo> <n> <model> <effort> <group> <slot> <prompt> — an 11-column contract row, \037 = empty
+xrow() { # <repo> <n> <model> <effort> <group> <slot> <prompt> [permission-mode] — an 11-column contract row, \037 = empty
   local wt="$BATS_TEST_TMPDIR/$1/w$2"; mkdir -p "$wt"
-  printf 'next\tsid-%s-%s\t%s\tbr\tlabel\t%s\t%s\t%s\t%s\t%s\t\037\n' "$1" "$2" "$wt" "$3" "$4" "$5" "$6" "$7" >> "$ROWS"
+  printf 'next\tsid-%s-%s\t%s\tbr\tlabel\t%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$wt" "$3" "$4" "$5" "$6" "$7" "${8:-$'\037'}" >> "$ROWS"
 }
 launched_sids() { grep ' launch ' "$KLOG" | grep -o "'sid-[a-z0-9-]*'" | tr -d "'" | tr '\n' ' '; }
 
@@ -419,14 +419,16 @@ launched_sids() { grep ' launch ' "$KLOG" | grep -o "'sid-[a-z0-9-]*'" | tr -d "
   [ "$(launched_sids)" = "sid-repo-a-2 sid-repo-b-1 sid-repo-a-1 " ]
 }
 
-@test "restore: model and effort ride through; columns 10-11 do not; a bad effort is dropped; \\037 is empty" {
+@test "restore: model, effort, permission mode (11) and prompt file (10) ride through; a bad effort is dropped; \\037 is empty" {
   restore_setup
-  xrow repo-a 1 claude-opus-5-5 xhigh $'\037' $'\037' /tmp/prompt-1
+  xrow repo-a 1 claude-opus-5-5 xhigh $'\037' $'\037' "/tmp/prompt 1" plan
   xrow repo-a 2 $'\037' turbo $'\037' $'\037' $'\037'
   restore
   [ "$status" -eq 0 ]
-  grep -q "'CC_RESUME_MODEL=claude-opus-5-5' '$CC_RESUME_ONE_BIN' 'next' '.*/repo-a/w1' 'sid-repo-a-1' 'br' '--effort' 'xhigh' || exec zsh -i" "$KLOG"
-  ! grep -q 'prompt-1\|--prompt-file\|--permission-mode' "$KLOG" || false
+  # In reso-resume-one's own flag order, the prompt path one quoted word although it holds a space.
+  grep -q "'CC_RESUME_MODEL=claude-opus-5-5' '$CC_RESUME_ONE_BIN' 'next' '.*/repo-a/w1' 'sid-repo-a-1' 'br' '--effort' 'xhigh' '--permission-mode' 'plan' '--prompt-file' '/tmp/prompt 1' || exec zsh -i" "$KLOG"
+  # An empty cell passes NO flag: the launcher's own default (auto, no prompt) then applies.
+  ! grep 'sid-repo-a-2' "$KLOG" | grep -q 'prompt-file\|permission-mode' || false
   grep -q "'sid-repo-a-2' 'br' || exec zsh -i" "$KLOG"
   ! grep 'sid-repo-a-2' "$KLOG" | grep -q 'CC_RESUME_MODEL\|--effort' || false
   printf '%s\n' "$stderr" | grep -q "effort 'turbo' for sid-repo-a-2 .* dropped"
