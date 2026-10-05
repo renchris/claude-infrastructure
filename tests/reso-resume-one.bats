@@ -792,7 +792,7 @@ fence_hold() { # <sid> <pid> — a launch lock held by <pid>, stamped as lr_reco
   run env CC_RR_STUB_NO_MENU=1 timeout 60 "$RRO" next "$WT" SID-HELD
   kill "$live" 2>/dev/null || true
   [ "$status" -eq 5 ] || { echo "status $status: $output"; false; }
-  [[ "$output" == *"1 live holder(s) already"* ]]
+  [[ "$output" == *"1 live holder(s) already"* ]] || false
   [ -z "$(spawn_argv)" ]
   [ ! -e "$(fence_dir SID-HELD)" ]   # the lock it took for the check is given back
 }
@@ -803,7 +803,7 @@ fence_hold() { # <sid> <pid> — a launch lock held by <pid>, stamped as lr_reco
   run env CC_RR_STUB_NO_MENU=1 CC_RESUME_FENCE_WAIT_S=1 timeout 60 "$RRO" next "$WT" SID-LOCKED
   kill "$live" 2>/dev/null || true
   [ "$status" -eq 5 ] || { echo "status $status: $output"; false; }
-  [[ "$output" == *"lock=held"* ]]
+  [[ "$output" == *"lock=held"* ]] || false
   [ -z "$(spawn_argv)" ]
   grep -q "\"pid\":$live," "$(fence_dir SID-LOCKED)/holder"   # someone else's lock is left alone
 }
@@ -814,8 +814,8 @@ fence_hold() { # <sid> <pid> — a launch lock held by <pid>, stamped as lr_reco
   printf '{"record_id":"x","attempt":0,"role":"x","pid":%s,"lstart":"Mon Jan 1 00:00:00 2001","at":1.0}\n' "$dead" > "$d/holder"
   run env CC_RR_STUB_NO_MENU=1 timeout 60 "$RRO" next "$WT" SID-STALE
   [ "$status" -eq 0 ] || { echo "status $status: $output"; false; }
-  [[ "$(spawn_argv)" == *"--resume SID-STALE"* ]]
-  [[ "$output" == *"lock=taken"* ]]
+  [[ "$(spawn_argv)" == *"--resume SID-STALE"* ]] || false
+  [[ "$output" == *"lock=taken"* ]] || false
   [ ! -e "$d" ]
 }
 
@@ -840,7 +840,7 @@ W
   unset CLAUDE_CODE_CERT_STORE
   run env CC_RR_STUB_NO_MENU=1 timeout 60 "$RRO" next "$WT" SID-WRAP
   [ "$status" -eq 0 ] || { echo "status $status: $output"; false; }
-  [[ "$(cat "$CC_RR_STUB_ARGV.wrap")" == "$CC_RESUME_CLAUDE_BIN "*"--resume SID-WRAP"* ]]
+  [[ "$(cat "$CC_RR_STUB_ARGV.wrap")" == "$CC_RESUME_CLAUDE_BIN "*"--resume SID-WRAP"* ]] || false
   [ "$(cat "$CC_RR_STUB_ARGV.cert")" = bundled ]
   [[ "$(spawn_argv)" == *"--resume SID-WRAP"* ]]
 }
@@ -853,6 +853,6 @@ W
   chmod +x "$CC_RESUME_CLAUDE_BIN"
   run env CC_RR_STUB_NO_MENU=1 timeout 60 "$RRO" next "$WT" SID-NOWRAP
   [ "$status" -eq 0 ] || { echo "status $status: $output"; false; }
-  [[ "$(spawn_argv)" == *"--resume SID-NOWRAP"* ]]
+  [[ "$(spawn_argv)" == *"--resume SID-NOWRAP"* ]] || false
   [ "$(cat "$CC_RR_STUB_ARGV.cert")" = bundled ]
 }

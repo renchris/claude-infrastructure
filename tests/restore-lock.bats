@@ -44,7 +44,7 @@ live_sleeper() { sleep 300 & SLEEPERS="$SLEEPERS $!"; LIVE=$!; }
 @test "take: lock and claim both carry pid, lstart and boot uuid" {
   rl 'restore_lock_take ev-1; echo "rc=$? pid=$$"; cat "$RESTORE_STATE_DIR/restore.lock/holder"'
   [ "$status" -eq 0 ]
-  [[ "$output" == *"rc=0"* ]]
+  [[ "$output" == *"rc=0"* ]] || false
   pid="$(printf '%s\n' "$output" | sed -n 's/.*pid=\([0-9]*\).*/\1/p' | head -1)"
   grep -q "\"pid\":$pid," "$LOCK/holder"
   grep -q '"boot":"boot-A"' "$LOCK/holder"
@@ -122,8 +122,8 @@ live_sleeper() { sleep 300 & SLEEPERS="$SLEEPERS $!"; LIVE=$!; }
 
 @test "restore_refuse_under_bats refuses under a harness and lets a real run through" {
   rl 'restore_refuse_under_bats "TERM kitty"; echo "rc=$?"'
-  [[ "$output" == *"REFUSED under a bats harness: TERM kitty"* ]]
-  [[ "$output" == *"rc=0" ]]
+  [[ "$output" == *"REFUSED under a bats harness: TERM kitty"* ]] || false
+  [[ "$output" == *"rc=0" ]] || false
   run env -u BATS_TEST_FILENAME -u BATS_TEST_TMPDIR -u BATS_VERSION \
     /bin/bash -c ". \"$LIB\"; restore_refuse_under_bats x; echo \"rc=\$?\""
   [ "$output" = "rc=1" ]
