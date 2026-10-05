@@ -1,0 +1,1059 @@
+#!/usr/bin/env python3
+"""cc-restore — the one operator command for a planned or deaf-kitty restart (W3 P5).
+
+  cc-restore --restart-kitty --dry-run            preview: signals nothing, needs no --confirm
+  cc-restore --restart-kitty --confirm <pid>      end the main kitty, start a new one, restore the fleet
+  cc-restore --after-crash [--kitty-pid K] [--dry-run]   kitty is already gone: restore its fleet
+  cc-restore --abort                              stop a running restore and release its lock
+  cc-restore --compare <event-dir> [--after <heartbeat-dir>]   before/after, one line per session
+
+Options: --land-wait SECS (600) · --no-wait.
+
+WHAT A RESTART DOES, in order (docs/research/session-durability-2026-10/W3-build-plan.md § E):
+  1. preflight: exactly one main kitty (a kitty with no --instance-group in its argv, read from ps,
+     never `pgrep -nx`), --confirm names it, `kitty-build-swap.sh status` passes;
+  2. a detached worker (its own session, so it outlives the kitty it is about to end) takes the
+     restore lock and the events/<epoch>.inprogress claim (scripts/lib/restore-lock.sh's format);
+  3. waits for in-flight lands (ship-land.sh) for at most --land-wait;
+  4. takes a heartbeat tick and copies that kitty's heartbeat into events/<epoch>/hb/<pid>/, with the
+     kalloc reading and the zombie count beside it;
+  5. SIGTERM, 3 s, SIGKILL (kitty 0.48.2 can drop the first);
+  6. `open -a /Applications/kitty.app`, then waits up to 60 s for the new socket;
+  7. runs `boot-resume.sh --event <epoch> --kind restart --roster-dir events/<epoch>/hb` until that
+     event is marked done (each round launches only what the ledger and the fence say is missing);
+  8. runs cc-restore-rebind (forwards, roles, exhausted accounts), then prints the verdict line.
+
+It never relaunches by itself after a crash: the crash page (boot-resume.sh) files one operator row
+carrying `cc-restore --after-crash`, because a deliberate quit cannot be told apart from a crash.
+
+LIMITS ON KITTY'S SOCKET (plan § C item 5): one `kitten @` call in flight at a time, a 30 s pause
+after one times out, and the restore stops if the new kitty holds more than 180 file descriptors.
+
+Under a bats harness it refuses to run unless every actuator is a stub (ps, kill, open, kitten,
+boot-resume, the build check, rebind, cc-sessions, lsof) and both state dirs are set, so a test can
+never signal or launch the real kitty.
+
+Exit: 0 done (or a clean dry run) · 1 partial / compare differs · 2 usage or refused · 3 preflight ·
+4 kitty did not exit · 5 the new kitty did not answer · 6 stopped (fd limit, no heartbeat) · 130 aborted.
+
+Seams: CC_BOOT_RESUME_STATE_DIR · CC_HEARTBEAT_DIR · CC_RESTORE_PS_BIN · CC_RESTORE_KILL_BIN ·
+  CC_OPEN_BIN · CC_KITTY_APP · CC_RESTORE_KITTEN_BIN · CC_RESTORE_BOOT_RESUME · CC_RESTORE_SWAP_BIN ·
+  CC_RESTORE_REBIND_BIN · CC_RESTORE_SESSIONS_BIN · CC_RESTORE_LSOF_BIN · CC_RESTORE_ZPRINT_BIN ·
+  CC_RESTORE_SOCKET_TMPL · CC_RESTORE_TERM_WAIT_S (3) · CC_RESTORE_EXIT_WAIT_S (30) ·
+  CC_RESTORE_SOCKET_WAIT_S (60) · CC_RESTORE_K_TIMEOUT_S (10) · CC_RESTORE_K_BACKOFF_S (30) · CC_RESTORE_FD_MAX (180) ·
+  CC_RESTORE_ROUND_SLEEP_S (30) · CC_RESTORE_LAND_POLL_S (15) · CC_RESTORE_MAX_S (2700) ·
+  RESTORE_LOCK_BOOT_UUID · RESTORE_LOCK_PS_BIN.
+"""
+import json
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import time
+
+HOME = os.path.expanduser("~")
+SELF = os.path.realpath(__file__)
+BIN = os.path.dirname(SELF)
+SCRIPTS = os.path.join(os.path.dirname(BIN), "scripts")
+PAD = "\x1f"
+
+DEFAULTS = {
+    "CC_RESTORE_PS_BIN": "/bin/ps",
+    "CC_RESTORE_KILL_BIN": "/bin/kill",
+    "CC_OPEN_BIN": "/usr/bin/open",
+    "CC_RESTORE_KITTEN_BIN": "/Applications/kitty.app/Contents/MacOS/kitten",
+    "CC_RESTORE_BOOT_RESUME": os.path.join(SCRIPTS, "boot-resume.sh"),
+    "CC_RESTORE_SWAP_BIN": os.path.join(SCRIPTS, "kitty-build-swap.sh"),
+    "CC_RESTORE_REBIND_BIN": os.path.join(BIN, "cc-restore-rebind"),
+    "CC_RESTORE_SESSIONS_BIN": os.path.join(BIN, "cc-sessions"),
+    "CC_RESTORE_LSOF_BIN": "/usr/sbin/lsof",
+}
+STATE_SEAMS = ("CC_BOOT_RESUME_STATE_DIR", "CC_HEARTBEAT_DIR")
+
+
+def seam(name):
+    return os.environ.get(name) or DEFAULTS[name]
+
+
+def num(name, default):
+    try:
+        return float(os.environ.get(name, default))
+    except ValueError:
+        return float(default)
+
+
+STATE = os.environ.get("CC_BOOT_RESUME_STATE_DIR") or os.path.join(HOME, ".claude/autonomy/boot-resume")
+EVENTS = os.path.join(STATE, "events")
+HB_ROOT = os.environ.get("CC_HEARTBEAT_DIR") or os.path.join(HOME, ".claude/autonomy/heartbeat")
+LOCK = os.path.join(STATE, "restore.lock")
+KITTY_APP = os.environ.get("CC_KITTY_APP") or "/Applications/kitty.app"
+HB_LIB = os.path.join(SCRIPTS, "lib", "restore-heartbeat.sh")
+
+
+def say(msg):
+    sys.stdout.write(msg + "\n")
+    sys.stdout.flush()
+
+
+def die(msg, rc=2):
+    sys.stderr.write("cc-restore: %s\n" % msg)
+    sys.exit(rc)
+
+
+def sh(argv, timeout=60, env=None):
+    """(rc, stdout, stderr); rc 124 on timeout, 127 when the program is missing."""
+    try:
+        p = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout,
+                           env=env, stdin=subprocess.DEVNULL)
+        return p.returncode, p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace")
+    except subprocess.TimeoutExpired:
+        return 124, "", "timeout"
+    except OSError as e:
+        return 127, "", str(e)
+
+
+def under_bats():
+    return any(os.environ.get(k) for k in ("BATS_TEST_FILENAME", "BATS_TEST_TMPDIR", "BATS_VERSION"))
+
+
+def refuse_under_bats():
+    """A test once reached the live kitty (1deb094d2). Under a harness every actuator must be a stub."""
+    if not under_bats():
+        return
+    missing = [k for k in list(DEFAULTS) + list(STATE_SEAMS) if not os.environ.get(k)]
+    real = [k for k in DEFAULTS if os.environ.get(k)
+            and os.path.realpath(os.environ[k]) == os.path.realpath(DEFAULTS[k])]
+    if missing or real:
+        die("REFUSED under a bats harness: %s must each name a stub, so nothing here can signal or "
+            "launch the real kitty" % ", ".join(missing + real), 2)
+
+
+# ── the main kitty ────────────────────────────────────────────────────────────────────────────────
+def kitties():
+    """[(pid, lstart, args)] for every process whose executable is named kitty."""
+    rc, out, _ = sh([seam("CC_RESTORE_PS_BIN"), "-axo", "pid=,lstart=,args="])
+    res = []
+    for ln in out.splitlines():
+        m = re.match(r"\s*(\d+)\s+(\w{3}\s+\S+\s+\S+\s+[\d:]+\s+\d{4})\s+(.*)$", ln)
+        if m and os.path.basename(m.group(3).split()[0]) == "kitty":
+            res.append((int(m.group(1)), " ".join(m.group(2).split()), m.group(3)))
+    return res
+
+
+def main_kitties():
+    """The main kitty has no --instance-group (the quick-access terminal and the sandbox build do),
+    and is not a helper started as `kitty +kitten …` / `kitty +runpy …`."""
+    return [k for k in kitties()
+            if "--instance-group" not in k[2] and not (k[2].split()[1:2] or [""])[0].startswith("+")]
+
+
+def lands():
+    """pids whose PROGRAM is ship-land.sh. Never a substring match on argv: every session whose
+    brief mentions ship-land.sh would count (scripts/alarm-reboot-prep.sh's rule)."""
+    rc, out, _ = sh([seam("CC_RESTORE_PS_BIN"), "-axo", "pid=,args="])
+    res = []
+    for ln in out.splitlines():
+        parts = ln.split()
+        if len(parts) < 2 or not parts[0].isdigit():
+            continue
+        a0, a1 = parts[1], (parts[2] if len(parts) > 2 else "")
+        if re.search(r"(^|/)ship-land\.sh$", a0) or (
+                re.search(r"(^|/)(ba|z|da)?sh$", a0) and re.search(r"(^|/)ship-land\.sh$", a1)):
+            res.append(int(parts[0]))
+    return res
+
+
+def socket_of(pid):
+    return (os.environ.get("CC_RESTORE_SOCKET_TMPL") or "unix:/tmp/kitty-{pid}").format(pid=pid)
+
+
+def fd_count(pid):
+    """Open file descriptors of <pid>, or -1 when lsof could not say."""
+    rc, out, _ = sh([seam("CC_RESTORE_LSOF_BIN"), "-p", str(pid)], timeout=15)
+    n = len([ln for ln in out.splitlines()[1:] if ln.strip()])
+    return n if rc == 0 and n > 0 else -1
+
+
+class Stop(Exception):
+    def __init__(self, rc, msg):
+        Exception.__init__(self, msg)
+        self.rc = rc
+
+
+def fd_gate(pid):
+    lim = int(num("CC_RESTORE_FD_MAX", 180))
+    n = fd_count(pid)
+    if n > lim:
+        raise Stop(6, "kitty %d holds %d file descriptors, over the limit of %d: the restore stops here "
+                      "rather than push it into its 256 soft limit" % (pid, n, lim))
+    return n
+
+
+_k_busy = False
+
+
+def k_ls(pid, sock):
+    """One bounded `kitten @ ls`. Never two in flight; a timeout costs a 30 s pause before the next."""
+    global _k_busy
+    assert not _k_busy, "a kitten call is already in flight"
+    fd_gate(pid)
+    _k_busy = True
+    try:
+        rc, out, _ = sh([seam("CC_RESTORE_KITTEN_BIN"), "@", "--to", sock, "ls"], timeout=num("CC_RESTORE_K_TIMEOUT_S", 10))
+    finally:
+        _k_busy = False
+    if rc == 124:
+        back = num("CC_RESTORE_K_BACKOFF_S", 30)
+        say("kitty did not answer within %d s; pausing %d s before the next call" % (num("CC_RESTORE_K_TIMEOUT_S", 10), back))
+        time.sleep(back)
+    return rc == 0
+
+
+# ── the restore lock: scripts/lib/restore-lock.sh's on-disk format, held by THIS process ─────────
+def boot_uuid():
+    if os.environ.get("RESTORE_LOCK_BOOT_UUID"):
+        return os.environ["RESTORE_LOCK_BOOT_UUID"]
+    rc, out, _ = sh(["/usr/sbin/sysctl", "-n", "kern.bootsessionuuid"], timeout=10)
+    return out.strip()
+
+
+def lstart_of(pid):
+    env = dict(os.environ, TZ="UTC", LC_ALL="C")
+    rc, out, _ = sh([os.environ.get("RESTORE_LOCK_PS_BIN") or "/bin/ps", "-o", "lstart=", "-p", str(pid)],
+                    timeout=10, env=env)
+    return " ".join(out.split())
+
+
+def holder():
+    try:
+        with open(os.path.join(LOCK, "holder")) as fh:
+            return json.loads(fh.read())
+    except (OSError, ValueError):
+        return None
+
+
+def holder_live(h):
+    if not h or not h.get("pid") or not h.get("lstart") or not h.get("boot"):
+        try:
+            return time.time() - os.stat(LOCK).st_mtime <= num("RESTORE_LOCK_GRACE_S", 10)
+        except OSError:
+            return False
+    return h["boot"] == boot_uuid() and lstart_of(h["pid"]) == h["lstart"]
+
+
+def lock_take(ev):
+    """0 taken · 1 held by a live restore · 2 cannot · 3 the event is already done."""
+    os.makedirs(EVENTS, exist_ok=True)
+    if os.path.exists(os.path.join(EVENTS, ev + ".done")):
+        return 3
+    ls, boot = lstart_of(os.getpid()), boot_uuid()
+    if not ls or not boot:
+        return 2
+    stamp = json.dumps({"event": ev, "pid": os.getpid(), "lstart": ls, "boot": boot, "at": int(time.time())},
+                       separators=(",", ":")) + "\n"
+    for _ in range(3):
+        try:
+            os.mkdir(LOCK)
+        except FileExistsError:
+            if holder_live(holder()):
+                return 1
+            shutil.rmtree(LOCK, ignore_errors=True)
+            continue
+        except OSError:
+            return 2
+        for path in (os.path.join(LOCK, "holder"), os.path.join(EVENTS, ev + ".inprogress")):
+            with open(path + ".tmp.%d" % os.getpid(), "w") as fh:
+                fh.write(stamp)
+            os.replace(path + ".tmp.%d" % os.getpid(), path)
+        return 0
+    return 1
+
+
+def lock_release(ev, done=False):
+    h = holder()
+    if not h or h.get("pid") != os.getpid():
+        return False
+    claim, mark = os.path.join(EVENTS, ev + ".inprogress"), os.path.join(EVENTS, ev + ".done")
+    if os.path.exists(claim):
+        if done and not os.path.exists(mark):
+            os.replace(claim, mark)
+        else:
+            os.unlink(claim)
+    shutil.rmtree(LOCK, ignore_errors=True)
+    return True
+
+
+# ── heartbeat ─────────────────────────────────────────────────────────────────────────────────────
+def hb_tick():
+    rc, _, err = sh(["/bin/bash", "-c", '. "$1" && hb_tick >/dev/null', "_", HB_LIB], timeout=120)
+    return rc, err.strip()
+
+
+def hb_start(d):
+    try:
+        with open(os.path.join(d, "hb.start")) as fh:
+            first = fh.readline().split()
+            return int(first[0]) if first and first[0].isdigit() else 0
+    except OSError:
+        return 0
+
+
+def hb_dirs():
+    """[(start, kitty pid, dir)] for every heartbeat dir, newest first."""
+    res = []
+    if os.path.isdir(HB_ROOT):
+        for u in os.listdir(HB_ROOT):
+            ud = os.path.join(HB_ROOT, u)
+            if not os.path.isdir(ud):
+                continue
+            for k in os.listdir(ud):
+                d = os.path.join(ud, k)
+                if k.isdigit() and os.path.isfile(os.path.join(d, "hb.roster.json")) and hb_start(d):
+                    res.append((hb_start(d), int(k), d))
+    return sorted(res, reverse=True)
+
+
+def hb_of(pid):
+    for st, k, d in hb_dirs():
+        if k == pid:
+            return d
+    return None
+
+
+def snapshot(evdir, pid, d):
+    """Copy heartbeat dir <d> to <evdir>/hb/<pid>/, and the two files rebind reads to <evdir>/."""
+    dst = os.path.join(evdir, "hb", str(pid))
+    if not os.path.isdir(dst):
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copytree(d, dst + ".tmp")
+        os.replace(dst + ".tmp", dst)
+    for f in ("hb.roster.json", "hb.roles.tsv"):
+        if os.path.isfile(os.path.join(dst, f)) and not os.path.exists(os.path.join(evdir, f)):
+            shutil.copy(os.path.join(dst, f), os.path.join(evdir, f))
+    return dst
+
+
+def host_record(evdir):
+    """The kalloc reading and the zombie count (plan § B gap 20): a restart erases neither, but the
+    record of what the box looked like when the operator chose to restart is otherwise lost."""
+    rc, out, _ = sh([os.environ.get("CC_RESTORE_ZPRINT_BIN") or "/usr/bin/zprint", "data.kalloc.1024"], timeout=20)
+    kalloc = "?"
+    for ln in out.splitlines():
+        f = ln.split()
+        if len(f) >= 7 and f[0] == "data.kalloc.1024" and f[1].isdigit() and f[6].isdigit():
+            kalloc = "%.2f" % (int(f[1]) * int(f[6]) / 1073741824.0)
+            break
+    rc, out, _ = sh([seam("CC_RESTORE_PS_BIN"), "-axo", "stat="], timeout=20)
+    zombies = sum(1 for ln in out.splitlines() if ln.strip().startswith("Z")) if rc == 0 else "?"
+    with open(os.path.join(evdir, "kalloc"), "w") as fh:
+        fh.write("%s\n" % kalloc)
+    with open(os.path.join(evdir, "zombies"), "w") as fh:
+        fh.write("%s\n" % zombies)
+    return kalloc, zombies
+
+
+# ── plan and commands (the preview) ───────────────────────────────────────────────────────────────
+def boot_resume_argv(ev_epoch, kind, roster_dir=None, kpid=None, plan=False):
+    a = [seam("CC_RESTORE_BOOT_RESUME"), "--event", str(ev_epoch), "--kind", kind]
+    if kpid:
+        a += ["--kitty-pid", str(kpid)]
+    if roster_dir:
+        a += ["--roster-dir", roster_dir]
+    if plan:
+        a.append("--plan-only")
+    return a
+
+
+def clean_env(sock=None):
+    """The worker outlives its kitty: nothing may inherit that kitty's window or socket."""
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith("KITTY_") and k not in ("ITERM_SESSION_ID", "CC_PANE_ID", "CC_TERM_KITTY_TO")}
+    if sock:
+        env["CC_TERM_KITTY_TO"] = sock
+    return env
+
+
+def print_plan(out):
+    """Render boot-resume --plan-only: the sessions, the windows they go into, the retired ones."""
+    rows, retired = [], []
+    for ln in out.splitlines():
+        f = ln.split("\t")
+        if f[0] == "row" and len(f) >= 12:
+            rows.append(f[1:])
+        elif f[0] == "retired":
+            retired.append(f[1] if len(f) > 1 else "")
+        elif ln.startswith("boot-resume: plan"):
+            say("  " + ln)
+    say("sessions to restore: %d" % len(rows))
+    for r in rows:
+        say("  %s  %s  [%s]  %s  model=%s effort=%s permission=%s" %
+            (r[1][:8], r[4], r[0], os.path.basename(r[2]) or r[2], r[5], r[6], r[10]))
+    wins = {}
+    for r in rows:
+        wins.setdefault(r[7], []).append(r)
+    say("windows planned: %d" % len(wins))
+    for g in sorted(wins):
+        ordered = sorted(wins[g], key=lambda r: int(r[8]) if r[8].isdigit() else 999)
+        where = "old window %s" % g if g != "-" else "no recorded window (placed after the others)"
+        say("  %s: %d pane(s) in one row: %s" % (where, len(ordered), ", ".join(r[4] for r in ordered)))
+    say("sessions left retired: %d" % len(retired))
+    for r in retired:
+        say("  " + r)
+    return len(rows)
+
+
+def preflight(confirm=None, need_one=True):
+    """(ok, main kitty tuple or None). Prints what it checked."""
+    ok = True
+    mk = main_kitties()
+    if len(mk) == 1:
+        say("main kitty: pid %d (started %s)" % (mk[0][0], mk[0][1]))
+    elif need_one:
+        ok = False
+        say("preflight: expected exactly one main kitty, found %d (%s)" %
+            (len(mk), ", ".join(str(k[0]) for k in mk) or "none"))
+    if confirm is not None and ok and str(mk[0][0]) != str(confirm):
+        ok = False
+        say("preflight: --confirm %s is not the main kitty (pid %d)" % (confirm, mk[0][0]))
+    rc, out, err = sh([seam("CC_RESTORE_SWAP_BIN"), "status"], timeout=60)
+    for ln in (out + err).splitlines():
+        say("  build: " + ln)
+    if rc != 0:
+        ok = False
+        say("preflight: kitty-build-swap.sh status failed (rc %d): the title-band link does not match "
+            "the installed build. Fix that first; a restart now would start a kitty its config does not fit." % rc)
+    for name in ("CC_RESTORE_BOOT_RESUME", "CC_RESTORE_REBIND_BIN"):
+        if not os.access(seam(name), os.X_OK):
+            ok = False
+            say("preflight: %s is not executable" % seam(name))
+    return ok, (mk[0] if len(mk) == 1 else None)
+
+
+def dry_run(args):
+    now = int(time.time())
+    say("cc-restore: DRY RUN — nothing is signalled, nothing is launched, no lock is taken.")
+    if args["mode"] == "restart":
+        ok, mk = preflight(args.get("confirm"))
+        pid = mk[0] if mk else None
+        plan = boot_resume_argv(now, "restart", plan=True)
+    else:
+        ok, _ = preflight(need_one=False)
+        pid, why = crash_target(args.get("kpid"))
+        if pid is None:
+            say("no dead kitty to restore: %s" % why)
+            return 0 if ok else 3
+        say("dead kitty: pid %d (%s)" % (pid, why))
+        plan = boot_resume_argv(now, "crash", kpid=pid, plan=True)
+    rc, out, err = sh(plan, timeout=300, env=clean_env())
+    n = print_plan(out)
+    if rc != 0:
+        ok = False
+        say("preflight: the plan run failed (rc %d): %s" % (rc, err.strip().splitlines()[-1] if err.strip() else ""))
+    evdir = os.path.join(EVENTS, "<epoch>" if args["mode"] == "restart" else str(pid))
+    say("event dir: %s" % evdir)
+    say("ledger: %s/launched (a session listed there is never launched twice)" % evdir)
+    say("commands a real run would execute, in order:")
+    if args["mode"] == "restart":
+        say("  %s -TERM %s" % (seam("CC_RESTORE_KILL_BIN"), pid))
+        say("  %s -KILL %s      (only if it is still alive after %d s)" %
+            (seam("CC_RESTORE_KILL_BIN"), pid, num("CC_RESTORE_TERM_WAIT_S", 3)))
+    say("  %s -a %s%s" % (seam("CC_OPEN_BIN"), KITTY_APP,
+                          "" if args["mode"] == "restart" else "      (only if no main kitty is running)"))
+    say("  %s @ --to %s ls      (until the new kitty answers, at most %d s)" %
+        (seam("CC_RESTORE_KITTEN_BIN"), socket_of("<new pid>"), num("CC_RESTORE_SOCKET_WAIT_S", 60)))
+    if args["mode"] == "restart":
+        say("  " + " ".join(boot_resume_argv("<epoch>", "restart", roster_dir=evdir + "/hb")))
+    else:
+        say("  " + " ".join(boot_resume_argv("<now>", "crash", kpid=pid, roster_dir=evdir + "/hb")))
+    say("  %s %s" % (seam("CC_RESTORE_REBIND_BIN"), evdir))
+    say("  %s --compare %s" % (SELF, evdir))
+    if args["mode"] == "restart" and pid:
+        say("to run it: %s --restart-kitty --confirm %d" % (os.path.join(HOME, ".claude/bin/cc-restore"), pid))
+    say("cc-restore: verdict=%s sessions=%d (dry run)" % ("DRY-RUN-OK" if ok else "PREFLIGHT-FAILED", n))
+    return 0 if ok else 3
+
+
+# ── the worker ────────────────────────────────────────────────────────────────────────────────────
+class Worker(object):
+    def __init__(self, ev, mode, old_pid=None, old_lstart=None, land_wait=600, br_kind="restart", br_kpid=None):
+        self.ev, self.mode, self.old_pid, self.old_lstart = ev, mode, old_pid, old_lstart
+        self.land_wait, self.br_kind, self.br_kpid = land_wait, br_kind, br_kpid
+        self.evdir = os.path.join(EVENTS, ev)
+        self.abort = False
+        self.touched = False        # True once a signal has been sent to kitty
+        self.child = None
+        self.new_pid = None
+        self.sock = None
+        self.load_seen = 0
+
+    def on_signal(self, signum, frame):
+        self.abort = True
+        if self.child is not None and self.child.poll() is None:
+            try:
+                os.killpg(self.child.pid, signal.SIGTERM)
+            except OSError:
+                pass
+
+    def check_abort(self):
+        if self.abort or os.path.exists(os.path.join(self.evdir, "abort")):
+            raise Stop(130, "aborted")
+
+    def phase(self, name):
+        with open(os.path.join(self.evdir, "phase"), "w") as fh:
+            fh.write(name + "\n")
+
+    def run(self):
+        os.makedirs(self.evdir, exist_ok=True)
+        rc = lock_take(self.ev)
+        if rc == 3:
+            say("cc-restore: event %s is already restored (events/%s.done); nothing to do" % (self.ev, self.ev))
+            return 0
+        if rc == 1:
+            h = holder() or {}
+            say("cc-restore: another restore holds the lock (pid %s, event %s). `cc-restore --abort` stops it."
+                % (h.get("pid", "?"), h.get("event", "?")))
+            return 2
+        if rc != 0:
+            say("cc-restore: could not take the restore lock at %s" % LOCK)
+            return 2
+        try:
+            # An abort request is for the worker that was running when it was made, never for the
+            # next one to use this event dir (a crash event is retried under the same id).
+            os.unlink(os.path.join(self.evdir, "abort"))
+        except OSError:
+            pass
+        say("lock taken event=%s" % self.ev)
+        say("worker pid=%d sid=%d (its own session: it outlives the kitty it restarts)" % (os.getpid(), os.getsid(0)))
+        signal.signal(signal.SIGTERM, self.on_signal)
+        signal.signal(signal.SIGINT, self.on_signal)
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        try:
+            if self.mode == "restart":
+                self.restart()
+            else:
+                self.after_crash()
+            code = self.rounds()
+            return self.finish(code)
+        except Stop as s:
+            lock_release(self.ev)
+            if s.rc == 130:
+                if self.touched or self.mode == "crash":
+                    say("cc-restore: verdict=ABORTED event=%s — no more sessions are launched; those already "
+                        "back stay as they are. `cc-restore --after-crash` brings back the rest (the ledger "
+                        "and the launch fence prevent duplicates)." % self.ev)
+                else:
+                    say("cc-restore: verdict=ABORTED event=%s — kitty was not touched, nothing was signalled." % self.ev)
+            else:
+                say("cc-restore: verdict=STOPPED event=%s — %s" % (self.ev, s))
+                if self.touched or self.mode == "crash":
+                    say("  the lock is released. Once kitty is up (open -a %s), run: cc-restore --after-crash" % KITTY_APP)
+            return s.rc
+
+    # steps 3-6 of a restart
+    def restart(self):
+        self.phase("lands")
+        t0 = time.time()
+        poll = num("CC_RESTORE_LAND_POLL_S", 15)
+        while self.land_wait > 0:
+            self.check_abort()
+            k = lands()
+            if not k:
+                break
+            if time.time() - t0 >= self.land_wait:
+                say("still %d land(s) in flight after %d s; going ahead" % (len(k), self.land_wait))
+                break
+            say("waiting for %d in-flight lands (pids %s), at most %d s more" %
+                (len(k), " ".join(map(str, k)), self.land_wait - (time.time() - t0)))
+            time.sleep(poll)
+        self.check_abort()
+        self.phase("snapshot")
+        rc, err = hb_tick()
+        if rc not in (0, 1):
+            say("heartbeat tick failed (rc %d: %s); using the last one on disk" % (rc, err))
+        d = hb_of(self.old_pid)
+        if not d:
+            raise Stop(6, "no heartbeat for kitty %d under %s, so there is nothing to restore from; "
+                          "kitty was not touched" % (self.old_pid, HB_ROOT))
+        snapshot(self.evdir, self.old_pid, d)
+        kalloc, zombies = host_record(self.evdir)
+        say("heartbeat copied (tick %d, kalloc %s GB, %s zombie(s)) → %s/hb/%d" %
+            (hb_start(d), kalloc, zombies, self.evdir, self.old_pid))
+        self.check_abort()
+        mk = main_kitties()
+        if len(mk) != 1 or mk[0][0] != self.old_pid or mk[0][1] != self.old_lstart:
+            raise Stop(3, "the main kitty changed while waiting (expected pid %d); nothing was signalled" % self.old_pid)
+        # The crash page keys on the dead pid. This says the death was planned and names its event.
+        with open(os.path.join(EVENTS, "%d.planned" % self.old_pid), "w") as fh:
+            fh.write("%s\n" % self.ev)
+        self.phase("kill")
+        self.touched = True
+        kill = seam("CC_RESTORE_KILL_BIN")
+        say("ending kitty %d: SIGTERM" % self.old_pid)
+        sh([kill, "-TERM", str(self.old_pid)], timeout=10)
+        time.sleep(num("CC_RESTORE_TERM_WAIT_S", 3))
+        if self.kitty_alive(self.old_pid):
+            say("kitty %d is still alive: SIGKILL" % self.old_pid)
+            sh([kill, "-KILL", str(self.old_pid)], timeout=10)
+        t0 = time.time()
+        while self.kitty_alive(self.old_pid):
+            if time.time() - t0 > num("CC_RESTORE_EXIT_WAIT_S", 30):
+                raise Stop(4, "kitty %d did not exit; nothing was relaunched" % self.old_pid)
+            time.sleep(1)
+        say("kitty %d exited" % self.old_pid)
+        self.open_kitty()
+
+    def kitty_alive(self, pid):
+        return any(k[0] == pid for k in kitties())
+
+    def open_kitty(self):
+        self.phase("open")
+        before = set(k[0] for k in kitties())
+        say("opening a new kitty: %s -a %s" % (seam("CC_OPEN_BIN"), KITTY_APP))
+        sh([seam("CC_OPEN_BIN"), "-a", KITTY_APP], timeout=60, env=clean_env())
+        self.wait_socket(lambda: [k for k in main_kitties() if k[0] not in before])
+
+    def wait_socket(self, find):
+        t0, wait = time.time(), num("CC_RESTORE_SOCKET_WAIT_S", 60)
+        while True:
+            cand = find()
+            if cand:
+                pid = cand[0][0]
+                sock = socket_of(pid)
+                path = sock[5:] if sock.startswith("unix:") else sock
+                if os.path.exists(path) and k_ls(pid, sock):
+                    self.new_pid, self.sock = pid, sock
+                    say("new kitty pid %d answers on %s" % (pid, sock))
+                    return
+            if time.time() - t0 > wait:
+                raise Stop(5, "the new kitty did not answer on its socket within %d s" % wait)
+            time.sleep(1)
+
+    def after_crash(self):
+        self.phase("open")
+        mk = main_kitties()
+        if mk:
+            self.wait_socket(main_kitties)
+        else:
+            say("no main kitty is running")
+            self.open_kitty()
+
+    # step 7
+    def rounds(self):
+        self.phase("restore")
+        roster = os.path.join(self.evdir, "hb")
+        epoch = self.event_epoch()
+        argv = boot_resume_argv(epoch, self.br_kind, kpid=self.br_kpid,
+                                roster_dir=roster if os.path.isdir(roster) else None)
+        done = os.path.join(EVENTS, self.ev + ".done")
+        t0, n, last = time.time(), 0, 0
+        while True:
+            self.check_abort()
+            fd_gate(self.new_pid)
+            n += 1
+            say("restore round %d: %s" % (n, " ".join(argv)))
+            self.child = subprocess.Popen(argv, stdout=sys.stdout, stderr=subprocess.STDOUT,
+                                          stdin=subprocess.DEVNULL, env=clean_env(self.sock),
+                                          start_new_session=True)
+            while self.child.poll() is None:
+                self.relay_load()
+                if os.path.exists(os.path.join(self.evdir, "abort")):
+                    self.on_signal(signal.SIGTERM, None)
+                time.sleep(1)
+            self.relay_load()
+            last = self.child.returncode
+            self.child = None
+            self.check_abort()
+            if os.path.exists(done):
+                return 0
+            if last == 3:
+                raise Stop(6, "boot-resume found no heartbeat to restore from (rc 3)")
+            if time.time() - t0 > num("CC_RESTORE_MAX_S", 2700):
+                say("the event is still not marked done after %d s; closing it as partial" % (time.time() - t0))
+                return 1
+            time.sleep(num("CC_RESTORE_ROUND_SLEEP_S", 30))
+
+    def event_epoch(self):
+        # A restart's event id IS its epoch. A crash's id is the dead kitty's pid, so its epoch is
+        # fixed on the first run and reused: boot-resume's deadline counts from it.
+        if self.br_kind == "restart":
+            return int(self.ev)
+        f = os.path.join(self.evdir, "event-epoch")
+        try:
+            with open(f) as fh:
+                return int(fh.read().split()[0])
+        except (OSError, ValueError, IndexError):
+            with open(f, "w") as fh:
+                fh.write("%d\n" % int(time.time()))
+            return int(time.time())
+
+    def relay_load(self):
+        lines = read_lines(os.path.join(self.evdir, "load.log"))
+        for ln in lines[self.load_seen:]:
+            say("load " + ln)
+        self.load_seen = max(self.load_seen, len(lines))
+
+    # step 8
+    def finish(self, code):
+        self.phase("rebind")
+        st = tally(self.evdir, exclude_kitty=self.old_pid)
+        confirmed_map(self.evdir, st)
+        marked = os.path.exists(os.path.join(EVENTS, self.ev + ".done"))
+        pid_done = os.path.join(EVENTS, "%s.done" % self.old_pid)
+        if marked and self.old_pid and not os.path.exists(pid_done):
+            # The crash page keys on the dead kitty's pid: this is what tells it the fleet is back.
+            with open(pid_done, "w") as fh:
+                fh.write("%s\n" % self.ev)
+        lock_release(self.ev, done=marked)
+        if marked:
+            # After the .done marker, as rebind's accounts step requires. Keyed on the sid: a session
+            # the layout only confirmed by holder count has no map line of its own (restored.map).
+            rc, out, err = sh([seam("CC_RESTORE_REBIND_BIN"), self.evdir], timeout=600, env=clean_env(self.sock))
+            for ln in (out + err).splitlines():
+                say("  " + ln)
+            if rc not in (0, 1):
+                say("  cc-restore-rebind failed (rc %d); re-run it by hand: %s %s" % (rc, seam("CC_RESTORE_REBIND_BIN"), self.evdir))
+        full = marked and st["restored"] == st["n"] and st["dup"] == 0
+        say("cc-restore: verdict=%s restored=%d/%d maybe=%d dup=%d shed=%d events=%s" %
+            ("RESTORED" if full else "PARTIAL", st["restored"], st["n"], st["maybe"], st["dup"], st["shed"], self.evdir))
+        say("pass check: %s --compare %s" % (os.path.join(HOME, ".claude/bin/cc-restore"), self.evdir))
+        return 0 if full else 1
+
+
+# ── what came back ────────────────────────────────────────────────────────────────────────────────
+def read_lines(path):
+    try:
+        with open(path) as fh:
+            return fh.read().splitlines()
+    except OSError:
+        return []
+
+
+def expected_sids(evdir):
+    """The sessions this event set out to restore: the classified rows, else the snapshot's roster."""
+    sids = [ln.split("\t")[1] for ln in read_lines(os.path.join(evdir, "rows.tsv")) if ln.count("\t") >= 1]
+    if sids:
+        return sids
+    out = []
+    hb = os.path.join(evdir, "hb")
+    for k in sorted(os.listdir(hb)) if os.path.isdir(hb) else []:
+        try:
+            with open(os.path.join(hb, k, "hb.roster.json")) as fh:
+                out += [r.get("session_id") for r in json.load(fh) if isinstance(r, dict) and r.get("session_id")]
+        except (OSError, ValueError):
+            pass
+    return out
+
+
+def live_sessions():
+    rc, out, _ = sh([seam("CC_RESTORE_SESSIONS_BIN"), "--json"], timeout=90)
+    try:
+        rows = json.loads(out) if rc == 0 else []
+    except ValueError:
+        rows = []
+    return [r for r in rows if isinstance(r, dict) and r.get("session_id")] if isinstance(rows, list) else []
+
+
+def tally(evdir, exclude_kitty=None):
+    exp = list(dict.fromkeys(expected_sids(evdir)))
+    live = {}
+    for r in live_sessions():
+        if exclude_kitty and str(r.get("kitty_pid", "")) == str(exclude_kitty):
+            continue
+        live.setdefault(r["session_id"], []).append(r)
+    launched = set(read_lines(os.path.join(evdir, "launched")))
+    restored = [s for s in exp if s in live]
+    maybe = [s for s in exp if s not in live and s in launched]
+    return {"n": len(exp), "restored": len(restored), "dup": sum(1 for s in exp if len(live.get(s, [])) > 1),
+            "maybe": len(maybe), "shed": len(exp) - len(restored) - len(maybe), "live": live, "exp": exp}
+
+
+def confirmed_map(evdir, st):
+    """restored.map = the layout's map lines, plus one line for every session that is live with no
+    map line (a `maybe` row the layout confirmed by holder count never got one)."""
+    lines = [ln for ln in read_lines(os.path.join(evdir, "map")) if ln.startswith("cc-resume-layout: map ")]
+    have = set(m.group(1) for m in (re.search(r"\bsid=(\S+)", ln) for ln in lines) if m)
+    for sid in st["exp"]:
+        rows = st["live"].get(sid, [])
+        pane = str(rows[0].get("paneUUID", "")) if rows else ""
+        if sid not in have and pane.isdigit():
+            lines.append("cc-resume-layout: map sid=%s wid=%s oswin=0" % (sid, pane))
+    # boot-resume keeps its own lines in <event>/map; rebind reads *.map, so this is the one it sees.
+    with open(os.path.join(evdir, "restored.map"), "w") as fh:
+        fh.write("".join(ln + "\n" for ln in lines))
+
+
+# ── --compare ─────────────────────────────────────────────────────────────────────────────────────
+def hb_view(dirs):
+    """{sid: {account, model, effort, permission, window, position, display, mates}} from heartbeat dirs."""
+    view = {}
+    for d in dirs:
+        try:
+            with open(os.path.join(d, "hb.roster.json")) as fh:
+                roster = [r for r in json.load(fh) if isinstance(r, dict)]
+        except (OSError, ValueError):
+            roster = []
+        pane = {str(r.get("paneUUID", "")): r.get("session_id") for r in roster if r.get("session_id")}
+        for ln in read_lines(os.path.join(d, "hb.session.tsv")):
+            f = [("" if c == PAD else c) for c in ln.split("\t")]
+            if len(f) >= 5 and f[0]:
+                view[f[0]] = {"account": f[1], "model": f[2], "effort": f[3], "permission": f[4],
+                              "window": "?", "position": "?", "display": "?", "mates": ()}
+        disp = {}
+        for ln in read_lines(os.path.join(d, "hb.displays.tsv")):
+            f = ln.split("\t")
+            if len(f) >= 2:
+                disp[f[0]] = f[1]
+        try:
+            with open(os.path.join(d, "hb.kitty-ls.json")) as fh:
+                tree = json.load(fh)
+        except (OSError, ValueError):
+            tree = []
+        for i, osw in enumerate(tree if isinstance(tree, list) else []):
+            sids = [pane.get(str(w.get("id"))) for t in osw.get("tabs", []) for w in t.get("windows", [])]
+            sids = [s for s in sids if s]
+            for j, s in enumerate(sids):
+                if s in view:
+                    view[s].update(window="w%d(%d panes)" % (i + 1, len(sids)), position=str(j + 1),
+                                   mates=tuple(sorted(sids)),
+                                   display=disp.get(str(osw.get("platform_window_id")), disp.get(str(osw.get("id")), "?")))
+    return view
+
+
+def compare(evdir, after):
+    evdir = os.path.abspath(evdir)
+    hb = os.path.join(evdir, "hb")
+    before_dirs = [os.path.join(hb, k) for k in sorted(os.listdir(hb))] if os.path.isdir(hb) else []
+    if not before_dirs:
+        die("%s holds no heartbeat snapshot (hb/<kitty-pid>/), so there is no 'before' to compare" % evdir, 2)
+    old = set(os.path.basename(d) for d in before_dirs)
+    if after:
+        after_dirs = [after]
+    else:
+        rc, err = hb_tick()
+        if rc not in (0, 1):
+            say("heartbeat tick failed (rc %d: %s); comparing against the last one on disk" % (rc, err))
+        cur = [d for d in hb_dirs() if str(d[1]) not in old]
+        after_dirs = [d[2] for d in cur if cur and d[0] >= cur[0][0] - 150]
+    b, a = hb_view(before_dirs), hb_view(after_dirs)
+    exp = list(dict.fromkeys(expected_sids(evdir))) or sorted(b)
+    restored = set(exp) & set(a)
+    n_match = n_diff = n_missing = 0
+    for sid in exp:
+        bv = b.get(sid)
+        if sid not in a:
+            n_missing += 1
+            say("%s  MISSING: not live after the restore" % sid[:8])
+            continue
+        if bv is None:
+            say("%s  no 'before' record (it started after the snapshot)" % sid[:8])
+            n_match += 1
+            continue
+        av, cells, bad = a[sid], [], False
+        for key in ("account", "model", "effort", "permission"):
+            same = bv[key] == av[key]
+            bad = bad or not same
+            cells.append("%s %s" % (key, bv[key] or "-") if same else "%s %s→%s ✗" % (key, bv[key] or "-", av[key] or "-"))
+        # A window is the same window when it holds the same restored sessions; kitty renumbers ids.
+        # No record BEFORE (no kitty tree in the snapshot, no display file) is nothing to compare
+        # against and is shown as "?"; a recorded value that cannot be read back AFTER is a difference.
+        same = bv["window"] == "?" or (
+            tuple(s for s in bv["mates"] if s in restored) == tuple(s for s in av["mates"] if s in restored))
+        bad = bad or not same
+        cells.append("window %s" % av["window"] if same else "window %s→%s ✗" % (bv["window"], av["window"]))
+        for key in ("position", "display"):
+            same = bv[key] == "?" or bv[key] == av[key]
+            bad = bad or not same
+            cells.append("%s %s" % (key, av[key]) if same else "%s %s→%s ✗" % (key, bv[key], av[key]))
+        n_diff += bad
+        n_match += not bad
+        say("%s  %s  %s" % (sid[:8], "DIFF " if bad else "match", " | ".join(cells)))
+    st = tally(evdir, exclude_kitty=None)
+    dup = sum(1 for s in exp if len([r for r in st["live"].get(s, []) if str(r.get("kitty_pid", "")) not in old]) > 1)
+    launched = set(read_lines(os.path.join(evdir, "launched")))
+    maybe = sum(1 for s in exp if s not in a and s in launched)
+    say("rebind (%s/rebind.log):" % evdir)
+    rb = read_lines(os.path.join(evdir, "rebind.log"))
+    for ln in rb or ["  (no rebind.log: cc-restore-rebind has not run for this event)"]:
+        say("  " + ln.strip())
+    ok = n_diff == 0 and n_missing == 0 and dup == 0 and maybe == 0
+    say("cc-restore: compare verdict=%s sessions=%d match=%d diff=%d missing=%d dup=%d maybe=%d" %
+        ("MATCH" if ok else "DIFF", len(exp), n_match, n_diff, n_missing, dup, maybe))
+    return 0 if ok else 1
+
+
+# ── --after-crash target, --abort, entry ──────────────────────────────────────────────────────────
+def crash_target(kpid=None):
+    """(dead kitty pid, why) — the newest heartbeat whose kitty is gone and whose event is not done."""
+    alive = set(k[0] for k in kitties())
+    for st, k, d in hb_dirs():
+        if kpid and k != int(kpid):
+            continue
+        if k in alive:
+            if kpid:
+                return None, "kitty %d is still running" % k
+            continue
+        if os.path.exists(os.path.join(EVENTS, "%d.done" % k)):
+            if kpid:
+                return None, "kitty %d was already restored (events/%d.done)" % (k, k)
+            return None, "the newest dead kitty (%d) was already restored" % k
+        return k, "last heartbeat %s" % time.strftime("%H:%M:%S", time.localtime(st))
+    return None, "no heartbeat of a dead kitty under %s" % HB_ROOT
+
+
+def do_abort():
+    h = holder()
+    if not h:
+        say("cc-restore: no restore is running (no lock at %s)" % LOCK)
+        return 0
+    ev = str(h.get("event", ""))
+    if not holder_live(h):
+        shutil.rmtree(LOCK, ignore_errors=True)
+        try:
+            os.unlink(os.path.join(EVENTS, ev + ".inprogress"))
+        except OSError:
+            pass
+        say("cc-restore: the restore that held the lock (pid %s, event %s) is gone; lock released" % (h.get("pid"), ev))
+        return 0
+    evdir = os.path.join(EVENTS, ev)
+    os.makedirs(evdir, exist_ok=True)
+    with open(os.path.join(evdir, "abort"), "w") as fh:
+        fh.write("%d\n" % int(time.time()))
+    sh([seam("CC_RESTORE_KILL_BIN"), "-TERM", str(h["pid"])], timeout=10)
+    for _ in range(30):
+        if not os.path.isdir(LOCK):
+            say("cc-restore: restore event %s stopped; lock released (phase was: %s)" %
+                (ev, " ".join(read_lines(os.path.join(evdir, "phase"))) or "?"))
+            return 0
+        time.sleep(1)
+    say("cc-restore: asked restore pid %s (event %s) to stop; it has not released the lock yet" % (h["pid"], ev))
+    return 1
+
+
+def spawn_worker(ev, argv_tail):
+    """Start the worker in its own session and follow its log until it ends."""
+    evdir = os.path.join(EVENTS, ev)
+    os.makedirs(evdir, exist_ok=True)
+    log = os.path.join(evdir, "run.log")
+    with open(log, "ab", 0) as fh:
+        p = subprocess.Popen([sys.executable, SELF, "--_worker", ev] + argv_tail, start_new_session=True,
+                             stdout=fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=clean_env())
+    say("cc-restore: worker pid %d started in its own session; log %s" % (p.pid, log))
+    pos = 0
+    try:
+        while True:
+            alive = p.poll() is None
+            with open(log, "rb") as fh:
+                fh.seek(pos)
+                chunk = fh.read()
+                pos += len(chunk)
+            sys.stdout.write(chunk.decode("utf-8", "replace"))
+            sys.stdout.flush()
+            if not alive:
+                return p.returncode
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        with open(os.path.join(evdir, "abort"), "w") as fh:
+            fh.write("%d\n" % int(time.time()))
+        say("\ncc-restore: Ctrl-C — asked the worker to stop (it finishes its current step first)")
+        return p.wait()
+
+
+def parse(argv):
+    a = {"mode": None, "dry": False, "confirm": None, "kpid": None, "land_wait": 600, "after": None, "target": None}
+    i = 0
+    while i < len(argv):
+        x = argv[i]
+        if x in ("-h", "--help"):
+            sys.stdout.write(__doc__)
+            sys.exit(0)
+        elif x == "--restart-kitty":
+            a["mode"] = "restart"
+        elif x == "--after-crash":
+            a["mode"] = "crash"
+        elif x == "--abort":
+            a["mode"] = "abort"
+        elif x == "--dry-run":
+            a["dry"] = True
+        elif x == "--no-wait":
+            a["land_wait"] = 0
+        elif x in ("--confirm", "--kitty-pid", "--land-wait", "--compare", "--after", "--_worker", "--_lstart", "--_kind"):
+            if i + 1 >= len(argv):
+                die("%s needs a value" % x)
+            v = argv[i + 1]
+            i += 1
+            if x == "--compare":
+                a["mode"], a["target"] = "compare", v
+            elif x == "--_worker":
+                a["worker"] = v
+            elif x == "--after":
+                a["after"] = v
+            elif x in ("--_lstart", "--_kind"):
+                a[x[3:]] = v
+            else:
+                if not v.isdigit():
+                    die("%s needs a number, got '%s'" % (x, v))
+                a[{"--confirm": "confirm", "--kitty-pid": "kpid", "--land-wait": "land_wait"}[x]] = int(v)
+        else:
+            die("unknown argument '%s' (see --help)" % x)
+        i += 1
+    return a
+
+
+def main(argv):
+    a = parse(argv)
+    if a["mode"] is None:
+        die("one of --restart-kitty, --after-crash, --abort or --compare <event-dir> is required (see --help)")
+    refuse_under_bats()
+    if "worker" in a:
+        if a["mode"] == "restart":
+            w = Worker(a["worker"], "restart", old_pid=a["confirm"], old_lstart=a.get("lstart"), land_wait=a["land_wait"])
+        else:
+            w = Worker(a["worker"], "crash", old_pid=a["kpid"], br_kind=a.get("kind", "crash"),
+                       br_kpid=a["kpid"] if a.get("kind", "crash") == "crash" else None)
+        return w.run()
+    if a["mode"] == "compare":
+        return compare(a["target"], a["after"])
+    if a["mode"] == "abort":
+        return do_abort()
+    if a["dry"]:
+        return dry_run(a)
+    if a["mode"] == "restart":
+        if a["confirm"] is None:
+            die("--restart-kitty ends every pane. Preview with --dry-run, then pass --confirm <main kitty pid>.")
+        ok, mk = preflight(a["confirm"])
+        if not ok:
+            say("cc-restore: verdict=PREFLIGHT-FAILED — nothing was signalled")
+            return 3
+        epoch = int(time.time())
+        while os.path.exists(os.path.join(EVENTS, str(epoch))) or os.path.exists(os.path.join(EVENTS, "%d.done" % epoch)):
+            epoch += 1                    # a second run inside the same second gets its own event
+        ev = str(epoch)
+        return spawn_worker(ev, ["--restart-kitty", "--confirm", str(mk[0]), "--_lstart", mk[1],
+                                 "--land-wait", str(a["land_wait"])])
+    # --after-crash
+    ok, _ = preflight(need_one=False)
+    if not ok:
+        say("cc-restore: verdict=PREFLIGHT-FAILED — nothing was launched")
+        return 3
+    pid, why = crash_target(a["kpid"])
+    if pid is None:
+        say("cc-restore: nothing to restore — %s" % why)
+        return 0
+    say("dead kitty: pid %d (%s)" % (pid, why))
+    planned = read_lines(os.path.join(EVENTS, "%d.planned" % pid))
+    if planned and planned[0].strip().isdigit():
+        # A planned restart that did not finish: carry on in ITS event, so its ledger keeps counting.
+        ev = planned[0].strip()
+        say("this kitty was ended by restart event %s; continuing that event" % ev)
+        return spawn_worker(ev, ["--after-crash", "--kitty-pid", str(pid), "--_kind", "restart"])
+    ev = str(pid)
+    d = hb_of(pid)
+    if d:
+        snapshot(os.path.join(EVENTS, ev), pid, d)
+    return spawn_worker(ev, ["--after-crash", "--kitty-pid", str(pid), "--_kind", "crash"])
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
