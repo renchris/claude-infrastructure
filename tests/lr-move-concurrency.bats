@@ -44,20 +44,27 @@ STUB
   : > "$NOTIFY_LOG"
   export LR_MOVE_GUARD_BIN="$REPO/hooks/handed-off-session-guard.sh"
   ROWS=()
-  N="${N:-15}"
+  # FIFTEEN SESSIONS ONCE, FOUR ELSEWHERE. Case 1 is the N=15 batch the design is judged on. Every
+  # other case asserts a property that does not depend on the count, and a suite that forks 15
+  # workers thirteen times took 25 minutes on a loaded box and is the kind of burst the machine's
+  # compressor sentinel signals. Width 2 over 4 sessions still makes the semaphore bind.
+  case "$BATS_TEST_DESCRIPTION" in
+    "1 "*) N=15; W=4 ;;
+    *) N=4; W=2 ;;
+  esac
   for i in $(seq 1 "$N"); do
     sid="$(printf 'cccc%04d-0000-4000-8000-000000000001' "$i")"
     mvf_session "$((500 + i))" "$sid"
     ROWS+=("$((500 + i)):$sid")
   done
-  MVF_SLOTS=4 mvf_plan c1 move "${ROWS[@]}"
+  MVF_SLOTS="$W" mvf_plan c1 move "${ROWS[@]}"
 }
 teardown() { mvf_teardown; }
 
 batch() { run bash "$LRD/lr-move-batch.sh" c1; }
 verdicts() { for f in "$BDIR"/cccc*.json; do jq -r .verdict "$f"; done | sort | uniq -c | awk '{ printf "%s=%s ", $2, $1 }'; }
 # On a mismatch, show every row that is not MOVED with its reason (the diagnosis, not a second assertion).
-all_moved() { [ "$(verdicts)" = "MOVED=15 " ] || { verdicts; for f in "$BDIR"/cccc*.json; do jq -r 'select(.verdict != "MOVED") | "\(.sid) \(.verdict): \(.reason)"' "$f"; done; tail -5 "$BDIR"/*.worker.log 2>/dev/null | tail -20; false; }; }
+all_moved() { [ "$(verdicts)" = "MOVED=$N " ] || { verdicts; for f in "$BDIR"/cccc*.json; do jq -r 'select(.verdict != "MOVED") | "\(.sid) \(.verdict): \(.reason)"' "$f"; done; for r in "$CC_REGISTRY_DIR"/50[12].json; do cat "$r"; p="$(jq -r .pid "$r")"; if kill -0 "$p" 2>/dev/null; then echo "pid $p alive"; else echo "pid $p DEAD"; fi; done; false; }; }
 
 @test "1 [RED] 15 sessions: all MOVED, slots never above the width and the width reached, one actuator each" {
   batch
@@ -67,7 +74,7 @@ all_moved() { [ "$(verdicts)" = "MOVED=15 " ] || { verdicts; for f in "$BDIR"/cc
   [ "$max" -le 4 ]
   [ "$max" -ge 2 ]
   [ "$(cut -d' ' -f1 "$STUB_LOG/typers.log" | sort | uniq -d | grep -c . || true)" -eq 0 ]
-  [ "$(grep -c . "$STUB_LOG/typers.log")" -eq 15 ]
+  [ "$(grep -c . "$STUB_LOG/typers.log")" -eq "$N" ]
   [ -z "$(ls -A "$LR_STATE_DIR/runs/by-sid" 2>/dev/null)" ]
   [ -z "$(ls -A "$LR_STATE_DIR/locks/swap-slots" 2>/dev/null)" ]
   [ ! -d "$LR_STATE_DIR/locks/move-admit.lock" ]
@@ -94,7 +101,7 @@ all_moved() { [ "$(verdicts)" = "MOVED=15 " ] || { verdicts; for f in "$BDIR"/cc
   export CC_ACCOUNT_MAP="$BATS_TEST_TMPDIR/absent-map.sh"
   run bash "$REPO/bin/cc-lr" move --status c1 --json
   [ "$status" -eq 0 ]
-  [ "$(printf '%s' "$output" | jq -r '[.rows[] | select(.verdict == "MOVED" and .recorded == "MOVED")] | length')" -eq 15 ]
+  [ "$(printf '%s' "$output" | jq -r '[.rows[] | select(.verdict == "MOVED" and .recorded == "MOVED")] | length')" -eq "$N" ]
   [ "$(printf '%s' "$output" | jq -r '.summary.status')" = "done" ]
 }
 
@@ -125,7 +132,7 @@ all_moved() { [ "$(verdicts)" = "MOVED=15 " ] || { verdicts; for f in "$BDIR"/cc
   [ "$(jq -r .verdict "$BDIR/$s.json")" = NOTMOVED ]
   [[ "$(jq -r .reason "$BDIR/$s.json")" == claim-held:* ]] || false
   ! grep -q "^$s " "$STUB_LOG/typers.log" || false
-  [ "$(grep -c . "$STUB_LOG/typers.log")" -eq 14 ]
+  [ "$(grep -c . "$STUB_LOG/typers.log")" -eq "$((N - 1))" ]
   [ -d "$LR_STATE_DIR/runs/by-sid/$s.active" ]
 }
 
@@ -133,7 +140,7 @@ all_moved() { [ "$(verdicts)" = "MOVED=15 " ] || { verdicts; for f in "$BDIR"/cc
   export RANK_MODE=excluded
   batch
   [ "$status" -eq 2 ]
-  [ "$(verdicts)" = "NOTMOVED=15 " ]
+  [ "$(verdicts)" = "NOTMOVED=$N " ]
   [ "$(jq -r .admitted "$BDIR/admit.json")" = false ]
   [[ "$(jq -r .reason "$BDIR/admit.json")" == "target-unroutable: kmax-concurrency"* ]] || false
   [ ! -s "$STUB_LOG/typers.log" ]
@@ -149,7 +156,7 @@ all_moved() { [ "$(verdicts)" = "MOVED=15 " ] || { verdicts; for f in "$BDIR"/cc
   rm -f "$BDIR"/cccc*.json "$BDIR/admit.json" "$BDIR/summary.json"
   jq -c '.target_unverified = true' "$BDIR/plan.json" > "$BDIR/plan.json.t"; mv "$BDIR/plan.json.t" "$BDIR/plan.json"
   batch
-  [ "$(grep -c . "$STUB_LOG/typers.log")" -eq 15 ]
+  [ "$(grep -c . "$STUB_LOG/typers.log")" -eq "$N" ]
   [ "$(jq -r .target_auth "$BDIR/admit.json")" = unverified-accepted ]
   all_moved
   [[ "$(jq -r .target_auth_after "$BDIR/summary.json")" == unverified:* ]]
@@ -183,7 +190,7 @@ all_moved() { [ "$(verdicts)" = "MOVED=15 " ] || { verdicts; for f in "$BDIR"/cc
   export LR_MOVE_LANE=off
   batch
   [ "$status" -eq 2 ]
-  [ "$(verdicts)" = "NOTMOVED=15 " ]
+  [ "$(verdicts)" = "NOTMOVED=$N " ]
   [ ! -s "$STUB_LOG/typers.log" ]
 }
 
