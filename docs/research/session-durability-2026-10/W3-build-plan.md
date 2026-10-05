@@ -680,7 +680,7 @@ This table replaces the phase table near the top of the file. Only the W3 lead e
 | P8 | W3.2 (no dependency, fired early) | landed, content-verified | 261 / `w3-p8` | `4b8915441` (feat), tests `fd50f450b` `4bbbb0dc1` |
 | P3a-i | W3.2 | landed, content-verified | 266 / `w3-p3a-i` | `bfdb948ef` |
 | P3b | W3.2 | landed, content-verified | 267 / `w3-p3b` | `96a0591dc` (feat), `6b30ad551` (fix), tests `124f51717` `760e13771` |
-| P3a-ii | W3.2b | landed, content-verified | 271 / `w3-p3a-ii` | `c483b8401` (feat), `6aa13bf1f` `3bfb4b9ad` (fixes) |
+| P3a-ii | W3.2b | landed, content-verified | 271 / `w3-p3a-ii` | `c483b8401` (feat), `6aa13bf1f` `3bfb4b9ad` `472ba14c4` (fixes) |
 | P4 | W3.3 | fired 2026-10-05 | 276 / `w3-p4` | |
 | P5 | W3.4 | waits for P4, P8 | | |
 | P7 | W3.4 | waits for P4, P3a-ii | | |
@@ -696,3 +696,5 @@ This table replaces the phase table near the top of the file. Only the W3 lead e
 - **2026-10-05, P3a-i. Event mode restores only from a heartbeat** (no heartbeat means exit 3, `no-heartbeat`). `--kind crash` picks the newest heartbeat whose kitty is dead, unless `--kitty-pid` or `--roster-dir` is given. On a new boot the tick runs after DETECT, because `cc-sessions` sweeps registry rows that have been dead for more than 24 h. P5's `cc-restore` builds on these rules.
 - **2026-10-05, lead. The forward-expiry fix goes to P5, with two added files.** P5 also owns `hooks/lib/mailbox-pending.sh` and `hooks/mailbox-drain.sh` (and their bats) while it runs. It adds the drain-side clear first, then lets `mailbox_write_forward` accept kitty's decimal keys, which closes the other half of gap 11. No other open phase touches those files.
 - **2026-10-05, P3a-ii. `tests/capacity-admit-coverage.bats` test 22 greps `boot-resume.sh` for the shed condition and its message on one line.** Splitting them turned P3a-ii's first land red (fixed in `3bfb4b9ad`). P4 and P5 edit `boot-resume.sh` next, so they keep each shed arm on one line.
+- **2026-10-05, P3a-ii. `--kind restart` took its heartbeat tick after the caller's event epoch**, so `hb.start` was later than the event and a restart could not restore from its own snapshot (measured live: exit 3, `no-heartbeat`). Fixed in `472ba14c4`: the pick's upper bound is now the later of the event and the tick clock. P5's `cc-restore` passes `$(date +%s)` as the event and relies on this.
+- **2026-10-05, P3a-ii. P8's fixture turned a trunk guard red.** `tests/fixtures/cc-restore-rebind/event/rows.tsv` holds raw 0x1f padding bytes on 5 lines, which fails `tests/tsv-field-collapse.bats` "no padding sentinel is ever left in a tracked source file as a raw byte". P8 has closed, so the lead assigns the fix to P5, which wires rebind in: P5 also owns `tests/fixtures/cc-restore-rebind/**` and `tests/cc-restore-rebind.bats`, and builds the padded rows at test setup with `$'\037'` instead of storing the raw byte. The other red in that file (the reader census in `bin/cc-dispatch`) is not W3's.
