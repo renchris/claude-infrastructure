@@ -366,6 +366,16 @@ arming stays under it. A mid-turn composer that does read empty is not deferred 
 Switch: `CC_RECYCLE_TURN_WAIT=off`. Bounds: `CC_RECYCLE_TURN_WAIT_S` (300),
 `CC_RECYCLE_TURN_SETTLE_S` (10). Suite: `tests/handoff-recycle-turn-wait.bats`.
 
+CORRECTED (2026-10-05, 15:38 local): the running turn was not what made pane 254's composer
+unreadable. The first live retry with the wait deployed deferred, saw the turn end at 27 s, and was
+still refused after 180 s on a session at rest. Measured on the pane's screen: it is 45 columns wide
+and Claude Code prints a notice into the box's top rule (`── Claude Code instruction files size
+limit ─`), so only the bottom rule held the run of 12 that `composer_content` required of two rows.
+`a1434bb25` accepts a labeled rule (starts at column 0 with two rule characters, ends with one) in
+all three copies of the locator. The wait stays: a call that does find the composer unreadable
+mid-turn still cannot wait its own turn out. The same day's retry advisory also rendered raw shell
+under `/bin/bash` 3.2 (a `case` inside `$( )`); fixed in `beeff10b3`.
+
 Not covered by the suite: the tail after the gate (watcher, `/exit`) running from the forked child
 against a real pane. The fork's survival past its tool call was checked by hand (own process group,
 parent 1, still writing after the call returned); the first live self-recycle is the end-to-end proof.
