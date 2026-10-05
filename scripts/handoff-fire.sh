@@ -10452,6 +10452,28 @@ if [ "${1:-}" = "land" ]; then
   exec "$HF_DIR/desk-land.sh" "$@"
 fi
 
+# ── paste-verified <pane> <prompt-file> — the verified paste, as an entry point (W3 P5) ────────────
+# it2_paste_submit_verified had no caller outside this file, so scripts/lib/restore-note.sh's last
+# fallback for a recovery prompt that never reached its session could only abstain
+# ("no-verified-paste-entry-point"). This is that door and nothing more: it types the file's text
+# into the pane's composer only when the composer is provably empty and the pane is ours to type
+# into, reads it back, and sends Enter only on an exact read-back. It never retries and never sends a
+# bare Enter. The exit status is it2_paste_submit_verified's own (0 pasted, verified and submitted ·
+# 1 send failed · 2 abstained · 3 held · 4 mangled, Enter not sent); 64 is a usage error.
+# restore-note.sh finds this subcommand by grepping for the line below, so keep its spelling.
+if [ "${1:-}" = "paste-verified" ]; then
+  PV_PANE="${2:-}"; PV_FILE="${3:-}"
+  if [ -z "$PV_PANE" ] || [ ! -s "$PV_FILE" ]; then
+    echo "usage: handoff-fire.sh paste-verified <pane> <prompt-file>   (the file must exist and be non-empty)" >&2
+    exit 64
+  fi
+  PV_IT2="${IT2_BIN:-$HOME/.claude/bin/it2}"
+  PV_RC=0; it2_paste_submit_verified "$PV_IT2" "$PV_PANE" "$(cat "$PV_FILE")" || PV_RC=$?
+  PV_RB="${FIRE_PASTE_LAST_READBACK:0:120}"; PV_RB="${PV_RB//$'\n'/ }"
+  echo "handoff-fire: paste-verified pane=$PV_PANE rc=$PV_RC${PV_RB:+ readback=$PV_RB}"
+  exit "$PV_RC"
+fi
+
 # stamp-peer — write the fired-peer lifecycle record for a pane THIS script did not spawn.
 #
 # WHY THIS EXISTS (item aba6bcbff6de). mark_fired_peer is reachable only from handoff-fire's own
