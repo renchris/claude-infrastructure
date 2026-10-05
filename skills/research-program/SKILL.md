@@ -63,6 +63,10 @@ and finish the Google sign-in. Park it before anything else, because the preflig
    It registers through `gate.sh register`, writes the frame skeleton (all 33 checklist rows unmapped,
    the three historical question frames unmapped), and starts the stage-1 budget clock. Default profile:
    lite for case-sized work, standard for medium; full only after the calibration run (§9 decision 4).
+   Updated 2026-10-04 (v1.2): lite for every size. At measured inputs a wider profile leaves no fewer
+   holes after signoff than lite (estimate.py reads the measured set by default), so `intake.py init`
+   warns on standard or full with the two simulated figures. Take a wider profile only on the operator's
+   word, and record it.
 3. **The two rulings come first.** Show them with `intake.py ruling --show`, then record the operator's
    answer verbatim:
    ```

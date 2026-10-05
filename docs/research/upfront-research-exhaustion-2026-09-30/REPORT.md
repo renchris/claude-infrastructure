@@ -38,6 +38,20 @@ more reviewers barely move it. The method needs two rulings from you, made in th
 starts: accept this definition of complete, and exempt active programs from the parts of your standing rules that
 currently force "no, one more thing".
 
+**Updated 2026-10-04 (v1.2), from measured inputs.** The two figures above, "about 1–4%" and "about 6–9 in 10", are
+the model at assumed inputs. At the inputs the calibration measured over 16 plans
+(`docs/research/research-calibration/REPORT.md` §3, §5; `evidence/params-measured.json`):
+- The 95% bound is exceeded in at most 2.2% of simulated programs, and held on 15 of 16 replayed plans.
+- The typical-case forecast is exceeded in 22–38% of simulated programs at the assumed inputs, and was on 6 of 16
+  replayed plans.
+- **Every program should expect material changes after signoff: the chance of at least one is 1.00 in every profile**,
+  not 6–9 in 10. A Lite or Standard program is left with about 9 changes after signoff on the reading closest to the
+  operator's (a call is false only when history proved it false; modeled,
+  `docs/research/triage-precision-study-2026-10-04/REPORT.md` §1).
+- More reviewers do not shrink that number. At measured inputs they raise it (§3.12 update, §6.1).
+`scripts/research-kit/estimate.py` and the contract page now print these measured figures by default; the assumed
+set is kept as a labeled contrast (`--base`).
+
 ---
 
 ## 2. Diagnosis: why holes keep appearing
@@ -653,7 +667,7 @@ rate of 0.1 new material holes per applied fix, which stress does not raise, and
 `evidence/design/SYNTHESIS.md:319-321`). Both were assumed when this table was built; the calibration run has since
 measured them, with the rest of the inputs, and the re-run is at the end of this section.
 
-| Profile, holes at freeze (assumed: a strong front end leaves about 10–20) | Rounds (typical / 90th pct) | Desk-detectable left (mean) | Invisible left (mean) | Chance of at least one material change after signoff | Chance the printed forecast is exceeded |
+| Profile, holes at freeze (assumed: a strong front end leaves about 10–20. Updated 2026-10-04 (v1.2): measured median 20.6 on 16 plans that had no method front end, middle half 15–27, so 10–20 is what ordinary planning already produces) | Rounds (typical / 90th pct) | Desk-detectable left (mean) | Invisible left (mean) | Chance of at least one material change after signoff | Chance the printed forecast is exceeded |
 |---|---|---|---|---|---|
 | Lite, 10 holes | 5 / 6 | 1.4 | 0.5 | 0.83 | 1.2% |
 | Standard, 10 holes | 7 / 10 | 0.9 | 0.6 | 0.70 | 2.2% |
@@ -1101,7 +1115,7 @@ Nothing else loops. There is no open-ended "find gaps" loop anywhere after the f
 | Residual | Why it cannot be zero | What the method does |
 |---|---|---|
 | **Literal zero unknowns** | Certifying no hole left needs examining at least 95% of every place one could be. At 60 holes found, a 5% statement needs 3,654 seeds, all caught (`evidence/design/stopping_model.out:12`) | Replaced by the signed-frame definition and a printed forecast. The contract page states the strongest statement any spend can buy |
-| **Desk-detectable holes that survive review** | Reviewers share blind spots and misrate some findings. The model leaves 0.7–1.6 per program at a strong front end (§3.12) | Printed bound, counted, fixed locally with 2 delta rounds at most. The forecast is exceeded in about 1–4% of programs in the model |
+| **Desk-detectable holes that survive review** | Reviewers share blind spots and misrate some findings. The model leaves 0.7–1.6 per program at a strong front end (§3.12). Updated 2026-10-04 (v1.2): that range is the model at assumed inputs. At measured inputs and 20 holes at freeze it leaves 6.5–7.6 counting only calls history proved false, and 9.4–21.4 counting every false material call, rising with the reviewer count (research-calibration REPORT §5) | Printed bound, counted, fixed locally with 2 delta rounds at most. The forecast is exceeded in about 1–4% of programs in the model |
 | **Holes every reviewer family misses** | Not estimable from overlap (Link 2003). About 0.5–1.1 at a strong front end, 3.3 or more at a weak one, with the share unmeasured | Contact before the claim (Stages 3 and 5). A separate forecast labeled "share assumed". A replay test puts them in their own bucket. The share is measured across programs from non-AI detectors |
 | **Production, tenants, elapsed time, your eye** | The property lives only there: 6 of 200 holes | Residual rows with an owner, a date, a check and a falsifier. Carried sets where a choice depends on them |
 | **New requirements and ideas** | Your intent changes: 6 of 200 holes, and 1.6 new ideas per active session-day | Parked in the next version with a price, processed at fixed checkpoints |
@@ -1193,6 +1207,35 @@ where named here):
   router (`scripts/research-kit/router.py` `CLASSIFIER_TIMEOUT_S`) and gate row 15's measurement
   (`scripts/research-kit/heldout.py` `ROUTER_TIMEOUT_S`). The hook's registered timeout stays at the 10 seconds
   `migrations/0050` set. Gate row 15 is re-measured at the new limit; its reading is in wave E1 of the build plan.
+
+**Updated 2026-10-04 (v1.2): the edits made under ruling `1bf69e5c1775`**, each named and from a measured result, as
+ruling 8 requires. Earlier text is kept and each edit is marked where it sits.
+
+- **Change (a), measurement half: triage stays as calibrated.** The triage precision study
+  (`docs/research/triage-precision-study-2026-10-04/REPORT.md`) tested four candidate filters against a blind,
+  three-vendor reading of the rubric. No filter beats the calibration's triage as run (provisional, 70% conviction).
+  On the line closest to the operator the triage as run leaves the fewest changes after signoff: 8.86 per program in
+  Lite and 8.83 in Standard (modeled), with the chance of at least one at 1.00. So §3.11, the rubric and the triage
+  steps of §3.8 are unchanged. The study left one measurement open, the executable-reproduction filter applied after
+  the triage as run. It was run the same day and fails the study's decision rule (that report's appendix A): on the
+  operator-strict line it leaves 9.1–9.2 unannounced changes in Lite against the triage's 8.8, and in Standard the
+  interval of the difference spans zero. So no filter is built, and change (a) closes with the triage as it is.
+- **Change (d), code and text half: the forecast is stated from measured inputs.**
+  - §1: the "1–4%" and "6–9 in 10" figures carry a dated note with the measured values.
+  - §3.12: the table's first column header carries the measured holes at freeze. The table's rows are unchanged; the
+    measured re-run is the calibration report's §5.
+  - §7: the "0.7–1.6" desk-detectable range carries the measured range.
+  - Decision 4 above: "standard for medium" is withdrawn as a default. Lite is the default for every size until the
+    measured false-call rate falls; `intake.py` warns on any wider profile with the two simulated figures, and stops
+    warning by itself if the measured file ever shows wider review paying.
+  - `scripts/research-kit/estimate.py` reads `research-calibration/evidence/params-measured.json` by default
+    (invisible share 0.121, false material calls 1.13 per reviewer-read, downgrade 0.223, omission share 0.577,
+    fix-born rate 0.211), and refuses if the file cannot supply them. `--base` runs the assumed set as a contrast.
+  - The contract page prints the measured forecast and the assumed one beside it as a contrast.
+  - Price: no added program cost. The contract page runs 2 to 4 simulations where it ran 1, a few seconds each.
+- **Change (d), operator half:** the pilot's contract is re-rendered on the measured forecast as a draft beside the
+  signed page, and the re-sign is filed as one operator step (build plan, wave E3a and E4). The signed page and the
+  pilot's records are untouched until the operator re-signs.
 
 ---
 
