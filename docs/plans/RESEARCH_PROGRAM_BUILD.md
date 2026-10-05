@@ -626,9 +626,10 @@ activation. Never change row 15's thresholds or the 9 s limit. Locus S (fired `f
     tuning numbers that predate the read.
   - Pushback: accept 5 counted prompts as what exists, or change how a rater split is counted; either is a method
     parameter (§6.6).
-- Status: **DONE 2026-10-04.** Commits `3be0284f9` (rule, before any measurement), `bfe1768bd` (tooling and
-  tests), `22493b3f7` (labeled counts and the uncounted line, before the read), `7f8e33f1d` (the choice), then
-  this record. Learnings: the transcripts are a 60-day store and the prompt history a year-deep one, so a rare
+- Status: **DONE 2026-10-04, landed and converged** (live layer at `3ce98732b`). On trunk, in order: `4107c141e`
+  (rule, before any measurement), `835da4f84` (tooling and tests), `8b58de677` (labeled counts and the uncounted
+  line, before the read), `e259b44cd` (the choice; `7f8e33f1d` before the land's rebase, the id the read's router
+  snapshot carries), `3ce98732b` (this record). Author dates keep the order: rule 20:17, read started 20:48. Learnings: the transcripts are a 60-day store and the prompt history a year-deep one, so a rare
   stratum is mined from history; one rater reply in seven calls dropped a single label, so a batch is asked again
   once before the whole pass is thrown away; the shared bats slots deferred a 2-suite run for 17 minutes at load
   35-45, so a retry loop around `bats` (never a waiver) belongs at the start of a wave, not after the first

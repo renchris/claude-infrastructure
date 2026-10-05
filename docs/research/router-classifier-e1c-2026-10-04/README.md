@@ -13,4 +13,4 @@ stay outside the repo; no file here carries prompt text.
 | `e1c-choose.py OUT` | the pre-registered rule as code: labeling eligibility, borderline relays, fallback share at 9 s; prints the chosen arm |
 | `tune-2reps.json` | the measurement the choice was made on (labels, wall seconds and 1-min load by tuning row index) |
 
-The rule and both scripts were committed (`3be0284f9`) before `e1c-tune.py` ran.
+The rule and both scripts were committed (`4107c141e` on trunk) before `e1c-tune.py` ran.
