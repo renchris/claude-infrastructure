@@ -6,7 +6,7 @@
 # && touch ~/.claude/autonomy/pending-activation/05-x.sh.done` line that wraps to four terminal lines
 # at 100 cols. The board was CORRECT and unreadable: the operator's actual next action was to
 # hand-transcribe nine long commands, in the right order, without dropping the `&& touch`. So the
-# readout now emits `▶ cc-do` as its headline and `▶ cc-do <stem>` per activation, and this script is
+# readout now emits `▶ cc-do --run --expect …` as its headline and `▶ cc-do <stem>` for a lone step, and this script is
 # what those point AT. The wall of commands becomes one word.
 #
 # ── THE PRODUCERS ARE THE READOUT'S ── this script and the hook read the SAME four stores through
@@ -45,6 +45,11 @@
 #   cc-do <stem>       run exactly ONE pending activation whose filename starts with <stem>
 #   cc-do --list       print the board, itemizing judgment items too. Runs nothing.
 #   cc-do --run        skip the prompt, run the runnable set (scripted/non-interactive use)
+#   cc-do --run --expect <stem,stem…|N:CRC>
+#                      the same, BOUND to the set the handed line was rendered from: runs only if
+#                      the runnable stems now are exactly those (or the N:CRC set fingerprint the
+#                      row carries past 3 stems or 100 columns); otherwise NOTHING RAN, exit 4, and
+#                      the refusal hands the line bound to the set now on the board
 #   cc-do --json       one JSON array of {class,mark,cmd,label}. Runs nothing.
 #   cc-do -h|--help    this block
 #
@@ -52,17 +57,22 @@
 # prints the board, says plainly that NOTHING RAN, and exits 3. It never blocks a scripted caller on
 # a `read` that can never answer — and never reports a no-op as success: an empty board still exits
 # 0, so 0 means "nothing outstanding" and 3 means "steps outstanding, no channel to confirm them".
-# That refusal also HANDS OVER the way through, on its own line, executable as typed: `cc-do --run`
-# for the board, `CC_DO_ASSUME_YES=1 cc-do <id>` for a single row. Claude Code's `!` bash-input line is
+# That refusal also HANDS OVER the way through, on its own line, executable as typed:
+# `cc-do --run --expect <stems>` for the board (bound to what it just printed — TARGET BINDING), `CC_DO_ASSUME_YES=1 cc-do <id>` for a single row. Claude Code's `!` bash-input line is
 # the surface most closes direct the operator to and it runs with stdin closed, so a refusal that names
 # no command ends there (row af096c5107b6, measured 2026-09-08).
 #
 # Env seams (tests): CC_ACTIVATION_DIR · CC_DECISIONS_DIR · CC_BACKLOG_FILE · CC_BACKLOG_BIN ·
 #   CC_SHARED_CHECKOUT · CC_DEPLOY_SCRIPT · CC_DO_ASSUME_YES
+# TARGET BINDING (decision 5cee611ac837, 2026-10-04): the close row hands `cc-do --run --expect …`,
+# a line that runs with zero keystrokes. Bare `--run` authorises whatever is queued at PASTE time;
+# `--expect` makes the consent name its target, so a queue that changed between render and paste
+# runs nothing. The comparison is a SET (order-free) and exact — a superset or a subset both refuse.
+#
 # Exit: 0 ok / nothing to do / list · 1 a step FAILED (named, nothing after it ran) · 2 usage or
 #   unresolvable stem · 3 runnable steps pending and NOTHING RAN because stdin is not a terminal
-#   (see NON-INTERACTIVE SAFETY). bash 3.2 (macOS) clean — no associative arrays, no mapfile, no
-#   ${x^^}.
+#   (see NON-INTERACTIVE SAFETY) · 4 `--expect` did not match the runnable set, NOTHING RAN.
+#   bash 3.2 (macOS) clean — no associative arrays, no mapfile, no ${x^^}.
 set -uo pipefail
 # ── activation marker predicate (hooks/lib/activation-marker.sh) ─────────────────────────────────
 # Resolution mirrors completion-assert.sh's four tiers, for the reason its comment gives: a
@@ -121,12 +131,15 @@ tildify() { printf '%s' "${1/#$HOME/~}"; }   # display+paste-safe: the shell re-
 # in THEIR shell, not ours: the bare name only when it is genuinely on PATH, else the path we were
 # invoked by. (Rule: a handed-over payload must be EXECUTABLE AS TYPED — row af096c5107b6.)
 CC_DO_INVOKE="$0"; command -v cc-do >/dev/null 2>&1 && CC_DO_INVOKE="cc-do"
-MODE=default; STEM=""
+MODE=default; STEM=""; EXPECT=""; EXPECT_SET=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --list) MODE=list ;;
     --run)  MODE=run ;;
     --json) MODE=json ;;
+    --expect)   [ $# -ge 2 ] || { printf 'cc-do: --expect needs a value (stem,stem… or N:CRC)\n' >&2; exit 2; }
+                EXPECT="$2"; EXPECT_SET=1; shift ;;
+    --expect=*) EXPECT="${1#--expect=}"; EXPECT_SET=1 ;;
     -h|--help) usage; exit 0 ;;
     -*) printf 'cc-do: unknown option %s\n' "$1" >&2; exit 2 ;;
     *)  [ -z "$STEM" ] || { printf 'cc-do: one stem at a time (got %s and %s)\n' "$STEM" "$1" >&2; exit 2; }
@@ -137,6 +150,34 @@ done
 if [ -n "$STEM" ] && [ "$MODE" != default ]; then
   printf 'cc-do: <stem> takes no mode flag (got --%s)\n' "$MODE" >&2; exit 2
 fi
+if [ "$EXPECT_SET" = 1 ]; then
+  [ -n "$EXPECT" ] || { printf 'cc-do: --expect needs a value (stem,stem… or N:CRC)\n' >&2; exit 2; }
+  [ "$MODE" = run ] && [ -z "$STEM" ] \
+    || { printf 'cc-do: --expect binds --run only: cc-do --run --expect <stems>\n' >&2; exit 2; }
+fi
+
+# ── the --expect token, ONE shape shared with hooks/operator-readout.sh's collapse row ───────────
+# Up to 3 stems AND a list that fits the line ⇒ the stems themselves, comma-joined (the operator can
+# read what he consents to). Otherwise ⇒ `N:CRC`, the count plus POSIX cksum of the sorted set. $1 is
+# the widest list the caller's line can hold inside 100 columns: live activation stems run 31-36
+# chars, so three of them made a 146-column row that wraps, and a wrapped line pastes as two
+# commands (the no-wrap rule). Both shapes are accepted by --expect whatever the count. The readout
+# carries a byte-identical copy of these two functions; tests/operator-readout.bats round-trips a
+# rendered row through this script so the copies cannot drift unseen.
+expect_fp() { # stdin: stems, one per line → N:CRC of the sorted unique set
+  local s n
+  s="$(grep -v '^$' | LC_ALL=C sort -u)"
+  n="$(printf '%s' "$s" | grep -c . || true)"
+  printf '%s:%s' "${n:-0}" "$(printf '%s\n' "$s" | cksum | awk '{print $1}')"
+}
+expect_token() { # stdin: stems in display order; $1: widest list the line holds → the --expect value
+  local s n j
+  s="$(grep -v '^$')"
+  n="$(printf '%s' "$s" | grep -c . || true)"
+  j="$(printf '%s\n' "$s" | paste -sd, -)"
+  if [ "${n:-0}" -le 3 ] && [ "${#j}" -le "${1:-${#j}}" ]; then printf '%s\n' "$j"
+  else printf '%s\n' "$s" | expect_fp; fi
+}
 
 STEPS="$(mktemp "${TMPDIR:-/tmp}/ccdo.XXXXXX")" || { printf 'cc-do: mktemp failed\n' >&2; exit 1; }
 trap 'rm -f "$STEPS"' EXIT
@@ -520,6 +561,40 @@ case "$MODE" in
 esac
 
 render
+# The runnable stems in board order — what --expect is checked against and what a hand-over binds to.
+RUN_STEMS="$(while IFS="$TABC" read -r cls mark name cmd label path; do
+  [ "$mark" = '▶' ] && printf '%s\n' "$name"; done < "$STEPS")"
+# The hand-over line for the CURRENT runnable set, bound with --expect and sized so the whole line
+# (4-space indent included) fits 100 columns — a wrapped line pastes as two commands.
+bound_line() {
+  local head="$CC_DO_INVOKE --run --expect "
+  printf '    %s%s\n' "$head" "$(printf '%s\n' "$RUN_STEMS" | expect_token $(( 100 - 4 - ${#head} )))"
+}
+
+# ── TARGET BINDING ── checked BEFORE the empty-board exit: a bound line whose steps have all gone
+# says so, rather than reading as a clean run of what it named.
+if [ "$EXPECT_SET" = 1 ]; then
+  case "$EXPECT" in
+    [0-9]*:[0-9]*[0-9]) _ex_fp=1; case "$EXPECT" in *[!0-9:]*|*:*:*) _ex_fp=0 ;; esac ;;
+    *) _ex_fp=0 ;;
+  esac
+  case "$_ex_fp" in
+    1) _want="$EXPECT"; _have="$(printf '%s\n' "$RUN_STEMS" | expect_fp)" ;;
+    *) _want="$(printf '%s\n' "$EXPECT" | tr ',' '\n' | grep -v '^$' | LC_ALL=C sort -u | paste -sd, -)"
+       _have="$(printf '%s\n' "$RUN_STEMS" | grep -v '^$' | LC_ALL=C sort -u | paste -sd, -)" ;;
+  esac
+  if [ "$_want" != "$_have" ]; then
+    printf 'cc-do: NOTHING RAN — the runnable set is not the one this line was bound to (bound: %s · now: %s); the board above is current.\n' \
+      "$EXPECT" "$(printf '%s\n' "$RUN_STEMS" | expect_token)" >&2
+    # A refusal names the way through (row af096c5107b6): the deploy row comes and goes as trunk
+    # moves, so render-vs-paste drift is routine — hand the line bound to the board just printed.
+    if [ -n "$RUN_STEMS" ]; then
+      printf 'cc-do:   to run the set on the board above instead, paste:\n\n' >&2
+      bound_line >&2; printf '\n' >&2
+    fi
+    exit 4
+  fi
+fi
 [ "$NRUN" -gt 0 ] || exit 0
 
 if [ "$MODE" = run ] || [ "${CC_DO_ASSUME_YES:-0}" = 1 ]; then run_steps; exit $?; fi
@@ -536,7 +611,7 @@ if [ ! -t 0 ]; then
   printf 'cc-do: NOTHING RAN — stdin is not a terminal, so the confirm prompt cannot be asked.\n' >&2
   printf 'cc-do:   %d runnable step(s) are still pending, exactly as listed above.\n' "$NRUN" >&2
   printf 'cc-do:   run them from a terminal with "%s", or paste this line on any surface:\n' "$CC_DO_INVOKE" >&2
-  printf '\n    %s --run\n\n' "$CC_DO_INVOKE" >&2
+  printf '\n' >&2; bound_line >&2; printf '\n' >&2
   exit 3
 fi
 

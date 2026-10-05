@@ -622,8 +622,116 @@ row_status() { bash "$BACKLOG" list --all --json | jq -r --arg i "$1" '.[]|selec
   mkact 05-alpha "$SENT"
   run "$DO" </dev/null
   [ "$status" -eq 3 ]
-  echo "$output" | grep -qE '^ *[^ ]*cc-do --run$' || false
+  # bound to the board it printed (decision 5cee611ac837): the way-out names its target
+  echo "$output" | grep -E '^ *[^ ]*cc-do --run --expect 05-alpha$' >/dev/null || false
   [ ! -e "$SENT" ]
+}
+
+# ── TARGET BINDING: --run --expect (decision 5cee611ac837, 2026-10-04) ───────────────────────────
+# The close row hands a line that runs with NO keystroke; --expect is what keeps that consent from
+# authorising whatever happens to be queued at paste time. Every refusal below is measured against
+# a sentinel the SAME fixture then shows firing under the matching binding.
+
+@test "--run --expect matching the runnable set runs it, order-free, on a closed stdin" {
+  mkact 05-alpha "$SENT"
+  mkact 06-beta "$SENT.b"
+  run "$DO" --run --expect 06-beta,05-alpha </dev/null
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -f "$SENT" ] && [ -f "$SENT.b" ] || false
+  [ -f "$CC_ACTIVATION_DIR/05-alpha.sh.done" ] && [ -f "$CC_ACTIVATION_DIR/06-beta.sh.done" ] || false
+}
+
+@test "--run --expect MISMATCH (different · superset · subset) refuses: exit 4, NOTHING RAN, no .done" {
+  mkact 05-alpha "$SENT"
+  mkact 06-beta "$SENT.b"
+  for want in 05-alpha,07-gamma 05-alpha,06-beta,07-gamma 05-alpha; do
+    run "$DO" --run --expect "$want" </dev/null
+    [ "$status" -eq 4 ] || { echo "$want: $output"; false; }
+    echo "$output" | grep -F 'NOTHING RAN' >/dev/null || false
+    [ "$(echo "$output" | grep -c 'NOTHING RAN')" -eq 1 ]           # one clear line
+    [ ! -e "$SENT" ] && [ ! -e "$SENT.b" ] || false
+    [ ! -e "$CC_ACTIVATION_DIR/05-alpha.sh.done" ] || false
+  done
+  # POSITIVE CONTROL — same fixture, the binding that matches: both fire.
+  run "$DO" --run --expect 05-alpha,06-beta </dev/null
+  [ "$status" -eq 0 ]
+  [ -f "$SENT" ] && [ -f "$SENT.b" ] || false
+}
+
+@test "a --expect MISMATCH refusal hands the line bound to the board NOW, on its own line, and it runs" {
+  # The deploy row comes and goes as trunk moves, so render-vs-paste drift is routine; a refusal
+  # that names no way through ends at the operator (row af096c5107b6).
+  mkact 05-alpha "$SENT"
+  mkact 06-beta "$SENT.b"
+  run "$DO" --run --expect 05-alpha,07-gamma </dev/null
+  [ "$status" -eq 4 ]
+  tok="$(echo "$output" | sed -n 's/^    [^ ]*cc-do --run --expect \([^ ]*\)$/\1/p')"
+  [ "$tok" = "05-alpha,06-beta" ] || { echo "$output"; false; }
+  [ ! -e "$SENT" ] && [ ! -e "$SENT.b" ] || false
+  run "$DO" --run --expect "$tok" </dev/null
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -f "$SENT" ] && [ -f "$SENT.b" ] || false
+}
+
+@test "live-length stems: the hand-over line binds by N:CRC and fits 100 columns, and it runs" {
+  # Live activation stems run 31-36 chars; three of them as a comma list made a 146-column line,
+  # and a wrapped line pastes as two commands. The width, not only the count, picks the shape.
+  local s
+  for s in 10-lead-crash-orphan-close-activate 32-cc-roles-kitty-normalise-activate \
+           49-boot-resume-desktops-activate; do mkact "$s" "$SENT.$s"; done
+  run "$DO" </dev/null
+  [ "$status" -eq 3 ]
+  line="$(echo "$output" | grep -E '^    [^ ]*cc-do --run --expect ')"
+  [ -n "$line" ] || { echo "$output"; false; }
+  norm="    cc-do${line#*cc-do}"   # as the operator sees it with cc-do on PATH (the checkout path is ours)
+  [ "${#norm}" -le 100 ] || { echo "${#norm}: $norm"; false; }
+  tok="${line##* }"
+  [[ "$tok" == 3:* ]] || { echo "$line"; false; }
+  run "$DO" --run --expect "$tok" </dev/null
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  for s in 10-lead-crash-orphan-close-activate 32-cc-roles-kitty-normalise-activate \
+           49-boot-resume-desktops-activate; do [ -f "$SENT.$s" ]; done
+}
+
+@test "--expect past 3 stems: the handed N:CRC fingerprint runs, and a changed set refuses it" {
+  for i in 1 2 3 4; do mkact "1$i-z" "$SENT.$i"; done
+  run "$DO" </dev/null
+  [ "$status" -eq 3 ]
+  tok="$(echo "$output" | sed -n 's/^ *[^ ]*cc-do --run --expect \([0-9]*:[0-9]*\)$/\1/p')"
+  [ -n "$tok" ] || { echo "$output"; false; }
+  [ "${tok%%:*}" = 4 ]
+  mkact 15-z "$SENT.5"                                    # the queue changes before the paste
+  run "$DO" --run --expect "$tok" </dev/null
+  [ "$status" -eq 4 ]
+  echo "$output" | grep -F 'NOTHING RAN' >/dev/null || false
+  for i in 1 2 3 4 5; do [ ! -e "$SENT.$i" ]; done
+  # POSITIVE CONTROL — the set it was bound to, restored: the same token runs all four.
+  rm -f "$CC_ACTIVATION_DIR/15-z.sh"
+  run "$DO" --run --expect "$tok" </dev/null
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  for i in 1 2 3 4; do [ -f "$SENT.$i" ]; done
+}
+
+@test "--expect is bound to --run: alone, with --list, empty, or with a stem it is usage (exit 2) and runs nothing" {
+  mkact 05-alpha "$SENT"
+  run "$DO" --expect 05-alpha </dev/null;          [ "$status" -eq 2 ]
+  run "$DO" --list --expect 05-alpha </dev/null;   [ "$status" -eq 2 ]
+  run "$DO" --run --expect '' </dev/null;          [ "$status" -eq 2 ]
+  run "$DO" --run --expect </dev/null;             [ "$status" -eq 2 ]
+  run "$DO" 05-alpha --expect 05-alpha </dev/null; [ "$status" -eq 2 ]
+  [ ! -e "$SENT" ]
+  # control: the bound form runs it
+  run "$DO" --run --expect=05-alpha </dev/null
+  [ "$status" -eq 0 ]
+  [ -f "$SENT" ]
+}
+
+@test "bare --run keeps today's behaviour: no binding, runs the whole set" {
+  mkact 05-alpha "$SENT"
+  mkact 06-beta "$SENT.b"
+  run "$DO" --run </dev/null
+  [ "$status" -eq 0 ]
+  [ -f "$SENT" ] && [ -f "$SENT.b" ] || false
 }
 
 @test "a placeholder-carrying command and a slash command are REFUSED (exit 2), never run" {
