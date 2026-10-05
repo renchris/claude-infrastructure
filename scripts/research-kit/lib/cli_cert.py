@@ -11,7 +11,8 @@
 The Workflows in ../workflows/ only call these. What is enforced HERE, in code: the slot plan and its
 caps (round.py), a fresh all-live vendor preflight before a round opens, the vendor/strategy/role
 of every slot (an agent names a pid, never a vendor), the re-run cap per slot (CAPS["slot_reruns"]),
-the rater assignment, the responding-model check against frame.json reviewer_pins, and the relay
+the rater assignment, the responding-model check against frame.json reviewer_pins, the reviewer
+effort check against frame.json reviewer_effort (a frame without it pins nothing), and the relay
 test of gate row 14. A Workflow round writes rounds/<rid>/
 matrix.json through check-round (round.py's shape), so `round.sh close` and gate row 13 read it as
 they read a round.py round. Exit codes are the kit's: 0 ok · 1 check failed · 2 refusal · 3 dead lane
@@ -272,6 +273,7 @@ def panel_breaches(
     pins: Dict[str, str],
     assign: Dict[int, Dict[str, Any]],
     needles: List[str],
+    efforts: Optional[Dict[str, str]] = None,
 ) -> List[str]:
     why: List[str] = []
     want = pins.get(str(p.get("vendor")))
@@ -279,6 +281,16 @@ def panel_breaches(
         why.append(f"no reviewer pin for {p.get('vendor')}")
     elif p.get("responding_model") != want:
         why.append(f"responding model {p.get('responding_model')}, pinned {want}")
+    # Effort is part of the detector the round was calibrated against: a reviewer that ran at any
+    # other effort than the frame pins (or a verifier/rater that ran pinned) is a different read.
+    # None on both sides — a frame without reviewer_effort, a panel without `effort` — is today's.
+    want_e = courier.effort_for(
+        efforts or {}, str(p.get("vendor")), str(p.get("role"))
+    )
+    if p.get("effort") != want_e:
+        why.append(
+            f"ran at effort {p.get('effort') or 'CLI default'}, pinned {want_e or 'CLI default'}"
+        )
     if p.get("role") == "rater":
         m = re.search(r"rater(\d+)$", str(p.get("pid")))
         slot = assign.get(int(m.group(1))) if m else None
@@ -305,6 +317,7 @@ def cmd_check(a: argparse.Namespace) -> int:
     rd = rdir(a.program, a.round)
     fr = rnd.frame(a.program)
     pins = fr.get("reviewer_pins") or {}
+    efforts = fr.get("reviewer_effort") or {}
     assign = {r["slot"]: r for r in raters(a.program, a.round) or []}
     needles = courier.integrity_needles(a.program)
     tries = attempts(a.program, a.round)
@@ -320,7 +333,7 @@ def cmd_check(a: argparse.Namespace) -> int:
         if p.get("status") == "dead":
             continue
         why = panel_breaches(
-            a.program, p, pj.with_suffix(".raw"), pins, assign, needles
+            a.program, p, pj.with_suffix(".raw"), pins, assign, needles, efforts
         )
         if not why:
             continue

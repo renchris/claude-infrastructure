@@ -44,6 +44,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE / "lib"))
 sys.path.insert(0, str(HERE.parents[1] / "scripts" / "lib"))
 import kit  # noqa: E402
+from courier import REVIEWER_EFFORT  # noqa: E402
 
 SKILL = HERE.parents[1] / "skills" / "research-program"
 CHECKLIST = SKILL / "checklist.jsonl"
@@ -323,6 +324,9 @@ def cmd_contract_page(a: argparse.Namespace) -> int:
     for v, r in pf.items():
         if r.get("ok") and r.get("model_id"):
             pins.setdefault(v, r["model_id"])
+    # Reviewer effort is pinned beside the model ids, so the frame signature covers it too; a frame
+    # that already carries reviewer_effort keeps its own (courier.REVIEWER_EFFORT is the default).
+    effort = dict(fr["reviewer_effort"] if "reviewer_effort" in fr else REVIEWER_EFFORT)
     prof = kit.profile(fr["profile"])
     f = forecast(fr["profile"])
     typical, ceiling = PROFILE_DAYS[fr["profile"]]
@@ -366,6 +370,10 @@ def cmd_contract_page(a: argparse.Namespace) -> int:
     ] + [
         f"- {v}: {'live' if r.get('ok') else 'DEAD'} {r.get('model_id') or '-'} at {r.get('at')}"
         for v, r in sorted(pf.items())
+    ] + [
+        "",
+        "Reviewer effort (certification reviewers only; verifiers and raters run at their CLI's "
+        "default): " + (", ".join(f"{v} {e}" for v, e in sorted(effort.items())) or "none pinned"),
     ]
     if fr.get("degraded"):
         lines += ["", f"**degraded: {fr['degraded']}**"]
@@ -382,6 +390,7 @@ def cmd_contract_page(a: argparse.Namespace) -> int:
     out = records(a.program) / "CONTRACT.md"
     out.write_text(page)
     fr["reviewer_pins"] = pins
+    fr["reviewer_effort"] = effort
     fr["contract_page_at"] = now
     fr["contract_page_sha256"] = hashlib.sha256(page.encode()).hexdigest()
     fr["reference_override"] = override

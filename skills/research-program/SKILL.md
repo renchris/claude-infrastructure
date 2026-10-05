@@ -96,8 +96,8 @@ and finish the Google sign-in. Park it before anything else, because the preflig
 8. **Contract page.** `scripts/research-kit/intake.py contract-page --program <slug>` refuses until both
    rulings, the escape cost and a strictly earlier, all-live preflight exist (a dead lane exits 3: pause
    on the operator step, class-B default "continue on two vendors" after 48 h). It writes `CONTRACT.md`,
-   pins the responding model ids, and stores the page's hash in `frame.json`, so the frame signature
-   covers the page.
+   pins the responding model ids and the reviewer effort (`reviewer_effort`: Opus xhigh, Fable high,
+   OpenAI xhigh), and stores the page's hash in `frame.json`, so the frame signature covers the page.
 9. **Lint, then the operator signs.** `intake.py lint --program <slug>` is gate row 1 without the
    signature; `intake.py status --program <slug>` lists what is left. When both are clean, hand the
    operator `cc-signoff research:<slug>/frame`.
@@ -117,10 +117,11 @@ and finish the Google sign-in. Park it before anything else, because the preflig
 - Seeds: a seed author from a vendor other than the lead's, briefed with `briefs/seed-author.md`, writes
   seed lines straight into `seed.py plant`. The lead never reads them.
 - Rounds: `round.sh --kind certification --round K` fills four slot sets (Opus, frontier, OpenAI, Google)
-  with the profile's strategies, every reviewer briefed with `briefs/reviewer.md` verbatim.
+  with the profile's strategies, every reviewer briefed with `briefs/reviewer.md` verbatim, at the
+  frame's `reviewer_effort`; `check-round` voids a reviewer panel run at any other effort.
   `round.sh` refuses past `R_max` (§10 item 17).
 - Each finding: a verifier (`briefs/verifier.md`), then raters (`briefs/rater.md`), launched through
-  `courier.sh run --role verifier|rater`. Rater 1 is non-Anthropic; rater 2 another vendor; rater 3 the
+  `courier.sh run --role verifier|rater` (never effort-pinned: their CLI's default). Rater 1 is non-Anthropic; rater 2 another vendor; rater 3 the
   third. Ratings follow `RUBRIC.md` and nothing else.
 - Fix only material findings, only between rounds, only by integration; refinements go to the
   apply-at-build list. Frame omissions (clause g) go to the frame-delta cycle.

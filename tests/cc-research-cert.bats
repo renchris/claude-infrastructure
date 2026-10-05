@@ -172,6 +172,49 @@ print('ok')"
   [ "$(grep -c '"pid": "r1p4"' "$CC_RESEARCH_RECORDS/rounds/1/check.jsonl")" -eq 1 ]
 }
 
+set_effort() { # <pid> <effort|null>: what the courier recorded on the panel
+  /usr/bin/python3 -c "
+import json, sys
+p = '$CC_RESEARCH_RECORDS/rounds/1/panels/' + sys.argv[1] + '.json'
+d = json.load(open(p)); d['effort'] = json.loads(sys.argv[2]); json.dump(d, open(p, 'w'))" "$1" "$2"
+}
+
+@test "check-round voids a reviewer panel whose recorded effort differs from the frame's pin (exit 4)" {
+  frame '{"reviewer_effort": {"anthropic": "xhigh", "frontier": "high", "openai": "xhigh"}}'
+  good_panels
+  set_effort r1p1 '"high"'
+  set_effort r1p2 '"high"'
+  set_effort r1p3 '"xhigh"'
+  run "$CR" check-round --program demo --round 1 --json
+  [ "$status" -eq 4 ]
+  grep -F 'ran at effort high, pinned xhigh' "$CC_RESEARCH_RECORDS/rounds/1/check.jsonl"
+  [ "$(grep -c '"event": "void"' "$CC_RESEARCH_RECORDS/rounds/1/check.jsonl")" -eq 1 ]
+  grep '"pid": "r1p1"' "$CC_RESEARCH_RECORDS/rounds/1/check.jsonl"
+  set_effort r1p1 '"xhigh"'
+  /usr/bin/python3 -c "
+import json; p = '$CC_RESEARCH_RECORDS/rounds/1/panels/r1p1.json'
+d = json.load(open(p)); d['status'] = 'complete'; json.dump(d, open(p, 'w'))"
+  run "$CR" check-round --program demo --round 1
+  [ "$status" -eq 0 ]
+}
+
+@test "check-round under an effort-pinned frame voids a reviewer that ran at the CLI default" {
+  frame '{"reviewer_effort": {"anthropic": "xhigh"}}'
+  good_panels
+  run "$CR" check-round --program demo --round 1 --json
+  [ "$status" -eq 4 ]
+  grep -F 'ran at effort CLI default, pinned xhigh' "$CC_RESEARCH_RECORDS/rounds/1/check.jsonl"
+  [ "$(grep -c '"event": "void"' "$CC_RESEARCH_RECORDS/rounds/1/check.jsonl")" -eq 1 ]
+}
+
+@test "check-round on a frame without reviewer_effort ignores effort, as before the pin" {
+  good_panels
+  set_effort r1p1 null
+  run "$CR" check-round --program demo --round 1
+  [ "$status" -eq 0 ]
+  [ ! -s "$CC_RESEARCH_RECORDS/rounds/1/check.jsonl" ]
+}
+
 # ── lost reads and dead lanes (audit 2026-10-04 REPORT §3 row 5) ────────────────────────────────
 
 stub_courier() { # a courier whose `run` writes a pinned panel; FAKE_STATUS="pid=dead|partial|none ..."

@@ -271,6 +271,8 @@ def row13(ctx: Ctx) -> Row:
         fails.append("the vendor preflight did not run before the contract page")
     two = fr.get("degraded") == "two vendors"
     pins = fr.get("reviewer_pins") or {}
+    # reviewer effort (decision 8c5cb4cdc518); a frame without reviewer_effort pins none, as before
+    efforts = fr.get("reviewer_effort") or {}
     counted = [m for m in cert_rounds(ctx) if m.get("counted")]
     if not counted:
         fails.append("no counted certification round")
@@ -305,6 +307,12 @@ def row13(ctx: Ctx) -> Row:
             if not want or pj.get("responding_model") != want:
                 fails.append(
                     f"round {rid}: {s.get('pid')} answered as {pj.get('responding_model')}, pinned {want}"
+                )
+            want_e = efforts.get(str(s.get("vendor")))
+            if pj.get("effort") != want_e:
+                fails.append(
+                    f"round {rid}: {s.get('pid')} ran at effort {pj.get('effort') or 'CLI default'}, "
+                    f"pinned {want_e or 'CLI default'}"
                 )
             if (pj.get("integrity") or {}).get("hits"):
                 fails.append(f"round {rid}: {s.get('pid')} integrity hit")

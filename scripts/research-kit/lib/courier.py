@@ -63,6 +63,16 @@ LANE_BIN = {
     "google": "GOOGLE",
 }
 DEAD, VOID = 3, 4
+# Reasoning effort for certification REVIEWERS, per lane (decision 8c5cb4cdc518, ruled 2026-10-04):
+# Opus 5.5 reviews at xhigh (model-config.yaml: review runs at xhigh), Fable 5.1 in the frontier
+# slots at high (its measured rung), and OpenAI at xhigh, the value ~/.codex/config.toml set and the
+# lane silently inherited until now. intake.py contract-page writes this into frame.json
+# `reviewer_effort` beside `reviewer_pins`; the frame, not this table, is the source of truth. A frame
+# WITHOUT `reviewer_effort` (every frame signed before 2026-10-04) pins nothing, and every lane runs
+# at its CLI's own default exactly as before. Verifiers and raters are never pinned: they are
+# bounded checks and keep the CLI default they have always run at. Google has no pin (agy has no
+# effort flag).
+REVIEWER_EFFORT = {"anthropic": "xhigh", "frontier": "high", "openai": "xhigh"}
 
 
 # ── resolution ──────────────────────────────────────────────────────────────────────────────────
@@ -118,6 +128,22 @@ def pins(slug: str) -> Dict[str, str]:
     )
 
 
+def efforts(slug: str) -> Dict[str, str]:
+    """frame.json `reviewer_effort` {vendor: level}; {} for a frame that predates it (no pin)."""
+    return dict(
+        (kit.read_json(kit.records_dir(slug) / "frame.json", {}) or {}).get(
+            "reviewer_effort"
+        )
+        or {}
+    )
+
+
+def effort_for(pinned: Dict[str, str], vendor: str, role: str) -> Optional[str]:
+    """The effort one courier call runs at: the frame's pin for a REVIEWER, None (the CLI's own
+    default, unchanged) for a verifier or rater, so the reviewer pin never leaks into a bounded check."""
+    return pinned.get(vendor) if role == "reviewer" else None
+
+
 AGY_READS_NOTE = (
     "Shell commands are unavailable in this mode. Read and search the files in your working directory "
     "with your built-in file viewing and search tools only."
@@ -125,12 +151,19 @@ AGY_READS_NOTE = (
 
 
 def argv_for(
-    vendor: str, binary: str, prompt: str, model: Optional[str], cwd: Path
+    vendor: str,
+    binary: str,
+    prompt: str,
+    model: Optional[str],
+    cwd: Path,
+    effort: Optional[str] = None,
 ) -> List[str]:
+    """`effort` comes from effort_for(), which already dropped it for anything but a reviewer."""
     if LANE_BIN[vendor] == "ANTHROPIC":
         return (
             [binary, "-p", "--setting-sources", "local", "--strict-mcp-config", "--output-format", "json"]
             + (["--model", model] if model else [])
+            + (["--effort", effort] if effort else [])
             + [prompt]
         )
     if vendor == "openai":
@@ -146,6 +179,8 @@ def argv_for(
                 str(cwd),
             ]
             + (["-m", model] if model else [])
+            # explicit, so the lane no longer inherits whatever ~/.codex/config.toml says today
+            + (["-c", f'model_reasoning_effort="{effort}"'] if effort else [])
             + [prompt]
         )
     # Headless agy auto-denies every shell command, and its model reaches for one to read the bundle,
@@ -173,13 +208,14 @@ def call(
     model: Optional[str],
     cwd: Path,
     timeout: int,
+    effort: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run one vendor process. Returns {exit, raw, stderr, reply, model_ids, wall_s, error}."""
     env = dict(os.environ)
     t0 = time.time()
     try:
         p = subprocess.run(
-            argv_for(vendor, binary, prompt, model, cwd),
+            argv_for(vendor, binary, prompt, model, cwd, effort),
             cwd=str(cwd),
             env=env,
             stdin=subprocess.DEVNULL,
@@ -459,6 +495,7 @@ def cmd_run(a: argparse.Namespace) -> int:
             f"no bundle for round {a.round}; run courier.sh bundle first"
         )
     pinned = pins(a.program).get(a.vendor)
+    effort = effort_for(efforts(a.program), a.vendor, a.role)
     binary, how = resolve(a.vendor)
     pd = panel_dir(a.program, a.round)
     pd.mkdir(parents=True, exist_ok=True)
@@ -471,6 +508,9 @@ def cmd_run(a: argparse.Namespace) -> int:
         "strategy": a.strategy,
         "role": a.role,
         "pinned_model": pinned,
+        # the effort passed on argv; None = the CLI's own default (no pin, or not a reviewer).
+        # cc-research check-round voids a panel whose effort differs from the frame's pin.
+        "effort": effort,
         "bundle_hash": (b.parent / "bundle.sha256").read_text().strip(),
         "snapshot_sha": (
             kit.read_json(kit.records_dir(a.program) / "freeze.json", {}) or {}
@@ -490,7 +530,14 @@ def cmd_run(a: argparse.Namespace) -> int:
         (pd / f"{a.pid}.raw").write_text("")
     else:
         r = call(
-            a.program, a.vendor, binary, Path(a.brief).read_text(), pinned, b, a.timeout
+            a.program,
+            a.vendor,
+            binary,
+            Path(a.brief).read_text(),
+            pinned,
+            b,
+            a.timeout,
+            effort,
         )
         (pd / f"{a.pid}.raw").write_text(r["raw"])
         panel.update(

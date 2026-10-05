@@ -16,11 +16,14 @@ setup() {
   mkdir -p "$CC_RESEARCH_RECORDS" "$BATS_TEST_TMPDIR/bin" "$CC_RESEARCH_CODEX_SESSIONS"
   printf '{"reviewer_pins":{"anthropic":"claude-opus-5-5","frontier":"claude-fable-5-1","openai":"gpt-x","google":"gemini-x"}}\n' \
     > "$CC_RESEARCH_RECORDS/frame.json"
+  export FAKE_ARGV_LOG="$BATS_TEST_TMPDIR/argv.log"
   export FAKE_REPLY='{"lenses":[{"lens":"premise","result":"nothing material"}],"rows":[],"findings":[]}'
   B="$BATS_TEST_TMPDIR/bin"
   # claude: echoes the requested --model back as the responding model unless FAKE_MODEL overrides.
+  # claude and codex append their argv, one call per line, to $FAKE_ARGV_LOG.
   cat > "$B/claude" <<'EOF'
 #!/bin/bash
+printf 'claude %s\n' "$*" >> "$FAKE_ARGV_LOG"
 m=""; while [ $# -gt 0 ]; do [ "$1" = "--model" ] && m="$2"; shift; done
 [ -n "${FAKE_FAIL:-}" ] && { echo "boom" >&2; exit 1; }
 [ -n "${FAKE_SLEEP:-}" ] && sleep "$FAKE_SLEEP"
@@ -29,6 +32,7 @@ EOF
   # codex: emits the JSONL event stream and writes the session record that names the model.
   cat > "$B/codex" <<'EOF'
 #!/bin/bash
+printf 'codex %s\n' "$*" >> "$FAKE_ARGV_LOG"
 m=""; while [ $# -gt 0 ]; do [ "$1" = "-m" ] && m="$2"; shift; done
 t="thread-$$"
 printf '{"type":"session_meta","payload":{"model":"%s"}}\n' "${FAKE_MODEL:-$m}" > "$CC_RESEARCH_CODEX_SESSIONS/rollout-x-$t.jsonl"
@@ -163,6 +167,52 @@ panel() { /usr/bin/python3 -c "import json; d=json.load(open('$CC_RESEARCH_RECOR
   FAKE_MODEL=claude-opus-4-8 run "$C" run --program demo --round 1 --pid r1p3 --vendor frontier --strategy full-context --role reviewer --brief "$BRIEF"
   [ "$status" -eq 4 ]
   [ "$(panel r1p3 'd["status"]')" = "void" ]
+}
+
+# ── reviewer effort (decision 8c5cb4cdc518): frame.json reviewer_effort pins reviewers only ─────
+
+effort_frame() {
+  printf '{"reviewer_pins":{"anthropic":"claude-opus-5-5","frontier":"claude-fable-5-1","openai":"gpt-x","google":"gemini-x"},"reviewer_effort":{"anthropic":"xhigh","frontier":"high","openai":"xhigh"}}\n' \
+    > "$CC_RESEARCH_RECORDS/frame.json"
+}
+
+@test "run: an Opus reviewer runs at --effort xhigh, a Fable reviewer at high, each recorded on its panel" {
+  effort_frame
+  "$C" bundle --program demo --round 1 --plan "$BATS_TEST_TMPDIR/PLAN.md"
+  "$C" run --program demo --round 1 --pid opus --vendor anthropic --strategy full-context --role reviewer --brief "$BRIEF"
+  grep -F -- '--model claude-opus-5-5 --effort xhigh review the plan' "$FAKE_ARGV_LOG"
+  [ "$(panel opus 'd["status"], d["pinned_model"], d["effort"]')" = "complete claude-opus-5-5 xhigh" ]
+  : > "$FAKE_ARGV_LOG"
+  "$C" run --program demo --round 1 --pid fable --vendor frontier --strategy full-context --role reviewer --brief "$BRIEF"
+  grep -F -- '--model claude-fable-5-1 --effort high review the plan' "$FAKE_ARGV_LOG"
+  [ "$(panel fable 'd["effort"]')" = "high" ]
+}
+
+@test "run: the reviewer effort pin never reaches a verifier or a rater" {
+  effort_frame
+  "$C" bundle --program demo --round 1 --plan "$BATS_TEST_TMPDIR/PLAN.md"
+  "$C" run --program demo --round 1 --pid ver --vendor anthropic --strategy full-context --role verifier --brief "$BRIEF"
+  "$C" run --program demo --round 1 --pid rat --vendor openai --strategy full-context --role rater --brief "$BRIEF"
+  [ "$(grep -c -e '^claude ' -e '^codex ' "$FAKE_ARGV_LOG")" -eq 2 ]
+  ! grep -e '--effort' -e 'model_reasoning_effort' "$FAKE_ARGV_LOG" || false
+  [ "$(panel ver 'd["status"], d["effort"]')" = "complete None" ]
+}
+
+@test "run: the OpenAI reviewer carries an explicit model_reasoning_effort, not ~/.codex/config.toml's" {
+  effort_frame
+  "$C" bundle --program demo --round 1 --plan "$BATS_TEST_TMPDIR/PLAN.md"
+  "$C" run --program demo --round 1 --pid oai --vendor openai --strategy full-context --role reviewer --brief "$BRIEF"
+  grep -F -- '-m gpt-x -c model_reasoning_effort="xhigh" review the plan' "$FAKE_ARGV_LOG"
+  [ "$(panel oai 'd["status"], d["effort"]')" = "complete xhigh" ]
+}
+
+@test "run: a frame without reviewer_effort passes no effort, exactly as before the pin" {
+  "$C" bundle --program demo --round 1 --plan "$BATS_TEST_TMPDIR/PLAN.md"
+  "$C" run --program demo --round 1 --pid a --vendor anthropic --strategy full-context --role reviewer --brief "$BRIEF"
+  "$C" run --program demo --round 1 --pid o --vendor openai --strategy full-context --role reviewer --brief "$BRIEF"
+  [ "$(grep -c -e '^claude ' -e '^codex ' "$FAKE_ARGV_LOG")" -eq 2 ]
+  ! grep -e '--effort' -e 'model_reasoning_effort' "$FAKE_ARGV_LOG" || false
+  [ "$(panel a 'd["status"], d["effort"]')" = "complete None" ]
 }
 
 @test "preflight: the Google lane's responding model is read from Antigravity's own log" {

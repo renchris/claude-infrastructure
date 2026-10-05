@@ -151,9 +151,11 @@ fr = json.load(open(rec + "/frame.json"))
 page = open(rec + "/CONTRACT.md", "rb").read()
 assert fr["contract_page_sha256"] == hashlib.sha256(page).hexdigest()
 assert fr["reviewer_pins"] == {v: v + "-model" for v in ("anthropic", "frontier", "openai", "google")}
+assert fr["reviewer_effort"] == {"anthropic": "xhigh", "frontier": "high", "openai": "xhigh"}, fr.get("reviewer_effort")
 text = page.decode()
 for s in ("Definition of complete", "fixing a counted escape", "3 research days", "hard cap 6",
-          "ceiling (every loop at its cap) about 12 days", "upstream release"):
+          "ceiling (every loop at its cap) about 12 days", "upstream release",
+          "anthropic xhigh, frontier high, openai xhigh"):
     assert s in text, s
 PY
 }

@@ -22,7 +22,8 @@ Registry entry (wave A1's contract, never extended): `{"slug","aliases","cwd_roo
 ## Tracked records (fields the kit uses)
 
 - `frame.json`: SYNTHESIS shape, plus `profile` (`lite|standard|full`), `deliverable_repo` (abs path),
-  `reviewer_pins` `{anthropic, frontier, openai, google: model id}`, `rulings` `{definition_of_complete: {at, quote},
+  `reviewer_pins` `{anthropic, frontier, openai, google: model id}`, `reviewer_effort` `{vendor: effort}` (reviewers
+  only, written by `intake.py contract-page`; absent in a frame signed before 2026-10-04 = no pin, CLI default), `rulings` `{definition_of_complete: {at, quote},
   exemption: {at, quote}}` (§3.1), `fac_map` `[{fac, row|null, na_reason|null}]` covering FAC-01..FAC-33, `reask_map`
   `[{frame, axis|null, excluded_quote|null}]`, `sources_required` `[source id]`, `populations` `[name]`,
   `known_rows` `[{id, kind:"frame-omission", names_rows:[], blocks_waves:[], resign_due, default:"descope|class-b",

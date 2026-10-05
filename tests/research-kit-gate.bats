@@ -299,6 +299,12 @@ state() { /usr/bin/python3 -c "import json; print(json.load(open('$CC_RESEARCH_R
   [[ "$(rowtext 13)" == *"gpt-old"* ]]
 }
 
+@test "row 13: a counted round whose reviewer ran at an effort other than the frame's pin fails" {
+  [ "$(rowstat 13)" = "PASS" ]
+  jedit frame.json 'd["reviewer_effort"] = {"openai": "xhigh"}'
+  [[ "$(rowtext 13)" == *"r2p5 ran at effort CLI default, pinned xhigh"* ]]
+}
+
 @test "row 13: a counted round with a dead vendor lane fails" {
   jedit rounds/3/matrix.json 'd["lanes"]["google"] = "dead"'
   [[ "$(rowtext 13)" == *"dead vendor lane"* ]]
