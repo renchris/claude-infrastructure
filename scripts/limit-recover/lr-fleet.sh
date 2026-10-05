@@ -607,13 +607,16 @@ lf_admit_lock_take() { # → 0 this process owns $LF_ADMIT_LOCK · 1 could not t
   mkdir -p "$STATE" 2>/dev/null || true
   while :; do
     if mkdir "$LF_ADMIT_LOCK" 2>/dev/null; then
-      printf '%s\n' "$$" > "$LF_ADMIT_LOCK/pid" 2>/dev/null || true
+      if command -v lr_pidlock_stamp >/dev/null 2>&1; then lr_pidlock_stamp "$LF_ADMIT_LOCK" "$$" || true
+      else printf '%s\n' "$$" > "$LF_ADMIT_LOCK/pid" 2>/dev/null || true; fi
       return 0
     fi
     hp="$(cat "$LF_ADMIT_LOCK/pid" 2>/dev/null || true)"
     case "${hp:-x}" in
       ''|*[!0-9]*) : ;;
-      *) kill -0 "$hp" 2>/dev/null || {
+      # (pid, lstart), F1: a reused pid is a dead holder (lr-lib.sh lr_pidlock_live; the bare
+      # `kill -0` only where the library is not loaded).
+      *) { if command -v lr_pidlock_live >/dev/null 2>&1; then lr_pidlock_live "$LF_ADMIT_LOCK"; else kill -0 "$hp" 2>/dev/null; fi; } || {
            echo "lr-fleet: admit lock $LF_ADMIT_LOCK was held by pid $hp, which is DEAD — stealing it" >&2
            rm -rf "$LF_ADMIT_LOCK" 2>/dev/null || true; } ;;
     esac
@@ -621,7 +624,8 @@ lf_admit_lock_take() { # → 0 this process owns $LF_ADMIT_LOCK · 1 could not t
       echo "lr-fleet: admit lock $LF_ADMIT_LOCK held by pid ${hp:-?} for >$(( maxt / 5 ))s — STEALING it; a second recovery may be admitted against one capacity reading" >&2
       rm -rf "$LF_ADMIT_LOCK" 2>/dev/null || true
       mkdir "$LF_ADMIT_LOCK" 2>/dev/null || return 1
-      printf '%s\n' "$$" > "$LF_ADMIT_LOCK/pid" 2>/dev/null || true
+      if command -v lr_pidlock_stamp >/dev/null 2>&1; then lr_pidlock_stamp "$LF_ADMIT_LOCK" "$$" || true
+      else printf '%s\n' "$$" > "$LF_ADMIT_LOCK/pid" 2>/dev/null || true; fi
       return 0
     fi
     sleep 0.2; t=$(( t + 1 ))
@@ -1387,11 +1391,15 @@ lf_one_slot_take() { # → 0 and LF_ONE_SLOT set · 1 every slot stayed held for
     i=1
     while [ "$i" -le "$n" ]; do
       d="$LF_ONE_SLOTS/slot-$i"; i=$((i + 1))
-      if mkdir "$d" 2>/dev/null; then printf '%s\n' "$$" > "$d/pid"; LF_ONE_SLOT="$d"; return 0; fi
+      if mkdir "$d" 2>/dev/null; then
+        if command -v lr_pidlock_stamp >/dev/null 2>&1; then lr_pidlock_stamp "$d" "$$" || true; else printf '%s\n' "$$" > "$d/pid"; fi
+        LF_ONE_SLOT="$d"; return 0
+      fi
       hp="$(cat "$d/pid" 2>/dev/null || true)"
       case "$hp" in
         ''|*[!0-9]*) [ -n "$(find "$d" -maxdepth 0 -mmin +1 2>/dev/null)" ] || continue ;;
-        *) kill -0 "$hp" 2>/dev/null && continue ;;
+        *) if command -v lr_pidlock_live >/dev/null 2>&1; then lr_pidlock_live "$d" && continue
+           else kill -0 "$hp" 2>/dev/null && continue; fi ;;
       esac
       echo "lr-fleet: --one slot $d held by ${hp:-no pid}, which is gone — taking it" >&2
       rm -rf "$d" 2>/dev/null

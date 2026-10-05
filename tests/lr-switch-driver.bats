@@ -700,3 +700,66 @@ bg_result() { cat "$LRU_STATE/results/switch-$BGSID.json"; }
   [ "$(jq -r .verdict "$LRU_STATE/results/switch-$BGSID.json")" = FAILED ] || { bg_result; false; }
   [ "$(cut -d' ' -f1 "$A" | sort -u | tr '\n' ' ')" = "stop " ] || { echo "acted past a failed stop:"; cat "$A"; false; }
 }
+
+# ── R. A ROUND-TRIP LEAVES A FOREIGN TOMBSTONE: retired-source (F4, 2026-10-04) ───────────────────
+# 8e18da3f and 762a6daa: live in store S, beside the tombstone of an earlier departure to T. The
+# prompt guard blocks every prompt there, and the census rated both `move`.
+RSID=cccccccc-0000-4000-8000-0000000000aa
+tomb() { # $1=handed_off_to dir [$2=phase]
+  printf '{"session_id":"%s","handed_off_to":"%s","ts":"2026-10-03T02:28:00Z"%s}\n' "$RSID" "$1" "${2:+,\"phase\":\"$2\"}" \
+    > "$HOME/.claude-tertiary/projects/-x/$RSID.HANDOFF.json"
+}
+
+@test "R1 [RED] a live row whose own store holds a tombstone naming another account is retired-source, never move" {
+  sess 430 "$RSID"
+  tomb "$HOME/.claude-quaternary"
+  run bash "$LRU" --switch-census --from next3 --target next2
+  [ "$status" -eq 0 ]
+  [ "$(disp_of 430)" = retired-source ]
+}
+
+@test "R1 control: LRU_RETIRED_SOURCE=off replays the old census — the deaf row is rated move" {
+  sess 430 "$RSID"
+  tomb "$HOME/.claude-quaternary"
+  LRU_RETIRED_SOURCE=off run bash "$LRU" --switch-census --from next3 --target next2
+  [ "$status" -eq 0 ]
+  [ "$(disp_of 430)" = move ]
+}
+
+@test "R2 a tombstone naming the row's OWN store, or a half-done admit with no retired copy, is not retired-source" {
+  sess 430 "$RSID"
+  tomb "$HOME/.claude-tertiary"
+  run bash "$LRU" --switch-census --from next3 --target next2
+  [ "$(disp_of 430)" = move ]
+  tomb "$HOME/.claude-quaternary" admit
+  run bash "$LRU" --switch-census --from next3 --target next2
+  [ "$(disp_of 430)" = move ]
+  : > "$HOME/.claude-tertiary/projects/-x/$RSID.jsonl.handed-off"
+  run bash "$LRU" --switch-census --from next3 --target next2
+  [ "$(disp_of 430)" = retired-source ]
+}
+
+@test "R3 retired-source is not a hold that ends by itself" {
+  run bash "$LRU" --switch-waitable retired-source
+  [ "$status" -ne 0 ]
+}
+
+# ── S. ONE ROW PER BG SESSION THROUGH A SYMLINKED sessions/ (F7) ──────────────────────────────────
+@test "S1 [RED] a bg session reached through a second, symlinked sessions dir is listed once" {
+  bgfix idle
+  mkdir -p "$HOME/.claude-zz"
+  ln -s "$HOME/.claude-quaternary/sessions" "$HOME/.claude-zz/sessions"
+  run bash "$LRU" --switch-census --target next2
+  [ "$status" -eq 0 ]
+  [ "$(row_of "$BGSID" | grep -c .)" -eq 1 ]
+  [ "$(row_of "$BGSID" | cut -f3)" = next4 ]
+}
+
+@test "S1 control: LRU_BG_DEDUPE=off replays the old glob — the same bg session is listed twice" {
+  bgfix idle
+  mkdir -p "$HOME/.claude-zz"
+  ln -s "$HOME/.claude-quaternary/sessions" "$HOME/.claude-zz/sessions"
+  LRU_BG_DEDUPE=off run bash "$LRU" --switch-census --target next2
+  [ "$status" -eq 0 ]
+  [ "$(row_of "$BGSID" | grep -c .)" -eq 2 ]
+}

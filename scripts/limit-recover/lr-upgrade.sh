@@ -741,9 +741,18 @@ lru_bg_attach_pids() { # $1=snapshot $2=jobId → space-joined pids of live `cla
 # Columns 8 and 9 are "-" when empty, never blank: tab is IFS whitespace, so `read` collapses an empty
 # middle field and column 9 would land in column 8 (the spawner's slot).
 lru_bg_sessions() { # $1=snapshot → TSV: sid pid cfg account cwd status jobId host_pid attach_pids — LIVE bg sessions only
-  local f sid pid cfg job st cwd host att
+  local f sid pid cfg job st cwd host att sd sdp seen=""
   for f in "${LRU_CFG_ROOT%/}"/.claude*/sessions/*.json; do
     [ -f "$f" ] || continue
+    # ONE ROW PER SESSION FILE (F7). ~/.claude-next/sessions is a symlink to ~/.claude/sessions, so
+    # the glob reaches every `next` bg session twice and the census listed it as two rows; the second
+    # then read as a duplicate holder. Dedupe on the physical sessions dir, as lr_config_dirs does
+    # for projects/. The first spelling in glob order (.claude) names the row. Kill switch
+    # LRU_BG_DEDUPE=off.
+    if [ "${LRU_BG_DEDUPE:-on}" != off ]; then
+      sd="${f%/*}"; sdp="$(cd "$sd" 2>/dev/null && pwd -P || printf '%s' "$sd")"
+      case "$seen" in *"|$sdp=$sd|"*) ;; *"|$sdp="*) continue ;; *) seen="$seen|$sdp=$sd|" ;; esac
+    fi
     [ "$(jq -r '.kind // empty' "$f" 2>/dev/null)" = bg ] || continue
     sid="$(jq -r '.sessionId // empty' "$f" 2>/dev/null)"; pid="$(jq -r '.pid // empty' "$f" 2>/dev/null)"
     [ -n "$sid" ] && [ -n "$pid" ] || continue
@@ -876,6 +885,28 @@ lru_acct_cfg() { # $1=account name → its config dir; rc 1 when the map does no
 # → TSV rows on stdout; rc 1 when nothing matched. The selection happens BEFORE any judging (the
 # subagent probe loads handoff-fire, the composer read is an RPC), but duplicates are still read
 # off the whole fleet's live pass, so a filtered row is never judged against a partial population.
+# A LIVE ROW THAT CANNOT TAKE A PROMPT (F4, 2026-10-04). A session that left store S for T and later
+# came BACK to S can find, beside its live transcript in S, the tombstone of its first departure,
+# still naming T. hooks/handed-off-session-guard.sh then refuses every prompt typed into that pane
+# ("THIS PANE IS A RETIRED SOURCE"): 8e18da3f was deaf for about 23 h and 762a6daa blocked 3 prompts
+# within 2 h of its move, while this census rated both `move`. The rule is the guard's own, restated
+# on the same three facts so the two cannot disagree about a row: a tombstone beside the transcript
+# names another ACCOUNT (.claude and .claude-next are one), and it is not the half-done move the
+# guard tolerates (phase admit, with no retired copy beside the transcript). The cure is a rename,
+# `cc-lr repair-markers --sid <sid>`; lr-transplant's confirm sweep prevents new ones.
+# Kill switch LRU_RETIRED_SOURCE=off: the row is judged as before.
+lru_store_acct() { case "$(basename "${1%/}")" in .claude|.claude-next) printf 'next' ;; *) basename "${1%/}" ;; esac; }
+lru_retired_source() { # $1=the row's live transcript $2=the row's config dir → 0 a foreign tombstone blocks its prompts
+  local tomb="${1%.jsonl}.HANDOFF.json" to phase
+  [ "${LRU_RETIRED_SOURCE:-on}" = off ] && return 1
+  [ -f "$tomb" ] || return 1
+  to="$(jq -r '.handed_off_to // empty' "$tomb" 2>/dev/null)"
+  [ -n "$to" ] || return 1
+  [ "$(lru_store_acct "$to")" != "$(lru_store_acct "$2")" ] || return 1
+  phase="$(jq -r '.phase // empty' "$tomb" 2>/dev/null)"
+  if [ "$phase" = admit ] && [ ! -e "$1.handed-off" ]; then return 1; fi
+  return 0
+}
 lru_switch_census() {
   local from="${1:-}" target="${2:-}" sel="${3:-}" snap pass dups k f sid pane pid acct cwd cfg args tx disp out="" bgs hostpids=""
   snap="$(lru_snapshot)"
@@ -906,6 +937,7 @@ lru_switch_census() {
       if [ -z "$disp" ]; then
         tx="$(lru_transcript "$cfg" "$sid" || true)"
         if [ -z "$tx" ]; then disp=no-transcript
+        elif lru_retired_source "$tx" "$cfg"; then disp=retired-source
         elif ! lru_at_rest "$tx"; then
           # A frozen parent whose pane spawned a LIVE bg session is showing that session, not
           # working: judge it by the bg session (listed as its own row below), never as mid-turn.
@@ -1212,6 +1244,9 @@ lru_mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo
 # a holder that is DEAD is stolen, a live one refuses. A bare `mkdir` here refused forever on a claim
 # an lr-fleet driver left behind a day earlier (pane 33, 2026-10-02). Without the lib (hermetic
 # tests), the bare mkdir is kept.
+lru_lock_live() { # $1=lock dir $2=its pid → 0 the holder is alive (by (pid, lstart) when lr-lib.sh is loaded)
+  if command -v lr_pidlock_live >/dev/null 2>&1; then lr_pidlock_live "$1"; else kill -0 "$2" 2>/dev/null; fi
+}
 lru_mutex_take() { # $1=sid $2=pane $3=by → 0 taken · 1 held
   if command -v lr_claim_take >/dev/null 2>&1; then
     lr_claim_take "$UPG_MUTEX_DIR" "$1" "$3" "$2" "$$" >/dev/null; return
@@ -1776,6 +1811,11 @@ lru_mint_launcher() { # $1=run dir $2=cfg $3=cwd $4=sid $5=model $6=effort $7=pe
     printf 'export LR_RUN=%q\n' "$d"
     printf 'export LR_RUN_DIR=%q\n' "$d"
     printf 'export LR_ADMIT_TOKEN=%q\n' "$tok"
+    # The swap's segment ceiling rides in the launcher (F12): lr-fire-resume's in-pane gate reads
+    # LR_SEGMENT_PCT and falls back to the 50% SPAWN ceiling without it, so an upgrade relaunch (one
+    # claude out, one in) was refused after its /exit whenever segments sat between 50 and 90%.
+    # lr-handoff's launcher already carries it. Kill switch LRU_SEGMENT_EXPORT=off.
+    [ "${LRU_SEGMENT_EXPORT:-on}" = off ] || printf 'export LR_SEGMENT_PCT=%q\n' "${LR_SEGMENT_PCT:-90}"
     printf 'export LR_SUBMIT_TOKEN=%q\n' "$sub"
     if [ "$role" = lead ]; then
       # The old process has exited (this line only runs at a shell prompt) and the new one has not
@@ -2308,11 +2348,13 @@ lru_drain() {
   local q sid pane by req scrub kind tgt n=0
   mkdir -p "$UPG_QUEUE" "$UPG_CLAIMED" 2>/dev/null || true
   if ! mkdir "$UPG_LOCK" 2>/dev/null; then
+    # (pid, lstart), not the pid alone (F1): a dead drainer's pid is reused within ~86 s on this box,
+    # and `kill -0` on the stranger then read "drain already running" for as long as it lived.
     local hp; hp="$(cat "$UPG_LOCK/pid" 2>/dev/null || true)"
-    if [ -n "$hp" ] && kill -0 "$hp" 2>/dev/null; then lru_say "drain already running (pid $hp)"; return 0; fi
+    if [ -n "$hp" ] && lru_lock_live "$UPG_LOCK" "$hp"; then lru_say "drain already running (pid $hp)"; return 0; fi
     rm -rf "$UPG_LOCK"; mkdir "$UPG_LOCK" 2>/dev/null || { lru_say "could not take $UPG_LOCK"; return 2; }
   fi
-  echo "$$" > "$UPG_LOCK/pid"
+  if command -v lr_pidlock_stamp >/dev/null 2>&1; then lr_pidlock_stamp "$UPG_LOCK" "$$" || true; else echo "$$" > "$UPG_LOCK/pid"; fi
   # shellcheck disable=SC2064
   trap "rm -rf '$UPG_LOCK'" EXIT
   # --until-idle: each drain re-judges every parked switch ONCE (see lru_switch_waitable). Promoted
@@ -2320,17 +2362,34 @@ lru_drain() {
   local d dn=0
   for d in "$UPG_DEFER"/*.json; do [ -f "$d" ] && mv -f "$d" "$UPG_QUEUE/" 2>/dev/null && dn=$((dn + 1)); done
   [ "$dn" -eq 0 ] || lru_say "re-judging $dn switch request(s) parked until idle"
-  local urc uts
+  local urc uts c unclaimed=""
   while :; do
+    # The oldest request this drain has not already failed to claim (F2, below).
+    q=""
     # shellcheck disable=SC2012  # names are ours (cc-lr-upgrade-<uuid>.json); ls -tr is the mtime order
-    q="$(ls -1tr "$UPG_QUEUE"/*.json 2>/dev/null | head -1)"
+    while IFS= read -r c; do
+      case $'\n'"$unclaimed"$'\n' in *$'\n'"$c"$'\n'*) continue ;; esac
+      q="$c"; break
+    done < <(ls -1tr "$UPG_QUEUE"/*.json 2>/dev/null)
     [ -n "$q" ] || break
     sid="$(jq -r '.sid // empty' "$q" 2>/dev/null)"; pane="$(jq -r '.source_pane // empty' "$q" 2>/dev/null)"
     by="$(jq -r '.requested_by // "?"' "$q" 2>/dev/null)"; req="$(jq -r '.req_id // empty' "$q" 2>/dev/null)"
     scrub="$(jq -r '.scrub_composer // empty' "$q" 2>/dev/null)"
     kind="$(jq -r '.kind // "upgrade"' "$q" 2>/dev/null)"; tgt="$(jq -r '.target // empty' "$q" 2>/dev/null)"
     uts="$(jq -r '.until_ts // 0' "$q" 2>/dev/null)"
-    mv -f "$q" "$UPG_CLAIMED/" 2>/dev/null || rm -f "$q"
+    # DRIVE ONLY WHAT THIS DRAIN CLAIMED (F2, 2026-10-04). The rename into claimed/ is the claim: two
+    # drainers that both read one request (a lock stolen on a reused pid, or two entry points) are
+    # told apart only by which rename succeeded. The line used to read `|| rm -f "$q"`, so the loser
+    # deleted the request and then DROVE it anyway: a second typer into one pane. A request that
+    # cannot be claimed is left where it is and skipped for the rest of this drain (never re-picked,
+    # so an unwritable claimed/ cannot spin the loop). Kill switch LRU_CLAIM_STRICT=off.
+    if ! mv -f "$q" "$UPG_CLAIMED/" 2>/dev/null; then
+      if [ "${LRU_CLAIM_STRICT:-on}" = off ]; then rm -f "$q"
+      else
+        lru_say "request ${q##*/} could not be claimed into $UPG_CLAIMED (another drainer took it, or the directory is not writable) - not driven"
+        unclaimed="${unclaimed:+$unclaimed$'\n'}$q"; continue
+      fi
+    fi
     # A marker set-aside names a SESSION, not a pane (it types nothing), so it needs only .sid.
     if [ -z "$sid" ] || { [ -z "$pane" ] && [ "$kind" != marker-setaside ]; }; then lru_say "malformed request $q (no sid/pane) - dropped to claimed/"; continue; fi
     [ "$n" -gt 0 ] && [ "$kind" != marker-setaside ] && sleep "$LRU_GAP_S"

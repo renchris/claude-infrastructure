@@ -226,6 +226,15 @@ census() { run bash "$LRU" --census --all; }
 # shellcheck disable=SC1090  # the subject, resolved from the repo at runtime
 mint() { ( . "$LRU"; lru_mint_launcher "$@" ); }
 
+@test "B0 [RED] the launcher exports the 90% swap segment ceiling; LRU_SEGMENT_EXPORT=off omits it" {
+  run mint "$BATS_TEST_TMPDIR/run0" "$CFG" "$BATS_TEST_TMPDIR" 16161616-0000-4000-8000-000000000000 claude-opus-5-5 high auto /tmp/tok
+  [ "$status" -eq 0 ]
+  grep -q '^export LR_SEGMENT_PCT=90$' "$output"
+  LRU_SEGMENT_EXPORT=off run mint "$BATS_TEST_TMPDIR/run0b" "$CFG" "$BATS_TEST_TMPDIR" 16161616-0000-4000-8000-000000000000 claude-opus-5-5 high auto /tmp/tok
+  [ "$status" -eq 0 ]
+  ! grep -q 'LR_SEGMENT_PCT' "$output"
+}
+
 @test "B1 the launcher resumes the SAME uuid on the SAME account via lr-fire-resume, pure ASCII" {
   run mint "$BATS_TEST_TMPDIR/run1" "$CFG" "$BATS_TEST_TMPDIR" 16161616-0000-4000-8000-000000000001 claude-opus-5-5 high auto /tmp/tok
   [ "$status" -eq 0 ] || { echo "$output"; false; }
@@ -352,6 +361,27 @@ await_file() { local i=0; while [ ! -s "$1" ] && [ "$i" -lt 50 ]; do sleep 0.1; 
   [[ "$(jq -r .reason "$LRU_STATE/results/upgrade-22222222-0000-4000-8000-00000000dead.json")" == "not live"* ]] || false
   [ ! -s "$BATS_TEST_TMPDIR/hf.log" ] || { echo "handoff-fire was invoked for a session that failed re-judgement"; false; }
   [ -z "$(ls -A "$LRU_STATE/upgrade-queue")" ] && [ -f "$LRU_STATE/claimed/a.json" ] && [ ! -e "$LRU_STATE/upgrade-drain.lock" ]
+}
+
+@test "C6 [RED] a request the drain could not claim into claimed/ is NOT driven, and the drain ends" {
+  # claimed/ is a FILE here, so the rename that is the claim fails for every request.
+  mkdir -p "$LRU_STATE/upgrade-queue"; : > "$LRU_STATE/claimed"
+  printf '{"kind":"upgrade","sid":"23232323-0000-4000-8000-00000000dead","source_pane":"533","req_id":"r3"}\n' > "$LRU_STATE/upgrade-queue/c.json"
+  run bash "$LRU" --drain
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"could not be claimed"* ]]
+  [ ! -e "$LRU_STATE/results/upgrade-23232323-0000-4000-8000-00000000dead.json" ]
+  [ -f "$LRU_STATE/upgrade-queue/c.json" ]
+  [[ "$output" == *"drain done: 0 session(s)"* ]]
+}
+
+@test "C6 control: LRU_CLAIM_STRICT=off replays the old line — the unclaimed request is deleted and DRIVEN" {
+  mkdir -p "$LRU_STATE/upgrade-queue"; : > "$LRU_STATE/claimed"
+  printf '{"kind":"upgrade","sid":"23232323-0000-4000-8000-00000000dead","source_pane":"533","req_id":"r3"}\n' > "$LRU_STATE/upgrade-queue/c.json"
+  LRU_CLAIM_STRICT=off run bash "$LRU" --drain
+  [ "$status" -eq 0 ]
+  [ -f "$LRU_STATE/results/upgrade-23232323-0000-4000-8000-00000000dead.json" ]
+  [ ! -e "$LRU_STATE/upgrade-queue/c.json" ]
 }
 
 # ── D. THE GATE BEFORE THE EXIT ───────────────────────────────────────────────────────────────────

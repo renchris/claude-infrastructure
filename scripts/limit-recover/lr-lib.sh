@@ -564,7 +564,8 @@ lr_holder_count() { # $1=sid → number of DISTINCT live holders (registry panes
 # The contract, for every taker:
 #   · the holder file ALWAYS names a pid, written atomically (tmp + mv), and the taker RE-STAMPS it
 #     with the dispatched driver's pid, so the claim lives exactly as long as the work;
-#   · holder pid ALIVE → refuse · holder pid DEAD → steal at once, loudly;
+#   · holder ALIVE → refuse · holder DEAD → steal at once, loudly ("alive" is (pid, lstart): see
+#     lr_pid_lstart below);
 #   · NO holder (a legacy claim, or a taker between mkdir and its stamp) → steal once it is older
 #     than LR_CLAIM_ORPHAN_GRACE_S (default 10 s, which covers the stamp window) AND no live
 #     recovery process names the sid in its argv. Not after 30 minutes: an orphan is a fact, not age.
@@ -585,10 +586,58 @@ lr_claim_age_s() { # $1=dir → age in seconds, 999999 when unreadable
   m="$(stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || true)"
   case "${m:-x}" in ''|*[!0-9]*) printf '999999' ;; *) printf '%s' $(( $(date +%s) - m )) ;; esac
 }
+# THE HOLDER IS (pid, lstart), NOT A PID (F1, 2026-10-04). This box forks ~1,162 pids/s, so the pid
+# space wraps about every 86 s and a dead holder's pid is soon some unrelated LIVE process: `kill -0`
+# then reads the claim as held-live for as long as that stranger runs. lstart is the rendering
+# lr_recon/store.py's proc_lstart writes into the same holder file (TZ=UTC LC_ALL=C, runs of blanks
+# collapsed), so a claim stamped by either side is judged the same way by both.
+#   · pid alive and the recorded lstart is its lstart  → the holder, alive;
+#   · pid alive under a DIFFERENT lstart               → the pid was reused: the holder is dead;
+#   · no recorded lstart (a holder stamped before this) → judged by its pid alone, as before. Not
+#     "unproven ⇒ steal": the takers that stamp their OWN pid (lr-upgrade's drain, the poller,
+#     cc-lr) are not in lr_claim_drivers' census, so a drain that was mid-drive when this deployed
+#     would have had its claim stolen and a second typer started in its pane. A legacy holder is
+#     gone as soon as the process that wrote it is, so the old blindness ends with those processes;
+#   · the pid's lstart cannot be read while kill -0 succeeds → held: only an affirmative mismatch steals.
+# Kill switch LR_CLAIM_LSTART=off: pid-only judgment, as before.
+lr_pid_lstart() { # $1=pid → its start time, normalised; empty when there is no such process
+  TZ=UTC LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null | tr -s '[:blank:]' ' ' | sed -e 's/^ //' -e 's/ $//'
+}
+# The same identity for the plain mkdir locks that keep a `pid` file (lr-upgrade's drain lock,
+# lr-fleet's admit lock and --one slots): the taker writes `lstart` beside `pid`, and the judge
+# reads both. A lock with no `lstart` file (taken by a pre-F1 process) keeps the pid-only judgment.
+lr_pidlock_stamp() { # $1=lock dir [$2=pid, default $$] → writes pid and lstart; rc 1 when pid cannot be written
+  local p="${2:-$$}"
+  printf '%s\n' "$p" > "$1/pid" 2>/dev/null || return 1
+  lr_pid_lstart "$p" > "$1/lstart" 2>/dev/null || true
+}
+lr_pidlock_live() { # $1=lock dir → 0 its holder is alive · 1 dead, reused or unnamed
+  local p l cur
+  p="$(cat "$1/pid" 2>/dev/null || true)"
+  case "${p:-x}" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$p" 2>/dev/null || return 1
+  [ "${LR_CLAIM_LSTART:-on}" = off ] && return 0
+  l="$(tr -s '[:blank:]' ' ' < "$1/lstart" 2>/dev/null | sed -e 's/^ //' -e 's/ $//')"
+  [ -n "$l" ] || return 0
+  cur="$(lr_pid_lstart "$p")"
+  [ -z "$cur" ] || [ "$cur" = "$l" ]
+}
+lr_claim_holder_lstart() { # $1=claim dir → the holder's recorded lstart on stdout (empty for a legacy holder)
+  sed -n 's/.*"lstart":"\([^"]*\)".*/\1/p' "$1/holder" 2>/dev/null | sed -n '1p'
+}
+lr_claim_holder_state() { # $1=claim dir $2=holder pid → live | dead | reused
+  local hl cur
+  kill -0 "$2" 2>/dev/null || { printf 'dead'; return 0; }
+  [ "${LR_CLAIM_LSTART:-on}" = off ] && { printf 'live'; return 0; }
+  hl="$(lr_claim_holder_lstart "$1")"
+  [ -n "$hl" ] || { printf 'live'; return 0; }
+  cur="$(lr_pid_lstart "$2")"
+  if [ -n "$cur" ] && [ "$cur" != "$hl" ]; then printf 'reused'; else printf 'live'; fi
+}
 lr_claim_stamp() { # $1=dir $2=sid $3=pid $4=by [$5=pane] → writes the holder atomically; rc 1 on failure
   local t="$1/.holder.$$.$RANDOM"
-  printf '{"sid":"%s","pane":"%s","pid":%d,"ts":"%s","by":"%s"}\n' \
-    "$2" "${5:--}" "$3" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$4" > "$t" 2>/dev/null \
+  printf '{"sid":"%s","pane":"%s","pid":%d,"ts":"%s","by":"%s","lstart":"%s"}\n' \
+    "$2" "${5:--}" "$3" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$4" "$(lr_pid_lstart "$3")" > "$t" 2>/dev/null \
     && mv -f "$t" "$1/holder" 2>/dev/null && return 0
   rm -f "$t" 2>/dev/null; return 1
 }
@@ -611,10 +660,14 @@ lr_claim_take() { # $1=root $2=sid $3=by [$4=pane] [$5=pid] → claim path on st
   mkdir -p "$root" 2>/dev/null || { echo "lr-claim: verdict=cannot-create root=$root" >&2; return 2; }
   if ! mkdir "$d" 2>/dev/null; then
     if hp="$(lr_claim_holder_pid "$d")"; then
-      if kill -0 "$hp" 2>/dev/null; then
-        echo "lr-claim: verdict=held-live sid=${sid:0:8} pid=$hp claim=$d — already being recovered by pid $hp; one actuator per session" >&2; return 1
-      fi
-      echo "lr-claim: verdict=stolen-dead-holder sid=${sid:0:8} pid=$hp claim=$d — held by pid $hp, which is DEAD — stealing it" >&2
+      case "$(lr_claim_holder_state "$d" "$hp")" in
+        live)
+          echo "lr-claim: verdict=held-live sid=${sid:0:8} pid=$hp claim=$d — already being recovered by pid $hp; one actuator per session" >&2; return 1 ;;
+        reused)
+          echo "lr-claim: verdict=stolen-pid-reused sid=${sid:0:8} pid=$hp claim=$d — pid $hp is alive but started at '$(lr_pid_lstart "$hp")', not the holder's '$(lr_claim_holder_lstart "$d")': the holder is DEAD and its pid was reused — stealing it" >&2 ;;
+        *)
+          echo "lr-claim: verdict=stolen-dead-holder sid=${sid:0:8} pid=$hp claim=$d — held by pid $hp, which is DEAD — stealing it" >&2 ;;
+      esac
     else
       hp=""
       grace="${LR_CLAIM_ORPHAN_GRACE_S:-10}"; case "$grace" in ''|*[!0-9]*) grace=10 ;; esac
