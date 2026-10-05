@@ -51,6 +51,21 @@ def tasks():
     )
 
 
+def heldout():
+    """Task ids pinned in a HELDOUT-MANIFEST.sha256 (harness/tasks and $GATE_TASKS). A plan without
+    --tasks skips them: the held-out confirm (GATE.md § Held-out re-gate) names them explicitly, and
+    an editing round that ran and judged them would end their held-out status."""
+    ids = set()
+    for d in {TASKS, f"{H}/tasks"}:
+        m = f"{d}/HELDOUT-MANIFEST.sha256"
+        if os.path.isfile(m):
+            for ln in open(m):
+                parts = ln.split()[-1].split("/") if ln.strip() else []
+                if len(parts) >= 3 and parts[0] == "tasks":
+                    ids.add(parts[1])
+    return ids
+
+
 def plan(accounts, arms=("full", "slim"), nreps=10, only=None, reps_map=None, offset=0):
     """Defaults reproduce the F1 plan exactly. F3/F4 pass --arms, --reps, --tasks, --reps-map:
     order is ABBA repeated and cut at the rep count; blocks are runs of 4 reps on one account.
@@ -60,7 +75,9 @@ def plan(accounts, arms=("full", "slim"), nreps=10, only=None, reps_map=None, of
         print(f"schedule exists: {SCHED}")
         return
     cells, k = [], 0
-    for ti, t in enumerate(t for t in tasks() if not only or t in only):
+    held = heldout()
+    chosen = [t for t in tasks() if (t in only if only else t not in held)]
+    for ti, t in enumerate(chosen):
         a, b = arms if int(t[1:3]) % 2 == 0 else arms[::-1]
         n = (reps_map or {}).get(t, nreps)
         order = [(a, b, b, a)[i % 4] for i in range(n)]
@@ -82,7 +99,7 @@ def plan(accounts, arms=("full", "slim"), nreps=10, only=None, reps_map=None, of
                     )
                 )
     json.dump(cells, open(SCHED, "w"), indent=1)
-    print(f"planned {len(cells)} cells over {len(tasks())} tasks on {accounts}")
+    print(f"planned {len(cells)} cells over {len(chosen)} tasks on {accounts}")
 
 
 def quota():

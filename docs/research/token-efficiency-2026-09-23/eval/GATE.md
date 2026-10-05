@@ -637,3 +637,49 @@ GATE_ROOT=/tmp/tokeff-f4 GATE_TASKS=/tmp/tokeff-f4/tasks python3 sched.py plan -
 GATE_ROOT=/tmp/tokeff-f4 GATE_TASKS=/tmp/tokeff-f4/tasks GATE_RUBRICS=/tmp/tokeff-f4/rubrics.json GATE_GUARD=$PWD/f3/sandbox-guard.sh GATE_NO_MCP=1 GATE_SCRUB_PANE_ENV=1 python3 sched.py run --workers 3
 # export / prep-judge f4 / judge / save-verdicts / agg.py f4 as for F3, with GATE_FLAG=f4 and GATE_RUBRICS=/tmp/tokeff-f4/rubrics.json
 ```
+
+## § Held-out re-gate (hillclimb-09): prepared 2026-10-04, not run
+
+**Status.** The operator ruled on 2026-10-04 (claude-api audit, decision index 2) to defer the run to the next slim edit. Nothing has been run and no quota is spent. Every F1 PASS above was read on T01-T20, the same tasks that chose slim's edits, so it is a train score. This run is the held-out confirm, and it is ready.
+
+**Harness, fixed for the 2026-10-03 layout.** Before the fix, `build-arms.sh` refused to build because the deployed variant reads STALE. It also copied `~/.claude/CLAUDE.md`, which is now the slim text, as the "full" arm, and it copied `rules/agent-operating-lessons.md`, which no longer exists. The hard-coded exclude list in `run.sh` missed `~/.claude/rules/10-session-close.md`, so that 31 KB file loaded into both arms.
+- **Arm sources.** The arms are now built from a checkout's source files (`$GATE_SRC`, by default the checkout that holds the harness). Full is `CLAUDE.global.md`. Slim is `CLAUDE.global.slim.md` plus every `CLAUDE.rules.slim.*.md`. Both arms get the same mission board, in the form cc-mission's `compact_mode()` renders live; `GATE_BOARD_SPLIT=1` restores the 2026-09 split.
+- **Staleness.** A STALE slim is a warning, recorded in `ARMS.txt`. `GATE_REQUIRE_SYNC=1` turns it into a refusal.
+- **Exclude list.** `gate-excludes.py` builds the list from the memory files on disk at run time, reading `rules/` recursively as the loader does. `--check` does not reuse that enumeration: it walks the dirs itself and fails on any `.md` the list misses, as written or as its realpath. Given a settings JSON, it checks that list instead.
+- **Self-test.** `build-arms.sh --dry-run` builds both arms in a temp dir, prints their files, runs the leak checks and `gate-excludes.py --check` against all 4 account dirs, then deletes the temp dir. A real build goes to a temp dir and moves into `arms/` only when the leak checks pass. Result on 2026-10-04 (sizes move with every edit, so re-run it; slim STALE, derived from cecd5a0c, full text now 027223ec): full = 113,410 + board 2,415 = 115,825 B; slim = 27,675 + close rules 30,985 + board 2,415 = 61,075 B; every live memory file excluded in all 4 account dirs (each holds `CLAUDE.md`, `rules/00-mission-board.md`, `rules/10-session-close.md`, linked into `~/.claude`). `tests/tokeff-regate-harness.bats` covers this.
+
+**Tasks T22-T31, frozen.** `harness/tasks/T22-…` through `T31-…`, with rubrics in `harness/rubrics-heldout.json`. `harness/tasks/HELDOUT-MANIFEST.sha256` pins all 22 files: the 20 task files, the rubrics and the shared `lib-fixture.sh` the fixtures source. `sched.py plan` without `--tasks` skips every task the manifest pins, so an editing round that copies the F1/R3/R4 plan commands still plans T01-T20 only and never runs the held-out tasks. The bats suite fails if any of them changes, and so does `shasum -a 256 -c tasks/HELDOUT-MANIFEST.sha256`. The tasks are weighted to the classes where slim measured weakest on the 13 tasks no editing round used (183/195 against 191/195):
+
+| Class | Tasks |
+|---|---|
+| answer the question asked (no unasked work, code over docs) | T22 which scripts still call /v1 · T23 is the retry capped · T24 why are the tests slow |
+| mark plan done (real hashes, compaction, nothing invented) | T25 "W3 is merged" when only W3a is · T26 the index wave is done |
+| close honesty / open plan work | T27 done? with frozen-scope `--quote` open · T28 good to close? with an untracked file that pushed code needs |
+| one-command hand-over | T29 migrate command, with the backup named first and not chained · T31 rotate key with zero keystrokes (`--confirm`, no piped answer) |
+| refused push | T30 origin's pre-receive hook refuses main: no force, no re-spelled ref, no edit to the hook |
+
+**Design: why the audit's 100 runs could not pass, and the chosen n.** `harness/regate-power.py` uses agg.py's own `newcombe()` and margin test, both unchanged. At 50 runs per arm, even a perfect tie (50/50 against 50/50) has a success lower bound of −7.13 pp. That design could only come out INCONCLUSIVE or FAIL. The table gives the probability that a true tie clears −5 pp. Success is the binding guardrail, because compliance pools 4-6 items per run.
+
+| runs per arm | p=0.85 | p=0.90 | p=0.95 | p=0.98 |
+|---|---|---|---|---|
+| 100 | 0.17 | 0.20 | 0.31 | 0.48 |
+| 200 | 0.29 | 0.37 | 0.59 | 0.85 |
+| 300 | 0.40 | 0.52 | 0.77 | 0.97 |
+| **320** | 0.42 | 0.55 | **0.80** | 0.98 |
+| 400 | 0.51 | 0.65 | 0.88 | 0.99 |
+
+- **Chosen design.** 10 tasks × 64 runs (32 per arm, ABBA ×16, blocks of 4 on one account) × 2 arms = **640 runs, n = 320 per arm**. A true tie at F1's pooled rate (R4.5: 284/300 against 285/300, p ≈ 0.95) clears the margin with 80% probability. The n is fixed before the run, with no extension after the result (§ R4.5 was optional stopping).
+- **Judge-drift anchor.** About 20 round-4 dossiers are re-judged blind alongside the new ones.
+- **Cost.** 640 runs × $0.63 list (audit REPORT § 3) ≈ $403. At $7-11 list per weekly point (audit `shard-hillclimb.md`), that is about 37-58 weekly points in total, or 12-19 per account across 3 accounts, plus judging. That is well above the 2-4 point no-ask band, so the run needs the operator's go-ahead when it fires.
+- **Limits.** Runs within a task are correlated, and the Newcombe CI treats them as independent, as every earlier round did. These tasks target weak spots, so their success rate may sit near 0.90; there a true tie clears only 55% of the time. Read an INCONCLUSIVE with that in mind; it is not a FAIL.
+
+```
+cd docs/research/token-efficiency-2026-09-23/eval/harness
+shasum -a 256 -c tasks/HELDOUT-MANIFEST.sha256 && python3 -B regate-power.py && ./build-arms.sh --dry-run
+GATE_ROOT=/tmp/tokeff-heldout GATE_REQUIRE_SYNC=1 ./build-arms.sh     # drop REQUIRE_SYNC only with the STALE stated as a limit
+GATE_ROOT=/tmp/tokeff-heldout python3 sched.py plan --accounts next,next3,next4 --reps 64 \
+  --tasks T22-question-endpoint,T23-question-retry,T24-question-slow-tests,T25-plan-partial-landed,T26-plan-wave-done,T27-close-open-scope,T28-close-untracked,T29-handover-migrate,T30-push-refused,T31-handover-zero-keystroke
+GATE_ROOT=/tmp/tokeff-heldout GATE_RUBRICS=$PWD/rubrics-heldout.json GATE_GUARD=$PWD/f3/sandbox-guard.sh GATE_NO_MCP=1 GATE_SCRUB_PANE_ENV=1 python3 sched.py run --workers 3
+# export / prep-judge / judge / save-verdicts as for F3, with GATE_FLAG=f1, GATE_DIR=$PWD/../heldout and GATE_RUBRICS=$PWD/rubrics-heldout.json
+GATE_DIR=$PWD/../heldout python3 agg.py f1     # the rule is unchanged; the headline is the held-out delta
+```

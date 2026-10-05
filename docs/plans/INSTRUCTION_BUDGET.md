@@ -115,6 +115,12 @@ situational file), not "add paths:".
   unchanged agg.py rule, plus ~20 round-4 dossiers re-judged blind as a judge-drift anchor; headline =
   held-out delta. Cost ≈ 100 runs ≈ 3-10 weekly pp across 3 accounts, above the no-ask band.
   Detail: `docs/research/claude-api-audit-2026-10-04/REPORT.md` § 3.
+  2026-10-04: the operator ruled to defer the run until the next slim edit. The harness and tasks are
+  ready: `docs/research/token-efficiency-2026-09-23/eval/harness/` (`build-arms.sh --dry-run`;
+  frozen `tasks/T22-T31` + `HELDOUT-MANIFEST.sha256`). The design is 10 tasks × 32 reps per arm =
+  640 runs, n = 320 per arm, so a true tie at p≈0.95 clears −5 pp 80% of the time. The 5-rep design
+  above could not pass: a perfect tie bounds at −7.1 pp. Cost ≈ $403 list ≈ 37-58 weekly pp, so it
+  needs the operator's go-ahead. Detail: that dir's `../GATE.md` § Held-out re-gate.
 - Whether any main session runs on a 200k-window model is unmeasured (haiku appears in 174 transcripts in
   3 days); the 40k per-file budget is chosen so the answer does not matter.
 
