@@ -137,6 +137,43 @@ class LauncherRootedTests(unittest.TestCase):
         self.assertEqual((out["rec"].substate, out["which"]), ("WAIT_RESET", None))
         self.assertEqual((out["placed"], out["defects"]), (0, 0))
 
+    def test_a_draft_holds_a_limited_session_before_any_move(self):
+        """W7h defect 2: the death path never read the composer, so the lead's limited session
+        762a6daa, with unsent text in its prompt, was recorded PLANNED to next2 (2026-10-04)."""
+        ctx, snap, facts = self.limited()
+        with mock.patch.object(M.observe, "composer_state", return_value="draft"):
+            out = self.run_pass(ctx, snap, facts)
+        rec = out["rec"]
+        self.assertEqual(out["buckets"], ["HOLD-DRAFT"])
+        self.assertEqual(
+            (rec.substate, rec.target_acct, out["which"]), ("HOLD-DRAFT", "", None)
+        )
+        self.assertEqual((rec.wait.max_age_s, rec.wait.eta), (900, None))
+        self.assertEqual((out["placed"], out["defects"]), (0, 0))
+        # sent or cleared: the next pass moves it as before
+        with mock.patch.object(M.observe, "composer_state", return_value="empty"):
+            out = self.run_pass(ctx, snap, facts)
+        self.assertEqual((out["rec"].substate, out["which"]), ("PLANNED", "R"))
+        # a draft typed after the plan takes the record back and voids its target
+        with mock.patch.object(M.observe, "composer_state", return_value="draft"):
+            out = self.run_pass(ctx, snap, facts)
+        self.assertEqual(
+            (out["rec"].substate, out["rec"].target_acct), ("HOLD-DRAFT", "")
+        )
+
+    def test_the_composer_is_not_read_under_a_live_actuator_or_a_reset_wait(self):
+        ctx, snap, facts = self.limited(born=False)
+        rec = ctx.records[SID]
+        with mock.patch.object(M.observe, "composer_state", return_value="draft") as cs:
+            rec.substate = "WAIT_RESET"
+            M._census(ctx, snap, facts, [], "act", NOW)
+            rec.substate = "PLANNED"
+            with mock.patch.object(M.act, "live_procs", return_value=[object()]):
+                M._census(ctx, snap, facts, [], "act", NOW)
+            self.assertEqual(cs.call_count, 0)
+            M._census(ctx, snap, facts, [], "act", NOW)
+            self.assertEqual((cs.call_count, rec.substate), (1, "HOLD-DRAFT"))
+
     def test_background_work_precedes_r(self):
         ctx, snap, facts = self.limited()
         snap.sessions[SID].bg_work = [T.BgWork(kind="shell", pid=3)]

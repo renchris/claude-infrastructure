@@ -39,6 +39,7 @@ CENSUS_OWNED = (
     "HOLD-FOCUS",
     "HOLD-BGWORK",
     "HOLD-SUBAGENTS",
+    "HOLD-DRAFT",  # W7h: the census reads a limited session's composer (see rebucket)
     "HOLD:iterm",
     "HELD:team",
     "LAUNCHER-ROOTED",
@@ -299,8 +300,20 @@ def rebucket(
         if n < TEAM_EXIT_PASSES:
             return False
         rec.close.pop("team_zero", None)
+    # W7h: a draft the census reads holds the record whether it is waiting or PLANNED, as a team
+    # does: the plan must not carry a draft as a mover. A HOLD-DRAFT with a re-probe eta came from
+    # an actuator's precheck; the census takes it over on reading the draft itself (eta None) and
+    # releases only one it holds, so one empty read cannot re-fire a move the precheck refused.
+    if new == "HOLD-DRAFT" and rec.substate == new and rec.wait is not None:
+        rec.wait.eta = None
+    if (
+        rec.substate == "HOLD-DRAFT"
+        and new != rec.substate
+        and (rec.wait is None or rec.wait.eta is not None)
+    ):
+        return False
     owned = rec.substate in CENSUS_OWNED or (
-        new == "HELD:team" and rec.substate in TEAM_ABSORBS
+        new in ("HELD:team", "HOLD-DRAFT") and rec.substate in TEAM_ABSORBS
     )
     if not owned or new not in CENSUS_OWNED or new == rec.substate:
         return False
@@ -310,6 +323,10 @@ def rebucket(
         rec.substate, rec.wait = new, None
     else:
         _hold(rec, new, now)
+        if new == "HOLD-DRAFT" and rec.wait is not None:
+            rec.wait.eta = (
+                None  # census-held: re-read every pass, never the timed re-probe
+            )
         if (
             new in ("HELD:team", "WAIT_RESET")
             and eta is not None

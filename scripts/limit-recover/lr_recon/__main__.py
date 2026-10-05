@@ -265,7 +265,7 @@ def _census(
             # typing, so the copied limit record stays last and re-opened the sid over its terminal
             # outcome (W5 rig 80294ba4: REPLACED-NEW-WINDOW overwritten by LAUNCHER-ROOTED)
             continue
-        _read_composer(s, snap, facts, now)
+        _read_composer(s, snap, facts, now, old)
         b = census.bucket(s, snap, facts, now)
         buckets.append(b)
         if b.name not in RECORD_TYPES or s.sid in stale_sids:
@@ -454,11 +454,53 @@ def _focus_ledger(
     return row
 
 
+# The substates in which a draft changes what the plan does with a LIMITED session: about to be
+# placed, placed, or already held on the draft. A record waiting on its reset or held on something
+# else is read once it becomes one of these, so a cohort waiting out a reset costs no kitty reads.
+DRAFT_READ_SUBSTATES = (
+    "DETECTED",
+    "WAIT_SLOT",
+    "WAIT_DATA",
+    "WAIT_CAPACITY",
+    "BACKOFF",
+    "PLANNED",
+    "HOLD-DRAFT",
+)
+
+
+def _reads_limited_composer(
+    s: T.SessionObs, old: Optional[T.Record], snap: T.Snapshot
+) -> bool:
+    """W7h: a LIMITED session's composer is read before it is bucketed, when no record is open for
+    it or its record is idle in PRE-MOVE in a substate a draft would change. Never while one of
+    our actuators is live on it: its own /exit in the composer would read as a draft."""
+    if not census._death(s):
+        return False
+    if old is None or not old.open:
+        return True
+    return (
+        old.phase == "PRE-MOVE"
+        and (old.substate or "") in DRAFT_READ_SUBSTATES
+        and not act.live_procs(old, snap)
+    )
+
+
 def _read_composer(
-    s: T.SessionObs, snap: T.Snapshot, facts: Dict[str, T.Fact], now: float
+    s: T.SessionObs,
+    snap: T.Snapshot,
+    facts: Dict[str, T.Fact],
+    now: float,
+    old: Optional[T.Record] = None,
 ) -> None:
-    """An idle fan-out candidate needs an affirmatively EMPTY composer (census._idle); nothing else
-    ever reads it, so the one kitty read per pass is spent only there, and only with fan-out on."""
+    """The one kitty read per session per pass, spent only where the answer decides a bucket: a
+    LIMITED session that is or is about to be a mover (census.bucket holds a draft, W7h), and an
+    idle fan-out candidate, which needs an affirmatively EMPTY composer (census._idle) and is read
+    only with fan-out on."""
+    if s.pane and _reads_limited_composer(s, old, snap):
+        pane = snap.panes.get("%d:%d" % s.pane)
+        if pane is not None and pane.state == "claude":
+            s.composer = observe.composer_state(pane.sock, pane.window_id)
+        return
     if (
         os.environ.get("LR_IDLE_FANOUT", "off") != "on"
         or not s.pane

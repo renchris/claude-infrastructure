@@ -351,6 +351,42 @@ class Rebucket(unittest.TestCase):
         )
         self.assertFalse(settle.rebucket(rec(sub="HOLD-DRAFT"), "LIMITED", 1.0))
 
+    def test_a_draft_the_census_reads_holds_a_waiting_or_planned_record(self):
+        """W7h defect 2: the census holds a draft itself, and releases the hold it placed."""
+        for sub in ("DETECTED", "WAIT_RESET", "WAIT_SLOT", "BACKOFF", "PLANNED"):
+            r = rec(sub=sub)
+            self.assertTrue(settle.rebucket(r, "HOLD-DRAFT", 5.0), sub)
+            self.assertEqual(
+                (r.substate, r.target_acct),
+                ("HOLD-DRAFT", "" if sub == "PLANNED" else "next2"),
+            )
+            self.assertEqual(
+                (r.wait.since, r.wait.eta, r.wait.max_age_s), (5.0, None, 900)
+            )
+            self.assertFalse(
+                settle.reprobe(r, 1e12)
+            )  # no timed re-probe hands it to the plan
+            self.assertTrue(settle.rebucket(r, "LIMITED", 9.0))
+            self.assertEqual((r.substate, r.wait), ("DETECTED", None))
+
+    def test_a_precheck_held_draft_is_released_only_after_the_census_read_it(self):
+        r = rec(sub="DETECTED")
+        settle._hold(
+            r, "HOLD-DRAFT", 5.0
+        )  # an actuator's precheck refused: re-probed at 125
+        self.assertFalse(
+            settle.rebucket(r, "LIMITED", 6.0)
+        )  # one empty read re-fires nothing
+        self.assertEqual(
+            (r.substate, r.wait.eta), ("HOLD-DRAFT", 5.0 + settle.REPROBE_S)
+        )
+        self.assertFalse(
+            settle.rebucket(r, "HOLD-DRAFT", 7.0)
+        )  # the census reads the draft
+        self.assertEqual((r.wait.since, r.wait.eta), (5.0, None))
+        self.assertTrue(settle.rebucket(r, "LIMITED", 8.0))
+        self.assertEqual(r.substate, "DETECTED")
+
 
 class AbortedAdmitHeld(unittest.TestCase):
     """D7.1: lr-handoff's in-place admit, ABORTED before /exit, now ends `verdict: HELD:<reason>`
@@ -401,7 +437,9 @@ class WakeExit(unittest.TestCase):
         self.assertIn("focused", d)
         self.assertNotIn("wake_eta", r.close)
         self.assertNotIn("wake_failed", r.close)
-        self.assertEqual((r.substate, r.next_eligible_at), ("HELD:team", 1.0 + settle.REPROBE_S))
+        self.assertEqual(
+            (r.substate, r.next_eligible_at), ("HELD:team", 1.0 + settle.REPROBE_S)
+        )
 
     def test_a_submit_failure_pages_and_is_never_retyped(self):
         for rc in (1, 2, 3, 4, 8):
@@ -415,7 +453,9 @@ class WakeExit(unittest.TestCase):
     def test_typed_waits_for_the_turn(self):
         for rc in (0, 5):
             r = self._rec()
-            self.assertIn("waiting for a turn", settle.settle_exit(r, actuator("C"), rc, "", 1.0))
+            self.assertIn(
+                "waiting for a turn", settle.settle_exit(r, actuator("C"), rc, "", 1.0)
+            )
             self.assertNotIn("wake_failed", r.close)
 
 
@@ -459,7 +499,9 @@ class TeamFlicker(unittest.TestCase):
         self.assertFalse(settle.rebucket(rec(sub="WAIT_SLOT"), "HOLD-BGWORK", 1.0))
 
     def test_a_team_notmoved_is_a_hold_never_deterministic(self):
-        self.assertEqual(classify.map_notmoved("team", "limited"), ("HOLD", "HELD:team"))
+        self.assertEqual(
+            classify.map_notmoved("team", "limited"), ("HOLD", "HELD:team")
+        )
 
 
 class Confirm(unittest.TestCase):

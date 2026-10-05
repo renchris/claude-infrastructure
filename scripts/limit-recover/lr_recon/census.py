@@ -207,6 +207,12 @@ def bucket(
                 bind,
                 detail="ship-land" if ship else "",
             )
+        if s.composer == "draft":
+            # §7.2 HOLD row: "foreign draft … No keystroke over a draft", and invariant 7. Before
+            # STAY and the movers, since the wake and every move type into this composer. Only an
+            # affirmative draft holds here: an unreadable composer ("unknown", or not read) stays
+            # with the actuator's precheck, which tells a parked menu from a failed read (W7h).
+            return _mk(s, "HOLD-DRAFT", "operator draft in the composer", kind, bind)
         resets = bind[1]
         if resets is not None and resets - now < STAY_S:
             return _mk(s, "STAY", "source resets within 15 min", kind, bind)
@@ -347,7 +353,9 @@ def new_record(
             reason=rec.substate or b.name,
             since=now,
             max_age_s=T.MAX_AGE_S.get(b.name),
-            eta=b.resets_at,
+            # a draft the census sees is released by the census, the pass it reads empty: with
+            # an eta, settle.reprobe handed it to the plan as a mover at that time (W7h)
+            eta=None if b.name == "HOLD-DRAFT" else b.resets_at,
             detail=b.detail,
         )
     if b.kind == "limited":

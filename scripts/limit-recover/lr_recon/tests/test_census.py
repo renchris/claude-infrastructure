@@ -180,6 +180,30 @@ class CensusBuckets(unittest.TestCase):
         b = self.b(self._five_hour(NOW + 3000), facts=_fact("auth", None))
         self.assertEqual((b.scope, b.resets_at), ("auth", None))
 
+    # ── W7h defect 2: a limited session with an operator draft is held, never a mover ──────────
+
+    def test_a_limited_session_with_a_draft_is_held(self):
+        s = self._s(composer="draft")
+        b = self.b(s)
+        self.assertEqual((b.name, b.kind), ("HOLD-DRAFT", "limited"))
+        rec = C.new_record(b, s, self.pane, "c", "census", True, NOW)
+        self.assertEqual((rec.substate, rec.wait.reason), ("HOLD-DRAFT", "HOLD-DRAFT"))
+        self.assertEqual((rec.wait.max_age_s, rec.wait.eta), (900, None))
+        self.assertEqual(plan.movers([rec], self.snap, NOW), [])
+        # it holds before the in-place stay too: the wake types into the same composer
+        stay = _fact(resets=NOW + 600)
+        self.assertEqual(self.b(s, facts=stay).name, "HOLD-DRAFT")
+        # background work is the earlier hold
+        s.bg_work = [T.BgWork(kind="shell", pid=3)]
+        self.assertEqual(self.b(s).name, "HOLD-BGWORK")
+
+    def test_a_limited_session_with_no_affirmative_draft_moves_as_before(self):
+        for composer in ("empty", "", "unknown"):
+            s = self._s(composer=composer)
+            self.assertEqual(self.b(s).name, "LIMITED", composer)
+            rec = C.new_record(self.b(s), s, self.pane, "c", "census", True, NOW)
+            self.assertEqual(len(plan.movers([rec], self.snap, NOW)), 1)
+
     def test_idle(self):
         idle = dict(last={}, composer="empty")
         on = {"LR_IDLE_FANOUT": "on"}
