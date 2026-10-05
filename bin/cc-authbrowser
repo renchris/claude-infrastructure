@@ -402,6 +402,39 @@ def is_running(st: Optional[Dict[str, Any]]) -> bool:
     return bool(st) and cmdline_matches(int(st.get("pid") or 0), str(st.get("chrome_bin") or ""))
 
 
+def orphan_pids(port: int, binpath: str, pdir: str) -> List[int]:
+    """Browsers running on THIS account's profile that no state file names.
+
+    A `--start` killed between Popen and write_state (its caller's subprocess timeout does
+    exactly that) leaves the browser alive -- start_new_session is what makes it outlive us --
+    with no state and no watchdog. Chrome allows ONE process per user-data-dir: a second launch
+    on the same profile hands off to the first and exits, so CDP never answers on the new port
+    and every later `--start` fails the same way. Measured 2026-10-05: one 60s timeout orphaned
+    next4's browser on 9344, and the next nine hourly relogin attempts all exited 4 on
+    "held by a foreign process", each leaving a dead sign-in tab in the operator's browser.
+
+    Candidates are the frozen port's listeners plus the pid Chrome itself records in
+    <profile>/SingletonLock (a symlink to "<host>-<pid>"), which also finds an orphan on a
+    fallback port. A candidate counts only if its command line carries BOTH our browser binary
+    and this exact --user-data-dir, so a foreign listener, and another account's browser, are
+    never ours. The trailing space is the boundary: ".../next" is a prefix of ".../next2".
+    """
+    cands = list(port_listener_pids(port))
+    try:
+        tail = os.readlink(os.path.join(pdir, "SingletonLock")).rsplit("-", 1)[-1]
+        if tail.isdigit():
+            cands.append(int(tail))
+    except OSError:
+        pass
+    want = "--user-data-dir=%s " % pdir
+    out: List[int] = []
+    for pid in cands:
+        line = pid_cmdline(pid)
+        if line and binpath in line and want in line + " " and pid not in out:
+            out.append(pid)
+    return out
+
+
 def do_start(acct: str, ttl: int, headless: bool) -> int:
     port = require_known(acct)
     require_ssot(acct)
@@ -419,6 +452,13 @@ def do_start(acct: str, ttl: int, headless: bool) -> int:
         if held and int(st0.get("pid") or 0) in port_listener_pids(held):
             print(json.dumps(public_view(st0), indent=2))  # already ours: idempotent
             return EXIT_OK
+
+    # No live state, so any browser still on this account's profile is an orphan of ours.
+    # Reclaim it BEFORE the foreign-port check: left alone it reads as foreign there, and the
+    # fallback launch can never come up beside it (orphan_pids).
+    for orphan in orphan_pids(port, binpath, profile_dir(acct)):
+        warn("reclaiming an orphaned browser on this account's profile (pid=%d)" % orphan)
+        kill_pid(orphan, binpath)
 
     if port_listening(port):
         # The frozen SS1 port is taken by something that is NOT ours. Still never adopt or

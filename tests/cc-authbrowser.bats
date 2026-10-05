@@ -704,6 +704,62 @@ EOF
   { kill "$FOREIGN" && wait "$FOREIGN"; } 2>/dev/null || true
 }
 
+# AN ORPHAN OF OURS IS NOT FOREIGN (2026-10-05). A --start killed between launching the browser
+# and writing state leaves it alive with no state file. The next --start read it as foreign and
+# fell back to another port, where real Chrome can never come up: one process per user-data-dir,
+# so the second launch hands off to the orphan and exits. next4's relogin failed nine hours
+# running on exactly that. These stubs do not model the hand-off, so the discriminator here is
+# what the subject does to the orphan and which port it lands on.
+# RED-proof: with the orphan_pids loop removed from do_start, the two ORPHAN tests fail at
+# `refute alive "$ORPHAN"`; with the trailing-space boundary removed from `want`, the
+# other-account test fails at `alive "$OTHER"`.
+spawn_stub_browser() {   # <acct-profile> <port> — a stub browser with no state file; echoes its pid
+  local pid
+  pid=$(spawn_bg "$D/stub-chrome-ok" "--user-data-dir=$CC_AUTHBROWSER_PROFILE_ROOT/$1" \
+        "--remote-debugging-port=$2")
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do port_open "$2" && break; sleep 0.2; done
+  port_open "$2"
+  echo "$pid"
+}
+
+@test "ORPHAN on the frozen port (our browser, this profile, no state) is reclaimed, not called foreign" {
+  if port_open "$P_NEXT"; then skip "leased port $P_NEXT already in use on this machine"; fi
+  ORPHAN=$(spawn_stub_browser next "$P_NEXT")
+
+  run "$B" next --start
+  [ "$status" -eq 0 ]
+  GOT="$(json_body "$output" | jq -r '.port')"
+  NEWPID="$(json_body "$output" | jq -r '.pid')"
+  [ "$GOT" = "$P_NEXT" ]                     # the frozen port, not a fallback beside the orphan
+  [ "$NEWPID" != "$ORPHAN" ]
+  alive "$NEWPID"
+  refute alive "$ORPHAN"
+}
+
+@test "ORPHAN on another port is found through the profile's SingletonLock and reclaimed" {
+  if port_open "$P_NEXT4"; then skip "leased port $P_NEXT4 already in use on this machine"; fi
+  ORPHAN=$(spawn_stub_browser next "$P_NEXT4")
+  mkdir -p "$CC_AUTHBROWSER_PROFILE_ROOT/next"
+  ln -s "somehost-$ORPHAN" "$CC_AUTHBROWSER_PROFILE_ROOT/next/SingletonLock"
+
+  run "$B" next --start
+  [ "$status" -eq 0 ]
+  [ "$(json_body "$output" | jq -r '.port')" = "$P_NEXT" ]
+  refute alive "$ORPHAN"
+  refute port_open "$P_NEXT4"
+}
+
+@test "ANOTHER ACCOUNT's browser on this account's port is never reclaimed (next is a prefix of next2)" {
+  if port_open "$P_NEXT"; then skip "leased port $P_NEXT already in use on this machine"; fi
+  OTHER=$(spawn_stub_browser next2 "$P_NEXT")
+
+  run "$B" next --start
+  [ "$status" -eq 0 ]
+  [ "$(json_body "$output" | jq -r '.port')" != "$P_NEXT" ]   # fell back, as for any foreign holder
+  alive "$OTHER"
+  port_open "$P_NEXT"
+}
+
 @test "free_port() returns a real, currently-unheld loopback port" {
   local prog='import importlib.machinery as m, importlib.util as u, socket, sys
 ld = m.SourceFileLoader("ccab", sys.argv[1]); sp = u.spec_from_loader("ccab", ld)
