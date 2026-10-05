@@ -233,6 +233,12 @@ com.claude.browser-spin-guard     | run    | 300  | ~/.claude/logs/browser-spin-
 # watchdog, is a SYSTEM daemon in launchd/system/ and deliberately has no row: this manifest and
 # cc-fleet describe the gui domain.
 com.claude.coreaudiod-watch       | run    | 300  | ~/.claude/logs/coreaudiod-watch.jsonl | — | 48-coreaudiod-watchdog-install.sh
+# ── com.claude.fseventsd-watch (2026-10-04, concurrency-scale-2026-10-04/c-outcome-ledger.md) ───────────
+# Reads fseventsd's footprint with `top -l 1 -pid` (no root) every 300 s and pages through cc-desk-page
+# when it rises past 8 GB (warn) or 16 GB (act). Evidence is its own JSONL, one line per run whatever
+# the verdict. Its root twin, the restart watchdog, is a SYSTEM daemon in launchd/system/ installed by
+# the operator's migrations/0057-fseventsd-watchdog.sh, and deliberately has no row (gui domain only).
+com.claude.fseventsd-watch        | run    | 300  | ~/.claude/logs/fseventsd-watch.jsonl | — | 18-fleet-activate.sh
 # ── com.claude.relogin (row 7, ACCOUNT_ROUTING_V2 M4) ──────────────────────────────────────────────
 # WHY IT WAS MISSING, and why that mattered: this label was invisible to the three-way coverage loop
 # because that loop globs launchd/*.plist and this plist lives in launchd/staged/ — deliberately, so

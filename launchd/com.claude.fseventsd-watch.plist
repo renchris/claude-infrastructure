@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.claude.fseventsd-watch — detects fseventsd memory bloat (2026-10-04).
+
+  fseventsd grew to a 64 GB footprint (56 GB compressed) over 4 days and filled swap to 40.7 of
+  42 GB, which pushed the compressor to 66-69% of its segments and got land gates SIGKILLed by the
+  compressor sentinel (docs/research/concurrency-scale-2026-10-04/c-outcome-ledger.md). Every 300 s
+  this job reads the daemon's footprint with `top -l 1 -pid` (no root), appends
+  ~/.claude/logs/fseventsd-watch.jsonl, and pages through cc-desk-page when the verdict rises
+  (8 GB warn, 16 GB act; re-asserted every 6 h).
+
+  It cannot clear the bloat: only a fseventsd restart does, and that needs root. The root half is
+  launchd/system/com.claude.fseventsd-watchdog.plist, installed by the operator through
+  migrations/0057-fseventsd-watchdog.sh.
+
+  Standard band, no ProcessType, for the reason browser-spin-guard's header gives: its trigger
+  condition is a loaded box, which is exactly when a Background-band job gets starved.
+  PATH carries /usr/sbin and /bin explicitly (sysctl, ps) — the wrapper overwrites launchd's PATH.
+
+  Kill switches: FSE_WATCH=0 in the wrapper, or `launchctl bootout gui/$UID/com.claude.fseventsd-watch`.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude.fseventsd-watch</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"; exec "$HOME/.claude/scripts/fseventsd-watch.sh" --notify</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <key>StandardOutPath</key>  <string>/tmp/claude-fseventsd-watch.stdout.log</string>
+    <key>StandardErrorPath</key><string>/tmp/claude-fseventsd-watch.stderr.log</string>
+</dict>
+</plist>

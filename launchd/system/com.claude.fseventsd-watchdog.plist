@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.claude.fseventsd-watchdog — SYSTEM LaunchDaemon (root). Restarts fseventsd when its footprint
+  passes the act floor (scripts/fseventsd-watch.sh --restart; 2026-10-04: 64 GB footprint, swap at
+  40.7 of 42 GB, land gates SIGKILLed by the compressor sentinel).
+
+  This file lives in launchd/system/, OUTSIDE launchd/*.plist on purpose: install.sh's glob and
+  scripts/fleet-manifest-lint.sh cover the gui domain only, and a root daemon must never be
+  activated by an agent's converge. The operator installs it with
+  migrations/0057-fseventsd-watchdog.sh --confirm com.claude.fseventsd-watchdog.
+
+  It runs a ROOT-OWNED COPY of scripts/fseventsd-watch.sh at /usr/local/libexec/, never the repo
+  path: a root job executing a file the user account can rewrite is a privilege escalation.
+
+  Decision rule: restart when the footprint is >= 16 GB on 2 consecutive runs of the same pid, at
+  most once per 30 min. It samples the daemon's stack first (/var/log/claude-fseventsd-samples/),
+  sends SIGTERM (SIGKILL after 10 s), confirms launchd brought fseventsd back under a new pid, and
+  appends one row per restart to /var/log/claude-fseventsd-restarts.jsonl.
+
+  Uninstall: sudo launchctl bootout system/com.claude.fseventsd-watchdog; then remove this plist
+  from /Library/LaunchDaemons and the copy from /usr/local/libexec.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude.fseventsd-watchdog</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/usr/local/libexec/claude-fseventsd-watch.sh</string>
+        <string>--restart</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <key>StandardOutPath</key>  <string>/var/log/claude-fseventsd-watchdog.stdout.log</string>
+    <key>StandardErrorPath</key><string>/var/log/claude-fseventsd-watchdog.stderr.log</string>
+</dict>
+</plist>
