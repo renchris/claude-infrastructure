@@ -678,9 +678,9 @@ This table replaces the phase table near the top of the file. Only the W3 lead e
 | P2 | W3.1 | landed, content-verified | 251 / `w3-p2-land` | `f40fad0d1` (feat), tests `558191bc8` `583170c62` `1f44391ec` |
 | P6 | W3.1 | fired 2026-10-05 after the memory storm cleared | 258 / `w3-p6-land` | |
 | P8 | W3.2 (no dependency, fired early) | landed, content-verified | 261 / `w3-p8` | `4b8915441` (feat), tests `fd50f450b` `4bbbb0dc1` |
-| P3a-i | W3.2 | fired 2026-10-05 | 266 / `w3-p3a-i` | |
-| P3b | W3.2 | held: active-session ceiling (P4 cannot start before P3a-ii, so it has slack) | | |
-| P3a-ii | W3.2b | waits for P3a-i | | |
+| P3a-i | W3.2 | landed, content-verified | 266 / `w3-p3a-i` | `bfdb948ef` |
+| P3b | W3.2 | fired 2026-10-05 | 267 / `w3-p3b` | |
+| P3a-ii | W3.2b | fired 2026-10-05 | 271 / `w3-p3a-ii` | |
 | P4 | W3.3 | waits for P3a-ii, P3b | | |
 | P5 | W3.4 | waits for P4, P8 | | |
 | P7 | W3.4 | waits for P4, P3a-ii | | |
