@@ -16,11 +16,18 @@ again here, from the same transcripts with the same patterns, into the strata of
   other          everything else, sampled — work orders, ideas, concerns, chatter (§10 item 11's
                  correct-label floor is measured on these)
 
-  heldout-candidates.py [--transcripts GLOB]... [--days 60] [--cap 60] --out C.jsonl
+  heldout-candidates.py [--transcripts GLOB]... [--history GLOB]... [--days 60] [--cap 60]
+                        [--cap-for STRATUM=N]... --out C.jsonl
 
-Rows are {prompt, stratum, source}; source is "<session id prefix>@<timestamp>". The sample inside a
-stratum is the first --cap prompts in sha256 order, so a re-run over the same transcripts picks the
-same set. It prints counts per stratum and NEVER a prompt: the router's builder must not read the
+Transcripts are kept about 60 days and held 3 pushback prompts in all when v1 was sealed, so wave E1c
+added a second store: --history reads Claude Code's prompt history (`~/.claude*/history.jsonl`, one
+`display` per typed prompt, about a year deep). It has no assistant turns, so it feeds every stratum
+but the after-a-done-claim half of regex-missed. --days does not apply to it.
+
+Rows are {prompt, stratum, source}; source is "<session id prefix>@<timestamp>", or
+"history:<config dir>@<epoch ms>". The sample inside a stratum is the first --cap prompts in sha256
+order (--cap-for overrides the cap for one stratum), so a re-run over the same stores picks the same
+set. It prints counts per stratum and NEVER a prompt: the router's builder must not read the
 candidates, half of which are about to be sealed (heldout.py's header, §7).
 """
 
@@ -62,6 +69,14 @@ CLAIM = re.compile(
 PUSHBACK = re.compile(
     r"^\W*(are you (sure|certain|confident)|you sure|really\b|no[- ]?take[- ]?backs?|double[- ]check|"
     r"sure about (that|this)|is that (right|true|correct)|are we sure)",
+    re.I,
+)
+# The same challenge when it is not the prompt's first words ("hmm, are you sure?"), plus plain
+# doubt. Written without reading a prompt; the raters decide which of them are pushback.
+PUSHBACK_ANYWHERE = re.compile(
+    r"\b(are you (sure|certain|confident)|you sure|no[- ]?take[- ]?backs?|double[- ]check|"
+    r"sure about (that|this)|is that (right|true|correct|accurate)|are we sure|i doubt|"
+    r"doesn'?t (sound|seem|look) right|that can'?t be right|how do you know|how confident)\b|really\?",
     re.I,
 )
 LOCATION = re.compile(r"[\w./-]+:\d+|\bline \d+|\b(row|decision|check|item|step)\s?#?\d+\b|#\d+", re.I)
@@ -120,8 +135,34 @@ def prompts(files: List[str]) -> Iterator[Tuple[str, str, bool]]:
                 last_claim = False
 
 
+def history_prompts(files: List[str]) -> Iterator[Tuple[str, str, bool]]:
+    """(prompt, source, False) for every genuine typed prompt in a prompt-history file. A slash
+    command is not a prompt."""
+    for f in files:
+        acct = Path(f).parent.name
+        try:
+            fh = open(f, "rb")
+        except OSError:
+            continue
+        with fh:
+            for line in fh:
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                s = genuine(r.get("display")) if isinstance(r, dict) else None
+                if s is None or s.startswith("/"):
+                    continue
+                yield s, f"history:{acct}@{r.get('timestamp', '')}", False
+
+
 def stratum(s: str, after_claim: bool) -> str:
-    if len(s) <= PUSHBACK_MAX and PUSHBACK.search(s) and not LOCATION.search(s) and not Q.search(s):
+    if (
+        len(s) <= PUSHBACK_MAX
+        and (PUSHBACK.search(s) or PUSHBACK_ANYWHERE.search(s))
+        and not LOCATION.search(s)
+        and not Q.search(s)
+    ):
         return "pushback"
     if Q.search(s):
         return "regex-matched"
@@ -130,10 +171,12 @@ def stratum(s: str, after_claim: bool) -> str:
     return "other"
 
 
-def build(files: List[str], cap: int) -> Dict[str, List[Dict[str, str]]]:
+def build(files: List[str], cap: int, history: Optional[List[str]] = None,
+          cap_for: Optional[Dict[str, int]] = None) -> Dict[str, List[Dict[str, str]]]:
     seen = set()
     by: Dict[str, List[Dict[str, str]]] = {k: [] for k in ("regex-matched", "regex-missed", "pushback", "other")}
-    for s, src, after in prompts(files):
+    # Transcripts first: they know which prompt followed a done-claim, and the first copy is kept.
+    for s, src, after in list(prompts(files)) + list(history_prompts(history or [])):
         k = s[:200]
         if k in seen:
             continue
@@ -141,7 +184,7 @@ def build(files: List[str], cap: int) -> Dict[str, List[Dict[str, str]]]:
         by[stratum(s, after)].append({"prompt": s, "stratum": stratum(s, after), "source": src})
     for k in by:
         by[k].sort(key=lambda c: hashlib.sha256(c["prompt"].encode()).hexdigest())
-        del by[k][cap:]
+        del by[k][(cap_for or {}).get(k, cap):]
     return by
 
 
@@ -151,16 +194,28 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="glob of transcript files (default ~/.claude*/projects/*/*.jsonl)")
     ap.add_argument("--days", type=float, default=60.0, help="only transcripts modified this recently")
     ap.add_argument("--cap", type=int, default=60, help="prompts kept per stratum")
+    ap.add_argument("--history", action="append",
+                    help="glob of prompt-history files (e.g. '~/.claude*/history.jsonl'); default none")
+    ap.add_argument("--cap-for", action="append", default=[], metavar="STRATUM=N",
+                    help="a cap for one stratum, overriding --cap")
     ap.add_argument("--out", required=True)
     a = ap.parse_args(argv)
+    cap_for: Dict[str, int] = {}
+    for spec in a.cap_for:
+        k, _, n = spec.partition("=")
+        if k not in ("regex-matched", "regex-missed", "pushback", "other") or not n.isdigit():
+            ap.error(f"--cap-for {spec!r}: expected STRATUM=N")
+        cap_for[k] = int(n)
     globs = a.transcripts or [os.path.expanduser("~/.claude*/projects/*/*.jsonl")]
     cut = time.time() - a.days * 86400
     files = sorted({f for g in globs for f in glob.glob(os.path.expanduser(g)) if os.path.getmtime(f) >= cut})
-    by = build(files, a.cap)
+    # realpath: every account's history.jsonl may be one file behind a symlink.
+    history = sorted({os.path.realpath(f) for g in a.history or [] for f in glob.glob(os.path.expanduser(g))})
+    by = build(files, a.cap, history, cap_for)
     rows = [c for k in by for c in by[k]]
     Path(a.out).write_text("".join(json.dumps(c, sort_keys=True) + "\n" for c in rows))
     counts = {k: len(v) for k, v in by.items()}
-    print(f"{len(files)} transcript(s); candidates per stratum {json.dumps(counts, sort_keys=True)} -> {a.out}")
+    print(f"{len(files)} transcript(s), {len(history)} history file(s); candidates per stratum {json.dumps(counts, sort_keys=True)} -> {a.out}")
     empty = [k for k, n in counts.items() if n == 0]
     if empty:
         print(f"heldout-candidates.py: no {', '.join(empty)} candidate; heldout.py seal will refuse", file=sys.stderr)

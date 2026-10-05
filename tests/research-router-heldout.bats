@@ -72,6 +72,38 @@ rec() {
   cmp -s "$BATS_TEST_TMPDIR/a.jsonl" "$BATS_TEST_TMPDIR/b.jsonl"
 }
 
+@test "wave E1c: the prompt history is a second store, a challenge is pushback wherever it sits, and one stratum takes its own cap" {
+  {
+    rec user "are we 100% complete?"
+    rec user "build the importer next"
+  } > "$T/s1.jsonl"
+  mkdir -p "$BATS_TEST_TMPDIR/acct"
+  {
+    jq -nc '{display:"hmm, are you sure?",timestamp:1790000000000}'
+    jq -nc '{display:"that cant be right",timestamp:1790000000001}'
+    jq -nc '{display:"how do you know line 40 is wrong?",timestamp:1790000000002}'
+    jq -nc '{display:"/wrap",timestamp:1790000000003}'
+    jq -nc '{display:"are we 100% complete?",timestamp:1790000000004}'
+    jq -nc '{display:"anything else we are missing",timestamp:1790000000005}'
+    for i in 1 2 3 4 5; do jq -nc --arg i "$i" '{display:("build gadget " + $i),timestamp:1790000000010}'; done
+    printf 'not json\n'
+  } > "$BATS_TEST_TMPDIR/acct/history.jsonl"
+  run python3 "$CAND" --transcripts "$T/*.jsonl" --history "$BATS_TEST_TMPDIR/acct/history.jsonl" --cap-for other=3 --out "$BATS_TEST_TMPDIR/c.jsonl"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"1 transcript(s), 1 history file(s)"* ]] || false
+  [ "$(printf '%s' "$output" | grep -c 'gadget')" -eq 0 ]
+  c="$BATS_TEST_TMPDIR/c.jsonl"
+  [ "$(jq -r 'select(.stratum=="pushback") | .prompt' "$c" | sort | tr '\n' '|')" = "hmm, are you sure?|that cant be right|" ]
+  # a challenge WITH a location stays out of pushback; the transcript's copy of a prompt wins
+  [ "$(jq -r 'select(.stratum=="regex-matched") | .source' "$c")" = "s1@2026-09-20T10:00:00" ]
+  [ "$(jq -r 'select(.stratum=="regex-missed") | .prompt' "$c")" = "anything else we are missing" ]
+  [ "$(jq -r 'select(.stratum=="other") | .prompt' "$c" | wc -l | tr -d ' ')" -eq 3 ]
+  [ "$(jq -r 'select(.prompt=="hmm, are you sure?") | .source' "$c")" = "history:acct@1790000000000" ]
+  [ "$(grep -c '/wrap' "$c")" -eq 0 ]
+  run python3 "$CAND" --transcripts "$T/*.jsonl" --cap-for bogus=3 --out "$c"
+  [ "$status" -eq 2 ]
+}
+
 @test "gate row 15 contract: router.py classify prints ONE route label, and exits non-zero on a fallback" {
   run bash -c "printf 'are we done?' | python3 '$ROUTER' classify"
   [ "$status" -eq 0 ]
@@ -208,6 +240,46 @@ STUB
   # The set now measures: router.py classify passes row 15 against these gold labels.
   CC_RESEARCH_ROUTER="python3 '$ROUTER' classify" run "$H" evaluate
   [ "$status" -eq 0 ]
+}
+
+@test "wave E1c: a rater labels a named set in batches, asks a short batch again once, and records nothing while one stays short" {
+  for i in $(seq 1 12); do
+    printf '{"prompt":"are we done with part %s?","stratum":"regex-matched"}\n' "$i"
+    printf '{"prompt":"is it good to close now, %s","stratum":"regex-missed"}\n' "$i"
+    printf '{"prompt":"are you sure, %s?","stratum":"pushback"}\n' "$i"
+    printf '{"prompt":"build widget %s","stratum":"other"}\n' "$i"
+  done > "$BATS_TEST_TMPDIR/c.jsonl"
+  "$H" seal --candidates "$BATS_TEST_TMPDIR/c.jsonl" --tuning-out "$BATS_TEST_TMPDIR/t.jsonl" --fraction 1.0 >/dev/null
+  sed 's/part \([0-9]*\)/piece \1/; s/now, /today, /; s/sure, /certain, /; s/widget/gizmo/' "$BATS_TEST_TMPDIR/c.jsonl" > "$BATS_TEST_TMPDIR/c2.jsonl"
+  "$H" --set v2 seal --candidates "$BATS_TEST_TMPDIR/c2.jsonl" --tuning-out "$BATS_TEST_TMPDIR/t2.jsonl" --fraction 1.0 >/dev/null
+  RATE="$REPO/scripts/research-kit/heldout-rate.py"
+  stub_vendor "$BATS_TEST_TMPDIR/claude-real" anthropic
+  # counts its calls; the 3rd call labels an id nobody asked about when FAIL_THIRD is set
+  cat > "$BATS_TEST_TMPDIR/claude-stub" <<STUB
+#!/bin/bash
+n=\$(( \$(cat "$BATS_TEST_TMPDIR/calls" 2>/dev/null || echo 0) + 1 )); echo "\$n" > "$BATS_TEST_TMPDIR/calls"
+if { [ "\$n" -ge 3 ] && [ "\${FAIL_THIRD:-}" = always ]; } || { [ "\$n" -eq 3 ] && [ "\${FAIL_THIRD:-}" = once ]; }; then echo '{"result": "{\\"id\\": \\"nope\\", \\"label\\": \\"other\\"}", "modelUsage": {"claude-rater-1": {}}}'; exit 0; fi
+exec "$BATS_TEST_TMPDIR/claude-real" "\$@"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/claude-stub"
+  run python3 "$RATE" --vendor anthropic --set v2 --batch 20 --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"would send 48 prompt(s) of set v2 to anthropic in 3 call(s)"* ]] || false
+  # the last batch comes back short twice: asked again once, then nothing is recorded
+  FAIL_THIRD=always CC_RESEARCH_BIN_ANTHROPIC="$BATS_TEST_TMPDIR/claude-stub" run python3 "$RATE" --vendor anthropic --set v2 --batch 20
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"labeled 40 of 48 prompt(s); nothing recorded"* ]] || false
+  [ "$(cat "$BATS_TEST_TMPDIR/calls")" -eq 4 ]
+  [ "$("$H" --set v2 status 2>/dev/null | jq '[.[].raters | length] | add')" -eq 0 ]
+  # short once: the second asking of that batch is whole, and every label is recorded
+  rm -f "$BATS_TEST_TMPDIR/calls"
+  FAIL_THIRD=once CC_RESEARCH_BIN_ANTHROPIC="$BATS_TEST_TMPDIR/claude-stub" run python3 "$RATE" --vendor anthropic --set v2 --batch 20
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"anthropic:claude-rater-1: 48 label(s) recorded"* ]] || false
+  [ "$(cat "$BATS_TEST_TMPDIR/calls")" -eq 4 ]
+  # v2 took the labels; v1 has none
+  [ "$("$H" --set v1 status 2>/dev/null | jq '[.[].raters | length] | add')" -eq 0 ]
+  [ "$("$H" --set v2 status 2>/dev/null | jq '[.[].raters["anthropic:claude-rater-1"]] | add')" -eq 48 ]
 }
 
 @test "a rater that labels only part of the set records nothing" {

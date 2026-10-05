@@ -8,15 +8,25 @@ keychain key (`cc-research-router-heldout/sealed`) so the builder does not read 
 raters label the sealed set; gate.sh reads it at run time. Same-uid processes can still read the
 keychain, so this keeps the set out of the builder's way; it does not lock it (§7).
 
-  heldout.py seal --candidates C.jsonl --tuning-out T.jsonl [--min-sealed 40]
+  heldout.py [--set v1|v2] seal --candidates C.jsonl --tuning-out T.jsonl [--min-sealed 40]
+                                               [--exclude F.jsonl]... [--dry-run]
       C.jsonl rows: {prompt, stratum: regex-matched|regex-missed|pushback|other, source}
   heldout.py rater-sheet --out F.jsonl        the sealed prompts by id, for a rater to label
   heldout.py label --rater NAME --labels L.jsonl   L.jsonl rows: {id, label}
   heldout.py status                            counts per stratum and rater; never a prompt
-  heldout.py evaluate                          what gate row 15 runs (router in CC_RESEARCH_ROUTER)
+  heldout.py evaluate [--record F.jsonl]       what gate row 15 runs (router in CC_RESEARCH_ROUTER);
+                                               --record keeps one row per routed item {id, stratum,
+                                               counted, got, wall_s}: no prompt and no rater label
 
 The split is deterministic under a secret (HMAC of the prompt), so re-running `seal` cannot be used to
 fish a different sealed set; a sealed set is sealed once.
+
+SETS. v1 (`sealed.enc`) was read three times while the classifier was being configured (waves E1 and
+E1b), and three of its strata are too small to judge, so wave E1c seals v2 (`sealed-v2.enc`, its own
+keychain account) beside it. Each set is sealed once and no verb overwrites or deletes another set.
+`seal --set v2` drops every candidate already in an earlier sealed set or in an `--exclude` file (the
+earlier tuning set), so v2 holds only prompts no builder has seen. With `--set` omitted `seal` means
+v1 and every other verb, and gate row 15, read the newest set that exists.
 """
 
 from __future__ import annotations
@@ -27,6 +37,7 @@ import hmac
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -57,41 +68,90 @@ MIN_SET, MIN_RECALL, MIN_OTHER_CORRECT, MAX_FALLBACK, ROUTER_TIMEOUT_S = (
 )
 
 
-def sealed_path() -> Path:
-    return kit.research_home() / "router-heldout" / "sealed.enc"
+SETS = ("v1", "v2")  # oldest first; v1 keeps the file and keychain account it was sealed under
 
 
-def load() -> Dict[str, Any]:
-    p = sealed_path()
+def check_set(name: str) -> str:
+    if name not in SETS:
+        raise kit.KitError(f"unknown held-out set {name!r} ({', '.join(SETS)})")
+    return name
+
+
+def sealed_path(name: str = "v1") -> Path:
+    check_set(name)
+    return (
+        kit.research_home()
+        / "router-heldout"
+        / ("sealed.enc" if name == "v1" else f"sealed-{name}.enc")
+    )
+
+
+def key_account(name: str) -> str:
+    return "sealed" if check_set(name) == "v1" else f"sealed-{name}"
+
+
+def current_set() -> str:
+    """The newest set that is sealed; v1 when none is."""
+    for name in reversed(SETS):
+        if sealed_path(name).exists():
+            return name
+    return "v1"
+
+
+def load(name: Optional[str] = None) -> Dict[str, Any]:
+    name = check_set(name or current_set())
+    p = sealed_path(name)
     if not p.exists():
-        raise kit.KitError(f"no sealed held-out set at {p} (heldout.py seal)")
-    return json.loads(kit.decrypt(p.read_bytes(), kit.vault_key(KEY_ITEM, "sealed")))
+        raise kit.KitError(f"no sealed held-out set {name} at {p} (heldout.py seal)")
+    return json.loads(
+        kit.decrypt(p.read_bytes(), kit.vault_key(KEY_ITEM, key_account(name)))
+    )
 
 
-def save(data: Dict[str, Any], key: str) -> None:
-    d = sealed_path().parent
+def save(data: Dict[str, Any], key: str, name: str) -> None:
+    d = sealed_path(name).parent
     d.mkdir(parents=True, exist_ok=True)
     d.chmod(0o700)
-    tmp = d / ".sealed.enc.tmp"
+    tmp = d / f".{sealed_path(name).name}.tmp"
     tmp.write_bytes(kit.encrypt(json.dumps(data, sort_keys=True).encode(), key))
     tmp.chmod(0o600)
-    tmp.replace(sealed_path())
+    tmp.replace(sealed_path(name))
 
 
 def item_id(prompt: str) -> str:
     return hashlib.sha256(prompt.encode()).hexdigest()[:12]
 
 
+def seen_key(prompt: str) -> str:
+    """What makes a candidate the same prompt as one already used: its first 200 characters with case
+    and whitespace folded, because one prompt reads slightly differently in two stores."""
+    return hashlib.sha256(" ".join(prompt.split()).lower()[:200].encode()).hexdigest()
+
+
 def cmd_seal(a: argparse.Namespace) -> int:
-    if sealed_path().exists():
-        raise kit.KitError("the held-out set is already sealed; it is sealed once")
+    name = check_set(a.set or "v1")
+    if sealed_path(name).exists():
+        later = [s for s in SETS[SETS.index(name) + 1 :] if not sealed_path(s).exists()]
+        raise kit.KitError(
+            f"the held-out set {name} is already sealed; it is sealed once"
+            + (f" (a new set is `--set {later[0]}`)" if later else "")
+        )
     cands = kit.read_jsonl(Path(a.candidates))
     bad = [c for c in cands if c.get("stratum") not in STRATA or not c.get("prompt")]
     if bad:
         raise kit.KitError(
             f"{len(bad)} candidate(s) without a prompt or a known stratum ({', '.join(STRATA)})"
         )
-    secret = kit.vault_key(KEY_ITEM, "split", create=True).encode()
+    used = set()
+    for earlier in SETS[: SETS.index(name)]:
+        if sealed_path(earlier).exists():
+            used |= {seen_key(i["prompt"]) for i in load(earlier)["items"]}
+    for f in a.exclude or []:
+        used |= {seen_key(r["prompt"]) for r in kit.read_jsonl(Path(f)) if r.get("prompt")}
+    fresh = [c for c in cands if seen_key(c["prompt"]) not in used]
+    dropped = len(cands) - len(fresh)
+    cands = fresh
+    secret = kit.vault_key(KEY_ITEM, "split", create=not a.dry_run).encode()
     sealed, tuning = [], []
     for c in cands:
         h = hmac.new(secret, c["prompt"].encode(), hashlib.sha256).digest()
@@ -103,9 +163,18 @@ def cmd_seal(a: argparse.Namespace) -> int:
             + (f" and no {', '.join(missing)} stratum" if missing else "")
             + "; add candidates and seal again"
         )
-    key = kit.vault_key(KEY_ITEM, "sealed", create=True)
+    per = {s: sum(1 for c in sealed if c["stratum"] == s) for s in STRATA}
+    if a.dry_run:
+        print(
+            f"would seal {len(sealed)} prompt(s) as set {name} {json.dumps(per, sort_keys=True)}; "
+            f"{len(tuning)} to the tuning set; {dropped} candidate(s) dropped as already used; "
+            "nothing written"
+        )
+        return 0
+    key = kit.vault_key(KEY_ITEM, key_account(name), create=True)
     save(
         {
+            "set": name,
             "items": [
                 {
                     "id": item_id(c["prompt"]),
@@ -119,16 +188,21 @@ def cmd_seal(a: argparse.Namespace) -> int:
             "sealed_at": kit.now_iso(),
         },
         key,
+        name,
     )
     Path(a.tuning_out).write_text(
         "".join(json.dumps(c, sort_keys=True) + "\n" for c in tuning)
     )
-    print(f"sealed {len(sealed)} prompt(s); {len(tuning)} written to the tuning set")
+    print(
+        f"sealed {len(sealed)} prompt(s) as set {name} {json.dumps(per, sort_keys=True)}; "
+        f"{len(tuning)} written to the tuning set"
+        + (f"; {dropped} candidate(s) dropped as already used" if dropped else "")
+    )
     return 0
 
 
 def cmd_rater_sheet(a: argparse.Namespace) -> int:
-    data = load()
+    data = load(a.set)
     Path(a.out).write_text(
         "".join(
             json.dumps({"id": i["id"], "prompt": i["prompt"]}) + "\n"
@@ -142,7 +216,8 @@ def cmd_rater_sheet(a: argparse.Namespace) -> int:
 
 
 def cmd_label(a: argparse.Namespace) -> int:
-    data = load()
+    name = check_set(a.set or current_set())
+    data = load(name)
     by_id = {i["id"]: i for i in data["items"]}
     n = 0
     for r in kit.read_jsonl(Path(a.labels)):
@@ -154,7 +229,7 @@ def cmd_label(a: argparse.Namespace) -> int:
             raise kit.KitError(f"unknown item id {r.get('id')!r}")
         by_id[r["id"]]["labels"][a.rater] = r["label"]
         n += 1
-    save(data, kit.vault_key(KEY_ITEM, "sealed"))
+    save(data, kit.vault_key(KEY_ITEM, key_account(name)), name)
     print(f"{a.rater}: {n} label(s) recorded")
     return 0
 
@@ -189,13 +264,16 @@ def route(router: str, prompt: str) -> Optional[str]:
     return labels[0]
 
 
-def evaluate(router: Optional[str]) -> Dict[str, List[str]]:
+def evaluate(
+    router: Optional[str], name: Optional[str] = None, record: Optional[Path] = None
+) -> Dict[str, List[str]]:
     """Gate row 15. A fallback (error, timeout, unknown or mixed label) is a miss in every stratum:
     the as-built router records it as `unavailable`, which relays nothing (router.py, §10 item 3), so
     it never counts as a correct relay. Fallbacks are also counted against MAX_FALLBACK."""
     if not router:
         raise kit.KitError("router not built (wave B1): CC_RESEARCH_ROUTER is unset")
-    data = load()
+    name = check_set(name or current_set())
+    data = load(name)
     valid = [
         i
         for i in data["items"]
@@ -203,7 +281,8 @@ def evaluate(router: Optional[str]) -> Dict[str, List[str]]:
     ]
     fails: List[str] = []
     notes = [
-        f"{len(data['items']) - len(valid)} item(s) excluded for rater disagreement or a missing label"
+        f"held-out set {name}: {len(data['items'])} sealed item(s)",
+        f"{len(data['items']) - len(valid)} item(s) excluded for rater disagreement or a missing label",
     ]
     if len(valid) < MIN_SET:
         return {
@@ -213,9 +292,26 @@ def evaluate(router: Optional[str]) -> Dict[str, List[str]]:
             "notes": notes,
         }
     hits: Dict[str, List[int]] = {s: [0, 0] for s in STRATA}
+    fell: Dict[str, int] = {s: 0 for s in STRATA}  # fallbacks among the items a stratum counts
     fallbacks = 0
-    for i in valid:
+    rows: List[Dict[str, Any]] = []
+
+    def routed(i: Dict[str, Any], counted: bool) -> Optional[str]:
+        t0 = time.time()
         got = route(router, i["prompt"])
+        rows.append(
+            {
+                "id": i["id"],
+                "stratum": i["stratum"],
+                "counted": counted,
+                "got": got,
+                "wall_s": round(time.time() - t0, 2),
+            }
+        )
+        return got
+
+    for i in valid:
+        got = routed(i, True)
         if got is None:
             fallbacks += 1  # None is neither RELAYED nor any gold label: a miss below
         gold = next(iter(i["labels"].values()))
@@ -229,6 +325,8 @@ def evaluate(router: Optional[str]) -> Dict[str, List[str]]:
             h[1] -= (
                 1  # a completeness-stratum prompt whose agreed label is not a re-ask
             )
+            continue
+        fell[i["stratum"]] += 1 if got is None else 0
     for s in STRATA:
         ok, n = hits[s]
         need = MIN_OTHER_CORRECT if s == "other" else MIN_RECALL
@@ -246,10 +344,40 @@ def evaluate(router: Optional[str]) -> Dict[str, List[str]]:
         f"{fallbacks} of {len(valid)} routed item(s) fell back (share {rate:.2f}); "
         "each is scored a miss in its stratum"
     )
+    notes.append(
+        "fallbacks among counted items, which tells a slow classifier from a wrong one: "
+        + " · ".join(f"{s} {fell[s]} of {hits[s][1]}" for s in STRATA)
+    )
     if rate > MAX_FALLBACK:
         fails.append(
             f"fallback rate {rate:.2f} (error or timeout at {ROUTER_TIMEOUT_S} s), above {MAX_FALLBACK}"
         )
+    # Not counted, shown only: a completeness-stratum prompt both raters would relay, under two
+    # different relay labels. Row 15 leaves it out as a disagreement; this line says what that costs.
+    split = [
+        i
+        for i in data["items"]
+        if i["stratum"] in COMPLETENESS_STRATA
+        and len(i["labels"]) >= 2
+        and len(set(i["labels"].values())) > 1
+        and all(lab in RELAYED for lab in i["labels"].values())
+    ]
+    if split:
+        seen: Dict[str, List[int]] = {s: [0, 0, 0] for s in COMPLETENESS_STRATA}
+        for i in split:
+            got = routed(i, False)
+            c = seen[i["stratum"]]
+            c[0] += 1 if got in RELAYED else 0
+            c[1] += 1
+            c[2] += 1 if got is None else 0
+        notes.append(
+            "not counted in any line above (the raters chose two different relay labels), relayed / "
+            "items / fell back: "
+            + " · ".join(f"{s} {c[0]}/{c[1]}/{c[2]}" for s, c in seen.items())
+        )
+    if record:
+        record.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in rows))
+        record.chmod(0o600)
     notes.append(
         f"thresholds are assumed inputs until calibration (§6.6): set ≥ {MIN_SET}, recall ≥ {MIN_RECALL}, "
         f"other ≥ {MIN_OTHER_CORRECT}, fallback ≤ {MAX_FALLBACK}"
@@ -259,19 +387,38 @@ def evaluate(router: Optional[str]) -> Dict[str, List[str]]:
 
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="heldout.py")
+    ap.add_argument(
+        "--set",
+        choices=SETS,
+        help="which sealed set; omitted: seal means v1, every other verb the newest sealed set",
+    )
     sub = ap.add_subparsers(dest="verb", required=True)
     p = sub.add_parser("seal")
     p.add_argument("--candidates", required=True)
     p.add_argument("--tuning-out", required=True)
     p.add_argument("--min-sealed", type=int, default=MIN_SET)
     p.add_argument("--fraction", type=float, default=0.5)
+    p.add_argument(
+        "--exclude",
+        action="append",
+        help="a JSONL of {prompt} rows already used (an earlier tuning set); never sealed again",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the per-stratum counts the split would seal (never a prompt) and write nothing",
+    )
     p = sub.add_parser("rater-sheet")
     p.add_argument("--out", required=True)
     p = sub.add_parser("label")
     p.add_argument("--rater", required=True)
     p.add_argument("--labels", required=True)
     sub.add_parser("status")
-    sub.add_parser("evaluate")
+    p = sub.add_parser("evaluate")
+    p.add_argument(
+        "--record",
+        help="write one row per routed item {id, stratum, counted, got, wall_s} to this file",
+    )
     a = ap.parse_args(argv)
     try:
         if a.verb == "seal":
@@ -281,11 +428,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         if a.verb == "label":
             return cmd_label(a)
         if a.verb == "status":
-            print(json.dumps(counts(load()), sort_keys=True))
+            name = check_set(a.set or current_set())
+            print(json.dumps(counts(load(name)), sort_keys=True))
+            print(f"heldout.py: set {name}", file=sys.stderr)
             return 0
         import os
 
-        res = evaluate(os.environ.get("CC_RESEARCH_ROUTER"))
+        res = evaluate(
+            os.environ.get("CC_RESEARCH_ROUTER"),
+            a.set,
+            Path(a.record) if a.record else None,
+        )
         print("\n".join(res["fails"] + res["notes"]))
         return 1 if res["fails"] else 0
     except kit.KitError as e:
