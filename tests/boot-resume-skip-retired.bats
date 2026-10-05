@@ -37,6 +37,9 @@ setup() {
   export CC_LAUNCHCTL_BIN="$STUBS/launchctl" CC_RESUME_SELECT_BIN="$STUBS/select"
   export CC_RESUME_CLASSIFY_BIN="$STUBS/classify" CC_RESUME_LAYOUT_BIN="$T/no-layout"
   export CC_BOOT_RESUME_KITTY_POLL=0 CC_BOOT_RESUME_MODE=resume
+  # Restore v2's start gate reads load through sysctl: a stub at 0.5 on 8 cores, never the box's.
+  stub sysctl 'case "$*" in *vm.loadavg*) echo "{ 0.50 0.40 0.30 }" ;; *hw.ncpu*) echo 8 ;; *) exit 1 ;; esac'
+  export CC_SYSCTL_BIN="$STUBS/sysctl" CC_RESTORE_GATE_POLL_S=0 CC_HANDOFF_LOG="$T/handoffs.jsonl"
 
   # The roster a pre-restart snapshot took: two sessions, both on .claude-tertiary (→ claude3).
   printf '%s\n' 1784799000 > "$CC_BOOT_RESUME_ROSTER_DIR/reboot-t.start"
@@ -146,4 +149,103 @@ launched() { cat "$STUBS/launch.log" 2>/dev/null; }
   CC_BOOT_RESUME_SKIP_RETIRED=off run bash "$SCRIPT"
   [ "$status" -eq 0 ]
   launched | grep -q sid-gone
+}
+
+# ── restore v2 (W3 P3a-ii): a recycle whose successor is found retires the old sid ─────────────────
+# 3a06361f recycled into 90040b85 in pane 6, and a restore then brought 3a06361f back too, a duplicate
+# beside its own successor. Under restore v2 (the flag, or an event) the old sid is dropped when
+# handoff-fire logged the recycle ENGAGED after the marker and the successor is found in the roster's
+# pane, the pane's registry row, or a transcript that started between the marker and the engagement.
+# Without the flag, main's rule above stands unchanged.
+v2() { touch "$CC_BOOT_RESUME_STATE_DIR/restore-v2"; }
+engaged() { # <prev sid> <pane> <ts>
+  printf '{"ts":"%s","class":"recycle-engaged","gate":"recycle","engaged":true,"target_pane":"%s","prev_sid":"%s"}\n' \
+    "$3" "$2" "$1" >> "$CC_HANDOFF_LOG"
+}
+succ_in_roster() { # the roster also lists the successor, in the recycled pane 25
+  jq -n '[{account:"claude-tertiary",cwd:"/x/wt-gone",session_id:"sid-gone",name:"gone-pane",branch:"b1",paneUUID:"9"},
+          {account:"claude-tertiary",cwd:"/x/wt-live",session_id:"sid-live",name:"live-pane",branch:"b2",paneUUID:"12"},
+          {account:"claude-tertiary",cwd:"/x/wt-gone",session_id:"sid-succ",name:"succ-pane",branch:"b1",paneUUID:"25"}]' \
+    > "$CC_BOOT_RESUME_ROSTER_DIR/reboot-t.roster.json"
+}
+setup_v2_state() { mkdir -p "$CC_BOOT_RESUME_STATE_DIR"; }
+
+@test "v2: a recycle with an engaged successor in the roster's pane ⇒ the old sid is dropped and named" {
+  setup_v2_state; v2; succ_in_roster
+  marker sid-gone recycle 2026-10-01T18:43:34Z
+  engaged sid-gone 25 2026-10-01T18:44:10Z
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  ! launched | grep -q sid-gone || false
+  launched | grep -q sid-succ
+  launched | grep -q sid-live
+  [[ "$output" == *"skipped retired session gone-pane (sid-gone): recycled into sid-succ (in the roster, pane 25; recycle-engaged 2026-10-01T18:44:10Z)"* ]] || false
+  grep -q "claude3 --resume sid-gone" "$CC_BOOT_RESUME_STATE_DIR/last-retired.txt"
+}
+
+@test "v2: the successor found from the pane's registry row, started after the marker and before the cut" {
+  export CC_BOOTTIME_OVERRIDE=1791000000
+  printf '%s\n' 1790999000 > "$CC_BOOT_RESUME_ROSTER_DIR/reboot-t.start"
+  setup_v2_state; v2
+  marker sid-gone recycle 2026-10-01T18:43:34Z
+  engaged sid-gone 25 2026-10-01T18:44:10Z
+  jq -n '{paneUUID:"25",session_id:"sid-new",startedAt:1790880230000}' > "$CC_REGISTRY_DIR/25.json"
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  ! launched | grep -q sid-gone || false
+  [[ "$output" == *"recycled into sid-new (registry row of pane 25;"* ]] || false
+}
+
+@test "v2: the successor found by a transcript that started between the marker and the engagement" {
+  setup_v2_state; v2
+  marker sid-gone recycle 2026-10-01T18:43:34Z
+  touch -t 202610011843 "$CC_TEARDOWN_DIR/sid-gone.json"      # the marker file dates from the marker
+  engaged sid-gone 25 2026-10-01T18:44:10Z
+  printf '{"type":"user","timestamp":"2026-10-01T18:43:50.000Z","message":{"content":"recycled"}}\n' \
+    > "$HOME/.claude-tertiary/projects/-x-wt/sid-tx.jsonl"
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  ! launched | grep -q sid-gone || false
+  [[ "$output" == *"recycled into sid-tx (transcript started 2026-10-01T18:43:50Z;"* ]] || false
+  launched | grep -q sid-live                                  # its transcript started before the marker
+}
+
+@test "v2: an engaged recycle with no successor anywhere ⇒ kept" {
+  setup_v2_state; v2
+  marker sid-gone recycle 2026-10-01T18:43:34Z
+  touch -t 202610011843 "$CC_TEARDOWN_DIR/sid-gone.json"
+  engaged sid-gone 25 2026-10-01T18:44:10Z
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  launched | grep -q sid-gone
+  grep -q '"retired_skipped":0' "$CC_IDL"
+}
+
+@test "v2: a successor in the pane but no recycle-engaged row (or one from before the marker) ⇒ kept" {
+  setup_v2_state; v2; succ_in_roster
+  marker sid-gone recycle 2026-10-01T18:43:34Z
+  engaged sid-gone 25 2026-10-01T18:40:00Z                     # an older recycle of the same sid
+  engaged sid-other 25 2026-10-01T18:44:10Z
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  launched | grep -q sid-gone
+}
+
+@test "v2: activity after the recycle marker ⇒ kept, even with an engaged successor" {
+  setup_v2_state; v2; succ_in_roster
+  marker sid-gone recycle 2026-10-01T18:43:20Z
+  engaged sid-gone 25 2026-10-01T18:44:10Z
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  launched | grep -q sid-gone
+}
+
+@test "without restore-v2 a recycle stays main's rule: resumed, even with an engaged successor in the pane" {
+  succ_in_roster
+  marker sid-gone recycle 2026-10-01T18:43:34Z
+  engaged sid-gone 25 2026-10-01T18:44:10Z
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  launched | grep -q sid-gone
+  [ ! -e "$CC_BOOT_RESUME_STATE_DIR/events" ]
 }

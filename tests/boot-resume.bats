@@ -161,6 +161,24 @@ SH
 if [ -f "$MTIME_STUB_DIR/$2" ]; then cat "$MTIME_STUB_DIR/$2"; else echo 1784799900; fi
 SH
   chmod +x "$CC_TRANSCRIPT_MTIME_BIN"
+
+  # Restore v2 (W3 P3a-ii): the start gate reads load through sysctl, so a stub answers it — the
+  # first lines of .loads in turn, then the last one; load 0.50 on 8 cores by default — or a case
+  # would wait on the box's real load. The recycle log and teardown markers are fixtures too.
+  export CC_SYSCTL_BIN="$BATS_TEST_TMPDIR/stub-sysctl"
+  cat > "$CC_SYSCTL_BIN" <<'SH'
+#!/bin/bash
+case "$*" in
+  *vm.loadavg*) n=$(cat "$0.n" 2>/dev/null || echo 0); echo $((n + 1)) > "$0.n"
+                l="$(sed -n "$((n + 1))p" "$0.loads" 2>/dev/null)"; [ -n "$l" ] || l="$(tail -n 1 "$0.loads" 2>/dev/null)"
+                echo "{ ${l:-0.50} 0.40 0.30 }" ;;
+  *hw.ncpu*) echo 8 ;;
+  *) exit 1 ;;
+esac
+SH
+  chmod +x "$CC_SYSCTL_BIN"
+  export CC_RESTORE_GATE_POLL_S=0
+  export CC_HANDOFF_LOG="$BATS_TEST_TMPDIR/handoffs.jsonl" CC_TEARDOWN_DIR="$BATS_TEST_TMPDIR/teardown"
 }
 
 # reg_entry <sid> <startedAt_ms> <account-config-basename> [cwd] [name]
@@ -499,6 +517,7 @@ stub_layout() { # <summary line>; a file .rc3=N makes the first N calls exit 3 (
   cat > "$CC_RESUME_LAYOUT_BIN" <<'SH'
 #!/bin/bash
 printf '%s\n' "$*" >> "$0.log"; cat >> "$0.rows"
+printf '%s\n' "${CC_ADMIT_LOAD_TERM:-on}" >> "$0.loadterm"
 n=$(cat "$0.n" 2>/dev/null || echo 0); echo $((n + 1)) > "$0.n"
 [ -f "$0.rc3" ] && [ "$n" -lt "$(cat "$0.rc3")" ] && exit 3
 cat "$0.sum"
@@ -825,4 +844,158 @@ markers_sum() { shasum "$CC_BOOT_RESUME_STATE_DIR/last-boot-epoch" "$CC_BOOT_RES
   run bash "$SCRIPT" --plan-only;                       [ "$status" -eq 2 ]
   run bash "$SCRIPT" --bogus;                           [ "$status" -eq 2 ]
   [ ! -f "$CC_IDL" ]
+}
+
+# ══ RESTORE V2: CONTRACT COLUMNS 6-11, LEDGER, HEADROOM, CAPACITY (W3 P3a-ii, 2026-10-04) ═════════════
+# Everything here runs behind --event or <state>/restore-v2. A roster says where a session WAS; the
+# newest transcript says where it went since, so the account, model, effort and permission mode come
+# from it, with the heartbeat's reading as the fallback. A later round of the same event never
+# launches a sid twice, and the event is done only at shed=0 or after its deadline.
+txn() { # <config-dir> <sid> <mtime YYYYMMDDhhmm> <jsonl lines...>
+  local d="$HOME/.$1/projects/-x-$2" f; f="$d/$2.jsonl"; mkdir -p "$d"; shift 3
+  : > "$f"; for l in "$@"; do printf '%s\n' "$l" >> "$f"; done
+}
+txn_at() { touch -t "$3" "$HOME/.$1/projects/-x-$2/$2.jsonl"; }
+ASST='{"type":"assistant","timestamp":"2026-10-04T10:00:00Z","effort":"high","gitBranch":"feat-tx","message":{"model":"claude-opus-5-5","content":[]}}'
+SYNTH='{"type":"assistant","timestamp":"2026-10-04T10:01:00Z","message":{"model":"<synthetic>","content":[]}}'
+PMODE='{"type":"permission-mode","permissionMode":"plan"}'
+row_of() { awk -F'\t' -v s="$2" '$2 == s' "$1"; }   # <rows file> <sid>
+SUM_MAP1='cc-resume-layout: map sid=e1 wid=51 oswin=1
+cc-resume-layout: verdict=ok launched=1 shed=1 failed=0 windows=1 fullscreen_ok=1 fullscreen_failed=0'
+SUM_OK1='cc-resume-layout: map sid=e2 wid=52 oswin=1
+cc-resume-layout: verdict=ok launched=1 shed=0 failed=0 windows=1 fullscreen_ok=1 fullscreen_failed=0'
+v2_fleet() { # a dead kitty's heartbeat of e1 (claude-next) and e2 (claude-tertiary)
+  export CC_BOOTUUID_OVERRIDE=UUID-1
+  KP="$(dead_pid)"
+  hbeat UUID-1 "$KP" 1784804900 "[$(rrow e1 claude-next /x/e1 EV-ONE),$(rrow e2 claude-tertiary /x/e2 EV-TWO)]" \
+    "e2	claude-tertiary	claude-sonnet-5-5	medium	default	feat-e2	1"
+}
+
+@test "v2 event: 11 columns; the account is the newest transcript's; model, effort, mode from its last real records; empty cells padded" {
+  v2_fleet
+  unset CC_TRANSCRIPT_MTIME_BIN                                # the real mtime reader, over fixture HOME
+  txn claude-next e1 202610040900 "$ASST"; txn_at claude-next e1 202610040900
+  txn claude-tertiary e1 202610041000 "$ASST" "$SYNTH" "$PMODE"; txn_at claude-tertiary e1 202610041000
+  stub_layout "$SUM_OK2"
+  run /bin/bash "$SCRIPT" --event 1784805000 --kind crash
+  [ "$status" -eq 0 ]
+  r1="$(row_of "$CC_RESUME_LAYOUT_BIN.rows" e1)"; r2="$(row_of "$CC_RESUME_LAYOUT_BIN.rows" e2)"
+  [ "$(printf '%s\n' "$r1" | awk -F'\t' '{ print NF }')" -eq 11 ]
+  [ "$(printf '%s\n' "$r2" | awk -F'\t' '{ print NF }')" -eq 11 ]
+  # e1 moved to tertiary (next3) after the roster was taken; the synthetic record does not count.
+  [ "$(printf '%s\n' "$r1" | awk -F'\t' '{ print $1, $4, $6, $7, $11 }')" = "next3 feat-tx claude-opus-5-5 high plan" ]
+  # e2 has no transcript: the heartbeat's reading stands, branch included.
+  [ "$(printf '%s\n' "$r2" | awk -F'\t' '{ print $1, $4, $6, $7, $11 }')" = "next3 feat-e2 claude-sonnet-5-5 medium default" ]
+  [ "$(printf '%s\n' "$r1" | cut -f10)" = $'\037' ]            # prompt_file is P4's: padded, never empty
+  grep -qx -- '--desktops --restore' "$CC_RESUME_LAYOUT_BIN.log"
+  grep -qx off "$CC_RESUME_LAYOUT_BIN.loadterm"                # restore capacity mode: no per-launch load term
+}
+
+@test "v2 --plan-only prints 11 columns per row with group and slot from the heartbeat's kitty tree" {
+  v2_fleet
+  d="$CC_HEARTBEAT_DIR/UUID-1/$KP"
+  jq '[.[] | .paneUUID = (if .session_id == "e1" then "30" else "31" end)]' "$d/hb.roster.json" > "$d/r" && mv "$d/r" "$d/hb.roster.json"
+  echo '[{"id":7,"tabs":[{"id":1,"windows":[{"id":31},{"id":99},{"id":30}]}]}]' > "$d/hb.kitty-ls.json"
+  run /bin/bash "$SCRIPT" --event 1784805000 --kind crash --plan-only
+  [ "$status" -eq 0 ]
+  rows="$(printf '%s\n' "$output" | grep '^row	')"
+  [ "$(printf '%s\n' "$rows" | grep -c .)" -eq 2 ]
+  [ "$(printf '%s\n' "$rows" | awk -F'\t' 'NF != 12' | grep -c .)" -eq 0 ]   # "row" + 11 contract columns
+  [ "$(printf '%s\n' "$rows" | awk -F'\t' '$3 == "e2" { print $9, $10 }')" = "k${KP}w7 1" ]
+  [ "$(printf '%s\n' "$rows" | awk -F'\t' '$3 == "e1" { print $9, $10, $7 }')" = "k${KP}w7 2 -" ]
+  [[ "$output" == *"verdict=planned rows=2 retired=0 exhausted=0 no_model=1 launches=0"* ]] || false
+  [ -z "$(ls "$CC_BOOT_RESUME_STATE_DIR/events" 2>/dev/null)" ]
+}
+
+@test "v2 ledger: a later round never relaunches a sid; map lines are kept; done only once nothing is shed" {
+  v2_fleet
+  export CC_RESTORE_NOW=1784805060                             # inside the event's deadline
+  stub_layout "$SUM_MAP1"
+  run /bin/bash "$SCRIPT" --event 1784805000 --kind crash
+  [ "$status" -eq 0 ]
+  ev="$CC_BOOT_RESUME_STATE_DIR/events/1784805000"
+  [ "$(cat "$ev/launched")" = e1 ]
+  grep -qx 'cc-resume-layout: map sid=e1 wid=51 oswin=1' "$CC_BOOT_RESUME_STATE_DIR/last-layout.map"
+  grep -qx 'cc-resume-layout: map sid=e1 wid=51 oswin=1' "$ev/map"
+  [ ! -f "$CC_BOOT_RESUME_STATE_DIR/events/1784805000.done" ]   # one row was shed
+  [ "$(notify_count)" -eq 1 ]
+  grep -q 'this restore runs again for them' "$CC_NOTIFY_BIN.log"
+  printf '%s\n' "$SUM_OK1" > "$CC_RESUME_LAYOUT_BIN.sum"
+  run /bin/bash "$SCRIPT" --event 1784805000 --kind crash        # round 2
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '	e1	' "$CC_RESUME_LAYOUT_BIN.rows")" -eq 1 ]   # e1 went to the layout once, ever
+  [ "$(grep -c '	e2	' "$CC_RESUME_LAYOUT_BIN.rows")" -eq 2 ]
+  [ -f "$CC_BOOT_RESUME_STATE_DIR/events/1784805000.done" ]
+  [ "$(notify_count)" -eq 1 ]                                  # one page per event, not per round
+  tail -n 1 "$CC_IDL" | grep -q '"ledger_skipped":1'
+  tail -n 1 "$CC_IDL" | grep -q '"channel":"already-paged"'
+  [ "$(sort "$ev/launched" | tr '\n' ' ')" = "e1 e2 " ]
+}
+
+@test "v2: past the event's deadline a shed row no longer holds the event open" {
+  v2_fleet
+  export CC_RESTORE_NOW=$((1784805000 + 1801))
+  stub_layout "$SUM_MAP1"
+  run /bin/bash "$SCRIPT" --event 1784805000 --kind crash
+  [ "$status" -eq 0 ]
+  [ -f "$CC_BOOT_RESUME_STATE_DIR/events/1784805000.done" ]
+}
+
+@test "v2 start gate: waits while load per core is over the gate, logging each reading; at its deadline it goes ahead" {
+  v2_fleet
+  printf '64.0\n64.0\n2.0\n' > "$CC_SYSCTL_BIN.loads"            # 8/core, 8/core, then 0.25/core
+  stub_layout "$SUM_OK2"
+  run /bin/bash "$SCRIPT" --event 1784805000 --kind crash
+  [ "$status" -eq 0 ]
+  log="$CC_BOOT_RESUME_STATE_DIR/events/1784805000/load.log"
+  [ "$(grep -c 'gate=6' "$log")" -eq 3 ]
+  tail -n 1 "$log" | grep -q 'per_core=0.25'
+  grep -q '"gate":"open"' "$CC_IDL"
+  rm -rf "$CC_BOOT_RESUME_STATE_DIR" "$CC_RESUME_LAYOUT_BIN".* "$CC_SYSCTL_BIN.n" "$CC_IDL" "$CC_NOTIFY_BIN".*
+  printf '64.0\n' > "$CC_SYSCTL_BIN.loads"; stub_layout "$SUM_OK2"
+  CC_RESTORE_GATE_MAX_S=0 run /bin/bash "$SCRIPT" --event 1784805000 --kind crash
+  [ "$status" -eq 0 ]
+  grep -q '"gate":"deadline"' "$CC_IDL"
+  [ "$(cat "$CC_RESUME_LAYOUT_BIN.n")" -eq 1 ]                  # restored anyway
+  grep -q 'stayed over 6 for the whole wait' "$CC_NOTIFY_BIN.log"
+}
+
+@test "v2 headroom: a row on an account at its weekly limit is restored, listed, and never reaches the keepalive" {
+  v2_fleet
+  export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/stub-accounts"
+  cat > "$CC_ACCOUNTS_BIN" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >> "$0.log"
+echo '{"rows":[{"acct":"next","weekly_pct":100},{"acct":"next3","weekly_pct":20}]}'
+SH
+  chmod +x "$CC_ACCOUNTS_BIN"
+  stub_layout "$SUM_OK2"
+  run /bin/bash "$SCRIPT" --event 1784805000 --kind crash
+  [ "$status" -eq 0 ]
+  grep -qx -- '--json --max-wait 0' "$CC_ACCOUNTS_BIN.log"       # cache-only, read once
+  [ "$(grep -c . "$CC_ACCOUNTS_BIN.log")" -eq 1 ]
+  row_of "$CC_RESUME_LAYOUT_BIN.rows" e1 | grep -q .           # still restored
+  [ "$(cat "$CC_BOOT_RESUME_STATE_DIR/events/1784805000/exhausted")" = e1 ]
+  [ "$(keepalive_log)" = /x/e2 ]                               # both INTERRUPTED; only e2 is nudged
+  grep -q '1 sit on account(s) at their weekly limit (next)' "$CC_NOTIFY_BIN.log"
+}
+
+@test "a reboot without the restore-v2 flag keeps 5 columns and no --restore; with the flag it is v2" {
+  roster alarm 1784799900 "[$(rrow a1 claude-next /x/a ALARM-ONE)]"
+  export CC_BOOT_RESUME_MODE=resume
+  stub_layout "$SUM_OK2"
+  run /bin/bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [ "$(awk -F'\t' '{ print NF }' "$CC_RESUME_LAYOUT_BIN.rows")" -eq 5 ]
+  grep -qx -- '--desktops' "$CC_RESUME_LAYOUT_BIN.log"
+  grep -qx on "$CC_RESUME_LAYOUT_BIN.loadterm"
+  [ ! -e "$CC_BOOT_RESUME_STATE_DIR/events" ]
+  rm -rf "$CC_BOOT_RESUME_STATE_DIR" "$CC_RESUME_LAYOUT_BIN".*; stub_layout "$SUM_OK2"
+  mkdir -p "$CC_BOOT_RESUME_STATE_DIR"; touch "$CC_BOOT_RESUME_STATE_DIR/restore-v2"
+  run /bin/bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [ "$(awk -F'\t' '{ print NF }' "$CC_RESUME_LAYOUT_BIN.rows")" -eq 11 ]
+  grep -qx -- '--desktops --restore' "$CC_RESUME_LAYOUT_BIN.log"
+  [ -f "$CC_BOOT_RESUME_STATE_DIR/events/boot-1784800000/load.log" ]
+  [ "$(marker)" = 1784800000 ]
 }
