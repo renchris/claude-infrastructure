@@ -24,7 +24,7 @@ packet `83adb541ea19` actioned. Method version 1.1 is frozen; it changes only fr
 | B2 | S | Item 8: `research-program` skill, `/research-program` command, intake script, briefs, rubric | A2 |
 | C | S | Wave 2: items 9–13, 15, in parallel with the pilot | B1, B2 |
 | D | S (fired `fire-rp-audit-bugfix`), T inside | Audit fixes: `docs/research/upfront-method-audit-2026-10-04/REPORT.md` §3 rows 4–6 | C |
-| E | E1 S (fired `fire-rp-v12-step1`); E2 Workflow in session d8964eb2; E3 S; E4 operator | Method v1.2 (ruling `1bf69e5c1775`): audit REPORT §3 rows 1, 2, 3, 7, plus the 9 s classifier limit (ruling `4bf73c4e55d5`) | D |
+| E | E1 S (fired `fire-rp-v12-step1`); E1b S (fired `fire-rp-v12-e1b`); E2 Workflow in session d8964eb2; E3 S; E4 operator | Method v1.2 (ruling `1bf69e5c1775`): audit REPORT §3 rows 1, 2, 3, 7, plus the 9 s classifier limit (ruling `4bf73c4e55d5`) | D |
 
 A1, A2 and A3 touch disjoint files and fire concurrently. B1 and B2 fire when A2 lands. Each dispatched session leads
 its own Agent Team where it has 2+ code-writing tasks.
@@ -439,6 +439,56 @@ change lands as a named, priced edit after E2's measurement, never before it.
   load-bound: one fewer fallback, or one more `other` label right, flips each condition. Thresholds stay assumed
   inputs (§6.6); a re-read at lower load, or the classifier-path options left in decision `4bf73c4e55d5`, are the
   levers. No program can certify while row 15 fails.
+
+#### E1b — make row 15 pass with the two allowed levers — EXHAUSTED, row 15 still FAILS (2026-10-04)
+Scope (frozen): make gate row 15 PASS honestly, without changing its thresholds, its sealed held-out set or the 9 s
+limit; levers in order: (1) a slimmer classifier start, (2) better labeling tuned on the tuning set only, (3)
+re-measure as E1 did. Locus S (fired `fire-rp-v12-e1b`). Harness, raw numbers and the tried patch:
+`docs/research/router-classifier-e1b-2026-10-04/`.
+- **What costs the time.** Haiku thinks before its one label (200-500 output tokens, ~4-5 s of API time). The cold
+  start itself costs ~2-4 s at load 40-100 before any token. `--disable-slash-commands` alone: median 7.68 → 6.29 s.
+  Thinking off (`--settings '{"alwaysThinkingEnabled":false}'`): median 2.88 s, 0 of 12 over 9 s (load 54-128,
+  n = 12 per arm, four arms interleaved). A short `--system-prompt` adds nothing to latency. `--json-schema` costs
+  2-4 internal turns, so it was rejected; `--bare` cannot use the OAuth login (B1).
+- **Lever 2, tuning set only.** The tuning set had no gold labels, so it was rated with `heldout-rate.py`'s brief and
+  courier path by `anthropic:claude-opus-5-5` and `openai:gpt-5.6-sol`: 69 of 96 agreed (labels beside the tuning
+  set, outside the repo). The tried brief (`e1b-classifier.patch`): a router system prompt that forbids following
+  the labeled prompt (an embedded "read this file and follow it" made haiku answer in prose, a fallback), the
+  prompt delimited as data, and classifier-only reading notes including the list-order tie-break.
+  `ROUTE_DEFINITIONS` stay the raters' word for word. On the agreed tuning rows with thinking off: `other` 65/66,
+  relay recall 78/78, 0 fallbacks (3 repeats).
+- **Readings of row 15** (all `CC_RESEARCH_ROUTER="python3 <worktree>/scripts/research-kit/router.py classify"
+  heldout.py evaluate`, rc 1, 22 of 91 excluded for rater disagreement, as in E1):
+
+  | # | config | when (CDT), load | fallback (cap ≤ 0.10) | `other` (≥ 0.90) | recall matched · missed · pushback (≥ 0.95) |
+  |---|---|---|---|---|---|
+  | E1 | pre-E1b, thinking on | 16:22-16:29, 24 → 40 | 7/69 = 0.10 FAIL | 23/26 = 0.88 FAIL | 14/14 · 3/3 · 1/1 |
+  | 2 | E1b brief, thinking off | 18:52-18:57, 40 → 39 | 0/69 = 0.00 | 25/26 = 0.96 | 14/14 · **1/3 FAIL** · 1/1 |
+  | 3 | E1b brief, thinking on | 19:27-19:34, 45 → 29 | 16/69 = 0.23 FAIL | 23/26 = 0.88 FAIL | 14/14 · 2/3 FAIL · 1/1 |
+
+- **Why both levers are exhausted.** Thinking carries the completeness sensitivity: on the 13 tuning rows where the
+  raters split and one said completeness or pushback, the pre-E1b path relays 18/26, the brief with thinking off
+  11/26, and the same brief with thinking on 17/26. Two cost-asymmetry notes ("when unsure, answer completeness")
+  left it at 10/26 and 12/26, so wording does not replace thinking. And with thinking on, the slimmer start buys
+  nothing: same-moment A/B, pre-E1b median 5.03 s (2 of 10 over 9 s) against the E1b config's 5.88 s (3 of 10,
+  max 54.8 s), load 27-40.
+- **Landed: nothing in the router.** The change (commit "feat(research-router): slimmer classifier start and
+  data-delimited brief", reverted by the next commit; the diff is `e1b-classifier.patch`) was committed before reading 3, so the configuration
+  choice was fixed ahead of the result. Since it read worse than baseline, it was reverted. No row-15 reading is
+  selected: all three are above. Disclosure: choosing thinking-on for reading 3 used one bit of reading 2 (the
+  regex-missed drop), and the sealed set has now been read three times since sealing.
+- **What remains (decisions for the lead, then the operator).** Row 15 cannot pass on a cold `claude -p` haiku under
+  the 9 s limit with these thresholds. Thinking-on is accurate enough but its cold call runs 5-6 s median with a
+  p90 of 11-19 s at load 27-45. Thinking-off fits easily (34 cold calls across load 31-128, none over 9 s) but misses
+  subtly worded completeness questions. The open options:
+  - **(a) A warm classifier.** A resident haiku process that drops the 2-4 s cold start and keeps thinking on. This
+    is the option decision `4bf73c4e55d5` left open; it needs a daemon and a fail-closed path when that daemon is down.
+  - **(b) Thinking off, plus a deterministic completeness pre-check ahead of the model.** This is a router design
+    change, and the sensitivity gap above has to be closed by measurement, not assumed.
+  - **(c) A different classifier model or thinking budget.** This is a §4.1 method parameter.
+  - **(d) The thresholds themselves.** These stay assumed inputs (§6.6) and are the operator's call.
+
+  Until one is chosen, no program can certify.
 
 #### E2 — triage precision study (v1.2 (a), measurement half) — RUNNING
 - Locus: a Workflow in session d8964eb2, started 2026-10-04. Results: `docs/research/triage-precision-study-2026-10-04/`.
