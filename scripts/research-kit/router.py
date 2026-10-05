@@ -45,11 +45,13 @@ research-verb deny. The registry cannot hold these: kit.registry_set keeps only 
 
 KILL SWITCHES (operator, set in the environment Claude Code is launched with, which no tool call of
 the session can change): CC_RESEARCH_BLOCK=0 turns the tool deny off; CC_RESEARCH_ROUTER=off
-(hooks) turns the routing off; CC_RESEARCH_RELAY_CHECK=0 turns the Stop check off.
+(hooks) turns the routing off; CC_RESEARCH_RELAY_CHECK=0 turns the Stop check off; CC_RESEARCH_WARM=0
+skips the resident classifier (classifier-warm.py) and makes the cold call.
 
 Test seams: CC_RESEARCH_HOME, CC_RESEARCH_REGISTRY, CC_RESEARCH_CLASSIFIER (a shell command given the
 classifier input on stdin, printing a label), CC_RESEARCH_CLASSIFIER_TIMEOUT, CC_RESEARCH_RENDER (a
-shell command printing the certificate lines), CC_MODEL_CONFIG.
+shell command printing the certificate lines), CC_MODEL_CONFIG, CC_RESEARCH_WARM_SOCK (the resident
+classifier's socket; default $CC_RESEARCH_HOME/classifier-warm/sock).
 """
 
 from __future__ import annotations
@@ -61,9 +63,11 @@ import os
 import re
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -250,14 +254,53 @@ def classifier_argv() -> Optional[List[str]]:
             "--tools", "", "--strict-mcp-config", "--no-session-persistence"]
 
 
+def warm_sock() -> Path:
+    env = os.environ.get("CC_RESEARCH_WARM_SOCK")
+    return Path(env) if env else kit.research_home() / "classifier-warm" / "sock"
+
+
+def warm_classify(text: str, timeout: float) -> Tuple[str, str]:
+    """Ask the resident classifier (classifier-warm.py, wave E1c), which keeps classifier processes
+    started ahead of the prompt. Returns ("answer", its raw reply), ("cold", why) when no process
+    took the prompt (no daemon, none ready: make the cold call), or ("spent", why) when one took it
+    and failed. It never yields a label of its own: the caller parses the reply as it parses a cold
+    call's."""
+    path = warm_sock()
+    if os.environ.get("CC_RESEARCH_WARM") == "0" or not path.exists():
+        return "cold", "no resident classifier"
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        s.settimeout(1.0)  # the daemon answers its socket within 1 s or it is treated as absent
+        s.connect(str(path))
+        s.sendall(json.dumps({"op": "ask", "text": text, "timeout": timeout}).encode() + b"\n")
+    except OSError:
+        s.close()
+        return "cold", "the resident classifier did not take the prompt"
+    try:
+        s.settimeout(timeout)
+        buf = b""
+        while b"\n" not in buf:
+            chunk = s.recv(65536)
+            if not chunk:
+                break
+            buf += chunk
+        out = json.loads(buf.split(b"\n", 1)[0])
+    except (OSError, ValueError):
+        return "spent", f"the resident classifier did not answer in {timeout:g} s"
+    finally:
+        s.close()
+    if isinstance(out, dict) and out.get("ok") and isinstance(out.get("text"), str):
+        return "answer", out["text"]
+    if isinstance(out, dict) and out.get("cold"):
+        return "cold", str(out.get("why") or "no warm process ready")
+    return "spent", str((out or {}).get("why") if isinstance(out, dict) else "bad reply")
+
+
 def classify(prompt: str, cert: str) -> Tuple[Optional[str], str]:
     """(label, reason). label None = unavailable: an error, a timeout, an unknown or mixed label."""
     m = WORK_ORDER_MARKER.search(prompt)
     if m:
         return "work-order", f"--requires-gate {m.group(1)} marker"
-    argv = classifier_argv()
-    if argv is None:
-        return None, "no classifier: `claude` is not on PATH"
     try:
         timeout = float(
             os.environ.get("CC_RESEARCH_CLASSIFIER_TIMEOUT") or CLASSIFIER_TIMEOUT_S
@@ -265,6 +308,22 @@ def classify(prompt: str, cert: str) -> Tuple[Optional[str], str]:
     except ValueError:
         timeout = CLASSIFIER_TIMEOUT_S
     text = CLASSIFIER_BRIEF.format(cert=cert or "(none rendered)", prompt=prompt)
+    # The resident classifier first, inside the same limit; the cold call gets what is left of it.
+    t0 = time.time()
+    state, reply = warm_classify(text, timeout)
+    if state == "answer":
+        labels = reply.replace(",", " ").split()
+        if len(labels) != 1 or labels[0] not in ROUTES:
+            return None, f"classifier answered {' '.join(labels)[:60]!r}, not one route label"
+        return labels[0], "classifier (resident)"
+    if state == "spent":
+        return None, reply
+    timeout -= time.time() - t0
+    if timeout <= 0:
+        return None, "classifier timed out before the cold call"
+    argv = classifier_argv()
+    if argv is None:
+        return None, "no classifier: `claude` is not on PATH"
     empty = tempfile.mkdtemp(prefix="cc-research-router-")
     try:
         p = subprocess.run(

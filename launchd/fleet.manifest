@@ -540,3 +540,8 @@ com.claude.research-market        | staged | 604800 | auto | - | 0051-research-j
 # Method v1.2 Stage 9 soak (2026-10-04, wave E3c, REPORT.md §11): the same runner, its own c10 step,
 # because 0051 was already run and a ledgered migration is never re-filed.
 com.claude.research-soak          | staged | 3600   | auto | - | 0058-research-soak-job.sh
+# com.claude.research-classifier-warm (2026-10-04, RESEARCH_PROGRAM_BUILD wave E1d): the re-ask
+# router's resident classifier, a KeepAlive daemon loaded only by the operator's c10 migration
+# 0059. No cadence (`0`) and no sensor (`-`): it writes only to stderr, so `auto` would read its
+# empty stdout as STALLED; its liveness check is `classifier-warm.py ping`.
+com.claude.research-classifier-warm | staged | 0 | - | - | 0059-research-classifier-warm.sh
