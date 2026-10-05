@@ -680,8 +680,8 @@ This table replaces the phase table near the top of the file. Only the W3 lead e
 | P8 | W3.2 (no dependency, fired early) | landed, content-verified | 261 / `w3-p8` | `4b8915441` (feat), tests `fd50f450b` `4bbbb0dc1` |
 | P3a-i | W3.2 | landed, content-verified | 266 / `w3-p3a-i` | `bfdb948ef` |
 | P3b | W3.2 | landed, content-verified | 267 / `w3-p3b` | `96a0591dc` (feat), `6b30ad551` (fix), tests `124f51717` `760e13771` |
-| P3a-ii | W3.2b | fired 2026-10-05 | 271 / `w3-p3a-ii` | |
-| P4 | W3.3 | waits for P3a-ii, P3b | | |
+| P3a-ii | W3.2b | landed, content-verified | 271 / `w3-p3a-ii` | `c483b8401` (feat), `6aa13bf1f` `3bfb4b9ad` (fixes) |
+| P4 | W3.3 | fired 2026-10-05 | 276 / `w3-p4` | |
 | P5 | W3.4 | waits for P4, P8 | | |
 | P7 | W3.4 | waits for P4, P3a-ii | | |
 
@@ -694,3 +694,5 @@ This table replaces the phase table near the top of the file. Only the W3 lead e
 - **2026-10-05, P3b. A `maybe` row confirmed by holder count and `SessionStart:resume` gets no map line**, because its window id is unknown. P4, P5, P7 and `cc-restore-rebind` must not assume one map line per restored sid. The layout's summary line now also carries `maybe=` and `stopped=`.
 - **2026-10-05, P3b. `boot-resume.sh:567-569`'s comment still says 2x2**; whichever phase next owns `boot-resume.sh` (P4) corrects it.
 - **2026-10-05, P3a-i. Event mode restores only from a heartbeat** (no heartbeat means exit 3, `no-heartbeat`). `--kind crash` picks the newest heartbeat whose kitty is dead, unless `--kitty-pid` or `--roster-dir` is given. On a new boot the tick runs after DETECT, because `cc-sessions` sweeps registry rows that have been dead for more than 24 h. P5's `cc-restore` builds on these rules.
+- **2026-10-05, lead. The forward-expiry fix goes to P5, with two added files.** P5 also owns `hooks/lib/mailbox-pending.sh` and `hooks/mailbox-drain.sh` (and their bats) while it runs. It adds the drain-side clear first, then lets `mailbox_write_forward` accept kitty's decimal keys, which closes the other half of gap 11. No other open phase touches those files.
+- **2026-10-05, P3a-ii. `tests/capacity-admit-coverage.bats` test 22 greps `boot-resume.sh` for the shed condition and its message on one line.** Splitting them turned P3a-ii's first land red (fixed in `3bfb4b9ad`). P4 and P5 edit `boot-resume.sh` next, so they keep each shed arm on one line.
