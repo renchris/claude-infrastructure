@@ -356,6 +356,12 @@ for n, (rs, gs) in enumerate(wins, 1):
         print("%d\t%d\t%s" % (n, r[0], "+".join(gs)))
 ' "$PER_WINDOW")" || die "the window planner failed"
 
+    # The non-charging probe; a library too old to carry it falls back to the charging admit, loudly.
+    PROBE_FN=cc_capacity_probe
+    if [ "$CC_ADMIT_OK" = 1 ] && ! command -v cc_capacity_probe >/dev/null 2>&1; then
+      PROBE_FN=cc_capacity_admit
+      note "cc-resume-layout: capacity-admit.sh has no cc_capacity_probe — each wait now spends the refusal budget"
+    fi
     t0=$SECONDS; stopped=none; fd_blind=0
     launched=0; failed=0; shed=0; nwin=0
     WIN_HEAD=(); WIN_NUM=(); MAYBE_SID=(); MAYBE_BASE=()
@@ -394,8 +400,15 @@ for n, (rs, gs) in enumerate(wins, 1):
       fi
       [ "$stopped" = none ] || { shed=$((shed + 1)); continue; }
       # CAPACITY: re-ask the same row with the probe until it admits, or the deadline passes.
+      # Only rc 9 is a refusal worth waiting on; any other rc is the probe failing, and it is admitted
+      # out loud rather than mistaken for a full box until the deadline sheds everything.
       if [ "$CC_ADMIT_OK" = 1 ]; then
-        while ! CC_ADMIT_RESTORE_R="$RESTORE_R" cc_capacity_probe cc-resume-layout "restore ${sid} on ${acct}"; do
+        while :; do
+          prc=0; CC_ADMIT_RESTORE_R="$RESTORE_R" "$PROBE_FN" cc-resume-layout "restore ${sid} on ${acct}" || prc=$?
+          [ "$prc" = 9 ] || {
+            [ "$prc" = 0 ] || note "cc-resume-layout: capacity probe failed (rc $prc) for $sid — launching it UNGATED"
+            break
+          }
           if [ $((SECONDS - t0)) -ge "$R_DEADLINE" ]; then
             stopped=deadline; note "cc-resume-layout: SHED — ${R_DEADLINE}s deadline passed: $(cc_capacity_admit_reason)"; break
           fi

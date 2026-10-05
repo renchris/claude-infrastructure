@@ -333,6 +333,30 @@ launched_sids() { grep ' launch ' "$KLOG" | grep -o "'sid-[a-z0-9-]*'" | tr -d "
   [ "$(kv launched)" = 2 ]; [ "$(kv shed)" = 0 ]; [ "$(kv verdict)" = ok ]
 }
 
+@test "restore: a library without cc_capacity_probe falls back to the admit, loudly, and never waits" {
+  row repo-a 1
+  export CC_RESTORE_FS_GAP=0 CC_RESTORE_WAIT=30
+  local t0=$SECONDS
+  run --separate-stderr bash "$LAYOUT" --desktops --restore --to unix:/tmp/fake --file "$ROWS"
+  [ $((SECONDS - t0)) -lt 20 ]
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$stderr" | grep -q 'has no cc_capacity_probe'
+  [ "$(cat "$BATS_TEST_TMPDIR/admits")" = 1 ]
+  [ "$(kv launched)" = 1 ]
+}
+
+@test "restore: a probe that errors (rc not 9) launches the row ungated instead of waiting" {
+  restore_setup
+  row repo-a 1
+  printf 'cc_capacity_probe() { return 1; }\n' >> "$FIX/scripts/lib/capacity-admit.sh"
+  export CC_RESTORE_WAIT=30
+  local t0=$SECONDS
+  restore
+  [ $((SECONDS - t0)) -lt 20 ]
+  printf '%s\n' "$stderr" | grep -q 'capacity probe failed (rc 1) for sid-repo-a-1 — launching it UNGATED'
+  [ "$(kv launched)" = 1 ]
+}
+
 @test "restore: R defaults to the active ceiling (8) when the caller sets none" {
   restore_setup
   row repo-a 1
