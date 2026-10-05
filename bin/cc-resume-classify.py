@@ -12,7 +12,8 @@ or was already AT-REST when the power died. Only the interrupted ones may be re-
             (a row may carry more than 4 columns — the W3 row contract has 11 — and the verdict
              is always appended last, so readers take $NF)
             --wake-lost adds a fourth verdict, WAKE-LOST: at rest, but with work open at the cut
-            that died with the process (see ASYNC WORK OPEN AT THE CUT). Without the flag the
+            that died with the process (see ASYNC WORK OPEN AT THE CUT; a watcher the session
+            armed itself is listed as lost and never decides the verdict). Without the flag the
             output is byte-identical to before it existed. --lost-json writes what each session
             lost; --hb-dir names a restore-heartbeat directory whose hb.bg.tsv says what was live.
 
@@ -320,7 +321,14 @@ def classify_full(path, boot_dt, alive_window, wake_lost=False, hb=None, sid="")
 # it as evidence would nudge the whole fleet, which is the 2026-08-24 defect. It only confirms a
 # watcher the session launched itself. Listening ports, agent-browser sessions and Agent Teams
 # members are named in the note and never decide the verdict.
-WAKE_KINDS = ("shell", "watcher", "agent", "workflow", "monitor", "journal", "goal", "ship")
+#
+# A watcher the session armed itself is listed too, and since W3 P4b it does not decide the verdict
+# either. Measured 2026-10-05 on the live fleet: 12 of 20 sessions read WAKE-LOST, 6 of them on a
+# self-armed cc-await-ping and nothing else. The same hook that makes the `.watching` pid worthless
+# as evidence makes the loss harmless: the resume's SessionStart re-arms a watcher without a turn,
+# so a prompt for it alone spends a turn and buys nothing. It stays in the lost items, where the
+# restore note says to re-arm it unless a /goal is live; any other item beside it still decides.
+WAKE_KINDS = ("shell", "agent", "workflow", "monitor", "journal", "goal", "ship")
 PAD = "\x1f"  # boot-resume.sh's TSV_PAD / restore-heartbeat.sh's HB_PAD: an empty cell
 JOURNAL_WINDOW_S = 900
 _TASK_ID_RES = (
@@ -767,7 +775,16 @@ WAKE_CASES = [
                              (499, _u_result("b1", _SH)), (400, _a_text())], "WAKE-LOST", {}, _has("ship")),
     ("watcher_armed_by_the_session", [(500, _a_use("b1", "Bash", command="cc-await-ping --timeout 3300",
                                                    run_in_background=True)), (499, _u_result("b1", _SH)),
-                                      (400, _a_text())], "WAKE-LOST", {"hb": "watching"}, _has("watcher", alive_at_tick=True)),
+                                      (400, _a_text())], "AT-REST", {"hb": "watching"}, _has("watcher", alive_at_tick=True)),
+    ("watcher_beside_a_lost_workflow", [(600, _a_use("b1", "Bash", command="cc-await-ping --timeout 3300",
+                                                     run_in_background=True)), (599, _u_result("b1", _SH)),
+                                        (500, _a_use("w1", "Workflow", script="x")), (499, _u_result("w1", _WF)),
+                                        (400, _a_text())], "WAKE-LOST", {"hb": "watching"},
+     lambda items: _has("watcher", alive_at_tick=True)(items) and _has("workflow", task_id="wtcaytsys")(items)),
+    ("watcher_only_parked_in_a_long_call", [(4000, _a_use("b1", "Bash", command="cc-await-ping --timeout 3300",
+                                                          run_in_background=True)), (3999, _u_result("b1", _SH)),
+                                            (3000, _a_use("t9", "Bash", command="make"))],
+     "AT-REST", {"hb": "live"}, _has("watcher")),
     ("watcher_from_the_hook_only", [(400, _a_text())], "AT-REST", {"hb": "watching"}, _lacks("watcher")),
     ("agent_background_open", [(500, _a_use("g1", "Agent", description="scan", run_in_background="true")),
                                (499, _u_result("g1", _AG)), (400, _a_text())], "WAKE-LOST", {}, _has("agent")),
