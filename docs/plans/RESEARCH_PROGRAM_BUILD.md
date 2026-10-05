@@ -656,6 +656,13 @@ here. Never change row 15's thresholds, the 9 s limit or the sealed sets; never 
 - **Fallback.** With no socket, a socket nobody answers, a daemon with no process ready, or `CC_RESEARCH_WARM=0`,
   `router.py classify` makes the cold call it made before, inside what is left of the same 9 s. A daemon that took
   the prompt and failed yields `unavailable` (the limit is spent), never a second try.
+- **Tests, red then green** (2026-10-04, load ~68). Red: in a snapshot of this commit with trunk's `router.py` and
+  `fleet.manifest`, `research-classifier-warm.bats` + `cc-fleet.bats` ran `1..44` with 4 `not ok` (the three
+  warm-answer router tests and the manifest count); the cold-path tests (no daemon, none ready,
+  `CC_RESEARCH_WARM=0`) pass on both, which is the no-regression claim. Green on this branch: the same two suites
+  `1..44`, and `research-router.bats` + `launchd-parity-lint.bats` `1..48`, no `not ok`; the runner and the
+  migration run under `/bin/bash` 3.2.57 inside the suite. Run by hand because the land's smoke reached none of
+  them before its 900 s budget ran out.
 
 #### E2 — triage precision study (v1.2 (a), measurement half) — RUNNING
 - Locus: a Workflow in session d8964eb2, started 2026-10-04. Results: `docs/research/triage-precision-study-2026-10-04/`.
