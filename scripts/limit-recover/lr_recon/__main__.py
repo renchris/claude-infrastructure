@@ -268,6 +268,22 @@ def _census(
         _read_composer(s, snap, facts, now, old)
         b = census.bucket(s, snap, facts, now)
         buckets.append(b)
+        if (
+            b.name == "IMPOSSIBLE"
+            and b.kind == "limited"
+            and s.sid not in stale_sids
+            and (old is None or not old.open)
+        ):
+            # W7h defect 3: a limited session the census cannot recover is a cohort member with
+            # a terminal outcome and a page, not a silent drop. An open record is left to its
+            # phase machine (a pane gone mid-move is PANE-GONE's R, not this).
+            req = req_by_sid.get(s.sid)
+            cid = census.cohort_id(b.acct, b.scope, b.resets_at)
+            rec = census.impossible_record(
+                b, s, cid, req.origin if req else "census", now
+            )
+            ctx.records[s.sid] = rec
+            _event(paths, "impossible", s.sid, rec.record_id, b.reason)
         if b.name not in RECORD_TYPES or s.sid in stale_sids:
             continue
         if (

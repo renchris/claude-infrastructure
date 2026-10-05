@@ -174,6 +174,51 @@ class LauncherRootedTests(unittest.TestCase):
             M._census(ctx, snap, facts, [], "act", NOW)
             self.assertEqual((cs.call_count, rec.substate), (1, "HOLD-DRAFT"))
 
+    def _headless(self, snap):
+        s = snap.sessions[SID]  # d425afab's shape: a session row is its only holder
+        s.pane, s.registry_name = None, ""
+        s.holders = [T.HolderObs(pid=10, lstart=L, cfg=self.cfg, src="session-row")]
+
+    def test_a_limited_headless_session_is_an_impossible_member_not_a_silent_drop(self):
+        """W7h defect 3: d425afab sat limited for 56 minutes (2026-10-04 07:59:47Z to legacy's
+        08:55Z bundle) in the IMPOSSIBLE bucket, which kept no record and logged no event."""
+        ctx, snap, facts = self.limited()
+        self._headless(snap)
+        buckets, _ = M._census(ctx, snap, facts, [], "observe", NOW)
+        self.assertEqual(
+            [(b.name, b.reason) for b in buckets], [("IMPOSSIBLE", "headless")]
+        )
+        rec = ctx.records[SID]
+        self.assertEqual(
+            (rec.terminal.outcome, rec.terminal.proof),
+            ("IMPOSSIBLE", "census: headless"),
+        )
+        self.assertEqual(
+            (rec.kind, rec.cohort_id, rec.source_acct),
+            ("limited", "next4-7d-1791104400", "next4"),
+        )
+        # one record and one event per death, however many passes see it
+        M._census(ctx, snap, facts, [], "observe", NOW + 5)
+        self.assertIs(ctx.records[SID], rec)
+        evs = [e for e in self.events() if e["ev"] == "impossible"]
+        self.assertEqual([(e["sid"], e["detail"]) for e in evs], [(SID, "headless")])
+
+    def test_an_idle_headless_session_or_an_open_record_is_left_alone(self):
+        ctx, snap, _rec, facts = self.world(answered=True)
+        del ctx.records[SID]
+        self._headless(snap)
+        M._census(ctx, snap, facts, [], "observe", NOW)
+        self.assertNotIn(
+            SID, ctx.records
+        )  # not limited: nothing to recover, nothing to page
+        ctx, snap, facts = self.limited(born=False)
+        self._headless(snap)
+        M._census(ctx, snap, facts, [], "observe", NOW)
+        self.assertTrue(
+            ctx.records[SID].open
+        )  # mid-recovery: its phase machine decides
+        self.assertNotIn("impossible", [e["ev"] for e in self.events()])
+
     def test_background_work_precedes_r(self):
         ctx, snap, facts = self.limited()
         snap.sessions[SID].bg_work = [T.BgWork(kind="shell", pid=3)]

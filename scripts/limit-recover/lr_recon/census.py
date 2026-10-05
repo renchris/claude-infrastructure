@@ -441,6 +441,37 @@ def not_needed_record(
     return rec
 
 
+def impossible_record(
+    b: T.Bucket, s: T.SessionObs, cid: str, origin: str, now: float
+) -> T.Record:
+    """A terminal IMPOSSIBLE(reason) member for a LIMITED session the census cannot recover (§3
+    step 5: "HEADLESS / CWD-GONE / NO-TRANSCRIPT: IMPOSSIBLE with the reason"; an immediate page).
+    Without a record the session was in no cohort and no event named it: d425afab, limited at
+    07:59:47Z on 2026-10-04 with a session row as its only holder (no pane, no registry row), sat
+    56 minutes as IMPOSSIBLE/headless and read as a census miss (W7h defect 3). The death key
+    makes it one record per death (``handled_death``)."""
+    rec = T.Record(
+        sid=s.sid,
+        record_id=T.make_record_id(cid, s.sid, 1),
+        kind=b.kind,
+        lane=_lane(s),
+        scope=b.scope,
+        pane=s.pane,
+        source_acct=s.acct,
+        source_cfg=s.cfg,
+        source_pid=s.pid,
+        source_lstart=s.lstart,
+        cwd=s.cwd,
+        cohort_id=cid,
+        origin=origin,
+    )
+    rec.close["death"] = death_key(s)
+    rec.timeline.detected = now
+    rec.updated_at = now
+    rec.terminal = T.Terminal(outcome="IMPOSSIBLE", proof="census: " + b.reason, at=now)
+    return rec
+
+
 # ── §3 step 3: stale reconcile ──────────────────────────────────────────────────────────────────
 
 
