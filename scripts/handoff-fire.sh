@@ -163,6 +163,11 @@
 #                       (CLAUDE_CONFIG_DIR-derived); --account/--launcher/--model/--effort/
 #                       --extra/--probe all compose. Excludes surface flags (same pane by
 #                       definition).
+#                       MID-TURN (2026-10-05): when the composer cannot be read because this very
+#                       call is running, the recycle is DEFERRED to the end of the turn: this call
+#                       prints `recycle DEFERRED` and exits 0, and a forked waiter runs the composer
+#                       gate and the /exit once the turn has ended (see hf_recycle_defer). End the
+#                       turn; do not re-run. Kill switch CC_RECYCLE_TURN_WAIT=off.
 #                       RELOCATING RECYCLE (2026-08-08): --recycle now COMPOSES with --worktree NAME
 #                       / --cwd DIR — same pane, NEW dir. The worktree is provisioned by the ordinary
 #                       fire machinery (pool-claim / cold-create / dep install / pre-trust), then the
@@ -3919,6 +3924,172 @@ rcy_composer_unreadable() { # $1=gate|fresh — emits the row and the refusal (s
       echo "!! recycle REFUSED after ${CC_RECYCLE_DRAFT_WAIT:-180}s: pane $SID's composer could not be READ (no box rendered, or the terminal did not answer) — typing /exit needs a composer proven empty. This is NOT a draft. Nothing was typed; the session stays alive. Re-run once the pane reads: $CMD" >&2 ;;
   esac
   return 0
+}
+
+# ---- A SELF-RECYCLE RUN MID-TURN WAITS FOR ITS TURN TO END (2026-10-05, reso pane 254) -------------
+# An agent can only run `--recycle` from inside a tool call of its own turn, and while that call runs
+# the pane often shows no composer box to read: session d425afab was refused twice in one day after
+# the full 180 s wait, and the retry ticket could not converge, because the re-run it asks for is
+# issued from inside a turn too. The call cannot wait the turn out either: the turn ends only after
+# the call returns. So the foreground FORKS: the parent returns at once (the turn can end), and the
+# child, in its own process group, waits for the turn to end and then runs the unchanged tail of the
+# recycle (composer gate, watcher, last read, /exit). Every guard still runs, after the wait.
+#
+# A fork, not a re-exec: the tail reads dozens of globals the pre-pass resolved (the pane proved
+# `mine` from this process's ancestry, the launch command, the worktree it may have just created),
+# and a detached re-run has no ancestry to prove the pane with. `set -m` is what gives the child its
+# own process group, so the kill that /exit sends to a tool call's group cannot reach it; by then the
+# parent is long gone and the child is launchd's. `$$` in the child is still the parent's pid.
+#
+# THE BOUND IS HELD UNDER bin/cc-reaper's 600 s orphan-bash floor on purpose: this child is a
+# launchd-parented bash, and wait (300) + composer gate (180) + arming must finish before the reaper
+# would TERM it. Raise CC_RECYCLE_TURN_WAIT_S only together with that floor.
+# Kill switch: CC_RECYCLE_TURN_WAIT=off restores the refusal and its retry ticket.
+
+# Did a prompt reach the session after the deferral? A tool result, a hook's feedback (isMeta) and
+# subagent traffic are the deferring turn's own records; anything else (an operator prompt, a task
+# notification, peer mail) starts work the session did not have when it asked to be recycled.
+hf_new_prompt_since() { # $1=transcript $2=epoch → 0 a new prompt · 1 none · 2 cannot tell
+  local tx="${1:-}" since="${2:-}" n
+  [ -n "$tx" ] && [ -f "$tx" ] && command -v jq >/dev/null 2>&1 || return 2
+  case "$since" in ''|*[!0-9]*) return 2 ;; esac
+  n="$(tail -n "${HF_REST_TAIL_LINES:-400}" "$tx" 2>/dev/null \
+    | jq -rc --argjson since "$since" 'select(.type=="user" and ((.isSidechain // false)|not) and ((.isMeta // false)|not))
+        | select(((.timestamp // "") | sub("\\.[0-9]+Z$"; "Z") | (try fromdateiso8601 catch 0)) > $since)
+        | select((.message.content|type) == "string"
+                 or ((.message.content|type) == "array"
+                     and ([.message.content[]? | select(.type == "tool_result")] | length) == 0))
+        | "p"' 2>/dev/null | grep -c p || true)"
+  case "$n" in ''|0) return 1 ;; esac
+  return 0
+}
+
+# recycle_turn_wait — has the deferring turn ended? A NAMED decision, like recycle_composer_gate, so
+# a suite can drive it over fixture transcripts and screens. Ready means: the tool call that ran the
+# recycle has returned AND the transcript reads at rest for a whole settle window (a blocking Stop
+# hook writes its feedback seconds after end_turn, and that is a turn still running). A transcript
+# that cannot be read leaves the composer box as the only witness. Sets RCY_TW_WHY on every non-zero.
+#   rc 0 = the turn ended · 2 = it did not end inside the wait · 3 = a new prompt arrived
+#   rc 4 = the pane no longer holds this session (rcy_tw_subject_gone, when the caller defines it)
+recycle_turn_wait() { # $1=it2-bin $2=pane $3=caller pid $4=transcript $5=since-epoch $6=max-wait-s $7=interval-s $8=settle-s
+  local it2="${1:-}" pane="${2:-}" cpid="${3:-}" tx="${4:-}" since="${5:-}" max="${6:-300}" ivl="${7:-3}" settle="${8:-10}"
+  local t=0 rest=-1 ok rrc
+  RCY_TW_WHY=""
+  case "$max" in ''|*[!0-9]*) max=300 ;; esac
+  case "$ivl" in ''|*[!0-9]*|0) ivl=3 ;; esac
+  case "$settle" in ''|*[!0-9]*) settle=10 ;; esac
+  while :; do
+    if command -v rcy_tw_subject_gone >/dev/null 2>&1 && rcy_tw_subject_gone; then
+      RCY_TW_WHY="pane $pane no longer holds the session that asked to be recycled"; return 4
+    fi
+    ok=0
+    if [ -n "$cpid" ] && kill -0 "$cpid" 2>/dev/null; then
+      RCY_TW_WHY="the tool call that ran the recycle (pid $cpid) has not returned"
+    else
+      if hf_new_prompt_since "$tx" "$since"; then
+        RCY_TW_WHY="a new prompt reached the session after it asked to be recycled"; return 3
+      fi
+      rrc=0; hf_transcript_at_rest "$tx" || rrc=$?
+      case "$rrc" in
+        0) ok=1 ;;
+        2) if composer_content "$it2" "$pane" >/dev/null 2>&1; then ok=1
+           else RCY_TW_WHY="the transcript could not be read and the pane shows no composer box"; fi ;;
+        *) RCY_TW_WHY="the turn is still running" ;;
+      esac
+    fi
+    if [ "$ok" = 1 ]; then
+      if [ "$rest" -lt 0 ]; then rest=0; else rest=$((rest + ivl)); fi
+      [ "$rest" -ge "$settle" ] && { RCY_TW_WHY=""; return 0; }
+    else
+      rest=-1
+    fi
+    [ "$t" -ge "$max" ] && return 2
+    "${HF_SLEEP:-/bin/sleep}" "$ivl"; t=$((t + ivl))
+  done
+}
+
+# Is this recycle one a turn-end wait can serve? Only the plain self form, run from inside a tool call
+# of the pane's own session (hf_invoking_call_pid): a remote recycle's subject is not mid-call because
+# of us, and resume mode's subject is not the session that would end the turn.
+hf_recycle_defer_eligible() { # $1=pane tty → 0 eligible (RCY_DEFER_CALLER_PID set) · 1 not
+  RCY_DEFER_CALLER_PID=""
+  [ "${CC_RECYCLE_TURN_WAIT:-on}" != off ] || return 1
+  [ "${RCY_DEFERRED:-0}" != 1 ] || return 1
+  [ "${RCY_REMOTE:-0}" != 1 ] && [ -z "${RESUME_LAUNCHER:-}" ] || return 1
+  RCY_DEFER_CALLER_PID="$(hf_invoking_call_pid "${1:-}")" || { RCY_DEFER_CALLER_PID=""; return 1; }
+  [ -n "$RCY_DEFER_CALLER_PID" ]
+}
+
+# hf_recycle_defer — the fork. Called from recycle_composer_block when the composer cannot be read.
+#   PARENT: prints what happens next and EXITS 0, so the tool call returns and the turn can end.
+#   CHILD:  waits (recycle_turn_wait), then runs recycle_fire_gated — the composer gate first, so a
+#           draft the operator typed meanwhile still holds the recycle. A hold writes the retry ticket.
+#   RETURNS 0 without forking when this recycle cannot be deferred (not eligible, or the fork could
+#   not be set up) — the caller then refuses as before. Never called under `||` or `if`: that would
+#   switch errexit off for the whole tail the child goes on to run.
+# One waiter per pane: a second call while one is alive says so and returns the turn, no second fork.
+hf_recycle_defer() { # $1=pane tty
+  local ptty="${1:-}" safe mark dlog dpid dsid dtx t0 opid oargs="" wrc=0
+  hf_recycle_defer_eligible "$ptty" || return 0
+  safe="$(printf '%s' "$SID" | LC_ALL=C tr -c 'A-Za-z0-9_-' '_')"
+  mark="$(hf_recycle_retry_dir)/.turn-wait-$safe.pid"
+  mkdir -p "$(hf_recycle_retry_dir)" 2>/dev/null || return 0
+  opid="$(cat "$mark" 2>/dev/null || true)"
+  case "$opid" in ''|*[!0-9]*) opid="" ;; esac
+  if [ -n "$opid" ] && kill -0 "$opid" 2>/dev/null; then oargs="$(ps -o args= -p "$opid" 2>/dev/null || true)"; fi
+  if [[ "$oargs" == *handoff-fire* ]]; then
+    echo "→ recycle already DEFERRED to the end of this turn: waiter pid $opid is waiting for pane $SID's turn to end. Nothing more to run — end your turn now."
+    trap - EXIT
+    exit 0
+  fi
+  dlog="$(mktemp "${TMPDIR:-/tmp}/handoff-recycle-defer-$safe-XXXXXX")" || return 0
+  dsid="$(cc_sid_for_pane "$SID" 2>/dev/null || true)"
+  dtx=""; [ -n "$dsid" ] && dtx="$(transcript_for_sid "$dsid" 2>/dev/null || true)"
+  t0="$(date +%s)"
+  # The pane no longer holds the deferring session: its registry row names another one. An empty or
+  # unreadable row is not evidence, and the tail's own probes re-read the pane before anything is typed.
+  rcy_tw_subject_gone() {
+    local now
+    [ -n "$dsid" ] || return 1
+    now="$(cc_sid_for_pane "$SID" 2>/dev/null || true)"
+    [ -n "$now" ] && [ "$now" != "$dsid" ]
+  }
+  set -m
+  (
+    set +m
+    # shellcheck disable=SC2030  # meant for this subshell alone: it IS the deferred recycle
+    RCY_DEFERRED=1
+    trap 'fire_cleanup; hf_inflight_release' EXIT
+    echo "→ deferred: waiting for pane $SID's turn to end (session ${dsid:-<unresolved>}, caller pid $RCY_DEFER_CALLER_PID, transcript ${dtx:-<none>}, bound ${CC_RECYCLE_TURN_WAIT_S:-300}s)"
+    recycle_turn_wait "$RCY_IT2" "$SID" "$RCY_DEFER_CALLER_PID" "$dtx" "$t0" \
+      "${CC_RECYCLE_TURN_WAIT_S:-300}" "${CC_RECYCLE_TURN_WAIT_IVL_S:-3}" "${CC_RECYCLE_TURN_SETTLE_S:-10}" || wrc=$?
+    rm -f "$mark" 2>/dev/null || true
+    case "$wrc" in
+      0) : ;;
+      4) emit_recycle_event recycle-held-subject-gone "" "$SID" "deferred to turn end: $RCY_TW_WHY" || true
+         echo "!! recycle DROPPED while waiting for the turn to end: $RCY_TW_WHY. Nothing was typed." >&2
+         exit 1 ;;
+      3) emit_recycle_event recycle-held-new-prompt "" "$SID" "deferred to turn end: $RCY_TW_WHY" || true
+         echo "!! recycle HELD while waiting for the turn to end: $RCY_TW_WHY. Nothing was typed; the session stays alive." >&2
+         hf_recycle_retry_ticket "$dsid" "$SID" "a new prompt arrived before the recycling turn had ended" - "${PROMPT_FILE_ORIG:-${PROMPT_FILE:-}}" >&2 || true
+         exit 1 ;;
+      *) emit_recycle_event recycle-held-busy "" "$SID" "deferred to turn end: the turn did not end in ${CC_RECYCLE_TURN_WAIT_S:-300}s (${RCY_TW_WHY:-no reason recorded})" || true
+         echo "!! recycle HELD: pane $SID's turn did not end within ${CC_RECYCLE_TURN_WAIT_S:-300}s of the recycle being asked for (${RCY_TW_WHY:-no reason recorded}). Nothing was typed; the session stays alive." >&2
+         hf_recycle_retry_ticket "$dsid" "$SID" "the turn that ran the recycle did not end in time" - "${PROMPT_FILE_ORIG:-${PROMPT_FILE:-}}" >&2 || true
+         exit 1 ;;
+    esac
+    emit_recycle_event recycle-turn-ended "" "$SID" "deferred self-recycle: the turn ended $(( $(date +%s) - t0 ))s after the call; running the composer gate" || true
+    echo "→ deferred: the turn ended after $(( $(date +%s) - t0 ))s — running the composer gate and the recycle"
+    recycle_fire_gated
+  ) </dev/null >>"$dlog" 2>&1 &
+  dpid=$!
+  set +m
+  disown "$dpid" 2>/dev/null || true
+  printf '%s\n' "$dpid" > "$mark" 2>/dev/null || true
+  emit_recycle_event recycle-deferred-turn "" "$SID" "composer unreadable mid-turn on a self-recycle; waiter pid $dpid runs the recycle once the turn ends (log $dlog)" || true
+  echo "→ recycle DEFERRED to the end of this turn: pane $SID's composer cannot be read while this tool call runs, so waiter pid $dpid (own process group) waits up to ${CC_RECYCLE_TURN_WAIT_S:-300}s for the turn to end, then proves the composer empty and types /exit. END YOUR TURN NOW and start no other work: a new prompt, a draft in the composer or a turn that keeps running holds it and leaves a retry ticket. Log: $dlog"
+  trap - EXIT
+  exit 0
 }
 
 # recycle_nudge_decision — what may the watcher's 60/150/300s checkpoint DO, decided from the
@@ -16361,6 +16532,19 @@ recycle_fire() {
       echo "!!   If a session is running there, /exit it yourself and re-run --recycle. If the pane is at a shell prompt, run: $CMD" >&2
       exit 1 ;;
   esac
+  recycle_fire_gated
+}
+
+# THE TAIL OF recycle_fire, FROM THE COMPOSER GATE TO THE /exit — its own function so a self-recycle
+# deferred to the end of its turn (hf_recycle_defer) can run it later, unchanged, in the forked child.
+# It reads recycle_fire's locals ($tty, $cmdfile, $log) through bash's dynamic scope, so it is only
+# ever called from recycle_fire or from a fork of it.
+recycle_fire_gated() {
+  recycle_composer_block
+  recycle_fire_armed
+}
+
+recycle_composer_block() {
   # COMPOSER GATE (recycle-100p 2026-08-22 — docs/research/recycle-100p-2026-08-22.md §2.1/§3).
   # /exit into a NON-empty composer does not exit: it MERGES with the draft into one text message
   # (measured 30 merges / 24 days, ≥8 of them swallowing a real in-flight operator message; the
@@ -16380,7 +16564,21 @@ recycle_fire() {
     if [ -n "$rcy_cg_now" ] && composer_residue_is_ours "$SID" "$rcy_cg_now"; then
       rcy_cg_c="$rcy_cg_now"; rcy_cg_rc=1
     else
-      rcy_cg_c="$(recycle_composer_gate "$RCY_IT2" "$SID" "${CC_RECYCLE_DRAFT_WAIT:-180}" "${CC_RECYCLE_DRAFT_IVL:-15}")" || rcy_cg_rc=$?
+      # A self-recycle run mid-turn that can be deferred to its turn's end does not spend the whole
+      # draft wait finding out the box is not there: a short first look, and only a DRAFT (rc 1) buys
+      # the rest of the wait, exactly as before.
+      rcy_cg_wait="${CC_RECYCLE_DRAFT_WAIT:-180}"; rcy_cg_first="$rcy_cg_wait"
+      case "$rcy_cg_wait" in ''|*[!0-9]*) rcy_cg_wait=180; rcy_cg_first=180 ;; esac
+      if hf_recycle_defer_eligible "$tty"; then
+        rcy_cg_first="${CC_RECYCLE_TURN_WAIT_PROBE_S:-30}"
+        case "$rcy_cg_first" in ''|*[!0-9]*) rcy_cg_first=30 ;; esac
+        [ "$rcy_cg_first" -le "$rcy_cg_wait" ] || rcy_cg_first="$rcy_cg_wait"
+      fi
+      rcy_cg_c="$(recycle_composer_gate "$RCY_IT2" "$SID" "$rcy_cg_first" "${CC_RECYCLE_DRAFT_IVL:-15}")" || rcy_cg_rc=$?
+      if [ "$rcy_cg_rc" = 1 ] && [ "$rcy_cg_first" -lt "$rcy_cg_wait" ]; then
+        rcy_cg_rc=0
+        rcy_cg_c="$(recycle_composer_gate "$RCY_IT2" "$SID" "$((rcy_cg_wait - rcy_cg_first))" "${CC_RECYCLE_DRAFT_IVL:-15}")" || rcy_cg_rc=$?
+      fi
     fi
     # OUR-OWN-RESIDUE ARM (item 1ea55b6ad9f3). A held composer has two very different causes and
     # the old gate could not tell them apart, so it refused both — forever, which is a deadlock
@@ -16403,9 +16601,13 @@ recycle_fire() {
       fi
     fi
     if [ "$rcy_cg_rc" = 2 ]; then
-      rcy_composer_unreadable gate
       # A self-recycle run mid-turn often has no composer box to read (pane 254, 2026-10-05: 180 s,
-      # refused). The turn's own Stop is when the box is back, so that is when it is re-attempted.
+      # refused, twice). hf_recycle_defer hands the rest of this recycle to a forked child that waits
+      # for the turn to end, and does not return here when it does. It returns only when this recycle
+      # cannot be deferred (not a self-recycle inside a tool call, already the deferred child, or the
+      # kill switch), and then the refusal and its retry ticket stand as before.
+      hf_recycle_defer "$tty"
+      rcy_composer_unreadable gate
       if [ "$RCY_REMOTE" != 1 ] && [ -z "${RESUME_LAUNCHER:-}" ]; then
         hf_recycle_retry_ticket "$(cc_sid_for_pane "$SID" 2>/dev/null || true)" "$SID" "the composer could not be read while the turn was running" - "${PROMPT_FILE_ORIG:-${PROMPT_FILE:-}}" >&2 || true
       fi
@@ -16427,6 +16629,9 @@ recycle_fire() {
       exit 1
     fi
   fi
+}
+
+recycle_fire_armed() {
   # ORDER IS LOAD-BEARING: watcher FIRST (heartbeat-verified), /exit LAST. A typed /exit
   # INTERRUPTS the in-flight turn and exits within seconds (E2E 2026-07-03 — twice: the busy
   # turn died with no output persisted; /exit does NOT enqueue-to-turn-end the way /clear does).
@@ -16579,7 +16784,12 @@ recycle_fire() {
   hf_recycle_lock_acquire "$SID" || exit 1
   # $16 (W7c): the tool call of THIS pane's session that we are running inside, if any — the watcher
   # waits for it to return before re-submitting an /exit that it alone held up.
-  RCY_CALLER_PID_ARG="$(hf_invoking_call_pid "$tty")" || RCY_CALLER_PID_ARG=""
+  # A recycle deferred to its turn's end runs in a fork that has no claude above it any more: it is
+  # still a self-recycle, so it hands over the call it was forked from (returned by now), which keeps
+  # the watcher's self-form arms and its retry ticket.
+  # shellcheck disable=SC2031  # read inside that same subshell, where the tail runs
+  if [ "${RCY_DEFERRED:-0}" = 1 ]; then RCY_CALLER_PID_ARG="${RCY_DEFER_CALLER_PID:-}"
+  else RCY_CALLER_PID_ARG="$(hf_invoking_call_pid "$tty")" || RCY_CALLER_PID_ARG=""; fi
   hf_phase detach
   # The watcher's outcome rows keep this recycle's clock (item 4b): exported here, at its detach only.
   export HF_T0_EPOCH HF_RCY_PHASES

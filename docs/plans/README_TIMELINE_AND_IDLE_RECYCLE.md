@@ -334,3 +334,38 @@ the hold line reports what it found (`composer after Esc: …`), so a stray `/ex
 
 Not covered: the ticket is not deleted by a successful recycle in a test, because the fixture pane
 never reaches a shell; that line is exercised only live.
+
+### Same day, later — a self-recycle run mid-turn waits for its turn to end
+
+Measured after the three changes landed (pane 254, 14:11-14:14 local): the re-armed advisory fired,
+the session ran the recycle from inside its turn, and it was refused after 180 s with "composer could
+not be READ", for the second time that day. The ticket could not fix this: the re-run it asks for is
+issued from inside a turn too, so it refuses again until the 3-hold cap.
+
+The call cannot wait for the turn to end, because the turn ends only after the call returns. So
+`recycle_composer_block` now forks (`hf_recycle_defer`): the foreground prints `recycle DEFERRED to
+the end of this turn` and exits 0, and the child waits (`recycle_turn_wait`) until the tool call has
+returned and the transcript has read at rest for 10 s, then runs the unchanged tail
+(`recycle_fire_gated`: composer gate, watcher, last read, `/exit`).
+
+| Case | Outcome |
+|---|---|
+| Turn ends, composer empty | the recycle goes on |
+| Turn ends, composer holds a draft | held as before (180 s wait, then the draft refusal and the desk page) |
+| A new prompt, task notification or peer mail arrives first | held, retry ticket |
+| Turn still running after 300 s | held, retry ticket |
+| The pane's registry row names another session | dropped, no ticket |
+| Remote form, resume mode, or not inside a tool call of the pane's own session | not deferred; refused as before |
+
+Why a fork and not a detached re-run: the tail reads state the pre-pass resolved from this process's
+ancestry (the pane proved `mine`), which a detached re-run cannot prove again. Why 300 s: the child is
+a launchd-parented bash, and `bin/cc-reaper` TERMs those at 600 s; wait 300 + composer gate 180 +
+arming stays under it. A mid-turn composer that does read empty is not deferred (30 s first look,
+`CC_RECYCLE_TURN_WAIT_PROBE_S`), so that path is as before.
+
+Switch: `CC_RECYCLE_TURN_WAIT=off`. Bounds: `CC_RECYCLE_TURN_WAIT_S` (300),
+`CC_RECYCLE_TURN_SETTLE_S` (10). Suite: `tests/handoff-recycle-turn-wait.bats`.
+
+Not covered by the suite: the tail after the gate (watcher, `/exit`) running from the forked child
+against a real pane. The fork's survival past its tool call was checked by hand (own process group,
+parent 1, still writing after the call returned); the first live self-recycle is the end-to-end proof.

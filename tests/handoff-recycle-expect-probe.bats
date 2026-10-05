@@ -260,6 +260,10 @@ setup_recycle() {
   hf_recycle_disarm() { :; }
   hf_pane_focused() { echo unknown; }
   eval "$(sed -n '/^recycle_fire() {/,/^}/p' "$HF")"
+  # recycle_fire's tail, three functions since 2026-10-05 (tests/handoff-recycle-turn-wait.bats).
+  eval "$(sed -n '/^recycle_fire_gated() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^recycle_composer_block() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^recycle_fire_armed() {/,/^}/p' "$HF")"
 }
 
 @test "recycle_fire: an UNCONFIRMED pane is REFUSED — exit non-zero, nothing typed" {

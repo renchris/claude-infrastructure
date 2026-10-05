@@ -314,6 +314,11 @@ setup_recycle() {
   rm -f "$BATS_TEST_TMPDIR/armed" "$BATS_TEST_TMPDIR/events.log"
   export CC_RECYCLE_COMPOSER_GATE=off          # a different gate; out of scope here
   eval "$(sed -n '/^recycle_fire() {/,/^}/p' "$HF")"
+  # recycle_fire ends by calling its tail, which has been three functions since 2026-10-05
+  # (the turn-end wait re-runs the tail in a fork; tests/handoff-recycle-turn-wait.bats).
+  eval "$(sed -n '/^recycle_fire_gated() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^recycle_composer_block() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^recycle_fire_armed() {/,/^}/p' "$HF")"
 }
 
 @test "recycle_fire: the pane-32 shape is REFUSED before the watcher arms — nothing typed" {

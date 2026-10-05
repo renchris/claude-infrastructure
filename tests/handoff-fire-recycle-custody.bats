@@ -645,7 +645,7 @@ SID_UUID="a1b2c3d4-0000-4000-8000-000000000002"
 
 @test "8 the blind anti-strand Enter is gone, and a matching read-back sends exactly one CR" {
   local body
-  body="$(sed -n '/^recycle_fire_commit() {/,/^}/p; /^recycle_fire() {/,/^}/p' "$HF")"
+  body="$(sed -n '/^recycle_fire_commit() {/,/^}/p; /^recycle_fire() {/,/^}/p; /^recycle_composer_block() {/,/^}/p; /^recycle_fire_armed() {/,/^}/p' "$HF")"
   [ -n "$body" ]
   [[ "$body" != *'as_write "$SID" ""'* ]] || { echo "the blind Enter is back"; false; }
   tail_world
