@@ -24,7 +24,7 @@ packet `83adb541ea19` actioned. Method version 1.1 is frozen; it changes only fr
 | B2 | S | Item 8: `research-program` skill, `/research-program` command, intake script, briefs, rubric | A2 |
 | C | S | Wave 2: items 9–13, 15, in parallel with the pilot | B1, B2 |
 | D | S (fired `fire-rp-audit-bugfix`), T inside | Audit fixes: `docs/research/upfront-method-audit-2026-10-04/REPORT.md` §3 rows 4–6 | C |
-| E | E1 S (fired `fire-rp-v12-step1`); E1b S (fired `fire-rp-v12-e1b`); E2 Workflow in session d8964eb2; E3 S; E4 operator | Method v1.2 (ruling `1bf69e5c1775`): audit REPORT §3 rows 1, 2, 3, 7, plus the 9 s classifier limit (ruling `4bf73c4e55d5`) | D |
+| E | E1 S (fired `fire-rp-v12-step1`); E1b S (fired `fire-rp-v12-e1b`); E1c S (fired `fire-rp-v12-e1c`); E2 Workflow in session d8964eb2; E3 S; E4 operator | Method v1.2 (ruling `1bf69e5c1775`): audit REPORT §3 rows 1, 2, 3, 7, plus the 9 s classifier limit (ruling `4bf73c4e55d5`) | D |
 
 A1, A2 and A3 touch disjoint files and fire concurrently. B1 and B2 fire when A2 lands. Each dispatched session leads
 its own Agent Team where it has 2+ code-writing tasks.
@@ -489,6 +489,67 @@ re-measure as E1 did. Locus S (fired `fire-rp-v12-e1b`). Harness, raw numbers an
   - **(d) The thresholds themselves.** These stay assumed inputs (§6.6) and are the operator's call.
 
   Until one is chosen, no program can certify.
+
+#### E1c — a valid instrument for row 15, read once — RUNNING (2026-10-04)
+Scope (frozen): make row 15 a valid instrument and read it once. (1) Mint a new sealed held-out set v2, big enough
+to judge each stratum, beside v1 (never overwritten); (2) pre-register here, on the tuning set only and before any
+read of v2, the rule that picks the classifier configuration, then read v2 exactly once with the chosen
+configuration; (3) if v2 fails only because thinking-on fallbacks exceed the cap, build the warm (resident)
+classifier as a staged launchd job with a c10 migration the operator runs, and leave the final reading pending its
+activation. Never change row 15's thresholds or the 9 s limit. Locus S (fired `fire-rp-v12-e1c`), lead-inline inside
+(why: the steps are strictly ordered around one sealed file, and no second writer may hold its key path).
+
+- **Why v1 cannot carry a verdict.** Its sealed strata hold 31 regex-matched, 27 regex-missed, 3 pushback and 30
+  other prompts, of which row 15 counts 14 · 3 · 1 as relay-gold: one prompt moves regex-missed recall by 33 points.
+  It has also been read three times while the configuration was being chosen (E1b's disclosure).
+- **Tooling (red, then green).** `heldout.py --set v1|v2`: each set is sealed once in its own file and keychain
+  account (`sealed.enc` / `sealed`, `sealed-v2.enc` / `sealed-v2`); `seal --set v2` drops every candidate that an
+  earlier sealed set or an `--exclude` file (the v1 tuning set) already holds, matched on the first 200 characters
+  with case and whitespace folded; `seal --dry-run` prints the per-stratum counts and writes nothing. With `--set`
+  omitted `seal` means v1, and every other verb and gate row 15 read the newest sealed set. `evaluate` now names
+  the set and counts fallbacks per stratum, so a slow classifier can be told from a wrong one.
+  `heldout-candidates.py --history` reads the prompt history (`~/.claude*/history.jsonl`, a year deep) as a second
+  store, counts a short challenge as pushback wherever it sits in the prompt, and takes `--cap-for STRATUM=N`.
+  `heldout-rate.py --set --batch N` sends the same brief N prompts per call, asks a batch whose reply skips a
+  prompt again once (the OpenAI rater's first pass returned 395 of 396 and recorded nothing), and records nothing
+  unless every batch came back whole from one model. The five new tests failed against the pre-change scripts
+  (research-kit-heldout + research-router-heldout: 5 of 23 not ok, the 18 older tests ok); the green run is in
+  this wave's status line.
+- **v2 sealed 2026-10-04.** The transcripts hold 3 pushback prompts in all (the same 3 v1 used), so pushback could
+  not grow from them; the prompt history holds 44 more. Mined from 7,360 transcripts and 4 history files with caps
+  110 regex-matched, 330 regex-missed, 100 other and every pushback prompt found (49): 589 candidates, 101 dropped
+  as already in v1's sealed or tuning set, the rest split 0.8 under the same HMAC secret. **Sealed: 396 prompts —
+  64 regex-matched, 228 regex-missed, 37 pushback, 67 other** (v1: 31 · 27 · 3 · 30). 92 more went to a new
+  tuning file (`tuning-v2.jsonl`, 29 · 42 · 9 · 12, unlabeled, outside the repo) for whoever builds next. v1's file
+  is byte-identical before and after (sha1 `97695cb0…`). Row 15 counts a completeness-stratum prompt only when both
+  raters agree it is a re-ask, so the counted sizes are known after labeling and are recorded below.
+- **Pre-registered configuration rule (committed before the tuning measurement and before any read of v2).**
+  Decided on the v1 tuning set only (96 rows; 69 with two agreeing raters, 13 "borderline" rows where the raters
+  split and one said completeness or pushback). Harness `docs/research/router-classifier-e1c-2026-10-04/`:
+  `e1c-tune.py 2 <out>` runs every tuning row twice per arm, the arms started at the same instant, one cold call
+  each with 30 s to answer; `e1c-choose.py <out>` is the rule below as code.
+  - Arms: `on-pre` (the router as built on trunk, thinking on); `on-e1b` (E1b's patch, thinking on); `off-e1b`
+    (E1b's patch, thinking off). No other configuration is a candidate in this wave.
+  - Measures per arm: relay recall on the agreed relay-gold rows of the three completeness strata; exact-label
+    rate on the agreed `other` rows; relays on the borderline rows (completeness sensitivity, which the agreed
+    rows cannot show); fallback share at 9 s (a call over 9.0 s wall, or one that returns anything but a single
+    route label).
+  - Step 1, labeling: an arm is eligible when recall ≥ 0.95 and `other` ≥ 0.90 (row 15's own thresholds) on the
+    labels it gives with time to answer. If none is eligible, take the highest recall, then `other`.
+  - Step 2, sensitivity: among eligible arms, the most borderline relays; arms within 2 calls of the best are tied.
+  - Step 3, latency: among tied arms, the lowest fallback share at 9 s; then the smaller change from trunk
+    (`on-pre`, `on-e1b`, `off-e1b`).
+  - Labeling ranks ahead of latency on purpose: E1b measured that wording does not replace thinking, while a cold
+    start is an engineering cost that decision `4bf73c4e55d5` option 3 (a warm classifier) removes.
+  - The read: `CC_RESEARCH_ROUTER="python3 <worktree>/scripts/research-kit/router.py classify" heldout.py --set v2
+    evaluate`, once, with the chosen arm committed in `router.py` first, whatever its tuning fallback share.
+  - The verdict, fixed now. PASS: `evaluate` exits 0. Otherwise, with `fell` the fallbacks among a stratum's
+    counted items: if every stratum meets its threshold on the items that got an answer (`ok / (n − fell)`) and
+    the fallback share is above 0.10, the failure is latency alone, the verdict is "pending warm-classifier
+    activation", and step (3) of the scope is built. If any stratum misses its threshold on answered items, the
+    verdict is FAIL (labeling) with the numbers, and no warm classifier is built on this wave's authority.
+  - No second read of v2 follows in this wave under any outcome. The later reading after the operator activates a
+    warm classifier uses the same committed labeling configuration and changes only the call path.
 
 #### E2 — triage precision study (v1.2 (a), measurement half) — RUNNING
 - Locus: a Workflow in session d8964eb2, started 2026-10-04. Results: `docs/research/triage-precision-study-2026-10-04/`.
