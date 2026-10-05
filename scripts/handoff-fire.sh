@@ -10138,7 +10138,7 @@ if [ "${1:-}" = "__recycle" ]; then
     # session carries its whole transcript, so a fresh non-error turn on the target is the session
     # ANSWERING, and the dead alarm below ("alive at an empty composer") was false on every such run.
     # The token stays the FIRST proof (it alone can say our prompt landed); this is read only once it
-    # has had the full window, and the line says which proof it is. ~40 false HANDOFF-RECYCLE-DEAD.
+    # has had the full window, and the line says which proof it is. ~40 false recycle-dead alarms.
     if [ -n "$RCY_RESUME_SID" ]; then
       rcy_tx_n=0
       if [ -n "$RCY_RESUME_CFG" ]; then

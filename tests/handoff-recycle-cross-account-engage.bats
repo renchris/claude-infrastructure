@@ -12,7 +12,10 @@
 # tests/lr-fire-resume-submit.bats:861 uses), with the source and target as two config dirs.
 
 setup() {
-  export CC_ADMIT_GATE=off CC_FIRE_CAPACITY_GATE=off CC_FIRE_HEADROOM_GATE=off
+  # One export per line: the pin-guard (handoff-fire-capacity-gate.bats case 25) reads them that way.
+  export CC_FIRE_CAPACITY_GATE=off
+  export CC_FIRE_HEADROOM_GATE=off
+  export CC_ADMIT_GATE=off
   export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/absent-sweep.json"
   export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/absent-claude-accounts"
   export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/absent-heal-"

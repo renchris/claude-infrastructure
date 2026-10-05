@@ -17,7 +17,10 @@
 setup() {
   REPO_SRC="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HF="$REPO_SRC/scripts/handoff-fire.sh"
-  export CC_FIRE_CAPACITY_GATE=off CC_FIRE_HEADROOM_GATE=off HANDOFF_ACCOUNT_SWEEP=off
+  # One export per line: the pin-guard (handoff-fire-capacity-gate.bats case 25) reads them that way.
+  export CC_FIRE_CAPACITY_GATE=off
+  export CC_FIRE_HEADROOM_GATE=off
+  export HANDOFF_ACCOUNT_SWEEP=off
   export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/no-such-sweep-stamp.json"
   export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/no-such-claude-accounts"
   export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/no-such-heal-lock-"

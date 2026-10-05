@@ -10,7 +10,9 @@
 # that every doubtful case leaves the copy alone and says so.
 
 setup() {
-  export CC_FIRE_CAPACITY_GATE=off CC_FIRE_HEADROOM_GATE=off
+  # One export per line: the pin-guard (handoff-fire-capacity-gate.bats case 25) reads them that way.
+  export CC_FIRE_CAPACITY_GATE=off
+  export CC_FIRE_HEADROOM_GATE=off
   export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/account-sweep.json"
   export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/claude-accounts-absent"
   export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/heal-"

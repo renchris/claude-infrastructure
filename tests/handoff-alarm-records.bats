@@ -328,5 +328,8 @@ site_is_converted() { # $1=file $2=class-token $3=hf_alarm class
   # SURFACE-GONE arm, raised when the pane vanished between the confirmed shell and the relaunch
   # write, so nothing was typed and the session's resume debt is settled in a new window.
   [ "$(grep -c 'if \[ -x "\$HOME/.claude/bin/cc-notify" \]' "$FIRE")" -eq 1 ]
-  [ "$(grep -c '^    hf_alarm ' "$FIRE")" -eq 8 ]
+  # NINTH added 2026-10-04 by b9c269850 (background-job recycle), class recycle-bgjob-stop-failed:
+  # the predecessor job could not be stopped after its successor engaged. It moved this count
+  # without raising it and left the suite red on trunk; recorded 2026-10-05 by the land it blocked.
+  [ "$(grep -c '^    hf_alarm ' "$FIRE")" -eq 9 ]
 }

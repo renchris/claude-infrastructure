@@ -23,7 +23,9 @@
 # claude is alive (the composer guard), so a wrong or missing key ends in close-failed-live.
 
 setup() {
-  export CC_FIRE_CAPACITY_GATE=off CC_FIRE_HEADROOM_GATE=off
+  # One export per line: the pin-guard (handoff-fire-capacity-gate.bats case 25) reads them that way.
+  export CC_FIRE_CAPACITY_GATE=off
+  export CC_FIRE_HEADROOM_GATE=off
   # Hermetic: the subject never sees the operator's live ~/, and its account-sweep seams point at
   # ABSENT paths (those sensors fail open on one) instead of /tmp defaults and a PATH-resolved tool.
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"

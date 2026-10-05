@@ -19,7 +19,9 @@
 # Every assertion is `[ ]`, `run`+status, or `… || false`.
 
 setup() {
-  export CC_FIRE_CAPACITY_GATE=off CC_FIRE_HEADROOM_GATE=off
+  # One export per line: the pin-guard (handoff-fire-capacity-gate.bats case 25) reads them that way.
+  export CC_FIRE_CAPACITY_GATE=off
+  export CC_FIRE_HEADROOM_GATE=off
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HF="$REPO/scripts/handoff-fire.sh"
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/.claude/bin" "$HOME/.claude/cc-registry"
