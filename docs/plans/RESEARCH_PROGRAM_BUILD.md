@@ -490,7 +490,7 @@ re-measure as E1 did. Locus S (fired `fire-rp-v12-e1b`). Harness, raw numbers an
 
   Until one is chosen, no program can certify.
 
-#### E1c — a valid instrument for row 15, read once — RUNNING (2026-10-04)
+#### E1c — a valid instrument for row 15, read once — DONE: row 15 FAILS on v2, on labeling and on latency (2026-10-04)
 Scope (frozen): make row 15 a valid instrument and read it once. (1) Mint a new sealed held-out set v2, big enough
 to judge each stratum, beside v1 (never overwritten); (2) pre-register here, on the tuning set only and before any
 read of v2, the rule that picks the classifier configuration, then read v2 exactly once with the chosen
@@ -513,8 +513,9 @@ activation. Never change row 15's thresholds or the 9 s limit. Locus S (fired `f
   `heldout-rate.py --set --batch N` sends the same brief N prompts per call, asks a batch whose reply skips a
   prompt again once (the OpenAI rater's first pass returned 395 of 396 and recorded nothing), and records nothing
   unless every batch came back whole from one model. The five new tests failed against the pre-change scripts
-  (research-kit-heldout + research-router-heldout: 5 of 23 not ok, the 18 older tests ok); the green run is in
-  this wave's status line.
+  (research-kit-heldout + research-router-heldout: 5 of 23 not ok, the 18 older tests ok); a sixth test covers the
+  uncounted line and `--record`. Green on the final code: those two suites plus research-kit-gate `1..74`, and
+  with research-router `1..103`, no `not ok`.
 - **v2 sealed 2026-10-04.** The transcripts hold 3 pushback prompts in all (the same 3 v1 used), so pushback could
   not grow from them; the prompt history holds 44 more. Mined from 7,360 transcripts and 4 history files with caps
   110 regex-matched, 330 regex-missed, 100 other and every pushback prompt found (49): 589 candidates, 101 dropped
@@ -561,7 +562,7 @@ activation. Never change row 15's thresholds or the 9 s limit. Locus S (fired `f
   Step 1: all three are eligible. Step 2: the thinking-on arms tie at 21 borderline relays; thinking-off, at 10,
   is out. Step 3: `on-pre` has the lower fallback share. **Chosen: `on-pre`, the router exactly as built on
   trunk; `router.py` is not changed for the read.** Its tuning fallback share is above the 0.10 cap (31 of its 33
-  fallbacks are right labels that arrived after 9 s), so the read is expected to fail on fallbacks, and the
+  fallbacks are single route labels that arrived after 9 s), so the read is expected to fail on fallbacks, and the
   open question it answers is whether the labeling holds on the items that get an answer.
 - **How the one read is run** (fixed before it starts): `heldout.py --set v2 evaluate --record <file outside the
   repo>` from this worktree, with `CC_RESEARCH_ROUTER` pointing at `router.py classify` in a `git archive`
@@ -580,6 +581,58 @@ activation. Never change row 15's thresholds or the 9 s limit. Locus S (fired `f
   share and no verdict; the line only shows what the same-label rule costs, so that question can be judged later
   without reading v2 again. `evaluate --record F` keeps one row per routed item (`id`, `stratum`, `counted`, the
   label the router gave, wall seconds; no prompt, no rater label) outside the repo.
+
+- **The one read of v2** (2026-10-04 20:48:54-21:15:13 CDT, 1-min load 58 at the start falling to 23, 26 min;
+  router snapshot of `7f8e33f1d`, rc 1). 396 sealed, 164 excluded for rater disagreement, 232 routed:
+
+  | condition | reading | on the items that got an answer |
+  |---|---|---|
+  | regex-matched recall (≥ 0.95) | 24/24 = 1.00 | 24/24, none fell back |
+  | regex-missed recall (≥ 0.95) | **31/34 = 0.91 FAIL** | 31/31 = 1.00; the 3 misses are all fallbacks |
+  | pushback recall (≥ 0.95) | 5/5 = 1.00 | 5/5, none fell back |
+  | `other` correct label (≥ 0.90) | **23/36 = 0.64 FAIL** | **23/26 = 0.88 FAIL**; 10 fell back, 3 answered wrong |
+  | fallback share (≤ 0.10) | **62/232 = 0.27 FAIL** | every one a timeout at 9 s, none a bad answer |
+
+  Uncounted line: 3 prompts carry two different relay labels (1 regex-missed, 2 pushback) and the router relayed
+  all 3. Per-item record (router side only): `~/.claude/autonomy/research/router-heldout/reading-v2-2026-10-04.jsonl`;
+  answered calls took 5.9 s median, 8.2 s at p90, and the fallbacks spread evenly over the run (20 · 21 · 21 by
+  thirds), so the load at the start does not explain them.
+- **Verdict, by the rule fixed above: FAIL (labeling), and latency as well.** Every completeness stratum meets its
+  threshold on answered items, but `other` does not: 23 of 26 = 0.88 against 0.90, one prompt short. So the failure
+  is not latency alone, the "pending warm-classifier activation" outcome does not apply, and **no warm classifier
+  is landed on this wave's authority and no operator step is filed.** The recall half of the instrument is now
+  sound where the population allows: regex-missed is judged on 34 prompts (v1: 3) and the as-built router relays
+  every one it answers in time.
+- **What the instrument still cannot do.** Pushback is judged on 5 prompts. 37 are sealed and the raters agree on
+  7; only 2 of the 30 they split on are relay-label splits, so the same-label rule is not what thins it. The two
+  stores hold no more short challenges.
+- **Disclosure.** v2 has now been read once, with a configuration fixed beforehand. Any configuration chosen from
+  here knows two things from that read: the as-built router is one `other` prompt short on answered items, and
+  27% of its cold calls time out. A later read of v2 is biased by that much and must say so.
+- **A warm classifier exists as an unlanded draft**, written while the read ran: local branch
+  `rp-v12-e1c-warm-draft` (daemon `scripts/research-kit/classifier-warm.py` holding two classifier processes
+  started ahead of the prompt, one prompt per process; `/bin/bash` 3.2 runner; staged plist; c10 migration
+  `0057`; `router.py` asks it first and makes the cold call when it is absent; `research-classifier-warm.bats`
+  `1..19`). Measured on one synthetic prompt at load 34-46: 2.6-3.3 s through the daemon (4 calls) and 1.5-2.8 s
+  from a process started 8 s earlier (3 calls), against 4.1-4.9 s cold. Landing it is the lead's call, not this
+  wave's.
+- **What remains (decisions for the lead, then the operator).** Row 15 needs both halves fixed, and no program can
+  certify until it passes:
+  - Latency: the warm classifier above removes the cold start; whether it brings the 0.27 under 0.10 is unmeasured
+    on real prompts.
+  - `other` labeling: on the tuning set E1b's brief with thinking on scored 42/44 on `other` against the as-built
+    40/44, with the same 21/26 borderline relays; the rule passed it over for its higher cold fallback share
+    (0.27 against 0.17), a cost the warm classifier is meant to remove. That pairing is the candidate, chosen on
+    tuning numbers that predate the read.
+  - Pushback: accept 5 counted prompts as what exists, or change how a rater split is counted; either is a method
+    parameter (§6.6).
+- Status: **DONE 2026-10-04.** Commits `3be0284f9` (rule, before any measurement), `bfe1768bd` (tooling and
+  tests), `22493b3f7` (labeled counts and the uncounted line, before the read), `7f8e33f1d` (the choice), then
+  this record. Learnings: the transcripts are a 60-day store and the prompt history a year-deep one, so a rare
+  stratum is mined from history; one rater reply in seven calls dropped a single label, so a batch is asked again
+  once before the whole pass is thrown away; the shared bats slots deferred a 2-suite run for 17 minutes at load
+  35-45, so a retry loop around `bats` (never a waiver) belongs at the start of a wave, not after the first
+  refusal.
 
 #### E2 — triage precision study (v1.2 (a), measurement half) — RUNNING
 - Locus: a Workflow in session d8964eb2, started 2026-10-04. Results: `docs/research/triage-precision-study-2026-10-04/`.
