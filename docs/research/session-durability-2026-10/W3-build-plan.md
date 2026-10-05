@@ -681,9 +681,9 @@ This table replaces the phase table near the top of the file. Only the W3 lead e
 | P3a-i | W3.2 | landed, content-verified | 266 / `w3-p3a-i` | `bfdb948ef` |
 | P3b | W3.2 | landed, content-verified | 267 / `w3-p3b` | `96a0591dc` (feat), `6b30ad551` (fix), tests `124f51717` `760e13771` |
 | P3a-ii | W3.2b | landed, content-verified | 271 / `w3-p3a-ii` | `c483b8401` (feat), `6aa13bf1f` `3bfb4b9ad` `472ba14c4` (fixes) |
-| P4 | W3.3 | fired 2026-10-05 | 276 / `w3-p4` | |
-| P5 | W3.4 | waits for P4, P8 | | |
-| P7 | W3.4 | waits for P4, P3a-ii | | |
+| P4 | W3.3 | landed, content-verified | 276 / `w3-p4` | `c410b5657` (classifier), `4f912ce85` (reso-resume-one), `f1dc36226` (boot-resume, restore-note) |
+| P5 | W3.4 | fired 2026-10-05; its `/goal` arrived as pasted text and did not arm, so it runs on its brief and the custody hooks | 285 / `w3-p5` | |
+| P7 | W3.4 | fired 2026-10-05 | 286 / `w3-p7` | |
 
 ### G. Findings from the build (for later phases)
 
