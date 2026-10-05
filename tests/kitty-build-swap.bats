@@ -191,6 +191,26 @@ $T/repo/docs/patches/kitty-talk-thread-survives-v0.48.2.patch" ]
   [ "$(readlink "$T/conf/kitty-title-on.conf")" = "$T/repo/config/kitty-title-on.conf" ]
 }
 
+# The cask-upgrade case (2026-10-04, W3 P6): the live bundle is replaced under a ⌘⇧B link that still
+# names the band drop-in. status is the check P5's preflight runs, so its exit code is the contract.
+@test "status exits 1 only when ⌘⇧B ON names the band config and live is not the band build" {
+  run bash "$SCRIPT" status
+  [ "$status" -eq 0 ]
+  ln -sfn "$T/repo/config/kitty-title-band-on.conf" "$T/conf/kitty-title-on.conf"
+  run bash "$SCRIPT" status
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"verdict=BAND-LINK-MISMATCH"* ]] || false
+  mkdir -p "$LIVE/Contents/Resources/kitty/kitty"
+  printf 'still serving\n' > "$LIVE/Contents/Resources/kitty/kitty/fast_data_types.so"
+  run bash "$SCRIPT" status
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"probes 'patched-noband'"* ]] || false
+  mkbundle "$LIVE" text
+  run bash "$SCRIPT" status
+  [ "$status" -eq 0 ]
+  [[ "$output" != *BAND-LINK-MISMATCH* ]] || false
+}
+
 # Static check on the patch TEXT, not a build. What it proves: in the patched accept_peer the only
 # `return false` lines (the returns that send talk_loop to `goto end`) are the shutdown one and the
 # one inside the EBADF/ENOTSOCK/EINVAL branch; the old unconditional `return false` and its perror

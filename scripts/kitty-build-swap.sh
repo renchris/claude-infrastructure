@@ -29,7 +29,7 @@
 # it rides a reboot the operator is already doing. --dry-run checks every precondition and prints
 # the renames without making them.
 #
-# Usage: kitty-build-swap.sh status
+# Usage: kitty-build-swap.sh status      (exit 1: ⌘⇧B ON names the band config, live is not the band build)
 #        kitty-build-swap.sh build --no-band [--src DIR] [--dry-run | --list-patches]
 #        kitty-build-swap.sh stage [--no-band] [--from <built kitty.app>]
 #        kitty-build-swap.sh arm
@@ -85,11 +85,21 @@ need_confirm() {  # need_confirm <given>
 }
 
 cmd_status() {
-  say "live     $LIVE  $(probe "$LIVE")  v$(version "$LIVE")"
+  local pl link
+  pl="$(probe "$LIVE")"; link="$(readlink "$TITLE_ON" 2>/dev/null)"
+  say "live     $LIVE  $pl  v$(version "$LIVE")"
   say "staged   $STAGED  $(probe "$STAGED")"
   say "stock    $STOCK  $(probe "$STOCK")"
-  say "⌘⇧B ON   $(readlink "$TITLE_ON" 2>/dev/null || echo "(not a link: $TITLE_ON)")"
+  say "⌘⇧B ON   ${link:-(not a link: $TITLE_ON)}"
   say "marker   $([ -s "$MARKER" ] && head -1 "$MARKER" || echo none)"
+  # Band-link check (2026-10-04, W3 P6): only the band build ("patched") knows the options the band
+  # drop-in sets. A cask upgrade or a no-band adoption replaces the live bundle and leaves the link
+  # behind, so ⌘⇧B would load a config the running build cannot parse. Matched by file name, since
+  # the link may name the drop-in through any checkout path.
+  if [ "${link##*/}" = "${BAND_ON##*/}" ] && [ "$pl" != patched ]; then
+    say "verdict=BAND-LINK-MISMATCH (⌘⇧B ON points at the band config but live $LIVE probes '$pl'; repoint it: ln -sfn $STOCK_ON $TITLE_ON)"
+    return 1
+  fi
 }
 
 # build --no-band (2026-10-02, P6): the band and the talk-thread fix are separate decisions, so this
