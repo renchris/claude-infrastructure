@@ -337,6 +337,18 @@ PY
   [[ "$output" != *"Built: certified"* ]] || false
 }
 
+@test "E3c: in a build state the research lines drop their placeholder 'Built –', so render never says both" {
+  freeze --wave W1
+  run "$G" render --program demo
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Built –"* ]] || false
+  [[ "$output" == *"Live – · Calibration: "* ]] || false
+  # certified, before Stage 9, keeps the placeholder: the kit holds no build record yet
+  setstate certified
+  run "$G" render --program demo
+  [[ "$output" == *"Built – · Live – · Calibration: "* ]]
+}
+
 # ── rules 8-9: the forecast split ────────────────────────────────────────────────────────────────
 
 # issue: write the next certificate from 19 passing rows and print its forecast as JSON.

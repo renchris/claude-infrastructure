@@ -451,6 +451,8 @@ def cmd_render(a: Any) -> int:
     cert = kit.read_json(certs[-1])
     out = lines_for(a.program, cert, "certified", live_state(rec, cert))
     if state in kit.BUILD_STATES:
+        # the research lines' "Built –" means "no build record"; in Stage 9 there is one, below
+        out = [ln.replace("Built – · Live – · ", "Live – · ", 1) for ln in out]
         out.append(built_line(rec, state))
     print("\n".join(out))
     return 0
