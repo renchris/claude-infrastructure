@@ -550,6 +550,19 @@ activation. Never change row 15's thresholds or the 9 s limit. Locus S (fired `f
     verdict is FAIL (labeling) with the numbers, and no warm classifier is built on this wave's authority.
   - No second read of v2 follows in this wave under any outcome. The later reading after the operator activates a
     warm classifier uses the same committed labeling configuration and changes only the call path.
+- **v2 labeled 2026-10-04, before the read** (`heldout.py --set v2 status`), by `anthropic:claude-opus-5-5` and
+  `openai:gpt-5.6-sol` through `heldout-rate.py --set v2 --batch 60`: every one of the 396 has two labels, and
+  the raters agree on 232 — regex-matched 53 of 64, regex-missed 136 of 228, pushback 7 of 37, other 36 of 67
+  (v1: 23 · 18 · 2 · 26 of 91). **Pushback is still thin and the population is spent:** every short challenge
+  the two stores hold is in v1 or v2 (49 found, 37 sealed here, 9 in the v2 tuning file), and the raters agree on
+  7 of the 37. Row 15 counts an item only when both raters give the same label, so a prompt one rater calls
+  completeness and the other pushback is dropped though either label relays.
+- **Added to the read before it ran, verdict untouched** (committed with this note, ahead of the read):
+  `evaluate` also routes those dropped completeness-stratum prompts whose two labels are both relay labels and
+  prints them on a line of their own (relayed / items / fell back per stratum). They enter no recall, no fallback
+  share and no verdict; the line only shows what the same-label rule costs, so that question can be judged later
+  without reading v2 again. `evaluate --record F` keeps one row per routed item (`id`, `stratum`, `counted`, the
+  label the router gave, wall seconds; no prompt, no rater label) outside the repo.
 
 #### E2 — triage precision study (v1.2 (a), measurement half) — RUNNING
 - Locus: a Workflow in session d8964eb2, started 2026-10-04. Results: `docs/research/triage-precision-study-2026-10-04/`.
