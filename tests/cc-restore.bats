@@ -100,6 +100,25 @@ echo "$* done=$done lock=$([ -d "$CC_BOOT_RESUME_STATE_DIR/restore.lock" ] && ec
 echo "rebind: forward old=249 → sid=x"
 echo "cc-restore-rebind: verdict=OK forwards=1"
 SH
+  # the layout's dry run: records the rows it was given; prints a recorded tree only when .tree exists
+  export CC_RESTORE_LAYOUT_BIN="$T/layout"
+  cat > "$CC_RESTORE_LAYOUT_BIN" <<'SH'
+#!/bin/bash
+echo "$*" >> "$0.log"; cat > "$0.rows"
+[ -f "$0.rc" ] && exit "$(cat "$0.rc")"
+if [ -f "$0.tree" ]; then
+  echo "cc-resume-layout: tree oswin=1 src=k${KP}w7 platform_window_id=900 tabs=1 panes=3 claude=2 shells=1 layout=splits:H:0.33(p,V(p,p)) display=DISPLAY-A display_rect=0,0,1728x1117 fullscreen=1"
+  echo "DRY [CC-DESK-1 k${KP}w7] head next3 $S2 /x/b model=m permission_mode=plan pane=#1" >&2
+  echo "DRY [CC-DESK-1] place on display DISPLAY-A (0,0 1728x1117)" >&2
+  echo "DRY [CC-DESK-1 k${KP}w7] vsplit next $S1 /x/a pane=#2 next-to=#1 bias=66.6667" >&2
+  echo "DRY [CC-DESK-1 k${KP}w7] hsplit shell /x/tools pane=#3 next-to=#2" >&2
+  echo "cc-resume-layout: layout tree_windows=1 shells=1 placed=0 placed_failed=0"
+else
+  echo "DRY [CC-DESK-1 k${KP}w7] head next3 $S2 /x/b pane=#1" >&2
+  echo "DRY [CC-DESK-1 k${KP}w7] vsplit next $S1 /x/a pane=#2 next-to=#1" >&2
+fi
+echo "cc-resume-layout: verdict=ok launched=0 shed=0 failed=0 windows=1 fullscreen_ok=0 fullscreen_failed=0 maybe=0 stopped=none"
+SH
   export CC_RESTORE_SESSIONS_BIN="$T/sessions"
   printf '#!/bin/bash\ncat "$0.json" 2>/dev/null || echo "[]"\n' > "$CC_RESTORE_SESSIONS_BIN"
   live_after "$S1:7" "$S2:8"
@@ -107,7 +126,7 @@ SH
   printf '#!/bin/bash\necho "COMMAND PID USER FD"\ni=0; n="$(cat "$0.n" 2>/dev/null || echo 40)"\nwhile [ "$i" -lt "$n" ]; do echo "kitty $2 u $i"; i=$((i + 1)); done\n' > "$CC_RESTORE_LSOF_BIN"
   export CC_RESTORE_ZPRINT_BIN="$T/zprint"
   printf '#!/bin/bash\necho "data.kalloc.1024 1024 0K 0K 0K 0 4194304 0"\n' > "$CC_RESTORE_ZPRINT_BIN"
-  chmod +x "$T"/ps "$T"/kill "$T"/open "$T"/kitten "$T"/boot-resume "$T"/swap "$T"/rebind "$T"/sessions "$T"/lsof "$T"/zprint
+  chmod +x "$T"/ps "$T"/kill "$T"/open "$T"/kitten "$T"/boot-resume "$T"/swap "$T"/rebind "$T"/sessions "$T"/lsof "$T"/zprint "$T"/layout
 
   # the heartbeat tick, over stubs: two sessions in the "kitty"
   export CC_HB_SESSIONS_BIN="$T/hb-sessions"
@@ -187,8 +206,14 @@ no_signal() { [ ! -e "$CC_RESTORE_KILL_BIN.log" ] && [ ! -e "$CC_OPEN_BIN.log" ]
   [ "$status" -eq 0 ]
   [[ "$output" == *"main kitty: pid $KP "* ]] || false
   [[ "$output" == *"sessions to restore: 2"* ]] || false
-  [[ "$output" == *"windows planned: 1"* ]] || false
-  [[ "$output" == *"old window k${KP}w7: 2 pane(s) in one row: B, A"* ]] || false       # slot order
+  # the window section is the layout's own dry run over the planned rows (11 columns, '-' cells padded)
+  grep -qx -- '--desktops --restore --dry-run' "$CC_RESTORE_LAYOUT_BIN.log"
+  [ "$(awk -F'\t' '{ print NF }' "$CC_RESTORE_LAYOUT_BIN.rows" | sort -u)" = 11 ]
+  [ "$(awk -F'\t' -v s="$S2" '$2 == s { print $6 }' "$CC_RESTORE_LAYOUT_BIN.rows")" = $'\037' ]
+  [[ "$output" == *"windows planned: 1 (from the layout's own dry run; no recorded tree, so one row of panes per window)"* ]] || false
+  [[ "$output" == *"window 1: 2 pane(s) · split: one row · display not recorded"* ]] || false
+  [[ "$output" == *"    head B  (pane=#1)"* ]] || false
+  [[ "$output" == *"    vsplit A  (pane=#2 next-to=#1)"* ]] || false
   [[ "$output" == *"sessions left retired: 1"* ]] || false
   [[ "$output" == *"C (cccc): terminal self-close marker"* ]] || false
   [[ "$output" == *"ledger: $EVENTS/<epoch>/launched"* ]] || false
@@ -203,6 +228,26 @@ no_signal() { [ ! -e "$CC_RESTORE_KILL_BIN.log" ] && [ ! -e "$CC_OPEN_BIN.log" ]
   [ ! -d "$EVENTS" ]
   grep -q -- '--kind restart --plan-only' "$CC_RESTORE_BOOT_RESUME.log"
   [ ! -e "$CC_BOOT_RESUME_STATE_DIR/restore-v2" ]
+}
+
+@test "--dry-run with a recorded tree prints each window's panes, split, display and shell panes as the layout plans them" {
+  : > "$CC_RESTORE_LAYOUT_BIN.tree"
+  run "$SUBJ" --restart-kitty --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"windows planned: 1 (from the layout's own dry run; recorded split tree replayed)"* ]] || false
+  [[ "$output" == *"window 1: 3 pane(s): 2 claude, 1 shell · was k${KP}w7 · split splits:H:0.33(p,V(p,p)) · display DISPLAY-A (0,0 1728x1117) · fullscreen"* ]] || false
+  [[ "$output" == *"    vsplit A  (pane=#2 next-to=#1 bias=66.6667)"* ]] || false
+  [[ "$output" == *"    hsplit shell tools  (pane=#3 next-to=#2)"* ]] || false
+  [[ "$output" == *"cc-resume-layout: layout tree_windows=1 shells=1"* ]] || false
+  no_signal
+}
+
+@test "--dry-run still prints a window plan when the layout's dry run fails: grouped by recorded window, and says so" {
+  echo 3 > "$CC_RESTORE_LAYOUT_BIN.rc"
+  run "$SUBJ" --restart-kitty --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"windows planned: 1 (the layout's dry run gave no plan; grouped by recorded window)"* ]] || false
+  [[ "$output" == *"old window k${KP}w7: 2 pane(s) in one row: B, A"* ]] || false
 }
 
 # ── the restart ───────────────────────────────────────────────────────────────────────────────────

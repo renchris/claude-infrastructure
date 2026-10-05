@@ -30,7 +30,7 @@ LIMITS ON KITTY'S SOCKET (plan § C item 5): one `kitten @` call in flight at a 
 after one times out, and the restore stops if the new kitty holds more than 180 file descriptors.
 
 Under a bats harness it refuses to run unless every actuator is a stub (ps, kill, open, kitten,
-boot-resume, the build check, rebind, cc-sessions, lsof) and both state dirs are set, so a test can
+boot-resume, the layout, the build check, rebind, cc-sessions, lsof) and both state dirs are set, so a test can
 never signal or launch the real kitty.
 
 Exit: 0 done (or a clean dry run) · 1 partial / compare differs · 2 usage or refused · 3 preflight ·
@@ -39,6 +39,7 @@ Exit: 0 done (or a clean dry run) · 1 partial / compare differs · 2 usage or r
 Seams: CC_BOOT_RESUME_STATE_DIR · CC_HEARTBEAT_DIR · CC_RESTORE_PS_BIN · CC_RESTORE_KILL_BIN ·
   CC_OPEN_BIN · CC_KITTY_APP · CC_RESTORE_KITTEN_BIN · CC_RESTORE_BOOT_RESUME · CC_RESTORE_SWAP_BIN ·
   CC_RESTORE_REBIND_BIN · CC_RESTORE_SESSIONS_BIN · CC_RESTORE_LSOF_BIN · CC_RESTORE_ZPRINT_BIN ·
+  CC_RESTORE_LAYOUT_BIN ·
   CC_RESTORE_SOCKET_TMPL · CC_RESTORE_TERM_WAIT_S (3) · CC_RESTORE_EXIT_WAIT_S (30) ·
   CC_RESTORE_SOCKET_WAIT_S (60) · CC_RESTORE_K_TIMEOUT_S (10) · CC_RESTORE_K_BACKOFF_S (30) · CC_RESTORE_FD_MAX (180) ·
   CC_RESTORE_ROUND_SLEEP_S (30) · CC_RESTORE_LAND_POLL_S (15) · CC_RESTORE_MAX_S (2700) ·
@@ -69,6 +70,7 @@ DEFAULTS = {
     "CC_RESTORE_REBIND_BIN": os.path.join(BIN, "cc-restore-rebind"),
     "CC_RESTORE_SESSIONS_BIN": os.path.join(BIN, "cc-sessions"),
     "CC_RESTORE_LSOF_BIN": "/usr/sbin/lsof",
+    "CC_RESTORE_LAYOUT_BIN": os.path.join(BIN, "cc-resume-layout.sh"),
 }
 STATE_SEAMS = ("CC_BOOT_RESUME_STATE_DIR", "CC_HEARTBEAT_DIR")
 
@@ -390,18 +392,79 @@ def print_plan(out):
     for r in rows:
         say("  %s  %s  [%s]  %s  model=%s effort=%s permission=%s" %
             (r[1][:8], r[4], r[0], os.path.basename(r[2]) or r[2], r[5], r[6], r[10]))
-    wins = {}
-    for r in rows:
-        wins.setdefault(r[7], []).append(r)
-    say("windows planned: %d" % len(wins))
-    for g in sorted(wins):
-        ordered = sorted(wins[g], key=lambda r: int(r[8]) if r[8].isdigit() else 999)
-        where = "old window %s" % g if g != "-" else "no recorded window (placed after the others)"
-        say("  %s: %d pane(s) in one row: %s" % (where, len(ordered), ", ".join(r[4] for r in ordered)))
+    if not layout_plan(rows):
+        wins = {}
+        for r in rows:
+            wins.setdefault(r[7], []).append(r)
+        say("windows planned: %d (the layout's dry run gave no plan; grouped by recorded window)" % len(wins))
+        for g in sorted(wins):
+            ordered = sorted(wins[g], key=lambda r: int(r[8]) if r[8].isdigit() else 999)
+            where = "old window %s" % g if g != "-" else "no recorded window (placed after the others)"
+            say("  %s: %d pane(s) in one row: %s" % (where, len(ordered), ", ".join(r[4] for r in ordered)))
     say("sessions left retired: %d" % len(retired))
     for r in retired:
         say("  " + r)
     return len(rows)
+
+
+def layout_plan(rows):
+    """The windows, from the layout's OWN dry run over these rows, so the preview shows what a real
+    run does: per window its panes, the recorded split tree, the display, and any shell panes.
+    False when the layout gave nothing to show."""
+    if not rows:
+        return False
+    data = "".join("\t".join(PAD if c == "-" else c for c in r) + "\n" for r in rows)
+    try:
+        p = subprocess.run([seam("CC_RESTORE_LAYOUT_BIN"), "--desktops", "--restore", "--dry-run"],
+                           input=data.encode(), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           timeout=120, env=clean_env())
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    out, err = p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace")
+    label = dict((r[1], r[4]) for r in rows)
+    panes, place = {}, {}
+    for ln in err.splitlines():
+        m = re.match(r"DRY \[CC-DESK-(\d+)(?: \S+)?\] (.*)$", ln)
+        if not m:
+            continue
+        n, rest = int(m.group(1)), m.group(2)
+        f = rest.split()
+        if f[0] == "place":
+            place[n] = rest[len("place on "):]
+        elif f[0] in ("head", "vsplit", "hsplit") and len(f) >= 3:
+            who = "shell %s" % os.path.basename(f[2]) if f[1] == "shell" else label.get(f[2], f[2][:8])
+            tail = " ".join(x for x in f if x.startswith(("pane=", "next-to=", "bias=")))
+            panes.setdefault(n, []).append("%s %s%s" % (f[0], who, "  (%s)" % tail if tail else ""))
+    trees = {}
+    for ln in out.splitlines():
+        if ln.startswith("cc-resume-layout: tree "):
+            kv = dict(x.split("=", 1) for x in ln.split()[2:] if "=" in x)
+            if kv.get("oswin", "").isdigit():
+                trees[int(kv["oswin"])] = kv
+    wins = sorted(set(panes) | set(trees))
+    if p.returncode != 0 or not wins:
+        return False
+    say("windows planned: %d (from the layout's own dry run%s)" %
+        (len(wins), "; recorded split tree replayed" if trees else "; no recorded tree, so one row of panes per window"))
+    for n in wins:
+        kv = trees.get(n, {})
+        bits = ["%d pane(s)" % len(panes.get(n, []))]
+        if kv:
+            bits = ["%s pane(s): %s claude, %s shell" % (kv.get("panes", "?"), kv.get("claude", "?"), kv.get("shells", "0")),
+                    "was %s" % kv.get("src", "?"), "split %s" % kv.get("layout", "?")]
+        else:
+            bits.append("split: one row")
+        disp = kv.get("display") or ""
+        bits.append("display %s" % (place.get(n, "").replace("display ", "") or disp or "not recorded"))
+        if kv.get("fullscreen") == "1":
+            bits.append("fullscreen")
+        say("  window %d: %s" % (n, " · ".join(bits)))
+        for ln in panes.get(n, []):
+            say("    " + ln)
+    for ln in out.splitlines():
+        if ln.startswith(("cc-resume-layout: layout ", "cc-resume-layout: verdict=")):
+            say("  " + ln)
+    return True
 
 
 def preflight(confirm=None, need_one=True):
