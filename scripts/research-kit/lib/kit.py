@@ -247,11 +247,16 @@ def max_original_seeds(profile_name: str, plan_lines: int) -> int:
 
 # ── 3. the program registry (contract owned by wave A1; gate.sh is its only writer) ────────────
 
-STATES = ("registered", "certifying", "certified", "build-certifying", "build-certified", "closed")
+STATES = ("registered", "certifying", "certified", "build-certifying", "build-certified",
+          "implementation-signed", "closed")
 # Method v1.2 (REPORT.md §11): build-certifying is set by `gate.sh built-freeze` after the last build
-# wave, build-certified by `gate.sh built-run`. ACTIVE_STATES are the ones a program is live in.
+# wave, build-certified by `gate.sh built-run`, implementation-signed by `gate.sh built-signed` once
+# the operator has signed the built certificate (cc-signoff research:<slug>/implementation).
+# ACTIVE_STATES are the ones a program is live in.
 ACTIVE_STATES = STATES[:-1]
 BUILD_STATES = ("build-certifying", "build-certified")
+IMPL_SIGNED = "implementation-signed"
+STAGE9_STATES = BUILD_STATES + (IMPL_SIGNED,)  # built records exist; live until `gate.sh close`
 _ENTRY_KEYS = ("slug", "aliases", "cwd_roots", "state")
 
 

@@ -397,15 +397,21 @@ def lines_for(
     return out
 
 
-def built_line(rec: Path, state: str) -> str:
+def built_line(slug: str, rec: Path, state: str) -> str:
     """§11: the built stage's one state line, read from built/ at every render."""
     certs = sorted(
         (rec / "built").glob("BUILT-CERT-v*.json"),
         key=lambda p: int("".join(c for c in p.stem if c.isdigit()) or 0),
     )
     bc = (kit.read_json(certs[-1], {}) or {}) if certs else {}
-    if state == "build-certified" and bc:
-        return f"Built: certified {bc.get('issued')} (BUILT-CERT-v{bc.get('version')})"
+    if state in ("build-certified", kit.IMPL_SIGNED) and bc:
+        import operator_sign
+
+        # the signature is read from the sealed log at every render, never from the registry state
+        return (
+            f"Built: certified {bc.get('issued')} (BUILT-CERT-v{bc.get('version')})"
+            f" · implementation {operator_sign.implementation_words(slug)}"
+        )
     fz = kit.read_json(rec / "built" / "freeze.json", {}) or {}
     return f"Built: frozen {fz.get('frozen_at') or 'at an unrecorded time'}, not yet certified"
 
@@ -427,7 +433,7 @@ def cmd_render(a: Any) -> int:
         if rec
         else []
     )
-    if state not in ("certified",) + kit.BUILD_STATES or not certs:
+    if state not in ("certified",) + kit.STAGE9_STATES or not certs:
         mats = (
             [kit.read_json(p) for p in (rec / "rounds").glob("*/matrix.json")]
             if rec
@@ -450,10 +456,10 @@ def cmd_render(a: Any) -> int:
         return 0
     cert = kit.read_json(certs[-1])
     out = lines_for(a.program, cert, "certified", live_state(rec, cert))
-    if state in kit.BUILD_STATES:
+    if state in kit.STAGE9_STATES:
         # the research lines' "Built –" means "no build record"; in Stage 9 there is one, below
         out = [ln.replace("Built – · Live – · ", "Live – · ", 1) for ln in out]
-        out.append(built_line(rec, state))
+        out.append(built_line(a.program, rec, state))
     print("\n".join(out))
     return 0
 

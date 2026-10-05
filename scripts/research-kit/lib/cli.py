@@ -12,7 +12,7 @@ One argparse parser; each module below adds its own verbs through `add_verbs(sub
   cli_cert     round frame-critique rehearse slots open-round slot raters check-round (item 11)
   cli_jobs     job sweep|freshness|triage|drift|market, run by jobs/research-job.sh (item 12)
   cli_refclass reference-class                                              (item 15)
-  cli_built    built finding|mutate|contact|soak|show          (method v1.2, REPORT.md §11)
+  cli_built    built finding|mutate|contact|soak|show|signoff  (method v1.2, REPORT.md §11)
   cli_yield    yield show|find                                 (method v1.2, REPORT.md §12)
 
 Exit codes are the kit's (RECORDS.md): 0 ok · 1 a check failed · 2 usage or refusal · 3 a dead
@@ -45,7 +45,7 @@ LEASE_EXEMPT = {
     "verdict", "pending", "doctor", "lint", "trace", "forecast", "menu", "ceiling", "slots",
     "check-round", "index", "estimate", "decision show", "concern list",
     "reference-class show", "reference-class check", "gate", "lease", "job",
-    "yield show", "built show",
+    "yield show", "built show", "built signoff",
 }
 
 

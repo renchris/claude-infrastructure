@@ -7,6 +7,9 @@
                 (--negative-control CMD | --no-negative-control REASON)   exit 1 if the run failed
   built soak sample|restart --program P [--finding BF-n]
   built show    --program P [--json]
+  built signoff --program P                        what the operator signs after the built gate: the
+                built certificate's lines, the path and hash the signature pins, the signature
+                state, and the operator's exact command. It signs nothing (an agent cannot).
 
 The logic is built.py; records are RECORDS.md "Stage 9 records".
 """
@@ -86,6 +89,39 @@ def cmd_show(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_signoff(a: argparse.Namespace) -> int:
+    import built_cert
+    import gate_built
+    import kit
+    import operator_sign
+
+    state = (kit.registry_get(a.program) or {}).get("state")
+    newest = operator_sign.newest_built_cert(a.program)
+    if state not in operator_sign.IMPLEMENTATION_STATES or newest is None:
+        raise kit.KitError(
+            f"built signoff: {a.program} is {state}, not build-certified; there is no built "
+            "certificate to sign yet (gate.sh built-run)"
+        )
+    try:
+        lines = built_cert.lines_for(kit.read_json(newest))
+    except (KeyError, TypeError) as e:
+        raise kit.KitError(f"built signoff: {newest} is not a built certificate ({e!r})") from None
+    st = operator_sign.implementation_state(a.program)
+    print("\n".join(lines))
+    print(f"Signing pins built/{newest.name} = {operator_sign.file_pin(newest)} "
+          "(one changed byte voids the signature)")
+    print(f"Read before signing: {newest.with_suffix('.md')}")
+    print(f"Implementation: {operator_sign.implementation_words(a.program, st)}")
+    if st["status"] == operator_sign.SIGNED and state == kit.IMPL_SIGNED:
+        return 0
+    if st["status"] == operator_sign.SIGNED:
+        print(f"Next: scripts/research-kit/gate.sh built-signed --program {a.program}")
+        return 0
+    print("Operator, to sign this in your own terminal (an agent is refused):")
+    print(f"  {gate_built.sign_cmd(a.program)}")
+    return 0
+
+
 def add_verbs(sub: Any) -> None:
     b = sub.add_parser("built", help="the Stage 9 instruments (method v1.2)")
     bs = b.add_subparsers(dest="built_verb", required=True)
@@ -116,5 +152,6 @@ def add_verbs(sub: Any) -> None:
     p = verb(bs, "soak", cmd_soak)
     p.add_argument("action", choices=("sample", "restart"))
     p.add_argument("--finding")
+    verb(bs, "signoff", cmd_signoff)
     p = verb(bs, "show", cmd_show)
     p.add_argument("--json", action="store_true")

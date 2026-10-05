@@ -50,7 +50,7 @@ import kit
 
 REPO = Path(__file__).resolve().parents[3]
 RESEARCH_ACTIVE = ("certifying", "certified")
-ACTIVE = RESEARCH_ACTIVE + kit.BUILD_STATES  # §11: the jobs still visit a program in Stage 9
+ACTIVE = RESEARCH_ACTIVE + kit.STAGE9_STATES  # §11: the jobs visit a program in Stage 9 until close
 SOAK_STATES = ("build-certifying",)  # §11: the soak runs between built-freeze and built-run
 DAY = 86400.0
 RULE_GLOBS = (
@@ -97,7 +97,7 @@ def scanned(job: str) -> str:
         "|".join(RESEARCH_ACTIVE)
         + (", nor registered with an open packet" if job == "sweep" else "")
         + ", nor in "
-        + "|".join(kit.BUILD_STATES)
+        + "|".join(kit.STAGE9_STATES)
     )
 
 

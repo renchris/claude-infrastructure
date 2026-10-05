@@ -85,6 +85,10 @@
 #                       work-order marker in its payload, so the fired session's re-ask router labels
 #                       its brief work-order without calling the classifier (§10 item 3).
 #   --gate-wave W       The build wave id the --requires-gate check is scoped to.
+#   --gate-after-signoff  The wave FOLLOWS implementation signoff (method v1.2, REPORT.md §11): the
+#                       --requires-gate check also refuses unless the registry reads
+#                       `implementation-signed` on a valid operator signature of the newest built
+#                       certificate (`gate.sh requires --after-signoff`).
 #   --cloud             OFF-BOX VENUE (G5). Marks this fire as one that does NOT run on this
 #                       machine, which changes WHICH GATE ADMITS IT: the box-local capacity terms
 #                       (load per core, reclaimable RAM) are the wrong two questions for a fire
@@ -527,6 +531,7 @@ SURFACE="split-right" SURFACE_EXPLICIT=0 SURFACE_REASON="" PROBE=0 DRY=0 IN_PLAC
 NOTIFY_BACK="" NOTIFY_BACK_EXPLICIT=0 NOTIFY_BACK_OPT_OUT=0 SELF_RETIRE=1 AS_ROLE="" FOLLOW=0
 WITH_MCP=0                                       # --with-mcp: opt back INTO project .mcp.json stdio servers
 REQUIRES_GATE="" GATE_WAVE=""                    # --requires-gate P / --gate-wave W: research build-wave gate
+GATE_AFTER_SIGNOFF=""                            # --gate-after-signoff: the wave follows implementation signoff
 RECYCLE_RELOC=0                                  # --recycle + --worktree/--cwd: same pane, NEW dir
 ALLOW_LIVE_SA=0                                  # L1-b: 1 = recycle over IN-FLIGHT Agent-tool subagents
 RCY_SUBAGENT_SID=""                              # L1-b: the PREDECESSOR's sid, for the brief trailer
@@ -12214,6 +12219,7 @@ while [ $# -gt 0 ]; do case "$1" in
   --goal)           FIRE_GOAL="${2:?--goal needs a condition}"; shift 2 ;;
   --requires-gate)  REQUIRES_GATE="${2:?--requires-gate needs a program slug}"; shift 2 ;;
   --gate-wave)      GATE_WAVE="${2:?--gate-wave needs a wave id}"; shift 2 ;;
+  --gate-after-signoff) GATE_AFTER_SIGNOFF="--after-signoff"; shift ;;
   --self-retire)    SELF_RETIRE=1; shift ;;
   --no-self-retire) SELF_RETIRE=0; shift ;;
   --as-role)     AS_ROLE="${2:?--as-role needs a value}"; shift 2 ;;
@@ -12256,6 +12262,9 @@ fi
 if [ -z "$REQUIRES_GATE" ] && [ -n "$GATE_WAVE" ]; then
   echo "!! --gate-wave scopes --requires-gate; it means nothing alone" >&2; exit 2
 fi
+if [ -z "$REQUIRES_GATE" ] && [ -n "$GATE_AFTER_SIGNOFF" ]; then
+  echo "!! --gate-after-signoff scopes --requires-gate; it means nothing alone" >&2; exit 2
+fi
 if [ -n "$REQUIRES_GATE" ]; then
   _rg_kit="${CC_RESEARCH_GATE:-$HF_DIR/research-kit/gate.sh}"
   if [ ! -f "$_rg_kit" ]; then
@@ -12265,9 +12274,9 @@ if [ -n "$REQUIRES_GATE" ]; then
   fi
   _rg_rc=0
   if [ -n "$GATE_WAVE" ]; then
-    _rg_out="$(bash "$_rg_kit" requires --program "$REQUIRES_GATE" --wave "$GATE_WAVE" 2>&1)" || _rg_rc=$?
+    _rg_out="$(bash "$_rg_kit" requires --program "$REQUIRES_GATE" --wave "$GATE_WAVE" ${GATE_AFTER_SIGNOFF:+"$GATE_AFTER_SIGNOFF"} 2>&1)" || _rg_rc=$?
   else
-    _rg_out="$(bash "$_rg_kit" requires --program "$REQUIRES_GATE" 2>&1)" || _rg_rc=$?
+    _rg_out="$(bash "$_rg_kit" requires --program "$REQUIRES_GATE" ${GATE_AFTER_SIGNOFF:+"$GATE_AFTER_SIGNOFF"} 2>&1)" || _rg_rc=$?
   fi
   if [ "$_rg_rc" -ne 0 ]; then
     if [ "$_rg_rc" -eq 1 ]; then

@@ -1120,7 +1120,7 @@ _ca_rp_prompt_active() {   # rc 0 ⇒ prompt text $1 names an ACTIVE program; _R
   _ca_rp_lib || return 1
   r="$(rp_resolve_prompt "$1" 2>/dev/null)"
   case "${r##* }" in
-    registered|certifying|certified|build-certifying|build-certified) _RP_RESULT="$r"; return 0 ;;
+    registered|certifying|certified|build-certifying|build-certified|implementation-signed) _RP_RESULT="$r"; return 0 ;;
   esac
   return 1
 }

@@ -18,6 +18,9 @@ from SYNTHESIS. Profile names and caps come from REPORT.md §6, and live in code
 Registry entry (wave A1's contract, never extended): `{"slug","aliases","cwd_roots","state"}`, state one of
 `registered → certifying (gate.sh freeze) → certified (gate.sh run, all rows pass) → build-certifying (gate.sh built-freeze) → build-certified (gate.sh built-run) → closed`; the two build states are method v1.2 (§11). A valid operator
 `reopen` signature newer than the certificate makes `gate.sh run` set the state back to `registered`.
+Added 2026-10-05 (wave E3d): between `build-certified` and `closed` sits `implementation-signed`
+(`gate.sh built-signed`, only on a valid operator `implementation` signature of the newest built certificate);
+`gate.sh close` refuses a `build-certified` program without it.
 
 ## Tracked records (fields the kit uses)
 
@@ -102,7 +105,14 @@ Both mechanisms apply only when `frame.json` carries `method_version` `"1.2"` or
 1.1. Constants: `kit.CAPS` (v1.2 block), `kit.YIELD_STAGES`, `kit.AS_BUILT_KINDS`, `kit.AS_BUILT_ENV`,
 `kit.SOAK_BOUNDARIES`, `kit.BUILD_FINDABLE_SHARE`, profile keys `quiet_probes_to_stop`, `built_hard_cap`,
 `built_stage_days`. Registry states gain `build-certifying` and `build-certified` (`kit.BUILD_STATES`); the entry
-shape is unchanged.
+shape is unchanged. Wave E3d adds `implementation-signed` (`kit.IMPL_SIGNED`; `kit.STAGE9_STATES` is the three).
+
+The implementation signature (§11 "Signing the implementation") is one line of `<sealed>/signoff.jsonl` like every
+other signature: `{row: "research:<slug>/implementation", action: "implementation", target: null, at, at_iso,
+evidence, pins: {"built/BUILT-CERT-v<n>.json": <git blob sha>}, provenance: {claude_ancestor, chain}}`.
+`operator_sign.implementation_state(slug)` is the one reader: `signed` (a VALID record pins the newest built
+certificate), `unsigned`, `void` (agent-written or no chain), `stale` (the pinned certificate changed), `superseded`
+(it pins an older built certificate). Only `signed` passes `gate.sh built-signed`, `close`, `requires` and `render`.
 
 ### Stage 9 records (`docs/research/<slug>/built/`, §11)
 

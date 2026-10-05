@@ -22,6 +22,10 @@ the program's sealed log `$CC_RESEARCH_HOME/<slug>/signoff.jsonl`:
   reopen       reopen certified scope, operator-caused, priced  (§5.1; gate.sh honours it)
   veto/<id>    veto an overrun or below-profile default on decision <id>  (§6.1; the sweep honours it)
   extend-decision/<id>  the one research extension on decision <id>   (§12.3; gate row 19 and the menu honour it)
+  implementation  pins the newest docs/research/<slug>/built/BUILT-CERT-v<n>.json, by path and hash
+               (§11, method v1.2: the implementation signoff; `gate.sh built-signed`, `close`,
+               `requires` and `render` honour it). Signed only while the registry reads
+               build-certified or implementation-signed.
 
 Python 3.9-safe, standard library only.
 """
@@ -42,9 +46,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "research-kit" /
 import kit  # noqa: E402
 
 PS = "/bin/ps"
-ACTIONS = ("frame", "cert", "extra-round", "reopen", "veto", "extend-decision")
+ACTIONS = ("frame", "cert", "extra-round", "reopen", "veto", "extend-decision", "implementation")
 TARGETED = ("veto", "extend-decision")  # the actions that name a decision id
+EVIDENCED = ("frame", "cert", "implementation")  # signatures over an artifact the operator read
 VALID, VOID, STALE = "valid", "void", "stale"
+# implementation_state()'s statuses, beyond the three verdicts' names
+SIGNED, UNSIGNED, SUPERSEDED = "signed", "unsigned", "superseded"
+IMPLEMENTATION_STATES = ("build-certified", "implementation-signed")
 
 
 class Refused(Exception):
@@ -143,7 +151,8 @@ def verdict(
 # ── the research namespace ──────────────────────────────────────────────────────────────────────
 
 ROW_RE = re.compile(
-    r"^research:([a-z0-9][a-z0-9-]{0,63})/(frame|cert|extra-round|reopen|veto|extend-decision)"
+    r"^research:([a-z0-9][a-z0-9-]{0,63})/"
+    r"(frame|cert|extra-round|reopen|veto|extend-decision|implementation)"
     r"(?:/([A-Za-z0-9._-]+))?$"
 )
 
@@ -174,7 +183,19 @@ def pin_targets(slug: str, action: str) -> Dict[str, Path]:
             key=lambda p: int(re.sub(r"\D", "", p.stem) or 0),
         )
         return {f"cert/{certs[-1].name}": certs[-1]} if certs else {}
+    if action == "implementation":
+        newest = newest_built_cert(slug)
+        return {f"built/{newest.name}": newest} if newest else {}
     return {}
+
+
+def newest_built_cert(slug: str) -> Optional[Path]:
+    """The newest built certificate (REPORT.md §11) of the program, or None."""
+    certs = sorted(
+        (kit.records_dir(slug) / "built").glob("BUILT-CERT-v*.json"),
+        key=lambda p: int(re.sub(r"\D", "", p.stem) or 0),
+    )
+    return certs[-1] if certs else None
 
 
 def current_pins(slug: str, rec: Dict[str, Any]) -> Dict[str, Optional[str]]:
@@ -201,11 +222,11 @@ def sign_research(
         f"cc-signoff {row} "
         + (
             "--evidence <what you read>"
-            if action in ("frame", "cert")
+            if action in EVIDENCED
             else '--because "<why>"'
         ),
     )
-    if action in ("frame", "cert") and not evidence:
+    if action in EVIDENCED and not evidence:
         raise Refused(
             "REFUSED — --evidence is required: the path or URL you actually read.\n"
             "A signature with no referent is a claim about nothing."
@@ -214,6 +235,19 @@ def sign_research(
         raise Refused(
             f'REFUSED — {action} needs --because "<why>"; it is logged as operator-caused and priced.'
         )
+    if action == "implementation":
+        state = (kit.registry_get(slug) or {}).get("state")
+        if state not in IMPLEMENTATION_STATES:
+            raise Refused(
+                f"REFUSED — {slug} is {state or 'not registered'}, not build-certified: the built "
+                "gate\nhas not certified the artifact this signature would accept "
+                "(gate.sh built-run)."
+            )
+        if newest_built_cert(slug) is None:
+            raise Refused(
+                f"REFUSED — no built certificate exists under {kit.records_dir(slug) / 'built'} "
+                "to pin."
+            )
     pins: Dict[str, str] = {}
     for rel, path in pin_targets(slug, action).items():
         pin = file_pin(path)
@@ -223,7 +257,7 @@ def sign_research(
                 "artifact would be a signature over nothing."
             )
         pins[rel] = pin
-    if action in ("frame", "cert") and not pins:
+    if action in EVIDENCED and not pins:
         raise Refused(
             f"REFUSED — no {action} artifact exists under {kit.records_dir(slug)} to pin."
         )
@@ -293,3 +327,44 @@ def latest_valid(
         r for r in research_records(slug, action, target) if r["_verdict"] == VALID
     ]
     return max(valid, key=lambda r: r.get("at", 0)) if valid else None
+
+
+def implementation_state(slug: str) -> Dict[str, Any]:
+    """Is the newest built certificate signed? {"status", "cert", "record"} (REPORT.md §11).
+
+    signed      a VALID record pins the newest built certificate, unchanged since
+    unsigned    no implementation record at all (or no built certificate)
+    void        the newest record was written under an agent, or carries no chain
+    stale       the newest record's pinned certificate changed after it was signed
+    superseded  the newest record is sound but pins an older built certificate
+    Only `signed` authorises anything; the other four are reasons, printed by name.
+    """
+    newest = newest_built_cert(slug)
+    name = newest.stem if newest else None
+    recs = research_records(slug, "implementation")
+    if newest is not None:
+        key = f"built/{newest.name}"
+        hits = [r for r in recs if r["_verdict"] == VALID and key in (r.get("pins") or {})]
+        if hits:
+            return {"status": SIGNED, "cert": name, "record": max(hits, key=lambda r: r.get("at", 0))}
+    if not recs:
+        return {"status": UNSIGNED, "cert": name, "record": None}
+    last = max(recs, key=lambda r: r.get("at", 0))
+    status = last["_verdict"] if last["_verdict"] in (VOID, STALE) else SUPERSEDED
+    return {"status": status, "cert": name, "record": last}
+
+
+def implementation_words(slug: str, state: Optional[Dict[str, Any]] = None) -> str:
+    """One clause for a reader: the signature state of the newest built certificate, by name."""
+    st = state or implementation_state(slug)
+    rec = st["record"] or {}
+    if st["status"] == SIGNED:
+        return f"signed by the operator {rec.get('at_iso') or 'at an unrecorded time'}"
+    if st["status"] == VOID:
+        return "signature VOID (agent-written): not signed"
+    if st["status"] == STALE:
+        return "signature STALE (the built certificate changed after it): not signed"
+    if st["status"] == SUPERSEDED:
+        old = ", ".join(Path(p).stem for p in sorted(rec.get("pins") or {})) or "no certificate"
+        return f"not signed (the signature on file covers {old})"
+    return "not signed"

@@ -92,7 +92,8 @@ HISTORICAL_FRAMES = ["deployed and live", "nothing can beat it", "no loose ends"
 METHOD_VERSION = "1.2"
 # Registry states of a program that is past intake and not closed; build-certifying and
 # build-certified are v1.2's built-artifact certification stage.
-LIVE_STATES = ("registered", "certifying", "certified", "build-certifying", "build-certified")
+LIVE_STATES = ("registered", "certifying", "certified", "build-certifying", "build-certified",
+               "implementation-signed")
 PROFILE_DAYS = {"lite": (6.5, 12.0), "standard": (14.0, 28.0), "full": (20.0, 39.0)}
 REFERENCE_FACTOR = 3.0  # §6.3
 

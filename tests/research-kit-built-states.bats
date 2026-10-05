@@ -327,7 +327,7 @@ PY
   run "$G" render --program demo
   [ "$status" -eq 0 ]
   [[ "${lines[0]}" == "Research: demo version 1. CERTIFIED"* ]] || false
-  [ "${lines[${#lines[@]}-1]}" = "Built: certified $issued (BUILT-CERT-v1)" ]
+  [ "${lines[${#lines[@]}-1]}" = "Built: certified $issued (BUILT-CERT-v1) · implementation not signed" ]
 }
 
 @test "render in certified prints no Built line of this kind" {
@@ -399,4 +399,220 @@ assert f['after_impl_bound95'] == f['desk_n95'] + f['invisible_bound95'], f
   at="$(printf '%s\n' "$output" | grep -n '^After signoff:' | cut -d: -f1)"
   [ -n "$at" ]
   [ "$(printf '%s\n' "$output" | sed -n "$((at + 1))p")" = "Split: before implementation signoff about 1.2 · after implementation signoff about 0.8 (at most 7 at 95%); build-findable share 0.585, share assumed" ]
+}
+
+# ── E3d: the implementation signature (REPORT.md §11 "Signing the implementation") ──────────────
+# built_certified: a frozen snapshot, one built certificate on disk, registry build-certified.
+built_certified() {
+  freeze --wave W1
+  printf '{"cert":"BUILT-CERT-v1","program":"demo","version":1,"issued":"%s"}\n' "$CC_NOW" > "$REC/built/BUILT-CERT-v1.json"
+  setstate build-certified
+}
+# lib_sign: the signing library's own call with an operator's chain; it writes only the sealed log.
+lib_sign() {
+  /usr/bin/python3 -c "import sys; sys.path.insert(0, '$REPO/scripts/lib'); import operator_sign as o
+o.ancestry = lambda pid=None: [{'pid': 2, 'comm': 'zsh', 'depth': 0}, {'pid': 3, 'comm': 'kitty', 'depth': 1}]
+o.sign_research('research:demo/implementation', evidence='read BUILT-CERT-v1.md')"
+}
+# rechain <json list>: rewrite the chain of every implementation record, as a hand-written record would carry it.
+rechain() {
+  /usr/bin/python3 -c "import json, sys
+p = '$CC_RESEARCH_HOME/demo/signoff.jsonl'
+rows = [json.loads(l) for l in open(p) if l.strip()]
+for r in rows:
+    if r.get('action') == 'implementation':
+        r['provenance']['chain'] = json.loads(sys.argv[1])
+open(p, 'w').write(''.join(json.dumps(r) + '\n' for r in rows))" "$1"
+}
+SIGNER() { "$REPO/tests/fixtures/research-kit/fixture_signer.py" "$@"; }
+
+@test "E3d built-signed refuses a built certificate nobody signed, and names the operator's command" {
+  built_certified
+  run "$G" built-signed --program demo
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"BUILT-CERT-v1 carries no operator signature"* ]] || false
+  [[ "$output" == *"cc-signoff research:demo/implementation --evidence <what you read>"* ]] || false
+  [ "$(state)" = "build-certified" ]
+}
+
+@test "E3d built-signed moves build-certified to implementation-signed on a valid operator signature" {
+  built_certified; lib_sign
+  [ "$(state)" = "build-certified" ]
+  run "$G" built-signed --program demo
+  [ "$status" -eq 0 ]
+  [[ "$output" == "IMPLEMENTATION-SIGNED demo: BUILT-CERT-v1"*"registry -> implementation-signed" ]] || false
+  [ "$(state)" = "implementation-signed" ]
+}
+
+@test "E3d built-signed refuses an agent-written signature and says it is void" {
+  built_certified; lib_sign
+  rechain '["zsh","claude"]'
+  run "$G" built-signed --program demo
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"VOID"* ]] || false
+  [ "$(state)" = "build-certified" ]
+}
+
+@test "E3d built-signed refuses a signature the built certificate changed under, and un-signs the registry" {
+  built_certified; lib_sign
+  "$G" built-signed --program demo
+  printf ' ' >> "$REC/built/BUILT-CERT-v1.json"
+  run "$G" built-signed --program demo
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"STALE"*"registry -> build-certified"* ]] || false
+  [ "$(state)" = "build-certified" ]
+}
+
+@test "E3d built-signed refuses a program that is not build-certified" {
+  freeze --wave W1
+  run "$G" built-signed --program demo
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"build-certifying"* ]] || false
+  [ "$(state)" = "build-certifying" ]
+}
+
+@test "E3d the operator's one cc-signoff command signs and hands the registry move to gate.sh" {
+  built_certified
+  run SIGNER research:demo/implementation --evidence "read BUILT-CERT-v1.md"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"SIGNED research:demo/implementation"* ]] || false
+  [[ "$output" == *"pinned built/BUILT-CERT-v1.json = "* ]] || false
+  [[ "$output" == *"registry -> implementation-signed"* ]] || false
+  [ "$(state)" = "implementation-signed" ]
+  grep -q '"fixture-signer"' "$CC_RESEARCH_HOME/demo/signoff.jsonl"
+}
+
+@test "E3d cc-signoff under a claude ancestor signs nothing and the registry stays build-certified" {
+  built_certified
+  ln -s /bin/bash "$BATS_TEST_TMPDIR/claude-fake-shell"
+  before="$(wc -l < "$CC_RESEARCH_HOME/demo/signoff.jsonl")"
+  # `; exit $?` keeps the fake shell alive as the CLI's parent (a lone -c command is exec'd in place)
+  run "$BATS_TEST_TMPDIR/claude-fake-shell" -c "'$REPO/bin/cc-signoff' research:demo/implementation --evidence x; exit \$?"
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"claude-fake-shell at depth 1"* ]] || false
+  [ "$(wc -l < "$CC_RESEARCH_HOME/demo/signoff.jsonl")" = "$before" ]
+  [ "$(state)" = "build-certified" ]
+}
+
+@test "E3d close refuses a build-certified program whose implementation is not signed" {
+  built_certified
+  run "$G" close --program demo
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"close refused"*"cc-signoff research:demo/implementation"* ]] || false
+  [ "$(state)" = "build-certified" ]
+}
+
+@test "E3d close refuses implementation-signed when the signature went stale, and closes when it holds" {
+  built_certified; lib_sign
+  "$G" built-signed --program demo
+  cp "$REC/built/BUILT-CERT-v1.json" "$BATS_TEST_TMPDIR/keep.json"
+  printf ' ' >> "$REC/built/BUILT-CERT-v1.json"
+  run "$G" close --program demo
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"STALE"* ]] || false
+  [ "$(state)" = "implementation-signed" ]
+  cp "$BATS_TEST_TMPDIR/keep.json" "$REC/built/BUILT-CERT-v1.json"
+  run "$G" close --program demo
+  [ "$status" -eq 0 ]
+  [ "$(state)" = "closed" ]
+}
+
+@test "E3d close of a program that never entered Stage 9 needs no implementation signature" {
+  run "$G" close --program demo
+  [ "$status" -eq 0 ]
+  [ "$(state)" = "closed" ]
+}
+
+@test "E3d requires admits a wave in implementation-signed only while the signature holds" {
+  built_certified; lib_sign
+  "$G" built-signed --program demo
+  run "$G" requires --program demo --wave B1
+  [ "$status" -eq 0 ]
+  printf ' ' >> "$REC/built/BUILT-CERT-v1.json"
+  run "$G" requires --program demo --wave B1
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"implementation-signed"*"STALE"* ]]
+}
+
+@test "E3d requires --after-signoff refuses a wave until the implementation is signed" {
+  built_certified
+  run "$G" requires --program demo --wave B1 --after-signoff
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"follows implementation signoff"*"cc-signoff research:demo/implementation"* ]] || false
+  run "$G" requires --program demo --wave B1
+  [ "$status" -eq 0 ]
+  lib_sign
+  "$G" built-signed --program demo
+  run "$G" requires --program demo --wave B1 --after-signoff
+  [ "$status" -eq 0 ]
+}
+
+@test "E3d handoff-fire --gate-after-signoff refuses a post-signoff wave on an unsigned implementation" {
+  built_certified
+  echo "TASK — post-signoff wave fixture payload." > "$BATS_TEST_TMPDIR/p.txt"
+  run bash "$REPO/scripts/handoff-fire.sh" --prompt-file "$BATS_TEST_TMPDIR/p.txt" --dry-run --requires-gate demo --gate-wave B1 --gate-after-signoff
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"research gate REFUSES this build wave"*"follows implementation signoff"* ]] || false
+  run bash "$REPO/scripts/handoff-fire.sh" --prompt-file "$BATS_TEST_TMPDIR/p.txt" --dry-run --gate-after-signoff
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--gate-after-signoff scopes --requires-gate"* ]]
+}
+
+@test "E3d render states the implementation signature: not signed, signed, stale, void" {
+  built_certified
+  run "$G" render --program demo
+  [ "${lines[${#lines[@]}-1]}" = "Built: certified $CC_NOW (BUILT-CERT-v1) · implementation not signed" ]
+  lib_sign
+  "$G" built-signed --program demo
+  run "$G" render --program demo
+  [[ "${lines[0]}" == "Research: demo version 1. CERTIFIED"* ]] || false
+  [[ "${lines[${#lines[@]}-1]}" == "Built: certified $CC_NOW (BUILT-CERT-v1) · implementation signed by the operator 20"*"Z" ]] || false
+  printf ' ' >> "$REC/built/BUILT-CERT-v1.json"
+  run "$G" render --program demo
+  [[ "${lines[${#lines[@]}-1]}" == *"· implementation signature STALE (the built certificate changed after it): not signed" ]] || false
+  rechain '["claude"]'
+  run "$G" render --program demo
+  [[ "${lines[${#lines[@]}-1]}" == *"· implementation signature VOID (agent-written): not signed" ]]
+}
+
+@test "E3d built-freeze from implementation-signed needs --refreeze, and the old signature does not cover the next certificate" {
+  built_certified; lib_sign
+  "$G" built-signed --program demo
+  run freeze --wave W1
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--refreeze"* ]] || false
+  [ "$(state)" = "implementation-signed" ]
+  run freeze --refreeze
+  [ "$status" -eq 0 ]
+  [ "$(state)" = "build-certifying" ]
+  printf '{"cert":"BUILT-CERT-v2","program":"demo","version":2,"issued":"%s"}\n' "$CC_NOW" > "$REC/built/BUILT-CERT-v2.json"
+  setstate build-certified
+  run "$G" built-signed --program demo
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"the signature on file covers BUILT-CERT-v1"* ]]
+}
+
+@test "E3d built-run refuses an implementation-signed program: a new certificate starts at built-freeze --refreeze" {
+  built_certified; lib_sign
+  "$G" built-signed --program demo
+  run "$G" built-run --program demo
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--refreeze"* ]] || false
+  [ "$(state)" = "implementation-signed" ]
+}
+
+@test "E3d every reader of the registry treats implementation-signed as active until close" {
+  setstate implementation-signed
+  run /bin/bash -c '. "$1"; rp_is_active "$2"' _ "$REPO/scripts/lib/research-program.sh" "$ROOT"
+  [ "$status" -eq 0 ]
+  fn="$(sed -n '/^_ca_rp_lib() {/,/^if \[ "\$d4" -eq 1 \]/p' "$REPO/hooks/completion-assert.sh" | sed '$d')"
+  export CC_RESEARCH_PROGRAM_LIB="$REPO/scripts/lib/research-program.sh"
+  run /bin/bash -c 'eval "$1"; _ca_rp_prompt_active "is demo done?" && printf "%s" "$_RP_RESULT"' _ "$fn"
+  [ "$output" = "demo implementation-signed" ]
+  run prompt "build it: research the options for caching"
+  [ -z "$output" ]
+  prompt "are we done?" >/dev/null
+  [ "$(tool Agent)" = deny ]
+  run /usr/bin/python3 "$REPO/bin/cc-research" job sweep
+  [[ "$output" == *"job sweep demo: ok"* ]]
 }

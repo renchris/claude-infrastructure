@@ -2,7 +2,7 @@
 §8 item 13; SYNTHESIS §6.3 "A build wave fires only when no row in its dependency closure is open or
 carried-unresolved"). The reader behind `handoff-fire.sh --requires-gate <program>`.
 
-  gate.sh requires --program P [--wave W] [--json]
+  gate.sh requires --program P [--wave W] [--after-signoff] [--json]
 
 A wave fires only when ALL of these hold:
   1. the registry reads `certified` (registered, certifying and closed all refuse: no build wave
@@ -26,6 +26,10 @@ appending events (gate_sweep.py), and a frame-delta cycle closes the known row i
 snapshot would refuse forever a wave whose row has since closed, which is exactly §10 item 9's defect.
 The gate rows themselves are NOT re-run here: a fire must not re-execute every probe, and row 10
 (freshness) is the gate's job; the certificate is the gate's verdict and this verb reads it.
+
+Method v1.2 (§11): in `implementation-signed` a wave fires only while a VALID operator signature
+still pins the newest built certificate, and `--after-signoff` (handoff-fire `--gate-after-signoff`)
+marks a wave that FOLLOWS implementation signoff: it is refused in every other state.
 
 Without --wave there is no dependency closure to scope to, so ANY block for ANY wave refuses
 (fail closed) and the refusal says to pass --wave.
@@ -55,7 +59,7 @@ def _cert_no(p: Any) -> int:
     return int(m.group(1)) if m else -1
 
 
-def blockers(slug: str, wave: Optional[str]) -> Dict[str, Any]:
+def blockers(slug: str, wave: Optional[str], after_signoff: bool = False) -> Dict[str, Any]:
     """{"cert": id|None, "reasons": [str]} — empty reasons means the wave may fire."""
     import gate
     from gate_rows_a import known_rows
@@ -66,10 +70,23 @@ def blockers(slug: str, wave: Optional[str]) -> Dict[str, Any]:
         raise kit.KitError(f"program {slug!r} is not registered")
     state = prog.get("state")
     # a fix wave runs during Stage 9 (REPORT.md §11), so both build states fire a wave too
-    if state not in ("certified",) + kit.BUILD_STATES:
+    if state not in ("certified",) + kit.STAGE9_STATES:
         reasons.append(
             f"registry state is {state!r}, not 'certified': no build wave fires before the gate passes"
         )
+    if state == kit.IMPL_SIGNED or after_signoff:
+        import gate_built
+
+        ok, why = gate_built.implementation_gate(slug)
+        if state == kit.IMPL_SIGNED and not ok:
+            reasons.append(f"registry state is 'implementation-signed' but {why}")
+        elif after_signoff and state != kit.IMPL_SIGNED:
+            reasons.append(
+                f"this wave follows implementation signoff and the registry state is {state!r}: {why}"
+                if not ok else
+                f"this wave follows implementation signoff and the registry state is {state!r}: "
+                f"run gate.sh built-signed --program {slug}"
+            )
     ctx = gate.make_ctx(slug)
     certs = sorted(ctx.records.glob("cert/CERT-v*.json"), key=_cert_no)
     cert: Dict[str, Any] = {}
@@ -137,7 +154,7 @@ def cmd_requires(a: Any) -> int:
     kit.check_slug(a.program)
     if a.wave is not None and not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]*$", a.wave):
         raise kit.KitError(f"bad wave id {a.wave!r}")
-    r = blockers(a.program, a.wave)
+    r = blockers(a.program, a.wave, a.after_signoff)
     ok = not r["reasons"]
     if a.json:
         print(json.dumps(dict(r, program=a.program, wave=a.wave, verdict="clear" if ok else "refused")))
@@ -156,5 +173,6 @@ def add_verbs(sub: Any) -> None:
     p = sub.add_parser("requires")
     p.add_argument("--program", required=True)
     p.add_argument("--wave")
+    p.add_argument("--after-signoff", action="store_true")
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_requires)

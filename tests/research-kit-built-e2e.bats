@@ -147,3 +147,44 @@ print([json.loads(l) for l in open('$REC/built/findings.jsonl') if json.loads(l)
   [ "$(rowstat 21)" = "PASS" ]
   [ "$(rowstat 22)" = "PASS" ]
 }
+
+# ── E3d: the implementation signature over a certificate the real gate wrote ─────────────────────
+
+@test "E3d built signoff renders what is signed and the operator's command, and signs nothing" {
+  instruments
+  "$G" built-run --program demo
+  before="$(cat "$CC_RESEARCH_HOME/demo/signoff.jsonl")"
+  run "$R" built signoff --program demo
+  [ "$status" -eq 0 ]
+  pin="$(/usr/bin/python3 -c "import sys; sys.path.insert(0, '$REPO/scripts/lib'); import operator_sign as o; print(o.file_pin('$REC/built/BUILT-CERT-v1.json'))")"
+  [[ "$output" == *"Built: demo built certificate version 1"* ]] || false
+  [[ "$output" == *"After implementation signoff: forecast about 0.2"* ]] || false
+  [[ "$output" == *"Signing pins built/BUILT-CERT-v1.json = $pin"* ]] || false
+  [[ "$output" == *"Implementation: not signed"* ]] || false
+  [[ "$output" == *"cc-signoff research:demo/implementation --evidence <what you read>"* ]] || false
+  [ "$(cat "$CC_RESEARCH_HOME/demo/signoff.jsonl")" = "$before" ]
+  [ "$(state)" = "build-certified" ]
+}
+
+@test "E3d built signoff refuses before the built gate has certified" {
+  run "$R" built signoff --program demo
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"not build-certified"* ]]
+}
+
+@test "E3d the fixture signer takes the operator path end to end: signed, registry moved, render says so, close allowed" {
+  instruments
+  "$G" built-run --program demo
+  run "$G" close --program demo
+  [ "$status" -eq 2 ]
+  run "$REPO/tests/fixtures/research-kit/fixture_signer.py" research:demo/implementation --evidence "$REC/built/BUILT-CERT-v1.md"
+  [ "$status" -eq 0 ]
+  [ "$(state)" = "implementation-signed" ]
+  run "$G" render --program demo
+  [[ "$output" == *"(BUILT-CERT-v1) · implementation signed by the operator "* ]] || false
+  run "$R" built signoff --program demo
+  [[ "$output" == *"Implementation: signed by the operator "* ]] || false
+  run "$G" close --program demo
+  [ "$status" -eq 0 ]
+  [ "$(state)" = "closed" ]
+}

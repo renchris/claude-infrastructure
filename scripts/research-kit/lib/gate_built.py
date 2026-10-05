@@ -9,6 +9,17 @@
   built-run    --program P [--json]               rows 20-25 (gate_rows_built.py); all pass ->
                                                   built/BUILT-CERT-v<n> (built_cert.py), registry
                                                   -> build-certified
+  built-signed --program P                        the operator signed the newest built certificate
+                                                  (cc-signoff research:P/implementation): registry
+                                                  build-certified -> implementation-signed. Refused
+                                                  (exit 2) while no VALID signature pins it. Run on
+                                                  an implementation-signed program whose signature
+                                                  no longer holds, it sets build-certified back
+                                                  and exits 1. The agent never signs; cc-signoff
+                                                  runs this verb itself after a signature.
+
+A build-certified program is not done: `gate.sh close` refuses it until the implementation is
+signed (implementation_gate below), and `requires --after-signoff` refuses a wave that follows it.
 
 Record shapes: RECORDS.md "Stage 9 records". gate.sh stays the only registry writer.
 """
@@ -82,12 +93,14 @@ def cmd_built_freeze(a: Any) -> int:
             f"built-freeze refused: {a.program}'s frame is not method 1.2 (Stage 9 is a v1.2 stage)"
         )
     state = (kit.registry_get(a.program) or {}).get("state")
-    if state == "build-certified" and not a.refreeze:
+    if state in ("build-certified", kit.IMPL_SIGNED) and not a.refreeze:
         raise kit.KitError(
-            f"built-freeze refused: {a.program} is build-certified; pass --refreeze to pin a new "
+            f"built-freeze refused: {a.program} is {state}; pass --refreeze to pin a new "
             "snapshot and certify the built artifact again"
+            + (" (the new certificate needs a new implementation signature)"
+               if state == kit.IMPL_SIGNED else "")
         )
-    if state not in ("certified",) + kit.BUILD_STATES:
+    if state not in ("certified",) + kit.STAGE9_STATES:
         raise kit.KitError(
             f"built-freeze needs a certified program: {a.program} is {state!r}"
         )
@@ -112,6 +125,11 @@ def cmd_built_run(a: Any) -> int:
 
     ctx = make_ctx(a.program)
     state = (kit.registry_get(a.program) or {}).get("state")
+    if state == kit.IMPL_SIGNED:
+        raise kit.KitError(
+            f"built-run refused: {a.program} is implementation-signed; a new built certificate "
+            "starts at gate.sh built-freeze --refreeze and needs a new signature"
+        )
     if state not in kit.BUILD_STATES:
         raise kit.KitError(
             f"built-run needs a frozen built snapshot: {a.program} is {state}, not "
@@ -128,7 +146,48 @@ def cmd_built_run(a: Any) -> int:
     return 0
 
 
+def sign_cmd(slug: str) -> str:
+    return f"cc-signoff research:{slug}/implementation --evidence <what you read>"
+
+
+def implementation_gate(slug: str) -> Tuple[bool, str]:
+    """(signed?, one sentence) for the newest built certificate. Only a VALID signature passes."""
+    import operator_sign
+
+    st = operator_sign.implementation_state(slug)
+    cert = st["cert"] or "no built certificate"
+    if st["status"] == operator_sign.SIGNED:
+        return True, f"{cert} {operator_sign.implementation_words(slug, st)}"
+    if st["status"] == operator_sign.UNSIGNED:
+        why = f"{cert} carries no operator signature"
+    else:
+        why = f"{cert}: implementation {operator_sign.implementation_words(slug, st)}"
+    return False, f"{why}. The operator signs it in their own terminal: {sign_cmd(slug)}"
+
+
+def cmd_built_signed(a: Any) -> int:
+    state = (kit.registry_get(a.program) or {}).get("state")
+    if state not in ("build-certified", kit.IMPL_SIGNED):
+        raise kit.KitError(
+            f"built-signed refused: {a.program} is {state}, not build-certified; the "
+            "implementation is signed over a built certificate (gate.sh built-run)"
+        )
+    ok, why = implementation_gate(a.program)
+    if not ok and state == kit.IMPL_SIGNED:
+        kit.registry_set(a.program, "build-certified")
+        print(f"UNSIGNED {a.program}: {why}; registry -> build-certified")
+        return 1
+    if not ok:
+        raise kit.KitError(f"built-signed refused: {why}")
+    kit.registry_set(a.program, kit.IMPL_SIGNED)
+    print(f"IMPLEMENTATION-SIGNED {a.program}: {why}; registry -> implementation-signed")
+    return 0
+
+
 def add_verbs(sub: Any) -> None:
+    p = sub.add_parser("built-signed")
+    p.add_argument("--program", required=True)
+    p.set_defaults(fn=cmd_built_signed)
     p = sub.add_parser("built-freeze")
     p.add_argument("--program", required=True)
     p.add_argument("--artifact", required=True)

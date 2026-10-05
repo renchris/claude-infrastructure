@@ -35,6 +35,8 @@ for a case-sized question answerable in a day, or when the operator declines eit
   - `cc-signoff research:<slug>/veto/<DECISION-ID>` — veto an overrun or below-profile default;
   - `cc-signoff research:<slug>/extend-decision/<DECISION-ID>` — v1.2: the one priced research
     extension on a decision tagged research, at most once per decision (§12.3).
+  - `cc-signoff research:<slug>/implementation` — v1.2 (§11, added 2026-10-05): the implementation
+    signoff, after `gate.sh built-run`; it pins the newest built certificate by path and hash.
 - **Program packets only through `gate.sh file-packet`**, never a bare `cc-decide open`: it adds the
   deliverable repo as `--project` and, for class B, `--default-effect no-change`, and gate row 12 fails
   any program packet without them (§10 item 4). Run `gate.sh sweep --program <slug>` daily in the pilot.
@@ -251,6 +253,20 @@ for the §3.1 exemption and the §4.2 research block, and the scheduled jobs sti
    excluded, with the overrun packet at 1.5 ×. Past a cap, open rows become named known rows or dated
    carried rows with defaults. A Stage 9 finding is a counted change against the before-signoff forecast,
    not a take-back.
+
+6. **The implementation signature** (added 2026-10-05, v1.2; §11 "Signing the implementation"). A
+   `build-certified` program is not done. Run `cc-research built signoff --program <slug>`: it prints the
+   built certificate's lines, the file and hash the signature pins, the signature state, and the
+   operator's exact command, `cc-signoff research:<slug>/implementation --evidence <what you read>`. Relay
+   that output and stop: the agent never signs, and `cc-signoff` refuses under an agent ancestor (exit 3).
+   The operator's command signs and runs `gate.sh built-signed`, which moves the registry
+   `build-certified → implementation-signed` (active until close, like the build states). If the operator
+   signed some other way, run `scripts/research-kit/gate.sh built-signed --program <slug>` yourself; it
+   refuses without a valid signature on the newest built certificate, and names a void or stale one.
+   Until then `gate.sh close` refuses, and a wave that follows implementation signoff is fired with
+   `handoff-fire.sh --requires-gate <slug> --gate-after-signoff` (`gate.sh requires --after-signoff`),
+   which refuses. `gate.sh render` states the signature on the built line. A fix after signoff goes back
+   through `built-freeze --refreeze` and `built-run`; the new built certificate needs a new signature.
 
 Then hand the operator the built certificate; signing the implementation is theirs.
 

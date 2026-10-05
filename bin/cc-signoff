@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """cc-signoff — the ONLY path from `awaiting-signoff` to `signed`, and the only way to sign a
-research program's frame or certificate, buy its extra round set, reopen it, or veto a default.
+research program's frame, certificate or built implementation, buy its extra round set, reopen
+it, or veto a default.
 Operator only.
 
 The operator's ruling, verbatim: "deeming completion for these items ie. bottle service,
@@ -59,6 +60,7 @@ USAGE = """usage: cc-signoff <row-id> --evidence <live-url|sha> [--note <text>]
        cc-signoff research:<slug>/reopen      --because "<why>"
        cc-signoff research:<slug>/veto/<decision-id> --because "<why>"
        cc-signoff research:<slug>/extend-decision/<decision-id> --because "<why>"
+       cc-signoff research:<slug>/implementation --evidence <what you read>
        run this in YOUR OWN terminal; an agent cannot."""
 
 
@@ -74,6 +76,15 @@ def sign_research(rid: str, evidence: str | None, because: str | None) -> int:
     print(f"SIGNED {rid}")
     for path, pin in sorted(rec["pins"].items()):
         print(f"  pinned {path} = {pin} — one changed byte voids this signature")
+    if rec["action"] == "implementation":
+        # the registry has one writer, gate.sh; hand it the move so this stays one command
+        gate = Path(__file__).resolve().parents[1] / "scripts" / "research-kit" / "gate.sh"
+        out = subprocess.run(("/bin/bash", str(gate), "built-signed", "--program", rec["program"]),
+                             capture_output=True, text=True)
+        print("  " + (out.stdout + out.stderr).strip().replace("\n", "\n  "))
+        if out.returncode != 0:
+            print(f"  the signature is recorded; the registry did not move. Re-run: {gate} "
+                  f"built-signed --program {rec['program']}")
     return 0
 
 

@@ -18,13 +18,17 @@ Invoked through scripts/research-kit/gate.sh. Verbs:
   sweep     --program P                                     class-B/class-C due-date sweep (§10 item 4)
   file-packet --program P --decision D ...                  cc-decide open with the program's
                                                             --project and --default-effect no-change
-  close     --program P                                     state -> closed
+  close     --program P                                     state -> closed; refused for a
+                                                            build-certified program until the
+                                                            operator signs the implementation (§11)
   requires  --program P [--wave W] [--json]                 may build wave W fire? exit 0 clear,
                                                             1 refused (handoff-fire --requires-gate)
   built-freeze --program P --artifact <abs dir>             pin the built snapshot; state ->
                                                             build-certifying (REPORT.md §11)
   built-run --program P [--json]                            rows 20-25; all pass -> built
                                                             certificate, state -> build-certified
+  built-signed --program P                                  a VALID operator signature on the built
+                                                            certificate -> implementation-signed
 
 Rows 1-8 live in gate_rows_a.py; rows 9-17 and the plan lint in gate_rows_b.py; the sweep and
 file-packet verbs in gate_sweep.py; requires in gate_requires.py; freeze, render and the certificate in gate_cert.py. Each row function takes a Ctx and returns a Row. A row that cannot
@@ -172,6 +176,14 @@ def cmd_add_root(a: argparse.Namespace) -> int:
 
 
 def cmd_close(a: argparse.Namespace) -> int:
+    # §11: a built certificate is not "done"; the operator's implementation signature is
+    state = (kit.registry_get(a.program) or {}).get("state")
+    if state in ("build-certified", kit.IMPL_SIGNED):
+        import gate_built
+
+        ok, why = gate_built.implementation_gate(a.program)
+        if not ok:
+            raise kit.KitError(f"close refused: {a.program} is {state} and {why}")
     kit.registry_set(a.program, "closed")
     print(f"closed {a.program}")
     return 0

@@ -1462,6 +1462,36 @@ row 2). Every number in this section is an assumed input until then (§6.6).
 change against the before-implementation-signoff forecast, not a take-back; the §5.3 take-back test still reads the
 total.
 
+**Signing the implementation.** Added 2026-10-05 (v1.2, build wave E3d); nothing above is deleted. "Before you sign
+the implementation" had no signature behind it: the signing tool could sign the frame and the research certificate,
+and nothing for what was built. It now has one, and a built certificate is not "done" without it.
+
+1. After `gate.sh built-run` certifies, the agent runs `cc-research built signoff --program <slug>`. It prints the
+   built certificate's lines, the file your signature will pin and its hash, the signature state, and your exact
+   command. It signs nothing; an agent cannot.
+2. You read the built certificate and sign in your own terminal:
+   `cc-signoff research:<slug>/implementation --evidence <what you read>`. The same three protections as every other
+   signature apply (§8 item 4): the tool refuses when any ancestor process is an agent; the signature pins the
+   newest built certificate by path and hash, so one changed byte makes it stale; and a record written under an
+   agent, or with no recorded ancestry, is read as void and authorises nothing. The tool also refuses while the
+   registry is not `build-certified`, or when no built certificate exists.
+3. Your one command also moves the registry: it runs `gate.sh built-signed`, which sets a third v1.2 state,
+   `certified → build-certifying → build-certified → implementation-signed → closed`. `gate.sh` stays the registry's
+   only writer and makes the move only on a valid signature of the newest built certificate. The state is active
+   for the §3.1 exemption and the §4.2 research block, like the two before it, until `gate.sh close`.
+4. What the signature gates. `gate.sh close` refuses a `build-certified` program until it is signed. A build wave
+   that follows implementation signoff fires with `handoff-fire.sh --requires-gate <slug> --gate-after-signoff`,
+   which refuses in every state but `implementation-signed`. `gate.sh render` adds the signature state to the
+   built line: "implementation signed by the operator <date>", "not signed", or the void or stale signature by
+   name.
+5. A signature does not outlive what it covers. If the built certificate changes, or a fix after signoff is
+   certified again (`gate.sh built-freeze --refreeze`, then `built-run` writes the next certificate), the old
+   signature no longer counts: `built-signed` sets the registry back to `build-certified`, and the new certificate
+   needs your signature again.
+
+Not gated: closing a program from `build-certifying` (an abandoned Stage 9 is not a "done" claim), and a 1.1 program,
+which never enters these states.
+
 ## 12. Method v1.2: contact and build-to-learn stop on yield; decisions below 90 are tagged by what blocks them
 
 Added 2026-10-04 under ruling `1bf69e5c1775` (§9), change (c), from audit row 7. Nothing in §3 is deleted. It
