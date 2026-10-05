@@ -53,7 +53,12 @@ printf '%s\n' "$*" >> "$0.log"
 exit "$(cat "$0.rc" 2>/dev/null || echo 1)"
 SH
   chmod +x "$CC_WAKE_BIN"
-  unset CC_RESTORE_NUDGE CC_RESTORE_PASTE_CMD
+  unset CC_RESTORE_NUDGE
+  # The verified paste has a real entry point since W3 P5 (handoff-fire.sh paste-verified). No case
+  # here may reach it: the seam names a path that does not exist unless a case installs a stub.
+  export CC_RESTORE_PASTE_CMD="$BATS_TEST_TMPDIR/no-paste-here"
+  # This suite names the fire script only in comments; pinned so no case reads live machine load.
+  export CC_FIRE_CAPACITY_GATE=off
 
   # stub cc-backlog: echo a hex id + log the argv. MANDATORY, not optional — resolve_bin's ladder
   # reaches the REPO's own bin/cc-backlog from $(dirname $0)/../bin, so an unstubbed run would file
@@ -1130,13 +1135,13 @@ SH
   [ ! -e "$CC_KEEPALIVE_BIN.log" ]
 }
 
-@test "P4 v2: cc-wake refusing and no verified paste ⇒ unconfirmed, logged and paged; nothing is typed" {
+@test "P4 v2: cc-wake refusing and no single registry pane ⇒ unconfirmed, logged and paged; nothing is typed" {
   v2_fleet
   printf 'e1 AT-REST\n' > "$CC_RESUME_CLASSIFY_BIN.verdicts"
   stub_layout "$SUM_OK2"
   run /bin/bash "$SCRIPT" --event "$EV" --kind crash               # the wake stub exits 1: a gate refused
   [ "$status" -eq 0 ]
-  grep -q 'sid=e2 .* unconfirmed verdict=unconfirmed via=none why=cc-wake-rc-1,no-verified-paste-entry-point' "$(evdir)/prompt.log"
+  grep -q 'sid=e2 .* unconfirmed verdict=unconfirmed via=none why=cc-wake-rc-1,no-single-registry-pane' "$(evdir)/prompt.log"
   grep -q '1 prompt(s) never reached their session' "$CC_NOTIFY_BIN.log"
   grep -q '"prompts_unconfirmed":1' "$CC_IDL"
   [ ! -e "$CC_KEEPALIVE_BIN.log" ]
@@ -1210,4 +1215,178 @@ SH
   [ "$(awk -F'\t' '{ print NF }' "$CC_RESUME_LAYOUT_BIN.rows" | sort -u)" = 11 ]
   [ ! -s "$(evdir)/noted" ]
   grep -q '2 inbox note(s) could not be written' "$CC_NOTIFY_BIN.log"
+}
+
+# ══ KITTY PAGES AND PLAN MODE (W3 P5) ═════════════════════════════════════════════════════════════
+# On the ticks of an already-handled boot: a kitty that is gone gets ONE operator row carrying
+# `cc-restore --after-crash`, a deaf kitty gets the stuck-kitty row handoff-fire.sh files, and
+# neither ever launches anything. ps, sample and netstat are stubs or captures; nothing here can
+# reach the real kitty.
+handled_boot() {
+  export CC_BOOTUUID_OVERRIDE=UUID-1
+  mkdir -p "$CC_BOOT_RESUME_STATE_DIR"
+  echo "$CC_BOOTTIME_OVERRIDE" > "$CC_BOOT_RESUME_STATE_DIR/last-boot-epoch"
+  echo UUID-1 > "$CC_BOOT_RESUME_STATE_DIR/last-boot-uuid"
+  # ps stub: `-o comm= -p <pid>` answers kitty for a pid listed in .alive; `-axo pid=,args=` prints .table
+  export CC_BOOT_RESUME_PS_BIN="$BATS_TEST_TMPDIR/stub-ps"
+  cat > "$CC_BOOT_RESUME_PS_BIN" <<'SH'
+#!/bin/bash
+case " $* " in
+  *" -axo "*) cat "$0.table" 2>/dev/null ;;
+  *" -p "*)   for p; do :; done; grep -qx "$p" "$0.alive" 2>/dev/null && echo /Applications/kitty.app/Contents/MacOS/kitty ;;
+esac
+exit 0
+SH
+  chmod +x "$CC_BOOT_RESUME_PS_BIN"
+  export CC_RESTORE_BIN=/fixture/bin/cc-restore
+  mkdir -p "$CC_ROLES_DIR"; echo DESK-UUID > "$CC_ROLES_DIR/desk"
+}
+backlog_rows() { local n; n="$(grep -c "$1" "$CC_BACKLOG_BIN.log" 2>/dev/null)"; echo "${n:-0}"; }
+
+@test "P5 crash page: a kitty that is gone files ONE needs-human row per pid, copies its heartbeat and launches nothing" {
+  handled_boot
+  KP="$(dead_pid)"
+  hbeat UUID-1 "$KP" 1784799900 "[$(rrow e1 claude-next /x/e1 EV-ONE),$(rrow e2 claude-next /x/e2 EV-TWO)]"
+  run /bin/bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [ "$(backlog_rows '^needs restart kitty (pid '"$KP"' is gone): 2 session(s)')" -eq 1 ]
+  grep -q -- "--class needs-human --run /fixture/bin/cc-restore --after-crash --kitty-pid $KP --falsifier test -e $CC_BOOT_RESUME_STATE_DIR/events/$KP.done" "$CC_BACKLOG_BIN.log"
+  grep -q "kitty $KP is gone and 2 session(s) went with it. Nothing was relaunched" "$CC_NOTIFY_BIN.log"
+  # the last good heartbeat is kept with the event (the heartbeat root is pruned after 7 days)
+  [ -s "$CC_BOOT_RESUME_STATE_DIR/events/$KP/hb/$KP/hb.roster.json" ]
+  [ "$(launch_count)" -eq 0 ]
+  [ ! -e "$CC_RESUME_LAYOUT_BIN.log" ]
+  [ ! -e "$CC_BOOT_RESUME_STATE_DIR/restore-v2" ]
+  # a second tick files nothing more, and still launches nothing
+  run /bin/bash "$SCRIPT"
+  [ "$(backlog_rows '^needs restart kitty (pid')" -eq 1 ]
+  [ "$(notify_count)" -eq 1 ]
+  [ "$(launch_count)" -eq 0 ]
+}
+
+@test "P5 crash page: silent for a live kitty, a restored one, an empty one, and while a restore holds the lock" {
+  handled_boot
+  A="$(dead_pid)"; B="$(dead_pid)"; C="$(dead_pid)"
+  two="[$(rrow e1 claude-next /x/e1 EV-ONE)]"
+  hbeat UUID-1 "$A" 1784799900 "$two"; echo "$A" > "$CC_BOOT_RESUME_PS_BIN.alive"       # still running
+  hbeat UUID-1 "$B" 1784799900 "$two"; mkdir -p "$CC_BOOT_RESUME_STATE_DIR/events"; : > "$CC_BOOT_RESUME_STATE_DIR/events/$B.done"
+  hbeat UUID-1 "$C" 1784799900 "[]"                                                     # nobody was in it
+  run /bin/bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [ "$(backlog_rows '^needs restart kitty')" -eq 0 ]
+  [ "$(notify_count)" -eq 0 ]
+  # a restore in progress ended its kitty on purpose: no page while the lock is held
+  : > "$CC_BOOT_RESUME_PS_BIN.alive"
+  mkdir -p "$CC_BOOT_RESUME_STATE_DIR/restore.lock"
+  run /bin/bash "$SCRIPT"
+  [ "$(backlog_rows '^needs restart kitty')" -eq 0 ]
+  rmdir "$CC_BOOT_RESUME_STATE_DIR/restore.lock"
+  run /bin/bash "$SCRIPT"                                                               # CONTROL: now it pages
+  [ "$(backlog_rows '^needs restart kitty (pid '"$A"' is gone)')" -eq 1 ]
+}
+
+@test "P5 crash page: a row cc-backlog could not file is tried again on the next tick" {
+  handled_boot
+  KP="$(dead_pid)"
+  hbeat UUID-1 "$KP" 1784799900 "[$(rrow e1 claude-next /x/e1 EV-ONE)]"
+  : > "$CC_BACKLOG_BIN.fail"
+  run /bin/bash "$SCRIPT"
+  [ ! -e "$CC_BOOT_RESUME_STATE_DIR/events/$KP/crash-paged" ]
+  rm -f "$CC_BACKLOG_BIN.fail"
+  run /bin/bash "$SCRIPT"
+  [ -e "$CC_BOOT_RESUME_STATE_DIR/events/$KP/crash-paged" ]
+}
+
+deaf_fixture() { # <queued rows> <sample: peer|nopeer|broken>
+  handled_boot
+  KP=4242
+  echo "$KP /Applications/kitty.app/Contents/MacOS/kitty" > "$CC_BOOT_RESUME_PS_BIN.table"
+  echo "$KP" > "$CC_BOOT_RESUME_PS_BIN.alive"
+  KSOCK="$BATS_TEST_TMPDIR/kitty-$KP"
+  printf '#!/bin/bash\necho "unix:%s/kitty-1"\necho "unix:%s"\n' "$BATS_TEST_TMPDIR" "$KSOCK" > "$CC_KITTY_SOCKET_BIN"; chmod +x "$CC_KITTY_SOCKET_BIN"
+  export CC_HF_NETSTAT_FILE="$BATS_TEST_TMPDIR/netstat.txt"
+  { echo "Active LOCAL (UNIX) domain sockets"
+    echo "a0 stream 0 0 9b64 0 0 0 0 0 8192 8192 $KP 0 00000 2 b56a 8000 0 1 0 000000 $KSOCK"
+    i=0; while [ "$i" -lt "$1" ]; do echo "b$i stream 120 0 0 0 0 0 0 0 8192 8192 0 0 00000 2 b56a 8000 0 1 0 000000 $KSOCK"; i=$((i + 1)); done
+  } > "$CC_HF_NETSTAT_FILE"
+  export CC_KQ_SAMPLE_BIN="$BATS_TEST_TMPDIR/stub-sample"
+  case "$2" in
+    peer)   body='echo "    1 Thread_1   DispatchQueue_1: com.apple.main-thread"; echo "    1 Thread_8855: KittyPeerMon"' ;;
+    nopeer) body='echo "    1 Thread_1   DispatchQueue_1: com.apple.main-thread"; echo "    1 Thread_8856: KittyChildMon"' ;;
+    *)      body='exit 1' ;;
+  esac
+  printf '#!/bin/bash\necho "$*" >> "$0.log"\n%s\n' "$body" > "$CC_KQ_SAMPLE_BIN"; chmod +x "$CC_KQ_SAMPLE_BIN"
+}
+
+@test "P5 deaf page: a full queue AND no KittyPeerMon thread pages once, with handoff-fire's own row and the one command" {
+  deaf_fixture 128 nopeer
+  run /bin/bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  title='restart kitty (control socket stuck: queue full)'
+  grep -qx -- "needs $title --class needs-human --falsifier test ! -S $KSOCK" "$CC_BACKLOG_BIN.log"
+  # one wedge, one row: tests/handoff-recycle-kitty-precheck.bats pins that this title is the one
+  # the recycle hold files, character for character
+  grep -q "kitty $KP is deaf" "$CC_NOTIFY_BIN.log"
+  grep -q 'The sessions in it are STILL WORKING' "$CC_NOTIFY_BIN.log"
+  grep -q -- "/fixture/bin/cc-restore --restart-kitty --confirm $KP" "$CC_NOTIFY_BIN.log"
+  grep -qx "$KP 1" "$CC_KQ_SAMPLE_BIN.log"
+  [ "$(launch_count)" -eq 0 ]
+  run /bin/bash "$SCRIPT"                                          # once per kitty pid
+  [ "$(notify_count)" -eq 1 ]
+}
+
+@test "P5 deaf page: gated on sample — a full queue with the talk thread running, or an unreadable sample, pages nobody" {
+  deaf_fixture 128 peer
+  run /bin/bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [ "$(notify_count)" -eq 0 ]
+  [ ! -s "$CC_BACKLOG_BIN.log" ]
+  [ -s "$CC_KQ_SAMPLE_BIN.log" ]                                   # it WAS asked: the gate decided
+  deaf_fixture 128 broken
+  run /bin/bash "$SCRIPT"
+  [ "$(notify_count)" -eq 0 ]
+  [ ! -s "$CC_BACKLOG_BIN.log" ]
+}
+
+@test "P5 deaf page: under the full-queue threshold nothing is sampled and nobody is paged" {
+  deaf_fixture 127 nopeer
+  run /bin/bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [ "$(notify_count)" -eq 0 ]
+  [ ! -e "$CC_KQ_SAMPLE_BIN.log" ]
+}
+
+@test "P5 deaf page: while load per core is over the restore gate it says to wait, never to restart now" {
+  deaf_fixture 128 nopeer
+  export CC_SYSCTL_BIN="$BATS_TEST_TMPDIR/stub-sysctl"
+  printf '#!/bin/bash\ncase "$*" in *hw.ncpu*) echo 2 ;; *vm.loadavg*) echo "{ 40.00 30.00 20.00 }" ;; esac\n' > "$CC_SYSCTL_BIN"
+  chmod +x "$CC_SYSCTL_BIN"
+  run /bin/bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  grep -q 'Load per core is 20.00, over the restore gate of 6: do NOT restart yet' "$CC_NOTIFY_BIN.log"
+}
+
+@test "P5 plan mode: restore-v2.plan makes a handled boot write the v2 plan once, launching nothing and touching no marker" {
+  handled_boot
+  echo "$$" > "$CC_BOOT_RESUME_PS_BIN.alive"
+  printf '[{"session_id":"e1","account":"claude-next","cwd":"/x/e1","name":"EV-ONE","kitty_pid":%s,"paneUUID":"30"},{"session_id":"e2","account":"claude-next","cwd":"/x/e2","name":"EV-TWO","kitty_pid":%s,"paneUUID":"31"}]' "$$" "$$" > "$CC_HB_SESSIONS_BIN.json"
+  export CC_RESTORE_NOW=1784800100 CC_HB_NOW=1784800050           # the tick falls after the boot marker
+  plan="$CC_BOOT_RESUME_STATE_DIR/events/boot-$CC_BOOTTIME_OVERRIDE/plan.txt"
+  run /bin/bash "$SCRIPT"                                          # CONTROL: no flag file, no plan
+  [ "$status" -eq 0 ]
+  [ ! -e "$plan" ]
+  : > "$CC_BOOT_RESUME_STATE_DIR/restore-v2.plan"                  # fixture state dir only
+  before="$(markers_sum)"
+  run /bin/bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  grep -q 'plan verdict=planned rows=2 retired=0 launches=0' "$plan"
+  [ "$(grep -c '^row	' "$plan")" -eq 2 ]
+  [ "$(launch_count)" -eq 0 ]
+  [ ! -e "$CC_RESUME_LAYOUT_BIN.log" ]
+  [ "$(markers_sum)" = "$before" ]
+  [ ! -e "$CC_BOOT_RESUME_STATE_DIR/restore-v2" ]                  # never created here
+  # once per touch: the next tick leaves the plan alone
+  echo SENTINEL >> "$plan"; touch "$plan"
+  run /bin/bash "$SCRIPT"
+  grep -q SENTINEL "$plan"
 }

@@ -245,11 +245,13 @@ ASST_OK='{"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"t
   [ ! -e "$CC_WAKE_BIN.log" ] && [ ! -e "$CC_MAILBOX_DIR/$SID_A.md" ] || false
 }
 
-@test "fallback: cc-wake is tried first with the prompt already in the inbox; with no verified paste the verdict is unconfirmed, never a raw send" {
+@test "fallback: cc-wake is tried first with the prompt already in the inbox; with no single registry pane the verdict is unconfirmed, never a raw send" {
+  # handoff-fire.sh has had the paste-verified entry point since W3 P5, so the paste is now refused
+  # one step later: this session has no registry row, so there is no pane to paste into.
   printf 'p (restore ref R-feedc0de)\n' > "$BATS_TEST_TMPDIR/p.txt"
   run rn rn_fallback "$SID_A" "$BATS_TEST_TMPDIR/p.txt" R-feedc0de
   [ "$status" -eq 1 ]
-  [ "$output" = "verdict=unconfirmed via=none why=cc-wake-rc-1,no-verified-paste-entry-point" ] || { echo "$output"; false; }
+  [ "$output" = "verdict=unconfirmed via=none why=cc-wake-rc-1,no-single-registry-pane" ] || { echo "$output"; false; }
   [ "$(cat "$CC_WAKE_BIN.log")" = "$SID_A --wait 60 --from boot-resume" ]
   grep -q '(restore ref R-feedc0de)' "$CC_MAILBOX_DIR/$SID_A.md"
 }

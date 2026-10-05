@@ -79,6 +79,22 @@
 #   opening a sid twice; rows on accounts at their weekly limit are restored and never nudged; the
 #   event is marked done only once nothing was shed or its deadline has passed, and pages once.
 #
+# KITTY PAGES (W3 P5), on every tick of an already-handled boot, after the heartbeat. Neither one ever
+#   restarts or relaunches anything: a deliberate quit cannot be told from a crash, and a crash
+#   cluster would loop. Each files one operator row and pages the desk once per kitty pid.
+#     crash — a kitty with a heartbeat this boot is gone, and no <state>/events/<pid>.done says its
+#             fleet was restored. Its last heartbeat is copied to <state>/events/<pid>/hb/<pid>/ and
+#             the row carries `cc-restore --after-crash --kitty-pid <pid>`.
+#     deaf  — the main kitty's accept queue is full AND `sample` shows no KittyPeerMon thread
+#             (scripts/lib/kitty-queue.sh, the detector handoff-fire.sh uses). Remote control is
+#             dead, the sessions are still working. Same row title as handoff-fire's stuck-kitty row,
+#             so one wedge is one row. The page carries `cc-restore --restart-kitty --confirm <pid>`
+#             and says to wait while load per core is over the restore start gate.
+# PLAN MODE (W3 P5): while <state>/restore-v2.plan exists (never created here), a tick of an
+#   already-handled boot also writes what a v2 restore of the live fleet would do to
+#   <state>/events/boot-<boot>/plan.txt, once per touch of that file. Nothing is launched. The
+#   operator reads it and renames the file to restore-v2 to turn the reboot path on.
+#
 # C10: this is machinery the OPERATOR loads via launchd (launchd/com.claude.boot-resume.plist,
 # RunAtLoad, shipped UNLOADED). The agent never loads launchd. Activation + rollback + the posture
 # switch: docs/activation/boot-resume-activate-snippet.md.
@@ -94,7 +110,9 @@
 #   closed itself on purpose too) · CC_BOOT_RESUME_ACTIVITY_TAIL (transcript lines read, default 4000) ·
 #   restore v2: CC_HANDOFF_LOG · CC_ACCOUNTS_BIN · CC_RESTORE_EXHAUSTED_PCT (100) · CC_RESTORE_START_LOAD
 #   (6 per core) · CC_RESTORE_GATE_MAX_S (600) · CC_RESTORE_GATE_POLL_S (10) · CC_RESTORE_DEADLINE_S
-#   (1800 after the event) · CC_RESTORE_NOW · CC_BOOT_RESUME_META_TAIL (1500).
+#   (1800 after the event) · CC_RESTORE_NOW · CC_BOOT_RESUME_META_TAIL (1500) · kitty pages:
+#   CC_BOOT_RESUME_PS_BIN (/bin/ps) · CC_RESTORE_BIN (the cc-restore the pages name) ·
+#   CC_HF_NETSTAT_FILE · CC_KQ_SAMPLE_BIN · CC_KITTY_WEDGED_QUEUE_N · CC_BOOT_RESUME_KITTY_PAGES=off.
 # BSD+GNU portable, no eval, fail-loud. bash 3.2-safe.
 set -uo pipefail
 
@@ -158,6 +176,12 @@ _rnl="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/lib/restore-note.sh"
 # shellcheck source=lib/restore-note.sh
 # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
 . "$_rnl" 2>/dev/null || echo "boot-resume: ⚠ cannot source $_rnl — no restore notes this run" >&2
+# The deaf-kitty detector, shared with handoff-fire.sh (one detector, never two). Missing = no deaf page.
+_kql="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/lib/kitty-queue.sh"
+[ -f "$_kql" ] || _kql="$HOME/.claude/scripts/lib/kitty-queue.sh"
+# shellcheck source=lib/kitty-queue.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+. "$_kql" 2>/dev/null || echo "boot-resume: ⚠ cannot source $_kql — no deaf-kitty page this run" >&2
 NOTIFY="$(resolve_bin "${CC_NOTIFY_BIN:-}" cc-notify)"
 # The addressless fallback for a delta with no desk role (see step 3 in the header). Resolved
 # here rather than at the use site so an unresolvable cc-backlog is a KNOWN-empty string on the
@@ -350,6 +374,95 @@ same_boot() { # rc 0 when the markers say this boot was already handled
   d=$((BOOT - me)); [ "$d" -lt 0 ] && d=$((-d))
   [ "$d" -le "$BOOT_EPOCH_TOLERANCE" ]
 }
+# ── KITTY PAGES + PLAN MODE (W3 P5; see the header). Run on the ticks of an already-handled boot. ──
+PS_BIN="${CC_BOOT_RESUME_PS_BIN:-/bin/ps}"
+RESTORE_BIN="${CC_RESTORE_BIN:-$HOME/.claude/bin/cc-restore}"
+_kp_under_bats() { [ -n "${BATS_TEST_FILENAME:-}${BATS_TEST_TMPDIR:-}${BATS_VERSION:-}" ]; }
+kitty_pid_alive() { # <pid> → rc 0 when that pid is a running kitty (a reused pid is not)
+  local c; c="$("$PS_BIN" -o comm= -p "$1" 2>/dev/null)"; c="${c%%$'\n'*}"
+  [ "${c##*/}" = kitty ]
+}
+page_desk() { # <message> — best effort; the backlog row is the durable half
+  local t=""
+  [ -f "$ROLES_DIR/desk" ] && t="$(head -1 "$ROLES_DIR/desk" 2>/dev/null | tr -d '[:space:]')"
+  [ -n "$t" ] && [ -n "$NOTIFY" ] && "$NOTIFY" "$t" "$1" >/dev/null 2>&1
+  return 0
+}
+crash_page() {
+  local root uuid d kp n ev bid step
+  command -v hb_root >/dev/null 2>&1 || return 0
+  root="$(hb_root)"; uuid="$(_hb_bootuuid 2>/dev/null)"
+  [ -d "$STATE_DIR/restore.lock" ] && return 0          # a restore is running: its kitty died on purpose
+  for d in "$root/${uuid:-nouuid}"/*; do
+    kp="${d##*/}"
+    case "$kp" in 0|''|*[!0-9]*) continue ;; esac
+    [ -f "$d/hb.roster.json" ] || continue
+    kitty_pid_alive "$kp" && continue
+    ev="$STATE_DIR/events/$kp"
+    { [ -e "$ev.done" ] || [ -e "$ev/crash-paged" ]; } && continue
+    n="$(jq 'if type == "array" then length else 0 end' "$d/hb.roster.json" 2>/dev/null)"
+    case "$n" in ''|*[!0-9]*) n=0 ;; esac
+    mkdir -p "$ev/hb" 2>/dev/null || continue
+    # The last good heartbeat, kept with the event: the heartbeat root is pruned after 7 days.
+    [ -d "$ev/hb/$kp" ] || cp -R "$d" "$ev/hb/$kp" 2>/dev/null || true
+    if [ "$n" -eq 0 ]; then : > "$ev/crash-paged"; continue; fi   # nothing was live in it: nothing to restore
+    step="restart kitty (pid $kp is gone): $n session(s) were live in it at its last heartbeat and nothing has restored them. If you quit it on purpose, ignore this; otherwise run the command."
+    bid=""
+    [ -n "$BACKLOG" ] && bid="$("$BACKLOG" needs "$step" --class needs-human --run "$RESTORE_BIN --after-crash --kitty-pid $kp" \
+        --falsifier "test -e $ev.done" --project claude-infrastructure 2>/dev/null | tail -1 | tr -d '[:space:]')"
+    case "$bid" in ''|*[!0-9a-f]*) bid="" ;; esac
+    page_desk "💥 kitty $kp is gone and $n session(s) went with it. Nothing was relaunched (a quit and a crash look the same). To restore them: $RESTORE_BIN --after-crash --kitty-pid $kp   (preview: add --dry-run)"
+    log_idl fired ",\"reason\":\"kitty-crash-page\",\"kitty_pid\":$kp,\"n_open\":$n,\"resumed\":0,\"backlog_id\":\"$bid\""
+    # Marked only once the row is filed, so a tick where cc-backlog was unreachable tries again.
+    [ -n "$bid" ] && : > "$ev/crash-paged"
+  done
+  return 0
+}
+deaf_page() {
+  local kp sock why nc l1 per lim hold=""
+  command -v kq_deaf >/dev/null 2>&1 || return 0
+  # Under a bats harness the real netstat and sample are never run: the capture seam must be set.
+  if _kp_under_bats && [ -z "${CC_HF_NETSTAT_FILE:-}" ]; then return 0; fi
+  [ -n "$KSOCK_BIN" ] && [ -x "$KSOCK_BIN" ] || return 0
+  for kp in $(CC_KQ_PS_BIN="$PS_BIN" kq_main_kitty_pids); do
+    [ -e "$STATE_DIR/deaf-$kp.paged" ] && continue
+    # This kitty's own socket, from the one resolver every launchd path uses (it opens no connection:
+    # a connect to a deaf kitty would only add one more entry to the queue being measured).
+    sock="$("$KSOCK_BIN" --all 2>/dev/null | sed -n "s|^unix:\\(.*-$kp\\)\$|\\1|p")"; sock="${sock%%$'\n'*}"
+    [ -n "$sock" ] || continue
+    why="$(kq_deaf "$sock" "$kp")" || continue
+    nc="$("$SYSCTL" -n hw.ncpu 2>/dev/null | tr -d '[:space:]')"; case "$nc" in ''|*[!0-9]*|0) nc=1 ;; esac
+    l1="$("$SYSCTL" -n vm.loadavg 2>/dev/null | tr -d '{}' | awk '{ print $1 }')"
+    lim="${CC_RESTORE_START_LOAD:-6}"
+    per="$(awk -v l="$l1" -v n="$nc" 'BEGIN { if (l !~ /^[0-9.]+$/) print "?"; else printf "%.2f", l / n }')"
+    if [ "$per" != "?" ] && awk -v p="$per" -v g="$lim" 'BEGIN { exit !(p > g) }'; then
+      hold=" Load per core is $per, over the restore gate of $lim: do NOT restart yet, wait until it is under."
+    fi
+    # The SAME step, class and falsifier as handoff-fire.sh's stuck-kitty row, so one wedge is one row.
+    [ -n "$BACKLOG" ] && "$BACKLOG" needs "restart kitty (control socket stuck: queue full)" --class needs-human \
+        --falsifier "test ! -S $sock" >/dev/null 2>&1
+    page_desk "🔇 kitty $kp is deaf: its remote control is dead ($why). The sessions in it are STILL WORKING; only new panes, recycles and handoffs are blocked, and only a restart clears it.${hold} Preview: $RESTORE_BIN --restart-kitty --dry-run   ·   restart and restore: $RESTORE_BIN --restart-kitty --confirm $kp"
+    log_idl fired ",\"reason\":\"kitty-deaf-page\",\"kitty_pid\":$kp,\"n_open\":0,\"resumed\":0"
+    mkdir -p "$STATE_DIR" 2>/dev/null && : > "$STATE_DIR/deaf-$kp.paged"
+  done
+  return 0
+}
+plan_mode() { # restore-v2.plan: what a v2 restore of the live fleet would do, written once per touch
+  local flag="$STATE_DIR/restore-v2.plan" out="$EVENT_DIR/plan.txt"
+  [ -f "$flag" ] || return 0
+  [ -f "$out" ] && [ ! "$flag" -nt "$out" ] && return 0
+  mkdir -p "$EVENT_DIR" 2>/dev/null || return 0
+  # A second run of this script, in event mode: an event is always v2, bypasses same_boot() and never
+  # writes the boot markers, and --plan-only launches nothing. It plans from the tick just taken.
+  if "$0" --event "${CC_RESTORE_NOW:-$(date +%s)}" --kind restart --plan-only > "$out.tmp" 2>&1; then mv -f "$out.tmp" "$out"
+  else { echo "boot-resume: the v2 plan run failed:"; cat "$out.tmp"; } > "$out" 2>/dev/null; rm -f "$out.tmp"; fi
+  return 0
+}
+kitty_pages() {
+  [ "${CC_BOOT_RESUME_KITTY_PAGES:-on}" != off ] || return 0
+  crash_page; deaf_page; plan_mode
+}
+
 # ── STEP 0, the heartbeat. Every tick of an already-handled boot takes it here, before the exit. The
 #    first run of a NEW boot takes it after DETECT instead: cc-sessions sweeps registry rows of dead
 #    sessions started over 24 h ago, and on that run those rows are the registry fallback's evidence.
@@ -371,6 +484,7 @@ if [ -n "$EVENT" ]; then
   fi
 elif same_boot; then
   heartbeat
+  kitty_pages
   log_idl abstained ',"reason":"already-processed","n_open":0,"resumed":0'
   # Backfill the uuid on a pre-uuid marker, so the next clock step is decided by the uuid.
   if [ -n "$BOOT_UUID" ] && [ ! -s "$UUID_MARKER" ]; then
@@ -1044,6 +1158,14 @@ EOF
   fi
   if [ "$(printf '%s' "$CLASSIFIED" | grep -c . || true)" != "$n_adm" ]; then
     CLASSIFIED="$(printf '%s' "$ADMITTED" | awk -F'\t' 'NF { print $0 "\tUNKNOWN" }')"
+  fi
+  # The classified rows, kept with the event: cc-restore-rebind and cc-restore --compare read them.
+  # A later round admits only what is still missing, so its rows are merged over the earlier ones
+  # by sid (column 2), never written in their place.
+  if [ "$RESTORE_V2" = 1 ] && [ "$n_adm" -gt 0 ]; then
+    { printf '%s\n' "$CLASSIFIED"; cat "$EVENT_DIR/rows.tsv" 2>/dev/null; } \
+      | awk -F'\t' 'NF >= 2 && !seen[$2]++' > "$EVENT_DIR/rows.tsv.tmp" 2>/dev/null \
+      && mv -f "$EVENT_DIR/rows.tsv.tmp" "$EVENT_DIR/rows.tsv" 2>/dev/null
   fi
   n_int="$(printf '%s\n' "$CLASSIFIED" | awk -F'\t' '$NF == "INTERRUPTED"' | grep -c . || true)"
   n_wake="$(printf '%s\n' "$CLASSIFIED" | awk -F'\t' '$NF == "WAKE-LOST"' | grep -c . || true)"
