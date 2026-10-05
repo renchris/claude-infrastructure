@@ -278,12 +278,17 @@ PY
   # NON-VACUITY: curl-gate must actually emit for the corpus's curl rows, or "neither emitted"
   # everywhere is a non-verdict wearing a pass's clothes.
   [ -n "$(rewritten 'curl -sSL https://example.com/')" ]
+  # _QOS_WORDS is word-start, so a qos binary name INSIDE a URL keeps the hardening.
+  [ -n "$(rewritten 'curl -L https://example.com/convert')" ]
 
   local c
   for c in 'curl -sSL https://example.com/' \
            'curl -L -o /tmp/x.json https://api.github.com/repos/x/y' \
            'curl -L https://example.com/ && npm install' \
            'curl -sSL https://example.com/pytest' \
+           'curl -L -o ffmpeg https://example.com/f' \
+           'curl -L https://example.com/convert' \
+           'agent-browser open https://example.com/' \
            'curl -L https://example.com/ ; npx next dev' \
            'shellcheck scripts/x.sh' \
            'npm install' \
@@ -305,16 +310,24 @@ PY
   # producing a second emitter in the field.
   local table="$REPO/config/qos-batch.patterns"
   [ -r "$table" ] || skip "no shipped qos table to compare against"
-  local row
+  # _QOS_WORDS matches at a word START only, which is a superset just while the row itself anchors
+  # on `(^|[[:space:]])` — so for those rows the anchor is pinned too.
+  local row words word
   while IFS= read -r row; do
     case "$row" in ''|'#'*) continue ;; esac
     local ere; ere="${row#*$'\t'}"
-    # Every table row's literal command word must appear in the guard.
-    local word; word="$(printf '%s' "$ere" | grep -oE '(pytest|shellcheck|npm \(install\|ci\)|du -s|bats)' | head -1)"
-    [ -n "$word" ] || { echo "new qos row the guard cannot see: $ere"; false; }
-    case "$word" in 'npm (install|ci)') word='npm install' ;; esac
-    grep -q -- "\"$word\"" "$REPO/hooks/curl-gate.py" \
-      || { echo "qos table row '$word' is missing from _QOS_TOKENS"; false; }
+    # EVERY literal command word in the row (an alternation names several) must appear in the guard.
+    words="$(printf '%s' "$ere" | grep -oE '(pytest|shellcheck|npm \(install\|ci\)|du -s|bats|ffmpeg|ffprobe|magick|convert|tesseract|agent-browser)')"
+    [ -n "$words" ] || { echo "new qos row the guard cannot see: $ere"; false; }
+    while IFS= read -r word; do
+      case "$word" in 'npm (install|ci)') word='npm install' ;; esac
+      grep -q -- "\"$word\"" "$REPO/hooks/curl-gate.py" \
+        || { echo "qos table row '$word' is missing from _QOS_TOKENS/_QOS_WORDS"; false; }
+      case "$word" in ffmpeg|ffprobe|magick|convert|tesseract|agent-browser)
+        case "$ere" in '(^|[[:space:]])'*) ;;
+          *) echo "row '$word' lost the leading anchor _QOS_WORDS relies on: $ere"; false ;; esac ;;
+      esac
+    done <<< "$words"
   done < "$table"
 }
 

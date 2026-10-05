@@ -1283,6 +1283,11 @@ def curl_invocations(cmd: str, ansi_c: bool = True) -> list[list[str]] | None:
 # for no security arm — a capped response is a context nuisance, not a breach — so the lever ships
 # available and off rather than guessing a number on the operator's behalf.
 _QOS_TOKENS = ("bats", "pytest", "shellcheck", "npm install", "npm ci", "du -s")
+# The binary-name rows (6878c93d2, 2cb55fbbc) are matched at a WORD START, not as substrings: every
+# table row anchors on `(^|[[:space:]])`, so this is still a superset, and a substring `convert`
+# would strip the redirect hardening from every `-L` read of a `/convert` URL. The test pins the anchor.
+_QOS_WORDS = ("ffmpeg", "ffprobe", "magick", "convert", "tesseract", "agent-browser")
+_QOS_WORD_RE = re.compile(r"(?:^|\s)(?:" + "|".join(map(re.escape, _QOS_WORDS)) + ")")
 
 # The leading `curl` word of a simple command, so the flags are inserted TEXTUALLY. Re-joining the
 # lexer's tokens would be cleaner code and a real bug: shlex posix mode has already stripped the
@@ -1319,7 +1324,7 @@ def redirect_hardening(cmd: str, parsed: dict) -> str | None:
     if not single_simple_curl(cmd):
         return None
     low = cmd.lower()
-    if any(tok in low for tok in _QOS_TOKENS):
+    if any(tok in low for tok in _QOS_TOKENS) or _QOS_WORD_RE.search(low):
         return None  # a shape qos-rewrite.sh could also claim — see DISJOINTNESS above
 
     add: list[str] = []
