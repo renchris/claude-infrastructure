@@ -1,0 +1,5 @@
+off-e1b                recall 51/52  other(answered) 44/44  other(all) 44/44  borderline 10/26  fallback 1/192  rows-flipped 10/96
+on-e1b                 recall 52/52  other(answered) 39/39  other(all) 39/44  borderline 15/26  fallback 51/192  rows-flipped 18/96
+on-pre                 recall 51/52  other(answered) 36/37  other(all) 36/44  borderline 18/26  fallback 33/192  rows-flipped 25/96
+union(off+on-pre)      recall 52/52  other(answered) 43/44  other(all) 43/44  borderline 19/26  fallback 1/192  rows-flipped 11/96
+union(off+on-e1b)      recall 52/52  other(answered) 44/44  other(all) 44/44  borderline 18/26  fallback 1/192  rows-flipped 11/96
