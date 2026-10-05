@@ -16,6 +16,8 @@ Terms:
 
 **No candidate filter wins. Keep the calibration's triage as run.** Conviction is 70%, and the verdict is provisional. §5 says what would settle it.
 
+**Updated 2026-10-04 (wave E3a).** §5's measurement has been run and is recorded in Appendix A. F3 applied after the triage as run fails the decision rule: on S4 it is worse in Lite and not distinguishable from the triage in Standard. The verdict above stands and is no longer waiting on that measurement.
+
 - **On the line closest to the operator, the triage as run is best.** That line is S4: a call is false only when later history proved the claim false. There the triage as run leaves the fewest post-signoff changes of any pipeline tested: 8.86 per program in Lite and 8.83 in Standard (modeled). The best filtered pipeline is F3 with a clause-f carve-out ("F3 +f"). It leaves 11.16 / 10.36 unannounced changes, and that is with its disputed items counted as announced and re-checked at build. In total it leaves 16.10 / 16.15 (modeled).
 - **The analysis stage's winner did not survive review.** That stage named F3 +f the conditional winner at 50% conviction. Two of the three skeptic passes refuted it, and both refutations stand (§4):
   - F3 +f wins only on the hindsight line, which this study shows is the worst stand-in for the operator.
@@ -313,3 +315,51 @@ Integrity:
 
 **Housekeeping:** one skeptic's scratch files in `/tmp/sk1/` hold private transcript excerpts and should be deleted.
 
+## Appendix A. The reversing measurement: F3 after the triage as run (added 2026-10-04, wave E3a)
+
+**Verdict: do not build "F3 after the triage". The question closes with no filter, and the triage stays as calibrated.** §5's decision rule fails. The second verdict, on clause f, passes, but both must hold.
+
+This appendix records the one measurement §5 left open. Aggregates only; the per-item evidence is in the private store under `triage-precision-study-2026-10-04/f3-after-triage/` (`analysis.py`, `result.json`). **Measured** and **modeled** mean what they mean in the report above.
+
+**The pipeline tested.** Start from the 237 items the triage as run called material. An item any vendor lane cited under clause f stays material and is never disputed (70 items). Every other item needs an F3 pass to stay material. One that fails F3 becomes disputed: announced at signoff and applied at build.
+
+**Decision rule, as written in §5 step 4, and what happened:**
+
+| Condition | Result |
+|---|---|
+| Beats the triage as run on S4 unannounced changes in Lite, bootstrap interval of the difference excluding zero | **Fails.** Difference +0.28 to +0.46 changes per program (worse); 95% intervals −0.23 to +0.88 and −0.06 to +1.05 |
+| The same in Standard | **Fails.** Difference −0.34 to −0.14 (slightly better); 95% intervals −1.78 to +0.77 and −1.52 to +1.02, both spanning zero |
+| Loses no clause-f item the triage kept | Passes. 0 of 70 lost, by the exemption |
+
+Each cell gives two figures because 23 items have no F3 verdict (below). They are bounded both ways: all pass, then all disputed. The rule fails under both bounds, so the missing verdicts cannot change the verdict by themselves.
+
+**Point results on S4, Lite / Standard (modeled, 500 simulated programs each, rubric-faithful dynamics):**
+
+| Pipeline | Kept material | Disputed | False calls per read | Downgrade q (unannounced part) | Unannounced changes | Total changes | Cap-hit share |
+|---|---|---|---|---|---|---|---|
+| Triage as run | 237 | 0 | 0.215 | 0.154 (0.154) | 8.83 / 8.85 | 8.83 / 8.85 | 98% / 100% |
+| F3 after triage, unknowns pass | 138 | 99 | 0.101 | 0.500 (0.154) | 9.12 / 8.61 | 13.88 / 14.49 | 77% / 98% |
+| F3 after triage, unknowns disputed | 120 | 117 | 0.101 | 0.569 (0.154) | 9.24 / 8.90 | 14.90 / 15.85 | 77% / 98% |
+
+Kept, disputed, false calls and q are measured. The rest is modeled. The triage row differs from §3's 8.86 / 8.83 by simulation noise only.
+
+What the numbers say:
+- **F3 halves the false calls and that buys almost nothing.** False calls per read fall from 0.215 to 0.101, but the stop rule needs about 0.02 (§1), so 77% of Lite programs and 98% of Standard programs still run to the cap.
+- **The cost is that half or more of the real holes are set aside.** They are announced, so they do not count as unannounced, but each one applied at build still breeds 0.2 holes no round reviews. Total changes after signoff rise from about 8.8 to 14–16.
+- **On the other lines F3 after triage looks better, and that does not change the verdict.** On the hindsight line its unannounced changes are 12.1–12.2 / 16.3–16.9 against the triage's 13.6 / 21.2, and on S1 it is level in Lite and lower in Standard (10.5–10.8 against 12.2). §2 shows why the rule is written on S4: the hindsight line is the worst stand-in for the operator.
+
+**Plan bootstrap (modeled).** 100 draws, each resampling the 16 plans with replacement, recomputing the false-call rate and q for both pipelines on the draw, and running both through `calib_sim.py` with the same seed (200 simulated programs per cell). F3 after triage was better than the triage as run in 4–14% of draws in Lite and 52–72% in Standard. Input intervals across draws: triage false calls 0.145–0.286 and q 0.113–0.202; F3 after triage false calls 0.039–0.143 and q 0.43–0.66.
+
+**Null tests, Holm-corrected (measured).** Does F3 dispute false calls faster than disputing the same number of calls per plan at random? Four tests (two lines, two bounds, 20,000 permutations each). Raw p: 0.027 and 0.079 on the hindsight line, 0.083 and 0.325 on S4. After Holm correction the smallest is 0.107. None is significant, so F3 after triage is not shown to discriminate better than random removal.
+
+**Coverage of this pass:**
+- **F3 verdicts.** 214 of the 237 items have a verdict: 152 from the study's first pass and 62 from this one. This pass probed 65 items: 45 of the 65 that had no verdict, and all 20 first-pass verdicts on the 3 permission-blocked plans. Results: 11 passed, 3 ran and did not reproduce, 48 could not be run at review time, 3 were blocked again (one by a database-statement guard, one by the test runner's load ceiling, one by a permission layer). 2 of the 20 re-runs changed their verdict.
+- **Not run.** The last 20 items, spread over 9 plans, were never dispatched: the machine's capacity gate refused the worker. With the 3 blocked items they are the 23 bounded above.
+- **Symmetric panel.** The Anthropic lane was re-rated on all 16 plans through the same clean prompt and bundle the OpenAI lane got, and the missing Google job for agent-context-sync was sent. All 17 jobs returned (Anthropic `claude-opus-5-5`, Google `gemini-3.8-flash-high`), one call per job, 332 of 332 item ids matched. These ratings set the clause-f exemption. The study's first-pass tables in §1–§3 were not recomputed on them.
+
+**Limits specific to this appendix:**
+- The clause-f exemption here is the wide one: any single lane's citation protects the item. With the narrower two-lane rule, 12–14 items a lane cited under clause f end disputed, 9–11 of them real. So the "loses no clause-f item" result holds only for the wide exemption.
+- F3 verdicts come from one worker per plan, as in the first pass, and 48 of the 65 probed items could not be run at all. F3 after triage is mostly a "not yet buildable" sorter at review time.
+- The bootstrap resamples plans and carries simulation noise. It does not resample the adjudicator's real-versus-false labels that S4 rests on.
+
+**Consequence for method v1.2.** Change (a) builds no filter. The lever the data point to is still downgrades, not false calls (§2).
