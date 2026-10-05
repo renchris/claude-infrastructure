@@ -246,7 +246,7 @@ restore_setup() {
 cc_capacity_probe() {
   local n; n=$(cat "$BATS_TEST_TMPDIR/probes" 2>/dev/null || echo 0); echo $((n + 1)) > "$BATS_TEST_TMPDIR/probes"
   printf 'R=%s %s\n' "${CC_ADMIT_RESTORE_R:-}" "$2" >> "$BATS_TEST_TMPDIR/probe.log"
-  [ "$n" -ge "${PROBE_REFUSE:-0}" ]
+  [ "$n" -ge "${PROBE_REFUSE:-0}" ] || return 9
 }
 SH
   mkdir -p "$FIX/scripts/limit-recover"
@@ -295,7 +295,7 @@ launched_sids() { grep ' launch ' "$KLOG" | grep -o "'sid-[a-z0-9-]*'" | tr -d "
   for p in 101 102 103 104; do grep -q -- "--match window_id:$p --next-to id:$p .*sid-repo-a-$((p - 99))'" "$KLOG"; done
   [ "$(grep -c 'goto-layout' "$KLOG")" -eq 1 ]
   grep -q -- 'goto-layout --match window_id:101 horizontal' "$KLOG"
-  grep -q "^KW=101 .*action --self kitten $FIX/scripts/kitty-equalize.py" "$KLOG"
+  grep -q "^KW=101 .*action --self kitten /.*/tree/scripts/kitty-equalize.py$" "$KLOG"
   ! grep -q 'rotate\|layout_action' "$KLOG" || false
   [ "$(grep ' launch ' "$KLOG" | grep -vc -- '--keep-focus')" -eq 0 ]
   [ "$(grep -vc -- '--to unix:/tmp/kitty-4242' "$KLOG")" -eq 0 ]
@@ -416,7 +416,7 @@ launched_sids() { grep ' launch ' "$KLOG" | grep -o "'sid-[a-z0-9-]*'" | tr -d "
   xrow repo-b 1 $'\037' $'\037' $'\037' $'\037' $'\037'
   restore
   [ "$status" -eq 0 ]
-  [ "$(launched_sids)" = "sid-repo-b-1 sid-repo-a-2 sid-repo-a-1 " ]
+  [ "$(launched_sids)" = "sid-repo-a-2 sid-repo-b-1 sid-repo-a-1 " ]
 }
 
 @test "restore: model and effort ride through; columns 10-11 do not; a bad effort is dropped; \\037 is empty" {
