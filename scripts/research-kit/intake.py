@@ -87,6 +87,12 @@ POST_CERT_ACTIVITIES = [
 HISTORICAL_FRAMES = ["deployed and live", "nothing can beat it", "no loose ends"]
 # §6.1, as printed: typical total and ceiling in agent-days. The ceiling formula's own arithmetic is
 # the report's; it is copied, not re-derived, so the contract page and the report cannot disagree.
+# Method v1.2 (ruling 1bf69e5c1775): a frame stamped 1.2 takes the v1.2 gate rows; a frame with no
+# stamp reads as 1.1, so programs that began before it keep the gate they signed.
+METHOD_VERSION = "1.2"
+# Registry states of a program that is past intake and not closed; build-certifying and
+# build-certified are v1.2's built-artifact certification stage.
+LIVE_STATES = ("registered", "certifying", "certified", "build-certifying", "build-certified")
 PROFILE_DAYS = {"lite": (6.5, 12.0), "standard": (14.0, 28.0), "full": (20.0, 39.0)}
 REFERENCE_FACTOR = 3.0  # §6.3
 
@@ -166,6 +172,7 @@ def cmd_init(a: argparse.Namespace) -> int:
     frame = {
         "program": a.program,
         "version": 1,
+        "method_version": METHOD_VERSION,
         "profile": a.profile,
         "deliverable_repo": root,
         "deliverable": a.deliverable,
@@ -186,6 +193,9 @@ def cmd_init(a: argparse.Namespace) -> int:
     )
     log(a.program, "init", profile=a.profile, index_fresh=index_fresh)
     print(f"{g.stdout.strip()}\nframe skeleton: {rec / 'frame.json'}")
+    wider = wider_profile_note(a.profile)
+    if wider:
+        print(wider, file=sys.stderr)
     if not index_fresh:
         print(
             "research index STALE: regenerate it in a claude-infrastructure worktree with "
@@ -284,17 +294,41 @@ def cmd_set(a: argparse.Namespace) -> int:
     return 0
 
 
-def forecast(profile_name: str) -> Dict[str, Any]:
-    n0 = kit.profile(profile_name)["design_holes"]
+def forecast(profile_name: str, n0: Optional[int] = None, base: bool = False) -> Dict[str, Any]:
+    """estimate.py simulate at the measured inputs (method v1.2); base=True is the assumed contrast."""
+    if n0 is None:
+        n0 = kit.profile(profile_name)["design_holes"]
     p = subprocess.run(
         [sys.executable, str(HERE / "estimate.py"), "simulate", "--profile", profile_name,
-         "--n0", str(n0)],
+         "--n0", str(n0)] + (["--base"] if base else []),
         capture_output=True,
         text=True,
     )
     if p.returncode != 0:
         raise Refused(f"estimate.py simulate failed: {p.stderr.strip()}")
     return json.loads(p.stdout)
+
+
+def wider_profile_note(profile_name: str) -> Optional[str]:
+    """Method v1.2: a profile wider than lite is warned about when the measured forecast says the extra
+    review leaves no fewer holes. Both figures are simulated here, at the same holes at freeze, so the
+    warning follows params-measured.json and stops by itself once a triage fix changes the comparison."""
+    if profile_name == "lite":
+        return None
+    n0 = kit.profile(profile_name)["design_holes"]
+    lite, wide = forecast("lite", n0), forecast(profile_name, n0)
+    left = lambda f: round(f["desk_left"] + f["invisible_left"], 2)  # noqa: E731
+    if left(wide) < left(lite):
+        return None
+    return (
+        f"WARNING profile {profile_name}: at the measured inputs it leaves {left(wide):g} holes after "
+        f"signoff against lite's {left(lite):g} ({n0} holes at freeze; desk-detectable "
+        f"{wide['desk_left']:g} against {lite['desk_left']:g}), and reaches its round cap in "
+        f"{wide['cap_pct']:g}% of simulated programs. Measured false material calls "
+        f"({wide['inputs']['fpp']:g} per reviewer-read) scale with the reviewer count, so wider review "
+        "adds false fixes faster than it finds holes (research-calibration REPORT §5; estimate.py "
+        "simulate). Lite is the default until that rate falls."
+    )
 
 
 def cmd_contract_page(a: argparse.Namespace) -> int:
@@ -329,6 +363,8 @@ def cmd_contract_page(a: argparse.Namespace) -> int:
     effort = dict(fr["reviewer_effort"] if "reviewer_effort" in fr else REVIEWER_EFFORT)
     prof = kit.profile(fr["profile"])
     f = forecast(fr["profile"])
+    f_base = forecast(fr["profile"], base=True)
+    wider = wider_profile_note(fr["profile"])
     typical, ceiling = PROFILE_DAYS[fr["profile"]]
     lines = [
         f"# Contract page — {a.program} (frame v{fr.get('version')})",
@@ -355,11 +391,16 @@ def cmd_contract_page(a: argparse.Namespace) -> int:
         f"- Stages 1–6 budget {prof['stage_budget_days']:g} agent-days; typical total about "
         f"{typical:g} days; ceiling (every loop at its cap) about {ceiling:g} days (§6.1). Only you "
         "can exceed it, through the signing tool.",
-        f"- Forecast at the design point ({prof['design_holes']} holes at freeze, assumed): rounds "
-        f"{f['rounds_p50']} typical / {f['rounds_p90']} at the 90th percentile; desk-detectable left "
-        f"{f['desk_left']}, invisible left {f['invisible_left']} (share assumed); chance of at least "
-        f"one material change after signoff {f['p_any']}; chance the 95% bound is exceeded "
-        f"{f['take_back_pct']}%. Model output, uncalibrated until the calibration run (§6.6).",
+        f"- Forecast at the design point ({prof['design_holes']} holes at freeze), at the measured "
+        f"inputs (method v1.2; research-calibration REPORT §3): rounds {f['rounds_p50']} typical / "
+        f"{f['rounds_p90']} at the 90th percentile, the round cap reached in {f['cap_pct']}% of "
+        f"simulated programs; desk-detectable left {f['desk_left']}, invisible left "
+        f"{f['invisible_left']}; chance of at least one material change after signoff {f['p_any']}; "
+        f"chance the 95% bound is exceeded {f['take_back_pct']}%. Model output.",
+        f"- Contrast, the pre-calibration assumed inputs (what this page stated before v1.2): desk-detectable "
+        f"left {f_base['desk_left']}, invisible left {f_base['invisible_left']}, chance of at least one "
+        f"material change after signoff {f_base['p_any']}.",
+    ] + ([f"- **{wider}**"] if wider else []) + [
         "",
         "## Your escape cost",
         "",
@@ -422,7 +463,7 @@ def cmd_status(a: argparse.Namespace) -> int:
     reg = kit.registry_get(a.program) or {}
     pf = kit.read_json(kit.sealed_dir(a.program) / "preflight.json")
     steps = [
-        ("registered", reg.get("state") in ("registered", "certifying", "certified")),
+        ("registered", reg.get("state") in LIVE_STATES),
         ("ruling: definition of complete", bool(fr.get("rulings", {}).get("definition_of_complete"))),
         ("ruling: exemption", bool(fr.get("rulings", {}).get("exemption"))),
         ("escape cost set", bool(fr.get("escape_cost_days"))),

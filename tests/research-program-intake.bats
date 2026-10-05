@@ -221,3 +221,61 @@ PY
   [[ "$output" == *"TODO  contract page"* ]] || false
   [[ "$output" == *"cc-signoff research:demo/frame"* ]]
 }
+
+# ── method v1.2 (ruling 1bf69e5c1775) ──────────────────────────────────────────────────────────
+
+init_wide() { # <profile>: init with a wider profile; stdout and stderr both captured by `run`
+  "$I" init --program demo --root "$ROOT" --profile "$1" \
+    --deliverable "a daemon that loses 0 writes in 1000 trials" --intent "make it solid"
+}
+
+@test "v1.2: a non-lite profile is warned about at init with the measured reason; lite is not" {
+  run init_wide standard
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"WARNING profile standard"*"against lite's"*"false material calls"* ]] || false
+  # the warning is advice, not a refusal: the frame exists with the profile that was asked for
+  [ "$(frame_field profile)" = '"standard"' ]
+}
+
+@test "v1.2: lite draws no profile warning" {
+  run init_ok
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"WARNING profile"* ]]
+}
+
+@test "v1.2: the warning follows the measured file, so it stops when wider review starts to pay" {
+  # planted inputs with no false calls, no downgrades and no fix-born holes: more reviewers only help
+  printf '{"u_plan_mean":0.0,"fpp":0.0,"q":0.0,"omit_plan_mean":0.9,"fixborn_plan_median":0.0,"u_hi":0.2}\n' \
+    > "$BATS_TEST_TMPDIR/params.json"
+  CC_RESEARCH_PARAMS="$BATS_TEST_TMPDIR/params.json" run init_wide standard
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"WARNING profile"* ]]
+}
+
+@test "v1.2: the frame is stamped method_version 1.2, which the v1.2 gate rows key on" {
+  init_ok
+  [ "$(frame_field method_version)" = '"1.2"' ]
+}
+
+@test "v1.2: the contract page prints the measured forecast and labels the assumed one a contrast" {
+  init_ok; rulings_ok
+  "$I" set --program demo --escape-cost-days 3
+  preflight "2026-10-01T11:00:00Z"
+  "$I" contract-page --program demo
+  grep -q "at the measured inputs (method v1.2" "$REC/CONTRACT.md"
+  grep -q "Contrast, the pre-calibration assumed inputs" "$REC/CONTRACT.md"
+  ! grep -q "uncalibrated until the calibration run" "$REC/CONTRACT.md"
+}
+
+@test "v1.2: status counts a program in the build-certification states as registered" {
+  init_ok
+  python3 - "$CC_RESEARCH_REGISTRY" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+for p in d["programs"]:
+    p["state"] = "build-certifying"
+json.dump(d, open(sys.argv[1], "w"))
+PY
+  run "$I" status --program demo
+  [[ "$output" == *"done  registered"* ]] || false
+}

@@ -80,6 +80,13 @@ failed, 2 usage or refusal, 3 a dead vendor lane, 4 a voided slot. Python is 3.9
   `discarded`, so they are never planted; `status` prints a second line with seed realism beside real detection.
 - `estimate.py forecast` also prints `found_raw`, `found` (deflated by `false_material_share`), `found_shadow`;
   `estimate.py calibration [--file]` prints coverage, bound sharpness and Spearman rank skill.
+- Method v1.2: `estimate.py simulate|forecast` read the measured inputs from
+  `docs/research/research-calibration/evidence/params-measured.json` by default (`CC_RESEARCH_PARAMS` or `--params`
+  for another file; an unreadable or incomplete file exits 2). `--base` runs the pre-calibration assumed set as a
+  contrast. `simulate` prints `regime: "measured|base|stress"` and its `inputs`; `forecast` prints
+  `inputs: "measured|base"` with matching `assumed` and `measured` lists. `intake.py init` stamps
+  `frame.json` `method_version: "1.2"` (no stamp reads as 1.1) and warns on stderr when a profile wider than lite
+  leaves no fewer holes at the measured inputs.
 - `cc-research probe --id P-.. --kind K --closes PR-.. -- <cmd…>`, `cc-research doctor` and `cc-research self-test`
   (each acceptance row over `control.known_bad`/`known_good`, fixture in env `FIXTURE`, as gate row 6 runs it);
   `probe-run.sh run|doctor` is a bash 3.2 shim onto the first two.
