@@ -24,7 +24,7 @@ packet `83adb541ea19` actioned. Method version 1.1 is frozen; it changes only fr
 | B2 | S | Item 8: `research-program` skill, `/research-program` command, intake script, briefs, rubric | A2 |
 | C | S | Wave 2: items 9–13, 15, in parallel with the pilot | B1, B2 |
 | D | S (fired `fire-rp-audit-bugfix`), T inside | Audit fixes: `docs/research/upfront-method-audit-2026-10-04/REPORT.md` §3 rows 4–6 | C |
-| E | E1 S (fired `fire-rp-v12-step1`); E1b S (fired `fire-rp-v12-e1b`); E1c S (fired `fire-rp-v12-e1c`); E2 Workflow in session d8964eb2; E3 S (E3a fired `fire-rp-v12-e3a`, E3b fired `fire-rp-v12-e3b` with T inside: six teammates; E3c fired `fire-rp-v12-e3c`, L inside); E4 operator | Method v1.2 (ruling `1bf69e5c1775`): audit REPORT §3 rows 1, 2, 3, 7, plus the 9 s classifier limit (ruling `4bf73c4e55d5`) | D |
+| E | E1 S (fired `fire-rp-v12-step1`); E1b S (fired `fire-rp-v12-e1b`); E1c S (fired `fire-rp-v12-e1c`); E1d S (fired `fire-rp-v12-e1d`); E2 Workflow in session d8964eb2; E3 S (E3a fired `fire-rp-v12-e3a`, E3b fired `fire-rp-v12-e3b` with T inside: six teammates; E3c fired `fire-rp-v12-e3c`, L inside); E4 operator | Method v1.2 (ruling `1bf69e5c1775`): audit REPORT §3 rows 1, 2, 3, 7, plus the 9 s classifier limit (ruling `4bf73c4e55d5`) | D |
 
 A1, A2 and A3 touch disjoint files and fire concurrently. B1 and B2 fire when A2 lands. Each dispatched session leads
 its own Agent Team where it has 2+ code-writing tasks.
@@ -634,6 +634,28 @@ activation. Never change row 15's thresholds or the 9 s limit. Locus S (fired `f
   once before the whole pass is thrown away; the shared bats slots deferred a 2-suite run for 17 minutes at load
   35-45, so a retry loop around `bats` (never a waiver) belongs at the start of a wave, not after the first
   refusal.
+
+#### E1d — land the warm classifier, then read v2 a second time — LANDED, awaiting activation (2026-10-05)
+Scope (frozen): operator ruling `2137be2c1d33` ("build-warm"). (1) Land E1c's warm-classifier draft on this wave's
+own branch with a fleet.manifest row, staged under `launchd/staged/` behind a c10 migration the operator runs, the
+cold call kept as the fallback when the daemon is absent; land and converge. (2) File the activation as one
+operator step. (3) After activation, measure warm latency on the tuning set (n ≥ 20), confirm the classifier
+configuration is E1c's pre-registered `on-pre` (thinking on), then read sealed v2 exactly once more with
+`heldout.py evaluate` and record the verdict, the per-stratum numbers, the load and the second-read disclosure
+here. Never change row 15's thresholds, the 9 s limit or the sealed sets; never tune against v2. Locus S (fired
+`fire-rp-v12-e1d`), lead-inline (why: one commit and one ordered read around a single sealed file).
+
+- **Landed.** The draft (`862659ef1`, cherry-picked with `-x`) plus: migration renumbered `0057` → `0059`
+  (`0057-fseventsd-watchdog.sh` and `0058-research-soak-job.sh` took the numbers on trunk); a `fleet.manifest` row
+  `com.claude.research-classifier-warm | staged | 0 | - | - | 0059-research-classifier-warm.sh` (no cadence, no
+  stdout sensor: the daemon writes only to stderr, so `auto` would read it STALLED; its liveness check is
+  `classifier-warm.py ping`); cc-fleet's declared-label count 50 → 51 in the same land. The labeling
+  configuration is untouched: the daemon builds its command line from `router.classifier_argv()`, the same one
+  the cold call uses (thinking on, E1c's `on-pre`), plus the stream-json flags that let a process wait for its
+  prompt.
+- **Fallback.** With no socket, a socket nobody answers, a daemon with no process ready, or `CC_RESEARCH_WARM=0`,
+  `router.py classify` makes the cold call it made before, inside what is left of the same 9 s. A daemon that took
+  the prompt and failed yields `unavailable` (the limit is spent), never a second try.
 
 #### E2 — triage precision study (v1.2 (a), measurement half) — RUNNING
 - Locus: a Workflow in session d8964eb2, started 2026-10-04. Results: `docs/research/triage-precision-study-2026-10-04/`.
