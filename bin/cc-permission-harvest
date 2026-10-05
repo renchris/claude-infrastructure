@@ -26,8 +26,9 @@ The matcher is IMPORTED from hooks/lib/permission_matcher.py, never re-implement
 two matchers over one population disagree about it invisibly (memory:
 sibling-auditors-must-share-the-state-model). A missing lib is exit 3, named — never a fallback.
 
-WHAT IT NEVER DOES. Write permission config from an agent session. `--apply` is operator-run through
-`cc-do`; consent is `CONFIRM=1`; an agent-session marker in the environment is a courtesy refusal
+WHAT IT NEVER DOES. Write permission config from an agent session. `--apply` is operator-run, from `!`
+or a terminal, as the `env -u <markers> CONFIRM=1 … --apply` line (APPLY_ENV_STRIP; never a `cc-do`
+id, whose run keeps the markers); consent is `CONFIRM=1`; an agent-session marker in the environment is a courtesy refusal
 (exit 4), and the hard stop is the `hooks/validate-bash.sh` deny arm on this tool's `--apply` argv.
 There is no override variable.
 
@@ -145,6 +146,9 @@ _TMP_RE = re.compile(r"(^|[/._-])tmp([/._-]|$)")
 _DIGITS_RE = re.compile(r"^[0-9]+$")
 _BACKUP_MARKERS = (".bak", "pre-", "permharvest-bak", "permprune-bak")
 AGENT_ENV = ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_ENTRYPOINT")
+# The operator's apply line strips exactly these: a `!` command inherits CLAUDECODE, so without the
+# prefix the apply hits the agent refusal below (decision 5cee611ac837).
+APPLY_ENV_STRIP = "env " + " ".join("-u %s" % k for k in AGENT_ENV)
 EVIDENCE_CAP = 12
 _GIT = "/usr/bin/git"
 _GREP = "/usr/bin/grep"
@@ -1787,7 +1791,8 @@ def render_report(doc, days):
     actionable = len(props) + len([c for c in cons if not c.get("present")])
     if actionable:
         w("  preview (read-only, any session):  %s --check" % TOOL)
-        w("  apply (OPERATOR, via cc-do; never in-session):  %s" % doc["apply_hint"])
+        w("  apply (OPERATOR, from ! or a terminal; never in-session):  %s %s"
+          % (APPLY_ENV_STRIP, doc["apply_hint"]))
         w("  apply re-runs this whole pipeline live and writes proposed ∩ fresh — a decayed rule is a "
           "named drop, a tampered one is exit 4.")
     else:
@@ -2074,8 +2079,9 @@ def check_apply(args, seams, apply_mode):
             print("  this is an agent session (%s set). Permission config is AUTHORIZATION; an agent "
                   "widening its own allowlist is the one thing the guardrails cannot police "
                   "afterwards." % ", ".join(marker))
-            print("  The apply is the OPERATOR's, via the queue the weekly run files: `cc-do --list`, "
-                  "find 'Apply the N harvested allow rules …', hand over its id.")
+            print("  The apply is the OPERATOR's: hand over the line `%s CONFIRM=1 ~/.claude/bin/%s "
+                  "--apply` (--bang before --apply for a bang proposal), never a cc-do id."
+                  % (APPLY_ENV_STRIP, TOOL))
             print("  Everything else is yours: `%s 30` reports, `--check` previews exactly what apply "
                   "would write. There is no override variable; the hard stop is validate-bash.sh." % TOOL)
             return 4
@@ -2884,7 +2890,7 @@ def render_bang_report(doc, days):
         top = e["shapes"][:4]
         L.append("    %s: %s" % (b, " · ".join("%s (%d)" % (s["shape"], s["n"]) for s in top)))
     L.append("")
-    L.append("  apply (operator only): %s <proposal>" % doc["apply_hint"])
+    L.append("  apply (operator only): %s %s <proposal>" % (APPLY_ENV_STRIP, doc["apply_hint"]))
     return "\n".join(L) + "\n"
 
 

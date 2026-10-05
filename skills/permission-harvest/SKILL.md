@@ -1,6 +1,6 @@
 ---
 name: permission-harvest
-description: "Weekly review to reduce permission prompts: runs cc-permission-harvest read-only, buckets the prompts, proposes composable prefix allow rules and hands the operator one cc-do apply step. Never writes settings files."
+description: "Weekly review to reduce permission prompts: runs cc-permission-harvest read-only, buckets the prompts, proposes composable prefix allow rules and hands the operator one apply line. Never writes settings files."
 ---
 
 ## permission-harvest — prompts in, composable prefixes out, with the ceiling stated first
@@ -132,19 +132,22 @@ is a snapshot of a single run; the shares over time are the finding, and only th
 
 ### 5. HAND OVER — the ONE operator step
 
-The weekly run files exactly one backlog row when `proposed + consolidation_prefixes > 0`. Give the
-operator its id and nothing else:
+The weekly run files exactly one backlog row when `proposed + consolidation_prefixes > 0`. Hand the
+operator the apply line itself, never `cc-do <id>`:
 
 ▶ Run this:
 
-`cc-do <id>`
+`env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_ENTRYPOINT CONFIRM=1 ~/.claude/bin/cc-permission-harvest --apply`
 
-That row's `--run` is the argument-free apply invocation (`CONFIRM=1 $HOME/.claude/bin/cc-permission-harvest --apply`):
-no proposal path and no rule text ride the queue, so nothing attacker-controllable is stored, and
-the tool resolves `latest.json` itself. `cc-do` prints the command, takes the operator's typed
-`yes`, runs it, and marks the row `done`. Apply re-runs every gate against the LIVE files and the
-LIVE archive and writes `proposed ∩ fresh`, so a tampered or decayed proposal can only SHRINK the
-set. The row's `--falsifier` is `--falsify` — **never `--check`, whose exit sense is the opposite** —
+For a bang proposal (§7b) the line carries `--bang` before `--apply`; that form is the one the
+operator ran and that worked on 2026-10-01 (decision 5cee611ac837). The `env -u` prefix is
+load-bearing: a `!` command inherits `CLAUDECODE`, and apply refuses (exit 4) whenever any of those
+three markers is set, which is why `cc-do <id>` never applied anything from `!` — it ran the row's
+`--run` (`CONFIRM=1 … --apply`) with the markers still set, behind a typed `yes` that a closed stdin
+cannot give. The line is argument-free: no proposal path and no rule text ride it, and the tool
+resolves `latest.json` (or `bang/latest.json`) itself. Apply re-runs every gate against the LIVE
+files and the LIVE archive and writes `proposed ∩ fresh`, so a tampered or decayed proposal can only
+SHRINK the set. The row closes itself: its `--falsifier` is `--falsify` — **never `--check`, whose exit sense is the opposite** —
 which the autonomy sweep runs every 6 h: `--falsify` exits 0 only when nothing is left to apply,
 which is the exit cc-premise reads as "close this row", so an applied or decayed proposal closes its
 own row and a live one never does. (It was `--check` until 2026-09-09; that wiring auto-closed the
@@ -156,8 +159,9 @@ settings-only and finishes in well under cc-premise's 20 s probe bound; `--check
 its own permissions does not have permissions. This is enforced at the chokepoint, not by an
 env check the agent controls: `hooks/validate-bash.sh` DENIES any leaf whose argv carries a
 `cc-permission-harvest` token together with `--apply`. Hooks precede rules and the classifier and
-cannot be unset from inside a session. **There is no override variable, and asking for one is the
-defect** — the answer is `cc-do`.
+cannot be unset from inside a session; the `env -u` above only strips an advisory marker, and the
+deny arm reads argv, so the line runs for the operator and never for an agent. **There is no
+override variable, and asking for one is the defect** — the answer is the operator's line in §5.
 
 ### 6. NEVER
 
@@ -214,8 +218,8 @@ exempt from FLAG_HEAD/TOKEN_CAP and from nothing else, with their own per-string
 
 Proposals go to `<out>/bang/latest.json`, never over the weekly archive's `latest.json`, and
 `--check`/`--apply`/`--falsify` with `--bang` default there. Apply re-runs the BANG pipeline, so a
-rule edited into the file drops as DECAYED. The operator's step is
-`CONFIRM=1 cc-permission-harvest --bang --apply`. First report and the live numbers:
+rule edited into the file drops as DECAYED. The operator's step is the §5 line with `--bang`:
+`env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_ENTRYPOINT CONFIRM=1 ~/.claude/bin/cc-permission-harvest --bang --apply`. First report and the live numbers:
 `docs/research/bang-command-harvest-2026-10-01.md`. Suite: `tests/cc-permission-harvest-bang.bats`.
 
 ### 8. TROUBLESHOOTING

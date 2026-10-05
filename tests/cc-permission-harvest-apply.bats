@@ -211,6 +211,9 @@ PY
       python3 "$HARVEST" --apply "$PROP"
   [ "$status" -eq 4 ]
   [[ "$output" == *[Ss]ession* || "$output" == *CLAUDECODE* || "$output" == *[Aa]gent* ]] || false
+  # decision 5cee611ac837: the refusal hands the env -u line that works from `!`, not a cc-do id
+  [[ "$output" == *"env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_ENTRYPOINT CONFIRM=1 ~/.claude/bin/cc-permission-harvest --apply"* ]] || false
+  [[ "$output" != *"hand over its id"* ]] || false
   unchanged
   run env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION_ID=fx CONFIRM=1 \
       python3 "$HARVEST" --apply "$PROP"

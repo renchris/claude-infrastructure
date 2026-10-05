@@ -52,12 +52,15 @@ decision() { # → deny | ask | none
 reason() { printf '%s' "$output" | jq -r '.hookSpecificOutput.permissionDecisionReason'; }
 logged() { wc -l < "$CC_VB_DECISION_LOG" 2>/dev/null | tr -d ' '; }
 
-@test "DENIES: cc-permission-harvest --apply — and the reason names the boundary, cc-do, and --check" {
+@test "DENIES: cc-permission-harvest --apply — and the reason names the boundary, the operator's line, and --check" {
   probe "cc-permission-harvest --apply"
   [ "$status" -eq 0 ]
   [ "$(decision)" = deny ]
   reason | grep -q 'AUTHORIZATION'
-  reason | grep -q 'cc-do'
+  # decision 5cee611ac837: the hand-over is the env -u apply line, never a cc-do id (a `!` command
+  # inherits CLAUDECODE, so the queue row's run hits the tool's own agent refusal)
+  reason | grep -F 'env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_ENTRYPOINT CONFIRM=1 ~/.claude/bin/cc-permission-harvest --apply' >/dev/null || false
+  ! reason | grep -F 'hand the operator its id' >/dev/null || false
   reason | grep -q -- '--check'
 }
 
