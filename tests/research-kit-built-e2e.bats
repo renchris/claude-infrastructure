@@ -113,7 +113,8 @@ instruments() {
   [ "$(rowstat 23)" = "FAIL" ]
   [ "$(rowstat 24)" = "PASS" ]
   [ "$(state)" = "build-certifying" ]
-  [ -z "$(ls "$REC/built" | grep BUILT-CERT || true)" ]
+  run compgen -G "$REC/built/BUILT-CERT*"
+  [ "$status" -ne 0 ]
 }
 
 @test "a mutant the harness misses, recorded by the verb, fails rows 21 and 22 until a harness row kills it" {

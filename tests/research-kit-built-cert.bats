@@ -126,5 +126,6 @@ try:
 except kit.KitError as e:
     print('REFUSED', 'no research certificate' in str(e))"
   [ "$output" = "REFUSED True" ]
-  [ -z "$(ls "$CC_RESEARCH_RECORDS/built" | grep BUILT-CERT || true)" ]
+  run compgen -G "$CC_RESEARCH_RECORDS/built/BUILT-CERT*"
+  [ "$status" -ne 0 ]
 }
