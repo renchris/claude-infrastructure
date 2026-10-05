@@ -55,6 +55,8 @@ setup() {
   # resolve the real handoff-fire.sh beside itself and type /exit into a live pane.
   cat > "$STUB/handoff-fire.sh" <<'STUB'
 #!/bin/bash
+# lr-handoff hands a flag to the probe only when the live handoff-fire PARSES it, which it decides
+# by grepping this file for the flag's case label: --account-evidence) --operator-intent)
 printf '%s\n' "$*" >> "${HF_LOG:?}"
 case " $* " in
   *" --probe-recycle-preconditions "*)

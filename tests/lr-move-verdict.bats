@@ -51,6 +51,7 @@ verdict() { # [from cfg] [to cfg] [batch dir or ""]
 
 @test "3 P2 alone: the row says target but the process runs under the SOURCE config dir ⇒ FAILED P2" {
   mvf_flip "$PANE" "$SID" "$SRC" "$DST"
+  # shellcheck disable=SC2153  # MVF_PID is set by mvf_session in the sourced fixture
   printf '%s' "$SRC" > "$LR_MOVE_ENV_DIR/$MVF_PID"
   verdict
   [ "$V" = FAILED ]

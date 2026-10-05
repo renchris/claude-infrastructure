@@ -84,7 +84,8 @@ fleet() { # six sessions on next3, one of every kind the plan must name, plus on
   sess 406 "$S6" rest claude-secondary
 }
 disp() { printf '%s\n' "$output" | awk -v s="${1:0:8}" '$2 == s { print $3 }'; }
-moved_dir() { ls -d "$LR_STATE_DIR"/move/*/ 2>/dev/null | grep -v '/requests/$' | head -1; }
+moved_dir() { local d; for d in "$LR_STATE_DIR"/move/*/; do case "$d" in */requests/) continue ;; esac; [ -d "$d" ] && { printf '%s\n' "$d"; return 0; }; done; }
+nfiles() { local f n=0; for f in "$1"/*; do [ -e "$f" ] && n=$((n + 1)); done; printf '%s' "$n"; }
 
 @test "1 [RED] plan: every session on the source account gets one row and one disposition" {
   fleet
@@ -133,11 +134,11 @@ moved_dir() { ls -d "$LR_STATE_DIR"/move/*/ 2>/dev/null | grep -v '/requests/$' 
   [ "$status" -eq 1 ]
   d="$(moved_dir)"
   [ -s "$d/plan.json" ]
-  [ "$(ls "$d/intent" | grep -c .)" -eq 1 ]
+  [ "$(nfiles "$d/intent")" -eq 1 ]
   [ "$(stat -f %Lp "$d/intent/$S1.json" 2>/dev/null || stat -c %a "$d/intent/$S1.json")" = 600 ]
   run bash -c '. "$1"; lr_intent_check "$2" "$3" 401 next3 next2; echo "rc=$? $LR_INTENT_WHY"' _ "$REPO/scripts/limit-recover/lr-intent.sh" "$d/intent/$S1.json" "$S1"
   [ "$output" = "rc=0 " ]
-  [ "$(ls "$LR_STATE_DIR/move/requests" | grep -c .)" -eq 1 ]
+  [ "$(nfiles "$LR_STATE_DIR/move/requests")" -eq 1 ]
   [ "$(jq -r .to_config_dir "$d/plan.json")" = "$HOME/.claude-secondary" ]
   grep -q '^kickstart gui/' "$BATS_TEST_TMPDIR/launchctl.log"
   ! grep -q -- '-k' "$BATS_TEST_TMPDIR/launchctl.log"

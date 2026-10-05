@@ -194,7 +194,7 @@ all_moved() { [ "$(verdicts)" = "MOVED=15 " ] || { verdicts; for f in "$BDIR"/cc
   frag="$BATS_TEST_TMPDIR/kick.sh"
   {
     echo 'STATE="$LR_STATE_DIR"; LR="$1"; DRY="${DRYRUN:-0}"; LOG="$STATE/poller.log"'
-    echo 'log() { printf "%s\n" "$*" >> "$LOG"; }'
+    printf '%s\n' 'log() { printf "%s\n" "$*" >> "$LOG"; }'
     sed -n '/^lrp_move_kick() {/,/^}/p' "$LRD/lr-reset-poller.sh"
     echo 'lrp_move_kick'
   } > "$frag"
