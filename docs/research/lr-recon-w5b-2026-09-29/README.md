@@ -454,6 +454,29 @@ twice: pid 37197 at about 16:18Z Oct 4 and pid 55551 at about 00:07Z Oct 5
 whatever it has not seen. The gap only drops the member-liveness samples that the legacy-corrected
 rule reads.
 
+The lead was resumed at 17:00Z Oct 5 at the operator's request (a new pane on next3, the same
+session; backlog `97336c5b03da` closed). It fired W7h at about 17:02Z.
+
+### Cutoff moved: the reconciler restarted onto W7h (2026-10-05 18:07:02Z)
+
+The lead restarted the reconciler onto W7h (`124050fac` .. `0133a555d`, which also carries
+`d46327fd2`): pid 82531, started 18:07:02Z. This is the last row of `recon/restarts.jsonl`
+(t=1791223625.89), and `launchctl print` confirms it (running, pid 82531, runs 7). The shared
+checkout is at `0133a555d`, and its `scripts/limit-recover/` is byte-identical to origin/main. W7h
+contains the fix for each item of the next4 5h FAIL:
+
+- `124050fac`: a session's block ends at the latest reset, so a new 5h limit is no longer filed
+  under an older 7d fact (item 1).
+- `4d785bbcb`: a limited session with an operator draft is held `HOLD-DRAFT`, not planned as a
+  mover (item 3).
+- `feb1528e8` and `219a3c457`: a limited session that the census buckets IMPOSSIBLE becomes a
+  cohort member with one page per cohort, not a silent drop (item 2, d425afab's shape).
+
+**This start time is the cutoff now, and the count is 0 of 2, per the lead's 15:55Z Oct 4 ruling.**
+Only cohorts whose limit began after 18:07:02Z count. Every cohort open at the restart began before
+it and is evidence only. The comparer (`a3ba677bc`) treats hold substates generically, so the first
+cohort to carry `HOLD-DRAFT` or an IMPOSSIBLE member is a vocabulary check before it is a verdict.
+
 ## Census step
 
 Operator step `f0df9145b73a` (the live observe census) was closed with the launchd daemon's own pass:
