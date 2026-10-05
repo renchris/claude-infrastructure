@@ -550,6 +550,10 @@ Scope (grown): +`intake.py` stamps `method_version: "1.2"` in the frame and coun
   - Known gap: the last 20 items (9 plans) were never dispatched, because the capacity gate refused the worker. With
     the 3 blocked items they are bounded both ways (all pass, all disputed), and the rule fails under both bounds.
   - Nothing is added to E3b's list: change (a) closes with the triage as calibrated.
+- Landed 2026-10-04, content-verified on `origin/main` (9 paths present, diff empty): `d4045400a` estimator and
+  `08eed0851` its test fixup (a dead assertion the land gate named), `e44627831` intake, `dfbfb1784` method text,
+  `4c83f9ea6` study appendix A, `4556688a3` this record. The land's smoke was cut by its time budget under load
+  (`smoke:"partial"`), so the behavioral proof is the test receipts above, not the land.
 
 #### E4 — re-sign the pilot contract (v1.2 (d), operator half) — after E3
 - Operator: re-render TM2's contract on the measured forecast and re-sign it, with rulings 1 and 4 re-presented at
