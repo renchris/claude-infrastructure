@@ -1148,11 +1148,11 @@ if [ "$MODE" = "resume" ]; then
   # A shed session is deferred, not lost, and it must SAY so: a boot-delta reading "resumed 1/4"
   # with no other line is indistinguishable from three launcher failures (§12.4's whole concern is
   # that the boot storm silently eats the recovery).
-  if [ "$resume_shed" -gt 0 ] && [ "$RESTORE_V2" = 1 ] && ! restore_done; then
-    msg="${msg} ⏸ ${resume_shed} shed by the capacity gate — this restore runs again for them until $(date -r $((BOOT + ${CC_RESTORE_DEADLINE_S:-1800})) +%H:%M 2>/dev/null), and its ledger keeps any session from opening twice."
-  elif [ "$resume_shed" -gt 0 ]; then
-    msg="${msg} ⏸ ${resume_shed} shed by the capacity gate (box saturated at boot) — re-run /resume-sessions once it settles."
-  fi
+  # Each arm keeps its condition and its message on ONE line: tests/capacity-admit-coverage.bats (22)
+  # keys on the emitting statement, so a counted shed that tells nobody fails it.
+  shed_retry=0; { [ "$RESTORE_V2" = 1 ] && ! restore_done; } && shed_retry=1
+  [ "$resume_shed" -gt 0 ] && [ "$shed_retry" = 1 ] && msg="${msg} ⏸ ${resume_shed} shed by the capacity gate — this restore runs again for them until $(date -r $((BOOT + ${CC_RESTORE_DEADLINE_S:-1800})) +%H:%M 2>/dev/null), and its ledger keeps any session from opening twice."
+  [ "$resume_shed" -gt 0 ] && [ "$shed_retry" = 0 ] && msg="${msg} ⏸ ${resume_shed} shed by the capacity gate (box saturated at boot) — re-run /resume-sessions once it settles."
   if [ "$RESTORE_V2" = 1 ]; then
     [ "$resume_ledger" -gt 0 ] && msg="${msg} ${resume_ledger} were already opened by an earlier round of this restore."
     [ "$n_exhausted" -gt 0 ] && msg="${msg} ⚠ ${n_exhausted} sit on account(s) at their weekly limit (${EXHAUSTED_ACCTS% }): restored, never nudged."
