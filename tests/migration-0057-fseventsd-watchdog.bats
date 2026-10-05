@@ -36,7 +36,7 @@ hdr() { grep -m1 "^# migration-$1:" "$MIG" | sed "s/^# migration-$1: *//"; }
   run bash "$MIG"
   [ "$status" -eq 0 ]
   [[ "$output" == *"(dry run): would copy"*"--confirm com.claude.fseventsd-watchdog"* ]] || false
-  [ ! -e "$FSE_INSTALL_DST" ] && [ ! -e "$FSE_INSTALL_DST_PLIST" ]
+  [ ! -e "$FSE_INSTALL_DST" ] && [ ! -e "$FSE_INSTALL_DST_PLIST" ] || false
   run ! grep -qsE 'bootstrap|bootout' "$F/launchctl.argv"
 }
 
