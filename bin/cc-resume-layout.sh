@@ -3,10 +3,12 @@
 # inside each, instead of piling every session into tabs of the operator's own window.
 #
 #   Usage: cc-resume-layout.sh [--per-window N] [--stagger SECS] [--use-all-screens] [--dry-run]
-#          cc-resume-layout.sh --desktops [--to unix:/path] [--per-window N<=4] [--stagger SECS] [--restore] [--dry-run]
+#          cc-resume-layout.sh --desktops [--to unix:/path] [--per-window N<=4, <=6 with --restore] [--stagger SECS] [--restore] [--dry-run]
 #          ... reading a TSV on stdin (or --file PATH):
 #              account <TAB> session-id <TAB> worktree <TAB> branch [<TAB> label]
-#          i.e. lr-select.py's own output, with an optional 5th label column.
+#          i.e. lr-select.py's own output, with an optional 5th label column. Under --restore the
+#          W3 row contract adds 6 model, 7 effort, 8 group, 9 slot, 10 prompt_file (a cell holding
+#          only \037 is empty); a 5-column row behaves exactly as before.
 #
 # ── WHY THIS EXISTS (2026-08-24, operator ruling during a post-crash recovery) ────────────────────
 # The skill's Phase 2 said "create an iTerm2 window per account with split panes", and its kitty
@@ -58,6 +60,29 @@
 # The calling pane's monitor is RESERVED by default — the operator is reading that window, and
 # covering it with resumed sessions is the defect this file exists to stop. --use-all-screens opts
 # out. Fail-loud, no eval, bash 3.2-safe.
+#
+# --desktops --restore (2026-10-04, W3 P3b; docs/research/session-durability-2026-10/W3-build-plan.md
+# § P3b and § Amendment D): the unattended restore path. Nothing here runs without --restore, which
+# only cc-restore and a restore-v2 reboot pass; the default path above keeps its 2x2 and AX loop.
+#   · ONE ROW per OS window, at most 6 panes: a head, then each pane a vsplit next to the previous,
+#     then `goto-layout horizontal` on the head's tab and scripts/kitty-equalize.py, whose
+#     reset_window_sizes evens a horizontal tab out. `layout_action equalize` is never sent: it
+#     exists only in splits and rings the bell in a horizontal tab (a1e4490ae).
+#   · WAIT, NOT SHED: capacity is re-asked with the non-charging probe (cc_capacity_probe), so a wait
+#     never spends the refusal budget that admits on the 3rd refusal; busy sessions are capped by
+#     CC_ADMIT_RESTORE_R. Only CC_RESTORE_DEADLINE (30 min) sheds the rest.
+#   · ORDER: heartbeat groups (columns 8-9) keep their own windows in slot order; without them, the
+#     project grouping above. Rows with a prompt (column 10) launch last, so the load gate meets them
+#     after the idle rows have settled.
+#   · KITTY'S HEALTH: one `kitty @` call in flight (this loop never backgrounds one), 30 s of backoff
+#     after a timed-out call, and the restore stops when kitty holds more than 180 fds (C3: its soft
+#     limit is 256).
+#   · PROOF: each launch prints `cc-resume-layout: map sid=<sid> wid=<wid> oswin=<n>` on stdout. A
+#     launch that errored or timed out prints `maybe sid=…` and counts as restored only once the
+#     session has a live holder (lr_holder_count) and its transcript gained a SessionStart:resume
+#     record, re-checked for CC_RESTORE_MAYBE_S (at least 240 s).
+#   · FULLSCREEN by kitty's own action, by window id: `action --match id:<head> toggle_fullscreen`
+#     (kitty dispatches it to the matched window's OS window), 3 s apart, never re-toggled.
 set -uo pipefail
 
 KITTY_BIN="${CC_TERM_KITTY:-}"
@@ -161,7 +186,9 @@ N=${#ROWS[@]}
 if [ "$DESKTOPS" = 1 ]; then
   SETTLE="${CC_DESKTOP_SETTLE:-1.5}"
   FS_DELAY="${CC_DESKTOP_FS_DELAY:-2.5}"
-  [ "$PER_WINDOW" -ge 1 ] 2>/dev/null && [ "$PER_WINDOW" -le 4 ] || PER_WINDOW=4
+  # 4 panes as a 2x2 on the default path; 6 in one row under --restore (the operator's 3-6 per window).
+  PW_CAP=4; [ "$RESTORE" = 1 ] && PW_CAP=6
+  [ "$PER_WINDOW" -ge 1 ] 2>/dev/null && [ "$PER_WINDOW" -le "$PW_CAP" ] || PER_WINDOW="$PW_CAP"
 
   # The control socket. boot-resume runs this from launchd, where no KITTY_WINDOW_ID exists, so
   # an explicit socket (or the live one cc-kitty-socket finds) is what makes kitty reachable.
@@ -208,6 +235,279 @@ tell application "System Events" to tell process "kitty"
 end tell
 EOF
   }
+
+  # ── --restore: its own planner, loop and fullscreen pass (the header's --restore paragraph) ──────
+  if [ "$RESTORE" = 1 ]; then
+    PAD=$'\037'                                   # boot-resume.sh's TSV_PAD: an empty cell
+    R_WAIT="${CC_RESTORE_WAIT:-30}"; R_DEADLINE="${CC_RESTORE_DEADLINE:-1800}"
+    R_BACKOFF="${CC_RESTORE_K_BACKOFF:-30}"; FD_MAX="${CC_RESTORE_FD_MAX:-180}"
+    FS_GAP="${CC_RESTORE_FS_GAP:-3}"
+    MAYBE_S="${CC_RESTORE_MAYBE_S:-240}"; MAYBE_POLL="${CC_RESTORE_MAYBE_POLL:-10}"
+    RESTORE_R="${CC_ADMIT_RESTORE_R:-${CC_ADMIT_ACTIVE_CEILING:-8}}"
+    LSOF_BIN="${CC_LSOF_BIN:-/usr/sbin/lsof}"
+    HERE="$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")"
+    cell() { local v; v="$(printf '%s' "$1" | cut -f"$2")"; [ "$v" = "$PAD" ] && v=""; printf '%s' "$v"; }
+
+    # The equalizer runs INSIDE kitty, so it needs an absolute path.
+    EQ_KITTEN="${CC_KITTY_EQUALIZE_KITTEN:-}"
+    if [ -z "$EQ_KITTEN" ]; then
+      for _eq in "$HERE/../scripts/kitty-equalize.py" "${HOME:-}/.claude/scripts/kitty-equalize.py"; do
+        [ -f "$_eq" ] && { EQ_KITTEN="$(cd "$(dirname "$_eq")" && pwd -P)/$(basename "$_eq")"; break; }
+      done
+      unset _eq
+    fi
+
+    # lr_holder_count, for the maybe re-check. Absent ⇒ the transcript alone decides, and it says so.
+    HOLDER_OK=0
+    if [ "$DRY_RUN" = 0 ]; then
+      for _lr in "$HERE/../scripts/limit-recover/lr-lib.sh" "${HOME:-}/.claude/scripts/limit-recover/lr-lib.sh"; do
+        # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+        if [ -f "$_lr" ] && . "$_lr" 2>/dev/null && command -v lr_holder_count >/dev/null 2>&1; then HOLDER_OK=1; break; fi
+      done
+      unset _lr
+      [ "$HOLDER_OK" = 1 ] || note "cc-resume-layout: lr-lib.sh unreachable — maybe rows are judged by transcript alone"
+    fi
+    holders() { [ "$HOLDER_OK" = 1 ] && lr_holder_count "$1" 2>/dev/null; return 0; }
+    # Every SessionStart:resume record across the account stores. Mirrored stores count twice both
+    # before and after a launch, so a GAIN is still a gain.
+    resume_marks() {
+      local f c n=0
+      for f in "${HOME:-}"/.claude*/projects/*/"$1".jsonl; do
+        [ -f "$f" ] || continue
+        c="$(grep -c '"hookName":"SessionStart:resume"' "$f" 2>/dev/null)"; n=$((n + ${c:-0}))
+      done
+      printf '%s\n' "$n"
+    }
+    # kitty's fd count; empty when unreadable. The pid is the one listen_on embeds (kitty.conf:
+    # unix:/tmp/kitty-{kitty_pid}), else the KITTY_PID kitty exports into its panes.
+    kitty_fds() {
+      local pid="${CC_RESTORE_KITTY_PID:-}"
+      if [ -z "$pid" ]; then
+        case "$SOCK" in unix:*/kitty-*) pid="${SOCK##*/kitty-}" ;; esac
+        case "$pid" in ''|*[!0-9]*) pid="${KITTY_PID:-}" ;; esac
+      fi
+      case "$pid" in ''|*[!0-9]*) return 0 ;; esac
+      # A failed or empty lsof is BLIND, not zero fds: `lsof | grep -c` would print 0 for both.
+      local out
+      out="$("$LSOF_BIN" -nP -p "$pid" -Ff 2>/dev/null)" || return 0
+      [ -n "$out" ] || return 0
+      printf '%s\n' "$out" | grep -c '^f[0-9]' || true
+    }
+    # A kitty call from the main shell: after a timeout, back off before the next one.
+    kr() {
+      local rc=0
+      k "$@" || rc=$?
+      [ "$rc" = 124 ] && { note "cc-resume-layout: kitty @ $1 timed out — backing off ${R_BACKOFF}s"; sleep "$R_BACKOFF"; }
+      return "$rc"
+    }
+
+    # PLAN: "<window#>\t<row index>\t<group label>", in launch order. Heartbeat groups (column 8) keep
+    # their own windows in slot order (column 9); the rest pack by project as the default path does.
+    # Windows holding a prompt row (column 10) go last, and inside a project window so do those rows.
+    PLAN="$(i=0; for r in "${ROWS[@]}"; do
+        printf '%s\t%s\t%s\t%s\t%s\n' "$i" "$(cell "$r" 3)" "$(cell "$r" 8)" "$(cell "$r" 9)" "$(cell "$r" 10)"
+        i=$((i + 1)); done \
+      | python3 -c '
+import os, subprocess, sys
+per = int(sys.argv[1])
+def key(wt):
+    try:
+        out = subprocess.run(["git", "-C", wt, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                             capture_output=True, text=True, timeout=10)
+        if out.returncode == 0 and out.stdout.strip():
+            return os.path.basename(os.path.dirname(out.stdout.strip().rstrip("/")))
+    except Exception:
+        pass
+    return os.path.basename(wt.rstrip("/")) or "?"
+def slot(r):
+    try:
+        return (0, int(r[1]), r[0])
+    except ValueError:
+        return (1, 0, r[0])
+groups, order = {}, []
+for line in sys.stdin:
+    f = line.rstrip("\n").split("\t") + [""] * 5
+    i, wt, grp, sl, prompt = int(f[0]), f[1], f[2], f[3], f[4]
+    k = ("hb", grp) if grp else ("proj", key(wt) if wt else "?")
+    if k not in groups:
+        groups[k] = []; order.append(k)
+    groups[k].append((i, sl, 1 if prompt else 0))
+wins, chunks = [], []
+for k in order:
+    rs = groups[k]
+    if k[0] == "hb":
+        rs = sorted(rs, key=slot)
+        wins += [(rs[j:j + per], [k[1]]) for j in range(0, len(rs), per)]
+    else:
+        rs = sorted(rs, key=lambda r: (r[2], r[0]))
+        chunks += [(k[1], rs[j:j + per]) for j in range(0, len(rs), per)]
+chunks.sort(key=lambda c: -len(c[1]))
+bins = []
+for g, rs in chunks:
+    for b in bins:
+        if len(b[0]) + len(rs) <= per:
+            b[0].extend(rs); b[1].append(g); break
+    else:
+        bins.append([list(rs), [g]])
+wins += [(sorted(rs, key=lambda r: r[2]), gs) for rs, gs in bins]
+wins.sort(key=lambda w: any(r[2] for r in w[0]))
+for n, (rs, gs) in enumerate(wins, 1):
+    for r in rs:
+        print("%d\t%d\t%s" % (n, r[0], "+".join(gs)))
+' "$PER_WINDOW")" || die "the window planner failed"
+
+    t0=$SECONDS; stopped=none; fd_blind=0
+    launched=0; failed=0; shed=0; nwin=0
+    WIN_HEAD=(); WIN_NUM=(); MAYBE_SID=(); MAYBE_BASE=()
+    cur=""; head=""; prev=""; pos=0
+    close_restore_window() { # one row, then even widths
+      [ -n "$head" ] || return 0
+      if [ "$DRY_RUN" = 1 ]; then
+        note "DRY [CC-DESK-$cur] goto-layout --match window_id:$head horizontal"
+        note "DRY [CC-DESK-$cur] kitten ${EQ_KITTEN:-kitty-equalize.py} (reset_window_sizes)"
+      else
+        kr goto-layout --match "window_id:$head" horizontal >/dev/null 2>&1 \
+          || note "  [CC-DESK-$cur] goto-layout horizontal refused — the panes stay as splits"
+        if [ -z "$EQ_KITTEN" ]; then
+          note "  [CC-DESK-$cur] scripts/kitty-equalize.py not found — panes may be uneven"
+        else
+          KITTY_WINDOW_ID="$head" kr action --self kitten "$EQ_KITTEN" >/dev/null 2>&1 \
+            || note "  [CC-DESK-$cur] equalize kitten refused — panes may be uneven"
+        fi
+      fi
+      WIN_HEAD+=("$head"); WIN_NUM+=("$cur"); nwin=$((nwin + 1))
+    }
+    while IFS=$'\t' read -r win idx grp; do
+      [ -n "$win" ] || continue
+      if [ "$win" != "$cur" ]; then close_restore_window; cur="$win"; head=""; prev=""; pos=0; fi
+      row="${ROWS[$idx]}"
+      acct="$(cell "$row" 1)"; sid="$(cell "$row" 2)"; wt="$(cell "$row" 3)"; br="$(cell "$row" 4)"
+      model="$(cell "$row" 6)"; effort="$(cell "$row" 7)"
+      # reso-resume-one exits 2 on an effort it does not know, after the pane is already open.
+      case "$effort" in ''|low|medium|high|xhigh|max) ;; *) note "cc-resume-layout: effort '$effort' for $sid is not one reso-resume-one takes — dropped"; effort="" ;; esac
+      case "$model" in *[!A-Za-z0-9._-]*) note "cc-resume-layout: model '$model' for $sid is malformed — dropped"; model="" ;; esac
+      how="vsplit"; [ "$pos" = 0 ] && how="head"
+      if [ "$DRY_RUN" = 1 ]; then
+        [ "$pos" = 0 ] && head="<head of CC-DESK-$win>"
+        note "DRY [CC-DESK-$win $grp] $how $acct $sid $wt${model:+ model=$model}${effort:+ effort=$effort}"
+        pos=$((pos + 1)); continue
+      fi
+      [ "$stopped" = none ] || { shed=$((shed + 1)); continue; }
+      # CAPACITY: re-ask the same row with the probe until it admits, or the deadline passes.
+      if [ "$CC_ADMIT_OK" = 1 ]; then
+        while ! CC_ADMIT_RESTORE_R="$RESTORE_R" cc_capacity_probe cc-resume-layout "restore ${sid} on ${acct}"; do
+          if [ $((SECONDS - t0)) -ge "$R_DEADLINE" ]; then
+            stopped=deadline; note "cc-resume-layout: SHED — ${R_DEADLINE}s deadline passed: $(cc_capacity_admit_reason)"; break
+          fi
+          note "cc-resume-layout: WAIT ${R_WAIT}s, then re-ask for $sid — $(cc_capacity_admit_reason)"
+          sleep "$R_WAIT"
+        done
+        [ "$stopped" = none ] || { shed=$((shed + 1)); continue; }
+      fi
+      fds="$(kitty_fds)"
+      case "$fds" in
+        ''|*[!0-9]*) [ "$fd_blind" = 1 ] || { note "cc-resume-layout: kitty fd count unreadable — the fd guard is blind"; fd_blind=1; } ;;
+        *) if [ "$fds" -gt "$FD_MAX" ]; then
+             stopped=fd; note "cc-resume-layout: STOP — kitty holds $fds fds (> $FD_MAX); the rest are shed"
+             shed=$((shed + 1)); continue
+           fi ;;
+      esac
+      base="$(resume_marks "$sid")"
+      # The spawn goes through reso-resume-one, which wraps claude in cc-close-attrib (P2); the cert
+      # store is set here as well so no keychain read can stall a restore.
+      cmd="'env' 'CC_ADMIT_DONE=1' 'CLAUDE_CODE_CERT_STORE=bundled'"
+      [ -n "$model" ] && cmd="$cmd $(shq "CC_RESUME_MODEL=$model")"
+      cmd="$cmd $(shq "$RESUME_ONE") $(shq "$acct") $(shq "$wt") $(shq "$sid")"
+      [ -n "$br" ] && cmd="$cmd $(shq "$br")"
+      [ -n "$effort" ] && cmd="$cmd '--effort' $(shq "$effort")"
+      LA=(launch --keep-focus)
+      if [ "$pos" = 0 ]; then LA+=(--type=os-window)
+      else LA+=(--location=vsplit --match "window_id:$prev" --next-to "id:$prev"); fi
+      { [ -n "$wt" ] && [ -d "$wt" ]; } && LA+=(--cwd "$wt")
+      LA+=(--env CC_ADMIT_DONE=1 --env CLAUDE_CODE_CERT_STORE=bundled -- zsh -ic "$cmd || exec zsh -i")
+      rc=0; wid="$(k "${LA[@]}" 2>&1)" || rc=$?
+      case "$wid" in
+        ''|*[!0-9]*)
+          printf 'cc-resume-layout: maybe sid=%s rc=%s\n' "$sid" "$rc"
+          note "cc-resume-layout: launch unconfirmed for $sid (rc $rc): $wid — re-checked after the batch"
+          MAYBE_SID+=("$sid"); MAYBE_BASE+=("$base")
+          [ "$rc" = 124 ] && { note "cc-resume-layout: backing off ${R_BACKOFF}s after the timeout"; sleep "$R_BACKOFF"; }
+          continue ;;
+      esac
+      if [ "$pos" = 0 ]; then
+        cc_log_pane_spawn os-window kitty "$wid" "$wt" "resume-layout CC-DESK-$win restore head sid=$sid acct=$acct"
+        head="$wid"
+      else
+        cc_log_pane_spawn split kitty "$wid" "$wt" "resume-layout CC-DESK-$win restore vsplit sid=$sid acct=$acct"
+      fi
+      prev="$wid"; pos=$((pos + 1)); launched=$((launched + 1))
+      printf 'cc-resume-layout: map sid=%s wid=%s oswin=%s\n' "$sid" "$wid" "$win"
+      note "  [CC-DESK-$win $grp] win $wid  $acct  $(basename "$wt")"
+      sleep "$STAGGER"
+    done <<EOF
+$PLAN
+EOF
+    close_restore_window
+
+    # FULLSCREEN by id, paced: back-to-back toggles are dropped, and a second toggle undoes the first.
+    fs_ok=0; fs_bad=0; w=0
+    while [ "$w" -lt "${#WIN_HEAD[@]}" ]; do
+      hd="${WIN_HEAD[$w]}"; n="${WIN_NUM[$w]}"
+      if [ "$DRY_RUN" = 1 ]; then
+        note "DRY [CC-DESK-$n] action --match id:$hd toggle_fullscreen"
+      elif kr action --match "id:$hd" toggle_fullscreen >/dev/null 2>&1; then
+        fs_ok=$((fs_ok + 1)); note "  [CC-DESK-$n] fullscreen toggled (window $hd)"; sleep "$FS_GAP"
+      else
+        fs_bad=$((fs_bad + 1)); note "  [CC-DESK-$n] toggle_fullscreen refused for window $hd — not re-toggled"; sleep "$FS_GAP"
+      fi
+      w=$((w + 1))
+    done
+
+    # MAYBE rows: restored only with a live holder AND a new SessionStart:resume record.
+    maybe_left=0
+    if [ "${#MAYBE_SID[@]}" -gt 0 ]; then
+      note "cc-resume-layout: re-checking ${#MAYBE_SID[@]} maybe row(s) for up to ${MAYBE_S}s"
+      MSTATE=(); j=0; while [ "$j" -lt "${#MAYBE_SID[@]}" ]; do MSTATE+=(open); j=$((j + 1)); done
+      t1=$SECONDS
+      while :; do
+        open=0; j=0
+        while [ "$j" -lt "${#MAYBE_SID[@]}" ]; do
+          if [ "${MSTATE[$j]}" = open ]; then
+            h="$(holders "${MAYBE_SID[$j]}")"
+            if [ "$(resume_marks "${MAYBE_SID[$j]}")" -gt "${MAYBE_BASE[$j]}" ] && { [ -z "$h" ] || [ "$h" -ge 1 ]; }; then
+              MSTATE[j]=restored
+            else
+              open=$((open + 1))
+            fi
+          fi
+          j=$((j + 1))
+        done
+        [ "$open" -gt 0 ] && [ $((SECONDS - t1)) -lt "$MAYBE_S" ] || break
+        sleep "$MAYBE_POLL"
+      done
+      j=0
+      while [ "$j" -lt "${#MAYBE_SID[@]}" ]; do
+        st="${MSTATE[$j]}"; h="$(holders "${MAYBE_SID[$j]}")"
+        if [ "$st" = open ]; then
+          if [ "$h" = 0 ]; then st=failed; failed=$((failed + 1)); else st=unconfirmed; maybe_left=$((maybe_left + 1)); fi
+        else
+          launched=$((launched + 1))
+        fi
+        printf 'cc-resume-layout: maybe-resolved sid=%s state=%s holders=%s\n' "${MAYBE_SID[$j]}" "$st" "${h:-unknown}"
+        j=$((j + 1))
+      done
+    fi
+
+    if [ "$DRY_RUN" = 1 ]; then verdict=ok
+    elif [ "$launched" -eq 0 ] && [ "$maybe_left" -eq 0 ]; then verdict=failed
+    elif [ "$failed" -eq 0 ] && [ "$fs_bad" -eq 0 ] && [ "$maybe_left" -eq 0 ] && [ "$shed" -eq 0 ]; then verdict=ok
+    elif [ "$failed" -eq 0 ] && [ "$fs_bad" -eq 0 ] && [ "$maybe_left" -eq 0 ]; then verdict=shed
+    else verdict=degraded; fi
+    printf 'cc-resume-layout: verdict=%s launched=%s shed=%s failed=%s windows=%s fullscreen_ok=%s fullscreen_failed=%s maybe=%s stopped=%s\n' \
+      "$verdict" "$launched" "$shed" "$failed" "$nwin" "$fs_ok" "$fs_bad" "$maybe_left" "$stopped"
+    [ "$verdict" = failed ] && exit 4
+    exit 0
+  fi
 
   # PLAN: group by project (the repo a worktree belongs to), pack projects into windows of at most
   # PER_WINDOW panes, first-fit-decreasing; a project bigger than a window is chunked. Output:

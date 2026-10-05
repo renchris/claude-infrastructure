@@ -232,3 +232,241 @@ bound_for() { # <extra layout args…> → the distinct bounds k() handed timeou
   rm -f "$BATS_TEST_TMPDIR/rec-timeout.log" "$KLOG"*; : > "$ROWS"
   [ "$(bound_for --restore)" = "15 " ]
 }
+
+# ── --restore (W3 P3b, 2026-10-04) ─────────────────────────────────────────────────────────────────
+# The unattended restore path: one row of panes per window (head + vsplits, then goto-layout
+# horizontal and the reset_window_sizes kitten, never `layout_action equalize`), wait-and-re-ask on
+# the non-charging capacity probe, idle rows before prompt rows, the kitty fd guard, map lines,
+# maybe rows judged by holder + SessionStart:resume, and fullscreen by kitty's own action by id.
+# Extra stubs: the probe (refuses the first $PROBE_REFUSE asks and logs the R it saw), lr-lib's
+# lr_holder_count (reads $BATS_TEST_TMPDIR/holders.<sid>), lsof, and a kitty that can time out
+# (rc 124), refuse a toggle, or write the session's resume record on a launch it reports as failed.
+restore_setup() {
+  cat >> "$FIX/scripts/lib/capacity-admit.sh" <<'SH'
+cc_capacity_probe() {
+  local n; n=$(cat "$BATS_TEST_TMPDIR/probes" 2>/dev/null || echo 0); echo $((n + 1)) > "$BATS_TEST_TMPDIR/probes"
+  printf 'R=%s %s\n' "${CC_ADMIT_RESTORE_R:-}" "$2" >> "$BATS_TEST_TMPDIR/probe.log"
+  [ "$n" -ge "${PROBE_REFUSE:-0}" ]
+}
+SH
+  mkdir -p "$FIX/scripts/limit-recover"
+  printf 'lr_holder_count() { cat "$BATS_TEST_TMPDIR/holders.$1" 2>/dev/null || echo 0; }\n' > "$FIX/scripts/limit-recover/lr-lib.sh"
+  : > "$FIX/scripts/kitty-equalize.py"
+  export CC_LSOF_BIN="$BATS_TEST_TMPDIR/lsof"
+  cat > "$CC_LSOF_BIN" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >> "$0.log"
+printf 'p1\nfcwd\nftxt\n'; i=0; while [ "$i" -lt "$(cat "$0.n" 2>/dev/null || echo 40)" ]; do echo "f$i"; i=$((i + 1)); done
+SH
+  chmod +x "$CC_LSOF_BIN"
+  cat > "$CC_TERM_KITTY" <<'SH'
+#!/bin/bash
+printf 'KW=%s %s\n' "${KITTY_WINDOW_ID:-}" "$*" >> "$KLOG"
+case " $* " in
+  *" launch "*)
+    if [ -f "$KLOG.mark" ]; then
+      s="$(printf '%s' "$*" | grep -o 'sid-[a-z0-9-]*' | head -1)"
+      mkdir -p "$HOME/.claude/projects/p"; echo '{"attachment":{"hookName":"SessionStart:resume"}}' >> "$HOME/.claude/projects/p/$s.jsonl"
+    fi
+    [ -f "$KLOG.rc124" ] && exit 124
+    [ -f "$KLOG.fail" ] && { echo "Error: no such window"; exit 1; }
+    n=$(cat "$KLOG.n" 2>/dev/null || echo 100); n=$((n + 1)); echo "$n" > "$KLOG.n"; echo "$n" ;;
+  *" toggle_fullscreen "*) [ -f "$KLOG.fsfail" ] && exit 1 ;;
+esac
+exit 0
+SH
+  export CC_RESTORE_WAIT=0 CC_RESTORE_K_BACKOFF=0 CC_RESTORE_FS_GAP=0 CC_RESTORE_MAYBE_S=0 CC_RESTORE_MAYBE_POLL=0
+  unset CC_ADMIT_RESTORE_R CC_ADMIT_ACTIVE_CEILING CC_RESTORE_DEADLINE CC_RESTORE_KITTY_PID KITTY_PID
+}
+restore() { run --separate-stderr bash "$LAYOUT" --desktops --restore --to unix:/tmp/kitty-4242 --file "$ROWS" "$@"; }
+xrow() { # <repo> <n> <model> <effort> <group> <slot> <prompt> — an 11-column contract row, \037 = empty
+  local wt="$BATS_TEST_TMPDIR/$1/w$2"; mkdir -p "$wt"
+  printf 'next\tsid-%s-%s\t%s\tbr\tlabel\t%s\t%s\t%s\t%s\t%s\t\037\n' "$1" "$2" "$wt" "$3" "$4" "$5" "$6" "$7" >> "$ROWS"
+}
+launched_sids() { grep ' launch ' "$KLOG" | grep -o "'sid-[a-z0-9-]*'" | tr -d "'" | tr '\n' ' '; }
+
+@test "restore: 5 rows → one window, a head plus 4 vsplits each beside the previous, one goto-layout, the kitten, no rotate or equalize" {
+  restore_setup
+  for i in 1 2 3 4 5; do row repo-a "$i"; done
+  restore
+  [ "$status" -eq 0 ]
+  [ "$(grep -c -- '--type=os-window' "$KLOG")" -eq 1 ]
+  [ "$(grep -c -- '--location=vsplit' "$KLOG")" -eq 4 ]
+  for p in 101 102 103 104; do grep -q -- "--match window_id:$p --next-to id:$p .*sid-repo-a-$((p - 99))'" "$KLOG"; done
+  [ "$(grep -c 'goto-layout' "$KLOG")" -eq 1 ]
+  grep -q -- 'goto-layout --match window_id:101 horizontal' "$KLOG"
+  grep -q "^KW=101 .*action --self kitten $FIX/scripts/kitty-equalize.py" "$KLOG"
+  ! grep -q 'rotate\|layout_action' "$KLOG" || false
+  [ "$(grep ' launch ' "$KLOG" | grep -vc -- '--keep-focus')" -eq 0 ]
+  [ "$(grep -vc -- '--to unix:/tmp/kitty-4242' "$KLOG")" -eq 0 ]
+  [ "$(kv windows)" = 1 ]; [ "$(kv launched)" = 5 ]; [ "$(kv verdict)" = ok ]; [ "$(kv maybe)" = 0 ]
+}
+
+@test "restore: a map line per launch, on stdout ahead of the verdict line" {
+  restore_setup
+  row repo-a 1; row repo-a 2
+  restore
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | sed -n 1p)" = "cc-resume-layout: map sid=sid-repo-a-1 wid=101 oswin=1" ]
+  [ "$(printf '%s\n' "$output" | sed -n 2p)" = "cc-resume-layout: map sid=sid-repo-a-2 wid=102 oswin=1" ]
+  printf '%s\n' "$output" | sed -n 3p | grep -q '^cc-resume-layout: verdict=ok '
+}
+
+@test "restore: 7 rows of one project → 6 + 1, the cap is 6" {
+  restore_setup
+  for i in 1 2 3 4 5 6 7; do row repo-a "$i"; done
+  restore
+  [ "$(grep -c -- '--type=os-window' "$KLOG")" -eq 2 ]
+  [ "$(grep -c 'goto-layout' "$KLOG")" -eq 2 ]
+  [ "$(kv windows)" = 2 ]; [ "$(kv launched)" = 7 ]
+}
+
+@test "restore: a refused probe waits and re-asks the SAME row, never spends the budget, and passes R" {
+  restore_setup
+  row repo-a 1; row repo-a 2
+  run --separate-stderr env PROBE_REFUSE=2 CC_ADMIT_RESTORE_R=5 bash "$LAYOUT" --desktops --restore --to unix:/tmp/kitty-4242 --file "$ROWS"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c 'restore sid-repo-a-1 on next' "$BATS_TEST_TMPDIR/probe.log")" -eq 3 ]
+  [ "$(cut -d' ' -f1 "$BATS_TEST_TMPDIR/probe.log" | sort -u)" = "R=5" ]
+  [ ! -f "$BATS_TEST_TMPDIR/admits" ]
+  [ "$(printf '%s\n' "$stderr" | grep -c 'WAIT 0s, then re-ask for sid-repo-a-1')" -eq 2 ]
+  [ "$(kv launched)" = 2 ]; [ "$(kv shed)" = 0 ]; [ "$(kv verdict)" = ok ]
+}
+
+@test "restore: R defaults to the active ceiling (8) when the caller sets none" {
+  restore_setup
+  row repo-a 1
+  restore
+  [ "$(cut -d' ' -f1 "$BATS_TEST_TMPDIR/probe.log")" = "R=8" ]
+}
+
+@test "restore: shed happens only at the deadline, and then for every remaining row" {
+  restore_setup
+  for i in 1 2 3; do row repo-a "$i"; done
+  run --separate-stderr env PROBE_REFUSE=999 CC_RESTORE_DEADLINE=0 bash "$LAYOUT" --desktops --restore --to unix:/tmp/kitty-4242 --file "$ROWS"
+  [ ! -f "$KLOG" ] || [ "$(launches)" -eq 0 ]
+  [ "$(kv shed)" = 3 ]; [ "$(kv launched)" = 0 ]; [ "$(kv stopped)" = deadline ]
+  [ "$(grep -c . "$BATS_TEST_TMPDIR/probe.log")" -eq 1 ]
+}
+
+@test "restore: a timed-out launch is a maybe, not failed; holder + a new resume record make it restored" {
+  restore_setup
+  row repo-a 1
+  touch "$KLOG.rc124" "$KLOG.mark"; echo 1 > "$BATS_TEST_TMPDIR/holders.sid-repo-a-1"
+  restore
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -q '^cc-resume-layout: maybe sid=sid-repo-a-1 rc=124$'
+  printf '%s\n' "$output" | grep -q '^cc-resume-layout: maybe-resolved sid=sid-repo-a-1 state=restored holders=1$'
+  printf '%s\n' "$stderr" | grep -q 'backing off'
+  [ "$(kv failed)" = 0 ]; [ "$(kv launched)" = 1 ]; [ "$(kv maybe)" = 0 ]; [ "$(kv verdict)" = ok ]
+}
+
+@test "restore: a live holder WITHOUT a new resume record stays maybe (degraded); no holder at all is failed" {
+  restore_setup
+  row repo-a 1; row repo-a 2
+  touch "$KLOG.fail"; echo 1 > "$BATS_TEST_TMPDIR/holders.sid-repo-a-1"
+  restore
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -q 'maybe-resolved sid=sid-repo-a-1 state=unconfirmed holders=1'
+  printf '%s\n' "$output" | grep -q 'maybe-resolved sid=sid-repo-a-2 state=failed holders=0'
+  [ "$(kv maybe)" = 1 ]; [ "$(kv failed)" = 1 ]; [ "$(kv launched)" = 0 ]; [ "$(kv verdict)" = degraded ]
+}
+
+@test "restore: groups from columns 8-9 keep their own windows, in slot order" {
+  restore_setup
+  xrow repo-a 1 $'\037' $'\037' g1 2 $'\037'
+  xrow repo-a 2 $'\037' $'\037' g2 1 $'\037'
+  xrow repo-a 3 $'\037' $'\037' g1 1 $'\037'
+  restore
+  [ "$status" -eq 0 ]
+  [ "$(kv windows)" = 2 ]
+  [ "$(launched_sids)" = "sid-repo-a-3 sid-repo-a-1 sid-repo-a-2 " ]
+  printf '%s\n' "$output" | grep -q 'map sid=sid-repo-a-1 wid=102 oswin=1'
+  printf '%s\n' "$output" | grep -q 'map sid=sid-repo-a-2 wid=103 oswin=2'
+}
+
+@test "restore: rows with a prompt (column 10) launch after the idle rows" {
+  restore_setup
+  xrow repo-a 1 $'\037' $'\037' $'\037' $'\037' /tmp/prompt-1
+  xrow repo-a 2 $'\037' $'\037' $'\037' $'\037' $'\037'
+  xrow repo-b 1 $'\037' $'\037' $'\037' $'\037' $'\037'
+  restore
+  [ "$status" -eq 0 ]
+  [ "$(launched_sids)" = "sid-repo-b-1 sid-repo-a-2 sid-repo-a-1 " ]
+}
+
+@test "restore: model and effort ride through; columns 10-11 do not; a bad effort is dropped; \\037 is empty" {
+  restore_setup
+  xrow repo-a 1 claude-opus-5-5 xhigh $'\037' $'\037' /tmp/prompt-1
+  xrow repo-a 2 $'\037' turbo $'\037' $'\037' $'\037'
+  restore
+  [ "$status" -eq 0 ]
+  grep -q "'CC_RESUME_MODEL=claude-opus-5-5' '$CC_RESUME_ONE_BIN' 'next' '.*/repo-a/w1' 'sid-repo-a-1' 'br' '--effort' 'xhigh' || exec zsh -i" "$KLOG"
+  ! grep -q 'prompt-1\|--prompt-file\|--permission-mode' "$KLOG" || false
+  grep -q "'sid-repo-a-2' 'br' || exec zsh -i" "$KLOG"
+  ! grep 'sid-repo-a-2' "$KLOG" | grep -q 'CC_RESUME_MODEL\|--effort' || false
+  printf '%s\n' "$stderr" | grep -q "effort 'turbo' for sid-repo-a-2 .* dropped"
+}
+
+@test "restore: a 5-column row launches as today — no model, no effort, cert store set, shell root kept" {
+  restore_setup
+  row repo-a 1
+  restore
+  [ "$status" -eq 0 ]
+  grep -q -- "-- zsh -ic 'env' 'CC_ADMIT_DONE=1' 'CLAUDE_CODE_CERT_STORE=bundled' '$CC_RESUME_ONE_BIN' 'next' '.*/repo-a/w1' 'sid-repo-a-1' 'br' || exec zsh -i" "$KLOG"
+  grep -q -- '--env CLAUDE_CODE_CERT_STORE=bundled' "$KLOG"
+}
+
+@test "restore: toggle_fullscreen by id once per window, never re-toggled on refusal, and no AX call" {
+  restore_setup
+  for i in 1 2 3 4 5 6 7; do row repo-a "$i"; done
+  touch "$KLOG.fsfail"
+  restore
+  [ "$status" -eq 0 ]
+  [ "$(grep -c 'toggle_fullscreen' "$KLOG")" -eq 2 ]
+  grep -q 'action --match id:101 toggle_fullscreen' "$KLOG"
+  grep -q 'action --match id:107 toggle_fullscreen' "$KLOG"
+  [ ! -f "$CC_OSASCRIPT_BIN.log" ]
+  ! grep -q 'set-window-title' "$KLOG" || false
+  [ "$(kv fullscreen_failed)" = 2 ]; [ "$(kv fullscreen_ok)" = 0 ]; [ "$(kv verdict)" = degraded ]
+}
+
+@test "restore: kitty past 180 fds (pid from the socket name) stops the restore before the next launch" {
+  restore_setup
+  row repo-a 1; row repo-a 2
+  echo 181 > "$CC_LSOF_BIN.n"
+  restore
+  grep -q -- '-p 4242' "$CC_LSOF_BIN.log"
+  [ ! -f "$KLOG" ] || [ "$(launches)" -eq 0 ]
+  [ "$(kv stopped)" = fd ]; [ "$(kv shed)" = 2 ]
+}
+
+@test "restore: a failing lsof is a BLIND fd guard (said once), never a reading of 0" {
+  restore_setup
+  row repo-a 1; row repo-a 2
+  printf '#!/bin/bash\nexit 1\n' > "$CC_LSOF_BIN"
+  restore
+  [ "$(printf '%s\n' "$stderr" | grep -c 'fd guard is blind')" -eq 1 ]
+  [ "$(kv launched)" = 2 ]; [ "$(kv stopped)" = none ]
+}
+
+@test "restore: at 180 fds the restore proceeds" {
+  restore_setup
+  row repo-a 1
+  echo 180 > "$CC_LSOF_BIN.n"
+  restore
+  [ "$(kv launched)" = 1 ]; [ "$(kv stopped)" = none ]
+}
+
+@test "restore --dry-run: one window, a head plus 4 vsplits, one goto-layout, no rotate, no equalize, no kitty" {
+  restore_setup
+  for i in 1 2 3 4 5; do row repo-a "$i"; done
+  run --separate-stderr bash "$LAYOUT" --desktops --restore --dry-run --file "$ROWS"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$stderr" | grep -c '^DRY \[CC-DESK-1 repo-a\] head ')" -eq 1 ]
+  [ "$(printf '%s\n' "$stderr" | grep -c '^DRY \[CC-DESK-1 repo-a\] vsplit ')" -eq 4 ]
+  [ "$(printf '%s\n' "$stderr" | grep -c 'goto-layout .* horizontal')" -eq 1 ]
+  ! printf '%s\n' "$stderr" | grep -q 'rotate\|layout_action' || false
+  [ ! -f "$KLOG" ]
+  [ "$(kv windows)" = 1 ]; [ "$(kv verdict)" = ok ]
+}
