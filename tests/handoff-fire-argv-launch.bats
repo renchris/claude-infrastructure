@@ -237,15 +237,20 @@ SH
 
 @test "EVERY kitty pane-creating surface pre-delivers \$CMD — none is left typing" {
   # Per-SITE, not "the file mentions HF_ARGV somewhere": a new surface added without the flags would
-  # silently reintroduce the 2026-08-07 race on exactly one path. kt launch appears at these three
-  # sites; the fourth (split) delegates to it2-kitty and pre-delivers through its environment.
+  # silently reintroduce the 2026-08-07 race on exactly one path. The three surfaces call kt_launch
+  # (5c3905fcd moved the raw `kt launch` into that one helper); the fourth (split) delegates to
+  # it2-kitty and pre-delivers through its environment.
   local n
-  n="$(grep -c 'kt launch .*HF_ARGV\[@\]' "$HF")"
-  [ "$n" -eq 3 ] || { echo "expected 3 argv-carrying kt launch sites, found $n"; false; }
-  # …and no kt launch site is left WITHOUT them.
+  n="$(grep -c 'kt_launch --.*HF_ARGV\[@\]' "$HF")"
+  [ "$n" -eq 3 ] || { echo "expected 3 argv-carrying kt_launch sites, found $n"; false; }
+  # …and no kt_launch site is left WITHOUT them.
   local bare
-  bare="$(grep -n 'kt launch ' "$HF" | grep -vc 'HF_ARGV\[@\]' || true)"
-  [ "$bare" -eq 0 ] || { echo "$bare kt launch site(s) still type:"; grep -n 'kt launch ' "$HF" | grep -v 'HF_ARGV\[@\]'; false; }
+  bare="$(grep -n 'kt_launch --' "$HF" | grep -vc 'HF_ARGV\[@\]' || true)"
+  [ "$bare" -eq 0 ] || { echo "$bare kt_launch site(s) still type:"; grep -n 'kt_launch --' "$HF" | grep -v 'HF_ARGV\[@\]'; false; }
+  # The per-site argv only reaches kitty if the helper forwards it whole: its one raw `kt launch`
+  # passes "$@", and no other raw `kt launch` exists to bypass it.
+  sed -n '/^kt_launch() {/,/^}/p' "$HF" | grep -q 'kt launch "\$@"' || false
+  [ "$(grep -c 'kt launch ' "$HF")" -eq 1 ] || { echo "a raw kt launch outside kt_launch:"; grep -n 'kt launch ' "$HF"; false; }
   # The split surface hands the command over through the shim's environment instead.
   sed -n '/^it2_split() {/,/^}/p' "$HF" | grep -q 'export CC_PANE_CMD="\$CMD"' || false
 }
@@ -261,13 +266,13 @@ SH
   # reason. Removing every guarded expansion first and then looking for ANY survivor cannot be fooled
   # by a spelling this test did not think of.
   local residue
-  residue="$(grep -n 'kt launch ' "$HF" | sed 's/\${HF_ARGV\[@\]+"\${HF_ARGV\[@\]}"}//g' | grep -c 'HF_ARGV\[@\]' || true)"
-  [ "$residue" -eq 0 ] || { echo "$residue unguarded HF_ARGV expansion(s) on a kt launch line"; false; }
+  residue="$(grep -n 'kt_launch --' "$HF" | sed 's/\${HF_ARGV\[@\]+"\${HF_ARGV\[@\]}"}//g' | grep -c 'HF_ARGV\[@\]' || true)"
+  [ "$residue" -eq 0 ] || { echo "$residue unguarded HF_ARGV expansion(s) on a kt_launch line"; false; }
   # …and the guarded form is actually PRESENT on all three — a file with no expansions at all would
   # otherwise satisfy the check above vacuously. Counted on the launch lines only: the helper's own
   # doc comment quotes the same form, and counting the whole file would pin a comment.
-  local n; n="$(grep 'kt launch ' "$HF" | grep -c '\${HF_ARGV\[@\]+"\${HF_ARGV\[@\]}"}')"
-  [ "$n" -eq 3 ] || { echo "expected 3 guarded expansions on kt launch lines, found $n"; false; }
+  local n; n="$(grep 'kt_launch --' "$HF" | grep -c '\${HF_ARGV\[@\]+"\${HF_ARGV\[@\]}"}')"
+  [ "$n" -eq 3 ] || { echo "expected 3 guarded expansions on kt_launch lines, found $n"; false; }
 }
 
 @test "it2_land does NOT type when the command was pre-delivered" {
