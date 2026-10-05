@@ -422,6 +422,38 @@ restarted, the cutoff moves to that restart, and the count resets to 0 of 2**, b
 ran on pre-fix code. Until then every cohort is evidence only. Pane 20 is live again and
 `b9fdad06b82b` is closed.
 
+### Waiting for W7h: the lead stopped, and one more auth cohort (2026-10-04 17:14Z to 2026-10-05 08:41Z)
+
+**W7h has not fired, and the count is still 0 of 2.** No row has been added to `recon/restarts.jsonl`
+since pid 28574 (01:21:36Z Oct 2). The lead (session 762a6daa, pane 20) moved from next4 to next3 at
+17:09Z Oct 4. The relaunch engaged at 17:14:08Z, but `handoffs.jsonl` notes that "the relaunch
+prompt never reached the transcript". The lead took no turn after that, pane 20 left the
+`cc-notify` registry, and the waiter that held W7h (pid 61780) is gone. Resuming the lead is filed
+for the operator as backlog `97336c5b03da`.
+
+**`lr_recon/` moved on trunk without a restart.** `d46327fd2` (03:54Z Oct 5, a `cc-lr` lane that
+moves an account's idle sessions in bulk) is the first `lr_recon/` change since W7g (`faa40b309`).
+The shared checkout is at `86242ab8a`, and its `scripts/limit-recover/` is identical to origin/main.
+But the running reconciler is still pid 28574, so it runs the W7g code and not these bytes. A
+cohort is described by what pid 28574 loaded, not by the checkout.
+
+**Not countable: `next-auth-0`** (opened 03:41Z Oct 5). Like `next3-auth-0`, this is an auth-scope
+cohort and not a usage limit. Its one member, 103c3c1c, is an idle pane held `HOLD:iterm`
+("relaunch this session by hand"), and `recon/facts/next.auth.json` reads `contradicted: true`.
+The compare judged nothing:
+
+```
+SHADOW next-auth-0: members 1 · legacy found 0 · census misses 0 · not owed 0 · placements feasible 0/0 · phase agree 0/0 (false-RECOVERED resolved 0, plan differed 0) · legacy-corrected 0 → PASS
+  103c3c1c no placement (PRE-MOVE/HOLD:iterm)
+```
+
+**Gaps in the shadow watcher.** The memory-pressure sentinel froze and then SIGKILLed the archiver
+twice: pid 37197 at about 16:18Z Oct 4 and pid 55551 at about 00:07Z Oct 5
+(`compressor-sentinel-snap.log`, `reason=retrip-over-debt`). Each was restarted, and it is now pid
+82022. A gap loses no cohort, because `recon/cohorts/` persists and a restarted watcher archives
+whatever it has not seen. The gap only drops the member-liveness samples that the legacy-corrected
+rule reads.
+
 ## Census step
 
 Operator step `f0df9145b73a` (the live observe census) was closed with the launchd daemon's own pass:
