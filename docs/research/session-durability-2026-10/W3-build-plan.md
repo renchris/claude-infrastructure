@@ -683,7 +683,7 @@ This table replaces the phase table near the top of the file. Only the W3 lead e
 | P3a-ii | W3.2b | landed, content-verified | 271 / `w3-p3a-ii` | `c483b8401` (feat), `6aa13bf1f` `3bfb4b9ad` `472ba14c4` (fixes) |
 | P4 | W3.3 | landed, content-verified | 276 / `w3-p4` | `c410b5657` (classifier), `4f912ce85` (reso-resume-one), `f1dc36226` (boot-resume, restore-note) |
 | P5 | W3.4 | fired 2026-10-05; its `/goal` arrived as pasted text and did not arm, so it runs on its brief and the custody hooks | 285 / `w3-p5` | |
-| P7 | W3.4 | fired 2026-10-05 | 286 / `w3-p7` | |
+| P7 | W3.4 | landed, content-verified | 286 / `w3-p7` | `21867169a` (hb.displays.tsv), `7636a9b78` (tree replay) |
 | P4b | W3.4 (added by the lead) | fired 2026-10-05: a lost self-armed watcher alone no longer makes a row WAKE-LOST (§ G, P4) | 287 / `w3-p4b` | |
 
 ### G. Findings from the build (for later phases)
@@ -704,3 +704,5 @@ This table replaces the phase table near the top of the file. Only the W3 lead e
 - **2026-10-05, P4. Gap 10 narrowed.** A live `.watching` pid alone is not WAKE-LOST evidence, because `mailbox-wake-arm.sh` arms one at every SessionStart; it only confirms a watcher the session launched itself.
 - **2026-10-05, P4 and lead. A self-armed watcher alone no longer earns a turn (P4b).** On the live fleet 10 of 18 sessions read WAKE-LOST, 8 of them only for their own `cc-await-ping`, which SessionStart re-arms without a turn. Lead's ruling (conviction above 90%, on P4's own goal that only real open work gets a turn): such a row keeps the watcher in its note and gets no nudge.
 - **2026-10-05, P4.** A session cold by the clock but inside a long call is WAKE-LOST only when `hb.session.tsv` shows it alive with work open. `hb.bg.tsv` holds no agent-browser URL or owner sid, so the note takes the URL from the session's own transcript and names only sessions it can attribute.
+- **2026-10-05, P7. The tree replay has never run against a real kitty.** `launch --bias` and `--type=tab` were read from the kitty 0.48.2 source, so G1 is the first real replay. `CC_RESTORE_TREE=off` returns to P3b's one-row plan. The `--tree` dry run matched a live `kitten @ ls` on all 5 windows (panes, splits, display).
+- **2026-10-05, P7.** Under `--restore` the layout finds the tree itself from the rows' group column (`k<pid>w<oswin>`), so `cc-restore` need not pass `--tree`. A `cc-resume-layout: layout tree_windows= shells= placed= placed_failed=` line precedes the verdict when a tree is replayed, and shell panes get no map line. Space order is recorded as kitty's OS-window order, because macOS has no public API for the Mission Control order. The first tab is left active, because focusing a tab would steal focus.
