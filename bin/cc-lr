@@ -440,7 +440,7 @@ sys.exit(2)' "$1"
 }
 cmd_recover_limited() { # [--account A] [--target T]
   local acct_f="" target="auto" dirs="" out rc sid pane acct cfg cwd live klass base n=0 fired=0 refused=0
-  local seen="" name cap cap_rc sw_target qrc=1
+  local seen="" name cap cap_rc sw_target qrc=1 qf
   while [ $# -gt 0 ]; do
     case "$1" in
       --account) [ $# -ge 2 ] || { usage; exit 3; }; acct_f="$2"; shift 2 ;;
@@ -494,7 +494,14 @@ EOF_ROWS
         fi
         if [ -n "$sw_target" ]; then
           echo "cc-lr: $name is at $cap — queueing its IDLE sessions for $sw_target (cc-lr switch --from $name --all-idle):"
-          ( cmd_switch_driver "$sw_target" 0 "" "" "$name" 1 0 "$seen" ); qrc=$?
+          # QUEUED IS THE SUCCESS THIS CALL ASKS FOR. Since the driver form delegates to `cc-lr move`
+          # (d46327fd2), a --wait 0 batch returns 1 by design while its sessions are in flight or
+          # beside a held row, where the legacy drive returned 0 once it had queued. So the move
+          # lane names its queued batch in CL_MOVE_QUEUED_OUT, and a batch on disk is the 0.
+          qf="$(mktemp "${TMPDIR:-/tmp}/cc-lr-queued.XXXXXX")" || qf=""
+          ( CL_MOVE_QUEUED_OUT="$qf" cmd_switch_driver "$sw_target" 0 "" "" "$name" 1 0 "$seen" ); qrc=$?
+          if [ "$qrc" -eq 1 ] && [ -n "$qf" ] && [ -s "$qf" ]; then qrc=0; fi
+          [ -z "$qf" ] || rm -f "$qf"
         fi ;;
       2) echo "cc-lr: could not read $name's usage — its idle sessions were NOT checked; if it is capped: cc-lr switch --from $name --all-idle --target <acct>" ;;
     esac
@@ -1226,6 +1233,7 @@ EOF
   [ ! -s "$bdir/summary.json" ] || printf 'summary: %s\n' "$(jq -r '"\(.status): \(.verdicts); target auth after the batch: \(.target_auth_after); \(.wall_s)s"' "$bdir/summary.json")"
 }
 CL_MOVE_EXCL=""
+CL_MOVE_QUEUED_OUT=""   # a file path: a real run writes its batch id there once the request is on disk
 cmd_move() {
   local from="" to="" until_s=0 wait_s="${CC_LR_MOVE_WAIT_S:-600}" cold=0 dry=0 slots="" unver=false self="" selv="" json=0
   local status_b="" abort_b="" rows rc=0 batch bdir by now nm s p ac cfg act tmp unroute="" urc hint=""
@@ -1324,6 +1332,7 @@ EOF
   tmp="$(lr_move_state)/move/requests/.$batch.$$.tmp"
   jq -nc --arg b "$batch" --argjson ts "$now" '{kind:"move-batch", batch:$b, ts:$ts}' > "$tmp" \
     && mv -f "$tmp" "$(lr_move_state)/move/requests/$batch.json" || cl_die "cannot write the batch request; nothing will run" 2
+  [ -z "$CL_MOVE_QUEUED_OUT" ] || printf '%s\n' "$batch" > "$CL_MOVE_QUEUED_OUT"
   printf 'cc-lr: batch %s queued for the poller (%s session(s)); re-derive its verdicts any time with: cc-lr move --status %s\n' "$batch" "$nm" "$batch"
   # `kickstart` with NO `-k` — the rule every request writer here follows (see cmd_repair).
   if command -v launchctl >/dev/null 2>&1; then

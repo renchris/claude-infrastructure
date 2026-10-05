@@ -855,7 +855,11 @@ never_fired() { [ ! -e "$BATS_TEST_TMPDIR/handoff.argv" ]; }
   [[ "$output" == *"cc-lr switch"* ]] || { echo "$output"; false; }
   run bash "$LR" nosuchverb
   [ "$status" -eq 3 ]
-  [[ "$output" == *"find | recover | switch | status | repair"* ]] || { echo "$output"; false; }
+  # The SUBJECT is "the expected-verbs line names switch", so the span is that line and the
+  # `| switch |` token, never the verbs around it: the earlier pin on the adjacent run
+  # `find | recover | switch | status | repair` went RED the moment d46327fd2 added `plan | move`.
+  local line; line="$(printf '%s\n' "$output" | grep "unknown subcommand 'nosuchverb' — expected")"
+  [[ "$line" == *"| switch |"* ]] || { echo "$output"; false; }
 }
 
 @test "RULE 2's refusal no longer claims the downstream rails are gated on quota" {
@@ -1033,6 +1037,10 @@ cat "$f"
 SH
   chmod +x "$CC_LR_UPGRADE_BIN"
 }
+# Since d46327fd2 the idle half queues through the move lane (cc-lr switch's driver form delegates
+# to `cc-lr move`), so "queued" is a batch dir holding plan.json and one intent per movable session,
+# not a cc-lr-switch-<sid>.json request. The legacy drive keeps its own cases in lr-switch-driver.bats.
+moved_dir() { local d; for d in "$LR_STATE_DIR"/move/*/; do case "$d" in */requests/) continue ;; esac; [ -d "$d" ] && { printf '%s\n' "${d%/}"; return 0; }; done; return 1; }
 
 @test "[RED] recover --limited --account 1 at weekly 100% also queues the account's IDLE sessions, not the limited one twice" {
   fleet_stub 0
@@ -1046,12 +1054,13 @@ SH
   [ "$status" -eq 0 ] || { echo "rc $status: $output"; false; }
   grep -q cccc0780 "$BATS_TEST_TMPDIR/fleet.argv" || { echo "the limited pane was not recovered"; false; }
   grep -q -- '--from next' "$BATS_TEST_TMPDIR/census.argv" || { echo "the idle census was not asked about next"; cat "$BATS_TEST_TMPDIR/census.argv" 2>/dev/null; echo "$output"; false; }
-  [ -f "$LR_STATE_DIR/requests/cc-lr-switch-cccc0754-0000-4000-8000-000000000754.json" ] || { echo "idle pane 754 was not queued"; ls "$LR_STATE_DIR/requests" 2>/dev/null; echo "$output"; false; }
-  [ ! -f "$LR_STATE_DIR/requests/cc-lr-switch-cccc0780-0000-4000-8000-000000000780.json" ] || { echo "the limited pane was ALSO queued for a switch"; false; }
-  [ ! -f "$LR_STATE_DIR/requests/cc-lr-switch-cccc0760-0000-4000-8000-000000000760.json" ] || { echo "a busy pane was queued"; false; }
-  jq -e '.target == "next2" and .from == "next"' "$LR_STATE_DIR/requests/cc-lr-switch-cccc0754-0000-4000-8000-000000000754.json" >/dev/null
+  local d; d="$(moved_dir)" || { echo "no batch was queued"; echo "$output"; false; }
+  [ -f "$d/intent/cccc0754-0000-4000-8000-000000000754.json" ] || { echo "idle pane 754 was not queued"; ls "$d/intent"; echo "$output"; false; }
+  [ ! -f "$d/intent/cccc0780-0000-4000-8000-000000000780.json" ] || { echo "the limited pane was ALSO queued for a switch"; false; }
+  [ ! -f "$d/intent/cccc0760-0000-4000-8000-000000000760.json" ] || { echo "a busy pane was queued"; false; }
+  jq -e '.to == "next2" and .from == "next"' "$d/plan.json" >/dev/null
   [[ "$output" == *"1 fired, 0 refused of 1 limited session(s) on 1"* ]] || { echo "$output"; false; }
-  [[ "$output" == *"754"*"queued next → next2"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"754"*"restart on next2"* ]] || { echo "$output"; false; }
 }
 
 @test "[RED] recover --limited --account on a capped account with NOTHING limited still queues the idle sessions" {
@@ -1062,7 +1071,8 @@ SH
   run bash "$LR" recover --limited --account next
   [ "$status" -eq 0 ] || { echo "rc $status: $output"; false; }
   [ ! -s "$BATS_TEST_TMPDIR/fleet.argv" ] || { echo "fired a recovery with nothing limited"; false; }
-  [ -f "$LR_STATE_DIR/requests/cc-lr-switch-cccc0754-0000-4000-8000-000000000754.json" ] || { echo "$output"; false; }
+  local d; d="$(moved_dir)" || { echo "$output"; false; }
+  [ -f "$d/intent/cccc0754-0000-4000-8000-000000000754.json" ] || { echo "$output"; false; }
 }
 
 @test "recover --limited --account on an account with headroom does not touch its idle sessions" {
@@ -1085,7 +1095,7 @@ SH
   census_stub "754	cccc0754-0000-4000-8000-000000000754	next	-	-	-	move"
   run bash "$LR" recover --limited --account next --target next3
   [ "$status" -eq 0 ] || { echo "rc $status: $output"; false; }
-  jq -e '.target == "next3"' "$LR_STATE_DIR/requests/cc-lr-switch-cccc0754-0000-4000-8000-000000000754.json" >/dev/null
+  jq -e '.to == "next3"' "$(moved_dir)/plan.json" >/dev/null
 }
 
 # ── STRICT ROUTING: for a batch, "the router could not answer" is not "routable" (2026-10-04) ──────
