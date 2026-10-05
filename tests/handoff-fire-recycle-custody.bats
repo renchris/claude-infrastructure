@@ -133,7 +133,7 @@ probe() { run bash "$HF" --probe-recycle-preconditions --source-pane "$PANE" --s
   [ "$status" -eq 5 ] || { echo "$output"; false; }
   local want got
   want="limit: NO — the last assistant record is not an api error ($TX)
-limit: a healthy pane is moved by asking it to move itself — cc-lr switch --pane $PANE --target <acct>"
+limit: a healthy pane is moved by the move lane, which writes the operator intent this gate needs — cc-lr move --sid ${SID:0:8} --to <acct>"
   got="$(printf '%s\n' "$output" | grep '^limit:')"
   [ "$got" = "$want" ] || { echo "want:"; echo "$want"; echo "got:"; echo "$got"; false; }
   [[ "$output" != *"evidence:"* ]] || { echo "$output"; false; }
@@ -141,6 +141,90 @@ limit: a healthy pane is moved by asking it to move itself — cc-lr switch --pa
   # Evidence without --voluntary is a usage error, not a silently ignored flag.
   probe --account-evidence "$EV/next2.5h.json"
   [ "$status" -eq 2 ] || { echo "status=$status $output"; false; }
+}
+
+# ── 1i · THE OPERATOR-INTENT BYPASS (design-swap-v3 D1/F11, 2026-10-04) ─────────────────────────
+# `cc-lr move` writes one intent per session; the probe's limit gate passes a HEALTHY pane on it.
+# The file's own rules are tests/lr-intent.bats's subject; here: the gate honours a valid one, binds
+# it to the row's account and the caller's target, and refuses a non-limit api error regardless.
+# intent_env first, in the test's own shell: intent_file runs inside $( ), where an export is lost.
+intent_env() { export LR_STATE_DIR="$BATS_TEST_TMPDIR/lrstate"; }
+intent_file() { # [jq filter that breaks the valid file] → its path (pane 901, next2 → next)
+  local d="$LR_STATE_DIR/move/b1/intent"; mkdir -p "$d"
+  jq -nc --arg sid "$SID" --arg pane "$PANE" --argjson exp "$(( $(date +%s) + 600 ))" \
+    '{kind:"cc-lr-move",batch:"b1",sid:$sid,pane:$pane,from:"next2",to:"next",requested_by:"t",ts:0,expires_epoch:$exp,plan_row_sha:"x"}' \
+    | jq -c "${1:-.}" > "$d/$SID.json"
+  chmod 600 "$d/$SID.json"
+  printf '%s' "$d/$SID.json"
+}
+
+@test "1i [RED] --voluntary + a valid operator intent passes a HEALTHY pane through the limit gate" {
+  intent_env
+  seed_healthy_transcript
+  f="$(intent_file)"
+  probe --voluntary --operator-intent "$f" --intent-target next
+  [[ "$output" == *"limit: bypassed — operator intent $f (voluntary, to next)"* ]] || false
+  [[ "$output" != *"REFUSED:not-limited"* ]] || false
+  [[ "$output" == *"teammate: no"* ]]
+}
+
+@test "1i an intent for another target, an expired one, or the kill switch still refuses, and names why" {
+  intent_env
+  seed_healthy_transcript
+  f="$(intent_file)"
+  probe --voluntary --operator-intent "$f" --intent-target next3
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"verdict: REFUSED:not-limited"* ]] || false
+  [[ "$output" == *"intent: to-mismatch"* ]] || false
+  f="$(intent_file '.expires_epoch = 1')"
+  probe --voluntary --operator-intent "$f" --intent-target next
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"intent: expired"* ]] || false
+  f="$(intent_file)"
+  LR_OPERATOR_INTENT=off probe --voluntary --operator-intent "$f" --intent-target next
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"intent: switched-off"* ]]
+}
+
+@test "1i a session whose last record is a non-limit api error is refused despite a valid intent" {
+  intent_env
+  printf '%s\n' \
+    '{"type":"user","timestamp":"2026-09-20T00:00:00.000Z","message":{"role":"user","content":"go"}}' \
+    '{"type":"assistant","timestamp":"2026-09-20T00:00:01.000Z","isApiErrorMessage":true,"message":{"role":"assistant","model":"<synthetic>","content":[{"type":"text","text":"API Error: Connection error."}]}}' \
+    > "$TX"
+  f="$(intent_file)"
+  probe --voluntary --operator-intent "$f" --intent-target next
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"verdict: REFUSED:not-limited"* ]] || false
+  [[ "$output" == *"intent: api-error"* ]]
+}
+
+@test "1i an intent without --voluntary is a usage error" {
+  intent_env
+  f="$(intent_file)"
+  probe --operator-intent "$f" --intent-target next
+  [ "$status" -eq 2 ]
+}
+
+@test "1s [RED] the probe prints shell_root: from pane_shell_root; HF_PROBE_SHELL_ROOT=off omits the line" {
+  tail_world
+  local frag="$BATS_TEST_TMPDIR/probe-shellroot.sh"
+  {
+    sed -n '/^pane_shell_root() {/,/^}/p' "$HF"
+    echo '[ -z "${STUB_ROOT:-}" ] || pane_shell_root() { printf "%s" "$STUB_ROOT"; }'
+    sed -n '/CAN THIS PANE TAKE A RELAUNCH AFTER ITS/,/echo "window_id: /p' "$HF"
+  } > "$frag"
+  grep -q 'shell_root' "$frag"
+  PRP_PANE=901 PRP_TTY=/dev/ttys999 STUB_ROOT=no run bash -c ". '$FUNCS'; . '$frag'"
+  [[ "$output" == *"shell_root: no"* ]] || false
+  [[ "$output" == *"window_id: 901"* ]] || false
+  PRP_PANE=901 PRP_TTY=/dev/ttys999 STUB_ROOT=yes run bash -c ". '$FUNCS'; . '$frag'"
+  [[ "$output" == *"shell_root: yes"* ]] || false
+  PRP_PANE=901 PRP_TTY="" run bash -c ". '$FUNCS'; . '$frag'"
+  [[ "$output" == *"shell_root: unknown"* ]] || false
+  PRP_PANE=901 PRP_TTY=/dev/ttys999 STUB_ROOT=no HF_PROBE_SHELL_ROOT=off run bash -c ". '$FUNCS'; . '$frag'"
+  [[ "$output" != *"shell_root"* ]] || false
+  [[ "$output" == *"window_id: 901"* ]] || false
 }
 
 @test "1a an auth fact admits the TARGET-AUTH hop with --voluntary; expired, foreign or flagless refuses" {

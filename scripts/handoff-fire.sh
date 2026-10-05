@@ -198,6 +198,8 @@
 #                       (not limited, a teammate, a pane not holding a claude, a binding that does
 #                       not hold). Its caller is lr-handoff's lrh_precheck, which runs it BEFORE the
 #                       transplant so a refusal costs a message instead of a tombstoned husk.
+#                       [--voluntary --operator-intent F --intent-target T] passes a HEALTHY pane on
+#                       the operator's `cc-lr move` intent (limit-recover/lr-intent.sh). Otherwise
 #                       [--voluntary --account-evidence F] is the ONLY way past the limit gate for
 #                       a pane that is not limited: F is a rejected 5h/7d account fact
 #                       (<acct>.<scope>.json) resetting ≥30 min out. A background job still
@@ -9429,6 +9431,61 @@ if [ "${1:-}" = "__recycle" ]; then
           fi
           echo "→ bgwork@${waited}s: this recycle's own tool call (pid $RCY_CALLER_PID) did not return (${RCY_SELFCALL}) — holding as for any background work"
         fi
+        # STOP-IF-WATCHER (design-swap-v3 F15, 2026-10-04). The operator's move lane restarts idle
+        # sessions with no model turn, and about a third of them (10 of 26, measured that day) hold a
+        # background cc-await-ping: a mailbox waiter, which hf_bg_work_kind already rules is not work
+        # and which the relaunched session re-arms. `cancel` would leave every one of them unmoved;
+        # the keep-work answer leaves a SECOND live copy of the session in the background, and
+        # standing the watcher down first completes its task and wakes the session for a full turn.
+        # So this value answers "Exit and stop tasks", and only when all three hold: the subject
+        # leads no live team, its background jobs are watcher-ONLY (not work, not none, not
+        # unreadable), and the stop-tasks index was read off the dialog on screen. Anything else is
+        # answered exactly as `cancel`: Esc, the session untouched, the move held. It never sends
+        # the keep-work index. Kill switch CC_RECYCLE_STOP_IF_WATCHER=off: the value means cancel.
+        if [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" = stop-if-watcher ]; then
+          rcy_siw_why="" rcy_siw_key=""
+          if [ "${CC_RECYCLE_STOP_IF_WATCHER:-on}" = off ]; then
+            rcy_siw_why="CC_RECYCLE_STOP_IF_WATCHER=off"
+          elif [ "$rcy_team_rc" != 1 ]; then
+            rcy_siw_why="the subject leads live team members, or its team could not be read"
+          else
+            rcy_siw_pid="$(jq -r '.pid // empty' "$REG_DIR/$RSID.json" 2>/dev/null || true)"
+            rcy_siw_sid="$(jq -r '.session_id // empty' "$REG_DIR/$RSID.json" 2>/dev/null || true)"
+            rcy_siw_kind=""
+            case "$rcy_siw_pid" in
+              ''|*[!0-9]*) rcy_siw_why="the pane's registry row names no claude pid, so its background jobs cannot be classified" ;;
+              *) if [ -n "${RCY_OLD_SID:-}" ] && [ "$rcy_siw_sid" != "$RCY_OLD_SID" ]; then
+                   rcy_siw_why="the pane's registry row names session ${rcy_siw_sid:-none}, not the subject ${RCY_OLD_SID}"
+                 else
+                   rcy_siw_kind="$(hf_bg_work_kind "$rcy_siw_pid")"
+                   case "$rcy_siw_kind" in
+                     watcher\ *) ;;
+                     *) rcy_siw_why="its background jobs are not watcher-only (${rcy_siw_kind:-unread})" ;;
+                   esac
+                 fi ;;
+            esac
+            if [ -z "$rcy_siw_why" ]; then
+              rcy_siw_scr="$(hf_bounded "$IT2" session read -s "$RSID" -n "${FIRE_TYPE_READLINES:-500}" 2>/dev/null || true)"
+              if command -v pane_bgwork_stop_choice >/dev/null 2>&1; then
+                rcy_siw_key="$(printf '%s\n' "$rcy_siw_scr" | hf_screen_unwrapped | pane_bgwork_stop_choice || true)"
+              fi
+              case "$rcy_siw_key" in
+                [1-9]) ;;
+                *) rcy_siw_key=""; rcy_siw_why="the 'Exit and stop tasks' index could not be read off the dialog" ;;
+              esac
+            fi
+          fi
+          if [ -n "$rcy_siw_key" ]; then
+            # typed-send-lint:allow — a single menu digit read off the dialog on screen, never a command line; no shell ever sees it
+            hf_bounded "$IT2" session send -s "$RSID" "$rcy_siw_key" >/dev/null 2>&1 || true
+            rcy_bgwork_sent=$((rcy_bgwork_sent + 1))
+            echo "→ bgwork@${waited}s: the /exit raised the background-work dialog; stop-if-watcher answered '$rcy_siw_key' (Exit and stop tasks) — the only background job is the mailbox watcher ($rcy_siw_kind)"
+            emit_recycle_event recycle-bgwork-stopped-watcher "" "$RSID" "background-work dialog at ${waited}s answered with the stop-tasks index '$rcy_siw_key'; jobs=$rcy_siw_kind" || true
+            continue
+          fi
+          echo "→ bgwork@${waited}s: stop-if-watcher HOLDS ($rcy_siw_why) — answering Stay, as cancel does"
+          CC_RECYCLE_BGWORK_ANSWER=cancel
+        fi
         if [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" = cancel ] || [ "$rcy_team_rc" != 1 ] \
            || { [ -z "$bgk" ] && [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" != off ]; }; then
           hf_bounded "$IT2" session send -s "$RSID" $'\e' >/dev/null 2>&1 || true
@@ -10607,14 +10664,19 @@ if [ "${1:-}" = "--relaunch-at-shell" ]; then
 fi
 if [ "${1:-}" = "--probe-recycle-preconditions" ]; then
   shift
-  PRP_PANE="" PRP_SESSION="" PRP_VOLUNTARY=0 PRP_EVIDENCE="" PRP_EVIDENCE_SET=0
+  PRP_PANE="" PRP_SESSION="" PRP_VOLUNTARY=0 PRP_EVIDENCE="" PRP_EVIDENCE_SET=0 PRP_INTENT="" PRP_INTENT_TO=""
   while [ $# -gt 0 ]; do case "$1" in
     --source-pane)    PRP_PANE="${2:?--source-pane needs a pane id}"; shift 2 ;;
     --source-session) PRP_SESSION="${2:?--source-session needs a session uuid}"; shift 2 ;;
     --voluntary)      PRP_VOLUNTARY=1; shift ;;
     --account-evidence) PRP_EVIDENCE="${2:?--account-evidence needs a file}"; PRP_EVIDENCE_SET=1; shift 2 ;;
+    --operator-intent) PRP_INTENT="${2:?--operator-intent needs a file}"; shift 2 ;;
+    --intent-target)  PRP_INTENT_TO="${2:?--intent-target needs an account}"; shift 2 ;;
     *) echo "!! unknown --probe-recycle-preconditions arg: $1" >&2; exit 2 ;;
   esac; done
+  if [ -n "$PRP_INTENT" ] && [ "$PRP_VOLUNTARY" != 1 ]; then
+    echo "!! --operator-intent is only meaningful with --voluntary" >&2; exit 2
+  fi
   # Evidence only ever STANDS IN for a limit on the voluntary path. Handed without --voluntary it
   # would be a flag that silently does nothing, so it is a usage error instead.
   if [ "$PRP_EVIDENCE_SET" = 1 ] && [ "$PRP_VOLUNTARY" != 1 ]; then
@@ -10713,15 +10775,41 @@ if [ "${1:-}" = "--probe-recycle-preconditions" ]; then
         PRP_EV_OUT="$(hf_account_evidence_check "$PRP_EVIDENCE" "${PRP_ROW_NAME:-}")" && PRP_EV_RC=0 || PRP_EV_RC=$?
       fi
     fi
+    # THE SECOND ALTERNATIVE (design-swap-v3 D1/F11, 2026-10-04): the OPERATOR's intent file for this
+    # exact move, written by `cc-lr move`. It admits a pane that is healthy (no api error at all);
+    # a last record that is a network, auth or overload error stays refused, because that session
+    # is not idle-and-well. The file's rules are lr-intent.sh's, the validator lr-handoff uses; if
+    # the library cannot be sourced the arm refuses (never admits on a check that did not run).
+    PRP_INT_RC=1 PRP_INT_WHY=""
+    if [ "$PRP_EV_RC" != 0 ] && [ -n "$PRP_INTENT" ]; then
+      for _prp_il in "$(dirname "$0")/limit-recover/lr-intent.sh" \
+                     "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/limit-recover/lr-intent.sh" \
+                     "$HOME/.claude/scripts/limit-recover/lr-intent.sh"; do
+        # shellcheck source=/dev/null
+        [ -f "$_prp_il" ] && { . "$_prp_il"; break; }
+      done
+      if ! command -v lr_intent_check >/dev/null 2>&1; then
+        PRP_INT_WHY="unavailable: lr-intent.sh is not reachable from $0"
+      elif [ -n "$PRP_KIND" ]; then
+        PRP_INT_WHY="api-error: the last record is an api error of kind '$PRP_KIND', which an operator intent does not cover"
+      elif lr_intent_check "$PRP_INTENT" "$PRP_SESSION" "$PRP_PANE" "${PRP_ROW_NAME:-}" "$PRP_INTENT_TO"; then
+        PRP_INT_RC=0
+      else
+        PRP_INT_WHY="$LR_INTENT_WHY"
+      fi
+    fi
     if [ "$PRP_EV_RC" = 0 ]; then
       echo "limit: bypassed — account evidence ${PRP_EV_OUT%% *} resets_at=${PRP_EV_OUT#* } (voluntary)"
+    elif [ "$PRP_INT_RC" = 0 ]; then
+      echo "limit: bypassed — operator intent $PRP_INTENT (voluntary, to $PRP_INTENT_TO)"
     else
       echo "limit: NO — the last assistant record is ${PRP_KIND:-not an api error} ($PRP_TX)"
       # NAME THE VERB THAT DOES MOVE A HEALTHY PEER (2026-09-23). A caller that reached this gate
       # with a healthy pane and no account fact cannot pass it; a refusal that names no next
       # command is how the incident's driver spent hours.
-      echo "limit: a healthy pane is moved by asking it to move itself — cc-lr switch --pane $PRP_PANE --target <acct>"
+      echo "limit: a healthy pane is moved by the move lane, which writes the operator intent this gate needs — cc-lr move --sid ${PRP_SESSION:0:8} --to <acct>"
       [ "$PRP_VOLUNTARY" = 1 ] && echo "evidence: ${PRP_EV_OUT:-missing}"
+      [ -n "$PRP_INTENT" ] && echo "intent: ${PRP_INT_WHY:-not checked}"
       prp_verdict "REFUSED:not-limited" 5
     fi
   else
@@ -10805,6 +10893,12 @@ if [ "${1:-}" = "--probe-recycle-preconditions" ]; then
   #     that restarts at 1, so the window id means something only beside the kitty pid AND its start
   #     time, and the pane's root process names what the window is actually running.
   echo "tty: ${PRP_TTY:--}"
+  # CAN THIS PANE TAKE A RELAUNCH AFTER ITS /exit (design-swap-v3 F4/F14). A pane rooted in its own
+  # launcher is destroyed by the /exit; the recycle refused that only at fire time, after a caller's
+  # admit. Reported here so a caller that must keep the SAME pane (lr-handoff --no-replace) holds
+  # before anything moves. Informational: it never changes this probe's verdict, and `unknown`
+  # means the read did not answer. Kill switch HF_PROBE_SHELL_ROOT=off omits the line.
+  [ "${HF_PROBE_SHELL_ROOT:-on}" = off ] || echo "shell_root: $(pane_shell_root "$PRP_TTY")"
   echo "window_id: $PRP_PANE"
   PRP_KPID="${CC_TERM_KITTY_TO:-}"; PRP_KPID="${PRP_KPID##*kitty-}"
   case "$PRP_KPID" in ''|*[!0-9]*) PRP_KPID="" ;; esac

@@ -612,3 +612,79 @@ _icp() { # $1 = "own" | "other" → prints "CALL=<tool-call shell pid> ANS=<answ
   echo "$output"
   [[ "$output" == *"ANS=none"* ]] || false
 }
+
+# ── STOP-IF-WATCHER (design-swap-v3 F15, 2026-10-04) ──────────────────────────────────────────────
+# The move lane restarts an idle session with no model turn. A session whose only background job is
+# its cc-await-ping mailbox watcher is answered "Exit and stop tasks"; everything else is answered
+# Stay, as `cancel` does. The keep-work index (2 on this screen) is never sent.
+# WHAT OLD CODE DOES WITH THE VALUE: `stop-if-watcher` is neither `cancel` nor `off`, so the pre-fix
+# watcher fell through to the answer branch and sent the KEEP-WORK index 2 ("Move to background and
+# exit"), the one answer this lane forbids. Every case below that asserts "2 is never sent" is
+# therefore red on the pre-fix handoff-fire.sh.
+SIW_L="Sun Oct  4 10:00:00 2026"
+siw_env() { # $1=jobs: watcher | work | none
+  export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg"; mkdir -p "$CC_REGISTRY_DIR"
+  printf '{"paneUUID":"%s","pid":5000,"session_id":"siw-sid"}\n' "$STUB_PANE" > "$CC_REGISTRY_DIR/$STUB_PANE.json"
+  export HF_PS_SNAPSHOT="$BATS_TEST_TMPDIR/siw-ps.txt"
+  printf '%s\n' "5000 4000 $SIW_L claude --resume siw-sid" > "$HF_PS_SNAPSHOT"
+  case "$1" in
+    watcher)
+      printf '%s\n' "5200 5000 $SIW_L /bin/zsh -c source \$HOME/.claude/shell-snapshots/snapshot-zsh-x.sh && eval '\$HOME/.claude/bin/cc-await-ping --timeout 3300'" \
+        "5201 5200 $SIW_L /bin/bash \$HOME/.claude/bin/cc-await-ping --timeout 3300" >> "$HF_PS_SNAPSHOT" ;;
+    work)
+      printf '%s\n' "5100 5000 $SIW_L /bin/zsh -c source \$HOME/.claude/shell-snapshots/snapshot-zsh-x.sh && eval 'sleep 600'" \
+        "5101 5100 $SIW_L sleep 600" >> "$HF_PS_SNAPSHOT" ;;
+  esac
+  export HF_TEAM_HOLD=off
+}
+siw_drive() { run env CC_RECYCLE_BGWORK_ANSWER=stop-if-watcher "$@" bash "$HF" __recycle "$STUB_PANE" "$BATS_TEST_TMPDIR/no-such-tty" "$CMDFILE" "$BATS_TEST_TMPDIR"; }
+siw_keys() { grep 'session send' "$H/it2-calls.log" 2>/dev/null || true; }
+
+@test "[RED] stop-if-watcher: a watcher-only session is answered with the STOP-TASKS index, never keep-work" {
+  siw_env watcher
+  siw_drive
+  [[ "$output" == *"stop-if-watcher answered '1' (Exit and stop tasks)"* ]] || false
+  siw_keys | grep -q 'session send -s BGWORK-PANE 1$'
+  ! siw_keys | grep -q 'session send -s BGWORK-PANE 2$'
+}
+
+@test "[RED] stop-if-watcher: real background WORK is answered Stay and held — no index is sent" {
+  siw_env work
+  siw_drive
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"stop-if-watcher HOLDS (its background jobs are not watcher-only"* ]] || false
+  [[ "$output" == *"recycle HELD"*"sent Esc (Stay)"* ]] || false
+  ! siw_keys | grep -qE 'session send -s BGWORK-PANE [0-9]$'
+}
+
+@test "[RED] stop-if-watcher: an unreadable stop-tasks index is answered Stay and held" {
+  siw_env watcher
+  sed -i '' 's/1\. Exit and stop tasks/Exit and stop tasks/' "$SCREEN"
+  siw_drive
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"stop-if-watcher HOLDS"* ]] || false
+  ! siw_keys | grep -qE 'session send -s BGWORK-PANE [0-9]$'
+}
+
+@test "[RED] stop-if-watcher: a pane whose registry row names another session is held" {
+  siw_env watcher
+  printf '{"paneUUID":"%s","pid":5000,"session_id":"someone-else"}\n' "$STUB_PANE" > "$CC_REGISTRY_DIR/$STUB_PANE.json"
+  run env CC_RECYCLE_BGWORK_ANSWER=stop-if-watcher bash "$HF" __recycle "$STUB_PANE" "$BATS_TEST_TMPDIR/no-such-tty" "$CMDFILE" "$BATS_TEST_TMPDIR" siw-sid
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"stop-if-watcher HOLDS (the pane's registry row names session someone-else"* ]] || false
+  ! siw_keys | grep -qE 'session send -s BGWORK-PANE [0-9]$'
+}
+
+@test "[RED] KILL SWITCH: CC_RECYCLE_STOP_IF_WATCHER=off makes the value mean cancel — Stay, held, no index" {
+  siw_env watcher
+  siw_drive CC_RECYCLE_STOP_IF_WATCHER=off
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"stop-if-watcher HOLDS (CC_RECYCLE_STOP_IF_WATCHER=off)"* ]] || false
+  ! siw_keys | grep -qE 'session send -s BGWORK-PANE [0-9]$'
+}
+
+@test "stop-if-watcher leaves the other values alone: the default still answers the keep-work index it read" {
+  siw_env watcher
+  run bash "$HF" __recycle "$STUB_PANE" "$BATS_TEST_TMPDIR/no-such-tty" "$CMDFILE" "$BATS_TEST_TMPDIR"
+  siw_keys | grep -q 'session send -s BGWORK-PANE 2$'
+}

@@ -594,7 +594,19 @@ done
 #   CC_ADMIT_LOAD_TERM  the SAME switch the driver's probe used, so this is not a different gate
 #   CC_ADMIT_MAX_SEGMENT_PCT the swap ceiling the probe used (LR_SEGMENT_PCT; unset ⇒ the spawn 50)
 #   CC_ADMIT_BUDGET_KEY per-RUN refusal counter: one recovery's refusals cannot release another's
-if [ -n "$_LR_CA" ]; then
+# ── A SWAP RUNS NO IN-PANE GATE (design-swap-v3 I8 / F13, 2026-10-04) ───────────────────────────
+# This gate runs AFTER the pane's old claude has exited. For a no-prompt account swap of an idle
+# pane that is the one place a refusal does harm: the token lr-handoff minted is refused
+# token-stale once it is past its 1,020 s TTL (a worker that waited for the pane to go idle can
+# outlive it), the script exits 9, and the pane sits at a bare shell with nobody carrying the
+# session. A swap is also net-zero here (one claude out, one in) and owes no turn. So the lane
+# admits it before /exit (batch admission, then its slot) and the launcher says LR_ADMIT_MODE=swap.
+# Only with --no-prompt: a prompted resume owes a turn and is gated as before. The mode is unset on
+# the spawn line, so the resumed session never inherits it. Kill switch LR_ADMIT_SWAP=off.
+if [ "${LR_ADMIT_MODE:-}" = swap ] && [ "${LR_ADMIT_SWAP:-on}" != off ] && [[ $NO_PROMPT -eq 1 ]]; then
+  echo "-- gate-exempt: swap (a no-prompt account swap is admitted before /exit; nothing refuses after it)" >&2
+  lr_state 'gate-exempt' gate "swap: no in-pane capacity gate for a no-prompt account swap of $SID on $ACCT"
+elif [ -n "$_LR_CA" ]; then
   # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
   . "$_LR_CA"
   # LR_RUN is set only by the FLEET driver (lr-fleet.sh / lr-handoff.sh). This script's OTHER
@@ -1103,9 +1115,9 @@ expect -c '
   set xargs [expr {[info exists env(LR_EXTRA_ARGS)] ? [regexp -all -inline {\S+} $env(LR_EXTRA_ARGS)] : {}}]
   set xenv  [expr {[info exists env(LR_EXTRA_ENV)] ? [regexp -all -inline {\S+} $env(LR_EXTRA_ENV)] : {}}]
   if {$wrap ne ""} {
-    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION -u LR_RUN -u LR_RUN_DIR -u LR_ADMIT_TOKEN -u LR_SUBMIT_TOKEN -u LR_LOAD_TERM -u LR_SEGMENT_PCT -u CC_ADMIT_TOKEN -u CC_ADMIT_WANT_SID -u CC_ADMIT_LOAD_TERM -u CC_ADMIT_BUDGET_KEY -u LR_EXTRA_ARGS -u LR_EXTRA_ENV -u LR_RECORD_ID -u LR_ATTEMPT DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_AGENT_VIEW=1 {*}$xenv CLAUDE_CONFIG_DIR=$cfg $wrap $bin --permission-mode $perm --model $model --effort $effort --resume $sid {*}$xargs
+    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION -u LR_RUN -u LR_RUN_DIR -u LR_ADMIT_TOKEN -u LR_SUBMIT_TOKEN -u LR_LOAD_TERM -u LR_SEGMENT_PCT -u LR_ADMIT_MODE -u CC_ADMIT_TOKEN -u CC_ADMIT_WANT_SID -u CC_ADMIT_LOAD_TERM -u CC_ADMIT_BUDGET_KEY -u LR_EXTRA_ARGS -u LR_EXTRA_ENV -u LR_RECORD_ID -u LR_ATTEMPT DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_AGENT_VIEW=1 {*}$xenv CLAUDE_CONFIG_DIR=$cfg $wrap $bin --permission-mode $perm --model $model --effort $effort --resume $sid {*}$xargs
   } else {
-    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION -u LR_RUN -u LR_RUN_DIR -u LR_ADMIT_TOKEN -u LR_SUBMIT_TOKEN -u LR_LOAD_TERM -u LR_SEGMENT_PCT -u CC_ADMIT_TOKEN -u CC_ADMIT_WANT_SID -u CC_ADMIT_LOAD_TERM -u CC_ADMIT_BUDGET_KEY -u LR_EXTRA_ARGS -u LR_EXTRA_ENV -u LR_RECORD_ID -u LR_ATTEMPT DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_AGENT_VIEW=1 {*}$xenv CLAUDE_CONFIG_DIR=$cfg $bin --permission-mode $perm --model $model --effort $effort --resume $sid {*}$xargs
+    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION -u LR_RUN -u LR_RUN_DIR -u LR_ADMIT_TOKEN -u LR_SUBMIT_TOKEN -u LR_LOAD_TERM -u LR_SEGMENT_PCT -u LR_ADMIT_MODE -u CC_ADMIT_TOKEN -u CC_ADMIT_WANT_SID -u CC_ADMIT_LOAD_TERM -u CC_ADMIT_BUDGET_KEY -u LR_EXTRA_ARGS -u LR_EXTRA_ENV -u LR_RECORD_ID -u LR_ATTEMPT DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_AGENT_VIEW=1 {*}$xenv CLAUDE_CONFIG_DIR=$cfg $bin --permission-mode $perm --model $model --effort $effort --resume $sid {*}$xargs
   }
   # The launch lock now names the spawned claude (env and the wrapper both exec in place, so this
   # pid IS the session). A failure here costs the handover, never the recovery.

@@ -200,3 +200,46 @@ SH
   [[ "$(cat "$LR_SAY_LOG")" != *"NOT SUBMITTED"* ]] || { cat "$LR_SAY_LOG"; false; }
   [ "$(grep -c ' CR$' "$LR_GOT")" = 0 ] || { echo "an Enter was sent over a draft that is not ours"; cat "$LR_GOT"; false; }
 }
+
+# ── A NO-PROMPT ACCOUNT SWAP RUNS NO IN-PANE GATE (design-swap-v3 I8 / F13, 2026-10-04) ───────────
+# The in-pane gate runs after the pane's old claude has exited, so a refusal there strands the pane
+# at a bare shell. The refusal is made deterministic by demanding an impossible headroom: the real
+# gate, on, refuses rc 9 on its first evaluation in a fresh state dir.
+refusing_gate() { export CC_ADMIT_GATE=on CC_ADMIT_MIN_HEADROOM_GB=999999 CC_ADMIT_BUDGET=9; }
+
+@test "control: with the gate refusing and no swap mode, the resume exits 9 and never spawns" {
+  refusing_gate
+  run fire --no-prompt
+  [ "$status" -eq 9 ]
+  [ ! -s "$STUB_OUT.painted" ]
+}
+
+@test "[RED] LR_ADMIT_MODE=swap with --no-prompt skips the refusing gate, says so, and spawns" {
+  refusing_gate
+  LR_ADMIT_MODE=swap run fire --no-prompt
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"-- gate-exempt: swap"* ]] || false
+  [ -s "$STUB_OUT.painted" ]
+  grep -q '"gate-exempt"' "$LR_RUN_DIR/events.jsonl"
+}
+
+@test "kill switch: LR_ADMIT_SWAP=off ignores the mode, and the refusing gate refuses rc 9" {
+  refusing_gate
+  LR_ADMIT_MODE=swap LR_ADMIT_SWAP=off run fire --no-prompt
+  [ "$status" -eq 9 ]
+  [ ! -s "$STUB_OUT.painted" ]
+}
+
+@test "swap mode is for a no-prompt resume only: a prompted resume is still gated" {
+  refusing_gate
+  LR_ADMIT_MODE=swap run fire --prompt "go"
+  [ "$status" -eq 9 ]
+}
+
+@test "[RED] the swap mode never reaches the resumed session: both spawn lines unset it" {
+  run grep -c 'spawn -noecho env .*-u LR_ADMIT_MODE ' "$FIRE"
+  [ "$output" = 2 ]
+  LR_ADMIT_MODE=swap run fire --no-prompt
+  [ "$status" -eq 0 ]
+  ! grep -q '^LR_ADMIT_MODE=' "$STUB_OUT.env"
+}

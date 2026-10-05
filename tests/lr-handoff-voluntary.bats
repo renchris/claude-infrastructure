@@ -59,6 +59,7 @@ printf '%s\n' "$*" >> "${HF_LOG:?}"
 case " $* " in
   *" --probe-recycle-preconditions "*)
     printf 'live_subagents: 0\n'
+    [ -z "${HF_PROBE_SHELL_ROOT_ANSWER:-}" ] || printf 'shell_root: %s\n' "$HF_PROBE_SHELL_ROOT_ANSWER"
     printf 'verdict: %s\n' "${HF_PROBE_VERDICT:-OK}"
     exit "${HF_PROBE_RC:-0}" ;;
 esac
@@ -326,12 +327,12 @@ vol_tx() { # $1 = healthy | limit — the pane's transcript under the SOURCE con
   esac > "$HOME/.claude/projects/-fx/$SID.jsonl"
 }
 
-@test "FAIL-FAST: --voluntary --source-pane on a HEALTHY pane refuses before planning and names cc-lr switch --pane" {
+@test "FAIL-FAST: --voluntary --source-pane on a HEALTHY pane refuses before planning and names cc-lr move" {
   # RED PROOF: the unfixed subject reaches the transplant (LRH_PRECHECK=off here) and exits 0.
   vol_tx healthy
   fire --voluntary
   [ "$status" -eq 6 ] || { echo "$output"; false; }
-  [[ "$output" == *"cc-lr switch --pane 31 --target next2"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"cc-lr move --sid ${SID:0:8} --to next2"* ]] || { echo "$output"; false; }
   [[ "$output" == *"verdict=NOTMOVED"* ]] || { echo "$output"; false; }
   # nothing was planned: no transplant, no recycle, no bundle
   [ ! -s "$TX_LOG" ] || { cat "$TX_LOG"; false; }
@@ -347,13 +348,155 @@ vol_tx() { # $1 = healthy | limit — the pane's transcript under the SOURCE con
   vol_tx healthy
   fire
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [[ "$output" != *"cc-lr switch --pane"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"cc-lr move --sid"* ]] || { echo "$output"; false; }
 }
 
 @test "FAIL-FAST kill switch LRH_VOLUNTARY_FAILFAST=off restores the old path" {
   vol_tx healthy
   LRH_VOLUNTARY_FAILFAST=off fire --voluntary
   [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+# ── 5b. OPERATOR INTENT: the operator's cc-lr move admits a healthy pane (design-swap-v3 D1/F11) ──
+# This section un-pins, on purpose, the rule section 5 pinned: a healthy peer could only move
+# itself. A healthy pane with NEITHER evidence nor an intent is still refused (the case above).
+intent() { # [jq filter to break the valid file] → path of the intent for $SID, pane 31, next → next2
+  local d="$HOME/.reso/limit-recover/move/b1/intent"; mkdir -p "$d"
+  jq -nc --arg sid "$SID" --argjson exp "$(( $(date +%s) + 600 ))" \
+    '{kind:"cc-lr-move",batch:"b1",sid:$sid,pane:"31",from:"next",to:"next2",requested_by:"t",ts:0,expires_epoch:$exp,plan_row_sha:"x"}' \
+    | jq -c "${1:-.}" > "$d/$SID.json"
+  chmod 600 "$d/$SID.json"
+  printf '%s' "$d/$SID.json"
+}
+
+@test "[RED] INTENT: a valid operator intent admits a --voluntary move of a healthy pane" {
+  vol_tx healthy
+  fire --voluntary --operator-intent "$(intent)"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"voluntary move admitted on operator intent"* ]] || false
+  [ -s "$TX_LOG" ]
+}
+
+@test "INTENT kill switch: LR_OPERATOR_INTENT=off refuses the same valid intent, nothing planned" {
+  vol_tx healthy
+  LR_OPERATOR_INTENT=off fire --voluntary --operator-intent "$(intent)"
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"REFUSED:intent-invalid"*"switched-off"* ]] || false
+  [ ! -s "$TX_LOG" ]
+}
+
+@test "INTENT: an expired intent is refused before planning" {
+  vol_tx healthy
+  fire --voluntary --operator-intent "$(intent '.expires_epoch = 1')"
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"REFUSED:intent-invalid"*"expired"* ]] || false
+  [ ! -s "$TX_LOG" ]
+}
+
+@test "INTENT: an intent for another pane, another source or another target is refused" {
+  vol_tx healthy
+  fire --voluntary --operator-intent "$(intent '.pane = "99"')"
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"pane-mismatch"* ]] || false
+  fire --voluntary --operator-intent "$(intent '.from = "next4"')"
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"from-mismatch"* ]] || false
+  fire --voluntary --operator-intent "$(intent '.to = "next3"')"
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"to-mismatch"* ]] || false
+  [ ! -s "$TX_LOG" ]
+}
+
+@test "INTENT: a symlink to a valid intent is refused" {
+  vol_tx healthy
+  f="$(intent)"; mv "$f" "$f.real"; ln -s "$f.real" "$f"
+  fire --voluntary --operator-intent "$f"
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"not-regular"* ]]
+}
+
+@test "INTENT: a session whose last record is a non-limit api error is refused despite a valid intent" {
+  mkdir -p "$HOME/.claude/projects/-fx"
+  printf '{"type":"assistant","timestamp":"2026-09-23T10:00:00.000Z","isApiErrorMessage":true,"message":{"role":"assistant","content":[{"type":"text","text":"API Error: Connection error."}]}}\n' > "$HOME/.claude/projects/-fx/$SID.jsonl"
+  fire --voluntary --operator-intent "$(intent)"
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"REFUSED:intent-api-error"* ]] || false
+  [ ! -s "$TX_LOG" ]
+}
+
+@test "INTENT: --operator-intent without --voluntary is a usage error" {
+  fire --operator-intent "$(intent)"
+  [ "$status" -eq 2 ]
+}
+
+@test "[RED] INTENT reaches the probe with its target, beside --voluntary" {
+  vol_tx healthy
+  f="$(intent)"
+  LRH_PRECHECK=on fire --voluntary --operator-intent "$f"
+  [ "$status" -eq 0 ]
+  grep -e '--probe-recycle-preconditions' "$HF_LOG" | grep -q -e "--operator-intent $f --intent-target next2 --voluntary"
+}
+
+# ── 5c. THE MOVE LANE'S PLACEMENT, SWAP ADMISSION AND --no-replace (F10, F13, F14) ────────────────
+@test "[RED] a cc-lr-move placement mails nothing into the pane it is moving" {
+  vol_tx healthy
+  LR_PLACED_BY=cc-lr-move fire --voluntary --operator-intent "$(intent)"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=SWITCHED"* ]] || false
+  [ ! -s "$NOTIFY_LOG" ]
+}
+
+@test "control: LR_PLACED_BY_MOVE=off replays the old behaviour — the verdict is mailed to the pane" {
+  vol_tx healthy
+  LR_PLACED_BY=cc-lr-move LR_PLACED_BY_MOVE=off fire --voluntary --operator-intent "$(intent)"
+  [ "$status" -eq 0 ]
+  grep -q '^31 ' "$NOTIFY_LOG"
+}
+
+@test "[RED] a cc-lr-move placement skips the router read; without it the router is asked" {
+  vol_tx healthy
+  printf '#!/bin/bash\necho asked >> "%s/rank.log"\necho next2\n' "$BATS_TEST_TMPDIR" > "$STUB/claude-accounts"; chmod +x "$STUB/claude-accounts"
+  mkdir -p "$HOME/bin"; cp "$STUB/claude-accounts" "$HOME/bin/claude-accounts"
+  f="$(intent)"
+  CC_ACCOUNTS_BIN="$STUB/claude-accounts" LRH_PRECHECK=on LR_PLACED_BY=cc-lr-move fire --voluntary --operator-intent "$f"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"LR_PLACED_BY=cc-lr-move: the router check is skipped"* ]] || false
+  [ ! -e "$BATS_TEST_TMPDIR/rank.log" ]
+}
+
+@test "[RED] SWAP: LR_ADMIT_MODE=swap with --no-prompt runs no capacity decision and the launcher carries the mode" {
+  vol_tx healthy
+  LRH_PRECHECK=on LR_PLACED_BY=cc-lr-move LR_ADMIT_MODE=swap fire --voluntary --no-prompt --operator-intent "$(intent)"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"LR_ADMIT_MODE=swap with --no-prompt: no capacity probe and no admission token"* ]] || false
+  grep -rqx 'export LR_ADMIT_MODE=swap' "$HOME/.reso/limit-recover"
+}
+
+@test "SWAP control: LR_ADMIT_SWAP=off, or no --no-prompt, keeps the capacity decision and writes no mode" {
+  vol_tx healthy
+  LRH_PRECHECK=on LR_PLACED_BY=cc-lr-move LR_ADMIT_MODE=swap LR_ADMIT_SWAP=off fire --voluntary --no-prompt --operator-intent "$(intent)"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"no capacity probe and no admission token"* ]] || false
+  ! grep -rq 'LR_ADMIT_MODE' "$HOME/.reso/limit-recover" || false
+  LRH_PRECHECK=on LR_PLACED_BY=cc-lr-move LR_ADMIT_MODE=swap fire --voluntary --operator-intent "$(intent)"
+  [[ "$output" == *"LR_ADMIT_MODE=swap is ignored without --no-prompt"* ]] || false
+  ! grep -rq 'LR_ADMIT_MODE' "$HOME/.reso/limit-recover"
+}
+
+@test "[RED] --no-replace: a probe that says shell_root: no is HELD:no-shell before anything moves" {
+  vol_tx healthy
+  HF_PROBE_SHELL_ROOT_ANSWER=no LRH_PRECHECK=on LR_PLACED_BY=cc-lr-move fire --voluntary --no-prompt --no-replace --operator-intent "$(intent)"
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"HELD:no-shell"* ]] || false
+  [ ! -s "$TX_LOG" ]
+}
+
+@test "--no-replace control: without the flag, or with shell_root yes/unknown, the precheck proceeds" {
+  vol_tx healthy
+  HF_PROBE_SHELL_ROOT_ANSWER=no LRH_PRECHECK=on LR_PLACED_BY=cc-lr-move fire --voluntary --no-prompt --operator-intent "$(intent)"
+  [ "$status" -eq 0 ]
+  HF_PROBE_SHELL_ROOT_ANSWER=unknown LRH_PRECHECK=on LR_PLACED_BY=cc-lr-move fire --voluntary --no-prompt --no-replace --operator-intent "$(intent)"
+  [ "$status" -eq 0 ]
 }
 
 # ── SONNET 5.5 THINKING IS ACCOUNT-BOUND (2026-09-28) ─────────────────────────────────────────────

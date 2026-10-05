@@ -10,6 +10,7 @@
 #                      [--source-pane PANE-ID] [--in-place] [--spawn]
 #                      [--voluntary] [--reason TEXT]
 #                      [--record-id R] [--attempt N] [--account-evidence FILE] [--no-prompt]
+#                      [--operator-intent FILE] [--no-replace]
 #
 # RECONCILER INTERFACE (LIMIT_RECOVER_FLEET_V2 W2a). Every item below is INERT unless its caller
 # sets it, so a legacy caller's launcher and every argv this script emits stay byte-identical.
@@ -19,6 +20,17 @@
 #   --account-evidence FILE  a quota fact (`<acct>.<scope>.json`) that admits a --voluntary move
 #                    of a pane that is not limit-blocked; an invalid fact refuses rc 6.
 #   --no-prompt      the launcher resumes with lr-fire-resume --no-prompt and runs no ingest verify.
+#   --operator-intent FILE  the operator's `cc-lr move` intent for THIS session, pane, source and
+#                    target (lr-intent.sh): admits a --voluntary move of a healthy pane, as account
+#                    evidence does. An invalid file refuses rc 6. Kill switch LR_OPERATOR_INTENT=off.
+#   --no-replace     a launcher-rooted pane (no shell survives its /exit) is HELD:no-shell with
+#                    nothing moved, instead of being replaced by a successor beside it.
+#   env LR_PLACED_BY=cc-lr-move  the move lane placed this: router check skipped (the batch ranked
+#                    the target once), no pane mail (mail wakes a no-prompt resume), and the
+#                    background-work dialog is never answered keep-work. LR_PLACED_BY_MOVE=off
+#                    treats the value as unset.
+#   env LR_ADMIT_MODE=swap  with --no-prompt: one claude out, one in, so no capacity probe, no
+#                    token and no in-pane gate (nothing may refuse after /exit). LR_ADMIT_SWAP=off.
 #   env LR_PLACED_BY=reconciler  skips the router check, forces CC_RECYCLE_BGWORK_ANSWER=cancel and
 #                    selects the reconciler continue prompt. LR_ASSIGN_ID is recorded and demands an
 #                    explicit --target. LR_ADMIT_TOKEN_PATH hands admission to the caller.
@@ -256,7 +268,7 @@ LRH_SPAWN_SHAPE=""
 
 CWD="$(pwd)" CONTEXT="" LAUNCH=0 PRINT_ONLY=0 NO_TRANSPLANT=0 KEEP_SOURCE=0 FORCE=0 CLOSE_SOURCE=0 IN_PLACE=0 SPAWN=0
 VOLUNTARY=0 REASON=""
-RECORD_ID="" ATTEMPT="" ACCOUNT_EVIDENCE="" NO_PROMPT=0
+RECORD_ID="" ATTEMPT="" ACCOUNT_EVIDENCE="" NO_PROMPT=0 OPERATOR_INTENT="" NO_REPLACE=0
 MODEL_EXPLICIT=0 EFFORT_EXPLICIT=0
 SOURCE_PANE=""
 # Set by lrh_resolve_implied_pane branch (b) and read by lrh_precheck. It MUST be initialised
@@ -287,10 +299,36 @@ while [[ $# -gt 0 ]]; do
     --attempt) ATTEMPT="$2"; shift 2 ;;
     --account-evidence) ACCOUNT_EVIDENCE="$2"; shift 2 ;;
     --no-prompt) NO_PROMPT=1; shift ;;
+    --operator-intent) OPERATOR_INTENT="$2"; shift 2 ;;
+    --no-replace) NO_REPLACE=1; shift ;;
     *) echo "lr-handoff: unknown arg $1" >&2; exit 2 ;;
   esac
 done
 [[ -n "$SID" ]] || { echo "lr-handoff: no --sid and CLAUDE_CODE_SESSION_ID unset" >&2; exit 2; }
+[[ -z "$OPERATOR_INTENT" || $VOLUNTARY -eq 1 ]] || { echo "lr-handoff: --operator-intent is only meaningful with --voluntary" >&2; exit 2; }
+# WHO PLACED THIS MOVE. A placed move's target was ranked by its placer and its subject asked
+# nothing, so the router re-read, the pane mail and a human-answered dialog are all wrong for it.
+# The reconciler was the only placer; the operator's move lane (cc-lr move, design-swap-v3) is the
+# second. Its submit token and continue prompt stay the reconciler's alone (see the launcher mint).
+lrh_placed() { # → 0 when a placer owns this move's routing and reporting
+  case "${LR_PLACED_BY:-}" in
+    reconciler) return 0 ;;
+    cc-lr-move) [[ "${LR_PLACED_BY_MOVE:-on}" != off ]] ;;
+    *) return 1 ;;
+  esac
+}
+# A SWAP IS NET-ZERO FOR CAPACITY, AND NOTHING MAY REFUSE AFTER /exit (design-swap-v3 I8, F13). A
+# no-prompt move of an idle pane ends one claude and starts one, and owes no turn. Gating it twice
+# (a probe and token here, the in-pane gate after /exit) had one failure that mattered: a token past
+# its 1,020 s TTL is refused token-stale (rc 9) by the gate that runs AFTER the pane's claude is
+# gone, and the pane sits at a bare shell. The lane admits once, at batch time and at its slot,
+# both before /exit. Only with --no-prompt: a prompted resume owes a turn and keeps every gate.
+lrh_swap() { # → 0 when this run is an admitted swap
+  [[ "${LR_ADMIT_MODE:-}" == swap && "${LR_ADMIT_SWAP:-on}" != off && $NO_PROMPT -eq 1 ]]
+}
+if [[ "${LR_ADMIT_MODE:-}" == swap && $NO_PROMPT -ne 1 ]]; then
+  echo "lr-handoff: note — LR_ADMIT_MODE=swap is ignored without --no-prompt: a prompted resume owes a turn, so it keeps the capacity gate" >&2
+fi
 [[ -z "$ATTEMPT" || "$ATTEMPT" =~ ^[0-9]+$ ]] || { echo "lr-handoff: --attempt must be a non-negative integer (got '$ATTEMPT')" >&2; exit 2; }
 # A PLACED ACTUATOR CARRIES ITS TARGET. The reconciler chose the account when it wrote the
 # assignment; letting `auto` re-route here would move the session somewhere the assignment does not
@@ -590,6 +628,33 @@ lrh_evidence_check() { # $1=fact file → 0 valid (LRH_EV_SCOPE, LRH_EV_RESETS s
   read -r _ LRH_EV_SCOPE LRH_EV_RESETS <<<"$out"
   return 0
 }
+# ── OPERATOR INTENT: A HEALTHY PANE MOVED BY ITS OPERATOR, NOT BY ITSELF (design-swap-v3 D1/F11) ──
+# Checked whenever the flag is given, not only when the fail-fast below runs: an intent that does
+# not bind this exact move is a refusal on every path. The file's rules live in lr-intent.sh, the one
+# validator handoff-fire's probe uses too.
+LRH_INTENT_OK=0
+if [[ -n "$OPERATOR_INTENT" ]]; then
+  for _lrh_il in "$(dirname "$0")/lr-intent.sh" "$LR/lr-intent.sh"; do
+    # shellcheck source=/dev/null
+    [[ -f "$_lrh_il" ]] && { source "$_lrh_il"; break; }
+  done
+  # The map names `.claude-next` and `claude` but not the dotted `.claude`, the mirror spelling a
+  # session on `next` usually runs under; an unnamed source would refuse every move off `next`
+  # as from-mismatch. So the dotless basename is asked when the dotted one has no name.
+  _lrh_ib="${CFG%/}"; _lrh_ib="${_lrh_ib##*/}"
+  _lrh_isrc="$(cc_acct_name_for_dir_basename "$_lrh_ib" 2>/dev/null || true)"
+  [[ -n "$_lrh_isrc" ]] || _lrh_isrc="$(cc_acct_name_for_dir_basename "${_lrh_ib#.}" 2>/dev/null || true)"
+  if ! command -v lr_intent_check >/dev/null 2>&1; then
+    LR_INTENT_WHY="unavailable: lr-intent.sh is not beside lr-handoff.sh, so no intent can be checked"
+  elif lr_intent_check "$OPERATOR_INTENT" "$SID" "$SOURCE_PANE" "$_lrh_isrc" "$TARGET"; then
+    LRH_INTENT_OK=1
+  fi
+  if [[ $LRH_INTENT_OK -ne 1 ]]; then
+    echo "lr-handoff: REFUSED:intent-invalid — $LR_INTENT_WHY (pane ${SOURCE_PANE:-none}, session ${SID:0:8}, intent $OPERATOR_INTENT). Nothing was planned, transplanted, locked or waited on." >&2
+    echo "lr-handoff: verdict=NOTMOVED from=- to=${TARGET:--} proven=no trigger=voluntary — refused before planning: the operator intent does not authorise this move ($LR_INTENT_WHY)" >&2
+    exit 6
+  fi
+fi
 if [[ $VOLUNTARY -eq 1 && -n "$SOURCE_PANE" && "${LRH_VOLUNTARY_FAILFAST:-on}" != off ]] \
    && command -v lr_last_api_error >/dev/null 2>&1; then
   _lrh_vtx=""
@@ -609,10 +674,23 @@ if [[ $VOLUNTARY -eq 1 && -n "$SOURCE_PANE" && "${LRH_VOLUNTARY_FAILFAST:-on}" !
         exit 6
       fi
     fi
+    # An intent admits a HEALTHY pane (no api error) and nothing else: a session whose last record
+    # is a network, auth or overload error is not idle-and-well, and restarting it under the
+    # operator's name would bury that error. It stays refused, with the reason named.
+    if [[ "$_lrh_vkind" != limit && $_lrh_ev_ok -eq 0 && $LRH_INTENT_OK -eq 1 ]]; then
+      if [[ -z "$_lrh_vkind" ]]; then
+        echo "lr-handoff: voluntary move admitted on operator intent $OPERATOR_INTENT" >&2
+        _lrh_ev_ok=1
+      else
+        echo "lr-handoff: REFUSED:intent-api-error — pane $SOURCE_PANE (session ${SID:0:8}) last ended on an api error of kind '$_lrh_vkind'; an operator intent moves a healthy or limit-blocked pane only. Nothing was planned, transplanted, locked or waited on." >&2
+        echo "lr-handoff: verdict=NOTMOVED from=- to=${TARGET:--} proven=no trigger=voluntary — refused before planning: the session's last record is an api error ($_lrh_vkind), which an operator intent does not cover" >&2
+        exit 6
+      fi
+    fi
     if [[ "$_lrh_vkind" != limit && $_lrh_ev_ok -eq 0 ]]; then
       echo "lr-handoff: REFUSED:not-limited — pane $SOURCE_PANE (session ${SID:0:8}) is not limit-blocked (last api error: ${_lrh_vkind:-none}), and a --voluntary move of ANOTHER pane is refused by the recycle probe's limit gate every time. Nothing was planned, transplanted, locked or waited on." >&2
-      echo "lr-handoff: to move a healthy peer, ask it to move itself: cc-lr switch --pane $SOURCE_PANE --target $TARGET" >&2
-      echo "lr-handoff: verdict=NOTMOVED from=- to=${TARGET:--} proven=no trigger=voluntary — refused before planning: a healthy peer is moved by cc-lr switch --pane, not by lr-handoff --voluntary --source-pane" >&2
+      echo "lr-handoff: to move a healthy peer, use the move lane, which writes the operator intent this needs: cc-lr move --sid ${SID:0:8} --to $TARGET" >&2
+      echo "lr-handoff: verdict=NOTMOVED from=- to=${TARGET:--} proven=no trigger=voluntary — refused before planning: a healthy peer is moved by cc-lr move, not by lr-handoff --voluntary --source-pane without an operator intent" >&2
       exit 6
     fi
   fi
@@ -685,7 +763,9 @@ lrh_verdict() { # <TOKEN> <proven yes|no> <note>
   # and the mail lands in its inbox the moment the recycle is armed, before the /exit: its watcher
   # wakes it, it takes a turn mid-move, and the last read holds it (W5b real canary 3). The
   # reconciler reads the outcome from its own records; the verdict stays on stderr, its actuator log.
-  [[ "${LR_PLACED_BY:-}" == reconciler ]] && return 0
+  # The move lane's subject asked nothing either, and its resume is no-prompt: 3 of 3 mailed
+  # no-prompt resumes took a turn on the mail, 0 of 5 unmailed ones did (design-swap-v3 F10).
+  lrh_placed && return 0
   to="${LRH_SELF_PANE:-$SOURCE_PANE}"
   if [[ -z "$to" ]]; then
     echo "lr-handoff: the verdict names no pane to mail (neither a self pane nor --source-pane), so it is stderr-only: $msg" >&2
@@ -1237,8 +1317,8 @@ lrh_precheck() { # → 0 admitted (token minted) / 6 HELD|REFUSED|PARKED, nothin
   # A RECONCILER PLACEMENT HAS ALREADY ASKED THE ROUTER: it chose the target from the same ranking
   # when it wrote the assignment, so a second read here can only disagree with a decision already
   # recorded — and a disagreement at this layer strands the assignment instead of re-placing it.
-  if [[ "${LR_PLACED_BY:-}" == reconciler ]]; then
-    echo "lr-handoff: precheck — LR_PLACED_BY=reconciler: the router check is skipped (the reconciler ranked '$TARGET' when it placed this move)" >&2
+  if lrh_placed; then
+    echo "lr-handoff: precheck — LR_PLACED_BY=$LR_PLACED_BY: the router check is skipped ($LR_PLACED_BY ranked '$TARGET' when it placed this move)" >&2
   elif ! lrh_target_routable; then
     lrh_state REFUSED precheck "target $TARGET not ranked by the router"
     return 6
@@ -1266,6 +1346,14 @@ lrh_precheck() { # → 0 admitted (token minted) / 6 HELD|REFUSED|PARKED, nothin
         echo "lr-handoff: note — the live $hf does not parse --account-evidence; the probe is run without it" >&2
       fi
     fi
+    if [[ -n "$OPERATOR_INTENT" ]]; then
+      if grep -q -- '--operator-intent)' "$hf" 2>/dev/null; then
+        probe_extra+=(--operator-intent "$OPERATOR_INTENT" --intent-target "$TARGET")
+        [[ " ${probe_extra[*]} " == *" --voluntary "* ]] || probe_extra+=(--voluntary)
+      else
+        echo "lr-handoff: note — the live $hf does not parse --operator-intent; the probe is run without it and its limit gate will refuse a healthy pane" >&2
+      fi
+    fi
     out="$("$hf" --probe-recycle-preconditions --source-pane "$SOURCE_PANE" --source-session "$SID" ${probe_extra[@]+"${probe_extra[@]}"} 2>&1)" || rc=$?
     printf '%s\n' "$out" | sed 's/^/lr-handoff: precheck /' >&2
     state="$(printf '%s\n' "$out" | sed -n 's/^verdict: //p' | tail -1)"
@@ -1278,6 +1366,17 @@ lrh_precheck() { # → 0 admitted (token minted) / 6 HELD|REFUSED|PARKED, nothin
     if [[ $rc -ne 0 ]]; then
       echo "lr-handoff: PRECHECK ${state:-REFUSED:unknown} — NOTHING has been transplanted, no lock and no tombstone were written, and the source session is untouched." >&2
       lrh_state "${state%%:*}" precheck "${state:-REFUSED:unknown}"
+      return 6
+    fi
+    # ── --no-replace: A LAUNCHER-ROOTED PANE IS HELD HERE, BEFORE ANYTHING MOVES (F14) ───────────────
+    # Such a pane has no shell under its claude, so a /exit closes the window and there is nothing
+    # to relaunch into. That used to surface only at fire time, after the admit, and the answer was
+    # REPLACE: a successor beside the source. The move lane promises the SAME pane, so it asks the
+    # probe's `shell_root:` line first and holds; `yes`, `unknown` or no line proceeds.
+    if [[ $NO_REPLACE -eq 1 && "$(printf '%s\n' "$out" | sed -n 's/^shell_root: //p' | tail -1)" == no ]]; then
+      echo "lr-handoff: PRECHECK HELD:no-shell — pane $SOURCE_PANE is launcher-rooted (no shell survives its /exit) and --no-replace forbids a successor beside it. NOTHING has been transplanted, no lock and no tombstone were written, and the source session is untouched." >&2
+      echo "lr-handoff: verdict: HELD:no-shell" >&2
+      lrh_state HELD precheck "HELD:no-shell"
       return 6
     fi
     # ── THE ONLY WRITER OF killed_inflight (W3i B3) ──────────────────────────────────────────────
@@ -1340,7 +1439,10 @@ lrh_precheck() { # → 0 admitted (token minted) / 6 HELD|REFUSED|PARKED, nothin
   # box its own batch is loading, and a second mint would be a token nobody redeems. So the token
   # is READ from the path it names. An empty or missing file is no token: the relaunch then
   # evaluates the gate fresh in the pane, which is the caller's design, and it is logged as such.
-  if [[ -n "${LR_ADMIT_TOKEN_PATH:-}" ]]; then
+  if lrh_swap; then
+    echo "lr-handoff: precheck — LR_ADMIT_MODE=swap with --no-prompt: no capacity probe and no admission token (one claude out, one in; the placer admitted this move before /exit, and the relaunch runs no in-pane gate)" >&2
+    lrh_state admitted gate "gate-exempt: swap (no probe, no token; placed_by=${LR_PLACED_BY:--})"
+  elif [[ -n "${LR_ADMIT_TOKEN_PATH:-}" ]]; then
     LRH_ADMIT_TOKEN="$(head -n 1 "$LR_ADMIT_TOKEN_PATH" 2>/dev/null | tr -d '[:space:]' || true)"
     if [[ -n "$LRH_ADMIT_TOKEN" ]]; then
       echo "lr-handoff: precheck — admission owned by the caller: token $LRH_ADMIT_TOKEN read from $LR_ADMIT_TOKEN_PATH (no probe, no mint)" >&2
@@ -1574,6 +1676,10 @@ export LR_SEGMENT_PCT=$(printf '%q' "${LR_SEGMENT_PCT:-90}")
 ${LRH_LR_REPO:+export LR_REPO=$(printf '%q' "$LRH_LR_REPO")}
 
 EOF
+# Appended, never a line inside the heredoc above: a legacy caller's launcher stays byte-identical.
+# The mode is read by lr-fire-resume's in-pane gate and unset on its spawn line, so it never
+# reaches the resumed session.
+if lrh_swap; then printf 'export LR_ADMIT_MODE=swap\n\n' >> "$LAUNCHER"; fi
 # THE LAUNCHER'S TAIL IS ONE OF THREE, CHOSEN AT MINT TIME (W2a). A legacy caller gets the tail it
 # always got, byte for byte (tests/lr-handoff-launcher-quoting.bats pins it); --no-prompt and a
 # reconciler placement each get their own. Split into appended heredocs so the legacy bytes are
@@ -1741,7 +1847,9 @@ if [[ $IN_PLACE -eq 1 ]]; then
   # until someone answers it, and a reconciler batch has nobody to answer; its in-flight units were
   # counted by the precheck (killed_inflight) and are re-audited by the ingest. Forced, whatever the
   # caller set — a legacy caller's value passes through untouched.
-  if [[ "${LR_PLACED_BY:-}" == reconciler ]]; then
+  # The move lane may ask for stop-if-watcher instead (a session whose only background job is a
+  # mailbox watcher exits and stops it); that value never answers keep-work, so it passes through.
+  if lrh_placed && [[ "${LR_PLACED_BY:-}" != cc-lr-move || "${CC_RECYCLE_BGWORK_ANSWER:-}" != stop-if-watcher ]]; then
     export CC_RECYCLE_BGWORK_ANSWER=cancel
   fi
   # The recycle and its watcher CONSUME these; exported explicitly so a value this process holds as
@@ -1801,7 +1909,9 @@ if [[ $IN_PLACE -eq 1 ]]; then
     rm -f "$LRH_RCY_ERR" 2>/dev/null || true
     echo "$BUNDLE"; exit 0
   fi
-  if grep -q 'has NO shell under its session' "$LRH_RCY_ERR" 2>/dev/null; then
+  _lrh_noshell=0
+  if grep -q 'has NO shell under its session' "$LRH_RCY_ERR" 2>/dev/null; then _lrh_noshell=1; fi
+  if [[ $_lrh_noshell -eq 1 && $NO_REPLACE -eq 0 ]]; then
     # The source's root is its own launcher (an expect-rooted pane): a /exit there closes the WINDOW,
     # so there is no shell to relaunch into. REPLACE in place instead — the successor is spawned
     # beside the SOURCE (anchor = the source pane, never the driver) and the source is retired through
@@ -1833,6 +1943,9 @@ if [[ $IN_PLACE -eq 1 ]]; then
     # handoff-fire has exited, so abort's live-holder refusals cannot fire on us). The reason comes
     # from handoff-fire's own recycle-held-* row, or `unknown`.
     _lrh_reason="$(lrh_held_reason)"
+    # --no-replace: the fire-time refusal of a launcher-rooted pane is a hold like any other, and
+    # the admit is withdrawn below. (The precheck holds it earlier when the probe can say so.)
+    [[ $_lrh_noshell -eq 1 ]] && _lrh_reason=no-shell
     _lrh_ab_rc=0
     _lrh_ab_out="$("$LR/lr-transplant.sh" --phase abort --sid "$SID" --from "$CFG" --to "$TCFG" \
         ${RECORD_ID:+--record-id "$RECORD_ID"} ${HF_WATCHER_RECORD:+--watcher-record "$HF_WATCHER_RECORD"} 2>&1)" || _lrh_ab_rc=$?
