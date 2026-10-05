@@ -65,7 +65,8 @@ def blockers(slug: str, wave: Optional[str]) -> Dict[str, Any]:
     if prog is None:
         raise kit.KitError(f"program {slug!r} is not registered")
     state = prog.get("state")
-    if state != "certified":
+    # a fix wave runs during Stage 9 (REPORT.md §11), so both build states fire a wave too
+    if state not in ("certified",) + kit.BUILD_STATES:
         reasons.append(
             f"registry state is {state!r}, not 'certified': no build wave fires before the gate passes"
         )

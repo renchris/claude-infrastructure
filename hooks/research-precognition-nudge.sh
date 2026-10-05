@@ -40,7 +40,7 @@ if [ "${CC_RESEARCH_ROUTER:-}" != off ] && [ -z "${CC_RESEARCH_ROUTER_INNER:-}" 
     _out="$(printf '%s' "$INPUT" | /usr/bin/env python3 "$RR_ROUTER" prompt \
               --program "${_res%% *}" --state "${_res##* }" --by "$_by" 2>/dev/null)"
     if [ -n "$_out" ]; then printf '%s\n' "$_out"; exit 0; fi
-    case "${_res##* }" in certifying|certified) exit 0 ;; esac   # routed silently (work-order)
+    case "${_res##* }" in certifying|certified|build-certifying|build-certified) exit 0 ;; esac   # routed silently (work-order)
   fi
 fi
 

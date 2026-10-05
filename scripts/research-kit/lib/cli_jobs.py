@@ -4,9 +4,9 @@
   cc-research job sweep|freshness|triage|drift|market [--program P] [--json]
 
 Run by launchd through scripts/research-kit/jobs/research-job.sh, never because a question was asked.
-No --program: every registry program in certifying|certified (the sweep also takes a registered one
-with an open packet). Each pass appends records only and prints one summary line per program; exit 1
-if any program's pass failed (the others still run).
+No --program: every registry program in certifying|certified or a Stage 9 build state (REPORT.md
+§11; the sweep also takes a registered one with an open packet). Each pass appends records only and
+prints one summary line per program; exit 1 if any program's pass failed (the others still run).
 
   sweep      gate_sweep.cmd_sweep: fired class-B defaults, overdue class-C conversions, known rows.
              Also run on a registered program whose decision records name a packet and are not yet
@@ -44,7 +44,8 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 import kit
 
 REPO = Path(__file__).resolve().parents[3]
-ACTIVE = ("certifying", "certified")
+RESEARCH_ACTIVE = ("certifying", "certified")
+ACTIVE = RESEARCH_ACTIVE + kit.BUILD_STATES  # §11: the jobs still visit a program in Stage 9
 DAY = 86400.0
 RULE_GLOBS = (
     "CLAUDE.global.md",
@@ -84,8 +85,11 @@ def open_packet(slug: str) -> bool:
 
 
 def scanned(job: str) -> str:
-    return "|".join(ACTIVE) + (
-        ", nor registered with an open packet" if job == "sweep" else ""
+    return (
+        "|".join(RESEARCH_ACTIVE)
+        + (", nor registered with an open packet" if job == "sweep" else "")
+        + ", nor in "
+        + "|".join(kit.BUILD_STATES)
     )
 
 

@@ -11,14 +11,16 @@
 # THE REGISTRY CONTRACT (wave A2's gate.sh is its only writer; do not change the shape here):
 #   file   ${CC_RESEARCH_REGISTRY:-$HOME/.claude/autonomy/research/programs.json}
 #   shape  {"programs":[{"slug":str,"aliases":[str],"cwd_roots":[abs path],
-#                        "state":"registered"|"certifying"|"certified"|"closed"}]}
+#                        "state":"registered"|"certifying"|"certified"|"build-certifying"|
+#                                "build-certified"|"closed"}]}
 #
 # FUNCTIONS (source this file; Bash 3.2-safe, because hooks and launchd jobs source it):
 #   rp_resolve_cwd <dir>  prints "<slug> <state>" for the program one of whose cwd_roots contains
 #                         <dir> (the root itself or any path under it; the longest root wins), else
 #                         prints nothing. Always exits 0.
-#   rp_is_active <dir>    exit 0 iff <dir> resolves to a program in state registered, certifying or
-#                         certified; exit 1 otherwise (closed, unregistered, no registry).
+#   rp_is_active <dir>    exit 0 iff <dir> resolves to a program in state registered, certifying,
+#                         certified, build-certifying or build-certified (method v1.2, REPORT.md
+#                         §11); exit 1 otherwise (closed, unregistered, no registry).
 #   rp_resolve_prompt <text>  prints "<slug> <state>" for the program whose slug or one of whose
 #                         aliases appears in <text> as a whole word, case-insensitively (the longest
 #                         match wins; two programs tied on it is ambiguous and prints nothing), else
@@ -111,7 +113,7 @@ rp_resolve_cwd() {
 rp_is_active() {
   _rp_resolve "${1:-}"
   case "${_RP_RESULT##* }" in
-    registered|certifying|certified) [ -n "$_RP_RESULT" ] && return 0 ;;
+    registered|certifying|certified|build-certifying|build-certified) [ -n "$_RP_RESULT" ] && return 0 ;;
   esac
   return 1
 }

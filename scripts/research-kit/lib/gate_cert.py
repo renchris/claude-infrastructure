@@ -7,7 +7,8 @@ gate.sh freeze --program P
     Re-runnable while certifying, because each fix cycle between rounds yields a new snapshot.
 gate.sh render --program P        (also `gate.sh --render --program P`)
     the certificate's state lines, the ONE read a completeness or pushback turn may make (§4.2).
-    A pure read: it writes nothing and runs nothing, so it is fast and repeatable.
+    A pure read: it writes nothing and runs nothing, so it is fast and repeatable. In a Stage 9
+    build state (§11) it prints the same lines plus one "Built:" line read from built/.
 (gate.sh run calls write_certificate once every row passes.)
 """
 
@@ -29,6 +30,13 @@ REPO = Path(__file__).resolve().parents[3]
 # next-version idea, not a change to the certified answer, so it is not a material change.
 COUNTED_CAUSES = ("escape", "frame_defect", "operator_unelicited", "reality_moved")
 SCHEDULED_RESIDUAL = ("production-traffic", "elapsed-time")
+# The §11 forecast split a v1.2 certificate carries (RECORDS.md "Stage 9 records", last bullet).
+SPLIT_KEYS = (
+    "build_findable_share",
+    "before_impl_mean",
+    "after_impl_mean",
+    "after_impl_bound95",
+)
 
 
 def git(repo: str, *args: str) -> Optional[str]:
@@ -192,6 +200,8 @@ def write_certificate(ctx: Ctx, rows: List[Row]) -> str:
         # the change ids already on record, so a change after signoff is known even if undated
         "changes_at_issue": sorted(folded_changes(ctx.records)),
     }
+    if kit.is_v12(ctx.frame):
+        cert["forecast"].update(impl_split(cert["forecast"]))
     path = ctx.records / "cert" / f"CERT-v{n}.json"
     kit.write_json_atomic(path, cert)
     # the .md keeps the issue-time snapshot; `gate.sh render` re-reads the records every time
@@ -200,6 +210,19 @@ def write_certificate(ctx: Ctx, rows: List[Row]) -> str:
         + "\n"
     )
     return str(path)
+
+
+def impl_split(fc: Dict[str, Any]) -> Dict[str, Any]:
+    """§11: the §3.12 mean split by the assumed build-findable share. The 95% bound is NOT split,
+    because an assumed share may not tighten a bound."""
+    share = kit.BUILD_FINDABLE_SHARE
+    total = fc["desk_mean"] + fc["invisible_mean"]
+    return {
+        "build_findable_share": share,
+        "before_impl_mean": round(share * total, 4),
+        "after_impl_mean": round((1 - share) * total, 4),
+        "after_impl_bound95": fc["desk_n95"] + fc["invisible_bound95"],
+    }
 
 
 def folded_changes(rec: Path) -> Dict[str, Dict[str, Any]]:
@@ -316,6 +339,14 @@ def lines_for(
         f"Next version: {s['parked']} ideas parked · Frame defects {s['frame_defects']} · "
         f"Unasked intent {s['unasked_intent']}",
     ]
+    if all(k in fc for k in SPLIT_KEYS):  # a v1.2 certificate (§11); a 1.1 one prints as before
+        out.insert(
+            3,
+            f"Split: before implementation signoff about {fc['before_impl_mean']:.1f} · after "
+            f"implementation signoff about {fc['after_impl_mean']:.1f} (at most "
+            f"{fc['after_impl_bound95']} at 95%); build-findable share {fc['build_findable_share']}, "
+            "share assumed",
+        )
     if cert.get("known_rows"):
         out.append(
             "Known rows: "
@@ -366,6 +397,19 @@ def lines_for(
     return out
 
 
+def built_line(rec: Path, state: str) -> str:
+    """§11: the built stage's one state line, read from built/ at every render."""
+    certs = sorted(
+        (rec / "built").glob("BUILT-CERT-v*.json"),
+        key=lambda p: int("".join(c for c in p.stem if c.isdigit()) or 0),
+    )
+    bc = (kit.read_json(certs[-1], {}) or {}) if certs else {}
+    if state == "build-certified" and bc:
+        return f"Built: certified {bc.get('issued')} (BUILT-CERT-v{bc.get('version')})"
+    fz = kit.read_json(rec / "built" / "freeze.json", {}) or {}
+    return f"Built: frozen {fz.get('frozen_at') or 'at an unrecorded time'}, not yet certified"
+
+
 def cmd_render(a: Any) -> int:
     kit.check_slug(a.program)
     prog = kit.registry_get(a.program)
@@ -383,7 +427,7 @@ def cmd_render(a: Any) -> int:
         if rec
         else []
     )
-    if state != "certified" or not certs:
+    if state not in ("certified",) + kit.BUILD_STATES or not certs:
         mats = (
             [kit.read_json(p) for p in (rec / "rounds").glob("*/matrix.json")]
             if rec
@@ -405,7 +449,10 @@ def cmd_render(a: Any) -> int:
         )
         return 0
     cert = kit.read_json(certs[-1])
-    print("\n".join(lines_for(a.program, cert, state, live_state(rec, cert))))
+    out = lines_for(a.program, cert, "certified", live_state(rec, cert))
+    if state in kit.BUILD_STATES:
+        out.append(built_line(rec, state))
+    print("\n".join(out))
     return 0
 
 
