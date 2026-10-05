@@ -136,6 +136,43 @@ setup() {
   [ "$status" -eq 0 ]; [ "$output" = "keepthistail" ]
 }
 
+# THE PANE-254 SHAPE (measured 2026-10-05): a 45-column pane whose TOP rule carries a notice, so no
+# row but the bottom one holds a run of 12. Read UNKNOWN at rest; every self-recycle was refused.
+mk_labeled_screen() { # $1..: composer rows under a labeled top rule
+  { echo "  the last line of a reply"; echo ""
+    echo "── Claude Code instruction files size limit ─"
+    for r in "$@"; do echo "$r"; done
+    echo "$B"; echo "  (3) #254 d425afab 53%"; } > "$SCREEN_FILE"
+}
+
+@test "[RED] a LABELED top border in a narrow pane still locates the box — empty reads EMPTY" {
+  mk_labeled_screen "$GLYPH "
+  run composer_content it2 sid
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  run recycle_composer_gate it2 sid 0 1
+  [ "$status" -eq 0 ]
+}
+
+@test "NEGATIVE CONTROL: a DRAFT under a labeled top border is still a draft, and still holds" {
+  mk_labeled_screen "$GLYPH fix the margin" "  and the footer"
+  run composer_content it2 sid
+  [ "$status" -eq 0 ]; [ "$output" = "fixthemarginandthefooter" ]
+  run recycle_composer_gate it2 sid 0 1
+  [ "$status" -eq 1 ]
+}
+
+@test "a label cut short by a narrower pane (no closing rule) stays UNKNOWN — never EMPTY" {
+  { echo "── Claude Code instruction fi…"; echo "$GLYPH "; echo "$B"; } > "$SCREEN_FILE"
+  run composer_content it2 sid
+  [ "$status" -eq 1 ]
+}
+
+@test "a draft row that itself looks like a rule is not a border: it is indented, and it is content" {
+  mk_screen "$GLYPH ── not a border ─" "  ── nor this ─"
+  run composer_content it2 sid
+  [ "$status" -eq 0 ]; [ "$output" = "──notaborder───northis─" ]
+}
+
 @test "a coloured border row still locates the box" {
   local cb=$'\e[m\e[38:2:136:136:136m'"$B"
   { echo "noise"; echo "$cb"; printf '%s\n' $'\e[m❯\xc2\xa0\e[2msuggested'; echo "$cb"; echo "  (4) status"; } > "$SCREEN_FILE"

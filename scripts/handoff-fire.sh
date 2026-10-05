@@ -3805,9 +3805,21 @@ composer_content() { # $1=it2-bin $2=session-id → stdout: printable composer c
   [ -n "$scr" ] || return 1
   # The BOX is located on an escape-free copy (line count preserved), so a colour change inside a
   # border row can never hide it; its ROWS are then taken from the rendered copy.
+  # A BORDER MAY CARRY A LABEL (pane 254, 2026-10-05). Claude Code prints a notice INTO the top rule
+  # ("── Claude Code instruction files size limit ─"), and in a 45-column pane that leaves no run of
+  # 12 anywhere on the row: the box read UNKNOWN at rest and every self-recycle was refused. Such a
+  # row is still a border: it starts at column 0 with two rule characters and ends with one. A
+  # composer row cannot match (it starts with the prompt glyph or two spaces), and a label cut short
+  # by a narrower pane stays UNKNOWN, which refuses. scripts/lib/cc-tui.sh and
+  # scripts/lib/lr-composer-snapshot.sh carry the same function.
   plain="$(printf '%s\n' "$scr" | LC_ALL=C perl -pe 's/\e\[[0-?]*[ -\/]*[@-~]|\e\][^\a\e]*(?:\a|\e\\)?|\e.//g')"
-  span="$(printf '%s\n' "$plain" | LC_ALL=C awk -v b="$b12" '
-    { if (index($0, b) > 0) { b2 = b1; b1 = NR } }
+  span="$(printf '%s\n' "$plain" | LC_ALL=C awk -v b="$b12" -v u='─' '
+    function border(s,   t) {                 # a full rule, or a LABELED one: "── label ─" from column 0
+      if (index(s, b) > 0) return 1
+      t = s; sub(/[ \t\r]+$/, "", t)
+      return (index(t, u u) == 1 && length(t) > 3 * length(u) && substr(t, length(t) - length(u) + 1) == u)
+    }
+    { if (border($0)) { b2 = b1; b1 = NR } }
     END {
       if (b1 == 0 || b2 == 0 || b1 - b2 < 2) exit 9      # no box between two borders ⇒ UNKNOWN
       print (b2 + 1) "," (b1 - 1)

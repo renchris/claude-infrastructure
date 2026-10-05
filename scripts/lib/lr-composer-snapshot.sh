@@ -48,8 +48,13 @@ _lcs_load_tui() {
 lcs_draft_rows() { # $1=file with the --ansi screen → rows on stdout; rc 0 parsed · 1 no input box
   local f="${1:-}" span rc b12='────────────'
   [ -f "$f" ] || return 1
-  span="$(LC_ALL=C perl -pe 's/\e\[[0-?]*[ -\/]*[@-~]|\e\][^\a\e]*(?:\a|\e\\)?|\e.//g' "$f" | LC_ALL=C awk -v b="$b12" '
-    { if (index($0, b) > 0) { b2 = b1; b1 = NR } }
+  span="$(LC_ALL=C perl -pe 's/\e\[[0-?]*[ -\/]*[@-~]|\e\][^\a\e]*(?:\a|\e\\)?|\e.//g' "$f" | LC_ALL=C awk -v b="$b12" -v u='─' '
+    function border(s,   t) {                 # a full rule, or a LABELED one: "── label ─" from column 0
+      if (index(s, b) > 0) return 1
+      t = s; sub(/[ \t\r]+$/, "", t)
+      return (index(t, u u) == 1 && length(t) > 3 * length(u) && substr(t, length(t) - length(u) + 1) == u)
+    }
+    { if (border($0)) { b2 = b1; b1 = NR } }
     END { if (b1 == 0 || b2 == 0 || b1 - b2 < 2) exit 9; print (b2 + 1) "," (b1 - 1) }')" && rc=0 || rc=$?
   [ "$rc" = 0 ] || return 1
   LC_ALL=C sed -n "${span}p" "$f" | LC_ALL=C perl -ne '

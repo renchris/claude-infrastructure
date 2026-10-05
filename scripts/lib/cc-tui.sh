@@ -191,8 +191,13 @@ cc_tui_composer_rows() { # $1=window id → stdout: rows; rc 0 parsed / 1 UNKNOW
   scr="$(cc_tui_rpc get-text --match "id:$id" --extent screen --ansi 2>/dev/null)" || scr=""
   [ -n "$scr" ] || scr="$(cc_tui_screen "$id")" || return 1
   plain="$(printf '%s\n' "$scr" | LC_ALL=C perl -pe 's/\e\[[0-?]*[ -\/]*[@-~]|\e\][^\a\e]*(?:\a|\e\\)?|\e.//g')"
-  span="$(printf '%s\n' "$plain" | LC_ALL=C awk -v b="$b12" '
-    { if (index($0, b) > 0) { b2 = b1; b1 = NR } }
+  span="$(printf '%s\n' "$plain" | LC_ALL=C awk -v b="$b12" -v u='─' '
+    function border(s,   t) {                 # a full rule, or a LABELED one: "── label ─" from column 0
+      if (index(s, b) > 0) return 1
+      t = s; sub(/[ \t\r]+$/, "", t)
+      return (index(t, u u) == 1 && length(t) > 3 * length(u) && substr(t, length(t) - length(u) + 1) == u)
+    }
+    { if (border($0)) { b2 = b1; b1 = NR } }
     END {
       if (b1 == 0 || b2 == 0 || b1 - b2 < 2) exit 9
       print (b2 + 1) "," (b1 - 1)
