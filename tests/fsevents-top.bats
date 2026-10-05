@@ -7,6 +7,7 @@
 # exact and nothing outside the test's own directory is read.
 
 setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   T="$REPO/scripts/fsevents-top.py"
   D="$(cd "$BATS_TEST_TMPDIR" && pwd -P)/watched"; mkdir -p "$D/hot" "$D/cold"

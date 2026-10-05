@@ -10,6 +10,7 @@
 bats_require_minimum_version 1.5.0
 
 setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   MIG="$REPO/migrations/0057-fseventsd-watchdog.sh"
   F="$BATS_TEST_TMPDIR/fx"; mkdir -p "$F"
