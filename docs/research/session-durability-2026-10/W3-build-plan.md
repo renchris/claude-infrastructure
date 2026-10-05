@@ -676,7 +676,7 @@ This table replaces the phase table near the top of the file. Only the W3 lead e
 |---|---|---|---|---|
 | P1b | W3.1 | landed, content-verified | 250 / `w3-p1b` | `973ea82f4` |
 | P2 | W3.1 | landed, content-verified | 251 / `w3-p2-land` | `f40fad0d1` (feat), tests `558191bc8` `583170c62` `1f44391ec` |
-| P6 | W3.1 | fired 2026-10-05 after the memory storm cleared | 258 / `w3-p6-land` | |
+| P6 | W3.1 | landed, content-verified; no-band build staged at `/Applications/kitty.app.staged` (adopting it is the operator's) | 258 / `w3-p6-land` | `35979ed78` (patch, build --no-band), `e1bb2624c` (band-link check) |
 | P8 | W3.2 (no dependency, fired early) | landed, content-verified | 261 / `w3-p8` | `4b8915441` (feat), tests `fd50f450b` `4bbbb0dc1` |
 | P3a-i | W3.2 | landed, content-verified | 266 / `w3-p3a-i` | `bfdb948ef` |
 | P3b | W3.2 | landed, content-verified | 267 / `w3-p3b` | `96a0591dc` (feat), `6b30ad551` (fix), tests `124f51717` `760e13771` |
@@ -691,3 +691,6 @@ This table replaces the phase table near the top of the file. Only the W3 lead e
 - **2026-10-04, P8. A forward on a reused kitty window id can hijack mail.** kitty reuses window ids after a restart, so a forward on an old decimal key would capture mail meant for whichever new session gets that id. Rebind refuses keys that a restored window or another registry row holds, but a forward written now has no expiry. The fix is a drain-side clear in `mailbox-pending.sh` or `mailbox-drain`, which no W3 phase owns yet. P5 wires rebind into `cc-restore`, so it is the phase to carry it unless the lead assigns it elsewhere.
 - **2026-10-04, P2. `reso-resume-one`'s fence waits up to `CC_RESUME_FENCE_WAIT_S`=20 s on a held lock**, because `boot-resume-launch` and `cc-resume-debt` hold it while opening the kitty window, and kitty does not pass their environment through.
 - **2026-10-04, lead. Under memory pressure, ship-land reports a sentinel SIGKILL as a code RED (exit 6).** The compressor sentinel (`retrip-over-debt`) killed gate children for about an hour while fseventsd held a 61 GB footprint. Every land failed with "test-hermeticity RED" or "selftest FAILED", and none named a file. Check land output for `Killed: 9` before treating an exit 6 as a code failure.
+- **2026-10-05, P3b. A `maybe` row confirmed by holder count and `SessionStart:resume` gets no map line**, because its window id is unknown. P4, P5, P7 and `cc-restore-rebind` must not assume one map line per restored sid. The layout's summary line now also carries `maybe=` and `stopped=`.
+- **2026-10-05, P3b. `boot-resume.sh:567-569`'s comment still says 2x2**; whichever phase next owns `boot-resume.sh` (P4) corrects it.
+- **2026-10-05, P3a-i. Event mode restores only from a heartbeat** (no heartbeat means exit 3, `no-heartbeat`). `--kind crash` picks the newest heartbeat whose kitty is dead, unless `--kitty-pid` or `--roster-dir` is given. On a new boot the tick runs after DETECT, because `cc-sessions` sweeps registry rows that have been dead for more than 24 h. P5's `cc-restore` builds on these rules.
