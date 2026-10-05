@@ -43,6 +43,9 @@ SH
   # a fresh copy of the fixture event dir per test (the subject writes rebind.log into it)
   EV="$BATS_TEST_TMPDIR/events/1791200000"; mkdir -p "$EV"
   cp "$FIX"/event/* "$EV"/
+  # The tracked fixture spells each empty cell @PAD@; the 0x1f sentinel the row contract uses is put
+  # in here, so no tracked file holds the raw byte (tests/tsv-field-collapse.bats guards that).
+  sed "s/@PAD@/"$'\037'"/g" "$EV/rows.tsv.in" > "$EV/rows.tsv"; rm -f "$EV/rows.tsv.in"
   : > "$EV.done"
   ACCTS="$FIX/accounts.json"
   # registry rows for the restored windows, with a LIVE pid (this test process) so roles can claim
