@@ -262,9 +262,11 @@ def warm_sock() -> Path:
 def warm_classify(text: str, timeout: float) -> Tuple[str, str]:
     """Ask the resident classifier (classifier-warm.py, wave E1c), which keeps classifier processes
     started ahead of the prompt. Returns ("answer", its raw reply), ("cold", why) when no process
-    took the prompt (no daemon, none ready: make the cold call), or ("spent", why) when one took it
-    and failed. It never yields a label of its own: the caller parses the reply as it parses a cold
-    call's."""
+    took the prompt (no daemon, none ready), or ("failed", why) when one took it and errored or
+    did not answer. Only "answer" ends the classification: the caller makes the cold call on both
+    others, inside what is left of the limit (wave E1f: the resident classifier is an accelerator,
+    never a single point of failure). It never yields a label of its own: the caller parses the
+    reply as it parses a cold call's."""
     path = warm_sock()
     if os.environ.get("CC_RESEARCH_WARM") == "0" or not path.exists():
         return "cold", "no resident classifier"
@@ -286,14 +288,15 @@ def warm_classify(text: str, timeout: float) -> Tuple[str, str]:
             buf += chunk
         out = json.loads(buf.split(b"\n", 1)[0])
     except (OSError, ValueError):
-        return "spent", f"the resident classifier did not answer in {timeout:g} s"
+        return "failed", f"the resident classifier did not answer in {timeout:g} s"
     finally:
         s.close()
     if isinstance(out, dict) and out.get("ok") and isinstance(out.get("text"), str):
         return "answer", out["text"]
     if isinstance(out, dict) and out.get("cold"):
         return "cold", str(out.get("why") or "no warm process ready")
-    return "spent", str((out or {}).get("why") if isinstance(out, dict) else "bad reply")
+    why = out.get("why") if isinstance(out, dict) else None
+    return "failed", str(why or "the resident classifier sent a bad reply")
 
 
 def classify(prompt: str, cert: str) -> Tuple[Optional[str], str]:
@@ -316,11 +319,13 @@ def classify(prompt: str, cert: str) -> Tuple[Optional[str], str]:
         if len(labels) != 1 or labels[0] not in ROUTES:
             return None, f"classifier answered {' '.join(labels)[:60]!r}, not one route label"
         return labels[0], "classifier (resident)"
-    if state == "spent":
-        return None, reply
+    # A resident classifier that took the prompt and failed is not the classifier failing: it was
+    # alive but logged out for a whole activation (incident 2026-10-05) and every prompt fell back
+    # in 0.2 s with 8.8 s unspent. Only the cold call below can end in `unavailable`.
+    warm_failed = reply if state == "failed" else ""
     timeout -= time.time() - t0
     if timeout <= 0:
-        return None, "classifier timed out before the cold call"
+        return None, warm_failed or "classifier timed out before the cold call"
     argv = classifier_argv()
     if argv is None:
         return None, "no classifier: `claude` is not on PATH"
@@ -346,6 +351,8 @@ def classify(prompt: str, cert: str) -> Tuple[Optional[str], str]:
         return None, f"classifier exited {p.returncode}"
     if len(labels) != 1 or labels[0] not in ROUTES:
         return None, f"classifier answered {' '.join(labels)[:60]!r}, not one route label"
+    if warm_failed:
+        return labels[0], f"classifier (cold call; the resident one failed: {warm_failed[:120]})"
     return labels[0], "classifier"
 
 

@@ -22,9 +22,14 @@
 # --dry-run prints what a real run would do and touches nothing. A real run refuses until the live
 # layer carries the runner and the daemon, then copies the plist into ~/Library/LaunchAgents and
 # bootstraps it; a label already loaded from identical bytes is left alone, so a re-run is a no-op.
-# The effect is read back by a different call than the one that made it: the daemon must answer
-# `classifier-warm.py ping` (it answers within 1 s once up; this waits up to 30 s for the start).
-# Exit 1 when the label is not loaded or the daemon does not answer.
+# The effect is read back by a different call than the one that made it: `classifier-warm.py ping`
+# must report an ANSWERED classification, not a live process (wave E1f; incident 2026-10-05: the
+# first activation read "ready 2" back from a daemon whose processes were logged out). A start is
+# an account ranking, a login probe and the daemon's own first round-trip, so this waits up to 90 s.
+# A job already loaded from identical bytes whose daemon is not answering is restarted once
+# (`launchctl kickstart -k`), so a re-run is how the job is moved onto newly converged code; one
+# that is answering is left alone and the re-run is a no-op.
+# Exit 1 when the label is not loaded or no worker answers.
 set -uo pipefail
 
 REPO="${CC_MIGRATION_REPO:-$HOME/Development/claude-infrastructure}"
@@ -32,7 +37,7 @@ LA="${CC_MIGRATION_LA_DIR:-$HOME/Library/LaunchAgents}"
 RUNNER="$HOME/.claude/scripts/research-kit/jobs/classifier-warm.sh"
 DAEMON="$HOME/.claude/scripts/research-kit/classifier-warm.py"
 LABEL="com.claude.research-classifier-warm"
-PING_TRIES="${CC_MIGRATION_PING_TRIES:-30}"
+PING_TRIES="${CC_MIGRATION_PING_TRIES:-90}"
 
 dry=0
 case "${1:-}" in
@@ -67,6 +72,13 @@ done
 mkdir -p "$LA" "$HOME/.claude/logs"
 if launchctl print "gui/$uid/$LABEL" >/dev/null 2>&1 && cmp -s "$src" "$dst"; then
   echo "0059: $LABEL already loaded from the repo plist"
+  if ! /usr/bin/python3 "$DAEMON" ping >/dev/null 2>&1; then
+    if ! launchctl kickstart -k "gui/$uid/$LABEL"; then
+      echo "0059: $LABEL is loaded but not answering, and its restart FAILED" >&2
+      exit 1
+    fi
+    echo "0059: $LABEL was loaded but not answering; restarted on the live code"
+  fi
 else
   launchctl bootout "gui/$uid/$LABEL" >/dev/null 2>&1 || true   # a stale copy is replaced, not doubled
   cp "$src" "$dst"
@@ -90,5 +102,5 @@ while [ "$i" -lt "$PING_TRIES" ]; do
   i=$((i + 1))
   sleep 1
 done
-echo "0059: $LABEL is loaded but its daemon did not answer a ping in ${PING_TRIES} s — read $HOME/.claude/logs/research-classifier-warm.err.log" >&2
+echo "0059: $LABEL is loaded but no worker answered a classification in ${PING_TRIES} s — read $HOME/.claude/logs/research-classifier-warm.err.log" >&2
 exit 1

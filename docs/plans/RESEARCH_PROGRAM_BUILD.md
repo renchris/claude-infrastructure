@@ -656,6 +656,8 @@ here. Never change row 15's thresholds, the 9 s limit or the sealed sets; never 
 - **Fallback.** With no socket, a socket nobody answers, a daemon with no process ready, or `CC_RESEARCH_WARM=0`,
   `router.py classify` makes the cold call it made before, inside what is left of the same 9 s. A daemon that took
   the prompt and failed yields `unavailable` (the limit is spent), never a second try.
+  CORRECTED (2026-10-05): that last rule is what turned a logged-out daemon into a fallback on every prompt; wave
+  E1f replaced it (a warm failure now falls through to the cold call).
 - **Tests, red then green** (2026-10-04, load ~68). Red: in a snapshot of this commit with trunk's `router.py` and
   `fleet.manifest`, `research-classifier-warm.bats` + `cc-fleet.bats` ran `1..44` with 4 `not ok` (the three
   warm-answer router tests and the manifest count); the cold-path tests (no daemon, none ready,
@@ -725,6 +727,67 @@ measurements around one sealed file).
   `com.claude.research-classifier-warm` returns the router to the cold path.
 - Status: **BLOCKED 2026-10-05**, reported to the wave lead. Evidence outside the repo:
   `/tmp/e1e/warm-latency.json` (per call: label, reason, wall, load).
+#### E1f — the activated warm classifier answered nothing; three fixes — BUILT, landing (2026-10-05)
+Scope (frozen): three fixes, each with a red-then-green test that replays the incident's shape (a daemon that is
+alive but logged out). (1) `router.py`: a warm-path error or no answer falls through to the cold call inside the
+9 s limit; only a cold-path failure is a fallback. (2) The runner serves under an explicit, logged-in account
+chosen from `claude-accounts --rank general`, verified by a cheap call, and exits non-zero when none is logged in;
+re-checked on each restart. (3) `ping` reports answering workers (a real classification round-trip), not a process
+count, and the cc-fleet check for the job uses it. Tested under `/bin/bash` 3.2.57 with launchd's minimal
+environment. Land, converge, file the restart as one operator step. Never change row 15's thresholds, the 9 s
+limit, the sealed sets or the classifier configuration; sealed v2 is not read here (wave E1e owns that read).
+Locus S (fired `fire-rp-v12-e1f`), lead-inline (why: three small fixes in four files that share one test suite).
+
+- **The incident** (wave E1e, 2026-10-05 01:36-01:41 CDT; evidence `/tmp/e1e/warm-latency.json`,
+  `/tmp/e1e/warm-latency.out`). After the operator ran migration `0059`, the live router on the tuning set
+  (n = 96) got 0 warm answers and fell back 96 times out of 96, median 0.20 s, every call "the warm classifier
+  process reported an error". launchd started the daemon with no `CLAUDE_CONFIG_DIR`, so its `claude` read
+  `~/.claude`, which is logged out ("Not logged in · Please run /login"). `ping` still said "ready 2", because it
+  counted live processes, and 0059 read that back as success. `router.py` treated the warm error as the limit
+  spent and made no cold call, so from activation every re-ask classification on this machine fell back: worse
+  than before activation, with 8.8 s of the limit unspent each time. At 01:39 `launchctl print` showed the job
+  still loaded and running (pid 22202, runs 1).
+- **A second cause, found here.** With HOME and PATH alone `claude` 2.1.278 answers "Not logged in" under every
+  account's config dir, including logged-in ones: it looks its login up in the keychain under `$USER` (measured:
+  `USER` unset or wrong fails, `USER` right answers). launchd does set `USER` for a user agent today, so the
+  incident needed only the missing config dir; the runner now sets `USER` and `LOGNAME` itself when they are
+  absent, so it does not depend on that.
+- **Fix 1, router.** `warm_classify` returns `failed` instead of `spent`, and `classify` makes the cold call on it
+  with what is left of the same limit. A warm answer that is not one route label stays `unavailable` with no
+  second try (that is an answer, not a failure), and a warm process that used the whole limit leaves nothing
+  for a cold call. Not done, on purpose: capping the warm wait below 9 s to always leave a cold call room. With
+  thinking on, a slow warm answer and a cold call cannot both fit, and a cap would turn slow warm answers into
+  cold timeouts; it would also be a change to the limit's use that row 15 did not measure.
+- **Fix 2, runner** (`scripts/research-kit/jobs/classifier-warm.sh`). It walks `claude-accounts --rank general`
+  (absolute path, bounded at 60 s, read from a file so a killed ranking cannot hold a pipe open), puts one real
+  classification through each candidate with the new `classifier-warm.py probe`, and execs the daemon under the
+  first that answers with `CLAUDE_CONFIG_DIR` exported. With no ranking it tries every account in
+  `accounts.json` order. With none answering it exits 1 and serves nothing. The daemon exits 1 after three
+  failed round-trips in a row, so a login that lapses mid-run sends launchd back through the runner.
+- **Fix 3, readiness.** The daemon puts one real classification (the router's own brief) through a worker at
+  start, every 900 s, and at once when a prompt fails; `ping` exits 0 only while the last one succeeded and is
+  fresh, 2 when a daemon is up but no worker has answered, 1 when no daemon answers. Each success rewrites
+  `~/.claude/autonomy/research/classifier-warm/answered`. The `fleet.manifest` row moved `staged | 0 | -` to
+  `run | 900 | <that stamp>` (the operator ran 0059, so `staged` had expired): cc-fleet reads a daemon that
+  stopped answering STALLED and a runner with no login FAILING. Migration 0059's read-back and its
+  `migration-verify` line are that `ping`, so `registration-state.sh` and `c10-batch.sh` use it too; a re-run of
+  0059 on a job that is loaded but not answering restarts it once (`launchctl kickstart -k`) and waits up to
+  90 s for an answered round-trip. The cost is one Haiku classification per 15 minutes plus two per start.
+- **Tests, red then green** (2026-10-05, load ~18-20). Red: `tests/research-classifier-warm.bats` run against
+  `git archive` of the pre-fix commit `472ba14c4` printed `1..31` with 12 `not ok`: all ten incident replays
+  (ping on a logged-out daemon, the stamp, a daemon that stops answering, the exit after three failures,
+  `probe`, the three runner cases, and the two router fall-throughs) plus the two migration cases. The red run
+  predates one tightening of the stub (it now also needs `USER`), which can only fail more. Green on this
+  branch: that suite with `cc-fleet.bats`, `research-router.bats`, `launchd-parity-lint.bats` and
+  `install-staged-plist.bats` printed `1..111`, no `not ok`. The runner cases run `/bin/bash` 3.2.57 under
+  `env -i` with HOME and PATH only. One test (`after a warm failure only a COLD failure is a fallback`) passes
+  on both sides and is a no-regression claim, not a replay.
+- **Checked against the real thing** (not sealed data; five ad-hoc prompts). The fixed runner, started with
+  `env -i HOME PATH` on a private socket with the real `claude` and the real ranking, picked `next2`, reported
+  ready after 20 s, and `router.classify` got five resident answers in 1.41, 5.67, 6.93, 2.98 and 4.53 s. The
+  fixed `ping` pointed at the live, still-hollow daemon exits 2.
+- **Unchanged:** row 15's thresholds, the 9 s limit, the sealed sets, the classifier's command line and brief
+  (`router.classifier_argv()` and `CLASSIFIER_BRIEF` are untouched; the readiness round-trip reuses both).
 
 #### E2 — triage precision study (v1.2 (a), measurement half) — RUNNING
 - Locus: a Workflow in session d8964eb2, started 2026-10-04. Results: `docs/research/triage-precision-study-2026-10-04/`.

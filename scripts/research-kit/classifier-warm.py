@@ -8,8 +8,14 @@ a small pool of classifier processes already started and waiting for their one p
 prompt to the oldest of them. A process labels ONE prompt and is ended, so no prompt ever shares a
 context with another; the pool is refilled behind it.
 
-  classifier-warm.py serve     the daemon (launchd job com.claude.research-classifier-warm, staged)
-  classifier-warm.py ping      "ready N" and exit 0 when the daemon answers within 1 s; else exit 1
+  classifier-warm.py serve     the daemon (launchd job com.claude.research-classifier-warm)
+  classifier-warm.py ping      "ready N" and exit 0 when the daemon's last classification round-trip
+                               succeeded and is fresh; exit 2 when a daemon is up but no worker has
+                               answered (alive but logged out); exit 1 when no daemon answers in 1 s
+  classifier-warm.py probe [--timeout S]
+                               no daemon: start one classifier process under this environment, put
+                               one classification through it, exit 0 when it answers and 1 when it
+                               does not (the runner's login check for a candidate account)
   classifier-warm.py ask [--timeout S]
                                classifier input on stdin, the classifier's raw answer on stdout;
                                exit 3 when the daemon is absent or has no process ready (make the
@@ -21,12 +27,23 @@ and when this daemon is absent, busy or wrong the router makes the cold call or 
 
 One JSON line each way on a unix socket ($CC_RESEARCH_HOME/classifier-warm/sock, mode 0600 in a 0700
 directory): {"op":"ask","text":…,"timeout":S} -> {"ok":true,"text":…} | {"ok":false,"why":…,
-"cold":bool}; {"op":"ping"} -> {"ok":true,"ready":N}. `cold` true means no process took the prompt.
+"cold":bool}; {"op":"ping"} -> {"ok":true,"ready":N,"answering":bool,"why":…}. `cold` true means no
+process took the prompt.
+
+Readiness is an answered classification, never a process count (wave E1f; incident 2026-10-05: launchd
+started the daemon with no CLAUDE_CONFIG_DIR, its processes sat alive and logged out, and `ping` said
+"ready 2" while every prompt failed). The daemon puts one real classification through a worker at
+start, every CANARY_S after, and at once when a prompt fails; each success rewrites the stamp
+$CC_RESEARCH_HOME/classifier-warm/answered, which is the job's evidence in launchd/fleet.manifest.
+After CANARY_FAILS_EXIT failures in a row the daemon exits 1, so launchd restarts the runner and the
+runner picks an account again.
 
 Test seams: CC_RESEARCH_WARM_SOCK (socket path; a unix socket path is capped near 100 bytes),
 CC_RESEARCH_WARM_CHILD (a shell command standing in for the classifier process: one stream-json user
 line on stdin, one {"type":"result","result":…} line on stdout), CC_RESEARCH_WARM_POOL,
-CC_RESEARCH_WARM_MAX_AGE (seconds an unused process is kept).
+CC_RESEARCH_WARM_MAX_AGE (seconds an unused process is kept), CC_RESEARCH_WARM_CANARY (seconds
+between readiness round-trips), CC_RESEARCH_WARM_CANARY_TIMEOUT (seconds one may take),
+CC_RESEARCH_WARM_CANARY_RETRY (first wait after a failed one; it doubles), CC_RESEARCH_WARM_STAMP.
 """
 
 from __future__ import annotations
@@ -54,6 +71,11 @@ import kit  # noqa: E402
 POOL = 2  # processes kept waiting; two cover a prompt arriving while the pool refills
 MAX_AGE_S = 900.0  # an unused process is replaced after this long, so none waits on a stale login
 PING_TIMEOUT_S = 1.0
+CANARY_S = 900.0  # fleet.manifest declares this cadence for the `answered` stamp; move both together
+CANARY_TIMEOUT_S = 30.0  # a start plus one answer; the router's 9 s limit is not this and is not here
+CANARY_RETRY_S = 5.0
+CANARY_FAILS_EXIT = 3
+CANARY_PROMPT = "is the classifier answering?"
 STREAM_FLAGS = [
     "--input-format",
     "stream-json",
@@ -141,7 +163,10 @@ class Child:
                         continue
                     if isinstance(ev, dict) and ev.get("type") == "result":
                         if ev.get("is_error") or not isinstance(ev.get("result"), str):
-                            return None, "the warm classifier process reported an error"
+                            said = " ".join(str(ev.get("result") or "").split())[:80]
+                            return None, "the warm classifier process reported an error" + (
+                                f": {said}" if said else ""
+                            )
                         return ev["result"], "warm"
         except (OSError, AssertionError) as e:
             return None, f"the warm classifier process failed: {e.__class__.__name__}"
@@ -215,7 +240,99 @@ class Pool:
             c.end()
 
 
-def handle(conn: socket.socket, pool: Pool) -> None:
+def stamp_path() -> Path:
+    env = os.environ.get("CC_RESEARCH_WARM_STAMP")
+    return Path(env) if env else sock_path().parent / "answered"
+
+
+def canary_text() -> str:
+    import router  # the brief a real prompt is labeled with, so the round-trip is a classification
+
+    return router.CLASSIFIER_BRIEF.format(cert="(none rendered)", prompt=CANARY_PROMPT)
+
+
+def env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name) or default)
+    except ValueError:
+        return default
+
+
+class Health:
+    """Whether a worker has answered: the last round-trip's outcome and when it was."""
+
+    def __init__(self, fresh_s: float):
+        self.lock = threading.Lock()
+        self.fresh_s = fresh_s
+        self.ok, self.at, self.fails = False, 0.0, 0
+        self.why = "no classification round-trip has completed yet"
+        self.check = threading.Event()  # set to run a round-trip now
+
+    def good(self) -> None:
+        with self.lock:
+            self.ok, self.at, self.fails, self.why = True, time.time(), 0, ""
+        try:
+            stamp_path().write_text(f"{int(time.time())}\n")
+        except OSError:
+            pass
+
+    def bad(self, why: str, count: bool = False) -> int:
+        with self.lock:
+            self.ok, self.why = False, why
+            self.fails += 1 if count else 0
+            return self.fails
+
+    def state(self) -> Tuple[bool, str]:
+        with self.lock:
+            if self.ok and time.time() - self.at > self.fresh_s:
+                return False, "the last answered round-trip is too old to vouch for the workers"
+            return self.ok, self.why
+
+
+def canary(pool: Pool, health: Health, quit: Any) -> None:
+    """One real classification through a worker at start, every CANARY_S, and when asked."""
+    every = env_float("CC_RESEARCH_WARM_CANARY", CANARY_S)
+    timeout = env_float("CC_RESEARCH_WARM_CANARY_TIMEOUT", CANARY_TIMEOUT_S)
+    retry = env_float("CC_RESEARCH_WARM_CANARY_RETRY", CANARY_RETRY_S)
+    text = canary_text()
+    while not pool.stop:
+        health.check.clear()
+        child, deadline = None, time.time() + timeout
+        while child is None and time.time() < deadline and not pool.stop:
+            child = pool.take()
+            if child is None:
+                time.sleep(0.2)
+        if child is None:
+            answer, why = None, "no warm classifier process became ready"
+        else:
+            try:
+                answer, why = child.ask(text, timeout)
+            finally:
+                threading.Thread(target=child.end, daemon=True).start()
+        if pool.stop:
+            return
+        if answer is not None and answer.strip():
+            health.good()
+            wait = every
+        else:
+            fails = health.bad(why or "the warm classifier answered nothing", count=True)
+            print(
+                f"classifier-warm: readiness round-trip {fails} failed: {why}",
+                file=sys.stderr,
+                flush=True,
+            )
+            if fails >= CANARY_FAILS_EXIT:
+                print(
+                    "classifier-warm: no worker answers; exiting so the runner picks an account again",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                quit(1)
+            wait = min(60.0, retry * 2.0 ** (fails - 1))
+        health.check.wait(wait)
+
+
+def handle(conn: socket.socket, pool: Pool, health: Health) -> None:
     try:
         conn.settimeout(5.0)
         buf = b""
@@ -229,7 +346,13 @@ def handle(conn: socket.socket, pool: Pool) -> None:
         except ValueError:
             req = {}
         if req.get("op") == "ping":
-            out: Dict[str, Any] = {"ok": True, "ready": pool.ready()}
+            answering, why = health.state()
+            out: Dict[str, Any] = {
+                "ok": True,
+                "ready": pool.ready(),
+                "answering": answering,
+                "why": why,
+            }
         elif req.get("op") == "ask" and isinstance(req.get("text"), str):
             child = pool.take()
             if child is None:
@@ -244,6 +367,12 @@ def handle(conn: socket.socket, pool: Pool) -> None:
                     answer, why = child.ask(req["text"], timeout)
                 finally:
                     threading.Thread(target=child.end, daemon=True).start()
+                if answer is not None:
+                    health.good()
+                else:
+                    if "did not answer in" not in why:  # slow is not logged out; the check decides
+                        health.bad(why)
+                    health.check.set()
                 out = (
                     {"ok": True, "text": answer}
                     if answer is not None
@@ -314,25 +443,57 @@ def serve() -> int:
     except ValueError:
         size, max_age = POOL, MAX_AGE_S
     pool = Pool(argv, size, max_age)
-    threading.Thread(target=pool.fill, daemon=True).start()
+    every = env_float("CC_RESEARCH_WARM_CANARY", CANARY_S)
+    health = Health(2.0 * every + env_float("CC_RESEARCH_WARM_CANARY_TIMEOUT", CANARY_TIMEOUT_S))
+    try:
+        stamp_path().unlink()  # a stamp is this daemon's own proof, never a predecessor's
+    except OSError:
+        pass
 
-    def bye(*_: Any) -> None:
+    def quit(code: int) -> None:
         pool.close()
         try:
             p.unlink()
         except OSError:
             pass
-        os._exit(0)
+        os._exit(code)
+
+    def bye(*_: Any) -> None:
+        quit(0)
 
     signal.signal(signal.SIGTERM, bye)
     signal.signal(signal.SIGINT, bye)
+    threading.Thread(target=pool.fill, daemon=True).start()
+    threading.Thread(target=canary, args=(pool, health, quit), daemon=True).start()
     print(
         f"classifier-warm: serving on {p}, {size} process(es) kept ready",
         file=sys.stderr,
     )
     while True:
         conn, _ = srv.accept()
-        threading.Thread(target=handle, args=(conn, pool), daemon=True).start()
+        threading.Thread(target=handle, args=(conn, pool, health), daemon=True).start()
+
+
+def probe(timeout: float) -> int:
+    """No daemon: does a classifier process started under THIS environment answer one prompt?"""
+    argv = child_argv()
+    if argv is None:
+        print("classifier-warm: no classifier command (`claude` is not on PATH)", file=sys.stderr)
+        return 1
+    try:
+        child = Child(argv)
+    except OSError as e:
+        print(f"classifier-warm: the classifier did not start: {e.__class__.__name__}", file=sys.stderr)
+        return 1
+    try:
+        answer, why = child.ask(canary_text(), timeout)
+    finally:
+        child.end()
+    if answer is not None and answer.strip():
+        print("answering")
+        return 0
+    print(f"classifier-warm: {why or 'the classifier answered nothing'}", file=sys.stderr)
+    return 1
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -340,16 +501,28 @@ def main(argv: Optional[List[str]] = None) -> int:
     sub = ap.add_subparsers(dest="verb", required=True)
     sub.add_parser("serve")
     sub.add_parser("ping")
+    p = sub.add_parser("probe")
+    p.add_argument("--timeout", type=float, default=CANARY_TIMEOUT_S)
     p = sub.add_parser("ask")
     p.add_argument("--timeout", type=float, default=9.0)
     a = ap.parse_args(argv)
     if a.verb == "serve":
         return serve()
+    if a.verb == "probe":
+        return probe(a.timeout)
     if a.verb == "ping":
         out = request({"op": "ping"}, PING_TIMEOUT_S)
         if not out or not out.get("ok"):
             print("classifier-warm: no daemon answered within 1 s", file=sys.stderr)
             return 1
+        if out.get("answering") is not True:  # a pre-E1f daemon sends no such key: unproven
+            why = out.get("why") or "it does not report an answered classification"
+            print(
+                f"classifier-warm: a daemon is up ({out.get('ready', 0)} process(es)) but no "
+                f"worker has answered: {why}",
+                file=sys.stderr,
+            )
+            return 2
         print(f"ready {out.get('ready', 0)}")
         return 0
     out = request(

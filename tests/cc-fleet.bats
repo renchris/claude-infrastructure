@@ -182,6 +182,35 @@ STUB
   [ "$(states)" = STALLED ]
 }
 
+# ── the warm classifier's own row (RESEARCH_PROGRAM_BUILD wave E1f) ──────────────────────────────
+@test "E1f: the warm classifier's DECLARED row reads a hollow daemon STALLED and a no-login runner FAILING" {
+  have_subject
+  # The row as trunk declares it, not a copy: on 2026-10-05 this job ran loaded, alive and logged
+  # out, answering nothing, behind a `staged | 0 | -` row that has no health and no sensor.
+  lbl=com.claude.research-classifier-warm
+  row="$(grep "^$lbl *|" "$BATS_TEST_DIRNAME/../launchd/fleet.manifest")"
+  [ "$(printf '%s' "$row" | cut -d'|' -f2 | tr -d ' ')" = run ]
+  manifest "$row"
+  export HOME="$D/home"
+  stamp="$HOME/.claude/autonomy/research/classifier-warm/answered"
+  mkdir -p "$(dirname "$stamp")"
+  plist "$lbl"
+
+  # hollow: running, never exited, and no worker has answered for an hour (the stamp is rewritten
+  # only by an ANSWERED classification, attempted every 900 s)
+  printfix "$lbl" '	state = running' '	runs = 1' '	last exit code = (never exited)'
+  age_file "$stamp" 3600
+  [ "$(states)" = STALLED ]
+
+  # answering: the same job with a fresh stamp is healthy, so the row above is about the answer
+  age_file "$stamp" 600
+  [ "$(rows)" = 0 ]
+
+  # no account logged in: the runner exits 1 and launchd's own counter says so
+  printfix "$lbl" '	state = not running' '	runs = 7' '	last exit code = 1'
+  [ "$(states)" = FAILING ]
+}
+
 # ── S5 + S6 ───────────────────────────────────────────────────────────────────────────────────────
 @test "S5 STALLED / S6 HEALTHY: the same fixture flips on the evidence mtime alone" {
   have_subject
@@ -667,6 +696,7 @@ STUB
   # soak (REPORT.md §11), its plist in launchd/staged/, loaded only by the operator's migrations/0058-research-soak-job.sh.
   # 51 since 2026-10-04: com.claude.research-classifier-warm (RESEARCH_PROGRAM_BUILD wave E1d), `staged`
   # in launchd/staged/ and loaded only by the operator's migrations/0059; row, plist and count in one land.
+  # Still 51 on 2026-10-05 (wave E1f): that row moved `staged` -> `run` after the operator ran 0059; no label added.
   if [ "$n" != 51 ]; then
     echo "manifest declares $n labels, expected 51 — if a plist was legitimately added or retired,"
     echo "move this count and say why (see the block above); if not, a row is missing. Declared:"
