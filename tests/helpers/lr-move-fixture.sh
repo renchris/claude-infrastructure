@@ -1,4 +1,5 @@
 # shellcheck shell=bash
+# shellcheck disable=SC2034  # LRD, BDIR, SRC, DST and MVF_PID are this fixture's out-parameters, read by the suites that source it
 # tests/helpers/lr-move-fixture.sh — the fixture world shared by the move-lane suites
 # (lr-move-verdict, lr-move-worker, lr-move-concurrency). Sourced from a suite's setup().
 #

@@ -58,7 +58,10 @@ FROM="$(jq -r '.from // empty' "$PLAN")"; TO="$(jq -r '.to // empty' "$PLAN")"
 TO_CFG="$(jq -r '.to_config_dir // empty' "$PLAN")"; UNTIL="$(jq -r '.until_idle_s // 0' "$PLAN")"
 BY="$(jq -r '.requested_by // empty' "$PLAN")"; UNVERIFIED_OK="$(jq -r '.target_unverified // false' "$PLAN")"
 # The rows this batch drives: sid<TAB>pane<TAB>cwd, for every row whose act is move or wait.
-DRIVE="$(jq -r '.rows[] | select(.act == "move" or .act == "wait") | [.sid, .pane, (.cwd // "-")] | @tsv' "$PLAN")"
+# Padded at the emitter: tab is IFS whitespace, so an empty pane or cwd would shift the next column
+# into its place on read.
+DRIVE="$(jq -r 'def cell(ph): (if . == null then "" else . end) | tostring | gsub("[\\t\\r\\n]"; " ") | if . == "" then ph else . end;
+  .rows[] | select(.act == "move" or .act == "wait") | [(.sid | cell("-")), (.pane | cell("-")), (.cwd | cell("-"))] | @tsv' "$PLAN")"
 
 result() { # $1=sid $2=pane $3=verdict $4=reason — written only when the row has no result yet
   [ -e "$BDIR/$1.json" ] && return 0
