@@ -24,7 +24,7 @@ packet `83adb541ea19` actioned. Method version 1.1 is frozen; it changes only fr
 | B2 | S | Item 8: `research-program` skill, `/research-program` command, intake script, briefs, rubric | A2 |
 | C | S | Wave 2: items 9–13, 15, in parallel with the pilot | B1, B2 |
 | D | S (fired `fire-rp-audit-bugfix`), T inside | Audit fixes: `docs/research/upfront-method-audit-2026-10-04/REPORT.md` §3 rows 4–6 | C |
-| E | E1 S (fired `fire-rp-v12-step1`); E1b S (fired `fire-rp-v12-e1b`); E1c S (fired `fire-rp-v12-e1c`); E1d S (fired `fire-rp-v12-e1d`); E2 Workflow in session d8964eb2; E3 S (E3a fired `fire-rp-v12-e3a`, E3b fired `fire-rp-v12-e3b` with T inside: six teammates; E3c fired `fire-rp-v12-e3c`, L inside; E3d fired `fire-rp-v12-e3d`, L inside); E4 operator | Method v1.2 (ruling `1bf69e5c1775`): audit REPORT §3 rows 1, 2, 3, 7, plus the 9 s classifier limit (ruling `4bf73c4e55d5`) | D |
+| E | E1 S (fired `fire-rp-v12-step1`); E1b S (fired `fire-rp-v12-e1b`); E1c S (fired `fire-rp-v12-e1c`); E1d S (fired `fire-rp-v12-e1d`); E1e S (fired `fire-rp-v12-e1e`); E2 Workflow in session d8964eb2; E3 S (E3a fired `fire-rp-v12-e3a`, E3b fired `fire-rp-v12-e3b` with T inside: six teammates; E3c fired `fire-rp-v12-e3c`, L inside; E3d fired `fire-rp-v12-e3d`, L inside); E4 operator | Method v1.2 (ruling `1bf69e5c1775`): audit REPORT §3 rows 1, 2, 3, 7, plus the 9 s classifier limit (ruling `4bf73c4e55d5`) | D |
 
 A1, A2 and A3 touch disjoint files and fire concurrently. B1 and B2 fire when A2 lands. Each dispatched session leads
 its own Agent Team where it has 2+ code-writing tasks.
@@ -671,6 +671,60 @@ here. Never change row 15's thresholds, the 9 s limit or the sealed sets; never 
 - **Still to do after activation (this wave):** warm latency on the tuning set (n ≥ 20), a check that the
   classifier's command line and brief equal `e259b44cd`'s (`on-pre`, thinking on), then the second and last read of
   v2, recorded here with its verdict, per-stratum numbers, load and the disclosure that it is biased by the first.
+
+#### E1e — the two measurements after activation — BLOCKED: the activated daemon answers nothing; v2 NOT read (2026-10-05)
+Scope (frozen): the two measurements E1d left for after activation, and nothing else. (1) Warm latency on the
+tuning set only (n ≥ 20; E1d's `/tmp/e1d-warm-latency.py`): median, p90, the count over 9 s, the load, and for each
+call whether the router used the warm path or the cold one. (2) One more read of sealed v2 with `heldout.py
+evaluate`, as E1c ran it, recorded with its verdict, per-stratum numbers, fallback share, load and the disclosure
+that it is the second read. Never tune against v2; never change row 15's thresholds, the 9 s limit, the sealed
+sets or the classifier configuration. Locus S (fired `fire-rp-v12-e1e`), lead-inline (why: two ordered
+measurements around one sealed file).
+
+- **Before measuring.** The operator activated the daemon 2026-10-05 (migration `0059`; backlog `320091ec2edd`
+  done). `classifier-warm.py ping` printed `ready 2`; `launchctl list` showed
+  `com.claude.research-classifier-warm` running (pid 22202, started 01:35:13 CDT). The live `router.py` is
+  byte-identical to this branch's, and `git diff e259b44cd HEAD -- scripts/research-kit/router.py` adds only the
+  warm call path: `CLASSIFIER_BRIEF` and `classifier_argv()` are untouched, so the labeling configuration is
+  E1c's `on-pre` (thinking on).
+- **Measurement 1, warm latency on the tuning set** (2026-10-05 01:36-01:41 CDT, 1-min load 21.7-24.5; all 96
+  rows of the v1 tuning file, one sequential call each through the live router's `classify`):
+
+  | calls | answered by the warm path | answered by the cold path | fell back | wall median · p90 · max | over 9 s |
+  |---|---|---|---|---|---|
+  | 96 | **0** | 0 | **96 (1.00)** | 0.20 s · 0.43 s · 0.76 s | 0 |
+
+  Every call returned no label with the reason `the warm classifier process reported an error`. The walls are
+  the time to fail, not the time to classify, so **this is not a latency reading of a working warm classifier;
+  that number is still unmeasured.**
+- **Cause, reproduced.** launchd starts the daemon with `HOME` and the runner's `PATH` and nothing else (`ps
+  eww` on pid 22202: no `CLAUDE_CONFIG_DIR`). Its `claude` processes therefore read `~/.claude`, which holds no
+  login on this machine: the four accounts live in their own config directories, which a session gets from its
+  launcher. The classifier's own command line run under `env -i HOME=… PATH=<the runner's>` returns `is_error:
+  true`, `Not logged in · Please run /login`. E1c's and E1d's warm timings came from a daemon started inside a
+  session, which inherits that session's account, so neither met this.
+- **Two defects this exposes, neither fixed here (outside the frozen scope).**
+  - `scripts/research-kit/jobs/classifier-warm.sh` gives the daemon no account. Which account pays for the
+    classifier is a choice, so the fix is the lead's to scope.
+  - `ping` counts processes that are alive, not processes that can answer: it said `ready 2` throughout, and
+    migration `0059` reads that ping back as its proof of success. `router.py` then treats a warm process's
+    error as the limit spent and makes no cold call. So from activation until the daemon is fixed or unloaded,
+    **every re-ask classification on this machine falls back** (0 of 96 answered), which is worse than before
+    activation, when the cold call answered about 73% of the time.
+- **Measurement 2, the second read of v2: NOT run.** A read now would return 232 fallbacks and tell nothing
+  about labeling or latency, and v2's reads are counted. v2 has still been read exactly once (E1c). Prepared and
+  unused, outside the repo: a `git archive` snapshot of `472ba14c4`'s `scripts/research-kit` and a wrapper that
+  calls the snapshot's `router.classify` exactly as the `classify` verb does and appends the answering path
+  (warm, cold or fallback), wall and load per call to a side file, so the read can show which path answered each
+  item; `evaluate` itself discards the router's reason.
+- **Row 15 verdict: unchanged, FAILS** (E1c's read stands: `other` 23/26 on answered items, fallback 62/232 =
+  0.27). No program can certify.
+- **To resume this wave:** give the daemon a logged-in account (or have the router make the cold call when a
+  warm process errors before it starts work), make `ping` prove an answer, reload; then rerun measurement 1 and
+  check `warm-answered` is not 0 before spending the read. Stopgap until then: unloading
+  `com.claude.research-classifier-warm` returns the router to the cold path.
+- Status: **BLOCKED 2026-10-05**, reported to the wave lead. Evidence outside the repo:
+  `/tmp/e1e/warm-latency.json` (per call: label, reason, wall, load).
 
 #### E2 — triage precision study (v1.2 (a), measurement half) — RUNNING
 - Locus: a Workflow in session d8964eb2, started 2026-10-04. Results: `docs/research/triage-precision-study-2026-10-04/`.
