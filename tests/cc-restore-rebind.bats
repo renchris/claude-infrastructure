@@ -101,7 +101,7 @@ rebind() { "$SUBJ" "$EV" --accounts-json "$ACCTS" "$@"; }
 }
 
 @test "idempotent: a second run re-writes nothing, re-claims nothing and hands nobody off twice" {
-  rebind >/dev/null || true
+  "$SUBJ" "$EV" --accounts-json "$ACCTS" >/dev/null || true
   : > "$STUBLOG"
   run rebind
   [[ "$output" == *"forward old=249 → sid=$S1 new_pane=3 writer=held migrated=0"* ]] || false
@@ -173,7 +173,7 @@ custody_ping() { # sends the peer's final ping to the OLD pane key, then runs S1
   [ "$("$REPO/bin/cc-custody" count --open --cwd "$orig")" = 1 ]
   "$REPO/bin/cc-notify" --mailbox-only --no-wake 249 "HANDOFF-PING p8-wave: DONE — landed abc1234" >/dev/null 2>&1 || true
   printf '{"cwd":"%s","session_id":"%s"}' "$orig" "$S1" \
-    | CC_PANE_ID=3 ITERM_SESSION_ID= "$REPO/hooks/mailbox-drain.sh" prompt >/dev/null 2>&1 || true
+    | CC_PANE_ID=3 ITERM_SESSION_ID='' "$REPO/hooks/mailbox-drain.sh" prompt >/dev/null 2>&1 || true
   "$REPO/bin/cc-custody" count --open --cwd "$orig"
 }
 
@@ -184,7 +184,7 @@ custody_ping() { # sends the peer's final ping to the OLD pane key, then runs S1
 }
 
 @test "custody: after the rebind, a DONE sent to the old pane key is forwarded and discharges the open row" {
-  rebind >/dev/null || true
+  "$SUBJ" "$EV" --accounts-json "$ACCTS" >/dev/null || true
   run custody_ping
   [ "${lines[${#lines[@]}-1]}" = 0 ]
   grep -q 'HANDOFF-PING p8-wave: DONE' "$CC_MAILBOX_DIR/$S1.md"
