@@ -171,9 +171,8 @@ mkrepo_unlanded() {
   : > "$CC_ACTIVATION_DIR/12-done-activate.sh.done"
   run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q '▶ cc-do   \[2 runnable: ' || false
-  echo "$output" | grep -q '11-gated-activate' || false          # CONFIRM-gated named first (F6)
-  echo "$output" | grep -q '10-plain-activate' || false
+  # CONFIRM-gated named first (F6); the stems are named ONCE, as the --expect binding (5cee611ac837)
+  echo "$output" | grep -F ' ▶ cc-do --run --expect 11-gated-activate,10-plain-activate   [2 runnable]' >/dev/null || false
   ! echo "$output" | grep -q '12-done-activate' || false
   # THE POINT: the long double-path form is GONE from the default render.
   ! echo "$output" | grep -q '&& touch' || false
@@ -213,8 +212,9 @@ mkrepo_unlanded() {
   # exists to kill, while telling the operator almost nothing. Above 3, cc-do enumerates.
   for i in 1 2 3 4 5; do printf '#!/bin/bash\n' > "$CC_ACTIVATION_DIR/5$i-x-activate.sh"; done
   run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
-  echo "$output" | grep -q '▶ cc-do   \[5 runnable\]' || false
-  ! echo "$output" | grep -q '5 runnable:' || false
+  # past 3 the --expect binding is the N:CRC set fingerprint, not a stem list (no wrap)
+  echo "$output" | grep -E '▶ cc-do --run --expect 5:[0-9]+   \[5 runnable\]' >/dev/null || false
+  ! echo "$output" | grep -q 'x-activate' || false
   # bounded by construction: the whole step render is ONE line here, not five.
   nlines="$(echo "$output" | grep -cE '^ (▶|◆)')"
   [ "$nlines" -eq 1 ]
@@ -225,10 +225,60 @@ mkrepo_unlanded() {
 @test "COLLAPSE: 2-3 runnable DO name every stem (the naming is complete, so it round-trips)" {
   for i in 1 2 3; do printf '#!/bin/bash\n' > "$CC_ACTIVATION_DIR/6$i-y-activate.sh"; done
   run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
-  echo "$output" | grep -q '▶ cc-do   \[3 runnable: ' || false
-  echo "$output" | grep -q '61-y-activate' || false
-  echo "$output" | grep -q '63-y-activate' || false
+  echo "$output" | grep -F ' ▶ cc-do --run --expect 61-y-activate,62-y-activate,63-y-activate   [3 runnable]' >/dev/null || false
   ! echo "$output" | grep -q '+' || false
+}
+
+# Decision 5cee611ac837 (2026-10-04): the handed row runs with NO keystroke and is BOUND to the set
+# it shows. The readout and bin/cc-do each carry a copy of the --expect token shape, so the only
+# proof they agree is to paste the RENDERED row into the real cc-do, on a closed stdin (the `!`
+# surface), in both shapes: the stem list (<=3) and the N:CRC fingerprint (>3).
+@test "COLLAPSE ROUND-TRIP: the rendered cc-do row, pasted on a closed stdin, runs exactly its set" {
+  local t row i
+  for t in 81-p 82-q; do
+    printf '#!/bin/bash\ntouch "%s"\n' "$BATS_TEST_TMPDIR/$t.ran" > "$CC_ACTIVATION_DIR/$t-activate.sh"
+  done
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  row="$(echo "$output" | sed -n 's/^ ▶ \(cc-do --run --expect [^ ]*\)   \[2 runnable\]$/\1/p')"
+  [ -n "$row" ] || { echo "$output"; false; }
+  # shellcheck disable=SC2086  # the row is word-split exactly as the operator's shell would split it
+  run "$REPO/bin/cc-do" ${row#cc-do } </dev/null
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -f "$BATS_TEST_TMPDIR/81-p.ran" ] && [ -f "$BATS_TEST_TMPDIR/82-q.ran" ] || false
+  # >3 — the fingerprint shape
+  for i in 1 2 3 4; do
+    printf '#!/bin/bash\ntouch "%s"\n' "$BATS_TEST_TMPDIR/9$i.ran" > "$CC_ACTIVATION_DIR/9$i-r-activate.sh"
+  done
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  row="$(echo "$output" | sed -n 's/^ ▶ \(cc-do --run --expect [0-9]*:[0-9]*\)   \[4 runnable\]$/\1/p')"
+  [ -n "$row" ] || { echo "$output"; false; }
+  # shellcheck disable=SC2086
+  run "$REPO/bin/cc-do" ${row#cc-do } </dev/null
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  for i in 1 2 3 4; do [ -f "$BATS_TEST_TMPDIR/9$i.ran" ]; done
+}
+
+# Live activation stems follow `NN-name-activate` and run 31-36 chars: three of them as the
+# --expect list made a 146-column row (two made 108), and a wrapped row pastes as two commands.
+# The WIDTH picks the shape, so at live lengths the row binds by N:CRC — and still round-trips.
+@test "COLLAPSE at LIVE stem lengths: the row stays within 100 columns, binds by N:CRC, and runs" {
+  local n s row
+  for n in 2 3; do
+    rm -f "$CC_ACTIVATION_DIR"/*.sh "$CC_ACTIVATION_DIR"/*.done "$BATS_TEST_TMPDIR"/*.ran
+    for s in 10-lead-crash-orphan-close 32-cc-roles-kitty-normalise 49-boot-resume-desktops; do
+      [ "$n" = 2 ] && [ "$s" = 49-boot-resume-desktops ] && continue
+      printf '#!/bin/bash\ntouch "%s"\n' "$BATS_TEST_TMPDIR/$s.ran" > "$CC_ACTIVATION_DIR/$s-activate.sh"
+    done
+    run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+    [ "$(echo "$output" | awk '{print length($0)}' | sort -rn | head -1)" -le 100 ] || { echo "$output"; false; }
+    row="$(echo "$output" | sed -n "s/^ ▶ \(cc-do --run --expect $n:[0-9]*\)   \[$n runnable\]\$/\1/p")"
+    [ -n "$row" ] || { echo "$output"; false; }
+    # shellcheck disable=SC2086  # word-split exactly as the operator's shell would split it
+    run "$REPO/bin/cc-do" ${row#cc-do } </dev/null
+    [ "$status" -eq 0 ] || { echo "$output"; false; }
+    [ -f "$BATS_TEST_TMPDIR/10-lead-crash-orphan-close.ran" ] && [ -f "$BATS_TEST_TMPDIR/32-cc-roles-kitty-normalise.ran" ] || false
+  done
+  [ -f "$BATS_TEST_TMPDIR/49-boot-resume-desktops.ran" ]
 }
 
 @test "COLLAPSE: many judgment items become ONE counted line per class, carrying ids + the listing cmd" {
@@ -926,7 +976,7 @@ hookrun_sid() { # $1=session_id $2=cwd
   for i in 1 2 3 4; do printf '#!/bin/bash\n' > "$CC_ACTIVATION_DIR/7$i-c-activate.sh"; done
   run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR" --sid S1
   echo "$output" | grep -q '▶ claude --mcp auth motion-plus   \[this session y-7' || false   # itemized
-  echo "$output" | grep -q '▶ cc-do   \[4 runnable\]' || false                               # collapsed
+  echo "$output" | grep -E '▶ cc-do --run --expect 4:[0-9]+   \[4 runnable\]' >/dev/null || false   # collapsed
   echo "$output" | grep -q '◆ 5 blocked backlog — your call   cc-backlog list --blocked' || false
   echo "$output" | head -1 | grep -q '1 step(s) are yours · 4 runnable now, 5 need your call' || false
 }

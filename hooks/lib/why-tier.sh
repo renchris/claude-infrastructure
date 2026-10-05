@@ -153,10 +153,10 @@ PLACEHOLDER — the plattered command still contains a slot the operator has to 
 operator cannot select-and-paste it, they have to first work out what you meant. If you know the
 value, RESOLVE IT into the command. If you genuinely do not, then the command is not runnable yet
 and it does not belong under the marker at all — say what is missing instead.
-Multiple runnable steps collapse to `cc-do`, which prints them, confirms once, and runs them in
-irreversibility order (`cc-do --list` to look, `cc-do <stem>` for exactly one). The collapsed
-`▶ cc-do [N runnable]` row is the admissible form; `cc-do --list` is 317 lines and may never be
-inlined.
+Multiple runnable steps collapse to one row, `cc-do --run --expect <stems>`, which runs them in
+irreversibility order with no keystroke and refuses (NOTHING RAN) if the queue changed since it was
+rendered (`cc-do --list` to look, `cc-do <stem>` for exactly one). That collapsed row is the
+admissible form; `cc-do --list` is 317 lines and may never be inlined.
 Every command shown carries a run / don't-run verdict, and at a close there is only one verdict: a
 command under `▶ Run this:` means run this. If you would tell them to ignore it, it does not appear
 at all — not marked, not bare.
@@ -193,9 +193,9 @@ the Good-to-close verdict at line 2 is exactly what keeps the marker at non-blan
 shipped CC_ACT_WINDOW of 3.
 ONE COMMAND, never a list. The operator's words: "I had to comb through the entire return body to
 fish out which is the command to copy and paste and not just more paragraph text." Multiple runnable
-steps collapse to `cc-do`. Reference-only commands stay in inline backticks MID-SENTENCE, never
-alone on their own line — the marker plus a lone span is what makes a command an instruction, so the
-discriminator is position, not styling.
+steps collapse to one bound `cc-do --run --expect` line. Reference-only commands stay in inline
+backticks MID-SENTENCE, never alone on their own line — the marker plus a lone span is what makes a
+command an instruction, so the discriminator is position, not styling.
 Kill switch for the whole arm: CC_CLOSE_ACT=0. Window: CC_ACT_WINDOW.
 WHY
     ;;

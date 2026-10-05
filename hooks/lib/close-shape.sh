@@ -165,7 +165,7 @@ TPL
 #
 # FENCED LINES ARE SKIPPED, AND DO NOT COUNT TOWARD THE WINDOW. Both halves are load-bearing:
 #   · SKIPPED, or the matcher is bypassable — 13 of the 81 `▶` occurrences are the
-#     ` ▶ cc-do   [N runnable]` row INSIDE the rendered `OPERATOR ▸` block, which sits fenced at the
+#     ` ▶ cc-do … [N runnable]` row INSIDE the rendered `OPERATOR ▸` block, which sits fenced at the
 #     top of a close as a verbatim paste. A naive matcher passes on that row at line 3 while the
 #     close's real act is at line 11 (observed twice in the sample).
 #   · UNCOUNTED, or compliance is impossible for the closes that do the right thing — that block is

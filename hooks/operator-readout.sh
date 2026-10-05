@@ -147,7 +147,7 @@
 #   which each activation line (`CONFIRM=1 bash <60-char path> && touch <same path>.done`) wrapped
 #   to FOUR terminal rows — ~25 visual lines of grey with nothing single to paste. The close exists
 #   to surface ONE decision point, so:
-#     runnable (deploy + activation) → ONE `▶ cc-do` line, naming up to 3 stems then `+N`
+#     runnable (deploy + activation) → ONE `▶ cc-do --run --expect <stems|N:CRC>` line (bound, no keystroke)
 #     judgment (decision, backlog)   → ONE `◆ <n> …` counted line each, naming up to 3 IDS then
 #                                      `+N`, carrying that class's exact listing command
 #   Live result: 10 lines → 5, none wrapping. Counting a class is NOT hiding it — every class stays
@@ -410,6 +410,24 @@ idl_init "$IDL" "operator-readout"
 
 # ── tiny helpers ─────────────────────────────────────────────────────────────────────────────────
 tildify() { printf '%s' "${1/#$HOME/~}"; }   # display+paste-safe: the shell re-expands ~
+# The collapse row's --expect value — a byte-identical copy of bin/cc-do's pair (that script's
+# TARGET BINDING note): <=3 stems comma-joined when the list fits the line ($1 = widest list it
+# holds), else `N:CRC` (count + cksum of the sorted set). tests/operator-readout.bats round-trips a
+# rendered row through cc-do, so the two copies cannot drift unseen.
+expect_fp() { # stdin: stems, one per line → N:CRC of the sorted unique set
+  local s n
+  s="$(grep -v '^$' | LC_ALL=C sort -u)"
+  n="$(printf '%s' "$s" | grep -c . || true)"
+  printf '%s:%s' "${n:-0}" "$(printf '%s\n' "$s" | cksum | awk '{print $1}')"
+}
+expect_token() { # stdin: stems in display order; $1: widest list the line holds → the --expect value
+  local s n j
+  s="$(grep -v '^$')"
+  n="$(printf '%s' "$s" | grep -c . || true)"
+  j="$(printf '%s\n' "$s" | paste -sd, -)"
+  if [ "${n:-0}" -le 3 ] && [ "${#j}" -le "${1:-${#j}}" ]; then printf '%s\n' "$j"
+  else printf '%s\n' "$s" | expect_fp; fi
+}
 # scope_of <wrap-ledger --machine text> → met | open | unknown. Reads the ledger's own SCOPE field;
 # a ledger too old to carry it is derived from DOD/REMAINDER the way the ledger itself derives it,
 # so a live layer one fast-forward behind this hook can never read an absent DoD as `met`.
@@ -693,8 +711,10 @@ render_block() {
         local dout drc
         dout="$(DEPLOY_REPO="$SHARED" bash "$dscript" --dry-run --offline 2>&1)"; drc=$?
         if [ "$drc" -eq 0 ]; then
-          printf 'deploy\t▶\tbash %s   [deploy: live layer %s behind origin/%s]\tdeploy-live\n' \
-            "$(tildify "$dscript")" "$behind" "$sbr" >> "$steps_file"
+          # Stem = the script's basename, derived exactly as bin/cc-do names it, so the collapse
+          # row's `--expect` names the step the way cc-do will find it.
+          printf 'deploy\t▶\tbash %s   [deploy: live layer %s behind origin/%s]\t%s\n' \
+            "$(tildify "$dscript")" "$behind" "$sbr" "$(basename "${dscript%.sh}")" >> "$steps_file"
         else
           local dwhy
           dwhy="$(printf '%s\n' "$dout" | tail -1 | tr -d '\t')"
@@ -1323,12 +1343,12 @@ render_block() {
   # to four terminal lines each — ~25 visual lines of grey with no single thing to paste. Counting a
   # class is not hiding it: every class stays NAMED, COUNTED, and reachable by its own command, which
   # is exactly the I10 guarantee, while the operator gets ONE verb.
-  #   runnable (deploy + activation) → one `▶ cc-do` line naming up to 3 stems
+  #   runnable (deploy + activation) → one `▶ cc-do --run --expect …` line naming up to 3 stems
   #   judgment (decision, backlog)   → one `◆ <n> …` counted line each, carrying its listing command
   # A class holding exactly ONE item is still itemised: one specific line costs nothing and says
   # strictly more than "1 decision". `cc-do --list` itemises everything, always.
   if [ "$CBUDGET" = collapse ]; then
-    local runnable=$(( c_deploy + c_activation )) stems="" sc=0 cn=0 c2 rcmd clabel
+    local runnable=$(( c_deploy + c_activation )) stems="" rstems="" cn=0 c2 rcmd clabel
     if [ "$runnable" -eq 1 ]; then
       while IFS="$TABC" read -r cls mark text stem; do
         case "$cls" in deploy|activation) printf ' %s %s\n' "$mark" "$text" ;; esac
@@ -1336,17 +1356,25 @@ render_block() {
     elif [ "$runnable" -gt 1 ]; then
       while IFS="$TABC" read -r cls mark text stem; do
         case "$cls" in
-          deploy|activation)
-            sc=$((sc + 1))
-            [ "$sc" -le 3 ] && [ -n "$stem" ] && stems="${stems:+$stems · }${stem}" ;;
+          deploy|activation) [ -n "$stem" ] && rstems="${rstems}${stem}"$'\n' ;;
         esac
       done < "$steps_file"
       # NAME THEM ONLY WHEN THE NAMING IS COMPLETE. Three of 174 is noise, not information, and it
       # was what pushed these lines past 130 chars — i.e. back into the wrapping this change exists
-      # to kill. At <=3 the list IS the full set (round-trippable, nothing to look up); above that
-      # the listing command is the honest pointer and cc-do itself enumerates.
-      if [ "$runnable" -le 3 ]; then printf ' ▶ %s   [%s runnable: %s]\n' "$CC_DO" "$runnable" "$stems"
-      else                           printf ' ▶ %s   [%s runnable]\n'     "$CC_DO" "$runnable"; fi
+      # to kill. At <=3 the list IS the full set (round-trippable, nothing to look up), and it is
+      # named ONCE, as the --expect value; above that the value is the N:CRC fingerprint of the set
+      # behind the count and cc-do itself enumerates.
+      # THE ROW RUNS WITH NO KEYSTROKE AND NAMES ITS TARGET (decision 5cee611ac837, 2026-10-04): the
+      # operator's 2026-09-24 ruling forbids a handed line that waits on a keypress, so the row is
+      # `cc-do --run`, and `--expect` binds that consent to the set rendered here — a queue that
+      # changed before the paste makes cc-do refuse with NOTHING RAN (exit 4). Flag at the END,
+      # never an env prefix: the line must read as the command it is.
+      # WIDTH DECIDES THE SHAPE, not only the count: live stems run 31-36 chars, so three of them
+      # made a 146-column row, and a wrapped row pastes as two commands. The stem list is used only
+      # when the WHOLE row fits 100 columns (` ▶ ` is 3); otherwise the N:CRC fingerprint binds.
+      local xhead="$CC_DO --run --expect " xtail="   [$runnable runnable]"
+      printf ' ▶ %s%s%s\n' "$xhead" \
+        "$(printf '%s' "$rstems" | expect_token $(( 100 - 3 - ${#xhead} - ${#xtail} )))" "$xtail"
     fi
     # Aggregates the ranking jq computed while it still had the whole blocked stream in hand:
     # how many rows earned a naming slot, how many have an unverified premise, and the horizon

@@ -33,15 +33,16 @@ operator has to be able to trust the rung.
 
 The operator-steps block is the SAME renderer the `operator-readout.sh` Stop hook pushes at turn
 close (one code path — the push and pull surfaces cannot drift): one state line, then the collapsed
-step lines from disk truth — `▶ cc-do` for everything runnable (deploy-lag · pending activations),
+step lines from disk truth — `▶ cc-do --run --expect …` for everything runnable (deploy-lag · pending activations),
 one `◆ <n> …` counted line per judgment class (open decisions · blocked backlog), each naming up to
 3 ids and carrying its exact listing command. Relay it VERBATIM below the rung line, the
 `Good to close:` line (when the close carries one) and the act line — never paraphrase the commands
 into prose (the silver-platter rule).
 
 **Hand over ONE command, not a list.** Whatever the block shows, the operator gets one `▶ Run this:`
-line with a single inline-code command under it — `cc-do` runs the runnable set after one confirm
-(`cc-do --list` to look first, `cc-do <stem>` for exactly one). Per CLAUDE.md §Session Close, the
+line with a single inline-code command under it — the block's `cc-do --run --expect <stems>` row runs
+the runnable set with no keystroke and refuses if the queue changed (`cc-do --list` to look first,
+`cc-do <stem>` for exactly one). Per CLAUDE.md §Session Close, the
 close is the rung line, the verdict line, at most one act line, the relayed block, and at most three
 supporting lines.
 

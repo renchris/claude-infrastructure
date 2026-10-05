@@ -1784,13 +1784,13 @@ finish the login")" = "act-line" ]
 ACT: <the one act>")" = "act-line" ]
 }
 
-# 13 of the 81 ▶ occurrences in the corpus are the ` ▶ cc-do [N runnable]` row INSIDE the rendered
+# 13 of the 81 ▶ occurrences in the corpus are the ` ▶ cc-do … [N runnable]` row INSIDE the rendered
 # OPERATOR block's fence. A matcher that counts it passes a close whose real act is at line 11.
 @test "D7 UNIT: a ▶ inside a fence is the rendered block, not this close's act ⇒ still missing" {
   . "$REPO/hooks/lib/close-shape.sh"
   [ "$(close_act_missing '```
 OPERATOR ▸ 13 runnable now, 205 need your call
- ▶ cc-do   [13 runnable]
+ ▶ cc-do --run --expect 13:2715391082   [13 runnable]
 ```
 👤 My side is done and landed.
 some supporting prose
@@ -1804,7 +1804,7 @@ more supporting prose
   . "$REPO/hooks/lib/close-shape.sh"
   run close_act_missing '```
 OPERATOR ▸ 13 runnable now, 205 need your call
- ▶ cc-do   [13 runnable]
+ ▶ cc-do --run --expect 13:2715391082   [13 runnable]
 ```
 👤 My side is done and landed — one step is yours.
 ▶ Run this:

@@ -1037,10 +1037,11 @@ corrupts a drag-copy the same way. *(Generalisable lesson: a rendering claim is 
 renderer you measured. The fence rule shipped, landed, and was hook-enforced for a whole session
 before anyone looked at a screenshot.)*
 
-Multiple runnable steps collapse to **`cc-do`** — it prints them, confirms once, and runs them in
-irreversibility order (`cc-do --list` to look, `cc-do <stem>` for exactly one). `cc-do --list` is
-**317 lines / 6,845 words**, 19× the close it would be inlined into; the collapsed
-`▶ cc-do [N runnable]` row is its only admissible form. Judgment items are counted, not itemized.
+Multiple runnable steps collapse to one row, **`cc-do --run --expect <stems>`** — it runs them in
+irreversibility order with no keystroke, and refuses (NOTHING RAN) if the queue changed since the
+row was rendered (`cc-do --list` to look, `cc-do <stem>` for exactly one). `cc-do --list` is
+**317 lines / 6,845 words**, 19× the close it would be inlined into; that collapsed row is its only
+admissible form. Judgment items are counted, not itemized.
 **Every command shown carries a run / don't-run verdict, and at a close there is only one verdict.** A
 command under a `▶ Run this:` marker means *run this*. If you would tell them to ignore it, **it does
 not appear at all** — not marked, not bare. (One close showed a command and had to follow up with

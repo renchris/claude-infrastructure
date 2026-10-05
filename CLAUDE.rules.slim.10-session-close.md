@@ -208,7 +208,7 @@ The payload must also run to completion with zero keystrokes, in a regular Termi
 
 Asked for the command that does X, the payload is the command for X alone. A step that should come first (a build, a staging deploy, a backup) is named in the line above the marker, not chained into the payload with `&&`: a chained payload runs a step the operator did not ask for.
 
-Multiple runnable steps collapse to `cc-do`, which prints them, confirms once, and runs them in irreversibility order (`cc-do --list` to look, `cc-do <stem>` for one); show it only as the collapsed `▶ cc-do [N runnable]` row. Judgment items are counted, not itemized. A command under the marker means run it; a command you would tell them to ignore does not appear at all. Reference-only commands stay in inline backticks mid-sentence, never alone on a line and never in the closing block.
+Multiple runnable steps collapse to one row, `cc-do --run --expect <stems>`, which runs them in irreversibility order with no keystroke and refuses if the queue changed (`cc-do --list` to look, `cc-do <stem>` for one). Judgment items are counted, not itemized. A command under the marker means run it; a command you would tell them to ignore does not appear at all. Reference-only commands stay in inline backticks mid-sentence, never alone on a line and never in the closing block.
 
 `/wrap --full`, or an explicit request, adds the per-field SESSION LEDGER that `~/.claude/scripts/wrap-ledger.sh --full` renders; never include it by default.
 
