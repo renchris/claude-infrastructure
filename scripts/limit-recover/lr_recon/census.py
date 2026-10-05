@@ -466,6 +466,9 @@ def impossible_record(
         origin=origin,
     )
     rec.close["death"] = death_key(s)
+    rec.close["impossible"] = (
+        b.reason
+    )  # report pages these once per cohort, not per record
     rec.timeline.detected = now
     rec.updated_at = now
     rec.terminal = T.Terminal(outcome="IMPOSSIBLE", proof="census: " + b.reason, at=now)

@@ -1082,6 +1082,7 @@ def _report(ctx: Ctx, mode: str, now: float) -> None:
             rep.delta_page(cohort, recs)
             if all(not r.open for r in recs):
                 rep.close_page(cohort, recs)
+            rep.unrecoverable_page(cohort, recs)
             for r in recs:
                 rep.immediate_pages(cohort, r)
                 rep.max_age_page(cohort, r)

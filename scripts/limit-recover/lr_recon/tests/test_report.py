@@ -274,6 +274,32 @@ class ReportTest(unittest.TestCase):
         self.assertEqual(len(self.pages), 2)
 
     # ── immediate ──────────────────────────────────────────────────────────────────────────────
+    def test_census_impossible_members_page_once_per_cohort(self) -> None:
+        """W7h defect 3, lead ruling: one page per cohort naming every member, never one per
+        death; a later member re-sends the list after the gap; an unchanged list never does."""
+        rep = self.reporter()
+        recs = [done(rec(i), "IMPOSSIBLE") for i in (1, 2, 3)]
+        for r in recs:
+            r.close["impossible"] = "headless"
+        self.assertIsNone(rep.unrecoverable_page(self.cohort, [done(rec(9), "CLOSED")]))
+        first = rep.unrecoverable_page(self.cohort, recs[:2])
+        self.assertIn("2 limited session(s) cannot be recovered here", first or "")
+        self.assertIn(recs[0].sid[:8], first or "")
+        self.assertIn(recs[1].sid[:8], first or "")
+        for r in recs:
+            self.assertEqual(
+                rep.immediate_pages(self.cohort, r), []
+            )  # no page per record
+        self.assertIsNone(self.reporter().unrecoverable_page(self.cohort, recs[:2]))
+        self.assertIsNone(rep.unrecoverable_page(self.cohort, recs))  # inside the gap
+        self.assertEqual(len(self.pages), 1)
+        self.clock.t += R.DELTA_MIN_GAP_S
+        again = rep.unrecoverable_page(self.cohort, recs)
+        self.assertIn("3 limited session(s)", again or "")
+        self.clock.t += 10 * R.DELTA_MIN_GAP_S
+        self.assertIsNone(rep.unrecoverable_page(self.cohort, recs))
+        self.assertEqual(len(self.pages), 2)
+
     def test_immediate_pages_latch_per_record(self) -> None:
         rep = self.reporter()
         a = rec(1, phase="SPLIT-BRAIN")

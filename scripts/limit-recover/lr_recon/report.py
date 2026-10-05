@@ -751,7 +751,13 @@ class Reporter:
             kinds.append("SPLIT-BRAIN")
         if rec.escalated:
             kinds.append("ESCALATED")
-        if rec.terminal is not None and rec.terminal.outcome == "IMPOSSIBLE":
+        # a census-made IMPOSSIBLE is paged by unrecoverable_page, once per cohort
+        census_made = bool(rec.close.get("impossible"))
+        if (
+            rec.terminal is not None
+            and rec.terminal.outcome == "IMPOSSIBLE"
+            and not census_made
+        ):
             kinds.append("IMPOSSIBLE")
         if _state(rec) == "HELD:team":
             kinds.append("HELD:team")
@@ -774,6 +780,41 @@ class Reporter:
             if self._once(cohort.cid, "imm:%s:%s" % (rec.record_id, k), k, text):
                 out.append(text)
         return out
+
+    def unrecoverable_page(
+        self, cohort: T.Cohort, records: Sequence[T.Record]
+    ) -> Optional[str]:
+        """One page per cohort for the limited sessions the census itself found unrecoverable
+        (``census.impossible_record``: headless, cwd gone), never one per death: a single limit
+        can stop many headless holders at once, and a page that always fires is ignored (lead
+        ruling, W7h). It names every such member and their count; a later member re-sends the
+        whole list, at most once per DELTA_MIN_GAP_S, and an unchanged list never re-sends."""
+        recs = sorted(
+            (r for r in records if r.close.get("impossible")), key=lambda r: r.sid
+        )
+        if not recs:
+            return None
+        sids = [r.sid for r in recs]
+        latch, now = self._latch(cohort.cid), self.now()
+        last = latch.get("unrecoverable")
+        last = last if isinstance(last, dict) else {}
+        if last.get("sids") == sids:
+            return None
+        at = last.get("at")
+        if isinstance(at, (int, float)) and now - at < DELTA_MIN_GAP_S:
+            return None  # coalesced: the new member is named when the window opens
+        text = (
+            "%s: %d limited session(s) cannot be recovered here: %s — next: relaunch by hand"
+            % (
+                self._head(cohort),
+                len(recs),
+                "; ".join("%s — %s" % (who(r), r.close["impossible"]) for r in recs),
+            )
+        )
+        latch["unrecoverable"] = {"at": now, "sids": sids}
+        self._save(cohort.cid, latch)
+        self._emit("IMPOSSIBLE", cohort.cid, text)
+        return text
 
     def max_age_page(self, cohort: T.Cohort, rec: T.Record) -> Optional[str]:
         """Pages once a WAIT/HOLD record passes its max age, then re-fires hourly (§C11)."""

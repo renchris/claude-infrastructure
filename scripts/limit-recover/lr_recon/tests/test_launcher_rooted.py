@@ -197,6 +197,9 @@ class LauncherRootedTests(unittest.TestCase):
             (rec.kind, rec.cohort_id, rec.source_acct),
             ("limited", "next4-7d-1791104400", "next4"),
         )
+        self.assertEqual(
+            rec.close.get("impossible"), "headless"
+        )  # the per-cohort page's key
         # one record and one event per death, however many passes see it
         M._census(ctx, snap, facts, [], "observe", NOW + 5)
         self.assertIs(ctx.records[SID], rec)
