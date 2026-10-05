@@ -328,7 +328,14 @@ if [ "${CC_RECYCLE_RETRY:-on}" != off ] && [ -f "$rt" ]; then
       if jq --argjson a "$rt_n" '.advised = $a' "$rt" > "$rt.tmp.$$" 2>/dev/null && mv -f "$rt.tmp.$$" "$rt" 2>/dev/null; then
         rt_cmd="\$HOME/.claude/scripts/handoff-fire.sh --recycle"
         [ -n "$rt_pf" ] && [ -f "$rt_pf" ] && rt_cmd="$rt_cmd --prompt-file $rt_pf"
-        rt_reason="⟳ RECYCLE RETRY — the self-recycle this session ran $(( rt_age / 60 )) min ago was HELD (${rt_why:-no reason recorded}) and nothing was relaunched. $(case "$rt_pids" in ''|-|*[!0-9,]*) printf 'Enough time has passed to try again.' ;; *) printf 'The background job that held it has exited.' ;; esac) Re-run it now: \`${rt_cmd}\` (attempt $(( rt_n + 1 )); the recycle re-checks every guard itself, and you are asked at most ${RETRY_MAX} times). If you have taken on new work since, do not re-run it: finish that work first."
+        # Chosen OUTSIDE the string: this hook runs under /bin/bash 3.2 (its shebang), where a case
+        # pattern's `)` inside `$( )` ends the substitution, so the message rendered the raw
+        # `printf … ;; esac)` text (seen live on pane 254, 2026-10-05).
+        case "$rt_pids" in
+          ''|-|*[!0-9,]*) rt_when="Enough time has passed to try again." ;;
+          *) rt_when="The background job that held it has exited." ;;
+        esac
+        rt_reason="⟳ RECYCLE RETRY — the self-recycle this session ran $(( rt_age / 60 )) min ago was HELD (${rt_why:-no reason recorded}) and nothing was relaunched. ${rt_when} Re-run it now: \`${rt_cmd}\` (attempt $(( rt_n + 1 )); the recycle re-checks every guard itself, and you are asked at most ${RETRY_MAX} times). If you have taken on new work since, do not re-run it: finish that work first."
         log_idl fired "recycle-retry" "$(jq -cn --argjson n "$rt_n" --argjson age "$rt_age" --arg pids "$rt_pids" --arg why "$rt_why" '{attempt:$n,held_age_s:$age,job_pids:$pids,why:$why,axis:"recycle-retry"}' 2>/dev/null || printf '{}')"
         jq -nc --arg r "$rt_reason" '{decision:"block",reason:$r,systemMessage:$r}'
         exit 0

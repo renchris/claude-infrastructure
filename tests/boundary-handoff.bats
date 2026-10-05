@@ -934,6 +934,26 @@ dead_pid() { ( exit 0 ) & local p=$!; wait "$p" 2>/dev/null || true; printf '%s'
   echo "$output" | grep -q "Enough time has passed"
 }
 
+@test "[RED] RETRY under the hook's OWN interpreter (/bin/bash): the message is a sentence, never raw shell" {
+  # The hook's shebang is /bin/bash (3.2 on macOS); `drive` runs it under the PATH's bash, which
+  # parsed the old `$(case … esac)` and hid the defect the deployed hook showed.
+  [ -x /bin/bash ] || skip "no /bin/bash on this host"
+  drive32() { printf '{"session_id":"%s","transcript_path":"%s"}' "$1" "${2:-}" | /bin/bash "$HOOK"; }
+  mk_ticket r8 400 -
+  run drive32 r8 "$(mk_btx 5000)"; fired "$output"
+  local msg; msg="$(printf '%s' "$output" | jq -r '.reason')"
+  [[ "$msg" == *"nothing was relaunched. Enough time has passed to try again. Re-run it now:"* ]] || { echo "$msg"; false; }
+  [[ "$msg" != *printf* ]] || { echo "$msg"; false; }
+  [[ "$msg" != *esac* ]] || { echo "$msg"; false; }
+  [[ "$msg" != *"has exited"* ]] || { echo "$msg"; false; }
+  mk_ticket r9 600 "$(dead_pid)"
+  run drive32 r9 "$(mk_btx 5000)"; fired "$output"
+  msg="$(printf '%s' "$output" | jq -r '.reason')"
+  [[ "$msg" == *"nothing was relaunched. The background job that held it has exited. Re-run it now:"* ]] || { echo "$msg"; false; }
+  [[ "$msg" != *printf* ]] || { echo "$msg"; false; }
+  [[ "$msg" != *"Enough time"* ]] || { echo "$msg"; false; }
+}
+
 @test "[RED] a human turn SINCE the hold voids the ticket: nothing is asked and the ticket is deleted" {
   mk_ticket r4 600 "$(dead_pid)"
   run drive r4 "$(mk_btx 30)"                                  # typed 30 s ago, held 600 s ago
