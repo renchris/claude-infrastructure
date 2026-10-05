@@ -550,6 +550,23 @@ activation. Never change row 15's thresholds or the 9 s limit. Locus S (fired `f
     verdict is FAIL (labeling) with the numbers, and no warm classifier is built on this wave's authority.
   - No second read of v2 follows in this wave under any outcome. The later reading after the operator activates a
     warm classifier uses the same committed labeling configuration and changes only the call path.
+- **The rule applied (2026-10-04 20:18-20:48 CDT, load 28-46; `tune-2reps.json`, 192 calls per arm).**
+
+  | arm | recall, agreed relay rows | `other`, agreed rows | borderline relays | fallback share at 9 s | wall median · p90 |
+  |---|---|---|---|---|---|
+  | `on-pre` (trunk, thinking on) | 51/52 = 0.98 | 40/44 = 0.91 | 21/26 | 33/192 = 0.17 | 5.7 s · 10.9 s |
+  | `on-e1b` (E1b patch, thinking on) | 52/52 = 1.00 | 42/44 = 0.95 | 21/26 | 51/192 = 0.27 | 6.1 s · 18.0 s |
+  | `off-e1b` (E1b patch, thinking off) | 51/52 = 0.98 | 44/44 = 1.00 | 10/26 | 1/192 = 0.01 | 1.7 s · 2.3 s |
+
+  Step 1: all three are eligible. Step 2: the thinking-on arms tie at 21 borderline relays; thinking-off, at 10,
+  is out. Step 3: `on-pre` has the lower fallback share. **Chosen: `on-pre`, the router exactly as built on
+  trunk; `router.py` is not changed for the read.** Its tuning fallback share is above the 0.10 cap (31 of its 33
+  fallbacks are right labels that arrived after 9 s), so the read is expected to fail on fallbacks, and the
+  open question it answers is whether the labeling holds on the items that get an answer.
+- **How the one read is run** (fixed before it starts): `heldout.py --set v2 evaluate --record <file outside the
+  repo>` from this worktree, with `CC_RESEARCH_ROUTER` pointing at `router.py classify` in a `git archive`
+  snapshot of the commit that records this choice, not at the worktree path the rule names. The bytes are the
+  same; the snapshot keeps the router fixed for the whole read while this wave's later files are written.
 - **v2 labeled 2026-10-04, before the read** (`heldout.py --set v2 status`), by `anthropic:claude-opus-5-5` and
   `openai:gpt-5.6-sol` through `heldout-rate.py --set v2 --batch 60`: every one of the 396 has two labels, and
   the raters agree on 232 — regex-matched 53 of 64, regex-missed 136 of 228, pushback 7 of 37, other 36 of 67
