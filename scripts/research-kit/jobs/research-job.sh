@@ -1,11 +1,12 @@
 #!/bin/bash
 # research-job.sh <job> — the ONE launchd runner for the research program's scheduled passes
-# (REPORT.md §5.5, §8 item 12, §10 item 4). The five plists in launchd/staged/com.claude.research-*
+# (REPORT.md §5.5, §8 item 12, §10 item 4). The plists in launchd/staged/com.claude.research-*
 # run `/bin/bash <this> <job>`; it pins PATH to what launchd can resolve and execs
-# `cc-research job <job>`, which iterates every program in certifying|certified. Re-checks run on
-# this schedule only, never because a question was asked.
+# `cc-research job <job>`, which iterates every program in certifying|certified (soak: every
+# program in build-certifying, REPORT.md §11). Re-checks run on this schedule only, never because
+# a question was asked.
 #
-#   research-job.sh sweep|freshness|triage|drift|market
+#   research-job.sh sweep|freshness|triage|drift|market|soak
 #
 # Exit 2 on an unknown job; otherwise cc-research's own exit (1 = some program's pass failed).
 # CC_RESEARCH_BIN overrides the cc-research binary (tests). bash 3.2-safe.
@@ -15,9 +16,9 @@ export PATH="$HOME/.claude/bin:/usr/bin:/bin"
 
 job="${1:-}"
 case "$job" in
-  sweep|freshness|triage|drift|market) ;;
+  sweep|freshness|triage|drift|market|soak) ;;
   *)
-    echo "research-job: unknown job '$job' (one of sweep freshness triage drift market)" >&2
+    echo "research-job: unknown job '$job' (one of sweep freshness triage drift market soak)" >&2
     exit 2
     ;;
 esac

@@ -1,7 +1,7 @@
 """cli_jobs.py — `cc-research job …`, the program's scheduled passes (REPORT.md §5.5, §8 item 12,
 §10 item 4).
 
-  cc-research job sweep|freshness|triage|drift|market [--program P] [--json]
+  cc-research job sweep|freshness|triage|drift|market|soak [--program P] [--json]
 
 Run by launchd through scripts/research-kit/jobs/research-job.sh, never because a question was asked.
 No --program: every registry program in certifying|certified or a Stage 9 build state (REPORT.md
@@ -25,6 +25,11 @@ prints one summary line per program; exit 1 if any program's pass failed (the ot
   market     frame.json populations_outside [{name, refresh_cmd, owner, cadence_days}]: once
              cadence_days have passed since <sealed>/market-state.json's last refresh, each stdout
              line not in census/<name>.json, nor parked before, is parked as a next-version candidate.
+  soak       method v1.2, Stage 9 (REPORT.md §11 instrument 4, built gate row 24): one
+             `built soak sample` per run over a program in build-certifying only, each acceptance
+             check run the as-built way. Hourly, so every boundary row 24 names is crossed. A failing
+             sample fails the pass and names the check; it becomes a finding by hand
+             (`cc-research built finding add --source soak`).
 """
 
 from __future__ import annotations
@@ -46,6 +51,7 @@ import kit
 REPO = Path(__file__).resolve().parents[3]
 RESEARCH_ACTIVE = ("certifying", "certified")
 ACTIVE = RESEARCH_ACTIVE + kit.BUILD_STATES  # §11: the jobs still visit a program in Stage 9
+SOAK_STATES = ("build-certifying",)  # §11: the soak runs between built-freeze and built-run
 DAY = 86400.0
 RULE_GLOBS = (
     "CLAUDE.global.md",
@@ -85,6 +91,8 @@ def open_packet(slug: str) -> bool:
 
 
 def scanned(job: str) -> str:
+    if job == "soak":
+        return "|".join(SOAK_STATES)
     return (
         "|".join(RESEARCH_ACTIVE)
         + (", nor registered with an open packet" if job == "sweep" else "")
@@ -100,6 +108,10 @@ def programs(only: Optional[str], job: str = "") -> List[Tuple[str, str]]:
     out: List[Tuple[str, str]] = []
     for p in kit.registry_load()["programs"]:
         slug, state = str(p["slug"]), str(p.get("state"))
+        if job == "soak":
+            if state in SOAK_STATES:
+                out.append((slug, state))
+            continue
         # the sweep alone also reaches a registered program: its class-B defaults fire on a
         # deadline, whether or not certification has begun (audit 2026-10-04, item 8)
         if state in ACTIVE or (
@@ -399,12 +411,35 @@ def job_market(slug: str, state: str) -> Tuple[bool, str]:
     return ok, "; ".join(msgs)
 
 
+# ── soak (method v1.2, REPORT.md §11) ──────────────────────────────────────────────────────────
+
+
+def job_soak(slug: str, state: str) -> Tuple[bool, str]:
+    import built
+    import gate
+
+    if state not in SOAK_STATES:
+        return False, (
+            f"{state}, not in {'|'.join(SOAK_STATES)}: the soak samples only between "
+            "`gate.sh built-freeze` and `gate.sh built-run`"
+        )
+    samples = built.soak_sample(gate.make_ctx(slug))
+    bad = [str(s["check"]) for s in samples if s["exit"] != 0]
+    if bad:
+        return False, (
+            f"{len(samples)} sample(s), failing: {', '.join(bad)} — a failing sample is a finding: "
+            "cc-research built finding add --source soak"
+        )
+    return True, f"{len(samples)} sample(s), all pass"
+
+
 PASSES: Dict[str, Pass] = {
     "sweep": job_sweep,
     "freshness": job_freshness,
     "triage": job_triage,
     "drift": job_drift,
     "market": job_market,
+    "soak": job_soak,
 }
 
 

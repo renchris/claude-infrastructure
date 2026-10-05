@@ -537,3 +537,6 @@ com.claude.research-freshness     | staged | 0      | auto | - | 0051-research-j
 com.claude.research-triage        | staged | 0      | auto | - | 0051-research-jobs.sh
 com.claude.research-drift         | staged | 0      | auto | - | 0051-research-jobs.sh
 com.claude.research-market        | staged | 604800 | auto | - | 0051-research-jobs.sh
+# Method v1.2 Stage 9 soak (2026-10-04, wave E3c, REPORT.md §11): the same runner, its own c10 step,
+# because 0051 was already run and a ledgered migration is never re-filed.
+com.claude.research-soak          | staged | 3600   | auto | - | 0058-research-soak-job.sh

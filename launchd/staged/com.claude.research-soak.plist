@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- SSOT for com.claude.research-soak. STAGED, NOT LOADED — loading it is the operator's
+     (migrations/0058-research-soak-job.sh, class c10). Hourly at :17: `cc-research job soak` takes one
+     soak sample (every acceptance check, run from an empty HOME with PATH=/usr/bin:/bin under
+     /bin/bash) for every research program in build-certifying, so Stage 9's soak crosses the hour,
+     UTC midnight and local midnight that built gate row 24 requires (REPORT.md §11, method v1.2). -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>            <string>com.claude.research-soak</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/chrisren/.claude/scripts/research-kit/jobs/research-job.sh</string>
+    <string>soak</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Minute</key>         <integer>17</integer>
+  </dict>
+  <key>RunAtLoad</key>        <false/>
+  <key>StandardOutPath</key>  <string>/Users/chrisren/.claude/logs/research-soak.out.log</string>
+  <key>StandardErrorPath</key><string>/Users/chrisren/.claude/logs/research-soak.err.log</string>
+</dict>
+</plist>

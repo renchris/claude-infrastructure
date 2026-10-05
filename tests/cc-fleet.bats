@@ -663,8 +663,10 @@ STUB
   # only by the operator's migrations/0051-research-jobs.sh. Rows, plists and this count in one land.
   # 49 since 2026-10-04: com.claude.fseventsd-watch (fseventsd at 64 GB, c-outcome-ledger.md), `run`,
   # row, plist and this count in one land. Its root twin lives in launchd/system/, undeclared.
-  if [ "$n" != 49 ]; then
-    echo "manifest declares $n labels, expected 49 — if a plist was legitimately added or retired,"
+  # 50 since 2026-10-04 (RESEARCH_PROGRAM_BUILD wave E3c): com.claude.research-soak, `staged`, the Stage 9
+  # soak (REPORT.md §11), its plist in launchd/staged/, loaded only by the operator's migrations/0058-research-soak-job.sh.
+  if [ "$n" != 50 ]; then
+    echo "manifest declares $n labels, expected 50 — if a plist was legitimately added or retired,"
     echo "move this count and say why (see the block above); if not, a row is missing. Declared:"
     grep -vE '^[[:space:]]*(#|$)' "$M" | cut -d'|' -f1 | sed 's/[[:space:]]//g; s/^/  /'
     return 1

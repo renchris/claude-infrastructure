@@ -238,3 +238,145 @@ d['populations_outside']=[{'name':'releases','refresh_cmd':'cat $F','owner':'lea
     grep -Fq "cls='$(dirname "$rel")/*'" "$REPO/scripts/deploy-parity-assert.sh"
   done
 }
+
+# ── wave E3c: the Stage 9 soak scheduler (REPORT.md §11 instrument 4, row 24) ─────────────────────
+
+SOAK_MIG() { echo "$REPO/migrations/0058-research-soak-job.sh"; }
+
+stage9() { # turn the fixture's demo into a Stage 9 program: a 1.2 frame, a built artifact, a freeze
+  local A="$W/artifact"
+  mkdir -p "$A" "$REC/built"
+  printf 'ok\n' > "$A/out.txt"
+  git -C "$A" init -q
+  git -C "$A" -c user.name=t -c user.email=t@t add -A
+  git -C "$A" -c user.name=t -c user.email=t@t commit -qm built
+  /usr/bin/python3 - "$REC" "$A" "$CC_NOW" <<'PY'
+import json, subprocess, sys
+rec, art, now = sys.argv[1:4]
+fr = json.load(open(f"{rec}/frame.json")); fr["method_version"] = "1.2"
+json.dump(fr, open(f"{rec}/frame.json", "w"))
+acc = json.load(open(f"{rec}/acceptance.json"))
+base = acc["rows"][0]
+acc["rows"] = [dict(base, id="AM-1", check_cmd='grep -q ok "$ARTIFACT/out.txt"'),
+               dict(base, id="AM-2", check_cmd='test -z "$(ls -A "$HOME")"')]
+json.dump(acc, open(f"{rec}/acceptance.json", "w"))
+sha = subprocess.run(["git", "-C", art, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+json.dump({"snapshot_sha": sha, "artifact_root": art, "frozen_at": now, "research_cert": "CERT-v1",
+           "waves_done": []}, open(f"{rec}/built/freeze.json", "w"))
+PY
+  reg demo build-certifying
+}
+
+@test "soak: no --program samples every acceptance check of a build-certifying program, the as-built way" {
+  stage9
+  reg x-cert certified
+  run job soak
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"job soak demo: ok — 2 sample(s), all pass"* ]] || false
+  [[ "$output" != *"x-cert"* ]] || false
+  # AM-2 passes only under the empty HOME the as-built run gives it
+  [ "$(count "$REC/built/soak.jsonl" "r['exit'] == 0 and r['check'] in ('AM-1', 'AM-2')")" -eq 2 ]
+  [ -f "$REC/built/soak.json" ]
+}
+
+@test "soak: a failing sample fails the pass and names the check, so the log is never quiet about it" {
+  stage9
+  printf 'bad\n' > "$W/artifact/out.txt"
+  run job soak --program demo
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"job soak demo: FAILED — 2 sample(s), failing: AM-1"*"built finding add --source soak"* ]] || false
+  [ "$(count "$REC/built/soak.jsonl" "r['check'] == 'AM-1' and r['exit'] != 0")" -eq 1 ]
+}
+
+@test "soak: only build-certifying is sampled; a certified program draws a refusal, not a sample" {
+  run job soak
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"job soak: no program in build-certifying"* ]] || false
+  run job soak --program demo
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"not in build-certifying"* ]] || false
+  [ ! -e "$REC/built/soak.jsonl" ]
+}
+
+@test "soak runner: /bin/bash 3.2 accepts soak and execs cc-research job soak" {
+  FAKE="$BATS_TEST_TMPDIR/fake-cc-research"
+  printf '#!/bin/bash\necho "$*" > "%s"\n' "$BATS_TEST_TMPDIR/args" > "$FAKE"
+  chmod +x "$FAKE"
+  CC_RESEARCH_BIN="$FAKE" run /bin/bash "$RUNNER" soak
+  [ "$status" -eq 0 ]
+  [ "$(cat "$BATS_TEST_TMPDIR/args")" = "job soak" ]
+}
+
+@test "soak plist: staged, lints, runs /bin/bash on the shared runner hourly at :17, declared in the fleet manifest" {
+  P="$REPO/launchd/staged/com.claude.research-soak.plist"
+  /usr/bin/plutil -lint "$P" >/dev/null
+  grep -q 'STAGED, NOT LOADED' "$P"
+  [ "$(/usr/bin/plutil -extract Label raw "$P")" = com.claude.research-soak ]
+  [ "$(/usr/bin/plutil -extract ProgramArguments.0 raw "$P")" = /bin/bash ]
+  [[ "$(/usr/bin/plutil -extract ProgramArguments.1 raw "$P")" == */.claude/scripts/research-kit/jobs/research-job.sh ]] || false
+  [ "$(/usr/bin/plutil -extract ProgramArguments.2 raw "$P")" = soak ]
+  [ "$(/usr/bin/plutil -extract StartCalendarInterval.Minute raw "$P")" = 17 ]
+  [[ "$(/usr/bin/plutil -extract StandardOutPath raw "$P")" == */.claude/logs/research-soak.out.log ]] || false
+  grep -Eq '^com\.claude\.research-soak +\| staged \| 3600 +\| auto \| - \| 0058-research-soak-job\.sh$' "$REPO/launchd/fleet.manifest"
+}
+
+@test "soak migration: c10, --dry-run under /bin/bash names the label and writes nothing; bad args exit 2" {
+  M="$(SOAK_MIG)"
+  grep -q '^# migration-class: c10$' "$M"
+  grep -q '^# migration-verify: launchctl print gui/$(id -u)/com.claude.research-soak' "$M"
+  grep -q '^# migration-run: bash ~/Development/claude-infrastructure/migrations/0058-research-soak-job.sh$' "$M"
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  printf '#!/bin/bash\necho called >> "%s"\n' "$BATS_TEST_TMPDIR/launchctl-calls" > "$BATS_TEST_TMPDIR/bin/launchctl"
+  chmod +x "$BATS_TEST_TMPDIR/bin/launchctl"
+  export HOME="$BATS_TEST_TMPDIR/mhome"
+  mkdir -p "$HOME"
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH" CC_MIGRATION_REPO="$REPO" run /bin/bash "$M" --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"would install $REPO/launchd/staged/com.claude.research-soak.plist"* ]] || false
+  [ -z "$(find "$HOME" -mindepth 1)" ]
+  [ ! -e "$BATS_TEST_TMPDIR/launchctl-calls" ]
+  run /bin/bash "$M" --bogus
+  [ "$status" -eq 2 ]
+}
+
+@test "soak migration: a real run refuses until the live layer has the runner, and loads nothing" {
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  printf '#!/bin/bash\necho "$*" >> "%s"\nexit 1\n' "$BATS_TEST_TMPDIR/launchctl-calls" > "$BATS_TEST_TMPDIR/bin/launchctl"
+  chmod +x "$BATS_TEST_TMPDIR/bin/launchctl"
+  export HOME="$BATS_TEST_TMPDIR/mhome"
+  mkdir -p "$HOME"
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH" CC_MIGRATION_REPO="$REPO" CC_MIGRATION_LA_DIR="$HOME/LA" run /bin/bash "$(SOAK_MIG)"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"not in the live layer yet"* ]] || false
+  [ ! -e "$HOME/LA/com.claude.research-soak.plist" ]
+}
+
+@test "soak migration: with the live layer present it installs the plist and reads the load back" {
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  # a launchctl that 'loads' on bootstrap and answers print only after it
+  cat > "$BATS_TEST_TMPDIR/bin/launchctl" <<SH
+#!/bin/bash
+case "\$1" in
+  bootstrap) touch "$BATS_TEST_TMPDIR/loaded"; exit 0 ;;
+  bootout) exit 0 ;;
+  print) [ -e "$BATS_TEST_TMPDIR/loaded" ] ;;
+esac
+SH
+  chmod +x "$BATS_TEST_TMPDIR/bin/launchctl"
+  export HOME="$BATS_TEST_TMPDIR/mhome"
+  mkdir -p "$HOME/.claude/scripts/research-kit/jobs" "$HOME/.claude/bin"
+  : > "$HOME/.claude/scripts/research-kit/jobs/research-job.sh"; : > "$HOME/.claude/bin/cc-research"
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH" CC_MIGRATION_REPO="$REPO" CC_MIGRATION_LA_DIR="$HOME/LA" run /bin/bash "$(SOAK_MIG)"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"com.claude.research-soak loaded"* ]] || false
+  cmp -s "$REPO/launchd/staged/com.claude.research-soak.plist" "$HOME/LA/com.claude.research-soak.plist"
+  # a re-run over identical bytes is a no-op
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH" CC_MIGRATION_REPO="$REPO" CC_MIGRATION_LA_DIR="$HOME/LA" run /bin/bash "$(SOAK_MIG)"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"already loaded from the repo plist"* ]] || false
+}
+
+@test "soak: shellcheck, bare, is clean on the runner and the soak migration" {
+  run shellcheck "$RUNNER" "$(SOAK_MIG)"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
