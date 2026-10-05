@@ -1,8 +1,10 @@
 #!/bin/bash
 # walk_v12.sh <scratch dir> — one dry walk of a method v1.2 research program, from intake to the
-# Stage 9 built certificate, through the kit's own verbs (RESEARCH_PROGRAM_BUILD wave E3c).
+# Stage 9 built certificate and the implementation signature, through the kit's own verbs
+# (RESEARCH_PROGRAM_BUILD waves E3c and E3d).
 # Everything lives under <scratch dir>: a fixture HOME, registry and records; never the live
-# pilot, never a vendor (the courier is a stub), never an operator signature written by a verb.
+# pilot, never a vendor (the courier is a stub), never a real operator signature: the one
+# signature the walk makes is the fixture signer's, on the fixture store, and says so in its chain.
 #
 #   Part A  a fresh program `walk`: intake init → rulings → escape cost → contract page (the v1.2
 #           ceiling), then stage 3's yield stop (REPORT.md §12.1): a failing probe keeps the stage
@@ -13,8 +15,14 @@
 #           Stage 9 by verbs only (§11): built-freeze, a finding with a failing test, the fix and a
 #           refreeze, a no-repro finding, mutation, as-built contact, 25 hourly soak samples by
 #           `cc-research job soak`, two built rounds, the built gate, the certificate, the render.
+#           Then the implementation signature (wave E3d): `built signoff` renders what is signed;
+#           the gate refuses `built-signed`, `close` and a post-signoff wave while it is unsigned;
+#           cc-signoff under a process named claude is refused (exit 3, nothing written); and the
+#           fixture signer (fixture_signer.py: bin/cc-signoff itself with an operator's ancestry,
+#           fixture store only) signs, which moves the registry to implementation-signed.
 #
-# Every command is echoed with `$ ` before its output. Exit 0 only if the walk ends build-certified.
+# Every command is echoed with `$ ` before its output. Exit 0 only if the walk ends closed, by way
+# of build-certified and implementation-signed.
 # Dates are relative to the clock at start (CC_NOW is stepped for the soak), never absolute.
 set -eu
 
@@ -176,6 +184,41 @@ printf '$ cat built/BUILT-CERT-v1.md\n'
 cat "$REC/built/BUILT-CERT-v1.md"
 run "$KIT/gate.sh" render --program demo
 
-state="$(/usr/bin/python3 -c "import json; print([p['state'] for p in json.load(open('$CC_RESEARCH_REGISTRY'))['programs'] if p['slug'] == 'demo'][0])")"
-say "Walk end: demo is $state"
-[ "$state" = build-certified ]
+regstate() { /usr/bin/python3 -c "import json; print([p['state'] for p in json.load(open('$CC_RESEARCH_REGISTRY'))['programs'] if p['slug'] == 'demo'][0])"; }
+echo "registry: demo $(regstate)"
+[ "$(regstate)" = build-certified ]
+
+say "Stage 9.8 — the implementation signature: the agent renders it, only the operator signs (§11)"
+SIGLOG="$CC_RESEARCH_HOME/demo/signoff.jsonl"
+implsigs() { grep -c '"action": "implementation"' "$SIGLOG" || true; }
+run "$CR" built signoff --program demo
+echo "-- unsigned, a build-certified program is not done"
+refuse "$KIT/gate.sh" built-signed --program demo
+refuse "$KIT/gate.sh" close --program demo
+refuse "$KIT/gate.sh" requires --program demo --after-signoff
+echo "-- an agent signs: cc-signoff under a process whose name is claude"
+AGENT="$W/claude-agent-shell"
+ln -s /bin/bash "$AGENT"
+printf '$ claude-agent-shell -c "bin/cc-signoff research:demo/implementation --evidence built/BUILT-CERT-v1.md"\n'
+set +e
+# `; exit $?` keeps the agent shell alive as the CLI's parent (a lone -c command is exec'd in place)
+"$AGENT" -c "'$REPO/bin/cc-signoff' research:demo/implementation --evidence built/BUILT-CERT-v1.md; exit \$?"
+rc=$?
+set -e
+echo "(exit $rc)"
+[ "$rc" -eq 3 ]
+echo "implementation signatures on file: $(implsigs) · registry: demo $(regstate)"
+# one test per line: under set -e a failing left side of `A && B` does not stop the script
+[ "$(implsigs)" = 0 ]
+[ "$(regstate)" = build-certified ]
+echo "-- the operator signs: bin/cc-signoff by the fixture signer (an operator's ancestry, fixture store only)"
+run "$FX/fixture_signer.py" research:demo/implementation --evidence built/BUILT-CERT-v1.md
+echo "implementation signatures on file: $(implsigs) · registry: demo $(regstate)"
+[ "$(implsigs)" = 1 ]
+[ "$(regstate)" = implementation-signed ]
+run "$KIT/gate.sh" render --program demo
+run "$KIT/gate.sh" requires --program demo --after-signoff
+run "$KIT/gate.sh" close --program demo
+
+say "Walk end: demo is $(regstate), by way of implementation-signed"
+[ "$(regstate)" = closed ]

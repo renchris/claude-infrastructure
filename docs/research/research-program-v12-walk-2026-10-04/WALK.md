@@ -147,3 +147,72 @@ Built: certified 2026-10-06T05:47:08Z (BUILT-CERT-v1)
 
 ## Walk end: demo is build-certified
 ```
+
+## Continued 2026-10-05 (wave E3d): the implementation signature
+
+The walk no longer ends at build-certified. After the render above (whose built line now ends
+"· implementation not signed"), it goes on through §11 "Signing the implementation": the agent renders, the gate
+refuses unsigned, a signature attempted under a process named claude is refused, and the fixture signer
+(`tests/fixtures/research-kit/fixture_signer.py`: `bin/cc-signoff` itself with an operator's ancestry, on the
+fixture store only) signs. Recorded by the same command, exit 0; the suite is now 1..11. No real signature was made.
+
+```text
+registry: demo build-certified
+
+## Stage 9.8 — the implementation signature: the agent renders it, only the operator signs (§11)
+$ bin/cc-research built signoff --program demo
+Built: demo built certificate version 1, issued 2026-10-06T06:34:49Z on snapshot b392d5dd692b567dd9469cf1969905c90e650cd9 (research CERT-v1)
+Before implementation signoff: 1 material change observed (forecast about 3.8)
+After implementation signoff: forecast about 0.2; at most 3 at 95% (mutant kill rate 10 of 10, lower bound 0.72; build-findable share 0.585, share assumed)
+Findings: 1 material, 1 fixed, 1 rejected for no failing test
+Signing pins built/BUILT-CERT-v1.json = ea9ee7a437daba32ca39cd2a99f01d953f085128 (one changed byte voids the signature)
+Read before signing: <W>/repo/docs/research/demo/built/BUILT-CERT-v1.md
+Implementation: not signed
+Operator, to sign this in your own terminal (an agent is refused):
+  cc-signoff research:demo/implementation --evidence <what you read>
+-- unsigned, a build-certified program is not done
+$ scripts/research-kit/gate.sh built-signed --program demo
+gate.sh: built-signed refused: BUILT-CERT-v1 carries no operator signature. The operator signs it in their own terminal: cc-signoff research:demo/implementation --evidence <what you read>
+(exit 2)
+$ scripts/research-kit/gate.sh close --program demo
+gate.sh: close refused: demo is build-certified and BUILT-CERT-v1 carries no operator signature. The operator signs it in their own terminal: cc-signoff research:demo/implementation --evidence <what you read>
+(exit 2)
+$ scripts/research-kit/gate.sh requires --program demo --after-signoff
+REFUSED demo every wave:
+  - this wave follows implementation signoff and the registry state is 'build-certified': BUILT-CERT-v1 carries no operator signature. The operator signs it in their own terminal: cc-signoff research:demo/implementation --evidence <what you read>
+  - no --wave given, so every block counts: pass the wave id to scope to its closure
+(exit 1)
+-- an agent signs: cc-signoff under a process whose name is claude
+$ claude-agent-shell -c "bin/cc-signoff research:demo/implementation --evidence built/BUILT-CERT-v1.md"
+REFUSED — this signing tool is descended from a claude process (<W>/claude-agent-shell at depth 1).
+A signature is the operator's, made in his own terminal after looking at the
+artifact. An agent may prepare it and stop there.
+
+  Operator, to sign this:  cc-signoff research:demo/implementation --evidence <what you read>
+(exit 3)
+implementation signatures on file: 0 · registry: demo build-certified
+-- the operator signs: bin/cc-signoff by the fixture signer (an operator's ancestry, fixture store only)
+$ tests/fixtures/research-kit/fixture_signer.py research:demo/implementation --evidence built/BUILT-CERT-v1.md
+SIGNED research:demo/implementation
+  pinned built/BUILT-CERT-v1.json = ea9ee7a437daba32ca39cd2a99f01d953f085128 — one changed byte voids this signature
+  IMPLEMENTATION-SIGNED demo: BUILT-CERT-v1 signed by the operator 2026-10-05T05:35:06Z; registry -> implementation-signed
+implementation signatures on file: 1 · registry: demo implementation-signed
+$ scripts/research-kit/gate.sh render --program demo
+Research: demo version 1. CERTIFIED Oct 05 (lite profile; stopped after 2 quiet rounds)
+Signed frame: 100.00% closed. 1/1 decisions · 1/1 populations enumerated two ways · 1/1 checks shown to fail first · 1/1 premises at required level · 1/1 sources
+After signoff: 0 material changes (0 escapes; forecast about 6.5; at most 11 at 95%, of which about 0.5 is invisible to any reviewer, share assumed)
+Split: before implementation signoff about 3.8 · after implementation signoff about 2.7 (at most 11 at 95%); build-findable share 0.585, share assumed
+Decisions: 1 ruled at 90%+ · 0 ruled by you · 0 decided by default · 0 carried
+Next version: 0 ideas parked · Frame defects 0 · Unasked intent 0
+Residuals: 1 declared (elapsed-time 1)
+Scheduled checks: 1 production or elapsed-time check with owner and date (next due 2026-11-01)
+Live – · Calibration: none measured (uncalibrated)
+Fingerprint: certified under m, rules r, memory x · this answer unchanged since 2026-10-05T05:34:49Z
+Built: certified 2026-10-06T06:34:49Z (BUILT-CERT-v1) · implementation signed by the operator 2026-10-05T05:35:06Z
+$ scripts/research-kit/gate.sh requires --program demo --after-signoff
+CLEAR demo every wave: CERT-v1 carries nothing that blocks it
+$ scripts/research-kit/gate.sh close --program demo
+closed demo
+
+## Walk end: demo is closed, by way of implementation-signed
+```
