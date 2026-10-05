@@ -82,7 +82,12 @@ class Ctx:
         self.paths, self.mode_cap, self.home = paths, mode_cap, home
         self.clock = Clock()
         self.admission = Admission()
-        self.boots = BootSlots()
+        # One slot store with `cc-lr move` (admit.py BootSlots). Kill switch LR_BOOT_SLOTS_SHARED=off.
+        self.boots = BootSlots(
+            store=""
+            if os.environ.get("LR_BOOT_SLOTS_SHARED", "on") == "off"
+            else os.path.join(paths.lr_root, "locks", "swap-slots")
+        )
         self.records: Dict[str, T.Record] = {}
         self.reporter: Optional[report.Reporter] = None
         self.actuations = 0

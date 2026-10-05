@@ -102,6 +102,11 @@ cc_lr_env() {
   chmod +x "$STUBS/launchctl"
   export PATH="$STUBS:$PATH"
   export LR_STATE_DIR="$LRU_STATE" CC_LR_UPGRADE_BIN="$LRU" CC_PANE_ID=999
+  # THIS SUITE PINS THE LEGACY DRIVE (the drainer asks the subject to move itself). Since
+  # design-swap-v3 the driver form of `cc-lr switch` delegates an interactive subject to
+  # `cc-lr move` (tests/lr-move-plan.bats case 14); the old drive stays reachable behind this
+  # switch until the lane's live ramp, and these cases keep it honest until it is deleted.
+  export CC_LR_SWITCH_LEGACY=on
 }
 
 # ── A. THE SELECTION — lr-upgrade's idle oracle, reused ──────────────────────────────────────────

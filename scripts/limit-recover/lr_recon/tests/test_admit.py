@@ -259,6 +259,39 @@ class Boots(unittest.TestCase):
         b.release("a")
         self.assertTrue(b.acquire("c"))
 
+    def test_shared_store_counts_the_move_lanes_slots(self) -> None:
+        """A boot slot is also one of `cc-lr move`'s slot directories, so each dispatcher's width
+        counts the other's boots; without a store (the control) the two cannot see each other."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as root:
+            store = os.path.join(root, "locks", "swap-slots")
+            os.makedirs(os.path.join(store, "slot-1"))
+            # slot-1 is held by a LIVE process of the move lane (this test process stands in for it)
+            with open(
+                os.path.join(store, "slot-1", "pid"), "w", encoding="utf-8"
+            ) as fh:
+                fh.write("%d\n" % os.getpid())
+            b = A.BootSlots(env={}, store=store)
+            b.limit = 2
+            self.assertTrue(b.acquire("a"))
+            self.assertEqual(os.path.basename(b.disk["a"]), "slot-2")
+            self.assertFalse(
+                b.acquire("b")
+            )  # the lane's slot counts against this width
+            control = A.BootSlots(env={})
+            control.limit = 2
+            self.assertTrue(control.acquire("a") and control.acquire("b"))
+            b.release("a")
+            self.assertFalse(os.path.exists(os.path.join(store, "slot-2")))
+            # a slot whose holder is dead is taken over
+            with open(
+                os.path.join(store, "slot-1", "pid"), "w", encoding="utf-8"
+            ) as fh:
+                fh.write("999999\n")
+            self.assertTrue(b.acquire("c"))
+            self.assertEqual(os.path.basename(b.disk["c"]), "slot-1")
+
 
 if __name__ == "__main__":
     unittest.main()

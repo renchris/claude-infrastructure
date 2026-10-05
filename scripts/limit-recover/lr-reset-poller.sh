@@ -259,6 +259,47 @@ lrp_recon_watchdog() {
 }
 lrp_recon_watchdog
 
+# ── THE MOVE LANE'S KICK (design-swap-v3 N5, 2026-10-04): the first work of the tick ────────────
+# `cc-lr move` writes <state>/move/<batch>/{plan.json,intent/} and one request, then kickstarts this
+# job. The batch runner must not be a child of the session that asked (auto mode refuses an agent
+# keying a live peer pane, and a tool call's children die with it), so THIS daemon starts it,
+# detached, and it outlives the tick. First in the tick because everything below can take minutes
+# (ticks ran 49-375 s that day) and an operator is waiting on this one.
+#   · THE CLAIM IS A LINK, AND THE RUNNER STARTS ONLY IF IT SUCCEEDED: `ln` refuses an existing
+#     name, so a request already claimed (by an earlier tick, or by a second poller) is never driven
+#     twice. The upgrade drain's `mv … || rm` drove a request it had failed to claim.
+#   · a runner that could not be started gives the request back, so the next tick retries.
+# Kill switch LR_MOVE_LANE=off: requests are left in place, untouched.
+lrp_move_kick() {
+  local root="${LR_STATE_DIR:-$STATE}/move" q b bdir det="" d pid runner="${LR_MOVE_BATCH_BIN:-$LR/lr-move-batch.sh}"
+  compgen -G "$root/requests/*.json" >/dev/null 2>&1 || return 0
+  if [[ "${LR_MOVE_LANE:-on}" == off ]]; then log "MOVE-SKIP LR_MOVE_LANE=off (move requests left in place)"; return 0; fi
+  for d in "$LR/../lib/detach.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/detach.sh" "$HOME/.claude/scripts/lib/detach.sh"; do
+    [[ -f "$d" ]] && { det="$d"; break; }
+  done
+  for q in "$root"/requests/*.json; do
+    [[ -f "$q" ]] || continue
+    b="$(basename "$q" .json)"; bdir="$root/$b"
+    if [[ ! -s "$bdir/plan.json" ]]; then log "MOVE-SKIP $b has no plan.json (request left in place)"; continue; fi
+    if [[ $DRY -eq 1 ]]; then log "DRY   move batch $b would start: $runner $b"; continue; fi
+    if [[ ! -f "$runner" || -z "$det" ]]; then log "MOVE-SKIP $b: lr-move-batch.sh or scripts/lib/detach.sh unreachable (request left in place)"; continue; fi
+    if [[ -e "$bdir/request.claimed.json" ]]; then
+      log "MOVE-SKIP $b was already claimed; dropping the repeated request"; rm -f "$q" 2>/dev/null || true; continue
+    fi
+    if ! ln "$q" "$bdir/request.claimed.json" 2>/dev/null; then log "MOVE-SKIP $b could not be claimed (not driven)"; continue; fi
+    rm -f "$q" 2>/dev/null || true
+    # shellcheck disable=SC1090  # runtime-resolved sibling
+    pid="$( . "$det" && detach "$bdir/batch.log" /bin/bash "$runner" "$b" 2>/dev/null )" || pid=""
+    if [[ "$pid" =~ ^[0-9]+$ ]]; then
+      log "MOVE-BATCH started pid $pid ($b)"
+    else
+      log "MOVE-BATCH $b could not be started; request given back for the next tick"
+      mv -f "$bdir/request.claimed.json" "$q" 2>/dev/null || true
+    fi
+  done
+}
+lrp_move_kick
+
 # ── FIRE CLAIM (closes the pgrep race) ─────────────────────────────────────────────────
 # The "already running" guard is `pgrep -f "resume <sid>"` — it looks for the claude CHILD.
 # But the spawn chain is launcher → lr-fire-resume.sh → expect → claude: for the seconds
@@ -1414,8 +1455,10 @@ lrp_upgrade_kick() {
   # A PARKED switch is work too: the drain start is what re-judges it, so a tick that saw only
   # parked requests and did not kick would leave them waiting out their whole --until-idle budget.
   compgen -G "$UPG_QUEUE/*.json" >/dev/null 2>&1 || compgen -G "$UPG_DEFER/*.json" >/dev/null 2>&1 || return 0
+  # (pid, lstart) when lr-lib.sh is loaded (F1): a reused pid read as "already running" and the
+  # queue then waited on a drainer that did not exist.
   hp="$(cat "$STATE/upgrade-drain.lock/pid" 2>/dev/null || true)"
-  if [[ "$hp" =~ ^[0-9]+$ ]] && kill -0 "$hp" 2>/dev/null; then
+  if [[ "$hp" =~ ^[0-9]+$ ]] && { if command -v lr_pidlock_live >/dev/null 2>&1; then lr_pidlock_live "$STATE/upgrade-drain.lock"; else kill -0 "$hp" 2>/dev/null; fi; }; then
     log "UPGRADE-DRAIN already running (pid $hp)"; return 0
   fi
   # THE FENCE, per queue: a drainer started over a queue whose every sid the reconciler owns would

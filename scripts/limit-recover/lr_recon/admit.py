@@ -23,6 +23,7 @@ import os
 import re
 import shlex
 import subprocess
+import time
 from typing import Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 # argv -> (rc, stdout). rc < 0 means the runner itself failed (spawn error, timeout).
@@ -261,12 +262,81 @@ class BootSlots:
     FAST_S = 15.0
     SLOW_S = 45.0
 
-    def __init__(self, env: Optional[Mapping[str, str]] = None) -> None:
+    def __init__(
+        self, env: Optional[Mapping[str, str]] = None, store: str = ""
+    ) -> None:
         e = env if env is not None else os.environ
         self.cap = _env_int(e, "LR_BOOT_MAX", 12)
         self.workers_cap = _env_int(e, "LR_RECON_WORKERS", 16)
         self.limit = min(self.START, self.cap)
         self.held: Set[str] = set()
+        # THE SHARED STORE (design-swap-v3 critic 11, 2026-10-04). `cc-lr move` bounds its own boots
+        # with mkdir slots under <lr_root>/locks/swap-slots (lr-move-lib.sh lr_swap_slot_acquire).
+        # Two counters that cannot see each other bound nothing together: 6 boots here plus 4 there
+        # is 10 at once on a box never measured above 4. With a store, a boot slot is ALSO one of
+        # those directories, holding this daemon's (pid, lstart) in the two files the bash side
+        # reads, so each dispatcher's width counts the other's boots. Empty store = memory only.
+        self.store = store
+        self.disk: Dict[str, str] = {}
+
+    @staticmethod
+    def _slot_live(d: str) -> bool:
+        from lr_recon.store import proc_lstart
+
+        try:
+            with open(os.path.join(d, "pid"), "r", encoding="utf-8") as fh:
+                pid = int(fh.read().strip() or "0")
+        except (OSError, ValueError):
+            # no pid yet: a taker between its mkdir and its stamp, unless the slot is old
+            try:
+                return time.time() - os.stat(d).st_mtime < 60
+            except OSError:
+                return False
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except OSError:
+            pass
+        try:
+            with open(os.path.join(d, "lstart"), "r", encoding="utf-8") as fh:
+                want = " ".join(fh.read().split())
+        except OSError:
+            want = ""
+        cur = proc_lstart(pid)
+        return not want or not cur or want == cur
+
+    def _disk_take(self, sid: str) -> bool:
+        from lr_recon.store import proc_lstart
+
+        try:
+            os.makedirs(self.store, exist_ok=True)
+        except OSError:
+            return True  # an unwritable store must not stop every boot: memory still bounds them
+        for i in range(1, self.limit + 1):
+            d = os.path.join(self.store, "slot-%d" % i)
+            try:
+                os.mkdir(d)
+            except FileExistsError:
+                if self._slot_live(d):
+                    continue
+                for name in ("pid", "lstart"):
+                    try:
+                        os.unlink(os.path.join(d, name))
+                    except OSError:
+                        pass
+            except OSError:
+                continue
+            try:
+                with open(os.path.join(d, "pid"), "w", encoding="utf-8") as fh:
+                    fh.write("%d\n" % os.getpid())
+                with open(os.path.join(d, "lstart"), "w", encoding="utf-8") as fh:
+                    fh.write(proc_lstart(os.getpid()) + "\n")
+            except OSError:
+                continue
+            self.disk[sid] = d
+            return True
+        return False
 
     def on_wave(self, durations: Sequence[Optional[float]]) -> int:
         """One finished wave; a ``None`` duration is an INDETERMINATE boot. Returns the new limit."""
@@ -283,8 +353,21 @@ class BootSlots:
             return True
         if len(self.held) >= self.limit:
             return False
+        if self.store and not self._disk_take(sid):
+            return False
         self.held.add(sid)
         return True
 
     def release(self, sid: str) -> None:
         self.held.discard(sid)
+        d = self.disk.pop(sid, "")
+        if d:
+            for name in ("pid", "lstart"):
+                try:
+                    os.unlink(os.path.join(d, name))
+                except OSError:
+                    pass
+            try:
+                os.rmdir(d)
+            except OSError:
+                pass

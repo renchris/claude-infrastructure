@@ -35,6 +35,11 @@
 #   cc-lr switch (--pane P | --sid S | --from A --all-idle) --target A [--dry-run] [--wait S|--no-wait]
 #                [--until-idle S]     ask ANOTHER idle session to move itself (the driver form);
 #                                     --until-idle waits out a busy one for up to S seconds (default off)
+#   cc-lr plan --from A --to B [--until-idle S] [--cold-only] [--json]
+#                                     READ-ONLY: every session on A and what `move` would do with it
+#   cc-lr move --from A --to B|auto [--until-idle S] [--cold-only] [--slots W] [--wait S] [--dry-run]
+#                                     restart A's idle sessions on B in place, no model turn (the lane)
+#   cc-lr move --status <batch> · cc-lr move --abort <batch>
 #   cc-lr status [ref | --all]
 #   cc-lr status --cohort [cid]       the reconciler's cohorts, one line per member
 #   cc-lr repair <bundle|ref> [--mode relaunch|prompt] [--target A] [--source-pane P]
@@ -179,6 +184,22 @@ cc-lr — find · recover · status · repair, for a limit-blocked session.
                              ask the reconciler to reset one member's retry budget (writes a
                              ctl request; the daemon acts on it)
   While the reconciler is live, recover and switch QUEUE a request for it instead of acting.
+  cc-lr plan --from A --to B [--until-idle S] [--cold-only] [--json]
+                             READ-ONLY: one row and one disposition for every session on
+                             account A (idle, busy, limited, background, held), and what
+                             `move` would do with it. Writes and types nothing.
+  cc-lr move --from A --to B|auto [--until-idle S] [--cold-only] [--slots W] [--wait S]
+             [--dry-run] [--target-unverified]   (or --sid S / --pane P with --to B)
+                             restart every idle, healthy session of A on B, each in its own
+                             pane, with NO model turn: one intent file per session and one
+                             batch request for the poller, whose batch runner admits once and
+                             runs one worker per session. Held, never moved: mid-turn (unless
+                             --until-idle), a draft, a teammate or lead, a live /goal, a
+                             limit-blocked session (use recover --limited), a background job.
+                             Exit 0 all moved · 1 some not · 2 batch refused · 3 usage.
+  cc-lr move --status <batch> [--json]
+                             every verdict RE-DERIVED from disk and ps, beside the recorded one
+  cc-lr move --abort <batch> stop workers that have not started their move yet
   cc-lr repair <bundle|ref> [--mode relaunch|prompt] [--target A] [--source-pane P]
                              write a poller request and kick the daemon — NEVER types
   cc-lr repair-markers [--sid S] [--dry-run]
@@ -829,6 +850,21 @@ cmd_switch_driver() { # <target> <dry> <pane> <sid> <from> <all> <wait_s> [exclu
     echo "cc-lr switch: REFUSED — --from and --target are both '$target'; there is nothing to move. Nothing was read or written." >&2; exit 3; }
   command -v jq >/dev/null 2>&1 || cl_die "jq is not on PATH; nothing was read or written" 2
   [ -n "$UPGRADE_BIN" ] && [ -f "$UPGRADE_BIN" ] || cl_die "cannot reach lr-upgrade.sh (set CC_LR_UPGRADE_BIN); nothing was read or written" 2
+  # ── THE DRIVER FORM NOW RUNS THE MOVE LANE (design-swap-v3 D1, 2026-10-04) ───────────────────
+  # An interactive subject is restarted on the target by the poller's batch runner, with no prompt
+  # typed into it and no subject turn (cc-lr move). What stays on the path below: a BACKGROUND
+  # session named by --sid/--pane, whose stop-transplant-relaunch drive lives in the drainer, and
+  # everything when CC_LR_SWITCH_LEGACY=on (the old ask-it-to-move-itself drive, kept reachable
+  # until the lane has run its live ramp). --all-idle never moved a background session, so it
+  # delegates before the census; a named subject is delegated after it, once its row is known.
+  local margs=()
+  margs=(--to "$target" --wait "$wait_s")
+  [ "$until_s" -gt 0 ] && margs+=(--until-idle "$until_s")
+  [ "$dry" -eq 1 ] && margs+=(--dry-run)
+  if [ "${CC_LR_SWITCH_LEGACY:-off}" != on ] && [ "$all" -eq 1 ]; then
+    echo "cc-lr switch: the driver form now runs the move lane (no subject turn): cc-lr move --from $from ${margs[*]}"
+    CL_MOVE_EXCL="$excl" cmd_move --from "$from" "${margs[@]}"; return $?
+  fi
   # ONCE, BEFORE ANY REQUEST. A real run refuses here; a dry run still shows its table, with every
   # would-be `move` row relabelled, so the rehearsal answers the same question the run would.
   local unroute="" hint=""
@@ -865,6 +901,15 @@ cmd_switch_driver() { # <target> <dry> <pane> <sid> <from> <all> <wait_s> [exclu
     echo "cc-lr switch: REFUSED — sid '$sid' matched more than one live session; pass the pane id. Nothing was written. Candidates:" >&2
     printf '%s\n' "$census" | cut -f1,2 >&2
     return 2
+  fi
+  if [ "${CC_LR_SWITCH_LEGACY:-off}" != on ]; then
+    case "$(printf '%s\n' "$census" | sed -n '1p' | cut -f7)" in
+      bg-*) ;;
+      *) [ -n "$pane" ] && margs+=(--pane "$pane")
+         [ -n "$sid" ] && margs+=(--sid "$sid")
+         echo "cc-lr switch: the driver form now runs the move lane (no subject turn): cc-lr move ${margs[*]}"
+         CL_MOVE_EXCL="$excl" cmd_move "${margs[@]}"; return $? ;;
+    esac
   fi
 
   if [ "$dry" -eq 1 ]; then
@@ -967,6 +1012,358 @@ EOF3
     done
   fi
   [ "$nbad" -eq 0 ] || return 1
+  return 0
+}
+
+# ── plan · move: THE LANE (design-swap-v3, 2026-10-04; operator decision D1) ─────────────────────
+# `cc-lr plan --from A --to B` is the read-only table: one row and one disposition for EVERY session
+# on the source account, none silent. `cc-lr move` writes one operator-intent file per movable
+# session and one batch request, and kicks the launchd poller; its batch runner admits the batch
+# once and detaches one worker per session, which restarts that session on the target in the same
+# pane with NO model turn (scripts/limit-recover/lr-move-batch.sh, lr-move-worker.sh).
+#
+# WHY IT REPLACES THE DRIVER FORM OF `switch`. That form asked each idle subject to move itself:
+# one global drain lock, a 10 s gap, a full model turn per subject. Measured 2026-10-04: a 12-request
+# batch took 36 m 51 s and moved 0; a subject turn cost a median 376K input-equivalent tokens and
+# was paid even when the move was then refused. This lane spends 0 model tokens at move time.
+#
+# Like `switch` and `upgrade`, these verbs only READ and WRITE REQUESTS: an agent keying a live peer
+# pane is refused by auto mode, so the actor stays the launchd-owned poller.
+#
+# A row is `move` only when the idle oracle (lr-upgrade.sh --switch-census) says so AND none of the
+# lane's own holds applies: a limit-blocked session owes a turn and belongs to `recover --limited`;
+# a session with a live /goal would be driven on by its goal mid-move; a session another actuator
+# has claimed is in flight. Drafts are held, never carried.
+# Kill switch LR_MOVE_LANE=off: `move` refuses rc 2 and writes nothing; `plan` still reads.
+cl_move_lib() { # → 0 when lr-move-lib.sh is loaded
+  local f
+  command -v lr_move_verdict >/dev/null 2>&1 && return 0
+  for f in "$_CL_BIN/../scripts/limit-recover/lr-move-lib.sh" \
+           "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/limit-recover/lr-move-lib.sh" \
+           "$HOME/.claude/scripts/limit-recover/lr-move-lib.sh"; do
+    # shellcheck disable=SC1090  # runtime-resolved library ladder, same shape as the ones above
+    [ -f "$f" ] && { . "$f"; return 0; }
+  done
+  return 1
+}
+cl_move_goal_lib() {
+  local f
+  command -v goal_live_condition >/dev/null 2>&1 && return 0
+  for f in "$_CL_BIN/../hooks/lib/goal-state.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/goal-state.sh" \
+           "$HOME/.claude/hooks/lib/goal-state.sh"; do
+    # shellcheck disable=SC1090
+    [ -f "$f" ] && { . "$f" 2>/dev/null || true; return 0; }
+  done
+  return 1
+}
+cl_move_mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
+# THE PLAN ROWS. stdout TSV, one row per session:
+#   pane sid account config_dir cwd pid disposition act action idle_s cache
+# act ∈ move | wait | hold | none (on-target). rc 1 when no live session matched, 2 census failure.
+cl_move_rows() { # <from or ""> <to> <until_idle_s> <sel flag or ""> <sel value> <cold_only 0|1> [excluded sids]
+  local from="$1" to="$2" until_s="$3" self="$4" selv="$5" cold="$6" excl="${7:-}" census rc=0
+  local p s ac cfg cwd pid d disp act action tx kind idle cache now hp
+  if [ -n "$self" ]; then
+    census="$(bash "$UPGRADE_BIN" --switch-census --target "$to" "$self" "$selv")" || rc=$?
+  else
+    census="$(bash "$UPGRADE_BIN" --switch-census --from "$from" --target "$to")" || rc=$?
+  fi
+  case "$rc" in 0) ;; 1) return 1 ;; *) return 2 ;; esac
+  now="$(date +%s)"
+  cl_move_goal_lib || true
+  while IFS=$'\t' read -r p s ac cfg cwd pid d; do
+    [ -n "$s" ] || continue
+    disp="" act=hold action="" idle="-" cache="-"
+    tx=""
+    for tx in "$cfg"/projects/*/"$s".jsonl; do [ -f "$tx" ] && break; tx=""; done
+    if [ -n "$tx" ]; then
+      idle=$(( now - $(cl_move_mtime "$tx") )); [ "$idle" -ge 0 ] || idle=0
+      # The prompt cache lives 1 h: a session idle longer pays its context write on its next turn
+      # whether or not it moved, so moving it costs nothing extra (`cold`).
+      if [ "$idle" -ge 3600 ]; then cache=cold; else cache=warm; fi
+    fi
+    case "$d" in
+      move) disp=move act=move action="restart on $to in this pane, no prompt" ;;
+      on-target) disp=on-target act=none action="already on $to" ;;
+      mid-turn|subagents-in-flight|background-job|composer-unknown)
+        if [ "$until_s" -gt 0 ]; then disp="wait:$d" act=wait action="waits until idle (<= ${until_s}s), then restarts on $to"
+        else disp="hold:$d" action="busy now; --until-idle S waits for it"; fi ;;
+      composer-occupied) disp=hold:draft action="a draft is in its composer; drafts are not carried" ;;
+      retired-source) disp=hold:retired-source action="a stale handoff marker blocks its prompts; repair first: cc-lr repair-markers --sid $s" ;;
+      bg-session) disp=hold:bg-session action="a background job moves only when named: cc-lr switch --sid $s --target $to" ;;
+      self) disp=hold:self action="the session that ran this command" ;;
+      *) disp="hold:$d" action="not moved" ;;
+    esac
+    case " $excl " in *" $s "*) disp=hold:being-recovered act=hold action="already being recovered by this command" ;; esac
+    if [ "$act" = move ] || [ "$act" = wait ]; then
+      kind=""
+      if [ -n "$tx" ] && command -v lr_last_api_error >/dev/null 2>&1; then kind="$(lr_last_api_error "$tx" 2>/dev/null | cut -f3 || true)"; fi
+      hp=""
+      if [ -d "$MUTEX_DIR/$s.active" ] && command -v lr_claim_holder_state >/dev/null 2>&1 \
+         && hp="$(lr_claim_holder_pid "$MUTEX_DIR/$s.active" 2>/dev/null)"; then
+        case "$(lr_claim_holder_state "$MUTEX_DIR/$s.active" "$hp")" in live) ;; *) hp="" ;; esac
+      fi
+      if [ "$kind" = limit ]; then
+        disp=hold:limited act=hold action="limit-blocked, so it owes a turn: cc-lr recover --limited --account $ac --target $to"
+      elif [ -n "$kind" ]; then
+        disp="hold:api-error-$kind" act=hold action="its last record is an api error ($kind); not an idle, healthy session"
+      elif [ -n "$hp" ]; then
+        disp=hold:in-flight act=hold action="another actuator holds its claim (pid $hp)"
+      elif [ "${CC_LR_MOVE_GOAL_HOLD:-on}" != off ] && [ -n "$tx" ] && command -v goal_live_condition >/dev/null 2>&1 \
+           && goal_live_condition "$tx" >/dev/null 2>&1; then
+        disp=hold:goal-live act=hold action="a /goal is live; its goal would drive it on mid-move"
+      elif [ "$cold" -eq 1 ] && [ "$cache" = warm ]; then
+        disp=hold:warm-cache act=hold action="skipped by --cold-only (idle ${idle}s < 3600s: a move would cost its cache)"
+      fi
+    fi
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$p" "$s" "${ac:--}" "$cfg" "${cwd:--}" "${pid:--}" "$disp" "$act" "$action" "$idle" "$cache"
+  done <<EOF
+$census
+EOF
+  return 0
+}
+cl_move_table() { # stdin = cl_move_rows output; $1=from $2=to $3=footer note
+  local rows nm nw nh nt
+  rows="$(cat)"
+  printf 'from %s → %s\n' "${1:--}" "$2"
+  printf '%-5s %-8s  %-26s %-7s %-5s %s\n' PANE SID DISPOSITION IDLE CACHE ACTION
+  printf '%s\n' "$rows" | while IFS=$'\t' read -r p s _ _ _ _ disp _ action idle cache; do
+    [ -n "$s" ] || continue
+    printf '%-5s %-8s  %-26s %-7s %-5s %s\n' "$p" "${s:0:8}" "$disp" "${idle}s" "$cache" "$action"
+  done
+  nm="$(printf '%s\n' "$rows" | awk -F'\t' '$8 == "move"' | grep -c . || true)"
+  nw="$(printf '%s\n' "$rows" | awk -F'\t' '$8 == "wait"' | grep -c . || true)"
+  nh="$(printf '%s\n' "$rows" | awk -F'\t' '$8 == "hold"' | grep -c . || true)"
+  nt="$(printf '%s\n' "$rows" | awk -F'\t' '$8 == "none"' | grep -c . || true)"
+  printf '%s to move · %s waiting · %s held · %s on target%s\n' "$nm" "$nw" "$nh" "$nt" "${3:+ · $3}"
+}
+cl_move_rows_json() { # stdin = rows → a JSON array
+  jq -Rn '[inputs | select(length > 0) | split("\t")
+          | {pane:.[0], sid:.[1], account:.[2], config_dir:.[3], cwd:.[4], pid:.[5], disposition:.[6], act:.[7], action:.[8],
+             idle_s:(.[9] | tonumber? // null), cache:.[10]}]'
+}
+cl_move_accounts() { # <from or ""> <to> <verb> → validates names; exits 3 on a bad one
+  local a
+  case "$2" in ''|-*|*[!A-Za-z0-9_-]*) echo "cc-lr $3: '$2' cannot be an account name. Nothing was read or written." >&2; exit 3 ;; esac
+  command -v cc_acct_dir_for_name >/dev/null 2>&1 || cl_die "the account map is not reachable, so no account name can be resolved; nothing was read or written" 2
+  for a in "$2" ${1:+"$1"}; do
+    cc_acct_dir_for_name "$a" >/dev/null 2>&1 && [ -n "${CC_ACCT_DIR:-}" ] || {
+      echo "cc-lr $3: '$a' is not an account the account map knows. Nothing was read or written." >&2; exit 3; }
+  done
+  if [ -n "$1" ] && [ "$1" = "$2" ]; then echo "cc-lr $3: --from and --to are both '$2'; there is nothing to move." >&2; exit 3; fi
+}
+cmd_plan() {
+  local from="" to="" until_s=0 json=0 cold=0 self="" selv="" rows rc=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --from) [ $# -ge 2 ] || { usage; exit 3; }; from="$2"; shift 2 ;;
+      --to|--target) [ $# -ge 2 ] || { usage; exit 3; }; to="$2"; shift 2 ;;
+      --sid) [ $# -ge 2 ] || { usage; exit 3; }; self=--sid; selv="$2"; shift 2 ;;
+      --pane) [ $# -ge 2 ] || { usage; exit 3; }; self=--pane; selv="$2"; shift 2 ;;
+      --until-idle) [ $# -ge 2 ] || { usage; exit 3; }; until_s="$2"; shift 2 ;;
+      --cold-only) cold=1; shift ;;
+      --json) json=1; shift ;;
+      -h|--help) usage; exit 0 ;;
+      *) echo "cc-lr plan: unknown argument $1" >&2; usage; exit 3 ;;
+    esac
+  done
+  case "$until_s" in ''|*[!0-9]*) echo "cc-lr plan: --until-idle takes whole seconds" >&2; exit 3 ;; esac
+  [ -n "$to" ] && { [ -n "$from" ] || [ -n "$self" ]; } || { echo "cc-lr plan: name the source and the target — --from <acct> --to <acct> (or --sid/--pane with --to)" >&2; exit 3; }
+  cl_move_accounts "$from" "$to" plan
+  command -v jq >/dev/null 2>&1 || cl_die "jq is not on PATH; nothing was read" 2
+  [ -n "$UPGRADE_BIN" ] && [ -f "$UPGRADE_BIN" ] || cl_die "cannot reach lr-upgrade.sh (set CC_LR_UPGRADE_BIN); nothing was read" 2
+  rows="$(cl_move_rows "$from" "$to" "$until_s" "$self" "$selv" "$cold")" || rc=$?
+  case "$rc" in
+    0) ;;
+    1) echo "cc-lr plan: no live session matched ${from:+on $from}${selv:+ $selv}" >&2; return 1 ;;
+    *) cl_die "the session census failed; nothing was read" 2 ;;
+  esac
+  if [ "$json" -eq 1 ]; then
+    printf '%s\n' "$rows" | cl_move_rows_json | jq -c --arg from "$from" --arg to "$to" '{from:$from, to:$to, rows:.}'
+  else
+    printf '%s\n' "$rows" | cl_move_table "$from" "$to" "PLAN: nothing was written or typed"
+  fi
+}
+cl_move_result_line() { # <pane> <sid> <verdict> <reason>
+  case "$3" in
+    MOVED|MOVED-NEW-PANE|MOVED-UNREGISTERED) printf '✓ %-5s %s  %s — %s\n' "$1" "${2:0:8}" "$3" "$4" ;;
+    NOTMOVED) printf '· %-5s %s  NOTMOVED — %s\n' "$1" "${2:0:8}" "$4" ;;
+    *) printf '✗ %-5s %s  %s — %s\n' "$1" "${2:0:8}" "$3" "$4" ;;
+  esac
+}
+cmd_move_status() { # <batch> [--json] — every verdict RE-DERIVED from disk now, beside the recorded one
+  local batch="$1" json="${2:-0}" bdir plan to_cfg out="" s p cfg act rec why now nwhy flags
+  cl_move_lib || cl_die "cannot reach lr-move-lib.sh; nothing was read" 2
+  bdir="$(lr_move_dir "$batch")"; plan="$bdir/plan.json"
+  [ -s "$plan" ] || cl_die "no such batch: $plan" 2
+  to_cfg="$(jq -r '.to_config_dir' "$plan")"
+  while IFS=$'\t' read -r s p cfg act; do
+    [ -n "$s" ] || continue
+    rec="$(jq -r '.verdict // empty' "$bdir/$s.json" 2>/dev/null || true)"; why="$(jq -r '.reason // empty' "$bdir/$s.json" 2>/dev/null || true)"
+    case "$act" in
+      move|wait)
+        IFS=$'\t' read -r now nwhy _ flags <<EOF
+$(lr_move_verdict "$s" "$p" "$cfg" "$to_cfg" "$bdir")
+EOF
+        ;;
+      *) now="-" nwhy="$(jq -r --arg s "$s" '.rows[] | select(.sid == $s) | .disposition' "$plan")" flags="" ;;
+    esac
+    out="$out$p"$'\t'"$s"$'\t'"${rec:-${act:+pending}}"$'\t'"$now"$'\t'"$nwhy"$'\t'"${why:--}"$'\t'"$flags"$'\n'
+  done <<EOF
+$(jq -r '.rows[] | [.sid, .pane, .config_dir, .act] | @tsv' "$plan")
+EOF
+  if [ "$json" = 1 ]; then
+    printf '%s' "$out" | jq -Rn --arg b "$batch" --slurpfile sum <(cat "$bdir/summary.json" 2>/dev/null || echo null) \
+      '{batch:$b, summary:$sum[0], rows:[inputs | select(length > 0) | split("\t")
+        | {pane:.[0], sid:.[1], recorded:.[2], verdict:.[3], reason:.[4], recorded_reason:.[5], conjuncts:.[6]}]}'
+    return 0
+  fi
+  printf 'batch %s  %s → %s\n' "$batch" "$(jq -r .from "$plan")" "$(jq -r .to "$plan")"
+  printf '%-5s %-8s  %-18s %-18s %s\n' PANE SID RECORDED NOW 'REASON (re-derived from disk)'
+  printf '%s' "$out" | while IFS=$'\t' read -r p s rec now nwhy _ _; do
+    [ -n "$s" ] && printf '%-5s %-8s  %-18s %-18s %s\n' "$p" "${s:0:8}" "$rec" "$now" "$nwhy"
+  done
+  [ ! -s "$bdir/summary.json" ] || printf 'summary: %s\n' "$(jq -r '"\(.status): \(.verdicts); target auth after the batch: \(.target_auth_after); \(.wall_s)s"' "$bdir/summary.json")"
+}
+CL_MOVE_EXCL=""
+cmd_move() {
+  local from="" to="" until_s=0 wait_s="${CC_LR_MOVE_WAIT_S:-600}" cold=0 dry=0 slots="" unver=false self="" selv="" json=0
+  local status_b="" abort_b="" rows rc=0 batch bdir by now nm s p ac cfg act tmp unroute="" urc hint=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --from) [ $# -ge 2 ] || { usage; exit 3; }; from="$2"; shift 2 ;;
+      --to|--target) [ $# -ge 2 ] || { usage; exit 3; }; to="$2"; shift 2 ;;
+      --sid) [ $# -ge 2 ] || { usage; exit 3; }; self=--sid; selv="$2"; shift 2 ;;
+      --pane) [ $# -ge 2 ] || { usage; exit 3; }; self=--pane; selv="$2"; shift 2 ;;
+      --until-idle) [ $# -ge 2 ] || { usage; exit 3; }; until_s="$2"; shift 2 ;;
+      --wait) [ $# -ge 2 ] || { usage; exit 3; }; wait_s="$2"; shift 2 ;;
+      --slots) [ $# -ge 2 ] || { usage; exit 3; }; slots="$2"; shift 2 ;;
+      --cold-only) cold=1; shift ;;
+      --dry-run) dry=1; shift ;;
+      --target-unverified) unver=true; shift ;;
+      --status) [ $# -ge 2 ] || { usage; exit 3; }; status_b="$2"; shift 2 ;;
+      --abort) [ $# -ge 2 ] || { usage; exit 3; }; abort_b="$2"; shift 2 ;;
+      --json) json=1; shift ;;
+      -h|--help) usage; exit 0 ;;
+      *) echo "cc-lr move: unknown argument $1" >&2; usage; exit 3 ;;
+    esac
+  done
+  command -v jq >/dev/null 2>&1 || cl_die "jq is not on PATH; nothing was read or written" 2
+  if [ -n "$status_b" ]; then cmd_move_status "$status_b" "$json"; return $?; fi
+  if [ -n "$abort_b" ]; then
+    cl_move_lib || cl_die "cannot reach lr-move-lib.sh" 2
+    [ -d "$(lr_move_dir "$abort_b")" ] || cl_die "no such batch: $abort_b" 2
+    : > "$(lr_move_dir "$abort_b")/abort"
+    echo "cc-lr move: batch $abort_b asked to stop — workers that have not yet started their move end NOTMOVED; a move already past its /exit runs to its verdict"
+    return 0
+  fi
+  case "$until_s$wait_s${slots:-0}" in *[!0-9]*) echo "cc-lr move: --until-idle, --wait and --slots take whole numbers" >&2; exit 3 ;; esac
+  [ -n "$to" ] && { [ -n "$from" ] || [ -n "$self" ]; } || { echo "cc-lr move: name the source and the target — --from <acct> --to <acct|auto> (or --sid/--pane with --to)" >&2; exit 3; }
+  if [ "$to" = auto ]; then
+    [ -n "$from" ] || { echo "cc-lr move: --to auto needs --from" >&2; exit 3; }
+    to="$(cl_switch_auto_target "$from")" || { echo "cc-lr move: REFUSED — no target could be chosen ($to). Nothing was written." >&2; exit 2; }
+    echo "cc-lr move: --to auto resolved to $to"
+  fi
+  cl_move_accounts "$from" "$to" move
+  [ -n "$UPGRADE_BIN" ] && [ -f "$UPGRADE_BIN" ] || cl_die "cannot reach lr-upgrade.sh (set CC_LR_UPGRADE_BIN); nothing was read or written" 2
+  cl_move_lib || cl_die "cannot reach lr-move-lib.sh; nothing was read or written" 2
+  if [ "${LR_MOVE_LANE:-on}" = off ] && [ "$dry" -ne 1 ]; then
+    echo "cc-lr move: REFUSED — LR_MOVE_LANE=off. Nothing was written." >&2; exit 2
+  fi
+  rows="$(cl_move_rows "$from" "$to" "$until_s" "$self" "$selv" "$cold" "$CL_MOVE_EXCL")" || rc=$?
+  case "$rc" in
+    0) ;;
+    1) echo "cc-lr move: no live session matched ${from:+on $from}${selv:+ $selv}" >&2; return 1 ;;
+    *) cl_die "the session census failed; nothing was written" 2 ;;
+  esac
+  [ -n "$from" ] || from="$(printf '%s\n' "$rows" | sed -n '1p' | cut -f3)"
+  # THE ROUTER, STRICT: an excluded target refuses; one the router cannot vouch for refuses unless
+  # the operator said --target-unverified. The batch runner asks again at admit; this is the
+  # early, cheap answer so nothing is written for a batch that cannot be admitted.
+  urc=0; unroute="$(cl_target_unroutable "$to" --strict)" || urc=$?
+  [ "$urc" -ne 0 ] || hint="$(cl_relogin_hint "$to" "$unroute")"
+  if [ "$dry" -eq 1 ]; then
+    printf '%s\n' "$rows" | cl_move_table "$from" "$to" "DRY RUN: nothing was written or typed"
+    case "$urc" in
+      0) printf 'target-unroutable: the router does not rank %s (%s)%s — a real run would be refused\n' "$to" "$unroute" "${hint:+ — $hint}" ;;
+      3) printf 'target-unverified: %s — a real run would be refused without --target-unverified\n' "$unroute" ;;
+    esac
+    return 0
+  fi
+  case "$urc" in
+    0) echo "cc-lr move: REFUSED — the router does not rank '$to' ($unroute). Nothing was written.${hint:+ $hint}" >&2; exit 2 ;;
+    3) [ "$unver" = true ] || { echo "cc-lr move: REFUSED — target-unverified: $unroute. Nothing was written. Pass --target-unverified to move anyway." >&2; exit 2; } ;;
+  esac
+  nm="$(printf '%s\n' "$rows" | awk -F'\t' '$8 == "move" || $8 == "wait"' | grep -c . || true)"
+  if [ "$nm" -eq 0 ]; then
+    printf '%s\n' "$rows" | cl_move_table "$from" "$to" "nothing to move; nothing was written"
+    return 1
+  fi
+  cc_acct_dir_for_name "$to" >/dev/null 2>&1 || true
+  now="$(date +%s)"; batch="$(date -u +%Y%m%dT%H%M%SZ)-$from-$to-$$"; bdir="$(lr_move_dir "$batch")"; by="$(cl_this_pane)"
+  ( umask 077; mkdir -p "$bdir/intent" "$(lr_move_state)/move/requests" ) || cl_die "cannot create $bdir; nothing was written" 2
+  printf '%s\n' "$rows" | cl_move_rows_json | jq -c --arg b "$batch" --arg from "$from" --arg to "$to" --arg tcfg "${CC_ACCT_DIR:-}" \
+      --argjson until "$until_s" --arg slots "$slots" --arg by "${by:-?}" --argjson unver "$unver" --argjson ts "$now" \
+      '{batch:$b, from:$from, to:$to, to_config_dir:$tcfg, until_idle_s:$until, requested_by:$by, target_unverified:$unver, ts:$ts, rows:.}
+       + (if $slots != "" then {slots:($slots | tonumber)} else {} end)' > "$bdir/plan.json.$$.tmp" \
+    && mv -f "$bdir/plan.json.$$.tmp" "$bdir/plan.json" || cl_die "cannot write $bdir/plan.json; nothing was queued" 2
+  # ONE INTENT PER SESSION, mode 0600 (lr-intent.sh checks owner, mode, path, binding and expiry).
+  while IFS=$'\t' read -r p s ac cfg _ _ _ act _; do
+    case "$act" in move|wait) ;; *) continue ;; esac
+    tmp="$bdir/intent/.$s.$$.tmp"
+    ( umask 077
+      jq -nc --arg b "$batch" --arg sid "$s" --arg pane "$p" --arg from "$ac" --arg to "$to" --arg by "${by:-?}" \
+            --argjson ts "$now" --argjson exp "$(( now + until_s + 900 ))" \
+            --arg sha "$(printf '%s|%s|%s|%s' "$s" "$p" "$ac" "$to" | shasum -a 256 | cut -c1-16)" \
+            '{kind:"cc-lr-move", batch:$b, sid:$sid, pane:$pane, from:$from, to:$to, requested_by:$by, ts:$ts, expires_epoch:$exp, plan_row_sha:$sha}' > "$tmp" ) \
+      && mv -f "$tmp" "$bdir/intent/$s.json" || cl_die "cannot write the intent for ${s:0:8}; the batch was not queued" 2
+  done <<EOF
+$rows
+EOF
+  printf '%s\n' "$rows" | cl_move_table "$from" "$to" "batch $batch"
+  tmp="$(lr_move_state)/move/requests/.$batch.$$.tmp"
+  jq -nc --arg b "$batch" --argjson ts "$now" '{kind:"move-batch", batch:$b, ts:$ts}' > "$tmp" \
+    && mv -f "$tmp" "$(lr_move_state)/move/requests/$batch.json" || cl_die "cannot write the batch request; nothing will run" 2
+  printf 'cc-lr: batch %s queued for the poller (%s session(s)); re-derive its verdicts any time with: cc-lr move --status %s\n' "$batch" "$nm" "$batch"
+  # `kickstart` with NO `-k` — the rule every request writer here follows (see cmd_repair).
+  if command -v launchctl >/dev/null 2>&1; then
+    launchctl kickstart "gui/$(id -u)/$POLLER_LABEL" >/dev/null 2>&1 \
+      || echo "cc-lr: the kick failed — the poller's own interval will start the batch" >&2
+  fi
+  # Bounded wait; the batch runner and its workers are detached and outlive this process.
+  local deadline seen=" " left f v
+  deadline=$(( now + wait_s ))
+  while :; do
+    left=0
+    while IFS=$'\t' read -r p s _ _ _ _ _ act _; do
+      case "$act" in move|wait) ;; *) continue ;; esac
+      case "$seen" in *" $s "*) continue ;; esac
+      f="$bdir/$s.json"
+      if [ -s "$f" ]; then
+        cl_move_result_line "$p" "$s" "$(jq -r '.verdict // "FAILED"' "$f")" "$(jq -r '.reason // "-"' "$f")"
+        seen="$seen$s "
+      else
+        left=$((left + 1))
+      fi
+    done <<EOF
+$rows
+EOF
+    [ "$left" -gt 0 ] || break
+    [ "$(date +%s)" -lt "$deadline" ] || break
+    sleep "${CC_LR_MOVE_POLL_S:-3}"
+  done
+  [ "$left" -eq 0 ] || printf '… %s session(s) still in flight after %ss — the workers keep running: cc-lr move --status %s\n' "$left" "$wait_s" "$batch"
+  if [ "$(jq -r '.admitted // true' "$bdir/admit.json" 2>/dev/null)" = false ]; then
+    echo "cc-lr move: the batch was REFUSED at admission — $(jq -r '.reason' "$bdir/admit.json"). Nothing moved." >&2
+    return 2
+  fi
+  [ "$left" -eq 0 ] || return 1
+  v="$(for f in "$bdir"/*.json; do
+         case "${f##*/}" in plan.json|admit.json|summary.json) continue ;; esac
+         jq -r '.verdict // "FAILED"' "$f" 2>/dev/null
+       done | grep -cv '^MOVED' || true)"
+  [ "$v" -eq 0 ] || return 1
+  [ "$(printf '%s\n' "$rows" | awk -F'\t' '$8 == "hold"' | grep -c . || true)" -eq 0 ] || return 1
   return 0
 }
 
@@ -1801,6 +2198,8 @@ case "$CMD" in
         exec bash "$FIND_BIN" "$@" ;;
   recover) cmd_recover "$@"; exit $? ;;
   switch)  cmd_switch  "$@"; exit $? ;;
+  plan)    cmd_plan    "$@"; exit $? ;;
+  move)    cmd_move    "$@"; exit $? ;;
   status)  cmd_status  "$@"; exit $? ;;
   repair)  cmd_repair  "$@"; exit $? ;;
   repair-markers) cmd_repair_markers "$@"; exit $? ;;
@@ -1814,6 +2213,6 @@ case "$CMD" in
     rc_reason="$(cl_target_unroutable "$@")"; rc_rc=$?
     [ -z "$rc_reason" ] || printf '%s\n' "$rc_reason"
     exit "$rc_rc" ;;
-  *) echo "cc-lr: unknown subcommand '$CMD' — expected find | recover | switch | status | repair | repair-markers | upgrade | accounts | cohort (status --cohort, accounts --limited, cohort refire)" >&2
+  *) echo "cc-lr: unknown subcommand '$CMD' — expected find | recover | switch | plan | move | status | repair | repair-markers | upgrade | accounts | cohort (status --cohort, accounts --limited, cohort refire)" >&2
      usage; exit 3 ;;
 esac
