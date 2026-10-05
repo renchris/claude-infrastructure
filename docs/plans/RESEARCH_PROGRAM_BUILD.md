@@ -24,7 +24,7 @@ packet `83adb541ea19` actioned. Method version 1.1 is frozen; it changes only fr
 | B2 | S | Item 8: `research-program` skill, `/research-program` command, intake script, briefs, rubric | A2 |
 | C | S | Wave 2: items 9–13, 15, in parallel with the pilot | B1, B2 |
 | D | S (fired `fire-rp-audit-bugfix`), T inside | Audit fixes: `docs/research/upfront-method-audit-2026-10-04/REPORT.md` §3 rows 4–6 | C |
-| E | E1 S (fired `fire-rp-v12-step1`); E1b S (fired `fire-rp-v12-e1b`); E1c S (fired `fire-rp-v12-e1c`); E1d S (fired `fire-rp-v12-e1d`); E2 Workflow in session d8964eb2; E3 S (E3a fired `fire-rp-v12-e3a`, E3b fired `fire-rp-v12-e3b` with T inside: six teammates; E3c fired `fire-rp-v12-e3c`, L inside); E4 operator | Method v1.2 (ruling `1bf69e5c1775`): audit REPORT §3 rows 1, 2, 3, 7, plus the 9 s classifier limit (ruling `4bf73c4e55d5`) | D |
+| E | E1 S (fired `fire-rp-v12-step1`); E1b S (fired `fire-rp-v12-e1b`); E1c S (fired `fire-rp-v12-e1c`); E1d S (fired `fire-rp-v12-e1d`); E2 Workflow in session d8964eb2; E3 S (E3a fired `fire-rp-v12-e3a`, E3b fired `fire-rp-v12-e3b` with T inside: six teammates; E3c fired `fire-rp-v12-e3c`, L inside; E3d fired `fire-rp-v12-e3d`, L inside); E4 operator | Method v1.2 (ruling `1bf69e5c1775`): audit REPORT §3 rows 1, 2, 3, 7, plus the 9 s classifier limit (ruling `4bf73c4e55d5`) | D |
 
 A1, A2 and A3 touch disjoint files and fire concurrently. B1 and B2 fire when A2 lands. Each dispatched session leads
 its own Agent Team where it has 2+ code-writing tasks.
@@ -868,8 +868,79 @@ showed the render saying "Built –" and "Built: certified" together).
     certified" only showed when one program passed through both. Keep the walk in the gate.
   - `rm -rf` is refused in fired sessions; a walk that needs a clean directory takes a fresh `mktemp -d` per run.
 - Open, outside this scope: §11 says "before you sign the implementation", and the kit has no implementation
-  signature (`operator_sign.ACTIONS` has none); SKILL.md says signing it is the operator's. Rows 1–19 were not
+  signature (`operator_sign.ACTIONS` has none); SKILL.md says signing it is the operator's. Closed by E3d below. Rows 1–19 were not
   re-run in the walk (by §11 they are not re-run at Stage 9; the fixture's research certificate stands in).
+
+#### E3d — the implementation signature, end to end — DONE 2026-10-05
+Scope (frozen): wave E3d — add the implementation signature end to end: (1) a new signing kind in the research
+namespace of `scripts/lib/operator_sign.py`, content-pinned to the built certificate (path + hash), with the same
+three protections, and a `cc-research` verb that renders what is being signed and prints the exact operator command;
+(2) the registry transition build-certified → implementation-signed (writer stays gate.sh/lib/kit.py), a gate
+condition so a build-certified program's "done" (and `handoff-fire.sh --requires-gate` for post-signoff waves) needs
+the signature, and the certificate render shows the signature state; (3) REPORT §11 and SKILL.md's Stage 9 walk gain
+the signing step, appended and dated; (4) the fixtured dry walk goes through the signature by a fixture signer on
+the operator path, and an agent-ancestor signature is refused.
+Scope (grown): +the two existing ancestry tests in `tests/operator-sign.bats` made deterministic (they convicted
+only because the suite ran under a real claude; see Learnings).
+- Locus: S (fired `fire-rp-v12-e3d`), L inside. Why L: one signing kind threaded through eight small readers
+  (5–40 lines each) that all share one state function; splitting it would have split that function's contract.
+- **1, the signing kind** (`1d8feb56c`). `research:<slug>/implementation` in `operator_sign.ACTIONS`. It needs
+  `--evidence`, refuses under a claude ancestor (exit 3, before anything else is read), refuses unless the registry
+  reads build-certified or implementation-signed and a built certificate exists, and pins the newest
+  `built/BUILT-CERT-v<n>.json` by records-relative path and git blob hash. One reader,
+  `operator_sign.implementation_state`, returns `signed | unsigned | void | stale | superseded`; only `signed`
+  authorises, and `implementation_words` prints the other four by name. `cc-research built signoff --program P`
+  (read-only, lease-exempt) prints the certificate's lines, the pinned path and hash, the state and the operator's
+  command. `bin/cc-signoff` accepts the row and, after a signature, runs `gate.sh built-signed` itself so the
+  operator's step stays one command (a refused move is printed with the re-run command; the signature stands).
+- **2, the registry and the gates** (`1d8feb56c`). `kit.STATES` gains `implementation-signed` (`kit.IMPL_SIGNED`,
+  `kit.STAGE9_STATES`). `gate.sh built-signed`: build-certified → implementation-signed only on `signed`; run on an
+  implementation-signed program whose signature no longer holds, it sets build-certified back and exits 1.
+  `gate.sh close` refuses a build-certified (or no-longer-signed implementation-signed) program.
+  `gate.sh requires` admits a wave in implementation-signed only while the signature holds, and
+  `--after-signoff` (`handoff-fire.sh --gate-after-signoff`) refuses a post-signoff wave in every other state.
+  `built-freeze` from implementation-signed needs `--refreeze`; `built-run` there is refused; the next certificate
+  needs a new signature (the old one reads `superseded`). `gate.sh render`'s built line ends "· implementation
+  signed by the operator <date>", "not signed", or the void / stale signature by name, read from the sealed log at
+  every render. The state is active until close in every reader: `research-program.sh`, `completion-assert.sh`'s
+  copy, the prompt nudge, the router's block, `intake.py`, the scheduled jobs.
+- **3, the texts** (`1d8feb56c`). REPORT §11 gains "Signing the implementation" (dated 2026-10-05, five numbered
+  steps, nothing deleted); SKILL.md gains the rail bullet and Stage 9 step 6; RECORDS.md gains the state and the
+  record shape.
+- **4, the walk** (`dad4e698b`; `tests/research-kit-v12-walk.bats` 1..11, the signature leg appended, dated, to
+  `docs/research/research-program-v12-walk-2026-10-04/WALK.md`). After the built certificate: `built signoff`
+  renders; `built-signed`, `close` and `requires --after-signoff` are refused unsigned; `cc-signoff` under a shell
+  named claude is refused with exit 3 and 0 records written; the fixture signer
+  (`tests/fixtures/research-kit/fixture_signer.py`: `bin/cc-signoff` itself with an operator's ancestry, refusing the
+  live store, its chain starting `fixture-signer`) signs, the registry reads implementation-signed, the render says
+  signed, the post-signoff wave is clear and `close` passes.
+- Tests, red before the code and green after: operator-sign 1..23 (E3d cases 14–23), research-kit-built-states
+  (17 E3d cases; 1..42 after one moved out), research-kit-built-e2e 1..7 (5–7): 27 red of 73 before, 73 of 73
+  after. Every research and signing suite together: 1..652, 0 red. The two `handoff-fire --gate-after-signoff`
+  cases landed in research-kit-requires (1..19, `5e4e6ec6c`), with a control. Two E3d cases passed
+  before the code for the wrong reason (a parse refusal also exits 2) and were tightened to assert the refusal's
+  text. The walk suite was run against the pre-change tree in a throwaway worktree: 7 of 11 red, then 1..11.
+- Decisions made here, for the reader who would have chosen otherwise:
+  - implementation-signed is **active until close** (exemption, research block, jobs), not a second closed state:
+    a completeness question after signoff should still be answered by the render, which now carries the signature.
+  - `close` is gated from build-certified only. From build-certifying it stays open: an abandoned Stage 9 is not a
+    "done" claim, and gating it would leave the operator no way to close a program whose built gate cannot pass.
+  - The registry never proves the signature. Every gate re-reads the sealed log, so a hand-edited registry state
+    of implementation-signed with no valid signature closes nothing and fires nothing.
+- Learnings:
+  - `bash -c '<one command>'` execs the command in place, so a "fake claude shell" wrapper vanishes from the
+    ancestry and the refusal test convicts only on the suite's real ancestors: green in a Claude session, red (it
+    would sign) under launchd. `; exit $?` after the command keeps the shell as the parent. Measured with `ps`
+    2026-10-05; the two older tests carried the flaw since wave A2.
+  - The land gate found three things the suites did not: a handoff-fire case in a suite that does not pin
+    handoff-fire's seams (moved to research-kit-requires, which does); `[ A ] && [ B ]` as a bats assertion, where
+    a false A is absorbed; and the same shape in `walk_v12.sh`, where under `set -e` a false left side does not
+    stop the script, so the walk's two state checks could not fail. One test per line in both.
+  - The land's selector answered FULL, so no smoke ran at the land; the suites above were run by hand before it.
+  - A command that bundled a heredoc edit, `rm -rf` of a scratch dir and the walk run was refused whole by the
+    permission layer. The edit went through the Edit tool and the run took a fresh `mktemp -d`; the delete was
+    dropped, not re-spelled.
+- Not built: no signature exists on any real program, and the live pilot's records were not read or written.
 
 #### E4 — re-sign the pilot contract (v1.2 (d), operator half) — after E3
 - Operator: re-render TM2's contract on the measured forecast and re-sign it, with rulings 1 and 4 re-presented at
