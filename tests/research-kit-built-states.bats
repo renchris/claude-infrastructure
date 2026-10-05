@@ -547,17 +547,6 @@ SIGNER() { "$REPO/tests/fixtures/research-kit/fixture_signer.py" "$@"; }
   [ "$status" -eq 0 ]
 }
 
-@test "E3d handoff-fire --gate-after-signoff refuses a post-signoff wave on an unsigned implementation" {
-  built_certified
-  echo "TASK — post-signoff wave fixture payload." > "$BATS_TEST_TMPDIR/p.txt"
-  run bash "$REPO/scripts/handoff-fire.sh" --prompt-file "$BATS_TEST_TMPDIR/p.txt" --dry-run --requires-gate demo --gate-wave B1 --gate-after-signoff
-  [ "$status" -eq 2 ]
-  [[ "$output" == *"research gate REFUSES this build wave"*"follows implementation signoff"* ]] || false
-  run bash "$REPO/scripts/handoff-fire.sh" --prompt-file "$BATS_TEST_TMPDIR/p.txt" --dry-run --gate-after-signoff
-  [ "$status" -eq 2 ]
-  [[ "$output" == *"--gate-after-signoff scopes --requires-gate"* ]]
-}
-
 @test "E3d render states the implementation signature: not signed, signed, stale, void" {
   built_certified
   run "$G" render --program demo

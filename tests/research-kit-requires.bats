@@ -210,3 +210,26 @@ hf_env() {
   [ "$status" -eq 0 ]
   [ "$output" = "work-order" ]
 }
+
+# ── wave E3d: a wave that follows implementation signoff (REPORT.md §11) ─────────────────────────
+
+@test "E3d handoff-fire --gate-after-signoff refuses a post-signoff wave on an unsigned implementation" {
+  hf_env; certify
+  mkdir -p "$REC/built"
+  printf '{"cert":"BUILT-CERT-v1","program":"demo","version":1}\n' > "$REC/built/BUILT-CERT-v1.json"
+  /usr/bin/env python3 -c "import json; p='$CC_RESEARCH_REGISTRY'; d=json.load(open(p)); d['programs'][0]['state']='build-certified'; json.dump(d, open(p, 'w'))"
+  # the control: the same wave without the flag is admitted in build-certified (a Stage 9 fix wave)
+  run bash "$HF" --prompt-file "$PAYLOAD" --dry-run --requires-gate demo --gate-wave B1
+  [[ "$output" == *"CLEAR demo wave B1"* ]] || false
+  run bash "$HF" --prompt-file "$PAYLOAD" --dry-run --requires-gate demo --gate-wave B1 --gate-after-signoff
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"research gate REFUSES this build wave"* ]] || false
+  [[ "$output" == *"follows implementation signoff"*"cc-signoff research:demo/implementation"* ]]
+}
+
+@test "E3d handoff-fire --gate-after-signoff without --requires-gate is a usage refusal" {
+  hf_env
+  run bash "$HF" --prompt-file "$PAYLOAD" --dry-run --gate-after-signoff
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--gate-after-signoff scopes --requires-gate"* ]]
+}
