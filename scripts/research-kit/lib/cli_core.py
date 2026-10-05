@@ -178,6 +178,37 @@ def seeds_all_caught(slug: str) -> bool:
     )
 
 
+def extension_items(slug: str) -> List[Dict[str, str]]:
+    """§12.3 (method v1.2): one priced research extension per decision below 90 that research
+    can still move, while unbought. Quoted as a change to that decision's conviction."""
+    import blockers
+
+    ctx = ctx_for(slug)
+    if not kit.is_v12(ctx.frame):
+        return []
+    items: List[Dict[str, str]] = []
+    for d in kit.fold(ctx.jsonl("decisions.jsonl")).values():
+        if d.get("status") == "descoped":
+            continue
+        t = blockers.tag(ctx, d)
+        if t["tag"] != "research" or t["extended"]:
+            continue
+        box = d.get("timebox_days")
+        items.append(
+            {
+                "id": f"extend-decision/{d.get('id')}",
+                "label": f"one research extension on decision {d.get('id')} "
+                f"({kit.CAPS['decision_extensions']} per decision)",
+                "price": f"{float(box):g} research days on this decision (one more intake timebox)"
+                if box
+                else "one more intake timebox on this decision (its timebox is not on record)",
+                "effect": f"conviction now {t['conviction']}%; still below level: "
+                f"{', '.join(t['gaps'])}; research can raise it to at most {t['reachable_max']}%",
+            }
+        )
+    return items
+
+
 def menu(slug: str) -> List[Dict[str, str]]:
     """§6.4: the extra round set (once per program, quoted as its change to the printed bound,
     never as a yield) while unbought, and the reopen."""
@@ -207,6 +238,7 @@ def menu(slug: str) -> List[Dict[str, str]]:
                 ),
             }
         )
+    items += extension_items(slug)
     items.append(
         {
             "id": "reopen",
@@ -371,6 +403,22 @@ def budget_report(ctx: Any) -> Dict[str, Any]:
     }
 
 
+def yield_stop_for(ctx: Any, stage: int) -> Dict[str, Any]:
+    """§12.1 (method v1.2): stages 3 and 5 end on yield. Refuses while the rule says continue;
+    otherwise the {"stop": …} record to store with the end. Empty for any other stage or frame."""
+    import yield_stop
+
+    if stage not in kit.YIELD_STAGES or not kit.is_v12(ctx.frame):
+        return {}
+    v = yield_stop.evaluate(ctx, stage, as_of=kit.now_iso())
+    if v["verdict"] == "continue":
+        raise kit.KitError(
+            f"stage {stage} cannot end yet — {yield_stop.describe(v)}. It ends when the last "
+            f"{v['k']} probes are quiet and that product is at most 1, or at the ceiling (§12.1)"
+        )
+    return {"stop": yield_stop.stop_record(v)}
+
+
 def cmd_budget(a: argparse.Namespace) -> int:
     ctx = ctx_for(a.program)
     if not a.action:
@@ -408,7 +456,7 @@ def cmd_budget(a: argparse.Namespace) -> int:
             raise kit.KitError(f"stage {st} never started; nothing to end")
         if cur.get("ended"):
             raise kit.KitError(f"stage {st} already ended at {cur['ended']}")
-        b["stages"][st] = dict(cur, ended=kit.now_iso())
+        b["stages"][st] = dict(cur, ended=kit.now_iso(), **yield_stop_for(ctx, a.stage))
     kit.write_json_atomic(ctx.records / "budget.json", b)
     print(f"stage {st} {a.action}ed at {kit.now_iso()}")
     return 0

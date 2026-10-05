@@ -58,6 +58,7 @@ USAGE = """usage: cc-signoff <row-id> --evidence <live-url|sha> [--note <text>]
        cc-signoff research:<slug>/extra-round --because "<why>"
        cc-signoff research:<slug>/reopen      --because "<why>"
        cc-signoff research:<slug>/veto/<decision-id> --because "<why>"
+       cc-signoff research:<slug>/extend-decision/<decision-id> --because "<why>"
        run this in YOUR OWN terminal; an agent cannot."""
 
 

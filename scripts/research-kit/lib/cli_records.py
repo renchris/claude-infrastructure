@@ -255,6 +255,21 @@ def derived(r: Path, d: Dict[str, Any]) -> Optional[int]:
     return kit.conviction(d, folded(r, "premises.jsonl"), folded(r, "probes.jsonl"))
 
 
+def timebox_fields(r: Path, a: argparse.Namespace) -> Dict[str, Any]:
+    """§12.2 (method v1.2): the decision's intake timebox and when its research started, which
+    its research ceiling is measured from. Required under a 1.2 frame."""
+    if a.timebox_days is None:
+        if kit.is_v12(frame(r)):
+            raise kit.KitError(
+                f"{a.id}: a method 1.2 program needs --timebox-days (the decision's intake "
+                "timebox; its research ceiling is twice that, §12.2)"
+            )
+        return {}
+    if a.timebox_days <= 0:
+        raise kit.KitError(f"{a.id}: --timebox-days must be above 0")
+    return {"timebox_days": a.timebox_days, "research_started": kit.now_iso()}
+
+
 def decision_add(a: argparse.Namespace) -> int:
     missing = {"do-nothing", "use-what-exists"} - set(a.option)
     if missing:
@@ -273,6 +288,7 @@ def decision_add(a: argparse.Namespace) -> int:
             "reversibility": a.reversibility,
             "runs_used": 0,
             "status": "open",
+            **timebox_fields(recs(a), a),
         },
     )
 
@@ -640,6 +656,7 @@ def add_verbs(sub: Any) -> None:
         default="reversible",
         choices=("reversible", "costly", "irreversible"),
     )
+    p.add_argument("--timebox-days", type=float)
     p = verb(g, "tally", decision_tally, "record the premises and the flip probe")
     p.add_argument("--id", required=True)
     p.add_argument("--premise", required=True, action="append")

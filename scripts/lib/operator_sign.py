@@ -21,6 +21,7 @@ the program's sealed log `$CC_RESEARCH_HOME/<slug>/signoff.jsonl`:
   extra-round  the one extra round set per program              (§6.4; round.sh honours it)
   reopen       reopen certified scope, operator-caused, priced  (§5.1; gate.sh honours it)
   veto/<id>    veto an overrun or below-profile default on decision <id>  (§6.1; the sweep honours it)
+  extend-decision/<id>  the one research extension on decision <id>   (§12.3; gate row 19 and the menu honour it)
 
 Python 3.9-safe, standard library only.
 """
@@ -41,7 +42,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "research-kit" /
 import kit  # noqa: E402
 
 PS = "/bin/ps"
-ACTIONS = ("frame", "cert", "extra-round", "reopen", "veto")
+ACTIONS = ("frame", "cert", "extra-round", "reopen", "veto", "extend-decision")
+TARGETED = ("veto", "extend-decision")  # the actions that name a decision id
 VALID, VOID, STALE = "valid", "void", "stale"
 
 
@@ -141,7 +143,7 @@ def verdict(
 # ── the research namespace ──────────────────────────────────────────────────────────────────────
 
 ROW_RE = re.compile(
-    r"^research:([a-z0-9][a-z0-9-]{0,63})/(frame|cert|extra-round|reopen|veto)"
+    r"^research:([a-z0-9][a-z0-9-]{0,63})/(frame|cert|extra-round|reopen|veto|extend-decision)"
     r"(?:/([A-Za-z0-9._-]+))?$"
 )
 
@@ -152,8 +154,8 @@ def parse_row(row: str) -> Optional[Dict[str, Optional[str]]]:
     if not m:
         return None
     slug, action, target = m.group(1), m.group(2), m.group(3)
-    if (action == "veto") != (target is not None):
-        return None  # veto needs a decision id; nothing else takes one
+    if (action in TARGETED) != (target is not None):
+        return None  # veto and extend-decision need a decision id; nothing else takes one
     return {"slug": slug, "action": action, "target": target}
 
 
@@ -208,7 +210,7 @@ def sign_research(
             "REFUSED — --evidence is required: the path or URL you actually read.\n"
             "A signature with no referent is a claim about nothing."
         )
-    if action in ("extra-round", "reopen", "veto") and not because:
+    if action in ("extra-round", "reopen", "veto", "extend-decision") and not because:
         raise Refused(
             f'REFUSED — {action} needs --because "<why>"; it is logged as operator-caused and priced.'
         )
@@ -231,6 +233,20 @@ def sign_research(
         raise Refused(
             "REFUSED — the one extra round set per program (REPORT.md §6.4) is already bought."
         )
+    if action == "extend-decision":
+        known = kit.fold(kit.read_jsonl(kit.records_dir(slug) / "decisions.jsonl"))
+        if target not in known:
+            raise Refused(
+                f"REFUSED — {target} is not a decision of {slug}: an extension is bought for "
+                "one decision on record."
+            )
+        if any(
+            verdict(r) == VALID for r in research_records(slug, "extend-decision", target)
+        ):
+            raise Refused(
+                f"REFUSED — the one research extension per decision (REPORT.md §12.3) is "
+                f"already bought for {target}."
+            )
     now = time.time()
     rec = {
         "row": row,
