@@ -37,7 +37,7 @@ take() { run bash -c 'source "$1"; lr_claim_take "$2" "$3" test - "$$"' _ "$LIB"
   holder "$HOLDER" "Thu Jan 1 00:00:00 1970"
   take
   [ "$status" -eq 0 ]
-  [[ "$output" == *"verdict=stolen-pid-reused"* ]]
+  [[ "$output" == *"verdict=stolen-pid-reused"* ]] || false
   [ "$(sed -n 's/.*"pid":\([0-9]*\).*/\1/p' "$ROOT/$SID.active/holder")" != "$HOLDER" ]
 }
 

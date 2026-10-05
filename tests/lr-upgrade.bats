@@ -369,7 +369,7 @@ await_file() { local i=0; while [ ! -s "$1" ] && [ "$i" -lt 50 ]; do sleep 0.1; 
   printf '{"kind":"upgrade","sid":"23232323-0000-4000-8000-00000000dead","source_pane":"533","req_id":"r3"}\n' > "$LRU_STATE/upgrade-queue/c.json"
   run bash "$LRU" --drain
   [ "$status" -eq 0 ]
-  [[ "$output" == *"could not be claimed"* ]]
+  [[ "$output" == *"could not be claimed"* ]] || false
   [ ! -e "$LRU_STATE/results/upgrade-23232323-0000-4000-8000-00000000dead.json" ]
   [ -f "$LRU_STATE/upgrade-queue/c.json" ]
   [[ "$output" == *"drain done: 0 session(s)"* ]]
