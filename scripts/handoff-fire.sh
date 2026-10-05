@@ -3864,6 +3864,43 @@ recycle_composer_gate() { # $1=it2-bin $2=sid $3=max-wait-s $4=interval-s
   done
 }
 
+# THE RETRY TICKET a refused or held SELF-recycle leaves for its own session (2026-10-05). One JSON
+# file per session id under CC_RECYCLE_RETRY_DIR; hooks/boundary-handoff.sh reads it at the session's
+# next Stop. Written by the watcher's holds (rcy_retry_ticket) and by the foreground's unreadable-
+# composer refusal. Nothing here types into a pane. Always rc 0.
+hf_recycle_retry_dir() { printf '%s' "${CC_RECYCLE_RETRY_DIR:-$HOME/.claude/autonomy/recycle-retry}"; }
+hf_recycle_retry_ticket() { # $1=session id $2=pane $3=why (one line) $4=job pids csv|- $5=prompt file
+  local sid="${1:-}" pane="${2:-}" why="${3:-}" pids="${4:--}" pf="${5:-}" d f n=0 at=0 now ttl="${CC_RECYCLE_RETRY_TTL_S:-21600}" out=""
+  if [ -z "$sid" ] || [ "${CC_RECYCLE_RETRY:-on}" = off ]; then return 0; fi
+  case "$sid" in */*|.*) return 0 ;; esac
+  case "$ttl" in ''|*[!0-9]*) ttl=21600 ;; esac
+  case "$pids" in ''|*[!0-9,]*) pids=- ;; esac
+  d="$(hf_recycle_retry_dir)"; f="$d/$sid.json"; now="$(date +%s)"
+  mkdir -p "$d" 2>/dev/null || return 0
+  if [ -f "$f" ]; then
+    at="$(jq -r '.held_at // 0' "$f" 2>/dev/null || echo 0)"; n="$(jq -r '.attempts // 0' "$f" 2>/dev/null || echo 0)"
+    case "$at" in ''|*[!0-9]*) at=0 ;; esac
+    case "$n" in ''|*[!0-9]*) n=0 ;; esac
+    if [ $((now - at)) -gt "$ttl" ]; then n=0; fi
+  fi
+  n=$((n + 1))
+  if jq -n --arg sid "$sid" --arg pane "$pane" --arg why "$why" --arg pids "$pids" \
+        --arg pf "$pf" --argjson at "$now" --argjson n "$n" \
+        '{sid:$sid, pane:$pane, held_at:$at, why:$why, job_pids:$pids, prompt_file:$pf, attempts:$n, advised:0}' \
+        > "$f.tmp.$$" 2>/dev/null && mv -f "$f.tmp.$$" "$f" 2>/dev/null; then
+    echo "→ retry ticket: $f (attempt $n, jobs=$pids) — the session's next Stop is told when to re-run this recycle"
+  else
+    rm -f "$f.tmp.$$" 2>/dev/null || true
+    echo "⚠ retry ticket NOT written ($f) — this hold is recorded in this log and the ledger only"
+    return 0
+  fi
+  # A Stop that follows the ticket is what delivers it, and the turn that ran this recycle may
+  # already have ended. One inbox line gives the session that turn; nothing is typed.
+  out="$(hf_bounded "${CC_NOTIFY_BIN:-$HOME/.claude/bin/cc-notify}" --from recycle-watcher "$pane" "RECYCLE-HELD: your self-recycle was held ($why) and nothing was relaunched. A retry ticket is filed; the Stop hook tells you when to re-run it. Nothing to do now." 2>&1)" || true
+  case "$out" in *verdict=*) out="${out#*verdict=}"; echo "→ retry ticket: wake mail verdict=${out%%[!a-z-]*}" ;; *) echo "→ retry ticket: wake mail not confirmed (the next Stop still reads the ticket)" ;; esac
+  return 0
+}
+
 # UNREADABLE IS NOT A DRAFT (husk panes 2026-09-30, root cause 9). Both composer reads before a
 # recycle's /exit (the bounded gate, and the freshness re-read right before the keystroke) used to
 # fold recycle_composer_gate's rc 2 — no box could be read for the whole wait — into rc 1, emit
@@ -9324,6 +9361,45 @@ if [ "${1:-}" = "__recycle" ]; then
     it2_paste_submit_verified "$IT2" "$RSID" "/exit" "$pre" >/dev/null || return 2
   }
   rcy_selfcall_tried=0; RCY_SELFCALL=none
+  # A HELD SELF-RECYCLE LEAVES A RETRY TICKET (2026-10-05, reso pane 254). The hold used to end in a
+  # sentence, "Re-run once its background work has ended", written to a log in TMPDIR that the held
+  # session never reads: session d425afab then sat idle at 46% for nine hours. The ticket is the same
+  # sentence in a store a hook reads. hooks/boundary-handoff.sh picks it up at the session's next
+  # Stop and tells the session to re-run the recycle once the jobs named here have exited (or, when
+  # none could be named, after a backoff). This watcher never re-types /exit itself: by the time the
+  # work ends the session may be on a new instruction, and only the session can know that.
+  # Self form only (a caller pid was handed over): the reconciler owns a remote recycle's hold, and
+  # resume mode's subject is not the session that would read the ticket.
+  #   attempts counts CONSECUTIVE holds inside the TTL, so the hook can stop asking; a recycle that
+  #   reaches its shell deletes the ticket. Kill switch CC_RECYCLE_RETRY=off. Always rc 0.
+  rcy_retry_ticket() { # $1=why (one line) $2=the holding job pids, csv, or - when none can be named
+    if [ -z "$RCY_CALLER_PID" ] || [ -n "${RCY_RESUME_SID:-}" ]; then return 0; fi
+    hf_recycle_retry_ticket "${RCY_OLD_SID:-}" "$RSID" "${1:-}" "${2:--}" "${RCY_PROMPT_FILE:-}" || true
+  }
+  # OUR /exit MUST NOT OUTLIVE A HOLD (2026-10-05). The hold's Esc can leave the /exit this watcher
+  # typed in the composer; one read 0.5 s later missed it on pane 254 and the operator found a stray
+  # /exit he had not typed. Read up to CC_RECYCLE_EXIT_SCRUB_TRIES times, scrub only a composer that
+  # reads exactly /exit, stop at the first other content (a human draft is never touched), and say
+  # what was found, so the hold line shows whether anything was left behind.
+  RCY_EXIT_SCRUB=unread
+  rcy_scrub_own_exit() {
+    local i=0 max="${CC_RECYCLE_EXIT_SCRUB_TRIES:-3}" c=""
+    case "$max" in ''|*[!0-9]*|0) max=3 ;; esac
+    RCY_EXIT_SCRUB=unread
+    while [ "$i" -lt "$max" ]; do
+      i=$((i + 1))
+      /bin/sleep "${FIRE_TYPE_SETTLE:-0.5}"
+      if ! c="$(composer_content "$IT2" "$RSID" 2>/dev/null)"; then RCY_EXIT_SCRUB=unread; continue; fi
+      if [ "$c" = "/exit" ]; then
+        if composer_scrub_verified "$IT2" "$RSID" >/dev/null 2>&1; then RCY_EXIT_SCRUB=scrubbed; return 0; fi
+        RCY_EXIT_SCRUB=scrub-failed; continue
+      fi
+      if [ -n "$c" ]; then RCY_EXIT_SCRUB=other-content-left-alone; return 0; fi
+      RCY_EXIT_SCRUB=empty
+    done
+    return 0
+  }
+  rcy_siw_why="" rcy_siw_kind="" rcy_self_siw=0
   case "$rcy_bgwork_max" in ''|*[!0-9]*) rcy_bgwork_max=2 ;; esac
   # SELFTEST SEAM, same shape and same safety argument as HF_RECYCLE_SHELL_WAIT_S above: it moves
   # only how OFTEN the screen is read. It cannot make the watcher send a key it would not otherwise
@@ -9431,9 +9507,24 @@ if [ "${1:-}" = "__recycle" ]; then
             # below would land on a live turn as an interrupt, so hold HERE with nothing more sent.
             echo "!! recycle HELD at ${waited}s: this recycle's own tool call returned (${RCY_SELFCALL}) and the dialog was dismissed, but /exit could not be re-submitted — the session in $RSID is alive at its composer and NO relaunch was typed. Re-run the recycle." >&2
             emit_recycle_event recycle-held-bgwork "" "$RSID" "own tool call ${RCY_SELFCALL}; Esc sent; /exit re-submit failed; nothing typed; unconfirm=needed" || true
+            rcy_retry_ticket "the dialog was dismissed but /exit could not be re-submitted" - || true
             exit 1
           fi
           echo "→ bgwork@${waited}s: this recycle's own tool call (pid $RCY_CALLER_PID) did not return (${RCY_SELFCALL}) — holding as for any background work"
+        fi
+        # A SELF-RECYCLE TAKES THE STOP-IF-WATCHER ANSWER BY DEFAULT (2026-10-05, reso pane 254).
+        # An idle session re-arms cc-await-ping on every wake, so its self-recycle always meets this
+        # dialog; under agent-view-off the menu has no keep-work option and the default answer was
+        # Stay: recycle HELD at 18 s, nothing retried, nine hours idle at 46%. The rule below was
+        # written for the move lane and is exactly the one a self-recycle needs, with every guard it
+        # carries (no live team, jobs watcher-ONLY, the index read off the screen). Scope: the caller
+        # handed its tool-call pid (a self-recycle), the menu offers no keep-work option, and the
+        # answer was left at its default; an explicit value is never overridden. The self-call retry
+        # above runs first, so the recycle's own Bash call is gone before the jobs are classified:
+        # while it still runs they read as work and this holds. Kill switch CC_RECYCLE_SELF_STOP_WATCHER=off.
+        if [ -z "$bgk" ] && [ -n "$RCY_CALLER_PID" ] && [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" = on ] \
+           && [ "${CC_RECYCLE_SELF_STOP_WATCHER:-on}" != off ]; then
+          CC_RECYCLE_BGWORK_ANSWER=stop-if-watcher; rcy_self_siw=1
         fi
         # STOP-IF-WATCHER (design-swap-v3 F15, 2026-10-04). The operator's move lane restarts idle
         # sessions with no model turn, and about a third of them (10 of 26, measured that day) hold a
@@ -9484,10 +9575,10 @@ if [ "${1:-}" = "__recycle" ]; then
             hf_bounded "$IT2" session send -s "$RSID" "$rcy_siw_key" >/dev/null 2>&1 || true
             rcy_bgwork_sent=$((rcy_bgwork_sent + 1))
             echo "→ bgwork@${waited}s: the /exit raised the background-work dialog; stop-if-watcher answered '$rcy_siw_key' (Exit and stop tasks) — the only background job is the mailbox watcher ($rcy_siw_kind)"
-            emit_recycle_event recycle-bgwork-stopped-watcher "" "$RSID" "background-work dialog at ${waited}s answered with the stop-tasks index '$rcy_siw_key'; jobs=$rcy_siw_kind" || true
+            emit_recycle_event recycle-bgwork-stopped-watcher "" "$RSID" "background-work dialog at ${waited}s answered with the stop-tasks index '$rcy_siw_key'; jobs=$rcy_siw_kind; lane=$([ "$rcy_self_siw" = 1 ] && printf self || printf explicit)" || true
             continue
           fi
-          echo "→ bgwork@${waited}s: stop-if-watcher HOLDS ($rcy_siw_why) — answering Stay, as cancel does"
+          echo "→ bgwork@${waited}s: stop-if-watcher HOLDS ($rcy_siw_why) — answering Stay, as cancel does$([ "$rcy_self_siw" = 1 ] && printf ' (self-recycle default)')"
           CC_RECYCLE_BGWORK_ANSWER=cancel
         fi
         if [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" = cancel ] || [ "$rcy_team_rc" != 1 ] \
@@ -9498,11 +9589,11 @@ if [ "${1:-}" = "__recycle" ]; then
           # precheck reads as an operator draft, so the session is HELD:draft forever and never
           # recovers after its job ends. Attribution is structural (we typed it seconds ago), and it
           # is scrubbed only when the composer reads back exactly `/exit`; anything else is left.
-          /bin/sleep "${FIRE_TYPE_SETTLE:-0.5}"
-          if [ "$(composer_content "$IT2" "$RSID" 2>/dev/null)" = "/exit" ]; then
-            composer_scrub_verified "$IT2" "$RSID" >/dev/null 2>&1 || true
-          fi
-          echo "!! recycle HELD at ${waited}s: the /exit raised the background-work dialog and this relaunch may not choose either exit ($(if [ -z "$bgk" ]; then printf 'the menu offers no keep-work option'; elif [ "$rcy_team_rc" != 1 ]; then printf 'the subject leads live team members'; else printf 'CC_RECYCLE_BGWORK_ANSWER=cancel'; fi)) — sent Esc (Stay); the session in $RSID is untouched and NO relaunch was typed. Re-run once its background work has ended." >&2
+          rcy_scrub_own_exit || true
+          echo "!! recycle HELD at ${waited}s: the /exit raised the background-work dialog and this relaunch may not choose either exit ($(if [ -z "$bgk" ]; then printf 'the menu offers no keep-work option'; elif [ "$rcy_team_rc" != 1 ]; then printf 'the subject leads live team members'; else printf 'CC_RECYCLE_BGWORK_ANSWER=cancel'; fi)) — sent Esc (Stay); the session in $RSID is untouched and NO relaunch was typed (composer after Esc: $RCY_EXIT_SCRUB). Re-run once its background work has ended." >&2
+          rcy_hold_pids=-
+          case "$rcy_siw_kind" in work\ *pids=*) rcy_hold_pids="${rcy_siw_kind##*pids=}" ;; esac
+          rcy_retry_ticket "${rcy_siw_why:-$(if [ "$rcy_team_rc" != 1 ]; then printf 'the session leads live team members, or its team could not be read'; else printf 'background work is running'; fi)}" "$rcy_hold_pids" || true
           # unconfirm=needed: the transplant confirm ran before the /exit and the session stays in
           # this pane, so the source must be handed back — the reconciler UNCONFIRMs off this field.
           emit_recycle_event recycle-held-bgwork "" "$RSID" "background-work dialog at ${waited}s cancelled with Esc; nothing typed; unconfirm=needed" || true
@@ -9526,6 +9617,7 @@ if [ "${1:-}" = "__recycle" ]; then
             # loudly, as the cancel arm does, and name the goal so it can be re-armed by hand.
             echo "!! recycle HELD at ${waited}s: the background-work dialog was dismissed to clear the predecessor's /goal (${RCY_GOAL_CLEAR}), and /exit could not be re-submitted — the session in $RSID is alive at its composer and NO relaunch was typed.$([ "$RCY_GOAL_CLEAR" = cleared ] && [ -n "${FIRE_GOAL:-}" ] && printf ' Its goal was cleared; re-arm it there with: /goal %s' "$FIRE_GOAL") Re-run the recycle." >&2
             emit_recycle_event recycle-held-bgwork "" "$RSID" "goal-clear dismissed the dialog at ${waited}s (goal=${RCY_GOAL_CLEAR}); /exit re-submit failed; nothing typed; unconfirm=needed" || true
+            rcy_retry_ticket "the dialog was dismissed to clear the /goal but /exit could not be re-submitted" - || true
             hf_alarm recycle-held-bgwork "$RSID" "${RCY_OLD_SID:-}" "" "HANDOFF-RECYCLE-HELD: pane $RSID — the recycle dismissed the background-work dialog to clear the predecessor's /goal (${RCY_GOAL_CLEAR}) and could not re-submit /exit. The predecessor is alive at its composer; no relaunch was typed.$([ "$RCY_GOAL_CLEAR" = cleared ] && [ -n "${FIRE_GOAL:-}" ] && printf ' Its goal was CLEARED — re-arm it in that pane: /goal %s' "$FIRE_GOAL") Re-run the recycle." || true
             exit 1
           fi
@@ -9616,6 +9708,8 @@ if [ "${1:-}" = "__recycle" ]; then
   fi
   # The bound expired with no confirmation: one last read, as the old loop condition gave it.
   if [ "$rcy_shell_ok" != 1 ] && [ "$rcy_vanished" != 1 ] && at_shell; then rcy_shell_ok=1; fi
+  # The session exited: a retry ticket an earlier held attempt left for it has nothing more to ask.
+  if [ "$rcy_shell_ok" = 1 ] && [ -n "${RCY_OLD_SID:-}" ]; then rm -f "$(hf_recycle_retry_dir)/$RCY_OLD_SID.json" 2>/dev/null || true; fi
   if [ "$rcy_shell_ok" != 1 ]; then
     # LEDGER COMPLETENESS (recycle-100p): both real recycle failures in the 3.5-day instrumented
     # window emitted ZERO outcome rows — a failed recycle was ledger-invisible, provable only by
@@ -16310,6 +16404,11 @@ recycle_fire() {
     fi
     if [ "$rcy_cg_rc" = 2 ]; then
       rcy_composer_unreadable gate
+      # A self-recycle run mid-turn often has no composer box to read (pane 254, 2026-10-05: 180 s,
+      # refused). The turn's own Stop is when the box is back, so that is when it is re-attempted.
+      if [ "$RCY_REMOTE" != 1 ] && [ -z "${RESUME_LAUNCHER:-}" ]; then
+        hf_recycle_retry_ticket "$(cc_sid_for_pane "$SID" 2>/dev/null || true)" "$SID" "the composer could not be read while the turn was running" - "${PROMPT_FILE_ORIG:-${PROMPT_FILE:-}}" >&2 || true
+      fi
       exit 1
     fi
     if [ "$rcy_cg_rc" != 0 ]; then
@@ -16550,6 +16649,9 @@ recycle_fire() {
     if [ "$rcy_cg_rc" = 2 ]; then
       hf_recycle_disarm
       rcy_composer_unreadable fresh
+      if [ "$RCY_REMOTE" != 1 ] && [ -z "${RESUME_LAUNCHER:-}" ]; then
+        hf_recycle_retry_ticket "${rcy_old_sid:-}" "$SID" "the composer could not be read right before /exit" - "${PROMPT_FILE_ORIG:-${PROMPT_FILE:-}}" >&2 || true
+      fi
       exit 1
     fi
     if [ "$rcy_cg_rc" != 0 ]; then

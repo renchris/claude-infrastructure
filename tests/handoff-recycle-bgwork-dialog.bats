@@ -688,3 +688,91 @@ siw_keys() { grep 'session send' "$H/it2-calls.log" 2>/dev/null || true; }
   run bash "$HF" __recycle "$STUB_PANE" "$BATS_TEST_TMPDIR/no-such-tty" "$CMDFILE" "$BATS_TEST_TMPDIR"
   siw_keys | grep -q 'session send -s BGWORK-PANE 2$'
 }
+
+# ── A SELF-RECYCLE PAST ITS OWN MAILBOX WATCHER, AND THE RETRY TICKET (2026-10-05, reso pane 254) ──
+# Session d425afab recycled itself while its own cc-await-ping was running: the self-call retry put
+# /exit back in, the dialog came back for the watcher, the view-off menu has no keep-work option, and
+# the default answered Stay. HELD at 18 s, nothing retried, nine hours idle. A self-recycle now takes
+# the stop-if-watcher answer by default, and every hold leaves a ticket for the session's Stop hook.
+# The self-call stub drives it: the dialog comes back after the retry (STUB_REDIALOG=1), and the
+# registry row names the subject (drive_sc hands `sid-before` over as the predecessor).
+self_env() { # $1=jobs: watcher | work
+  siw_env "$1"
+  printf '{"paneUUID":"%s","pid":5000,"session_id":"sid-before"}\n' "$STUB_PANE" > "$CC_REGISTRY_DIR/$STUB_PANE.json"
+}
+ticket() { cat "$H/.claude/autonomy/recycle-retry/sid-before.json" 2>/dev/null || true; }
+
+@test "[RED] SELF-RECYCLE past its own watcher: the dialog that comes back is answered 'Exit and stop tasks', no hold, no ticket" {
+  _selfcall_stub; self_env watcher
+  STUB_REDIALOG=1 run drive_sc
+  [[ "$output" == *"stop-if-watcher answered '1' (Exit and stop tasks)"* ]] || { echo "$output"; false; }
+  [ "$(sc_sends 'caller=alive')" = 0 ] || { cat "$H/sends.log"; false; }   # nothing mid-call
+  [ "$(sc_sends 'caller=gone 1$')" = 1 ] || { cat "$H/sends.log"; false; } # the stop-tasks index, once
+  [[ "$output" != *"recycle HELD"* ]] || { echo "$output"; false; }
+  run row recycle-bgwork-stopped-watcher
+  [[ "$output" == *"lane=self"* ]] || { echo "$output"; false; }
+  run ticket
+  [ -z "$output" ]
+}
+
+@test "NEGATIVE CONTROL: the same self-recycle over real background WORK still holds — no index, and a ticket naming the job" {
+  _selfcall_stub; self_env work
+  STUB_REDIALOG=1 run drive_sc
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"stop-if-watcher HOLDS (its background jobs are not watcher-only"*"(self-recycle default)"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"recycle HELD"* ]] || { echo "$output"; false; }
+  [ "$(sc_sends ' [0-9]$')" = 0 ] || { cat "$H/sends.log"; false; }
+  run ticket
+  [ "$(printf '%s' "$output" | jq -r '.job_pids')" = 5100 ] || { echo "$output"; false; }
+  [ "$(printf '%s' "$output" | jq -r '.attempts')" = 1 ] || { echo "$output"; false; }
+  [ "$(printf '%s' "$output" | jq -r '.advised')" = 0 ] || { echo "$output"; false; }
+  [ "$(printf '%s' "$output" | jq -r '.pane')" = "$STUB_PANE" ] || { echo "$output"; false; }
+}
+
+@test "KILL SWITCH: CC_RECYCLE_SELF_STOP_WATCHER=off restores the old hold over a watcher-only session" {
+  _selfcall_stub; self_env watcher
+  STUB_REDIALOG=1 CC_RECYCLE_SELF_STOP_WATCHER=off run drive_sc
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"the menu offers no keep-work option"* ]] || { echo "$output"; false; }
+  [ "$(sc_sends ' [0-9]$')" = 0 ] || { cat "$H/sends.log"; false; }
+}
+
+@test "NOT a self-recycle: a watcher-only session is still answered Stay, and no ticket is left for a pane that did not ask" {
+  _selfcall_stub; self_env watcher
+  run drive_sc ""
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [ "$(sc_sends ' [0-9]$')" = 0 ] || { cat "$H/sends.log"; false; }
+  run ticket
+  [ -z "$output" ]
+}
+
+@test "an EXPLICIT answer is never overridden: cancel on a self-recycle over a watcher still holds" {
+  _selfcall_stub; self_env watcher
+  STUB_REDIALOG=1 CC_RECYCLE_BGWORK_ANSWER=cancel run drive_sc
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [ "$(sc_sends ' [0-9]$')" = 0 ] || { cat "$H/sends.log"; false; }
+}
+
+@test "[RED] a hold never leaves OUR /exit in the composer, and the hold line says what it found" {
+  _selfcall_stub; self_env work
+  STUB_REDIALOG=1 run drive_sc
+  [[ "$output" == *"composer after Esc: scrubbed"* ]] || { echo "$output"; false; }
+  [ -z "$(cat "$H/stub.composer" 2>/dev/null)" ] || { cat "$H/stub.composer"; false; }
+}
+
+@test "the retry ticket counts CONSECUTIVE holds, and CC_RECYCLE_RETRY=off writes none" {
+  local fn="$BATS_TEST_TMPDIR/rt-funcs.sh"
+  { sed -n '/^hf_recycle_retry_dir() {/p' "$HF"; sed -n '/^hf_recycle_retry_ticket() {/,/^}/p' "$HF"; } > "$fn"
+  grep -q 'hf_recycle_retry_ticket' "$fn" || { echo "the function was not extracted"; false; }
+  run bash -c "set -euo pipefail; hf_bounded() { return 127; }; . '$fn'
+    hf_recycle_retry_ticket sid-x pane-x 'work is running' 41,42 /tmp/brief.md
+    hf_recycle_retry_ticket sid-x pane-x 'work is running' 'not pids' ''
+    CC_RECYCLE_RETRY=off hf_recycle_retry_ticket sid-off pane-x why - ''
+    hf_recycle_retry_ticket '' pane-x why - ''
+    hf_recycle_retry_ticket ../escape pane-x why - ''
+    jq -r '[.attempts, .job_pids, .why] | @tsv' \"\$HOME/.claude/autonomy/recycle-retry/sid-x.json\"
+    ls \"\$HOME/.claude/autonomy/recycle-retry\" | wc -l | tr -d ' '"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *$'2\t-\twork is running'* ]] || { echo "$output"; false; }
+  [ "${lines[${#lines[@]}-1]}" = 1 ] || { echo "$output"; false; }
+}
