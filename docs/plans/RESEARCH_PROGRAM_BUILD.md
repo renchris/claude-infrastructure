@@ -501,6 +501,56 @@ re-measure as E1 did. Locus S (fired `fire-rp-v12-e1b`). Harness, raw numbers an
   the stale REPORT §1/§7/§3.12 and SKILL.md:65 numbers). Each is a named, priced edit to the sections it changes,
   recorded in REPORT.md §9 per ruling 8's rule; each code change gets a planted-input test red before, green after.
 
+#### E3a — the honest forecast and the triage record — DONE 2026-10-04
+Scope (frozen): (1) `estimate.py` loads `params-measured.json` by default, BASE kept as a labeled contrast, red-then-green
+test; (2) the stale REPORT §1/§7/§3.12 and SKILL.md numbers fixed as dated notes, with the triage study's verdict
+recorded; (3) `intake.py` warns on a non-lite profile with the measured reason; (4) the pilot's contract re-rendered as
+a draft beside the signed one, and the re-sign filed as one operator step; (5) the triage study's one reversing
+measurement run and its decision rule's outcome recorded.
+Scope (grown): +`intake.py` stamps `method_version: "1.2"` in the frame and counts `build-certifying` /
+`build-certified` as registered in `status` (asked by the wave lead for E3b's gate rows 18 and 19).
+- Locus: S (fired `fire-rp-v12-e3a`), with the code written L, lead-inline: the machine's capacity gate refused
+  teammate and worker spawns for most of the session (8-9 sessions mid-turn against a ceiling of 8), and its own
+  instruction for that case is to run the step in-session.
+- **Item 1, estimator.** `simulate` and `forecast` read `docs/research/research-calibration/evidence/params-measured.json`
+  by default: `u_plan_mean` 0.121, `fpp` 1.1266, `q` 0.223, `omit_plan_mean` 0.577, `fixborn_plan_median` 0.211, `u_hi`
+  0.234. `CC_RESEARCH_PARAMS` or `--params` points at another file; an unreadable or incomplete file exits 2. `--base`
+  is the assumed contrast, and `--published` still reproduces `profile_sim.out` byte for byte. At the measured inputs
+  and 20 holes at freeze (modeled, 500 programs): Lite 10.11 desk + 3.96 invisible, Standard 15.28 + 7.45, Full
+  24.69 + 13.2; the cap is reached in 100% and the chance of a change after signoff is 1.00 in each. Tests: 5 new cases
+  in `tests/research-kit-estimate.bats`, all 5 red on the old file.
+- **Item 3, intake.** `init` warns on stderr when the chosen profile leaves no fewer holes than Lite at the measured
+  inputs (Standard 22.73 against Lite's 14.07 at 20 holes; both simulated at call time, so the warning follows the
+  measured file and a planted file with no false calls silences it). The contract page prints the measured forecast,
+  the assumed one as a contrast, and the warning. Tests: 6 new cases in `tests/research-program-intake.bats`, 4 red on
+  the old file (the two that pass there are the lite and planted-file controls).
+- Test receipts (2026-10-04, `CC_BATS_MAX_ROOTS=0` with a recorded waiver after 7 deferrals at load 55-90): the two
+  suites `1..36`, 0 not ok; cc-research-core, cc-research-records, cc-research-cert, research-program-briefs,
+  research-kit-round and research-kit-gate `1..142`, 0 not ok.
+- **Item 2, text.** Dated "Updated 2026-10-04 (v1.2)" notes, nothing deleted: REPORT §1 (bound exceeded in at most 2.2%;
+  chance of a change after signoff 1.00, about 9 changes per program on the operator-strict line), the §3.12 column
+  header (measured median 20.6 holes at freeze), §7 (6.5-7.6 desk holes, or 9.4-21.4 counting every false call), §9
+  (the list of v1.2 edits and the triage verdict), and SKILL.md's default profile (lite for every size).
+- **Item 4, pilot contract.** Draft at
+  `~/Development/claude-private/docs/research/triage-precision-study-2026-10-04/contract-draft/` (private: it carries
+  the operator's rulings verbatim): `CONTRACT.draft.md`, `NOTE.md`, `resign.sh`. Rendered from a temporary copy of the
+  pilot's `frame.json` and `preflight.json`; the signed page's sha256 is unchanged (`54ccaf73…`). Against the signed
+  page only the forecast differs: desk left 1.57 → 15.28, invisible 1.12 → 7.45, chance of a change after signoff
+  0.87 → 1.00. At the pilot's measured 145 holes at freeze Lite and Standard are level (71.3 against 72.2 total,
+  modeled, 200 programs). Operator step filed: backlog `01e7de9219c0`
+  (`bash …/contract-draft/resign.sh --confirm truememory-2-0`). This is E4's packet.
+- **Item 5, the reversing measurement: F3 after the triage FAILS the decision rule; build no filter.** Recorded as
+  appendix A of `docs/research/triage-precision-study-2026-10-04/REPORT.md`. On S4 unannounced changes (modeled):
+  triage as run 8.83 Lite / 8.85 Standard; F3 after triage 9.12-9.24 / 8.61-8.90. Plan-bootstrap 95% interval of the
+  difference (100 draws): Lite −0.23 to +0.88 and −0.06 to +1.05; Standard −1.78 to +0.77 and −1.52 to +1.02. Total
+  changes rise to 13.9-15.9. Clause f: 0 of 70 exempt items lost. Holm-corrected null tests: smallest p 0.107.
+  - Coverage: symmetric panel 17 of 17 jobs (Anthropic re-rated on 16 plans through the clean prompt, the missing
+    Google job sent). F3 verdicts on 214 of 237 items; this pass probed 65 (45 new, 20 re-runs on the 3 blocked plans:
+    11 passed, 3 ran and did not reproduce, 48 not runnable, 3 blocked again).
+  - Known gap: the last 20 items (9 plans) were never dispatched, because the capacity gate refused the worker. With
+    the 3 blocked items they are bounded both ways (all pass, all disputed), and the rule fails under both bounds.
+  - Nothing is added to E3b's list: change (a) closes with the triage as calibrated.
+
 #### E4 — re-sign the pilot contract (v1.2 (d), operator half) — after E3
 - Operator: re-render TM2's contract on the measured forecast and re-sign it, with rulings 1 and 4 re-presented at
   measured numbers. Agent-side work stops at presenting the packet.
