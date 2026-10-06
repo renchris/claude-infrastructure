@@ -974,6 +974,21 @@ thresholds or the 9 s limit; never read v1 or v2; never tune on v3. Locus S (fir
   stratum meets the lead's floor (100 · 200 · 250, all pushback), so no cap was raised again. From the seal
   on, `tuning-v2.jsonl` holds 92 sealed v3 prompts in the clear: it is no longer a tuning set and must not be
   read by anyone who builds the classifier (E1e's "the set to work on next" is superseded by this line).
+- **v3 sealed and labeled, before the read** (2026-10-05). Sealed 22:10 CDT: 752 prompts, the dry run's counts
+  exactly; v1 and v2 byte-identical before and after (sha1 `97695cb083d6`, `e00d6f8969d1`); the clear-text
+  candidate files deleted. Labeled 22:10-22:34 by `anthropic:claude-opus-5-5` and `openai:gpt-5.6-sol`
+  through `heldout-rate.py --set v3 --batch 60`, as v2 was: every prompt has two labels and the raters agree
+  on **446 — regex-matched 114 of 144, regex-missed 180 of 326, pushback 4 of 9, other 148 of 273** (v2: 53 ·
+  136 · 7 · 36 of 232). `other` is judged on up to 148 prompts, four times v2's 36. Pushback stays thin, as
+  stated at the outset: 4 agreed prompts, counted only if their agreed label is a relay label.
+- **How the one read is run** (fixed before it starts): `heldout.py --set v3 evaluate --record
+  ~/.claude/autonomy/research/router-heldout/reading-v3-2026-10-05.jsonl`, once, with `CC_RESEARCH_ROUTER`
+  pointing at `router.py classify` in a `git archive` snapshot of the landed `55753fdc9`, and an in-session
+  daemon of the same snapshot on its own socket (the launchd daemon still runs E1f's code until the operator's
+  restart, and would leave every call to the cold path). One made-up prompt goes through the whole path first;
+  if it gets no label from the resident path the sealed set is not opened. The router's trace beside the
+  record says which call and path answered each item. Verdict, as E1c fixed it: PASS is `evaluate` exiting 0;
+  anything else is FAIL with the numbers, and v3 is not read again in this wave under any outcome.
 
 #### E2 — triage precision study (v1.2 (a), measurement half) — RUNNING
 - Locus: a Workflow in session d8964eb2, started 2026-10-04. Results: `docs/research/triage-precision-study-2026-10-04/`.
