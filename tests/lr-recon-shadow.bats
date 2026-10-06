@@ -291,7 +291,10 @@ nudge() { printf '%s\t841\t841\tnext2\t%s\tnudge-in-place/RECOVERED\t-\t%s\n' "$
 
 # Lead ruling W5b2 (2026-10-06, after W7i): a LIMITED member that goes SPLIT-BRAIN and then sits
 # PRE-MOVE/None is a known gap deferred past cutover: flagged in the compare, never a FAIL.
-defect() { printf '{"t":%s,"ev":"RECON-DEFECT","sid":"%s","record_id":"","detail":"%s"}\n' "$2" "$1" "$3" >> "$LR/recon/events.jsonl"; }
+defect() { # sid t detail [cohort id, default this one]
+  printf '{"t":%s,"ev":"RECON-DEFECT","sid":"%s","record_id":"recon:%s:%s:1","detail":"%s"}\n' \
+    "$2" "$1" "${4:-$CID}" "${1:0:8}" "$3" >> "$LR/recon/events.jsonl"
+}
 
 @test "a member SPLIT-BRAIN then PRE-MOVE/None is flagged as a watch line and still PASSes" {
   defect "$SIDA" 1790654500 SPLIT-BRAIN/None; defect "$SIDA" 1790654600 PRE-MOVE/None
@@ -318,4 +321,40 @@ defect() { printf '{"t":%s,"ev":"RECON-DEFECT","sid":"%s","record_id":"","detail
   archive
   run /usr/bin/python3 "$L" compare "$LR" "$CID" --home "$HOME"
   [[ "$output" == *"not a FAIL): bbbbbbbb went SPLIT-BRAIN"* ]] || { echo "$output"; false; }
+}
+
+# Live 2026-10-06: three next3-7d members were flagged off their stuck next3-auth-0 records.
+@test "a member's SPLIT-BRAIN then PRE-MOVE/None on ANOTHER cohort's record is not this cohort's watch line" {
+  defect "$SIDA" 1790654500 SPLIT-BRAIN/None next2-auth-0
+  defect "$SIDA" 1790654600 PRE-MOVE/None next2-auth-0
+  archive
+  run /usr/bin/python3 "$L" compare "$LR" "$CID" --home "$HOME"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *"watch (known gap"* ]] || { echo "$output"; false; }
+}
+
+# Live 2026-10-06 (next3-7d-1791288000): a second limit event on the same account, scope and reset
+# JOINS the existing cohort (W7h), so no new cid appears and the watcher announced nothing.
+@test "the watcher announces members that join an already-archived cohort, once" {
+  run /usr/bin/python3 "$L" watch "$LR" --once
+  [[ "$output" == *"new cohort archived: $CID"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"gained member"* ]] || { echo "$output"; false; }
+  printf '{"cid":"%s","acct":"next2","scope":"5h","resets_at":1790663400,"opened_at":1790654300,"members":["%s","%s","%s"]}' \
+    "$CID" "$SIDA" "$SIDB" "$SIDC" > "$LR/recon/cohorts/$CID.json"
+  run /usr/bin/python3 "$L" watch "$LR" --once
+  [[ "$output" == *"cohort gained member(s): $CID +cccccccc"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"new cohort archived"* ]] || { echo "$output"; false; }
+  run /usr/bin/python3 "$L" watch "$LR" --once
+  [ -z "$output" ] || { echo "$output"; false; }
+}
+
+@test "an archive made before members were tracked is seeded silently, then announces the next join" {
+  archive
+  rm -f "$LR/shadow-archive/$CID/members.json"
+  run /usr/bin/python3 "$L" watch "$LR" --once
+  [ -z "$output" ] || { echo "$output"; false; }
+  printf '{"cid":"%s","acct":"next2","scope":"5h","resets_at":1790663400,"opened_at":1790654300,"members":["%s","%s","%s"]}' \
+    "$CID" "$SIDA" "$SIDB" "$SIDC" > "$LR/recon/cohorts/$CID.json"
+  run /usr/bin/python3 "$L" watch "$LR" --once
+  [[ "$output" == *"gained member(s): $CID +cccccccc"* ]] || { echo "$output"; false; }
 }

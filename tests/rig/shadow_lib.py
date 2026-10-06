@@ -106,7 +106,10 @@ def _append_distinct(path: str, body: str, now: float) -> bool:
 
 
 def watch_once(lr: str, now: Optional[float] = None) -> List[str]:
-    """One archive pass. Returns the cids seen for the first time."""
+    """One archive pass. Returns one line per thing seen for the first time: ``<cid>`` for a new
+    cohort, ``<cid> +<sid8>[,<sid8>…]`` for members that JOINED a cohort already archived (W7h: a
+    new limit opens or joins its own scope's cohort, so a second limit event on the same account,
+    scope and reset never makes a new cid; live case next3-7d-1791288000, 2026-10-06)."""
     now = time.time() if now is None else now
     root = os.path.join(lr, "recon")
     arch = os.path.join(lr, "shadow-archive")
@@ -122,11 +125,25 @@ def watch_once(lr: str, now: Optional[float] = None) -> List[str]:
             continue
         cid = coh.get("cid") or os.path.basename(cpath)[:-5]
         d = os.path.join(arch, cid)
-        if not os.path.isdir(d):
+        fresh = not os.path.isdir(d)
+        if fresh:
             os.makedirs(os.path.join(d, "records"))
             new.append(cid)
             with open(os.path.join(arch, "index.jsonl"), "a", encoding="utf-8") as fh:
                 fh.write(json.dumps({"at": now, "cid": cid}) + "\n")
+        # members seen so far; an archive made before this file existed is seeded silently
+        mp = os.path.join(d, "members.json")
+        members = [str(s) for s in coh.get("members") or []]
+        try:
+            known: Optional[List[str]] = list(_load(mp))
+        except (OSError, ValueError):
+            known = None
+        joined = [s for s in members if known is not None and s not in known]
+        if joined and not fresh:
+            new.append("%s +%s" % (cid, ",".join(s[:8] for s in joined)))
+        if known is None or joined:
+            with open(mp, "w", encoding="utf-8") as fh:
+                json.dump(sorted(set(known or []) | set(members)), fh)
         shutil.copyfile(cpath, os.path.join(d, "cohort.json"))
         pages = cpath[:-5] + ".pages.json"
         if os.path.exists(pages):
@@ -189,9 +206,14 @@ def watch(lr: str, interval: float, once: bool, notify: str = "") -> int:
     session's wake path: it never polls)."""
     while True:
         for cid in watch_once(lr):
+            joined = " +" in cid
             print(
-                "%s new cohort archived: %s"
-                % (time.strftime("%H:%M:%SZ", time.gmtime()), cid),
+                "%s %s: %s"
+                % (
+                    time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "cohort gained member(s)" if joined else "new cohort archived",
+                    cid,
+                ),
                 flush=True,
             )
             if notify:
@@ -202,8 +224,13 @@ def watch(lr: str, interval: float, once: bool, notify: str = "") -> int:
                     [
                         exe,
                         notify,
-                        "SHADOW: new real limit cohort %s — shadow_lib.py compare "
-                        "once it settles" % cid,
+                        "SHADOW: %s %s — shadow_lib.py compare once it settles"
+                        % (
+                            "a new limit JOINED cohort"
+                            if joined
+                            else "new real limit cohort",
+                            cid,
+                        ),
                     ],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
@@ -428,18 +455,23 @@ def _daemon_dead(lr: str, sids: Set[str], lo: float, hi: float) -> Set[str]:
 
 
 def _split_brain_stuck(
-    lr: str, members: List[str], recs: Dict[str, Dict[str, Any]], since: float
+    lr: str, cid: str, members: List[str], recs: Dict[str, Dict[str, Any]], since: float
 ) -> Dict[str, float]:
     """Members the daemon flagged SPLIT-BRAIN that then sat PRE-MOVE/None (a later RECON-DEFECT
     PRE-MOVE/None, or a record still PRE-MOVE with no substate) → the split-brain time. Lead
     ruling W5b2 (2026-10-06, after W7i): a known gap deferred past cutover, so it is FLAGGED in
-    the compare and never folded into PASS/FAIL."""
+    the compare and never folded into PASS/FAIL. Keyed on THIS cohort's record ids: the same sid
+    in another cohort is another record (live: three next3-7d members flagged off their
+    next3-auth-0 records)."""
     want = set(members)
+    mine = "recon:%s:" % cid
     split: Dict[str, float] = {}
     stuck: Set[str] = set()
     for r in _jsonl(os.path.join(lr, "recon", "events.jsonl")):
         sid = r.get("sid")
         if sid not in want or r.get("ev") != "RECON-DEFECT":
+            continue
+        if not str(r.get("record_id", "")).startswith(mine):
             continue
         t = _epoch(r.get("t"))
         if t is None or t < since:
@@ -710,7 +742,7 @@ def compare(lr: str, cid: str, home: str) -> int:
             "  filed in another cohort (not a miss): %s"
             % ", ".join("%s→%s" % (s[:8], other[s]) for s in elsewhere)
         )
-    split_stuck = _split_brain_stuck(lr, members, recs, since)
+    split_stuck = _split_brain_stuck(lr, cid, members, recs, since)
     for s in sorted(split_stuck):
         print(
             "  watch (known gap, deferred past cutover; not a FAIL): %s went SPLIT-BRAIN at %s "
