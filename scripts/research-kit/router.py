@@ -14,6 +14,8 @@ scripts/lib/research-program.sh (wave A1's resolver, the one key every exemption
   router.py prompt --program P --state S --by cwd|prompt     (hooks/research-precognition-nudge.sh)
       UserPromptSubmit. Classifies a genuine prompt, records the turn's label for this session and
       prints the hook's JSON. `router.py prompt --clear` forgets the session's route (no program).
+      A relay turn (completeness, pushback) also carries a one-line systemMessage, so the operator
+      sees the route and the one word that undoes it.
       A machine-envelope FIRST prompt (no route record yet) is labeled without the classifier and
       recorded `by: envelope`: work-order on a --requires-gate marker, else a named predecessor's
       non-relayed label, else other.
@@ -21,19 +23,30 @@ scripts/lib/research-program.sh (wave A1's resolver, the one key every exemption
       PreToolUse. Prints a deny, or nothing (allow).
   router.py relay-check --session SID                        (hooks/completion-assert.sh)
       Stop. The reply on stdin; prints the block reason and exits 1 when a completeness or pushback
-      reply names something the relayed certificate does not carry.
+      reply names something the relayed certificate does not carry. An `unavailable` or `by:
+      override` turn is checked the same way only when the reply opens with a yes/no verdict.
   router.py status --session SID                             the session's route record, as JSON
 
 LABELS are exactly heldout.ROUTES, plus `unavailable` for a classifier that errored, timed out or
 answered outside the list (§10 item 3: that is NOT a completeness label — it denies only the
-research verbs, and the next genuine prompt is classified afresh). A prompt carrying the
-`--requires-gate <program>` work-order marker is labeled work-order without calling the classifier.
-A machine-envelope prompt (a fired or recycled successor's brief) is never classified: it keeps the
-session's last label, or, as the session's FIRST prompt, gets a deterministic `by: envelope` label
-(envelope_label) so a successor is not left unlabeled, which would deny it every tool.
+research verbs, and the next genuine prompt is classified afresh). A typed prompt carrying the
+`--requires-gate <program>` work-order marker is labeled work-order without calling the classifier
+only when <program> is the routed program's slug; with any other slug it is classified like any
+prompt. A machine-envelope prompt (a fired or recycled successor's brief) is never classified: it
+keeps the session's last label unless that label is a relay one, which becomes `other`, `by:
+envelope` (a relay label governs one re-ask turn and is not carried into a continuation); as the
+session's FIRST prompt it gets a deterministic `by: envelope` label (envelope_label) so a successor
+is not left unlabeled, which would deny it every tool.
+
+THE OVERRIDE: the one word `misrouted`, typed alone right after a relay turn in the same program,
+re-routes that previous prompt as `other`, `by: override`, without the classifier. It never grants
+more than `other` (research verbs stay denied), it is one-shot (a second one, or one after a
+non-relay turn, is an ordinary prompt), and each is counted per program in
+$CC_RESEARCH_HOME/route-counters.json  {"programs": {"<slug>": {"overrides", "last_override_at"}}}.
 
 THE ROUTE RECORD, one per session: $CC_RESEARCH_HOME/route-state/<sid>.json
-  {program, state, by, label, cert, reason, at, prompt_sha, fallbacks}
+  {program, state, by, label, cert, reason, at, prompt_sha, fallbacks}, plus `overrode` (the label
+  an override replaced) on a `by: override` record, whose prompt_sha is the overridden prompt's.
 It is pre-written as `unavailable` before the classifier runs, so a hook killed at its timeout
 leaves the research-verb deny in force, never a stale label from an earlier turn.
 
@@ -103,6 +116,9 @@ PUSHBACK_LINE = (
     "checked in the next scheduled review."
 )
 WORK_ORDER_MARKER = re.compile(r"--requires-gate[ =]+([a-z0-9][a-z0-9-]*)")
+OVERRIDE_WORD = (
+    "misrouted"  # typed alone right after a relay turn: re-route it as `other`
+)
 # How an envelope names the session it continues: `predecessor session <sid>` (or `predecessor:`,
 # `predecessor_sid=`), or a bare Claude Code session uuid. A candidate counts only if route-state
 # holds a record for it in the same program.
@@ -514,7 +530,9 @@ class Call(threading.Thread):
             shutil.rmtree(self.dir, ignore_errors=True)
 
 
-def classify(prompt: str, cert: str) -> Tuple[Optional[str], str]:
+def classify(
+    prompt: str, cert: str, program: Optional[str] = None
+) -> Tuple[Optional[str], str]:
     """(label, reason). label None = unavailable: neither call gave one route label inside the limit.
 
     Two calls start together (KINDS), and the rule that joins them is wave E1g's (receipt
@@ -526,7 +544,7 @@ def classify(prompt: str, cert: str) -> Tuple[Optional[str], str]:
     the prompt is relayed. With a label in hand the wait for the other call stops DELIVER_MARGIN_S
     before the limit."""
     m = WORK_ORDER_MARKER.search(prompt)
-    if m:
+    if m and program and m.group(1) == program:
         return "work-order", f"--requires-gate {m.group(1)} marker"
     try:
         timeout = float(
@@ -678,6 +696,13 @@ def cmd_prompt(a: argparse.Namespace) -> int:
         route_clear(sid)
         return 0
     prev = route_load(sid) or {}
+    if (
+        prompt.strip().lower().rstrip(".!") == OVERRIDE_WORD
+        and prev.get("label") in RELAYED
+        and prev.get("program") == a.program
+        and prev.get("by") != "override"
+    ):
+        return override_prompt(a, sid, prev)
     base = {
         "program": a.program,
         "state": a.state,
@@ -697,7 +722,7 @@ def cmd_prompt(a: argparse.Namespace) -> int:
         ),
     )
     cert, err = render_cert(a.program)
-    label, reason = classify(prompt, cert)
+    label, reason = classify(prompt, cert, a.program)
     fallbacks = 0 if label else int(prev.get("fallbacks") or 0) + 1
     label = label or UNAVAILABLE
     route_save(
@@ -711,6 +736,13 @@ def cmd_prompt(a: argparse.Namespace) -> int:
             "hookEventName": "UserPromptSubmit",
             "additionalContext": ctx,
         }
+    if label in RELAYED:
+        # Only the model sees additionalContext; this line is the operator's view of the route.
+        out["systemMessage"] = (
+            f"research-program router: this prompt was routed as {label} ({reason}), so every tool "
+            "but the certificate read is blocked this turn. If it was not a completeness question, "
+            f"reply with the one word: {OVERRIDE_WORD}"
+        )
     if fallbacks >= FALLBACK_NOTICE_AFTER:
         out["systemMessage"] = (
             f"research-program router: classifier unavailable for {fallbacks} prompts in a row "
@@ -722,27 +754,112 @@ def cmd_prompt(a: argparse.Namespace) -> int:
     return 0
 
 
-def envelope_prompt(a: argparse.Namespace, sid: str, prompt: str) -> int:
-    """A machine-envelope prompt. With a route record the last genuine label stands (§4.2); as the
-    session's first prompt in a blocking program it gets envelope_label's label, recorded `by:
-    envelope`, so cmd_tool does not read the session as unlabeled (completeness)."""
-    if a.clear or not a.program or a.state not in BLOCKING_STATES or route_load(sid):
-        return 0
-    label, reason = envelope_label(prompt, a.program, sid)
+def count_override(slug: str) -> None:
+    """Add one operator override to the program's row in route-counters.json, which
+    operator-readout reads: {"programs": {"<slug>": {"overrides": N, "last_override_at": ISO}}}.
+    A missing or garbled file starts from empty; a failed write never fails the override."""
+    path = kit.research_home() / "route-counters.json"
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    progs = data.get("programs")
+    if not isinstance(progs, dict):
+        progs = {}
+    row = progs.get(slug)
+    if not isinstance(row, dict):
+        row = {}
+    try:
+        n = int(row.get("overrides") or 0)
+    except (TypeError, ValueError):
+        n = 0
+    row["overrides"] = n + 1
+    row["last_override_at"] = kit.now_iso()
+    progs[slug] = row
+    data["programs"] = progs
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        kit.write_json_atomic(path, data)
+    except OSError:
+        pass
+
+
+def override_prompt(a: argparse.Namespace, sid: str, prev: Dict[str, Any]) -> int:
+    """The one word `misrouted` right after a relay turn: the previous prompt is re-routed as
+    `other`, without the classifier. It grants `other` rights only (research verbs stay denied),
+    and the record's `by: override` makes it one-shot and keeps the Stop check on a verdict."""
+    reason = "operator override: the previous prompt was misrouted"
     route_save(
         sid,
         {
             "program": a.program,
             "state": a.state,
-            "by": "envelope",
+            "by": "override",
             "at": kit.now_iso(),
-            "prompt_sha": hashlib.sha256(prompt.encode()).hexdigest()[:12],
-            "label": label,
-            "cert": "",
+            "prompt_sha": prev.get("prompt_sha") or "",
+            "label": "other",
+            "overrode": prev.get("label"),
+            "cert": prev.get("cert") or "",
             "reason": reason,
             "fallbacks": 0,
         },
     )
+    count_override(a.program)
+    ctx = (
+        f"RESEARCH PROGRAM {a.program} ({a.state}) — the operator says the PREVIOUS prompt was not "
+        f"a completeness question (it was routed as {prev.get('label')}). Answer that PREVIOUS "
+        "prompt now, under `other` handling: normal handling, but research verbs stay blocked this "
+        "turn (§4.2)."
+    )
+    print(
+        json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": ctx,
+                }
+            }
+        )
+    )
+    return 0
+
+
+def envelope_prompt(a: argparse.Namespace, sid: str, prompt: str) -> int:
+    """A machine-envelope prompt. With a route record a non-relay label stands (§4.2), and a relay
+    label is rewritten to `other`, `by: envelope`: it governed one re-ask turn, and a continuation
+    is not one. As the session's first prompt in a blocking program it gets envelope_label's label,
+    recorded `by: envelope`, so cmd_tool does not read the session as unlabeled (completeness)."""
+    if a.clear or not a.program or a.state not in BLOCKING_STATES:
+        return 0
+    prev = route_load(sid)
+    if prev and prev.get("label") not in RELAYED:
+        return 0
+    if prev:
+        label, reason = (
+            "other",
+            "a relay label is not carried into a machine-envelope turn",
+        )
+        route_save(
+            sid, dict(prev, label=label, by="envelope", reason=reason, at=kit.now_iso())
+        )
+    else:
+        label, reason = envelope_label(prompt, a.program, sid)
+        route_save(
+            sid,
+            {
+                "program": a.program,
+                "state": a.state,
+                "by": "envelope",
+                "at": kit.now_iso(),
+                "prompt_sha": hashlib.sha256(prompt.encode()).hexdigest()[:12],
+                "label": label,
+                "cert": "",
+                "reason": reason,
+                "fallbacks": 0,
+            },
+        )
     ctx = context_for(a.program, a.state, label, "", reason)
     if ctx:
         print(
@@ -1074,7 +1191,8 @@ def relay_violations(reply: str, cert: str, label: str) -> List[str]:
 def cmd_relay_check(a: argparse.Namespace) -> int:
     route = route_load(a.session)
     label = (route or {}).get("label")
-    if not route or (label not in RELAYED and label != UNAVAILABLE):
+    override = (route or {}).get("by") == "override"
+    if not route or (label not in RELAYED and label != UNAVAILABLE and not override):
         return 0
     slug = route.get("program") or ""
     if program_state(slug) not in BLOCKING_STATES:
@@ -1082,14 +1200,20 @@ def cmd_relay_check(a: argparse.Namespace) -> int:
     reply = sys.stdin.read()
     cert = route.get("cert") or ""
     routed = str(label)
-    if label == UNAVAILABLE:
-        # The classifier fell back, so the prompt may have been a re-ask: a reply that opens with a
-        # verdict is checked as a completeness relay; any other reply is ordinary work.
+    if label == UNAVAILABLE or override:
+        # The classifier fell back, or the operator overrode a relay, so the prompt may have been a
+        # re-ask: a reply that opens with a verdict is checked as a completeness relay; any other
+        # reply is ordinary work.
         first = next((ln for ln in reply.splitlines() if ln.strip()), "")
         if not (OPENS_NO.search(first) or OPENS_YES.search(first)):
             return 0
         cert = cert or render_cert(slug)[0]
         routed = "unavailable (the re-ask classifier fell back; the reply opens with a verdict)"
+        if override:
+            routed = (
+                f"other by operator override of a {route.get('overrode')} route (the reply opens "
+                "with a verdict, so it is checked as a relay)"
+            )
     v = relay_violations(reply, cert, str(label))
     if not v:
         return 0
@@ -1125,7 +1249,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if a.verb == "classify":
         cert = render_cert(a.program)[0] if a.program else ""
         t0 = time.time()
-        label, why = classify(sys.stdin.read(), cert)
+        label, why = classify(sys.stdin.read(), cert, a.program)
         trace = os.environ.get("CC_RESEARCH_CLASSIFY_TRACE")
         if trace:
             row = {

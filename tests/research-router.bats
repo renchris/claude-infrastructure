@@ -226,13 +226,121 @@ label() { python3 "$ROUTER" status --session "${1:-s1}" | jq -r '.label // "none
   [ ! -s "$STUB_LOG" ]
 }
 
-@test "a machine-envelope prompt AFTER a genuine labeled prompt keeps the genuine label" {
+@test "a machine-envelope prompt AFTER a relay turn is 'other' by envelope: the relay label is not carried" {
   state certifying
   prompt "are you sure?" "$PROG/src" s5 >/dev/null
   [ "$(label s5)" = pushback ]
-  prompt "Continue. --requires-gate demo HANDOFF-ENGAGE-7-8-9" "$PROG/src" s5 >/dev/null
-  [ "$(label s5)" = pushback ]
-  [ "$(python3 "$ROUTER" status --session s5 | jq -r .by)" = cwd ]
+  sha="$(python3 "$ROUTER" status --session s5 | jq -r .prompt_sha)"
+  : > "$STUB_LOG"
+  # The envelope carries --requires-gate: after a relay turn it is still `other`, never a work order.
+  run prompt "Continue. --requires-gate demo HANDOFF-ENGAGE-7-8-9" "$PROG/src" s5
+  printf '%s' "$output" | jq -e '.hookSpecificOutput.additionalContext | test("routed as other")' >/dev/null
+  [ "$(label s5)" = other ]
+  [ "$(python3 "$ROUTER" status --session s5 | jq -r .by)" = envelope ]
+  [ "$(python3 "$ROUTER" status --session s5 | jq -r .prompt_sha)" = "$sha" ]
+  [ "$(tool Read 'x' "$PROG/src" s5)" = allow ]
+  [ "$(tool Agent 'x' "$PROG/src" s5)" = deny ]
+  [ ! -s "$STUB_LOG" ]
+}
+
+@test "every relay turn tells the operator how the prompt was routed and the one word that undoes it" {
+  state certified
+  run prompt "are we done?"
+  printf '%s' "$output" | jq -e '.systemMessage
+    | test("routed as completeness") and test("reply with the one word: misrouted")' >/dev/null
+  run prompt "are you sure?"
+  printf '%s' "$output" | jq -e '.systemMessage | test("routed as pushback")' >/dev/null
+  run prompt "hello there"
+  [ "$(label)" = other ]
+  printf '%s' "$output" | jq -e 'has("systemMessage") | not' >/dev/null
+}
+
+@test "a typed --requires-gate naming another program is classified, not a work order by the marker" {
+  state certified
+  : > "$STUB_LOG"
+  prompt "are we done? --requires-gate otherslug" >/dev/null
+  [ -s "$STUB_LOG" ]
+  [ "$(label)" = completeness ]
+  [ "$(tool Agent 'x')" = deny ]
+  run bash -c "printf 'are we done? --requires-gate otherslug' | python3 '$ROUTER' classify --program demo"
+  [ "$output" = completeness ]
+  run bash -c "printf 'are we done? --requires-gate demo' | python3 '$ROUTER' classify --program demo"
+  [ "$output" = work-order ]
+}
+
+@test "the one word 'misrouted' after a relay turn reroutes it as other, without the classifier, and is counted" {
+  state certified
+  prompt "are we done?" >/dev/null
+  [ "$(label)" = completeness ]
+  sha="$(python3 "$ROUTER" status --session s1 | jq -r .prompt_sha)"
+  : > "$STUB_LOG"
+  run prompt " Misrouted! "
+  printf '%s' "$output" | jq -e '.hookSpecificOutput.additionalContext | test("PREVIOUS prompt")' >/dev/null
+  [ ! -s "$STUB_LOG" ]
+  [ "$(label)" = other ]
+  rec="$(python3 "$ROUTER" status --session s1)"
+  [ "$(jq -r .by <<<"$rec")" = override ]
+  [ "$(jq -r .overrode <<<"$rec")" = completeness ]
+  [ "$(jq -r .prompt_sha <<<"$rec")" = "$sha" ]
+  [ "$(jq -r .fallbacks <<<"$rec")" = 0 ]
+  [ "$(tool Read 'x')" = allow ]
+  [ "$(tool Agent 'x')" = deny ]
+  [ "$(tool Bash 'codex exec x')" = deny ]
+  [ "$(jq -r '.programs.demo.overrides' "$CC_RESEARCH_HOME/route-counters.json")" = 1 ]
+  [ "$(jq -r '.programs.demo.last_override_at | type' "$CC_RESEARCH_HOME/route-counters.json")" = string ]
+}
+
+@test "'misrouted' is one-shot: a second one in a row is an ordinary, classified prompt" {
+  state certified
+  prompt "are we done?" >/dev/null
+  prompt "misrouted" >/dev/null
+  [ "$(python3 "$ROUTER" status --session s1 | jq -r .by)" = override ]
+  : > "$STUB_LOG"
+  prompt "misrouted" >/dev/null
+  [ -s "$STUB_LOG" ]
+  [ "$(label)" = other ]
+  [ "$(python3 "$ROUTER" status --session s1 | jq -r .by)" = cwd ]
+  [ "$(jq -r '.programs.demo.overrides' "$CC_RESEARCH_HOME/route-counters.json")" = 1 ]
+}
+
+@test "'misrouted' as a first prompt, or after a work-order turn, is classified and overrides nothing" {
+  state certified
+  : > "$STUB_LOG"
+  prompt "misrouted" "$PROG/src" s8 >/dev/null
+  [ -s "$STUB_LOG" ]
+  [ "$(python3 "$ROUTER" status --session s8 | jq -r .by)" = cwd ]
+  prompt "build it" >/dev/null
+  [ "$(label)" = work-order ]
+  : > "$STUB_LOG"
+  prompt "misrouted." >/dev/null
+  [ -s "$STUB_LOG" ]
+  [ "$(label)" = other ]
+  [ "$(python3 "$ROUTER" status --session s1 | jq -r .by)" = cwd ]
+  [ ! -e "$CC_RESEARCH_HOME/route-counters.json" ]
+}
+
+@test "the override counter survives a garbled counter file" {
+  state certified
+  mkdir -p "$CC_RESEARCH_HOME"; printf 'not json' > "$CC_RESEARCH_HOME/route-counters.json"
+  prompt "are we done?" >/dev/null
+  prompt "misrouted" >/dev/null
+  [ "$(label)" = other ]
+  [ "$(jq -r '.programs.demo.overrides' "$CC_RESEARCH_HOME/route-counters.json")" = 1 ]
+}
+
+@test "relay-check on an override turn: a reply opening with a verdict that adds an item is blocked, ordinary work passes" {
+  state certified
+  prompt "are we done?" >/dev/null
+  prompt "misrouted" >/dev/null
+  run bash -c "printf 'Yes. One more thing: the retry path in sync.py.\nResearch: demo — CERTIFIED Oct 16\n' \
+    | python3 '$ROUTER' relay-check --session s1"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"override"* ]] || false
+  [[ "$output" == *"sync.py"* ]] || false
+  run bash -c "printf 'Edited sync.py to add a retry; one more thing is still open.' \
+    | python3 '$ROUTER' relay-check --session s1"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
 }
 
 @test "§10 item 3: the operator kill switches turn the block and the routing off" {
