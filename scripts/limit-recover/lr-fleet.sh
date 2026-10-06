@@ -19,7 +19,8 @@
 # transplants the session and then RECYCLES ITS OWN PANE onto the target (handoff-fire.sh --recycle's
 # remote form: /exit typed into the blocked TUI, the same uuid relaunched in the surviving shell — same
 # window id, new account). This script is the fleet front end: it LOCATES (transcripts × registry),
-# SEQUENCES (one at a time, engagement-gated, behind the NON-charging capacity probe — a pane is never
+# SEQUENCES (a pool of LR_RECOVER_MAX_CONCURRENT, default 2 — see lf_pool_max; it was one at a time
+# until 2026-09-21 — engagement-gated, behind the NON-charging capacity probe — a pane is never
 # exited unless its relaunch can be admitted, and the probe never spends the refusal budget), and
 # REPORTS in a form where "which pane do I work from" cannot arise: pane before == pane after.
 # When a session's own tool is refused (auto-mode classifier), --enqueue hands the same request to

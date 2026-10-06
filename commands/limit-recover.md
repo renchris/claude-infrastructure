@@ -78,6 +78,33 @@ tick or two; `claude-accounts --reset-report` shows each detection and how long 
 
 ## The fast path — `cc-lr recover <ref>`, then END THE TURN
 
+**The whole fleet, or one account, is TWO commands: one that lists, one that rotates (2026-10-06).**
+
+```bash
+cc-lr rotate --list                          # READ-ONLY, fleet-wide: every session that needs another account
+cc-lr rotate --all                           # rotate all of them in place; one verdict line per session
+cc-lr rotate --account nextN [--to nextM]    # the same for one account; --to defaults to the router's pick
+```
+
+A session needs another account when its last word is a usage-limit error, or when it sits on an
+account that reads 100% on its 5-hour or weekly limit. `rotate` sends the first kind through
+`recover` (it owes a turn) and the second through `move` (restarted in its pane, no model turn),
+then prints one verdict per session as each lands. It is a front over those two verbs, so every
+refusal below still applies per session. `--until-idle S` also waits out sessions that are busy
+now; without it they are listed as held. `--no-wait` returns once everything is queued and names
+where each verdict will land. A bare `cc-lr rotate` moves nothing: the act needs `--all` or
+`--account` said aloud.
+
+**What bounds a rotation, and it is not memory.** Measured 2026-10-06
+(`docs/research/limit-recover-zero-memory-2026-10-06/README.md`): a relaunch costs about 0.2 GB
+that replaces a process already there, and the memory read admitted 8 of 8 moves in under a second
+each. What does bound it is printed in every `rotate`, `plan` and `move` output: moves run 4 at a
+time (`LR_MOVE_SLOTS`; a fixed count for the terminal's control socket and overlapping boots),
+recoveries 2 at a time (`LR_ONE_MAX_CONCURRENT`; first-turn bursts on the target account). A
+session that times out waiting for a move slot now says `slot-wait:`, never `capacity:`. Do not
+raise either width from a session: nothing has run above them, and the one batch at width 4
+coincided with load 150 on 10 CPUs and 2 of 7 slow boots.
+
 **`/limit-recover account N` (or no ref at all) is also ONE command:**
 
 ```bash
@@ -594,7 +621,9 @@ no orphan, no ambiguity about which pane is which*). Script: `scripts/limit-reco
    🚨 `HUSK` outranks `TRANSPLANTED→acct` for the SOURCE row, and the discriminator is whether the
    source pane is still alive: a live source row is a `HUSK` (something is standing and needs
    retiring), no source row is `TRANSPLANTED→` (the move is complete; nothing to act on).
-2. **`fleet --recover`** — sequenced, one session at a time, each behind the NON-charging capacity
+2. **`fleet --recover`** — a pool of `LR_RECOVER_MAX_CONCURRENT` workers (default 2, a fixed count
+   that guards routing races and first-turn bursts, not a memory limit; it was one at a time until
+   2026-09-21), each behind the NON-charging capacity
    probe (`cc_capacity_probe`: same terms as the admit gate, spends none of its 3-refusal budget — a
    pane is never `/exit`ed unless its relaunch can be admitted; at the wait cap the session stays
    PARKED with the term named). The target is `claude-accounts --rank` walked PAST the limited
