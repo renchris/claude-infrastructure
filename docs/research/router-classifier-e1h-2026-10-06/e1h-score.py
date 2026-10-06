@@ -157,6 +157,7 @@ def score(rows: dict, calls: dict, rule: str, X: str, Y: str) -> dict:
         [],
     )
     fallbacks = total = 0
+    miss: dict = {}
     for key, row in rows.items():
         per = calls.get(key)
         if not per:
@@ -171,6 +172,20 @@ def score(rows: dict, calls: dict, rule: str, X: str, Y: str) -> dict:
                 false_relay.append(lab in REL)
             if row["stratum"] == "other" and g is not None:
                 (v1_other if row["src"] == "v1" else other).append(lab == g)
+                if row["src"] != "v1" and lab != g:
+                    # what a miss on `other` is made of; shown only, RULE 1 does not read it
+                    kind = (
+                        "fallback"
+                        if lab is None
+                        else "relayed_wrongly"
+                        if lab in REL and g not in REL
+                        else "relay_missed"
+                        if g in REL and lab not in REL
+                        else "wrong_relay_label"
+                        if g in REL
+                        else "wrong_nonrelay_label"
+                    )
+                    miss[kind] = miss.get(kind, 0) + 1
             if row["stratum"] in COMPLETENESS_STRATA and g in REL:
                 recall.append(lab in REL)
                 if row["stratum"] == "regex-missed":
@@ -189,6 +204,7 @@ def score(rows: dict, calls: dict, rule: str, X: str, Y: str) -> dict:
     ):
         m[name], m[name + "_n"] = frac(pairs)
     m["fallback"] = f"{fallbacks}/{total}"
+    m["other_misses"] = miss
     m["decide_median_s"] = times[len(times) // 2] if times else None
     m["decide_p90_s"] = times[int(len(times) * 0.9)] if times else None
     m["haiku_latest"] = "sonnet" not in X and "sonnet" not in (Y or "")
@@ -239,6 +255,7 @@ def main() -> int:
             + " ".join(f"{c[:-2] if c.endswith('_n') else c}={m[c]}" for c in cols)
             + f" other={m['other']:.3f} recall={m['recall']:.3f} missed={m['regex_missed']:.3f}"
             f" border={m['borderline']:.3f} decide={m['decide_median_s']}/{m['decide_p90_s']}s {tag}"
+            f" other_misses={json.dumps(m['other_misses'], sort_keys=True)}"
         )
     eligible = [m for m in table if m["eligible"]]
     if not eligible:
