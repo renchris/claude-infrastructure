@@ -1,0 +1,9 @@
+| measure | reading | rule | |
+|---|---|---|---|
+| relay recall, agreed relay rows | 52/52 = 1.00 | >= 0.95 | pass |
+| `other`, agreed rows | 41/44 = 0.93 | >= 0.9 | pass |
+| borderline relays | 17/26 = 0.65 | >= 17 of 26 | pass |
+| fallback share at 9 s | 0/192 = 0.00 | <= 0.1 | pass |
+calls 192 (96 rows x 2 reps); wall median 3.95 s, p90 8.57 s, max 8.63 s; load 25.0-83.1; rows whose two reps differ 13/96
+answered by: careful call, resident 14 · fast call, resident 178
+VERDICT: PASS

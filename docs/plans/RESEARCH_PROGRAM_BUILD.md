@@ -870,7 +870,7 @@ Locus S (fired `fire-rp-v12-e1f`), lead-inline (why: three small fixes in four f
   exists and the row is live. E1e's measurements (warm latency on the tuning set, then the second read of v2)
   wait for the restart.
 
-#### E1g — the fast-plus-careful classifier, then a new sealed set v3 read once — FIRED (2026-10-05)
+#### E1g — the fast-plus-careful classifier, then a new sealed set v3 read once — BUILT, tuning rule PASSED; v3 not yet minted or read (2026-10-05)
 Scope (frozen): operator ruling on decision `b18c74a4f8e1` ("run-both", 2026-10-05: "Proceed with all of your
 recommendations"). (1) Build the union classifier in `router.py` and `classifier-warm.py`: per prompt, a fast call
 (E1b's brief, `docs/research/router-classifier-e1b-2026-10-04/e1b-classifier.patch`, thinking off) and a careful
@@ -899,6 +899,59 @@ thresholds or the 9 s limit; never read v1 or v2; never tune on v3. Locus S (fir
   transcript tool call names it: E1c's `seal` that wrote it), so it is held-out by every rule here and becomes
   v3's core. Risk, stated now: 9 pushback prompts at v2's agreement rate (7 of 37) leave about a 15% chance of no
   agreed pushback item, which reads FAIL by `evaluate`'s rule; that outcome is recorded as such, not re-cut.
+- **Built** (`1e4486e03`, branch `rp-v12-e1g`). `router.py` `classify` starts the two calls together and
+  joins them by the rule above; each call asks the resident classifier first and makes its own cold call when
+  that fails, inside what is left of the limit (E1f's guarantee, per call). `classifier-warm.py` keeps two
+  processes of each kind, takes the kind in a new `classify` op, and ends the process holding a prompt when the
+  asker hangs up, so a careful worker stops thinking once the fast call has settled the label. The careful
+  call's brief and command line are byte-for-byte the as-built ones; the fast call adds E1b's notes, the
+  delimited prompt, `--disable-slash-commands`, E1b's system prompt and `--settings
+  '{"alwaysThinkingEnabled":false}'`, which is E1c's `off-e1b` arm.
+  - **One rule beyond the scope's wording, approved by the lead before the measurement** (2026-10-05): with a
+    label in hand, the wait for the other call stops 0.5 s before the limit (`DELIVER_MARGIN_S`). Why:
+    `heldout.py` stops a router call at 9 s of its own clock, which includes starting Python, so "else the fast
+    call's label" handed back at the router's 9.0 s reads as a fallback (E1e: 45 of 232 at 9.00-9.01 s). The
+    limit is unchanged; the careful call gets 8.5 s of it when a fast label is waiting. A relay label from the
+    careful call is also taken the moment it arrives, without waiting for a slower fast call: the prompt is
+    relayed either way.
+  - **`ping` and migration `0059`.** `ping` exits 0 only when each kind has answered a real classification and
+    the daemon's classifier configuration (each kind's flags, model and brief, hashed) matches the code on
+    disk. Until now a re-run of `0059` left a job alone when it was loaded and answering, so it would not have
+    moved a running daemon onto new code; it restarts on a non-zero `ping`, so it does now. A daemon from before
+    this wave declines the new op at once, so until the restart the live router makes both cold calls. Checked
+    against the real loaded daemon (pid 14445, E1f's code): the new `ping` exits 2 ("it runs older code; restart
+    it") and the new router's ask comes back `cold` in 17 ms.
+  - **Tests, red then green** (2026-10-05, load 50-135). Green: `research-classifier-warm.bats` `1..45`, and with
+    `research-router`, `research-router-heldout` and `research-kit-heldout` `1..100`. Red, on a `git archive`
+    copy of `dc797dec8`: 17 `not ok` of 56, which are 13 of the 15 new cases plus 4 older cases whose counts
+    moved (two calls per prompt, two processes per login probe). The two new cases that pass on both sides (a
+    careful relay beats the fast call's `other`; the careful label stands when the fast call fails) are
+    no-regression claims, not replays. The runner cases run `/bin/bash` 3.2.57 under `env -i` with HOME and
+    PATH only; bare `shellcheck` is clean on the runner and the migration. Two older tests changed for a reason
+    other than counts: the exit-after-three-failures case no longer needs to catch the daemon on its socket
+    first (at load 121 it had already exited), and the "inside the limit" case reads the router's own clock,
+    because the test's clock adds two interpreter starts.
+- **Phase 2, the pre-registered pass rule on the v1 tuning set: PASS** (2026-10-05 21:30-21:43 CDT; 96 rows × 2
+  reps, one call after another, each made as `heldout.py evaluate` makes it and stopped at 9 s of the caller's
+  clock; an in-session daemon of `1e4486e03`'s code on its own socket under a logged-in account; harness and
+  per-call data in `docs/research/router-classifier-e1g-2026-10-05/`). Decided before the first call: the run
+  waited for the 1-min load to fall under 50 (it was 121-135; it waited 390 s), then ran whatever the load was.
+
+  | measure (`e1c-choose.py`'s definitions) | reading | rule | |
+  |---|---|---|---|
+  | relay recall, agreed relay rows | 52/52 = 1.00 | ≥ 0.95 | pass |
+  | `other`, agreed rows | 41/44 = 0.93 | ≥ 0.90 | pass |
+  | borderline relays | 17/26 | ≥ 17 of 26 | pass, at the bar |
+  | fallback share at 9 s | 0/192 = 0.00 | ≤ 0.10 | pass |
+
+  Load 25-83 over the run. Wall: median 3.95 s, p90 8.57 s, max 8.63 s. Which call answered: the fast call 178
+  times and the careful call 14 times, all 192 through the resident path, none through a cold call. In 22
+  calls the careful call was still thinking when the fast label was handed back at 8.56-8.62 s; without the
+  0.5 s rule those 22 are fallbacks (0.11, over the cap). The 14 careful answers are relay labels that arrived
+  in 3.6-6.7 s. In 3 calls the careful call replied in prose and the fast label stood. 13 of the 96 rows got
+  different labels in their two reps. Against the offline replay (52/52 · 43/44 · 19/26 · 1/192): `other` is 2
+  calls lower and borderline 2 lower, at twice the load of the data the replay used. A tuning pass is not a
+  forecast of a held-out pass (the as-built configuration passed tuning and then read 0.88 and 0.72 on v2).
 
 #### E2 — triage precision study (v1.2 (a), measurement half) — RUNNING
 - Locus: a Workflow in session d8964eb2, started 2026-10-04. Results: `docs/research/triage-precision-study-2026-10-04/`.
