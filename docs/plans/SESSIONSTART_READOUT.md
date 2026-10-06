@@ -1,5 +1,5 @@
 ---
-status: open
+status: complete
 ---
 # SessionStart account readout — plan
 
@@ -59,3 +59,5 @@ Deliverable: `docs/research/sessionstart-readout-2026-10-06/README.md` with the 
 ## Status
 
 - 2026-10-06: plan created from the incident above; nothing implemented. Research not started.
+- 2026-10-06: **W0 done, W1 done; scope (frozen) met.** Research: `docs/research/sessionstart-readout-2026-10-06/README.md` (13-agent workflow, two skeptics). W1, the changes above 90%: the nearly-out cell prints the server's whole percent (`99%`, never a tenth; `100%` refused and `≥99%` unconfirmed unchanged); the note is past tense with the read's local clock time and live/working sessions and states no headroom amount; the hook's emptiness test is a `case` glob; `get_data`'s setitimer shadow fixed. Controls: W-11 (verbatim 06:01:45Z row) red on the pre-fix renderer with 20 failed checks, test 6 of `claude-accounts-fresh-lock-bound.bats` red with `itimer_error [Errno 22]`; both green after. Gate: accounts-board 1..33, wire-truth 1..12, freshness 1..7, fresh-lock-bound 1..6, core 1..95, all ok; py_compile and bare shellcheck clean. Hook after vs before, interleaved: bash 5.3 p50/p99 61.2/136.7 ms (was 64.1/151.9), /bin/bash 3.2 52.7/128.3 (was 904.9/1897.7); still a pure file read.
+- Open, not in this scope: desk routing on the last 1% is the operator's call, filed as `cc-decide` packet `05490056dd9f` (class B, default no change, deadline 2026-10-15). The refusal-on-disk signal, `wire_at`, drain/pace wording and `render_table` consistency stay at or below 90%; reasons in the README's last section.
