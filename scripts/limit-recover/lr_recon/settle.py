@@ -746,6 +746,45 @@ def _in_place(rec: T.Record, h: T.HolderObs, ok: float, now: float) -> str:
     return proof
 
 
+def _never_began(rec: T.Record) -> bool:
+    """Open in PRE-MOVE with no move of ours begun: nothing planned, confirmed or typed, no target,
+    no recorded process. Past any of those the phase table and the reboot park own the record."""
+    t = rec.timeline
+    return (
+        rec.open
+        and rec.phase == "PRE-MOVE"
+        and rec.substate not in ("PLANNED", "IN-FLIGHT", "PARKED-REBOOT")
+        and t.planned is None
+        and t.confirmed is None
+        and t.exit_typed_by_me is None
+        and not rec.target_acct
+        and not rec.procs
+    )
+
+
+def idle_unneeded(rec: T.Record, facts: Optional[Dict[str, T.Fact]], now: float) -> str:
+    """W7i: an idle member whose fact can no longer move it is closed NOT_NEEDED(reason) (§4.2
+    Outcomes). An idle move is optional work that an uncontradicted 5h/7d fact alone licenses (§3
+    step 5; §C4 "A contradicted fact blocks idle fan-out"); once that fact is contradicted or
+    gone, the census reads the session WORKING, which rewrites no substate, so the record kept its
+    last one for good: 14 members of next3-auth-0 sat HOLD:iterm ("relaunch this session by hand")
+    for sessions on a logged-in account, and the cohort could never close. Only before a move of
+    ours began. Returns the proof ('' = not settled)."""
+    if facts is None or rec.kind != "idle" or not _never_began(rec):
+        return ""
+    fact = facts.get("%s.%s" % (rec.source_acct, rec.scope))
+    if fact is not None and not fact.contradicted:
+        return ""
+    proof = "idle member, no move begun: the %s fact on %s is %s" % (
+        rec.scope or "account",
+        rec.source_acct or "its account",
+        "gone" if fact is None else "contradicted (the account served a turn since)",
+    )
+    rec.substate, rec.wait, rec.escalated = None, None, False
+    rec.terminal = T.Terminal(outcome="NOT_NEEDED", proof=proof, at=now)
+    return proof
+
+
 def replacement_unproven(rec: T.Record, now: float) -> bool:
     """R rc 0 proves a window opened, never that the session is live in it: the engine can refuse
     INSIDE the window after the launcher returned (W5 rig). No holder in another window by

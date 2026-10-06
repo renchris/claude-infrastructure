@@ -114,7 +114,10 @@ def _binding(s: T.SessionObs, fact: Optional[T.Fact], now: float) -> Binding:
         return _own_scope(s)
     scope, resets = _own_scope(s) if _death(s) else ("", None)
     if (
-        fact.scope != "auth"
+        # A contradicted auth fact is an account that served a turn since (a re-login), and nothing
+        # in the daemon expires it (no wire read reaches F.expire), so it must not outrank a new
+        # death's own reset: that death would join the auth cohort with no reset to wake at (W7i).
+        (fact.scope != "auth" or fact.contradicted)
         and scope
         and scope != fact.scope
         and resets is not None
@@ -125,8 +128,22 @@ def _binding(s: T.SessionObs, fact: Optional[T.Fact], now: float) -> Binding:
     return fact.scope, fact.resets_at
 
 
+FANOUT_SCOPES = ("5h", "7d")
+
+
+def fans_out(fact: Optional[T.Fact]) -> bool:
+    """The only fact a session with no death of its own is a member on: an account-wide 5h/7d
+    fact that is not contradicted (§3 step 5 IDLE-ELIGIBLE; §C4: "A contradicted fact blocks idle
+    fan-out, which is optional work"). ``F.blocking`` returns an auth fact for as long as its file
+    exists, and no wire read reaches ``F.expire``, so a re-logged-in account kept its auth fact,
+    contradicted, for good. Every healthy session there was "covered", and one that showed two
+    holders for a pass, or sat in iTerm2, became an idle member of the auth cohort: 19 members of
+    next3-auth-0 by 2026-10-05, 14 more at the next kitty restart (W7i)."""
+    return fact is not None and fact.scope in FANOUT_SCOPES and not fact.contradicted
+
+
 def in_scope(s: T.SessionObs, facts: Dict[str, T.Fact], now: float) -> bool:
-    return _death(s) or _cover(s, facts, now) is not None
+    return _death(s) or fans_out(_cover(s, facts, now))
 
 
 def _mk(
@@ -164,6 +181,10 @@ def bucket(
     kind = "limited" if _death(s) else "idle"
     if s.transcript.teammate:
         return _mk(s, "TEAMMATE", "lead-owned (invariant 1)", kind, bind)
+    if kind == "idle" and not fans_out(fact):
+        # Before the structural buckets: SPLIT-BRAIN and HOLD:iterm are record types, and a session
+        # reaches here on a closed record of its own even when in_scope says no (W7i).
+        return _mk(s, "WORKING", "no fact an idle session moves on", kind, bind)
     if _distinct_holders(s) > 1:
         return _mk(
             s, "SPLIT-BRAIN", "%d live holders" % _distinct_holders(s), kind, bind

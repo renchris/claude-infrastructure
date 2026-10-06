@@ -568,6 +568,11 @@ def _derive(
             ev = "engaged-in-place" if in_place else "engaged-elsewhere"
             _event(ctx.paths, ev, rec.sid, rec.record_id, proof)
             continue
+        if not act.live_procs(rec, snap):
+            why = settle.idle_unneeded(rec, facts, now)
+            if why:
+                _event(ctx.paths, "not-needed", rec.sid, rec.record_id, why)
+                continue
         if rec.substate == "PARKED-REBOOT":
             continue  # the census owns the reboot park (census.park); the phase table defers
         if rec.escalated:
