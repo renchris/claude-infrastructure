@@ -291,7 +291,7 @@ router_says() { printf '#!/bin/bash\ncat >/dev/null\necho %s\n' "$1" > "$BATS_TE
   run "$H" --set v2 seal --candidates "$BATS_TEST_TMPDIR/c2.jsonl" --tuning-out "$BATS_TEST_TMPDIR/t2.jsonl" --dry-run
   [ "$status" -eq 0 ]
   n="$(printf '%s' "$output" | sed 's/.*"other": \([0-9]*\).*/\1/')"
-  [ "$n" -gt 0 ] && [ "$n" -lt 20 ]
+  [ "$n" -gt 0 ] && [ "$n" -lt 20 ] || false
   # a stratum with too few fresh prompts is refused, never short-filled in silence
   run "$H" draw --candidates "$BATS_TEST_TMPDIR/pool.jsonl" --strata other --take other=500 \
     --exclude "$BATS_TEST_TMPDIR/tuning-old.jsonl" --out "$BATS_TEST_TMPDIR/d3.jsonl"
