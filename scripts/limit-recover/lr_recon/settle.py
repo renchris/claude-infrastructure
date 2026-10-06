@@ -762,6 +762,44 @@ def _never_began(rec: T.Record) -> bool:
     )
 
 
+HOLDER_GONE_QUIET_S = (
+    60.0  # since a watcher or launcher of the move was last seen (close.busy_at)
+)
+
+
+def holder_gone(rec: T.Record, snap: T.Snapshot, now: float) -> str:
+    """W7i: a PRE-MOVE record nothing owns (no substate, wait or next_eligible_at, no move begun)
+    whose session has no live holder is closed NOT_NEEDED(dead-before-claim). §3 step 3: "No live
+    holder at first observation: NOT_NEEDED(dead-before-claim)"; invariant 25: "NOT_NEEDED only on
+    target-side evidence or dead-before-claim"; §4.4: a record that breaks the invariant "gets its
+    next action in the same pass". Nothing gave it one: a record back from SPLIT-BRAIN derives
+    PRE-MOVE with substate None (the phase table writes no PRE-MOVE substate and the census
+    rewrites only one it owns), the census stops seeing a dead session, and §4.4 logged
+    RECON-DEFECT for it every pass: five records, about 1,400 events an hour on 2026-10-05.
+
+    It spawns nothing (invariant 27: no R for a pane this reconciler did not retire); a session
+    that died unmoved is the resume debt's. With a live holder the record is left as it is.
+    Returns the proof ('' = not settled)."""
+    if (
+        not _never_began(rec)
+        or rec.substate is not None
+        or rec.wait is not None
+        or rec.next_eligible_at
+    ):
+        return ""
+    if now - float(rec.close.get("busy_at", 0)) < HOLDER_GONE_QUIET_S:
+        return ""
+    s = snap.sessions.get(rec.sid)
+    if s is not None and s.holders:
+        return ""
+    if rec.source_pid and snap.alive(rec.source_pid, rec.source_lstart):
+        return ""
+    proof = "dead-before-claim: no live holder, and no plan, wait or eligibility"
+    rec.escalated = False
+    rec.terminal = T.Terminal(outcome="NOT_NEEDED", proof=proof, at=now)
+    return proof
+
+
 def idle_unneeded(rec: T.Record, facts: Optional[Dict[str, T.Fact]], now: float) -> str:
     """W7i: an idle member whose fact can no longer move it is closed NOT_NEEDED(reason) (§4.2
     Outcomes). An idle move is optional work that an uncontradicted 5h/7d fact alone licenses (§3
