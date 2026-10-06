@@ -487,6 +487,19 @@ cohort whose limit spans the restart is evidence only; a restart onto CHANGED `l
 the cutoff and resets the count to 0. So on a new `restarts.jsonl` row, diff `scripts/limit-recover`
 between the two running shas before deciding. Status at 23:14Z: 0 of 2, no cohort since the cutoff.
 
+### Cutoff moved: the reconciler restarted onto W7i (2026-10-06 02:28:28Z)
+
+The lead restarted the reconciler onto W7i (`90391f322` .. `821786aae`): pid 88125, started
+02:28:28Z Oct 6, the last row of `recon/restarts.jsonl` (t=1791253708.71), confirmed by `launchctl
+print` (`com.reso.lr-reconciler`, pid 88125). The shared checkout is at `821786aae` and its
+`scripts/limit-recover/` is identical to origin/main. This is a restart onto CHANGED `lr` code
+(`git diff --stat 0133a555d 821786aae -- scripts/limit-recover/`: 5 files, +446/-2; Q1, a
+contradicted or non-fan-out fact admits no idle member, and one it admitted closes; Q2, a PRE-MOVE
+record with no holder, plan, wait or eligibility closes dead-before-claim, i.e. the `next3-auth-0`
+stuck records), so under the ruling above **the cutoff moves to 02:28:28Z and the count is 0 of 2**.
+Nothing is lost: no cohort had opened since the 18:07:02Z cutoff. Only cohorts whose limit began
+after 02:28:28Z count.
+
 ## Census step
 
 Operator step `f0df9145b73a` (the live observe census) was closed with the launchd daemon's own pass:
