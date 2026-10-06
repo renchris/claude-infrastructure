@@ -1107,6 +1107,65 @@ files, tracks B and C by its lead (ordered around sealed files).
   - fallback <= 0.10, and at least 40 agreed items.
 
   There is no re-read on FAIL. That spends the method's '1 repair and 1 re-test' (REPORT:1078). No v3 stratum is read a third time.
+- **Track A, the false-relay cost limits: built** (2026-10-06, two teammates on disjoint files, merged by the
+  lead; shas at the land below). `router.py`: every relay turn shows the operator a one-line notice naming the
+  route and the word `misrouted`; a typed `--requires-gate <slug>` is a work order only when the slug is the
+  routed program's (machine envelopes unchanged); `misrouted`, typed alone right after a relay turn, relabels it
+  `other` once, without the classifier, never a work order, counted per program in `route-counters.json`, and
+  the Stop check still checks a reply that opens with a verdict; a relay label is no longer carried into a
+  machine-envelope turn (it becomes `other`, `by: envelope`). `cc-research pending`/`verdict` and the
+  `operator-readout` line show the override count. Method REPORT §4.1, §4.2 and §9 carry the three named edits
+  of ruling part (e). Red then green from the lead: `research-router`, `research-relay-check`,
+  `research-router-heldout`, `cc-research-core`, `operator-readout-research` `1..108`, 107 ok on the merge, and
+  the one red case was the held-out contract test pinning the old any-slug marker, updated with the change.
+- **Track B, the tooling: built** (2026-10-06, lead). `heldout.py` gains `draw`, `retire`, `seal --strata/--take`,
+  `instrument`, `reads` and set `v4`; `evaluate` without `--set` reads a pinned instrument (each stratum from
+  its own set, the item floor and fallback share pooled), writes every read to `router-heldout/reads.jsonl`,
+  says in its notes how often each stratum of each set was read before, and adds two lines that cannot fail the
+  row: the false-relay rate on agreed non-relay items, and `other` split by store. `heldout-rate.py --tuning`
+  rates a clear tuning file; `heldout-candidates.py --live-frame` makes a history row what the hook received.
+  Red then green: `research-kit-heldout` + `research-router-heldout` `1..33`, 33 ok; on a `git archive` copy
+  of the commit before, 9 `not ok` (the 8 new cases, and the older `--record` key-list case, which now carries
+  `set`). Row 15's thresholds and the 9 s limit are untouched.
+  - **Frame fidelity, verified before the miner changed** (counts only, 42,097 history rows and 23,875
+    transcript prompts): 1,301 history rows are `!` shell lines and 0 transcript prompts start with `!`, so the
+    hook never receives them; 2,358 history rows show a paste as a placeholder, and of the 110 found again in a
+    transcript 20 held the expanded text and 0 the placeholder. With `--live-frame` the uncapped pool is
+    regex-matched 679 · regex-missed 621 · pushback 49 · other 24,173 (other was 25,459 without it).
+  - **Sealed v2 retired** (ruling part b, 02:15 CDT): `heldout.py --set v2 retire` wrote its 396 prompts with
+    their labels to `router-heldout/retired-v2.jsonl`; `sealed.enc`, `sealed-v2.enc` and `sealed-v3.enc` read
+    sha1 `97695cb083d6`, `e00d6f8969d1`, `aabd144ce51f` before and after; `--set v2 evaluate` now exits 2. The
+    ledger was first given the reads made before it existed (v1 three, v2 two, v3 one).
+- **The tuning base, drawn and rated before any classifier call** (2026-10-06 02:15-02:46 CDT; counts only).
+  `heldout.py draw` took 340 `other` and 150 regex-matched prompts from the live-frame pool (815 candidates
+  dropped as already in a sealed set or the v1 tuning file; 23,291 `other` and 256 regex-matched fresh ones
+  left for v4). Rated by `anthropic:claude-opus-5-5` and `openai:gpt-5.6-sol` through `heldout-rate.py
+  --tuning` (the OpenAI rater left one prompt unlabeled in each of two whole runs, so nothing was written; a
+  third run in batches of 40 came back whole, 490 of 490). With retired v2 and the v1 tuning file:
+
+  | source | stratum | rows | agreed | agreed, relay gold | borderline |
+  |---|---|---|---|---|---|
+  | fresh | other | 340 | 204 | 19 | 26 |
+  | fresh | regex-matched | 150 | 119 | 48 | 12 |
+  | retired v2 | other | 67 | 36 | 5 | 11 |
+  | retired v2 | regex-matched | 64 | 53 | 24 | 3 |
+  | retired v2 | regex-missed | 228 | 136 | 34 | 33 |
+  | retired v2 | pushback | 37 | 7 | 5 | 27 |
+  | v1 tuning (2 calls each) | other | 30 | 22 | 1 | 4 |
+  | v1 tuning | regex-matched | 29 | 26 | 20 | 2 |
+  | v1 tuning | regex-missed | 33 | 19 | 4 | 5 |
+  | v1 tuning | pushback | 4 | 2 | 2 | 2 |
+  | all | | 982 | 624 | 162 | 125 |
+
+  What RULE 1 is scored on, fixed here: E1 on the 240 agreed `other` rows of the fresh sample and retired v2
+  (exact label); E2 on the 137 agreed relay-gold rows of the three completeness strata, and on the 38 of them in
+  regex-missed; E3 on the 125 borderline rows. A v1 row counts once per call. Arms and joins as the report's
+  C2 and C3 list them: `haiku-off`, `haiku-on`, `sonnet-off`, `sonnet-on` (Haiku 5.5 is not released:
+  `model-config.yaml` `haiku_latest` is `claude-haiku-4-5`), and for each thinking-off arm X and thinking-on
+  arm Y: X alone, union, careful-confirms, and X relays with Y a veto only, the joins being the code
+  `confirm-rule-replay.md` replayed (14 configurations). Harness and scorer:
+  `docs/research/router-classifier-e1h-2026-10-06/` (`e1h-tune.py`, `e1h-score.py`), committed with this
+  record. 1,078 rows-times-calls × 4 arms = 4,312 calls, rows one after another.
 
 #### E2 — triage precision study (v1.2 (a), measurement half) — RUNNING
 - Locus: a Workflow in session d8964eb2, started 2026-10-04. Results: `docs/research/triage-precision-study-2026-10-04/`.
