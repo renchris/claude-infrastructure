@@ -848,6 +848,24 @@ def confirmed_map(evdir, st):
 
 
 # ── --compare ─────────────────────────────────────────────────────────────────────────────────────
+def visual_order(tab):
+    """A tab's window ids in on-screen order. kitty's `windows` list is CREATION order, and a split
+    replay creates panes in a different order than the operator did, so in a splits tab the order is
+    the split tree's leaves (group ids) mapped through `groups`. 2026-10-05 restart: 7 panes read
+    'position ✗' while every window's tree, biases and on-screen order were identical."""
+    wins = [w.get("id") for w in tab.get("windows", []) if isinstance(w, dict)]
+    groups = {g.get("id"): g.get("windows") or [] for g in tab.get("groups") or [] if isinstance(g, dict)}
+
+    def leaves(n):
+        if isinstance(n, dict):
+            return leaves(n.get("one")) + leaves(n.get("two"))
+        return [n] if isinstance(n, int) else []
+
+    pairs = (tab.get("layout_state") or {}).get("pairs")
+    order = [w for g in leaves(pairs) for w in groups.get(g, []) if w in wins] if pairs and groups else []
+    return order + [w for w in wins if w not in order]
+
+
 def hb_view(dirs):
     """{sid: {account, model, effort, permission, window, position, display, mates}} from heartbeat dirs."""
     view = {}
@@ -874,7 +892,7 @@ def hb_view(dirs):
         except (OSError, ValueError):
             tree = []
         for i, osw in enumerate(tree if isinstance(tree, list) else []):
-            sids = [pane.get(str(w.get("id"))) for t in osw.get("tabs", []) for w in t.get("windows", [])]
+            sids = [pane.get(str(w)) for t in osw.get("tabs", []) for w in visual_order(t)]
             sids = [s for s in sids if s]
             for j, s in enumerate(sids):
                 if s in view:

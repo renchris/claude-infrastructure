@@ -535,6 +535,18 @@ compare_fixture() {
   [[ "$output" == *"maybe=1"* ]] || false
 }
 
+@test "--compare: position is the split tree's on-screen order, not kitty's creation-ordered windows list" {
+  compare_fixture
+  # BEFORE: created S1 then S2, but the tree puts S2's group (6) left of S1's (5) ⇒ on screen S2, S1.
+  printf '[{"id":3,"platform_window_id":900,"tabs":[{"windows":[{"id":249},{"id":250}],"groups":[{"id":5,"windows":[249]},{"id":6,"windows":[250]}],"layout_state":{"pairs":{"one":6,"two":5}}}]}]' > "$E/hb/4141/hb.kitty-ls.json"
+  # AFTER: created S2 then S1, no split tree ⇒ on screen S2, S1 — the same place for both.
+  hb_dir "$BATS_TEST_TMPDIR/after" 1 7 8 claude-next
+  printf '[{"id":1,"platform_window_id":900,"tabs":[{"windows":[{"id":8},{"id":7}]}]}]' > "$BATS_TEST_TMPDIR/after/hb.kitty-ls.json"
+  run "$SUBJ" --compare "$E" --after "$BATS_TEST_TMPDIR/after"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"compare verdict=MATCH sessions=2 match=2 diff=0"* ]] || false
+}
+
 @test "--compare on a dir with no snapshot is a usage error, not a pass" {
   mkdir -p "$EVENTS/5"
   run "$SUBJ" --compare "$EVENTS/5"
