@@ -500,6 +500,47 @@ stuck records), so under the ruling above **the cutoff moves to 02:28:28Z and th
 Nothing is lost: no cohort had opened since the 18:07:02Z cutoff. Only cohorts whose limit began
 after 02:28:28Z count.
 
+### Cohort 1 of 2 on W7i: next3's weekly limit at 06:03Z Oct 6 PASSES (lead ruling, 91%)
+
+next3 hit its weekly limit at about 06:03Z Oct 6, 3 h 35 min after the cutoff. Four sessions were
+limited: `7913752f` (detected 06:03:46Z), `e131c8d2` (06:03:27Z), `4ad354fc` (06:03:10Z) and
+`4e9949e0` (06:20:00Z). The reconciler filed all four into the EXISTING cohort
+`next3-7d-1791288000` (opened Oct 2 01:50Z, reset 12:00Z Oct 6), which is by design: W7h's rule is
+that a new limit opens or joins its own scope's cohort, and account, scope and reset are the same.
+The cohort settled (`tally` done 13/13; `dod`: `CLOSED 7/13 (ENGAGED 5, MOVED 0, IN-PLACE 2) ·
+NOT_NEEDED 6 · double-typer 0 · split-brain 4 · lost-records 0 · unowned-non-terminal 0`).
+Reconciler pid 88125 (last `restarts.jsonl` row t=1791253708.71, no row since; `launchctl print`
+agrees), shared checkout `c2c1660e4`, `scripts/limit-recover/` identical to origin/main, no
+`recon.on` (observe mode: every `exit_typed_by_me` is null). Compared at 15:40Z Oct 6:
+
+`SHADOW next3-7d-1791288000: members 13 · legacy found 7 · census misses 0 · not owed 0 ·
+placements feasible 4/4 · phase agree 7/8 (false-RECOVERED resolved 1, plan differed 0) ·
+legacy-corrected 1: 0962ca47 → PASS`
+
+**Lead ruling (2026-10-06 15:37Z, 91%): it counts, 1 of 2.** The evidence is the four post-cutoff
+members only; the nine members from the Oct 2 event are evidence only (the comparer cannot split
+two limit events that share a cohort id, and its totals above span both). For the four:
+
+- detected by the census (census misses 0), each planned `next3→next4`, feasible 4/4;
+- legacy RECOVERED all four (`4ad354fc` and `7913752f` to next2, `e131c8d2` and `4e9949e0` to
+  next4), the watcher saw each engage, and the recon closed each `ENGAGED via=ENGAGED
+  by=elsewhere` on the account legacy chose: agree 4/4. The recon's own target (next4) differs
+  from legacy's for two of them; the comparer scores engagement, and both targets were feasible.
+
+Notes, not FAILs (same ruling):
+
+- While legacy moved them under the observing recon, each logged `RECON-DEFECT TRANSPLANTED/None`
+  or `SPLIT-BRAIN/None` for 15 to 60 s (06:04:23Z to 06:22:33Z) and one page each, then closed
+  `engaged-elsewhere … moved there by another recovery path`. That is a shadow artifact: in act
+  mode legacy is not the mover. None sat `PRE-MOVE/None`.
+- The comparer's three `watch (known gap …)` lines for `4ad354fc`, `7913752f` and `e131c8d2` are
+  dated 00:44Z to 00:46Z: they are the pre-W7i `next3-auth-0` stuck records of the same sids, not
+  this event. The rule keys on sid; it must key on the cohort's `record_id` (rig fix, below).
+- The watcher did not announce this event, because it announces a cohort when its archive
+  directory first appears and this one joined an existing id. This shadow session was itself moved
+  off next3 at about 06:10Z and did not run again until 15:36Z, so the event was reported 9.5 h
+  late. Rig fix: the watcher must announce a post-cutoff limit that joins an existing cohort.
+
 ## Census step
 
 Operator step `f0df9145b73a` (the live observe census) was closed with the launchd daemon's own pass:
