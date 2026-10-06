@@ -784,6 +784,9 @@ above), except in a pane matched only by the single-active fallback, where the p
 fallback costs one turn without research tools; a missed completeness ask restarts research, which is the failure this
 section exists to stop. Every fallback is counted as "classifier unavailable" in your `operator-readout` block.
 
+**Edited 2026-10-06 (decision `aba630ebe329`, part e):** each relay you override as misrouted (§4.2) is counted in
+that block too.
+
 A rule-driven order to research a row below 90% is answered from that row's line: its conviction, its "research
 exhausted at timebox" receipt, and the contact event that would move it. Your most frequent research-order prompt
 (44 genuine prompts in 32 sessions, `evidence/adversary/reality/conviction_frame.out:1`) therefore gets a direct
@@ -796,7 +799,11 @@ session (§4.1), the calls that buy research: Agent, Workflow, `handoff-fire.sh`
 `claude -p`), and the `cc-research` verbs that buy or reopen research. It allows them only on a turn whose prompt the
 classifier positively labeled a work order or a new idea (whose research runs as a separate task and parks), or after
 you ran a reopen in your terminal. A turn with no new genuine prompt, such as a hook-driven continuation, keeps the
-label of the last genuine one. A classifier error, timeout or mixed label, or a genuine prompt the router left no
+label of the last genuine one. **Edited 2026-10-06 (decision `aba630ebe329`, part e):** a completeness or pushback
+label is not carried into a machine-envelope turn (`<task-notification>`, `<teammate-message>`, `[handoff …]`). That
+turn runs as "anything else": normal handling, with research tools still denied. Why: the relay reply was already
+given and Stop-checked, while carrying the label blocked every tool of every background agent in the session until
+you typed again. A classifier error, timeout or mixed label, or a genuine prompt the router left no
 label for, counts as a completeness question, so a failing classifier blocks research instead of allowing it. On a turn routed as a completeness question or pushback,
 the hook denies **every** tool except one whitelisted certificate read (`cc-research verdict`, or the kit's
 `gate.sh --render` until that exists, §8 item 7), so the turn cannot gather material for a new item either. A text-only
@@ -807,6 +814,20 @@ settings file on this machine has a PreToolUse entry that matches Workflow, or o
 (`~/.claude/settings.json:726-854`, and the same in the four account config directories). So wave 1 includes a
 settings migration you run that adds one entry matching every tool, Workflow included, because a completeness or
 pushback turn denies every tool but the certificate read (§8, item 6).
+
+**Edited 2026-10-06 (decision `aba630ebe329`, part e): the one-word override.** The classifier sometimes relays the
+certificate on an ordinary prompt. When it does, type `misrouted` as your next prompt.
+
+- It is accepted only as the next prompt right after a relay turn. Anywhere else the word is an ordinary prompt.
+- It works once. The next relay needs its own override.
+- It relabels that turn "anything else" and nothing more. It never becomes a work order, and research tools stay
+  denied.
+- The Stop check still checks a reply that opens with a yes or no verdict.
+- Each use is counted in your `operator-readout` block.
+- Every relay turn now shows you a one-line notice. It says how the prompt was routed and names the word.
+
+The residual, stated plainly: on a real completeness question, an operator who overrides gets one turn with read and
+shell tools. That happens only by your own typed act.
 
 **What this guarantees.** In a program session, a re-ask can start research only if the classifier positively
 mislabels it as a work order or a new idea. That rate is measured, not assumed: gate row 15 checks the router's recall
@@ -1240,6 +1261,25 @@ ruling 8 requires. Earlier text is kept and each edit is marked where it sits.
 - **Change (d), operator half:** the pilot's contract is re-rendered on the measured forecast as a draft beside the
   signed page, and the re-sign is filed as one operator step (build plan, wave E3a and E4). The signed page and the
   pilot's records are untouched until the operator re-signs.
+
+**Updated 2026-10-06: the edits made under decision `aba630ebe329` (part e)**, each named and from a measured result.
+Earlier text is kept and each edit is marked where it sits. The measured reason is the same for all three: on the
+held-out set v3 about 0.24 of ordinary prompts were relayed (35 of 148), and a relay blocks every tool for the turn
+(`docs/research/reask-overflag-decision-2026-10-06/false-relay-cost.md`).
+
+- **§4.2, no relay label on a machine-envelope turn.** A completeness or pushback label is no longer carried into a
+  `<task-notification>`, `<teammate-message>` or `[handoff …]` turn. That turn runs as "anything else", with research
+  tools still denied. Reason: one false relay used to block every tool of every background agent in the session until
+  the operator typed again, so its cost was not one turn.
+- **§4.2, the one-word override.** `misrouted`, typed as the next prompt after a relay turn, relabels that turn
+  "anything else", once. Research tools stay denied and it never becomes a work order. Every relay turn shows a
+  one-line notice naming the word. Reason: about 1 in 4 ordinary prompts was relayed, and the operator had no way to
+  get that turn back.
+- **§4.1, overridden relays are counted.** Each override is counted in the `operator-readout` block, beside the
+  "classifier unavailable" count. Reason: the count shows how often a relay was wrong in real use, which the held-out
+  set only estimates.
+
+Gate row 15's thresholds are unchanged. These edits lower the cost of a false relay, not its rate.
 
 ---
 
