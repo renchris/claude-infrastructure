@@ -19,12 +19,15 @@ Predecessor: `docs/plans/QUOTA_CACHE_FRESHNESS.md` (complete) made startup a cac
 - 06:01:45Z: the sweep recorded next3 `weekly_pct 100`, `wire_7d_util 0.99`, `wire_7d_status allowed_warning` (`~/.claude/logs/account-utilization.jsonl`). The board (`/tmp/claude-accounts-board.txt`, mtime 01:01:46 CDT) printed `99.0%` and "next3 is not out of weekly quota: the meter shows 100%, but Anthropic's server says 99.0% used and still accepts work (about 1% of the week left, roughly 5% of one 5-hour window)".
 - 06:03:04Z, 79 seconds later: session `4ad354fc` on next3 got "You've hit your weekly limit · resets 7am (America/Chicago)". 11 sessions were live on next3; the board's own drain line read "1.04× burn, ⚠ WALL trajectory".
 - The operator read the board as a promise of headroom and reported it as wrong.
+- CORRECTED (2026-10-06, W0 R3b): the FIRST refusal on next3 was 06:02:42Z (session e131c8d2; durable source: the StopFailure marker `rate_limit__next3.jsonl`, since that transcript is gone), 57 s after the sweep and 60 s after the wire read at 06:01:41.857Z. `4ad354fc` at 06:03:04Z was a later one.
 
 ## Known defects at intake (verified by reading the code and the logs, not yet by experiment)
 
 1. **False precision.** The wire figure arrives as two decimals (`0.99` on four consecutive sweeps). `board_eff` (`bin/claude-accounts`, near line 6325) floors it to a tenth and prints `99.0%`; the note turns it into "about 1% of the week left". The figure supports "99% or more", and the headroom is an upper bound, possibly near zero.
 2. **A present-tense claim on a snapshot.** "still accepts work" was true at the read and false 79 s later. The board carries its file age but the sentence does not carry the read's age, the live-session count or the burn trajectory that the same board prints three lines lower.
 3. **Cadence.** The producer is `com.claude.accounts-keepwarm` (`StartInterval 180`), yet the last four next3 rows are about 6 min 14 s apart (05:43:11, 05:49:26, 05:55:39, 06:01:45 UTC). Whether that is the Background-band sweep duration, a skipped tick or a throttle is unmeasured.
+   - CORRECTED (2026-10-06, W0 R4): none of the three. The observation was right and the suspected causes were wrong: sweeps run 185.6 s apart (p50, ProcessType Standard, launchd re-arms at exit) and next3 was wire-read on every sweep (71/71); the ~6 min spacing is the RECORDER, which appends at most one batch per 300 s (`UTIL_MIN_INTERVAL_S`). No cadence change can close a 60 s read-to-refusal gap. The one real producer defect is a shadowed `deadline` in `get_data`'s no-cache fallback that asked setitimer for ~1.8e9 s (EINVAL, 2026-09-30) — fixed in W1.
+4. **(found in W0, R1) Interpreter.** The board child runs under the PATH bash (Homebrew 5.3 in 16/16 live sessions), not /bin/bash 3.2; only the dispatcher is 3.2. Under 3.2 the hook cost ~0.9 s from one superlinear whitespace-strip line — fixed in W1.
 
 ## W0 — research (Dynamic Workflow, before any edit)
 
@@ -42,6 +45,8 @@ Questions the research must answer with receipts. Each is one or more read-only 
 | R8 | Outside view: how do other quota meters present a coarse reading near a cap (lower bound, age, rate), and is there any zero-cost signal of a rejection (a sibling session's limit error on disk) the producer could fold in? | public docs and the web; `cc-limited --json`, `lr-fleet.sh --locate` stores |
 
 Deliverable: `docs/research/sessionstart-readout-2026-10-06/README.md` with the measured baseline, an answer per row, and the ranked changes with a conviction number each.
+
+**Done 2026-10-06 (78af7aabb):** 13-agent workflow, 0 failed; README + the 12 slot/skeptic files in `slots/`. Answers in one line each — R1: board p50 61.5 / p99 124.2 ms on bash 5.3, 0 model tokens; R2: hundredths, rounded, held at 0.99 until refusal; R3: every ≥99% stay ended in a refusal (10/10, median 47 min), burn predicts it, k does not; R4: see defect 3; R5: no zero-token reallocation buys a 60 s gap; R6: one precision source (`board_eff`) feeding five sites, routing sent nothing new to next3; R7: five defect pins, control drafted red; R8: no surveyed meter prints a point ETA, all print bounds or the source's own resolution.
 
 ## W1 — implementation (shape depends on W0; expected, not decided)
 
