@@ -8,7 +8,7 @@ keychain key (`cc-research-router-heldout/sealed`) so the builder does not read 
 raters label the sealed set; gate.sh reads it at run time. Same-uid processes can still read the
 keychain, so this keeps the set out of the builder's way; it does not lock it (§7).
 
-  heldout.py [--set v1|v2] seal --candidates C.jsonl --tuning-out T.jsonl [--min-sealed 40]
+  heldout.py [--set v1|v2|v3] seal --candidates C.jsonl --tuning-out T.jsonl [--min-sealed 40]
                                                [--exclude F.jsonl]... [--dry-run]
       C.jsonl rows: {prompt, stratum: regex-matched|regex-missed|pushback|other, source}
   heldout.py rater-sheet --out F.jsonl        the sealed prompts by id, for a rater to label
@@ -27,6 +27,10 @@ keychain account) beside it. Each set is sealed once and no verb overwrites or d
 `seal --set v2` drops every candidate already in an earlier sealed set or in an `--exclude` file (the
 earlier tuning set), so v2 holds only prompts no builder has seen. With `--set` omitted `seal` means
 v1 and every other verb, and gate row 15, read the newest set that exists.
+v2 was read twice (waves E1c and E1e), the second time by a configuration chosen knowing the first
+read, so wave E1g seals v3 (`sealed-v3.enc`) for one read of the fast-plus-careful classifier. Its
+candidates are v2's never-opened tuning file plus what the stores have gained since, and all of them
+are sealed: `--fraction 1.0` leaves no tuning split. A prompt the candidates repeat is sealed once.
 """
 
 from __future__ import annotations
@@ -68,7 +72,11 @@ MIN_SET, MIN_RECALL, MIN_OTHER_CORRECT, MAX_FALLBACK, ROUTER_TIMEOUT_S = (
 )
 
 
-SETS = ("v1", "v2")  # oldest first; v1 keeps the file and keychain account it was sealed under
+SETS = (
+    "v1",
+    "v2",
+    "v3",
+)  # oldest first; v1 keeps the file and keychain account it was sealed under
 
 
 def check_set(name: str) -> str:
@@ -147,8 +155,17 @@ def cmd_seal(a: argparse.Namespace) -> int:
         if sealed_path(earlier).exists():
             used |= {seen_key(i["prompt"]) for i in load(earlier)["items"]}
     for f in a.exclude or []:
-        used |= {seen_key(r["prompt"]) for r in kit.read_jsonl(Path(f)) if r.get("prompt")}
-    fresh = [c for c in cands if seen_key(c["prompt"]) not in used]
+        used |= {
+            seen_key(r["prompt"]) for r in kit.read_jsonl(Path(f)) if r.get("prompt")
+        }
+    fresh = []
+    for c in cands:
+        k = seen_key(c["prompt"])
+        if k not in used:
+            fresh.append(c)
+            used.add(
+                k
+            )  # a prompt the candidates repeat (two stores, two files) is sealed once
     dropped = len(cands) - len(fresh)
     cands = fresh
     secret = kit.vault_key(KEY_ITEM, "split", create=not a.dry_run).encode()
@@ -292,7 +309,9 @@ def evaluate(
             "notes": notes,
         }
     hits: Dict[str, List[int]] = {s: [0, 0] for s in STRATA}
-    fell: Dict[str, int] = {s: 0 for s in STRATA}  # fallbacks among the items a stratum counts
+    fell: Dict[str, int] = {
+        s: 0 for s in STRATA
+    }  # fallbacks among the items a stratum counts
     fallbacks = 0
     rows: List[Dict[str, Any]] = []
 

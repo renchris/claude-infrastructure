@@ -219,3 +219,38 @@ R
   run grep -c "secret prompt" "$BATS_TEST_TMPDIR/rec.jsonl"
   [ "$output" = 0 ]
 }
+
+@test "wave E1g: --set v3 seals a third set whole, without a prompt v1, v2 or a tuning file holds, and a repeated candidate once" {
+  cands 12
+  "$H" seal --candidates "$BATS_TEST_TMPDIR/c.jsonl" --tuning-out "$BATS_TEST_TMPDIR/t.jsonl" --fraction 1.0
+  sed 's/secret prompt/second prompt/' "$BATS_TEST_TMPDIR/c.jsonl" > "$BATS_TEST_TMPDIR/c2.jsonl"
+  "$H" --set v2 seal --candidates "$BATS_TEST_TMPDIR/c2.jsonl" --tuning-out "$BATS_TEST_TMPDIR/t2.jsonl" --fraction 1.0
+  cp "$CC_RESEARCH_HOME/router-heldout/sealed.enc" "$BATS_TEST_TMPDIR/v1.before"
+  cp "$CC_RESEARCH_HOME/router-heldout/sealed-v2.enc" "$BATS_TEST_TMPDIR/v2.before"
+  printf '{"prompt":"third prompt other 3"}\n' > "$BATS_TEST_TMPDIR/tuning-v1.jsonl"
+  {
+    sed 's/secret prompt/third prompt/' "$BATS_TEST_TMPDIR/c.jsonl"     # 48 new, one of them in a tuning file
+    sed 's/secret prompt/THIRD  prompt/' "$BATS_TEST_TMPDIR/c.jsonl"    # the same 48 as a second store spells them
+    cat "$BATS_TEST_TMPDIR/c.jsonl" "$BATS_TEST_TMPDIR/c2.jsonl"         # everything v1 and v2 sealed
+  } > "$BATS_TEST_TMPDIR/c3.jsonl"
+  run "$H" --set v3 seal --candidates "$BATS_TEST_TMPDIR/c3.jsonl" --tuning-out "$BATS_TEST_TMPDIR/t3.jsonl" --fraction 1.0 --exclude "$BATS_TEST_TMPDIR/tuning-v1.jsonl" --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"would seal 47 prompt(s) as set v3"*"0 to the tuning set"*"145 candidate(s) dropped as already used"* ]] || false
+  [ ! -e "$CC_RESEARCH_HOME/router-heldout/sealed-v3.enc" ]
+  run "$H" --set v3 seal --candidates "$BATS_TEST_TMPDIR/c3.jsonl" --tuning-out "$BATS_TEST_TMPDIR/t3.jsonl" --fraction 1.0 --exclude "$BATS_TEST_TMPDIR/tuning-v1.jsonl"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"sealed 47 prompt(s) as set v3"*"0 written to the tuning set"* ]] || false
+  [ ! -s "$BATS_TEST_TMPDIR/t3.jsonl" ]
+  "$H" --set v3 rater-sheet --out "$BATS_TEST_TMPDIR/sheet3.jsonl"
+  [ "$(jq -r .id "$BATS_TEST_TMPDIR/sheet3.jsonl" | sort -u | wc -l | tr -d ' ')" -eq 47 ]
+  run grep -ci 'secret prompt\|second prompt' "$BATS_TEST_TMPDIR/sheet3.jsonl"
+  [ "$output" = 0 ]
+  # the earlier sets are untouched, v3 is sealed once, and the gate now reads v3
+  cmp "$BATS_TEST_TMPDIR/v1.before" "$CC_RESEARCH_HOME/router-heldout/sealed.enc"
+  cmp "$BATS_TEST_TMPDIR/v2.before" "$CC_RESEARCH_HOME/router-heldout/sealed-v2.enc"
+  run "$H" --set v3 seal --candidates "$BATS_TEST_TMPDIR/c3.jsonl" --tuning-out "$BATS_TEST_TMPDIR/t3.jsonl" --fraction 1.0
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"v3 is already sealed"* ]] || false
+  run "$H" status
+  [[ "$output" == *"set v3"* ]] || false
+}
