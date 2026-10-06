@@ -8,15 +8,23 @@ a small pool of classifier processes already started and waiting for their one p
 prompt to the oldest of them. A process labels ONE prompt and is ended, so no prompt ever shares a
 context with another; the pool is refilled behind it.
 
+The router makes two calls per prompt (wave E1g, router.py `KINDS`): a fast one (thinking off) and a
+careful one (thinking on). The daemon keeps a pool of each kind, and a request names the kind it
+wants.
+
   classifier-warm.py serve     the daemon (launchd job com.claude.research-classifier-warm)
   classifier-warm.py ping      "ready N" and exit 0 when the daemon's last classification round-trip
-                               succeeded and is fresh; exit 2 when a daemon is up but no worker has
-                               answered (alive but logged out); exit 1 when no daemon answers in 1 s
+                               succeeded and is fresh FOR EACH KIND and the daemon runs the
+                               classifier configuration the code on disk has; exit 2 when a daemon
+                               is up but a kind has not answered (alive but logged out) or the
+                               daemon runs an older configuration (restart it); exit 1 when no
+                               daemon answers in 1 s
   classifier-warm.py probe [--timeout S]
-                               no daemon: start one classifier process under this environment, put
-                               one classification through it, exit 0 when it answers and 1 when it
-                               does not (the runner's login check for a candidate account)
-  classifier-warm.py ask [--timeout S]
+                               no daemon: start one classifier process of each kind under this
+                               environment, put one classification through each, exit 0 when both
+                               answer and 1 when one does not (the runner's login check for a
+                               candidate account)
+  classifier-warm.py ask [--kind fast|careful] [--timeout S]
                                classifier input on stdin, the classifier's raw answer on stdout;
                                exit 3 when the daemon is absent or has no process ready (make the
                                cold call), exit 1 when a process took the prompt and failed
@@ -26,21 +34,27 @@ and when this daemon is absent, busy or wrong the router makes the cold call or 
 `unavailable` (§10 item 3). The 9 s limit is the router's and is not changed here.
 
 One JSON line each way on a unix socket ($CC_RESEARCH_HOME/classifier-warm/sock, mode 0600 in a 0700
-directory): {"op":"ask","text":…,"timeout":S} -> {"ok":true,"text":…} | {"ok":false,"why":…,
-"cold":bool}; {"op":"ping"} -> {"ok":true,"ready":N,"answering":bool,"why":…}. `cold` true means no
-process took the prompt.
+directory): {"op":"classify","kind":K,"text":…,"timeout":S} -> {"ok":true,"text":…,"kind":K} |
+{"ok":false,"why":…,"cold":bool}; {"op":"ping"} -> {"ok":true,"ready":N,"answering":bool,"why":…,
+"kinds":{K:{"ready":N,"answering":bool,"why":…}},"config":ID}. `cold` true means no process took
+the prompt. A daemon from before wave E1g knows no `classify` op and declines it at once as `cold`,
+so the router makes both cold calls until that daemon is restarted; it also sends no `kinds`, which
+is how `ping` (and migration 0059, which reads `ping` back) tells it is stale. An asker that hangs
+up ends the process holding its prompt: the router hangs up on the careful call when the fast one
+has already settled the label.
 
 Readiness is an answered classification, never a process count (wave E1f; incident 2026-10-05: launchd
 started the daemon with no CLAUDE_CONFIG_DIR, its processes sat alive and logged out, and `ping` said
-"ready 2" while every prompt failed). The daemon puts one real classification through a worker at
-start, every CANARY_S after, and at once when a prompt fails; each success rewrites the stamp
-$CC_RESEARCH_HOME/classifier-warm/answered, which is the job's evidence in launchd/fleet.manifest.
-After CANARY_FAILS_EXIT failures in a row the daemon exits 1, so launchd restarts the runner and the
-runner picks an account again.
+"ready 2" while every prompt failed). The daemon puts one real classification through a worker of
+each kind at start, every CANARY_S after, and at once when a prompt fails; when every kind's last
+round-trip succeeded the stamp $CC_RESEARCH_HOME/classifier-warm/answered is rewritten, which is the
+job's evidence in launchd/fleet.manifest. After CANARY_FAILS_EXIT failures in a row of either kind
+the daemon exits 1, so launchd restarts the runner and the runner picks an account again.
 
 Test seams: CC_RESEARCH_WARM_SOCK (socket path; a unix socket path is capped near 100 bytes),
 CC_RESEARCH_WARM_CHILD (a shell command standing in for the classifier process: one stream-json user
-line on stdin, one {"type":"result","result":…} line on stdout), CC_RESEARCH_WARM_POOL,
+line on stdin, one {"type":"result","result":…} line on stdout; CC_RESEARCH_CLASSIFIER_KIND in its
+environment names its kind), CC_RESEARCH_WARM_POOL (processes kept per kind),
 CC_RESEARCH_WARM_MAX_AGE (seconds an unused process is kept), CC_RESEARCH_WARM_CANARY (seconds
 between readiness round-trips), CC_RESEARCH_WARM_CANARY_TIMEOUT (seconds one may take),
 CC_RESEARCH_WARM_CANARY_RETRY (first wait after a failed one; it doubles), CC_RESEARCH_WARM_STAMP.
@@ -67,15 +81,20 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE / "lib"))
 sys.path.insert(0, str(HERE))
 import kit  # noqa: E402
+import router  # noqa: E402  the one definition of the classifier's command lines and briefs
 
-POOL = 2  # processes kept waiting; two cover a prompt arriving while the pool refills
+KINDS = router.KINDS
+POOL = 2  # processes kept waiting per kind; two cover a prompt arriving while the pool refills
 MAX_AGE_S = 900.0  # an unused process is replaced after this long, so none waits on a stale login
 PING_TIMEOUT_S = 1.0
 CANARY_S = 900.0  # fleet.manifest declares this cadence for the `answered` stamp; move both together
-CANARY_TIMEOUT_S = 30.0  # a start plus one answer; the router's 9 s limit is not this and is not here
+CANARY_TIMEOUT_S = (
+    30.0  # a start plus one answer; the router's 9 s limit is not this and is not here
+)
 CANARY_RETRY_S = 5.0
 CANARY_FAILS_EXIT = 3
 CANARY_PROMPT = "is the classifier answering?"
+HUNG_UP = "the asker hung up before the answer"
 STREAM_FLAGS = [
     "--input-format",
     "stream-json",
@@ -90,20 +109,18 @@ def sock_path() -> Path:
     return Path(env) if env else kit.research_home() / "classifier-warm" / "sock"
 
 
-def child_argv() -> Optional[List[str]]:
+def child_argv(kind: str) -> Optional[List[str]]:
     env_cmd = os.environ.get("CC_RESEARCH_WARM_CHILD")
     if env_cmd:
         return ["/bin/bash", "-c", env_cmd]
-    import router  # the one definition of the classifier's command line
-
-    argv = router.classifier_argv()
+    argv = router.classifier_argv(kind)
     if argv is None or os.environ.get("CC_RESEARCH_CLASSIFIER"):
         return None
     return argv + STREAM_FLAGS
 
 
 class Child:
-    def __init__(self, argv: List[str]):
+    def __init__(self, argv: List[str], kind: str):
         self.dir = tempfile.mkdtemp(prefix="cc-research-warm-")
         self.born = time.time()
         self.proc = subprocess.Popen(
@@ -112,7 +129,11 @@ class Child:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             cwd=self.dir,
-            env=dict(os.environ, CC_RESEARCH_ROUTER_INNER="1"),
+            env=dict(
+                os.environ,
+                CC_RESEARCH_ROUTER_INNER="1",
+                CC_RESEARCH_CLASSIFIER_KIND=kind,
+            ),
         )
 
     def alive(self) -> bool:
@@ -132,8 +153,11 @@ class Child:
                 pass
         shutil.rmtree(self.dir, ignore_errors=True)
 
-    def ask(self, text: str, timeout: float) -> Tuple[Optional[str], str]:
-        """(answer, why). The process's `result` line, read until the deadline."""
+    def ask(
+        self, text: str, timeout: float, asker: Optional[socket.socket] = None
+    ) -> Tuple[Optional[str], str]:
+        """(answer, why). The process's `result` line, read until the deadline, or until `asker`
+        (the connection the prompt came in on) hangs up: nobody is waiting for the answer then."""
         deadline = time.time() + timeout
         line = (
             json.dumps({"type": "user", "message": {"role": "user", "content": text}})
@@ -149,7 +173,16 @@ class Child:
                 left = deadline - time.time()
                 if left <= 0:
                     return None, f"the warm classifier did not answer in {timeout:g} s"
-                if not select.select([fd], [], [], left)[0]:
+                watch: List[Any] = [fd] + ([asker] if asker is not None else [])
+                ready = select.select(watch, [], [], left)[0]
+                if asker is not None and asker in ready:
+                    try:
+                        gone = not asker.recv(4096)
+                    except OSError:
+                        gone = True
+                    if gone:
+                        return None, HUNG_UP
+                if fd not in ready:
                     continue
                 chunk = os.read(fd, 65536)
                 if not chunk:
@@ -164,8 +197,10 @@ class Child:
                     if isinstance(ev, dict) and ev.get("type") == "result":
                         if ev.get("is_error") or not isinstance(ev.get("result"), str):
                             said = " ".join(str(ev.get("result") or "").split())[:80]
-                            return None, "the warm classifier process reported an error" + (
-                                f": {said}" if said else ""
+                            return (
+                                None,
+                                "the warm classifier process reported an error"
+                                + (f": {said}" if said else ""),
                             )
                         return ev["result"], "warm"
         except (OSError, AssertionError) as e:
@@ -173,8 +208,8 @@ class Child:
 
 
 class Pool:
-    def __init__(self, argv: List[str], size: int, max_age: float):
-        self.argv, self.size, self.max_age = argv, size, max_age
+    def __init__(self, argv: List[str], kind: str, size: int, max_age: float):
+        self.argv, self.kind, self.size, self.max_age = argv, kind, size, max_age
         self.lock = threading.Lock()
         self.kids: List[Child] = []
         self.wake = threading.Event()
@@ -220,7 +255,7 @@ class Pool:
                 if self.stop:
                     break
                 try:
-                    c = Child(self.argv)
+                    c = Child(self.argv, self.kind)
                 except OSError:
                     self.early_deaths += 1
                     break
@@ -245,10 +280,9 @@ def stamp_path() -> Path:
     return Path(env) if env else sock_path().parent / "answered"
 
 
-def canary_text() -> str:
-    import router  # the brief a real prompt is labeled with, so the round-trip is a classification
-
-    return router.CLASSIFIER_BRIEF.format(cert="(none rendered)", prompt=CANARY_PROMPT)
+def canary_text(kind: str) -> str:
+    # the brief a real prompt of this kind is labeled with, so the round-trip is a classification
+    return router.BRIEFS[kind].format(cert="(none rendered)", prompt=CANARY_PROMPT)
 
 
 def env_float(name: str, default: float) -> float:
@@ -259,7 +293,7 @@ def env_float(name: str, default: float) -> float:
 
 
 class Health:
-    """Whether a worker has answered: the last round-trip's outcome and when it was."""
+    """Whether a worker of one kind has answered: the last round-trip's outcome and when it was."""
 
     def __init__(self, fresh_s: float):
         self.lock = threading.Lock()
@@ -271,10 +305,6 @@ class Health:
     def good(self) -> None:
         with self.lock:
             self.ok, self.at, self.fails, self.why = True, time.time(), 0, ""
-        try:
-            stamp_path().write_text(f"{int(time.time())}\n")
-        except OSError:
-            pass
 
     def bad(self, why: str, count: bool = False) -> int:
         with self.lock:
@@ -285,18 +315,33 @@ class Health:
     def state(self) -> Tuple[bool, str]:
         with self.lock:
             if self.ok and time.time() - self.at > self.fresh_s:
-                return False, "the last answered round-trip is too old to vouch for the workers"
+                return (
+                    False,
+                    "the last answered round-trip is too old to vouch for the workers",
+                )
             return self.ok, self.why
 
 
-def canary(pool: Pool, health: Health, quit: Any) -> None:
-    """One real classification through a worker at start, every CANARY_S, and when asked."""
+def answered(health: Dict[str, Health], kind: str) -> None:
+    """A worker of `kind` answered. The stamp is the job's evidence, so it is rewritten only while
+    every kind's last round-trip stands: half a classifier is not a working one."""
+    health[kind].good()
+    if all(h.state()[0] for h in health.values()):
+        try:
+            stamp_path().write_text(f"{int(time.time())}\n")
+        except OSError:
+            pass
+
+
+def canary(kind: str, pool: Pool, health: Dict[str, Health], quit: Any) -> None:
+    """One real classification through a worker of `kind` at start, every CANARY_S, and when asked."""
     every = env_float("CC_RESEARCH_WARM_CANARY", CANARY_S)
     timeout = env_float("CC_RESEARCH_WARM_CANARY_TIMEOUT", CANARY_TIMEOUT_S)
     retry = env_float("CC_RESEARCH_WARM_CANARY_RETRY", CANARY_RETRY_S)
-    text = canary_text()
+    text = canary_text(kind)
+    mine = health[kind]
     while not pool.stop:
-        health.check.clear()
+        mine.check.clear()
         child, deadline = None, time.time() + timeout
         while child is None and time.time() < deadline and not pool.stop:
             child = pool.take()
@@ -312,12 +357,12 @@ def canary(pool: Pool, health: Health, quit: Any) -> None:
         if pool.stop:
             return
         if answer is not None and answer.strip():
-            health.good()
+            answered(health, kind)
             wait = every
         else:
-            fails = health.bad(why or "the warm classifier answered nothing", count=True)
+            fails = mine.bad(why or "the warm classifier answered nothing", count=True)
             print(
-                f"classifier-warm: readiness round-trip {fails} failed: {why}",
+                f"classifier-warm: {kind} readiness round-trip {fails} failed: {why}",
                 file=sys.stderr,
                 flush=True,
             )
@@ -329,10 +374,12 @@ def canary(pool: Pool, health: Health, quit: Any) -> None:
                 )
                 quit(1)
             wait = min(60.0, retry * 2.0 ** (fails - 1))
-        health.check.wait(wait)
+        mine.check.wait(wait)
 
 
-def handle(conn: socket.socket, pool: Pool, health: Health) -> None:
+def handle(
+    conn: socket.socket, pools: Dict[str, Pool], health: Dict[str, Health], config: str
+) -> None:
     try:
         conn.settimeout(5.0)
         buf = b""
@@ -345,16 +392,31 @@ def handle(conn: socket.socket, pool: Pool, health: Health) -> None:
             req = json.loads(buf.split(b"\n", 1)[0] or b"{}")
         except ValueError:
             req = {}
-        if req.get("op") == "ping":
-            answering, why = health.state()
+        op = req.get("op")
+        # `ask` is the pre-E1g op: one kind of worker existed then, the careful one
+        kind = req.get("kind") if op == "classify" else "careful"
+        if op == "ping":
+            kinds = {}
+            for k in KINDS:
+                ok, why = health[k].state()
+                kinds[k] = {"ready": pools[k].ready(), "answering": ok, "why": why}
+            down = [
+                f"{k} call: {v['why']}" for k, v in kinds.items() if not v["answering"]
+            ]
             out: Dict[str, Any] = {
                 "ok": True,
-                "ready": pool.ready(),
-                "answering": answering,
-                "why": why,
+                "ready": sum(v["ready"] for v in kinds.values()),
+                "answering": not down,
+                "why": "; ".join(down),
+                "kinds": kinds,
+                "config": config,
             }
-        elif req.get("op") == "ask" and isinstance(req.get("text"), str):
-            child = pool.take()
+        elif (
+            op in ("classify", "ask")
+            and kind in KINDS
+            and isinstance(req.get("text"), str)
+        ):
+            child = pools[kind].take()
             if child is None:
                 out = {
                     "ok": False,
@@ -364,22 +426,24 @@ def handle(conn: socket.socket, pool: Pool, health: Health) -> None:
             else:
                 try:
                     timeout = min(max(float(req.get("timeout") or 9.0), 0.1), 60.0)
-                    answer, why = child.ask(req["text"], timeout)
+                    answer, why = child.ask(req["text"], timeout, conn)
                 finally:
                     threading.Thread(target=child.end, daemon=True).start()
                 if answer is not None:
-                    health.good()
-                else:
-                    if "did not answer in" not in why:  # slow is not logged out; the check decides
-                        health.bad(why)
-                    health.check.set()
+                    answered(health, kind)
+                elif why != HUNG_UP:
+                    if (
+                        "did not answer in" not in why
+                    ):  # slow is not logged out; the check decides
+                        health[kind].bad(why)
+                    health[kind].check.set()
                 out = (
-                    {"ok": True, "text": answer}
+                    {"ok": True, "text": answer, "kind": kind}
                     if answer is not None
                     else {"ok": False, "cold": False, "why": why}
                 )
         else:
-            out = {"ok": False, "cold": True, "why": "not an ask or a ping"}
+            out = {"ok": False, "cold": True, "why": "not a classify or a ping"}
         conn.sendall(json.dumps(out).encode() + b"\n")
     except OSError:
         pass
@@ -413,8 +477,8 @@ def request(req: Dict[str, Any], timeout: float) -> Optional[Dict[str, Any]]:
 
 
 def serve() -> int:
-    argv = child_argv()
-    if argv is None:
+    argvs = {k: child_argv(k) for k in KINDS}
+    if any(v is None for v in argvs.values()):
         print(
             "classifier-warm: no classifier command (`claude` is not on PATH)",
             file=sys.stderr,
@@ -442,16 +506,19 @@ def serve() -> int:
         max_age = float(os.environ.get("CC_RESEARCH_WARM_MAX_AGE") or MAX_AGE_S)
     except ValueError:
         size, max_age = POOL, MAX_AGE_S
-    pool = Pool(argv, size, max_age)
+    pools = {k: Pool(argvs[k] or [], k, size, max_age) for k in KINDS}
     every = env_float("CC_RESEARCH_WARM_CANARY", CANARY_S)
-    health = Health(2.0 * every + env_float("CC_RESEARCH_WARM_CANARY_TIMEOUT", CANARY_TIMEOUT_S))
+    fresh = 2.0 * every + env_float("CC_RESEARCH_WARM_CANARY_TIMEOUT", CANARY_TIMEOUT_S)
+    health = {k: Health(fresh) for k in KINDS}
+    config = router.classifier_config()  # what this daemon's workers were started as
     try:
         stamp_path().unlink()  # a stamp is this daemon's own proof, never a predecessor's
     except OSError:
         pass
 
     def quit(code: int) -> None:
-        pool.close()
+        for pool in pools.values():
+            pool.close()
         try:
             p.unlink()
         except OSError:
@@ -463,37 +530,95 @@ def serve() -> int:
 
     signal.signal(signal.SIGTERM, bye)
     signal.signal(signal.SIGINT, bye)
-    threading.Thread(target=pool.fill, daemon=True).start()
-    threading.Thread(target=canary, args=(pool, health, quit), daemon=True).start()
+    for k in KINDS:
+        threading.Thread(target=pools[k].fill, daemon=True).start()
+        threading.Thread(
+            target=canary, args=(k, pools[k], health, quit), daemon=True
+        ).start()
     print(
-        f"classifier-warm: serving on {p}, {size} process(es) kept ready",
+        f"classifier-warm: serving on {p}, {size} process(es) of each kind "
+        f"({', '.join(KINDS)}) kept ready",
         file=sys.stderr,
     )
     while True:
         conn, _ = srv.accept()
-        threading.Thread(target=handle, args=(conn, pool, health), daemon=True).start()
+        threading.Thread(
+            target=handle, args=(conn, pools, health, config), daemon=True
+        ).start()
 
 
 def probe(timeout: float) -> int:
-    """No daemon: does a classifier process started under THIS environment answer one prompt?"""
-    argv = child_argv()
-    if argv is None:
-        print("classifier-warm: no classifier command (`claude` is not on PATH)", file=sys.stderr)
+    """No daemon: does a classifier process of each kind, started under THIS environment, answer
+    one prompt? Both are asked at once, so the check costs one answer's time, not two."""
+    argvs = {k: child_argv(k) for k in KINDS}
+    if any(v is None for v in argvs.values()):
+        print(
+            "classifier-warm: no classifier command (`claude` is not on PATH)",
+            file=sys.stderr,
+        )
         return 1
-    try:
-        child = Child(argv)
-    except OSError as e:
-        print(f"classifier-warm: the classifier did not start: {e.__class__.__name__}", file=sys.stderr)
-        return 1
-    try:
-        answer, why = child.ask(canary_text(), timeout)
-    finally:
-        child.end()
-    if answer is not None and answer.strip():
+    got: Dict[str, str] = {}
+
+    def one(kind: str) -> None:
+        try:
+            child = Child(argvs[kind] or [], kind)
+        except OSError as e:
+            got[kind] = f"the classifier did not start: {e.__class__.__name__}"
+            return
+        try:
+            answer, why = child.ask(canary_text(kind), timeout)
+        finally:
+            child.end()
+        ok = answer is not None and answer.strip()
+        got[kind] = "" if ok else (why or "the classifier answered nothing")
+
+    threads = [threading.Thread(target=one, args=(k,)) for k in KINDS]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    bad = [
+        f"{k} call: {got.get(k, 'no result')}" for k in KINDS if got.get(k, "no result")
+    ]
+    if not bad:
         print("answering")
         return 0
-    print(f"classifier-warm: {why or 'the classifier answered nothing'}", file=sys.stderr)
+    print(f"classifier-warm: {'; '.join(bad)}", file=sys.stderr)
     return 1
+
+
+def ping() -> int:
+    out = request({"op": "ping"}, PING_TIMEOUT_S)
+    if not out or not out.get("ok"):
+        print("classifier-warm: no daemon answered within 1 s", file=sys.stderr)
+        return 1
+    ready = out.get("ready", 0)
+    kinds = out.get("kinds")
+    if not isinstance(kinds, dict) or any(k not in kinds for k in KINDS):
+        # a daemon from before wave E1g: one kind of worker, and no `classify` op for the router
+        print(
+            f"classifier-warm: a daemon is up ({ready} process(es)) but it does not serve "
+            f"each kind of call ({', '.join(KINDS)}): it runs older code; restart it",
+            file=sys.stderr,
+        )
+        return 2
+    if out.get("answering") is not True:
+        why = out.get("why") or "it does not report an answered classification"
+        print(
+            f"classifier-warm: a daemon is up ({ready} process(es)) but no "
+            f"worker has answered: {why}",
+            file=sys.stderr,
+        )
+        return 2
+    if out.get("config") != router.classifier_config():
+        print(
+            f"classifier-warm: a daemon is up ({ready} process(es)) but its workers were started "
+            "with an older classifier configuration than the code on disk; restart it",
+            file=sys.stderr,
+        )
+        return 2
+    print(f"ready {ready}")
+    return 0
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -504,6 +629,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p = sub.add_parser("probe")
     p.add_argument("--timeout", type=float, default=CANARY_TIMEOUT_S)
     p = sub.add_parser("ask")
+    p.add_argument("--kind", choices=KINDS, default="careful")
     p.add_argument("--timeout", type=float, default=9.0)
     a = ap.parse_args(argv)
     if a.verb == "serve":
@@ -511,22 +637,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     if a.verb == "probe":
         return probe(a.timeout)
     if a.verb == "ping":
-        out = request({"op": "ping"}, PING_TIMEOUT_S)
-        if not out or not out.get("ok"):
-            print("classifier-warm: no daemon answered within 1 s", file=sys.stderr)
-            return 1
-        if out.get("answering") is not True:  # a pre-E1f daemon sends no such key: unproven
-            why = out.get("why") or "it does not report an answered classification"
-            print(
-                f"classifier-warm: a daemon is up ({out.get('ready', 0)} process(es)) but no "
-                f"worker has answered: {why}",
-                file=sys.stderr,
-            )
-            return 2
-        print(f"ready {out.get('ready', 0)}")
-        return 0
+        return ping()
     out = request(
-        {"op": "ask", "text": sys.stdin.read(), "timeout": a.timeout}, a.timeout + 1.0
+        {
+            "op": "classify",
+            "kind": a.kind,
+            "text": sys.stdin.read(),
+            "timeout": a.timeout,
+        },
+        a.timeout + 1.0,
     )
     if out and out.get("ok"):
         print(out.get("text", ""))

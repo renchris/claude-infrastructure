@@ -172,7 +172,8 @@ label() { python3 "$ROUTER" status --session "${1:-s1}" | jq -r '.label // "none
   export CC_RESEARCH_CLASSIFIER="python3 '$ROUTER' status --session s1 | jq -r .label >> '$STUB_LOG'; echo other"
   : > "$STUB_LOG"
   prompt "anything" >/dev/null
-  [ "$(cat "$STUB_LOG")" = unavailable ]
+  # (two lines since wave E1g: the fast call and the careful call each run the stub)
+  [ "$(sort -u "$STUB_LOG")" = unavailable ]
 }
 
 @test "§10 item 3: a machine-authored record keeps the last genuine label (a continuation inherits nothing new)" {
@@ -348,17 +349,23 @@ label() { python3 "$ROUTER" status --session "${1:-s1}" | jq -r '.label // "none
   export CC_MODEL_CONFIG="$BATS_TEST_TMPDIR/model-config.yaml"
   cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
 #!/bin/bash
-{ printf 'argv=%s\n' "$*"; printf 'inner=%s\n' "${CC_RESEARCH_ROUTER_INNER:-}"; printf 'files=%s\n' "$(ls -A | wc -l | tr -d ' ')"; } > "$STUB_ARGS"
+{ printf 'argv=%s\n' "$*"; printf 'inner=%s\n' "${CC_RESEARCH_ROUTER_INNER:-}"; printf 'files=%s\n' "$(ls -A | wc -l | tr -d ' ')"; } > "$STUB_ARGS.$CC_RESEARCH_CLASSIFIER_KIND"
 cat >/dev/null
-echo completeness
+# the fast call's `other` ends nothing, so the router waits for the careful call and both are seen
+if [ "$CC_RESEARCH_CLASSIFIER_KIND" = fast ]; then echo other; else echo completeness; fi
 STUB
   chmod +x "$BATS_TEST_TMPDIR/bin/claude"
   export STUB_ARGS="$BATS_TEST_TMPDIR/args"
   PATH="$BATS_TEST_TMPDIR/bin:$PATH" prompt "are we done?" >/dev/null
   [ "$(label)" = completeness ]
-  grep -qx 'argv=-p --model claude-haiku-test-9 --setting-sources local --tools  --strict-mcp-config --no-session-persistence' "$STUB_ARGS"
-  grep -qx 'inner=1' "$STUB_ARGS"
-  grep -qx 'files=0' "$STUB_ARGS"
+  # Since wave E1g the classifier is two calls. The careful one is this command line, unchanged; the
+  # fast one adds its own flags to it (tests/research-classifier-warm.bats pins those).
+  grep -qx 'argv=-p --model claude-haiku-test-9 --setting-sources local --tools  --strict-mcp-config --no-session-persistence' "$STUB_ARGS.careful"
+  grep -q '^argv=-p --model claude-haiku-test-9 --setting-sources local --tools  --strict-mcp-config --no-session-persistence --disable-slash-commands ' "$STUB_ARGS.fast"
+  for k in fast careful; do
+    grep -qx 'inner=1' "$STUB_ARGS.$k"
+    grep -qx 'files=0' "$STUB_ARGS.$k"
+  done
 }
 
 # ── the block's fast exit (docs/research/concurrency-scale-2026-10-04 fix row 4) ────────────────

@@ -26,9 +26,13 @@
 # must report an ANSWERED classification, not a live process (wave E1f; incident 2026-10-05: the
 # first activation read "ready 2" back from a daemon whose processes were logged out). A start is
 # an account ranking, a login probe and the daemon's own first round-trip, so this waits up to 90 s.
-# A job already loaded from identical bytes whose daemon is not answering is restarted once
+# A job already loaded from identical bytes whose daemon is not READY is restarted once
 # (`launchctl kickstart -k`), so a re-run is how the job is moved onto newly converged code; one
-# that is answering is left alone and the re-run is a no-op.
+# that is ready is left alone and the re-run is a no-op. Not ready is `ping` exiting non-zero: no
+# worker answering, or (wave E1g) a daemon that answers but still runs older code in memory, which
+# `ping` tells by the daemon not serving each kind of call or by its classifier configuration
+# differing from the code on disk. Until E1g a loaded daemon that answered on old code read as
+# ready, and a re-run restarted nothing.
 # Exit 1 when the label is not loaded or no worker answers.
 set -uo pipefail
 
@@ -74,10 +78,10 @@ if launchctl print "gui/$uid/$LABEL" >/dev/null 2>&1 && cmp -s "$src" "$dst"; th
   echo "0059: $LABEL already loaded from the repo plist"
   if ! /usr/bin/python3 "$DAEMON" ping >/dev/null 2>&1; then
     if ! launchctl kickstart -k "gui/$uid/$LABEL"; then
-      echo "0059: $LABEL is loaded but not answering, and its restart FAILED" >&2
+      echo "0059: $LABEL is loaded but not ready, and its restart FAILED" >&2
       exit 1
     fi
-    echo "0059: $LABEL was loaded but not answering; restarted on the live code"
+    echo "0059: $LABEL was loaded but not answering on the live code; restarted on the live code"
   fi
 else
   launchctl bootout "gui/$uid/$LABEL" >/dev/null 2>&1 || true   # a stale copy is replaced, not doubled

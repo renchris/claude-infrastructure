@@ -172,7 +172,7 @@ exited() {
   # answers the readiness round-trip, then is logged out for every later process
   flip="read -r line; if [ -e '$BATS_TEST_TMPDIR/out' ]; then echo '{\"type\":\"result\",\"is_error\":true,\"result\":\"Not logged in\"}'; else echo '{\"type\":\"result\",\"result\":\"other\"}'; fi; sleep 30"
   CC_RESEARCH_WARM_POOL=1 CC_RESEARCH_WARM_CANARY_RETRY=30 serve "$flip"
-  for i in $(seq 1 50); do [ "$(/usr/bin/python3 "$WARM" ping 2>/dev/null)" = "ready 1" ] && break; sleep 0.1; done
+  for i in $(seq 1 50); do [ "$(/usr/bin/python3 "$WARM" ping 2>/dev/null)" = "ready 2" ] && break; sleep 0.1; done   # one of each kind
   touch "$BATS_TEST_TMPDIR/out"
   # the one waiting process started before the login lapsed, but it reads the lapse at its prompt
   run bash -c "printf 'label this' | /usr/bin/python3 '$WARM' ask"
@@ -182,14 +182,16 @@ exited() {
 }
 
 @test "E1f daemon: three failed round-trips in a row and it exits 1 and removes its socket, so launchd restarts the runner" {
-  CC_RESEARCH_WARM_CANARY_RETRY=0.1 serve "$(logged_out)" up
+  # `|| true`: at load the daemon can fail three times and exit before the helper's first ping
+  # sees it on its socket, and its exit is what this test is about.
+  CC_RESEARCH_WARM_CANARY_RETRY=0.1 serve "$(logged_out)" up || true
   exited
   [ "$rc" -eq 1 ]
   [ ! -e "$CC_RESEARCH_WARM_SOCK" ]
   grep -q 'exiting so the runner picks an account again' "$BATS_TEST_TMPDIR/serve.err"
 }
 
-@test "E1f probe: one classification through one process, exit 0 when it answers and 1 when it is logged out" {
+@test "E1f probe: one classification through one process of each kind, exit 0 when they answer and 1 when logged out" {
   CC_RESEARCH_WARM_CHILD="$(child completeness)" run /usr/bin/python3 "$WARM" probe
   [ "$status" -eq 0 ]
   [ "$output" = answering ]
@@ -243,8 +245,9 @@ launchd_run() {
   [ "$status" -eq 0 ]
   [ "$output" = pushback ]
   # b was tried first and refused; everything after ran under c; ~/.claude and a were never used
-  [ "$(sed -n 1p "$BATS_TEST_TMPDIR/dirs")" = "$HOME/.claude-b" ]
-  [ "$(sed 1d "$BATS_TEST_TMPDIR/dirs" | sort -u)" = "$HOME/.claude-c" ]
+  # (a probe is one process of each kind, so an account tried is two lines)
+  [ "$(sed -n 1,2p "$BATS_TEST_TMPDIR/dirs" | sort -u)" = "$HOME/.claude-b" ]
+  [ "$(sed 1,2d "$BATS_TEST_TMPDIR/dirs" | sort -u)" = "$HOME/.claude-c" ]
   grep -q 'account b did not answer: .*Not logged in' "$BATS_TEST_TMPDIR/serve.err"
   grep -q 'account c answered a classification' "$BATS_TEST_TMPDIR/serve.err"
 }
@@ -272,8 +275,8 @@ launchd_run() {
   run /usr/bin/python3 "$WARM" ping
   [ "$status" -eq 0 ]
   grep -q 'no ranking from' "$BATS_TEST_TMPDIR/serve.err"
-  [ "$(sed -n 1p "$BATS_TEST_TMPDIR/dirs")" = "$HOME/.claude-a" ]
-  [ "$(sed 1d "$BATS_TEST_TMPDIR/dirs" | sort -u)" = "$HOME/.claude-b" ]
+  [ "$(sed -n 1,2p "$BATS_TEST_TMPDIR/dirs" | sort -u)" = "$HOME/.claude-a" ]
+  [ "$(sed 1,2d "$BATS_TEST_TMPDIR/dirs" | sort -u)" = "$HOME/.claude-b" ]
 }
 
 # ── router.py ───────────────────────────────────────────────────────────────────────────────────
@@ -281,11 +284,11 @@ launchd_run() {
 # The cold classifier stub logs that it ran and answers work-order, so a warm label is told apart.
 cold() { printf 'cat >/dev/null; echo ran >> "%s"; echo work-order' "$BATS_TEST_TMPDIR/cold-calls"; }
 
-@test "router: no daemon means the cold call, exactly as before" {
+@test "router: no daemon means the cold calls, one of each kind" {
   CC_RESEARCH_CLASSIFIER="$(cold)" run bash -c "printf 'are we done?' | python3 '$ROUTER' classify"
   [ "$status" -eq 0 ]
   [ "$output" = work-order ]
-  [ "$(wc -l < "$BATS_TEST_TMPDIR/cold-calls" | tr -d ' ')" -eq 1 ]
+  [ "$(wc -l < "$BATS_TEST_TMPDIR/cold-calls" | tr -d ' ')" -eq 2 ]   # one per kind of call (E1g)
 }
 
 @test "router: a running daemon gives the label and the cold call is not made; the brief reaches it whole" {
@@ -303,7 +306,7 @@ cold() { printf 'cat >/dev/null; echo ran >> "%s"; echo work-order' "$BATS_TEST_
   CC_RESEARCH_CLASSIFIER="$(cold)" run bash -c "printf 'are we done?' | python3 '$ROUTER' classify"
   [ "$status" -eq 0 ]
   [ "$output" = work-order ]
-  [ "$(wc -l < "$BATS_TEST_TMPDIR/cold-calls" | tr -d ' ')" -eq 1 ]
+  [ "$(wc -l < "$BATS_TEST_TMPDIR/cold-calls" | tr -d ' ')" -eq 2 ]   # one per kind of call (E1g)
 }
 
 @test "E1f router: a warm process that dies on its prompt falls through to the cold call too" {
@@ -345,6 +348,207 @@ cold() { printf 'cat >/dev/null; echo ran >> "%s"; echo work-order' "$BATS_TEST_
   CC_RESEARCH_WARM=0 CC_RESEARCH_CLASSIFIER="$(cold)" run bash -c "printf 'are we done?' | python3 '$ROUTER' classify"
   [ "$status" -eq 0 ]
   [ "$output" = work-order ]
+}
+
+# ── two calls per prompt (wave E1g) ─────────────────────────────────────────────────────────────
+# The router asks a fast classifier (E1b's brief, thinking off) and a careful one (the brief as
+# built, thinking on) at once, inside the one limit. Rule: a relay label from the fast call ends it;
+# else a relay label from the careful call; else the fast call's label; unavailable only when neither
+# answered. The stubs read CC_RESEARCH_CLASSIFIER_KIND, which names the call they stand in for.
+
+# two <fast script> <careful script> — a cold classifier stub that behaves by kind and logs the kind.
+two() {
+  printf 'cat > "%s/in.$CC_RESEARCH_CLASSIFIER_KIND"; echo "$CC_RESEARCH_CLASSIFIER_KIND" >> "%s/kinds"; if [ "$CC_RESEARCH_CLASSIFIER_KIND" = fast ]; then %s; else %s; fi' \
+    "$BATS_TEST_TMPDIR" "$BATS_TEST_TMPDIR" "$1" "$2"
+}
+
+# timed <limit s> <stub> — classify one prompt the way heldout.py does (a `bash -c` child, its whole
+# wall measured from outside); leaves the label in $output, the exit in $status, the wall in $wall.
+timed() {
+  local t0
+  t0="$(/usr/bin/python3 -c 'import time; print(time.time())')"
+  CC_RESEARCH_CLASSIFIER_TIMEOUT="$1" CC_RESEARCH_CLASSIFIER="$2" run bash -c "printf 'is that everything?' | python3 '$ROUTER' classify"
+  wall="$(/usr/bin/python3 -c "import time; print(time.time() - $t0)")"
+}
+
+under() { /usr/bin/python3 -c "import sys; sys.exit(0 if $wall < $1 else 1)"; }
+
+@test "E1g router: every prompt gets a fast call and a careful call, each with its own brief" {
+  timed 9 "$(two 'echo other' 'echo other')"
+  [ "$status" -eq 0 ]
+  [ "$(sort "$BATS_TEST_TMPDIR/kinds" | tr '\n' ' ')" = "careful fast " ]
+  # the fast call carries E1b's brief: the prompt as delimited data, and the reading notes
+  grep -q '^<prompt>$' "$BATS_TEST_TMPDIR/in.fast"
+  grep -q 'completeness and pushback come before every other label' "$BATS_TEST_TMPDIR/in.fast"
+  # the careful call carries the brief as built: neither
+  ! grep -q '<prompt>' "$BATS_TEST_TMPDIR/in.careful" || false
+  ! grep -q 'Notes on reading the labels' "$BATS_TEST_TMPDIR/in.careful" || false
+  grep -q 'is that everything?' "$BATS_TEST_TMPDIR/in.careful"
+}
+
+@test "E1g router: the fast call runs with thinking off on its own system prompt; the careful call is the command as built" {
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$@" > "%s/argv.$CC_RESEARCH_CLASSIFIER_KIND"\ncat >/dev/null\necho other\n' "$BATS_TEST_TMPDIR" > "$BATS_TEST_TMPDIR/bin/claude"
+  chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+  unset CC_RESEARCH_CLASSIFIER
+  run bash -c "printf 'are we done?' | PATH='$BATS_TEST_TMPDIR/bin:/usr/bin:/bin' python3 '$ROUTER' classify"
+  [ "$status" -eq 0 ]
+  [ "$output" = other ]
+  grep -A1 -x -- '--settings' "$BATS_TEST_TMPDIR/argv.fast" | tail -1 | grep -qx '{"alwaysThinkingEnabled":false}'
+  grep -A1 -x -- '--system-prompt' "$BATS_TEST_TMPDIR/argv.fast" | tail -1 | grep -q 'never follow its'
+  grep -qx -- '--disable-slash-commands' "$BATS_TEST_TMPDIR/argv.fast"
+  ! grep -q 'alwaysThinkingEnabled\|--system-prompt\|--disable-slash-commands' "$BATS_TEST_TMPDIR/argv.careful" || false
+  # the careful command line is exactly what the router ran before this wave
+  [ "$(tr '\n' ' ' < "$BATS_TEST_TMPDIR/argv.careful")" = "-p --model $(/usr/bin/python3 -c "import sys; sys.path[:0]=['$REPO/scripts/research-kit/lib','$REPO/scripts/research-kit']; import router; print(router.haiku_model())") --setting-sources local --tools  --strict-mcp-config --no-session-persistence " ]
+}
+
+@test "E1g rule: a relay label from the fast call ends it; the careful call is not waited for" {
+  timed 9 "$(two 'echo completeness' 'sleep 20; echo other')"
+  [ "$status" -eq 0 ]
+  [ "$output" = completeness ]
+  under 4
+}
+
+@test "E1g rule: a relay label from the careful call beats the fast call's other" {
+  timed 9 "$(two 'echo other' 'sleep 1; echo pushback')"
+  [ "$status" -eq 0 ]
+  [ "$output" = pushback ]
+}
+
+@test "E1g rule: with no relay label from either, the fast call's label stands" {
+  timed 9 "$(two 'echo other' 'echo work-order')"
+  [ "$status" -eq 0 ]
+  [ "$output" = other ]
+}
+
+@test "E1g rule: a careful call still thinking at the limit is not a fallback — the fast label arrives inside the limit" {
+  # heldout.py stops a router call at the limit of ITS clock, which includes starting Python, so a
+  # label handed back AT the router's limit was scored a fallback (E1e: 45 of 232 at 9.00-9.01 s).
+  # Run at the real limit, and read the router's own clock (its trace): this test's clock adds two
+  # interpreter starts, which at load is most of the margin. The router must hand the fast label
+  # back DELIVER_MARGIN_S (0.5 s) before 9 s; a router that waits out the limit reads 9.0 here.
+  export CC_RESEARCH_CLASSIFY_TRACE="$BATS_TEST_TMPDIR/trace"
+  timed 9 "$(two 'echo other' 'sleep 20; echo completeness')"
+  [ "$status" -eq 0 ]
+  [ "$output" = other ]
+  [ "$(jq -r '.label' "$BATS_TEST_TMPDIR/trace")" = other ]
+  jq -e '.wall_s >= 8.4 and .wall_s < 8.9' "$BATS_TEST_TMPDIR/trace"
+  jq -e '.why | test("fast call, cold.*careful call: had not answered")' "$BATS_TEST_TMPDIR/trace"
+}
+
+@test "E1g rule: the careful call's label stands when the fast call fails, and unavailable needs both to fail" {
+  timed 9 "$(two 'exit 7' 'echo new-idea')"
+  [ "$status" -eq 0 ]
+  [ "$output" = new-idea ]
+  timed 9 "$(two 'echo I think it is other' 'exit 7')"
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+  timed 1 "$(two 'sleep 20' 'sleep 20')"
+  [ "$status" -eq 1 ]
+  under 3
+}
+
+# by_kind — a resident classifier process that answers with the kind it was started as.
+by_kind() {
+  printf 'read -r line; printf "%%s\\n" "$line" >> "%s/$CC_RESEARCH_CLASSIFIER_KIND.$$"; echo "{\\"type\\":\\"result\\",\\"result\\":\\"$CC_RESEARCH_CLASSIFIER_KIND\\"}"; sleep 30' "$SEEN"
+}
+
+@test "E1g daemon: it keeps processes of each kind, and a prompt is answered by the kind it names" {
+  serve "$(by_kind)"
+  run /usr/bin/python3 "$WARM" ping
+  [ "$status" -eq 0 ]
+  [ "$output" = "ready 4" ] || [ "$output" = "ready 3" ] || [ "$output" = "ready 2" ]   # refilling
+  run bash -c "printf 'label this' | /usr/bin/python3 '$WARM' ask --kind fast"
+  [ "$status" -eq 0 ]
+  [ "$output" = fast ]
+  run bash -c "printf 'label this' | /usr/bin/python3 '$WARM' ask --kind careful"
+  [ "$status" -eq 0 ]
+  [ "$output" = careful ]
+  # each kind's readiness round-trip carried that kind's brief
+  cat "$SEEN"/fast.* | grep 'is the classifier answering' | grep -q 'Notes on reading the labels'
+  ! cat "$SEEN"/careful.* | grep -q 'Notes on reading the labels'
+}
+
+@test "E1g ping: ready needs an answered round-trip of EACH kind; one kind logged out is not ready and leaves no stamp" {
+  half="read -r line; if [ \"\$CC_RESEARCH_CLASSIFIER_KIND\" = fast ]; then echo '{\"type\":\"result\",\"is_error\":true,\"result\":\"Not logged in\"}'; else echo '{\"type\":\"result\",\"result\":\"other\"}'; fi; sleep 30"
+  CC_RESEARCH_WARM_CANARY_RETRY=30 serve "$half" up
+  for i in $(seq 1 50); do
+    /usr/bin/python3 "$WARM" ping 2>&1 | grep -q 'fast call: .*Not logged in' && break
+    sleep 0.1
+  done
+  run /usr/bin/python3 "$WARM" ping
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"fast call: "*"Not logged in"* ]] || false
+  [[ "$output" != *"careful call:"* ]] || false
+  [ ! -e "$SOCKD/answered" ]
+}
+
+# old_daemon — the daemon as it answered before wave E1g, on this test's socket: one kind of worker,
+# `ping` with no per-kind report, `ask` answered, any other op declined at once as `cold`.
+old_daemon() {
+  /usr/bin/python3 -c '
+import json, os, socket, sys
+d, b = os.path.split(os.path.abspath(sys.argv[1]))
+os.chdir(d)   # bind the basename: sun_path is capped at 104 bytes
+s = socket.socket(socket.AF_UNIX); s.bind(b); s.listen(8)
+while True:
+    c, _ = s.accept()
+    op = json.loads(c.makefile().readline() or "{}").get("op")
+    out = ({"ok": True, "ready": 2, "answering": True, "why": ""} if op == "ping"
+           else {"ok": True, "text": "pushback"} if op == "ask"
+           else {"ok": False, "cold": True, "why": "not an ask or a ping"})
+    c.sendall(json.dumps(out).encode() + b"\n"); c.close()
+' "$CC_RESEARCH_WARM_SOCK" &
+  DPID=$!
+  for i in $(seq 1 50); do [ -S "$CC_RESEARCH_WARM_SOCK" ] && break; sleep 0.1; done
+}
+
+@test "E1g ping: a daemon still running the code from before this wave is NOT ready (exit 2: restart it)" {
+  old_daemon
+  run /usr/bin/python3 "$WARM" ping
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"runs older code; restart it"* ]] || false
+}
+
+@test "E1g ping: a daemon whose workers were started with another classifier configuration is NOT ready" {
+  printf 'versions:\n  haiku_latest: claude-haiku-old\n' > "$BATS_TEST_TMPDIR/old-models.yaml"
+  CC_MODEL_CONFIG="$BATS_TEST_TMPDIR/old-models.yaml" serve "$(child other)" up
+  for i in $(seq 1 50); do
+    /usr/bin/python3 "$WARM" ping 2>&1 | grep -q 'older classifier configuration' && break
+    sleep 0.1
+  done
+  run /usr/bin/python3 "$WARM" ping
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"older classifier configuration"* ]] || false
+  CC_MODEL_CONFIG="$BATS_TEST_TMPDIR/old-models.yaml" run /usr/bin/python3 "$WARM" ping
+  [ "$status" -eq 0 ]
+}
+
+@test "E1g router: a daemon from before this wave is not asked to stand in — both cold calls are made" {
+  old_daemon
+  CC_RESEARCH_CLASSIFIER="$(cold)" run bash -c "printf 'are we done?' | python3 '$ROUTER' classify"
+  [ "$status" -eq 0 ]
+  [ "$output" = work-order ]            # the cold stub's label, not the old daemon's pushback
+  [ "$(wc -l < "$BATS_TEST_TMPDIR/cold-calls" | tr -d ' ')" -eq 2 ]
+}
+
+@test "E1g router + daemon: a resident fast relay label ends it, and the careful process holding the prompt is ended" {
+  # (the fast answer takes half a second, so the careful process is surely holding the prompt by then)
+  stub="read -r line; if [ \"\$CC_RESEARCH_CLASSIFIER_KIND\" = fast ]; then sleep 0.5; echo '{\"type\":\"result\",\"result\":\"completeness\"}'; else case \"\$line\" in *'are we done?'*) echo \$\$ > '$BATS_TEST_TMPDIR/careful.pid';; *) echo '{\"type\":\"result\",\"result\":\"other\"}';; esac; fi; sleep 30"
+  serve "$stub"
+  CC_RESEARCH_CLASSIFIER="$(cold)" run bash -c "printf 'are we done?' | python3 '$ROUTER' classify"
+  [ "$status" -eq 0 ]
+  [ "$output" = completeness ]
+  [ ! -e "$BATS_TEST_TMPDIR/cold-calls" ]
+  # the careful worker took the prompt; the router hung up on it, so the daemon ended it at once
+  # instead of holding a thinking process for the rest of the limit
+  for i in $(seq 1 30); do [ -s "$BATS_TEST_TMPDIR/careful.pid" ] && break; sleep 0.1; done
+  pid="$(cat "$BATS_TEST_TMPDIR/careful.pid")"
+  for i in $(seq 1 30); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+  ! kill -0 "$pid" 2>/dev/null || false
+  # and a hang-up is not a failed worker: the daemon is still ready
+  run /usr/bin/python3 "$WARM" ping
+  [ "$status" -eq 0 ]
 }
 
 # ── the staged plist and migration 0059 ─────────────────────────────────────────────────────────
@@ -445,6 +649,36 @@ live_layer() {
   [[ "$output" == *"the daemon answers (ready 2)"* ]] || false
   [ "$(grep -c '^kickstart -k gui/.*/com.claude.research-classifier-warm$' "$BATS_TEST_TMPDIR/launchctl-calls")" -eq 1 ]
   [ "$(grep -c '^bootstrap ' "$BATS_TEST_TMPDIR/launchctl-calls")" -eq 1 ]
+}
+
+@test "E1g migration: a job loaded and ANSWERING on the code from before this wave is restarted onto the live code, end to end" {
+  # The E1f test above stubs the daemon's ping. Here the live layer is the real daemon script, the
+  # loaded job is a daemon that answers the way the pre-E1g one does, and `kickstart -k` does what
+  # launchd does: ends it and starts the live code. Before this wave a re-run left such a job alone
+  # (its ping said "ready 2"), so the operator's one step would have restarted nothing.
+  fake_launchctl
+  mkdir -p "$HOME/.claude/scripts" "$HOME/Library/LaunchAgents"
+  ln -s "$REPO/scripts/research-kit" "$HOME/.claude/scripts/research-kit"
+  cp "$PLIST" "$HOME/Library/LaunchAgents/com.claude.research-classifier-warm.plist"
+  touch "$BATS_TEST_TMPDIR/loaded"
+  old_daemon
+  cat > "$BATS_TEST_TMPDIR/bin/launchctl" <<EOF
+#!/bin/bash
+echo "\$*" >> "$BATS_TEST_TMPDIR/launchctl-calls"
+if [ "\$1" = kickstart ]; then
+  kill "$DPID"; rm -f "$CC_RESEARCH_WARM_SOCK"
+  CC_RESEARCH_WARM_CHILD='$(child other)' /usr/bin/python3 "$WARM" serve >/dev/null 2>&1 &
+  echo \$! > "$BATS_TEST_TMPDIR/new.pid"
+fi
+exit 0
+EOF
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH" CC_MIGRATION_REPO="$REPO" run /bin/bash "$MIG"
+  [ -s "$BATS_TEST_TMPDIR/new.pid" ] && DPID="$(cat "$BATS_TEST_TMPDIR/new.pid")"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"restarted on the live code"* ]] || false
+  [[ "$output" == *"the daemon answers (ready "* ]] || false
+  [ "$(grep -c '^kickstart -k gui/.*/com.claude.research-classifier-warm$' "$BATS_TEST_TMPDIR/launchctl-calls")" -eq 1 ]
+  ! grep -q '^bootstrap ' "$BATS_TEST_TMPDIR/launchctl-calls"
 }
 
 @test "shellcheck, bare, is clean on the runner and the migration" {
