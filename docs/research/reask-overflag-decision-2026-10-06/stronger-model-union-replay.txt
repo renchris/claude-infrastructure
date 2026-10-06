@@ -1,0 +1,10 @@
+union(haiku-off-e1b + on-pre rep1): recall 26/26  other 21/22  borderline 9/13  relays on neither-relay rows 10/56 (fast 8, careful 2)  fallback 0/96
+union(haiku-off-e1b + on-pre rep2): recall 26/26  other 22/22  borderline 10/13  relays on neither-relay rows 10/56 (fast 8, careful 2)  fallback 0/96
+union(haiku-off-tight + on-pre rep1): recall 26/26  other 20/22  borderline 9/13  relays on neither-relay rows 8/56 (fast 5, careful 3)  fallback 0/96
+union(haiku-off-tight + on-pre rep2): recall 26/26  other 21/22  borderline 10/13  relays on neither-relay rows 8/56 (fast 5, careful 3)  fallback 0/96
+union(sonnet-off-e1b + on-pre rep1): recall 26/26  other 21/22  borderline 10/13  relays on neither-relay rows 6/56 (fast 1, careful 5)  fallback 0/96
+union(sonnet-off-e1b + on-pre rep2): recall 26/26  other 22/22  borderline 11/13  relays on neither-relay rows 6/56 (fast 1, careful 5)  fallback 0/96
+union(sonnet-off-tight + on-pre rep1): recall 26/26  other 21/22  borderline 9/13  relays on neither-relay rows 6/56 (fast 1, careful 5)  fallback 0/96
+union(sonnet-off-tight + on-pre rep2): recall 26/26  other 22/22  borderline 10/13  relays on neither-relay rows 6/56 (fast 1, careful 5)  fallback 0/96
+union(e1c:off-e1b rep1 + on-pre rep1): recall 26/26  other 21/22  borderline 9/13  relays on neither-relay rows 10/56 (fast 8, careful 2)  fallback 1/96
+union(e1c:off-e1b rep1 + on-pre rep2): recall 26/26  other 22/22  borderline 11/13  relays on neither-relay rows 10/56 (fast 8, careful 2)  fallback 0/96

@@ -24,7 +24,7 @@ packet `83adb541ea19` actioned. Method version 1.1 is frozen; it changes only fr
 | B2 | S | Item 8: `research-program` skill, `/research-program` command, intake script, briefs, rubric | A2 |
 | C | S | Wave 2: items 9–13, 15, in parallel with the pilot | B1, B2 |
 | D | S (fired `fire-rp-audit-bugfix`), T inside | Audit fixes: `docs/research/upfront-method-audit-2026-10-04/REPORT.md` §3 rows 4–6 | C |
-| E | E1 S (fired `fire-rp-v12-step1`); E1b S (fired `fire-rp-v12-e1b`); E1c S (fired `fire-rp-v12-e1c`); E1d S (fired `fire-rp-v12-e1d`); E1e S (fired `fire-rp-v12-e1e`); E1g S (fired `fire-rp-v12-e1g`); E2 Workflow in session d8964eb2; E3 S (E3a fired `fire-rp-v12-e3a`, E3b fired `fire-rp-v12-e3b` with T inside: six teammates; E3c fired `fire-rp-v12-e3c`, L inside; E3d fired `fire-rp-v12-e3d`, L inside); E4 operator | Method v1.2 (ruling `1bf69e5c1775`): audit REPORT §3 rows 1, 2, 3, 7, plus the 9 s classifier limit (ruling `4bf73c4e55d5`) | D |
+| E | E1 S (fired `fire-rp-v12-step1`); E1b S (fired `fire-rp-v12-e1b`); E1c S (fired `fire-rp-v12-e1c`); E1d S (fired `fire-rp-v12-e1d`); E1e S (fired `fire-rp-v12-e1e`); E1g S (fired `fire-rp-v12-e1g`); E1h S (fired `fire-rp-v12-e1h`, T inside for track A); E2 Workflow in session d8964eb2; E3 S (E3a fired `fire-rp-v12-e3a`, E3b fired `fire-rp-v12-e3b` with T inside: six teammates; E3c fired `fire-rp-v12-e3c`, L inside; E3d fired `fire-rp-v12-e3d`, L inside); E4 operator | Method v1.2 (ruling `1bf69e5c1775`): audit REPORT §3 rows 1, 2, 3, 7, plus the 9 s classifier limit (ruling `4bf73c4e55d5`) | D |
 
 A1, A2 and A3 touch disjoint files and fire concurrently. B1 and B2 fire when A2 lands. Each dispatched session leads
 its own Agent Team where it has 2+ code-writing tasks.
@@ -1042,6 +1042,36 @@ thresholds or the 9 s limit; never read v1 or v2; never tune on v3. Locus S (fir
   cannot fail on, one socket bound by absolute path) that a green local run had not; a harness that stops a
   call at the same 9 s the router waits turns every slow careful call into a fallback, and handing the label
   back half a second early is the whole fix.
+
+#### E1h — measure first with every lever open, then one composite read; cap the cost of a false relay — FIRED (2026-10-06)
+Scope (frozen): the recommendation of `docs/research/reask-overflag-decision-2026-10-06/REPORT.md` (decision
+`aba630ebe329`, workflow `wf_aa8c940c-e38`), adopted whole by the operator 2026-10-06 ("ultracode on each
+/explain-decisions. then proceed with all recommendations"). Execute its "Build scope (wave E1h)" section — tracks
+A (false-relay cost limits: relay notice, `--requires-gate` narrowed to the routed slug, one-word `misrouted`
+override, no relay label carried into envelope turns), B (tooling: miner frame fidelity, `heldout.py draw`,
+`heldout-rate.py --tuning`, `--set v2 retire`, subset seal + pinned `instrument.json`, reads ledger) and C
+(draw and rate the tuning base, run every arm to completion, replay the frozen rule list, select or STOP, then
+land, warm-latency check, seal v4 and one composite read) — under its RULE 1 (selection and stop) and RULE 2
+(certification read) exactly as written there. Never change row 15's thresholds or the 9 s limit; never read
+`tuning-v2.jsonl`; never tune on v3 or v4; no v3 stratum is read a third time; a FAIL on the composite read is
+final for this wave. Locus S (fired `fire-rp-v12-e1h`); track A runs as two teammates inside it on disjoint
+files, tracks B and C by its lead (ordered around sealed files).
+- **Operator ruling, the five parts the report needs** (all granted by "proceed with all recommendations",
+  recorded as decision packet below): (a) the REPORT §4.1 named model edit, only if a non-`haiku_latest`
+  configuration wins RULE 1; (b) retiring sealed v2 to tuning data (it has been read twice and E1e already
+  barred a third verdict, so the retirement forecloses nothing still available); (c) disclosed second reads of
+  v3's pushback items, and of its regex-missed items if fewer than 400 unused regex-missed candidates exist at
+  the v4 seal; (d) the `other` frame stays all of the operator's prompts, with only the fidelity fix for strings
+  the live hook never receives; (e) the §4.2 edits for the `misrouted` override and for not carrying a relay
+  label into envelope turns.
+- **Why not the precision pass this lead recommended first** (both critics, independently): tuning a join rule or
+  brief over the two haiku calls tops out near 0.90 on v3's own algebra (estimated 0.81-0.87), the two calls are
+  wrong on the same prompts so a careful-call veto rarely fires, and haiku 4.5 has a retirement floor of
+  2026-10-15, so a haiku-4.5 fix expires within weeks. Only a stronger model showed a measured precision effect
+  (Sonnet 5.5 thinking off: 1 of 56 neither-relay tuning rows relayed against haiku's 8, paired 7 to 0, p ≈ 0.016,
+  cold median 2.8 s), and that evidence is thin where row 15 scores — hence measure first.
+- **Stated odds**: about 0.55 that any configuration clears RULE 1 (a STOP is a likely, valid outcome that spends
+  no sealed data); about 35-40% that this wave ends with row 15 passing.
 
 #### E2 — triage precision study (v1.2 (a), measurement half) — RUNNING
 - Locus: a Workflow in session d8964eb2, started 2026-10-04. Results: `docs/research/triage-precision-study-2026-10-04/`.
