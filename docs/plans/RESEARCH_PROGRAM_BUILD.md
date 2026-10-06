@@ -870,7 +870,7 @@ Locus S (fired `fire-rp-v12-e1f`), lead-inline (why: three small fixes in four f
   exists and the row is live. E1e's measurements (warm latency on the tuning set, then the second read of v2)
   wait for the restart.
 
-#### E1g — the fast-plus-careful classifier, then a new sealed set v3 read once — BUILT, tuning rule PASSED; v3 not yet minted or read (2026-10-05)
+#### E1g — the fast-plus-careful classifier, then a new sealed set v3 read once — DONE: row 15 FAILS on v3, on `other` labeling alone; recall and fallbacks pass (2026-10-05)
 Scope (frozen): operator ruling on decision `b18c74a4f8e1` ("run-both", 2026-10-05: "Proceed with all of your
 recommendations"). (1) Build the union classifier in `router.py` and `classifier-warm.py`: per prompt, a fast call
 (E1b's brief, `docs/research/router-classifier-e1b-2026-10-04/e1b-classifier.patch`, thinking off) and a careful
@@ -899,7 +899,8 @@ thresholds or the 9 s limit; never read v1 or v2; never tune on v3. Locus S (fir
   transcript tool call names it: E1c's `seal` that wrote it), so it is held-out by every rule here and becomes
   v3's core. Risk, stated now: 9 pushback prompts at v2's agreement rate (7 of 37) leave about a 15% chance of no
   agreed pushback item, which reads FAIL by `evaluate`'s rule; that outcome is recorded as such, not re-cut.
-- **Built** (`1e4486e03`, branch `rp-v12-e1g`). `router.py` `classify` starts the two calls together and
+- **Built** (trunk `2e2d17cb5`; it was `1e4486e03` on the branch when phase 2 measured it, and `router.py` and
+  `classifier-warm.py` are byte-identical in the two). `router.py` `classify` starts the two calls together and
   joins them by the rule above; each call asks the resident classifier first and makes its own cold call when
   that fails, inside what is left of the limit (E1f's guarantee, per call). `classifier-warm.py` keeps two
   processes of each kind, takes the kind in a new `classify` op, and ends the process holding a prompt when the
@@ -989,6 +990,58 @@ thresholds or the 9 s limit; never read v1 or v2; never tune on v3. Locus S (fir
   if it gets no label from the resident path the sealed set is not opened. The router's trace beside the
   record says which call and path answered each item. Verdict, as E1c fixed it: PASS is `evaluate` exiting 0;
   anything else is FAIL with the numbers, and v3 is not read again in this wave under any outcome.
+- **The one read of v3** (2026-10-05 22:34:09-23:10:12 CDT, 36 min, 1-min load 14-118; router and in-session
+  daemon both a snapshot of `55753fdc9`, checked byte-identical to the landed and the live files before the
+  first call; the made-up probe was answered by the resident fast call in 0.5 s; rc 1). 752 sealed, 306
+  excluded for rater disagreement, 446 routed:
+
+  | condition | reading | |
+  |---|---|---|
+  | regex-matched recall (≥ 0.95) | 47/47 = 1.00 | pass |
+  | regex-missed recall (≥ 0.95) | 24/25 = 0.96 | pass |
+  | pushback recall (≥ 0.95) | 2/2 = 1.00 | pass, on 2 prompts |
+  | `other` correct label (≥ 0.90) | **113/148 = 0.76** | **FAIL** |
+  | fallback share (≤ 0.10) | 0/446 = 0.00 | pass |
+
+  `evaluate` printed one failure: `stratum other: correct-label rate 113/148 = 0.76, below 0.9`. No call fell
+  back in any stratum, so all 35 `other` misses are wrong labels, none a timeout. Uncounted line: 4 prompts
+  carry two different relay labels (2 regex-matched, 2 regex-missed) and the router relayed all 4.
+- **Which path answered, and how fast.** All 450 calls (446 counted, 4 uncounted) were answered through the
+  resident path and none through a cold call: the fast call's label 426 times, the careful call's relay label
+  24 times. In 80 of the 426 the careful call was still thinking when the fast label was handed back at the
+  8.5 s mark (27 · 33 · 26 by thirds of the run); without the 0.5 s rule those are 80 fallbacks, a share of
+  0.18. Wall: median 5.42 s, p90 8.57 s, max 8.79 s, none over 9 s. Per item (router side only, no prompt, no
+  rater label): `~/.claude/autonomy/research/router-heldout/reading-v3-2026-10-05.jsonl`; the trace of which
+  call and path answered: `reading-v3-2026-10-05.paths.jsonl` beside it.
+- **What the `other` miss is made of, as far as the router's side shows** (the rater labels were not opened).
+  The router gave a relay label to 36 of the 148 counted `other` prompts: 26 from the fast call and 10 from the
+  careful call. The careful call can only change an answer by adding a relay label, so it accounts for at most
+  10 of the 35 misses; at least 25 are the fast call's own label, and the fast call alone could have read at
+  best 123/148 = 0.83 here. So the union is not what fails `other`, and dropping the careful call would not
+  pass it either. On the tuning set the same configuration read 41/44 = 0.93: as with the as-built
+  configuration (tuning 0.91, then 0.88 and 0.72 on v2), the v1 tuning set overstates `other`. It holds 44
+  agreed `other` prompts against 148 here, mined under caps that kept the first 100 in sha order.
+- **Row 15 verdict: FAILS.** `evaluate` exited 1 on `other` labeling. For the first time every completeness
+  stratum and the fallback share pass on a held-out set that was read once with a configuration fixed
+  beforehand (73 of 74 relay-gold prompts relayed; 0 fallbacks against 0.27 and 0.19 on v2). No program can
+  certify.
+- **Disclosure.** v3 has been read once, with the configuration, the caps, the labeled counts and the way the
+  read is run all committed before it (the two commits ahead of this record, author dates 22:09 and 22:33; read started
+  22:34). Anyone
+  choosing a configuration from here knows that `other` read 0.76 on it and that the router relays about a
+  quarter of its `other` prompts; a second read is biased by that. Pushback was judged on 2 prompts.
+- **What remains (decisions for the lead, then the operator). Not opened here.**
+  - `other` labeling is the one failing condition, and it has now failed on three reads of two sets with two
+    labeling configurations (0.88 and 0.72 as built, 0.76 fast plus careful). The fast call's own labels are most of it.
+  - The 0.5 s hand-back is what removes the fallbacks; it is in the landed router and applies to the live hook.
+  - A tuning set that predicts `other` does not exist: v1's has 44 agreed `other` prompts, and `tuning-v2.jsonl`
+    is now sealed inside v3.
+- Status: **DONE 2026-10-05.** Learnings: the miner's caps keep the first N of a stratum in sha order, so the
+  same caps re-pick the same sample and a new set needs larger caps, not a later date; a land gate under load
+  sheds its smoke, so the lints that still ran caught two real defects in new tests (four `! cmd` lines bats
+  cannot fail on, one socket bound by absolute path) that a green local run had not; a harness that stops a
+  call at the same 9 s the router waits turns every slow careful call into a fallback, and handing the label
+  back half a second early is the whole fix.
 
 #### E2 — triage precision study (v1.2 (a), measurement half) — RUNNING
 - Locus: a Workflow in session d8964eb2, started 2026-10-04. Results: `docs/research/triage-precision-study-2026-10-04/`.
