@@ -405,7 +405,7 @@ cells = lambda s: sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 
 bad = []
 for label, r in (("k_work=4", build()), ("k_work=None", build(k_work=None))):
     v, ex = ca.board_eff(r, "weekly_pct")
-    assert ex is False, "the replay must land in the nearly-out state: %r" % ((v, ex),)
+    assert ex is False, "the replay must land in the nearly-out state: " + repr([v, ex])
     if ca.pct_rgb(v, ex) != ca.NEAR_WALL_RGB: bad.append((label, "near-wall orange lost", ca.pct_rgb(v, ex)))
     for narrow in (True, False):
         surf = label + (" board" if narrow else " readout")
@@ -438,5 +438,6 @@ for label, r in (("k_work=4", build()), ("k_work=None", build(k_work=None))):
 for b in bad: print("FAIL", b)
 assert not bad, "%d checks failed" % len(bad)
 print("OK")'
-  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
