@@ -161,7 +161,10 @@ fmt_age() {  # seconds → the coarsest form that still answers "should I trust 
 }
 
 body="$(cat "$BOARD" 2>/dev/null || true)"
-if [ -z "${body//[[:space:]]/}" ]; then
+# Emptiness by a glob, never by stripping: `${body//[[:space:]]/}` is superlinear on /bin/bash 3.2
+# (0.9 s on a 2 KB board, 6.5 s at 4 KB; docs/research/sessionstart-readout-2026-10-06, R1), so
+# every byte added to the board would have cost startup time wherever this runs under 3.2.
+if case "$body" in *[![:space:]]*) false ;; *) true ;; esac; then
   emit "accounts board at $BOARD is EMPTY — the producer wrote nothing.
   Producer: $PRODUCER. For the live table, run: claude-accounts"
 fi

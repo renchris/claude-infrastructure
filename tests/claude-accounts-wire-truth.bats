@@ -203,10 +203,12 @@ def readout(wire):
     return buf.getvalue(), r
 allowed, r1 = readout({"7d_util": 0.99, "7d_status": "allowed_warning", "5h_util": 0.05,
                        "5h_status": "allowed", "status": "allowed_warning", "http": 200})
-assert "is **not out of weekly quota**" in allowed and "says 99.0% used" in allowed, allowed
-assert "still accepts work" in allowed, allowed
+assert "was **not out of weekly quota**" in allowed and "server read 99% used" in allowed, allowed
+assert "was still accepting work" in allowed and "still accepts work" not in allowed, allowed
+assert "of the week left" not in allowed and "5-hour window" not in allowed, \
+    "no headroom figure off a two-decimal reading: %r" % allowed
 row = next(l for l in allowed.splitlines() if l.startswith("|") and "next3" in l)
-assert "| 99.0% |" in row, "a still-allowed weekly cell must never read 100%%: %r" % row
+assert "| 99% |" in row, "a still-allowed weekly cell is the server s whole percent, never 100%%: %r" % row
 rejected, _ = readout({"7d_util": 1.0, "7d_status": "rejected", "5h_util": 0.05,
                        "5h_status": "allowed", "status": "rejected", "http": 429})
 assert "is **out of weekly quota**, confirmed by Anthropic" in rejected, rejected
@@ -317,7 +319,7 @@ print("OK")'
 # ---- W-10: the board draws the three 100%-states IN THE BAR (operator, 2026-10-01) -------------
 # The board showed refused and 99%-still-allowed accounts as the same solid red bar at `100%`, with
 # the difference only in six lines of footnote prose. The bar and percent now carry it: refused =
-# solid bar at 100%, still-allowed = the FLOORED wire percent over a bar whose last cell is never
+# solid bar at 100%, still-allowed = the server's WHOLE wire percent over a bar whose last cell is never
 # full. The board ALSO prints the plain sentence (2026-10-03): the bar alone left "confirmed out"
 # readable only from a missing line, which the operator could not read.
 
@@ -333,12 +335,12 @@ def board(wire):
     return buf.getvalue()
 refused = board({"7d_util": 1.0, "7d_status": "rejected", "5h_util": 0.05,
                  "5h_status": "allowed", "status": "rejected", "http": 429})
-allowed = board({"7d_util": 0.996, "7d_status": "allowed_warning", "5h_util": 0.05,
+allowed = board({"7d_util": 0.99, "7d_status": "allowed_warning", "5h_util": 0.05,
                  "5h_status": "allowed", "status": "allowed_warning", "http": 200})
 assert "▆▆▆▆▆▆▆▆" in refused and "100%" in refused, refused
 assert "▆▆▆▆▆▆▆▁" in allowed, "a spendable bar must not read full: %r" % allowed
 row = next(l for l in allowed.splitlines() if "next3" in l and "▆" in l)
-assert " 99.6%" in row and "100%" not in row, row
+assert " 99%" in row and "≥99%" not in row and "100%" not in row, row
 blind = board(None)
 brow = next(l for l in blind.splitlines() if "next3" in l and "▄" in l)
 assert "▄▄▄▄▄▄▄▄" in brow and "≥99%" in brow and "100%" not in brow, \
@@ -347,18 +349,94 @@ rrow = next(l for l in refused.splitlines() if "next3" in l and "▆" in l)
 assert "▄" not in rrow and " 100%" in rrow, rrow
 flat = lambda t: " ".join(t.split())
 assert "next3 is out of weekly quota, confirmed by Anthropic" in flat(refused), refused
-assert "next3 is not out of weekly quota" in flat(allowed), allowed
+assert "next3 was not out of weekly quota" in flat(allowed), allowed
 for out in (refused, allowed):
     assert "ʷ" not in out and "rate-limit headers" not in out, out
 # Whole cells round 94% up to 8; the cap keeps a still-spendable bar one cell short of full.
 assert ca.board_bar(94.0) == "▆▆▆▆▆▆▆▁", ca.board_bar(94.0)
 assert ca.board_bar(100.0, True) == "▆▆▆▆▆▆▆▆"
 assert ca.board_bar(100.0) == "▄▄▄▄▄▄▄▄", "no server verdict: half height, not solid"
-assert (ca.pct_text(100.0, True), ca.pct_text(99.6, False), ca.pct_text(100.0, None)) \
-    == ("100%", "99.6%", "≥99%")
-assert ca.pct_rgb(100.0, True) == ca.RED and ca.pct_rgb(99.6, False) == ca.NEAR_WALL_RGB \
+assert (ca.pct_text(100.0, True), ca.pct_text(99.0, False), ca.pct_text(100.0, None)) \
+    == ("100%", "99%", "≥99%")
+assert ca.pct_rgb(100.0, True) == ca.RED and ca.pct_rgb(99.0, False) == ca.NEAR_WALL_RGB \
     and ca.pct_rgb(100.0, None) == ca.GRAY
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+# ---- W-11: CONTROL — the 2026-10-06 incident, replayed from the series verbatim ---------------
+# 06:01:45Z the sweep recorded next3 at endpoint 100 / wire 0.99 allowed_warning with 11 live
+# sessions; the board printed "99.0%" and "still accepts work (about 1% of the week left, roughly
+# 5% of one 5-hour window)", and about a minute later sessions on next3 were refused. The wire is
+# rounded to hundredths and capped at 0.99 until the server refuses
+# (docs/research/sessionstart-readout-2026-10-06/README.md, R2), so 0.99 is the server's whole
+# percent: no tenth, and no headroom figure (the true remainder is anywhere from ~1pp down to 0).
+# A snapshot is not a present tense: the note carries the read's clock time and the account's load.
+# FAILS PRE-FIX on checks 1-4; checks 5-6 and the colour pin the 2026-10-01/03 rulings.
+
+@test "W-11: CONTROL replay of the 06:01:45Z next3 row: server's whole percent, no headroom figure, read time and load" {
+  run env CC_BOARD_COLOR=off python3 -c "$LOAD"'
+import re, time, unicodedata
+from datetime import datetime, timezone, timedelta
+# VERBATIM, ~/.claude/logs/account-utilization.jsonl, the next3 row at ts 2026-10-06T06:01:45.
+REC = json.loads(r"""{"ts":"2026-10-06T06:01:45.738874+00:00","acct":"next3","k":11,"k_work":4,"k_src":"work","session_pct":7,"weekly_pct":100,"fable_pct":3,"session_reset_at":"2026-10-06T07:50:00.443077+00:00","weekly_reset_at":"2026-10-06T12:00:00.443099+00:00","wire_5h_util":0.06,"wire_7d_util":0.99,"wire_5h_status":"allowed","wire_7d_status":"allowed_warning","credits_on":false,"credits_used":0.0,"auth":"ok","stale":false}""")
+AGE_S = 79
+P = datetime.fromisoformat
+# The series row is flat; the renderer takes the collect() shape. Rebuild it (wire_* -> wire{})
+# and rebase every absolute stamp so the read is AGE_S old NOW while each countdown is unchanged.
+shift = (datetime.now(timezone.utc) - timedelta(seconds=AGE_S)) - P(REC["ts"])
+def build(**over):
+    r = {k: REC[k] for k in ("acct", "k", "k_work", "session_pct", "weekly_pct", "fable_pct",
+                             "credits_on", "credits_used", "auth")}
+    r.update(session_reset_at=(P(REC["session_reset_at"]) + shift).isoformat(),
+             weekly_reset_at=(P(REC["weekly_reset_at"]) + shift).isoformat(),
+             session_reset_h=(P(REC["session_reset_at"]) - P(REC["ts"])).total_seconds() / 3600,
+             weekly_reset_h=(P(REC["weekly_reset_at"]) - P(REC["ts"])).total_seconds() / 3600,
+             wire={w: REC["wire_" + w] for w in ("5h_util", "7d_util", "5h_status", "7d_status")})
+    r.update(over)
+    return r
+# The read time comes from the cache ts field (_quota_age_s), never an mtime.
+json.dump({"ts": time.time() - AGE_S, "rows": []}, open(cfg["cache_file"], "w"))
+# Local clock, as the board header prints it; two candidates absorb a minute boundary on a slow box.
+clocks = {(datetime.now() - timedelta(seconds=s)).strftime("%H:%M") for s in (AGE_S, AGE_S + 10)}
+WIN_OPEN = {"active": True, "end": "2099-12-31", "deadline": None, "permanent": True}
+cells = lambda s: sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in s)
+bad = []
+for label, r in (("k_work=4", build()), ("k_work=None", build(k_work=None))):
+    v, ex = ca.board_eff(r, "weekly_pct")
+    assert ex is False, "the replay must land in the nearly-out state: %r" % ((v, ex),)
+    if ca.pct_rgb(v, ex) != ca.NEAR_WALL_RGB: bad.append((label, "near-wall orange lost", ca.pct_rgb(v, ex)))
+    for narrow in (True, False):
+        surf = label + (" board" if narrow else " readout")
+        out = "\n".join(ca.readout_lines([r], cfg, WIN_OPEN, True, narrow=narrow))
+        lines = out.splitlines()
+        ri = next(i for i, l in enumerate(lines) if "next3" in l and ("▆" in l or "▄" in l or l.startswith("|")))
+        row = lines[ri]
+        ni = next(i for i in range(ri + 1, len(lines)) if "next3" in lines[i] and "week" in lines[i])
+        nl, j = [lines[ni]], ni + 1
+        while narrow and j < len(lines) and lines[j].startswith("   "):
+            nl.append(lines[j]); j += 1
+        note = " ".join(" ".join(nl).split())
+        # (1) a two-decimal read never prints a tenth, anywhere on either surface
+        if re.search(r"\b99\.\d%", out): bad.append((surf, "tenth printed", re.findall(r"\b99\.\d%", out)))
+        # (2) the cell is the server s whole percent; only a refusal prints 100%, only an unread meter >=99%
+        if not re.search(r"(^|[ |])99%", row) or "≥99%" in row or "100%" in row:
+            bad.append((surf, "cell is not the server s whole 99%", row))
+        # (3) no headroom figure and no present-tense acceptance off the snapshot
+        if re.search(r"\d+% of (the week|one 5-hour window)", note) or "still accepts work" in note:
+            bad.append((surf, "headroom figure or present tense in note", note))
+        # (4) the read carries its clock time and the load on the account
+        if not any(c in note for c in clocks): bad.append((surf, "no read time", note, sorted(clocks)))
+        if not re.search(r"\b11 live session", note): bad.append((surf, "no live-session count", note))
+        # (5) RULINGS 2026-10-01/03: inline state, last cell open, not the unconfirmed half-height bar
+        if narrow and ("▆▆▆▆▆▆▆▁" not in row or "▄" in row):
+            bad.append((surf, "bar: spendable last cell must stay open", row))
+        # (6) the note still fits the 76-cell board budget
+        if narrow and any(cells(l) > 76 for l in lines):
+            bad.append((surf, "line over 76 cells", [l for l in lines if cells(l) > 76]))
+for b in bad: print("FAIL", b)
+assert not bad, "%d checks failed" % len(bad)
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }

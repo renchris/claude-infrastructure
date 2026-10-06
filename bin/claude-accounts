@@ -1225,12 +1225,16 @@ def fetch_usage(cfg, token, retries=2):
 # the fleet was excluding a WORKING account as `weekly-exhausted`. `next4` read `percent: 100` on
 # the 5h window while the wire read `5h-utilization: 1.02  5h-status: rejected` (HTTP 429), which
 # is the OTHER end of the same collapse: the endpoint cannot represent overage either. The
-# binary's own SDK doc names both properties — "events are emitted when a window's ROUNDED
-# percentage ... moves" and "values above 1 occur when usage legitimately runs past a window's cap".
+# binary's SDK doc says "values above 1 occur when usage legitimately runs past a window's cap";
+# its "events are emitted when a window's rounded percentage or reset time moves" is about WHEN
+# events fire and says nothing about the header's precision. The precision was measured instead
+# (docs/research/sessionstart-readout-2026-10-06/README.md, R2): hundredths, rounded, held at 0.99
+# until the server refuses — so a 0.99 reading bounds the remainder at roughly 1.5pp and can be 0.
 #
 # 1pp of a weekly window is not a rounding nicety. At the fitted exchange rate (K_FROZEN = 0.192
-# weekly pp per session pp) it is ~5.2% of a whole 5-hour window — about one research subagent —
-# and it is worth MOST exactly when every meter reads 100 and there is nothing else to route to.
+# weekly pp per session pp) it is up to ~5% of a whole 5-hour window (the in-band rate measured on
+# 2026-10-06 was nearer 0.27, i.e. ~3.7%) — and it is worth MOST exactly when every meter reads 100
+# and there is nothing else to route to.
 # Measured over the recorded series, an account sits at a pinned `100` for a mean ~21 h before its
 # weekly reset (max 56.5 h on `next`, 2026-09-13), hard-excluded from routing that entire time.
 #
@@ -5831,14 +5835,17 @@ def get_data(cfg, fresh=False, no_heal=False, max_wait=None, max_age=None, src=N
             # (a15/D7). This was the second bare blocking flock: a caller with no cache at all sat
             # here forever behind an alive-but-wedged holder. The budget is the same generous
             # fresh-path one, and expiry raises the same distinct type rather than inventing a
-            # second failure mode.
-            deadline = time.time() + _fresh_lock_wait_s(cfg)
+            # second failure mode. Its OWN name, never `deadline`: that one is the monotonic
+            # --max-wait bound _arm_sweep_bound reads below, and reusing it for this epoch stamp
+            # asked setitimer for ~1.8e9 s, which macOS refuses with EINVAL (keepwarm died on it
+            # 2026-09-30; tests/claude-accounts-fresh-lock-bound.bats test 6).
+            wedge_at = time.time() + _fresh_lock_wait_s(cfg)
             while True:
                 try:
                     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     break
                 except BlockingIOError:
-                    if time.time() >= deadline:
+                    if time.time() >= wedge_at:
                         raise FreshLockWedged(
                             f"no servable cache and the single-flight lock stayed held for "
                             f"{_fresh_lock_wait_s(cfg):.0f}s: a live holder is wedged.")
@@ -6329,9 +6336,15 @@ def board_eff(r, key):
     The endpoint integer rounds UP and clamps at 100, so it draws "99% used, still allowed" and
     "refused" as the same full red bar (operator, 2026-10-01: leaving ~1% of a weekly on the
     table is a lot). The wire carries both apart: `exhausted` is True only when the server says
-    `rejected` (or reads >= 100%), False for any other wire reading — whose percent is FLOORED to
-    a tenth and capped at 99.9, since 99.6% is still spendable — and None when there is no wire
-    reading, i.e. the endpoint integer alone, where a 100 is a ceiling nobody verified."""
+    `rejected` (or reads >= 100%), False for any other wire reading — whose percent is the
+    server's WHOLE percent, capped at 99 — and None when there is no wire reading, i.e. the
+    endpoint integer alone, where a 100 is a ceiling nobody verified.
+
+    Whole, not a tenth (2026-10-06 incident): the server sends hundredths, ROUNDED and held at 0.99
+    until it refuses (docs/research/sessionstart-readout-2026-10-06/README.md, R2; 0 of 6,793
+    readings carried a third decimal). So 0.99 means somewhere from ~98.5% to just under 100%,
+    and the old floor-to-a-tenth printed "99.0%", a digit nobody measured. round, never floor:
+    0.57 * 100 is 56.99999999999999 in binary floating point."""
     if r.get(key) is None:          # withheld (rolled since the reading) or never read
         return None, None
     wf = WIRE_FIELD.get(key)
@@ -6340,7 +6353,7 @@ def board_eff(r, key):
     if wv is not None:
         if wire.get(wf.replace("_util", "_status")) == "rejected" or wv >= 1.0:
             return 100.0, True
-        return float(min(math.floor(wv * 1000) / 10, 99.9)), False
+        return float(min(round(wv * 100), 99)), False
     v = r.get(key)
     return (None, None) if v is None else (float(v), None)
 
@@ -6350,10 +6363,11 @@ def board_eff(r, key):
 # one the colour, and every percent renderer goes through them, so the column, the bar and the
 # /accounts table can never disagree about which state an account is in.
 #   confirmed out   (server refused)            "100%"   red bar, full
-#   nearly out      (server: still accepting)    "99.6%"  orange bar, last sliver left open
+#   nearly out      (server: still accepting)    "99%"    orange bar, last sliver left open
 #   not confirmed   (meter's rounded 100 only)   "≥99%"   gray bar
 # The text carries it without colour too (CC_BOARD_COLOR=off, a colour-blind reader): only a
-# confirmed refusal ever prints "100%".
+# confirmed refusal ever prints "100%", and only an unverified meter prints "≥99%". The nearly-out
+# cell is the server's own whole percent, never a tenth (2026-10-06; see board_eff).
 NEAR_WALL_RGB = (255, 140, 40)
 
 
@@ -6362,7 +6376,7 @@ def pct_text(v, exhausted):
     if exhausted is None and v >= 100:
         return "≥99%"               # the meter rounds UP: true value is somewhere from 99% up
     if exhausted is False:
-        return f"{v:.1f}%" if v >= 99 else f"{math.floor(v):.0f}%"
+        return f"{math.floor(v):.0f}%"
     return f"{v:.0f}%"
 
 
@@ -6725,9 +6739,9 @@ def readout_lines(rows, cfg, win, cached, narrow=False):
         # server says allowed", "exactly full", and "102% used and rejected". Saying **LIMITED**
         # over the first of those is a false refusal, and it is the one that costs: measured over
         # the recorded series an account sits pinned at `100` for a mean ~21 h before its weekly
-        # reset (max 56.5 h), excluded from routing the whole time, and ~1pp of a weekly window
-        # is ~5.2% of a whole 5-hour one. So the bullet now states which of the three it is, and
-        # says so in the language of who decided: the SERVER, or a rounding we did.
+        # reset (max 56.5 h), excluded from routing the whole time. So the bullet now states which
+        # of the three it is, and says so in the language of who decided: the SERVER, or a
+        # rounding we did.
         #
         # BOTH SURFACES PRINT THE SENTENCE, and it leads with the answer in plain words (operator,
         # 2026-10-03). The 2026-10-01 board carried this distinction only in the bar — a solid
@@ -6743,11 +6757,24 @@ def readout_lines(rows, cfg, win, cached, narrow=False):
             notes.append(f"`{acct}` is **out of weekly quota**, confirmed by Anthropic's server"
                          + (f" ({w7 * 100:.0f}% used)" if w7 is not None else "") + resets)
         elif w7 is not None and (r.get("weekly_pct") or 0) >= 100:
-            notes.append(f"`{acct}` is **not out of weekly quota**: the meter shows 100%, but "
-                         f"Anthropic's server says {pct_text(*board_eff(r, 'weekly_pct'))} used and "
-                         f"still accepts work (about {max(0.0, 1 - w7) * 100:.0f}% of the week "
-                         f"left, roughly {max(0.0, 1 - w7) * 100 / K_FROZEN:.0f}% of one "
-                         f"5-hour window)")
+            # A SNAPSHOT, SAID AS ONE (2026-10-06): this sentence used to read "still accepts work
+            # (about 1% of the week left, roughly 5% of one 5-hour window)", and sessions on that
+            # account were refused about a minute later with 11 of them live on it. Both figures
+            # were the CEILING of a reading the server rounds to hundredths and holds at 0.99 until
+            # it refuses (research README, R2/R3: every recorded >=99% stay ended in a refusal), so
+            # no amount is stated; the read's clock time and the load on the account are, because
+            # those are what tell a reader how long "accepting" can still be true.
+            age_q = _quota_age_s(cfg)
+            at = (" at " + (datetime.now() - timedelta(seconds=age_q)).strftime("%H:%M")
+                  if age_q is not None else "")
+            k, kw = r.get("k"), r.get("k_work")
+            load = (f", with {k} live session{'' if k == 1 else 's'}"
+                    + (f" ({kw} working)" if kw is not None else "") + " on it"
+                    if isinstance(k, int) else "")
+            notes.append(f"`{acct}` was **not out of weekly quota**{at}: the meter showed 100%, "
+                         f"but Anthropic's server read {pct_text(*board_eff(r, 'weekly_pct'))} used "
+                         f"and was still accepting work{load}; that reading cannot say how much was "
+                         f"left, and it may be none")
         elif (r.get("weekly_pct") or 0) >= 100:
             notes.append(f"`{acct}` shows 100% weekly, **not confirmed**: the usage meter rounds "
                          f"up, so a little may be left; `claude-accounts --wire` asks the server")

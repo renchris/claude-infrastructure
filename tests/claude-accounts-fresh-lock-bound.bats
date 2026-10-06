@@ -155,3 +155,32 @@ print(int(ca._fresh_lock_wait_s(cfg)))
   [ "$status" -eq 0 ] || { echo "could not read the budget: $output"; false; }
   [ "$output" -ge 120 ] || { echo "default budget is only ${output}s — shorter than a lawful hold, so it would convict healthy sweeps"; false; }
 }
+
+@test "6: CONTROL — a caller with no --max-wait that waits out the lock with no cache arms no sweep timer" {
+  # 2026-09-30 (~/.claude/logs/accounts-keepwarm.err.log): keepwarm died in signal.setitimer with
+  # EINVAL. get_data's no-cache fallback stored its EPOCH wedge bound in `deadline`, the same name
+  # _arm_sweep_bound reads as a MONOTONIC --max-wait deadline, so the timer was asked for ~1.8e9 s
+  # (over macOS's 1e8 s itimer limit) and the tick lost its sweep and its board. Without --max-wait
+  # the sweep must run with no timer at all (_arm_sweep_bound's documented no-op).
+  hold_lock 2
+  run python3 -c "
+import importlib.machinery, importlib.util, json, os
+loader = importlib.machinery.SourceFileLoader('ca', os.environ['CA_BIN'])
+ca = importlib.util.module_from_spec(importlib.util.spec_from_loader('ca', loader))
+loader.exec_module(ca)
+cfg = json.load(open(os.environ['CA_CFG']))
+cfg['lock_wait_s'] = 0.2                 # give up on the lock fast, so the no-cache fallback runs
+armed = []
+real = ca._arm_sweep_bound
+ca._arm_sweep_bound = lambda d: (armed.append(d), real(d))[1]
+ca.collect = lambda *a, **k: []          # the sweep itself is not under test
+ca.record_utilization = lambda rows: None
+try:
+    ca.get_data(cfg, max_age=90)
+except ca.FreshLockWedged as e:
+    print('WEDGED', e)
+print('ARMED', armed)
+"
+  [ "$status" -eq 0 ] || { echo "get_data raised (pre-fix: signal.ItimerError EINVAL): $output"; false; }
+  [[ "$output" == *"ARMED [None]"* ]] || { echo "the sweep timer was armed without --max-wait: $output"; false; }
+}
