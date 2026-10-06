@@ -152,7 +152,7 @@ seed.save_vault('demo', {'seeds': [{'sid': 's%d' % i, 'cohort': 'original', 'sta
   [[ "$output" == *"cc-signoff research:demo/reopen"* ]] || false
   run "$CLI" verdict --program demo --json
   [ "$status" -eq 0 ]
-  [ "$(printf '%s' "$output" | jq_py "sorted(d)")" = "['lines', 'menu', 'pending_concerns', 'program', 'state', 'waiting_since']" ]
+  [ "$(printf '%s' "$output" | jq_py "sorted(d)")" = "['lines', 'menu', 'overridden_relays', 'pending_concerns', 'program', 'state', 'waiting_since']" ]
   [ "$(printf '%s' "$output" | jq_py "(d['program'], d['state'], d['pending_concerns'], d['waiting_since'])")" = "('demo', 'registered', 1, None)" ]
   [ "$(printf '%s' "$output" | jq_py "sorted(d['menu'][0])")" = "['effect', 'id', 'label', 'price']" ]
 }
@@ -246,7 +246,47 @@ print(router.cert_read('cc-research verdict demo', 'demo'), router.cert_read('cc
   run "$CLI" pending --json
   [ "$status" -eq 0 ]
   [ "$(printf '%s' "$output" | jq_py "[(p['program'], p['state']) for p in d['programs']]")" = "[('demo', 'registered'), ('broken', 'unknown')]" ]
-  [ "$(printf '%s' "$output" | jq_py "sorted(d['programs'][0])")" = "['menu', 'pending_concerns', 'program', 'state', 'waiting_since']" ]
+  [ "$(printf '%s' "$output" | jq_py "sorted(d['programs'][0])")" = "['menu', 'overridden_relays', 'pending_concerns', 'program', 'state', 'waiting_since']" ]
+  [ "$(printf '%s' "$output" | jq_py "d['programs'][1]['overridden_relays']")" = "None" ]
+}
+
+@test "pending carries the program's overridden relays from route-counters.json" {
+  printf '{"programs":{"demo":{"overrides":2,"last_override_at":"2026-10-06T00:00:00Z"},"elsewhere":{"overrides":9}}}\n' \
+    > "$CC_RESEARCH_HOME/route-counters.json"
+  run "$CLI" pending --json
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq_py "d['programs'][0]['overridden_relays']")" = "2" ]
+  run "$CLI" pending
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"demo: "*" · overrode 2 relay(s)"* ]] || false
+  run "$CLI" verdict demo
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Relays you overrode as misrouted: 2"* ]] || false
+}
+
+@test "pending reads 0 overridden relays with no counters file, and says nothing about them" {
+  [ ! -e "$CC_RESEARCH_HOME/route-counters.json" ]
+  run "$CLI" pending --json
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq_py "d['programs'][0]['overridden_relays']")" = "0" ]
+  run "$CLI" pending
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"overrode"* ]] || false
+  run "$CLI" verdict demo
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"overrode as misrouted"* ]] || false
+}
+
+@test "pending reads 0 overridden relays from a garbled counters file and still exits 0" {
+  printf 'not json\n' > "$CC_RESEARCH_HOME/route-counters.json"
+  run "$CLI" pending --json
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq_py "d['programs'][0]['overridden_relays']")" = "0" ]
+  # valid JSON of the wrong shape is garbled too
+  printf '{"programs":{"demo":{"overrides":"many"}}}\n' > "$CC_RESEARCH_HOME/route-counters.json"
+  run "$CLI" pending --json
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq_py "d['programs'][0]['overridden_relays']")" = "0" ]
 }
 
 # ── budget (§10 item 17: caps enforced in code) ──────────────────────────────────────────────────

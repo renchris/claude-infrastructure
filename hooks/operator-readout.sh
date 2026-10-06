@@ -585,7 +585,8 @@ lr_recon_line() {
 }
 
 # ── RESEARCH PROGRAMS (REPORT.md §8 item 13) — one counted `◆` line per program the operator owes
-# a ruling: pending concerns, or an open priced menu. Read from `cc-research pending --json`
+# a ruling: pending concerns, or an open priced menu. A program whose relays the operator overrode
+# as `misrouted` gets the line too, with that count after the menu. Read from `cc-research pending --json`
 # (scripts/research-kit/RECORDS.md § bin/cc-research). `◆`, never `▶`: a menu item is the operator's
 # PURCHASE decision, so the line names the options and their prices and carries the read command
 # inline only — nothing under a run mark. No registry ⇒ no program can exist ⇒ no fork at all.
@@ -622,12 +623,14 @@ research_lines() {
       .programs[]? | select(type == "object" and (.program | type) == "string")
       | (.pending_concerns // 0 | if type == "number" then floor else 0 end) as $n
       | ([ .menu[]? | select(type == "object") ]) as $m
-      | select($n > 0 or ($m | length) > 0)
+      | (.overridden_relays // 0 | if type == "number" then floor else 0 end) as $o
+      | select($n > 0 or ($m | length) > 0 or $o > 0)
       | " ◆ research \(.program): \($n) pending concern(s)"
         + (if ($m | length) > 0 then
              " — menu: " + ([ $m[0:3][] | "\(.label // .id // "?") (\(.price // "?" | tostring))" ] | join(" · "))
              + (if ($m | length) > 3 then " · +\(($m | length) - 3) more" else "" end)
            else "" end)
+        + (if $o > 0 then " · \($o) relay(s) you overrode as misrouted" else "" end)
         + "   cc-research verdict \(.program)"' 2>/dev/null)" || {
     log_idl degraded "research-pending-unread" '{"why":"cc-research pending reply unparseable"}'
     return 0

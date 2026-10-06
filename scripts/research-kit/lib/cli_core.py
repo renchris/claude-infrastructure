@@ -139,6 +139,17 @@ def pending_concerns(ctx: Any) -> int:
     )
 
 
+def overridden_relays(slug: str) -> int:
+    """Relays the operator overrode as `misrouted` (router.py counts them in route-counters.json);
+    0 when the file is missing, garbled, or has no such program."""
+    try:
+        d = json.loads((kit.research_home() / "route-counters.json").read_text())
+        n = d["programs"][slug]["overrides"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return 0
+    return n if isinstance(n, int) and not isinstance(n, bool) and n > 0 else 0
+
+
 def waiting_since(ctx: Any) -> Optional[str]:
     """The oldest OPEN program packet's created date; None if none is open; "unknown" if
     cc-decide cannot be read (a wait is never dropped silently, §5.6)."""
@@ -273,6 +284,7 @@ def verdict_data(slug: str, with_lines: bool = True) -> Dict[str, Any]:
     }
     if with_lines:
         out["lines"] = render_lines(slug)
+    out["overridden_relays"] = overridden_relays(slug)
     if prog is None and not os.environ.get("CC_RESEARCH_RECORDS"):
         out.update(pending_concerns=0, waiting_since=None, menu=[])
         return out
@@ -294,6 +306,7 @@ def cmd_verdict(a: argparse.Namespace) -> int:
         print(json.dumps(d, indent=2))
         return 0
     ws = d["waiting_since"]
+    o = d["overridden_relays"]
     print(
         "\n".join(
             d["lines"]
@@ -303,6 +316,7 @@ def cmd_verdict(a: argparse.Namespace) -> int:
                 if ws
                 else "Waiting on you since: nothing open",
             ]
+            + ([f"Relays you overrode as misrouted: {o}"] if o > 0 else [])
             + menu_lines(slug, d["menu"])
         )
     )
@@ -335,6 +349,7 @@ def cmd_pending(a: argparse.Namespace) -> int:
                     "pending_concerns": None,
                     "waiting_since": None,
                     "menu": [],
+                    "overridden_relays": None,
                     "error": f"{type(e).__name__}: {e}",
                 }
             )
@@ -342,9 +357,11 @@ def cmd_pending(a: argparse.Namespace) -> int:
         print(json.dumps({"programs": out}, indent=2))
     else:
         for d in out:
+            o = d["overridden_relays"] or 0
             print(
                 f"{d['program']}: {d['state']} · pending concerns {d['pending_concerns']} · "
                 f"waiting on you since {d['waiting_since'] or 'nothing open'}"
+                + (f" · overrode {o} relay(s)" if o > 0 else "")
             )
     return 0
 
@@ -469,7 +486,11 @@ def cmd_ceiling(a: argparse.Namespace) -> int:
     name = kit.profile(ctx.frame.get("profile") or "")["name"]
     typical, ceiling = intake.PROFILE_DAYS[name]
     # method v1.2: the yield ceiling (§12) and the Stage 9 budget (§11), as the contract page adds them
-    v12 = intake.v12_ceiling(kit.profile(name), ceiling) if kit.is_v12(ctx.frame) else None
+    v12 = (
+        intake.v12_ceiling(kit.profile(name), ceiling)
+        if kit.is_v12(ctx.frame)
+        else None
+    )
     if v12:
         ceiling = v12["total"]
     f = intake.forecast(name)
@@ -509,8 +530,11 @@ def cmd_ceiling(a: argparse.Namespace) -> int:
     print(
         f"Typical total about {typical:g} days; ceiling (every loop at its cap) about "
         f"{ceiling:g} days ({name} profile, §6.1"
-        + (f", plus the v1.2 yield ceiling {v12['yield_days']:g} d and Stage 9 {v12['stage9_days']:g} d"
-           if v12 else "")
+        + (
+            f", plus the v1.2 yield ceiling {v12['yield_days']:g} d and Stage 9 {v12['stage9_days']:g} d"
+            if v12
+            else ""
+        )
         + f") · elapsed {d['elapsed_days']:g} d\n"
         f"Waiting on you since {ws or 'nothing open'} · calendar ceiling with your waits {cal}"
     )

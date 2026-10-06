@@ -173,9 +173,15 @@ Cross-module contracts (a consumer depends on exactly these shapes):
 
 - `cc-research verdict [--program] P [--json]` → the `gate.sh render` state lines, then an operator block (pending
   concerns, "waiting on you since <date>", the priced menu). `--json`: `{program, state, lines:[…],
-  pending_concerns:N, waiting_since:ISO|null|"unknown" (null: nothing open; "unknown": cc-decide unreadable), menu:[{id, label, price, effect}]}`.
-- `cc-research pending --json` → `{programs:[{program, state, pending_concerns, waiting_since, menu:[…]}]}` over every
-  registry program not `closed`. Read by `hooks/operator-readout.sh` and `scripts/wrap-ledger.sh`.
+  pending_concerns:N, waiting_since:ISO|null|"unknown" (null: nothing open; "unknown": cc-decide unreadable), menu:[{id, label, price, effect}],
+  overridden_relays:N}`.
+- `cc-research pending --json` → `{programs:[{program, state, pending_concerns, waiting_since, menu:[…],
+  overridden_relays:N}]}` over every registry program not `closed` (`overridden_relays` is `null` on a program that
+  could not be read). Read by `hooks/operator-readout.sh` and `scripts/wrap-ledger.sh`.
+- `$CC_RESEARCH_HOME/route-counters.json` = `{"programs": {"<slug>": {"overrides": N, "last_override_at": "<ISO>"}}}`:
+  how many relays the operator overrode as `misrouted`. Written by `router.py` `prompt` on an accepted `misrouted`;
+  read by `lib/cli_core.py` `overridden_relays`, which reads 0 when the file is missing or garbled. It holds one small
+  object per program, so it does not grow.
 - `cc-research concern add --program P --text T [--raised-by operator|agent|sweep|build|rehearsal]` appends a
   `challenges.jsonl` row with `triage: "pending"`; `cc-research concern list --program P [--pending] [--json]`.
 - `cc-research triage --program P` buckets pending challenges by the §5.2 table through a blind rater, appending

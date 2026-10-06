@@ -142,6 +142,37 @@ PENDING2='[{"program":"alpha","state":"certifying","pending_concerns":2,"waiting
   printf '%s\n' "$output" | grep -qF ' ◆ research alpha: 0 pending concern(s) — menu: extra round (~4%)'
 }
 
+@test "overridden relays alone render one counted ◆ research line, never a run line" {
+  plant_registry
+  stub_pending '[{"program":"alpha","state":"certified","pending_concerns":0,"waiting_since":null,"menu":[],"overridden_relays":3}]'
+  w="$(mkrepo r2o)"
+  run bash "$READOUT" --render --cwd "$w"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c '^ ◆ research ')" -eq 1 ]
+  printf '%s\n' "$output" | grep -qF ' ◆ research alpha: 0 pending concern(s) · 3 relay(s) you overrode as misrouted   cc-research verdict alpha'
+  [ "$(printf '%s\n' "$output" | grep -c '▶.*research')" -eq 0 ]
+}
+
+@test "with the overridden_relays key absent the research line is byte-for-byte the old one" {
+  plant_registry; stub_pending "$PENDING2"
+  w="$(mkrepo r2a)"
+  run bash "$READOUT" --render --cwd "$w"
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -qF ' ◆ research alpha: 2 pending concern(s) — menu: extra round (~4% weekly) · reopen (~1%)   cc-research verdict alpha'
+  [ "$(printf '%s\n' "$output" | grep -c 'overrode')" -eq 0 ]
+}
+
+@test "with concerns and overrides both, the override clause follows the menu" {
+  plant_registry
+  stub_pending "$(printf '%s' "$PENDING2" | jq -c '.[0].overridden_relays = 1')"
+  w="$(mkrepo r2b)"
+  run bash "$READOUT" --render --cwd "$w"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c '^ ◆ research ')" -eq 1 ]
+  printf '%s\n' "$output" | grep -qF ' ◆ research alpha: 2 pending concern(s) — menu: extra round (~4% weekly) · reopen (~1%) · 1 relay(s) you overrode as misrouted   cc-research verdict alpha'
+  [ "$(printf '%s\n' "$output" | grep -c '▶.*research')" -eq 0 ]
+}
+
 @test "no pending concern and no menu: no research line" {
   plant_registry
   stub_pending '[{"program":"alpha","state":"certified","pending_concerns":0,"waiting_since":null,"menu":[]}]'
