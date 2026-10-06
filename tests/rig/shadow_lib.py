@@ -427,6 +427,35 @@ def _daemon_dead(lr: str, sids: Set[str], lo: float, hi: float) -> Set[str]:
     return out
 
 
+def _split_brain_stuck(
+    lr: str, members: List[str], recs: Dict[str, Dict[str, Any]], since: float
+) -> Dict[str, float]:
+    """Members the daemon flagged SPLIT-BRAIN that then sat PRE-MOVE/None (a later RECON-DEFECT
+    PRE-MOVE/None, or a record still PRE-MOVE with no substate) → the split-brain time. Lead
+    ruling W5b2 (2026-10-06, after W7i): a known gap deferred past cutover, so it is FLAGGED in
+    the compare and never folded into PASS/FAIL."""
+    want = set(members)
+    split: Dict[str, float] = {}
+    stuck: Set[str] = set()
+    for r in _jsonl(os.path.join(lr, "recon", "events.jsonl")):
+        sid = r.get("sid")
+        if sid not in want or r.get("ev") != "RECON-DEFECT":
+            continue
+        t = _epoch(r.get("t"))
+        if t is None or t < since:
+            continue
+        d = str(r.get("detail", ""))
+        if d.startswith("SPLIT-BRAIN/"):
+            split.setdefault(sid, t)
+        elif d == "PRE-MOVE/None" and sid in split and t >= split[sid]:
+            stuck.add(sid)
+    for sid in split:
+        rec = recs.get(sid) or {}
+        if rec.get("phase") == "PRE-MOVE" and not rec.get("substate"):
+            stuck.add(sid)
+    return {s: split[s] for s in stuck}
+
+
 def _watcher_truth(home: str, sid: str, since: float) -> str:
     rows = [
         r
@@ -681,6 +710,13 @@ def compare(lr: str, cid: str, home: str) -> int:
             "  filed in another cohort (not a miss): %s"
             % ", ".join("%s→%s" % (s[:8], other[s]) for s in elsewhere)
         )
+    split_stuck = _split_brain_stuck(lr, members, recs, since)
+    for s in sorted(split_stuck):
+        print(
+            "  watch (known gap, deferred past cutover; not a FAIL): %s went SPLIT-BRAIN at %s "
+            "then sat PRE-MOVE/None"
+            % (s[:8], time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(split_stuck[s])))
+        )
     for s in sorted(not_owed):
         print(
             "  not owed (not a miss): %s — legacy run %s found no pane and moved nothing (%s); "
@@ -706,6 +742,7 @@ def compare(lr: str, cid: str, home: str) -> int:
                     "legacy_corrected": corrected,
                     "plan_differed": differed,
                     "window_from": coh.get("window_from") or "",
+                    "split_brain_stuck": sorted(split_stuck),
                     "pass": passed,
                 },
                 fh,

@@ -288,3 +288,34 @@ nudge() { printf '%s\t841\t841\tnext2\t%s\tnudge-in-place/RECOVERED\t-\t%s\n' "$
   run grep -c '"next2"' "$LR/shadow-archive/$CID/facts.jsonl"
   [ "$output" -eq 1 ]
 }
+
+# Lead ruling W5b2 (2026-10-06, after W7i): a LIMITED member that goes SPLIT-BRAIN and then sits
+# PRE-MOVE/None is a known gap deferred past cutover: flagged in the compare, never a FAIL.
+defect() { printf '{"t":%s,"ev":"RECON-DEFECT","sid":"%s","record_id":"","detail":"%s"}\n' "$2" "$1" "$3" >> "$LR/recon/events.jsonl"; }
+
+@test "a member SPLIT-BRAIN then PRE-MOVE/None is flagged as a watch line and still PASSes" {
+  defect "$SIDA" 1790654500 SPLIT-BRAIN/None; defect "$SIDA" 1790654600 PRE-MOVE/None
+  archive
+  run /usr/bin/python3 "$L" compare "$LR" "$CID" --home "$HOME"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"watch (known gap, deferred past cutover; not a FAIL): aaaaaaaa went SPLIT-BRAIN"* ]] || { echo "$output"; false; }
+  grep -q '"split_brain_stuck": \["aaaaaaaa' "$LR/shadow-archive/$CID/compare.json"
+}
+
+@test "split-brain watch arms: SPLIT-BRAIN alone, PRE-MOVE/None alone, or a non-member ⇒ no watch line" {
+  defect "$SIDA" 1790654500 SPLIT-BRAIN/None
+  defect "$SIDB" 1790654600 PRE-MOVE/None
+  defect "$SIDC" 1790654500 SPLIT-BRAIN/None; defect "$SIDC" 1790654600 PRE-MOVE/None
+  archive
+  run /usr/bin/python3 "$L" compare "$LR" "$CID" --home "$HOME"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *"watch (known gap"* ]] || { echo "$output"; false; }
+}
+
+@test "a member SPLIT-BRAIN whose record still sits PRE-MOVE with no substate is flagged" {
+  defect "$SIDB" 1790654500 SPLIT-BRAIN/None
+  rec "$SIDB" next4 PRE-MOVE ""
+  archive
+  run /usr/bin/python3 "$L" compare "$LR" "$CID" --home "$HOME"
+  [[ "$output" == *"not a FAIL): bbbbbbbb went SPLIT-BRAIN"* ]] || { echo "$output"; false; }
+}
