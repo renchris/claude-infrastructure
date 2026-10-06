@@ -67,6 +67,7 @@ SH
 #!/bin/bash
 echo "$(date +%s) $*" >> "$0.log"
 if [ -f "$0.slow-once" ]; then rm -f "$0.slow-once"; sleep 3; exit 1; fi
+case " $* " in *" ls "*) [ -f "$0.ls" ] && { cat "$0.ls"; exit 0; } ;; esac
 echo '[]'
 SH
   export CC_RESTORE_BOOT_RESUME="$T/boot-resume"
@@ -279,6 +280,30 @@ no_signal() { [ ! -e "$CC_RESTORE_KILL_BIN.log" ] && [ ! -e "$CC_OPEN_BIN.log" ]
   [ ! -e "$CC_BOOT_RESUME_STATE_DIR/restore-v2" ]
 }
 
+launch_window() { # <at_prompt> <foreground cmd> [extra pane] — what kitten @ ls shows for window 1
+  local extra=""; [ -n "${3:-}" ] && extra=',{"id":2,"at_prompt":true,"foreground_processes":[{"cmdline":["claude"]}]}'
+  printf '[{"id":1,"tabs":[{"windows":[{"id":1,"at_prompt":%s,"foreground_processes":[{"cmdline":["%s"]}]}%s]}]}]' "$1" "$2" "$extra" > "$CC_RESTORE_KITTEN_BIN.ls"
+}
+
+@test "a restart closes the window kitty opened at launch when it is still a lone idle shell" {
+  launch_window true -zsh
+  run "$SUBJ" --restart-kitty --confirm "$KP" --no-wait
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -q ' close-window --match id:1$' "$CC_RESTORE_KITTEN_BIN.log"
+  [[ "$output" == *"closed kitty's launch window 1 (an idle shell)"* ]] || false
+}
+
+kept_case() { # <launch_window args…> — the restart leaves window 1 open and says why
+  launch_window "$@"
+  run "$SUBJ" --restart-kitty --confirm "$KP" --no-wait
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  ! grep -q 'close-window' "$CC_RESTORE_KITTEN_BIN.log" || false
+  [[ "$output" == *"kept kitty's launch window 1: it is in use"* ]] || false
+}
+@test "the launch window is kept when it runs something other than a shell" { kept_case true vim; }
+@test "the launch window is kept when its shell is not at the prompt" { kept_case false -zsh; }
+@test "the launch window is kept when another pane shares its OS window" { kept_case true -zsh x; }
+
 @test "DETACH: the restart runs in a new session, so it outlives the kitty (and the pane) it was started from" {
   run "$SUBJ" --restart-kitty --confirm "$KP" --no-wait
   [ "$status" -eq 0 ]
@@ -348,7 +373,7 @@ no_signal() { [ ! -e "$CC_RESTORE_KILL_BIN.log" ] && [ ! -e "$CC_OPEN_BIN.log" ]
   run "$SUBJ" --restart-kitty --confirm "$KP" --no-wait
   [ "$status" -eq 0 ]
   [[ "$output" == *"kitty did not answer within 1 s; pausing 2 s before the next call"* ]] || false
-  [ "$(grep -c . "$CC_RESTORE_KITTEN_BIN.log")" -eq 2 ]
+  [ "$(grep -c . "$CC_RESTORE_KITTEN_BIN.log")" -ge 2 ]          # the socket wait's two, then the launch-window reads
   t1="$(sed -n 1p "$CC_RESTORE_KITTEN_BIN.log" | cut -d' ' -f1)"; t2="$(sed -n 2p "$CC_RESTORE_KITTEN_BIN.log" | cut -d' ' -f1)"
   [ $((t2 - t1)) -ge 3 ]                                           # 1 s timeout + 2 s pause
 }

@@ -21,7 +21,8 @@ WHAT A RESTART DOES, in order (docs/research/session-durability-2026-10/W3-build
   6. `open -a /Applications/kitty.app`, then waits up to 60 s for the new socket;
   7. runs `boot-resume.sh --event <epoch> --kind restart --roster-dir events/<epoch>/hb` until that
      event is marked done (each round launches only what the ledger and the fence say is missing);
-  8. runs cc-restore-rebind (forwards, roles, exhausted accounts), then prints the verdict line.
+  8. runs cc-restore-rebind (forwards, roles, exhausted accounts), closes the window kitty opened at
+     launch if it is still a lone idle shell, then prints the verdict line.
 
 It never relaunches by itself after a crash: the crash page (boot-resume.sh) files one operator row
 carrying `cc-restore --after-crash`, because a deliberate quit cannot be told apart from a crash.
@@ -196,21 +197,50 @@ def fd_gate(pid):
 _k_busy = False
 
 
-def k_ls(pid, sock):
-    """One bounded `kitten @ ls`. Never two in flight; a timeout costs a 30 s pause before the next."""
+def k_run(pid, sock, args):
+    """One bounded `kitten @ <args>` → (rc, stdout). Never two in flight; a timeout costs a 30 s pause
+    before the next."""
     global _k_busy
     assert not _k_busy, "a kitten call is already in flight"
     fd_gate(pid)
     _k_busy = True
     try:
-        rc, out, _ = sh([seam("CC_RESTORE_KITTEN_BIN"), "@", "--to", sock, "ls"], timeout=num("CC_RESTORE_K_TIMEOUT_S", 10))
+        rc, out, _ = sh([seam("CC_RESTORE_KITTEN_BIN"), "@", "--to", sock] + list(args), timeout=num("CC_RESTORE_K_TIMEOUT_S", 10))
     finally:
         _k_busy = False
     if rc == 124:
         back = num("CC_RESTORE_K_BACKOFF_S", 30)
         say("kitty did not answer within %d s; pausing %d s before the next call" % (num("CC_RESTORE_K_TIMEOUT_S", 10), back))
         time.sleep(back)
-    return rc == 0
+    return rc, out
+
+
+def k_ls(pid, sock):
+    return k_run(pid, sock, ["ls"])[0] == 0
+
+
+def k_windows(pid, sock):
+    """[(window dict, number of panes in its OS window)] from one `kitten @ ls`; [] when unreadable."""
+    rc, out = k_run(pid, sock, ["ls"])
+    try:
+        data = json.loads(out) if rc == 0 else []
+    except ValueError:
+        return []
+    got = []
+    for o in data if isinstance(data, list) else []:
+        ws = [w for t in o.get("tabs") or [] for w in t.get("windows") or [] if isinstance(w, dict)]
+        got.extend((w, len(ws)) for w in ws)
+    return got
+
+
+SHELLS = ("zsh", "bash", "fish", "sh")
+
+
+def idle_shell(w):
+    """A pane holding only a login shell at its prompt: nothing in it to lose."""
+    procs = w.get("foreground_processes") or []
+    names = [os.path.basename(str((p.get("cmdline") or [""])[0])).lstrip("-") for p in procs if isinstance(p, dict)]
+    return bool(names) and all(n in SHELLS for n in names) and w.get("at_prompt") is not False
 
 
 # ── the restore lock: scripts/lib/restore-lock.sh's on-disk format, held by THIS process ─────────
@@ -550,6 +580,7 @@ class Worker(object):
         self.new_pid = None
         self.sock = None
         self.load_seen = 0
+        self.startup = []           # window ids the new kitty opened on its own (open_kitty)
 
     def on_signal(self, signum, frame):
         self.abort = True
@@ -676,6 +707,10 @@ class Worker(object):
         say("opening a new kitty: %s -a %s" % (seam("CC_OPEN_BIN"), KITTY_APP))
         sh([seam("CC_OPEN_BIN"), "-a", KITTY_APP], timeout=60, env=clean_env())
         self.wait_socket(lambda: [k for k in main_kitties() if k[0] not in before])
+        # The window kitty opens on launch is not part of the fleet: on 2026-10-05 it was left as an
+        # empty shell, and fullscreening the fleet gave it a Desktop of its own. Remember it here, and
+        # close it once the restore is done if it is still an idle shell (close_startup_window).
+        self.startup = [w.get("id") for w, _ in k_windows(self.new_pid, self.sock)]
 
     def wait_socket(self, find):
         t0, wait = time.time(), num("CC_RESTORE_SOCKET_WAIT_S", 60)
@@ -701,6 +736,17 @@ class Worker(object):
         else:
             say("no main kitty is running")
             self.open_kitty()
+
+    def close_startup_window(self):
+        """Close the launch window when it is still a lone idle shell; anything else is left alone."""
+        for w, panes in k_windows(self.new_pid, self.sock) if self.startup else []:
+            if w.get("id") not in self.startup:
+                continue
+            if panes == 1 and idle_shell(w):
+                rc, _ = k_run(self.new_pid, self.sock, ["close-window", "--match", "id:%s" % w.get("id")])
+                say("closed kitty's launch window %s (an idle shell)%s" % (w.get("id"), "" if rc == 0 else ": FAILED rc %d" % rc))
+            else:
+                say("kept kitty's launch window %s: it is in use" % w.get("id"))
 
     # step 7
     def rounds(self):
@@ -777,6 +823,8 @@ class Worker(object):
                 say("  " + ln)
             if rc not in (0, 1):
                 say("  cc-restore-rebind failed (rc %d); re-run it by hand: %s %s" % (rc, seam("CC_RESTORE_REBIND_BIN"), self.evdir))
+        if marked:
+            self.close_startup_window()
         full = marked and st["restored"] == st["n"] and st["dup"] == 0
         say("cc-restore: verdict=%s restored=%d/%d maybe=%d dup=%d shed=%d events=%s" %
             ("RESTORED" if full else "PARTIAL", st["restored"], st["n"], st["maybe"], st["dup"], st["shed"], self.evdir))
