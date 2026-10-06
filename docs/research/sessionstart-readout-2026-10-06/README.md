@@ -334,3 +334,16 @@ The skeptic stage ran after the draft above: a red-team on a different model (`s
 - **Drain/pace line rewording, render_table through the three-state functions, `_wire_note` tense** (ranks 6, 15, 20; 50-68): consistency work whose ruling coverage is disputed (the 10-03 "/accounts table" most plausibly means `--readout`); the drain line's "0% of the week left" is true on a refused account, which is the case the live board showed.
 - **Recorder gate bypass on a status change, keepwarm out-log timestamp, larger-board 3.2 test, marker cap alignment** (ranks 11, 14, 16, 17; 65-75): low-cost but not settled above 90; recorded here as the next increments.
 - **Rejected outright:** a midpoint `weekly_headroom` (rank 28; excludes the account at WEEKLY_FLOOR), a burn-gated hot wire cadence (rank 27; tokens for nothing), shortening StartInterval (rank 32).
+
+### R1 after the change (measured 2026-10-06 07:04-07:07Z)
+
+Same harness (`r1-harness.sh`), same sandboxing (DL_DIR copy, fresh board copy, the R1 startup payload). Old arm = `git show HEAD:hooks/accounts-board.sh` before W1; new arm = the W1 hook; each in its own directory with `lib/origin-identity.sh`, runs INTERLEAVED old/new so load drift hits both. Load was high and is reported, not hidden.
+
+| interpreter | arm | n | p50 | p90 | p99 | max | load 1-min start → end |
+|---|---|---|---|---|---|---|---|
+| bash 5.3.15 (what Claude Code runs, 16/16 sessions) | old | 300 | 64.1 | 99.2 | 151.9 | 164.7 | 65.2 → 50.9 |
+| bash 5.3.15 | **new** | 300 | **61.2** | 94.9 | **136.7** | 157.5 | same batch |
+| /bin/bash 3.2.57 | old | 100 | 904.9 | 1289.9 | 1897.7 | 2002.6 | 50.9 → 26.9 |
+| /bin/bash 3.2.57 | **new** | 100 | **52.7** | 85.4 | **128.3** | 149.4 | same batch |
+
+Verdict: p50 and p99 did not rise on either interpreter (bash 5.3: −2.9 / −15.2 ms, inside load noise; /bin/bash 3.2: −852 / −1769 ms). The hook still forks no `claude-accounts` and makes no network call (the W1 hook diff is the one emptiness line; `tests/accounts-board.bats` pins the no-fork contract).
