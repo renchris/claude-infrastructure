@@ -223,3 +223,93 @@ all_moved() { [ "$(verdicts)" = "MOVED=$N " ] || { verdicts; for f in "$BDIR"/cc
   [ "$(grep -c . "$BATS_TEST_TMPDIR/batch-rec.log")" -eq 1 ]
   grep -q 'MOVE-SKIP c1 was already claimed' "$LR_STATE_DIR/poller.log"
 }
+
+# ── REPLAY OF A REAL RUN: batch 20261006T060534Z-next3-next2-64630 (7 idle sessions, next3 → next2).
+# What the record holds at close: plan.json with 7 `move` rows and 2 held rows, one result per moved
+# session (all MOVED), one <sid>.watcher.json per moved session, and request.claimed.json. Its
+# batch.log reads `command substitution: line 84: syntax error near unexpected token 'newline'`,
+# its summary.json `"verdicts":"none"`, and the one mail "done: no rows". The cause is the
+# interpreter: launchd starts the runner with /bin/bash (3.2), which ends a `$( )` at the `)` of a
+# bare `case` pattern, and every other case in this file runs it under PATH bash (5.x), so the
+# defect was invisible here. The pane numbers and sid prefixes below are the record's own.
+replay_20261006() { # → RB (batch id) and RD (its dir), holding the record's shape at close
+  RB="20261006T060534Z-next3-next2-64630"; RD="$LR_STATE_DIR/move/$RB"; mkdir -p "$RD/intent"
+  local ps p s rows="[]"
+  for ps in 2:7f5deb68:move 3:1c0f7f90:move 4:893204d3:move 8:4e9949e0:hold 11:4ad354fc:hold \
+            12:840ca76c:move 14:4d059264:move 15:deaa242a:move 16:404651b1:move; do
+    p="${ps%%:*}"; s="${ps#*:}"; act="${s#*:}"; s="${s%%:*}-0000-4000-8000-000000000001"
+    rows="$(jq -c --arg p "$p" --arg s "$s" --arg act "$act" --arg cfg "$HOME/.claude-tertiary" \
+      '. + [{pane:$p, sid:$s, account:"next3", config_dir:$cfg, cwd:"/x", disposition:(if $act == "move" then "move" else "hold:mid-turn" end), act:$act}]' <<<"$rows")"
+    [ "$act" = move ] || continue
+    jq -nc --arg s "$s" --arg p "$p" '{sid:$s, pane:$p, verdict:"MOVED", reason:("pane " + $p + " runs the session on the target, one copy"), conjuncts:"1111111", from:"next3", to:"next2", wall_s:176}' > "$RD/$s.json"
+    jq -nc --arg p "$p" '{pid:17125, lstart:"Tue Oct  6 06:08:40 2026", pane:$p, armed_at:"2026-10-06T06:08:41Z"}' > "$RD/$s.watcher.json"
+  done
+  jq -nc --arg b "$RB" --arg tcfg "$HOME/.claude-secondary" --argjson rows "$rows" \
+    '{batch:$b, from:"next3", to:"next2", to_config_dir:$tcfg, until_idle_s:0, requested_by:"999", target_unverified:false, ts:1791266734, rows:$rows}' > "$RD/plan.json"
+  jq -nc --arg b "$RB" '{kind:"move-batch", batch:$b, ts:1791266734}' > "$RD/request.claimed.json"
+}
+
+@test "14 [RED] replay 20261006T060534Z under /bin/bash: the roll-up counts the 7 MOVED rows, and the mail says so" {
+  [ -x /bin/bash ] || skip "/bin/bash absent"
+  replay_20261006
+  # /bin/bash explicitly, as lr-reset-poller.sh's lrp_move_kick starts it. Every driven row already
+  # has its result, so nothing is claimed or actuated: this run is the admit, the close and the roll-up.
+  run /bin/bash "$LRD/lr-move-batch.sh" "$RB"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *"syntax error"* ]] || { echo "$output"; false; }
+  # RED before the fix (and in the record): "none".
+  [ "$(jq -r .verdicts "$RD/summary.json")" = "MOVED=7" ] || { cat "$RD/summary.json"; echo "$output"; false; }
+  grep -q "^999 cc-lr move $RB (next3 -> next2) done: MOVED=7" "$NOTIFY_LOG" || { cat "$NOTIFY_LOG"; false; }
+  [ ! -s "$STUB_LOG/typers.log" ]
+}
+
+# ── THE LOST KICK (2026-10-06). `cc-lr move` kickstarts the poller, and launchd does not start a
+# second instance of a running job, so a request written while a tick runs was seen only by the
+# NEXT tick: 89 s for the recorded batch (request 06:05:34Z, a tick in flight since 06:05:16Z,
+# started 06:07:03Z), 629-820 s for 7 of 30 switch and upgrade requests. The tick now looks again
+# as its last act.
+@test "16 [RED] a move request that lands DURING a tick is started when that tick ends, and the tick lock is still released" {
+  export LR_MOVE_BATCH_BIN="$STUBS/batch-rec"
+  printf '#!/bin/bash\necho "$*" >> "%s/batch-rec.log"\n' "$BATS_TEST_TMPDIR" > "$LR_MOVE_BATCH_BIN"; chmod +x "$LR_MOVE_BATCH_BIN"
+  frag="$BATS_TEST_TMPDIR/tick.sh"
+  {
+    echo 'STATE="$LR_STATE_DIR"; LR="$1"; DRY=0; LOG="$STATE/poller.log"; LOCKD="$2"; mkdir -p "$LOCKD"'
+    printf '%s\n' 'log() { printf "%s\n" "$*" >> "$LOG"; }'
+    sed -n '/^lrp_tick_end() {/,/^}/p' "$LRD/lr-reset-poller.sh"
+    grep -E "^trap '[^']*' EXIT$" "$LRD/lr-reset-poller.sh"
+    sed -n '/^lrp_move_kick() {/,/^}/p' "$LRD/lr-reset-poller.sh"
+    echo 'lrp_move_kick'                                             # the top of the tick: nothing queued yet
+    echo 'echo "{\"kind\":\"move-batch\",\"batch\":\"c1\"}" > "$STATE/move/requests/c1.json"'   # the request arrives mid-tick
+    echo 'exit 0'
+  } > "$frag"
+  mkdir -p "$LR_STATE_DIR/move/requests"
+  bash "$frag" "$LRD" "$BATS_TEST_TMPDIR/tick.lock"
+  for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$BATS_TEST_TMPDIR/batch-rec.log" ] && break; sleep 0.3; done
+  # RED before the fix: the request is still queued and the runner never started.
+  [ "$(cat "$BATS_TEST_TMPDIR/batch-rec.log" 2>/dev/null)" = c1 ] || { cat "$frag"; cat "$LR_STATE_DIR/poller.log" 2>/dev/null; false; }
+  [ ! -e "$LR_STATE_DIR/move/requests/c1.json" ]
+  [ -f "$BDIR/request.claimed.json" ]
+  [ ! -d "$BATS_TEST_TMPDIR/tick.lock" ]
+}
+
+@test "17 a whole dry-run tick looks at the move requests twice (top and end), starts nothing, and exits 0" {
+  export LR_POLLER_NO_CENSUS=1 LR_UPGRADE_AUTO=off LR_POLLER_LOCK_DIR="$BATS_TEST_TMPDIR/poller.lock"
+  unset KITTY_WINDOW_ID; export IT2_WRAPPER_NO_KITTY=1
+  export LR_MOVE_BATCH_BIN="$STUBS/batch-rec"
+  printf '#!/bin/bash\necho "$*" >> "%s/batch-rec.log"\n' "$BATS_TEST_TMPDIR" > "$LR_MOVE_BATCH_BIN"; chmod +x "$LR_MOVE_BATCH_BIN"
+  mkdir -p "$LR_STATE_DIR/move/requests"
+  echo '{"kind":"move-batch","batch":"c1"}' > "$LR_STATE_DIR/move/requests/c1.json"
+  run bash "$LRD/lr-reset-poller.sh" --dry-run
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(grep -c 'DRY   move batch c1 would start' "$LR_STATE_DIR/poller.log")" -eq 2 ] || { cat "$LR_STATE_DIR/poller.log"; false; }
+  [ ! -e "$BATS_TEST_TMPDIR/batch-rec.log" ]
+  [ -f "$LR_STATE_DIR/move/requests/c1.json" ]
+  [ ! -d "$LR_POLLER_LOCK_DIR" ]
+}
+
+@test "15 the same replay under PATH bash agrees with /bin/bash (the roll-up is interpreter-independent)" {
+  replay_20261006
+  run bash "$LRD/lr-move-batch.sh" "$RB"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(jq -r .verdicts "$RD/summary.json")" = "MOVED=7" ]
+}

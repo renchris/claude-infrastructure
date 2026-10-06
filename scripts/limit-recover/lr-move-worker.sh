@@ -116,15 +116,32 @@ case "$DISP" in
     rm -f "$BDIR/$SID.waiting" 2>/dev/null || true ;;
 esac
 
+# W2b. A session whose last record is now a limit error owes a turn, and this lane types none: it
+# would come up on the target at rest, still unanswered, and be reported MOVED. The plan-time hold
+# (bin/cc-lr, hold:limited) reads the transcript once, when the plan is written; a row that waited
+# for idle, or queued for a slot, can have hit its limit since. The census the wait loop reads does
+# not look (an api-error tail is "at rest"), so the same read is made here and again once the slot
+# is held.
+limited_now() { # → 0 when the session's last assistant record is a limit error
+  local tx
+  for tx in "$SRC_CFG"/projects/*/"$SID".jsonl; do [ -f "$tx" ] && break; tx=""; done
+  [ -n "$tx" ] && [ "$(lr_last_api_error "$tx" 2>/dev/null | cut -f3 || true)" = limit ]
+}
+limited_stop() { finish NOTMOVED "became-limited: its last record is now a limit error, so it owes a turn this lane does not type; nothing touched. Recover it: cc-lr recover ${SID:0:8}"; }
+limited_now && limited_stop
+
 # W3. The slot, then the kernel-safety read, both while the session is still alive in its pane.
+# The width is a fixed count (terminal control streams and overlapping boots), not a memory
+# reading, and its timeout says so: `slot-wait:`, never the `capacity:` of the memory read below.
 ev slot-wait "width $WIDTH"
 slot_deadline=$(( $(date +%s) + ${LR_MOVE_SLOT_WAIT_S:-600} ))
 until lr_swap_slot_acquire "$WIDTH"; do
   aborted && finish NOTMOVED "aborted while waiting for a slot; nothing touched"
-  [ "$(date +%s)" -lt "$slot_deadline" ] || finish NOTMOVED "capacity: no swap slot freed in ${LR_MOVE_SLOT_WAIT_S:-600}s (width $WIDTH); nothing touched"
+  [ "$(date +%s)" -lt "$slot_deadline" ] || finish NOTMOVED "slot-wait: no move slot freed in ${LR_MOVE_SLOT_WAIT_S:-600}s (width $WIDTH, a fixed count, not a memory limit); nothing touched. Run it again once the lane has drained"
   sleep "${LR_MOVE_SLOT_POLL_S:-2}"
 done
 ev slot "${LR_SWAP_SLOT##*/}"
+limited_now && limited_stop
 if [ "${LR_MOVE_KERNEL_CHECK:-on}" != off ] && command -v lr_capacity_probe_corrected >/dev/null 2>&1; then
   # The swap read: segments under the 90% swap ceiling and headroom over the floor. The active and
   # load terms do not apply to a move that owes no turn, and the operator reserve does not apply to

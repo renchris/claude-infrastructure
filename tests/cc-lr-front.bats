@@ -1174,3 +1174,188 @@ SH
   [ "$status" -eq 0 ] || { echo "rc $status: $output"; false; }
   [ "$output" = "poll throttled ↻ (cached usage)" ] || { echo "$output"; false; }
 }
+
+# ── rotate: ONE LIST, ONE ACT (2026-10-06) ──────────────────────────────────────────────────────
+# The operator's ask: one command that lists every session needing another account, one that
+# rotates all of them in place. `rotate` is a front over what already exists (`cc-find --limited`,
+# the move lane's plan rows, cmd_recover_limited per account), so what these cases pin is the
+# composition: the list is fleet-wide and writes nothing; the act needs its scope said aloud; every
+# refusal that lives downstream still fires (a teammate is never recovered, a busy session is never
+# queued unless asked); and each started session gets one verdict line.
+# The fixture fleet: `next` is at 100% weekly with a limited session (780), an idle one (754) and a
+# busy one (760); next3 has a limited session (310) and a limited TEAMMATE (311); next2 and next4
+# have headroom.
+rot_ranker() { # <next weekly> <next2 weekly> <next3 weekly> <next4 weekly>
+  cat > "$CC_ACCOUNTS_BIN" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$BATS_TEST_TMPDIR/ranker.argv"
+case " \$* " in
+  *" --json "*) printf '{"rows":[{"acct":"next","weekly_pct":%s,"session_pct":1},{"acct":"next2","weekly_pct":%s,"session_pct":1},{"acct":"next3","weekly_pct":%s,"session_pct":1},{"acct":"next4","weekly_pct":%s,"session_pct":1}]}\n' "$1" "$2" "$3" "$4"; exit 0 ;;
+  *" --rank "*) printf 'next2 3\nnext4 2\n'; exit 0 ;;
+esac
+exit 97
+SH
+  chmod +x "$CC_ACCOUNTS_BIN"
+}
+rot_fleet() {
+  fleet_stub 0
+  limited_stub \
+    "cccc0780-0000-4000-8000-000000000780	780	claude-next	$HOME/.claude-next	/x	live	LIMITED" \
+    "dddd0310-0000-4000-8000-000000000310	310	claude-tertiary	$HOME/.claude-tertiary	/y	live	LIMITED" \
+    "dddd0311-0000-4000-8000-000000000311	311	claude-tertiary	$HOME/.claude-tertiary	/y	live	TEAMMATE"
+  rot_ranker 100 7 40 2
+  census_stub \
+    "780	cccc0780-0000-4000-8000-000000000780	next	-	-	-	move" \
+    "754	cccc0754-0000-4000-8000-000000000754	next	-	-	-	move" \
+    "760	cccc0760-0000-4000-8000-000000000760	next	-	-	-	mid-turn"
+}
+rot_row() { printf '%s\n' "$output" | awk -v s="$1" '$3 == s'; }   # the list row for a sid8
+rot_wrote_nothing() {
+  [ ! -s "$BATS_TEST_TMPDIR/fleet.argv" ] || { echo "a recovery was fired"; cat "$BATS_TEST_TMPDIR/fleet.argv"; return 1; }
+  [ ! -s "$BATS_TEST_TMPDIR/launchctl.argv" ] || { echo "the poller was kicked"; return 1; }
+  [ ! -d "$LR_STATE_DIR/move" ] || { echo "a move directory was created"; ls -R "$LR_STATE_DIR/move"; return 1; }
+  [ ! -d "$LR_STATE_DIR/runs/by-sid" ] || [ -z "$(ls -A "$LR_STATE_DIR/runs/by-sid")" ] || { echo "a mutex was taken"; return 1; }
+}
+
+@test "rotate with no scope is rc 3 and reads nothing: a bare rotate moves nothing" {
+  rot_fleet
+  run bash "$LR" rotate
+  [ "$status" -eq 3 ] || { echo "rc $status: $output"; false; }
+  [[ "$output" == *"name the scope"* ]] || { echo "$output"; false; }
+  [ ! -e "$BATS_TEST_TMPDIR/ranker.argv" ] || { echo "the router was read"; false; }
+  [ ! -e "$BATS_TEST_TMPDIR/census.argv" ] || { echo "the census ran"; false; }
+  rot_wrote_nothing
+  # --all and --account together are two scopes, also rc 3
+  run bash "$LR" rotate --all --account next
+  [ "$status" -eq 3 ]
+  rot_wrote_nothing
+}
+
+@test "rotate --list is fleet-wide and read-only: one row per session that needs another account, and the bounds in force" {
+  rot_fleet
+  run bash "$LR" rotate --list
+  [ "$status" -eq 0 ] || { echo "rc $status: $output"; false; }
+  # limited sessions on any account in scope → recover; the teammate is listed and held
+  [[ "$(rot_row cccc0780)" == *"limited"*"recover"* ]] || { echo "$output"; false; }
+  [[ "$(rot_row dddd0310)" == next3*"recover"* ]] || { echo "$output"; false; }
+  [[ "$(rot_row dddd0311)" == *"teammate"*"hold"*"never a recovery target"* ]] || { echo "$output"; false; }
+  # the capped account's other sessions: idle → move to the router's pick, busy → held, and the
+  # session already being recovered is not listed a second time
+  [[ "$(rot_row cccc0754)" == next*"weekly 100%"*"move"*"next2"*"restart on next2"* ]] || { echo "$output"; false; }
+  [[ "$(rot_row cccc0760)" == *"hold:mid-turn"*"hold"*"--until-idle"* ]] || { echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | awk '$3 == "cccc0780"' | grep -c .)" -eq 1 ] || { echo "$output"; false; }
+  # accounts with headroom are said to stay, never silently skipped
+  [[ "$output" == *"next2: headroom on both limits"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"2 to recover · 1 to move · 0 waiting for idle · 2 held"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"bounds: move 4 at a time"*"not memory"*"recover 2 at a time"*"memory read:"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"rotate them: cc-lr rotate --all"* ]] || { echo "$output"; false; }
+  # the census was asked about the capped account only
+  grep -q -- '--from next ' "$BATS_TEST_TMPDIR/census.argv" || { cat "$BATS_TEST_TMPDIR/census.argv"; false; }
+  ! grep -q -- '--from next2\|--from next3\|--from next4' "$BATS_TEST_TMPDIR/census.argv" || { cat "$BATS_TEST_TMPDIR/census.argv"; false; }
+  rot_wrote_nothing
+}
+
+@test "rotate --list --until-idle turns the busy session into a wait row; --json carries the same rows; --account narrows" {
+  rot_fleet
+  run bash "$LR" rotate --list --until-idle 900
+  [ "$status" -eq 0 ] || { echo "rc $status: $output"; false; }
+  [[ "$(rot_row cccc0760)" == *"wait:mid-turn"*"wait"*"next2"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"rotate them: cc-lr rotate --all --until-idle 900"* ]] || { echo "$output"; false; }
+  run bash "$LR" rotate --list --account next3 --json
+  [ "$status" -eq 0 ] || { echo "rc $status: $output"; false; }
+  [ "$(printf '%s' "$output" | jq -r '[.rows[] | .account] | unique | join(",")')" = next3 ] || { echo "$output"; false; }
+  [ "$(printf '%s' "$output" | jq -r '.rows[] | select(.sid | startswith("dddd0310")) | .act')" = recover ]
+  [ "$(printf '%s' "$output" | jq -r '.bounds' | grep -c 'not memory')" -eq 1 ]
+  rot_wrote_nothing
+}
+
+@test "rotate --list exits 1 when nothing needs another account, and still says why" {
+  fleet_stub 0
+  limited_stub
+  rot_ranker 30 7 40 2
+  census_stub "754	cccc0754-0000-4000-8000-000000000754	next	-	-	-	move"
+  run bash "$LR" rotate --list
+  [ "$status" -eq 1 ] || { echo "rc $status: $output"; false; }
+  [[ "$output" == *"0 to recover · 0 to move"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"next: headroom on both limits"* ]] || { echo "$output"; false; }
+  [ ! -e "$BATS_TEST_TMPDIR/census.argv" ] || { echo "the census ran for an account with headroom"; false; }
+  rot_wrote_nothing
+}
+
+@test "[RED] rotate --account next --no-wait: the limited session is fired, the idle one queued, the busy one and the other accounts untouched" {
+  rot_fleet
+  run bash "$LR" rotate --account next --no-wait
+  # in flight is rc 1: nothing has a verdict yet
+  [ "$status" -eq 1 ] || { echo "rc $status: $output"; false; }
+  grep -q cccc0780 "$BATS_TEST_TMPDIR/fleet.argv" || { echo "the limited session was not fired"; echo "$output"; false; }
+  ! grep -q 'dddd0310\|dddd0311' "$BATS_TEST_TMPDIR/fleet.argv" || { echo "a next3 session was fired under --account next"; false; }
+  local d; d="$(moved_dir)" || { echo "no batch was queued"; echo "$output"; false; }
+  [ -f "$d/intent/cccc0754-0000-4000-8000-000000000754.json" ] || { ls "$d/intent"; echo "$output"; false; }
+  [ ! -f "$d/intent/cccc0760-0000-4000-8000-000000000760.json" ] || { echo "a busy session was queued without --until-idle"; false; }
+  [ ! -f "$d/intent/cccc0780-0000-4000-8000-000000000780.json" ] || { echo "the limited session was also queued for a move"; false; }
+  jq -e '.from == "next" and .to == "next2" and .until_idle_s == 0' "$d/plan.json" >/dev/null || { cat "$d/plan.json"; false; }
+  # where each verdict will land, by name
+  [[ "$output" == *"0 rotated · 0 not · 2 still in flight"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"cc-lr status cccc0780"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"cc-lr move --status $(basename "$d")"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"bounds: move 4 at a time"* ]] || { echo "$output"; false; }
+}
+
+@test "[RED] rotate --all: a TEAMMATE is still never recovered, --until-idle queues the busy session, and every started session gets ONE verdict line; rc 0 when all rotated" {
+  rot_fleet
+  # the recover lane's verdict, where lr-fleet writes it (the stub names this run dir for every sid)
+  mkdir -p "$LR_STATE_DIR/fleet/one-20260919T175207Z"
+  printf 'lr-fleet --one cccc0780: verdict=RECOVERED rc=0 pane=780 acct=next mech=recycle-in-place/RECOVERED — relaunched in place on next2\n' \
+    > "$LR_STATE_DIR/fleet/one-20260919T175207Z/verdict.txt"
+  # the move lane, stood in for by the kick: a MOVED result per intent, beside what a real batch leaves
+  cat > "$STUBBIN/launchctl" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$BATS_TEST_TMPDIR/launchctl.argv"
+for d in "$LR_STATE_DIR"/move/*/; do
+  [ -d "\${d}intent" ] || continue
+  for i in "\${d}intent"/*.json; do
+    s="\$(basename "\$i" .json)"
+    printf '{"sid":"%s","verdict":"MOVED","reason":"runs the session on the target, one copy"}\n' "\$s" > "\${d}\$s.json"
+    printf '{"pid":17125}\n' > "\${d}\$s.watcher.json"
+  done
+  rm -f "$LR_STATE_DIR/move/requests"/*.json
+done
+exit 0
+STUB
+  chmod +x "$STUBBIN/launchctl"
+  CC_LR_MOVE_POLL_S=0 run bash "$LR" rotate --all --until-idle 600 --wait 30
+  [ "$status" -eq 0 ] || { echo "rc $status: $output"; false; }
+  # RULE 0 survives the front: the teammate is refused by cmd_recover, the rest fire
+  ! grep -q dddd0311 "$BATS_TEST_TMPDIR/fleet.argv" || { echo "a TEAMMATE was fired"; false; }
+  grep -q cccc0780 "$BATS_TEST_TMPDIR/fleet.argv"
+  grep -q dddd0310 "$BATS_TEST_TMPDIR/fleet.argv"
+  local d; d="$(moved_dir)" || { echo "$output"; false; }
+  jq -e '.until_idle_s == 600' "$d/plan.json" >/dev/null || { cat "$d/plan.json"; false; }
+  [ -f "$d/intent/cccc0760-0000-4000-8000-000000000760.json" ] || { echo "the busy session was not queued under --until-idle"; echo "$output"; false; }
+  # one verdict line per started session in the verdicts section: 2 recoveries, 2 moves. (The kick
+  # stub answers synchronously, so `move --wait 0` may print a result of its own above the section.)
+  local vs; vs="$(printf '%s\n' "$output" | awk 'f; /^── verdicts ──$/ { f = 1 }')"
+  [ "$(printf '%s\n' "$vs" | grep -c '^✓ .* RECOVERED — relaunched in place on next2')" -eq 2 ] || { echo "$output"; false; }
+  [ "$(printf '%s\n' "$vs" | grep -c '^✓ .* MOVED — runs the session on the target')" -eq 2 ] || { echo "$output"; false; }
+  [[ "$output" == *"4 rotated · 0 not · 0 still in flight"* ]] || { echo "$output"; false; }
+}
+
+@test "rotate --all with nothing limited and no capped account starts nothing and is rc 1" {
+  fleet_stub 0
+  limited_stub
+  rot_ranker 30 7 40 2
+  census_stub "754	cccc0754-0000-4000-8000-000000000754	next	-	-	-	move"
+  run bash "$LR" rotate --all --no-wait
+  [ "$status" -eq 1 ] || { echo "rc $status: $output"; false; }
+  [[ "$output" == *"nothing was started"* ]] || { echo "$output"; false; }
+  rot_wrote_nothing
+}
+
+@test "recover --limited --account --until-idle S passes the wait budget to the idle half (a busy session is queued, not dropped)" {
+  rot_fleet
+  run bash "$LR" recover --limited --account next --until-idle 600
+  [ "$status" -eq 0 ] || { echo "rc $status: $output"; false; }
+  local d; d="$(moved_dir)" || { echo "$output"; false; }
+  jq -e '.until_idle_s == 600' "$d/plan.json" >/dev/null || { cat "$d/plan.json"; false; }
+  [ -f "$d/intent/cccc0760-0000-4000-8000-000000000760.json" ] || { echo "$output"; false; }
+}

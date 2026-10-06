@@ -230,7 +230,20 @@ if ! mkdir "$LOCKD" 2>/dev/null; then
   mkdir "$LOCKD" 2>/dev/null || exit 0        # lost the race to another tick — skip
 fi
 echo $$ > "$LOCKD/pid"; _lstart_of $$ > "$LOCKD/lstart"
-trap 'rm -rf "$LOCKD" 2>/dev/null || true' EXIT INT TERM
+# THE TICK'S LAST ACT IS THE MOVE LANE'S KICK AGAIN (2026-10-06). launchd does not start a second
+# instance of a running job, so a `launchctl kickstart` sent while this tick runs is dropped (0
+# TICK-SKIP lines in 1,846 ticks: the drop is launchd's, never the lock above), and a request
+# written after the kick at the top of the tick waited for the next interval: 89 s for the batch of
+# 2026-10-06, 629-820 s for 7 of 30 switch and upgrade requests. Ticks run p50 36 s, p90 256 s. So
+# every exit of the tick looks once more. lrp_move_kick claims by hard link, so a batch the first
+# look already started is never started twice. Signals keep the old handler: lock only.
+# shellcheck disable=SC2329  # invoked by the EXIT trap two lines below
+lrp_tick_end() {
+  if declare -F lrp_move_kick >/dev/null 2>&1; then lrp_move_kick || true; fi
+  rm -rf "$LOCKD" 2>/dev/null || true
+}
+trap 'rm -rf "$LOCKD" 2>/dev/null || true' INT TERM
+trap 'lrp_tick_end' EXIT
 mkdir -p "$STATE" 2>/dev/null || true
 log "TICK start"        # the denominator: without it no rate, gap or duty cycle is computable
 (( LRP_FENCE )) || log "RECON-FENCE-MISSING lr-recon-fence.sh unreachable — every arm acts as before (legacy)"

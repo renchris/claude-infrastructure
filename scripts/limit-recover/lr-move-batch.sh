@@ -77,8 +77,11 @@ admit_json() { # $1=admitted true|false $2=target_auth $3=reason
 }
 summary() { # $1=batch verdict (done|refused) $2=note
   local counts auth_after="${AUTH_AFTER:-unchecked}"
+  # LEADING-PAREN PATTERNS, AND THEY ARE LOAD-BEARING: launchd runs this file under /bin/bash 3.2,
+  # which ends a `$( )` at the first unbalanced `)` — the one closing a bare `a|b)` pattern. The
+  # 2026-10-06 batch (7 of 7 MOVED) logged a syntax error here and mailed "done: no rows".
   counts="$(for f in "$BDIR"/*.json; do
-              case "${f##*/}" in plan.json|admit.json|summary.json|request*.json) continue ;; esac
+              case "${f##*/}" in (plan.json|admit.json|summary.json|request*.json|*.watcher.json) continue ;; esac
               jq -r '.verdict // empty' "$f" 2>/dev/null
             done | sort | uniq -c | awk '{ printf "%s%s=%s", (NR > 1 ? " " : ""), $2, $1 }')"
   jq -nc --arg b "$BATCH" --arg st "$1" --arg note "$2" --arg c "${counts:-none}" --arg a "$auth_after" \

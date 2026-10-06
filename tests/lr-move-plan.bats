@@ -239,3 +239,65 @@ nfiles() { local f n=0; for f in "$1"/*; do [ -e "$f" ] && n=$((n + 1)); done; p
   run bash "$CCLR" move --status no-such-batch
   [ "$status" -eq 2 ]
 }
+
+# ── RULE 1 ON THIS LANE (2026-10-06). The census matches --sid by prefix, fleet-wide when no --from
+# is given, and `plan`/`move` never counted the rows: a short prefix planned two sessions where the
+# operator named one. `switch --sid` has always refused that.
+@test "16 [RED] plan --sid / move --sid with a prefix that matches two sessions is REFUSED and writes nothing" {
+  sess 401 "$S1"
+  sess 402 "$S2"
+  run bash "$CCLR" plan --sid aaaa000 --to next2
+  # RED before the fix: rc 0 and a two-row plan.
+  [ "$status" -eq 2 ] || { echo "rc $status: $output"; false; }
+  [[ "$output" == *"matched more than one live session"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"401"* && "$output" == *"402"* ]] || { echo "$output"; false; }
+  run bash "$CCLR" move --sid aaaa000 --to next2 --wait 0
+  [ "$status" -eq 2 ] || { echo "rc $status: $output"; false; }
+  [ -z "$(moved_dir)" ]
+  [ ! -e "$BATS_TEST_TMPDIR/launchctl.log" ]
+  # an EMPTY sid is a prefix of every sid; with no --from it selected the whole fleet
+  run bash "$CCLR" move --sid "" --to next2 --wait 0
+  [ "$status" -eq 2 ] || { echo "rc $status: $output"; false; }
+  [[ "$output" == *"empty value"* ]] || { echo "$output"; false; }
+  [ -z "$(moved_dir)" ]
+  # control: a sid that names one session still plans it
+  run bash "$CCLR" plan --sid "$S1" --to next2
+  [ "$status" -eq 0 ] || { echo "rc $status: $output"; false; }
+  [ "$(disp "$S1")" = move ]
+}
+
+# ── EXIT 0 MEANS ALL MOVED, ON A DIRECTORY SHAPED LIKE A REAL ONE (2026-10-06). The recorded batch
+# 20261006T060534Z-next3-next2-64630 holds, beside each <sid>.json, a <sid>.watcher.json and one
+# request.claimed.json. The exit-code count read every *.json for `.verdict // "FAILED"`, so those
+# files counted as failures and a fully moved batch exited 1; and its `case a|b)` inside `$( )` is
+# the construct bash 3.2 cannot parse. No case reached that path: every other `move` here passes
+# --wait 0 and returns before it. The lane is stood in for by the kick stub.
+@test "17 [RED] move exits 0 after a fully moved batch whose directory holds what a real one holds, and states its bounds" {
+  sess 401 "$S1"
+  cat > "$STUBS/launchctl" <<STUB
+#!/bin/bash
+for d in "$LR_STATE_DIR"/move/*/; do
+  [ -d "\${d}intent" ] || continue
+  for i in "\${d}intent"/*.json; do
+    s="\$(basename "\$i" .json)"
+    printf '{"sid":"%s","verdict":"MOVED","reason":"pane 401 runs the session on the target, one copy"}\n' "\$s" > "\${d}\$s.json"
+    printf '{"pid":17125,"pane":"401"}\n' > "\${d}\$s.watcher.json"
+  done
+  printf '{"kind":"move-batch"}\n' > "\${d}request.claimed.json"
+  printf '{"admitted":true,"target_auth":"ok"}\n' > "\${d}admit.json"
+done
+STUB
+  chmod +x "$STUBS/launchctl"
+  run bash "$CCLR" move --sid "$S1" --to next2 --wait 30
+  # RED before the fix: rc 1.
+  [ "$status" -eq 0 ] || { echo "rc $status: $output"; false; }
+  [[ "$output" == *"MOVED — pane 401 runs the session on the target"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"bounds: move 4 at a time (LR_MOVE_SLOTS; a fixed count"*"not memory"* ]] || { echo "$output"; false; }
+}
+
+@test "18 --slots W is the width this batch was given, and the bounds line says so" {
+  sess 401 "$S1"
+  run bash "$CCLR" move --sid "$S1" --to next2 --slots 6 --dry-run
+  [ "$status" -eq 0 ] || { echo "rc $status: $output"; false; }
+  [[ "$output" == *"bounds: move 6 at a time (--slots;"* ]] || { echo "$output"; false; }
+}
